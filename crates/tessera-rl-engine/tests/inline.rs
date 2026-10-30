@@ -293,3 +293,27 @@ fn test_step_limit_truncates_alive_agents() {
     assert_eq!(out.agent_truncated(), [Bool8::TRUE, Bool8::TRUE]);
     assert_eq!(out.agent_terminated(), [Bool8::FALSE, Bool8::FALSE]);
 }
+
+#[test]
+fn test_set_lineage_applies_immediately_in_a_running_episode() {
+    let cfg = CountConfig {
+        length: 100,
+        ..CountConfig::default()
+    };
+    let mut p = EnvPool::<Counter>::new(
+        cfg,
+        PoolOptions::new(NonZeroU32::new(2).unwrap(), Seed::new(0)),
+    )
+    .unwrap();
+    p.reset_all(Reseed::List(&[Seed::new(3), Seed::new(3)]))
+        .unwrap();
+    p.step(actions(&[1, 1, 1, 1])).unwrap();
+    assert_eq!(hashes(&p, 2)[0], hashes(&p, 2)[1]);
+    p.set_lineage(1, LogicalId::new(5)).unwrap();
+    let mut differ = false;
+    for _ in 0..20 {
+        p.step(actions(&[1, 1, 1, 1])).unwrap();
+        differ |= hashes(&p, 2)[0] != hashes(&p, 2)[1];
+    }
+    assert!(differ);
+}

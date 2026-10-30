@@ -63,6 +63,11 @@ where
     ///
     /// Returns an [`EngineError`] for an invalid config, options or space.
     pub fn new(cfg: E::Config, options: PoolOptions) -> Result<Self, EngineError> {
+        // Config validation, spaces, initial values: all FP-sensitive.
+        fp::with_canonical(|| Self::build(cfg, options))
+    }
+
+    fn build(cfg: E::Config, options: PoolOptions) -> Result<Self, EngineError> {
         const {
             assert!(
                 <E::Header as RecordLayout>::AGENTS == E::MAX_AGENTS,
@@ -148,7 +153,8 @@ where
     }
 
     /// Sets the lineage of `id`, so instances sharing a seed draw
-    /// independent streams (ADR-0007). Takes effect from the next reset.
+    /// independent streams (ADR-0007). Takes effect immediately, from the
+    /// next draw of the current episode.
     ///
     /// # Errors
     ///
@@ -177,10 +183,15 @@ where
     /// Returns an [`EngineError`] if a seed list has the wrong length or an
     /// episode counter is exhausted; nothing is mutated then.
     pub fn reset_all(&mut self, reseed: Reseed<'_>) -> Result<&Outputs, EngineError> {
+        fp::with_canonical(|| self.reset_all_inner(reseed))?;
+        Ok(&self.outputs)
+    }
+
+    fn reset_all_inner(&mut self, reseed: Reseed<'_>) -> Result<(), EngineError> {
         let n = self.headers.len();
         self.check_reset(0..n, n, reseed)?;
         self.apply_reset(0..n, reseed);
-        Ok(&self.outputs)
+        Ok(())
     }
 
     /// Resets the instances `ids`, in the order given; other instances keep
@@ -192,11 +203,16 @@ where
     /// of the wrong length or an exhausted episode counter; nothing is
     /// mutated then.
     pub fn reset(&mut self, ids: &[u32], reseed: Reseed<'_>) -> Result<&Outputs, EngineError> {
+        fp::with_canonical(|| self.reset_inner(ids, reseed))?;
+        Ok(&self.outputs)
+    }
+
+    fn reset_inner(&mut self, ids: &[u32], reseed: Reseed<'_>) -> Result<(), EngineError> {
         check_ids(ids, &mut self.seen)?;
         let indices = ids.iter().filter_map(|&id| usize::try_from(id).ok());
         self.check_reset(indices.clone(), ids.len(), reseed)?;
         self.apply_reset(indices, reseed);
-        Ok(&self.outputs)
+        Ok(())
     }
 
     fn check_reset(
@@ -266,6 +282,13 @@ where
     /// required action is invalid, an instance is pending reset or a step
     /// counter is exhausted; nothing is mutated then.
     pub fn step(&mut self, actions: ActionInput<'_>) -> Result<&Outputs, EngineError> {
+        // The validation boundary compares floats too: it runs in the
+        // canonical environment with the kernels (ADR-0037).
+        fp::with_canonical(|| self.step_inner(actions))?;
+        Ok(&self.outputs)
+    }
+
+    fn step_inner(&mut self, actions: ActionInput<'_>) -> Result<(), EngineError> {
         check_and_copy_actions(
             &self.actions,
             &self.headers,
@@ -304,7 +327,7 @@ where
                 observe_instance::<E>(cfg, authority, header, state, outputs, i);
             }
         });
-        Ok(&self.outputs)
+        Ok(())
     }
 }
 
@@ -413,8 +436,17 @@ fn step_one<E: Environment>(
         );
         row.episode_return += reward;
         total += row.episode_return;
-        let died = outputs.died.get(k).is_some_and(|f| f.get());
+        let mut died = outputs.died.get(k).is_some_and(|f| f.get());
         let spawned = outputs.spawned.get(k).is_some_and(|f| f.get());
+        if died && !row.alive.get() {
+            // Death of an agent that is already dead: ignored, so its final
+            // `terminated` flag is reported exactly once.
+            debug_assert!(false, "agent_died on dead slot {slot}");
+            died = false;
+            if let Some(f) = outputs.agent_terminated.get_mut(k) {
+                *f = Bool8::FALSE;
+            }
+        }
         if died {
             row.alive = Bool8::FALSE;
             row.acting = Bool8::FALSE;

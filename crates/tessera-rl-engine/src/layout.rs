@@ -55,7 +55,7 @@ impl ActionLayout {
             }
             Space::Box {
                 shape,
-                dtype: DType::F32 | DType::F64,
+                dtype: DType::F32,
                 bounds: BoxBounds::Float { low, high },
             } => {
                 let count = elements(shape)?;
@@ -65,6 +65,15 @@ impl ActionLayout {
                         _ => return Err(EngineError::UnsupportedSpace { what: "box bounds" }),
                     }
                 }
+            }
+            Space::Box {
+                dtype: DType::F64, ..
+            } => {
+                // Continuous actions travel as f32 (SPEC 5.2); f64 action
+                // heads come later.
+                return Err(EngineError::UnsupportedSpace {
+                    what: "f64 box actions",
+                });
             }
             Space::Box { .. } => {
                 return Err(EngineError::UnsupportedSpace {
