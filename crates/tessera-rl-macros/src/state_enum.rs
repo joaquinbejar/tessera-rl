@@ -96,6 +96,13 @@ pub(crate) fn derive(input: &DeriveInput) -> syn::Result<TokenStream> {
             }
         }
 
+        impl #core::StateInit for #name {
+            #[inline]
+            fn state_default() -> Self {
+                <Self as ::core::default::Default>::default()
+            }
+        }
+
         impl #core::encoding::Canonical for #name {
             const ENCODED_LEN: usize = <#repr as #core::encoding::Canonical>::ENCODED_LEN;
 

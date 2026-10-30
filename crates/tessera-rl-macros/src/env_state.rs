@@ -58,6 +58,7 @@ struct FieldParts {
     lens: Vec<TokenStream>,
     encodes: Vec<TokenStream>,
     decodes: Vec<TokenStream>,
+    inits: Vec<TokenStream>,
 }
 
 impl FieldParts {
@@ -79,7 +80,7 @@ impl FieldParts {
         }
         let message = LitStr::new(
             &format!(
-                "EnvState: `{name}` has padding before field `{ident}`; fill the gap with a Reserved<N> field (ADR-0029)"
+                "EnvState: `{name}` has padding before field `{ident}`; insert a Reserved<N> field before it, with N = offset_of!({name}, {ident}) minus the end of the previous field (ADR-0029)"
             ),
             ident.span(),
         );
@@ -94,6 +95,8 @@ impl FieldParts {
             .push(quote!(<#ty as #core::encoding::Canonical>::ENCODED_LEN));
         self.encodes
             .push(quote!(#core::encoding::Canonical::encode(&self.#ident, out);));
+        self.inits
+            .push(quote!(#ident: <#ty as #core::StateInit>::state_default(),));
         self.decodes.push(if nan {
             quote!(#ident: <#ty as #core::encoding::DecodeAllowNan>::decode_allow_nan(input)?,)
         } else {
@@ -146,11 +149,12 @@ pub(crate) fn derive(input: &DeriveInput) -> syn::Result<TokenStream> {
         lens,
         encodes,
         decodes,
+        inits,
     } = parts;
     let trailing = LitStr::new(
         &match &last {
             Some(ident) => format!(
-                "EnvState: `{name}` has trailing padding after field `{ident}`; add a Reserved<N> field at the end (ADR-0029)"
+                "EnvState: `{name}` has trailing padding after field `{ident}`; add a Reserved<N> field at the end, with N = size_of::<{name}>() minus the end of `{ident}` (ADR-0029)"
             ),
             None => format!("EnvState: `{name}` has no fields"),
         },
@@ -167,8 +171,8 @@ pub(crate) fn derive(input: &DeriveInput) -> syn::Result<TokenStream> {
         };
 
         const _: () = {
-            const fn assert_field<T: #core::encoding::Canonical + ::core::marker::Copy + ::core::default::Default>() {}
-            const fn assert_state<T: ::core::marker::Copy + ::core::default::Default>() {}
+            const fn assert_field<T: #core::encoding::Canonical + #core::StateInit + ::core::marker::Copy>() {}
+            const fn assert_state<T: ::core::marker::Copy>() {}
             #(#bounds)*
             assert_state::<#name>();
         };
@@ -186,6 +190,13 @@ pub(crate) fn derive(input: &DeriveInput) -> syn::Result<TokenStream> {
                 input: &mut #core::encoding::Decoder<'_>,
             ) -> ::core::result::Result<Self, #core::DecodeError> {
                 ::core::result::Result::Ok(Self { #(#decodes)* })
+            }
+        }
+
+        impl #core::StateInit for #name {
+            #[inline]
+            fn state_default() -> Self {
+                Self { #(#inits)* }
             }
         }
 

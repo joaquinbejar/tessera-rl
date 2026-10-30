@@ -182,8 +182,7 @@ fn leaf_space(
                 #core::space::Space::Box {
                     shape: shape(#shape)?,
                     dtype: <#elem as #core::LeafDType>::DTYPE,
-                    low: ::std::vec![(#low) as f64],
-                    high: ::std::vec![(#high) as f64],
+                    bounds: <#elem as #core::LeafDType>::box_bounds(#low, #high),
                 }
             }
         }
@@ -191,7 +190,7 @@ fn leaf_space(
             let n = eval(n);
             quote! {
                 #core::space::Space::Discrete {
-                    n: u32::try_from(#n).map_err(|_| #core::SpaceError::ZeroChoices)?,
+                    n: u32::try_from(#n).map_err(|_| #core::SpaceError::InvalidChoices { n: u32::MAX })?,
                 }
             }
         }

@@ -7,7 +7,7 @@ use tessera_rl_core::encoding::{
     Canonical, Decoder, Encoder, Sink, decode_from_slice, decode_state_enum, encode_state_enum,
     encode_to_vec,
 };
-use tessera_rl_core::space::{DType, Space};
+use tessera_rl_core::space::{BoxBounds, DType, Space};
 use tessera_rl_core::{
     Bool8, ConfigError, DecodeError, EnvConfig, ObsLeaf, Observation, Pool, Reserved, StateEnum,
     StateHash,
@@ -80,6 +80,22 @@ fn test_env_state_derive_matches_hand_encoding() {
     assert_eq!(size_of::<Toy>(), Toy::ENCODED_LEN);
     assert_eq!(encode_to_vec(&value), hand_encoded(&value));
     assert_eq!(decode_from_slice::<Toy>(&encode_to_vec(&value)), Ok(value));
+}
+
+#[derive(EnvState, Clone, Copy)]
+#[repr(C)]
+struct Big {
+    grid: [[u8; 64]; 2],
+    field: [[f32; 40]; 40],
+}
+
+#[test]
+fn test_env_state_large_nested_arrays_use_state_init() {
+    use tessera_rl_core::StateInit;
+    let big = Big::state_default();
+    assert!(big.grid.iter().flatten().all(|&b| b == 0));
+    let decoded = decode_from_slice::<Big>(&encode_to_vec(&big)).unwrap();
+    assert_eq!(decoded.field[39][39].to_bits(), 0);
 }
 
 #[test]
@@ -255,8 +271,10 @@ fn test_observation_space_resolves_from_config() {
             Space::Box {
                 shape: vec![3, 8, 8],
                 dtype: DType::U8,
-                low: vec![0.0],
-                high: vec![255.0]
+                bounds: BoxBounds::UInt {
+                    low: vec![0],
+                    high: vec![255]
+                },
             }
         )
     );

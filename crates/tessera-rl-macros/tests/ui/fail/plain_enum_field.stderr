@@ -27,6 +27,35 @@ note: required by a bound in `assert_field`
    |          ^^^^^^^^ required by this bound in `assert_field`
    = note: this error originates in the derive macro `EnvState` (in Nightly builds, run with -Z macro-backtrace for more info)
 
+error[E0277]: `Phase` has no state initial value
+  --> tests/ui/fail/plain_enum_field.rs:16:12
+   |
+16 |     phase: Phase,
+   |            ^^^^^ not a plain-data state type
+   |
+help: the trait `StateInit` is not implemented for `Phase`
+  --> tests/ui/fail/plain_enum_field.rs:7:1
+   |
+ 7 | enum Phase {
+   | ^^^^^^^^^^
+   = note: use #[derive(StateEnum)] for enums and #[derive(EnvState)] for structs (ADR-0029)
+   = help: the following other types implement trait `StateInit`:
+             Bool8
+             Pool<T, CAP>
+             Reserved<N>
+             S
+             [T; N]
+             f32
+             f64
+             i16
+           and $N others
+note: required by a bound in `assert_field`
+  --> tests/ui/fail/plain_enum_field.rs:13:10
+   |
+13 | #[derive(EnvState, Clone, Copy, Default)]
+   |          ^^^^^^^^ required by this bound in `assert_field`
+   = note: this error originates in the derive macro `EnvState` (in Nightly builds, run with -Z macro-backtrace for more info)
+
 error[E0277]: `Phase` cannot be used as a state field
   --> tests/ui/fail/plain_enum_field.rs:16:12
    |
@@ -73,3 +102,26 @@ help: the trait `Canonical` is not implemented for `Phase`
              i16
            and $N others
    = note: this error originates in the derive macro `EnvState` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: `Phase` has no state initial value
+  --> tests/ui/fail/plain_enum_field.rs:16:12
+   |
+16 |     phase: Phase,
+   |            ^^^^^ not a plain-data state type
+   |
+help: the trait `StateInit` is not implemented for `Phase`
+  --> tests/ui/fail/plain_enum_field.rs:7:1
+   |
+ 7 | enum Phase {
+   | ^^^^^^^^^^
+   = note: use #[derive(StateEnum)] for enums and #[derive(EnvState)] for structs (ADR-0029)
+   = help: the following other types implement trait `StateInit`:
+             Bool8
+             Pool<T, CAP>
+             Reserved<N>
+             S
+             [T; N]
+             f32
+             f64
+             i16
+           and $N others
