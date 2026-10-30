@@ -135,6 +135,16 @@ impl ActionMask for Counter {
     fn action_mask(_: &CountConfig, state: &Count, _: AgentSlot, out: &mut MaskWriter<'_>) {
         out.fill(!state.done.get());
     }
+
+    fn noop(_: &CountConfig, _: &Count, _: AgentSlot, out: &mut ActionWriter<'_>) {
+        Self::noop_action(out);
+    }
+}
+
+impl Counter {
+    fn noop_action(out: &mut ActionWriter<'_>) {
+        out.set_discrete(0, 0);
+    }
 }
 
 impl Heuristic for Counter {

@@ -48,12 +48,14 @@ pub struct AgentRow {
     pub generation: u32,
     /// Sum of the agent's rewards in the current episode.
     pub episode_return: f32,
+    /// Illegal-but-valid actions replaced in the current episode.
+    pub illegal_actions: u32,
     /// The slot holds a living agent.
     pub alive: Bool8,
     /// The agent acts this step.
     pub acting: Bool8,
     /// Always zero.
-    pub reserved: Reserved<6>,
+    pub reserved: Reserved<2>,
 }
 
 /// Adaptive values built from a config `C`: `#[derive(EnvConfig)]`
@@ -247,6 +249,7 @@ impl Canonical for AgentRow {
     fn encode<S: Sink>(&self, out: &mut Encoder<S>) {
         self.generation.encode(out);
         self.episode_return.encode(out);
+        self.illegal_actions.encode(out);
         self.alive.encode(out);
         self.acting.encode(out);
         self.reserved.encode(out);
@@ -257,6 +260,7 @@ impl Canonical for AgentRow {
         Ok(Self {
             generation: u32::decode(input)?,
             episode_return: f32::decode(input)?,
+            illegal_actions: u32::decode(input)?,
             alive: Bool8::decode(input)?,
             acting: Bool8::decode(input)?,
             reserved: Reserved::decode(input)?,
