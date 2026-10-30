@@ -14,8 +14,9 @@ pub mod state_init;
 // Encoding and hashing (SPEC 8.3, ADR-0029).
 pub mod encoding;
 
-// Authoring API (SPEC 10, ADR-0012, ADR-0014).
+// Authoring API (SPEC 10, ADR-0012, ADR-0014, ADR-0030).
 pub mod agent;
+pub mod config;
 pub mod env;
 pub mod error;
 pub mod io;
