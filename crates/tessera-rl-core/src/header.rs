@@ -181,6 +181,7 @@ impl<const A: usize, Ad: Canonical + StateInit + Copy + 'static> RecordLayout
 impl<const A: usize, Ad: StateInit> StateInit for RecordHeader<A, Ad> {
     #[inline]
     fn state_default() -> Self {
+        let () = Self::LAYOUT_OK;
         Self {
             engine: EngineHeader::state_default(),
             agents: <[AgentRow; A]>::state_default(),
@@ -264,8 +265,15 @@ impl Canonical for AgentRow {
 }
 
 impl<const A: usize, Ad: Canonical + StateInit> Canonical for RecordHeader<A, Ad> {
-    const ENCODED_LEN: usize =
-        EngineHeader::ENCODED_LEN + A * AgentRow::ENCODED_LEN + Ad::ENCODED_LEN;
+    const ENCODED_LEN: usize = {
+        let () = Self::LAYOUT_OK;
+        let len = EngineHeader::ENCODED_LEN + A * AgentRow::ENCODED_LEN + Ad::ENCODED_LEN;
+        assert!(
+            len == size_of::<Self>(),
+            "RecordHeader size differs from its encoded length: the adaptive struct has hidden padding"
+        );
+        len
+    };
 
     #[inline]
     fn encode<S: Sink>(&self, out: &mut Encoder<S>) {
