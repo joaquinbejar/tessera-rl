@@ -130,6 +130,9 @@ pub enum EngineError {
         /// The value.
         value: f32,
     },
+    /// An engine was created inside an engine worker (ADR-0005).
+    #[error("engines cannot be created inside an engine worker")]
+    NestedEngine,
     /// The pool is poisoned after a panic in environment code; only a full
     /// reset (or, later, a full restore) or dropping the pool is accepted
     /// (ADR-0028).
