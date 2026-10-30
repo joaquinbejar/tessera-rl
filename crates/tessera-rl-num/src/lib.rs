@@ -16,3 +16,4 @@ pub mod splitmix;
 pub use fx32::Fx32;
 pub use fx64::Fx64;
 pub mod fp;
+pub mod math;

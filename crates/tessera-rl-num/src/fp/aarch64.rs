@@ -6,11 +6,19 @@ use core::arch::asm;
 
 pub(super) type Control = u64;
 
+// FEAT_AFP: flushes subnormal inputs to zero; must be off. RES0 without
+// FEAT_AFP, so clearing it is always valid.
 const FIZ: u64 = 1 << 0;
+// FEAT_AFP: alternate handling of NaN and min/max; off for IEEE behaviour.
 const AH: u64 = 1 << 1;
+// Flush-to-zero for half precision; off for IEEE subnormals.
 const FZ16: u64 = 1 << 19;
+// Rounding mode; 0b00 is round to nearest, ties to even.
 const RMODE: u64 = 0b11 << 22;
+// Flush-to-zero for single and double precision (also covers denormal
+// inputs, the aarch64 equivalent of x86 DAZ); off.
 const FZ: u64 = 1 << 24;
+// Default NaN; off, so NaN propagation follows IEEE 754.
 const DN: u64 = 1 << 25;
 
 #[inline]
