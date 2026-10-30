@@ -119,9 +119,29 @@ pub fn with_canonical<R>(f: impl FnOnce() -> R) -> R {
 /// A non-inlined call, so the closure's floating-point operations are not
 /// merged into the caller and moved across the mode change. Tested, not
 /// guaranteed by the language (ADR-0037).
+///
+/// Without the barriers LLVM infers `memory(none)` for this function when
+/// the closure is pure, which would let it hoist or reschedule the call
+/// outside the guard. The empty `asm!` blocks (without `nomem`) give it an
+/// opaque memory effect, and `black_box` hides the closure and its result.
 #[inline(never)]
 fn call_opaque<R>(f: impl FnOnce() -> R) -> R {
-    f()
+    compiler_barrier();
+    let result = core::hint::black_box(core::hint::black_box(f)());
+    compiler_barrier();
+    result
+}
+
+/// An empty assembly block with an opaque memory effect.
+#[inline]
+#[expect(unsafe_code, reason = "audited module: compiler barrier")]
+fn compiler_barrier() {
+    // SAFETY: the template is empty, so no instruction executes; it touches
+    // no register, memory or flag. Omitting `nomem` makes the compiler
+    // assume arbitrary memory effects, which is the only purpose.
+    unsafe {
+        core::arch::asm!("", options(nostack));
+    }
 }
 
 /// Returns whether the current thread is in the canonical environment.
@@ -315,6 +335,20 @@ mod tests {
             let mut out = Vec::with_capacity(xs.len());
             halve_all(&xs, &mut out);
             assert!(out.iter().all(|&b| b == 0x0008_0000_0000_0000));
+        });
+    }
+
+    // A loop-invariant closure under FTZ: the call must not be hoisted out
+    // of the loop or merged across iterations outside the guard.
+    #[test]
+    fn test_with_canonical_loop_invariant_closure_under_ftz() {
+        with_mode(test_modes::flush_to_zero, |_| {
+            let (a, b) = (black_box(f64::MIN_POSITIVE), black_box(2.0));
+            let mut out = [0u64; 32];
+            for slot in &mut out {
+                *slot = with_canonical(|| a / b).to_bits();
+            }
+            assert!(out.iter().all(|&bits| bits == 0x0008_0000_0000_0000));
         });
     }
 

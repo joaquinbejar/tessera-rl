@@ -80,6 +80,8 @@ pub(super) mod test_modes {
         control | DN | AH | FZ16
     }
 
+    // FPCR has no status flags (they live in FPSR), so every bit is a
+    // control bit.
     pub(crate) const fn control_bits(control: Control) -> Control {
         control
     }
