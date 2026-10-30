@@ -77,6 +77,7 @@ struct ConfigParts {
     entries: Vec<Entry>,
     adaptive: Vec<String>,
     adaptive_fields: Vec<(Ident, Type)>,
+    static_checks: Vec<TokenStream>,
 }
 
 impl ConfigParts {
@@ -135,6 +136,19 @@ impl ConfigParts {
         if nested {
             self.checks
                 .push(quote!(#core::EnvConfig::validate(&self.#ident)?;));
+            // ADR-0030: only top-level fields can be adaptive.
+            self.static_checks.push(quote! {
+                assert!(
+                    <#ty as #core::config::CanonicalConfig>::ADAPTIVE_FIELDS.is_empty(),
+                    "EnvConfig: nested configs cannot have adaptive fields (ADR-0030)"
+                );
+            });
+        }
+        if attrs.adaptive && ident == "_reserved" {
+            return Err(syn::Error::new_spanned(
+                ident,
+                "`_reserved` is used by the generated adaptive struct",
+            ));
         }
         if matches!(last_ident(ty).as_deref(), Some("f32" | "f64")) {
             self.checks.push(quote! {
@@ -192,6 +206,7 @@ pub(crate) fn derive(input: &DeriveInput) -> syn::Result<TokenStream> {
         mut entries,
         adaptive,
         adaptive_fields,
+        static_checks,
     } = parts;
     let adaptive_struct = adaptive_struct(&core, input, &adaptive_fields)?;
     entries.sort_by(|a, b| a.key.as_bytes().cmp(b.key.as_bytes()));
@@ -220,6 +235,10 @@ pub(crate) fn derive(input: &DeriveInput) -> syn::Result<TokenStream> {
         }
 
         #adaptive_struct
+
+        const _: () = {
+            #(#static_checks)*
+        };
 
         impl #core::config::CanonicalConfig for #name {
             const ADAPTIVE_FIELDS: &'static [&'static str] = &[#(#adaptive),*];
@@ -299,11 +318,11 @@ fn adaptive_struct(
         (quote!(), quote!(), quote!(), quote!(), quote!())
     } else {
         (
-            quote!(pub reserved: #core::Reserved<#pad>,),
-            quote!(#core::encoding::Canonical::encode(&self.reserved, out);),
-            quote!(reserved: #core::encoding::Canonical::decode(input)?,),
-            quote!(reserved: #core::Reserved::ZERO,),
-            quote!(reserved: #core::Reserved::ZERO,),
+            quote!(pub _reserved: #core::Reserved<#pad>,),
+            quote!(#core::encoding::Canonical::encode(&self._reserved, out);),
+            quote!(_reserved: #core::encoding::Canonical::decode(input)?,),
+            quote!(_reserved: #core::Reserved::ZERO,),
+            quote!(_reserved: #core::Reserved::ZERO,),
         )
     };
     let len = total + pad;
