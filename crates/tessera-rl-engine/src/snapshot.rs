@@ -6,6 +6,10 @@
 //! canonical FP environment, so observations and masks always describe the
 //! copied state. Pending resets travel with the record. Single-instance
 //! operations never allocate.
+//!
+//! On a poisoned pool every operation here is rejected except
+//! `restore_all`, which is a recovery path (ADR-0028): the records of a
+//! poisoned pool may be partly written by the panicking call.
 
 use tessera_rl_core::{AdaptiveValues, Environment, RecordLayout, StateHash};
 use tessera_rl_num::identity::RngIdentity;
@@ -35,8 +39,12 @@ where
     ///
     /// # Errors
     ///
-    /// Returns [`EngineError::InstanceOutOfRange`] for an unknown id.
+    /// Returns [`EngineError::Poisoned`] on a poisoned pool, or
+    /// [`EngineError::InstanceOutOfRange`] for an unknown id.
     pub fn snapshot(&self, id: u32) -> Result<Record<E>, EngineError> {
+        if self.poisoned {
+            return Err(EngineError::Poisoned);
+        }
         let i = self.index(id)?;
         match (self.headers.get(i), self.states.get(i)) {
             (Some(&header), Some(&state)) => Ok(Record { header, state }),
@@ -52,8 +60,12 @@ where
     ///
     /// # Errors
     ///
-    /// Returns [`EngineError::RecordCount`] if `out` has the wrong length.
+    /// Returns [`EngineError::Poisoned`] on a poisoned pool, or
+    /// [`EngineError::RecordCount`] if `out` has the wrong length.
     pub fn snapshot_all(&self, out: &mut [Record<E>]) -> Result<(), EngineError> {
+        if self.poisoned {
+            return Err(EngineError::Poisoned);
+        }
         if out.len() != self.headers.len() {
             return Err(EngineError::RecordCount {
                 records: out.len(),
@@ -70,7 +82,8 @@ where
     ///
     /// # Errors
     ///
-    /// Returns [`EngineError::InstanceOutOfRange`] for an unknown id.
+    /// Returns [`EngineError::Poisoned`] on a poisoned pool, or
+    /// [`EngineError::InstanceOutOfRange`] for an unknown id.
     pub fn state_hash(&self, id: u32) -> Result<StateHash, EngineError> {
         self.snapshot(id).map(|r| r.hash())
     }
@@ -193,16 +206,30 @@ where
     }
 
     /// The pool-level context, for pool snapshots.
-    #[must_use]
-    pub const fn pool_context(&self) -> PoolContext {
-        PoolContext {
-            branch_counter: self.branch_counter,
+    ///
+    /// # Errors
+    ///
+    /// Returns [`EngineError::Poisoned`] on a poisoned pool.
+    pub const fn pool_context(&self) -> Result<PoolContext, EngineError> {
+        if self.poisoned {
+            return Err(EngineError::Poisoned);
         }
+        Ok(PoolContext {
+            branch_counter: self.branch_counter,
+        })
     }
 
     /// Restores the pool-level context.
-    pub const fn restore_pool_context(&mut self, context: PoolContext) {
+    ///
+    /// # Errors
+    ///
+    /// Returns [`EngineError::Poisoned`] on a poisoned pool.
+    pub const fn restore_pool_context(&mut self, context: PoolContext) -> Result<(), EngineError> {
+        if self.poisoned {
+            return Err(EngineError::Poisoned);
+        }
         self.branch_counter = context.branch_counter;
+        Ok(())
     }
 
     fn checked_fork_source(&mut self, src: u32, dst: &[u32]) -> Result<Record<E>, EngineError> {

@@ -86,7 +86,9 @@ fn run(p: &mut Pool, i: usize, script: &[[i32; 2]]) -> Vec<Frame> {
         .collect()
 }
 
-const SCRIPT: [[i32; 2]; 6] = [[1, 0], [0, 2], [2, 1], [1, 1], [0, 0], [2, 2]];
+/// Legal for both agents (action 2 is illegal for agent 0), so the script
+/// also runs under `debug-checks`.
+const SCRIPT: [[i32; 2]; 6] = [[1, 0], [0, 2], [1, 1], [1, 2], [0, 0], [0, 2]];
 
 #[test]
 fn test_continuation_same_slot_other_slot_other_pool() {
@@ -158,7 +160,7 @@ fn test_fork_branched_diverges_deterministically() {
                     .collect::<Vec<_>>(),
             );
         }
-        (hashes, p.pool_context())
+        (hashes, p.pool_context().unwrap())
     };
     let (a, ctx) = branch(7);
     let (b, _) = branch(7);
@@ -185,7 +187,8 @@ fn test_fork_branched_labels_and_counter_errors() {
     );
     p.restore_pool_context(PoolContext {
         branch_counter: u64::MAX,
-    });
+    })
+    .unwrap();
     assert_eq!(
         p.fork_branched(0, &[1], None),
         Err(EngineError::BranchCounterExhausted)
@@ -221,6 +224,18 @@ fn test_poisoned_pool_accepts_only_full_restore() {
     );
     assert_eq!(bad.restore(0, &records[0]), Err(EngineError::Poisoned));
     assert_eq!(bad.fork(0, &[1]), Err(EngineError::Poisoned));
+    assert_eq!(bad.fork_branched(0, &[1], None), Err(EngineError::Poisoned));
+    assert_eq!(bad.snapshot(0).map(|_| ()), Err(EngineError::Poisoned));
+    assert_eq!(bad.state_hash(0).map(|_| ()), Err(EngineError::Poisoned));
+    assert_eq!(
+        bad.snapshot_all(&mut records.clone()),
+        Err(EngineError::Poisoned)
+    );
+    assert_eq!(bad.pool_context(), Err(EngineError::Poisoned));
+    assert_eq!(
+        bad.restore_pool_context(PoolContext { branch_counter: 0 }),
+        Err(EngineError::Poisoned)
+    );
     assert_eq!(
         bad.restore_all(&records[..1]),
         Err(EngineError::RecordCount {
@@ -230,6 +245,7 @@ fn test_poisoned_pool_accepts_only_full_restore() {
     );
     bad.restore_all(&records).unwrap();
     assert!(!bad.is_poisoned());
+    assert_eq!(bad.state_hash(0).unwrap(), p.state_hash(0).unwrap());
 }
 
 #[test]
