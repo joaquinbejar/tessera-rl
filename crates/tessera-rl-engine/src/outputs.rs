@@ -112,8 +112,9 @@ impl Outputs {
         &self.episode_truncated
     }
 
-    /// Return of episodes that ended in the last call (sum over agents),
-    /// `[N]`; zero elsewhere.
+    /// Return of episodes that ended in the last call, `[N]`: the sum of the
+    /// per-agent returns, which stay available per agent in the record
+    /// header (`AgentRow::episode_return`) for adapters. Zero elsewhere.
     #[must_use]
     pub fn episode_return(&self) -> &[f32] {
         &self.episode_return

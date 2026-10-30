@@ -11,14 +11,14 @@ help: the trait `Canonical` is not implemented for `Phase`
    | ^^^^^^^^^^
    = note: use #[derive(StateEnum)] for enums and #[derive(EnvState)] for structs; other fields must be fixed-width integers, floats, Fx32, Fx64, Bool8, Reserved<N>, arrays or Pool (ADR-0029)
    = help: the following other types implement trait `Canonical`:
+             AgentRow
              Bool8
+             EngineHeader
+             NoAdaptive
              Pool<T, CAP>
+             RecordHeader<A, Ad>
              Reserved<N>
              S
-             [T; N]
-             f32
-             f64
-             i16
            and $N others
 
 error[E0277]: `Phase` cannot be used as a state field
@@ -34,14 +34,14 @@ help: the trait `Canonical` is not implemented for `Phase`
    | ^^^^^^^^^^
    = note: use #[derive(StateEnum)] for enums and #[derive(EnvState)] for structs; other fields must be fixed-width integers, floats, Fx32, Fx64, Bool8, Reserved<N>, arrays or Pool (ADR-0029)
    = help: the following other types implement trait `Canonical`:
+             AgentRow
              Bool8
+             EngineHeader
+             NoAdaptive
              Pool<T, CAP>
+             RecordHeader<A, Ad>
              Reserved<N>
              S
-             [T; N]
-             f32
-             f64
-             i16
            and $N others
 note: required by a bound in `assert_field`
   --> tests/ui/fail/plain_enum_field.rs:13:10
@@ -63,14 +63,14 @@ help: the trait `StateInit` is not implemented for `Phase`
    | ^^^^^^^^^^
    = note: use #[derive(StateEnum)] for enums and #[derive(EnvState)] for structs (ADR-0029)
    = help: the following other types implement trait `StateInit`:
+             AgentRow
              Bool8
+             EngineHeader
+             NoAdaptive
              Pool<T, CAP>
+             RecordHeader<A, Ad>
              Reserved<N>
              S
-             [T; N]
-             f32
-             f64
-             i16
            and $N others
 note: required by a bound in `assert_field`
   --> tests/ui/fail/plain_enum_field.rs:13:10
@@ -92,14 +92,14 @@ help: the trait `Canonical` is not implemented for `Phase`
    | ^^^^^^^^^^
    = note: use #[derive(StateEnum)] for enums and #[derive(EnvState)] for structs; other fields must be fixed-width integers, floats, Fx32, Fx64, Bool8, Reserved<N>, arrays or Pool (ADR-0029)
    = help: the following other types implement trait `Canonical`:
+             AgentRow
              Bool8
+             EngineHeader
+             NoAdaptive
              Pool<T, CAP>
+             RecordHeader<A, Ad>
              Reserved<N>
              S
-             [T; N]
-             f32
-             f64
-             i16
            and $N others
    = note: this error originates in the derive macro `EnvState` (in Nightly builds, run with -Z macro-backtrace for more info)
 
@@ -116,12 +116,12 @@ help: the trait `StateInit` is not implemented for `Phase`
    | ^^^^^^^^^^
    = note: use #[derive(StateEnum)] for enums and #[derive(EnvState)] for structs (ADR-0029)
    = help: the following other types implement trait `StateInit`:
+             AgentRow
              Bool8
+             EngineHeader
+             NoAdaptive
              Pool<T, CAP>
+             RecordHeader<A, Ad>
              Reserved<N>
              S
-             [T; N]
-             f32
-             f64
-             i16
            and $N others

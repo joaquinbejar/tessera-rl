@@ -28,8 +28,9 @@ use crate::validate::{ActionInput, check_and_copy_actions, check_ids};
 pub enum Reseed<'a> {
     /// Keep the seeds; the episode index advances.
     Keep,
-    /// The k-th reset instance gets `seed + k`, modulo 2^64; for a full
-    /// reset, instance i gets `seed + i`.
+    /// The k-th reset instance, in the order given (ADR-0007), gets
+    /// `seed + k`, modulo 2^64; for a full reset, instance i gets
+    /// `seed + i`.
     Base(Seed),
     /// The k-th reset instance gets `seeds[k]`.
     List(&'a [Seed]),
