@@ -128,6 +128,17 @@ fn test_canonical_signed_zero_and_nan_payload_are_bit_exact() {
 }
 
 #[test]
+fn test_decode_allow_nan_accepts_nan_arrays() {
+    use tessera_rl_core::encoding::DecodeAllowNan;
+    let values = [1.0f32, f32::from_bits(0x7fc0_0123)];
+    let bytes = encode_to_vec(&values);
+    let mut input = Decoder::new(&bytes);
+    let got = <[f32; 2]>::decode_allow_nan(&mut input).unwrap();
+    assert_eq!(got.map(f32::to_bits), values.map(f32::to_bits));
+    assert!(decode_from_slice::<[f32; 2]>(&bytes).is_err());
+}
+
+#[test]
 fn test_decode_rejects_nan_without_allow_nan() {
     let bytes = encode_to_vec(&f32::from_bits(0x7fc0_0001));
     assert_eq!(

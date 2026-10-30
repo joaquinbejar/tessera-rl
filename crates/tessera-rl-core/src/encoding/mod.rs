@@ -22,7 +22,10 @@ pub use decoder::Decoder;
 pub use encoder::{Encoder, HashSink, Sink, SliceSink};
 pub use eq::canonical_eq;
 pub use hash::{StateHash, StateHasher};
-pub use impls::{decode_f32_allow_nan, decode_f64_allow_nan, decode_state_enum, encode_state_enum};
+pub use impls::{
+    DecodeAllowNan, decode_f32_allow_nan, decode_f64_allow_nan, decode_state_enum,
+    encode_state_enum,
+};
 
 use crate::error::{DecodeError, EncodeError};
 

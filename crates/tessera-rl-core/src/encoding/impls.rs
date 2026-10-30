@@ -75,6 +75,42 @@ impl Canonical for f64 {
     }
 }
 
+/// Decoding for float fields annotated `#[state(allow_nan)]`: like
+/// [`Canonical::decode`], but NaN (with its payload) is accepted.
+pub trait DecodeAllowNan: Sized {
+    /// Reads a value, accepting NaN.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DecodeError::UnexpectedEof`] on a short input.
+    fn decode_allow_nan(input: &mut Decoder<'_>) -> Result<Self, DecodeError>;
+}
+
+impl DecodeAllowNan for f32 {
+    #[inline]
+    fn decode_allow_nan(input: &mut Decoder<'_>) -> Result<Self, DecodeError> {
+        decode_f32_allow_nan(input)
+    }
+}
+
+impl DecodeAllowNan for f64 {
+    #[inline]
+    fn decode_allow_nan(input: &mut Decoder<'_>) -> Result<Self, DecodeError> {
+        decode_f64_allow_nan(input)
+    }
+}
+
+impl<T: DecodeAllowNan + Copy + Default, const N: usize> DecodeAllowNan for [T; N] {
+    #[inline]
+    fn decode_allow_nan(input: &mut Decoder<'_>) -> Result<Self, DecodeError> {
+        let mut items = [T::default(); N];
+        for item in &mut items {
+            *item = T::decode_allow_nan(input)?;
+        }
+        Ok(items)
+    }
+}
+
 /// Decodes an `f32` field annotated `#[state(allow_nan)]`, keeping any NaN
 /// payload.
 ///
