@@ -8,10 +8,12 @@
 //! calling thread inside `fp::with_canonical` (ADR-0037). After
 //! construction, `reset` and `step` never allocate.
 
-use tessera_rl_core::io::{Actions, ObsWriter};
+use core::marker::PhantomData;
+
+use tessera_rl_core::io::{ActionWriter, Actions, MaskWriter, ObsWriter};
 use tessera_rl_core::{
-    AdaptiveValues, AgentSlot, Bool8, EnvConfig, Environment, EpisodeEnd, RecordLayout, StateInit,
-    StepOut,
+    ActionMask, AdaptiveValues, AgentSlot, Bool8, EnvConfig, Environment, EpisodeEnd, RecordLayout,
+    StateInit, StepOut,
 };
 use tessera_rl_num::fp;
 use tessera_rl_num::identity::{LogicalId, RngIdentity, Seed, StreamId};
@@ -19,6 +21,7 @@ use tessera_rl_num::rng::{ObsRng, RngAuthority, StepRng};
 
 use crate::error::EngineError;
 use crate::layout::{ActionLayout, MAX_LEAVES, obs_leaves};
+use crate::masks::{IllegalActionPolicy, MaskProvider, Masked, NoMasks};
 use crate::options::{AutoReset, PoolOptions};
 use crate::outputs::Outputs;
 use crate::validate::{ActionInput, check_and_copy_actions, check_ids};
@@ -38,7 +41,7 @@ pub enum Reseed<'a> {
 
 /// A pool of `num_envs` instances of `E`.
 #[derive(Debug)]
-pub struct EnvPool<E: Environment> {
+pub struct EnvPool<E: Environment, M: MaskProvider<E> = NoMasks> {
     cfg: E::Config,
     options: PoolOptions,
     headers: Vec<E::Header>,
@@ -50,15 +53,18 @@ pub struct EnvPool<E: Environment> {
     seen: Vec<Bool8>,
     authority: RngAuthority,
     poisoned: bool,
+    penalties: Vec<f32>,
+    _masks: PhantomData<M>,
 }
 
-impl<E> EnvPool<E>
+impl<E> EnvPool<E, NoMasks>
 where
     E: Environment,
     <E::Header as RecordLayout>::Adaptive: AdaptiveValues<E::Config>,
 {
-    /// Builds a pool: validates the config, the options and the spaces, and
-    /// initializes every record. Instances need a `reset` before stepping.
+    /// Builds a pool without action masks: validates the config, the
+    /// options and the spaces, and initializes every record. Instances need
+    /// a `reset` before stepping.
     ///
     /// # Errors
     ///
@@ -67,7 +73,32 @@ where
         // Config validation, spaces, initial values: all FP-sensitive.
         fp::with_canonical(|| Self::build(cfg, options))
     }
+}
 
+impl<E> EnvPool<E, Masked>
+where
+    E: ActionMask,
+    <E::Header as RecordLayout>::Adaptive: AdaptiveValues<E::Config>,
+{
+    /// Builds a pool with action masks from `ActionMask`: masks are written
+    /// in the observation pass, and illegal actions follow
+    /// `options.illegal_action`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`EngineError`] for an invalid config, options or space.
+    pub fn with_masks(cfg: E::Config, options: PoolOptions) -> Result<Self, EngineError> {
+        // Config validation, spaces, initial values: all FP-sensitive.
+        fp::with_canonical(|| Self::build(cfg, options))
+    }
+}
+
+impl<E, M> EnvPool<E, M>
+where
+    E: Environment,
+    M: MaskProvider<E>,
+    <E::Header as RecordLayout>::Adaptive: AdaptiveValues<E::Config>,
+{
     fn build(cfg: E::Config, options: PoolOptions) -> Result<Self, EngineError> {
         const {
             assert!(
@@ -86,11 +117,21 @@ where
 
         let num_envs = usize::try_from(options.num_envs.get()).map_err(|_| too_large())?;
         let rows = num_envs.checked_mul(E::MAX_AGENTS).ok_or_else(too_large)?;
+        let mask_len = if M::ENABLED {
+            actions
+                .discrete
+                .iter()
+                .try_fold(0usize, |acc, &n| acc.checked_add(usize::try_from(n).ok()?))
+                .ok_or_else(too_large)?
+        } else {
+            0
+        };
         let outputs = Outputs::new(
             num_envs,
             E::MAX_AGENTS,
             &leaves,
             options.auto_reset == AutoReset::SameStep,
+            mask_len,
         )
         .ok_or_else(too_large)?;
         let adaptive = <E::Header as RecordLayout>::Adaptive::from_config(&cfg);
@@ -127,6 +168,8 @@ where
             seen: vec![Bool8::FALSE; num_envs],
             authority: RngAuthority::engine_only(),
             poisoned: false,
+            penalties: vec![0.0; if M::ENABLED { rows } else { 0 }],
+            _masks: PhantomData,
         })
     }
 
@@ -297,9 +340,79 @@ where
                 reset_one::<E>(cfg, authority, header, state, seed);
                 clear_instance(outputs, i);
                 write_agent_masks(outputs, i, header);
-                observe_instance::<E>(cfg, authority, header, state, outputs, i);
+                observe_instance::<E, M>(cfg, authority, header, state, outputs, i);
             }
         })
+    }
+
+    /// Replaces illegal-but-valid actions with the environment's no-op,
+    /// counts them and records penalties (ADR-0028). Runs after validation,
+    /// against the masks of the current state; never fails the call.
+    fn replace_illegal(&mut self) {
+        let Self {
+            cfg,
+            options,
+            headers,
+            states,
+            actions,
+            discrete,
+            continuous,
+            outputs,
+            penalties,
+            ..
+        } = self;
+        let a = E::MAX_AGENTS;
+        let (dh, ch) = (actions.discrete.len(), actions.continuous.len());
+        let mask_len = outputs.mask_len;
+        let penalty = match options.illegal_action {
+            IllegalActionPolicy::Noop => 0.0,
+            IllegalActionPolicy::Penalize(r) => r,
+        };
+        penalties.fill(0.0);
+        for (i, (header, state)) in headers.iter_mut().zip(states.iter()).enumerate() {
+            if header.engine().pending_reset.get() {
+                continue;
+            }
+            for (slot, row) in header.agents_mut().iter_mut().enumerate() {
+                if !(row.alive.get() && row.acting.get()) {
+                    continue;
+                }
+                let k = i * a + slot;
+                let mask = outputs
+                    .masks
+                    .get(k * mask_len..(k + 1) * mask_len)
+                    .unwrap_or(&[]);
+                let heads = discrete.get(k * dh..(k + 1) * dh).unwrap_or(&[]);
+                let mut offset = 0usize;
+                let mut illegal = false;
+                for (&value, &n) in heads.iter().zip(&actions.discrete) {
+                    let legal = usize::try_from(value)
+                        .ok()
+                        .and_then(|v| mask.get(offset + v))
+                        .is_some_and(|m| m.get());
+                    illegal |= !legal;
+                    offset += usize::try_from(n).unwrap_or(0);
+                }
+                if !illegal {
+                    continue;
+                }
+                // Counts saturate at u32::MAX per episode (documented).
+                row.illegal_actions = row.illegal_actions.saturating_add(1);
+                if let Some(p) = penalties.get_mut(k) {
+                    *p = penalty;
+                }
+                let (Some(d), Some(c), Some(agent)) = (
+                    discrete.get_mut(k * dh..(k + 1) * dh),
+                    continuous.get_mut(k * ch..(k + 1) * ch),
+                    AgentSlot::new(u16::try_from(slot).unwrap_or(u16::MAX), a),
+                ) else {
+                    continue;
+                };
+                d.fill(0);
+                c.fill(0.0);
+                M::noop(cfg, state, agent, &mut ActionWriter::new(d, c));
+            }
+        }
     }
 
     /// Steps every instance with `actions` (Inline mode).
@@ -331,6 +444,9 @@ where
             &mut self.discrete,
             &mut self.continuous,
         )?;
+        if M::ENABLED {
+            self.replace_illegal();
+        }
         let Self {
             cfg,
             options,
@@ -342,6 +458,7 @@ where
             outputs,
             authority,
             poisoned,
+            penalties,
             ..
         } = self;
         let (dh, ch) = (layout.discrete.len(), layout.continuous.len());
@@ -354,7 +471,7 @@ where
                     reset_one::<E>(cfg, authority, header, state, None);
                     clear_instance(outputs, i);
                     write_agent_masks(outputs, i, header);
-                    observe_instance::<E>(cfg, authority, header, state, outputs, i);
+                    observe_instance::<E, M>(cfg, authority, header, state, outputs, i);
                     continue;
                 }
                 let rows = i * E::MAX_AGENTS;
@@ -368,14 +485,19 @@ where
                         .unwrap_or(&[]),
                     ch,
                 );
-                step_one::<E>(cfg, authority, header, state, &view, outputs, i, limit);
-                observe_instance::<E>(cfg, authority, header, state, outputs, i);
+                let penalty = penalties
+                    .get(i * E::MAX_AGENTS..(i + 1) * E::MAX_AGENTS)
+                    .unwrap_or(&[]);
+                step_one::<E>(
+                    cfg, authority, header, state, &view, outputs, i, limit, penalty,
+                );
+                observe_instance::<E, M>(cfg, authority, header, state, outputs, i);
                 if auto_reset == AutoReset::SameStep && header.engine().pending_reset.get() {
                     save_terminal(outputs, i);
                     // Flags and stats of the ended episode stay set.
                     reset_one::<E>(cfg, authority, header, state, None);
                     write_agent_masks(outputs, i, header);
-                    observe_instance::<E>(cfg, authority, header, state, outputs, i);
+                    observe_instance::<E, M>(cfg, authority, header, state, outputs, i);
                 }
             }
         })?;
@@ -460,6 +582,7 @@ fn reset_one<E: Environment>(
         row.alive = Bool8::TRUE;
         row.acting = Bool8::TRUE;
         row.episode_return = 0.0;
+        row.illegal_actions = 0;
     }
     *state = E::State::state_default();
     let mut rng = StepRng::new(authority, &identity, StreamId::DYNAMICS);
@@ -479,6 +602,7 @@ fn step_one<E: Environment>(
     outputs: &mut Outputs,
     i: usize,
     limit: Option<u32>,
+    penalties: &[f32],
 ) {
     let a = E::MAX_AGENTS;
     let range = i * a..(i + 1) * a;
@@ -515,6 +639,9 @@ fn step_one<E: Environment>(
     let mut total = 0.0f32;
     for (slot, row) in header.agents_mut().iter_mut().enumerate() {
         let k = i * a + slot;
+        if let (Some(r), Some(&p)) = (outputs.rewards.get_mut(k), penalties.get(slot)) {
+            *r += p;
+        }
         let reward = outputs.rewards.get(k).copied().unwrap_or(0.0);
         debug_assert!(
             reward.is_finite(),
@@ -568,26 +695,48 @@ fn step_one<E: Environment>(
         }
     }
     if let Some(end) = end {
-        let engine = header.engine_mut();
-        engine.pending_reset = Bool8::TRUE;
-        let (terminated, kind) = match end {
-            EpisodeEnd::Terminated => (true, 1),
-            EpisodeEnd::Truncated => (false, 2),
-        };
-        engine.end_kind = kind;
-        set(&mut outputs.episode_terminated, i, terminated);
-        set(&mut outputs.episode_truncated, i, !terminated);
-        if let Some(r) = outputs.episode_return.get_mut(i) {
-            *r = total;
-        }
-        if let Some(l) = outputs.episode_length.get_mut(i) {
-            // Episode lengths are reported as f32 statistics (SPEC 5.2).
-            #[expect(clippy::cast_precision_loss, reason = "statistic, exact below 2^24")]
-            let length = t as f32;
-            *l = length;
-        }
+        finish_episode(header, outputs, i, end, t, total);
     }
     write_agent_masks(outputs, i, header);
+}
+
+/// Records the end of an episode: flags, pending reset and statistics.
+fn finish_episode<H: RecordLayout>(
+    header: &mut H,
+    outputs: &mut Outputs,
+    i: usize,
+    end: EpisodeEnd,
+    t: u32,
+    total: f32,
+) {
+    let engine = header.engine_mut();
+    engine.pending_reset = Bool8::TRUE;
+    let (terminated, kind) = match end {
+        EpisodeEnd::Terminated => (true, 1),
+        EpisodeEnd::Truncated => (false, 2),
+    };
+    engine.end_kind = kind;
+    set(&mut outputs.episode_terminated, i, terminated);
+    set(&mut outputs.episode_truncated, i, !terminated);
+    if let Some(r) = outputs.episode_return.get_mut(i) {
+        *r = total;
+    }
+    let illegal: u32 = header
+        .agents()
+        .iter()
+        .fold(0u32, |acc, row| acc.saturating_add(row.illegal_actions));
+    if let Some(n) = outputs.episode_illegal_actions.get_mut(i) {
+        // Statistics are f32 (SPEC 5.2); exact below 2^24.
+        #[expect(clippy::cast_precision_loss, reason = "statistic, exact below 2^24")]
+        let count = illegal as f32;
+        *n = count;
+    }
+    if let Some(l) = outputs.episode_length.get_mut(i) {
+        // Episode lengths are reported as f32 statistics (SPEC 5.2).
+        #[expect(clippy::cast_precision_loss, reason = "statistic, exact below 2^24")]
+        let length = t as f32;
+        *l = length;
+    }
 }
 
 fn set(buf: &mut [Bool8], i: usize, value: bool) {
@@ -614,7 +763,11 @@ fn clear_instance(outputs: &mut Outputs, i: usize) {
     }
     set(&mut outputs.episode_terminated, i, false);
     set(&mut outputs.episode_truncated, i, false);
-    for buf in [&mut outputs.episode_return, &mut outputs.episode_length] {
+    for buf in [
+        &mut outputs.episode_return,
+        &mut outputs.episode_length,
+        &mut outputs.episode_illegal_actions,
+    ] {
         if let Some(v) = buf.get_mut(i) {
             *v = 0.0;
         }
@@ -637,7 +790,7 @@ fn write_agent_masks<H: RecordLayout>(outputs: &mut Outputs, i: usize, header: &
     }
 }
 
-fn observe_instance<E: Environment>(
+fn observe_instance<E: Environment, M: MaskProvider<E>>(
     cfg: &E::Config,
     authority: &RngAuthority,
     header: &E::Header,
@@ -647,14 +800,20 @@ fn observe_instance<E: Environment>(
 ) {
     let identity = header.engine().identity;
     let a = E::MAX_AGENTS;
+    let Outputs {
+        observations,
+        leaf_bytes,
+        masks,
+        mask_len,
+        ..
+    } = outputs;
     for (slot, row) in header.agents().iter().enumerate() {
         let k = i * a + slot;
         let mut views: [&mut [u8]; MAX_LEAVES] = Default::default();
         let mut used = 0;
-        for ((buf, &bytes), view) in outputs
-            .observations
+        for ((buf, &bytes), view) in observations
             .iter_mut()
-            .zip(&outputs.leaf_bytes)
+            .zip(leaf_bytes.iter())
             .zip(views.iter_mut())
         {
             if let Some(rows) = buf.get_mut(k * bytes..(k + 1) * bytes) {
@@ -662,6 +821,16 @@ fn observe_instance<E: Environment>(
                 *view = rows;
             }
             used += 1;
+        }
+        // Masks describe the current state: written in the same pass as
+        // the observation (ADR-0014); dead agents get an all-false mask.
+        let mut mask = if M::ENABLED {
+            masks.get_mut(k * *mask_len..(k + 1) * *mask_len)
+        } else {
+            None
+        };
+        if let Some(m) = mask.as_deref_mut() {
+            m.fill(Bool8::FALSE);
         }
         if !row.alive.get() {
             continue;
@@ -675,5 +844,8 @@ fn observe_instance<E: Environment>(
         let mut writer = ObsWriter::new(leaves);
         let mut rng = ObsRng::new(authority, &identity);
         E::observe(cfg, state, agent, &mut rng, &mut writer);
+        if let Some(m) = mask {
+            M::write_mask(cfg, state, agent, &mut MaskWriter::new(m));
+        }
     }
 }

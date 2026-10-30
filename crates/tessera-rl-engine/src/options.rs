@@ -7,6 +7,7 @@ use core::num::NonZeroU32;
 use tessera_rl_num::identity::Seed;
 
 use crate::error::EngineError;
+use crate::masks::IllegalActionPolicy;
 
 /// Smallest and largest chunk sizes (SPEC 5.1).
 pub const CHUNK_RANGE: core::ops::RangeInclusive<u32> = 1..=1024;
@@ -30,7 +31,7 @@ pub enum AutoReset {
 }
 
 /// Options of an [`EnvPool`](crate::EnvPool).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct PoolOptions {
     /// Number of instances.
     pub num_envs: NonZeroU32,
@@ -42,6 +43,8 @@ pub struct PoolOptions {
     pub max_episode_steps: Option<NonZeroU32>,
     /// Behaviour after an episode ends.
     pub auto_reset: AutoReset,
+    /// Policy for illegal actions; applies only to masked pools.
+    pub illegal_action: IllegalActionPolicy,
 }
 
 impl PoolOptions {
@@ -55,6 +58,7 @@ impl PoolOptions {
             chunk_size: NonZeroU32::MIN.saturating_add(63),
             max_episode_steps: None,
             auto_reset: AutoReset::NextStep,
+            illegal_action: IllegalActionPolicy::Noop,
         }
     }
 
@@ -63,6 +67,14 @@ impl PoolOptions {
             return Err(EngineError::Options {
                 option: "chunk_size",
                 reason: "must be in 1..=1024",
+            });
+        }
+        if let IllegalActionPolicy::Penalize(r) = self.illegal_action
+            && !r.is_finite()
+        {
+            return Err(EngineError::Options {
+                option: "illegal_action",
+                reason: "the penalty must be finite",
             });
         }
         Ok(())

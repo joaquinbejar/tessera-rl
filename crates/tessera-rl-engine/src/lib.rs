@@ -8,6 +8,7 @@
 
 mod error;
 mod layout;
+mod masks;
 mod options;
 mod outputs;
 mod pool;
@@ -15,6 +16,7 @@ mod validate;
 
 pub use error::EngineError;
 pub use layout::MAX_LEAVES;
+pub use masks::{IllegalActionPolicy, MaskProvider, Masked, NoMasks};
 pub use options::{AutoReset, CHUNK_RANGE, PoolOptions};
 pub use outputs::Outputs;
 pub use pool::{EnvPool, Reseed};

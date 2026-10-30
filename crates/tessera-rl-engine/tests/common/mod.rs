@@ -4,11 +4,11 @@
 //! bonus to its counter; agent 1 dies when its counter passes `kill_at`;
 //! the episode terminates after `length` steps.
 
-use tessera_rl_core::io::{Actions, ObsWriter};
+use tessera_rl_core::io::{ActionWriter, Actions, MaskWriter, ObsWriter};
 use tessera_rl_core::space::Space;
 use tessera_rl_core::{
-    AgentSlot, Bool8, EnvState, Environment, EpisodeEnd, NoAdaptive, ObsLeaf, Observation,
-    RecordHeader, SpaceError, StepOut, Tier,
+    ActionMask, AgentSlot, Bool8, EnvState, Environment, EpisodeEnd, NoAdaptive, ObsLeaf,
+    Observation, RecordHeader, SpaceError, StepOut, Tier,
 };
 use tessera_rl_macros::{EnvConfig, EnvState, Observation};
 use tessera_rl_num::rng::{ObsRng, StepRng};
@@ -121,6 +121,20 @@ impl Environment for Counter {
             leaf.set(0, own);
             leaf.set(1, noise);
         }
+    }
+}
+
+/// Action 2 is illegal for agent 0 and legal for agent 1; the no-op is 0.
+impl ActionMask for Counter {
+    fn action_mask(_: &CountConfig, _: &Counts, agent: AgentSlot, out: &mut MaskWriter<'_>) {
+        out.fill(true);
+        if agent.index() == 0 {
+            out.set(2, false);
+        }
+    }
+
+    fn noop(_: &CountConfig, _: &Counts, _: AgentSlot, out: &mut ActionWriter<'_>) {
+        out.set_discrete(0, 0);
     }
 }
 

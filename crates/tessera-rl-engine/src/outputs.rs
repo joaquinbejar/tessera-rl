@@ -31,6 +31,9 @@ pub struct Outputs {
     pub(crate) episode_truncated: Vec<Bool8>,
     pub(crate) episode_return: Vec<f32>,
     pub(crate) episode_length: Vec<f32>,
+    pub(crate) episode_illegal_actions: Vec<f32>,
+    pub(crate) masks: Vec<tessera_rl_core::Bool8>,
+    pub(crate) mask_len: usize,
 }
 
 impl Outputs {
@@ -39,6 +42,7 @@ impl Outputs {
         agents: usize,
         leaves: &[Leaf],
         terminal: bool,
+        mask_len: usize,
     ) -> Option<Self> {
         let rows = num_envs.checked_mul(agents)?;
         let observations = leaves
@@ -67,6 +71,9 @@ impl Outputs {
             episode_truncated: vec![Bool8::FALSE; num_envs],
             episode_return: vec![0.0; num_envs],
             episode_length: vec![0.0; num_envs],
+            episode_illegal_actions: vec![0.0; num_envs],
+            masks: vec![Bool8::FALSE; rows.checked_mul(mask_len)?],
+            mask_len,
         })
     }
 
@@ -138,6 +145,20 @@ impl Outputs {
     #[must_use]
     pub fn episode_return(&self) -> &[f32] {
         &self.episode_return
+    }
+
+    /// Illegal actions replaced in episodes that ended in the last call
+    /// (sum over agents), `[N]`; zero elsewhere.
+    #[must_use]
+    pub fn episode_illegal_actions(&self) -> &[f32] {
+        &self.episode_illegal_actions
+    }
+
+    /// Action masks for the current state, `[N, A, mask length]`: one entry
+    /// per choice of each discrete head. Empty for pools without masks.
+    #[must_use]
+    pub fn masks(&self) -> &[Bool8] {
+        &self.masks
     }
 
     /// Length of episodes that ended in the last call, `[N]`; zero elsewhere.
