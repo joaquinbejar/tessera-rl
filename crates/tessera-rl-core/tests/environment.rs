@@ -7,7 +7,8 @@ use tessera_rl_core::io::{ActionWriter, Actions, MaskWriter, ObsWriter};
 use tessera_rl_core::space::Space;
 use tessera_rl_core::{
     ActionMask, AgentSlot, Bool8, DecodeError, EnvConfig, EnvState, Environment, EpisodeEnd,
-    Heuristic, InvariantViolation, SpaceError, StateInit, StepOut, Tier, Validate,
+    Heuristic, InvariantViolation, NoAdaptive, RecordHeader, SpaceError, StateInit, StepOut, Tier,
+    Validate,
 };
 use tessera_rl_num::identity::{LogicalId, RngIdentity, Seed, StreamId};
 use tessera_rl_num::rng::{ObsRng, RngAuthority, StepRng};
@@ -70,6 +71,7 @@ impl Environment for Counter {
     type Config = CountConfig;
     type Obs = ();
     type Action = ();
+    type Header = RecordHeader<2, NoAdaptive>;
 
     const MAX_AGENTS: usize = 2;
     const TIER: Tier = Tier::CrossPlatform;
