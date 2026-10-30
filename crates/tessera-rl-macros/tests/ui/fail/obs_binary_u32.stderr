@@ -1,0 +1,5 @@
+error[E0080]: evaluation panicked: Observation: multi_binary leaves must be ObsLeaf<Bool8>
+ --> tests/ui/fail/obs_binary_u32.rs:6:10
+  |
+6 | #[derive(Observation)]
+  |          ^^^^^^^^^^^ evaluation of `_` failed here

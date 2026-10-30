@@ -9,7 +9,30 @@ help: the trait `Canonical` is not implemented for `Phase`
    |
  7 | enum Phase {
    | ^^^^^^^^^^
-   = note: state fields must be fixed-width integers, f32, f64, Fx32, Fx64, Bool8, Reserved<N>, arrays of these, Pool<T, CAP>, #[derive(StateEnum)] enums or #[derive(EnvState)] structs (ADR-0029)
+   = note: use #[derive(StateEnum)] for enums and #[derive(EnvState)] for structs; other fields must be fixed-width integers, floats, Fx32, Fx64, Bool8, Reserved<N>, arrays or Pool (ADR-0029)
+   = help: the following other types implement trait `Canonical`:
+             Bool8
+             Pool<T, CAP>
+             Reserved<N>
+             S
+             [T; N]
+             f32
+             f64
+             i16
+           and $N others
+
+error[E0277]: `Phase` cannot be used as a state field
+  --> tests/ui/fail/plain_enum_field.rs:16:12
+   |
+16 |     phase: Phase,
+   |            ^^^^^ not a plain-data state type
+   |
+help: the trait `Canonical` is not implemented for `Phase`
+  --> tests/ui/fail/plain_enum_field.rs:7:1
+   |
+ 7 | enum Phase {
+   | ^^^^^^^^^^
+   = note: use #[derive(StateEnum)] for enums and #[derive(EnvState)] for structs; other fields must be fixed-width integers, floats, Fx32, Fx64, Bool8, Reserved<N>, arrays or Pool (ADR-0029)
    = help: the following other types implement trait `Canonical`:
              Bool8
              Pool<T, CAP>
@@ -57,29 +80,6 @@ note: required by a bound in `assert_field`
    = note: this error originates in the derive macro `EnvState` (in Nightly builds, run with -Z macro-backtrace for more info)
 
 error[E0277]: `Phase` cannot be used as a state field
-  --> tests/ui/fail/plain_enum_field.rs:16:12
-   |
-16 |     phase: Phase,
-   |            ^^^^^ not a plain-data state type
-   |
-help: the trait `Canonical` is not implemented for `Phase`
-  --> tests/ui/fail/plain_enum_field.rs:7:1
-   |
- 7 | enum Phase {
-   | ^^^^^^^^^^
-   = note: state fields must be fixed-width integers, f32, f64, Fx32, Fx64, Bool8, Reserved<N>, arrays of these, Pool<T, CAP>, #[derive(StateEnum)] enums or #[derive(EnvState)] structs (ADR-0029)
-   = help: the following other types implement trait `Canonical`:
-             Bool8
-             Pool<T, CAP>
-             Reserved<N>
-             S
-             [T; N]
-             f32
-             f64
-             i16
-           and $N others
-
-error[E0277]: `Phase` cannot be used as a state field
   --> tests/ui/fail/plain_enum_field.rs:13:10
    |
 13 | #[derive(EnvState, Clone, Copy, Default)]
@@ -90,7 +90,7 @@ help: the trait `Canonical` is not implemented for `Phase`
    |
  7 | enum Phase {
    | ^^^^^^^^^^
-   = note: state fields must be fixed-width integers, f32, f64, Fx32, Fx64, Bool8, Reserved<N>, arrays of these, Pool<T, CAP>, #[derive(StateEnum)] enums or #[derive(EnvState)] structs (ADR-0029)
+   = note: use #[derive(StateEnum)] for enums and #[derive(EnvState)] for structs; other fields must be fixed-width integers, floats, Fx32, Fx64, Bool8, Reserved<N>, arrays or Pool (ADR-0029)
    = help: the following other types implement trait `Canonical`:
              Bool8
              Pool<T, CAP>

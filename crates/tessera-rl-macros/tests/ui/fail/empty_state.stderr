@@ -1,0 +1,5 @@
+error: EnvState requires at least one field
+ --> tests/ui/fail/empty_state.rs:7:8
+  |
+7 | struct S {}
+  |        ^

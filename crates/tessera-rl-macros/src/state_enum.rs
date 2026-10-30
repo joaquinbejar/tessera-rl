@@ -13,13 +13,16 @@ const REPRS: &[&str] = &["u8", "u16", "u32", "i8", "i16", "i32", "i64"];
 fn repr_type(input: &DeriveInput) -> syn::Result<Ident> {
     let mut found = None;
     for attr in input.attrs.iter().filter(|a| a.path().is_ident("repr")) {
-        attr.parse_nested_meta(|meta| {
-            if let Some(ident) = meta.path.get_ident()
-                && REPRS.iter().any(|r| ident == r)
-            {
-                found = Some(ident.clone());
+        attr.parse_nested_meta(|meta| match meta.path.get_ident() {
+            Some(ident) if REPRS.iter().any(|r| ident == r) => {
+                if found.replace(ident.clone()).is_some() {
+                    return Err(meta.error("StateEnum takes exactly one integer repr"));
+                }
+                Ok(())
             }
-            Ok(())
+            _ => Err(meta.error(
+                "StateEnum takes only an integer repr; no C, align, packed or other arguments",
+            )),
         })?;
     }
     found.ok_or_else(|| {
@@ -53,6 +56,7 @@ pub(crate) fn derive(input: &DeriveInput) -> syn::Result<TokenStream> {
         ));
     }
     let mut defaults = 0usize;
+    let mut default_variant = None;
     let mut arms = Vec::new();
     for variant in &data.variants {
         if !matches!(variant.fields, Fields::Unit) {
@@ -63,6 +67,7 @@ pub(crate) fn derive(input: &DeriveInput) -> syn::Result<TokenStream> {
         }
         if variant.attrs.iter().any(|a| a.path().is_ident("default")) {
             defaults += 1;
+            default_variant = Some(variant.ident.clone());
         }
         let v = &variant.ident;
         arms.push(quote! {
@@ -71,12 +76,12 @@ pub(crate) fn derive(input: &DeriveInput) -> syn::Result<TokenStream> {
             }
         });
     }
-    if defaults != 1 {
+    let Some(default_variant) = default_variant.filter(|_| defaults == 1) else {
         return Err(syn::Error::new_spanned(
             name,
             "StateEnum requires exactly one #[default] variant (with #[derive(Default)])",
         ));
-    }
+    };
     let name_str = LitStr::new(&name.to_string(), name.span());
 
     Ok(quote! {
@@ -99,7 +104,7 @@ pub(crate) fn derive(input: &DeriveInput) -> syn::Result<TokenStream> {
         impl #core::StateInit for #name {
             #[inline]
             fn state_default() -> Self {
-                <Self as ::core::default::Default>::default()
+                Self::#default_variant
             }
         }
 

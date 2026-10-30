@@ -191,6 +191,24 @@ fn test_env_config_defaults_and_ranges() {
     assert_eq!(heavy.validate().map_err(|e| e.field), Err("gravity"));
 }
 
+#[derive(EnvConfig, Debug, Clone, PartialEq)]
+struct Noise {
+    #[config(default = 0.5)]
+    noise: f64,
+}
+
+#[test]
+fn test_env_config_rejects_nan_floats_without_range() {
+    let cfg = Noise { noise: f64::NAN };
+    assert_eq!(
+        cfg.validate(),
+        Err(ConfigError {
+            field: "noise",
+            reason: "must not be NaN"
+        })
+    );
+}
+
 #[test]
 fn test_env_config_canonical_form_sorted_without_adaptive() {
     assert_eq!(GridConfig::ADAPTIVE_FIELDS, ["difficulty"]);
@@ -208,7 +226,7 @@ fn test_env_config_canonical_form_sorted_without_adaptive() {
 #[test]
 fn test_env_config_hash_ignores_adaptive_and_tracks_static_fields() {
     let base = GridConfig::default();
-    let hash = |cfg: &GridConfig| config_hash("tessera/Grid", 1, cfg);
+    let hash = |cfg: &GridConfig| config_hash("tessera/Grid", 1, cfg).unwrap();
     assert_eq!(
         hash(&base),
         hash(&GridConfig {

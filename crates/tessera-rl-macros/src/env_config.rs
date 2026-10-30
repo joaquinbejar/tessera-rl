@@ -31,8 +31,18 @@ struct FieldAttrs {
 
 fn parse_attrs(field: &syn::Field) -> syn::Result<FieldAttrs> {
     let mut attrs = FieldAttrs::default();
+    let mut seen: Vec<String> = Vec::new();
     for attr in field.attrs.iter().filter(|a| a.path().is_ident("config")) {
         attr.parse_nested_meta(|meta| {
+            let key = meta
+                .path
+                .get_ident()
+                .map(ToString::to_string)
+                .unwrap_or_default();
+            if seen.contains(&key) {
+                return Err(meta.error(format!("duplicate `{key}`")));
+            }
+            seen.push(key);
             if meta.path.is_ident("default") {
                 attrs.default = Some(meta.value()?.parse()?);
             } else if meta.path.is_ident("range") {
@@ -124,6 +134,16 @@ impl ConfigParts {
         if nested {
             self.checks
                 .push(quote!(#core::EnvConfig::validate(&self.#ident)?;));
+        }
+        if matches!(last_ident(ty).as_deref(), Some("f32" | "f64")) {
+            self.checks.push(quote! {
+                if self.#ident.is_nan() {
+                    return ::core::result::Result::Err(#core::ConfigError {
+                        field: #key,
+                        reason: "must not be NaN",
+                    });
+                }
+            });
         }
         if attrs.adaptive {
             self.adaptive.push(key);

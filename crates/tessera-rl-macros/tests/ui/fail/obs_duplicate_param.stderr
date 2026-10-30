@@ -1,0 +1,5 @@
+error: duplicate `low`
+ --> tests/ui/fail/obs_duplicate_param.rs:8:26
+  |
+8 |     #[space(box(low = 0, low = 1, high = 5, shape = [1]))]
+  |                          ^^^

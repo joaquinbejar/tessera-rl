@@ -12,10 +12,10 @@
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 use syn::meta::ParseNestedMeta;
-use syn::{Data, DeriveInput, Expr, Fields, Ident, Pat, Type};
+use syn::{DeriveInput, Expr, Ident, Pat, Type};
 
 use crate::paths::core_path;
-use crate::types::obs_leaf_inner;
+use crate::types::{named_fields, obs_leaf_inner};
 
 struct BoxLeaf {
     low: Expr,
@@ -38,6 +38,9 @@ fn parse_params(meta: &ParseNestedMeta<'_>, names: &[&str]) -> syn::Result<Vec<(
         };
         if !names.contains(&key.as_str()) {
             return Err(inner.error(format!("expected one of {names:?}")));
+        }
+        if params.iter().any(|(k, _)| *k == key) {
+            return Err(inner.error(format!("duplicate `{key}`")));
         }
         params.push((key, inner.value()?.parse::<Expr>()?));
         Ok(())
@@ -222,24 +225,12 @@ pub(crate) fn derive(input: &DeriveInput) -> syn::Result<TokenStream> {
             "Observation does not support generics",
         ));
     }
-    let Data::Struct(data) = &input.data else {
-        return Err(syn::Error::new_spanned(
-            name,
-            "Observation can only be derived for structs",
-        ));
-    };
-    let Fields::Named(fields) = &data.fields else {
-        return Err(syn::Error::new_spanned(
-            name,
-            "Observation requires a struct with named fields",
-        ));
-    };
-
+    let fields = named_fields(input, "Observation")?;
     let mut config: Option<Type> = None;
     let mut ids = Vec::new();
     let mut spaces = Vec::new();
     let mut dtype_checks = Vec::new();
-    for (index, field) in fields.named.iter().enumerate() {
+    for (index, field) in fields.iter().enumerate() {
         let Some(ident) = &field.ident else { continue };
         let Some(elem) = obs_leaf_inner(&field.ty) else {
             return Err(syn::Error::new_spanned(
@@ -277,7 +268,7 @@ pub(crate) fn derive(input: &DeriveInput) -> syn::Result<TokenStream> {
         spaces.push(quote!((::std::string::String::from(#key), #space)));
     }
     let leaves = spaces.len();
-    let field_idents = fields.named.iter().filter_map(|f| f.ident.as_ref());
+    let field_idents = fields.iter().filter_map(|f| f.ident.as_ref());
     let (impl_generics, config_ty) = match &config {
         Some(ty) => (quote!(), quote!(#ty)),
         None => (quote!(<C>), quote!(C)),

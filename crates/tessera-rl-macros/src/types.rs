@@ -2,7 +2,9 @@
 
 //! Syntactic checks on field types.
 
-use syn::{GenericArgument, PathArguments, Type};
+use syn::punctuated::Punctuated;
+use syn::token::Comma;
+use syn::{Data, DeriveInput, Field, Fields, GenericArgument, PathArguments, Type};
 
 /// Types that can never be state fields, with the reason shown to authors.
 const FORBIDDEN: &[(&str, &str)] = &[
@@ -117,4 +119,31 @@ pub(crate) fn obs_leaf_inner(ty: &Type) -> Option<&Type> {
         GenericArgument::Type(inner) if args.args.len() == 1 => Some(inner),
         _ => None,
     }
+}
+
+/// The named fields of a non-generic struct with at least one field.
+pub(crate) fn named_fields<'a>(
+    input: &'a DeriveInput,
+    derive: &str,
+) -> syn::Result<&'a Punctuated<Field, Comma>> {
+    let name = &input.ident;
+    let Data::Struct(data) = &input.data else {
+        return Err(syn::Error::new_spanned(
+            name,
+            format!("{derive} can only be derived for structs"),
+        ));
+    };
+    let Fields::Named(fields) = &data.fields else {
+        return Err(syn::Error::new_spanned(
+            name,
+            format!("{derive} requires a struct with named fields"),
+        ));
+    };
+    if fields.named.is_empty() {
+        return Err(syn::Error::new_spanned(
+            name,
+            format!("{derive} requires at least one field"),
+        ));
+    }
+    Ok(&fields.named)
 }

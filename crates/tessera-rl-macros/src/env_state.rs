@@ -8,10 +8,10 @@
 
 use proc_macro2::TokenStream;
 use quote::quote;
-use syn::{Attribute, Data, DeriveInput, Fields, Ident, LitStr};
+use syn::{Attribute, DeriveInput, Ident, LitStr};
 
 use crate::paths::core_path;
-use crate::types::{check_state_field, is_float};
+use crate::types::{check_state_field, is_float, named_fields};
 
 /// Returns whether `#[repr(...)]` contains `C`; rejects `packed`.
 fn has_repr_c(attrs: &[Attribute]) -> syn::Result<bool> {
@@ -91,6 +91,17 @@ impl FieldParts {
             end = ::core::mem::offset_of!(#name, #ident) + ::core::mem::size_of::<#ty>();
         });
         self.bounds.push(quote!(assert_field::<#ty>();));
+        let hidden = LitStr::new(
+            &format!(
+                "EnvState: field `{ident}` of `{name}` has hidden padding (size differs from its encoded length), for example a Pool whose CAP is not a multiple of align_of::<T>() (ADR-0029)"
+            ),
+            ident.span(),
+        );
+        self.padding_checks.push(quote! {
+            if ::core::mem::size_of::<#ty>() != <#ty as #core::encoding::Canonical>::ENCODED_LEN {
+                ::core::panic!(#hidden);
+            }
+        });
         self.lens
             .push(quote!(<#ty as #core::encoding::Canonical>::ENCODED_LEN));
         self.encodes
@@ -115,24 +126,13 @@ pub(crate) fn derive(input: &DeriveInput) -> syn::Result<TokenStream> {
             "EnvState requires #[repr(C)] (ADR-0029)",
         ));
     }
-    let Data::Struct(data) = &input.data else {
-        return Err(syn::Error::new_spanned(
-            name,
-            "EnvState can only be derived for structs",
-        ));
-    };
-    let Fields::Named(fields) = &data.fields else {
-        return Err(syn::Error::new_spanned(
-            name,
-            "EnvState requires a struct with named fields",
-        ));
-    };
+    let fields = named_fields(input, "EnvState")?;
 
     // Field types first, so a reference reports itself rather than the
     // lifetime parameter it needs.
     let mut parts = FieldParts::default();
     let mut last = None;
-    for field in &fields.named {
+    for field in fields {
         let Some(ident) = &field.ident else { continue };
         parts.push(&core, name, ident, field)?;
         last = Some(ident.clone());
@@ -151,6 +151,19 @@ pub(crate) fn derive(input: &DeriveInput) -> syn::Result<TokenStream> {
         decodes,
         inits,
     } = parts;
+    if last.is_none() {
+        return Err(syn::Error::new_spanned(
+            name,
+            "EnvState requires at least one field",
+        ));
+    }
+    let lens_check = lens.clone();
+    let whole = LitStr::new(
+        &format!(
+            "EnvState: `{name}` has hidden padding: its size differs from its encoded length (ADR-0029)"
+        ),
+        name.span(),
+    );
     let trailing = LitStr::new(
         &match &last {
             Some(ident) => format!(
@@ -167,6 +180,9 @@ pub(crate) fn derive(input: &DeriveInput) -> syn::Result<TokenStream> {
             #(#padding_checks)*
             if ::core::mem::size_of::<#name>() != end {
                 ::core::panic!(#trailing);
+            }
+            if ::core::mem::size_of::<#name>() != 0 #(+ #lens_check)* {
+                ::core::panic!(#whole);
             }
         };
 
