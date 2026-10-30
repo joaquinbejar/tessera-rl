@@ -44,6 +44,7 @@ proc-macro2 = "1"
 quote = "1"
 syn = { version = "3", features = ["full"] }
 thiserror = "2"
+tracing = { version = "0.1", default-features = false, features = ["std"] }
 trybuild = "1"
 xxhash-rust = { version = "0.8", default-features = false, features = ["xxh3"] }
 

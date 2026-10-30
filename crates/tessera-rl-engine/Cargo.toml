@@ -17,6 +17,10 @@ categories.workspace = true
 [dependencies]
 tessera-rl-core.workspace = true
 tessera-rl-num.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+tessera-rl-macros.workspace = true
 
 [lints]
 workspace = true

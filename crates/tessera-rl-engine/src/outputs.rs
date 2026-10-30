@@ -1,0 +1,127 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
+//! Output buffers (SPEC 5.2), allocated once at construction.
+//!
+//! Per-agent buffers are `[N, A]` row-major; per-instance buffers `[N]`.
+//! Observations are one byte buffer per leaf, `[N, A, leaf bytes]`, holding
+//! little-endian elements of the leaf dtype. Results borrowed through
+//! `&self` stay valid until the next call that takes `&mut self` (the
+//! borrow window of ADR-0003 for Sync and Inline modes).
+
+use tessera_rl_core::Bool8;
+
+use crate::layout::Leaf;
+
+/// Output buffers of a pool.
+#[derive(Debug)]
+pub struct Outputs {
+    pub(crate) agents: usize,
+    pub(crate) observations: Vec<Vec<u8>>,
+    pub(crate) leaf_bytes: Vec<usize>,
+    pub(crate) rewards: Vec<f32>,
+    pub(crate) agent_terminated: Vec<Bool8>,
+    pub(crate) agent_truncated: Vec<Bool8>,
+    pub(crate) died: Vec<Bool8>,
+    pub(crate) spawned: Vec<Bool8>,
+    pub(crate) alive: Vec<Bool8>,
+    pub(crate) acting: Vec<Bool8>,
+    pub(crate) generations: Vec<u32>,
+    pub(crate) episode_terminated: Vec<Bool8>,
+    pub(crate) episode_truncated: Vec<Bool8>,
+    pub(crate) episode_return: Vec<f32>,
+    pub(crate) episode_length: Vec<f32>,
+}
+
+impl Outputs {
+    pub(crate) fn new(num_envs: usize, agents: usize, leaves: &[Leaf]) -> Option<Self> {
+        let rows = num_envs.checked_mul(agents)?;
+        let observations = leaves
+            .iter()
+            .map(|leaf| rows.checked_mul(leaf.bytes).map(|len| vec![0u8; len]))
+            .collect::<Option<Vec<_>>>()?;
+        Some(Self {
+            agents,
+            observations,
+            leaf_bytes: leaves.iter().map(|l| l.bytes).collect(),
+            rewards: vec![0.0; rows],
+            agent_terminated: vec![Bool8::FALSE; rows],
+            agent_truncated: vec![Bool8::FALSE; rows],
+            died: vec![Bool8::FALSE; rows],
+            spawned: vec![Bool8::FALSE; rows],
+            alive: vec![Bool8::FALSE; rows],
+            acting: vec![Bool8::FALSE; rows],
+            generations: vec![0; rows],
+            episode_terminated: vec![Bool8::FALSE; num_envs],
+            episode_truncated: vec![Bool8::FALSE; num_envs],
+            episode_return: vec![0.0; num_envs],
+            episode_length: vec![0.0; num_envs],
+        })
+    }
+
+    /// Observation bytes of leaf `leaf`, `[N, A, leaf bytes]`.
+    #[must_use]
+    pub fn observation(&self, leaf: usize) -> Option<&[u8]> {
+        self.observations.get(leaf).map(Vec::as_slice)
+    }
+
+    /// Rewards of the last call, `[N, A]`.
+    #[must_use]
+    pub fn rewards(&self) -> &[f32] {
+        &self.rewards
+    }
+
+    /// Per-agent terminated flags, `[N, A]`.
+    #[must_use]
+    pub fn agent_terminated(&self) -> &[Bool8] {
+        &self.agent_terminated
+    }
+
+    /// Per-agent truncated flags, `[N, A]`.
+    #[must_use]
+    pub fn agent_truncated(&self) -> &[Bool8] {
+        &self.agent_truncated
+    }
+
+    /// Alive mask, `[N, A]`.
+    #[must_use]
+    pub fn alive(&self) -> &[Bool8] {
+        &self.alive
+    }
+
+    /// Acting mask, `[N, A]`.
+    #[must_use]
+    pub fn acting(&self) -> &[Bool8] {
+        &self.acting
+    }
+
+    /// Slot generations, `[N, A]`.
+    #[must_use]
+    pub fn generations(&self) -> &[u32] {
+        &self.generations
+    }
+
+    /// Episode terminated flags, `[N]`.
+    #[must_use]
+    pub fn episode_terminated(&self) -> &[Bool8] {
+        &self.episode_terminated
+    }
+
+    /// Episode truncated flags, `[N]`.
+    #[must_use]
+    pub fn episode_truncated(&self) -> &[Bool8] {
+        &self.episode_truncated
+    }
+
+    /// Return of episodes that ended in the last call (sum over agents),
+    /// `[N]`; zero elsewhere.
+    #[must_use]
+    pub fn episode_return(&self) -> &[f32] {
+        &self.episode_return
+    }
+
+    /// Length of episodes that ended in the last call, `[N]`; zero elsewhere.
+    #[must_use]
+    pub fn episode_length(&self) -> &[f32] {
+        &self.episode_length
+    }
+}
