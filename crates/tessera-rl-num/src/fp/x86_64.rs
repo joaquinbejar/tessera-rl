@@ -23,6 +23,12 @@ pub(super) const fn canonical(control: Control) -> Control {
     (control & !(DAZ | RC | FTZ)) | MASKS
 }
 
+/// Flush-to-zero enabled, for hostile-mode tests.
+#[inline]
+pub(super) const fn flush_to_zero(control: Control) -> Control {
+    control | DAZ | FTZ
+}
+
 /// The caller's control bits with the current status flags.
 #[inline]
 pub(super) const fn restored(saved: Control, current: Control) -> Control {
