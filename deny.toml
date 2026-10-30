@@ -4,7 +4,7 @@
 # dependency that compiles C or C++ in the default build (SPEC 20).
 
 [graph]
-all-features = false
+all-features = true
 
 [advisories]
 version = 2
