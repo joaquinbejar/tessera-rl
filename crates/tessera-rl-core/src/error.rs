@@ -83,7 +83,7 @@ pub enum EncodeError {
 }
 
 /// Errors in a space definition (ADR-0014).
-#[derive(Debug, Clone, PartialEq, Eq, Error)]
+#[derive(Debug, Clone, PartialEq, Error)]
 pub enum SpaceError {
     /// A discrete space or dimension with zero or more than 2^31 choices.
     #[error("invalid number of discrete choices {n}: must be in 1..=2^31")]
@@ -102,6 +102,14 @@ pub enum SpaceError {
     InvalidBounds {
         /// What is wrong.
         reason: &'static str,
+    },
+    /// An `F32` box bound that is not exactly an `f32`.
+    #[error("f32 box bound {value} is not exactly representable; the nearest f32 is {nearest}")]
+    InexactF32Bound {
+        /// The bound given.
+        value: f64,
+        /// The nearest `f32`.
+        nearest: f32,
     },
     /// A composite space nested deeper than the supported depth.
     #[error("space nesting depth {depth} exceeds the maximum of {max}")]
@@ -133,7 +141,7 @@ pub struct ConfigError {
 }
 
 /// Any error from the core crate.
-#[derive(Debug, Clone, PartialEq, Eq, Error)]
+#[derive(Debug, Clone, PartialEq, Error)]
 pub enum CoreError {
     /// See [`DecodeError`].
     #[error(transparent)]

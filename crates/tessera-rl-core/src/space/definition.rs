@@ -262,9 +262,31 @@ mod tests {
             f64::NEG_INFINITY
         )));
         assert!(bad_bounds(&float_box(DType::F64, 2.0, 1.0)));
-        assert!(bad_bounds(&float_box(DType::F32, 0.0, 1e39)));
         assert_eq!(
             float_box(DType::F32, 0.0, f64::from(f32::MAX)).validate(),
+            Ok(())
+        );
+        assert_eq!(float_box(DType::F64, 0.1, 0.1).validate(), Ok(()));
+    }
+
+    #[test]
+    fn test_f32_bounds_must_be_exact() {
+        let inexact = |s: &Space| matches!(s.validate(), Err(SpaceError::InexactF32Bound { .. }));
+        assert!(inexact(&float_box(DType::F32, 0.1, 0.1)));
+        assert_eq!(
+            float_box(DType::F32, f64::from(0.1f32), f64::from(0.1f32)).validate(),
+            Ok(())
+        );
+        let next = f64::from(f32::from_bits(0.1f32.to_bits() + 1));
+        assert_eq!(
+            float_box(DType::F32, f64::from(0.1f32), next).validate(),
+            Ok(())
+        );
+        assert!(inexact(&float_box(DType::F32, 0.0, 1e-46)));
+        assert!(inexact(&float_box(DType::F32, 0.0, 1e39)));
+        assert_eq!(float_box(DType::F32, -0.0, 0.0).validate(), Ok(()));
+        assert_eq!(
+            float_box(DType::F32, f64::NEG_INFINITY, f64::INFINITY).validate(),
             Ok(())
         );
     }

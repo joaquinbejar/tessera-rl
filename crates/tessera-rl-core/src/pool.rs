@@ -15,9 +15,10 @@ use crate::state_init::StateInit;
 /// O(CAP). `insert` reuses the lowest free index; indices are therefore not
 /// stable handles across removals.
 ///
-/// The layout is `items` then `occupied`. A containing state struct must
-/// still be padding-free: choose `CAP` (or add `Reserved` fields) so the
-/// occupancy bytes end on the alignment of the next field.
+/// The layout is `items` then `occupied`, with no padding inside: `CAP`
+/// must be a multiple of `align_of::<T>()`, so the occupancy bytes fill the
+/// pool to a multiple of its alignment. This is checked at compile time;
+/// `Reserved` fields outside the pool cannot fix it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(C)]
 pub struct Pool<T, const CAP: usize> {
@@ -25,9 +26,17 @@ pub struct Pool<T, const CAP: usize> {
     occupied: [Bool8; CAP],
 }
 
+impl<T, const CAP: usize> Pool<T, CAP> {
+    const LAYOUT_OK: () = assert!(
+        size_of::<Self>() == CAP * size_of::<T>() + CAP,
+        "Pool<T, CAP> has padding: CAP must be a multiple of align_of::<T>()"
+    );
+}
+
 impl<T: StateInit, const CAP: usize> StateInit for Pool<T, CAP> {
     #[inline]
     fn state_default() -> Self {
+        let () = Self::LAYOUT_OK;
         Self {
             items: <[T; CAP]>::state_default(),
             occupied: [Bool8::FALSE; CAP],
@@ -138,7 +147,10 @@ impl<T, const CAP: usize> Canonical for Pool<T, CAP>
 where
     T: Canonical + StateInit,
 {
-    const ENCODED_LEN: usize = <[T; CAP]>::ENCODED_LEN + CAP;
+    const ENCODED_LEN: usize = {
+        let () = Self::LAYOUT_OK;
+        <[T; CAP]>::ENCODED_LEN + CAP
+    };
 
     #[inline]
     fn encode<S: Sink>(&self, out: &mut Encoder<S>) {
@@ -174,19 +186,20 @@ mod tests {
 
     #[test]
     fn test_pool_insert_fills_lowest_free_index() {
-        let mut p = Pool::<u32, 3>::default();
+        let mut p = Pool::<u32, 4>::default();
         assert_eq!(p.insert(10), Some(0));
         assert_eq!(p.insert(11), Some(1));
         assert_eq!(p.remove(0), Some(10));
         assert_eq!(p.insert(12), Some(0));
         assert_eq!(p.insert(13), Some(2));
-        assert_eq!(p.insert(14), None);
-        assert_eq!(p.len(), 3);
+        assert_eq!(p.insert(14), Some(3));
+        assert_eq!(p.insert(15), None);
+        assert_eq!(p.len(), 4);
     }
 
     #[test]
     fn test_pool_remove_resets_to_default() {
-        let mut p = Pool::<u32, 2>::default();
+        let mut p = Pool::<u32, 4>::default();
         p.insert(7);
         p.remove(0);
         assert_eq!(p, Pool::default());
@@ -206,6 +219,13 @@ mod tests {
     }
 
     #[test]
+    fn test_pool_layout_has_no_internal_padding() {
+        assert_eq!(size_of::<Pool<u32, 4>>(), 4 * 4 + 4);
+        assert_eq!(size_of::<Pool<f64, 8>>(), 8 * 8 + 8);
+        assert_eq!(size_of::<Pool<u8, 3>>(), 3 + 3);
+    }
+
+    #[test]
     fn test_pool_iter_mut_updates_occupied_only() {
         let mut p = Pool::<u8, 3>::default();
         p.insert(1);
@@ -220,22 +240,22 @@ mod tests {
 
     #[test]
     fn test_pool_decode_rejects_inactive_negative_zero() {
-        let mut p = Pool::<f64, 2>::default();
+        let mut p = Pool::<f64, 8>::default();
         p.insert(1.5);
         let mut bytes = encode_to_vec(&p);
         bytes[8..16].copy_from_slice(&(-0.0f64).to_bits().to_le_bytes());
         assert_eq!(
-            decode_from_slice::<Pool<f64, 2>>(&bytes),
+            decode_from_slice::<Pool<f64, 8>>(&bytes),
             Err(DecodeError::InactivePoolEntry { index: 1 })
         );
     }
 
     #[test]
     fn test_pool_decode_rejects_inactive_nan_payload() {
-        let p = Pool::<f64, 1>::default();
+        let p = Pool::<f64, 8>::default();
         let mut bytes = encode_to_vec(&p);
         bytes[..8].copy_from_slice(&0x7ff8_0000_0000_0001u64.to_le_bytes());
-        assert!(decode_from_slice::<Pool<f64, 1>>(&bytes).is_err());
+        assert!(decode_from_slice::<Pool<f64, 8>>(&bytes).is_err());
     }
 
     /// Equality that ignores the value: decoding must not rely on it.

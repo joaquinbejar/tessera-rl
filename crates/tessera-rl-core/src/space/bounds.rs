@@ -82,16 +82,20 @@ impl BoxBounds {
             }
             (Self::Float { low, high }, DType::F32 | DType::F64) => {
                 check_lengths(low, high, elements)?;
-                let limit = if dtype == DType::F32 {
-                    f64::from(f32::MAX)
-                } else {
-                    f64::MAX
-                };
-                let representable = |v: &f64| v.is_infinite() || v.abs() <= limit;
                 if low.iter().chain(high).any(|v| v.is_nan()) {
                     return Err(invalid("NaN bound"));
                 }
-                check_ordered(low, high, representable)?;
+                if dtype == DType::F32 {
+                    // Every F32 bound must be exactly an f32; never rounded
+                    // silently.
+                    if let Some(&value) = low.iter().chain(high).find(|v| !exact_f32(**v)) {
+                        return Err(SpaceError::InexactF32Bound {
+                            value,
+                            nearest: to_f32(value),
+                        });
+                    }
+                }
+                check_ordered(low, high, |_| true)?;
                 let positive_inf = |v: &&f64| v.is_infinite() && v.is_sign_positive();
                 let negative_inf = |v: &&f64| v.is_infinite() && v.is_sign_negative();
                 if low.iter().any(|v| positive_inf(&v)) || high.iter().any(|v| negative_inf(&v)) {
@@ -102,6 +106,20 @@ impl BoxBounds {
             _ => Err(invalid("bound type does not match the dtype")),
         }
     }
+}
+
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "rounding is the point: exactness is checked"
+)]
+fn to_f32(v: f64) -> f32 {
+    v as f32
+}
+
+/// Whether `v` is exactly representable as `f32` (infinities included,
+/// signed zeros preserved).
+fn exact_f32(v: f64) -> bool {
+    f64::from(to_f32(v)).to_bits() == v.to_bits()
 }
 
 /// Checks every bound with `in_range`, then `low <= high` per element
