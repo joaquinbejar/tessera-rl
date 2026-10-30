@@ -10,14 +10,15 @@ use crate::encoding::Canonical;
 use crate::error::{ConfigError, InvariantViolation, SpaceError};
 use crate::io::{ActionWriter, Actions, MaskWriter, ObsWriter};
 use crate::space::Space;
+use crate::state_init::StateInit;
 use crate::step_out::StepOut;
 
-/// Plain-data state (ADR-0029): `#[repr(C)]`, padding-free, `Default` with
-/// valid values, and a canonical encoding.
+/// Plain-data state (ADR-0029): `#[repr(C)]`, padding-free, a valid initial
+/// value ([`StateInit`]) and a canonical encoding.
 ///
 /// Implemented by `#[derive(EnvState)]`, which checks the layout rules at
 /// compile time. Implementing it by hand must uphold the same rules.
-pub trait EnvState: Canonical + Copy + Default + 'static {}
+pub trait EnvState: Canonical + StateInit + Copy + 'static {}
 
 /// An environment configuration, validated at construction.
 pub trait EnvConfig: Sized + 'static {
@@ -66,7 +67,8 @@ pub trait Environment: Sized + 'static {
     /// Returns a [`SpaceError`] if `cfg` yields an invalid space.
     fn action_space(cfg: &Self::Config) -> Result<Space, SpaceError>;
 
-    /// Starts an episode. `state` holds `Default` or the previous episode.
+    /// Starts an episode. `state` holds the initial value or the previous
+    /// episode.
     fn reset(cfg: &Self::Config, rng: &mut StepRng, state: &mut Self::State);
 
     /// Advances one transition.
@@ -84,7 +86,7 @@ pub trait Environment: Sized + 'static {
         state: &Self::State,
         agent: AgentSlot,
         rng: &mut ObsRng,
-        out: &mut ObsWriter<'_, Self::Obs>,
+        out: &mut ObsWriter<'_, '_, Self::Obs>,
     );
 }
 

@@ -11,6 +11,7 @@ use crate::bool8::Bool8;
 use crate::error::DecodeError;
 use crate::reserved::Reserved;
 use crate::state_enum::StateEnum;
+use crate::state_init::StateInit;
 
 macro_rules! canonical_int {
     ($($ty:ty),*) => {$(
@@ -129,7 +130,7 @@ impl<const N: usize> Canonical for Reserved<N> {
     }
 }
 
-impl<T: Canonical + Copy + Default, const N: usize> Canonical for [T; N] {
+impl<T: Canonical + StateInit, const N: usize> Canonical for [T; N] {
     const ENCODED_LEN: usize = T::ENCODED_LEN * N;
 
     #[inline]
@@ -141,7 +142,7 @@ impl<T: Canonical + Copy + Default, const N: usize> Canonical for [T; N] {
 
     #[inline]
     fn decode(input: &mut Decoder<'_>) -> Result<Self, DecodeError> {
-        let mut items = [T::default(); N];
+        let mut items = <[T; N]>::state_default();
         for item in &mut items {
             *item = T::decode(input)?;
         }

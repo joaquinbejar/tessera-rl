@@ -9,6 +9,7 @@ pub mod bool8;
 pub mod pool;
 pub mod reserved;
 pub mod state_enum;
+pub mod state_init;
 
 // Encoding and hashing (SPEC 8.3, ADR-0029).
 pub mod encoding;
@@ -32,4 +33,5 @@ pub use error::{ConfigError, CoreError, DecodeError, EncodeError, InvariantViola
 pub use pool::Pool;
 pub use reserved::Reserved;
 pub use state_enum::StateEnum;
+pub use state_init::StateInit;
 pub use step_out::{EpisodeEnd, StepOut};

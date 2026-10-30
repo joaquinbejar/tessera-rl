@@ -3,11 +3,17 @@
 //! `Pool<T, CAP>`: fixed-capacity variable-size state (SPEC 5.1, ADR-0029).
 
 use crate::bool8::Bool8;
-use crate::encoding::{Canonical, Decoder, Encoder, Sink};
+use crate::encoding::{Canonical, Decoder, Encoder, Sink, canonical_eq};
 use crate::error::DecodeError;
+use crate::state_init::StateInit;
 
 /// Up to `CAP` entries with an occupancy array. Inactive entries always
-/// hold `T::default()`, so equal pools encode identically.
+/// hold `T::state_default()` (canonically: the same bytes), so equal pools
+/// encode identically.
+///
+/// `insert`, `len` and `is_empty` scan the occupancy array, so they are
+/// O(CAP). `insert` reuses the lowest free index; indices are therefore not
+/// stable handles across removals.
 ///
 /// The layout is `items` then `occupied`. A containing state struct must
 /// still be padding-free: choose `CAP` (or add `Reserved` fields) so the
@@ -19,17 +25,24 @@ pub struct Pool<T, const CAP: usize> {
     occupied: [Bool8; CAP],
 }
 
-impl<T: Copy + Default, const CAP: usize> Default for Pool<T, CAP> {
+impl<T: StateInit, const CAP: usize> StateInit for Pool<T, CAP> {
     #[inline]
-    fn default() -> Self {
+    fn state_default() -> Self {
         Self {
-            items: [T::default(); CAP],
+            items: <[T; CAP]>::state_default(),
             occupied: [Bool8::FALSE; CAP],
         }
     }
 }
 
-impl<T: Copy + Default, const CAP: usize> Pool<T, CAP> {
+impl<T: StateInit, const CAP: usize> Default for Pool<T, CAP> {
+    #[inline]
+    fn default() -> Self {
+        Self::state_default()
+    }
+}
+
+impl<T: StateInit, const CAP: usize> Pool<T, CAP> {
     /// The compile-time capacity.
     pub const CAPACITY: usize = CAP;
 
@@ -88,7 +101,8 @@ impl<T: Copy + Default, const CAP: usize> Pool<T, CAP> {
         Some(index)
     }
 
-    /// Removes and returns entry `index`, resetting it to `T::default()`.
+    /// Removes and returns entry `index`, resetting it to
+    /// `T::state_default()`.
     #[inline]
     pub fn remove(&mut self, index: usize) -> Option<T> {
         if !self.is_occupied(index) {
@@ -96,7 +110,7 @@ impl<T: Copy + Default, const CAP: usize> Pool<T, CAP> {
         }
         let (slot, flag) = (self.items.get_mut(index)?, self.occupied.get_mut(index)?);
         *flag = Bool8::FALSE;
-        Some(core::mem::take(slot))
+        Some(core::mem::replace(slot, T::state_default()))
     }
 
     /// Iterates over occupied entries in index order.
@@ -108,11 +122,21 @@ impl<T: Copy + Default, const CAP: usize> Pool<T, CAP> {
             .enumerate()
             .filter_map(|(i, (item, flag))| flag.get().then_some((i, item)))
     }
+
+    /// Iterates mutably over occupied entries in index order.
+    #[inline]
+    pub fn iter_mut(&mut self) -> impl Iterator<Item = (usize, &mut T)> {
+        self.items
+            .iter_mut()
+            .zip(&self.occupied)
+            .enumerate()
+            .filter_map(|(i, (item, flag))| flag.get().then_some((i, item)))
+    }
 }
 
 impl<T, const CAP: usize> Canonical for Pool<T, CAP>
 where
-    T: Canonical + Copy + Default + PartialEq,
+    T: Canonical + StateInit,
 {
     const ENCODED_LEN: usize = <[T; CAP]>::ENCODED_LEN + CAP;
 
@@ -122,16 +146,18 @@ where
         self.occupied.encode(out);
     }
 
-    /// Rejects inactive entries that are not `T::default()`.
+    /// Rejects inactive entries whose canonical bytes differ from those of
+    /// `T::state_default()`; `PartialEq` is not used, so `-0.0` or a lax
+    /// equality cannot hide a difference.
     #[inline]
     fn decode(input: &mut Decoder<'_>) -> Result<Self, DecodeError> {
         let items = <[T; CAP]>::decode(input)?;
         let occupied = <[Bool8; CAP]>::decode(input)?;
-        let default = T::default();
+        let default = T::state_default();
         let bad = items
             .iter()
             .zip(&occupied)
-            .position(|(item, flag)| !flag.get() && *item != default);
+            .position(|(item, flag)| !flag.get() && !canonical_eq(item, &default));
         match bad {
             Some(index) => Err(DecodeError::InactivePoolEntry { index }),
             None => Ok(Self { items, occupied }),
@@ -142,8 +168,9 @@ where
 #[cfg(test)]
 mod tests {
     use super::Pool;
-    use crate::encoding::{decode_from_slice, encode_to_vec};
+    use crate::encoding::{Canonical, Decoder, Encoder, Sink, decode_from_slice, encode_to_vec};
     use crate::error::DecodeError;
+    use crate::state_init::StateInit;
 
     #[test]
     fn test_pool_insert_fills_lowest_free_index() {
@@ -176,6 +203,74 @@ mod tests {
         p.remove(1);
         let got: Vec<_> = p.iter().map(|(i, v)| (i, *v)).collect();
         assert_eq!(got, [(0, 1), (2, 3)]);
+    }
+
+    #[test]
+    fn test_pool_iter_mut_updates_occupied_only() {
+        let mut p = Pool::<u8, 3>::default();
+        p.insert(1);
+        p.insert(2);
+        p.remove(0);
+        for (_, v) in p.iter_mut() {
+            *v += 10;
+        }
+        assert_eq!(p.get(1), Some(&12));
+        assert_eq!(p.get(0), None);
+    }
+
+    #[test]
+    fn test_pool_decode_rejects_inactive_negative_zero() {
+        let mut p = Pool::<f64, 2>::default();
+        p.insert(1.5);
+        let mut bytes = encode_to_vec(&p);
+        bytes[8..16].copy_from_slice(&(-0.0f64).to_bits().to_le_bytes());
+        assert_eq!(
+            decode_from_slice::<Pool<f64, 2>>(&bytes),
+            Err(DecodeError::InactivePoolEntry { index: 1 })
+        );
+    }
+
+    #[test]
+    fn test_pool_decode_rejects_inactive_nan_payload() {
+        let p = Pool::<f64, 1>::default();
+        let mut bytes = encode_to_vec(&p);
+        bytes[..8].copy_from_slice(&0x7ff8_0000_0000_0001u64.to_le_bytes());
+        assert!(decode_from_slice::<Pool<f64, 1>>(&bytes).is_err());
+    }
+
+    /// Equality that ignores the value: decoding must not rely on it.
+    #[derive(Debug, Clone, Copy)]
+    struct Lax(u8);
+
+    impl PartialEq for Lax {
+        fn eq(&self, _: &Self) -> bool {
+            true
+        }
+    }
+
+    impl StateInit for Lax {
+        fn state_default() -> Self {
+            Self(0)
+        }
+    }
+
+    impl Canonical for Lax {
+        const ENCODED_LEN: usize = 1;
+        fn encode<S: Sink>(&self, out: &mut Encoder<S>) {
+            self.0.encode(out);
+        }
+        fn decode(input: &mut Decoder<'_>) -> Result<Self, DecodeError> {
+            u8::decode(input).map(Self)
+        }
+    }
+
+    #[test]
+    fn test_pool_decode_ignores_lax_partial_eq() {
+        let bytes = [5u8, 0];
+        assert_eq!(
+            decode_from_slice::<Pool<Lax, 1>>(&bytes),
+            Err(DecodeError::InactivePoolEntry { index: 0 })
+        );
     }
 
     #[test]

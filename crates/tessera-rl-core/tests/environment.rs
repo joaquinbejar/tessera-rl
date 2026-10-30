@@ -7,7 +7,7 @@ use tessera_rl_core::io::{ActionWriter, Actions, MaskWriter, ObsWriter};
 use tessera_rl_core::space::Space;
 use tessera_rl_core::{
     ActionMask, AgentSlot, Bool8, DecodeError, EnvConfig, EnvState, Environment, EpisodeEnd,
-    Heuristic, InvariantViolation, SpaceError, StepOut, Tier, Validate,
+    Heuristic, InvariantViolation, SpaceError, StateInit, StepOut, Tier, Validate,
 };
 use tessera_rl_num::identity::{LogicalId, RngIdentity, Seed, StreamId};
 use tessera_rl_num::rng::{ObsRng, RngAuthority, StepRng};
@@ -38,6 +38,12 @@ impl Canonical for Count {
             done: Canonical::decode(input)?,
             pad: Canonical::decode(input)?,
         })
+    }
+}
+
+impl StateInit for Count {
+    fn state_default() -> Self {
+        Self::default()
     }
 }
 
@@ -114,7 +120,7 @@ impl Environment for Counter {
         state: &Count,
         agent: AgentSlot,
         _: &mut ObsRng,
-        out: &mut ObsWriter<'_, ()>,
+        out: &mut ObsWriter<'_, '_, ()>,
     ) {
         let value = state.value.get(agent.index()).copied().unwrap_or(0);
         if let Some(byte) = out.leaf(0).and_then(|leaf| leaf.first_mut()) {
