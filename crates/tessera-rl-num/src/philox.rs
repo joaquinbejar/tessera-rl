@@ -6,6 +6,10 @@
 //! 1, 2, 3", SC 2011. Constants and round structure follow the Random123
 //! reference implementation, and the known-answer tests below use its
 //! published vectors.
+//!
+//! Tessera's counter words are `[logical_id, episode_index, step_index,
+//! draw_index]` in that order, and the key words are the stream key split
+//! little-endian into `[lo, hi]` (see `crate::key`).
 
 const MUL_0: u32 = 0xD251_1F53;
 const MUL_1: u32 = 0xCD9E_8D57;
