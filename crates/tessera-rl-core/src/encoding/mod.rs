@@ -36,7 +36,7 @@ use crate::error::{DecodeError, EncodeError};
 #[diagnostic::on_unimplemented(
     message = "`{Self}` cannot be used as a state field",
     label = "not a plain-data state type",
-    note = "state fields must be fixed-width integers, f32, f64, Fx32, Fx64, Bool8, Reserved<N>, arrays of these, Pool<T, CAP>, #[derive(StateEnum)] enums or #[derive(EnvState)] structs (ADR-0029)"
+    note = "use #[derive(StateEnum)] for enums and #[derive(EnvState)] for structs; other fields must be fixed-width integers, floats, Fx32, Fx64, Bool8, Reserved<N>, arrays or Pool (ADR-0029)"
 )]
 pub trait Canonical: Sized {
     /// The exact number of bytes [`Canonical::encode`] writes.

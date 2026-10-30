@@ -330,11 +330,11 @@ mod config {
         };
         let b = Cfg { curriculum: 7, ..a };
         let c = Cfg { size: 17, ..a };
-        let hash = |cfg: &Cfg| config_hash("tessera/Toy", 1, cfg);
+        let hash = |cfg: &Cfg| config_hash("tessera/Toy", 1, cfg).unwrap();
         assert_ne!(a.curriculum, b.curriculum);
         assert_eq!(hash(&a), hash(&b));
         assert_ne!(hash(&a), hash(&c));
-        assert_ne!(hash(&a), config_hash("tessera/Toy", 2, &a));
-        assert_ne!(hash(&a), config_hash("tessera/Other", 1, &a));
+        assert_ne!(hash(&a), config_hash("tessera/Toy", 2, &a).unwrap());
+        assert_ne!(hash(&a), config_hash("tessera/Other", 1, &a).unwrap());
     }
 }

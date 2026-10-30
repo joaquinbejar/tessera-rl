@@ -13,10 +13,14 @@
 //! The config hash is XXH3-64 of the format version, the environment id
 //! (`[length: u16][UTF-8]`), the environment version (`u32`) and the
 //! entries. Adaptive fields are excluded.
+//!
+//! Floats are hashed by their bits, so `-0.0` and `0.0` give different
+//! hashes; NaN is rejected by the generated `validate`.
 
 use tessera_rl_num::{Fx32, Fx64};
 
 use crate::encoding::{Canonical, Encoder, HashSink, Sink};
+use crate::error::ConfigError;
 
 /// Version of the canonical config format. A change to the format bumps
 /// it, so old and new forms never collide silently.
@@ -119,12 +123,25 @@ pub fn canonical_bytes<C: CanonicalConfig>(cfg: &C) -> Vec<u8> {
 
 /// The config hash: XXH3-64 of the format version, environment id and
 /// version, and the static entries of `cfg`. Never allocates.
-#[must_use]
-pub fn config_hash<C: CanonicalConfig>(env_id: &str, env_version: u32, cfg: &C) -> u64 {
+///
+/// # Errors
+///
+/// Returns a [`ConfigError`] if `env_id` is longer than 65 535 bytes.
+pub fn config_hash<C: CanonicalConfig>(
+    env_id: &str,
+    env_version: u32,
+    cfg: &C,
+) -> Result<u64, ConfigError> {
+    if u16::try_from(env_id.len()).is_err() {
+        return Err(ConfigError {
+            field: "env_id",
+            reason: "longer than 65535 bytes",
+        });
+    }
     let mut out = Encoder::new(HashSink::new());
     out.write_bytes(&[CONFIG_FORMAT_VERSION]);
     write_key(&mut out, env_id);
     env_version.encode(&mut out);
     cfg.write_entries(&mut out);
-    out.sink().digest()
+    Ok(out.sink().digest())
 }
