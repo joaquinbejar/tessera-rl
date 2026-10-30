@@ -90,3 +90,29 @@ impl PoolOptions {
         Ok(())
     }
 }
+
+/// Options of Sync mode (ADR-0005, ADR-0006).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SyncOptions {
+    /// Worker threads.
+    pub workers: core::num::NonZeroUsize,
+    /// Spins before a waiting thread parks (about 20 microseconds at the
+    /// default).
+    pub spin: u32,
+    /// Logical cores to pin workers to, in order. `None` pins worker `w` to
+    /// core `w` when no other engine with workers is active, and leaves
+    /// workers unpinned (with a warning) otherwise.
+    pub cpu_set: Option<Vec<usize>>,
+}
+
+impl SyncOptions {
+    /// `workers` workers with the default spin budget and default pinning.
+    #[must_use]
+    pub const fn new(workers: core::num::NonZeroUsize) -> Self {
+        Self {
+            workers,
+            spin: 2_000,
+            cpu_set: None,
+        }
+    }
+}

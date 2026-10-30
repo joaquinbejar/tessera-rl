@@ -19,11 +19,14 @@ use tessera_rl_num::fp;
 use tessera_rl_num::identity::{LogicalId, RngIdentity, Seed, StreamId};
 use tessera_rl_num::rng::{ObsRng, RngAuthority, StepRng};
 
+use crate::buffer::par_chunks;
 use crate::error::EngineError;
 use crate::layout::{ActionLayout, MAX_LEAVES, obs_leaves};
 use crate::masks::{IllegalActionPolicy, MaskProvider, Masked, NoMasks};
-use crate::options::{AutoReset, PoolOptions};
+use crate::options::{AutoReset, PoolOptions, SyncOptions};
 use crate::outputs::{Outputs, OutputsView};
+use crate::registry::Registration;
+use crate::sys::{Gang, GangOptions};
 use crate::validate::{ActionInput, check_and_copy_actions, check_ids};
 
 /// Whether an entry point is accepted on a poisoned pool (ADR-0028).
@@ -65,12 +68,25 @@ pub struct EnvPool<E: Environment, M: MaskProvider<E> = NoMasks> {
     penalties: Vec<f32>,
     penalized: Vec<Bool8>,
     pub(crate) branch_counter: u64,
+    sync: Option<SyncRuntime>,
     _masks: PhantomData<M>,
+}
+
+/// Workers of a pool in Sync mode. Dropping it shuts them down and joins
+/// them.
+#[derive(Debug)]
+struct SyncRuntime {
+    gang: Gang,
+    workers: usize,
+    _registration: Registration,
 }
 
 impl<E> EnvPool<E, NoMasks>
 where
     E: Environment,
+    E::Config: Sync,
+    E::Header: Send,
+    E::State: Send,
     <E::Header as RecordLayout>::Adaptive: AdaptiveValues<E::Config>,
 {
     /// Builds a pool without action masks: validates the config, the
@@ -89,6 +105,9 @@ where
 impl<E> EnvPool<E, Masked>
 where
     E: ActionMask,
+    E::Config: Sync,
+    E::Header: Send,
+    E::State: Send,
     <E::Header as RecordLayout>::Adaptive: AdaptiveValues<E::Config>,
 {
     /// Builds a pool with action masks from `ActionMask`: masks are written
@@ -108,6 +127,9 @@ impl<E, M> EnvPool<E, M>
 where
     E: Environment,
     M: MaskProvider<E>,
+    E::Config: Sync,
+    E::Header: Send,
+    E::State: Send,
     <E::Header as RecordLayout>::Adaptive: AdaptiveValues<E::Config>,
 {
     fn build(cfg: E::Config, options: PoolOptions) -> Result<Self, EngineError> {
@@ -195,8 +217,63 @@ where
             penalties: vec![0.0; if M::ENABLED { rows } else { 0 }],
             penalized: vec![Bool8::FALSE; if M::ENABLED { rows } else { 0 }],
             branch_counter: 0,
+            sync: None,
             _masks: PhantomData,
         })
+    }
+
+    /// Switches the pool to Sync mode: `step` and `reset_all` run chunks on
+    /// persistent worker threads and return when every instance is done.
+    /// Results are bit-identical to Inline mode for any worker count.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`EngineError::NestedEngine`] when called from an engine
+    /// worker, or [`EngineError::Options`] for an invalid `cpu_set`.
+    pub fn with_workers(mut self, options: SyncOptions) -> Result<Self, EngineError> {
+        let workers = options.workers.get();
+        let (registration, others) = Registration::register();
+        let pin = match options.cpu_set {
+            Some(cores) if cores.len() < workers => {
+                return Err(EngineError::Options {
+                    option: "cpu_set",
+                    reason: "needs one core per worker",
+                });
+            }
+            Some(cores) => Some(cores),
+            None if others == 0 => Some((0..workers).collect()),
+            None => {
+                tracing::warn!(
+                    others,
+                    "another engine with workers is active; workers run unpinned (set cpu_set to partition cores)"
+                );
+                None
+            }
+        };
+        let gang = Gang::new(&GangOptions {
+            workers,
+            spin: options.spin,
+            pin,
+        })?;
+        self.sync = Some(SyncRuntime {
+            gang,
+            workers,
+            _registration: registration,
+        });
+        Ok(self)
+    }
+
+    /// Number of worker threads; 0 in Inline mode.
+    #[must_use]
+    pub fn workers(&self) -> usize {
+        self.sync.as_ref().map_or(0, |s| s.workers)
+    }
+
+    /// Times a worker found its FP environment changed at a batch start and
+    /// reset it (ADR-0037).
+    #[must_use]
+    pub fn fp_resets(&self) -> u64 {
+        self.sync.as_ref().map_or(0, |s| s.gang.fp_resets())
     }
 
     /// Whether a panic in environment code poisoned the pool (ADR-0028).
@@ -318,6 +395,8 @@ where
         self.check_reset(0..n, n, reseed)?;
         let Self {
             cfg,
+            options,
+            actions: layout,
             headers,
             states,
             discrete,
@@ -327,20 +406,34 @@ where
             poisoned,
             penalties,
             penalized,
+            sync,
             ..
         } = self;
-        run_kernels(poisoned, || {
-            let mut chunk = Chunk::<E> {
-                headers,
-                states,
-                discrete,
-                continuous,
-                penalties,
-                penalized,
-                outputs: outputs.view_all(),
-            };
-            reset_chunk::<E, M>(cfg, authority, &mut chunk, reseed, 0);
-        })?;
+        let all = Chunk::<E> {
+            headers,
+            states,
+            discrete,
+            continuous,
+            penalties,
+            penalized,
+            outputs: outputs.view_all(),
+        };
+        if let Some(rt) = sync {
+            let heads = (layout.discrete.len(), layout.continuous.len());
+            let size = chunk_size(options);
+            let panicked = par_chunks(&rt.gang, rt.workers, all, size, heads, |chunk, first| {
+                reset_chunk::<E, M>(cfg, authority, chunk, reseed, first);
+            });
+            if panicked {
+                *poisoned = true;
+                return Err(EngineError::Panicked);
+            }
+        } else {
+            let mut chunk = all;
+            run_kernels(poisoned, || {
+                reset_chunk::<E, M>(cfg, authority, &mut chunk, reseed, 0);
+            })?;
+        }
         self.poisoned = false;
         Ok(())
     }
@@ -537,6 +630,7 @@ where
             poisoned,
             penalties,
             penalized,
+            sync,
             ..
         } = self;
         let ctx = StepCtx::<E> {
@@ -547,18 +641,29 @@ where
             limit: options.max_episode_steps.map(core::num::NonZeroU32::get),
             auto_reset: options.auto_reset,
         };
-        run_kernels(poisoned, || {
-            let mut chunk = Chunk::<E> {
-                headers,
-                states,
-                discrete,
-                continuous,
-                penalties,
-                penalized,
-                outputs: outputs.view_all(),
-            };
-            step_chunk::<E, M>(&ctx, &mut chunk);
-        })?;
+        let all = Chunk::<E> {
+            headers,
+            states,
+            discrete,
+            continuous,
+            penalties,
+            penalized,
+            outputs: outputs.view_all(),
+        };
+        if let Some(rt) = sync {
+            let heads = (layout.discrete.len(), layout.continuous.len());
+            let size = chunk_size(options);
+            let panicked = par_chunks(&rt.gang, rt.workers, all, size, heads, |chunk, _| {
+                step_chunk::<E, M>(&ctx, chunk);
+            });
+            if panicked {
+                *poisoned = true;
+                return Err(EngineError::Panicked);
+            }
+        } else {
+            let mut chunk = all;
+            run_kernels(poisoned, || step_chunk::<E, M>(&ctx, &mut chunk))?;
+        }
         #[cfg(feature = "debug-checks")]
         self.check_agent_events()?;
         Ok(())
@@ -583,6 +688,11 @@ where
         }
         Ok(())
     }
+}
+
+/// Instances per chunk.
+fn chunk_size(options: &PoolOptions) -> usize {
+    usize::try_from(options.chunk_size.get()).unwrap_or(usize::MAX)
 }
 
 /// Read-only context of a step, shared by every chunk.

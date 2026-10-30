@@ -1,0 +1,171 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
+//! Sync mode: bit-identical to Inline for any worker count, worker panics
+//! poison, shutdown joins (ADR-0005, ADR-0006, SPEC 8.5).
+
+#![expect(
+    clippy::unwrap_used,
+    reason = "test helpers unwrap: a failure is the assertion"
+)]
+
+mod common;
+
+use core::num::{NonZeroU32, NonZeroUsize};
+
+use common::{CountConfig, Counter};
+use tessera_rl_engine::{
+    ActionInput, AutoReset, EngineError, EnvPool, Masked, PoolOptions, Reseed, SyncOptions,
+};
+use tessera_rl_num::identity::Seed;
+
+const N: u32 = 100;
+
+fn pool(mode: AutoReset, workers: Option<usize>, cfg: CountConfig) -> EnvPool<Counter, Masked> {
+    let options = PoolOptions {
+        auto_reset: mode,
+        chunk_size: NonZeroU32::new(8).unwrap(),
+        ..PoolOptions::new(NonZeroU32::new(N).unwrap(), Seed::new(77))
+    };
+    let p = EnvPool::with_masks(cfg, options).unwrap();
+    match workers {
+        Some(w) => p
+            .with_workers(SyncOptions::new(NonZeroUsize::new(w).unwrap()))
+            .unwrap(),
+        None => p,
+    }
+}
+
+/// Everything a step returns, plus every state hash.
+fn snapshot_outputs(p: &EnvPool<Counter, Masked>) -> Vec<u64> {
+    let out = p.outputs();
+    let mut v: Vec<u64> = out
+        .observation(0)
+        .unwrap()
+        .iter()
+        .map(|&b| u64::from(b))
+        .collect();
+    v.extend(out.rewards().iter().map(|r| u64::from(r.to_bits())));
+    for flags in [
+        out.agent_terminated(),
+        out.agent_truncated(),
+        out.alive(),
+        out.masks(),
+    ] {
+        v.extend(flags.iter().map(|f| u64::from(f.get())));
+    }
+    v.extend(out.episode_terminated().iter().map(|f| u64::from(f.get())));
+    v.extend(out.episode_return().iter().map(|r| u64::from(r.to_bits())));
+    if let Some(term) = out.terminal_observation(0) {
+        v.extend(term.iter().map(|&b| u64::from(b)));
+    }
+    v.extend((0..N).map(|i| p.state_hash(i).unwrap().get()));
+    v
+}
+
+fn trajectory(mode: AutoReset, workers: Option<usize>) -> Vec<Vec<u64>> {
+    let cfg = CountConfig {
+        length: 7,
+        kill_at: 4,
+        ..CountConfig::default()
+    };
+    let mut p = pool(mode, workers, cfg);
+    assert_eq!(p.workers(), workers.unwrap_or(0));
+    p.reset_all(Reseed::Keep).unwrap();
+    let mut frames = vec![snapshot_outputs(&p)];
+    let n = usize::try_from(N).unwrap();
+    for t in 0..20 {
+        // Agent 0 sometimes acts illegally (action 2) to exercise the noop.
+        let actions: Vec<i32> = (0..n * 2)
+            .map(|k| i32::try_from((k * 7 + t * 3) % 3).unwrap())
+            .collect();
+        #[cfg(feature = "debug-checks")]
+        let actions: Vec<i32> = actions
+            .iter()
+            .enumerate()
+            .map(|(k, &a)| if k % 2 == 0 && a == 2 { 1 } else { a })
+            .collect();
+        p.step(ActionInput {
+            discrete: &actions,
+            continuous: &[],
+        })
+        .unwrap();
+        frames.push(snapshot_outputs(&p));
+    }
+    frames
+}
+
+#[test]
+fn test_sync_matches_inline_bit_for_bit_for_1_2_7_and_64_workers() {
+    for mode in [AutoReset::NextStep, AutoReset::SameStep] {
+        let inline = trajectory(mode, None);
+        for workers in [1, 2, 7, 64] {
+            assert_eq!(
+                trajectory(mode, Some(workers)),
+                inline,
+                "{workers} workers, {mode:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn test_worker_panic_poisons_and_full_reset_recovers() {
+    let cfg = CountConfig {
+        panic_at: 1,
+        length: 9,
+        ..CountConfig::default()
+    };
+    let mut p = pool(AutoReset::NextStep, Some(4), cfg);
+    p.reset_all(Reseed::Keep).unwrap();
+    let actions = vec![0; usize::try_from(N).unwrap() * 2];
+    assert_eq!(
+        p.step(ActionInput {
+            discrete: &actions,
+            continuous: &[]
+        })
+        .map(|_| ()),
+        Err(EngineError::Panicked)
+    );
+    assert!(p.is_poisoned());
+    assert_eq!(
+        p.step(ActionInput {
+            discrete: &actions,
+            continuous: &[]
+        })
+        .map(|_| ()),
+        Err(EngineError::Poisoned)
+    );
+    p.reset_all(Reseed::Keep).unwrap();
+    assert!(!p.is_poisoned());
+}
+
+#[test]
+fn test_dropping_a_sync_pool_joins_its_workers() {
+    for _ in 0..20 {
+        let p = pool(AutoReset::NextStep, Some(8), CountConfig::default());
+        drop(p);
+    }
+}
+
+#[test]
+fn test_cpu_set_needs_one_core_per_worker() {
+    let p = pool(AutoReset::NextStep, None, CountConfig::default());
+    let options = SyncOptions {
+        cpu_set: Some(vec![0]),
+        ..SyncOptions::new(NonZeroUsize::new(2).unwrap())
+    };
+    assert!(matches!(
+        p.with_workers(options),
+        Err(EngineError::Options {
+            option: "cpu_set",
+            ..
+        })
+    ));
+}
+
+#[test]
+fn test_workers_run_in_the_canonical_fp_environment() {
+    let mut p = pool(AutoReset::NextStep, Some(2), CountConfig::default());
+    p.reset_all(Reseed::Keep).unwrap();
+    assert_eq!(p.fp_resets(), 0);
+}
