@@ -17,10 +17,13 @@
 //!   environment: they call [`establish_canonical`] when they start, never
 //!   restore it, and check [`is_canonical`] per batch in `debug-checks`
 //!   builds.
-//! - **Caller threads** (Inline mode, construction, hashing) take an
-//!   [`FpGuard`] at the entry point. Guards are scoped and strictly LIFO:
-//!   drop them in reverse order of creation, on the thread that created
-//!   them (`FpGuard` is not `Send`).
+//! - **Caller threads** (Inline mode, construction, hashing) run
+//!   environment code only through [`with_canonical`], at the outermost
+//!   Rust frame of the entry point. It enters a scoped guard and calls the
+//!   closure through an `#[inline(never)]` helper, so no floating-point
+//!   operation of the closure can be hoisted or sunk across the mode
+//!   change, even when its result stays in registers (ADR-0037). The raw
+//!   guard is not public; guards are strictly LIFO and not `Send`.
 //!
 //! On drop the guard restores the caller's control bits and keeps the
 //! current sticky status flags (x86-64 MXCSR bits 0 to 5; aarch64 keeps them
@@ -28,7 +31,7 @@
 //! visible to the caller, as if the code had run in the caller's mode.
 //!
 //! The register accesses are full compiler barriers (no `nomem`,
-//! `readonly` or `preserves_flags`), and [`FpGuard::enter`] and its `Drop`
+//! `readonly` or `preserves_flags`), and the guard's `enter` and its `Drop`
 //! are `#[inline(never)]`, so floating-point operations are not moved across
 //! the boundary.
 //!
@@ -37,16 +40,14 @@
 //! Rust's abstract machine assumes the default floating-point environment;
 //! running Rust code under a different one is outside the language's
 //! guarantees even when it is restored before any operation. Code that runs
-//! between a host's non-default mode and [`FpGuard::enter`] (the entry
+//! between a host's non-default mode and the guard's `enter` (the entry
 //! point's own prologue) is therefore not covered by the language, only by
 //! the barriers above and by release-mode boundary tests.
 //!
 //! The barriers order memory, not register-only arithmetic: in release
-//! builds the compiler may move a floating-point operation whose result is
-//! only used after the guard is dropped to the other side of the boundary
-//! (observed in this module's tests). Results computed under a guard must
-//! therefore be stored to memory (in the engine, the output buffers) before
-//! the guard is dropped. Running kernels
+//! builds the compiler moved a quotient whose result was only used after a
+//! raw guard was dropped to the other side of the boundary. That is why
+//! code runs only inside the non-inlined call of [`with_canonical`]. Running kernels
 //! inside an assembly shim would close this; the decision is recorded in a
 //! proposed ADR (FP environment boundary).
 //!
@@ -75,6 +76,42 @@ pub fn establish_canonical() {
     arch::write(arch::canonical(arch::read()));
 }
 
+/// Puts the current thread in the canonical environment if it is not
+/// already, and returns whether a reset was needed. Engine workers call it
+/// at the start of every batch and count resets (ADR-0037).
+#[must_use = "workers count resets"]
+#[inline(never)]
+pub fn ensure_canonical() -> bool {
+    let current = arch::read();
+    let canonical = arch::canonical(current);
+    if canonical == current {
+        false
+    } else {
+        arch::write(canonical);
+        true
+    }
+}
+
+/// Runs `f` in the canonical environment and restores the caller's
+/// environment afterwards, also when `f` unwinds. Control bits are
+/// restored; sticky status flags raised inside are kept.
+///
+/// This is the only way environment code runs on a caller's thread.
+#[inline]
+pub fn with_canonical<R>(f: impl FnOnce() -> R) -> R {
+    let guard = FpGuard::enter();
+    let result = call_opaque(f);
+    drop(guard);
+    result
+}
+
+/// An opaque call: the closure's floating-point operations stay between
+/// the mode change and the restore.
+#[inline(never)]
+fn call_opaque<R>(f: impl FnOnce() -> R) -> R {
+    f()
+}
+
 /// Returns whether the current thread is in the canonical environment.
 /// Status flags are ignored.
 #[must_use]
@@ -85,11 +122,13 @@ pub fn is_canonical() -> bool {
 }
 
 /// Enters the canonical environment and restores the caller's on drop.
+/// Use [`with_canonical`]; the raw guard does not keep register arithmetic
+/// inside its scope.
 ///
 /// Not `Send`: the guard must be dropped on the thread that created it.
 #[derive(Debug)]
 #[must_use = "the canonical environment lasts only while the guard is alive"]
-pub struct FpGuard {
+pub(crate) struct FpGuard {
     saved: arch::Control,
     _not_send: PhantomData<*const ()>,
 }
@@ -97,7 +136,7 @@ pub struct FpGuard {
 impl FpGuard {
     /// Saves the caller's environment and enters the canonical one.
     #[inline(never)]
-    pub fn enter() -> Self {
+    pub(crate) fn enter() -> Self {
         let saved = arch::read();
         arch::write(arch::canonical(saved));
         Self {
@@ -120,7 +159,7 @@ mod tests {
     use core::hint::black_box;
 
     use super::arch::{self, test_modes};
-    use super::{FpGuard, establish_canonical, is_canonical};
+    use super::{FpGuard, ensure_canonical, establish_canonical, is_canonical, with_canonical};
 
     // 1/3 rounded to nearest.
     const ONE_THIRD_NEAREST: u64 = 0x3FD5_5555_5555_5555;
@@ -240,6 +279,62 @@ mod tests {
             assert!(is_canonical());
         }
         assert_eq!(test_modes::control_bits(arch::read()), original);
+    }
+
+    // Regression for the hoist agy reproduced: a caller inlined into a loop
+    // under flush-to-zero. Each quotient is a subnormal that must not be
+    // flushed. Results are compared as bits: under DAZ a float comparison
+    // would read them as zero.
+    #[inline(always)]
+    #[expect(
+        clippy::inline_always,
+        reason = "the regression needs the caller inlined"
+    )]
+    fn halve_all(xs: &[f64], out: &mut Vec<u64>) {
+        for &x in xs {
+            out.push(with_canonical(|| x / 2.0).to_bits());
+        }
+    }
+
+    #[test]
+    fn test_with_canonical_inlined_loop_under_ftz_keeps_subnormals() {
+        with_mode(test_modes::flush_to_zero, |_| {
+            let xs = black_box([f64::MIN_POSITIVE; 64]);
+            let mut out = Vec::with_capacity(xs.len());
+            halve_all(&xs, &mut out);
+            assert!(out.iter().all(|&b| b == 0x0008_0000_0000_0000));
+        });
+    }
+
+    // The case observed in PR #2: a register-only result used after the
+    // scope.
+    #[test]
+    fn test_with_canonical_register_result_used_after_scope_not_flushed() {
+        with_mode(test_modes::flush_to_zero, |_| {
+            let (a, b) = (black_box(f64::MIN_POSITIVE), black_box(2.0));
+            let t = with_canonical(|| a / b);
+            assert_eq!(t.to_bits(), 0x0008_0000_0000_0000);
+        });
+    }
+
+    #[test]
+    fn test_with_canonical_restores_on_unwind() {
+        with_mode(test_modes::flush_to_zero, |entered| {
+            let result = std::panic::catch_unwind(|| with_canonical(|| panic!("unwind")));
+            assert!(result.is_err());
+            assert_eq!(
+                test_modes::control_bits(arch::read()),
+                test_modes::control_bits(entered)
+            );
+        });
+    }
+
+    #[test]
+    fn test_ensure_canonical_reports_reset() {
+        with_mode(test_modes::flush_to_zero, |_| {
+            assert!(ensure_canonical());
+            assert!(!ensure_canonical());
+        });
     }
 
     #[test]

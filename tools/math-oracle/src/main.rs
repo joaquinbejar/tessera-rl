@@ -32,7 +32,7 @@ const BINARY: [Binary; 2] = [
     ("hypot", math::hypot, libm::hypot),
 ];
 
-const EDGES: [f64; 33] = [
+const EDGES: [f64; 35] = [
     0.0,
     -0.0,
     f64::from_bits(1),
@@ -66,6 +66,9 @@ const EDGES: [f64; 33] = [
     f64::INFINITY,
     f64::NEG_INFINITY,
     f64::NAN,
+    // Large arguments that take the Payne-Hanek reduction path.
+    f64::from_bits(0x7396_ac5b_262c_a1ff),
+    f64::from_bits(0x4199_21fb_5444_2d18),
 ];
 
 /// Marsaglia xorshift64; only used to pick test inputs.
