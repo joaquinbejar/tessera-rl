@@ -20,10 +20,13 @@
 //! - **Caller threads** (Inline mode, construction, hashing) run
 //!   environment code only through [`with_canonical`], at the outermost
 //!   Rust frame of the entry point. It enters a scoped guard and calls the
-//!   closure through an `#[inline(never)]` helper, so no floating-point
-//!   operation of the closure can be hoisted or sunk across the mode
-//!   change, even when its result stays in registers (ADR-0037). The raw
-//!   guard is not public; guards are strictly LIFO and not `Send`.
+//!   closure through an `#[inline(never)]` helper, to keep the closure's
+//!   floating-point operations between the mode change and the restore,
+//!   even when results stay in registers. This is an empirically tested
+//!   mitigation, not a Rust language guarantee: `#[inline(never)]` controls
+//!   inlining, not LLVM's floating-point environment semantics. See
+//!   ADR-0037 (Proposed, pending owner acceptance). The raw guard is not
+//!   public; guards are strictly LIFO and not `Send`.
 //!
 //! On drop the guard restores the caller's control bits and keeps the
 //! current sticky status flags (x86-64 MXCSR bits 0 to 5; aarch64 keeps them
@@ -47,9 +50,11 @@
 //! The barriers order memory, not register-only arithmetic: in release
 //! builds the compiler moved a quotient whose result was only used after a
 //! raw guard was dropped to the other side of the boundary. That is why
-//! code runs only inside the non-inlined call of [`with_canonical`]. Running kernels
-//! inside an assembly shim would close this; the decision is recorded in a
-//! proposed ADR (FP environment boundary).
+//! code runs only inside the non-inlined call of [`with_canonical`], which
+//! release regression tests show to be effective on the supported targets;
+//! it is not a language-level proof. Running kernels inside an assembly
+//! shim would give one; ADR-0037 (Proposed, pending owner acceptance)
+//! records the decision not to do so for now.
 //!
 //! Miri cannot run inline assembly, so this module is covered by native
 //! tests on every CI platform.
@@ -97,6 +102,12 @@ pub fn ensure_canonical() -> bool {
 /// restored; sticky status flags raised inside are kept.
 ///
 /// This is the only way environment code runs on a caller's thread.
+///
+/// Keeping the closure's operations inside the canonical environment is an
+/// empirically tested mitigation (release regression tests on x86-64 and
+/// aarch64), not a Rust language guarantee: `#[inline(never)]` controls
+/// inlining, not LLVM's floating-point environment semantics. See ADR-0037
+/// (Proposed, pending owner acceptance).
 #[inline]
 pub fn with_canonical<R>(f: impl FnOnce() -> R) -> R {
     let guard = FpGuard::enter();
@@ -105,8 +116,9 @@ pub fn with_canonical<R>(f: impl FnOnce() -> R) -> R {
     result
 }
 
-/// An opaque call: the closure's floating-point operations stay between
-/// the mode change and the restore.
+/// A non-inlined call, so the closure's floating-point operations are not
+/// merged into the caller and moved across the mode change. Tested, not
+/// guaranteed by the language (ADR-0037).
 #[inline(never)]
 fn call_opaque<R>(f: impl FnOnce() -> R) -> R {
     f()
