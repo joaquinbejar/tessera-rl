@@ -121,3 +121,21 @@ fn test_masked_same_step_pool_does_not_allocate() {
     });
     assert_eq!(n, 0);
 }
+
+#[test]
+fn test_snapshot_restore_and_fork_do_not_allocate() {
+    let options = PoolOptions::new(NonZeroU32::new(8).unwrap(), Seed::new(3));
+    let mut pool = EnvPool::<Counter, Masked>::with_masks(CountConfig::default(), options).unwrap();
+    pool.reset_all(Reseed::Keep).unwrap();
+    let mut records = [pool.snapshot(0).unwrap(); 8];
+    let n = allocations(|| {
+        let record = pool.snapshot(3).unwrap();
+        let _ = std::hint::black_box(pool.restore(5, &record));
+        let _ = std::hint::black_box(pool.fork(1, &[2, 4]));
+        let _ = std::hint::black_box(pool.fork_branched(1, &[6, 7], Some(&[10, 11])));
+        let _ = std::hint::black_box(pool.snapshot_all(&mut records));
+        let _ = std::hint::black_box(pool.restore_all(&records));
+        let _ = std::hint::black_box(pool.state_hash(0));
+    });
+    assert_eq!(n, 0);
+}

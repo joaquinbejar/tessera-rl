@@ -51,19 +51,20 @@ pub enum Reseed<'a> {
 /// A pool of `num_envs` instances of `E`.
 #[derive(Debug)]
 pub struct EnvPool<E: Environment, M: MaskProvider<E> = NoMasks> {
-    cfg: E::Config,
-    options: PoolOptions,
-    headers: Vec<E::Header>,
-    states: Vec<E::State>,
+    pub(crate) cfg: E::Config,
+    pub(crate) options: PoolOptions,
+    pub(crate) headers: Vec<E::Header>,
+    pub(crate) states: Vec<E::State>,
     actions: ActionLayout,
     discrete: Vec<i32>,
     continuous: Vec<f32>,
-    outputs: Outputs,
-    seen: Vec<Bool8>,
-    authority: RngAuthority,
-    poisoned: bool,
+    pub(crate) outputs: Outputs,
+    pub(crate) seen: Vec<Bool8>,
+    pub(crate) authority: RngAuthority,
+    pub(crate) poisoned: bool,
     penalties: Vec<f32>,
     penalized: Vec<Bool8>,
+    pub(crate) branch_counter: u64,
     _masks: PhantomData<M>,
 }
 
@@ -193,6 +194,7 @@ where
             poisoned: false,
             penalties: vec![0.0; if M::ENABLED { rows } else { 0 }],
             penalized: vec![Bool8::FALSE; if M::ENABLED { rows } else { 0 }],
+            branch_counter: 0,
             _masks: PhantomData,
         })
     }
@@ -590,7 +592,7 @@ where
 /// environment, catching a panic and poisoning the pool (ADR-0028). There
 /// is no rollback: instances processed before the panic keep their new
 /// state. With `panic = "abort"` a panic aborts the process instead.
-fn run_kernels(poisoned: &mut bool, f: impl FnOnce()) -> Result<(), EngineError> {
+pub(crate) fn run_kernels(poisoned: &mut bool, f: impl FnOnce()) -> Result<(), EngineError> {
     if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| fp::with_canonical(f))).is_ok() {
         Ok(())
     } else {
@@ -938,7 +940,7 @@ fn set(buf: &mut [Bool8], i: usize, value: bool) {
     }
 }
 
-fn clear_instance(outputs: &mut Outputs, i: usize) {
+pub(crate) fn clear_instance(outputs: &mut Outputs, i: usize) {
     let a = outputs.agents;
     let range = i * a..(i + 1) * a;
     for buf in [
@@ -969,7 +971,7 @@ fn clear_instance(outputs: &mut Outputs, i: usize) {
     }
 }
 
-fn write_agent_masks<H: RecordLayout>(outputs: &mut Outputs, i: usize, header: &H) {
+pub(crate) fn write_agent_masks<H: RecordLayout>(outputs: &mut Outputs, i: usize, header: &H) {
     let a = outputs.agents;
     for (slot, row) in header.agents().iter().enumerate() {
         let k = i * a + slot;
@@ -985,7 +987,7 @@ fn write_agent_masks<H: RecordLayout>(outputs: &mut Outputs, i: usize, header: &
     }
 }
 
-fn observe_instance<E: Environment, M: MaskProvider<E>>(
+pub(crate) fn observe_instance<E: Environment, M: MaskProvider<E>>(
     cfg: &E::Config,
     authority: &RngAuthority,
     header: &E::Header,
