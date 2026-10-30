@@ -6,7 +6,7 @@ use core::marker::PhantomData;
 
 use crate::bool8::Bool8;
 use crate::error::SpaceError;
-use crate::space::{DType, Space};
+use crate::space::{BoxBounds, DType, Space};
 
 /// An element type that observation leaves can hold.
 pub trait LeafDType: Copy + 'static {
@@ -16,10 +16,13 @@ pub trait LeafDType: Copy + 'static {
     /// Writes `self` little-endian into `dst`, which has `DTYPE.size()`
     /// bytes.
     fn write_le(self, dst: &mut [u8]);
+
+    /// Box bounds `low..=high` of this element type, typed for its dtype.
+    fn box_bounds(low: Self, high: Self) -> BoxBounds;
 }
 
 macro_rules! leaf_dtype {
-    ($($ty:ty => $dtype:ident),* $(,)?) => {$(
+    ($($ty:ty => $dtype:ident, $variant:ident, $wide:ty);* $(;)?) => {$(
         impl LeafDType for $ty {
             const DTYPE: DType = DType::$dtype;
 
@@ -27,13 +30,22 @@ macro_rules! leaf_dtype {
             fn write_le(self, dst: &mut [u8]) {
                 dst.copy_from_slice(&self.to_le_bytes());
             }
+
+            #[inline]
+            fn box_bounds(low: Self, high: Self) -> BoxBounds {
+                BoxBounds::$variant {
+                    low: vec![<$wide>::from(low)],
+                    high: vec![<$wide>::from(high)],
+                }
+            }
         }
     )*};
 }
 
 leaf_dtype! {
-    u8 => U8, i8 => I8, u16 => U16, i16 => I16, u32 => U32, i32 => I32,
-    i64 => I64, f32 => F32, f64 => F64,
+    u8 => U8, UInt, u64; u16 => U16, UInt, u64; u32 => U32, UInt, u64;
+    i8 => I8, Int, i64; i16 => I16, Int, i64; i32 => I32, Int, i64; i64 => I64, Int, i64;
+    f32 => F32, Float, f64; f64 => F64, Float, f64;
 }
 
 impl LeafDType for Bool8 {
@@ -42,6 +54,14 @@ impl LeafDType for Bool8 {
     #[inline]
     fn write_le(self, dst: &mut [u8]) {
         dst.copy_from_slice(&[self.to_byte()]);
+    }
+
+    #[inline]
+    fn box_bounds(low: Self, high: Self) -> BoxBounds {
+        BoxBounds::Int {
+            low: vec![i64::from(low.to_byte())],
+            high: vec![i64::from(high.to_byte())],
+        }
     }
 }
 

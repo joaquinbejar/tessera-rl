@@ -100,10 +100,10 @@ impl DecodeAllowNan for f64 {
     }
 }
 
-impl<T: DecodeAllowNan + Copy + Default, const N: usize> DecodeAllowNan for [T; N] {
+impl<T: DecodeAllowNan + StateInit, const N: usize> DecodeAllowNan for [T; N] {
     #[inline]
     fn decode_allow_nan(input: &mut Decoder<'_>) -> Result<Self, DecodeError> {
-        let mut items = [T::default(); N];
+        let mut items = <[T; N]>::state_default();
         for item in &mut items {
             *item = T::decode_allow_nan(input)?;
         }
