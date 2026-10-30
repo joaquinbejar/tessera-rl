@@ -7,6 +7,7 @@ use tessera_rl_core::{Bool8, RecordLayout};
 
 use crate::error::EngineError;
 use crate::layout::ActionLayout;
+use crate::options::AutoReset;
 
 /// Caller-provided actions for every instance, `[N, A, heads]`.
 #[derive(Debug, Clone, Copy)]
@@ -48,6 +49,7 @@ pub(crate) fn check_ids(ids: &[u32], seen: &mut [Bool8]) -> Result<(), EngineErr
 /// stored as zero and never validated.
 pub(crate) fn check_and_copy_actions<H: RecordLayout>(
     layout: &ActionLayout,
+    auto_reset: AutoReset,
     headers: &[H],
     input: ActionInput<'_>,
     discrete_out: &mut [i32],
@@ -61,7 +63,25 @@ pub(crate) fn check_and_copy_actions<H: RecordLayout>(
         let instance = u32::try_from(index).unwrap_or(u32::MAX);
         let engine = header.engine();
         if engine.pending_reset.get() {
-            return Err(EngineError::PendingReset { id: instance });
+            // Never reset, or frozen in Disabled mode: the caller must reset.
+            if engine.fresh.get() || auto_reset == AutoReset::Disabled {
+                return Err(EngineError::PendingReset { id: instance });
+            }
+            // NextStep: this instance resets instead of stepping.
+            if engine.identity.episode_index() == u32::MAX {
+                return Err(EngineError::CounterExhausted {
+                    id: instance,
+                    counter: "episode_index",
+                });
+            }
+            continue;
+        }
+        // SameStep may reset any instance in this pass.
+        if auto_reset == AutoReset::SameStep && engine.identity.episode_index() == u32::MAX {
+            return Err(EngineError::CounterExhausted {
+                id: instance,
+                counter: "episode_index",
+            });
         }
         if engine.episode_steps == u32::MAX {
             return Err(EngineError::CounterExhausted {
@@ -107,8 +127,9 @@ pub(crate) fn check_and_copy_actions<H: RecordLayout>(
     }
     // Validated: copy, zeroing slots whose actions are not required.
     for (index, header) in headers.iter().enumerate() {
+        let pending = header.engine().pending_reset.get();
         for (slot, row) in header.agents().iter().enumerate() {
-            let required = row.alive.get() && row.acting.get();
+            let required = !pending && row.alive.get() && row.acting.get();
             let base = index * agents + slot;
             copy_row(required, input.discrete, discrete_out, base * dh, dh, 0);
             copy_row(

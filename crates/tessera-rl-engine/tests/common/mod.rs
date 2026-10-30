@@ -28,6 +28,12 @@ pub struct CountConfig {
     pub length: u32,
     #[config(default = 1000)]
     pub kill_at: i32,
+    /// Panic in `step` when the step counter reaches this value (0: never).
+    #[config(default = 0)]
+    pub panic_at: u32,
+    /// Panic in `reset`.
+    #[config(default = false)]
+    pub panic_on_reset: bool,
 }
 
 #[derive(Observation)]
@@ -64,7 +70,9 @@ impl Environment for Counter {
         Ok(Space::Discrete { n: 3 })
     }
 
-    fn reset(_: &CountConfig, rng: &mut StepRng, state: &mut Counts) {
+    fn reset(cfg: &CountConfig, rng: &mut StepRng, state: &mut Counts) {
+        // Panic injection for the poisoning tests.
+        assert!(!cfg.panic_on_reset, "injected reset panic");
         state.value = [rng.next_u32().cast_signed() % 100, 0];
     }
 
@@ -92,6 +100,9 @@ impl Environment for Counter {
             out.set_reward(agent, inc as f32);
         }
         state.steps += 1;
+        if cfg.panic_at != 0 && state.steps == cfg.panic_at {
+            panic_now();
+        }
         if state.steps >= cfg.length {
             out.end_episode(EpisodeEnd::Terminated);
         }
@@ -111,6 +122,11 @@ impl Environment for Counter {
             leaf.set(1, noise);
         }
     }
+}
+
+#[expect(clippy::panic, reason = "panic injection for poisoning tests")]
+fn panic_now() {
+    panic!("injected step panic");
 }
 
 const _: fn() = || {

@@ -19,7 +19,7 @@ use tessera_rl_num::rng::{ObsRng, RngAuthority, StepRng};
 
 use crate::error::EngineError;
 use crate::layout::{ActionLayout, MAX_LEAVES, obs_leaves};
-use crate::options::PoolOptions;
+use crate::options::{AutoReset, PoolOptions};
 use crate::outputs::Outputs;
 use crate::validate::{ActionInput, check_and_copy_actions, check_ids};
 
@@ -49,6 +49,7 @@ pub struct EnvPool<E: Environment> {
     outputs: Outputs,
     seen: Vec<Bool8>,
     authority: RngAuthority,
+    poisoned: bool,
 }
 
 impl<E> EnvPool<E>
@@ -85,7 +86,13 @@ where
 
         let num_envs = usize::try_from(options.num_envs.get()).map_err(|_| too_large())?;
         let rows = num_envs.checked_mul(E::MAX_AGENTS).ok_or_else(too_large)?;
-        let outputs = Outputs::new(num_envs, E::MAX_AGENTS, &leaves).ok_or_else(too_large)?;
+        let outputs = Outputs::new(
+            num_envs,
+            E::MAX_AGENTS,
+            &leaves,
+            options.auto_reset == AutoReset::SameStep,
+        )
+        .ok_or_else(too_large)?;
         let adaptive = <E::Header as RecordLayout>::Adaptive::from_config(&cfg);
         let headers = (0..num_envs)
             .map(|i| {
@@ -119,7 +126,14 @@ where
             outputs,
             seen: vec![Bool8::FALSE; num_envs],
             authority: RngAuthority::engine_only(),
+            poisoned: false,
         })
+    }
+
+    /// Whether a panic in environment code poisoned the pool (ADR-0028).
+    #[must_use]
+    pub const fn is_poisoned(&self) -> bool {
+        self.poisoned
     }
 
     /// The pool options.
@@ -182,6 +196,9 @@ where
     ///
     /// Returns an [`EngineError`] if a seed list has the wrong length or an
     /// episode counter is exhausted; nothing is mutated then.
+    ///
+    /// On a poisoned pool this is the recovery path: the poison is cleared
+    /// only if every instance resets without panicking.
     pub fn reset_all(&mut self, reseed: Reseed<'_>) -> Result<&Outputs, EngineError> {
         fp::with_canonical(|| self.reset_all_inner(reseed))?;
         Ok(&self.outputs)
@@ -190,7 +207,8 @@ where
     fn reset_all_inner(&mut self, reseed: Reseed<'_>) -> Result<(), EngineError> {
         let n = self.headers.len();
         self.check_reset(0..n, n, reseed)?;
-        self.apply_reset(0..n, reseed);
+        self.apply_reset(0..n, reseed)?;
+        self.poisoned = false;
         Ok(())
     }
 
@@ -202,7 +220,12 @@ where
     /// Returns an [`EngineError`] for unknown or duplicate ids, a seed list
     /// of the wrong length or an exhausted episode counter; nothing is
     /// mutated then.
+    ///
+    /// Rejected with [`EngineError::Poisoned`] on a poisoned pool.
     pub fn reset(&mut self, ids: &[u32], reseed: Reseed<'_>) -> Result<&Outputs, EngineError> {
+        if self.poisoned {
+            return Err(EngineError::Poisoned);
+        }
         fp::with_canonical(|| self.reset_inner(ids, reseed))?;
         Ok(&self.outputs)
     }
@@ -211,7 +234,7 @@ where
         check_ids(ids, &mut self.seen)?;
         let indices = ids.iter().filter_map(|&id| usize::try_from(id).ok());
         self.check_reset(indices.clone(), ids.len(), reseed)?;
-        self.apply_reset(indices, reseed);
+        self.apply_reset(indices, reseed)?;
         Ok(())
     }
 
@@ -246,16 +269,21 @@ where
         Ok(())
     }
 
-    fn apply_reset(&mut self, indices: impl Iterator<Item = usize>, reseed: Reseed<'_>) {
+    fn apply_reset(
+        &mut self,
+        indices: impl Iterator<Item = usize>,
+        reseed: Reseed<'_>,
+    ) -> Result<(), EngineError> {
         let Self {
             cfg,
             headers,
             states,
             outputs,
             authority,
+            poisoned,
             ..
         } = self;
-        fp::with_canonical(|| {
+        run_kernels(poisoned, || {
             for (k, i) in indices.enumerate() {
                 let (Some(header), Some(state)) = (headers.get_mut(i), states.get_mut(i)) else {
                     continue;
@@ -271,7 +299,7 @@ where
                 write_agent_masks(outputs, i, header);
                 observe_instance::<E>(cfg, authority, header, state, outputs, i);
             }
-        });
+        })
     }
 
     /// Steps every instance with `actions` (Inline mode).
@@ -280,8 +308,14 @@ where
     ///
     /// Returns an [`EngineError`] if the actions have the wrong shape, a
     /// required action is invalid, an instance is pending reset or a step
-    /// counter is exhausted; nothing is mutated then.
+    /// counter is exhausted; nothing is mutated then. Returns
+    /// [`EngineError::Poisoned`] on a poisoned pool, and
+    /// [`EngineError::Panicked`] if environment code panics during the
+    /// call, which poisons the pool.
     pub fn step(&mut self, actions: ActionInput<'_>) -> Result<&Outputs, EngineError> {
+        if self.poisoned {
+            return Err(EngineError::Poisoned);
+        }
         // The validation boundary compares floats too: it runs in the
         // canonical environment with the kernels (ADR-0037).
         fp::with_canonical(|| self.step_inner(actions))?;
@@ -291,6 +325,7 @@ where
     fn step_inner(&mut self, actions: ActionInput<'_>) -> Result<(), EngineError> {
         check_and_copy_actions(
             &self.actions,
+            self.options.auto_reset,
             &self.headers,
             actions,
             &mut self.discrete,
@@ -306,12 +341,22 @@ where
             continuous,
             outputs,
             authority,
+            poisoned,
             ..
         } = self;
         let (dh, ch) = (layout.discrete.len(), layout.continuous.len());
         let limit = options.max_episode_steps.map(core::num::NonZeroU32::get);
-        fp::with_canonical(|| {
+        let auto_reset = options.auto_reset;
+        run_kernels(poisoned, || {
             for (i, (header, state)) in headers.iter_mut().zip(states.iter_mut()).enumerate() {
+                if header.engine().pending_reset.get() {
+                    // NextStep: reset instead of stepping (validated above).
+                    reset_one::<E>(cfg, authority, header, state, None);
+                    clear_instance(outputs, i);
+                    write_agent_masks(outputs, i, header);
+                    observe_instance::<E>(cfg, authority, header, state, outputs, i);
+                    continue;
+                }
                 let rows = i * E::MAX_AGENTS;
                 let view = Actions::new(
                     discrete
@@ -325,9 +370,50 @@ where
                 );
                 step_one::<E>(cfg, authority, header, state, &view, outputs, i, limit);
                 observe_instance::<E>(cfg, authority, header, state, outputs, i);
+                if auto_reset == AutoReset::SameStep && header.engine().pending_reset.get() {
+                    save_terminal(outputs, i);
+                    // Flags and stats of the ended episode stay set.
+                    reset_one::<E>(cfg, authority, header, state, None);
+                    write_agent_masks(outputs, i, header);
+                    observe_instance::<E>(cfg, authority, header, state, outputs, i);
+                }
             }
-        });
+        })?;
         Ok(())
+    }
+}
+
+/// Runs environment code at a chunk boundary: inside the canonical FP
+/// environment, catching a panic and poisoning the pool (ADR-0028). There
+/// is no rollback: instances processed before the panic keep their new
+/// state. With `panic = "abort"` a panic aborts the process instead.
+fn run_kernels(poisoned: &mut bool, f: impl FnOnce()) -> Result<(), EngineError> {
+    if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| fp::with_canonical(f))).is_ok() {
+        Ok(())
+    } else {
+        *poisoned = true;
+        Err(EngineError::Panicked)
+    }
+}
+
+/// Copies instance `i`'s observation rows into the terminal buffer.
+fn save_terminal(outputs: &mut Outputs, i: usize) {
+    let a = outputs.agents;
+    let Outputs {
+        observations,
+        terminal_observations,
+        leaf_bytes,
+        ..
+    } = outputs;
+    for ((obs, term), &bytes) in observations
+        .iter()
+        .zip(terminal_observations.iter_mut())
+        .zip(leaf_bytes.iter())
+    {
+        let range = i * a * bytes..(i + 1) * a * bytes;
+        if let (Some(src), Some(dst)) = (obs.get(range.clone()), term.get_mut(range)) {
+            dst.copy_from_slice(src);
+        }
     }
 }
 

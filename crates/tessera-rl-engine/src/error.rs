@@ -89,7 +89,17 @@ pub enum EngineError {
         /// The value.
         value: f32,
     },
-    /// The instance's episode ended and it has not been reset.
+    /// The pool is poisoned after a panic in environment code; only a full
+    /// reset (or, later, a full restore) or dropping the pool is accepted
+    /// (ADR-0028).
+    #[error("the pool is poisoned by an earlier panic; reset all instances to recover")]
+    Poisoned,
+    /// Environment code panicked during this call. The pool is now
+    /// poisoned; there is no rollback.
+    #[error("environment code panicked; the pool is poisoned")]
+    Panicked,
+    /// The instance has not been reset yet, or its episode ended in
+    /// `Disabled` auto-reset mode.
     #[error("instance {id} is pending reset")]
     PendingReset {
         /// The id.

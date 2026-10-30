@@ -14,7 +14,7 @@ use core::num::NonZeroU32;
 
 use common::{CountConfig, Counter};
 use tessera_rl_core::{Bool8, StateHash};
-use tessera_rl_engine::{ActionInput, EngineError, EnvPool, PoolOptions, Reseed};
+use tessera_rl_engine::{ActionInput, AutoReset, EngineError, EnvPool, PoolOptions, Reseed};
 use tessera_rl_num::identity::{LogicalId, Seed};
 
 fn pool(n: u32, seed: u64) -> EnvPool<Counter> {
@@ -188,7 +188,11 @@ fn test_reset_rejects_duplicate_and_unknown_ids_and_bad_seed_lists() {
 
 #[test]
 fn test_episode_terminates_and_sets_flags_and_stats() {
-    let mut p = pool(1, 2);
+    let options = PoolOptions {
+        auto_reset: AutoReset::Disabled,
+        ..PoolOptions::new(NonZeroU32::MIN, Seed::new(2))
+    };
+    let mut p = EnvPool::<Counter>::new(CountConfig::default(), options).unwrap();
     p.reset_all(Reseed::Keep).unwrap();
     for _ in 0..4 {
         let out = p.step(actions(&[1, 1])).unwrap();
