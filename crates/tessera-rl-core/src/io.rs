@@ -1,0 +1,190 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
+//! Minimal views over the engine's action, observation and mask buffers
+//! (SPEC 5.2). Typed views per head and leaf come with the `Observation`
+//! derive and the engine (milestones 4 and 5).
+
+use core::marker::PhantomData;
+
+use crate::agent::AgentSlot;
+use crate::bool8::Bool8;
+
+/// Read-only actions of one instance: per agent, `discrete_heads` `i32`
+/// values and `continuous_heads` `f32` values, already validated at the
+/// boundary (ADR-0028).
+#[derive(Debug, Clone, Copy)]
+pub struct Actions<'a, A> {
+    discrete: &'a [i32],
+    continuous: &'a [f32],
+    discrete_heads: usize,
+    continuous_heads: usize,
+    _action: PhantomData<fn() -> A>,
+}
+
+impl<'a, A> Actions<'a, A> {
+    /// Engine-only: views over one instance's action rows.
+    #[doc(hidden)]
+    #[must_use]
+    #[inline]
+    pub const fn new(
+        discrete: &'a [i32],
+        discrete_heads: usize,
+        continuous: &'a [f32],
+        continuous_heads: usize,
+    ) -> Self {
+        Self {
+            discrete,
+            continuous,
+            discrete_heads,
+            continuous_heads,
+            _action: PhantomData,
+        }
+    }
+
+    /// The discrete action of `agent` on `head`.
+    #[must_use]
+    #[inline]
+    pub fn discrete(&self, agent: AgentSlot, head: usize) -> Option<i32> {
+        flat(agent, head, self.discrete_heads).and_then(|i| self.discrete.get(i).copied())
+    }
+
+    /// The continuous action of `agent` on `head`.
+    #[must_use]
+    #[inline]
+    pub fn continuous(&self, agent: AgentSlot, head: usize) -> Option<f32> {
+        flat(agent, head, self.continuous_heads).and_then(|i| self.continuous.get(i).copied())
+    }
+}
+
+#[inline]
+fn flat(agent: AgentSlot, head: usize, heads: usize) -> Option<usize> {
+    if head >= heads {
+        return None;
+    }
+    agent.index().checked_mul(heads)?.checked_add(head)
+}
+
+/// Writes one agent's actions, for heuristics (`Heuristic::act`).
+#[derive(Debug)]
+pub struct ActionWriter<'a> {
+    discrete: &'a mut [i32],
+    continuous: &'a mut [f32],
+}
+
+impl<'a> ActionWriter<'a> {
+    /// Engine-only: views over one agent's action heads.
+    #[doc(hidden)]
+    #[must_use]
+    #[inline]
+    pub fn new(discrete: &'a mut [i32], continuous: &'a mut [f32]) -> Self {
+        Self {
+            discrete,
+            continuous,
+        }
+    }
+
+    /// Sets discrete head `head`; returns `false` if it does not exist.
+    #[inline]
+    pub fn set_discrete(&mut self, head: usize, value: i32) -> bool {
+        self.discrete.get_mut(head).map(|v| *v = value).is_some()
+    }
+
+    /// Sets continuous head `head`; returns `false` if it does not exist.
+    #[inline]
+    pub fn set_continuous(&mut self, head: usize, value: f32) -> bool {
+        self.continuous.get_mut(head).map(|v| *v = value).is_some()
+    }
+}
+
+/// Writes one agent's observation, leaf by leaf, as raw little-endian
+/// bytes of the leaf dtype.
+#[derive(Debug)]
+pub struct ObsWriter<'a, O> {
+    leaves: &'a mut [&'a mut [u8]],
+    _obs: PhantomData<fn() -> O>,
+}
+
+impl<'a, O> ObsWriter<'a, O> {
+    /// Engine-only: views over one agent's leaf rows.
+    #[doc(hidden)]
+    #[must_use]
+    #[inline]
+    pub fn new(leaves: &'a mut [&'a mut [u8]]) -> Self {
+        Self {
+            leaves,
+            _obs: PhantomData,
+        }
+    }
+
+    /// The bytes of leaf `index`.
+    #[must_use]
+    #[inline]
+    pub fn leaf(&mut self, index: usize) -> Option<&mut [u8]> {
+        self.leaves.get_mut(index).map(|leaf| &mut **leaf)
+    }
+}
+
+/// Writes one agent's legal-action mask (dense, one byte per action).
+#[derive(Debug)]
+pub struct MaskWriter<'a> {
+    mask: &'a mut [Bool8],
+}
+
+impl<'a> MaskWriter<'a> {
+    /// Engine-only: a view over one agent's mask row.
+    #[doc(hidden)]
+    #[must_use]
+    #[inline]
+    pub fn new(mask: &'a mut [Bool8]) -> Self {
+        Self { mask }
+    }
+
+    /// Sets whether action `index` is legal; returns `false` if it does
+    /// not exist.
+    #[inline]
+    pub fn set(&mut self, index: usize, legal: bool) -> bool {
+        self.mask
+            .get_mut(index)
+            .map(|m| *m = Bool8::new(legal))
+            .is_some()
+    }
+
+    /// Marks every action as legal or illegal.
+    #[inline]
+    pub fn fill(&mut self, legal: bool) {
+        self.mask.fill(Bool8::new(legal));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Actions, MaskWriter, ObsWriter};
+    use crate::agent::AgentSlot;
+    use crate::bool8::Bool8;
+
+    #[test]
+    fn test_actions_index_by_agent_and_head() {
+        let discrete = [1, 2, 3, 4];
+        let a = Actions::<()>::new(&discrete, 2, &[], 0);
+        let second = AgentSlot::new(1, 2).unwrap();
+        assert_eq!(a.discrete(second, 1), Some(4));
+        assert_eq!(a.discrete(second, 2), None);
+        assert_eq!(a.continuous(AgentSlot::FIRST, 0), None);
+    }
+
+    #[test]
+    fn test_obs_and_mask_writers_bounds_checked() {
+        let mut leaf = [0u8; 2];
+        let mut leaves = [&mut leaf[..]];
+        let mut w = ObsWriter::<()>::new(&mut leaves);
+        w.leaf(0).unwrap()[1] = 7;
+        assert!(w.leaf(1).is_none());
+        assert_eq!(leaf, [0, 7]);
+        let mut mask = [Bool8::FALSE; 3];
+        let mut m = MaskWriter::new(&mut mask);
+        m.fill(true);
+        assert!(m.set(1, false));
+        assert!(!m.set(3, true));
+        assert_eq!(mask, [Bool8::TRUE, Bool8::FALSE, Bool8::TRUE]);
+    }
+}
