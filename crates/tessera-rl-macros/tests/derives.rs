@@ -209,6 +209,35 @@ fn test_env_config_rejects_nan_floats_without_range() {
     );
 }
 
+#[derive(EnvConfig, Debug, Clone, PartialEq)]
+struct Curriculum {
+    #[config(default = 1, adaptive)]
+    level: u8,
+    #[config(default = 0.5, adaptive)]
+    noise: f64,
+    #[config(default = true, adaptive)]
+    hints: bool,
+    #[config(default = 9)]
+    size: u16,
+}
+
+#[test]
+fn test_env_config_adaptive_struct_is_padding_free_header_data() {
+    use tessera_rl_core::{AdaptiveValues, StateInit};
+    // f64 first, then the two one-byte fields, padded to 16 bytes.
+    assert_eq!(size_of::<CurriculumAdaptive>(), 16);
+    let values = CurriculumAdaptive::from_config(&Curriculum::default());
+    assert_eq!(
+        (values.level, values.noise, values.hints),
+        (1, 0.5, Bool8::TRUE)
+    );
+    let bytes = encode_to_vec(&values);
+    assert_eq!(bytes.len(), 16);
+    assert_eq!(decode_from_slice::<CurriculumAdaptive>(&bytes), Ok(values));
+    assert_eq!(CurriculumAdaptive::state_default().level, 0);
+    let _ = Curriculum::default().size;
+}
+
 #[test]
 fn test_env_config_canonical_form_sorted_without_adaptive() {
     assert_eq!(GridConfig::ADAPTIVE_FIELDS, ["difficulty"]);

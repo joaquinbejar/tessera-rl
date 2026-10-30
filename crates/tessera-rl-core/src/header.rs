@@ -56,6 +56,21 @@ pub struct AgentRow {
     pub reserved: Reserved<6>,
 }
 
+/// Adaptive values built from a config `C`: `#[derive(EnvConfig)]`
+/// generates `<Name>Adaptive` implementing it, and [`NoAdaptive`]
+/// implements it for every config.
+pub trait AdaptiveValues<C>: Canonical + StateInit + Copy + 'static {
+    /// The values of the adaptive fields of `cfg`.
+    fn from_config(cfg: &C) -> Self;
+}
+
+impl<C> AdaptiveValues<C> for NoAdaptive {
+    #[inline]
+    fn from_config(_: &C) -> Self {
+        Self
+    }
+}
+
 /// The adaptive values of a config without adaptive fields.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct NoAdaptive;
@@ -97,6 +112,12 @@ pub trait RecordLayout: Canonical + StateInit + Copy + 'static {
     /// Number of agent slots; must equal `Environment::MAX_AGENTS`.
     const AGENTS: usize;
 
+    /// The adaptive config values stored in the header.
+    type Adaptive: Canonical + StateInit + Copy + 'static;
+
+    /// The adaptive values, mutably.
+    fn adaptive_mut(&mut self) -> &mut Self::Adaptive;
+
     /// The engine fields.
     fn engine(&self) -> &EngineHeader;
 
@@ -128,6 +149,13 @@ impl<const A: usize, Ad: Canonical + StateInit + Copy + 'static> RecordLayout
         let () = Self::LAYOUT_OK;
         A
     };
+
+    type Adaptive = Ad;
+
+    #[inline]
+    fn adaptive_mut(&mut self) -> &mut Ad {
+        &mut self.adaptive
+    }
 
     #[inline]
     fn engine(&self) -> &EngineHeader {

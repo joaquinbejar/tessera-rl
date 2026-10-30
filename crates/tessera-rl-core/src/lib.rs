@@ -33,7 +33,7 @@ pub use env::{
     ImperfectInformation, Render, Validate,
 };
 pub use error::{ConfigError, CoreError, DecodeError, EncodeError, InvariantViolation, SpaceError};
-pub use header::{AgentRow, EngineHeader, NoAdaptive, RecordHeader, RecordLayout};
+pub use header::{AdaptiveValues, AgentRow, EngineHeader, NoAdaptive, RecordHeader, RecordLayout};
 pub use leaf::{LeafDType, LeafId, ObsLeaf, Observation};
 pub use pool::Pool;
 pub use reserved::Reserved;
