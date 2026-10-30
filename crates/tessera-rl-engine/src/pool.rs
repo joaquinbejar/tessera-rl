@@ -26,6 +26,15 @@ use crate::options::{AutoReset, PoolOptions};
 use crate::outputs::Outputs;
 use crate::validate::{ActionInput, check_and_copy_actions, check_ids};
 
+/// Whether an entry point is accepted on a poisoned pool (ADR-0028).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Poison {
+    /// Rejected with `EngineError::Poisoned`.
+    Reject,
+    /// Accepted: a full reset or restore that may clear the poison.
+    Recover,
+}
+
 /// How `reset` reseeds the instances it resets (SPEC 8.1).
 #[derive(Debug, Clone, Copy)]
 pub enum Reseed<'a> {
@@ -212,15 +221,50 @@ where
         (self.actions.discrete.len(), self.actions.continuous.len())
     }
 
-    /// The record header of instance `id`.
+    /// The single entry path of every public method that compares floats,
+    /// runs environment code or mutates records: it applies the poison
+    /// policy, then runs `f` in the canonical FP environment (ADR-0028,
+    /// ADR-0037).
+    pub(crate) fn guarded<R>(
+        &mut self,
+        poison: Poison,
+        f: impl FnOnce(&mut Self) -> Result<R, EngineError>,
+    ) -> Result<R, EngineError> {
+        if poison == Poison::Reject && self.poisoned {
+            return Err(EngineError::Poisoned);
+        }
+        fp::with_canonical(|| f(self))
+    }
+
+    /// [`EnvPool::guarded`] for read-only methods; they are always rejected
+    /// on a poisoned pool.
+    pub(crate) fn guarded_ref<R>(
+        &self,
+        f: impl FnOnce(&Self) -> Result<R, EngineError>,
+    ) -> Result<R, EngineError> {
+        if self.poisoned {
+            return Err(EngineError::Poisoned);
+        }
+        fp::with_canonical(|| f(self))
+    }
+
+    /// The record header of instance `id`; `None` for an unknown id or a
+    /// poisoned pool, whose records may be partly written.
     #[must_use]
     pub fn header(&self, id: u32) -> Option<&E::Header> {
+        if self.poisoned {
+            return None;
+        }
         self.headers.get(usize::try_from(id).ok()?)
     }
 
-    /// The author state of instance `id`.
+    /// The author state of instance `id`; `None` for an unknown id or a
+    /// poisoned pool.
     #[must_use]
     pub fn state(&self, id: u32) -> Option<&E::State> {
+        if self.poisoned {
+            return None;
+        }
         self.states.get(usize::try_from(id).ok()?)
     }
 
@@ -233,9 +277,10 @@ where
     /// Returns [`EngineError::Poisoned`] on a poisoned pool, or
     /// [`EngineError::InstanceOutOfRange`] for an unknown id.
     pub fn set_lineage(&mut self, id: u32, lineage: LogicalId) -> Result<(), EngineError> {
-        if self.poisoned {
-            return Err(EngineError::Poisoned);
-        }
+        self.guarded(Poison::Reject, |pool| pool.set_lineage_inner(id, lineage))
+    }
+
+    fn set_lineage_inner(&mut self, id: u32, lineage: LogicalId) -> Result<(), EngineError> {
         let num_envs = self.options.num_envs.get();
         let header = usize::try_from(id)
             .ok()
@@ -262,7 +307,7 @@ where
     /// On a poisoned pool this is the recovery path: the poison is cleared
     /// only if every instance resets without panicking.
     pub fn reset_all(&mut self, reseed: Reseed<'_>) -> Result<&Outputs, EngineError> {
-        fp::with_canonical(|| self.reset_all_inner(reseed))?;
+        self.guarded(Poison::Recover, |pool| pool.reset_all_inner(reseed))?;
         Ok(&self.outputs)
     }
 
@@ -285,10 +330,7 @@ where
     ///
     /// Rejected with [`EngineError::Poisoned`] on a poisoned pool.
     pub fn reset(&mut self, ids: &[u32], reseed: Reseed<'_>) -> Result<&Outputs, EngineError> {
-        if self.poisoned {
-            return Err(EngineError::Poisoned);
-        }
-        fp::with_canonical(|| self.reset_inner(ids, reseed))?;
+        self.guarded(Poison::Reject, |pool| pool.reset_inner(ids, reseed))?;
         Ok(&self.outputs)
     }
 
@@ -375,16 +417,16 @@ where
     /// [`EngineError::Poisoned`] on a poisoned pool, or a validation error
     /// for malformed actions.
     pub fn check_actions(&self, actions: ActionInput<'_>) -> Result<(), EngineError> {
-        if self.poisoned {
-            return Err(EngineError::Poisoned);
-        }
-        crate::validate::check_actions_only(
-            &self.actions,
-            self.options.auto_reset,
-            &self.headers,
-            actions,
-        )?;
-        self.legality(actions.discrete)
+        // Float comparisons: the same canonical environment as `step`.
+        self.guarded_ref(|pool| {
+            crate::validate::check_actions_only(
+                &pool.actions,
+                pool.options.auto_reset,
+                &pool.headers,
+                actions,
+            )?;
+            pool.legality(actions.discrete)
+        })
     }
 
     #[cfg(feature = "debug-checks")]
@@ -438,12 +480,9 @@ where
     /// [`EngineError::Panicked`] if environment code panics during the
     /// call, which poisons the pool.
     pub fn step(&mut self, actions: ActionInput<'_>) -> Result<&Outputs, EngineError> {
-        if self.poisoned {
-            return Err(EngineError::Poisoned);
-        }
         // The validation boundary compares floats too: it runs in the
         // canonical environment with the kernels (ADR-0037).
-        fp::with_canonical(|| self.step_inner(actions))?;
+        self.guarded(Poison::Reject, |pool| pool.step_inner(actions))?;
         Ok(&self.outputs)
     }
 

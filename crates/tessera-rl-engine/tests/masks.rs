@@ -153,8 +153,9 @@ fn test_panic_in_noop_poisons_and_recovers() {
         .map(|_| ());
     assert_eq!(err, Err(EngineError::Panicked));
     assert!(p.is_poisoned());
-    // The counter incremented before the panic stays (no rollback).
-    assert_eq!(p.header(0).unwrap().agents[0].illegal_actions, 1);
+    // Records of a poisoned pool are not readable (they may be partly
+    // written; there is no rollback).
+    assert!(p.header(0).is_none());
     assert_eq!(
         p.step(ActionInput {
             discrete: &[0, 0],
@@ -190,7 +191,6 @@ fn test_panic_in_mask_writing_poisons_and_failed_recovery_stays_poisoned() {
 
 #[test]
 fn test_set_lineage_is_rejected_while_poisoned_without_mutation() {
-    use tessera_rl_core::encoding::encode_to_vec;
     let cfg = CountConfig {
         panic_in_mask: true,
         length: 9,
@@ -201,12 +201,14 @@ fn test_set_lineage_is_rejected_while_poisoned_without_mutation() {
         discrete: &[0, 0],
         continuous: &[],
     });
-    let before = encode_to_vec(p.header(0).unwrap());
     assert_eq!(
         p.set_lineage(0, tessera_rl_num::identity::LogicalId::new(3)),
         Err(EngineError::Poisoned)
     );
-    assert_eq!(encode_to_vec(p.header(0).unwrap()), before);
+    // The lineage survives resets, so a rejected change is visible after
+    // recovery if it had been applied.
+    p.reset_all(Reseed::Keep).unwrap();
+    assert_eq!(p.header(0).unwrap().engine.identity.logical_id().get(), 0);
 }
 
 #[test]

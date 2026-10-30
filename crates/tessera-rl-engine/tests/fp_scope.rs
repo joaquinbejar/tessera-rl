@@ -186,3 +186,29 @@ fn test_agent_died_on_dead_slot_reports_terminated_once() {
         .unwrap();
     assert_eq!(out.agent_terminated(), [Bool8::FALSE]);
 }
+
+#[test]
+fn test_check_actions_and_step_agree_under_hostile_ftz() {
+    let mut pool = EnvPool::<Cont>::new(ContConfig::default(), options()).unwrap();
+    pool.reset_all(Reseed::Keep).unwrap();
+    for value in [f32::from_bits(1), -f32::from_bits(1), 0.0, -0.0] {
+        let input = [value];
+        let (checked, stepped) = fp::with_hostile_flush_to_zero(|| {
+            let checked = pool
+                .check_actions(ActionInput {
+                    discrete: &[],
+                    continuous: &input,
+                })
+                .is_ok();
+            let stepped = pool
+                .step(ActionInput {
+                    discrete: &[],
+                    continuous: &input,
+                })
+                .is_ok();
+            (checked, stepped)
+        });
+        assert_eq!(checked, stepped, "value bits {:#x}", value.to_bits());
+        assert_eq!(checked, value == 0.0, "only zeros fit [0, 0]");
+    }
+}
