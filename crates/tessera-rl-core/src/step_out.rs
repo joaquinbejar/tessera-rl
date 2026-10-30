@@ -22,6 +22,12 @@ pub enum EpisodeEnd {
 /// only [`StepOut::end_episode`] (or the step limit) ends the episode
 /// (ADR-0028).
 ///
+/// Mapping to the Python APIs (SPEC 12): an agent's `terminated` and
+/// `truncated` flags are its Gymnasium / `PettingZoo` `terminations` and
+/// `truncations` entries; a dead agent reports `terminated` exactly once, on
+/// the step it dies, and is then absent from the acting mask. `died` and
+/// `spawned` are engine events, not exported flags.
+///
 /// Slots are validated when created ([`AgentSlot::new`]), so every
 /// accessor's index is in range. As a safety net, an out-of-range slot is
 /// ignored, and debug builds assert.
@@ -103,16 +109,19 @@ impl<'a> StepOut<'a> {
         }
     }
 
-    /// Reports that `agent` died this step. The engine clears its alive
-    /// flag and bumps its slot generation; the episode continues.
+    /// Reports that `agent` died this step and sets its final `terminated`
+    /// flag. The engine clears its alive flag; the episode continues.
     #[inline]
     pub fn agent_died(&mut self, agent: AgentSlot) {
         if let Some(f) = slot_mut(self.died, agent) {
             *f = Bool8::TRUE;
         }
+        self.terminate_agent(agent);
     }
 
-    /// Reports that `agent` spawned this step.
+    /// Reports that `agent` spawned this step. The engine sets its alive
+    /// flag and increments its slot generation, so policies can tell the
+    /// new occupant from the previous one.
     #[inline]
     pub fn agent_spawned(&mut self, agent: AgentSlot) {
         if let Some(f) = slot_mut(self.spawned, agent) {
@@ -164,7 +173,7 @@ mod tests {
         out.end_episode(EpisodeEnd::Truncated);
         assert_eq!(out.episode_end(), Some(EpisodeEnd::Truncated));
         assert_eq!(rewards, [0.0, 2.0]);
-        assert_eq!(terminated, [Bool8::TRUE, Bool8::FALSE]);
+        assert_eq!(terminated, [Bool8::TRUE, Bool8::TRUE]);
         assert_eq!(died, [Bool8::FALSE, Bool8::TRUE]);
         assert_eq!(truncated, [Bool8::FALSE; 2]);
         assert_eq!(spawned, [Bool8::FALSE; 2]);
