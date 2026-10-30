@@ -9,6 +9,7 @@ members = [
     "crates/tessera-rl-macros",
     "crates/tessera-rl-engine",
     "crates/tessera-rl-classic",
+    "tools/math-oracle",
 ]
 default-members = [
     "crates/tessera-rl",
