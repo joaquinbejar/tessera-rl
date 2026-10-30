@@ -2,7 +2,6 @@
 
 doc-valid-idents = ["CartPole", "PettingZoo", "PufferLib", "..", "EnvPool"]
 
-
 # Test code may unwrap, expect, panic and index directly.
 allow-unwrap-in-tests = true
 allow-expect-in-tests = true

@@ -1,0 +1,41 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
+# cargo-deny policy: licenses compatible with MIT OR Apache-2.0, and no
+# dependency that compiles C or C++ in the default build (SPEC 20).
+
+[graph]
+all-features = false
+
+[advisories]
+version = 2
+yanked = "deny"
+
+[licenses]
+version = 2
+confidence-threshold = 0.9
+unused-allowed-license = "allow"
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-3.0",
+    "Zlib",
+]
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+allow-wildcard-paths = true
+deny = [
+    { name = "bindgen", reason = "SPEC 20: no native build dependencies" },
+    { name = "cc", reason = "SPEC 20: no C or C++ compilation in the default build" },
+    { name = "cmake", reason = "SPEC 20: no C or C++ compilation in the default build" },
+    { name = "pkg-config", reason = "SPEC 20: no system libraries in the default build" },
+]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"

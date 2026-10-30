@@ -7,9 +7,10 @@ environments, with cheap snapshot, restore and fork, bit-exact determinism
 and a native multi-agent model. It is exposed to Python through Gymnasium,
 PettingZoo and PufferLib compatible interfaces.
 
-This crate is the facade: it re-exports the workspace crates.
+This crate is the facade: it re-exports the workspace crates, following
+the layered workspace layout of SPEC section 4.1 and ADR-0021.
 
-Status: pre-implementation (phase 1a scaffold).
+Status: phase 1a scaffold.
 
 ## License
 
