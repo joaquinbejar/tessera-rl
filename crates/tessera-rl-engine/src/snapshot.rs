@@ -301,6 +301,7 @@ where
             ..
         } = self;
         run_kernels(poisoned, || {
+            let outputs = &mut outputs.view_all();
             for i in indices {
                 let (Some(header), Some(state)) = (headers.get(i), states.get(i)) else {
                     continue;

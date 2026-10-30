@@ -23,7 +23,7 @@ use crate::error::EngineError;
 use crate::layout::{ActionLayout, MAX_LEAVES, obs_leaves};
 use crate::masks::{IllegalActionPolicy, MaskProvider, Masked, NoMasks};
 use crate::options::{AutoReset, PoolOptions};
-use crate::outputs::Outputs;
+use crate::outputs::{Outputs, OutputsView};
 use crate::validate::{ActionInput, check_and_copy_actions, check_ids};
 
 /// Whether an entry point is accepted on a poisoned pool (ADR-0028).
@@ -316,7 +316,31 @@ where
     fn reset_all_inner(&mut self, reseed: Reseed<'_>) -> Result<(), EngineError> {
         let n = self.headers.len();
         self.check_reset(0..n, n, reseed)?;
-        self.apply_reset(0..n, reseed)?;
+        let Self {
+            cfg,
+            headers,
+            states,
+            discrete,
+            continuous,
+            outputs,
+            authority,
+            poisoned,
+            penalties,
+            penalized,
+            ..
+        } = self;
+        run_kernels(poisoned, || {
+            let mut chunk = Chunk::<E> {
+                headers,
+                states,
+                discrete,
+                continuous,
+                penalties,
+                penalized,
+                outputs: outputs.view_all(),
+            };
+            reset_chunk::<E, M>(cfg, authority, &mut chunk, reseed, 0);
+        })?;
         self.poisoned = false;
         Ok(())
     }
@@ -390,6 +414,7 @@ where
             ..
         } = self;
         run_kernels(poisoned, || {
+            let outputs = &mut outputs.view_all();
             for (k, i) in indices.enumerate() {
                 let (Some(header), Some(state)) = (headers.get_mut(i), states.get_mut(i)) else {
                     continue;
@@ -514,53 +539,25 @@ where
             penalized,
             ..
         } = self;
-        let (dh, ch) = (layout.discrete.len(), layout.continuous.len());
-        let policy = options.illegal_action;
-        let limit = options.max_episode_steps.map(core::num::NonZeroU32::get);
-        let auto_reset = options.auto_reset;
+        let ctx = StepCtx::<E> {
+            cfg,
+            authority,
+            layout,
+            policy: options.illegal_action,
+            limit: options.max_episode_steps.map(core::num::NonZeroU32::get),
+            auto_reset: options.auto_reset,
+        };
         run_kernels(poisoned, || {
-            for (i, (header, state)) in headers.iter_mut().zip(states.iter_mut()).enumerate() {
-                if header.engine().pending_reset.get() {
-                    // NextStep: reset instead of stepping (validated above).
-                    reset_one::<E>(cfg, authority, header, state, None);
-                    clear_instance(outputs, i);
-                    write_agent_masks(outputs, i, header);
-                    observe_instance::<E, M>(cfg, authority, header, state, outputs, i);
-                    continue;
-                }
-                if M::ENABLED {
-                    // Inside the panic catch: the author's noop may panic.
-                    replace_illegal_one::<E, M>(
-                        cfg, policy, header, state, outputs, layout, discrete, continuous,
-                        penalties, penalized, i,
-                    );
-                }
-                let rows = i * E::MAX_AGENTS;
-                let view = Actions::new(
-                    discrete
-                        .get(rows * dh..(rows + E::MAX_AGENTS) * dh)
-                        .unwrap_or(&[]),
-                    dh,
-                    continuous
-                        .get(rows * ch..(rows + E::MAX_AGENTS) * ch)
-                        .unwrap_or(&[]),
-                    ch,
-                );
-                let agents = i * E::MAX_AGENTS..(i + 1) * E::MAX_AGENTS;
-                let penalty = penalties.get(agents.clone()).unwrap_or(&[]);
-                let marked = penalized.get(agents).unwrap_or(&[]);
-                step_one::<E>(
-                    cfg, authority, header, state, &view, outputs, i, limit, penalty, marked,
-                );
-                observe_instance::<E, M>(cfg, authority, header, state, outputs, i);
-                if auto_reset == AutoReset::SameStep && header.engine().pending_reset.get() {
-                    save_terminal(outputs, i);
-                    // Flags and stats of the ended episode stay set.
-                    reset_one::<E>(cfg, authority, header, state, None);
-                    write_agent_masks(outputs, i, header);
-                    observe_instance::<E, M>(cfg, authority, header, state, outputs, i);
-                }
-            }
+            let mut chunk = Chunk::<E> {
+                headers,
+                states,
+                discrete,
+                continuous,
+                penalties,
+                penalized,
+                outputs: outputs.view_all(),
+            };
+            step_chunk::<E, M>(&ctx, &mut chunk);
         })?;
         #[cfg(feature = "debug-checks")]
         self.check_agent_events()?;
@@ -585,6 +582,126 @@ where
             });
         }
         Ok(())
+    }
+}
+
+/// Read-only context of a step, shared by every chunk.
+pub(crate) struct StepCtx<'a, E: Environment> {
+    pub(crate) cfg: &'a E::Config,
+    pub(crate) authority: &'a RngAuthority,
+    pub(crate) layout: &'a ActionLayout,
+    pub(crate) policy: IllegalActionPolicy,
+    pub(crate) limit: Option<u32>,
+    pub(crate) auto_reset: AutoReset,
+}
+
+/// The records, action rows and output rows of a range of instances,
+/// indexed from the first instance of the range. A chunk is the unit of
+/// scheduling (SPEC 5.1): kernels only ever see one chunk.
+pub(crate) struct Chunk<'a, E: Environment> {
+    pub(crate) headers: &'a mut [E::Header],
+    pub(crate) states: &'a mut [E::State],
+    pub(crate) discrete: &'a mut [i32],
+    pub(crate) continuous: &'a mut [f32],
+    pub(crate) penalties: &'a mut [f32],
+    pub(crate) penalized: &'a mut [Bool8],
+    pub(crate) outputs: OutputsView<'a>,
+}
+
+/// Steps every instance of `chunk` (after validation).
+pub(crate) fn step_chunk<E: Environment, M: MaskProvider<E>>(
+    ctx: &StepCtx<'_, E>,
+    chunk: &mut Chunk<'_, E>,
+) {
+    let StepCtx {
+        cfg,
+        authority,
+        layout,
+        policy,
+        limit,
+        auto_reset,
+    } = *ctx;
+    let Chunk {
+        headers,
+        states,
+        discrete,
+        continuous,
+        penalties,
+        penalized,
+        outputs,
+    } = chunk;
+    let (dh, ch) = (layout.discrete.len(), layout.continuous.len());
+    for (i, (header, state)) in headers.iter_mut().zip(states.iter_mut()).enumerate() {
+        if header.engine().pending_reset.get() {
+            // NextStep: reset instead of stepping (validated above).
+            reset_one::<E>(cfg, authority, header, state, None);
+            clear_instance(outputs, i);
+            write_agent_masks(outputs, i, header);
+            observe_instance::<E, M>(cfg, authority, header, state, outputs, i);
+            continue;
+        }
+        if M::ENABLED {
+            // Inside the panic catch: the author's noop may panic.
+            replace_illegal_one::<E, M>(
+                cfg, policy, header, state, outputs, layout, discrete, continuous, penalties,
+                penalized, i,
+            );
+        }
+        let rows = i * E::MAX_AGENTS;
+        let view = Actions::new(
+            discrete
+                .get(rows * dh..(rows + E::MAX_AGENTS) * dh)
+                .unwrap_or(&[]),
+            dh,
+            continuous
+                .get(rows * ch..(rows + E::MAX_AGENTS) * ch)
+                .unwrap_or(&[]),
+            ch,
+        );
+        let agents = i * E::MAX_AGENTS..(i + 1) * E::MAX_AGENTS;
+        let penalty = penalties.get(agents.clone()).unwrap_or(&[]);
+        let marked = penalized.get(agents).unwrap_or(&[]);
+        step_one::<E>(
+            cfg, authority, header, state, &view, outputs, i, limit, penalty, marked,
+        );
+        observe_instance::<E, M>(cfg, authority, header, state, outputs, i);
+        if auto_reset == AutoReset::SameStep && header.engine().pending_reset.get() {
+            save_terminal(outputs, i);
+            // Flags and stats of the ended episode stay set.
+            reset_one::<E>(cfg, authority, header, state, None);
+            write_agent_masks(outputs, i, header);
+            observe_instance::<E, M>(cfg, authority, header, state, outputs, i);
+        }
+    }
+}
+
+/// Resets every instance of `chunk`; `first` is the position of the
+/// chunk's first instance among the reset instances (for `Reseed`).
+pub(crate) fn reset_chunk<E: Environment, M: MaskProvider<E>>(
+    cfg: &E::Config,
+    authority: &RngAuthority,
+    chunk: &mut Chunk<'_, E>,
+    reseed: Reseed<'_>,
+    first: usize,
+) {
+    let outputs = &mut chunk.outputs;
+    for (i, (header, state)) in chunk
+        .headers
+        .iter_mut()
+        .zip(chunk.states.iter_mut())
+        .enumerate()
+    {
+        let k = first + i;
+        let seed = match reseed {
+            Reseed::Keep => None,
+            // `k` counts reset instances, at most `u32::MAX`.
+            Reseed::Base(base) => Some(base.offset(u64::try_from(k).unwrap_or(u64::MAX))),
+            Reseed::List(seeds) => seeds.get(k).copied(),
+        };
+        reset_one::<E>(cfg, authority, header, state, seed);
+        clear_instance(outputs, i);
+        write_agent_masks(outputs, i, header);
+        observe_instance::<E, M>(cfg, authority, header, state, outputs, i);
     }
 }
 
@@ -614,7 +731,7 @@ fn replace_illegal_one<E: Environment, M: MaskProvider<E>>(
     policy: IllegalActionPolicy,
     header: &mut E::Header,
     state: &E::State,
-    outputs: &Outputs,
+    outputs: &OutputsView<'_>,
     layout: &ActionLayout,
     discrete: &mut [i32],
     continuous: &mut [f32],
@@ -693,9 +810,9 @@ pub(crate) fn first_illegal(heads: &[i32], sizes: &[u32], mask: &[Bool8]) -> Opt
 }
 
 /// Copies instance `i`'s observation rows into the terminal buffer.
-fn save_terminal(outputs: &mut Outputs, i: usize) {
+fn save_terminal(outputs: &mut OutputsView<'_>, i: usize) {
     let a = outputs.agents;
-    let Outputs {
+    let OutputsView {
         observations,
         terminal_observations,
         leaf_bytes,
@@ -774,7 +891,7 @@ fn step_one<E: Environment>(
     header: &mut E::Header,
     state: &mut E::State,
     actions: &Actions<'_, E::Action>,
-    outputs: &mut Outputs,
+    outputs: &mut OutputsView<'_>,
     i: usize,
     limit: Option<u32>,
     penalties: &[f32],
@@ -787,7 +904,7 @@ fn step_one<E: Environment>(
     let identity = with_step(header, episode, t);
     clear_instance(outputs, i);
     let end = {
-        let Outputs {
+        let OutputsView {
             rewards,
             agent_terminated,
             agent_truncated,
@@ -838,8 +955,8 @@ fn step_one<E: Environment>(
             // `debug-checks` turns it into an error.
             died = false;
             row.invalid_agent_events = row.invalid_agent_events.saturating_add(1);
-            set(&mut outputs.invalid_agent_event, k, true);
-            set(&mut outputs.agent_terminated, k, false);
+            set(outputs.invalid_agent_event, k, true);
+            set(outputs.agent_terminated, k, false);
         }
         if died {
             row.alive = Bool8::FALSE;
@@ -853,8 +970,8 @@ fn step_one<E: Environment>(
             let valid = !died && !row.alive.get();
             if !valid {
                 row.invalid_agent_events = row.invalid_agent_events.saturating_add(1);
-                set(&mut outputs.invalid_agent_event, k, true);
-                set(&mut outputs.spawned, k, false);
+                set(outputs.invalid_agent_event, k, true);
+                set(outputs.spawned, k, false);
             }
             if valid {
                 row.alive = Bool8::TRUE;
@@ -890,7 +1007,7 @@ fn step_one<E: Environment>(
 /// Records the end of an episode: flags, pending reset and statistics.
 fn finish_episode<H: RecordLayout>(
     header: &mut H,
-    outputs: &mut Outputs,
+    outputs: &mut OutputsView<'_>,
     i: usize,
     end: EpisodeEnd,
     t: u32,
@@ -903,8 +1020,8 @@ fn finish_episode<H: RecordLayout>(
         EpisodeEnd::Truncated => (false, 2),
     };
     engine.end_kind = kind;
-    set(&mut outputs.episode_terminated, i, terminated);
-    set(&mut outputs.episode_truncated, i, !terminated);
+    set(outputs.episode_terminated, i, terminated);
+    set(outputs.episode_truncated, i, !terminated);
     if let Some(r) = outputs.episode_return.get_mut(i) {
         *r = total;
     }
@@ -940,7 +1057,7 @@ fn set(buf: &mut [Bool8], i: usize, value: bool) {
     }
 }
 
-pub(crate) fn clear_instance(outputs: &mut Outputs, i: usize) {
+pub(crate) fn clear_instance(outputs: &mut OutputsView<'_>, i: usize) {
     let a = outputs.agents;
     let range = i * a..(i + 1) * a;
     for buf in [
@@ -957,8 +1074,8 @@ pub(crate) fn clear_instance(outputs: &mut Outputs, i: usize) {
     if let Some(rows) = outputs.rewards.get_mut(range) {
         rows.fill(0.0);
     }
-    set(&mut outputs.episode_terminated, i, false);
-    set(&mut outputs.episode_truncated, i, false);
+    set(outputs.episode_terminated, i, false);
+    set(outputs.episode_truncated, i, false);
     for buf in [
         &mut outputs.episode_return,
         &mut outputs.episode_length,
@@ -973,12 +1090,12 @@ pub(crate) fn clear_instance(outputs: &mut Outputs, i: usize) {
 
 /// Zeroes instance `i`'s terminal observation rows: they are a step
 /// output, not continuation state (ADR-0039).
-pub(crate) fn clear_terminal(outputs: &mut Outputs, i: usize) {
+pub(crate) fn clear_terminal(outputs: &mut OutputsView<'_>, i: usize) {
     let a = outputs.agents;
     for (rows, &bytes) in outputs
         .terminal_observations
         .iter_mut()
-        .zip(&outputs.leaf_bytes)
+        .zip(outputs.leaf_bytes)
     {
         if let Some(r) = rows.get_mut(i * a * bytes..(i + 1) * a * bytes) {
             r.fill(0);
@@ -986,7 +1103,11 @@ pub(crate) fn clear_terminal(outputs: &mut Outputs, i: usize) {
     }
 }
 
-pub(crate) fn write_agent_masks<H: RecordLayout>(outputs: &mut Outputs, i: usize, header: &H) {
+pub(crate) fn write_agent_masks<H: RecordLayout>(
+    outputs: &mut OutputsView<'_>,
+    i: usize,
+    header: &H,
+) {
     let a = outputs.agents;
     for (slot, row) in header.agents().iter().enumerate() {
         let k = i * a + slot;
@@ -1007,12 +1128,12 @@ pub(crate) fn observe_instance<E: Environment, M: MaskProvider<E>>(
     authority: &RngAuthority,
     header: &E::Header,
     state: &E::State,
-    outputs: &mut Outputs,
+    outputs: &mut OutputsView<'_>,
     i: usize,
 ) {
     let identity = header.engine().identity;
     let a = E::MAX_AGENTS;
-    let Outputs {
+    let OutputsView {
         observations,
         leaf_bytes,
         masks,

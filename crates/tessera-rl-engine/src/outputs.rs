@@ -10,7 +10,7 @@
 
 use tessera_rl_core::Bool8;
 
-use crate::layout::Leaf;
+use crate::layout::{Leaf, MAX_LEAVES};
 
 /// Output buffers of a pool.
 #[derive(Debug)]
@@ -181,5 +181,74 @@ impl Outputs {
     #[must_use]
     pub fn episode_length(&self) -> &[f32] {
         &self.episode_length
+    }
+}
+
+/// Mutable views over the rows of a range of instances in every output
+/// buffer, indexed from the first instance of the range. Kernels write
+/// through a view, so a chunk of instances can be processed without access
+/// to the rest of the pool (SPEC 5.1 chunks).
+#[derive(Debug)]
+pub(crate) struct OutputsView<'a> {
+    pub(crate) agents: usize,
+    pub(crate) mask_len: usize,
+    pub(crate) leaf_bytes: &'a [usize],
+    pub(crate) observations: [&'a mut [u8]; MAX_LEAVES],
+    pub(crate) terminal_observations: [&'a mut [u8]; MAX_LEAVES],
+    pub(crate) rewards: &'a mut [f32],
+    pub(crate) agent_terminated: &'a mut [Bool8],
+    pub(crate) agent_truncated: &'a mut [Bool8],
+    pub(crate) died: &'a mut [Bool8],
+    pub(crate) spawned: &'a mut [Bool8],
+    pub(crate) invalid_agent_event: &'a mut [Bool8],
+    pub(crate) alive: &'a mut [Bool8],
+    pub(crate) acting: &'a mut [Bool8],
+    pub(crate) generations: &'a mut [u32],
+    pub(crate) episode_terminated: &'a mut [Bool8],
+    pub(crate) episode_truncated: &'a mut [Bool8],
+    pub(crate) episode_return: &'a mut [f32],
+    pub(crate) episode_length: &'a mut [f32],
+    pub(crate) episode_illegal_actions: &'a mut [f32],
+    pub(crate) episode_invalid_agent_events: &'a mut [f32],
+    pub(crate) masks: &'a mut [Bool8],
+}
+
+impl Outputs {
+    /// A view over every instance.
+    pub(crate) fn view_all(&mut self) -> OutputsView<'_> {
+        let mut observations: [&mut [u8]; MAX_LEAVES] = Default::default();
+        for (slot, buf) in observations.iter_mut().zip(self.observations.iter_mut()) {
+            *slot = buf.as_mut_slice();
+        }
+        let mut terminal_observations: [&mut [u8]; MAX_LEAVES] = Default::default();
+        for (slot, buf) in terminal_observations
+            .iter_mut()
+            .zip(self.terminal_observations.iter_mut())
+        {
+            *slot = buf.as_mut_slice();
+        }
+        OutputsView {
+            agents: self.agents,
+            mask_len: self.mask_len,
+            leaf_bytes: &self.leaf_bytes,
+            observations,
+            terminal_observations,
+            rewards: &mut self.rewards,
+            agent_terminated: &mut self.agent_terminated,
+            agent_truncated: &mut self.agent_truncated,
+            died: &mut self.died,
+            spawned: &mut self.spawned,
+            invalid_agent_event: &mut self.invalid_agent_event,
+            alive: &mut self.alive,
+            acting: &mut self.acting,
+            generations: &mut self.generations,
+            episode_terminated: &mut self.episode_terminated,
+            episode_truncated: &mut self.episode_truncated,
+            episode_return: &mut self.episode_return,
+            episode_length: &mut self.episode_length,
+            episode_illegal_actions: &mut self.episode_illegal_actions,
+            episode_invalid_agent_events: &mut self.episode_invalid_agent_events,
+            masks: &mut self.masks,
+        }
     }
 }
