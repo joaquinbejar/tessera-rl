@@ -32,6 +32,7 @@ pub(super) const fn canonical(control: Control) -> Control {
 }
 
 /// Flush-to-zero enabled, for hostile-mode tests.
+#[cfg(any(test, feature = "test-hooks"))]
 #[inline]
 pub(super) const fn flush_to_zero(control: Control) -> Control {
     control | FZ

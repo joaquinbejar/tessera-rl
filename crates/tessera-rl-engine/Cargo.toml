@@ -20,6 +20,7 @@ tessera-rl-num.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
+tessera-rl-num = { workspace = true, features = ["test-hooks"] }
 tessera-rl-macros.workspace = true
 
 [lints]

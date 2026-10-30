@@ -144,11 +144,14 @@ fn compiler_barrier() {
     }
 }
 
-/// Testing support: runs `f` with flush-to-zero (and, on x86-64,
+/// Test-only: runs `f` with flush-to-zero (and, on x86-64,
 /// denormals-are-zero) enabled, as a hostile host library might leave the
-/// thread, then restores the previous state. For tests of code that must
-/// enter the canonical environment itself; not for production use.
-#[doc(hidden)]
+/// thread, then restores the previous state.
+///
+/// Running Rust code in a non-default FP mode is outside the language's
+/// guarantees (ADR-0037), so this exists only behind the non-default
+/// `test-hooks` feature, which only test dev-dependencies enable.
+#[cfg(any(test, feature = "test-hooks"))]
 #[inline(never)]
 pub fn with_hostile_flush_to_zero<R>(f: impl FnOnce() -> R) -> R {
     let original = arch::read();
