@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
 .PHONY: fmt fmt-check clippy test doc readme readme-check pre-push
 
 fmt:
