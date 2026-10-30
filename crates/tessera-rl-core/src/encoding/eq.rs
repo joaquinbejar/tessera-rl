@@ -7,8 +7,12 @@
 //! the initial value" compare canonical bytes. The comparison runs in
 //! windows of [`WINDOW`] bytes: for each window both values are encoded
 //! again and only that window is kept, so no buffer of `ENCODED_LEN` bytes
-//! is needed. The cost is quadratic in `ENCODED_LEN / WINDOW`; it is used
-//! only when decoding, never on the hot path.
+//! is needed. The cost is O(L^2 / 64) byte writes for an encoding of L
+//! bytes, per comparison (per inactive pool entry when decoding). It is
+//! used only when decoding persisted data, never on the hot path.
+//!
+//! TODO: a linear version that encodes both values in lockstep, once
+//! `Canonical` can expose its byte stream incrementally.
 
 use super::{Canonical, Encoder, Sink};
 
@@ -29,7 +33,12 @@ impl Sink for WindowSink {
             {
                 *slot = byte;
             }
-            self.pos = self.pos.saturating_add(1);
+            // Positions are bounded by ENCODED_LEN, a usize; overflow would
+            // mean a larger encoding than memory can hold, so stop counting.
+            match self.pos.checked_add(1) {
+                Some(next) => self.pos = next,
+                None => return,
+            }
         }
     }
 }
