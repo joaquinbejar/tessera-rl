@@ -54,6 +54,7 @@ pub struct EnvPool<E: Environment, M: MaskProvider<E> = NoMasks> {
     authority: RngAuthority,
     poisoned: bool,
     penalties: Vec<f32>,
+    penalized: Vec<Bool8>,
     _masks: PhantomData<M>,
 }
 
@@ -118,11 +119,24 @@ where
         let num_envs = usize::try_from(options.num_envs.get()).map_err(|_| too_large())?;
         let rows = num_envs.checked_mul(E::MAX_AGENTS).ok_or_else(too_large)?;
         let mask_len = if M::ENABLED {
-            actions
+            let len = actions
                 .discrete
                 .iter()
-                .try_fold(0usize, |acc, &n| acc.checked_add(usize::try_from(n).ok()?))
-                .ok_or_else(too_large)?
+                .try_fold(0usize, |acc, &n| acc.checked_add(usize::try_from(n).ok()?));
+            // Checked before any allocation (SPEC 11.3).
+            let bytes = len
+                .and_then(|len| rows.checked_mul(len))
+                .and_then(|b| u64::try_from(b).ok());
+            let budget = options.mask_budget_bytes;
+            match (len, bytes) {
+                (Some(len), Some(bytes)) if bytes <= budget => len,
+                (_, bytes) => {
+                    return Err(EngineError::MaskBudgetExceeded {
+                        bytes: bytes.unwrap_or(u64::MAX),
+                        budget,
+                    });
+                }
+            }
         } else {
             0
         };
@@ -169,6 +183,7 @@ where
             authority: RngAuthority::engine_only(),
             poisoned: false,
             penalties: vec![0.0; if M::ENABLED { rows } else { 0 }],
+            penalized: vec![Bool8::FALSE; if M::ENABLED { rows } else { 0 }],
             _masks: PhantomData,
         })
     }
@@ -215,8 +230,12 @@ where
     ///
     /// # Errors
     ///
-    /// Returns [`EngineError::InstanceOutOfRange`] for an unknown id.
+    /// Returns [`EngineError::Poisoned`] on a poisoned pool, or
+    /// [`EngineError::InstanceOutOfRange`] for an unknown id.
     pub fn set_lineage(&mut self, id: u32, lineage: LogicalId) -> Result<(), EngineError> {
+        if self.poisoned {
+            return Err(EngineError::Poisoned);
+        }
         let num_envs = self.options.num_envs.get();
         let header = usize::try_from(id)
             .ok()
@@ -345,74 +364,67 @@ where
         })
     }
 
-    /// Replaces illegal-but-valid actions with the environment's no-op,
-    /// counts them and records penalties (ADR-0028). Runs after validation,
-    /// against the masks of the current state; never fails the call.
-    fn replace_illegal(&mut self) {
-        let Self {
-            cfg,
-            options,
-            headers,
-            states,
+    /// Checks that every required action (alive, acting, not pending reset)
+    /// is legal under the current masks, without mutating anything. Always
+    /// `Ok` for pools without masks. The `debug-checks` feature runs it on
+    /// every step and rejects the call instead of replacing the actions.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`EngineError::IllegalAction`] for the first illegal action,
+    /// [`EngineError::Poisoned`] on a poisoned pool, or a validation error
+    /// for malformed actions.
+    pub fn check_actions(&self, actions: ActionInput<'_>) -> Result<(), EngineError> {
+        if self.poisoned {
+            return Err(EngineError::Poisoned);
+        }
+        crate::validate::check_actions_only(
+            &self.actions,
+            self.options.auto_reset,
+            &self.headers,
             actions,
-            discrete,
-            continuous,
-            outputs,
-            penalties,
-            ..
-        } = self;
+        )?;
+        self.legality(actions.discrete)
+    }
+
+    #[cfg(feature = "debug-checks")]
+    fn check_actions_inner(&self) -> Result<(), EngineError> {
+        self.legality(&self.discrete)
+    }
+
+    fn legality(&self, discrete: &[i32]) -> Result<(), EngineError> {
+        if !M::ENABLED {
+            return Ok(());
+        }
         let a = E::MAX_AGENTS;
-        let (dh, ch) = (actions.discrete.len(), actions.continuous.len());
-        let mask_len = outputs.mask_len;
-        let penalty = match options.illegal_action {
-            IllegalActionPolicy::Noop => 0.0,
-            IllegalActionPolicy::Penalize(r) => r,
-        };
-        penalties.fill(0.0);
-        for (i, (header, state)) in headers.iter_mut().zip(states.iter()).enumerate() {
+        let dh = self.actions.discrete.len();
+        let mask_len = self.outputs.mask_len;
+        for (i, header) in self.headers.iter().enumerate() {
             if header.engine().pending_reset.get() {
                 continue;
             }
-            for (slot, row) in header.agents_mut().iter_mut().enumerate() {
+            for (slot, row) in header.agents().iter().enumerate() {
                 if !(row.alive.get() && row.acting.get()) {
                     continue;
                 }
                 let k = i * a + slot;
-                let mask = outputs
+                let heads = discrete.get(k * dh..(k + 1) * dh).unwrap_or(&[]);
+                let mask = self
+                    .outputs
                     .masks
                     .get(k * mask_len..(k + 1) * mask_len)
                     .unwrap_or(&[]);
-                let heads = discrete.get(k * dh..(k + 1) * dh).unwrap_or(&[]);
-                let mut offset = 0usize;
-                let mut illegal = false;
-                for (&value, &n) in heads.iter().zip(&actions.discrete) {
-                    let legal = usize::try_from(value)
-                        .ok()
-                        .and_then(|v| mask.get(offset + v))
-                        .is_some_and(|m| m.get());
-                    illegal |= !legal;
-                    offset += usize::try_from(n).unwrap_or(0);
+                if let Some(head) = first_illegal(heads, &self.actions.discrete, mask) {
+                    return Err(EngineError::IllegalAction {
+                        instance: u32::try_from(i).unwrap_or(u32::MAX),
+                        agent: u16::try_from(slot).unwrap_or(u16::MAX),
+                        head: u32::try_from(head).unwrap_or(u32::MAX),
+                        value: heads.get(head).copied().unwrap_or(0),
+                    });
                 }
-                if !illegal {
-                    continue;
-                }
-                // Counts saturate at u32::MAX per episode (documented).
-                row.illegal_actions = row.illegal_actions.saturating_add(1);
-                if let Some(p) = penalties.get_mut(k) {
-                    *p = penalty;
-                }
-                let (Some(d), Some(c), Some(agent)) = (
-                    discrete.get_mut(k * dh..(k + 1) * dh),
-                    continuous.get_mut(k * ch..(k + 1) * ch),
-                    AgentSlot::new(u16::try_from(slot).unwrap_or(u16::MAX), a),
-                ) else {
-                    continue;
-                };
-                d.fill(0);
-                c.fill(0.0);
-                M::noop(cfg, state, agent, &mut ActionWriter::new(d, c));
             }
         }
+        Ok(())
     }
 
     /// Steps every instance with `actions` (Inline mode).
@@ -444,9 +456,8 @@ where
             &mut self.discrete,
             &mut self.continuous,
         )?;
-        if M::ENABLED {
-            self.replace_illegal();
-        }
+        #[cfg(feature = "debug-checks")]
+        self.check_actions_inner()?;
         let Self {
             cfg,
             options,
@@ -459,9 +470,11 @@ where
             authority,
             poisoned,
             penalties,
+            penalized,
             ..
         } = self;
         let (dh, ch) = (layout.discrete.len(), layout.continuous.len());
+        let policy = options.illegal_action;
         let limit = options.max_episode_steps.map(core::num::NonZeroU32::get);
         let auto_reset = options.auto_reset;
         run_kernels(poisoned, || {
@@ -474,6 +487,13 @@ where
                     observe_instance::<E, M>(cfg, authority, header, state, outputs, i);
                     continue;
                 }
+                if M::ENABLED {
+                    // Inside the panic catch: the author's noop may panic.
+                    replace_illegal_one::<E, M>(
+                        cfg, policy, header, state, outputs, layout, discrete, continuous,
+                        penalties, penalized, i,
+                    );
+                }
                 let rows = i * E::MAX_AGENTS;
                 let view = Actions::new(
                     discrete
@@ -485,11 +505,11 @@ where
                         .unwrap_or(&[]),
                     ch,
                 );
-                let penalty = penalties
-                    .get(i * E::MAX_AGENTS..(i + 1) * E::MAX_AGENTS)
-                    .unwrap_or(&[]);
+                let agents = i * E::MAX_AGENTS..(i + 1) * E::MAX_AGENTS;
+                let penalty = penalties.get(agents.clone()).unwrap_or(&[]);
+                let marked = penalized.get(agents).unwrap_or(&[]);
                 step_one::<E>(
-                    cfg, authority, header, state, &view, outputs, i, limit, penalty,
+                    cfg, authority, header, state, &view, outputs, i, limit, penalty, marked,
                 );
                 observe_instance::<E, M>(cfg, authority, header, state, outputs, i);
                 if auto_reset == AutoReset::SameStep && header.engine().pending_reset.get() {
@@ -516,6 +536,97 @@ fn run_kernels(poisoned: &mut bool, f: impl FnOnce()) -> Result<(), EngineError>
         *poisoned = true;
         Err(EngineError::Panicked)
     }
+}
+
+/// Replaces illegal-but-valid actions of instance `i` with the
+/// environment's no-op, counts them and marks penalties (ADR-0028). Runs
+/// before the kernel, against the masks of the current state. There is no
+/// rollback: if a later kernel panics, counters already incremented stay.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "one instance's illegal-action pass"
+)]
+fn replace_illegal_one<E: Environment, M: MaskProvider<E>>(
+    cfg: &E::Config,
+    policy: IllegalActionPolicy,
+    header: &mut E::Header,
+    state: &E::State,
+    outputs: &Outputs,
+    layout: &ActionLayout,
+    discrete: &mut [i32],
+    continuous: &mut [f32],
+    penalties: &mut [f32],
+    penalized: &mut [Bool8],
+    i: usize,
+) {
+    let a = E::MAX_AGENTS;
+    let (dh, ch) = (layout.discrete.len(), layout.continuous.len());
+    let mask_len = outputs.mask_len;
+    for (slot, row) in header.agents_mut().iter_mut().enumerate() {
+        let k = i * a + slot;
+        if let Some(f) = penalized.get_mut(k) {
+            *f = Bool8::FALSE;
+        }
+        if !(row.alive.get() && row.acting.get()) {
+            continue;
+        }
+        let mask = outputs
+            .masks
+            .get(k * mask_len..(k + 1) * mask_len)
+            .unwrap_or(&[]);
+        let heads = discrete.get(k * dh..(k + 1) * dh).unwrap_or(&[]);
+        if first_illegal(heads, &layout.discrete, mask).is_none() {
+            continue;
+        }
+        // Counts saturate at u32::MAX per episode (documented).
+        row.illegal_actions = row.illegal_actions.saturating_add(1);
+        if let IllegalActionPolicy::Penalize(r) = policy
+            && let (Some(p), Some(f)) = (penalties.get_mut(k), penalized.get_mut(k))
+        {
+            *p = r;
+            *f = Bool8::TRUE;
+        }
+        let (Some(disc), Some(cont), Some(agent)) = (
+            discrete.get_mut(k * dh..(k + 1) * dh),
+            continuous.get_mut(k * ch..(k + 1) * ch),
+            AgentSlot::new(u16::try_from(slot).unwrap_or(u16::MAX), a),
+        ) else {
+            continue;
+        };
+        disc.fill(0);
+        cont.fill(0.0);
+        M::noop(cfg, state, agent, &mut ActionWriter::new(disc, cont));
+        debug_assert!(
+            disc.iter()
+                .zip(&layout.discrete)
+                .all(|(&v, &n)| u32::try_from(v).is_ok_and(|v| v < n)),
+            "ActionMask::noop wrote a discrete action outside its range"
+        );
+        debug_assert!(
+            cont.iter()
+                .zip(&layout.continuous)
+                .all(|(&v, &(low, high))| {
+                    v.is_finite() && (low..=high).contains(&f64::from(v))
+                }),
+            "ActionMask::noop wrote a continuous action outside its bounds"
+        );
+    }
+}
+
+/// The first discrete head whose value the mask forbids, if any.
+pub(crate) fn first_illegal(heads: &[i32], sizes: &[u32], mask: &[Bool8]) -> Option<usize> {
+    let mut offset = 0usize;
+    for (head, (&value, &n)) in heads.iter().zip(sizes).enumerate() {
+        let legal = usize::try_from(value)
+            .ok()
+            .and_then(|v| mask.get(offset.checked_add(v)?))
+            .is_some_and(|m| m.get());
+        if !legal {
+            return Some(head);
+        }
+        offset = offset.saturating_add(usize::try_from(n).unwrap_or(0));
+    }
+    None
 }
 
 /// Copies instance `i`'s observation rows into the terminal buffer.
@@ -603,6 +714,7 @@ fn step_one<E: Environment>(
     i: usize,
     limit: Option<u32>,
     penalties: &[f32],
+    penalized: &[Bool8],
 ) {
     let a = E::MAX_AGENTS;
     let range = i * a..(i + 1) * a;
@@ -639,7 +751,11 @@ fn step_one<E: Environment>(
     let mut total = 0.0f32;
     for (slot, row) in header.agents_mut().iter_mut().enumerate() {
         let k = i * a + slot;
-        if let (Some(r), Some(&p)) = (outputs.rewards.get_mut(k), penalties.get(slot)) {
+        // Only a penalized illegal action changes the reward, so a kernel's
+        // -0.0 stays -0.0 otherwise.
+        if penalized.get(slot).is_some_and(|f| f.get())
+            && let (Some(r), Some(&p)) = (outputs.rewards.get_mut(k), penalties.get(slot))
+        {
             *r += p;
         }
         let reward = outputs.rewards.get(k).copied().unwrap_or(0.0);
@@ -669,6 +785,9 @@ fn step_one<E: Environment>(
         if spawned {
             let valid = !died && !row.alive.get();
             debug_assert!(valid, "spawn on an occupied or dying slot {slot}");
+            if !valid && let Some(f) = outputs.spawned.get_mut(k) {
+                *f = Bool8::FALSE;
+            }
             if valid {
                 row.alive = Bool8::TRUE;
                 row.acting = Bool8::TRUE;

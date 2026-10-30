@@ -23,7 +23,9 @@ pub enum AutoReset {
     NextStep,
     /// The instance resets in the same pass: the final observation goes to
     /// the terminal observation buffer, the initial one to the observation
-    /// buffer, and the flags are set. PufferLib and EnvPool style.
+    /// buffer, and the flags are set. PufferLib and EnvPool style. Because
+    /// any instance may reset in a pass, the boundary checks the
+    /// `episode_index` headroom of every instance on every step.
     SameStep,
     /// The instance stays frozen until the caller resets it; stepping it
     /// is an error.
@@ -43,9 +45,16 @@ pub struct PoolOptions {
     pub max_episode_steps: Option<NonZeroU32>,
     /// Behaviour after an episode ends.
     pub auto_reset: AutoReset,
-    /// Policy for illegal actions; applies only to masked pools.
+    /// Policy for illegal actions; applies only to masked pools. When
+    /// options enter hashes or replays, the penalty is recorded by its bits.
     pub illegal_action: IllegalActionPolicy,
+    /// Largest mask buffer allowed, in bytes (SPEC 11.3); checked before
+    /// allocating. Applies only to masked pools.
+    pub mask_budget_bytes: u64,
 }
+
+/// Default mask budget: 1 GiB.
+pub const DEFAULT_MASK_BUDGET: u64 = 1 << 30;
 
 impl PoolOptions {
     /// `num_envs` instances seeded from `seed`, chunks of 64, no step limit,
@@ -59,6 +68,7 @@ impl PoolOptions {
             max_episode_steps: None,
             auto_reset: AutoReset::NextStep,
             illegal_action: IllegalActionPolicy::Noop,
+            mask_budget_bytes: DEFAULT_MASK_BUDGET,
         }
     }
 

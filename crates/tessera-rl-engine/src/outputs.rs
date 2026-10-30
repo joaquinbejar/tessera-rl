@@ -141,7 +141,9 @@ impl Outputs {
 
     /// Return of episodes that ended in the last call, `[N]`: the sum of the
     /// per-agent returns, which stay available per agent in the record
-    /// header (`AgentRow::episode_return`) for adapters. Zero elsewhere.
+    /// header (`AgentRow::episode_return`) for adapters. Zero elsewhere. In
+    /// `SameStep` mode the header row already belongs to the new episode
+    /// when the call returns, so read the ended episode's return here.
     #[must_use]
     pub fn episode_return(&self) -> &[f32] {
         &self.episode_return

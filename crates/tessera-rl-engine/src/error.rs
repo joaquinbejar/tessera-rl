@@ -98,6 +98,29 @@ pub enum EngineError {
     /// poisoned; there is no rollback.
     #[error("environment code panicked; the pool is poisoned")]
     Panicked,
+    /// A required action is valid but illegal under the current mask
+    /// (`check_actions`, and every step with `debug-checks`).
+    #[error(
+        "instance {instance}, agent {agent}, head {head}: action {value} is illegal under the mask"
+    )]
+    IllegalAction {
+        /// Instance.
+        instance: u32,
+        /// Agent slot.
+        agent: u16,
+        /// Head.
+        head: u32,
+        /// The value.
+        value: i32,
+    },
+    /// The mask buffer would exceed the pool's mask budget (SPEC 11.3).
+    #[error("mask buffer needs {bytes} bytes, over the budget of {budget}")]
+    MaskBudgetExceeded {
+        /// Bytes needed (`u64::MAX` on overflow).
+        bytes: u64,
+        /// The budget.
+        budget: u64,
+    },
     /// The instance has not been reset yet, or its episode ended in
     /// `Disabled` auto-reset mode.
     #[error("instance {id} is pending reset")]

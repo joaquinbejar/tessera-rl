@@ -44,21 +44,37 @@ pub(crate) fn check_ids(ids: &[u32], seen: &mut [Bool8]) -> Result<(), EngineErr
     result
 }
 
-/// Validates a step for every instance and copies the required actions
-/// into the internal buffers; values of slots that are not required are
-/// stored as zero and never validated.
-pub(crate) fn check_and_copy_actions<H: RecordLayout>(
+/// Validates actions like `check_and_copy_actions`, without copying.
+pub(crate) fn check_actions_only<H: RecordLayout>(
     layout: &ActionLayout,
     auto_reset: AutoReset,
     headers: &[H],
     input: ActionInput<'_>,
-    discrete_out: &mut [i32],
-    continuous_out: &mut [f32],
+) -> Result<(), EngineError> {
+    let rows = headers.len().saturating_mul(H::AGENTS);
+    check_inputs(
+        layout,
+        auto_reset,
+        headers,
+        input,
+        rows.saturating_mul(layout.discrete.len()),
+        rows.saturating_mul(layout.continuous.len()),
+    )
+}
+
+/// Every check of the validation boundary, without mutation.
+fn check_inputs<H: RecordLayout>(
+    layout: &ActionLayout,
+    auto_reset: AutoReset,
+    headers: &[H],
+    input: ActionInput<'_>,
+    discrete_len: usize,
+    continuous_len: usize,
 ) -> Result<(), EngineError> {
     let agents = H::AGENTS;
     let (dh, ch) = (layout.discrete.len(), layout.continuous.len());
-    check_len("discrete", discrete_out.len(), input.discrete.len())?;
-    check_len("continuous", continuous_out.len(), input.continuous.len())?;
+    check_len("discrete", discrete_len, input.discrete.len())?;
+    check_len("continuous", continuous_len, input.continuous.len())?;
     for (index, header) in headers.iter().enumerate() {
         let instance = u32::try_from(index).unwrap_or(u32::MAX);
         let engine = header.engine();
@@ -125,6 +141,30 @@ pub(crate) fn check_and_copy_actions<H: RecordLayout>(
             }
         }
     }
+    Ok(())
+}
+
+/// Validates a step for every instance and copies the required actions
+/// into the internal buffers; values of slots that are not required are
+/// stored as zero and never validated.
+pub(crate) fn check_and_copy_actions<H: RecordLayout>(
+    layout: &ActionLayout,
+    auto_reset: AutoReset,
+    headers: &[H],
+    input: ActionInput<'_>,
+    discrete_out: &mut [i32],
+    continuous_out: &mut [f32],
+) -> Result<(), EngineError> {
+    let agents = H::AGENTS;
+    let (dh, ch) = (layout.discrete.len(), layout.continuous.len());
+    check_inputs(
+        layout,
+        auto_reset,
+        headers,
+        input,
+        discrete_out.len(),
+        continuous_out.len(),
+    )?;
     // Validated: copy, zeroing slots whose actions are not required.
     for (index, header) in headers.iter().enumerate() {
         let pending = header.engine().pending_reset.get();

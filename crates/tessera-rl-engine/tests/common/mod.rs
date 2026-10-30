@@ -22,6 +22,8 @@ pub struct Counts {
     pub reserved: tessera_rl_core::Reserved<3>,
 }
 
+/// Test switches are independent flags by design.
+#[expect(clippy::struct_excessive_bools, reason = "independent test switches")]
 #[derive(EnvConfig, Debug, Clone)]
 pub struct CountConfig {
     #[config(default = 5, range = 1..=1000)]
@@ -34,6 +36,21 @@ pub struct CountConfig {
     /// Panic in `reset`.
     #[config(default = false)]
     pub panic_on_reset: bool,
+    /// Panic in `ActionMask::noop`.
+    #[config(default = false)]
+    pub panic_in_noop: bool,
+    /// Panic in `ActionMask::action_mask` once a step has run.
+    #[config(default = false)]
+    pub panic_in_mask: bool,
+    /// Reward every agent with -0.0 instead of its increment.
+    #[config(default = false)]
+    pub negative_zero_reward: bool,
+    /// Number of discrete choices per head.
+    #[config(default = 3, range = 3..=2_147_483_648)]
+    pub actions_n: u32,
+    /// Number of discrete action heads per agent; only head 0 is used.
+    #[config(default = 1, range = 1..=4)]
+    pub action_heads: u32,
 }
 
 #[derive(Observation)]
@@ -66,8 +83,14 @@ impl Environment for Counter {
         CountObs::space(cfg)
     }
 
-    fn action_space(_: &CountConfig) -> Result<Space, SpaceError> {
-        Ok(Space::Discrete { n: 3 })
+    fn action_space(cfg: &CountConfig) -> Result<Space, SpaceError> {
+        if cfg.action_heads == 1 {
+            return Ok(Space::Discrete { n: cfg.actions_n });
+        }
+        let heads = usize::try_from(cfg.action_heads).unwrap_or(1);
+        Ok(Space::MultiDiscrete {
+            nvec: vec![cfg.actions_n; heads],
+        })
     }
 
     fn reset(cfg: &CountConfig, rng: &mut StepRng, state: &mut Counts) {
@@ -97,7 +120,12 @@ impl Environment for Counter {
                 }
             }
             #[expect(clippy::cast_precision_loss, reason = "small test values")]
-            out.set_reward(agent, inc as f32);
+            let reward = if cfg.negative_zero_reward {
+                -0.0
+            } else {
+                inc as f32
+            };
+            out.set_reward(agent, reward);
         }
         state.steps += 1;
         if cfg.panic_at != 0 && state.steps == cfg.panic_at {
@@ -126,14 +154,20 @@ impl Environment for Counter {
 
 /// Action 2 is illegal for agent 0 and legal for agent 1; the no-op is 0.
 impl ActionMask for Counter {
-    fn action_mask(_: &CountConfig, _: &Counts, agent: AgentSlot, out: &mut MaskWriter<'_>) {
+    fn action_mask(cfg: &CountConfig, state: &Counts, agent: AgentSlot, out: &mut MaskWriter<'_>) {
+        // Panic injection for the poisoning tests.
+        assert!(
+            !(cfg.panic_in_mask && state.steps > 0),
+            "injected mask panic"
+        );
         out.fill(true);
         if agent.index() == 0 {
             out.set(2, false);
         }
     }
 
-    fn noop(_: &CountConfig, _: &Counts, _: AgentSlot, out: &mut ActionWriter<'_>) {
+    fn noop(cfg: &CountConfig, _: &Counts, _: AgentSlot, out: &mut ActionWriter<'_>) {
+        assert!(!cfg.panic_in_noop, "injected noop panic");
         out.set_discrete(0, 0);
     }
 }
