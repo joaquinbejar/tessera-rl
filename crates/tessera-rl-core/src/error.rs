@@ -85,18 +85,24 @@ pub enum EncodeError {
 /// Errors in a space definition (ADR-0014).
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum SpaceError {
-    /// A discrete space or dimension with zero choices.
-    #[error("discrete space with zero choices")]
-    ZeroChoices,
+    /// A discrete space or dimension with zero or more than 2^31 choices.
+    #[error("invalid number of discrete choices {n}: must be in 1..=2^31")]
+    InvalidChoices {
+        /// The number of choices.
+        n: u32,
+    },
     /// A box or binary space with an empty shape or a zero dimension.
     #[error("invalid shape {shape:?}")]
     InvalidShape {
         /// The offending shape.
         shape: Vec<u32>,
     },
-    /// Box bounds with a different length than the shape, or low > high.
-    #[error("invalid box bounds")]
-    InvalidBounds,
+    /// Box bounds that do not fit the dtype or the shape.
+    #[error("invalid box bounds: {reason}")]
+    InvalidBounds {
+        /// What is wrong.
+        reason: &'static str,
+    },
     /// A composite space nested deeper than the supported depth.
     #[error("space nesting depth {depth} exceeds the maximum of {max}")]
     TooDeep {

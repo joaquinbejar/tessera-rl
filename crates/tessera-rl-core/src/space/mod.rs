@@ -5,8 +5,10 @@
 //! Spaces are construction-time descriptions: they may allocate, and they
 //! never appear in state.
 
+mod bounds;
 mod definition;
 mod dtype;
 
-pub use definition::{MAX_DEPTH, Space};
+pub use bounds::BoxBounds;
+pub use definition::{MAX_CHOICES, MAX_DEPTH, Space};
 pub use dtype::DType;

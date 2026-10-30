@@ -2,17 +2,21 @@
 
 //! The `Space` description and its validation.
 
-use super::DType;
+use super::{BoxBounds, DType};
 use crate::error::SpaceError;
 
-/// Maximum nesting depth of `Dict` and `Tuple` (ADR-0014).
+/// Maximum nesting depth of `Dict`, `Tuple` and `Set` (ADR-0014).
 pub const MAX_DEPTH: usize = 4;
+
+/// Maximum number of choices of a discrete dimension: actions travel as
+/// `i32` (SPEC 5.2), so values `0..n` must fit.
+pub const MAX_CHOICES: u64 = 1 << 31;
 
 /// An observation or action space. `Text`, `Graph` and `Sequence` are not
 /// supported (ADR-0014).
 #[derive(Debug, Clone, PartialEq)]
 pub enum Space {
-    /// `n` choices, `0..n`.
+    /// `n` choices, `0..n`, with `1 <= n <= 2^31`.
     Discrete {
         /// Number of choices.
         n: u32,
@@ -27,23 +31,21 @@ pub enum Space {
         /// Shape.
         shape: Vec<u32>,
     },
-    /// A box of the given shape and dtype with per-element bounds, stored
-    /// as `f64` (exact for every supported dtype except `i64` beyond 2^53).
+    /// A box of the given shape and dtype with typed bounds.
     Box {
         /// Shape.
         shape: Vec<u32>,
         /// Element type.
         dtype: DType,
-        /// Lower bounds, one per element, or one for all.
-        low: Vec<f64>,
-        /// Upper bounds, one per element, or one for all.
-        high: Vec<f64>,
+        /// Bounds, typed to match `dtype`.
+        bounds: BoxBounds,
     },
     /// Named sub-spaces, in declaration order.
     Dict(Vec<(String, Space)>),
     /// Positional sub-spaces.
     Tuple(Vec<Space>),
-    /// Up to `max` elements of `inner`, with a presence mask.
+    /// Up to `max` elements of `inner`, with a presence mask. Counts as one
+    /// level of nesting.
     Set {
         /// Element space.
         inner: Box<Space>,
@@ -66,10 +68,18 @@ fn check_shape(shape: &[u32]) -> Result<u64, SpaceError> {
         })
 }
 
+fn check_choices(n: u32) -> Result<(), SpaceError> {
+    if n == 0 || u64::from(n) > MAX_CHOICES {
+        Err(SpaceError::InvalidChoices { n })
+    } else {
+        Ok(())
+    }
+}
+
 impl Space {
-    /// Validates the space: non-zero choices, valid shapes and bounds,
-    /// non-empty composites, unique dict keys and depth at most
-    /// [`MAX_DEPTH`].
+    /// Validates the space: choices in `1..=2^31`, valid shapes, bounds
+    /// typed and in range for the dtype, non-empty composites, unique dict
+    /// keys and depth at most [`MAX_DEPTH`].
     ///
     /// # Errors
     ///
@@ -80,31 +90,25 @@ impl Space {
 
     fn validate_at(&self, depth: usize) -> Result<(), SpaceError> {
         match self {
-            Self::Discrete { n } => {
-                if *n == 0 {
-                    return Err(SpaceError::ZeroChoices);
-                }
-            }
+            Self::Discrete { n } => check_choices(*n)?,
             Self::MultiDiscrete { nvec } => {
                 if nvec.is_empty() {
                     return Err(SpaceError::Empty);
                 }
-                if nvec.contains(&0) {
-                    return Err(SpaceError::ZeroChoices);
+                for &n in nvec {
+                    check_choices(n)?;
                 }
             }
             Self::MultiBinary { shape } => {
                 check_shape(shape)?;
             }
             Self::Box {
-                shape, low, high, ..
+                shape,
+                dtype,
+                bounds,
             } => {
                 let elements = check_shape(shape)?;
-                let fits = |v: &[f64]| v.len() == 1 || u64::try_from(v.len()) == Ok(elements);
-                let ordered = low.iter().zip(high.iter()).all(|(l, h)| l <= h);
-                if !fits(low) || !fits(high) || low.len() != high.len() || !ordered {
-                    return Err(SpaceError::InvalidBounds);
-                }
+                bounds.validate(*dtype, elements)?;
             }
             Self::Dict(entries) => {
                 let child = Self::enter(depth)?;
@@ -128,10 +132,11 @@ impl Space {
                 }
             }
             Self::Set { inner, max } => {
+                let child = Self::enter(depth)?;
                 if *max == 0 {
                     return Err(SpaceError::Empty);
                 }
-                inner.validate_at(depth)?;
+                inner.validate_at(child)?;
             }
         }
         Ok(())
@@ -154,10 +159,36 @@ impl Space {
 mod tests {
     use super::{MAX_DEPTH, Space};
     use crate::error::SpaceError;
-    use crate::space::DType;
+    use crate::space::{BoxBounds, DType};
 
     fn leaf() -> Space {
         Space::Discrete { n: 4 }
+    }
+
+    fn int_box(dtype: DType, low: i64, high: i64) -> Space {
+        Space::Box {
+            shape: vec![1],
+            dtype,
+            bounds: BoxBounds::Int {
+                low: vec![low],
+                high: vec![high],
+            },
+        }
+    }
+
+    fn float_box(dtype: DType, low: f64, high: f64) -> Space {
+        Space::Box {
+            shape: vec![1],
+            dtype,
+            bounds: BoxBounds::Float {
+                low: vec![low],
+                high: vec![high],
+            },
+        }
+    }
+
+    fn bad_bounds(s: &Space) -> bool {
+        matches!(s.validate(), Err(SpaceError::InvalidBounds { .. }))
     }
 
     #[test]
@@ -165,39 +196,136 @@ mod tests {
         let s = Space::Box {
             shape: vec![2, 3],
             dtype: DType::F32,
-            low: vec![-1.0],
-            high: vec![1.0],
+            bounds: BoxBounds::Float {
+                low: vec![-1.0],
+                high: vec![1.0],
+            },
         };
         assert_eq!(s.validate(), Ok(()));
     }
 
     #[test]
-    fn test_space_validate_rejects_bad_shapes_and_bounds() {
+    fn test_box_bounds_reject_values_outside_dtype() {
+        // U8 [-1, 300] cannot even be written as UInt; written as Int it is a
+        // variant mismatch, and 300 is out of range as UInt.
+        assert!(bad_bounds(&int_box(DType::U8, -1, 300)));
+        let u8_high = Space::Box {
+            shape: vec![1],
+            dtype: DType::U8,
+            bounds: BoxBounds::UInt {
+                low: vec![0],
+                high: vec![300],
+            },
+        };
+        assert!(bad_bounds(&u8_high));
+        assert!(bad_bounds(&int_box(DType::Bool, 2, 3)));
+        assert_eq!(int_box(DType::Bool, 0, 1).validate(), Ok(()));
+        assert!(bad_bounds(&int_box(DType::I8, -129, 0)));
+    }
+
+    #[test]
+    fn test_box_bounds_reject_variant_mismatch() {
+        assert!(bad_bounds(&float_box(DType::I32, 0.5, 0.5)));
+        assert!(bad_bounds(&int_box(DType::F32, 0, 1)));
+    }
+
+    #[test]
+    fn test_box_bounds_i64_exact_beyond_2_pow_53() {
+        let big = int_box(DType::I64, 1 << 53, (1 << 53) + 1);
+        assert_eq!(big.validate(), Ok(()));
+        let Space::Box {
+            bounds: BoxBounds::Int { high, .. },
+            ..
+        } = &big
+        else {
+            panic!("int bounds");
+        };
+        assert_eq!(high[0], (1 << 53) + 1);
+        assert_eq!(int_box(DType::I64, i64::MAX, i64::MAX).validate(), Ok(()));
+    }
+
+    #[test]
+    fn test_box_bounds_float_rules() {
+        assert_eq!(
+            float_box(DType::F64, f64::NEG_INFINITY, f64::INFINITY).validate(),
+            Ok(())
+        );
+        assert!(bad_bounds(&float_box(DType::F64, f64::NAN, 1.0)));
+        assert!(bad_bounds(&float_box(
+            DType::F64,
+            f64::INFINITY,
+            f64::INFINITY
+        )));
+        assert!(bad_bounds(&float_box(
+            DType::F64,
+            f64::NEG_INFINITY,
+            f64::NEG_INFINITY
+        )));
+        assert!(bad_bounds(&float_box(DType::F64, 2.0, 1.0)));
+        assert!(bad_bounds(&float_box(DType::F32, 0.0, 1e39)));
+        assert_eq!(
+            float_box(DType::F32, 0.0, f64::from(f32::MAX)).validate(),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn test_box_bounds_per_element_lengths() {
+        let s = Space::Box {
+            shape: vec![2],
+            dtype: DType::I16,
+            bounds: BoxBounds::Int {
+                low: vec![0, 1],
+                high: vec![5],
+            },
+        };
+        assert!(bad_bounds(&s));
+    }
+
+    #[test]
+    fn test_discrete_choices_limit_is_2_pow_31() {
+        let max = 1u32 << 31;
+        assert_eq!(Space::Discrete { n: max }.validate(), Ok(()));
+        assert_eq!(
+            Space::Discrete { n: max + 1 }.validate(),
+            Err(SpaceError::InvalidChoices { n: max + 1 })
+        );
         assert_eq!(
             Space::Discrete { n: 0 }.validate(),
-            Err(SpaceError::ZeroChoices)
+            Err(SpaceError::InvalidChoices { n: 0 })
         );
+        assert_eq!(
+            Space::MultiDiscrete { nvec: vec![3, max] }.validate(),
+            Ok(())
+        );
+        assert_eq!(
+            Space::MultiDiscrete {
+                nvec: vec![3, max + 1]
+            }
+            .validate(),
+            Err(SpaceError::InvalidChoices { n: max + 1 })
+        );
+    }
+
+    #[test]
+    fn test_space_validate_rejects_bad_shapes() {
         assert!(matches!(
             Space::MultiBinary { shape: vec![3, 0] }.validate(),
             Err(SpaceError::InvalidShape { .. })
         ));
-        let inverted = Space::Box {
-            shape: vec![1],
-            dtype: DType::U8,
-            low: vec![5.0],
-            high: vec![1.0],
-        };
-        assert_eq!(inverted.validate(), Err(SpaceError::InvalidBounds));
     }
 
     #[test]
-    fn test_space_validate_depth_limit() {
+    fn test_space_validate_depth_limit_counts_sets() {
         let mut s = leaf();
         for _ in 0..MAX_DEPTH {
             s = Space::Tuple(vec![s]);
         }
         assert_eq!(s.validate(), Ok(()));
-        let too_deep = Space::Tuple(vec![s]);
+        let too_deep = Space::Set {
+            inner: Box::new(s),
+            max: 2,
+        };
         assert_eq!(
             too_deep.validate(),
             Err(SpaceError::TooDeep {
