@@ -1,0 +1,5 @@
+error: Observation fields must have type ObsLeaf<T>
+ --> tests/ui/fail/obs_not_leaf.rs:8:13
+  |
+8 |     action: u8,
+  |             ^^

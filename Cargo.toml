@@ -32,6 +32,7 @@ keywords = ["reinforcement-learning", "gymnasium", "simulation", "multi-agent"]
 categories = ["science", "simulation"]
 
 [workspace.dependencies]
+tessera-rl = { path = "crates/tessera-rl", version = "0.1.0" }
 tessera-rl-core = { path = "crates/tessera-rl-core", version = "0.1.0" }
 tessera-rl-num = { path = "crates/tessera-rl-num", version = "0.1.0" }
 tessera-rl-macros = { path = "crates/tessera-rl-macros", version = "0.1.0" }

@@ -1,0 +1,5 @@
+error[E0080]: evaluation panicked: EnvState: `S` has trailing padding after field `b`; add a Reserved<N> field at the end (ADR-0029)
+ --> tests/ui/fail/trailing_padding.rs:5:10
+  |
+5 | #[derive(EnvState, Clone, Copy, Default)]
+  |          ^^^^^^^^ evaluation of `_` failed here

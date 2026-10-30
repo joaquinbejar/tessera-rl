@@ -197,6 +197,7 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn",
+ "tessera-rl",
  "tessera-rl-core",
  "tessera-rl-num",
  "trybuild",

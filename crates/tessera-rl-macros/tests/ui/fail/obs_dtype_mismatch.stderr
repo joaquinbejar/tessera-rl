@@ -1,0 +1,5 @@
+error[E0080]: evaluation panicked: Observation: the dtype attribute does not match the leaf type
+ --> tests/ui/fail/obs_dtype_mismatch.rs:6:10
+  |
+6 | #[derive(Observation)]
+  |          ^^^^^^^^^^^ evaluation of `_` failed here

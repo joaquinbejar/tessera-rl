@@ -1,0 +1,5 @@
+error[E0080]: evaluation panicked: EnvState: `S` has padding before field `b`; fill the gap with a Reserved<N> field (ADR-0029)
+ --> tests/ui/fail/padding.rs:5:10
+  |
+5 | #[derive(EnvState, Clone, Copy, Default)]
+  |          ^^^^^^^^ evaluation of `_` failed here

@@ -106,12 +106,6 @@ impl FieldParts {
 pub(crate) fn derive(input: &DeriveInput) -> syn::Result<TokenStream> {
     let core = core_path(&input.attrs)?;
     let name = &input.ident;
-    if !input.generics.params.is_empty() {
-        return Err(syn::Error::new_spanned(
-            &input.generics,
-            "EnvState does not support generic state types",
-        ));
-    }
     if !has_repr_c(&input.attrs)? {
         return Err(syn::Error::new_spanned(
             name,
@@ -131,12 +125,20 @@ pub(crate) fn derive(input: &DeriveInput) -> syn::Result<TokenStream> {
         ));
     };
 
+    // Field types first, so a reference reports itself rather than the
+    // lifetime parameter it needs.
     let mut parts = FieldParts::default();
     let mut last = None;
     for field in &fields.named {
         let Some(ident) = &field.ident else { continue };
         parts.push(&core, name, ident, field)?;
         last = Some(ident.clone());
+    }
+    if !input.generics.params.is_empty() {
+        return Err(syn::Error::new_spanned(
+            &input.generics,
+            "EnvState does not support generic state types",
+        ));
     }
     let FieldParts {
         padding_checks,

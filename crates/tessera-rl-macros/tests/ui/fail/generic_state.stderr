@@ -1,0 +1,5 @@
+error: EnvState does not support generic state types
+ --> tests/ui/fail/generic_state.rs:7:9
+  |
+7 | struct S<T: Copy + Default> {
+  |         ^^^^^^^^^^^^^^^^^^^

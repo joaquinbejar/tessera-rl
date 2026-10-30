@@ -1,0 +1,5 @@
+error: an adaptive field cannot affect shapes or capacities (ADR-0030)
+ --> tests/ui/fail/config_adaptive_shape.rs:8:5
+  |
+8 |     size: u16,
+  |     ^^^^

@@ -1,0 +1,5 @@
+error: references are not allowed in state (ADR-0029)
+ --> tests/ui/fail/reference_field.rs:8:8
+  |
+8 |     r: &'a u32,
+  |        ^^^^^^^

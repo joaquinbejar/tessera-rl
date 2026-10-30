@@ -1,0 +1,5 @@
+error: #[repr(packed)] is not allowed in state: unaligned fields (ADR-0029)
+ --> tests/ui/fail/packed.rs:6:11
+  |
+6 | #[repr(C, packed)]
+  |           ^^^^^^

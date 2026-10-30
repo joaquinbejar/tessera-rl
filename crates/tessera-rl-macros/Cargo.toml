@@ -24,6 +24,7 @@ quote.workspace = true
 syn.workspace = true
 
 [dev-dependencies]
+tessera-rl.workspace = true
 tessera-rl-core.workspace = true
 tessera-rl-num.workspace = true
 trybuild.workspace = true
