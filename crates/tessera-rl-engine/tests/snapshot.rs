@@ -5,7 +5,8 @@
 
 #![expect(
     clippy::unwrap_used,
-    reason = "test helpers unwrap: a failure is the assertion"
+    clippy::indexing_slicing,
+    reason = "test helpers unwrap and index: a failure is the assertion"
 )]
 
 mod common;
@@ -198,7 +199,7 @@ fn test_fork_branched_labels_and_counter_errors() {
 
 #[test]
 fn test_poisoned_pool_accepts_only_full_restore() {
-    let mut p = pool(2, 1);
+    let p = pool(2, 1);
     let mut records = [p.snapshot(0).unwrap(); 2];
     p.snapshot_all(&mut records).unwrap();
     let cfg = CountConfig {
