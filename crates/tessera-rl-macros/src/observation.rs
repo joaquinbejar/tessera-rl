@@ -187,6 +187,12 @@ fn leaf_space(
             }
         }
         Leaf::Discrete { n } => {
+            dtype_checks.push(quote! {
+                assert!(
+                    matches!(<#elem as #core::LeafDType>::DTYPE, #core::space::DType::I32),
+                    "Observation: discrete leaves must be ObsLeaf<i32>"
+                );
+            });
             let n = eval(n);
             quote! {
                 #core::space::Space::Discrete {
@@ -195,6 +201,12 @@ fn leaf_space(
             }
         }
         Leaf::MultiBinary { shape } => {
+            dtype_checks.push(quote! {
+                assert!(
+                    matches!(<#elem as #core::LeafDType>::DTYPE, #core::space::DType::Bool),
+                    "Observation: multi_binary leaves must be ObsLeaf<Bool8>"
+                );
+            });
             let shape = eval(shape);
             quote!(#core::space::Space::MultiBinary { shape: shape(#shape)? })
         }
