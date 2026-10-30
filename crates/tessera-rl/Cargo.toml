@@ -1,0 +1,25 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
+[package]
+name = "tessera-rl"
+description = "Fast, deterministic, forkable reinforcement learning environments in Rust"
+readme = "README.md"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+tessera-rl-core.workspace = true
+tessera-rl-num.workspace = true
+tessera-rl-macros.workspace = true
+tessera-rl-engine.workspace = true
+tessera-rl-classic.workspace = true
+
+[lints]
+workspace = true

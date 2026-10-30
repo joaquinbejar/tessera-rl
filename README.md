@@ -1,10 +1,16 @@
+<!-- SPDX-License-Identifier: MIT OR Apache-2.0 -->
+
 # Tessera
 
-Tessera (`tessera-rl`) is an open-source Rust engine for writing and running
-reinforcement learning environments, exposed to Python through Gymnasium,
+Tessera is a Rust engine for writing and running reinforcement learning
+environments, with cheap snapshot, restore and fork, bit-exact determinism
+and a native multi-agent model. It is exposed to Python through Gymnasium,
 PettingZoo and PufferLib compatible interfaces.
 
-Status: pre-implementation.
+This crate is the facade: it re-exports the workspace crates, following
+the layered workspace layout of SPEC section 4.1 and ADR-0021.
+
+Status: phase 1a scaffold.
 
 ## License
 
@@ -14,3 +20,7 @@ Licensed under either of
 - MIT license ([LICENSE-MIT](LICENSE-MIT))
 
 at your option.
+
+Unless you explicitly state otherwise, any contribution intentionally submitted
+for inclusion in the work by you, as defined in the Apache-2.0 license, shall be
+dual licensed as above, without any additional terms or conditions.
