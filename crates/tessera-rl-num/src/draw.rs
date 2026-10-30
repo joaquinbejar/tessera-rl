@@ -50,6 +50,15 @@ impl Draws {
         }
     }
 
+    /// Returns whether this sequence has made more than 2^32 Philox calls,
+    /// so counters were reused. The engine checks this at the boundary and
+    /// poisons the instance.
+    #[must_use]
+    #[inline]
+    pub const fn exhausted(&self) -> bool {
+        self.exhausted
+    }
+
     #[inline]
     fn refill(&mut self) {
         debug_assert!(!self.exhausted, "more than 2^32 Philox calls in one phase");
@@ -170,6 +179,15 @@ mod tests {
 
     use super::Draws;
     use crate::philox::philox4x32_10;
+
+    #[test]
+    fn test_draws_exhausted_after_counter_wrap() {
+        let mut d = Draws::new([1, 2], 0, 0, 0);
+        assert!(!d.exhausted());
+        d.draw_index = u32::MAX;
+        d.next_u32();
+        assert!(d.exhausted());
+    }
 
     #[test]
     fn test_draws_word_order_follows_counter_layout() {

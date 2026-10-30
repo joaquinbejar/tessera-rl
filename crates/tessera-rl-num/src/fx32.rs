@@ -91,6 +91,25 @@ mod tests {
     }
 
     #[test]
+    fn test_fx32_sub_wrapping_and_saturating() {
+        assert_eq!(fx(1.0).wrapping_sub(fx(2.5)), fx(-1.5));
+        assert_eq!(Fx32::MIN.wrapping_sub(Fx32::EPSILON), Fx32::MAX);
+        assert_eq!(fx(1.0).saturating_sub(fx(2.5)), fx(-1.5));
+        assert_eq!(Fx32::MIN.saturating_sub(Fx32::EPSILON), Fx32::MIN);
+        assert_eq!(fx(1.0).checked_sub(fx(2.5)), Some(fx(-1.5)));
+        assert_eq!(fx(1.5).checked_add(fx(-0.25)), Some(fx(1.25)));
+        assert_eq!(fx(1.5).checked_neg(), Some(fx(-1.5)));
+    }
+
+    #[test]
+    fn test_fx32_from_f32_rounds_without_saturating() {
+        assert_eq!(Fx32::checked_from_f32(1.25), Some(fx(1.25)));
+        assert_eq!(Fx32::checked_from_f32(-3.5), Some(fx(-3.5)));
+        assert_eq!(Fx32::saturating_from_f32(0.1).to_raw(), 6_554);
+        assert_eq!(Fx32::checked_from_f32(f32::NAN), None);
+    }
+
+    #[test]
     fn test_fx32_to_f64_is_exact() {
         assert_eq!(Fx32::MAX.to_f64(), 32_768.0 - 1.0 / 65_536.0);
         assert_eq!(Fx32::MIN.to_f64(), -32_768.0);
@@ -102,5 +121,8 @@ mod tests {
         assert_eq!(Fx32::checked_from_int(3), Some(fx(3.0)));
         assert_eq!(Fx32::checked_from_int(32_767), Some(fx(32_767.0)));
         assert_eq!(Fx32::checked_from_int(32_768), None);
+        assert_eq!(Fx32::checked_from_int(-32_768), Some(Fx32::MIN));
+        assert_eq!(Fx32::checked_from_int(-32_769), None);
+        assert_eq!(Fx32::checked_from_int(-7), Some(fx(-7.0)));
     }
 }

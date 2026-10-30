@@ -46,6 +46,33 @@ mod tests {
     }
 
     #[test]
+    fn test_fx64_wrapping_mul_and_add_sub_rules() {
+        // 2^16 * 2^16 = 2^32, raw 2^64 wraps to 0.
+        assert_eq!(fx(65_536.0).wrapping_mul(fx(65_536.0)), Fx64::ZERO);
+        assert_eq!(fx(-0.5).wrapping_mul(fx(3.0)), fx(-1.5));
+        assert_eq!(Fx64::MAX.checked_add(Fx64::EPSILON), None);
+        assert_eq!(Fx64::MAX.wrapping_add(Fx64::EPSILON), Fx64::MIN);
+        assert_eq!(Fx64::MAX.saturating_add(Fx64::EPSILON), Fx64::MAX);
+        assert_eq!(Fx64::MIN.checked_sub(Fx64::EPSILON), None);
+        assert_eq!(Fx64::MIN.wrapping_sub(Fx64::EPSILON), Fx64::MAX);
+        assert_eq!(Fx64::MIN.saturating_sub(Fx64::EPSILON), Fx64::MIN);
+        assert_eq!(Fx64::MIN.checked_neg(), None);
+    }
+
+    #[test]
+    fn test_fx64_from_int_and_f32() {
+        assert_eq!(Fx64::checked_from_int(-2_147_483_648), Some(Fx64::MIN));
+        assert_eq!(
+            Fx64::checked_from_int(2_147_483_647),
+            Some(fx(2_147_483_647.0))
+        );
+        assert_eq!(Fx64::checked_from_int(2_147_483_648), None);
+        assert_eq!(Fx64::checked_from_int(-2_147_483_649), None);
+        assert_eq!(Fx64::checked_from_f32(-0.75), Some(fx(-0.75)));
+        assert_eq!(Fx64::saturating_from_f32(f32::INFINITY), Fx64::MAX);
+    }
+
+    #[test]
     fn test_fx64_div_truncates_toward_zero() {
         assert_eq!(
             fx(1.0).checked_div(fx(3.0)),

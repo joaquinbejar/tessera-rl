@@ -18,7 +18,14 @@
 //! - Adding a new function does not change any existing result, so it does
 //!   not change the math version.
 //!
-//! Version 1 is `libm` 0.2.16, vendored in `vendor`.
+//! Version 1 is `libm` 0.2.16, vendored in `vendor` verbatim except for the
+//! listed adaptations: `force_eval!` uses `black_box`, `i!` uses checked
+//! indexing, `select_implementation!` expands to nothing (x87 only), and
+//! `scalbn` is musl's algorithm, checked against `libm` 0.2.16.
+//!
+//! Not yet available (added later without a version change): `asin`,
+//! `acos`, `sinh`, `cosh`, `asinh`, `acosh`, `atanh`, `exp2`, `exp_m1`,
+//! `log2`, `log10`, `ln_1p`, `cbrt`, `pow`, `gamma` and `ln_gamma`.
 
 mod vendor;
 

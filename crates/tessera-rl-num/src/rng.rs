@@ -41,6 +41,15 @@ fn draws(identity: &RngIdentity, stream: StreamId) -> Draws {
 
 macro_rules! forward_draws {
     () => {
+        /// Returns whether more than 2^32 Philox calls were made in this
+        /// phase, so counters were reused. The engine checks this at the
+        /// validation boundary.
+        #[must_use]
+        #[inline]
+        pub const fn exhausted(&self) -> bool {
+            self.draws.exhausted()
+        }
+
         /// Returns the next 32-bit word.
         #[inline]
         pub fn next_u32(&mut self) -> u32 {
