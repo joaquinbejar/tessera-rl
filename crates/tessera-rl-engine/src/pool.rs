@@ -85,6 +85,7 @@ where
         let headers = (0..num_envs)
             .map(|i| {
                 let mut header = E::Header::state_default();
+                // `i < num_envs <= u32::MAX`, so the conversion never fails.
                 let seed = options.seed.offset(u64::try_from(i).unwrap_or(u64::MAX));
                 let engine = header.engine_mut();
                 engine.identity = RngIdentity::new(seed, LogicalId::DEFAULT);
@@ -245,6 +246,7 @@ where
                 };
                 let seed = match reseed {
                     Reseed::Keep => None,
+                    // `k` counts reset instances, at most `u32::MAX`.
                     Reseed::Base(base) => Some(base.offset(u64::try_from(k).unwrap_or(u64::MAX))),
                     Reseed::List(seeds) => seeds.get(k).copied(),
                 };
@@ -405,17 +407,46 @@ fn step_one<E: Environment>(
     for (slot, row) in header.agents_mut().iter_mut().enumerate() {
         let k = i * a + slot;
         let reward = outputs.rewards.get(k).copied().unwrap_or(0.0);
+        debug_assert!(
+            reward.is_finite(),
+            "non-finite reward for agent slot {slot}"
+        );
         row.episode_return += reward;
         total += row.episode_return;
-        if outputs.died.get(k).is_some_and(|f| f.get()) {
+        let died = outputs.died.get(k).is_some_and(|f| f.get());
+        let spawned = outputs.spawned.get(k).is_some_and(|f| f.get());
+        if died {
             row.alive = Bool8::FALSE;
             row.acting = Bool8::FALSE;
         }
-        if outputs.spawned.get(k).is_some_and(|f| f.get()) {
-            row.alive = Bool8::TRUE;
-            row.acting = Bool8::TRUE;
-            // Generations count occupants modulo 2^32 (documented wrap).
-            row.generation = row.generation.wrapping_add(1);
+        // A spawn needs an empty slot that did not die this step; otherwise
+        // it is ignored (debug builds assert).
+        if spawned {
+            let valid = !died && !row.alive.get();
+            debug_assert!(valid, "spawn on an occupied or dying slot {slot}");
+            if valid {
+                row.alive = Bool8::TRUE;
+                row.acting = Bool8::TRUE;
+                // Generations count occupants modulo 2^32: an explicit,
+                // documented wrap (unreachable in practice).
+                row.generation = row.generation.wrapping_add(1);
+            }
+        }
+    }
+    // Terminal flush (SPEC 12): when the episode ends, every agent still
+    // alive gets its final terminated or truncated flag in this step.
+    if let Some(end) = end {
+        for (slot, row) in header.agents().iter().enumerate() {
+            if row.alive.get() {
+                let k = i * a + slot;
+                let flags = match end {
+                    EpisodeEnd::Terminated => &mut outputs.agent_terminated,
+                    EpisodeEnd::Truncated => &mut outputs.agent_truncated,
+                };
+                if let Some(f) = flags.get_mut(k) {
+                    *f = Bool8::TRUE;
+                }
+            }
         }
     }
     if let Some(end) = end {

@@ -256,3 +256,40 @@ fn test_invalid_options_and_config_are_rejected() {
         Err(EngineError::Config(_))
     ));
 }
+
+#[test]
+fn test_episode_end_flushes_final_flags_to_alive_agents_only() {
+    // Episodes last 5 steps (the default length).
+    let cfg = CountConfig {
+        kill_at: 0,
+        ..CountConfig::default()
+    };
+    let options = PoolOptions::new(NonZeroU32::MIN, Seed::new(4));
+    let mut p = EnvPool::<Counter>::new(cfg, options).unwrap();
+    p.reset_all(Reseed::Keep).unwrap();
+    // Agent 1 dies on the first step and reports terminated once.
+    let out = p.step(actions(&[0, 1])).unwrap();
+    assert_eq!(out.agent_terminated(), [Bool8::FALSE, Bool8::TRUE]);
+    for _ in 0..3 {
+        let out = p.step(actions(&[0, 0])).unwrap();
+        assert_eq!(out.agent_terminated(), [Bool8::FALSE, Bool8::FALSE]);
+    }
+    // The episode ends on the fifth step: only the living agent 0 gets
+    // the final flag; dead agent 1 does not report again.
+    let out = p.step(actions(&[0, 0])).unwrap();
+    assert_eq!(out.episode_terminated(), [Bool8::TRUE]);
+    assert_eq!(out.agent_terminated(), [Bool8::TRUE, Bool8::FALSE]);
+}
+
+#[test]
+fn test_step_limit_truncates_alive_agents() {
+    let options = PoolOptions {
+        max_episode_steps: NonZeroU32::new(1),
+        ..PoolOptions::new(NonZeroU32::MIN, Seed::new(0))
+    };
+    let mut p = EnvPool::<Counter>::new(CountConfig::default(), options).unwrap();
+    p.reset_all(Reseed::Keep).unwrap();
+    let out = p.step(actions(&[0, 0])).unwrap();
+    assert_eq!(out.agent_truncated(), [Bool8::TRUE, Bool8::TRUE]);
+    assert_eq!(out.agent_terminated(), [Bool8::FALSE, Bool8::FALSE]);
+}
