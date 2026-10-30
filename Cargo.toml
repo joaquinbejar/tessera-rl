@@ -37,23 +37,20 @@ tessera-rl-macros = { path = "crates/tessera-rl-macros", version = "0.1.0" }
 tessera-rl-engine = { path = "crates/tessera-rl-engine", version = "0.1.0" }
 tessera-rl-classic = { path = "crates/tessera-rl-classic", version = "0.1.0" }
 
-bytemuck = { version = "1.24", features = ["derive"] }
-proc-macro2 = "1.0"
-quote = "1.0"
-syn = { version = "2.0", features = ["full"] }
-thiserror = "2.0"
-tracing = "0.1"
 
 [workspace.lints.rust]
-missing_docs = "warn"
+missing_docs = "deny"
 unsafe_code = "deny"
 unsafe_op_in_unsafe_fn = "deny"
 
 [workspace.lints.clippy]
 pedantic = { level = "warn", priority = -1 }
+allow_attributes = "deny"
+allow_attributes_without_reason = "deny"
 dbg_macro = "deny"
 expect_used = "deny"
 indexing_slicing = "deny"
+multiple_unsafe_ops_per_block = "deny"
 panic = "deny"
 print_stderr = "deny"
 print_stdout = "deny"
