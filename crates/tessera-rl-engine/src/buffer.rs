@@ -502,14 +502,14 @@ mod tests {
                         out.episode_return.fill(f);
                         out.episode_length.fill(f);
                         out.episode_illegal_actions.fill(f);
-                        out.episode_invalid_spawns.fill(f);
+                        out.episode_invalid_agent_events.fill(f);
                         out.generations.fill(mark);
                         for flags in [
                             out.agent_terminated,
                             out.agent_truncated,
                             out.died,
                             out.spawned,
-                            out.invalid_spawn,
+                            out.invalid_agent_event,
                             out.alive,
                             out.acting,
                             out.episode_terminated,
@@ -533,11 +533,11 @@ mod tests {
             assert_eq!(&outputs.generations[i * 2..i * 2 + 2], &[owner(i); 2]);
         }
         assert!(outputs.masks.iter().all(|m| m.get()));
-        assert!(outputs.invalid_spawn.iter().all(|m| m.get()));
+        assert!(outputs.invalid_agent_event.iter().all(|m| m.get()));
         for i in 0..N {
             #[expect(clippy::cast_precision_loss, reason = "tiny marks")]
             let mark = owner(i) as f32;
-            assert_eq!(outputs.episode_invalid_spawns[i], mark);
+            assert_eq!(outputs.episode_invalid_agent_events[i], mark);
         }
         assert!(outputs.episode_truncated.iter().all(|m| m.get()));
         let first_leaf = &outputs.observations[0];
