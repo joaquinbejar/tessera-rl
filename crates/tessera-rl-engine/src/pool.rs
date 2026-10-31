@@ -10,6 +10,7 @@
 
 use core::marker::PhantomData;
 
+use tessera_rl_core::error::ConfigError;
 use tessera_rl_core::io::{ActionWriter, Actions, MaskWriter, ObsWriter};
 use tessera_rl_core::{
     ActionMask, AdaptiveValues, AgentSlot, Bool8, EnvConfig, Environment, EpisodeEnd, RecordLayout,
@@ -143,6 +144,13 @@ where
             );
         }
         cfg.validate()?;
+        if !(1..=E::MAX_AGENTS).contains(&E::initial_agents(&cfg)) {
+            return Err(ConfigError {
+                field: "initial_agents",
+                reason: "must be in 1..=MAX_AGENTS",
+            }
+            .into());
+        }
         options.validate()?;
         let obs_space = E::observation_space(&cfg)?;
         obs_space.validate()?;
@@ -1065,9 +1073,12 @@ fn reset_one<E: Environment>(
     engine.pending_reset = Bool8::FALSE;
     engine.end_kind = 0;
     engine.episode_steps = 0;
-    for row in header.agents_mut() {
-        row.alive = Bool8::TRUE;
-        row.acting = Bool8::TRUE;
+    // Checked at construction.
+    let initial = E::initial_agents(cfg);
+    for (slot, row) in header.agents_mut().iter_mut().enumerate() {
+        let alive = Bool8::from(slot < initial);
+        row.alive = alive;
+        row.acting = alive;
         row.episode_return = 0.0;
         row.illegal_actions = 0;
         row.invalid_agent_events = 0;
@@ -1122,7 +1133,13 @@ fn step_one<E: Environment>(
         E::step(cfg, state, actions, &mut rng, &mut out);
         out.episode_end()
     };
-    let end = end.or_else(|| (limit == Some(t)).then_some(EpisodeEnd::Truncated));
+    // TimeLimit semantics (SPEC 5.4): reaching the step limit truncates the
+    // episode in addition to whatever the environment reported.
+    let end = Ending {
+        terminated: end == Some(EpisodeEnd::Terminated),
+        truncated: end == Some(EpisodeEnd::Truncated) || limit == Some(t),
+    };
+    let end = (end.terminated || end.truncated).then_some(end);
 
     header.engine_mut().episode_steps = t;
     let mut total = 0.0f32;
@@ -1184,12 +1201,11 @@ fn step_one<E: Environment>(
         for (slot, row) in header.agents().iter().enumerate() {
             if row.alive.get() {
                 let k = i * a + slot;
-                let flags = match end {
-                    EpisodeEnd::Terminated => &mut outputs.agent_terminated,
-                    EpisodeEnd::Truncated => &mut outputs.agent_truncated,
-                };
-                if let Some(f) = flags.get_mut(k) {
-                    *f = Bool8::TRUE;
+                if end.terminated {
+                    set(outputs.agent_terminated, k, true);
+                }
+                if end.truncated {
+                    set(outputs.agent_truncated, k, true);
                 }
             }
         }
@@ -1200,24 +1216,27 @@ fn step_one<E: Environment>(
     write_agent_masks(outputs, i, header);
 }
 
+/// How an episode ended; both flags may be set.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Ending {
+    terminated: bool,
+    truncated: bool,
+}
+
 /// Records the end of an episode: flags, pending reset and statistics.
 fn finish_episode<H: RecordLayout>(
     header: &mut H,
     outputs: &mut OutputsView<'_>,
     i: usize,
-    end: EpisodeEnd,
+    end: Ending,
     t: u32,
     total: f32,
 ) {
     let engine = header.engine_mut();
     engine.pending_reset = Bool8::TRUE;
-    let (terminated, kind) = match end {
-        EpisodeEnd::Terminated => (true, 1),
-        EpisodeEnd::Truncated => (false, 2),
-    };
-    engine.end_kind = kind;
-    set(outputs.episode_terminated, i, terminated);
-    set(outputs.episode_truncated, i, !terminated);
+    engine.end_kind = u8::from(end.terminated) | (u8::from(end.truncated) << 1);
+    set(outputs.episode_terminated, i, end.terminated);
+    set(outputs.episode_truncated, i, end.truncated);
     if let Some(r) = outputs.episode_return.get_mut(i) {
         *r = total;
     }

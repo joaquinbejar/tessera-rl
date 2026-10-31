@@ -73,6 +73,17 @@ pub trait Environment: Sized + 'static {
     /// Returns a [`SpaceError`] if `cfg` yields an invalid space.
     fn action_space(cfg: &Self::Config) -> Result<Space, SpaceError>;
 
+    /// Number of agent slots alive at the start of each episode: slots
+    /// `0..n` start alive and acting, the rest start empty and may be
+    /// filled later by `agent_spawned` (a refinement of ADR-0013). The
+    /// engine checks `1..=MAX_AGENTS` at construction. Defaults to
+    /// `MAX_AGENTS`.
+    #[must_use]
+    fn initial_agents(cfg: &Self::Config) -> usize {
+        let _ = cfg;
+        Self::MAX_AGENTS
+    }
+
     /// Starts an episode. `state` holds the initial value or the previous
     /// episode.
     fn reset(cfg: &Self::Config, rng: &mut StepRng, state: &mut Self::State);

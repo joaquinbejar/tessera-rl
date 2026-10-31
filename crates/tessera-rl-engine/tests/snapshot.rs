@@ -449,7 +449,7 @@ fn test_from_parts_applies_the_canonical_field_policies() {
     assert_eq!(kept.state().noise.to_bits(), 0x7fc0_1234);
     // An invalid end kind is rejected.
     let mut header = *good.header();
-    header.engine.end_kind = 3;
+    header.engine.end_kind = 4;
     assert!(DecodedRecord::<Counter>::from_parts(header, *good.state()).is_err());
 }
 

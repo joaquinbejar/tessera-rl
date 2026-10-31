@@ -559,7 +559,9 @@ dependencies = [
 name = "tessera-rl-classic"
 version = "0.1.0"
 dependencies = [
+ "criterion",
  "tessera-rl-core",
+ "tessera-rl-engine",
  "tessera-rl-macros",
  "tessera-rl-num",
 ]

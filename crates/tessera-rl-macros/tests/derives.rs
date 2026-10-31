@@ -347,3 +347,32 @@ fn test_observation_without_closures_is_generic_over_config() {
         )])
     );
 }
+
+fn check_pair(cfg: &PairConfig) -> Result<(), tessera_rl_core::ConfigError> {
+    if cfg.a + cfg.b > 8 {
+        return Err(tessera_rl_core::ConfigError {
+            field: "b",
+            reason: "a + b must not exceed 8",
+        });
+    }
+    Ok(())
+}
+
+#[derive(EnvConfig, Debug, Clone, PartialEq)]
+#[config(validate = check_pair)]
+struct PairConfig {
+    #[config(default = 1, range = 1..=7)]
+    a: u32,
+    #[config(default = 1, range = 1..=7)]
+    b: u32,
+}
+
+#[test]
+fn test_env_config_validate_hook_runs_after_field_checks() {
+    use tessera_rl_core::EnvConfig as _;
+    assert_eq!(PairConfig::default().validate(), Ok(()));
+    let err = PairConfig { a: 5, b: 4 }.validate().unwrap_err();
+    assert_eq!(err.field, "b");
+    // Field ranges are checked first.
+    assert_eq!(PairConfig { a: 9, b: 4 }.validate().unwrap_err().field, "a");
+}

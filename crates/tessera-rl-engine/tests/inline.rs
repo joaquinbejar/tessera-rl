@@ -437,3 +437,65 @@ fn test_death_of_a_dead_agent_fails_and_poisons_under_debug_checks() {
     );
     assert!(p.is_poisoned());
 }
+
+#[test]
+fn test_pool_initial_agents_out_of_range_is_config_error() {
+    for initial_agents in [0, 3] {
+        let cfg = CountConfig {
+            initial_agents,
+            ..CountConfig::default()
+        };
+        let options = PoolOptions::new(NonZeroU32::MIN, Seed::new(1));
+        assert!(matches!(
+            EnvPool::<Counter>::new(cfg, options).map(|_| ()),
+            Err(EngineError::Config(e)) if e.field == "initial_agents"
+        ));
+    }
+}
+
+#[test]
+fn test_pool_initial_agents_starts_the_rest_empty_until_spawned() {
+    let cfg = CountConfig {
+        initial_agents: 1,
+        respawn: true,
+        ..CountConfig::default()
+    };
+    let mut p =
+        EnvPool::<Counter>::new(cfg, PoolOptions::new(NonZeroU32::MIN, Seed::new(4))).unwrap();
+    let out = p.reset_all(Reseed::Keep).unwrap();
+    assert_eq!(out.alive(), [Bool8::TRUE, Bool8::FALSE]);
+    // The empty slot's action is not validated; the env spawns it.
+    let out = p.step(actions(&[0, 99])).unwrap();
+    assert_eq!(out.alive(), [Bool8::TRUE, Bool8::TRUE]);
+    // Every reset starts the empty slot again.
+    let out = p.reset_all(Reseed::Keep).unwrap();
+    assert_eq!(out.alive(), [Bool8::TRUE, Bool8::FALSE]);
+}
+
+#[test]
+fn test_pool_terminal_step_at_the_limit_is_terminated_and_truncated() {
+    // The counter terminates after 3 steps; the step limit is also 3.
+    let cfg = CountConfig {
+        length: 3,
+        ..CountConfig::default()
+    };
+    let options = PoolOptions {
+        max_episode_steps: NonZeroU32::new(3),
+        ..PoolOptions::new(NonZeroU32::MIN, Seed::new(4))
+    };
+    let mut p = EnvPool::<Counter>::new(cfg, options).unwrap();
+    p.reset_all(Reseed::Keep).unwrap();
+    p.step(actions(&[0, 0])).unwrap();
+    p.step(actions(&[0, 0])).unwrap();
+    let out = p.step(actions(&[0, 0])).unwrap();
+    assert_eq!(out.episode_terminated(), [Bool8::TRUE]);
+    assert_eq!(out.episode_truncated(), [Bool8::TRUE]);
+    assert_eq!(out.agent_terminated(), [Bool8::TRUE; 2]);
+    assert_eq!(out.agent_truncated(), [Bool8::TRUE; 2]);
+    assert_eq!(p.header(0).unwrap().engine.end_kind, 3);
+    // The record round-trips through import validation.
+    let record = p.snapshot(0).unwrap();
+    let decoded =
+        tessera_rl_engine::DecodedRecord::from_parts(*record.header(), *record.state()).unwrap();
+    p.import(&[0], &[decoded]).unwrap();
+}

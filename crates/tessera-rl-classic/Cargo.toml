@@ -19,5 +19,13 @@ tessera-rl-core.workspace = true
 tessera-rl-num.workspace = true
 tessera-rl-macros.workspace = true
 
+[dev-dependencies]
+criterion.workspace = true
+tessera-rl-engine.workspace = true
+
 [lints]
 workspace = true
+
+[[bench]]
+name = "classic_step"
+harness = false
