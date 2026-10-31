@@ -7,11 +7,16 @@
 format = 1
 
 [ref-x86]
-# A candidate until: the turbo state is recorded, the SMT sibling of the
-# bench core is reserved (taskset -c 2 with nothing on CPU 3), and a noise
-# floor is measured (the coefficient of variation of 10 runs of a reference
-# bench is below the gate threshold).
+# A candidate: SPEC 19.3 requires a dedicated machine for wall-clock gates,
+# and xaskar is shared. A recorded turbo state, an idle SMT sibling and a
+# low coefficient of variation do NOT by themselves promote a shared host:
+# it needs a measured exclusive window. Until then its wall-clock results
+# are indicative and the binding G1 gate is pending. It is valid for
+# bit-exactness (golden suites, math-diff) and for instruction counts
+# (gungraun), which do not depend on load.
 status = "candidate"
+wall_clock_gates = "pending: needs an exclusive window"
+valid_for = ["golden", "math-diff", "instruction-counts"]
 host = "xaskar (shared host, about 20 containers; record the load with every run)"
 cpu = "Intel Core i7-12700H (Alder Lake, hybrid)"
 cores = "6 P-cores with HT (CPUs 0-11, up to 4.7 GHz); 8 E-cores (CPUs 12-19, up to 3.5 GHz)"

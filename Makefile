@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: MIT OR Apache-2.0
 
-.PHONY: fmt fmt-check clippy test doc readme readme-check pre-push deny check-targets
+.PHONY: fmt fmt-check clippy test doc readme readme-check pre-push deny check-targets compat-test
 
 fmt:
 	cargo fmt --all
@@ -26,19 +26,32 @@ readme:
 readme-check:
 	cargo readme -r crates/tessera-rl -t ../../README.tpl --no-title --no-license --no-indent-headings | diff -u README.md -
 
-pre-push: fmt-check clippy test doc readme-check
+pre-push: fmt-check clippy test doc readme-check compat-test
 
 deny:
 	cargo deny check
 
-# The Python tool environment (uv, Python 3.11) matches compat/targets.toml.
-# ENV=main (default) or ENV=pufferlib (its own uv project in compat/pufferlib).
-ENV ?= main
+# The Python tool environment matches compat/targets.toml for a profile
+# (b1, test, torch, conformance or pufferlib; default conformance).
+PROFILE ?= conformance
 check-targets:
-ifeq ($(ENV),main)
-	uv sync --locked --python 3.11 --all-groups
-	uv run --locked --python 3.11 python scripts/check_targets.py --require-all main
+ifeq ($(PROFILE),pufferlib)
+	uv sync --locked --python 3.11 --project compat/pufferlib
+	uv run --locked --python 3.11 --project compat/pufferlib python scripts/check_targets.py pufferlib
+else ifeq ($(PROFILE),b1)
+	uv sync --locked --python 3.11 --no-default-groups
+	uv run --locked --python 3.11 --no-default-groups python scripts/check_targets.py b1
+else ifeq ($(PROFILE),test)
+	uv sync --locked --python 3.11 --only-group test
+	uv run --locked --python 3.11 --only-group test python scripts/check_targets.py test
+else ifeq ($(PROFILE),torch)
+	uv sync --locked --python 3.11 --group test --group torch
+	uv run --locked --python 3.11 --group test --group torch python scripts/check_targets.py torch
 else
-	uv sync --locked --python 3.11 --project compat/$(ENV)
-	uv run --locked --python 3.11 --project compat/$(ENV) python scripts/check_targets.py --require-all $(ENV)
+	uv sync --locked --python 3.11 --all-groups
+	uv run --locked --python 3.11 --all-groups python scripts/check_targets.py $(PROFILE)
 endif
+
+# Tests of the compat tooling (the target checker).
+compat-test:
+	uv run --locked --python 3.11 --only-group test pytest -q tests/compat
