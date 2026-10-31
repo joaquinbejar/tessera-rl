@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: MIT OR Apache-2.0
 
-.PHONY: fmt fmt-check clippy test doc readme readme-check pre-push deny check-targets compat-test
+.PHONY: fmt fmt-check clippy test doc readme readme-check pre-push deny check-targets compat-test py-entries py-test
 
 fmt:
 	cargo fmt --all
@@ -26,7 +26,7 @@ readme:
 readme-check:
 	cargo readme -r crates/tessera-rl -t ../../README.tpl --no-title --no-license --no-indent-headings | diff -u README.md -
 
-pre-push: fmt-check clippy test doc readme-check compat-test
+pre-push: fmt-check clippy test doc readme-check compat-test py-entries py-test
 
 deny:
 	cargo deny check
@@ -55,3 +55,12 @@ endif
 # Tests of the compat tooling (the target checker).
 compat-test:
 	uv run --locked --python 3.11 --only-group test pytest -q tests/compat
+
+# ADR-0041: no raw PyO3 registrations in tessera-rl-py.
+py-entries:
+	python3 scripts/check_py_entries.py
+
+# Builds the native package into the uv environment and runs the Python tests.
+py-test:
+	uv sync --locked --python 3.11
+	uv run --locked --python 3.11 pytest -q tests/python

@@ -7,6 +7,15 @@ requires-python = ">=3.11"
 license = "MIT OR Apache-2.0"
 version = "0.1.0"
 
+[build-system]
+requires = ["maturin>=1.16,<2"]
+build-backend = "maturin"
+
+[tool.maturin]
+manifest-path = "crates/tessera-rl-py/Cargo.toml"
+python-source = "python"
+module-name = "tessera_rl._native"
+
 # Development and test tools (ADR-0027 versions from compat/targets.toml).
 [dependency-groups]
 test = [
@@ -28,10 +37,11 @@ conformance = [
 ]
 
 [tool.uv]
-# The native package (maturin build backend) arrives in phase 1b B2; until
-# then uv only manages the tool environment.
-package = false
+# `uv sync` builds and installs the native package (maturin, debug profile
+# by default) next to the tool environment.
+package = true
 default-groups = ["test"]
+cache-keys = [{ file = "pyproject.toml" }, { file = "Cargo.toml" }, { file = "Cargo.lock" }, { file = "crates/**/*.rs" }, { file = "crates/**/Cargo.toml" }]
 
 # CPU wheels of PyTorch on Linux (the default index ships CUDA builds).
 [[tool.uv.index]]
