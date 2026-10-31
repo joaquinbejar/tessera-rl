@@ -2,7 +2,16 @@
 
 //! The worker gang and its epoch protocol (ADR-0005).
 //!
-//! One `run` is one epoch:
+//! # Startup
+//!
+//! Workers are spawned with fallible `Builder::spawn`; if a spawn fails,
+//! the workers already started are shut down and joined. Every worker then
+//! reports `ready` (after pinning and entering the canonical FP
+//! environment, both caught), and `Gang::new` waits for all of them: a
+//! failed worker shuts the gang down and returns a typed error, so a run
+//! can never wait for a worker that does not exist.
+//!
+//! # One epoch per `run`
 //!
 //! 1. the caller stores `pending = workers` and the job pointer (Relaxed),
 //!    then increments `epoch` with Release, which publishes both, and
@@ -16,8 +25,12 @@
 //! Waits spin for a bounded budget, then park; parking and waking happen
 //! only at these batch boundaries. `unpark` before `park` is remembered by
 //! the thread token, so a wake-up can never be lost, and spurious wake-ups
-//! just re-check the counters. A worker always decrements `pending`, even
-//! after a panic in the job, so the caller can never hang.
+//! just re-check the counters. `run` takes `&mut self`, so only one epoch
+//! is ever in flight.
+//!
+//! A worker always decrements `pending`, even after a panic in the job. A
+//! panic anywhere else in its loop marks the gang dead (after
+//! decrementing), and later runs return an error instead of waiting.
 //!
 //! Shutdown (on drop) sets `shutdown` and increments `epoch` with Release,
 //! unparks and joins every worker.
@@ -33,6 +46,8 @@
 //! - Workers run concurrently, so `F: Sync`; the job itself is responsible
 //!   for giving each worker disjoint data (see `engine::buffer`).
 
+use core::num::NonZeroUsize;
+
 use crate::error::EngineError;
 
 use super::affinity::pin_current;
@@ -44,11 +59,25 @@ use super::sync::{
 #[derive(Debug, Clone)]
 pub(crate) struct GangOptions {
     /// Number of workers.
-    pub(crate) workers: usize,
-    /// Spins before parking (about 20 microseconds by default).
+    pub(crate) workers: NonZeroUsize,
+    /// Spins before parking.
     pub(crate) spin: u32,
-    /// Logical cores to pin workers to, in order; `None` leaves them unpinned.
+    /// Logical cores to pin workers to, in order (already validated);
+    /// `None` leaves them unpinned.
     pub(crate) pin: Option<Vec<usize>>,
+    /// Test-only fault injection.
+    #[cfg(test)]
+    pub(crate) faults: Faults,
+}
+
+/// Test-only fault injection for startup.
+#[cfg(test)]
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct Faults {
+    /// Fail the spawn of this worker.
+    pub(crate) spawn: Option<usize>,
+    /// Panic during the startup of this worker.
+    pub(crate) startup: Option<usize>,
 }
 
 struct Job {
@@ -62,8 +91,12 @@ struct Shared {
     pending: AtomicUsize,
     shutdown: AtomicBool,
     panicked: AtomicBool,
+    dead: AtomicBool,
+    ready: AtomicUsize,
+    failed: AtomicUsize,
     fp_resets: AtomicU64,
     job: AtomicPtr<Job>,
+    creator: thread::Thread,
     spin: u32,
 }
 
@@ -109,8 +142,22 @@ unsafe fn trampoline<F: Fn(usize) + Sync>(data: *const (), worker: usize) {
     f(worker);
 }
 
+/// Waits until `done()` holds: a bounded spin, then parking.
+fn wait(spin: u32, mut done: impl FnMut() -> bool) {
+    let mut spins = 0;
+    while !done() {
+        if spins < spin {
+            spins += 1;
+            spin_loop();
+        } else {
+            thread::park();
+        }
+    }
+}
+
 impl Gang {
-    /// Spawns the workers. Engines may not be nested inside a worker.
+    /// Spawns the workers and waits until every one is ready. Engines may
+    /// not be nested inside a worker.
     pub(crate) fn new(options: &GangOptions) -> Result<Self, EngineError> {
         if in_worker() {
             return Err(EngineError::NestedEngine);
@@ -120,30 +167,72 @@ impl Gang {
             pending: AtomicUsize::new(0),
             shutdown: AtomicBool::new(false),
             panicked: AtomicBool::new(false),
+            dead: AtomicBool::new(false),
+            ready: AtomicUsize::new(0),
+            failed: AtomicUsize::new(usize::MAX),
             fp_resets: AtomicU64::new(0),
             job: AtomicPtr::new(core::ptr::null_mut()),
+            creator: thread::current(),
             spin: options.spin,
         });
-        let workers = (0..options.workers)
-            .map(|w| {
-                let shared = Arc::clone(&shared);
-                let core = options.pin.as_ref().and_then(|cores| cores.get(w).copied());
-                let handle = thread::spawn(move || worker_loop(&shared, w, core));
-                (handle.thread().clone(), Some(handle))
-            })
-            .collect();
-        Ok(Self { shared, workers })
+        // Dropping `gang` on any early return shuts down and joins the
+        // workers spawned so far (the construction guard).
+        let mut gang = Self {
+            shared,
+            workers: Vec::with_capacity(options.workers.get()),
+        };
+        for w in 0..options.workers.get() {
+            let shared = Arc::clone(&gang.shared);
+            let core = options.pin.as_ref().and_then(|cores| cores.get(w).copied());
+            #[cfg(test)]
+            let faults = options.faults;
+            #[cfg(test)]
+            if faults.spawn == Some(w) {
+                return Err(EngineError::WorkerStartup { worker: w });
+            }
+            let spawned = thread::Builder::new()
+                .name(format!("tessera-worker-{w}"))
+                .spawn(move || {
+                    #[cfg(test)]
+                    let fail = faults.startup == Some(w);
+                    #[cfg(not(test))]
+                    let fail = false;
+                    worker_main(&shared, w, core, fail);
+                });
+            match spawned {
+                Ok(handle) => gang.workers.push((handle.thread().clone(), Some(handle))),
+                Err(_) => return Err(EngineError::WorkerStartup { worker: w }),
+            }
+        }
+        let shared = Arc::clone(&gang.shared);
+        let n = gang.workers.len();
+        // Acquire: pairs with each worker's Release on `ready`.
+        wait(shared.spin, || shared.ready.load(Ordering::Acquire) == n);
+        let failed = shared.failed.load(Ordering::Relaxed);
+        if failed != usize::MAX {
+            drop(gang);
+            return Err(EngineError::WorkerStartup { worker: failed });
+        }
+        Ok(gang)
+    }
+
+    /// Number of workers.
+    pub(crate) fn workers(&self) -> usize {
+        self.workers.len()
     }
 
     /// Runs `f(worker)` on every worker and waits for all of them. Returns
-    /// `true` if any call panicked.
-    pub(crate) fn run<F: Fn(usize) + Sync>(&self, f: &F) -> bool {
+    /// whether any call panicked, or an error if a worker died earlier.
+    pub(crate) fn run<F: Fn(usize) + Sync>(&mut self, f: &F) -> Result<bool, EngineError> {
+        let shared = &*self.shared;
+        if shared.dead.load(Ordering::Acquire) {
+            return Err(EngineError::WorkerDied);
+        }
         let job = Job {
             call: trampoline::<F>,
             data: core::ptr::from_ref(f).cast::<()>(),
             waker: thread::current(),
         };
-        let shared = &*self.shared;
         shared.panicked.store(false, Ordering::Relaxed);
         shared.pending.store(self.workers.len(), Ordering::Relaxed);
         shared
@@ -154,17 +243,9 @@ impl Gang {
         for (handle, _) in &self.workers {
             handle.unpark();
         }
-        let mut spins = 0;
         // Acquire: sees every worker's writes once all have decremented.
-        while shared.pending.load(Ordering::Acquire) != 0 {
-            if spins < shared.spin {
-                spins += 1;
-                spin_loop();
-            } else {
-                thread::park();
-            }
-        }
-        shared.panicked.load(Ordering::Relaxed)
+        wait(shared.spin, || shared.pending.load(Ordering::Acquire) == 0);
+        Ok(shared.panicked.load(Ordering::Relaxed))
     }
 
     /// FP environment resets made by workers at batch starts (ADR-0037).
@@ -183,45 +264,54 @@ impl Drop for Gang {
             if let Some(join) = join.take()
                 && join.join().is_err()
             {
-                tracing::error!("an engine worker thread panicked outside a job");
+                tracing::error!("an engine worker thread ended with a panic");
             }
         }
     }
 }
 
-fn worker_loop(shared: &Shared, worker: usize, core: Option<usize>) {
-    #[cfg(not(loom))]
-    IN_WORKER.with(|flag| flag.set(true));
-    if let Some(core) = core {
-        pin_current(core);
+/// Startup, then the epoch loop. A panic outside a job marks the gang dead.
+fn worker_main(shared: &Shared, worker: usize, core: Option<usize>, fail: bool) {
+    let started = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        assert!(!fail, "injected worker startup failure");
+        #[cfg(not(loom))]
+        IN_WORKER.with(|flag| flag.set(true));
+        if let Some(core) = core {
+            pin_current(core);
+        }
+        #[cfg(not(loom))]
+        tessera_rl_num::fp::establish_canonical();
+    }));
+    if started.is_err() {
+        shared.failed.store(worker, Ordering::Relaxed);
     }
-    #[cfg(not(loom))]
-    tessera_rl_num::fp::establish_canonical();
+    // Release: publishes `failed`; the creator waits for every worker.
+    shared.ready.fetch_add(1, Ordering::Release);
+    shared.creator.unpark();
+    if started.is_err() {
+        return;
+    }
     let mut seen = 0;
     loop {
-        let mut spins = 0;
-        let epoch = loop {
+        let mut epoch = seen;
+        wait(shared.spin, || {
             // Acquire: pairs with the caller's Release increment.
-            let epoch = shared.epoch.load(Ordering::Acquire);
-            if epoch != seen {
-                break epoch;
-            }
-            if spins < shared.spin {
-                spins += 1;
-                spin_loop();
-            } else {
-                thread::park();
-            }
-        };
+            epoch = shared.epoch.load(Ordering::Acquire);
+            epoch != seen
+        });
         seen = epoch;
         if shared.shutdown.load(Ordering::Relaxed) {
             return;
         }
-        #[cfg(not(loom))]
-        if tessera_rl_num::fp::ensure_canonical() {
-            shared.fp_resets.fetch_add(1, Ordering::Relaxed);
+        // Everything that can panic runs inside `run_job`'s catch, before
+        // its decrement; this outer catch is a backstop that marks the gang
+        // dead so later runs fail instead of waiting for this worker.
+        let alive =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run_job(shared, worker)));
+        if alive.is_err() {
+            shared.dead.store(true, Ordering::Release);
+            return;
         }
-        run_job(shared, worker);
     }
 }
 
@@ -236,6 +326,10 @@ fn run_job(shared: &Shared, worker: usize) {
     let waker = job.waker.clone();
     let (call, data) = (job.call, job.data);
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        #[cfg(not(loom))]
+        if tessera_rl_num::fp::ensure_canonical() {
+            shared.fp_resets.fetch_add(1, Ordering::Relaxed);
+        }
         // SAFETY: `call` is `trampoline::<F>` and `data` the matching `&F`,
         // valid for this epoch (module invariants).
         unsafe { call(data, worker) };
@@ -251,14 +345,18 @@ fn run_job(shared: &Shared, worker: usize) {
 
 #[cfg(test)]
 mod tests {
-    use super::{Gang, GangOptions};
+    use core::num::NonZeroUsize;
+
+    use super::{Faults, Gang, GangOptions};
+    use crate::error::EngineError;
     use crate::sys::sync::{Arc, AtomicUsize, Ordering};
 
     fn options(workers: usize) -> GangOptions {
         GangOptions {
-            workers,
+            workers: NonZeroUsize::new(workers).unwrap(),
             spin: if cfg!(loom) { 0 } else { 64 },
             pin: None,
+            faults: Faults::default(),
         }
     }
 
@@ -272,21 +370,21 @@ mod tests {
     /// Runs `epochs` jobs on `workers` workers and checks every worker ran
     /// each one and saw the writes of the previous epoch.
     fn epochs(workers: usize, epochs: usize) {
-        let gang = Gang::new(&options(workers)).unwrap();
+        let mut gang = Gang::new(&options(workers)).unwrap();
         let count = Arc::new(AtomicUsize::new(0));
         for epoch in 1..=epochs {
             let c = Arc::clone(&count);
-            let panicked = gang.run(&move |_w: usize| {
-                c.fetch_add(1, Ordering::Relaxed);
-            });
+            let panicked = gang
+                .run(&move |_w: usize| {
+                    c.fetch_add(1, Ordering::Relaxed);
+                })
+                .unwrap();
             assert!(!panicked);
             assert_eq!(count.load(Ordering::Relaxed), workers * epoch);
         }
     }
 
-    // loom explores every interleaving, so its models stay small: one
-    // worker over two epochs (epoch reuse, lost wake-ups of both sides) and
-    // two workers over one epoch (the pending count).
+    // loom explores every interleaving, so its models stay small.
     #[test]
     fn test_gang_one_worker_two_epochs() {
         model(|| epochs(1, 2));
@@ -295,6 +393,20 @@ mod tests {
     #[test]
     fn test_gang_two_workers_one_epoch() {
         model(|| epochs(2, 1));
+    }
+
+    #[test]
+    fn test_gang_two_workers_two_epochs() {
+        model(|| epochs(2, 2));
+    }
+
+    #[test]
+    fn test_gang_drop_right_after_run() {
+        model(|| {
+            let mut gang = Gang::new(&options(2)).unwrap();
+            assert!(!gang.run(&|_w: usize| {}).unwrap());
+            drop(gang);
+        });
     }
 
     #[cfg(not(loom))]
@@ -314,24 +426,69 @@ mod tests {
     #[test]
     fn test_gang_worker_panic_is_reported_and_does_not_hang() {
         model(|| {
-            let gang = Gang::new(&options(1)).unwrap();
-            assert!(gang.run(&|_w: usize| panic!("injected worker panic")));
-            assert!(!gang.run(&|_w: usize| {}));
+            let mut gang = Gang::new(&options(1)).unwrap();
+            assert!(
+                gang.run(&|_w: usize| panic!("injected worker panic"))
+                    .unwrap()
+            );
+            assert!(!gang.run(&|_w: usize| {}).unwrap());
+        });
+    }
+
+    /// Runs `f` on a helper thread and fails if it does not finish in time,
+    /// so a hang shows up as a failure instead of a stuck test run.
+    #[cfg(not(loom))]
+    fn within_timeout(f: impl FnOnce() + Send + 'static) {
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            f();
+            let _ = tx.send(());
+        });
+        assert!(
+            rx.recv_timeout(std::time::Duration::from_secs(20)).is_ok(),
+            "timed out"
+        );
+    }
+
+    #[cfg(not(loom))]
+    #[test]
+    fn test_gang_startup_failure_is_an_error_not_a_hang() {
+        within_timeout(|| {
+            let mut opts = options(3);
+            opts.faults.startup = Some(1);
+            assert!(matches!(
+                Gang::new(&opts),
+                Err(EngineError::WorkerStartup { .. })
+            ));
+        });
+    }
+
+    #[cfg(not(loom))]
+    #[test]
+    fn test_gang_failed_spawn_cleans_up_started_workers() {
+        within_timeout(|| {
+            let mut opts = options(3);
+            opts.faults.spawn = Some(1);
+            assert_eq!(
+                Gang::new(&opts).map(|_| ()),
+                Err(EngineError::WorkerStartup { worker: 1 })
+            );
         });
     }
 
     #[cfg(not(loom))]
     #[test]
     fn test_gang_rejects_nested_engines() {
-        let gang = Gang::new(&options(1)).unwrap();
+        let mut gang = Gang::new(&options(1)).unwrap();
         let nested = std::sync::Mutex::new(None);
         gang.run(&|_w: usize| {
             let result = Gang::new(&options(1)).map(|_| ());
             if let Ok(mut slot) = nested.lock() {
                 *slot = Some(result);
             }
-        });
+        })
+        .unwrap();
         let result = nested.lock().ok().and_then(|mut s| s.take());
-        assert_eq!(result, Some(Err(crate::error::EngineError::NestedEngine)));
+        assert_eq!(result, Some(Err(EngineError::NestedEngine)));
     }
 }

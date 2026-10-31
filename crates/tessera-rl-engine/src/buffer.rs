@@ -29,6 +29,7 @@ use core::ops::Range;
 
 use tessera_rl_core::{Bool8, Environment};
 
+use crate::error::EngineError;
 use crate::layout::MAX_LEAVES;
 use crate::outputs::OutputsView;
 use crate::pool::Chunk;
@@ -58,8 +59,18 @@ impl<T> Raw<T> {
     /// epoch, and `instances` is a range no other live view covers.
     #[expect(unsafe_code, reason = "audited module: disjoint chunk views")]
     unsafe fn view<'a>(self, instances: &Range<usize>, per: usize) -> &'a mut [T] {
-        let start = instances.start.saturating_mul(per).min(self.len);
-        let end = instances.end.saturating_mul(per).min(self.len);
+        // Products stay below the buffer length for valid ranges; an
+        // overflow can only come from an out-of-range request, which is
+        // clamped to the end of the buffer (an empty view).
+        let start = instances
+            .start
+            .checked_mul(per)
+            .map_or(self.len, |s| s.min(self.len));
+        let end = instances
+            .end
+            .checked_mul(per)
+            .map_or(self.len, |e| e.min(self.len))
+            .max(start);
         // SAFETY: `start <= len`, so the offset stays inside (or one past)
         // the live allocation (invariant 1).
         let first = unsafe { self.ptr.add(start) };
@@ -296,8 +307,12 @@ impl<E: Environment> RawChunk<E> {
 
 /// The instances of chunk `c`.
 pub(crate) fn chunk_range(c: usize, size: usize, instances: usize) -> Range<usize> {
-    let start = c.saturating_mul(size).min(instances);
-    start..start.saturating_add(size).min(instances)
+    // Overflow means `c` is past the last chunk: an empty range at the end.
+    let start = c.checked_mul(size).map_or(instances, |s| s.min(instances));
+    start
+        ..start
+            .checked_add(size)
+            .map_or(instances, |e| e.min(instances))
 }
 
 /// Runs `f` on every chunk of `size` instances of `all`, spread over the
@@ -305,26 +320,31 @@ pub(crate) fn chunk_range(c: usize, size: usize, instances: usize) -> Range<usiz
 /// chunk; a panic in it is caught per chunk. Returns `true` if any chunk
 /// panicked. `dh` and `ch` are the discrete and continuous heads per agent.
 pub(crate) fn par_chunks<E, F>(
-    gang: &Gang,
-    workers: usize,
+    gang: &mut Gang,
     all: Chunk<'_, E>,
     size: usize,
     heads: (usize, usize),
     f: F,
-) -> bool
+) -> Result<bool, EngineError>
 where
     E: Environment,
     E::Header: Send,
     E::State: Send,
     F: Fn(&mut Chunk<'_, E>, usize) + Sync,
 {
+    // The worker count comes from the gang itself, so the assignment below
+    // is disjoint by construction (invariant 2).
+    let workers = gang.workers();
     let raw = RawChunk::new(all, heads.0, heads.1);
     let chunks = raw.instances.div_ceil(size.max(1));
     let panicked = AtomicBool::new(false);
     let job = |w: usize| {
-        for c in (w..chunks).step_by(workers.max(1)) {
+        if w >= workers {
+            return;
+        }
+        for c in (w..chunks).step_by(workers) {
             let range = chunk_range(c, size, raw.instances);
-            debug_assert!(c % workers.max(1) == w, "chunk {c} is not worker {w}'s");
+            debug_assert!(c % workers == w, "chunk {c} is not worker {w}'s");
             // SAFETY: chunk `c` belongs to worker `w` only, and chunk ranges
             // do not overlap (invariant 2); the pool is borrowed for the
             // whole epoch (invariant 3) and this view is dropped at the end
@@ -340,13 +360,187 @@ where
             }
         }
     };
-    let gang_panicked = gang.run(&job);
-    gang_panicked || panicked.load(Ordering::Relaxed)
+    let gang_panicked = gang.run(&job)?;
+    Ok(gang_panicked || panicked.load(Ordering::Relaxed))
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{Raw, chunk_range};
+    use tessera_rl_core::io::{Actions, ObsWriter};
+    use tessera_rl_core::space::Space;
+    use tessera_rl_core::{
+        AgentSlot, Bool8, EnvConfig, Environment, NoAdaptive, RecordHeader, SpaceError, StateInit,
+        StepOut, Tier,
+    };
+    use tessera_rl_num::rng::{ObsRng, StepRng};
+
+    use super::{Raw, RawChunk, chunk_range};
+    use crate::layout::Leaf;
+    use crate::outputs::Outputs;
+    use crate::pool::Chunk;
+
+    /// A minimal environment so a real `Chunk` can be built in unit tests.
+    struct Probe;
+
+    #[derive(Debug, Clone, Copy, Default, PartialEq)]
+    #[repr(C)]
+    struct ProbeState(u32);
+
+    impl StateInit for ProbeState {
+        fn state_default() -> Self {
+            Self(0)
+        }
+    }
+
+    impl tessera_rl_core::encoding::Canonical for ProbeState {
+        const ENCODED_LEN: usize = 4;
+        fn encode<S: tessera_rl_core::encoding::Sink>(
+            &self,
+            out: &mut tessera_rl_core::encoding::Encoder<S>,
+        ) {
+            self.0.encode(out);
+        }
+        fn decode(
+            input: &mut tessera_rl_core::encoding::Decoder<'_>,
+        ) -> Result<Self, tessera_rl_core::DecodeError> {
+            u32::decode(input).map(Self)
+        }
+    }
+
+    impl tessera_rl_core::EnvState for ProbeState {}
+
+    struct ProbeConfig;
+
+    impl EnvConfig for ProbeConfig {}
+
+    impl Environment for Probe {
+        type State = ProbeState;
+        type Config = ProbeConfig;
+        type Obs = ();
+        type Action = ();
+        type Header = RecordHeader<2, NoAdaptive>;
+        const MAX_AGENTS: usize = 2;
+        const TIER: Tier = Tier::CrossPlatform;
+        fn observation_space(_: &ProbeConfig) -> Result<Space, SpaceError> {
+            Ok(Space::Discrete { n: 2 })
+        }
+        fn action_space(_: &ProbeConfig) -> Result<Space, SpaceError> {
+            Ok(Space::Discrete { n: 2 })
+        }
+        fn reset(_: &ProbeConfig, _: &mut StepRng, _: &mut ProbeState) {}
+        fn step(
+            _: &ProbeConfig,
+            _: &mut ProbeState,
+            _: &Actions<'_, ()>,
+            _: &mut StepRng,
+            _: &mut StepOut<'_>,
+        ) {
+        }
+        fn observe(
+            _: &ProbeConfig,
+            _: &ProbeState,
+            _: AgentSlot,
+            _: &mut ObsRng,
+            _: &mut ObsWriter<'_, '_, ()>,
+        ) {
+        }
+    }
+
+    /// Two threads write through the views of disjoint, ragged chunks into
+    /// every buffer family (run under Miri in the nightly job); every
+    /// element ends up written by exactly its owner, and empty optional
+    /// buffers give empty views.
+    #[test]
+    #[expect(unsafe_code, reason = "exercises the audited views")]
+    fn test_raw_chunk_views_cover_every_buffer_from_two_threads() {
+        const N: usize = 7;
+        let leaves = [Leaf { bytes: 3 }, Leaf { bytes: 1 }];
+        let mut outputs = Outputs::new(N, 2, &leaves, true, 2).unwrap();
+        let mut headers = vec![RecordHeader::<2, NoAdaptive>::state_default(); N];
+        let mut states = vec![ProbeState(0); N];
+        let mut discrete = vec![0i32; N * 2];
+        let mut continuous: Vec<f32> = Vec::new();
+        let mut penalties: Vec<f32> = Vec::new();
+        let mut penalized: Vec<Bool8> = Vec::new();
+        let all = Chunk::<Probe> {
+            headers: &mut headers,
+            states: &mut states,
+            discrete: &mut discrete,
+            continuous: &mut continuous,
+            penalties: &mut penalties,
+            penalized: &mut penalized,
+            outputs: outputs.view_all(),
+        };
+        let raw = RawChunk::<Probe>::new(all, 1, 0);
+        // Size 3 over 7 instances: chunks 0..3, 3..6 and the ragged 6..7.
+        std::thread::scope(|scope| {
+            for w in 0..2usize {
+                let raw = &raw;
+                scope.spawn(move || {
+                    for c in (w..3).step_by(2) {
+                        let range = chunk_range(c, 3, N);
+                        // SAFETY: worker `w` owns chunk `c`; chunks are
+                        // disjoint and the buffers outlive the scope.
+                        let chunk = unsafe { raw.chunk(&range) };
+                        let mark = u32::try_from(w + 1).unwrap();
+                        for s in chunk.states.iter_mut() {
+                            s.0 = mark;
+                        }
+                        for h in chunk.headers.iter_mut() {
+                            h.engine.episode_steps = mark;
+                        }
+                        chunk.discrete.fill(i32::try_from(mark).unwrap());
+                        assert!(chunk.continuous.is_empty() && chunk.penalties.is_empty());
+                        let out = chunk.outputs;
+                        for leaf in out
+                            .observations
+                            .into_iter()
+                            .chain(out.terminal_observations)
+                        {
+                            leaf.fill(u8::try_from(mark).unwrap());
+                        }
+                        #[expect(clippy::cast_precision_loss, reason = "tiny marks")]
+                        let f = mark as f32;
+                        out.rewards.fill(f);
+                        out.episode_return.fill(f);
+                        out.episode_length.fill(f);
+                        out.episode_illegal_actions.fill(f);
+                        out.generations.fill(mark);
+                        for flags in [
+                            out.agent_terminated,
+                            out.agent_truncated,
+                            out.died,
+                            out.spawned,
+                            out.alive,
+                            out.acting,
+                            out.episode_terminated,
+                            out.episode_truncated,
+                            out.masks,
+                        ] {
+                            flags.fill(Bool8::TRUE);
+                        }
+                    }
+                });
+            }
+        });
+        let owner = |i: usize| u32::try_from((i / 3) % 2 + 1).unwrap();
+        for i in 0..N {
+            assert_eq!(states[i].0, owner(i));
+            assert_eq!(headers[i].engine.episode_steps, owner(i));
+            assert_eq!(
+                &discrete[i * 2..i * 2 + 2],
+                &[i32::try_from(owner(i)).unwrap(); 2]
+            );
+            assert_eq!(&outputs.generations[i * 2..i * 2 + 2], &[owner(i); 2]);
+        }
+        assert!(outputs.masks.iter().all(|m| m.get()));
+        assert!(outputs.episode_truncated.iter().all(|m| m.get()));
+        let first_leaf = &outputs.observations[0];
+        for i in 0..N {
+            let row = &first_leaf[i * 6..(i + 1) * 6];
+            assert!(row.iter().all(|&b| u32::from(b) == owner(i)));
+        }
+    }
 
     /// Threadless check of the raw views (run under Miri in the nightly
     /// job): disjoint views of one buffer live at the same time, writes go

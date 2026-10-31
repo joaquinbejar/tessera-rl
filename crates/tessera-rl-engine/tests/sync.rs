@@ -169,3 +169,19 @@ fn test_workers_run_in_the_canonical_fp_environment() {
     p.reset_all(Reseed::Keep).unwrap();
     assert_eq!(p.fp_resets(), 0);
 }
+
+#[test]
+fn test_cpu_set_rejects_core_ids_the_os_does_not_report() {
+    let p = pool(AutoReset::NextStep, None, CountConfig::default());
+    let options = SyncOptions {
+        cpu_set: Some(vec![usize::MAX]),
+        ..SyncOptions::new(NonZeroUsize::new(1).unwrap())
+    };
+    assert!(matches!(
+        p.with_workers(options),
+        Err(EngineError::Options {
+            option: "cpu_set",
+            ..
+        })
+    ));
+}

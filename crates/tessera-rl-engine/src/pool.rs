@@ -26,7 +26,7 @@ use crate::masks::{IllegalActionPolicy, MaskProvider, Masked, NoMasks};
 use crate::options::{AutoReset, PoolOptions, SyncOptions};
 use crate::outputs::{Outputs, OutputsView};
 use crate::registry::Registration;
-use crate::sys::{Gang, GangOptions};
+use crate::sys::{Gang, GangOptions, available_cores};
 use crate::validate::{ActionInput, check_and_copy_actions, check_ids};
 
 /// Whether an entry point is accepted on a poisoned pool (ADR-0028).
@@ -232,6 +232,7 @@ where
     /// worker, or [`EngineError::Options`] for an invalid `cpu_set`.
     pub fn with_workers(mut self, options: SyncOptions) -> Result<Self, EngineError> {
         let workers = options.workers.get();
+        let available = available_cores();
         let (registration, others) = Registration::register();
         let pin = match options.cpu_set {
             Some(cores) if cores.len() < workers => {
@@ -240,8 +241,29 @@ where
                     reason: "needs one core per worker",
                 });
             }
-            Some(cores) => Some(cores),
-            None if others == 0 => Some((0..workers).collect()),
+            Some(cores) => {
+                // Only ids the OS reports (and, on Windows, below 64).
+                let known = |id: &usize| available.as_ref().is_some_and(|a| a.contains(id));
+                if !cores.iter().all(known) {
+                    return Err(EngineError::Options {
+                        option: "cpu_set",
+                        reason: "contains a core id the OS does not report",
+                    });
+                }
+                Some(cores)
+            }
+            None if others == 0 => match available {
+                Some(cores) if cores.len() >= workers => {
+                    Some(cores.into_iter().take(workers).collect())
+                }
+                _ => {
+                    tracing::warn!(
+                        workers,
+                        "fewer reported cores than workers; workers run unpinned"
+                    );
+                    None
+                }
+            },
             None => {
                 tracing::warn!(
                     others,
@@ -251,9 +273,11 @@ where
             }
         };
         let gang = Gang::new(&GangOptions {
-            workers,
+            workers: options.workers,
             spin: options.spin,
             pin,
+            #[cfg(test)]
+            faults: crate::sys::Faults::default(),
         })?;
         self.sync = Some(SyncRuntime {
             gang,
@@ -421,9 +445,9 @@ where
         if let Some(rt) = sync {
             let heads = (layout.discrete.len(), layout.continuous.len());
             let size = chunk_size(options);
-            let panicked = par_chunks(&rt.gang, rt.workers, all, size, heads, |chunk, first| {
+            let panicked = par_chunks(&mut rt.gang, all, size, heads, |chunk, first| {
                 reset_chunk::<E, M>(cfg, authority, chunk, reseed, first);
-            });
+            })?;
             if panicked {
                 *poisoned = true;
                 return Err(EngineError::Panicked);
@@ -653,9 +677,9 @@ where
         if let Some(rt) = sync {
             let heads = (layout.discrete.len(), layout.continuous.len());
             let size = chunk_size(options);
-            let panicked = par_chunks(&rt.gang, rt.workers, all, size, heads, |chunk, _| {
+            let panicked = par_chunks(&mut rt.gang, all, size, heads, |chunk, _| {
                 step_chunk::<E, M>(&ctx, chunk);
-            });
+            })?;
             if panicked {
                 *poisoned = true;
                 return Err(EngineError::Panicked);
