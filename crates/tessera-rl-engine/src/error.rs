@@ -89,7 +89,52 @@ pub enum EngineError {
         /// The value.
         value: f32,
     },
-    /// The instance's episode ended and it has not been reset.
+    /// The pool is poisoned after a panic in environment code; only a full
+    /// reset (or, later, a full restore) or dropping the pool is accepted
+    /// (ADR-0028).
+    #[error("the pool is poisoned by an earlier panic; reset all instances to recover")]
+    Poisoned,
+    /// Environment code panicked during this call. The pool is now
+    /// poisoned; there is no rollback.
+    #[error("environment code panicked; the pool is poisoned")]
+    Panicked,
+    /// A required action is valid but illegal under the current mask
+    /// (`check_actions`, and every step with `debug-checks`).
+    #[error(
+        "instance {instance}, agent {agent}, head {head}: action {value} is illegal under the mask"
+    )]
+    IllegalAction {
+        /// Instance.
+        instance: u32,
+        /// Agent slot.
+        agent: u16,
+        /// Head.
+        head: u32,
+        /// The value.
+        value: i32,
+    },
+    /// The mask buffer would exceed the pool's mask budget (SPEC 11.3).
+    #[error("mask buffer needs {bytes} bytes, over the budget of {budget}")]
+    MaskBudgetExceeded {
+        /// Bytes needed (`u64::MAX` on overflow).
+        bytes: u64,
+        /// The budget.
+        budget: u64,
+    },
+    /// With `debug-checks`, an invalid agent event: the environment spawned
+    /// an agent on a slot that was alive or died in the same step (SPEC
+    /// 9.1), or reported the death of an agent that was already dead. This
+    /// is an environment bug (or an inconsistent imported record): the pool
+    /// is poisoned.
+    #[error("instance {instance}: invalid agent event on agent slot {agent}")]
+    InvalidAgentEvent {
+        /// The instance.
+        instance: u32,
+        /// The agent slot.
+        agent: u32,
+    },
+    /// The instance has not been reset yet, or its episode ended in
+    /// `Disabled` auto-reset mode.
     #[error("instance {id} is pending reset")]
     PendingReset {
         /// The id.

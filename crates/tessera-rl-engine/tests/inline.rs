@@ -14,7 +14,7 @@ use core::num::NonZeroU32;
 
 use common::{CountConfig, Counter};
 use tessera_rl_core::{Bool8, StateHash};
-use tessera_rl_engine::{ActionInput, EngineError, EnvPool, PoolOptions, Reseed};
+use tessera_rl_engine::{ActionInput, AutoReset, EngineError, EnvPool, PoolOptions, Reseed};
 use tessera_rl_num::identity::{LogicalId, Seed};
 
 fn pool(n: u32, seed: u64) -> EnvPool<Counter> {
@@ -188,7 +188,11 @@ fn test_reset_rejects_duplicate_and_unknown_ids_and_bad_seed_lists() {
 
 #[test]
 fn test_episode_terminates_and_sets_flags_and_stats() {
-    let mut p = pool(1, 2);
+    let options = PoolOptions {
+        auto_reset: AutoReset::Disabled,
+        ..PoolOptions::new(NonZeroU32::MIN, Seed::new(2))
+    };
+    let mut p = EnvPool::<Counter>::new(CountConfig::default(), options).unwrap();
     p.reset_all(Reseed::Keep).unwrap();
     for _ in 0..4 {
         let out = p.step(actions(&[1, 1])).unwrap();
@@ -316,4 +320,120 @@ fn test_set_lineage_applies_immediately_in_a_running_episode() {
         differ |= hashes(&p, 2)[0] != hashes(&p, 2)[1];
     }
     assert!(differ);
+}
+
+fn spawn_pool(cfg: CountConfig) -> EnvPool<Counter> {
+    EnvPool::<Counter>::new(cfg, PoolOptions::new(NonZeroU32::MIN, Seed::new(4))).unwrap()
+}
+
+/// SPEC 9.1: a spawn on a dying or alive slot is never applied; without
+/// `debug-checks` it is ignored and counted.
+#[cfg(not(feature = "debug-checks"))]
+#[test]
+fn test_invalid_agent_events_are_ignored_and_counted() {
+    let cfg = CountConfig {
+        kill_at: 2,
+        spawn_when_dying: true,
+        spawn_alive_at: 2,
+        length: 3,
+        ..CountConfig::default()
+    };
+    let mut p = spawn_pool(cfg);
+    p.reset_all(Reseed::Keep).unwrap();
+    // Step 1: agent 1 dies and asks to respawn in the same step.
+    let out = p.step(actions(&[0, 2])).unwrap();
+    assert_eq!(out.alive(), [Bool8::TRUE, Bool8::FALSE]);
+    assert_eq!(out.generations(), [0, 0]);
+    let header = p.header(0).unwrap();
+    assert_eq!(header.agents[1].invalid_agent_events, 1);
+    // Step 2: agent 0 is alive and asks to spawn.
+    let out = p.step(actions(&[0, 0])).unwrap();
+    assert_eq!(out.generations(), [0, 0]);
+    assert_eq!(p.header(0).unwrap().agents[0].invalid_agent_events, 1);
+    // Step 3 ends the episode: the statistic sums both.
+    let out = p.step(actions(&[0, 0])).unwrap();
+    assert_eq!(out.episode_invalid_agent_events(), [2.0]);
+    // Counters restart with the episode.
+    p.reset_all(Reseed::Keep).unwrap();
+    assert!(
+        p.header(0)
+            .unwrap()
+            .agents
+            .iter()
+            .all(|r| r.invalid_agent_events == 0)
+    );
+}
+
+/// With `debug-checks` an invalid spawn is an environment bug: the call
+/// fails with a typed error and the pool is poisoned.
+#[cfg(feature = "debug-checks")]
+#[test]
+fn test_invalid_spawn_fails_and_poisons_under_debug_checks() {
+    for cfg in [
+        CountConfig {
+            kill_at: 2,
+            spawn_when_dying: true,
+            ..CountConfig::default()
+        },
+        CountConfig {
+            spawn_alive_at: 1,
+            ..CountConfig::default()
+        },
+    ] {
+        let dying = cfg.spawn_when_dying;
+        let mut p = spawn_pool(cfg);
+        p.reset_all(Reseed::Keep).unwrap();
+        let agent = u32::from(dying);
+        assert_eq!(
+            p.step(actions(&[0, 2])).map(|_| ()),
+            Err(EngineError::InvalidAgentEvent { instance: 0, agent })
+        );
+        assert!(p.is_poisoned());
+    }
+}
+
+/// The death of an agent that is already dead is an invalid agent event:
+/// never applied (no second `terminated` flag), counted without
+/// `debug-checks`.
+#[cfg(not(feature = "debug-checks"))]
+#[test]
+fn test_death_of_a_dead_agent_is_ignored_and_counted() {
+    let cfg = CountConfig {
+        kill_at: 2,
+        die_twice: true,
+        length: 3,
+        ..CountConfig::default()
+    };
+    let mut p = spawn_pool(cfg);
+    p.reset_all(Reseed::Keep).unwrap();
+    let out = p.step(actions(&[0, 2])).unwrap();
+    assert_eq!(out.agent_terminated(), [Bool8::FALSE, Bool8::TRUE]);
+    let out = p.step(actions(&[0, 0])).unwrap();
+    assert_eq!(out.agent_terminated(), [Bool8::FALSE, Bool8::FALSE]);
+    assert_eq!(out.alive(), [Bool8::TRUE, Bool8::FALSE]);
+    assert_eq!(p.header(0).unwrap().agents[1].invalid_agent_events, 1);
+    let out = p.step(actions(&[0, 0])).unwrap();
+    assert_eq!(out.episode_invalid_agent_events(), [2.0]);
+}
+
+/// With `debug-checks` it fails with a typed error and poisons the pool.
+#[cfg(feature = "debug-checks")]
+#[test]
+fn test_death_of_a_dead_agent_fails_and_poisons_under_debug_checks() {
+    let cfg = CountConfig {
+        kill_at: 2,
+        die_twice: true,
+        ..CountConfig::default()
+    };
+    let mut p = spawn_pool(cfg);
+    p.reset_all(Reseed::Keep).unwrap();
+    p.step(actions(&[0, 2])).unwrap();
+    assert_eq!(
+        p.step(actions(&[0, 0])).map(|_| ()),
+        Err(EngineError::InvalidAgentEvent {
+            instance: 0,
+            agent: 1
+        })
+    );
+    assert!(p.is_poisoned());
 }

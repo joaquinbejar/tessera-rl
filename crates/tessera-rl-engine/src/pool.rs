@@ -8,10 +8,12 @@
 //! calling thread inside `fp::with_canonical` (ADR-0037). After
 //! construction, `reset` and `step` never allocate.
 
-use tessera_rl_core::io::{Actions, ObsWriter};
+use core::marker::PhantomData;
+
+use tessera_rl_core::io::{ActionWriter, Actions, MaskWriter, ObsWriter};
 use tessera_rl_core::{
-    AdaptiveValues, AgentSlot, Bool8, EnvConfig, Environment, EpisodeEnd, RecordLayout, StateInit,
-    StepOut,
+    ActionMask, AdaptiveValues, AgentSlot, Bool8, EnvConfig, Environment, EpisodeEnd, RecordLayout,
+    StateInit, StepOut,
 };
 use tessera_rl_num::fp;
 use tessera_rl_num::identity::{LogicalId, RngIdentity, Seed, StreamId};
@@ -19,9 +21,19 @@ use tessera_rl_num::rng::{ObsRng, RngAuthority, StepRng};
 
 use crate::error::EngineError;
 use crate::layout::{ActionLayout, MAX_LEAVES, obs_leaves};
-use crate::options::PoolOptions;
+use crate::masks::{IllegalActionPolicy, MaskProvider, Masked, NoMasks};
+use crate::options::{AutoReset, PoolOptions};
 use crate::outputs::Outputs;
 use crate::validate::{ActionInput, check_and_copy_actions, check_ids};
+
+/// Whether an entry point is accepted on a poisoned pool (ADR-0028).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Poison {
+    /// Rejected with `EngineError::Poisoned`.
+    Reject,
+    /// Accepted: a full reset or restore that may clear the poison.
+    Recover,
+}
 
 /// How `reset` reseeds the instances it resets (SPEC 8.1).
 #[derive(Debug, Clone, Copy)]
@@ -38,7 +50,7 @@ pub enum Reseed<'a> {
 
 /// A pool of `num_envs` instances of `E`.
 #[derive(Debug)]
-pub struct EnvPool<E: Environment> {
+pub struct EnvPool<E: Environment, M: MaskProvider<E> = NoMasks> {
     cfg: E::Config,
     options: PoolOptions,
     headers: Vec<E::Header>,
@@ -49,15 +61,20 @@ pub struct EnvPool<E: Environment> {
     outputs: Outputs,
     seen: Vec<Bool8>,
     authority: RngAuthority,
+    poisoned: bool,
+    penalties: Vec<f32>,
+    penalized: Vec<Bool8>,
+    _masks: PhantomData<M>,
 }
 
-impl<E> EnvPool<E>
+impl<E> EnvPool<E, NoMasks>
 where
     E: Environment,
     <E::Header as RecordLayout>::Adaptive: AdaptiveValues<E::Config>,
 {
-    /// Builds a pool: validates the config, the options and the spaces, and
-    /// initializes every record. Instances need a `reset` before stepping.
+    /// Builds a pool without action masks: validates the config, the
+    /// options and the spaces, and initializes every record. Instances need
+    /// a `reset` before stepping.
     ///
     /// # Errors
     ///
@@ -66,7 +83,32 @@ where
         // Config validation, spaces, initial values: all FP-sensitive.
         fp::with_canonical(|| Self::build(cfg, options))
     }
+}
 
+impl<E> EnvPool<E, Masked>
+where
+    E: ActionMask,
+    <E::Header as RecordLayout>::Adaptive: AdaptiveValues<E::Config>,
+{
+    /// Builds a pool with action masks from `ActionMask`: masks are written
+    /// in the observation pass, and illegal actions follow
+    /// `options.illegal_action`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`EngineError`] for an invalid config, options or space.
+    pub fn with_masks(cfg: E::Config, options: PoolOptions) -> Result<Self, EngineError> {
+        // Config validation, spaces, initial values: all FP-sensitive.
+        fp::with_canonical(|| Self::build(cfg, options))
+    }
+}
+
+impl<E, M> EnvPool<E, M>
+where
+    E: Environment,
+    M: MaskProvider<E>,
+    <E::Header as RecordLayout>::Adaptive: AdaptiveValues<E::Config>,
+{
     fn build(cfg: E::Config, options: PoolOptions) -> Result<Self, EngineError> {
         const {
             assert!(
@@ -85,7 +127,36 @@ where
 
         let num_envs = usize::try_from(options.num_envs.get()).map_err(|_| too_large())?;
         let rows = num_envs.checked_mul(E::MAX_AGENTS).ok_or_else(too_large)?;
-        let outputs = Outputs::new(num_envs, E::MAX_AGENTS, &leaves).ok_or_else(too_large)?;
+        let mask_len = if M::ENABLED {
+            let len = actions
+                .discrete
+                .iter()
+                .try_fold(0usize, |acc, &n| acc.checked_add(usize::try_from(n).ok()?));
+            // Checked before any allocation (SPEC 11.3).
+            let bytes = len
+                .and_then(|len| rows.checked_mul(len))
+                .and_then(|b| u64::try_from(b).ok());
+            let budget = options.mask_budget_bytes;
+            match (len, bytes) {
+                (Some(len), Some(bytes)) if bytes <= budget => len,
+                (_, bytes) => {
+                    return Err(EngineError::MaskBudgetExceeded {
+                        bytes: bytes.unwrap_or(u64::MAX),
+                        budget,
+                    });
+                }
+            }
+        } else {
+            0
+        };
+        let outputs = Outputs::new(
+            num_envs,
+            E::MAX_AGENTS,
+            &leaves,
+            options.auto_reset == AutoReset::SameStep,
+            mask_len,
+        )
+        .ok_or_else(too_large)?;
         let adaptive = <E::Header as RecordLayout>::Adaptive::from_config(&cfg);
         let headers = (0..num_envs)
             .map(|i| {
@@ -119,7 +190,17 @@ where
             outputs,
             seen: vec![Bool8::FALSE; num_envs],
             authority: RngAuthority::engine_only(),
+            poisoned: false,
+            penalties: vec![0.0; if M::ENABLED { rows } else { 0 }],
+            penalized: vec![Bool8::FALSE; if M::ENABLED { rows } else { 0 }],
+            _masks: PhantomData,
         })
+    }
+
+    /// Whether a panic in environment code poisoned the pool (ADR-0028).
+    #[must_use]
+    pub const fn is_poisoned(&self) -> bool {
+        self.poisoned
     }
 
     /// The pool options.
@@ -140,15 +221,50 @@ where
         (self.actions.discrete.len(), self.actions.continuous.len())
     }
 
-    /// The record header of instance `id`.
+    /// The single entry path of every public method that compares floats,
+    /// runs environment code or mutates records: it applies the poison
+    /// policy, then runs `f` in the canonical FP environment (ADR-0028,
+    /// ADR-0037).
+    pub(crate) fn guarded<R>(
+        &mut self,
+        poison: Poison,
+        f: impl FnOnce(&mut Self) -> Result<R, EngineError>,
+    ) -> Result<R, EngineError> {
+        if poison == Poison::Reject && self.poisoned {
+            return Err(EngineError::Poisoned);
+        }
+        fp::with_canonical(|| f(self))
+    }
+
+    /// [`EnvPool::guarded`] for read-only methods; they are always rejected
+    /// on a poisoned pool.
+    pub(crate) fn guarded_ref<R>(
+        &self,
+        f: impl FnOnce(&Self) -> Result<R, EngineError>,
+    ) -> Result<R, EngineError> {
+        if self.poisoned {
+            return Err(EngineError::Poisoned);
+        }
+        fp::with_canonical(|| f(self))
+    }
+
+    /// The record header of instance `id`; `None` for an unknown id or a
+    /// poisoned pool, whose records may be partly written.
     #[must_use]
     pub fn header(&self, id: u32) -> Option<&E::Header> {
+        if self.poisoned {
+            return None;
+        }
         self.headers.get(usize::try_from(id).ok()?)
     }
 
-    /// The author state of instance `id`.
+    /// The author state of instance `id`; `None` for an unknown id or a
+    /// poisoned pool.
     #[must_use]
     pub fn state(&self, id: u32) -> Option<&E::State> {
+        if self.poisoned {
+            return None;
+        }
         self.states.get(usize::try_from(id).ok()?)
     }
 
@@ -158,8 +274,13 @@ where
     ///
     /// # Errors
     ///
-    /// Returns [`EngineError::InstanceOutOfRange`] for an unknown id.
+    /// Returns [`EngineError::Poisoned`] on a poisoned pool, or
+    /// [`EngineError::InstanceOutOfRange`] for an unknown id.
     pub fn set_lineage(&mut self, id: u32, lineage: LogicalId) -> Result<(), EngineError> {
+        self.guarded(Poison::Reject, |pool| pool.set_lineage_inner(id, lineage))
+    }
+
+    fn set_lineage_inner(&mut self, id: u32, lineage: LogicalId) -> Result<(), EngineError> {
         let num_envs = self.options.num_envs.get();
         let header = usize::try_from(id)
             .ok()
@@ -182,15 +303,19 @@ where
     ///
     /// Returns an [`EngineError`] if a seed list has the wrong length or an
     /// episode counter is exhausted; nothing is mutated then.
+    ///
+    /// On a poisoned pool this is the recovery path: the poison is cleared
+    /// only if every instance resets without panicking.
     pub fn reset_all(&mut self, reseed: Reseed<'_>) -> Result<&Outputs, EngineError> {
-        fp::with_canonical(|| self.reset_all_inner(reseed))?;
+        self.guarded(Poison::Recover, |pool| pool.reset_all_inner(reseed))?;
         Ok(&self.outputs)
     }
 
     fn reset_all_inner(&mut self, reseed: Reseed<'_>) -> Result<(), EngineError> {
         let n = self.headers.len();
         self.check_reset(0..n, n, reseed)?;
-        self.apply_reset(0..n, reseed);
+        self.apply_reset(0..n, reseed)?;
+        self.poisoned = false;
         Ok(())
     }
 
@@ -202,8 +327,10 @@ where
     /// Returns an [`EngineError`] for unknown or duplicate ids, a seed list
     /// of the wrong length or an exhausted episode counter; nothing is
     /// mutated then.
+    ///
+    /// Rejected with [`EngineError::Poisoned`] on a poisoned pool.
     pub fn reset(&mut self, ids: &[u32], reseed: Reseed<'_>) -> Result<&Outputs, EngineError> {
-        fp::with_canonical(|| self.reset_inner(ids, reseed))?;
+        self.guarded(Poison::Reject, |pool| pool.reset_inner(ids, reseed))?;
         Ok(&self.outputs)
     }
 
@@ -211,7 +338,7 @@ where
         check_ids(ids, &mut self.seen)?;
         let indices = ids.iter().filter_map(|&id| usize::try_from(id).ok());
         self.check_reset(indices.clone(), ids.len(), reseed)?;
-        self.apply_reset(indices, reseed);
+        self.apply_reset(indices, reseed)?;
         Ok(())
     }
 
@@ -246,16 +373,21 @@ where
         Ok(())
     }
 
-    fn apply_reset(&mut self, indices: impl Iterator<Item = usize>, reseed: Reseed<'_>) {
+    fn apply_reset(
+        &mut self,
+        indices: impl Iterator<Item = usize>,
+        reseed: Reseed<'_>,
+    ) -> Result<(), EngineError> {
         let Self {
             cfg,
             headers,
             states,
             outputs,
             authority,
+            poisoned,
             ..
         } = self;
-        fp::with_canonical(|| {
+        run_kernels(poisoned, || {
             for (k, i) in indices.enumerate() {
                 let (Some(header), Some(state)) = (headers.get_mut(i), states.get_mut(i)) else {
                     continue;
@@ -269,9 +401,72 @@ where
                 reset_one::<E>(cfg, authority, header, state, seed);
                 clear_instance(outputs, i);
                 write_agent_masks(outputs, i, header);
-                observe_instance::<E>(cfg, authority, header, state, outputs, i);
+                observe_instance::<E, M>(cfg, authority, header, state, outputs, i);
             }
-        });
+        })
+    }
+
+    /// Checks that every required action (alive, acting, not pending reset)
+    /// is legal under the current masks, without mutating anything. Always
+    /// `Ok` for pools without masks. The `debug-checks` feature runs it on
+    /// every step and rejects the call instead of replacing the actions.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`EngineError::IllegalAction`] for the first illegal action,
+    /// [`EngineError::Poisoned`] on a poisoned pool, or a validation error
+    /// for malformed actions.
+    pub fn check_actions(&self, actions: ActionInput<'_>) -> Result<(), EngineError> {
+        // Float comparisons: the same canonical environment as `step`.
+        self.guarded_ref(|pool| {
+            crate::validate::check_actions_only(
+                &pool.actions,
+                pool.options.auto_reset,
+                &pool.headers,
+                actions,
+            )?;
+            pool.legality(actions.discrete)
+        })
+    }
+
+    #[cfg(feature = "debug-checks")]
+    fn check_actions_inner(&self) -> Result<(), EngineError> {
+        self.legality(&self.discrete)
+    }
+
+    fn legality(&self, discrete: &[i32]) -> Result<(), EngineError> {
+        if !M::ENABLED {
+            return Ok(());
+        }
+        let a = E::MAX_AGENTS;
+        let dh = self.actions.discrete.len();
+        let mask_len = self.outputs.mask_len;
+        for (i, header) in self.headers.iter().enumerate() {
+            if header.engine().pending_reset.get() {
+                continue;
+            }
+            for (slot, row) in header.agents().iter().enumerate() {
+                if !(row.alive.get() && row.acting.get()) {
+                    continue;
+                }
+                let k = i * a + slot;
+                let heads = discrete.get(k * dh..(k + 1) * dh).unwrap_or(&[]);
+                let mask = self
+                    .outputs
+                    .masks
+                    .get(k * mask_len..(k + 1) * mask_len)
+                    .unwrap_or(&[]);
+                if let Some(head) = first_illegal(heads, &self.actions.discrete, mask) {
+                    return Err(EngineError::IllegalAction {
+                        instance: u32::try_from(i).unwrap_or(u32::MAX),
+                        agent: u16::try_from(slot).unwrap_or(u16::MAX),
+                        head: u32::try_from(head).unwrap_or(u32::MAX),
+                        value: heads.get(head).copied().unwrap_or(0),
+                    });
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Steps every instance with `actions` (Inline mode).
@@ -280,22 +475,28 @@ where
     ///
     /// Returns an [`EngineError`] if the actions have the wrong shape, a
     /// required action is invalid, an instance is pending reset or a step
-    /// counter is exhausted; nothing is mutated then.
+    /// counter is exhausted; nothing is mutated then. Returns
+    /// [`EngineError::Poisoned`] on a poisoned pool, and
+    /// [`EngineError::Panicked`] if environment code panics during the
+    /// call, which poisons the pool.
     pub fn step(&mut self, actions: ActionInput<'_>) -> Result<&Outputs, EngineError> {
         // The validation boundary compares floats too: it runs in the
         // canonical environment with the kernels (ADR-0037).
-        fp::with_canonical(|| self.step_inner(actions))?;
+        self.guarded(Poison::Reject, |pool| pool.step_inner(actions))?;
         Ok(&self.outputs)
     }
 
     fn step_inner(&mut self, actions: ActionInput<'_>) -> Result<(), EngineError> {
         check_and_copy_actions(
             &self.actions,
+            self.options.auto_reset,
             &self.headers,
             actions,
             &mut self.discrete,
             &mut self.continuous,
         )?;
+        #[cfg(feature = "debug-checks")]
+        self.check_actions_inner()?;
         let Self {
             cfg,
             options,
@@ -306,12 +507,32 @@ where
             continuous,
             outputs,
             authority,
+            poisoned,
+            penalties,
+            penalized,
             ..
         } = self;
         let (dh, ch) = (layout.discrete.len(), layout.continuous.len());
+        let policy = options.illegal_action;
         let limit = options.max_episode_steps.map(core::num::NonZeroU32::get);
-        fp::with_canonical(|| {
+        let auto_reset = options.auto_reset;
+        run_kernels(poisoned, || {
             for (i, (header, state)) in headers.iter_mut().zip(states.iter_mut()).enumerate() {
+                if header.engine().pending_reset.get() {
+                    // NextStep: reset instead of stepping (validated above).
+                    reset_one::<E>(cfg, authority, header, state, None);
+                    clear_instance(outputs, i);
+                    write_agent_masks(outputs, i, header);
+                    observe_instance::<E, M>(cfg, authority, header, state, outputs, i);
+                    continue;
+                }
+                if M::ENABLED {
+                    // Inside the panic catch: the author's noop may panic.
+                    replace_illegal_one::<E, M>(
+                        cfg, policy, header, state, outputs, layout, discrete, continuous,
+                        penalties, penalized, i,
+                    );
+                }
                 let rows = i * E::MAX_AGENTS;
                 let view = Actions::new(
                     discrete
@@ -323,11 +544,170 @@ where
                         .unwrap_or(&[]),
                     ch,
                 );
-                step_one::<E>(cfg, authority, header, state, &view, outputs, i, limit);
-                observe_instance::<E>(cfg, authority, header, state, outputs, i);
+                let agents = i * E::MAX_AGENTS..(i + 1) * E::MAX_AGENTS;
+                let penalty = penalties.get(agents.clone()).unwrap_or(&[]);
+                let marked = penalized.get(agents).unwrap_or(&[]);
+                step_one::<E>(
+                    cfg, authority, header, state, &view, outputs, i, limit, penalty, marked,
+                );
+                observe_instance::<E, M>(cfg, authority, header, state, outputs, i);
+                if auto_reset == AutoReset::SameStep && header.engine().pending_reset.get() {
+                    save_terminal(outputs, i);
+                    // Flags and stats of the ended episode stay set.
+                    reset_one::<E>(cfg, authority, header, state, None);
+                    write_agent_masks(outputs, i, header);
+                    observe_instance::<E, M>(cfg, authority, header, state, outputs, i);
+                }
             }
-        });
+        })?;
+        #[cfg(feature = "debug-checks")]
+        self.check_agent_events()?;
         Ok(())
+    }
+
+    /// `debug-checks`: an invalid agent event in the last step poisons the pool
+    /// and fails the call with its first instance and slot.
+    #[cfg(feature = "debug-checks")]
+    fn check_agent_events(&mut self) -> Result<(), EngineError> {
+        let a = self.outputs.agents;
+        if let Some(k) = self
+            .outputs
+            .invalid_agent_event
+            .iter()
+            .position(|f| f.get())
+        {
+            self.poisoned = true;
+            return Err(EngineError::InvalidAgentEvent {
+                instance: u32::try_from(k / a).unwrap_or(u32::MAX),
+                agent: u32::try_from(k % a).unwrap_or(u32::MAX),
+            });
+        }
+        Ok(())
+    }
+}
+
+/// Runs environment code at a chunk boundary: inside the canonical FP
+/// environment, catching a panic and poisoning the pool (ADR-0028). There
+/// is no rollback: instances processed before the panic keep their new
+/// state. With `panic = "abort"` a panic aborts the process instead.
+fn run_kernels(poisoned: &mut bool, f: impl FnOnce()) -> Result<(), EngineError> {
+    if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| fp::with_canonical(f))).is_ok() {
+        Ok(())
+    } else {
+        *poisoned = true;
+        Err(EngineError::Panicked)
+    }
+}
+
+/// Replaces illegal-but-valid actions of instance `i` with the
+/// environment's no-op, counts them and marks penalties (ADR-0028). Runs
+/// before the kernel, against the masks of the current state. There is no
+/// rollback: if a later kernel panics, counters already incremented stay.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "one instance's illegal-action pass"
+)]
+fn replace_illegal_one<E: Environment, M: MaskProvider<E>>(
+    cfg: &E::Config,
+    policy: IllegalActionPolicy,
+    header: &mut E::Header,
+    state: &E::State,
+    outputs: &Outputs,
+    layout: &ActionLayout,
+    discrete: &mut [i32],
+    continuous: &mut [f32],
+    penalties: &mut [f32],
+    penalized: &mut [Bool8],
+    i: usize,
+) {
+    let a = E::MAX_AGENTS;
+    let (dh, ch) = (layout.discrete.len(), layout.continuous.len());
+    let mask_len = outputs.mask_len;
+    for (slot, row) in header.agents_mut().iter_mut().enumerate() {
+        let k = i * a + slot;
+        if let Some(f) = penalized.get_mut(k) {
+            *f = Bool8::FALSE;
+        }
+        if !(row.alive.get() && row.acting.get()) {
+            continue;
+        }
+        let mask = outputs
+            .masks
+            .get(k * mask_len..(k + 1) * mask_len)
+            .unwrap_or(&[]);
+        let heads = discrete.get(k * dh..(k + 1) * dh).unwrap_or(&[]);
+        if first_illegal(heads, &layout.discrete, mask).is_none() {
+            continue;
+        }
+        // Counts saturate at u32::MAX per episode (documented).
+        row.illegal_actions = row.illegal_actions.saturating_add(1);
+        if let IllegalActionPolicy::Penalize(r) = policy
+            && let (Some(p), Some(f)) = (penalties.get_mut(k), penalized.get_mut(k))
+        {
+            *p = r;
+            *f = Bool8::TRUE;
+        }
+        let (Some(disc), Some(cont), Some(agent)) = (
+            discrete.get_mut(k * dh..(k + 1) * dh),
+            continuous.get_mut(k * ch..(k + 1) * ch),
+            AgentSlot::new(u16::try_from(slot).unwrap_or(u16::MAX), a),
+        ) else {
+            continue;
+        };
+        disc.fill(0);
+        cont.fill(0.0);
+        M::noop(cfg, state, agent, &mut ActionWriter::new(disc, cont));
+        debug_assert!(
+            disc.iter()
+                .zip(&layout.discrete)
+                .all(|(&v, &n)| u32::try_from(v).is_ok_and(|v| v < n)),
+            "ActionMask::noop wrote a discrete action outside its range"
+        );
+        debug_assert!(
+            cont.iter()
+                .zip(&layout.continuous)
+                .all(|(&v, &(low, high))| {
+                    v.is_finite() && (low..=high).contains(&f64::from(v))
+                }),
+            "ActionMask::noop wrote a continuous action outside its bounds"
+        );
+    }
+}
+
+/// The first discrete head whose value the mask forbids, if any.
+pub(crate) fn first_illegal(heads: &[i32], sizes: &[u32], mask: &[Bool8]) -> Option<usize> {
+    let mut offset = 0usize;
+    for (head, (&value, &n)) in heads.iter().zip(sizes).enumerate() {
+        let legal = usize::try_from(value)
+            .ok()
+            .and_then(|v| mask.get(offset.checked_add(v)?))
+            .is_some_and(|m| m.get());
+        if !legal {
+            return Some(head);
+        }
+        offset = offset.saturating_add(usize::try_from(n).unwrap_or(0));
+    }
+    None
+}
+
+/// Copies instance `i`'s observation rows into the terminal buffer.
+fn save_terminal(outputs: &mut Outputs, i: usize) {
+    let a = outputs.agents;
+    let Outputs {
+        observations,
+        terminal_observations,
+        leaf_bytes,
+        ..
+    } = outputs;
+    for ((obs, term), &bytes) in observations
+        .iter()
+        .zip(terminal_observations.iter_mut())
+        .zip(leaf_bytes.iter())
+    {
+        let range = i * a * bytes..(i + 1) * a * bytes;
+        if let (Some(src), Some(dst)) = (obs.get(range.clone()), term.get_mut(range)) {
+            dst.copy_from_slice(src);
+        }
     }
 }
 
@@ -374,6 +754,8 @@ fn reset_one<E: Environment>(
         row.alive = Bool8::TRUE;
         row.acting = Bool8::TRUE;
         row.episode_return = 0.0;
+        row.illegal_actions = 0;
+        row.invalid_agent_events = 0;
     }
     *state = E::State::state_default();
     let mut rng = StepRng::new(authority, &identity, StreamId::DYNAMICS);
@@ -393,6 +775,8 @@ fn step_one<E: Environment>(
     outputs: &mut Outputs,
     i: usize,
     limit: Option<u32>,
+    penalties: &[f32],
+    penalized: &[Bool8],
 ) {
     let a = E::MAX_AGENTS;
     let range = i * a..(i + 1) * a;
@@ -429,6 +813,13 @@ fn step_one<E: Environment>(
     let mut total = 0.0f32;
     for (slot, row) in header.agents_mut().iter_mut().enumerate() {
         let k = i * a + slot;
+        // Only a penalized illegal action changes the reward, so a kernel's
+        // -0.0 stays -0.0 otherwise.
+        if penalized.get(slot).is_some_and(|f| f.get())
+            && let (Some(r), Some(&p)) = (outputs.rewards.get_mut(k), penalties.get(slot))
+        {
+            *r += p;
+        }
         let reward = outputs.rewards.get(k).copied().unwrap_or(0.0);
         debug_assert!(
             reward.is_finite(),
@@ -439,23 +830,30 @@ fn step_one<E: Environment>(
         let mut died = outputs.died.get(k).is_some_and(|f| f.get());
         let spawned = outputs.spawned.get(k).is_some_and(|f| f.get());
         if died && !row.alive.get() {
-            // Death of an agent that is already dead: ignored, so its final
-            // `terminated` flag is reported exactly once.
-            debug_assert!(false, "agent_died on dead slot {slot}");
+            // An invalid agent event, like a spawn on an occupied slot: the
+            // death of an agent that is already dead is never applied (its
+            // final `terminated` flag was reported once), it is counted, and
+            // `debug-checks` turns it into an error.
             died = false;
-            if let Some(f) = outputs.agent_terminated.get_mut(k) {
-                *f = Bool8::FALSE;
-            }
+            row.invalid_agent_events = row.invalid_agent_events.saturating_add(1);
+            set(&mut outputs.invalid_agent_event, k, true);
+            set(&mut outputs.agent_terminated, k, false);
         }
         if died {
             row.alive = Bool8::FALSE;
             row.acting = Bool8::FALSE;
         }
-        // A spawn needs an empty slot that did not die this step; otherwise
-        // it is ignored (debug builds assert).
+        // Same-step slot reuse (SPEC 9.1): a spawn needs an empty slot that
+        // did not die this step. Otherwise it is never applied: it is
+        // counted (saturating at u16::MAX, a documented statistic bound)
+        // and marked, and `debug-checks` turns it into an error.
         if spawned {
             let valid = !died && !row.alive.get();
-            debug_assert!(valid, "spawn on an occupied or dying slot {slot}");
+            if !valid {
+                row.invalid_agent_events = row.invalid_agent_events.saturating_add(1);
+                set(&mut outputs.invalid_agent_event, k, true);
+                set(&mut outputs.spawned, k, false);
+            }
             if valid {
                 row.alive = Bool8::TRUE;
                 row.acting = Bool8::TRUE;
@@ -482,26 +880,56 @@ fn step_one<E: Environment>(
         }
     }
     if let Some(end) = end {
-        let engine = header.engine_mut();
-        engine.pending_reset = Bool8::TRUE;
-        let (terminated, kind) = match end {
-            EpisodeEnd::Terminated => (true, 1),
-            EpisodeEnd::Truncated => (false, 2),
-        };
-        engine.end_kind = kind;
-        set(&mut outputs.episode_terminated, i, terminated);
-        set(&mut outputs.episode_truncated, i, !terminated);
-        if let Some(r) = outputs.episode_return.get_mut(i) {
-            *r = total;
-        }
-        if let Some(l) = outputs.episode_length.get_mut(i) {
-            // Episode lengths are reported as f32 statistics (SPEC 5.2).
-            #[expect(clippy::cast_precision_loss, reason = "statistic, exact below 2^24")]
-            let length = t as f32;
-            *l = length;
-        }
+        finish_episode(header, outputs, i, end, t, total);
     }
     write_agent_masks(outputs, i, header);
+}
+
+/// Records the end of an episode: flags, pending reset and statistics.
+fn finish_episode<H: RecordLayout>(
+    header: &mut H,
+    outputs: &mut Outputs,
+    i: usize,
+    end: EpisodeEnd,
+    t: u32,
+    total: f32,
+) {
+    let engine = header.engine_mut();
+    engine.pending_reset = Bool8::TRUE;
+    let (terminated, kind) = match end {
+        EpisodeEnd::Terminated => (true, 1),
+        EpisodeEnd::Truncated => (false, 2),
+    };
+    engine.end_kind = kind;
+    set(&mut outputs.episode_terminated, i, terminated);
+    set(&mut outputs.episode_truncated, i, !terminated);
+    if let Some(r) = outputs.episode_return.get_mut(i) {
+        *r = total;
+    }
+    let illegal: u32 = header
+        .agents()
+        .iter()
+        .fold(0u32, |acc, row| acc.saturating_add(row.illegal_actions));
+    if let Some(n) = outputs.episode_illegal_actions.get_mut(i) {
+        // Statistics are f32 (SPEC 5.2); exact below 2^24.
+        #[expect(clippy::cast_precision_loss, reason = "statistic, exact below 2^24")]
+        let count = illegal as f32;
+        *n = count;
+    }
+    let spawns: u32 = header.agents().iter().fold(0u32, |acc, row| {
+        acc.saturating_add(u32::from(row.invalid_agent_events))
+    });
+    if let Some(n) = outputs.episode_invalid_agent_events.get_mut(i) {
+        #[expect(clippy::cast_precision_loss, reason = "statistic, exact below 2^24")]
+        let count = spawns as f32;
+        *n = count;
+    }
+    if let Some(l) = outputs.episode_length.get_mut(i) {
+        // Episode lengths are reported as f32 statistics (SPEC 5.2).
+        #[expect(clippy::cast_precision_loss, reason = "statistic, exact below 2^24")]
+        let length = t as f32;
+        *l = length;
+    }
 }
 
 fn set(buf: &mut [Bool8], i: usize, value: bool) {
@@ -518,6 +946,7 @@ fn clear_instance(outputs: &mut Outputs, i: usize) {
         &mut outputs.agent_truncated,
         &mut outputs.died,
         &mut outputs.spawned,
+        &mut outputs.invalid_agent_event,
     ] {
         if let Some(rows) = buf.get_mut(range.clone()) {
             rows.fill(Bool8::FALSE);
@@ -528,7 +957,12 @@ fn clear_instance(outputs: &mut Outputs, i: usize) {
     }
     set(&mut outputs.episode_terminated, i, false);
     set(&mut outputs.episode_truncated, i, false);
-    for buf in [&mut outputs.episode_return, &mut outputs.episode_length] {
+    for buf in [
+        &mut outputs.episode_return,
+        &mut outputs.episode_length,
+        &mut outputs.episode_illegal_actions,
+        &mut outputs.episode_invalid_agent_events,
+    ] {
         if let Some(v) = buf.get_mut(i) {
             *v = 0.0;
         }
@@ -551,7 +985,7 @@ fn write_agent_masks<H: RecordLayout>(outputs: &mut Outputs, i: usize, header: &
     }
 }
 
-fn observe_instance<E: Environment>(
+fn observe_instance<E: Environment, M: MaskProvider<E>>(
     cfg: &E::Config,
     authority: &RngAuthority,
     header: &E::Header,
@@ -561,14 +995,20 @@ fn observe_instance<E: Environment>(
 ) {
     let identity = header.engine().identity;
     let a = E::MAX_AGENTS;
+    let Outputs {
+        observations,
+        leaf_bytes,
+        masks,
+        mask_len,
+        ..
+    } = outputs;
     for (slot, row) in header.agents().iter().enumerate() {
         let k = i * a + slot;
         let mut views: [&mut [u8]; MAX_LEAVES] = Default::default();
         let mut used = 0;
-        for ((buf, &bytes), view) in outputs
-            .observations
+        for ((buf, &bytes), view) in observations
             .iter_mut()
-            .zip(&outputs.leaf_bytes)
+            .zip(leaf_bytes.iter())
             .zip(views.iter_mut())
         {
             if let Some(rows) = buf.get_mut(k * bytes..(k + 1) * bytes) {
@@ -576,6 +1016,16 @@ fn observe_instance<E: Environment>(
                 *view = rows;
             }
             used += 1;
+        }
+        // Masks describe the current state: written in the same pass as
+        // the observation (ADR-0014); dead agents get an all-false mask.
+        let mut mask = if M::ENABLED {
+            masks.get_mut(k * *mask_len..(k + 1) * *mask_len)
+        } else {
+            None
+        };
+        if let Some(m) = mask.as_deref_mut() {
+            m.fill(Bool8::FALSE);
         }
         if !row.alive.get() {
             continue;
@@ -589,5 +1039,8 @@ fn observe_instance<E: Environment>(
         let mut writer = ObsWriter::new(leaves);
         let mut rng = ObsRng::new(authority, &identity);
         E::observe(cfg, state, agent, &mut rng, &mut writer);
+        if let Some(m) = mask {
+            M::write_mask(cfg, state, agent, &mut MaskWriter::new(m));
+        }
     }
 }

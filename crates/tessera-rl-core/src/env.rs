@@ -96,15 +96,22 @@ pub trait Environment: Sized + 'static {
     );
 }
 
-/// Legal-action masks, written in the observation pass (ADR-0014).
+/// Legal-action masks, written in the observation pass (ADR-0014), and
+/// the no-op that replaces an illegal action.
 pub trait ActionMask: Environment {
-    /// Writes the mask of `agent`.
+    /// Writes the mask of `agent`: one entry per choice of each discrete
+    /// head, heads concatenated in order.
     fn action_mask(
         cfg: &Self::Config,
         state: &Self::State,
         agent: AgentSlot,
         out: &mut MaskWriter<'_>,
     );
+
+    /// Writes the environment's no-op action for `agent`, used in place of
+    /// an illegal action (ADR-0028). There is no default: the author
+    /// defines it.
+    fn noop(cfg: &Self::Config, state: &Self::State, agent: AgentSlot, out: &mut ActionWriter<'_>);
 }
 
 /// Imperfect information: the per-agent information state (ADR-0035).

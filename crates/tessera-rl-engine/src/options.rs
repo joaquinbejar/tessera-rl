@@ -7,12 +7,33 @@ use core::num::NonZeroU32;
 use tessera_rl_num::identity::Seed;
 
 use crate::error::EngineError;
+use crate::masks::IllegalActionPolicy;
 
 /// Smallest and largest chunk sizes (SPEC 5.1).
 pub const CHUNK_RANGE: core::ops::RangeInclusive<u32> = 1..=1024;
 
+/// What happens after an episode ends (ADR-0028).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum AutoReset {
+    /// The step that ends the episode returns the final observation and
+    /// the episode flags; on the next step the instance resets instead of
+    /// stepping (its actions are ignored), returns its initial observation
+    /// and clears its flags. The Gymnasium vector default.
+    #[default]
+    NextStep,
+    /// The instance resets in the same pass: the final observation goes to
+    /// the terminal observation buffer, the initial one to the observation
+    /// buffer, and the flags are set. PufferLib and EnvPool style. Because
+    /// any instance may reset in a pass, the boundary checks the
+    /// `episode_index` headroom of every instance on every step.
+    SameStep,
+    /// The instance stays frozen until the caller resets it; stepping it
+    /// is an error.
+    Disabled,
+}
+
 /// Options of an [`EnvPool`](crate::EnvPool).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct PoolOptions {
     /// Number of instances.
     pub num_envs: NonZeroU32,
@@ -22,10 +43,22 @@ pub struct PoolOptions {
     pub chunk_size: NonZeroU32,
     /// Truncates an episode after this many transitions.
     pub max_episode_steps: Option<NonZeroU32>,
+    /// Behaviour after an episode ends.
+    pub auto_reset: AutoReset,
+    /// Policy for illegal actions; applies only to masked pools. When
+    /// options enter hashes or replays, the penalty is recorded by its bits.
+    pub illegal_action: IllegalActionPolicy,
+    /// Largest mask buffer allowed, in bytes (SPEC 11.3); checked before
+    /// allocating. Applies only to masked pools.
+    pub mask_budget_bytes: u64,
 }
 
+/// Default mask budget: 1 GiB.
+pub const DEFAULT_MASK_BUDGET: u64 = 1 << 30;
+
 impl PoolOptions {
-    /// `num_envs` instances seeded from `seed`, chunks of 64, no step limit.
+    /// `num_envs` instances seeded from `seed`, chunks of 64, no step limit,
+    /// `NextStep` auto-reset.
     #[must_use]
     pub const fn new(num_envs: NonZeroU32, seed: Seed) -> Self {
         Self {
@@ -33,6 +66,9 @@ impl PoolOptions {
             seed,
             chunk_size: NonZeroU32::MIN.saturating_add(63),
             max_episode_steps: None,
+            auto_reset: AutoReset::NextStep,
+            illegal_action: IllegalActionPolicy::Noop,
+            mask_budget_bytes: DEFAULT_MASK_BUDGET,
         }
     }
 
@@ -41,6 +77,14 @@ impl PoolOptions {
             return Err(EngineError::Options {
                 option: "chunk_size",
                 reason: "must be in 1..=1024",
+            });
+        }
+        if let IllegalActionPolicy::Penalize(r) = self.illegal_action
+            && !r.is_finite()
+        {
+            return Err(EngineError::Options {
+                option: "illegal_action",
+                reason: "the penalty must be finite",
             });
         }
         Ok(())

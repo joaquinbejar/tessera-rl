@@ -13,6 +13,7 @@ clippy:
 
 test:
 	cargo test --workspace --all-features --locked
+	cargo test --workspace --locked
 
 doc:
 	RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --all-features --locked

@@ -14,6 +14,11 @@ homepage.workspace = true
 keywords.workspace = true
 categories.workspace = true
 
+[features]
+# Strict checks (SPEC 5.5): illegal actions reject the call atomically
+# instead of being replaced. Off by default.
+debug-checks = []
+
 [dependencies]
 tessera-rl-core.workspace = true
 tessera-rl-num.workspace = true

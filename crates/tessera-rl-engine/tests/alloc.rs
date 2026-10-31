@@ -14,7 +14,7 @@ use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
 
 use common::{CountConfig, Counter};
-use tessera_rl_engine::{ActionInput, EnvPool, PoolOptions, Reseed};
+use tessera_rl_engine::{ActionInput, AutoReset, EnvPool, Masked, PoolOptions, Reseed};
 use tessera_rl_num::identity::Seed;
 
 thread_local! {
@@ -95,4 +95,29 @@ fn test_inline_reset_and_step_do_not_allocate() {
     });
     assert_eq!(n, 0);
     assert!(pool.outputs().rewards().iter().any(|&r| r > 0.0));
+}
+
+#[test]
+fn test_masked_same_step_pool_does_not_allocate() {
+    let cfg = CountConfig {
+        length: 3,
+        ..CountConfig::default()
+    };
+    let options = PoolOptions {
+        auto_reset: AutoReset::SameStep,
+        ..PoolOptions::new(NonZeroU32::new(16).unwrap(), Seed::new(1))
+    };
+    let mut pool = EnvPool::<Counter, Masked>::with_masks(cfg, options).unwrap();
+    let actions = vec![2i32; 32];
+    let n = allocations(|| {
+        let _ = std::hint::black_box(pool.reset_all(Reseed::Keep));
+        for _ in 0..10 {
+            let input = ActionInput {
+                discrete: &actions,
+                continuous: &[],
+            };
+            let _ = std::hint::black_box(pool.step(input));
+        }
+    });
+    assert_eq!(n, 0);
 }
