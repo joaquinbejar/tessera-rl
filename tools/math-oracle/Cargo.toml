@@ -1,0 +1,20 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
+[package]
+name = "tessera-rl-math-oracle"
+description = "Reference vector generator and differential checker for tessera-rl-num::math"
+publish = false
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+tessera-rl-num.workspace = true
+# The oracle is the exact upstream release vendored as math version 1.
+libm = "=0.2.16"
+
+[lints]
+workspace = true

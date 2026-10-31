@@ -9,6 +9,7 @@ members = [
     "crates/tessera-rl-macros",
     "crates/tessera-rl-engine",
     "crates/tessera-rl-classic",
+    "tools/math-oracle",
 ]
 default-members = [
     "crates/tessera-rl",
@@ -36,7 +37,6 @@ tessera-rl-num = { path = "crates/tessera-rl-num", version = "0.1.0" }
 tessera-rl-macros = { path = "crates/tessera-rl-macros", version = "0.1.0" }
 tessera-rl-engine = { path = "crates/tessera-rl-engine", version = "0.1.0" }
 tessera-rl-classic = { path = "crates/tessera-rl-classic", version = "0.1.0" }
-
 
 [workspace.lints.rust]
 missing_docs = "deny"

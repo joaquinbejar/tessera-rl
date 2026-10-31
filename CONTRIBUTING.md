@@ -22,4 +22,5 @@ without any additional terms or conditions.
   `SPDX-License-Identifier: MIT OR Apache-2.0`, in the comment syntax of the
   file type.
 - Use conventional commits and keep one concern per pull request.
-- Run `make pre-push` and make sure it passes.
+- Run `make pre-push` and make sure it passes; run `make deny` after any
+  dependency change.
