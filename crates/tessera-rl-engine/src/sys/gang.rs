@@ -89,6 +89,9 @@ pub(crate) struct Faults {
     /// Panic outside the job's catch, before the decrement, in this
     /// worker's first epoch (exercises the backstop).
     pub(crate) die_in_epoch: Option<usize>,
+    /// Like `die_in_epoch`, but before the worker reads the job (and so
+    /// before it clones the caller's waker).
+    pub(crate) die_before_job: Option<usize>,
 }
 
 struct Job {
@@ -205,9 +208,15 @@ impl Gang {
                 .name(format!("tessera-worker-{w}"))
                 .spawn(move || {
                     #[cfg(test)]
-                    let (fail, die) = (faults.startup == Some(w), faults.die_in_epoch == Some(w));
+                    let (fail, die) = (
+                        faults.startup == Some(w),
+                        Death {
+                            after_waker: faults.die_in_epoch == Some(w),
+                            before_job: faults.die_before_job == Some(w),
+                        },
+                    );
                     #[cfg(not(test))]
-                    let (fail, die) = (false, false);
+                    let (fail, die) = (false, Death::default());
                     worker_main(&shared, w, core, fail, die);
                 });
             match spawned {
@@ -282,7 +291,14 @@ impl Drop for Gang {
 }
 
 /// Startup, then the epoch loop. A panic outside a job marks the gang dead.
-fn worker_main(shared: &Shared, worker: usize, core: Option<usize>, fail: bool, die: bool) {
+/// Test-only injected deaths outside the job's catch (all false otherwise).
+#[derive(Debug, Clone, Copy, Default)]
+struct Death {
+    after_waker: bool,
+    before_job: bool,
+}
+
+fn worker_main(shared: &Shared, worker: usize, core: Option<usize>, fail: bool, die: Death) {
     let started = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         assert!(!fail, "injected worker startup failure");
         #[cfg(not(loom))]
@@ -367,7 +383,11 @@ fn job_waker(shared: &Shared) -> Option<thread::Thread> {
 }
 
 #[expect(unsafe_code, reason = "audited module: job pointer and call")]
-fn run_job(shared: &Shared, worker: usize, slot: &mut Slot, die: bool) {
+fn run_job(shared: &Shared, worker: usize, slot: &mut Slot, die: Death) {
+    assert!(
+        !die.before_job,
+        "injected worker death before the job is read"
+    );
     let job = shared.job.load(Ordering::Relaxed);
     // SAFETY: the caller stored a pointer to a `Job` on its stack before the
     // Release epoch increment we observed with Acquire, and keeps it alive
@@ -376,7 +396,10 @@ fn run_job(shared: &Shared, worker: usize, slot: &mut Slot, die: bool) {
     let job = unsafe { &*job };
     slot.waker = Some(job.waker.clone());
     let (call, data) = (job.call, job.data);
-    assert!(!die, "injected worker death outside the job's catch");
+    assert!(
+        !die.after_waker,
+        "injected worker death outside the job's catch"
+    );
     let completed = catch(|| {
         #[cfg(not(loom))]
         if tessera_rl_num::fp::ensure_canonical() {
@@ -544,6 +567,30 @@ mod tests {
             assert!(gang.run(&|_w: usize| std::panic::panic_any(Bomb)).unwrap());
             assert!(!gang.run(&|_w: usize| {}).unwrap());
         });
+    }
+
+    /// A worker that dies before it reads the job, so before it clones
+    /// the caller's waker, still wakes the run's caller, read from the job
+    /// itself: the gang is created on one thread and run on another, with
+    /// no spinning, so the caller really parks.
+    #[cfg(not(loom))]
+    #[test]
+    fn test_gang_death_before_the_job_wakes_a_caller_on_another_thread() {
+        let mut opts = options(2);
+        opts.spin = 0;
+        opts.faults.die_before_job = Some(1);
+        let gang = Gang::new(&opts).unwrap();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let runner = std::thread::spawn(move || {
+            let mut gang = gang;
+            let first = gang.run(&|_w: usize| {});
+            let second = gang.run(&|_w: usize| {}).map(|_| ());
+            let _ = tx.send((first, second));
+            gang
+        });
+        let outcome = rx.recv_timeout(std::time::Duration::from_secs(30));
+        assert_eq!(outcome, Ok((Ok(true), Err(EngineError::WorkerDied))));
+        drop(runner.join());
     }
 
     /// A worker that dies outside the job's catch still accounts for its
