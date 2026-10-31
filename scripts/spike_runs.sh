@@ -6,11 +6,16 @@
 # (one `cargo bench` process per layout, a Criterion baseline per run and
 # layout), so drift and ordering effects spread over the layouts.
 #
-# Usage: scripts/spike_runs.sh [runs] [criterion dir]
+# Usage: scripts/spike_runs.sh [runs] [criterion dir, <target dir>/criterion]
 # Then:  python3 scripts/spike_stats.py --runs [criterion dir]
 set -euo pipefail
 runs="${1:-10}"
 dir="${2:-target/criterion}"
+# Criterion writes to <target dir>/criterion: the argument picks the target.
+case "$dir" in
+  */criterion) export CARGO_TARGET_DIR="${dir%/criterion}" ;;
+  *) echo "the criterion dir must end in /criterion: $dir" >&2; exit 2 ;;
+esac
 layouts=(L0-parallel L1-combined L2-soa L3-aosoa)
 export SPIKE_WARMUP_S="${SPIKE_WARMUP_S:-2}" SPIKE_MEASURE_S="${SPIKE_MEASURE_S:-2}" SPIKE_SAMPLES="${SPIKE_SAMPLES:-10}"
 cargo bench --locked -p tessera-rl-spike-layout --bench layout --no-run >/dev/null 2>&1
