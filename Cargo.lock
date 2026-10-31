@@ -691,6 +691,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "tessera-rl-bench-runner"
+version = "0.1.0"
+dependencies = [
+ "tessera-rl-classic",
+ "tessera-rl-core",
+ "tessera-rl-engine",
+ "tessera-rl-num",
+ "thiserror",
+]
+
+[[package]]
 name = "tessera-rl-classic"
 version = "0.1.0"
 dependencies = [

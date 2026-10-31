@@ -19,6 +19,8 @@ wall_clock_gates = "pending: needs an exclusive window"
 valid_for = ["golden", "math-diff", "instruction-counts"]
 host = "xaskar (shared host, about 20 containers; record the load with every run)"
 cpu = "Intel Core i7-12700H (Alder Lake, hybrid)"
+# Matched against the observed CPU model by tools/bench before a claim.
+cpu_id = "i7-12700H"
 cores = "6 P-cores with HT (CPUs 0-11, up to 4.7 GHz); 8 E-cores (CPUs 12-19, up to 3.5 GHz)"
 isa = "x86-64, AVX2, no AVX-512"
 memory = "62 GiB"
@@ -29,6 +31,10 @@ frequency_policy = "governor performance"
 # to one P-core with `taskset -c 2` (CPU 0 avoided), with its SMT sibling
 # (CPU 3) left idle.
 bench_pinning = "taskset -c 2"
+# CPUs the harness pins to (tools/bench): distinct physical P-cores, CPU 0
+# avoided, SMT siblings (3, 5, 7, 9) left idle. Single-core runs use the
+# first; a k-worker run uses the first k.
+bench_cpu_set = [2, 4, 6, 8]
 turbo = ""
 noise_floor_cv = ""
 toolchain = "rustc and cargo 1.99.1 (system), valgrind 3.26.0, gcc 15.2"
@@ -37,6 +43,7 @@ toolchain = "rustc and cargo 1.99.1 (system), valgrind 3.26.0, gcc 15.2"
 status = "pending characterization"
 candidate = "Mac Studio M5 (the development machine)"
 cpu = "Apple M5 Max (18 cores)"
+cpu_id = "Apple M5 Max"
 memory = ""
 os = ""
 frequency_policy = ""

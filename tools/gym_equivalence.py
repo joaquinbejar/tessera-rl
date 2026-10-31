@@ -10,7 +10,9 @@ Gymnasium's unwrapped env, the same action is applied, and the results are
 compared:
 
 - next state: every component within 4 ulps or 1e-12 relative;
-- observation (float32): exact;
+- observation (float32): exactly the float32 of our accepted f64 next
+  state; for same_step terminal observations (no f64 state), within one
+  float32 ulp of the reference's;
 - reward and terminated: exact, except when the reference next state lies
   within 1e-9 of a termination threshold (counted, not gated);
 - truncated: always false here (no time limit in a single step); time

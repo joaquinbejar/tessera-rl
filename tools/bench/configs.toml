@@ -1,0 +1,146 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+#
+# Named benchmark configurations (ADR-0025, SPEC 19). Every reported number
+# carries its configuration name, the machine (compat/machines.toml), the
+# software versions and the method below.
+
+[method]
+# SPEC 19.2: at least 2 s of warm-up and 10 measured repetitions.
+warmup_s = 2.0
+reps = 10
+rep_s = 1.0
+# Latency: batches timed per repetition.
+batches = 2000
+bootstrap_resamples = 10000
+bootstrap_seed = 0
+# Claims need process-level repetitions: `--runs` separate processes per
+# configuration, in a seeded shuffled order (TESSERA-REVIEWER R-PR12, R-PR24).
+runs_for_claims = 10
+# Every configuration, Rust or Python, steps under the same options: seed 1,
+# next_step auto-reset, this truncation limit (CartPole-v1's), unless a
+# configuration overrides it.
+max_episode_steps = 500
+
+# Rust: raw env throughput, pregenerated seeded random actions, auto-reset
+# and observation writing included (SPEC 19.1).
+[[config]]
+name = "rust/cartpole/inline/n1024"
+kind = "rust"
+metric = "throughput"
+env = "cartpole"
+num_envs = 1024
+workers = 0
+
+[[config]]
+name = "rust/cartpole/sync1/n4096"
+kind = "rust"
+metric = "throughput"
+env = "cartpole"
+num_envs = 4096
+workers = 1
+
+[[config]]
+name = "rust/cartpole/sync4/n4096"
+kind = "rust"
+metric = "throughput"
+env = "cartpole"
+num_envs = 4096
+workers = 4
+
+[[config]]
+name = "rust/tag/inline/n256"
+kind = "rust"
+max_episode_steps = 200
+metric = "throughput"
+env = "tag"
+num_envs = 256
+workers = 0
+
+[[config]]
+name = "rust/cartpole/sync4/n4096/latency"
+kind = "rust"
+metric = "latency"
+env = "cartpole"
+num_envs = 4096
+workers = 4
+
+[[config]]
+name = "rust/cartpole/n1024/snapshot"
+kind = "rust"
+metric = "snapshot"
+env = "cartpole"
+num_envs = 1024
+
+[[config]]
+name = "rust/cartpole/n1024/memory"
+kind = "rust"
+metric = "memory"
+env = "cartpole"
+num_envs = 1024
+
+[[config]]
+name = "rust/tag/n1024/memory"
+kind = "rust"
+max_episode_steps = 200
+metric = "memory"
+env = "tag"
+num_envs = 1024
+
+# Python: steps/s through the bindings, naming the output mode (SPEC 19.2).
+[[config]]
+name = "py/native/cartpole/n1024/borrowed"
+kind = "python"
+api = "native"
+outputs = "borrowed"
+num_envs = 1024
+
+[[config]]
+name = "py/native/cartpole/n1024/owned"
+kind = "python"
+api = "native"
+outputs = "owned"
+num_envs = 1024
+
+[[config]]
+name = "py/gym-adapter/cartpole/n64/owned"
+kind = "python"
+api = "gym"
+outputs = "owned"
+num_envs = 64
+
+# Head-to-head baseline: Gymnasium's own CartPole-v1 in a SyncVectorEnv,
+# same number of environments, NEXT_STEP auto-reset, same action stream.
+[[config]]
+name = "py/gymnasium-sync/cartpole/n64"
+kind = "python"
+api = "gymnasium"
+num_envs = 64
+
+# Derived metrics (SPEC 19.1), computed from the medians above.
+[[derived]]
+name = "scaling_efficiency/cartpole/sync4"
+kind = "scaling"
+multi = "rust/cartpole/sync4/n4096"
+single = "rust/cartpole/sync1/n4096"
+workers = 4
+
+[[derived]]
+name = "python_overhead/cartpole/n1024/borrowed"
+kind = "ratio"
+require_same_work = true
+numerator = "py/native/cartpole/n1024/borrowed"
+denominator = "rust/cartpole/inline/n1024"
+
+[[derived]]
+name = "python_overhead/cartpole/n1024/owned"
+kind = "ratio"
+require_same_work = true
+numerator = "py/native/cartpole/n1024/owned"
+denominator = "rust/cartpole/inline/n1024"
+
+[[derived]]
+name = "speedup/gym-adapter-vs-gymnasium-sync/n64"
+kind = "ratio"
+require_same_work = true
+numerator = "py/gym-adapter/cartpole/n64/owned"
+denominator = "py/gymnasium-sync/cartpole/n64"

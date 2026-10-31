@@ -54,8 +54,9 @@ filterwarnings = [
 ]
 
 [tool.uv]
-# `uv sync` builds and installs the native package (maturin, debug profile
-# by default) next to the tool environment.
+# `uv sync` builds and installs the native package with maturin's PEP 517
+# backend, which builds the release profile; `tessera_rl._native.
+# build_profile()` reports what was built.
 package = true
 default-groups = ["test"]
 cache-keys = [{ file = "pyproject.toml" }, { file = "Cargo.toml" }, { file = "Cargo.lock" }, { file = "crates/**/*.rs" }, { file = "crates/**/Cargo.toml" }]

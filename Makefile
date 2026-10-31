@@ -4,7 +4,7 @@
 # maturin's default of macOS 11. Ignored on other platforms.
 export MACOSX_DEPLOYMENT_TARGET := 13.0
 
-.PHONY: fmt fmt-check clippy test doc readme readme-check pre-push deny check-targets compat-test py-entries py-test py-test-torch pre-push-torch gym-equivalence
+.PHONY: fmt fmt-check clippy test doc readme readme-check pre-push deny check-targets compat-test py-entries py-test py-test-torch pre-push-torch gym-equivalence bench bench-quick bench-kernels
 
 fmt:
 	cargo fmt --all
@@ -81,6 +81,24 @@ py-test-torch:
 gym-equivalence:
 	uv sync --locked --python 3.11
 	uv run --locked --python 3.11 python tools/gym_equivalence.py
+
+# Benchmark harness (ADR-0025, tools/bench): the full method, a JSON
+# report per machine; `MACHINE` names a compat/machines.toml entry.
+MACHINE ?=
+RUNS ?= 1
+bench:
+	uv sync --locked --python 3.11
+	mkdir -p target/bench
+	uv run --locked --python 3.11 python tools/bench/bench.py $(if $(MACHINE),--machine $(MACHINE)) --runs $(RUNS) --out target/bench/report.json
+
+# A short smoke run of every configuration (never valid for claims).
+bench-quick:
+	uv sync --locked --python 3.11
+	uv run --locked --python 3.11 python tools/bench/bench.py --quick
+
+# Criterion benches of the kernels.
+bench-kernels:
+	cargo bench -p tessera-rl-classic -p tessera-rl-engine --locked
 
 # pre-push plus the PyTorch tests (downloads PyTorch on first use).
 pre-push-torch: pre-push py-test-torch

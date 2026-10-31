@@ -24,12 +24,34 @@ pub(super) unsafe extern "C" fn version(
     unsafe { ffi::PyUnicode_FromStringAndSize(text.as_ptr().cast(), text.len().cast_signed()) }
 }
 
-static METHODS: Table<[ffi::PyMethodDef; 4]> = Table([
+/// `build_profile()`: `"release"` or `"debug"`, as the native module was
+/// compiled (benchmark reports record it).
+pub(super) unsafe extern "C" fn build_profile(
+    _module: *mut ffi::PyObject,
+    _args: *mut ffi::PyObject,
+) -> *mut ffi::PyObject {
+    let text = if cfg!(debug_assertions) {
+        "debug"
+    } else {
+        "release"
+    };
+    // SAFETY: called by CPython with the interpreter attached; the bytes
+    // are valid UTF-8 of the given length.
+    unsafe { ffi::PyUnicode_FromStringAndSize(text.as_ptr().cast(), text.len().cast_signed()) }
+}
+
+static METHODS: Table<[ffi::PyMethodDef; 5]> = Table([
     method(
         c"version",
         thunks::VERSION,
         ffi::METH_NOARGS,
         c"The Tessera version.",
+    ),
+    method(
+        c"build_profile",
+        thunks::BUILD_PROFILE,
+        ffi::METH_NOARGS,
+        c"The native build profile: release or debug.",
     ),
     env_type::MAKERS[0],
     env_type::MAKERS[1],
