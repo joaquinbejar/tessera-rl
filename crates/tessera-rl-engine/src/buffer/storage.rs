@@ -23,7 +23,9 @@
 //!    `Outputs::view_all`, which calls [`OutputStorage::begin_write`]).
 //!    Borrowers may read a region only between engine calls, which the
 //!    caller serializes (the borrow window of ADR-0003); comparing the
-//!    generation tells a borrower whether its view is stale.
+//!    generation tells a borrower whether its view is stale. It is a
+//!    diagnostic, not a synchronization protocol: it does not make reads
+//!    that overlap an engine call sound.
 
 use core::cell::UnsafeCell;
 use core::ops::{Deref, DerefMut};
@@ -169,6 +171,12 @@ impl OutputStorage {
     /// The write generation: incremented before every engine call that
     /// writes outputs. A view taken at generation `g` is stale once this
     /// differs from `g`.
+    ///
+    /// Scope: a staleness diagnostic for readers whose reads are already
+    /// serialized with engine calls (the borrow windows of ADR-0003). It is
+    /// not a seqlock and not a permission to read: reading a region while an
+    /// engine call runs is a data race, and checking the generation after
+    /// such a read does not make it sound.
     #[must_use]
     pub fn generation(&self) -> u64 {
         self.generation.load(Ordering::Acquire)
@@ -475,11 +483,12 @@ mod loom_tests {
     use super::*;
     use crate::sys::sync::thread;
 
-    /// `storage_generation`: a reader that sees a generation also sees
-    /// every write made before the matching `begin_write` was published by
-    /// the next one, and the generation never goes backwards.
+    /// The generation never goes backwards as seen from another thread,
+    /// and ends at the number of writes. It proves monotonicity only, not
+    /// publication of the region payload (readers are serialized with the
+    /// engine by the caller, see `OutputStorage::generation`).
     #[test]
-    fn test_storage_generation_monotonic_across_threads() {
+    fn test_storage_generation_is_monotonic_across_threads() {
         loom::model(|| {
             let mut b = StorageBuilder::default();
             let _ = b.reserve::<u32>(OutputField::Generations, 1);
