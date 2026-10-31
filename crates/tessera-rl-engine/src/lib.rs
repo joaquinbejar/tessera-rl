@@ -11,6 +11,7 @@
 //! views for workers) and `sys` (the worker gang).
 
 mod buffer;
+mod entry;
 mod error;
 #[cfg(test)]
 mod fault_tests;

@@ -60,6 +60,7 @@
 //! tests on every CI platform.
 
 use core::marker::PhantomData;
+use core::sync::atomic::{AtomicU64, Ordering};
 
 #[cfg(target_arch = "aarch64")]
 mod aarch64;
@@ -161,6 +162,20 @@ pub fn with_hostile_flush_to_zero<R>(f: impl FnOnce() -> R) -> R {
     result
 }
 
+/// Entries into [`with_canonical`] whose caller thread was not in the
+/// canonical environment (ADR-0037 observability), process-wide.
+static NON_CANONICAL_ENTRIES: AtomicU64 = AtomicU64::new(0);
+
+/// How many times, process-wide, a caller thread entered Tessera in a
+/// non-canonical floating-point environment (for example after a host
+/// library enabled flush-to-zero). Such entries are supported only as a
+/// tested mitigation (ADR-0037): the Rust code before the guard runs in the
+/// caller's environment.
+#[must_use]
+pub fn non_canonical_entries() -> u64 {
+    NON_CANONICAL_ENTRIES.load(Ordering::Relaxed)
+}
+
 /// Returns whether the current thread is in the canonical environment.
 /// Status flags are ignored.
 #[must_use]
@@ -187,7 +202,11 @@ impl FpGuard {
     #[inline(never)]
     pub(crate) fn enter() -> Self {
         let saved = arch::read();
-        arch::write(arch::canonical(saved));
+        let canonical = arch::canonical(saved);
+        if canonical != saved {
+            NON_CANONICAL_ENTRIES.fetch_add(1, Ordering::Relaxed);
+        }
+        arch::write(canonical);
         Self {
             saved,
             _not_send: PhantomData,
@@ -209,10 +228,20 @@ mod tests {
 
     use super::arch::{self, test_modes};
     use super::with_hostile_flush_to_zero;
-    use super::{FpGuard, ensure_canonical, establish_canonical, is_canonical, with_canonical};
+    use super::{
+        FpGuard, ensure_canonical, establish_canonical, is_canonical, non_canonical_entries,
+        with_canonical,
+    };
 
     // 1/3 rounded to nearest.
     const ONE_THIRD_NEAREST: u64 = 0x3FD5_5555_5555_5555;
+
+    #[test]
+    fn test_with_canonical_counts_entries_from_a_non_canonical_thread() {
+        let before = non_canonical_entries();
+        with_hostile_flush_to_zero(|| with_canonical(|| ()));
+        assert!(non_canonical_entries() > before);
+    }
 
     /// Runs `f` with `mode` applied to the current state, then restores the
     /// original state before any further floating-point operation.

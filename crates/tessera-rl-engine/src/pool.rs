@@ -102,7 +102,7 @@ where
     /// Returns an [`EngineError`] for an invalid config, options or space.
     pub fn new(cfg: E::Config, options: PoolOptions) -> Result<Self, EngineError> {
         // Config validation, spaces, initial values: all FP-sensitive.
-        fp::with_canonical(|| Self::build(cfg, options))
+        crate::entry::canonical(|| Self::build(cfg, options))
     }
 }
 
@@ -123,7 +123,7 @@ where
     /// Returns an [`EngineError`] for an invalid config, options or space.
     pub fn with_masks(cfg: E::Config, options: PoolOptions) -> Result<Self, EngineError> {
         // Config validation, spaces, initial values: all FP-sensitive.
-        fp::with_canonical(|| Self::build(cfg, options))
+        crate::entry::canonical(|| Self::build(cfg, options))
     }
 }
 
@@ -383,7 +383,7 @@ where
         if poison == Poison::Reject && self.poisoned {
             return Err(EngineError::Poisoned);
         }
-        fp::with_canonical(|| f(self))
+        crate::entry::canonical(|| f(self))
     }
 
     /// [`EnvPool::guarded`] for read-only methods; they are always rejected
@@ -395,7 +395,7 @@ where
         if self.poisoned {
             return Err(EngineError::Poisoned);
         }
-        fp::with_canonical(|| f(self))
+        crate::entry::canonical(|| f(self))
     }
 
     /// The record header of instance `id`; `None` for an unknown id or a
