@@ -74,3 +74,56 @@ def test_fp_boundary_policy_names_are_checked():
     with pytest.raises(t.ArgumentError):
         t.set_fp_policy("lenient")
     assert t.get_fp_policy() == "canonicalize"
+
+
+def test_fp_boundary_user_conversions_never_run_inside_native():
+    # codex R-PR26 P1: exact types only, so no __index__ runs inside Rust.
+    r = child("probe")
+    assert r["raised"] == "TypeError"
+    assert r["user_code_ran"] == []
+    assert r["python_layer_ok"], "the Python layer converts user objects first"
+
+
+def test_fp_boundary_gc_finalizer_changing_controls_does_not_leak_into_rust():
+    r = child("gc_finalizer")
+    assert r["finalizers_ran"] > 0, "gc ran the finalizers during native allocations"
+    assert r["identical"], "Rust never resumed under the finalizer's controls"
+    if sys.version_info < (3, 12):
+        # Python 3.11 collects inside the allocation, so inside the callout.
+        # From 3.12 the collection waits for the eval breaker and the
+        # finalizers run in Python, never inside the native module.
+        assert r["counted"] > 0, "the callout counted the change"
+
+
+def test_fp_boundary_reports_its_variant():
+    import platform
+
+    import tessera_rl._native as n
+
+    variant = n.fp_boundary()
+    if platform.system() == "Windows":
+        assert variant.startswith("none")
+    elif platform.machine() in ("arm64", "aarch64"):
+        assert variant == "AAPCS64"
+    else:
+        assert variant == "System V x86-64"
+
+
+def test_fp_boundary_callout_lint_rejects_a_direct_call(tmp_path):
+    import shutil
+
+    root = pathlib.Path(__file__).resolve().parents[2]
+    src = tmp_path / "src"
+    shutil.copytree(root / "crates" / "tessera-rl-py" / "src", src)
+    lint = root / "scripts" / "check_py_callouts.py"
+    ok = subprocess.run([sys.executable, str(lint), str(src)], capture_output=True, text=True)
+    assert ok.returncode == 0, ok.stdout
+    api = src / "api.rs"
+    api.write_text(api.read_text() + "\nfn sneaky() { unsafe { pyo3::ffi::PyList_New(0); } }\n")
+    bad = subprocess.run([sys.executable, str(lint), str(src)], capture_output=True, text=True)
+    assert bad.returncode != 0 and "PyList_New" in bad.stdout
+    capi = src / "ffi" / "capi.rs"
+    shutil.copy(root / "crates" / "tessera-rl-py" / "src" / "api.rs", api)
+    capi.write_text(capi.read_text() + "\nfn sneaky() { unsafe { ffi::PyDict_New(); } }\n")
+    bad = subprocess.run([sys.executable, str(lint), str(src)], capture_output=True, text=True)
+    assert bad.returncode != 0 and "PyDict_New" in bad.stdout

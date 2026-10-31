@@ -145,6 +145,86 @@ def main(scenario):
             result["enabled_after"] = LIBM.fegetexcept()
             LIBM.fedisableexcept(FE_DIVBYZERO | 0x01)
             result["identical"] = hostile == default
+    elif scenario == "probe":
+        # codex R-PR26: an __index__ that changes the controls. The native
+        # module accepts only exact ints, so it never calls __index__: the
+        # conversion fails with TypeError before any user code runs.
+        from tessera_rl import _native
+
+        observed = []
+
+        class Change:
+            def __index__(self):
+                observed.append(LIBM.fegetround())
+                LIBM.fesetround(FE_TOWARDZERO)
+                return 1
+
+        class Observe:
+            def __index__(self):
+                observed.append(LIBM.fegetround())
+                return 1
+
+        set_round(FE_TONEAREST)
+        try:
+            _native.make_cartpole(num_envs=Change(), seed=Observe())
+            result["raised"] = None
+        except TypeError as e:
+            result["raised"] = "TypeError"
+            result["message"] = str(e)
+        result["user_code_ran"] = list(observed)
+        result["round_after"] = LIBM.fegetround()
+        set_round(FE_TONEAREST)
+        # Through the Python layer, __index__ runs in Python, under the
+        # caller's own controls, before the native call.
+        env = t.make("tessera/CartPole-v1", num_envs=Observe(), seed=Observe())
+        result["python_layer_ok"] = env.num_envs == 1
+    elif scenario == "gc_finalizer":
+        # A __del__ that changes the controls, run by gc.collect inside a
+        # GC-tracked allocation of the native module (a callout): Rust must
+        # not resume under it. Results identical to a run without it.
+        import gc
+
+        hits = []
+
+        class Bomb:
+            def __del__(self):
+                hits.append(LIBM.fegetround())
+                LIBM.fesetround(FE_TOWARDZERO)
+
+        def episode(bombs):
+            env = t.make("tessera/CartPole-v1", num_envs=8, seed=3, outputs="owned")
+            native = env._native
+            out = [bytes(native.reset()["observations"][0])]
+            acts = np.ones(8, dtype="<i4").tobytes()
+            for _ in range(40):
+                if bombs:
+                    gc.disable()
+                    # Drain the dict, list and tuple free lists so the
+                    # native allocations are real GC allocations that can
+                    # trigger a collection.
+                    hold = [({}, [], (i, i)) for i in range(400)]
+                    for _ in range(50):
+                        b = Bomb()
+                        b.cycle = b
+                        del b
+                    gc.enable()
+                    gc.set_threshold(1)
+                o = native.step(acts)
+                if bombs:
+                    del hold
+                    gc.set_threshold(700)
+                    set_round(FE_TONEAREST)
+                out.append(bytes(o["observations"][0]) + bytes(o["rewards"]))
+            env.close()
+            return out
+
+        clean = episode(False)
+        before = t.fp_non_canonical_entries()
+        bombed = episode(True)
+        result["finalizers_ran"] = len(hits)
+        result["identical"] = bombed == clean
+        result["counted"] = t.fp_non_canonical_entries() - before
+        gc.collect()
     elif scenario == "torch_ftz":
         import torch
 
