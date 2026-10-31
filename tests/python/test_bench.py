@@ -141,24 +141,35 @@ QUAL = {"machine": "ref-x86", "exclusive_window": True, "operator": "test"}
 
 
 def qualified_report():
-    """A synthetic report that meets every condition."""
+    """A synthetic report that meets every condition: Rust and Python
+    configurations, every process record qualified."""
     method = dict(bench.load(quick=False)[1])
     pin = {"cpu_set": [2, 4, 6, 8], "applied": True, "tool": "taskset", "note": None}
     n = method["runs_for_claims"]
     stats = {"median": 1.0, "ci95": [1.0, 1.0], "n": n, "samples": [1.0] * n}
+    options = {"seed": 1, "auto_reset": "next_step", "max_episode_steps": 500, "action_batches": 64}
+
+    run_stats = {"median": 1.0, "ci95": [1.0, 1.0], "n": method["reps"], "samples": [1.0] * method["reps"]}
+
+    def record(affinity):
+        return {
+            "method": {"warmup_s": method["warmup_s"], "reps": method["reps"], "rep_s": method["rep_s"]},
+            "profile": "release",
+            "cpu": "12th Gen Intel(R) Core(TM) i7-12700H",
+            "pinning": {"process_affinity": affinity},
+            "options": dict(options),
+            "plan_fingerprint": "45cd2a7ac0333cd5",
+            "samples": run_stats,
+        }
+
+    def result(name, kind, workers, affinity):
+        runs = [record(affinity) for _ in range(n)]
+        return {"config": {"name": name, "kind": kind, "workers": workers}, **runs[0], "runs": runs, "samples": stats}
+
     results = {
-        "rust/x/inline": {
-            "config": {"name": "rust/x/inline", "kind": "rust", "workers": 0},
-            "profile": "release",
-            "pinning": {"process_affinity": "2"},
-            "samples": stats,
-        },
-        "rust/x/sync4": {
-            "config": {"name": "rust/x/sync4", "kind": "rust", "workers": 4},
-            "profile": "release",
-            "pinning": {"process_affinity": "2,4,6,8"},
-            "samples": stats,
-        },
+        "rust/x/inline": result("rust/x/inline", "rust", 0, "2"),
+        "rust/x/sync4": result("rust/x/sync4", "rust", 4, "2,4,6,8"),
+        "py/x/borrowed": result("py/x/borrowed", "python", 0, "2"),
     }
     env = {
         "machine": "ref-x86",
@@ -191,7 +202,7 @@ def test_bench_missing_qualification_is_not_valid(reference_machine):
 
 def test_bench_debug_builds_are_not_valid(reference_machine):
     report = qualified_report()
-    report["results"]["rust/x/inline"]["profile"] = "debug"
+    report["results"]["rust/x/inline"]["runs"][0]["profile"] = "debug"
     assert any("debug" in r for r in bench.qualify(report, QUAL))
     report = qualified_report()
     report["environment"]["software"]["native_build_profile"] = "debug"
@@ -200,7 +211,7 @@ def test_bench_debug_builds_are_not_valid(reference_machine):
 
 def test_bench_unobserved_pinning_is_not_valid(reference_machine):
     report = qualified_report()
-    report["results"]["rust/x/sync4"]["pinning"]["process_affinity"] = "0-19"
+    report["results"]["rust/x/sync4"]["runs"][0]["pinning"]["process_affinity"] = "0-19"
     assert any("affinity" in r for r in bench.qualify(report, QUAL))
 
 
@@ -221,3 +232,66 @@ def test_bench_non_reference_machines_are_not_valid(monkeypatch):
 def test_bench_quick_reports_explain_why_they_are_indicative(quick_report):
     assert quick_report["valid_for_claims"] is False
     assert "quick run" in quick_report["claim_check"]["reasons"]
+
+
+def test_bench_a_bad_later_run_is_not_valid(reference_machine):
+    # codex R-PR24 R2: every process record qualifies, not only the first.
+    for field, value, reason in (
+        ("profile", "debug", "build"),
+        ("cpu", "Apple M5 Max", "does not match"),
+        ("plan_fingerprint", "0000000000000000", "different plans"),
+    ):
+        report = qualified_report()
+        report["results"]["py/x/borrowed"]["runs"][3][field] = value
+        assert any(reason in r and ("run 3" in r or "process runs" in r) for r in bench.qualify(report, QUAL)), field
+    report = qualified_report()
+    report["results"]["py/x/borrowed"]["runs"][5]["pinning"]["process_affinity"] = "0-19"
+    assert any("run 5" in r and "affinity" in r for r in bench.qualify(report, QUAL))
+
+
+def test_bench_a_missing_run_is_not_valid(reference_machine):
+    report = qualified_report()
+    report["results"]["rust/x/inline"]["runs"].pop()
+    assert any("process records" in r for r in bench.qualify(report, QUAL))
+
+
+def test_bench_a_python_configuration_qualifies_with_observed_affinity(reference_machine):
+    report = qualified_report()
+    assert bench.qualify(report, QUAL) == []
+    report["results"]["py/x/borrowed"]["runs"][0]["pinning"] = {}
+    assert any("py/x/borrowed run 0" in r for r in bench.qualify(report, QUAL))
+
+
+def test_bench_python_children_record_their_affinity(quick_report):
+    py = quick_report["results"]["py/native/cartpole/n1024/borrowed"]
+    assert all("process_affinity" in run["pinning"] for run in py["runs"])
+
+
+def test_bench_ratio_refused_when_a_later_run_differs():
+    a = {"runs": [{"options": {"x": 1}, "plan_fingerprint": "f"}] * 3}
+    b = {"runs": [{"options": {"x": 1}, "plan_fingerprint": "f"}, {"options": {"x": 1}, "plan_fingerprint": "g"}]}
+    assert bench._same_work(a, a)
+    assert not bench._same_work(a, b)
+
+
+def test_bench_affinity_lists_parse_ranges():
+    assert bench.parse_affinity("2,4") == {2, 4}
+    assert bench.parse_affinity("0-3,8") == {0, 1, 2, 3, 8}
+    assert bench.parse_affinity("not exposed by this OS") is None
+
+
+def test_bench_a_later_run_with_another_method_or_fewer_samples_is_not_valid(reference_machine):
+    report = qualified_report()
+    report["results"]["rust/x/sync4"]["runs"][7]["method"]["reps"] = 3
+    assert any("run 7" in r and "method" in r for r in bench.qualify(report, QUAL))
+    report = qualified_report()
+    report["results"]["rust/x/sync4"]["runs"][2]["samples"] = {"median": 1.0, "ci95": [1, 1], "n": 4, "samples": [1.0] * 4}
+    assert any("run 2" in r and "samples" in r for r in bench.qualify(report, QUAL))
+    report = qualified_report()
+    del report["results"]["rust/x/sync4"]["runs"][1]["method"]
+    assert any("run 1" in r for r in bench.qualify(report, QUAL))  # missing metadata stays indicative
+
+
+def test_bench_copy_cost_per_kib_carries_a_ci(quick_report):
+    d = quick_report["derived"]["rust/cartpole/n1024/snapshot/copy_ns_per_kib"]
+    assert d["ci95"][0] <= d["value"] <= d["ci95"][1]

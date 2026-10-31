@@ -189,6 +189,25 @@ def pinning(machine: str | None) -> dict:
     }
 
 
+def parse_affinity(text) -> set[int] | None:
+    """A CPU list such as ``2,4`` or ``0-3,8`` (Linux ``Cpus_allowed_list``
+    syntax) as a set; ``None`` when the OS does not expose it."""
+    if not isinstance(text, str) or not text or not text[0].isdigit():
+        return None
+    cpus = set()
+    for part in text.split(","):
+        lo, _, hi = part.partition("-")
+        cpus.update(range(int(lo), int(hi or lo) + 1))
+    return cpus
+
+
+def _observed_affinity() -> str:
+    """This process's CPU affinity, in the runner's format."""
+    if hasattr(os, "sched_getaffinity"):
+        return ",".join(str(c) for c in sorted(os.sched_getaffinity(0)))
+    return "not exposed by this OS"
+
+
 def _prefix(pin: dict, cpus) -> list[str]:
     if not pin["applied"] or not cpus:
         return []
@@ -242,7 +261,8 @@ def run_rust(runner: pathlib.Path, cfg: dict, method: dict, pin: dict) -> dict:
     proc = subprocess.run([*_prefix(pin, cpus), str(runner), *args], capture_output=True, text=True, check=True)
     raw = json.loads(proc.stdout)
     stats = {k: summarize(v, method["bootstrap_resamples"], method["bootstrap_seed"]) for k, v in raw.items() if isinstance(v, list)}
-    return {**{k: v for k, v in raw.items() if not isinstance(v, list)}, **stats}
+    # The runner shares this host; its CPU model is the harness's.
+    return {**{k: v for k, v in raw.items() if not isinstance(v, list)}, **stats, "cpu": _cpu_model()}
 
 
 def _python_env(cfg: dict, method: dict):
@@ -300,6 +320,8 @@ def measure_python(cfg: dict, method: dict) -> dict:
         "options": {"seed": 1, "auto_reset": "next_step", "max_episode_steps": _limit(cfg, method), "action_batches": ACTION_BATCHES},
         "plan_fingerprint": fingerprint(plan),
         "profile": _native.build_profile(),
+        "cpu": _cpu_model(),
+        "pinning": {"process_affinity": _observed_affinity()},
         "samples": summarize(samples, method["bootstrap_resamples"], method["bootstrap_seed"]),
     }
 
@@ -321,7 +343,7 @@ def combine(per_run: list[dict], method: dict) -> dict:
     95% bootstrap CI over the run medians (the claim statistic)."""
     first = per_run[0]
     if len(per_run) == 1:
-        return {**first, "statistic": "in-process repetitions (indicative)"}
+        return {**first, "statistic": "in-process repetitions (indicative)", "runs": per_run}
     out = {k: v for k, v in first.items() if not (isinstance(v, dict) and "median" in v)}
     for key, value in first.items():
         if isinstance(value, dict) and "median" in value:
@@ -337,8 +359,18 @@ def _samples(results: dict, name: str):
     return None if r is None else r["samples"]["samples"]
 
 
+def _work(result: dict) -> set:
+    """The distinct (options, plan) pairs over every process run."""
+    return {
+        (json.dumps(r.get("options"), sort_keys=True), r.get("plan_fingerprint"))
+        for r in result.get("runs", [result])
+    }
+
+
 def _same_work(a: dict, b: dict) -> bool:
-    return a.get("options") == b.get("options") and a.get("plan_fingerprint") == b.get("plan_fingerprint")
+    """Every run on both sides ran one and the same plan and options."""
+    work_a, work_b = _work(a), _work(b)
+    return len(work_a) == 1 and work_a == work_b
 
 
 def derive(results: dict, derived: list[dict], method: dict) -> dict:
@@ -364,8 +396,11 @@ def derive(results: dict, derived: list[dict], method: dict) -> dict:
     for name, r in results.items():
         if r.get("metric") == "snapshot":
             kib = r["record_bytes"] / 1024
+            copy = r["snapshot_all_copy"]
             out[f"{name}/copy_ns_per_kib"] = {
-                "value": r["snapshot_all_copy"]["median"] / kib,
+                "value": copy["median"] / kib,
+                # A linear transform of snapshot_all_copy, so its CI scales.
+                "ci95": [copy["ci95"][0] / kib, copy["ci95"][1] / kib],
                 "budget_ns_per_kib": 1000.0,  # ADR-0010: at most 1 us/KB
                 "from": [name],
             }
@@ -402,13 +437,30 @@ def qualify(report: dict, qualification: dict | None) -> list[str]:
         reasons.append("the native module is not a release build")
     if not report["pinning"]["applied"]:
         reasons.append("pinning not applied")
+    cpu_id = record.get("cpu_id") if record else None
     for name, r in report["results"].items():
-        if r.get("profile") not in (None, "release"):
-            reasons.append(f"{name}: {r.get('profile')} build")
-        observed = r.get("pinning", {}).get("process_affinity")
+        runs = r.get("runs", [])
+        if len(runs) != report["runs"]:
+            reasons.append(f"{name}: {len(runs)} process records, expected {report['runs']}")
+        if len(_work(r)) != 1:
+            reasons.append(f"{name}: the process runs ran different plans or options")
         cpus = _cpus_for(r["config"], report["pinning"]) if report["pinning"]["applied"] else None
-        if cpus and observed != ",".join(str(c) for c in cpus):
-            reasons.append(f"{name}: observed affinity {observed!r} differs from {cpus}")
+        # Every process record must qualify, not only the first.
+        for k, run in enumerate(runs):
+            if run.get("profile") != "release":
+                reasons.append(f"{name} run {k}: {run.get('profile')!r} build")
+            observed = parse_affinity(run.get("pinning", {}).get("process_affinity"))
+            if cpus and observed != set(cpus):
+                reasons.append(f"{name} run {k}: observed affinity {observed} differs from {cpus}")
+            if not cpu_id or cpu_id not in str(run.get("cpu", "")):
+                reasons.append(f"{name} run {k}: CPU {run.get('cpu')!r} does not match {cpu_id!r}")
+            if r["config"].get("metric") != "memory":
+                eff = run.get("method") or {}
+                if eff.get("warmup_s") != method["warmup_s"] or eff.get("reps") != method["reps"]:
+                    reasons.append(f"{name} run {k}: effective method {eff} differs from the report's")
+                for key, value in run.items():
+                    if isinstance(value, dict) and "n" in value and value["n"] != method["reps"]:
+                        reasons.append(f"{name} run {k}: {key} has {value['n']} samples, expected {method['reps']}")
         for key, value in r.items():
             if isinstance(value, dict) and "n" in value and value["n"] < report["runs"]:
                 reasons.append(f"{name}: {key} has {value['n']} samples")
