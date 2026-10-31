@@ -1,0 +1,53 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+#
+# cargo-fuzz targets (ADR-0024 layer 5), outside the workspace: nightly
+# only, run by .github/workflows/fuzz.yml. Run one locally with
+# `cargo +nightly fuzz run <target>` from the repository root.
+
+[package]
+name = "tessera-rl-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+license = "MIT OR Apache-2.0"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+tessera-rl-core = { path = "../crates/tessera-rl-core" }
+tessera-rl-num = { path = "../crates/tessera-rl-num" }
+tessera-rl-engine = { path = "../crates/tessera-rl-engine" }
+tessera-rl-classic = { path = "../crates/tessera-rl-classic" }
+
+# Not part of the main workspace.
+[workspace]
+
+[[bin]]
+name = "actions"
+path = "fuzz_targets/actions.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "config"
+path = "fuzz_targets/config.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "record"
+path = "fuzz_targets/record.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "decode"
+path = "fuzz_targets/decode.rs"
+test = false
+doc = false
+bench = false
