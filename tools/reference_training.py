@@ -197,8 +197,12 @@ def make_single(backend: str):
     return gymnasium.make("tessera/CartPole-v1")
 
 
-def train(backend: str, seed: int, h: Hyper) -> dict:
+def train(backend: str, seed: int, h: Hyper, eval_episodes: int = 20) -> dict:
     """Trains one agent; returns its curve, evaluation and timings."""
+    if h.total_steps < h.num_envs * h.num_steps:
+        raise ValueError(f"total_steps {h.total_steps} is less than one rollout ({h.num_envs * h.num_steps} steps)")
+    if eval_episodes <= 0:
+        raise ValueError(f"eval_episodes must be positive, got {eval_episodes}")
     np.random.seed(seed)
     torch.manual_seed(seed)
     envs = make_vector(backend, h.num_envs, seed)
@@ -310,7 +314,7 @@ def train(backend: str, seed: int, h: Hyper) -> dict:
                 optimizer.step()
     envs.close()
     train_seconds = time.perf_counter() - started
-    evaluation = evaluate(backend, agent, h)
+    evaluation = evaluate(backend, agent, eval_episodes)
     return {
         "backend": backend,
         "seed": seed,
@@ -331,10 +335,10 @@ def curve_mean(curve: list[dict]) -> float:
     return float(np.mean(values)) if values else 0.0
 
 
-def evaluate(backend: str, agent: Agent, h: Hyper, episodes: int | None = None) -> list[float]:
+def evaluate(backend: str, agent: Agent, episodes: int) -> list[float]:
     env = make_single(backend)
     out = []
-    for i in range(episodes or ARGS.eval_episodes):
+    for i in range(episodes):
         o, _ = env.reset(seed=EVAL_SEED_BASE + i)
         total, done = 0.0, False
         while not done:
@@ -377,7 +381,7 @@ def main() -> int:
     plan += [(seed, f"mutant:{m}") for m in mutants for seed in ARGS.mutant_seeds]
     runs = []
     for seed, backend in plan:
-        r = train(backend, seed, h)
+        r = train(backend, seed, h, ARGS.eval_episodes)
         runs.append(r)
         sys.stderr.write(f"{backend} seed {seed}: eval mean {r['eval_mean']:.1f} in {r['train_seconds']}s\n")
 

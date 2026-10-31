@@ -4,7 +4,7 @@
 # maturin's default of macOS 11. Ignored on other platforms.
 export MACOSX_DEPLOYMENT_TARGET := 13.0
 
-.PHONY: fmt fmt-check clippy test doc readme readme-check pre-push deny check-targets compat-test py-entries py-callouts py-test py-test-hooks py-test-torch pre-push-torch gym-equivalence reference-training bench bench-quick bench-kernels gungraun gungraun-bless
+.PHONY: fmt fmt-check clippy test doc readme readme-check pre-push deny check-targets compat-test py-entries py-callouts py-test py-test-hooks py-test-torch pre-push-torch gym-equivalence reference-training learning-test learning-calibrate bench bench-quick bench-kernels gungraun gungraun-bless
 
 fmt:
 	cargo fmt --all
@@ -103,6 +103,26 @@ gym-equivalence:
 reference-training:
 	uv sync --locked --python 3.11 --group test --group torch
 	uv run --locked --python 3.11 --group test --group torch python tools/reference_training.py --out reference-training.json
+
+# SPEC 18 learning test (nightly): the reference PPO on seeds 1-5 against
+# the calibrated threshold (compat/learning/cartpole.json); red only after
+# two consecutive failing nights (PREVIOUS names last night's result).
+PREVIOUS ?=
+learning-test:
+	uv sync --locked --python 3.11 --group test --group torch
+	uv run --locked --python 3.11 --group test --group torch python tools/learning_test.py night --calibration compat/learning/cartpole.json $(if $(PREVIOUS),--previous $(PREVIOUS)) --out learning-test.json
+
+# Re-calibrates the learning test (a reviewed re-bless, like gungraun):
+# seeds 101-140 in 4 single-threaded shards, on Linux x86-64.
+learning-calibrate:
+	uv sync --locked --python 3.11 --group test --group torch
+	rm -f learning-cal-*.json
+	pids=""; for k in 0 1 2 3; do a=$$((101 + k * 10)); \
+	  uv run --locked --python 3.11 --group test --group torch python tools/learning_test.py scores --total-steps 150000 --seeds $$(seq $$a $$((a + 9))) --out learning-cal-$$k.json & \
+	  pids="$$pids $$!"; \
+	done; status=0; for p in $$pids; do wait $$p || status=1; done; \
+	if [ $$status -ne 0 ]; then echo "a calibration shard failed" >&2; exit 1; fi
+	uv run --locked --python 3.11 --group test --group torch python tools/learning_test.py calibrate --out compat/learning/cartpole.json learning-cal-0.json learning-cal-1.json learning-cal-2.json learning-cal-3.json
 
 # Benchmark harness (ADR-0025, tools/bench): the full method, a JSON
 # report per machine; `MACHINE` names a compat/machines.toml entry.
