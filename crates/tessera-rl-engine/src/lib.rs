@@ -26,6 +26,7 @@ mod snapshot;
 mod sys;
 mod validate;
 
+pub use buffer::{OutputDtype, OutputField, OutputRegion, OutputStorage};
 pub use error::EngineError;
 pub use layout::MAX_LEAVES;
 pub use masks::{IllegalActionPolicy, MaskProvider, Masked, NoMasks};

@@ -89,6 +89,10 @@ pub enum EngineError {
         /// The label.
         label: u64,
     },
+    /// The process ran out of output storage ids (2^64 pools built): ids
+    /// are never reused, so no further pool can be constructed.
+    #[error("the output storage id counter is exhausted")]
+    StorageIdsExhausted,
     /// The pool's branch counter cannot be incremented.
     #[error("the branch counter is exhausted")]
     BranchCounterExhausted,

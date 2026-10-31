@@ -10,8 +10,9 @@
 //!
 //! 1. The buffers are never reallocated after construction: the pool never
 //!    pushes to or resizes them, so pointers taken at the start of an epoch
-//!    stay valid for the whole epoch. The pointers are to the heap data of
-//!    the `Vec`s, not to the pool, so moving the pool between calls is fine.
+//!    stay valid for the whole epoch. The pointers are to the heap data
+//!    (record arrays, and the shared output storage of [`storage`]), not to
+//!    the pool, so moving the pool between calls is fine.
 //! 2. Chunk ranges are disjoint by construction: chunk `c` covers instances
 //!    `c * size .. min((c + 1) * size, n)`, and worker `w` takes the chunks
 //!    `c` with `c % workers == w`, so no two workers, and no two chunks of
@@ -25,6 +26,8 @@
 //!    created and dropped inside the job, and the caller's output views are
 //!    returned only after `run`.
 
+mod storage;
+
 use core::ops::Range;
 
 use tessera_rl_core::{Bool8, Environment};
@@ -35,6 +38,9 @@ use crate::outputs::OutputsView;
 use crate::pool::Chunk;
 use crate::sys::Gang;
 use crate::sys::sync::{AtomicBool, Ordering};
+
+pub(crate) use storage::{Buf, StorageBuilder};
+pub use storage::{OutputDtype, OutputField, OutputRegion, OutputStorage};
 
 #[derive(Clone, Copy)]
 struct Raw<T> {
@@ -530,17 +536,17 @@ mod tests {
                 &discrete[i * 2..i * 2 + 2],
                 &[i32::try_from(owner(i)).unwrap(); 2]
             );
-            assert_eq!(&outputs.generations[i * 2..i * 2 + 2], &[owner(i); 2]);
+            assert_eq!(&outputs.generations()[i * 2..i * 2 + 2], &[owner(i); 2]);
         }
-        assert!(outputs.masks.iter().all(|m| m.get()));
-        assert!(outputs.invalid_agent_event.iter().all(|m| m.get()));
+        assert!(outputs.masks().iter().all(|m| m.get()));
+        assert!(outputs.invalid_agent_event().iter().all(|m| m.get()));
         for i in 0..N {
             #[expect(clippy::cast_precision_loss, reason = "tiny marks")]
             let mark = owner(i) as f32;
-            assert_eq!(outputs.episode_invalid_agent_events[i], mark);
+            assert_eq!(outputs.episode_invalid_agent_events()[i], mark);
         }
-        assert!(outputs.episode_truncated.iter().all(|m| m.get()));
-        let first_leaf = &outputs.observations[0];
+        assert!(outputs.episode_truncated().iter().all(|m| m.get()));
+        let first_leaf = outputs.observation(0).unwrap();
         for i in 0..N {
             let row = &first_leaf[i * 6..(i + 1) * 6];
             assert!(row.iter().all(|&b| u32::from(b) == owner(i)));

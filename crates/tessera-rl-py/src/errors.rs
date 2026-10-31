@@ -146,9 +146,9 @@ fn engine_kind(e: &EngineError) -> Kind {
         | EngineError::WorkerStartup { .. }
         | EngineError::InvalidAgentEvent { .. } => Kind::Poisoned,
         EngineError::NestedEngine => Kind::Concurrency,
-        EngineError::CounterExhausted { .. } | EngineError::BranchCounterExhausted => {
-            Kind::Exhausted
-        }
+        EngineError::CounterExhausted { .. }
+        | EngineError::BranchCounterExhausted
+        | EngineError::StorageIdsExhausted => Kind::Exhausted,
     }
 }
 
