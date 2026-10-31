@@ -12,6 +12,8 @@ members = [
     "tools/math-oracle",
     "tools/spikes/layout",
 ]
+# The fuzz targets build with nightly and cargo-fuzz, outside the workspace.
+exclude = ["fuzz"]
 default-members = [
     "crates/tessera-rl",
     "crates/tessera-rl-core",
@@ -42,6 +44,7 @@ tessera-rl-classic = { path = "crates/tessera-rl-classic", version = "0.1.0" }
 
 core_affinity = "0.8"
 criterion = { version = "0.8", default-features = false, features = ["cargo_bench_support"] }
+proptest = { version = "1", default-features = false, features = ["std"] }
 libc = "0.2"
 loom = "0.7"
 proc-macro-crate = "3"
