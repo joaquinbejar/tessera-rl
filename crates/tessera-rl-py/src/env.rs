@@ -235,42 +235,17 @@ where
         tessera_rl_core::AdaptiveValues<E::Config>,
     M: MaskProvider<E>,
 {
-    /// A reset with one optional seed per reset instance: the instances
-    /// with a seed are reseeded, the others keep theirs. Both groups are
-    /// reset in this one admitted call.
+    /// A reset with one optional seed per reset instance (`None` keeps
+    /// that instance's seed), as one engine call: validated as a whole
+    /// before anything is written (ADR-0028). A full reset goes through
+    /// `reset_all`, which recovers a poisoned pool.
     fn reset_list(&mut self, ids: Option<&[u32]>, seeds: &[Option<u64>]) -> Result<(), BindError> {
-        let all: Vec<u32>;
-        let ids = if let Some(ids) = ids {
-            ids
-        } else {
-            let n = u32::try_from(self.layout.num_envs)
-                .map_err(|_| BindError::Argument("num_envs too large".to_owned()))?;
-            all = (0..n).collect();
-            &all
+        let seeds: Vec<Option<Seed>> = seeds.iter().map(|s| s.map(Seed::new)).collect();
+        let reseed = Reseed::Each(&seeds);
+        match ids {
+            None => self.pool.reset_all(reseed)?,
+            Some(ids) => self.pool.reset(ids, reseed)?,
         };
-        if ids.len() != seeds.len() {
-            return Err(BindError::Argument(format!(
-                "{} seeds for {} instances",
-                seeds.len(),
-                ids.len()
-            )));
-        }
-        let (mut kept, mut seeded, mut values) = (Vec::new(), Vec::new(), Vec::new());
-        for (&id, seed) in ids.iter().zip(seeds) {
-            match seed {
-                None => kept.push(id),
-                Some(s) => {
-                    seeded.push(id);
-                    values.push(Seed::new(*s));
-                }
-            }
-        }
-        if !seeded.is_empty() {
-            self.pool.reset(&seeded, Reseed::List(&values))?;
-        }
-        if !kept.is_empty() {
-            self.pool.reset(&kept, Reseed::Keep)?;
-        }
         Ok(())
     }
 }

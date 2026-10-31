@@ -243,3 +243,29 @@ def test_gym_seed_none_draws_and_exposes_a_reproducible_seed():
     assert np.array_equal(a.reset()[0], again.reset()[0])
     assert tg.make(ID, num_envs=2, seed=5).construction_seed == 5
     assert gymnasium.make(ID).unwrapped.construction_seed >= 0
+
+
+@pytest.mark.parametrize("ids", [[0, 99], [0, 0]])
+def test_gym_mixed_seed_reset_is_atomic(ids):
+    # codex R-PR22 R2: a mixed seed list resets in one engine call, so an
+    # invalid request writes nothing (ADR-0028).
+    env = tg.make(ID, num_envs=3)
+    env.reset(seed=3)
+    env.step(np.ones(3, dtype=np.int64))
+    native = env._native
+    before = [native.snapshot(i) for i in range(3)]
+    with pytest.raises(t.TesseraError):
+        native.reset([7, None], ids)
+    assert [native.snapshot(i) for i in range(3)] == before
+
+
+def test_gym_mixed_seed_reset_keeps_the_output_generation_on_error():
+    env = t.make("tessera/CartPole-v1", num_envs=3)  # borrowed views carry the generation
+    env.reset(seed=3)
+    native = env._native
+    g = native.outputs()["rewards"].generation()
+    with pytest.raises(t.TesseraError):
+        native.reset([7, None], [0, 99])
+    with pytest.raises(t.TesseraError):
+        native.reset([7, None], [0, 0])
+    assert native.outputs()["rewards"].generation() == g
