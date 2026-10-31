@@ -6,7 +6,7 @@
 use pyo3::prelude::*;
 use pyo3::types::{PyByteArray, PyBytes, PyDict, PyList, PyTuple};
 
-use crate::env::{PoolArgs, TagFields};
+use crate::env::{PoolArgs, PoolOps, TagFields};
 use crate::errors::{Kind, error, to_py};
 use crate::ffi::inner::Inner;
 
@@ -106,7 +106,8 @@ pub(crate) fn layout<'py>(py: Python<'py>, inner: &Inner) -> PyResult<Bound<'py,
     })
 }
 
-/// `reset(seed=None)`: resets every instance (a new seed base if given).
+/// `reset(seed=None)`: resets every instance (a new seed base if given) and
+/// returns its outputs, captured in the same admitted section.
 pub(crate) fn reset<'py>(
     py: Python<'py>,
     inner: &Inner,
@@ -125,12 +126,14 @@ pub(crate) fn reset<'py>(
     };
     inner.with(py, |ops| {
         py.detach(|| ops.reset(seed)).map_err(|e| to_py(py, e))?;
-        Ok(py.None().into_bound(py))
+        outputs_of(py, ops)
     })
 }
 
 /// `step(actions: bytes)`: one step; `actions` are little-endian int32,
-/// one per agent row.
+/// one per agent row. Returns the outputs of this step, captured in the same
+/// admitted section, so no other call can interleave between the mutation
+/// and the copy.
 pub(crate) fn step<'py>(
     py: Python<'py>,
     inner: &Inner,
@@ -154,7 +157,7 @@ pub(crate) fn step<'py>(
         .collect();
     inner.with(py, |ops| {
         py.detach(|| ops.step(&actions)).map_err(|e| to_py(py, e))?;
-        Ok(py.None().into_bound(py))
+        outputs_of(py, ops)
     })
 }
 
@@ -176,27 +179,29 @@ fn one_arg<'py>(
 /// `outputs()`: copies of the last call's outputs (`owned` mode), as fresh
 /// bytearrays the caller owns (NumPy wraps them writable, without copying).
 pub(crate) fn outputs<'py>(py: Python<'py>, inner: &Inner) -> PyResult<Bound<'py, PyAny>> {
-    inner.with(py, |ops| {
-        let o = ops.outputs();
-        let d = PyDict::new(py);
-        let obs = PyList::empty(py);
-        for leaf in &o.observations {
-            obs.append(PyByteArray::new(py, leaf))?;
-        }
-        d.set_item("observations", obs)?;
-        for (key, buf) in [
-            ("rewards", &o.rewards),
-            ("agent_terminated", &o.agent_terminated),
-            ("agent_truncated", &o.agent_truncated),
-            ("alive", &o.alive),
-            ("episode_terminated", &o.episode_terminated),
-            ("episode_truncated", &o.episode_truncated),
-            ("masks", &o.masks),
-        ] {
-            d.set_item(key, PyByteArray::new(py, buf))?;
-        }
-        Ok(d.into_any())
-    })
+    inner.with(py, |ops| outputs_of(py, ops))
+}
+
+fn outputs_of<'py>(py: Python<'py>, ops: &dyn PoolOps) -> PyResult<Bound<'py, PyAny>> {
+    let o = ops.outputs();
+    let d = PyDict::new(py);
+    let obs = PyList::empty(py);
+    for leaf in &o.observations {
+        obs.append(PyByteArray::new(py, leaf))?;
+    }
+    d.set_item("observations", obs)?;
+    for (key, buf) in [
+        ("rewards", &o.rewards),
+        ("agent_terminated", &o.agent_terminated),
+        ("agent_truncated", &o.agent_truncated),
+        ("alive", &o.alive),
+        ("episode_terminated", &o.episode_terminated),
+        ("episode_truncated", &o.episode_truncated),
+        ("masks", &o.masks),
+    ] {
+        d.set_item(key, PyByteArray::new(py, buf))?;
+    }
+    Ok(d.into_any())
 }
 
 /// `snapshot(id) -> bytes`: the canonical encoding of instance `id`.

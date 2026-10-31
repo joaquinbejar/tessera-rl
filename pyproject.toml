@@ -6,6 +6,9 @@ description = "Fast, deterministic, snapshot-able reinforcement learning environ
 requires-python = ">=3.11"
 license = "MIT OR Apache-2.0"
 version = "0.1.0"
+# Outputs are NumPy arrays; the floor admits both conformance environments
+# (numpy 2.4.6 in [env.main], 1.26.4 in [env.pufferlib]).
+dependencies = ["numpy>=1.26.4"]
 
 [build-system]
 requires = ["maturin>=1.16,<2"]

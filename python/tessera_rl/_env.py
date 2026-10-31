@@ -47,19 +47,22 @@ class Env:
 
     def reset(self, seed: int | None = None) -> Step:
         """Resets every instance; a new seed base if ``seed`` is given."""
-        self._native.reset() if seed is None else self._native.reset(seed)
-        return self._outputs()
+        out = self._native.reset() if seed is None else self._native.reset(seed)
+        return self._wrap(out)
 
     def step(self, actions) -> Step:
-        """One step. ``actions`` has one int per agent row, ``(num_envs, agents)``."""
-        acts = np.ascontiguousarray(actions, dtype="<i4")
+        """One step. ``actions`` has one int per agent row, ``(num_envs, agents)``.
+
+        Actions are discrete: every value must be an exact integer in the
+        int32 range (integer dtypes, or floats with no fractional part).
+        Anything else raises ``ActionError`` before the pool is touched.
+        """
+        acts = _discrete_actions(actions)
         if acts.size != self.num_envs * self.agents:
             raise _native.ActionError(f"expected {self.num_envs * self.agents} actions, got {acts.size}")
-        self._native.step(acts.tobytes())
-        return self._outputs()
+        return self._wrap(self._native.step(acts.tobytes()))
 
-    def _outputs(self) -> Step:
-        out = self._native.outputs()
+    def _wrap(self, out: dict) -> Step:
         n, a = self.num_envs, self.agents
         obs = {
             name: np.frombuffer(buf, dtype=dtype).reshape((n, a, *shape))
@@ -108,6 +111,30 @@ class Env:
 
     def __exit__(self, *exc) -> None:
         self.close()
+
+
+_I32 = np.iinfo(np.int32)
+
+
+def _discrete_actions(actions) -> np.ndarray:
+    """``actions`` as contiguous little-endian int32, converted exactly."""
+    try:
+        arr = np.asarray(actions)
+    except (TypeError, ValueError) as e:
+        raise _native.ActionError(f"actions are not an array: {e}") from None
+    if arr.dtype.kind in "iu":
+        if arr.size and (arr.min() < _I32.min or arr.max() > _I32.max):
+            raise _native.ActionError("actions out of the int32 range")
+    elif arr.dtype.kind == "f":
+        if not np.all(np.isfinite(arr)):
+            raise _native.ActionError("actions must be finite")
+        if not np.all(arr == np.trunc(arr)):
+            raise _native.ActionError("discrete actions must be integers")
+        if arr.size and (arr.min() < _I32.min or arr.max() > _I32.max):
+            raise _native.ActionError("actions out of the int32 range")
+    elif arr.size:
+        raise _native.ActionError(f"actions must be integers, got dtype {arr.dtype}")
+    return np.ascontiguousarray(arr, dtype="<i4")
 
 
 def make(env_id: str, num_envs: int = 1, seed: int = 0, **kwargs) -> Env:

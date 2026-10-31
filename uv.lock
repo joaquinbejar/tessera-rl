@@ -743,6 +743,9 @@ name = "tessera-rl"
 version = "0.1.0"
 source = { editable = "." }
 default-groups = ["test"]
+dependencies = [
+    { name = "numpy" },
+]
 
 [package.dev-dependencies]
 conformance = [
@@ -765,6 +768,7 @@ torch = [
 ]
 
 [package.metadata]
+requires-dist = [{ name = "numpy", specifier = ">=1.26.4" }]
 
 [package.metadata.requires-dev]
 conformance = [

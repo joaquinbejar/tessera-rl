@@ -183,3 +183,73 @@ def test_step_and_close_from_two_threads_never_crash():
         thread.join()
         with pytest.raises(t.ArgumentError):
             env.step(acts)
+
+
+def test_step_outputs_are_never_those_of_a_concurrent_reset():
+    # codex R-PR17: a step must return its own outputs, never those of a
+    # reset admitted between the mutation and the copy. Every step here is
+    # at most 4 steps after a reset, so no CartPole instance has terminated
+    # and every step reward is 1; a reset's rewards are all 0.
+    env = cartpole(20000, 3)
+    env.reset()
+    acts = np.ones((20000, 1), dtype=np.int32)
+    stop = threading.Event()
+    bad = []
+
+    def stepper():
+        n = 0
+        while not stop.is_set():
+            try:
+                if n % 4 == 0:
+                    env.reset()
+                s = env.step(acts)
+                if not np.all(s.rewards == 1.0):
+                    bad.append(s.rewards.min())
+                n += 1
+            except t.ConcurrencyError:
+                pass
+
+    thread = threading.Thread(target=stepper)
+    thread.start()
+    deadline = time.monotonic() + 5
+    try:
+        while time.monotonic() < deadline:
+            try:
+                env.reset()
+            except t.ConcurrencyError:
+                pass
+    finally:
+        stop.set()
+        thread.join()
+    assert not bad
+
+
+@pytest.mark.parametrize(
+    "actions",
+    [
+        np.full((2, 1), 0.9),
+        np.full((2, 1), 2**32, dtype=np.int64),
+        np.full((2, 1), -(2**31) - 1, dtype=np.int64),
+        np.full((2, 1), np.nan),
+        np.full((2, 1), np.inf),
+        np.array([["a"], ["b"]]),
+        [[0.5], [1]],
+    ],
+)
+def test_step_inexact_actions_raise_action_error_before_mutation(actions):
+    env = cartpole(2, 7)
+    env.reset()
+    before = env.snapshot(0)
+    with pytest.raises(t.ActionError):
+        env.step(actions)
+    assert env.snapshot(0) == before
+
+
+def test_step_exact_float_and_int64_actions_are_accepted():
+    a = cartpole(2, 7)
+    b = cartpole(2, 7)
+    a.reset()
+    b.reset()
+    sa = a.step(np.ones((2, 1), dtype=np.float64))
+    sb = b.step(np.ones((2, 1), dtype=np.int64))
+    assert np.array_equal(sa.observations["obs"], sb.observations["obs"])
