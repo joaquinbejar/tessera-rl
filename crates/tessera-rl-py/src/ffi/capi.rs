@@ -22,9 +22,12 @@
 //!   own types, which are not GC-tracked); reads of exact built-in types
 //!   (`PyTuple_Size`/`GetItem`, `PyList_Size`/`GetItem`, `PyDict_Next`,
 //!   `PyBytes_AsString`/`Size`); appends and string-keyed inserts into
-//!   containers we created, with values we created; `PyErr_Fetch`/`Restore`
-//!   /`Occurred`/`Clear`; reference increments; releasing and reacquiring
-//!   the interpreter; and a decref of a [`Mine`].
+//!   containers we created, with values we created; `PyErr_Fetch`,
+//!   `PyErr_Occurred`, and `PyErr_Restore` with no exception set (it then
+//!   decrefs nothing); reference increments; releasing and reacquiring the
+//!   interpreter; and a decref of a [`Mine`]. `PyErr_Clear` is never
+//!   called: dropping a pending exception can run finalizers through its
+//!   traceback, so it would be a callout.
 //!
 //! **Decref invariant.** The bindings never own a reference to a user
 //! object: everything they read from Python (arguments, keyword values,
@@ -34,6 +37,12 @@
 //! deallocation runs no Python code and is a direct decref. Owning a
 //! reference that may reach a user object would need a decref through a
 //! callout (`Py_DecRef` can run a finalizer); add one to the table first.
+//!
+//! **Borrow invariant.** A [`Ref`] is valid only while its owner keeps the
+//! object alive. A `Ref` borrowed from a container a user can reach (a
+//! keyword dict, a tuple or list the caller passed) must not be used after
+//! a callout that can run Python code: that code can mutate the container
+//! and drop the object. Read every argument first, then allocate.
 //!
 //! **Exact types.** Arguments are read only from exact built-in types
 //! (`int`, `bool`, `str`, `bytes`, `tuple`, `list`, `dict`, `None`); any
