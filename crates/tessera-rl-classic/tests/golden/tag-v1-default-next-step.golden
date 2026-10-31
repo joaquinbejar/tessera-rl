@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: MIT OR Apache-2.0
 # golden fixture tag-v1-default-next-step; see tests/support/mod.rs
-format=1
+format=2
 env_id=tessera/Tag-v1
 env_version=1
 config_hash=2c7115abec4d13f9

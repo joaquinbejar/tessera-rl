@@ -4,7 +4,8 @@
 //! generator, per-step output digests and golden fixtures (ADR-0009,
 //! ADR-0024 layer 2).
 //!
-//! Fixture format 1 (`tests/golden/<name>.golden`, plain text):
+//! Fixture format 2 (`tests/golden/<name>.golden`, plain text; format 1
+//! had 15 fields, without `episode_invalid_spawns`):
 //!
 //! - `#` comment lines;
 //! - `key=value` header lines: `format`, `env_id`, `env_version`,
@@ -48,7 +49,7 @@ use tessera_rl_num::math::MATH_VERSION;
 use tessera_rl_num::rng::{RngAuthority, StepRng};
 
 /// Fixture format version.
-pub const FORMAT: u32 = 1;
+pub const FORMAT: u32 = 2;
 /// Identifier of the action generator below; bump it with any change.
 pub const ACTIONS_GEN: &str = "mix-heuristic-v1";
 /// Digest fields, in fixture order.
@@ -519,7 +520,14 @@ pub fn bless_into(
 pub fn compare_text(name: &str, committed: &str, lines: &[String]) -> Result<(), String> {
     let old: Vec<&str> = committed.lines().collect();
     let new: Vec<&str> = lines.iter().map(String::as_str).collect();
-    for key in ["format", "env_id", "env_version", "math_version", "actions"] {
+    for key in [
+        "format",
+        "env_id",
+        "env_version",
+        "math_version",
+        "actions",
+        "fields",
+    ] {
         if value(&old, key) != value(&new, key) {
             return Err(format!(
                 "{name}: fixture {key} differs from the code; a behaviour change needs a version bump"

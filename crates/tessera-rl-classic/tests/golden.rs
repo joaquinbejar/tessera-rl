@@ -188,7 +188,7 @@ fn test_golden_bless_policy_needs_an_env_version_bump() {
         Ok(Bless::Write)
     );
     // Harness migrations need the matching reason.
-    let format = bump(&changed, "format", "2");
+    let format = bump(&changed, "format", "99");
     assert!(bless_decision(Some(&old), &text(&format), None).is_err());
     assert!(bless_decision(Some(&old), &text(&format), Some(BlessReason::Generator)).is_err());
     assert_eq!(
