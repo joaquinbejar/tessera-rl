@@ -4,7 +4,7 @@
 # maturin's default of macOS 11. Ignored on other platforms.
 export MACOSX_DEPLOYMENT_TARGET := 13.0
 
-.PHONY: fmt fmt-check clippy test doc readme readme-check pre-push deny check-targets compat-test py-entries py-callouts py-test py-test-hooks py-test-torch pre-push-torch gym-equivalence bench bench-quick bench-kernels gungraun gungraun-bless
+.PHONY: fmt fmt-check clippy test doc readme readme-check pre-push deny check-targets compat-test py-entries py-callouts py-test py-test-hooks py-test-torch pre-push-torch gym-equivalence reference-training bench bench-quick bench-kernels gungraun gungraun-bless
 
 fmt:
 	cargo fmt --all
@@ -95,6 +95,13 @@ py-test-torch:
 gym-equivalence:
 	uv sync --locked --python 3.11
 	uv run --locked --python 3.11 python tools/gym_equivalence.py
+
+# SPEC 14.2 reference training: PPO on tessera/CartPole-v1 through the
+# Gymnasium adapter, Gymnasium's CartPole-v1 as the control (nightly CI,
+# a few minutes; not in pre-push). JSON report in reference-training.json.
+reference-training:
+	uv sync --locked --python 3.11 --group test --group torch
+	uv run --locked --python 3.11 --group test --group torch python tools/reference_training.py --out reference-training.json
 
 # Benchmark harness (ADR-0025, tools/bench): the full method, a JSON
 # report per machine; `MACHINE` names a compat/machines.toml entry.
