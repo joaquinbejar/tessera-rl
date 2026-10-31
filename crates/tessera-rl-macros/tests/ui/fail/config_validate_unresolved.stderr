@@ -1,0 +1,5 @@
+error[E0425]: cannot find function `no_such_check` in this scope
+ --> tests/ui/fail/config_validate_unresolved.rs:6:21
+  |
+6 | #[config(validate = no_such_check)]
+  |                     ^^^^^^^^^^^^^
