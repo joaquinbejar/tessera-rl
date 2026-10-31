@@ -51,6 +51,47 @@ pub enum EngineError {
         /// Instances to reseed.
         instances: usize,
     },
+    /// An imported record has an inconsistent engine header.
+    #[error("record {index}: {reason}")]
+    InvalidRecord {
+        /// Position of the record in the call.
+        index: usize,
+        /// What is inconsistent.
+        reason: &'static str,
+    },
+    /// An imported record violates a game invariant (`Validate`).
+    #[error("record {index}: {violation}")]
+    Invariant {
+        /// Position of the record in the call.
+        index: usize,
+        /// The violated invariant.
+        violation: tessera_rl_core::InvariantViolation,
+    },
+    /// A record slice does not have one record per instance.
+    #[error("{records} records for {instances} instances")]
+    RecordCount {
+        /// Records given.
+        records: usize,
+        /// Instances in the pool.
+        instances: usize,
+    },
+    /// A label list does not have one label per destination.
+    #[error("{labels} labels for {destinations} destinations")]
+    LabelCount {
+        /// Labels given.
+        labels: usize,
+        /// Destinations.
+        destinations: usize,
+    },
+    /// A `fork_branched` label appears twice in one call.
+    #[error("branch label {label} appears more than once")]
+    DuplicateLabel {
+        /// The label.
+        label: u64,
+    },
+    /// The pool's branch counter cannot be incremented.
+    #[error("the branch counter is exhausted")]
+    BranchCounterExhausted,
     /// An action buffer has the wrong length.
     #[error("{buffer} actions hold {actual} values, expected {expected}")]
     ActionLength {
