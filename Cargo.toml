@@ -10,6 +10,7 @@ members = [
     "crates/tessera-rl-engine",
     "crates/tessera-rl-classic",
     "tools/math-oracle",
+    "tools/bench-runner",
     "tools/spikes/layout",
     "crates/tessera-rl-py",
 ]
