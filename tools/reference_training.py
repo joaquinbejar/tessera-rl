@@ -82,7 +82,7 @@ import tessera_rl
 import tessera_rl.gym  # noqa: F401  registers tessera/CartPole-v1
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
-from reference_gate import evaluate_gate  # noqa: E402
+from reference_gate import evaluate_gate, truncation_bootstrap_mask  # noqa: E402
 
 EVAL_SEED_BASE = 10_000
 
@@ -244,17 +244,18 @@ def train(backend: str, seed: int, h: Hyper) -> dict:
             env_seconds += time.perf_counter() - t0
             reward = torch.tensor(np.asarray(reward, dtype=np.float32))
             # A truncated episode is not terminal: bootstrap its last reward
-            # with the value of its final observation. A terminated one is.
-            trunc_np = np.asarray(trunc, dtype=bool)
-            if trunc_np.any():
-                final = np.stack([info["final_obs"][i] for i in np.flatnonzero(trunc_np)])
+            # with the value of its final observation. A terminated one is,
+            # also when it ends on the time-limit step (both flags set).
+            boot = truncation_bootstrap_mask(term, trunc)
+            if boot.any():
+                final = np.stack([info["final_obs"][i] for i in np.flatnonzero(boot)])
                 with torch.no_grad():
                     v = agent.value(torch.tensor(final, dtype=torch.float32)).flatten()
-                reward[torch.as_tensor(np.flatnonzero(trunc_np))] += h.gamma * v
+                reward[torch.as_tensor(np.flatnonzero(boot))] += h.gamma * v
             rewards[step] = reward
             next_obs = torch.tensor(next_np, dtype=torch.float32)
             # The GAE recursion stops at every episode end.
-            next_done = torch.tensor(np.logical_or(term, trunc_np), dtype=torch.float32)
+            next_done = torch.tensor(np.logical_or(term, trunc), dtype=torch.float32)
             if "episode" in info:
                 mask = info["_episode"]
                 finished.extend(float(r) for r in np.asarray(info["episode"]["r"])[mask])
@@ -380,7 +381,7 @@ def main() -> int:
         runs.append(r)
         sys.stderr.write(f"{backend} seed {seed}: eval mean {r['eval_mean']:.1f} in {r['train_seconds']}s\n")
 
-    gate = evaluate_gate(runs, ARGS.threshold, ARGS.margin, ARGS.seeds, mutants)
+    gate = evaluate_gate(runs, ARGS.threshold, ARGS.margin, ARGS.seeds, mutants, ARGS.mutant_seeds)
 
     report = {
         "schema": "tessera-reference-training/1",
@@ -407,7 +408,7 @@ def main() -> int:
     with open(ARGS.out, "w") as f:
         json.dump(report, f, indent=2)
     sys.stderr.write(json.dumps({k: gate[k] for k in ("pass", "every_mutant_fails")}) + "\n")
-    sys.stderr.write(json.dumps(gate["tessera"]) + "\n")
+    sys.stderr.write(json.dumps(gate.get("tessera", gate.get("errors"))) + "\n")
     return 0 if gate["pass"] else 1
 
 
