@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: MIT OR Apache-2.0
 
-.PHONY: fmt fmt-check clippy test doc readme readme-check pre-push deny
+.PHONY: fmt fmt-check clippy test doc readme readme-check pre-push deny check-targets
 
 fmt:
 	cargo fmt --all
@@ -30,3 +30,8 @@ pre-push: fmt-check clippy test doc readme-check
 
 deny:
 	cargo deny check
+
+# The Python tool environment (uv, Python 3.11) matches compat/targets.toml.
+check-targets:
+	uv sync --locked --python 3.11 --all-groups
+	uv run --locked --python 3.11 python scripts/check_targets.py

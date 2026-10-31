@@ -1,0 +1,43 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+#
+# Reference machines (ADR-0025). Performance claims and gates name one of
+# these. Phase 1b entry requires them fixed; until a machine is
+# characterized (exact model, OS, kernel, frequency policy) it is a
+# candidate and results on it are indicative, not binding.
+
+format = 1
+
+[ref-x86]
+status = "pending characterization"
+candidate = "Linux amd64 machine (integrated graphics)"
+cpu = ""
+memory = ""
+os = ""
+kernel = ""
+frequency_policy = ""
+
+[ref-mac]
+status = "pending characterization"
+candidate = "Mac Studio M5"
+cpu = ""
+memory = ""
+os = ""
+frequency_policy = ""
+
+[ref-arm]
+status = "pending characterization"
+candidate = "Mac Studio M4 or a Linux arm64 machine (undecided)"
+cpu = ""
+memory = ""
+os = ""
+frequency_policy = ""
+
+[ref-gpu]
+status = "pending characterization"
+candidate = "Windows 10 machine with an RTX 4090"
+cpu = ""
+gpu = ""
+memory = ""
+os = ""
+driver = ""
+frequency_policy = ""

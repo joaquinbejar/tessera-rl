@@ -1,0 +1,33 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
+[project]
+name = "tessera-rl"
+description = "Fast, deterministic, snapshot-able reinforcement learning environments"
+requires-python = ">=3.11"
+license = "MIT OR Apache-2.0"
+version = "0.1.0"
+
+# Development and test tools (ADR-0027 versions from compat/targets.toml).
+[dependency-groups]
+test = [
+    "pytest==9.2.0",
+    "numpy==2.4.6",
+    "gymnasium==1.4.0",
+]
+# Only for the PyTorch DLPack and read-only tests (pytest marker `torch`).
+torch = ["torch==2.15.0"]
+
+[tool.uv]
+# The native package (maturin build backend) arrives in phase 1b B2; until
+# then uv only manages the tool environment.
+package = false
+default-groups = ["test"]
+
+# CPU wheels of PyTorch on Linux (the default index ships CUDA builds).
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[tool.uv.sources]
+torch = [{ index = "pytorch-cpu", marker = "sys_platform == 'linux'" }]

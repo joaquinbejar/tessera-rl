@@ -1,0 +1,33 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+#
+# Conformance targets (ADR-0027): exact versions the conformance suites run
+# against. Upgrading a target is a deliberate PR that reruns those suites.
+# `make check-targets` verifies an installed environment against this file.
+#
+# Pinned on 2026-10-31 to the latest stable releases on PyPI.
+
+format = 1
+
+[python]
+# abi3-py311 wheels; standard (GIL) builds only.
+minimum = "3.11"
+tested = ["3.11", "3.12", "3.13"]
+
+# The main conformance environment: the Gymnasium adapter (phase 1b), the
+# PettingZoo adapters, JAX and onnxruntime (later phases).
+[env.main]
+gymnasium = "1.4.0"
+pettingzoo = "1.27.0"
+numpy = "2.4.6"
+torch = "2.15.0"
+jax = "0.10.2"
+onnxruntime = "1.31.1"
+
+# PufferLib 3.0.0 requires gymnasium 0.29.1, pettingzoo 1.24.1 and
+# numpy < 2, which conflict with [env.main]; its adapter (phase 2) is
+# tested in its own environment with the versions PufferLib resolves.
+[env.pufferlib]
+pufferlib = "3.0.0"
+gymnasium = "0.29.1"
+pettingzoo = "1.24.1"
+numpy = "1.26.4"
