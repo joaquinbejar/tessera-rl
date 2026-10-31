@@ -40,6 +40,7 @@ loom.workspace = true
 [dev-dependencies]
 proptest.workspace = true
 criterion.workspace = true
+gungraun.workspace = true
 tessera-rl-num = { workspace = true, features = ["test-hooks"] }
 tessera-rl-macros.workspace = true
 
@@ -48,4 +49,9 @@ workspace = true
 
 [[bench]]
 name = "sync_step"
+harness = false
+
+# Instruction counts (gungraun, Linux only; ADR-0025).
+[[bench]]
+name = "snapshot_instructions"
 harness = false

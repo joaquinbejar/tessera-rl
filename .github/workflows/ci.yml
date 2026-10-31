@@ -144,3 +144,16 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - run: pipx install uv==0.13.6
       - run: make py-test-torch
+
+  # Instruction-count gate (ADR-0025 level 1): gungraun against the
+  # committed baseline, in the baseline's image (benches/gungraun/README.md).
+  gungraun:
+    runs-on: ubuntu-latest
+    container:
+      image: rust:1.99.1
+      options: --security-opt seccomp=unconfined
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: apt-get update && apt-get install -y valgrind
+      - run: cargo install --locked gungraun-runner --version 0.20.0
+      - run: scripts/gungraun.sh check

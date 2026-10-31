@@ -4,7 +4,7 @@
 # maturin's default of macOS 11. Ignored on other platforms.
 export MACOSX_DEPLOYMENT_TARGET := 13.0
 
-.PHONY: fmt fmt-check clippy test doc readme readme-check pre-push deny check-targets compat-test py-entries py-test py-test-torch pre-push-torch gym-equivalence bench bench-quick bench-kernels
+.PHONY: fmt fmt-check clippy test doc readme readme-check pre-push deny check-targets compat-test py-entries py-test py-test-torch pre-push-torch gym-equivalence bench bench-quick bench-kernels gungraun gungraun-bless
 
 fmt:
 	cargo fmt --all
@@ -99,6 +99,16 @@ bench-quick:
 # Criterion benches of the kernels.
 bench-kernels:
 	cargo bench -p tessera-rl-classic -p tessera-rl-engine --locked
+
+# Instruction-count gate (ADR-0025 level 1, gungraun): compares with the
+# committed baseline in benches/gungraun; Linux only (skipped elsewhere).
+gungraun:
+	scripts/gungraun.sh check
+
+# Records a new instruction-count baseline (benches/gungraun/README.md says
+# when and who approves).
+gungraun-bless:
+	scripts/gungraun.sh bless
 
 # pre-push plus the PyTorch tests (downloads PyTorch on first use).
 pre-push-torch: pre-push py-test-torch
