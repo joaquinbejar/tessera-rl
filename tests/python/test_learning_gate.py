@@ -36,14 +36,14 @@ def good_night(score=lambda s: 500.0):
     return night(records(NIGHT_SEEDS, score=score), NIGHT_SEEDS, calibration(), SETUP)
 
 
-IDENTITY = {"event": "schedule", "calibration": "c1"}
+IDENTITY = {"event": "schedule", "calibration": "c1", "run_id": "42", "date": "2026-11-02T06:10:00+00:00"}
 
 
-def previous(failed, event="schedule", cal="c1", errors=None):
+def previous(failed, event="schedule", cal="c1", errors=None, run_id="41", date="2026-11-01T06:10:00+00:00"):
     n = {"failed": failed}
     if errors:
         n["errors"] = errors
-    return {"night": n, "identity": {"event": event, "calibration": cal, "run_id": "41"}}
+    return {"night": n, "identity": {"event": event, "calibration": cal, "run_id": run_id, "date": date}}
 
 
 # -- calibration --------------------------------------------------------------
@@ -86,13 +86,44 @@ def test_learning_check_calibration_tampered_records_fail():
     assert check_calibration(c)
 
 
+ENV = {
+    "git": "a" * 40,
+    "git_dirty": False,
+    "os": "Linux-7.0.0-x86_64-with-glibc2.41",
+    "python": "3.11.18",
+    "arch": "x86_64",
+    "cpu": "12th Gen Intel(R) Core(TM) i7-12700H",
+    "image": "rust:1.99.1@sha256:09027f87",
+    "tessera_rl": "0.1.0",
+    "gymnasium": "1.4.0",
+    "torch": "2.15.0+cpu",
+    "numpy": "2.4.6",
+}
+
+
 def test_learning_check_shards_one_provenance_passes():
-    env = {"git": "a" * 40, "git_dirty": False, "torch": "2.15.0+cpu", "arch": "x86_64"}
-    assert check_shards([{"environment": env, "setup": SETUP}] * 4) == []
+    assert check_shards([{"environment": ENV, "setup": SETUP}] * 4) == []
+
+
+def test_learning_check_shards_missing_fields_fail():
+    # The schema is checked before the coherence: identical incomplete
+    # shards must not pass.
+    minimal = {"environment": {"git": "a" * 40, "git_dirty": False}, "setup": {"env": "tessera/CartPole-v1"}}
+    assert check_shards([minimal] * 4)
+    for key in ENV:
+        if key != "git_dirty":
+            env = {k: v for k, v in ENV.items() if k != key}
+            assert check_shards([{"environment": env, "setup": SETUP}] * 4), key
+            assert check_shards([{"environment": dict(ENV, **{key: ""}), "setup": SETUP}] * 4), key
+    for key in SETUP:
+        setup = {k: v for k, v in SETUP.items() if k != key}
+        assert check_shards([{"environment": ENV, "setup": setup}] * 4), key
+    assert check_shards([{"environment": ENV, "setup": dict(SETUP, total_steps="150000")}] * 4)
+    assert check_shards([{"setup": SETUP}] * 4)
 
 
 def test_learning_check_shards_dirty_unknown_or_mixed_fail():
-    env = {"git": "a" * 40, "git_dirty": False, "torch": "2.15.0+cpu"}
+    env = ENV
     assert check_shards([{"environment": dict(env, git_dirty=True), "setup": SETUP}])
     assert check_shards([{"environment": dict(env, git="unknown"), "setup": SETUP}])
     assert check_shards([{"environment": env, "setup": SETUP}, {"environment": dict(env, git="b" * 40), "setup": SETUP}])
@@ -180,6 +211,29 @@ def test_learning_alert_previous_on_another_calibration_does_not_count():
 def test_learning_alert_previous_invalid_night_does_not_count():
     assert alert({"failed": True}, IDENTITY, previous(True, errors=["bad"]))["red"] is False
     assert alert({"failed": True}, IDENTITY, {"night": {"failed": "yes"}})["red"] is False
+
+
+def test_learning_alert_manual_run_never_turns_red_through_the_debounce():
+    manual = dict(IDENTITY, event="workflow_dispatch")
+    a = alert({"failed": True}, manual, previous(True))
+    assert a["red"] is False and a["previous"].startswith("not used")
+
+
+def test_learning_alert_manual_invalid_night_is_still_red():
+    assert alert({"failed": True, "errors": ["bad"]}, dict(IDENTITY, event="workflow_dispatch"), None)["red"] is True
+
+
+def test_learning_alert_stale_previous_does_not_count():
+    a = alert({"failed": True}, IDENTITY, previous(True, date="2020-01-01T06:10:00+00:00"))
+    assert a["red"] is False and "within" in a["previous"]
+
+
+def test_learning_alert_previous_without_date_or_later_run_does_not_count():
+    assert alert({"failed": True}, IDENTITY, previous(True, date="yesterday"))["red"] is False
+    assert alert({"failed": True}, IDENTITY, previous(True, date="2026-11-01T06:10:00"))["red"] is False
+    assert alert({"failed": True}, IDENTITY, previous(True, run_id="43"))["red"] is False
+    assert alert({"failed": True}, IDENTITY, previous(True, run_id="42"))["red"] is False
+    assert alert({"failed": True}, IDENTITY, previous(True, date="2026-11-02T07:00:00+00:00"))["red"] is False
 
 
 def test_learning_alert_passing_night_after_a_failure_is_not_red():

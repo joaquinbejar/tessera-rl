@@ -17,6 +17,7 @@ dependency so the tests can check it on stub scores.
 
 from __future__ import annotations
 
+import datetime
 import math
 
 import numpy as np
@@ -103,49 +104,122 @@ def night(records: list[dict], seeds: list[int], calibration: dict, setup: dict)
     return out
 
 
+DEBOUNCE_WINDOW_HOURS = 48
+
+
+def _date(text):
+    try:
+        d = datetime.datetime.fromisoformat(str(text))
+    except ValueError:
+        return None
+    return d if d.tzinfo else None
+
+
+def _run_id(value):
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _previous_errors(identity: dict, previous) -> list[str]:
+    """Why ``previous`` is not the immediately preceding scheduled night of
+    this one, on the same calibration (empty when it is)."""
+    if not isinstance(previous, dict):
+        return ["missing"]
+    n = previous.get("night") or {}
+    who = previous.get("identity") or {}
+    errors = []
+    if not isinstance(n.get("failed"), bool) or n.get("errors"):
+        errors.append("not a valid night")
+    if who.get("event") != "schedule":
+        errors.append("not a scheduled run")
+    if who.get("calibration") != identity.get("calibration"):
+        errors.append("another calibration")
+    now, then = _date(identity.get("date")), _date(who.get("date"))
+    if now is None or then is None:
+        errors.append("no date")
+    elif not datetime.timedelta(0) < now - then <= datetime.timedelta(hours=DEBOUNCE_WINDOW_HOURS):
+        errors.append(f"not within {DEBOUNCE_WINDOW_HOURS} h before this night")
+    mine, theirs = _run_id(identity.get("run_id")), _run_id(who.get("run_id"))
+    if mine is None or theirs is None or theirs >= mine:
+        errors.append("not an earlier run")
+    return errors
+
+
 def alert(tonight: dict, identity: dict, previous: dict | None) -> dict:
     """Whether the job is red. ``identity`` is tonight's (``event``,
-    ``calibration``: the calibration file's hash); ``previous`` is the last
-    scheduled night's whole result (its ``night`` and ``identity``)."""
+    ``run_id``, ``date``, ``calibration``: the calibration file's hash);
+    ``previous`` is the last scheduled night's whole result (its ``night``
+    and ``identity``).
+
+    An invalid night is red at once, whatever the event. The debounce (red
+    after two failing nights) applies only between two scheduled runs: this
+    one and the immediately preceding one (an earlier run id, within
+    ``DEBOUNCE_WINDOW_HOURS``), on the same calibration. A manual run
+    reports its result but never turns red through the debounce."""
     out: dict = {"tonight_failed": bool(tonight.get("failed", True))}
     if tonight.get("errors") or not isinstance(tonight.get("failed"), bool):
         out["reason"] = "invalid night: red at once"
         out["red"] = True
         return out
-    usable = (
-        isinstance(previous, dict)
-        and isinstance((previous.get("night") or {}).get("failed"), bool)
-        and not (previous.get("night") or {}).get("errors")
-        and (previous.get("identity") or {}).get("event") == "schedule"
-        and (previous.get("identity") or {}).get("calibration") == identity.get("calibration")
-    )
-    if not usable:
-        out["previous"] = "missing" if previous is None else "unusable (not a valid scheduled night on this calibration)"
+    if identity.get("event") != "schedule":
+        out["previous"] = "not used: this is not a scheduled run"
+        out["previous_failed"] = False
+        out["red"] = False
+        return out
+    errors = _previous_errors(identity, previous)
+    if errors:
+        out["previous"] = "missing" if errors == ["missing"] else "unusable: " + "; ".join(errors)
         out["previous_failed"] = False
     else:
-        out["previous"] = (previous.get("identity") or {}).get("run_id", "found")
+        out["previous"] = previous["identity"]["run_id"]
         out["previous_failed"] = previous["night"]["failed"]
     out["red"] = out["tonight_failed"] and out["previous_failed"]
     return out
 
 
-PROVENANCE = ("git", "git_dirty", "python", "arch", "image", "tessera_rl", "gymnasium", "torch", "numpy")
+PROVENANCE = ("git", "git_dirty", "os", "python", "arch", "cpu", "image", "tessera_rl", "gymnasium", "torch", "numpy")
+SETUP_TYPES = {"env": str, "total_steps": int, "eval_episodes": int, "fingerprint": str}
+
+
+def _schema_errors(i: int, shard: dict) -> list[str]:
+    """The required fields of a score file, present and non-empty."""
+    errors = []
+    env = shard.get("environment")
+    setup = shard.get("setup")
+    if not isinstance(env, dict):
+        return [f"shard {i}: no environment"]
+    if not isinstance(setup, dict):
+        return [f"shard {i}: no setup"]
+    for key in PROVENANCE:
+        value = env.get(key)
+        if key == "git_dirty":
+            if value is not False:
+                errors.append(f"shard {i}: not from a clean tree (git_dirty={value!r})")
+        elif not isinstance(value, str) or not value or value == "unknown":
+            errors.append(f"shard {i}: environment {key} missing or unknown")
+    for key, kind in SETUP_TYPES.items():
+        value = setup.get(key)
+        if not isinstance(value, kind) or isinstance(value, bool) or not value:
+            errors.append(f"shard {i}: setup {key} missing or invalid")
+    return errors
 
 
 def check_shards(shards: list[dict]) -> list[str]:
-    """Errors of a set of calibration score files: one provenance (a clean,
-    committed tree; the same versions, platform and setup) for all."""
+    """Errors of a set of calibration score files: each one complete (every
+    provenance and setup field, a clean committed tree), and one provenance
+    and setup for all."""
     if not shards:
         return ["no score files"]
-    errors = []
+    errors = [e for i, shard in enumerate(shards) for e in _schema_errors(i, shard)]
+    if errors:
+        return errors
     first = shards[0]
     for i, shard in enumerate(shards):
-        env = shard.get("environment") or {}
-        if env.get("git") in (None, "", "unknown") or env.get("git_dirty") is not False:
-            errors.append(f"shard {i}: not from a clean, committed tree")
         for key in PROVENANCE:
-            if env.get(key) != (first.get("environment") or {}).get(key):
+            if shard["environment"][key] != first["environment"][key]:
                 errors.append(f"shard {i}: {key} differs from shard 0")
-        if shard.get("setup") != first.get("setup"):
+        if shard["setup"] != first["setup"]:
             errors.append(f"shard {i}: setup differs from shard 0")
     return errors

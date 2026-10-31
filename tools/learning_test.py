@@ -35,7 +35,7 @@ source hash and the torch, NumPy and Gymnasium versions); a night whose
 fingerprint differs from the calibration's fails until a reviewed
 re-calibration.
 
-Sensitivity (measured by Codex at 150k on xaskar): an adapter that gives
+Sensitivity (measured by Codex at 150k on macOS arm64): an adapter that gives
 each instance its neighbour's observation drops the median to 9.7 and
 fails (red after two nights); an adapter with terminated and truncated
 swapped keeps the median at 488.05 and passes, although the mean drops
