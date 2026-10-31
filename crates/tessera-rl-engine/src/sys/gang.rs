@@ -341,10 +341,11 @@ struct Slot {
 /// This worker's decrement of `pending`; the last one wakes the caller.
 fn decrement(shared: &Shared, waker: Option<&thread::Thread>) {
     // AcqRel: releases this worker's writes (and `panicked`) to the caller.
-    if shared.pending.fetch_sub(1, Ordering::AcqRel) == 1
-        && let Some(waker) = waker
-    {
-        waker.unpark();
+    if shared.pending.fetch_sub(1, Ordering::AcqRel) == 1 {
+        // Only a backstop that died before reading the job has no waker; it
+        // falls back to the creator, the usual caller. An unpark of the
+        // wrong thread is harmless.
+        waker.unwrap_or(&shared.creator).unpark();
     }
 }
 
