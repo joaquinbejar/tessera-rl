@@ -5,14 +5,12 @@
 //! through the thunks of `thunks`.
 
 use core::cell::UnsafeCell;
-use core::ffi::c_int;
 use core::ptr;
 
 use pyo3::ffi;
-use pyo3::prelude::*;
-use pyo3::types::PyString;
 
 use super::boundary::{self, Policy};
+use super::capi::{self, Ref};
 use super::tables::{method, method_end};
 use super::{Table, entry, env_type, thunks, view_type};
 use crate::errors::{Kind, error};
@@ -21,7 +19,7 @@ pub(super) unsafe extern "C" fn version(
     _module: *mut ffi::PyObject,
     _args: *mut ffi::PyObject,
 ) -> *mut ffi::PyObject {
-    entry(|py| Ok(PyString::new(py, env!("CARGO_PKG_VERSION")).into_ptr()))
+    entry(|g| capi::string(g, env!("CARGO_PKG_VERSION")))
 }
 
 /// `build_profile()`: `"release"` or `"debug"`, as the native module was
@@ -35,7 +33,16 @@ pub(super) unsafe extern "C" fn build_profile(
     } else {
         "release"
     };
-    entry(|py| Ok(PyString::new(py, text).into_ptr()))
+    entry(|g| capi::string(g, text))
+}
+
+/// `fp_boundary()`: which native floating-point boundary this build
+/// carries (ADR-0041), or that there is none on this target.
+pub(super) unsafe extern "C" fn fp_boundary(
+    _module: *mut ffi::PyObject,
+    _args: *mut ffi::PyObject,
+) -> *mut ffi::PyObject {
+    entry(|g| capi::string(g, thunks::BOUNDARY))
 }
 
 /// `set_fp_policy(name)`: `"canonicalize"` (the default) or `"reject"`
@@ -44,16 +51,24 @@ pub(super) unsafe extern "C" fn set_fp_policy(
     _module: *mut ffi::PyObject,
     args: *mut ffi::PyObject,
 ) -> *mut ffi::PyObject {
-    entry(|py| {
-        // SAFETY: METH_VARARGS passes a borrowed tuple.
-        let args = unsafe { Bound::from_borrowed_ptr(py, args) };
-        let (name,): (String,) = args.extract()?;
-        let policy = match name.as_str() {
+    entry(|g| {
+        // SAFETY: METH_VARARGS passes a borrowed tuple, alive for the call.
+        let args = unsafe { Ref::from_ptr(args) }
+            .ok_or_else(|| capi::raise(g, capi::type_error(), "missing arguments"))?;
+        let items = capi::tuple_items(g, args, "the arguments")?;
+        let [name] = items.as_slice() else {
+            return Err(error(
+                g,
+                Kind::Argument,
+                "set_fp_policy takes one argument".to_owned(),
+            ));
+        };
+        let policy = match capi::to_string(g, *name, "the policy")?.as_str() {
             "canonicalize" => Policy::Canonicalize,
             "reject" => Policy::Reject,
             other => {
                 return Err(error(
-                    py,
+                    g,
                     Kind::Argument,
                     format!(
                         "the floating-point policy is \"canonicalize\" or \"reject\", not {other:?}"
@@ -62,7 +77,7 @@ pub(super) unsafe extern "C" fn set_fp_policy(
             }
         };
         boundary::set_policy(policy);
-        Ok(py.None().into_ptr())
+        Ok(capi::none(g))
     })
 }
 
@@ -71,12 +86,12 @@ pub(super) unsafe extern "C" fn get_fp_policy(
     _module: *mut ffi::PyObject,
     _args: *mut ffi::PyObject,
 ) -> *mut ffi::PyObject {
-    entry(|py| {
+    entry(|g| {
         let name = match boundary::policy() {
             Policy::Canonicalize => "canonicalize",
             Policy::Reject => "reject",
         };
-        Ok(PyString::new(py, name).into_ptr())
+        capi::string(g, name)
     })
 }
 
@@ -86,14 +101,10 @@ pub(super) unsafe extern "C" fn fp_non_canonical_entries(
     _module: *mut ffi::PyObject,
     _args: *mut ffi::PyObject,
 ) -> *mut ffi::PyObject {
-    entry(|py| {
-        Ok(tessera_rl_num::fp::non_canonical_entries()
-            .into_pyobject(py)?
-            .into_ptr())
-    })
+    entry(|g| capi::int_u64(g, tessera_rl_num::fp::non_canonical_entries()))
 }
 
-static METHODS: Table<[ffi::PyMethodDef; 8]> = Table([
+static METHODS: Table<[ffi::PyMethodDef; 9]> = Table([
     method(
         c"version",
         thunks::VERSION,
@@ -117,6 +128,12 @@ static METHODS: Table<[ffi::PyMethodDef; 8]> = Table([
         thunks::FP_NON_CANONICAL_ENTRIES,
         ffi::METH_NOARGS,
         c"Entries made with non-default caller floating-point controls.",
+    ),
+    method(
+        c"fp_boundary",
+        thunks::FP_BOUNDARY,
+        ffi::METH_NOARGS,
+        c"Which native floating-point boundary this build carries.",
     ),
     method(
         c"build_profile",
@@ -144,19 +161,13 @@ static MODULE: Table<UnsafeCell<ffi::PyModuleDef>> = Table(UnsafeCell::new(ffi::
 }));
 
 pub(super) unsafe extern "C" fn init() -> *mut ffi::PyObject {
-    entry(|py| {
-        // SAFETY: attached; MODULE is a valid static definition that only
-        // CPython writes (its `m_base`), as `PyModule_Create2` requires.
-        let raw =
-            unsafe { ffi::PyModule_Create2(MODULE.0.get(), ffi::PYTHON_API_VERSION as c_int) };
-        // SAFETY: `raw` is a new reference or null with an exception set.
-        let module = unsafe { Bound::from_owned_ptr_or_err(py, raw) }?;
-        let module = module
-            .cast_into::<pyo3::types::PyModule>()
-            .map_err(PyErr::from)?;
-        crate::errors::register(py, &module)?;
-        env_type::register(py, &module)?;
-        view_type::register(py, &module)?;
-        Ok(module.into_ptr())
+    entry(|g| {
+        // SAFETY: MODULE is a valid static definition that only CPython
+        // writes (its `m_base`), as `PyModule_Create2` requires.
+        let module = unsafe { capi::module_create(g, MODULE.0.get()) }?;
+        crate::errors::register(g, module.as_ref())?;
+        env_type::register(g, module.as_ref())?;
+        view_type::register(g, module.as_ref())?;
+        Ok(module)
     })
 }

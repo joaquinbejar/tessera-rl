@@ -52,7 +52,7 @@ except ImportError as e:  # pragma: no cover - exercised only without gymnasium
 import numpy as np
 
 from tessera_rl import _native
-from tessera_rl._env import _discrete_actions
+from tessera_rl._env import _discrete_actions, native_kwargs
 
 #: Single-agent environments the adapter exposes.
 _MAKERS = {"tessera/CartPole-v1": _native.make_cartpole}
@@ -78,7 +78,7 @@ def _native_env(env_id: str, num_envs: int, seed: int, mode: AutoresetMode, outp
         maker = _MAKERS[env_id]
     except KeyError:
         raise _native.ArgumentError(f"unknown single-agent environment {env_id!r}; known: {sorted(_MAKERS)}") from None
-    native = maker(num_envs=num_envs, seed=seed, auto_reset=_NATIVE_MODE[mode], outputs=outputs, **kwargs)
+    native = maker(**native_kwargs(num_envs=num_envs, seed=seed, auto_reset=_NATIVE_MODE[mode], outputs=outputs, **kwargs))
     layout = native.layout()
     if layout["agents"] != 1:
         native.close()

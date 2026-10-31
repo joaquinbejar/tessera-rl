@@ -271,6 +271,13 @@ pub const fn canonical_control(control: Control) -> Control {
     arch::canonical(control)
 }
 
+/// The current control register, zero-extended to 64 bits (native
+/// boundaries pass it to their callouts).
+#[must_use]
+pub fn current_bits() -> u64 {
+    arch::to_bits(arch::read())
+}
+
 /// Whether a control register value, passed zero-extended to 64 bits by a
 /// native boundary, is canonical (status flags ignored).
 #[must_use]

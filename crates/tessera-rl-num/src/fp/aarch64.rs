@@ -31,6 +31,11 @@ pub(super) const CLEAR: Control = FIZ | AH | TRAPS | FZ16 | RMODE | FZ | DN;
 pub(super) const SET: Control = 0;
 pub(super) const STATUS_FLAGS: Control = 0;
 
+/// The register as a 64-bit value.
+pub(super) const fn to_bits(control: Control) -> u64 {
+    control
+}
+
 /// The register from a 64-bit value.
 pub(super) const fn from_bits(bits: u64) -> Control {
     bits

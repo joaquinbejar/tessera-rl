@@ -40,7 +40,9 @@ use core::ffi::{c_char, c_int};
 
 use pyo3::ffi;
 
-use super::boundary::{tessera_fp_callout_returned, tessera_fp_enter, tessera_fp_leave};
+use super::boundary::{
+    tessera_fp_caller_controls, tessera_fp_callout_returned, tessera_fp_enter, tessera_fp_leave,
+};
 use super::dlpack::{self, DLManagedTensor, DLManagedTensorVersioned};
 use super::{env_type, module, view_type};
 
@@ -66,10 +68,6 @@ pub(crate) type GetBuffer = unsafe extern "C" fn(
 pub(crate) type DlDeleter = unsafe extern "C" fn(*mut DLManagedTensor);
 /// `DLManagedTensorVersioned::deleter`.
 pub(crate) type DlDeleterVersioned = unsafe extern "C" fn(*mut DLManagedTensorVersioned);
-/// The warning callout: `(category, message, stacklevel, caller controls)
-/// -> PyErr_WarnEx status`.
-pub(crate) type CalloutWarn =
-    unsafe extern "C" fn(*mut ffi::PyObject, *const c_char, ffi::Py_ssize_t, u64) -> c_int;
 
 /// C types passed in integer registers: the only argument and result types
 /// a thunk accepts (module docs). Sealed.
@@ -82,6 +80,7 @@ mod sealed {
     impl Sealed for core::ffi::c_int {}
     impl Sealed for isize {}
     impl Sealed for u64 {}
+    impl Sealed for i64 {}
     impl Sealed for () {}
 }
 impl<T> IntClass for *mut T {}
@@ -89,6 +88,7 @@ impl<T> IntClass for *const T {}
 impl IntClass for c_int {}
 impl IntClass for isize {}
 impl IntClass for u64 {}
+impl IntClass for i64 {}
 impl IntClass for () {}
 
 /// Compile-time check that a type is [`IntClass`].
@@ -105,10 +105,10 @@ impl<F: Copy> ThunkFn<F> {
     }
 }
 
-/// The audited template, System V x86-64. Frame: rbp, then 64 bytes:
+/// The audited template, System V x86-64 (Linux, macOS). Frame: rbp, then 64 bytes:
 /// [rbp-8..-48] rdi, rsi, rdx, rcx, r8, r9; [rbp-52] caller MXCSR;
 /// [rbp-56] scratch; [rbp-64] previous boundary frame.
-#[cfg(target_arch = "x86_64")]
+#[cfg(all(target_arch = "x86_64", not(windows)))]
 macro_rules! boundary_template {
     ($target:path) => {
         core::arch::naked_asm!(
@@ -178,7 +178,7 @@ macro_rules! boundary_template {
 /// The audited template, AAPCS64 (Apple and Linux). Frame of 112 bytes:
 /// [sp] x29, x30; [sp+16..+80] x0 to x8; [sp+88] caller FPCR; [sp+96]
 /// previous boundary frame. FPSR (the sticky flags) is never written.
-#[cfg(target_arch = "aarch64")]
+#[cfg(all(target_arch = "aarch64", not(windows)))]
 macro_rules! boundary_template {
     ($target:path) => {
         core::arch::naked_asm!(
@@ -238,6 +238,178 @@ macro_rules! boundary_template {
     };
 }
 
+/// Windows (Win64): no boundary yet. The B2 pass-through tail jump, so the
+/// bindings keep the ADR-0037 precondition there (the caller's thread must
+/// be in the default controls, with no rejection guarantee) until the
+/// Win64 template with SEH unwind data lands.
+#[cfg(windows)]
+macro_rules! boundary_template {
+    ($target:path) => {
+        core::arch::naked_asm!("jmp {f}", f = sym $target)
+    };
+}
+
+/// Which boundary this build carries (`tessera_rl._native.fp_boundary()`).
+pub(crate) const BOUNDARY: &str = if cfg!(windows) {
+    "none (Windows: the default-controls precondition applies)"
+} else if cfg!(target_arch = "x86_64") {
+    "System V x86-64"
+} else {
+    "AAPCS64"
+};
+
+/// Integer argument registers the templates preserve.
+#[cfg(target_arch = "x86_64")]
+pub(crate) const MAX_ARGS: usize = 6;
+#[cfg(target_arch = "aarch64")]
+pub(crate) const MAX_ARGS: usize = 8;
+
+/// The audited callout template, System V x86-64 (ADR-0041 callouts): a
+/// call from Rust, under canonical controls, into C-API code that can run
+/// Python code. It saves the integer argument registers, loads the
+/// caller's control bits (the current boundary frame's, kept by
+/// `boundary`) with the current sticky flags, calls the C function, then
+/// reloads the canonical controls (keeping the flags the host raised) and
+/// lets `tessera_fp_callout_returned` count a change before returning to
+/// Rust. Frame: [rbp-8..-48] rdi..r9; [rbp-52] canonical MXCSR; [rbp-56]
+/// the value loaded; [rbp-60] the value after; [rbp-64] scratch.
+#[cfg(all(target_arch = "x86_64", not(windows)))]
+macro_rules! callout_template {
+    ($target:path) => {
+        core::arch::naked_asm!(
+            ".cfi_startproc",
+            "push rbp",
+            ".cfi_adjust_cfa_offset 8",
+            ".cfi_rel_offset rbp, 0",
+            "mov rbp, rsp",
+            ".cfi_def_cfa_register rbp",
+            "sub rsp, 64",
+            "mov [rbp - 8], rdi",
+            "mov [rbp - 16], rsi",
+            "mov [rbp - 24], rdx",
+            "mov [rbp - 32], rcx",
+            "mov [rbp - 40], r8",
+            "mov [rbp - 48], r9",
+            "stmxcsr [rbp - 52]",
+            "call {caller}",
+            "mov ecx, [rbp - 52]",
+            "and ecx, {status}",
+            "and eax, {not_status}",
+            "or eax, ecx",
+            "mov [rbp - 56], eax",
+            "ldmxcsr [rbp - 56]",
+            "mov rdi, [rbp - 8]",
+            "mov rsi, [rbp - 16]",
+            "mov rdx, [rbp - 24]",
+            "mov rcx, [rbp - 32]",
+            "mov r8, [rbp - 40]",
+            "mov r9, [rbp - 48]",
+            "call {target}",
+            "mov [rbp - 8], rax",
+            "stmxcsr [rbp - 60]",
+            "mov eax, [rbp - 52]",
+            "mov ecx, [rbp - 60]",
+            "and ecx, {status}",
+            "or eax, ecx",
+            "mov [rbp - 64], eax",
+            "ldmxcsr [rbp - 64]",
+            "mov edi, [rbp - 56]",
+            "mov esi, [rbp - 60]",
+            "call {returned}",
+            "mov rax, [rbp - 8]",
+            "leave",
+            ".cfi_def_cfa rsp, 8",
+            "ret",
+            ".cfi_endproc",
+            status = const tessera_rl_num::fp::STATUS_FLAGS,
+            not_status = const !tessera_rl_num::fp::STATUS_FLAGS,
+            caller = sym tessera_fp_caller_controls,
+            returned = sym tessera_fp_callout_returned,
+            target = sym $target,
+        )
+    };
+}
+
+/// The audited callout template, AAPCS64. Frame of 112 bytes: [sp] x29,
+/// x30; [sp+16..+80] x0 to x8; [sp+88] canonical FPCR; [sp+96] the
+/// caller's FPCR loaded for the call.
+#[cfg(all(target_arch = "aarch64", not(windows)))]
+macro_rules! callout_template {
+    ($target:path) => {
+        core::arch::naked_asm!(
+            ".cfi_startproc",
+            "stp x29, x30, [sp, #-112]!",
+            ".cfi_def_cfa_offset 112",
+            ".cfi_offset x30, -104",
+            ".cfi_offset x29, -112",
+            "mov x29, sp",
+            ".cfi_def_cfa x29, 112",
+            "stp x0, x1, [sp, #16]",
+            "stp x2, x3, [sp, #32]",
+            "stp x4, x5, [sp, #48]",
+            "stp x6, x7, [sp, #64]",
+            "str x8, [sp, #80]",
+            "mrs x9, fpcr",
+            "str x9, [sp, #88]",
+            "bl {caller}",
+            "str x0, [sp, #96]",
+            "msr fpcr, x0",
+            "ldp x0, x1, [sp, #16]",
+            "ldp x2, x3, [sp, #32]",
+            "ldp x4, x5, [sp, #48]",
+            "ldp x6, x7, [sp, #64]",
+            "ldr x8, [sp, #80]",
+            "bl {target}",
+            "str x0, [sp, #16]",
+            "mrs x1, fpcr",
+            "ldr x9, [sp, #88]",
+            "msr fpcr, x9",
+            "ldr x0, [sp, #96]",
+            "bl {returned}",
+            "ldr x0, [sp, #16]",
+            "ldp x29, x30, [sp], #112",
+            ".cfi_def_cfa sp, 0",
+            ".cfi_restore x30",
+            ".cfi_restore x29",
+            "ret",
+            ".cfi_endproc",
+            caller = sym tessera_fp_caller_controls,
+            returned = sym tessera_fp_callout_returned,
+            target = sym $target,
+        )
+    };
+}
+
+/// Windows: the callouts are plain tail calls, like the pass-through
+/// thunks (no boundary yet).
+#[cfg(windows)]
+macro_rules! callout_template {
+    ($target:path) => {
+        core::arch::naked_asm!("jmp {f}", f = sym $target)
+    };
+}
+
+/// Defines the callout `$name` for the C function `$target`: integer-class
+/// arguments and result only, at most [`MAX_ARGS`] arguments.
+macro_rules! callout {
+    ($(#[$meta:meta])* $name:ident => $target:path : fn($($arg:ty),*) -> $ret:ty) => {
+        $(#[$meta])*
+        #[unsafe(naked)]
+        pub(crate) unsafe extern "C" fn $name($(_: $arg),*) -> $ret {
+            // SAFETY: the audited callout template (callout_template docs):
+            // a full frame that preserves every integer argument register,
+            // the stack alignment and the callee-saved registers, runs the
+            // C function under the caller's controls and returns its integer
+            // result under canonical controls; the target has the same C
+            // signature (checked below) with integer-class types only.
+            callout_template!($target);
+        }
+        const _: unsafe extern "C" fn($($arg),*) -> $ret = $target;
+        const _: () = { $( int_class::<$arg>(); )* int_class::<$ret>(); };
+        const _: () = assert!(<[&str]>::len(&[$(stringify!($arg)),*]) <= MAX_ARGS, "too many arguments for the template");
+    };
+}
+
 /// Defines the boundary thunk `$thunk` for `$target` and, with a name, the
 /// `ThunkFn` constant tables use.
 macro_rules! thunk {
@@ -255,8 +427,10 @@ macro_rules! thunk {
         }
         // The target's signature must match the thunk's.
         const _: unsafe extern "C" fn($($arg),*) -> $ret = $target;
-        // Integer-class arguments and result only (module docs).
+        // Integer-class arguments and result only (module docs), and no
+        // more than the template preserves.
         const _: () = { $( int_class::<$arg>(); )* int_class::<$ret>(); };
+        const _: () = assert!(<[&str]>::len(&[$(stringify!($arg)),*]) <= MAX_ARGS, "too many arguments for the template");
     };
     ($name:ident: $ty:ident = $thunk:ident => $target:path : fn($($arg:ty),*) -> $ret:ty) => {
         thunk!(@naked $thunk => $target : fn($($arg),*) -> $ret);
@@ -277,6 +451,7 @@ thunk!(VERSION: CFunction = thunk_version => module::version : fn(Obj, Obj) -> O
 thunk!(SET_FP_POLICY: CFunction = thunk_set_fp_policy => module::set_fp_policy : fn(Obj, Obj) -> Obj);
 thunk!(GET_FP_POLICY: CFunction = thunk_get_fp_policy => module::get_fp_policy : fn(Obj, Obj) -> Obj);
 thunk!(FP_NON_CANONICAL_ENTRIES: CFunction = thunk_fp_non_canonical_entries => module::fp_non_canonical_entries : fn(Obj, Obj) -> Obj);
+thunk!(FP_BOUNDARY: CFunction = thunk_fp_boundary => module::fp_boundary : fn(Obj, Obj) -> Obj);
 thunk!(BUILD_PROFILE: CFunction = thunk_build_profile => module::build_profile : fn(Obj, Obj) -> Obj);
 thunk!(MAKE_CARTPOLE: CFunctionKw = thunk_make_cartpole => env_type::make_cartpole : fn(Obj, Obj, Obj) -> Obj);
 thunk!(MAKE_TAG: CFunctionKw = thunk_make_tag => env_type::make_tag : fn(Obj, Obj, Obj) -> Obj);
@@ -302,111 +477,6 @@ thunk!(VIEW_IS_STALE: CFunction = thunk_view_is_stale => view_type::is_stale : f
 thunk!(CAPSULE_DESTRUCTOR: Destructor = thunk_capsule_destructor => dlpack::destroy_capsule : fn(Obj) -> ());
 thunk!(DL_DELETER: DlDeleter = thunk_dl_deleter => dlpack::delete_legacy : fn(*mut DLManagedTensor) -> ());
 thunk!(DL_DELETER_VERSIONED: DlDeleterVersioned = thunk_dl_deleter_versioned => dlpack::delete_versioned : fn(*mut DLManagedTensorVersioned) -> ());
-
-/// The warning callout (ADR-0041 callouts): runs `PyErr_WarnEx`, host
-/// code that may call filters and hooks, under the caller's saved controls,
-/// then re-canonicalizes and lets `tessera_fp_callout_returned` count a
-/// callback that changed them. Not a table entry: `boundary::check` calls
-/// it from Rust, under canonical controls.
-#[cfg(target_arch = "x86_64")]
-#[unsafe(naked)]
-unsafe extern "C" fn callout_warn(
-    _category: *mut ffi::PyObject,
-    _message: *const c_char,
-    _stacklevel: ffi::Py_ssize_t,
-    _caller: u64,
-) -> c_int {
-    // SAFETY: a full frame (16-byte aligned, CFI); the canonical MXCSR and
-    // the caller's controls are saved, the caller's control bits are loaded
-    // (with the current flags) only around the C call, and the canonical
-    // value is reloaded before returning to Rust; callee-saved registers
-    // are untouched.
-    core::arch::naked_asm!(
-        ".cfi_startproc",
-        "push rbp",
-        ".cfi_adjust_cfa_offset 8",
-        ".cfi_rel_offset rbp, 0",
-        "mov rbp, rsp",
-        ".cfi_def_cfa_register rbp",
-        "sub rsp, 32",
-        "stmxcsr [rbp - 4]",
-        "mov [rbp - 16], rcx",
-        // Caller's control bits, current flags.
-        "mov eax, ecx",
-        "and eax, {not_status}",
-        "mov r8d, [rbp - 4]",
-        "and r8d, {status}",
-        "or eax, r8d",
-        "mov [rbp - 8], eax",
-        "ldmxcsr [rbp - 8]",
-        "call {warn}",
-        "mov [rbp - 24], eax",
-        // Back to canonical (keeping the flags), then count a change.
-        "stmxcsr [rbp - 8]",
-        "mov eax, [rbp - 4]",
-        "mov ecx, [rbp - 8]",
-        "and ecx, {status}",
-        "or eax, ecx",
-        "mov [rbp - 12], eax",
-        "ldmxcsr [rbp - 12]",
-        "mov rdi, [rbp - 16]",
-        "mov esi, [rbp - 8]",
-        "call {returned}",
-        "mov eax, [rbp - 24]",
-        "leave",
-        ".cfi_def_cfa rsp, 8",
-        "ret",
-        ".cfi_endproc",
-        status = const tessera_rl_num::fp::STATUS_FLAGS,
-        not_status = const !tessera_rl_num::fp::STATUS_FLAGS,
-        warn = sym ffi::PyErr_WarnEx,
-        returned = sym tessera_fp_callout_returned,
-    )
-}
-
-#[cfg(target_arch = "aarch64")]
-#[unsafe(naked)]
-unsafe extern "C" fn callout_warn(
-    _category: *mut ffi::PyObject,
-    _message: *const c_char,
-    _stacklevel: ffi::Py_ssize_t,
-    _caller: u64,
-) -> c_int {
-    // SAFETY: as on x86-64; FPCR holds no flags, so the caller's value is
-    // loaded as is around the C call and the canonical one reloaded after.
-    core::arch::naked_asm!(
-        ".cfi_startproc",
-        "stp x29, x30, [sp, #-48]!",
-        ".cfi_def_cfa_offset 48",
-        ".cfi_offset x30, -40",
-        ".cfi_offset x29, -48",
-        "mov x29, sp",
-        ".cfi_def_cfa x29, 48",
-        "mrs x9, fpcr",
-        "str x9, [sp, #16]",
-        "str x3, [sp, #24]",
-        "msr fpcr, x3",
-        "bl {warn}",
-        "str x0, [sp, #32]",
-        "mrs x1, fpcr",
-        "ldr x9, [sp, #16]",
-        "msr fpcr, x9",
-        "ldr x0, [sp, #24]",
-        "bl {returned}",
-        "ldr x0, [sp, #32]",
-        "ldp x29, x30, [sp], #48",
-        ".cfi_def_cfa sp, 0",
-        ".cfi_restore x30",
-        ".cfi_restore x29",
-        "ret",
-        ".cfi_endproc",
-        warn = sym ffi::PyErr_WarnEx,
-        returned = sym tessera_fp_callout_returned,
-    )
-}
-
-/// The warning callout, for `boundary::check`.
-pub(crate) const CALLOUT_WARN: ThunkFn<CalloutWarn> = ThunkFn(callout_warn);
 
 #[cfg(test)]
 mod tests {
@@ -646,3 +716,23 @@ mod tests {
         assert_eq!(boundary::frame_token(), 0);
     }
 }
+
+// The callout table (ADR-0041 callouts): every C-API function that can run
+// Python code, called from Rust only through `capi`. Rule: a GC-tracked
+// allocation is a callout (it can run `gc.collect` and any `__del__`), as
+// is setting an exception (it normalizes: an allocation), a conversion that
+// may raise. (The bindings never own a user object, so no decref needs a
+// callout: capi's decref invariant.)
+type CStr = *const c_char;
+callout!(c_err_set_string => ffi::PyErr_SetString : fn(Obj, CStr) -> ());
+callout!(c_err_new_exception => ffi::PyErr_NewExceptionWithDoc : fn(CStr, CStr, Obj, Obj) -> Obj);
+callout!(c_err_warn => ffi::PyErr_WarnEx : fn(Obj, CStr, ffi::Py_ssize_t) -> c_int);
+callout!(c_module_create => ffi::PyModule_Create2 : fn(*mut ffi::PyModuleDef, c_int) -> Obj);
+callout!(c_module_add => ffi::PyModule_AddObjectRef : fn(Obj, CStr, Obj) -> c_int);
+callout!(c_type_from_spec => ffi::PyType_FromSpec : fn(*mut ffi::PyType_Spec) -> Obj);
+callout!(c_list_new => ffi::PyList_New : fn(ffi::Py_ssize_t) -> Obj);
+callout!(c_tuple_new => ffi::PyTuple_New : fn(ffi::Py_ssize_t) -> Obj);
+callout!(c_dict_new => ffi::PyDict_New : fn() -> Obj);
+callout!(c_long_as_i64 => ffi::PyLong_AsLongLong : fn(Obj) -> i64);
+callout!(c_long_as_u64 => ffi::PyLong_AsUnsignedLongLong : fn(Obj) -> u64);
+callout!(c_unicode_as_utf8 => ffi::PyUnicode_AsUTF8AndSize : fn(Obj, *mut ffi::Py_ssize_t) -> CStr);

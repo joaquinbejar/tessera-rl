@@ -15,8 +15,8 @@ use core::ptr;
 use std::sync::Arc;
 
 use pyo3::ffi;
-use pyo3::prelude::*;
 
+use super::capi::{self, CResult, Gil, Mine};
 use super::{dispose, thunks};
 
 /// `kDLCPU`.
@@ -217,20 +217,18 @@ fn export(
 /// `read_only`) or legacy. A legacy capsule cannot carry the flag, so its
 /// consumer gets a writable alias: writing through it corrupts the outputs
 /// until the next call overwrites them.
-pub(crate) fn capsule(
-    py: Python<'_>,
-    src: &Source<'_>,
-    versioned: bool,
-    read_only: bool,
-) -> PyResult<*mut ffi::PyObject> {
-    let (raw, name) = export(src, versioned, read_only).ok_or_else(|| {
-        pyo3::exceptions::PyBufferError::new_err("the view's shape does not fit DLPack")
-    })?;
-    // SAFETY: attached; `raw` is a live export, `name` a static C string,
-    // and the destructor a cleanup thunk.
-    let cap =
-        unsafe { ffi::PyCapsule_New(raw, name.as_ptr(), Some(thunks::CAPSULE_DESTRUCTOR.get())) };
-    if cap.is_null() {
+pub(crate) fn capsule(g: Gil, src: &Source<'_>, versioned: bool, read_only: bool) -> CResult<Mine> {
+    let Some((raw, name)) = export(src, versioned, read_only) else {
+        return Err(capi::raise(
+            g,
+            capi::buffer_error(),
+            "the view's shape does not fit DLPack",
+        ));
+    };
+    // SAFETY: `raw` is a live export valid for the destructor, `name` a
+    // static C string, and the destructor a cleanup thunk.
+    let cap = unsafe { capi::capsule(g, raw, name, thunks::CAPSULE_DESTRUCTOR.get()) };
+    if cap.is_err() {
         // The capsule does not own the export: free it here.
         if versioned {
             // SAFETY: `raw` is the versioned export made above, unshared.
@@ -239,9 +237,8 @@ pub(crate) fn capsule(
             // SAFETY: `raw` is the legacy export made above, unshared.
             drop(unsafe { Box::from_raw(raw.cast::<Legacy>()) });
         }
-        return Err(PyErr::fetch(py));
     }
-    Ok(cap)
+    cap
 }
 
 /// `DLManagedTensor::deleter`: a cleanup entry. Consumers may call it from
@@ -274,25 +271,19 @@ pub(super) unsafe extern "C" fn delete_versioned(managed: *mut DLManagedTensorVe
 /// original name was never consumed, so its export is deleted here; a
 /// consumer renames it (`used_dltensor`) and owns the deleter call.
 pub(super) unsafe extern "C" fn destroy_capsule(cap: *mut ffi::PyObject) {
-    let (mut ty, mut value, mut tb) = (ptr::null_mut(), ptr::null_mut(), ptr::null_mut());
-    // SAFETY: CPython calls capsule destructors attached; the pending
-    // exception, if any, is saved and restored around the checks.
-    unsafe { ffi::PyErr_Fetch(&raw mut ty, &raw mut value, &raw mut tb) };
-    // SAFETY: attached; `cap` is a live capsule.
-    if unsafe { ffi::PyCapsule_IsValid(cap, VERSIONED.as_ptr()) } == 1 {
-        // SAFETY: a valid capsule of this name holds a versioned export.
-        let raw = unsafe { ffi::PyCapsule_GetPointer(cap, VERSIONED.as_ptr()) };
-        // SAFETY: an unconsumed export, deleted once.
+    // CPython calls capsule destructors attached; the pending exception,
+    // if any, is saved and restored around the checks.
+    let pending = capi::fetch_pending();
+    // SAFETY: `cap` is a live capsule.
+    if let Some(raw) = unsafe { capi::capsule_pointer(cap, VERSIONED) } {
+        // SAFETY: an unconsumed versioned export, deleted once.
         unsafe { delete_versioned(raw.cast()) };
     // SAFETY: as above.
-    } else if unsafe { ffi::PyCapsule_IsValid(cap, LEGACY.as_ptr()) } == 1 {
-        // SAFETY: a valid capsule of this name holds a legacy export.
-        let raw = unsafe { ffi::PyCapsule_GetPointer(cap, LEGACY.as_ptr()) };
-        // SAFETY: an unconsumed export, deleted once.
+    } else if let Some(raw) = unsafe { capi::capsule_pointer(cap, LEGACY) } {
+        // SAFETY: an unconsumed legacy export, deleted once.
         unsafe { delete_legacy(raw.cast()) };
     }
-    // SAFETY: restores exactly what was fetched (references transferred).
-    unsafe { ffi::PyErr_Restore(ty, value, tb) };
+    capi::restore_pending(pending);
 }
 
 #[cfg(test)]

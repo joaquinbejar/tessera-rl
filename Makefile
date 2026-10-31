@@ -4,7 +4,7 @@
 # maturin's default of macOS 11. Ignored on other platforms.
 export MACOSX_DEPLOYMENT_TARGET := 13.0
 
-.PHONY: fmt fmt-check clippy test doc readme readme-check pre-push deny check-targets compat-test py-entries py-test py-test-torch pre-push-torch gym-equivalence bench bench-quick bench-kernels gungraun gungraun-bless
+.PHONY: fmt fmt-check clippy test doc readme readme-check pre-push deny check-targets compat-test py-entries py-callouts py-test py-test-torch pre-push-torch gym-equivalence bench bench-quick bench-kernels gungraun gungraun-bless
 
 fmt:
 	cargo fmt --all
@@ -30,7 +30,7 @@ readme:
 readme-check:
 	cargo readme -r crates/tessera-rl -t ../../README.tpl --no-title --no-license --no-indent-headings | diff -u README.md -
 
-pre-push: fmt-check clippy test doc readme-check compat-test py-entries py-test
+pre-push: fmt-check clippy test doc readme-check compat-test py-entries py-callouts py-test
 
 deny:
 	cargo deny check
@@ -63,6 +63,11 @@ compat-test:
 # ADR-0041: no raw PyO3 registrations in tessera-rl-py.
 py-entries:
 	python3 scripts/check_py_entries.py
+
+# ADR-0041 callouts: only ffi::capi calls the C API, and every call that
+# can run Python code is a callout.
+py-callouts:
+	python3 scripts/check_py_callouts.py
 
 # Builds the native package into the uv environment and runs the Python tests.
 py-test:

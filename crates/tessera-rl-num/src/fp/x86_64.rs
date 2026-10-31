@@ -23,6 +23,11 @@ pub(super) const CLEAR: Control = DAZ | RC | FTZ;
 pub(super) const SET: Control = MASKS;
 pub(super) const STATUS_FLAGS: Control = STATUS;
 
+/// The register zero-extended to 64 bits.
+pub(super) const fn to_bits(control: Control) -> u64 {
+    control as u64
+}
+
 /// The register from a zero-extended 64-bit value (MXCSR is 32 bits).
 #[expect(clippy::cast_possible_truncation, reason = "MXCSR is 32 bits wide")]
 pub(super) const fn from_bits(bits: u64) -> Control {

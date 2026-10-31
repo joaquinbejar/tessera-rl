@@ -17,13 +17,13 @@
 //!                      (strict policy, ADR-0041)
 //! ```
 
-use pyo3::exceptions::PyException;
-use pyo3::prelude::*;
-use pyo3::sync::PyOnceLock;
-use pyo3::types::{PyModule, PyType};
+use core::sync::atomic::{AtomicPtr, Ordering};
+
+use pyo3::ffi;
 use tessera_rl_engine::EngineError;
 
 use crate::env::BindError;
+use crate::ffi::capi::{self, CResult, Gil, Raised, Ref};
 
 /// The exception classes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -93,41 +93,53 @@ const KINDS: [(Kind, &str, &std::ffi::CStr); 10] = [
     ),
 ];
 
-static TYPES: [PyOnceLock<Py<PyType>>; 10] = [const { PyOnceLock::new() }; 10];
+/// The classes, created once at module initialization; null before.
+static TYPES: [AtomicPtr<ffi::PyObject>; 10] =
+    [const { AtomicPtr::new(core::ptr::null_mut()) }; 10];
 
 fn index(kind: Kind) -> usize {
     KINDS.iter().position(|(k, _, _)| *k == kind).unwrap_or(0)
 }
 
-/// Creates the classes and adds them to `module`.
-pub(crate) fn register(py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
-    let base = PyErr::new_type(
-        py,
-        c"tessera_rl.TesseraError",
-        Some(KINDS[0].2),
-        Some(&py.get_type::<PyException>()),
-        None,
-    )?;
-    let _ = TYPES[0].set(py, base.clone_ref(py));
-    module.add(KINDS[0].1, base.bind(py))?;
-    for (i, (_, name, doc)) in KINDS.iter().enumerate().skip(1) {
+/// Creates the classes and adds them to `module` (callouts: class creation
+/// and module attributes allocate).
+pub(crate) fn register(g: Gil, module: Ref<'_>) -> CResult<()> {
+    let mut base = capi::exception_base();
+    for (i, (_, name, doc)) in KINDS.iter().enumerate() {
         let qualified = std::ffi::CString::new(format!("tessera_rl.{name}"))
-            .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
-        let ty = PyErr::new_type(py, &qualified, Some(*doc), Some(base.bind(py)), None)?;
-        module.add(*name, ty.bind(py))?;
+            .map_err(|_| capi::raise(g, capi::runtime_error(), "exception name"))?;
+        let short = std::ffi::CString::new(*name)
+            .map_err(|_| capi::raise(g, capi::runtime_error(), "exception name"))?;
+        let ty = capi::new_exception(g, &qualified, doc, base)?;
+        capi::module_add(g, module, &short, &ty)?;
+        // The module keeps the class alive for the process; the stored
+        // pointer is a borrowed reference to it.
+        let ptr = ty.as_ref().as_ptr();
         if let Some(slot) = TYPES.get(i) {
-            let _ = slot.set(py, ty);
+            slot.store(ptr, Ordering::Release);
+        }
+        if i == 0 {
+            base = ptr;
         }
     }
     Ok(())
 }
 
-/// An error of class `kind` with `message`.
-pub(crate) fn error(py: Python<'_>, kind: Kind, message: String) -> PyErr {
-    match TYPES.get(index(kind)).and_then(|slot| slot.get(py)) {
-        Some(ty) => PyErr::from_type(ty.bind(py).clone(), message),
-        None => PyException::new_err(message),
-    }
+/// Raises an error of class `kind` with `message`.
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "callers build the message in place"
+)]
+pub(crate) fn error(g: Gil, kind: Kind, message: String) -> Raised {
+    let ty = TYPES
+        .get(index(kind))
+        .map_or(core::ptr::null_mut(), |slot| slot.load(Ordering::Acquire));
+    let ty = if ty.is_null() {
+        capi::runtime_error()
+    } else {
+        ty
+    };
+    capi::raise(g, ty, &message)
 }
 
 fn engine_kind(e: &EngineError) -> Kind {
@@ -161,11 +173,11 @@ fn engine_kind(e: &EngineError) -> Kind {
     }
 }
 
-/// The Python exception for `e`.
-pub(crate) fn to_py(py: Python<'_>, e: BindError) -> PyErr {
+/// Raises the Python exception for `e`.
+pub(crate) fn to_py(g: Gil, e: BindError) -> Raised {
     match e {
-        BindError::Engine(e) => error(py, engine_kind(&e), e.to_string()),
-        BindError::Decode(e) => error(py, Kind::Record, e.to_string()),
-        BindError::Argument(message) => error(py, Kind::Argument, message),
+        BindError::Engine(e) => error(g, engine_kind(&e), e.to_string()),
+        BindError::Decode(e) => error(g, Kind::Record, e.to_string()),
+        BindError::Argument(message) => error(g, Kind::Argument, message),
     }
 }

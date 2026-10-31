@@ -27,6 +27,7 @@ modify outputs, use ``outputs="owned"`` or copy first (``tensor.clone()``,
 
 from __future__ import annotations
 
+import operator
 from typing import NamedTuple
 
 import numpy as np
@@ -77,7 +78,7 @@ class Env:
 
     def reset(self, seed: int | None = None) -> Step:
         """Resets every instance; a new seed base if ``seed`` is given."""
-        out = self._native.reset() if seed is None else self._native.reset(seed)
+        out = self._native.reset() if seed is None else self._native.reset(_index(seed, "seed"))
         return self._wrap(out)
 
     def step(self, actions) -> Step:
@@ -125,15 +126,15 @@ class Env:
 
     def snapshot(self, index: int) -> bytes:
         """The canonical record of instance ``index``."""
-        return self._native.snapshot(index)
+        return self._native.snapshot(_index(index, "index"))
 
     def import_record(self, index: int, record: bytes) -> None:
         """Imports an (untrusted) record into instance ``index``."""
-        self._native.import_record(index, bytes(record))
+        self._native.import_record(_index(index, "index"), bytes(record))
 
     def fork(self, src: int, dst: list[int]) -> None:
         """Copies instance ``src`` into every instance of ``dst``."""
-        self._native.fork(src, list(dst))
+        self._native.fork(_index(src, "src"), [_index(d, "dst") for d in dst])
 
     @property
     def is_poisoned(self) -> bool:
@@ -173,6 +174,36 @@ def _discrete_actions(actions) -> np.ndarray:
     elif arr.size:
         raise _native.ActionError(f"actions must be integers, got dtype {arr.dtype}")
     return np.ascontiguousarray(arr, dtype="<i4")
+
+
+def _index(value, what: str) -> int:
+    """An integer argument as an exact ``int``: the native module accepts
+    only exact built-in types (ADR-0041 callouts), so user objects are
+    converted here, under the caller's own floating-point controls."""
+    if isinstance(value, bool):
+        raise TypeError(f"{what} must be an integer, not a bool")
+    try:
+        return int(operator.index(value))
+    except TypeError:
+        raise TypeError(f"{what} must be an integer, got {type(value).__name__}") from None
+
+
+#: Keyword arguments the native constructors take as strings.
+_STRING_OPTIONS = {"auto_reset", "outputs"}
+
+
+def native_kwargs(**kwargs) -> dict:
+    """Constructor options as exact ``int``/``str``/``None`` values for the
+    native module (see ``_index``)."""
+    out = {}
+    for key, value in kwargs.items():
+        if value is None:
+            out[key] = None
+        elif key in _STRING_OPTIONS:
+            out[key] = str(value)
+        else:
+            out[key] = _index(value, key)
+    return out
 
 
 def is_stale(array) -> bool:
@@ -217,4 +248,4 @@ def make(env_id: str, num_envs: int = 1, seed: int = 0, outputs: str = "borrowed
         maker = makers[env_id]
     except KeyError:
         raise _native.ArgumentError(f"unknown environment {env_id!r}; known: {sorted(makers)}") from None
-    return Env(maker(num_envs=num_envs, seed=seed, outputs=outputs, **kwargs))
+    return Env(maker(**native_kwargs(num_envs=num_envs, seed=seed, outputs=outputs, **kwargs)))

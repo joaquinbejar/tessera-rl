@@ -19,31 +19,46 @@ pub(crate) struct Table<T>(pub(crate) T);
 // afterwards (by CPython, holding the interpreter lock).
 unsafe impl<T> Sync for Table<T> {}
 
-/// The body of every fallible entry point: attached, the floating-point
-/// policy applied first (`boundary::check`: a rejection or a failed
-/// warning returns before `f` runs), panics contained (no unwind crosses
-/// the C boundary), errors raised as Python exceptions. It returns null
-/// with an exception set on any failure; slots with another sentinel map
-/// null to theirs (`getbuffer` returns -1).
+/// The body of every fallible entry point that returns an object: the
+/// floating-point policy applied first (`boundary::check`: a rejection or a
+/// failed warning returns before `f` runs), panics contained (no unwind
+/// crosses the C boundary), and null returned with an exception set on any
+/// failure.
 pub(crate) fn entry(
-    f: impl FnOnce(pyo3::Python<'_>) -> pyo3::PyResult<*mut pyo3::ffi::PyObject>,
+    f: impl FnOnce(capi::Gil) -> capi::CResult<capi::Mine>,
 ) -> *mut pyo3::ffi::PyObject {
     // SAFETY: every entry point is called by CPython with the interpreter
     // attached to this thread.
-    let py = unsafe { pyo3::Python::assume_attached() };
+    let g = unsafe { capi::Gil::assume() };
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        boundary::check(py)?;
-        f(py)
+        boundary::check(g)?;
+        f(g)
     })) {
-        Ok(Ok(obj)) => obj,
-        Ok(Err(err)) => {
-            err.restore(py);
-            core::ptr::null_mut()
-        }
+        Ok(Ok(obj)) => obj.into_ptr(),
+        Ok(Err(capi::Raised)) => core::ptr::null_mut(),
         Err(payload) => {
             dispose(payload);
-            pyo3::exceptions::PyRuntimeError::new_err("internal panic in Tessera").restore(py);
+            capi::raise(g, capi::runtime_error(), "internal panic in Tessera");
             core::ptr::null_mut()
+        }
+    }
+}
+
+/// As [`entry`], for slots returning a status: 0, or -1 with an exception
+/// set (`getbuffer`).
+pub(crate) fn entry_status(f: impl FnOnce(capi::Gil) -> capi::CResult<()>) -> core::ffi::c_int {
+    // SAFETY: as in `entry`.
+    let g = unsafe { capi::Gil::assume() };
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        boundary::check(g)?;
+        f(g)
+    })) {
+        Ok(Ok(())) => 0,
+        Ok(Err(capi::Raised)) => -1,
+        Err(payload) => {
+            dispose(payload);
+            capi::raise(g, capi::runtime_error(), "internal panic in Tessera");
+            -1
         }
     }
 }
@@ -54,31 +69,8 @@ pub(crate) fn dispose(payload: Box<dyn core::any::Any + Send>) {
     core::mem::forget(payload);
 }
 
-/// Frees a heap-type instance after its own fields were released: the
-/// type's `tp_free`, then the type reference every heap instance holds.
-///
-/// # Safety
-///
-/// `obj` must be a live instance of a heap type, allocated by its
-/// `tp_alloc`, in its `tp_dealloc`, attached.
-pub(crate) unsafe fn free_heap_object(obj: *mut pyo3::ffi::PyObject) {
-    // SAFETY: `obj` is a live object.
-    let ty = unsafe { pyo3::ffi::Py_TYPE(obj) };
-    // SAFETY: `ty` is a heap type, which always has a tp_free slot.
-    let free = unsafe { pyo3::ffi::PyType_GetSlot(ty, pyo3::ffi::Py_tp_free) };
-    if !free.is_null() {
-        // SAFETY: the tp_free slot holds a `freefunc`.
-        let free: unsafe extern "C" fn(*mut core::ffi::c_void) =
-            unsafe { core::mem::transmute(free) };
-        // SAFETY: `obj` was allocated by this type's tp_alloc.
-        unsafe { free(obj.cast()) };
-    }
-    // SAFETY: instances of heap types hold a reference to their type,
-    // released after the instance is freed.
-    unsafe { pyo3::ffi::Py_DECREF(ty.cast()) };
-}
-
 mod boundary;
+pub(crate) mod capi;
 mod dlpack;
 mod env_type;
 pub(crate) mod inner;

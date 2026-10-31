@@ -20,11 +20,9 @@
 use core::cell::Cell;
 use core::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 
-use pyo3::ffi;
-use pyo3::prelude::*;
 use tessera_rl_num::fp;
 
-use super::thunks;
+use super::capi::{self, CResult, Gil};
 use crate::errors::{Kind, error};
 
 // A frame token: bit 0 marks a live frame, bit 1 a non-canonical caller,
@@ -47,6 +45,7 @@ pub(super) extern "C" fn tessera_fp_enter(caller: u64) -> u64 {
     if non_canonical {
         fp::record_non_canonical_entry();
     }
+    debug_assert!(caller >> 32 == 0, "the control register fits 32 bits");
     let token =
         LIVE | if non_canonical { NON_CANONICAL } else { 0 } | ((caller & 0xffff_ffff) << SHIFT);
     FRAME.with(|f| f.replace(token))
@@ -56,6 +55,13 @@ pub(super) extern "C" fn tessera_fp_enter(caller: u64) -> u64 {
 /// restores the previous frame.
 pub(super) extern "C" fn tessera_fp_leave(previous: u64) {
     FRAME.with(|f| f.set(previous));
+}
+
+/// Called by every callout thunk, under canonical controls, before the
+/// host call: the controls to run it under, those of the innermost
+/// boundary frame's caller (or the current ones outside any frame).
+pub(super) extern "C" fn tessera_fp_caller_controls() -> u64 {
+    frame().map_or_else(fp::current_bits, |(_, caller)| caller)
 }
 
 /// Called by the callout thunk after the host code returned and the
@@ -111,13 +117,13 @@ const WARNING: &core::ffi::CStr = c"tessera_rl: the caller's floating-point cont
 /// The policy check of a fallible entry, run first in `ffi::entry`, under
 /// canonical controls. `Err` means the entry must fail before any work:
 /// a rejection under the strict policy, or a warning that raised.
-pub(super) fn check(py: Python<'_>) -> PyResult<()> {
-    let Some((true, caller)) = frame() else {
+pub(super) fn check(g: Gil) -> CResult<()> {
+    let Some((true, _caller)) = frame() else {
         return Ok(());
     };
     if policy() == Policy::Reject {
         return Err(error(
-            py,
+            g,
             Kind::FloatingPoint,
             "the caller's floating-point controls are not the default and the policy is \"reject\" (tessera_rl.set_fp_policy)".to_owned(),
         ));
@@ -126,16 +132,8 @@ pub(super) fn check(py: Python<'_>) -> PyResult<()> {
         return Ok(());
     }
     // The warning runs host code (filters, hooks, or an exception under
-    // warnings-as-errors): it goes through the callout thunk, which runs
-    // it under the caller's controls and re-canonicalizes afterwards.
-    // SAFETY: attached (entry bodies are); reading the interpreter's
-    // RuntimeWarning type object pointer.
-    let category = unsafe { ffi::PyExc_RuntimeWarning };
-    // SAFETY: attached; the category is a live exception type and the
-    // message a static C string.
-    let rc = unsafe { (thunks::CALLOUT_WARN.get())(category, WARNING.as_ptr(), 1, caller) };
-    if rc < 0 {
-        return Err(PyErr::fetch(py));
-    }
-    Ok(())
+    // warnings-as-errors): `capi::warn` is a callout, which runs it under
+    // the caller's controls and re-canonicalizes afterwards. Failing
+    // propagates before the entry runs.
+    capi::warn(g, capi::runtime_warning(), WARNING)
 }

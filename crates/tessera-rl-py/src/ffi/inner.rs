@@ -12,7 +12,7 @@
 use core::cell::UnsafeCell;
 use core::sync::atomic::{AtomicBool, Ordering};
 
-use pyo3::prelude::*;
+use super::capi::{CResult, Gil};
 
 use crate::env::PoolOps;
 use crate::errors::{Kind, error};
@@ -51,7 +51,7 @@ impl Inner {
         self.borrowed
     }
 
-    fn acquire(&self, py: Python<'_>) -> PyResult<Busy<'_>> {
+    fn acquire(&self, g: Gil) -> CResult<Busy<'_>> {
         // Acquire: pairs with the Release in `Busy::drop`.
         if self
             .busy
@@ -59,7 +59,7 @@ impl Inner {
             .is_err()
         {
             return Err(error(
-                py,
+                g,
                 Kind::Concurrency,
                 "another call on this environment is running".to_owned(),
             ));
@@ -71,22 +71,22 @@ impl Inner {
     /// raises `ConcurrencyError`, a closed environment `ArgumentError`.
     pub(crate) fn with<R>(
         &self,
-        py: Python<'_>,
-        f: impl FnOnce(&mut dyn PoolOps) -> PyResult<R>,
-    ) -> PyResult<R> {
-        let _busy = self.acquire(py)?;
+        g: Gil,
+        f: impl FnOnce(&mut dyn PoolOps) -> CResult<R>,
+    ) -> CResult<R> {
+        let _busy = self.acquire(g)?;
         // SAFETY: `busy` is held for the lifetime of `_busy`, and every
         // access to `ops` happens under it, so this is the only reference.
         let ops = unsafe { &mut *self.ops.get() };
         let ops = ops
             .as_deref_mut()
-            .ok_or_else(|| error(py, Kind::Argument, "the environment is closed".to_owned()))?;
+            .ok_or_else(|| error(g, Kind::Argument, "the environment is closed".to_owned()))?;
         f(ops)
     }
 
     /// Takes the pool out under the guard (closing); idempotent.
-    pub(crate) fn take(&self, py: Python<'_>) -> PyResult<Option<Box<dyn PoolOps>>> {
-        let _busy = self.acquire(py)?;
+    pub(crate) fn take(&self, g: Gil) -> CResult<Option<Box<dyn PoolOps>>> {
+        let _busy = self.acquire(g)?;
         // SAFETY: as in `with`: `busy` is held.
         Ok(unsafe { &mut *self.ops.get() }.take())
     }
