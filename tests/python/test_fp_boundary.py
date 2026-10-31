@@ -102,7 +102,7 @@ def test_fp_boundary_reports_its_variant():
 
     variant = n.fp_boundary()
     if platform.system() == "Windows":
-        assert variant.startswith("none")
+        assert variant == "Win64"
     elif platform.machine() in ("arm64", "aarch64"):
         assert variant == "AAPCS64"
     else:
