@@ -293,9 +293,9 @@ where
                 frame(&p, SRC, self.same_step()),
                 frame(&p, OTHER_SLOT, self.same_step()),
             );
-            assert_eq!(x.obs, y.obs, "fork at {t}, step {k}");
-            assert_eq!(x.state, y.state, "fork at {t}, step {k}");
-            assert_eq!(x.rewards, y.rewards, "fork at {t}, step {k}");
+            // The whole frame: masks, terminal obs, flags, generations,
+            // stats and the record hash too.
+            assert_eq!(x, y, "fork at {t}, step {k}");
 
             let mut acts = actions(&b, &self.cfg, SEED, t + k);
             let row = acts[s * a..(s + 1) * a].to_vec();

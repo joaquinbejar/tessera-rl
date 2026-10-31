@@ -16,8 +16,8 @@
 //!
 //! Every digest is XXH3-64 over the canonical little-endian bytes of one
 //! output buffer for the whole batch. Fixtures are written only with
-//! `TESSERA_BLESS=1`, and blessing refuses to change an existing fixture
-//! unless `env_version` or `math_version` changed (ADR-0023).
+//! `TESSERA_BLESS=1`, under the policy of [`bless_decision`] (see
+//! `tests/README.md`).
 
 #![allow(
     dead_code,
@@ -424,64 +424,113 @@ fn value<'a>(lines: &'a [&'a str], key: &str) -> Option<&'a str> {
         .find_map(|l| l.strip_prefix(key)?.strip_prefix('='))
 }
 
-/// Compares `lines` with the committed fixture `name`, or writes it under
-/// `TESSERA_BLESS=1`.
-///
-/// # Panics
-///
-/// On any difference: the first diverging call and field, and the
-/// instances whose final record differs.
-pub fn check(name: &str, lines: &[String]) {
-    let bless = std::env::var_os("TESSERA_BLESS").is_some_and(|v| v == "1");
-    check_mode(name, lines, bless);
+/// Why a harness migration may re-bless a fixture (`TESSERA_BLESS_REASON`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BlessReason {
+    /// The fixture format version changed.
+    Format,
+    /// The action generator changed.
+    Generator,
 }
 
-/// [`check`] that never writes, whatever `TESSERA_BLESS` says.
-pub fn compare(name: &str, lines: &[String]) {
-    check_mode(name, lines, false);
-}
-
-fn check_mode(name: &str, lines: &[String], bless: bool) {
-    let file = path(name);
-    let fresh = lines.join("\n") + "\n";
-    let committed = std::fs::read_to_string(&file).ok();
-    if bless {
-        if let Some(old) = &committed
-            && *old != fresh
-        {
-            let old_lines: Vec<&str> = old.lines().collect();
-            let new_lines: Vec<&str> = fresh.lines().collect();
-            let same_versions = ["env_version", "math_version", "actions", "format"]
-                .iter()
-                .all(|k| value(&old_lines, k) == value(&new_lines, k));
-            assert!(
-                !same_versions,
-                "{name}: refusing to bless a changed fixture without bumping env_version \
-                 (ADR-0023), MATH_VERSION, the action generator or the format"
-            );
+impl BlessReason {
+    /// Parses `TESSERA_BLESS_REASON`.
+    #[must_use]
+    pub fn from_env() -> Option<Self> {
+        match std::env::var("TESSERA_BLESS_REASON").ok()?.as_str() {
+            "format" => Some(Self::Format),
+            "generator" => Some(Self::Generator),
+            _ => None,
         }
-        std::fs::write(&file, &fresh).unwrap_or_else(|e| panic!("{}: {e}", file.display()));
-        return;
     }
-    let Some(committed) = committed else {
-        panic!(
-            "{name}: missing fixture {}; run with TESSERA_BLESS=1",
-            file.display()
-        );
+}
+
+/// What blessing does with a fixture.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Bless {
+    /// The output did not change: the file is left untouched.
+    Unchanged,
+    /// The fixture is new, or the change is authorized: write it.
+    Write,
+}
+
+/// The bless policy (ADR-0008, ADR-0023), pure. A changed fixture needs
+/// an `env_version` bump; a `MATH_VERSION` bump alone does not authorize it
+/// (new math is a new environment version that records it). A format or
+/// generator change is a harness migration and needs the matching
+/// `reason`.
+///
+/// # Errors
+///
+/// Returns why the change is refused.
+pub fn bless_decision(
+    old: Option<&str>,
+    new: &str,
+    reason: Option<BlessReason>,
+) -> Result<Bless, String> {
+    let Some(old) = old else {
+        return Ok(Bless::Write);
     };
+    if old == new {
+        return Ok(Bless::Unchanged);
+    }
+    let (o, n): (Vec<&str>, Vec<&str>) = (old.lines().collect(), new.lines().collect());
+    let changed = |key| value(&o, key) != value(&n, key);
+    if changed("env_version") {
+        return Ok(Bless::Write);
+    }
+    match reason {
+        Some(BlessReason::Format) if changed("format") => Ok(Bless::Write),
+        Some(BlessReason::Generator) if changed("actions") => Ok(Bless::Write),
+        _ => Err(
+            "a changed fixture needs an env_version bump (ADR-0023); MATH_VERSION alone \
+                  does not authorize it, and a format or generator migration needs \
+                  TESSERA_BLESS_REASON=format|generator"
+                .to_owned(),
+        ),
+    }
+}
+
+/// Blesses `lines` into `file` under the policy; returns what it did.
+///
+/// # Errors
+///
+/// Returns why the change is refused; the file is then left intact.
+pub fn bless_into(
+    file: &std::path::Path,
+    lines: &[String],
+    reason: Option<BlessReason>,
+) -> Result<Bless, String> {
+    let fresh = lines.join("\n") + "\n";
+    let old = std::fs::read_to_string(file).ok();
+    let decision = bless_decision(old.as_deref(), &fresh, reason)?;
+    if decision == Bless::Write {
+        std::fs::write(file, &fresh).map_err(|e| format!("{}: {e}", file.display()))?;
+    }
+    Ok(decision)
+}
+
+/// Compares `lines` with fixture text `committed`, pure.
+///
+/// # Errors
+///
+/// The first diverging call and field, and the instances whose final
+/// record differs; or a header value that differs from the code.
+pub fn compare_text(name: &str, committed: &str, lines: &[String]) -> Result<(), String> {
     let old: Vec<&str> = committed.lines().collect();
     let new: Vec<&str> = lines.iter().map(String::as_str).collect();
     for key in ["format", "env_id", "env_version", "math_version", "actions"] {
-        assert_eq!(
-            value(&old, key),
-            value(&new, key),
-            "{name}: fixture {key} differs from the code; a behaviour change needs a version bump"
-        );
+        if value(&old, key) != value(&new, key) {
+            return Err(format!(
+                "{name}: fixture {key} differs from the code; a behaviour change needs a version bump"
+            ));
+        }
     }
-    let first = old.iter().zip(&new).position(|(a, b)| a != b);
-    let Some(k) = first else {
-        assert_eq!(old.len(), new.len(), "{name}: fixture length differs");
-        return;
+    let Some(k) = old.iter().zip(&new).position(|(a, b)| a != b) else {
+        if old.len() != new.len() {
+            return Err(format!("{name}: fixture length differs"));
+        }
+        return Ok(());
     };
     let (a, b) = (old[k], new[k]);
     let fields: Vec<&str> = a
@@ -505,11 +554,42 @@ fn check_mode(name: &str, lines: &[String], bless: bool) {
         .filter(|(_, (x, y))| *x != y)
         .map(|(i, _)| i)
         .collect();
-    panic!(
+    Err(format!(
         "{name}: first divergence at line {k} (call {}), fields {fields:?}; \
          instances with a different final record: {instances:?}\n  fixture: {a}\n  code:    {b}",
         a.split(' ').next().unwrap_or("?")
-    );
+    ))
+}
+
+/// Compares `lines` with the committed fixture `name` (read-only), or
+/// blesses it under `TESSERA_BLESS=1` and the bless policy.
+///
+/// # Panics
+///
+/// On any difference, or a refused bless.
+pub fn check(name: &str, lines: &[String]) {
+    let file = path(name);
+    if std::env::var_os("TESSERA_BLESS").is_some_and(|v| v == "1") {
+        if let Err(e) = bless_into(&file, lines, BlessReason::from_env()) {
+            panic!("{name}: {e}");
+        }
+        return;
+    }
+    let Ok(committed) = std::fs::read_to_string(&file) else {
+        panic!(
+            "{name}: missing fixture {}; run with TESSERA_BLESS=1",
+            file.display()
+        );
+    };
+    if let Err(e) = compare_text(name, &committed, lines) {
+        panic!("{e}");
+    }
+}
+
+/// The committed fixture `name`.
+#[must_use]
+pub fn committed(name: &str) -> String {
+    std::fs::read_to_string(path(name)).unwrap_or_default()
 }
 
 /// `StateHash` of every instance (for tests that compare pools).

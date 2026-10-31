@@ -16,7 +16,15 @@
 
 The fixture format is documented in `support/mod.rs`.
 
-Fixtures are rewritten only with `TESSERA_BLESS=1 cargo test -p tessera-rl-classic --test golden`. Blessing refuses to change an existing fixture unless `env_version`, `MATH_VERSION`, the action generator or the format version changed (ADR-0023). A plain run fails on any difference: it reports the first diverging call and field, and which instances end with a different record.
+Fixtures are written only with `TESSERA_BLESS=1 cargo test -p tessera-rl-classic --test golden`. Blessing follows a policy (ADR-0008, ADR-0023):
+
+- If the output did not change, the file is left untouched.
+- A new fixture is written.
+- A changed fixture needs an `env_version` bump. A `MATH_VERSION` bump alone does **not** authorize it: new math is a new environment version that records it, and the old version stays reproducible.
+- A harness migration needs an explicit reason: `TESSERA_BLESS_REASON=format` with a changed format version, or `TESSERA_BLESS_REASON=generator` with a changed action generator.
+- A refused change leaves the fixture intact.
+
+A plain run is read-only. It fails on any difference, reporting the first diverging call and field and the instances that end with a different record. The negative tests of the policy use in-memory text and a temporary file, never `tests/golden/`.
 
 ## ADR-0024 layer 3: edge fixtures
 
