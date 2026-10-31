@@ -759,8 +759,11 @@ fn select_native(choice: WaitBackend) -> Option<crate::sys::Native> {
     let native = crate::sys::Native::detect();
     match choice {
         WaitBackend::Park => None,
-        // Windows stays on park until WaitOnAddress has run in CI.
-        WaitBackend::Auto if cfg!(windows) => None,
+        // Native by default only where it measured faster than park: Linux
+        // futex (about 4% when every batch blocks). macOS os_sync showed no
+        // gain, and Windows WaitOnAddress has not run in CI yet. Re-evaluate
+        // on the reference hardware (ADR-0025).
+        WaitBackend::Auto if !cfg!(target_os = "linux") => None,
         WaitBackend::Auto => native,
         WaitBackend::Native => {
             if native.is_none() {

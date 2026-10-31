@@ -88,10 +88,11 @@ fn trajectory_on(mode: AutoReset, workers: Option<usize>, wait: WaitBackend) -> 
     let mut p = pool_on(mode, workers, cfg, wait);
     assert_eq!(p.workers(), workers.unwrap_or(0));
     if workers.is_some() {
-        // Native where it is tested and enabled: Linux, and macOS 14.4+.
+        // Native by default only on Linux; on request on macOS 14.4+ and
+        // Windows too.
         let native_expected = match wait {
             WaitBackend::Park => false,
-            WaitBackend::Auto => cfg!(any(target_os = "linux", target_os = "macos")),
+            WaitBackend::Auto => cfg!(target_os = "linux"),
             WaitBackend::Native => cfg!(any(target_os = "linux", target_os = "macos", windows)),
         };
         assert_eq!(p.uses_native_wait(), native_expected, "{wait:?}");

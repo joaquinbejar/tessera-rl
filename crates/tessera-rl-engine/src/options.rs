@@ -94,16 +94,17 @@ impl PoolOptions {
 /// How worker threads block between batches (ADR-0005).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum WaitBackend {
-    /// The native address wait where it is tested and enabled by default
-    /// (Linux `futex`, macOS 14.4+ `os_sync_wait_on_address`), park and
-    /// unpark elsewhere (Windows until it runs in CI, older macOS).
+    /// The native address wait where it measured faster than park (Linux
+    /// `futex`); park and unpark elsewhere (macOS showed no gain, Windows
+    /// has not run in CI yet). To be re-evaluated on reference hardware.
     #[default]
     Auto,
     /// Portable `thread::park` and `unpark`.
     Park,
-    /// The native address wait, including Windows `WaitOnAddress` (opt-in:
-    /// not yet run on Windows). Falls back to park, with a warning, where
-    /// none exists.
+    /// The native address wait: `futex`, macOS 14.4+
+    /// `os_sync_wait_on_address`, or Windows `WaitOnAddress` (opt-in: not yet
+    /// run on Windows). Falls back to park, with a warning, where none
+    /// exists.
     Native,
 }
 

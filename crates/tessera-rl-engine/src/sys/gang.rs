@@ -464,7 +464,6 @@ mod tests {
     use core::num::NonZeroUsize;
 
     use super::{Faults, Gang, GangOptions};
-    #[cfg(not(loom))]
     use crate::error::EngineError;
     use crate::sys::sync::{Arc, AtomicUsize, Ordering};
 
