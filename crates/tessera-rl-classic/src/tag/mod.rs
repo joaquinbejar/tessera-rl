@@ -366,45 +366,42 @@ impl Heuristic for Tag {
     }
 }
 
-/// What one agent knows: its own cell and its current egocentric window
-/// (the same bytes as its observation, zero-padded to the largest radius).
+/// What one agent knows: exactly its current egocentric window, the same
+/// bytes as its observation, zero-padded to the largest radius. Its
+/// absolute cell is not part of it: the observation does not reveal it
+/// (the out-of-grid channel carries what the agent sees of the edges).
 ///
-/// This is a current-observation (Markov) information state, not perfect
-/// recall: it does not track history and is not a sufficient statistic of
-/// the observation history (an agent may remember where it saw an evader).
-/// A history-tracking information state would be a different version of
-/// the environment. Phase 2 (`Determinize`, validated with Leduc) must
-/// revisit it. The episode step is not part of it: it lives in the engine
-/// header, not in the environment state.
+/// This is a current-observation information state: it does not track
+/// history and is not a sufficient statistic of the observation history
+/// (an agent may remember where it saw an evader). A history-tracking
+/// information state would be a different version of the environment.
+/// Phase 2 (`Determinize`, validated with Leduc) must revisit it. The
+/// episode step is not part of it: it lives in the engine header.
 #[derive(EnvState, Debug, Clone, Copy, PartialEq)]
 #[repr(C)]
 pub struct TagInfo {
-    /// The agent's cell, `[x, y]`.
-    pub pos: [i16; 2],
     /// The window, `[3, 2r+1, 2r+1]` then zeros.
     pub window: [u8; WINDOW_BYTES],
-    /// Padding to a multiple of 2 bytes.
+    /// Padding to an even size.
     pub reserved: Reserved<1>,
 }
 
 impl Default for TagInfo {
     fn default() -> Self {
         Self {
-            pos: [0; 2],
             window: [0; WINDOW_BYTES],
             reserved: Reserved::default(),
         }
     }
 }
 
-/// Reads only the agent's own position and window (noninterference by
-/// construction). No `Determinize` in phase 1a.
+/// Reads only the agent's own window (noninterference by construction).
+/// No `Determinize` in phase 1a.
 impl ImperfectInformation for Tag {
     type InfoState = TagInfo;
 
     fn info_state(cfg: &TagConfig, state: &TagState, agent: AgentSlot) -> TagInfo {
         TagInfo {
-            pos: state.pos.get(agent.index()).copied().unwrap_or([0; 2]),
             window: egocentric_window(cfg, state, agent.index()),
             reserved: Reserved::default(),
         }

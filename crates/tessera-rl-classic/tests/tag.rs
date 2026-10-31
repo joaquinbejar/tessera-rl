@@ -400,16 +400,10 @@ fn test_tag_partial_observability_witness_justifies_imperfect_information() {
         Tag::info_state(&cfg, &a, pursuer),
         Tag::info_state(&cfg, &b, pursuer)
     );
-    // The evader itself does see the difference (its own cell).
-    let evader = AgentSlot::new(1, A).unwrap();
-    assert_ne!(
-        Tag::info_state(&cfg, &a, evader),
-        Tag::info_state(&cfg, &b, evader)
-    );
 }
 
 #[test]
-fn test_tag_info_state_is_own_cell_and_the_observation_window() {
+fn test_tag_info_state_is_the_observation_window() {
     let cfg = TagConfig {
         pursuers: 3,
         evaders: 3,
@@ -434,7 +428,6 @@ fn test_tag_info_state_is_own_cell_and_the_observation_window() {
                 }
                 let slot = AgentSlot::new(u16::try_from(a).unwrap(), A).unwrap();
                 let info = Tag::info_state(&cfg, s, slot);
-                assert_eq!(info.pos, s.pos[a]);
                 assert_eq!(
                     &info.window[..leaf],
                     &obs[row * leaf..(row + 1) * leaf],
@@ -444,4 +437,24 @@ fn test_tag_info_state_is_own_cell_and_the_observation_window() {
             }
         }
     }
+}
+
+/// codex's R10-04 witness: an interior observer translated from [2, 2] to
+/// [3, 2] with radius 0 sees the same window and mask, so its information
+/// state must not reveal the absolute cell.
+#[test]
+fn test_tag_info_state_hides_the_observer_absolute_cell() {
+    let cfg = TagConfig {
+        pursuers: 1,
+        evaders: 1,
+        radius: 0,
+        ..TagConfig::default()
+    };
+    let mut a = TagState::default();
+    a.pos[0] = [2, 2];
+    a.pos[1] = [6, 6];
+    let mut b = a;
+    b.pos[0] = [3, 2];
+    let me = AgentSlot::FIRST;
+    assert_eq!(Tag::info_state(&cfg, &a, me), Tag::info_state(&cfg, &b, me));
 }
