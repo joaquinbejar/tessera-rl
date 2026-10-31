@@ -10,8 +10,9 @@
 //!
 //! 1. The buffers are never reallocated after construction: the pool never
 //!    pushes to or resizes them, so pointers taken at the start of an epoch
-//!    stay valid for the whole epoch. The pointers are to the heap data of
-//!    the `Vec`s, not to the pool, so moving the pool between calls is fine.
+//!    stay valid for the whole epoch. The pointers are to the heap data
+//!    (record arrays, and the shared output storage of [`storage`]), not to
+//!    the pool, so moving the pool between calls is fine.
 //! 2. Chunk ranges are disjoint by construction: chunk `c` covers instances
 //!    `c * size .. min((c + 1) * size, n)`, and worker `w` takes the chunks
 //!    `c` with `c % workers == w`, so no two workers, and no two chunks of
@@ -25,6 +26,8 @@
 //!    created and dropped inside the job, and the caller's output views are
 //!    returned only after `run`.
 
+mod storage;
+
 use core::ops::Range;
 
 use tessera_rl_core::{Bool8, Environment};
@@ -35,6 +38,9 @@ use crate::outputs::OutputsView;
 use crate::pool::Chunk;
 use crate::sys::Gang;
 use crate::sys::sync::{AtomicBool, Ordering};
+
+pub(crate) use storage::{Buf, StorageBuilder};
+pub use storage::{OutputDtype, OutputField, OutputRegion, OutputStorage};
 
 #[derive(Clone, Copy)]
 struct Raw<T> {
