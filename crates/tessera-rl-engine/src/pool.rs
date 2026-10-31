@@ -644,7 +644,7 @@ where
                 let heads = discrete.get(k * dh..(k + 1) * dh).unwrap_or(&[]);
                 let mask = self
                     .outputs
-                    .masks
+                    .masks()
                     .get(k * mask_len..(k + 1) * mask_len)
                     .unwrap_or(&[]);
                 if let Some(head) = first_illegal(heads, &self.actions.discrete, mask) {
@@ -747,7 +747,7 @@ where
         let a = self.outputs.agents;
         if let Some(k) = self
             .outputs
-            .invalid_agent_event
+            .invalid_agent_event()
             .iter()
             .position(|f| f.get())
         {

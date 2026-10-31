@@ -536,17 +536,17 @@ mod tests {
                 &discrete[i * 2..i * 2 + 2],
                 &[i32::try_from(owner(i)).unwrap(); 2]
             );
-            assert_eq!(&outputs.generations[i * 2..i * 2 + 2], &[owner(i); 2]);
+            assert_eq!(&outputs.generations()[i * 2..i * 2 + 2], &[owner(i); 2]);
         }
-        assert!(outputs.masks.iter().all(|m| m.get()));
-        assert!(outputs.invalid_agent_event.iter().all(|m| m.get()));
+        assert!(outputs.masks().iter().all(|m| m.get()));
+        assert!(outputs.invalid_agent_event().iter().all(|m| m.get()));
         for i in 0..N {
             #[expect(clippy::cast_precision_loss, reason = "tiny marks")]
             let mark = owner(i) as f32;
-            assert_eq!(outputs.episode_invalid_agent_events[i], mark);
+            assert_eq!(outputs.episode_invalid_agent_events()[i], mark);
         }
-        assert!(outputs.episode_truncated.iter().all(|m| m.get()));
-        let first_leaf = &outputs.observations[0];
+        assert!(outputs.episode_truncated().iter().all(|m| m.get()));
+        let first_leaf = outputs.observation(0).unwrap();
         for i in 0..N {
             let row = &first_leaf[i * 6..(i + 1) * 6];
             assert!(row.iter().all(|&b| u32::from(b) == owner(i)));

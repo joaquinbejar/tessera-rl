@@ -14,8 +14,9 @@
 //!    all-zero bit pattern ([`Element`]).
 //! 2. Regions are disjoint: offsets come from one running sum, each region
 //!    starts aligned to 8 bytes, which covers every [`Element`] alignment.
-//! 3. Exactly one [`Buf`] exists per region (`Buf` is not `Clone` and is
-//!    only created by [`StorageBuilder::finish`]), so `&mut Buf` is the only
+//! 3. Exactly one [`Buf`] exists per region: `Buf` is not `Clone` and is
+//!    only created by [`Regions::take`], which checks the slot's builder,
+//!    dtype and bounds and hands each region out once, so `&mut Buf` is the only
 //!    way to get a `&mut` slice of its region.
 //! 4. The engine increments the generation before any write to the
 //!    outputs ([`Buf`] slices are written only through
@@ -140,6 +141,7 @@ struct Entry {
 /// The single allocation holding every output buffer of a pool.
 pub struct OutputStorage {
     words: Box<[UnsafeCell<u64>]>,
+    bytes: usize,
     entries: Vec<Entry>,
     generation: AtomicU64,
 }
@@ -175,7 +177,7 @@ impl OutputStorage {
     /// Total size of the allocation in bytes.
     #[must_use]
     pub fn bytes(&self) -> usize {
-        self.words.len().saturating_mul(8)
+        self.bytes
     }
 
     /// The region of `field`, if the pool has it.
@@ -199,17 +201,33 @@ impl OutputStorage {
 }
 
 /// A typed handle to one region, reserved before the allocation exists.
+/// It names its builder, so it cannot be redeemed against another storage.
 #[derive(Debug)]
 pub(crate) struct Slot<T> {
+    builder: u64,
     index: usize,
     _t: core::marker::PhantomData<T>,
 }
 
+/// Distinct ids for builders (not modeled by loom: identity only).
+static BUILDERS: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+
 /// Lays out the regions of an [`OutputStorage`].
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub(crate) struct StorageBuilder {
+    id: u64,
     entries: Vec<Entry>,
     bytes: usize,
+}
+
+impl Default for StorageBuilder {
+    fn default() -> Self {
+        Self {
+            id: BUILDERS.fetch_add(1, core::sync::atomic::Ordering::Relaxed),
+            entries: Vec::new(),
+            bytes: 0,
+        }
+    }
 }
 
 impl StorageBuilder {
@@ -229,20 +247,75 @@ impl StorageBuilder {
             dtype: T::DTYPE,
         });
         Some(Slot {
+            builder: self.id,
             index: self.entries.len().checked_sub(1)?,
             _t: core::marker::PhantomData,
         })
     }
 
-    /// Allocates the zeroed storage.
-    pub(crate) fn finish(self) -> Option<Arc<OutputStorage>> {
+    /// Allocates the zeroed storage. Its regions are handed out only by the
+    /// returned [`Regions`], once each.
+    pub(crate) fn finish(self) -> Option<Regions> {
         let words = self.bytes.checked_next_multiple_of(8)? / 8;
         let words = (0..words).map(|_| UnsafeCell::new(0)).collect();
-        Some(Arc::new(OutputStorage {
-            words,
-            entries: self.entries,
-            generation: AtomicU64::new(0),
-        }))
+        let taken = vec![false; self.entries.len()];
+        Some(Regions {
+            builder: self.id,
+            storage: Arc::new(OutputStorage {
+                words,
+                bytes: self.bytes,
+                entries: self.entries,
+                generation: AtomicU64::new(0),
+            }),
+            taken,
+        })
+    }
+}
+
+/// The only source of [`Buf`]s: one per region of its storage, at most once
+/// (invariant 3).
+#[derive(Debug)]
+pub(crate) struct Regions {
+    builder: u64,
+    storage: Arc<OutputStorage>,
+    taken: Vec<bool>,
+}
+
+impl Regions {
+    /// The storage being handed out.
+    #[cfg(test)]
+    pub(crate) fn storage(&self) -> &Arc<OutputStorage> {
+        &self.storage
+    }
+
+    /// The unique handle of `slot`; `None` if the slot is from another
+    /// builder, already taken, or does not match its entry's dtype and
+    /// bounds (checked in every build, not only in debug).
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "consuming the slot documents that each region is taken once"
+    )]
+    pub(crate) fn take<T: Element>(&mut self, slot: Slot<T>) -> Option<Buf<T>> {
+        if slot.builder != self.builder {
+            return None;
+        }
+        let taken = self.taken.get_mut(slot.index)?;
+        let e = self.storage.entries.get(slot.index)?;
+        let end = e
+            .len
+            .checked_mul(core::mem::size_of::<T>())?
+            .checked_add(e.offset)?;
+        if *taken || e.dtype != T::DTYPE || end > self.storage.bytes || e.offset % 8 != 0 {
+            return None;
+        }
+        *taken = true;
+        let base = UnsafeCell::raw_get(self.storage.words.as_ptr()).cast::<u8>();
+        let ptr = NonNull::new(base.wrapping_add(e.offset).cast::<T>())?;
+        Some(Buf {
+            storage: Arc::clone(&self.storage),
+            ptr,
+            len: e.len,
+        })
     }
 }
 
@@ -270,24 +343,7 @@ unsafe impl<T: Send> Send for Buf<T> {}
 #[expect(unsafe_code, reason = "audited module: shared output storage")]
 unsafe impl<T: Sync> Sync for Buf<T> {}
 
-impl<T: Element> Buf<T> {
-    /// The handle of `slot`; each slot is taken once (invariant 3).
-    #[expect(
-        clippy::needless_pass_by_value,
-        reason = "taking the slot by value is what makes each region's Buf unique"
-    )]
-    pub(crate) fn take(storage: &Arc<OutputStorage>, slot: Slot<T>) -> Option<Self> {
-        let e = storage.entries.get(slot.index)?;
-        let base = UnsafeCell::raw_get(storage.words.as_ptr()).cast::<u8>();
-        let ptr = NonNull::new(base.wrapping_add(e.offset).cast::<T>())?;
-        debug_assert!(ptr.as_ptr().is_aligned(), "regions are 8-byte aligned");
-        Some(Self {
-            storage: Arc::clone(storage),
-            ptr,
-            len: e.len,
-        })
-    }
-
+impl<T> Buf<T> {
     /// The storage this region lives in.
     pub(crate) fn storage(&self) -> &Arc<OutputStorage> {
         &self.storage
@@ -333,11 +389,11 @@ mod tests {
         let obs = builder
             .reserve::<u8>(OutputField::Observation(0), 7)
             .unwrap();
-        let storage = builder.finish().unwrap();
-        let rewards = Buf::take(&storage, rewards).unwrap();
-        let alive = Buf::take(&storage, alive).unwrap();
-        let obs = Buf::take(&storage, obs).unwrap();
-        (storage, rewards, alive, obs)
+        let mut regions = builder.finish().unwrap();
+        let rewards = regions.take(rewards).unwrap();
+        let alive = regions.take(alive).unwrap();
+        let obs = regions.take(obs).unwrap();
+        (Arc::clone(regions.storage()), rewards, alive, obs)
     }
 
     #[test]
@@ -382,6 +438,31 @@ mod tests {
     }
 
     #[test]
+    fn test_storage_slot_of_another_builder_or_taken_twice_is_refused() {
+        let mut a = StorageBuilder::default();
+        let mut b = StorageBuilder::default();
+        let from_b = b.reserve::<f32>(OutputField::Rewards, 1 << 20).unwrap();
+        let first = a.reserve::<f32>(OutputField::Rewards, 1).unwrap();
+        let mut regions = a.finish().unwrap();
+        // Same index 0, but another builder (and out of this storage's
+        // bounds): refused, not an out-of-bounds view.
+        assert!(regions.take(from_b).is_none());
+        assert!(regions.take(first).is_some());
+        let again = Slot::<f32> {
+            builder: regions.builder,
+            index: 0,
+            _t: core::marker::PhantomData,
+        };
+        assert!(regions.take(again).is_none());
+        let wrong_dtype = Slot::<u32> {
+            builder: regions.builder,
+            index: 0,
+            _t: core::marker::PhantomData,
+        };
+        assert!(regions.take(wrong_dtype).is_none());
+    }
+
+    #[test]
     fn test_storage_reserve_overflow_returns_none() {
         let mut b = StorageBuilder::default();
         assert!(b.reserve::<f32>(OutputField::Rewards, usize::MAX).is_none());
@@ -402,7 +483,7 @@ mod loom_tests {
         loom::model(|| {
             let mut b = StorageBuilder::default();
             let _ = b.reserve::<u32>(OutputField::Generations, 1);
-            let s = b.finish().unwrap();
+            let s = Arc::clone(b.finish().unwrap().storage());
             let reader = {
                 let s = Arc::clone(&s);
                 thread::spawn(move || {

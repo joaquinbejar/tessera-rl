@@ -16,30 +16,32 @@ use crate::buffer::{Buf, OutputField, OutputStorage, StorageBuilder};
 
 use crate::layout::{Leaf, MAX_LEAVES};
 
-/// Output buffers of a pool, all in one shared [`OutputStorage`].
+/// Output buffers of a pool, all in one shared [`OutputStorage`]. The
+/// buffers are private: `Outputs::view_all` is the only way to write them,
+/// and it starts a new write generation first.
 #[derive(Debug)]
 pub struct Outputs {
     pub(crate) agents: usize,
-    pub(crate) observations: Vec<Buf<u8>>,
-    pub(crate) terminal_observations: Vec<Buf<u8>>,
+    observations: Vec<Buf<u8>>,
+    terminal_observations: Vec<Buf<u8>>,
     pub(crate) leaf_bytes: Vec<usize>,
-    pub(crate) rewards: Buf<f32>,
-    pub(crate) agent_terminated: Buf<Bool8>,
-    pub(crate) agent_truncated: Buf<Bool8>,
-    pub(crate) died: Buf<Bool8>,
-    pub(crate) spawned: Buf<Bool8>,
+    rewards: Buf<f32>,
+    agent_terminated: Buf<Bool8>,
+    agent_truncated: Buf<Bool8>,
+    died: Buf<Bool8>,
+    spawned: Buf<Bool8>,
     /// Invalid agent events of the last call, `[N, A]`.
-    pub(crate) invalid_agent_event: Buf<Bool8>,
-    pub(crate) alive: Buf<Bool8>,
-    pub(crate) acting: Buf<Bool8>,
-    pub(crate) generations: Buf<u32>,
-    pub(crate) episode_terminated: Buf<Bool8>,
-    pub(crate) episode_truncated: Buf<Bool8>,
-    pub(crate) episode_return: Buf<f32>,
-    pub(crate) episode_length: Buf<f32>,
-    pub(crate) episode_illegal_actions: Buf<f32>,
-    pub(crate) episode_invalid_agent_events: Buf<f32>,
-    pub(crate) masks: Buf<Bool8>,
+    invalid_agent_event: Buf<Bool8>,
+    alive: Buf<Bool8>,
+    acting: Buf<Bool8>,
+    generations: Buf<u32>,
+    episode_terminated: Buf<Bool8>,
+    episode_truncated: Buf<Bool8>,
+    episode_return: Buf<f32>,
+    episode_length: Buf<f32>,
+    episode_illegal_actions: Buf<f32>,
+    episode_invalid_agent_events: Buf<f32>,
+    masks: Buf<Bool8>,
     pub(crate) mask_len: usize,
 }
 
@@ -92,34 +94,34 @@ impl Outputs {
         let episode_invalid_agent_events =
             b.reserve::<f32>(OutputField::EpisodeInvalidAgentEvents, num_envs)?;
         let masks = b.reserve::<Bool8>(OutputField::Masks, rows.checked_mul(mask_len)?)?;
-        let s = b.finish()?;
+        let mut r = b.finish()?;
         Some(Self {
             agents,
             observations: obs
                 .into_iter()
-                .map(|slot| Buf::take(&s, slot))
+                .map(|slot| r.take(slot))
                 .collect::<Option<_>>()?,
             terminal_observations: term
                 .into_iter()
-                .map(|slot| Buf::take(&s, slot))
+                .map(|slot| r.take(slot))
                 .collect::<Option<_>>()?,
             leaf_bytes: leaves.iter().map(|l| l.bytes).collect(),
-            rewards: Buf::take(&s, rewards)?,
-            agent_terminated: Buf::take(&s, agent_terminated)?,
-            agent_truncated: Buf::take(&s, agent_truncated)?,
-            died: Buf::take(&s, died)?,
-            spawned: Buf::take(&s, spawned)?,
-            invalid_agent_event: Buf::take(&s, invalid_agent_event)?,
-            alive: Buf::take(&s, alive)?,
-            acting: Buf::take(&s, acting)?,
-            generations: Buf::take(&s, generations)?,
-            episode_terminated: Buf::take(&s, episode_terminated)?,
-            episode_truncated: Buf::take(&s, episode_truncated)?,
-            episode_return: Buf::take(&s, episode_return)?,
-            episode_length: Buf::take(&s, episode_length)?,
-            episode_illegal_actions: Buf::take(&s, episode_illegal_actions)?,
-            episode_invalid_agent_events: Buf::take(&s, episode_invalid_agent_events)?,
-            masks: Buf::take(&s, masks)?,
+            rewards: r.take(rewards)?,
+            agent_terminated: r.take(agent_terminated)?,
+            agent_truncated: r.take(agent_truncated)?,
+            died: r.take(died)?,
+            spawned: r.take(spawned)?,
+            invalid_agent_event: r.take(invalid_agent_event)?,
+            alive: r.take(alive)?,
+            acting: r.take(acting)?,
+            generations: r.take(generations)?,
+            episode_terminated: r.take(episode_terminated)?,
+            episode_truncated: r.take(episode_truncated)?,
+            episode_return: r.take(episode_return)?,
+            episode_length: r.take(episode_length)?,
+            episode_illegal_actions: r.take(episode_illegal_actions)?,
+            episode_invalid_agent_events: r.take(episode_invalid_agent_events)?,
+            masks: r.take(masks)?,
             mask_len,
         })
     }
@@ -144,6 +146,12 @@ impl Outputs {
     #[must_use]
     pub fn terminal_observation(&self, leaf: usize) -> Option<&[u8]> {
         self.terminal_observations.get(leaf).map(|b| &**b)
+    }
+
+    /// Invalid agent events of the last call, `[N, A]`.
+    #[cfg(any(test, feature = "debug-checks"))]
+    pub(crate) fn invalid_agent_event(&self) -> &[Bool8] {
+        &self.invalid_agent_event
     }
 
     /// Rewards of the last call, `[N, A]`.
