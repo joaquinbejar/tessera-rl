@@ -4,6 +4,13 @@
 /target/
 **/*.rs.bk
 
+# cargo-fuzz local outputs (also in fuzz/.gitignore; repeated here so they
+# stay ignored when a branch without fuzz/ is checked out)
+/fuzz/target/
+/fuzz/corpus/
+/fuzz/artifacts/
+/fuzz/coverage/
+
 # Python
 __pycache__/
 *.py[cod]
