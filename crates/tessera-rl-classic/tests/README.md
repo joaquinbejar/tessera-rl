@@ -24,7 +24,7 @@ Fixtures are rewritten only with `TESSERA_BLESS=1 cargo test -p tessera-rl-class
 | --- | --- |
 | Signed zeros, subnormals, enums without a zero discriminant | engine `snapshot.rs::test_edge_fixtures_survive_snapshot_and_encoding`, `masks.rs::test_negative_zero_reward_survives_without_illegal_actions` |
 | Agent death at t, respawn of the same slot at t+1, snapshots on both sides | engine `snapshot.rs::test_continuation_across_death_and_respawn`; Tag death with snapshots at t-1 and t in `continuation.rs` |
-| Same-step slot reuse rejected by an invariant check | **gap**: the engine ignores a spawn on a dying slot and only debug-asserts it; there is no test yet |
+| Same-step slot reuse rejected by an invariant check | engine `inline.rs::test_invalid_spawns_are_ignored_and_counted` (ignored and counted), `inline.rs::test_invalid_spawn_fails_and_poisons_under_debug_checks` (`debug-checks`) |
 | Ignored actions (dead, pending reset, empty slots) | engine `inline.rs::test_agent_death_clears_alive_and_skips_its_validation`, `inline.rs::test_pool_initial_agents_starts_the_rest_empty_until_spawned`; `edge.rs::test_edge_tag_actions_of_empty_and_caught_slots_are_ignored` |
 | Illegal actions | engine `masks.rs` (`noop`, `penalize`, `debug-checks`); `edge.rs::test_edge_tag_illegal_move_is_penalized_or_rejected` |
 | Duplicate ids | engine `inline.rs::test_reset_rejects_duplicate_and_unknown_ids_and_bad_seed_lists` |
