@@ -110,10 +110,18 @@ impl<E: Environment> DecodedRecord<E> {
         &self.state
     }
 
-    /// Builds an untrusted record from parts, for tests and tools.
-    #[must_use]
-    pub const fn from_parts(header: E::Header, state: E::State) -> Self {
-        Self { header, state }
+    /// Builds an untrusted record from parts, for tests and tools. The parts
+    /// go through exactly the canonical path that bytes do: they are encoded
+    /// and decoded with the generated field policies (`Bool8`, enums,
+    /// `Reserved`, NaN unless `#[state(allow_nan)]`), so no invalid field
+    /// can get in this way. Allocates; never on the hot path.
+    ///
+    /// # Errors
+    ///
+    /// Returns the [`DecodeError`] of the first invalid field.
+    pub fn from_parts(header: E::Header, state: E::State) -> Result<Self, DecodeError> {
+        let parts = Self { header, state };
+        tessera_rl_core::encoding::decode_from_slice(&encode_to_vec(&parts))
     }
 
     pub(crate) const fn trust(self) -> Record<E> {

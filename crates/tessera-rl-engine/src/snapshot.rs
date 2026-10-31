@@ -329,6 +329,19 @@ where
         if pending && !engine.fresh.get() && engine.end_kind == 0 {
             return invalid("a pending reset without an episode end");
         }
+        // The engine sets `fresh` only on a never-reset record: pending
+        // reset, no episode end, no steps, episode and step index 0. Any
+        // other `fresh` record would make the next reset reuse an episode
+        // index, and with it RNG counters (ADR-0007).
+        if engine.fresh.get()
+            && !(pending
+                && engine.end_kind == 0
+                && engine.episode_steps == 0
+                && engine.identity.episode_index() == 0
+                && engine.identity.step_index() == 0)
+        {
+            return invalid("a fresh record that is not a never-reset record");
+        }
         if engine.identity.step_index() != engine.episode_steps {
             return invalid("the RNG step index differs from the episode steps");
         }

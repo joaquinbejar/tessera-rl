@@ -32,6 +32,9 @@ pub struct Counts {
     pub dead: Bool8,
     pub phase: Phase,
     pub reserved: tessera_rl_core::Reserved<2>,
+    /// A float that may hold NaN (with its payload).
+    #[state(allow_nan)]
+    pub noise: f32,
 }
 
 /// Test switches are independent flags by design.

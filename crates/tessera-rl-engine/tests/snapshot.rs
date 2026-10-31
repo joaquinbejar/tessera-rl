@@ -372,7 +372,7 @@ fn test_import_validates_game_invariants_and_headers_atomically() {
     // A game invariant: steps past the episode length (50).
     let mut state = *good.state();
     state.steps = 999;
-    let bad_state = DecodedRecord::from_parts(*good.header(), state);
+    let bad_state = DecodedRecord::from_parts(*good.header(), state).unwrap();
     assert!(matches!(
         p.import(&[1], &[bad_state]),
         Err(EngineError::Invariant { index: 0, .. })
@@ -381,7 +381,7 @@ fn test_import_validates_game_invariants_and_headers_atomically() {
     // An inconsistent header: an episode end without a pending reset.
     let mut header = *good.header();
     header.engine.end_kind = 1;
-    let bad_header = DecodedRecord::from_parts(header, *good.state());
+    let bad_header = DecodedRecord::from_parts(header, *good.state()).unwrap();
     assert!(matches!(
         p.import(&[0, 1], &[good, bad_header]),
         Err(EngineError::InvalidRecord { index: 1, .. })
@@ -399,7 +399,7 @@ fn test_import_all_failure_keeps_the_poison() {
     let good = DecodedRecord::from(p.snapshot(0).unwrap());
     let mut state = *good.state();
     state.steps = 999;
-    let bad = DecodedRecord::from_parts(*good.header(), state);
+    let bad = DecodedRecord::from_parts(*good.header(), state).unwrap();
     let mut poisoned = poisoned_pool();
     assert!(poisoned.import_all(&[good, bad]).is_err());
     assert!(poisoned.is_poisoned());
@@ -418,6 +418,80 @@ fn test_record_encoding_round_trips_and_matches_state_hash() {
     assert_eq!(q.state_hash(0).unwrap(), p.state_hash(0).unwrap());
     assert_eq!(
         tessera_rl_engine::Record::<Counter>::record_size(),
-        40 + 2 * 16 + 20
+        40 + 2 * 16 + 24
+    );
+}
+
+#[test]
+fn test_from_parts_applies_the_canonical_field_policies() {
+    let p = pool(1, 3);
+    let good = p.snapshot(0).unwrap();
+    // An unannotated NaN is rejected.
+    let mut nan_bias = *good.state();
+    nan_bias.bias = f32::NAN;
+    assert!(matches!(
+        DecodedRecord::<Counter>::from_parts(*good.header(), nan_bias),
+        Err(tessera_rl_core::DecodeError::NanInState { .. })
+    ));
+    // A NaN in an `allow_nan` field keeps its payload bit for bit.
+    let mut nan_noise = *good.state();
+    nan_noise.noise = f32::from_bits(0x7fc0_1234);
+    let kept = DecodedRecord::<Counter>::from_parts(*good.header(), nan_noise).unwrap();
+    assert_eq!(kept.state().noise.to_bits(), 0x7fc0_1234);
+    // An invalid end kind is rejected.
+    let mut header = *good.header();
+    header.engine.end_kind = 3;
+    assert!(DecodedRecord::<Counter>::from_parts(header, *good.state()).is_err());
+}
+
+#[test]
+fn test_import_rejects_fresh_flags_outside_a_never_reset_record() {
+    let mut p = pool(2, 1);
+    run(&mut p, 0, &SCRIPT[..2]);
+    let mut bytes = p.snapshot(0).unwrap().to_bytes();
+    // Byte 38 of the header is `fresh`: an active record marked fresh would
+    // make the next reset reuse episode 0.
+    bytes[38] = 1;
+    let forged: DecodedRecord<Counter> = decode_from_slice(&bytes).unwrap();
+    assert!(matches!(
+        p.import(&[1], &[forged]),
+        Err(EngineError::InvalidRecord { index: 0, .. })
+    ));
+
+    // Fresh with a used episode counter is rejected too.
+    let fresh = DecodedRecord::from(
+        pool_with(1, 1, long(), AutoReset::NextStep)
+            .snapshot(0)
+            .unwrap(),
+    );
+    let mut header = *fresh.header();
+    header.engine.fresh = tessera_rl_core::Bool8::TRUE;
+    header.engine.pending_reset = tessera_rl_core::Bool8::TRUE;
+    header.engine.identity = tessera_rl_num::identity::RngIdentity::from_parts(
+        header.engine.identity.seed(),
+        header.engine.identity.branch_salt(),
+        header.engine.identity.logical_id(),
+        u32::MAX,
+        0,
+    );
+    header.engine.episode_steps = 0;
+    let exhausted = DecodedRecord::from_parts(header, *fresh.state()).unwrap();
+    assert!(matches!(
+        p.import(&[1], &[exhausted]),
+        Err(EngineError::InvalidRecord { .. })
+    ));
+}
+
+#[test]
+fn test_import_of_an_active_record_then_reset_keep_advances_the_episode() {
+    let mut p = pool(2, 1);
+    run(&mut p, 0, &SCRIPT[..2]);
+    let good = DecodedRecord::from(p.snapshot(0).unwrap());
+    let episode = good.header().engine.identity.episode_index();
+    p.import(&[1], &[good]).unwrap();
+    p.reset(&[1], Reseed::Keep).unwrap();
+    assert_eq!(
+        p.header(1).unwrap().engine.identity.episode_index(),
+        episode + 1
     );
 }
