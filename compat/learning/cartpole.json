@@ -51,7 +51,7 @@
     "eval_episodes": 20
   },
   "environment": {
-    "git": "unknown",
+    "git": "4af6cd3fcfeb38d727a7d21c21c485fd5d8ec5b5",
     "git_dirty": false,
     "python": "3.11.18",
     "os": "Linux-7.0.0-38-generic-x86_64-with-glibc2.41",
