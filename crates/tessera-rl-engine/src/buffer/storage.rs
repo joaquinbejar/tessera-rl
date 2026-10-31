@@ -34,6 +34,7 @@ use std::sync::Arc;
 
 use tessera_rl_core::Bool8;
 
+use crate::error::EngineError;
 use crate::sys::sync::{AtomicU64, Ordering};
 
 /// The element type of an output region.
@@ -228,17 +229,31 @@ pub(crate) struct StorageBuilder {
     bytes: usize,
 }
 
-impl Default for StorageBuilder {
-    fn default() -> Self {
-        Self {
-            id: BUILDERS.fetch_add(1, core::sync::atomic::Ordering::Relaxed),
-            entries: Vec::new(),
-            bytes: 0,
+/// Takes the next id from `counter`, refusing to wrap.
+fn next_id(counter: &core::sync::atomic::AtomicU64) -> Result<u64, EngineError> {
+    use core::sync::atomic::Ordering::Relaxed;
+    // A CAS loop rather than `fetch_update`/`try_update`, which differ
+    // between the MSRV and the current toolchain.
+    let mut id = counter.load(Relaxed);
+    loop {
+        let next = id.checked_add(1).ok_or(EngineError::StorageIdsExhausted)?;
+        match counter.compare_exchange_weak(id, next, Relaxed, Relaxed) {
+            Ok(_) => return Ok(id),
+            Err(seen) => id = seen,
         }
     }
 }
 
 impl StorageBuilder {
+    /// A builder with a fresh id; ids are distinct for the process lifetime.
+    pub(crate) fn new() -> Result<Self, EngineError> {
+        Ok(Self {
+            id: next_id(&BUILDERS)?,
+            entries: Vec::new(),
+            bytes: 0,
+        })
+    }
+
     /// Reserves `len` elements of `T` for `field`; `None` on overflow.
     pub(crate) fn reserve<T: Element>(
         &mut self,
@@ -391,7 +406,7 @@ mod tests {
     use super::*;
 
     fn storage() -> (Arc<OutputStorage>, Buf<f32>, Buf<Bool8>, Buf<u8>) {
-        let mut builder = StorageBuilder::default();
+        let mut builder = StorageBuilder::new().unwrap();
         let rewards = builder.reserve::<f32>(OutputField::Rewards, 5).unwrap();
         let alive = builder.reserve::<Bool8>(OutputField::Alive, 3).unwrap();
         let obs = builder
@@ -447,8 +462,8 @@ mod tests {
 
     #[test]
     fn test_storage_slot_of_another_builder_or_taken_twice_is_refused() {
-        let mut a = StorageBuilder::default();
-        let mut b = StorageBuilder::default();
+        let mut a = StorageBuilder::new().unwrap();
+        let mut b = StorageBuilder::new().unwrap();
         let from_b = b.reserve::<f32>(OutputField::Rewards, 1 << 20).unwrap();
         let first = a.reserve::<f32>(OutputField::Rewards, 1).unwrap();
         let mut regions = a.finish().unwrap();
@@ -471,8 +486,20 @@ mod tests {
     }
 
     #[test]
+    fn test_storage_id_counter_near_limit_fails_instead_of_wrapping() {
+        let counter = core::sync::atomic::AtomicU64::new(u64::MAX - 1);
+        assert_eq!(next_id(&counter), Ok(u64::MAX - 1));
+        assert_eq!(next_id(&counter), Err(EngineError::StorageIdsExhausted));
+        assert_eq!(next_id(&counter), Err(EngineError::StorageIdsExhausted));
+        assert_eq!(
+            counter.load(core::sync::atomic::Ordering::Relaxed),
+            u64::MAX
+        );
+    }
+
+    #[test]
     fn test_storage_reserve_overflow_returns_none() {
-        let mut b = StorageBuilder::default();
+        let mut b = StorageBuilder::new().unwrap();
         assert!(b.reserve::<f32>(OutputField::Rewards, usize::MAX).is_none());
     }
 }
@@ -490,7 +517,7 @@ mod loom_tests {
     #[test]
     fn test_storage_generation_is_monotonic_across_threads() {
         loom::model(|| {
-            let mut b = StorageBuilder::default();
+            let mut b = StorageBuilder::new().unwrap();
             let _ = b.reserve::<u32>(OutputField::Generations, 1);
             let s = Arc::clone(b.finish().unwrap().storage());
             let reader = {

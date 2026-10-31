@@ -13,6 +13,7 @@ use std::sync::Arc;
 use tessera_rl_core::Bool8;
 
 use crate::buffer::{Buf, OutputField, OutputStorage, StorageBuilder};
+use crate::error::EngineError;
 
 use crate::layout::{Leaf, MAX_LEAVES};
 
@@ -52,9 +53,23 @@ impl Outputs {
         leaves: &[Leaf],
         terminal: bool,
         mask_len: usize,
+    ) -> Result<Self, EngineError> {
+        let b = StorageBuilder::new()?;
+        Self::lay_out(b, num_envs, agents, leaves, terminal, mask_len).ok_or(EngineError::Options {
+            option: "num_envs",
+            reason: "buffers too large",
+        })
+    }
+
+    fn lay_out(
+        mut b: StorageBuilder,
+        num_envs: usize,
+        agents: usize,
+        leaves: &[Leaf],
+        terminal: bool,
+        mask_len: usize,
     ) -> Option<Self> {
         let rows = num_envs.checked_mul(agents)?;
-        let mut b = StorageBuilder::default();
         let obs = leaves
             .iter()
             .enumerate()

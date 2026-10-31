@@ -189,8 +189,7 @@ where
             &leaves,
             options.auto_reset == AutoReset::SameStep,
             mask_len,
-        )
-        .ok_or_else(too_large)?;
+        )?;
         let adaptive = <E::Header as RecordLayout>::Adaptive::from_config(&cfg);
         let headers = (0..num_envs)
             .map(|i| {
