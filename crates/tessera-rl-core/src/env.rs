@@ -8,6 +8,7 @@ use tessera_rl_num::rng::{ObsRng, StepRng};
 use crate::agent::{AgentSlot, Tier};
 use crate::encoding::Canonical;
 use crate::error::{ConfigError, InvariantViolation, SpaceError};
+use crate::header::RecordLayout;
 use crate::io::{ActionWriter, Actions, MaskWriter, ObsWriter};
 use crate::space::Space;
 use crate::state_init::StateInit;
@@ -45,6 +46,11 @@ pub trait Environment: Sized + 'static {
     type Obs: 'static;
     /// Action type (a marker until typed action heads exist).
     type Action: 'static;
+    /// Record header: `RecordHeader<MAX_AGENTS, Adaptive>` (ADR-0036). The
+    /// engine checks at compile time that its agent count equals
+    /// `MAX_AGENTS`; use `NoAdaptive` when the config has no adaptive
+    /// fields.
+    type Header: RecordLayout;
 
     /// Number of agent slots; 1 for single-agent environments.
     const MAX_AGENTS: usize;

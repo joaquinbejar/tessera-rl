@@ -19,6 +19,7 @@ pub mod agent;
 pub mod config;
 pub mod env;
 pub mod error;
+pub mod header;
 pub mod io;
 pub mod leaf;
 pub mod space;
@@ -32,6 +33,7 @@ pub use env::{
     ImperfectInformation, Render, Validate,
 };
 pub use error::{ConfigError, CoreError, DecodeError, EncodeError, InvariantViolation, SpaceError};
+pub use header::{AdaptiveValues, AgentRow, EngineHeader, NoAdaptive, RecordHeader, RecordLayout};
 pub use leaf::{LeafDType, LeafId, ObsLeaf, Observation};
 pub use pool::Pool;
 pub use reserved::Reserved;

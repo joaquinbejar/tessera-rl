@@ -31,6 +31,13 @@ pub(super) const fn canonical(control: Control) -> Control {
     control & !(FIZ | AH | TRAPS | FZ16 | RMODE | FZ | DN)
 }
 
+/// Flush-to-zero enabled, for hostile-mode tests.
+#[cfg(any(test, feature = "test-hooks"))]
+#[inline]
+pub(super) const fn flush_to_zero(control: Control) -> Control {
+    control | FZ
+}
+
 /// FPCR holds no status flags, so the caller's value is restored as is.
 #[inline]
 pub(super) const fn restored(saved: Control, _current: Control) -> Control {

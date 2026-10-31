@@ -144,6 +144,23 @@ fn compiler_barrier() {
     }
 }
 
+/// Test-only: runs `f` with flush-to-zero (and, on x86-64,
+/// denormals-are-zero) enabled, as a hostile host library might leave the
+/// thread, then restores the previous state.
+///
+/// Running Rust code in a non-default FP mode is outside the language's
+/// guarantees (ADR-0037), so this exists only behind the non-default
+/// `test-hooks` feature, which only test dev-dependencies enable.
+#[cfg(any(test, feature = "test-hooks"))]
+#[inline(never)]
+pub fn with_hostile_flush_to_zero<R>(f: impl FnOnce() -> R) -> R {
+    let original = arch::read();
+    arch::write(arch::flush_to_zero(original));
+    let result = call_opaque(f);
+    arch::write(original);
+    result
+}
+
 /// Returns whether the current thread is in the canonical environment.
 /// Status flags are ignored.
 #[must_use]
@@ -191,6 +208,7 @@ mod tests {
     use core::hint::black_box;
 
     use super::arch::{self, test_modes};
+    use super::with_hostile_flush_to_zero;
     use super::{FpGuard, ensure_canonical, establish_canonical, is_canonical, with_canonical};
 
     // 1/3 rounded to nearest.
@@ -381,6 +399,17 @@ mod tests {
             assert!(ensure_canonical());
             assert!(!ensure_canonical());
         });
+    }
+
+    #[test]
+    fn test_with_hostile_flush_to_zero_flushes_and_restores() {
+        let before = arch::read();
+        let flushed = with_hostile_flush_to_zero(|| {
+            assert!(!is_canonical());
+            black_box(black_box(f64::MIN_POSITIVE) / black_box(2.0)).to_bits()
+        });
+        assert_eq!(flushed, 0);
+        assert_eq!(arch::read(), before);
     }
 
     #[test]
