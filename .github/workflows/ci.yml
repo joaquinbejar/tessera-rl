@@ -40,6 +40,15 @@ jobs:
       # only detect compiler motion in optimized builds.
       - run: cargo test -p tessera-rl-num --release --all-features --locked
 
+  # The native wait on Windows (WaitOnAddress) runs only on request until
+  # this job passes; it is the precondition for `Auto` to use it there.
+  windows-native-wait:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - run: cargo test -p tessera-rl-engine --test sync --locked test_every_wait_backend_matches_inline -- --exact
+
   musl:
     name: test (${{ matrix.target }})
     runs-on: ${{ matrix.os }}

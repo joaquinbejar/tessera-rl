@@ -134,6 +134,8 @@ struct Shared {
 pub(crate) struct Gang {
     shared: Arc<Shared>,
     workers: Vec<(thread::Thread, Option<thread::JoinHandle<()>>)>,
+    /// `workers.len()` once every worker is spawned, checked to fit a u32.
+    count: u32,
 }
 
 impl core::fmt::Debug for Gang {
@@ -219,6 +221,11 @@ impl Gang {
         if in_worker() {
             return Err(EngineError::NestedEngine);
         }
+        // `pending` and `ready` count workers in a u32.
+        let count = u32::try_from(options.workers.get()).map_err(|_| EngineError::Options {
+            option: "workers",
+            reason: "more than u32::MAX workers",
+        })?;
         let shared = Arc::new(Shared {
             epoch: AtomicU32::new(0),
             pending: AtomicU32::new(0),
@@ -241,6 +248,7 @@ impl Gang {
         let mut gang = Self {
             shared,
             workers: Vec::with_capacity(options.workers.get()),
+            count,
         };
         for w in 0..options.workers.get() {
             let shared = Arc::clone(&gang.shared);
@@ -272,7 +280,7 @@ impl Gang {
             }
         }
         let shared = Arc::clone(&gang.shared);
-        let n = u32::try_from(gang.workers.len()).unwrap_or(u32::MAX);
+        let n = gang.count;
         // Acquire (in `wait_on`): pairs with each worker's Release on `ready`.
         shared.wait_on(&shared.ready, |ready| ready == n);
         let failed = shared.failed.load(Ordering::Relaxed);
@@ -301,8 +309,7 @@ impl Gang {
             waker: thread::current(),
         };
         shared.panicked.store(false, Ordering::Relaxed);
-        let workers = u32::try_from(self.workers.len()).unwrap_or(u32::MAX);
-        shared.pending.store(workers, Ordering::Relaxed);
+        shared.pending.store(self.count, Ordering::Relaxed);
         shared
             .job
             .store(core::ptr::from_ref(&job).cast_mut(), Ordering::Relaxed);
