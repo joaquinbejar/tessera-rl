@@ -38,6 +38,9 @@ tessera-rl-macros = { path = "crates/tessera-rl-macros", version = "0.1.0" }
 tessera-rl-engine = { path = "crates/tessera-rl-engine", version = "0.1.0" }
 tessera-rl-classic = { path = "crates/tessera-rl-classic", version = "0.1.0" }
 
+thiserror = "2"
+xxhash-rust = { version = "0.8", default-features = false, features = ["xxh3"] }
+
 [workspace.lints.rust]
 missing_docs = "deny"
 # `deny`, not `forbid`: the audited modules (engine::buffer, engine::sys,

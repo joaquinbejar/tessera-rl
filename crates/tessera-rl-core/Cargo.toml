@@ -15,6 +15,9 @@ keywords.workspace = true
 categories.workspace = true
 
 [dependencies]
+tessera-rl-num.workspace = true
+thiserror.workspace = true
+xxhash-rust.workspace = true
 
 [lints]
 workspace = true
