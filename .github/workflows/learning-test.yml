@@ -1,0 +1,47 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
+# Nightly learning test (SPEC 18): the reference PPO on seeds 1-5 against
+# the calibrated threshold (compat/learning/cartpole.json). A failing night
+# alone stays green and is recorded; the job goes red only when the
+# previous scheduled night failed too. A missing previous result counts as
+# not failing and is reported in the job's result.
+
+name: Learning test
+
+on:
+  schedule:
+    - cron: "0 6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  learning-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Find the previous scheduled run
+        id: previous
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          id=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow learning-test.yml --event schedule --status completed --limit 1 --json databaseId --jq '.[0].databaseId // empty')
+          echo "id=$id" >> "$GITHUB_OUTPUT"
+      - if: steps.previous.outputs.id != ''
+        continue-on-error: true
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: learning-test
+          path: previous
+          run-id: ${{ steps.previous.outputs.id }}
+          github-token: ${{ github.token }}
+      # uv is pinned; it fetches CPython 3.11 itself.
+      - run: pipx install uv==0.13.6
+      - run: make learning-test PREVIOUS=previous/learning-test.json
+      - if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: learning-test
+          path: learning-test.json
