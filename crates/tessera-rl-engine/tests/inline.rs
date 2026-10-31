@@ -437,3 +437,37 @@ fn test_death_of_a_dead_agent_fails_and_poisons_under_debug_checks() {
     );
     assert!(p.is_poisoned());
 }
+
+#[test]
+fn test_pool_initial_agents_out_of_range_is_config_error() {
+    for initial_agents in [0, 3] {
+        let cfg = CountConfig {
+            initial_agents,
+            ..CountConfig::default()
+        };
+        let options = PoolOptions::new(NonZeroU32::MIN, Seed::new(1));
+        assert!(matches!(
+            EnvPool::<Counter>::new(cfg, options).map(|_| ()),
+            Err(EngineError::Config(e)) if e.field == "initial_agents"
+        ));
+    }
+}
+
+#[test]
+fn test_pool_initial_agents_starts_the_rest_empty_until_spawned() {
+    let cfg = CountConfig {
+        initial_agents: 1,
+        respawn: true,
+        ..CountConfig::default()
+    };
+    let mut p =
+        EnvPool::<Counter>::new(cfg, PoolOptions::new(NonZeroU32::MIN, Seed::new(4))).unwrap();
+    let out = p.reset_all(Reseed::Keep).unwrap();
+    assert_eq!(out.alive(), [Bool8::TRUE, Bool8::FALSE]);
+    // The empty slot's action is not validated; the env spawns it.
+    let out = p.step(actions(&[0, 99])).unwrap();
+    assert_eq!(out.alive(), [Bool8::TRUE, Bool8::TRUE]);
+    // Every reset starts the empty slot again.
+    let out = p.reset_all(Reseed::Keep).unwrap();
+    assert_eq!(out.alive(), [Bool8::TRUE, Bool8::FALSE]);
+}

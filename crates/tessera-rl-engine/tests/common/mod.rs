@@ -82,6 +82,9 @@ pub struct CountConfig {
     /// Agent 1 reports its death again in the step after it died.
     #[config(default = false)]
     pub die_twice: bool,
+    /// Agent slots alive at each reset (the engine checks `1..=2`).
+    #[config(default = 2)]
+    pub initial_agents: u32,
 }
 
 #[derive(Observation)]
@@ -124,12 +127,17 @@ impl Environment for Counter {
         })
     }
 
+    fn initial_agents(cfg: &CountConfig) -> usize {
+        usize::try_from(cfg.initial_agents).unwrap_or(usize::MAX)
+    }
+
     fn reset(cfg: &CountConfig, rng: &mut StepRng, state: &mut Counts) {
         // Panic injection for the poisoning tests.
         assert!(!cfg.panic_on_reset, "injected reset panic");
         state.value = [rng.next_u32().cast_signed() % 100, 0];
         state.bias = -0.0;
         state.phase = Phase::Opening;
+        state.dead = Bool8::from(cfg.initial_agents < 2);
     }
 
     fn step(
