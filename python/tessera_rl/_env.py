@@ -15,10 +15,14 @@ Native views export through the buffer protocol (read-only) and DLPack
 for ``max_version >= (1, 0)``, a legacy capsule otherwise). A legacy
 capsule cannot be marked read-only, so legacy consumers get a writable
 alias. NumPy honours the read-only flag; PyTorch 2.15 asks for DLPack 1.0
-and accepts the flag without warnings but returns a writable tensor. A
-write through any writable alias reaches the engine buffer and corrupts
-the outputs until the next call overwrites them: never write through
-borrowed views.
+and accepts the flag without warnings but returns a writable tensor.
+
+The read-only flag is a signal, not an enforcement (ADR-0003 rule 7): no
+tensor is promised to be immutable, and writing is the caller's
+responsibility. A write through any writable alias reaches the engine
+buffer and corrupts the outputs until the next call overwrites them. To
+modify outputs, use ``outputs="owned"`` or copy first (``tensor.clone()``,
+``array.copy()``).
 """
 
 from __future__ import annotations

@@ -137,7 +137,8 @@ unsafe fn view<'a>(slf: *mut ffi::PyObject) -> PyResult<&'a View> {
 }
 
 /// `bf_getbuffer`: a read-only, C-contiguous export. A request for a
-/// writable buffer raises `BufferError`.
+/// writable buffer, or for Fortran order the view does not have, raises
+/// `BufferError` (with `obj` null).
 pub(super) unsafe extern "C" fn getbuffer(
     slf: *mut ffi::PyObject,
     out: *mut ffi::Py_buffer,
@@ -155,6 +156,15 @@ pub(super) unsafe extern "C" fn getbuffer(
         let len = isize::try_from(v.bytes).map_err(|_| undescribable())?;
         let itemsize = isize::try_from(v.elem.itemsize).map_err(|_| undescribable())?;
         let ndim = c_int::try_from(v.shape.len()).map_err(|_| undescribable())?;
+        // Views are C-contiguous, which satisfies C and ANY requests. They
+        // are also F-contiguous only when at most one dimension exceeds 1
+        // (or the view is empty): refuse an F request otherwise.
+        let f_contiguous = v.shape.contains(&0) || v.shape.iter().filter(|&&d| d > 1).count() <= 1;
+        if flags & ffi::PyBUF_F_CONTIGUOUS == ffi::PyBUF_F_CONTIGUOUS && !f_contiguous {
+            return Err(pyo3::exceptions::PyBufferError::new_err(
+                "borrowed outputs are C-contiguous, not Fortran-contiguous",
+            ));
+        }
         let nd = flags & ffi::PyBUF_ND == ffi::PyBUF_ND;
         let strided = flags & ffi::PyBUF_STRIDES == ffi::PyBUF_STRIDES;
         let buffer = ffi::Py_buffer {

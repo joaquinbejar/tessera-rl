@@ -3,6 +3,7 @@
 borrow window (overwrite semantics), staleness, memory lifetime after
 close, and the buffer protocol and DLPack exports."""
 
+import ctypes
 import gc
 import sys
 
@@ -109,14 +110,74 @@ def test_staleness_tracks_every_numpy_and_memoryview_derivation():
         t.is_stale(imported)
 
 
+class _PyBuffer(ctypes.Structure):
+    _fields_ = [
+        ("buf", ctypes.c_void_p),
+        ("obj", ctypes.c_void_p),
+        ("len", ctypes.c_ssize_t),
+        ("itemsize", ctypes.c_ssize_t),
+        ("readonly", ctypes.c_int),
+        ("ndim", ctypes.c_int),
+        ("format", ctypes.c_char_p),
+        ("shape", ctypes.c_void_p),
+        ("strides", ctypes.c_void_p),
+        ("suboffsets", ctypes.c_void_p),
+        ("internal", ctypes.c_void_p),
+    ]
+
+
+_STRIDES = 0x0010 | 0x0008
+_C, _F, _ANY = 0x0020 | _STRIDES, 0x0040 | _STRIDES, 0x0080 | _STRIDES
+
+
+def _get_buffer(view, flags):
+    """`PyObject_GetBuffer(view, flags)`: True on success (then released),
+    False on `BufferError`, which must leave `obj` null."""
+    get = ctypes.pythonapi.PyObject_GetBuffer
+    get.argtypes = [ctypes.py_object, ctypes.POINTER(_PyBuffer), ctypes.c_int]
+    get.restype = ctypes.c_int
+    release = ctypes.pythonapi.PyBuffer_Release
+    release.argtypes = [ctypes.POINTER(_PyBuffer)]
+    buf = _PyBuffer()
+    try:
+        get(view, ctypes.byref(buf), flags)
+    except BufferError:
+        assert buf.obj is None
+        return False
+    release(ctypes.byref(buf))
+    return True
+
+
+@pytest.mark.parametrize(
+    ("n", "field", "f_ok"),
+    [
+        (3, "obs", False),  # (3, 1, 4): two dimensions above 1
+        (1, "obs", True),  # (1, 1, 4): C and F coincide
+        (3, "rewards", True),  # (3, 1): a size-1 dimension
+        (3, "episode_terminated", True),  # (3,): one dimension
+        (3, "masks", True),  # (3, 1, 0): empty
+    ],
+)
+def test_getbuffer_honours_contiguity_requests(n, field, f_ok):
+    # codex R-PR20: an unsatisfied Fortran request is refused (obj null);
+    # C and ANY always hold for these C-contiguous views.
+    env = cartpole(n)
+    env.reset()
+    out = env._native.outputs()
+    view = out["observations"][0] if field == "obs" else out[field]
+    before = sys.getrefcount(view)
+    assert _get_buffer(view, _C)
+    assert _get_buffer(view, _ANY)
+    assert _get_buffer(view, _F) is f_ok
+    assert sys.getrefcount(view) == before
+
+
 def test_writable_buffer_requests_are_refused():
     env = cartpole()
     env.reset()
     view = env._native.outputs()["rewards"]
     with pytest.raises(ValueError):
         np.frombuffer(view, dtype=np.uint8).setflags(write=True)
-    import ctypes
-
     with pytest.raises((BufferError, TypeError)):
         (ctypes.c_char * 8).from_buffer(view)
 
