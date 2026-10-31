@@ -3,7 +3,8 @@
 //! A read-only, lifecycle-aware view of a record header for
 //! `Validate::validate_record` (ADR-0040): per-slot liveness and
 //! generations, the episode step counter and the record's phase. RNG
-//! identity and statistics are not exposed.
+//! identity and statistics are not exposed. Building a view grants no
+//! trust: acceptance is decided by the engine's import checks.
 
 use crate::header::{AgentRow, RecordLayout};
 
@@ -41,8 +42,9 @@ pub struct HeaderView<'a> {
 }
 
 impl<'a> HeaderView<'a> {
-    /// Engine-only: the view of `header`.
-    #[doc(hidden)]
+    /// The view of `header`. Public and safe: constructing one grants no
+    /// trust, since only `import` decides whether a record is accepted
+    /// (ADR-0040).
     #[must_use]
     pub fn of<H: RecordLayout>(header: &'a H) -> Self {
         let engine = header.engine();
