@@ -28,9 +28,16 @@
 //! just re-check the counters. `run` takes `&mut self`, so only one epoch
 //! is ever in flight.
 //!
-//! A worker always decrements `pending`, even after a panic in the job. A
-//! panic anywhere else in its loop marks the gang dead (after
-//! decrementing), and later runs return an error instead of waiting.
+//! A worker decrements `pending` exactly once per epoch, even after a
+//! panic in the job: the panic is caught and its payload disposed of
+//! (`sys::panics`) before the decrement, and nothing that can panic runs
+//! after it. If anything else in the worker panics during an epoch (outside
+//! the job's catch, where only a pointer load, a `Thread` clone and the
+//! decrement run, so this is effectively unreachable), the backstop marks
+//! the gang dead (Release) and then makes the missing decrement, so the
+//! current run still completes; later runs see `dead` and return
+//! `WorkerDied` before publishing anything. A run therefore never waits for
+//! a worker that will not decrement.
 //!
 //! Shutdown (on drop) sets `shutdown` and increments `epoch` with Release,
 //! unparks and joins every worker.
@@ -51,6 +58,7 @@ use core::num::NonZeroUsize;
 use crate::error::EngineError;
 
 use super::affinity::pin_current;
+use super::panics::catch;
 use super::sync::{
     Arc, AtomicBool, AtomicPtr, AtomicU64, AtomicUsize, Ordering, spin_loop, thread,
 };
@@ -78,6 +86,9 @@ pub(crate) struct Faults {
     pub(crate) spawn: Option<usize>,
     /// Panic during the startup of this worker.
     pub(crate) startup: Option<usize>,
+    /// Panic outside the job's catch, before the decrement, in this
+    /// worker's first epoch (exercises the backstop).
+    pub(crate) die_in_epoch: Option<usize>,
 }
 
 struct Job {
@@ -194,10 +205,10 @@ impl Gang {
                 .name(format!("tessera-worker-{w}"))
                 .spawn(move || {
                     #[cfg(test)]
-                    let fail = faults.startup == Some(w);
+                    let (fail, die) = (faults.startup == Some(w), faults.die_in_epoch == Some(w));
                     #[cfg(not(test))]
-                    let fail = false;
-                    worker_main(&shared, w, core, fail);
+                    let (fail, die) = (false, false);
+                    worker_main(&shared, w, core, fail, die);
                 });
             match spawned {
                 Ok(handle) => gang.workers.push((handle.thread().clone(), Some(handle))),
@@ -271,7 +282,7 @@ impl Drop for Gang {
 }
 
 /// Startup, then the epoch loop. A panic outside a job marks the gang dead.
-fn worker_main(shared: &Shared, worker: usize, core: Option<usize>, fail: bool) {
+fn worker_main(shared: &Shared, worker: usize, core: Option<usize>, fail: bool, die: bool) {
     let started = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         assert!(!fail, "injected worker startup failure");
         #[cfg(not(loom))]
@@ -304,28 +315,47 @@ fn worker_main(shared: &Shared, worker: usize, core: Option<usize>, fail: bool) 
             return;
         }
         // Everything that can panic runs inside `run_job`'s catch, before
-        // its decrement; this outer catch is a backstop that marks the gang
-        // dead so later runs fail instead of waiting for this worker.
-        let alive =
-            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run_job(shared, worker)));
-        if alive.is_err() {
+        // its decrement; this outer catch is a backstop (module docs).
+        let mut slot = Slot::default();
+        if !catch(|| run_job(shared, worker, &mut slot, die)) {
             shared.dead.store(true, Ordering::Release);
+            if !slot.decremented {
+                decrement(shared, slot.waker.as_ref());
+            }
             return;
         }
     }
 }
 
+/// What a worker has done in the current epoch, for the backstop.
+#[derive(Default)]
+struct Slot {
+    waker: Option<thread::Thread>,
+    decremented: bool,
+}
+
+/// This worker's decrement of `pending`; the last one wakes the caller.
+fn decrement(shared: &Shared, waker: Option<&thread::Thread>) {
+    // AcqRel: releases this worker's writes (and `panicked`) to the caller.
+    if shared.pending.fetch_sub(1, Ordering::AcqRel) == 1
+        && let Some(waker) = waker
+    {
+        waker.unpark();
+    }
+}
+
 #[expect(unsafe_code, reason = "audited module: job pointer and call")]
-fn run_job(shared: &Shared, worker: usize) {
+fn run_job(shared: &Shared, worker: usize, slot: &mut Slot, die: bool) {
     let job = shared.job.load(Ordering::Relaxed);
     // SAFETY: the caller stored a pointer to a `Job` on its stack before the
     // Release epoch increment we observed with Acquire, and keeps it alive
     // until `pending` reaches zero, which needs this worker's decrement
     // below; it is never null during an epoch.
     let job = unsafe { &*job };
-    let waker = job.waker.clone();
+    slot.waker = Some(job.waker.clone());
     let (call, data) = (job.call, job.data);
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+    assert!(!die, "injected worker death outside the job's catch");
+    let completed = catch(|| {
         #[cfg(not(loom))]
         if tessera_rl_num::fp::ensure_canonical() {
             shared.fp_resets.fetch_add(1, Ordering::Relaxed);
@@ -333,14 +363,13 @@ fn run_job(shared: &Shared, worker: usize) {
         // SAFETY: `call` is `trampoline::<F>` and `data` the matching `&F`,
         // valid for this epoch (module invariants).
         unsafe { call(data, worker) };
-    }));
-    if result.is_err() {
+    });
+    if !completed {
         shared.panicked.store(true, Ordering::Relaxed);
     }
-    // AcqRel: releases this worker's writes (and `panicked`) to the caller.
-    if shared.pending.fetch_sub(1, Ordering::AcqRel) == 1 {
-        waker.unpark();
-    }
+    // The payload is already disposed of; nothing that can panic follows.
+    slot.decremented = true;
+    decrement(shared, slot.waker.as_ref());
 }
 
 #[cfg(test)]
@@ -472,6 +501,42 @@ mod tests {
             assert_eq!(
                 Gang::new(&opts).map(|_| ()),
                 Err(EngineError::WorkerStartup { worker: 1 })
+            );
+        });
+    }
+
+    struct Bomb;
+
+    impl Drop for Bomb {
+        fn drop(&mut self) {
+            std::panic::panic_any(());
+        }
+    }
+
+    /// A job panic whose payload panics on drop is caught: the worker stays
+    /// alive and the next epoch completes.
+    #[test]
+    fn test_gang_survives_a_payload_whose_drop_panics() {
+        model(|| {
+            let mut gang = Gang::new(&options(1)).unwrap();
+            assert!(gang.run(&|_w: usize| std::panic::panic_any(Bomb)).unwrap());
+            assert!(!gang.run(&|_w: usize| {}).unwrap());
+        });
+    }
+
+    /// A worker that dies outside the job's catch still accounts for its
+    /// slot: the current run completes, and the next one reports the death
+    /// instead of waiting.
+    #[test]
+    fn test_gang_death_mid_epoch_completes_the_run_then_reports() {
+        model(|| {
+            let mut opts = options(2);
+            opts.faults.die_in_epoch = Some(1);
+            let mut gang = Gang::new(&opts).unwrap();
+            assert!(gang.run(&|_w: usize| {}).is_ok());
+            assert_eq!(
+                gang.run(&|_w: usize| {}).map(|_| ()),
+                Err(EngineError::WorkerDied)
             );
         });
     }

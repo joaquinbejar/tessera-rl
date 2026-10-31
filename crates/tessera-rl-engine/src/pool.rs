@@ -844,7 +844,9 @@ pub(crate) fn reset_chunk<E: Environment, M: MaskProvider<E>>(
 /// is no rollback: instances processed before the panic keep their new
 /// state. With `panic = "abort"` a panic aborts the process instead.
 pub(crate) fn run_kernels(poisoned: &mut bool, f: impl FnOnce()) -> Result<(), EngineError> {
-    if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| fp::with_canonical(f))).is_ok() {
+    // `catch` also disposes of the payload safely: one whose `Drop` panics
+    // must not unwind out of the call.
+    if crate::sys::catch(|| fp::with_canonical(f)) {
         Ok(())
     } else {
         *poisoned = true;

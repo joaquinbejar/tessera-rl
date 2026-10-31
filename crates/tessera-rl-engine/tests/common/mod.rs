@@ -63,6 +63,10 @@ pub struct CountConfig {
     /// Number of discrete choices per head.
     #[config(default = 3, range = 3..=2_147_483_648)]
     pub actions_n: u32,
+    /// Panic in `step` at this step (0: never) with a payload whose `Drop`
+    /// sleeps 300 ms and then panics again.
+    #[config(default = 0)]
+    pub bomb_at: u32,
     /// Agent 1 respawns on the step after it dies.
     #[config(default = false)]
     pub respawn: bool,
@@ -184,6 +188,9 @@ impl Environment for Counter {
         if cfg.panic_at != 0 && state.steps == cfg.panic_at {
             panic_now();
         }
+        if cfg.bomb_at != 0 && state.steps == cfg.bomb_at {
+            throw_bomb();
+        }
         if state.steps >= cfg.length {
             out.end_episode(EpisodeEnd::Terminated);
         }
@@ -238,6 +245,25 @@ impl ActionMask for Counter {
         assert!(!cfg.panic_in_noop, "injected noop panic");
         out.set_discrete(0, 0);
     }
+}
+
+/// A panic payload whose `Drop` panics, after a delay.
+pub struct Bomb;
+
+impl Drop for Bomb {
+    #[expect(
+        clippy::panic,
+        reason = "a payload whose drop panics, for the poisoning tests"
+    )]
+    fn drop(&mut self) {
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        std::panic::panic_any("bomb defused too late");
+    }
+}
+
+#[expect(clippy::panic, reason = "panic injection for poisoning tests")]
+fn throw_bomb() {
+    std::panic::panic_any(Bomb);
 }
 
 #[expect(clippy::panic, reason = "panic injection for poisoning tests")]

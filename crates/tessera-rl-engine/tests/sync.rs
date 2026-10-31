@@ -185,3 +185,46 @@ fn test_cpu_set_rejects_core_ids_the_os_does_not_report() {
         })
     ));
 }
+
+/// Runs `f` on a helper thread and fails if it does not finish in time.
+fn within_timeout(seconds: u64, f: impl FnOnce() + Send + 'static) {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        f();
+        let _ = tx.send(());
+    });
+    assert!(
+        rx.recv_timeout(std::time::Duration::from_secs(seconds))
+            .is_ok(),
+        "timed out: the pool hung"
+    );
+}
+
+/// codex's regression: a kernel panic whose payload panics on drop (after
+/// 300 ms) must neither escape nor kill a worker; the pool is poisoned and
+/// `reset_all` recovers, in Sync and in Inline mode.
+#[test]
+fn test_panic_payload_whose_drop_panics_does_not_hang_or_escape() {
+    for workers in [Some(2), None] {
+        within_timeout(30, move || {
+            let cfg = CountConfig {
+                bomb_at: 2,
+                length: 50,
+                ..CountConfig::default()
+            };
+            let mut p = pool(AutoReset::NextStep, workers, cfg);
+            p.reset_all(Reseed::Keep).unwrap();
+            let actions = vec![0; usize::try_from(N).unwrap() * 2];
+            let input = || ActionInput {
+                discrete: &actions,
+                continuous: &[],
+            };
+            assert!(p.step(input()).is_ok());
+            assert_eq!(p.step(input()).map(|_| ()), Err(EngineError::Panicked));
+            assert!(p.is_poisoned());
+            p.reset_all(Reseed::Keep).unwrap();
+            assert!(!p.is_poisoned());
+            assert!(p.step(input()).is_ok());
+        });
+    }
+}

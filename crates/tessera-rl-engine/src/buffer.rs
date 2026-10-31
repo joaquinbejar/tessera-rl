@@ -351,10 +351,7 @@ where
             // of the iteration (invariant 4).
             #[expect(unsafe_code, reason = "audited module: disjoint chunk views")]
             let mut chunk = unsafe { raw.chunk(&range) };
-            let ok = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                f(&mut chunk, range.start);
-            }))
-            .is_ok();
+            let ok = crate::sys::catch(|| f(&mut chunk, range.start));
             if !ok {
                 panicked.store(true, Ordering::Relaxed);
             }
