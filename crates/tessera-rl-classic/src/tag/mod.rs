@@ -25,8 +25,9 @@ pub mod grid;
 use tessera_rl_core::io::{ActionWriter, Actions, MaskWriter, ObsWriter};
 use tessera_rl_core::space::Space;
 use tessera_rl_core::{
-    ActionMask, AgentSlot, Bool8, Environment, EpisodeEnd, Heuristic, InvariantViolation,
-    NoAdaptive, ObsLeaf, Observation, RecordHeader, SpaceError, StepOut, Tier, Validate,
+    ActionMask, AgentSlot, Bool8, Environment, EpisodeEnd, Heuristic, ImperfectInformation,
+    InvariantViolation, NoAdaptive, ObsLeaf, Observation, RecordHeader, Reserved, SpaceError,
+    StepOut, Tier, Validate,
 };
 use tessera_rl_macros::{EnvConfig, EnvState, Observation};
 use tessera_rl_num::rng::{ObsRng, StepRng};
@@ -43,6 +44,8 @@ pub const MAX_AGENTS: usize = 8;
 pub const MAX_RADIUS: u32 = 7;
 
 const MAX_SIDE: usize = 2 * MAX_RADIUS as usize + 1;
+/// Bytes of the largest window, `[3, 15, 15]`.
+pub const WINDOW_BYTES: usize = 3 * MAX_SIDE * MAX_SIDE;
 const PER_MILLE: core::num::NonZeroU32 = core::num::NonZeroU32::new(1000).unwrap();
 const MOVES: core::num::NonZeroU32 = core::num::NonZeroU32::new(ACTIONS).unwrap();
 
@@ -122,6 +125,50 @@ pub struct TagObs {
     pub window: ObsLeaf<u8>,
 }
 
+/// Values of the egocentric window of slot `me`, `[3, side, side]`
+/// row-major in the first `3 * side * side` bytes, zero after them. It
+/// reads only `me`'s position and the cells inside its window.
+fn egocentric_window(cfg: &TagConfig, state: &TagState, me: usize) -> [u8; WINDOW_BYTES] {
+    let side = cfg.side();
+    let plane = side * side;
+    let mut window = [0u8; WINDOW_BYTES];
+    let Some(&[cx, cy]) = state.pos.get(me) else {
+        return window;
+    };
+    let r = i32::try_from(cfg.radius).unwrap_or(0);
+    let cell_index = |x: i32, y: i32| {
+        let col = usize::try_from(x - i32::from(cx) + r).ok()?;
+        let row = usize::try_from(y - i32::from(cy) + r).ok()?;
+        (col < side && row < side).then_some(row * side + col)
+    };
+    // Channel 0: cells outside the grid.
+    for row in 0..side {
+        for col in 0..side {
+            let x = i32::from(cx) + i32::try_from(col).unwrap_or(0) - r;
+            let y = i32::from(cy) + i32::try_from(row).unwrap_or(0) - r;
+            let inside = u32::try_from(x).is_ok_and(|x| x < cfg.width)
+                && u32::try_from(y).is_ok_and(|y| y < cfg.height);
+            if let Some(v) = window.get_mut(row * side + col) {
+                *v = u8::from(!inside);
+            }
+        }
+    }
+    // Channels 1 and 2: pursuers and live evaders.
+    for (j, &[x, y]) in state.pos.iter().enumerate() {
+        if !state.active(cfg, j) {
+            continue;
+        }
+        let channel = if cfg.is_pursuer(j) { 1 } else { 2 };
+        if let Some(v) =
+            cell_index(i32::from(x), i32::from(y)).and_then(|k| window.get_mut(channel * plane + k))
+        {
+            // At most 8 agents per cell.
+            *v += 1;
+        }
+    }
+    window
+}
+
 /// The Tag environment.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Tag;
@@ -139,11 +186,9 @@ impl Environment for Tag {
 
     const MAX_AGENTS: usize = MAX_AGENTS;
     const TIER: Tier = Tier::CrossPlatform;
-    /// No state is hidden: positions and slips are a deterministic function
-    /// of the shared state and the RNG. The egocentric window is only an
-    /// observation choice. (`ImperfectInformation` and `Determinize` are
-    /// validated with Leduc in phase 2.)
-    const PERFECT_INFORMATION: bool = true;
+    /// Agents see only their window: two states that differ outside it
+    /// give the same observation.
+    const PERFECT_INFORMATION: bool = false;
 
     fn observation_space(cfg: &TagConfig) -> Result<Space, SpaceError> {
         TagObs::space(cfg)
@@ -228,44 +273,9 @@ impl Environment for Tag {
         out: &mut ObsWriter<'_, '_, TagObs>,
     ) {
         let side = cfg.side();
-        let plane = side * side;
-        let mut window = [0u8; 3 * MAX_SIDE * MAX_SIDE];
-        let Some(&[cx, cy]) = state.pos.get(agent.index()) else {
-            return;
-        };
-        let r = i32::try_from(cfg.radius).unwrap_or(0);
-        let cell_index = |x: i32, y: i32| {
-            let col = usize::try_from(x - i32::from(cx) + r).ok()?;
-            let row = usize::try_from(y - i32::from(cy) + r).ok()?;
-            (col < side && row < side).then_some(row * side + col)
-        };
-        // Channel 0: cells outside the grid.
-        for row in 0..side {
-            for col in 0..side {
-                let x = i32::from(cx) + i32::try_from(col).unwrap_or(0) - r;
-                let y = i32::from(cy) + i32::try_from(row).unwrap_or(0) - r;
-                let inside = u32::try_from(x).is_ok_and(|x| x < cfg.width)
-                    && u32::try_from(y).is_ok_and(|y| y < cfg.height);
-                if let Some(v) = window.get_mut(row * side + col) {
-                    *v = u8::from(!inside);
-                }
-            }
-        }
-        // Channels 1 and 2: pursuers and live evaders.
-        for (j, &[x, y]) in state.pos.iter().enumerate() {
-            if !state.active(cfg, j) {
-                continue;
-            }
-            let channel = if cfg.is_pursuer(j) { 1 } else { 2 };
-            if let Some(v) = cell_index(i32::from(x), i32::from(y))
-                .and_then(|k| window.get_mut(channel * plane + k))
-            {
-                // At most 8 agents per cell.
-                *v += 1;
-            }
-        }
+        let window = egocentric_window(cfg, state, agent.index());
         if let Some(mut leaf) = out.leaf_mut(TagObs::WINDOW) {
-            for (k, v) in window.iter().take(3 * plane).enumerate() {
+            for (k, v) in window.iter().take(3 * side * side).enumerate() {
                 leaf.set(k, *v);
             }
         }
@@ -353,5 +363,50 @@ impl Heuristic for Tag {
             }
         }
         out.set_discrete(0, best.0);
+    }
+}
+
+/// What one agent knows: its own cell and its current egocentric window
+/// (the same bytes as its observation, zero-padded to the largest radius).
+///
+/// This is a current-observation (Markov) information state, not perfect
+/// recall: it does not track history and is not a sufficient statistic of
+/// the observation history (an agent may remember where it saw an evader).
+/// A history-tracking information state would be a different version of
+/// the environment. Phase 2 (`Determinize`, validated with Leduc) must
+/// revisit it. The episode step is not part of it: it lives in the engine
+/// header, not in the environment state.
+#[derive(EnvState, Debug, Clone, Copy, PartialEq)]
+#[repr(C)]
+pub struct TagInfo {
+    /// The agent's cell, `[x, y]`.
+    pub pos: [i16; 2],
+    /// The window, `[3, 2r+1, 2r+1]` then zeros.
+    pub window: [u8; WINDOW_BYTES],
+    /// Padding to a multiple of 2 bytes.
+    pub reserved: Reserved<1>,
+}
+
+impl Default for TagInfo {
+    fn default() -> Self {
+        Self {
+            pos: [0; 2],
+            window: [0; WINDOW_BYTES],
+            reserved: Reserved::default(),
+        }
+    }
+}
+
+/// Reads only the agent's own position and window (noninterference by
+/// construction). No `Determinize` in phase 1a.
+impl ImperfectInformation for Tag {
+    type InfoState = TagInfo;
+
+    fn info_state(cfg: &TagConfig, state: &TagState, agent: AgentSlot) -> TagInfo {
+        TagInfo {
+            pos: state.pos.get(agent.index()).copied().unwrap_or([0; 2]),
+            window: egocentric_window(cfg, state, agent.index()),
+            reserved: Reserved::default(),
+        }
     }
 }

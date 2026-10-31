@@ -19,7 +19,7 @@ use tessera_rl_classic::tag::grid::moved;
 use tessera_rl_classic::{Tag, TagConfig, TagState};
 use tessera_rl_core::io::ActionWriter;
 use tessera_rl_core::space::{BoxBounds, DType, Space};
-use tessera_rl_core::{AgentSlot, Bool8, Environment, Heuristic, StateHash};
+use tessera_rl_core::{AgentSlot, Bool8, Environment, Heuristic, ImperfectInformation, StateHash};
 use tessera_rl_engine::{
     ActionInput, EngineError, EnvPool, Masked, PoolOptions, Reseed, SyncOptions,
 };
@@ -376,4 +376,72 @@ fn test_tag_heuristic_pursuers_catch_more_than_random_play() {
         caught
     };
     assert!(episodes(true) > episodes(false));
+}
+
+/// codex's witness: radius 0, an evader at [4, 4] or [3, 4] while the
+/// pursuer is elsewhere; the pursuer cannot tell the states apart.
+#[test]
+fn test_tag_partial_observability_witness_justifies_imperfect_information() {
+    const { assert!(!Tag::PERFECT_INFORMATION) };
+    let cfg = TagConfig {
+        pursuers: 1,
+        evaders: 1,
+        radius: 0,
+        ..TagConfig::default()
+    };
+    let mut a = TagState::default();
+    a.pos[0] = [0, 0];
+    a.pos[1] = [4, 4];
+    let mut b = a;
+    b.pos[1] = [3, 4];
+    assert_ne!(StateHash::of(&a), StateHash::of(&b));
+    let pursuer = AgentSlot::FIRST;
+    assert_eq!(
+        Tag::info_state(&cfg, &a, pursuer),
+        Tag::info_state(&cfg, &b, pursuer)
+    );
+    // The evader itself does see the difference (its own cell).
+    let evader = AgentSlot::new(1, A).unwrap();
+    assert_ne!(
+        Tag::info_state(&cfg, &a, evader),
+        Tag::info_state(&cfg, &b, evader)
+    );
+}
+
+#[test]
+fn test_tag_info_state_is_own_cell_and_the_observation_window() {
+    let cfg = TagConfig {
+        pursuers: 3,
+        evaders: 3,
+        radius: 2,
+        ..TagConfig::default()
+    };
+    let n = 4;
+    let mut p = pool(n, 12, cfg.clone());
+    p.reset_all(Reseed::Keep).unwrap();
+    let leaf = 3 * 5 * 5;
+    for t in 0..20 {
+        let acts = scripted(&p, &cfg, n, false);
+        let out = p.step(act(&acts)).unwrap();
+        let obs = out.observation(0).unwrap().to_vec();
+        let alive = out.alive().to_vec();
+        for i in 0..n {
+            let s = p.state(i).unwrap();
+            for a in 0..cfg.agents() {
+                let row = usize::try_from(i).unwrap() * A + a;
+                if !alive[row].get() {
+                    continue;
+                }
+                let slot = AgentSlot::new(u16::try_from(a).unwrap(), A).unwrap();
+                let info = Tag::info_state(&cfg, s, slot);
+                assert_eq!(info.pos, s.pos[a]);
+                assert_eq!(
+                    &info.window[..leaf],
+                    &obs[row * leaf..(row + 1) * leaf],
+                    "t {t}"
+                );
+                assert!(info.window[leaf..].iter().all(|v| *v == 0));
+            }
+        }
+    }
 }
