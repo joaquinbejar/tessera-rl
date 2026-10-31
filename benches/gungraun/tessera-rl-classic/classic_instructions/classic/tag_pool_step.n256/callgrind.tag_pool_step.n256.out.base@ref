@@ -1,7 +1,7 @@
 # callgrind format
 version: 1
 creator: callgrind-3.24.0
-pid: 3777
+pid: 3801
 cmd:  /src/target/release/deps/classic_instructions-9c2edad6485955b6 --gungraun-run d:d:000000 00000 00002 00000
 part: 1
 thread: 1
@@ -11,13 +11,328 @@ desc: I1 cache: 32768 B, 64 B, 8-way associative
 desc: D1 cache: 32768 B, 64 B, 8-way associative
 desc: LL cache: 8388608 B, 64 B, 16-way associative
 
-desc: Timerange: Basic block 0 - 1545197
+desc: Timerange: Basic block 0 - 1563650
 desc: Trigger: Program termination
 
 positions: line
 events: Ir Dr Dw I1mr D1mr D1mw ILmr DLmr DLmw
-summary: 2817706 443041 360563 124 2627 3304 122 4
+summary: 2929409 462417 409449 122 2628 3302 119 4
 
+
+ob=/src/target/release/deps/classic_instructions-9c2edad6485955b6
+fl=???
+fn=<tessera_rl_num::draw::Draws>::refill
+0 53742 4732 4732 10 0 1 10
+
+fn=classic_instructions::tag_pool_step::__gungraun_wrapper_mod::tag_pool_step
+0 12 1 6 2 0 0 2
+cob=/usr/lib/x86_64-linux-gnu/libc.so.6
+cfi=./string/../sysdeps/x86_64/multiarch/memmove-vec-unaligned-erms.S
+cfn=memcpy@GLIBC_2.2.5
+calls=1 211 
+0 181 55 53 0 0 11
+0 16 5 7 1 0 0 1
+cfn=<tessera_rl_engine::pool::EnvPool<tessera_rl_classic::tag::Tag, tessera_rl_engine::masks::Masked>>::step
+calls=1 0 
+0 2928992 462289 409324 117 2616 3277 114 4
+0 16 6 3 1 1 0 1
+cob=/usr/lib/x86_64-linux-gnu/libc.so.6
+cfi=./string/../sysdeps/x86_64/multiarch/memmove-vec-unaligned-erms.S
+cfn=memcpy@GLIBC_2.2.5
+calls=1 211 
+0 181 55 53 0 10 14
+0 11 6 3 1 1 0 1
+
+fn=tessera_rl_num::fp::call_opaque::<(), <tessera_rl_engine::pool::EnvPool<tessera_rl_classic::tag::Tag, tessera_rl_engine::masks::Masked>>::step_inner::{closure#1}>
+0 7 2 3 1 0 0 1
+cfn=tessera_rl_engine::pool::step_chunk::<tessera_rl_classic::tag::Tag, tessera_rl_engine::masks::Masked>
+calls=1 0 
+0 2730549 404725 398281 72 1061 3107 71 3
+0 2 1 0 0 1
+
+fn=std::sys::backtrace::__rust_begin_short_backtrace::<fn(), ()>
+cfn=classic_instructions::main
+calls=1 0 
+0 2929409 462417 409449 122 2628 3302 119 4
+
+fn=<tessera_rl_num::fp::FpGuard>::enter
+0 26 6 6
+
+fn=<tessera_rl_classic::tag::Tag as tessera_rl_core::env::Environment>::observe
+0 11165 1015 3045 0 0 2
+cfn=tessera_rl_classic::tag::egocentric_window
+calls=2039 0 
+0 996646 115898 136802 0 0 22
+0 736890 83230 76125
+
+fn=std::rt::lang_start::<()>::{closure#0}
+cfn=std::sys::backtrace::__rust_begin_short_backtrace::<fn(), ()>
+calls=1 0 
+0 2929409 462417 409449 122 2628 3302 119 4
+
+fn=classic_instructions::tag_pool_step::__run_n256
+cfn=classic_instructions::tag_pool_step::__gungraun_wrapper_id_mod_n256::n256
+calls=1 0 
+0 2929409 462417 409449 122 2628 3302 119 4
+
+fn=tessera_rl_engine::validate::check_and_copy_actions::<tessera_rl_core::header::RecordHeader<8, tessera_rl_core::header::NoAdaptive>>
+0 74852 22551 3614 20 892 3 20 1
+cob=/usr/lib/x86_64-linux-gnu/libc.so.6
+cfi=./string/../sysdeps/x86_64/multiarch/memmove-vec-unaligned-erms.S
+cfn=memcpy@GLIBC_2.2.5
+calls=1024 211 
+0 10240 1024
+0 50176 18432 1024 4 513 0 4
+cob=/usr/lib/x86_64-linux-gnu/libc.so.6
+cfi=./string/../sysdeps/x86_64/multiarch/memmove-vec-unaligned-erms.S
+cfn=memcpy@GLIBC_2.2.5
+calls=1024 211 
+0 12288 3072 2048 2 129 129
+0 19456 6144 2048 2 1 0 2
+cob=/usr/lib/x86_64-linux-gnu/libc.so.6
+cfi=./string/../sysdeps/x86_64/multiarch/memset-vec-unaligned-erms.S
+cfn=__memset_sse2_unaligned_erms
+calls=1024 199 
+0 15360 1024 2048
+0 15363 5121 1 2 0 1 2
+
+fn=<tessera_rl_classic::tag::Tag as tessera_rl_core::env::ActionMask>::action_mask
+0 87500 6090 5075
+
+fn=tessera_rl_num::fp::call_opaque::<core::result::Result<(), tessera_rl_engine::error::EngineError>, tessera_rl_engine::entry::canonical<core::result::Result<(), tessera_rl_engine::error::EngineError>, <tessera_rl_engine::pool::EnvPool<tessera_rl_classic::tag::Tag, tessera_rl_engine::masks::Masked>>::guarded<(), <tessera_rl_engine::pool::EnvPool<tessera_rl_classic::tag::Tag, tessera_rl_engine::masks::Masked>>::step::{closure#0}>::{closure#0}>::{closure#0}>
+0 14 4 6 1 0 0 1
+cfn=<tessera_rl_engine::pool::EnvPool<tessera_rl_classic::tag::Tag, tessera_rl_engine::masks::Masked>>::step_inner
+calls=1 0 
+0 2928907 462264 409298 113 2614 3276 110 4
+0 4 2 0 0 1
+
+fn=<tessera_rl_engine::pool::EnvPool<tessera_rl_classic::tag::Tag, tessera_rl_engine::masks::Masked>>::step_inner
+0 30 7 14 2 0 2 2
+cfn=tessera_rl_engine::validate::check_and_copy_actions::<tessera_rl_core::header::RecordHeader<8, tessera_rl_core::header::NoAdaptive>>
+calls=1 0 
+0 197735 57368 10783 30 1535 133 28 1
+0 29 8 12 3 4 1 3
+cfn=<tessera_rl_engine::outputs::Outputs>::view_all
+calls=1 0 
+0 296 70 126 0 11 18
+0 21 8 10 3 0 1 3
+cob=/usr/lib/x86_64-linux-gnu/libc.so.6
+cfi=./string/../sysdeps/x86_64/multiarch/memmove-vec-unaligned-erms.S
+cfn=memcpy@GLIBC_2.2.5
+calls=1 211 
+0 193 59 57 0 0 13
+0 1 1 1
+cfn=<tessera_rl_num::fp::FpGuard>::enter
+calls=1 0 
+0 13 3 3
+0 5 0 2 1 0 0 1
+cfn=tessera_rl_num::fp::call_opaque::<(), <tessera_rl_engine::pool::EnvPool<tessera_rl_classic::tag::Tag, tessera_rl_engine::masks::Masked>>::step_inner::{closure#1}>
+calls=1 0 
+0 2730558 404728 398284 73 1062 3107 72 3
+0 3 1 2
+cfn=<tessera_rl_num::fp::FpGuard as core::ops::drop::Drop>::drop
+calls=1 0 
+0 12 4 3
+0 11 7 1 1 2 1 1
+
+fn=<tessera_rl_classic::tag::Tag as tessera_rl_core::env::Environment>::step
+0 40066 9728 4673 4 161 2 4
+cfn=<tessera_rl_num::draw::Draws>::refill
+calls=321 0 
+0 51039 4494 4494 10 0 1 10
+0 18752 2463 1135 2 0 0 2
+cfn=<tessera_rl_num::draw::Draws>::refill
+calls=17 0 
+0 2703 238 238
+0 67447 15528 3868 9 3 0 9 3
+
+fn=(below main)
+cob=/usr/lib/x86_64-linux-gnu/libc.so.6
+cfi=./csu/../csu/libc-start.c
+cfn=__libc_start_main@@GLIBC_2.34
+calls=1 242 
+0 2929409 462417 409449 122 2628 3302 119 4
+
+fn=classic_instructions::main
+cfn=classic_instructions::classic::__run
+calls=1 0 
+0 2929409 462417 409449 122 2628 3302 119 4
+
+fn=classic_instructions::classic::__run
+cfn=classic_instructions::tag_pool_step::__run_n256
+calls=1 0 
+0 2929409 462417 409449 122 2628 3302 119 4
+
+fn=tessera_rl_engine::pool::clear_instance
+0 5888 1024 1536
+cob=/usr/lib/x86_64-linux-gnu/libc.so.6
+cfi=./string/../sysdeps/x86_64/multiarch/memset-vec-unaligned-erms.S
+cfn=__memset_sse2_unaligned_erms
+calls=512 199 
+0 3328 256 512 0 0 33
+0 2816 768 256
+cob=/usr/lib/x86_64-linux-gnu/libc.so.6
+cfi=./string/../sysdeps/x86_64/multiarch/memset-vec-unaligned-erms.S
+cfn=__memset_sse2_unaligned_erms
+calls=512 199 
+0 3328 256 512 0 0 33
+0 2304 768 256
+cob=/usr/lib/x86_64-linux-gnu/libc.so.6
+cfi=./string/../sysdeps/x86_64/multiarch/memset-vec-unaligned-erms.S
+cfn=__memset_sse2_unaligned_erms
+calls=512 199 
+0 3328 256 512 0 0 33
+0 2816 768 256
+cob=/usr/lib/x86_64-linux-gnu/libc.so.6
+cfi=./string/../sysdeps/x86_64/multiarch/memset-vec-unaligned-erms.S
+cfn=__memset_sse2_unaligned_erms
+calls=512 199 
+0 3328 256 512 0 0 33
+0 2304 768 256
+cob=/usr/lib/x86_64-linux-gnu/libc.so.6
+cfi=./string/../sysdeps/x86_64/multiarch/memset-vec-unaligned-erms.S
+cfn=__memset_sse2_unaligned_erms
+calls=512 199 
+0 3328 256 512 0 0 33
+0 2816 768 256
+cob=/usr/lib/x86_64-linux-gnu/libc.so.6
+cfi=./string/../sysdeps/x86_64/multiarch/memset-vec-unaligned-erms.S
+cfn=__memset_sse2_unaligned_erms
+calls=512 199 
+0 3072 256 512 0 0 129
+0 7680 4608 1536 0 0 78
+
+fn=tessera_rl_engine::pool::step_chunk::<tessera_rl_classic::tag::Tag, tessera_rl_engine::masks::Masked>
+0 85560 20237 12827 16 673 35 15
+cfn=tessera_rl_engine::pool::first_illegal
+calls=1024 0 
+0 36129 7063 3072 3 220 1 3
+0 12051 8008 315 4 0 0 4
+cob=/usr/lib/x86_64-linux-gnu/libc.so.6
+cfi=./string/../sysdeps/x86_64/multiarch/memset-vec-unaligned-erms.S
+cfn=__memset_sse2_unaligned_erms
+calls=105 199 
+0 1575 105 210
+0 19797 6367 4457 7 1 0 7
+cfn=tessera_rl_engine::pool::clear_instance
+calls=256 0 
+0 46336 11008 7424 0 0 372
+0 13056 3072 3072 4 0 0 4
+cfn=tessera_rl_num::rng::draws
+calls=256 0 
+0 13568 1280 1536
+0 3072 1536 1024 2 0 0 2
+cfn=<tessera_rl_classic::tag::Tag as tessera_rl_core::env::Environment>::step
+calls=256 0 
+0 180007 32451 14408 25 164 3 25 3
+0 84763 29449 2825 9 0 0 9
+cfn=tessera_rl_engine::pool::write_agent_masks::<tessera_rl_core::header::RecordHeader<8, tessera_rl_core::header::NoAdaptive>>
+calls=256 0 
+0 28928 8448 6400 0 0 195
+0 2304 1280 256 1 0 0 1
+cfn=tessera_rl_engine::pool::observe_instance::<tessera_rl_classic::tag::Tag, tessera_rl_engine::masks::Masked>
+calls=256 0 
+0 2202883 274158 340455 0 2 2501
+0 520 263 0 1 1 0 1
+
+fn=std::rt::lang_start_internal
+cfn=std::rt::lang_start::<()>::{closure#0}
+calls=1 0 
+0 2929409 462417 409449 122 2628 3302 119 4
+
+fn=<tessera_rl_engine::outputs::Outputs>::view_all
+0 102 9 72 0 5 4
+cob=/usr/lib/x86_64-linux-gnu/libc.so.6
+cfi=./string/../sysdeps/x86_64/multiarch/memmove-vec-unaligned-erms.S
+cfn=memcpy@GLIBC_2.2.5
+calls=2 211 
+0 73 19 17 0 1 5
+0 4 0 1
+cob=/usr/lib/x86_64-linux-gnu/libc.so.6
+cfi=./string/../sysdeps/x86_64/multiarch/memmove-vec-unaligned-erms.S
+cfn=memcpy@GLIBC_2.2.5
+calls=2 211 
+0 73 19 17 0 0 4
+0 44 23 19 0 5 5
+
+fn=tessera_rl_num::rng::draws
+0 67363 6355 7626
+
+fn=tessera_rl_engine::pool::write_agent_masks::<tessera_rl_core::header::RecordHeader<8, tessera_rl_core::header::NoAdaptive>>
+0 28928 8448 6400 0 0 195
+
+fn=tessera_rl_classic::tag::egocentric_window
+0 18270 2030 8120 0 0 3
+cob=/usr/lib/x86_64-linux-gnu/libc.so.6
+cfi=./string/../sysdeps/x86_64/multiarch/memset-vec-unaligned-erms.S
+cfn=__memset_sse2_unaligned_erms
+calls=2039 199 
+0 93380 2030 44660 0 0 10
+0 651769 38333 36540
+cob=/usr/lib/x86_64-linux-gnu/libc.so.6
+cfi=./string/../sysdeps/x86_64/multiarch/memmove-vec-unaligned-erms.S
+cfn=memcpy@GLIBC_2.2.5
+calls=2039 211 
+0 159355 47705 45675 0 0 9
+0 73872 25800 1807
+
+fn=classic_instructions::tag_pool_step::__gungraun_wrapper_id_mod_n256::n256
+cfn=classic_instructions::tag_pool_step::__gungraun_wrapper_mod::tag_pool_step
+calls=1 0 
+0 2929409 462417 409449 122 2628 3302 119 4
+
+fn=tessera_rl_engine::pool::first_illegal
+0 36129 7063 3072 3 220 1 3
+
+fn=<tessera_rl_num::fp::FpGuard as core::ops::drop::Drop>::drop
+0 24 8 6
+
+fn=<tessera_rl_engine::pool::EnvPool<tessera_rl_classic::tag::Tag, tessera_rl_engine::masks::Masked>>::step
+0 12 2 5 1 0 0 1
+cfn=<tessera_rl_num::fp::FpGuard>::enter
+calls=1 0 
+0 13 3 3
+0 6 0 2
+cfn=tessera_rl_num::fp::call_opaque::<core::result::Result<(), tessera_rl_engine::error::EngineError>, tessera_rl_engine::entry::canonical<core::result::Result<(), tessera_rl_engine::error::EngineError>, <tessera_rl_engine::pool::EnvPool<tessera_rl_classic::tag::Tag, tessera_rl_engine::masks::Masked>>::guarded<(), <tessera_rl_engine::pool::EnvPool<tessera_rl_classic::tag::Tag, tessera_rl_engine::masks::Masked>>::step::{closure#0}>::{closure#0}>::{closure#0}>
+calls=1 0 
+0 2928925 462270 409304 114 2615 3276 111 4
+0 3 1 2 1 0 0 1
+cfn=<tessera_rl_num::fp::FpGuard as core::ops::drop::Drop>::drop
+calls=1 0 
+0 12 4 3
+0 21 9 5 1 1 1 1
+
+fn=main
+cfn=std::rt::lang_start_internal
+calls=1 0 
+0 2929409 462417 409449 122 2628 3302 119 4
+
+fn=tessera_rl_engine::pool::observe_instance::<tessera_rl_classic::tag::Tag, tessera_rl_engine::masks::Masked>
+0 140014 16110 76544 0 1 4
+cob=/usr/lib/x86_64-linux-gnu/libc.so.6
+cfi=./string/../sysdeps/x86_64/multiarch/memset-vec-unaligned-erms.S
+cfn=__memset_sse2_unaligned_erms
+calls=4096 199 
+0 53248 4096 16384 0 1 2401
+0 45056 14336 6144
+cob=/usr/lib/x86_64-linux-gnu/libc.so.6
+cfi=./string/../sysdeps/x86_64/multiarch/memset-vec-unaligned-erms.S
+cfn=__memset_sse2_unaligned_erms
+calls=4096 199 
+0 30720 2048 4096 0 0 71
+0 22456 14318 3045 0 0 1
+cfn=tessera_rl_num::rng::draws
+calls=2039 0 
+0 53795 5075 6090
+0 12180 6090 4060
+cfn=<tessera_rl_classic::tag::Tag as tessera_rl_core::env::Environment>::observe
+calls=2039 0 
+0 1744701 200143 215972 0 0 24
+0 10150 4060 3045
+cfn=<tessera_rl_classic::tag::Tag as tessera_rl_core::env::ActionMask>::action_mask
+calls=2039 0 
+0 87500 6090 5075
+0 3063 1792
 
 ob=/usr/lib/x86_64-linux-gnu/libc.so.6
 fl=./csu/../sysdeps/nptl/libc_start_call_main.h
@@ -26,26 +341,17 @@ cob=/src/target/release/deps/classic_instructions-9c2edad6485955b6
 cfi=???
 cfn=main
 calls=1 0 
-58 2817706 443041 360563 124 2627 3304 122 4
-
-fl=./csu/../csu/libc-start.c
-fn=__libc_start_main@@GLIBC_2.34
-cfi=./csu/../sysdeps/nptl/libc_start_call_main.h
-cfn=(below main)
-calls=1 29 
-360 2817706 443041 360563 124 2627 3304 122 4
+58 2929409 462417 409449 122 2628 3302 119 4
 
 fl=./string/../sysdeps/x86_64/multiarch/memmove-vec-unaligned-erms.S
-fn=__memcpy_avx_unaligned_erms
-256 3068
-262 3068
-263 3068
-265 1020 1020
-266 1020
-267 1020
-305 2048
-306 2048
-308 2048
+fn=memcpy@GLIBC_2.2.5
+211 3068
+217 3068
+218 3068
+220 1020 1020 0 0 1
+221 1020
+222 1020
+308 2048 0 0 1
 309 2048
 311 2048
 315 2048
@@ -57,456 +363,122 @@ fn=__memcpy_avx_unaligned_erms
 333 1024 0 1024 0 0 129
 334 1024 0 1024
 335 1024 1024
-386 1020 1020 0 0 1
-387 1020
 392 1020
 393 1020
-395 2 2
-396 2
-397 2
-399 2 2
-400 2 2
-401 2 2
-402 2 2
-403 2 2
-404 2 2
-405 2 0 2 0 0 2
-406 2 0 2
-407 2 0 2 0 0 2
-408 2 0 2
-409 2 0 2 0 0 2
-410 2 0 2 0 0 2
-411 2 0 2
-412 2 0 2
-413 4 2
-417 1018
-418 1018
-422 1018
-424 1018
-428 1018 1018 0 0 1
-429 1018
-440 1018
-443 1018
-445 1018
-447 1018
-451 1018
-452 1018
-461 1018 1018
-462 1018 1018
-464 1018
-466 1018
-467 1018 1018
-468 1018 1018 0 0 1
-471 1018
-473 1018
-475 1018
-477 2036
-483 1018 1018
-484 1018 1018
-485 1018 1018
-486 1018 1018
-487 1018
-488 1018 0 1018 0 0 3
-489 1018 0 1018 0 0 1
-490 1018 0 1018 0 0 3
-491 1018 0 1018 0 0 1
-492 1018
-493 1018
-494 1018
-483 4075 4075 0 0 4
-484 4075 4075
-485 4075 4075 0 0 3
-486 4075 4075
-487 4075
-488 4075 0 4075 0 0 14
-489 4075 0 4075 0 0 5
-490 4075 0 4075 0 0 14
-491 4075 0 4075 0 0 5
-492 4075
-493 4075
-494 4075
-496 1018 0 1018
-497 1018 0 1018 0 0 1
-498 1018 0 1018
-499 1018 0 1018
-501 1018 0 1018
-505 2036 1018
+417 1020
+418 1020
+422 1020
+424 1020
+428 1020 1020 0 0 1
+429 1020
+440 1020
+443 1020
+445 1020
+447 1020
+451 1020
+452 1020
+461 1020 1020
+462 1020 1020
+464 1020
+466 1020
+467 1020 1020
+468 1020 1020
+471 1020
+473 1020
+475 1020
+477 2040
+483 1020 1020
+484 1020 1020
+485 1020 1020
+486 1020 1020
+487 1020
+488 1020 0 1020 0 0 2
+489 1020 0 1020 0 0 1
+490 1020 0 1020 0 0 2
+491 1020 0 1020 0 0 2
+492 1020
+493 1020
+494 1020
+483 9173 9173
+484 9173 9173
+485 9173 9173
+486 9173 9173 0 0 9
+487 9173
+488 9173 0 9173
+489 9173 0 9173 0 0 11
+490 9173 0 9173 0 0 20
+491 9173 0 9173 0 0 15
+492 9173
+493 9173
+494 9173
+496 1020 0 1020 0 0 3
+497 1020 0 1020
+498 1020 0 1020
+499 1020 0 1020
+501 1020 0 1020
+505 1020 1020
+
+fl=./csu/../csu/libc-start.c
+fn=__libc_start_main@@GLIBC_2.34
+cfi=./csu/../sysdeps/nptl/libc_start_call_main.h
+cfn=(below main)
+calls=1 29 
+360 2929409 462417 409449 122 2628 3302 119 4
 
 fl=./string/../sysdeps/x86_64/multiarch/memset-vec-unaligned-erms.S
-fn=__memset_avx2_unaligned_erms
-199 15552
+fn=__memset_sse2_unaligned_erms
+199 38880
 204 7776
 205 7776
-206 3319
 207 3319
 208 3319
-210 256 0 256 0 0 129
-211 256 0 256
-212 512 256
-221 2048 0 2048
-222 2048 0 2048 0 0 352
-224 4096 2048
-229 3063 3063
+210 256 0 256 0 0 1
+211 256 0 256 0 0 128
+212 256 256
+229 3063 3063 0 0 1
 230 3063
-236 3063 0 3063 0 0 1026
-237 3063 0 3063 0 0 1025
+236 3063 0 3063 0 0 514
+237 3063 0 3063 0 0 512
 249 3063
 252 3063
 253 3063
-265 1015 0 1015
-266 1015 0 1015 0 0 1
-279 1015
-280 1015
-282 1015
+265 3063 0 3063 0 0 512
+266 3063 0 3063 0 0 512
+279 3063
+280 3063
+282 3063
 285 1015
-288 1015
+288 2030
 291 1015 0 1015
-292 1015 0 1015
-293 1015 0 1015 0 0 1
+292 1015 0 1015 0 0 1
+293 1015 0 1015
 294 1015 0 1015
 295 1015
 296 1015
 297 1015
-291 3045 0 3045 0 0 3
-292 3045 0 3045
-293 3045 0 3045 0 0 3
-294 3045 0 3045
-295 3045
-296 3045
-297 4060
-300 1015 0 1015
-301 1015 0 1015
-302 1015 0 1015
-303 1015 0 1015
-306 2030 1015
-341 4457
-350 4457
-351 4457
+291 8120 0 8120
+292 8120 0 8120 0 0 8
+293 8120 0 8120
+294 8120 0 8120
+295 8120
+296 8120
+297 8120
+300 3063 0 3063
+301 3063 0 3063
+302 3063 0 3063
+303 3063 0 3063 0 0 352
+308 3063 3063
+354 4457
 356 4457
 357 4457
 358 3177
 359 3177
-393 1280 0 1280 0 0 165
-394 1280 0 1280
+396 1280 0 1280 0 0 165
+397 1280 0 1280
 399 1280 1280
-407 3177 0 3177 0 0 39
-408 3177 0 3177 0 0 32
+410 3177 0 3177 0 0 39
+411 3177 0 3177 0 0 32
 413 3177 3177
-
-ob=/src/target/release/deps/classic_instructions-9c2edad6485955b6
-fl=???
-fn=std::rt::lang_start::<()>::{closure#0}
-cfn=std::sys::backtrace::__rust_begin_short_backtrace::<fn(), ()>
-calls=1 0 
-0 2817706 443041 360563 124 2627 3304 122 4
-
-fn=std::rt::lang_start_internal
-cfn=std::rt::lang_start::<()>::{closure#0}
-calls=1 0 
-0 2817706 443041 360563 124 2627 3304 122 4
-
-fn=<tessera_rl_num::fp::FpGuard>::enter
-0 26 6 6
-
-fn=<tessera_rl_num::draw::Draws>::refill
-0 53742 4732 4732 9 0 1 9
-
-fn=classic_instructions::tag_pool_step::__gungraun_wrapper_mod::tag_pool_step
-0 12 1 6 2 0 0 2
-cob=/usr/lib/x86_64-linux-gnu/libc.so.6
-cfi=./string/../sysdeps/x86_64/multiarch/memmove-vec-unaligned-erms.S
-cfn=__memcpy_avx_unaligned_erms
-calls=1 256 
-0 112 32 29 0 0 11
-0 16 5 7 1 0 0 1
-cfn=<tessera_rl_engine::pool::EnvPool<tessera_rl_classic::tag::Tag, tessera_rl_engine::masks::Masked>>::step
-calls=1 0 
-0 2817427 442959 360486 119 2617 3278 117 4
-0 16 6 3 1 1 1 1
-cob=/usr/lib/x86_64-linux-gnu/libc.so.6
-cfi=./string/../sysdeps/x86_64/multiarch/memmove-vec-unaligned-erms.S
-cfn=__memcpy_avx_unaligned_erms
-calls=1 256 
-0 112 32 29 0 8 13
-0 11 6 3 1 1 1 1
-
-fn=tessera_rl_num::fp::call_opaque::<(), <tessera_rl_engine::pool::EnvPool<tessera_rl_classic::tag::Tag, tessera_rl_engine::masks::Masked>>::step_inner::{closure#1}>
-0 7 2 3 1 0 0 1
-cfn=tessera_rl_engine::pool::step_chunk::<tessera_rl_classic::tag::Tag, tessera_rl_engine::masks::Masked>
-calls=1 0 
-0 2616081 385440 349489 71 1061 3107 70 3
-0 2 1
-
-fn=classic_instructions::main
-cfn=classic_instructions::classic::__run
-calls=1 0 
-0 2817706 443041 360563 124 2627 3304 122 4
-
-fn=classic_instructions::tag_pool_step::__run_n256
-cfn=classic_instructions::tag_pool_step::__gungraun_wrapper_id_mod_n256::n256
-calls=1 0 
-0 2817706 443041 360563 124 2627 3304 122 4
-
-fn=tessera_rl_engine::pool::write_agent_masks::<tessera_rl_core::header::RecordHeader<8, tessera_rl_core::header::NoAdaptive>>
-0 28928 8448 6400 0 0 195
-
-fn=<tessera_rl_classic::tag::Tag as tessera_rl_core::env::Environment>::observe
-0 11165 1015 3045 0 0 1
-cfn=tessera_rl_classic::tag::egocentric_window
-calls=2039 0 
-0 902251 96613 96202 0 0 23
-0 736890 83230 76125
-
-fn=tessera_rl_engine::validate::check_and_copy_actions::<tessera_rl_core::header::RecordHeader<8, tessera_rl_core::header::NoAdaptive>>
-0 74852 22551 3614 22 893 4 22 1
-cob=/usr/lib/x86_64-linux-gnu/libc.so.6
-cfi=./string/../sysdeps/x86_64/multiarch/memmove-vec-unaligned-erms.S
-cfn=__memcpy_avx_unaligned_erms
-calls=1024 256 
-0 12288 1024
-0 50176 18432 1024 4 513 1 4
-cob=/usr/lib/x86_64-linux-gnu/libc.so.6
-cfi=./string/../sysdeps/x86_64/multiarch/memmove-vec-unaligned-erms.S
-cfn=__memcpy_avx_unaligned_erms
-calls=1024 256 
-0 14336 3072 2048 1 129 129
-0 19456 6144 2048 2 1 0 2
-cob=/usr/lib/x86_64-linux-gnu/libc.so.6
-cfi=./string/../sysdeps/x86_64/multiarch/memset-vec-unaligned-erms.S
-cfn=__memset_avx2_unaligned_erms
-calls=1024 199 
-0 14336 1024 2048
-0 15363 5121 1 2 0 1 2
-
-fn=main
-cfn=std::rt::lang_start_internal
-calls=1 0 
-0 2817706 443041 360563 124 2627 3304 122 4
-
-fn=classic_instructions::classic::__run
-cfn=classic_instructions::tag_pool_step::__run_n256
-calls=1 0 
-0 2817706 443041 360563 124 2627 3304 122 4
-
-fn=<tessera_rl_classic::tag::Tag as tessera_rl_core::env::ActionMask>::action_mask
-0 87500 6090 5075
-
-fn=tessera_rl_num::fp::call_opaque::<core::result::Result<(), tessera_rl_engine::error::EngineError>, tessera_rl_engine::entry::canonical<core::result::Result<(), tessera_rl_engine::error::EngineError>, <tessera_rl_engine::pool::EnvPool<tessera_rl_classic::tag::Tag, tessera_rl_engine::masks::Masked>>::guarded<(), <tessera_rl_engine::pool::EnvPool<tessera_rl_classic::tag::Tag, tessera_rl_engine::masks::Masked>>::step::{closure#0}>::{closure#0}>::{closure#0}>
-0 14 4 6 2 0 0 2
-cfn=<tessera_rl_engine::pool::EnvPool<tessera_rl_classic::tag::Tag, tessera_rl_engine::masks::Masked>>::step_inner
-calls=1 0 
-0 2817342 442934 360460 113 2615 3277 111 4
-0 4 2 0 0 1
-
-fn=<tessera_rl_engine::pool::EnvPool<tessera_rl_classic::tag::Tag, tessera_rl_engine::masks::Masked>>::step_inner
-0 30 7 14 2 0 2 2
-cfn=tessera_rl_engine::validate::check_and_copy_actions::<tessera_rl_core::header::RecordHeader<8, tessera_rl_core::header::NoAdaptive>>
-calls=1 0 
-0 200807 57368 10783 31 1536 135 30 1
-0 29 8 12 3 4 1 3
-cfn=<tessera_rl_engine::outputs::Outputs>::view_all
-calls=1 0 
-0 208 52 108 0 10 16
-0 21 8 10 3 0 2 3
-cob=/usr/lib/x86_64-linux-gnu/libc.so.6
-cfi=./string/../sysdeps/x86_64/multiarch/memmove-vec-unaligned-erms.S
-cfn=__memcpy_avx_unaligned_erms
-calls=1 256 
-0 112 32 29 0 1 13
-0 1 1 1
-cfn=<tessera_rl_num::fp::FpGuard>::enter
-calls=1 0 
-0 13 3 3
-0 5 0 2 1 0 0 1
-cfn=tessera_rl_num::fp::call_opaque::<(), <tessera_rl_engine::pool::EnvPool<tessera_rl_classic::tag::Tag, tessera_rl_engine::masks::Masked>>::step_inner::{closure#1}>
-calls=1 0 
-0 2616090 385443 349492 72 1061 3107 71 3
-0 3 1 2 0 1
-cfn=<tessera_rl_num::fp::FpGuard as core::ops::drop::Drop>::drop
-calls=1 0 
-0 12 4 3
-0 11 7 1 1 2 1 1
-
-fn=<tessera_rl_classic::tag::Tag as tessera_rl_core::env::Environment>::step
-0 40066 9728 4673 3 162 1 3
-cfn=<tessera_rl_num::draw::Draws>::refill
-calls=321 0 
-0 51039 4494 4494 9 0 1 9
-0 18752 2463 1135 3 0 0 3
-cfn=<tessera_rl_num::draw::Draws>::refill
-calls=17 0 
-0 2703 238 238
-0 67447 15528 3868 11 3 0 11 3
-
-fn=tessera_rl_engine::pool::clear_instance
-0 5888 1024 1536 0 0 1
-cob=/usr/lib/x86_64-linux-gnu/libc.so.6
-cfi=./string/../sysdeps/x86_64/multiarch/memset-vec-unaligned-erms.S
-cfn=__memset_avx2_unaligned_erms
-calls=512 199 
-0 3072 256 512 0 0 33
-0 2816 768 256
-cob=/usr/lib/x86_64-linux-gnu/libc.so.6
-cfi=./string/../sysdeps/x86_64/multiarch/memset-vec-unaligned-erms.S
-cfn=__memset_avx2_unaligned_erms
-calls=512 199 
-0 3072 256 512 0 0 33
-0 2304 768 256
-cob=/usr/lib/x86_64-linux-gnu/libc.so.6
-cfi=./string/../sysdeps/x86_64/multiarch/memset-vec-unaligned-erms.S
-cfn=__memset_avx2_unaligned_erms
-calls=512 199 
-0 3072 256 512 0 0 33
-0 2816 768 256
-cob=/usr/lib/x86_64-linux-gnu/libc.so.6
-cfi=./string/../sysdeps/x86_64/multiarch/memset-vec-unaligned-erms.S
-cfn=__memset_avx2_unaligned_erms
-calls=512 199 
-0 3072 256 512 0 0 33
-0 2304 768 256
-cob=/usr/lib/x86_64-linux-gnu/libc.so.6
-cfi=./string/../sysdeps/x86_64/multiarch/memset-vec-unaligned-erms.S
-cfn=__memset_avx2_unaligned_erms
-calls=512 199 
-0 3072 256 512 0 0 33
-0 2816 768 256
-cob=/usr/lib/x86_64-linux-gnu/libc.so.6
-cfi=./string/../sysdeps/x86_64/multiarch/memset-vec-unaligned-erms.S
-cfn=__memset_avx2_unaligned_erms
-calls=512 199 
-0 2816 256 512 0 0 129
-0 7680 4608 1536 0 0 78
-
-fn=tessera_rl_engine::pool::observe_instance::<tessera_rl_classic::tag::Tag, tessera_rl_engine::masks::Masked>
-0 140014 16110 76544 0 1 6
-cob=/usr/lib/x86_64-linux-gnu/libc.so.6
-cfi=./string/../sysdeps/x86_64/multiarch/memset-vec-unaligned-erms.S
-cfn=__memset_avx2_unaligned_erms
-calls=4096 199 
-0 36864 4096 8192 0 0 2401
-0 45056 14336 6144
-cob=/usr/lib/x86_64-linux-gnu/libc.so.6
-cfi=./string/../sysdeps/x86_64/multiarch/memset-vec-unaligned-erms.S
-cfn=__memset_avx2_unaligned_erms
-calls=4096 199 
-0 28672 2048 4096 0 0 71
-0 22456 14318 3045
-cfn=tessera_rl_num::rng::draws
-calls=2039 0 
-0 53795 5075 6090
-0 12180 6090 4060 0 1
-cfn=<tessera_rl_classic::tag::Tag as tessera_rl_core::env::Environment>::observe
-calls=2039 0 
-0 1650306 180858 175372 0 0 24
-0 10150 4060 3045
-cfn=<tessera_rl_classic::tag::Tag as tessera_rl_core::env::ActionMask>::action_mask
-calls=2039 0 
-0 87500 6090 5075
-0 3063 1792
-
-fn=tessera_rl_engine::pool::step_chunk::<tessera_rl_classic::tag::Tag, tessera_rl_engine::masks::Masked>
-0 85560 20237 12827 17 673 35 16
-cfn=tessera_rl_engine::pool::first_illegal
-calls=1024 0 
-0 36129 7063 3072 2 220 0 2
-0 12051 8008 315 3 0 0 3
-cob=/usr/lib/x86_64-linux-gnu/libc.so.6
-cfi=./string/../sysdeps/x86_64/multiarch/memset-vec-unaligned-erms.S
-cfn=__memset_avx2_unaligned_erms
-calls=105 199 
-0 1470 105 210
-0 19797 6367 4457 7 0 0 7
-cfn=tessera_rl_engine::pool::clear_instance
-calls=256 0 
-0 44800 11008 7424 0 0 373
-0 13056 3072 3072 5 0 0 5
-cfn=tessera_rl_num::rng::draws
-calls=256 0 
-0 13568 1280 1536
-0 3072 1536 1024 1 0 0 1
-cfn=<tessera_rl_classic::tag::Tag as tessera_rl_core::env::Environment>::step
-calls=256 0 
-0 180007 32451 14408 26 165 2 26 3
-0 84763 29449 2825 8 0 0 8
-cfn=tessera_rl_engine::pool::write_agent_masks::<tessera_rl_core::header::RecordHeader<8, tessera_rl_core::header::NoAdaptive>>
-calls=256 0 
-0 28928 8448 6400 0 0 195
-0 2304 1280 256 1 0 0 1
-cfn=tessera_rl_engine::pool::observe_instance::<tessera_rl_classic::tag::Tag, tessera_rl_engine::masks::Masked>
-calls=256 0 
-0 2090056 254873 291663 0 2 2502
-0 520 263 0 1 1 0 1
-
-fn=(below main)
-cob=/usr/lib/x86_64-linux-gnu/libc.so.6
-cfi=./csu/../csu/libc-start.c
-cfn=__libc_start_main@@GLIBC_2.34
-calls=1 242 
-0 2817706 443041 360563 124 2627 3304 122 4
-
-fn=<tessera_rl_engine::outputs::Outputs>::view_all
-0 102 9 72 0 4 4
-cob=/usr/lib/x86_64-linux-gnu/libc.so.6
-cfi=./string/../sysdeps/x86_64/multiarch/memmove-vec-unaligned-erms.S
-cfn=__memcpy_avx_unaligned_erms
-calls=2 256 
-0 29 10 8 0 1 4
-0 4 0 1
-cob=/usr/lib/x86_64-linux-gnu/libc.so.6
-cfi=./string/../sysdeps/x86_64/multiarch/memmove-vec-unaligned-erms.S
-cfn=__memcpy_avx_unaligned_erms
-calls=2 256 
-0 29 10 8 0 0 4
-0 44 23 19 0 5 4
-
-fn=tessera_rl_num::rng::draws
-0 67363 6355 7626
-
-fn=tessera_rl_classic::tag::egocentric_window
-0 18270 2030 8120 0 0 3
-cob=/usr/lib/x86_64-linux-gnu/libc.so.6
-cfi=./string/../sysdeps/x86_64/multiarch/memset-vec-unaligned-erms.S
-cfn=__memset_avx2_unaligned_erms
-calls=2039 199 
-0 56840 2030 24360 0 0 10
-0 651769 38333 36540
-cob=/usr/lib/x86_64-linux-gnu/libc.so.6
-cfi=./string/../sysdeps/x86_64/multiarch/memmove-vec-unaligned-erms.S
-cfn=__memcpy_avx_unaligned_erms
-calls=2039 256 
-0 101500 28420 25375 0 0 10
-0 73872 25800 1807
-
-fn=classic_instructions::tag_pool_step::__gungraun_wrapper_id_mod_n256::n256
-cfn=classic_instructions::tag_pool_step::__gungraun_wrapper_mod::tag_pool_step
-calls=1 0 
-0 2817706 443041 360563 124 2627 3304 122 4
-
-fn=tessera_rl_engine::pool::first_illegal
-0 36129 7063 3072 2 220 0 2
-
-fn=<tessera_rl_num::fp::FpGuard as core::ops::drop::Drop>::drop
-0 24 8 6
-
-fn=std::sys::backtrace::__rust_begin_short_backtrace::<fn(), ()>
-cfn=classic_instructions::main
-calls=1 0 
-0 2817706 443041 360563 124 2627 3304 122 4
-
-fn=<tessera_rl_engine::pool::EnvPool<tessera_rl_classic::tag::Tag, tessera_rl_engine::masks::Masked>>::step
-0 12 2 5 1 0 0 1
-cfn=<tessera_rl_num::fp::FpGuard>::enter
-calls=1 0 
-0 13 3 3
-0 6 0 2 1 0 0 1
-cfn=tessera_rl_num::fp::call_opaque::<core::result::Result<(), tessera_rl_engine::error::EngineError>, tessera_rl_engine::entry::canonical<core::result::Result<(), tessera_rl_engine::error::EngineError>, <tessera_rl_engine::pool::EnvPool<tessera_rl_classic::tag::Tag, tessera_rl_engine::masks::Masked>>::guarded<(), <tessera_rl_engine::pool::EnvPool<tessera_rl_classic::tag::Tag, tessera_rl_engine::masks::Masked>>::step::{closure#0}>::{closure#0}>::{closure#0}>
-calls=1 0 
-0 2817360 442940 360466 115 2616 3277 113 4
-0 3 1 2
-cfn=<tessera_rl_num::fp::FpGuard as core::ops::drop::Drop>::drop
-calls=1 0 
-0 12 4 3
-0 21 9 5 2 1 1 2
 
 ob=/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2
 fl=???
@@ -515,6 +487,6 @@ cob=/src/target/release/deps/classic_instructions-9c2edad6485955b6
 cfi=???
 cfn=(below main)
 calls=1 0 
-0 2817706 443041 360563 124 2627 3304 122 4
+0 2929409 462417 409449 122 2628 3302 119 4
 
-totals: 2817706 443041 360563 124 2627 3304 122 4
+totals: 2929409 462417 409449 122 2628 3302 119 4
