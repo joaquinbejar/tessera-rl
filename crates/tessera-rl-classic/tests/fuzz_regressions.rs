@@ -2,7 +2,8 @@
 
 //! Stable replay of every input in `fuzz/regressions/record/` through the same
 //! harness as the `record` fuzz target, so fixed findings stay fixed
-//! without nightly or cargo-fuzz.
+//! without nightly or cargo-fuzz. Every committed input is a record whose
+//! header and state disagree, which import must now reject (ADR-0040).
 
 #[path = "../../../fuzz/harness/record.rs"]
 mod harness;
@@ -15,7 +16,8 @@ fn test_fuzz_regressions_replay_without_panicking() {
     for entry in std::fs::read_dir(&dir).unwrap() {
         let path = entry.unwrap().path();
         if path.extension().is_some_and(|e| e == "bin") {
-            harness::run(&std::fs::read(&path).unwrap());
+            let outcome = harness::run(&std::fs::read(&path).unwrap());
+            assert_eq!(outcome, harness::Outcome::Rejected, "{}", path.display());
             replayed += 1;
         }
     }
