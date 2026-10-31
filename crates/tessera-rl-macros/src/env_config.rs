@@ -2,7 +2,10 @@
 
 //! `#[derive(EnvConfig)]` (ADR-0030).
 //!
-//! Generates `Default` from `#[config(default = ...)]`, range validation,
+//! Generates `Default` from `#[config(default = ...)]`, range validation
+//! (plus a cross-field check named by the struct attribute
+//! `#[config(validate = path)]`, a `fn(&Self) -> Result<(), ConfigError>`
+//! run after the field checks),
 //! and the canonical form (`CanonicalConfig`, keys sorted at compile time).
 //! Fields marked `#[config(adaptive)]` are excluded from the canonical form
 //! and the config hash. JSON Schema generation is deferred to phase 1b; the
@@ -196,6 +199,18 @@ pub(crate) fn derive(input: &DeriveInput) -> syn::Result<TokenStream> {
         ));
     };
 
+    let mut extra = None;
+    for attr in input.attrs.iter().filter(|a| a.path().is_ident("config")) {
+        attr.parse_nested_meta(|meta| {
+            if meta.path.is_ident("validate") && extra.is_none() {
+                extra = Some(meta.value()?.parse::<syn::Path>()?);
+                Ok(())
+            } else {
+                Err(meta.error("expected one `validate = path`"))
+            }
+        })?;
+    }
+    let extra = extra.map(|path| quote!(#path(self)?;));
     let mut parts = ConfigParts::default();
     for field in &fields.named {
         parts.push(&core, field)?;
@@ -230,6 +245,7 @@ pub(crate) fn derive(input: &DeriveInput) -> syn::Result<TokenStream> {
         impl #core::EnvConfig for #name {
             fn validate(&self) -> ::core::result::Result<(), #core::ConfigError> {
                 #(#checks)*
+                #extra
                 ::core::result::Result::Ok(())
             }
         }
