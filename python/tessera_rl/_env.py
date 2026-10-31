@@ -12,10 +12,13 @@ work you started on them, before the next call.
 
 Native views export through the buffer protocol (read-only) and DLPack
 (``__dlpack__``: DLPack 1.0 with the read-only flag when the consumer asks
-for it, legacy otherwise). NumPy honours the read-only flag; PyTorch 2.15
-accepts it without warnings but returns a writable tensor, whose writes
-reach the engine buffer until the next call overwrites them: do not write
-through borrowed tensors.
+for ``max_version >= (1, 0)``, a legacy capsule otherwise). A legacy
+capsule cannot be marked read-only, so legacy consumers get a writable
+alias. NumPy honours the read-only flag; PyTorch 2.15 asks for DLPack 1.0
+and accepts the flag without warnings but returns a writable tensor. A
+write through any writable alias reaches the engine buffer and corrupts
+the outputs until the next call overwrites them: never write through
+borrowed views.
 """
 
 from __future__ import annotations

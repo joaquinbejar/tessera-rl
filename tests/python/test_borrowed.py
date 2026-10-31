@@ -78,6 +78,37 @@ def test_staleness_follows_numpy_views_and_memoryviews():
         t.is_stale(np.zeros(3))
 
 
+def test_staleness_tracks_every_numpy_and_memoryview_derivation():
+    # TESSERA-REVIEWER R-PR20: arrays and memoryviews derived from a view
+    # through `.base` and `.obj` chains are tracked.
+    env = cartpole(4)
+    s = env.reset()
+    view = env._native.outputs()["observations"][0]
+    mem = memoryview(view)
+    derived = [
+        s.observations["obs"],  # np.asarray(view)
+        s.observations["obs"].reshape(-1),  # reshape
+        s.observations["obs"].reshape(-1)[::2],  # view of a view
+        s.observations["obs"].T,  # transpose
+        s.observations["obs"].view(np.uint32),  # reinterpreting view
+        np.asarray(mem),  # array over a memoryview
+        np.frombuffer(view, dtype=np.uint8),  # raw bytes over the view
+        mem[1:],  # sliced memoryview (same exporter)
+        mem.cast("B"),  # cast memoryview
+        memoryview(np.asarray(view)),  # memoryview of an array
+    ]
+    assert not any(t.is_stale(d) for d in derived)
+    env.step(np.zeros((4, 1), dtype=np.int32))
+    assert all(t.is_stale(d) for d in derived)
+    # Copies own their data: their staleness cannot be tracked.
+    with pytest.raises(TypeError):
+        t.is_stale(s.observations["obs"].copy())
+    # A DLPack import is a raw alias NumPy does not link back to the view.
+    imported = np.from_dlpack(view)
+    with pytest.raises(TypeError):
+        t.is_stale(imported)
+
+
 def test_writable_buffer_requests_are_refused():
     env = cartpole()
     env.reset()
@@ -159,9 +190,24 @@ def test_torch_from_dlpack_is_zero_copy_and_reports_read_only_behaviour():
     env = cartpole(3)
     env.reset()
     view = env._native.outputs()["observations"][0]
+
+    class Probe:
+        """Records which DLPack path the pinned PyTorch takes."""
+
+        kwargs = None
+
+        def __dlpack__(self, **kwargs):
+            Probe.kwargs = kwargs
+            return view.__dlpack__(**kwargs)
+
+        def __dlpack_device__(self):
+            return view.__dlpack_device__()
+
     with warnings.catch_warnings():
         warnings.simplefilter("error")
-        tensor = torch.from_dlpack(view)
+        tensor = torch.from_dlpack(Probe())
+    # The versioned path (read-only flag set), not the legacy one.
+    assert Probe.kwargs.get("max_version", (0, 0)) >= (1, 0)
     assert tuple(tensor.shape) == (3, 1, 4) and tensor.dtype == torch.float32
     assert tensor.data_ptr() == np.asarray(view).__array_interface__["data"][0]
     # PyTorch 2.15 asks for DLPack 1.0 and accepts the read-only flag

@@ -75,23 +75,33 @@ pub(crate) fn new_view<'py>(
             format!("output {:?} does not match its layout", spec.field),
         ));
     }
+    let too_large = || {
+        pyo3::exceptions::PyBufferError::new_err(format!(
+            "output {:?} is too large to export",
+            spec.field
+        ))
+    };
     let shape: Box<[isize]> = spec
         .shape
         .iter()
-        .map(|&d| isize::try_from(d).unwrap_or(0))
-        .collect();
-    // Row-major strides, in bytes; their products fit, as the total size
-    // was checked above.
+        .map(|&d| isize::try_from(d).map_err(|_| too_large()))
+        .collect::<PyResult<_>>()?;
+    // Row-major strides, in bytes.
     let mut strides = vec![0isize; shape.len()];
-    let mut acc = isize::try_from(spec.elem.itemsize).ok();
+    let mut acc = isize::try_from(spec.elem.itemsize).map_err(|_| too_large())?;
     for (stride, &dim) in strides.iter_mut().zip(shape.iter()).rev() {
-        *stride = acc.unwrap_or(0);
-        acc = acc.and_then(|a| a.checked_mul(dim));
+        *stride = acc;
+        acc = acc.checked_mul(dim).ok_or_else(too_large)?;
     }
+    let bytes = bytes.ok_or_else(too_large)?;
+    // The buffer protocol describes sizes and dimensions as `Py_ssize_t`
+    // and `int`: refuse now what `getbuffer` could not describe.
+    isize::try_from(bytes).map_err(|_| too_large())?;
+    c_int::try_from(shape.len()).map_err(|_| too_large())?;
     let view = View {
         storage: Arc::clone(storage),
         data: region.ptr,
-        bytes: bytes.unwrap_or(0),
+        bytes,
         generation: storage.generation(),
         elem: spec.elem,
         shape,
@@ -141,19 +151,19 @@ pub(super) unsafe extern "C" fn getbuffer(
                 "borrowed outputs are read-only",
             ));
         }
+        let undescribable = || pyo3::exceptions::PyBufferError::new_err("view too large to export");
+        let len = isize::try_from(v.bytes).map_err(|_| undescribable())?;
+        let itemsize = isize::try_from(v.elem.itemsize).map_err(|_| undescribable())?;
+        let ndim = c_int::try_from(v.shape.len()).map_err(|_| undescribable())?;
         let nd = flags & ffi::PyBUF_ND == ffi::PyBUF_ND;
         let strided = flags & ffi::PyBUF_STRIDES == ffi::PyBUF_STRIDES;
         let buffer = ffi::Py_buffer {
             buf: v.data.cast_mut().cast(),
             obj: slf,
-            len: isize::try_from(v.bytes).unwrap_or(0),
-            itemsize: isize::try_from(v.elem.itemsize).unwrap_or(1),
+            len,
+            itemsize,
             readonly: 1,
-            ndim: if nd {
-                c_int::try_from(v.shape.len()).unwrap_or(0)
-            } else {
-                1
-            },
+            ndim: if nd { ndim } else { 1 },
             format: if flags & ffi::PyBUF_FORMAT != 0 {
                 v.elem.format.as_ptr().cast_mut()
             } else {
@@ -237,7 +247,9 @@ fn kwarg<'py>(
 
 /// `__dlpack__(*, stream=None, max_version=None, dl_device=None,
 /// copy=None)`: a capsule of the view, versioned and read-only when the
-/// consumer accepts DLPack 1.x, legacy otherwise.
+/// consumer accepts DLPack 1.x, legacy otherwise. A legacy capsule has no
+/// read-only flag: its consumer gets a writable alias, and writing through
+/// it corrupts the outputs until the next call overwrites them.
 pub(super) unsafe extern "C" fn dlpack(
     slf: *mut ffi::PyObject,
     args: *mut ffi::PyObject,
@@ -301,7 +313,7 @@ static METHODS: Table<[ffi::PyMethodDef; 5]> = Table([
     method_kw(
         c"__dlpack__",
         thunks::VIEW_DLPACK,
-        c"__dlpack__(*, stream=None, max_version=None, dl_device=None, copy=None)",
+        c"__dlpack__(*, stream=None, max_version=None, dl_device=None, copy=None): a read-only DLPack 1.0 capsule when max_version >= (1, 0); otherwise a legacy capsule, which cannot be marked read-only (writing through it corrupts the outputs until the next call).",
     ),
     method(
         c"__dlpack_device__",

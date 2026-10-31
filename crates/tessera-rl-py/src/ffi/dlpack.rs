@@ -134,23 +134,23 @@ pub(crate) struct Source<'a> {
     pub(crate) shape: &'a [isize],
 }
 
-fn tensor(src: &Source<'_>, keep: &Keep) -> DLTensor {
-    DLTensor {
+fn tensor(src: &Source<'_>, keep: &Keep) -> Option<DLTensor> {
+    Some(DLTensor {
         data: src.data.cast_mut().cast(),
         device: DLDevice {
             device_type: DL_CPU,
             device_id: 0,
         },
-        ndim: i32::try_from(keep.shape.len()).unwrap_or(0),
+        ndim: i32::try_from(keep.shape.len()).ok()?,
         dtype: DLDataType {
             code: src.dl_code,
-            bits: u8::try_from(src.itemsize.checked_mul(8).unwrap_or(0)).unwrap_or(0),
+            bits: u8::try_from(src.itemsize.checked_mul(8)?).ok()?,
             lanes: 1,
         },
         shape: keep.shape.cast::<i64>(),
         strides: keep.strides.cast::<i64>(),
         byte_offset: 0,
-    }
+    })
 }
 
 fn keep(src: &Source<'_>) -> Option<Keep> {
@@ -182,7 +182,7 @@ fn export(
 ) -> Option<(*mut c_void, &'static CStr)> {
     Some(if versioned {
         let keep = keep(src)?;
-        let dl_tensor = tensor(src, &keep);
+        let dl_tensor = tensor(src, &keep)?;
         let export = Box::into_raw(Box::new(Versioned {
             managed: DLManagedTensorVersioned {
                 version: DLPackVersion { major: 1, minor: 0 },
@@ -198,7 +198,7 @@ fn export(
         (export.cast(), VERSIONED)
     } else {
         let keep = keep(src)?;
-        let dl_tensor = tensor(src, &keep);
+        let dl_tensor = tensor(src, &keep)?;
         let export = Box::into_raw(Box::new(Legacy {
             managed: DLManagedTensor {
                 dl_tensor,
@@ -214,7 +214,9 @@ fn export(
 }
 
 /// A capsule exporting `src`: versioned (with the read-only flag when
-/// `read_only`) or legacy.
+/// `read_only`) or legacy. A legacy capsule cannot carry the flag, so its
+/// consumer gets a writable alias: writing through it corrupts the outputs
+/// until the next call overwrites them.
 pub(crate) fn capsule(
     py: Python<'_>,
     src: &Source<'_>,
