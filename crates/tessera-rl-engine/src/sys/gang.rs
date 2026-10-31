@@ -324,7 +324,10 @@ fn worker_main(shared: &Shared, worker: usize, core: Option<usize>, fail: bool, 
                 // current run reports a panic (published by the AcqRel
                 // decrement), so the pool is poisoned.
                 shared.panicked.store(true, Ordering::Relaxed);
-                decrement(shared, slot.waker.as_ref());
+                // The run's own caller, read from the job when the worker
+                // died before cloning it.
+                let waker = slot.waker.take().or_else(|| job_waker(shared));
+                decrement(shared, waker.as_ref());
             }
             return;
         }
@@ -342,11 +345,25 @@ struct Slot {
 fn decrement(shared: &Shared, waker: Option<&thread::Thread>) {
     // AcqRel: releases this worker's writes (and `panicked`) to the caller.
     if shared.pending.fetch_sub(1, Ordering::AcqRel) == 1 {
-        // Only a backstop that died before reading the job has no waker; it
-        // falls back to the creator, the usual caller. An unpark of the
-        // wrong thread is harmless.
+        // Every path passes the run's caller (`Job::waker`). `None` would
+        // need a `Thread` clone to fail twice; the creator is the last
+        // resort, and wakes the caller only if it did not move threads.
         waker.unwrap_or(&shared.creator).unpark();
     }
+}
+
+/// The caller of the current run, for a backstop that died before reading
+/// the job.
+#[expect(unsafe_code, reason = "audited module: job pointer")]
+fn job_waker(shared: &Shared) -> Option<thread::Thread> {
+    let job = shared.job.load(Ordering::Relaxed);
+    if job.is_null() {
+        return None;
+    }
+    // SAFETY: as in `run_job`: this worker observed the epoch increment
+    // with Acquire and has not decremented `pending` yet, so the caller
+    // keeps the `Job` alive.
+    Some(unsafe { &*job }.waker.clone())
 }
 
 #[expect(unsafe_code, reason = "audited module: job pointer and call")]
