@@ -19,5 +19,8 @@ tessera-rl-core.workspace = true
 tessera-rl-num.workspace = true
 tessera-rl-macros.workspace = true
 
+[dev-dependencies]
+tessera-rl-engine.workspace = true
+
 [lints]
 workspace = true

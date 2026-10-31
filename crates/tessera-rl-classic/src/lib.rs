@@ -3,3 +3,7 @@
 //! Classic environments for phase 1a: CartPole and Tag.
 //!
 //! Environment ids and versions follow SPEC section 16 and ADR-0023.
+
+pub mod cartpole;
+
+pub use cartpole::{CartPole, CartPoleConfig, CartPoleObs, CartPoleState};
