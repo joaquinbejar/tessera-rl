@@ -128,6 +128,17 @@ fn test_canonical_signed_zero_and_nan_payload_are_bit_exact() {
 }
 
 #[test]
+fn test_decode_allow_nan_accepts_nan_arrays() {
+    use tessera_rl_core::encoding::DecodeAllowNan;
+    let values = [1.0f32, f32::from_bits(0x7fc0_0123)];
+    let bytes = encode_to_vec(&values);
+    let mut input = Decoder::new(&bytes);
+    let got = <[f32; 2]>::decode_allow_nan(&mut input).unwrap();
+    assert_eq!(got.map(f32::to_bits), values.map(f32::to_bits));
+    assert!(decode_from_slice::<[f32; 2]>(&bytes).is_err());
+}
+
+#[test]
 fn test_decode_rejects_nan_without_allow_nan() {
     let bytes = encode_to_vec(&f32::from_bits(0x7fc0_0001));
     assert_eq!(
@@ -265,4 +276,65 @@ fn test_xxh3_64_matches_upstream_sanity_vectors() {
     assert_eq!(hash(6), 0x27B5_6A84_CD2D_7325);
     assert_eq!(hash(12), 0xA713_DAF0_DFBB_77E7);
     assert_eq!(hash(24), 0xA3FE_70BF_9D35_10EB);
+}
+
+mod config {
+    use tessera_rl_core::config::{
+        CONFIG_FORMAT_VERSION, CanonicalConfig, canonical_bytes, config_hash, write_entry,
+    };
+    use tessera_rl_core::encoding::{Encoder, Sink};
+
+    // What `#[derive(EnvConfig)]` will generate, keys sorted.
+    struct Cfg {
+        size: u16,
+        gravity: f64,
+        curriculum: u8,
+    }
+
+    impl CanonicalConfig for Cfg {
+        const ADAPTIVE_FIELDS: &'static [&'static str] = &["curriculum"];
+        const STATIC_ENTRIES: u16 = 2;
+
+        fn write_entries<S: Sink>(&self, out: &mut Encoder<S>) {
+            write_entry(out, "gravity", &self.gravity);
+            write_entry(out, "size", &self.size);
+        }
+    }
+
+    #[test]
+    fn test_config_canonical_form_layout() {
+        let cfg = Cfg {
+            size: 16,
+            gravity: 9.8,
+            curriculum: 3,
+        };
+        let bytes = canonical_bytes(&cfg);
+        let mut want = vec![CONFIG_FORMAT_VERSION];
+        want.extend(7u16.to_le_bytes());
+        want.extend(b"gravity");
+        want.push(10);
+        want.extend(9.8f64.to_bits().to_le_bytes());
+        want.extend(4u16.to_le_bytes());
+        want.extend(b"size");
+        want.push(2);
+        want.extend(16u16.to_le_bytes());
+        assert_eq!(bytes, want);
+    }
+
+    #[test]
+    fn test_config_hash_ignores_adaptive_and_tracks_static_fields() {
+        let a = Cfg {
+            size: 16,
+            gravity: 9.8,
+            curriculum: 3,
+        };
+        let b = Cfg { curriculum: 7, ..a };
+        let c = Cfg { size: 17, ..a };
+        let hash = |cfg: &Cfg| config_hash("tessera/Toy", 1, cfg).unwrap();
+        assert_ne!(a.curriculum, b.curriculum);
+        assert_eq!(hash(&a), hash(&b));
+        assert_ne!(hash(&a), hash(&c));
+        assert_ne!(hash(&a), config_hash("tessera/Toy", 2, &a).unwrap());
+        assert_ne!(hash(&a), config_hash("tessera/Other", 1, &a).unwrap());
+    }
 }

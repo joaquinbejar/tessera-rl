@@ -14,6 +14,11 @@ use crate::reserved::Reserved;
 
 /// A valid initial value. `#[derive(EnvState)]` implements it field by
 /// field, and `#[derive(StateEnum)]` returns the `#[default]` variant.
+#[diagnostic::on_unimplemented(
+    message = "`{Self}` has no state initial value",
+    label = "not a plain-data state type",
+    note = "use #[derive(StateEnum)] for enums and #[derive(EnvState)] for structs (ADR-0029)"
+)]
 pub trait StateInit: Sized {
     /// Returns the initial value.
     fn state_default() -> Self;

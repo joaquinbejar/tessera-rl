@@ -1,0 +1,5 @@
+error: StateEnum variants must be unit variants
+  --> tests/ui/fail/state_enum_data_variant.rs:10:5
+   |
+10 |     B(u8),
+   |     ^^^^^

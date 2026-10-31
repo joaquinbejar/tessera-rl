@@ -1,0 +1,5 @@
+error: duplicate `default`
+ --> tests/ui/fail/config_duplicate_key.rs:7:27
+  |
+7 |     #[config(default = 1, default = 2)]
+  |                           ^^^^^^^

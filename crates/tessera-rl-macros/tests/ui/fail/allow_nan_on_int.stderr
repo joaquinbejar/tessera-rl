@@ -1,0 +1,5 @@
+error: #[state(allow_nan)] applies only to f32, f64 and arrays of them
+ --> tests/ui/fail/allow_nan_on_int.rs:9:12
+  |
+9 |     count: i32,
+  |            ^^^

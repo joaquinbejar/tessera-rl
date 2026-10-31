@@ -1,0 +1,5 @@
+error: `bool` is not allowed in state; use `Bool8` (ADR-0029)
+ --> tests/ui/fail/bool_field.rs:8:11
+  |
+8 |     done: bool,
+  |           ^^^^

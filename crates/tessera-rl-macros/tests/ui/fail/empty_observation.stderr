@@ -1,0 +1,5 @@
+error: Observation requires at least one field
+ --> tests/ui/fail/empty_observation.rs:6:8
+  |
+6 | struct O {}
+  |        ^

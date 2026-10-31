@@ -1,0 +1,27 @@
+error[E0080]: evaluation panicked: Pool<T, CAP> has padding: CAP must be a multiple of align_of::<T>()
+ --> $RUST/core/src/panic.rs
+  |
+  = note: evaluation of `tessera_rl_core::Pool::<u32, 3>::LAYOUT_OK` failed here
+  |
+ ::: $WORKSPACE/crates/tessera-rl-core/src/pool.rs
+  |
+  |       const LAYOUT_OK: () = assert!(
+  |  ___________________________-
+  | |         size_of::<Self>() == CAP * size_of::<T>() + CAP,
+  | |         "Pool<T, CAP> has padding: CAP must be a multiple of align_of::<T>()"
+  | |     );
+  | |_____- in this macro invocation
+
+note: erroneous constant encountered
+ --> $WORKSPACE/crates/tessera-rl-core/src/pool.rs
+  |
+  |         let () = Self::LAYOUT_OK;
+  |                  ^^^^^^^^^^^^^^^
+
+note: erroneous constant encountered
+ --> tests/ui/fail/pool_padded.rs:6:10
+  |
+6 | #[derive(EnvState, Clone, Copy)]
+  |          ^^^^^^^^
+  |
+  = note: this note originates in the derive macro `EnvState` (in Nightly builds, run with -Z macro-backtrace for more info)

@@ -1,0 +1,5 @@
+error: heap types are not allowed in state; use `Pool<T, CAP>` or an array
+ --> tests/ui/fail/vec_field.rs:8:12
+  |
+8 |     items: Vec<u32>,
+  |            ^^^^^^^^
