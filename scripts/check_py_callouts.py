@@ -50,6 +50,14 @@ CALLOUT_ONLY = {
     "PyObject_GetItem", "PyObject_GetAttr", "PyObject_Str", "PyObject_Repr",
 }
 
+# Callouts that return a new GC-tracked object: it must be owned as a
+# container (`Mine::container`), whose decref is a callout.
+GC_ALLOCATORS = {
+    "c_list_new", "c_tuple_new", "c_dict_new", "c_type_from_spec", "c_module_create",
+    "c_err_new_exception",
+}
+LEAF_OWNED = re.compile(r"Mine::new\(\s*unsafe\s*\{\s*thunks::(\w+)\s*\(")
+
 HIGH_LEVEL = re.compile(r"pyo3::(types|prelude|sync|exceptions)\b|\bBound<|\.extract\s*::|\.extract\(|\bPyErr::|\bPython::")
 CALL = re.compile(r"\bffi::([A-Za-z_][A-Za-z0-9_]*)\s*\(")
 
@@ -64,6 +72,8 @@ def check(src: pathlib.Path) -> list[str]:
         rel = path.relative_to(src)
         code = strip_comments(path.read_text())
         if rel.as_posix() == "ffi/capi.rs":
+            for name in sorted(set(LEAF_OWNED.findall(code)) & GC_ALLOCATORS):
+                problems.append(f"{rel}: {name} returns a GC-tracked object: own it with Mine::container")
             # The one direct decref is the leaf branch of `Mine::drop`.
             if len(re.findall(r"\bffi::Py_DecRef\s*\(", code)) > 1:
                 problems.append(f"{rel}: Py_DecRef is called directly outside the leaf branch of Mine::drop")

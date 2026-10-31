@@ -239,7 +239,7 @@ pub(crate) fn new_exception(
     base: *mut ffi::PyObject,
 ) -> CResult<Mine> {
     // SAFETY: attached; static C strings and a live base type.
-    Mine::new(unsafe {
+    Mine::container(unsafe {
         thunks::c_err_new_exception(name.as_ptr(), doc.as_ptr(), base, ptr::null_mut())
     })
 }

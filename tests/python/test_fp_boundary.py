@@ -127,6 +127,9 @@ def test_fp_boundary_callout_lint_rejects_a_direct_call(tmp_path):
     capi.write_text(capi.read_text() + "\nfn sneaky() { unsafe { ffi::PyDict_New(); } }\n")
     bad = subprocess.run([sys.executable, str(lint), str(src)], capture_output=True, text=True)
     assert bad.returncode != 0 and "PyDict_New" in bad.stdout
+    capi.write_text(capi.read_text() + "\nfn sneaky() -> CResult<Mine> { Mine::new(unsafe { thunks::c_dict_new() }) }\n")
+    bad = subprocess.run([sys.executable, str(lint), str(src)], capture_output=True, text=True)
+    assert bad.returncode != 0 and "own it with Mine::container" in bad.stdout
 
 
 @pytest.mark.skipif(sys.version_info >= (3, 12), reason="from 3.12 gc never runs inside a native allocation")

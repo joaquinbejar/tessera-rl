@@ -77,9 +77,11 @@ py-test:
 # The ADR-0041 unwind tests against a wheel built with the `test-hooks`
 # feature (failure injection), then the default build again.
 py-test-hooks:
-	MATURIN_PEP517_ARGS="--features test-hooks" uv sync --locked --python 3.11 --reinstall-package tessera-rl
-	uv run --locked --python 3.11 pytest -q tests/python/test_fp_boundary.py
-	uv sync --locked --python 3.11 --reinstall-package tessera-rl
+	MATURIN_PEP517_ARGS="--features test-hooks" uv sync --locked --python 3.11 --reinstall-package tessera-rl; \
+	status=$$?; \
+	if [ $$status -eq 0 ]; then uv run --locked --python 3.11 pytest -q tests/python/test_fp_boundary.py; status=$$?; fi; \
+	uv sync --locked --python 3.11 --reinstall-package tessera-rl || status=1; \
+	exit $$status
 
 # The Python tests with PyTorch (marker `torch`), then the default
 # environment again.
