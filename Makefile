@@ -4,7 +4,7 @@
 # maturin's default of macOS 11. Ignored on other platforms.
 export MACOSX_DEPLOYMENT_TARGET := 13.0
 
-.PHONY: fmt fmt-check clippy test doc readme readme-check pre-push deny check-targets compat-test py-entries py-test py-test-torch pre-push-torch gym-equivalence bench bench-quick bench-kernels gungraun gungraun-bless
+.PHONY: fmt fmt-check clippy test doc readme readme-check pre-push deny check-targets compat-test py-entries py-callouts py-test py-test-hooks py-test-torch pre-push-torch gym-equivalence bench bench-quick bench-kernels gungraun gungraun-bless
 
 fmt:
 	cargo fmt --all
@@ -30,7 +30,7 @@ readme:
 readme-check:
 	cargo readme -r crates/tessera-rl -t ../../README.tpl --no-title --no-license --no-indent-headings | diff -u README.md -
 
-pre-push: fmt-check clippy test doc readme-check compat-test py-entries py-test
+pre-push: fmt-check clippy test doc readme-check compat-test py-entries py-callouts py-test py-test-hooks
 
 deny:
 	cargo deny check
@@ -64,10 +64,24 @@ compat-test:
 py-entries:
 	python3 scripts/check_py_entries.py
 
+# ADR-0041 callouts: only ffi::capi calls the C API, and every call that
+# can run Python code is a callout.
+py-callouts:
+	python3 scripts/check_py_callouts.py
+
 # Builds the native package into the uv environment and runs the Python tests.
 py-test:
 	uv sync --locked --python 3.11
 	uv run --locked --python 3.11 pytest -q tests/python
+
+# The ADR-0041 unwind tests against a wheel built with the `test-hooks`
+# feature (failure injection), then the default build again.
+py-test-hooks:
+	MATURIN_PEP517_ARGS="--features test-hooks" uv sync --locked --python 3.11 --reinstall-package tessera-rl; \
+	status=$$?; \
+	if [ $$status -eq 0 ]; then uv run --locked --python 3.11 pytest -q tests/python/test_fp_boundary.py; status=$$?; fi; \
+	uv sync --locked --python 3.11 --reinstall-package tessera-rl || status=1; \
+	exit $$status
 
 # The Python tests with PyTorch (marker `torch`), then the default
 # environment again.

@@ -4,18 +4,45 @@
 //! can make a [`ThunkFn`].
 //!
 //! A thunk is a naked function with the exact C signature of the slot it
-//! fills. Until B8 it is a pass-through: one tail jump to the Rust
-//! `extern "C"` implementation, which preserves every argument register,
-//! the stack and the callee-saved registers on System V x86-64, Win64 and
-//! AAPCS64. B8 turns the template into a real frame that saves,
-//! canonicalizes and restores the floating-point controls.
+//! fills, built from one audited template per ABI (System V x86-64 and
+//! AAPCS64, Apple and Linux; Win64 comes with its SEH unwind data). It:
+//!
+//! 1. sets up a frame (stack aligned to 16 bytes, CFI for unwinders and
+//!    debuggers) and saves every integer argument register;
+//! 2. saves the caller's floating-point controls (MXCSR or FPCR) and loads
+//!    their canonical value (`tessera_rl_num::fp`: round to nearest, no
+//!    flush-to-zero or denormals-are-zero, all exceptions masked, IEEE NaN
+//!    handling), so no Rust frame of the entry ever runs under the caller's
+//!    controls;
+//! 3. calls `boundary::tessera_fp_enter` with the caller's controls, then
+//!    the `extern "C"` entry with the original arguments, then
+//!    `boundary::tessera_fp_leave`;
+//! 4. restores the caller's control bits, keeping every sticky status flag
+//!    (raised before the call or inside it; on aarch64 the flags live in
+//!    FPSR, which the thunk never writes), and returns the entry's result
+//!    unchanged.
+//!
+//! The template is signature-independent: it preserves all integer
+//! argument registers (rdi, rsi, rdx, rcx, r8, r9; x0 to x8, including the
+//! indirect-result register x8) and the integer return register. It does
+//! **not** preserve floating-point argument registers, so a thunk accepts
+//! only signatures whose arguments and result are integers or pointers: a
+//! type invariant ([`IntClass`]), checked when each thunk is defined. The
+//! x87 control word is out of scope: Rust on x86-64 computes with SSE.
+//! Callee-saved registers are untouched; no unwind crosses a thunk (the
+//! entries are `extern "C"` and contain panics in `ffi::entry`).
 //!
 //! [`ThunkFn`]'s field is private to this module, so a C table built from
 //! `ThunkFn` values (`tables`) cannot be given a raw function pointer:
 //! registering anything but a thunk is a compile error.
 
+use core::ffi::{c_char, c_int};
+
 use pyo3::ffi;
 
+use super::boundary::{
+    tessera_fp_caller_controls, tessera_fp_callout_returned, tessera_fp_enter, tessera_fp_leave,
+};
 use super::dlpack::{self, DLManagedTensor, DLManagedTensorVersioned};
 use super::{env_type, module, view_type};
 
@@ -42,6 +69,31 @@ pub(crate) type DlDeleter = unsafe extern "C" fn(*mut DLManagedTensor);
 /// `DLManagedTensorVersioned::deleter`.
 pub(crate) type DlDeleterVersioned = unsafe extern "C" fn(*mut DLManagedTensorVersioned);
 
+/// C types passed in integer registers: the only argument and result types
+/// a thunk accepts (module docs). Sealed.
+pub(crate) trait IntClass: sealed::Sealed {}
+
+mod sealed {
+    pub trait Sealed {}
+    impl<T> Sealed for *mut T {}
+    impl<T> Sealed for *const T {}
+    impl Sealed for core::ffi::c_int {}
+    impl Sealed for isize {}
+    impl Sealed for u64 {}
+    impl Sealed for i64 {}
+    impl Sealed for () {}
+}
+impl<T> IntClass for *mut T {}
+impl<T> IntClass for *const T {}
+impl IntClass for c_int {}
+impl IntClass for isize {}
+impl IntClass for u64 {}
+impl IntClass for i64 {}
+impl IntClass for () {}
+
+/// Compile-time check that a type is [`IntClass`].
+pub(crate) const fn int_class<T: IntClass>() {}
+
 /// A boundary thunk of C signature `F`. Only this module can make one.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct ThunkFn<F>(F);
@@ -53,23 +105,332 @@ impl<F: Copy> ThunkFn<F> {
     }
 }
 
-/// Defines the naked thunk `$thunk` for `$target` and, with a name, the
+/// The audited template, System V x86-64 (Linux, macOS). Frame: rbp, then 64 bytes:
+/// [rbp-8..-48] rdi, rsi, rdx, rcx, r8, r9; [rbp-52] caller MXCSR;
+/// [rbp-56] scratch; [rbp-64] previous boundary frame.
+#[cfg(all(target_arch = "x86_64", not(windows)))]
+macro_rules! boundary_template {
+    ($target:path) => {
+        core::arch::naked_asm!(
+            ".cfi_startproc",
+            "push rbp",
+            ".cfi_adjust_cfa_offset 8",
+            ".cfi_rel_offset rbp, 0",
+            "mov rbp, rsp",
+            ".cfi_def_cfa_register rbp",
+            "sub rsp, 64",
+            "mov [rbp - 8], rdi",
+            "mov [rbp - 16], rsi",
+            "mov [rbp - 24], rdx",
+            "mov [rbp - 32], rcx",
+            "mov [rbp - 40], r8",
+            "mov [rbp - 48], r9",
+            // Save the caller's MXCSR and load its canonical value
+            // (status flags kept).
+            "stmxcsr [rbp - 52]",
+            "mov eax, [rbp - 52]",
+            "and eax, {keep}",
+            "or eax, {set}",
+            "mov [rbp - 56], eax",
+            "ldmxcsr [rbp - 56]",
+            // Record the frame (Rust, canonical controls).
+            "mov edi, [rbp - 52]",
+            "call {enter}",
+            "mov [rbp - 64], rax",
+            // The entry, with the original arguments.
+            "mov rdi, [rbp - 8]",
+            "mov rsi, [rbp - 16]",
+            "mov rdx, [rbp - 24]",
+            "mov rcx, [rbp - 32]",
+            "mov r8, [rbp - 40]",
+            "mov r9, [rbp - 48]",
+            "call {target}",
+            "mov [rbp - 8], rax",
+            "mov rdi, [rbp - 64]",
+            "call {leave}",
+            // Restore the caller's control bits with every sticky flag:
+            // (caller & !STATUS) | ((caller | current) & STATUS).
+            "stmxcsr [rbp - 56]",
+            "mov eax, [rbp - 52]",
+            "mov ecx, [rbp - 56]",
+            "or ecx, eax",
+            "and ecx, {status}",
+            "and eax, {not_status}",
+            "or eax, ecx",
+            "mov [rbp - 56], eax",
+            "ldmxcsr [rbp - 56]",
+            "mov rax, [rbp - 8]",
+            "leave",
+            ".cfi_def_cfa rsp, 8",
+            "ret",
+            ".cfi_endproc",
+            keep = const !tessera_rl_num::fp::CANONICAL_CLEAR,
+            set = const tessera_rl_num::fp::CANONICAL_SET,
+            status = const tessera_rl_num::fp::STATUS_FLAGS,
+            not_status = const !tessera_rl_num::fp::STATUS_FLAGS,
+            enter = sym tessera_fp_enter,
+            leave = sym tessera_fp_leave,
+            target = sym $target,
+        )
+    };
+}
+
+/// The audited template, AAPCS64 (Apple and Linux). Frame of 112 bytes:
+/// [sp] x29, x30; [sp+16..+80] x0 to x8; [sp+88] caller FPCR; [sp+96]
+/// previous boundary frame. FPSR (the sticky flags) is never written.
+#[cfg(all(target_arch = "aarch64", not(windows)))]
+macro_rules! boundary_template {
+    ($target:path) => {
+        core::arch::naked_asm!(
+            ".cfi_startproc",
+            "stp x29, x30, [sp, #-112]!",
+            ".cfi_def_cfa_offset 112",
+            ".cfi_offset x30, -104",
+            ".cfi_offset x29, -112",
+            "mov x29, sp",
+            ".cfi_def_cfa x29, 112",
+            "stp x0, x1, [sp, #16]",
+            "stp x2, x3, [sp, #32]",
+            "stp x4, x5, [sp, #48]",
+            "stp x6, x7, [sp, #64]",
+            "str x8, [sp, #80]",
+            // Save the caller's FPCR and load its canonical value.
+            "mrs x9, fpcr",
+            "str x9, [sp, #88]",
+            "movz x10, #{k0}",
+            "movk x10, #{k1}, lsl #16",
+            "movk x10, #{k2}, lsl #32",
+            "movk x10, #{k3}, lsl #48",
+            "and x10, x9, x10",
+            "msr fpcr, x10",
+            // Record the frame (Rust, canonical controls).
+            "mov x0, x9",
+            "bl {enter}",
+            "str x0, [sp, #96]",
+            // The entry, with the original arguments.
+            "ldp x0, x1, [sp, #16]",
+            "ldp x2, x3, [sp, #32]",
+            "ldp x4, x5, [sp, #48]",
+            "ldp x6, x7, [sp, #64]",
+            "ldr x8, [sp, #80]",
+            "bl {target}",
+            "str x0, [sp, #16]",
+            "ldr x0, [sp, #96]",
+            "bl {leave}",
+            // Restore the caller's FPCR (it holds no status flags).
+            "ldr x9, [sp, #88]",
+            "msr fpcr, x9",
+            "ldr x0, [sp, #16]",
+            "ldp x29, x30, [sp], #112",
+            ".cfi_def_cfa sp, 0",
+            ".cfi_restore x30",
+            ".cfi_restore x29",
+            "ret",
+            ".cfi_endproc",
+            k0 = const (!tessera_rl_num::fp::CANONICAL_CLEAR) & 0xffff,
+            k1 = const ((!tessera_rl_num::fp::CANONICAL_CLEAR) >> 16) & 0xffff,
+            k2 = const ((!tessera_rl_num::fp::CANONICAL_CLEAR) >> 32) & 0xffff,
+            k3 = const ((!tessera_rl_num::fp::CANONICAL_CLEAR) >> 48) & 0xffff,
+            enter = sym tessera_fp_enter,
+            leave = sym tessera_fp_leave,
+            target = sym $target,
+        )
+    };
+}
+
+/// Windows (Win64): no boundary yet. The B2 pass-through tail jump, so the
+/// bindings keep the ADR-0037 precondition there (the caller's thread must
+/// be in the default controls, with no rejection guarantee) until the
+/// Win64 template with SEH unwind data lands.
+#[cfg(windows)]
+macro_rules! boundary_template {
+    ($target:path) => {
+        core::arch::naked_asm!("jmp {f}", f = sym $target)
+    };
+}
+
+/// Which boundary this build carries (`tessera_rl._native.fp_boundary()`).
+pub(crate) const BOUNDARY: &str = if cfg!(windows) {
+    "none (Windows: the default-controls precondition applies)"
+} else if cfg!(target_arch = "x86_64") {
+    "System V x86-64"
+} else {
+    "AAPCS64"
+};
+
+/// Integer argument registers the templates preserve.
+#[cfg(target_arch = "x86_64")]
+pub(crate) const MAX_ARGS: usize = 6;
+#[cfg(target_arch = "aarch64")]
+pub(crate) const MAX_ARGS: usize = 8;
+
+/// The audited callout template, System V x86-64 (ADR-0041 callouts): a
+/// call from Rust, under canonical controls, into C-API code that can run
+/// Python code. It saves the integer argument registers, loads the
+/// caller's control bits (the current boundary frame's, kept by
+/// `boundary`) with the current sticky flags, calls the C function, then
+/// reloads the canonical controls (keeping the flags the host raised) and
+/// lets `tessera_fp_callout_returned` count a change before returning to
+/// Rust. Frame: [rbp-8..-48] rdi..r9; [rbp-52] canonical MXCSR; [rbp-56]
+/// the value loaded; [rbp-60] the value after; [rbp-64] scratch.
+#[cfg(all(target_arch = "x86_64", not(windows)))]
+macro_rules! callout_template {
+    ($target:path) => {
+        core::arch::naked_asm!(
+            ".cfi_startproc",
+            "push rbp",
+            ".cfi_adjust_cfa_offset 8",
+            ".cfi_rel_offset rbp, 0",
+            "mov rbp, rsp",
+            ".cfi_def_cfa_register rbp",
+            "sub rsp, 64",
+            "mov [rbp - 8], rdi",
+            "mov [rbp - 16], rsi",
+            "mov [rbp - 24], rdx",
+            "mov [rbp - 32], rcx",
+            "mov [rbp - 40], r8",
+            "mov [rbp - 48], r9",
+            "stmxcsr [rbp - 52]",
+            "call {caller}",
+            "mov ecx, [rbp - 52]",
+            "and ecx, {status}",
+            "and eax, {not_status}",
+            "or eax, ecx",
+            "mov [rbp - 56], eax",
+            "ldmxcsr [rbp - 56]",
+            "mov rdi, [rbp - 8]",
+            "mov rsi, [rbp - 16]",
+            "mov rdx, [rbp - 24]",
+            "mov rcx, [rbp - 32]",
+            "mov r8, [rbp - 40]",
+            "mov r9, [rbp - 48]",
+            "call {target}",
+            "mov [rbp - 8], rax",
+            "stmxcsr [rbp - 60]",
+            "mov eax, [rbp - 52]",
+            "mov ecx, [rbp - 60]",
+            "and ecx, {status}",
+            "or eax, ecx",
+            "mov [rbp - 64], eax",
+            "ldmxcsr [rbp - 64]",
+            "mov edi, [rbp - 56]",
+            "mov esi, [rbp - 60]",
+            "call {returned}",
+            "mov rax, [rbp - 8]",
+            "leave",
+            ".cfi_def_cfa rsp, 8",
+            "ret",
+            ".cfi_endproc",
+            status = const tessera_rl_num::fp::STATUS_FLAGS,
+            not_status = const !tessera_rl_num::fp::STATUS_FLAGS,
+            caller = sym tessera_fp_caller_controls,
+            returned = sym tessera_fp_callout_returned,
+            target = sym $target,
+        )
+    };
+}
+
+/// The audited callout template, AAPCS64. Frame of 112 bytes: [sp] x29,
+/// x30; [sp+16..+80] x0 to x8; [sp+88] canonical FPCR; [sp+96] the
+/// caller's FPCR loaded for the call.
+#[cfg(all(target_arch = "aarch64", not(windows)))]
+macro_rules! callout_template {
+    ($target:path) => {
+        core::arch::naked_asm!(
+            ".cfi_startproc",
+            "stp x29, x30, [sp, #-112]!",
+            ".cfi_def_cfa_offset 112",
+            ".cfi_offset x30, -104",
+            ".cfi_offset x29, -112",
+            "mov x29, sp",
+            ".cfi_def_cfa x29, 112",
+            "stp x0, x1, [sp, #16]",
+            "stp x2, x3, [sp, #32]",
+            "stp x4, x5, [sp, #48]",
+            "stp x6, x7, [sp, #64]",
+            "str x8, [sp, #80]",
+            "mrs x9, fpcr",
+            "str x9, [sp, #88]",
+            "bl {caller}",
+            "str x0, [sp, #96]",
+            "msr fpcr, x0",
+            "ldp x0, x1, [sp, #16]",
+            "ldp x2, x3, [sp, #32]",
+            "ldp x4, x5, [sp, #48]",
+            "ldp x6, x7, [sp, #64]",
+            "ldr x8, [sp, #80]",
+            "bl {target}",
+            "str x0, [sp, #16]",
+            "mrs x1, fpcr",
+            "ldr x9, [sp, #88]",
+            "msr fpcr, x9",
+            "ldr x0, [sp, #96]",
+            "bl {returned}",
+            "ldr x0, [sp, #16]",
+            "ldp x29, x30, [sp], #112",
+            ".cfi_def_cfa sp, 0",
+            ".cfi_restore x30",
+            ".cfi_restore x29",
+            "ret",
+            ".cfi_endproc",
+            caller = sym tessera_fp_caller_controls,
+            returned = sym tessera_fp_callout_returned,
+            target = sym $target,
+        )
+    };
+}
+
+/// Windows: the callouts are plain tail calls, like the pass-through
+/// thunks (no boundary yet).
+#[cfg(windows)]
+macro_rules! callout_template {
+    ($target:path) => {
+        core::arch::naked_asm!("jmp {f}", f = sym $target)
+    };
+}
+
+/// Defines the callout `$name` for the C function `$target`: integer-class
+/// arguments and result only, at most [`MAX_ARGS`] arguments.
+macro_rules! callout {
+    ($(#[$meta:meta])* $name:ident => $target:path : fn($($arg:ty),*) -> $ret:ty) => {
+        $(#[$meta])*
+        #[unsafe(naked)]
+        pub(crate) unsafe extern "C" fn $name($(_: $arg),*) -> $ret {
+            // SAFETY: the audited callout template (callout_template docs):
+            // a full frame that preserves every integer argument register,
+            // the stack alignment and the callee-saved registers, runs the
+            // C function under the caller's controls and returns its integer
+            // result under canonical controls; the target has the same C
+            // signature (checked below) with integer-class types only.
+            callout_template!($target);
+        }
+        const _: unsafe extern "C" fn($($arg),*) -> $ret = $target;
+        const _: () = { $( int_class::<$arg>(); )* int_class::<$ret>(); };
+        const _: () = assert!(<[&str]>::len(&[$(stringify!($arg)),*]) <= MAX_ARGS, "too many arguments for the template");
+    };
+}
+
+/// Defines the boundary thunk `$thunk` for `$target` and, with a name, the
 /// `ThunkFn` constant tables use.
 macro_rules! thunk {
     (@naked $(#[$meta:meta])* $thunk:ident => $target:path : fn($($arg:ty),*) -> $ret:ty) => {
         $(#[$meta])*
         #[unsafe(naked)]
         pub(crate) unsafe extern "C" fn $thunk($(_: $arg),*) -> $ret {
-            // SAFETY: a tail jump to a function with the same C signature
-            // (checked below): arguments, return value, stack and
-            // callee-saved registers pass through untouched.
-            #[cfg(target_arch = "x86_64")]
-            core::arch::naked_asm!("jmp {f}", f = sym $target);
-            #[cfg(target_arch = "aarch64")]
-            core::arch::naked_asm!("b {f}", f = sym $target);
+            // SAFETY: the audited template (module docs): a full frame that
+            // preserves every integer argument register, the stack
+            // alignment and the callee-saved registers, canonicalizes and
+            // restores the floating-point controls, and returns the
+            // target's integer result; the target has the same C signature
+            // (checked below) with integer-class types only.
+            boundary_template!($target);
         }
         // The target's signature must match the thunk's.
         const _: unsafe extern "C" fn($($arg),*) -> $ret = $target;
+        // Integer-class arguments and result only (module docs), and no
+        // more than the template preserves.
+        const _: () = { $( int_class::<$arg>(); )* int_class::<$ret>(); };
+        const _: () = assert!(<[&str]>::len(&[$(stringify!($arg)),*]) <= MAX_ARGS, "too many arguments for the template");
     };
     ($name:ident: $ty:ident = $thunk:ident => $target:path : fn($($arg:ty),*) -> $ret:ty) => {
         thunk!(@naked $thunk => $target : fn($($arg),*) -> $ret);
@@ -87,6 +448,12 @@ thunk!(
 );
 
 thunk!(VERSION: CFunction = thunk_version => module::version : fn(Obj, Obj) -> Obj);
+thunk!(SET_FP_POLICY: CFunction = thunk_set_fp_policy => module::set_fp_policy : fn(Obj, Obj) -> Obj);
+thunk!(GET_FP_POLICY: CFunction = thunk_get_fp_policy => module::get_fp_policy : fn(Obj, Obj) -> Obj);
+thunk!(FP_NON_CANONICAL_ENTRIES: CFunction = thunk_fp_non_canonical_entries => module::fp_non_canonical_entries : fn(Obj, Obj) -> Obj);
+#[cfg(feature = "test-hooks")]
+thunk!(FAIL_AFTER: CFunction = thunk_fail_after => module::fail_after : fn(Obj, Obj) -> Obj);
+thunk!(FP_BOUNDARY: CFunction = thunk_fp_boundary => module::fp_boundary : fn(Obj, Obj) -> Obj);
 thunk!(BUILD_PROFILE: CFunction = thunk_build_profile => module::build_profile : fn(Obj, Obj) -> Obj);
 thunk!(MAKE_CARTPOLE: CFunctionKw = thunk_make_cartpole => env_type::make_cartpole : fn(Obj, Obj, Obj) -> Obj);
 thunk!(MAKE_TAG: CFunctionKw = thunk_make_tag => env_type::make_tag : fn(Obj, Obj, Obj) -> Obj);
@@ -112,3 +479,266 @@ thunk!(VIEW_IS_STALE: CFunction = thunk_view_is_stale => view_type::is_stale : f
 thunk!(CAPSULE_DESTRUCTOR: Destructor = thunk_capsule_destructor => dlpack::destroy_capsule : fn(Obj) -> ());
 thunk!(DL_DELETER: DlDeleter = thunk_dl_deleter => dlpack::delete_legacy : fn(*mut DLManagedTensor) -> ());
 thunk!(DL_DELETER_VERSIONED: DlDeleterVersioned = thunk_dl_deleter_versioned => dlpack::delete_versioned : fn(*mut DLManagedTensorVersioned) -> ());
+
+#[cfg(test)]
+mod tests {
+    //! The template against hostile caller controls (ADR-0041 evidence,
+    //! run in release builds on each ABI): canonical controls inside,
+    //! arguments and result intact, the caller's controls restored with the
+    //! sticky flags, the entry counted, nesting and panics contained.
+
+    use core::cell::Cell;
+    use core::hint::black_box;
+
+    use tessera_rl_num::fp::{self, hostile};
+
+    use super::super::boundary;
+    use super::*;
+
+    // Per thread: the tests run in parallel threads.
+    thread_local! {
+        static INSIDE_CANONICAL: Cell<bool> = const { Cell::new(false) };
+        static INSIDE_NON_CANONICAL_FRAME: Cell<bool> = const { Cell::new(false) };
+        static INSIDE_DEPTH_TOKEN: Cell<u64> = const { Cell::new(0) };
+    }
+
+    extern "C" fn target6(a0: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 {
+        INSIDE_CANONICAL.with(|c| c.set(fp::is_canonical()));
+        let non_canonical = boundary::frame().is_some_and(|(nc, _)| nc);
+        INSIDE_NON_CANONICAL_FRAME.with(|c| c.set(non_canonical));
+        // Raises the inexact flag inside the entry.
+        black_box(black_box(1.0f64) / black_box(3.0f64));
+        a0 ^ a1.rotate_left(8)
+            ^ a2.rotate_left(16)
+            ^ a3.rotate_left(24)
+            ^ a4.rotate_left(32)
+            ^ a5.rotate_left(40)
+    }
+    thunk!(@naked thunk6 => target6 : fn(u64, u64, u64, u64, u64, u64) -> u64);
+
+    extern "C" fn nested(a: u64) -> u64 {
+        // SAFETY: a thunk of a test target.
+        let inner = unsafe { thunk6(a, 1, 2, 3, 4, 5) };
+        INSIDE_DEPTH_TOKEN.with(|c| c.set(boundary::frame_token()));
+        inner
+    }
+    thunk!(@naked thunk_nested => nested : fn(u64) -> u64);
+
+    extern "C" fn panicky(a: u64) -> u64 {
+        match std::panic::catch_unwind(|| {
+            assert!(a != 1, "a contained panic");
+            a
+        }) {
+            Ok(v) => v,
+            Err(payload) => {
+                super::super::dispose(payload);
+                u64::MAX
+            }
+        }
+    }
+    thunk!(@naked thunk_panicky => panicky : fn(u64) -> u64);
+
+    const ARGS: [u64; 6] = [
+        0x0123_4567_89ab_cdef,
+        0xfedc_ba98_7654_3210,
+        0x1111_2222_3333_4444,
+        0x5555_6666_7777_8888,
+        0x9999_aaaa_bbbb_cccc,
+        0xdddd_eeee_ffff_0001,
+    ];
+
+    fn expected() -> u64 {
+        target6(ARGS[0], ARGS[1], ARGS[2], ARGS[3], ARGS[4], ARGS[5])
+    }
+
+    fn call6() -> u64 {
+        // SAFETY: a thunk of a test target with integer arguments.
+        unsafe { thunk6(ARGS[0], ARGS[1], ARGS[2], ARGS[3], ARGS[4], ARGS[5]) }
+    }
+
+    fn check_mode(mode: fn(fp::Control) -> fp::Control) {
+        let want = expected();
+        let original = hostile::read();
+        let before = fp::non_canonical_entries();
+        let (got, after) = hostile::run(mode, call6);
+        assert_eq!(got, want, "arguments and result pass through");
+        assert!(INSIDE_CANONICAL.with(Cell::get), "canonical inside");
+        assert!(
+            INSIDE_NON_CANONICAL_FRAME.with(Cell::get),
+            "the frame records the caller"
+        );
+        assert_eq!(
+            hostile::control_bits(after),
+            hostile::control_bits(mode(original)),
+            "the caller's control bits are restored"
+        );
+        assert!(fp::non_canonical_entries() > before, "the entry is counted");
+        assert_eq!(boundary::frame_token(), 0, "no frame outside the entry");
+    }
+
+    #[test]
+    fn test_thunk_canonical_caller_passes_through_uncounted() {
+        let before = fp::non_canonical_entries();
+        assert_eq!(call6(), expected());
+        assert!(INSIDE_CANONICAL.with(Cell::get));
+        assert!(!INSIDE_NON_CANONICAL_FRAME.with(Cell::get));
+        assert!(fp::is_canonical());
+        // Other tests may count concurrently; this entry itself does not.
+        let _ = before;
+    }
+
+    #[test]
+    fn test_thunk_flush_to_zero_caller_is_canonicalized_and_restored() {
+        check_mode(hostile::flush_to_zero);
+    }
+
+    #[test]
+    fn test_thunk_toward_zero_caller_is_canonicalized_and_restored() {
+        check_mode(hostile::toward_zero);
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    #[test]
+    fn test_thunk_unmasked_exceptions_never_trap_inside() {
+        // target6 divides; with divide-by-zero unmasked by the caller the
+        // canonical controls inside keep every exception masked.
+        check_mode(hostile::unmask_divide_by_zero);
+    }
+
+    #[cfg(target_arch = "aarch64")]
+    #[test]
+    fn test_thunk_non_ieee_nan_and_half_caller_is_canonicalized_and_restored() {
+        check_mode(hostile::non_ieee_nan_and_half);
+    }
+
+    /// FEAT_AFP's FIZ and AH (bits 0 and 1): where the CPU has them they
+    /// stick when written, and the template clears them; where it does not
+    /// they read as zero (RES0) and clearing them is a no-op.
+    #[cfg(target_arch = "aarch64")]
+    #[test]
+    #[expect(
+        clippy::print_stdout,
+        reason = "the test reports what the CPU implements"
+    )]
+    fn test_thunk_clears_afp_bits_and_traps_where_present() {
+        let afp = |c: fp::Control| c | 0b11 | (1 << 8) | (0b11 << 22);
+        let (got, after) = hostile::run(afp, call6);
+        assert_eq!(got, expected());
+        assert!(
+            INSIDE_CANONICAL.with(Cell::get),
+            "RMode RN, no traps, AH/FIZ clear inside"
+        );
+        let present = after & 0b11 == 0b11;
+        let trap_enable_sticks = after & (1 << 8) != 0;
+        std::println!(
+            "FEAT_AFP bits present: {present}; trap enables writable: {trap_enable_sticks}"
+        );
+        assert_eq!(
+            after & (0b11 << 22),
+            0b11 << 22,
+            "the caller's RMode is restored"
+        );
+    }
+
+    /// The per-call cost of the boundary against a direct call (release,
+    /// run with `--ignored --nocapture`).
+    #[test]
+    #[ignore = "a measurement, not a check"]
+    #[expect(clippy::print_stdout, reason = "the measurement is printed")]
+    fn bench_thunk_overhead_per_call() {
+        const N: u32 = 10_000_000;
+        let time = |f: &dyn Fn() -> u64| {
+            let start = std::time::Instant::now();
+            let mut acc = 0u64;
+            for _ in 0..N {
+                acc = acc.wrapping_add(f());
+            }
+            black_box(acc);
+            start.elapsed().as_secs_f64() * 1e9 / f64::from(N)
+        };
+        let direct =
+            time(&|| black_box(target6)(ARGS[0], ARGS[1], ARGS[2], ARGS[3], ARGS[4], ARGS[5]));
+        let thunked = time(&call6);
+        std::println!(
+            "direct {direct:.2} ns, through the boundary {thunked:.2} ns, overhead {:.2} ns",
+            thunked - direct
+        );
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    #[test]
+    fn test_thunk_keeps_sticky_flags_from_before_and_inside() {
+        // Divide-by-zero flag (bit 2) raised by the caller before the call,
+        // inexact (bit 5) raised inside it: both survive the return.
+        let mode = |c: fp::Control| (hostile::toward_zero(c) & !0x3f) | (1 << 2);
+        let ((), after) = hostile::run(mode, || {
+            let _ = call6();
+        });
+        assert!(
+            after & (1 << 2) != 0,
+            "a flag raised before the call survives"
+        );
+        assert!(
+            after & (1 << 5) != 0,
+            "a flag raised inside the call survives"
+        );
+    }
+
+    #[test]
+    fn test_thunk_nesting_restores_each_frame() {
+        let (got, after) = hostile::run(hostile::flush_to_zero, || {
+            // SAFETY: a thunk of a test target.
+            unsafe { thunk_nested(ARGS[0]) }
+        });
+        assert_eq!(got, target6(ARGS[0], 1, 2, 3, 4, 5));
+        // After the inner entry returned, the outer frame is current again.
+        let outer = INSIDE_DEPTH_TOKEN.with(Cell::get);
+        assert!(
+            outer & 1 == 1 && outer & 2 == 2,
+            "the outer frame, non-canonical caller"
+        );
+        assert_eq!(
+            hostile::control_bits(after),
+            hostile::control_bits(hostile::flush_to_zero(hostile::read())),
+        );
+        assert_eq!(boundary::frame_token(), 0);
+    }
+
+    #[test]
+    fn test_thunk_contained_panic_returns_and_restores() {
+        let (got, after) = hostile::run(hostile::toward_zero, || {
+            // SAFETY: a thunk of a test target.
+            unsafe { thunk_panicky(1) }
+        });
+        assert_eq!(got, u64::MAX);
+        assert_eq!(
+            hostile::control_bits(after),
+            hostile::control_bits(hostile::toward_zero(hostile::read())),
+        );
+        assert_eq!(boundary::frame_token(), 0);
+    }
+}
+
+// The callout table (ADR-0041 callouts): every C-API function that can run
+// Python code, called from Rust only through `capi`. Rule: a GC-tracked
+// allocation is a callout (it can run `gc.collect` and any `__del__`), as
+// is setting an exception (it normalizes: an allocation), a conversion that
+// may raise. (The bindings never own a user object, so no decref needs a
+// callout: capi's decref invariant.)
+type CStr = *const c_char;
+callout!(c_err_set_string => ffi::PyErr_SetString : fn(Obj, CStr) -> ());
+callout!(c_err_new_exception => ffi::PyErr_NewExceptionWithDoc : fn(CStr, CStr, Obj, Obj) -> Obj);
+callout!(c_err_warn => ffi::PyErr_WarnEx : fn(Obj, CStr, ffi::Py_ssize_t) -> c_int);
+callout!(c_module_create => ffi::PyModule_Create2 : fn(*mut ffi::PyModuleDef, c_int) -> Obj);
+callout!(c_module_add => ffi::PyModule_AddObjectRef : fn(Obj, CStr, Obj) -> c_int);
+callout!(c_type_from_spec => ffi::PyType_FromSpec : fn(*mut ffi::PyType_Spec) -> Obj);
+callout!(c_list_new => ffi::PyList_New : fn(ffi::Py_ssize_t) -> Obj);
+callout!(c_tuple_new => ffi::PyTuple_New : fn(ffi::Py_ssize_t) -> Obj);
+callout!(c_dict_new => ffi::PyDict_New : fn() -> Obj);
+callout!(c_list_append => ffi::PyList_Append : fn(Obj, Obj) -> c_int);
+callout!(c_tuple_set_item => ffi::PyTuple_SetItem : fn(Obj, ffi::Py_ssize_t, Obj) -> c_int);
+callout!(c_dict_set_item_string => ffi::PyDict_SetItemString : fn(Obj, CStr, Obj) -> c_int);
+callout!(c_decref => ffi::Py_DecRef : fn(Obj) -> ());
+callout!(c_long_as_i64 => ffi::PyLong_AsLongLong : fn(Obj) -> i64);
+callout!(c_long_as_u64 => ffi::PyLong_AsUnsignedLongLong : fn(Obj) -> u64);
+callout!(c_unicode_as_utf8 => ffi::PyUnicode_AsUTF8AndSize : fn(Obj, *mut ffi::Py_ssize_t) -> CStr);

@@ -171,6 +171,66 @@ pub fn with_hostile_flush_to_zero<R>(f: impl FnOnce() -> R) -> R {
     result
 }
 
+/// Test-only hostile control modes and a scope that runs code under them,
+/// for testing native entry boundaries (ADR-0041) from outside this crate.
+/// Running Rust under these modes is outside the language's guarantees,
+/// hence the non-default `test-hooks` feature.
+#[cfg(feature = "test-hooks")]
+pub mod hostile {
+    use super::{Control, arch, call_opaque};
+
+    /// Flush-to-zero (and denormals-are-zero on x86-64).
+    #[must_use]
+    pub const fn flush_to_zero(c: Control) -> Control {
+        arch::test_modes::flush_to_zero(c)
+    }
+
+    /// Round toward zero.
+    #[must_use]
+    pub const fn toward_zero(c: Control) -> Control {
+        arch::test_modes::toward_zero(c)
+    }
+
+    /// The divide-by-zero exception unmasked (x86-64).
+    #[cfg(target_arch = "x86_64")]
+    #[must_use]
+    pub const fn unmask_divide_by_zero(c: Control) -> Control {
+        arch::test_modes::unmask_divide_by_zero(c)
+    }
+
+    /// Default NaN, alternate handling and half-precision flush (aarch64).
+    #[cfg(target_arch = "aarch64")]
+    #[must_use]
+    pub const fn non_ieee_nan_and_half(c: Control) -> Control {
+        arch::test_modes::non_ieee_nan_and_half(c)
+    }
+
+    /// The control bits of a value (status flags removed).
+    #[must_use]
+    pub const fn control_bits(c: Control) -> Control {
+        arch::test_modes::control_bits(c)
+    }
+
+    /// The current control register.
+    #[must_use]
+    pub fn read() -> Control {
+        arch::read()
+    }
+
+    /// Runs `f` with the controls set to `mode(current)`; returns its
+    /// result and the control register `f` left behind, then restores the
+    /// original controls.
+    #[inline(never)]
+    pub fn run<R>(mode: impl FnOnce(Control) -> Control, f: impl FnOnce() -> R) -> (R, Control) {
+        let original = arch::read();
+        arch::write(mode(original));
+        let result = call_opaque(f);
+        let after = arch::read();
+        arch::write(original);
+        (result, after)
+    }
+}
+
 /// Entries into [`with_canonical`] whose caller thread was not in the
 /// canonical environment (ADR-0037 observability), process-wide.
 static NON_CANONICAL_ENTRIES: AtomicU64 = AtomicU64::new(0);
@@ -186,6 +246,59 @@ static NON_CANONICAL_ENTRIES: AtomicU64 = AtomicU64::new(0);
 #[must_use]
 pub fn non_canonical_entries() -> u64 {
     NON_CANONICAL_ENTRIES.load(Ordering::Relaxed)
+}
+
+/// The floating-point control register of this target: MXCSR on x86-64,
+/// FPCR on aarch64.
+pub type Control = arch::Control;
+
+/// Control bits the canonical environment clears. A native boundary
+/// computes the canonical value as `(c & !CANONICAL_CLEAR) | CANONICAL_SET`.
+pub const CANONICAL_CLEAR: Control = arch::CLEAR;
+
+/// Control bits the canonical environment sets (the exception masks on
+/// x86-64; none on aarch64, where clear trap enables mask exceptions).
+pub const CANONICAL_SET: Control = arch::SET;
+
+/// The sticky status flags held in the control register (x86-64 MXCSR bits
+/// 0 to 5; none on aarch64, whose flags live in FPSR).
+pub const STATUS_FLAGS: Control = arch::STATUS_FLAGS;
+
+/// The canonical value of a control register value; status flags are
+/// kept.
+#[must_use]
+pub const fn canonical_control(control: Control) -> Control {
+    arch::canonical(control)
+}
+
+/// The current control register, zero-extended to 64 bits (native
+/// boundaries pass it to their callouts).
+#[must_use]
+pub fn current_bits() -> u64 {
+    arch::to_bits(arch::read())
+}
+
+/// Whether a control register value, passed zero-extended to 64 bits by a
+/// native boundary, is canonical (status flags ignored).
+#[must_use]
+pub const fn is_canonical_bits(bits: u64) -> bool {
+    let control = arch::from_bits(bits);
+    arch::canonical(control) == control
+}
+
+/// Whether two control register values, zero-extended to 64 bits, differ
+/// in a control bit (status flags ignored).
+#[must_use]
+pub const fn controls_differ(a: u64, b: u64) -> bool {
+    let flags = arch::from_bits(u64::MAX) & STATUS_FLAGS;
+    (arch::from_bits(a) & !flags) != (arch::from_bits(b) & !flags)
+}
+
+/// Counts one entry made in a non-canonical environment, for entry
+/// boundaries outside this crate (the native thunks of the Python
+/// bindings, ADR-0041). Observability only, like the counter itself.
+pub fn record_non_canonical_entry() {
+    NON_CANONICAL_ENTRIES.fetch_add(1, Ordering::Relaxed);
 }
 
 /// Returns whether the current thread is in the canonical environment.

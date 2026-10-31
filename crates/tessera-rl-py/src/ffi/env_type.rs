@@ -7,17 +7,16 @@
 
 use core::ffi::c_int;
 use core::ptr;
+use core::sync::atomic::{AtomicPtr, Ordering};
 
 use pyo3::ffi;
-use pyo3::prelude::*;
-use pyo3::sync::PyOnceLock;
-use pyo3::types::{PyDict, PyTuple, PyType};
 
+use super::capi::{self, CResult, Gil, Mine, Ref};
 use super::inner::Inner;
 use super::tables::{
     method, method_end, method_kw, slot_dealloc, slot_doc, slot_end, slot_methods,
 };
-use super::{Table, dispose, entry, free_heap_object, thunks};
+use super::{Table, dispose, entry, thunks};
 use crate::api;
 
 /// The C layout of an `Env` object.
@@ -28,24 +27,26 @@ struct EnvObject {
     inner: *mut Inner,
 }
 
-static TYPE: PyOnceLock<Py<PyType>> = PyOnceLock::new();
+/// The `Env` type, set at module initialization (a borrowed reference: the
+/// module keeps it alive).
+static TYPE: AtomicPtr<ffi::PyObject> = AtomicPtr::new(ptr::null_mut());
 
 /// Wraps `inner` in a new `Env` object.
-fn new_object(py: Python<'_>, inner: Inner) -> PyResult<*mut ffi::PyObject> {
-    let ty = TYPE
-        .get(py)
-        .ok_or_else(|| pyo3::exceptions::PyRuntimeError::new_err("Env type not initialized"))?;
-    let ty_ptr = ty.as_ptr().cast::<ffi::PyTypeObject>();
-    // SAFETY: attached; `ty_ptr` is our heap type, whose basic size is
-    // `EnvObject`. PyType_GenericAlloc zero-fills and takes a reference to
-    // the heap type, as instances of heap types require.
-    let obj = unsafe { ffi::PyType_GenericAlloc(ty_ptr, 0) };
-    if obj.is_null() {
-        return Err(PyErr::fetch(py));
+fn new_object(g: Gil, inner: Inner) -> CResult<Mine> {
+    let ty = TYPE.load(Ordering::Acquire);
+    if ty.is_null() {
+        return Err(capi::raise(
+            g,
+            capi::runtime_error(),
+            "Env type not initialized",
+        ));
     }
+    // SAFETY: our heap type (not GC-tracked), whose basic size is
+    // `EnvObject`.
+    let obj = unsafe { capi::alloc_instance(g, ty) }?;
     let raw = Box::into_raw(Box::new(inner));
     // SAFETY: `obj` is a fresh, zeroed `EnvObject` nobody else sees yet.
-    unsafe { (*obj.cast::<EnvObject>()).inner = raw };
+    unsafe { (*obj.as_ref().as_ptr().cast::<EnvObject>()).inner = raw };
     Ok(obj)
 }
 
@@ -56,45 +57,46 @@ fn new_object(py: Python<'_>, inner: Inner) -> PyResult<*mut ffi::PyObject> {
 /// `slf` must be `self` of an `Env` method, passed by CPython while
 /// attached. Only `&Inner` is handed out: exclusive access to the pool goes
 /// through the guard in `Inner`.
-unsafe fn inner<'a>(slf: *mut ffi::PyObject) -> PyResult<&'a Inner> {
+unsafe fn inner<'a>(g: Gil, slf: *mut ffi::PyObject) -> CResult<&'a Inner> {
     // SAFETY: per the contract, `slf` is an `EnvObject`.
     let raw = unsafe { (*slf.cast::<EnvObject>()).inner };
     // SAFETY: a non-null `inner` is the live Box made in `new_object`,
     // freed only in `dealloc`, which runs after the last reference.
     unsafe { raw.as_ref() }
-        .ok_or_else(|| pyo3::exceptions::PyRuntimeError::new_err("Env object not initialized"))
+        .ok_or_else(|| capi::raise(g, capi::runtime_error(), "Env object not initialized"))
 }
 
-/// A method without arguments, calling `$api(py, &Inner)`.
+/// A method without arguments, calling `$api(g, &Inner)`.
 macro_rules! noargs {
     ($impl_fn:ident, $api:path) => {
         pub(super) unsafe extern "C" fn $impl_fn(
             slf: *mut ffi::PyObject,
             _args: *mut ffi::PyObject,
         ) -> *mut ffi::PyObject {
-            entry(|py| {
+            entry(|g| {
                 // SAFETY: CPython passes `self` of an `Env` method.
-                let inner = unsafe { inner(slf) }?;
-                Ok($api(py, inner)?.into_ptr())
+                let inner = unsafe { inner(g, slf) }?;
+                $api(g, inner)
             })
         }
     };
 }
 
-/// A method with positional arguments, calling `$api(py, &Inner, args)`.
+/// A method with positional arguments, calling `$api(g, &Inner, args)`.
 macro_rules! varargs {
     ($impl_fn:ident, $api:path) => {
         pub(super) unsafe extern "C" fn $impl_fn(
             slf: *mut ffi::PyObject,
             args: *mut ffi::PyObject,
         ) -> *mut ffi::PyObject {
-            entry(|py| {
+            entry(|g| {
                 // SAFETY: CPython passes `self` of an `Env` method.
-                let inner = unsafe { inner(slf) }?;
-                // SAFETY: METH_VARARGS passes a borrowed tuple.
-                let args = unsafe { Bound::from_borrowed_ptr(py, args) };
-                let args = args.cast::<PyTuple>().map_err(PyErr::from)?;
-                Ok($api(py, inner, args)?.into_ptr())
+                let inner = unsafe { inner(g, slf) }?;
+                // SAFETY: METH_VARARGS passes a borrowed tuple, alive for
+                // the call.
+                let args = unsafe { Ref::from_ptr(args) }
+                    .ok_or_else(|| capi::raise(g, capi::type_error(), "missing arguments"))?;
+                $api(g, inner, args)
             })
         }
     };
@@ -176,17 +178,17 @@ pub(super) unsafe extern "C" fn dealloc(obj: *mut ffi::PyObject) {
         // by this object; no entry can run on an object being deallocated.
         let boxed = unsafe { Box::from_raw(raw) };
         // SAFETY: CPython calls tp_dealloc attached.
-        let py = unsafe { Python::assume_attached() };
+        let g = unsafe { Gil::assume() };
         // Dropping a pool joins its workers: detached. A panic is
         // contained and its payload disposed of without unwinding.
         if let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            py.detach(move || drop(boxed));
+            g.detach(move || drop(boxed));
         })) {
             dispose(payload);
         }
     }
     // SAFETY: `obj` is a live `Env` instance, in its tp_dealloc.
-    unsafe { free_heap_object(obj) };
+    unsafe { capi::free_instance(obj) };
 }
 
 static SLOTS: Table<[ffi::PyType_Slot; 4]> = Table([
@@ -197,22 +199,19 @@ static SLOTS: Table<[ffi::PyType_Slot; 4]> = Table([
 ]);
 
 /// Creates the `Env` type and adds it to `module`.
-pub(super) fn register(py: Python<'_>, module: &Bound<'_, pyo3::types::PyModule>) -> PyResult<()> {
+pub(super) fn register(g: Gil, module: Ref<'_>) -> CResult<()> {
     let mut spec = ffi::PyType_Spec {
         name: c"tessera_rl._native.Env".as_ptr(),
         basicsize: c_int::try_from(core::mem::size_of::<EnvObject>()).unwrap_or(c_int::MAX),
         itemsize: 0,
+        // Not GC-tracked (no Py_TPFLAGS_HAVE_GC): instances hold no Python
+        // objects, and allocating one never runs `gc.collect` (capi).
         flags: core::ffi::c_uint::try_from(ffi::Py_TPFLAGS_DEFAULT).unwrap_or(0),
         slots: SLOTS.0.as_ptr().cast_mut(),
     };
-    // SAFETY: attached; the spec lives through the call, its slot table is
-    // static, and CPython copies what it keeps.
-    let raw = unsafe { ffi::PyType_FromSpec(&raw mut spec) };
-    // SAFETY: `raw` is a new reference or null with an exception set.
-    let ty = unsafe { Bound::from_owned_ptr_or_err(py, raw) }?;
-    let ty = ty.cast_into::<PyType>().map_err(PyErr::from)?;
-    module.add("Env", &ty)?;
-    let _ = TYPE.set(py, ty.unbind());
+    let ty = capi::type_from_spec(g, &mut spec)?;
+    capi::module_add(g, module, c"Env", &ty)?;
+    TYPE.store(ty.as_ref().as_ptr(), Ordering::Release);
     Ok(())
 }
 
@@ -224,17 +223,12 @@ macro_rules! maker {
             _args: *mut ffi::PyObject,
             kwargs: *mut ffi::PyObject,
         ) -> *mut ffi::PyObject {
-            entry(|py| {
+            entry(|g| {
                 // SAFETY: METH_VARARGS | METH_KEYWORDS passes a borrowed dict
-                // or null.
-                let kwargs = unsafe { Bound::from_borrowed_ptr_or_opt(py, kwargs) };
-                let kwargs = kwargs
-                    .as_ref()
-                    .map(|k| k.cast::<PyDict>())
-                    .transpose()
-                    .map_err(PyErr::from)?;
-                let inner = $api(py, kwargs)?;
-                new_object(py, inner)
+                // or null, alive for the call.
+                let kwargs = unsafe { Ref::from_ptr(kwargs) };
+                let inner = $api(g, kwargs)?;
+                new_object(g, inner)
             })
         }
     };
