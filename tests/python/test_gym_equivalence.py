@@ -45,6 +45,9 @@ def test_equivalence_one_step_matches_gymnasium(sampled, mode):
     assert report["terminations_by_x"] > 0 and report["terminations_by_theta"] > 0
     assert report["near_threshold"] > 0, "the boundary set must reach the thresholds"
     if mode == "same_step":
+        # Honest scope: these were checked through float32 only.
+        assert report["compared_through_terminal_obs"] > 0
+    if mode == "same_step":
         assert report["compared_through_terminal_obs"] == report["reference_terminations"]
     for key in ("state", "obs", "reward", "terminated", "truncated"):
         assert report[key] == 0, (key, report)
@@ -68,7 +71,7 @@ def test_equivalence_short_trajectories_are_reported(sampled):
 def test_equivalence_boundary_states_land_on_the_thresholds(sampled):
     states, actions, ref, thresholds = sampled
     edge = ref[N:]
-    assert len(edge) == 2 * 2 * 20 * 5  # axes x signs x bases x offsets
+    assert len(edge) == 2 * 2 * 20 * len(eq.OFFSETS)  # axes x signs x bases x offsets
     on = sum(abs(abs(n[0]) - thresholds[0]) == 0 or abs(abs(n[2]) - thresholds[1]) == 0 for n, *_ in edge)
     assert on == 2 * 2 * 20  # the zero-offset targets land exactly
 
@@ -78,3 +81,30 @@ def test_equivalence_truncation_matches_time_limit():
     print("truncation", report)
     assert report["mismatches"] == 0
     assert report["compared_steps"] == report["episodes"] * report["limit"]
+
+
+def test_equivalence_gate_detects_a_dropped_negative_x_termination(sampled):
+    # codex R-PR23: a mutation that deletes only `x < -x_threshold` must
+    # fail the gate. Equivalently, a reference with that condition removed
+    # must disagree with Tessera on the boundary set.
+    states, actions, ref, thresholds = sampled
+    x_thr, theta_thr = thresholds
+    mutated = [
+        (n, o, r, bool(n[0] > x_thr or n[2] < -theta_thr or n[2] > theta_thr), tr)
+        for n, o, r, _, tr in ref
+    ]
+    report = eq.compare(eq.one_step(states, actions, "next_step"), mutated, thresholds)
+    assert report["terminated"] > 0, report
+
+
+def test_equivalence_time_limit_fixtures_match_gymnasium():
+    report = eq.time_limit_fixtures()
+    print("time limit fixtures", report)
+    assert len(report["mismatches"]) == 9
+    # The fixtures exercise what they claim: (terminated, truncated) at the end.
+    for mode in ("next_step", "same_step", "disabled"):
+        flags = report["reference_end_flags"]
+        assert flags[f"{mode}/truncate"] == (False, True)
+        assert flags[f"{mode}/terminate_at_horizon"] == (True, True)
+        assert flags[f"{mode}/terminate_before"] == (True, False)
+    assert all(v == 0 for v in report["mismatches"].values()), report

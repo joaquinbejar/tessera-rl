@@ -21,8 +21,11 @@ The gated set adds deterministic boundary states whose reference next
 terminations are reported by cause.
 
 It runs in each auto-reset mode. In ``same_step`` an ended instance is
-reset in the same call, so its next state is compared through the
-terminal observation (the step output of ADR-0039) instead.
+reset in the same call, so its f64 next state is gone: those cases
+(``compared_through_terminal_obs`` in the report) are checked only through
+the float32 terminal observation (the step output of ADR-0039), within one
+float32 ulp of the reference's; their f64 next state is the same as in
+``next_step`` and ``disabled``, where it is gated.
 
 Secondary check, short trajectories: episodes of 50 steps from injected
 initial states with replayed actions, reported with the observed
@@ -81,10 +84,16 @@ def sample(n: int, seed: int):
     return np.array(states), np.array(actions, dtype=np.int32)
 
 
+#: Boundary offsets from a threshold, away from zero when positive: ulps
+#: (ints) and absolute distances just outside the 1e-9 band (floats).
+OFFSETS = (-4, -1, 0, 1, 4, -2e-9, 2e-9)
+
+
 def boundary_states(states, actions, per_axis: int = 20):
     """Deterministic threshold cases (TESSERA-REVIEWER R-PR23): states whose
     reference next ``x`` or ``theta`` lands exactly on a termination
-    threshold, or 1 or 4 ulps either side, on both signs. Built from sampled
+    threshold, 1 or 4 ulps either side, or 2e-9 either side (outside the
+    exclusion band, so gated exactly), on both signs. Built from sampled
     states by solving the (Euler) update one step back and nudging the
     component until Gymnasium's step lands on the target bit for bit."""
     env = gymnasium.make("CartPole-v1").unwrapped
@@ -95,10 +104,14 @@ def boundary_states(states, actions, per_axis: int = 20):
         for sign in (1.0, -1.0):
             for k in range(per_axis):
                 base, action = states[k].copy(), int(actions[k])
-                for ulps_off in (-4, -1, 0, 1, 4):
+                for offset in OFFSETS:
                     target = sign * threshold
-                    for _ in range(abs(ulps_off)):
-                        target = np.nextafter(target, np.inf if ulps_off * sign > 0 else -np.inf)
+                    if isinstance(offset, float):
+                        # Just outside the 1e-9 exclusion band: gated exactly.
+                        target = sign * (threshold + offset)
+                    else:
+                        for _ in range(abs(offset)):
+                            target = np.nextafter(target, np.inf if offset * sign > 0 else -np.inf)
                     cand = base.copy()
                     cand[axis] = target - env.tau * cand[rate]
                     for _ in range(200):
@@ -211,6 +224,7 @@ def compare(ours, ref, thresholds):
         "terminations_by_x": 0,
         "terminations_by_theta": 0,
         "compared_through_terminal_obs": 0,
+        "terminal_obs_check": "float32, within 1 float32 ulp (no f64 state after a same_step reset)",
     }
     x_thr, theta_thr = thresholds
     for (n_ours, o_ours, r_ours, t_ours, tr_ours), (n_ref, o_ref, r_ref, t_ref, tr_ref) in zip(ours, ref, strict=True):
@@ -331,6 +345,90 @@ def truncation(seeds=range(10), limit: int = 500):
     return {"episodes": len(list(seeds)), "limit": limit, "compared_steps": compared, "mismatches": mismatches}
 
 
+def time_limit_fixtures():
+    """Small differential fixtures against Gymnasium's ``TimeLimit`` in a
+    ``SyncVectorEnv``, in each auto-reset mode, from the same injected start
+    state with the same action plan: ``truncate`` (the horizon is reached
+    upright), ``terminate_at_horizon`` (the natural end falls on the
+    horizon: both flags), ``terminate_before`` (an end before the horizon).
+    Flags and rewards must match at every step up to and including the end,
+    and the step after it (``next_step``); in ``same_step`` the
+    ``final_obs`` masks must match and the values be within one float32 ulp.
+    Returns the mismatches per mode and case."""
+    from gymnasium.envs.classic_control import CartPoleEnv
+    from gymnasium.vector import AutoresetMode, SyncVectorEnv
+    from gymnasium.wrappers import TimeLimit
+
+    import tessera_rl.gym as tg
+
+    start = np.array([0.01, 0.0, 0.02, 0.0])
+    # The all-ones plan ends naturally at step `natural` (found on Gymnasium).
+    probe = CartPoleEnv()
+    probe.reset(seed=0)
+    probe.state = start.copy()
+    natural = 0
+    while True:
+        natural += 1
+        if probe.step(1)[2]:
+            break
+    probe.close()
+
+    def balance_plan(n):
+        env = CartPoleEnv()
+        env.reset(seed=0)
+        env.state = start.copy()
+        plan = []
+        o = np.array(start, dtype=np.float32)
+        for _ in range(n):
+            a = int(o[2] + 0.25 * o[3] + 0.05 * o[0] + 0.1 * o[1] > 0)
+            plan.append(a)
+            o = env.step(a)[0]
+        env.close()
+        return plan
+
+    cases = {
+        "truncate": (40, balance_plan(41)),
+        "terminate_at_horizon": (natural, [1] * (natural + 1)),
+        "terminate_before": (natural + 5, [1] * (natural + 1)),
+    }
+    result, end_flags = {}, {}
+    for mode in (AutoresetMode.NEXT_STEP, AutoresetMode.SAME_STEP, AutoresetMode.DISABLED):
+        for name, (limit, plan) in cases.items():
+            ref = SyncVectorEnv([lambda limit=limit: TimeLimit(CartPoleEnv(), limit)], autoreset_mode=mode)
+            ours = tg.make("tessera/CartPole-v1", num_envs=1, seed=0, autoreset_mode=mode, max_episode_steps=limit)
+            ref.reset(seed=0)
+            ref.envs[0].unwrapped.state = start.copy()
+            ours.reset(seed=0)
+            native = ours._native
+            native.import_record(0, native.snapshot(0)[: -STATE.size] + STATE.pack(*start))
+            mismatches = 0
+            ended = False
+            for a in plan:
+                _, rr, rt, rtr, ri = ref.step(np.array([a]))
+                _, orr, ot, otr, oi = ours.step(np.array([a]))
+                if (float(rr[0]), bool(rt[0]), bool(rtr[0])) != (float(orr[0]), bool(ot[0]), bool(otr[0])):
+                    mismatches += 1
+                if mode is AutoresetMode.SAME_STEP:
+                    rmask = ri.get("_final_obs", np.zeros(1, bool))
+                    omask = oi.get("_final_obs", np.zeros(1, bool))
+                    if not np.array_equal(rmask, omask):
+                        mismatches += 1
+                    elif rmask[0]:
+                        rf = np.asarray(ri["final_obs"][0], dtype=np.float32)
+                        of = np.asarray(oi["final_obs"][0], dtype=np.float32)
+                        if not np.all(np.abs(rf - of) <= np.spacing(np.abs(rf))):
+                            mismatches += 1
+                if (rt[0] or rtr[0]) and not ended:
+                    end_flags[f"{mode.name.lower()}/{name}"] = (bool(rt[0]), bool(rtr[0]))
+                if ended or mode is not AutoresetMode.NEXT_STEP and (rt[0] or rtr[0]):
+                    break
+                ended = bool(rt[0] or rtr[0])
+            ref.close()
+            ours.close()
+            result[f"{mode.name.lower()}/{name}"] = mismatches
+    return {"horizon_natural_end": natural, "reference_end_flags": end_flags, "mismatches": result}
+
+
 def run(n: int = 100_000, seed: int = 2026) -> dict:
     states, actions = gate_set(n, seed)
     ref, thresholds = reference(states, actions)
@@ -342,6 +440,7 @@ def run(n: int = 100_000, seed: int = 2026) -> dict:
         "one_step": {mode: compare(one_step(states, actions, mode), ref, thresholds) for mode in MODES},
         "trajectories": trajectories(states[:n]),
         "truncation": truncation(),
+        "time_limit_fixtures": time_limit_fixtures(),
     }
     return report
 
@@ -349,7 +448,8 @@ def run(n: int = 100_000, seed: int = 2026) -> dict:
 def gate_passes(report: dict) -> bool:
     keys = ("state", "obs", "reward", "terminated", "truncated")
     one_step = all(all(r[k] == 0 for k in keys) for r in report["one_step"].values())
-    return one_step and report["truncation"]["mismatches"] == 0
+    fixtures = all(v == 0 for v in report["time_limit_fixtures"]["mismatches"].values())
+    return one_step and fixtures and report["truncation"]["mismatches"] == 0
 
 
 if __name__ == "__main__":
