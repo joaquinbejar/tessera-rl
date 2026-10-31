@@ -82,6 +82,10 @@ pub struct CountConfig {
     /// Agent 1 reports its death again in the step after it died.
     #[config(default = false)]
     pub die_twice: bool,
+    /// Ignore the RNG: no step bonus and no observation noise (a negative
+    /// control for tests that need the environment to use its streams).
+    #[config(default = false)]
+    pub ignore_rng: bool,
     /// Agent slots alive at each reset (the engine checks `1..=2`).
     #[config(default = 2)]
     pub initial_agents: u32,
@@ -161,7 +165,12 @@ impl Environment for Counter {
                 }
                 continue;
             }
-            let bonus = i32::from(rng.next_u32().is_multiple_of(2));
+            let draw = rng.next_u32();
+            let bonus = if cfg.ignore_rng {
+                0
+            } else {
+                i32::from(draw.is_multiple_of(2))
+            };
             let inc = actions.discrete(agent, 0).unwrap_or(0) + bonus;
             if let Some(v) = state.value.get_mut(agent.index()) {
                 *v += inc;
@@ -205,13 +214,18 @@ impl Environment for Counter {
     }
 
     fn observe(
-        _: &CountConfig,
+        cfg: &CountConfig,
         state: &Counts,
         agent: AgentSlot,
         rng: &mut ObsRng,
         out: &mut ObsWriter<'_, '_, CountObs>,
     ) {
-        let noise = i32::from(rng.next_u32().is_multiple_of(2));
+        let draw = rng.next_u32();
+        let noise = if cfg.ignore_rng {
+            0
+        } else {
+            i32::from(draw.is_multiple_of(2))
+        };
         if let Some(mut leaf) = out.leaf_mut(CountObs::VALUES) {
             let own = state.value.get(agent.index()).copied().unwrap_or(0);
             leaf.set(0, own);
