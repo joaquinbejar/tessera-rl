@@ -13,7 +13,12 @@ compared:
 - observation (float32): exact;
 - reward and terminated: exact, except when the reference next state lies
   within 1e-9 of a termination threshold (counted, not gated);
-- truncated: always false here (no time limit in a single step).
+- truncated: always false here (no time limit in a single step); time
+  limits are checked separately against Gymnasium's ``TimeLimit``.
+
+The gated set adds deterministic boundary states whose reference next
+``x`` or ``theta`` lands on a threshold or 1 or 4 ulps either side;
+terminations are reported by cause.
 
 It runs in each auto-reset mode. In ``same_step`` an ended instance is
 reset in the same call, so its next state is compared through the
@@ -36,7 +41,7 @@ import gymnasium
 import numpy as np
 
 import tessera_rl
-from tessera_rl import _native
+import tessera_rl.gym  # noqa: F401 (registers tessera/CartPole-v1)
 
 MODES = ("next_step", "same_step", "disabled")
 STATE = struct.Struct("<4d")
@@ -74,6 +79,47 @@ def sample(n: int, seed: int):
             env.reset(seed=seed + episode)
     env.close()
     return np.array(states), np.array(actions, dtype=np.int32)
+
+
+def boundary_states(states, actions, per_axis: int = 20):
+    """Deterministic threshold cases (TESSERA-REVIEWER R-PR23): states whose
+    reference next ``x`` or ``theta`` lands exactly on a termination
+    threshold, or 1 or 4 ulps either side, on both signs. Built from sampled
+    states by solving the (Euler) update one step back and nudging the
+    component until Gymnasium's step lands on the target bit for bit."""
+    env = gymnasium.make("CartPole-v1").unwrapped
+    env.reset(seed=0)
+    out_states, out_actions = [], []
+    for axis, threshold in ((0, env.x_threshold), (2, env.theta_threshold_radians)):
+        rate = axis + 1  # x_dot for x, theta_dot for theta
+        for sign in (1.0, -1.0):
+            for k in range(per_axis):
+                base, action = states[k].copy(), int(actions[k])
+                for ulps_off in (-4, -1, 0, 1, 4):
+                    target = sign * threshold
+                    for _ in range(abs(ulps_off)):
+                        target = np.nextafter(target, np.inf if ulps_off * sign > 0 else -np.inf)
+                    cand = base.copy()
+                    cand[axis] = target - env.tau * cand[rate]
+                    for _ in range(200):
+                        env.state = cand.copy()
+                        env.steps_beyond_terminated = None
+                        env.step(action)
+                        got = env.state[axis]
+                        if got == target:
+                            out_states.append(cand.copy())
+                            out_actions.append(action)
+                            break
+                        cand[axis] = np.nextafter(cand[axis], np.inf if got < target else -np.inf)
+    env.close()
+    return np.array(out_states), np.array(out_actions, dtype=np.int32)
+
+
+def gate_set(n: int, seed: int):
+    """The gated states: ``n`` rollout samples plus the boundary set."""
+    states, actions = sample(n, seed)
+    edge_states, edge_actions = boundary_states(states, actions)
+    return np.concatenate([states, edge_states]), np.concatenate([actions, edge_actions])
 
 
 def reference(states, actions):
@@ -159,14 +205,20 @@ def compare(ours, ref, thresholds):
         "terminated": 0,
         "truncated": 0,
         "near_threshold": 0,
+        "near_threshold_terminated_agree": 0,
         "max_ulps": 0,
         "reference_terminations": 0,
+        "terminations_by_x": 0,
+        "terminations_by_theta": 0,
         "compared_through_terminal_obs": 0,
     }
+    x_thr, theta_thr = thresholds
     for (n_ours, o_ours, r_ours, t_ours, tr_ours), (n_ref, o_ref, r_ref, t_ref, tr_ref) in zip(ours, ref, strict=True):
         near = near_threshold(n_ref, thresholds)
         report["near_threshold"] += int(near)
         report["reference_terminations"] += int(t_ref)
+        report["terminations_by_x"] += int(t_ref and abs(n_ref[0]) > x_thr)
+        report["terminations_by_theta"] += int(t_ref and abs(n_ref[2]) > theta_thr)
         report["compared_through_terminal_obs"] += int(n_ours is None)
         if n_ours is not None:
             for a, b in zip(n_ours, n_ref, strict=True):
@@ -174,11 +226,19 @@ def compare(ours, ref, thresholds):
                 if not close(float(a), float(b)):
                     report["state"] += 1
                     break
-        if not np.array_equal(o_ours, o_ref):
+        # The observation is the float32 of the accepted next state: of ours
+        # where we have it (so a rounding-boundary state within the state
+        # tolerance cannot fail it spuriously), else within one float32 ulp
+        # of the reference's (same_step terminal observations).
+        if n_ours is not None:
+            if not np.array_equal(o_ours, np.asarray(n_ours, dtype=np.float32)):
+                report["obs"] += 1
+        elif not np.all(np.abs(o_ours - o_ref) <= np.spacing(np.abs(o_ref).astype(np.float32))):
             report["obs"] += 1
         if tr_ours != tr_ref:
             report["truncated"] += 1
         if near:
+            report["near_threshold_terminated_agree"] += int(t_ours == t_ref)
             continue
         if r_ours != r_ref:
             report["reward"] += 1
@@ -234,22 +294,62 @@ def trajectories(states, episodes: int = 1000, length: int = 50, seed: int = 7):
     return {"episodes": episodes, "length": length, "compared_steps": compared, "max_ulps": max_ulps_seen, "max_relative": max_rel, "flag_mismatches": flag_mismatch}
 
 
+def truncation(seeds=range(10), limit: int = 500):
+    """Truncation against Gymnasium's TimeLimit: a balancing controller on
+    each side from the same seeded reset; both must truncate exactly at
+    ``limit`` and never terminate."""
+
+    def balance(o):
+        return int(o[2] + 0.25 * o[3] + 0.05 * o[0] + 0.1 * o[1] > 0)
+
+    mismatches, compared = 0, 0
+    for seed in seeds:
+        ref = gymnasium.make("CartPole-v1", max_episode_steps=limit)
+        ours = gymnasium.make("tessera/CartPole-v1", max_episode_steps=limit)
+        native = tessera_rl.make(
+            "tessera/CartPole-v1", num_envs=1, seed=seed, outputs="owned", auto_reset="next_step", max_episode_steps=limit
+        )
+        ro, _ = ref.reset(seed=seed)
+        oo, _ = ours.reset(seed=seed)
+        ns = native.reset()
+        no = ns.observations["obs"][0, 0]
+        for k in range(1, limit + 2):
+            ro, _, rt, rtr, _ = ref.step(balance(ro))
+            oo, _, ot, otr, _ = ours.step(balance(oo))
+            ns = native.step(np.array([[balance(no)]]))
+            no = ns.observations["obs"][0, 0]
+            nt, ntr = bool(ns.episode_terminated[0]), bool(ns.episode_truncated[0])
+            compared += 1
+            expect = k == limit
+            if (rt, rtr) != (False, expect) or (ot, otr) != (False, expect) or (nt, ntr) != (False, expect):
+                mismatches += 1
+            if expect:
+                break
+        ref.close()
+        ours.close()
+        native.close()
+    return {"episodes": len(list(seeds)), "limit": limit, "compared_steps": compared, "mismatches": mismatches}
+
+
 def run(n: int = 100_000, seed: int = 2026) -> dict:
-    states, actions = sample(n, seed)
+    states, actions = gate_set(n, seed)
     ref, thresholds = reference(states, actions)
     report = {
         "gymnasium": gymnasium.__version__,
         "tessera_rl": tessera_rl.__version__,
+        "boundary_states": len(states) - n,
         "seed": seed,
         "one_step": {mode: compare(one_step(states, actions, mode), ref, thresholds) for mode in MODES},
-        "trajectories": trajectories(states),
+        "trajectories": trajectories(states[:n]),
+        "truncation": truncation(),
     }
     return report
 
 
 def gate_passes(report: dict) -> bool:
     keys = ("state", "obs", "reward", "terminated", "truncated")
-    return all(all(r[k] == 0 for k in keys) for r in report["one_step"].values())
+    one_step = all(all(r[k] == 0 for k in keys) for r in report["one_step"].values())
+    return one_step and report["truncation"]["mismatches"] == 0
 
 
 if __name__ == "__main__":
