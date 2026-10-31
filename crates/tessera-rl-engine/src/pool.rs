@@ -52,6 +52,35 @@ pub enum Reseed<'a> {
     Base(Seed),
     /// The k-th reset instance gets `seeds[k]`.
     List(&'a [Seed]),
+    /// The k-th reset instance gets `seeds[k]`, or keeps its seed (its
+    /// episode index advances, as with `Keep`) where `seeds[k]` is `None`:
+    /// Gymnasium's per-environment `None`, in one call (SPEC 8.1). The
+    /// whole request (ids, seed count, the episode counters of the kept
+    /// instances) is validated before anything is written; on an error no
+    /// instance or output changes.
+    Each(&'a [Option<Seed>]),
+}
+
+impl Reseed<'_> {
+    /// The seed of the k-th reset instance; `None` keeps its seed.
+    fn seed(self, k: usize) -> Option<Seed> {
+        match self {
+            Self::Keep => None,
+            // `k` counts reset instances, at most `u32::MAX`.
+            Self::Base(base) => Some(base.offset(u64::try_from(k).unwrap_or(u64::MAX))),
+            Self::List(seeds) => seeds.get(k).copied(),
+            Self::Each(seeds) => seeds.get(k).copied().flatten(),
+        }
+    }
+
+    /// The number of seeds given, for lists.
+    const fn len(self) -> Option<usize> {
+        match self {
+            Self::List(seeds) => Some(seeds.len()),
+            Self::Each(seeds) => Some(seeds.len()),
+            Self::Keep | Self::Base(_) => None,
+        }
+    }
 }
 
 /// A pool of `num_envs` instances of `E`.
@@ -537,16 +566,17 @@ where
         count: usize,
         reseed: Reseed<'_>,
     ) -> Result<(), EngineError> {
-        if let Reseed::List(seeds) = reseed
-            && seeds.len() != count
+        if let Some(seeds) = reseed.len()
+            && seeds != count
         {
             return Err(EngineError::SeedCount {
-                seeds: seeds.len(),
+                seeds,
                 instances: count,
             });
         }
-        if matches!(reseed, Reseed::Keep) {
-            for i in indices {
+        // Instances that keep their seed advance their episode index.
+        for (k, i) in indices.enumerate() {
+            if reseed.seed(k).is_none() {
                 let engine = self.headers.get(i).map(RecordLayout::engine);
                 if let Some(engine) = engine
                     && !engine.fresh.get()
@@ -582,12 +612,7 @@ where
                 let (Some(header), Some(state)) = (headers.get_mut(i), states.get_mut(i)) else {
                     continue;
                 };
-                let seed = match reseed {
-                    Reseed::Keep => None,
-                    // `k` counts reset instances, at most `u32::MAX`.
-                    Reseed::Base(base) => Some(base.offset(u64::try_from(k).unwrap_or(u64::MAX))),
-                    Reseed::List(seeds) => seeds.get(k).copied(),
-                };
+                let seed = reseed.seed(k);
                 reset_one::<E>(cfg, authority, header, state, seed);
                 clear_instance(outputs, i);
                 write_agent_masks(outputs, i, header);
@@ -893,12 +918,7 @@ pub(crate) fn reset_chunk<E: Environment, M: MaskProvider<E>>(
         .enumerate()
     {
         let k = first + i;
-        let seed = match reseed {
-            Reseed::Keep => None,
-            // `k` counts reset instances, at most `u32::MAX`.
-            Reseed::Base(base) => Some(base.offset(u64::try_from(k).unwrap_or(u64::MAX))),
-            Reseed::List(seeds) => seeds.get(k).copied(),
-        };
+        let seed = reseed.seed(k);
         reset_one::<E>(cfg, authority, header, state, seed);
         clear_instance(outputs, i);
         write_agent_masks(outputs, i, header);

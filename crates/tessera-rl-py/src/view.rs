@@ -69,6 +69,8 @@ pub(crate) struct ViewSpec {
 #[derive(Debug, Clone)]
 pub(crate) struct ViewSet {
     pub(crate) observations: Vec<ViewSpec>,
+    /// Terminal observation leaves (`same_step` mode only, else empty).
+    pub(crate) terminal_observations: Vec<ViewSpec>,
     pub(crate) others: Vec<(&'static str, ViewSpec)>,
 }
 
@@ -76,24 +78,32 @@ pub(crate) struct ViewSet {
 /// name.
 pub(crate) fn view_set(layout: &Layout) -> Option<ViewSet> {
     let (n, a) = (layout.num_envs, layout.agents);
-    let observations = layout
-        .leaves
-        .iter()
-        .enumerate()
-        .map(|(i, leaf)| {
-            let mut shape = vec![n, a];
-            shape.extend(
-                leaf.shape
-                    .iter()
-                    .map(|&d| usize::try_from(d).unwrap_or(usize::MAX)),
-            );
-            Some(ViewSpec {
-                field: OutputField::Observation(i),
-                elem: leaf_elem(leaf.dtype)?,
-                shape,
+    let leaf_views = |field: fn(usize) -> OutputField| {
+        layout
+            .leaves
+            .iter()
+            .enumerate()
+            .map(|(i, leaf)| {
+                let mut shape = vec![n, a];
+                shape.extend(
+                    leaf.shape
+                        .iter()
+                        .map(|&d| usize::try_from(d).unwrap_or(usize::MAX)),
+                );
+                Some(ViewSpec {
+                    field: field(i),
+                    elem: leaf_elem(leaf.dtype)?,
+                    shape,
+                })
             })
-        })
-        .collect::<Option<Vec<_>>>()?;
+            .collect::<Option<Vec<_>>>()
+    };
+    let observations = leaf_views(OutputField::Observation)?;
+    let terminal_observations = if layout.terminal {
+        leaf_views(OutputField::TerminalObservation)?
+    } else {
+        Vec::new()
+    };
     let spec = |field, dtype, shape: &[usize]| {
         Some(ViewSpec {
             field,
@@ -138,6 +148,7 @@ pub(crate) fn view_set(layout: &Layout) -> Option<ViewSet> {
     ];
     Some(ViewSet {
         observations,
+        terminal_observations,
         others,
     })
 }
@@ -156,15 +167,19 @@ mod tests {
                 name: String::new(),
                 dtype: "float32",
                 shape: vec![4],
+                low: vec![-1.0; 4],
+                high: vec![1.0; 4],
             }],
             action_choices: 2,
             mask_len: 5,
+            terminal: true,
         };
         let set = view_set(&layout).unwrap();
         assert_eq!(set.observations[0].shape, vec![3, 2, 4]);
         assert_eq!(set.observations[0].elem.itemsize, 4);
         let masks = &set.others.iter().find(|(k, _)| *k == "masks").unwrap().1;
         assert_eq!(masks.shape, vec![3, 2, 5]);
+        assert_eq!(set.terminal_observations[0].shape, vec![3, 2, 4]);
         assert_eq!(leaf_elem("complex64"), None);
     }
 }
