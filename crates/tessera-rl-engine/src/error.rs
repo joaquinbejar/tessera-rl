@@ -51,6 +51,22 @@ pub enum EngineError {
         /// Instances to reseed.
         instances: usize,
     },
+    /// An imported record has an inconsistent engine header.
+    #[error("record {index}: {reason}")]
+    InvalidRecord {
+        /// Position of the record in the call.
+        index: usize,
+        /// What is inconsistent.
+        reason: &'static str,
+    },
+    /// An imported record violates a game invariant (`Validate`).
+    #[error("record {index}: {violation}")]
+    Invariant {
+        /// Position of the record in the call.
+        index: usize,
+        /// The violated invariant.
+        violation: tessera_rl_core::InvariantViolation,
+    },
     /// A record slice does not have one record per instance.
     #[error("{records} records for {instances} instances")]
     RecordCount {

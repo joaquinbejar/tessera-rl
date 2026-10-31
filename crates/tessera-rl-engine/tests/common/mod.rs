@@ -10,16 +10,28 @@ use tessera_rl_core::{
     ActionMask, AgentSlot, Bool8, EnvState, Environment, EpisodeEnd, NoAdaptive, ObsLeaf,
     Observation, RecordHeader, SpaceError, StepOut, Tier,
 };
-use tessera_rl_macros::{EnvConfig, EnvState, Observation};
+use tessera_rl_macros::{EnvConfig, EnvState, Observation, StateEnum};
 use tessera_rl_num::rng::{ObsRng, StepRng};
+
+/// No variant has discriminant 0, so an all-zero state would not decode.
+#[derive(StateEnum, Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[repr(u8)]
+pub enum Phase {
+    #[default]
+    Opening = 1,
+    Endgame = 2,
+}
 
 #[derive(EnvState, Debug, Clone, Copy, PartialEq, Default)]
 #[repr(C)]
 pub struct Counts {
     pub value: [i32; 2],
     pub steps: u32,
+    /// Alternates between -0.0 and the smallest subnormal: edge fixtures.
+    pub bias: f32,
     pub dead: Bool8,
-    pub reserved: tessera_rl_core::Reserved<3>,
+    pub phase: Phase,
+    pub reserved: tessera_rl_core::Reserved<2>,
 }
 
 /// Test switches are independent flags by design.
@@ -48,6 +60,9 @@ pub struct CountConfig {
     /// Number of discrete choices per head.
     #[config(default = 3, range = 3..=2_147_483_648)]
     pub actions_n: u32,
+    /// Agent 1 respawns on the step after it dies.
+    #[config(default = false)]
+    pub respawn: bool,
     /// Number of discrete action heads per agent; only head 0 is used.
     #[config(default = 1, range = 1..=4)]
     pub action_heads: u32,
@@ -106,6 +121,8 @@ impl Environment for Counter {
         // Panic injection for the poisoning tests.
         assert!(!cfg.panic_on_reset, "injected reset panic");
         state.value = [rng.next_u32().cast_signed() % 100, 0];
+        state.bias = -0.0;
+        state.phase = Phase::Opening;
     }
 
     fn step(
@@ -119,6 +136,13 @@ impl Environment for Counter {
             if agent.index() == 1 && state.dead.get() {
                 if cfg.die_twice {
                     out.agent_died(agent);
+                }
+                if cfg.respawn {
+                    state.dead = Bool8::FALSE;
+                    if let Some(v) = state.value.get_mut(1) {
+                        *v = 0;
+                    }
+                    out.agent_spawned(agent);
                 }
                 continue;
             }
@@ -146,6 +170,14 @@ impl Environment for Counter {
         if cfg.spawn_alive_at != 0 && state.steps == cfg.spawn_alive_at {
             out.agent_spawned(AgentSlot::FIRST);
         }
+        state.bias = if state.steps % 2 == 1 {
+            f32::from_bits(1)
+        } else {
+            -0.0
+        };
+        if state.steps >= 3 {
+            state.phase = Phase::Endgame;
+        }
         if cfg.panic_at != 0 && state.steps == cfg.panic_at {
             panic_now();
         }
@@ -167,6 +199,21 @@ impl Environment for Counter {
             leaf.set(0, own);
             leaf.set(1, noise);
         }
+    }
+}
+
+/// The invariant of a counter: it never runs past its episode length.
+impl tessera_rl_core::Validate for Counter {
+    fn validate(
+        cfg: &CountConfig,
+        state: &Counts,
+    ) -> Result<(), tessera_rl_core::InvariantViolation> {
+        if state.steps > cfg.length {
+            return Err(tessera_rl_core::InvariantViolation {
+                code: "steps beyond the episode length",
+            });
+        }
+        Ok(())
     }
 }
 

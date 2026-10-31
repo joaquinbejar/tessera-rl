@@ -23,5 +23,5 @@ pub use masks::{IllegalActionPolicy, MaskProvider, Masked, NoMasks};
 pub use options::{AutoReset, CHUNK_RANGE, PoolOptions};
 pub use outputs::Outputs;
 pub use pool::{EnvPool, Reseed};
-pub use record::{PoolContext, Record};
+pub use record::{DecodedRecord, PoolContext, Record};
 pub use validate::ActionInput;

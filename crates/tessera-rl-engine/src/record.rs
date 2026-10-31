@@ -2,19 +2,24 @@
 
 //! Instance records: the continuation state of one instance (ADR-0010,
 //! ADR-0036).
+//!
+//! A [`Record`] is trusted: only the engine creates one (by snapshotting),
+//! so it can be restored directly. Bytes from outside decode into a
+//! [`DecodedRecord`], which is untrusted and enters a pool only through
+//! `EnvPool::import`, after the engine and the environment validated it
+//! (ADR-0029).
 
-use tessera_rl_core::encoding::{Canonical, Decoder, Encoder, Sink, StateHasher};
+use tessera_rl_core::encoding::{Canonical, Decoder, Encoder, Sink, StateHasher, encode_to_vec};
 use tessera_rl_core::{DecodeError, Environment, StateHash};
 
 /// The continuation state of one instance: its engine header (RNG
 /// identity, auto-reset progress, accumulators, generations, adaptive
-/// values) and its author state. Copying a record is two `memcpy`s, and
-/// its canonical encoding is the header followed by the state.
+/// values) and its author state. Copying a record is two `memcpy`s. The
+/// `same_step` terminal observation is a step output, not part of the
+/// record (ADR-0039).
 pub struct Record<E: Environment> {
-    /// Engine header.
-    pub header: E::Header,
-    /// Author state.
-    pub state: E::State,
+    pub(crate) header: E::Header,
+    pub(crate) state: E::State,
 }
 
 impl<E: Environment> Clone for Record<E> {
@@ -34,6 +39,18 @@ impl<E: Environment> core::fmt::Debug for Record<E> {
 }
 
 impl<E: Environment> Record<E> {
+    /// The engine header.
+    #[must_use]
+    pub const fn header(&self) -> &E::Header {
+        &self.header
+    }
+
+    /// The author state.
+    #[must_use]
+    pub const fn state(&self) -> &E::State {
+        &self.state
+    }
+
     /// The `StateHash` of the record: XXH3-64 of header then state.
     #[must_use]
     pub fn hash(&self) -> StateHash {
@@ -41,6 +58,13 @@ impl<E: Environment> Record<E> {
         hasher.add(&self.header);
         hasher.add(&self.state);
         hasher.finish()
+    }
+
+    /// The canonical encoding: header then state. For persistence; never
+    /// on the hot path.
+    #[must_use]
+    pub fn to_bytes(&self) -> Vec<u8> {
+        encode_to_vec(&DecodedRecord::<E>::from(*self))
     }
 
     /// Size of the continuation record in bytes (header plus state), as
@@ -51,7 +75,65 @@ impl<E: Environment> Record<E> {
     }
 }
 
-impl<E: Environment> Canonical for Record<E> {
+/// A record decoded from bytes. Its fields have valid bit patterns, but
+/// it is not trusted: restore it with `EnvPool::import`, which checks the
+/// engine header and runs `Validate` first.
+pub struct DecodedRecord<E: Environment> {
+    header: E::Header,
+    state: E::State,
+}
+
+impl<E: Environment> Clone for DecodedRecord<E> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<E: Environment> Copy for DecodedRecord<E> {}
+
+impl<E: Environment> core::fmt::Debug for DecodedRecord<E> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("DecodedRecord").finish_non_exhaustive()
+    }
+}
+
+impl<E: Environment> DecodedRecord<E> {
+    /// The decoded engine header.
+    #[must_use]
+    pub const fn header(&self) -> &E::Header {
+        &self.header
+    }
+
+    /// The decoded author state.
+    #[must_use]
+    pub const fn state(&self) -> &E::State {
+        &self.state
+    }
+
+    /// Builds an untrusted record from parts, for tests and tools.
+    #[must_use]
+    pub const fn from_parts(header: E::Header, state: E::State) -> Self {
+        Self { header, state }
+    }
+
+    pub(crate) const fn trust(self) -> Record<E> {
+        Record {
+            header: self.header,
+            state: self.state,
+        }
+    }
+}
+
+impl<E: Environment> From<Record<E>> for DecodedRecord<E> {
+    fn from(record: Record<E>) -> Self {
+        Self {
+            header: record.header,
+            state: record.state,
+        }
+    }
+}
+
+impl<E: Environment> Canonical for DecodedRecord<E> {
     const ENCODED_LEN: usize =
         <E::Header as Canonical>::ENCODED_LEN + <E::State as Canonical>::ENCODED_LEN;
 

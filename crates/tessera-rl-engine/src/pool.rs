@@ -971,6 +971,21 @@ pub(crate) fn clear_instance(outputs: &mut Outputs, i: usize) {
     }
 }
 
+/// Zeroes instance `i`'s terminal observation rows: they are a step
+/// output, not continuation state (ADR-0039).
+pub(crate) fn clear_terminal(outputs: &mut Outputs, i: usize) {
+    let a = outputs.agents;
+    for (rows, &bytes) in outputs
+        .terminal_observations
+        .iter_mut()
+        .zip(&outputs.leaf_bytes)
+    {
+        if let Some(r) = rows.get_mut(i * a * bytes..(i + 1) * a * bytes) {
+            r.fill(0);
+        }
+    }
+}
+
 pub(crate) fn write_agent_masks<H: RecordLayout>(outputs: &mut Outputs, i: usize, header: &H) {
     let a = outputs.agents;
     for (slot, row) in header.agents().iter().enumerate() {

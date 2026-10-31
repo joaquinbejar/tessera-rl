@@ -1,30 +1,46 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! Snapshot, restore and fork (ADR-0010, ADR-0007).
+//! Snapshot, restore, import and fork (ADR-0010, ADR-0007, ADR-0029,
+//! ADR-0039).
 //!
-//! Records are copied whole, then the instance is re-observed in the
-//! canonical FP environment, so observations and masks always describe the
-//! copied state. Pending resets travel with the record. Single-instance
-//! operations never allocate.
+//! Records are copied whole, then the destination's per-step outputs
+//! (flags, rewards, terminal observation rows) are cleared and it is
+//! re-observed in the canonical FP environment, so observations and masks
+//! always describe the copied state and the result is deterministic.
+//! Pending resets travel with the record. Single-instance operations never
+//! allocate.
 //!
-//! On a poisoned pool every operation here is rejected except
-//! `restore_all`, which is a recovery path (ADR-0028): the records of a
-//! poisoned pool may be partly written by the panicking call.
+//! Every operation goes through the pool's guarded path. On a poisoned
+//! pool everything here is rejected except `restore_all` and `import_all`,
+//! which are recovery paths (ADR-0028).
+//!
+//! # Restoring into another pool
+//!
+//! A record continues identically in another pool when both pools have the
+//! same environment config (static fields and assets), the same spaces, the
+//! same step limit, auto-reset mode, mask provider and illegal-action
+//! policy. The seed, slot and pool size may differ. Checking a pool
+//! fingerprint is deferred to the persistent format (ADR-0011, phase 2).
 
-use tessera_rl_core::{AdaptiveValues, Environment, RecordLayout, StateHash};
-use tessera_rl_num::identity::RngIdentity;
-use tessera_rl_num::key::derive_branch_salt;
+use tessera_rl_core::{AdaptiveValues, Environment, RecordLayout, StateHash, Validate};
 
 use crate::error::EngineError;
 use crate::masks::MaskProvider;
-use crate::pool::{EnvPool, clear_instance, observe_instance, run_kernels, write_agent_masks};
-use crate::record::{PoolContext, Record};
+use crate::options::AutoReset;
+use crate::pool::{
+    EnvPool, Poison, clear_instance, clear_terminal, observe_instance, run_kernels,
+    write_agent_masks,
+};
+use crate::record::{DecodedRecord, PoolContext, Record};
 use crate::validate::check_ids;
 
 impl<E, M> EnvPool<E, M>
 where
     E: Environment,
     M: MaskProvider<E>,
+    E::Config: Sync,
+    E::Header: Send,
+    E::State: Send,
     <E::Header as RecordLayout>::Adaptive: AdaptiveValues<E::Config>,
 {
     fn index(&self, id: u32) -> Result<usize, EngineError> {
@@ -35,6 +51,13 @@ where
             .ok_or(EngineError::InstanceOutOfRange { id, num_envs })
     }
 
+    fn record(&self, i: usize) -> Option<Record<E>> {
+        match (self.headers.get(i), self.states.get(i)) {
+            (Some(&header), Some(&state)) => Some(Record { header, state }),
+            _ => None,
+        }
+    }
+
     /// The continuation record of `id`.
     ///
     /// # Errors
@@ -42,17 +65,13 @@ where
     /// Returns [`EngineError::Poisoned`] on a poisoned pool, or
     /// [`EngineError::InstanceOutOfRange`] for an unknown id.
     pub fn snapshot(&self, id: u32) -> Result<Record<E>, EngineError> {
-        if self.poisoned {
-            return Err(EngineError::Poisoned);
-        }
-        let i = self.index(id)?;
-        match (self.headers.get(i), self.states.get(i)) {
-            (Some(&header), Some(&state)) => Ok(Record { header, state }),
-            _ => Err(EngineError::InstanceOutOfRange {
+        self.guarded_ref(|pool| {
+            let i = pool.index(id)?;
+            pool.record(i).ok_or(EngineError::InstanceOutOfRange {
                 id,
-                num_envs: self.options.num_envs.get(),
-            }),
-        }
+                num_envs: pool.options.num_envs.get(),
+            })
+        })
     }
 
     /// Writes the records of every instance into `out`, which must have one
@@ -63,19 +82,15 @@ where
     /// Returns [`EngineError::Poisoned`] on a poisoned pool, or
     /// [`EngineError::RecordCount`] if `out` has the wrong length.
     pub fn snapshot_all(&self, out: &mut [Record<E>]) -> Result<(), EngineError> {
-        if self.poisoned {
-            return Err(EngineError::Poisoned);
-        }
-        if out.len() != self.headers.len() {
-            return Err(EngineError::RecordCount {
-                records: out.len(),
-                instances: self.headers.len(),
-            });
-        }
-        for ((slot, &header), &state) in out.iter_mut().zip(&self.headers).zip(&self.states) {
-            *slot = Record { header, state };
-        }
-        Ok(())
+        self.guarded_ref(|pool| {
+            pool.check_count(out.len())?;
+            for (i, slot) in out.iter_mut().enumerate() {
+                if let Some(record) = pool.record(i) {
+                    *slot = record;
+                }
+            }
+            Ok(())
+        })
     }
 
     /// The `StateHash` of instance `id` (header then state).
@@ -88,9 +103,9 @@ where
         self.snapshot(id).map(|r| r.hash())
     }
 
-    /// Restores `record` into slot `id`, from this or any other pool of the
-    /// same environment. The instance then continues exactly as the
-    /// original would have.
+    /// Restores a trusted `record` (from [`EnvPool::snapshot`]) into slot
+    /// `id` of this or another compatible pool (see the module docs). The
+    /// instance then continues exactly as the original would have.
     ///
     /// # Errors
     ///
@@ -98,17 +113,16 @@ where
     /// [`EnvPool::restore_all`]), [`EngineError::InstanceOutOfRange`] for an
     /// unknown id, or [`EngineError::Panicked`] if re-observing panics.
     pub fn restore(&mut self, id: u32, record: &Record<E>) -> Result<(), EngineError> {
-        if self.poisoned {
-            return Err(EngineError::Poisoned);
-        }
-        let i = self.index(id)?;
-        self.write_record(i, record);
-        self.reobserve(core::iter::once(i))
+        self.guarded(Poison::Reject, |pool| {
+            let i = pool.index(id)?;
+            pool.write_record(i, record);
+            pool.reobserve(core::iter::once(i))
+        })
     }
 
-    /// Restores every instance from `records`, one per instance. On a
-    /// poisoned pool this is a recovery path: the poison is cleared only if
-    /// it completes.
+    /// Restores every instance from trusted `records`, one per instance. On
+    /// a poisoned pool this is a recovery path: the poison is cleared only
+    /// if it completes.
     ///
     /// # Errors
     ///
@@ -116,18 +130,15 @@ where
     /// length (nothing is mutated), or [`EngineError::Panicked`] if
     /// re-observing panics.
     pub fn restore_all(&mut self, records: &[Record<E>]) -> Result<(), EngineError> {
-        if records.len() != self.headers.len() {
-            return Err(EngineError::RecordCount {
-                records: records.len(),
-                instances: self.headers.len(),
-            });
-        }
-        for (i, record) in records.iter().enumerate() {
-            self.write_record(i, record);
-        }
-        self.reobserve(0..records.len())?;
-        self.poisoned = false;
-        Ok(())
+        self.guarded(Poison::Recover, |pool| {
+            pool.check_count(records.len())?;
+            for (i, record) in records.iter().enumerate() {
+                pool.write_record(i, record);
+            }
+            pool.reobserve(0..records.len())?;
+            pool.poisoned = false;
+            Ok(())
+        })
     }
 
     /// Copies instance `src` into every instance of `dst`, identity
@@ -140,12 +151,13 @@ where
     /// [`EngineError::Panicked`] if re-observing panics; on an id error
     /// nothing is mutated.
     pub fn fork(&mut self, src: u32, dst: &[u32]) -> Result<(), EngineError> {
-        let record = self.checked_fork_source(src, dst)?;
-        for &id in dst {
-            let i = self.index(id)?;
-            self.write_record(i, &record);
-        }
-        self.reobserve(dst.iter().filter_map(|&id| usize::try_from(id).ok()))
+        self.guarded(Poison::Reject, |pool| {
+            let record = pool.fork_source(src, dst)?;
+            for i in valid_indices(dst) {
+                pool.write_record(i, &record);
+            }
+            pool.reobserve(valid_indices(dst))
+        })
     }
 
     /// Like [`EnvPool::fork`], but each destination gets a distinct branch
@@ -166,7 +178,21 @@ where
         dst: &[u32],
         labels: Option<&[u64]>,
     ) -> Result<(), EngineError> {
-        let record = self.checked_fork_source(src, dst)?;
+        self.guarded(Poison::Reject, |pool| {
+            pool.fork_branched_inner(src, dst, labels)
+        })
+    }
+
+    fn fork_branched_inner(
+        &mut self,
+        src: u32,
+        dst: &[u32],
+        labels: Option<&[u64]>,
+    ) -> Result<(), EngineError> {
+        use tessera_rl_num::identity::RngIdentity;
+        use tessera_rl_num::key::derive_branch_salt;
+
+        let record = self.fork_source(src, dst)?;
         if let Some(labels) = labels {
             if labels.len() != dst.len() {
                 return Err(EngineError::LabelCount {
@@ -185,9 +211,13 @@ where
             .checked_add(1)
             .ok_or(EngineError::BranchCounterExhausted)?;
         let parent = record.header.engine().identity;
-        for (k, &id) in dst.iter().enumerate() {
+        for (k, i) in valid_indices(dst).enumerate() {
+            // Labels were checked to have one entry per destination.
             let label = match labels {
-                Some(labels) => labels.get(k).copied().unwrap_or(0),
+                Some(labels) => match labels.get(k) {
+                    Some(&label) => label,
+                    None => continue,
+                },
                 None => u64::try_from(k).unwrap_or(u64::MAX),
             };
             let salt = derive_branch_salt(parent.branch_salt(), counter, label);
@@ -199,10 +229,9 @@ where
                 parent.episode_index(),
                 parent.step_index(),
             );
-            let i = self.index(id)?;
             self.write_record(i, &branched);
         }
-        self.reobserve(dst.iter().filter_map(|&id| usize::try_from(id).ok()))
+        self.reobserve(valid_indices(dst))
     }
 
     /// The pool-level context, for pool snapshots.
@@ -210,12 +239,11 @@ where
     /// # Errors
     ///
     /// Returns [`EngineError::Poisoned`] on a poisoned pool.
-    pub const fn pool_context(&self) -> Result<PoolContext, EngineError> {
-        if self.poisoned {
-            return Err(EngineError::Poisoned);
-        }
-        Ok(PoolContext {
-            branch_counter: self.branch_counter,
+    pub fn pool_context(&self) -> Result<PoolContext, EngineError> {
+        self.guarded_ref(|pool| {
+            Ok(PoolContext {
+                branch_counter: pool.branch_counter,
+            })
         })
     }
 
@@ -224,19 +252,30 @@ where
     /// # Errors
     ///
     /// Returns [`EngineError::Poisoned`] on a poisoned pool.
-    pub const fn restore_pool_context(&mut self, context: PoolContext) -> Result<(), EngineError> {
-        if self.poisoned {
-            return Err(EngineError::Poisoned);
-        }
-        self.branch_counter = context.branch_counter;
-        Ok(())
+    pub fn restore_pool_context(&mut self, context: PoolContext) -> Result<(), EngineError> {
+        self.guarded(Poison::Reject, |pool| {
+            pool.branch_counter = context.branch_counter;
+            Ok(())
+        })
     }
 
-    fn checked_fork_source(&mut self, src: u32, dst: &[u32]) -> Result<Record<E>, EngineError> {
-        if self.poisoned {
-            return Err(EngineError::Poisoned);
+    fn check_count(&self, records: usize) -> Result<(), EngineError> {
+        if records == self.headers.len() {
+            Ok(())
+        } else {
+            Err(EngineError::RecordCount {
+                records,
+                instances: self.headers.len(),
+            })
         }
-        let record = self.snapshot(src)?;
+    }
+
+    fn fork_source(&mut self, src: u32, dst: &[u32]) -> Result<Record<E>, EngineError> {
+        let i = self.index(src)?;
+        let record = self.record(i).ok_or(EngineError::InstanceOutOfRange {
+            id: src,
+            num_envs: self.options.num_envs.get(),
+        })?;
         check_ids(dst, &mut self.seen)?;
         Ok(record)
     }
@@ -249,8 +288,8 @@ where
     }
 
     /// Recomputes the outputs of the given instances from their records:
-    /// flags cleared, alive and acting masks, observations and action
-    /// masks for the current state.
+    /// per-step outputs and terminal rows cleared (ADR-0039), alive and
+    /// acting masks, observations and action masks for the current state.
     fn reobserve(&mut self, indices: impl Iterator<Item = usize>) -> Result<(), EngineError> {
         let Self {
             cfg,
@@ -267,9 +306,115 @@ where
                     continue;
                 };
                 clear_instance(outputs, i);
+                clear_terminal(outputs, i);
                 write_agent_masks(outputs, i, header);
                 observe_instance::<E, M>(cfg, authority, header, state, outputs, i);
             }
         })
     }
+
+    /// Checks an untrusted record: the engine header against this pool,
+    /// then the environment's invariants.
+    fn check_import(&self, index: usize, record: &DecodedRecord<E>) -> Result<(), EngineError>
+    where
+        E: Validate,
+    {
+        let invalid = |reason| Err(EngineError::InvalidRecord { index, reason });
+        let header = record.header();
+        let engine = header.engine();
+        let pending = engine.pending_reset.get();
+        if !pending && engine.end_kind != 0 {
+            return invalid("an episode end without a pending reset");
+        }
+        if pending && !engine.fresh.get() && engine.end_kind == 0 {
+            return invalid("a pending reset without an episode end");
+        }
+        if engine.identity.step_index() != engine.episode_steps {
+            return invalid("the RNG step index differs from the episode steps");
+        }
+        if let Some(limit) = self.options.max_episode_steps
+            && engine.episode_steps > limit.get()
+        {
+            return invalid("an episode longer than the step limit");
+        }
+        if pending && !engine.fresh.get() && self.options.auto_reset == AutoReset::SameStep {
+            return invalid("a pending reset in same_step mode");
+        }
+        for row in header.agents() {
+            if row.acting.get() && !row.alive.get() {
+                return invalid("an acting agent that is not alive");
+            }
+            if row.illegal_actions > engine.episode_steps {
+                return invalid("more illegal actions than steps");
+            }
+            if !row.episode_return.is_finite() {
+                return invalid("a non-finite episode return");
+            }
+        }
+        E::validate(&self.cfg, record.state())
+            .map_err(|violation| EngineError::Invariant { index, violation })
+    }
+
+    /// Restores untrusted records (decoded from bytes) into `ids`, in
+    /// order. Every record is checked first (engine header consistency and
+    /// `Validate`); then all are written. Atomic: on any error nothing is
+    /// mutated.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`EngineError::Poisoned`], id and count errors,
+    /// [`EngineError::InvalidRecord`], [`EngineError::Invariant`], or
+    /// [`EngineError::Panicked`] if re-observing panics.
+    pub fn import(&mut self, ids: &[u32], records: &[DecodedRecord<E>]) -> Result<(), EngineError>
+    where
+        E: Validate,
+    {
+        self.guarded(Poison::Reject, |pool| {
+            check_ids(ids, &mut pool.seen)?;
+            if ids.len() != records.len() {
+                return Err(EngineError::RecordCount {
+                    records: records.len(),
+                    instances: ids.len(),
+                });
+            }
+            for (index, record) in records.iter().enumerate() {
+                pool.check_import(index, record)?;
+            }
+            for (i, record) in valid_indices(ids).zip(records) {
+                pool.write_record(i, &record.trust());
+            }
+            pool.reobserve(valid_indices(ids))
+        })
+    }
+
+    /// [`EnvPool::import`] for every instance. A recovery path: on a
+    /// poisoned pool the poison is cleared only if every record is valid and
+    /// the import completes; a failed check leaves the pool (and its
+    /// poison) unchanged.
+    ///
+    /// # Errors
+    ///
+    /// As [`EnvPool::import`], without the poison rejection.
+    pub fn import_all(&mut self, records: &[DecodedRecord<E>]) -> Result<(), EngineError>
+    where
+        E: Validate,
+    {
+        self.guarded(Poison::Recover, |pool| {
+            pool.check_count(records.len())?;
+            for (index, record) in records.iter().enumerate() {
+                pool.check_import(index, record)?;
+            }
+            for (i, record) in records.iter().enumerate() {
+                pool.write_record(i, &record.trust());
+            }
+            pool.reobserve(0..records.len())?;
+            pool.poisoned = false;
+            Ok(())
+        })
+    }
+}
+
+/// The ids as indices; ids were validated before this is called.
+fn valid_indices(ids: &[u32]) -> impl Iterator<Item = usize> + '_ {
+    ids.iter().filter_map(|&id| usize::try_from(id).ok())
 }
