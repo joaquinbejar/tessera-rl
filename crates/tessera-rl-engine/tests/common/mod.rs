@@ -51,6 +51,12 @@ pub struct CountConfig {
     /// Number of discrete action heads per agent; only head 0 is used.
     #[config(default = 1, range = 1..=4)]
     pub action_heads: u32,
+    /// Invalid spawns (SPEC 9.1): agent 1 requests a spawn in the step it
+    /// dies, and agent 0 (alive) at step `spawn_alive_at` (0: never).
+    #[config(default = false)]
+    pub spawn_when_dying: bool,
+    #[config(default = 0)]
+    pub spawn_alive_at: u32,
 }
 
 #[derive(Observation)]
@@ -117,6 +123,9 @@ impl Environment for Counter {
                 if agent.index() == 1 && *v > cfg.kill_at {
                     state.dead = Bool8::TRUE;
                     out.agent_died(agent);
+                    if cfg.spawn_when_dying {
+                        out.agent_spawned(agent);
+                    }
                 }
             }
             #[expect(clippy::cast_precision_loss, reason = "small test values")]
@@ -128,6 +137,9 @@ impl Environment for Counter {
             out.set_reward(agent, reward);
         }
         state.steps += 1;
+        if cfg.spawn_alive_at != 0 && state.steps == cfg.spawn_alive_at {
+            out.agent_spawned(AgentSlot::FIRST);
+        }
         if cfg.panic_at != 0 && state.steps == cfg.panic_at {
             panic_now();
         }

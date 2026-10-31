@@ -54,8 +54,9 @@ pub struct AgentRow {
     pub alive: Bool8,
     /// The agent acts this step.
     pub acting: Bool8,
-    /// Always zero.
-    pub reserved: Reserved<2>,
+    /// Spawns requested on this slot in the current episode while it was
+    /// alive or dying, and therefore not applied (SPEC 9.1).
+    pub invalid_spawns: u16,
 }
 
 /// Adaptive values built from a config `C`: `#[derive(EnvConfig)]`
@@ -252,7 +253,7 @@ impl Canonical for AgentRow {
         self.illegal_actions.encode(out);
         self.alive.encode(out);
         self.acting.encode(out);
-        self.reserved.encode(out);
+        self.invalid_spawns.encode(out);
     }
 
     #[inline]
@@ -263,7 +264,7 @@ impl Canonical for AgentRow {
             illegal_actions: u32::decode(input)?,
             alive: Bool8::decode(input)?,
             acting: Bool8::decode(input)?,
-            reserved: Reserved::decode(input)?,
+            invalid_spawns: u16::decode(input)?,
         })
     }
 }

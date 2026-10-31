@@ -24,6 +24,8 @@ pub struct Outputs {
     pub(crate) agent_truncated: Vec<Bool8>,
     pub(crate) died: Vec<Bool8>,
     pub(crate) spawned: Vec<Bool8>,
+    /// Spawns rejected in the last call (SPEC 9.1), `[N, A]`.
+    pub(crate) invalid_spawn: Vec<Bool8>,
     pub(crate) alive: Vec<Bool8>,
     pub(crate) acting: Vec<Bool8>,
     pub(crate) generations: Vec<u32>,
@@ -32,6 +34,7 @@ pub struct Outputs {
     pub(crate) episode_return: Vec<f32>,
     pub(crate) episode_length: Vec<f32>,
     pub(crate) episode_illegal_actions: Vec<f32>,
+    pub(crate) episode_invalid_spawns: Vec<f32>,
     pub(crate) masks: Vec<tessera_rl_core::Bool8>,
     pub(crate) mask_len: usize,
 }
@@ -64,6 +67,7 @@ impl Outputs {
             agent_truncated: vec![Bool8::FALSE; rows],
             died: vec![Bool8::FALSE; rows],
             spawned: vec![Bool8::FALSE; rows],
+            invalid_spawn: vec![Bool8::FALSE; rows],
             alive: vec![Bool8::FALSE; rows],
             acting: vec![Bool8::FALSE; rows],
             generations: vec![0; rows],
@@ -72,6 +76,7 @@ impl Outputs {
             episode_return: vec![0.0; num_envs],
             episode_length: vec![0.0; num_envs],
             episode_illegal_actions: vec![0.0; num_envs],
+            episode_invalid_spawns: vec![0.0; num_envs],
             masks: vec![Bool8::FALSE; rows.checked_mul(mask_len)?],
             mask_len,
         })
@@ -154,6 +159,14 @@ impl Outputs {
     #[must_use]
     pub fn episode_illegal_actions(&self) -> &[f32] {
         &self.episode_illegal_actions
+    }
+
+    /// Spawns not applied in episodes that ended in the last call, because
+    /// their slot was alive or died in the same step (SPEC 9.1; sum over
+    /// agents), `[N]`; zero elsewhere.
+    #[must_use]
+    pub fn episode_invalid_spawns(&self) -> &[f32] {
+        &self.episode_invalid_spawns
     }
 
     /// Action masks for the current state, `[N, A, mask length]`: one entry

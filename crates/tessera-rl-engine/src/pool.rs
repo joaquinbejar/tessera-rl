@@ -560,6 +560,23 @@ where
                 }
             }
         })?;
+        #[cfg(feature = "debug-checks")]
+        self.check_spawns()?;
+        Ok(())
+    }
+
+    /// `debug-checks`: an invalid spawn in the last step poisons the pool
+    /// and fails the call with its first instance and slot.
+    #[cfg(feature = "debug-checks")]
+    fn check_spawns(&mut self) -> Result<(), EngineError> {
+        let a = self.outputs.agents;
+        if let Some(k) = self.outputs.invalid_spawn.iter().position(|f| f.get()) {
+            self.poisoned = true;
+            return Err(EngineError::InvalidSpawn {
+                instance: u32::try_from(k / a).unwrap_or(u32::MAX),
+                agent: u32::try_from(k % a).unwrap_or(u32::MAX),
+            });
+        }
         Ok(())
     }
 }
@@ -733,6 +750,7 @@ fn reset_one<E: Environment>(
         row.acting = Bool8::TRUE;
         row.episode_return = 0.0;
         row.illegal_actions = 0;
+        row.invalid_spawns = 0;
     }
     *state = E::State::state_default();
     let mut rng = StepRng::new(authority, &identity, StreamId::DYNAMICS);
@@ -819,13 +837,16 @@ fn step_one<E: Environment>(
             row.alive = Bool8::FALSE;
             row.acting = Bool8::FALSE;
         }
-        // A spawn needs an empty slot that did not die this step; otherwise
-        // it is ignored (debug builds assert).
+        // Same-step slot reuse (SPEC 9.1): a spawn needs an empty slot that
+        // did not die this step. Otherwise it is never applied: it is
+        // counted (saturating at u16::MAX, a documented statistic bound)
+        // and marked, and `debug-checks` turns it into an error.
         if spawned {
             let valid = !died && !row.alive.get();
-            debug_assert!(valid, "spawn on an occupied or dying slot {slot}");
-            if !valid && let Some(f) = outputs.spawned.get_mut(k) {
-                *f = Bool8::FALSE;
+            if !valid {
+                row.invalid_spawns = row.invalid_spawns.saturating_add(1);
+                set(&mut outputs.invalid_spawn, k, true);
+                set(&mut outputs.spawned, k, false);
             }
             if valid {
                 row.alive = Bool8::TRUE;
@@ -889,6 +910,14 @@ fn finish_episode<H: RecordLayout>(
         let count = illegal as f32;
         *n = count;
     }
+    let spawns: u32 = header.agents().iter().fold(0u32, |acc, row| {
+        acc.saturating_add(u32::from(row.invalid_spawns))
+    });
+    if let Some(n) = outputs.episode_invalid_spawns.get_mut(i) {
+        #[expect(clippy::cast_precision_loss, reason = "statistic, exact below 2^24")]
+        let count = spawns as f32;
+        *n = count;
+    }
     if let Some(l) = outputs.episode_length.get_mut(i) {
         // Episode lengths are reported as f32 statistics (SPEC 5.2).
         #[expect(clippy::cast_precision_loss, reason = "statistic, exact below 2^24")]
@@ -911,6 +940,7 @@ fn clear_instance(outputs: &mut Outputs, i: usize) {
         &mut outputs.agent_truncated,
         &mut outputs.died,
         &mut outputs.spawned,
+        &mut outputs.invalid_spawn,
     ] {
         if let Some(rows) = buf.get_mut(range.clone()) {
             rows.fill(Bool8::FALSE);
@@ -925,6 +955,7 @@ fn clear_instance(outputs: &mut Outputs, i: usize) {
         &mut outputs.episode_return,
         &mut outputs.episode_length,
         &mut outputs.episode_illegal_actions,
+        &mut outputs.episode_invalid_spawns,
     ] {
         if let Some(v) = buf.get_mut(i) {
             *v = 0.0;
