@@ -16,6 +16,16 @@ test = [
 ]
 # Only for the PyTorch DLPack and read-only tests (pytest marker `torch`).
 torch = ["torch==2.15.0"]
+# Every [env.main] pin of compat/targets.toml, so the lock proves they
+# resolve together (make check-targets installs and verifies all of them).
+conformance = [
+    "gymnasium==1.4.0",
+    "pettingzoo==1.27.0",
+    "numpy==2.4.6",
+    "torch==2.15.0",
+    "jax==0.10.2",
+    "onnxruntime==1.31.1",
+]
 
 [tool.uv]
 # The native package (maturin build backend) arrives in phase 1b B2; until

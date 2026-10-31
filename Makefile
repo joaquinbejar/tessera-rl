@@ -32,6 +32,13 @@ deny:
 	cargo deny check
 
 # The Python tool environment (uv, Python 3.11) matches compat/targets.toml.
+# ENV=main (default) or ENV=pufferlib (its own uv project in compat/pufferlib).
+ENV ?= main
 check-targets:
+ifeq ($(ENV),main)
 	uv sync --locked --python 3.11 --all-groups
-	uv run --locked --python 3.11 python scripts/check_targets.py
+	uv run --locked --python 3.11 python scripts/check_targets.py --require-all main
+else
+	uv sync --locked --python 3.11 --project compat/$(ENV)
+	uv run --locked --python 3.11 --project compat/$(ENV) python scripts/check_targets.py --require-all $(ENV)
+endif

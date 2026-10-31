@@ -7,7 +7,11 @@
 format = 1
 
 [ref-x86]
-status = "characterized"
+# A candidate until: the turbo state is recorded, the SMT sibling of the
+# bench core is reserved (taskset -c 2 with nothing on CPU 3), and a noise
+# floor is measured (the coefficient of variation of 10 runs of a reference
+# bench is below the gate threshold).
+status = "candidate"
 host = "xaskar (shared host, about 20 containers; record the load with every run)"
 cpu = "Intel Core i7-12700H (Alder Lake, hybrid)"
 cores = "6 P-cores with HT (CPUs 0-11, up to 4.7 GHz); 8 E-cores (CPUs 12-19, up to 3.5 GHz)"
@@ -17,14 +21,17 @@ os = "Ubuntu 26.04.1"
 kernel = "7.0.0-38"
 frequency_policy = "governor performance"
 # Hybrid CPU: single-core benches (G1 and every wall-clock bench) run pinned
-# to one P-core with `taskset -c 2` (CPU 0 avoided).
+# to one P-core with `taskset -c 2` (CPU 0 avoided), with its SMT sibling
+# (CPU 3) left idle.
 bench_pinning = "taskset -c 2"
+turbo = ""
+noise_floor_cv = ""
 toolchain = "rustc and cargo 1.99.1 (system), valgrind 3.26.0, gcc 15.2"
 
 [ref-mac]
 status = "pending characterization"
 candidate = "Mac Studio M5 (the development machine)"
-cpu = ""
+cpu = "Apple M5 Max (18 cores)"
 memory = ""
 os = ""
 frequency_policy = ""
@@ -45,6 +52,7 @@ candidate = ""
 
 [ref-gpu]
 status = "pending characterization (powered on on demand)"
+# Windows 10 is out of support upstream; noted for the reference record.
 candidate = "Windows 10 machine with an RTX 4090"
 cpu = ""
 gpu = ""
