@@ -33,6 +33,9 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          # Self-hosted runners: the post step would delete rustup from ~/.cargo/bin.
+          cache-bin: "false"
       - run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
       - run: cargo test --workspace --all-features --locked
       - run: cargo test --workspace --locked
@@ -50,6 +53,9 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          # Self-hosted runners: the post step would delete rustup from ~/.cargo/bin.
+          cache-bin: "false"
       - run: cargo test -p tessera-rl-engine --test sync --locked test_every_wait_backend_matches_inline -- --exact
 
   # The fuzz crate lives outside the workspace: check that it still builds
@@ -61,6 +67,9 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          # Self-hosted runners: the post step would delete rustup from ~/.cargo/bin.
+          cache-bin: "false"
       - run: cargo check --manifest-path fuzz/Cargo.toml --locked
 
   musl:
@@ -81,6 +90,9 @@ jobs:
       - run: sudo apt-get update && sudo apt-get install -y musl-tools
       - run: rustup target add ${{ matrix.target }}
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          # Self-hosted runners: the post step would delete rustup from ~/.cargo/bin.
+          cache-bin: "false"
       - run: cargo test --workspace --all-features --locked --target ${{ matrix.target }}
 
   math-diff:
@@ -93,6 +105,9 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          # Self-hosted runners: the post step would delete rustup from ~/.cargo/bin.
+          cache-bin: "false"
       - run: cargo run -p tessera-rl-math-oracle --release --locked -- diff ${{ github.run_id }} 1000000
 
   loom:
@@ -144,6 +159,9 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          # Self-hosted runners: the post step would delete rustup from ~/.cargo/bin.
+          cache-bin: "false"
       - run: pipx install uv==0.13.6
       - run: make py-test-torch
 
