@@ -48,14 +48,17 @@ pub struct AgentRow {
     pub generation: u32,
     /// Sum of the agent's rewards in the current episode.
     pub episode_return: f32,
-    /// Illegal-but-valid actions replaced in the current episode.
+    /// Illegal-but-valid actions replaced in the current episode. A
+    /// statistic: it saturates at `u32::MAX` (a documented bound).
     pub illegal_actions: u32,
     /// The slot holds a living agent.
     pub alive: Bool8,
     /// The agent acts this step.
     pub acting: Bool8,
     /// Spawns requested on this slot in the current episode while it was
-    /// alive or dying, and therefore not applied (SPEC 9.1).
+    /// alive or dying, and therefore not applied (SPEC 9.1). A statistic
+    /// like `illegal_actions`: it saturates at `u16::MAX` (a documented
+    /// bound).
     pub invalid_spawns: u16,
 }
 
