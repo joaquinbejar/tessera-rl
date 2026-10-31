@@ -199,6 +199,10 @@ def make_single(backend: str):
 
 def train(backend: str, seed: int, h: Hyper, eval_episodes: int = 20) -> dict:
     """Trains one agent; returns its curve, evaluation and timings."""
+    if h.total_steps < h.num_envs * h.num_steps:
+        raise ValueError(f"total_steps {h.total_steps} is less than one rollout ({h.num_envs * h.num_steps} steps)")
+    if eval_episodes <= 0:
+        raise ValueError(f"eval_episodes must be positive, got {eval_episodes}")
     np.random.seed(seed)
     torch.manual_seed(seed)
     envs = make_vector(backend, h.num_envs, seed)

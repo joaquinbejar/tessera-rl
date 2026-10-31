@@ -68,7 +68,7 @@ import subprocess
 import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
-from learning_gate import CALIBRATION_SEEDS, NIGHT_SEEDS, alert, calibrate, check_shards, night  # noqa: E402
+from learning_gate import CALIBRATION_SEEDS, NIGHT_SEEDS, alert, calibrate, check_budget, check_shards, night  # noqa: E402
 
 ENV_ID = "tessera/CartPole-v1"
 
@@ -182,6 +182,10 @@ def _write(path: str, data: dict) -> None:
 
 
 def cmd_scores(args) -> int:
+    errors = check_budget({"total_steps": args.total_steps, "eval_episodes": args.eval_episodes})
+    if errors:
+        sys.stderr.write("; ".join(errors) + "\n")
+        return 1
     _write(args.out, {"setup": _setup(args), "environment": _environment(), "records": _train(args, args.seeds)})
     return 0
 
@@ -237,12 +241,13 @@ def cmd_night(args) -> int:
         args.total_steps = setup.get("total_steps")
     if args.eval_episodes is None:
         args.eval_episodes = setup.get("eval_episodes")
-    if isinstance(args.total_steps, int) and isinstance(args.eval_episodes, int):
+    budget = check_budget({"total_steps": args.total_steps, "eval_episodes": args.eval_episodes})
+    if not budget:
         records = _train(args, args.seeds)
         tonight = night(records, args.seeds, calibration, _setup(args))
     else:
         records = []
-        tonight = {"seeds": args.seeds, "errors": ["the calibration has no valid setup"], "failed": True}
+        tonight = {"seeds": args.seeds, "errors": budget, "failed": True}
     previous = None
     if args.previous and pathlib.Path(args.previous).exists():
         try:

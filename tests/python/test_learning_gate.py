@@ -12,6 +12,7 @@ from learning_gate import (  # noqa: E402
     NIGHT_SEEDS,
     alert,
     calibrate,
+    check_budget,
     check_calibration,
     check_shards,
     night,
@@ -253,3 +254,40 @@ def test_learning_committed_calibration_is_valid():
     env = c["environment"]
     assert env["git_dirty"] is False and len(env["git"]) == 40
     assert env["os"].startswith("Linux") and env["arch"] == "x86_64"
+
+
+# -- budget -------------------------------------------------------------------
+
+BAD_BUDGETS = [
+    {"total_steps": -1},
+    {"total_steps": 0},
+    {"total_steps": 511},
+    {"eval_episodes": -1},
+    {"eval_episodes": 0},
+    {"total_steps": True},
+]
+
+
+def test_learning_budget_negative_zero_or_sub_rollout_fails():
+    assert check_budget(SETUP) == []
+    assert check_budget(dict(SETUP, total_steps=512)) == []
+    for bad in BAD_BUDGETS:
+        assert check_budget(dict(SETUP, **bad)), bad
+
+
+def test_learning_budget_is_checked_in_shards_night_and_calibration():
+    for bad in BAD_BUDGETS:
+        setup = dict(SETUP, **bad)
+        assert check_shards([{"environment": ENV, "setup": setup}] * 4), bad
+        assert night(records(NIGHT_SEEDS, score=lambda s: 500.0), NIGHT_SEEDS, dict(calibration(), setup=setup), setup)["errors"], bad
+        assert check_calibration(dict(calibration(), setup=setup)), bad
+
+
+def test_learning_trainer_rejects_a_sub_rollout_budget():
+    pytest = __import__("pytest")
+    pytest.importorskip("torch")
+    import reference_training as rt
+
+    for steps, episodes in ((-1, 20), (0, 20), (511, 20), (512, 0), (512, -1)):
+        with pytest.raises(ValueError):
+            rt.train("tessera", 1, rt.Hyper(total_steps=steps), episodes)

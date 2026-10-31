@@ -23,11 +23,28 @@ import math
 import numpy as np
 
 CALIBRATION_SEEDS = list(range(101, 141))
+# One full PPO rollout of the reference trainer (num_envs * num_steps): a
+# smaller budget trains nothing.
+MIN_TOTAL_STEPS = 4 * 128
 NIGHT_SEEDS = [1, 2, 3, 4, 5]
 
 
 def _finite(v) -> bool:
     return isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v)
+
+
+def check_budget(setup) -> list[str]:
+    """Errors of a setup's budget: at least one full rollout, and at least
+    one evaluation episode."""
+    if not isinstance(setup, dict):
+        return ["no setup"]
+    errors = []
+    steps, episodes = setup.get("total_steps"), setup.get("eval_episodes")
+    if not isinstance(steps, int) or isinstance(steps, bool) or steps < MIN_TOTAL_STEPS:
+        errors.append(f"total_steps {steps!r} is less than one rollout ({MIN_TOTAL_STEPS} steps)")
+    if not isinstance(episodes, int) or isinstance(episodes, bool) or episodes <= 0:
+        errors.append(f"eval_episodes {episodes!r} is not a positive integer")
+    return errors
 
 
 def _scores(records: list[dict], seeds: list[int]) -> tuple[list[float], list[str]]:
@@ -73,6 +90,9 @@ def check_calibration(calibration: dict) -> list[str]:
     """Errors of a stored calibration: its records must give its threshold."""
     if calibration.get("errors"):
         return ["the calibration recorded errors"]
+    budget = check_budget(calibration.get("setup"))
+    if budget:
+        return [f"calibration: {e}" for e in budget]
     again = calibrate(calibration.get("records") or [], calibration.get("seeds") or [])
     if again.get("errors"):
         return [f"calibration: {e}" for e in again["errors"]]
@@ -89,6 +109,7 @@ def night(records: list[dict], seeds: list[int], calibration: dict, setup: dict)
     if list(seeds) != NIGHT_SEEDS:
         errors.append(f"the night seeds must be exactly {NIGHT_SEEDS}")
     errors += check_calibration(calibration)
+    errors += check_budget(setup)
     stored = calibration.get("setup") or {}
     for key in sorted(set(setup) | set(stored)):
         if stored.get(key) != setup.get(key):
@@ -201,8 +222,9 @@ def _schema_errors(i: int, shard: dict) -> list[str]:
             errors.append(f"shard {i}: environment {key} missing or unknown")
     for key, kind in SETUP_TYPES.items():
         value = setup.get(key)
-        if not isinstance(value, kind) or isinstance(value, bool) or not value:
+        if not isinstance(value, kind) or isinstance(value, bool) or (kind is str and not value):
             errors.append(f"shard {i}: setup {key} missing or invalid")
+    errors += [f"shard {i}: {e}" for e in check_budget(setup)]
     return errors
 
 
