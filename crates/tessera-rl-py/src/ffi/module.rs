@@ -1,17 +1,20 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! The `tessera_rl._native` module: its definition, method table and
-//! initialization, all reached through boundary thunks.
+//! initialization. The `extern "C"` functions here are only reachable
+//! through the thunks of `thunks`.
 
+use core::cell::UnsafeCell;
 use core::ffi::c_int;
 use core::ptr;
 
 use pyo3::ffi;
-
-use super::{Table, entry, env_type};
 use pyo3::prelude::*;
 
-unsafe extern "C" fn version(
+use super::tables::{method, method_end};
+use super::{Table, entry, env_type, thunks};
+
+pub(super) unsafe extern "C" fn version(
     _module: *mut ffi::PyObject,
     _args: *mut ffi::PyObject,
 ) -> *mut ffi::PyObject {
@@ -21,43 +24,38 @@ unsafe extern "C" fn version(
     unsafe { ffi::PyUnicode_FromStringAndSize(text.as_ptr().cast(), text.len().cast_signed()) }
 }
 
-thunk!(thunk_version => version: fn(*mut ffi::PyObject, *mut ffi::PyObject) -> *mut ffi::PyObject);
-
 static METHODS: Table<[ffi::PyMethodDef; 4]> = Table([
-    ffi::PyMethodDef {
-        ml_name: c"version".as_ptr(),
-        ml_meth: ffi::PyMethodDefPointer {
-            PyCFunction: thunk_version,
-        },
-        ml_flags: ffi::METH_NOARGS,
-        ml_doc: c"The Tessera version.".as_ptr(),
-    },
+    method(
+        c"version",
+        thunks::VERSION,
+        ffi::METH_NOARGS,
+        c"The Tessera version.",
+    ),
     env_type::MAKERS[0],
     env_type::MAKERS[1],
-    ffi::PyMethodDef::zeroed(),
+    method_end(),
 ]);
 
-static mut MODULE: ffi::PyModuleDef = ffi::PyModuleDef {
+/// The module definition, fully initialized at compile time and never
+/// written by Rust; CPython owns its `m_base` after `PyModule_Create2`.
+static MODULE: Table<UnsafeCell<ffi::PyModuleDef>> = Table(UnsafeCell::new(ffi::PyModuleDef {
     m_base: ffi::PyModuleDef_HEAD_INIT,
     m_name: c"tessera_rl._native".as_ptr(),
     m_doc: c"Native Tessera bindings.".as_ptr(),
     m_size: -1,
-    m_methods: ptr::null_mut(),
+    m_methods: METHODS.0.as_ptr().cast_mut(),
     m_slots: ptr::null_mut(),
     m_traverse: None,
     m_clear: None,
     m_free: None,
-};
+}));
 
-unsafe extern "C" fn init() -> *mut ffi::PyObject {
+pub(super) unsafe extern "C" fn init() -> *mut ffi::PyObject {
     entry(|py| {
-        // CPython calls the module initializer once, attached, before any
-        // other entry; MODULE is only touched here.
-        let def = ptr::addr_of_mut!(MODULE);
-        // SAFETY: single-threaded initialization (above); `def` is valid.
-        unsafe { (*def).m_methods = METHODS.0.as_ptr().cast_mut() };
-        // SAFETY: attached; `def` is a static module definition.
-        let raw = unsafe { ffi::PyModule_Create2(def, ffi::PYTHON_API_VERSION as c_int) };
+        // SAFETY: attached; MODULE is a valid static definition that only
+        // CPython writes (its `m_base`), as `PyModule_Create2` requires.
+        let raw =
+            unsafe { ffi::PyModule_Create2(MODULE.0.get(), ffi::PYTHON_API_VERSION as c_int) };
         // SAFETY: `raw` is a new reference or null with an exception set.
         let module = unsafe { Bound::from_owned_ptr_or_err(py, raw) }?;
         let module = module
@@ -68,9 +66,3 @@ unsafe extern "C" fn init() -> *mut ffi::PyObject {
         Ok(module.into_ptr())
     })
 }
-
-thunk!(
-    /// The module initializer CPython looks up by name.
-    #[unsafe(no_mangle)]
-    PyInit__native => init: fn() -> *mut ffi::PyObject
-);

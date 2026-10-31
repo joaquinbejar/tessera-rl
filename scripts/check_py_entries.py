@@ -2,10 +2,14 @@
 # SPDX-License-Identifier: MIT OR Apache-2.0
 """ADR-0041: every C entry point of tessera-rl-py goes through a boundary thunk.
 
-Fails when pyo3-macros is a dependency, a PyO3 registration attribute or
-macro appears, or a C table entry (a `method(...)` row, a PyMethodDefPointer
-field, a function slot) names anything but a `thunk_*` function. Parsing is
-whitespace-insensitive, so rustfmt's line breaks do not hide an entry.
+The primary guarantee is the compiler's: C tables are built only by
+`ffi::tables`, whose function rows take a `ThunkFn`, which only
+`ffi::thunks` can make. This script is the secondary check. It fails when
+pyo3-macros is a dependency, a PyO3 registration attribute or macro
+appears, a thunk or `ThunkFn` is made outside `ffi/thunks.rs`, or a C table
+row (`PyMethodDef`, `PyType_Slot`) is built outside `ffi/tables.rs`.
+Parsing is whitespace-insensitive, so rustfmt's line breaks do not hide an
+entry.
 """
 
 import pathlib
@@ -30,16 +34,11 @@ def main():
         rel = path.relative_to(SRC.parent.parent.parent)
         if re.search(r"#\[(pyclass|pymethods|pymodule|pyfunction)|wrap_pyfunction|wrap_pymodule", text):
             problems.append(f"{rel}: PyO3 registration macros are not allowed")
-        for fn in re.findall(r'\bmethod\( ?c"[^"]*", ?([A-Za-z_][A-Za-z0-9_]*)', flat):
-            if not fn.startswith("thunk_"):
-                problems.append(f"{rel}: method table entry {fn} is not a boundary thunk")
-        for fn in re.findall(r"\b(?:PyCFunction|PyCFunctionWithKeywords): ?([A-Za-z_][A-Za-z0-9_]*)", flat):
-            # `f` is the parameter of the `method` constructor itself.
-            if not fn.startswith("thunk_") and fn != "f":
-                problems.append(f"{rel}: PyMethodDef points at {fn}, not a boundary thunk")
-        for fn in re.findall(r"\bpfunc: ?([A-Za-z_][A-Za-z0-9_]*) as \*mut", flat):
-            if not fn.startswith("thunk_"):
-                problems.append(f"{rel}: type slot points at {fn}, not a boundary thunk")
+        name = path.name
+        if name != "thunks.rs" and re.search(r"\bthunk!|\bThunkFn ?\(|naked_asm!|#\[unsafe\(naked\)\]", flat):
+            problems.append(f"{rel}: thunks and ThunkFn values are made only in ffi/thunks.rs")
+        if name != "tables.rs" and re.search(r"\b(?:ffi::)?(?:PyMethodDef|PyType_Slot) ?\{", flat):
+            problems.append(f"{rel}: C table rows are built only in ffi/tables.rs")
     for p in problems:
         print(p)
     if problems:

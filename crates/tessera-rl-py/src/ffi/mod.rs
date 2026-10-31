@@ -2,36 +2,14 @@
 
 //! The C boundary with CPython. Audited `unsafe` module (ADR-0041).
 //!
-//! - [`thunk!`] defines one boundary thunk per C entry point: a naked
-//!   function with the exact C signature of the slot it fills, which
-//!   transfers control to the Rust `extern "C"` implementation. Until B8 it
-//!   is a pass-through (a single tail jump, which preserves every argument
-//!   register, the stack and callee-saved registers on System V x86-64,
-//!   Win64 and AAPCS64); B8 adds the floating-point save, canonicalize and
-//!   restore around the call.
-//! - Module and type tables ([`module`]) hold only thunk pointers.
+//! - `thunks` defines every boundary thunk (ADR-0041) and is the only
+//!   module that can make a `ThunkFn`.
+//! - `tables` builds every C table row; function entries take a
+//!   `ThunkFn`, so a raw function pointer cannot be registered.
+//! - `inner` holds an environment object's state behind the reentrancy
+//!   guard.
 
 #![expect(unsafe_code, reason = "audited module: the CPython C boundary")]
-
-/// Defines the boundary thunk `$thunk` for the `extern "C"` function
-/// `$target`, which must have exactly the signature given.
-macro_rules! thunk {
-    ($(#[$meta:meta])* $thunk:ident => $target:path : fn($($arg:ty),*) -> $ret:ty) => {
-        $(#[$meta])*
-        #[unsafe(naked)]
-        pub(crate) unsafe extern "C" fn $thunk($(_: $arg),*) -> $ret {
-            // SAFETY: a tail jump to a function with the same C signature:
-            // arguments, return value, stack and callee-saved registers are
-            // passed through untouched.
-            #[cfg(target_arch = "x86_64")]
-            core::arch::naked_asm!("jmp {f}", f = sym $target);
-            #[cfg(target_arch = "aarch64")]
-            core::arch::naked_asm!("b {f}", f = sym $target);
-        }
-        // The signature of the target must match the thunk's.
-        const _: unsafe extern "C" fn($($arg),*) -> $ret = $target;
-    };
-}
 
 /// A static C table holding raw pointers, shared read-only with CPython.
 #[repr(transparent)]
@@ -56,13 +34,21 @@ pub(crate) fn entry(
             core::ptr::null_mut()
         }
         Err(payload) => {
-            // The payload's own drop could panic: leak it instead.
-            core::mem::forget(payload);
+            dispose(payload);
             pyo3::exceptions::PyRuntimeError::new_err("internal panic in Tessera").restore(py);
             core::ptr::null_mut()
         }
     }
 }
 
+/// Disposes of a panic payload without running its `Drop`, which could
+/// itself panic across the C boundary: it is leaked.
+pub(crate) fn dispose(payload: Box<dyn core::any::Any + Send>) {
+    core::mem::forget(payload);
+}
+
 mod env_type;
-pub(crate) mod module;
+pub(crate) mod inner;
+mod module;
+mod tables;
+mod thunks;

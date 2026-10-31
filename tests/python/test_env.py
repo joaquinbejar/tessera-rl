@@ -151,3 +151,35 @@ def test_workers_match_inline():
         return s.observations["obs"].copy()
 
     assert np.array_equal(run(0), run(3))
+
+
+def test_step_and_close_from_two_threads_never_crash():
+    # TESSERA-REVIEWER R-PR17: closing while another thread steps must be
+    # either rejected (ConcurrencyError) or happen between steps; a step on
+    # a closed environment raises ArgumentError. Nothing else, no crash.
+    for _ in range(20):
+        env = t.make("tessera/Tag-v1", num_envs=2000, seed=2)
+        env.reset()
+        acts = np.zeros((2000, 8), dtype=int)
+        errors = []
+
+        def stepper():
+            for _ in range(50):
+                try:
+                    env.step(acts)
+                except (t.ConcurrencyError, t.ArgumentError, t.PendingResetError) as e:
+                    errors.append(type(e))
+                    if isinstance(e, t.ArgumentError):
+                        return
+
+        thread = threading.Thread(target=stepper)
+        thread.start()
+        while True:
+            try:
+                env.close()
+                break
+            except t.ConcurrencyError:
+                time.sleep(0)
+        thread.join()
+        with pytest.raises(t.ArgumentError):
+            env.step(acts)

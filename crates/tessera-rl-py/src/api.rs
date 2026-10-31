@@ -3,65 +3,12 @@
 //! The safe implementation of every Python-visible operation. The C entry
 //! points in `ffi` only translate pointers and call these functions.
 
-use core::sync::atomic::{AtomicBool, Ordering};
-
 use pyo3::prelude::*;
 use pyo3::types::{PyByteArray, PyBytes, PyDict, PyList, PyTuple};
 
-use crate::env::{PoolArgs, PoolOps, TagFields};
+use crate::env::{PoolArgs, TagFields};
 use crate::errors::{Kind, error, to_py};
-
-/// An environment object's state.
-pub(crate) struct Inner {
-    ops: Option<Box<dyn PoolOps>>,
-    busy: AtomicBool,
-}
-
-/// Holds the reentrancy guard while an operation runs.
-struct Busy<'a>(&'a AtomicBool);
-
-impl Drop for Busy<'_> {
-    fn drop(&mut self) {
-        self.0.store(false, Ordering::Release);
-    }
-}
-
-impl Inner {
-    /// An open environment around `ops`.
-    pub(crate) fn new(ops: Box<dyn PoolOps>) -> Self {
-        Self {
-            ops: Some(ops),
-            busy: AtomicBool::new(false),
-        }
-    }
-
-    /// Runs `f` on the pool under the reentrancy guard: a concurrent or
-    /// nested call raises `ConcurrencyError`, a closed environment
-    /// `ArgumentError`.
-    fn with<R>(
-        &mut self,
-        py: Python<'_>,
-        f: impl FnOnce(&mut dyn PoolOps) -> PyResult<R>,
-    ) -> PyResult<R> {
-        if self
-            .busy
-            .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
-            .is_err()
-        {
-            return Err(error(
-                py,
-                Kind::Concurrency,
-                "another call on this environment is running".to_owned(),
-            ));
-        }
-        let _busy = Busy(&self.busy);
-        let ops = self
-            .ops
-            .as_deref_mut()
-            .ok_or_else(|| error(py, Kind::Argument, "the environment is closed".to_owned()))?;
-        f(ops)
-    }
-}
+use crate::ffi::inner::Inner;
 
 fn kw<'py, T: FromPyObjectOwned<'py>>(
     kwargs: Option<&Bound<'py, PyDict>>,
@@ -142,7 +89,7 @@ pub(crate) fn make_tag(py: Python<'_>, kwargs: Option<&Bound<'_, PyDict>>) -> Py
 }
 
 /// `layout()`: the shapes and dtypes the Python layer needs.
-pub(crate) fn layout<'py>(py: Python<'py>, inner: &mut Inner) -> PyResult<Bound<'py, PyAny>> {
+pub(crate) fn layout<'py>(py: Python<'py>, inner: &Inner) -> PyResult<Bound<'py, PyAny>> {
     inner.with(py, |ops| {
         let l = ops.layout();
         let d = PyDict::new(py);
@@ -162,7 +109,7 @@ pub(crate) fn layout<'py>(py: Python<'py>, inner: &mut Inner) -> PyResult<Bound<
 /// `reset(seed=None)`: resets every instance (a new seed base if given).
 pub(crate) fn reset<'py>(
     py: Python<'py>,
-    inner: &mut Inner,
+    inner: &Inner,
     args: &Bound<'py, PyTuple>,
 ) -> PyResult<Bound<'py, PyAny>> {
     let seed: Option<u64> = match args.len() {
@@ -186,7 +133,7 @@ pub(crate) fn reset<'py>(
 /// one per agent row.
 pub(crate) fn step<'py>(
     py: Python<'py>,
-    inner: &mut Inner,
+    inner: &Inner,
     args: &Bound<'py, PyTuple>,
 ) -> PyResult<Bound<'py, PyAny>> {
     let bytes = one_arg(py, args, "step")?;
@@ -228,7 +175,7 @@ fn one_arg<'py>(
 
 /// `outputs()`: copies of the last call's outputs (`owned` mode), as fresh
 /// bytearrays the caller owns (NumPy wraps them writable, without copying).
-pub(crate) fn outputs<'py>(py: Python<'py>, inner: &mut Inner) -> PyResult<Bound<'py, PyAny>> {
+pub(crate) fn outputs<'py>(py: Python<'py>, inner: &Inner) -> PyResult<Bound<'py, PyAny>> {
     inner.with(py, |ops| {
         let o = ops.outputs();
         let d = PyDict::new(py);
@@ -255,7 +202,7 @@ pub(crate) fn outputs<'py>(py: Python<'py>, inner: &mut Inner) -> PyResult<Bound
 /// `snapshot(id) -> bytes`: the canonical encoding of instance `id`.
 pub(crate) fn snapshot<'py>(
     py: Python<'py>,
-    inner: &mut Inner,
+    inner: &Inner,
     args: &Bound<'py, PyTuple>,
 ) -> PyResult<Bound<'py, PyAny>> {
     let id: u32 = one_arg(py, args, "snapshot")?.extract()?;
@@ -268,7 +215,7 @@ pub(crate) fn snapshot<'py>(
 /// `import_record(id, record: bytes)`: imports an untrusted record.
 pub(crate) fn import_record<'py>(
     py: Python<'py>,
-    inner: &mut Inner,
+    inner: &Inner,
     args: &Bound<'py, PyTuple>,
 ) -> PyResult<Bound<'py, PyAny>> {
     let (id, record): (u32, Vec<u8>) = args.extract()?;
@@ -282,7 +229,7 @@ pub(crate) fn import_record<'py>(
 /// `fork(src, dst: list[int])`: copies instance `src` into `dst`.
 pub(crate) fn fork<'py>(
     py: Python<'py>,
-    inner: &mut Inner,
+    inner: &Inner,
     args: &Bound<'py, PyTuple>,
 ) -> PyResult<Bound<'py, PyAny>> {
     let (src, dst): (u32, Vec<u32>) = args.extract()?;
@@ -294,7 +241,7 @@ pub(crate) fn fork<'py>(
 }
 
 /// `is_poisoned() -> bool`.
-pub(crate) fn is_poisoned<'py>(py: Python<'py>, inner: &mut Inner) -> PyResult<Bound<'py, PyAny>> {
+pub(crate) fn is_poisoned<'py>(py: Python<'py>, inner: &Inner) -> PyResult<Bound<'py, PyAny>> {
     inner.with(py, |ops| {
         Ok(pyo3::types::PyBool::new(py, ops.is_poisoned())
             .to_owned()
@@ -302,16 +249,10 @@ pub(crate) fn is_poisoned<'py>(py: Python<'py>, inner: &mut Inner) -> PyResult<B
     })
 }
 
-/// `close()`: frees the pool; idempotent.
-pub(crate) fn close<'py>(py: Python<'py>, inner: &mut Inner) -> PyResult<Bound<'py, PyAny>> {
-    if inner.busy.load(Ordering::Acquire) {
-        return Err(error(
-            py,
-            Kind::Concurrency,
-            "another call on this environment is running".to_owned(),
-        ));
-    }
-    let ops = inner.ops.take();
+/// `close()`: frees the pool; idempotent. It takes the reentrancy guard
+/// like every other call, so it cannot free a pool another thread is using.
+pub(crate) fn close<'py>(py: Python<'py>, inner: &Inner) -> PyResult<Bound<'py, PyAny>> {
+    let ops = inner.take(py)?;
     py.detach(move || drop(ops));
     Ok(py.None().into_bound(py))
 }
