@@ -14,7 +14,9 @@ use pyo3::sync::PyOnceLock;
 use pyo3::types::{PyDict, PyTuple, PyType};
 
 use super::inner::Inner;
-use super::tables::{method, method_end, method_kw, slot_data, slot_destructor, slot_end};
+use super::tables::{
+    method, method_end, method_kw, slot_dealloc, slot_doc, slot_end, slot_methods,
+};
 use super::{Table, dispose, entry, thunks};
 use crate::api;
 
@@ -199,14 +201,9 @@ pub(super) unsafe extern "C" fn dealloc(obj: *mut ffi::PyObject) {
 }
 
 static SLOTS: Table<[ffi::PyType_Slot; 4]> = Table([
-    slot_destructor(ffi::Py_tp_dealloc, thunks::DEALLOC),
-    slot_data(ffi::Py_tp_methods, METHODS.0.as_ptr().cast()),
-    slot_data(
-        ffi::Py_tp_doc,
-        c"A pool of Tessera environments (use tessera_rl.make)."
-            .as_ptr()
-            .cast(),
-    ),
+    slot_dealloc(thunks::DEALLOC),
+    slot_methods(&METHODS.0),
+    slot_doc(c"A pool of Tessera environments (use tessera_rl.make)."),
     slot_end(),
 ]);
 

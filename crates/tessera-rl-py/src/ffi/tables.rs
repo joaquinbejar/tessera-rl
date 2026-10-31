@@ -48,19 +48,36 @@ pub(crate) const fn method_end() -> ffi::PyMethodDef {
     ffi::PyMethodDef::zeroed()
 }
 
-/// A type slot holding a destructor thunk (`Py_tp_dealloc`).
-pub(crate) const fn slot_destructor(slot: c_int, thunk: ThunkFn<Destructor>) -> ffi::PyType_Slot {
+// Each slot constructor fixes its slot id and the type of its payload, so a
+// function slot can only hold a thunk and a data slot only its data.
+
+/// The `Py_tp_dealloc` slot.
+pub(crate) const fn slot_dealloc(thunk: ThunkFn<Destructor>) -> ffi::PyType_Slot {
     ffi::PyType_Slot {
-        slot,
+        slot: ffi::Py_tp_dealloc,
         pfunc: thunk.get() as *mut c_void,
     }
 }
 
-/// A type slot holding data, not a function (`Py_tp_methods`, `Py_tp_doc`).
-pub(crate) const fn slot_data(slot: c_int, data: *const c_void) -> ffi::PyType_Slot {
+/// The `Py_tp_methods` slot. `methods` must end with [`method_end`]; a
+/// table that does not is rejected when the static is evaluated.
+pub(crate) const fn slot_methods(methods: &'static [ffi::PyMethodDef]) -> ffi::PyType_Slot {
+    let terminated = match methods.last() {
+        Some(last) => last.ml_name.is_null(),
+        None => false,
+    };
+    assert!(terminated, "a method table must end with method_end()");
     ffi::PyType_Slot {
-        slot,
-        pfunc: data.cast_mut(),
+        slot: ffi::Py_tp_methods,
+        pfunc: methods.as_ptr().cast_mut().cast(),
+    }
+}
+
+/// The `Py_tp_doc` slot.
+pub(crate) const fn slot_doc(doc: &'static CStr) -> ffi::PyType_Slot {
+    ffi::PyType_Slot {
+        slot: ffi::Py_tp_doc,
+        pfunc: doc.as_ptr().cast_mut().cast(),
     }
 }
 
