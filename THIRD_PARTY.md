@@ -23,3 +23,39 @@ Code from other projects that is vendored into this repository (ADR-0034).
 The full upstream license file, including the MIT text and the musl and
 fdlibm notices, is kept verbatim at
 `crates/tessera-rl-num/src/math/vendor/LICENSE.txt`.
+
+## CleanRL `ppo.py`
+
+- **Where:** `tools/reference_training.py` (the PPO: network, rollout,
+  GAE and clipped update).
+- **Upstream:** <https://github.com/vwxyzjn/cleanrl>, `cleanrl/ppo.py`.
+- **License:** MIT, text below.
+- **Use:** adapted, not vendored verbatim: the structure, the update and
+  the CartPole hyperparameters follow `ppo.py`. The changes are the two
+  environment backends, the greedy evaluation, the JSON report and the
+  gate, and the removal of the logging and the command-line flags of the
+  original. A validation tool only (ADR-0018): Tessera ships no trainer.
+
+```text
+MIT License
+
+Copyright (c) 2019 CleanRL developers
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```

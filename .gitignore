@@ -30,3 +30,4 @@ wheels/
 .idea/
 .vscode/
 .DS_Store
+reference-training.json
