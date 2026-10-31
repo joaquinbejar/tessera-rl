@@ -23,8 +23,11 @@
   Gymnasium's ``TimeLimit`` wrapper owns it.
 
 Status: the adapter passes Gymnasium's env checker and the vector API
-tests of this repository. That is not a drop-in compatibility claim: the
-reference training run (ADR-0018) is still to come.
+tests of this repository, and a nightly reference run (ADR-0018,
+``tools/reference_training.py``, workflow ``reference-training.yml``)
+trains PPO on ``tessera/CartPole-v1`` through it and gates it against the
+same PPO on Gymnasium's ``CartPole-v1``. That validates this adapter; it
+is not a drop-in compatibility claim for SB3, RLlib or Tianshou.
 
 Seeding: ``seed=None`` at construction draws one 64-bit seed from OS
 entropy and exposes it as ``construction_seed``, so the run can be

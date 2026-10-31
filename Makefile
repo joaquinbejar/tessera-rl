@@ -97,8 +97,9 @@ gym-equivalence:
 	uv run --locked --python 3.11 python tools/gym_equivalence.py
 
 # SPEC 14.2 reference training: PPO on tessera/CartPole-v1 through the
-# Gymnasium adapter, Gymnasium's CartPole-v1 as the control (nightly CI,
-# a few minutes; not in pre-push). JSON report in reference-training.json.
+# Gymnasium adapter, Gymnasium's CartPole-v1 as the control and broken
+# adapters as negative controls (nightly CI,
+# about 15 minutes; not in pre-push). JSON report in reference-training.json.
 reference-training:
 	uv sync --locked --python 3.11 --group test --group torch
 	uv run --locked --python 3.11 --group test --group torch python tools/reference_training.py --out reference-training.json

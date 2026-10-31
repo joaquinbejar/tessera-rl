@@ -2,7 +2,8 @@
 
 # Nightly reference training (SPEC 14.2, ADR-0018): PPO on
 # tessera/CartPole-v1 through the Gymnasium adapter against Gymnasium's
-# CartPole-v1 (tools/reference_training.py). A few minutes on CPU, so it
+# CartPole-v1 (tools/reference_training.py), with broken-adapter negative
+# controls that must fail. About 15 minutes on CPU, so it
 # runs nightly and on demand, not on every push. The JSON report is
 # uploaded as an artifact.
 

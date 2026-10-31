@@ -4,11 +4,20 @@
 through the Gymnasium vector adapter, with Gymnasium's own ``CartPole-v1``
 (``SyncVectorEnv``) as the control.
 
-The PPO is a single-file implementation following the structure and the
-CartPole hyperparameters of CleanRL's ``ppo.py`` (MIT License, Copyright
-(c) 2019 CleanRL developers, https://github.com/vwxyzjn/cleanrl). It uses
-only the pinned PyTorch, NumPy and Gymnasium. Tessera ships no trainer: this
-script only validates that the adapter trains like the reference.
+Scope: this validates the adapter (SPEC 14.2, ADR-0018); it is not the
+SPEC 18 learning test.
+
+The PPO is adapted from CleanRL's ``ppo.py`` (MIT License, Copyright (c)
+2019 CleanRL developers, https://github.com/vwxyzjn/cleanrl; the entry and
+the license text are in ``THIRD_PARTY.md``): its structure, update and
+CartPole hyperparameters. It uses only the pinned PyTorch, NumPy and
+Gymnasium. Tessera ships no trainer.
+
+Both backends run in ``SAME_STEP`` auto-reset, so no reset-only step
+enters the batch. A truncated episode bootstraps its last reward with the
+value of its final observation (``info["final_obs"]``); a terminated one
+is terminal. That makes terminated and truncated distinguishable to the
+learner.
 
 For every seed, both backends run the same script with the same seed:
 
@@ -16,27 +25,38 @@ For every seed, both backends run the same script with the same seed:
 - evaluate the greedy policy on ``--eval-episodes`` episodes of a fresh
   single environment of the same backend (seeds ``EVAL_SEED_BASE + i``).
 
-The gate (exit 1 when it fails):
+With fixed seeds, one thread and deterministic algorithms, a run is a
+fixed number for a given platform and set of versions, not a random draw;
+the seeds only stand for typical training runs. The gate (exit 1 when it
+fails):
 
-- every Tessera seed reaches a mean evaluation return of at least
-  ``--threshold`` (475, CartPole-v1's ``reward_threshold``);
+- the median across seeds of the Tessera greedy evaluation mean is at
+  least ``--threshold`` (475, CartPole-v1's ``reward_threshold``);
 - the difference of the across-seed means of the training-curve mean
   (the mean, over all updates, of the mean episodic return of the
   episodes that ended in that update), Tessera minus Gymnasium, is within
   ``--margin``. The greedy evaluation saturates at 500 on both backends,
   so it cannot compare them; the curve can.
 
-Seeds and margin come from a 10-seed measurement on each backend (macOS
-arm64, the PR records it): the curve mean has a standard deviation
-across seeds of 7.0 (Tessera) and 11.6 (Gymnasium), pooled 9.6. With 5
-seeds per backend the standard error of the difference is
-``9.6 * sqrt(2 / 5) = 6.1``, so a margin of 20 is about 3.3 standard
-errors: a false alarm is rare (about 0.1%) while a systematic training
-difference of a twentieth of the scale fails.
+Negative controls: the Tessera adapter deliberately broken (``Mutant``:
+terminated and truncated swapped, rewards negated, observations of the
+neighbour instance) trains on ``--mutant-seeds`` and is evaluated on the
+real environment; each mutant must FAIL the same gate, or the run fails.
+The gate also fails closed: Tessera, the control and every mutant must
+have run, on the expected seeds (``reference_gate.py``).
+
+The margin comes from the spread of the per-seed curve means measured on
+Linux x86-64 (the CI platform) with 10 seeds per backend (the PR records
+the per-seed values of both backends): standard deviation 8.3 (Tessera)
+and 11.4 (Gymnasium), pooled 10.0. Over the 5 gate seeds the spread of a
+difference of means is ``10.0 * sqrt(2 / 5) = 6.3``, and the margin of 20
+is about three times that. The mutants land 190 or more below the control
+and fail the threshold by far, so the margin separates the two cases
+widely. The measured difference was -3.6 on x86-64 and +9.2 on macOS
+arm64: no sign of a persistent Tessera-lower bias.
 
 The JSON report records the seeds, versions, git commit, hyperparameters,
-per-seed evaluation returns and the training curves (the mean episodic
-return per update).
+per-seed evaluation returns and the training curves.
 
 Usage: reference_training.py [--seeds 1 2 3] [--out report.json]
 """
@@ -45,6 +65,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import pathlib
 import platform
 import subprocess
 import sys
@@ -59,6 +80,9 @@ from torch.distributions.categorical import Categorical
 
 import tessera_rl
 import tessera_rl.gym  # noqa: F401  registers tessera/CartPole-v1
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+from reference_gate import evaluate_gate  # noqa: E402
 
 EVAL_SEED_BASE = 10_000
 
@@ -113,18 +137,64 @@ class Agent(nn.Module):
         return action, dist.log_prob(action), dist.entropy(), self.critic(x)
 
 
+SAME_STEP = gymnasium.vector.AutoresetMode.SAME_STEP
+
+# Negative controls: deliberately broken adapters that must fail the gate,
+# so the gate is shown to detect what it claims to.
+MUTANTS = ("swap_flags", "reward_sign", "obs_roll")
+
+
+class Mutant(gymnasium.vector.VectorWrapper):
+    """A broken adapter: ``swap_flags`` exchanges terminated and truncated,
+    ``reward_sign`` negates the rewards, ``obs_roll`` gives each instance
+    the observation of its neighbour."""
+
+    def __init__(self, env, kind: str):
+        super().__init__(env)
+        self.kind = kind
+
+    def reset(self, **kwargs):
+        obs, info = self.env.reset(**kwargs)
+        return self._obs(obs), info
+
+    def _obs(self, obs):
+        return np.roll(obs, 1, axis=0) if self.kind == "obs_roll" else obs
+
+    def step(self, actions):
+        obs, reward, term, trunc, info = self.env.step(actions)
+        if self.kind == "swap_flags":
+            term, trunc = trunc, term
+        if self.kind == "reward_sign":
+            reward = -np.asarray(reward)
+        return self._obs(obs), reward, term, trunc, info
+
+
 def make_vector(backend: str, num_envs: int, seed: int):
-    if backend == "tessera":
-        envs = tessera_rl.gym.make("tessera/CartPole-v1", num_envs=num_envs, seed=seed)
+    """Both backends in SAME_STEP auto-reset: no reset-only step enters the
+    batch, and the final observation of an ended episode is in
+    ``info["final_obs"]``."""
+    if backend == "gymnasium":
+        envs = gymnasium.make_vec(
+            "CartPole-v1",
+            num_envs=num_envs,
+            vectorization_mode="sync",
+            vector_kwargs={"autoreset_mode": SAME_STEP},
+        )
     else:
-        envs = gymnasium.make_vec("CartPole-v1", num_envs=num_envs, vectorization_mode="sync")
+        envs = tessera_rl.gym.make(
+            "tessera/CartPole-v1", num_envs=num_envs, seed=seed, autoreset_mode=SAME_STEP
+        )
+        if backend != "tessera":
+            envs = Mutant(envs, backend.removeprefix("mutant:"))
     return gymnasium.wrappers.vector.RecordEpisodeStatistics(envs)
 
 
 def make_single(backend: str):
-    if backend == "tessera":
-        return gymnasium.make("tessera/CartPole-v1")
-    return gymnasium.make("CartPole-v1")
+    """The evaluation environment: always the backend's real environment
+    (a mutant is evaluated on Tessera's)."""
+    if backend == "gymnasium":
+        return gymnasium.make("CartPole-v1")
+    return gymnasium.make("tessera/CartPole-v1")
 
 
 def train(backend: str, seed: int, h: Hyper) -> dict:
@@ -172,9 +242,19 @@ def train(backend: str, seed: int, h: Hyper) -> dict:
             t0 = time.perf_counter()
             next_np, reward, term, trunc, info = envs.step(action.numpy())
             env_seconds += time.perf_counter() - t0
-            rewards[step] = torch.tensor(np.asarray(reward, dtype=np.float32))
+            reward = torch.tensor(np.asarray(reward, dtype=np.float32))
+            # A truncated episode is not terminal: bootstrap its last reward
+            # with the value of its final observation. A terminated one is.
+            trunc_np = np.asarray(trunc, dtype=bool)
+            if trunc_np.any():
+                final = np.stack([info["final_obs"][i] for i in np.flatnonzero(trunc_np)])
+                with torch.no_grad():
+                    v = agent.value(torch.tensor(final, dtype=torch.float32)).flatten()
+                reward[torch.as_tensor(np.flatnonzero(trunc_np))] += h.gamma * v
+            rewards[step] = reward
             next_obs = torch.tensor(next_np, dtype=torch.float32)
-            next_done = torch.tensor(np.logical_or(term, trunc), dtype=torch.float32)
+            # The GAE recursion stops at every episode end.
+            next_done = torch.tensor(np.logical_or(term, trunc_np), dtype=torch.float32)
             if "episode" in info:
                 mask = info["_episode"]
                 finished.extend(float(r) for r in np.asarray(info["episode"]["r"])[mask])
@@ -282,37 +362,25 @@ def main() -> int:
     p.add_argument("--eval-episodes", type=int, default=20)
     p.add_argument("--threshold", type=float, default=475.0)
     p.add_argument("--margin", type=float, default=20.0)
-    p.add_argument("--backends", nargs="+", default=["tessera", "gymnasium"])
+    p.add_argument("--mutants", nargs="*", default=list(MUTANTS), choices=MUTANTS)
+    p.add_argument("--mutant-seeds", type=int, nargs="+", default=[1, 2, 3])
     p.add_argument("--out", default="reference-training.json")
     ARGS = p.parse_args()
 
     torch.set_num_threads(1)
     torch.use_deterministic_algorithms(True)
     h = Hyper(total_steps=ARGS.total_steps)
+    mutants = list(ARGS.mutants)
+    plan = [(seed, b) for seed in ARGS.seeds for b in ("tessera", "gymnasium")]
+    plan += [(seed, "gymnasium") for seed in ARGS.mutant_seeds if seed not in ARGS.seeds]
+    plan += [(seed, f"mutant:{m}") for m in mutants for seed in ARGS.mutant_seeds]
     runs = []
-    for seed in ARGS.seeds:
-        for backend in ARGS.backends:
-            r = train(backend, seed, h)
-            runs.append(r)
-            sys.stderr.write(f"{backend} seed {seed}: eval mean {r['eval_mean']:.1f} in {r['train_seconds']}s\n")
+    for seed, backend in plan:
+        r = train(backend, seed, h)
+        runs.append(r)
+        sys.stderr.write(f"{backend} seed {seed}: eval mean {r['eval_mean']:.1f} in {r['train_seconds']}s\n")
 
-    def values(backend, key):
-        return [r[key] for r in runs if r["backend"] == backend]
-
-    tessera = values("tessera", "eval_mean")
-    gate = {"threshold": ARGS.threshold, "margin": ARGS.margin}
-    gate["every_tessera_seed_reaches_threshold"] = bool(tessera) and min(tessera) >= ARGS.threshold
-    gate["tessera_eval_mean"] = float(np.mean(tessera)) if tessera else None
-    control = values("gymnasium", "eval_mean")
-    gate["gymnasium_eval_mean"] = float(np.mean(control)) if control else None
-    t_curve = values("tessera", "curve_mean")
-    g_curve = values("gymnasium", "curve_mean")
-    if t_curve and g_curve:
-        gate["tessera_curve_mean"] = float(np.mean(t_curve))
-        gate["gymnasium_curve_mean"] = float(np.mean(g_curve))
-        gate["curve_difference"] = gate["tessera_curve_mean"] - gate["gymnasium_curve_mean"]
-        gate["difference_within_margin"] = abs(gate["curve_difference"]) <= ARGS.margin
-    gate["pass"] = gate["every_tessera_seed_reaches_threshold"] and gate.get("difference_within_margin", True)
+    gate = evaluate_gate(runs, ARGS.threshold, ARGS.margin, ARGS.seeds, mutants)
 
     report = {
         "schema": "tessera-reference-training/1",
@@ -328,6 +396,8 @@ def main() -> int:
             "numpy": np.__version__,
         },
         "seeds": ARGS.seeds,
+        "mutant_seeds": ARGS.mutant_seeds,
+        "autoreset_mode": "same_step",
         "eval_seed_base": EVAL_SEED_BASE,
         "eval_episodes": ARGS.eval_episodes,
         "hyperparameters": asdict(h),
@@ -336,7 +406,8 @@ def main() -> int:
     }
     with open(ARGS.out, "w") as f:
         json.dump(report, f, indent=2)
-    sys.stderr.write(json.dumps(gate) + "\n")
+    sys.stderr.write(json.dumps({k: gate[k] for k in ("pass", "every_mutant_fails")}) + "\n")
+    sys.stderr.write(json.dumps(gate["tessera"]) + "\n")
     return 0 if gate["pass"] else 1
 
 
