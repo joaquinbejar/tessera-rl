@@ -360,6 +360,9 @@ where
             if row.illegal_actions > engine.episode_steps {
                 return invalid("more illegal actions than steps");
             }
+            if u32::from(row.invalid_spawns) > engine.episode_steps {
+                return invalid("more invalid spawns than steps");
+            }
             if !row.episode_return.is_finite() {
                 return invalid("a non-finite episode return");
             }
