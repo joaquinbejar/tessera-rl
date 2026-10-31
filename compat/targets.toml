@@ -23,9 +23,12 @@ torch = "2.15.0"
 jax = "0.10.2"
 onnxruntime = "1.31.1"
 
-# PufferLib 3.0.0 requires gymnasium 0.29.1, pettingzoo 1.24.1 and
-# numpy < 2, which conflict with [env.main]; its adapter (phase 2) is
-# tested in its own environment with the versions PufferLib resolves.
+# PufferLib 3.0.0 requires pettingzoo <= 1.24.1, and with it gymnasium
+# 0.29.1 and numpy < 2, which cannot be installed next to [env.main]
+# (`uv lock` finds no solution). Its adapter (phase 2) is therefore tested
+# in this separate environment, with the versions PufferLib resolves. To be
+# revisited, and merged into [env.main], once a PufferLib release supports
+# Gymnasium 1.x.
 [env.pufferlib]
 pufferlib = "3.0.0"
 gymnasium = "0.29.1"

@@ -1,39 +1,50 @@
 # SPDX-License-Identifier: MIT OR Apache-2.0
 #
 # Reference machines (ADR-0025). Performance claims and gates name one of
-# these. Phase 1b entry requires them fixed; until a machine is
-# characterized (exact model, OS, kernel, frequency policy) it is a
-# candidate and results on it are indicative, not binding.
+# these. A machine that is not characterized yet is a candidate: results on
+# it are indicative, not binding.
 
 format = 1
 
 [ref-x86]
-status = "pending characterization"
-candidate = "Linux amd64 machine (integrated graphics)"
-cpu = ""
-memory = ""
-os = ""
-kernel = ""
-frequency_policy = ""
+status = "characterized"
+host = "xaskar (shared host, about 20 containers; record the load with every run)"
+cpu = "Intel Core i7-12700H (Alder Lake, hybrid)"
+cores = "6 P-cores with HT (CPUs 0-11, up to 4.7 GHz); 8 E-cores (CPUs 12-19, up to 3.5 GHz)"
+isa = "x86-64, AVX2, no AVX-512"
+memory = "62 GiB"
+os = "Ubuntu 26.04.1"
+kernel = "7.0.0-38"
+frequency_policy = "governor performance"
+# Hybrid CPU: single-core benches (G1 and every wall-clock bench) run pinned
+# to one P-core with `taskset -c 2` (CPU 0 avoided).
+bench_pinning = "taskset -c 2"
+toolchain = "rustc and cargo 1.99.1 (system), valgrind 3.26.0, gcc 15.2"
 
 [ref-mac]
 status = "pending characterization"
-candidate = "Mac Studio M5"
+candidate = "Mac Studio M5 (the development machine)"
 cpu = ""
 memory = ""
 os = ""
 frequency_policy = ""
 
-[ref-arm]
+# Secondary validation only, not a reference for performance gates.
+[ref-mac-alt]
 status = "pending characterization"
-candidate = "Mac Studio M4 or a Linux arm64 machine (undecided)"
+candidate = "Mac Studio M4"
 cpu = ""
 memory = ""
 os = ""
 frequency_policy = ""
+
+# Linux on ARM64. Docker linux/arm64 on the M5 is not a reference machine.
+[ref-arm]
+status = "pending: no host"
+candidate = ""
 
 [ref-gpu]
-status = "pending characterization"
+status = "pending characterization (powered on on demand)"
 candidate = "Windows 10 machine with an RTX 4090"
 cpu = ""
 gpu = ""
