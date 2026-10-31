@@ -10,4 +10,6 @@ use libfuzzer_sys::fuzz_target;
 #[path = "../harness/record.rs"]
 mod harness;
 
-fuzz_target!(|data: &[u8]| harness::run(data));
+fuzz_target!(|data: &[u8]| {
+    let _ = harness::run(data);
+});

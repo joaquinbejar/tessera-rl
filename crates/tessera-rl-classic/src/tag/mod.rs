@@ -323,6 +323,38 @@ impl Validate for Tag {
         }
         Ok(())
     }
+
+    /// ADR-0040: in a record that has been reset, a used slot is alive
+    /// exactly when its agent is not caught, and an unused slot is neither
+    /// alive nor acting. A never-reset record has no episode yet.
+    fn validate_record(
+        cfg: &TagConfig,
+        header: &tessera_rl_core::HeaderView<'_>,
+        state: &TagState,
+    ) -> Result<(), InvariantViolation> {
+        Self::validate(cfg, state)?;
+        if header.phase() == tessera_rl_core::Phase::NeverReset {
+            return Ok(());
+        }
+        for slot in 0..header.agents() {
+            let Some(view) = header.agent(slot) else {
+                continue;
+            };
+            if slot < cfg.agents() {
+                let caught = state.caught.get(slot).is_some_and(|c| c.get());
+                if view.alive == caught {
+                    return Err(InvariantViolation {
+                        code: "a used slot alive exactly when its agent is caught",
+                    });
+                }
+            } else if view.alive || view.acting {
+                return Err(InvariantViolation {
+                    code: "an unused slot that is alive or acting",
+                });
+            }
+        }
+        Ok(())
+    }
 }
 
 /// Scripted baseline: pursuers step towards the nearest live evader,

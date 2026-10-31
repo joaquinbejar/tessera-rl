@@ -169,6 +169,22 @@ impl Validate for CartPole {
         }
         Ok(())
     }
+
+    /// ADR-0040: once reset, the single slot is always alive.
+    fn validate_record(
+        cfg: &CartPoleConfig,
+        header: &tessera_rl_core::HeaderView<'_>,
+        state: &CartPoleState,
+    ) -> Result<(), InvariantViolation> {
+        Self::validate(cfg, state)?;
+        let alive = header.agent(0).is_some_and(|a| a.alive);
+        if header.phase() != tessera_rl_core::Phase::NeverReset && !alive {
+            return Err(InvariantViolation {
+                code: "a reset record whose agent is not alive",
+            });
+        }
+        Ok(())
+    }
 }
 
 /// Scripted baseline: push toward the side the pole is falling to.

@@ -247,6 +247,23 @@ impl tessera_rl_core::Validate for Counter {
         }
         Ok(())
     }
+
+    /// ADR-0040: once reset, agent 1's slot is alive exactly when the
+    /// state does not mark it dead.
+    fn validate_record(
+        cfg: &CountConfig,
+        header: &tessera_rl_core::HeaderView<'_>,
+        state: &Counts,
+    ) -> Result<(), tessera_rl_core::InvariantViolation> {
+        Self::validate(cfg, state)?;
+        let alive = header.agent(1).is_some_and(|a| a.alive);
+        if header.phase() != tessera_rl_core::Phase::NeverReset && alive == state.dead.get() {
+            return Err(tessera_rl_core::InvariantViolation {
+                code: "agent 1 alive exactly when the state marks it dead",
+            });
+        }
+        Ok(())
+    }
 }
 
 /// Action 2 is illegal for agent 0 and legal for agent 1; the no-op is 0.

@@ -179,4 +179,23 @@ pub trait Validate: Environment {
     ///
     /// Returns the first [`InvariantViolation`] found.
     fn validate(cfg: &Self::Config, state: &Self::State) -> Result<(), InvariantViolation>;
+
+    /// Checks an untrusted record: `state` together with its engine header
+    /// (ADR-0040), for invariants that span both (for example, an agent
+    /// slot is alive exactly when the state has that agent). The engine
+    /// calls it on every imported record, after its own header checks and
+    /// before writing anything; restore and fork of trusted records do not
+    /// call it. Defaults to [`Validate::validate`].
+    ///
+    /// # Errors
+    ///
+    /// Returns the [`InvariantViolation`] found.
+    fn validate_record(
+        cfg: &Self::Config,
+        header: &crate::header_view::HeaderView<'_>,
+        state: &Self::State,
+    ) -> Result<(), InvariantViolation> {
+        let _ = header;
+        Self::validate(cfg, state)
+    }
 }

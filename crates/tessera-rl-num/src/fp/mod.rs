@@ -22,11 +22,21 @@
 //!   Rust frame of the entry point. It enters a scoped guard and calls the
 //!   closure through an `#[inline(never)]` helper, to keep the closure's
 //!   floating-point operations between the mode change and the restore,
-//!   even when results stay in registers. This is an empirically tested
-//!   mitigation, not a Rust language guarantee: `#[inline(never)]` controls
-//!   inlining, not LLVM's floating-point environment semantics. See
-//!   ADR-0037 (Proposed, pending owner acceptance). The raw guard is not
-//!   public; guards are strictly LIFO and not `Send`.
+//!   even when results stay in registers. The raw guard is not public;
+//!   guards are strictly LIFO and not `Send`.
+//!
+//! # Precondition (ADR-0037, accepted)
+//!
+//! In phase 1a the API is Rust-only, and **a caller thread must be in Rust's
+//! default floating-point environment**. Entering with non-default controls
+//! (for example flush-to-zero left by a host library) is **unsupported**.
+//! The guard is a defensive mitigation against that misuse, empirically
+//! tested in release builds, not a language guarantee: `#[inline(never)]`
+//! controls inlining, not LLVM's floating-point semantics.
+//! [`non_canonical_entries`] makes such misuse observable; it is not proof
+//! of correctness. Supporting foreign callers with non-default controls
+//! requires an audited native entry boundary that canonicalizes before the
+//! first Rust frame: a hard gate for phase 1b.
 //!
 //! On drop the guard restores the caller's control bits and keeps the
 //! current sticky status flags (x86-64 MXCSR bits 0 to 5; aarch64 keeps them
@@ -52,14 +62,14 @@
 //! raw guard was dropped to the other side of the boundary. That is why
 //! code runs only inside the non-inlined call of [`with_canonical`], which
 //! release regression tests show to be effective on the supported targets;
-//! it is not a language-level proof. Running kernels inside an assembly
-//! shim would give one; ADR-0037 (Proposed, pending owner acceptance)
-//! records the decision not to do so for now.
+//! it is not a language-level proof. The native entry boundary required
+//! before phase 1b (ADR-0037) is what will give one.
 //!
 //! Miri cannot run inline assembly, so this module is covered by native
 //! tests on every CI platform.
 
 use core::marker::PhantomData;
+use core::sync::atomic::{AtomicU64, Ordering};
 
 #[cfg(target_arch = "aarch64")]
 mod aarch64;
@@ -103,11 +113,11 @@ pub fn ensure_canonical() -> bool {
 ///
 /// This is the only way environment code runs on a caller's thread.
 ///
-/// Keeping the closure's operations inside the canonical environment is an
-/// empirically tested mitigation (release regression tests on x86-64 and
-/// aarch64), not a Rust language guarantee: `#[inline(never)]` controls
-/// inlining, not LLVM's floating-point environment semantics. See ADR-0037
-/// (Proposed, pending owner acceptance).
+/// The caller's thread must be in the default environment (the module's
+/// precondition, ADR-0037). Keeping the closure's operations inside the
+/// canonical environment when it is not is a defensive mitigation,
+/// empirically tested in release builds on x86-64 and aarch64, not a Rust
+/// language guarantee.
 #[inline]
 pub fn with_canonical<R>(f: impl FnOnce() -> R) -> R {
     let guard = FpGuard::enter();
@@ -161,6 +171,23 @@ pub fn with_hostile_flush_to_zero<R>(f: impl FnOnce() -> R) -> R {
     result
 }
 
+/// Entries into [`with_canonical`] whose caller thread was not in the
+/// canonical environment (ADR-0037 observability), process-wide.
+static NON_CANONICAL_ENTRIES: AtomicU64 = AtomicU64::new(0);
+
+/// How many times, process-wide and shared by every pool, a caller thread
+/// entered [`with_canonical`] in a non-canonical floating-point environment
+/// (for example after a host library enabled flush-to-zero).
+///
+/// Such entries are **unsupported** in phase 1a (ADR-0037): the guard only
+/// mitigates them defensively, and the Rust code before it runs in the
+/// caller's environment. This counter is observability of that misuse, not
+/// proof that results are correct.
+#[must_use]
+pub fn non_canonical_entries() -> u64 {
+    NON_CANONICAL_ENTRIES.load(Ordering::Relaxed)
+}
+
 /// Returns whether the current thread is in the canonical environment.
 /// Status flags are ignored.
 #[must_use]
@@ -187,7 +214,11 @@ impl FpGuard {
     #[inline(never)]
     pub(crate) fn enter() -> Self {
         let saved = arch::read();
-        arch::write(arch::canonical(saved));
+        let canonical = arch::canonical(saved);
+        if canonical != saved {
+            NON_CANONICAL_ENTRIES.fetch_add(1, Ordering::Relaxed);
+        }
+        arch::write(canonical);
         Self {
             saved,
             _not_send: PhantomData,
@@ -209,10 +240,20 @@ mod tests {
 
     use super::arch::{self, test_modes};
     use super::with_hostile_flush_to_zero;
-    use super::{FpGuard, ensure_canonical, establish_canonical, is_canonical, with_canonical};
+    use super::{
+        FpGuard, ensure_canonical, establish_canonical, is_canonical, non_canonical_entries,
+        with_canonical,
+    };
 
     // 1/3 rounded to nearest.
     const ONE_THIRD_NEAREST: u64 = 0x3FD5_5555_5555_5555;
+
+    #[test]
+    fn test_with_canonical_counts_entries_from_a_non_canonical_thread() {
+        let before = non_canonical_entries();
+        with_hostile_flush_to_zero(|| with_canonical(|| ()));
+        assert!(non_canonical_entries() > before);
+    }
 
     /// Runs `f` with `mode` applied to the current state, then restores the
     /// original state before any further floating-point operation.
