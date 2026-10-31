@@ -504,3 +504,35 @@ fn test_import_of_an_active_record_then_reset_keep_advances_the_episode() {
         episode + 1
     );
 }
+
+/// ADR-0040: a recovery import whose record fails the header-aware check
+/// leaves the pool poisoned and unchanged; a consistent one recovers it.
+#[test]
+fn test_failed_header_aware_recovery_import_keeps_the_poison() {
+    let cfg = CountConfig {
+        panic_at: 3,
+        ..long()
+    };
+    let mut p = pool_with(1, 2, cfg, AutoReset::NextStep);
+    let good = p.snapshot(0).unwrap();
+    let act = ActionInput {
+        discrete: &[0, 0],
+        continuous: &[],
+    };
+    p.step(act).unwrap();
+    p.step(act).unwrap();
+    assert_eq!(p.step(act).map(|_| ()), Err(EngineError::Panicked));
+    assert!(p.is_poisoned());
+    // Agent 1 alive in the header, dead in the state.
+    let mut state = *good.state();
+    state.dead = tessera_rl_core::Bool8::TRUE;
+    let bad = DecodedRecord::<Counter>::from_parts(*good.header(), state).unwrap();
+    assert!(matches!(
+        p.import_all(&[bad]),
+        Err(EngineError::Invariant { index: 0, .. })
+    ));
+    assert!(p.is_poisoned());
+    let fine = DecodedRecord::<Counter>::from_parts(*good.header(), *good.state()).unwrap();
+    p.import_all(&[fine]).unwrap();
+    assert!(!p.is_poisoned());
+}

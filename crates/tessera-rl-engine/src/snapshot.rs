@@ -368,13 +368,14 @@ where
                 return invalid("a non-finite episode return");
             }
         }
-        E::validate(&self.cfg, record.state())
+        let view = tessera_rl_core::HeaderView::of(header);
+        E::validate_record(&self.cfg, &view, record.state())
             .map_err(|violation| EngineError::Invariant { index, violation })
     }
 
     /// Restores untrusted records (decoded from bytes) into `ids`, in
     /// order. Every record is checked first (engine header consistency and
-    /// `Validate`); then all are written. Atomic: on any error nothing is
+    /// `Validate::validate_record`, ADR-0040); then all are written. Atomic: on any error nothing is
     /// mutated.
     ///
     /// # Errors
