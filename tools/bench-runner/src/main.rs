@@ -10,17 +10,21 @@
 //!   and observation writing included (SPEC 19.1).
 //! - `latency <env> <num_envs> <workers> <warmup_s> <reps> <batches>`: p50
 //!   and p99 of the batch step time per repetition, in nanoseconds.
-//! - `snapshot <env> <num_envs> <reps>`: per-instance nanoseconds. Copy
+//! - `snapshot <env> <num_envs> <warmup_s> <reps>`: per-instance
+//!   nanoseconds, after warming the measured operations up. Copy
 //!   only: `snapshot` (one record at a time) and `snapshot_all` (into a
 //!   preallocated buffer). Including re-observation (ADR-0039):
 //!   `restore`, `import` (plus validation), `fork` and `fork_branched`.
 //! - `memory <env> <num_envs>`: continuation bytes per instance, mask
 //!   bytes written per step and output storage bytes.
 //!
-//! `env` is `cartpole` or `tag`; `workers` 0 is Inline mode. An optional
-//! trailing `--cpus a,b,...` pins the Sync-mode workers to those logical
-//! CPUs (pin the process itself with `taskset` on Linux). The report
-//! includes the process CPU affinity where the OS exposes it.
+//! `env` is `cartpole` or `tag`; `workers` 0 is Inline mode. Options:
+//! `--cpus a,b,...` pins the Sync-mode workers to those logical CPUs (pin
+//! the process itself with `taskset` on Linux); `--max-episode-steps N`
+//! sets the truncation limit (0, the default, is none). The output records
+//! the effective method and pool options, the FNV-1a fingerprint of the
+//! action plan (the same plan the Python harness generates), and the
+//! process CPU affinity where the OS exposes it.
 
 use core::num::{NonZeroU32, NonZeroUsize};
 use std::hint::black_box;
@@ -55,6 +59,27 @@ fn arg<T: core::str::FromStr>(args: &[String], i: usize, name: &str) -> Result<T
     args.get(i)
         .and_then(|a| a.parse().ok())
         .ok_or_else(|| usage(&format!("missing or invalid <{name}>")))
+}
+
+/// The value after `flag`, if given.
+fn option<T: core::str::FromStr>(args: &[String], flag: &str) -> Result<Option<T>, Error> {
+    let Some(pos) = args.iter().position(|a| a == flag) else {
+        return Ok(None);
+    };
+    args.get(pos + 1)
+        .and_then(|v| v.parse().ok())
+        .map(Some)
+        .ok_or_else(|| usage(&format!("{flag} needs a value")))
+}
+
+/// FNV-1a over the little-endian bytes of the plan, batch by batch.
+fn fingerprint(batches: &[Vec<i32>]) -> u64 {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for byte in batches.iter().flatten().flat_map(|v| v.to_le_bytes()) {
+        h ^= u64::from(byte);
+        h = h.wrapping_mul(0x0100_0000_01b3);
+    }
+    h
 }
 
 /// The `--cpus a,b,...` list, if given.
@@ -94,6 +119,7 @@ fn pool<E, M>(
     num_envs: u32,
     workers: usize,
     cpu_set: Option<Vec<usize>>,
+    max_episode_steps: u32,
 ) -> Result<EnvPool<E, M>, Error>
 where
     E: Environment + tessera_rl_core::Validate,
@@ -105,7 +131,9 @@ where
     M: MaskProvider<E>,
 {
     let n = NonZeroU32::new(num_envs).ok_or_else(|| usage("num_envs must be at least 1"))?;
-    let mut p = make(PoolOptions::new(n, Seed::new(1)))?;
+    let mut options = PoolOptions::new(n, Seed::new(1));
+    options.max_episode_steps = NonZeroU32::new(max_episode_steps);
+    let mut p = make(options)?;
     if let Some(w) = NonZeroUsize::new(workers) {
         let mut sync = SyncOptions::new(w);
         if let Some(set) = cpu_set {
@@ -224,7 +252,10 @@ where
         Ok((p50, p99))
     }
 
-    fn snapshot(&mut self, reps: usize) -> Result<[Vec<f64>; 6], Error> {
+    /// Per-instance costs, after `warmup` seconds of the same operations
+    /// on the same preallocated buffers; returns the samples and the
+    /// number of warm-up iterations.
+    fn snapshot(&mut self, warmup: f64, reps: usize) -> Result<([Vec<f64>; 6], u64), Error> {
         let n = self.num_envs;
         if n < 2 {
             return Err(usage("snapshot costs need at least two instances"));
@@ -236,7 +267,18 @@ where
         let mut out: [Vec<f64>; 6] = Default::default();
         let mut records: Vec<Record<E>> = Vec::with_capacity(ids.len());
         let mut buffer: Vec<Record<E>> = Vec::with_capacity(ids.len());
-        for _ in 0..reps {
+        let warm = Duration::from_secs_f64(warmup);
+        let began = Instant::now();
+        let mut warmups = 0u64;
+        let mut scratch: [Vec<f64>; 6] = Default::default();
+        let total = reps;
+        let mut done = 0usize;
+        loop {
+            let warming = began.elapsed() < warm;
+            if !warming && done == total {
+                break;
+            }
+            let out = if warming { &mut scratch } else { &mut out };
             self.step(0)?;
             records.clear();
             let start = Instant::now();
@@ -265,8 +307,14 @@ where
             let start = Instant::now();
             self.pool.fork_branched(0, &others, None)?;
             push(&mut out[5], start.elapsed(), dst_count);
+            if warming {
+                warmups += 1;
+                scratch.iter_mut().for_each(Vec::clear);
+            } else {
+                done += 1;
+            }
         }
-        Ok(out)
+        Ok((out, warmups))
     }
 
     fn memory(&self) -> (usize, usize, usize) {
@@ -332,33 +380,37 @@ where
     let cmd = args.get(1).map_or("", String::as_str);
     let body = match cmd {
         "throughput" => {
-            let s = bench.throughput(
+            let (warmup, reps, rep): (f64, usize, f64) = (
                 arg(args, 5, "warmup_s")?,
                 arg(args, 6, "reps")?,
                 arg(args, 7, "rep_s")?,
-            )?;
+            );
+            let s = bench.throughput(warmup, reps, rep)?;
             format!(
-                r#""metric": "throughput", "unit": "steps/s", "samples": {}"#,
+                r#""metric": "throughput", "unit": "steps/s", "method": {{"warmup_s": {warmup}, "reps": {reps}, "rep_s": {rep}}}, "samples": {}"#,
                 list(&s)
             )
         }
         "latency" => {
-            let (p50, p99) = bench.latency(
+            let (warmup, reps, batches): (f64, usize, usize) = (
                 arg(args, 5, "warmup_s")?,
                 arg(args, 6, "reps")?,
                 arg(args, 7, "batches")?,
-            )?;
+            );
+            let (p50, p99) = bench.latency(warmup, reps, batches)?;
             format!(
-                r#""metric": "latency", "unit": "ns/batch", "p50": {}, "p99": {}"#,
+                r#""metric": "latency", "unit": "ns/batch", "method": {{"warmup_s": {warmup}, "reps": {reps}, "batches": {batches}}}, "p50": {}, "p99": {}"#,
                 list(&p50),
                 list(&p99)
             )
         }
         "snapshot" => {
-            let [snap, all, restore, import, fork, branched] =
-                bench.snapshot(arg(args, 4, "reps")?)?;
+            let warmup: f64 = arg(args, 4, "warmup_s")?;
+            let reps: usize = arg(args, 5, "reps")?;
+            let ([snap, all, restore, import, fork, branched], warmups) =
+                bench.snapshot(warmup, reps)?;
             format!(
-                r#""metric": "snapshot", "unit": "ns/instance", "record_bytes": {}, "snapshot_copy": {}, "snapshot_all_copy": {}, "restore_with_reobserve": {}, "import_with_validation_and_reobserve": {}, "fork_with_reobserve": {}, "fork_branched_with_reobserve": {}"#,
+                r#""metric": "snapshot", "unit": "ns/instance", "method": {{"warmup_s": {warmup}, "warmup_iterations": {warmups}, "reps": {reps}}}, "record_bytes": {}, "snapshot_copy": {}, "snapshot_all_copy": {}, "restore_with_reobserve": {}, "import_with_validation_and_reobserve": {}, "fork_with_reobserve": {}, "fork_branched_with_reobserve": {}"#,
                 Record::<E>::record_size(),
                 list(&snap),
                 list(&all),
@@ -377,8 +429,15 @@ where
         other => return Err(usage(&format!("unknown command {other:?}"))),
     };
     let requested = cpus(args)?.map_or_else(|| "engine default".to_owned(), |c| format!("{c:?}"));
+    let limit: u32 = option(args, "--max-episode-steps")?.unwrap_or(0);
     Ok(format!(
-        r#"{{{body}, "pinning": {{"worker_cpu_set": "{requested}", "process_affinity": "{}"}}}}"#,
+        r#"{{{body}, "options": {{"seed": 1, "auto_reset": "next_step", "max_episode_steps": {limit}, "action_batches": {ACTION_BATCHES}}}, "plan_fingerprint": "{:016x}", "profile": "{}", "pinning": {{"worker_cpu_set": "{requested}", "process_affinity": "{}"}}}}"#,
+        fingerprint(&bench.batches),
+        if cfg!(debug_assertions) {
+            "debug"
+        } else {
+            "release"
+        },
         affinity()
     ))
 }
@@ -393,6 +452,7 @@ fn run(args: &[String]) -> Result<String, Error> {
         0
     };
     let cpu_set = cpus(args)?;
+    let limit: u32 = option(args, "--max-episode-steps")?.unwrap_or(0);
     match env {
         "cartpole" => run_env(
             args,
@@ -402,6 +462,7 @@ fn run(args: &[String]) -> Result<String, Error> {
                     num_envs,
                     workers,
                     cpu_set,
+                    limit,
                 )?,
                 &CartPoleConfig::default(),
                 num_envs,
@@ -415,6 +476,7 @@ fn run(args: &[String]) -> Result<String, Error> {
                     num_envs,
                     workers,
                     cpu_set,
+                    limit,
                 )?,
                 &TagConfig::default(),
                 num_envs,

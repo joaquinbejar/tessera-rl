@@ -30,7 +30,14 @@ make bench-kernels                # Criterion benches of the kernels
   separate processes, in a seeded shuffled order recorded in the report.
   The claim statistic is the median and CI over the process medians. One
   run (the default) gives in-process statistics, which are only indicative.
-- Fixed seeds and pregenerated seeded action streams.
+- The same work everywhere: every configuration, Rust or Python, steps the
+  same seeded action plan (a 64-bit LCG, 64 batches) under the same
+  options: seed 1, `next_step` auto-reset, and `max_episode_steps` (500 by
+  default, CartPole-v1's). The report records each side's options and the
+  plan's FNV-1a fingerprint. A derived ratio marked `require_same_work` is
+  refused when they differ.
+- Every measured operation is warmed up first, snapshot costs included.
+  The report records the effective method of each metric.
 - Pinning: each machine's `bench_cpu_set` in `compat/machines.toml` lists
   distinct physical cores, avoids CPU 0 and leaves SMT siblings idle.
   Single-core and Python runs use its first CPU (`taskset`). A k-worker run
@@ -40,9 +47,19 @@ make bench-kernels                # Criterion benches of the kernels
   the report says so.
 - Every Python result names its output mode. `owned` numbers are never
   presented as borrowed-path throughput.
-- `valid_for_claims` is true only with the full method, at least
-  `runs_for_claims` process runs, applied pinning, and a machine whose
-  `compat/machines.toml` status is `reference`. Today no machine is
+- Derived ratios (scaling efficiency, Python overhead, speedup) carry a 95%
+  CI that bootstraps each operand's median independently.
+- Claims fail closed. `valid_for_claims` holds only when
+  `claim_check.reasons` is empty, which requires all of the following:
+  - the full method;
+  - at least `runs_for_claims` process runs;
+  - release builds (runner and native module);
+  - pinning applied, with the observed affinity matching it;
+  - an observed CPU matching the record's `cpu_id`;
+  - enough samples;
+  - a machine whose `compat/machines.toml` status is `reference`;
+  - a qualification record (`--qualification`, TOML with `machine` and
+    `exclusive_window = true`) for what cannot be checked automatically. Today no machine is
   characterized (`ref-x86` is a candidate on a shared host), so every
   report is indicative. Quick runs are never valid.
 

@@ -16,6 +16,10 @@ bootstrap_seed = 0
 # Claims need process-level repetitions: `--runs` separate processes per
 # configuration, in a seeded shuffled order (TESSERA-REVIEWER R-PR12, R-PR24).
 runs_for_claims = 10
+# Every configuration, Rust or Python, steps under the same options: seed 1,
+# next_step auto-reset, this truncation limit (CartPole-v1's), unless a
+# configuration overrides it.
+max_episode_steps = 500
 
 # Rust: raw env throughput, pregenerated seeded random actions, auto-reset
 # and observation writing included (SPEC 19.1).
@@ -46,6 +50,7 @@ workers = 4
 [[config]]
 name = "rust/tag/inline/n256"
 kind = "rust"
+max_episode_steps = 200
 metric = "throughput"
 env = "tag"
 num_envs = 256
@@ -76,6 +81,7 @@ num_envs = 1024
 [[config]]
 name = "rust/tag/n1024/memory"
 kind = "rust"
+max_episode_steps = 200
 metric = "memory"
 env = "tag"
 num_envs = 1024
@@ -121,17 +127,20 @@ workers = 4
 [[derived]]
 name = "python_overhead/cartpole/n1024/borrowed"
 kind = "ratio"
+require_same_work = true
 numerator = "py/native/cartpole/n1024/borrowed"
 denominator = "rust/cartpole/inline/n1024"
 
 [[derived]]
 name = "python_overhead/cartpole/n1024/owned"
 kind = "ratio"
+require_same_work = true
 numerator = "py/native/cartpole/n1024/owned"
 denominator = "rust/cartpole/inline/n1024"
 
 [[derived]]
 name = "speedup/gym-adapter-vs-gymnasium-sync/n64"
 kind = "ratio"
+require_same_work = true
 numerator = "py/gym-adapter/cartpole/n64/owned"
 denominator = "py/gymnasium-sync/cartpole/n64"
