@@ -29,7 +29,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [xaskar, ubuntu-24.04-arm, m4, windows-latest]
+        os: [xaskar, m4-linux-arm64, m4] # windows-latest: off until the Windows runner exists
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
@@ -44,6 +44,8 @@ jobs:
   # The native wait on Windows (WaitOnAddress) runs only on request until
   # this job passes; it is the precondition for `Auto` to use it there.
   windows-native-wait:
+    # Off until the self-hosted Windows runner exists.
+    if: false
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -70,7 +72,7 @@ jobs:
         include:
           - os: xaskar
             target: x86_64-unknown-linux-musl
-          - os: ubuntu-24.04-arm
+          - os: m4-linux-arm64
             target: aarch64-unknown-linux-musl
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -87,7 +89,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [xaskar, ubuntu-24.04-arm]
+        os: [xaskar, m4-linux-arm64]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
