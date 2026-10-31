@@ -91,6 +91,23 @@ impl PoolOptions {
     }
 }
 
+/// How worker threads block between batches (ADR-0005).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum WaitBackend {
+    /// The native address wait where it measured faster than park (Linux
+    /// `futex`); park and unpark elsewhere (macOS showed no gain, Windows
+    /// has not run in CI yet). To be re-evaluated on reference hardware.
+    #[default]
+    Auto,
+    /// Portable `thread::park` and `unpark`.
+    Park,
+    /// The native address wait: `futex`, macOS 14.4+
+    /// `os_sync_wait_on_address`, or Windows `WaitOnAddress` (opt-in: not yet
+    /// run on Windows). Falls back to park, with a warning, where none
+    /// exists.
+    Native,
+}
+
 /// Options of Sync mode (ADR-0005, ADR-0006).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SyncOptions {
@@ -103,6 +120,8 @@ pub struct SyncOptions {
     /// core `w` when no other engine with workers is active, and leaves
     /// workers unpinned (with a warning) otherwise.
     pub cpu_set: Option<Vec<usize>>,
+    /// How workers block between batches.
+    pub wait: WaitBackend,
 }
 
 impl SyncOptions {
@@ -113,6 +132,7 @@ impl SyncOptions {
             workers,
             spin: 2_000,
             cpu_set: None,
+            wait: WaitBackend::Auto,
         }
     }
 }

@@ -23,6 +23,8 @@ use crate::buffer::par_chunks;
 use crate::error::EngineError;
 use crate::layout::{ActionLayout, MAX_LEAVES, obs_leaves};
 use crate::masks::{IllegalActionPolicy, MaskProvider, Masked, NoMasks};
+#[cfg(not(loom))]
+use crate::options::WaitBackend;
 use crate::options::{AutoReset, PoolOptions, SyncOptions};
 use crate::outputs::{Outputs, OutputsView};
 use crate::registry::Registration;
@@ -78,6 +80,7 @@ pub struct EnvPool<E: Environment, M: MaskProvider<E> = NoMasks> {
 struct SyncRuntime {
     gang: Gang,
     workers: usize,
+    native: bool,
     _registration: Registration,
 }
 
@@ -294,19 +297,33 @@ where
                 None
             }
         };
+        #[cfg(not(loom))]
+        let native = select_native(options.wait);
+        #[cfg(loom)]
+        let native: Option<()> = None;
         let gang = Gang::new(&GangOptions {
             workers: options.workers,
             spin: options.spin,
             pin,
+            #[cfg(not(loom))]
+            native,
             #[cfg(test)]
             faults,
         })?;
         self.sync = Some(SyncRuntime {
             gang,
             workers,
+            native: native.is_some(),
             _registration: registration,
         });
         Ok(self)
+    }
+
+    /// Whether the workers block with the native address wait (otherwise
+    /// park and unpark, or Inline mode).
+    #[must_use]
+    pub fn uses_native_wait(&self) -> bool {
+        self.sync.as_ref().is_some_and(|s| s.native)
     }
 
     /// Number of worker threads; 0 in Inline mode.
@@ -733,6 +750,27 @@ where
             });
         }
         Ok(())
+    }
+}
+
+/// The native wait primitive to use for `choice`, if any.
+#[cfg(not(loom))]
+fn select_native(choice: WaitBackend) -> Option<crate::sys::Native> {
+    let native = crate::sys::Native::detect();
+    match choice {
+        WaitBackend::Park => None,
+        // Native by default only where it measured faster than park: Linux
+        // futex (about 4% when every batch blocks). macOS os_sync showed no
+        // gain, and Windows WaitOnAddress has not run in CI yet. Re-evaluate
+        // on the reference hardware (ADR-0025).
+        WaitBackend::Auto if !cfg!(target_os = "linux") => None,
+        WaitBackend::Auto => native,
+        WaitBackend::Native => {
+            if native.is_none() {
+                tracing::warn!("no native wait primitive on this system; workers use park");
+            }
+            native
+        }
     }
 }
 

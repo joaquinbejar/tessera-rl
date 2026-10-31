@@ -60,7 +60,7 @@ use crate::error::EngineError;
 use super::affinity::pin_current;
 use super::panics::catch;
 use super::sync::{
-    Arc, AtomicBool, AtomicPtr, AtomicU64, AtomicUsize, Ordering, spin_loop, thread,
+    Arc, AtomicBool, AtomicPtr, AtomicU32, AtomicU64, AtomicUsize, Ordering, spin_loop, thread,
 };
 
 /// Options of a gang.
@@ -73,6 +73,9 @@ pub(crate) struct GangOptions {
     /// Logical cores to pin workers to, in order (already validated);
     /// `None` leaves them unpinned.
     pub(crate) pin: Option<Vec<usize>>,
+    /// The native wait primitive, or `None` for park and unpark.
+    #[cfg(not(loom))]
+    pub(crate) native: Option<super::Native>,
     /// Test-only fault injection.
     #[cfg(test)]
     pub(crate) faults: Faults,
@@ -100,24 +103,39 @@ struct Job {
     waker: thread::Thread,
 }
 
+/// How waiting threads block and are woken.
+#[derive(Debug, Clone, Copy)]
+enum Backend {
+    /// `thread::park` and `unpark` (portable; the only backend under loom).
+    Park,
+    /// Address waits on the 32-bit words below.
+    #[cfg(not(loom))]
+    Native(super::Native),
+}
+
 struct Shared {
-    epoch: AtomicU64,
-    pending: AtomicUsize,
+    // 32-bit words, as address waits need. The epoch wraps at 2^32; only
+    // its change matters, and every epoch is seen by every worker.
+    epoch: AtomicU32,
+    pending: AtomicU32,
     shutdown: AtomicBool,
     panicked: AtomicBool,
     dead: AtomicBool,
-    ready: AtomicUsize,
+    ready: AtomicU32,
     failed: AtomicUsize,
     fp_resets: AtomicU64,
     job: AtomicPtr<Job>,
     creator: thread::Thread,
     spin: u32,
+    backend: Backend,
 }
 
 /// Persistent worker threads running one job per epoch.
 pub(crate) struct Gang {
     shared: Arc<Shared>,
     workers: Vec<(thread::Thread, Option<thread::JoinHandle<()>>)>,
+    /// `workers.len()` once every worker is spawned, checked to fit a u32.
+    count: u32,
 }
 
 impl core::fmt::Debug for Gang {
@@ -156,15 +174,42 @@ unsafe fn trampoline<F: Fn(usize) + Sync>(data: *const (), worker: usize) {
     f(worker);
 }
 
-/// Waits until `done()` holds: a bounded spin, then parking.
-fn wait(spin: u32, mut done: impl FnMut() -> bool) {
-    let mut spins = 0;
-    while !done() {
-        if spins < spin {
-            spins += 1;
-            spin_loop();
-        } else {
-            thread::park();
+impl Shared {
+    /// Waits until `done(word)` holds: a bounded spin, then blocking. The
+    /// word is read with Acquire; spurious returns just loop.
+    fn wait_on(&self, word: &AtomicU32, mut done: impl FnMut(u32) -> bool) -> u32 {
+        let mut spins = 0;
+        loop {
+            let value = word.load(Ordering::Acquire);
+            if done(value) {
+                return value;
+            }
+            if spins < self.spin {
+                spins += 1;
+                spin_loop();
+                continue;
+            }
+            match self.backend {
+                Backend::Park => thread::park(),
+                #[cfg(not(loom))]
+                Backend::Native(native) => native.wait(word, value),
+            }
+        }
+    }
+
+    /// Wakes the threads waiting on `word`: `parked` lists them for the
+    /// park backend; the native backend wakes by address.
+    fn wake<'a>(&self, word: &AtomicU32, parked: impl IntoIterator<Item = &'a thread::Thread>) {
+        match self.backend {
+            Backend::Park => {
+                // Park wakes threads, not addresses.
+                let _ = word;
+                for thread in parked {
+                    thread.unpark();
+                }
+            }
+            #[cfg(not(loom))]
+            Backend::Native(native) => native.wake_all(word),
         }
     }
 }
@@ -176,24 +221,34 @@ impl Gang {
         if in_worker() {
             return Err(EngineError::NestedEngine);
         }
+        // `pending` and `ready` count workers in a u32.
+        let count = u32::try_from(options.workers.get()).map_err(|_| EngineError::Options {
+            option: "workers",
+            reason: "more than u32::MAX workers",
+        })?;
         let shared = Arc::new(Shared {
-            epoch: AtomicU64::new(0),
-            pending: AtomicUsize::new(0),
+            epoch: AtomicU32::new(0),
+            pending: AtomicU32::new(0),
             shutdown: AtomicBool::new(false),
             panicked: AtomicBool::new(false),
             dead: AtomicBool::new(false),
-            ready: AtomicUsize::new(0),
+            ready: AtomicU32::new(0),
             failed: AtomicUsize::new(usize::MAX),
             fp_resets: AtomicU64::new(0),
             job: AtomicPtr::new(core::ptr::null_mut()),
             creator: thread::current(),
             spin: options.spin,
+            #[cfg(not(loom))]
+            backend: options.native.map_or(Backend::Park, Backend::Native),
+            #[cfg(loom)]
+            backend: Backend::Park,
         });
         // Dropping `gang` on any early return shuts down and joins the
         // workers spawned so far (the construction guard).
         let mut gang = Self {
             shared,
             workers: Vec::with_capacity(options.workers.get()),
+            count,
         };
         for w in 0..options.workers.get() {
             let shared = Arc::clone(&gang.shared);
@@ -225,9 +280,9 @@ impl Gang {
             }
         }
         let shared = Arc::clone(&gang.shared);
-        let n = gang.workers.len();
-        // Acquire: pairs with each worker's Release on `ready`.
-        wait(shared.spin, || shared.ready.load(Ordering::Acquire) == n);
+        let n = gang.count;
+        // Acquire (in `wait_on`): pairs with each worker's Release on `ready`.
+        shared.wait_on(&shared.ready, |ready| ready == n);
         let failed = shared.failed.load(Ordering::Relaxed);
         if failed != usize::MAX {
             drop(gang);
@@ -254,17 +309,15 @@ impl Gang {
             waker: thread::current(),
         };
         shared.panicked.store(false, Ordering::Relaxed);
-        shared.pending.store(self.workers.len(), Ordering::Relaxed);
+        shared.pending.store(self.count, Ordering::Relaxed);
         shared
             .job
             .store(core::ptr::from_ref(&job).cast_mut(), Ordering::Relaxed);
         // Release: publishes `pending`, `panicked` and the job (step 1).
         shared.epoch.fetch_add(1, Ordering::Release);
-        for (handle, _) in &self.workers {
-            handle.unpark();
-        }
+        shared.wake(&shared.epoch, self.workers.iter().map(|(t, _)| t));
         // Acquire: sees every worker's writes once all have decremented.
-        wait(shared.spin, || shared.pending.load(Ordering::Acquire) == 0);
+        shared.wait_on(&shared.pending, |pending| pending == 0);
         Ok(shared.panicked.load(Ordering::Relaxed))
     }
 
@@ -279,8 +332,9 @@ impl Drop for Gang {
         self.shared.shutdown.store(true, Ordering::Relaxed);
         // Release: publishes `shutdown` with the new epoch.
         self.shared.epoch.fetch_add(1, Ordering::Release);
-        for (handle, join) in &mut self.workers {
-            handle.unpark();
+        self.shared
+            .wake(&self.shared.epoch, self.workers.iter().map(|(t, _)| t));
+        for (_, join) in &mut self.workers {
             if let Some(join) = join.take()
                 && join.join().is_err()
             {
@@ -314,19 +368,14 @@ fn worker_main(shared: &Shared, worker: usize, core: Option<usize>, fail: bool, 
     }
     // Release: publishes `failed`; the creator waits for every worker.
     shared.ready.fetch_add(1, Ordering::Release);
-    shared.creator.unpark();
+    shared.wake(&shared.ready, core::iter::once(&shared.creator));
     if started.is_err() {
         return;
     }
     let mut seen = 0;
     loop {
-        let mut epoch = seen;
-        wait(shared.spin, || {
-            // Acquire: pairs with the caller's Release increment.
-            epoch = shared.epoch.load(Ordering::Acquire);
-            epoch != seen
-        });
-        seen = epoch;
+        // Acquire (in `wait_on`): pairs with the caller's Release increment.
+        seen = shared.wait_on(&shared.epoch, |epoch| epoch != seen);
         if shared.shutdown.load(Ordering::Relaxed) {
             return;
         }
@@ -364,7 +413,7 @@ fn decrement(shared: &Shared, waker: Option<&thread::Thread>) {
         // Every path passes the run's caller (`Job::waker`). `None` would
         // need a `Thread` clone to fail twice; the creator is the last
         // resort, and wakes the caller only if it did not move threads.
-        waker.unwrap_or(&shared.creator).unpark();
+        shared.wake(&shared.pending, Some(waker.unwrap_or(&shared.creator)));
     }
 }
 
@@ -430,6 +479,8 @@ mod tests {
             workers: NonZeroUsize::new(workers).unwrap(),
             spin: if cfg!(loom) { 0 } else { 64 },
             pin: None,
+            #[cfg(not(loom))]
+            native: None,
             faults: Faults::default(),
         }
     }

@@ -40,6 +40,8 @@ tessera-rl-engine = { path = "crates/tessera-rl-engine", version = "0.1.0" }
 tessera-rl-classic = { path = "crates/tessera-rl-classic", version = "0.1.0" }
 
 core_affinity = "0.8"
+criterion = { version = "0.8", default-features = false, features = ["cargo_bench_support"] }
+libc = "0.2"
 loom = "0.7"
 proc-macro-crate = "3"
 proc-macro2 = "1"
@@ -48,6 +50,7 @@ syn = { version = "3", features = ["full"] }
 thiserror = "2"
 tracing = { version = "0.1", default-features = false, features = ["std"] }
 trybuild = "1"
+windows-sys = { version = "0.61", features = ["Win32_System_Threading"] }
 xxhash-rust = { version = "0.8", default-features = false, features = ["xxh3"] }
 
 [workspace.lints.rust]

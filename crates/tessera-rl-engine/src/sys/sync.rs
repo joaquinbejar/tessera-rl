@@ -8,7 +8,9 @@ pub(crate) use loom::hint::spin_loop;
 #[cfg(loom)]
 pub(crate) use loom::sync::Arc;
 #[cfg(loom)]
-pub(crate) use loom::sync::atomic::{AtomicBool, AtomicPtr, AtomicU64, AtomicUsize, Ordering};
+pub(crate) use loom::sync::atomic::{
+    AtomicBool, AtomicPtr, AtomicU32, AtomicU64, AtomicUsize, Ordering,
+};
 #[cfg(loom)]
 pub(crate) use loom::thread;
 
@@ -17,6 +19,8 @@ pub(crate) use core::hint::spin_loop;
 #[cfg(not(loom))]
 pub(crate) use std::sync::Arc;
 #[cfg(not(loom))]
-pub(crate) use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU64, AtomicUsize, Ordering};
+pub(crate) use std::sync::atomic::{
+    AtomicBool, AtomicPtr, AtomicU32, AtomicU64, AtomicUsize, Ordering,
+};
 #[cfg(not(loom))]
 pub(crate) use std::thread;
