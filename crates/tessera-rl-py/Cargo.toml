@@ -22,6 +22,10 @@ tessera-rl-num.workspace = true
 tessera-rl-engine.workspace = true
 tessera-rl-classic.workspace = true
 
+[dev-dependencies]
+# Hostile floating-point modes for the boundary tests (ADR-0041).
+tessera-rl-num = { workspace = true, features = ["test-hooks"] }
+
 [build-dependencies]
 pyo3-build-config = "0.30"
 

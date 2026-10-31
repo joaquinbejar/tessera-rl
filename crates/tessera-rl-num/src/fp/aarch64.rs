@@ -25,6 +25,17 @@ const FZ: u64 = 1 << 24;
 // Default NaN; off, so NaN propagation follows IEEE 754.
 const DN: u64 = 1 << 25;
 
+/// Bits the canonical environment clears and sets, and the status flags
+/// (none: they live in FPSR), for native entry boundaries (ADR-0041).
+pub(super) const CLEAR: Control = FIZ | AH | TRAPS | FZ16 | RMODE | FZ | DN;
+pub(super) const SET: Control = 0;
+pub(super) const STATUS_FLAGS: Control = 0;
+
+/// The register from a 64-bit value.
+pub(super) const fn from_bits(bits: u64) -> Control {
+    bits
+}
+
 /// Canonical control bits.
 #[inline]
 pub(super) const fn canonical(control: Control) -> Control {
@@ -71,7 +82,7 @@ pub(super) fn write(control: Control) {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-hooks"))]
 pub(super) mod test_modes {
     use super::{AH, Control, DN, FZ, FZ16, RMODE};
 

@@ -17,6 +17,18 @@ const RC: u32 = 0b11 << 13;
 // Flush-to-zero.
 const FTZ: u32 = 1 << 15;
 
+/// Bits the canonical environment clears and sets, and the sticky status
+/// flags, for native entry boundaries (ADR-0041).
+pub(super) const CLEAR: Control = DAZ | RC | FTZ;
+pub(super) const SET: Control = MASKS;
+pub(super) const STATUS_FLAGS: Control = STATUS;
+
+/// The register from a zero-extended 64-bit value (MXCSR is 32 bits).
+#[expect(clippy::cast_possible_truncation, reason = "MXCSR is 32 bits wide")]
+pub(super) const fn from_bits(bits: u64) -> Control {
+    bits as Control
+}
+
 /// Canonical control bits; the status flags are left untouched.
 #[inline]
 pub(super) const fn canonical(control: Control) -> Control {
@@ -65,9 +77,11 @@ pub(super) fn write(control: Control) {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-hooks"))]
 pub(super) mod test_modes {
-    use super::{Control, DAZ, FTZ, MASKS, RC, STATUS};
+    #[cfg(test)]
+    use super::MASKS;
+    use super::{Control, DAZ, FTZ, RC, STATUS};
 
     pub(crate) const fn flush_to_zero(control: Control) -> Control {
         control | DAZ | FTZ
@@ -85,14 +99,17 @@ pub(super) mod test_modes {
         control & !STATUS
     }
 
+    #[cfg(test)]
     pub(crate) const fn inexact_raised(control: Control) -> bool {
         control & (1 << 5) != 0
     }
 
+    #[cfg(test)]
     pub(crate) const fn clear_status(control: Control) -> Control {
         control & !STATUS
     }
 
+    #[cfg(test)]
     pub(crate) const fn all_masked(control: Control) -> bool {
         control & MASKS == MASKS
     }

@@ -10,18 +10,18 @@ use core::ptr;
 
 use pyo3::ffi;
 use pyo3::prelude::*;
+use pyo3::types::PyString;
 
+use super::boundary::{self, Policy};
 use super::tables::{method, method_end};
 use super::{Table, entry, env_type, thunks, view_type};
+use crate::errors::{Kind, error};
 
 pub(super) unsafe extern "C" fn version(
     _module: *mut ffi::PyObject,
     _args: *mut ffi::PyObject,
 ) -> *mut ffi::PyObject {
-    let text = env!("CARGO_PKG_VERSION");
-    // SAFETY: called by CPython with the interpreter attached; the bytes
-    // are valid UTF-8 of the given length.
-    unsafe { ffi::PyUnicode_FromStringAndSize(text.as_ptr().cast(), text.len().cast_signed()) }
+    entry(|py| Ok(PyString::new(py, env!("CARGO_PKG_VERSION")).into_ptr()))
 }
 
 /// `build_profile()`: `"release"` or `"debug"`, as the native module was
@@ -35,17 +35,88 @@ pub(super) unsafe extern "C" fn build_profile(
     } else {
         "release"
     };
-    // SAFETY: called by CPython with the interpreter attached; the bytes
-    // are valid UTF-8 of the given length.
-    unsafe { ffi::PyUnicode_FromStringAndSize(text.as_ptr().cast(), text.len().cast_signed()) }
+    entry(|py| Ok(PyString::new(py, text).into_ptr()))
 }
 
-static METHODS: Table<[ffi::PyMethodDef; 5]> = Table([
+/// `set_fp_policy(name)`: `"canonicalize"` (the default) or `"reject"`
+/// (ADR-0041).
+pub(super) unsafe extern "C" fn set_fp_policy(
+    _module: *mut ffi::PyObject,
+    args: *mut ffi::PyObject,
+) -> *mut ffi::PyObject {
+    entry(|py| {
+        // SAFETY: METH_VARARGS passes a borrowed tuple.
+        let args = unsafe { Bound::from_borrowed_ptr(py, args) };
+        let (name,): (String,) = args.extract()?;
+        let policy = match name.as_str() {
+            "canonicalize" => Policy::Canonicalize,
+            "reject" => Policy::Reject,
+            other => {
+                return Err(error(
+                    py,
+                    Kind::Argument,
+                    format!(
+                        "the floating-point policy is \"canonicalize\" or \"reject\", not {other:?}"
+                    ),
+                ));
+            }
+        };
+        boundary::set_policy(policy);
+        Ok(py.None().into_ptr())
+    })
+}
+
+/// `get_fp_policy()`: the current policy's name.
+pub(super) unsafe extern "C" fn get_fp_policy(
+    _module: *mut ffi::PyObject,
+    _args: *mut ffi::PyObject,
+) -> *mut ffi::PyObject {
+    entry(|py| {
+        let name = match boundary::policy() {
+            Policy::Canonicalize => "canonicalize",
+            Policy::Reject => "reject",
+        };
+        Ok(PyString::new(py, name).into_ptr())
+    })
+}
+
+/// `fp_non_canonical_entries()`: entries made with non-default caller
+/// controls, process-wide (observability, ADR-0037).
+pub(super) unsafe extern "C" fn fp_non_canonical_entries(
+    _module: *mut ffi::PyObject,
+    _args: *mut ffi::PyObject,
+) -> *mut ffi::PyObject {
+    entry(|py| {
+        Ok(tessera_rl_num::fp::non_canonical_entries()
+            .into_pyobject(py)?
+            .into_ptr())
+    })
+}
+
+static METHODS: Table<[ffi::PyMethodDef; 8]> = Table([
     method(
         c"version",
         thunks::VERSION,
         ffi::METH_NOARGS,
         c"The Tessera version.",
+    ),
+    method(
+        c"set_fp_policy",
+        thunks::SET_FP_POLICY,
+        ffi::METH_VARARGS,
+        c"set_fp_policy(name): \"canonicalize\" (default) or \"reject\".",
+    ),
+    method(
+        c"get_fp_policy",
+        thunks::GET_FP_POLICY,
+        ffi::METH_NOARGS,
+        c"The floating-point policy for non-default caller controls.",
+    ),
+    method(
+        c"fp_non_canonical_entries",
+        thunks::FP_NON_CANONICAL_ENTRIES,
+        ffi::METH_NOARGS,
+        c"Entries made with non-default caller floating-point controls.",
     ),
     method(
         c"build_profile",

@@ -12,6 +12,9 @@
 //!   PoisonedError      the environment is poisoned (or a worker failed)
 //!   ConcurrencyError   a concurrent or nested call on one environment
 //!   ExhaustedError     a step, episode or branch counter would overflow
+//!   FloatingPointEnvironmentError
+//!                      a call rejected for non-default caller FP controls
+//!                      (strict policy, ADR-0041)
 //! ```
 
 use pyo3::exceptions::PyException;
@@ -34,9 +37,10 @@ pub(crate) enum Kind {
     Poisoned,
     Concurrency,
     Exhausted,
+    FloatingPoint,
 }
 
-const KINDS: [(Kind, &str, &std::ffi::CStr); 9] = [
+const KINDS: [(Kind, &str, &std::ffi::CStr); 10] = [
     (
         Kind::Base,
         "TesseraError",
@@ -82,9 +86,14 @@ const KINDS: [(Kind, &str, &std::ffi::CStr); 9] = [
         "ExhaustedError",
         c"A step, episode or branch counter would overflow.",
     ),
+    (
+        Kind::FloatingPoint,
+        "FloatingPointEnvironmentError",
+        c"A call rejected because the caller's floating-point controls were not the default (strict policy).",
+    ),
 ];
 
-static TYPES: [PyOnceLock<Py<PyType>>; 9] = [const { PyOnceLock::new() }; 9];
+static TYPES: [PyOnceLock<Py<PyType>>; 10] = [const { PyOnceLock::new() }; 10];
 
 fn index(kind: Kind) -> usize {
     KINDS.iter().position(|(k, _, _)| *k == kind).unwrap_or(0)
