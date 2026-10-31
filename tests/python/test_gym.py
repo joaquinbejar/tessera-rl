@@ -232,3 +232,14 @@ def test_gym_make_vec_time_limit_follows_the_registration(limit, ends_at):
             break
     assert end == ends_at
     env.close()
+
+
+def test_gym_seed_none_draws_and_exposes_a_reproducible_seed():
+    a, b = tg.make(ID, num_envs=2), tg.make(ID, num_envs=2)
+    assert 0 <= a.construction_seed < 2**64
+    assert a.construction_seed != b.construction_seed
+    again = tg.make(ID, num_envs=2, seed=a.construction_seed)
+    assert again.construction_seed == a.construction_seed
+    assert np.array_equal(a.reset()[0], again.reset()[0])
+    assert tg.make(ID, num_envs=2, seed=5).construction_seed == 5
+    assert gymnasium.make(ID).unwrapped.construction_seed >= 0

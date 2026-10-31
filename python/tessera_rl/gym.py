@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: MIT OR Apache-2.0
-"""Gymnasium adapter (SPEC 15, ADR-0003): single-agent Tessera pools as a
+"""Gymnasium adapter (SPEC 14.2, ADR-0003): single-agent Tessera pools as a
 ``gymnasium.vector.VectorEnv``.
 
 - Outputs are ``owned`` by default (fresh arrays), because code written for
@@ -22,6 +22,14 @@
   none). Under ``gymnasium.make`` the single env has no native limit and
   Gymnasium's ``TimeLimit`` wrapper owns it.
 
+Status: the adapter passes Gymnasium's env checker and the vector API
+tests of this repository. That is not a drop-in compatibility claim: the
+reference training run (ADR-0018) is still to come.
+
+Seeding: ``seed=None`` at construction draws one 64-bit seed from OS
+entropy and exposes it as ``construction_seed``, so the run can be
+reproduced by passing it back; a given seed is deterministic.
+
 Importing this module registers the Tessera environment ids with Gymnasium
 (``gymnasium.make_vec("tessera/CartPole-v1", num_envs=8)``); ``gymnasium.make``
 returns :class:`TesseraEnv`, a one-instance ``gymnasium.Env`` with
@@ -30,6 +38,7 @@ returns :class:`TesseraEnv`, a one-instance ``gymnasium.Env`` with
 
 from __future__ import annotations
 
+import secrets
 from typing import Any
 
 try:
@@ -90,19 +99,29 @@ def _single_space(layout) -> spaces.Space:
 
 
 class TesseraVectorEnv(VectorEnv):
-    """``num_envs`` instances of a single-agent Tessera environment."""
+    """``num_envs`` instances of a single-agent Tessera environment.
+
+    Rewards are ``float32`` (the engine's precision), not the ``float64``
+    of ``SyncVectorEnv``; terminations and truncations are ``bool``.
+    ``construction_seed`` is the pool seed used (drawn from OS entropy when
+    ``seed`` is ``None``).
+    """
 
     def __init__(
         self,
         env_id: str = "tessera/CartPole-v1",
         num_envs: int = 1,
-        seed: int = 0,
+        seed: int | None = None,
         autoreset_mode: AutoresetMode | str = AutoresetMode.NEXT_STEP,
         outputs: str = "owned",
         max_episode_steps: int | None = 500,
         **kwargs: Any,
     ):
         mode = _autoreset_mode(autoreset_mode)
+        if seed is None:
+            seed = secrets.randbits(64)
+        #: The pool seed: instance i starts from ``construction_seed + i``.
+        self.construction_seed: int = int(seed)
         # The vector env owns its time limit (Gymnasium has no vector
         # TimeLimit): `make_vec` passes the registered 500 or an override;
         # None or -1 means no limit.
@@ -204,9 +223,10 @@ class TesseraEnv(gymnasium.Env):
 
     metadata = {"render_modes": []}
 
-    def __init__(self, env_id: str = "tessera/CartPole-v1", seed: int = 0, **kwargs: Any):
+    def __init__(self, env_id: str = "tessera/CartPole-v1", seed: int | None = None, **kwargs: Any):
         kwargs.setdefault("max_episode_steps", None)
         self._vec = TesseraVectorEnv(env_id, 1, seed, AutoresetMode.DISABLED, "owned", **kwargs)
+        self.construction_seed: int = self._vec.construction_seed
         self.observation_space = self._vec.single_observation_space
         self.action_space = self._vec.single_action_space
         self.render_mode = None
@@ -268,10 +288,11 @@ def _first(obs):
     return np.array(obs[0])
 
 
-def make(env_id: str, num_envs: int = 1, seed: int = 0, **kwargs: Any) -> TesseraVectorEnv:
+def make(env_id: str, num_envs: int = 1, seed: int | None = None, **kwargs: Any) -> TesseraVectorEnv:
     """A :class:`TesseraVectorEnv` of ``num_envs`` instances of ``env_id``.
 
-    Options: ``autoreset_mode`` (``AutoresetMode`` or its name, default
+    ``seed=None`` draws the pool seed from OS entropy (see
+    ``construction_seed``). Options: ``autoreset_mode`` (``AutoresetMode`` or its name, default
     ``NEXT_STEP``), ``outputs`` (``"owned"`` by default or ``"borrowed"``),
     and the native pool options (``max_episode_steps``, ``chunk_size``,
     ``workers``).

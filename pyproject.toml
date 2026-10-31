@@ -45,6 +45,13 @@ conformance = [
 
 [tool.pytest.ini_options]
 markers = ["torch: needs PyTorch (the `torch` dependency group)"]
+# Gymnasium's env checker warns about the infinite velocity bounds of
+# CartPole's observation space; it warns identically for Gymnasium's own
+# CartPole-v1, whose space ours equals.
+filterwarnings = [
+    "ignore:.*A Box observation space minimum value is -infinity:UserWarning",
+    "ignore:.*A Box observation space maximum value is infinity:UserWarning",
+]
 
 [tool.uv]
 # `uv sync` builds and installs the native package (maturin, debug profile
