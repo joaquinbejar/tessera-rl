@@ -10,7 +10,7 @@ from learning_gate import alert, calibrate, night  # noqa: E402
 
 CAL_SEEDS = list(range(101, 141))
 NIGHT_SEEDS = [1, 2, 3, 4, 5]
-SETUP = {"env": "tessera/CartPole-v1", "total_steps": 150000, "eval_episodes": 20}
+SETUP = {"env": "tessera/CartPole-v1", "total_steps": 150000, "eval_episodes": 20, "fingerprint": "ab" * 32}
 
 
 def records(seeds, score=lambda s: 450.0 + (s % 50)):
@@ -62,6 +62,17 @@ def test_learning_night_other_setup_fails():
     assert n["failed"] is True and n["errors"]
 
 
+def test_learning_night_other_fingerprint_fails():
+    n = night(records(NIGHT_SEEDS, score=lambda s: 500.0), NIGHT_SEEDS, calibration(), dict(SETUP, fingerprint="cd" * 32))
+    assert n["failed"] is True and any("fingerprint" in e for e in n["errors"])
+
+
+def test_learning_night_calibration_without_fingerprint_fails():
+    c = calibration()
+    del c["setup"]["fingerprint"]
+    assert night(records(NIGHT_SEEDS, score=lambda s: 500.0), NIGHT_SEEDS, c, SETUP)["failed"] is True
+
+
 def test_learning_night_invalid_calibration_fails():
     c = calibration()
     del c["threshold"]
@@ -98,4 +109,6 @@ def test_learning_committed_calibration_is_valid():
     again = calibrate(c["records"], CAL_SEEDS)
     assert "errors" not in c and "errors" not in again
     assert again["threshold"] == c["threshold"]
-    assert c["setup"] == SETUP
+    assert {k: c["setup"][k] for k in ("env", "total_steps", "eval_episodes")} == {k: SETUP[k] for k in ("env", "total_steps", "eval_episodes")}
+    fp = c["setup"]["fingerprint"]
+    assert isinstance(fp, str) and len(fp) == 64

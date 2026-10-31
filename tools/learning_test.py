@@ -26,6 +26,15 @@ on most seeds, so the 5th percentile degenerates to the maximum (or to a
 single outlier); at 150k the scores still spread below 500. The nightly
 seeds 1-5 are disjoint from the calibration seeds.
 
+With fixed seeds, one thread and deterministic algorithms, consecutive
+nights on the same commit and hardware give identical scores: there is no
+per-night randomness. The two-night rule filters noise across commits and
+hardware (another runner CPU, a changed dependency), not a random draw.
+The setup records a fingerprint (the PPO hyperparameters, the trainer's
+source hash and the torch, NumPy and Gymnasium versions); a night whose
+fingerprint differs from the calibration's fails until a reviewed
+re-calibration.
+
 The final score is the greedy evaluation mean (``--eval-episodes``
 episodes, seeds ``EVAL_SEED_BASE + i``) after ``--total-steps`` training
 steps; the calibration records the budget it was made with, and a night
@@ -35,6 +44,7 @@ with another setup fails.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import pathlib
@@ -53,7 +63,8 @@ def _git(*args: str) -> str:
     if args == ("rev-parse", "HEAD") and os.environ.get("TESSERA_GIT_SHA"):
         return os.environ["TESSERA_GIT_SHA"]
     if args[0] == "status" and os.environ.get("TESSERA_GIT_SHA"):
-        return ""
+        # A "+worktree" suffix marks uncommitted changes on that commit.
+        return "dirty" if os.environ["TESSERA_GIT_SHA"].endswith("+worktree") else ""
     try:
         return subprocess.run(["git", *args], capture_output=True, text=True, check=True).stdout.strip()
     except (OSError, subprocess.CalledProcessError):
@@ -73,6 +84,11 @@ def _environment() -> dict:
         "python": platform.python_version(),
         "os": platform.platform(),
         "arch": platform.machine(),
+        "cpu": _cpu(),
+        # The Docker image (TESSERA_IMAGE) or the GitHub runner image.
+        "image": os.environ.get("TESSERA_IMAGE")
+        or " ".join(filter(None, (os.environ.get("ImageOS"), os.environ.get("ImageVersion"))))
+        or "unknown",
         "tessera_rl": tessera_rl.__version__,
         "gymnasium": gymnasium.__version__,
         "torch": torch.__version__,
@@ -80,8 +96,54 @@ def _environment() -> dict:
     }
 
 
+def _fingerprint() -> str:
+    """What determines a score besides the seed: the PPO hyperparameters,
+    the trainer's source and the numeric libraries. A change fails every
+    night until a reviewed re-calibration."""
+    from dataclasses import asdict
+
+    import gymnasium
+    import numpy
+    import torch
+
+    import reference_training as rt
+
+    source = pathlib.Path(rt.__file__).read_bytes()
+    payload = json.dumps(
+        {
+            "hyper": asdict(rt.Hyper()),
+            "trainer_sha256": hashlib.sha256(source).hexdigest(),
+            "torch": torch.__version__,
+            "numpy": numpy.__version__,
+            "gymnasium": gymnasium.__version__,
+        },
+        sort_keys=True,
+    )
+    return hashlib.sha256(payload.encode()).hexdigest()
+
+
 def _setup(args) -> dict:
-    return {"env": ENV_ID, "total_steps": args.total_steps, "eval_episodes": args.eval_episodes}
+    return {
+        "env": ENV_ID,
+        "total_steps": args.total_steps,
+        "eval_episodes": args.eval_episodes,
+        "fingerprint": _fingerprint(),
+    }
+
+
+def _cpu() -> str:
+    try:
+        for line in pathlib.Path("/proc/cpuinfo").read_text().splitlines():
+            if line.startswith("model name"):
+                return line.split(":", 1)[1].strip()
+    except OSError:
+        pass
+    if sys.platform == "darwin":
+        try:
+            return subprocess.run(["sysctl", "-n", "machdep.cpu.brand_string"], capture_output=True, text=True, check=True).stdout.strip()
+        except (OSError, subprocess.CalledProcessError):
+            pass
+    return platform.processor() or "unknown"
 
 
 def _train(args, seeds: list[int]) -> list[dict]:

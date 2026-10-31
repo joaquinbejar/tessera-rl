@@ -48,14 +48,17 @@
   "setup": {
     "env": "tessera/CartPole-v1",
     "total_steps": 150000,
-    "eval_episodes": 20
+    "eval_episodes": 20,
+    "fingerprint": "1bf1cc3d6e6a5ff6db1f6c317598acb71a61790e333ba1897abc17014de048c1"
   },
   "environment": {
-    "git": "4af6cd3fcfeb38d727a7d21c21c485fd5d8ec5b5",
-    "git_dirty": false,
+    "git": "f0915f5ed434396a2a86b46eb2b7243d1d2eae57+worktree",
+    "git_dirty": true,
     "python": "3.11.18",
     "os": "Linux-7.0.0-38-generic-x86_64-with-glibc2.41",
     "arch": "x86_64",
+    "cpu": "12th Gen Intel(R) Core(TM) i7-12700H",
+    "image": "rust:1.99.1@sha256:09027f873d45b8ecd1dc86f1fa13b7a62b875c961f017a0e331267b350430137",
     "tessera_rl": "0.1.0",
     "gymnasium": "1.4.0",
     "torch": "2.15.0+cpu",
