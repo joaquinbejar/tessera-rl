@@ -11,18 +11,27 @@
 
 use core::num::NonZeroU32;
 
+use tessera_rl_classic::cartpole::MAX_EPISODE_STEPS;
 use tessera_rl_classic::cartpole::physics::{THETA_THRESHOLD, X_THRESHOLD};
 use tessera_rl_classic::{CartPole, CartPoleConfig, CartPoleState};
 use tessera_rl_core::io::ActionWriter;
 use tessera_rl_core::space::{BoxBounds, DType, Space};
 use tessera_rl_core::{Bool8, Environment, Heuristic, StateHash};
-use tessera_rl_engine::{ActionInput, EnvPool, PoolOptions, Reseed};
+use tessera_rl_engine::{ActionInput, DecodedRecord, EnvPool, PoolOptions, Reseed};
 use tessera_rl_num::identity::{LogicalId, RngIdentity, Seed, StreamId};
 use tessera_rl_num::rng::{RngAuthority, StepRng};
 
-fn pool(n: u32, seed: u64, cfg: CartPoleConfig) -> EnvPool<CartPole> {
-    let options = PoolOptions::new(NonZeroU32::new(n).unwrap(), Seed::new(seed));
-    EnvPool::new(cfg, options).unwrap()
+/// A `CartPole-v1` pool: the step limit is 500 unless `limit` says otherwise.
+fn pool_limit(n: u32, seed: u64, limit: u32) -> EnvPool<CartPole> {
+    let options = PoolOptions {
+        max_episode_steps: NonZeroU32::new(limit),
+        ..PoolOptions::new(NonZeroU32::new(n).unwrap(), Seed::new(seed))
+    };
+    EnvPool::new(CartPoleConfig::default(), options).unwrap()
+}
+
+fn pool(n: u32, seed: u64, _: CartPoleConfig) -> EnvPool<CartPole> {
+    pool_limit(n, seed, MAX_EPISODE_STEPS)
 }
 
 fn act(values: &[i32]) -> ActionInput<'_> {
@@ -55,7 +64,7 @@ fn heuristic(state: &CartPoleState) -> i32 {
 #[test]
 fn test_cartpole_spaces_match_gymnasium_float32_bounds() {
     let cfg = CartPoleConfig::default();
-    let high = [4.8_f32, f32::MAX, 0.418_879_02_f32, f32::MAX].map(f64::from);
+    let high = [4.8_f32, f32::INFINITY, 0.418_879_03_f32, f32::INFINITY].map(f64::from);
     let expected = Space::Box {
         shape: vec![4],
         dtype: DType::F32,
@@ -71,7 +80,7 @@ fn test_cartpole_spaces_match_gymnasium_float32_bounds() {
         CartPole::action_space(&cfg).unwrap(),
         Space::Discrete { n: 2 }
     );
-    assert_eq!(cfg.max_steps, 500);
+    assert_eq!(MAX_EPISODE_STEPS, 500);
 }
 
 #[test]
@@ -125,9 +134,8 @@ fn test_cartpole_constant_push_terminates_with_reward_one() {
 }
 
 #[test]
-fn test_cartpole_truncates_at_max_steps() {
-    let cfg = CartPoleConfig { max_steps: 3 };
-    let mut p = pool(1, 5, cfg);
+fn test_cartpole_truncates_at_the_engine_step_limit() {
+    let mut p = pool_limit(1, 5, 3);
     p.reset_all(Reseed::Keep).unwrap();
     for t in 0..3 {
         let out = p.step(act(&[t % 2])).unwrap();
@@ -150,4 +158,35 @@ fn test_cartpole_heuristic_balances_to_truncation() {
         assert!(out.episode_terminated().iter().all(|f| !f.get()));
     }
     assert!(p.outputs().episode_truncated().iter().all(|f| f.get()));
+}
+
+/// Gymnasium's `TimeLimit`: a terminal step that reaches the limit reports
+/// terminated and truncated. The pre-step state and horizon are the ones
+/// codex reproduced against Gymnasium 1.0.0 (horizon 9, 8 steps elapsed,
+/// action 1).
+#[test]
+fn test_cartpole_terminal_step_at_the_horizon_is_terminated_and_truncated() {
+    let mut p = pool_limit(1, 5, 9);
+    p.reset_all(Reseed::Keep).unwrap();
+    for t in 0..8 {
+        let out = p.step(act(&[t % 2])).unwrap();
+        assert!(!out.episode_terminated()[0].get() && !out.episode_truncated()[0].get());
+    }
+    let record = p.snapshot(0).unwrap();
+    let state = CartPoleState {
+        s: [
+            0.131_335_108_872_431_9,
+            1.601_798_890_794_725_8,
+            -0.207_035_334_068_830_26,
+            -2.519_182_399_894_15,
+        ],
+    };
+    let injected = DecodedRecord::from_parts(*record.header(), state).unwrap();
+    p.import(&[0], &[injected]).unwrap();
+    let out = p.step(act(&[1])).unwrap();
+    assert_eq!(out.rewards(), [1.0]);
+    assert_eq!(out.episode_terminated(), [Bool8::TRUE]);
+    assert_eq!(out.episode_truncated(), [Bool8::TRUE]);
+    assert_eq!(out.agent_terminated(), [Bool8::TRUE]);
+    assert_eq!(out.agent_truncated(), [Bool8::TRUE]);
 }

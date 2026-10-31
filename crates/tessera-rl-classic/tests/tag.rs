@@ -28,9 +28,16 @@ use tessera_rl_num::rng::{RngAuthority, StepRng};
 
 const A: usize = 8;
 
-fn pool(n: u32, seed: u64, cfg: TagConfig) -> EnvPool<Tag, Masked> {
-    let options = PoolOptions::new(NonZeroU32::new(n).unwrap(), Seed::new(seed));
+fn pool_limit(n: u32, seed: u64, cfg: TagConfig, limit: u32) -> EnvPool<Tag, Masked> {
+    let options = PoolOptions {
+        max_episode_steps: NonZeroU32::new(limit),
+        ..PoolOptions::new(NonZeroU32::new(n).unwrap(), Seed::new(seed))
+    };
     EnvPool::with_masks(cfg, options).unwrap()
+}
+
+fn pool(n: u32, seed: u64, cfg: TagConfig) -> EnvPool<Tag, Masked> {
+    pool_limit(n, seed, cfg, 200)
 }
 
 fn act(values: &[i32]) -> ActionInput<'_> {
@@ -293,15 +300,14 @@ fn test_tag_capture_rewards_pursuers_and_kills_the_evader() {
 }
 
 #[test]
-fn test_tag_truncates_at_max_steps_while_evaders_remain() {
+fn test_tag_truncates_at_the_engine_step_limit_while_evaders_remain() {
     let cfg = TagConfig {
         width: 16,
         height: 16,
         slip: 0,
-        max_steps: 5,
         ..TagConfig::default()
     };
-    let mut p = pool(1, 6, cfg);
+    let mut p = pool_limit(1, 6, cfg, 5);
     p.reset_all(Reseed::Keep).unwrap();
     for t in 0..5 {
         // Everyone stays: no capture.
@@ -348,7 +354,6 @@ fn test_tag_heuristic_pursuers_catch_more_than_random_play() {
         pursuers: 3,
         evaders: 3,
         slip: 0,
-        max_steps: 100,
         ..TagConfig::default()
     };
     let n = 32;

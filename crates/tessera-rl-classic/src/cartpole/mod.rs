@@ -4,11 +4,21 @@
 //! rewards and termination, single agent, cross-platform tier.
 //!
 //! - Observation: `Box(f32, [4])`, `[x, x_dot, theta, theta_dot]`, with
-//!   Gymnasium's bounds (`±4.8`, `±f32::MAX`, `±24°`, `±f32::MAX`).
+//!   Gymnasium's bounds (`±4.8`, `±inf`, `±24°` as f32, `±inf`).
 //! - Action: `Discrete(2)`; 0 pushes left, 1 pushes right.
 //! - Reward: 1 per step, including the terminating one.
 //! - Reset: each component uniform in `[-0.05, 0.05)`.
-//! - Ends: terminated past the thresholds; truncated after `max_steps`.
+//! - Ends: terminated past the thresholds. Truncation is the engine's
+//!   step limit (SPEC 5.4) with `TimeLimit` semantics: `CartPole-v1` is this
+//!   environment with `PoolOptions::max_episode_steps` set to
+//!   [`MAX_EPISODE_STEPS`]; a terminal step at the limit reports both flags.
+//!
+//! Sources: Gymnasium v1.0.0,
+//! <https://github.com/Farama-Foundation/Gymnasium/blob/v1.0.0/gymnasium/envs/classic_control/cartpole.py>;
+//! A. G. Barto, R. S. Sutton and C. W. Anderson, "Neuronlike adaptive
+//! elements that can solve difficult learning control problems", IEEE
+//! Transactions on Systems, Man, and Cybernetics SMC-13(5), 1983,
+//! <https://doi.org/10.1109/TSMC.1983.6313077>.
 
 pub mod physics;
 
@@ -16,10 +26,14 @@ use tessera_rl_core::io::{ActionWriter, Actions, ObsWriter};
 use tessera_rl_core::space::{BoxBounds, DType, Space};
 use tessera_rl_core::{
     AgentSlot, Environment, EpisodeEnd, Heuristic, InvariantViolation, LeafId, NoAdaptive,
-    Observation, RecordHeader, Reserved, SpaceError, StepOut, Tier, Validate,
+    Observation, RecordHeader, SpaceError, StepOut, Tier, Validate,
 };
 use tessera_rl_macros::{EnvConfig, EnvState};
 use tessera_rl_num::rng::StepRng;
+
+/// The step limit of `CartPole-v1`, to set as the pool's
+/// `max_episode_steps`.
+pub const MAX_EPISODE_STEPS: u32 = 500;
 
 /// Versioned environment id (ADR-0023).
 pub const ENV_ID: &str = "tessera/CartPole-v1";
@@ -29,26 +43,16 @@ pub const ENV_VERSION: u32 = 1;
 /// Half-width of the reset distribution.
 const RESET_BOUND: f64 = 0.05;
 
-/// CartPole configuration.
+/// CartPole configuration: `CartPole-v1` has no parameters.
 #[derive(EnvConfig, Debug, Clone, PartialEq, Eq)]
-pub struct CartPoleConfig {
-    /// Steps after which the episode is truncated (500 in `CartPole-v1`).
-    /// The pool's `max_episode_steps` is an additional cap: the lower one
-    /// wins.
-    #[config(default = 500, range = 1..=1_000_000)]
-    pub max_steps: u32,
-}
+pub struct CartPoleConfig {}
 
-/// CartPole state: the four physical components and the step count.
+/// CartPole state: the four physical components.
 #[derive(EnvState, Debug, Clone, Copy, PartialEq, Default)]
 #[repr(C)]
 pub struct CartPoleState {
     /// `[x, x_dot, theta, theta_dot]`.
     pub s: [f64; 4],
-    /// Steps taken in this episode.
-    pub steps: u32,
-    /// Padding to a multiple of 8 bytes.
-    pub reserved: Reserved<4>,
 }
 
 /// CartPole observation: one `f32` box leaf.
@@ -61,7 +65,7 @@ impl CartPoleObs {
 }
 
 /// Gymnasium's float32 observation bounds: the thresholds doubled, rounded
-/// to `f32`, and the largest finite `f32` for the velocities.
+/// to `f32`, and infinity for the velocities.
 #[expect(
     clippy::cast_possible_truncation,
     reason = "the bounds are defined as float32 values"
@@ -69,9 +73,9 @@ impl CartPoleObs {
 fn obs_high() -> Vec<f64> {
     [
         physics::X_THRESHOLD * 2.0,
-        f64::from(f32::MAX),
+        f64::INFINITY,
         physics::THETA_THRESHOLD * 2.0,
-        f64::from(f32::MAX),
+        f64::INFINITY,
     ]
     .map(|v| f64::from(v as f32))
     .to_vec()
@@ -119,11 +123,10 @@ impl Environment for CartPole {
         for v in &mut state.s {
             *v = -RESET_BOUND + 2.0 * RESET_BOUND * rng.unit_f64();
         }
-        state.steps = 0;
     }
 
     fn step(
-        cfg: &CartPoleConfig,
+        _: &CartPoleConfig,
         state: &mut CartPoleState,
         actions: &Actions<'_, ()>,
         _: &mut StepRng,
@@ -131,14 +134,9 @@ impl Environment for CartPole {
     ) {
         let push_right = actions.discrete(AgentSlot::FIRST, 0) == Some(1);
         state.s = physics::step(state.s, push_right);
-        // Bounded by max_steps: the episode ends below when it is reached.
-        debug_assert!(state.steps < cfg.max_steps);
-        state.steps += 1;
         out.set_reward(AgentSlot::FIRST, 1.0);
         if physics::is_terminal(state.s) {
             out.end_episode(EpisodeEnd::Terminated);
-        } else if state.steps >= cfg.max_steps {
-            out.end_episode(EpisodeEnd::Truncated);
         }
     }
 
@@ -161,17 +159,12 @@ impl Environment for CartPole {
     }
 }
 
-/// Imported states must be finite and within one episode.
+/// Imported states must be finite.
 impl Validate for CartPole {
-    fn validate(cfg: &CartPoleConfig, state: &CartPoleState) -> Result<(), InvariantViolation> {
+    fn validate(_: &CartPoleConfig, state: &CartPoleState) -> Result<(), InvariantViolation> {
         if !state.s.iter().all(|v| v.is_finite()) {
             return Err(InvariantViolation {
                 code: "a non-finite physical component",
-            });
-        }
-        if state.steps > cfg.max_steps {
-            return Err(InvariantViolation {
-                code: "steps beyond max_steps",
             });
         }
         Ok(())

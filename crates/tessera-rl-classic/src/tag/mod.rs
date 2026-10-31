@@ -13,8 +13,8 @@
 //! - Capture: after the moves, an evader on a cell with at least one
 //!   pursuer dies (`agent_died`), with reward -1; every pursuer on that cell
 //!   gets +1. Agents only meet on cells: swapping places is not a capture.
-//! - Ends: terminated when every evader is caught; truncated after
-//!   `max_steps`.
+//! - Ends: terminated when every evader is caught. Truncation is the
+//!   engine's step limit (`PoolOptions::max_episode_steps`, SPEC 5.4).
 //! - Observation: an egocentric `(2r+1) x (2r+1)` window around the agent,
 //!   `Box(u8, [3, 2r+1, 2r+1])`: channel 0 marks cells outside the grid,
 //!   channels 1 and 2 count the pursuers and the live evaders on each cell
@@ -26,7 +26,7 @@ use tessera_rl_core::io::{ActionWriter, Actions, MaskWriter, ObsWriter};
 use tessera_rl_core::space::Space;
 use tessera_rl_core::{
     ActionMask, AgentSlot, Bool8, Environment, EpisodeEnd, Heuristic, InvariantViolation,
-    NoAdaptive, ObsLeaf, Observation, RecordHeader, Reserved, SpaceError, StepOut, Tier, Validate,
+    NoAdaptive, ObsLeaf, Observation, RecordHeader, SpaceError, StepOut, Tier, Validate,
 };
 use tessera_rl_macros::{EnvConfig, EnvState, Observation};
 use tessera_rl_num::rng::{ObsRng, StepRng};
@@ -78,10 +78,6 @@ pub struct TagConfig {
     /// Observation radius `r`: the window is `2r+1` cells wide.
     #[config(default = 2, range = 0..=7)]
     pub radius: u32,
-    /// Steps after which the episode is truncated. The pool's
-    /// `max_episode_steps` is an additional cap: the lower one wins.
-    #[config(default = 200, range = 1..=1_000_000)]
-    pub max_steps: u32,
 }
 
 impl TagConfig {
@@ -110,10 +106,6 @@ pub struct TagState {
     pub pos: [[i16; 2]; MAX_AGENTS],
     /// Evaders caught in this episode.
     pub caught: [Bool8; MAX_AGENTS],
-    /// Steps taken in this episode.
-    pub steps: u32,
-    /// Padding to a multiple of 8 bytes.
-    pub reserved: Reserved<4>,
 }
 
 impl TagState {
@@ -171,7 +163,6 @@ impl Environment for Tag {
             place(cells, cfg.width, cfg.height, rng);
         }
         state.caught = [Bool8::FALSE; MAX_AGENTS];
-        state.steps = 0;
     }
 
     fn step(
@@ -224,13 +215,8 @@ impl Environment for Tag {
             }
         }
 
-        // Bounded by max_steps: the episode ends below when it is reached.
-        debug_assert!(state.steps < cfg.max_steps);
-        state.steps += 1;
         if remaining == 0 {
             out.end_episode(EpisodeEnd::Terminated);
-        } else if state.steps >= cfg.max_steps {
-            out.end_episode(EpisodeEnd::Truncated);
         }
     }
 
@@ -306,13 +292,10 @@ impl ActionMask for Tag {
 }
 
 /// Imported states: used slots on the grid, unused slots zeroed, only
-/// evaders caught, and within one episode.
+/// evaders caught.
 impl Validate for Tag {
     fn validate(cfg: &TagConfig, state: &TagState) -> Result<(), InvariantViolation> {
         let invalid = |code| Err(InvariantViolation { code });
-        if state.steps > cfg.max_steps {
-            return invalid("steps beyond max_steps");
-        }
         for (i, &[x, y]) in state.pos.iter().enumerate() {
             let used = i < cfg.agents();
             if !used && [x, y] != [0, 0] {
