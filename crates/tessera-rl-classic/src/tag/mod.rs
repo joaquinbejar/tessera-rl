@@ -46,9 +46,19 @@ const MAX_SIDE: usize = 2 * MAX_RADIUS as usize + 1;
 const PER_MILLE: core::num::NonZeroU32 = core::num::NonZeroU32::new(1000).unwrap();
 const MOVES: core::num::NonZeroU32 = core::num::NonZeroU32::new(ACTIONS).unwrap();
 
-/// Tag configuration. `pursuers + evaders` must not exceed 8; the engine
-/// checks it at construction as `initial_agents`.
+fn check_agents(cfg: &TagConfig) -> Result<(), tessera_rl_core::ConfigError> {
+    if cfg.agents() > MAX_AGENTS {
+        return Err(tessera_rl_core::ConfigError {
+            field: "evaders",
+            reason: "pursuers + evaders must not exceed 8",
+        });
+    }
+    Ok(())
+}
+
+/// Tag configuration. `pursuers + evaders` must not exceed 8.
 #[derive(EnvConfig, Debug, Clone, PartialEq, Eq)]
+#[config(validate = check_agents)]
 pub struct TagConfig {
     /// Grid width in cells.
     #[config(default = 8, range = 3..=64)]
@@ -68,7 +78,8 @@ pub struct TagConfig {
     /// Observation radius `r`: the window is `2r+1` cells wide.
     #[config(default = 2, range = 0..=7)]
     pub radius: u32,
-    /// Steps after which the episode is truncated.
+    /// Steps after which the episode is truncated. The pool's
+    /// `max_episode_steps` is an additional cap: the lower one wins.
     #[config(default = 200, range = 1..=1_000_000)]
     pub max_steps: u32,
 }
@@ -136,7 +147,11 @@ impl Environment for Tag {
 
     const MAX_AGENTS: usize = MAX_AGENTS;
     const TIER: Tier = Tier::CrossPlatform;
-    const PERFECT_INFORMATION: bool = false;
+    /// No state is hidden: positions and slips are a deterministic function
+    /// of the shared state and the RNG. The egocentric window is only an
+    /// observation choice. (`ImperfectInformation` and `Determinize` are
+    /// validated with Leduc in phase 2.)
+    const PERFECT_INFORMATION: bool = true;
 
     fn observation_space(cfg: &TagConfig) -> Result<Space, SpaceError> {
         TagObs::space(cfg)
@@ -209,7 +224,8 @@ impl Environment for Tag {
             }
         }
 
-        // Bounded by max_steps, checked below.
+        // Bounded by max_steps: the episode ends below when it is reached.
+        debug_assert!(state.steps < cfg.max_steps);
         state.steps += 1;
         if remaining == 0 {
             out.end_episode(EpisodeEnd::Terminated);

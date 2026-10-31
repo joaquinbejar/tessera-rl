@@ -33,6 +33,8 @@ const RESET_BOUND: f64 = 0.05;
 #[derive(EnvConfig, Debug, Clone, PartialEq, Eq)]
 pub struct CartPoleConfig {
     /// Steps after which the episode is truncated (500 in `CartPole-v1`).
+    /// The pool's `max_episode_steps` is an additional cap: the lower one
+    /// wins.
     #[config(default = 500, range = 1..=1_000_000)]
     pub max_steps: u32,
 }
@@ -129,7 +131,8 @@ impl Environment for CartPole {
     ) {
         let push_right = actions.discrete(AgentSlot::FIRST, 0) == Some(1);
         state.s = physics::step(state.s, push_right);
-        // Bounded by max_steps, checked below.
+        // Bounded by max_steps: the episode ends below when it is reached.
+        debug_assert!(state.steps < cfg.max_steps);
         state.steps += 1;
         out.set_reward(AgentSlot::FIRST, 1.0);
         if physics::is_terminal(state.s) {

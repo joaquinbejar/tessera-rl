@@ -127,6 +127,23 @@ fn test_tag_spaces_are_an_egocentric_u8_window_and_five_moves() {
 }
 
 #[test]
+fn test_tag_config_more_than_eight_agents_names_evaders() {
+    use tessera_rl_core::EnvConfig as _;
+    let cfg = TagConfig {
+        pursuers: 5,
+        evaders: 4,
+        ..TagConfig::default()
+    };
+    assert_eq!(cfg.validate().unwrap_err().field, "evaders");
+    let ok = TagConfig {
+        pursuers: 4,
+        evaders: 4,
+        ..TagConfig::default()
+    };
+    assert_eq!(ok.validate(), Ok(()));
+}
+
+#[test]
 fn test_tag_more_than_eight_agents_is_config_error() {
     let cfg = TagConfig {
         pursuers: 5,
@@ -136,7 +153,7 @@ fn test_tag_more_than_eight_agents_is_config_error() {
     let options = PoolOptions::new(NonZeroU32::MIN, Seed::new(1));
     assert!(matches!(
         EnvPool::<Tag, Masked>::with_masks(cfg, options).map(|_| ()),
-        Err(EngineError::Config(e)) if e.field == "initial_agents"
+        Err(EngineError::Config(e)) if e.field == "evaders"
     ));
 }
 
