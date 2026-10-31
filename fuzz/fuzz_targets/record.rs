@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! Persisted snapshots: see `fuzz/harness/record.rs` (shared with the
-//! stable replay of `fuzz/regressions/` in tessera-rl-classic).
+//! stable replay of `fuzz/regressions/record/` in tessera-rl-classic).
 
 #![no_main]
 

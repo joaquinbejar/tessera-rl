@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! The `record` harness, shared by the fuzz target and the stable replay
-//! test of `fuzz/regressions/`: decode arbitrary bytes as a Tag
+//! test of `fuzz/regressions/record/`: decode arbitrary bytes as a Tag
 //! `DecodedRecord`, import it and step. Decoding and import return typed
 //! errors; an accepted record must round-trip and the pool must keep
 //! stepping. This covers today's import checks, not the header-aware
