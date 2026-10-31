@@ -149,3 +149,10 @@ def test_fp_boundary_unwind_drops_injected_containers_under_caller_controls():
     r = child("gc_unwind")
     assert r["injected"] > 0 and r["failed"] > 0 and r["finalizers"] > 0, r
     assert r["all_caller_controls"], r
+
+
+def test_fp_boundary_windows_flush_to_zero_is_invisible():
+    r = child("windows_ftz")
+    if "skipped" in r:
+        pytest.skip(r["skipped"])
+    assert r["identical"] and r["restored"]
