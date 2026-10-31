@@ -53,8 +53,11 @@ pub enum Reseed<'a> {
     /// The k-th reset instance gets `seeds[k]`.
     List(&'a [Seed]),
     /// The k-th reset instance gets `seeds[k]`, or keeps its seed (its
-    /// episode index advances) where `seeds[k]` is `None`: Gymnasium's
-    /// per-environment `None`, in one call.
+    /// episode index advances, as with `Keep`) where `seeds[k]` is `None`:
+    /// Gymnasium's per-environment `None`, in one call (SPEC 8.1). The
+    /// whole request (ids, seed count, the episode counters of the kept
+    /// instances) is validated before anything is written; on an error no
+    /// instance or output changes.
     Each(&'a [Option<Seed>]),
 }
 
