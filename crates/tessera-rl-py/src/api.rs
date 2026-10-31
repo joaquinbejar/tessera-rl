@@ -9,6 +9,7 @@ use pyo3::types::{PyByteArray, PyBytes, PyDict, PyList, PyTuple};
 use crate::env::{PoolArgs, PoolOps, TagFields};
 use crate::errors::{Kind, error, to_py};
 use crate::ffi::inner::Inner;
+use crate::ffi::view_type::new_view;
 
 fn kw<'py, T: FromPyObjectOwned<'py>>(
     kwargs: Option<&Bound<'py, PyDict>>,
@@ -45,6 +46,20 @@ fn check_keys(py: Python<'_>, kwargs: Option<&Bound<'_, PyDict>>, extra: &[&str]
     Ok(())
 }
 
+/// The `outputs` mode: `"borrowed"` (the native default, ADR-0003) or
+/// `"owned"`.
+fn borrowed(py: Python<'_>, kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<bool> {
+    match kw::<String>(kwargs, "outputs")?.as_deref() {
+        None | Some("borrowed") => Ok(true),
+        Some("owned") => Ok(false),
+        Some(other) => Err(error(
+            py,
+            Kind::Argument,
+            format!("outputs must be \"borrowed\" or \"owned\", not {other:?}"),
+        )),
+    }
+}
+
 fn pool_args(kwargs: Option<&Bound<'_, PyDict>>, default_limit: u32) -> PyResult<PoolArgs> {
     Ok(PoolArgs {
         num_envs: kw(kwargs, "num_envs")?.unwrap_or(1),
@@ -59,20 +74,24 @@ fn pool_args(kwargs: Option<&Bound<'_, PyDict>>, default_limit: u32) -> PyResult
 /// `make_cartpole(**kwargs)`: the pool of a CartPole environment object.
 /// `max_episode_steps` defaults to 500 (`CartPole-v1`).
 pub(crate) fn make_cartpole(py: Python<'_>, kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<Inner> {
-    check_keys(py, kwargs, &[])?;
+    check_keys(py, kwargs, &["outputs"])?;
+    let borrowed = borrowed(py, kwargs)?;
     let args = pool_args(kwargs, tessera_rl_classic::cartpole::MAX_EPISODE_STEPS)?;
     let ops = py
         .detach(|| crate::env::cartpole(&args))
         .map_err(|e| to_py(py, e))?;
-    Ok(Inner::new(ops))
+    Ok(Inner::new(ops, borrowed))
 }
 
-const TAG_KEYS: [&str; 6] = ["width", "height", "pursuers", "evaders", "slip", "radius"];
+const TAG_KEYS: [&str; 7] = [
+    "width", "height", "pursuers", "evaders", "slip", "radius", "outputs",
+];
 
 /// `make_tag(**kwargs)`: the pool of a Tag environment object.
 /// `max_episode_steps` defaults to 200.
 pub(crate) fn make_tag(py: Python<'_>, kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<Inner> {
     check_keys(py, kwargs, &TAG_KEYS)?;
+    let borrowed = borrowed(py, kwargs)?;
     let args = pool_args(kwargs, 200)?;
     let fields = TagFields {
         width: kw(kwargs, "width")?,
@@ -85,7 +104,7 @@ pub(crate) fn make_tag(py: Python<'_>, kwargs: Option<&Bound<'_, PyDict>>) -> Py
     let ops = py
         .detach(|| crate::env::tag(&args, &fields))
         .map_err(|e| to_py(py, e))?;
-    Ok(Inner::new(ops))
+    Ok(Inner::new(ops, borrowed))
 }
 
 /// `layout()`: the shapes and dtypes the Python layer needs.
@@ -97,6 +116,14 @@ pub(crate) fn layout<'py>(py: Python<'py>, inner: &Inner) -> PyResult<Bound<'py,
         d.set_item("agents", l.agents)?;
         d.set_item("action_choices", l.action_choices)?;
         d.set_item("mask_len", l.mask_len)?;
+        d.set_item(
+            "outputs",
+            if inner.borrowed() {
+                "borrowed"
+            } else {
+                "owned"
+            },
+        )?;
         let leaves = PyList::empty(py);
         for leaf in &l.leaves {
             leaves.append((leaf.name.as_str(), leaf.dtype, leaf.shape.clone()))?;
@@ -126,7 +153,7 @@ pub(crate) fn reset<'py>(
     };
     inner.with(py, |ops| {
         py.detach(|| ops.reset(seed)).map_err(|e| to_py(py, e))?;
-        outputs_of(py, ops)
+        outputs_of(py, inner, ops)
     })
 }
 
@@ -157,7 +184,7 @@ pub(crate) fn step<'py>(
         .collect();
     inner.with(py, |ops| {
         py.detach(|| ops.step(&actions)).map_err(|e| to_py(py, e))?;
-        outputs_of(py, ops)
+        outputs_of(py, inner, ops)
     })
 }
 
@@ -176,13 +203,21 @@ fn one_arg<'py>(
     args.get_item(0)
 }
 
-/// `outputs()`: copies of the last call's outputs (`owned` mode), as fresh
-/// bytearrays the caller owns (NumPy wraps them writable, without copying).
+/// `outputs()`: the last call's outputs, as borrowed views or owned
+/// copies (the environment's `outputs` mode).
 pub(crate) fn outputs<'py>(py: Python<'py>, inner: &Inner) -> PyResult<Bound<'py, PyAny>> {
-    inner.with(py, |ops| outputs_of(py, ops))
+    inner.with(py, |ops| outputs_of(py, inner, ops))
 }
 
-fn outputs_of<'py>(py: Python<'py>, ops: &dyn PoolOps) -> PyResult<Bound<'py, PyAny>> {
+/// The outputs dict, built inside the admitted call that produced them.
+fn outputs_of<'py>(
+    py: Python<'py>,
+    inner: &Inner,
+    ops: &dyn PoolOps,
+) -> PyResult<Bound<'py, PyAny>> {
+    if inner.borrowed() {
+        return borrowed_views(py, ops);
+    }
     let o = ops.outputs();
     let d = PyDict::new(py);
     let obs = PyList::empty(py);
@@ -200,6 +235,29 @@ fn outputs_of<'py>(py: Python<'py>, ops: &dyn PoolOps) -> PyResult<Bound<'py, Py
         ("masks", &o.masks),
     ] {
         d.set_item(key, PyByteArray::new(py, buf))?;
+    }
+    Ok(d.into_any())
+}
+
+/// Borrowed views of every output (ADR-0003): read-only, valid until the
+/// next call that writes outputs.
+fn borrowed_views<'py>(py: Python<'py>, ops: &dyn PoolOps) -> PyResult<Bound<'py, PyAny>> {
+    let set = crate::view::view_set(ops.layout()).ok_or_else(|| {
+        error(
+            py,
+            Kind::Argument,
+            "an observation dtype has no buffer format".to_owned(),
+        )
+    })?;
+    let storage = ops.storage();
+    let d = PyDict::new(py);
+    let obs = PyList::empty(py);
+    for spec in &set.observations {
+        obs.append(new_view(py, &storage, spec)?)?;
+    }
+    d.set_item("observations", obs)?;
+    for (key, spec) in &set.others {
+        d.set_item(*key, new_view(py, &storage, spec)?)?;
     }
     Ok(d.into_any())
 }

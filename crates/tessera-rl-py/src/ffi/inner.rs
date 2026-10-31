@@ -22,6 +22,8 @@ pub(crate) struct Inner {
     /// Written only while `busy` is held.
     ops: UnsafeCell<Option<Box<dyn PoolOps>>>,
     busy: AtomicBool,
+    /// Output mode, fixed at construction: borrowed views or owned copies.
+    borrowed: bool,
 }
 
 /// Releases the reentrancy guard on drop.
@@ -36,11 +38,17 @@ impl Drop for Busy<'_> {
 
 impl Inner {
     /// An open environment around `ops`.
-    pub(crate) fn new(ops: Box<dyn PoolOps>) -> Self {
+    pub(crate) fn new(ops: Box<dyn PoolOps>, borrowed: bool) -> Self {
         Self {
             ops: UnsafeCell::new(Some(ops)),
             busy: AtomicBool::new(false),
+            borrowed,
         }
+    }
+
+    /// Whether calls return borrowed views (else owned copies).
+    pub(crate) const fn borrowed(&self) -> bool {
+        self.borrowed
     }
 
     fn acquire(&self, py: Python<'_>) -> PyResult<Busy<'_>> {

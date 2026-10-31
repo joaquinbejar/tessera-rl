@@ -5,7 +5,7 @@
 //! `extern "C"` functions here are only reachable through the thunks of
 //! `thunks`.
 
-use core::ffi::{c_int, c_void};
+use core::ffi::c_int;
 use core::ptr;
 
 use pyo3::ffi;
@@ -17,7 +17,7 @@ use super::inner::Inner;
 use super::tables::{
     method, method_end, method_kw, slot_dealloc, slot_doc, slot_end, slot_methods,
 };
-use super::{Table, dispose, entry, thunks};
+use super::{Table, dispose, entry, free_heap_object, thunks};
 use crate::api;
 
 /// The C layout of an `Env` object.
@@ -185,19 +185,8 @@ pub(super) unsafe extern "C" fn dealloc(obj: *mut ffi::PyObject) {
             dispose(payload);
         }
     }
-    // SAFETY: `obj` is a live object.
-    let ty = unsafe { ffi::Py_TYPE(obj) };
-    // SAFETY: `ty` is our heap type, which always has a tp_free slot.
-    let free = unsafe { ffi::PyType_GetSlot(ty, ffi::Py_tp_free) };
-    if !free.is_null() {
-        // SAFETY: the tp_free slot holds a `freefunc`.
-        let free: unsafe extern "C" fn(*mut c_void) = unsafe { core::mem::transmute(free) };
-        // SAFETY: `obj` was allocated by this type's tp_alloc.
-        unsafe { free(obj.cast()) };
-    }
-    // SAFETY: instances of heap types hold a reference to their type,
-    // released after the instance is freed.
-    unsafe { ffi::Py_DECREF(ty.cast()) };
+    // SAFETY: `obj` is a live `Env` instance, in its tp_dealloc.
+    unsafe { free_heap_object(obj) };
 }
 
 static SLOTS: Table<[ffi::PyType_Slot; 4]> = Table([

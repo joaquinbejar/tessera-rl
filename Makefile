@@ -1,6 +1,10 @@
 # SPDX-License-Identifier: MIT OR Apache-2.0
 
-.PHONY: fmt fmt-check clippy test doc readme readme-check pre-push deny check-targets compat-test py-entries py-test
+# Wheels target the macOS support floor (SPEC 7.1: macOS 13), not
+# maturin's default of macOS 11. Ignored on other platforms.
+export MACOSX_DEPLOYMENT_TARGET := 13.0
+
+.PHONY: fmt fmt-check clippy test doc readme readme-check pre-push deny check-targets compat-test py-entries py-test py-test-torch pre-push-torch
 
 fmt:
 	cargo fmt --all
@@ -64,3 +68,13 @@ py-entries:
 py-test:
 	uv sync --locked --python 3.11
 	uv run --locked --python 3.11 pytest -q tests/python
+
+# The Python tests with PyTorch (marker `torch`), then the default
+# environment again.
+py-test-torch:
+	uv sync --locked --python 3.11 --group test --group torch
+	uv run --locked --python 3.11 --group test --group torch pytest -q tests/python
+	uv sync --locked --python 3.11
+
+# pre-push plus the PyTorch tests (downloads PyTorch on first use).
+pre-push-torch: pre-push py-test-torch

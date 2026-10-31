@@ -16,7 +16,8 @@
 
 use pyo3::ffi;
 
-use super::{env_type, module};
+use super::dlpack::{self, DLManagedTensor, DLManagedTensorVersioned};
+use super::{env_type, module, view_type};
 
 /// `PyCFunction`: `(self, args) -> object`.
 pub(crate) type CFunction =
@@ -29,6 +30,17 @@ pub(crate) type CFunctionKw = unsafe extern "C" fn(
 ) -> *mut ffi::PyObject;
 /// `destructor`: `(object)`.
 pub(crate) type Destructor = unsafe extern "C" fn(*mut ffi::PyObject);
+
+/// `getbufferproc`: `(exporter, view, flags) -> 0 | -1`.
+pub(crate) type GetBuffer = unsafe extern "C" fn(
+    *mut ffi::PyObject,
+    *mut ffi::Py_buffer,
+    core::ffi::c_int,
+) -> core::ffi::c_int;
+/// `DLManagedTensor::deleter`.
+pub(crate) type DlDeleter = unsafe extern "C" fn(*mut DLManagedTensor);
+/// `DLManagedTensorVersioned::deleter`.
+pub(crate) type DlDeleterVersioned = unsafe extern "C" fn(*mut DLManagedTensorVersioned);
 
 /// A boundary thunk of C signature `F`. Only this module can make one.
 #[derive(Debug, Clone, Copy)]
@@ -87,3 +99,15 @@ thunk!(SNAPSHOT: CFunction = thunk_snapshot => env_type::snapshot : fn(Obj, Obj)
 thunk!(IMPORT_RECORD: CFunction = thunk_import_record => env_type::import_record : fn(Obj, Obj) -> Obj);
 thunk!(FORK: CFunction = thunk_fork => env_type::fork : fn(Obj, Obj) -> Obj);
 thunk!(DEALLOC: Destructor = thunk_dealloc => env_type::dealloc : fn(Obj) -> ());
+
+// Borrowed output views (ADR-0003). The deleters and the capsule destructor
+// are cleanup entries: they never fail or reject.
+thunk!(VIEW_DEALLOC: Destructor = thunk_view_dealloc => view_type::dealloc : fn(Obj) -> ());
+thunk!(VIEW_GETBUFFER: GetBuffer = thunk_view_getbuffer => view_type::getbuffer : fn(Obj, *mut ffi::Py_buffer, core::ffi::c_int) -> core::ffi::c_int);
+thunk!(VIEW_DLPACK: CFunctionKw = thunk_view_dlpack => view_type::dlpack : fn(Obj, Obj, Obj) -> Obj);
+thunk!(VIEW_DLPACK_DEVICE: CFunction = thunk_view_dlpack_device => view_type::dlpack_device : fn(Obj, Obj) -> Obj);
+thunk!(VIEW_GENERATION: CFunction = thunk_view_generation => view_type::generation : fn(Obj, Obj) -> Obj);
+thunk!(VIEW_IS_STALE: CFunction = thunk_view_is_stale => view_type::is_stale : fn(Obj, Obj) -> Obj);
+thunk!(CAPSULE_DESTRUCTOR: Destructor = thunk_capsule_destructor => dlpack::destroy_capsule : fn(Obj) -> ());
+thunk!(DL_DELETER: DlDeleter = thunk_dl_deleter => dlpack::delete_legacy : fn(*mut DLManagedTensor) -> ());
+thunk!(DL_DELETER_VERSIONED: DlDeleterVersioned = thunk_dl_deleter_versioned => dlpack::delete_versioned : fn(*mut DLManagedTensorVersioned) -> ());

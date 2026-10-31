@@ -1,5 +1,29 @@
 # SPDX-License-Identifier: MIT OR Apache-2.0
-"""The native environment API: a pool of instances with owned NumPy outputs."""
+"""The native environment API: a pool of instances with NumPy outputs.
+
+Output modes (ADR-0003): ``outputs="borrowed"`` (the default here) returns
+read-only arrays that view the engine's buffers without copying. They stay
+readable for as long as they are referenced, even after ``close``, but
+their contents are only guaranteed until the next ``reset`` or ``step`` on
+the same environment: afterwards they show the values of later calls, and
+``is_stale`` reports it. ``outputs="owned"`` returns fresh writable arrays
+the caller keeps. Finish reading borrowed arrays, including asynchronous
+work you started on them, before the next call.
+
+Native views export through the buffer protocol (read-only) and DLPack
+(``__dlpack__``: DLPack 1.0 with the read-only flag when the consumer asks
+for ``max_version >= (1, 0)``, a legacy capsule otherwise). A legacy
+capsule cannot be marked read-only, so legacy consumers get a writable
+alias. NumPy honours the read-only flag; PyTorch 2.15 asks for DLPack 1.0
+and accepts the flag without warnings but returns a writable tensor.
+
+The read-only flag is a signal, not an enforcement (ADR-0003 rule 7): no
+tensor is promised to be immutable, and writing is the caller's
+responsibility. A write through any writable alias reaches the engine
+buffer and corrupts the outputs until the next call overwrites them. To
+modify outputs, use ``outputs="owned"`` or copy first (``tensor.clone()``,
+``array.copy()``).
+"""
 
 from __future__ import annotations
 
@@ -11,7 +35,7 @@ from tessera_rl import _native
 
 
 class Step(NamedTuple):
-    """The outputs of one call, as arrays the caller owns.
+    """The outputs of one call: borrowed read-only views or owned arrays.
 
     Per-agent arrays have shape ``(num_envs, agents, ...)``; episode flags
     have shape ``(num_envs,)``. ``masks`` is ``None`` for environments
@@ -31,9 +55,14 @@ class Step(NamedTuple):
 class Env:
     """A pool of ``num_envs`` instances of one environment.
 
-    Outputs are copies (``owned`` mode): arrays returned by one call stay
-    valid and unchanged after later calls. Calls on one ``Env`` must not
-    overlap; a concurrent call raises ``ConcurrencyError``.
+    ``outputs`` is ``"borrowed"`` or ``"owned"`` (see the module notes).
+
+    Concurrency: each native call is admitted on its own. A native call
+    that starts while another native call on the same ``Env`` is running
+    raises ``ConcurrencyError``. This is not a guarantee about whole Python
+    method calls: the Python work around the native call (converting
+    actions, wrapping outputs) can interleave with other threads, so
+    serialize calls on one ``Env`` yourself.
     """
 
     def __init__(self, native: _native.Env):
@@ -43,6 +72,7 @@ class Env:
         self.agents: int = layout["agents"]
         self.action_choices: int = layout["action_choices"]
         self._mask_len: int = layout["mask_len"]
+        self.outputs: str = layout["outputs"]
         self._leaves = [(name or "obs", np.dtype(dtype), tuple(shape)) for name, dtype, shape in layout["leaves"]]
 
     def reset(self, seed: int | None = None) -> Step:
@@ -64,25 +94,32 @@ class Env:
 
     def _wrap(self, out: dict) -> Step:
         n, a = self.num_envs, self.agents
-        obs = {
-            name: np.frombuffer(buf, dtype=dtype).reshape((n, a, *shape))
-            for (name, dtype, shape), buf in zip(self._leaves, out["observations"], strict=True)
-        }
+        if self.outputs == "borrowed":
+            # Zero-copy, read-only arrays over the native views (the buffer
+            # protocol carries dtype and shape).
+            obs = {name: np.asarray(v) for (name, _, _), v in zip(self._leaves, out["observations"], strict=True)}
+        else:
+            obs = {
+                name: np.frombuffer(buf, dtype=dtype).reshape((n, a, *shape))
+                for (name, dtype, shape), buf in zip(self._leaves, out["observations"], strict=True)
+            }
 
-        def per_agent(key, dtype):
-            return np.frombuffer(out[key], dtype=dtype).reshape((n, a))
+        def field(key, dtype, shape):
+            if self.outputs == "borrowed":
+                return np.asarray(out[key])
+            return np.frombuffer(out[key], dtype=dtype).reshape(shape)
 
         masks = None
         if self._mask_len:
-            masks = np.frombuffer(out["masks"], dtype=np.bool_).reshape((n, a, self._mask_len))
+            masks = field("masks", np.bool_, (n, a, self._mask_len))
         return Step(
             observations=obs,
-            rewards=per_agent("rewards", "<f4"),
-            agent_terminated=per_agent("agent_terminated", np.bool_),
-            agent_truncated=per_agent("agent_truncated", np.bool_),
-            alive=per_agent("alive", np.bool_),
-            episode_terminated=np.frombuffer(out["episode_terminated"], dtype=np.bool_),
-            episode_truncated=np.frombuffer(out["episode_truncated"], dtype=np.bool_),
+            rewards=field("rewards", "<f4", (n, a)),
+            agent_terminated=field("agent_terminated", np.bool_, (n, a)),
+            agent_truncated=field("agent_truncated", np.bool_, (n, a)),
+            alive=field("alive", np.bool_, (n, a)),
+            episode_terminated=field("episode_terminated", np.bool_, (n,)),
+            episode_truncated=field("episode_truncated", np.bool_, (n,)),
             masks=masks,
         )
 
@@ -103,7 +140,8 @@ class Env:
         return self._native.is_poisoned()
 
     def close(self) -> None:
-        """Frees the pool; idempotent. Arrays already returned stay valid."""
+        """Frees the pool; idempotent. Arrays already returned stay readable
+        (borrowed views keep the engine's buffers alive) and never change."""
         self._native.close()
 
     def __enter__(self) -> Env:
@@ -137,10 +175,36 @@ def _discrete_actions(actions) -> np.ndarray:
     return np.ascontiguousarray(arr, dtype="<i4")
 
 
-def make(env_id: str, num_envs: int = 1, seed: int = 0, **kwargs) -> Env:
+def is_stale(array) -> bool:
+    """Whether a borrowed output's borrow window has ended.
+
+    ``array`` is an array returned in ``borrowed`` mode, or a NumPy view of
+    one (slices, reshapes), or a ``memoryview`` of a native view. Owned
+    arrays are never stale. Raw aliases NumPy does not link back to the
+    exporter (for example a ``torch.from_dlpack`` tensor) cannot be
+    tracked and raise ``TypeError``.
+    """
+    obj = array
+    while obj is not None:
+        if isinstance(obj, _native.OutputView):
+            return obj.is_stale()
+        if isinstance(obj, (bytes, bytearray)):
+            return False
+        if isinstance(obj, memoryview):
+            obj = obj.obj
+        elif isinstance(obj, np.ndarray):
+            obj = obj.base
+        else:
+            break
+    raise TypeError("not a Tessera output: its staleness cannot be tracked")
+
+
+def make(env_id: str, num_envs: int = 1, seed: int = 0, outputs: str = "borrowed", **kwargs) -> Env:
     """Creates a pool of ``num_envs`` instances of ``env_id``.
 
-    Pool options: ``max_episode_steps``, ``auto_reset`` (``"next_step"``,
+    ``outputs`` is ``"borrowed"`` (default: read-only zero-copy views valid
+    until the next call) or ``"owned"`` (fresh arrays). Pool options:
+    ``max_episode_steps``, ``auto_reset`` (``"next_step"``,
     ``"same_step"`` or ``"disabled"``), ``chunk_size``, ``workers``. Tag also
     takes its config fields (``width``, ``height``, ``pursuers``,
     ``evaders``, ``slip``, ``radius``).
@@ -153,4 +217,4 @@ def make(env_id: str, num_envs: int = 1, seed: int = 0, **kwargs) -> Env:
         maker = makers[env_id]
     except KeyError:
         raise _native.ArgumentError(f"unknown environment {env_id!r}; known: {sorted(makers)}") from None
-    return Env(maker(num_envs=num_envs, seed=seed, **kwargs))
+    return Env(maker(num_envs=num_envs, seed=seed, outputs=outputs, **kwargs))

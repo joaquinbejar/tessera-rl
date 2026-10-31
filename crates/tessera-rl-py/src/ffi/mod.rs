@@ -47,8 +47,34 @@ pub(crate) fn dispose(payload: Box<dyn core::any::Any + Send>) {
     core::mem::forget(payload);
 }
 
+/// Frees a heap-type instance after its own fields were released: the
+/// type's `tp_free`, then the type reference every heap instance holds.
+///
+/// # Safety
+///
+/// `obj` must be a live instance of a heap type, allocated by its
+/// `tp_alloc`, in its `tp_dealloc`, attached.
+pub(crate) unsafe fn free_heap_object(obj: *mut pyo3::ffi::PyObject) {
+    // SAFETY: `obj` is a live object.
+    let ty = unsafe { pyo3::ffi::Py_TYPE(obj) };
+    // SAFETY: `ty` is a heap type, which always has a tp_free slot.
+    let free = unsafe { pyo3::ffi::PyType_GetSlot(ty, pyo3::ffi::Py_tp_free) };
+    if !free.is_null() {
+        // SAFETY: the tp_free slot holds a `freefunc`.
+        let free: unsafe extern "C" fn(*mut core::ffi::c_void) =
+            unsafe { core::mem::transmute(free) };
+        // SAFETY: `obj` was allocated by this type's tp_alloc.
+        unsafe { free(obj.cast()) };
+    }
+    // SAFETY: instances of heap types hold a reference to their type,
+    // released after the instance is freed.
+    unsafe { pyo3::ffi::Py_DECREF(ty.cast()) };
+}
+
+mod dlpack;
 mod env_type;
 pub(crate) mod inner;
 mod module;
 mod tables;
 mod thunks;
+pub(crate) mod view_type;

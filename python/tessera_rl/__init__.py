@@ -8,7 +8,7 @@ the native floating-point boundary of ADR-0041 lands; no typed rejection is
 promised before then.
 """
 
-from tessera_rl._env import Env, Step, make
+from tessera_rl._env import Env, Step, is_stale, make
 from tessera_rl._native import (
     ActionError,
     ArgumentError,
@@ -34,6 +34,7 @@ __all__ = [
     "RecordError",
     "Step",
     "TesseraError",
+    "is_stale",
     "make",
     "version",
 ]

@@ -12,7 +12,7 @@ use pyo3::ffi;
 use pyo3::prelude::*;
 
 use super::tables::{method, method_end};
-use super::{Table, entry, env_type, thunks};
+use super::{Table, entry, env_type, thunks, view_type};
 
 pub(super) unsafe extern "C" fn version(
     _module: *mut ffi::PyObject,
@@ -63,6 +63,7 @@ pub(super) unsafe extern "C" fn init() -> *mut ffi::PyObject {
             .map_err(PyErr::from)?;
         crate::errors::register(py, &module)?;
         env_type::register(py, &module)?;
+        view_type::register(py, &module)?;
         Ok(module.into_ptr())
     })
 }

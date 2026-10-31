@@ -19,3 +19,4 @@ mod api;
 mod env;
 mod errors;
 mod ffi;
+mod view;
