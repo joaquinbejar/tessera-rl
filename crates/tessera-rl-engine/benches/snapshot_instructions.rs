@@ -127,12 +127,28 @@ library_benchmark_group!(
     ]
 );
 
+/// The glibc dispatch pin of every instruction-count run.
+const GLIBC_TUNABLES: &str = include_str!("../../../benches/gungraun/GLIBC_TUNABLES");
+
 /// Callgrind with the cache simulation on (instruction counts and cache
 /// misses, ADR-0025). The gate, a 2% limit on `Ir`, is passed by
 /// `scripts/gungraun.sh`; the cache metrics are reported.
 fn config() -> LibraryBenchmarkConfig {
     let mut config = LibraryBenchmarkConfig::default();
-    config.tool(Callgrind::with_args(["--cache-sim=yes"]).format([CallgrindMetrics::All]));
+    // glibc picks memcpy and memset variants by CPU (ifunc), which would
+    // make the counts depend on the machine: pin them to the baseline
+    // variants (benches/gungraun/README.md).
+    config.env("GLIBC_TUNABLES", GLIBC_TUNABLES.trim());
+    config.tool(
+        // A fixed cache geometry, so cache metrics compare across hosts.
+        Callgrind::with_args([
+            "--cache-sim=yes",
+            "--I1=32768,8,64",
+            "--D1=32768,8,64",
+            "--LL=8388608,16,64",
+        ])
+        .format([CallgrindMetrics::All]),
+    );
     config
 }
 

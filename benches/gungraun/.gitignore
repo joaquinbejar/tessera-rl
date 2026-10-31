@@ -4,4 +4,6 @@
 !*/
 !*.base@ref
 !README.md
+!GLIBC_TUNABLES
+!environment.toml
 !.gitignore
