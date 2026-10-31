@@ -13,6 +13,11 @@ on:
     - cron: "0 6 * * *"
   workflow_dispatch:
 
+# One night at a time, so the previous night has always finished.
+concurrency:
+  group: learning-test
+  cancel-in-progress: false
+
 permissions:
   contents: read
   actions: read

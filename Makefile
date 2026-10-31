@@ -116,9 +116,12 @@ learning-test:
 # seeds 101-140 in 4 single-threaded shards, on Linux x86-64.
 learning-calibrate:
 	uv sync --locked --python 3.11 --group test --group torch
-	for k in 0 1 2 3; do a=$$((101 + k * 10)); \
+	rm -f learning-cal-*.json
+	pids=""; for k in 0 1 2 3; do a=$$((101 + k * 10)); \
 	  uv run --locked --python 3.11 --group test --group torch python tools/learning_test.py scores --total-steps 150000 --seeds $$(seq $$a $$((a + 9))) --out learning-cal-$$k.json & \
-	done; wait
+	  pids="$$pids $$!"; \
+	done; status=0; for p in $$pids; do wait $$p || status=1; done; \
+	if [ $$status -ne 0 ]; then echo "a calibration shard failed" >&2; exit 1; fi
 	uv run --locked --python 3.11 --group test --group torch python tools/learning_test.py calibrate --out compat/learning/cartpole.json learning-cal-0.json learning-cal-1.json learning-cal-2.json learning-cal-3.json
 
 # Benchmark harness (ADR-0025, tools/bench): the full method, a JSON

@@ -35,6 +35,20 @@ source hash and the torch, NumPy and Gymnasium versions); a night whose
 fingerprint differs from the calibration's fails until a reviewed
 re-calibration.
 
+Sensitivity (measured by Codex at 150k on xaskar): an adapter that gives
+each instance its neighbour's observation drops the median to 9.7 and
+fails (red after two nights); an adapter with terminated and truncated
+swapped keeps the median at 488.05 and passes, although the mean drops
+from 493 to 393. This test detects learning degradation, not every
+adapter error: the flag swap is caught by the negative controls of the
+reference training (``reference_training.py``), which complement it.
+
+Invalid data or setup (missing, repeated or non-finite scores, another
+fingerprint, a calibration whose threshold is not its records') is red at
+once; only a valid night below the threshold waits for the second night.
+The calibration is for Linux x86-64; elsewhere ``night`` stops with that
+message (exit 1) instead of training and comparing.
+
 The final score is the greedy evaluation mean (``--eval-episodes``
 episodes, seeds ``EVAL_SEED_BASE + i``) after ``--total-steps`` training
 steps; the calibration records the budget it was made with, and a night
@@ -44,6 +58,7 @@ with another setup fails.
 from __future__ import annotations
 
 import argparse
+import datetime
 import hashlib
 import json
 import os
@@ -53,7 +68,7 @@ import subprocess
 import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
-from learning_gate import alert, calibrate, night  # noqa: E402
+from learning_gate import CALIBRATION_SEEDS, NIGHT_SEEDS, alert, calibrate, check_shards, night  # noqa: E402
 
 ENV_ID = "tessera/CartPole-v1"
 
@@ -172,24 +187,49 @@ def cmd_scores(args) -> int:
 
 
 def cmd_calibrate(args) -> int:
-    records, setups = [], []
-    for f in args.scores:
-        data = json.loads(pathlib.Path(f).read_text())
-        setups.append(data.get("setup"))
-        records += data.get("records", [])
+    shards = [json.loads(pathlib.Path(f).read_text()) for f in args.scores]
+    records = [r for shard in shards for r in shard.get("records", [])]
     out = calibrate(records, args.seeds)
-    if any(s != setups[0] for s in setups) or not setups:
-        out.setdefault("errors", []).append("the score files have different setups")
-    out["setup"] = setups[0] if setups else None
-    out["environment"] = json.loads(pathlib.Path(args.scores[0]).read_text()).get("environment") if args.scores else None
-    out["records"] = sorted(({"seed": r["seed"], "score": r["score"]} for r in records), key=lambda r: r["seed"])
-    _write(args.out, out)
+    errors = out.get("errors", []) + check_shards(shards)
+    if errors:
+        out["errors"] = errors
+    out["setup"] = shards[0].get("setup") if shards else None
+    out["environment"] = shards[0].get("environment") if shards else None
+    out["records"] = sorted(({"seed": r.get("seed"), "score": r.get("score")} for r in records), key=lambda r: str(r["seed"]))
     sys.stderr.write(json.dumps({k: out.get(k) for k in ("threshold", "median", "min", "max", "errors")}) + "\n")
-    return 1 if out.get("errors") else 0
+    if errors:
+        # A failed calibration never replaces the committed one.
+        return 1
+    _write(args.out, out)
+    return 0
+
+
+def _platform_errors(calibration: dict) -> list[str]:
+    env = calibration.get("environment") or {}
+    here = (platform.system(), platform.machine())
+    there = (str(env.get("os", "")).split("-", 1)[0], env.get("arch"))
+    if here != there:
+        return [
+            f"the calibration is for {there[0]} {there[1]} (the CI platform); this is {here[0]} {here[1]}: "
+            "scores here would only be indicative, so the learning test does not run (run it on Linux x86-64)"
+        ]
+    return []
 
 
 def cmd_night(args) -> int:
-    calibration = json.loads(pathlib.Path(args.calibration).read_text())
+    path = pathlib.Path(args.calibration)
+    calibration = json.loads(path.read_text())
+    identity = {
+        "event": os.environ.get("GITHUB_EVENT_NAME", "local"),
+        "run_id": os.environ.get("GITHUB_RUN_ID", "local"),
+        "date": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
+        "commit": _git("rev-parse", "HEAD"),
+        "calibration": hashlib.sha256(path.read_bytes()).hexdigest(),
+    }
+    wrong_platform = _platform_errors(calibration)
+    if wrong_platform:
+        sys.stderr.write(wrong_platform[0] + "\n")
+        return 1
     # The night uses the calibration's budget unless told otherwise (a
     # different one then fails the setup check).
     setup = calibration.get("setup") or {}
@@ -197,19 +237,23 @@ def cmd_night(args) -> int:
         args.total_steps = setup.get("total_steps")
     if args.eval_episodes is None:
         args.eval_episodes = setup.get("eval_episodes")
-    if not isinstance(args.total_steps, int) or not isinstance(args.eval_episodes, int):
-        sys.stderr.write("the calibration has no valid setup\n")
-        return 1
-    records = _train(args, args.seeds)
-    tonight = night(records, args.seeds, calibration, _setup(args))
+    if isinstance(args.total_steps, int) and isinstance(args.eval_episodes, int):
+        records = _train(args, args.seeds)
+        tonight = night(records, args.seeds, calibration, _setup(args))
+    else:
+        records = []
+        tonight = {"seeds": args.seeds, "errors": ["the calibration has no valid setup"], "failed": True}
     previous = None
     if args.previous and pathlib.Path(args.previous).exists():
         try:
-            previous = json.loads(pathlib.Path(args.previous).read_text()).get("night")
+            previous = json.loads(pathlib.Path(args.previous).read_text())
         except (OSError, ValueError):
-            previous = None
-    verdict = alert(tonight, previous)
-    _write(args.out, {"setup": _setup(args), "environment": _environment(), "night": tonight, "alert": verdict, "records": records})
+            previous = {}
+    verdict = alert(tonight, identity, previous)
+    _write(
+        args.out,
+        {"identity": identity, "setup": setup, "environment": _environment(), "night": tonight, "alert": verdict, "records": records},
+    )
     sys.stderr.write(json.dumps({"night": {k: tonight.get(k) for k in ("median", "threshold", "failed", "errors")}, "alert": verdict}) + "\n")
     return 1 if verdict["red"] else 0
 
@@ -221,12 +265,12 @@ def main() -> int:
         q = sub.add_parser(name)
         q.add_argument("--total-steps", type=int, required=name == "scores")
         q.add_argument("--eval-episodes", type=int, default=20 if name == "scores" else None)
-        q.add_argument("--seeds", type=int, nargs="+", default=[1, 2, 3, 4, 5])
+        q.add_argument("--seeds", type=int, nargs="+", default=NIGHT_SEEDS)
         q.add_argument("--out", required=True)
     sub.choices["night"].add_argument("--calibration", required=True)
     sub.choices["night"].add_argument("--previous")
     q = sub.add_parser("calibrate")
-    q.add_argument("--seeds", type=int, nargs="+", default=list(range(101, 141)))
+    q.add_argument("--seeds", type=int, nargs="+", default=CALIBRATION_SEEDS)
     q.add_argument("--out", required=True)
     q.add_argument("scores", nargs="+")
     args = p.parse_args()
