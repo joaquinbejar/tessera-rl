@@ -19,11 +19,14 @@ use tessera_rl_num::fp;
 use tessera_rl_num::identity::{LogicalId, RngIdentity, Seed, StreamId};
 use tessera_rl_num::rng::{ObsRng, RngAuthority, StepRng};
 
+use crate::buffer::par_chunks;
 use crate::error::EngineError;
 use crate::layout::{ActionLayout, MAX_LEAVES, obs_leaves};
 use crate::masks::{IllegalActionPolicy, MaskProvider, Masked, NoMasks};
-use crate::options::{AutoReset, PoolOptions};
-use crate::outputs::Outputs;
+use crate::options::{AutoReset, PoolOptions, SyncOptions};
+use crate::outputs::{Outputs, OutputsView};
+use crate::registry::Registration;
+use crate::sys::{Gang, GangOptions, available_cores};
 use crate::validate::{ActionInput, check_and_copy_actions, check_ids};
 
 /// Whether an entry point is accepted on a poisoned pool (ADR-0028).
@@ -65,12 +68,25 @@ pub struct EnvPool<E: Environment, M: MaskProvider<E> = NoMasks> {
     penalties: Vec<f32>,
     penalized: Vec<Bool8>,
     pub(crate) branch_counter: u64,
+    sync: Option<SyncRuntime>,
     _masks: PhantomData<M>,
+}
+
+/// Workers of a pool in Sync mode. Dropping it shuts them down and joins
+/// them.
+#[derive(Debug)]
+struct SyncRuntime {
+    gang: Gang,
+    workers: usize,
+    _registration: Registration,
 }
 
 impl<E> EnvPool<E, NoMasks>
 where
     E: Environment,
+    E::Config: Sync,
+    E::Header: Send,
+    E::State: Send,
     <E::Header as RecordLayout>::Adaptive: AdaptiveValues<E::Config>,
 {
     /// Builds a pool without action masks: validates the config, the
@@ -89,6 +105,9 @@ where
 impl<E> EnvPool<E, Masked>
 where
     E: ActionMask,
+    E::Config: Sync,
+    E::Header: Send,
+    E::State: Send,
     <E::Header as RecordLayout>::Adaptive: AdaptiveValues<E::Config>,
 {
     /// Builds a pool with action masks from `ActionMask`: masks are written
@@ -108,6 +127,9 @@ impl<E, M> EnvPool<E, M>
 where
     E: Environment,
     M: MaskProvider<E>,
+    E::Config: Sync,
+    E::Header: Send,
+    E::State: Send,
     <E::Header as RecordLayout>::Adaptive: AdaptiveValues<E::Config>,
 {
     fn build(cfg: E::Config, options: PoolOptions) -> Result<Self, EngineError> {
@@ -195,8 +217,109 @@ where
             penalties: vec![0.0; if M::ENABLED { rows } else { 0 }],
             penalized: vec![Bool8::FALSE; if M::ENABLED { rows } else { 0 }],
             branch_counter: 0,
+            sync: None,
             _masks: PhantomData,
         })
+    }
+
+    /// Switches the pool to Sync mode: `step` and `reset_all` run chunks on
+    /// persistent worker threads and return when every instance is done.
+    /// Results are bit-identical to Inline mode for any worker count.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`EngineError::NestedEngine`] when called from an engine
+    /// worker, or [`EngineError::Options`] for an invalid `cpu_set`.
+    pub fn with_workers(self, options: SyncOptions) -> Result<Self, EngineError> {
+        self.with_workers_inner(
+            options,
+            #[cfg(test)]
+            crate::sys::Faults::default(),
+        )
+    }
+
+    /// [`Self::with_workers`] with test-only fault injection.
+    #[cfg(test)]
+    pub(crate) fn with_workers_faults(
+        self,
+        options: SyncOptions,
+        faults: crate::sys::Faults,
+    ) -> Result<Self, EngineError> {
+        self.with_workers_inner(options, faults)
+    }
+
+    fn with_workers_inner(
+        mut self,
+        options: SyncOptions,
+        #[cfg(test)] faults: crate::sys::Faults,
+    ) -> Result<Self, EngineError> {
+        let workers = options.workers.get();
+        let available = available_cores();
+        let (registration, others) = Registration::register();
+        let pin = match options.cpu_set {
+            Some(cores) if cores.len() < workers => {
+                return Err(EngineError::Options {
+                    option: "cpu_set",
+                    reason: "needs one core per worker",
+                });
+            }
+            Some(cores) => {
+                // Only ids the OS reports (and, on Windows, below 64).
+                let known = |id: &usize| available.as_ref().is_some_and(|a| a.contains(id));
+                if !cores.iter().all(known) {
+                    return Err(EngineError::Options {
+                        option: "cpu_set",
+                        reason: "contains a core id the OS does not report",
+                    });
+                }
+                Some(cores)
+            }
+            None if others == 0 => match available {
+                Some(cores) if cores.len() >= workers => {
+                    Some(cores.into_iter().take(workers).collect())
+                }
+                _ => {
+                    tracing::warn!(
+                        workers,
+                        "fewer reported cores than workers; workers run unpinned"
+                    );
+                    None
+                }
+            },
+            None => {
+                tracing::warn!(
+                    others,
+                    "another engine with workers is active; workers run unpinned (set cpu_set to partition cores)"
+                );
+                None
+            }
+        };
+        let gang = Gang::new(&GangOptions {
+            workers: options.workers,
+            spin: options.spin,
+            pin,
+            #[cfg(test)]
+            faults,
+        })?;
+        self.sync = Some(SyncRuntime {
+            gang,
+            workers,
+            _registration: registration,
+        });
+        Ok(self)
+    }
+
+    /// Number of worker threads; 0 in Inline mode.
+    #[must_use]
+    pub fn workers(&self) -> usize {
+        self.sync.as_ref().map_or(0, |s| s.workers)
+    }
+
+    /// Times a worker found its FP environment changed at a batch start and
+    /// reset it (ADR-0037).
+    #[must_use]
+    pub fn fp_resets(&self) -> u64 {
+        self.sync.as_ref().map_or(0, |s| s.gang.fp_resets())
     }
 
     /// Whether a panic in environment code poisoned the pool (ADR-0028).
@@ -316,7 +439,47 @@ where
     fn reset_all_inner(&mut self, reseed: Reseed<'_>) -> Result<(), EngineError> {
         let n = self.headers.len();
         self.check_reset(0..n, n, reseed)?;
-        self.apply_reset(0..n, reseed)?;
+        let Self {
+            cfg,
+            options,
+            actions: layout,
+            headers,
+            states,
+            discrete,
+            continuous,
+            outputs,
+            authority,
+            poisoned,
+            penalties,
+            penalized,
+            sync,
+            ..
+        } = self;
+        let all = Chunk::<E> {
+            headers,
+            states,
+            discrete,
+            continuous,
+            penalties,
+            penalized,
+            outputs: outputs.view_all(),
+        };
+        if let Some(rt) = sync {
+            let heads = (layout.discrete.len(), layout.continuous.len());
+            let size = chunk_size(options);
+            let panicked = par_chunks(&mut rt.gang, all, size, heads, |chunk, first| {
+                reset_chunk::<E, M>(cfg, authority, chunk, reseed, first);
+            })?;
+            if panicked {
+                *poisoned = true;
+                return Err(EngineError::Panicked);
+            }
+        } else {
+            let mut chunk = all;
+            run_kernels(poisoned, || {
+                reset_chunk::<E, M>(cfg, authority, &mut chunk, reseed, 0);
+            })?;
+        }
         self.poisoned = false;
         Ok(())
     }
@@ -390,6 +553,7 @@ where
             ..
         } = self;
         run_kernels(poisoned, || {
+            let outputs = &mut outputs.view_all();
             for (k, i) in indices.enumerate() {
                 let (Some(header), Some(state)) = (headers.get_mut(i), states.get_mut(i)) else {
                     continue;
@@ -512,56 +676,40 @@ where
             poisoned,
             penalties,
             penalized,
+            sync,
             ..
         } = self;
-        let (dh, ch) = (layout.discrete.len(), layout.continuous.len());
-        let policy = options.illegal_action;
-        let limit = options.max_episode_steps.map(core::num::NonZeroU32::get);
-        let auto_reset = options.auto_reset;
-        run_kernels(poisoned, || {
-            for (i, (header, state)) in headers.iter_mut().zip(states.iter_mut()).enumerate() {
-                if header.engine().pending_reset.get() {
-                    // NextStep: reset instead of stepping (validated above).
-                    reset_one::<E>(cfg, authority, header, state, None);
-                    clear_instance(outputs, i);
-                    write_agent_masks(outputs, i, header);
-                    observe_instance::<E, M>(cfg, authority, header, state, outputs, i);
-                    continue;
-                }
-                if M::ENABLED {
-                    // Inside the panic catch: the author's noop may panic.
-                    replace_illegal_one::<E, M>(
-                        cfg, policy, header, state, outputs, layout, discrete, continuous,
-                        penalties, penalized, i,
-                    );
-                }
-                let rows = i * E::MAX_AGENTS;
-                let view = Actions::new(
-                    discrete
-                        .get(rows * dh..(rows + E::MAX_AGENTS) * dh)
-                        .unwrap_or(&[]),
-                    dh,
-                    continuous
-                        .get(rows * ch..(rows + E::MAX_AGENTS) * ch)
-                        .unwrap_or(&[]),
-                    ch,
-                );
-                let agents = i * E::MAX_AGENTS..(i + 1) * E::MAX_AGENTS;
-                let penalty = penalties.get(agents.clone()).unwrap_or(&[]);
-                let marked = penalized.get(agents).unwrap_or(&[]);
-                step_one::<E>(
-                    cfg, authority, header, state, &view, outputs, i, limit, penalty, marked,
-                );
-                observe_instance::<E, M>(cfg, authority, header, state, outputs, i);
-                if auto_reset == AutoReset::SameStep && header.engine().pending_reset.get() {
-                    save_terminal(outputs, i);
-                    // Flags and stats of the ended episode stay set.
-                    reset_one::<E>(cfg, authority, header, state, None);
-                    write_agent_masks(outputs, i, header);
-                    observe_instance::<E, M>(cfg, authority, header, state, outputs, i);
-                }
+        let ctx = StepCtx::<E> {
+            cfg,
+            authority,
+            layout,
+            policy: options.illegal_action,
+            limit: options.max_episode_steps.map(core::num::NonZeroU32::get),
+            auto_reset: options.auto_reset,
+        };
+        let all = Chunk::<E> {
+            headers,
+            states,
+            discrete,
+            continuous,
+            penalties,
+            penalized,
+            outputs: outputs.view_all(),
+        };
+        if let Some(rt) = sync {
+            let heads = (layout.discrete.len(), layout.continuous.len());
+            let size = chunk_size(options);
+            let panicked = par_chunks(&mut rt.gang, all, size, heads, |chunk, _| {
+                step_chunk::<E, M>(&ctx, chunk);
+            })?;
+            if panicked {
+                *poisoned = true;
+                return Err(EngineError::Panicked);
             }
-        })?;
+        } else {
+            let mut chunk = all;
+            run_kernels(poisoned, || step_chunk::<E, M>(&ctx, &mut chunk))?;
+        }
         #[cfg(feature = "debug-checks")]
         self.check_agent_events()?;
         Ok(())
@@ -588,12 +736,139 @@ where
     }
 }
 
+/// Instances per chunk.
+fn chunk_size(options: &PoolOptions) -> usize {
+    usize::try_from(options.chunk_size.get()).unwrap_or(usize::MAX)
+}
+
+/// Read-only context of a step, shared by every chunk.
+pub(crate) struct StepCtx<'a, E: Environment> {
+    pub(crate) cfg: &'a E::Config,
+    pub(crate) authority: &'a RngAuthority,
+    pub(crate) layout: &'a ActionLayout,
+    pub(crate) policy: IllegalActionPolicy,
+    pub(crate) limit: Option<u32>,
+    pub(crate) auto_reset: AutoReset,
+}
+
+/// The records, action rows and output rows of a range of instances,
+/// indexed from the first instance of the range. A chunk is the unit of
+/// scheduling (SPEC 5.1): kernels only ever see one chunk.
+pub(crate) struct Chunk<'a, E: Environment> {
+    pub(crate) headers: &'a mut [E::Header],
+    pub(crate) states: &'a mut [E::State],
+    pub(crate) discrete: &'a mut [i32],
+    pub(crate) continuous: &'a mut [f32],
+    pub(crate) penalties: &'a mut [f32],
+    pub(crate) penalized: &'a mut [Bool8],
+    pub(crate) outputs: OutputsView<'a>,
+}
+
+/// Steps every instance of `chunk` (after validation).
+pub(crate) fn step_chunk<E: Environment, M: MaskProvider<E>>(
+    ctx: &StepCtx<'_, E>,
+    chunk: &mut Chunk<'_, E>,
+) {
+    let StepCtx {
+        cfg,
+        authority,
+        layout,
+        policy,
+        limit,
+        auto_reset,
+    } = *ctx;
+    let Chunk {
+        headers,
+        states,
+        discrete,
+        continuous,
+        penalties,
+        penalized,
+        outputs,
+    } = chunk;
+    let (dh, ch) = (layout.discrete.len(), layout.continuous.len());
+    for (i, (header, state)) in headers.iter_mut().zip(states.iter_mut()).enumerate() {
+        if header.engine().pending_reset.get() {
+            // NextStep: reset instead of stepping (validated above).
+            reset_one::<E>(cfg, authority, header, state, None);
+            clear_instance(outputs, i);
+            write_agent_masks(outputs, i, header);
+            observe_instance::<E, M>(cfg, authority, header, state, outputs, i);
+            continue;
+        }
+        if M::ENABLED {
+            // Inside the panic catch: the author's noop may panic.
+            replace_illegal_one::<E, M>(
+                cfg, policy, header, state, outputs, layout, discrete, continuous, penalties,
+                penalized, i,
+            );
+        }
+        let rows = i * E::MAX_AGENTS;
+        let view = Actions::new(
+            discrete
+                .get(rows * dh..(rows + E::MAX_AGENTS) * dh)
+                .unwrap_or(&[]),
+            dh,
+            continuous
+                .get(rows * ch..(rows + E::MAX_AGENTS) * ch)
+                .unwrap_or(&[]),
+            ch,
+        );
+        let agents = i * E::MAX_AGENTS..(i + 1) * E::MAX_AGENTS;
+        let penalty = penalties.get(agents.clone()).unwrap_or(&[]);
+        let marked = penalized.get(agents).unwrap_or(&[]);
+        step_one::<E>(
+            cfg, authority, header, state, &view, outputs, i, limit, penalty, marked,
+        );
+        observe_instance::<E, M>(cfg, authority, header, state, outputs, i);
+        if auto_reset == AutoReset::SameStep && header.engine().pending_reset.get() {
+            save_terminal(outputs, i);
+            // Flags and stats of the ended episode stay set.
+            reset_one::<E>(cfg, authority, header, state, None);
+            write_agent_masks(outputs, i, header);
+            observe_instance::<E, M>(cfg, authority, header, state, outputs, i);
+        }
+    }
+}
+
+/// Resets every instance of `chunk`; `first` is the position of the
+/// chunk's first instance among the reset instances (for `Reseed`).
+pub(crate) fn reset_chunk<E: Environment, M: MaskProvider<E>>(
+    cfg: &E::Config,
+    authority: &RngAuthority,
+    chunk: &mut Chunk<'_, E>,
+    reseed: Reseed<'_>,
+    first: usize,
+) {
+    let outputs = &mut chunk.outputs;
+    for (i, (header, state)) in chunk
+        .headers
+        .iter_mut()
+        .zip(chunk.states.iter_mut())
+        .enumerate()
+    {
+        let k = first + i;
+        let seed = match reseed {
+            Reseed::Keep => None,
+            // `k` counts reset instances, at most `u32::MAX`.
+            Reseed::Base(base) => Some(base.offset(u64::try_from(k).unwrap_or(u64::MAX))),
+            Reseed::List(seeds) => seeds.get(k).copied(),
+        };
+        reset_one::<E>(cfg, authority, header, state, seed);
+        clear_instance(outputs, i);
+        write_agent_masks(outputs, i, header);
+        observe_instance::<E, M>(cfg, authority, header, state, outputs, i);
+    }
+}
+
 /// Runs environment code at a chunk boundary: inside the canonical FP
 /// environment, catching a panic and poisoning the pool (ADR-0028). There
 /// is no rollback: instances processed before the panic keep their new
 /// state. With `panic = "abort"` a panic aborts the process instead.
 pub(crate) fn run_kernels(poisoned: &mut bool, f: impl FnOnce()) -> Result<(), EngineError> {
-    if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| fp::with_canonical(f))).is_ok() {
+    // `catch` also disposes of the payload safely: one whose `Drop` panics
+    // must not unwind out of the call.
+    if crate::sys::catch(|| fp::with_canonical(f)) {
         Ok(())
     } else {
         *poisoned = true;
@@ -614,7 +889,7 @@ fn replace_illegal_one<E: Environment, M: MaskProvider<E>>(
     policy: IllegalActionPolicy,
     header: &mut E::Header,
     state: &E::State,
-    outputs: &Outputs,
+    outputs: &OutputsView<'_>,
     layout: &ActionLayout,
     discrete: &mut [i32],
     continuous: &mut [f32],
@@ -693,9 +968,9 @@ pub(crate) fn first_illegal(heads: &[i32], sizes: &[u32], mask: &[Bool8]) -> Opt
 }
 
 /// Copies instance `i`'s observation rows into the terminal buffer.
-fn save_terminal(outputs: &mut Outputs, i: usize) {
+fn save_terminal(outputs: &mut OutputsView<'_>, i: usize) {
     let a = outputs.agents;
-    let Outputs {
+    let OutputsView {
         observations,
         terminal_observations,
         leaf_bytes,
@@ -774,7 +1049,7 @@ fn step_one<E: Environment>(
     header: &mut E::Header,
     state: &mut E::State,
     actions: &Actions<'_, E::Action>,
-    outputs: &mut Outputs,
+    outputs: &mut OutputsView<'_>,
     i: usize,
     limit: Option<u32>,
     penalties: &[f32],
@@ -787,7 +1062,7 @@ fn step_one<E: Environment>(
     let identity = with_step(header, episode, t);
     clear_instance(outputs, i);
     let end = {
-        let Outputs {
+        let OutputsView {
             rewards,
             agent_terminated,
             agent_truncated,
@@ -838,8 +1113,8 @@ fn step_one<E: Environment>(
             // `debug-checks` turns it into an error.
             died = false;
             row.invalid_agent_events = row.invalid_agent_events.saturating_add(1);
-            set(&mut outputs.invalid_agent_event, k, true);
-            set(&mut outputs.agent_terminated, k, false);
+            set(outputs.invalid_agent_event, k, true);
+            set(outputs.agent_terminated, k, false);
         }
         if died {
             row.alive = Bool8::FALSE;
@@ -853,8 +1128,8 @@ fn step_one<E: Environment>(
             let valid = !died && !row.alive.get();
             if !valid {
                 row.invalid_agent_events = row.invalid_agent_events.saturating_add(1);
-                set(&mut outputs.invalid_agent_event, k, true);
-                set(&mut outputs.spawned, k, false);
+                set(outputs.invalid_agent_event, k, true);
+                set(outputs.spawned, k, false);
             }
             if valid {
                 row.alive = Bool8::TRUE;
@@ -890,7 +1165,7 @@ fn step_one<E: Environment>(
 /// Records the end of an episode: flags, pending reset and statistics.
 fn finish_episode<H: RecordLayout>(
     header: &mut H,
-    outputs: &mut Outputs,
+    outputs: &mut OutputsView<'_>,
     i: usize,
     end: EpisodeEnd,
     t: u32,
@@ -903,8 +1178,8 @@ fn finish_episode<H: RecordLayout>(
         EpisodeEnd::Truncated => (false, 2),
     };
     engine.end_kind = kind;
-    set(&mut outputs.episode_terminated, i, terminated);
-    set(&mut outputs.episode_truncated, i, !terminated);
+    set(outputs.episode_terminated, i, terminated);
+    set(outputs.episode_truncated, i, !terminated);
     if let Some(r) = outputs.episode_return.get_mut(i) {
         *r = total;
     }
@@ -940,7 +1215,7 @@ fn set(buf: &mut [Bool8], i: usize, value: bool) {
     }
 }
 
-pub(crate) fn clear_instance(outputs: &mut Outputs, i: usize) {
+pub(crate) fn clear_instance(outputs: &mut OutputsView<'_>, i: usize) {
     let a = outputs.agents;
     let range = i * a..(i + 1) * a;
     for buf in [
@@ -957,8 +1232,8 @@ pub(crate) fn clear_instance(outputs: &mut Outputs, i: usize) {
     if let Some(rows) = outputs.rewards.get_mut(range) {
         rows.fill(0.0);
     }
-    set(&mut outputs.episode_terminated, i, false);
-    set(&mut outputs.episode_truncated, i, false);
+    set(outputs.episode_terminated, i, false);
+    set(outputs.episode_truncated, i, false);
     for buf in [
         &mut outputs.episode_return,
         &mut outputs.episode_length,
@@ -973,12 +1248,12 @@ pub(crate) fn clear_instance(outputs: &mut Outputs, i: usize) {
 
 /// Zeroes instance `i`'s terminal observation rows: they are a step
 /// output, not continuation state (ADR-0039).
-pub(crate) fn clear_terminal(outputs: &mut Outputs, i: usize) {
+pub(crate) fn clear_terminal(outputs: &mut OutputsView<'_>, i: usize) {
     let a = outputs.agents;
     for (rows, &bytes) in outputs
         .terminal_observations
         .iter_mut()
-        .zip(&outputs.leaf_bytes)
+        .zip(outputs.leaf_bytes)
     {
         if let Some(r) = rows.get_mut(i * a * bytes..(i + 1) * a * bytes) {
             r.fill(0);
@@ -986,7 +1261,11 @@ pub(crate) fn clear_terminal(outputs: &mut Outputs, i: usize) {
     }
 }
 
-pub(crate) fn write_agent_masks<H: RecordLayout>(outputs: &mut Outputs, i: usize, header: &H) {
+pub(crate) fn write_agent_masks<H: RecordLayout>(
+    outputs: &mut OutputsView<'_>,
+    i: usize,
+    header: &H,
+) {
     let a = outputs.agents;
     for (slot, row) in header.agents().iter().enumerate() {
         let k = i * a + slot;
@@ -1007,12 +1286,12 @@ pub(crate) fn observe_instance<E: Environment, M: MaskProvider<E>>(
     authority: &RngAuthority,
     header: &E::Header,
     state: &E::State,
-    outputs: &mut Outputs,
+    outputs: &mut OutputsView<'_>,
     i: usize,
 ) {
     let identity = header.engine().identity;
     let a = E::MAX_AGENTS;
-    let Outputs {
+    let OutputsView {
         observations,
         leaf_bytes,
         masks,

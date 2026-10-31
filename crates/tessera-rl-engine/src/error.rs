@@ -130,6 +130,20 @@ pub enum EngineError {
         /// The value.
         value: f32,
     },
+    /// A worker thread could not be spawned or failed to start; the workers
+    /// already started were shut down.
+    #[error("engine worker {worker} failed to start")]
+    WorkerStartup {
+        /// The worker that failed.
+        worker: usize,
+    },
+    /// A worker thread died outside a job; the pool cannot run in Sync mode
+    /// any more.
+    #[error("an engine worker died; the pool cannot step in Sync mode")]
+    WorkerDied,
+    /// An engine was created inside an engine worker (ADR-0005).
+    #[error("engines cannot be created inside an engine worker")]
+    NestedEngine,
     /// The pool is poisoned after a panic in environment code; only a full
     /// reset (or, later, a full restore) or dropping the pool is accepted
     /// (ADR-0028).

@@ -1,0 +1,25 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
+# Nightly Miri run over the audited views and the canonical encoding
+# (ADR-0024). Miri needs the nightly toolchain, so this workflow installs it
+# explicitly and leaves rust-toolchain.toml untouched.
+
+name: Miri
+
+on:
+  schedule:
+    - cron: "0 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  miri:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: rustup toolchain install nightly --profile minimal --component miri
+      - run: cargo +nightly miri setup
+      - run: cargo +nightly miri test -p tessera-rl-core --locked
+      - run: cargo +nightly miri test -p tessera-rl-engine --lib --locked buffer::

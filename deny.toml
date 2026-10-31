@@ -5,6 +5,10 @@
 
 [graph]
 all-features = true
+# Bans and licenses apply to the production graph. Dev-only dependencies
+# (loom pulls generator -> cc) never ship; the cc/cmake/bindgen bans below
+# still hold for everything a user builds.
+exclude-dev = true
 
 [advisories]
 version = 2
