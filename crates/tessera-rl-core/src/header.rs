@@ -31,7 +31,9 @@ pub struct EngineHeader {
     pub episode_steps: u32,
     /// The episode ended and the instance waits for its reset.
     pub pending_reset: Bool8,
-    /// How the last episode ended: 0 none, 1 terminated, 2 truncated.
+    /// How the last episode ended: 0 none, 1 terminated, 2 truncated, 3
+    /// terminated and truncated (a terminal step that reaches the step
+    /// limit, as Gymnasium's `TimeLimit` reports it).
     pub end_kind: u8,
     /// No reset has used the current `episode_index` yet (construction or
     /// reseeding), so the next reset keeps it instead of incrementing it.
@@ -230,7 +232,7 @@ impl Canonical for EngineHeader {
         let episode_steps = u32::decode(input)?;
         let pending_reset = Bool8::decode(input)?;
         let end_kind = u8::decode(input)?;
-        if end_kind > 2 {
+        if end_kind > 3 {
             return Err(DecodeError::InvalidEnum {
                 name: "EpisodeEnd",
                 value: i64::from(end_kind),
@@ -331,7 +333,7 @@ mod tests {
     #[test]
     fn test_header_decode_rejects_invalid_end_kind() {
         let mut bytes = encode_to_vec(&RecordHeader::<1, NoAdaptive>::state_default());
-        bytes[37] = 3;
+        bytes[37] = 4;
         assert!(decode_from_slice::<RecordHeader<1, NoAdaptive>>(&bytes).is_err());
     }
 }
