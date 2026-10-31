@@ -22,6 +22,7 @@ ARM = platform.machine() in ("arm64", "aarch64")
 # <fenv.h> values: x86-64 (glibc and macOS) and aarch64 (glibc and macOS).
 FE_TOWARDZERO = 0x00C00000 if ARM else 0x0C00
 FE_TONEAREST = 0
+FE_UPWARD = 0x00400000 if ARM else 0x0800
 FE_DIVBYZERO = 0x02 if ARM else 0x04
 
 
@@ -225,6 +226,73 @@ def main(scenario):
         result["identical"] = bombed == clean
         result["counted"] = t.fp_non_canonical_entries() - before
         gc.collect()
+    elif scenario in ("gc_inject", "gc_unwind"):
+        # codex R-PR26 R2: a gc callback, run inside a native GC
+        # allocation, finds the output dict under construction and stores
+        # user objects in it and in its observations list. Every later drop
+        # of those objects (a replaced dict value; on gc_unwind, the partly
+        # built containers dropped by a failure) must run their finalizers
+        # through a callout, under the caller's controls (FE_UPWARD here),
+        # never under Rust's canonical ones.
+        import gc
+
+        from tessera_rl import _native
+
+        warnings.simplefilter("ignore", RuntimeWarning)
+        seen = []
+        injected = []
+
+        class Bomb:
+            def __del__(self):
+                seen.append(LIBM.fegetround())
+
+        def callback(phase, info):
+            if phase != "start":
+                return
+            for d in gc.get_objects():
+                if type(d) is dict and "observations" in d and "masks" not in d and type(d["observations"]) is list:
+                    d["rewards"] = Bomb()
+                    d["agent_terminated"] = Bomb()
+                    d["observations"].append(Bomb())
+                    injected.append(id(d))
+
+        env = _native.make_cartpole(num_envs=1, outputs="owned")
+        env.reset()
+        gc.collect()
+        gc.disable()
+        hold = [({}, [], (i, i)) for i in range(1000)]
+        gc.callbacks.append(callback)
+        gc.set_threshold(1, 1, 1)
+        failed = 0
+        try:
+            for _ in range(30):
+                if scenario == "gc_unwind":
+                    # Fail at the 4th insertion: after observations and
+                    # terminal_observations, before the remaining outputs.
+                    _native._fail_after(4)
+                set_round(FE_UPWARD)
+                gc.enable()
+                try:
+                    env.outputs()
+                except RuntimeError:
+                    failed += 1
+                gc.disable()
+                set_round(FE_TONEAREST)
+                if injected and seen:
+                    break
+        finally:
+            gc.disable()
+            gc.callbacks.remove(callback)
+            gc.set_threshold(700, 10, 10)
+            set_round(FE_TONEAREST)
+            if scenario == "gc_unwind":
+                _native._fail_after(0)
+        del hold
+        result["injected"] = len(injected)
+        result["failed"] = failed
+        result["finalizers"] = len(seen)
+        result["all_caller_controls"] = all(m == FE_UPWARD for m in seen)
+        result["modes"] = sorted(set(seen))
     elif scenario == "torch_ftz":
         import torch
 

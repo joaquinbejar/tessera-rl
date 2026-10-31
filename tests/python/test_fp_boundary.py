@@ -127,3 +127,22 @@ def test_fp_boundary_callout_lint_rejects_a_direct_call(tmp_path):
     capi.write_text(capi.read_text() + "\nfn sneaky() { unsafe { ffi::PyDict_New(); } }\n")
     bad = subprocess.run([sys.executable, str(lint), str(src)], capture_output=True, text=True)
     assert bad.returncode != 0 and "PyDict_New" in bad.stdout
+
+
+@pytest.mark.skipif(sys.version_info >= (3, 12), reason="from 3.12 gc never runs inside a native allocation")
+def test_fp_boundary_injected_container_values_drop_under_caller_controls():
+    # codex R-PR26 R2 P1: dict_set replacing a value a gc callback stored.
+    r = child("gc_inject")
+    assert r["injected"] > 0 and r["finalizers"] > 0, r
+    assert r["all_caller_controls"], r
+
+
+@pytest.mark.skipif(sys.version_info >= (3, 12), reason="from 3.12 gc never runs inside a native allocation")
+def test_fp_boundary_unwind_drops_injected_containers_under_caller_controls():
+    import tessera_rl._native as n
+
+    if not hasattr(n, "_fail_after"):
+        pytest.skip("needs the test-hooks build (make py-test-hooks)")
+    r = child("gc_unwind")
+    assert r["injected"] > 0 and r["failed"] > 0 and r["finalizers"] > 0, r
+    assert r["all_caller_controls"], r
