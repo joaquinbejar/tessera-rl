@@ -11,8 +11,10 @@
 use tessera_rl_num::fp;
 
 /// Runs `f` in the canonical environment. Entries from a non-canonical
-/// caller thread are counted (`fp::non_canonical_entries`); with
-/// `debug-checks` the first one is also logged.
+/// caller thread are counted by `fp::non_canonical_entries`, which is
+/// process-wide and shared by every pool (and any other user of
+/// `fp::with_canonical`); with `debug-checks` the first one is also
+/// logged, once per process.
 #[inline]
 pub(crate) fn canonical<R>(f: impl FnOnce() -> R) -> R {
     #[cfg(feature = "debug-checks")]
