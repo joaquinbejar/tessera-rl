@@ -14,6 +14,8 @@ clippy:
 test:
 	cargo test --workspace --all-features --locked
 	cargo test --workspace --locked
+	# Release with every feature: strict checks without debug assertions.
+	cargo test --workspace --release --all-features --locked
 
 doc:
 	RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --all-features --locked

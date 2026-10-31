@@ -159,9 +159,10 @@ fn test_f64_box_actions_are_unsupported_in_phase_1a() {
     );
 }
 
-/// In release builds (where the debug assertion is off) a second death of
-/// the same slot is ignored: `terminated` is reported exactly once.
-#[cfg(not(debug_assertions))]
+/// Without `debug-checks`, a second death of the same slot is an invalid
+/// agent event: ignored and counted, so `terminated` is reported exactly
+/// once (in every build profile).
+#[cfg(not(feature = "debug-checks"))]
 #[test]
 fn test_agent_died_on_dead_slot_reports_terminated_once() {
     let cfg = ContConfig {
@@ -185,6 +186,33 @@ fn test_agent_died_on_dead_slot_reports_terminated_once() {
         })
         .unwrap();
     assert_eq!(out.agent_terminated(), [Bool8::FALSE]);
+}
+
+/// With `debug-checks`, the second death fails with a typed error and
+/// poisons the pool.
+#[cfg(feature = "debug-checks")]
+#[test]
+fn test_agent_died_on_dead_slot_fails_and_poisons_under_debug_checks() {
+    let cfg = ContConfig {
+        kill_each_step: true,
+        ..ContConfig::default()
+    };
+    let mut pool = EnvPool::<Cont>::new(cfg, options()).unwrap();
+    pool.reset_all(Reseed::Keep).unwrap();
+    let zero = [0.0f32];
+    let input = ActionInput {
+        discrete: &[],
+        continuous: &zero,
+    };
+    assert_eq!(pool.step(input).unwrap().agent_terminated(), [Bool8::TRUE]);
+    assert_eq!(
+        pool.step(input).map(|_| ()),
+        Err(EngineError::InvalidAgentEvent {
+            instance: 0,
+            agent: 0
+        })
+    );
+    assert!(pool.is_poisoned());
 }
 
 #[test]

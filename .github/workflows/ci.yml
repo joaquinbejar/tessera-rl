@@ -36,6 +36,7 @@ jobs:
       - run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
       - run: cargo test --workspace --all-features --locked
       - run: cargo test --workspace --locked
+      - run: cargo test --workspace --release --all-features --locked
       # Release, without debug assertions: the FP boundary tests (ADR-0037)
       # only detect compiler motion in optimized builds.
       - run: cargo test -p tessera-rl-num --release --all-features --locked
