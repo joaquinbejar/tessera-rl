@@ -471,3 +471,31 @@ fn test_pool_initial_agents_starts_the_rest_empty_until_spawned() {
     let out = p.reset_all(Reseed::Keep).unwrap();
     assert_eq!(out.alive(), [Bool8::TRUE, Bool8::FALSE]);
 }
+
+#[test]
+fn test_pool_terminal_step_at_the_limit_is_terminated_and_truncated() {
+    // The counter terminates after 3 steps; the step limit is also 3.
+    let cfg = CountConfig {
+        length: 3,
+        ..CountConfig::default()
+    };
+    let options = PoolOptions {
+        max_episode_steps: NonZeroU32::new(3),
+        ..PoolOptions::new(NonZeroU32::MIN, Seed::new(4))
+    };
+    let mut p = EnvPool::<Counter>::new(cfg, options).unwrap();
+    p.reset_all(Reseed::Keep).unwrap();
+    p.step(actions(&[0, 0])).unwrap();
+    p.step(actions(&[0, 0])).unwrap();
+    let out = p.step(actions(&[0, 0])).unwrap();
+    assert_eq!(out.episode_terminated(), [Bool8::TRUE]);
+    assert_eq!(out.episode_truncated(), [Bool8::TRUE]);
+    assert_eq!(out.agent_terminated(), [Bool8::TRUE; 2]);
+    assert_eq!(out.agent_truncated(), [Bool8::TRUE; 2]);
+    assert_eq!(p.header(0).unwrap().engine.end_kind, 3);
+    // The record round-trips through import validation.
+    let record = p.snapshot(0).unwrap();
+    let decoded =
+        tessera_rl_engine::DecodedRecord::from_parts(*record.header(), *record.state()).unwrap();
+    p.import(&[0], &[decoded]).unwrap();
+}
