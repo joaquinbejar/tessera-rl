@@ -387,9 +387,9 @@ fn test_import_validates_game_invariants_and_headers_atomically() {
         Err(EngineError::InvalidRecord { index: 1, .. })
     ));
 
-    // More invalid spawns than steps (SPEC 9.1 counter).
+    // More invalid agent events than steps.
     let mut header = *good.header();
-    header.agents[0].invalid_spawns = u16::MAX;
+    header.agents[0].invalid_agent_events = u16::MAX;
     let bad_spawns = DecodedRecord::from_parts(header, *good.state()).unwrap();
     assert!(matches!(
         p.import(&[1], &[bad_spawns]),
