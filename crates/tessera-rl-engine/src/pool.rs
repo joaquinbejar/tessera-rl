@@ -230,7 +230,29 @@ where
     ///
     /// Returns [`EngineError::NestedEngine`] when called from an engine
     /// worker, or [`EngineError::Options`] for an invalid `cpu_set`.
-    pub fn with_workers(mut self, options: SyncOptions) -> Result<Self, EngineError> {
+    pub fn with_workers(self, options: SyncOptions) -> Result<Self, EngineError> {
+        self.with_workers_inner(
+            options,
+            #[cfg(test)]
+            crate::sys::Faults::default(),
+        )
+    }
+
+    /// [`Self::with_workers`] with test-only fault injection.
+    #[cfg(test)]
+    pub(crate) fn with_workers_faults(
+        self,
+        options: SyncOptions,
+        faults: crate::sys::Faults,
+    ) -> Result<Self, EngineError> {
+        self.with_workers_inner(options, faults)
+    }
+
+    fn with_workers_inner(
+        mut self,
+        options: SyncOptions,
+        #[cfg(test)] faults: crate::sys::Faults,
+    ) -> Result<Self, EngineError> {
         let workers = options.workers.get();
         let available = available_cores();
         let (registration, others) = Registration::register();
@@ -277,7 +299,7 @@ where
             spin: options.spin,
             pin,
             #[cfg(test)]
-            faults: crate::sys::Faults::default(),
+            faults,
         })?;
         self.sync = Some(SyncRuntime {
             gang,

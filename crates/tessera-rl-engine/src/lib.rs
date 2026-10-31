@@ -12,6 +12,8 @@
 
 mod buffer;
 mod error;
+#[cfg(test)]
+mod fault_tests;
 mod layout;
 mod masks;
 mod options;

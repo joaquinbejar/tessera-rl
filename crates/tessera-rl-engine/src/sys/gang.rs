@@ -320,6 +320,10 @@ fn worker_main(shared: &Shared, worker: usize, core: Option<usize>, fail: bool, 
         if !catch(|| run_job(shared, worker, &mut slot, die)) {
             shared.dead.store(true, Ordering::Release);
             if !slot.decremented {
+                // The job may not have run for this worker's chunks: the
+                // current run reports a panic (published by the AcqRel
+                // decrement), so the pool is poisoned.
+                shared.panicked.store(true, Ordering::Relaxed);
                 decrement(shared, slot.waker.as_ref());
             }
             return;
@@ -525,15 +529,16 @@ mod tests {
     }
 
     /// A worker that dies outside the job's catch still accounts for its
-    /// slot: the current run completes, and the next one reports the death
-    /// instead of waiting.
+    /// slot: the current run completes and reports a panic (its chunks may
+    /// be untouched), and the next one reports the death instead of
+    /// waiting.
     #[test]
     fn test_gang_death_mid_epoch_completes_the_run_then_reports() {
         model(|| {
             let mut opts = options(2);
             opts.faults.die_in_epoch = Some(1);
             let mut gang = Gang::new(&opts).unwrap();
-            assert!(gang.run(&|_w: usize| {}).is_ok());
+            assert_eq!(gang.run(&|_w: usize| {}), Ok(true));
             assert_eq!(
                 gang.run(&|_w: usize| {}).map(|_| ()),
                 Err(EngineError::WorkerDied)
