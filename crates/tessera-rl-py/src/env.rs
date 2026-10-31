@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! The safe side of an environment object: one pool behind [`PoolOps`],
-//! constructed from Python arguments, with owned (copied) outputs. No
+//! constructed from Python arguments. No
 //! `unsafe` here; the C entry points live in `ffi`.
 
 use core::num::{NonZeroU32, NonZeroUsize};
@@ -79,6 +79,8 @@ pub(crate) trait PoolOps: Send {
     fn reset(&mut self, seed: Option<u64>) -> Result<(), BindError>;
     fn step(&mut self, actions: &[i32]) -> Result<(), BindError>;
     fn outputs(&self) -> Owned;
+    /// The shared output storage, for borrowed views.
+    fn storage(&self) -> std::sync::Arc<tessera_rl_engine::OutputStorage>;
     fn snapshot(&self, id: u32) -> Result<Vec<u8>, BindError>;
     fn import(&mut self, id: u32, bytes: &[u8]) -> Result<(), BindError>;
     fn fork(&mut self, src: u32, dst: &[u32]) -> Result<(), BindError>;
@@ -210,6 +212,10 @@ where
             episode_truncated: flags(out.episode_truncated()),
             masks: flags(out.masks()),
         }
+    }
+
+    fn storage(&self) -> std::sync::Arc<tessera_rl_engine::OutputStorage> {
+        self.pool.outputs().storage()
     }
 
     fn snapshot(&self, id: u32) -> Result<Vec<u8>, BindError> {

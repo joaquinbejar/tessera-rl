@@ -1,5 +1,9 @@
 # SPDX-License-Identifier: MIT OR Apache-2.0
 
+# Wheels target the macOS support floor (SPEC 7.1: macOS 13), not
+# maturin's default of macOS 11. Ignored on other platforms.
+export MACOSX_DEPLOYMENT_TARGET := 13.0
+
 .PHONY: fmt fmt-check clippy test doc readme readme-check pre-push deny check-targets compat-test py-entries py-test
 
 fmt:

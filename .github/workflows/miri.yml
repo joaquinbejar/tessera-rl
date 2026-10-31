@@ -23,3 +23,5 @@ jobs:
       - run: cargo +nightly miri setup
       - run: cargo +nightly miri test -p tessera-rl-core --locked
       - run: cargo +nightly miri test -p tessera-rl-engine --lib --locked buffer::
+      # DLPack export ownership (ADR-0003 rule 1), without an interpreter.
+      - run: cargo +nightly miri test -p tessera-rl-py --lib --locked ffi::dlpack

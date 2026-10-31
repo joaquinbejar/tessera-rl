@@ -8,7 +8,7 @@ use core::ptr;
 
 use pyo3::ffi;
 
-use super::thunks::{CFunction, CFunctionKw, Destructor, ThunkFn};
+use super::thunks::{CFunction, CFunctionKw, Destructor, GetBuffer, ThunkFn};
 
 /// A method row with positional arguments (`METH_NOARGS` or `METH_VARARGS`).
 pub(crate) const fn method(
@@ -55,6 +55,14 @@ pub(crate) const fn method_end() -> ffi::PyMethodDef {
 pub(crate) const fn slot_dealloc(thunk: ThunkFn<Destructor>) -> ffi::PyType_Slot {
     ffi::PyType_Slot {
         slot: ffi::Py_tp_dealloc,
+        pfunc: thunk.get() as *mut c_void,
+    }
+}
+
+/// The `Py_bf_getbuffer` slot.
+pub(crate) const fn slot_getbuffer(thunk: ThunkFn<GetBuffer>) -> ffi::PyType_Slot {
+    ffi::PyType_Slot {
+        slot: ffi::Py_bf_getbuffer,
         pfunc: thunk.get() as *mut c_void,
     }
 }

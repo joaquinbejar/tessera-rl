@@ -52,7 +52,7 @@ def test_same_seed_same_trajectory_and_different_seed_differs():
 
 
 def test_outputs_are_owned_and_survive_later_steps():
-    env = cartpole(2)
+    env = cartpole(2, outputs="owned")
     first = env.reset().observations["obs"]
     kept = first.copy()
     for _ in range(5):

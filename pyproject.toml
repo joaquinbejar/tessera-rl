@@ -39,6 +39,9 @@ conformance = [
     "onnxruntime==1.31.1",
 ]
 
+[tool.pytest.ini_options]
+markers = ["torch: needs PyTorch (the `torch` dependency group)"]
+
 [tool.uv]
 # `uv sync` builds and installs the native package (maturin, debug profile
 # by default) next to the tool environment.
