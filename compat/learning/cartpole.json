@@ -49,10 +49,10 @@
     "env": "tessera/CartPole-v1",
     "total_steps": 150000,
     "eval_episodes": 20,
-    "fingerprint": "1bf1cc3d6e6a5ff6db1f6c317598acb71a61790e333ba1897abc17014de048c1"
+    "fingerprint": "b13770880d6f42cc3deac419f92d549e268f07f85a78f0aacd3edb50a59838e3"
   },
   "environment": {
-    "git": "59f234aa266f9f0c4b17c1f4d12f75b801ebe578",
+    "git": "f9dfc713ae32491cda518a1ecb59a4f93378b6db",
     "git_dirty": false,
     "python": "3.11.18",
     "os": "Linux-7.0.0-38-generic-x86_64-with-glibc2.41",
