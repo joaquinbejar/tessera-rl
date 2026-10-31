@@ -1,0 +1,27 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
+[package]
+name = "tessera-rl-spike-layout"
+description = "Storage layout spike for ADR-0036: AoS, combined records, SoA and AoSoA"
+publish = false
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+tessera-rl-core.workspace = true
+tessera-rl-num.workspace = true
+tessera-rl-classic.workspace = true
+
+[dev-dependencies]
+criterion.workspace = true
+
+[lints]
+workspace = true
+
+[[bench]]
+name = "layout"
+harness = false
