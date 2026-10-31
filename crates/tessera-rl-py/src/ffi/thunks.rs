@@ -451,6 +451,8 @@ thunk!(VERSION: CFunction = thunk_version => module::version : fn(Obj, Obj) -> O
 thunk!(SET_FP_POLICY: CFunction = thunk_set_fp_policy => module::set_fp_policy : fn(Obj, Obj) -> Obj);
 thunk!(GET_FP_POLICY: CFunction = thunk_get_fp_policy => module::get_fp_policy : fn(Obj, Obj) -> Obj);
 thunk!(FP_NON_CANONICAL_ENTRIES: CFunction = thunk_fp_non_canonical_entries => module::fp_non_canonical_entries : fn(Obj, Obj) -> Obj);
+#[cfg(feature = "test-hooks")]
+thunk!(FAIL_AFTER: CFunction = thunk_fail_after => module::fail_after : fn(Obj, Obj) -> Obj);
 thunk!(FP_BOUNDARY: CFunction = thunk_fp_boundary => module::fp_boundary : fn(Obj, Obj) -> Obj);
 thunk!(BUILD_PROFILE: CFunction = thunk_build_profile => module::build_profile : fn(Obj, Obj) -> Obj);
 thunk!(MAKE_CARTPOLE: CFunctionKw = thunk_make_cartpole => env_type::make_cartpole : fn(Obj, Obj, Obj) -> Obj);
@@ -733,6 +735,10 @@ callout!(c_type_from_spec => ffi::PyType_FromSpec : fn(*mut ffi::PyType_Spec) ->
 callout!(c_list_new => ffi::PyList_New : fn(ffi::Py_ssize_t) -> Obj);
 callout!(c_tuple_new => ffi::PyTuple_New : fn(ffi::Py_ssize_t) -> Obj);
 callout!(c_dict_new => ffi::PyDict_New : fn() -> Obj);
+callout!(c_list_append => ffi::PyList_Append : fn(Obj, Obj) -> c_int);
+callout!(c_tuple_set_item => ffi::PyTuple_SetItem : fn(Obj, ffi::Py_ssize_t, Obj) -> c_int);
+callout!(c_dict_set_item_string => ffi::PyDict_SetItemString : fn(Obj, CStr, Obj) -> c_int);
+callout!(c_decref => ffi::Py_DecRef : fn(Obj) -> ());
 callout!(c_long_as_i64 => ffi::PyLong_AsLongLong : fn(Obj) -> i64);
 callout!(c_long_as_u64 => ffi::PyLong_AsUnsignedLongLong : fn(Obj) -> u64);
 callout!(c_unicode_as_utf8 => ffi::PyUnicode_AsUTF8AndSize : fn(Obj, *mut ffi::Py_ssize_t) -> CStr);

@@ -4,7 +4,7 @@
 # maturin's default of macOS 11. Ignored on other platforms.
 export MACOSX_DEPLOYMENT_TARGET := 13.0
 
-.PHONY: fmt fmt-check clippy test doc readme readme-check pre-push deny check-targets compat-test py-entries py-callouts py-test py-test-torch pre-push-torch gym-equivalence bench bench-quick bench-kernels gungraun gungraun-bless
+.PHONY: fmt fmt-check clippy test doc readme readme-check pre-push deny check-targets compat-test py-entries py-callouts py-test py-test-hooks py-test-torch pre-push-torch gym-equivalence bench bench-quick bench-kernels gungraun gungraun-bless
 
 fmt:
 	cargo fmt --all
@@ -30,7 +30,7 @@ readme:
 readme-check:
 	cargo readme -r crates/tessera-rl -t ../../README.tpl --no-title --no-license --no-indent-headings | diff -u README.md -
 
-pre-push: fmt-check clippy test doc readme-check compat-test py-entries py-callouts py-test
+pre-push: fmt-check clippy test doc readme-check compat-test py-entries py-callouts py-test py-test-hooks
 
 deny:
 	cargo deny check
@@ -73,6 +73,13 @@ py-callouts:
 py-test:
 	uv sync --locked --python 3.11
 	uv run --locked --python 3.11 pytest -q tests/python
+
+# The ADR-0041 unwind tests against a wheel built with the `test-hooks`
+# feature (failure injection), then the default build again.
+py-test-hooks:
+	MATURIN_PEP517_ARGS="--features test-hooks" uv sync --locked --python 3.11 --reinstall-package tessera-rl
+	uv run --locked --python 3.11 pytest -q tests/python/test_fp_boundary.py
+	uv sync --locked --python 3.11 --reinstall-package tessera-rl
 
 # The Python tests with PyTorch (marker `torch`), then the default
 # environment again.

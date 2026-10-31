@@ -15,6 +15,11 @@ repository.workspace = true
 name = "_native"
 crate-type = ["cdylib"]
 
+[features]
+# Test-only failure injection (`_native._fail_after`), for the ADR-0041
+# unwind tests (`make py-test-hooks`). Never in a release wheel.
+test-hooks = []
+
 [dependencies]
 pyo3.workspace = true
 tessera-rl-core.workspace = true

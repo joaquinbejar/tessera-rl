@@ -14,29 +14,36 @@
 //! - **Callout**: every GC-tracked allocation (`PyList_New`, `PyTuple_New`,
 //!   `PyDict_New`, `PyModule_Create2`, `PyType_FromSpec`,
 //!   `PyErr_NewExceptionWithDoc`), because it can run `gc.collect` and so
-//!   any `__del__`; setting an exception (`PyErr_SetString`, which
-//!   normalizes: an allocation); a conversion that may raise
-//!   (`PyLong_As*`, `PyUnicode_AsUTF8AndSize`); and a warning.
+//!   any `__del__`; every call that mutates a GC-tracked container
+//!   (`PyList_Append`, `PyTuple_SetItem`, `PyDict_SetItemString`) or
+//!   decrefs one (`Py_DecRef` of a container [`Mine`]), because Python code
+//!   (a `gc` callback, `gc.get_objects`) can find our containers and store
+//!   user objects in them, so a replaced or dropped value may run a
+//!   finalizer; setting an exception (`PyErr_SetString`, which normalizes:
+//!   an allocation); a conversion that may raise (`PyLong_As*`,
+//!   `PyUnicode_AsUTF8AndSize`); and a warning.
 //! - **Direct** (cannot run Python code): non-GC allocations (`str`,
 //!   `bytes`, `bytearray`, `int`, `float`, capsules, and instances of our
 //!   own types, which are not GC-tracked); reads of exact built-in types
 //!   (`PyTuple_Size`/`GetItem`, `PyList_Size`/`GetItem`, `PyDict_Next`,
-//!   `PyBytes_AsString`/`Size`); appends and string-keyed inserts into
-//!   containers we created, with values we created; `PyErr_Fetch`,
+//!   `PyBytes_AsString`/`Size`); `PyErr_Fetch`,
 //!   `PyErr_Occurred`, and `PyErr_Restore` with no exception set (it then
 //!   decrefs nothing); reference increments; releasing and reacquiring the
-//!   interpreter; and a decref of a [`Mine`]. `PyErr_Clear` is never
+//!   interpreter; and a decref of a leaf [`Mine`]. `PyErr_Clear` is never
 //!   called: dropping a pending exception can run finalizers through its
 //!   traceback, so it would be a callout.
 //!
 //! **Decref invariant.** The bindings never own a reference to a user
 //! object: everything they read from Python (arguments, keyword values,
 //! items) is borrowed ([`Ref`]) and never decref'd. The only owned
-//! references are [`Mine`]: objects we created whose transitive contents
-//! we also created (no user object is reachable from them), so their
-//! deallocation runs no Python code and is a direct decref. Owning a
-//! reference that may reach a user object would need a decref through a
-//! callout (`Py_DecRef` can run a finalizer); add one to the table first.
+//! references are [`Mine`]: objects we created. A leaf (not GC-tracked)
+//! cannot hold or reach a user object, so its decref is direct. A
+//! GC-tracked container can: Python code running in any callout may find
+//! it and store user objects in it. So its decref, on success and on every
+//! failure or unwind path that drops a partly built container, is a
+//! callout (`Mine::drop`). Owning any other reference that may reach a
+//! user object would also need a callout decref; add one to the table
+//! first.
 //!
 //! **Borrow invariant.** A [`Ref`] is valid only while its owner keeps the
 //! object alive. A `Ref` borrowed from a container a user can reach (a
@@ -133,16 +140,35 @@ impl Ref<'_> {
     }
 }
 
-/// An owned reference to an object we created, all of whose transitive
-/// contents we created too (decref invariant): dropping it runs no Python
-/// code.
-pub(crate) struct Mine(NonNull<ffi::PyObject>);
+/// An owned reference to an object we created. A leaf (not GC-tracked:
+/// `int`, `float`, `str`, `bytes`, capsules, our own instances) is dropped
+/// with a direct decref; a GC-tracked container is dropped through a
+/// callout, because Python code may have found it and stored user objects
+/// in it (decref invariant).
+pub(crate) struct Mine(NonNull<ffi::PyObject>, Tracked);
+
+/// Whether the garbage collector tracks the object, so Python code can
+/// reach it.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Tracked {
+    Leaf,
+    Container,
+}
 
 impl Mine {
     /// Takes ownership of a new reference; `None` (an exception is set)
     /// for null.
     fn new(ptr: *mut ffi::PyObject) -> CResult<Self> {
-        NonNull::new(ptr).map(Self).ok_or(Raised)
+        NonNull::new(ptr)
+            .map(|p| Self(p, Tracked::Leaf))
+            .ok_or(Raised)
+    }
+
+    /// As [`Mine::new`], for a GC-tracked container.
+    fn container(ptr: *mut ffi::PyObject) -> CResult<Self> {
+        NonNull::new(ptr)
+            .map(|p| Self(p, Tracked::Container))
+            .ok_or(Raised)
     }
 
     pub(crate) fn as_ref(&self) -> Ref<'_> {
@@ -159,10 +185,15 @@ impl Mine {
 
 impl Drop for Mine {
     fn drop(&mut self) {
-        // SAFETY: an owned reference; by the decref invariant its
-        // deallocation runs no Python code, so a direct decref is safe for
-        // the floating-point boundary.
-        unsafe { ffi::Py_DecRef(self.0.as_ptr()) };
+        if self.1 == Tracked::Container {
+            // SAFETY: an owned reference; a container may hold user objects
+            // whose finalizers run, so the decref is a callout.
+            unsafe { thunks::c_decref(self.0.as_ptr()) };
+        } else {
+            // SAFETY: an owned reference to a leaf: its deallocation runs
+            // no Python code, so a direct decref is safe for the boundary.
+            unsafe { ffi::Py_DecRef(self.0.as_ptr()) };
+        }
     }
 }
 
@@ -251,7 +282,7 @@ fn singleton(p: *mut ffi::PyObject) -> Mine {
     // SAFETY: a live singleton; incrementing runs no Python code.
     unsafe { ffi::Py_IncRef(p) };
     // SAFETY: singletons are never null.
-    Mine(unsafe { NonNull::new_unchecked(p) })
+    Mine(unsafe { NonNull::new_unchecked(p) }, Tracked::Leaf)
 }
 
 /// `None`, a new reference.
@@ -317,14 +348,53 @@ pub(crate) fn bytearray(g: Gil, data: &[u8]) -> CResult<Mine> {
 /// A new empty `list` (callout: GC-tracked).
 pub(crate) fn list(_g: Gil) -> CResult<Mine> {
     // SAFETY: attached.
-    Mine::new(unsafe { thunks::c_list_new(0) })
+    Mine::container(unsafe { thunks::c_list_new(0) })
 }
 
-/// Appends `item` to `list` (direct: our list, our item; the item's
-/// reference is not stolen).
-pub(crate) fn list_append(_g: Gil, list: &Mine, item: &Mine) -> CResult<()> {
+/// Test hook: the `n`-th next container insertion fails with
+/// `RuntimeError` (0 disables), to exercise the unwind drops.
+#[cfg(feature = "test-hooks")]
+pub(crate) fn fail_after(n: u32) {
+    FAIL_AFTER.with(|c| c.set(n));
+}
+
+#[cfg(feature = "test-hooks")]
+std::thread_local! {
+    static FAIL_AFTER: core::cell::Cell<u32> = const { core::cell::Cell::new(0) };
+}
+
+#[cfg(feature = "test-hooks")]
+fn injected(g: Gil) -> CResult<()> {
+    let hit = FAIL_AFTER.with(|c| match c.get() {
+        0 => false,
+        n => {
+            c.set(n - 1);
+            n == 1
+        }
+    });
+    if hit {
+        Err(raise(g, runtime_error(), "test hook: injected failure"))
+    } else {
+        Ok(())
+    }
+}
+
+#[cfg(not(feature = "test-hooks"))]
+#[inline]
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "the same signature as the test-hooks build"
+)]
+fn injected(_g: Gil) -> CResult<()> {
+    Ok(())
+}
+
+/// Appends `item` to `list` (callout: it mutates a GC-tracked container;
+/// the item's reference is not stolen).
+pub(crate) fn list_append(g: Gil, list: &Mine, item: &Mine) -> CResult<()> {
+    injected(g)?;
     // SAFETY: attached; our list and a live item.
-    let rc = unsafe { ffi::PyList_Append(list.as_ref().as_ptr(), item.as_ref().as_ptr()) };
+    let rc = unsafe { thunks::c_list_append(list.as_ref().as_ptr(), item.as_ref().as_ptr()) };
     if rc < 0 { Err(Raised) } else { Ok(()) }
 }
 
@@ -332,12 +402,13 @@ pub(crate) fn list_append(_g: Gil, list: &Mine, item: &Mine) -> CResult<()> {
 pub(crate) fn tuple(g: Gil, items: Vec<Mine>) -> CResult<Mine> {
     let n = ssize(items.len()).map_err(|_| raise(g, runtime_error(), "tuple too long"))?;
     // SAFETY: attached.
-    let t = Mine::new(unsafe { thunks::c_tuple_new(n) })?;
+    let t = Mine::container(unsafe { thunks::c_tuple_new(n) })?;
     for (i, item) in items.into_iter().enumerate() {
         let i = ssize(i)?;
         // SAFETY: our new tuple, an index below its size; the reference is
-        // stolen (ownership passes to the tuple), which runs no Python code.
-        let rc = unsafe { ffi::PyTuple_SetItem(t.as_ref().as_ptr(), i, item.into_ptr()) };
+        // stolen (ownership passes to the tuple). A callout: it mutates a
+        // GC-tracked container and drops any previous item.
+        let rc = unsafe { thunks::c_tuple_set_item(t.as_ref().as_ptr(), i, item.into_ptr()) };
         if rc < 0 {
             return Err(Raised);
         }
@@ -348,15 +419,17 @@ pub(crate) fn tuple(g: Gil, items: Vec<Mine>) -> CResult<Mine> {
 /// A new empty `dict` (callout: GC-tracked).
 pub(crate) fn dict(_g: Gil) -> CResult<Mine> {
     // SAFETY: attached.
-    Mine::new(unsafe { thunks::c_dict_new() })
+    Mine::container(unsafe { thunks::c_dict_new() })
 }
 
-/// `dict[key] = value` with an exact `str` key (direct: our dict, our
-/// value; hashing and comparing exact strings runs no Python code).
-pub(crate) fn dict_set(_g: Gil, dict: &Mine, key: &CStr, value: &Mine) -> CResult<()> {
+/// `dict[key] = value` with an exact `str` key (callout: it mutates a
+/// GC-tracked container, and replacing a value Python code stored there
+/// runs its finalizer).
+pub(crate) fn dict_set(g: Gil, dict: &Mine, key: &CStr, value: &Mine) -> CResult<()> {
+    injected(g)?;
     // SAFETY: attached; our dict, a static key and a live value.
     let rc = unsafe {
-        ffi::PyDict_SetItemString(
+        thunks::c_dict_set_item_string(
             dict.as_ref().as_ptr(),
             key.as_ptr(),
             value.as_ref().as_ptr(),
@@ -380,7 +453,7 @@ pub(crate) fn module_add(_g: Gil, module: Ref<'_>, name: &CStr, value: &Mine) ->
 pub(crate) fn type_from_spec(_g: Gil, spec: &mut ffi::PyType_Spec) -> CResult<Mine> {
     // SAFETY: attached; the spec lives through the call, its slot table is
     // static, and CPython copies what it keeps.
-    Mine::new(unsafe { thunks::c_type_from_spec(&raw mut *spec) })
+    Mine::container(unsafe { thunks::c_type_from_spec(&raw mut *spec) })
 }
 
 /// A new module from its static definition (callout: a GC allocation).
@@ -390,7 +463,7 @@ pub(crate) fn type_from_spec(_g: Gil, spec: &mut ffi::PyType_Spec) -> CResult<Mi
 /// `def` must be a valid module definition that lives for the process.
 pub(crate) unsafe fn module_create(_g: Gil, def: *mut ffi::PyModuleDef) -> CResult<Mine> {
     // SAFETY: attached; per the contract.
-    Mine::new(unsafe { thunks::c_module_create(def, ffi::PYTHON_API_VERSION as c_int) })
+    Mine::container(unsafe { thunks::c_module_create(def, ffi::PYTHON_API_VERSION as c_int) })
 }
 
 /// A new, zero-filled instance of one of our heap types (direct: our types
@@ -426,8 +499,9 @@ pub(crate) unsafe fn free_instance(obj: *mut ffi::PyObject) {
         unsafe { free(obj.cast()) };
     }
     // SAFETY: instances of heap types hold a reference to their type,
-    // released after the instance is freed.
-    unsafe { ffi::Py_DecRef(ty.cast()) };
+    // released after the instance is freed. A type is GC-tracked, so the
+    // decref is a callout.
+    unsafe { thunks::c_decref(ty.cast()) };
 }
 
 /// A new strong reference to `r`, returned as a raw pointer (for a

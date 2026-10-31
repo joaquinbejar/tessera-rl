@@ -104,7 +104,25 @@ pub(super) unsafe extern "C" fn fp_non_canonical_entries(
     entry(|g| capi::int_u64(g, tessera_rl_num::fp::non_canonical_entries()))
 }
 
-static METHODS: Table<[ffi::PyMethodDef; 9]> = Table([
+/// `_fail_after(n)` (test hooks only): the `n`-th next container insertion
+/// fails.
+#[cfg(feature = "test-hooks")]
+pub(super) unsafe extern "C" fn fail_after(
+    _module: *mut ffi::PyObject,
+    arg: *mut ffi::PyObject,
+) -> *mut ffi::PyObject {
+    entry(|g| {
+        // SAFETY: METH_O passes a borrowed object, alive for the call.
+        let arg = unsafe { Ref::from_ptr(arg) }
+            .ok_or_else(|| capi::raise(g, capi::type_error(), "missing argument"))?;
+        capi::fail_after(capi::to_u32(g, arg, "n")?);
+        Ok(capi::none(g))
+    })
+}
+
+const METHOD_COUNT: usize = if cfg!(feature = "test-hooks") { 10 } else { 9 };
+
+static METHODS: Table<[ffi::PyMethodDef; METHOD_COUNT]> = Table([
     method(
         c"version",
         thunks::VERSION,
@@ -143,6 +161,13 @@ static METHODS: Table<[ffi::PyMethodDef; 9]> = Table([
     ),
     env_type::MAKERS[0],
     env_type::MAKERS[1],
+    #[cfg(feature = "test-hooks")]
+    method(
+        c"_fail_after",
+        thunks::FAIL_AFTER,
+        ffi::METH_O,
+        c"Test hook: the n-th next container insertion fails.",
+    ),
     method_end(),
 ]);
 

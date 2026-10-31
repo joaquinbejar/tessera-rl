@@ -22,14 +22,14 @@ import sys
 DEFAULT_SRC = pathlib.Path(__file__).resolve().parent.parent / "crates" / "tessera-rl-py" / "src"
 
 # Direct calls `capi` may make: none of them can run Python code (the
-# reasons are in capi's module docs).
+# reasons are in capi's module docs). `Py_DecRef` is direct only for leaf
+# objects; `Mine::drop` sends container decrefs through `c_decref`.
 ALLOWED = {
     "Py_TYPE", "Py_None", "Py_True", "Py_False", "Py_IncRef", "Py_DecRef",
     "PyEval_SaveThread", "PyEval_RestoreThread",
     "PyErr_Fetch", "PyErr_Restore", "PyErr_Occurred",
     "PyLong_FromUnsignedLongLong", "PyFloat_FromDouble", "PyUnicode_FromStringAndSize",
     "PyBytes_FromStringAndSize", "PyByteArray_FromStringAndSize",
-    "PyList_Append", "PyTuple_SetItem", "PyDict_SetItemString",
     "PyTuple_Size", "PyTuple_GetItem", "PyList_Size", "PyList_GetItem", "PyDict_Next",
     "PyBytes_AsString", "PyBytes_Size",
     "PyType_GenericAlloc", "PyType_GetSlot",
@@ -40,9 +40,11 @@ ALLOWED = {
 # allocation, setting an exception, conversions that may raise, warnings,
 # module attributes).
 CALLOUT_ONLY = {
-    "PyList_New", "PyTuple_New", "PyDict_New", "PyModule_Create2", "PyType_FromSpec",
+    "PyList_New", "PyTuple_New", "PyDict_New",
+    "PyList_Append", "PyList_SetItem", "PyTuple_SetItem", "PyDict_SetItem", "PyDict_SetItemString",
+    "PyModule_Create2", "PyType_FromSpec",
     "PyErr_NewException", "PyErr_NewExceptionWithDoc", "PyErr_SetString", "PyErr_SetObject",
-    "PyErr_SetNone", "PyErr_Format", "PyErr_WarnEx", "PyModule_AddObjectRef",
+    "PyErr_SetNone", "PyErr_Format", "PyErr_Clear", "PyErr_WarnEx", "PyModule_AddObjectRef",
     "PyLong_AsLongLong", "PyLong_AsUnsignedLongLong", "PyLong_AsLong", "PyNumber_Index",
     "PyUnicode_AsUTF8AndSize", "PyObject_IsTrue", "PyObject_GetIter", "PyIter_Next",
     "PyObject_GetItem", "PyObject_GetAttr", "PyObject_Str", "PyObject_Repr",
@@ -62,6 +64,9 @@ def check(src: pathlib.Path) -> list[str]:
         rel = path.relative_to(src)
         code = strip_comments(path.read_text())
         if rel.as_posix() == "ffi/capi.rs":
+            # The one direct decref is the leaf branch of `Mine::drop`.
+            if len(re.findall(r"\bffi::Py_DecRef\s*\(", code)) > 1:
+                problems.append(f"{rel}: Py_DecRef is called directly outside the leaf branch of Mine::drop")
             for name in sorted(set(CALL.findall(code))):
                 if name in CALLOUT_ONLY:
                     problems.append(f"{rel}: {name} can run Python code: call it through a callout")
