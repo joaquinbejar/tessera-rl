@@ -17,7 +17,7 @@ permissions:
 
 jobs:
   fuzz:
-    runs-on: ubuntu-latest
+    runs-on: xaskar
     strategy:
       fail-fast: false
       matrix:

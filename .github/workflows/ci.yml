@@ -18,7 +18,7 @@ env:
 
 jobs:
   fmt:
-    runs-on: ubuntu-latest
+    runs-on: xaskar
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - run: cargo fmt --all -- --check
@@ -29,7 +29,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest, windows-latest]
+        os: [xaskar, ubuntu-24.04-arm, m4, windows-latest]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
@@ -55,7 +55,7 @@ jobs:
   # under cargo deny: libfuzzer-sys compiles LLVM's C++ libFuzzer and is
   # outside the production dependency graph.
   fuzz-check:
-    runs-on: ubuntu-latest
+    runs-on: xaskar
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
@@ -68,7 +68,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
+          - os: xaskar
             target: x86_64-unknown-linux-musl
           - os: ubuntu-24.04-arm
             target: aarch64-unknown-linux-musl
@@ -87,14 +87,14 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, ubuntu-24.04-arm]
+        os: [xaskar, ubuntu-24.04-arm]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - run: cargo run -p tessera-rl-math-oracle --release --locked -- diff ${{ github.run_id }} 1000000
 
   loom:
-    runs-on: ubuntu-latest
+    runs-on: xaskar
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - run: cargo test -p tessera-rl-engine --lib --release --locked -- gang storage
@@ -104,14 +104,14 @@ jobs:
           CARGO_TARGET_DIR: target/loom
 
   msrv:
-    runs-on: ubuntu-latest
+    runs-on: xaskar
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - run: rustup toolchain install 1.95.0 --profile minimal
       - run: cargo +1.95.0 check --workspace --all-targets --locked
 
   docs:
-    runs-on: ubuntu-latest
+    runs-on: xaskar
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - run: cargo doc --workspace --no-deps --all-features --locked
@@ -119,7 +119,7 @@ jobs:
           RUSTDOCFLAGS: -D warnings
 
   readme:
-    runs-on: ubuntu-latest
+    runs-on: xaskar
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: taiki-e/install-action@86f7a0ffb25f40114606501a311ebcfaf882ea32 # v2.88.0
@@ -128,7 +128,7 @@ jobs:
       - run: make readme-check
 
   deny:
-    runs-on: ubuntu-latest
+    runs-on: xaskar
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
@@ -138,7 +138,7 @@ jobs:
   # The Python tests, including the PyTorch consumer tests (marker `torch`,
   # ADR-0003 rule 7). uv is pinned; it fetches CPython 3.11 itself.
   python:
-    runs-on: ubuntu-latest
+    runs-on: xaskar
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
