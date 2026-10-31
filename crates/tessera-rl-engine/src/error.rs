@@ -121,11 +121,13 @@ pub enum EngineError {
         /// The budget.
         budget: u64,
     },
-    /// With `debug-checks`, the environment spawned an agent on a slot that
-    /// was alive or died in the same step (SPEC 9.1). This is an
-    /// environment bug: the pool is poisoned.
-    #[error("instance {instance} spawned on occupied or dying agent slot {agent}")]
-    InvalidSpawn {
+    /// With `debug-checks`, an invalid agent event: the environment spawned
+    /// an agent on a slot that was alive or died in the same step (SPEC
+    /// 9.1), or reported the death of an agent that was already dead. This
+    /// is an environment bug (or an inconsistent imported record): the pool
+    /// is poisoned.
+    #[error("instance {instance}: invalid agent event on agent slot {agent}")]
+    InvalidAgentEvent {
         /// The instance.
         instance: u32,
         /// The agent slot.

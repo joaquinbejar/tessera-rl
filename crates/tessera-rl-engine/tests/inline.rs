@@ -330,7 +330,7 @@ fn spawn_pool(cfg: CountConfig) -> EnvPool<Counter> {
 /// `debug-checks` it is ignored and counted.
 #[cfg(not(feature = "debug-checks"))]
 #[test]
-fn test_invalid_spawns_are_ignored_and_counted() {
+fn test_invalid_agent_events_are_ignored_and_counted() {
     let cfg = CountConfig {
         kill_at: 2,
         spawn_when_dying: true,
@@ -345,14 +345,14 @@ fn test_invalid_spawns_are_ignored_and_counted() {
     assert_eq!(out.alive(), [Bool8::TRUE, Bool8::FALSE]);
     assert_eq!(out.generations(), [0, 0]);
     let header = p.header(0).unwrap();
-    assert_eq!(header.agents[1].invalid_spawns, 1);
+    assert_eq!(header.agents[1].invalid_agent_events, 1);
     // Step 2: agent 0 is alive and asks to spawn.
     let out = p.step(actions(&[0, 0])).unwrap();
     assert_eq!(out.generations(), [0, 0]);
-    assert_eq!(p.header(0).unwrap().agents[0].invalid_spawns, 1);
+    assert_eq!(p.header(0).unwrap().agents[0].invalid_agent_events, 1);
     // Step 3 ends the episode: the statistic sums both.
     let out = p.step(actions(&[0, 0])).unwrap();
-    assert_eq!(out.episode_invalid_spawns(), [2.0]);
+    assert_eq!(out.episode_invalid_agent_events(), [2.0]);
     // Counters restart with the episode.
     p.reset_all(Reseed::Keep).unwrap();
     assert!(
@@ -360,7 +360,7 @@ fn test_invalid_spawns_are_ignored_and_counted() {
             .unwrap()
             .agents
             .iter()
-            .all(|r| r.invalid_spawns == 0)
+            .all(|r| r.invalid_agent_events == 0)
     );
 }
 
@@ -386,8 +386,54 @@ fn test_invalid_spawn_fails_and_poisons_under_debug_checks() {
         let agent = u32::from(dying);
         assert_eq!(
             p.step(actions(&[0, 2])).map(|_| ()),
-            Err(EngineError::InvalidSpawn { instance: 0, agent })
+            Err(EngineError::InvalidAgentEvent { instance: 0, agent })
         );
         assert!(p.is_poisoned());
     }
+}
+
+/// The death of an agent that is already dead is an invalid agent event:
+/// never applied (no second `terminated` flag), counted without
+/// `debug-checks`.
+#[cfg(not(feature = "debug-checks"))]
+#[test]
+fn test_death_of_a_dead_agent_is_ignored_and_counted() {
+    let cfg = CountConfig {
+        kill_at: 2,
+        die_twice: true,
+        length: 3,
+        ..CountConfig::default()
+    };
+    let mut p = spawn_pool(cfg);
+    p.reset_all(Reseed::Keep).unwrap();
+    let out = p.step(actions(&[0, 2])).unwrap();
+    assert_eq!(out.agent_terminated(), [Bool8::FALSE, Bool8::TRUE]);
+    let out = p.step(actions(&[0, 0])).unwrap();
+    assert_eq!(out.agent_terminated(), [Bool8::FALSE, Bool8::FALSE]);
+    assert_eq!(out.alive(), [Bool8::TRUE, Bool8::FALSE]);
+    assert_eq!(p.header(0).unwrap().agents[1].invalid_agent_events, 1);
+    let out = p.step(actions(&[0, 0])).unwrap();
+    assert_eq!(out.episode_invalid_agent_events(), [2.0]);
+}
+
+/// With `debug-checks` it fails with a typed error and poisons the pool.
+#[cfg(feature = "debug-checks")]
+#[test]
+fn test_death_of_a_dead_agent_fails_and_poisons_under_debug_checks() {
+    let cfg = CountConfig {
+        kill_at: 2,
+        die_twice: true,
+        ..CountConfig::default()
+    };
+    let mut p = spawn_pool(cfg);
+    p.reset_all(Reseed::Keep).unwrap();
+    p.step(actions(&[0, 2])).unwrap();
+    assert_eq!(
+        p.step(actions(&[0, 0])).map(|_| ()),
+        Err(EngineError::InvalidAgentEvent {
+            instance: 0,
+            agent: 1
+        })
+    );
+    assert!(p.is_poisoned());
 }

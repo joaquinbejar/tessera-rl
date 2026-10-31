@@ -55,11 +55,12 @@ pub struct AgentRow {
     pub alive: Bool8,
     /// The agent acts this step.
     pub acting: Bool8,
-    /// Spawns requested on this slot in the current episode while it was
-    /// alive or dying, and therefore not applied (SPEC 9.1). A statistic
+    /// Invalid agent events of this slot in the current episode, never
+    /// applied: spawns requested while it was alive or dying (SPEC 9.1),
+    /// and deaths reported while it was already dead. A statistic
     /// like `illegal_actions`: it saturates at `u16::MAX` (a documented
     /// bound).
-    pub invalid_spawns: u16,
+    pub invalid_agent_events: u16,
 }
 
 /// Adaptive values built from a config `C`: `#[derive(EnvConfig)]`
@@ -256,7 +257,7 @@ impl Canonical for AgentRow {
         self.illegal_actions.encode(out);
         self.alive.encode(out);
         self.acting.encode(out);
-        self.invalid_spawns.encode(out);
+        self.invalid_agent_events.encode(out);
     }
 
     #[inline]
@@ -267,7 +268,7 @@ impl Canonical for AgentRow {
             illegal_actions: u32::decode(input)?,
             alive: Bool8::decode(input)?,
             acting: Bool8::decode(input)?,
-            invalid_spawns: u16::decode(input)?,
+            invalid_agent_events: u16::decode(input)?,
         })
     }
 }

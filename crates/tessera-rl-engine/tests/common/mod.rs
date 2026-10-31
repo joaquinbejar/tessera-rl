@@ -57,6 +57,9 @@ pub struct CountConfig {
     pub spawn_when_dying: bool,
     #[config(default = 0)]
     pub spawn_alive_at: u32,
+    /// Agent 1 reports its death again in the step after it died.
+    #[config(default = false)]
+    pub die_twice: bool,
 }
 
 #[derive(Observation)]
@@ -114,6 +117,9 @@ impl Environment for Counter {
     ) {
         for agent in AGENTS {
             if agent.index() == 1 && state.dead.get() {
+                if cfg.die_twice {
+                    out.agent_died(agent);
+                }
                 continue;
             }
             let bonus = i32::from(rng.next_u32().is_multiple_of(2));

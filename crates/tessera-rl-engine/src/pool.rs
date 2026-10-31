@@ -561,18 +561,23 @@ where
             }
         })?;
         #[cfg(feature = "debug-checks")]
-        self.check_spawns()?;
+        self.check_agent_events()?;
         Ok(())
     }
 
-    /// `debug-checks`: an invalid spawn in the last step poisons the pool
+    /// `debug-checks`: an invalid agent event in the last step poisons the pool
     /// and fails the call with its first instance and slot.
     #[cfg(feature = "debug-checks")]
-    fn check_spawns(&mut self) -> Result<(), EngineError> {
+    fn check_agent_events(&mut self) -> Result<(), EngineError> {
         let a = self.outputs.agents;
-        if let Some(k) = self.outputs.invalid_spawn.iter().position(|f| f.get()) {
+        if let Some(k) = self
+            .outputs
+            .invalid_agent_event
+            .iter()
+            .position(|f| f.get())
+        {
             self.poisoned = true;
-            return Err(EngineError::InvalidSpawn {
+            return Err(EngineError::InvalidAgentEvent {
                 instance: u32::try_from(k / a).unwrap_or(u32::MAX),
                 agent: u32::try_from(k % a).unwrap_or(u32::MAX),
             });
@@ -750,7 +755,7 @@ fn reset_one<E: Environment>(
         row.acting = Bool8::TRUE;
         row.episode_return = 0.0;
         row.illegal_actions = 0;
-        row.invalid_spawns = 0;
+        row.invalid_agent_events = 0;
     }
     *state = E::State::state_default();
     let mut rng = StepRng::new(authority, &identity, StreamId::DYNAMICS);
@@ -825,13 +830,14 @@ fn step_one<E: Environment>(
         let mut died = outputs.died.get(k).is_some_and(|f| f.get());
         let spawned = outputs.spawned.get(k).is_some_and(|f| f.get());
         if died && !row.alive.get() {
-            // Death of an agent that is already dead: ignored, so its final
-            // `terminated` flag is reported exactly once.
-            debug_assert!(false, "agent_died on dead slot {slot}");
+            // An invalid agent event, like a spawn on an occupied slot: the
+            // death of an agent that is already dead is never applied (its
+            // final `terminated` flag was reported once), it is counted, and
+            // `debug-checks` turns it into an error.
             died = false;
-            if let Some(f) = outputs.agent_terminated.get_mut(k) {
-                *f = Bool8::FALSE;
-            }
+            row.invalid_agent_events = row.invalid_agent_events.saturating_add(1);
+            set(&mut outputs.invalid_agent_event, k, true);
+            set(&mut outputs.agent_terminated, k, false);
         }
         if died {
             row.alive = Bool8::FALSE;
@@ -844,8 +850,8 @@ fn step_one<E: Environment>(
         if spawned {
             let valid = !died && !row.alive.get();
             if !valid {
-                row.invalid_spawns = row.invalid_spawns.saturating_add(1);
-                set(&mut outputs.invalid_spawn, k, true);
+                row.invalid_agent_events = row.invalid_agent_events.saturating_add(1);
+                set(&mut outputs.invalid_agent_event, k, true);
                 set(&mut outputs.spawned, k, false);
             }
             if valid {
@@ -911,9 +917,9 @@ fn finish_episode<H: RecordLayout>(
         *n = count;
     }
     let spawns: u32 = header.agents().iter().fold(0u32, |acc, row| {
-        acc.saturating_add(u32::from(row.invalid_spawns))
+        acc.saturating_add(u32::from(row.invalid_agent_events))
     });
-    if let Some(n) = outputs.episode_invalid_spawns.get_mut(i) {
+    if let Some(n) = outputs.episode_invalid_agent_events.get_mut(i) {
         #[expect(clippy::cast_precision_loss, reason = "statistic, exact below 2^24")]
         let count = spawns as f32;
         *n = count;
@@ -940,7 +946,7 @@ fn clear_instance(outputs: &mut Outputs, i: usize) {
         &mut outputs.agent_truncated,
         &mut outputs.died,
         &mut outputs.spawned,
-        &mut outputs.invalid_spawn,
+        &mut outputs.invalid_agent_event,
     ] {
         if let Some(rows) = buf.get_mut(range.clone()) {
             rows.fill(Bool8::FALSE);
@@ -955,7 +961,7 @@ fn clear_instance(outputs: &mut Outputs, i: usize) {
         &mut outputs.episode_return,
         &mut outputs.episode_length,
         &mut outputs.episode_illegal_actions,
-        &mut outputs.episode_invalid_spawns,
+        &mut outputs.episode_invalid_agent_events,
     ] {
         if let Some(v) = buf.get_mut(i) {
             *v = 0.0;
