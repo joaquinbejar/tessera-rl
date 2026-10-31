@@ -45,14 +45,14 @@ fn row() -> impl Strategy<Value = AgentRow> {
         any::<u16>(),
     )
         .prop_map(
-            |(generation, episode_return, illegal_actions, alive, acting, invalid_spawns)| {
+            |(generation, episode_return, illegal_actions, alive, acting, invalid_agent_events)| {
                 AgentRow {
                     generation,
                     episode_return,
                     illegal_actions,
                     alive,
                     acting,
-                    invalid_spawns,
+                    invalid_agent_events,
                 }
             },
         )
