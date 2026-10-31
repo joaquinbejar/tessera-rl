@@ -109,7 +109,7 @@ fn frame<E: Pooled, M: MaskProvider<E>>(p: &EnvPool<E, M>, id: u32, same_step: b
             out.episode_return()[i].to_bits(),
             out.episode_length()[i].to_bits(),
             out.episode_illegal_actions()[i].to_bits(),
-            out.episode_invalid_spawns()[i].to_bits(),
+            out.episode_invalid_agent_events()[i].to_bits(),
         ],
         episode: [
             out.episode_terminated()[i].to_byte(),

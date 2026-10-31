@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: MIT OR Apache-2.0
 # golden fixture cartpole-v1-same-step; see tests/support/mod.rs
-format=2
+format=3
 env_id=tessera/CartPole-v1
 env_version=1
 config_hash=53adcb6c1f549f69
@@ -13,7 +13,7 @@ auto_reset=SameStep
 max_episode_steps=500
 steps=600
 reseed=300:[3, 7]:999
-fields=records,obs,terminal_obs,rewards,masks,agent_terminated,agent_truncated,episode_terminated,episode_truncated,alive,acting,generations,episode_return,episode_length,episode_illegal,episode_invalid_spawns
+fields=records,obs,terminal_obs,rewards,masks,agent_terminated,agent_truncated,episode_terminated,episode_truncated,alive,acting,generations,episode_return,episode_length,episode_illegal,episode_invalid_agent_events
 0 b72b8623642dbff8 96425b2c755c555e 2d06800538d394c2 2ffb6918c12c256e 2d06800538d394c2 d0a66a65c7528968 d0a66a65c7528968 d0a66a65c7528968 d0a66a65c7528968 a74131e62938d20e a74131e62938d20e 2ffb6918c12c256e 2ffb6918c12c256e 2ffb6918c12c256e 2ffb6918c12c256e 2ffb6918c12c256e
 1 7eba03f772f45b31 c95108d3ecb84edb 2d06800538d394c2 a10d9ef6701c0e58 2d06800538d394c2 d0a66a65c7528968 d0a66a65c7528968 d0a66a65c7528968 d0a66a65c7528968 a74131e62938d20e a74131e62938d20e 2ffb6918c12c256e 2ffb6918c12c256e 2ffb6918c12c256e 2ffb6918c12c256e 2ffb6918c12c256e
 2 1e1a6643c07224f4 f168a57ad478517d 2d06800538d394c2 a10d9ef6701c0e58 2d06800538d394c2 d0a66a65c7528968 d0a66a65c7528968 d0a66a65c7528968 d0a66a65c7528968 a74131e62938d20e a74131e62938d20e 2ffb6918c12c256e 2ffb6918c12c256e 2ffb6918c12c256e 2ffb6918c12c256e 2ffb6918c12c256e

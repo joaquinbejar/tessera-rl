@@ -4,8 +4,8 @@
 //! generator, per-step output digests and golden fixtures (ADR-0009,
 //! ADR-0024 layer 2).
 //!
-//! Fixture format 2 (`tests/golden/<name>.golden`, plain text; format 1
-//! had 15 fields, without `episode_invalid_spawns`):
+//! Fixture format 3 (`tests/golden/<name>.golden`, plain text; format 1
+//! had 15 fields; format 2 named the 16th `episode_invalid_spawns`):
 //!
 //! - `#` comment lines;
 //! - `key=value` header lines: `format`, `env_id`, `env_version`,
@@ -49,7 +49,7 @@ use tessera_rl_num::math::MATH_VERSION;
 use tessera_rl_num::rng::{RngAuthority, StepRng};
 
 /// Fixture format version.
-pub const FORMAT: u32 = 2;
+pub const FORMAT: u32 = 3;
 /// Identifier of the action generator below; bump it with any change.
 pub const ACTIONS_GEN: &str = "mix-heuristic-v1";
 /// Digest fields, in fixture order.
@@ -69,7 +69,7 @@ pub const FIELDS: [&str; 16] = [
     "episode_return",
     "episode_length",
     "episode_illegal",
-    "episode_invalid_spawns",
+    "episode_invalid_agent_events",
 ];
 
 /// One golden scenario.
@@ -307,7 +307,7 @@ where
         digest(&floats(out.episode_return())),
         digest(&floats(out.episode_length())),
         digest(&floats(out.episode_illegal_actions())),
-        digest(&floats(out.episode_invalid_spawns())),
+        digest(&floats(out.episode_invalid_agent_events())),
     ]
 }
 

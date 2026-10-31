@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: MIT OR Apache-2.0
 # golden fixture tag-v1-crowded-same-step; see tests/support/mod.rs
-format=2
+format=3
 env_id=tessera/Tag-v1
 env_version=1
 config_hash=e049bac1288d7b4c
@@ -13,7 +13,7 @@ auto_reset=SameStep
 max_episode_steps=200
 steps=300
 reseed=150:[0, 9]:4242
-fields=records,obs,terminal_obs,rewards,masks,agent_terminated,agent_truncated,episode_terminated,episode_truncated,alive,acting,generations,episode_return,episode_length,episode_illegal,episode_invalid_spawns
+fields=records,obs,terminal_obs,rewards,masks,agent_terminated,agent_truncated,episode_terminated,episode_truncated,alive,acting,generations,episode_return,episode_length,episode_illegal,episode_invalid_agent_events
 0 8694bf328e3b2723 832c4eb155606827 2d06800538d394c2 b2987a9d949e807c 67197a2baa0cf01b 093c29f27ecfcf21 093c29f27ecfcf21 d0a66a65c7528968 d0a66a65c7528968 e2d800809915ce78 e2d800809915ce78 b2987a9d949e807c 2ffb6918c12c256e 2ffb6918c12c256e 2ffb6918c12c256e 2ffb6918c12c256e
 1 98b2c8cfbaf0f3a8 dc6f7a9e205c8700 2d06800538d394c2 cd9b825afd33e044 9f580846f7d7baaf 484a57ee81ec1853 093c29f27ecfcf21 d0a66a65c7528968 d0a66a65c7528968 3f9bde6257e0bff9 3f9bde6257e0bff9 b2987a9d949e807c 2ffb6918c12c256e 2ffb6918c12c256e 2ffb6918c12c256e 2ffb6918c12c256e
 2 7a6d11c4db964558 d27618f066543454 2d06800538d394c2 df2bc62b01f01a48 274c03e5c1fc6c74 78c2a6affcafa305 093c29f27ecfcf21 d0a66a65c7528968 d0a66a65c7528968 dd347ec4be44c8ae dd347ec4be44c8ae b2987a9d949e807c 2ffb6918c12c256e 2ffb6918c12c256e 2ffb6918c12c256e 2ffb6918c12c256e
