@@ -1,0 +1,360 @@
+# callgrind format
+version: 1
+creator: callgrind-3.24.0
+pid: 3809
+cmd:  /src/target/release/deps/snapshot_instructions-9b37d25204404827 --gungraun-run d:d:000000 00000 00003 00000
+part: 1
+thread: 1
+
+
+desc: I1 cache: 32768 B, 64 B, 8-way associative
+desc: D1 cache: 32768 B, 64 B, 8-way associative
+desc: LL cache: 8388608 B, 64 B, 16-way associative
+
+desc: Timerange: Basic block 0 - 661561
+desc: Trigger: Program termination
+
+positions: line
+events: Ir Dr Dw I1mr D1mr D1mw ILmr DLmr DLmw
+summary: 1085416 197742 204955 37 1706 2758 37
+
+
+ob=/usr/lib/x86_64-linux-gnu/libc.so.6
+fl=./csu/../sysdeps/nptl/libc_start_call_main.h
+fn=(below main)
+cob=/src/target/release/deps/snapshot_instructions-9b37d25204404827
+cfi=???
+cfn=main
+calls=1 0 
+58 1085416 197742 204955 37 1706 2758 37
+
+fl=./csu/../csu/libc-start.c
+fn=__libc_start_main@@GLIBC_2.34
+cfi=./csu/../sysdeps/nptl/libc_start_call_main.h
+cfn=(below main)
+calls=1 29 
+360 1085416 197742 204955 37 1706 2758 37
+
+fl=./string/../sysdeps/x86_64/multiarch/memmove-vec-unaligned-erms.S
+fn=memcpy@GLIBC_2.2.5
+211 4
+217 4
+218 4
+220 4 4
+221 4
+222 4
+392 4
+393 4
+417 4
+418 4
+422 4
+424 4
+428 4 4 0 0 2
+429 4
+440 4
+443 4
+445 4
+447 4
+451 4
+452 4
+461 4 4
+462 4 4
+464 4
+466 4
+467 4 4 0 0 1
+468 4 4
+471 4
+473 4
+475 4
+477 8
+483 4 4
+484 4 4
+485 4 4
+486 4 4
+487 4
+488 4 0 4 0 0 2
+489 4 0 4
+490 4 0 4
+491 4 0 4 0 0 3
+492 4
+493 4
+494 4
+483 26 26
+484 26 26 0 0 10
+485 26 26
+486 26 26
+487 26
+488 26 0 26
+489 26 0 26
+490 26 0 26
+491 26 0 26 0 0 15
+492 26
+493 26
+494 26
+496 4 0 4 0 0 3
+497 4 0 4
+498 4 0 4
+499 4 0 4
+501 4 0 4
+505 4 4
+
+fl=./string/../sysdeps/x86_64/multiarch/memset-vec-unaligned-erms.S
+fn=__memset_sse2_unaligned_erms
+199 40920
+204 8184
+205 8184
+354 8184
+356 8184
+357 8184
+358 5115
+359 5115
+360 5115
+361 5115
+396 3069 0 3069 0 0 402
+397 3069 0 3069
+399 3069 3069
+424 5115 0 5115 0 0 199
+425 5115 0 5115
+427 5115 5115
+
+ob=/src/target/release/deps/snapshot_instructions-9b37d25204404827
+fl=???
+fn=tessera_rl_engine::pool::clear_instance
+0 23529 4092 6138 0 1
+cob=/usr/lib/x86_64-linux-gnu/libc.so.6
+cfi=./string/../sysdeps/x86_64/multiarch/memset-vec-unaligned-erms.S
+cfn=__memset_sse2_unaligned_erms
+calls=3071 199 
+0 17391 1023 2046 0 0 39
+0 11253 3069 1023
+cob=/usr/lib/x86_64-linux-gnu/libc.so.6
+cfi=./string/../sysdeps/x86_64/multiarch/memset-vec-unaligned-erms.S
+cfn=__memset_sse2_unaligned_erms
+calls=3071 199 
+0 17391 1023 2046 0 0 41
+0 9207 3069 1023
+cob=/usr/lib/x86_64-linux-gnu/libc.so.6
+cfi=./string/../sysdeps/x86_64/multiarch/memset-vec-unaligned-erms.S
+cfn=__memset_sse2_unaligned_erms
+calls=3071 199 
+0 17391 1023 2046 0 0 39
+0 11253 3069 1023
+cob=/usr/lib/x86_64-linux-gnu/libc.so.6
+cfi=./string/../sysdeps/x86_64/multiarch/memset-vec-unaligned-erms.S
+cfn=__memset_sse2_unaligned_erms
+calls=3071 199 
+0 17391 1023 2046 0 0 41
+0 9207 3069 1023
+cob=/usr/lib/x86_64-linux-gnu/libc.so.6
+cfi=./string/../sysdeps/x86_64/multiarch/memset-vec-unaligned-erms.S
+cfn=__memset_sse2_unaligned_erms
+calls=3071 199 
+0 17391 1023 2046 0 0 39
+0 11253 3069 1023
+cob=/usr/lib/x86_64-linux-gnu/libc.so.6
+cfi=./string/../sysdeps/x86_64/multiarch/memset-vec-unaligned-erms.S
+cfn=__memset_sse2_unaligned_erms
+calls=3071 199 
+0 13299 1023 2046 0 0 141
+0 30690 18414 6138 0 0 362
+
+fn=snapshot_instructions::fork_with_reobserve::__gungraun_wrapper_mod::fork_with_reobserve
+0 13 1 7 1 0 1 1
+cob=/usr/lib/x86_64-linux-gnu/libc.so.6
+cfi=./string/../sysdeps/x86_64/multiarch/memmove-vec-unaligned-erms.S
+cfn=memcpy@GLIBC_2.2.5
+calls=1 211 
+0 181 55 53
+0 14 7 6 2 0 0 2
+cfn=<tessera_rl_num::fp::FpGuard>::enter
+calls=1 0 
+0 13 3 3
+0 10 0 6 0 0 1
+cfn=tessera_rl_num::fp::call_opaque::<core::result::Result<(), tessera_rl_engine::error::EngineError>, tessera_rl_engine::entry::canonical<core::result::Result<(), tessera_rl_engine::error::EngineError>, <tessera_rl_engine::pool::EnvPool<snapshot_instructions::common::Counter>>::guarded<(), <tessera_rl_engine::pool::EnvPool<snapshot_instructions::common::Counter>>::fork::{closure#0}>::{closure#0}>::{closure#0}>
+calls=1 0 
+0 1084962 197602 204815 31 1692 2742 31
+0 3 1 2 1 0 0 1
+cfn=<tessera_rl_num::fp::FpGuard as core::ops::drop::Drop>::drop
+calls=1 0 
+0 12 4 3
+0 13 5 4 1 1 0 1
+cob=/usr/lib/x86_64-linux-gnu/libc.so.6
+cfi=./string/../sysdeps/x86_64/multiarch/memmove-vec-unaligned-erms.S
+cfn=memcpy@GLIBC_2.2.5
+calls=1 211 
+0 181 55 53 0 12 14
+0 14 9 3 1 1 0 1
+
+fn=tessera_rl_engine::validate::check_ids
+0 14356 3071 2050 5 16 0 5
+
+fn=(below main)
+cob=/usr/lib/x86_64-linux-gnu/libc.so.6
+cfi=./csu/../csu/libc-start.c
+cfn=__libc_start_main@@GLIBC_2.34
+calls=1 242 
+0 1085416 197742 204955 37 1706 2758 37
+
+fn=tessera_rl_num::fp::call_opaque::<core::result::Result<(), tessera_rl_engine::error::EngineError>, tessera_rl_engine::entry::canonical<core::result::Result<(), tessera_rl_engine::error::EngineError>, <tessera_rl_engine::pool::EnvPool<snapshot_instructions::common::Counter>>::guarded<(), <tessera_rl_engine::pool::EnvPool<snapshot_instructions::common::Counter>>::fork::{closure#0}>::{closure#0}>::{closure#0}>
+0 21 7 7 2 0 3 2
+cfn=<tessera_rl_engine::pool::EnvPool<snapshot_instructions::common::Counter>>::fork_source
+calls=1 0 
+0 14425 3101 2071 10 18 4 10
+0 37892 14333 10244 6 46 1536 6
+cfn=<tessera_rl_engine::pool::EnvPool<snapshot_instructions::common::Counter>>::reobserve::<core::iter::adapters::filter_map::FilterMap<core::slice::iter::Iter<u32>, tessera_rl_engine::snapshot::valid_indices::{closure#0}>>
+calls=1 0 
+0 1032610 180153 192490 12 1625 1198 12
+0 14 8 3 1 3 1 1
+
+fn=std::rt::lang_start_internal
+cfn=std::rt::lang_start::<()>::{closure#0}
+calls=1 0 
+0 1085416 197742 204955 37 1706 2758 37
+
+fn=std::sys::backtrace::__rust_begin_short_backtrace::<fn(), ()>
+cfn=snapshot_instructions::main
+calls=1 0 
+0 1085416 197742 204955 37 1706 2758 37
+
+fn=<tessera_rl_num::fp::FpGuard as core::ops::drop::Drop>::drop
+0 24 8 6
+
+fn=tessera_rl_engine::pool::observe_instance::<snapshot_instructions::common::Counter, tessera_rl_engine::masks::NoMasks>
+0 82863 9207 49104 0 2
+cob=/usr/lib/x86_64-linux-gnu/libc.so.6
+cfi=./string/../sysdeps/x86_64/multiarch/memset-vec-unaligned-erms.S
+cfn=__memset_sse2_unaligned_erms
+calls=3071 199 
+0 13299 1023 2046 0 0 261
+0 13299 6138 3069
+cfn=tessera_rl_num::rng::draws
+calls=3071 0 
+0 54219 5115 6138
+0 11253 4092 4092
+cfn=<tessera_rl_num::draw::Draws>::refill
+calls=3071 0 
+0 162657 14322 14322
+0 85932 14322 35805 0 386
+cob=/usr/lib/x86_64-linux-gnu/libc.so.6
+cfi=./string/../sysdeps/x86_64/multiarch/memset-vec-unaligned-erms.S
+cfn=__memset_sse2_unaligned_erms
+calls=3071 199 
+0 13299 1023 2046
+0 13299 4092 3069
+cfn=tessera_rl_num::rng::draws
+calls=3071 0 
+0 54219 5115 6138
+0 11253 4092 4092
+cfn=<tessera_rl_num::draw::Draws>::refill
+calls=3071 0 
+0 162657 14322 14322
+0 33759 16368 2046
+
+fn=tessera_rl_engine::pool::clear_terminal
+0 45012 12276 7161 2 1 0 2
+
+fn=std::rt::lang_start::<()>::{closure#0}
+cfn=std::sys::backtrace::__rust_begin_short_backtrace::<fn(), ()>
+calls=1 0 
+0 1085416 197742 204955 37 1706 2758 37
+
+fn=<tessera_rl_engine::outputs::Outputs>::view_all
+0 102 9 72 0 6 9
+cob=/usr/lib/x86_64-linux-gnu/libc.so.6
+cfi=./string/../sysdeps/x86_64/multiarch/memmove-vec-unaligned-erms.S
+cfn=memcpy@GLIBC_2.2.5
+calls=3 211 
+0 73 19 17 0 1 5
+0 4 0 1
+cob=/usr/lib/x86_64-linux-gnu/libc.so.6
+cfi=./string/../sysdeps/x86_64/multiarch/memmove-vec-unaligned-erms.S
+cfn=memcpy@GLIBC_2.2.5
+calls=3 211 
+0 73 19 17 0 0 4
+0 44 23 19 0 6 3
+
+fn=tessera_rl_num::rng::draws
+0 108438 10230 12276
+
+fn=<tessera_rl_engine::pool::EnvPool<snapshot_instructions::common::Counter>>::fork_source
+0 45 18 12 3 2 3 3
+cfn=tessera_rl_engine::validate::check_ids
+calls=1 0 
+0 14356 3071 2050 5 16 0 5
+0 24 12 9 2 0 1 2
+
+fn=snapshot_instructions::fork_with_reobserve::__run_n1024
+cfn=snapshot_instructions::fork_with_reobserve::__gungraun_wrapper_id_mod_n1024::n1024
+calls=1 0 
+0 1085416 197742 204955 37 1706 2758 37
+
+fn=main
+cfn=std::rt::lang_start_internal
+calls=1 0 
+0 1085416 197742 204955 37 1706 2758 37
+
+fn=snapshot_instructions::main
+cfn=snapshot_instructions::engine::__run
+calls=1 0 
+0 1085416 197742 204955 37 1706 2758 37
+
+fn=<tessera_rl_num::fp::FpGuard>::enter
+0 26 6 6
+
+fn=<tessera_rl_num::draw::Draws>::refill
+0 325314 28644 28644
+
+fn=snapshot_instructions::fork_with_reobserve::__gungraun_wrapper_id_mod_n1024::n1024
+cfn=snapshot_instructions::fork_with_reobserve::__gungraun_wrapper_mod::fork_with_reobserve
+calls=1 0 
+0 1085416 197742 204955 37 1706 2758 37
+
+fn=tessera_rl_num::fp::call_opaque::<(), <tessera_rl_engine::pool::EnvPool<snapshot_instructions::common::Counter>>::reobserve<core::iter::adapters::filter_map::FilterMap<core::slice::iter::Iter<u32>, tessera_rl_engine::snapshot::valid_indices::{closure#0}>>::{closure#0}>
+0 19 6 11 2 1 3 2
+cfn=<tessera_rl_engine::outputs::Outputs>::view_all
+calls=1 0 
+0 296 70 126 0 13 21
+0 7172 2052 1027
+cfn=tessera_rl_engine::pool::observe_instance::<snapshot_instructions::common::Counter, tessera_rl_engine::masks::NoMasks>
+calls=1023 0 
+0 712008 99231 146289 0 388 261
+0 23534 8184 1023 3 64 0 3
+cfn=tessera_rl_engine::pool::clear_instance
+calls=1023 0 
+0 206646 43989 29667 0 1 702
+0 3069 1023 1023 0 1
+cfn=tessera_rl_engine::pool::clear_terminal
+calls=1023 0 
+0 45012 12276 7161 2 1 0 2
+0 34790 13306 6138 2 1152 208 2
+
+fn=snapshot_instructions::engine::__run
+cfn=snapshot_instructions::fork_with_reobserve::__run_n1024
+calls=1 0 
+0 1085416 197742 204955 37 1706 2758 37
+
+fn=<tessera_rl_engine::pool::EnvPool<snapshot_instructions::common::Counter>>::reobserve::<core::iter::adapters::filter_map::FilterMap<core::slice::iter::Iter<u32>, tessera_rl_engine::snapshot::valid_indices::{closure#0}>>
+0 21 1 14 2 1 2 2
+cfn=<tessera_rl_num::fp::FpGuard>::enter
+calls=1 0 
+0 13 3 3
+0 4 0 2
+cfn=tessera_rl_num::fp::call_opaque::<(), <tessera_rl_engine::pool::EnvPool<snapshot_instructions::common::Counter>>::reobserve<core::iter::adapters::filter_map::FilterMap<core::slice::iter::Iter<u32>, tessera_rl_engine::snapshot::valid_indices::{closure#0}>>::{closure#0}>
+calls=1 0 
+0 1032546 180137 192465 9 1621 1195 9
+0 3 1 2 1 1 0 1
+cfn=<tessera_rl_num::fp::FpGuard as core::ops::drop::Drop>::drop
+calls=1 0 
+0 12 4 3
+0 11 7 1 0 2 1
+
+ob=/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2
+fl=???
+fn=0x000000000001d2c0
+cob=/src/target/release/deps/snapshot_instructions-9b37d25204404827
+cfi=???
+cfn=(below main)
+calls=1 0 
+0 1085416 197742 204955 37 1706 2758 37
+
+totals: 1085416 197742 204955 37 1706 2758 37

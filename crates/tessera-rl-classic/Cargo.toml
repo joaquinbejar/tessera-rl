@@ -22,6 +22,7 @@ tessera-rl-macros.workspace = true
 [dev-dependencies]
 proptest.workspace = true
 criterion.workspace = true
+gungraun.workspace = true
 tessera-rl-engine.workspace = true
 
 [lints]
@@ -29,4 +30,9 @@ workspace = true
 
 [[bench]]
 name = "classic_step"
+harness = false
+
+# Instruction counts (gungraun, Linux only; ADR-0025).
+[[bench]]
+name = "classic_instructions"
 harness = false

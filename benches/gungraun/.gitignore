@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+# Only the committed baseline (and this directory's README) is tracked.
+*
+!*/
+!*.base@ref
+!README.md
+!GLIBC_TUNABLES
+!environment.toml
+!.gitignore
