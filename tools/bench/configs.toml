@@ -13,6 +13,9 @@ rep_s = 1.0
 batches = 2000
 bootstrap_resamples = 10000
 bootstrap_seed = 0
+# Claims need process-level repetitions: `--runs` separate processes per
+# configuration, in a seeded shuffled order (TESSERA-REVIEWER R-PR12, R-PR24).
+runs_for_claims = 10
 
 # Rust: raw env throughput, pregenerated seeded random actions, auto-reset
 # and observation writing included (SPEC 19.1).

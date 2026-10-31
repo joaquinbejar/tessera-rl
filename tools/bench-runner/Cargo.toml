@@ -16,6 +16,7 @@ tessera-rl-core.workspace = true
 tessera-rl-num.workspace = true
 tessera-rl-engine.workspace = true
 tessera-rl-classic.workspace = true
+thiserror.workspace = true
 
 [lints]
 workspace = true

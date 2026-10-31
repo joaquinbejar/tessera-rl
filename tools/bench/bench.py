@@ -5,7 +5,11 @@
 
 Method: at least 2 s of warm-up and 10 repetitions per configuration;
 median and 95% bootstrap confidence interval of the median (seeded); fixed
-seeds and action streams. Rust configurations run ``tessera-rl-bench-runner``
+seeds and action streams. ``--runs N`` repeats every configuration in N
+separate processes, in a seeded shuffled order, and the claim statistic is
+the median and CI over the process medians; one run (the default) gives
+in-process statistics, which are indicative only. Benchmarks are pinned to
+the machine's ``bench_cpu_set`` with ``taskset`` where available. Rust configurations run ``tessera-rl-bench-runner``
 (raw samples); Python ones run in this interpreter. The report records the
 machine, the hardware, the CPU frequency policy, the load, and the
 software versions, and marks whether the run is valid for claims
@@ -13,7 +17,7 @@ software versions, and marks whether the run is valid for claims
 
 Usage::
 
-    python tools/bench/bench.py --machine ref-mac [--only PREFIX] [--out FILE]
+    python tools/bench/bench.py --machine ref-x86 --runs 10 [--only PREFIX] [--out FILE]
     python tools/bench/bench.py --quick     # smoke run, not for claims
 """
 
@@ -24,6 +28,7 @@ import json
 import os
 import pathlib
 import platform
+import shutil
 import subprocess
 import sys
 import time
@@ -125,7 +130,46 @@ def runner_path(profile: str = "release") -> pathlib.Path:
     return ROOT / "target" / profile / "tessera-rl-bench-runner"
 
 
-def run_rust(runner: pathlib.Path, cfg: dict, method: dict) -> dict:
+# -- pinning ------------------------------------------------------------------
+
+
+def pinning(machine: str | None) -> dict:
+    """The CPUs benchmarks run on: the machine's ``bench_cpu_set`` (distinct
+    physical cores, CPU 0 avoided, SMT siblings idle), applied with
+    ``taskset`` where it exists (Linux). Elsewhere runs are unpinned, and
+    the report says so."""
+    record = machines().get(machine, {}) if machine else {}
+    cpu_set = record.get("bench_cpu_set")
+    taskset = shutil.which("taskset")
+    return {
+        "cpu_set": cpu_set,
+        "applied": bool(cpu_set and taskset),
+        "tool": "taskset" if taskset else None,
+        "note": None if cpu_set and taskset else "unpinned: no bench_cpu_set for this machine or no taskset on this OS",
+    }
+
+
+def _prefix(pin: dict, cpus) -> list[str]:
+    if not pin["applied"] or not cpus:
+        return []
+    return ["taskset", "-c", ",".join(str(c) for c in cpus)]
+
+
+def _cpus_for(cfg: dict, pin: dict):
+    """Process CPUs for a configuration: one core for Inline and Python
+    runs, one per worker for Sync runs."""
+    if not pin["applied"]:
+        return None
+    k = max(1, int(cfg.get("workers", 0)))
+    if len(pin["cpu_set"]) < k:
+        raise ValueError(f"{cfg['name']}: bench_cpu_set has {len(pin['cpu_set'])} CPUs, needs {k}")
+    return pin["cpu_set"][:k]
+
+
+# -- one measurement (one process) ---------------------------------------------
+
+
+def run_rust(runner: pathlib.Path, cfg: dict, method: dict, pin: dict) -> dict:
     env, n = cfg["env"], str(cfg["num_envs"])
     metric = cfg["metric"]
     if metric == "throughput":
@@ -138,13 +182,13 @@ def run_rust(runner: pathlib.Path, cfg: dict, method: dict) -> dict:
         args = [metric, env, n]
     else:
         raise ValueError(f"unknown metric {metric!r}")
-    raw = json.loads(subprocess.run([str(runner), *args], capture_output=True, text=True, check=True).stdout)
+    cpus = _cpus_for(cfg, pin)
+    if cpus and cfg.get("workers", 0) > 0:
+        args += ["--cpus", ",".join(str(c) for c in cpus)]
+    proc = subprocess.run([*_prefix(pin, cpus), str(runner), *args], capture_output=True, text=True, check=True)
+    raw = json.loads(proc.stdout)
     stats = {k: summarize(v, method["bootstrap_resamples"], method["bootstrap_seed"]) for k, v in raw.items() if isinstance(v, list)}
-    scalars = {k: v for k, v in raw.items() if not isinstance(v, list)}
-    return {**scalars, **stats}
-
-
-# -- Python configurations ----------------------------------------------------
+    return {**{k: v for k, v in raw.items() if not isinstance(v, list)}, **stats}
 
 
 def _python_env(cfg: dict):
@@ -175,7 +219,8 @@ def _python_env(cfg: dict):
     raise ValueError(f"unknown api {api!r}")
 
 
-def run_python(cfg: dict, method: dict) -> dict:
+def measure_python(cfg: dict, method: dict) -> dict:
+    """One Python measurement in this process."""
     step, per_call, close = _python_env(cfg)
 
     def run_for(seconds):
@@ -192,7 +237,32 @@ def run_python(cfg: dict, method: dict) -> dict:
     return {"metric": "throughput", "unit": "steps/s", "samples": summarize(samples, method["bootstrap_resamples"], method["bootstrap_seed"])}
 
 
-# -- derived metrics ----------------------------------------------------------
+def run_python(cfg: dict, method: dict, pin: dict, quick: bool) -> dict:
+    """One Python measurement in a fresh interpreter (``--single``)."""
+    cmd = [sys.executable, str(pathlib.Path(__file__).resolve()), "--single", cfg["name"]]
+    if quick:
+        cmd.append("--quick")
+    proc = subprocess.run([*_prefix(pin, _cpus_for(cfg, pin)), *cmd], capture_output=True, text=True, check=True)
+    return json.loads(proc.stdout)
+
+
+# -- aggregation --------------------------------------------------------------
+
+
+def combine(per_run: list[dict], method: dict) -> dict:
+    """With one run, its in-process summary. With several, the median and
+    95% bootstrap CI over the run medians (the claim statistic)."""
+    first = per_run[0]
+    if len(per_run) == 1:
+        return {**first, "statistic": "in-process repetitions (indicative)"}
+    out = {k: v for k, v in first.items() if not (isinstance(v, dict) and "median" in v)}
+    for key, value in first.items():
+        if isinstance(value, dict) and "median" in value:
+            medians = [r[key]["median"] for r in per_run]
+            out[key] = summarize(medians, method["bootstrap_resamples"], method["bootstrap_seed"])
+    out["statistic"] = f"median and 95% bootstrap CI over {len(per_run)} process medians"
+    out["runs"] = per_run
+    return out
 
 
 def _median(results: dict, name: str) -> float | None:
@@ -211,37 +281,72 @@ def derive(results: dict, derived: list[dict]) -> dict:
             num, den = _median(results, d["numerator"]), _median(results, d["denominator"])
             if num is not None and den:
                 out[d["name"]] = {"value": num / den, "from": [d["numerator"], d["denominator"]]}
+    for name, r in results.items():
+        if r.get("metric") == "snapshot":
+            kib = r["record_bytes"] / 1024
+            out[f"{name}/copy_ns_per_kib"] = {
+                "value": r["snapshot_all_copy"]["median"] / kib,
+                "budget_ns_per_kib": 1000.0,  # ADR-0010: at most 1 us/KB
+                "from": [name],
+            }
     return out
 
 
 # -- main ---------------------------------------------------------------------
 
 
-def run(only: str | None = None, quick: bool = False, machine: str | None = None, profile: str = "release") -> dict:
+def load(quick: bool):
     spec = tomllib.loads(CONFIGS.read_text())
     method = dict(spec["method"])
     if quick:
         method.update(QUICK)
+    return spec, method
+
+
+def run(
+    only: str | None = None,
+    quick: bool = False,
+    machine: str | None = None,
+    profile: str = "release",
+    runs: int = 1,
+) -> dict:
+    spec, method = load(quick)
     configs = [c for c in spec["config"] if only is None or c["name"].startswith(only)]
+    pin = pinning(machine)
     load_before = os.getloadavg()
     runner = runner_path(profile) if any(c["kind"] == "rust" for c in configs) else None
-    results = {}
-    for cfg in configs:
-        result = run_rust(runner, cfg, method) if cfg["kind"] == "rust" else run_python(cfg, method)
-        results[cfg["name"]] = {"config": cfg, **result}
+    order_rng = np.random.default_rng(method["bootstrap_seed"])
+    per_run: dict[str, list] = {c["name"]: [] for c in configs}
+    orders = []
+    for _ in range(runs):
+        order = [configs[i] for i in order_rng.permutation(len(configs))]
+        orders.append([c["name"] for c in order])
+        for cfg in order:
+            if cfg["kind"] == "rust":
+                per_run[cfg["name"]].append(run_rust(runner, cfg, method, pin))
+            else:
+                per_run[cfg["name"]].append(run_python(cfg, method, pin, quick))
+    results = {c["name"]: {"config": c, **combine(per_run[c["name"]], method)} for c in configs}
+    claims = (
+        not quick
+        and method["warmup_s"] >= 2.0
+        and method["reps"] >= 10
+        and runs >= method["runs_for_claims"]
+        and pin["applied"]
+        and machine is not None
+        and machines().get(machine, {}).get("status") == "reference"
+    )
     return {
-        "schema": "tessera-bench/1",
-        # A claim needs the full method on a characterized reference machine
-        # (ADR-0025): candidates and pending machines give indicative numbers.
-        "valid_for_claims": (
-            not quick
-            and method["warmup_s"] >= 2.0
-            and method["reps"] >= 10
-            and machine is not None
-            and machines().get(machine, {}).get("status") == "reference"
-        ),
+        "schema": "tessera-bench/2",
+        # A claim needs the full method, process-level repetitions, pinning
+        # and a characterized reference machine (ADR-0025); anything else
+        # gives indicative numbers.
+        "valid_for_claims": claims,
         "quick": quick,
+        "runs": runs,
+        "run_orders": orders,
         "method": method,
+        "pinning": pin,
         "environment": environment(machine),
         "load_average": {"before": list(load_before), "after": list(os.getloadavg())},
         "results": results,
@@ -253,12 +358,21 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--machine", help="reference machine name from compat/machines.toml (required for claims)")
     parser.add_argument("--only", help="run only configurations whose name starts with this prefix")
+    parser.add_argument("--runs", type=int, default=1, help="separate processes per configuration, in shuffled order")
     parser.add_argument("--quick", action="store_true", help="short smoke run; never valid for claims")
     parser.add_argument("--out", type=pathlib.Path, help="write the JSON report here (default: stdout)")
+    parser.add_argument("--single", help=argparse.SUPPRESS)  # one Python measurement, internal
     args = parser.parse_args()
+    if args.single:
+        spec, method = load(args.quick)
+        cfg = next(c for c in spec["config"] if c["name"] == args.single)
+        sys.stdout.write(json.dumps(measure_python(cfg, method)) + "\n")
+        return 0
     if args.machine is not None and args.machine not in machines():
         parser.error(f"unknown machine {args.machine!r}; known: {sorted(machines())}")
-    report = run(args.only, args.quick, args.machine)
+    if args.runs < 1:
+        parser.error("--runs must be at least 1")
+    report = run(args.only, args.quick, args.machine, runs=args.runs)
     text = json.dumps(report, indent=2)
     if args.out:
         args.out.write_text(text + "\n")

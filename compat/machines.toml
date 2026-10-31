@@ -29,6 +29,10 @@ frequency_policy = "governor performance"
 # to one P-core with `taskset -c 2` (CPU 0 avoided), with its SMT sibling
 # (CPU 3) left idle.
 bench_pinning = "taskset -c 2"
+# CPUs the harness pins to (tools/bench): distinct physical P-cores, CPU 0
+# avoided, SMT siblings (3, 5, 7, 9) left idle. Single-core runs use the
+# first; a k-worker run uses the first k.
+bench_cpu_set = [2, 4, 6, 8]
 turbo = ""
 noise_floor_cv = ""
 toolchain = "rustc and cargo 1.99.1 (system), valgrind 3.26.0, gcc 15.2"

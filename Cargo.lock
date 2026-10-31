@@ -698,6 +698,7 @@ dependencies = [
  "tessera-rl-core",
  "tessera-rl-engine",
  "tessera-rl-num",
+ "thiserror",
 ]
 
 [[package]]

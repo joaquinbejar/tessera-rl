@@ -7,7 +7,7 @@ reports carries a named configuration, the machine, the software versions
 and the method, and can be reproduced with one command.
 
 ```sh
-make bench MACHINE=ref-mac        # full method, JSON report in target/bench/
+make bench MACHINE=ref-x86 RUNS=10   # claim method, JSON report in target/bench/
 make bench-quick                  # smoke run (not valid for claims)
 make bench-kernels                # Criterion benches of the kernels
 ```
@@ -26,13 +26,22 @@ make bench-kernels                # Criterion benches of the kernels
 - At least 2 s of warm-up and 10 measured repetitions per configuration.
   The report gives the median and the 95% bootstrap confidence interval of
   the median (10,000 seeded resamples), with the raw samples.
-- Fixed seeds and pregenerated seeded action streams. Workers are pinned by
-  the engine's default policy (worker `w` on core `w`). On the hybrid
-  `ref-x86` candidate, single-core runs go under `taskset -c 2`, as
-  `compat/machines.toml` says.
+- Process-level repetitions: `--runs N` runs every configuration in N
+  separate processes, in a seeded shuffled order recorded in the report.
+  The claim statistic is the median and CI over the process medians. One
+  run (the default) gives in-process statistics, which are only indicative.
+- Fixed seeds and pregenerated seeded action streams.
+- Pinning: each machine's `bench_cpu_set` in `compat/machines.toml` lists
+  distinct physical cores, avoids CPU 0 and leaves SMT siblings idle.
+  Single-core and Python runs use its first CPU (`taskset`). A k-worker run
+  pins the process to the first k CPUs and passes them to the pool as the
+  workers' `cpu_set`. The report records the requested set and the process
+  affinity the OS reports. Without `taskset` (macOS) runs are unpinned, and
+  the report says so.
 - Every Python result names its output mode. `owned` numbers are never
   presented as borrowed-path throughput.
-- `valid_for_claims` is true only with the full method on a machine whose
+- `valid_for_claims` is true only with the full method, at least
+  `runs_for_claims` process runs, applied pinning, and a machine whose
   `compat/machines.toml` status is `reference`. Today no machine is
   characterized (`ref-x86` is a candidate on a shared host), so every
   report is indicative. Quick runs are never valid.
@@ -45,7 +54,7 @@ make bench-kernels                # Criterion benches of the kernels
 | Scaling efficiency | `scaling_efficiency/*`: k-worker throughput over k times one worker |
 | Step latency | `rust/*/latency`: p50 and p99 per batch, Sync mode |
 | Python overhead | `python_overhead/*`: binding throughput over raw Rust, borrowed and owned separately |
-| Snapshot cost | `rust/*/snapshot`: per-instance snapshot, restore, fork, `fork_branched` |
+| Snapshot cost | `rust/*/snapshot`, per instance. Copy only: `snapshot_copy` and `snapshot_all_copy`; the latter is also reported in ns/KiB against ADR-0010's budget of at most 1 µs/KB. Including re-observation (ADR-0039): `restore_with_reobserve`, `import_with_validation_and_reobserve`, `fork_with_reobserve`, `fork_branched_with_reobserve` |
 | Memory | `rust/*/memory`: continuation bytes per instance, mask bytes per step, output storage bytes |
 | Head to head | `py/gymnasium-sync/*` against `py/gym-adapter/*`: same environment count, NEXT_STEP auto-reset, same action stream |
 
