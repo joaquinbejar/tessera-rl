@@ -8,7 +8,7 @@ use core::num::{NonZeroU32, NonZeroUsize};
 
 use tessera_rl_classic::{CartPole, CartPoleConfig, Tag, TagConfig};
 use tessera_rl_core::encoding::decode_from_slice;
-use tessera_rl_core::space::{DType, Space};
+use tessera_rl_core::space::{BoxBounds, DType, Space};
 use tessera_rl_core::{DecodeError, Environment, Validate};
 use tessera_rl_engine::{
     ActionInput, AutoReset, DecodedRecord, EngineError, EnvPool, MAX_LEAVES, MaskProvider, Masked,
@@ -43,6 +43,21 @@ pub(crate) struct Leaf {
     pub(crate) dtype: &'static str,
     /// Shape of one agent's observation.
     pub(crate) shape: Vec<u32>,
+    /// Inclusive bounds per element, as floats (integer bounds are exact
+    /// up to 2^53; infinities for unbounded float elements).
+    pub(crate) low: Vec<f64>,
+    pub(crate) high: Vec<f64>,
+}
+
+/// How a reset chooses seeds.
+#[derive(Debug, Clone)]
+pub(crate) enum ResetSeed {
+    /// Keep the seeds; the episode index advances.
+    Keep,
+    /// The k-th reset instance gets `base + k` (Gymnasium vector rule).
+    Base(u64),
+    /// The k-th reset instance gets `seeds[k]`.
+    List(Vec<u64>),
 }
 
 /// The fixed layout of a pool's outputs.
@@ -53,6 +68,8 @@ pub(crate) struct Layout {
     pub(crate) leaves: Vec<Leaf>,
     pub(crate) action_choices: u32,
     pub(crate) mask_len: usize,
+    /// Terminal observations are written (`same_step` auto-reset).
+    pub(crate) terminal: bool,
 }
 
 /// Copies of one call's outputs (`owned` mode).
@@ -71,12 +88,17 @@ pub(crate) struct Owned {
     pub(crate) episode_truncated: Vec<u8>,
     /// `[N, A, mask length]`; empty without masks.
     pub(crate) masks: Vec<u8>,
+    /// One buffer per leaf in `same_step` mode, `[N, A, leaf]`: final
+    /// observations of episodes that ended in the call (ADR-0039); rows of
+    /// other instances are stale. Empty in other modes.
+    pub(crate) terminal_observations: Vec<Vec<u8>>,
 }
 
 /// What an environment object can do, whatever the environment.
 pub(crate) trait PoolOps: Send {
     fn layout(&self) -> &Layout;
-    fn reset(&mut self, seed: Option<u64>) -> Result<(), BindError>;
+    /// Resets every instance, or only `ids`.
+    fn reset(&mut self, ids: Option<&[u32]>, seed: &ResetSeed) -> Result<(), BindError>;
     fn step(&mut self, actions: &[i32]) -> Result<(), BindError>;
     fn outputs(&self) -> Owned;
     /// The shared output storage, for borrowed views.
@@ -107,13 +129,40 @@ fn dtype_name(dtype: DType) -> &'static str {
     }
 }
 
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "bounds are exposed to Python as floats; documented on Leaf"
+)]
+fn float_bounds(bounds: &BoxBounds) -> (Vec<f64>, Vec<f64>) {
+    match bounds {
+        BoxBounds::Int { low, high } => (
+            low.iter().map(|&v| v as f64).collect(),
+            high.iter().map(|&v| v as f64).collect(),
+        ),
+        BoxBounds::UInt { low, high } => (
+            low.iter().map(|&v| v as f64).collect(),
+            high.iter().map(|&v| v as f64).collect(),
+        ),
+        BoxBounds::Float { low, high } => (low.clone(), high.clone()),
+    }
+}
+
 fn leaves(space: &Space, name: &str, out: &mut Vec<Leaf>) -> Result<(), BindError> {
     match space {
-        Space::Box { shape, dtype, .. } => out.push(Leaf {
-            name: name.to_owned(),
-            dtype: dtype_name(*dtype),
-            shape: shape.clone(),
-        }),
+        Space::Box {
+            shape,
+            dtype,
+            bounds,
+        } => {
+            let (low, high) = float_bounds(bounds);
+            out.push(Leaf {
+                name: name.to_owned(),
+                dtype: dtype_name(*dtype),
+                shape: shape.clone(),
+                low,
+                high,
+            });
+        }
         Space::Dict(entries) => {
             for (key, inner) in entries {
                 leaves(inner, key, out)?;
@@ -133,7 +182,12 @@ where
     E: Environment + Validate,
     M: MaskProvider<E>,
 {
-    fn new(cfg: &E::Config, pool: EnvPool<E, M>, num_envs: usize) -> Result<Self, BindError> {
+    fn new(
+        cfg: &E::Config,
+        pool: EnvPool<E, M>,
+        num_envs: usize,
+        terminal: bool,
+    ) -> Result<Self, BindError> {
         let mut obs = Vec::new();
         leaves(
             &E::observation_space(cfg).map_err(EngineError::from)?,
@@ -160,6 +214,7 @@ where
                 leaves: obs,
                 action_choices,
                 mask_len,
+                terminal,
             },
         })
     }
@@ -183,9 +238,20 @@ where
         &self.layout
     }
 
-    fn reset(&mut self, seed: Option<u64>) -> Result<(), BindError> {
-        let reseed = seed.map_or(Reseed::Keep, |s| Reseed::Base(Seed::new(s)));
-        self.pool.reset_all(reseed)?;
+    fn reset(&mut self, ids: Option<&[u32]>, seed: &ResetSeed) -> Result<(), BindError> {
+        let list: Vec<Seed>;
+        let reseed = match seed {
+            ResetSeed::Keep => Reseed::Keep,
+            ResetSeed::Base(s) => Reseed::Base(Seed::new(*s)),
+            ResetSeed::List(seeds) => {
+                list = seeds.iter().map(|&s| Seed::new(s)).collect();
+                Reseed::List(&list)
+            }
+        };
+        match ids {
+            None => self.pool.reset_all(reseed)?,
+            Some(ids) => self.pool.reset(ids, reseed)?,
+        };
         Ok(())
     }
 
@@ -202,7 +268,15 @@ where
         let observations = (0..MAX_LEAVES)
             .map_while(|leaf| out.observation(leaf).map(<[u8]>::to_vec))
             .collect();
+        let terminal_observations = if self.layout.terminal {
+            (0..MAX_LEAVES)
+                .map_while(|leaf| out.terminal_observation(leaf).map(<[u8]>::to_vec))
+                .collect()
+        } else {
+            Vec::new()
+        };
         Owned {
+            terminal_observations,
             observations,
             rewards: out.rewards().iter().flat_map(|r| r.to_le_bytes()).collect(),
             agent_terminated: flags(out.agent_terminated()),
@@ -294,11 +368,12 @@ where
 pub(crate) fn cartpole(args: &PoolArgs) -> Result<Box<dyn PoolOps>, BindError> {
     let cfg = CartPoleConfig::default();
     let (options, n) = options(args)?;
+    let same_step = options.auto_reset == AutoReset::SameStep;
     let pool = with_workers(
         EnvPool::<CartPole, NoMasks>::new(cfg.clone(), options)?,
         args.workers,
     )?;
-    Ok(Box::new(Pooled::new(&cfg, pool, n)?))
+    Ok(Box::new(Pooled::new(&cfg, pool, n, same_step)?))
 }
 
 /// The Tag config fields, by name, as Python passes them.
@@ -324,9 +399,10 @@ pub(crate) fn tag(args: &PoolArgs, fields: &TagFields) -> Result<Box<dyn PoolOps
         radius: fields.radius.unwrap_or(d.radius),
     };
     let (options, n) = options(args)?;
+    let same_step = options.auto_reset == AutoReset::SameStep;
     let pool = with_workers(
         EnvPool::<Tag, Masked>::with_masks(cfg.clone(), options)?,
         args.workers,
     )?;
-    Ok(Box::new(Pooled::new(&cfg, pool, n)?))
+    Ok(Box::new(Pooled::new(&cfg, pool, n, same_step)?))
 }

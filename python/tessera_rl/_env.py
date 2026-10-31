@@ -73,7 +73,7 @@ class Env:
         self.action_choices: int = layout["action_choices"]
         self._mask_len: int = layout["mask_len"]
         self.outputs: str = layout["outputs"]
-        self._leaves = [(name or "obs", np.dtype(dtype), tuple(shape)) for name, dtype, shape in layout["leaves"]]
+        self._leaves = [(name or "obs", np.dtype(dtype), tuple(shape)) for name, dtype, shape, *_ in layout["leaves"]]
 
     def reset(self, seed: int | None = None) -> Step:
         """Resets every instance; a new seed base if ``seed`` is given."""

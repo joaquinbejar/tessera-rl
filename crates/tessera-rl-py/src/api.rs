@@ -6,7 +6,7 @@
 use pyo3::prelude::*;
 use pyo3::types::{PyByteArray, PyBytes, PyDict, PyList, PyTuple};
 
-use crate::env::{PoolArgs, PoolOps, TagFields};
+use crate::env::{PoolArgs, PoolOps, ResetSeed, TagFields};
 use crate::errors::{Kind, error, to_py};
 use crate::ffi::inner::Inner;
 use crate::ffi::view_type::new_view;
@@ -126,33 +126,52 @@ pub(crate) fn layout<'py>(py: Python<'py>, inner: &Inner) -> PyResult<Bound<'py,
         )?;
         let leaves = PyList::empty(py);
         for leaf in &l.leaves {
-            leaves.append((leaf.name.as_str(), leaf.dtype, leaf.shape.clone()))?;
+            leaves.append((
+                leaf.name.as_str(),
+                leaf.dtype,
+                leaf.shape.clone(),
+                leaf.low.clone(),
+                leaf.high.clone(),
+            ))?;
         }
+        d.set_item("terminal", l.terminal)?;
         d.set_item("leaves", leaves)?;
         Ok(d.into_any())
     })
 }
 
-/// `reset(seed=None)`: resets every instance (a new seed base if given) and
-/// returns its outputs, captured in the same admitted section.
+/// `reset(seed=None, ids=None)`: resets every instance, or only `ids`, and
+/// returns the outputs, captured in the same admitted section. `seed` is
+/// `None` (keep the seeds), an int (the k-th reset instance gets
+/// `seed + k`) or a list with one seed per reset instance.
 pub(crate) fn reset<'py>(
     py: Python<'py>,
     inner: &Inner,
     args: &Bound<'py, PyTuple>,
 ) -> PyResult<Bound<'py, PyAny>> {
-    let seed: Option<u64> = match args.len() {
-        0 => None,
-        1 => args.get_item(0)?.extract()?,
-        _ => {
-            return Err(error(
-                py,
-                Kind::Argument,
-                "reset takes at most one argument".to_owned(),
-            ));
-        }
+    if args.len() > 2 {
+        return Err(error(
+            py,
+            Kind::Argument,
+            "reset takes at most two arguments".to_owned(),
+        ));
+    }
+    let arg = |i: usize| -> PyResult<Option<Bound<'py, PyAny>>> {
+        Ok(if i < args.len() {
+            Some(args.get_item(i)?).filter(|v| !v.is_none())
+        } else {
+            None
+        })
     };
+    let seed = match arg(0)? {
+        None => ResetSeed::Keep,
+        Some(v) if v.cast::<PyList>().is_ok() => ResetSeed::List(v.extract()?),
+        Some(v) => ResetSeed::Base(v.extract()?),
+    };
+    let ids: Option<Vec<u32>> = arg(1)?.map(|v| v.extract()).transpose()?;
     inner.with(py, |ops| {
-        py.detach(|| ops.reset(seed)).map_err(|e| to_py(py, e))?;
+        py.detach(|| ops.reset(ids.as_deref(), &seed))
+            .map_err(|e| to_py(py, e))?;
         outputs_of(py, inner, ops)
     })
 }
@@ -225,6 +244,11 @@ fn outputs_of<'py>(
         obs.append(PyByteArray::new(py, leaf))?;
     }
     d.set_item("observations", obs)?;
+    let term = PyList::empty(py);
+    for leaf in &o.terminal_observations {
+        term.append(PyByteArray::new(py, leaf))?;
+    }
+    d.set_item("terminal_observations", term)?;
     for (key, buf) in [
         ("rewards", &o.rewards),
         ("agent_terminated", &o.agent_terminated),
@@ -256,6 +280,11 @@ fn borrowed_views<'py>(py: Python<'py>, ops: &dyn PoolOps) -> PyResult<Bound<'py
         obs.append(new_view(py, &storage, spec)?)?;
     }
     d.set_item("observations", obs)?;
+    let term = PyList::empty(py);
+    for spec in &set.terminal_observations {
+        term.append(new_view(py, &storage, spec)?)?;
+    }
+    d.set_item("terminal_observations", term)?;
     for (key, spec) in &set.others {
         d.set_item(*key, new_view(py, &storage, spec)?)?;
     }

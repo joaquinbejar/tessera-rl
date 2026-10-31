@@ -10,6 +10,10 @@ version = "0.1.0"
 # (numpy 2.4.6 in [env.main], 1.26.4 in [env.pufferlib]).
 dependencies = ["numpy>=1.26.4"]
 
+[project.optional-dependencies]
+# tessera_rl.gym (the Gymnasium 1.x vector adapter).
+gymnasium = ["gymnasium>=1.4.0,<2"]
+
 [build-system]
 requires = ["maturin>=1.16,<2"]
 build-backend = "maturin"

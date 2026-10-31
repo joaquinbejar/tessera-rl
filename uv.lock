@@ -747,6 +747,11 @@ dependencies = [
     { name = "numpy" },
 ]
 
+[package.optional-dependencies]
+gymnasium = [
+    { name = "gymnasium" },
+]
+
 [package.dev-dependencies]
 conformance = [
     { name = "gymnasium" },
@@ -768,7 +773,11 @@ torch = [
 ]
 
 [package.metadata]
-requires-dist = [{ name = "numpy", specifier = ">=1.26.4" }]
+requires-dist = [
+    { name = "gymnasium", marker = "extra == 'gymnasium'", specifier = ">=1.4.0,<2" },
+    { name = "numpy", specifier = ">=1.26.4" },
+]
+provides-extras = ["gymnasium"]
 
 [package.metadata.requires-dev]
 conformance = [

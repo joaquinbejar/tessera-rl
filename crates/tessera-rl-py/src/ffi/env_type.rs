@@ -139,7 +139,7 @@ static METHODS: Table<[ffi::PyMethodDef; 10]> = Table([
         c"reset",
         thunks::RESET,
         ffi::METH_VARARGS,
-        c"reset(seed=None)",
+        c"reset(seed=None, ids=None)",
     ),
     method(
         c"step",
