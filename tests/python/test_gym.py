@@ -124,7 +124,7 @@ def test_gym_seeds_follow_the_vector_convention():
     assert np.array_equal(obs_a, obs_b)
     assert np.array_equal(obs_a[1], obs_c[0])
     assert np.array_equal(a.reset(seed=7)[0], obs_a)
-    with pytest.raises(t.ArgumentError):
+    with pytest.raises(ValueError):
         a.reset(seed=[1, 2])
 
 
@@ -160,3 +160,75 @@ def test_gym_vector_wrappers_record_episode_statistics():
         if seen:
             break
     assert seen
+
+
+def _reference(n):
+    """Gymnasium's own vectorization of the registered single env."""
+    return gymnasium.vector.SyncVectorEnv([lambda: tg.TesseraEnv() for _ in range(n)])
+
+
+@pytest.mark.parametrize("seed", [7, [7, 8, 9], [None, None, 9], None])
+def test_gym_masked_reset_seeds_match_sync_vector_env(seed):
+    # codex R-PR22: the full seed vector is formed before the mask.
+    ours, ref = tg.make(ID, num_envs=3), _reference(3)
+    mask = np.array([False, False, True])
+    for env in (ours, ref):
+        env.reset(seed=3)
+        env.step(np.ones(3, dtype=np.int64))
+    a, _ = ours.reset(seed=seed, options={"reset_mask": mask.copy()})
+    b, _ = ref.reset(seed=seed, options={"reset_mask": mask.copy()})
+    assert np.array_equal(a, b)
+
+
+@pytest.mark.parametrize(
+    ("mask", "error"),
+    [
+        (np.zeros(3, dtype=bool), ValueError),
+        (np.array([0, 0, 1]), TypeError),
+        ([False, False, True], TypeError),
+        (np.ones(2, dtype=bool), ValueError),
+    ],
+)
+def test_gym_reset_mask_is_validated_like_sync_vector_env(mask, error):
+    ours, ref = tg.make(ID, num_envs=3), _reference(3)
+    for env in (ours, ref):
+        env.reset(seed=3)
+        with pytest.raises(error):
+            env.reset(options={"reset_mask": mask})
+
+
+def _balance(obs):
+    """A controller that keeps the pole up far beyond 500 steps."""
+    return int(obs[2] + 0.25 * obs[3] + 0.05 * obs[0] + 0.1 * obs[1] > 0)
+
+
+@pytest.mark.parametrize(("limit", "ends_at"), [(None, 500), (600, 600), (-1, None)])
+def test_gym_time_limit_is_owned_by_the_gymnasium_wrapper(limit, ends_at):
+    # codex R-PR22: no hidden native limit under gymnasium.make.
+    env = gymnasium.make(ID) if limit is None else gymnasium.make(ID, max_episode_steps=limit)
+    obs, _ = env.reset(seed=3)
+    end = None
+    for k in range(650):
+        obs, _, term, trunc, _ = env.step(_balance(obs))
+        assert not term, "the controller should keep the pole up"
+        if trunc:
+            end = k + 1
+            break
+    assert end == ends_at
+    env.close()
+
+
+@pytest.mark.parametrize(("limit", "ends_at"), [(None, 500), (600, 600), (-1, None)])
+def test_gym_make_vec_time_limit_follows_the_registration(limit, ends_at):
+    kwargs = {} if limit is None else {"max_episode_steps": limit}
+    env = gymnasium.make_vec(ID, num_envs=1, **kwargs)
+    obs, _ = env.reset(seed=3)
+    end = None
+    for k in range(650):
+        obs, _, term, trunc, _ = env.step(np.array([_balance(obs[0])]))
+        assert not term[0]
+        if trunc[0]:
+            end = k + 1
+            break
+    assert end == ends_at
+    env.close()

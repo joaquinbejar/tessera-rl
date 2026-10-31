@@ -13,8 +13,14 @@
   instances with ``reset(options={"reset_mask": mask})``.
 - Rewards are ``float32`` (the engine's precision); terminations and
   truncations are ``bool``.
-- ``reset(seed=s)`` gives instance ``i`` the seed ``s + i``; a list gives
-  one seed per instance (per reset instance with ``reset_mask``).
+- ``reset(seed=...)`` follows ``SyncVectorEnv``: ``s`` gives instance ``i``
+  the seed ``s + i``; a list gives one seed (or ``None``, keep) per
+  instance; ``reset_mask`` then selects which instances reset, validated
+  with the same error types.
+- Time limits: the vector env truncates at ``max_episode_steps`` (500 by
+  default, the registered value under ``make_vec``; ``None`` or ``-1`` for
+  none). Under ``gymnasium.make`` the single env has no native limit and
+  Gymnasium's ``TimeLimit`` wrapper owns it.
 
 Importing this module registers the Tessera environment ids with Gymnasium
 (``gymnasium.make_vec("tessera/CartPole-v1", num_envs=8)``); ``gymnasium.make``
@@ -93,9 +99,15 @@ class TesseraVectorEnv(VectorEnv):
         seed: int = 0,
         autoreset_mode: AutoresetMode | str = AutoresetMode.NEXT_STEP,
         outputs: str = "owned",
+        max_episode_steps: int | None = 500,
         **kwargs: Any,
     ):
         mode = _autoreset_mode(autoreset_mode)
+        # The vector env owns its time limit (Gymnasium has no vector
+        # TimeLimit): `make_vec` passes the registered 500 or an override;
+        # None or -1 means no limit.
+        limit = 0 if max_episode_steps is None or max_episode_steps < 0 else int(max_episode_steps)
+        kwargs["max_episode_steps"] = limit
         self._native, layout = _native_env(env_id, num_envs, seed, mode, outputs, kwargs)
         self.num_envs = layout["num_envs"]
         self.outputs = outputs
@@ -145,25 +157,22 @@ class TesseraVectorEnv(VectorEnv):
 
     # -- Gymnasium API -------------------------------------------------------
 
-    def reset(self, *, seed: int | list[int] | None = None, options: dict | None = None):
+    def reset(self, *, seed: int | list[int | None] | None = None, options: dict | None = None):
+        """As ``SyncVectorEnv.reset``: the full seed vector is formed first
+        (``None``, ``seed + i``, or one entry per instance, ``None`` keeping
+        that instance's seed), then ``reset_mask`` selects the instances to
+        reset, with the same validation and error types."""
         options = dict(options or {})
-        mask = options.pop("reset_mask", None)
+        seeds = _seed_vector(seed, self.num_envs)
+        ids = None
+        if "reset_mask" in options:
+            mask = _check_reset_mask(options.pop("reset_mask"), self.num_envs)
+            ids = [int(i) for i in np.flatnonzero(mask)]
+            seeds = [seeds[i] for i in ids]
         if options:
             raise _native.ArgumentError(f"unsupported reset options {sorted(options)}")
-        ids = None
-        if mask is not None:
-            mask = np.asarray(mask, dtype=np.bool_)
-            if mask.shape != (self.num_envs,):
-                raise _native.ArgumentError(f"reset_mask must have shape ({self.num_envs},)")
-            ids = [int(i) for i in np.flatnonzero(mask)]
-        if isinstance(seed, (list, tuple, np.ndarray)):
-            seed = [int(s) for s in seed]
-            expected = self.num_envs if ids is None else len(ids)
-            if len(seed) != expected:
-                raise _native.ArgumentError(f"expected {expected} seeds, got {len(seed)}")
-        elif seed is not None:
-            seed = int(seed)
-        out = self._native.reset(seed, ids)
+        native_seed = None if all(s is None for s in seeds) else seeds
+        out = self._native.reset(native_seed, ids)
         return self._obs(out["observations"]), {}
 
     def step(self, actions):
@@ -186,11 +195,17 @@ class TesseraVectorEnv(VectorEnv):
 
 class TesseraEnv(gymnasium.Env):
     """One instance as a ``gymnasium.Env`` (``DISABLED`` auto-reset, owned
-    outputs): for the Gymnasium env checker and single-env tooling."""
+    outputs): for the Gymnasium env checker and single-env tooling.
+
+    It has no native time limit: ``gymnasium.make`` adds the ``TimeLimit``
+    wrapper (registered ``max_episode_steps=500``), so overrides such as
+    ``max_episode_steps=600`` or ``-1`` (no wrapper) behave as for
+    Gymnasium's own environments."""
 
     metadata = {"render_modes": []}
 
     def __init__(self, env_id: str = "tessera/CartPole-v1", seed: int = 0, **kwargs: Any):
+        kwargs.setdefault("max_episode_steps", None)
         self._vec = TesseraVectorEnv(env_id, 1, seed, AutoresetMode.DISABLED, "owned", **kwargs)
         self.observation_space = self._vec.single_observation_space
         self.action_space = self._vec.single_action_space
@@ -209,6 +224,42 @@ class TesseraEnv(gymnasium.Env):
 
     def close(self):
         self._vec.close()
+
+
+def _seed_vector(seed, n: int) -> list[int | None]:
+    """The per-instance seeds of a reset, as ``SyncVectorEnv`` forms them;
+    sums wrap modulo 2^64 (SPEC 9.2)."""
+    if seed is None:
+        return [None] * n
+    if isinstance(seed, (int, np.integer)) and not isinstance(seed, bool):
+        if seed < 0:
+            raise ValueError(f"seeds must be non-negative integers, got {seed}")
+        return [(int(seed) + i) % 2**64 for i in range(n)]
+    seeds = list(seed)
+    if len(seeds) != n:
+        raise ValueError(
+            f"If seeds are passed as a list the length must match num_envs={n} but got length={len(seeds)}."
+        )
+    for s in seeds:
+        if s is not None and (not isinstance(s, (int, np.integer)) or isinstance(s, bool) or s < 0):
+            raise ValueError(f"seeds must be non-negative integers or None, got {s!r}")
+    return [None if s is None else int(s) for s in seeds]
+
+
+def _check_reset_mask(mask, n: int) -> np.ndarray:
+    """``options["reset_mask"]``, validated exactly as ``SyncVectorEnv``."""
+    if not isinstance(mask, np.ndarray):
+        raise TypeError(f"`options['reset_mask']` must be a numpy array, got {type(mask)}")
+    if mask.shape != (n,):
+        raise ValueError(f"`options['reset_mask']` must have shape `({n},)`, got {mask.shape}")
+    if mask.dtype != np.bool_:
+        raise TypeError(f"`options['reset_mask']` must have `dtype=np.bool_`, got {mask.dtype}")
+    if not np.any(mask):
+        raise ValueError(
+            "`options['reset_mask']` must contain a boolean array with at least one True value, "
+            f"got reset_mask={mask}"
+        )
+    return mask
 
 
 def _first(obs):
@@ -236,6 +287,7 @@ def _register() -> None:
             id=env_id,
             entry_point="tessera_rl.gym:TesseraEnv",
             vector_entry_point="tessera_rl.gym:TesseraVectorEnv",
+            max_episode_steps=500,
             kwargs={"env_id": env_id},
         )
 

@@ -56,8 +56,9 @@ pub(crate) enum ResetSeed {
     Keep,
     /// The k-th reset instance gets `base + k` (Gymnasium vector rule).
     Base(u64),
-    /// The k-th reset instance gets `seeds[k]`.
-    List(Vec<u64>),
+    /// The k-th reset instance gets `seeds[k]`; `None` keeps that
+    /// instance's seed (Gymnasium's per-environment `None`).
+    List(Vec<Option<u64>>),
 }
 
 /// The fixed layout of a pool's outputs.
@@ -224,6 +225,56 @@ fn flags(v: &[tessera_rl_core::Bool8]) -> Vec<u8> {
     v.iter().map(|f| f.to_byte()).collect()
 }
 
+impl<E, M> Pooled<E, M>
+where
+    E: Environment + Validate,
+    E::Config: Sync,
+    E::Header: Send,
+    E::State: Send,
+    <E::Header as tessera_rl_core::RecordLayout>::Adaptive:
+        tessera_rl_core::AdaptiveValues<E::Config>,
+    M: MaskProvider<E>,
+{
+    /// A reset with one optional seed per reset instance: the instances
+    /// with a seed are reseeded, the others keep theirs. Both groups are
+    /// reset in this one admitted call.
+    fn reset_list(&mut self, ids: Option<&[u32]>, seeds: &[Option<u64>]) -> Result<(), BindError> {
+        let all: Vec<u32>;
+        let ids = if let Some(ids) = ids {
+            ids
+        } else {
+            let n = u32::try_from(self.layout.num_envs)
+                .map_err(|_| BindError::Argument("num_envs too large".to_owned()))?;
+            all = (0..n).collect();
+            &all
+        };
+        if ids.len() != seeds.len() {
+            return Err(BindError::Argument(format!(
+                "{} seeds for {} instances",
+                seeds.len(),
+                ids.len()
+            )));
+        }
+        let (mut kept, mut seeded, mut values) = (Vec::new(), Vec::new(), Vec::new());
+        for (&id, seed) in ids.iter().zip(seeds) {
+            match seed {
+                None => kept.push(id),
+                Some(s) => {
+                    seeded.push(id);
+                    values.push(Seed::new(*s));
+                }
+            }
+        }
+        if !seeded.is_empty() {
+            self.pool.reset(&seeded, Reseed::List(&values))?;
+        }
+        if !kept.is_empty() {
+            self.pool.reset(&kept, Reseed::Keep)?;
+        }
+        Ok(())
+    }
+}
+
 impl<E, M> PoolOps for Pooled<E, M>
 where
     E: Environment + Validate,
@@ -239,14 +290,10 @@ where
     }
 
     fn reset(&mut self, ids: Option<&[u32]>, seed: &ResetSeed) -> Result<(), BindError> {
-        let list: Vec<Seed>;
         let reseed = match seed {
             ResetSeed::Keep => Reseed::Keep,
             ResetSeed::Base(s) => Reseed::Base(Seed::new(*s)),
-            ResetSeed::List(seeds) => {
-                list = seeds.iter().map(|&s| Seed::new(s)).collect();
-                Reseed::List(&list)
-            }
+            ResetSeed::List(seeds) => return self.reset_list(ids, seeds),
         };
         match ids {
             None => self.pool.reset_all(reseed)?,
