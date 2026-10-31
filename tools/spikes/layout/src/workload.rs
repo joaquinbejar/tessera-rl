@@ -36,22 +36,55 @@ pub fn legalize(acts: &mut [i32], work: &Work, choices: usize) {
     }
 }
 
-/// Steps `layout` `steps` times from step `from` with the shared actions.
+/// Pregenerated action rows for the batch, reused cyclically, plus a
+/// scratch row: stepping with a table allocates nothing.
+#[derive(Debug, Clone)]
+pub struct ActionTable {
+    rows: Vec<Vec<i32>>,
+    scratch: Vec<i32>,
+    choices: u32,
+}
+
+impl ActionTable {
+    /// `len` steps of actions for `rows` agent rows.
+    #[must_use]
+    pub fn new(rows: usize, choices: u32, len: u64) -> Self {
+        Self {
+            rows: (0..len.max(1)).map(|t| actions(rows, choices, t)).collect(),
+            scratch: vec![0; rows],
+            choices,
+        }
+    }
+
+    /// The legalized actions of step `t`, in the scratch row.
+    pub fn at(&mut self, t: u64, work: &Work) -> &[i32] {
+        let len = u64::try_from(self.rows.len()).unwrap_or(1).max(1);
+        let k = usize::try_from(t % len).unwrap_or(0);
+        if let Some(row) = self.rows.get(k) {
+            self.scratch.copy_from_slice(row);
+        }
+        legalize(
+            &mut self.scratch,
+            work,
+            usize::try_from(self.choices).unwrap_or(1),
+        );
+        &self.scratch
+    }
+}
+
+/// Steps `layout` `steps` times from step `from` with the table's actions.
 pub fn run<E: SpikeEnv, L: Layout<E>>(
     layout: &mut L,
     cfg: &E::Config,
     work: &mut Work,
-    choices: u32,
+    table: &mut ActionTable,
     from: u64,
     steps: u64,
     limit: u32,
 ) {
-    let rows = work.rewards.len();
-    let width = usize::try_from(choices).unwrap_or(1);
     for t in from..from + steps {
-        let mut acts = actions(rows, choices, t);
-        legalize(&mut acts, work, width);
-        layout.step_all(cfg, &acts, work, limit);
+        let acts = table.at(t, work);
+        layout.step_all(cfg, acts, work, limit);
     }
 }
 
@@ -61,7 +94,7 @@ pub fn fork_heavy<E: SpikeEnv, L: Layout<E>>(
     layout: &mut L,
     cfg: &E::Config,
     work: &mut Work,
-    choices: u32,
+    table: &mut ActionTable,
     k: usize,
     steps: u64,
     limit: u32,
@@ -72,7 +105,7 @@ pub fn fork_heavy<E: SpikeEnv, L: Layout<E>>(
     for d in 1..=k {
         layout.set(d, &h, &s);
     }
-    run::<E, L>(layout, cfg, work, choices, 0, steps, limit);
+    run::<E, L>(layout, cfg, work, table, 0, steps, limit);
     for d in 0..=k {
         layout.set(d, &h, &s);
     }

@@ -26,7 +26,7 @@ use tessera_rl_spike_layout::columns::Columnar;
 use tessera_rl_spike_layout::kernel::{SpikeEnv, Work};
 use tessera_rl_spike_layout::lanes::{physics_aos, physics_soa};
 use tessera_rl_spike_layout::layouts::{Blocks, Columns, Combined, Layout, Parallel};
-use tessera_rl_spike_layout::workload::{actions, fork_heavy, legalize};
+use tessera_rl_spike_layout::workload::{ActionTable, fork_heavy, run};
 
 const SEED: u64 = 20_261_031;
 
@@ -41,16 +41,12 @@ fn step_bench<E: SpikeEnv, L: Layout<E>>(
     let mut g = c.benchmark_group(group);
     let mut layout = L::new(cfg, n, SEED);
     let mut work = Work::new::<E>(cfg, n);
-    let rows = n * E::MAX_AGENTS;
-    let width = usize::try_from(choices).unwrap();
-    // Pre-generated actions, legalized per step: the cost is the step.
-    let base: Vec<Vec<i32>> = (0..64).map(|t| actions(rows, choices, t)).collect();
-    let mut t = 0usize;
+    // Pregenerated actions, legalized in a reused row: no allocation.
+    let mut table = ActionTable::new(n * E::MAX_AGENTS, choices, 64);
+    let mut t = 0u64;
     g.bench_function(BenchmarkId::new(L::NAME, n), |b| {
         b.iter(|| {
-            let mut acts = base[t % base.len()].clone();
-            legalize(&mut acts, &work, width);
-            layout.step_all(cfg, &acts, &mut work, limit);
+            run::<E, L>(&mut layout, cfg, &mut work, &mut table, t, 1, limit);
             t += 1;
             black_box(&work.rewards);
         });
@@ -63,9 +59,10 @@ fn fork_bench<E: SpikeEnv, L: Layout<E>>(c: &mut Criterion, cfg: &E::Config, cho
     for k in [1usize, 8, 64] {
         let mut layout = L::new(cfg, k + 1, SEED);
         let mut work = Work::new::<E>(cfg, k + 1);
+        let mut table = ActionTable::new((k + 1) * E::MAX_AGENTS, choices, 10);
         g.bench_function(BenchmarkId::new(L::NAME, k), |b| {
             b.iter(|| {
-                fork_heavy::<E, L>(&mut layout, cfg, &mut work, choices, k, 10, 500);
+                fork_heavy::<E, L>(&mut layout, cfg, &mut work, &mut table, k, 10, 500);
                 black_box(&work.rewards);
             });
         });
@@ -166,7 +163,8 @@ fn physics(c: &mut Criterion) {
     for (i, s) in aos.iter().enumerate() {
         s.scatter(&mut soa, i);
     }
-    g.bench_function(BenchmarkId::new("aos", N), |b| {
+    // Named after the layouts so a per-layout run selects them.
+    g.bench_function(BenchmarkId::new("L0-parallel", N), |b| {
         b.iter(|| {
             physics_aos(&mut aos, &push);
             // Keep the states bounded.
@@ -178,7 +176,7 @@ fn physics(c: &mut Criterion) {
             black_box(&aos);
         });
     });
-    g.bench_function(BenchmarkId::new("soa", N), |b| {
+    g.bench_function(BenchmarkId::new("L2-soa", N), |b| {
         b.iter(|| {
             physics_soa(&mut soa, &push);
             for i in 0..N {
@@ -195,11 +193,24 @@ fn physics(c: &mut Criterion) {
     g.finish();
 }
 
+/// Defaults: warm-up 3 s, measurement 5 s, 20 samples; the repeated runs
+/// of `scripts/spike_runs.sh` override them with `SPIKE_WARMUP_S`,
+/// `SPIKE_MEASURE_S` and `SPIKE_SAMPLES` (ADR-0025: warm-up at least 2 s).
 fn config() -> Criterion {
+    let env = |key: &str, default: u64| {
+        std::env::var(key)
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(default)
+    };
     Criterion::default()
-        .warm_up_time(Duration::from_secs(3))
-        .measurement_time(Duration::from_secs(5))
-        .sample_size(20)
+        .warm_up_time(Duration::from_secs(env("SPIKE_WARMUP_S", 3).max(2)))
+        .measurement_time(Duration::from_secs(env("SPIKE_MEASURE_S", 5)))
+        .sample_size(
+            usize::try_from(env("SPIKE_SAMPLES", 20))
+                .unwrap_or(20)
+                .max(10),
+        )
 }
 
 criterion_group! {

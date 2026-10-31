@@ -7,16 +7,17 @@
 use tessera_rl_classic::{CartPole, CartPoleConfig, Tag, TagConfig};
 use tessera_rl_spike_layout::kernel::{SpikeEnv, Work};
 use tessera_rl_spike_layout::layouts::{Blocks, Columns, Combined, Layout, Parallel};
-use tessera_rl_spike_layout::workload::{fork_heavy, hashes, run};
+use tessera_rl_spike_layout::workload::{ActionTable, fork_heavy, hashes, run};
 
 const N: usize = 37;
 
 fn outcome<E: SpikeEnv, L: Layout<E>>(cfg: &E::Config, choices: u32) -> Vec<(u64, u64)> {
     let mut layout = L::new(cfg, N, 9);
     let mut work = Work::new::<E>(cfg, N);
-    run::<E, L>(&mut layout, cfg, &mut work, choices, 0, 300, 200);
-    fork_heavy::<E, L>(&mut layout, cfg, &mut work, choices, 8, 10, 200);
-    run::<E, L>(&mut layout, cfg, &mut work, choices, 1_000, 50, 200);
+    let mut table = ActionTable::new(N * E::MAX_AGENTS, choices, 97);
+    run::<E, L>(&mut layout, cfg, &mut work, &mut table, 0, 300, 200);
+    fork_heavy::<E, L>(&mut layout, cfg, &mut work, &mut table, 8, 10, 200);
+    run::<E, L>(&mut layout, cfg, &mut work, &mut table, 1_000, 50, 200);
     hashes::<E, L>(&layout, N)
 }
 
@@ -81,7 +82,8 @@ fn test_layouts_copy_all_reproduces_every_instance() {
     fn check<E: SpikeEnv, L: Layout<E>>(cfg: &E::Config, choices: u32) {
         let mut layout = L::new(cfg, N, 9);
         let mut work = Work::new::<E>(cfg, N);
-        run::<E, L>(&mut layout, cfg, &mut work, choices, 0, 120, 200);
+        let mut table = ActionTable::new(N * E::MAX_AGENTS, choices, 97);
+        run::<E, L>(&mut layout, cfg, &mut work, &mut table, 0, 120, 200);
         let mut copy = L::new(cfg, N, 1);
         layout.copy_all(&mut copy);
         assert_eq!(hashes::<E, L>(&copy, N), hashes::<E, L>(&layout, N));

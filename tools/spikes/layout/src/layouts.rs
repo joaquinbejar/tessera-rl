@@ -151,11 +151,10 @@ impl<E: SpikeEnv> Layout<E> for Combined<E> {
     }
 
     fn set(&mut self, i: usize, header: &E::Header, state: &E::State) {
+        // Field by field, in place (no temporary record).
         if let Some(r) = self.records.get_mut(i) {
-            *r = Record {
-                header: *header,
-                state: *state,
-            };
+            r.header = *header;
+            r.state = *state;
         }
     }
 

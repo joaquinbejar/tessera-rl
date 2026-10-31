@@ -7,12 +7,20 @@ CI on the mean, so this script recomputes from the raw samples
 (`target/criterion/<group>/<layout>/<param>/new/sample.json`, per sample
 `times[i] / iters[i]` nanoseconds per iteration).
 
-For each group and parameter it prints a Markdown table: the median, its
-CI, and the ratio to the L0 layout with a CI of the ratio (paired by
-bootstrap resampling of both sides). Standard library only; the resampling
-seed is fixed so the report is reproducible.
+Two modes, both printing one Markdown table per group and parameter:
 
-Usage: python3 scripts/spike_stats.py [target/criterion] > report.md
+- default: one Criterion run (`new/`). The median and its CI over the
+  samples, and the ratio to the L0 layout with a CI obtained by resampling
+  the two sides INDEPENDENTLY (unpaired).
+- `--runs`: the independent runs of `scripts/spike_runs.sh` (baselines
+  `run1`, `run2`, ...). Each run gives one median per layout; the table
+  reports the median of the run medians with a bootstrap CI over runs, and
+  the ratio to L0 paired BY RUN (per-run ratios, bootstrapped over runs).
+
+Standard library only; the resampling seed is fixed so the report is
+reproducible.
+
+Usage: python3 scripts/spike_stats.py [--runs] [target/criterion] > report.md
 """
 
 import json
@@ -56,8 +64,48 @@ def fmt(ns):
     return "%.1f ns" % ns
 
 
+def runs_main(root):
+    table = {}
+    for dirpath, _, files in os.walk(root):
+        base = os.path.basename(dirpath)
+        if "sample.json" not in files or not base.startswith("run"):
+            continue
+        parts = os.path.relpath(dirpath, root).split(os.sep)[:-1]
+        if len(parts) != 3:
+            continue
+        group, layout, param = parts
+        med = statistics.median(samples(os.path.join(dirpath, "sample.json")))
+        table.setdefault((group, param), {}).setdefault(layout, {})[base] = med
+    rng = random.Random(SEED)
+    for (group, param) in sorted(table):
+        rows = table[(group, param)]
+        print("\n### %s, %s\n" % (group, param))
+        print("| Layout | Median of run medians | 95% CI | Ratio to L0 (paired by run) | 95% CI of ratio | runs |")
+        print("| --- | --- | --- | --- | --- | --- |")
+        base = rows.get(BASELINE, {})
+        for layout in sorted(rows):
+            meds = rows[layout]
+            xs = list(meds.values())
+            lo, hi = bootstrap(xs, rng)
+            common = sorted(set(meds) & set(base))
+            ratios = [meds[k] / base[k] for k in common]
+            if ratios:
+                rlo, rhi = bootstrap(ratios, rng)
+                ratio, rci = "%.3f" % statistics.median(ratios), "[%.3f, %.3f]" % (rlo, rhi)
+            else:
+                ratio, rci = "", ""
+            print(
+                "| %s | %s | [%s, %s] | %s | %s | %d |"
+                % (layout, fmt(statistics.median(xs)), fmt(lo), fmt(hi), ratio, rci, len(xs))
+            )
+
+
 def main():
-    root = sys.argv[1] if len(sys.argv) > 1 else "target/criterion"
+    args = [a for a in sys.argv[1:] if a != "--runs"]
+    root = args[0] if args else "target/criterion"
+    if "--runs" in sys.argv[1:]:
+        runs_main(root)
+        return
     table = {}
     for dirpath, _, files in os.walk(root):
         if "sample.json" not in files or os.path.basename(dirpath) != "new":
