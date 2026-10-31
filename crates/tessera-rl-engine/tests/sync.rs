@@ -15,12 +15,22 @@ use core::num::{NonZeroU32, NonZeroUsize};
 use common::{CountConfig, Counter};
 use tessera_rl_engine::{
     ActionInput, AutoReset, EngineError, EnvPool, Masked, PoolOptions, Reseed, SyncOptions,
+    WaitBackend,
 };
 use tessera_rl_num::identity::Seed;
 
 const N: u32 = 100;
 
 fn pool(mode: AutoReset, workers: Option<usize>, cfg: CountConfig) -> EnvPool<Counter, Masked> {
+    pool_on(mode, workers, cfg, WaitBackend::Auto)
+}
+
+fn pool_on(
+    mode: AutoReset,
+    workers: Option<usize>,
+    cfg: CountConfig,
+    wait: WaitBackend,
+) -> EnvPool<Counter, Masked> {
     let options = PoolOptions {
         auto_reset: mode,
         chunk_size: NonZeroU32::new(8).unwrap(),
@@ -29,7 +39,10 @@ fn pool(mode: AutoReset, workers: Option<usize>, cfg: CountConfig) -> EnvPool<Co
     let p = EnvPool::with_masks(cfg, options).unwrap();
     match workers {
         Some(w) => p
-            .with_workers(SyncOptions::new(NonZeroUsize::new(w).unwrap()))
+            .with_workers(SyncOptions {
+                wait,
+                ..SyncOptions::new(NonZeroUsize::new(w).unwrap())
+            })
             .unwrap(),
         None => p,
     }
@@ -63,13 +76,26 @@ fn snapshot_outputs(p: &EnvPool<Counter, Masked>) -> Vec<u64> {
 }
 
 fn trajectory(mode: AutoReset, workers: Option<usize>) -> Vec<Vec<u64>> {
+    trajectory_on(mode, workers, WaitBackend::Auto)
+}
+
+fn trajectory_on(mode: AutoReset, workers: Option<usize>, wait: WaitBackend) -> Vec<Vec<u64>> {
     let cfg = CountConfig {
         length: 7,
         kill_at: 4,
         ..CountConfig::default()
     };
-    let mut p = pool(mode, workers, cfg);
+    let mut p = pool_on(mode, workers, cfg, wait);
     assert_eq!(p.workers(), workers.unwrap_or(0));
+    if workers.is_some() {
+        // Native where it is tested and enabled: Linux, and macOS 14.4+.
+        let native_expected = match wait {
+            WaitBackend::Park => false,
+            WaitBackend::Auto => cfg!(any(target_os = "linux", target_os = "macos")),
+            WaitBackend::Native => cfg!(any(target_os = "linux", target_os = "macos", windows)),
+        };
+        assert_eq!(p.uses_native_wait(), native_expected, "{wait:?}");
+    }
     p.reset_all(Reseed::Keep).unwrap();
     let mut frames = vec![snapshot_outputs(&p)];
     let n = usize::try_from(N).unwrap();
@@ -103,6 +129,20 @@ fn test_sync_matches_inline_bit_for_bit_for_1_2_7_and_64_workers() {
                 trajectory(mode, Some(workers)),
                 inline,
                 "{workers} workers, {mode:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn test_every_wait_backend_matches_inline() {
+    let inline = trajectory(AutoReset::NextStep, None);
+    for wait in [WaitBackend::Park, WaitBackend::Native, WaitBackend::Auto] {
+        for workers in [1, 3, 8] {
+            assert_eq!(
+                trajectory_on(AutoReset::NextStep, Some(workers), wait),
+                inline,
+                "{wait:?}, {workers} workers"
             );
         }
     }

@@ -28,7 +28,7 @@ mod validate;
 pub use error::EngineError;
 pub use layout::MAX_LEAVES;
 pub use masks::{IllegalActionPolicy, MaskProvider, Masked, NoMasks};
-pub use options::{AutoReset, CHUNK_RANGE, PoolOptions, SyncOptions};
+pub use options::{AutoReset, CHUNK_RANGE, PoolOptions, SyncOptions, WaitBackend};
 pub use outputs::Outputs;
 pub use pool::{EnvPool, Reseed};
 pub use record::{DecodedRecord, PoolContext, Record};

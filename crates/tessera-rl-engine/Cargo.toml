@@ -28,12 +28,23 @@ tracing.workspace = true
 [target.'cfg(not(loom))'.dependencies]
 core_affinity.workspace = true
 
+[target.'cfg(all(not(loom), any(target_os = "linux", target_os = "macos")))'.dependencies]
+libc.workspace = true
+
+[target.'cfg(all(not(loom), windows))'.dependencies]
+windows-sys.workspace = true
+
 [target.'cfg(loom)'.dev-dependencies]
 loom.workspace = true
 
 [dev-dependencies]
+criterion.workspace = true
 tessera-rl-num = { workspace = true, features = ["test-hooks"] }
 tessera-rl-macros.workspace = true
 
 [lints]
 workspace = true
+
+[[bench]]
+name = "sync_step"
+harness = false
