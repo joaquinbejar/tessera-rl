@@ -285,6 +285,68 @@ fn test_connect4_import_rejects_a_running_episode_on_a_won_board() {
 }
 
 #[test]
+fn test_connect4_validate_rejects_play_after_a_four() {
+    use tessera_rl_core::Validate;
+    let cfg = Connect4Config {};
+    // Slot 0 made four in column 0, then slot 1 covered it and slot 0
+    // played again: slot 1 to move, slot 0's four is not its last stone.
+    let after = Connect4State {
+        stones: [
+            cell(0, 0) | cell(0, 1) | cell(0, 2) | cell(0, 3) | cell(4, 0),
+            cell(0, 4) | cell(1, 0) | cell(1, 1) | cell(2, 0),
+        ],
+        moves: 9,
+        ..Connect4State::default()
+    };
+    assert_eq!(
+        Connect4::validate(&cfg, &after).unwrap_err().code,
+        "play went on after a four"
+    );
+    // The same four made by the last stone (on top of column 0) is a
+    // finished game, and valid.
+    let finished = Connect4State {
+        stones: [
+            cell(0, 0) | cell(0, 1) | cell(0, 2) | cell(0, 3),
+            cell(1, 0) | cell(1, 1) | cell(2, 0),
+        ],
+        moves: 7,
+        ..Connect4State::default()
+    };
+    assert!(Connect4::validate(&cfg, &finished).is_ok());
+    // Two fours sharing the last stone are valid too: slot 0 completes
+    // column 3 and row 3 with the stone at (3, 3), on top of column 3.
+    let line = |cells: &[(u32, u32)]| cells.iter().fold(0, |b, &(c, r)| b | cell(c, r));
+    let double = Connect4State {
+        stones: [
+            line(&[
+                (3, 0),
+                (3, 1),
+                (3, 2),
+                (3, 3),
+                (0, 3),
+                (1, 3),
+                (2, 3),
+                (0, 0),
+                (2, 1),
+            ]),
+            line(&[
+                (1, 0),
+                (2, 0),
+                (0, 1),
+                (1, 1),
+                (0, 2),
+                (1, 2),
+                (2, 2),
+                (6, 0),
+            ]),
+        ],
+        moves: 17,
+        ..Connect4State::default()
+    };
+    assert!(Connect4::validate(&cfg, &double).is_ok());
+}
+
+#[test]
 fn test_connect4_terminal_record_imports_as_pending_reset() {
     let mut p = pool();
     play_all(&mut p, "0101010");

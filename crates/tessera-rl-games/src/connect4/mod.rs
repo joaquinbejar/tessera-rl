@@ -238,8 +238,10 @@ impl ActionMask for Connect4 {
 }
 
 /// Imported states: disjoint stones that obey gravity, stone counts that
-/// match the plies and the turn, and no four for the side to move (the
-/// side that just moved may hold one in a finished game).
+/// match the plies and the turn, and no four for the side to move. The
+/// side that just moved may hold four only if its last stone made them
+/// all: some stone on top of its column lies in every one of its fours.
+/// Otherwise play went on after a win, which no game reaches.
 impl Validate for Connect4 {
     fn validate(_: &Connect4Config, state: &Connect4State) -> Result<(), InvariantViolation> {
         let invalid = |code| Err(InvariantViolation { code });
@@ -254,6 +256,10 @@ impl Validate for Connect4 {
         let to_move = state.stones.get(state.to_move()).copied().unwrap_or(0);
         if has_four(to_move) {
             return invalid("the side to move already holds four");
+        }
+        let mover = state.stones.get(1 - state.to_move()).copied().unwrap_or(0);
+        if has_four(mover) && !ended_on_last_move(mover, a | b) {
+            return invalid("play went on after a four");
         }
         Ok(())
     }
@@ -283,6 +289,23 @@ impl Validate for Connect4 {
         }
         Ok(())
     }
+}
+
+/// Whether some stone of `mover` on top of its column lies in every four
+/// of `mover` (removing it leaves none): the four were made by the last
+/// stone played.
+fn ended_on_last_move(mover: u64, occupied: u64) -> bool {
+    let mut rest = mover;
+    while rest != 0 {
+        let stone = rest & rest.wrapping_neg();
+        rest &= rest - 1;
+        // The cell above is empty, or is the column's sentinel bit.
+        let on_top = (stone << 1) & occupied == 0;
+        if on_top && !has_four(mover & !stone) {
+            return true;
+        }
+    }
+    false
 }
 
 /// Scripted baseline (not the P2-G1 bot): win at once if possible, else
