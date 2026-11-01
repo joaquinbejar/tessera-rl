@@ -1,0 +1,30 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
+# Temporary diagnosis of a flaky allocation test (closed after use).
+name: diag-alloc-sync
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  loop:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: nproc; grep -m1 "model name" /proc/cpuinfo
+      - run: |
+          for feat in "" "--all-features"; do
+            cargo test -q -p tessera-rl-engine --test alloc_sync $feat --no-run 2>/dev/null
+            B=$(ls -t target/debug/deps/alloc_sync-* | grep -v '\.d$' | head -1)
+            fails=0
+            for i in $(seq 1 300); do
+              if ! "$B" -q > out.txt 2>&1; then
+                fails=$((fails+1))
+                if [ $fails -le 2 ]; then cat out.txt; fi
+              fi
+            done
+            echo "features [$feat]: $fails of 300 failed"
+          done
