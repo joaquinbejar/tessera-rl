@@ -946,6 +946,34 @@ where
         }
     }
 
+    /// Bytes of one agent's observation (every observation leaf, in order).
+    pub(crate) fn obs_row_bytes(&self) -> usize {
+        let rows = idx(self.batch).saturating_mul(self.agents).max(1);
+        (0..tessera_rl_engine::MAX_LEAVES)
+            .map_while(|l| self.scratch.outputs().observation(l).map(<[u8]>::len))
+            .map(|len| len / rows)
+            .sum()
+    }
+
+    /// Copies the observation of `agent` at scratch row `row` into `out`
+    /// (every observation leaf, in order).
+    pub(crate) fn copy_observation(&self, row: usize, agent: usize, out: &mut [u8]) {
+        let rows = idx(self.batch).saturating_mul(self.agents).max(1);
+        let mut at = 0;
+        for l in 0..tessera_rl_engine::MAX_LEAVES {
+            let Some(bytes) = self.scratch.outputs().observation(l) else {
+                break;
+            };
+            let per = bytes.len() / rows;
+            let from = (row * self.agents + agent) * per;
+            if let (Some(src), Some(dst)) = (bytes.get(from..from + per), out.get_mut(at..at + per))
+            {
+                dst.copy_from_slice(src);
+            }
+            at += per;
+        }
+    }
+
     /// A digest of the whole tree (records, nodes, edges, rewards, the free
     /// list, the root and the counter), for tests of atomicity and of
     /// determinism.

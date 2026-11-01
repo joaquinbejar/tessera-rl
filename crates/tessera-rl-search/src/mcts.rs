@@ -24,7 +24,7 @@ use tessera_rl_num::math;
 use tessera_rl_num::rng::{RngAuthority, StepRng};
 
 use crate::error::SearchError;
-use crate::evaluator::{Evaluator, validate_leaf};
+use crate::evaluator::{Evaluator, LeafBatch, validate_leaf};
 use crate::handle::NodeHandle;
 use crate::noise::dirichlet;
 use crate::pool::{NONE, SearchPool};
@@ -118,6 +118,11 @@ pub struct Mcts<E: Environment, M: MaskProvider<E>> {
     root_priors: Vec<f64>,
     noise: Vec<f64>,
     legal: Vec<bool>,
+    /// Bytes of one leaf's observation.
+    obs_bytes: usize,
+    /// The batch's observations, then legal actions, for the evaluator.
+    obs_buf: Vec<u8>,
+    leaf_legal: Vec<bool>,
 }
 
 fn idx(v: u32) -> usize {
@@ -169,7 +174,11 @@ where
             return Err(config_error("noise", "alpha > 0 and epsilon in [0, 1]"));
         }
         let (b, a) = (idx(cfg.batch_size), idx(pool.actions()));
+        let obs_bytes = pool.obs_row_bytes();
         Ok(Self {
+            obs_bytes,
+            obs_buf: vec![0; b.max(1) * obs_bytes],
+            leaf_legal: vec![false; b.max(1) * a],
             cfg,
             calls: 0,
             rng: None,
@@ -337,11 +346,21 @@ where
         }
         self.eval_records.clear();
         self.eval_records.push(record);
+        let ob = self.obs_bytes;
+        self.pool
+            .copy_observation(0, agent, self.obs_buf.get_mut(..ob).unwrap_or(&mut []));
+        let batch = LeafBatch::new(
+            &self.eval_records,
+            self.obs_buf.get(..ob).unwrap_or(&[]),
+            ob,
+            &self.legal,
+            width,
+        );
         let (raw, values) = (
             self.raw_priors.get_mut(..width).unwrap_or(&mut []),
             self.values.get_mut(..1).unwrap_or(&mut []),
         );
-        evaluator.evaluate(&self.eval_records, raw, values)?;
+        evaluator.evaluate_batch(&batch, raw, values)?;
         let value = self.values.first().copied().unwrap_or(f64::NAN);
         validate_leaf(
             0,
@@ -562,11 +581,39 @@ where
         }
         let k = self.eval_records.len();
         if k > 0 {
+            let ob = self.obs_bytes;
+            for leaf in 0..k {
+                let row = self.eval_rows.get(leaf).copied().unwrap_or(0);
+                let mover = self
+                    .eval_records
+                    .get(leaf)
+                    .map_or(Ok(0), SearchPool::<E, M>::single_actor)?;
+                self.pool.copy_observation(
+                    row,
+                    mover,
+                    self.obs_buf
+                        .get_mut(leaf * ob..leaf * ob + ob)
+                        .unwrap_or(&mut []),
+                );
+                if let (Some(dst), Some(src)) = (
+                    self.leaf_legal.get_mut(leaf * width..leaf * width + width),
+                    self.pool.child_masks.get(row * width..row * width + width),
+                ) {
+                    dst.copy_from_slice(src);
+                }
+            }
+            let batch = LeafBatch::new(
+                &self.eval_records,
+                self.obs_buf.get(..k * ob).unwrap_or(&[]),
+                ob,
+                self.leaf_legal.get(..k * width).unwrap_or(&[]),
+                width,
+            );
             let (raw, values) = (
                 self.raw_priors.get_mut(..k * width).unwrap_or(&mut []),
                 self.values.get_mut(..k).unwrap_or(&mut []),
             );
-            evaluator.evaluate(&self.eval_records, raw, values)?;
+            evaluator.evaluate_batch(&batch, raw, values)?;
             for leaf in 0..k {
                 let row = self.eval_rows.get(leaf).copied().unwrap_or(0);
                 let legal = self

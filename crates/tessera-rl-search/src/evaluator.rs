@@ -9,6 +9,81 @@ use thiserror::Error;
 /// Tolerance on the sum of an evaluator's priors over all actions.
 pub const PRIOR_SUM_TOLERANCE: f64 = 1e-6;
 
+/// One batch of leaves for an evaluator, in batch order: each leaf's
+/// record, the observation of the player to move at the leaf (the
+/// observation leaves of the environment concatenated in order, as the
+/// engine writes them), and its legal actions.
+#[derive(Debug)]
+pub struct LeafBatch<'a, E: Environment> {
+    records: &'a [Record<E>],
+    observations: &'a [u8],
+    obs_bytes: usize,
+    legal: &'a [bool],
+    actions: usize,
+}
+
+impl<'a, E: Environment> LeafBatch<'a, E> {
+    pub(crate) fn new(
+        records: &'a [Record<E>],
+        observations: &'a [u8],
+        obs_bytes: usize,
+        legal: &'a [bool],
+        actions: usize,
+    ) -> Self {
+        Self {
+            records,
+            observations,
+            obs_bytes,
+            legal,
+            actions,
+        }
+    }
+
+    /// Leaves in the batch.
+    #[must_use]
+    pub const fn len(&self) -> usize {
+        self.records.len()
+    }
+
+    /// Whether the batch is empty.
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        self.records.is_empty()
+    }
+
+    /// The leaves' records.
+    #[must_use]
+    pub const fn records(&self) -> &'a [Record<E>] {
+        self.records
+    }
+
+    /// Bytes of one leaf's observation.
+    #[must_use]
+    pub const fn obs_bytes(&self) -> usize {
+        self.obs_bytes
+    }
+
+    /// Every leaf's observation, `len() * obs_bytes()` bytes, row-major:
+    /// the observation of the player to move at the leaf.
+    #[must_use]
+    pub const fn observations(&self) -> &'a [u8] {
+        self.observations
+    }
+
+    /// The legal actions of every leaf, `len() * actions`, row-major (the
+    /// mask of the player to move; all true without masks).
+    #[must_use]
+    pub const fn legal(&self) -> &'a [bool] {
+        self.legal
+    }
+
+    /// Actions per leaf.
+    #[must_use]
+    pub const fn actions(&self) -> usize {
+        self.actions
+    }
+}
+
 /// A batched evaluator: priors and a value for every leaf of a batch.
 ///
 /// `leaves` holds the leaf records in batch order. The evaluator writes
@@ -29,6 +104,23 @@ pub trait Evaluator<E: Environment> {
         priors: &mut [f64],
         values: &mut [f64],
     ) -> Result<(), EvaluatorError>;
+
+    /// Evaluates one batch with its observations and legal actions. The
+    /// search calls this; the default delegates to [`Self::evaluate`] with
+    /// the records, so an evaluator that needs no observation implements
+    /// only that.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::evaluate`].
+    fn evaluate_batch(
+        &mut self,
+        batch: &LeafBatch<'_, E>,
+        priors: &mut [f64],
+        values: &mut [f64],
+    ) -> Result<(), EvaluatorError> {
+        self.evaluate(batch.records(), priors, values)
+    }
 }
 
 /// Why an evaluator's response was rejected (ADR-0043 section 3). The
