@@ -366,3 +366,24 @@ fn test_turns_import_validates_the_state_before_asking_who_acts() {
     assert!(!p.is_poisoned());
     assert_eq!(p.state_hash(0).unwrap(), before, "atomic: nothing written");
 }
+
+#[test]
+fn test_turns_import_rejects_a_sequential_record_with_no_acting_agent() {
+    use tessera_rl_engine::{DecodedRecord, EngineError};
+
+    let mut p = race();
+    let good = DecodedRecord::from(p.snapshot(0).unwrap());
+    // Player 0 to move, but its slot is dead: every flag matches `acting`
+    // (all false), yet nobody can move. The import must reject it.
+    let mut header = *good.header();
+    header.agents[0].alive = Bool8::FALSE;
+    header.agents[0].acting = Bool8::FALSE;
+    let bad = DecodedRecord::from_parts(header, *good.state()).unwrap();
+    let before = p.state_hash(0).unwrap();
+    assert!(matches!(
+        p.import(&[0], &[bad]),
+        Err(EngineError::InvalidRecord { index: 0, .. })
+    ));
+    assert!(!p.is_poisoned());
+    assert_eq!(p.state_hash(0).unwrap(), before, "atomic: nothing written");
+}

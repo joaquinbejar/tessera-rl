@@ -390,6 +390,16 @@ where
                     return invalid("acting flags that differ from the environment's turn order");
                 }
             }
+            // A Sequential game that goes on has exactly one (alive) agent
+            // to move; a record without one would let the next step run on
+            // an ignored action. Mixed may have none.
+            if E::TURNS == TurnStructure::Sequential
+                && header.agents().iter().filter(|r| r.acting.get()).count() != 1
+            {
+                return invalid(
+                    "a Sequential record that goes on without exactly one acting agent",
+                );
+            }
         }
         Ok(())
     }
