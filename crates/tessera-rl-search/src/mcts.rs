@@ -579,8 +579,10 @@ where
                     .get(leaf * width..leaf * width + width)
                     .unwrap_or(&[]);
                 let value = self.values.get(leaf).copied().unwrap_or(f64::NAN);
-                // Validated in place; renormalized rows overwrite the raw
-                // ones after every leaf passed.
+                // First pass: validate every leaf before anything is
+                // committed, so an invalid response fails the call with no
+                // child written. The renormalized priors are discarded
+                // here: one scratch row serves every leaf.
                 validate_leaf(leaf, raw, value, legal, &mut self.priors)?;
             }
         }
@@ -611,6 +613,9 @@ where
             self.legal.clear();
             self.legal.extend_from_slice(legal);
             let mut priors = core::mem::take(&mut self.priors);
+            // Second pass, after the commit: the same (already valid)
+            // response is renormalized again into the scratch row, then
+            // written to the child. It cannot fail here.
             validate_leaf(leaf, raw, value, &self.legal, &mut priors)?;
             self.priors = priors;
             self.write_priors(child);
