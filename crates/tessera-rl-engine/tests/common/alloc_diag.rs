@@ -81,6 +81,12 @@ thread_local! {
 pub static ALLOCATE_IN_STEP: AtomicBool = AtomicBool::new(false);
 
 /// Starts a counted window: the count and the table are cleared.
+///
+/// The window is not a barrier: an allocation on another thread that
+/// passed the `COUNTING` check just before [`stop`] may still increment the
+/// count, or fill a table slot, after `stop` returns. Callers stop counting
+/// only once the code under test has returned (a completed step joins every
+/// worker), so the race can only add events, never hide one.
 pub fn start() {
     ALLOCATIONS.store(0, Ordering::Relaxed);
     NEXT.store(0, Ordering::Relaxed);
@@ -114,7 +120,10 @@ fn count(size: usize) {
             .store(KERNEL_CALLS.with(Cell::get), Ordering::Relaxed);
         // The current thread's handle: set at spawn for std threads, so
         // reading the name does not allocate (and, under the guard, an
-        // allocation here would not be counted).
+        // allocation here would not be counted). `thread::current` panics if
+        // called while the thread's locals are being destroyed; no counted
+        // window spans a thread's exit, because workers live as long as the
+        // pool and the windows end before it is dropped.
         let thread = std::thread::current();
         let name = thread.name().unwrap_or("").as_bytes();
         let n = name.len().min(NAME);
@@ -226,6 +235,11 @@ pub fn report() -> String {
 
 /// The engine's counter test environment, with its kernels tagged for the
 /// diagnostics (the shared `Counter` stays untouched: benches use it).
+///
+/// Every item delegates to `Counter`. A new required item of
+/// `Environment`, `Validate` or `ActionMask` fails to compile here; a new
+/// item with a default must be delegated by hand, and
+/// `alloc_sync_probe.rs` checks the spaces and constants agree.
 pub struct Tagged;
 
 /// Tags the thread as inside kernel `kind` until dropped.
