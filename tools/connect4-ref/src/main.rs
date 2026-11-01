@@ -10,17 +10,7 @@
 //!   solver from the first `GAMES` openings).
 //! - `solve MOVES`: prints the exact score of a position.
 
-#![expect(
-    clippy::cast_possible_wrap,
-    reason = "board quantities (plies, cells, scores) are at most 42 and fit in i32"
-)]
-
-mod board;
-mod bot;
-mod calibrate;
-mod openings;
-mod rng;
-mod solver;
+use tessera_rl_connect4_ref::{board, bot, calibrate, openings, solver};
 
 use std::collections::BTreeSet;
 use std::fmt::Write as _;

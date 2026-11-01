@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! Shared harness for the classic suites: a deterministic action
+//! Shared harness for the environment suites (the classic crate, and the
+//! games crate by `#[path]`): a deterministic action
 //! generator, per-step output digests and golden fixtures (ADR-0009,
 //! ADR-0024 layer 2).
 //!
@@ -29,6 +30,8 @@
     clippy::indexing_slicing,
     reason = "test harness: a failure is the assertion"
 )]
+
+pub mod continuation;
 
 use core::num::{NonZeroU32, NonZeroUsize};
 use std::path::PathBuf;
@@ -142,16 +145,6 @@ where
     const ENV_ID: &'static str;
     /// Version.
     const ENV_VERSION: u32;
-}
-
-impl GoldenEnv for tessera_rl_classic::CartPole {
-    const ENV_ID: &'static str = tessera_rl_classic::cartpole::ENV_ID;
-    const ENV_VERSION: u32 = tessera_rl_classic::cartpole::ENV_VERSION;
-}
-
-impl GoldenEnv for tessera_rl_classic::Tag {
-    const ENV_ID: &'static str = tessera_rl_classic::tag::ENV_ID;
-    const ENV_VERSION: u32 = tessera_rl_classic::tag::ENV_VERSION;
 }
 
 /// splitmix64 (the generator's mixer; independent of the engine RNG).
