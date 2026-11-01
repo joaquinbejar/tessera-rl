@@ -23,6 +23,7 @@
 //!   top row, column 0 the leftmost.
 
 pub mod board;
+pub mod bot;
 
 use tessera_rl_core::io::{ActionWriter, Actions, MaskWriter, ObsWriter};
 use tessera_rl_core::space::Space;
