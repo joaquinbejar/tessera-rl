@@ -15,7 +15,6 @@ use tessera_rl_engine::{ActionInput, EnvPool, PoolOptions, Reseed, SyncOptions, 
 use tessera_rl_num::identity::Seed;
 
 #[path = "../tests/common/mod.rs"]
-#[expect(dead_code, reason = "shared with the tests")]
 mod common;
 
 use common::{CountConfig, Counter};

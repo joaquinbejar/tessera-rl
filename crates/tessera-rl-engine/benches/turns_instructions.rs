@@ -26,11 +26,9 @@ use tessera_rl_engine::{ActionInput, EnvPool, Masked, PoolOptions, Reseed};
 use tessera_rl_num::identity::Seed;
 
 #[path = "../tests/common/mod.rs"]
-#[expect(dead_code, reason = "shared with the tests")]
 mod common;
 
 #[path = "../tests/common/race.rs"]
-#[expect(dead_code, reason = "shared with the tests")]
 mod race;
 
 use common::{CountConfig, Counter};
