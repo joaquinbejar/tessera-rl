@@ -78,6 +78,9 @@ impl Environment for RaceEnv {
     }
 
     fn acting(cfg: &RaceConfig, state: &Race, agent: AgentSlot) -> bool {
+        // Relies on the invariant `Validate` checks: the engine never asks
+        // about an invalid state (an imported record is validated first).
+        assert!(state.to_move <= 1, "acting called on an invalid state");
         cfg.both_act || agent.index() == state.to_move as usize
     }
 
@@ -341,4 +344,25 @@ fn test_turns_import_rejects_acting_flags_outside_the_turn_order() {
     // The untouched record imports.
     assert!(p.import(&[0], &[good]).is_ok());
     assert_eq!(acting(&p), [false, true]);
+}
+
+#[test]
+fn test_turns_import_validates_the_state_before_asking_who_acts() {
+    use tessera_rl_engine::{DecodedRecord, EngineError};
+
+    let mut p = race();
+    step(&mut p, [0, 0]);
+    let good = DecodedRecord::from(p.snapshot(0).unwrap());
+    // An invalid state: no player 2. `acting` asserts on it, so asking it
+    // before `validate_record` would unwind; the import must fail cleanly.
+    let mut state = *good.state();
+    state.to_move = 2;
+    let bad = DecodedRecord::from_parts(*good.header(), state).unwrap();
+    let before = p.state_hash(0).unwrap();
+    assert!(matches!(
+        p.import(&[0], &[bad]),
+        Err(EngineError::Invariant { index: 0, .. })
+    ));
+    assert!(!p.is_poisoned());
+    assert_eq!(p.state_hash(0).unwrap(), before, "atomic: nothing written");
 }

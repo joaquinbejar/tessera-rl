@@ -370,7 +370,12 @@ where
                 return invalid("a non-finite episode return");
             }
         }
-        // Turn order (ADR-0013): outside a pending reset, the acting flags
+        let view = tessera_rl_core::HeaderView::of(header);
+        E::validate_record(&self.cfg, &view, record.state())
+            .map_err(|violation| EngineError::Invariant { index, violation })?;
+        // Turn order (ADR-0013), checked only after the record passed
+        // `validate_record`, so `acting` never sees an invalid state:
+        // outside a pending reset, the acting flags
         // of a non-simultaneous environment are exactly the ones its
         // `acting` names for this state, so a record cannot make a waiting
         // agent act.
@@ -386,9 +391,7 @@ where
                 }
             }
         }
-        let view = tessera_rl_core::HeaderView::of(header);
-        E::validate_record(&self.cfg, &view, record.state())
-            .map_err(|violation| EngineError::Invariant { index, violation })
+        Ok(())
     }
 
     /// Restores untrusted records (decoded from bytes) into `ids`, in
