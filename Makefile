@@ -25,10 +25,10 @@ doc:
 	RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --all-features --locked
 
 readme:
-	cargo readme -r crates/tessera-rl -t ../../README.tpl --no-title --no-license --no-indent-headings > README.md
+	cargo readme -r crates/tessera-rl -t $(CURDIR)/README.tpl --no-title --no-license --no-indent-headings > README.md
 
 readme-check:
-	cargo readme -r crates/tessera-rl -t ../../README.tpl --no-title --no-license --no-indent-headings | diff -u README.md -
+	cargo readme -r crates/tessera-rl -t $(CURDIR)/README.tpl --no-title --no-license --no-indent-headings | diff -u README.md -
 
 pre-push: fmt-check clippy test doc readme-check compat-test py-entries py-callouts py-test py-test-hooks
 
