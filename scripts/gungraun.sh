@@ -89,7 +89,9 @@ case "$mode" in
         [ "$sums_before" = "$sums_after" ] || fail "check created or changed baseline files"
         # A regression (gungraun exits 3) or a failed run is reported as is.
         [ "$status" -eq 0 ] || exit "$status"
-        compared="$(grep -cE '^ +Instructions: +[0-9]+\|[0-9]+ ' "$log" || true)"
+        # Strip ANSI colours first: CI sets CARGO_TERM_COLOR=always, and
+        # gungraun then colours the counts.
+        compared="$(sed 's/\x1b\[[0-9;]*m//g' "$log" | grep -cE '^ +Instructions: +[0-9]+\|[0-9]+ ' || true)"
         [ "$compared" -eq "${#expected[@]}" ] || fail "compared $compared benchmarks against the baseline, expected ${#expected[@]}"
         ;;
     bless)
