@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
+[package]
+name = "tessera-rl-connect4-ref"
+description = "Phase 2 M0 reference tools for Connect Four: perfect solver, the pinned P2-G1 bot, openings and calibration"
+publish = false
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+
+[lints]
+workspace = true

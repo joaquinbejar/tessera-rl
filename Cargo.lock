@@ -855,6 +855,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "tessera-rl-connect4-ref"
+version = "0.1.0"
+
+[[package]]
 name = "tessera-rl-core"
 version = "0.1.0"
 dependencies = [
