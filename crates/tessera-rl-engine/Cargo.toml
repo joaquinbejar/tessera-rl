@@ -55,3 +55,8 @@ harness = false
 [[bench]]
 name = "snapshot_instructions"
 harness = false
+
+# Instruction counts of masked and turn-based steps (P2-M1a).
+[[bench]]
+name = "turns_instructions"
+harness = false
