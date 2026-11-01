@@ -90,3 +90,22 @@ fn test_search_hold_and_visit_counters_report_exhaustion() {
     );
     assert_eq!(s.tree_hash(), before);
 }
+
+#[test]
+fn test_search_set_root_with_no_usable_slot_changes_nothing() {
+    // One slot, the root's, at the last generation: freeing it would
+    // retire it and leave no slot for the new root (R38-02).
+    let mut s = search(1, Eviction::Strict);
+    let root = s.root();
+    s.nodes[root.slot() as usize].generation = u32::MAX;
+    let root = s.root();
+    let record = *s.record(root).unwrap();
+    let before = s.tree_hash();
+    assert_eq!(
+        s.set_root(&record).unwrap_err(),
+        SearchError::CapacityExceeded { capacity: 1 }
+    );
+    assert_eq!(s.tree_hash(), before);
+    assert_eq!(s.root(), root);
+    assert!(s.record(root).is_ok());
+}

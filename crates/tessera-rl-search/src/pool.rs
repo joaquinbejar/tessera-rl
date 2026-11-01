@@ -624,6 +624,19 @@ where
         }
         let alloc = self.next_alloc;
         let next = alloc.checked_add(1).ok_or(SearchError::CounterExhausted)?;
+        // Plan before freeing anything: after the frees, the free list
+        // gains every live slot whose generation is not exhausted (those
+        // retire). With none, nothing is changed (R38-02).
+        let reusable = self
+            .nodes
+            .iter()
+            .filter(|n| n.live && n.generation != u32::MAX)
+            .count();
+        if self.free.len() + reusable == 0 {
+            return Err(SearchError::CapacityExceeded {
+                capacity: self.capacity,
+            });
+        }
         self.free_unprotected();
         let Some(slot) = self.free.pop() else {
             return Err(SearchError::CapacityExceeded {
