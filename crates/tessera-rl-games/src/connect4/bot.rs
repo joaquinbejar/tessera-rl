@@ -25,8 +25,9 @@ pub const W3: i32 = 5;
 pub const WC: i32 = 3;
 /// Value of a win (minus the plies played, so faster wins score higher).
 pub const WIN: i32 = 1_000_000;
-/// Seed base of the tie-break stream (ADR-0042: game or opening `j` uses
-/// `TIE_BASE + j`), disjoint from the opening seeds.
+/// Seed base of the tie-break stream, disjoint from the opening seeds
+/// (ADR-0042: both games of opening `j`, one per colour, use
+/// `TIE_BASE + j`, with `j` the opening's index in its file).
 pub const TIE_BASE: u64 = 0x7e55_e2a0_0000_0000;
 
 const H1: u32 = HEIGHT + 1;

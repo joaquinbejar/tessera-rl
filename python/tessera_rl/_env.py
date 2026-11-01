@@ -40,7 +40,10 @@ class Step(NamedTuple):
 
     Per-agent arrays have shape ``(num_envs, agents, ...)``; episode flags
     have shape ``(num_envs,)``. ``masks`` is ``None`` for environments
-    without action masks.
+    without action masks. ``acting`` marks the agents whose action the
+    next step reads (ADR-0013): every alive agent in a simultaneous
+    environment, exactly one in a sequential one while its game runs, and
+    none on a finished board.
     """
 
     observations: dict[str, np.ndarray]
@@ -51,6 +54,7 @@ class Step(NamedTuple):
     episode_terminated: np.ndarray
     episode_truncated: np.ndarray
     masks: np.ndarray | None
+    acting: np.ndarray
 
 
 class Env:
@@ -73,6 +77,8 @@ class Env:
         self.agents: int = layout["agents"]
         self.action_choices: int = layout["action_choices"]
         self._mask_len: int = layout["mask_len"]
+        #: ``"simultaneous"``, ``"sequential"`` or ``"mixed"`` (ADR-0013).
+        self.turns: str = layout["turns"]
         self.outputs: str = layout["outputs"]
         self._leaves = [(name or "obs", np.dtype(dtype), tuple(shape)) for name, dtype, shape, *_ in layout["leaves"]]
 
@@ -122,6 +128,7 @@ class Env:
             episode_terminated=field("episode_terminated", np.bool_, (n,)),
             episode_truncated=field("episode_truncated", np.bool_, (n,)),
             masks=masks,
+            acting=field("acting", np.bool_, (n, a)),
         )
 
     def snapshot(self, index: int) -> bytes:
@@ -238,11 +245,13 @@ def make(env_id: str, num_envs: int = 1, seed: int = 0, outputs: str = "borrowed
     ``max_episode_steps``, ``auto_reset`` (``"next_step"``,
     ``"same_step"`` or ``"disabled"``), ``chunk_size``, ``workers``. Tag also
     takes its config fields (``width``, ``height``, ``pursuers``,
-    ``evaders``, ``slip``, ``radius``).
+    ``evaders``, ``slip``, ``radius``). Connect Four takes no config;
+    its ``max_episode_steps`` defaults to 64, above the 42 plies of a game.
     """
     makers = {
         "tessera/CartPole-v1": _native.make_cartpole,
         "tessera/Tag-v1": _native.make_tag,
+        "tessera/Connect4-v1": _native.make_connect4,
     }
     try:
         maker = makers[env_id]

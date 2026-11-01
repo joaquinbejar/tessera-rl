@@ -4,7 +4,7 @@
 # maturin's default of macOS 11. Ignored on other platforms.
 export MACOSX_DEPLOYMENT_TARGET := 13.0
 
-.PHONY: fmt fmt-check clippy test doc readme readme-check pre-push deny check-targets compat-test py-entries py-callouts py-test py-test-hooks py-test-torch pre-push-torch gym-equivalence reference-training learning-test learning-calibrate bench bench-quick bench-kernels gungraun gungraun-bless
+.PHONY: fmt fmt-check clippy test doc readme readme-check pre-push deny check-targets compat-test py-entries py-callouts py-test py-test-hooks py-test-torch pre-push-torch gym-equivalence reference-training learning-test learning-calibrate bench bench-quick bench-kernels gungraun gungraun-bless connect4-calibration
 
 fmt:
 	cargo fmt --all
@@ -137,6 +137,13 @@ bench:
 bench-quick:
 	uv sync --locked --python 3.11
 	uv run --locked --python 3.11 python tools/bench/bench.py --quick
+
+# The full ADR-0042 calibration of the ported P2-G1 bot, including the
+# games against the perfect solver (about a minute with 14 threads,
+# a few minutes on xaskar). Not in pre-push; run it on any change to
+# tessera-rl-games/src/connect4/bot.rs or board.rs.
+connect4-calibration:
+	cargo test --release --locked -p tessera-rl-games --test bot -- --include-ignored
 
 # Criterion benches of the kernels.
 bench-kernels:
