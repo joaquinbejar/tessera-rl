@@ -42,6 +42,20 @@ pub enum Tier {
     SamePlatform,
 }
 
+/// The turn structure an environment declares (ADR-0013). The acting mask
+/// marks the agents whose action is required this step
+/// ([`crate::Environment::acting`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum TurnStructure {
+    /// Every alive agent acts every step.
+    Simultaneous,
+    /// Exactly one alive agent acts in every step that does not end the
+    /// episode (board games, card games).
+    Sequential,
+    /// Any subset of the alive agents acts, declared per state.
+    Mixed,
+}
+
 #[cfg(test)]
 mod tests {
     use super::AgentSlot;

@@ -14,7 +14,7 @@ use tessera_rl_core::error::ConfigError;
 use tessera_rl_core::io::{ActionWriter, Actions, MaskWriter, ObsWriter};
 use tessera_rl_core::{
     ActionMask, AdaptiveValues, AgentSlot, Bool8, EnvConfig, Environment, EpisodeEnd, RecordLayout,
-    StateInit, StepOut,
+    StateInit, StepOut, TurnStructure,
 };
 use tessera_rl_num::fp;
 use tessera_rl_num::identity::{LogicalId, RngIdentity, Seed, StreamId};
@@ -1105,6 +1105,37 @@ fn reset_one<E: Environment>(
     *state = E::State::state_default();
     let mut rng = StepRng::new(authority, &identity, StreamId::DYNAMICS);
     E::reset(cfg, &mut rng, state);
+    update_acting::<E>(cfg, header, state, false);
+}
+
+/// Sets the acting flag of every alive agent from the environment's turn
+/// structure (ADR-0013): every alive agent for `Simultaneous`, the agents
+/// `Environment::acting` names otherwise. A `Sequential` environment must
+/// name exactly one alive agent while the episode goes on (`ended`
+/// false); `debug_assert` checks it.
+fn update_acting<E: Environment>(
+    cfg: &E::Config,
+    header: &mut E::Header,
+    state: &E::State,
+    ended: bool,
+) {
+    if E::TURNS == TurnStructure::Simultaneous {
+        return;
+    }
+    let mut acting = 0usize;
+    for (slot, row) in header.agents_mut().iter_mut().enumerate() {
+        let on = row.alive.get()
+            && u16::try_from(slot)
+                .ok()
+                .and_then(|s| AgentSlot::new(s, E::MAX_AGENTS))
+                .is_some_and(|s| E::acting(cfg, state, s));
+        row.acting = Bool8::from(on);
+        acting += usize::from(on);
+    }
+    debug_assert!(
+        E::TURNS != TurnStructure::Sequential || ended || acting == 1,
+        "a Sequential environment named {acting} acting agents"
+    );
 }
 
 #[expect(
@@ -1229,6 +1260,7 @@ fn step_one<E: Environment>(
             }
         }
     }
+    update_acting::<E>(cfg, header, state, end.is_some());
     if let Some(end) = end {
         finish_episode(header, outputs, i, end, t, total);
     }

@@ -5,7 +5,7 @@
 
 use tessera_rl_num::rng::{ObsRng, StepRng};
 
-use crate::agent::{AgentSlot, Tier};
+use crate::agent::{AgentSlot, Tier, TurnStructure};
 use crate::encoding::Canonical;
 use crate::error::{ConfigError, InvariantViolation, SpaceError};
 use crate::header::RecordLayout;
@@ -58,6 +58,9 @@ pub trait Environment: Sized + 'static {
     const TIER: Tier;
     /// Whether every agent observes the full state (ADR-0035).
     const PERFECT_INFORMATION: bool = true;
+    /// The turn structure (ADR-0013). `Sequential` and `Mixed` take the
+    /// acting agents from [`Environment::acting`]; `Simultaneous` ignores it.
+    const TURNS: TurnStructure = TurnStructure::Simultaneous;
 
     /// The observation space for `cfg`.
     ///
@@ -82,6 +85,18 @@ pub trait Environment: Sized + 'static {
     fn initial_agents(cfg: &Self::Config) -> usize {
         let _ = cfg;
         Self::MAX_AGENTS
+    }
+
+    /// Whether alive `agent` acts in `state`: its action is required and
+    /// read in the next step. The engine asks after every reset and every
+    /// step, for alive agents only, when [`Environment::TURNS`] is not
+    /// `Simultaneous`. A `Sequential` environment returns `true` for
+    /// exactly one alive agent whenever the episode goes on. Defaults to
+    /// `true`.
+    #[must_use]
+    fn acting(cfg: &Self::Config, state: &Self::State, agent: AgentSlot) -> bool {
+        let _ = (cfg, state, agent);
+        true
     }
 
     /// Starts an episode. `state` holds the initial value or the previous
