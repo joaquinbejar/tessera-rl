@@ -12,6 +12,13 @@ makes them raise ``FloatingPointEnvironmentError`` instead, before any
 work. Deallocation and export deleters always run. The boundary covers
 x86-64 (System V) and aarch64 (AAPCS64) on Linux and macOS, and Win64
 (x86-64) on Windows.
+
+API changes (pre-release; the package is not published yet):
+
+- P2-M1b: ``Step`` gained a ninth field, ``acting``, after ``masks``.
+  Access by name or index is unchanged, but unpacking a ``Step`` into a
+  fixed number of names is a breaking change: it now needs 9 names, not 8.
+  ``Env`` gained ``turns``.
 """
 
 from tessera_rl._env import Env, Step, is_stale, make

@@ -21,6 +21,7 @@ tessera-rl-macros.workspace = true
 
 [dev-dependencies]
 criterion.workspace = true
+gungraun.workspace = true
 tessera-rl-engine.workspace = true
 # The M0 reference tools (ADR-0042), for the equivalence tests only.
 tessera-rl-connect4-ref = { path = "../../tools/connect4-ref" }
@@ -30,4 +31,9 @@ workspace = true
 
 [[bench]]
 name = "games_step"
+harness = false
+
+# Instruction counts (gungraun, Linux only; ADR-0025).
+[[bench]]
+name = "games_instructions"
 harness = false
