@@ -700,9 +700,13 @@ where
 
     /// The action to play after a call: the most visited root action
     /// (ties to the lowest) when `temperature` is 0, else a draw
-    /// proportional to `N^(1/T)`, computed as `exp(ln(N) / T)` (`N = 0`
-    /// weighs 0), from the last call's search stream, under the canonical
-    /// controls.
+    /// proportional to `N^(1/T)`, computed as `exp((ln(N) - ln(N_max)) / T)`
+    /// so the largest weight is 1 and none overflows (`N = 0` weighs 0),
+    /// under the canonical controls.
+    ///
+    /// Each sampled call consumes one draw of the last search call's
+    /// stream, which advances: repeated calls after one search give a
+    /// reproducible sequence, not the same action.
     ///
     /// # Errors
     ///
@@ -731,12 +735,19 @@ where
             }
             return best.map(|(_, a)| a).ok_or(SearchError::TerminalNode);
         }
+        // Normalized by the most visited action, so no weight overflows
+        // for a small T: the largest weight is exactly 1 (C2).
+        let most = (0..self.pool.actions).map(visits).max().unwrap_or(0);
+        if most == 0 {
+            return Err(SearchError::TerminalNode);
+        }
+        let ln_most = math::ln(count(most));
         let weights = (0..self.pool.actions).map(|a| {
             let n = visits(a);
             if n == 0 {
                 0.0
             } else {
-                math::exp(math::ln(count(n)) / temperature)
+                math::exp((math::ln(count(n)) - ln_most) / temperature)
             }
         });
         let total: f64 = weights.clone().sum();
@@ -744,7 +755,9 @@ where
             .rng
             .as_mut()
             .ok_or(config_error("select_action", "run a search first"))?;
-        if total <= 0.0 {
+        // Never a silent fallback: a total that is not a positive finite
+        // number (impossible after the normalization) is an error.
+        if !(total.is_finite() && total > 0.0) {
             return Err(SearchError::TerminalNode);
         }
         let u = rng.unit_f64() * total;

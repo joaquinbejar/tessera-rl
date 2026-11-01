@@ -410,3 +410,41 @@ fn test_mcts_is_canonical_under_hostile_rounding() {
     assert_eq!(visits(&m), GOLDEN_VISITS);
     assert_eq!(m.pool().tree_hash(), GOLDEN_TREE);
 }
+
+/// A small temperature is (almost) greedy: `exp(ln N / T)` must not
+/// overflow (C2, TR m1).
+#[test]
+fn test_mcts_small_temperature_samples_the_most_visited_action() {
+    let mut m = mcts_with("", 4_096, Eviction::Strict, config(200));
+    m.run(&mut Canned::default()).unwrap();
+    let greedy = m.select_action(0.0).unwrap();
+    for t in [0.001, 0.01] {
+        for _ in 0..20 {
+            assert_eq!(m.select_action(t).unwrap(), greedy, "T = {t}");
+        }
+    }
+}
+
+/// Equal top counts share a small temperature; unvisited actions are never
+/// drawn (C2).
+#[test]
+fn test_mcts_small_temperature_splits_equal_counts_and_skips_unvisited() {
+    let mut m = mcts_with("", 4_096, Eviction::Strict, config(16));
+    m.run(&mut Canned::default()).unwrap();
+    m.pool_mut().clear().unwrap();
+    let root = m.pool().root();
+    m.pool_mut().add_visits(root, 2, 10, 0.0).unwrap();
+    m.pool_mut().add_visits(root, 5, 10, 0.0).unwrap();
+    m.pool_mut().add_visits(root, 6, 1, 0.0).unwrap();
+    let picks: Vec<u32> = (0..64).map(|_| m.select_action(0.001).unwrap()).collect();
+    assert!(picks.iter().all(|&a| a == 2 || a == 5), "{picks:?}");
+    assert!(
+        picks.contains(&2) && picks.contains(&5),
+        "both tied actions drawn: {picks:?}"
+    );
+    // With a large temperature every visited action can come up, never an
+    // unvisited one.
+    let wide: Vec<u32> = (0..256).map(|_| m.select_action(100.0).unwrap()).collect();
+    assert!(wide.iter().all(|&a| [2, 5, 6].contains(&a)), "{wide:?}");
+    assert!(wide.contains(&6));
+}
