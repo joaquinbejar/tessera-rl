@@ -91,6 +91,11 @@ pub(crate) struct Planned {
 /// scratch pool runs with [`AutoReset::Disabled`], so a child whose step
 /// ends the episode keeps its terminal state: it is marked terminal and
 /// cannot be expanded.
+///
+/// A failed scratch step (a kernel panic the engine contains, or a turn
+/// order violation) poisons the scratch pool. The expansion fails and the
+/// tree is unchanged; the next expansion reloads every scratch row with
+/// `restore_all`, which recovers the scratch pool.
 pub struct SearchPool<E: Environment, M: MaskProvider<E>> {
     pub(crate) records: Vec<Record<E>>,
     pub(crate) nodes: Vec<Node>,
@@ -116,6 +121,8 @@ pub struct SearchPool<E: Environment, M: MaskProvider<E>> {
     pub(crate) act_buf: Vec<i32>,
     /// The stepped children's records, taken before the commit.
     pub(crate) child_records: Vec<Record<E>>,
+    /// The parents loaded into the scratch pool, one per row.
+    pub(crate) load_records: Vec<Record<E>>,
 }
 
 fn options_error(option: &'static str, reason: &'static str) -> SearchError {
@@ -217,6 +224,7 @@ where
             planned: Vec::with_capacity(idx(batch)),
             act_buf: vec![0; idx(batch).saturating_mul(agents)],
             child_records: vec![*root; idx(batch)],
+            load_records: vec![*root; idx(batch)],
         };
         pool.set_root(root)?;
         Ok(pool)
@@ -717,13 +725,16 @@ where
         let Some(first) = self.planned.first().map(|p| p.parent) else {
             return Ok(());
         };
-        for row in 0..self.batch {
-            let parent = self.planned.get(idx(row)).map_or(first, |p| p.parent);
-            let record = self.records.get(idx(parent)).copied();
-            if let Some(record) = record {
-                self.scratch.restore(row, &record)?;
+        for (row, slot) in self.load_records.iter_mut().enumerate() {
+            let parent = self.planned.get(row).map_or(first, |p| p.parent);
+            if let Some(&record) = self.records.get(idx(parent)) {
+                *slot = record;
             }
         }
+        // `restore_all` recovers a scratch pool poisoned by an earlier
+        // failed step (a contained kernel panic): every row is rewritten,
+        // so nothing of the failed step survives.
+        self.scratch.restore_all(&self.load_records)?;
         let masks = self.scratch.outputs().masks();
         if !masks.is_empty() {
             let width = idx(self.actions);

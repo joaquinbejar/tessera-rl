@@ -21,6 +21,7 @@ tessera-rl-num.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
+tessera-rl-macros.workspace = true
 tessera-rl-games.workspace = true
 tessera-rl-classic.workspace = true
 tessera-rl-connect4-ref = { path = "../../tools/connect4-ref" }
