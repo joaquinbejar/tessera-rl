@@ -109,6 +109,9 @@ pub enum SearchError {
     /// The allocation counter would overflow.
     #[error("the allocation counter is exhausted")]
     CounterExhausted,
+    /// A backed-up value that is NaN or infinite.
+    #[error("a backed-up value is not finite")]
+    NonFiniteValue,
     /// An edge's visit count or virtual loss would overflow.
     #[error("an edge counter is exhausted")]
     VisitsExhausted,

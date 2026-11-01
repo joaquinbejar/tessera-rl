@@ -21,6 +21,8 @@ tessera-rl-num.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
+# Hostile floating-point modes for the canonical-controls test (ADR-0037).
+tessera-rl-num = { workspace = true, features = ["test-hooks"] }
 tessera-rl-macros.workspace = true
 tessera-rl-games.workspace = true
 tessera-rl-classic.workspace = true

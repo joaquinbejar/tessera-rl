@@ -417,3 +417,53 @@ fn test_search_pool_partial_batch_padding_is_legal_under_strict_checks() {
     let [c] = expand_n(&mut s, &[(root, 3)]);
     assert_eq!(*s.record(c).unwrap().state(), reference("0000003"));
 }
+
+#[test]
+fn test_search_pool_add_visits_rejects_non_finite_values() {
+    let mut s = search(4, 1, Eviction::Strict);
+    let root = s.root();
+    let before = s.tree_hash();
+    for v in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+        assert_eq!(
+            s.add_visits(root, 0, 1, v).unwrap_err(),
+            SearchError::NonFiniteValue
+        );
+    }
+    assert_eq!(s.tree_hash(), before);
+}
+
+/// `add_visits` computes under the canonical controls: a caller in round
+/// toward zero gets the same tree as one in round to nearest (ADR-0037).
+#[test]
+fn test_search_pool_add_visits_is_canonical_under_hostile_rounding() {
+    use tessera_rl_num::fp::hostile;
+    let run = |hostile_mode: bool| {
+        let mut s = search(4, 1, Eviction::Strict);
+        let root = s.root();
+        let mut add = || {
+            for v in [0.1, 0.2, 0.7, -0.3, 1.0 / 3.0] {
+                s.add_visits(root, 0, 1, v).unwrap();
+            }
+        };
+        if hostile_mode {
+            hostile::run(hostile::toward_zero, add);
+        } else {
+            add();
+        }
+        (
+            s.tree_hash(),
+            s.edge_stats(root, 0).unwrap().value.to_bits(),
+        )
+    };
+    let canonical = run(false);
+    assert_eq!(run(true), canonical);
+    // The probe can tell: the same sums in round toward zero differ.
+    let (direct, _) = hostile::run(hostile::toward_zero, || {
+        let mut w = 0.0_f64;
+        for v in [0.1, 0.2, 0.7, -0.3, 1.0 / 3.0] {
+            w = std::hint::black_box(w) + v;
+        }
+        w.to_bits()
+    });
+    assert_ne!(direct, canonical.1, "round toward zero changes this sum");
+}

@@ -248,7 +248,8 @@ where
         self.actions
     }
 
-    /// Live nodes, the root included.
+    /// Live nodes, the root included. It scans every slot (`O(capacity)`):
+    /// for tests and reports, not for the hot path.
     #[must_use]
     pub fn live_nodes(&self) -> usize {
         self.nodes.iter().filter(|n| n.live).count()
@@ -406,13 +407,25 @@ where
     }
 
     /// Adds `visits` and `value` to edge `(h, action)`: the backup
-    /// primitive of the search helper.
+    /// primitive of the search helper. The `f64` addition runs under the
+    /// canonical floating-point controls (ADR-0037, ADR-0043 section 2),
+    /// whatever the caller's.
     ///
     /// # Errors
     ///
-    /// A stale handle, an action out of range, or a visit count that
-    /// would overflow (nothing is changed).
+    /// A stale handle, an action out of range, a value that is not finite,
+    /// or a visit count that would overflow (nothing is changed).
     pub fn add_visits(
+        &mut self,
+        h: NodeHandle,
+        action: u32,
+        visits: u32,
+        value: f64,
+    ) -> Result<(), SearchError> {
+        tessera_rl_num::fp::with_canonical(|| self.add_visits_canonical(h, action, visits, value))
+    }
+
+    fn add_visits_canonical(
         &mut self,
         h: NodeHandle,
         action: u32,
@@ -421,6 +434,9 @@ where
     ) -> Result<(), SearchError> {
         let slot = self.resolve(h)?;
         self.check_action(action)?;
+        if !value.is_finite() {
+            return Err(SearchError::NonFiniteValue);
+        }
         let e = self
             .edge_mut(slot, action)
             .ok_or(SearchError::VisitsExhausted)?;
@@ -433,6 +449,12 @@ where
     }
 
     /// Sets the priors of `h`'s edges, one per action.
+    ///
+    /// A primitive: it stores the values as given, without validation. The
+    /// evaluator contract (no NaN or negative priors, a sum of 1 over all
+    /// actions, renormalization over the legal actions, a legal mass above
+    /// 0) is enforced by the search helper before it calls this (ADR-0043
+    /// section 3).
     ///
     /// # Errors
     ///
