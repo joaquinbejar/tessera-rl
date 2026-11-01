@@ -837,7 +837,10 @@ where
                 batch: self.batch,
             });
         }
+        // Every stage starts from an empty plan, so a commit never
+        // replays an earlier call's children or evictions (C1).
         self.planned.clear();
+        self.evict_roots.clear();
         if requests.is_empty() {
             return Ok(());
         }

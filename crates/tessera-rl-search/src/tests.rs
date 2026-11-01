@@ -109,3 +109,33 @@ fn test_search_set_root_with_no_usable_slot_changes_nothing() {
     assert_eq!(s.root(), root);
     assert!(s.record(root).is_ok());
 }
+
+/// The MCTS route of C1: a batch of terminal leaves only stages no request
+/// and commits; the commit must not replay the previous eviction.
+#[test]
+fn test_search_commit_after_an_empty_stage_replays_nothing() {
+    let mut s = search(3, Eviction::Oldest);
+    let root = s.root();
+    let _a = expand(&mut s, root, 0).unwrap();
+    let b = expand(&mut s, root, 1).unwrap();
+    let c = expand(&mut s, root, 2).unwrap();
+    // A held (pending) node, edge statistics and the free list are in the
+    // tree hash, with every record, node and handle generation.
+    s.hold(c).unwrap();
+    s.add_visits(root, 1, 3, 0.5).unwrap();
+    let (free, records) = (
+        s.free.clone(),
+        (s.record(b).unwrap().hash(), s.record(c).unwrap().hash()),
+    );
+    let before = s.tree_hash();
+    s.stage(&[]).unwrap();
+    s.commit_staged(&mut []);
+    assert_eq!(s.tree_hash(), before);
+    assert_eq!(s.free, free, "free list");
+    assert_eq!(
+        (s.record(b).unwrap().hash(), s.record(c).unwrap().hash()),
+        records
+    );
+    assert_eq!(s.edge_stats(root, 1).unwrap().visits, 3);
+    s.release(c).unwrap();
+}
