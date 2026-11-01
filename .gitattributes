@@ -1,0 +1,10 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
+# Golden fixtures are compared byte for byte by the bless policy: keep
+# them LF on every checkout (Windows autocrlf would rewrite them).
+*.golden text eol=lf
+
+# Files pinned by SHA-256 (ADR-0042 openings) or compared byte for byte
+# (gungraun baselines): LF everywhere.
+compat/connect4/*.txt text eol=lf
+benches/gungraun/**/*.base@* text eol=lf
