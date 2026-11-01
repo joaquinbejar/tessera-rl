@@ -44,6 +44,8 @@ expected=(
     tessera-rl-engine/snapshot_instructions/engine/fork_branched_with_reobserve.n1024
     tessera-rl-engine/turns_instructions/turns/masked_step.n1024
     tessera-rl-engine/turns_instructions/turns/sequential_step.n1024
+    tessera-rl-games/games_instructions/games/connect4_pool_step.n1024
+    tessera-rl-games/games_instructions/games/bot_choose.positions_32
 )
 baseline_of() { local d="$1"; local b; b="$(basename "$d")"; echo "$home/$d/callgrind.$b.out.base@ref"; }
 
@@ -68,7 +70,7 @@ TOML
 echo "gungraun: cpu: $(grep -m1 'model name' /proc/cpuinfo | cut -d: -f2- | sed 's/^ *//')"
 observed | sed 's/^/gungraun: /'
 
-benches=(-p tessera-rl-classic --bench classic_instructions -p tessera-rl-engine --bench snapshot_instructions --bench turns_instructions)
+benches=(-p tessera-rl-classic --bench classic_instructions -p tessera-rl-engine --bench snapshot_instructions --bench turns_instructions -p tessera-rl-games --bench games_instructions)
 case "$mode" in
     check)
         [ -f "$manifest" ] || fail "no environment manifest: bless first"

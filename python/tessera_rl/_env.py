@@ -44,6 +44,9 @@ class Step(NamedTuple):
     next step reads (ADR-0013): every alive agent in a simultaneous
     environment, exactly one in a sequential one while its game runs, and
     none on a finished board.
+
+    Breaking change in P2-M1b: ``acting`` is the ninth field, so unpacking
+    a ``Step`` into 8 names fails; access by name is stable.
     """
 
     observations: dict[str, np.ndarray]

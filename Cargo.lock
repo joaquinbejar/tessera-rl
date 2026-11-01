@@ -892,6 +892,7 @@ name = "tessera-rl-games"
 version = "0.1.0"
 dependencies = [
  "criterion",
+ "gungraun",
  "tessera-rl-connect4-ref",
  "tessera-rl-core",
  "tessera-rl-engine",
