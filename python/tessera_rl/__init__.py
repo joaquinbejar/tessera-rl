@@ -10,9 +10,8 @@ such calls proceed, are counted (``fp_non_canonical_entries()``) and warn
 once per process with a ``RuntimeWarning``; ``set_fp_policy("reject")``
 makes them raise ``FloatingPointEnvironmentError`` instead, before any
 work. Deallocation and export deleters always run. The boundary covers
-x86-64 (System V) and aarch64 (AAPCS64) on Linux and macOS. Win64
-(x86-64): implemented, pending runtime validation; until then Windows
-callers must keep the default controls (ADR-0037 precondition).
+x86-64 (System V) and aarch64 (AAPCS64) on Linux and macOS, and Win64
+(x86-64) on Windows.
 """
 
 from tessera_rl._env import Env, Step, is_stale, make
