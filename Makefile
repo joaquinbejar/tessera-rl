@@ -140,7 +140,7 @@ bench-quick:
 
 # Criterion benches of the kernels.
 bench-kernels:
-	cargo bench -p tessera-rl-classic -p tessera-rl-engine --locked
+	cargo bench -p tessera-rl-classic -p tessera-rl-games -p tessera-rl-engine --locked
 
 # Instruction-count gate (ADR-0025 level 1, gungraun): compares with the
 # committed baseline in benches/gungraun; Linux only (skipped elsewhere).

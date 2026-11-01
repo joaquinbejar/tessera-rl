@@ -1,0 +1,33 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
+[package]
+name = "tessera-rl-games"
+description = "Tessera board and card game environments: Connect Four"
+readme = "README.md"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+tessera-rl-core.workspace = true
+tessera-rl-num.workspace = true
+tessera-rl-macros.workspace = true
+
+[dev-dependencies]
+criterion.workspace = true
+tessera-rl-engine.workspace = true
+# The M0 reference tools (ADR-0042), for the equivalence tests only.
+tessera-rl-connect4-ref = { path = "../../tools/connect4-ref" }
+
+[lints]
+workspace = true
+
+[[bench]]
+name = "games_step"
+harness = false

@@ -34,6 +34,14 @@ docker run --rm --security-opt seccomp=unconfined \
 | `snapshot_instructions::restore_with_reobserve` | `restore` of every instance (with re-observation, ADR-0039) |
 | `snapshot_instructions::fork_with_reobserve` | `fork` of instance 0 into the other 1,023 |
 | `snapshot_instructions::fork_branched_with_reobserve` | `fork_branched` of instance 0 into the other 1,023 |
+| `turns_instructions::masked_step` | One Inline pool step, 1,024 instances of the counter environment with masks on (mask writing) |
+| `turns_instructions::sequential_step` | One Inline pool step, 1,024 instances of the Sequential race fixture (target 100) with masks on: masks, the acting update and the turn check |
+
+The cost of the serial turn check (`check_turns`) inside `sequential_step`
+was measured by an A/B run in the baseline's image: the same bench with
+the check disabled in an uncommitted copy ran 14,339 fewer instructions,
+1.04% of the step (about 14 per instance). That is why the check stays a
+serial pass over the headers; the benchmark pins its cost.
 
 Setup runs outside the measured region, and every benchmark returns its
 inputs so that dropping them, and the allocator, is not counted.

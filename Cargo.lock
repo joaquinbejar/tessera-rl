@@ -826,6 +826,7 @@ dependencies = [
  "tessera-rl-classic",
  "tessera-rl-core",
  "tessera-rl-engine",
+ "tessera-rl-games",
  "tessera-rl-macros",
  "tessera-rl-num",
 ]
@@ -884,6 +885,18 @@ dependencies = [
  "thiserror",
  "tracing",
  "windows-sys",
+]
+
+[[package]]
+name = "tessera-rl-games"
+version = "0.1.0"
+dependencies = [
+ "criterion",
+ "tessera-rl-connect4-ref",
+ "tessera-rl-core",
+ "tessera-rl-engine",
+ "tessera-rl-macros",
+ "tessera-rl-num",
 ]
 
 [[package]]

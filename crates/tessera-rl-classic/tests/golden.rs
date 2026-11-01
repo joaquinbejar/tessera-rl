@@ -15,6 +15,16 @@ use tessera_rl_classic::cartpole::MAX_EPISODE_STEPS;
 use tessera_rl_classic::{CartPole, CartPoleConfig, Tag, TagConfig};
 use tessera_rl_engine::{AutoReset, EnvPool, Masked};
 
+impl support::GoldenEnv for CartPole {
+    const ENV_ID: &'static str = tessera_rl_classic::cartpole::ENV_ID;
+    const ENV_VERSION: u32 = tessera_rl_classic::cartpole::ENV_VERSION;
+}
+
+impl support::GoldenEnv for Tag {
+    const ENV_ID: &'static str = tessera_rl_classic::tag::ENV_ID;
+    const ENV_VERSION: u32 = tessera_rl_classic::tag::ENV_VERSION;
+}
+
 const WORKERS: [Option<usize>; 5] = [None, Some(1), Some(2), Some(7), Some(64)];
 
 fn cartpole(name: &'static str, auto_reset: AutoReset) -> Scenario<CartPoleConfig> {

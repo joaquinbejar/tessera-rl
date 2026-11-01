@@ -9,6 +9,7 @@ members = [
     "crates/tessera-rl-macros",
     "crates/tessera-rl-engine",
     "crates/tessera-rl-classic",
+    "crates/tessera-rl-games",
     "tools/math-oracle",
     "tools/bench-runner",
     "tools/connect4-ref",
@@ -24,6 +25,7 @@ default-members = [
     "crates/tessera-rl-macros",
     "crates/tessera-rl-engine",
     "crates/tessera-rl-classic",
+    "crates/tessera-rl-games",
 ]
 
 [workspace.package]
@@ -44,6 +46,7 @@ tessera-rl-num = { path = "crates/tessera-rl-num", version = "0.1.0" }
 tessera-rl-macros = { path = "crates/tessera-rl-macros", version = "0.1.0" }
 tessera-rl-engine = { path = "crates/tessera-rl-engine", version = "0.1.0" }
 tessera-rl-classic = { path = "crates/tessera-rl-classic", version = "0.1.0" }
+tessera-rl-games = { path = "crates/tessera-rl-games", version = "0.1.0" }
 
 core_affinity = "0.8"
 criterion = { version = "0.8", default-features = false, features = ["cargo_bench_support"] }
