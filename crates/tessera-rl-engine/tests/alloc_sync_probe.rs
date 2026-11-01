@@ -5,7 +5,8 @@
 //! the step kernel on several workers are counted and attributed, a count
 //! past the table is reported as truncated, and allocations under the
 //! reentrancy guard are not counted. One test, because the counter is
-//! process-wide.
+//! process-wide (it first checks `Tagged` against `Counter`, before any
+//! counted window).
 
 mod common;
 
@@ -23,8 +24,41 @@ use tessera_rl_engine::{
 };
 use tessera_rl_num::identity::Seed;
 
+/// `Tagged` stays in step with `Counter` (TR, #43): the same spaces,
+/// initial agents and constants, for the default config and for a
+/// multi-head one. Called before any counted window.
+fn tagged_matches_counter() {
+    use tessera_rl_core::Environment;
+    let multi = CountConfig {
+        action_heads: 2,
+        ..CountConfig::default()
+    };
+    for cfg in [CountConfig::default(), multi] {
+        assert_eq!(
+            Tagged::observation_space(&cfg),
+            common::Counter::observation_space(&cfg)
+        );
+        assert_eq!(
+            Tagged::action_space(&cfg),
+            common::Counter::action_space(&cfg)
+        );
+        assert_eq!(
+            Tagged::initial_agents(&cfg),
+            common::Counter::initial_agents(&cfg)
+        );
+    }
+    assert_eq!(Tagged::MAX_AGENTS, common::Counter::MAX_AGENTS);
+    assert_eq!(Tagged::TIER, common::Counter::TIER);
+    assert_eq!(Tagged::TURNS, common::Counter::TURNS);
+    assert_eq!(
+        Tagged::PERFECT_INFORMATION,
+        common::Counter::PERFECT_INFORMATION
+    );
+}
+
 #[test]
 fn test_alloc_diagnostics_count_attribute_truncate_and_guard() {
+    tagged_matches_counter();
     let options = PoolOptions {
         auto_reset: AutoReset::SameStep,
         chunk_size: NonZeroU32::new(1).unwrap(),
