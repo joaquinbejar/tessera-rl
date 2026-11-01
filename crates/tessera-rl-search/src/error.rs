@@ -13,6 +13,13 @@ pub enum SearchError {
     /// The scratch pool failed.
     #[error(transparent)]
     Engine(#[from] EngineError),
+    /// The evaluator failed or returned an invalid response.
+    #[error(transparent)]
+    Evaluator(#[from] crate::evaluator::EvaluatorError),
+    /// A terminal reward outside `[-1, 1]` or not finite (ADR-0043: the
+    /// scalar contract covers two-player zero-sum games).
+    #[error("a terminal reward is outside [-1, 1]")]
+    TerminalValue,
     /// Invalid options.
     #[error("invalid search option {option}: {reason}")]
     Options {

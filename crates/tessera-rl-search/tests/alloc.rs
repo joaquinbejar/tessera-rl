@@ -109,3 +109,47 @@ fn test_search_expand_evict_reroot_and_clear_do_not_allocate() {
     assert_eq!(n, 0, "the search pool allocated {n} times");
     assert_eq!(s.live_nodes(), 1);
 }
+
+struct Uniform;
+
+impl tessera_rl_search::Evaluator<Connect4> for Uniform {
+    fn evaluate(
+        &mut self,
+        _: &[tessera_rl_engine::Record<Connect4>],
+        priors: &mut [f64],
+        values: &mut [f64],
+    ) -> Result<(), tessera_rl_search::EvaluatorError> {
+        priors.fill(1.0 / 7.0);
+        values.fill(0.0);
+        Ok(())
+    }
+}
+
+#[test]
+fn test_search_mcts_run_with_eviction_and_noise_does_not_allocate() {
+    let mut p = EnvPool::<Connect4, Masked>::with_masks(
+        Connect4Config {},
+        PoolOptions::new(NonZeroU32::MIN, Seed::new(1)),
+    )
+    .unwrap();
+    p.reset_all(Reseed::Keep).unwrap();
+    let root = p.snapshot(0).unwrap();
+    let mut o = SearchOptions::new(NonZeroU32::new(256).unwrap(), NonZeroU32::new(8).unwrap());
+    o.eviction = Eviction::Oldest;
+    let pool = SearchPool::new(Connect4Config {}, o, &root, EnvPool::with_masks).unwrap();
+    let mut cfg = tessera_rl_search::PuctConfig::default();
+    cfg.simulations = 600;
+    cfg.noise = Some(tessera_rl_search::RootNoise {
+        alpha: 0.3,
+        epsilon: 0.25,
+    });
+    let mut m = tessera_rl_search::Mcts::new(pool, cfg).unwrap();
+    let n = allocations(|| {
+        for _ in 0..3 {
+            m.run(&mut Uniform).unwrap();
+            std::hint::black_box(m.select_action(1.0).unwrap());
+            m.pool_mut().set_root(&root).unwrap();
+        }
+    });
+    assert_eq!(n, 0, "a search call allocated {n} times");
+}

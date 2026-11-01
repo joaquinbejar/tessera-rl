@@ -98,6 +98,9 @@ impl StreamId {
     pub const OPPONENT: Self = Self(2);
     /// Observation noise, used only through `ObsRng`.
     pub const OBS_NOISE: Self = Self(3);
+    /// Search: root noise and action sampling of a search call, keyed by
+    /// the search call counter (ADR-0043). Never used by a step.
+    pub const SEARCH: Self = Self(4);
     /// The first id available to environments.
     pub const FIRST_ENV: u32 = 16;
 
