@@ -5,10 +5,14 @@ extension module (``_native.pyd``) has unwind data, and it is the
 template's (one stack allocation of 88 bytes, no frame register).
 
 The .pyd exports only ``PyInit__native``, so the thunk addresses come from
-the linker map. Build with it, for example::
+the linker map. Build with it, and with an explicit target: without one,
+``RUSTFLAGS`` also applies to the build scripts, whose links then write
+the same map file and fail with LNK1104. With a target, Cargo applies
+``RUSTFLAGS`` to the target crates only::
 
+    set CARGO_BUILD_TARGET=x86_64-pc-windows-msvc
     set RUSTFLAGS=-C link-arg=/MAP:target\\native.map
-    maturin build --release
+    maturin build --release --target x86_64-pc-windows-msvc
 
 then::
 

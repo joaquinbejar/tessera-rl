@@ -410,6 +410,15 @@ def derive(results: dict, derived: list[dict], method: dict) -> dict:
 # -- qualification ------------------------------------------------------------
 
 
+def load_average() -> list[float] | None:
+    """The 1, 5 and 15 minute load averages, or None where the OS has none
+    (Windows): a run without it is never valid for claims."""
+    try:
+        return list(os.getloadavg())
+    except (AttributeError, OSError):
+        return None
+
+
 def qualify(report: dict, qualification: dict | None) -> list[str]:
     """Reasons the report is NOT valid for claims; empty means valid."""
     reasons = []
@@ -437,6 +446,9 @@ def qualify(report: dict, qualification: dict | None) -> list[str]:
         reasons.append("the native module is not a release build")
     if not report["pinning"]["applied"]:
         reasons.append("pinning not applied")
+    load = report.get("load_average") or {}
+    if load.get("before") is None or load.get("after") is None:
+        reasons.append("load average unavailable on this OS")
     cpu_id = record.get("cpu_id") if record else None
     for name, r in report["results"].items():
         runs = r.get("runs", [])
@@ -495,7 +507,7 @@ def run(
     if not configs:
         raise ValueError(f"no configuration matches {only!r}")
     pin = pinning(machine)
-    load_before = os.getloadavg()
+    load_before = load_average()
     runner = runner_path(profile) if any(c["kind"] == "rust" for c in configs) else None
     order_rng = np.random.default_rng(method["bootstrap_seed"])
     per_run: dict[str, list] = {c["name"]: [] for c in configs}
@@ -518,7 +530,7 @@ def run(
         "pinning": pin,
         "qualification": qualification,
         "environment": environment(machine),
-        "load_average": {"before": list(load_before), "after": list(os.getloadavg())},
+        "load_average": {"before": load_before, "after": load_average()},
         "results": results,
         "derived": derive(results, spec.get("derived", []), method),
     }

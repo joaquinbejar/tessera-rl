@@ -40,11 +40,26 @@ class _Ucrt:
         self.crt._controlfp_s.restype = ctypes.c_int
         self.crt._clearfp.restype = ctypes.c_uint
         self.crt._statusfp.restype = ctypes.c_uint
+        self.crt.feraiseexcept.argtypes = [ctypes.c_int]
+        self.crt.feraiseexcept.restype = ctypes.c_int
 
     def _control(self, new=0, mask=0):
+        # _controlfp_s clears the MXCSR status flags when it writes: keep
+        # the caller's sticky flags as <fenv.h> calls do, by raising them
+        # again afterwards.
+        flags = self.crt._statusfp() if mask else 0
         cur = ctypes.c_uint(0)
         assert self.crt._controlfp_s(ctypes.byref(cur), new, mask) == 0
+        if flags & ~self.crt._statusfp():
+            self._raise(flags)
         return cur.value
+
+    def _raise(self, flags):
+        """Raises the sticky status flags ``flags`` with UCRT's C99
+        ``feraiseexcept``, whose ``FE_*`` values are the ``_SW_*`` ones
+        (NumPy is no help here: it clears the status flags around its
+        operations)."""
+        assert self.crt.feraiseexcept(flags) == 0
 
     def fesetround(self, mode):
         self._control(mode, self.MCW_RC)
@@ -58,12 +73,7 @@ class _Ucrt:
         return 0
 
     def feraiseexcept(self, flags):
-        # Raise through an operation, as the host would: 1/0 in SSE.
-        if flags & 0x08:
-            import numpy
-
-            with numpy.errstate(divide="ignore"):
-                numpy.float64(1.0) / numpy.float64(0.0)
+        self._raise(flags)
         return 0
 
     def fetestexcept(self, flags):
