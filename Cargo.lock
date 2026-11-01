@@ -829,6 +829,7 @@ dependencies = [
  "tessera-rl-games",
  "tessera-rl-macros",
  "tessera-rl-num",
+ "tessera-rl-search",
 ]
 
 [[package]]
@@ -937,6 +938,20 @@ dependencies = [
  "tessera-rl-engine",
  "tessera-rl-games",
  "tessera-rl-num",
+]
+
+[[package]]
+name = "tessera-rl-search"
+version = "0.1.0"
+dependencies = [
+ "tessera-rl-classic",
+ "tessera-rl-connect4-ref",
+ "tessera-rl-core",
+ "tessera-rl-engine",
+ "tessera-rl-games",
+ "tessera-rl-macros",
+ "tessera-rl-num",
+ "thiserror",
 ]
 
 [[package]]

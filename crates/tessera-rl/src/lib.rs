@@ -18,3 +18,4 @@ pub use tessera_rl_engine as engine;
 pub use tessera_rl_games as games;
 pub use tessera_rl_macros as macros;
 pub use tessera_rl_num as num;
+pub use tessera_rl_search as search;
