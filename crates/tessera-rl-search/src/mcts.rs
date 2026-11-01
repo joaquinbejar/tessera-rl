@@ -326,7 +326,10 @@ where
             .get(idx(root))
             .ok_or(SearchError::TerminalNode)?;
         let agent = SearchPool::<E, M>::single_actor(&record)?;
-        self.pool.scratch.restore(0, &record)?;
+        // Every scratch row gets the root, by `restore_all`, which also
+        // recovers a scratch pool poisoned by an earlier failed call (C3).
+        self.pool.load_records.fill(record);
+        self.pool.scratch.restore_all(&self.pool.load_records)?;
         let width = idx(self.pool.actions);
         let masks = self.pool.scratch.outputs().masks();
         for (a, l) in self.legal.iter_mut().enumerate() {
