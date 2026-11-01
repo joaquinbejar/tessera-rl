@@ -134,6 +134,20 @@ pub(crate) fn make_tag(g: Gil, kwargs: Option<Ref<'_>>) -> CResult<Inner> {
     Ok(Inner::new(ops, borrowed))
 }
 
+/// `make_connect4(**kwargs)`: the pool of a Connect Four environment
+/// object. A game lasts at most 42 plies; `max_episode_steps` defaults to
+/// 64, so it never truncates a game.
+pub(crate) fn make_connect4(g: Gil, kwargs: Option<Ref<'_>>) -> CResult<Inner> {
+    let kw = Kwargs::parse(g, kwargs)?;
+    kw.check(g, &[&POOL_KEYS, &["outputs"]])?;
+    let borrowed = borrowed(g, &kw)?;
+    let args = pool_args(g, &kw, 64)?;
+    let ops = g
+        .detach(|| crate::env::connect4(&args))
+        .map_err(|e| to_py(g, e))?;
+    Ok(Inner::new(ops, borrowed))
+}
+
 fn int(g: Gil, v: usize) -> CResult<Mine> {
     capi::int_u64(g, u64::try_from(v).unwrap_or(u64::MAX))
 }
@@ -160,6 +174,7 @@ pub(crate) fn layout(g: Gil, inner: &Inner) -> CResult<Mine> {
             &capi::int_u64(g, l.action_choices.into())?,
         )?;
         capi::dict_set(g, &d, c"mask_len", &int(g, l.mask_len)?)?;
+        capi::dict_set(g, &d, c"turns", &capi::string(g, l.turns)?)?;
         let mode = if inner.borrowed() {
             "borrowed"
         } else {
@@ -318,6 +333,7 @@ fn outputs_of(g: Gil, inner: &Inner, ops: &dyn PoolOps) -> CResult<Mine> {
         (c"agent_terminated", &o.agent_terminated),
         (c"agent_truncated", &o.agent_truncated),
         (c"alive", &o.alive),
+        (c"acting", &o.acting),
         (c"episode_terminated", &o.episode_terminated),
         (c"episode_truncated", &o.episode_truncated),
         (c"masks", &o.masks),

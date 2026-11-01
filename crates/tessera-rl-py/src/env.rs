@@ -9,11 +9,12 @@ use core::num::{NonZeroU32, NonZeroUsize};
 use tessera_rl_classic::{CartPole, CartPoleConfig, Tag, TagConfig};
 use tessera_rl_core::encoding::decode_from_slice;
 use tessera_rl_core::space::{BoxBounds, DType, Space};
-use tessera_rl_core::{DecodeError, Environment, Validate};
+use tessera_rl_core::{DecodeError, Environment, TurnStructure, Validate};
 use tessera_rl_engine::{
     ActionInput, AutoReset, DecodedRecord, EngineError, EnvPool, MAX_LEAVES, MaskProvider, Masked,
     NoMasks, PoolOptions, Reseed, SyncOptions,
 };
+use tessera_rl_games::{Connect4, Connect4Config};
 use tessera_rl_num::identity::Seed;
 
 /// Errors of the bindings: the engine's, plus record decoding and argument
@@ -69,6 +70,9 @@ pub(crate) struct Layout {
     pub(crate) leaves: Vec<Leaf>,
     pub(crate) action_choices: u32,
     pub(crate) mask_len: usize,
+    /// Turn structure (ADR-0013): `"simultaneous"`, `"sequential"` or
+    /// `"mixed"`.
+    pub(crate) turns: &'static str,
     /// Terminal observations are written (`same_step` auto-reset).
     pub(crate) terminal: bool,
 }
@@ -84,6 +88,8 @@ pub(crate) struct Owned {
     pub(crate) agent_terminated: Vec<u8>,
     pub(crate) agent_truncated: Vec<u8>,
     pub(crate) alive: Vec<u8>,
+    /// Agents whose action this step reads (ADR-0013).
+    pub(crate) acting: Vec<u8>,
     /// `[N]`.
     pub(crate) episode_terminated: Vec<u8>,
     pub(crate) episode_truncated: Vec<u8>,
@@ -215,6 +221,11 @@ where
                 leaves: obs,
                 action_choices,
                 mask_len,
+                turns: match E::TURNS {
+                    TurnStructure::Simultaneous => "simultaneous",
+                    TurnStructure::Sequential => "sequential",
+                    TurnStructure::Mixed => "mixed",
+                },
                 terminal,
             },
         })
@@ -304,6 +315,7 @@ where
             agent_terminated: flags(out.agent_terminated()),
             agent_truncated: flags(out.agent_truncated()),
             alive: flags(out.alive()),
+            acting: flags(out.acting()),
             episode_terminated: flags(out.episode_terminated()),
             episode_truncated: flags(out.episode_truncated()),
             masks: flags(out.masks()),
@@ -424,6 +436,19 @@ pub(crate) fn tag(args: &PoolArgs, fields: &TagFields) -> Result<Box<dyn PoolOps
     let same_step = options.auto_reset == AutoReset::SameStep;
     let pool = with_workers(
         EnvPool::<Tag, Masked>::with_masks(cfg.clone(), options)?,
+        args.workers,
+    )?;
+    Ok(Box::new(Pooled::new(&cfg, pool, n, same_step)?))
+}
+
+/// A Connect Four pool (`tessera/Connect4-v1`), with masks and
+/// Sequential turns.
+pub(crate) fn connect4(args: &PoolArgs) -> Result<Box<dyn PoolOps>, BindError> {
+    let cfg = Connect4Config {};
+    let (options, n) = options(args)?;
+    let same_step = options.auto_reset == AutoReset::SameStep;
+    let pool = with_workers(
+        EnvPool::<Connect4, Masked>::with_masks(cfg.clone(), options)?,
         args.workers,
     )?;
     Ok(Box::new(Pooled::new(&cfg, pool, n, same_step)?))

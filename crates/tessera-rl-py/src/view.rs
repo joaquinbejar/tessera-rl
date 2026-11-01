@@ -130,6 +130,10 @@ pub(crate) fn view_set(layout: &Layout) -> Option<ViewSet> {
             spec(OutputField::Alive, OutputDtype::Bool8, &per_agent)?,
         ),
         (
+            "acting",
+            spec(OutputField::Acting, OutputDtype::Bool8, &per_agent)?,
+        ),
+        (
             "episode_terminated",
             spec(OutputField::EpisodeTerminated, OutputDtype::Bool8, &[n])?,
         ),
@@ -172,6 +176,7 @@ mod tests {
             }],
             action_choices: 2,
             mask_len: 5,
+            turns: "simultaneous",
             terminal: true,
         };
         let set = view_set(&layout).unwrap();

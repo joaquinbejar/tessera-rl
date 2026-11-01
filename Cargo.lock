@@ -934,6 +934,7 @@ dependencies = [
  "tessera-rl-classic",
  "tessera-rl-core",
  "tessera-rl-engine",
+ "tessera-rl-games",
  "tessera-rl-num",
 ]
 
