@@ -21,6 +21,7 @@ tessera-rl-macros.workspace = true
 tessera-rl-engine.workspace = true
 tessera-rl-classic.workspace = true
 tessera-rl-games.workspace = true
+tessera-rl-search.workspace = true
 
 [lints]
 workspace = true

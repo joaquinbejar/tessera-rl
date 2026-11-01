@@ -1,0 +1,871 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
+//! The bounded search pool (ADR-0043 section 1): a fixed arena of node
+//! records and edges, expanded in batch through a scratch engine pool.
+//!
+//! Expansion is plan, step, commit: the plan validates every request and
+//! computes the evictions without touching the tree; the scratch pool then
+//! steps the children; only then is the tree changed. An error at any
+//! point before the commit leaves the tree and its counters unchanged.
+
+use core::mem::size_of;
+use core::num::NonZeroU32;
+
+use tessera_rl_core::encoding::{Encoder, HashSink};
+use tessera_rl_core::space::Space;
+use tessera_rl_core::{AdaptiveValues, Environment, RecordLayout};
+use tessera_rl_engine::{
+    ActionInput, AutoReset, EngineError, EnvPool, MaskProvider, PoolOptions, Record, Reseed,
+};
+use tessera_rl_num::identity::Seed;
+
+use crate::error::SearchError;
+use crate::handle::{EdgeStats, NodeHandle};
+use crate::options::{Eviction, SearchOptions};
+
+/// No node: an unexpanded edge, or the root's parent.
+pub(crate) const NONE: u32 = u32::MAX;
+
+/// One node slot.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Node {
+    /// The parent slot, `NONE` for the root.
+    pub(crate) parent: u32,
+    /// The parent's action that leads here.
+    pub(crate) action: u32,
+    /// Bumped when the slot is freed; `u32::MAX` retires the slot.
+    pub(crate) generation: u32,
+    /// Allocation number: the eviction order.
+    pub(crate) alloc: u64,
+    /// Handles held on the node (pending leaves included).
+    pub(crate) holds: u32,
+    pub(crate) live: bool,
+    /// The step that made the node ended the episode.
+    pub(crate) terminal: bool,
+}
+
+impl Node {
+    const FREE: Self = Self {
+        parent: NONE,
+        action: 0,
+        generation: 0,
+        alloc: 0,
+        holds: 0,
+        live: false,
+        terminal: false,
+    };
+}
+
+/// One edge: a parent's action.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct Edge {
+    pub(crate) child: u32,
+    pub(crate) visits: u32,
+    pub(crate) virtual_loss: u32,
+    pub(crate) value: f64,
+    pub(crate) prior: f64,
+}
+
+impl Edge {
+    pub(crate) const EMPTY: Self = Self {
+        child: NONE,
+        visits: 0,
+        virtual_loss: 0,
+        value: 0.0,
+        prior: 0.0,
+    };
+}
+
+/// A planned child: its parent slot, action and acting agent.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Planned {
+    pub(crate) parent: u32,
+    pub(crate) action: u32,
+    pub(crate) agent: usize,
+}
+
+/// A bounded tree of environment records for search (ADR-0043).
+///
+/// Every node holds the full record of its instance; its children are
+/// made by restoring it into a scratch pool and stepping one action. The
+/// scratch pool runs with [`AutoReset::Disabled`], so a child whose step
+/// ends the episode keeps its terminal state: it is marked terminal and
+/// cannot be expanded.
+pub struct SearchPool<E: Environment, M: MaskProvider<E>> {
+    pub(crate) records: Vec<Record<E>>,
+    pub(crate) nodes: Vec<Node>,
+    pub(crate) edges: Vec<Edge>,
+    /// Rewards of the step that made each node, `[capacity, agents]`.
+    pub(crate) rewards: Vec<f32>,
+    /// Free slots; the next allocation pops the last.
+    pub(crate) free: Vec<u32>,
+    pub(crate) root: u32,
+    pub(crate) next_alloc: u64,
+    pub(crate) actions: u32,
+    pub(crate) agents: usize,
+    pub(crate) capacity: u32,
+    pub(crate) batch: u32,
+    pub(crate) eviction: Eviction,
+    pub(crate) scratch: EnvPool<E, M>,
+    // Per-call working storage, allocated at construction.
+    pub(crate) protected: Vec<bool>,
+    pub(crate) doomed: Vec<bool>,
+    pub(crate) stack: Vec<u32>,
+    pub(crate) evict_roots: Vec<u32>,
+    pub(crate) planned: Vec<Planned>,
+    pub(crate) act_buf: Vec<i32>,
+    /// The stepped children's records, taken before the commit.
+    pub(crate) child_records: Vec<Record<E>>,
+}
+
+fn options_error(option: &'static str, reason: &'static str) -> SearchError {
+    SearchError::Options { option, reason }
+}
+
+fn idx(v: u32) -> usize {
+    usize::try_from(v).unwrap_or(usize::MAX)
+}
+
+impl<E, M> SearchPool<E, M>
+where
+    E: Environment<
+            Config: Sync,
+            State: Send,
+            Header: Send + RecordLayout<Adaptive: AdaptiveValues<E::Config>>,
+        >,
+    M: MaskProvider<E>,
+{
+    /// Bytes of node storage per slot: the record, the node, one edge per
+    /// action and one reward per agent.
+    #[must_use]
+    pub fn bytes_per_node(actions: u32) -> u64 {
+        let per = size_of::<Record<E>>()
+            + size_of::<Node>()
+            + idx(actions).saturating_mul(size_of::<Edge>())
+            + E::MAX_AGENTS.saturating_mul(size_of::<f32>());
+        u64::try_from(per).unwrap_or(u64::MAX)
+    }
+
+    /// A pool rooted at `root`, a record of an instance with config `cfg`.
+    /// `build` makes the scratch pool from the options it is given (for
+    /// example `EnvPool::with_masks`).
+    ///
+    /// # Errors
+    ///
+    /// [`SearchError::ImperfectInformation`] when the environment does
+    /// not have perfect information (ADR-0035); a non-discrete action
+    /// space; a budget overrun (the error names the bytes per node); a
+    /// scratch pool error.
+    pub fn new(
+        cfg: E::Config,
+        options: SearchOptions,
+        root: &Record<E>,
+        build: impl FnOnce(E::Config, PoolOptions) -> Result<EnvPool<E, M>, EngineError>,
+    ) -> Result<Self, SearchError> {
+        if !E::PERFECT_INFORMATION {
+            return Err(SearchError::ImperfectInformation);
+        }
+        let Ok(Space::Discrete { n: actions }) = E::action_space(&cfg) else {
+            return Err(SearchError::UnsupportedActions);
+        };
+        if options.capacity.get() == NONE {
+            return Err(options_error("capacity", "must be below u32::MAX"));
+        }
+        let capacity = options.capacity.get();
+        let batch = options.batch.get();
+        if batch > capacity {
+            return Err(options_error("batch", "must not exceed the capacity"));
+        }
+        let per_node = Self::bytes_per_node(actions);
+        let bytes = per_node.saturating_mul(u64::from(capacity));
+        if bytes > options.budget_bytes {
+            return Err(SearchError::Budget {
+                bytes,
+                per_node,
+                budget: options.budget_bytes,
+            });
+        }
+        let pool_options = PoolOptions {
+            auto_reset: AutoReset::Disabled,
+            ..PoolOptions::new(
+                NonZeroU32::new(batch).unwrap_or(NonZeroU32::MIN),
+                Seed::new(0),
+            )
+        };
+        let mut scratch = build(cfg, pool_options)?;
+        scratch.reset_all(Reseed::Keep)?;
+        let cap = idx(capacity);
+        let agents = E::MAX_AGENTS;
+        let mut pool = Self {
+            records: vec![*root; cap],
+            nodes: vec![Node::FREE; cap],
+            edges: vec![Edge::EMPTY; cap.saturating_mul(idx(actions))],
+            rewards: vec![0.0; cap.saturating_mul(agents)],
+            free: (0..capacity).rev().collect(),
+            root: NONE,
+            next_alloc: 0,
+            actions,
+            agents,
+            capacity,
+            batch,
+            eviction: options.eviction,
+            scratch,
+            protected: vec![false; cap],
+            doomed: vec![false; cap],
+            stack: Vec::with_capacity(cap),
+            evict_roots: Vec::with_capacity(cap),
+            planned: Vec::with_capacity(idx(batch)),
+            act_buf: vec![0; idx(batch).saturating_mul(agents)],
+            child_records: vec![*root; idx(batch)],
+        };
+        pool.set_root(root)?;
+        Ok(pool)
+    }
+
+    /// Node slots, the root included.
+    #[must_use]
+    pub const fn capacity(&self) -> u32 {
+        self.capacity
+    }
+
+    /// Children stepped per expansion call.
+    #[must_use]
+    pub const fn batch(&self) -> u32 {
+        self.batch
+    }
+
+    /// Actions per node.
+    #[must_use]
+    pub const fn actions(&self) -> u32 {
+        self.actions
+    }
+
+    /// Live nodes, the root included.
+    #[must_use]
+    pub fn live_nodes(&self) -> usize {
+        self.nodes.iter().filter(|n| n.live).count()
+    }
+
+    /// The root.
+    #[must_use]
+    pub fn root(&self) -> NodeHandle {
+        NodeHandle {
+            slot: self.root,
+            generation: self.node(self.root).map_or(0, |n| n.generation),
+        }
+    }
+
+    pub(crate) fn node(&self, slot: u32) -> Option<&Node> {
+        self.nodes.get(idx(slot))
+    }
+
+    fn node_mut(&mut self, slot: u32) -> Option<&mut Node> {
+        self.nodes.get_mut(idx(slot))
+    }
+
+    pub(crate) fn edge_index(&self, slot: u32, action: u32) -> usize {
+        idx(slot)
+            .saturating_mul(idx(self.actions))
+            .saturating_add(idx(action))
+    }
+
+    pub(crate) fn edge(&self, slot: u32, action: u32) -> Option<&Edge> {
+        self.edges.get(self.edge_index(slot, action))
+    }
+
+    fn edge_mut(&mut self, slot: u32, action: u32) -> Option<&mut Edge> {
+        let i = self.edge_index(slot, action);
+        self.edges.get_mut(i)
+    }
+
+    /// The live slot of `h`.
+    ///
+    /// # Errors
+    ///
+    /// [`SearchError::StaleHandle`] if the slot was freed or reused.
+    pub fn resolve(&self, h: NodeHandle) -> Result<u32, SearchError> {
+        match self.node(h.slot) {
+            Some(n) if n.live && n.generation == h.generation => Ok(h.slot),
+            _ => Err(SearchError::StaleHandle {
+                slot: h.slot,
+                generation: h.generation,
+            }),
+        }
+    }
+
+    fn check_action(&self, action: u32) -> Result<(), SearchError> {
+        if action >= self.actions {
+            return Err(SearchError::ActionOutOfRange {
+                action,
+                actions: self.actions,
+            });
+        }
+        Ok(())
+    }
+
+    fn handle_of(&self, slot: u32) -> NodeHandle {
+        NodeHandle {
+            slot,
+            generation: self.node(slot).map_or(0, |n| n.generation),
+        }
+    }
+
+    /// The record of node `h`.
+    ///
+    /// # Errors
+    ///
+    /// A stale handle.
+    pub fn record(&self, h: NodeHandle) -> Result<&Record<E>, SearchError> {
+        let slot = self.resolve(h)?;
+        self.records.get(idx(slot)).ok_or(SearchError::StaleHandle {
+            slot: h.slot,
+            generation: h.generation,
+        })
+    }
+
+    /// Whether the step that made `h` ended the episode (a terminal node
+    /// has no children).
+    ///
+    /// # Errors
+    ///
+    /// A stale handle.
+    pub fn is_terminal(&self, h: NodeHandle) -> Result<bool, SearchError> {
+        let slot = self.resolve(h)?;
+        Ok(self.node(slot).is_some_and(|n| n.terminal))
+    }
+
+    /// The rewards of the step that made `h`, one per agent (zero for the
+    /// root).
+    ///
+    /// # Errors
+    ///
+    /// A stale handle.
+    pub fn rewards(&self, h: NodeHandle) -> Result<&[f32], SearchError> {
+        let slot = self.resolve(h)?;
+        let from = idx(slot).saturating_mul(self.agents);
+        Ok(self
+            .rewards
+            .get(from..from.saturating_add(self.agents))
+            .unwrap_or(&[]))
+    }
+
+    /// The parent of `h` and the action that leads to `h`; `None` for the
+    /// root.
+    ///
+    /// # Errors
+    ///
+    /// A stale handle.
+    pub fn parent(&self, h: NodeHandle) -> Result<Option<(NodeHandle, u32)>, SearchError> {
+        let slot = self.resolve(h)?;
+        Ok(self
+            .node(slot)
+            .filter(|n| n.parent != NONE)
+            .map(|n| (self.handle_of(n.parent), n.action)))
+    }
+
+    /// The child of `h` through `action`, if expanded.
+    ///
+    /// # Errors
+    ///
+    /// A stale handle or an action out of range.
+    pub fn child(&self, h: NodeHandle, action: u32) -> Result<Option<NodeHandle>, SearchError> {
+        let slot = self.resolve(h)?;
+        self.check_action(action)?;
+        Ok(self
+            .edge(slot, action)
+            .filter(|e| e.child != NONE)
+            .map(|e| self.handle_of(e.child)))
+    }
+
+    /// The statistics of edge `(h, action)`.
+    ///
+    /// # Errors
+    ///
+    /// A stale handle or an action out of range.
+    pub fn edge_stats(&self, h: NodeHandle, action: u32) -> Result<EdgeStats, SearchError> {
+        let slot = self.resolve(h)?;
+        self.check_action(action)?;
+        Ok(self
+            .edge(slot, action)
+            .map(|e| EdgeStats {
+                visits: e.visits,
+                value: e.value,
+                virtual_loss: e.virtual_loss,
+                prior: e.prior,
+                expanded: e.child != NONE,
+            })
+            .unwrap_or_default())
+    }
+
+    /// Adds `visits` and `value` to edge `(h, action)`: the backup
+    /// primitive of the search helper.
+    ///
+    /// # Errors
+    ///
+    /// A stale handle, an action out of range, or a visit count that
+    /// would overflow (nothing is changed).
+    pub fn add_visits(
+        &mut self,
+        h: NodeHandle,
+        action: u32,
+        visits: u32,
+        value: f64,
+    ) -> Result<(), SearchError> {
+        let slot = self.resolve(h)?;
+        self.check_action(action)?;
+        let e = self
+            .edge_mut(slot, action)
+            .ok_or(SearchError::VisitsExhausted)?;
+        e.visits = e
+            .visits
+            .checked_add(visits)
+            .ok_or(SearchError::VisitsExhausted)?;
+        e.value += value;
+        Ok(())
+    }
+
+    /// Sets the priors of `h`'s edges, one per action.
+    ///
+    /// # Errors
+    ///
+    /// A stale handle, or a slice that is not one prior per action.
+    pub fn set_priors(&mut self, h: NodeHandle, priors: &[f64]) -> Result<(), SearchError> {
+        let slot = self.resolve(h)?;
+        if priors.len() != idx(self.actions) {
+            return Err(SearchError::OutputLength {
+                expected: idx(self.actions),
+                got: priors.len(),
+            });
+        }
+        let from = self.edge_index(slot, 0);
+        let to = from.saturating_add(priors.len());
+        if let Some(edges) = self.edges.get_mut(from..to) {
+            for (e, &p) in edges.iter_mut().zip(priors) {
+                e.prior = p;
+            }
+        }
+        Ok(())
+    }
+
+    /// Holds `h`: a held node, its subtree's holders and its ancestors are
+    /// never evicted. Pending leaves are held.
+    ///
+    /// # Errors
+    ///
+    /// A stale handle, or a hold count that would overflow.
+    pub fn hold(&mut self, h: NodeHandle) -> Result<(), SearchError> {
+        let slot = self.resolve(h)?;
+        let n = self.node_mut(slot).ok_or(SearchError::HoldsExhausted)?;
+        n.holds = n.holds.checked_add(1).ok_or(SearchError::HoldsExhausted)?;
+        Ok(())
+    }
+
+    /// Releases one hold of `h`.
+    ///
+    /// # Errors
+    ///
+    /// A stale handle, or a node that is not held.
+    pub fn release(&mut self, h: NodeHandle) -> Result<(), SearchError> {
+        let slot = self.resolve(h)?;
+        let n = self.node_mut(slot).ok_or(SearchError::NotHeld)?;
+        n.holds = n.holds.checked_sub(1).ok_or(SearchError::NotHeld)?;
+        Ok(())
+    }
+
+    /// Frees one slot: its edges are cleared, its generation bumped, and
+    /// it returns to the free list unless the generation is exhausted,
+    /// which retires it.
+    pub(crate) fn free_slot(&mut self, slot: u32) {
+        let from = self.edge_index(slot, 0);
+        let to = from.saturating_add(idx(self.actions));
+        if let Some(edges) = self.edges.get_mut(from..to) {
+            edges.fill(Edge::EMPTY);
+        }
+        let Some(n) = self.node_mut(slot) else {
+            return;
+        };
+        let retired = n.generation == u32::MAX;
+        *n = Node {
+            generation: n.generation.saturating_add(1),
+            ..Node::FREE
+        };
+        if !retired {
+            self.free.push(slot);
+        }
+    }
+
+    /// Frees the subtree under `top` (with `top`) and reverts its parent
+    /// edge to unexpanded, keeping the edge's statistics.
+    pub(crate) fn free_subtree(&mut self, top: u32) {
+        if let Some(&Node { parent, action, .. }) = self.node(top)
+            && parent != NONE
+            && let Some(e) = self.edge_mut(parent, action)
+        {
+            e.child = NONE;
+        }
+        self.stack.clear();
+        self.stack.push(top);
+        while let Some(slot) = self.stack.pop() {
+            for a in 0..self.actions {
+                if let Some(&Edge { child, .. }) = self.edge(slot, a)
+                    && child != NONE
+                {
+                    self.stack.push(child);
+                }
+            }
+            self.free_slot(slot);
+        }
+    }
+
+    /// Marks `slot` and its ancestors protected.
+    pub(crate) fn protect_path(&mut self, slot: u32) {
+        let mut s = slot;
+        while let Some(flag) = self.protected.get_mut(idx(s)) {
+            if *flag {
+                break;
+            }
+            *flag = true;
+            s = self.nodes.get(idx(s)).map_or(NONE, |n| n.parent);
+        }
+    }
+
+    /// The first held live node outside the protected set, if any.
+    fn held_outside(&self) -> Option<u32> {
+        self.nodes
+            .iter()
+            .zip(&self.protected)
+            .position(|(n, &keep)| n.live && n.holds > 0 && !keep)
+            .and_then(|i| u32::try_from(i).ok())
+    }
+
+    /// Frees every live node outside the protected set, in slot order.
+    fn free_unprotected(&mut self) {
+        for slot in 0..self.capacity {
+            let live = self.node(slot).is_some_and(|n| n.live);
+            let keep = self.protected.get(idx(slot)).copied().unwrap_or(true);
+            if live && !keep {
+                self.free_slot(slot);
+            }
+        }
+    }
+
+    fn mark_subtree(&mut self, top: u32) {
+        self.protected.fill(false);
+        self.stack.clear();
+        self.stack.push(top);
+        while let Some(slot) = self.stack.pop() {
+            if let Some(flag) = self.protected.get_mut(idx(slot)) {
+                *flag = true;
+            }
+            for a in 0..self.actions {
+                if let Some(&Edge { child, .. }) = self.edge(slot, a)
+                    && child != NONE
+                {
+                    self.stack.push(child);
+                }
+            }
+        }
+    }
+
+    /// Makes `h` the root, keeping its subtree (subtree reuse) and freeing
+    /// every other node.
+    ///
+    /// # Errors
+    ///
+    /// A stale handle, or a held node outside the subtree (nothing is
+    /// freed).
+    pub fn reroot(&mut self, h: NodeHandle) -> Result<(), SearchError> {
+        let slot = self.resolve(h)?;
+        self.mark_subtree(slot);
+        if let Some(held) = self.held_outside() {
+            return Err(SearchError::Held { slot: held });
+        }
+        self.free_unprotected();
+        if let Some(n) = self.node_mut(slot) {
+            n.parent = NONE;
+            n.action = 0;
+        }
+        self.root = slot;
+        Ok(())
+    }
+
+    /// Frees every node but the root and clears the root's edges.
+    ///
+    /// # Errors
+    ///
+    /// A held node other than the root (nothing is freed).
+    pub fn clear(&mut self) -> Result<(), SearchError> {
+        self.protected.fill(false);
+        if let Some(flag) = self.protected.get_mut(idx(self.root)) {
+            *flag = true;
+        }
+        if let Some(held) = self.held_outside() {
+            return Err(SearchError::Held { slot: held });
+        }
+        self.free_unprotected();
+        let from = self.edge_index(self.root, 0);
+        let to = from.saturating_add(idx(self.actions));
+        if let Some(edges) = self.edges.get_mut(from..to) {
+            edges.fill(Edge::EMPTY);
+        }
+        Ok(())
+    }
+
+    /// Replaces the whole tree by a new root.
+    ///
+    /// # Errors
+    ///
+    /// A held node, an exhausted allocation counter, or no usable slot
+    /// (nothing is changed).
+    pub fn set_root(&mut self, record: &Record<E>) -> Result<NodeHandle, SearchError> {
+        self.protected.fill(false);
+        if let Some(held) = self.held_outside() {
+            return Err(SearchError::Held { slot: held });
+        }
+        let alloc = self.next_alloc;
+        let next = alloc.checked_add(1).ok_or(SearchError::CounterExhausted)?;
+        self.free_unprotected();
+        let Some(slot) = self.free.pop() else {
+            return Err(SearchError::CapacityExceeded {
+                capacity: self.capacity,
+            });
+        };
+        self.next_alloc = next;
+        let terminal = record.header().engine().pending_reset.get();
+        if let Some(n) = self.node_mut(slot) {
+            *n = Node {
+                alloc,
+                live: true,
+                terminal,
+                ..Node {
+                    generation: n.generation,
+                    ..Node::FREE
+                }
+            };
+        }
+        if let Some(r) = self.records.get_mut(idx(slot)) {
+            *r = *record;
+        }
+        let from = idx(slot).saturating_mul(self.agents);
+        if let Some(rw) = self.rewards.get_mut(from..from.saturating_add(self.agents)) {
+            rw.fill(0.0);
+        }
+        self.root = slot;
+        Ok(self.handle_of(slot))
+    }
+
+    /// The acting agent of a parent record: exactly one is required.
+    fn single_actor(record: &Record<E>) -> Result<usize, SearchError> {
+        let rows = record.header().agents();
+        let acting = rows.iter().filter(|r| r.acting.get()).count();
+        if acting != 1 {
+            return Err(SearchError::NotSingleActor { acting });
+        }
+        Ok(rows.iter().position(|r| r.acting.get()).unwrap_or(0))
+    }
+
+    /// Validates the requests into `self.planned`.
+    fn plan_requests(&mut self, requests: &[(NodeHandle, u32)]) -> Result<(), SearchError> {
+        self.planned.clear();
+        for (index, &(h, action)) in requests.iter().enumerate() {
+            let parent = self.resolve(h)?;
+            self.check_action(action)?;
+            if self.node(parent).is_some_and(|n| n.terminal) {
+                return Err(SearchError::TerminalNode);
+            }
+            if self.edge(parent, action).is_some_and(|e| e.child != NONE) {
+                return Err(SearchError::AlreadyExpanded { action });
+            }
+            if self
+                .planned
+                .iter()
+                .any(|p| p.parent == parent && p.action == action)
+            {
+                return Err(SearchError::DuplicateRequest { index });
+            }
+            let record = self
+                .records
+                .get(idx(parent))
+                .ok_or(SearchError::TerminalNode)?;
+            let agent = Self::single_actor(record)?;
+            self.planned.push(Planned {
+                parent,
+                action,
+                agent,
+            });
+        }
+        Ok(())
+    }
+
+    /// Restores the planned parents into the scratch pool and checks each
+    /// action against the parent's mask. Unused rows get the first
+    /// parent's record; their outputs are discarded.
+    fn load_scratch(&mut self) -> Result<(), SearchError> {
+        let Some(first) = self.planned.first().map(|p| p.parent) else {
+            return Ok(());
+        };
+        for row in 0..self.batch {
+            let parent = self.planned.get(idx(row)).map_or(first, |p| p.parent);
+            let record = self.records.get(idx(parent)).copied();
+            if let Some(record) = record {
+                self.scratch.restore(row, &record)?;
+            }
+        }
+        let masks = self.scratch.outputs().masks();
+        if !masks.is_empty() {
+            let width = idx(self.actions);
+            for (row, p) in self.planned.iter().enumerate() {
+                let at = (row * self.agents + p.agent) * width + idx(p.action);
+                if !masks.get(at).is_some_and(|m| m.get()) {
+                    return Err(SearchError::IllegalAction { action: p.action });
+                }
+            }
+        }
+        self.act_buf.fill(0);
+        for (row, p) in self.planned.iter().enumerate() {
+            if let Some(a) = self.act_buf.get_mut(row * self.agents + p.agent) {
+                *a = i32::try_from(p.action).unwrap_or(0);
+            }
+        }
+        Ok(())
+    }
+
+    /// Expands one child per request `(parent, action)`, stepping them in
+    /// one batch, and writes their handles into `out`.
+    ///
+    /// # Errors
+    ///
+    /// Any invalid request (stale handle, action out of range or illegal,
+    /// terminal parent, edge already expanded, repeated edge, not one
+    /// acting agent), too many requests, no free slot (strict) or nothing
+    /// evictable, an exhausted counter, or a scratch pool error. On error
+    /// the tree and its counters are unchanged.
+    pub fn expand(
+        &mut self,
+        requests: &[(NodeHandle, u32)],
+        out: &mut [NodeHandle],
+    ) -> Result<(), SearchError> {
+        if requests.len() > idx(self.batch) {
+            return Err(SearchError::BatchTooLarge {
+                requests: requests.len(),
+                batch: self.batch,
+            });
+        }
+        if out.len() != requests.len() {
+            return Err(SearchError::OutputLength {
+                expected: requests.len(),
+                got: out.len(),
+            });
+        }
+        if requests.is_empty() {
+            return Ok(());
+        }
+        // Plan: nothing below changes the tree until the commit.
+        self.plan_requests(requests)?;
+        let n = u64::try_from(requests.len()).unwrap_or(u64::MAX);
+        let next = self
+            .next_alloc
+            .checked_add(n)
+            .ok_or(SearchError::CounterExhausted)?;
+        self.plan_evictions(requests.len())?;
+        self.load_scratch()?;
+        // Step: the scratch pool only.
+        self.scratch.step(ActionInput {
+            discrete: &self.act_buf,
+            continuous: &[],
+        })?;
+        for row in 0..self.planned.len() {
+            let record = self.scratch.snapshot(u32::try_from(row).unwrap_or(0))?;
+            if let Some(r) = self.child_records.get_mut(row) {
+                *r = record;
+            }
+        }
+        // Commit: infallible from here.
+        self.commit_evictions();
+        let base = self.next_alloc;
+        self.next_alloc = next;
+        for (row, handle) in out.iter_mut().enumerate() {
+            let Some(p) = self.planned.get(row).copied() else {
+                continue;
+            };
+            let Some(slot) = self.free.pop() else {
+                continue;
+            };
+            let record = self.child_records.get(row).copied();
+            let outputs = self.scratch.outputs();
+            let terminal = outputs
+                .episode_terminated()
+                .get(row)
+                .is_some_and(|f| f.get())
+                || outputs
+                    .episode_truncated()
+                    .get(row)
+                    .is_some_and(|f| f.get());
+            let from = row * self.agents;
+            let to = slot_rewards(slot, self.agents);
+            if let (Some(src), Some(dst)) = (
+                outputs.rewards().get(from..from + self.agents),
+                self.rewards.get_mut(to..to + self.agents),
+            ) {
+                dst.copy_from_slice(src);
+            }
+            if let (Some(r), Some(record)) = (self.records.get_mut(idx(slot)), record) {
+                *r = record;
+            }
+            if let Some(node) = self.nodes.get_mut(idx(slot)) {
+                *node = Node {
+                    parent: p.parent,
+                    action: p.action,
+                    generation: node.generation,
+                    alloc: base + u64::try_from(row).unwrap_or(0),
+                    holds: 0,
+                    live: true,
+                    terminal,
+                };
+            }
+            if let Some(e) = self.edge_mut(p.parent, p.action) {
+                e.child = slot;
+            }
+            *handle = self.handle_of(slot);
+        }
+        Ok(())
+    }
+
+    /// A digest of the whole tree (records, nodes, edges, rewards, the free
+    /// list, the root and the counter), for tests of atomicity and of
+    /// determinism.
+    #[must_use]
+    pub fn tree_hash(&self) -> u64 {
+        let mut out = Encoder::new(HashSink::new());
+        for r in &self.records {
+            out.write_bytes(&r.hash().get().to_le_bytes());
+        }
+        for n in &self.nodes {
+            for v in [n.parent, n.action, n.generation, n.holds] {
+                out.write_bytes(&v.to_le_bytes());
+            }
+            out.write_bytes(&n.alloc.to_le_bytes());
+            out.write_bytes(&[u8::from(n.live), u8::from(n.terminal)]);
+        }
+        for e in &self.edges {
+            for v in [e.child, e.visits, e.virtual_loss] {
+                out.write_bytes(&v.to_le_bytes());
+            }
+            out.write_bytes(&e.value.to_bits().to_le_bytes());
+            out.write_bytes(&e.prior.to_bits().to_le_bytes());
+        }
+        for r in &self.rewards {
+            out.write_bytes(&r.to_bits().to_le_bytes());
+        }
+        for f in &self.free {
+            out.write_bytes(&f.to_le_bytes());
+        }
+        out.write_bytes(&self.root.to_le_bytes());
+        out.write_bytes(&self.next_alloc.to_le_bytes());
+        out.sink().digest()
+    }
+}
+
+fn slot_rewards(slot: u32, agents: usize) -> usize {
+    idx(slot).saturating_mul(agents)
+}
