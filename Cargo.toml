@@ -11,6 +11,7 @@ members = [
     "crates/tessera-rl-classic",
     "tools/math-oracle",
     "tools/bench-runner",
+    "tools/connect4-ref",
     "tools/spikes/layout",
     "crates/tessera-rl-py",
 ]
