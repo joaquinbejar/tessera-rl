@@ -189,8 +189,10 @@ def test_step_outputs_are_never_those_of_a_concurrent_reset():
     # codex R-PR17: a step must return its own outputs, never those of a
     # reset admitted between the mutation and the copy. Every step here is
     # at most 4 steps after a reset, so no CartPole instance has terminated
-    # and every step reward is 1; a reset's rewards are all 0.
-    env = cartpole(20000, 3)
+    # and every step reward is 1; a reset's rewards are all 0. Owned
+    # outputs: a borrowed view is valid only until the next call, and the
+    # main thread's next reset may rewrite it before this thread reads it.
+    env = cartpole(20000, 3, outputs="owned")
     env.reset()
     acts = np.ones((20000, 1), dtype=np.int32)
     stop = threading.Event()
