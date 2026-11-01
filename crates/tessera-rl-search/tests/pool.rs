@@ -407,3 +407,13 @@ fn test_search_pool_same_expansions_give_the_same_tree_for_any_batch() {
         assert_eq!(run(batch), (h1, n1), "batch {batch}");
     }
 }
+
+/// A partial batch whose padding rows reuse a parent where column 0 is
+/// full: strict checks (`debug-checks`) accept the padding (R38-01).
+#[test]
+fn test_search_pool_partial_batch_padding_is_legal_under_strict_checks() {
+    let mut s = search_at("000000", 16, 7, Eviction::Strict);
+    let root = s.root();
+    let [c] = expand_n(&mut s, &[(root, 3)]);
+    assert_eq!(*s.record(c).unwrap().state(), reference("0000003"));
+}

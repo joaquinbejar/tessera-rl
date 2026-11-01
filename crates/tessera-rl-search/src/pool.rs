@@ -721,8 +721,14 @@ where
                 }
             }
         }
+        // Unused rows repeat the first request (a legal action at the
+        // parent they were loaded with), so strict checks accept them.
         self.act_buf.fill(0);
-        for (row, p) in self.planned.iter().enumerate() {
+        let Some(&lead) = self.planned.first() else {
+            return Ok(());
+        };
+        for row in 0..idx(self.batch) {
+            let p = self.planned.get(row).copied().unwrap_or(lead);
             if let Some(a) = self.act_buf.get_mut(row * self.agents + p.agent) {
                 *a = i32::try_from(p.action).unwrap_or(0);
             }
