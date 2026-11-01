@@ -5,7 +5,8 @@
 //!
 //! A thunk is a naked function with the exact C signature of the slot it
 //! fills, built from one audited template per ABI (System V x86-64 and
-//! AAPCS64, Apple and Linux; Win64 comes with its SEH unwind data). It:
+//! AAPCS64, Apple and Linux; Win64 on Windows x86-64, with its SEH unwind
+//! data). It:
 //!
 //! 1. sets up a frame (stack aligned to 16 bytes, CFI for unwinders and
 //!    debuggers) and saves every integer argument register;
@@ -23,8 +24,9 @@
 //!    unchanged.
 //!
 //! The template is signature-independent: it preserves all integer
-//! argument registers (rdi, rsi, rdx, rcx, r8, r9; x0 to x8, including the
-//! indirect-result register x8) and the integer return register. It does
+//! argument registers (rdi, rsi, rdx, rcx, r8, r9 on System V; rcx, rdx,
+//! r8, r9 on Win64; x0 to x8, including the indirect-result register x8)
+//! and the integer return register. It does
 //! **not** preserve floating-point argument registers, so a thunk accepts
 //! only signatures whose arguments and result are integers or pointers: a
 //! type invariant ([`IntClass`]), checked when each thunk is defined. The
@@ -110,7 +112,7 @@ impl<F: Copy> ThunkFn<F> {
 /// [rbp-56] scratch; [rbp-64] previous boundary frame.
 #[cfg(all(target_arch = "x86_64", not(windows)))]
 macro_rules! boundary_template {
-    ($target:path) => {
+    ($target:path, $me:path) => {
         core::arch::naked_asm!(
             ".cfi_startproc",
             "push rbp",
@@ -180,7 +182,7 @@ macro_rules! boundary_template {
 /// previous boundary frame. FPSR (the sticky flags) is never written.
 #[cfg(all(target_arch = "aarch64", not(windows)))]
 macro_rules! boundary_template {
-    ($target:path) => {
+    ($target:path, $me:path) => {
         core::arch::naked_asm!(
             ".cfi_startproc",
             "stp x29, x30, [sp, #-112]!",
@@ -238,20 +240,83 @@ macro_rules! boundary_template {
     };
 }
 
-/// Windows (Win64): no boundary yet. The B2 pass-through tail jump, so the
-/// bindings keep the ADR-0037 precondition there (the caller's thread must
-/// be in the default controls, with no rejection guarantee) until the
-/// Win64 template with SEH unwind data lands.
-#[cfg(windows)]
+/// The audited template, Win64 (Windows x86-64). Arguments in rcx, rdx,
+/// r8, r9 (four at most: [`MAX_ARGS`]; a fifth would be on the caller's
+/// stack, which the template does not forward). No frame pointer and no
+/// callee-saved register is used (rsi, rdi, rbx, rbp, r12 to r15 and xmm6
+/// to xmm15 are untouched), so the SEH unwind data is a single stack
+/// allocation: `.seh_stackalloc 88`. On entry rsp is 8 mod 16, so after it
+/// rsp is 16-byte aligned for the calls. Frame (rsp-relative): [rsp+0..32]
+/// the shadow space of the calls; [rsp+32..64] rcx, rdx, r8, r9; [rsp+64]
+/// caller MXCSR; [rsp+68] scratch; [rsp+72] previous boundary frame.
+#[cfg(all(target_arch = "x86_64", windows))]
 macro_rules! boundary_template {
-    ($target:path) => {
-        core::arch::naked_asm!("jmp {f}", f = sym $target)
+    ($target:path, $me:path) => {
+        core::arch::naked_asm!(
+            ".seh_proc {me}",
+            "sub rsp, 88",
+            ".seh_stackalloc 88",
+            ".seh_endprologue",
+            "mov [rsp + 32], rcx",
+            "mov [rsp + 40], rdx",
+            "mov [rsp + 48], r8",
+            "mov [rsp + 56], r9",
+            // Save the caller's MXCSR and load its canonical value
+            // (status flags kept).
+            "stmxcsr [rsp + 64]",
+            "mov eax, [rsp + 64]",
+            "and eax, {keep}",
+            "or eax, {set}",
+            "mov [rsp + 68], eax",
+            "ldmxcsr [rsp + 68]",
+            // Record the frame (Rust, canonical controls); the 32-bit move
+            // zero-extends into the u64 argument.
+            "mov ecx, [rsp + 64]",
+            "call {enter}",
+            "mov [rsp + 72], rax",
+            // The entry, with the original arguments.
+            "mov rcx, [rsp + 32]",
+            "mov rdx, [rsp + 40]",
+            "mov r8, [rsp + 48]",
+            "mov r9, [rsp + 56]",
+            "call {target}",
+            "mov [rsp + 32], rax",
+            "mov rcx, [rsp + 72]",
+            "call {leave}",
+            // Restore the caller's control bits with every sticky flag:
+            // (caller & !STATUS) | ((caller | current) & STATUS).
+            "stmxcsr [rsp + 68]",
+            "mov eax, [rsp + 64]",
+            "mov ecx, [rsp + 68]",
+            "or ecx, eax",
+            "and ecx, {status}",
+            "and eax, {not_status}",
+            "or eax, ecx",
+            "mov [rsp + 68], eax",
+            "ldmxcsr [rsp + 68]",
+            "mov rax, [rsp + 32]",
+            // The epilogue form the Win64 unwinder recognizes.
+            "add rsp, 88",
+            "ret",
+            ".seh_endproc",
+            keep = const !tessera_rl_num::fp::CANONICAL_CLEAR,
+            set = const tessera_rl_num::fp::CANONICAL_SET,
+            status = const tessera_rl_num::fp::STATUS_FLAGS,
+            not_status = const !tessera_rl_num::fp::STATUS_FLAGS,
+            enter = sym tessera_fp_enter,
+            leave = sym tessera_fp_leave,
+            target = sym $target,
+            me = sym $me,
+        )
     };
 }
 
+#[cfg(all(windows, not(target_arch = "x86_64")))]
+compile_error!("the floating-point boundary (ADR-0041) supports Windows on x86-64 only");
+
 /// Which boundary this build carries (`tessera_rl._native.fp_boundary()`).
 pub(crate) const BOUNDARY: &str = if cfg!(windows) {
-    "none (Windows: the default-controls precondition applies)"
+    "Win64"
 } else if cfg!(target_arch = "x86_64") {
     "System V x86-64"
 } else {
@@ -259,8 +324,10 @@ pub(crate) const BOUNDARY: &str = if cfg!(windows) {
 };
 
 /// Integer argument registers the templates preserve.
-#[cfg(target_arch = "x86_64")]
+#[cfg(all(target_arch = "x86_64", not(windows)))]
 pub(crate) const MAX_ARGS: usize = 6;
+#[cfg(all(target_arch = "x86_64", windows))]
+pub(crate) const MAX_ARGS: usize = 4;
 #[cfg(target_arch = "aarch64")]
 pub(crate) const MAX_ARGS: usize = 8;
 
@@ -275,7 +342,7 @@ pub(crate) const MAX_ARGS: usize = 8;
 /// the value loaded; [rbp-60] the value after; [rbp-64] scratch.
 #[cfg(all(target_arch = "x86_64", not(windows)))]
 macro_rules! callout_template {
-    ($target:path) => {
+    ($target:path, $me:path) => {
         core::arch::naked_asm!(
             ".cfi_startproc",
             "push rbp",
@@ -335,7 +402,7 @@ macro_rules! callout_template {
 /// caller's FPCR loaded for the call.
 #[cfg(all(target_arch = "aarch64", not(windows)))]
 macro_rules! callout_template {
-    ($target:path) => {
+    ($target:path, $me:path) => {
         core::arch::naked_asm!(
             ".cfi_startproc",
             "stp x29, x30, [sp, #-112]!",
@@ -380,12 +447,57 @@ macro_rules! callout_template {
     };
 }
 
-/// Windows: the callouts are plain tail calls, like the pass-through
-/// thunks (no boundary yet).
-#[cfg(windows)]
+/// The audited callout template, Win64 (the frame and SEH data of the
+/// Win64 boundary template). Frame: [rsp+0..32] shadow space;
+/// [rsp+32..64] rcx, rdx, r8, r9; [rsp+64] canonical MXCSR; [rsp+68] the
+/// value loaded for the call; [rsp+72] the value after; [rsp+76] scratch.
+#[cfg(all(target_arch = "x86_64", windows))]
 macro_rules! callout_template {
-    ($target:path) => {
-        core::arch::naked_asm!("jmp {f}", f = sym $target)
+    ($target:path, $me:path) => {
+        core::arch::naked_asm!(
+            ".seh_proc {me}",
+            "sub rsp, 88",
+            ".seh_stackalloc 88",
+            ".seh_endprologue",
+            "mov [rsp + 32], rcx",
+            "mov [rsp + 40], rdx",
+            "mov [rsp + 48], r8",
+            "mov [rsp + 56], r9",
+            "stmxcsr [rsp + 64]",
+            "call {caller}",
+            "mov ecx, [rsp + 64]",
+            "and ecx, {status}",
+            "and eax, {not_status}",
+            "or eax, ecx",
+            "mov [rsp + 68], eax",
+            "ldmxcsr [rsp + 68]",
+            "mov rcx, [rsp + 32]",
+            "mov rdx, [rsp + 40]",
+            "mov r8, [rsp + 48]",
+            "mov r9, [rsp + 56]",
+            "call {target}",
+            "mov [rsp + 32], rax",
+            "stmxcsr [rsp + 72]",
+            "mov eax, [rsp + 64]",
+            "mov ecx, [rsp + 72]",
+            "and ecx, {status}",
+            "or eax, ecx",
+            "mov [rsp + 76], eax",
+            "ldmxcsr [rsp + 76]",
+            "mov ecx, [rsp + 68]",
+            "mov edx, [rsp + 72]",
+            "call {returned}",
+            "mov rax, [rsp + 32]",
+            "add rsp, 88",
+            "ret",
+            ".seh_endproc",
+            status = const tessera_rl_num::fp::STATUS_FLAGS,
+            not_status = const !tessera_rl_num::fp::STATUS_FLAGS,
+            caller = sym tessera_fp_caller_controls,
+            returned = sym tessera_fp_callout_returned,
+            target = sym $target,
+            me = sym $me,
+        )
     };
 }
 
@@ -402,7 +514,7 @@ macro_rules! callout {
             // C function under the caller's controls and returns its integer
             // result under canonical controls; the target has the same C
             // signature (checked below) with integer-class types only.
-            callout_template!($target);
+            callout_template!($target, $name);
         }
         const _: unsafe extern "C" fn($($arg),*) -> $ret = $target;
         const _: () = { $( int_class::<$arg>(); )* int_class::<$ret>(); };
@@ -423,7 +535,7 @@ macro_rules! thunk {
             // restores the floating-point controls, and returns the
             // target's integer result; the target has the same C signature
             // (checked below) with integer-class types only.
-            boundary_template!($target);
+            boundary_template!($target, $thunk);
         }
         // The target's signature must match the thunk's.
         const _: unsafe extern "C" fn($($arg),*) -> $ret = $target;
@@ -503,18 +615,36 @@ mod tests {
     }
 
     extern "C" fn target6(a0: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 {
+        target4(a0, a1, a2, a3) ^ a4.rotate_left(32) ^ a5.rotate_left(40)
+    }
+
+    /// The first [`MAX_ARGS`]-compatible part of `target6`: the four
+    /// register arguments of every ABI.
+    extern "C" fn target4(a0: u64, a1: u64, a2: u64, a3: u64) -> u64 {
         INSIDE_CANONICAL.with(|c| c.set(fp::is_canonical()));
         let non_canonical = boundary::frame().is_some_and(|(nc, _)| nc);
         INSIDE_NON_CANONICAL_FRAME.with(|c| c.set(non_canonical));
         // Raises the inexact flag inside the entry.
         black_box(black_box(1.0f64) / black_box(3.0f64));
-        a0 ^ a1.rotate_left(8)
-            ^ a2.rotate_left(16)
-            ^ a3.rotate_left(24)
-            ^ a4.rotate_left(32)
-            ^ a5.rotate_left(40)
+        a0 ^ a1.rotate_left(8) ^ a2.rotate_left(16) ^ a3.rotate_left(24)
     }
+
+    // System V and AAPCS64 preserve six or more integer registers: the
+    // thunk takes all six arguments.
+    #[cfg(not(windows))]
     thunk!(@naked thunk6 => target6 : fn(u64, u64, u64, u64, u64, u64) -> u64);
+
+    // Win64 preserves four (MAX_ARGS): the thunk takes the register
+    // arguments, and the test helper folds in the last two outside it, so
+    // every test checks the same value on every ABI.
+    #[cfg(windows)]
+    thunk!(@naked thunk4 => target4 : fn(u64, u64, u64, u64) -> u64);
+
+    #[cfg(windows)]
+    unsafe extern "C" fn thunk6(a0: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 {
+        // SAFETY: a thunk of a test target.
+        unsafe { thunk4(a0, a1, a2, a3) ^ a4.rotate_left(32) ^ a5.rotate_left(40) }
+    }
 
     extern "C" fn nested(a: u64) -> u64 {
         // SAFETY: a thunk of a test target.

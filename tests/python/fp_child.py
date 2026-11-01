@@ -17,13 +17,118 @@ import numpy as np
 
 import tessera_rl as t
 
-LIBM = ctypes.CDLL(ctypes.util.find_library("m") or None)
-ARM = platform.machine() in ("arm64", "aarch64")
-# <fenv.h> values: x86-64 (glibc and macOS) and aarch64 (glibc and macOS).
-FE_TOWARDZERO = 0x00C00000 if ARM else 0x0C00
-FE_TONEAREST = 0
-FE_UPWARD = 0x00400000 if ARM else 0x0800
-FE_DIVBYZERO = 0x02 if ARM else 0x04
+WINDOWS = sys.platform == "win32"
+ARM = platform.machine().lower() in ("arm64", "aarch64")
+
+
+class _Ucrt:
+    """The <fenv.h> calls this file uses, on Windows, through ucrtbase's
+    ``_controlfp_s``, ``_clearfp`` and ``_statusfp`` (on x64 they act on
+    MXCSR). Its values are the ``_RC_*``, ``_SW_*`` and ``_EM_*`` constants
+    of <float.h>; an exception is enabled when its ``_EM_*`` mask bit is
+    clear."""
+
+    MCW_RC = 0x00000300
+    MCW_EM = 0x0008001F
+    MCW_DN = 0x03000000
+    DN_FLUSH = 0x01000000
+    ALL_FLAGS = 0x1F  # FE_ALL_EXCEPT: the _SW_* status flags
+    # On Windows FE_* already are the UCRT values, and <float.h> gives the
+    # same bit to a status flag and to its mask: _SW_INEXACT/_EM_INEXACT
+    # 0x01, UNDERFLOW 0x02, OVERFLOW 0x04, ZERODIVIDE 0x08, INVALID 0x10.
+    # So an FE_* set is its _EM_* mask, with no translation.
+
+    def __init__(self):
+        self.crt = ctypes.CDLL("ucrtbase")
+        self.crt._controlfp_s.argtypes = [ctypes.POINTER(ctypes.c_uint), ctypes.c_uint, ctypes.c_uint]
+        self.crt._controlfp_s.restype = ctypes.c_int
+        self.crt._clearfp.restype = ctypes.c_uint
+        self.crt._statusfp.restype = ctypes.c_uint
+        for name in ("fegetexceptflag", "fesetexceptflag"):
+            getattr(self.crt, name).argtypes = [ctypes.POINTER(ctypes.c_ulong), ctypes.c_int]
+            getattr(self.crt, name).restype = ctypes.c_int
+
+    def _control(self, new=0, mask=0):
+        # _controlfp_s clears the MXCSR status flags when it writes: keep
+        # the caller's sticky flags, as <fenv.h> calls do, by saving them
+        # with fegetexceptflag before and restoring them with
+        # fesetexceptflag after (UCRT exports both; fexcept_t is opaque).
+        saved = ctypes.c_ulong(0)
+        if mask:
+            assert self.crt.fegetexceptflag(ctypes.byref(saved), self.ALL_FLAGS) == 0
+        cur = ctypes.c_uint(0)
+        assert self.crt._controlfp_s(ctypes.byref(cur), new, mask) == 0
+        if mask:
+            assert self.crt.fesetexceptflag(ctypes.byref(saved), self.ALL_FLAGS) == 0
+        return cur.value
+
+    def fesetround(self, mode):
+        self._control(mode, self.MCW_RC)
+        return 0
+
+    def fegetround(self):
+        return self._control() & self.MCW_RC
+
+    def feclearexcept(self, _flags):
+        # _clearfp clears every status flag, not only ``_flags``: the
+        # scenarios only clear all flags.
+        self.crt._clearfp()
+        return 0
+
+    def feraiseexcept(self, flags):
+        # UCRT has no exported feraiseexcept (it is inline in <fenv.h>):
+        # raise through a real operation, as the host would: 1/0 in SSE.
+        if flags & 0x08:
+            import numpy
+
+            with numpy.errstate(divide="ignore"):
+                numpy.float64(1.0) / numpy.float64(0.0)
+        return 0
+
+    def fetestexcept(self, flags):
+        return self.crt._statusfp() & flags
+
+    def _em(self, flags):
+        assert not flags & ~self.ALL_FLAGS, f"not FE_* flags: {flags:#x}"
+        return flags
+
+    def feenableexcept(self, flags):
+        self._control(0, self._em(flags))
+        return 0
+
+    def fedisableexcept(self, flags):
+        em = self._em(flags)
+        self._control(em, em)
+        return 0
+
+    def fegetexcept(self):
+        # Enabled = mask bit clear.
+        return ~self._control() & self.ALL_FLAGS
+
+    def raw_control(self):
+        """The raw control word (``_controlfp_s(&cur, 0, 0)``)."""
+        return self._control()
+
+    def set_flush_denormals(self, on):
+        self._control(self.DN_FLUSH if on else 0, self.MCW_DN)
+
+
+if WINDOWS:
+    LIBM = _Ucrt()
+    # <float.h> values (_RC_*, _SW_*), x64.
+    FE_TONEAREST = 0x000
+    FE_UPWARD = 0x200
+    FE_TOWARDZERO = 0x300
+    FE_DIVBYZERO = 0x08
+    FE_INVALID = 0x10
+else:
+    LIBM = ctypes.CDLL(ctypes.util.find_library("m") or None)
+    # <fenv.h> values: x86-64 (glibc and macOS) and aarch64 (glibc and macOS).
+    FE_TOWARDZERO = 0x00C00000 if ARM else 0x0C00
+    FE_TONEAREST = 0
+    FE_UPWARD = 0x00400000 if ARM else 0x0800
+    FE_DIVBYZERO = 0x02 if ARM else 0x04
+    FE_INVALID = 0x01
 
 
 def set_round(mode):
@@ -136,15 +241,20 @@ def main(scenario):
         warnings.simplefilter("default")
         result["unchanged"] = env.snapshot(0) == before
     elif scenario == "unmasked":
-        # glibc only: unmask divide-by-zero and invalid in the caller.
+        # glibc and Windows: unmask divide-by-zero and invalid in the caller.
         if not hasattr(LIBM, "feenableexcept"):
             result["skipped"] = "no feenableexcept"
         else:
             default = run_episode()
-            LIBM.feenableexcept(FE_DIVBYZERO | 0x01)
+            LIBM.feenableexcept(FE_DIVBYZERO | FE_INVALID)
             hostile = run_episode()
             result["enabled_after"] = LIBM.fegetexcept()
-            LIBM.fedisableexcept(FE_DIVBYZERO | 0x01)
+            if WINDOWS:
+                # Independent of the shim's mapping: in the raw control word
+                # exactly _EM_ZERODIVIDE and _EM_INVALID are clear.
+                raw = LIBM.raw_control() & LIBM.ALL_FLAGS
+                result["raw_em_exact"] = raw == LIBM.ALL_FLAGS & ~(0x08 | 0x10)
+            LIBM.fedisableexcept(FE_DIVBYZERO | FE_INVALID)
             result["identical"] = hostile == default
     elif scenario == "probe":
         # codex R-PR26: an __index__ that changes the controls. The native
@@ -293,6 +403,21 @@ def main(scenario):
         result["finalizers"] = len(seen)
         result["all_caller_controls"] = all(m == FE_UPWARD for m in seen)
         result["modes"] = sorted(set(seen))
+    elif scenario == "windows_ftz":
+        # Windows: flush-to-zero and denormals-are-zero set through
+        # _controlfp_s (_DN_FLUSH) by the caller; results identical.
+        if not WINDOWS:
+            result["skipped"] = "Windows only"
+        else:
+            clean = run_episode()
+            LIBM.set_flush_denormals(True)
+            try:
+                hostile = run_episode()
+                result["dn_after"] = LIBM._control() & LIBM.MCW_DN
+            finally:
+                LIBM.set_flush_denormals(False)
+            result["identical"] = hostile == clean
+            result["restored"] = result["dn_after"] == LIBM.DN_FLUSH
     elif scenario == "torch_ftz":
         import torch
 

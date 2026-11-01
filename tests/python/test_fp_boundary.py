@@ -58,6 +58,8 @@ def test_fp_boundary_unmasked_exceptions_never_trap():
         pytest.skip(r["skipped"])
     assert r["identical"]
     assert r["enabled_after"] != 0, "the caller's unmasked exceptions are restored"
+    if "raw_em_exact" in r:
+        assert r["raw_em_exact"], "exactly divide-by-zero and invalid were unmasked"
 
 
 @pytest.mark.torch
@@ -102,7 +104,7 @@ def test_fp_boundary_reports_its_variant():
 
     variant = n.fp_boundary()
     if platform.system() == "Windows":
-        assert variant.startswith("none")
+        assert variant == "Win64"
     elif platform.machine() in ("arm64", "aarch64"):
         assert variant == "AAPCS64"
     else:
@@ -149,3 +151,10 @@ def test_fp_boundary_unwind_drops_injected_containers_under_caller_controls():
     r = child("gc_unwind")
     assert r["injected"] > 0 and r["failed"] > 0 and r["finalizers"] > 0, r
     assert r["all_caller_controls"], r
+
+
+def test_fp_boundary_windows_flush_to_zero_is_invisible():
+    r = child("windows_ftz")
+    if "skipped" in r:
+        pytest.skip(r["skipped"])
+    assert r["identical"] and r["restored"]

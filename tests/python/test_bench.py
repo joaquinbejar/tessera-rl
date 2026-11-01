@@ -176,7 +176,8 @@ def qualified_report():
         "hardware": {"cpu": "12th Gen Intel(R) Core(TM) i7-12700H"},
         "software": {"native_build_profile": "release"},
     }
-    return {"quick": False, "runs": n, "method": method, "pinning": pin, "environment": env, "results": results}
+    load = {"before": [0.5, 0.4, 0.3], "after": [0.6, 0.4, 0.3]}
+    return {"quick": False, "runs": n, "method": method, "pinning": pin, "environment": env, "load_average": load, "results": results}
 
 
 @pytest.fixture
@@ -186,6 +187,15 @@ def reference_machine(monkeypatch):
 
 def test_bench_qualified_report_is_valid(reference_machine):
     assert bench.qualify(qualified_report(), QUAL) == []
+
+
+def test_bench_load_average_unavailable_is_not_valid(reference_machine, monkeypatch):
+    # Windows has no os.getloadavg: the run is recorded, never valid for claims.
+    monkeypatch.delattr(bench.os, "getloadavg", raising=False)
+    assert bench.load_average() is None
+    report = qualified_report()
+    report["load_average"] = {"before": None, "after": None}
+    assert "load average unavailable on this OS" in bench.qualify(report, QUAL)
 
 
 def test_bench_mislabelled_hardware_is_not_valid(reference_machine):
