@@ -26,7 +26,7 @@ pub mod leaf;
 pub mod space;
 pub mod step_out;
 
-pub use agent::{AgentSlot, Tier};
+pub use agent::{AgentSlot, Tier, TurnStructure};
 pub use bool8::Bool8;
 pub use encoding::{Canonical, StateHash};
 pub use env::{

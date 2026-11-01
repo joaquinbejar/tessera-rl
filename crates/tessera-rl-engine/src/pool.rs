@@ -14,7 +14,7 @@ use tessera_rl_core::error::ConfigError;
 use tessera_rl_core::io::{ActionWriter, Actions, MaskWriter, ObsWriter};
 use tessera_rl_core::{
     ActionMask, AdaptiveValues, AgentSlot, Bool8, EnvConfig, Environment, EpisodeEnd, RecordLayout,
-    StateInit, StepOut,
+    StateInit, StepOut, TurnStructure,
 };
 use tessera_rl_num::fp;
 use tessera_rl_num::identity::{LogicalId, RngIdentity, Seed, StreamId};
@@ -534,7 +534,7 @@ where
             })?;
         }
         self.poisoned = false;
-        Ok(())
+        self.check_turns()
     }
 
     /// Resets the instances `ids`, in the order given; other instances keep
@@ -557,7 +557,7 @@ where
         let indices = ids.iter().filter_map(|&id| usize::try_from(id).ok());
         self.check_reset(indices.clone(), ids.len(), reseed)?;
         self.apply_reset(indices, reseed)?;
-        Ok(())
+        self.check_turns()
     }
 
     fn check_reset(
@@ -759,8 +759,41 @@ where
             let mut chunk = all;
             run_kernels(poisoned, || step_chunk::<E, M>(&ctx, &mut chunk))?;
         }
+        self.check_turns()?;
         #[cfg(feature = "debug-checks")]
         self.check_agent_events()?;
+        Ok(())
+    }
+
+    /// The turn order of a `Sequential` environment (ADR-0013): every
+    /// instance whose episode goes on (not pending reset) has exactly one
+    /// acting agent. A violation poisons the pool in every build, with the
+    /// first instance (ADR-0028). One count per instance; nothing for
+    /// `Simultaneous` and `Mixed` (where no acting agent is allowed: a step
+    /// that reads no action).
+    fn check_turns(&mut self) -> Result<(), EngineError> {
+        if E::TURNS != TurnStructure::Sequential {
+            return Ok(());
+        }
+        for (i, header) in self.headers.iter().enumerate() {
+            if header.engine().pending_reset.get() {
+                continue;
+            }
+            let acting = header.agents().iter().filter(|r| r.acting.get()).count();
+            if acting != 1 {
+                self.poisoned = true;
+                return Err(EngineError::TurnOrder {
+                    instance: u32::try_from(i).unwrap_or(u32::MAX),
+                    violation: tessera_rl_core::InvariantViolation {
+                        code: if acting == 0 {
+                            "a Sequential environment named no acting agent"
+                        } else {
+                            "a Sequential environment named more than one acting agent"
+                        },
+                    },
+                });
+            }
+        }
         Ok(())
     }
 
@@ -1105,6 +1138,27 @@ fn reset_one<E: Environment>(
     *state = E::State::state_default();
     let mut rng = StepRng::new(authority, &identity, StreamId::DYNAMICS);
     E::reset(cfg, &mut rng, state);
+    update_acting::<E>(cfg, header, state);
+}
+
+/// Sets the acting flag of every alive agent from the environment's turn
+/// structure (ADR-0013): every alive agent for `Simultaneous`, the agents
+/// `Environment::acting` names otherwise. It runs after the step's agent
+/// events (deaths and spawns) are applied, so `acting` sees the step's
+/// final alive set. Whether the count is valid is checked by
+/// `EnvPool::check_turns` after the kernels.
+fn update_acting<E: Environment>(cfg: &E::Config, header: &mut E::Header, state: &E::State) {
+    if E::TURNS == TurnStructure::Simultaneous {
+        return;
+    }
+    for (slot, row) in header.agents_mut().iter_mut().enumerate() {
+        let on = row.alive.get()
+            && u16::try_from(slot)
+                .ok()
+                .and_then(|s| AgentSlot::new(s, E::MAX_AGENTS))
+                .is_some_and(|s| E::acting(cfg, state, s));
+        row.acting = Bool8::from(on);
+    }
 }
 
 #[expect(
@@ -1229,6 +1283,7 @@ fn step_one<E: Environment>(
             }
         }
     }
+    update_acting::<E>(cfg, header, state);
     if let Some(end) = end {
         finish_episode(header, outputs, i, end, t, total);
     }

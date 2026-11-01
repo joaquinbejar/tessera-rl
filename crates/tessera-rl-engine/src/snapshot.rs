@@ -22,7 +22,9 @@
 //! policy. The seed, slot and pool size may differ. Checking a pool
 //! fingerprint is deferred to the persistent format (ADR-0011, phase 2).
 
-use tessera_rl_core::{AdaptiveValues, Environment, RecordLayout, StateHash, Validate};
+use tessera_rl_core::{
+    AdaptiveValues, AgentSlot, Environment, RecordLayout, StateHash, TurnStructure, Validate,
+};
 
 use crate::error::EngineError;
 use crate::masks::MaskProvider;
@@ -370,7 +372,36 @@ where
         }
         let view = tessera_rl_core::HeaderView::of(header);
         E::validate_record(&self.cfg, &view, record.state())
-            .map_err(|violation| EngineError::Invariant { index, violation })
+            .map_err(|violation| EngineError::Invariant { index, violation })?;
+        // Turn order (ADR-0013), checked only after the record passed
+        // `validate_record`, so `acting` never sees an invalid state:
+        // outside a pending reset, the acting flags
+        // of a non-simultaneous environment are exactly the ones its
+        // `acting` names for this state, so a record cannot make a waiting
+        // agent act.
+        if E::TURNS != TurnStructure::Simultaneous && !pending {
+            for (slot, row) in header.agents().iter().enumerate() {
+                let expected = row.alive.get()
+                    && u16::try_from(slot)
+                        .ok()
+                        .and_then(|s| AgentSlot::new(s, E::MAX_AGENTS))
+                        .is_some_and(|s| E::acting(&self.cfg, record.state(), s));
+                if row.acting.get() != expected {
+                    return invalid("acting flags that differ from the environment's turn order");
+                }
+            }
+            // A Sequential game that goes on has exactly one (alive) agent
+            // to move; a record without one would let the next step run on
+            // an ignored action. Mixed may have none.
+            if E::TURNS == TurnStructure::Sequential
+                && header.agents().iter().filter(|r| r.acting.get()).count() != 1
+            {
+                return invalid(
+                    "a Sequential record that goes on without exactly one acting agent",
+                );
+            }
+        }
+        Ok(())
     }
 
     /// Restores untrusted records (decoded from bytes) into `ids`, in
