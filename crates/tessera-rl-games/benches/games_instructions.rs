@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! Instruction counts of Connect Four (ADR-0025 PR gate, gungraun): one
-//! full pool step (masks, the acting update and the turn check, auto-reset
-//! on) and the pinned P2-G1 bot's choice on a fixed set of positions.
+//! mid-game pool step (masks, the acting update and the turn check; no
+//! game ends or resets) and the pinned P2-G1 bot's choice on a fixed set of positions.
 //! Setup runs outside the measured region, and the benchmarks return their
 //! inputs so that dropping them is not counted either. Linux only
 //! (Valgrind); see `make gungraun`.
@@ -23,9 +23,10 @@ use tessera_rl_games::connect4::bot::{Bot, TIE_BASE};
 use tessera_rl_games::{Connect4, Connect4Config, Connect4State};
 use tessera_rl_num::identity::Seed;
 
-/// A Connect Four pool advanced 10 plies (mid-game boards, some games
-/// already restarted), and one batch of columns (full ones become the
-/// no-op).
+/// A Connect Four pool advanced 10 plies, and one batch of columns (full
+/// ones become the no-op). Every game is still running before and after
+/// the measured step: it is a mid-game step, and auto-reset, though
+/// enabled, is not exercised.
 fn connect4(n: u32) -> (EnvPool<Connect4, Masked>, Vec<i32>) {
     let options = PoolOptions::new(NonZeroU32::new(n).unwrap(), Seed::new(1));
     let mut pool = EnvPool::with_masks(Connect4Config {}, options).unwrap();
@@ -66,7 +67,15 @@ fn positions(n: usize) -> Vec<Connect4State> {
             s
         })
         .filter(|s| !s.is_over())
-        .collect()
+        .collect::<Vec<_>>()
+}
+
+/// Exactly 32 non-terminal positions, checked in the setup (outside the
+/// measured region).
+fn positions_32(n: usize) -> Vec<Connect4State> {
+    let states = positions(n);
+    assert_eq!(states.len(), 32, "the fixed position set changed");
+    states
 }
 
 #[library_benchmark]
@@ -85,7 +94,7 @@ fn connect4_pool_step(
 }
 
 #[library_benchmark]
-#[bench::positions_32(setup = positions, args = (32))]
+#[bench::positions_32(setup = positions_32, args = (32))]
 fn bot_choose(states: Vec<Connect4State>) -> Vec<Connect4State> {
     let bot = Bot::new(TIE_BASE);
     for s in &states {
