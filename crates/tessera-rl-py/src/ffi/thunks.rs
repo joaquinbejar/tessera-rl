@@ -689,7 +689,6 @@ mod tests {
 
     fn check_mode(mode: fn(fp::Control) -> fp::Control) {
         let want = expected();
-        let original = hostile::read();
         let before = fp::non_canonical_entries();
         let (got, after) = hostile::run(mode, call6);
         assert_eq!(got, want, "arguments and result pass through");
@@ -698,9 +697,15 @@ mod tests {
             INSIDE_NON_CANONICAL_FRAME.with(Cell::get),
             "the frame records the caller"
         );
+        // What the CPU actually latches for `mode` (no entry in between):
+        // a bit the CPU does not implement reads as zero (for example
+        // FPCR.AH without FEAT_AFP is RES0), so the restore is checked
+        // against the written-and-read-back controls. Every writable bit is
+        // still compared.
+        let ((), latched) = hostile::run(mode, || ());
         assert_eq!(
             hostile::control_bits(after),
-            hostile::control_bits(mode(original)),
+            hostile::control_bits(latched),
             "the caller's control bits are restored"
         );
         assert!(fp::non_canonical_entries() > before, "the entry is counted");
