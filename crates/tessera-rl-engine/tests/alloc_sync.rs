@@ -30,6 +30,7 @@ unsafe impl GlobalAlloc for Counting {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         if COUNTING.load(Ordering::Relaxed) {
             ALLOCATIONS.fetch_add(1, Ordering::Relaxed);
+            diag(layout.size());
         }
         // SAFETY: forwarded unchanged; the caller upholds `alloc`'s contract.
         unsafe { System.alloc(layout) }
@@ -47,6 +48,16 @@ unsafe impl GlobalAlloc for Counting {
         // SAFETY: forwarded unchanged; the caller upholds `realloc`'s contract.
         unsafe { System.realloc(ptr, layout, new_size) }
     }
+}
+
+thread_local! { static IN: core::cell::Cell<bool> = const { core::cell::Cell::new(false) }; }
+static TRACES: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+fn diag(size: usize) {
+    if IN.with(|f| f.replace(true)) { return; }
+    let bt = std::backtrace::Backtrace::force_capture();
+    let s = format!("size {size} thread {:?}\n{bt}", std::thread::current().name());
+    TRACES.lock().unwrap().push(s);
+    IN.with(|f| f.set(false));
 }
 
 #[global_allocator]
@@ -85,5 +96,6 @@ fn test_sync_reset_and_step_do_not_allocate_on_any_thread() {
     }
     let _ = std::hint::black_box(pool.reset_all(Reseed::Keep));
     COUNTING.store(false, Ordering::Relaxed);
+    for t in TRACES.lock().unwrap().iter() { eprintln!("=== {t}"); }
     assert_eq!(ALLOCATIONS.load(Ordering::Relaxed), 0);
 }
