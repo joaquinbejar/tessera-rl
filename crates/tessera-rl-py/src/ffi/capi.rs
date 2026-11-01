@@ -432,6 +432,14 @@ pub(crate) fn clear_pending(_g: Gil) {
     unsafe { thunks::c_err_clear() };
 }
 
+/// Runs pending signal handlers (callout: they are Python code); an
+/// exception they raise (`KeyboardInterrupt`) is returned.
+pub(crate) fn check_signals(_g: Gil) -> CResult<()> {
+    // SAFETY: attached.
+    let rc = unsafe { thunks::c_check_signals() };
+    if rc < 0 { Err(Raised) } else { Ok(()) }
+}
+
 /// A new empty `dict` (callout: GC-tracked).
 pub(crate) fn dict(_g: Gil) -> CResult<Mine> {
     // SAFETY: attached.

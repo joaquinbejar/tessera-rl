@@ -465,6 +465,42 @@ def main(scenario):
         result["clean_modes_default"] = clean_modes == {FE_TONEAREST}
         result["callback_saw_caller_mode"] = bool(modes) and all(m == FE_TOWARDZERO for m in modes)
         result["counted"] = t.fp_non_canonical_entries() - before
+
+        # The evaluator ALTERS the controls (round upward) and leaves them
+        # changed: the search arithmetic after it returns is canonical (the
+        # tree is unchanged), the change is counted, and the caller's mode
+        # is restored when run returns, and when it raises.
+        def altering(obs, legal, hashes):
+            LIBM.fesetround(FE_UPWARD)
+            return evaluator(obs, legal, hashes)
+
+        def failing(obs, legal, hashes):
+            LIBM.fesetround(FE_UPWARD)
+            raise RuntimeError("after altering the controls")
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            set_round(FE_TOWARDZERO)
+            try:
+                before = t.fp_non_canonical_entries()
+                s = Search(simulations=128)
+                s.set_root(record)
+                s.run(altering)
+                altered = (s.root_visits().tolist(), s.tree_hash())
+                result["altered_counted"] = t.fp_non_canonical_entries() - before
+                result["restored_after_success"] = LIBM.fegetround() == FE_TOWARDZERO
+                s2 = Search(simulations=128)
+                s2.set_root(record)
+                try:
+                    s2.run(failing)
+                    result["raised"] = False
+                except t.EvaluatorError:
+                    result["raised"] = True
+                result["restored_after_exception"] = LIBM.fegetround() == FE_TOWARDZERO
+                result["unchanged_after_exception"] = s2.calls == 0
+            finally:
+                set_round(FE_TONEAREST)
+        result["altered_identical"] = altered == clean
     elif scenario == "torch_ftz":
         import torch
 

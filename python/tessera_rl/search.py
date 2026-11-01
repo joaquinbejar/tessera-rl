@@ -14,8 +14,18 @@ once per batch of leaves as ``evaluator(obs, legal, hashes)``:
 
 It returns ``(priors, values)``: priors ``(n, actions)`` over **all** actions,
 each row summing to 1, and values ``(n,)`` in ``[-1, 1]`` from the view of
-the player to move at the leaf. The engine validates them, drops the
-illegal priors and renormalizes over the legal ones.
+the player to move at the leaf, both C-contiguous float64 in native byte
+order (the wire format: nothing is cast or broadcast, see
+``_wire_problem``). The engine validates them, drops the illegal priors
+and renormalizes over the legal ones.
+
+The inputs are fresh arrays owned by Python for every batch: an evaluator
+may keep them, and they never change afterwards.
+
+The record hashes identify perfect-information states only. They are
+exposed for Connect Four; an imperfect-information environment would leak
+hidden state through them, and is not searchable from here without
+``Determinize`` (ADR-0035).
 
 A call is all or nothing: if the evaluator raises or returns an invalid
 response, the call raises ``EvaluatorError`` (with the evaluator's own
@@ -23,10 +33,15 @@ exception as its ``__cause__``), and the tree and the call counter are as
 before the call.
 
 The evaluator runs under the caller's floating-point controls (ADR-0041:
-it is called through a callout); the search arithmetic runs under the
-canonical ones. The interpreter stays attached for the whole call, and the
-zero-allocation guarantees of the engine do not extend across the Python
-boundary.
+it is called through a callout); the search arithmetic, including the
+validation of each response, runs under the canonical ones, and the
+caller's controls are restored when ``run`` returns or raises. The
+interpreter stays attached for the whole call, which holds the search
+object: a nested or concurrent call on it raises ``ConcurrencyError``.
+Pending signals are checked before each batch (a ``KeyboardInterrupt``
+aborts the call like any evaluator exception). Building the evaluator's
+arguments and reading its response allocate: the engine's zero-allocation
+guarantee covers the search itself, not the Python boundary.
 """
 
 from __future__ import annotations
@@ -35,6 +50,31 @@ import numpy as np
 
 from tessera_rl import _native
 from tessera_rl._env import make
+
+
+def _wire_problem(response, n: int, actions: int) -> str | None:
+    """Why ``response`` is not the wire format, or ``None``.
+
+    The wire format is strict: a 2-tuple of buffer-protocol objects, each C
+    contiguous, of native-byte-order float64 (format ``"d"``), with shapes
+    exactly ``(n, actions)`` and ``(n,)``. Nothing is converted, cast or
+    broadcast: a float32 or complex array, a list, a transposed view or a
+    wrong shape is rejected (``EvaluatorError``).
+    """
+    if not isinstance(response, tuple) or len(response) != 2:
+        return "the evaluator must return a (priors, values) tuple"
+    for name, obj, shape in (("priors", response[0], (n, actions)), ("values", response[1], (n,))):
+        try:
+            view = memoryview(obj)
+        except TypeError:
+            return f"{name} must support the buffer protocol (a NumPy array), not {type(obj).__name__}"
+        if view.format != "d":
+            return f"{name} must be float64 in native byte order, not format {view.format!r}"
+        if not view.c_contiguous:
+            return f"{name} must be C-contiguous"
+        if tuple(view.shape) != shape:
+            return f"{name} must have shape {shape}, not {tuple(view.shape)}"
+    return None
 
 
 class Search:
@@ -79,11 +119,13 @@ class Search:
                 o = next(iter(arrays.values())) if len(arrays) == 1 else arrays
                 m = np.frombuffer(legal, dtype=np.bool_).reshape((n, actions))
                 h = np.frombuffer(hashes, dtype="<u8")
-                priors, values = evaluator(o, m, h)
-                return (
-                    np.ascontiguousarray(priors, dtype="<f8").tobytes(),
-                    np.ascontiguousarray(values, dtype="<f8").tobytes(),
-                )
+                response = evaluator(o, m, h)
+                problem = _wire_problem(response, n, actions)
+                if problem is not None:
+                    # A malformed response: native reports it as Shape.
+                    return (problem.encode(),)
+                priors, values = response
+                return (bytes(memoryview(priors)), bytes(memoryview(values)))
             except BaseException as exc:
                 raised.append(exc)
                 raise

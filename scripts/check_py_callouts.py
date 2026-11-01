@@ -49,6 +49,7 @@ CALLOUT_ONLY = {
     "PyUnicode_AsUTF8AndSize", "PyObject_IsTrue", "PyObject_GetIter", "PyIter_Next",
     "PyObject_GetItem", "PyObject_GetAttr", "PyObject_Str", "PyObject_Repr",
     "PyObject_Call", "PyObject_CallObject", "PyObject_CallNoArgs", "PyObject_Vectorcall",
+    "PyErr_CheckSignals",
 }
 
 # Callouts that return a new GC-tracked object: it must be owned as a

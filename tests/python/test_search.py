@@ -158,3 +158,169 @@ def test_search_options_are_validated():
         Search(batch_size=99)
     with pytest.raises(t.RecordError):
         Search().set_root(b"not a record")
+
+
+@pytest.mark.parametrize(
+    "response",
+    [
+        lambda n: (np.full((n, 7), 1 / 7, dtype=np.float32), np.zeros(n)),
+        lambda n: (np.full((n, 7), 1 / 7), np.zeros(n, dtype=np.complex128)),
+        lambda n: (np.full((7, n), 1 / 7).T, np.zeros(n)),  # not C-contiguous
+        lambda n: ([[1 / 7] * 7] * n, np.zeros(n)),  # a list, no buffer
+        lambda n: (np.full((n, 7), 1 / 7), np.zeros(n), None),  # arity 3
+        lambda n: np.full((n, 7), 1 / 7),  # not a tuple
+        lambda n: (np.full((1, 7), 1 / 7), np.zeros(1)),  # no broadcasting
+    ],
+    ids=["float32", "complex", "transposed", "list", "arity", "not_tuple", "broadcast"],
+)
+def test_search_wire_format_is_strict_and_never_casts(response):
+    s = search("33")
+    before = s.tree_hash()
+
+    def evaluator(obs, legal, hashes):
+        return response(len(hashes))
+
+    with pytest.raises(t.EvaluatorError):
+        s.run(evaluator)
+    assert (s.tree_hash(), s.calls) == (before, 0)
+
+
+def test_search_inputs_are_owned_and_keep_their_values():
+    kept = []
+
+    def keep(obs, legal, hashes):
+        kept.append((obs, obs.copy(), legal, legal.copy(), hashes, hashes.copy()))
+        return uniform(obs, legal, hashes)
+
+    s = search("33")
+    s.run(keep)
+    s.run(keep)
+    s.set_root(root("0"))
+    s.run(uniform)
+    assert len(kept) > 2
+    for obs, obs0, legal, legal0, hashes, hashes0 in kept:
+        assert np.array_equal(obs, obs0) and np.array_equal(legal, legal0) and np.array_equal(hashes, hashes0)
+        assert obs.base is None or obs.flags.owndata or not isinstance(obs.base, memoryview)
+
+
+def test_search_keyboard_interrupt_is_chained_and_rolls_back():
+    s = search()
+    before = s.tree_hash()
+
+    def interrupt(obs, legal, hashes):
+        raise KeyboardInterrupt
+
+    with pytest.raises(t.EvaluatorError) as info:
+        s.run(interrupt)
+    assert isinstance(info.value.__cause__, KeyboardInterrupt)
+    assert (s.tree_hash(), s.calls) == (before, 0)
+
+
+def test_search_exception_after_commits_and_evictions_rolls_back_tree_calls_and_stream():
+    def make():
+        s = Search(simulations=200, capacity=48, eviction="oldest")
+        s.set_root(root("33"))
+        return s
+
+    s, fresh = make(), make()
+    s.run(canned)
+    fresh.run(canned)
+    before = s.tree_hash()
+    batches = []
+
+    def late_failure(obs, legal, hashes):
+        batches.append(1)
+        if len(batches) == 12:  # well after commits and evictions
+            raise RuntimeError("late")
+        return canned(obs, legal, hashes)
+
+    with pytest.raises(t.EvaluatorError) as info:
+        s.run(late_failure)
+    assert isinstance(info.value.__cause__, RuntimeError)
+    assert len(batches) == 12
+    assert (s.tree_hash(), s.calls) == (before, 1)
+    # The retry equals a fresh second call, tree and search stream.
+    s.run(canned)
+    fresh.run(canned)
+    assert s.tree_hash() == fresh.tree_hash()
+    assert [s.select_action(1.0) for _ in range(16)] == [fresh.select_action(1.0) for _ in range(16)]
+
+
+def test_search_first_call_failure_then_retry_equals_a_fresh_call():
+    s, fresh = search(), search()
+
+    def fail(obs, legal, hashes):
+        raise ValueError("first")
+
+    with pytest.raises(t.EvaluatorError):
+        s.run(fail)
+    s.run(canned)
+    fresh.run(canned)
+    assert s.root_visits().tolist() == fresh.root_visits().tolist() == GOLDEN_VISITS
+    assert s.tree_hash() == fresh.tree_hash()
+
+
+@pytest.mark.parametrize("call", ["run", "set_root", "select_action", "root_visits", "calls", "tree_hash"])
+def test_search_nested_calls_are_concurrency_errors(call):
+    s = search()
+    record = root("4")
+    calls = {
+        "run": lambda: s.run(uniform),
+        "set_root": lambda: s.set_root(record),
+        "select_action": lambda: s.select_action(0.0),
+        "root_visits": lambda: s.root_visits(),
+        "calls": lambda: s.calls,
+        "tree_hash": lambda: s.tree_hash(),
+    }
+
+    def nested(obs, legal, hashes):
+        calls[call]()
+        return uniform(obs, legal, hashes)
+
+    with pytest.raises(t.EvaluatorError) as info:
+        s.run(nested)
+    assert isinstance(info.value.__cause__, t.ConcurrencyError)
+    assert s.calls == 0
+
+
+def test_search_call_from_another_thread_during_run_is_a_concurrency_error():
+    import threading
+
+    s = search()
+    seen = []
+
+    def evaluator(obs, legal, hashes):
+        if not seen:
+            def other():
+                try:
+                    s.root_visits()
+                    seen.append("ok")
+                except t.ConcurrencyError:
+                    seen.append("concurrency")
+
+            th = threading.Thread(target=other)
+            th.start()
+            th.join()
+        return uniform(obs, legal, hashes)
+
+    s.run(evaluator)
+    assert seen == ["concurrency"]
+    assert s.calls == 1
+    assert s.root_visits().sum() == 256
+
+
+def test_search_mixed_terminal_and_nonterminal_batches():
+    # Slot 0 to move wins in column 0: batches mix terminal leaves (the
+    # win) with evaluated ones.
+    s = Search(simulations=200)
+    s.set_root(root("010101"))
+    sizes = []
+
+    def count(obs, legal, hashes):
+        sizes.append(len(hashes))
+        return uniform(obs, legal, hashes)
+
+    s.run(count)
+    assert s.root_visits().sum() == 200
+    assert sum(sizes) < 200, "terminal leaves are not sent to the evaluator"
+    assert s.select_action(0.0) == 0

@@ -153,3 +153,66 @@ fn test_search_mcts_run_with_eviction_and_noise_does_not_allocate() {
     });
     assert_eq!(n, 0, "a search call allocated {n} times");
 }
+
+/// A native evaluator on the batch path: it reads every observation and
+/// mask (as a Python bridge would) and allocates nothing.
+struct Reads;
+
+impl tessera_rl_search::Evaluator<Connect4> for Reads {
+    fn evaluate(
+        &mut self,
+        _: &[tessera_rl_engine::Record<Connect4>],
+        _: &mut [f64],
+        _: &mut [f64],
+    ) -> Result<(), tessera_rl_search::EvaluatorError> {
+        Err(tessera_rl_search::EvaluatorError::NoLegalMass { leaf: 0 })
+    }
+
+    fn evaluate_batch(
+        &mut self,
+        batch: &tessera_rl_search::LeafBatch<'_, Connect4>,
+        priors: &mut [f64],
+        values: &mut [f64],
+    ) -> Result<(), tessera_rl_search::EvaluatorError> {
+        let ones = batch
+            .observations()
+            .iter()
+            .map(|&b| u64::from(b))
+            .sum::<u64>()
+            + batch.legal().iter().map(|&l| u64::from(l)).sum::<u64>();
+        std::hint::black_box(ones);
+        priors.fill(1.0 / 7.0);
+        values.fill(0.0);
+        Ok(())
+    }
+}
+
+#[test]
+#[expect(clippy::many_single_char_names, reason = "test setup")]
+fn test_search_mcts_batch_evaluator_path_does_not_allocate_and_leaves_no_virtual_loss() {
+    let mut p = EnvPool::<Connect4, Masked>::with_masks(
+        Connect4Config {},
+        PoolOptions::new(NonZeroU32::MIN, Seed::new(1)),
+    )
+    .unwrap();
+    p.reset_all(Reseed::Keep).unwrap();
+    let root = p.snapshot(0).unwrap();
+    let mut o = SearchOptions::new(NonZeroU32::new(128).unwrap(), NonZeroU32::new(8).unwrap());
+    o.eviction = Eviction::Oldest;
+    let pool = SearchPool::new(Connect4Config {}, o, &root, EnvPool::with_masks).unwrap();
+    let mut cfg = tessera_rl_search::PuctConfig::default();
+    cfg.simulations = 400;
+    let mut m = tessera_rl_search::Mcts::new(pool, cfg).unwrap();
+    let n = allocations(|| {
+        for _ in 0..3 {
+            m.run(&mut Reads).unwrap();
+            m.pool_mut().set_root(&root).unwrap();
+        }
+        m.run(&mut Reads).unwrap();
+    });
+    assert_eq!(n, 0, "the batch evaluator path allocated {n} times");
+    let r = m.pool().root();
+    for a in 0..7 {
+        assert_eq!(m.pool().edge_stats(r, a).unwrap().virtual_loss, 0);
+    }
+}

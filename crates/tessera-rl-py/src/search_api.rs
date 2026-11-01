@@ -4,8 +4,8 @@
 //! and the evaluator bridge: each batch calls the Python evaluator through
 //! a callout (ADR-0041), as `evaluator(observations, legal, hashes, n)`
 //! with `bytes`, `bytes`, `bytes` and `int`, and reads back a tuple of two
-//! `bytes`, the priors (`n * actions` little-endian `f64`) and the values
-//! (`n` little-endian `f64`). A wrong result type or length is
+//! `bytes`, the priors (`n * actions` native-byte-order `f64`) and the
+//! values (`n` native-byte-order `f64`). A wrong result type or length is
 //! `EvaluatorError::Shape`; a Python exception is `EvaluatorError::Failed`
 //! and is kept to be raised again after the tree is rolled back.
 
@@ -131,7 +131,7 @@ fn shape(what: String) -> EvaluatorError {
     EvaluatorError::Shape { what }
 }
 
-/// Reads `n` little-endian `f64` from `bytes` into `out`.
+/// Reads `n` native-byte-order `f64` from `bytes` into `out`.
 fn read_f64(bytes: &[u8], out: &mut [f64], what: &str) -> Result<(), EvaluatorError> {
     if bytes.len() != out.len() * 8 {
         return Err(shape(format!(
@@ -140,9 +140,11 @@ fn read_f64(bytes: &[u8], out: &mut [f64], what: &str) -> Result<(), EvaluatorEr
             out.len()
         )));
     }
+    // Native byte order: the adapter sends the evaluator's float64 buffer
+    // as it is.
     let (chunks, _) = bytes.as_chunks::<8>();
     for (o, chunk) in out.iter_mut().zip(chunks) {
-        *o = f64::from_le_bytes(*chunk);
+        *o = f64::from_ne_bytes(*chunk);
     }
     Ok(())
 }
@@ -150,6 +152,9 @@ fn read_f64(bytes: &[u8], out: &mut [f64], what: &str) -> Result<(), EvaluatorEr
 impl PyEval<'_> {
     fn call(&mut self, batch: &RawBatch<'_>) -> CResult<Mine> {
         let g = self.g;
+        // Pending signals (Ctrl-C) between batches: a handler that raises
+        // aborts the call like an evaluator exception.
+        capi::check_signals(g)?;
         let legal: Vec<u8> = batch.legal.iter().map(|&l| u8::from(l)).collect();
         let hashes: Vec<u8> = batch.hashes.iter().flat_map(|h| h.to_le_bytes()).collect();
         let n = u64::try_from(batch.n).unwrap_or(u64::MAX);
@@ -187,10 +192,19 @@ impl BatchEval for PyEval<'_> {
             ));
         };
         let [p, v] = items.as_slice() else {
-            return Err(shape(format!(
-                "the evaluator returned {} items, not (priors, values)",
-                items.len()
-            )));
+            // The adapter reports a malformed response as a 1-tuple with
+            // its reason.
+            let reason = match items.as_slice() {
+                [only] => capi::bytes_of(g, *only, "reason").map_or_else(
+                    |_| {
+                        capi::clear_pending(g);
+                        "malformed response".to_owned()
+                    },
+                    |b| String::from_utf8_lossy(b).into_owned(),
+                ),
+                _ => format!("{} items, not (priors, values)", items.len()),
+            };
+            return Err(shape(reason));
         };
         let (Ok(p), Ok(v)) = (
             capi::bytes_of(g, *p, "priors"),
