@@ -50,9 +50,15 @@ pub enum TurnStructure {
     /// Every alive agent acts every step.
     Simultaneous,
     /// Exactly one alive agent acts in every step that does not end the
-    /// episode (board games, card games).
+    /// episode (board games, card games). The environment must override
+    /// [`crate::Environment::acting`]. Naming no acting agent, or more than
+    /// one, while the episode goes on poisons the pool in every build
+    /// (`EngineError::TurnOrder`, ADR-0028).
     Sequential,
-    /// Any subset of the alive agents acts, declared per state.
+    /// Any subset of the alive agents acts, declared per state; the
+    /// environment must override [`crate::Environment::acting`]. An empty
+    /// subset is allowed: that step reads no action (an environment-driven
+    /// or chance step).
     Mixed,
 }
 

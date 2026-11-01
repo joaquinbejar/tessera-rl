@@ -67,6 +67,16 @@ pub enum EngineError {
         /// The violated invariant.
         violation: tessera_rl_core::InvariantViolation,
     },
+    /// A `Sequential` environment named no acting agent, or more than one,
+    /// in a step that does not end the episode (ADR-0013, ADR-0028). It
+    /// poisons the pool.
+    #[error("instance {instance}: {violation}")]
+    TurnOrder {
+        /// The first instance that violated the turn order.
+        instance: u32,
+        /// The violated invariant.
+        violation: tessera_rl_core::InvariantViolation,
+    },
     /// A record slice does not have one record per instance.
     #[error("{records} records for {instances} instances")]
     RecordCount {

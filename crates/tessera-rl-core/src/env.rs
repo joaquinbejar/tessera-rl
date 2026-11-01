@@ -89,10 +89,12 @@ pub trait Environment: Sized + 'static {
 
     /// Whether alive `agent` acts in `state`: its action is required and
     /// read in the next step. The engine asks after every reset and every
-    /// step, for alive agents only, when [`Environment::TURNS`] is not
-    /// `Simultaneous`. A `Sequential` environment returns `true` for
-    /// exactly one alive agent whenever the episode goes on. Defaults to
-    /// `true`.
+    /// step (after the step's deaths and spawns), for alive agents only,
+    /// when [`Environment::TURNS`] is not `Simultaneous`. `Sequential` and
+    /// `Mixed` environments must override it: the default, `true`, makes
+    /// every alive agent act. A `Sequential` environment returns `true` for
+    /// exactly one alive agent whenever the episode goes on, or the pool is
+    /// poisoned; a `Mixed` one may return `false` for every agent.
     #[must_use]
     fn acting(cfg: &Self::Config, state: &Self::State, agent: AgentSlot) -> bool {
         let _ = (cfg, state, agent);

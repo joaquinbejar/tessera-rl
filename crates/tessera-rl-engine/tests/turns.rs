@@ -197,8 +197,14 @@ fn test_turns_non_acting_action_is_ignored() {
     // Player 0 acts; player 1's action differs between the pools.
     step(&mut a, [1, 0]);
     step(&mut b, [1, 1]);
-    assert_eq!(total(&a), total(&b));
     assert_eq!(total(&a), 2);
+    // The whole state and the engine header are identical.
+    assert_eq!(
+        a.snapshot(0).unwrap().state(),
+        b.snapshot(0).unwrap().state()
+    );
+    assert_eq!(a.header(0), b.header(0));
+    assert_eq!(a.state_hash(0).unwrap(), b.state_hash(0).unwrap());
     assert_eq!(a.outputs().rewards(), b.outputs().rewards());
 }
 
@@ -277,9 +283,10 @@ fn test_turns_snapshot_and_restore_continue_the_turn_order() {
     }
 }
 
-#[cfg(debug_assertions)]
 #[test]
-fn test_turns_sequential_violation_poisons_in_debug_builds() {
+fn test_turns_sequential_violation_poisons_in_every_build() {
+    use tessera_rl_engine::EngineError;
+
     let options = PoolOptions {
         auto_reset: AutoReset::Disabled,
         ..PoolOptions::new(NonZeroU32::MIN, Seed::new(3))
@@ -292,8 +299,28 @@ fn test_turns_sequential_violation_poisons_in_debug_builds() {
         options,
     )
     .unwrap();
-    assert!(p.reset_all(Reseed::Keep).is_err());
+    assert!(matches!(
+        p.reset_all(Reseed::Keep),
+        Err(EngineError::TurnOrder { instance: 0, .. })
+    ));
     assert!(p.is_poisoned());
+}
+
+#[test]
+fn test_turns_terminal_record_imports_as_pending_reset() {
+    use tessera_rl_engine::DecodedRecord;
+
+    let mut p = race();
+    for act in [[1, 1], [1, 1], [1, 1], [0, 0]] {
+        step(&mut p, act);
+    }
+    // AutoReset::Disabled: the finished game waits for a reset; no agent
+    // acts, which the Sequential check allows for a pending reset.
+    assert!(p.header(0).unwrap().engine.pending_reset.get());
+    let rec = DecodedRecord::from(p.snapshot(0).unwrap());
+    let mut q = race();
+    assert!(q.import(&[0], &[rec]).is_ok());
+    assert!(q.header(0).unwrap().engine.pending_reset.get());
 }
 
 #[test]

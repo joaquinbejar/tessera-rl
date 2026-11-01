@@ -165,7 +165,8 @@ fn engine_kind(e: &EngineError) -> Kind {
         | EngineError::Panicked
         | EngineError::WorkerDied
         | EngineError::WorkerStartup { .. }
-        | EngineError::InvalidAgentEvent { .. } => Kind::Poisoned,
+        | EngineError::InvalidAgentEvent { .. }
+        | EngineError::TurnOrder { .. } => Kind::Poisoned,
         EngineError::NestedEngine => Kind::Concurrency,
         EngineError::CounterExhausted { .. }
         | EngineError::BranchCounterExhausted
