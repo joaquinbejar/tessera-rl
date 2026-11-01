@@ -25,6 +25,7 @@ thiserror.workspace = true
 tessera-rl-num = { workspace = true, features = ["test-hooks"] }
 tessera-rl-macros.workspace = true
 criterion.workspace = true
+gungraun.workspace = true
 tessera-rl-games.workspace = true
 tessera-rl-classic.workspace = true
 tessera-rl-connect4-ref = { path = "../../tools/connect4-ref" }
@@ -34,4 +35,9 @@ workspace = true
 
 [[bench]]
 name = "search_step"
+harness = false
+
+# Instruction counts (gungraun, Linux only; ADR-0025).
+[[bench]]
+name = "search_instructions"
 harness = false
