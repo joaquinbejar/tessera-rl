@@ -33,7 +33,10 @@ class _Ucrt:
     MCW_DN = 0x03000000
     DN_FLUSH = 0x01000000
     ALL_FLAGS = 0x1F  # FE_ALL_EXCEPT: the _SW_* status flags
-    EM = {0x01: 0x10, 0x04: 0x08, 0x08: 0x04, 0x10: 0x02, 0x20: 0x01}
+    # On Windows FE_* already are the UCRT values, and <float.h> gives the
+    # same bit to a status flag and to its mask: _SW_INEXACT/_EM_INEXACT
+    # 0x01, UNDERFLOW 0x02, OVERFLOW 0x04, ZERODIVIDE 0x08, INVALID 0x10.
+    # So an FE_* set is its _EM_* mask, with no translation.
 
     def __init__(self):
         self.crt = ctypes.CDLL("ucrtbase")
@@ -67,6 +70,8 @@ class _Ucrt:
         return self._control() & self.MCW_RC
 
     def feclearexcept(self, _flags):
+        # _clearfp clears every status flag, not only ``_flags``: the
+        # scenarios only clear all flags.
         self.crt._clearfp()
         return 0
 
@@ -84,7 +89,8 @@ class _Ucrt:
         return self.crt._statusfp() & flags
 
     def _em(self, flags):
-        return sum(em for sw, em in self.EM.items() if flags & sw)
+        assert not flags & ~self.ALL_FLAGS, f"not FE_* flags: {flags:#x}"
+        return flags
 
     def feenableexcept(self, flags):
         self._control(0, self._em(flags))
@@ -96,8 +102,12 @@ class _Ucrt:
         return 0
 
     def fegetexcept(self):
-        masked = self._control() & self.MCW_EM
-        return sum(sw for sw, em in self.EM.items() if not masked & em)
+        # Enabled = mask bit clear.
+        return ~self._control() & self.ALL_FLAGS
+
+    def raw_control(self):
+        """The raw control word (``_controlfp_s(&cur, 0, 0)``)."""
+        return self._control()
 
     def set_flush_denormals(self, on):
         self._control(self.DN_FLUSH if on else 0, self.MCW_DN)
@@ -231,7 +241,7 @@ def main(scenario):
         warnings.simplefilter("default")
         result["unchanged"] = env.snapshot(0) == before
     elif scenario == "unmasked":
-        # glibc only: unmask divide-by-zero and invalid in the caller.
+        # glibc and Windows: unmask divide-by-zero and invalid in the caller.
         if not hasattr(LIBM, "feenableexcept"):
             result["skipped"] = "no feenableexcept"
         else:
@@ -239,6 +249,11 @@ def main(scenario):
             LIBM.feenableexcept(FE_DIVBYZERO | FE_INVALID)
             hostile = run_episode()
             result["enabled_after"] = LIBM.fegetexcept()
+            if WINDOWS:
+                # Independent of the shim's mapping: in the raw control word
+                # exactly _EM_ZERODIVIDE and _EM_INVALID are clear.
+                raw = LIBM.raw_control() & LIBM.ALL_FLAGS
+                result["raw_em_exact"] = raw == LIBM.ALL_FLAGS & ~(0x08 | 0x10)
             LIBM.fedisableexcept(FE_DIVBYZERO | FE_INVALID)
             result["identical"] = hostile == default
     elif scenario == "probe":

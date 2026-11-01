@@ -36,17 +36,22 @@ THUNK = re.compile(r"6thunks\d+\w+|^PyInit__native$")
 TEMPLATE = {"codes": ["ALLOC_SMALL size=88"], "frame": "-"}
 
 
-def parse_map(text: str) -> dict[str, int]:
-    """Function name -> RVA, from an MSVC linker map."""
+def image_base(text: str) -> int:
+    """The preferred load address of an MSVC linker map."""
     base = re.search(r"Preferred load address is ([0-9a-fA-F]+)", text)
     if not base:
         raise ValueError("no preferred load address in the map")
-    image_base = int(base.group(1), 16)
+    return int(base.group(1), 16)
+
+
+def parse_map(text: str) -> dict[str, int]:
+    """Function name -> RVA, from an MSVC linker map."""
+    base = image_base(text)
     out = {}
     for line in text.splitlines():
         m = re.match(r"\s*[0-9a-fA-F]{4}:[0-9a-fA-F]{8}\s+(\S+)\s+([0-9a-fA-F]{16})\s+f\b", line)
         if m and THUNK.search(m.group(1)):
-            out[m.group(1)] = int(m.group(2), 16) - image_base
+            out[m.group(1)] = int(m.group(2), 16) - base
     return out
 
 
@@ -89,10 +94,14 @@ def main() -> int:
     p.add_argument("--readobj", default="llvm-readobj")
     args = p.parse_args()
     map_text = open(args.map, encoding="utf-8", errors="replace").read()
-    thunks = parse_map(map_text)
-    image_base = int(re.search(r"Preferred load address is ([0-9a-fA-F]+)", map_text).group(1), 16)
+    try:
+        thunks = parse_map(map_text)
+        base = image_base(map_text)
+    except ValueError as e:
+        print(f"{args.map}: {e}")
+        return 1
     dump = subprocess.run([args.readobj, "--unwind", args.pyd], capture_output=True, text=True, check=True).stdout
-    problems = check(thunks, parse_unwind(dump, image_base))
+    problems = check(thunks, parse_unwind(dump, base))
     for line in problems:
         print(line)
     if problems:

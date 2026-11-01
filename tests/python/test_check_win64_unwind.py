@@ -65,3 +65,13 @@ def test_check_win64_unwind_other_record_fails():
 
 def test_check_win64_unwind_no_thunks_fails():
     assert check(parse_map("Preferred load address is 0000000180000000\n"), {})
+
+
+def test_check_win64_unwind_map_without_load_address_exits_1(tmp_path):
+    import subprocess
+
+    m = tmp_path / "x.map"
+    m.write_text("no address here\n")
+    script = pathlib.Path(__file__).resolve().parents[2] / "scripts" / "check_win64_unwind.py"
+    r = subprocess.run([sys.executable, str(script), "--pyd", "x.pyd", "--map", str(m)], capture_output=True, text=True)
+    assert r.returncode == 1 and "no preferred load address" in r.stdout

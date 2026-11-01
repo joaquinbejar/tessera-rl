@@ -58,6 +58,8 @@ def test_fp_boundary_unmasked_exceptions_never_trap():
         pytest.skip(r["skipped"])
     assert r["identical"]
     assert r["enabled_after"] != 0, "the caller's unmasked exceptions are restored"
+    if "raw_em_exact" in r:
+        assert r["raw_em_exact"], "exactly divide-by-zero and invalid were unmasked"
 
 
 @pytest.mark.torch
