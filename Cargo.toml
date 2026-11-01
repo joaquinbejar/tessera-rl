@@ -51,8 +51,6 @@ tessera-rl-classic = { path = "crates/tessera-rl-classic", version = "0.1.0" }
 tessera-rl-games = { path = "crates/tessera-rl-games", version = "0.1.0" }
 tessera-rl-search = { path = "crates/tessera-rl-search", version = "0.1.0" }
 
-# Test-only: allocation-free stack capture for the alloc_sync diagnostic.
-backtrace = "0.3"
 core_affinity = "0.8"
 criterion = { version = "0.8", default-features = false, features = ["cargo_bench_support"] }
 # Instruction-count gate (ADR-0025); dev-only, pinned: the library must

@@ -38,7 +38,6 @@ windows-sys.workspace = true
 loom.workspace = true
 
 [dev-dependencies]
-backtrace.workspace = true
 proptest.workspace = true
 criterion.workspace = true
 gungraun.workspace = true
