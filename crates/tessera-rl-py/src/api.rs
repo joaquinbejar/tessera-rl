@@ -11,10 +11,10 @@ use crate::ffi::inner::Inner;
 use crate::ffi::view_type::new_view;
 
 /// Keyword arguments, as exact `(str, value)` pairs.
-struct Kwargs<'a>(Vec<(String, Ref<'a>)>);
+pub(crate) struct Kwargs<'a>(Vec<(String, Ref<'a>)>);
 
 impl<'a> Kwargs<'a> {
-    fn parse(g: Gil, kwargs: Option<Ref<'a>>) -> CResult<Self> {
+    pub(crate) fn parse(g: Gil, kwargs: Option<Ref<'a>>) -> CResult<Self> {
         Ok(Self(match kwargs {
             Some(d) => capi::dict_items(g, d, "keyword arguments")?,
             None => Vec::new(),
@@ -22,7 +22,7 @@ impl<'a> Kwargs<'a> {
     }
 
     /// The value of `key`, absent or `None` as `None`.
-    fn get(&self, key: &str) -> Option<Ref<'a>> {
+    pub(crate) fn get(&self, key: &str) -> Option<Ref<'a>> {
         self.0
             .iter()
             .find(|(k, _)| k == key)
@@ -30,7 +30,7 @@ impl<'a> Kwargs<'a> {
             .filter(|v| !v.is_none())
     }
 
-    fn check(&self, g: Gil, allowed: &[&[&str]]) -> CResult<()> {
+    pub(crate) fn check(&self, g: Gil, allowed: &[&[&str]]) -> CResult<()> {
         for (key, _) in &self.0 {
             if !allowed.iter().any(|set| set.contains(&key.as_str())) {
                 return Err(error(
@@ -43,18 +43,22 @@ impl<'a> Kwargs<'a> {
         Ok(())
     }
 
-    fn u32(&self, g: Gil, key: &str) -> CResult<Option<u32>> {
+    pub(crate) fn u32(&self, g: Gil, key: &str) -> CResult<Option<u32>> {
         self.get(key).map(|v| capi::to_u32(g, v, key)).transpose()
     }
 
-    fn u64(&self, g: Gil, key: &str) -> CResult<Option<u64>> {
+    pub(crate) fn u64(&self, g: Gil, key: &str) -> CResult<Option<u64>> {
         self.get(key).map(|v| capi::to_u64(g, v, key)).transpose()
     }
 
-    fn string(&self, g: Gil, key: &str) -> CResult<Option<String>> {
+    pub(crate) fn string(&self, g: Gil, key: &str) -> CResult<Option<String>> {
         self.get(key)
             .map(|v| capi::to_string(g, v, key))
             .transpose()
+    }
+
+    pub(crate) fn f64(&self, g: Gil, key: &str) -> CResult<Option<f64>> {
+        self.get(key).map(|v| capi::to_f64(g, v, key)).transpose()
     }
 }
 

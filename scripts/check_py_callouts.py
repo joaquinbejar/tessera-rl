@@ -27,7 +27,7 @@ DEFAULT_SRC = pathlib.Path(__file__).resolve().parent.parent / "crates" / "tesse
 ALLOWED = {
     "Py_TYPE", "Py_None", "Py_True", "Py_False", "Py_IncRef", "Py_DecRef",
     "PyEval_SaveThread", "PyEval_RestoreThread",
-    "PyErr_Fetch", "PyErr_Restore", "PyErr_Occurred",
+    "PyErr_Fetch", "PyErr_Restore", "PyErr_Occurred", "PyFloat_AsDouble",
     "PyLong_FromUnsignedLongLong", "PyFloat_FromDouble", "PyUnicode_FromStringAndSize",
     "PyBytes_FromStringAndSize", "PyByteArray_FromStringAndSize",
     "PyTuple_Size", "PyTuple_GetItem", "PyList_Size", "PyList_GetItem", "PyDict_Next",
@@ -48,13 +48,14 @@ CALLOUT_ONLY = {
     "PyLong_AsLongLong", "PyLong_AsUnsignedLongLong", "PyLong_AsLong", "PyNumber_Index",
     "PyUnicode_AsUTF8AndSize", "PyObject_IsTrue", "PyObject_GetIter", "PyIter_Next",
     "PyObject_GetItem", "PyObject_GetAttr", "PyObject_Str", "PyObject_Repr",
+    "PyObject_Call", "PyObject_CallObject", "PyObject_CallNoArgs", "PyObject_Vectorcall",
 }
 
 # Callouts that return a new GC-tracked object: it must be owned as a
 # container (`Mine::container`), whose decref is a callout.
 GC_ALLOCATORS = {
     "c_list_new", "c_tuple_new", "c_dict_new", "c_type_from_spec", "c_module_create",
-    "c_err_new_exception",
+    "c_err_new_exception", "c_object_call",
 }
 LEAF_OWNED = re.compile(r"Mine::new\(\s*unsafe\s*\{\s*thunks::(\w+)\s*\(")
 

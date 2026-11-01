@@ -418,6 +418,53 @@ def main(scenario):
                 LIBM.set_flush_denormals(False)
             result["identical"] = hostile == clean
             result["restored"] = result["dn_after"] == LIBM.DN_FLUSH
+    elif scenario == "search_callback":
+        # ADR-0041 callouts and ADR-0043 section 3: the Python evaluator runs
+        # under the caller's controls (here round toward zero), the search
+        # arithmetic under the canonical ones, so the visits and the tree
+        # equal those of a caller in the default mode.
+        from tessera_rl.search import Search
+
+        env = t.make("tessera/Connect4-v1", seed=21, auto_reset="disabled", outputs="owned")
+        env.reset()
+        for c in (3, 3):
+            env.step(np.array([[c, c]]))
+        record = env.snapshot(0)
+        modes = []
+
+        def evaluator(obs, legal, hashes):
+            modes.append(LIBM.fegetround())
+            # Responses exact in every rounding mode (powers of two summing
+            # to 1, placed by the hash), so any difference in the result
+            # would come from the engine's own arithmetic.
+            n = len(hashes)
+            priors = np.full((n, 7), 0.125)
+            priors[np.arange(n), (hashes % np.uint64(7)).astype(np.int64)] = 0.25
+            values = np.where(hashes % np.uint64(2) == 0, 0.5, -0.5)
+            return priors, values
+
+        def run():
+            s = Search(simulations=128)
+            s.set_root(record)
+            s.run(evaluator)
+            return s.root_visits().tolist(), s.tree_hash()
+
+        clean = run()
+        clean_modes = set(modes)
+        modes.clear()
+        before = t.fp_non_canonical_entries()
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            set_round(FE_TOWARDZERO)
+            try:
+                hostile = run()
+                result["round_after"] = LIBM.fegetround() == FE_TOWARDZERO
+            finally:
+                set_round(FE_TONEAREST)
+        result["identical"] = hostile == clean
+        result["clean_modes_default"] = clean_modes == {FE_TONEAREST}
+        result["callback_saw_caller_mode"] = bool(modes) and all(m == FE_TOWARDZERO for m in modes)
+        result["counted"] = t.fp_non_canonical_entries() - before
     elif scenario == "torch_ftz":
         import torch
 

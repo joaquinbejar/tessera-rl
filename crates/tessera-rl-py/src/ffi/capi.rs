@@ -416,6 +416,22 @@ pub(crate) fn tuple(g: Gil, items: Vec<Mine>) -> CResult<Mine> {
     Ok(t)
 }
 
+/// `callable(*args)` (callout: it runs arbitrary Python code, under the
+/// caller's floating-point controls, ADR-0041). The result may be any
+/// object, so it is owned as a container (its decref is a callout too).
+pub(crate) fn call(_g: Gil, callable: Ref<'_>, args: &Mine) -> CResult<Mine> {
+    // SAFETY: attached; a live callable and our argument tuple, both
+    // borrowed for the call.
+    Mine::container(unsafe { thunks::c_object_call(callable.as_ptr(), args.as_ref().as_ptr()) })
+}
+
+/// Discards the pending exception (callout: dropping it may run
+/// finalizers).
+pub(crate) fn clear_pending(_g: Gil) {
+    // SAFETY: attached.
+    unsafe { thunks::c_err_clear() };
+}
+
 /// A new empty `dict` (callout: GC-tracked).
 pub(crate) fn dict(_g: Gil) -> CResult<Mine> {
     // SAFETY: attached.
@@ -667,6 +683,16 @@ pub(crate) fn to_i64(g: Gil, v: Ref<'_>, what: &str) -> CResult<i64> {
         return Err(Raised);
     }
     Ok(x)
+}
+
+/// An exact `float` as `f64`. Not a callout: for an exact float,
+/// `PyFloat_AsDouble` reads the value and never calls `__float__`.
+pub(crate) fn to_f64(g: Gil, v: Ref<'_>, what: &str) -> CResult<f64> {
+    if !v.is_exact(&raw mut ffi::PyFloat_Type) {
+        return Err(wrong(g, what, "a float"));
+    }
+    // SAFETY: attached; an exact float.
+    Ok(unsafe { ffi::PyFloat_AsDouble(v.as_ptr()) })
 }
 
 /// An exact `int` in `u32` range.

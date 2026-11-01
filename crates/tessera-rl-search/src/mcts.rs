@@ -214,6 +214,12 @@ where
         &self.cfg
     }
 
+    /// Bytes of one leaf's observation in the evaluator batches.
+    #[must_use]
+    pub const fn obs_bytes(&self) -> usize {
+        self.obs_bytes
+    }
+
     /// Search calls completed (the persistent call counter).
     #[must_use]
     pub const fn calls(&self) -> u64 {
