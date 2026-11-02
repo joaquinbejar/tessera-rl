@@ -10,7 +10,7 @@ another entry is open. A run **reserves** its whole allowance (its deadline time
 cores) in the ledger file before any work starts, under an exclusive file
 lock, so concurrent runs cannot spend the same allowance. On normal
 completion, failure or a deadline kill the supervisor settles the entry to
-the wall time actually used. If the supervisor itself dies (SIGKILL, a
+the wall time actually used, never clamped. If the supervisor itself dies (SIGKILL, a
 lost host), the entry stays ``running`` and the next run settles it as
 ``interrupted`` at its full reservation: the conservative charge.
 """
@@ -130,11 +130,13 @@ class Ledger:
             return len(entries) - 1, granted
 
     def settle(self, index: int, wall_s: float, status: str) -> dict:
-        """Charges the wall time actually used (never more than reserved)."""
+        """Charges the wall time actually used, never clamped: a run that
+        overran its reservation is charged in full and marked."""
         with self._locked() as entries:
             e = entries[index]
-            wall = min(wall_s, e["deadline_s"])
-            e["wall_s"] = round(wall, 3)
-            e["core_hours"] = round(wall * e["cores"] / 3600, 6)
+            e["wall_s"] = round(wall_s, 3)
+            e["core_hours"] = round(wall_s * e["cores"] / 3600, 6)
+            if wall_s > e["deadline_s"]:
+                status += f" (overran the {e['deadline_s']} s reservation)"
             e["status"] = status
             return dict(e)

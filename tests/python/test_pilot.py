@@ -103,10 +103,8 @@ def test_pilot_ledger_reserves_before_work_and_settles_to_the_time_used(tmp_path
     # One run at a time per ledger file.
     with pytest.raises(LedgerBusy):
         led.reserve("b", cores=4, deadline_s=600)
-    entry = led.settle(i, wall_s=60, status="ok")
-    assert entry["core_hours"] == pytest.approx(60 * 4 / 3600, abs=1e-5)
-    # Never charged beyond the reservation.
-    assert led.settle(i, wall_s=10_000, status="ok")["wall_s"] == 600
+    entry = led.settle(i, wall_s=600, status="ok")
+    assert entry["core_hours"] == pytest.approx(600 * 4 / 3600, abs=1e-5)
     # The settled spend counts: only 0.333 core-hours are left.
     j, granted = led.reserve("b", cores=4, deadline_s=600)
     assert granted == pytest.approx(300)
@@ -267,18 +265,41 @@ def test_pilot_deadline_kills_running_work_and_charges_the_ledger(bot, tmp_path)
     # Far more self-play than 3 s allow, and a first-unit allowance that
     # fits: only the supervisor's kill can stop it.
     args = tiny_args(
-        tmp_path, bot, "selfplay", **{"--wall-cap-s": "3", "--games-per-worker": "100000", "--sims": "64"}
+        tmp_path, bot, "selfplay", **{"--wall-cap-s": "6", "--games-per-worker": "100000", "--sims": "64"}
     )
     start = time.monotonic()
     proc = run_pilot(args)
     wall = time.monotonic() - start
     assert proc.returncode == pilot.EXIT_DEADLINE, proc.stderr
-    assert wall < 3 + 15
+    assert wall < 6 + 3
     report = only_report(tmp_path)
     assert report["status"].startswith("killed at the deadline")
     assert report["missing_sections"] == ["selfplay"]
     (entry,) = json.loads((tmp_path / "ledger.json").read_text())["entries"]
-    assert entry["status"].startswith("killed") and 0 < entry["wall_s"] <= 3
+    assert entry["status"].startswith("killed") and 0 < entry["wall_s"] <= 6
+
+
+def test_pilot_supervisor_kills_native_work_that_holds_the_gil_and_charges_it_unclamped(bot, tmp_path):
+    # The child sleeps 30 s in C with the GIL held: its watchdog thread
+    # never runs, so only the supervisor's own deadline can stop it.
+    start = time.monotonic()
+    proc = run_pilot(tiny_args(tmp_path, bot, "train", **{"--wall-cap-s": "4"}), env={"PILOT_TEST_HOLD_GIL_S": "30"})
+    wall = time.monotonic() - start
+    assert proc.returncode == pilot.EXIT_DEADLINE, proc.stderr
+    assert wall < 4 + 3
+    (entry,) = json.loads((tmp_path / "ledger.json").read_text())["entries"]
+    assert entry["status"].startswith("killed")
+    # The charge is the measured wall, not a clamped value: the work
+    # stopped at 4 - grace s, inside the 4 s reservation.
+    assert 4 - pilot.CLEANUP_GRACE_S <= entry["wall_s"] <= 4
+    assert "overran" not in entry["status"]
+
+
+def test_pilot_ledger_charges_an_overrun_in_full(tmp_path):
+    led = Ledger(str(tmp_path / "ledger.json"), budget_core_hours=1.0)
+    i, _ = led.reserve("a", cores=1, deadline_s=10)
+    entry = led.settle(i, wall_s=12.5, status="killed")
+    assert entry["wall_s"] == 12.5 and "overran" in entry["status"]
 
 
 def test_pilot_sigkilled_supervisor_takes_its_workers_and_its_reservation(bot, tmp_path):

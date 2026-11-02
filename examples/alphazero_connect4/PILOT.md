@@ -113,9 +113,12 @@ If either cell is missing because of the budget, the verdict is
   whole allowance in the ledger, under a file lock: the deadline times the
   allocated cores. The deadline is the smaller of the wall cap and what is
   left of the core-hour budget. The supervisor runs the measurements in a
-  child process group and kills the whole group (pool workers and the bot
-  included) at the deadline, exit code 124. It then settles the ledger
-  to the time used.
+  child process group and, on its own monotonic clock, kills the whole
+  group (pool workers and the bot included) 2 s before the end of the
+  reservation, exit code 124; the 2 s are for the kill and cleanup. It
+  then settles the ledger to the wall time actually used, never clamped:
+  an overrun is charged in full and marked. The child's watchdog is only
+  a second guard, since native code holding the GIL can starve it.
 - One run at a time per ledger file: a reservation is refused while
   another entry is open. A dead supervisor's entry is settled
   automatically only on its own host (its container's hostname); an open

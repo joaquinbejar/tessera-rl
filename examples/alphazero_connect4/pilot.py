@@ -82,6 +82,9 @@ HELDOUT_OPENINGS = os.path.join(REPO, "compat", "connect4", "openings-heldout.tx
 
 EXIT_NOT_REPEATABLE = 3
 EXIT_DEADLINE = 124
+# Reserved for the supervisor's kill and cleanup: the work deadline is
+# this much before the end of the reservation.
+CLEANUP_GRACE_S = 2.0
 
 
 class NotRepeatable(RuntimeError):
@@ -422,6 +425,13 @@ def _train_step(model, opt, x, tp, tv):
 
 
 def run_train(args, clock: Clock) -> dict:
+    hold = os.environ.get("PILOT_TEST_HOLD_GIL_S")
+    if hold and args.source_sha == "test":
+        # Test hook only (with --source-sha test): native work that holds
+        # the GIL, which starves the child's watchdog thread.
+        import ctypes
+
+        ctypes.PyDLL(None).sleep(int(hold))
     cells = []
     gen = np.random.default_rng(args.seed)
     for size in args.sizes:
@@ -670,9 +680,18 @@ def supervise(args, argv) -> int:
     ledger = Ledger(args.ledger, args.budget_core_hours)
     stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
     run = f"pilot {args.command} {stamp}"
-    index, granted = ledger.reserve(run, args.cores, args.wall_cap_s)
     start = time.monotonic()
-    deadline_epoch = time.time() + granted
+    index, granted = ledger.reserve(run, args.cores, args.wall_cap_s)
+    work_s = granted - CLEANUP_GRACE_S
+    if work_s <= 0:
+        ledger.settle(index, time.monotonic() - start, "refused: the budget left is under the cleanup grace")
+        print(f"pilot: {granted:.1f} s left, under the {CLEANUP_GRACE_S} s cleanup grace", file=sys.stderr)
+        return EXIT_DEADLINE
+    # The supervisor enforces the work deadline itself, on its own
+    # monotonic clock: the child's watchdog is only a second guard (native
+    # code holding the GIL can starve it).
+    work_deadline = start + work_s
+    deadline_epoch = time.time() + (work_deadline - time.monotonic())
     proc = subprocess.Popen(
         [sys.executable, os.path.abspath(__file__), *argv, "--child-deadline-epoch", repr(deadline_epoch)],
         start_new_session=True,
@@ -693,7 +712,7 @@ def supervise(args, argv) -> int:
     signal.signal(signal.SIGTERM, on_term)
     signal.signal(signal.SIGINT, on_term)
     try:
-        rc = proc.wait(timeout=granted + 5)
+        rc = proc.wait(timeout=max(0.0, work_deadline - time.monotonic()))
     except subprocess.TimeoutExpired:
         rc = None
     # Whatever happened, no descendant outlives the run.
@@ -701,7 +720,7 @@ def supervise(args, argv) -> int:
     proc.wait()
     wall = time.monotonic() - start
     if rc is None or rc == -signal.SIGKILL:
-        status, code = f"killed at the deadline ({granted:.0f} s)", EXIT_DEADLINE
+        status, code = f"killed at the deadline ({work_s:.1f} s of work)", EXIT_DEADLINE
     elif rc == 0:
         status, code = "ok", 0
     elif rc == EXIT_NOT_REPEATABLE:
