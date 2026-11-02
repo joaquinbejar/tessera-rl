@@ -1,0 +1,17 @@
+{
+ "budget_core_hours": 1.0,
+ "spent_core_hours": 0.092708,
+ "entries": [
+  {
+   "run": "pilot eval 20261102T175120Z",
+   "host": "xaskar",
+   "pid": 622,
+   "cores": 1,
+   "deadline_s": 3300.0,
+   "started": "2026-11-02T17:51:20Z",
+   "wall_s": 333.751,
+   "core_hours": 0.092708,
+   "status": "ok"
+  }
+ ]
+}

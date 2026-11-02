@@ -1,0 +1,225 @@
+{
+ "command": "eval",
+ "params": {
+  "command": "eval",
+  "out": "/out",
+  "ledger": "/out/ledger.json",
+  "cores": 1,
+  "budget_core_hours": 1.0,
+  "wall_cap_s": 3300.0,
+  "source_sha": "4e6efb8ceb23ac079dfabaabfcb64ce5e5d0db5a",
+  "bot": "target/release/tessera-rl-connect4-ref",
+  "sizes": [
+   "small",
+   "medium",
+   "large"
+  ],
+  "sims": [
+   50,
+   100,
+   200
+  ],
+  "batch_size": 8,
+  "capacity": 8192,
+  "infer_batches": [
+   1,
+   8,
+   64,
+   256
+  ],
+  "infer_inner": 50,
+  "train_batches": [
+   256,
+   1024
+  ],
+  "warmup": 2,
+  "repeats": 7,
+  "games_per_worker": 2,
+  "temperature_moves": 8,
+  "cell_allowance_s": 60,
+  "eval_size": "small",
+  "eval_sims": 100,
+  "eval_openings": 500,
+  "eval_allowance_s": 900,
+  "seed": 20261102
+ },
+ "config_sha256": "b690387a9398b888be4ac0038831a6a37ad096f3ffa1f1b15350b000a4777bac",
+ "provenance": {
+  "source_sha": "4e6efb8ceb23ac079dfabaabfcb64ce5e5d0db5a",
+  "env_id": "tessera/Connect4-v1",
+  "image_digest": "rust:1.99.1@sha256:09027f873d45b8ecd1dc86f1fa13b7a62b875c961f017a0e331267b350430137",
+  "cpuset": "2",
+  "bot_sha256": "910c1075c59994eee9ac796ff01a31b399dc8372cd44095c2274d73afc034afc",
+  "versions": {
+   "python": "3.11.18",
+   "torch": "2.15.0+cpu",
+   "numpy": "2.4.6",
+   "tessera_rl": "0.1.0"
+  },
+  "threads": {
+   "torch_intra_op": 1,
+   "torch_inter_op": 1,
+   "env": {
+    "OMP_NUM_THREADS": "1",
+    "MKL_NUM_THREADS": "1",
+    "OPENBLAS_NUM_THREADS": "1"
+   },
+   "env_inherited": {
+    "OMP_NUM_THREADS": null,
+    "MKL_NUM_THREADS": null,
+    "OPENBLAS_NUM_THREADS": null
+   },
+   "deterministic_algorithms": true
+  },
+  "machine": {
+   "host": "xaskar",
+   "platform": "Linux-7.0.0-38-generic-x86_64-with-glibc2.41",
+   "machine": "x86_64",
+   "logical_cores": 20,
+   "affinity_cores": 1,
+   "cpu_model": "12th Gen Intel(R) Core(TM) i7-12700H",
+   "physical_cores": 14,
+   "governor": "performance"
+  },
+  "openings": {
+   "eval": "54a1cea7e6fe70d53a039bc27176486953c8bb6a243353175128526702360475",
+   "heldout": "3276d2d044c911ed29c36f2d42690697f19a4bac0183e3a77b1af3c5af72cc49"
+  }
+ },
+ "sections_done": [
+  "eval"
+ ],
+ "eval": {
+  "checkpoint_sha256": "80998924a6423e7ed515d64e1be849a439dbb9d53b8555618534b1397e5ed5c6",
+  "size": "small",
+  "sims": 100,
+  "passes": {
+   "heldout": {
+    "openings_in_file": 200,
+    "openings_played": 200,
+    "games_per_pass": 400,
+    "runs": [
+     {
+      "log_sha256": "e47a3491c76ab9115c3131e3f6d6555b8bf0e32093bd1eb2cc9737d1bbf6c90e",
+      "results": {
+       "win": 5,
+       "draw": 5,
+       "loss": 390
+      },
+      "distinct_games": 397,
+      "game_wall_s": {
+       "n": 400,
+       "p10": 0.048221432,
+       "median": 0.1092701895,
+       "p90": 0.332650179,
+       "min": 0.01782505,
+       "max": 0.817284603
+      },
+      "bot_share": 0.004778485232766629,
+      "candidate_moves": 2891,
+      "games": 400,
+      "wall_s": 60.54581342602614,
+      "log_file": "eval-heldout-pass0.log.json"
+     },
+     {
+      "log_sha256": "e47a3491c76ab9115c3131e3f6d6555b8bf0e32093bd1eb2cc9737d1bbf6c90e",
+      "results": {
+       "win": 5,
+       "draw": 5,
+       "loss": 390
+      },
+      "distinct_games": 397,
+      "game_wall_s": {
+       "n": 400,
+       "p10": 0.044377159,
+       "median": 0.08696867850000001,
+       "p90": 0.152335386,
+       "min": 0.017723321,
+       "max": 0.226627207
+      },
+      "bot_share": 0.004841322059289058,
+      "candidate_moves": 2891,
+      "games": 400,
+      "wall_s": 36.627383155049756,
+      "log_file": "eval-heldout-pass1.log.json"
+     }
+    ],
+    "repeatable": true
+   },
+   "eval": {
+    "openings_in_file": 500,
+    "openings_played": 500,
+    "games_per_pass": 1000,
+    "runs": [
+     {
+      "log_sha256": "b26b9be63f7e9c2b043690bf01fcfec91a768e40d6fd8ad2de26ba0090b585df",
+      "results": {
+       "win": 18,
+       "draw": 10,
+       "loss": 972
+      },
+      "distinct_games": 991,
+      "game_wall_s": {
+       "n": 1000,
+       "p10": 0.051680929,
+       "median": 0.0974894065,
+       "p90": 0.182020109,
+       "min": 0.017237504,
+       "max": 0.725716028
+      },
+      "bot_share": 0.005099330695237704,
+      "candidate_moves": 7541,
+      "games": 1000,
+      "wall_s": 113.7683256759774,
+      "log_file": "eval-eval-pass0.log.json"
+     },
+     {
+      "log_sha256": "b26b9be63f7e9c2b043690bf01fcfec91a768e40d6fd8ad2de26ba0090b585df",
+      "results": {
+       "win": 18,
+       "draw": 10,
+       "loss": 972
+      },
+      "distinct_games": 991,
+      "game_wall_s": {
+       "n": 1000,
+       "p10": 0.051076781,
+       "median": 0.0949679025,
+       "p90": 0.180492838,
+       "min": 0.018406402,
+       "max": 0.973702855
+      },
+      "bot_share": 0.00488254589824689,
+      "candidate_moves": 7541,
+      "games": 1000,
+      "wall_s": 112.95938907691743,
+      "log_file": "eval-eval-pass1.log.json"
+     }
+    ],
+    "repeatable": true
+   }
+  },
+  "mismatches": []
+ },
+ "starvation": {
+  "infer_ratio_b8_over_b64": null,
+  "non_net_share_small_100": null,
+  "criterion_1_fired": false,
+  "criterion_2_fired": false,
+  "complete": false,
+  "starved": "incomplete"
+ },
+ "missing_sections": [],
+ "status": "ok",
+ "ledger": {
+  "run": "pilot eval 20261102T175120Z",
+  "host": "xaskar",
+  "pid": 622,
+  "cores": 1,
+  "deadline_s": 3300.0,
+  "started": "2026-11-02T17:51:20Z",
+  "wall_s": 333.751,
+  "core_hours": 0.092708,
+  "status": "ok"
+ }
+}
