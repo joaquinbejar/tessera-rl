@@ -9,6 +9,13 @@
 //!   JSON (random play, depth-1, solver agreement, games against the
 //!   solver from the first `GAMES` openings).
 //! - `solve MOVES`: prints the exact score of a position.
+//! - `serve`: the pinned bot as a line protocol, for the P2-M3 example.
+//!   Each input line is `TIE_SEED MOVES` (the tie seed in hex with a `0x`
+//!   prefix, the moves as 1-based column digits, `-` for the empty board);
+//!   each output line is the bot's 0-based column. A line that does not
+//!   parse, an illegal move, a move after a win or a full board is
+//!   answered `error malformed|illegal|finished|full` and ends the process
+//!   with a failure. Otherwise it runs until the end of its input.
 
 use tessera_rl_connect4_ref::{board, bot, calibrate, openings, solver};
 
@@ -58,6 +65,87 @@ fn read_openings(path: &str) -> io::Result<Vec<Position>> {
         out.push(p);
     }
     Ok(out)
+}
+
+/// Why a `serve` line has no move. Printed as `error <kind>`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ServeError {
+    /// Not `0xSEED MOVES`.
+    Malformed,
+    /// A move into a full column, or a column outside 1..=7.
+    Illegal,
+    /// A move after the game was already won.
+    Finished,
+    /// A drawn, full board: the bot has no move.
+    Full,
+}
+
+impl ServeError {
+    const fn kind(self) -> &'static str {
+        match self {
+            Self::Malformed => "malformed",
+            Self::Illegal => "illegal",
+            Self::Finished => "finished",
+            Self::Full => "full",
+        }
+    }
+}
+
+/// The bot's move for one `serve` line, validated: never a guessed move.
+fn serve_line(line: &str) -> Result<u32, ServeError> {
+    let mut parts = line.split_whitespace();
+    let seed = parts
+        .next()
+        .and_then(|s| s.strip_prefix("0x"))
+        .and_then(|s| u64::from_str_radix(s, 16).ok())
+        .ok_or(ServeError::Malformed)?;
+    let moves = parts.next().ok_or(ServeError::Malformed)?;
+    if parts.next().is_some() {
+        return Err(ServeError::Malformed);
+    }
+    let mut p = Position::new();
+    if moves != "-" {
+        for ch in moves.chars() {
+            let col = ch.to_digit(10).ok_or(ServeError::Malformed)?;
+            let col = col.checked_sub(1).ok_or(ServeError::Illegal)?;
+            if col >= board::WIDTH || !p.can_play(col) {
+                return Err(ServeError::Illegal);
+            }
+            if p.is_winning_col(col) {
+                // This move wins: a later move, or the bot's, is after the end.
+                p.play_col(col);
+                return Err(ServeError::Finished);
+            }
+            p.play_col(col);
+        }
+    }
+    bot::Bot::new(seed).choose(&p).ok_or(ServeError::Full)
+}
+
+/// Serves `serve_line` replies until the end of the input. The first bad
+/// line is answered `error <kind>` and ends the process with a failure.
+fn serve() -> io::Result<String> {
+    let stdin = io::stdin();
+    let mut out = io::stdout().lock();
+    let mut line = String::new();
+    loop {
+        line.clear();
+        if stdin.read_line(&mut line)? == 0 {
+            return Ok(String::new());
+        }
+        match serve_line(&line) {
+            Ok(col) => writeln!(out, "{col}")?,
+            Err(e) => {
+                writeln!(out, "error {}", e.kind())?;
+                out.flush()?;
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("serve: {} line {:?}", e.kind(), line.trim_end()),
+                ));
+            }
+        }
+        out.flush()?;
+    }
 }
 
 fn run(args: &[String]) -> io::Result<String> {
@@ -112,6 +200,7 @@ fn run(args: &[String]) -> io::Result<String> {
             let p = Position::from_moves(args.get(1).map_or("", String::as_str)).ok_or_else(bad)?;
             Ok(Solver::new().solve(&p).to_string())
         }
+        Some("serve") => serve(),
         _ => Err(bad()),
     }
 }
@@ -119,6 +208,7 @@ fn run(args: &[String]) -> io::Result<String> {
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match run(&args) {
+        Ok(out) if out.is_empty() => ExitCode::SUCCESS,
         Ok(out) => {
             let _ = writeln!(io::stdout(), "{out}");
             ExitCode::SUCCESS
@@ -127,5 +217,37 @@ fn main() -> ExitCode {
             let _ = writeln!(io::stderr(), "connect4-ref: {e}");
             ExitCode::FAILURE
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_serve_line_matches_the_bot_and_rejects_bad_lines() {
+        let seed = calibrate::TIE_BASE;
+        let want = Position::from_moves("4453").and_then(|p| bot::Bot::new(seed).choose(&p));
+        assert_eq!(serve_line(&format!("{seed:#x} 4453\n")).ok(), want);
+        let empty = bot::Bot::new(7).choose(&Position::new());
+        assert_eq!(serve_line("0x7 -").ok(), empty);
+        for (bad, why) in [
+            ("", ServeError::Malformed),
+            ("7 44", ServeError::Malformed),
+            ("0xzz 44", ServeError::Malformed),
+            ("0x7", ServeError::Malformed),
+            ("0x7 44 1", ServeError::Malformed),
+            ("0x7 4a", ServeError::Malformed),
+            ("0x7 48", ServeError::Illegal),
+            ("0x7 40", ServeError::Illegal),
+            ("0x7 4444444", ServeError::Illegal),
+            ("0x7 1212121", ServeError::Finished),
+            ("0x7 12121212", ServeError::Finished),
+        ] {
+            assert_eq!(serve_line(bad), Err(why), "{bad:?}");
+        }
+        // A drawn full board: 42 moves, no four.
+        let draw = "547125662261271266215743771576315353334444";
+        assert_eq!(serve_line(&format!("0x7 {draw}")), Err(ServeError::Full));
     }
 }
