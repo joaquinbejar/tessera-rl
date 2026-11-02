@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: MIT OR Apache-2.0
 """ADR-0041 on Windows: every boundary thunk and callout in the LINKED
 extension module (``_native.pyd``) has unwind data, and it is the
-template's (one stack allocation of 88 bytes, no frame register).
+template's (one stack allocation of 104 bytes, no frame register).
 
 The .pyd exports only ``PyInit__native``, so the thunk addresses come from
 the linker map. Build with it, and with an explicit target: without one,
@@ -33,7 +33,7 @@ import sys
 # Mangled (v0) names of functions in `ffi::thunks`: the thunks, the
 # callouts and the module initializer.
 THUNK = re.compile(r"6thunks\d+\w+|^PyInit__native$")
-TEMPLATE = {"codes": ["ALLOC_SMALL size=88"], "frame": "-"}
+TEMPLATE = {"codes": ["ALLOC_SMALL size=104"], "frame": "-"}
 
 
 def image_base(text: str) -> int:
