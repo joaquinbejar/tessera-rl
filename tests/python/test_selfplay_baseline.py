@@ -274,6 +274,18 @@ def test_selfplay_tiny_end_to_end(tmp_path):
     )) == 0  # fmt: skip
     r3 = json.loads((out3 / "h2h.json").read_text())
     assert r3["games"] == 4 and r3["criterion_applicable"] is False and r3["pass"] is None
+    # Not the registered runtime here (host, image, cpuset): never formal.
+    assert r3["runtime"]["registered"] is False
+    # No update, no checkpoint.
+    for bad in (("--epochs", 0), ("--batch", 10**9)):
+        with pytest.raises(SystemExit):
+            targs = train_step.parse([str(a) for a in (
+                "train", "--checkpoint", c0, "--data", data, "--out", tmp_path / f"no-{bad[0][2:]}.pt", "--run-seed", 11,
+                "--batch", 16, "--source-sha", "test", "--ledger", tmp_path / "l.json", "--budget-core-hours", 1,
+                "--wall-cap-s", 60, *bad,
+            )])  # fmt: skip
+            train_step.work_train(targs, NoClock())
+    assert not list(tmp_path.glob("no-*"))
     # A checkpoint is never overwritten, the parent least of all.
     with pytest.raises(SystemExit, match="parent"):
         inprocess_train = train_step.parse([str(a) for a in (
@@ -312,3 +324,21 @@ def test_selfplay_diverged_training_writes_no_checkpoint(tmp_path, monkeypatch):
     )])  # fmt: skip
     assert train_step.work_train(targs, NoClock()) == train_step.EXIT_DIVERGED
     assert not out.exists() and not (tmp_path / "C1.json").exists()
+
+
+def test_selfplay_formal_runtime_is_the_registered_one(monkeypatch):
+    assert h2h.cpuset_size("2") == 1 and h2h.cpuset_size("0-3,6") == 5 and h2h.cpuset_size(None) is None
+    torch.set_num_threads(1)
+    torch.use_deterministic_algorithms(True)
+    monkeypatch.setattr("socket.gethostname", lambda: "xaskar")
+    monkeypatch.setenv("PILOT_IMAGE_DIGEST", h2h.REGISTERED_IMAGE)
+    monkeypatch.setenv("PILOT_CPUSET", "2")
+    if hasattr(os, "sched_getaffinity"):
+        monkeypatch.setattr(os, "sched_getaffinity", lambda pid: {2})
+        expected = torch.get_num_interop_threads() == 1
+        assert h2h.runtime()["registered"] is expected
+    monkeypatch.setenv("PILOT_CPUSET", "0-1")
+    assert h2h.runtime()["registered"] is False
+    monkeypatch.setenv("PILOT_CPUSET", "2")
+    monkeypatch.setenv("PILOT_IMAGE_DIGEST", "rust:latest")
+    assert h2h.runtime()["registered"] is False

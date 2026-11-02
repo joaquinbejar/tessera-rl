@@ -58,6 +58,46 @@ Z = 1.645
 SEARCH_SEED = 20261102
 # The frozen protocol: (sims, batch size, capacity, run seed).
 FROZEN = (100, 8, 8192, 1)
+# The registered runtime (design revision 3): xaskar, the pinned image,
+# one allocated core, one torch thread.
+REGISTERED_HOST = "xaskar"
+REGISTERED_IMAGE = "rust:1.99.1@sha256:09027f873d45b8ecd1dc86f1fa13b7a62b875c961f017a0e331267b350430137"
+
+
+def cpuset_size(spec: str | None) -> int | None:
+    """CPUs in a cpuset string such as ``2`` or ``0-3,6``."""
+    if not spec:
+        return None
+    n = 0
+    for part in spec.split(","):
+        lo, _, hi = part.partition("-")
+        n += int(hi or lo) - int(lo) + 1
+    return n
+
+
+def runtime() -> dict:
+    """The observed runtime, compared with the registered one."""
+    affinity = len(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else None
+    cpuset = os.environ.get("PILOT_CPUSET")
+    observed = {
+        "host": __import__("socket").gethostname(),
+        "image_digest": os.environ.get("PILOT_IMAGE_DIGEST"),
+        "cpuset": cpuset,
+        "affinity_cores": affinity,
+        "torch_threads": torch.get_num_threads(),
+        "torch_interop_threads": torch.get_num_interop_threads(),
+        "deterministic": torch.are_deterministic_algorithms_enabled(),
+    }
+    observed["registered"] = (
+        observed["host"] == REGISTERED_HOST
+        and observed["image_digest"] == REGISTERED_IMAGE
+        and cpuset_size(cpuset) == 1
+        and affinity == 1
+        and observed["torch_threads"] == 1
+        and observed["torch_interop_threads"] == 1
+        and observed["deterministic"]
+    )
+    return observed
 
 
 def wilson_lower(p: float, n: int, z: float = Z) -> float:
@@ -142,8 +182,10 @@ def work(args, clock) -> int:
         "search_seed": SEARCH_SEED,
         "run_seed": args.run_seed,
     }
+    observed = runtime()
     applicable = (
-        not args.any_openings
+        observed["registered"]
+        and not args.any_openings
         and protocol["openings_sha256"] == DEV_SHA256
         and len(results) == 400
         and meta_a["size"] == meta_b["size"] == "medium"
@@ -180,6 +222,7 @@ def work(args, clock) -> int:
         "any_openings": args.any_openings,
         # Only the full pre-registered protocol passes or fails; anything
         # else is a diagnostic run with pass = null.
+        "runtime": observed,
         "criterion_applicable": applicable,
         "pass": (lower > 0.5) if applicable else None,
         "provenance": provenance.block(args.source_sha, protocol),

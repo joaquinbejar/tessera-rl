@@ -184,14 +184,20 @@ def work_train(args, clock) -> int:
     configure_torch()
     if os.path.abspath(args.out) == os.path.abspath(args.checkpoint):
         raise SystemExit("--out must not be the parent checkpoint")
+    if args.epochs < 1 or args.batch < 1:
+        raise SystemExit("--epochs and --batch must be at least 1")
     model, parent = ckpt.load(args.checkpoint)
     planes, policy, z, digests = load_samples(args.data)
+    if (2 * len(z)) // args.batch < 1:
+        raise SystemExit(f"{2 * len(z)} augmented samples make no full batch of {args.batch}: no update")
     batch = args.batch
     try:
         losses, counts = train(model, planes, policy, z, args.run_seed, args.epochs, batch, clock)
     except Diverged as e:
         print(f"diverged, no checkpoint written: {e}", file=sys.stderr)
         return EXIT_DIVERGED
+    if counts["steps"] < 1 or len(losses) != counts["steps"]:
+        raise SystemExit(f"{counts['steps']} steps realized: no checkpoint without an update")
     config = {
         "parent_sha256": parent["sha256"],
         "data_manifests": digests,
