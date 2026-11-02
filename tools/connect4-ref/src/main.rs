@@ -9,6 +9,12 @@
 //!   JSON (random play, depth-1, solver agreement, games against the
 //!   solver from the first `GAMES` openings).
 //! - `solve MOVES`: prints the exact score of a position.
+//! - `serve`: the pinned bot as a line protocol, for the P2-M3 example.
+//!   Each input line is `TIE_SEED MOVES` (the tie seed in hex with a `0x`
+//!   prefix, the moves as 1-based column digits, `-` for the empty board);
+//!   each output line is the bot's 0-based column, or `error` for a line
+//!   that does not parse or names a finished or illegal position. It runs
+//!   until the end of its input.
 
 use tessera_rl_connect4_ref::{board, bot, calibrate, openings, solver};
 
@@ -58,6 +64,36 @@ fn read_openings(path: &str) -> io::Result<Vec<Position>> {
         out.push(p);
     }
     Ok(out)
+}
+
+/// The bot's reply to one `serve` line.
+fn serve_line(line: &str) -> String {
+    let mut parts = line.split_whitespace();
+    let reply = (|| {
+        let seed = u64::from_str_radix(parts.next()?.strip_prefix("0x")?, 16).ok()?;
+        let moves = parts.next()?;
+        if parts.next().is_some() {
+            return None;
+        }
+        let p = Position::from_moves(if moves == "-" { "" } else { moves })?;
+        bot::Bot::new(seed).choose(&p)
+    })();
+    reply.map_or_else(|| "error".to_owned(), |c| c.to_string())
+}
+
+/// Serves `serve_line` replies until the end of the input.
+fn serve() -> io::Result<String> {
+    let stdin = io::stdin();
+    let mut out = io::stdout().lock();
+    let mut line = String::new();
+    loop {
+        line.clear();
+        if stdin.read_line(&mut line)? == 0 {
+            return Ok(String::new());
+        }
+        writeln!(out, "{}", serve_line(&line))?;
+        out.flush()?;
+    }
 }
 
 fn run(args: &[String]) -> io::Result<String> {
@@ -112,6 +148,7 @@ fn run(args: &[String]) -> io::Result<String> {
             let p = Position::from_moves(args.get(1).map_or("", String::as_str)).ok_or_else(bad)?;
             Ok(Solver::new().solve(&p).to_string())
         }
+        Some("serve") => serve(),
         _ => Err(bad()),
     }
 }
@@ -119,6 +156,7 @@ fn run(args: &[String]) -> io::Result<String> {
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match run(&args) {
+        Ok(out) if out.is_empty() => ExitCode::SUCCESS,
         Ok(out) => {
             let _ = writeln!(io::stdout(), "{out}");
             ExitCode::SUCCESS
@@ -126,6 +164,27 @@ fn main() -> ExitCode {
         Err(e) => {
             let _ = writeln!(io::stderr(), "connect4-ref: {e}");
             ExitCode::FAILURE
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_serve_line_matches_the_bot_and_rejects_bad_lines() {
+        let seed = calibrate::TIE_BASE;
+        let want = Position::from_moves("4453")
+            .and_then(|p| bot::Bot::new(seed).choose(&p))
+            .map(|c| c.to_string());
+        assert_eq!(Some(serve_line(&format!("{seed:#x} 4453\n"))), want);
+        let empty = bot::Bot::new(7)
+            .choose(&Position::new())
+            .map(|c| c.to_string());
+        assert_eq!(Some(serve_line("0x7 -")), empty);
+        for bad in ["", "7 44", "0xzz 44", "0x7 48", "0x7 44 1", "0x7 1212121"] {
+            assert_eq!(serve_line(bad), "error", "{bad:?}");
         }
     }
 }
