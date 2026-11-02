@@ -22,6 +22,7 @@ import shutil
 import subprocess
 import sys
 
+import numpy as np
 import pytest
 
 torch = pytest.importorskip("torch")
@@ -92,28 +93,23 @@ def make_root(tmp_path, bot, **over):
 
 
 def identities(root):
-    """The logical identities of a loop root: checkpoints, data, looks."""
+    """The logical identities of a loop root: data, checkpoints, looks."""
     lp = loop.Loop(str(root))
     entries = lp.ledger.entries()
-    out = []
-    for k in range(lp.cfg["k_max"]):
-        sp, _ = lp.phase_state(k, "selfplay", entries)
-        tr, _ = lp.phase_state(k, "train", entries)
-        lk, _ = lp.phase_state(k, "look", entries)
-        out.append(
-            (
-                artifacts.load_manifest(sp)[0]["games_digest"] if sp else None,
-                ckpt.manifest(os.path.join(tr, "C.pt"))["sha256"] if tr else None,
-                json.load(open(os.path.join(lk, "look.json")))["log_sha256"] if lk else None,
-            )
-        )
-    looks = [(e["generation"], e["checkpoint"]) for e in lp.selection() if e["type"] == "look"]
+    gens = lp.chain(entries)
+    out = [
+        tuple(g[p]["identity"].get(k) if g[p] else None for p, k in
+              (("selfplay", "games_digest"), ("train", "checkpoint_sha256"), ("look", "log_sha256")))
+        for g in gens
+    ]  # fmt: skip
+    looks = [(e["generation"], e["checkpoint"]) for e in lp.looks(gens, entries)]
     return out, looks
 
 
-def run_loop(root, crash=None):
+def run_loop(root, crash=None, inprocess=True):
     env = {k: v for k, v in os.environ.items() if k != "PILOT_INHERITED_THREAD_VARS"}
-    env["LOOP_TEST_INPROCESS"] = "1"
+    if inprocess:
+        env["LOOP_TEST_INPROCESS"] = "1"
     if crash:
         env["LOOP_TEST_CRASH"] = crash
     return subprocess.run(
@@ -143,13 +139,17 @@ def test_loop_tiny_end_to_end_stops_at_k_max(clean_run):
     assert c2["parent_sha256"] == ckpt.manifest(str(root / "gen-000" / "train-0" / "C.pt"))["sha256"]
     stops = [e for e in lp.selection() if e["type"] == "stop"]
     assert [e["reason"] for e in stops] == ["K_max"]
-    # Test looks are never eligible: no selection, so no gate.
-    assert lp.select()["selected"] is None
+    # A test run is never formal: no eligible look, no selection, no gate.
+    assert lp.cfg["formal"] is False
+    m = lp.select()
+    assert m["selected"] is None and m["formal"] is False
+    assert m["final_checkpoint"]["generation"] == 2
 
 
 @pytest.mark.parametrize(
     "crash",
-    ["during-selfplay", "after-selfplay", "during-train", "after-train", "during-look", "after-look",
+    ["during-selfplay", "output-before-settle-selfplay", "after-selfplay", "during-train",
+     "output-before-settle-train", "after-train", "during-look", "output-before-settle-look", "after-look",
      "after-selection-append", "before-state"],
 )  # fmt: skip
 def test_loop_resume_after_a_crash_reproduces_the_logical_identities(tmp_path, bot, clean_run, crash):
@@ -161,8 +161,8 @@ def test_loop_resume_after_a_crash_reproduces_the_logical_identities(tmp_path, b
     assert r.returncode == 0, r.stderr
     assert identities(root) == want
     looks = [e for e in loop.Loop(str(root)).selection() if e["type"] == "look"]
-    assert len({e["checkpoint"] for e in looks}) == len(looks) == 2
-    if crash.startswith("during-"):
+    assert [e["generation"] for e in looks] == [1, 2], "one audit entry per generation"
+    if crash.startswith(("during-", "output-before-settle")):
         # The interrupted attempt was charged and superseded by a new one.
         entries = loop.Loop(str(root)).ledger.entries()
         assert any(e["status"].startswith("interrupted") for e in entries)
@@ -180,55 +180,129 @@ def test_loop_incomplete_attempt_is_redone_in_a_new_directory(tmp_path, bot):
     assert (d / "shard-w000-r0000.bin").read_bytes() == b"partial", "never overwritten"
 
 
-def test_loop_refuses_a_changed_input_and_a_second_owner(tmp_path, bot):
-    root = make_root(tmp_path, bot, **{"--k-max": 1})
-    assert run_loop(root).returncode == 0
-    # A changed shard makes its self-play attempt incomplete: training of a
-    # later generation could not use it, and the cache rebuild sees it.
-    lp = loop.Loop(str(root))
-    shard = next((root / "gen-000" / "selfplay-0").glob("shard-*.bin"))
-    shard.write_bytes(shard.read_bytes() + b"x")
-    done, _ = lp.phase_state(0, "selfplay", lp.ledger.entries())
-    assert done is None
+def copy_root(src, dst):
+    shutil.copytree(src, dst)
+    return dst
+
+
+@pytest.mark.parametrize("change", ["shard", "c0", "checkpoint", "look-log"])
+def test_loop_refuses_a_changed_committed_input_after_completion(tmp_path, clean_run, change):
+    root = copy_root(clean_run[0], tmp_path / "root")
+    target = {
+        "shard": next((root / "gen-000" / "selfplay-0").glob("shard-*.bin")),
+        "c0": root / "c0" / "C.pt",
+        "checkpoint": root / "gen-000" / "train-0" / "C.pt",
+        "look-log": root / "gen-001" / "look-0" / "look-log.json",
+    }[change]
+    target.write_bytes(target.read_bytes() + b"x")
+    r = run_loop(root)
+    assert r.returncode == 0, r.stderr
+    assert json.loads(r.stdout.strip().splitlines()[-1])["stop"] == "incomplete input"
+    # select refuses too.
+    with pytest.raises(loop.Stop, match="incomplete input"):
+        loop.Loop(str(root)).select()
+
+
+def test_loop_refuses_a_second_owner(tmp_path, clean_run):
+    root = copy_root(clean_run[0], tmp_path / "root")
     with open(root / "loop.lock", "a+") as held:
         fcntl.flock(held, fcntl.LOCK_EX)
         r = run_loop(root)
-    assert r.returncode != 0 and "another loop" in r.stderr
+        assert r.returncode != 0 and "another loop" in r.stderr
+        with pytest.raises(SystemExit, match="another loop"):
+            loop.Loop(str(root)).select()
 
 
-def scripted(tmp_path, entries, k_max=30):
-    root = tmp_path / "s"
-    root.mkdir(parents=True)
-    cfg = {"k_max": k_max, "budget_core_hours": 200.0, "early_stop_wins": 380}
-    (root / "config.json").write_text(json.dumps(cfg))
-    with open(root / "selection.jsonl", "w") as f:
-        for e in entries:
-            f.write(json.dumps(e) + "\n")
-    return loop.Loop(str(root))
+def test_loop_selection_comes_from_evidence_not_the_log(tmp_path, clean_run):
+    root = copy_root(clean_run[0], tmp_path / "root")
+    # A forged audit entry for a checkpoint with no look: ignored.
+    lp = loop.Loop(str(root))
+    lp.append_selection({"type": "look", "generation": 9, "checkpoint": "forged", "wins": 400, "eligible": True})
+    assert lp.select()["selected"] is None
+    looks = lp.looks(lp.chain(lp.ledger.entries()), lp.ledger.entries())
+    assert {e["checkpoint"] for e in looks} != {"forged"} and len(looks) == 2
 
 
-def look_entry(g, wins, eligible=True, ok=True, sha=None):
-    return {"type": "look", "generation": g, "checkpoint": sha or f"sha{g}", "wins": wins, "eligible": eligible, "ledger_ok": ok}
+def test_loop_evicted_window_input_must_be_restored_then_resumes(tmp_path, bot, clean_run):
+    import assets
+
+    root = make_root(tmp_path, bot)
+    r = run_loop(root, crash="after-look")  # generation 0 done, generation 1 not started
+    assert r.returncode == 137
+    out = tmp_path / "assets"
+    m = assets.pack(str(root), str(out), "p2-m3-train-test")
+    sp = next(a for a in m["assets"] if a["attempt"] == "g000-selfplay-0")
+    assert sp["command"][0] == "selfplay.py"
+    assets.evict(str(root), str(out / sp["name"]))
+    assert not list((root / "gen-000" / "selfplay-0").glob("shard-*"))
+    r = run_loop(root)
+    assert json.loads(r.stdout.strip().splitlines()[-1])["stop"] == "incomplete input"
+    assets.restore(str(root), str(out / sp["name"]))
+    r = run_loop(root)
+    assert json.loads(r.stdout.strip().splitlines()[-1])["stop"] == "K_max"
+    assert identities(root) == clean_run[2]
+    # The manifest only grows; a substitute is refused.
+    m2 = assets.pack(str(root), str(out), "p2-m3-train-test")
+    assert {a["name"] for a in m["assets"]} <= {a["name"] for a in m2["assets"]}
+    bad = out / sp["name"]
+    bad.write_bytes(bad.read_bytes() + b"x")
+    with pytest.raises(artifacts.Incomplete, match="broken"):
+        assets.verify(assets.load_manifest(str(root)), str(bad))
 
 
-def test_loop_selection_rule_ties_to_the_later_generation_and_needs_eligible_looks(tmp_path):
-    entries = [look_entry(1, 300), look_entry(2, 350), look_entry(3, 350)]
-    entries += [look_entry(4, 399, eligible=False), look_entry(5, 399, ok=False)]
-    lp = scripted(tmp_path, entries)
-    m = lp.select()
-    assert m["selected"] == {"generation": 3, "checkpoint": "sha3", "wins": 350}
-    assert [e["generation"] for e in m["eligible_looks"]] == [1, 2, 3]
-    lp2 = scripted(tmp_path / "b", [look_entry(1, 300, eligible=False)])
-    assert lp2.select()["selected"] is None
+def test_loop_reuses_a_look_at_a_repeated_checkpoint(tmp_path, clean_run):
+    root = copy_root(clean_run[0], tmp_path / "root")
+    lp = loop.Loop(str(root))
+    gens = lp.chain(lp.ledger.entries())
+    # Generation 1 trained a checkpoint identical to generation 0's (forced).
+    gens[1]["c_k1"] = gens[0]["look"]["identity"]["checkpoint_sha256"]
+    gens[1]["look"] = None
+    shutil.rmtree(root / "gen-001" / "look-0")
+    assert lp.reuse_look(gens, 1)
+    desc = json.loads((root / "gen-001" / "look-ref" / "attempt.json").read_text())
+    assert desc["ref"] == "g000-look-0"
 
 
-def test_loop_early_stop_needs_two_consecutive_eligible_generations(tmp_path):
-    lp = scripted(tmp_path, [look_entry(1, 381), look_entry(2, 379), look_entry(3, 385)])
-    assert lp.early_stop(1) is None  # generations 1, 2: 381, 379
+def test_loop_supervised_runner_path(tmp_path, bot):
+    """One generation through the real supervised tools (no in-process)."""
+    root = make_root(tmp_path, bot, **{"--k-max": 1})
+    r = run_loop(root, inprocess=False)
+    assert r.returncode == 0, r.stderr
+    assert json.loads(r.stdout.strip().splitlines()[-1])["stop"] == "K_max"
+    entries = loop.Loop(str(root)).ledger.entries()
+    assert [e["run"].split()[0] for e in entries] == ["g000-selfplay-0", "g000-train-0", "g000-look-0"]
+    assert all(e["status"] == "ok" for e in entries)
+
+
+def look_entry(g, wins, eligible=True):
+    return {"generation": g, "checkpoint": f"sha{g}", "wins": wins, "eligible": eligible}
+
+
+def test_loop_selection_rule_ties_to_the_later_generation():
+    eligible = [look_entry(1, 300), look_entry(2, 350), look_entry(3, 350)]
+    assert loop.choose(eligible) == {"generation": 3, "checkpoint": "sha3", "wins": 350}
+    assert loop.choose([]) is None
+
+
+def test_loop_early_stop_needs_two_consecutive_eligible_generations(tmp_path, clean_run):
+    root = copy_root(clean_run[0], tmp_path / "root")
+    lp = loop.Loop(str(root))
+    lp.cfg["early_stop_wins"] = 0
+    gens, entries = lp.chain(lp.ledger.entries()), lp.ledger.entries()
+    # Not formal: no look is eligible, so no early stop.
+    lp.early_stop(gens, entries)
+    lp.looks = lambda gens, entries: [look_entry(1, 381), look_entry(2, 379), look_entry(3, 385), look_entry(4, 380)]
+    lp.cfg["early_stop_wins"] = 380
     with pytest.raises(loop.Stop) as stop:
-        lp.append_selection(look_entry(4, 380))
-        lp.early_stop(3)  # generations 3, 4: 385, 380
-    assert stop.value.reason == "early" and stop.value.inputs["wins"] == [385, 380]
+        lp.early_stop(gens, entries)
+    assert stop.value.reason == "early" and stop.value.inputs["generations"] == [3, 4]
+
+
+def test_loop_formal_flag_needs_the_registered_configuration():
+    cfg = dict(loop.FORMAL)
+    assert loop.is_formal(cfg)
+    for key, bad in (("k_max", 2), ("steps", 2), ("c0_sha256", "x"), ("any_openings", True), ("games", 4)):
+        assert not loop.is_formal({**cfg, key: bad}), key
 
 
 def test_loop_admission_against_the_ledger_with_k_max_lifted(tmp_path):
@@ -237,8 +311,12 @@ def test_loop_admission_against_the_ledger_with_k_max_lifted(tmp_path):
     stops at K_max = 30 before that)."""
     root = tmp_path / "adm"
     root.mkdir()
+    (root / "c0").mkdir()
+    c0 = str(root / "c0" / "C.pt")
+    assert train_step.main(["init", "--size", "tiny", "--seed", "7", "--out", c0, "--source-sha", "t"]) == 0
+    c0sha = ckpt.manifest(str(root / "c0" / "C.pt"))["sha256"]
     cfg = {
-        "k_max": 60, "budget_core_hours": 200.0, "selfplay_cores": 32, "selfplay_wall_s": 900,
+        "c0_sha256": c0sha, "k_max": 60, "budget_core_hours": 200.0, "selfplay_cores": 32, "selfplay_wall_s": 900,
         "train_wall_s": 1200, "look_wall_s": 900, "early_stop_wins": 380,
     }  # fmt: skip
     (root / "config.json").write_text(json.dumps(cfg))
@@ -272,16 +350,75 @@ def test_loop_real_configuration_stops_at_k_max_not_budget():
     assert schedule.K_MAX == 30
 
 
-def test_loop_assets_are_content_addressed_and_substitutes_refused(tmp_path, clean_run):
+def test_loop_assets_are_content_addressed(tmp_path, clean_run):
     import assets
 
-    root, _, _ = clean_run
-    m1 = assets.pack(str(root), str(tmp_path / "a"), "p2-m3-train-test")
-    m2 = assets.pack(str(root), str(tmp_path / "b"), "p2-m3-train-test")
-    assert [a["sha256"] for a in m1["assets"]] == [a["sha256"] for a in m2["assets"]]
+    a = copy_root(clean_run[0], tmp_path / "a")
+    b = copy_root(clean_run[0], tmp_path / "b")
+    m1 = assets.pack(str(a), str(tmp_path / "out-a"), "p2-m3-train-test")
+    m2 = assets.pack(str(b), str(tmp_path / "out-b"), "p2-m3-train-test")
+    assert [x["sha256"] for x in m1["assets"]] == [x["sha256"] for x in m2["assets"]]
     assert len(m1["assets"]) == 6 and m1["tag"] == "p2-m3-train-test"
-    first = tmp_path / "a" / m1["assets"][0]["name"]
-    assets.verify(str(tmp_path / "a" / "assets-manifest.json"), str(first))
-    first.write_bytes(first.read_bytes() + b"x")
-    with pytest.raises(artifacts.Incomplete, match="broken"):
-        assets.verify(str(tmp_path / "a" / "assets-manifest.json"), str(first))
+    with pytest.raises(SystemExit, match="release"):
+        assets.pack(str(a), str(tmp_path / "out-c"), "another-tag")
+
+
+def test_loop_look_is_eligible_only_with_the_registered_bot_and_a_medium_net(monkeypatch, bot):
+    import look
+
+    args = look.parse(["--checkpoint", "x", "--bot", bot, "--bot-sha256", "y", "--out", "o", "--source-sha", "t",
+                       "--ledger", "l", "--budget-core-hours", "1", "--wall-cap-s", "1"])  # fmt: skip
+    observed = {"registered": True, "image_digest": "img"}
+    ok = ("botsha", "medium", look.HELDOUT_SHA256, args, 200)
+    assert not look.is_eligible(observed, *ok), "no registered bot yet"
+    monkeypatch.setitem(look.REGISTERED_BOTS, "img", "botsha")
+    assert look.is_eligible(observed, *ok)
+    assert not look.is_eligible(observed, "other", "medium", look.HELDOUT_SHA256, args, 200)
+    assert not look.is_eligible(observed, "botsha", "tiny", look.HELDOUT_SHA256, args, 200)
+    assert not look.is_eligible({**observed, "registered": False}, *ok)
+    assert not look.is_eligible(observed, "botsha", "medium", look.HELDOUT_SHA256, args, 1)
+
+
+def test_loop_look_refuses_an_unexpected_bot_binary(tmp_path, bot):
+    import look
+
+    c = tmp_path / "C.pt"
+    assert train_step.main(["init", "--size", "tiny", "--seed", "1", "--out", str(c), "--source-sha", "t"]) == 0
+    out = tmp_path / "o"
+    out.mkdir()
+    args = look.parse(["--checkpoint", str(c), "--bot", bot, "--bot-sha256", "0" * 64, "--out", str(out),
+                       "--source-sha", "t", "--ledger", str(tmp_path / "l"), "--budget-core-hours", "1",
+                       "--wall-cap-s", "1"])  # fmt: skip
+    with pytest.raises(SystemExit, match="not the expected"):
+        look.work(args, None)
+
+
+def test_loop_lazy_augmentation_matches_the_materialized_pool():
+    import augment
+
+    rng = np.random.default_rng(1)
+    planes = (rng.random((5, 2, 6, 7)) < 0.3).astype(np.uint8)
+    policy = rng.dirichlet(np.ones(7), size=5)
+    z = rng.choice([-1.0, 0.0, 1.0], size=5)
+    p, pol, v = augment.augment(planes.astype(np.float32), policy, z)
+    model = __import__("net").build("tiny", seed=1)
+    calls = {}
+
+    def capture(x):
+        calls.setdefault("x", []).append(x.clone())
+        return orig(x)
+
+    orig = model.forward
+    model.forward = capture
+    losses, counts = train_step.train_window(model, planes, policy, z, generation=0, base=7, steps=3, batch=4)
+    idx = np.random.Generator(np.random.PCG64(seeds.sample(7, 0))).integers(0, 10, size=(3, 4))
+    for s, x in enumerate(calls["x"]):
+        assert torch.equal(x, torch.from_numpy(p[idx[s]]))
+
+
+def test_loop_formal_training_needs_exactly_the_registered_steps(tmp_path):
+    args = train_step.parse(["train-window", "--checkpoint", "c", "--data", "d", "--out", str(tmp_path / "o.pt"),
+                             "--generation", "0", "--base", "1", "--steps", "5", "--formal", "--source-sha", "t",
+                             "--ledger", "l", "--budget-core-hours", "1", "--wall-cap-s", "1"])  # fmt: skip
+    with pytest.raises(SystemExit, match="exactly"):
+        train_step.work_window(args, None)

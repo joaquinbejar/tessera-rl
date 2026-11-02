@@ -190,13 +190,25 @@ def train_window(model, planes, policy, z, generation: int, base: int, steps: in
     per-step losses and counts."""
     if not 1 <= steps <= schedule.STEPS:
         raise ValueError(f"steps must be in 1..{schedule.STEPS}")
-    p, pol, v = augment.augment(planes.astype(np.float32), policy, z)
-    x_all = torch.from_numpy(np.ascontiguousarray(p))
-    pol_all = torch.from_numpy(np.ascontiguousarray(pol, dtype=np.float32))
-    v_all = torch.from_numpy(np.ascontiguousarray(v, dtype=np.float32))
-    n = len(v)
+    # The augmented pool is the samples then their mirrors (index i >= N
+    # is the mirror of i - N), sampled lazily: only the batch is mirrored.
+    x_base = torch.from_numpy(np.ascontiguousarray(planes, dtype=np.float32))
+    pol_base = torch.from_numpy(np.ascontiguousarray(policy, dtype=np.float32))
+    v_base = torch.from_numpy(np.ascontiguousarray(z, dtype=np.float32))
+    half = len(z)
+    n = 2 * half
     rng = np.random.Generator(np.random.PCG64(seeds.sample(base, generation)))
     indices = rng.integers(0, n, size=(steps, batch))
+
+    def batch_of(idx: np.ndarray):
+        src = torch.from_numpy(idx % half)
+        mirrored = torch.from_numpy(idx >= half)
+        x = x_base[src].clone()
+        x[mirrored] = x[mirrored].flip(-1)
+        p = pol_base[src].clone()
+        p[mirrored] = p[mirrored].flip(-1)
+        return x, p, v_base[src]
+
     opt = torch.optim.SGD(
         model.parameters(),
         lr=schedule.lr(schedule.global_step(generation, 0)),
@@ -211,10 +223,10 @@ def train_window(model, planes, policy, z, generation: int, base: int, steps: in
             rate = schedule.lr(schedule.global_step(generation, s_))
             for group in opt.param_groups:
                 group["lr"] = rate
-            idx = torch.from_numpy(indices[s_])
-            logits, values = model(x_all[idx])
-            lp = -(pol_all[idx] * torch.log_softmax(logits, dim=1)).sum(dim=1).mean()
-            lv = ((values - v_all[idx]) ** 2).mean()
+            xb, pb, vb = batch_of(indices[s_])
+            logits, values = model(xb)
+            lp = -(pb * torch.log_softmax(logits, dim=1)).sum(dim=1).mean()
+            lv = ((values - vb) ** 2).mean()
             loss = lp + HYPER["value_loss_weight"] * lv
             if not bool(torch.isfinite(loss)):
                 raise Diverged(f"generation {generation} step {s_}: the loss is not finite")
@@ -241,6 +253,8 @@ def work_window(args, clock) -> int:
     configure_torch()
     if os.path.abspath(args.out) == os.path.abspath(args.checkpoint):
         raise SystemExit("--out must not be the parent checkpoint")
+    if args.formal and args.steps != schedule.STEPS:
+        raise SystemExit(f"a formal run trains exactly {schedule.STEPS} steps per generation")
     model, parent = ckpt.load(args.checkpoint)
     planes, policy, z, digests = load_samples(args.data)
     try:
@@ -347,6 +361,7 @@ def parse(argv):
     w.add_argument("--base", type=int, required=True)
     w.add_argument("--steps", type=int, default=schedule.STEPS)
     w.add_argument("--batch", type=int, default=HYPER["batch"])
+    w.add_argument("--formal", action="store_true", help="the registered run: steps must equal schedule.STEPS")
     w.add_argument("--source-sha", required=True)
     w.add_argument("--attempt", default="train")
     w.add_argument("--ledger", required=True)

@@ -13,18 +13,26 @@ This file pre-registers the training loop before any run. The contract is design
   3. runs a held-out look at `C_{k+1}`.
 - **Training:**
   - exactly `S = 1000` steps per generation;
-  - each step a batch of 1024 drawn uniformly with replacement from the mirror-augmented window;
+  - each step a batch of 1024 drawn uniformly with replacement from the mirror-augmented window (the samples, then their mirrors), mirrored lazily per batch;
+  - a formal run asserts exactly 1000 steps;
   - the window is the self-play data of generations `max(0, k-3)..k`, in generation, file and sample order;
   - the indices come from `PCG64(seeds.sample(20261103, k))`, drawn in one call.
 - **Learning rate:** `lr(t) = 0.002 + 0.5 * 0.018 * (1 + cos(pi * t / 30000))` with `t = k * 1000 + s`. The horizon is fixed and never recomputed on resume or stop.
 
 ## Exactly-once recovery
 
-- **Attempts:** every phase attempt `(k, phase, n)` has a fresh directory `gen-<k>/<phase>-<n>/` and its ledger run name `g<k>-<phase>-<n>`.
-- **Done:** a phase is done if and only if an attempt has a complete, digest-verified output **and** an `ok` ledger entry; the lowest such `n` counts.
-- **The ledger** is authoritative for spend. `loop.json` is a cache.
-- **The selection log** `selection.jsonl` is append-only and deduplicated by checkpoint SHA-256. It also records every stop decision with its inputs.
-- **One owner:** one process at a time holds `loop.lock`.
+- **Attempts:** every phase attempt `(k, phase, n)` has a fresh directory `gen-<k>/<phase>-<n>/` and its ledger run name `g<k>-<phase>-<n>`. Its command is recorded next to it.
+- **Done:** an attempt is done when its output is complete and digest-verified, or evicted after a verified upload, **and** its ledger entry is `ok`.
+- **Descriptor:** the loop then writes `attempt.json`, the attempt's immutable identity: output digests, inputs and command.
+- **Recomputed from evidence:** every decision comes from the descriptors, the ledger and the pinned lineage:
+  - `C_0` matches the configured digest;
+  - self-play names `C_k`;
+  - training names `C_k` and the window's self-play manifests;
+  - the look names `C_{k+1}`.
+- **No regeneration:** a recorded attempt whose output is gone or changed, or any broken link, stops the loop with `incomplete input`. The loop never regenerates a different history.
+- **Audit log only:** `selection.jsonl` holds one look entry per generation plus every stop decision with its inputs, and `loop.json` is a cache. Selection and the early stop never trust either of them.
+- **Look reuse:** a look at a checkpoint that already has a verified look is referenced (`look-ref`), not run again, and every generation keeps its own reference.
+- **One owner:** one process at a time holds `loop.lock`, for `run` and for `select`.
 
 ## Budget and stops
 
@@ -52,7 +60,13 @@ The stop reasons are `K_max`, `budget`, `early`, `failed` (3 attempts), `disk` (
   - the ADR-0042 bot with tie seeds `TIE_BASE + j`;
   - the 200 held-out openings x 2 colours;
   - the registered runtime.
-- **Eligible:** only a complete look with an ok ledger entry, on the registered runtime and protocol.
+- **Looks start at C_1:** `C_0` is never selectable.
+- **Eligible:** only a verified look with an ok ledger entry, on a **formal** run, and only with all of:
+  - the registered runtime;
+  - the registered bot binary for that image (`look.REGISTERED_BOTS`, filled by a reviewed pre-run commit after the build);
+  - a medium net;
+  - the frozen protocol.
+- **Formal run:** `K_max` 30, 1000 steps, early stop at 380 wins, budget 200, window 4, 10,000 games, base 20261103, 100 sims, batch 8, capacity 8192, train batch 1024, 200 look openings, the registered `C_0`, and test settings off. The flag is in `config.json`, `loop.json` and the selection manifest, and PR 4 refuses a non-formal selection.
 - **Rule:** the most held-out wins (draws are non-wins), ties going to the later generation. `loop.py select` writes `selection-manifest.json`. It names every eligible look, the selected checkpoint, the final (last trained) checkpoint and the stop decisions, and it is committed before PR 4 opens the gate set. With no eligible look there is no selection and no gate.
 - **Early stop:** two consecutive generations with at least 380/400 held-out wins.
 
@@ -62,7 +76,9 @@ The stop reasons are `K_max`, `budget`, `early`, `failed` (3 attempts), `disk` (
 
 `assets.py pack` makes one content-addressed tarball per done phase attempt and an `assets-manifest.json` with the tag, name, size, SHA-256, generation, phase, attempt, source SHA and config hash. The coordinator uploads the tarballs, after their ledger entries are settled, to the private draft release `p2-m3-train-<date>`.
 
-`assets.py verify` checks every download and refuses substitutes. A sole local copy is deleted only after the read-back verifies.
+`assets.py verify` checks every download and refuses substitutes. The manifest only grows; a changed entry is refused.
+
+`assets.py evict` removes an attempt's output only after the read-back of its asset verifies. It keeps the descriptor, marked evicted with its asset entry. An evicted input that a later phase needs (the active window, the current checkpoint) stops the loop with `incomplete input` until `assets.py restore` brings it back from a verified asset.
 
 ## Results
 

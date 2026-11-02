@@ -58,6 +58,25 @@ TIE_BASE = 0x7E55E2A000000000
 SEARCH_SEED = 20261102
 # The frozen protocol: (sims, batch size, capacity, openings).
 FROZEN = (100, 8, 8192, 200)
+# The registered bot binaries, per registered image digest: the
+# tools/connect4-ref build of the run's source in that image, whose bot.rs,
+# board.rs and rng.rs are the ADR-0042 pinned files. An entry is added by
+# a reviewed pre-run commit after the build; a look with any other binary
+# is never eligible.
+REGISTERED_BOTS: dict[str, str] = {}
+
+
+def is_eligible(observed: dict, bot_sha: str, size: str, openings_sha: str, args, openings: int) -> bool:
+    """Whether a look may enter selection: the registered runtime and bot
+    binary for that image, a medium net, and the frozen protocol."""
+    return bool(
+        observed["registered"]
+        and REGISTERED_BOTS.get(observed["image_digest"]) == bot_sha
+        and size == "medium"
+        and not args.any_openings
+        and openings_sha == HELDOUT_SHA256
+        and (args.sims, args.batch_size, args.capacity, openings) == FROZEN
+    )
 
 
 def work(args, clock) -> int:
@@ -69,6 +88,9 @@ def work(args, clock) -> int:
     torch.use_deterministic_algorithms(True)
     if artifacts.sha256_file(args.openings) != HELDOUT_SHA256 and not args.any_openings:
         raise SystemExit("a look is defined on the pinned held-out set only")
+    bot_sha = artifacts.sha256_file(args.bot)
+    if bot_sha != args.bot_sha256:
+        raise SystemExit(f"the bot binary is {bot_sha}, not the expected {args.bot_sha256}")
     model, meta = ckpt.load(args.checkpoint)
     evaluator = netmod.Evaluator(model)
     openings = game.read_openings(args.openings)[: args.limit]
@@ -103,14 +125,10 @@ def work(args, clock) -> int:
         "openings": len(openings),
         "search_seed": SEARCH_SEED,
         "tie_base": TIE_BASE,
-        "bot_sha256": artifacts.sha256_file(args.bot),
+        "bot_sha256": bot_sha,
+        "size": meta["size"],
     }
-    eligible = (
-        observed["registered"]
-        and not args.any_openings
-        and protocol["openings_sha256"] == HELDOUT_SHA256
-        and (args.sims, args.batch_size, args.capacity, len(openings)) == FROZEN
-    )
+    eligible = is_eligible(observed, bot_sha, meta["size"], protocol["openings_sha256"], args, len(openings))
     log_bytes = artifacts.canonical_json(logs)
     wins = sum(1 for r in results if r > 0)
     draws = sum(1 for r in results if r == 0)
@@ -140,6 +158,7 @@ def parse(argv):
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     p.add_argument("--checkpoint", required=True)
     p.add_argument("--bot", required=True)
+    p.add_argument("--bot-sha256", required=True, help="the expected binary digest, checked before the bot starts")
     p.add_argument("--out", required=True)
     p.add_argument("--openings", default=HELDOUT)
     p.add_argument("--any-openings", action="store_true", help="tests only: never eligible")

@@ -1,40 +1,66 @@
 # SPDX-License-Identifier: MIT OR Apache-2.0
 """The resumable AlphaZero loop of P2-M3 (PR 3, design revision 2).
 
-Generation ``k`` runs three phases:
-1. self-play with ``C_k`` (run seed ``seeds.generation(base, k)``);
+**Generations.** Generation ``k`` runs three phases:
+1. self-play with ``C_k``, run seed ``seeds.generation(base, k)``;
 2. training ``C_{k+1}`` for ``schedule.STEPS`` steps over the window of
    generations ``max(0, k-3)..k``, warm-started from ``C_k`` with a fresh
    optimizer;
-3. a held-out look at ``C_{k+1}`` (``look.py``).
+3. a held-out look at ``C_{k+1}`` (``look.py``). Looks start at ``C_1``,
+   so ``C_0`` is never selectable.
 
 ``C_0`` is given at ``init`` and pinned by SHA-256.
 
-**Exactly once.** Every phase attempt ``(k, phase, n)`` has a fresh
-directory ``gen-<k>/<phase>-<n>/`` and its ledger run name. An attempt is
-never reused or overwritten.
+**Evidence, not cache.** Every phase attempt ``(k, phase, n)`` has a
+fresh directory ``gen-<k>/<phase>-<n>/`` and its ledger run name. An
+attempt is never reused or overwritten.
 
-A phase is **done** if and only if an attempt has a complete,
-digest-verified output **and** a ledger entry settled ``ok``; the lowest
-such ``n`` counts. The ledger is authoritative for spend. ``loop.json`` is
-only a cache, rebuilt from the attempts and the ledger on every start.
+An attempt is **done** when two things hold:
+- its output is complete and digest-verified, or it was evicted after a
+  verified upload, with its descriptor and its asset entry kept;
+- its ledger entry is settled ``ok``.
 
-The selection log (``selection.jsonl``) is append-only and deduplicated by
-checkpoint SHA-256, so a restart never appends a look twice; incomplete
-looks never enter it. One owner at a time holds ``loop.lock``.
+At that point the loop writes ``attempt.json``, the attempt's immutable
+identity: its output digests, its inputs and the command it ran.
+
+Every decision is recomputed from these descriptors, the ledger and the
+pinned lineage:
+- ``C_0`` matches the configured digest;
+- self-play names ``C_k``;
+- training names ``C_k`` as its parent and the window's self-play
+  manifests as its data;
+- the look names ``C_{k+1}``.
+
+A referenced attempt whose descriptor exists but whose output is gone or
+changed stops the loop with ``incomplete input``, and so does any broken
+link of the chain. The loop never regenerates a different history.
+
+``selection.jsonl`` is an append-only audit log, one look entry per
+generation plus every stop decision with its inputs. ``loop.json`` is a
+cache. Selection and the early stop never trust either of them.
+
+**Looks.** A look at a checkpoint that already has a verified look with
+the same protocol is not run again: the generation references it.
 
 **Admission.** A phase starts only if the ledger's remaining budget (the
 settled spend plus every open reservation) covers the frozen reservations
-of the generation's remaining phases. Otherwise the loop stops with reason
-``budget``. It stops with ``K_max`` after the last generation, and with
-``early`` when two consecutive generations reach the early-stop wins.
-Every stop decision is appended to the selection log with its inputs.
+of the generation's remaining phases. The stop reasons are ``K_max``,
+``budget``, ``early``, ``failed``, ``disk`` and ``incomplete input``.
 
-**Selection** (``select``) picks, among eligible complete looks with an ok
-ledger entry, the most held-out wins, ties going to the later generation.
-It writes ``selection-manifest.json``. With no eligible look there is no
-selection, and therefore no gate. The selected checkpoint and the final
-(last trained) checkpoint are named separately.
+**Formal.** A run is formal only with the registered configuration:
+- ``K_max`` 30, 1000 steps, early-stop at 380 wins, budget 200, window 4;
+- 10,000 games, base 20261103, 100 sims, batch 8, capacity 8192;
+- train batch 1024, 200 look openings;
+- the registered ``C_0`` (medium), and test settings off.
+
+Only a formal run has eligible looks. The look itself must also be
+eligible: registered runtime and bot, frozen protocol, medium net.
+
+**Selection** (``select``, under the owner lock) picks, among eligible
+verified looks, the most held-out wins, ties going to the later
+generation. It writes ``selection-manifest.json``, naming the selected
+checkpoint and the final (last trained) checkpoint separately. With no
+eligible look there is no selection, and therefore no gate.
 
 Repeated looks make the selected held-out score optimistically biased; it
 is never an estimate of gate performance.
@@ -69,6 +95,24 @@ PHASES = ("selfplay", "train", "look")
 WINDOW = 4
 MAX_ATTEMPTS = 3
 EXIT_NO_SELECTION = 2
+REGISTERED_C0 = "89855dce4aa429d657af96c5effc42917cb18edbedb5f614e458832a6cb7ff7d"
+FORMAL = {
+    "k_max": schedule.K_MAX,
+    "steps": schedule.STEPS,
+    "early_stop_wins": 380,
+    "budget_core_hours": 200.0,
+    "window": WINDOW,
+    "games": 10000,
+    "base": 20261103,
+    "sims": 100,
+    "batch_size": 8,
+    "capacity": 8192,
+    "train_batch": 1024,
+    "look_openings": 200,
+    "c0_sha256": REGISTERED_C0,
+    "any_openings": False,
+}
+LOAD_ERRORS = (artifacts.Incomplete, OSError, KeyError, ValueError, ckpt.NonFinite)
 
 
 class Stop(Exception):
@@ -95,6 +139,10 @@ def reservations(cfg: dict) -> dict[str, int]:
     }
 
 
+def is_formal(cfg: dict) -> bool:
+    return all(cfg.get(k) == v for k, v in FORMAL.items())
+
+
 class Loop:
     def __init__(self, root: str):
         self.root = root
@@ -102,7 +150,7 @@ class Loop:
             self.cfg = json.load(f)
         self.ledger = Ledger(os.path.join(root, "ledger.json"), self.cfg["budget_core_hours"])
 
-    # ------------------------------------------------------------ state
+    # ------------------------------------------------------------ attempts
 
     def attempt_dir(self, k: int, phase: str, n: int) -> str:
         return os.path.join(self.root, f"gen-{k:03d}", f"{phase}-{n}")
@@ -113,36 +161,121 @@ class Loop:
     def ledger_ok(self, attempt: str, entries: list[dict]) -> bool:
         return any(e["run"].startswith(attempt + " ") and e["status"] == "ok" for e in entries)
 
-    def output_complete(self, phase: str, d: str) -> bool:
-        try:
-            if phase == "selfplay":
-                artifacts.load_manifest(d)
-            elif phase == "train":
-                ckpt.load(os.path.join(d, "C.pt"))
-            else:
-                lookmod.load(d)
-            return True
-        except (artifacts.Incomplete, OSError, KeyError, ValueError, ckpt.NonFinite):
-            return False
+    def identity(self, phase: str, d: str) -> dict:
+        """The verified identity of an attempt's output; raises one of
+        ``LOAD_ERRORS`` if it is not complete."""
+        if phase == "selfplay":
+            manifest, digest = artifacts.load_manifest(d)
+            return {"manifest_sha256": digest, "games_digest": manifest["games_digest"],
+                    "checkpoint_sha256": manifest["checkpoint_sha256"]}  # fmt: skip
+        if phase == "train":
+            _, meta = ckpt.load(os.path.join(d, "C.pt"))
+            return {"checkpoint_sha256": meta["sha256"], "parent_sha256": meta["parent_sha256"],
+                    "data_manifests": meta["data_manifests"], "size": meta["size"]}  # fmt: skip
+        report = lookmod.load(d)
+        return {"checkpoint_sha256": report["checkpoint"], "log_sha256": report["log_sha256"],
+                "wins": report["wins"], "eligible": report["eligible"], "protocol": report["protocol"]}  # fmt: skip
 
-    def phase_state(self, k: int, phase: str, entries: list[dict]) -> tuple[str | None, int]:
-        """The done attempt's directory (or None) and the next attempt
-        number."""
-        n = 0
-        done = None
-        while os.path.exists(self.attempt_dir(k, phase, n)):
+    def descriptor(self, d: str) -> dict | None:
+        path = os.path.join(d, "attempt.json")
+        if not os.path.exists(path):
+            return None
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
+
+    def command(self, d: str) -> list[str] | None:
+        path = d + ".command.json"
+        if not os.path.exists(path):
+            return None
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
+
+    def resolve(self, k: int, phase: str, entries: list[dict]) -> tuple[dict | None, int]:
+        """The done attempt of ``(k, phase)`` as its descriptor (or None),
+        and the next attempt number. Raises ``Stop("incomplete input")``
+        when a recorded attempt lost or changed its output."""
+        n, done = 0, None
+        while os.path.exists(self.attempt_dir(k, phase, n)) or os.path.exists(self.attempt_dir(k, phase, n) + ".command.json"):
             d = self.attempt_dir(k, phase, n)
-            if done is None and self.output_complete(phase, d) and self.ledger_ok(self.attempt_id(k, phase, n), entries):
-                done = d
+            attempt = self.attempt_id(k, phase, n)
+            desc = self.descriptor(d) if os.path.isdir(d) else None
+            if desc is not None:
+                if not desc.get("evicted"):
+                    try:
+                        ok = self.identity(phase, d) == desc["identity"]
+                    except LOAD_ERRORS:
+                        ok = False
+                    if not ok:
+                        raise Stop("incomplete input", {"attempt": attempt, "reason": "recorded output missing or changed"})
+                if done is None:
+                    done = {**desc, "dir": d}
+            elif done is None and self.ledger_ok(attempt, entries):
+                try:
+                    ident = self.identity(phase, d)
+                except LOAD_ERRORS:
+                    ident = None
+                if ident is not None:
+                    desc = {"attempt": attempt, "generation": k, "phase": phase, "identity": ident,
+                            "command": self.command(d)}  # fmt: skip
+                    artifacts.write_atomic(os.path.join(d, "attempt.json"), artifacts.canonical_json(desc))
+                    done = {**desc, "dir": d}
             n += 1
+        ref = os.path.join(self.root, f"gen-{k:03d}", f"{phase}-ref")
+        if done is None and phase == "look" and os.path.exists(os.path.join(ref, "attempt.json")):
+            done = {**self.descriptor(ref), "dir": ref}
         return done, n
 
-    def checkpoint(self, k: int, entries: list[dict]) -> str | None:
-        """The path of C_k, or None if it does not exist yet."""
+    # ------------------------------------------------------------ lineage
+
+    def c0_sha(self) -> str:
+        path = os.path.join(self.root, "c0", "C.pt")
+        try:
+            _, meta = ckpt.load(path)
+        except LOAD_ERRORS as e:
+            raise Stop("incomplete input", {"attempt": "c0", "reason": str(e)}) from None
+        if meta["sha256"] != self.cfg["c0_sha256"]:
+            raise Stop("incomplete input", {"attempt": "c0", "reason": f"C_0 is {meta['sha256']}, not the pinned one"})
+        return meta["sha256"]
+
+    def chain(self, entries: list[dict]) -> list[dict]:
+        """Per generation, the verified done phases, with every lineage link
+        checked, up to the first generation without a look. Stops on a
+        broken link or a missing referenced input."""
+        sha = self.c0_sha()
+        gens = []
+        for k in range(self.cfg["k_max"]):
+            states = {p: self.resolve(k, p, entries) for p in PHASES}
+            sp, tr, lk = (states[p][0] for p in PHASES)
+            if tr is not None and sp is None:
+                raise Stop("incomplete input", {"generation": k, "reason": "training references missing self-play"})
+            if lk is not None and tr is None:
+                raise Stop("incomplete input", {"generation": k, "reason": "a look references a missing checkpoint"})
+            if sp is not None and sp["identity"]["checkpoint_sha256"] != sha:
+                raise Stop("incomplete input", {"generation": k, "reason": "self-play does not name C_k"})
+            c_next = None
+            if tr is not None:
+                window = [gens[j]["selfplay"]["identity"]["manifest_sha256"] for j in range(max(0, k - WINDOW + 1), k)]
+                window.append(sp["identity"]["manifest_sha256"])
+                if tr["identity"]["parent_sha256"] != sha or tr["identity"]["data_manifests"] != window:
+                    raise Stop("incomplete input", {"generation": k, "reason": "training does not name C_k and its window"})
+                c_next = tr["identity"]["checkpoint_sha256"]
+            if lk is not None and lk["identity"]["checkpoint_sha256"] != c_next:
+                raise Stop("incomplete input", {"generation": k, "reason": "the look does not name C_{k+1}"})
+            gens.append({"selfplay": sp, "train": tr, "look": lk, "next": {p: states[p][1] for p in PHASES}, "c_k1": c_next})
+            if lk is None:
+                break
+            sha = c_next
+        return gens
+
+    def checkpoint_path(self, gens: list[dict], k: int) -> str:
         if k == 0:
             return os.path.join(self.root, "c0", "C.pt")
-        done, _ = self.phase_state(k - 1, "train", entries)
-        return os.path.join(done, "C.pt") if done else None
+        tr = gens[k - 1]["train"]
+        if tr.get("evicted"):
+            raise Stop("incomplete input", {"generation": k, "reason": f"restore {tr['attempt']} (the checkpoint) first"})
+        return os.path.join(tr["dir"], "C.pt")
+
+    # ------------------------------------------------------------ audit log
 
     def selection(self) -> list[dict]:
         path = os.path.join(self.root, "selection.jsonl")
@@ -162,9 +295,25 @@ class Loop:
         spent = sum(e["core_hours"] for e in entries)
         return (self.cfg["budget_core_hours"] - spent) * 3600
 
+    def looks(self, gens: list[dict], entries: list[dict]) -> list[dict]:
+        """Every generation's look, from verified evidence. Eligible only on
+        a formal run, with an eligible report and an ok ledger entry for the
+        look that ran."""
+        out = []
+        for k, g in enumerate(gens):
+            lk = g["look"]
+            if lk is None:
+                continue
+            source = lk.get("ref", lk["attempt"])
+            eligible = is_formal(self.cfg) and lk["identity"]["eligible"] and self.ledger_ok(source, entries)
+            out.append({"generation": k + 1, "checkpoint": lk["identity"]["checkpoint_sha256"],
+                        "wins": lk["identity"]["wins"], "eligible": bool(eligible), "look": source,
+                        "log_sha256": lk["identity"]["log_sha256"]})  # fmt: skip
+        return out
+
     # ------------------------------------------------------------ phases
 
-    def phase_argv(self, k: int, phase: str, n: int, entries: list[dict]) -> list[str]:
+    def phase_argv(self, gens: list[dict], k: int, phase: str, n: int) -> list[str]:
         cfg, d, attempt = self.cfg, self.attempt_dir(k, phase, n), self.attempt_id(k, phase, n)
         common = [
             "--source-sha", cfg["source_sha"], "--attempt", attempt,
@@ -173,7 +322,7 @@ class Loop:
         ]  # fmt: skip
         if phase == "selfplay":
             return [
-                "--checkpoint", self.checkpoint(k, entries), "--games", str(cfg["games"]),
+                "--checkpoint", self.checkpoint_path(gens, k), "--games", str(cfg["games"]),
                 "--workers", str(cfg["selfplay_cores"]), "--run-seed", str(seeds.generation(cfg["base"], k)),
                 "--out", d, "--sims", str(cfg["sims"]), "--batch-size", str(cfg["batch_size"]),
                 "--capacity", str(cfg["capacity"]), "--cores", str(cfg["selfplay_cores"]),
@@ -182,27 +331,33 @@ class Loop:
         if phase == "train":
             window = []
             for j in range(max(0, k - WINDOW + 1), k + 1):
-                done, _ = self.phase_state(j, "selfplay", entries)
-                if done is None:
-                    raise Stop("incomplete input", {"generation": k, "missing_selfplay": j})
-                window.append(done)
-            os.makedirs(d, exist_ok=True)
+                sp = gens[j]["selfplay"]
+                if sp.get("evicted"):
+                    raise Stop("incomplete input", {"generation": k, "reason": f"restore {sp['attempt']} (a window input)"})
+                window.append(sp["dir"])
             return [
-                "train-window", "--checkpoint", self.checkpoint(k, entries), "--data", *window,
+                "train-window", "--checkpoint", self.checkpoint_path(gens, k), "--data", *window,
                 "--out", os.path.join(d, "C.pt"), "--generation", str(k), "--base", str(cfg["base"]),
                 "--steps", str(cfg["steps"]), "--batch", str(cfg["train_batch"]), "--cores", "1",
-                "--wall-cap-s", str(cfg["train_wall_s"]), *common,
+                "--wall-cap-s", str(cfg["train_wall_s"]), *(["--formal"] if is_formal(cfg) else []), *common,
             ]  # fmt: skip
         return [
-            "--checkpoint", self.checkpoint(k + 1, entries), "--bot", cfg["bot"], "--out", d,
-            "--limit", str(cfg["look_openings"]), "--sims", str(cfg["sims"]),
+            "--checkpoint", self.checkpoint_path(gens, k + 1), "--bot", cfg["bot"], "--bot-sha256", cfg["bot_sha256"],
+            "--out", d, "--limit", str(cfg["look_openings"]), "--sims", str(cfg["sims"]),
             "--batch-size", str(cfg["batch_size"]), "--capacity", str(cfg["capacity"]), "--cores", "1",
             "--wall-cap-s", str(cfg["look_wall_s"]), *common, *(["--any-openings"] if cfg.get("any_openings") else []),
         ]  # fmt: skip
 
-    def run_phase(self, k: int, phase: str, n: int, entries: list[dict]) -> None:
+    def run_phase(self, gens: list[dict], k: int, phase: str, n: int) -> None:
         tool = {"selfplay": "selfplay.py", "train": "train_step.py", "look": "look.py"}[phase]
-        argv = self.phase_argv(k, phase, n, entries)
+        argv = self.phase_argv(gens, k, phase, n)
+        d = self.attempt_dir(k, phase, n)
+        # The command sits next to the attempt: self-play and looks need a
+        # fresh output directory.
+        os.makedirs(os.path.dirname(d), exist_ok=True)
+        artifacts.write_atomic(d + ".command.json", artifacts.canonical_json([tool, *argv]))
+        if phase == "train":
+            os.makedirs(d)
         if os.environ.get("LOOP_TEST_INPROCESS") == "1":
             self.run_inprocess(phase, argv)
             return
@@ -226,9 +381,8 @@ class Loop:
         module = importlib.import_module({"selfplay": "selfplay", "train": "train_step", "look": "look"}[phase])
         args = module.parse(argv)
         work = {"selfplay": "work", "train": "work_window", "look": "work"}[phase]
-        out = os.path.dirname(os.path.abspath(args.out)) if phase == "train" else args.out
         if phase != "train":
-            artifacts.fresh_dir(out)
+            artifacts.fresh_dir(args.out)
         index, _ = self.ledger.reserve(f"{args.attempt} inprocess", args.cores, args.wall_cap_s)
         start = time.monotonic()
         crash_point(f"during-{phase}")
@@ -241,77 +395,84 @@ class Loop:
             rc = getattr(module, work)(args, Clock())
         except SystemExit as e:
             rc = e.code if isinstance(e.code, int) else 1
+        crash_point(f"output-before-settle-{phase}")
         self.ledger.settle(index, time.monotonic() - start, "ok" if rc == 0 else f"failed: exit {rc}")
 
     # ------------------------------------------------------------ driver
 
-    def step(self) -> str | None:
-        """Does the next unit of work; returns a stop reason or None."""
+    def step(self) -> None:
+        """Does the next unit of work, or raises ``Stop``."""
         entries = self.ledger.entries()
-        res = reservations(self.cfg)
-        for k in range(self.cfg["k_max"]):
-            states = {p: self.phase_state(k, p, entries) for p in PHASES}
-            if states["look"][0] is not None:
-                self.record_look(k, states["look"][0], entries)
-                reason = self.early_stop(k)
-                if reason:
-                    return reason
-                continue
-            pending = [p for p in PHASES if states[p][0] is None]
-            need = sum(res[p] for p in pending)
-            remaining = self.remaining_core_s(entries)
-            if need > remaining:
-                raise Stop("budget", {"generation": k, "pending": pending, "need_core_s": need, "remaining_core_s": remaining})
-            used = disk_bytes(self.root)
-            if used > self.cfg.get("max_disk_mb", 600) * 2**20:
-                raise Stop("disk", {"generation": k, "used_bytes": used, "max_disk_mb": self.cfg.get("max_disk_mb", 600)})
-            phase = pending[0]
-            n = states[phase][1]
-            if n >= MAX_ATTEMPTS:
-                raise Stop("failed", {"generation": k, "phase": phase, "attempts": n})
-            self.run_phase(k, phase, n, entries)
-            crash_point(f"after-{phase}")
-            return None
-        raise Stop("K_max", {"k_max": self.cfg["k_max"]})
-
-    def record_look(self, k: int, d: str, entries: list[dict]) -> None:
-        """Appends generation k's look once (by checkpoint SHA)."""
-        report = lookmod.load(d)
-        known = {e["checkpoint"] for e in self.selection() if e["type"] == "look"}
-        if report["checkpoint"] in known:
+        gens = self.chain(entries)
+        self.audit(gens, entries)
+        self.early_stop(gens, entries)
+        k = len(gens) - 1
+        if gens[k]["look"] is not None:
+            if k + 1 >= self.cfg["k_max"]:
+                raise Stop("K_max", {"k_max": self.cfg["k_max"]})
+            k += 1
+            gens.append({"selfplay": None, "train": None, "look": None, "next": dict.fromkeys(PHASES, 0), "c_k1": None})
+        g = gens[k]
+        pending = [p for p in PHASES if g[p] is None]
+        if pending == ["look"] and self.reuse_look(gens, k):
             return
-        n = int(os.path.basename(d).rsplit("-", 1)[1])
-        self.append_selection(
-            {
-                "type": "look",
-                "generation": k + 1,
-                "checkpoint": report["checkpoint"],
-                "wins": report["wins"],
-                "wdl": report["wdl"],
-                "games": report["games"],
-                "eligible": report["eligible"],
-                "ledger_ok": self.ledger_ok(self.attempt_id(k, "look", n), entries),
-                "log_sha256": report["log_sha256"],
-                "attempt": self.attempt_id(k, "look", n),
-            }
-        )
-        crash_point("after-selection-append")
+        res = reservations(self.cfg)
+        need = sum(res[p] for p in pending)
+        remaining = self.remaining_core_s(entries)
+        if need > remaining:
+            raise Stop("budget", {"generation": k, "pending": pending, "need_core_s": need, "remaining_core_s": remaining})
+        used = disk_bytes(self.root)
+        if used > self.cfg.get("max_disk_mb", 600) * 2**20:
+            raise Stop("disk", {"generation": k, "used_bytes": used, "max_disk_mb": self.cfg.get("max_disk_mb", 600)})
+        phase = pending[0]
+        n = g["next"][phase]
+        if n >= MAX_ATTEMPTS:
+            raise Stop("failed", {"generation": k, "phase": phase, "attempts": n})
+        self.run_phase(gens, k, phase, n)
+        crash_point(f"after-{phase}")
 
-    def early_stop(self, k: int) -> str | None:
-        looks = {e["generation"]: e for e in self.selection() if e["type"] == "look" and e["eligible"] and e["ledger_ok"]}
-        g = k + 1
-        last = [looks.get(g - 1), looks.get(g)]
-        if all(e is not None and e["wins"] >= self.cfg["early_stop_wins"] for e in last):
-            inputs = {"generations": [g - 1, g], "wins": [e["wins"] for e in last], "threshold": self.cfg["early_stop_wins"]}
-            raise Stop("early", inputs)
-        return None
+    def reuse_look(self, gens: list[dict], k: int) -> bool:
+        """References an earlier verified look at the same checkpoint and
+        protocol instead of running it again."""
+        sha = gens[k]["c_k1"]
+        for j in range(k):
+            lk = gens[j]["look"]
+            if lk is not None and lk["identity"]["checkpoint_sha256"] == sha:
+                ref = os.path.join(self.root, f"gen-{k:03d}", "look-ref")
+                os.makedirs(ref, exist_ok=True)
+                desc = {"attempt": f"g{k:03d}-look-ref", "generation": k, "phase": "look",
+                        "ref": lk.get("ref", lk["attempt"]), "identity": lk["identity"]}  # fmt: skip
+                artifacts.write_atomic(os.path.join(ref, "attempt.json"), artifacts.canonical_json(desc))
+                return True
+        return False
 
-    def run(self) -> dict:
+    def audit(self, gens: list[dict], entries: list[dict]) -> None:
+        """Appends each generation's look to the audit log, once."""
+        logged = {e["generation"] for e in self.selection() if e["type"] == "look"}
+        for e in self.looks(gens, entries):
+            if e["generation"] not in logged:
+                self.append_selection({"type": "look", **e})
+                crash_point("after-selection-append")
+
+    def early_stop(self, gens: list[dict], entries: list[dict]) -> None:
+        looks = {e["generation"]: e for e in self.looks(gens, entries) if e["eligible"]}
+        threshold = self.cfg["early_stop_wins"]
+        for g in sorted(looks):
+            last = [looks.get(g - 1), looks.get(g)]
+            if all(e is not None and e["wins"] >= threshold for e in last):
+                raise Stop("early", {"generations": [g - 1, g], "wins": [e["wins"] for e in last], "threshold": threshold})
+
+    def owner(self):
         lock = open(os.path.join(self.root, "loop.lock"), "a+")
         try:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
+            lock.close()
             raise SystemExit("another loop owns this root") from None
+        return lock
+
+    def run(self) -> dict:
+        lock = self.owner()
         try:
             while True:
                 try:
@@ -328,42 +489,46 @@ class Loop:
             lock.close()
 
     def write_cache(self, reason) -> None:
-        entries = self.ledger.entries()
-        gens = []
-        for k in range(self.cfg["k_max"]):
-            states = {p: self.phase_state(k, p, entries)[0] for p in PHASES}
-            if not any(states.values()):
-                break
-            gens.append({"generation": k, **{p: (os.path.relpath(v, self.root) if v else None) for p, v in states.items()}})
+        try:
+            gens = self.chain(self.ledger.entries())
+        except Stop:
+            gens = []
+        summary = [{p: (g[p]["attempt"] if g[p] else None) for p in PHASES} for g in gens]
         artifacts.write_atomic(
             os.path.join(self.root, "loop.json"),
-            artifacts.canonical_json({"cache": True, "generations": gens, "stop": reason}),
+            artifacts.canonical_json({"cache": True, "formal": is_formal(self.cfg), "generations": summary, "stop": reason}),
         )
 
     def select(self) -> dict:
-        looks = [e for e in self.selection() if e["type"] == "look"]
-        eligible = [e for e in looks if e["eligible"] and e["ledger_ok"]]
-        entries = self.ledger.entries()
-        final = None
-        for k in range(self.cfg["k_max"]):
-            done, _ = self.phase_state(k, "train", entries)
-            if done:
-                final = {"generation": k + 1, "checkpoint": ckpt.manifest(os.path.join(done, "C.pt"))["sha256"]}
-        manifest = {
-            "kind": "p2-m3-selection",
-            "rule": "most held-out wins among eligible complete looks with an ok ledger entry; ties to the later generation",
-            "eligible_looks": eligible,
-            "stops": [e for e in self.selection() if e["type"] == "stop"],
-            "final_checkpoint": final,
-            "note": "the selected held-out score is optimistically biased by repeated looks; never a gate estimate",
-        }
-        if eligible:
-            best = max(eligible, key=lambda e: (e["wins"], e["generation"]))
-            manifest["selected"] = {"generation": best["generation"], "checkpoint": best["checkpoint"], "wins": best["wins"]}
-        else:
-            manifest["selected"] = None
-        artifacts.write_atomic(os.path.join(self.root, "selection-manifest.json"), artifacts.canonical_json(manifest))
-        return manifest
+        lock = self.owner()
+        try:
+            entries = self.ledger.entries()
+            gens = self.chain(entries)
+            eligible = [e for e in self.looks(gens, entries) if e["eligible"]]
+            trained = [(k + 1, g["c_k1"]) for k, g in enumerate(gens) if g.get("c_k1")]
+            manifest = {
+                "kind": "p2-m3-selection",
+                "formal": is_formal(self.cfg),
+                "rule": "most held-out wins among eligible verified looks; ties to the later generation",
+                "eligible_looks": eligible,
+                "stops": [e for e in self.selection() if e["type"] == "stop"],
+                "final_checkpoint": {"generation": trained[-1][0], "checkpoint": trained[-1][1]} if trained else None,
+                "note": "the selected held-out score is optimistically biased by repeated looks; never a gate estimate",
+            }
+            manifest["selected"] = choose(eligible)
+            artifacts.write_atomic(os.path.join(self.root, "selection-manifest.json"), artifacts.canonical_json(manifest))
+            return manifest
+        finally:
+            lock.close()
+
+
+def choose(eligible: list[dict]) -> dict | None:
+    """The selection rule: the most held-out wins, ties to the later
+    generation; None without an eligible look."""
+    if not eligible:
+        return None
+    best = max(eligible, key=lambda e: (e["wins"], e["generation"]))
+    return {"generation": best["generation"], "checkpoint": best["checkpoint"], "wins": best["wins"]}
 
 
 def disk_bytes(root: str) -> int:
@@ -388,6 +553,9 @@ def init(args) -> int:
     _, meta = ckpt.load(args.c0)
     if args.c0_sha256 and meta["sha256"] != args.c0_sha256:
         raise SystemExit(f"C_0 is {meta['sha256']}, not the registered {args.c0_sha256}")
+    bot_sha = artifacts.sha256_file(args.bot)
+    if args.bot_sha256 and bot_sha != args.bot_sha256:
+        raise SystemExit(f"the bot binary is {bot_sha}, not the expected {args.bot_sha256}")
     os.makedirs(os.path.join(args.root, "c0"))
     for ext in (".pt", ".json"):
         shutil.copyfile(os.path.splitext(args.c0)[0] + ext, os.path.join(args.root, "c0", "C" + ext))
@@ -395,6 +563,7 @@ def init(args) -> int:
         "c0_sha256": meta["sha256"],
         "base": args.base,
         "k_max": args.k_max,
+        "window": WINDOW,
         "games": args.games,
         "sims": args.sims,
         "batch_size": args.batch_size,
@@ -410,13 +579,14 @@ def init(args) -> int:
         "max_disk_mb": args.max_disk_mb,
         "budget_core_hours": args.budget_core_hours,
         "bot": os.path.abspath(args.bot),
+        "bot_sha256": bot_sha,
         "source_sha": args.source_sha,
         "any_openings": args.any_openings,
         "runners": json.loads(args.runners) if args.runners else {},
-        "created": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
     }
+    cfg["formal"] = is_formal(cfg)
     artifacts.write_atomic(os.path.join(args.root, "config.json"), artifacts.canonical_json(cfg))
-    print(json.dumps({"root": args.root, "c0": meta["sha256"]}))
+    print(json.dumps({"root": args.root, "c0": meta["sha256"], "formal": cfg["formal"]}))
     return 0
 
 
@@ -427,25 +597,26 @@ def parse(argv):
     i.add_argument("--root", required=True)
     i.add_argument("--c0", required=True)
     i.add_argument("--c0-sha256", help="the registered C_0 digest, checked")
-    i.add_argument("--base", type=int, default=20261103)
+    i.add_argument("--base", type=int, default=FORMAL["base"])
     i.add_argument("--k-max", type=int, default=schedule.K_MAX)
-    i.add_argument("--games", type=int, default=10000)
-    i.add_argument("--sims", type=int, default=100)
-    i.add_argument("--batch-size", type=int, default=8)
-    i.add_argument("--capacity", type=int, default=8192)
+    i.add_argument("--games", type=int, default=FORMAL["games"])
+    i.add_argument("--sims", type=int, default=FORMAL["sims"])
+    i.add_argument("--batch-size", type=int, default=FORMAL["batch_size"])
+    i.add_argument("--capacity", type=int, default=FORMAL["capacity"])
     i.add_argument("--steps", type=int, default=schedule.STEPS)
-    i.add_argument("--train-batch", type=int, default=1024)
+    i.add_argument("--train-batch", type=int, default=FORMAL["train_batch"])
     i.add_argument("--selfplay-cores", type=int, default=32)
     i.add_argument("--selfplay-wall-s", type=int, default=900)
     i.add_argument("--train-wall-s", type=int, default=1200)
     i.add_argument("--look-wall-s", type=int, default=900)
-    i.add_argument("--look-openings", type=int, default=200)
-    i.add_argument("--early-stop-wins", type=int, default=380)
+    i.add_argument("--look-openings", type=int, default=FORMAL["look_openings"])
+    i.add_argument("--early-stop-wins", type=int, default=FORMAL["early_stop_wins"])
     i.add_argument("--max-disk-mb", type=int, default=600, help="stop before a phase when the root holds more")
-    i.add_argument("--budget-core-hours", type=float, default=200.0)
+    i.add_argument("--budget-core-hours", type=float, default=FORMAL["budget_core_hours"])
     i.add_argument("--bot", required=True)
+    i.add_argument("--bot-sha256", help="the expected bot binary digest, checked")
     i.add_argument("--source-sha", required=True)
-    i.add_argument("--any-openings", action="store_true", help="tests only: looks are never eligible")
+    i.add_argument("--any-openings", action="store_true", help="tests only: never formal, looks never eligible")
     i.add_argument("--runners", help="JSON {phase: command template}")
     for name in ("run", "select"):
         c = sub.add_parser(name)
@@ -461,7 +632,11 @@ def main(argv=None) -> int:
     if args.command == "run":
         print(json.dumps(loop.run()))
         return 0
-    manifest = loop.select()
+    try:
+        manifest = loop.select()
+    except Stop as s:
+        print(json.dumps({"stop": s.reason, "inputs": s.inputs}))
+        return EXIT_NO_SELECTION
     print(json.dumps({"selected": manifest["selected"], "final": manifest["final_checkpoint"]}))
     return 0 if manifest["selected"] else EXIT_NO_SELECTION
 
