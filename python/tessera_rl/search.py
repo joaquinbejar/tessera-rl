@@ -41,8 +41,10 @@ caller's controls are restored when ``run`` returns or raises. The
 interpreter stays attached for the whole call, which holds the search
 object: a nested or concurrent call on it raises ``ConcurrencyError``.
 Pending signals are checked before every batch, including batches whose
-leaves are all terminal and call no evaluator: a ``KeyboardInterrupt``
-from a signal handler rolls the call back and is raised unchanged. Building the evaluator's
+leaves are all terminal and call no evaluator. That poll is not an
+evaluator failure: whatever a signal handler raises, ``KeyboardInterrupt``
+or an ``Exception`` subclass alike, rolls the call back and is raised
+unchanged. Building the evaluator's
 arguments and reading its response allocate: the engine's zero-allocation
 guarantee covers the search itself, not the Python boundary.
 """
@@ -137,9 +139,10 @@ class Search:
             self._native.run(call)
         except Exception as exc:
             if raised and exc is raised[0]:
-                # The type name only: formatting the exception runs its
-                # ``__str__``, which may itself raise.
-                raise _native.EvaluatorError(f"the evaluator raised {type(exc).__name__}") from exc
+                # A fixed message: formatting the exception, or even naming
+                # its type, can run user code that raises. The cause
+                # carries both.
+                raise _native.EvaluatorError("the evaluator raised") from exc
             raise
 
     def root_visits(self) -> np.ndarray:

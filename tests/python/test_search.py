@@ -248,36 +248,91 @@ def test_search_exception_with_failing_str_is_chained():
     assert (s.tree_hash(), s.calls) == (before, 0)
 
 
+def test_search_base_exception_with_failing_str_comes_out_as_itself():
+    class Unprintable(BaseException):
+        def __str__(self):
+            raise RuntimeError("no str")
+
+    s = search()
+    before = s.tree_hash()
+    sent = Unprintable()
+
+    def fail(obs, legal, hashes):
+        raise sent
+
+    with pytest.raises(Unprintable) as info:
+        s.run(fail)
+    assert info.value is sent
+    assert (s.tree_hash(), s.calls) == (before, 0)
+
+
+def test_search_error_message_runs_no_user_code():
+    class Meta(type):
+        def __getattribute__(cls, name):
+            if name == "__name__":
+                raise RuntimeError("no name")
+            return super().__getattribute__(name)
+
+    class Odd(Exception, metaclass=Meta):
+        def __repr__(self):
+            raise RuntimeError("no repr")
+
+    s = search()
+    sent = Odd()
+
+    def fail(obs, legal, hashes):
+        raise sent
+
+    with pytest.raises(t.EvaluatorError) as info:
+        s.run(fail)
+    assert info.value.__cause__ is sent
+
+
 # 41 plies of a drawn game: one legal move, into a terminal draw, so after
 # the root every batch is made of terminal leaves and calls no evaluator.
 DRAW_41 = "545062455041104565311226266362030334314210"[:41]
 
 
 @pytest.mark.skipif(not hasattr(signal, "setitimer"), reason="needs setitimer")
-def test_search_signal_during_terminal_only_batches_interrupts_and_rolls_back():
-    s = Search(simulations=2_000_000)
-    s.set_root(root(DRAW_41))
+@pytest.mark.parametrize("raised", [KeyboardInterrupt, ValueError])
+def test_search_signal_during_terminal_only_batches_propagates_unchanged_and_rolls_back(raised):
+    """The batch poll is not an evaluator failure: whatever the handler
+    raises, an Exception subclass included, comes out as itself."""
+
+    def make():
+        s = Search(simulations=2_000_000)
+        s.set_root(root(DRAW_41))
+        return s
+
+    s, fresh = make(), make()
     before = s.tree_hash()
     evaluations = []
+    sent = raised("from the handler")
 
     def counted(obs, legal, hashes):
         evaluations.append(len(hashes))
         return canned(obs, legal, hashes)
 
     def alarm(signum, frame):
-        raise KeyboardInterrupt
+        raise sent
 
     previous = signal.signal(signal.SIGALRM, alarm)
     try:
         signal.setitimer(signal.ITIMER_REAL, 0.01)
-        with pytest.raises(KeyboardInterrupt):
+        with pytest.raises(raised) as info:
             s.run(counted)
     finally:
         signal.setitimer(signal.ITIMER_REAL, 0)
         signal.signal(signal.SIGALRM, previous)
+    assert info.value is sent
     assert evaluations == [1]  # the root only
     assert (s.tree_hash(), s.calls) == (before, 0)
     assert s.root_visits().sum() == 0
+    # The retry succeeds and equals a fresh first call, tree and stream.
+    s.run(canned)
+    fresh.run(canned)
+    assert s.tree_hash() == fresh.tree_hash()
+    assert [s.select_action(1.0) for _ in range(8)] == [fresh.select_action(1.0) for _ in range(8)]
 
 
 def test_search_exception_after_commits_and_evictions_rolls_back_tree_calls_and_stream():
