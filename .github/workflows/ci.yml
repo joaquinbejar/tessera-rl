@@ -182,10 +182,11 @@ jobs:
           cache-bin: "false"
       - run: pipx install uv==0.13.6
       # Self-hosted: checkout's git clean deletes the extension module that
-      # the editable build put in python/tessera_rl, while uv's persistent
-      # cache would reuse that build without rebuilding it. Drop the cached
-      # tessera-rl build so uv sync builds the extension again.
-      - run: uv cache clean tessera-rl
+      # the editable build put in python/tessera_rl, and uv's persistent
+      # cache installs the project again without rebuilding it. Build it
+      # explicitly, and check that the extension imports.
+      - run: uv sync --locked --python 3.11 --group test --group torch --reinstall-package tessera-rl
+      - run: uv run --locked --python 3.11 --group test --group torch python -c "import tessera_rl._native"
       - run: make py-test-torch
 
   # Instruction-count gate (ADR-0025 level 1): gungraun against the
