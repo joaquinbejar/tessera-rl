@@ -139,12 +139,17 @@ class BotClient:
         self.proc.stdin.flush()
         reply = self.proc.stdout.readline().strip()
         if not reply.isdigit():
+            # "error <kind>": the server exits after it; never guess a move.
+            self.proc.wait(timeout=10)
             raise RuntimeError(f"connect4-ref serve replied {reply!r} to {moves_text!r}")
         return int(reply)
 
     def close(self) -> None:
-        if self.proc.stdin is not None:
-            self.proc.stdin.close()
+        if self.proc.stdin is not None and not self.proc.stdin.closed:
+            try:
+                self.proc.stdin.close()
+            except BrokenPipeError:
+                pass
         self.proc.wait(timeout=10)
 
 

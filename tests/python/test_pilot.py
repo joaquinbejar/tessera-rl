@@ -146,14 +146,16 @@ def bot():
     return path
 
 
-def test_pilot_bot_serve_replies_a_legal_column_and_rejects_finished_games(bot):
+def test_pilot_bot_serve_replies_a_legal_column_and_fails_on_a_finished_game(bot):
     client = game.BotClient(bot)
     try:
         col = client.choose(pilot.TIE_BASE, "-")
         assert 0 <= col < 7
         assert client.choose(pilot.TIE_BASE, "4453") == client.choose(pilot.TIE_BASE, "4453")
-        with pytest.raises(RuntimeError):
+        with pytest.raises(RuntimeError, match="error finished"):
             client.choose(pilot.TIE_BASE, "1212121")
+        # The server exits with a failure after an error line.
+        assert client.proc.returncode == 1
     finally:
         client.close()
 
