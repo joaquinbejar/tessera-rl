@@ -139,7 +139,7 @@ If either cell is missing because of the budget, the verdict is
 
 ## Results (2026-11-02)
 
-Source `4e6efb8ceb23ac079dfabaabfcb64ce5e5d0db5a`, image `rust:1.99.1@sha256:09027f873d45b8ecd1dc86f1fa13b7a62b875c961f017a0e331267b350430137`, torch 2.15.0+cpu, Python 3.11.18. The reports and ledgers are in [`results/pilot-20261102/`](results/pilot-20261102/).
+Source `4e6efb8ceb23ac079dfabaabfcb64ce5e5d0db5a` (content-identical to main `775ffd9`, the squash of #48), image `rust:1.99.1@sha256:09027f873d45b8ecd1dc86f1fa13b7a62b875c961f017a0e331267b350430137`, torch 2.15.0+cpu, Python 3.11.18. The reports and ledgers are in [`results/pilot-20261102/`](results/pilot-20261102/).
 
 - **swarmer02:** AMD Ryzen 9 9955HX 16-Core Processor, 16 physical / 32 logical cores (SMT), governor `performance`, cpuset `0-31`: 32 allocated cores. Sections `infer`, `selfplay` and `train`.
 - **xaskar:** cpuset `2`, 1 allocated core. Section `eval`.
@@ -148,7 +148,7 @@ Source `4e6efb8ceb23ac079dfabaabfcb64ce5e5d0db5a`, image `rust:1.99.1@sha256:090
 
 **Criterion 1 FIRED**, so the verdict is starved.
 
-1. Per-sample inference of the `small` net at 1 thread (7 kept samples per cell): batch 8 median 66.192 us, batch 64 median 31.024 us, ratio **2.1336** (threshold 2.0): **FIRED**. The 2.1355 quoted earlier on the bus is the ratio of the rounded medians (66.2 / 31.0); 2.1336 is the exact one. Spread (p10 to p90): batch 8 66.135 to 66.631 us, batch 64 30.990 to 31.044 us. The ratio range is 66.135 / 31.044 = 2.1303 to 66.631 / 30.990 = 2.1501, which does not straddle 2.0.
+1. Per-sample inference of the `small` net at 1 thread (7 kept samples per cell): batch 8 median 66.192 us, batch 64 median 31.024 us, ratio **2.1336** (threshold 2.0): **FIRED**. The 2.1355 quoted earlier on the bus is the ratio of the rounded medians (66.2 / 31.0); 2.1336 is the exact one. Spread (p10 to p90): batch 8 66.135 to 66.631 us, batch 64 30.990 to 31.044 us. The ratio range is 66.135 / 31.044 = 2.1303 to 66.631 / 30.990 = 2.1501, which does not straddle 2.0. This envelope is descriptive, the spread of the kept samples; it is not a confidence interval.
 2. Non-net share of the self-play search wall, `small` net, 100 simulations, `W = 1`: 3.2% (threshold 30%): not fired.
 
 The two criteria were measured in separate runs (`infer` and `selfplay`), so each report alone shows the verdict as `incomplete`; together they are complete. The consequence was decided by consensus (coordinator, Codex, TR) and recorded in the team note `tessera-rl:m3-starvation-ruling`.
@@ -232,6 +232,8 @@ Frozen random-init `small` checkpoint `80998924a6423e7ed515d64e1be849a439dbb9d53
 | heldout | 200 of 200 | 400 | 60.5, 36.6 | `e47a3491c76ab9115c3131e3f6d6555b8bf0e32093bd1eb2cc9737d1bbf6c90e` | True |
 | eval | 500 of 500 | 1000 | 113.8, 113.0 | `b26b9be63f7e9c2b043690bf01fcfec91a768e40d6fd8ad2de26ba0090b585df` | True |
 
+The held-out passes differ (60.5 s against 36.6 s). The slower one is the first pass of the run, which also pays the process's one-time costs, such as the first torch calls (every pass starts its own bot process, so that is not the difference); this is the likely cause, not a measured split. The evaluation set, played afterwards, shows no such gap (113.8 s against 113.0 s).
+
 The bot takes 0.5% of the evaluation wall time.
 
 ### Spend
@@ -258,14 +260,23 @@ From the steady 32-worker self-play rates (p10 to p90), on swarmer02 at 32 alloc
 | large | 100 | 6.54 to 7.16 | 209.2 to 229.0 |
 | large | 200 | 13.00 to 14.45 | 415.9 to 462.5 |
 
+### Training cost per epoch-equivalent
+
+One epoch-equivalent is one pass over the mirrored samples of 100k self-play games: 100k games times the median moves per game (100 simulations, `W = 32` cells above) times 2 for the mirror, in SGD steps of batch 1024 at the T table's median step time, on 1 core. These are 1-core core-hours: to be added to the self-play projection when sizing the 200 core-hour STOP budget over self-play, training, held-out selection and the gate.
+
+| Net | Moves per game | Samples | Steps (batch 1024) | Step ms | Core-hours per epoch-equivalent |
+| --- | --- | --- | --- | --- | --- |
+| small | 27 | 5.40 M | 5,273 | 143.7 | 0.21 |
+| medium | 26 | 5.20 M | 5,078 | 590.5 | 0.83 |
+
 ### Provenance, commands and cleanup
 
-- Source: `4e6efb8ceb23ac079dfabaabfcb64ce5e5d0db5a` (git archive).
+- Source: `4e6efb8ceb23ac079dfabaabfcb64ce5e5d0db5a` (git archive), content-identical to main `775ffd9` (the squash of #48).
 - Image: `rust:1.99.1@sha256:09027f873d45b8ecd1dc86f1fa13b7a62b875c961f017a0e331267b350430137`.
 - Evaluation checkpoint (random init, `small`, seed 20261102): SHA-256 `80998924a6423e7ed515d64e1be849a439dbb9d53b8555618534b1397e5ed5c6`.
 - Bot binary (`tessera-rl-connect4-ref`, built in the container): SHA-256 `910c1075c59994eee9ac796ff01a31b399dc8372cd44095c2274d73afc034afc`.
-- Canonical evaluation logs, equal across both passes (not committed, 2.8 MB): held-out `f9e34abd380b06f4f9145c2923845071008cf4fc4ef671948e550efaaec6d42c`, eval `e40c5dc8f358132ffaf3fe5fbc4e56d28511fa8edb193c0662a1a951126b3493` (file digests; the report's `log_sha256` is the digest of the canonical JSON).
-- Raw reports, with every kept sample, and the ledgers: [`results/pilot-20261102/`](results/pilot-20261102/).
+- Canonical evaluation logs, one file per set and pass, committed gzip-compressed as `xaskar-eval-<set>-pass<n>.log.json.gz`. The uncompressed files are equal across both passes: held-out `f9e34abd380b06f4f9145c2923845071008cf4fc4ef671948e550efaaec6d42c`, eval `e40c5dc8f358132ffaf3fe5fbc4e56d28511fa8edb193c0662a1a951126b3493` (file digests; the report's `log_sha256` is the digest of the canonical JSON).
+- Raw reports, with every kept sample, and the ledgers: [`results/pilot-20261102/`](results/pilot-20261102/). The self-play report is gzip-compressed (`swarmer02-selfplay.json.gz`); the SHA-256 of the uncompressed file is `2c0880c5ea4fea3ea9e9a17229ff14b7d92d6a0d6b1edc398b7bdc6027d6eb72`.
 
 In the commands, `D=sha256:09027f873d45b8ecd1dc86f1fa13b7a62b875c961f017a0e331267b350430137`.
 
