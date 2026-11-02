@@ -232,7 +232,7 @@ def work(args, clock) -> int:
     }
     artifacts.write_atomic(os.path.join(args.out, "h2h-log.json"), log_bytes)
     artifacts.write_atomic(os.path.join(args.out, "h2h.json"), artifacts.canonical_json(report))
-    print(f"score {p:.4f} lower {lower:.4f} pass {lower > 0.5}")
+    print(f"score {p:.4f} lower {lower:.4f} criterion_applicable {applicable} pass {report['pass']}")
     return 0
 
 

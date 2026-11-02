@@ -50,6 +50,8 @@ With 10k games of about 26 plies, an epoch-equivalent is about 500 steps.
 
 This is a **nominal, descriptive** threshold, not calibrated 95% evidence: draws are fractional and the two games of an opening are paired.
 
+The criterion applies only on the registered runtime: xaskar, the pinned image, one allocated core and one torch thread. The head-to-head checks the observed affinity and thread counts, but the host name and the image digest are self-declared by the container, so `registered: true` guards against accidents and is not an attestation.
+
 The report gives W/D/L, the colour splits, the per-opening pair scores, the distinct move sequences and the log hash. The C1 loss trend is reported too, but it is not a criterion.
 
 A failure is reported as a failure; nothing is rerun until it passes, and the schedule is not changed afterwards.
