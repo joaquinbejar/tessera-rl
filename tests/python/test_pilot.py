@@ -24,7 +24,7 @@ import augment  # noqa: E402
 import game  # noqa: E402
 import net as netmod  # noqa: E402
 import pilot  # noqa: E402
-from ledger import BudgetExceeded, Ledger  # noqa: E402
+from ledger import BudgetExceeded, Ledger, LedgerBusy  # noqa: E402
 from tessera_rl.search import Search  # noqa: E402
 
 
@@ -100,15 +100,19 @@ def test_pilot_ledger_reserves_before_work_and_settles_to_the_time_used(tmp_path
     i, granted = led.reserve("a", cores=4, deadline_s=600)  # 0.667 core-hours
     assert granted == 600
     assert json.loads(pathlib.Path(path).read_text())["entries"][0]["status"] == "running"
-    # The open reservation counts: only 0.333 core-hours are left.
-    _, granted = led.reserve("b", cores=4, deadline_s=600)
-    assert granted == pytest.approx(300)
-    with pytest.raises(BudgetExceeded):
-        led.reserve("c", cores=4, deadline_s=10)
+    # One run at a time per ledger file.
+    with pytest.raises(LedgerBusy):
+        led.reserve("b", cores=4, deadline_s=600)
     entry = led.settle(i, wall_s=60, status="ok")
     assert entry["core_hours"] == pytest.approx(60 * 4 / 3600, abs=1e-5)
     # Never charged beyond the reservation.
     assert led.settle(i, wall_s=10_000, status="ok")["wall_s"] == 600
+    # The settled spend counts: only 0.333 core-hours are left.
+    j, granted = led.reserve("b", cores=4, deadline_s=600)
+    assert granted == pytest.approx(300)
+    led.settle(j, wall_s=300, status="ok")
+    with pytest.raises(BudgetExceeded):
+        led.reserve("c", cores=4, deadline_s=10)
 
 
 def test_pilot_ledger_settles_a_dead_supervisor_at_its_full_reservation(tmp_path):
@@ -121,6 +125,19 @@ def test_pilot_ledger_settles_a_dead_supervisor_at_its_full_reservation(tmp_path
     (e,) = led.entries()
     assert e["status"].startswith("interrupted") and e["core_hours"] == pytest.approx(1.0)
     assert led.spent_core_hours() == pytest.approx(1.0)
+
+
+def test_pilot_ledger_leaves_another_hosts_open_entry_and_refuses_a_second_run(tmp_path):
+    path = str(tmp_path / "ledger.json")
+    led = Ledger(path, budget_core_hours=10.0)
+    led.reserve("elsewhere", cores=2, deadline_s=600)
+    data = json.loads(pathlib.Path(path).read_text())
+    data["entries"][0].update(host="another-container", pid=2**22 + 12345)
+    pathlib.Path(path).write_text(json.dumps(data))
+    # Its pid cannot be checked from here: it stays open and blocks.
+    assert led.entries()[0]["status"] == "running"
+    with pytest.raises(LedgerBusy):
+        led.reserve("second", cores=2, deadline_s=600)
 
 
 def test_pilot_self_play_game_gives_mover_relative_targets():

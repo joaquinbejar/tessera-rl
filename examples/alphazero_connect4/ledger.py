@@ -5,7 +5,8 @@ across runs, with a durable reservation per run.
 A core-hour is one allocated CPU core for one hour of wall time, whatever
 the cores did: a 90 minute run on 16 allocated cores spends 24.
 
-A run **reserves** its whole allowance (its deadline times its allocated
+One run at a time uses a ledger file: a reservation is refused while
+another entry is open. A run **reserves** its whole allowance (its deadline times its allocated
 cores) in the ledger file before any work starts, under an exclusive file
 lock, so concurrent runs cannot spend the same allowance. On normal
 completion, failure or a deadline kill the supervisor settles the entry to
@@ -29,9 +30,11 @@ class BudgetExceeded(RuntimeError):
     """The next unit of work does not fit the remaining budget."""
 
 
-def _alive(pid: int, host: str) -> bool:
-    if host != socket.gethostname():
-        return False
+class LedgerBusy(RuntimeError):
+    """Another run holds an open reservation: one run at a time per ledger."""
+
+
+def _alive(pid: int) -> bool:
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
@@ -76,9 +79,13 @@ class Ledger:
 
     @staticmethod
     def _recover(entries: list[dict]) -> None:
-        """Settles the reservations of dead supervisors at their full value."""
+        """Settles the reservations of dead supervisors of this host at
+        their full value. A pid can only be checked on its own host (and in
+        its own container, whose hostname is its own), so an entry of
+        another host is left open."""
+        here = socket.gethostname()
         for e in entries:
-            if e["status"] == "running" and not _alive(e["pid"], e["host"]):
+            if e["status"] == "running" and e["host"] == here and not _alive(e["pid"]):
                 e["status"] = "interrupted (settled at the full reservation)"
 
     def entries(self) -> list[dict]:
@@ -97,6 +104,12 @@ class Ledger:
         if not (math.isfinite(deadline_s) and deadline_s > 0):
             raise ValueError("the deadline must be positive and finite")
         with self._locked() as entries:
+            for e in entries:
+                if e["status"] == "running":
+                    raise LedgerBusy(
+                        f"{run}: {e['run']!r} (host {e['host']}, pid {e['pid']}) holds an open reservation; "
+                        "one run at a time per ledger file. Settle a dead entry of another host by hand."
+                    )
             left = self.budget_core_hours - sum(e["core_hours"] for e in entries)
             granted = min(deadline_s, left * 3600 / cores)
             if granted <= 0:

@@ -116,6 +116,10 @@ If either cell is missing because of the budget, the verdict is
   child process group and kills the whole group (pool workers and the bot
   included) at the deadline, exit code 124. It then settles the ledger
   to the time used.
+- One run at a time per ledger file: a reservation is refused while
+  another entry is open. A dead supervisor's entry is settled
+  automatically only on its own host (its container's hostname); an open
+  entry of another host blocks until it is settled by hand.
 - The child also kills its own group when the supervisor disappears. A
   supervisor that died without settling (SIGKILL) leaves a `running`
   entry, which the next run settles at its full reservation.
