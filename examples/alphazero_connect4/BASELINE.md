@@ -2,7 +2,7 @@
 
 # P2-M3 self-play baseline (PR 2)
 
-This file pre-registers the contract (design revision 3, accepted by Codex and TR) **before any training run**. The results go below it afterwards. This example is not a shipped trainer (ADR-0018).
+This file pre-registers the contract (design revision 3, accepted by Codex and TR) **before any training run**. The pre-registration record is commit `ab6bbf92de3b40507a649d3da7ffc800e7075b51` (the dev set was frozen in `02eb3e535bbcefe58100db34b6e6c829a9801843`). The results go below it afterwards. This example is not a shipped trainer (ADR-0018).
 
 ## Experiment
 

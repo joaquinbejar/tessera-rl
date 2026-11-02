@@ -46,6 +46,7 @@ import artifacts  # noqa: E402
 import ckpt  # noqa: E402
 import game  # noqa: E402
 import net as netmod  # noqa: E402
+import seeds  # noqa: E402
 import supervisor  # noqa: E402
 from tessera_rl.search import Search  # noqa: E402
 
@@ -115,7 +116,10 @@ def work(args, clock) -> int:
                     )
                     for k in ("a", "b")
                 }
-                r, log = play_pair_game(searchers, opening, a_first, env_seed=SEARCH_SEED)
+                # Greedy, noiseless play does not read the root's stream; the
+                # env seed is still derived per game for the record identity.
+                env_seed = seeds.env(args.run_seed, 2 * j + (0 if a_first else 1))
+                r, log = play_pair_game(searchers, opening, a_first, env_seed=env_seed)
                 score = 1.0 if r > 0 else 0.5 if r == 0 else 0.0
                 pair += score
                 results.append(score)
@@ -144,13 +148,17 @@ def work(args, clock) -> int:
             "noise": None,
             "temperature": 0.0,
             "search_seed": SEARCH_SEED,
+            "env_seed": "seeds.env(run_seed, 2j + colour), colour 0 when A moves first",
+            "run_seed": args.run_seed,
         },
         "wdl": [w, d, n - w - d],
         "by_colour": by_colour,
         "score": p,
         "wilson_lower_z1645": lower,
         "criterion": "nominal: one-sided Wilson lower bound of the score > 0.5 at z = 1.645",
-        "pass": lower > 0.5,
+        "any_openings": args.any_openings,
+        # A test run on other openings never passes or fails the criterion.
+        "pass": None if args.any_openings else lower > 0.5,
         "pair_scores": {str(k): pairs.count(k) for k in (2.0, 1.5, 1.0, 0.5, 0.0)},
         "distinct_sequences": len(sequences),
         "log_sha256": artifacts.sha256(log_bytes),
@@ -168,6 +176,7 @@ def parse(argv):
     p.add_argument("--openings", default=DEV_OPENINGS)
     p.add_argument("--any-openings", action="store_true", help="tests only: skip the dev-set pin")
     p.add_argument("--limit", type=int, default=200)
+    p.add_argument("--run-seed", type=int, default=1)
     p.add_argument("--require-size", default="medium", help="the net size both sides must have (\"any\" in tests)")
     p.add_argument("--sims", type=int, default=100)
     p.add_argument("--batch-size", type=int, default=8)

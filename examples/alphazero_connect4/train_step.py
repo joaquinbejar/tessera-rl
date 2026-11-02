@@ -124,7 +124,7 @@ def train(model, planes, policy, z, run_seed: int, epochs: int, batch: int, cloc
                 opt.zero_grad()
                 loss.backward()
                 opt.step()
-                losses.append([float(lp), float(lv)])
+                losses.append([lp.item(), lv.item()])
     finally:
         model.eval()
     return losses, {

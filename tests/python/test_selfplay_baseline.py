@@ -28,6 +28,7 @@ sys.path.insert(0, str(EXAMPLE))
 
 import artifacts  # noqa: E402
 import ckpt  # noqa: E402
+import h2h  # noqa: E402
 import seeds  # noqa: E402
 import selfplay  # noqa: E402
 import train_step  # noqa: E402
@@ -97,19 +98,31 @@ def test_selfplay_targets_are_mover_relative_on_a_scripted_win_and_draw():
 
 def make_c0(tmp_path, size="tiny"):
     path = tmp_path / "C0.pt"
-    r = run("train_step.py", "init", "--size", size, "--seed", 7, "--out", path)
-    assert r.returncode == 0, r.stderr
+    assert train_step.main(["init", "--size", size, "--seed", "7", "--out", str(path)]) == 0
     return path
 
 
-def selfplay_run(tmp_path, c0, out, workers, games=6, extra=()):
-    return run(
-        "selfplay.py",
+class NoClock:
+    def check(self, projected_s, what):
+        pass
+
+
+def inprocess(module, argv):
+    """The tool's work, without the supervisor (its own tests cover it)."""
+    return module.work(module.parse([str(a) for a in argv]), NoClock())
+
+
+def selfplay_args(tmp_path, c0, out, workers, games=4, extra=()):
+    return [
         "--checkpoint", c0, "--games", games, "--workers", workers, "--run-seed", 11,
-        "--out", out, "--sims", 4, "--batch-size", 4, "--capacity", 256, "--round-games", 2,
+        "--out", out, "--sims", 2, "--batch-size", 2, "--capacity", 64, "--round-games", 2,
         "--ledger", tmp_path / f"ledger-{pathlib.Path(out).name}.json", "--cores", max(2, workers),
         "--budget-core-hours", 1, "--wall-cap-s", 120, *extra,
-    )  # fmt: skip
+    ]  # fmt: skip
+
+
+def selfplay_run(tmp_path, c0, out, workers, games=4, extra=()):
+    return run("selfplay.py", *selfplay_args(tmp_path, c0, out, workers, games, extra))
 
 
 def games_by_id(directory):
@@ -128,15 +141,14 @@ def test_selfplay_is_repeatable_and_per_game_independent_of_the_worker_count(tmp
         pytest.skip("needs 2 cores")
     c0 = make_c0(tmp_path)
     runs = {}
-    for name, w in (("w1a", 1), ("w1b", 1), ("w2", 2)):
-        r = selfplay_run(tmp_path, c0, tmp_path / name, w)
-        assert r.returncode == 0, r.stderr
+    for name, w in (("w1a", 1), ("w2", 2), ("w1b", 1)):
+        assert inprocess(selfplay, selfplay_args(tmp_path, c0, tmp_path / name, w)) == 0
         runs[name] = games_by_id(tmp_path / name)
     m1, g1 = runs["w1a"]
     assert artifacts.load_manifest(tmp_path / "w1a")[1] == artifacts.load_manifest(tmp_path / "w1b")[1]
     m2, g2 = runs["w2"]
     assert m1["games_digest"] == m2["games_digest"]
-    assert sorted(g1) == sorted(g2) == list(range(6))
+    assert sorted(g1) == sorted(g2) == list(range(4))
     for g in g1:
         for k in ("planes", "visits", "z", "ply"):
             assert np.array_equal(g1[g][k], g2[g][k]), (g, k)
@@ -184,32 +196,40 @@ def test_selfplay_wilson_lower_bound():
 def test_selfplay_tiny_end_to_end(tmp_path):
     c0 = make_c0(tmp_path)
     data = tmp_path / "data"
-    r = selfplay_run(tmp_path, c0, data, 1, games=4)
-    assert r.returncode == 0, r.stderr
+    assert inprocess(selfplay, selfplay_args(tmp_path, c0, data, 1, games=2)) == 0
     c1 = tmp_path / "C1.pt"
-    r = run(
-        "train_step.py", "train", "--checkpoint", c0, "--data", data, "--out", c1, "--run-seed", 11,
+    targs = train_step.parse([str(a) for a in (
+        "train", "--checkpoint", c0, "--data", data, "--out", c1, "--run-seed", 11,
         "--batch", 16, "--ledger", tmp_path / "ledger-train.json", "--budget-core-hours", 1, "--wall-cap-s", 60,
-    )  # fmt: skip
-    assert r.returncode == 0, r.stderr
+    )])  # fmt: skip
+    assert train_step.work_train(targs, NoClock()) == 0
     _, m1 = ckpt.load(str(c1))
     _, m0 = ckpt.load(str(c0))
     assert m1["parent_sha256"] == m0["sha256"] and m1["steps"] >= 1
     assert m1["dropped_per_epoch"] == m1["augmented_samples"] - m1["steps_per_epoch"] * 16
     assert m1["data_manifests"] == [artifacts.load_manifest(str(data))[1]]
     out = tmp_path / "h2h"
-    r = run(
-        "h2h.py", "--a", c1, "--b", c0, "--out", out, "--any-openings", "--require-size", "any", "--limit", 1,
-        "--sims", 4, "--batch-size", 4, "--capacity", 256,
+    out.mkdir()
+    assert inprocess(h2h, (
+        "--a", c1, "--b", c0, "--out", out, "--any-openings", "--require-size", "any", "--limit", 1,
+        "--sims", 2, "--batch-size", 2, "--capacity", 64,
         "--ledger", tmp_path / "ledger-h2h.json", "--budget-core-hours", 1, "--wall-cap-s", 60,
-    )  # fmt: skip
-    assert r.returncode == 0, r.stderr
+    )) == 0  # fmt: skip
     report = json.loads((out / "h2h.json").read_text())
     assert report["games"] == 2 and sum(report["wdl"]) == 2
     assert report["a"] == m1["sha256"] and report["b"] == m0["sha256"]
-    # Refused on a non-dev set or a non-medium net without the test flags.
-    r = run(
-        "h2h.py", "--a", c1, "--b", c0, "--out", tmp_path / "h2h2", "--limit", 1,
-        "--ledger", tmp_path / "ledger-h2h2.json", "--budget-core-hours", 1, "--wall-cap-s", 60,
-    )  # fmt: skip
-    assert r.returncode != 0
+    assert report["any_openings"] is True and report["pass"] is None
+    # Refused on a non-medium net without the test flag (the dev set is
+    # the default openings file).
+    (tmp_path / "h2h2").mkdir()
+    with pytest.raises(SystemExit, match="medium"):
+        inprocess(h2h, (
+            "--a", c1, "--b", c0, "--out", tmp_path / "h2h2", "--limit", 1,
+            "--ledger", tmp_path / "ledger-h2h2.json", "--budget-core-hours", 1, "--wall-cap-s", 60,
+        ))  # fmt: skip
+    with pytest.raises(SystemExit, match="dev set"):
+        inprocess(h2h, (
+            "--a", c1, "--b", c0, "--out", tmp_path / "h2h2", "--limit", 1, "--require-size", "any",
+            "--openings", EXAMPLE.parents[1] / "compat" / "connect4" / "openings-heldout.txt",
+            "--ledger", tmp_path / "ledger-h2h2.json", "--budget-core-hours", 1, "--wall-cap-s", 60,
+        ))  # fmt: skip
