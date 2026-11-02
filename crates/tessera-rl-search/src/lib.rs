@@ -22,7 +22,10 @@ mod pool;
 
 pub use error::SearchError;
 pub use evaluator::{Evaluator, EvaluatorError, LeafBatch, PRIOR_SUM_TOLERANCE};
-pub use group::{DEFAULT_GROUP_BUDGET, GroupError, GroupFailure, MAX_TREES, SearchGroup};
+pub use group::{
+    CAPACITY_EXTRA, DEFAULT_GROUP_BUDGET, FIXED_PER_TREE, GroupError, GroupFailure, MAX_TREES,
+    SearchGroup,
+};
 pub use handle::{EdgeStats, NodeHandle};
 pub use mcts::{Mcts, PUCT_FORMULA, PuctConfig, RootNoise};
 pub use options::{Eviction, SearchOptions};

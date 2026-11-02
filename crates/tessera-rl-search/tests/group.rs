@@ -124,7 +124,7 @@ fn test_group_canned_slots_reproduce_the_adr0043_golden() {
     let slots = (0..3)
         .map(|_| mcts_with("33", 4_096, Eviction::Strict, config(256)))
         .collect();
-    let mut g = Group::new(slots, DEFAULT_GROUP_BUDGET).unwrap();
+    let mut g = Group::new(&Connect4Config {}, slots, DEFAULT_GROUP_BUDGET).unwrap();
     g.run(&mut Canned::default()).unwrap();
     for i in 0..3 {
         let m = g.slot(i).unwrap();
@@ -159,7 +159,7 @@ fn test_group_slots_equal_independent_searches_over_calls_with_reuse() {
             .collect()
     };
     let mut solo = build();
-    let mut g = Group::new(build(), DEFAULT_GROUP_BUDGET).unwrap();
+    let mut g = Group::new(&Connect4Config {}, build(), DEFAULT_GROUP_BUDGET).unwrap();
     for call in 0..3 {
         for m in &mut solo {
             m.run(&mut Canned::default()).unwrap();
@@ -236,7 +236,7 @@ fn group_of(n: usize, sims: u32) -> Group {
     let slots = (0..n)
         .map(|i| mcts_with(&"1234"[..i.min(4)], 64, Eviction::Oldest, noisy(sims)))
         .collect();
-    Group::new(slots, DEFAULT_GROUP_BUDGET).unwrap()
+    Group::new(&Connect4Config {}, slots, DEFAULT_GROUP_BUDGET).unwrap()
 }
 
 #[test]
@@ -300,7 +300,7 @@ fn test_group_terminal_root_fails_before_any_change() {
         mcts_with("", 64, Eviction::Strict, config(16)),
         mcts_with("1212121", 64, Eviction::Strict, config(16)),
     ];
-    let mut g = Group::new(slots, DEFAULT_GROUP_BUDGET).unwrap();
+    let mut g = Group::new(&Connect4Config {}, slots, DEFAULT_GROUP_BUDGET).unwrap();
     let mut ev = Canned::default();
     let err = g.run(&mut ev).unwrap_err();
     assert_eq!(err.slot, Some(1));
@@ -352,6 +352,7 @@ fn test_group_terminal_only_rounds_poll_but_never_call_the_evaluator() {
     // A position one move from a forced end: many rounds reach only
     // terminal leaves.
     let mut g = Group::new(
+        &Connect4Config {},
         vec![mcts_with("121212", 4_096, Eviction::Strict, config(40))],
         DEFAULT_GROUP_BUDGET,
     )
@@ -415,7 +416,7 @@ fn test_group_batches_concatenate_slots_and_route_rows_back() {
 #[test]
 fn test_group_rejects_bad_sizes_and_an_aggregate_over_the_budget() {
     assert!(matches!(
-        Group::new(Vec::new(), DEFAULT_GROUP_BUDGET).err(),
+        Group::new(&Connect4Config {}, Vec::new(), DEFAULT_GROUP_BUDGET).err(),
         Some(SearchError::Options {
             option: "trees",
             ..
@@ -424,7 +425,7 @@ fn test_group_rejects_bad_sizes_and_an_aggregate_over_the_budget() {
     let slots = (0..4)
         .map(|_| mcts_with("", 4_096, Eviction::Strict, config(8)))
         .collect();
-    let g = Group::new(slots, DEFAULT_GROUP_BUDGET).unwrap();
+    let g = Group::new(&Connect4Config {}, slots, DEFAULT_GROUP_BUDGET).unwrap();
     let bound = g.memory_bytes();
     let per_tree = SearchPool::<Connect4, Masked>::bytes_per_node(7) * 4_096;
     assert!(bound >= 4 * per_tree, "{bound} >= 4 x {per_tree}");
@@ -432,7 +433,7 @@ fn test_group_rejects_bad_sizes_and_an_aggregate_over_the_budget() {
         .map(|_| mcts_with("", 4_096, Eviction::Strict, config(8)))
         .collect();
     assert!(matches!(
-        Group::new(slots, bound - 1).err(),
+        Group::new(&Connect4Config {}, slots, bound - 1).err(),
         Some(SearchError::Budget { .. })
     ));
 }

@@ -396,12 +396,34 @@ pub(crate) fn connect4_group(slots: &[SearchArgs]) -> Result<Box<dyn GroupOps>, 
     let first = slots
         .first()
         .ok_or_else(|| BindError::Argument("trees must be at least 1".to_owned()))?;
+    // The aggregate bound is checked from the arguments alone, before any
+    // tree is allocated (ADR-0045 section 1).
+    let shapes = slots
+        .iter()
+        .map(|a| {
+            let mut o =
+                SearchOptions::new(nonzero(a.capacity, "capacity")?, nonzero(a.batch, "batch")?);
+            o.eviction = a.eviction;
+            Ok((o, a.puct))
+        })
+        .collect::<Result<Vec<_>, BindError>>()?;
+    let bound = SearchGroup::<Connect4, Masked>::bound_bytes(&Connect4Config {}, &shapes);
+    match bound {
+        Some(bytes) if bytes <= DEFAULT_GROUP_BUDGET => {}
+        bytes => {
+            return Err(BindError::Search(SearchError::Budget {
+                bytes: bytes.unwrap_or(u64::MAX),
+                per_node: SearchPool::<Connect4, Masked>::bytes_per_node(7),
+                budget: DEFAULT_GROUP_BUDGET,
+            }));
+        }
+    }
     let (_, importer) = connect4_tree(first)?;
     let trees = slots
         .iter()
         .map(|a| connect4_tree(a).map(|(m, _)| m))
         .collect::<Result<Vec<_>, _>>()?;
-    let group = SearchGroup::new(trees, DEFAULT_GROUP_BUDGET)?;
+    let group = SearchGroup::new(&Connect4Config {}, trees, DEFAULT_GROUP_BUDGET)?;
     Ok(Box::new(GroupSearcher {
         group,
         importer,

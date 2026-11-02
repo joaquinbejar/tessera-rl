@@ -10,6 +10,9 @@
 //! or nothing over its participants: any failure rolls every one of them
 //! back through its journal.
 
+use core::num::NonZeroU32;
+
+use tessera_rl_core::space::Space;
 use tessera_rl_core::{AdaptiveValues, Environment, RecordLayout};
 use tessera_rl_engine::{MaskProvider, Record};
 use tessera_rl_num::rng::StepRng;
@@ -17,7 +20,8 @@ use thiserror::Error;
 
 use crate::error::SearchError;
 use crate::evaluator::{Evaluator, LeafBatch};
-use crate::mcts::{CallStart, Mcts};
+use crate::mcts::{CallStart, Mcts, PuctConfig};
+use crate::options::SearchOptions;
 use crate::pool::SearchPool;
 
 /// The most trees a group may hold.
@@ -25,6 +29,68 @@ pub const MAX_TREES: usize = 4_096;
 
 /// Default bound on a group's aggregate memory: 16 GiB.
 pub const DEFAULT_GROUP_BUDGET: u64 = 16 << 30;
+
+/// Bytes per node slot beyond [`SearchPool::bytes_per_node`]: the pool's
+/// per-slot flags, traversal stack, eviction roots and free list, with
+/// headroom.
+pub const CAPACITY_EXTRA: u64 = 32;
+
+/// Fixed bytes per tree: the allocations that do not scale with the
+/// capacity or the batch (vector bookkeeping, the scratch pool's own
+/// tables), with headroom.
+pub const FIXED_PER_TREE: u64 = 16 << 10;
+
+/// Bytes per batch row of one tree: the scratch pool's record,
+/// observations and masks (twice, for the pool and its outputs), the
+/// staged child's record, mask and rewards, and the search's batch
+/// buffers (observation, legal actions, priors and value), each with
+/// twice the headroom.
+fn row_bytes<E: Environment>(actions: usize, obs: usize, agents: usize) -> Option<u64> {
+    let record = size_of::<Record<E>>();
+    let scratch = record
+        .checked_add(obs.checked_mul(agents)?)?
+        .checked_add(actions.checked_mul(agents)?)?
+        .checked_add(agents.checked_mul(size_of::<f32>() * 4)?)?
+        .checked_mul(2)?;
+    let staged = record
+        .checked_add(actions)?
+        .checked_add(agents.checked_mul(size_of::<f32>())?)?
+        .checked_add(size_of::<u64>() * 4)?;
+    let search = obs
+        .checked_add(actions.checked_mul(size_of::<f64>() + size_of::<bool>())?)?
+        .checked_add(record)?
+        .checked_add(size_of::<f64>() + size_of::<u64>() * 6)?;
+    u64::try_from(
+        scratch
+            .checked_add(staged)?
+            .checked_add(search)?
+            .checked_mul(2)?,
+    )
+    .ok()
+}
+
+/// Bytes of one agent's observation in a space, or `None` for a `Set`
+/// (not supported by the search).
+fn space_bytes(space: &Space) -> Option<usize> {
+    let product = |shape: &[u32]| {
+        shape
+            .iter()
+            .try_fold(1usize, |acc, &d| acc.checked_mul(usize::try_from(d).ok()?))
+    };
+    match space {
+        Space::Discrete { .. } => Some(size_of::<i64>()),
+        Space::MultiDiscrete { nvec } => nvec.len().checked_mul(size_of::<i64>()),
+        Space::MultiBinary { shape } => product(shape),
+        Space::Box { shape, dtype, .. } => product(shape)?.checked_mul(dtype.size()),
+        Space::Dict(items) => items
+            .iter()
+            .try_fold(0usize, |acc, (_, s)| acc.checked_add(space_bytes(s)?)),
+        Space::Tuple(items) => items
+            .iter()
+            .try_fold(0usize, |acc, s| acc.checked_add(space_bytes(s)?)),
+        Space::Set { .. } => None,
+    }
+}
 
 /// A failed group call: the error, and the slot it belongs to (`None`
 /// for an evaluator failure or an interruption, which belong to no slot).
@@ -81,6 +147,8 @@ pub struct SearchGroup<E: Environment, M: MaskProvider<E>> {
     collected: Vec<u32>,
     done: Vec<u32>,
     last_failure: Option<GroupFailure>,
+    /// The aggregate memory bound checked at construction.
+    memory_bytes: u64,
 }
 
 impl<E, M> SearchGroup<E, M>
@@ -92,24 +160,68 @@ where
         >,
     M: MaskProvider<E>,
 {
-    /// The aggregate memory of `slots`, in bytes: every tree's node
-    /// storage plus the group batch, or `None` on overflow.
-    fn aggregate_bytes(
-        slots: &[Mcts<E, M>],
-        rows: usize,
-        actions: usize,
-        obs_bytes: usize,
-    ) -> Option<u64> {
+    /// The aggregate memory bound of a group of trees with these
+    /// `shapes` (each slot's pool options and configuration), in bytes, or
+    /// `None` on overflow or an unsupported space. It is computed from the
+    /// configuration alone, so it can be checked before anything is
+    /// allocated; [`Self::new`] checks the same value.
+    ///
+    /// Per slot it counts:
+    /// - the node storage of [`SearchPool::bytes_per_node`] times the
+    ///   capacity;
+    /// - [`CAPACITY_EXTRA`] bytes per node slot for the pool's per-slot
+    ///   flags, stacks and free list;
+    /// - per row of the larger of the pool's and the search's batch,
+    ///   the row bytes: the scratch pool's records, observations and masks,
+    ///   the staged children and the search's batch and response buffers,
+    ///   each counted with headroom;
+    /// - [`FIXED_PER_TREE`] for fixed allocations (vector and pool
+    ///   bookkeeping).
+    ///
+    /// Then come the group batch for the rows of every slot, and the
+    /// per-slot call state. A counting-allocator test checks that this is
+    /// an upper bound of the retained heap.
+    ///
+    /// # Errors
+    ///
+    /// `None` for an action space that is not discrete or an observation
+    /// space of unsupported shape, or on overflow.
+    #[must_use]
+    pub fn bound_bytes(cfg: &E::Config, shapes: &[(SearchOptions, PuctConfig)]) -> Option<u64> {
+        let actions = match E::action_space(cfg).ok()? {
+            Space::Discrete { n } => usize::try_from(n).ok()?,
+            _ => return None,
+        };
+        let obs = space_bytes(&E::observation_space(cfg).ok()?)?;
+        let agents = E::MAX_AGENTS.max(1);
+        let row = row_bytes::<E>(actions, obs, agents)?;
+        let per_node = SearchPool::<E, M>::bytes_per_node(u32::try_from(actions).ok()?);
         let mut bytes = 0u64;
-        for m in slots {
-            let pool = m.pool();
-            let per = SearchPool::<E, M>::bytes_per_node(pool.actions());
-            bytes = bytes.checked_add(per.checked_mul(u64::from(pool.capacity()))?)?;
+        let mut rows = 0usize;
+        for (options, puct) in shapes {
+            let cap = u64::from(options.capacity.get());
+            let batch = options.batch.get().max(puct.batch_size).max(1);
+            let slot = per_node
+                .checked_add(CAPACITY_EXTRA)?
+                .checked_mul(cap)?
+                .checked_add(row.checked_mul(u64::from(batch))?)?
+                .checked_add(FIXED_PER_TREE)?;
+            bytes = bytes.checked_add(slot)?;
+            rows = rows.checked_add(usize::try_from(puct.batch_size).ok()?.max(1))?;
         }
-        let per_row = obs_bytes
+        let per_row = obs
+            .checked_mul(agents)?
             .checked_add(actions.checked_mul(size_of::<bool>() + size_of::<f64>())?)?
             .checked_add(size_of::<f64>() + size_of::<Record<E>>() + size_of::<(usize, usize)>())?;
-        bytes.checked_add(u64::try_from(rows.checked_mul(per_row)?).ok()?)
+        let per_slot = size_of::<bool>()
+            + size_of::<(usize, usize)>()
+            + size_of::<Option<CallStart>>()
+            + size_of::<Option<StepRng>>()
+            + 3 * size_of::<u32>()
+            + size_of::<usize>();
+        bytes
+            .checked_add(u64::try_from(rows.checked_mul(per_row)?).ok()?)?
+            .checked_add(u64::try_from(shapes.len().checked_mul(per_slot)?).ok()?)
     }
 
     /// A group of `slots`, every slot active once it has a root (a slot
@@ -121,7 +233,11 @@ where
     /// slots of different action counts or observation sizes;
     /// [`SearchError::Budget`] when the aggregate memory (computed with
     /// checked arithmetic) exceeds `budget_bytes`.
-    pub fn new(slots: Vec<Mcts<E, M>>, budget_bytes: u64) -> Result<Self, SearchError> {
+    pub fn new(
+        cfg: &E::Config,
+        slots: Vec<Mcts<E, M>>,
+        budget_bytes: u64,
+    ) -> Result<Self, SearchError> {
         let t = slots.len();
         if t == 0 || t > MAX_TREES {
             return Err(SearchError::Options {
@@ -143,11 +259,22 @@ where
                 reason: "every slot needs the same actions and observation size",
             });
         }
-        // Rows: every slot's largest batch, at least one (its root).
+        // Rows: every slot's batch, at least one (its root).
         let rows = slots.iter().try_fold(0usize, |acc, m| {
             acc.checked_add(usize::try_from(m.config().batch_size).ok()?.max(1))
         });
-        let bytes = rows.and_then(|r| Self::aggregate_bytes(&slots, r, actions, obs_bytes));
+        let shapes: Vec<_> = slots
+            .iter()
+            .map(|m| {
+                let pool = m.pool();
+                let options = SearchOptions::new(
+                    NonZeroU32::new(pool.capacity()).unwrap_or(NonZeroU32::MIN),
+                    NonZeroU32::new(pool.batch()).unwrap_or(NonZeroU32::MIN),
+                );
+                (options, *m.config())
+            })
+            .collect();
+        let bytes = Self::bound_bytes(cfg, &shapes);
         let (Some(rows), Some(bytes)) = (rows, bytes) else {
             return Err(SearchError::Budget {
                 bytes: u64::MAX,
@@ -182,16 +309,16 @@ where
             collected: vec![0; t],
             done: vec![0; t],
             last_failure: None,
+            memory_bytes: bytes,
             slots,
         })
     }
 
-    /// The aggregate memory bound of this group, in bytes (what
-    /// construction checked against the budget).
+    /// The aggregate memory bound of this group, in bytes (see
+    /// [`Self::bound_bytes`]), as checked at construction.
     #[must_use]
-    pub fn memory_bytes(&self) -> u64 {
-        Self::aggregate_bytes(&self.slots, self.values.len(), self.actions, self.obs_bytes)
-            .unwrap_or(u64::MAX)
+    pub const fn memory_bytes(&self) -> u64 {
+        self.memory_bytes
     }
 
     /// Slots.
@@ -212,7 +339,8 @@ where
         self.slots.get(i)
     }
 
-    /// Slot `i`'s tree, to re-root it or select an action between calls.
+    /// Slot `i`'s tree, to re-root it or select an action between calls
+    /// (never during [`Self::run`], which holds the group).
     pub fn slot_mut(&mut self, i: usize) -> Option<&mut Mcts<E, M>> {
         self.slots.get_mut(i)
     }

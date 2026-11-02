@@ -236,3 +236,12 @@ def test_search_group_options_and_bounds_are_validated():
         SearchGroup(1).set_root(1, root(""))
     g = SearchGroup(4, capacity=1024)
     assert g.memory_bytes > 0 and g.trees == 4
+    # Over the 16 GiB aggregate budget: refused from the options alone,
+    # before any tree is allocated (4096 trees of 2^20 nodes would need
+    # hundreds of GiB).
+    import time
+
+    start = time.monotonic()
+    with pytest.raises(t.TesseraError, match="budget"):
+        SearchGroup(4096, capacity=1 << 20)
+    assert time.monotonic() - start < 1.0
