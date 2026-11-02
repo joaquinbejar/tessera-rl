@@ -21,8 +21,8 @@ use tessera_rl_engine::{
 use tessera_rl_games::{Connect4, Connect4Config};
 use tessera_rl_num::identity::Seed;
 use tessera_rl_search::{
-    Evaluator, EvaluatorError, Eviction, LeafBatch, Mcts, PuctConfig, RootNoise, SearchError,
-    SearchOptions, SearchPool,
+    DEFAULT_GROUP_BUDGET, Evaluator, EvaluatorError, Eviction, LeafBatch, Mcts, PuctConfig,
+    RootNoise, SearchError, SearchGroup, SearchOptions, SearchPool,
 };
 
 use crate::env::BindError;
@@ -199,24 +199,245 @@ fn nonzero(v: u32, what: &str) -> Result<NonZeroU32, BindError> {
     NonZeroU32::new(v).ok_or_else(|| BindError::Argument(format!("{what} must be at least 1")))
 }
 
-/// A Connect Four search (`tessera/Connect4-v1`), rooted at a fresh game.
-pub(crate) fn connect4(args: &SearchArgs) -> Result<Box<dyn SearchOps>, BindError> {
-    let cfg = Connect4Config {};
+/// A Connect Four tree and its root importer.
+type Connect4Tree = (Mcts<Connect4, Masked>, EnvPool<Connect4, Masked>);
+
+/// A one-instance Connect Four pool that validates imported roots, and
+/// its fresh-game root record.
+fn connect4_importer(
+    seed: u64,
+) -> Result<(EnvPool<Connect4, Masked>, Record<Connect4>), BindError> {
     let pool_options = PoolOptions {
         auto_reset: AutoReset::Disabled,
-        ..PoolOptions::new(NonZeroU32::MIN, Seed::new(args.seed))
+        ..PoolOptions::new(NonZeroU32::MIN, Seed::new(seed))
     };
-    let mut importer = EnvPool::<Connect4, Masked>::with_masks(cfg.clone(), pool_options)?;
+    let mut importer = EnvPool::<Connect4, Masked>::with_masks(Connect4Config {}, pool_options)?;
     importer.reset_all(Reseed::Keep)?;
     let root = importer.snapshot(0)?;
+    Ok((importer, root))
+}
+
+/// A Connect Four tree rooted at a fresh game, and its root importer.
+fn connect4_tree(args: &SearchArgs) -> Result<Connect4Tree, BindError> {
+    let (importer, root) = connect4_importer(args.seed)?;
     let mut options = SearchOptions::new(
         nonzero(args.capacity, "capacity")?,
         nonzero(args.batch, "batch")?,
     );
     options.eviction = args.eviction;
-    let pool = SearchPool::new(cfg.clone(), options, &root, EnvPool::with_masks)?;
+    let pool = SearchPool::new(Connect4Config {}, options, &root, EnvPool::with_masks)?;
     let mcts = Mcts::new(pool, args.puct)?;
+    Ok((mcts, importer))
+}
+
+/// A Connect Four search (`tessera/Connect4-v1`), rooted at a fresh game.
+pub(crate) fn connect4(args: &SearchArgs) -> Result<Box<dyn SearchOps>, BindError> {
+    let (mcts, importer) = connect4_tree(args)?;
     Ok(Box::new(Searcher { mcts, importer }))
+}
+
+/// The last failed group call, as Python sees it: its slot, its message,
+/// and whether the exception raised was the user's own (the evaluator's,
+/// or a signal handler's), which the bindings never touch (ADR-0045 §3).
+#[derive(Debug, Clone)]
+pub(crate) struct Failure {
+    pub(crate) slot: Option<usize>,
+    pub(crate) message: String,
+    pub(crate) user_raised: bool,
+}
+
+/// What a search group can do, whatever the environment (ADR-0045).
+pub(crate) trait GroupOps: Send {
+    /// Slots.
+    fn trees(&self) -> usize;
+    /// Actions per node.
+    fn actions(&self) -> u32;
+    /// Bytes of one leaf's observation.
+    fn obs_bytes(&self) -> usize;
+    /// Replaces slot `i`'s tree by the root `record`.
+    fn set_root(&mut self, i: usize, record: &[u8]) -> Result<(), BindError>;
+    /// Sets whether slot `i` takes part in the next call.
+    fn set_active(&mut self, i: usize, flag: bool) -> Result<(), BindError>;
+    /// Whether slot `i` takes part in the next call.
+    fn active(&self, i: usize) -> Result<bool, BindError>;
+    /// One group call; on failure, the slot it belongs to.
+    fn run(&mut self, eval: &mut dyn BatchEval) -> Result<(), (Option<usize>, BindError)>;
+    /// Records whether the last failure's exception was the user's own.
+    fn set_user_raised(&mut self, user: bool);
+    /// The last failed call, cleared at the start of every call.
+    fn last_failure(&self) -> Option<Failure>;
+    /// Slot `i`'s root visit counts.
+    fn root_visits(&self, i: usize) -> Result<Vec<u32>, BindError>;
+    /// Slot `i`'s action to play.
+    fn select_action(&mut self, i: usize, temperature: f64) -> Result<u32, BindError>;
+    /// Slot `i`'s completed calls.
+    fn calls(&self, i: usize) -> Result<u64, BindError>;
+    /// Slot `i`'s tree digest.
+    fn tree_hash(&self, i: usize) -> Result<u64, BindError>;
+    /// The aggregate memory bound, in bytes.
+    fn memory_bytes(&self) -> u64;
+}
+
+struct GroupSearcher<E: Environment, M: MaskProvider<E>> {
+    group: SearchGroup<E, M>,
+    importer: EnvPool<E, M>,
+    user_raised: bool,
+}
+
+fn slot_error(i: usize, trees: usize) -> BindError {
+    BindError::Argument(format!("slot {i} out of range for {trees} trees"))
+}
+
+impl<E, M> GroupSearcher<E, M>
+where
+    E: Environment<
+            Config: Sync + Clone,
+            State: Send,
+            Header: Send + RecordLayout<Adaptive: AdaptiveValues<E::Config>>,
+        > + Validate,
+    M: MaskProvider<E> + Send,
+    E::Config: Send,
+{
+    fn tree(&self, i: usize) -> Result<&Mcts<E, M>, BindError> {
+        self.group
+            .slot(i)
+            .ok_or_else(|| slot_error(i, self.group.len()))
+    }
+
+    fn tree_mut(&mut self, i: usize) -> Result<&mut Mcts<E, M>, BindError> {
+        let n = self.group.len();
+        self.group.slot_mut(i).ok_or_else(|| slot_error(i, n))
+    }
+}
+
+impl<E, M> GroupOps for GroupSearcher<E, M>
+where
+    E: Environment<
+            Config: Sync + Clone,
+            State: Send,
+            Header: Send + RecordLayout<Adaptive: AdaptiveValues<E::Config>>,
+        > + Validate,
+    M: MaskProvider<E> + Send,
+    E::Config: Send,
+{
+    fn trees(&self) -> usize {
+        self.group.len()
+    }
+
+    fn actions(&self) -> u32 {
+        self.group.slot(0).map_or(0, |m| m.pool().actions())
+    }
+
+    fn obs_bytes(&self) -> usize {
+        self.group.slot(0).map_or(0, Mcts::obs_bytes)
+    }
+
+    fn set_root(&mut self, i: usize, record: &[u8]) -> Result<(), BindError> {
+        self.tree(i)?;
+        let decoded = decode_from_slice::<DecodedRecord<E>>(record).map_err(BindError::Decode)?;
+        self.importer.import(&[0], &[decoded])?;
+        let root = self.importer.snapshot(0)?;
+        self.tree_mut(i)?.pool_mut().set_root(&root)?;
+        Ok(())
+    }
+
+    fn set_active(&mut self, i: usize, flag: bool) -> Result<(), BindError> {
+        if self.group.set_active(i, flag) {
+            Ok(())
+        } else {
+            Err(slot_error(i, self.group.len()))
+        }
+    }
+
+    fn active(&self, i: usize) -> Result<bool, BindError> {
+        self.group
+            .active(i)
+            .ok_or_else(|| slot_error(i, self.group.len()))
+    }
+
+    fn run(&mut self, eval: &mut dyn BatchEval) -> Result<(), (Option<usize>, BindError)> {
+        self.user_raised = false;
+        self.group
+            .run(&mut Adapter(eval))
+            .map_err(|e| (e.slot, e.error.into()))
+    }
+
+    fn set_user_raised(&mut self, user: bool) {
+        self.user_raised = user;
+    }
+
+    fn last_failure(&self) -> Option<Failure> {
+        self.group.last_failure().map(|f| Failure {
+            slot: f.slot,
+            message: f.message.clone(),
+            user_raised: self.user_raised,
+        })
+    }
+
+    fn root_visits(&self, i: usize) -> Result<Vec<u32>, BindError> {
+        let m = self.tree(i)?;
+        let mut v = vec![0; usize::try_from(m.pool().actions()).unwrap_or(0)];
+        m.root_visits(&mut v);
+        Ok(v)
+    }
+
+    fn select_action(&mut self, i: usize, temperature: f64) -> Result<u32, BindError> {
+        Ok(self.tree_mut(i)?.select_action(temperature)?)
+    }
+
+    fn calls(&self, i: usize) -> Result<u64, BindError> {
+        Ok(self.tree(i)?.calls())
+    }
+
+    fn tree_hash(&self, i: usize) -> Result<u64, BindError> {
+        Ok(self.tree(i)?.pool().tree_hash())
+    }
+
+    fn memory_bytes(&self) -> u64 {
+        self.group.memory_bytes()
+    }
+}
+
+/// A Connect Four search group: one tree per entry of `slots`, each from
+/// its own arguments, every root a fresh game.
+pub(crate) fn connect4_group(slots: &[SearchArgs]) -> Result<Box<dyn GroupOps>, BindError> {
+    let first = slots
+        .first()
+        .ok_or_else(|| BindError::Argument("trees must be at least 1".to_owned()))?;
+    // The aggregate bound is checked from the arguments alone, before any
+    // tree is allocated (ADR-0045 section 1).
+    let shapes = slots
+        .iter()
+        .map(|a| {
+            let mut o =
+                SearchOptions::new(nonzero(a.capacity, "capacity")?, nonzero(a.batch, "batch")?);
+            o.eviction = a.eviction;
+            Ok((o, a.puct))
+        })
+        .collect::<Result<Vec<_>, BindError>>()?;
+    let bound = SearchGroup::<Connect4, Masked>::bound_bytes(&Connect4Config {}, &shapes);
+    match bound {
+        Some(bytes) if bytes <= DEFAULT_GROUP_BUDGET => {}
+        bytes => {
+            return Err(BindError::Search(SearchError::Budget {
+                bytes: bytes.unwrap_or(u64::MAX),
+                per_node: SearchPool::<Connect4, Masked>::bytes_per_node(7),
+                budget: DEFAULT_GROUP_BUDGET,
+            }));
+        }
+    }
+    // Only the small root importer: no tree is built and dropped.
+    let (importer, _) = connect4_importer(first.seed)?;
+    let trees = slots
+        .iter()
+        .map(|a| connect4_tree(a).map(|(m, _)| m))
+        .collect::<Result<Vec<_>, _>>()?;
+    let group = SearchGroup::new(&Connect4Config {}, trees, DEFAULT_GROUP_BUDGET)?;
+    Ok(Box::new(GroupSearcher {
+        group,
+        importer,
+        user_raised: false,
+    }))
 }
 
 impl From<SearchError> for BindError {

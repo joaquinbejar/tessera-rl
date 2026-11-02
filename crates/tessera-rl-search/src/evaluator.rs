@@ -27,6 +27,8 @@ pub struct LeafBatch<'a, E: Environment> {
     picks: &'a [(usize, usize)],
     buf: &'a mut [u8],
     filled: bool,
+    /// Built by [`Self::prefilled`]: its source is never read.
+    prefilled: bool,
     obs_bytes: usize,
     legal: &'a [bool],
     actions: usize,
@@ -51,10 +53,30 @@ impl<'a, E: Environment> LeafBatch<'a, E> {
             picks,
             buf,
             filled: false,
+            prefilled: false,
             obs_bytes,
             legal,
             actions,
         }
+    }
+
+    /// A batch whose observations are already in `buf` (a group batch,
+    /// filled tree by tree): `source` and `picks` are never read, because
+    /// [`Self::observations`] only copies from them while `filled` is
+    /// false.
+    pub(crate) fn prefilled(
+        records: &'a [Record<E>],
+        source: ObsSource<'a>,
+        picks: &'a [(usize, usize)],
+        buf: &'a mut [u8],
+        obs_bytes: usize,
+        legal: &'a [bool],
+        actions: usize,
+    ) -> Self {
+        let mut batch = Self::new(records, source, picks, buf, obs_bytes, legal, actions);
+        batch.filled = true;
+        batch.prefilled = true;
+        batch
     }
 
     /// Leaves in the batch.
@@ -87,6 +109,7 @@ impl<'a, E: Environment> LeafBatch<'a, E> {
     #[must_use]
     pub fn observations(&mut self) -> &[u8] {
         if !self.filled {
+            debug_assert!(!self.prefilled, "a prefilled batch never reads its source");
             let ob = self.obs_bytes;
             for (leaf, &(row, mover)) in self.picks.iter().enumerate() {
                 let range = leaf

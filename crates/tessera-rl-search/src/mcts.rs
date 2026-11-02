@@ -100,6 +100,21 @@ enum Leaf {
     Terminal { slot: u32 },
 }
 
+/// The counter and search stream of a call in progress.
+#[derive(Debug, Clone)]
+pub(crate) struct CallStart {
+    pub(crate) calls: u64,
+    pub(crate) rng: StepRng,
+}
+
+/// The gathered leaves of one tree, for a group batch.
+pub(crate) struct Gathered<'a, E: Environment> {
+    pub(crate) records: &'a [Record<E>],
+    pub(crate) picks: &'a [(usize, usize)],
+    pub(crate) legal: &'a [bool],
+    pub(crate) source: crate::pool::ObsSource<'a>,
+}
+
 /// A PUCT search over a [`SearchPool`].
 pub struct Mcts<E: Environment, M: MaskProvider<E>> {
     pool: SearchPool<E, M>,
@@ -125,6 +140,9 @@ pub struct Mcts<E: Environment, M: MaskProvider<E>> {
     /// The batch's observations, then legal actions, for the evaluator.
     obs_buf: Vec<u8>,
     leaf_legal: Vec<bool>,
+    /// Whether the gathered batch is the root's (its legal actions are in
+    /// `legal`, not `leaf_legal`).
+    root_batch: bool,
 }
 
 fn idx(v: u32) -> usize {
@@ -181,6 +199,7 @@ where
             obs_bytes,
             obs_buf: vec![0; b.max(1) * obs_bytes],
             leaf_legal: vec![false; b.max(1) * a],
+            root_batch: false,
             cfg,
             calls: 0,
             rng: None,
@@ -239,11 +258,9 @@ where
 
     /// The player to move at `slot` (its single acting agent).
     fn mover(&self, slot: u32) -> Result<usize, SearchError> {
-        let record = self
-            .pool
-            .records
-            .get(idx(slot))
-            .ok_or(SearchError::TerminalNode)?;
+        let Some(record) = self.pool.records.get(idx(slot)) else {
+            return Err(SearchError::TerminalNode);
+        };
         SearchPool::<E, M>::single_actor(record)
     }
 
@@ -290,63 +307,98 @@ where
     }
 
     fn run_canonical(&mut self, evaluator: &mut impl Evaluator<E>) -> Result<(), SearchError> {
-        let calls = self
-            .calls
-            .checked_add(1)
-            .ok_or(SearchError::CounterExhausted)?;
-        let mut rng = self.search_rng()?;
-        self.pool.begin();
-        match self.run_inner(evaluator, &mut rng) {
-            Ok(()) => {
-                self.pool.finish();
-                self.calls = calls;
-                self.rng = Some(rng);
+        let start = self.call_begin()?;
+        match self.run_inner(evaluator, &start) {
+            Ok(rng) => {
+                self.call_commit(start.calls, rng);
                 Ok(())
             }
             Err(e) => {
-                self.pool.rollback();
+                self.call_rollback();
                 Err(e)
             }
         }
     }
 
+    /// The first step of a call, before any change to the tree: the next
+    /// call counter and its search stream, then the journal is opened.
+    pub(crate) fn call_begin(&mut self) -> Result<CallStart, SearchError> {
+        let Some(calls) = self.calls.checked_add(1) else {
+            return Err(SearchError::CounterExhausted);
+        };
+        let rng = self.search_rng()?;
+        self.pool.begin();
+        Ok(CallStart { calls, rng })
+    }
+
+    /// Closes the journal and keeps the call's counter and stream.
+    pub(crate) fn call_commit(&mut self, calls: u64, rng: StepRng) {
+        self.pool.finish();
+        self.calls = calls;
+        self.rng = Some(rng);
+    }
+
+    /// Restores the tree to its state at [`Self::call_begin`].
+    pub(crate) fn call_rollback(&mut self) {
+        self.pool.rollback();
+    }
+
+    /// Whether the root is terminal (a call on it is an error).
+    pub(crate) fn root_terminal(&self) -> bool {
+        self.pool.node(self.pool.root).is_some_and(|n| n.terminal)
+    }
+
+    /// Whether the root has no priors yet.
+    pub(crate) fn root_unevaluated(&self) -> bool {
+        !self.evaluated(self.pool.root)
+    }
+
     fn run_inner(
         &mut self,
         evaluator: &mut impl Evaluator<E>,
-        rng: &mut StepRng,
-    ) -> Result<(), SearchError> {
-        let root = self.pool.root;
-        if self.pool.node(root).is_some_and(|n| n.terminal) {
+        start: &CallStart,
+    ) -> Result<StepRng, SearchError> {
+        if self.root_terminal() {
             return Err(SearchError::TerminalNode);
         }
         evaluator.check()?;
-        if !self.evaluated(root) {
+        if self.root_unevaluated() {
             self.evaluate_root(evaluator)?;
         }
-        self.prepare_root_priors(rng);
+        let mut rng = start.rng.clone();
+        self.prepare_root_priors(&mut rng);
         let mut done = 0u32;
-        while done < self.cfg.simulations {
+        while let Some(want) = self.want(done) {
             // Every batch, even one of terminal leaves only, which calls
             // no evaluator.
             evaluator.check()?;
-            let want = (self.cfg.simulations - done).min(self.cfg.batch_size);
-            self.collect(want)?;
-            let n = u32::try_from(self.leaves.len()).unwrap_or(u32::MAX);
-            self.expand_and_evaluate(evaluator)?;
-            self.backup_all()?;
+            let n = self.collect_and_stage(want)?;
+            let k = self.eval_len();
+            if k > 0 {
+                self.evaluate_staged(evaluator, k)?;
+                self.validate_staged(k)?;
+            }
+            self.commit_and_backup(k)?;
             done = done.saturating_add(n.max(1));
         }
-        Ok(())
+        Ok(rng)
     }
 
-    /// Evaluates the root alone and sets its priors.
-    fn evaluate_root(&mut self, evaluator: &mut impl Evaluator<E>) -> Result<(), SearchError> {
+    /// The leaves to collect next after `done` simulations, or `None`
+    /// when the budget is spent.
+    pub(crate) fn want(&self, done: u32) -> Option<u32> {
+        (done < self.cfg.simulations)
+            .then(|| (self.cfg.simulations - done).min(self.cfg.batch_size))
+    }
+
+    /// Loads the root into the scratch pool and the evaluation lists, as a
+    /// one-leaf batch: its record, its mover and its legal actions (in
+    /// `self.legal`).
+    pub(crate) fn load_root(&mut self) -> Result<(), SearchError> {
         let root = self.pool.root;
-        let record = *self
-            .pool
-            .records
-            .get(idx(root))
-            .ok_or(SearchError::TerminalNode)?;
+        let Some(&record) = self.pool.records.get(idx(root)) else {
+            return Err(SearchError::TerminalNode);
+        };
         let agent = SearchPool::<E, M>::single_actor(&record)?;
         // Every scratch row gets the root, by `restore_all`, which also
         // recovers a scratch pool poisoned by an earlier failed call (C3).
@@ -361,6 +413,30 @@ where
         self.eval_records.push(record);
         self.eval_picks.clear();
         self.eval_picks.push((0, agent));
+        self.root_batch = true;
+        Ok(())
+    }
+
+    /// Validates the root's response (in `raw_priors` and `values`, row 0)
+    /// and writes its priors.
+    pub(crate) fn store_root(&mut self) -> Result<(), SearchError> {
+        let width = idx(self.pool.actions);
+        let value = self.values.first().copied().unwrap_or(f64::NAN);
+        validate_leaf(
+            0,
+            self.raw_priors.get(..width).unwrap_or(&[]),
+            value,
+            &self.legal,
+            &mut self.priors,
+        )?;
+        self.write_priors(self.pool.root);
+        Ok(())
+    }
+
+    /// Evaluates the root alone and sets its priors.
+    fn evaluate_root(&mut self, evaluator: &mut impl Evaluator<E>) -> Result<(), SearchError> {
+        self.load_root()?;
+        let width = idx(self.pool.actions);
         let ob = self.obs_bytes;
         let mut batch = LeafBatch::new(
             &self.eval_records,
@@ -376,16 +452,7 @@ where
             self.values.get_mut(..1).unwrap_or(&mut []),
         );
         evaluator.evaluate_batch(&mut batch, raw, values)?;
-        let value = self.values.first().copied().unwrap_or(f64::NAN);
-        validate_leaf(
-            0,
-            self.raw_priors.get(..width).unwrap_or(&[]),
-            value,
-            &self.legal,
-            &mut self.priors,
-        )?;
-        self.write_priors(root);
-        Ok(())
+        self.store_root()
     }
 
     /// Writes `self.priors` and `self.legal` into `slot`'s edges.
@@ -474,14 +541,13 @@ where
     /// selection calls it once per edge of the path.
     fn add_virtual_loss(&mut self, slot: u32, action: u32) -> Result<(), SearchError> {
         let vl = self.cfg.virtual_loss;
-        let e = self
-            .pool
-            .edge_mut(slot, action)
-            .ok_or(SearchError::VisitsExhausted)?;
-        e.virtual_loss = e
-            .virtual_loss
-            .checked_add(vl)
-            .ok_or(SearchError::VisitsExhausted)?;
+        let Some(e) = self.pool.edge_mut(slot, action) else {
+            return Err(SearchError::VisitsExhausted);
+        };
+        let Some(next) = e.virtual_loss.checked_add(vl) else {
+            return Err(SearchError::VisitsExhausted);
+        };
+        e.virtual_loss = next;
         Ok(())
     }
 
@@ -491,14 +557,13 @@ where
         let vl = self.cfg.virtual_loss;
         let (mut s, mut a) = (slot, action);
         loop {
-            let e = self
-                .pool
-                .edge_mut(s, a)
-                .ok_or(SearchError::VisitsExhausted)?;
-            e.virtual_loss = e
-                .virtual_loss
-                .checked_sub(vl)
-                .ok_or(SearchError::VisitsExhausted)?;
+            let Some(e) = self.pool.edge_mut(s, a) else {
+                return Err(SearchError::VisitsExhausted);
+            };
+            let Some(next) = e.virtual_loss.checked_sub(vl) else {
+                return Err(SearchError::VisitsExhausted);
+            };
+            e.virtual_loss = next;
             let Some(node) = self.pool.node(s) else {
                 break;
             };
@@ -573,12 +638,14 @@ where
         Ok(())
     }
 
-    /// Steps the new children, evaluates the non-terminal ones, and
-    /// commits them with their priors.
-    fn expand_and_evaluate(
-        &mut self,
-        evaluator: &mut impl Evaluator<E>,
-    ) -> Result<(), SearchError> {
+    /// Collects up to `want` leaves, steps the new children in the
+    /// scratch pool, and gathers the non-terminal ones for evaluation
+    /// (their records, movers and legal actions). Returns the leaves
+    /// collected.
+    pub(crate) fn collect_and_stage(&mut self, want: u32) -> Result<u32, SearchError> {
+        self.root_batch = false;
+        self.collect(want)?;
+        let n = u32::try_from(self.leaves.len()).unwrap_or(u32::MAX);
         let requests = core::mem::take(&mut self.requests);
         let staged = self.pool.stage(&requests);
         self.requests = requests;
@@ -594,57 +661,81 @@ where
                 self.eval_rows.push(row);
             }
         }
-        let k = self.eval_records.len();
-        if k > 0 {
-            let ob = self.obs_bytes;
-            self.eval_picks.clear();
-            for leaf in 0..k {
-                let row = self.eval_rows.get(leaf).copied().unwrap_or(0);
-                let mover = self
-                    .eval_records
-                    .get(leaf)
-                    .map_or(Ok(0), SearchPool::<E, M>::single_actor)?;
-                self.eval_picks.push((row, mover));
-                if let (Some(dst), Some(src)) = (
-                    self.leaf_legal.get_mut(leaf * width..leaf * width + width),
-                    self.pool.child_masks.get(row * width..row * width + width),
-                ) {
-                    dst.copy_from_slice(src);
-                }
-            }
-            let mut batch = LeafBatch::new(
-                &self.eval_records,
-                self.pool.obs_source(),
-                &self.eval_picks,
-                self.obs_buf.get_mut(..k * ob).unwrap_or(&mut []),
-                ob,
-                self.leaf_legal.get(..k * width).unwrap_or(&[]),
-                width,
-            );
-            let (raw, values) = (
-                self.raw_priors.get_mut(..k * width).unwrap_or(&mut []),
-                self.values.get_mut(..k).unwrap_or(&mut []),
-            );
-            evaluator.evaluate_batch(&mut batch, raw, values)?;
-            for leaf in 0..k {
-                let row = self.eval_rows.get(leaf).copied().unwrap_or(0);
-                let legal = self
-                    .pool
-                    .child_masks
-                    .get(row * width..row * width + width)
-                    .unwrap_or(&[]);
-                let raw = self
-                    .raw_priors
-                    .get(leaf * width..leaf * width + width)
-                    .unwrap_or(&[]);
-                let value = self.values.get(leaf).copied().unwrap_or(f64::NAN);
-                // First pass: validate every leaf before anything is
-                // committed, so an invalid response fails the call with no
-                // child written. The renormalized priors are discarded
-                // here: one scratch row serves every leaf.
-                validate_leaf(leaf, raw, value, legal, &mut self.priors)?;
+        self.eval_picks.clear();
+        for leaf in 0..self.eval_records.len() {
+            let row = self.eval_rows.get(leaf).copied().unwrap_or(0);
+            let mover = self
+                .eval_records
+                .get(leaf)
+                .map_or_else(|| Ok(0), SearchPool::<E, M>::single_actor)?;
+            self.eval_picks.push((row, mover));
+            if let (Some(dst), Some(src)) = (
+                self.leaf_legal.get_mut(leaf * width..leaf * width + width),
+                self.pool.child_masks.get(row * width..row * width + width),
+            ) {
+                dst.copy_from_slice(src);
             }
         }
+        Ok(n)
+    }
+
+    /// Leaves gathered for evaluation by the last collection.
+    pub(crate) fn eval_len(&self) -> usize {
+        self.eval_records.len()
+    }
+
+    /// Evaluates the `k` gathered leaves into `raw_priors` and `values`.
+    fn evaluate_staged(
+        &mut self,
+        evaluator: &mut impl Evaluator<E>,
+        k: usize,
+    ) -> Result<(), SearchError> {
+        let width = idx(self.pool.actions);
+        let ob = self.obs_bytes;
+        let mut batch = LeafBatch::new(
+            &self.eval_records,
+            self.pool.obs_source(),
+            &self.eval_picks,
+            self.obs_buf.get_mut(..k * ob).unwrap_or(&mut []),
+            ob,
+            self.leaf_legal.get(..k * width).unwrap_or(&[]),
+            width,
+        );
+        let (raw, values) = (
+            self.raw_priors.get_mut(..k * width).unwrap_or(&mut []),
+            self.values.get_mut(..k).unwrap_or(&mut []),
+        );
+        evaluator.evaluate_batch(&mut batch, raw, values)?;
+        Ok(())
+    }
+
+    /// First pass: validates every gathered leaf's response before
+    /// anything is committed, so an invalid response fails the call with
+    /// no child written. The renormalized priors are discarded here: one
+    /// scratch row serves every leaf.
+    pub(crate) fn validate_staged(&mut self, k: usize) -> Result<(), SearchError> {
+        let width = idx(self.pool.actions);
+        for leaf in 0..k {
+            let row = self.eval_rows.get(leaf).copied().unwrap_or(0);
+            let legal = self
+                .pool
+                .child_masks
+                .get(row * width..row * width + width)
+                .unwrap_or(&[]);
+            let raw = self
+                .raw_priors
+                .get(leaf * width..leaf * width + width)
+                .unwrap_or(&[]);
+            let value = self.values.get(leaf).copied().unwrap_or(f64::NAN);
+            validate_leaf(leaf, raw, value, legal, &mut self.priors)?;
+        }
+        Ok(())
+    }
+
+    /// Commits the staged children with the (validated) priors of the `k`
+    /// evaluated ones, then backs every collected leaf up in batch order.
+    pub(crate) fn commit_and_backup(&mut self, k: usize) -> Result<(), SearchError> {
+        let width = idx(self.pool.actions);
         for t in 0..self.leaves.len() {
             if let Some(Leaf::Terminal { slot }) = self.leaves.get(t).copied() {
                 self.pool.release(self.pool.handle_of(slot))?;
@@ -679,7 +770,44 @@ where
             self.priors = priors;
             self.write_priors(child);
         }
-        Ok(())
+        self.backup_all()
+    }
+
+    /// The gathered leaves for a group batch: their records, their scratch
+    /// rows and movers, their legal actions (`eval_len() * actions`), and
+    /// the scratch pool's observation source.
+    pub(crate) fn gathered(&self) -> Gathered<'_, E> {
+        let k = self.eval_records.len();
+        let width = idx(self.pool.actions);
+        let legal: &[bool] = if self.root_batch {
+            // The root batch: its legal actions are in `self.legal`.
+            &self.legal
+        } else {
+            self.leaf_legal.get(..k * width).unwrap_or(&[])
+        };
+        Gathered {
+            records: &self.eval_records,
+            picks: &self.eval_picks,
+            legal,
+            source: self.pool.obs_source(),
+        }
+    }
+
+    /// Writes a group response for the gathered leaves into this tree's
+    /// response rows: `raw` is `eval_len() * actions` priors, `values`
+    /// `eval_len()` values.
+    pub(crate) fn put_response(&mut self, raw: &[f64], values: &[f64]) {
+        if let Some(dst) = self.raw_priors.get_mut(..raw.len()) {
+            dst.copy_from_slice(raw);
+        }
+        if let Some(dst) = self.values.get_mut(..values.len()) {
+            dst.copy_from_slice(values);
+        }
+    }
+
+    /// Mixes this call's root noise into the root priors.
+    pub(crate) fn prepare_noise(&mut self, rng: &mut StepRng) {
+        self.prepare_root_priors(rng);
     }
 
     /// The value of a leaf from the view of the player to move at its
@@ -695,7 +823,9 @@ where
                 (child, parent, action)
             }
             Leaf::Terminal { slot } => {
-                let n = self.pool.node(slot).ok_or(SearchError::TerminalNode)?;
+                let Some(n) = self.pool.node(slot) else {
+                    return Err(SearchError::TerminalNode);
+                };
                 (slot, n.parent, n.action)
             }
         };
@@ -717,11 +847,9 @@ where
             Leaf::Edge { row, .. } => row,
             Leaf::Terminal { .. } => 0,
         };
-        let k = self
-            .eval_rows
-            .iter()
-            .position(|&r| r == row)
-            .ok_or(SearchError::TerminalNode)?;
+        let Some(k) = self.eval_rows.iter().position(|&r| r == row) else {
+            return Err(SearchError::TerminalNode);
+        };
         let v = self.values.get(k).copied().unwrap_or(0.0);
         let child_mover = self.mover(node)?;
         Ok((parent, action, if child_mover == mover { v } else { -v }))
@@ -736,18 +864,17 @@ where
             let (mut s, mut a, mut v) = self.leaf_value(leaf)?;
             loop {
                 let vl = self.cfg.virtual_loss;
-                let e = self
-                    .pool
-                    .edge_mut(s, a)
-                    .ok_or(SearchError::VisitsExhausted)?;
-                e.virtual_loss = e
-                    .virtual_loss
-                    .checked_sub(vl)
-                    .ok_or(SearchError::VisitsExhausted)?;
-                e.visits = e
-                    .visits
-                    .checked_add(1)
-                    .ok_or(SearchError::VisitsExhausted)?;
+                let Some(e) = self.pool.edge_mut(s, a) else {
+                    return Err(SearchError::VisitsExhausted);
+                };
+                let Some(next) = e.virtual_loss.checked_sub(vl) else {
+                    return Err(SearchError::VisitsExhausted);
+                };
+                e.virtual_loss = next;
+                let Some(next) = e.visits.checked_add(1) else {
+                    return Err(SearchError::VisitsExhausted);
+                };
+                e.visits = next;
                 e.value += v;
                 let Some(&node) = self.pool.node(s) else {
                     break;
