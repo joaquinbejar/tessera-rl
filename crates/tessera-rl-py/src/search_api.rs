@@ -20,7 +20,7 @@ use tessera_rl_search::{EvaluatorError, Eviction};
 /// The state behind a `Search` object.
 pub(crate) type SearchInner = Inner<dyn SearchOps>;
 
-const SEARCH_KEYS: [&str; 12] = [
+pub(crate) const SEARCH_KEYS: [&str; 12] = [
     "env_id",
     "capacity",
     "batch",
@@ -35,20 +35,18 @@ const SEARCH_KEYS: [&str; 12] = [
     "seed",
 ];
 
-/// `make_search(**kwargs)`: a PUCT search object.
-pub(crate) fn make_search(g: Gil, kwargs: Option<Ref<'_>>) -> CResult<SearchInner> {
-    let kw = Kwargs::parse(g, kwargs)?;
-    kw.check(g, &[&SEARCH_KEYS])?;
-    let mut args = SearchArgs::new();
+/// Applies the search options in `kw` to `args`.
+pub(crate) fn apply_options(g: Gil, kw: &Kwargs<'_>, args: &mut SearchArgs) -> CResult<()> {
     if let Some(v) = kw.u32(g, "capacity")? {
         args.capacity = v;
     }
     if let Some(v) = kw.u32(g, "batch")? {
         args.batch = v;
     }
-    args.eviction = match kw.string(g, "eviction")?.as_deref() {
-        None | Some("strict") => Eviction::Strict,
-        Some("oldest") => Eviction::Oldest,
+    match kw.string(g, "eviction")?.as_deref() {
+        None => {}
+        Some("strict") => args.eviction = Eviction::Strict,
+        Some("oldest") => args.eviction = Eviction::Oldest,
         Some(other) => {
             return Err(error(
                 g,
@@ -56,7 +54,7 @@ pub(crate) fn make_search(g: Gil, kwargs: Option<Ref<'_>>) -> CResult<SearchInne
                 format!("eviction must be \"strict\" or \"oldest\", not {other:?}"),
             ));
         }
-    };
+    }
     if let Some(v) = kw.f64(g, "c_puct")? {
         args.puct.c_puct = v;
     }
@@ -76,7 +74,7 @@ pub(crate) fn make_search(g: Gil, kwargs: Option<Ref<'_>>) -> CResult<SearchInne
         args.seed = v;
     }
     match (kw.f64(g, "noise_alpha")?, kw.f64(g, "noise_epsilon")?) {
-        (Some(alpha), Some(epsilon)) => args = args.with_noise(alpha, epsilon),
+        (Some(alpha), Some(epsilon)) => *args = args.clone().with_noise(alpha, epsilon),
         (None, None) => {}
         _ => {
             return Err(error(
@@ -86,6 +84,15 @@ pub(crate) fn make_search(g: Gil, kwargs: Option<Ref<'_>>) -> CResult<SearchInne
             ));
         }
     }
+    Ok(())
+}
+
+/// `make_search(**kwargs)`: a PUCT search object.
+pub(crate) fn make_search(g: Gil, kwargs: Option<Ref<'_>>) -> CResult<SearchInner> {
+    let kw = Kwargs::parse(g, kwargs)?;
+    kw.check(g, &[&SEARCH_KEYS])?;
+    let mut args = SearchArgs::new();
+    apply_options(g, &kw, &mut args)?;
     let env_id = kw
         .string(g, "env_id")?
         .unwrap_or_else(|| "tessera/Connect4-v1".to_owned());
@@ -119,12 +126,12 @@ pub(crate) fn set_root(g: Gil, inner: &SearchInner, args: Ref<'_>) -> CResult<Mi
 }
 
 /// The Python evaluator of one `run` call.
-struct PyEval<'a> {
-    g: Gil,
-    callable: Ref<'a>,
+pub(crate) struct PyEval<'a> {
+    pub(crate) g: Gil,
+    pub(crate) callable: Ref<'a>,
     /// A Python exception raised by the callable, raised again after the
     /// rollback.
-    pending: Option<capi::Pending>,
+    pub(crate) pending: Option<capi::Pending>,
 }
 
 fn shape(what: String) -> EvaluatorError {
@@ -282,7 +289,7 @@ pub(crate) fn tree_hash(g: Gil, inner: &SearchInner) -> CResult<Mine> {
 }
 
 /// The single positional argument of `signature`.
-fn one_arg<'a>(g: Gil, args: Ref<'a>, signature: &str) -> CResult<[Ref<'a>; 1]> {
+pub(crate) fn one_arg<'a>(g: Gil, args: Ref<'a>, signature: &str) -> CResult<[Ref<'a>; 1]> {
     let items = capi::tuple_items(g, args, signature)?;
     <[Ref<'a>; 1]>::try_from(items)
         .map_err(|_| error(g, Kind::Argument, format!("expected {signature}")))

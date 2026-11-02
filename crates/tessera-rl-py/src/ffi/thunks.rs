@@ -58,7 +58,7 @@ use super::boundary::{
     tessera_fp_caller_controls, tessera_fp_callout_returned, tessera_fp_enter, tessera_fp_leave,
 };
 use super::dlpack::{self, DLManagedTensor, DLManagedTensorVersioned};
-use super::{env_type, module, search_type, view_type};
+use super::{env_type, module, search_group_type, search_type, view_type};
 
 /// `PyCFunction`: `(self, args) -> object`.
 pub(crate) type CFunction =
@@ -624,6 +624,18 @@ thunk!(SEARCH_SELECT_ACTION: CFunction = thunk_search_select_action => search_ty
 thunk!(SEARCH_CALLS: CFunction = thunk_search_calls => search_type::calls : fn(Obj, Obj) -> Obj);
 thunk!(SEARCH_TREE_HASH: CFunction = thunk_search_tree_hash => search_type::tree_hash : fn(Obj, Obj) -> Obj);
 thunk!(SEARCH_DEALLOC: Destructor = thunk_search_dealloc => search_type::dealloc : fn(Obj) -> ());
+thunk!(MAKE_SEARCH_GROUP: CFunctionKw = thunk_make_search_group => search_group_type::make_search_group : fn(Obj, Obj, Obj) -> Obj);
+thunk!(GROUP_LAYOUT: CFunction = thunk_group_layout => search_group_type::layout : fn(Obj, Obj) -> Obj);
+thunk!(GROUP_LAST_FAILURE: CFunction = thunk_group_last_failure => search_group_type::last_failure : fn(Obj, Obj) -> Obj);
+thunk!(GROUP_SET_ROOT: CFunction = thunk_group_set_root => search_group_type::set_root : fn(Obj, Obj) -> Obj);
+thunk!(GROUP_SET_ACTIVE: CFunction = thunk_group_set_active => search_group_type::set_active : fn(Obj, Obj) -> Obj);
+thunk!(GROUP_ACTIVE: CFunction = thunk_group_active => search_group_type::active : fn(Obj, Obj) -> Obj);
+thunk!(GROUP_RUN: CFunction = thunk_group_run => search_group_type::run : fn(Obj, Obj) -> Obj);
+thunk!(GROUP_ROOT_VISITS: CFunction = thunk_group_root_visits => search_group_type::root_visits : fn(Obj, Obj) -> Obj);
+thunk!(GROUP_SELECT_ACTION: CFunction = thunk_group_select_action => search_group_type::select_action : fn(Obj, Obj) -> Obj);
+thunk!(GROUP_CALLS: CFunction = thunk_group_calls => search_group_type::calls : fn(Obj, Obj) -> Obj);
+thunk!(GROUP_TREE_HASH: CFunction = thunk_group_tree_hash => search_group_type::tree_hash : fn(Obj, Obj) -> Obj);
+thunk!(GROUP_DEALLOC: Destructor = thunk_group_dealloc => search_group_type::dealloc : fn(Obj) -> ());
 
 // Borrowed output views (ADR-0003). The deleters and the capsule destructor
 // are cleanup entries: they never fail or reject.

@@ -57,6 +57,22 @@ impl<'a, E: Environment> LeafBatch<'a, E> {
         }
     }
 
+    /// A batch whose observations are already in `buf` (a group batch,
+    /// filled tree by tree): `source` is never read.
+    pub(crate) fn prefilled(
+        records: &'a [Record<E>],
+        source: ObsSource<'a>,
+        picks: &'a [(usize, usize)],
+        buf: &'a mut [u8],
+        obs_bytes: usize,
+        legal: &'a [bool],
+        actions: usize,
+    ) -> Self {
+        let mut batch = Self::new(records, source, picks, buf, obs_bytes, legal, actions);
+        batch.filled = true;
+        batch
+    }
+
     /// Leaves in the batch.
     #[must_use]
     pub const fn len(&self) -> usize {

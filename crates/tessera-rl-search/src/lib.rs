@@ -12,6 +12,7 @@
 mod error;
 mod evaluator;
 mod evict;
+mod group;
 mod handle;
 mod journal;
 mod mcts;
@@ -21,6 +22,7 @@ mod pool;
 
 pub use error::SearchError;
 pub use evaluator::{Evaluator, EvaluatorError, LeafBatch, PRIOR_SUM_TOLERANCE};
+pub use group::{DEFAULT_GROUP_BUDGET, GroupError, GroupFailure, MAX_TREES, SearchGroup};
 pub use handle::{EdgeStats, NodeHandle};
 pub use mcts::{Mcts, PUCT_FORMULA, PuctConfig, RootNoise};
 pub use options::{Eviction, SearchOptions};

@@ -20,4 +20,5 @@ mod errors;
 mod ffi;
 mod search;
 mod search_api;
+mod search_group_api;
 mod view;
