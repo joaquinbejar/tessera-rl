@@ -17,10 +17,11 @@ use super::capi::{CResult, Gil};
 use crate::env::PoolOps;
 use crate::errors::{Kind, error};
 
-/// An environment object's state.
-pub(crate) struct Inner {
+/// An object's state: an environment pool (`Env`) by default, or a search
+/// (`Search`).
+pub(crate) struct Inner<T: ?Sized = dyn PoolOps> {
     /// Written only while `busy` is held.
-    ops: UnsafeCell<Option<Box<dyn PoolOps>>>,
+    ops: UnsafeCell<Option<Box<T>>>,
     busy: AtomicBool,
     /// Output mode, fixed at construction: borrowed views or owned copies.
     borrowed: bool,
@@ -36,9 +37,9 @@ impl Drop for Busy<'_> {
     }
 }
 
-impl Inner {
-    /// An open environment around `ops`.
-    pub(crate) fn new(ops: Box<dyn PoolOps>, borrowed: bool) -> Self {
+impl<T: ?Sized> Inner<T> {
+    /// An open object around `ops`.
+    pub(crate) fn new(ops: Box<T>, borrowed: bool) -> Self {
         Self {
             ops: UnsafeCell::new(Some(ops)),
             busy: AtomicBool::new(false),
@@ -69,11 +70,7 @@ impl Inner {
 
     /// Runs `f` on the pool under the guard: a concurrent or nested call
     /// raises `ConcurrencyError`, a closed environment `ArgumentError`.
-    pub(crate) fn with<R>(
-        &self,
-        g: Gil,
-        f: impl FnOnce(&mut dyn PoolOps) -> CResult<R>,
-    ) -> CResult<R> {
+    pub(crate) fn with<R>(&self, g: Gil, f: impl FnOnce(&mut T) -> CResult<R>) -> CResult<R> {
         let _busy = self.acquire(g)?;
         // SAFETY: `busy` is held for the lifetime of `_busy`, and every
         // access to `ops` happens under it, so this is the only reference.
@@ -85,7 +82,7 @@ impl Inner {
     }
 
     /// Takes the pool out under the guard (closing); idempotent.
-    pub(crate) fn take(&self, g: Gil) -> CResult<Option<Box<dyn PoolOps>>> {
+    pub(crate) fn take(&self, g: Gil) -> CResult<Option<Box<T>>> {
         let _busy = self.acquire(g)?;
         // SAFETY: as in `with`: `busy` is held.
         Ok(unsafe { &mut *self.ops.get() }.take())

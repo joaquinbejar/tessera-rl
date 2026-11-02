@@ -15,7 +15,8 @@ use tessera_rl_core::encoding::{Encoder, HashSink};
 use tessera_rl_core::space::Space;
 use tessera_rl_core::{AdaptiveValues, Environment, RecordLayout};
 use tessera_rl_engine::{
-    ActionInput, AutoReset, EngineError, EnvPool, MaskProvider, PoolOptions, Record, Reseed,
+    ActionInput, AutoReset, EngineError, EnvPool, MaskProvider, Outputs, PoolOptions, Record,
+    Reseed,
 };
 use tessera_rl_num::identity::Seed;
 
@@ -946,6 +947,63 @@ where
         }
     }
 
+    /// Bytes of one agent's observation (every observation leaf, in order).
+    pub(crate) fn obs_row_bytes(&self) -> usize {
+        let rows = idx(self.batch).saturating_mul(self.agents).max(1);
+        (0..tessera_rl_engine::MAX_LEAVES)
+            .map_while(|l| self.scratch.outputs().observation(l).map(<[u8]>::len))
+            .map(|len| len / rows)
+            .sum()
+    }
+
+    /// Where the scratch rows' observations are read from.
+    pub(crate) fn obs_source(&self) -> ObsSource<'_> {
+        ObsSource {
+            outputs: self.scratch.outputs(),
+            rows: idx(self.batch).saturating_mul(self.agents).max(1),
+            agents: self.agents,
+        }
+    }
+}
+
+/// The observations of the scratch pool's rows, read on demand.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct ObsSource<'a> {
+    outputs: &'a Outputs,
+    /// Agent rows of the scratch outputs.
+    rows: usize,
+    agents: usize,
+}
+
+impl ObsSource<'_> {
+    /// Copies the observation of `agent` at scratch row `row` into `out`
+    /// (every observation leaf, in order).
+    pub(crate) fn copy(&self, row: usize, agent: usize, out: &mut [u8]) {
+        let mut at = 0;
+        for l in 0..tessera_rl_engine::MAX_LEAVES {
+            let Some(bytes) = self.outputs.observation(l) else {
+                break;
+            };
+            let per = bytes.len() / self.rows;
+            let from = (row * self.agents + agent) * per;
+            if let (Some(src), Some(dst)) = (bytes.get(from..from + per), out.get_mut(at..at + per))
+            {
+                dst.copy_from_slice(src);
+            }
+            at += per;
+        }
+    }
+}
+
+impl<E, M> SearchPool<E, M>
+where
+    E: Environment<
+            Config: Sync,
+            State: Send,
+            Header: Send + RecordLayout<Adaptive: AdaptiveValues<E::Config>>,
+        >,
+    M: MaskProvider<E>,
+{
     /// A digest of the whole tree (records, nodes, edges, rewards, the free
     /// list, the root and the counter), for tests of atomicity and of
     /// determinism.

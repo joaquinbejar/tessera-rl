@@ -12,7 +12,7 @@ use pyo3::ffi;
 use super::boundary::{self, Policy};
 use super::capi::{self, Ref};
 use super::tables::{method, method_end};
-use super::{Table, entry, env_type, thunks, view_type};
+use super::{Table, entry, env_type, search_type, thunks, view_type};
 use crate::errors::{Kind, error};
 
 pub(super) unsafe extern "C" fn version(
@@ -120,7 +120,7 @@ pub(super) unsafe extern "C" fn fail_after(
     })
 }
 
-const METHOD_COUNT: usize = if cfg!(feature = "test-hooks") { 11 } else { 10 };
+const METHOD_COUNT: usize = if cfg!(feature = "test-hooks") { 12 } else { 11 };
 
 static METHODS: Table<[ffi::PyMethodDef; METHOD_COUNT]> = Table([
     method(
@@ -162,6 +162,7 @@ static METHODS: Table<[ffi::PyMethodDef; METHOD_COUNT]> = Table([
     env_type::MAKERS[0],
     env_type::MAKERS[1],
     env_type::MAKERS[2],
+    search_type::MAKER,
     #[cfg(feature = "test-hooks")]
     method(
         c"_fail_after",
@@ -194,6 +195,7 @@ pub(super) unsafe extern "C" fn init() -> *mut ffi::PyObject {
         crate::errors::register(g, module.as_ref())?;
         env_type::register(g, module.as_ref())?;
         view_type::register(g, module.as_ref())?;
+        search_type::register(g, module.as_ref())?;
         Ok(module)
     })
 }

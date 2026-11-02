@@ -18,4 +18,6 @@ mod api;
 mod env;
 mod errors;
 mod ffi;
+mod search;
+mod search_api;
 mod view;

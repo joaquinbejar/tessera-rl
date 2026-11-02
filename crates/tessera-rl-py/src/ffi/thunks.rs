@@ -58,7 +58,7 @@ use super::boundary::{
     tessera_fp_caller_controls, tessera_fp_callout_returned, tessera_fp_enter, tessera_fp_leave,
 };
 use super::dlpack::{self, DLManagedTensor, DLManagedTensorVersioned};
-use super::{env_type, module, view_type};
+use super::{env_type, module, search_type, view_type};
 
 /// `PyCFunction`: `(self, args) -> object`.
 pub(crate) type CFunction =
@@ -615,6 +615,15 @@ thunk!(SNAPSHOT: CFunction = thunk_snapshot => env_type::snapshot : fn(Obj, Obj)
 thunk!(IMPORT_RECORD: CFunction = thunk_import_record => env_type::import_record : fn(Obj, Obj) -> Obj);
 thunk!(FORK: CFunction = thunk_fork => env_type::fork : fn(Obj, Obj) -> Obj);
 thunk!(DEALLOC: Destructor = thunk_dealloc => env_type::dealloc : fn(Obj) -> ());
+thunk!(MAKE_SEARCH: CFunctionKw = thunk_make_search => search_type::make_search : fn(Obj, Obj, Obj) -> Obj);
+thunk!(SEARCH_LAYOUT: CFunction = thunk_search_layout => search_type::layout : fn(Obj, Obj) -> Obj);
+thunk!(SEARCH_SET_ROOT: CFunction = thunk_search_set_root => search_type::set_root : fn(Obj, Obj) -> Obj);
+thunk!(SEARCH_RUN: CFunction = thunk_search_run => search_type::run : fn(Obj, Obj) -> Obj);
+thunk!(SEARCH_ROOT_VISITS: CFunction = thunk_search_root_visits => search_type::root_visits : fn(Obj, Obj) -> Obj);
+thunk!(SEARCH_SELECT_ACTION: CFunction = thunk_search_select_action => search_type::select_action : fn(Obj, Obj) -> Obj);
+thunk!(SEARCH_CALLS: CFunction = thunk_search_calls => search_type::calls : fn(Obj, Obj) -> Obj);
+thunk!(SEARCH_TREE_HASH: CFunction = thunk_search_tree_hash => search_type::tree_hash : fn(Obj, Obj) -> Obj);
+thunk!(SEARCH_DEALLOC: Destructor = thunk_search_dealloc => search_type::dealloc : fn(Obj) -> ());
 
 // Borrowed output views (ADR-0003). The deleters and the capsule destructor
 // are cleanup entries: they never fail or reject.
@@ -1074,6 +1083,9 @@ callout!(c_list_append => ffi::PyList_Append : fn(Obj, Obj) -> c_int);
 callout!(c_tuple_set_item => ffi::PyTuple_SetItem : fn(Obj, ffi::Py_ssize_t, Obj) -> c_int);
 callout!(c_dict_set_item_string => ffi::PyDict_SetItemString : fn(Obj, CStr, Obj) -> c_int);
 callout!(c_decref => ffi::Py_DecRef : fn(Obj) -> ());
+callout!(c_object_call => ffi::PyObject_CallObject : fn(Obj, Obj) -> Obj);
+callout!(c_err_clear => ffi::PyErr_Clear : fn() -> ());
+callout!(c_check_signals => ffi::PyErr_CheckSignals : fn() -> c_int);
 callout!(c_long_as_i64 => ffi::PyLong_AsLongLong : fn(Obj) -> i64);
 callout!(c_long_as_u64 => ffi::PyLong_AsUnsignedLongLong : fn(Obj) -> u64);
 callout!(c_unicode_as_utf8 => ffi::PyUnicode_AsUTF8AndSize : fn(Obj, *mut ffi::Py_ssize_t) -> CStr);

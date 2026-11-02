@@ -27,6 +27,8 @@ pub(crate) enum BindError {
     Decode(DecodeError),
     /// An argument the bindings reject before reaching the engine.
     Argument(String),
+    /// A search error (ADR-0043), the evaluator's included.
+    Search(tessera_rl_search::SearchError),
 }
 
 impl From<EngineError> for BindError {

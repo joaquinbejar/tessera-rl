@@ -27,6 +27,7 @@ tessera-rl-num.workspace = true
 tessera-rl-engine.workspace = true
 tessera-rl-classic.workspace = true
 tessera-rl-games.workspace = true
+tessera-rl-search.workspace = true
 
 [dev-dependencies]
 # Hostile floating-point modes for the boundary tests (ADR-0041).

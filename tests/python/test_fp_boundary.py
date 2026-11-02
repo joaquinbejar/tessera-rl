@@ -52,6 +52,21 @@ def test_fp_boundary_failing_warning_propagates_before_mutation():
     assert r["unchanged"], "the warning failed before the step ran"
 
 
+def test_fp_boundary_search_callback_runs_under_the_caller_controls():
+    r = child("search_callback")
+    assert r["identical"], "visits and tree equal those of a default-mode caller"
+    assert r["clean_modes_default"]
+    assert r["callback_saw_caller_mode"], "the evaluator runs under the caller's rounding"
+    assert r["round_after"], "the caller's rounding is restored after run"
+    assert r["counted"] > 0
+    # An evaluator that alters the controls and leaves them changed.
+    assert r["altered_identical"], "canonical arithmetic after the callback"
+    assert r["altered_counted"] > 0
+    assert r["restored_after_success"], "the caller's mode after a successful run"
+    assert r["raised"] and r["unchanged_after_exception"]
+    assert r["restored_after_exception"], "the caller's mode after a failed run"
+
+
 def test_fp_boundary_unmasked_exceptions_never_trap():
     r = child("unmasked")
     if "skipped" in r:

@@ -6,8 +6,114 @@ use tessera_rl_core::Environment;
 use tessera_rl_engine::Record;
 use thiserror::Error;
 
+use crate::pool::ObsSource;
+
 /// Tolerance on the sum of an evaluator's priors over all actions.
 pub const PRIOR_SUM_TOLERANCE: f64 = 1e-6;
+
+/// One batch of leaves for an evaluator, in batch order: each leaf's
+/// record, the observation of the player to move at the leaf (the
+/// observation leaves of the environment concatenated in order, as the
+/// engine writes them), and its legal actions.
+///
+/// The observations are copied out of the scratch pool on the first call
+/// to [`Self::observations`], into a preallocated buffer: an evaluator
+/// that never asks for them does not pay for them.
+#[derive(Debug)]
+pub struct LeafBatch<'a, E: Environment> {
+    records: &'a [Record<E>],
+    source: ObsSource<'a>,
+    /// Each leaf's scratch row and player to move.
+    picks: &'a [(usize, usize)],
+    buf: &'a mut [u8],
+    filled: bool,
+    obs_bytes: usize,
+    legal: &'a [bool],
+    actions: usize,
+}
+
+impl<'a, E: Environment> LeafBatch<'a, E> {
+    /// `buf` holds `records.len() * obs_bytes` bytes.
+    pub(crate) fn new(
+        records: &'a [Record<E>],
+        source: ObsSource<'a>,
+        picks: &'a [(usize, usize)],
+        buf: &'a mut [u8],
+        obs_bytes: usize,
+        legal: &'a [bool],
+        actions: usize,
+    ) -> Self {
+        debug_assert_eq!(picks.len(), records.len());
+        debug_assert_eq!(buf.len(), records.len() * obs_bytes);
+        Self {
+            records,
+            source,
+            picks,
+            buf,
+            filled: false,
+            obs_bytes,
+            legal,
+            actions,
+        }
+    }
+
+    /// Leaves in the batch.
+    #[must_use]
+    pub const fn len(&self) -> usize {
+        self.records.len()
+    }
+
+    /// Whether the batch is empty.
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        self.records.is_empty()
+    }
+
+    /// The leaves' records.
+    #[must_use]
+    pub const fn records(&self) -> &'a [Record<E>] {
+        self.records
+    }
+
+    /// Bytes of one leaf's observation.
+    #[must_use]
+    pub const fn obs_bytes(&self) -> usize {
+        self.obs_bytes
+    }
+
+    /// Every leaf's observation, `len() * obs_bytes()` bytes, row-major:
+    /// the observation of the player to move at the leaf. Copied on the
+    /// first call, without allocating.
+    #[must_use]
+    pub fn observations(&mut self) -> &[u8] {
+        if !self.filled {
+            let ob = self.obs_bytes;
+            for (leaf, &(row, mover)) in self.picks.iter().enumerate() {
+                let range = leaf
+                    .checked_mul(ob)
+                    .and_then(|from| Some(from..from.checked_add(ob)?));
+                if let Some(out) = range.and_then(|r| self.buf.get_mut(r)) {
+                    self.source.copy(row, mover, out);
+                }
+            }
+            self.filled = true;
+        }
+        self.buf
+    }
+
+    /// The legal actions of every leaf, `len() * actions`, row-major (the
+    /// mask of the player to move; all true without masks).
+    #[must_use]
+    pub const fn legal(&self) -> &'a [bool] {
+        self.legal
+    }
+
+    /// Actions per leaf.
+    #[must_use]
+    pub const fn actions(&self) -> usize {
+        self.actions
+    }
+}
 
 /// A batched evaluator: priors and a value for every leaf of a batch.
 ///
@@ -29,6 +135,35 @@ pub trait Evaluator<E: Environment> {
         priors: &mut [f64],
         values: &mut [f64],
     ) -> Result<(), EvaluatorError>;
+
+    /// Evaluates one batch with its observations and legal actions. The
+    /// search calls this; the default delegates to [`Self::evaluate`] with
+    /// the records, so an evaluator that needs no observation implements
+    /// only that.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::evaluate`].
+    fn evaluate_batch(
+        &mut self,
+        batch: &mut LeafBatch<'_, E>,
+        priors: &mut [f64],
+        values: &mut [f64],
+    ) -> Result<(), EvaluatorError> {
+        self.evaluate(batch.records(), priors, values)
+    }
+
+    /// Called before every batch, whether or not it has leaves to
+    /// evaluate: an error aborts the search call and rolls it back, like
+    /// an evaluator error. A host polls for interruptions here (a pending
+    /// Ctrl-C); the default never aborts.
+    ///
+    /// # Errors
+    ///
+    /// Any [`EvaluatorError`], which aborts the call.
+    fn check(&mut self) -> Result<(), EvaluatorError> {
+        Ok(())
+    }
 }
 
 /// Why an evaluator's response was rejected (ADR-0043 section 3). The

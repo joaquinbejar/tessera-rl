@@ -2,7 +2,8 @@
 
 //! A contained kernel fault on the first search call rolls the tree back,
 //! root priors included, and leaves the scratch pool poisoned; the next
-//! call must recover it and succeed (C3, Codex R39).
+//! call must recover it and succeed (C3, Codex R39). An interruption
+//! reported by [`Evaluator::check`] rolls the call back too (R46-01).
 
 #![expect(
     clippy::expect_used,
@@ -10,6 +11,7 @@
 )]
 
 use core::num::NonZeroU32;
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use tessera_rl_core::io::{Actions, ObsWriter};
@@ -28,6 +30,17 @@ use tessera_rl_search::{
 
 /// Set to make the next step kernel panic once.
 static FAULT: AtomicBool = AtomicBool::new(false);
+
+/// Serializes the tests of this file: `FAULT` is process-global, and a
+/// test running beside the fault test would consume its fault (R46-03).
+/// Only these tests take it; nothing measured does.
+static SERIAL: Mutex<()> = Mutex::new(());
+
+fn serial() -> std::sync::MutexGuard<'static, ()> {
+    SERIAL
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
 
 #[derive(EnvState, Debug, Clone, Copy, PartialEq, Default)]
 #[repr(C)]
@@ -153,6 +166,7 @@ fn mcts() -> Mcts<OneShot, NoMasks> {
 
 #[test]
 fn test_mcts_recovers_the_scratch_pool_after_a_fault_on_the_first_call() {
+    let _serial = serial();
     let mut m = mcts();
     let before = m.pool().tree_hash();
     FAULT.store(true, Ordering::Relaxed);
@@ -181,4 +195,53 @@ fn test_mcts_recovers_the_scratch_pool_after_a_fault_on_the_first_call() {
             .collect::<Vec<_>>()
     };
     assert_eq!(draws(&mut m), draws(&mut fresh));
+}
+
+/// Uniform, and interrupted at the `at`-th check.
+struct Interrupted {
+    checks: u32,
+    at: u32,
+}
+
+impl Evaluator<OneShot> for Interrupted {
+    fn evaluate(
+        &mut self,
+        leaves: &[Record<OneShot>],
+        priors: &mut [f64],
+        values: &mut [f64],
+    ) -> Result<(), EvaluatorError> {
+        Uniform.evaluate(leaves, priors, values)
+    }
+
+    fn check(&mut self) -> Result<(), EvaluatorError> {
+        self.checks += 1;
+        if self.checks == self.at {
+            return Err(EvaluatorError::Failed {
+                reason: "interrupted".to_owned(),
+            });
+        }
+        Ok(())
+    }
+}
+
+#[test]
+fn test_mcts_check_runs_before_every_batch_and_an_interruption_rolls_back() {
+    let _serial = serial();
+    let mut whole = Interrupted {
+        checks: 0,
+        at: u32::MAX,
+    };
+    let mut m = mcts();
+    m.run(&mut whole).expect("never interrupted");
+    // Once before the root, then once per batch: 32 simulations in
+    // batches of at most 4.
+    assert!(whole.checks > 8, "{} checks", whole.checks);
+    let before = m.pool().tree_hash();
+    let mut late = Interrupted { checks: 0, at: 6 };
+    let err = m.run(&mut late).expect_err("interrupted");
+    assert!(matches!(
+        err,
+        SearchError::Evaluator(EvaluatorError::Failed { .. })
+    ));
+    assert_eq!((m.pool().tree_hash(), m.calls()), (before, 1));
 }

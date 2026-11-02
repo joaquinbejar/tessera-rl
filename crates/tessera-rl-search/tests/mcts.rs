@@ -448,3 +448,127 @@ fn test_mcts_small_temperature_splits_equal_counts_and_skips_unvisited() {
     assert!(wide.iter().all(|&a| [2, 5, 6].contains(&a)), "{wide:?}");
     assert!(wide.contains(&6));
 }
+
+/// Checks every leaf's observation and legal actions against its state:
+/// channel 0 holds the mover's stones, channel 1 the opponent's, and the
+/// legal columns are the open ones.
+#[derive(Default)]
+struct Inspect {
+    leaves: u32,
+}
+
+impl Evaluator<Connect4> for Inspect {
+    fn evaluate(
+        &mut self,
+        _: &[Record<Connect4>],
+        _: &mut [f64],
+        _: &mut [f64],
+    ) -> Result<(), EvaluatorError> {
+        unreachable_evaluate()
+    }
+
+    fn evaluate_batch(
+        &mut self,
+        batch: &mut tessera_rl_search::LeafBatch<'_, Connect4>,
+        priors: &mut [f64],
+        values: &mut [f64],
+    ) -> Result<(), EvaluatorError> {
+        assert_eq!(batch.obs_bytes(), 2 * 6 * 7);
+        assert_eq!(batch.actions(), 7);
+        for (i, r) in batch.records().iter().enumerate() {
+            self.leaves += 1;
+            let s = r.state();
+            let me = s.to_move();
+            let obs = &batch.observations()[i * 84..i * 84 + 84];
+            let count = |plane: usize| {
+                obs[plane * 42..plane * 42 + 42]
+                    .iter()
+                    .map(|&v| usize::from(v))
+                    .sum::<usize>()
+            };
+            assert_eq!(
+                count(0),
+                s.stones[me].count_ones() as usize,
+                "mover's plane"
+            );
+            assert_eq!(
+                count(1),
+                s.stones[1 - me].count_ones() as usize,
+                "opponent's plane"
+            );
+            for col in 0..7u32 {
+                let open = tessera_rl_games::connect4::board::can_play(s.occupied(), col);
+                assert_eq!(batch.legal()[i * 7 + col as usize], open, "column {col}");
+            }
+        }
+        priors.fill(1.0 / 7.0);
+        values.fill(0.0);
+        Ok(())
+    }
+}
+
+fn unreachable_evaluate() -> Result<(), EvaluatorError> {
+    Err(EvaluatorError::Failed {
+        reason: "the search calls evaluate_batch".to_owned(),
+    })
+}
+
+#[test]
+fn test_mcts_evaluator_batch_carries_the_movers_observation_and_legal_actions() {
+    let mut m = mcts_with("3333332", 4_096, Eviction::Strict, config(64));
+    let mut ev = Inspect::default();
+    m.run(&mut ev).unwrap();
+    assert!(ev.leaves > 50, "{} leaves inspected", ev.leaves);
+}
+
+/// Keeps every leaf's record and lazily copied observation, asking twice.
+#[derive(Default)]
+struct Keep {
+    seen: Vec<(Record<Connect4>, Vec<u8>)>,
+}
+
+impl Evaluator<Connect4> for Keep {
+    fn evaluate(
+        &mut self,
+        _: &[Record<Connect4>],
+        _: &mut [f64],
+        _: &mut [f64],
+    ) -> Result<(), EvaluatorError> {
+        unreachable_evaluate()
+    }
+
+    fn evaluate_batch(
+        &mut self,
+        batch: &mut tessera_rl_search::LeafBatch<'_, Connect4>,
+        priors: &mut [f64],
+        values: &mut [f64],
+    ) -> Result<(), EvaluatorError> {
+        let first = batch.observations().to_vec();
+        assert_eq!(batch.observations(), first.as_slice(), "copied once");
+        for (i, r) in batch.records().iter().enumerate() {
+            self.seen.push((*r, first[i * 84..i * 84 + 84].to_vec()));
+        }
+        priors.fill(1.0 / 7.0);
+        values.fill(0.0);
+        Ok(())
+    }
+}
+
+#[test]
+fn test_mcts_lazy_observations_equal_an_eager_restore_of_each_leaf() {
+    let mut m = mcts_with("3333332", 4_096, Eviction::Strict, config(64));
+    let mut ev = Keep::default();
+    m.run(&mut ev).unwrap();
+    assert!(ev.seen.len() > 50, "{} leaves", ev.seen.len());
+    let options = PoolOptions {
+        auto_reset: AutoReset::Disabled,
+        ..PoolOptions::new(NonZeroU32::MIN, Seed::new(21))
+    };
+    let mut p = EnvPool::<Connect4, Masked>::with_masks(Connect4Config {}, options).unwrap();
+    for (r, obs) in &ev.seen {
+        p.restore_all(core::slice::from_ref(r)).unwrap();
+        let me = r.state().to_move();
+        let eager = &p.outputs().observation(0).unwrap()[me * 84..me * 84 + 84];
+        assert_eq!(obs.as_slice(), eager);
+    }
+}

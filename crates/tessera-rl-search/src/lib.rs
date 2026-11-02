@@ -20,7 +20,7 @@ mod options;
 mod pool;
 
 pub use error::SearchError;
-pub use evaluator::{Evaluator, EvaluatorError, PRIOR_SUM_TOLERANCE};
+pub use evaluator::{Evaluator, EvaluatorError, LeafBatch, PRIOR_SUM_TOLERANCE};
 pub use handle::{EdgeStats, NodeHandle};
 pub use mcts::{Mcts, PUCT_FORMULA, PuctConfig, RootNoise};
 pub use options::{Eviction, SearchOptions};

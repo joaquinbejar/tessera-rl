@@ -75,6 +75,7 @@ mod dlpack;
 mod env_type;
 pub(crate) mod inner;
 mod module;
+mod search_type;
 mod tables;
 mod thunks;
 pub(crate) mod view_type;
