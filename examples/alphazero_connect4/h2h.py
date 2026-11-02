@@ -46,6 +46,7 @@ import artifacts  # noqa: E402
 import ckpt  # noqa: E402
 import game  # noqa: E402
 import net as netmod  # noqa: E402
+import provenance  # noqa: E402
 import seeds  # noqa: E402
 import supervisor  # noqa: E402
 from tessera_rl.search import Search  # noqa: E402
@@ -55,6 +56,8 @@ DEV_OPENINGS = os.path.join(REPO, "compat", "connect4", "openings-dev.txt")
 DEV_SHA256 = "6208bf759e5adf712040f37f05da9a33c469e57ce077b1e6eb8a3270faffebd2"
 Z = 1.645
 SEARCH_SEED = 20261102
+# The frozen protocol: (sims, batch size, capacity, run seed).
+FROZEN = (100, 8, 8192, 1)
 
 
 def wilson_lower(p: float, n: int, z: float = Z) -> float:
@@ -128,6 +131,24 @@ def work(args, clock) -> int:
                 sequences.add(tuple(c for _, c, _ in log))
                 logs.append([j, a_first, score, log])
             pairs.append(pair)
+    protocol = {
+        "a": meta_a["sha256"],
+        "b": meta_b["sha256"],
+        "openings_sha256": artifacts.sha256_file(args.openings),
+        "limit": args.limit,
+        "sims": args.sims,
+        "batch_size": args.batch_size,
+        "capacity": args.capacity,
+        "search_seed": SEARCH_SEED,
+        "run_seed": args.run_seed,
+    }
+    applicable = (
+        not args.any_openings
+        and protocol["openings_sha256"] == DEV_SHA256
+        and len(results) == 400
+        and meta_a["size"] == meta_b["size"] == "medium"
+        and (args.sims, args.batch_size, args.capacity, args.run_seed) == FROZEN
+    )
     n = len(results)
     w = sum(1 for s in results if s == 1.0)
     d = sum(1 for s in results if s == 0.5)
@@ -157,8 +178,11 @@ def work(args, clock) -> int:
         "wilson_lower_z1645": lower,
         "criterion": "nominal: one-sided Wilson lower bound of the score > 0.5 at z = 1.645",
         "any_openings": args.any_openings,
-        # A test run on other openings never passes or fails the criterion.
-        "pass": None if args.any_openings else lower > 0.5,
+        # Only the full pre-registered protocol passes or fails; anything
+        # else is a diagnostic run with pass = null.
+        "criterion_applicable": applicable,
+        "pass": (lower > 0.5) if applicable else None,
+        "provenance": provenance.block(args.source_sha, protocol),
         "pair_scores": {str(k): pairs.count(k) for k in (2.0, 1.5, 1.0, 0.5, 0.0)},
         "distinct_sequences": len(sequences),
         "log_sha256": artifacts.sha256(log_bytes),
@@ -182,6 +206,7 @@ def parse(argv):
     p.add_argument("--batch-size", type=int, default=8)
     p.add_argument("--capacity", type=int, default=8192)
     p.add_argument("--out", required=True)
+    p.add_argument("--source-sha", required=True)
     p.add_argument("--ledger", required=True)
     p.add_argument("--cores", type=int, default=1)
     p.add_argument("--budget-core-hours", type=float, required=True)

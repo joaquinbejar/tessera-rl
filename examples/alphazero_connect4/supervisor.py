@@ -29,6 +29,7 @@ import sys
 import threading
 import time
 
+import artifacts
 from ledger import BudgetExceeded, Ledger
 
 EXIT_DEADLINE = 124
@@ -70,14 +71,20 @@ def strip_child_flag(argv: list[str]) -> list[str]:
 
 
 def run(script: str, argv: list[str], work, *, ledger: str, budget_core_hours: float, cores: int,
-        wall_cap_s: float, out: str, name: str, exit_names: dict[int, str] | None = None) -> int:
+        wall_cap_s: float, out: str, name: str, exit_names: dict[int, str] | None = None,
+        fresh_out: bool = True) -> int:
     """Runs ``work`` supervised (see the module docs); returns the exit
     code."""
     deadline = child_flag(argv)
     if deadline is not None:
         threading.Thread(target=_watchdog, args=(deadline, os.getppid()), daemon=True).start()
         return work(Clock(deadline))
-    os.makedirs(out, exist_ok=True)
+    if fresh_out:
+        # Never reuse an earlier run's output (checked before anything is
+        # reserved or written).
+        artifacts.fresh_dir(out)
+    else:
+        os.makedirs(out, exist_ok=True)
     led = Ledger(ledger, budget_core_hours)
     stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
     start = time.monotonic()

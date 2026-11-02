@@ -47,6 +47,7 @@ import artifacts  # noqa: E402
 import augment  # noqa: E402
 import ckpt  # noqa: E402
 import net as netmod  # noqa: E402
+import provenance  # noqa: E402
 import seeds  # noqa: E402
 import supervisor  # noqa: E402
 
@@ -70,6 +71,42 @@ def configure_torch() -> None:
     torch.use_deterministic_algorithms(True)
 
 
+SCHEMA = {
+    "planes": (np.dtype(np.uint8), (2, 6, 7)),
+    "visits": (np.dtype(np.uint32), (7,)),
+    "z": (np.dtype(np.int8), ()),
+    "g": (np.dtype(np.uint32), ()),
+    "ply": (np.dtype(np.uint16), ()),
+}
+
+
+def check_shard(name: str, arrays: dict) -> int:
+    """Checks a shard's schema and targets; returns its sample count or
+    raises ``artifacts.Incomplete``."""
+    if set(arrays) != set(SCHEMA):
+        raise artifacts.Incomplete(f"{name}: arrays {sorted(arrays)}, expected {sorted(SCHEMA)}")
+    n = len(arrays["z"])
+    for key, (dtype, shape) in SCHEMA.items():
+        a = arrays[key]
+        if a.dtype != dtype or a.shape != (n, *shape):
+            raise artifacts.Incomplete(f"{name}: {key} is {a.dtype} {a.shape}, expected {dtype} {(n, *shape)}")
+    if n == 0:
+        raise artifacts.Incomplete(f"{name}: no samples")
+    if not np.isin(arrays["z"], (-1, 0, 1)).all():
+        raise artifacts.Incomplete(f"{name}: an outcome outside {{-1, 0, 1}}")
+    if (arrays["planes"] > 1).any():
+        raise artifacts.Incomplete(f"{name}: a plane value other than 0 or 1")
+    total = arrays["visits"].astype(np.uint64).sum(axis=1)
+    if (total == 0).any():
+        raise artifacts.Incomplete(f"{name}: a sample without visits")
+    # Illegal moves have zero visits: the mover's top cell is filled
+    # (either plane) exactly where the visits must be 0.
+    full = arrays["planes"][:, :, 0, :].sum(axis=1) > 0
+    if (arrays["visits"][full] != 0).any():
+        raise artifacts.Incomplete(f"{name}: visits on an illegal move")
+    return n
+
+
 def load_samples(directories: list[str]) -> tuple[np.ndarray, np.ndarray, np.ndarray, list[str]]:
     """Planes, visit policies and outcomes of complete runs, and their
     manifest digests; raises ``artifacts.Incomplete``."""
@@ -80,19 +117,19 @@ def load_samples(directories: list[str]) -> tuple[np.ndarray, np.ndarray, np.nda
         for entry in manifest["files"]:
             with open(os.path.join(d, entry["name"]), "rb") as f:
                 arrays, _ = artifacts.decode_shard(f.read())
+            check_shard(f"{d}/{entry['name']}", arrays)
             v = arrays["visits"].astype(np.float64)
-            total = v.sum(axis=1, keepdims=True)
-            if (total <= 0).any():
-                raise artifacts.Incomplete(f"{d}/{entry['name']}: a sample without visits")
-            # Illegal moves have zero visits: the mover's top cell is
-            # filled (either plane) exactly where the visits must be 0.
-            full = arrays["planes"][:, :, 0, :].sum(axis=1) > 0
-            if (arrays["visits"][full] != 0).any():
-                raise artifacts.Incomplete(f"{d}/{entry['name']}: visits on an illegal move")
+            p = v / v.sum(axis=1, keepdims=True)
+            if not (np.isfinite(p).all() and np.allclose(p.sum(axis=1), 1.0)):
+                raise artifacts.Incomplete(f"{d}/{entry['name']}: a policy is not a distribution")
             planes.append(arrays["planes"])
-            policy.append(v / total)
+            policy.append(p)
             z.append(arrays["z"].astype(np.float64))
     return np.concatenate(planes), np.concatenate(policy), np.concatenate(z), digests
+
+
+class Diverged(RuntimeError):
+    """A non-finite loss or parameter during training."""
 
 
 def train(model, planes, policy, z, run_seed: int, epochs: int, batch: int, clock=None):
@@ -121,9 +158,13 @@ def train(model, planes, policy, z, run_seed: int, epochs: int, batch: int, cloc
                 lp = -(pol_all[idx] * torch.log_softmax(logits, dim=1)).sum(dim=1).mean()
                 lv = ((values - v_all[idx]) ** 2).mean()
                 loss = lp + HYPER["value_loss_weight"] * lv
+                if not bool(torch.isfinite(loss)):
+                    raise Diverged(f"epoch {epoch} step {s}: the loss is not finite")
                 opt.zero_grad()
                 loss.backward()
                 opt.step()
+                if not all(bool(torch.isfinite(t).all()) for t in model.state_dict().values() if t.is_floating_point()):
+                    raise Diverged(f"epoch {epoch} step {s}: a parameter is not finite")
                 losses.append([lp.item(), lv.item()])
     finally:
         model.eval()
@@ -136,13 +177,30 @@ def train(model, planes, policy, z, run_seed: int, epochs: int, batch: int, cloc
     }
 
 
+EXIT_DIVERGED = 5
+
+
 def work_train(args, clock) -> int:
     configure_torch()
+    if os.path.abspath(args.out) == os.path.abspath(args.checkpoint):
+        raise SystemExit("--out must not be the parent checkpoint")
     model, parent = ckpt.load(args.checkpoint)
     planes, policy, z, digests = load_samples(args.data)
     batch = args.batch
-    losses, counts = train(model, planes, policy, z, args.run_seed, args.epochs, batch, clock)
+    try:
+        losses, counts = train(model, planes, policy, z, args.run_seed, args.epochs, batch, clock)
+    except Diverged as e:
+        print(f"diverged, no checkpoint written: {e}", file=sys.stderr)
+        return EXIT_DIVERGED
+    config = {
+        "parent_sha256": parent["sha256"],
+        "data_manifests": digests,
+        "hyper": {**HYPER, "batch": batch},
+        "run_seed": args.run_seed,
+        "epochs": args.epochs,
+    }
     meta = {
+        "provenance": provenance.block(args.source_sha, config),
         "kind": "p2-m3-checkpoint",
         "parent_sha256": parent["sha256"],
         "data_manifests": digests,
@@ -167,6 +225,7 @@ def parse(argv):
     i.add_argument("--size", required=True, choices=list(netmod.SIZES))
     i.add_argument("--seed", type=int, required=True)
     i.add_argument("--out", required=True)
+    i.add_argument("--source-sha", required=True)
     t = sub.add_parser("train")
     t.add_argument("--checkpoint", required=True)
     t.add_argument("--data", nargs="+", required=True)
@@ -174,6 +233,7 @@ def parse(argv):
     t.add_argument("--run-seed", type=int, required=True)
     t.add_argument("--epochs", type=int, default=1)
     t.add_argument("--batch", type=int, default=HYPER["batch"])
+    t.add_argument("--source-sha", required=True)
     t.add_argument("--ledger", required=True)
     t.add_argument("--cores", type=int, default=1)
     t.add_argument("--budget-core-hours", type=float, required=True)
@@ -184,10 +244,14 @@ def parse(argv):
 def main(argv=None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     args = parse(argv)
+    if args.command == "train" and supervisor.child_flag(argv) is None and os.path.exists(args.out):
+        raise SystemExit(f"{args.out} exists: checkpoints are never overwritten")
     if args.command == "init":
         configure_torch()
         model = netmod.build(args.size, seed=args.seed)
-        digest = ckpt.save(model, args.out, args.size, {"kind": "p2-m3-checkpoint", "init_seed": args.seed})
+        config = {"size": args.size, "init_seed": args.seed}
+        meta = {"kind": "p2-m3-checkpoint", "init_seed": args.seed, "provenance": provenance.block(args.source_sha, config)}
+        digest = ckpt.save(model, args.out, args.size, meta)
         print(f"checkpoint {digest}")
         return 0
     return supervisor.run(
@@ -200,6 +264,10 @@ def main(argv=None) -> int:
         wall_cap_s=args.wall_cap_s,
         out=os.path.dirname(os.path.abspath(args.out)),
         name="train",
+        exit_names={EXIT_DIVERGED: "training diverged"},
+        # The checkpoint directory also holds the parent; the checkpoint
+        # itself is never overwritten (ckpt.save).
+        fresh_out=False,
     )
 
 

@@ -98,7 +98,7 @@ def test_selfplay_targets_are_mover_relative_on_a_scripted_win_and_draw():
 
 def make_c0(tmp_path, size="tiny"):
     path = tmp_path / "C0.pt"
-    assert train_step.main(["init", "--size", size, "--seed", "7", "--out", str(path)]) == 0
+    assert train_step.main(["init", "--size", size, "--seed", "7", "--out", str(path), "--source-sha", "test"]) == 0
     return path
 
 
@@ -115,7 +115,7 @@ def inprocess(module, argv):
 def selfplay_args(tmp_path, c0, out, workers, games=4, extra=()):
     return [
         "--checkpoint", c0, "--games", games, "--workers", workers, "--run-seed", 11,
-        "--out", out, "--sims", 2, "--batch-size", 2, "--capacity", 64, "--round-games", 2,
+        "--out", out, "--source-sha", "test", "--sims", 2, "--batch-size", 2, "--capacity", 64, "--round-games", 2,
         "--ledger", tmp_path / f"ledger-{pathlib.Path(out).name}.json", "--cores", max(2, workers),
         "--budget-core-hours", 1, "--wall-cap-s", 120, *extra,
     ]  # fmt: skip
@@ -176,6 +176,47 @@ def test_selfplay_incomplete_or_changed_runs_are_refused(tmp_path):
         train_step.load_samples([str(d)])
 
 
+def test_selfplay_refuses_a_used_output_directory(tmp_path):
+    c0 = make_c0(tmp_path)
+    out = tmp_path / "used"
+    out.mkdir()
+    (out / "manifest.json").write_text("{}")
+    r = selfplay_run(tmp_path, c0, out, 1, games=1)
+    assert r.returncode != 0 and "not empty" in r.stderr
+    assert not (tmp_path / "ledger-used.json").exists(), "refused before anything is reserved"
+
+
+def test_selfplay_rejects_hash_consistent_bad_samples_and_non_finite_state(tmp_path):
+    good = {
+        "planes": np.zeros((2, 2, 6, 7), dtype=np.uint8),
+        "visits": np.ones((2, 7), dtype=np.uint32),
+        "z": np.array([1, -1], dtype=np.int8),
+        "g": np.zeros(2, dtype=np.uint32),
+        "ply": np.arange(2, dtype=np.uint16),
+    }
+    bad = [
+        {**good, "z": np.array([1, 7], dtype=np.int8)},
+        {**good, "visits": np.zeros((2, 7), dtype=np.uint32)},
+        {**good, "planes": np.full((2, 2, 6, 7), 3, dtype=np.uint8)},
+        {k: v for k, v in good.items() if k != "ply"},
+        {**good, "z": np.array([np.nan, 1.0])},  # NaN outcome, float dtype
+    ]
+    for i, arrays in enumerate(bad):
+        d = tmp_path / f"bad{i}"
+        d.mkdir()
+        data = artifacts.encode_shard(arrays, {})
+        artifacts.write_atomic(str(d / "s.bin"), data)
+        artifacts.write_manifest(str(d), {"files": [{"name": "s.bin", "sha256": artifacts.sha256(data)}]})
+        with pytest.raises(artifacts.Incomplete):
+            train_step.load_samples([str(d)])
+    model = __import__("net").build("tiny", seed=1)
+    with torch.no_grad():
+        next(model.parameters()).fill_(float("nan"))
+    with pytest.raises(ckpt.NonFinite):
+        ckpt.save(model, str(tmp_path / "nan.pt"), "tiny", {})
+    assert not (tmp_path / "nan.pt").exists()
+
+
 def test_selfplay_killed_run_is_charged_and_incomplete(tmp_path):
     c0 = make_c0(tmp_path)
     out = tmp_path / "killed"
@@ -200,7 +241,8 @@ def test_selfplay_tiny_end_to_end(tmp_path):
     c1 = tmp_path / "C1.pt"
     targs = train_step.parse([str(a) for a in (
         "train", "--checkpoint", c0, "--data", data, "--out", c1, "--run-seed", 11,
-        "--batch", 16, "--ledger", tmp_path / "ledger-train.json", "--budget-core-hours", 1, "--wall-cap-s", 60,
+        "--batch", 16, "--source-sha", "test", "--ledger", tmp_path / "ledger-train.json",
+        "--budget-core-hours", 1, "--wall-cap-s", 60,
     )])  # fmt: skip
     assert train_step.work_train(targs, NoClock()) == 0
     _, m1 = ckpt.load(str(c1))
@@ -211,7 +253,7 @@ def test_selfplay_tiny_end_to_end(tmp_path):
     out = tmp_path / "h2h"
     out.mkdir()
     assert inprocess(h2h, (
-        "--a", c1, "--b", c0, "--out", out, "--any-openings", "--require-size", "any", "--limit", 1,
+        "--a", c1, "--b", c0, "--out", out, "--source-sha", "test", "--any-openings", "--require-size", "any", "--limit", 1,
         "--sims", 2, "--batch-size", 2, "--capacity", 64,
         "--ledger", tmp_path / "ledger-h2h.json", "--budget-core-hours", 1, "--wall-cap-s", 60,
     )) == 0  # fmt: skip
@@ -219,17 +261,54 @@ def test_selfplay_tiny_end_to_end(tmp_path):
     assert report["games"] == 2 and sum(report["wdl"]) == 2
     assert report["a"] == m1["sha256"] and report["b"] == m0["sha256"]
     assert report["any_openings"] is True and report["pass"] is None
+    assert report["criterion_applicable"] is False
+    assert report["provenance"]["source_sha"] == "test" and m1["provenance"]["config_sha256"]
+    # The pinned dev set with a limit is a diagnostic run, never a pass,
+    # whatever the games give (Codex's 4-game probe).
+    out3 = tmp_path / "h2h3"
+    out3.mkdir()
+    assert inprocess(h2h, (
+        "--a", c1, "--b", c0, "--out", out3, "--source-sha", "test", "--require-size", "any", "--limit", 2,
+        "--sims", 2, "--batch-size", 2, "--capacity", 64,
+        "--ledger", tmp_path / "ledger-h2h3.json", "--budget-core-hours", 1, "--wall-cap-s", 60,
+    )) == 0  # fmt: skip
+    r3 = json.loads((out3 / "h2h.json").read_text())
+    assert r3["games"] == 4 and r3["criterion_applicable"] is False and r3["pass"] is None
+    # A checkpoint is never overwritten, the parent least of all.
+    with pytest.raises(SystemExit, match="parent"):
+        inprocess_train = train_step.parse([str(a) for a in (
+            "train", "--checkpoint", c0, "--data", data, "--out", c0, "--run-seed", 11, "--batch", 16,
+            "--source-sha", "test", "--ledger", tmp_path / "l.json", "--budget-core-hours", 1, "--wall-cap-s", 60,
+        )])  # fmt: skip
+        train_step.work_train(inprocess_train, NoClock())
+    with pytest.raises(FileExistsError):
+        ckpt.save(ckpt.load(str(c1))[0], str(c1), "tiny", {})
     # Refused on a non-medium net without the test flag (the dev set is
     # the default openings file).
     (tmp_path / "h2h2").mkdir()
     with pytest.raises(SystemExit, match="medium"):
         inprocess(h2h, (
-            "--a", c1, "--b", c0, "--out", tmp_path / "h2h2", "--limit", 1,
+            "--a", c1, "--b", c0, "--out", tmp_path / "h2h2", "--source-sha", "test", "--limit", 1,
             "--ledger", tmp_path / "ledger-h2h2.json", "--budget-core-hours", 1, "--wall-cap-s", 60,
         ))  # fmt: skip
     with pytest.raises(SystemExit, match="dev set"):
         inprocess(h2h, (
-            "--a", c1, "--b", c0, "--out", tmp_path / "h2h2", "--limit", 1, "--require-size", "any",
+            "--a", c1, "--b", c0, "--out", tmp_path / "h2h2", "--source-sha", "test", "--limit", 1, "--require-size", "any",
             "--openings", EXAMPLE.parents[1] / "compat" / "connect4" / "openings-heldout.txt",
             "--ledger", tmp_path / "ledger-h2h2.json", "--budget-core-hours", 1, "--wall-cap-s", 60,
         ))  # fmt: skip
+
+
+def test_selfplay_diverged_training_writes_no_checkpoint(tmp_path, monkeypatch):
+    c0 = make_c0(tmp_path)
+    data = tmp_path / "data"
+    assert inprocess(selfplay, selfplay_args(tmp_path, c0, data, 1, games=2)) == 0
+    monkeypatch.setitem(train_step.HYPER, "lr", 1e30)
+    out = tmp_path / "C1.pt"
+    targs = train_step.parse([str(a) for a in (
+        "train", "--checkpoint", c0, "--data", data, "--out", out, "--run-seed", 11, "--epochs", 50,
+        "--batch", 16, "--source-sha", "test", "--ledger", tmp_path / "l.json", "--budget-core-hours", 1,
+        "--wall-cap-s", 60,
+    )])  # fmt: skip
+    assert train_step.work_train(targs, NoClock()) == train_step.EXIT_DIVERGED
+    assert not out.exists() and not (tmp_path / "C1.json").exists()

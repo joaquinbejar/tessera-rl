@@ -55,6 +55,7 @@ import artifacts  # noqa: E402
 import ckpt  # noqa: E402
 import game  # noqa: E402
 import net as netmod  # noqa: E402
+import provenance  # noqa: E402
 import seeds  # noqa: E402
 import supervisor  # noqa: E402
 from tessera_rl.search import Search  # noqa: E402
@@ -184,8 +185,19 @@ def work(args, clock) -> int:
             files.append({"name": name, "sha256": artifacts.sha256(data), "samples": int(len(shard["z"]))})
     ordered = [game_digests[g] for g in range(args.games)]
     lengths = [moves_per_game[g] for g in range(args.games)]
+    config = {
+        **cfg,
+        "games": args.games,
+        "noise_alpha": NOISE_ALPHA,
+        "noise_epsilon": NOISE_EPSILON,
+        "temperature_plies": TEMPERATURE_PLIES,
+        "checkpoint_sha256": cmeta["sha256"],
+    }
     manifest = {
         "kind": "p2-m3-selfplay",
+        # W, the round size and the host are recorded but not in the
+        # config hash: the games do not depend on them.
+        "provenance": provenance.block(args.source_sha, config),
         "checkpoint_sha256": cmeta["sha256"],
         "checkpoint_size": cmeta["size"],
         "games": args.games,
@@ -224,6 +236,7 @@ def parse(argv):
     p.add_argument("--batch-size", type=int, default=8)
     p.add_argument("--capacity", type=int, default=8192)
     p.add_argument("--round-games", type=int, default=32)
+    p.add_argument("--source-sha", required=True)
     p.add_argument("--ledger", required=True)
     p.add_argument("--cores", type=int, required=True)
     p.add_argument("--budget-core-hours", type=float, required=True)

@@ -20,9 +20,23 @@ import net as netmod
 import torch
 
 
+class NonFinite(ValueError):
+    """A checkpoint with a non-finite weight or statistic."""
+
+
+def check_finite(state: dict, what: str) -> None:
+    for name, t in state.items():
+        if t.is_floating_point() and not bool(torch.isfinite(t).all()):
+            raise NonFinite(f"{what}: {name} is not finite")
+
+
 def save(model: torch.nn.Module, path: str, size: str, meta: dict) -> str:
     """Writes the checkpoint at ``path`` (``.pt``) and its manifest;
-    returns its digest."""
+    returns its digest. Refuses non-finite state, and an existing file:
+    a checkpoint is never overwritten."""
+    check_finite(model.state_dict(), path)
+    if os.path.exists(path) or os.path.exists(os.path.splitext(path)[0] + ".json"):
+        raise FileExistsError(f"{path} exists: checkpoints are never overwritten")
     buf = io.BytesIO()
     torch.save(model.state_dict(), buf)
     data = buf.getvalue()
@@ -47,5 +61,7 @@ def load(path: str) -> tuple[torch.nn.Module, dict]:
     if artifacts.sha256(data) != m.get("sha256") or m.get("complete") is not True:
         raise artifacts.Incomplete(f"{path}: checkpoint does not match its manifest")
     model = netmod.Net(*netmod.SIZES[m["size"]])
-    model.load_state_dict(torch.load(io.BytesIO(data), weights_only=True))
+    state = torch.load(io.BytesIO(data), weights_only=True)
+    check_finite(state, path)
+    model.load_state_dict(state)
     return model.eval(), m

@@ -85,6 +85,16 @@ def decode_shard(data: bytes) -> tuple[dict[str, np.ndarray], dict]:
     return arrays, header["meta"]
 
 
+def fresh_dir(directory: str, allowed: tuple[str, ...] = ()) -> None:
+    """Creates ``directory`` or checks that it is empty (apart from
+    ``allowed`` prefixes): a run never reuses an earlier run's output, so
+    a failed retry cannot leave an old complete manifest behind."""
+    os.makedirs(directory, exist_ok=True)
+    stale = [n for n in os.listdir(directory) if not n.startswith(allowed)]
+    if stale:
+        raise Incomplete(f"{directory} is not empty ({sorted(stale)[:3]}...): use a new output directory")
+
+
 def write_manifest(directory: str, manifest: dict) -> str:
     """Writes ``manifest.json`` (canonical JSON, ``complete`` set) last;
     returns its SHA-256, the run's identity."""
