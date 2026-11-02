@@ -1,0 +1,39 @@
+{
+ "budget_core_hours": 24.0,
+ "spent_core_hours": 12.3673,
+ "entries": [
+  {
+   "run": "pilot infer 20261102T175108Z",
+   "host": "swarmer02",
+   "pid": 902,
+   "cores": 32,
+   "deadline_s": 400.0,
+   "started": "2026-11-02T17:51:08Z",
+   "wall_s": 203.393,
+   "core_hours": 1.807935,
+   "status": "ok"
+  },
+  {
+   "run": "pilot selfplay 20261102T175432Z",
+   "host": "swarmer02",
+   "pid": 940,
+   "cores": 32,
+   "deadline_s": 2000.0,
+   "started": "2026-11-02T17:54:32Z",
+   "wall_s": 1140.66,
+   "core_hours": 10.139197,
+   "status": "ok"
+  },
+  {
+   "run": "pilot train 20261102T181334Z",
+   "host": "swarmer02",
+   "pid": 2040,
+   "cores": 32,
+   "deadline_s": 300.0,
+   "started": "2026-11-02T18:13:34Z",
+   "wall_s": 47.269,
+   "core_hours": 0.420168,
+   "status": "ok"
+  }
+ ]
+}

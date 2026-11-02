@@ -1,0 +1,274 @@
+{
+ "command": "train",
+ "params": {
+  "command": "train",
+  "out": "/out/train",
+  "ledger": "/out/ledger.json",
+  "cores": 32,
+  "budget_core_hours": 24.0,
+  "wall_cap_s": 300.0,
+  "source_sha": "4e6efb8ceb23ac079dfabaabfcb64ce5e5d0db5a",
+  "bot": null,
+  "sizes": [
+   "small",
+   "medium",
+   "large"
+  ],
+  "sims": [
+   50,
+   100,
+   200
+  ],
+  "batch_size": 8,
+  "capacity": 8192,
+  "infer_batches": [
+   1,
+   8,
+   64,
+   256
+  ],
+  "infer_inner": 50,
+  "train_batches": [
+   256,
+   1024
+  ],
+  "warmup": 2,
+  "repeats": 7,
+  "games_per_worker": 2,
+  "temperature_moves": 8,
+  "cell_allowance_s": 60,
+  "eval_size": "small",
+  "eval_sims": 100,
+  "eval_openings": 500,
+  "eval_allowance_s": 900,
+  "seed": 20261102
+ },
+ "config_sha256": "7273747fb43ea7a035fd3b184c82f522a67d7ff33840264e4a62459325a2d8a1",
+ "provenance": {
+  "source_sha": "4e6efb8ceb23ac079dfabaabfcb64ce5e5d0db5a",
+  "env_id": "tessera/Connect4-v1",
+  "image_digest": "rust:1.99.1@sha256:09027f873d45b8ecd1dc86f1fa13b7a62b875c961f017a0e331267b350430137",
+  "cpuset": "0-31",
+  "bot_sha256": null,
+  "versions": {
+   "python": "3.11.18",
+   "torch": "2.15.0+cpu",
+   "numpy": "2.4.6",
+   "tessera_rl": "0.1.0"
+  },
+  "threads": {
+   "torch_intra_op": 1,
+   "torch_inter_op": 1,
+   "env": {
+    "OMP_NUM_THREADS": "1",
+    "MKL_NUM_THREADS": "1",
+    "OPENBLAS_NUM_THREADS": "1"
+   },
+   "env_inherited": {
+    "OMP_NUM_THREADS": null,
+    "MKL_NUM_THREADS": null,
+    "OPENBLAS_NUM_THREADS": null
+   },
+   "deterministic_algorithms": true
+  },
+  "machine": {
+   "host": "swarmer02",
+   "platform": "Linux-7.0.0-42-generic-x86_64-with-glibc2.41",
+   "machine": "x86_64",
+   "logical_cores": 32,
+   "affinity_cores": 32,
+   "cpu_model": "AMD Ryzen 9 9955HX 16-Core Processor",
+   "physical_cores": 16,
+   "governor": "performance"
+  },
+  "openings": {
+   "eval": "54a1cea7e6fe70d53a039bc27176486953c8bb6a243353175128526702360475",
+   "heldout": "3276d2d044c911ed29c36f2d42690697f19a4bac0183e3a77b1af3c5af72cc49"
+  }
+ },
+ "sections_done": [
+  "train"
+ ],
+ "train": {
+  "cells": [
+   {
+    "size": "small",
+    "batch": 256,
+    "device": "cpu",
+    "threads": 1,
+    "warmup": 2,
+    "repeats": 7,
+    "samples_s": [
+     0.030669352039694786,
+     0.030530721007380635,
+     0.03166499000508338,
+     0.031204716011416167,
+     0.031278214999474585,
+     0.03206120303366333,
+     0.03158185398206115
+    ],
+    "stopped": null,
+    "step_s": {
+     "n": 7,
+     "p10": 0.030669352039694786,
+     "median": 0.031278214999474585,
+     "p90": 0.03166499000508338,
+     "min": 0.030530721007380635,
+     "max": 0.03206120303366333
+    }
+   },
+   {
+    "size": "small",
+    "batch": 1024,
+    "device": "cpu",
+    "threads": 1,
+    "warmup": 2,
+    "repeats": 7,
+    "samples_s": [
+     0.13941692397929728,
+     0.1436503970180638,
+     0.144730503030587,
+     0.14310971199302003,
+     0.14541942498181015,
+     0.14356810197932646,
+     0.14443882601335645
+    ],
+    "stopped": null,
+    "step_s": {
+     "n": 7,
+     "p10": 0.14310971199302003,
+     "median": 0.1436503970180638,
+     "p90": 0.144730503030587,
+     "min": 0.13941692397929728,
+     "max": 0.14541942498181015
+    }
+   },
+   {
+    "size": "medium",
+    "batch": 256,
+    "device": "cpu",
+    "threads": 1,
+    "warmup": 2,
+    "repeats": 7,
+    "samples_s": [
+     0.1359587759943679,
+     0.13336822600103915,
+     0.13422775798244402,
+     0.13396805099910125,
+     0.13369673199485987,
+     0.13414004299556836,
+     0.13656092603923753
+    ],
+    "stopped": null,
+    "step_s": {
+     "n": 7,
+     "p10": 0.13369673199485987,
+     "median": 0.13414004299556836,
+     "p90": 0.1359587759943679,
+     "min": 0.13336822600103915,
+     "max": 0.13656092603923753
+    }
+   },
+   {
+    "size": "medium",
+    "batch": 1024,
+    "device": "cpu",
+    "threads": 1,
+    "warmup": 2,
+    "repeats": 7,
+    "samples_s": [
+     0.6040426740073599,
+     0.597727365035098,
+     0.588919008965604,
+     0.5861193059827201,
+     0.5880997919593938,
+     0.5920951479929499,
+     0.5905088419676758
+    ],
+    "stopped": null,
+    "step_s": {
+     "n": 7,
+     "p10": 0.5880997919593938,
+     "median": 0.5905088419676758,
+     "p90": 0.597727365035098,
+     "min": 0.5861193059827201,
+     "max": 0.6040426740073599
+    }
+   },
+   {
+    "size": "large",
+    "batch": 256,
+    "device": "cpu",
+    "threads": 1,
+    "warmup": 2,
+    "repeats": 7,
+    "samples_s": [
+     0.7559823329793289,
+     0.7519315129611641,
+     0.7501666420139372,
+     0.7532646839972585,
+     0.7557621699525043,
+     0.7465304100187495,
+     0.752509708981961
+    ],
+    "stopped": null,
+    "step_s": {
+     "n": 7,
+     "p10": 0.7501666420139372,
+     "median": 0.752509708981961,
+     "p90": 0.7557621699525043,
+     "min": 0.7465304100187495,
+     "max": 0.7559823329793289
+    }
+   },
+   {
+    "size": "large",
+    "batch": 1024,
+    "device": "cpu",
+    "threads": 1,
+    "warmup": 2,
+    "repeats": 7,
+    "samples_s": [
+     3.4681628469843417,
+     3.4233722719945945,
+     3.3881622219923884,
+     3.4679917879984714,
+     3.399826508015394,
+     3.4182636600453407,
+     3.4156288070371374
+    ],
+    "stopped": null,
+    "step_s": {
+     "n": 7,
+     "p10": 3.399826508015394,
+     "median": 3.4182636600453407,
+     "p90": 3.4679917879984714,
+     "min": 3.3881622219923884,
+     "max": 3.4681628469843417
+    }
+   }
+  ],
+  "gpu": "not measured (no Windows session approved)"
+ },
+ "starvation": {
+  "infer_ratio_b8_over_b64": null,
+  "non_net_share_small_100": null,
+  "criterion_1_fired": false,
+  "criterion_2_fired": false,
+  "complete": false,
+  "starved": "incomplete"
+ },
+ "missing_sections": [],
+ "status": "ok",
+ "ledger": {
+  "run": "pilot train 20261102T181334Z",
+  "host": "swarmer02",
+  "pid": 2040,
+  "cores": 32,
+  "deadline_s": 300.0,
+  "started": "2026-11-02T18:13:34Z",
+  "wall_s": 47.269,
+  "core_hours": 0.420168,
+  "status": "ok"
+ }
+}
