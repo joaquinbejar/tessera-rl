@@ -9,6 +9,7 @@ import pathlib
 import shutil
 import subprocess
 import sys
+import time
 
 import numpy as np
 import pytest
@@ -24,7 +25,6 @@ import game  # noqa: E402
 import net as netmod  # noqa: E402
 import pilot  # noqa: E402
 from ledger import BudgetExceeded, Ledger  # noqa: E402
-
 from tessera_rl.search import Search  # noqa: E402
 
 
@@ -90,23 +90,37 @@ def test_pilot_build_is_seeded_and_leaves_the_global_rng_alone():
     state = torch.random.get_rng_state()
     a, b = netmod.build("tiny", seed=9), netmod.build("tiny", seed=9)
     assert torch.equal(torch.random.get_rng_state(), state)
-    for x, y in zip(a.state_dict().values(), b.state_dict().values()):
+    for x, y in zip(a.state_dict().values(), b.state_dict().values(), strict=True):
         assert torch.equal(x, y)
 
 
-def test_pilot_ledger_refuses_work_beyond_the_budget(tmp_path):
+def test_pilot_ledger_reserves_before_work_and_settles_to_the_time_used(tmp_path):
     path = str(tmp_path / "ledger.json")
-    led = Ledger(path, budget_core_hours=1.0, wall_cap_s=10_000, cores=4)
-    led.check(600, "fits")  # 600 s x 4 cores = 0.667 core-hours
+    led = Ledger(path, budget_core_hours=1.0)
+    i, granted = led.reserve("a", cores=4, deadline_s=600)  # 0.667 core-hours
+    assert granted == 600
+    assert json.loads(pathlib.Path(path).read_text())["entries"][0]["status"] == "running"
+    # The open reservation counts: only 0.333 core-hours are left.
+    _, granted = led.reserve("b", cores=4, deadline_s=600)
+    assert granted == pytest.approx(300)
     with pytest.raises(BudgetExceeded):
-        led.check(1200, "core-hours")  # 1.333 core-hours
-    with pytest.raises(BudgetExceeded):
-        Ledger(path, 100, wall_cap_s=5, cores=1).check(6, "wall")
-    entry = led.close("run", "host", "failed: test")
-    assert entry["status"] == "failed: test" and entry["cores"] == 4
-    again = Ledger(path, budget_core_hours=1.0, wall_cap_s=10_000, cores=4)
-    assert again.spent_core_hours() == entry["core_hours"]
-    assert json.loads(pathlib.Path(path).read_text())["entries"][0]["run"] == "run"
+        led.reserve("c", cores=4, deadline_s=10)
+    entry = led.settle(i, wall_s=60, status="ok")
+    assert entry["core_hours"] == pytest.approx(60 * 4 / 3600, abs=1e-5)
+    # Never charged beyond the reservation.
+    assert led.settle(i, wall_s=10_000, status="ok")["wall_s"] == 600
+
+
+def test_pilot_ledger_settles_a_dead_supervisor_at_its_full_reservation(tmp_path):
+    path = str(tmp_path / "ledger.json")
+    led = Ledger(path, budget_core_hours=10.0)
+    led.reserve("lost", cores=2, deadline_s=1800)
+    data = json.loads(pathlib.Path(path).read_text())
+    data["entries"][0]["pid"] = 2**22 + 12345  # no such process
+    pathlib.Path(path).write_text(json.dumps(data))
+    (e,) = led.entries()
+    assert e["status"].startswith("interrupted") and e["core_hours"] == pytest.approx(1.0)
+    assert led.spent_core_hours() == pytest.approx(1.0)
 
 
 def test_pilot_self_play_game_gives_mover_relative_targets():
@@ -160,41 +174,167 @@ def test_pilot_bot_serve_replies_a_legal_column_and_fails_on_a_finished_game(bot
         client.close()
 
 
+def tiny_args(tmp_path, bot, command="all", **over):
+    opts = {
+        "--out": str(tmp_path / "out"),
+        "--ledger": str(tmp_path / "ledger.json"),
+        "--cores": "1",
+        "--budget-core-hours": "1",
+        "--wall-cap-s": "120",
+        "--source-sha": "test",
+        "--bot": bot,
+        "--sizes": "tiny",
+        "--sims": "4",
+        "--batch-size": "4",
+        "--capacity": "256",
+        "--infer-batches": "1",
+        "--infer-inner": "1",
+        "--train-batches": "8",
+        "--warmup": "0",
+        "--repeats": "1",
+        "--games-per-worker": "1",
+        "--cell-allowance-s": "1",
+        "--eval-size": "tiny",
+        "--eval-sims": "2",
+        "--eval-openings": "1",
+        "--eval-allowance-s": "1",
+    }
+    opts.update(over)
+    return [command] + [x for k, v in opts.items() for x in (k, *str(v).split())]
+
+
+def run_pilot(args, env=None):
+    proc = subprocess.run(
+        [sys.executable, str(EXAMPLE / "pilot.py"), *args],
+        capture_output=True,
+        text=True,
+        env={k: v for k, v in {**os.environ, **(env or {})}.items() if k != "PILOT_INHERITED_THREAD_VARS"},
+        timeout=120,
+    )
+    return proc
+
+
+def only_report(tmp_path):
+    (path,) = (tmp_path / "out").glob("pilot-*.json")
+    return json.loads(path.read_text())
+
+
 def test_pilot_tiny_run_is_repeatable_and_writes_the_report(bot, tmp_path):
-    out = tmp_path / "out"
-    args = [
-        "all",
-        "--out", str(out),
-        "--ledger", str(tmp_path / "ledger.json"),
-        "--cores", "1",
-        "--budget-core-hours", "1",
-        "--wall-cap-s", "600",
-        "--source-sha", "test",
-        "--bot", bot,
-        "--sizes", "tiny",
-        "--sims", "4",
-        "--batch-size", "4",
-        "--capacity", "256",
-        "--infer-batches", "1", "8",
-        "--infer-inner", "2",
-        "--train-batches", "16",
-        "--warmup", "1",
-        "--repeats", "2",
-        "--games-per-worker", "1",
-        "--selfplay-cell-s", "30",
-        "--eval-size", "tiny",
-        "--eval-sims", "4",
-        "--eval-openings", "2",
-        "--eval-cell-s", "30",
-    ]  # fmt: skip
-    assert pilot.main(args) == 0
-    (report_path,) = out.glob("pilot-*.json")
-    report = json.loads(report_path.read_text())
-    assert report["provenance"]["threads"]["deterministic_algorithms"] is True
-    assert report["provenance"]["threads"]["torch_intra_op"] == 1
+    proc = run_pilot(tiny_args(tmp_path, bot))
+    assert proc.returncode == 0, proc.stderr
+    report = only_report(tmp_path)
+    assert report["status"] == "ok" and report["missing_sections"] == []
+    threads = report["provenance"]["threads"]
+    assert threads["deterministic_algorithms"] is True and threads["torch_intra_op"] == 1
+    assert set(threads["env"].values()) == {"1"}
+    assert report["provenance"]["bot_sha256"]
     assert report["ledger"]["status"] == "ok" and report["ledger"]["cores"] == 1
     for name in ("heldout", "eval"):
-        assert report["eval"]["passes"][name]["repeatable"] is True
-        assert report["eval"]["passes"][name]["runs"][0]["games"] == 4
+        verdict = report["eval"]["passes"][name]
+        assert verdict["repeatable"] is True
+        assert verdict["openings_played"] == 1 and verdict["games_per_pass"] == 2
+        assert verdict["openings_in_file"] == {"heldout": 200, "eval": 500}[name]
     assert {c["evaluator"] for c in report["selfplay"]["cells"]} == {"uniform", "net"}
     assert all(c["samples_s"] for c in report["infer"]["cells"])
+
+
+def test_pilot_inherited_thread_variables_are_overridden(bot, tmp_path):
+    proc = run_pilot(tiny_args(tmp_path, bot, "train"), env={"OMP_NUM_THREADS": "8"})
+    assert proc.returncode == 0, proc.stderr
+    threads = only_report(tmp_path)["provenance"]["threads"]
+    assert threads["env"]["OMP_NUM_THREADS"] == "1"
+    assert threads["env_inherited"]["OMP_NUM_THREADS"] == "8"
+
+
+def test_pilot_deadline_kills_running_work_and_charges_the_ledger(bot, tmp_path):
+    # Far more self-play than 3 s allow, and a first-unit allowance that
+    # fits: only the supervisor's kill can stop it.
+    args = tiny_args(
+        tmp_path, bot, "selfplay", **{"--wall-cap-s": "3", "--games-per-worker": "100000", "--sims": "64"}
+    )
+    start = time.monotonic()
+    proc = run_pilot(args)
+    wall = time.monotonic() - start
+    assert proc.returncode == pilot.EXIT_DEADLINE, proc.stderr
+    assert wall < 3 + 15
+    report = only_report(tmp_path)
+    assert report["status"].startswith("killed at the deadline")
+    assert report["missing_sections"] == ["selfplay"]
+    (entry,) = json.loads((tmp_path / "ledger.json").read_text())["entries"]
+    assert entry["status"].startswith("killed") and 0 < entry["wall_s"] <= 3
+
+
+def test_pilot_sigkilled_supervisor_takes_its_workers_and_its_reservation(bot, tmp_path):
+    args = tiny_args(tmp_path, bot, "selfplay", **{"--wall-cap-s": "60", "--games-per-worker": "100000", "--sims": "64"})
+    sup = subprocess.Popen([sys.executable, str(EXAMPLE / "pilot.py"), *args], stdout=subprocess.PIPE, text=True)
+    ledger = tmp_path / "ledger.json"
+    deadline = time.monotonic() + 30
+    while not ledger.exists() and time.monotonic() < deadline:
+        time.sleep(0.1)
+    time.sleep(1.0)
+    child_pids = [
+        int(p) for p in subprocess.run(["pgrep", "-P", str(sup.pid)], capture_output=True, text=True).stdout.split()
+    ]
+    assert child_pids, "the supervisor started its child"
+    sup.kill()
+    sup.wait()
+    # The child's watchdog sees its parent gone and kills its group.
+    gone = time.monotonic() + 10
+    while time.monotonic() < gone and any(_exists(p) for p in child_pids):
+        time.sleep(0.1)
+    assert not any(_exists(p) for p in child_pids)
+    (entry,) = Ledger(str(ledger), budget_core_hours=1).entries()
+    assert entry["status"].startswith("interrupted") and entry["core_hours"] == pytest.approx(60 / 3600, abs=1e-5)
+
+
+def _exists(pid):
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    # A zombie still answers kill(0); it holds no resources.
+    state = subprocess.run(["ps", "-o", "stat=", "-p", str(pid)], capture_output=True, text=True).stdout.strip()
+    return bool(state) and not state.startswith("Z")
+
+
+def test_pilot_divergent_evaluation_logs_fail_the_run(bot, tmp_path):
+    proc = run_pilot(tiny_args(tmp_path, bot, "eval"), env={"PILOT_TEST_PERTURB_EVAL": "1"})
+    assert proc.returncode == pilot.EXIT_NOT_REPEATABLE, proc.stderr
+    report = only_report(tmp_path)
+    assert report["status"] == "failed: evaluation not repeatable"
+    verdict = report["eval"]["passes"]["heldout"]
+    assert verdict["repeatable"] is False and verdict["first_differing_game"] == 2
+    assert (tmp_path / "out" / verdict["runs"][0]["log_file"]).exists()
+    (entry,) = json.loads((tmp_path / "ledger.json").read_text())["entries"]
+    assert entry["status"] == "failed: evaluation not repeatable"
+
+
+def test_pilot_per_allocated_core_rate_divides_by_allocated_cores(bot, tmp_path):
+    if (len(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else os.cpu_count()) < 2:
+        pytest.skip("needs 2 cores")
+    proc = run_pilot(tiny_args(tmp_path, bot, "selfplay", **{"--cores": "2", "--sizes": "tiny"}))
+    assert proc.returncode == 0, proc.stderr
+    for c in only_report(tmp_path)["selfplay"]["cells"]:
+        assert c["allocated_cores"] == 2
+        per_core = c["steady_games_per_hour_per_allocated_core"]["median"]
+        assert per_core == pytest.approx(c["steady_games_per_hour"]["median"] / 2)
+        assert c["workers_seen_ready"] == c["workers"]
+
+
+def test_pilot_tie_base_matches_the_rust_constant():
+    text = (pathlib.Path(__file__).parents[2] / "tools" / "connect4-ref" / "src" / "calibrate.rs").read_text()
+    (line,) = [x for x in text.splitlines() if x.startswith("pub const TIE_BASE")]
+    value = int(line.split("=")[1].strip().rstrip(";").replace("_", ""), 16)
+    assert value == pilot.TIE_BASE
+
+
+def test_pilot_rejects_non_positive_budgets_and_too_many_cores(tmp_path):
+    base = ["train", "--out", str(tmp_path), "--ledger", str(tmp_path / "l.json"), "--source-sha", "x"]
+    for bad in (
+        ["--cores", "1", "--budget-core-hours", "0", "--wall-cap-s", "10"],
+        ["--cores", "1", "--budget-core-hours", "nan", "--wall-cap-s", "10"],
+        ["--cores", "1", "--budget-core-hours", "1", "--wall-cap-s", "-1"],
+        ["--cores", "100000", "--budget-core-hours", "1", "--wall-cap-s", "10"],
+    ):
+        with pytest.raises(SystemExit):
+            pilot.parse(base + bad)

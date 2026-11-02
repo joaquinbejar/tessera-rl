@@ -19,19 +19,30 @@ each cell.
   allocated core count.
 - **S, self-play:** full games at simulations `{50, 100, 200}`, with
   leaf batches of 8 (`batch_size`) and `W` in `{1, 8, allocated}` worker
-  processes. Each worker owns one `Search` (capacity 8192 nodes, bounded),
-  one net and 1 torch thread. Two evaluators are used:
+  processes. Each worker owns one net, 1 torch thread and, per round, one
+  `Search` with a bounded capacity of 8192 nodes. Two evaluators are used:
   - `uniform`, a canned Python evaluator. Its timing is the **end-to-end
     canned search**: the engine plus the Python boundary. It is not the
     pure engine cost, which only a Rust bench measures.
   - `net`: the network.
 
+  **Startup** runs from pool creation until a barrier releases every
+  worker, after each one has imported torch and built its net. It is
+  reported separately, with each worker's initialization time. A cell
+  then runs `--warmup` discarded rounds and `--repeats` kept rounds; in
+  each round every worker plays `--games-per-worker` games. Rates come in
+  two forms:
+  - steady state, from the kept rounds, per round;
+  - end to end, over the whole cell including startup and warmup.
+
+  Per-core rates divide by the **allocated** cores, not by the worker
+  count. Per-worker rates are reported next to them.
+
   The net section (tensor conversion, forward, masked softmax) is timed
   inside the evaluator. It is disjoint from the rest of the search call,
   so `search - net` is the engine, the boundary and the call overhead
-  together. Worker startup and model replication are timed separately
-  (`pool_startup_s`). The report also gives the measured leaf-batch
-  size histogram: batches can be smaller than 8.
+  together. The report also gives the measured leaf-batch size histogram:
+  batches can be smaller than 8.
 - **T, training:** an SGD step (policy cross-entropy plus value MSE) on
   CPU at 1 thread, with batches of 256 and 1024 samples. The samples are
   synthetic and augmented with the left-right mirror only (the one
@@ -49,12 +60,17 @@ each cell.
 
 Each evaluation set is played twice from the same serialized checkpoint,
 with fresh nets, fresh searches and a fresh bot process. The canonical
-log is hashed: for every game, the opening, the colour, the result and
-every move with the candidate's root visits, excluding all timing. Equal
-hashes show repeatability on the same host and the same image only.
-Torch CPU kernels are not bit-identical across ISAs or thread counts, so
-no cross-machine claim is made. A mismatch fails the check and stops any
-reproducibility claim.
+log covers, for every game, the opening, the colour, the result and every
+move with the candidate's root visits, excluding all timing. It is written
+to its own file per pass and hashed. Equal hashes show repeatability on
+the same host and the same image only. Torch CPU kernels are not
+bit-identical across ISAs or thread counts, so no cross-machine claim is
+made.
+
+A mismatch between two completed passes **fails the run**: exit code 3,
+status `failed: evaluation not repeatable`, and the index of the first
+differing game in the report. An incomplete pair is reported as
+`incomplete`, never as repeatable.
 
 The gate evaluation (PR 4) is pinned to xaskar and the image digest,
 both recorded in the report. Torch runs with
@@ -93,11 +109,20 @@ If either cell is missing because of the budget, the verdict is
   wall cap. That is at most `1.5 x N` core-hours for `N` allocated cores.
 - xaskar: E, the repeatability check, and a short S cross-check, capped
   at 1 hour of wall time on its allocated cores.
-- The harness keeps a cumulative ledger across runs, failed and
-  interrupted runs included. A cell starts only if its projection (the
-  previous repetition, or the declared cell allowance) fits both the
-  remaining core-hours and the remaining wall time. Cells that do not fit
-  are reported as missing, never extrapolated.
+- The command is a supervisor. Before any work it reserves the run's
+  whole allowance in the ledger, under a file lock: the deadline times the
+  allocated cores. The deadline is the smaller of the wall cap and what is
+  left of the core-hour budget. The supervisor runs the measurements in a
+  child process group and kills the whole group (pool workers and the bot
+  included) at the deadline, exit code 124. It then settles the ledger
+  to the time used.
+- The child also kills its own group when the supervisor disappears. A
+  supervisor that died without settling (SIGKILL) leaves a `running`
+  entry, which the next run settles at its full reservation.
+- Inside the deadline, a cell's first unit starts only if
+  `--cell-allowance-s` (or `--eval-allowance-s`) is left, and each later
+  unit only if the previous one's duration is left. A cell or section
+  that does not run is reported as missing, never extrapolated.
 - The full M3 budget is proposed from the pilot as a p10 to p90 range,
   separately for self-play, training, held-out selection and evaluation.
   Crossing it is reported, never spent. A GPU fallback is an owner

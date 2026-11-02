@@ -14,7 +14,6 @@ import time
 from dataclasses import dataclass, field
 
 import numpy as np
-
 import tessera_rl as t
 from tessera_rl.search import Search
 
