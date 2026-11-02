@@ -31,6 +31,8 @@ jobs:
         id: previous
         env:
           GH_TOKEN: ${{ github.token }}
+        # An explicit bash shell adds -o pipefail, so a curl failure fails the step.
+        shell: bash
         run: |
           # The REST API with curl and jq: the self-hosted runner has no gh.
           id=$(curl -fsSL -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
