@@ -152,9 +152,6 @@ fn read_f64(bytes: &[u8], out: &mut [f64], what: &str) -> Result<(), EvaluatorEr
 impl PyEval<'_> {
     fn call(&mut self, batch: &RawBatch<'_>) -> CResult<Mine> {
         let g = self.g;
-        // Pending signals (Ctrl-C) between batches: a handler that raises
-        // aborts the call like an evaluator exception.
-        capi::check_signals(g)?;
         let legal: Vec<u8> = batch.legal.iter().map(|&l| u8::from(l)).collect();
         let hashes: Vec<u8> = batch.hashes.iter().flat_map(|h| h.to_le_bytes()).collect();
         let n = u64::try_from(batch.n).unwrap_or(u64::MAX);
@@ -172,6 +169,19 @@ impl PyEval<'_> {
 }
 
 impl BatchEval for PyEval<'_> {
+    fn check(&mut self) -> Result<(), EvaluatorError> {
+        // Pending signals (Ctrl-C) before every batch, including batches
+        // of terminal leaves only: a handler that raises aborts the call,
+        // which is rolled back, and its exception is raised again.
+        if capi::check_signals(self.g).is_err() {
+            self.pending = Some(capi::fetch_pending());
+            return Err(EvaluatorError::Failed {
+                reason: "a signal handler raised".to_owned(),
+            });
+        }
+        Ok(())
+    }
+
     fn eval(
         &mut self,
         batch: &RawBatch<'_>,

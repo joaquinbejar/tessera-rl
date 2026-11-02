@@ -27,10 +27,12 @@ exposed for Connect Four; an imperfect-information environment would leak
 hidden state through them, and is not searchable from here without
 ``Determinize`` (ADR-0035).
 
-A call is all or nothing: if the evaluator raises or returns an invalid
-response, the call raises ``EvaluatorError`` (with the evaluator's own
-exception as its ``__cause__``), and the tree and the call counter are as
-before the call.
+A call is all or nothing: if the evaluator raises an ``Exception`` or
+returns an invalid response, the call raises ``EvaluatorError`` (with the
+evaluator's own exception as its ``__cause__``), and the tree and the call
+counter are as before the call. A ``BaseException`` that is not an
+``Exception`` (``KeyboardInterrupt``, ``SystemExit``) rolls the call back
+the same way and is raised again unchanged.
 
 The evaluator runs under the caller's floating-point controls (ADR-0041:
 it is called through a callout); the search arithmetic, including the
@@ -38,8 +40,9 @@ validation of each response, runs under the canonical ones, and the
 caller's controls are restored when ``run`` returns or raises. The
 interpreter stays attached for the whole call, which holds the search
 object: a nested or concurrent call on it raises ``ConcurrencyError``.
-Pending signals are checked before each batch (a ``KeyboardInterrupt``
-aborts the call like any evaluator exception). Building the evaluator's
+Pending signals are checked before every batch, including batches whose
+leaves are all terminal and call no evaluator: a ``KeyboardInterrupt``
+from a signal handler rolls the call back and is raised unchanged. Building the evaluator's
 arguments and reading its response allocate: the engine's zero-allocation
 guarantee covers the search itself, not the Python boundary.
 """
@@ -126,15 +129,17 @@ class Search:
                     return (problem.encode(),)
                 priors, values = response
                 return (bytes(memoryview(priors)), bytes(memoryview(values)))
-            except BaseException as exc:
+            except Exception as exc:
                 raised.append(exc)
                 raise
 
         try:
             self._native.run(call)
-        except BaseException as exc:
+        except Exception as exc:
             if raised and exc is raised[0]:
-                raise _native.EvaluatorError(f"the evaluator raised {type(exc).__name__}: {exc}") from exc
+                # The type name only: formatting the exception runs its
+                # ``__str__``, which may itself raise.
+                raise _native.EvaluatorError(f"the evaluator raised {type(exc).__name__}") from exc
             raise
 
     def root_visits(self) -> np.ndarray:

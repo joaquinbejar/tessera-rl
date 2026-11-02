@@ -121,6 +121,18 @@ pub trait Evaluator<E: Environment> {
     ) -> Result<(), EvaluatorError> {
         self.evaluate(batch.records(), priors, values)
     }
+
+    /// Called before every batch, whether or not it has leaves to
+    /// evaluate: an error aborts the search call and rolls it back, like
+    /// an evaluator error. A host polls for interruptions here (a pending
+    /// Ctrl-C); the default never aborts.
+    ///
+    /// # Errors
+    ///
+    /// Any [`EvaluatorError`], which aborts the call.
+    fn check(&mut self) -> Result<(), EvaluatorError> {
+        Ok(())
+    }
 }
 
 /// Why an evaluator's response was rejected (ADR-0043 section 3). The

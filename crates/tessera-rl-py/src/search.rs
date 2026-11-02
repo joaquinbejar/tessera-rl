@@ -48,6 +48,9 @@ pub(crate) trait BatchEval {
         priors: &mut [f64],
         values: &mut [f64],
     ) -> Result<(), EvaluatorError>;
+
+    /// Polls for an interruption before every batch.
+    fn check(&mut self) -> Result<(), EvaluatorError>;
 }
 
 /// Adapts a [`BatchEval`] to the search's evaluator trait.
@@ -78,6 +81,10 @@ impl<E: Environment> Evaluator<E> for Adapter<'_> {
             hashes: batch.records().iter().map(|r| r.hash().get()).collect(),
         };
         self.0.eval(&raw, priors, values)
+    }
+
+    fn check(&mut self) -> Result<(), EvaluatorError> {
+        self.0.check()
     }
 }
 

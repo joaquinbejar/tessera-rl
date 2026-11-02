@@ -316,12 +316,16 @@ where
         if self.pool.node(root).is_some_and(|n| n.terminal) {
             return Err(SearchError::TerminalNode);
         }
+        evaluator.check()?;
         if !self.evaluated(root) {
             self.evaluate_root(evaluator)?;
         }
         self.prepare_root_priors(rng);
         let mut done = 0u32;
         while done < self.cfg.simulations {
+            // Every batch, even one of terminal leaves only, which calls
+            // no evaluator.
+            evaluator.check()?;
             let want = (self.cfg.simulations - done).min(self.cfg.batch_size);
             self.collect(want)?;
             let n = u32::try_from(self.leaves.len()).unwrap_or(u32::MAX);

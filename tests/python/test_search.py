@@ -5,6 +5,8 @@ reproduces the Rust golden visits; every invalid response or exception is
 an EvaluatorError (the evaluator's exception as its cause) with the tree
 and the call counter unchanged."""
 
+import signal
+
 import numpy as np
 import pytest
 
@@ -203,17 +205,79 @@ def test_search_inputs_are_owned_and_keep_their_values():
         assert obs.base is None or obs.flags.owndata or not isinstance(obs.base, memoryview)
 
 
-def test_search_keyboard_interrupt_is_chained_and_rolls_back():
+def test_search_keyboard_interrupt_is_raised_unchanged_and_rolls_back():
     s = search()
     before = s.tree_hash()
 
     def interrupt(obs, legal, hashes):
         raise KeyboardInterrupt
 
-    with pytest.raises(t.EvaluatorError) as info:
+    with pytest.raises(KeyboardInterrupt) as info:
         s.run(interrupt)
-    assert isinstance(info.value.__cause__, KeyboardInterrupt)
+    assert type(info.value) is KeyboardInterrupt
     assert (s.tree_hash(), s.calls) == (before, 0)
+
+
+def test_search_system_exit_is_raised_unchanged_and_rolls_back():
+    s = search()
+    before = s.tree_hash()
+
+    def leave(obs, legal, hashes):
+        raise SystemExit(3)
+
+    with pytest.raises(SystemExit) as info:
+        s.run(leave)
+    assert info.value.code == 3
+    assert (s.tree_hash(), s.calls) == (before, 0)
+
+
+def test_search_exception_with_failing_str_is_chained():
+    class Unprintable(Exception):
+        def __str__(self):
+            raise RuntimeError("no str")
+
+    s = search()
+    before = s.tree_hash()
+
+    def fail(obs, legal, hashes):
+        raise Unprintable
+
+    with pytest.raises(t.EvaluatorError) as info:
+        s.run(fail)
+    assert isinstance(info.value.__cause__, Unprintable)
+    assert (s.tree_hash(), s.calls) == (before, 0)
+
+
+# 41 plies of a drawn game: one legal move, into a terminal draw, so after
+# the root every batch is made of terminal leaves and calls no evaluator.
+DRAW_41 = "545062455041104565311226266362030334314210"[:41]
+
+
+@pytest.mark.skipif(not hasattr(signal, "setitimer"), reason="needs setitimer")
+def test_search_signal_during_terminal_only_batches_interrupts_and_rolls_back():
+    s = Search(simulations=2_000_000)
+    s.set_root(root(DRAW_41))
+    before = s.tree_hash()
+    evaluations = []
+
+    def counted(obs, legal, hashes):
+        evaluations.append(len(hashes))
+        return canned(obs, legal, hashes)
+
+    def alarm(signum, frame):
+        raise KeyboardInterrupt
+
+    previous = signal.signal(signal.SIGALRM, alarm)
+    try:
+        signal.setitimer(signal.ITIMER_REAL, 0.01)
+        with pytest.raises(KeyboardInterrupt):
+            s.run(counted)
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, previous)
+    assert evaluations == [1]  # the root only
+    assert (s.tree_hash(), s.calls) == (before, 0)
+    assert s.root_visits().sum() == 0
 
 
 def test_search_exception_after_commits_and_evictions_rolls_back_tree_calls_and_stream():
