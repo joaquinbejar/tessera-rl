@@ -175,6 +175,8 @@ impl BatchEval for PyEval<'_> {
         // which is rolled back, and its exception is raised again.
         if capi::check_signals(self.g).is_err() {
             self.pending = Some(capi::fetch_pending());
+            // This reason is never shown in Python: `run` raises the
+            // pending exception again instead.
             return Err(EvaluatorError::Failed {
                 reason: "a signal handler raised".to_owned(),
             });

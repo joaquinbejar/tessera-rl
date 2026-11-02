@@ -11,6 +11,7 @@
 )]
 
 use core::num::NonZeroU32;
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use tessera_rl_core::io::{Actions, ObsWriter};
@@ -29,6 +30,17 @@ use tessera_rl_search::{
 
 /// Set to make the next step kernel panic once.
 static FAULT: AtomicBool = AtomicBool::new(false);
+
+/// Serializes the tests of this file: `FAULT` is process-global, and a
+/// test running beside the fault test would consume its fault (R46-03).
+/// Only these tests take it; nothing measured does.
+static SERIAL: Mutex<()> = Mutex::new(());
+
+fn serial() -> std::sync::MutexGuard<'static, ()> {
+    SERIAL
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
 
 #[derive(EnvState, Debug, Clone, Copy, PartialEq, Default)]
 #[repr(C)]
@@ -154,6 +166,7 @@ fn mcts() -> Mcts<OneShot, NoMasks> {
 
 #[test]
 fn test_mcts_recovers_the_scratch_pool_after_a_fault_on_the_first_call() {
+    let _serial = serial();
     let mut m = mcts();
     let before = m.pool().tree_hash();
     FAULT.store(true, Ordering::Relaxed);
@@ -213,6 +226,7 @@ impl Evaluator<OneShot> for Interrupted {
 
 #[test]
 fn test_mcts_check_runs_before_every_batch_and_an_interruption_rolls_back() {
+    let _serial = serial();
     let mut whole = Interrupted {
         checks: 0,
         at: u32::MAX,
