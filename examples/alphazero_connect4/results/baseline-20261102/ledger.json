@@ -1,0 +1,39 @@
+{
+ "budget_core_hours": 12.0,
+ "spent_core_hours": 4.275067,
+ "entries": [
+  {
+   "run": "selfplay 20261102T200803Z",
+   "host": "swarmer02",
+   "pid": 905,
+   "cores": 32,
+   "deadline_s": 1150.0,
+   "started": "2026-11-02T20:08:03Z",
+   "wall_s": 461.873,
+   "core_hours": 4.105534,
+   "status": "ok"
+  },
+  {
+   "run": "train 20261102T201552Z",
+   "host": "swarmer02",
+   "pid": 60,
+   "cores": 1,
+   "deadline_s": 1750.0,
+   "started": "2026-11-02T20:15:52Z",
+   "wall_s": 280.968,
+   "core_hours": 0.078047,
+   "status": "ok"
+  },
+  {
+   "run": "h2h 20261102T202136Z",
+   "host": "xaskar",
+   "pid": 593,
+   "cores": 1,
+   "deadline_s": 3550.0,
+   "started": "2026-11-02T20:21:36Z",
+   "wall_s": 329.35,
+   "core_hours": 0.091486,
+   "status": "ok"
+  }
+ ]
+}

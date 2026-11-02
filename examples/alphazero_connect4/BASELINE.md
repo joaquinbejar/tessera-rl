@@ -67,6 +67,60 @@ There is one ledger for the whole experiment, with a 12 core-hour ceiling across
 
 Every phase runs under the supervisor, and the run is announced on #tessera-rl first. No GPU.
 
-## Results
+## Results (2026-11-02)
 
-Not run yet.
+**PASS.** This is the nominal, descriptive criterion above; the result is reported as measured, with no rerun.
+
+All three tools ran from a git archive of `ba8bb5245dfbef38e5b80321a186e94d90566c8f` (PR #51 before its rebase). After the rebase onto main `8ca4792`, its counterpart `d474fcc` is content-identical to it for `examples/alphazero_connect4`, `compat` and `tools/connect4-ref`, and under `tests` it differs only by `tests/python/test_search_group.py`, which #50 added, with image `rust:1.99.1@sha256:09027f873d45b8ecd1dc86f1fa13b7a62b875c961f017a0e331267b350430137`. The artifacts are in [`results/baseline-20261102/`](results/baseline-20261102/).
+
+### Head-to-head (the criterion)
+
+C1 played C0 on the 200 dev openings, both colours, on xaskar. The run is formal: `criterion_applicable: true`, and the runtime matched the registered one (host `xaskar`, cpuset `2`, affinity 1 core, torch threads 1 and 1, deterministic algorithms).
+
+| Quantity | Value |
+| --- | --- |
+| Games | 400 |
+| C1 W / D / L | 349 / 16 / 35 |
+| C1 moving first (W / D / L) | 167 / 13 / 20 |
+| C0 moving first (C1's W / D / L) | 182 / 3 / 15 |
+| Score p = (W + 0.5 D) / 400 | 0.8925 |
+| One-sided Wilson lower bound, z = 1.645 | 0.8643 (threshold 0.5) |
+| Pair scores (2 / 1.5 / 1 / 0.5 / 0) | 152 / 14 / 31 / 2 / 1 |
+| Distinct move sequences | 399 |
+| Log SHA-256 | `f93869fd53cae95822df12ca1cdee02e7b9283914ecfe15585220cf3408457ee` |
+
+### Pipeline
+
+- **C0:** `medium`, init seed 20261102, SHA-256 `9219438ab348905cd31ac6af1eb4a8ada053e9071056f85cc049cf6ab469d9ca`.
+- **Self-play** on swarmer02, 32 workers, run seed 1:
+  - 10000 games and 247688 samples;
+  - 7 to 42 plies per game, 24.77 on average;
+  - 9953 distinct 8-ply prefixes;
+  - manifest SHA-256 `ba643a179924c124892f5a0fbb8ef0bbf7d2e1106be4c9caccd25d6d129b0d86`, games digest `90c765ea29177348de475fb6eeb8af59dd28115ef833a31fc7ae8a68f2a52e07`, and 320 shards.
+- **Training:** one epoch-equivalent of 483 steps, over 495376 augmented samples with 784 dropped. C1 SHA-256 `89855dce4aa429d657af96c5effc42917cb18edbedb5f614e458832a6cb7ff7d`, parent `9219438ab348905cd31ac6af1eb4a8ada053e9071056f85cc049cf6ab469d9ca`.
+- **Loss** (policy, value), first step to last, reported only and not a criterion: (2.010, 0.931) to (1.791, 0.804). The per-step trend is in `C1.losses.json.gz`.
+
+### Spend
+
+One ledger for the whole experiment, against a 12 core-hour ceiling.
+
+| Run | Host | Allocated cores | Wall s | Core-hours | Status |
+| --- | --- | --- | --- | --- | --- |
+| selfplay 20261102T200803Z | swarmer02 | 32 | 461.9 | 4.106 | ok |
+| train 20261102T201552Z | swarmer02 | 1 | 281.0 | 0.078 | ok |
+| h2h 20261102T202136Z | xaskar | 1 | 329.4 | 0.091 | ok |
+
+Total: 4.275 core-hours.
+
+### Artifacts and cleanup
+
+- **Committed** (gzipped where large):
+  - both checkpoints with their manifests;
+  - C1's losses;
+  - the self-play manifest, which holds every shard's SHA-256 and every game's digest;
+  - the head-to-head report and its canonical log;
+  - the ledger and the three run logs.
+- **Shards:** the 320 shards (30 MB raw) are committed as `selfplay-shards.tar.gz`, SHA-256 `49654ae461fb651a6ceeede87950f87e7c82409309f0c412ca50ed6e7b6b88da`. Each shard can also be checked against the manifest's per-shard digests.
+- **Cleanup:**
+  - swarmer02: the run directory and the image were removed, and no container was left.
+  - xaskar: the run directory was removed, and no container was left.
