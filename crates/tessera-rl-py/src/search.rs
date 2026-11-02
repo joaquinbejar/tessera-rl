@@ -202,22 +202,30 @@ fn nonzero(v: u32, what: &str) -> Result<NonZeroU32, BindError> {
 /// A Connect Four tree and its root importer.
 type Connect4Tree = (Mcts<Connect4, Masked>, EnvPool<Connect4, Masked>);
 
-/// A Connect Four tree rooted at a fresh game, and its root importer.
-fn connect4_tree(args: &SearchArgs) -> Result<Connect4Tree, BindError> {
-    let cfg = Connect4Config {};
+/// A one-instance Connect Four pool that validates imported roots, and
+/// its fresh-game root record.
+fn connect4_importer(
+    seed: u64,
+) -> Result<(EnvPool<Connect4, Masked>, Record<Connect4>), BindError> {
     let pool_options = PoolOptions {
         auto_reset: AutoReset::Disabled,
-        ..PoolOptions::new(NonZeroU32::MIN, Seed::new(args.seed))
+        ..PoolOptions::new(NonZeroU32::MIN, Seed::new(seed))
     };
-    let mut importer = EnvPool::<Connect4, Masked>::with_masks(cfg.clone(), pool_options)?;
+    let mut importer = EnvPool::<Connect4, Masked>::with_masks(Connect4Config {}, pool_options)?;
     importer.reset_all(Reseed::Keep)?;
     let root = importer.snapshot(0)?;
+    Ok((importer, root))
+}
+
+/// A Connect Four tree rooted at a fresh game, and its root importer.
+fn connect4_tree(args: &SearchArgs) -> Result<Connect4Tree, BindError> {
+    let (importer, root) = connect4_importer(args.seed)?;
     let mut options = SearchOptions::new(
         nonzero(args.capacity, "capacity")?,
         nonzero(args.batch, "batch")?,
     );
     options.eviction = args.eviction;
-    let pool = SearchPool::new(cfg, options, &root, EnvPool::with_masks)?;
+    let pool = SearchPool::new(Connect4Config {}, options, &root, EnvPool::with_masks)?;
     let mcts = Mcts::new(pool, args.puct)?;
     Ok((mcts, importer))
 }
@@ -418,7 +426,8 @@ pub(crate) fn connect4_group(slots: &[SearchArgs]) -> Result<Box<dyn GroupOps>, 
             }));
         }
     }
-    let (_, importer) = connect4_tree(first)?;
+    // Only the small root importer: no tree is built and dropped.
+    let (importer, _) = connect4_importer(first.seed)?;
     let trees = slots
         .iter()
         .map(|a| connect4_tree(a).map(|(m, _)| m))
