@@ -376,3 +376,22 @@ def test_pilot_rejects_non_positive_budgets_and_too_many_cores(tmp_path):
     ):
         with pytest.raises(SystemExit):
             pilot.parse(base + bad)
+
+
+def test_pilot_ledger_settle_charges_a_lost_runs_full_reservation(tmp_path):
+    path = str(tmp_path / "ledger.json")
+    led = Ledger(path, budget_core_hours=10.0)
+    led.reserve("lost container", cores=4, deadline_s=900)
+    data = json.loads(pathlib.Path(path).read_text())
+    data["entries"][0].update(host="lost-container")
+    pathlib.Path(path).write_text(json.dumps(data))
+    with pytest.raises(LedgerBusy):
+        led.reserve("next", cores=4, deadline_s=60)
+    proc = run_pilot(["ledger-settle", "--ledger", path, "--index", "0", "--interrupted"])
+    assert proc.returncode == 0, proc.stderr
+    (e,) = led.entries()
+    assert e["status"].startswith("interrupted (settled by hand") and e["core_hours"] == pytest.approx(1.0)
+    # Unblocked, and settling a closed entry again is refused.
+    led.reserve("next", cores=4, deadline_s=60)
+    assert run_pilot(["ledger-settle", "--ledger", path, "--index", "0", "--interrupted"]).returncode != 0
+    assert run_pilot(["ledger-settle", "--ledger", path, "--index", "0"]).returncode != 0

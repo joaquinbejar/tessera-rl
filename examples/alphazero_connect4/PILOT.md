@@ -122,7 +122,9 @@ If either cell is missing because of the budget, the verdict is
 - One run at a time per ledger file: a reservation is refused while
   another entry is open. A dead supervisor's entry is settled
   automatically only on its own host (its container's hostname); an open
-  entry of another host blocks until it is settled by hand.
+  entry of another host blocks until it is settled by hand with
+  `pilot.py ledger-settle --ledger PATH --index N --interrupted`, at its
+  full reservation.
 - The child also kills its own group when the supervisor disappears. A
   supervisor that died without settling (SIGKILL) leaves a `running`
   entry, which the next run settles at its full reservation.

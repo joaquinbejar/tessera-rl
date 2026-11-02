@@ -140,3 +140,16 @@ class Ledger:
                 status += f" (overran the {e['deadline_s']} s reservation)"
             e["status"] = status
             return dict(e)
+
+    def settle_interrupted(self, index: int) -> dict:
+        """Settles an open entry by hand at its full reservation: for a run
+        lost where its pid cannot be checked (another host or container)."""
+        with self._locked() as entries:
+            if not 0 <= index < len(entries):
+                raise IndexError(f"no ledger entry {index}")
+            e = entries[index]
+            if e["status"] != "running":
+                raise ValueError(f"entry {index} is not open: {e['status']!r}")
+            e["core_hours"] = round(e["deadline_s"] * e["cores"] / 3600, 6)
+            e["status"] = "interrupted (settled by hand at the full reservation)"
+            return dict(e)

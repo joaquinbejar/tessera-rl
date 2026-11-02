@@ -21,6 +21,11 @@ supervisor adds the final status. Exit codes:
 - 124: killed at the deadline;
 - any other code: the child failed.
 
+``pilot.py ledger-settle --ledger PATH --index N --interrupted`` settles by
+hand, at its full reservation, the open entry of a run lost where its pid
+cannot be checked (another host or container); until then it blocks the
+ledger.
+
 Usage (from the repository root, the ``test`` and ``torch`` groups
 installed)::
 
@@ -744,8 +749,25 @@ def supervise(args, argv) -> int:
     return code
 
 
+def ledger_settle(argv) -> int:
+    """``ledger-settle --ledger PATH --index N --interrupted``: settles a
+    lost run's open entry at its full reservation."""
+    p = argparse.ArgumentParser(prog="pilot.py ledger-settle", description=ledger_settle.__doc__)
+    p.add_argument("--ledger", required=True)
+    p.add_argument("--index", type=int, required=True)
+    p.add_argument("--interrupted", action="store_true", required=True)
+    args = p.parse_args(argv)
+    with open(args.ledger, encoding="utf-8") as f:
+        budget = json.load(f)["budget_core_hours"]
+    entry = Ledger(args.ledger, budget).settle_interrupted(args.index)
+    print(json.dumps(entry))
+    return 0
+
+
 def main(argv=None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
+    if argv[:1] == ["ledger-settle"]:
+        return ledger_settle(argv[1:])
     args = parse(argv)
     if args.child_deadline_epoch is not None:
         return child(args)
