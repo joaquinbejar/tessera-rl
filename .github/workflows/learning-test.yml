@@ -24,7 +24,7 @@ permissions:
 
 jobs:
   learning-test:
-    runs-on: xaskar
+    runs-on: [self-hosted, xaskar]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Find the previous scheduled run
@@ -32,7 +32,10 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          id=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow learning-test.yml --event schedule --status completed --limit 1 --json databaseId --jq '.[0].databaseId // empty')
+          # The REST API with curl and jq: the self-hosted runner has no gh.
+          id=$(curl -fsSL -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
+            "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/actions/workflows/learning-test.yml/runs?event=schedule&status=completed&per_page=1" \
+            | jq -r '.workflow_runs[0].id // empty')
           echo "id=$id" >> "$GITHUB_OUTPUT"
       - if: steps.previous.outputs.id != ''
         continue-on-error: true
