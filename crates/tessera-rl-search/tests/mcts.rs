@@ -469,7 +469,7 @@ impl Evaluator<Connect4> for Inspect {
 
     fn evaluate_batch(
         &mut self,
-        batch: &tessera_rl_search::LeafBatch<'_, Connect4>,
+        batch: &mut tessera_rl_search::LeafBatch<'_, Connect4>,
         priors: &mut [f64],
         values: &mut [f64],
     ) -> Result<(), EvaluatorError> {
@@ -519,4 +519,56 @@ fn test_mcts_evaluator_batch_carries_the_movers_observation_and_legal_actions() 
     let mut ev = Inspect::default();
     m.run(&mut ev).unwrap();
     assert!(ev.leaves > 50, "{} leaves inspected", ev.leaves);
+}
+
+/// Keeps every leaf's record and lazily copied observation, asking twice.
+#[derive(Default)]
+struct Keep {
+    seen: Vec<(Record<Connect4>, Vec<u8>)>,
+}
+
+impl Evaluator<Connect4> for Keep {
+    fn evaluate(
+        &mut self,
+        _: &[Record<Connect4>],
+        _: &mut [f64],
+        _: &mut [f64],
+    ) -> Result<(), EvaluatorError> {
+        unreachable_evaluate()
+    }
+
+    fn evaluate_batch(
+        &mut self,
+        batch: &mut tessera_rl_search::LeafBatch<'_, Connect4>,
+        priors: &mut [f64],
+        values: &mut [f64],
+    ) -> Result<(), EvaluatorError> {
+        let first = batch.observations().to_vec();
+        assert_eq!(batch.observations(), first.as_slice(), "copied once");
+        for (i, r) in batch.records().iter().enumerate() {
+            self.seen.push((*r, first[i * 84..i * 84 + 84].to_vec()));
+        }
+        priors.fill(1.0 / 7.0);
+        values.fill(0.0);
+        Ok(())
+    }
+}
+
+#[test]
+fn test_mcts_lazy_observations_equal_an_eager_restore_of_each_leaf() {
+    let mut m = mcts_with("3333332", 4_096, Eviction::Strict, config(64));
+    let mut ev = Keep::default();
+    m.run(&mut ev).unwrap();
+    assert!(ev.seen.len() > 50, "{} leaves", ev.seen.len());
+    let options = PoolOptions {
+        auto_reset: AutoReset::Disabled,
+        ..PoolOptions::new(NonZeroU32::MIN, Seed::new(21))
+    };
+    let mut p = EnvPool::<Connect4, Masked>::with_masks(Connect4Config {}, options).unwrap();
+    for (r, obs) in &ev.seen {
+        p.restore_all(core::slice::from_ref(r)).unwrap();
+        let me = r.state().to_move();
+        let eager = &p.outputs().observation(0).unwrap()[me * 84..me * 84 + 84];
+        assert_eq!(obs.as_slice(), eager);
+    }
 }

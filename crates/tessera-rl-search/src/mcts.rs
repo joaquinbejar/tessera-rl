@@ -112,6 +112,8 @@ pub struct Mcts<E: Environment, M: MaskProvider<E>> {
     children: Vec<NodeHandle>,
     eval_records: Vec<Record<E>>,
     eval_rows: Vec<usize>,
+    /// Each evaluated leaf's scratch row and player to move.
+    eval_picks: Vec<(usize, usize)>,
     raw_priors: Vec<f64>,
     values: Vec<f64>,
     priors: Vec<f64>,
@@ -187,6 +189,7 @@ where
             children: vec![pool.root(); b],
             eval_records: Vec::with_capacity(b.max(1)),
             eval_rows: Vec::with_capacity(b.max(1)),
+            eval_picks: Vec::with_capacity(b.max(1)),
             raw_priors: vec![0.0; b.max(1) * a],
             values: vec![0.0; b.max(1)],
             priors: vec![0.0; a],
@@ -356,12 +359,14 @@ where
         }
         self.eval_records.clear();
         self.eval_records.push(record);
+        self.eval_picks.clear();
+        self.eval_picks.push((0, agent));
         let ob = self.obs_bytes;
-        self.pool
-            .copy_observation(0, agent, self.obs_buf.get_mut(..ob).unwrap_or(&mut []));
-        let batch = LeafBatch::new(
+        let mut batch = LeafBatch::new(
             &self.eval_records,
-            self.obs_buf.get(..ob).unwrap_or(&[]),
+            self.pool.obs_source(),
+            &self.eval_picks,
+            self.obs_buf.get_mut(..ob).unwrap_or(&mut []),
             ob,
             &self.legal,
             width,
@@ -370,7 +375,7 @@ where
             self.raw_priors.get_mut(..width).unwrap_or(&mut []),
             self.values.get_mut(..1).unwrap_or(&mut []),
         );
-        evaluator.evaluate_batch(&batch, raw, values)?;
+        evaluator.evaluate_batch(&mut batch, raw, values)?;
         let value = self.values.first().copied().unwrap_or(f64::NAN);
         validate_leaf(
             0,
@@ -592,19 +597,14 @@ where
         let k = self.eval_records.len();
         if k > 0 {
             let ob = self.obs_bytes;
+            self.eval_picks.clear();
             for leaf in 0..k {
                 let row = self.eval_rows.get(leaf).copied().unwrap_or(0);
                 let mover = self
                     .eval_records
                     .get(leaf)
                     .map_or(Ok(0), SearchPool::<E, M>::single_actor)?;
-                self.pool.copy_observation(
-                    row,
-                    mover,
-                    self.obs_buf
-                        .get_mut(leaf * ob..leaf * ob + ob)
-                        .unwrap_or(&mut []),
-                );
+                self.eval_picks.push((row, mover));
                 if let (Some(dst), Some(src)) = (
                     self.leaf_legal.get_mut(leaf * width..leaf * width + width),
                     self.pool.child_masks.get(row * width..row * width + width),
@@ -612,9 +612,11 @@ where
                     dst.copy_from_slice(src);
                 }
             }
-            let batch = LeafBatch::new(
+            let mut batch = LeafBatch::new(
                 &self.eval_records,
-                self.obs_buf.get(..k * ob).unwrap_or(&[]),
+                self.pool.obs_source(),
+                &self.eval_picks,
+                self.obs_buf.get_mut(..k * ob).unwrap_or(&mut []),
                 ob,
                 self.leaf_legal.get(..k * width).unwrap_or(&[]),
                 width,
@@ -623,7 +625,7 @@ where
                 self.raw_priors.get_mut(..k * width).unwrap_or(&mut []),
                 self.values.get_mut(..k).unwrap_or(&mut []),
             );
-            evaluator.evaluate_batch(&batch, raw, values)?;
+            evaluator.evaluate_batch(&mut batch, raw, values)?;
             for leaf in 0..k {
                 let row = self.eval_rows.get(leaf).copied().unwrap_or(0);
                 let legal = self

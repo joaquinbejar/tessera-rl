@@ -4,6 +4,8 @@
 
 use tessera_rl_core::Environment;
 use tessera_rl_engine::Record;
+
+use crate::pool::ObsSource;
 use thiserror::Error;
 
 /// Tolerance on the sum of an evaluator's priors over all actions.
@@ -13,26 +15,42 @@ pub const PRIOR_SUM_TOLERANCE: f64 = 1e-6;
 /// record, the observation of the player to move at the leaf (the
 /// observation leaves of the environment concatenated in order, as the
 /// engine writes them), and its legal actions.
+///
+/// The observations are copied out of the scratch pool on the first call
+/// to [`Self::observations`], into a preallocated buffer: an evaluator
+/// that never asks for them does not pay for them.
 #[derive(Debug)]
 pub struct LeafBatch<'a, E: Environment> {
     records: &'a [Record<E>],
-    observations: &'a [u8],
+    source: ObsSource<'a>,
+    /// Each leaf's scratch row and player to move.
+    picks: &'a [(usize, usize)],
+    buf: &'a mut [u8],
+    filled: bool,
     obs_bytes: usize,
     legal: &'a [bool],
     actions: usize,
 }
 
 impl<'a, E: Environment> LeafBatch<'a, E> {
+    /// `buf` holds `records.len() * obs_bytes` bytes.
     pub(crate) fn new(
         records: &'a [Record<E>],
-        observations: &'a [u8],
+        source: ObsSource<'a>,
+        picks: &'a [(usize, usize)],
+        buf: &'a mut [u8],
         obs_bytes: usize,
         legal: &'a [bool],
         actions: usize,
     ) -> Self {
+        debug_assert_eq!(picks.len(), records.len());
+        debug_assert_eq!(buf.len(), records.len() * obs_bytes);
         Self {
             records,
-            observations,
+            source,
+            picks,
+            buf,
+            filled: false,
             obs_bytes,
             legal,
             actions,
@@ -64,10 +82,19 @@ impl<'a, E: Environment> LeafBatch<'a, E> {
     }
 
     /// Every leaf's observation, `len() * obs_bytes()` bytes, row-major:
-    /// the observation of the player to move at the leaf.
-    #[must_use]
-    pub const fn observations(&self) -> &'a [u8] {
-        self.observations
+    /// the observation of the player to move at the leaf. Copied on the
+    /// first call, without allocating.
+    pub fn observations(&mut self) -> &[u8] {
+        if !self.filled {
+            let ob = self.obs_bytes;
+            for (leaf, &(row, mover)) in self.picks.iter().enumerate() {
+                if let Some(out) = self.buf.get_mut(leaf * ob..leaf * ob + ob) {
+                    self.source.copy(row, mover, out);
+                }
+            }
+            self.filled = true;
+        }
+        self.buf
     }
 
     /// The legal actions of every leaf, `len() * actions`, row-major (the
@@ -115,7 +142,7 @@ pub trait Evaluator<E: Environment> {
     /// As [`Self::evaluate`].
     fn evaluate_batch(
         &mut self,
-        batch: &LeafBatch<'_, E>,
+        batch: &mut LeafBatch<'_, E>,
         priors: &mut [f64],
         values: &mut [f64],
     ) -> Result<(), EvaluatorError> {

@@ -70,15 +70,17 @@ impl<E: Environment> Evaluator<E> for Adapter<'_> {
 
     fn evaluate_batch(
         &mut self,
-        batch: &LeafBatch<'_, E>,
+        batch: &mut LeafBatch<'_, E>,
         priors: &mut [f64],
         values: &mut [f64],
     ) -> Result<(), EvaluatorError> {
+        let (n, legal) = (batch.len(), batch.legal());
+        let hashes = batch.records().iter().map(|r| r.hash().get()).collect();
         let raw = RawBatch {
-            n: batch.len(),
+            n,
             observations: batch.observations(),
-            legal: batch.legal(),
-            hashes: batch.records().iter().map(|r| r.hash().get()).collect(),
+            legal,
+            hashes,
         };
         self.0.eval(&raw, priors, values)
     }

@@ -170,7 +170,7 @@ impl tessera_rl_search::Evaluator<Connect4> for Reads {
 
     fn evaluate_batch(
         &mut self,
-        batch: &tessera_rl_search::LeafBatch<'_, Connect4>,
+        batch: &mut tessera_rl_search::LeafBatch<'_, Connect4>,
         priors: &mut [f64],
         values: &mut [f64],
     ) -> Result<(), tessera_rl_search::EvaluatorError> {
