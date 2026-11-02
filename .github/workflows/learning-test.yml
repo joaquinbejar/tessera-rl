@@ -47,6 +47,11 @@ jobs:
           github-token: ${{ github.token }}
       # uv is pinned; it fetches CPython 3.11 itself.
       - run: pipx install uv==0.13.6
+      # Self-hosted: checkout's git clean deletes the extension module that
+      # the editable build put in python/tessera_rl, while uv's persistent
+      # cache would reuse that build without rebuilding it. Drop the cached
+      # tessera-rl build so uv sync builds the extension again.
+      - run: uv cache clean tessera-rl
       - run: make learning-test PREVIOUS=previous/learning-test.json
       - if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
