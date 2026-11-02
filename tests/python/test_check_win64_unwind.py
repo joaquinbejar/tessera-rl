@@ -23,7 +23,7 @@ MAP = """
 """
 
 
-def record(addr, codes=("0x04: ALLOC_SMALL size=88",), frame="-"):
+def record(addr, codes=("0x04: ALLOC_SMALL size=104",), frame="-"):
     lines = "\n".join(f"        {c}" for c in codes)
     return f"""  RuntimeFunction {{
     StartAddress: (0x{addr:x})

@@ -29,8 +29,20 @@
 //! and the integer return register. It does
 //! **not** preserve floating-point argument registers, so a thunk accepts
 //! only signatures whose arguments and result are integers or pointers: a
-//! type invariant ([`IntClass`]), checked when each thunk is defined. The
-//! x87 control word is out of scope: Rust on x86-64 computes with SSE.
+//! type invariant ([`IntClass`]), checked when each thunk is defined.
+//!
+//! On x86-64 the thunks also preserve the caller's x87 control word
+//! (ADR-0044): preserve only, never canonicalized, counted or checked, since
+//! Rust on x86-64 computes with SSE only. An entry saves it with `fnstcw`
+//! and restores it with `fldcw` on its single exit path; a callout does the
+//! same around the host call, so a change the host makes never outlives
+//! the callout. Rust never writes the control word, so whenever Rust runs
+//! inside a frame it holds that frame's caller's value, and the callout's
+//! save is that value. Only the control word: the x87 status word, tag word
+//! and stack are untouched (no `fninit`, `fnclex` or `fldenv`). A pending
+//! unmasked x87 exception at an entry or at a callback return is an
+//! unsupported precondition (ADR-0044): `fldcw` then faults inside the
+//! thunk.
 //! Callee-saved registers are untouched; no unwind crosses a thunk (the
 //! entries are `extern "C"` and contain panics in `ffi::entry`).
 //!
@@ -107,9 +119,10 @@ impl<F: Copy> ThunkFn<F> {
     }
 }
 
-/// The audited template, System V x86-64 (Linux, macOS). Frame: rbp, then 64 bytes:
+/// The audited template, System V x86-64 (Linux, macOS). Frame: rbp, then 80 bytes:
 /// [rbp-8..-48] rdi, rsi, rdx, rcx, r8, r9; [rbp-52] caller MXCSR;
-/// [rbp-56] scratch; [rbp-64] previous boundary frame.
+/// [rbp-56] scratch; [rbp-64] previous boundary frame; [rbp-66] caller x87
+/// control word (ADR-0044); [rbp-80..-67] unused (alignment).
 #[cfg(all(target_arch = "x86_64", not(windows)))]
 macro_rules! boundary_template {
     ($target:path, $me:path) => {
@@ -120,13 +133,15 @@ macro_rules! boundary_template {
             ".cfi_rel_offset rbp, 0",
             "mov rbp, rsp",
             ".cfi_def_cfa_register rbp",
-            "sub rsp, 64",
+            "sub rsp, 80",
             "mov [rbp - 8], rdi",
             "mov [rbp - 16], rsi",
             "mov [rbp - 24], rdx",
             "mov [rbp - 32], rcx",
             "mov [rbp - 40], r8",
             "mov [rbp - 48], r9",
+            // Save the caller's x87 control word (ADR-0044, no-wait form).
+            "fnstcw [rbp - 66]",
             // Save the caller's MXCSR and load its canonical value
             // (status flags kept).
             "stmxcsr [rbp - 52]",
@@ -161,6 +176,8 @@ macro_rules! boundary_template {
             "or eax, ecx",
             "mov [rbp - 56], eax",
             "ldmxcsr [rbp - 56]",
+            // The caller's x87 control word back (ADR-0044).
+            "fldcw [rbp - 66]",
             "mov rax, [rbp - 8]",
             "leave",
             ".cfi_def_cfa rsp, 8",
@@ -245,22 +262,26 @@ macro_rules! boundary_template {
 /// stack, which the template does not forward). No frame pointer and no
 /// callee-saved register is used (rsi, rdi, rbx, rbp, r12 to r15 and xmm6
 /// to xmm15 are untouched), so the SEH unwind data is a single stack
-/// allocation: `.seh_stackalloc 88`. On entry rsp is 8 mod 16, so after it
+/// allocation: `.seh_stackalloc 104`. On entry rsp is 8 mod 16, so after it
 /// rsp is 16-byte aligned for the calls. Frame (rsp-relative): [rsp+0..32]
 /// the shadow space of the calls; [rsp+32..64] rcx, rdx, r8, r9; [rsp+64]
-/// caller MXCSR; [rsp+68] scratch; [rsp+72] previous boundary frame.
+/// caller MXCSR; [rsp+68] scratch; [rsp+72] previous boundary frame;
+/// [rsp+80] caller x87 control word (ADR-0044; unverified on native
+/// Windows until the Windows session checks it); [rsp+82..104] unused.
 #[cfg(all(target_arch = "x86_64", windows))]
 macro_rules! boundary_template {
     ($target:path, $me:path) => {
         core::arch::naked_asm!(
             ".seh_proc {me}",
-            "sub rsp, 88",
-            ".seh_stackalloc 88",
+            "sub rsp, 104",
+            ".seh_stackalloc 104",
             ".seh_endprologue",
             "mov [rsp + 32], rcx",
             "mov [rsp + 40], rdx",
             "mov [rsp + 48], r8",
             "mov [rsp + 56], r9",
+            // Save the caller's x87 control word (ADR-0044, no-wait form).
+            "fnstcw [rsp + 80]",
             // Save the caller's MXCSR and load its canonical value
             // (status flags kept).
             "stmxcsr [rsp + 64]",
@@ -294,9 +315,11 @@ macro_rules! boundary_template {
             "or eax, ecx",
             "mov [rsp + 68], eax",
             "ldmxcsr [rsp + 68]",
+            // The caller's x87 control word back (ADR-0044).
+            "fldcw [rsp + 80]",
             "mov rax, [rsp + 32]",
             // The epilogue form the Win64 unwinder recognizes.
-            "add rsp, 88",
+            "add rsp, 104",
             "ret",
             ".seh_endproc",
             keep = const !tessera_rl_num::fp::CANONICAL_CLEAR,
@@ -338,8 +361,11 @@ pub(crate) const MAX_ARGS: usize = 8;
 /// `boundary`) with the current sticky flags, calls the C function, then
 /// reloads the canonical controls (keeping the flags the host raised) and
 /// lets `tessera_fp_callout_returned` count a change before returning to
-/// Rust. Frame: [rbp-8..-48] rdi..r9; [rbp-52] canonical MXCSR; [rbp-56]
-/// the value loaded; [rbp-60] the value after; [rbp-64] scratch.
+/// Rust. Around the C call it saves and reloads the x87 control word
+/// (ADR-0044: a host change never outlives the callout; not counted).
+/// Frame: [rbp-8..-48] rdi..r9; [rbp-52] canonical MXCSR; [rbp-56] the
+/// value loaded; [rbp-60] the value after; [rbp-64] scratch; [rbp-66] the
+/// x87 control word; [rbp-80..-67] unused (alignment).
 #[cfg(all(target_arch = "x86_64", not(windows)))]
 macro_rules! callout_template {
     ($target:path, $me:path) => {
@@ -350,13 +376,15 @@ macro_rules! callout_template {
             ".cfi_rel_offset rbp, 0",
             "mov rbp, rsp",
             ".cfi_def_cfa_register rbp",
-            "sub rsp, 64",
+            "sub rsp, 80",
             "mov [rbp - 8], rdi",
             "mov [rbp - 16], rsi",
             "mov [rbp - 24], rdx",
             "mov [rbp - 32], rcx",
             "mov [rbp - 40], r8",
             "mov [rbp - 48], r9",
+            // The frame caller's x87 control word (Rust never changes it).
+            "fnstcw [rbp - 66]",
             "stmxcsr [rbp - 52]",
             "call {caller}",
             "mov ecx, [rbp - 52]",
@@ -372,6 +400,8 @@ macro_rules! callout_template {
             "mov r8, [rbp - 40]",
             "mov r9, [rbp - 48]",
             "call {target}",
+            // Undo any x87 control change by the host before Rust resumes.
+            "fldcw [rbp - 66]",
             "mov [rbp - 8], rax",
             "stmxcsr [rbp - 60]",
             "mov eax, [rbp - 52]",
@@ -450,19 +480,22 @@ macro_rules! callout_template {
 /// The audited callout template, Win64 (the frame and SEH data of the
 /// Win64 boundary template). Frame: [rsp+0..32] shadow space;
 /// [rsp+32..64] rcx, rdx, r8, r9; [rsp+64] canonical MXCSR; [rsp+68] the
-/// value loaded for the call; [rsp+72] the value after; [rsp+76] scratch.
+/// value loaded for the call; [rsp+72] the value after; [rsp+76] scratch;
+/// [rsp+80] the x87 control word (ADR-0044, unverified on native Windows).
 #[cfg(all(target_arch = "x86_64", windows))]
 macro_rules! callout_template {
     ($target:path, $me:path) => {
         core::arch::naked_asm!(
             ".seh_proc {me}",
-            "sub rsp, 88",
-            ".seh_stackalloc 88",
+            "sub rsp, 104",
+            ".seh_stackalloc 104",
             ".seh_endprologue",
             "mov [rsp + 32], rcx",
             "mov [rsp + 40], rdx",
             "mov [rsp + 48], r8",
             "mov [rsp + 56], r9",
+            // The frame caller's x87 control word (Rust never changes it).
+            "fnstcw [rsp + 80]",
             "stmxcsr [rsp + 64]",
             "call {caller}",
             "mov ecx, [rsp + 64]",
@@ -476,6 +509,8 @@ macro_rules! callout_template {
             "mov r8, [rsp + 48]",
             "mov r9, [rsp + 56]",
             "call {target}",
+            // Undo any x87 control change by the host before Rust resumes.
+            "fldcw [rsp + 80]",
             "mov [rsp + 32], rax",
             "stmxcsr [rsp + 72]",
             "mov eax, [rsp + 64]",
@@ -488,7 +523,7 @@ macro_rules! callout_template {
             "mov edx, [rsp + 72]",
             "call {returned}",
             "mov rax, [rsp + 32]",
-            "add rsp, 88",
+            "add rsp, 104",
             "ret",
             ".seh_endproc",
             status = const tessera_rl_num::fp::STATUS_FLAGS,
@@ -838,6 +873,170 @@ mod tests {
             hostile::control_bits(hostile::flush_to_zero(hostile::read())),
         );
         assert_eq!(boundary::frame_token(), 0);
+    }
+
+    /// The raw x87 control word (ADR-0044 tests).
+    #[cfg(target_arch = "x86_64")]
+    fn x87_cw() -> u16 {
+        let mut cw: u16 = 0;
+        // SAFETY: `fnstcw` stores two bytes to a valid, aligned local and
+        // has no other effect.
+        unsafe {
+            core::arch::asm!("fnstcw [{}]", in(reg) &raw mut cw, options(nostack, preserves_flags));
+        }
+        cw
+    }
+
+    /// Loads `cw` as the x87 control word (ADR-0044 tests). Every caller
+    /// keeps all x87 exceptions masked, so no pending exception can fault.
+    #[cfg(target_arch = "x86_64")]
+    fn set_x87_cw(cw: u16) {
+        // SAFETY: `fldcw` reads two bytes from a valid local; no x87
+        // exception is pending or unmasked (the tests mask all six).
+        unsafe {
+            core::arch::asm!("fldcw [{}]", in(reg) &raw const cw, options(nostack, preserves_flags));
+        }
+    }
+
+    /// An x87 control word unlike the default 0x037f: precision control
+    /// double (bits 8-9 = 0b10) and rounding up (bits 10-11 = 0b10), with
+    /// every exception still masked.
+    #[cfg(target_arch = "x86_64")]
+    const X87_HOSTILE: u16 = 0x0a7f;
+    /// What a callback or entry body writes: extended precision, toward
+    /// zero, all masked.
+    #[cfg(target_arch = "x86_64")]
+    const X87_CHANGED: u16 = 0x0f7f;
+
+    #[cfg(target_arch = "x86_64")]
+    thread_local! {
+        static INSIDE_X87: Cell<u16> = const { Cell::new(0) };
+        static AFTER_CALLOUT_X87: Cell<u16> = const { Cell::new(0) };
+        static INSIDE_X87_NON_CANONICAL: Cell<bool> = const { Cell::new(true) };
+    }
+
+    /// An entry body that changes the x87 control word and leaves it.
+    #[cfg(target_arch = "x86_64")]
+    extern "C" fn x87_changer(a: u64) -> u64 {
+        INSIDE_X87.with(|c| c.set(x87_cw()));
+        INSIDE_X87_NON_CANONICAL.with(|c| c.set(boundary::frame().is_some_and(|(nc, _)| nc)));
+        set_x87_cw(X87_CHANGED);
+        a
+    }
+    #[cfg(target_arch = "x86_64")]
+    thunk!(@naked thunk_x87_changer => x87_changer : fn(u64) -> u64);
+
+    /// A host function (the target of a test callout) that changes the x87
+    /// control word and leaves it.
+    #[cfg(target_arch = "x86_64")]
+    unsafe extern "C" fn host_x87_changer(a: u64) -> u64 {
+        set_x87_cw(X87_CHANGED);
+        a
+    }
+    #[cfg(target_arch = "x86_64")]
+    callout!(callout_x87_changer => host_x87_changer : fn(u64) -> u64);
+
+    /// An entry body that calls the host twice through the callout.
+    #[cfg(target_arch = "x86_64")]
+    extern "C" fn calls_host(a: u64) -> u64 {
+        // SAFETY: a callout of a test host function with an integer
+        // argument and result.
+        let r = unsafe { callout_x87_changer(a) };
+        AFTER_CALLOUT_X87.with(|c| c.set(x87_cw()));
+        // SAFETY: as above.
+        unsafe { callout_x87_changer(r) }
+    }
+    #[cfg(target_arch = "x86_64")]
+    thunk!(@naked thunk_calls_host => calls_host : fn(u64) -> u64);
+
+    /// An entry body that enters again (a nested entry whose body changes
+    /// the control word), as host code inside a callback would.
+    #[cfg(target_arch = "x86_64")]
+    extern "C" fn enters_again(a: u64) -> u64 {
+        // SAFETY: a thunk of a test target.
+        let r = unsafe { thunk_x87_changer(a) };
+        AFTER_CALLOUT_X87.with(|c| c.set(x87_cw()));
+        r
+    }
+    #[cfg(target_arch = "x86_64")]
+    thunk!(@naked thunk_enters_again => enters_again : fn(u64) -> u64);
+
+    /// Runs `f` with the x87 control word set to `cw`, and returns `f`'s
+    /// result with the control word read right after it; restores the
+    /// previous control word.
+    #[cfg(target_arch = "x86_64")]
+    fn with_x87<R>(cw: u16, f: impl FnOnce() -> R) -> (R, u16) {
+        let saved = x87_cw();
+        set_x87_cw(cw);
+        let r = f();
+        let after = x87_cw();
+        set_x87_cw(saved);
+        (r, after)
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    #[test]
+    fn test_thunk_x87_entry_preserves_caller_word_uncounted() {
+        // SAFETY: a thunk of a test target.
+        let (got, after) = with_x87(X87_HOSTILE, || unsafe { thunk_x87_changer(7) });
+        assert_eq!(got, 7);
+        assert_eq!(
+            INSIDE_X87.with(Cell::get),
+            X87_HOSTILE,
+            "not canonicalized inside"
+        );
+        assert!(
+            !INSIDE_X87_NON_CANONICAL.with(Cell::get),
+            "an x87-only change is not a non-canonical caller"
+        );
+        assert_eq!(
+            after, X87_HOSTILE,
+            "the body's change does not outlive the entry"
+        );
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    #[test]
+    fn test_thunk_x87_callout_change_never_outlives_the_callout() {
+        // SAFETY: a thunk of a test target.
+        let (got, after) = with_x87(X87_HOSTILE, || unsafe { thunk_calls_host(9) });
+        assert_eq!(got, 9);
+        assert_eq!(
+            AFTER_CALLOUT_X87.with(Cell::get),
+            X87_HOSTILE,
+            "Rust resumes under the caller's word after the host changed it"
+        );
+        assert_eq!(after, X87_HOSTILE);
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    #[test]
+    fn test_thunk_x87_nested_entry_restores_its_immediate_caller() {
+        // SAFETY: a thunk of a test target.
+        let (got, after) = with_x87(X87_HOSTILE, || unsafe { thunk_enters_again(3) });
+        assert_eq!(got, 3);
+        assert_eq!(
+            AFTER_CALLOUT_X87.with(Cell::get),
+            X87_HOSTILE,
+            "the inner entry restored its caller"
+        );
+        assert_eq!(after, X87_HOSTILE);
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    #[test]
+    fn test_thunk_x87_preserved_with_hostile_mxcsr() {
+        // Both registers hostile at once: each is restored independently.
+        let ((got, cw), after) = hostile::run(hostile::toward_zero, || {
+            // SAFETY: a thunk of a test target.
+            with_x87(X87_HOSTILE, || unsafe { thunk_calls_host(5) })
+        });
+        assert_eq!(got, 5);
+        assert_eq!(cw, X87_HOSTILE);
+        assert_eq!(
+            hostile::control_bits(after),
+            hostile::control_bits(hostile::toward_zero(hostile::read())),
+        );
     }
 
     #[test]

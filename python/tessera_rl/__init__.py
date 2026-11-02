@@ -13,6 +13,18 @@ work. Deallocation and export deleters always run. The boundary covers
 x86-64 (System V) and aarch64 (AAPCS64) on Linux and macOS, and Win64
 (x86-64) on Windows.
 
+On x86-64 the caller's x87 control word is preserved as well (ADR-0044):
+it is restored after every call and after every callback into Python
+(for example a warning hook), so a change Python or C code makes to it
+inside a callback never reaches the caller. It is never counted, warned
+about or rejected: Tessera does not compute with x87. Only the control
+word is restored; the x87 status flags are left as host code set them.
+Precondition: code running in a callback must not leave an unmasked x87
+exception pending (an x87 status flag set whose exception is unmasked in
+the current control word or in the caller's). Restoring the control word
+then faults with a hardware ``SIGFPE``, which Tessera cannot turn into a
+Python exception. Win64 x87 preservation is not yet verified natively.
+
 API changes (pre-release; the package is not published yet):
 
 - P2-M1b: ``Step`` gained a ninth field, ``acting``, after ``masks``.
