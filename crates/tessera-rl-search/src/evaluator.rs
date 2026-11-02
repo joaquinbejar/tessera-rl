@@ -4,9 +4,9 @@
 
 use tessera_rl_core::Environment;
 use tessera_rl_engine::Record;
+use thiserror::Error;
 
 use crate::pool::ObsSource;
-use thiserror::Error;
 
 /// Tolerance on the sum of an evaluator's priors over all actions.
 pub const PRIOR_SUM_TOLERANCE: f64 = 1e-6;
@@ -84,11 +84,15 @@ impl<'a, E: Environment> LeafBatch<'a, E> {
     /// Every leaf's observation, `len() * obs_bytes()` bytes, row-major:
     /// the observation of the player to move at the leaf. Copied on the
     /// first call, without allocating.
+    #[must_use]
     pub fn observations(&mut self) -> &[u8] {
         if !self.filled {
             let ob = self.obs_bytes;
             for (leaf, &(row, mover)) in self.picks.iter().enumerate() {
-                if let Some(out) = self.buf.get_mut(leaf * ob..leaf * ob + ob) {
+                let range = leaf
+                    .checked_mul(ob)
+                    .and_then(|from| Some(from..from.checked_add(ob)?));
+                if let Some(out) = range.and_then(|r| self.buf.get_mut(r)) {
                     self.source.copy(row, mover, out);
                 }
             }
