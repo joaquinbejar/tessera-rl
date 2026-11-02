@@ -4,7 +4,7 @@
 # maturin's default of macOS 11. Ignored on other platforms.
 export MACOSX_DEPLOYMENT_TARGET := 13.0
 
-.PHONY: fmt fmt-check clippy test doc readme readme-check pre-push deny check-targets compat-test py-entries py-callouts py-test py-test-hooks py-test-torch pre-push-torch gym-equivalence reference-training learning-test learning-calibrate bench bench-quick bench-kernels gungraun gungraun-bless connect4-calibration
+.PHONY: fmt fmt-check clippy test doc readme readme-check pre-push deny check-targets compat-test py-entries py-callouts py-test py-test-hooks py-test-torch pre-push-torch gym-equivalence reference-training learning-test learning-calibrate bench bench-quick bench-kernels gungraun gungraun-bless connect4-calibration search-strength
 
 fmt:
 	cargo fmt --all
@@ -145,9 +145,14 @@ bench-quick:
 connect4-calibration:
 	cargo test --release --locked -p tessera-rl-games --test bot -- --include-ignored
 
+# MCTS strength and tactics on Connect Four (P2-M2): the ignored tests of
+# tessera-rl-search/tests/strength.rs, in release (about 20 s).
+search-strength:
+	cargo test --release --locked -p tessera-rl-search --test strength -- --include-ignored
+
 # Criterion benches of the kernels.
 bench-kernels:
-	cargo bench -p tessera-rl-classic -p tessera-rl-games -p tessera-rl-engine --locked
+	cargo bench -p tessera-rl-classic -p tessera-rl-games -p tessera-rl-search -p tessera-rl-engine --locked
 
 # Instruction-count gate (ADR-0025 level 1, gungraun): compares with the
 # committed baseline in benches/gungraun; Linux only (skipped elsewhere).

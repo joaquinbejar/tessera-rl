@@ -60,6 +60,8 @@ impl Node {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct Edge {
     pub(crate) child: u32,
+    /// The parent's mask allowed the action when its priors were set.
+    pub(crate) legal: bool,
     pub(crate) visits: u32,
     pub(crate) virtual_loss: u32,
     pub(crate) value: f64,
@@ -69,6 +71,7 @@ pub(crate) struct Edge {
 impl Edge {
     pub(crate) const EMPTY: Self = Self {
         child: NONE,
+        legal: false,
         visits: 0,
         virtual_loss: 0,
         value: 0.0,
@@ -123,6 +126,12 @@ pub struct SearchPool<E: Environment, M: MaskProvider<E>> {
     pub(crate) child_records: Vec<Record<E>>,
     /// The parents loaded into the scratch pool, one per row.
     pub(crate) load_records: Vec<Record<E>>,
+    /// Per child row: terminal, then the rewards and the mask of its
+    /// acting agent are read from the scratch outputs before the commit.
+    pub(crate) child_terminal: Vec<bool>,
+    pub(crate) child_rewards: Vec<f32>,
+    pub(crate) child_masks: Vec<bool>,
+    pub(crate) journal: crate::journal::Journal<E>,
 }
 
 fn options_error(option: &'static str, reason: &'static str) -> SearchError {
@@ -143,14 +152,18 @@ where
     M: MaskProvider<E>,
 {
     /// Bytes of node storage per slot: the record, the node, one edge per
-    /// action and one reward per agent.
+    /// action and one reward per agent, twice (the tree and its rollback
+    /// journal, which holds at most one copy of each), plus the per-call
+    /// flags.
     #[must_use]
     pub fn bytes_per_node(actions: u32) -> u64 {
-        let per = size_of::<Record<E>>()
+        let once = size_of::<Record<E>>()
             + size_of::<Node>()
-            + idx(actions).saturating_mul(size_of::<Edge>())
+            + size_of::<u32>()
+            + idx(actions).saturating_mul(size_of::<Edge>() + size_of::<usize>())
             + E::MAX_AGENTS.saturating_mul(size_of::<f32>());
-        u64::try_from(per).unwrap_or(u64::MAX)
+        let flags = 3 + idx(actions);
+        u64::try_from(once.saturating_mul(2).saturating_add(flags)).unwrap_or(u64::MAX)
     }
 
     /// A pool rooted at `root`, a record of an instance with config `cfg`.
@@ -225,6 +238,10 @@ where
             act_buf: vec![0; idx(batch).saturating_mul(agents)],
             child_records: vec![*root; idx(batch)],
             load_records: vec![*root; idx(batch)],
+            child_terminal: vec![false; idx(batch)],
+            child_rewards: vec![0.0; idx(batch).saturating_mul(agents)],
+            child_masks: vec![true; idx(batch).saturating_mul(idx(actions))],
+            journal: crate::journal::Journal::new(cap, cap.saturating_mul(idx(actions)), agents),
         };
         pool.set_root(root)?;
         Ok(pool)
@@ -269,6 +286,7 @@ where
     }
 
     fn node_mut(&mut self, slot: u32) -> Option<&mut Node> {
+        self.touch_node(slot);
         self.nodes.get_mut(idx(slot))
     }
 
@@ -282,9 +300,19 @@ where
         self.edges.get(self.edge_index(slot, action))
     }
 
-    fn edge_mut(&mut self, slot: u32, action: u32) -> Option<&mut Edge> {
+    pub(crate) fn edge_mut(&mut self, slot: u32, action: u32) -> Option<&mut Edge> {
         let i = self.edge_index(slot, action);
+        self.touch_edge(i);
         self.edges.get_mut(i)
+    }
+
+    /// Resets every edge of `slot`.
+    fn clear_edges(&mut self, slot: u32) {
+        for a in 0..self.actions {
+            if let Some(e) = self.edge_mut(slot, a) {
+                *e = Edge::EMPTY;
+            }
+        }
     }
 
     /// The live slot of `h`.
@@ -312,7 +340,7 @@ where
         Ok(())
     }
 
-    fn handle_of(&self, slot: u32) -> NodeHandle {
+    pub(crate) fn handle_of(&self, slot: u32) -> NodeHandle {
         NodeHandle {
             slot,
             generation: self.node(slot).map_or(0, |n| n.generation),
@@ -467,10 +495,8 @@ where
                 got: priors.len(),
             });
         }
-        let from = self.edge_index(slot, 0);
-        let to = from.saturating_add(priors.len());
-        if let Some(edges) = self.edges.get_mut(from..to) {
-            for (e, &p) in edges.iter_mut().zip(priors) {
+        for (a, &p) in (0u32..).zip(priors) {
+            if let Some(e) = self.edge_mut(slot, a) {
                 e.prior = p;
             }
         }
@@ -506,11 +532,7 @@ where
     /// it returns to the free list unless the generation is exhausted,
     /// which retires it.
     pub(crate) fn free_slot(&mut self, slot: u32) {
-        let from = self.edge_index(slot, 0);
-        let to = from.saturating_add(idx(self.actions));
-        if let Some(edges) = self.edges.get_mut(from..to) {
-            edges.fill(Edge::EMPTY);
-        }
+        self.clear_edges(slot);
         let Some(n) = self.node_mut(slot) else {
             return;
         };
@@ -633,11 +655,7 @@ where
             return Err(SearchError::Held { slot: held });
         }
         self.free_unprotected();
-        let from = self.edge_index(self.root, 0);
-        let to = from.saturating_add(idx(self.actions));
-        if let Some(edges) = self.edges.get_mut(from..to) {
-            edges.fill(Edge::EMPTY);
-        }
+        self.clear_edges(self.root);
         Ok(())
     }
 
@@ -675,6 +693,7 @@ where
         };
         self.next_alloc = next;
         let terminal = record.header().engine().pending_reset.get();
+        self.clear_edges(slot);
         if let Some(n) = self.node_mut(slot) {
             *n = Node {
                 alloc,
@@ -698,7 +717,7 @@ where
     }
 
     /// The acting agent of a parent record: exactly one is required.
-    fn single_actor(record: &Record<E>) -> Result<usize, SearchError> {
+    pub(crate) fn single_actor(record: &Record<E>) -> Result<usize, SearchError> {
         let rows = record.header().agents();
         let acting = rows.iter().filter(|r| r.acting.get()).count();
         if acting != 1 {
@@ -797,53 +816,51 @@ where
         requests: &[(NodeHandle, u32)],
         out: &mut [NodeHandle],
     ) -> Result<(), SearchError> {
-        if requests.len() > idx(self.batch) {
-            return Err(SearchError::BatchTooLarge {
-                requests: requests.len(),
-                batch: self.batch,
-            });
-        }
         if out.len() != requests.len() {
             return Err(SearchError::OutputLength {
                 expected: requests.len(),
                 got: out.len(),
             });
         }
+        self.stage(requests)?;
+        self.commit_staged(out);
+        Ok(())
+    }
+
+    /// Plans and steps the children of `requests` without changing the
+    /// tree: their records, terminal flags, rewards and masks wait in the
+    /// staging buffers for [`Self::commit_staged`].
+    pub(crate) fn stage(&mut self, requests: &[(NodeHandle, u32)]) -> Result<(), SearchError> {
+        if requests.len() > idx(self.batch) {
+            return Err(SearchError::BatchTooLarge {
+                requests: requests.len(),
+                batch: self.batch,
+            });
+        }
+        // Every stage starts from an empty plan, so a commit never
+        // replays an earlier call's children or evictions (C1).
+        self.planned.clear();
+        self.evict_roots.clear();
         if requests.is_empty() {
             return Ok(());
         }
-        // Plan: nothing below changes the tree until the commit.
         self.plan_requests(requests)?;
         let n = u64::try_from(requests.len()).unwrap_or(u64::MAX);
-        let next = self
-            .next_alloc
+        self.next_alloc
             .checked_add(n)
             .ok_or(SearchError::CounterExhausted)?;
         self.plan_evictions(requests.len())?;
         self.load_scratch()?;
-        // Step: the scratch pool only.
         self.scratch.step(ActionInput {
             discrete: &self.act_buf,
             continuous: &[],
         })?;
+        let width = idx(self.actions);
         for row in 0..self.planned.len() {
             let record = self.scratch.snapshot(u32::try_from(row).unwrap_or(0))?;
             if let Some(r) = self.child_records.get_mut(row) {
                 *r = record;
             }
-        }
-        // Commit: infallible from here.
-        self.commit_evictions();
-        let base = self.next_alloc;
-        self.next_alloc = next;
-        for (row, handle) in out.iter_mut().enumerate() {
-            let Some(p) = self.planned.get(row).copied() else {
-                continue;
-            };
-            let Some(slot) = self.free.pop() else {
-                continue;
-            };
-            let record = self.child_records.get(row).copied();
             let outputs = self.scratch.outputs();
             let terminal = outputs
                 .episode_terminated()
@@ -853,17 +870,62 @@ where
                     .episode_truncated()
                     .get(row)
                     .is_some_and(|f| f.get());
+            if let Some(t) = self.child_terminal.get_mut(row) {
+                *t = terminal;
+            }
             let from = row * self.agents;
-            let to = slot_rewards(slot, self.agents);
             if let (Some(src), Some(dst)) = (
                 outputs.rewards().get(from..from + self.agents),
+                self.child_rewards.get_mut(from..from + self.agents),
+            ) {
+                dst.copy_from_slice(src);
+            }
+            // The child's legal actions: the mask of its acting agent (all
+            // true without masks or without a single actor).
+            let agent = Self::single_actor(&record).ok();
+            let masks = outputs.masks();
+            for a in 0..width {
+                let legal = match agent {
+                    Some(k) if !masks.is_empty() => masks
+                        .get((row * self.agents + k) * width + a)
+                        .is_some_and(|m| m.get()),
+                    _ => true,
+                };
+                if let Some(m) = self.child_masks.get_mut(row * width + a) {
+                    *m = legal;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Commits the staged children: the planned evictions, then one node
+    /// per child, written to `out` in request order. Infallible.
+    pub(crate) fn commit_staged(&mut self, out: &mut [NodeHandle]) {
+        self.commit_evictions();
+        let base = self.next_alloc;
+        let n = u64::try_from(self.planned.len()).unwrap_or(0);
+        self.next_alloc = base.saturating_add(n);
+        for row in 0..self.planned.len() {
+            let Some(p) = self.planned.get(row).copied() else {
+                continue;
+            };
+            let Some(slot) = self.free.pop() else {
+                continue;
+            };
+            self.touch_node(slot);
+            let record = self.child_records.get(row).copied();
+            if let (Some(r), Some(record)) = (self.records.get_mut(idx(slot)), record) {
+                *r = record;
+            }
+            let (from, to) = (row * self.agents, slot_rewards(slot, self.agents));
+            if let (Some(src), Some(dst)) = (
+                self.child_rewards.get(from..from + self.agents),
                 self.rewards.get_mut(to..to + self.agents),
             ) {
                 dst.copy_from_slice(src);
             }
-            if let (Some(r), Some(record)) = (self.records.get_mut(idx(slot)), record) {
-                *r = record;
-            }
+            let terminal = self.child_terminal.get(row).copied().unwrap_or(false);
             if let Some(node) = self.nodes.get_mut(idx(slot)) {
                 *node = Node {
                     parent: p.parent,
@@ -878,9 +940,10 @@ where
             if let Some(e) = self.edge_mut(p.parent, p.action) {
                 e.child = slot;
             }
-            *handle = self.handle_of(slot);
+            if let Some(h) = out.get_mut(row) {
+                *h = self.handle_of(slot);
+            }
         }
-        Ok(())
     }
 
     /// A digest of the whole tree (records, nodes, edges, rewards, the free
@@ -905,6 +968,7 @@ where
             }
             out.write_bytes(&e.value.to_bits().to_le_bytes());
             out.write_bytes(&e.prior.to_bits().to_le_bytes());
+            out.write_bytes(&[u8::from(e.legal)]);
         }
         for r in &self.rewards {
             out.write_bytes(&r.to_bits().to_le_bytes());

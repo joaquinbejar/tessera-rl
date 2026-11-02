@@ -467,3 +467,24 @@ fn test_search_pool_add_visits_is_canonical_under_hostile_rounding() {
     });
     assert_ne!(direct, canonical.1, "round toward zero changes this sum");
 }
+
+/// An empty expansion after an eviction changes nothing: it must not
+/// replay the previous call's eviction (C1, Codex R39).
+#[test]
+fn test_search_pool_empty_expansion_after_an_eviction_changes_nothing() {
+    let mut s = search(3, 1, Eviction::Oldest);
+    let root = s.root();
+    let [a] = expand_n(&mut s, &[(root, 0)]);
+    let [b] = expand_n(&mut s, &[(root, 1)]);
+    // Full: this evicts a (the oldest) and reuses its slot for c.
+    let [c] = expand_n(&mut s, &[(root, 2)]);
+    assert!(s.record(a).is_err());
+    let before = s.tree_hash();
+    let mut out: [NodeHandle; 0] = [];
+    s.expand(&[], &mut out).unwrap();
+    assert_eq!(s.tree_hash(), before, "an empty expansion changed the tree");
+    assert!(
+        s.record(b).is_ok() && s.record(c).is_ok(),
+        "a live node was freed"
+    );
+}

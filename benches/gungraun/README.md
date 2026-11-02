@@ -38,6 +38,8 @@ docker run --rm --security-opt seccomp=unconfined \
 | `turns_instructions::sequential_step` | One Inline pool step, 1,024 instances of the Sequential race fixture (target 100) with masks on: masks, the acting update and the turn check |
 | `games_instructions::connect4_pool_step` | One Inline mid-game pool step, 1,024 Connect Four instances 10 plies in (masks, the acting update and the turn check). Auto-reset is enabled but not exercised: no game ends in the measured step |
 | `games_instructions::bot_choose` | The pinned P2-G1 bot's choice (depth 4) on 32 fixed mid-game positions |
+| `search_instructions::expand_batch` | One batched expansion of the 7 children of the empty Connect Four board (restore, one scratch step, snapshot, commit) |
+| `search_instructions::puct_run` | One PUCT call of 256 simulations from the empty board, batch 8, uniform evaluator: selection, virtual loss, batched expansion, evaluation and backup |
 
 The cost of the serial turn check (`check_turns`) inside `sequential_step`
 was measured by an A/B run in the baseline's image: the same bench with
