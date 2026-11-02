@@ -24,15 +24,20 @@ permissions:
 
 jobs:
   learning-test:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, xaskar]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Find the previous scheduled run
         id: previous
         env:
           GH_TOKEN: ${{ github.token }}
+        # An explicit bash shell adds -o pipefail, so a curl failure fails the step.
+        shell: bash
         run: |
-          id=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow learning-test.yml --event schedule --status completed --limit 1 --json databaseId --jq '.[0].databaseId // empty')
+          # The REST API with curl and jq: the self-hosted runner has no gh.
+          id=$(curl -fsSL -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
+            "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/actions/workflows/learning-test.yml/runs?event=schedule&status=completed&per_page=1" \
+            | jq -r '.workflow_runs[0].id // empty')
           echo "id=$id" >> "$GITHUB_OUTPUT"
       - if: steps.previous.outputs.id != ''
         continue-on-error: true
@@ -44,6 +49,12 @@ jobs:
           github-token: ${{ github.token }}
       # uv is pinned; it fetches CPython 3.11 itself.
       - run: pipx install uv==0.13.6
+      # Self-hosted: checkout's git clean deletes the extension module that
+      # the editable build put in python/tessera_rl, and uv's persistent
+      # cache installs the project again without rebuilding it. Build it
+      # explicitly, and check that the extension imports.
+      - run: uv sync --locked --python 3.11 --group test --group torch --reinstall-package tessera-rl
+      - run: uv run --locked --python 3.11 --group test --group torch python -c "import tessera_rl._native"
       - run: make learning-test PREVIOUS=previous/learning-test.json
       - if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

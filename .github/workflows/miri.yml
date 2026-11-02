@@ -16,7 +16,12 @@ permissions:
 
 jobs:
   miri:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, xaskar]
+    env:
+      # proptest's failure persistence calls getcwd, which Miri's isolation
+      # rejects; turn it off and forward the switch into the interpreter.
+      PROPTEST_DISABLE_FAILURE_PERSISTENCE: "1"
+      MIRIFLAGS: -Zmiri-env-forward=PROPTEST_DISABLE_FAILURE_PERSISTENCE
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - run: rustup toolchain install nightly --profile minimal --component miri
