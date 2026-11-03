@@ -30,16 +30,25 @@ per round.
 The verdict reads only the named cells. **Adopted** if the median steady
 games per hour per allocated core of the group at ``T = 8`` and
 ``W = allocated`` is at least 1.2x the single-tree ``W = allocated``
-median. The ``W = 1`` ratio is a diagnostic only. A missing named cell
-makes the verdict ``incomplete``.
+median. The ``W = 1`` ratio is a diagnostic only.
+
+The ratios are always reported, but the verdict is **formal** only on the
+frozen protocol (``FORMAL``), the small net, every declared cell kept in
+full, complete matched-work evidence and the observed runtime matching the
+declared allocation (pinned image, cpuset and affinity of ``--cores``,
+torch 1/1 threads, deterministic). Otherwise ``adopted`` is null and
+``not_formal_because`` says why.
 
 Companion evidence, per cell:
 - moves per game and per hour;
 - simulations per hour;
 - evaluated leaves per hour;
-- the fixed-root matched-work cell (the same roots searched for the same
-  simulations, single against group), which separates the scheduler's
-  effect from game-length changes.
+- the fixed-root matched-work cell (the same roots, by SHA-256, searched
+  for the same simulations, single against group, both warmed, then
+  ``--repeats`` alternating kept rounds with raw samples and medians),
+  which separates the scheduler's effect from game-length changes;
+- the layout of every round: worker, batch, slot, logical game, its length
+  and seeds, and each group's active schedule (ADR-0045 §4).
 
 Usage::
 
@@ -126,7 +135,7 @@ def single_games(gids: list[int]) -> list[dict]:
                 t = 1.0 if len(board.moves) < TEMPERATURE_PLIES else 0.0
                 col, _ = game.search_move(search, board, ev, timing, t)
                 board.play(col)
-            out.append({"g": g, "moves": len(board.moves), "leaves": ev.leaves - leaves0})
+            out.append({"g": g, "moves": len(board.moves), "leaves": ev.leaves - leaves0, **slot_seeds(cfg, g)})
         finally:
             board.close()
     return out
@@ -142,11 +151,13 @@ def group_games(gids: list[int]) -> list[dict]:
     )  # fmt: skip
     boards = [game.Board(seeds.env(cfg["run_seed"], g)) for g in gids]
     leaves0 = ev.leaves
+    active = []
     try:
         while True:
             live = [i for i in range(t_) if not boards[i].over]
             if not live:
                 break
+            active.append(len(live))
             for i in range(t_):
                 group.set_active(i, i in live)
                 if i in live:
@@ -162,15 +173,30 @@ def group_games(gids: list[int]) -> list[dict]:
             b.close()
     # Leaves are shared by the group's batches: attributed evenly.
     leaves = ev.leaves - leaves0
-    return [{"g": g, "moves": m, "leaves": leaves / t_} for g, m in zip(gids, moves, strict=True)]
+    games = [{"g": g, "slot": i, "moves": m, "leaves": leaves / t_, **slot_seeds(cfg, g)}
+             for i, (g, m) in enumerate(zip(gids, moves, strict=True))]  # fmt: skip
+    # The active schedule: live slots per group call. Slot i is live at call
+    # j exactly while j < its game's moves, so it is reconstructible.
+    games[0]["active_schedule"] = active
+    return games
 
 
-def _round(task: tuple[str, list[list[int]]]) -> list[dict]:
+def slot_seeds(cfg: dict, g: int) -> dict:
+    """A logical game's seeds: a function of the run seed and ``g`` only,
+    never of its worker, batch or slot."""
+    return {"env_seed": seeds.env(cfg["run_seed"], g), "search_seed": seeds.search(cfg["run_seed"], g)}
+
+
+def active_sets(batch: list[dict]) -> list[list[int]]:
+    """The live slots of each group call, from the recorded game lengths."""
+    longest = max(x["moves"] for x in batch)
+    return [[x["slot"] for x in batch if j < x["moves"]] for j in range(longest)]
+
+
+def _round(task: tuple[str, list[list[int]]]) -> list[list[dict]]:
+    """A worker's batches in order, each a list of its games."""
     kind, batches = task
-    out = []
-    for gids in batches:
-        out += single_games(gids) if kind == "single" else group_games(gids)
-    return out
+    return [single_games(gids) if kind == "single" else group_games(gids) for gids in batches]
 
 
 def roots(n: int, run_seed: int) -> list[bytes]:
@@ -227,7 +253,7 @@ def cell(args, clock, kind: str, workers: int, t_: int) -> dict:
         return {**info, "stopped": str(e)}
     cfg = {"run_seed": args.run_seed, "sims": args.sims, "batch_size": args.batch_size, "capacity": args.capacity}
     per_round = workers * t_ * args.games_per_slot
-    rounds, next_g = [], 0
+    rounds, layout, next_g = [], [], 0
     ctx = mp.get_context("spawn")
     with ctx.Pool(workers, initializer=_init, initargs=(args.checkpoint, cfg)) as pool:
         last = args.cell_allowance_s
@@ -248,7 +274,11 @@ def cell(args, clock, kind: str, workers: int, t_: int) -> dict:
             results = pool.map(_round, tasks, chunksize=1)
             wall = time.perf_counter() - t0
             last = wall
-            games = [g for res in results for g in res]
+            games = [g for res in results for batch in res for g in batch]
+            # Logical worker -> batch -> slot -> game, with each game's length
+            # and seeds (ADR-0045 §4), warmup rounds included.
+            layout.append({"round": r, "warmup": r < args.warmup,
+                           "workers": [{"worker": w, "batches": res} for w, res in enumerate(results)]})  # fmt: skip
             if r >= args.warmup:
                 rounds.append({"wall_s": wall, "games": len(games), "moves": sum(g["moves"] for g in games),
                                "leaves": sum(g["leaves"] for g in games)})  # fmt: skip
@@ -262,40 +292,96 @@ def cell(args, clock, kind: str, workers: int, t_: int) -> dict:
         "simulations_per_hour": quant([x["moves"] * args.sims / x["wall_s"] * 3600 for x in rounds]),
         "leaves_per_hour": quant([x["leaves"] / x["wall_s"] * 3600 for x in rounds]),
         "raw_rounds": rounds,
+        "layout": layout,
         "stopped": info.get("stopped"),
     }
+
+
+def matched_rounds(run, timer, warmup: int, repeats: int) -> dict:
+    """Warms both modes, then times ``repeats`` kept rounds of each,
+    alternating. ``run(kind)`` does one full pass over the fixed roots and
+    returns its work. Only kept samples enter the comparison."""
+    for _ in range(warmup):
+        for kind in ("single", "group"):
+            run(kind)
+    samples = {"single": [], "group": []}
+    work = {"single": [], "group": []}
+    for r in range(repeats):
+        for kind in ("single", "group") if r % 2 == 0 else ("group", "single"):
+            t0 = timer()
+            work[kind].append(run(kind))
+            samples[kind].append(timer() - t0)
+    return {"samples_s": samples, "work": work}
 
 
 def matched(args, clock, t_: int) -> dict:
     recs = roots(args.matched_roots, args.run_seed)
     cfg = {"run_seed": args.run_seed, "sims": args.sims, "batch_size": args.batch_size, "capacity": args.capacity}
-    out = {"roots": len(recs), "trees": t_, "workers": args.cores}
+    out = {"roots": len(recs), "roots_sha256": artifacts.sha256(b"".join(recs)), "trees": t_, "workers": args.cores,
+           "simulations": args.sims, "warmup": args.matched_warmup, "repeats": args.repeats}  # fmt: skip
+    projected = args.cell_allowance_s * 2 * (args.matched_warmup + args.repeats)
+    try:
+        clock.check(projected, "matched work")
+    except BudgetExceeded as e:
+        return {**out, "stopped": str(e)}
     ctx = mp.get_context("spawn")
     with ctx.Pool(args.cores, initializer=_init, initargs=(args.checkpoint, cfg)) as pool:
-        for kind in ("single", "group"):
-            try:
-                clock.check(args.cell_allowance_s, f"matched {kind}")
-            except BudgetExceeded as e:
-                out[kind] = {"stopped": str(e)}
-                continue
-            t0 = time.perf_counter()
+
+        def run(kind):
             res = pool.map(_matched, [(kind, t_, recs)] * args.cores, chunksize=1)
-            wall = time.perf_counter() - t0
-            out[kind] = {
-                "wall_s": wall,
-                "root_searches_per_hour_per_allocated_core": len(res) * len(recs) / wall * 3600 / args.cores,
-                "leaves": sum(x["leaves"] for x in res),
-            }
-    if "wall_s" in out.get("single", {}) and "wall_s" in out.get("group", {}):
-        out["speedup"] = out["group"]["root_searches_per_hour_per_allocated_core"] / out["single"][
-            "root_searches_per_hour_per_allocated_core"
-        ]
+            return {"root_searches": sum(x["roots"] for x in res), "leaves": sum(x["leaves"] for x in res)}
+
+        r = matched_rounds(run, time.perf_counter, args.matched_warmup, args.repeats)
+    out.update(r)
+    per = {k: args.cores * len(recs) for k in ("single", "group")}
+    if any(w["root_searches"] != per[k] for k in per for w in r["work"][k]):
+        return {**out, "stopped": "a pass did not search every root"}
+    med = {k: statistics.median(r["samples_s"][k]) for k in per}
+    out["median_s"] = med
+    out["root_searches_per_hour_per_allocated_core"] = {k: per[k] / med[k] * 3600 / args.cores for k in per}
+    out["speedup"] = med["single"] / med["group"]
+    out["stopped"] = None
     return out
 
 
-def verdict(cells: list[dict], cores: int, repeats: int) -> dict:
-    """The pre-registered verdict from the named cells. A cell counts only
-    if it kept all its rounds."""
+# The pre-registered protocol (ADR-0045 §5). Only a run on exactly this,
+# with every cell and the matched-work evidence complete on the declared
+# allocation, may adopt or reject; anything else is diagnostic.
+FORMAL = {"warmup": 2, "repeats": 7, "games_per_slot": 2, "sims": 100, "batch_size": 8, "capacity": 8192,
+          "trees": [4, 8, 16], "matched_warmup": 2, "any_size": False}  # fmt: skip
+
+
+def declared_cells(cores: int, trees: list[int]) -> list[tuple[str, int, int]]:
+    plan = [("single", w, 1) for w in sorted({1, min(8, cores), cores})]
+    return plan + [("group", cores, t_) for t_ in trees] + [("group", 1, 8)]
+
+
+def applicability(config: dict, size: str, cells: list[dict], mw: dict, runtime: dict) -> list[str]:
+    """Why this run cannot give a formal verdict; empty when it can."""
+    cores = config["cores"]
+    why = [f"{k} is {config.get(k)!r}, not {v!r}" for k, v in FORMAL.items() if config.get(k) != v]
+    if size != "small":
+        why.append(f"the net is {size}, not small")
+    got = {(c["kind"], c["workers"], c["trees"]): c for c in cells}
+    for key in declared_cells(cores, FORMAL["trees"]):
+        c = got.get(key)
+        if c is None or c.get("stopped") or c.get("rounds_kept") != FORMAL["repeats"]:
+            why.append(f"cell {key} is missing, stopped or short")
+    if mw.get("stopped") is not None or "speedup" not in mw:
+        why.append("the matched-work evidence is missing or stopped")
+    if runtime.get("image_digest") != h2h.REGISTERED_IMAGE:
+        why.append("not the pinned image")
+    if h2h.cpuset_size(runtime.get("cpuset")) != cores or runtime.get("affinity_cores") != cores:
+        why.append(f"the observed cpuset/affinity is not the declared {cores} cores")
+    if (runtime.get("torch_threads"), runtime.get("torch_interop_threads"), runtime.get("deterministic")) != (1, 1, True):
+        why.append("torch is not 1/1 threads, deterministic")
+    return why
+
+
+def verdict(cells: list[dict], cores: int, repeats: int, why: list[str] | None = None) -> dict:
+    """The ratios from the named cells, and the formal verdict only when
+    ``why`` (from ``applicability``) is empty. A cell counts for a ratio
+    only if it kept all its rounds."""
 
     def median(kind, w, t_):
         for c in cells:
@@ -305,15 +391,17 @@ def verdict(cells: list[dict], cores: int, repeats: int) -> dict:
 
     base, group = median("single", cores, 1), median("group", cores, 8)
     d_base, d_group = median("single", 1, 1), median("group", 1, 8)
-    complete = None not in (base, group, d_base, d_group)
     ratio = group / base if base and group else None
+    why = ["applicability was not checked"] if why is None else why
+    formal = not why and ratio is not None
     return {
         "criterion": f"group T=8 W={cores} median >= {ADOPTION_RATIO}x single-tree W={cores} median, "
         "games per hour per allocated core",
         "ratio": ratio,
         "diagnostic_ratio_w1": d_group / d_base if d_base and d_group else None,
-        "complete": complete,
-        "adopted": (ratio >= ADOPTION_RATIO) if complete else "incomplete",
+        "formal": formal,
+        "not_formal_because": why,
+        "adopted": (ratio >= ADOPTION_RATIO) if formal else None,
     }
 
 
@@ -322,13 +410,12 @@ def work(args, clock) -> int:
     _, cmeta = ckpt.load(args.checkpoint)
     if cmeta["size"] != "small" and not args.any_size:
         raise SystemExit("the §5 measurement uses the small net")
-    plan = [("single", w, 1) for w in sorted({1, min(8, args.cores), args.cores})]
-    plan += [("group", args.cores, t_) for t_ in args.trees] + [("group", 1, 8)]
-    cells = [cell(args, clock, kind, w, t_) for kind, w, t_ in plan]
+    cells = [cell(args, clock, kind, w, t_) for kind, w, t_ in declared_cells(args.cores, args.trees)]
     mw = matched(args, clock, 8)
-    v = verdict(cells, args.cores, args.repeats)
-    memory = {str(t_): SearchGroup(t_, capacity=args.capacity, batch_size=args.batch_size).memory_bytes for t_ in args.trees}
+    runtime = h2h.runtime()
     config = {k: v for k, v in vars(args).items() if k not in ("out", "ledger", "child_deadline_epoch")}
+    v = verdict(cells, args.cores, args.repeats, applicability(config, cmeta["size"], cells, mw, runtime))
+    memory = {str(t_): SearchGroup(t_, capacity=args.capacity, batch_size=args.batch_size).memory_bytes for t_ in args.trees}
     report = {
         "kind": "adr-0045-s5",
         "checkpoint": cmeta["sha256"],
@@ -336,12 +423,12 @@ def work(args, clock) -> int:
         "matched_work": mw,
         "memory_bytes_per_worker": memory,
         "verdict": v,
-        "runtime": h2h.runtime(),
+        "runtime": runtime,
         "note": "games/h is end-to-end evidence; the matched-work cell is the fixed-work comparison",
         "provenance": provenance.block(args.source_sha, config),
     }
     artifacts.write_atomic(os.path.join(args.out, "group-bench.json"), artifacts.canonical_json(report))
-    print(f"ratio {v['ratio']} adopted {v['adopted']}")
+    print(f"ratio {v['ratio']} formal {v['formal']} adopted {v['adopted']}")
     return 0
 
 
@@ -359,6 +446,7 @@ def parse(argv):
     p.add_argument("--repeats", type=int, default=7)
     p.add_argument("--games-per-slot", type=int, default=2)
     p.add_argument("--matched-roots", type=int, default=64)
+    p.add_argument("--matched-warmup", type=int, default=2)
     p.add_argument("--cell-allowance-s", type=float, default=120)
     p.add_argument("--any-size", action="store_true", help="tests only")
     p.add_argument("--attempt", default="group-bench")
