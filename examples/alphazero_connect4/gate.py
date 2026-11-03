@@ -364,12 +364,13 @@ def work(args, clock) -> int:
 PROVISIONAL = "gate.provisional.json"
 
 
-def settlement(ledger: str, budget: float, name: str) -> dict | None:
-    from ledger import Ledger
-
+def settlement(ledger: str, name: str) -> dict | None:
+    """The latest ``name`` entry, read with a plain load: finalizing never
+    rewrites the ledger (``Ledger.entries`` would)."""
     if not os.path.exists(ledger):
         return None
-    mine = [e for e in Ledger(ledger, budget).entries() if e["run"].split()[0] == name]
+    with open(ledger, encoding="utf-8") as f:
+        mine = [e for e in json.load(f)["entries"] if e["run"].split()[0] == name]
     return mine[-1] if mine else None
 
 
@@ -377,7 +378,7 @@ def finalize(args, rc: int, name: str) -> dict:
     """The gate's result, tied to the supervisor's exit and the actual
     ledger settlement: a verdict only with exit 0, an ok entry and a
     complete provisional report; otherwise pass null with the reason."""
-    entry = settlement(args.ledger, args.budget_core_hours, name)
+    entry = settlement(args.ledger, name)
     path = os.path.join(args.out, PROVISIONAL)
     report = None
     if os.path.exists(path):
@@ -454,10 +455,10 @@ def recover(root: str) -> dict:
     if not os.path.exists(os.path.join(gate_dir(root), "claim.json")):
         raise Refused("no gate was claimed on this loop root")
     ledger = os.path.join(gate_dir(root), "ledger.json")
-    entry = settlement(ledger, 1.0, "gate")
+    entry = settlement(ledger, "gate")
     if entry is None or entry["status"] == "running":
         raise Refused("the gate has no settled ledger entry yet")
-    args = argparse.Namespace(out=run, ledger=ledger, budget_core_hours=1.0, any_openings=False)
+    args = argparse.Namespace(out=run, ledger=ledger, any_openings=False)
     os.makedirs(run, exist_ok=True)
     return finalize(args, 0 if entry["status"] == "ok" else 1, "gate")
 

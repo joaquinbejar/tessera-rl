@@ -482,3 +482,24 @@ def test_gate_finalize_recovers_after_the_parent_died(tmp_path, done_root, as_fo
     doc["entries"][-1]["status"] = "failed: killed"
     pathlib.Path(args.ledger).write_text(json.dumps(doc))
     assert gate.recover(str(root))["pass"] is None
+
+
+def test_gate_finalize_and_recover_never_rewrite_the_ledger(tmp_path, done_root, as_formal, bot, monkeypatch):
+    from ledger import Ledger
+
+    root, _, sha, _ = selected_root(tmp_path, done_root)
+    args, _ = preflight_and_claim(formal_argv(root, sha, bot, "--budget-core-hours", "0.75", "--wall-cap-s", "2400"))
+    monkeypatch.setattr(gate.botmatch, "play", scripted_play(1000))
+    monkeypatch.setattr(gate.game, "BotClient", lambda path: type("B", (), {"close": lambda self: None})())
+    os.makedirs(args.out)
+    led = Ledger(args.ledger, args.budget_core_hours)
+    i, _ = led.reserve("gate 20261103T000000Z", 1, 60)
+    assert gate.work(args, None) == 0
+    led.settle(i, 1, "ok")
+    before = pathlib.Path(args.ledger).read_bytes()
+    gate.finalize(args, 0, "gate")
+    assert pathlib.Path(args.ledger).read_bytes() == before
+    os.remove(pathlib.Path(args.out) / "gate.json")
+    assert gate.recover(str(root))["pass"] is True
+    assert pathlib.Path(args.ledger).read_bytes() == before
+    assert json.loads(before)["budget_core_hours"] == 0.75
