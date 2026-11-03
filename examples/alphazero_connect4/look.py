@@ -63,7 +63,15 @@ FROZEN = (100, 8, 8192, 200)
 # board.rs and rng.rs are the ADR-0042 pinned files. An entry is added by
 # a reviewed pre-run commit after the build; a look with any other binary
 # is never eligible.
-REGISTERED_BOTS: dict[str, str] = {}
+REGISTERED_BOTS: dict[str, str] = {
+    # tools/connect4-ref from 46462481 (archive sha256 2dabd40a…74e74b),
+    # built twice in fresh containers of this image on xaskar at
+    # /work/tessera: rustc 1.99.1 (58cf8f9c3 2026-10-13), cargo 1.99.1
+    # (5f94df478 2026-08-27); both builds give this digest.
+    "rust:1.99.1@sha256:09027f873d45b8ecd1dc86f1fa13b7a62b875c961f017a0e331267b350430137": (
+        "ef274131e42f270222d907cd054b43aa19df1577f8a6bca2555b7f9bf311f857"
+    ),
+}
 
 
 def is_eligible(observed: dict, bot_sha: str, size: str, openings_sha: str, args, openings: int) -> bool:
