@@ -35,7 +35,7 @@ median. The ``W = 1`` ratio is a diagnostic only.
 The ratios are always reported, but the verdict is **formal** only on the
 frozen protocol (``FORMAL``), the small net, every declared cell kept in
 full, complete matched-work evidence and the observed runtime matching the
-declared allocation (pinned image, cpuset and affinity of ``--cores``,
+declared allocation (host swarmer02, pinned image, cpuset and affinity of ``--cores``,
 torch 1/1 threads, deterministic). Otherwise ``adopted`` is null and
 ``not_formal_because`` says why.
 
@@ -351,6 +351,11 @@ FORMAL = {"warmup": 2, "repeats": 7, "games_per_slot": 2, "sims": 100, "batch_si
           "trees": [4, 8, 16], "matched_warmup": 2, "any_size": False}  # fmt: skip
 
 
+# ADR-0045 §5 fixes the measurement host. The container runs with
+# ``--hostname swarmer02`` so the observed host is the machine's name.
+REGISTERED_HOST = "swarmer02"
+
+
 def declared_cells(cores: int, trees: list[int]) -> list[tuple[str, int, int]]:
     plan = [("single", w, 1) for w in sorted({1, min(8, cores), cores})]
     return plan + [("group", cores, t_) for t_ in trees] + [("group", 1, 8)]
@@ -369,6 +374,8 @@ def applicability(config: dict, size: str, cells: list[dict], mw: dict, runtime:
             why.append(f"cell {key} is missing, stopped or short")
     if mw.get("stopped") is not None or "speedup" not in mw:
         why.append("the matched-work evidence is missing or stopped")
+    if runtime.get("host") != REGISTERED_HOST:
+        why.append(f"the host is {runtime.get('host')!r}, not {REGISTERED_HOST}")
     if runtime.get("image_digest") != h2h.REGISTERED_IMAGE:
         why.append("not the pinned image")
     if h2h.cpuset_size(runtime.get("cpuset")) != cores or runtime.get("affinity_cores") != cores:

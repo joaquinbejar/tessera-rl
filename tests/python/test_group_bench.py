@@ -31,7 +31,7 @@ def formal_inputs(cores=32):
     cells = [c(k, w, t, 100.0) for k, w, t in group_bench.declared_cells(cores, [4, 8, 16])]
     config = {**group_bench.FORMAL, "cores": cores}
     mw = {"stopped": None, "speedup": 1.3}
-    runtime = {"image_digest": group_bench.h2h.REGISTERED_IMAGE, "cpuset": f"0-{cores - 1}", "affinity_cores": cores,
+    runtime = {"host": "swarmer02", "image_digest": group_bench.h2h.REGISTERED_IMAGE, "cpuset": f"0-{cores - 1}", "affinity_cores": cores,
                "torch_threads": 1, "torch_interop_threads": 1, "deterministic": True}  # fmt: skip
     return config, cells, mw, runtime
 
@@ -55,7 +55,7 @@ def test_group_bench_verdict_ratios_and_formal_adoption():
 @pytest.mark.parametrize(
     "damage",
     ["one-kept-round", "no-warmup", "trees", "sims", "net", "any-size", "allocation", "threads", "image",
-     "missing-cell", "stopped-cell", "matched-missing", "matched-stopped"],
+     "other-host", "missing-host", "missing-cell", "stopped-cell", "matched-missing", "matched-stopped"],
 )  # fmt: skip
 def test_group_bench_shortened_or_altered_run_is_diagnostic_only(damage):
     config, cells, mw, runtime = formal_inputs()
@@ -79,6 +79,10 @@ def test_group_bench_shortened_or_altered_run_is_diagnostic_only(damage):
         runtime["torch_threads"] = 4
     elif damage == "image":
         runtime["image_digest"] = None
+    elif damage == "other-host":
+        runtime["host"] = "xaskar"
+    elif damage == "missing-host":
+        del runtime["host"]
     elif damage == "missing-cell":
         cells = cells[1:]
     elif damage == "stopped-cell":
