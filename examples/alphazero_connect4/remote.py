@@ -76,7 +76,10 @@ PHASES = {"selfplay.py": "selfplay", "train_step.py": "train", "look.py": "look"
 # the supervisor's cleanup grace, uv sync and the build, and a margin.
 SSH_TIMEOUT_S = 600
 # Build products and caches never count in the source tree hash.
-TREE_EXCLUDE = (".venv", ".uvcache", "target", "__pycache__", ".pytest_cache")
+TREE_EXCLUDE = (".venv", ".uvcache", "target", "__pycache__", ".pytest_cache", "build")
+# Built native extensions (maturin's editable install writes
+# python/tessera_rl/_native.abi3.so): build products, not source.
+FILE_EXCLUDE_SUFFIXES = (".so", ".pyd", ".dylib", ".pyc")
 SETUP_S = float(os.environ.get("REMOTE_TEST_SETUP_S", "900"))
 MARGIN_S = float(os.environ.get("REMOTE_TEST_MARGIN_S", "300"))
 
@@ -218,8 +221,8 @@ p = sys.argv[1]
 h = hashlib.sha256()
 if os.path.isdir(p):
     for base, dirs, files in os.walk(p):
-        dirs[:] = sorted(x for x in dirs if x not in (".venv", ".uvcache", "target", "__pycache__", ".pytest_cache"))
-        for n in sorted(files):
+        dirs[:] = sorted(x for x in dirs if x not in (".venv", ".uvcache", "target", "__pycache__", ".pytest_cache", "build"))
+        for n in sorted(x for x in files if not x.endswith((".so", ".pyd", ".dylib", ".pyc"))):
             f = os.path.join(base, n)
             h.update(os.path.relpath(f, p).encode() + b"\\0")
             h.update(open(f, "rb").read())
@@ -234,7 +237,8 @@ def tree_sha256(path: str, exclude_files: tuple[str, ...] = ()) -> str:
     if os.path.isdir(path):
         for base, dirs, files in os.walk(path):
             dirs[:] = sorted(x for x in dirs if x not in TREE_EXCLUDE)
-            for n in sorted(x for x in files if not (base == path and x in exclude_files)):
+            for n in sorted(x for x in files if not (base == path and x in exclude_files)
+                            and not x.endswith(FILE_EXCLUDE_SUFFIXES)):  # fmt: skip
                 f = os.path.join(base, n)
                 h.update(os.path.relpath(f, path).encode() + b"\0")
                 with open(f, "rb") as fh:
@@ -430,9 +434,12 @@ def validate_entry(e: dict, record: dict) -> None:
     if not _finite(e.get("core_hours")):
         raise bad(f"charge {e.get('core_hours')} is not finite and non-negative")
     status = e.get("status", "")
-    if status.startswith("interrupted"):
+    # Settled at the full reservation by recovery or by hand (ledger.py);
+    # every supervisor settlement charges the measured wall (supervisor.py).
+    if status.startswith("interrupted (settled"):
         expected = round(e["deadline_s"] * e["cores"] / 3600, 6)
-    elif status == "ok" or status.startswith(("ok (overran", "failed", "refused")):
+    elif status == "ok" or status.startswith(("ok (overran", "failed", "refused", "interrupted by signal",
+                                              "killed at the deadline")):  # fmt: skip
         if not _finite(e.get("wall_s")):
             raise bad(f"wall {e.get('wall_s')} is not finite and non-negative")
         expected = round(e["wall_s"] * e["cores"] / 3600, 6)
@@ -556,14 +563,19 @@ def reconcile_one(root: str, path: str) -> dict:
             "checked": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         }
     elif remote[mine[0]]["status"] == "running":
-        if state is not None:
-            raise TransportError(f"{name} still exists on {record['host']} with its entry running")
-        record["gone_evidence"] = {
-            "docker_ps_by_name": t.docker_ps_by_name(name),
+        # The container is terminal (absent, or exited, killed included)
+        # while its entry is open: settled conservatively at the full
+        # reservation. A running container never is.
+        if state is not None and state[0] == "running":
+            raise TransportError(f"{name} is still running on {record['host']} with its entry open")
+        listed = t.docker_ps_by_name(name)
+        record["terminal_evidence"] = {
+            "docker_state": list(state) if state else None,
+            "docker_ps_by_name": listed,
             "checked": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         }
-        if record["gone_evidence"]["docker_ps_by_name"]:
-            raise TransportError(f"{name} is listed on {record['host']}: not gone")
+        if state is None and listed:
+            raise TransportError(f"{name} is listed on {record['host']} but not inspectable: {listed}")
         from ledger import Ledger
 
         led = Ledger(rledger, rdoc["budget_core_hours"])

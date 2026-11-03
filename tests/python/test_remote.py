@@ -191,7 +191,7 @@ def test_remote_vanished_container_is_settled_with_evidence(tmp_path, bot):
     (a0, s0), (a1, s1) = runs(root)[:2]
     assert (a0, a1, s1) == ("g000-selfplay-0", "g000-selfplay-1", "ok") and s0.startswith("interrupted")
     first = next(d for d in dispatches(root) if d["attempt"] == "g000-selfplay-0")
-    assert first["gone_evidence"]["docker_ps_by_name"] == "" and first["gone_evidence"]["checked"]
+    assert first["terminal_evidence"]["docker_ps_by_name"] == "" and first["terminal_evidence"]["checked"]
 
 
 def test_remote_open_dispatch_refuses_a_new_one(tmp_path, bot):
@@ -416,11 +416,15 @@ def test_remote_entry_validation_rules():
     remote.validate_entry(good, record)
     remote.validate_entry({**good, "status": "interrupted (settled by hand at the full reservation)", "wall_s": None,
                            "core_hours": 8.0}, record)  # fmt: skip
+    for st in ("interrupted by signal 15", "killed at the deadline (898.0 s of work)", "failed: child exit 1",
+               "ok (overran the 900.0 s reservation)"):  # fmt: skip
+        remote.validate_entry({**good, "status": st}, record)  # charged the measured wall
     bad = [
         {**good, "cores": 0}, {**good, "cores": 16}, {**good, "deadline_s": 0}, {**good, "deadline_s": 901},
         {**good, "core_hours": -1}, {**good, "core_hours": float("nan")}, {**good, "core_hours": 1.0},
         {**good, "status": "running"}, {**good, "status": "weird"}, {**good, "wall_s": None},
-        {**good, "status": "interrupted", "core_hours": 1.0},
+        {**good, "status": "interrupted (settled at the full reservation)", "core_hours": 1.0},
+        {**good, "status": "interrupted by signal 15", "core_hours": 8.0},
     ]  # fmt: skip
     for e in bad:
         with pytest.raises(remote.TransportError):
@@ -458,3 +462,45 @@ def test_remote_owner_busy_reconcile_touches_nothing(tmp_path, bot, monkeypatch)
     assert calls == []
     after = {p: p.read_bytes() for p in pathlib.Path(root).rglob("*") if p.is_file() and p.name != "loop.lock"}
     assert after == before
+
+
+def test_remote_built_extension_does_not_change_the_source_hash(tmp_path):
+    src = tmp_path / "src"
+    (src / "python" / "tessera_rl").mkdir(parents=True)
+    (src / "python" / "tessera_rl" / "__init__.py").write_text("x = 1\n")
+    before = remote.tree_sha256(str(src))
+    (src / "python" / "tessera_rl" / "_native.abi3.so").write_bytes(b"\x7fELF built")
+    (src / "build").mkdir()
+    (src / "build" / "lib.o").write_bytes(b"o")
+    assert remote.tree_sha256(str(src)) == before
+    (src / "python" / "tessera_rl" / "__init__.py").write_text("x = 2\n")
+    assert remote.tree_sha256(str(src)) != before
+
+
+def test_remote_exited_container_with_open_entry_is_settled_conservatively(tmp_path, bot):
+    """A container killed (exit 137) while its entry is still open, e.g.
+    by the driver's overdue safeguard: terminal, so it is settled at the
+    full reservation with its state recorded, then retried as n + 1."""
+    root = remote_root(tmp_path, bot)
+    r = drive(root, env_for(tmp_path, "after-start"))
+    assert r.returncode != 0
+    rl = tmp_path / "hosts" / "swarmer02" / "root" / "ledger.json"
+    wait_for(lambda: rl.exists() and any(e["status"] == "running" for e in json.loads(rl.read_text())["entries"]))
+    os.environ["REMOTE_TEST_HOSTS"] = str(tmp_path / "hosts")
+    try:
+        host = remote_fake.FakeHost("swarmer02")
+        host.docker_kill(cname(root, "g000-selfplay-0"))
+        assert host.docker_state(cname(root, "g000-selfplay-0")) == ("exited", 137)
+        # The killed supervisor never settles: put its entry back to open.
+        doc = json.loads(rl.read_text())
+        doc["entries"][-1].update(status="running", wall_s=None)
+        doc["entries"][-1]["core_hours"] = round(doc["entries"][-1]["deadline_s"] * doc["entries"][-1]["cores"] / 3600, 6)
+        rl.write_text(json.dumps(doc))
+    finally:
+        del os.environ["REMOTE_TEST_HOSTS"]
+    r = drive(root, env_for(tmp_path))
+    assert r.returncode == 0, r.stderr
+    (a0, s0), (a1, s1) = runs(root)[:2]
+    assert (a0, a1, s1) == ("g000-selfplay-0", "g000-selfplay-1", "ok") and s0.startswith("interrupted (settled")
+    first = next(d for d in dispatches(root) if d["attempt"] == "g000-selfplay-0")
+    assert first["terminal_evidence"]["docker_state"] == ["exited", 137] and first["published_partial"]
