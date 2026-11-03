@@ -83,3 +83,33 @@ The stop reasons are `K_max`, `budget`, `early`, `failed` (3 attempts), `disk` (
 ## Results
 
 Not run yet.
+
+## Remote phases (remote.py)
+
+Self-play needs 32 cores (swarmer02), and the looks need the registered runtime (xaskar, 1 core). The loop driver therefore runs on the Mac, owns the root and holds `loop.lock`. Each phase reaches its host through `remote.py run`, set as that phase's `runners` command at `init`, for example:
+
+```
+{python} remote.py run --host swarmer02 --cpuset 0-31 --root ROOT -- {tool} {args}
+```
+
+The phase runs as one detached, named container (`docker run -d --name tessera-m3-<attempt>`), with the pinned image and bind mounts by absolute path only. Its round trip has five steps:
+
+1. A durable dispatch record next to the attempt. It holds the host, cpuset, container, image, prior-ledger digest and the input hashes.
+2. The inputs are pushed to `~/tessera-rl-m3loop/root` and their hashes are checked on the host.
+3. The run, then a wait.
+4. The import. The host's ledger is accepted only if it keeps the ledger that was sent as an exact prefix and appends only this attempt's entry. Outputs are staged, verified and published atomically, then acknowledged.
+5. Cleanup, only after the acknowledgement. The host keeps only the ledger and the cached image. The image is removed with `docker rmi` and the directory with `rm -rf` when the loop ends.
+
+A dead driver loses no work and never doubles a charge. `remote.py reconcile --root ROOT` closes any open dispatch:
+- It finds a still-running container by name and waits for it.
+- It imports a successful attempt once.
+- It settles an entry whose container is gone at the full reservation. It does so only after a by-name check on that host, recorded in the dispatch.
+- It replays a missing acknowledgement.
+
+While a dispatch is open, no new one is accepted. The driver is:
+
+```
+caffeinate -dims sh -c 'python remote.py reconcile --root ROOT && python loop.py run --root ROOT'
+```
+
+Disk: the PR(2) sizes give about 33 MB per generation, about 1.0 GB over 30, so the formal run sets `--max-disk-mb 1536` at `init`. That needs at least 5 GB free on the Mac. On each host, only the current phase's inputs and outputs exist, at most about 130 MB.
