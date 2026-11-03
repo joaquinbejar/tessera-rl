@@ -72,6 +72,10 @@ BASE = "tessera-rl-m3loop"  # under the remote home: src/, uv, root/
 CROOT = "/m3root"  # the root's mount point in the container
 SRC = "/work/tessera"
 PHASES = {"selfplay.py": "selfplay", "train_step.py": "train", "look.py": "look"}
+# A container older than its wall cap plus these is killed by the driver:
+# the supervisor's cleanup grace, uv sync and the build, and a margin.
+SETUP_S = float(os.environ.get("REMOTE_TEST_SETUP_S", "900"))
+MARGIN_S = float(os.environ.get("REMOTE_TEST_MARGIN_S", "300"))
 
 
 class TransportError(RuntimeError):
@@ -304,7 +308,8 @@ def dispatch(args, argv: list[str]) -> str:
         "phase": phase,
         "host": args.host,
         "cpuset": args.cpuset,
-        "container": f"tessera-m3-{attempt}",
+        # Unique per experiment (the root's config) and attempt.
+        "container": f"tessera-m3-{artifacts.sha256_file(os.path.join(root, 'config.json'))[:8]}-{attempt}",
         "image": IMAGE,
         "attempt_dir": os.path.relpath(d, root),
         "argv": argv,
@@ -313,6 +318,9 @@ def dispatch(args, argv: list[str]) -> str:
         "ledger_entries_sent": len(read_ledger(ledger)),
         "inputs": {inputs[p]: tree_sha256(p) for p in sorted(inputs)},
         "dispatched": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "dispatched_epoch": time.time(),
+        "wall_cap_s": float(argv[argv.index("--wall-cap-s") + 1]),
+        "started": False,
         "closed": None,
     }
     path = d + ".dispatch.json"
@@ -328,6 +336,9 @@ def dispatch(args, argv: list[str]) -> str:
         if t.tree_sha256(rel) != sha:
             raise TransportError(f"{rel} does not match its dispatch hash on {args.host}")
     t.docker_run(record["container"], args.cpuset, args.host, cargv)
+    crash_point("after-docker-run")  # before the start is recorded
+    record["started"] = True
+    write_dispatch(path, record)
     crash_point("after-start")
     return path
 
@@ -346,8 +357,29 @@ def accept_ledger(sent: list[dict], remote: list[dict], attempt: str) -> list[di
     return remote
 
 
+def wait_or_kill(t, record: dict, path: str):
+    """The container's state once it is not running. A container older
+    than its wall cap plus the setup allowance and a margin is killed, and
+    the kill is recorded."""
+    name = record["container"]
+    deadline = record["dispatched_epoch"] + record["wall_cap_s"] + SETUP_S + MARGIN_S
+    poll = float(os.environ.get("REMOTE_POLL_S", "15"))
+    while True:
+        state = t.docker_state(name)
+        if state is None or state[0] != "running":
+            return state
+        if time.time() > deadline:
+            t.docker_rm(name)
+            record["killed_overdue"] = {"at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                                        "deadline_epoch": deadline}  # fmt: skip
+            write_dispatch(path, record)
+            return t.docker_state(name)
+        time.sleep(poll)
+
+
 def reconcile_one(root: str, path: str, owner_held: bool) -> dict:
-    """Takes one open dispatch to a closed state. Idempotent."""
+    """Takes one open dispatch to a closed state. Idempotent: every step
+    replays to the same result."""
     import loop as loopmod
 
     with open(path, encoding="utf-8") as f:
@@ -356,13 +388,13 @@ def reconcile_one(root: str, path: str, owner_held: bool) -> dict:
     name, attempt = record["container"], record["attempt"]
     d = os.path.join(root, record["attempt_dir"])
     ledger = os.path.join(root, "ledger.json")
-    sent = read_ledger(ledger)[: record["ledger_entries_sent"]]
+    local = read_ledger(ledger)
+    sent = local[: record["ledger_entries_sent"]]
     if record.get("imported"):
         return cleanup(t, record, path)
-    state = t.docker_state(name)
-    if state is not None and state[0] == "running":
-        t.docker_wait(name)
-        state = t.docker_state(name)
+    # Found by name, whether or not its start was recorded; never started
+    # twice.
+    state = wait_or_kill(t, record, path)
     record["exit_code"] = state[1] if state else None
     if state is not None:
         record["logs_tail"] = t.docker_logs(name)[-4000:]
@@ -372,16 +404,33 @@ def reconcile_one(root: str, path: str, owner_held: bool) -> dict:
     rledger = ledger + ".staging"
     if t.exists("root/ledger.json"):
         t.pull("root/ledger.json", rledger)
-        remote = read_ledger(rledger)
+        with open(rledger, encoding="utf-8") as f:
+            rdoc = json.load(f)
+        remote = rdoc["entries"]
+        if os.path.exists(ledger):
+            with open(ledger, encoding="utf-8") as f:
+                if rdoc["budget_core_hours"] != json.load(f)["budget_core_hours"]:
+                    raise TransportError("the remote ledger's budget differs from the local one")
+    elif not sent:
+        remote = []
     else:
-        remote = sent
+        raise TransportError(f"no ledger on {record['host']}: no evidence of what the attempt did")
     rel = f"root/{record['attempt_dir']}"
     if t.exists(rel):
         t.pull(rel, staging)
     crash_point("after-pull")
     remote = accept_ledger(sent, remote, attempt)
     mine = [i for i, e in enumerate(remote) if e["run"].split()[0] == attempt]
-    if mine and remote[mine[0]]["status"] == "running":
+    if not mine:
+        # Before any reservation: positive evidence that nothing ran.
+        if state is not None and state[0] == "running":
+            raise TransportError(f"{name} is running with no ledger entry")
+        record["not_started_evidence"] = {
+            "docker_ps_by_name": t.docker_ps_by_name(name) if state is None else f"exited {state[1]}",
+            "remote_ledger_entries": len(remote),
+            "checked": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        }
+    elif remote[mine[0]]["status"] == "running":
         if state is not None:
             raise TransportError(f"{name} still exists on {record['host']} with its entry running")
         record["gone_evidence"] = {
@@ -392,9 +441,7 @@ def reconcile_one(root: str, path: str, owner_held: bool) -> dict:
             raise TransportError(f"{name} is listed on {record['host']}: not gone")
         from ledger import Ledger
 
-        with open(rledger, encoding="utf-8") as f:
-            budget = json.load(f)["budget_core_hours"]
-        led = Ledger(rledger, budget)
+        led = Ledger(rledger, rdoc["budget_core_hours"])
         # Ledger's own same-host recovery may already have settled it.
         if led.entries()[mine[0]]["status"] == "running":
             led.settle_interrupted(mine[0])
@@ -402,21 +449,33 @@ def reconcile_one(root: str, path: str, owner_held: bool) -> dict:
     lp = loopmod.Loop(root)
     lock = None if owner_held else lp.owner()
     try:
-        # Publish: the output (if any), then the ledger, atomically.
-        if os.path.isdir(staging) and os.listdir(staging):
+        # Journal, then publish the output and the ledger. Replay checks
+        # each step against the journal.
+        out_sha = tree_sha256(staging) if os.path.isdir(staging) and os.listdir(staging) else None
+        led_sha = artifacts.sha256_file(rledger) if os.path.exists(rledger) else None
+        journal = record.get("publish")
+        if journal is None:
+            record["publish"] = journal = {"output_sha256": out_sha, "ledger_sha256": led_sha}
+            write_dispatch(path, record)
+        elif journal != {"output_sha256": out_sha, "ledger_sha256": led_sha}:
+            raise TransportError("the remote evidence changed since publication began")
+        if out_sha is not None:
             if os.path.isdir(d) and not os.listdir(d):
                 os.rmdir(d)
             if os.path.exists(d):
-                # A replay after publication: the same output is already in
-                # place; anything else is never overwritten.
-                if tree_sha256(d) != tree_sha256(staging):
+                if tree_sha256(d) != out_sha:
                     raise TransportError(f"{d} already holds a different output: not overwritten")
                 shutil.rmtree(staging)
             else:
                 os.replace(staging, d)
         else:
             shutil.rmtree(staging, ignore_errors=True)
-        if os.path.exists(rledger):
+        if led_sha is not None:
+            # Compare and replace: the local ledger is still the one sent,
+            # or already this result (a replay).
+            now = artifacts.sha256_file(ledger) if os.path.exists(ledger) else None
+            if now not in (record["ledger_sha256"], led_sha):
+                raise TransportError("the local ledger changed since the dispatch")
             with open(rledger, "rb") as f:
                 artifacts.write_atomic(ledger, f.read())
         crash_point("after-publish")
@@ -461,6 +520,7 @@ def main(argv=None) -> int:
     r.add_argument("--root", required=True)
     c = sub.add_parser("reconcile")
     c.add_argument("--root", required=True)
+    c.add_argument("--owner-held", action="store_true", help="called by loop.py, which holds the owner lock")
     if "--" in argv:
         i = argv.index("--")
         args, phase_argv = p.parse_args(argv[:i]), argv[i + 1 :]
@@ -475,7 +535,7 @@ def main(argv=None) -> int:
         print(json.dumps({"attempt": rec["attempt"], "exit_code": rec.get("exit_code"), "closed": rec["closed"]}))
         return 0
     for path in open_dispatches(root):
-        rec = reconcile_one(root, path, owner_held=False)
+        rec = reconcile_one(root, path, owner_held=args.owner_held)
         print(json.dumps({"attempt": rec["attempt"], "closed": rec["closed"]}))
     return 0
 

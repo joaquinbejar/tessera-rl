@@ -106,10 +106,18 @@ A dead driver loses no work and never doubles a charge. `remote.py reconcile --r
 - It settles an entry whose container is gone at the full reservation. It does so only after a by-name check on that host, recorded in the dispatch.
 - It replays a missing acknowledgement.
 
-While a dispatch is open, no new one is accepted. The driver is:
+The loop runs `remote.py reconcile --root ROOT --owner-held`, set with `init --reconcile`, before every step. Every open dispatch is therefore closed before the next attempt is allocated, and while a dispatch is open no new one is accepted.
+
+Each step leaves a record in the dispatch:
+- Publication is journaled with the staged output and ledger digests, then replayed against them. The output rename, the ledger replace and the acknowledgement are not jointly atomic, so a replay must reach the same result.
+- Before replacing the local ledger, the import checks that it is still the one sent: a compare and replace. The import also checks that the budgets match.
+- "Nothing ran" needs positive evidence: a by-name check, and the remote ledger read with no entry for the attempt.
+- A container that outlives its wall cap plus 900 s of setup and a 300 s margin is killed by the driver, and the kill is recorded.
+
+Container names are `tessera-m3-<config digest>-<attempt>`, unique per experiment. Run alone, `remote.py reconcile --root ROOT` takes the owner lock itself. The driver is:
 
 ```
-caffeinate -dims sh -c 'python remote.py reconcile --root ROOT && python loop.py run --root ROOT'
+caffeinate -dims python loop.py run --root ROOT
 ```
 
-Disk: the PR(2) sizes give about 33 MB per generation, about 1.0 GB over 30, so the formal run sets `--max-disk-mb 1536` at `init`. That needs at least 5 GB free on the Mac. On each host, only the current phase's inputs and outputs exist, at most about 130 MB.
+Disk: the PR(2) sizes give about 33 MB per generation, about 1.0 GB over 30, so the formal run sets `--max-disk-mb 1536` at `init`. That needs at least 5 GB free on the Mac. On each host, the current phase's inputs and outputs take at most about 130 MB. On top of that sit the cached source, its `.venv` and build (estimated at 1.5 to 2 GB, to be measured on the first phase) and the cached image. The Mac holds the root, up to 1.5 GB, plus one phase's staging (about 35 MB).

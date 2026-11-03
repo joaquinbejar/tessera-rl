@@ -36,7 +36,7 @@ def bot():
 def env_for(tmp_path, crash=None):
     env = {k: v for k, v in os.environ.items() if not k.startswith(("REMOTE_TEST", "LOOP_TEST"))}
     env.update(REMOTE_TEST_TRANSPORT="remote_fake:factory", REMOTE_TEST_PATH=str(HERE),
-               REMOTE_TEST_HOSTS=str(tmp_path / "hosts"))  # fmt: skip
+               REMOTE_TEST_HOSTS=str(tmp_path / "hosts"), REMOTE_POLL_S="0.2")  # fmt: skip
     if crash:
         env["REMOTE_TEST_CRASH"] = crash
     return env
@@ -47,17 +47,20 @@ def remote_root(tmp_path, bot, **over):
         phase: f"{{python}} {EXAMPLE / 'remote.py'} run --host {h} --cpuset {c} --root {tmp_path / 'root'} -- {{tool}} {{args}}"
         for phase, (h, c) in HOSTS.items()
     }
-    return make_root(tmp_path, bot, **{"--k-max": 1, "--runners": json.dumps(runners), **over})
+    reconcile = f"{{python}} {EXAMPLE / 'remote.py'} reconcile --root {{root}} --owner-held"
+    return make_root(tmp_path, bot, **{"--k-max": 1, "--runners": json.dumps(runners), "--reconcile": reconcile, **over})
 
 
-def drive(root, env, *, reconcile=True):
-    """The driver: reconcile, then loop.py run, in its own session (a crash
-    point kills the whole driver group, never the stand-in containers)."""
-    if reconcile:
-        subprocess.run([sys.executable, str(EXAMPLE / "remote.py"), "reconcile", "--root", str(root)],
-                       env=env, check=True, start_new_session=True, timeout=300)  # fmt: skip
+def drive(root, env):
+    """The driver, loop.py run, in its own session: a crash point kills the
+    whole driver group, never the stand-in containers. The loop reconciles
+    any open dispatch before each step."""
     return subprocess.run([sys.executable, str(EXAMPLE / "loop.py"), "run", "--root", str(root)], env=env,
                           capture_output=True, text=True, start_new_session=True, timeout=300)  # fmt: skip
+
+
+def cname(root, attempt):
+    return f"tessera-m3-{remote.artifacts.sha256_file(str(pathlib.Path(root) / 'config.json'))[:8]}-{attempt}"
 
 
 def last_stop(r):
@@ -115,7 +118,7 @@ def wait_for(cond, timeout=120):
     raise AssertionError("timed out")
 
 
-@pytest.mark.parametrize("crash", ["after-start", "after-pull", "after-publish"])
+@pytest.mark.parametrize("crash", ["after-docker-run", "after-start", "after-pull", "after-publish"])
 def test_remote_driver_death_after_start_imports_the_work_once(tmp_path, bot, direct, crash):
     """The driver dies with the phase still running, after staging, or
     after publication before the acknowledgement: the next driver imports
@@ -155,7 +158,7 @@ def test_remote_vanished_container_is_settled_with_evidence(tmp_path, bot):
         host = remote_fake.FakeHost("swarmer02")
         rl = tmp_path / "hosts" / "swarmer02" / "root" / "ledger.json"
         wait_for(lambda: rl.exists() and any(e["status"] == "running" for e in json.loads(rl.read_text())["entries"]))
-        host.kill("tessera-m3-g000-selfplay-0")
+        host.kill(cname(root, "g000-selfplay-0"))
     finally:
         del os.environ["REMOTE_TEST_HOSTS"]
     r = drive(root, env_for(tmp_path))
@@ -180,7 +183,7 @@ def test_remote_divergent_ledger_is_rejected_and_kept(tmp_path, bot):
     r = drive(root, env_for(tmp_path, "after-start"))
     assert r.returncode != 0
     rl = tmp_path / "hosts" / "swarmer02" / "root" / "ledger.json"
-    wait_for(lambda: (tmp_path / "hosts" / "swarmer02" / "containers" / "tessera-m3-g000-selfplay-0.json.exit").exists())
+    wait_for(lambda: (tmp_path / "hosts" / "swarmer02" / "containers" / f"{cname(root, 'g000-selfplay-0')}.json.exit").exists())
     doc = json.loads(rl.read_text())
     doc["entries"].insert(0, {**doc["entries"][0], "run": "forged 0"})
     rl.write_text(json.dumps(doc))
@@ -231,3 +234,38 @@ def test_remote_mapping_keeps_the_scientific_arguments(tmp_path):
     assert cargv[2] == "/m3root/c0/C.pt" and cargv[4].startswith("/m3root/_inputs/") and cargv[6] == "100"
     assert cargv[8] == "/m3root/gen-000/look-0"
     assert set(inputs) == {str(root / "c0" / "C.pt"), str(bin_)}
+
+
+def test_remote_standalone_reconcile_takes_the_owner_lock(tmp_path, bot):
+    import fcntl
+
+    root = remote_root(tmp_path, bot)
+    r = drive(root, env_for(tmp_path, "after-start"))
+    assert r.returncode != 0
+    with open(root / "loop.lock", "a+") as held:
+        fcntl.flock(held, fcntl.LOCK_EX)
+        p = subprocess.run([sys.executable, str(EXAMPLE / "remote.py"), "reconcile", "--root", str(root)],
+                           env=env_for(tmp_path), capture_output=True, text=True, timeout=300)  # fmt: skip
+        assert p.returncode != 0 and "another loop" in p.stderr
+    p = subprocess.run([sys.executable, str(EXAMPLE / "remote.py"), "reconcile", "--root", str(root)],
+                       env=env_for(tmp_path), capture_output=True, text=True, timeout=300)  # fmt: skip
+    assert p.returncode == 0, p.stderr
+    assert all(d["closed"] for d in dispatches(root))
+
+
+def test_remote_overdue_container_is_killed_and_recorded(tmp_path, monkeypatch):
+    monkeypatch.setenv("REMOTE_TEST_HOSTS", str(tmp_path / "hosts"))
+    monkeypatch.setenv("REMOTE_POLL_S", "0.1")
+    host = remote_fake.FakeHost("swarmer02")
+    host.docker_run("tessera-m3-hang", "0", "swarmer02", ["-c", "import time; time.sleep(600)"])
+    path = tmp_path / "x.dispatch.json"
+    record = {"container": "tessera-m3-hang", "dispatched_epoch": time.time() - 10_000, "wall_cap_s": 60.0}
+    state = remote.wait_or_kill(host, record, str(path))
+    assert state is None and record["killed_overdue"]["deadline_epoch"] < time.time()
+    assert json.loads(path.read_text())["killed_overdue"] == record["killed_overdue"]
+
+
+def test_remote_container_names_are_unique_per_experiment(tmp_path, bot):
+    a = remote_root(tmp_path / "a", bot)
+    b = remote_root(tmp_path / "b", bot, **{"--base": 7})
+    assert cname(a, "g000-selfplay-0") != cname(b, "g000-selfplay-0")

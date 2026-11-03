@@ -426,8 +426,21 @@ class Loop:
 
     # ------------------------------------------------------------ driver
 
+    def reconcile_transport(self) -> None:
+        """Closes any open remote dispatch before the next attempt is
+        allocated (remote.py); a failure stops the loop with its evidence
+        kept."""
+        template = self.cfg.get("reconcile")
+        if not template:
+            return
+        cmd = template.format(python=sys.executable, root=_q(self.root))
+        r = subprocess.run(cmd, shell=True, check=False, capture_output=True, text=True)
+        if r.returncode != 0:
+            raise Stop("transport", {"command": cmd, "exit": r.returncode, "stderr": r.stderr[-2000:]})
+
     def step(self) -> None:
         """Does the next unit of work, or raises ``Stop``."""
+        self.reconcile_transport()
         entries = self.ledger.entries()
         gens = self.chain(entries)
         self.audit(gens, entries)
@@ -609,6 +622,7 @@ def init(args) -> int:
         "source_sha": args.source_sha,
         "any_openings": args.any_openings,
         "runners": json.loads(args.runners) if args.runners else {},
+        "reconcile": args.reconcile,
     }
     cfg["formal"] = is_formal(cfg)
     artifacts.write_atomic(os.path.join(args.root, "config.json"), artifacts.canonical_json(cfg))
@@ -644,6 +658,7 @@ def parse(argv):
     i.add_argument("--source-sha", required=True)
     i.add_argument("--any-openings", action="store_true", help="tests only: never formal, looks never eligible")
     i.add_argument("--runners", help="JSON {phase: command template}")
+    i.add_argument("--reconcile", help="command run before every step, e.g. remote.py reconcile; placeholders {python} {root}")
     for name in ("run", "select"):
         c = sub.add_parser(name)
         c.add_argument("--root", required=True)
