@@ -39,9 +39,11 @@ the gate ledger and the run output.
    consumed, and a retry needs the owner's decision.
 3. The supervised run reserves the budget, then revalidates the claim at
    use (checkpoint, bot, runtime). Only then does it hash, compare and
-   parse the evaluation file. Nothing is printed or written before every
-   game is played. An interrupted run leaves only its ledger entry
-   (failed, with the exit code and wall time).
+   parse the evaluation file. Nothing is written before every game is
+   played, and the child's report is only provisional.
+4. The parent finalizes ``gate.json``. It carries a verdict only with exit
+   0, an ok ledger settlement and a complete provisional report; any other
+   attempt stays consumed, with ``pass`` null and the reason.
 
 **Diagnostic mode** (``--any-openings --openings FIXTURE``, tests and dry
 runs). It never names a selection and has no verdict. It refuses the
@@ -64,6 +66,7 @@ for _var in ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS"):
 
 import argparse  # noqa: E402
 import json  # noqa: E402
+import math  # noqa: E402
 import sys  # noqa: E402
 import time  # noqa: E402
 
@@ -184,8 +187,7 @@ def preflight(args, lp) -> dict:
     claim to record."""
     manifest, path = snapshot(lp, os.path.join(args.root, "selection-manifest.json"), args.selection_sha256)
     meta, observed = check_candidate(path, manifest["selected"]["checkpoint"], args.bot, args.bot_sha256, args)
-    if args.budget_core_hours * 3600 < args.cores * args.wall_cap_s:
-        raise Refused("the gate budget does not fund the full wall cap")
+    check_resources(args)
     return {
         "kind": "p2-g1-gate-claim",
         "selection_sha256": args.selection_sha256,
@@ -199,14 +201,40 @@ def preflight(args, lp) -> dict:
     }
 
 
+def check_resources(args) -> None:
+    """A usable allowance before the claim: one core, a finite positive
+    budget that funds the whole wall cap, and a cap above the supervisor's
+    cleanup grace."""
+    budget, cap = args.budget_core_hours, args.wall_cap_s
+    if args.cores != 1:
+        raise Refused("the registered gate runs on one core")
+    if not (math.isfinite(budget) and budget > 0 and math.isfinite(cap) and cap > supervisor.CLEANUP_GRACE_S):
+        raise Refused("the gate budget and wall cap must be finite and positive, above the cleanup grace")
+    if budget * 3600 < args.cores * cap:
+        raise Refused("the gate budget does not fund the full wall cap")
+
+
+def fsync_dir(path: str) -> None:
+    fd = os.open(path, os.O_RDONLY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
 def claim(args, lp, record: dict) -> None:
-    """The durable, irreversible claim: an atomic mkdir, then the record."""
+    """The durable, irreversible claim: an atomic mkdir, its parent entry
+    synced, then the record and the audit entry, all before any read of
+    the evaluation set."""
     try:
         os.mkdir(gate_dir(args.root))
     except FileExistsError:
         raise Refused("a gate was already claimed on this loop root; a retry needs the owner's decision") from None
+    fsync_dir(args.root)
     artifacts.write_atomic(os.path.join(gate_dir(args.root), "claim.json"), artifacts.canonical_json(record))
+    fsync_dir(gate_dir(args.root))
     lp.append_selection({"type": "gate-claim", **record})
+    fsync_dir(args.root)
 
 
 def formal_openings() -> list[str]:
@@ -217,6 +245,13 @@ def formal_openings() -> list[str]:
     if len(openings) != FROZEN[3]:
         raise Refused("the evaluation openings are not the pinned ones")
     return openings
+
+
+def distinct_games(openings: list[str], logs: list) -> int:
+    """Distinct complete move sequences: the opening's columns, then the
+    played columns. Roles, results and visit counts are not identity."""
+    seqs = {tuple([int(c) - 1 for c in openings[j]] + [entry[1] for entry in log]) for j, _, _, log in logs}
+    return len(seqs)
 
 
 def eval_sha_now() -> str:
@@ -300,7 +335,7 @@ def work(args, clock) -> int:
         "wdl": [wins, draws, len(results) - wins - draws],
         "by_colour": played["by_colour"],
         "pair_wins": {str(k): pairs.count(k) for k in (2, 1, 0)},
-        "distinct_games": len({artifacts.canonical_json([openings[j], log]) for j, _, _, log in logs}),
+        "distinct_games": distinct_games(openings, logs),
         "openings_covered": len(openings),
         "rule": rule,
         "pass": rule["pass"] if complete else None,
@@ -318,11 +353,55 @@ def work(args, clock) -> int:
     }
     if formal and report["openings_sha256_at_end"] != EVAL_SHA256:
         report["pass"] = None
-    # Nothing is written or printed before every game is played.
+    # Nothing is written before every game is played, and this is only
+    # provisional: the parent finalizes it after the ok settlement.
     artifacts.write_atomic(os.path.join(args.out, "gate-log.json"), log_bytes)
-    artifacts.write_atomic(os.path.join(args.out, "gate.json"), artifacts.canonical_json({**report, "complete": True}))
-    print(json.dumps({"gate_run": formal, "games": len(results), "wins": wins, "pass": report["pass"]}))
+    report["provisional_pass"] = report.pop("pass")
+    artifacts.write_atomic(os.path.join(args.out, PROVISIONAL), artifacts.canonical_json(report))
     return 0
+
+
+PROVISIONAL = "gate.provisional.json"
+
+
+def settlement(ledger: str, budget: float, name: str) -> dict | None:
+    from ledger import Ledger
+
+    if not os.path.exists(ledger):
+        return None
+    mine = [e for e in Ledger(ledger, budget).entries() if e["run"].split()[0] == name]
+    return mine[-1] if mine else None
+
+
+def finalize(args, rc: int, name: str) -> dict:
+    """The gate's result, tied to the supervisor's exit and the actual
+    ledger settlement: a verdict only with exit 0, an ok entry and a
+    complete provisional report; otherwise pass null with the reason."""
+    entry = settlement(args.ledger, args.budget_core_hours, name)
+    path = os.path.join(args.out, PROVISIONAL)
+    report = None
+    if os.path.exists(path):
+        with open(path, encoding="utf-8") as f:
+            report = json.load(f)
+    why = []
+    if rc != 0:
+        why.append(f"the supervised run exited {rc}")
+    if entry is None or entry["status"] != "ok":
+        why.append(f"the ledger entry is {entry['status'] if entry else 'missing'}, not ok")
+    if report is None:
+        why.append("no complete provisional report")
+    final = {
+        **(report or {"kind": "p2-g1-gate", "gate_run": not args.any_openings}),
+        "pass": None if why or report is None else report["provisional_pass"],
+        "attempt_invalid_because": why,
+        "settlement": entry,
+        "exit_code": rc,
+        "complete": True,
+    }
+    final.pop("provisional_pass", None)
+    artifacts.write_atomic(os.path.join(args.out, "gate.json"), artifacts.canonical_json(final))
+    print(json.dumps({"gate_run": final["gate_run"], "games": final.get("games"), "pass": final["pass"]}))
+    return final
 
 
 def parse(argv):
@@ -364,12 +443,17 @@ def main(argv=None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     args = parse(argv)
 
+    name = "gate" if not args.any_openings else "diagnostic-gate"
+
     def supervised() -> int:
-        return supervisor.run(
+        rc = supervisor.run(
             __file__, argv, lambda clock: work(args, clock), ledger=args.ledger,
             budget_core_hours=args.budget_core_hours, cores=args.cores, wall_cap_s=args.wall_cap_s,
-            out=args.out, name="gate" if not args.any_openings else "diagnostic-gate",
+            out=args.out, name=name,
         )  # fmt: skip
+        if supervisor.child_flag(argv) is None:
+            finalize(args, rc, name)
+        return rc
 
     if args.any_openings or supervisor.child_flag(argv) is not None:
         return supervised()

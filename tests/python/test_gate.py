@@ -29,9 +29,31 @@ HELDOUT = REPO / "compat" / "connect4" / "openings-heldout.txt"
 IMAGE = "rust:1.99.1@sha256:09027f873d45b8ecd1dc86f1fa13b7a62b875c961f017a0e331267b350430137"
 
 
+REAL_EVAL = os.path.realpath(gate.EVAL)
+
+
 @pytest.fixture(scope="module")
 def bot():
     return bot_binary()
+
+
+@pytest.fixture(autouse=True)
+def synthetic_eval(tmp_path, monkeypatch):
+    """Every test plays a synthetic 500-opening stand-in for the blind set,
+    and any open of the real file fails the test."""
+    lines = [x for x in HELDOUT.read_text().splitlines() if x and not x.startswith("#")]
+    fake = tmp_path / "synthetic-eval.txt"
+    fake.write_text("".join(f"{j} x {lines[j % len(lines)].split()[2]}\n" for j in range(500)))
+    monkeypatch.setattr(gate, "EVAL", str(fake))
+    monkeypatch.setattr(gate, "EVAL_SHA256", artifacts.sha256_file(str(fake)))
+    real_open = builtins.open
+
+    def guard(path, *a, **k):
+        if isinstance(path, (str, os.PathLike)) and os.path.realpath(path) == REAL_EVAL:
+            raise AssertionError("the real evaluation file was opened")
+        return real_open(path, *a, **k)
+
+    monkeypatch.setattr(builtins, "open", guard)
 
 
 # ------------------------------------------------------------------ rule
@@ -252,9 +274,10 @@ def test_gate_formal_work_revalidates_then_records_true_or_false(tmp_path, done_
         args.out = str(tmp_path / f"out-{wins}")
         os.makedirs(args.out)
         assert gate.work(args, None) == 0
-        report = json.loads((pathlib.Path(args.out) / "gate.json").read_text())
-        assert report["gate_run"] is True and report["games"] == 1000
-        assert report["pass"] is expected and report["rule"]["wins"] == wins
+        assert not (pathlib.Path(args.out) / "gate.json").exists(), "the child writes a provisional report only"
+        report = json.loads((pathlib.Path(args.out) / gate.PROVISIONAL).read_text())
+        assert report["gate_run"] is True and report["games"] == 1000 and "pass" not in report
+        assert report["provisional_pass"] is expected and report["rule"]["wins"] == wins
         assert report["openings_sha256_at_end"] == gate.EVAL_SHA256
         assert report["selected"]["checkpoint"] == report["checkpoint"]
     assert order[:2] == ["check", "openings"]
@@ -293,8 +316,8 @@ def diag_argv(tmp_path, bot, openings, *extra):
 def test_gate_diagnostic_run_never_opens_the_evaluation_file(tmp_path, bot, eval_trap):
     args = gate.parse(diag_argv(tmp_path, bot, HELDOUT, "--limit", 2, "--sims", 2, "--batch-size", 2, "--capacity", 64))
     assert gate.work(args, None) == 0
-    report = json.loads((tmp_path / "out" / "gate.json").read_text())
-    assert report["gate_run"] is False and report["pass"] is None and report["selected"] is None
+    report = json.loads((tmp_path / "out" / gate.PROVISIONAL).read_text())
+    assert report["gate_run"] is False and report["provisional_pass"] is None and report["selected"] is None
     assert report["games"] == 4 and report["openings_covered"] == 2 and sum(report["pair_wins"].values()) == 2
     assert [x[0] for x in json.loads((tmp_path / "out" / "gate-log.json").read_text())] == [0, 0, 1, 1]
     assert eval_trap == []
@@ -308,11 +331,10 @@ def test_gate_diagnostic_refuses_the_evaluation_set_and_its_aliases(tmp_path, bo
     elif alias == "symlink":
         target.symlink_to(gate.EVAL)
     elif alias == "hardlink":
-        # On the evaluation file's own file system (target/ is ignored).
+        # On the stand-in's own file system.
         import tempfile
 
-        (REPO / "target").mkdir(exist_ok=True)
-        target = pathlib.Path(tempfile.mkdtemp(dir=REPO / "target")) / "alias.txt"
+        target = pathlib.Path(tempfile.mkdtemp(dir=tmp_path)) / "alias.txt"
         os.link(gate.EVAL, target)
     else:
         shutil.copyfile(gate.EVAL, target)
@@ -361,4 +383,72 @@ def test_gate_evaluation_set_is_named_only_by_the_gate():
     calls = {ast.unparse(c.func) for c in ast.walk(diag) if isinstance(c, ast.Call)
              if any(isinstance(a, ast.Name) and a.id == "EVAL" for a in c.args)}  # fmt: skip
     assert calls <= {"os.stat", "os.path.realpath"}
-    assert artifacts.sha256_file(gate.EVAL) == gate.EVAL_SHA256
+
+
+# ------------------------------------------------------------- finalize
+
+
+def test_gate_verdict_only_after_an_ok_settlement(tmp_path, done_root, as_formal, bot, monkeypatch):
+    """A provisional PASS becomes the gate result only with exit 0 and an ok
+    ledger entry; a failure after the report was written leaves pass null."""
+    from ledger import Ledger
+
+    root, _, sha, _ = selected_root(tmp_path, done_root)
+    args, _ = preflight_and_claim(formal_argv(root, sha, bot))
+    monkeypatch.setattr(gate.botmatch, "play", scripted_play(1000))
+    monkeypatch.setattr(gate.game, "BotClient", lambda path: type("B", (), {"close": lambda self: None})())
+    for case, (rc, status) in {"ok": (0, "ok"), "killed": (137, "failed: killed at the deadline"),
+                               "failed-exit": (1, "ok")}.items():  # fmt: skip
+        args.out = str(tmp_path / f"out-{case}")
+        args.ledger = str(tmp_path / f"ledger-{case}.json")
+        os.makedirs(args.out)
+        led = Ledger(args.ledger, 1)
+        i, _ = led.reserve("gate 20261103T000000Z", 1, 60)
+        assert gate.work(args, None) == 0  # the provisional report exists
+        led.settle(i, 1, status)
+        final = gate.finalize(args, rc, "gate")
+        on_disk = json.loads((pathlib.Path(args.out) / "gate.json").read_text())
+        assert on_disk == final and "provisional_pass" not in final
+        if case == "ok":
+            assert final["pass"] is True and final["attempt_invalid_because"] == []
+        else:
+            assert final["pass"] is None and final["attempt_invalid_because"]
+    # No provisional report at all (killed before the games ended).
+    args.out = str(tmp_path / "out-empty")
+    os.makedirs(args.out)
+    assert gate.finalize(args, 137, "gate")["pass"] is None
+
+
+def test_gate_claim_syncs_the_parent_entry_before_anything_else(tmp_path, done_root, as_formal, bot, monkeypatch):
+    root, _, sha, _ = selected_root(tmp_path, done_root)
+    order = []
+    real_mkdir, real_sync, real_write = os.mkdir, gate.fsync_dir, gate.artifacts.write_atomic
+    monkeypatch.setattr(gate.os, "mkdir", lambda p, *a: (order.append(("mkdir", p)), real_mkdir(p, *a))[1])
+    monkeypatch.setattr(gate, "fsync_dir", lambda p: (order.append(("fsync", p)), real_sync(p))[1])
+    monkeypatch.setattr(gate.artifacts, "write_atomic", lambda p, b: (order.append(("write", p)), real_write(p, b))[1])
+    preflight_and_claim(formal_argv(root, sha, bot))
+    g = str(root / "gate")
+    assert order[:4] == [("mkdir", g), ("fsync", str(root)), ("write", os.path.join(g, "claim.json")), ("fsync", g)]
+    assert order[-1] == ("fsync", str(root))
+
+
+def test_gate_distinct_games_are_move_sequences():
+    openings = ["4455", "44", "445"]
+    logs = [
+        [0, True, 1.0, [("c", 0, [1, 2]), ("b", 1, [])]],
+        [0, False, -1.0, [("b", 0, []), ("c", 1, [9, 9])]],  # same moves, roles and visits swapped
+        [1, True, 1.0, [("c", 4, []), ("b", 4, []), ("c", 0, []), ("b", 1, [])]],  # "44"+"55..." = "4455"+...
+        [2, True, 1.0, [("c", 4, [])]],
+    ]
+    assert gate.distinct_games(openings, logs) == 2
+
+
+@pytest.mark.parametrize("bad", [("--budget-core-hours", "nan"), ("--budget-core-hours", "inf"),
+                                 ("--budget-core-hours", "0"), ("--budget-core-hours", "-1"),
+                                 ("--wall-cap-s", "0"), ("--wall-cap-s", "-5"), ("--wall-cap-s", "nan"),
+                                 ("--wall-cap-s", "1"), ("--cores", "0"), ("--cores", "2")])  # fmt: skip
+def test_gate_invalid_resources_never_consume_the_claim(tmp_path, done_root, as_formal, bot, eval_trap, bad):
+    root, _, sha, _ = selected_root(tmp_path, done_root)
+    with pytest.raises(gate.Refused):
+        preflight_and_claim(formal_argv(root, sha, bot, *bad))
+    assert not (root / "gate").exists() and eval_trap == []
