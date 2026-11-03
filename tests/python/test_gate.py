@@ -452,3 +452,33 @@ def test_gate_invalid_resources_never_consume_the_claim(tmp_path, done_root, as_
     with pytest.raises(gate.Refused):
         preflight_and_claim(formal_argv(root, sha, bot, *bad))
     assert not (root / "gate").exists() and eval_trap == []
+
+
+def test_gate_finalize_recovers_after_the_parent_died(tmp_path, done_root, as_formal, bot, monkeypatch):
+    """The child settled ok but the parent died before gate.json: the
+    read-only finalize rebuilds it under the same rules, idempotently."""
+    from ledger import Ledger
+
+    root, _, sha, _ = selected_root(tmp_path, done_root)
+    assert pytest.raises(gate.Refused, gate.recover, str(root))  # nothing claimed
+    args, _ = preflight_and_claim(formal_argv(root, sha, bot))
+    monkeypatch.setattr(gate.botmatch, "play", scripted_play(1000))
+    monkeypatch.setattr(gate.game, "BotClient", lambda path: type("B", (), {"close": lambda self: None})())
+    os.makedirs(args.out)
+    led = Ledger(args.ledger, args.budget_core_hours)
+    i, _ = led.reserve("gate 20261103T000000Z", 1, 60)
+    with pytest.raises(gate.Refused, match="no settled"):
+        gate.recover(str(root))  # still running
+    assert gate.work(args, None) == 0
+    led.settle(i, 1, "ok")
+    first = gate.main(["finalize", "--root", str(root)])
+    assert first == 0
+    final = json.loads((pathlib.Path(args.out) / "gate.json").read_text())
+    assert final["pass"] is True and final["settlement"]["status"] == "ok"
+    assert gate.recover(str(root)) == final  # idempotent, unchanged
+    # A failed settlement recovers as pass null.
+    os.remove(pathlib.Path(args.out) / "gate.json")
+    doc = json.loads(pathlib.Path(args.ledger).read_text())
+    doc["entries"][-1]["status"] = "failed: killed"
+    pathlib.Path(args.ledger).write_text(json.dumps(doc))
+    assert gate.recover(str(root))["pass"] is None

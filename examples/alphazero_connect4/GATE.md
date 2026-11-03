@@ -42,7 +42,7 @@ All of it runs under the loop's owner lock. The gate's paths are fixed under the
 2. **Claim.** An atomic `mkdir <root>/gate` and a durable `claim.json`, plus a `gate-claim` entry in the loop's audit log (`selection.jsonl`). A second gate is refused, whatever paths it names. The selection is never rewritten.
 3. **Run.** The supervisor reserves the budget. The work then revalidates the claim at use (checkpoint, bot, runtime), and only then hashes, compares and parses the evaluation file. The file's digest is recomputed after the games.
 
-4. **Finalize.** The child's report is only provisional (`gate.provisional.json`). The parent writes `gate.json` with a verdict only after exit 0 and an ok ledger settlement. A failed or interrupted attempt stays consumed, with `pass` null and the reason, and a retry needs the owner's decision.
+4. **Finalize.** The child's report is only provisional (`gate.provisional.json`). The parent writes `gate.json` with a verdict only after exit 0 and an ok ledger settlement. A failed or interrupted attempt stays consumed, with `pass` null and the reason, and a retry needs the owner's decision. If the parent dies after the child settles but before `gate.json` is written, `gate.py finalize --root ROOT` rebuilds it, read-only and idempotently, from the provisional report and the ledger entry under the same rules.
 
 The claim syncs the root directory after the `mkdir`, then the claim file and the gate directory, then the audit log, all before the evaluation set is read. `distinct_games` counts distinct complete move sequences (the opening's columns, then the played ones).
 

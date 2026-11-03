@@ -439,8 +439,36 @@ def parse(argv):
     return args
 
 
+def recover(root: str) -> dict:
+    """``gate.py finalize --root``: read-only recovery when the parent died
+    after the child settled but before it wrote ``gate.json``. It rebuilds
+    the result from the provisional report and the ledger entry under the
+    same rules, and the settled status stands for the exit (the supervisor
+    writes ``ok`` only on exit 0). An existing ``gate.json`` is returned
+    unchanged; nothing else in the root is touched."""
+    run = os.path.join(gate_dir(root), "run")
+    existing = os.path.join(run, "gate.json")
+    if os.path.exists(existing):
+        with open(existing, encoding="utf-8") as f:
+            return json.load(f)
+    if not os.path.exists(os.path.join(gate_dir(root), "claim.json")):
+        raise Refused("no gate was claimed on this loop root")
+    ledger = os.path.join(gate_dir(root), "ledger.json")
+    entry = settlement(ledger, 1.0, "gate")
+    if entry is None or entry["status"] == "running":
+        raise Refused("the gate has no settled ledger entry yet")
+    args = argparse.Namespace(out=run, ledger=ledger, budget_core_hours=1.0, any_openings=False)
+    os.makedirs(run, exist_ok=True)
+    return finalize(args, 0 if entry["status"] == "ok" else 1, "gate")
+
+
 def main(argv=None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
+    if argv[:1] == ["finalize"]:
+        p = argparse.ArgumentParser(prog="gate.py finalize", description=recover.__doc__.splitlines()[0])
+        p.add_argument("--root", required=True)
+        recover(p.parse_args(argv[1:]).root)
+        return 0
     args = parse(argv)
 
     name = "gate" if not args.any_openings else "diagnostic-gate"
