@@ -441,26 +441,32 @@ def parse(argv):
 
 
 def recover(root: str) -> dict:
-    """``gate.py finalize --root``: read-only recovery when the parent died
-    after the child settled but before it wrote ``gate.json``. It rebuilds
-    the result from the provisional report and the ledger entry under the
-    same rules, and the settled status stands for the exit (the supervisor
-    writes ``ok`` only on exit 0). An existing ``gate.json`` is returned
-    unchanged; nothing else in the root is touched."""
-    run = os.path.join(gate_dir(root), "run")
-    existing = os.path.join(run, "gate.json")
-    if os.path.exists(existing):
-        with open(existing, encoding="utf-8") as f:
-            return json.load(f)
-    if not os.path.exists(os.path.join(gate_dir(root), "claim.json")):
-        raise Refused("no gate was claimed on this loop root")
-    ledger = os.path.join(gate_dir(root), "ledger.json")
-    entry = settlement(ledger, "gate")
-    if entry is None or entry["status"] == "running":
-        raise Refused("the gate has no settled ledger entry yet")
-    args = argparse.Namespace(out=run, ledger=ledger, any_openings=False)
-    os.makedirs(run, exist_ok=True)
-    return finalize(args, 0 if entry["status"] == "ok" else 1, "gate")
+    """``gate.py finalize --root``: recovery when the parent died after the
+    child settled but before it wrote ``gate.json``. It holds the loop's
+    owner lock (refused when busy), reads a plain snapshot of the gate
+    ledger (never rewriting it or settling a running entry), and rebuilds
+    the result from the provisional report under the same rules. The
+    settled status stands for the exit: the supervisor writes ``ok`` only
+    on exit 0. An existing ``gate.json`` is returned unchanged. It writes
+    nothing but ``gate.json``."""
+    lock = loopmod.Loop(root).owner()
+    try:
+        run = os.path.join(gate_dir(root), "run")
+        existing = os.path.join(run, "gate.json")
+        if os.path.exists(existing):
+            with open(existing, encoding="utf-8") as f:
+                return json.load(f)
+        if not os.path.exists(os.path.join(gate_dir(root), "claim.json")):
+            raise Refused("no gate was claimed on this loop root")
+        ledger = os.path.join(gate_dir(root), "ledger.json")
+        entry = settlement(ledger, "gate")
+        if entry is None or entry["status"] == "running":
+            raise Refused("the gate has no settled ledger entry yet")
+        args = argparse.Namespace(out=run, ledger=ledger, any_openings=False)
+        os.makedirs(run, exist_ok=True)
+        return finalize(args, 0 if entry["status"] == "ok" else 1, "gate")
+    finally:
+        lock.close()
 
 
 def main(argv=None) -> int:

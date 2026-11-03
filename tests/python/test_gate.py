@@ -485,6 +485,8 @@ def test_gate_finalize_recovers_after_the_parent_died(tmp_path, done_root, as_fo
 
 
 def test_gate_finalize_and_recover_never_rewrite_the_ledger(tmp_path, done_root, as_formal, bot, monkeypatch):
+    import fcntl
+
     from ledger import Ledger
 
     root, _, sha, _ = selected_root(tmp_path, done_root)
@@ -494,12 +496,28 @@ def test_gate_finalize_and_recover_never_rewrite_the_ledger(tmp_path, done_root,
     os.makedirs(args.out)
     led = Ledger(args.ledger, args.budget_core_hours)
     i, _ = led.reserve("gate 20261103T000000Z", 1, 60)
+    ledger = pathlib.Path(args.ledger)
+    running = ledger.read_bytes()
+    # Refusal while running: the entry is never settled by the recovery.
+    with pytest.raises(gate.Refused, match="no settled"):
+        gate.recover(str(root))
+    assert ledger.read_bytes() == running
     assert gate.work(args, None) == 0
     led.settle(i, 1, "ok")
-    before = pathlib.Path(args.ledger).read_bytes()
+    before = ledger.read_bytes()
+    # The normal path.
     gate.finalize(args, 0, "gate")
-    assert pathlib.Path(args.ledger).read_bytes() == before
+    assert ledger.read_bytes() == before
     os.remove(pathlib.Path(args.out) / "gate.json")
-    assert gate.recover(str(root))["pass"] is True
-    assert pathlib.Path(args.ledger).read_bytes() == before
-    assert json.loads(before)["budget_core_hours"] == 0.75
+    # Owner busy: refused, nothing written.
+    with open(root / "loop.lock", "a+") as held:
+        fcntl.flock(held, fcntl.LOCK_EX)
+        with pytest.raises(SystemExit, match="another loop"):
+            gate.recover(str(root))
+    assert not (pathlib.Path(args.out) / "gate.json").exists()
+    # Success, then an idempotent repeat.
+    first = gate.recover(str(root))
+    assert first["pass"] is True and gate.recover(str(root)) == first
+    assert ledger.read_bytes() == before
+    doc = json.loads(before)
+    assert doc["budget_core_hours"] == 0.75 and doc["entries"][-1]["status"] == "ok"
