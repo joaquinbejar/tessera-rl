@@ -46,7 +46,7 @@ An interrupted gate stays consumed. Its ledger entry holds the exit code and wal
 
 ## Blindness
 
-- **Who reads the set:** within the example, only this tool plays the evaluation set. The P2-M3 pilot timed a randomly initialized net on it before any training, and never selected or tuned with it. The pin test only hashes the file.
+- **Who reads the set:** within the example, only this tool plays the evaluation set. The P2-M3 pilot (`pilot.py`, #48, results in #49) timed an untrained random init on it before any training, and never selected or tuned with it. It stays as it is, allowlisted in the blindness test, because changing it would break #49's reproducibility. The pin test only hashes the file.
 - **Diagnostic mode:** `--any-openings --openings FIXTURE` is for tests and dry runs. It has no default fixture. It refuses the evaluation file and its aliases (symlinks, hard links, by device and inode) before opening it, and a byte-identical copy by digest. It never names a selection and has no verdict.
 
 This score is the only gate estimate. The selected checkpoint's held-out score is biased by repeated looks and is never reported as one.

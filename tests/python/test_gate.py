@@ -48,7 +48,8 @@ def test_gate_pass_rule_needs_900_wins_and_the_two_sided_lower_bound(wins, count
     assert r["lower_bound_at_least_0.90"] is (wins >= 919)
     if lb is not None:
         assert r["wilson_lower_z1.96"] == pytest.approx(lb, abs=1e-15)
-    assert not gate.passes(999, 999)["pass"], "a short gate never passes"
+    short = gate.passes(999, 999)
+    assert short["pass"] is None and short["invalid_because"], "a short gate has no verdict"
 
 
 # --------------------------------------------------------------- fixtures
@@ -202,6 +203,26 @@ def test_gate_second_claim_is_refused_whatever_paths_it_names(tmp_path, done_roo
     with pytest.raises(gate.Refused, match="already claimed"):
         gate.main(formal_argv(root, sha, bot))
     assert eval_trap == []
+
+
+def test_gate_refused_reservation_never_unblinds(tmp_path, done_root, as_formal, bot, eval_trap, monkeypatch):
+    """A reservation the ledger refuses stops the formal run after the
+    claim and before the child exists: the eval file is never opened,
+    and the claim stays consumed."""
+    import supervisor
+    from ledger import BudgetExceeded
+
+    root, _, sha, _ = selected_root(tmp_path, done_root)
+
+    def refuse(self, run, cores, deadline_s):
+        raise BudgetExceeded(f"{run}: refused for the test")
+
+    monkeypatch.setattr(supervisor.Ledger, "reserve", refuse)
+    with pytest.raises(BudgetExceeded):
+        gate.main(formal_argv(root, sha, bot))
+    assert (root / "gate" / "claim.json").exists() and eval_trap == []
+    with pytest.raises(gate.Refused, match="already claimed"):
+        gate.main(formal_argv(root, sha, bot))
 
 
 def scripted_play(wins):

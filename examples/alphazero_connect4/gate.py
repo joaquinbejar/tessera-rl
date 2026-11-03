@@ -100,7 +100,8 @@ class Refused(SystemExit):
 
 
 def passes(wins: int, games: int) -> dict:
-    """The ADR-0042 section 5 rule; ``pass`` needs exactly 1,000 games."""
+    """The ADR-0042 section 5 rule. ``pass`` is true or false on exactly
+    1,000 games, and null otherwise."""
     lb = h2h.wilson_lower(wins / games, games, Z) if games else 0.0
     return {
         "wins": wins,
@@ -108,7 +109,9 @@ def passes(wins: int, games: int) -> dict:
         "wilson_lower_z1.96": lb,
         "wins_at_least_900": wins >= WINS_MIN,
         "lower_bound_at_least_0.90": lb >= LB_MIN,
-        "pass": games == GAMES and wins >= WINS_MIN and lb >= LB_MIN,
+        # A short or overlong gate is invalid: no verdict, never false.
+        "pass": (wins >= WINS_MIN and lb >= LB_MIN) if games == GAMES else None,
+        "invalid_because": None if games == GAMES else f"{games} games, not {GAMES}",
     }
 
 
