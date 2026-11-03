@@ -13,6 +13,10 @@ The verdict block of `group-bench.json`, verbatim:
 
 The ratio is **observed shared-host throughput**: the host's production services ran alongside, as its normal state (see "Other containers"). It is not a speedup of the isolated engine.
 
+swarmer02 has 16 physical cores and 32 SMT threads, and the 32 "allocated cores" are logical CPUs. Part of the 1.83x is relief of SMT and shared-resource contention: single-tree games per busy second fall from 5.14 at W 8 to 2.04 at W 32. Do not extrapolate the ratio to hosts without SMT or to other core counts.
+
+SearchGroup is adopted but not used in the PR(3) run. The measurement covers the small net, the medium net was not starved, and the single-tree path that PR(2) validated is kept. SearchGroup stays in the codebase.
+
 ## Cells
 
 Each cell kept 7 rounds after 2 warmup rounds. Q = 32 logical games per worker per round, and no cell stopped.
