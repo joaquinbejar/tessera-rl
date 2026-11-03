@@ -1,0 +1,11 @@
+warning: Ignoring existing virtual environment linked to non-existent Python interpreter: `.venv/bin/python` -> `/root/.local/share/uv/python/cpython-3.11-linux-x86_64-gnu/bin/python3.11`
+Downloading cpython-3.11.18-linux-x86_64-gnu (download) (29.2MiB)
+ Downloaded cpython-3.11.18-linux-x86_64-gnu (download)
+Using CPython 3.11.18
+Removed virtual environment at: .venv
+Creating virtual environment at: .venv
+   Building tessera-rl @ file:///work/tessera
+      Built tessera-rl @ file:///work/tessera
+Installed 20 packages in 364ms
+ratio 1.8264066168803306 formal True adopted True
+{"status": "ok", "log": "/out/gb/run-swarmer02-20261103T113741Z.json"}
