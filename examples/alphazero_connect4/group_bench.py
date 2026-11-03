@@ -15,11 +15,14 @@ alpha 1.0 and eps 0.25, and temperature 1 for the first 8 plies.
 Game ``g`` of a cell is always the same logical game: its environment seed
 is ``seeds.env(run_seed, g)``, its search seed ``seeds.search(run_seed,
 g)`` and its slot state fresh. A group plays ``T`` games at once. Each
-round gives every worker the same number of games in every cell
+round gives every worker the same number of games in every cell (the
+equal-quota clarification, ADR-0045 addendum 1, agreed before any data)
 (``games_per_slot`` at the largest ``T``: 32), in batches of ``T``; each
 batch is a new ``SearchGroup`` of ``T`` slots that plays its games until all
-end (a finished slot goes inactive). Each worker's busy seconds per round
-are recorded. Membership never reseeds a game.
+end (a finished slot goes inactive). At the same W every cell plays the
+same game ids and seeds. Each worker's busy wall seconds and CPU seconds per
+round are recorded; games per busy wall second is companion evidence, never
+the criterion. See GROUP_BENCH.md. Membership never reseeds a game.
 
 The cells (pre-registered in ADR-0045 §5) are:
 - baseline single-tree at ``W`` in ``{1, 8, allocated}``;
@@ -207,9 +210,10 @@ def _round(task: tuple[str, list[list[int]]]) -> dict:
     """A worker's batches in order, each a list of its games, and the
     seconds the worker was busy with them."""
     kind, batches = task
-    t0 = time.perf_counter()
+    t0, c0 = time.perf_counter(), time.process_time()
     out = [single_games(gids) if kind == "single" else group_games(gids) for gids in batches]
-    return {"batches": out, "busy_s": time.perf_counter() - t0}
+    # Busy wall time and CPU time are separate observations.
+    return {"batches": out, "busy_wall_s": time.perf_counter() - t0, "busy_cpu_s": time.process_time() - c0}
 
 
 def games_per_worker(trees: list[int], games_per_slot: int) -> int:
@@ -280,7 +284,9 @@ def quant(xs):
 
 def cell(args, clock, kind: str, workers: int, t_: int) -> dict:
     name = f"{kind} W{workers} T{t_}"
-    info = {"kind": kind, "workers": workers, "trees": t_, "allocated_cores": args.cores}
+    # W = 1 keeps the allocated denominator; the idle allocation is recorded.
+    info = {"kind": kind, "workers": workers, "trees": t_, "allocated_cores": args.cores,
+            "unused_allocated_cores": args.cores - workers}  # fmt: skip
     try:
         clock.check(args.cell_allowance_s, name)
     except BudgetExceeded as e:
@@ -304,13 +310,14 @@ def cell(args, clock, kind: str, workers: int, t_: int) -> dict:
             wall = time.perf_counter() - t0
             last = wall
             games = [g for res in results for batch in res["batches"] for g in batch]
-            busy = [res["busy_s"] for res in results]
+            busy = [res["busy_wall_s"] for res in results]
+            cpu = [res["busy_cpu_s"] for res in results]
             # Logical worker -> batch -> slot -> game, with each game's length
             # and seeds (ADR-0045 §4), warmup rounds included.
             layout.append({"round": r, "warmup": r < args.warmup,
                            "workers": [{"worker": w, **res} for w, res in enumerate(results)]})  # fmt: skip
             if r >= args.warmup:
-                rounds.append({"wall_s": wall, "busy_s": busy, "games": len(games), "moves": sum(g["moves"] for g in games),
+                rounds.append({"wall_s": wall, "busy_wall_s": busy, "busy_cpu_s": cpu, "games": len(games), "moves": sum(g["moves"] for g in games),
                                "leaves": sum(g["leaves"] for g in games)})  # fmt: skip
     rate = [x["games"] / x["wall_s"] * 3600 / args.cores for x in rounds]
     return {
@@ -318,9 +325,10 @@ def cell(args, clock, kind: str, workers: int, t_: int) -> dict:
         "rounds_kept": len(rounds),
         "games_per_hour_per_allocated_core": quant(rate),
         "games_per_worker_per_round": per_worker,
-        # Companion: work per busy core-second, free of the round barrier's
-        # idle tail.
-        "games_per_busy_core_second": quant([x["games"] / sum(x["busy_s"]) for x in rounds]),
+        # Companion evidence only, never the criterion (ADR-0045 addendum 1):
+        # games per busy worker wall second, kept rounds only, free of the
+        # round barrier's idle tail.
+        "games_per_busy_wall_second": quant([x["games"] / sum(x["busy_wall_s"]) for x in rounds]),
         "moves_per_game": quant([x["moves"] / x["games"] for x in rounds]),
         "moves_per_hour": quant([x["moves"] / x["wall_s"] * 3600 for x in rounds]),
         "simulations_per_hour": quant([x["moves"] * args.sims / x["wall_s"] * 3600 for x in rounds]),

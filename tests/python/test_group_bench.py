@@ -106,11 +106,22 @@ def test_group_bench_shortened_or_altered_run_is_diagnostic_only(damage):
 def test_group_bench_every_cell_gives_each_worker_the_same_games_per_round():
     n = group_bench.games_per_worker([4, 8, 16], 2)
     assert n == 32
+    cfg = {"run_seed": 45}
+    by_w = {}
     for kind, w, t in group_bench.declared_cells(32, [4, 8, 16]):
         tasks = group_bench.worker_tasks(kind, w, t, 0, n)
+        assert tasks == group_bench.worker_tasks(kind, w, t, 0, n)  # deterministic membership
         assert len(tasks) == w
+        # Equal quota, batches of exactly T, no padding.
         assert all(sum(len(b) for b in batches) == 32 and all(len(b) == t for b in batches) for _, batches in tasks)
-        assert sorted(g for _, batches in tasks for b in batches for g in b) == list(range(w * 32))
+        ids = sorted(g for _, batches in tasks for b in batches for g in b)
+        assert ids == list(range(w * 32))  # no drop, no duplicate
+        # Per worker, the same logical games and seeds at the same W.
+        per_worker = [sorted(g for b in batches for g in b) for _, batches in tasks]
+        seeds_ = [[group_bench.slot_seeds(cfg, g) for g in mine] for mine in per_worker]
+        by_w.setdefault(w, []).append((per_worker, seeds_))
+    for w, cells in by_w.items():
+        assert all(c == cells[0] for c in cells), w
     with pytest.raises(SystemExit):
         group_bench.games_per_worker([3, 8], 1)
 
@@ -150,6 +161,14 @@ def test_group_bench_tiny_run_writes_every_cell(tmp_path):
     assert kinds == {("single", 1, 1), ("group", 1, 2), ("group", 1, 8)}
     assert all(c["rounds_kept"] == 1 and c["moves_per_game"]["n"] == 1 for c in report["cells"])
     assert {"boot_id", "cpu_model", "mem_total", "host"} <= set(report["runtime"])
+    assert all(c["unused_allocated_cores"] == 0 and c["games_per_busy_wall_second"]["n"] == 1 for c in report["cells"])
+    # At the same W, every cell's kept round plays the same logical games.
+    kept = [
+        sorted((g["g"], g["env_seed"], g["search_seed"]) for rnd in c["layout"] if not rnd["warmup"]
+               for w in rnd["workers"] for b in w["batches"] for g in b)
+        for c in report["cells"]
+    ]  # fmt: skip
+    assert all(k == kept[0] for k in kept)
     v = report["verdict"]
     assert v["formal"] is False and v["adopted"] is None and v["not_formal_because"]
     mw = report["matched_work"]
@@ -160,7 +179,7 @@ def test_group_bench_tiny_run_writes_every_cell(tmp_path):
     for cell in report["cells"]:
         for rnd in cell["layout"]:
             for w in rnd["workers"]:
-                assert w["busy_s"] > 0
+                assert w["busy_wall_s"] > 0 and w["busy_cpu_s"] >= 0
                 for batch in w["batches"]:
                     if cell["kind"] == "group":
                         sets = group_bench.active_sets(batch)
