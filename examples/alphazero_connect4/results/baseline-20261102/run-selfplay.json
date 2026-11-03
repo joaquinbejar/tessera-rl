@@ -1,0 +1,16 @@
+{
+ "run": "selfplay",
+ "host": "swarmer02",
+ "status": "ok",
+ "ledger": {
+  "run": "selfplay 20261102T200803Z",
+  "host": "swarmer02",
+  "pid": 905,
+  "cores": 32,
+  "deadline_s": 1150.0,
+  "started": "2026-11-02T20:08:03Z",
+  "wall_s": 461.873,
+  "core_hours": 4.105534,
+  "status": "ok"
+ }
+}

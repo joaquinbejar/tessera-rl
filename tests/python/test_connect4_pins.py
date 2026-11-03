@@ -19,6 +19,8 @@ PINS = {
     "tools/connect4-ref/src/calibrate.rs": "4d97d0cdeb8c013747c81d6ad67b178cfe0d3fb51e924cc2f0755e98697e08ca",
     "compat/connect4/openings-eval.txt": "54a1cea7e6fe70d53a039bc27176486953c8bb6a243353175128526702360475",
     "compat/connect4/openings-heldout.txt": "3276d2d044c911ed29c36f2d42690697f19a4bac0183e3a77b1af3c5af72cc49",
+    # P2-M3 dev set, frozen before any training (DEV-PROVENANCE.md).
+    "compat/connect4/openings-dev.txt": "6208bf759e5adf712040f37f05da9a33c469e57ce077b1e6eb8a3270faffebd2",
 }
 
 

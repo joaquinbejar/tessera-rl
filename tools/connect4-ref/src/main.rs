@@ -8,6 +8,10 @@
 //! - `calibrate OPENINGS THREADS GAMES`: prints the bot's calibration as
 //!   JSON (random play, depth-1, solver agreement, games against the
 //!   solver from the first `GAMES` openings).
+//! - `dev-openings EVAL HELDOUT DEV_OUT`: writes the 200 P2-M3 dev
+//!   openings (seeds from `DEV_BASE`), disjoint up to mirror from both
+//!   opening files, and prints the disjointness check as JSON. Pipeline
+//!   checks only; never P2-G1 evaluation or checkpoint selection.
 //! - `solve MOVES`: prints the exact score of a position.
 //! - `serve`: the pinned bot as a line protocol, for the P2-M3 example.
 //!   Each input line is `TIE_SEED MOVES` (the tie seed in hex with a `0x`
@@ -32,15 +36,23 @@ use solver::Solver;
 const EVAL_BASE: u64 = 0x5032_4731_0000_0000;
 /// Seed base of the 200 held-out openings.
 const HELDOUT_BASE: u64 = 0x5032_4731_8000_0000;
+/// Seed base of the 200 P2-M3 dev openings (pipeline checks only).
+const DEV_BASE: u64 = 0x5032_4731_4000_0000;
+const DEV_COUNT: usize = 200;
 const EVAL_COUNT: usize = 500;
 const HELDOUT_COUNT: usize = 200;
 
 fn write_openings(path: &str, kind: &str, base: u64, list: &[Opening]) -> io::Result<()> {
+    write_titled(path, &format!("P2-G1 {kind}"), base, list)
+}
+
+/// Writes an opening file whose header line starts with `title`.
+fn write_titled(path: &str, title: &str, base: u64, list: &[Opening]) -> io::Result<()> {
     let mut out = String::new();
     out.push_str("# SPDX-License-Identifier: MIT OR Apache-2.0\n");
     let _ = writeln!(
         out,
-        "# P2-G1 {kind} openings (ADR-0042): K={} random plies, forced-win filter L={}, seed base {base:#018x}.",
+        "# {title} openings (ADR-0042): K={} random plies, forced-win filter L={}, seed base {base:#018x}.",
         openings::K,
         openings::L
     );
@@ -194,6 +206,41 @@ fn run(args: &[String]) -> io::Result<String> {
                 games.min(openings.len()),
                 first.json(),
                 second.json()
+            ))
+        }
+        Some("dev-openings") => {
+            let (eval_in, held_in, dev_out) = (
+                args.get(1).ok_or_else(bad)?,
+                args.get(2).ok_or_else(bad)?,
+                args.get(3).ok_or_else(bad)?,
+            );
+            let keys = |path: &str| -> io::Result<BTreeSet<u64>> {
+                Ok(read_openings(path)?
+                    .iter()
+                    .map(Position::canonical_key)
+                    .collect())
+            };
+            let (eval, held) = (keys(eval_in)?, keys(held_in)?);
+            let taken: BTreeSet<u64> = eval.union(&held).copied().collect();
+            let mut solver = Solver::new();
+            let dev = openings::generate(DEV_BASE, DEV_COUNT, &taken, &mut solver);
+            let dev_keys: BTreeSet<u64> = dev
+                .iter()
+                .filter_map(|o| Position::from_moves(&o.moves))
+                .map(|p| p.canonical_key())
+                .collect();
+            write_titled(
+                dev_out,
+                "P2-M3 dev (pipeline checks only, not P2-G1)",
+                DEV_BASE,
+                &dev,
+            )?;
+            Ok(format!(
+                "{{\"dev\": {}, \"distinct_up_to_mirror\": {}, \"shared_with_eval\": {}, \"shared_with_heldout\": {}}}",
+                dev.len(),
+                dev_keys.len(),
+                dev_keys.intersection(&eval).count(),
+                dev_keys.intersection(&held).count()
             ))
         }
         Some("solve") => {
