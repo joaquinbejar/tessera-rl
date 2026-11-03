@@ -213,6 +213,74 @@ def test_loop_refuses_a_second_owner(tmp_path, clean_run):
             loop.Loop(str(root)).select()
 
 
+@pytest.mark.parametrize("damage", ["failed", "deleted"])
+def test_loop_refuses_descriptors_without_their_ok_settlement(tmp_path, clean_run, damage):
+    import assets
+
+    root = copy_root(clean_run[0], tmp_path / "root")
+    ledger = root / "ledger.json"
+    if damage == "failed":
+        doc = json.loads(ledger.read_text())
+        for e in doc["entries"]:
+            if e["run"].split("-")[1] in ("selfplay", "train"):
+                e["status"] = "failed: exit 1"
+        ledger.write_text(json.dumps(doc))
+    else:
+        ledger.unlink()
+    r = run_loop(root)
+    assert r.returncode == 0, r.stderr
+    last = json.loads(r.stdout.strip().splitlines()[-1])
+    assert last["stop"] == "incomplete input" and "settlement" in last["inputs"]["reason"]
+    with pytest.raises(loop.Stop, match="incomplete input"):
+        loop.Loop(str(root)).select()
+    with pytest.raises(SystemExit, match="broken history"):
+        assets.pack(str(root), str(tmp_path / "out"), "p2-m3-train-test")
+
+
+def test_loop_look_reference_needs_its_settled_origin(tmp_path, clean_run):
+    root = copy_root(clean_run[0], tmp_path / "root")
+    lp = loop.Loop(str(root))
+    gens = lp.chain(lp.ledger.entries())
+    gens[1]["c_k1"] = gens[0]["look"]["identity"]["checkpoint_sha256"]
+    shutil.rmtree(root / "gen-001" / "look-0")
+    assert lp.reuse_look(gens, 1)
+    doc = json.loads((root / "ledger.json").read_text())
+    for e in doc["entries"]:
+        if e["run"].startswith("g000-look-0 "):
+            e["status"] = "failed: exit 1"
+    (root / "ledger.json").write_text(json.dumps(doc))
+    with pytest.raises(loop.Stop, match="incomplete input"):
+        lp.resolve(1, "look", lp.ledger.entries())
+
+
+def test_loop_asset_operations_hold_the_owner_lock(tmp_path, clean_run):
+    import assets
+
+    root = copy_root(clean_run[0], tmp_path / "root")
+    out = tmp_path / "out"
+    m = assets.pack(str(root), str(out), "p2-m3-train-test")
+    sp = next(a for a in m["assets"] if a["attempt"] == "g000-selfplay-0")
+    shards = sorted((root / "gen-000" / "selfplay-0").glob("shard-*"))
+    with open(root / "loop.lock", "a+") as held:
+        fcntl.flock(held, fcntl.LOCK_EX)
+        for op in (lambda: assets.pack(str(root), str(out), "p2-m3-train-test"),
+                   lambda: assets.evict(str(root), str(out / sp["name"])),
+                   lambda: assets.restore(str(root), str(out / sp["name"]))):  # fmt: skip
+            with pytest.raises(SystemExit, match="another loop"):
+                op()
+    assert sorted((root / "gen-000" / "selfplay-0").glob("shard-*")) == shards
+    # Idle: evict then restore succeed, and an interrupted eviction (mark
+    # written, files partly left) resumes by running it again.
+    assets.evict(str(root), str(out / sp["name"]))
+    assert not list((root / "gen-000" / "selfplay-0").glob("shard-*"))
+    assets.restore(str(root), str(out / sp["name"]))
+    assert sorted((root / "gen-000" / "selfplay-0").glob("shard-*")) == shards
+    assets.evict(str(root), str(out / sp["name"]))
+    assets.evict(str(root), str(out / sp["name"]))
+    assets.restore(str(root), str(out / sp["name"]))
+    assert "evicted" not in json.loads((root / "gen-000" / "selfplay-0" / "attempt.json").read_text())
+
+
 def test_loop_selection_comes_from_evidence_not_the_log(tmp_path, clean_run):
     root = copy_root(clean_run[0], tmp_path / "root")
     # A forged audit entry for a checkpoint with no look: ignored.

@@ -22,7 +22,7 @@ This file pre-registers the training loop before any run. The contract is design
 ## Exactly-once recovery
 
 - **Attempts:** every phase attempt `(k, phase, n)` has a fresh directory `gen-<k>/<phase>-<n>/` and its ledger run name `g<k>-<phase>-<n>`. Its command is recorded next to it.
-- **Done:** an attempt is done when its output is complete and digest-verified, or evicted after a verified upload, **and** its ledger entry is `ok`.
+- **Done:** an attempt is done when its output is complete and digest-verified, or evicted after a verified upload, **and** its ledger entry is `ok`. That settlement is rechecked on every resolution: a descriptor whose entry is failed or missing (a reset ledger included) is broken history and stops the loop with `incomplete input`, and so does a look reference whose origin is not settled.
 - **Descriptor:** the loop then writes `attempt.json`, the attempt's immutable identity: output digests, inputs and command.
 - **Recomputed from evidence:** every decision comes from the descriptors, the ledger and the pinned lineage:
   - `C_0` matches the configured digest;
@@ -78,7 +78,7 @@ The stop reasons are `K_max`, `budget`, `early`, `failed` (3 attempts), `disk` (
 
 `assets.py verify` checks every download and refuses substitutes. The manifest only grows; a changed entry is refused.
 
-`assets.py evict` removes an attempt's output only after the read-back of its asset verifies. It keeps the descriptor, marked evicted with its asset entry. An evicted input that a later phase needs (the active window, the current checkpoint) stops the loop with `incomplete input` until `assets.py restore` brings it back from a verified asset.
+`assets.py evict` removes an attempt's output only after the read-back of its asset verifies. It keeps the descriptor, marked evicted with its asset entry. An evicted input that a later phase needs (the active window, the current checkpoint) stops the loop with `incomplete input` until `assets.py restore` brings it back from a verified asset. `pack`, `evict` and `restore` hold the loop's owner lock and refuse a broken history. Eviction writes its mark before deleting and restore clears it last, so an interrupted operation resumes by running it again.
 
 ## Results
 

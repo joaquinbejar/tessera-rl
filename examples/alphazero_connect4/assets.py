@@ -22,6 +22,9 @@ loop still resolves the attempt's identity. An evicted input that a later
 phase needs stops the loop with ``incomplete input`` until ``restore``
 brings it back. ``restore`` extracts a verified asset and clears the mark.
 
+``pack``, ``evict`` and ``restore`` hold the loop's owner lock and refuse
+a history whose recorded attempts lack their ok ledger settlement.
+
 ``verify`` refuses any substitute: a mismatching asset is a broken
 artifact, never a silent re-upload.
 """
@@ -29,6 +32,7 @@ artifact, never a silent re-upload.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import os
 import shutil
@@ -72,6 +76,33 @@ def load_manifest(root: str) -> dict:
 
 def pack(root: str, out: str, tag: str) -> dict:
     lp = loopmod.Loop(root)
+    with _owned(lp):
+        return _pack(lp, root, out, tag)
+
+
+def _owned(lp):
+    """Every operation that reads or changes the root holds the loop's
+    owner lock, so it never races a running loop."""
+    return contextlib.closing(lp.owner())
+
+
+def _verified(lp) -> list[dict]:
+    """The settled, verified history: every recorded attempt resolves
+    against an ok ledger entry, or this refuses."""
+    entries = lp.ledger.entries()
+    try:
+        lp.chain(entries)
+        for gen in sorted(os.listdir(lp.root)):
+            if gen.startswith("gen-"):
+                for phase in loopmod.PHASES:
+                    lp.resolve(int(gen[4:]), phase, entries)
+    except loopmod.Stop as s:
+        raise SystemExit(f"broken history: {s.reason} {json.dumps(s.inputs, sort_keys=True)}") from None
+    return entries
+
+
+def _pack(lp, root: str, out: str, tag: str) -> dict:
+    _verified(lp)
     manifest = load_manifest(root)
     if manifest["tag"] not in (None, tag):
         raise SystemExit(f"the root's assets belong to release {manifest['tag']}, not {tag}")
@@ -123,30 +154,43 @@ def attempt_dir(root: str, attempt: str) -> str:
 
 
 def evict(root: str, readback: str) -> None:
-    """Removes an attempt's output after its asset's read-back verifies."""
-    entry = verify(load_manifest(root), readback)
-    d = attempt_dir(root, entry["attempt"])
-    desc = loopmod.Loop(root).descriptor(d)
-    if desc is None:
-        raise SystemExit(f"{entry['attempt']} has no descriptor")
-    for name in os.listdir(d):
-        if name != "attempt.json":
-            p = os.path.join(d, name)
-            shutil.rmtree(p) if os.path.isdir(p) else os.remove(p)
-    artifacts.write_atomic(os.path.join(d, "attempt.json"), artifacts.canonical_json({**desc, "evicted": entry}))
+    """Removes an attempt's output after its asset's read-back verifies.
+    The mark is written first, so an interrupted eviction resumes by
+    running it again, and restore can always bring the output back."""
+    lp = loopmod.Loop(root)
+    with _owned(lp):
+        entry = verify(load_manifest(root), readback)
+        _verified(lp)
+        d = attempt_dir(root, entry["attempt"])
+        desc = lp.descriptor(d)
+        if desc is None:
+            raise SystemExit(f"{entry['attempt']} has no descriptor")
+        artifacts.write_atomic(os.path.join(d, "attempt.json"), artifacts.canonical_json({**desc, "evicted": entry}))
+        for name in os.listdir(d):
+            if name != "attempt.json":
+                p = os.path.join(d, name)
+                shutil.rmtree(p) if os.path.isdir(p) else os.remove(p)
 
 
 def restore(root: str, asset: str) -> None:
-    """Extracts a verified asset into its attempt and clears the mark."""
-    entry = verify(load_manifest(root), asset)
-    d = attempt_dir(root, entry["attempt"])
-    desc = loopmod.Loop(root).descriptor(d)
-    with tarfile.open(asset) as tar:
-        tar.extractall(d, filter="data")
-    desc.pop("evicted", None)
-    artifacts.write_atomic(os.path.join(d, "attempt.json"), artifacts.canonical_json(desc))
-    # The restored output must match the recorded identity.
-    loopmod.Loop(root).resolve(desc["generation"], desc["phase"], loopmod.Loop(root).ledger.entries())
+    """Extracts a verified asset into its attempt, then clears the mark;
+    an interrupted restore resumes by running it again."""
+    lp = loopmod.Loop(root)
+    with _owned(lp):
+        entry = verify(load_manifest(root), asset)
+        d = attempt_dir(root, entry["attempt"])
+        desc = lp.descriptor(d)
+        if desc is None:
+            raise SystemExit(f"{entry['attempt']} has no descriptor")
+        with tarfile.open(asset) as tar:
+            tar.extractall(d, filter="data")
+        desc.pop("evicted", None)
+        # The restored output must match the recorded identity before the
+        # mark goes.
+        if lp.identity(desc["phase"], d) != desc["identity"]:
+            raise SystemExit(f"{entry['attempt']}: the restored output differs from its identity")
+        artifacts.write_atomic(os.path.join(d, "attempt.json"), artifacts.canonical_json(desc))
+        _verified(lp)
 
 
 def main(argv=None) -> int:

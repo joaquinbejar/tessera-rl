@@ -200,6 +200,11 @@ class Loop:
             attempt = self.attempt_id(k, phase, n)
             desc = self.descriptor(d) if os.path.isdir(d) else None
             if desc is not None:
+                # The ledger is authoritative: a descriptor without its ok
+                # settlement (a failed, missing or reset ledger) is broken
+                # history, never a done attempt.
+                if not self.ledger_ok(attempt, entries):
+                    raise Stop("incomplete input", {"attempt": attempt, "reason": "no ok ledger settlement for a recorded attempt"})
                 if not desc.get("evicted"):
                     try:
                         ok = self.identity(phase, d) == desc["identity"]
@@ -222,8 +227,29 @@ class Loop:
             n += 1
         ref = os.path.join(self.root, f"gen-{k:03d}", f"{phase}-ref")
         if done is None and phase == "look" and os.path.exists(os.path.join(ref, "attempt.json")):
-            done = {**self.descriptor(ref), "dir": ref}
+            desc = self.descriptor(ref)
+            origin = self.origin(desc["ref"], entries)
+            if origin["identity"] != desc["identity"]:
+                raise Stop("incomplete input", {"attempt": desc["attempt"], "reason": "a look reference differs from its origin"})
+            done = {**desc, "dir": ref}
         return done, n
+
+    def origin(self, attempt: str, entries: list[dict]) -> dict:
+        """The verified, settled look attempt a reference names."""
+        gen, _, n = attempt.split("-")
+        k = int(gen[1:])
+        d = self.attempt_dir(k, "look", int(n))
+        desc = self.descriptor(d) if os.path.isdir(d) else None
+        if desc is None or desc["attempt"] != attempt or not self.ledger_ok(attempt, entries):
+            raise Stop("incomplete input", {"attempt": attempt, "reason": "a referenced look is missing or unsettled"})
+        if not desc.get("evicted"):
+            try:
+                ok = self.identity("look", d) == desc["identity"]
+            except LOAD_ERRORS:
+                ok = False
+            if not ok:
+                raise Stop("incomplete input", {"attempt": attempt, "reason": "recorded output missing or changed"})
+        return desc
 
     # ------------------------------------------------------------ lineage
 
