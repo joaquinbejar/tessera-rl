@@ -13,7 +13,7 @@ The verdict block of `group-bench.json`, verbatim:
 
 The ratio is **observed shared-host throughput**: the host's production services ran alongside, as its normal state (see "Other containers"). It is not a speedup of the isolated engine.
 
-swarmer02 has 16 physical cores and 32 SMT threads, and the 32 "allocated cores" are logical CPUs. Part of the 1.83x is relief of SMT and shared-resource contention: single-tree games per busy second fall from 5.14 at W 8 to 2.04 at W 32. Do not extrapolate the ratio to hosts without SMT or to other core counts.
+swarmer02 has 16 physical cores and 32 SMT threads, and the 32 "allocated cores" are logical CPUs. The 1.83x is consistent with SMT and shared-resource contention, since single-tree games per busy second fall from 5.14 at W 8 to 2.04 at W 32. That share is not quantified; it is not a measured causal part of the ratio. Do not extrapolate the ratio to hosts without SMT or to other core counts.
 
 SearchGroup is adopted but not used in the PR(3) run. The measurement covers the small net, the medium net was not starved, and the single-tree path that PR(2) validated is kept. SearchGroup stays in the codebase.
 
@@ -71,6 +71,36 @@ Cleanup:
 - The evidence was copied to the Mac first.
 - Then `~/tessera-rl-m3gb` was removed and the image deleted with `docker rmi`.
 - `docker ps -a --filter name=tessera-m3` was empty, and the volume set was unchanged (17). The trap in `run.sh` reported neither a leftover container nor a changed volume set.
+
+## Wrapper changes after registration
+
+`scripts/run.sh` went through three versions. The one that ran the measurement was frozen and announced (ACS #tessera-rl, msg 50587) before `sh run.sh measure` started.
+
+1. `8fa55c49…`: the first draft (msg 50450). It never ran.
+2. `80d63cda8f4164b2e8d490cb026658a92ea9e620d77e901033b04f1c911c255d`: the coordinator's fixes (msg 50455), which are absolute bind-mount paths, `export S1` and the volume-set check. This version ran the init-only step (`launch-init.json`) and is the one registered in msg 50479.
+3. `26447f8cb5bb28bc4debce140108965e0494879096091edb9720a184f90e4589`: the measurement wrapper. It adds only the host-side CPU sampler that the coordinator's go required (msg 50488). The whole diff from 80d63cda:
+
+```diff
+@@ -11,7 +11,9 @@
+ cd "$DIR" || exit 2
+ export S1
+ VOLUMES_BEFORE=$(docker volume ls -q | sort)
++SAMPLER=
+ cleanup() {
++  [ -n "$SAMPLER" ] && kill "$SAMPLER" 2>/dev/null
+   docker rm -f "$NAME" >/dev/null 2>&1
+@@ -22,6 +24,10 @@
+ }
+ trap cleanup EXIT INT TERM HUP
+ mkdir -p out
++if [ "$PHASE" = measure ]; then
++  sh "$DIR/sampler.sh" >> "$DIR/out/others-cpu.log" 2>&1 &
++  SAMPLER=$!
++fi
+ start=$(date +%s)
+```
+
+The diff leaves these unchanged: the `docker run` line, mounts, environment, cap, timeout and trap logic, `inner-measure.sh` (`38e9cdc5…`), `pre.sh` (`c320dce1…`) and the measurement protocol. `sampler.sh` is `ea33fbb8faeeadf80d2b24bc60e901999107b973c557ded74f5f189a40bd7115`. Every script was checked with `sha256sum` on the host after upload, and the committed `scripts/` are those exact files.
 
 ## Addendum 1 records
 
