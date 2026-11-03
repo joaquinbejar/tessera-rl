@@ -1,0 +1,17 @@
+{
+ "budget_core_hours": 24.0,
+ "spent_core_hours": 5.390195,
+ "entries": [
+  {
+   "run": "group-bench 20261103T113741Z",
+   "host": "swarmer02",
+   "pid": 166,
+   "cores": 32,
+   "deadline_s": 2700.0,
+   "started": "2026-11-03T11:37:41Z",
+   "wall_s": 606.397,
+   "core_hours": 5.390195,
+   "status": "ok"
+  }
+ ]
+}
