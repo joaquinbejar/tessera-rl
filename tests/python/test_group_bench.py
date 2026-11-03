@@ -30,6 +30,7 @@ def c(kind, w, t, median, kept=7):
 def formal_inputs(cores=32):
     cells = [c(k, w, t, 100.0) for k, w, t in group_bench.declared_cells(cores, [4, 8, 16])]
     config = {**group_bench.FORMAL, "cores": cores}
+    assert config["run_seed"] == 45 and config["matched_roots"] == 64
     mw = {"stopped": None, "speedup": 1.3}
     runtime = {"host": "swarmer02", "image_digest": group_bench.h2h.REGISTERED_IMAGE, "cpuset": f"0-{cores - 1}", "affinity_cores": cores,
                "torch_threads": 1, "torch_interop_threads": 1, "deterministic": True}  # fmt: skip
@@ -54,7 +55,7 @@ def test_group_bench_verdict_ratios_and_formal_adoption():
 
 @pytest.mark.parametrize(
     "damage",
-    ["one-kept-round", "no-warmup", "trees", "sims", "net", "any-size", "allocation", "threads", "image",
+    ["one-kept-round", "no-warmup", "trees", "sims", "run-seed", "matched-roots", "net", "any-size", "allocation", "threads", "image",
      "other-host", "missing-host", "missing-cell", "stopped-cell", "matched-missing", "matched-stopped"],
 )  # fmt: skip
 def test_group_bench_shortened_or_altered_run_is_diagnostic_only(damage):
@@ -69,6 +70,10 @@ def test_group_bench_shortened_or_altered_run_is_diagnostic_only(damage):
         config["trees"] = [8]
     elif damage == "sims":
         config["sims"] = 50
+    elif damage == "run-seed":
+        config["run_seed"] = 46
+    elif damage == "matched-roots":
+        config["matched_roots"] = 8
     elif damage == "net":
         size = "medium"
     elif damage == "any-size":
@@ -132,6 +137,7 @@ def test_group_bench_tiny_run_writes_every_cell(tmp_path):
     kinds = {(c["kind"], c["workers"], c["trees"]) for c in report["cells"]}
     assert kinds == {("single", 1, 1), ("group", 1, 2), ("group", 1, 8)}
     assert all(c["rounds_kept"] == 1 and c["moves_per_game"]["n"] == 1 for c in report["cells"])
+    assert {"boot_id", "cpu_model", "mem_total", "host"} <= set(report["runtime"])
     v = report["verdict"]
     assert v["formal"] is False and v["adopted"] is None and v["not_formal_because"]
     mw = report["matched_work"]

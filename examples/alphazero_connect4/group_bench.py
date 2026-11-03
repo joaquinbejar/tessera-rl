@@ -50,6 +50,11 @@ Companion evidence, per cell:
 - the layout of every round: worker, batch, slot, logical game, its length
   and seeds, and each group's active schedule (ADR-0045 §4).
 
+The runtime block records the host name, the boot id, the CPU model and
+the memory size. The host name is self-declared provenance (the container
+is launched with ``--hostname swarmer02`` under the reviewed run plan),
+not an attestation of the machine.
+
 Usage::
 
     python examples/alphazero_connect4/group_bench.py --checkpoint SMALL.pt --out DIR \\
@@ -128,13 +133,16 @@ def single_games(gids: list[int]) -> list[dict]:
         search = Search(simulations=cfg["sims"], batch_size=cfg["batch_size"], capacity=cfg["capacity"],
                         seed=seeds.search(cfg["run_seed"], g), **NOISE)  # fmt: skip
         board = game.Board(seeds.env(cfg["run_seed"], g))
-        timing = game.Timing()
         leaves0 = ev.leaves
         try:
+            # The same calls, in the same mode, as a group slot: set_root,
+            # run, select_action; no extra per-move work on either path.
             while not board.over:
                 t = 1.0 if len(board.moves) < TEMPERATURE_PLIES else 0.0
-                col, _ = game.search_move(search, board, ev, timing, t)
-                board.play(col)
+                search.set_root(board.record())
+                with torch.inference_mode():
+                    search.run(ev)
+                board.play(search.select_action(t))
             out.append({"g": g, "moves": len(board.moves), "leaves": ev.leaves - leaves0, **slot_seeds(cfg, g)})
         finally:
             board.close()
@@ -347,7 +355,7 @@ def matched(args, clock, t_: int) -> dict:
 # The pre-registered protocol (ADR-0045 §5). Only a run on exactly this,
 # with every cell and the matched-work evidence complete on the declared
 # allocation, may adopt or reject; anything else is diagnostic.
-FORMAL = {"warmup": 2, "repeats": 7, "games_per_slot": 2, "sims": 100, "batch_size": 8, "capacity": 8192,
+FORMAL = {"warmup": 2, "repeats": 7, "games_per_slot": 2, "run_seed": 45, "matched_roots": 64, "sims": 100, "batch_size": 8, "capacity": 8192,
           "trees": [4, 8, 16], "matched_warmup": 2, "any_size": False}  # fmt: skip
 
 
@@ -406,6 +414,8 @@ def verdict(cells: list[dict], cores: int, repeats: int, why: list[str] | None =
         "games per hour per allocated core",
         "ratio": ratio,
         "diagnostic_ratio_w1": d_group / d_base if d_base and d_group else None,
+        "normalization": f"every cell, W = 1 included, divides by the {cores} allocated cores; "
+        "the W = 1 ratio is unaffected, its absolute rates are not per busy core",
         "formal": formal,
         "not_formal_because": why,
         "adopted": (ratio >= ADOPTION_RATIO) if formal else None,
