@@ -71,7 +71,7 @@ Every phase runs under the supervisor, and the run is announced on #tessera-rl f
 
 **PASS.** This is the nominal, descriptive criterion above; the result is reported as measured, with no rerun.
 
-All three tools ran from a git archive of `ba8bb5245dfbef38e5b80321a186e94d90566c8f` (PR #51 before its rebase). After the rebase onto main `8ca4792`, its counterpart `d474fcc` is content-identical to it for `examples/alphazero_connect4`, `compat` and `tools/connect4-ref`, and under `tests` it differs only by `tests/python/test_search_group.py`, which #50 added, with image `rust:1.99.1@sha256:09027f873d45b8ecd1dc86f1fa13b7a62b875c961f017a0e331267b350430137`. The artifacts are in [`results/baseline-20261102/`](results/baseline-20261102/).
+All three tools ran from a git archive of `ba8bb5245dfbef38e5b80321a186e94d90566c8f` (PR #51 before its rebase). After the rebase onto main `8ca4792`, its counterpart `d474fcc` is content-identical to it for `examples/alphazero_connect4`, `compat` and `tools/connect4-ref`, and under `tests` it differs only by `tests/python/test_search_group.py`, which #50 added. The image was `rust:1.99.1@sha256:09027f873d45b8ecd1dc86f1fa13b7a62b875c961f017a0e331267b350430137`. The artifacts are in [`results/baseline-20261102/`](results/baseline-20261102/).
 
 ### Head-to-head (the criterion)
 
