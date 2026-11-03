@@ -237,6 +237,7 @@ def parse(argv):
     p.add_argument("--capacity", type=int, default=8192)
     p.add_argument("--round-games", type=int, default=32)
     p.add_argument("--source-sha", required=True)
+    p.add_argument("--attempt", default="selfplay", help="the ledger run name (the loop's attempt id)")
     p.add_argument("--ledger", required=True)
     p.add_argument("--cores", type=int, required=True)
     p.add_argument("--budget-core-hours", type=float, required=True)
@@ -261,7 +262,7 @@ def main(argv=None) -> int:
         cores=args.cores,
         wall_cap_s=args.wall_cap_s,
         out=args.out,
-        name="selfplay",
+        name=args.attempt,
     )
 
 

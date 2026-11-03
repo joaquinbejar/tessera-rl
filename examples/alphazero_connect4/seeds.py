@@ -10,7 +10,9 @@ canonical tuple bytes::
     || index as 8 bytes little-endian
 
 The domains are ``env`` (index: the logical game id), ``search`` (index:
-the game id) and ``shuffle`` (index: the epoch). No seed depends on the
+the game id) and ``shuffle`` (index: the epoch); PR 3 adds ``generation``
+(the self-play run seed of generation k) and ``sample`` (the batch sampler
+of generation k). No seed depends on the
 worker count, the worker or the shard. Every derived seed is checked
 against the seed ranges the project already uses (the ADR-0042 bot tie
 seeds and the evaluation, held-out and dev opening seeds), and a
@@ -22,7 +24,7 @@ from __future__ import annotations
 import hashlib
 
 PREFIX = b"tessera-rl/p2-m3/seed/v1\x00"
-DOMAINS = ("env", "search", "shuffle")
+DOMAINS = ("env", "search", "shuffle", "generation", "sample")
 
 # Seed ranges in use elsewhere: (name, base); each covers base + [0, 1000).
 RESERVED = (
@@ -35,7 +37,7 @@ RESERVED_SPAN = 1000
 
 DERIVATION = (
     "sha256(b'tessera-rl/p2-m3/seed/v1\\x00' || u64le(run_seed) || utf8(domain) || b'\\x00' || u64le(index))[0:8] "
-    "as u64 little-endian; domains env(g), search(g), shuffle(epoch)"
+    "as u64 little-endian; domains env(g), search(g), shuffle(epoch), generation(k), sample(k)"
 )
 
 
@@ -70,3 +72,11 @@ def search(run_seed: int, g: int) -> int:
 
 def shuffle(run_seed: int, epoch: int) -> int:
     return derive(run_seed, "shuffle", epoch)
+
+
+def generation(base: int, k: int) -> int:
+    return derive(base, "generation", k)
+
+
+def sample(base: int, k: int) -> int:
+    return derive(base, "sample", k)

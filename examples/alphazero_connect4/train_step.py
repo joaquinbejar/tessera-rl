@@ -48,6 +48,7 @@ import augment  # noqa: E402
 import ckpt  # noqa: E402
 import net as netmod  # noqa: E402
 import provenance  # noqa: E402
+import schedule  # noqa: E402
 import seeds  # noqa: E402
 import supervisor  # noqa: E402
 
@@ -180,6 +181,114 @@ def train(model, planes, policy, z, run_seed: int, epochs: int, batch: int, cloc
 EXIT_DIVERGED = 5
 
 
+def train_window(model, planes, policy, z, generation: int, base: int, steps: int, batch: int):
+    """PR 3: ``steps`` steps of generation ``generation`` (at most
+    ``schedule.STEPS``), each a batch drawn uniformly with replacement from
+    the mirror-augmented window pool. The rate follows the registered
+    schedule at ``t = generation * schedule.STEPS + s``. A fresh optimizer
+    is built each generation: momentum is reset by design. Returns the
+    per-step losses and counts."""
+    if not 1 <= steps <= schedule.STEPS:
+        raise ValueError(f"steps must be in 1..{schedule.STEPS}")
+    # The augmented pool is the samples then their mirrors (index i >= N
+    # is the mirror of i - N), sampled lazily: only the batch is mirrored.
+    x_base = torch.from_numpy(np.ascontiguousarray(planes, dtype=np.float32))
+    pol_base = torch.from_numpy(np.ascontiguousarray(policy, dtype=np.float32))
+    v_base = torch.from_numpy(np.ascontiguousarray(z, dtype=np.float32))
+    half = len(z)
+    n = 2 * half
+    rng = np.random.Generator(np.random.PCG64(seeds.sample(base, generation)))
+    indices = rng.integers(0, n, size=(steps, batch))
+
+    def batch_of(idx: np.ndarray):
+        src = torch.from_numpy(idx % half)
+        mirrored = torch.from_numpy(idx >= half)
+        x = x_base[src].clone()
+        x[mirrored] = x[mirrored].flip(-1)
+        p = pol_base[src].clone()
+        p[mirrored] = p[mirrored].flip(-1)
+        return x, p, v_base[src]
+
+    opt = torch.optim.SGD(
+        model.parameters(),
+        lr=schedule.lr(schedule.global_step(generation, 0)),
+        momentum=HYPER["momentum"],
+        nesterov=HYPER["nesterov"],
+        weight_decay=HYPER["weight_decay"],
+    )
+    losses, rates = [], []
+    model.train()
+    try:
+        for s_ in range(steps):
+            rate = schedule.lr(schedule.global_step(generation, s_))
+            for group in opt.param_groups:
+                group["lr"] = rate
+            xb, pb, vb = batch_of(indices[s_])
+            logits, values = model(xb)
+            lp = -(pb * torch.log_softmax(logits, dim=1)).sum(dim=1).mean()
+            lv = ((values - vb) ** 2).mean()
+            loss = lp + HYPER["value_loss_weight"] * lv
+            if not bool(torch.isfinite(loss)):
+                raise Diverged(f"generation {generation} step {s_}: the loss is not finite")
+            opt.zero_grad()
+            loss.backward()
+            opt.step()
+            if not all(bool(torch.isfinite(t).all()) for t in model.state_dict().values() if t.is_floating_point()):
+                raise Diverged(f"generation {generation} step {s_}: a parameter is not finite")
+            losses.append([lp.item(), lv.item()])
+            rates.append(rate)
+    finally:
+        model.eval()
+    return losses, {
+        "augmented_samples": n,
+        "steps": steps,
+        "t_first": schedule.global_step(generation, 0),
+        "t_last": schedule.global_step(generation, steps - 1),
+        "lr_first_last": [rates[0], rates[-1]],
+        "indices_sha256": artifacts.sha256(np.ascontiguousarray(indices).tobytes()),
+    }
+
+
+def work_window(args, clock) -> int:
+    configure_torch()
+    if os.path.abspath(args.out) == os.path.abspath(args.checkpoint):
+        raise SystemExit("--out must not be the parent checkpoint")
+    if args.formal and args.steps != schedule.STEPS:
+        raise SystemExit(f"a formal run trains exactly {schedule.STEPS} steps per generation")
+    model, parent = ckpt.load(args.checkpoint)
+    planes, policy, z, digests = load_samples(args.data)
+    try:
+        losses, counts = train_window(model, planes, policy, z, args.generation, args.base, args.steps, args.batch)
+    except Diverged as e:
+        print(f"diverged, no checkpoint written: {e}", file=sys.stderr)
+        return EXIT_DIVERGED
+    if counts["steps"] < 1 or len(losses) != counts["steps"]:
+        raise SystemExit("no checkpoint without an update")
+    config = {
+        "parent_sha256": parent["sha256"],
+        "data_manifests": digests,
+        "generation": args.generation,
+        "base": args.base,
+        "steps": args.steps,
+        "batch": args.batch,
+        "schedule": {"k_max": schedule.K_MAX, "steps": schedule.STEPS, "lr_max": schedule.LR_MAX, "lr_min": schedule.LR_MIN},
+        "hyper": {k: v for k, v in HYPER.items() if k != "lr"},
+    }
+    meta = {
+        "kind": "p2-m3-checkpoint",
+        "provenance": provenance.block(args.source_sha, config),
+        **config,
+        "sample_seed": seeds.sample(args.base, args.generation),
+        "samples": int(len(z)),
+        **counts,
+        "loss_first_last": [losses[0], losses[-1]],
+    }
+    digest = ckpt.save(model, args.out, parent["size"], meta)
+    artifacts.write_atomic(os.path.splitext(args.out)[0] + ".losses.json", json.dumps(losses).encode())
+    print(f"checkpoint {digest} steps {counts['steps']}")
+    return 0
+
+
 def work_train(args, clock) -> int:
     configure_torch()
     if os.path.abspath(args.out) == os.path.abspath(args.checkpoint):
@@ -244,13 +353,28 @@ def parse(argv):
     t.add_argument("--cores", type=int, default=1)
     t.add_argument("--budget-core-hours", type=float, required=True)
     t.add_argument("--wall-cap-s", type=float, required=True)
+    w = sub.add_parser("train-window", help="PR 3: one generation of the loop")
+    w.add_argument("--checkpoint", required=True)
+    w.add_argument("--data", nargs="+", required=True, help="the window's runs, oldest generation first")
+    w.add_argument("--out", required=True)
+    w.add_argument("--generation", type=int, required=True)
+    w.add_argument("--base", type=int, required=True)
+    w.add_argument("--steps", type=int, default=schedule.STEPS)
+    w.add_argument("--batch", type=int, default=HYPER["batch"])
+    w.add_argument("--formal", action="store_true", help="the registered run: steps must equal schedule.STEPS")
+    w.add_argument("--source-sha", required=True)
+    w.add_argument("--attempt", default="train")
+    w.add_argument("--ledger", required=True)
+    w.add_argument("--cores", type=int, default=1)
+    w.add_argument("--budget-core-hours", type=float, required=True)
+    w.add_argument("--wall-cap-s", type=float, required=True)
     return p.parse_args(supervisor.strip_child_flag(argv))
 
 
 def main(argv=None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     args = parse(argv)
-    if args.command == "train" and supervisor.child_flag(argv) is None and os.path.exists(args.out):
+    if args.command in ("train", "train-window") and supervisor.child_flag(argv) is None and os.path.exists(args.out):
         raise SystemExit(f"{args.out} exists: checkpoints are never overwritten")
     if args.command == "init":
         configure_torch()
@@ -260,16 +384,17 @@ def main(argv=None) -> int:
         digest = ckpt.save(model, args.out, args.size, meta)
         print(f"checkpoint {digest}")
         return 0
+    work = work_window if args.command == "train-window" else work_train
     return supervisor.run(
         __file__,
         argv,
-        lambda clock: work_train(args, clock),
+        lambda clock: work(args, clock),
         ledger=args.ledger,
         budget_core_hours=args.budget_core_hours,
         cores=args.cores,
         wall_cap_s=args.wall_cap_s,
         out=os.path.dirname(os.path.abspath(args.out)),
-        name="train",
+        name=getattr(args, "attempt", "train"),
         exit_names={EXIT_DIVERGED: "training diverged"},
         # The checkpoint directory also holds the parent; the checkpoint
         # itself is never overwritten (ckpt.save).
