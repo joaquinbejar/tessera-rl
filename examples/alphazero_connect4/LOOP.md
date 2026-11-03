@@ -83,3 +83,50 @@ The stop reasons are `K_max`, `budget`, `early`, `failed` (3 attempts), `disk` (
 ## Results
 
 Not run yet.
+
+## Remote phases (remote.py)
+
+Self-play needs 32 cores (swarmer02), and the looks need the registered runtime (xaskar, 1 core). The loop driver therefore runs on the Mac, owns the root and holds `loop.lock`. Each phase reaches its host through `remote.py run`, set as that phase's `runners` command at `init`, for example:
+
+```
+{python} remote.py run --host swarmer02 --cpuset 0-31 --root ROOT -- {tool} {args}
+```
+
+The phase runs as one detached, named container (`docker run -d --name tessera-m3-<attempt>`), with the pinned image and bind mounts by absolute path only. Its round trip has five steps:
+
+1. A durable dispatch record next to the attempt. It holds the host, cpuset, container, image, prior-ledger digest and the input hashes.
+2. The inputs are pushed to `~/tessera-rl-m3loop/root` and their hashes are checked on the host.
+3. The run, then a wait.
+4. The import. The host's ledger is accepted only if it keeps the ledger that was sent as an exact prefix and appends only this attempt's entry. Outputs are staged, verified and published atomically, then acknowledged.
+5. Cleanup, only after the acknowledgement. The host keeps only the ledger and the cached image. The image is removed with `docker rmi` and the directory with `rm -rf` when the loop ends.
+
+A dead driver loses no work and never doubles a charge. `remote.py reconcile --root ROOT` closes any open dispatch:
+- It finds a still-running container by name and waits for it.
+- It imports a successful attempt once.
+- It settles an entry whose container is gone at the full reservation. It does so only after a by-name check on that host, recorded in the dispatch.
+- It replays a missing acknowledgement.
+
+The loop runs `remote.py reconcile --root ROOT --owner-held`, set with `init --reconcile`, before every step. Every open dispatch is therefore closed before the next attempt is allocated, and while a dispatch is open no new one is accepted.
+
+Each step leaves a record in the dispatch:
+- Publication is journaled with the staged output and ledger digests, then replayed against them. The output rename, the ledger replace and the acknowledgement are not jointly atomic, so a replay must reach the same result.
+- Before replacing the local ledger, the import checks that it is still the one sent: a compare and replace. The import also checks that the budgets match.
+- "Nothing ran" needs positive evidence: a by-name check, and the remote ledger read with no entry for the attempt.
+- A container that outlives its wall cap plus 900 s of setup and a 300 s margin is killed by the driver, and the kill is recorded.
+
+Fail-closed rules:
+- Provisioning is explicit. `remote.py provision --host H --archive TAR --uv UV` deploys the reviewed source archive and uv once and prints the evidence: archive, uv and deployed-tree digests.
+- Every dispatch checks the host's source tree against `--source-tree-sha256` before anything is pushed or reserved. It also pushes and checks the root's `config.json`.
+- An ssh failure (exit 255), a docker daemon error or a malformed answer is never read as "gone". Only docker's own "No such object" counts as absent.
+- An ok attempt is imported only if its staged output equals the remote one and its identity loads; the loop's lineage check runs before the acknowledgement. The payload is fsynced before the acknowledgement.
+- The settled entry is checked against the dispatch's frozen cores and cap, against the status rules and against the charge arithmetic.
+- The container carries its own deadline (`timeout` around uv setup and the phase, at the wall cap plus 900 s), so a dead driver cannot leave it running.
+- A killed or interrupted attempt is marked `published_partial` and is never packed.
+
+Container names are `tessera-m3-<config digest>-<attempt>`, unique per experiment. Run alone, `remote.py reconcile --root ROOT` takes the owner lock itself. The driver is:
+
+```
+caffeinate -dims python loop.py run --root ROOT
+```
+
+Disk: the PR(2) sizes give about 33 MB per generation, about 1.0 GB over 30, so the formal run sets `--max-disk-mb 1536` at `init`. That needs at least 5 GB free on the Mac. On each host, the current phase's inputs and outputs take at most about 130 MB. On top of that sit the cached source, its `.venv` and build (estimated at 1.5 to 2 GB, to be measured on the first phase) and the cached image. The Mac holds the root, up to 1.5 GB, plus one phase's staging (about 35 MB).
