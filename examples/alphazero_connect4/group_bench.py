@@ -15,9 +15,11 @@ alpha 1.0 and eps 0.25, and temperature 1 for the first 8 plies.
 Game ``g`` of a cell is always the same logical game: its environment seed
 is ``seeds.env(run_seed, g)``, its search seed ``seeds.search(run_seed,
 g)`` and its slot state fresh. A group plays ``T`` games at once. Each
-round builds a new ``SearchGroup`` of ``T`` slots, plays its games until all
-end (a finished slot goes inactive), and runs ``games_per_slot`` such
-batches. Membership never reseeds a game.
+round gives every worker the same number of games in every cell
+(``games_per_slot`` at the largest ``T``: 32), in batches of ``T``; each
+batch is a new ``SearchGroup`` of ``T`` slots that plays its games until all
+end (a finished slot goes inactive). Each worker's busy seconds per round
+are recorded. Membership never reseeds a game.
 
 The cells (pre-registered in ADR-0045 §5) are:
 - baseline single-tree at ``W`` in ``{1, 8, allocated}``;
@@ -201,10 +203,34 @@ def active_sets(batch: list[dict]) -> list[list[int]]:
     return [[x["slot"] for x in batch if j < x["moves"]] for j in range(longest)]
 
 
-def _round(task: tuple[str, list[list[int]]]) -> list[list[dict]]:
-    """A worker's batches in order, each a list of its games."""
+def _round(task: tuple[str, list[list[int]]]) -> dict:
+    """A worker's batches in order, each a list of its games, and the
+    seconds the worker was busy with them."""
     kind, batches = task
-    return [single_games(gids) if kind == "single" else group_games(gids) for gids in batches]
+    t0 = time.perf_counter()
+    out = [single_games(gids) if kind == "single" else group_games(gids) for gids in batches]
+    return {"batches": out, "busy_s": time.perf_counter() - t0}
+
+
+def games_per_worker(trees: list[int], games_per_slot: int) -> int:
+    """Every cell gives each worker the same number of games per round
+    (``games_per_slot`` at the largest T), so no cell's round barrier
+    waits on a different amount of work."""
+    n = max(trees) * games_per_slot
+    for t_ in (1, 8, *trees):
+        if n % t_:
+            raise SystemExit(f"{n} games per worker do not split into batches of {t_}")
+    return n
+
+
+def worker_tasks(kind: str, workers: int, t_: int, first: int, per_worker: int) -> list[tuple[str, list[list[int]]]]:
+    """A round's game ids, dealt g mod W, in batches of T."""
+    gids = list(range(first, first + workers * per_worker))
+    tasks = []
+    for w in range(workers):
+        mine = gids[w::workers]
+        tasks.append((kind, [mine[i : i + t_] for i in range(0, len(mine), t_)]))
+    return tasks
 
 
 def roots(n: int, run_seed: int) -> list[bytes]:
@@ -260,7 +286,7 @@ def cell(args, clock, kind: str, workers: int, t_: int) -> dict:
     except BudgetExceeded as e:
         return {**info, "stopped": str(e)}
     cfg = {"run_seed": args.run_seed, "sims": args.sims, "batch_size": args.batch_size, "capacity": args.capacity}
-    per_round = workers * t_ * args.games_per_slot
+    per_worker = games_per_worker(args.trees, args.games_per_slot)
     rounds, layout, next_g = [], [], 0
     ctx = mp.get_context("spawn")
     with ctx.Pool(workers, initializer=_init, initargs=(args.checkpoint, cfg)) as pool:
@@ -271,30 +297,30 @@ def cell(args, clock, kind: str, workers: int, t_: int) -> dict:
             except BudgetExceeded as e:
                 info["stopped"] = str(e)
                 break
-            # Game ids of this round, dealt g mod W, in batches of T.
-            gids = list(range(next_g, next_g + per_round))
-            next_g += per_round
-            tasks = []
-            for w in range(workers):
-                mine = gids[w::workers]
-                tasks.append((kind, [mine[i : i + t_] for i in range(0, len(mine), t_)]))
+            tasks = worker_tasks(kind, workers, t_, next_g, per_worker)
+            next_g += workers * per_worker
             t0 = time.perf_counter()
             results = pool.map(_round, tasks, chunksize=1)
             wall = time.perf_counter() - t0
             last = wall
-            games = [g for res in results for batch in res for g in batch]
+            games = [g for res in results for batch in res["batches"] for g in batch]
+            busy = [res["busy_s"] for res in results]
             # Logical worker -> batch -> slot -> game, with each game's length
             # and seeds (ADR-0045 §4), warmup rounds included.
             layout.append({"round": r, "warmup": r < args.warmup,
-                           "workers": [{"worker": w, "batches": res} for w, res in enumerate(results)]})  # fmt: skip
+                           "workers": [{"worker": w, **res} for w, res in enumerate(results)]})  # fmt: skip
             if r >= args.warmup:
-                rounds.append({"wall_s": wall, "games": len(games), "moves": sum(g["moves"] for g in games),
+                rounds.append({"wall_s": wall, "busy_s": busy, "games": len(games), "moves": sum(g["moves"] for g in games),
                                "leaves": sum(g["leaves"] for g in games)})  # fmt: skip
     rate = [x["games"] / x["wall_s"] * 3600 / args.cores for x in rounds]
     return {
         **info,
         "rounds_kept": len(rounds),
         "games_per_hour_per_allocated_core": quant(rate),
+        "games_per_worker_per_round": per_worker,
+        # Companion: work per busy core-second, free of the round barrier's
+        # idle tail.
+        "games_per_busy_core_second": quant([x["games"] / sum(x["busy_s"]) for x in rounds]),
         "moves_per_game": quant([x["moves"] / x["games"] for x in rounds]),
         "moves_per_hour": quant([x["moves"] / x["wall_s"] * 3600 for x in rounds]),
         "simulations_per_hour": quant([x["moves"] * args.sims / x["wall_s"] * 3600 for x in rounds]),
