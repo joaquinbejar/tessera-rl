@@ -75,6 +75,24 @@ def cpuset_size(spec: str | None) -> int | None:
     return n
 
 
+def _read(path: str) -> str | None:
+    try:
+        with open(path, encoding="utf-8") as f:
+            return f.read().strip()
+    except OSError:
+        return None
+
+
+def _field(path: str, key: str) -> str | None:
+    """The first ``key: value`` line's value of a /proc file, or None."""
+    text = _read(path) or ""
+    for line in text.splitlines():
+        name, _, value = line.partition(":")
+        if name.strip() == key:
+            return value.strip()
+    return None
+
+
 def runtime() -> dict:
     """The observed runtime, compared with the registered one."""
     affinity = len(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else None
@@ -87,6 +105,10 @@ def runtime() -> dict:
         "torch_threads": torch.get_num_threads(),
         "torch_interop_threads": torch.get_num_interop_threads(),
         "deterministic": torch.are_deterministic_algorithms_enabled(),
+        # Self-declared machine provenance, never an attestation.
+        "boot_id": _read("/proc/sys/kernel/random/boot_id"),
+        "cpu_model": _field("/proc/cpuinfo", "model name"),
+        "mem_total": _field("/proc/meminfo", "MemTotal"),
     }
     observed["registered"] = (
         observed["host"] == REGISTERED_HOST
