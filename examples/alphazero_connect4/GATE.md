@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: MIT OR Apache-2.0 -->
 # The P2-G1 gate (P2-M3 PR 4)
 
-`gate.py` runs the phase 2 exit gate of SPEC 22 under ADR-0042, once, on the checkpoint that the loop's committed selection names (see [LOOP.md](LOOP.md)).
+`gate.py` runs the phase 2 exit gate of SPEC 22 under ADR-0042, once, on the checkpoint that the loop's committed selection names (see [LOOP.md](LOOP.md)). Only `selected.checkpoint` is ever gated, never the final (last trained) checkpoint.
 
 ## Contract
 
@@ -15,7 +15,7 @@
   - at least 900 wins out of 1,000;
   - the lower bound of the two-sided Wilson interval at z = 1.96 is at least 0.90, which takes 919 wins.
 
-  Draws are non-wins. The interval is nominal: the games come in pairs and may repeat, so it is a stricter descriptive criterion, not calibrated coverage.
+  Draws are non-wins. A complete, valid, formal gate records `pass` as true or false; null is only for an incomplete, inapplicable or diagnostic run. The interval is nominal: the games come in pairs and may repeat, so it is a stricter descriptive criterion, not calibrated coverage.
 - **Report:** `gate.json` and `gate-log.json` hold:
   - W/D/L, overall and per colour;
   - per-pair results, distinct games and openings covered;
@@ -26,23 +26,28 @@
 
   The exit code and the spend are in the gate's ledger entry.
 
-## Refusals before anything is played
+## The formal flow
 
-The formal mode reads the evaluation openings only after every check below passes. It refuses when:
-- the selection manifest's digest is not the committed one;
-- the manifest is not formal, or names no checkpoint;
-- a recomputation from the loop root's verified, settled evidence (under the owner lock) disagrees with it;
-- the checkpoint is not the selected one, or is not a medium net;
-- the bot binary is not the expected one, or not the registered one for the image;
-- the runtime is not the registered one;
-- the search settings are not the frozen ones;
-- the ledger already holds a gate entry, whatever its status.
+All of it runs under the loop's owner lock. The gate's paths are fixed under the root: `<root>/gate/` holds `claim.json`, `ledger.json` and `run/`.
+
+1. **Preflight.** Nothing of the evaluation set is touched yet. It refuses when:
+   - the selection manifest's digest is not the committed one;
+   - the manifest is not formal, or names no checkpoint;
+   - a recomputation from the loop root's verified, settled evidence disagrees with it;
+   - the selected checkpoint is evicted, is not the selected one, or is not a medium net;
+   - the bot binary is not the expected one, or not the registered one for the image;
+   - the runtime is not the registered one;
+   - the search settings are not the frozen ones;
+   - the budget does not fund the full wall cap.
+2. **Claim.** An atomic `mkdir <root>/gate` and a durable `claim.json`, plus a `gate-claim` entry in the loop's audit log (`selection.jsonl`). A second gate is refused, whatever paths it names. The selection is never rewritten.
+3. **Run.** The supervisor reserves the budget. The work then revalidates the claim at use (checkpoint, bot, runtime), and only then hashes, compares and parses the evaluation file. The file's digest is recomputed after the games.
+
+An interrupted gate stays consumed. Its ledger entry holds the exit code and wall time, it prints nothing partial, and a retry needs the owner's decision.
 
 ## Blindness
 
-- **Who reads the set:** the evaluation set is played only by this tool. The P2-M3 pilot timed a randomly initialized net on it before any training, and never selected or tuned with it.
-- **Diagnostic mode:** `--diagnostic-openings` is for tests and dry runs. It refuses the evaluation file, whether given by path or as a copy, before reading it. It never names a selection and has no verdict.
-- **One shot:** a gate runs once. A failed or interrupted gate is reported as it is, and a retry needs the owner's decision.
+- **Who reads the set:** within the example, only this tool plays the evaluation set. The P2-M3 pilot timed a randomly initialized net on it before any training, and never selected or tuned with it. The pin test only hashes the file.
+- **Diagnostic mode:** `--any-openings --openings FIXTURE` is for tests and dry runs. It has no default fixture. It refuses the evaluation file and its aliases (symlinks, hard links, by device and inode) before opening it, and a byte-identical copy by digest. It never names a selection and has no verdict.
 
 This score is the only gate estimate. The selected checkpoint's held-out score is biased by repeated looks and is never reported as one.
 

@@ -56,3 +56,50 @@ def test_botmatch_play_matches_the_pre_refactor_look_loop(tmp_path):
             bot.close()
     assert out[0] == out[1]
     assert len(out[1]["logs"]) == 6
+
+
+def test_botmatch_opening_index_is_its_index_in_the_file(monkeypatch):
+    """For the 500 evaluation openings j runs 0..499, and the tie seed is
+    TIE_BASE + j for both colours."""
+    seen = []
+
+    def fake(search, evaluator, bot, j, opening, first, tie_seed, seed):
+        seen.append((j, opening, first, tie_seed, seed))
+        return type("G", (), {"result": 1.0, "log": []})()
+
+    monkeypatch.setattr(game, "versus_bot", fake)
+    openings = game.read_openings(str(EXAMPLE.parents[1] / "compat" / "connect4" / "openings-heldout.txt")) * 3
+    out = botmatch.play(None, None, openings[:500], 1, 1, 64)
+    assert [s[0] for s in seen] == [j for j in range(500) for _ in (0, 1)]
+    assert all(t == botmatch.TIE_BASE + j and o == openings[j] and seed == 20261102 for j, o, _, t, seed in seen)
+    assert [s[2] for s in seen[:2]] == [True, False] and len(out["logs"]) == 1000
+
+
+def test_botmatch_look_report_fields_are_unchanged(tmp_path):
+    """The look's report keeps its fields and its eligibility rule."""
+    import look
+
+    c = tmp_path / "C.pt"
+    assert train_step.main(["init", "--size", "tiny", "--seed", "1", "--out", str(c), "--source-sha", "t"]) == 0
+    out = tmp_path / "o"
+    out.mkdir()
+    bot = bot_binary()
+    import artifacts
+
+    args = look.parse(["--checkpoint", str(c), "--bot", bot, "--bot-sha256", artifacts.sha256_file(bot),
+                       "--out", str(out), "--source-sha", "t", "--ledger", str(tmp_path / "l"),
+                       "--budget-core-hours", "1", "--wall-cap-s", "1", "--limit", "1", "--sims", "2",
+                       "--batch-size", "2", "--capacity", "64"])  # fmt: skip
+    assert look.work(args, None) == 0
+    import json
+
+    report = json.loads((out / "look.json").read_text())
+    assert sorted(report) == sorted([
+        "kind", "checkpoint", "generation", "games", "wins", "wdl", "by_colour", "pair_wins", "log_sha256",
+        "runtime", "protocol", "eligible", "note", "provenance", "complete",
+    ])  # fmt: skip
+    assert sorted(report["protocol"]) == sorted([
+        "checkpoint", "openings_sha256", "sims", "batch_size", "capacity", "openings", "search_seed", "tie_base",
+        "bot_sha256", "size",
+    ])  # fmt: skip
+    assert report["eligible"] is False and report["games"] == 2
