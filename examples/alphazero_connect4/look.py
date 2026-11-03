@@ -43,19 +43,19 @@ import torch  # noqa: E402
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import artifacts  # noqa: E402
+import botmatch  # noqa: E402
 import ckpt  # noqa: E402
 import game  # noqa: E402
 import h2h  # noqa: E402
 import net as netmod  # noqa: E402
 import provenance  # noqa: E402
 import supervisor  # noqa: E402
-from tessera_rl.search import Search  # noqa: E402
 
 REPO = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
 HELDOUT = os.path.join(REPO, "compat", "connect4", "openings-heldout.txt")
 HELDOUT_SHA256 = "3276d2d044c911ed29c36f2d42690697f19a4bac0183e3a77b1af3c5af72cc49"
-TIE_BASE = 0x7E55E2A000000000
-SEARCH_SEED = 20261102
+TIE_BASE = botmatch.TIE_BASE
+SEARCH_SEED = botmatch.SEARCH_SEED
 # The frozen protocol: (sims, batch size, capacity, openings).
 FROZEN = (100, 8, 8192, 200)
 # The registered bot binaries, per registered image digest: the
@@ -95,26 +95,11 @@ def work(args, clock) -> int:
     evaluator = netmod.Evaluator(model)
     openings = game.read_openings(args.openings)[: args.limit]
     bot = game.BotClient(args.bot)
-    results, logs, pairs = [], [], []
-    by_colour = {"candidate_first": [0, 0, 0], "bot_first": [0, 0, 0]}
     try:
-        with torch.inference_mode():
-            for j, opening in enumerate(openings):
-                pair = 0
-                for first in (True, False):
-                    search = Search(
-                        simulations=args.sims, batch_size=args.batch_size, capacity=args.capacity, seed=SEARCH_SEED
-                    )
-                    g = game.versus_bot(search, evaluator, bot, j, opening, first, TIE_BASE + j, seed=SEARCH_SEED)
-                    key = "candidate_first" if first else "bot_first"
-                    by_colour[key][0 if g.result > 0 else 1 if g.result == 0 else 2] += 1
-                    win = 1 if g.result > 0 else 0
-                    pair += win
-                    results.append(g.result)
-                    logs.append([j, first, g.result, g.log])
-                pairs.append(pair)
+        played = botmatch.play(evaluator, bot, openings, args.sims, args.batch_size, args.capacity)
     finally:
         bot.close()
+    results, logs, pairs, by_colour = (played[k] for k in ("results", "logs", "pairs", "by_colour"))
     observed = h2h.runtime()
     protocol = {
         "checkpoint": meta["sha256"],
