@@ -114,6 +114,15 @@ Each step leaves a record in the dispatch:
 - "Nothing ran" needs positive evidence: a by-name check, and the remote ledger read with no entry for the attempt.
 - A container that outlives its wall cap plus 900 s of setup and a 300 s margin is killed by the driver, and the kill is recorded.
 
+Fail-closed rules:
+- Provisioning is explicit. `remote.py provision --host H --archive TAR --uv UV` deploys the reviewed source archive and uv once and prints the evidence: archive, uv and deployed-tree digests.
+- Every dispatch checks the host's source tree against `--source-tree-sha256` before anything is pushed or reserved. It also pushes and checks the root's `config.json`.
+- An ssh failure (exit 255), a docker daemon error or a malformed answer is never read as "gone". Only docker's own "No such object" counts as absent.
+- An ok attempt is imported only if its staged output equals the remote one and its identity loads; the loop's lineage check runs before the acknowledgement. The payload is fsynced before the acknowledgement.
+- The settled entry is checked against the dispatch's frozen cores and cap, against the status rules and against the charge arithmetic.
+- The container carries its own deadline (`timeout` around uv setup and the phase, at the wall cap plus 900 s), so a dead driver cannot leave it running.
+- A killed or interrupted attempt is marked `published_partial` and is never packed.
+
 Container names are `tessera-m3-<config digest>-<attempt>`, unique per experiment. Run alone, `remote.py reconcile --root ROOT` takes the owner lock itself. The driver is:
 
 ```

@@ -66,6 +66,16 @@ def _tar(src: str, dst: str) -> None:
     os.replace(dst + ".tmp", dst)
 
 
+def published_partial(d: str) -> bool:
+    """A remote attempt that was killed or interrupted (remote.py) is never
+    packed, whatever it left."""
+    path = d + ".dispatch.json"
+    if not os.path.exists(path):
+        return False
+    with open(path, encoding="utf-8") as f:
+        return bool(json.load(f).get("published_partial"))
+
+
 def load_manifest(root: str) -> dict:
     path = os.path.join(root, MANIFEST)
     if not os.path.exists(path):
@@ -114,7 +124,7 @@ def _pack(lp, root: str, out: str, tag: str) -> dict:
         for attempt in sorted(os.listdir(os.path.join(root, gen))):
             d = os.path.join(root, gen, attempt)
             desc = lp.descriptor(d)
-            if desc is None or desc.get("evicted") or "ref" in desc:
+            if desc is None or desc.get("evicted") or "ref" in desc or published_partial(d):
                 continue
             name = f"{desc['attempt']}.tar"
             path = os.path.join(out, name)

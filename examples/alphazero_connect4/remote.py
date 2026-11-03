@@ -74,6 +74,9 @@ SRC = "/work/tessera"
 PHASES = {"selfplay.py": "selfplay", "train_step.py": "train", "look.py": "look"}
 # A container older than its wall cap plus these is killed by the driver:
 # the supervisor's cleanup grace, uv sync and the build, and a margin.
+SSH_TIMEOUT_S = 600
+# Build products and caches never count in the source tree hash.
+TREE_EXCLUDE = (".venv", ".uvcache", "target", "__pycache__", ".pytest_cache")
 SETUP_S = float(os.environ.get("REMOTE_TEST_SETUP_S", "900"))
 MARGIN_S = float(os.environ.get("REMOTE_TEST_MARGIN_S", "300"))
 
@@ -100,7 +103,14 @@ class SSH:
         self.host = host
 
     def _ssh(self, cmd: str, check: bool = True) -> subprocess.CompletedProcess:
-        r = subprocess.run(["ssh", "-o", "BatchMode=yes", self.host, cmd], capture_output=True, text=True)
+        try:
+            r = subprocess.run(["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=20", self.host, cmd],
+                               capture_output=True, text=True, timeout=SSH_TIMEOUT_S)  # fmt: skip
+        except subprocess.TimeoutExpired:
+            raise TransportError(f"{self.host}: {cmd[:80]!r} timed out after {SSH_TIMEOUT_S} s") from None
+        # 255 is ssh's own failure: never an answer about the host.
+        if r.returncode == 255:
+            raise TransportError(f"{self.host}: ssh failed (255): {r.stderr.strip()[:300]}")
         if check and r.returncode != 0:
             raise TransportError(f"{self.host}: {cmd!r} exited {r.returncode}: {r.stderr.strip()[:300]}")
         return r
@@ -126,11 +136,17 @@ class SSH:
     def mkdir(self, rel: str) -> None:
         self._ssh(f"mkdir -p {shlex.quote(self.path(rel))}")
 
+    def _test(self, flag: str, rel: str) -> bool:
+        r = self._ssh(f"test {flag} {shlex.quote(self.path(rel))}", check=False)
+        if r.returncode not in (0, 1):
+            raise TransportError(f"{self.host}: test {flag} {rel} exited {r.returncode}")
+        return r.returncode == 0
+
     def exists(self, rel: str) -> bool:
-        return self._ssh(f"test -e {shlex.quote(self.path(rel))}", check=False).returncode == 0
+        return self._test("-e", rel)
 
     def isdir(self, rel: str) -> bool:
-        return self._ssh(f"test -d {shlex.quote(self.path(rel))}", check=False).returncode == 0
+        return self._test("-d", rel)
 
     def tree_sha256(self, rel: str) -> str:
         # The same digest as tree_sha256 below, computed on the host.
@@ -146,11 +162,14 @@ class SSH:
         self._ssh(f"test ! -d {r} || find {r} -mindepth 1 -maxdepth 1 ! -name ledger.json ! -name ledger.json.lock "
                   "-exec rm -rf {} +")  # fmt: skip
 
-    def docker_run(self, name: str, cpuset: str, hostname: str, argv: list[str]) -> None:
+    def docker_run(self, name: str, cpuset: str, hostname: str, argv: list[str], deadline_s: float) -> None:
         home = self._ssh("pwd").stdout.strip()
         base = f"{home}/{BASE}"
+        # The deadline lives in the container, around uv setup and the
+        # phase alike: it holds even if the driver or ssh is gone.
+        phase = "uv run --locked --python 3.11 --group test --group torch python " + " ".join(map(shlex.quote, argv))
         inner = (
-            "uv run --locked --python 3.11 --group test --group torch python " + " ".join(map(shlex.quote, argv))
+            f"timeout --kill-after 30 {int(deadline_s)} sh -c {shlex.quote(phase)}"
             + "; rc=$?; chown -R $HOST_UID:$HOST_GID " + CROOT + " " + SRC + "; exit $rc"
         )  # fmt: skip
         cmd = [
@@ -166,7 +185,11 @@ class SSH:
         r = self._ssh(f"docker inspect --format '{{{{.State.Status}}}} {{{{.State.ExitCode}}}}' {shlex.quote(name)}",
                       check=False)  # fmt: skip
         if r.returncode != 0:
-            return None
+            # Absent only when docker says so; any other failure is not
+            # evidence that the container is gone.
+            if "No such object" in r.stderr or "No such container" in r.stderr:
+                return None
+            raise TransportError(f"{self.host}: docker inspect {name} exited {r.returncode}: {r.stderr.strip()[:300]}")
         status, code = r.stdout.split()
         return ("running", None) if status in ("created", "running", "restarting") else ("exited", int(code))
 
@@ -176,12 +199,14 @@ class SSH:
     def docker_logs(self, name: str) -> str:
         return self._ssh(f"docker logs {shlex.quote(name)} 2>&1", check=False).stdout
 
+    def docker_kill(self, name: str) -> None:
+        self._ssh(f"docker kill {shlex.quote(name)}", check=False)
+
     def docker_rm(self, name: str) -> None:
         self._ssh(f"docker rm -f {shlex.quote(name)}", check=False)
 
     def docker_ps_by_name(self, name: str) -> str:
-        return self._ssh(f"docker ps -a --filter name=^{name}$ --format '{{{{.Names}} {{{{.Status}}}}'",
-                         check=False).stdout.strip()  # fmt: skip
+        return self._ssh(f"docker ps -a --filter name=^{name}$ --format '{{{{.Names}}}} {{{{.Status}}}}'").stdout.strip()
 
     def volumes(self) -> list[str]:
         return sorted(self._ssh("docker volume ls -q").stdout.split())
@@ -193,7 +218,7 @@ p = sys.argv[1]
 h = hashlib.sha256()
 if os.path.isdir(p):
     for base, dirs, files in os.walk(p):
-        dirs.sort()
+        dirs[:] = sorted(x for x in dirs if x not in (".venv", ".uvcache", "target", "__pycache__", ".pytest_cache"))
         for n in sorted(files):
             f = os.path.join(base, n)
             h.update(os.path.relpath(f, p).encode() + b"\\0")
@@ -204,12 +229,12 @@ print(h.hexdigest())
 """
 
 
-def tree_sha256(path: str) -> str:
+def tree_sha256(path: str, exclude_files: tuple[str, ...] = ()) -> str:
     h = hashlib.sha256()
     if os.path.isdir(path):
         for base, dirs, files in os.walk(path):
-            dirs.sort()
-            for n in sorted(files):
+            dirs[:] = sorted(x for x in dirs if x not in TREE_EXCLUDE)
+            for n in sorted(x for x in files if not (base == path and x in exclude_files)):
                 f = os.path.join(base, n)
                 h.update(os.path.relpath(f, path).encode() + b"\0")
                 with open(f, "rb") as fh:
@@ -293,33 +318,51 @@ def read_ledger(path: str) -> list[dict]:
         return json.load(f)["entries"]
 
 
+def entries_sha256(entries: list[dict]) -> str:
+    return artifacts.sha256(artifacts.canonical_json(entries))
+
+
 def dispatch(args, argv: list[str]) -> str:
-    """Steps 1 to 3; returns the dispatch path."""
+    """Steps 1 to 3; returns the dispatch path. The caller holds the owner
+    lock (loop.py run)."""
     root = os.path.abspath(args.root)
     opened = open_dispatches(root)
     if opened:
         raise TransportError(f"an open dispatch must be reconciled first: {opened[0]}")
     phase, attempt, d = attempt_of(argv)
     cargv, inputs = mapped(root, argv)
+    config = os.path.join(root, "config.json")
+    inputs[config] = "root/config.json"
     ledger = os.path.join(root, "ledger.json")
+    sent = read_ledger(ledger)
+    cores = int(argv[argv.index("--cores") + 1])
+    if cores != cpuset_size(args.cpuset):
+        raise TransportError(f"--cores {cores} does not match the cpuset {args.cpuset}")
+    wall_cap = float(argv[argv.index("--wall-cap-s") + 1])
     record = {
         "kind": "p2-m3-dispatch",
         "attempt": attempt,
         "phase": phase,
         "host": args.host,
         "cpuset": args.cpuset,
+        "cores": cores,
         # Unique per experiment (the root's config) and attempt.
-        "container": f"tessera-m3-{artifacts.sha256_file(os.path.join(root, 'config.json'))[:8]}-{attempt}",
+        "container": f"tessera-m3-{artifacts.sha256_file(config)[:8]}-{attempt}",
         "image": IMAGE,
         "attempt_dir": os.path.relpath(d, root),
         "argv": argv,
         "container_argv": cargv,
+        "config_sha256": artifacts.sha256_file(config),
+        "source_tree_sha256": args.source_tree_sha256,
         "ledger_sha256": artifacts.sha256_file(ledger) if os.path.exists(ledger) else None,
-        "ledger_entries_sent": len(read_ledger(ledger)),
+        "ledger_entries_sent": len(sent),
+        "sent_entries_sha256": entries_sha256(sent),
         "inputs": {inputs[p]: tree_sha256(p) for p in sorted(inputs)},
         "dispatched": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "dispatched_epoch": time.time(),
-        "wall_cap_s": float(argv[argv.index("--wall-cap-s") + 1]),
+        "wall_cap_s": wall_cap,
+        # The container's own deadline, around setup and the phase.
+        "container_deadline_s": wall_cap + SETUP_S,
         "started": False,
         "closed": None,
     }
@@ -327,6 +370,11 @@ def dispatch(args, argv: list[str]) -> str:
     write_dispatch(path, record)
     crash_point("after-dispatch")
     t = transport(args.host)
+    # The deployed source must be the reviewed tree (provision with
+    # `remote.py provision`).
+    got = t.tree_sha256("src")
+    if got != args.source_tree_sha256:
+        raise TransportError(f"the source on {args.host} is {got}, not the reviewed {args.source_tree_sha256}")
     for local, rel in inputs.items():
         t.push(local, rel)
     if phase == "train":
@@ -335,12 +383,20 @@ def dispatch(args, argv: list[str]) -> str:
     for rel, sha in record["inputs"].items():
         if t.tree_sha256(rel) != sha:
             raise TransportError(f"{rel} does not match its dispatch hash on {args.host}")
-    t.docker_run(record["container"], args.cpuset, args.host, cargv)
+    t.docker_run(record["container"], args.cpuset, args.host, cargv, record["container_deadline_s"])
     crash_point("after-docker-run")  # before the start is recorded
     record["started"] = True
     write_dispatch(path, record)
     crash_point("after-start")
     return path
+
+
+def cpuset_size(spec: str) -> int:
+    n = 0
+    for part in spec.split(","):
+        a, _, b = part.partition("-")
+        n += int(b or a) - int(a) + 1
+    return n
 
 
 # ----------------------------------------------------------------- import
@@ -357,10 +413,61 @@ def accept_ledger(sent: list[dict], remote: list[dict], attempt: str) -> list[di
     return remote
 
 
+def _finite(x) -> bool:
+    import math
+
+    return isinstance(x, (int, float)) and not isinstance(x, bool) and math.isfinite(x) and x >= 0
+
+
+def validate_entry(e: dict, record: dict) -> None:
+    """The attempt's settled entry against the frozen dispatch: the cores,
+    the cap, the status and the charge arithmetic."""
+    bad = lambda why: TransportError(f"ledger entry {e.get('run')!r}: {why}")  # noqa: E731
+    if e.get("cores") != record["cores"]:
+        raise bad(f"cores {e.get('cores')}, not the dispatched {record['cores']}")
+    if not (_finite(e.get("deadline_s")) and 0 < e["deadline_s"] <= record["wall_cap_s"] + 1e-3):
+        raise bad(f"deadline {e.get('deadline_s')} outside (0, {record['wall_cap_s']}]")
+    if not _finite(e.get("core_hours")):
+        raise bad(f"charge {e.get('core_hours')} is not finite and non-negative")
+    status = e.get("status", "")
+    if status.startswith("interrupted"):
+        expected = round(e["deadline_s"] * e["cores"] / 3600, 6)
+    elif status == "ok" or status.startswith(("ok (overran", "failed", "refused")):
+        if not _finite(e.get("wall_s")):
+            raise bad(f"wall {e.get('wall_s')} is not finite and non-negative")
+        expected = round(e["wall_s"] * e["cores"] / 3600, 6)
+    else:
+        raise bad(f"status {status!r} is not a settled status")
+    # The ledger rounds wall_s to 1 ms and charges from the unrounded wall.
+    if abs(e["core_hours"] - expected) > 1e-6 + e["cores"] * 0.001 / 3600:
+        raise bad(f"charge {e['core_hours']} is not {expected}")
+
+
+def fsync_tree(path: str) -> None:
+    for base, dirs, files in os.walk(path):
+        for n in files:
+            fd = os.open(os.path.join(base, n), os.O_RDONLY)
+            try:
+                os.fsync(fd)
+            finally:
+                os.close(fd)
+        fd = os.open(base, os.O_RDONLY)
+        try:
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+    fd = os.open(os.path.dirname(os.path.abspath(path)), os.O_RDONLY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
 def wait_or_kill(t, record: dict, path: str):
-    """The container's state once it is not running. A container older
-    than its wall cap plus the setup allowance and a margin is killed, and
-    the kill is recorded."""
+    """The container's state once it is not running. The container's own
+    deadline stops it first; this is the driver's second safeguard: one
+    older than its wall cap plus the setup allowance and a margin is
+    killed (not removed), and the kill is recorded."""
     name = record["container"]
     deadline = record["dispatched_epoch"] + record["wall_cap_s"] + SETUP_S + MARGIN_S
     poll = float(os.environ.get("REMOTE_POLL_S", "15"))
@@ -369,17 +476,26 @@ def wait_or_kill(t, record: dict, path: str):
         if state is None or state[0] != "running":
             return state
         if time.time() > deadline:
-            t.docker_rm(name)
+            t.docker_kill(name)
             record["killed_overdue"] = {"at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                                         "deadline_epoch": deadline}  # fmt: skip
+            record["published_partial"] = True
             write_dispatch(path, record)
-            return t.docker_state(name)
+            for _ in range(100):
+                state = t.docker_state(name)
+                if state is None or state[0] != "running":
+                    return state
+                time.sleep(poll)
+            raise TransportError(f"{name} did not stop after docker kill")
         time.sleep(poll)
 
 
-def reconcile_one(root: str, path: str, owner_held: bool) -> dict:
-    """Takes one open dispatch to a closed state. Idempotent: every step
-    replays to the same result."""
+def reconcile_one(root: str, path: str) -> dict:
+    """Takes one open dispatch to a closed state; the caller holds the
+    owner lock. Idempotent: every step replays to the same result, and any
+    doubt leaves the dispatch open with the remote evidence in place."""
+    import fcntl
+
     import loop as loopmod
 
     with open(path, encoding="utf-8") as f:
@@ -388,10 +504,13 @@ def reconcile_one(root: str, path: str, owner_held: bool) -> dict:
     name, attempt = record["container"], record["attempt"]
     d = os.path.join(root, record["attempt_dir"])
     ledger = os.path.join(root, "ledger.json")
-    local = read_ledger(ledger)
-    sent = local[: record["ledger_entries_sent"]]
     if record.get("imported"):
         return cleanup(t, record, path)
+    # The prefix comes from the immutable dispatch evidence, not from a
+    # possibly altered local ledger.
+    sent = read_ledger(ledger)[: record["ledger_entries_sent"]]
+    if entries_sha256(sent) != record["sent_entries_sha256"]:
+        raise TransportError("the local ledger no longer holds the entries sent with the dispatch")
     # Found by name, whether or not its start was recorded; never started
     # twice.
     state = wait_or_kill(t, record, path)
@@ -402,29 +521,35 @@ def reconcile_one(root: str, path: str, owner_held: bool) -> dict:
     staging = d + ".staging"
     shutil.rmtree(staging, ignore_errors=True)
     rledger = ledger + ".staging"
+    rdoc = None
     if t.exists("root/ledger.json"):
         t.pull("root/ledger.json", rledger)
         with open(rledger, encoding="utf-8") as f:
             rdoc = json.load(f)
         remote = rdoc["entries"]
-        if os.path.exists(ledger):
-            with open(ledger, encoding="utf-8") as f:
-                if rdoc["budget_core_hours"] != json.load(f)["budget_core_hours"]:
-                    raise TransportError("the remote ledger's budget differs from the local one")
-    elif not sent:
-        remote = []
+        with open(os.path.join(root, "config.json"), encoding="utf-8") as f:
+            budget = json.load(f)["budget_core_hours"]
+        if rdoc["budget_core_hours"] != budget:
+            raise TransportError("the remote ledger's budget differs from the loop's")
+    elif not record["started"] and state is None and not t.docker_ps_by_name(name):
+        remote = sent  # never started: no container was ever created
     else:
         raise TransportError(f"no ledger on {record['host']}: no evidence of what the attempt did")
     rel = f"root/{record['attempt_dir']}"
+    remote_out_sha = None
     if t.exists(rel):
         t.pull(rel, staging)
+        remote_out_sha = t.tree_sha256(rel)
     crash_point("after-pull")
     remote = accept_ledger(sent, remote, attempt)
     mine = [i for i, e in enumerate(remote) if e["run"].split()[0] == attempt]
     if not mine:
-        # Before any reservation: positive evidence that nothing ran.
+        # Before any reservation: positive evidence that nothing ran. A
+        # started dispatch needs an exited container and the remote ledger.
         if state is not None and state[0] == "running":
             raise TransportError(f"{name} is running with no ledger entry")
+        if record["started"] and (state is None or rdoc is None or state[1] in (None, 0)):
+            raise TransportError(f"{name} was started but is gone with no ledger entry: reconcile by hand")
         record["not_started_evidence"] = {
             "docker_ps_by_name": t.docker_ps_by_name(name) if state is None else f"exited {state[1]}",
             "remote_ledger_entries": len(remote),
@@ -446,28 +571,49 @@ def reconcile_one(root: str, path: str, owner_held: bool) -> dict:
         if led.entries()[mine[0]]["status"] == "running":
             led.settle_interrupted(mine[0])
         remote = read_ledger(rledger)
-    lp = loopmod.Loop(root)
-    lock = None if owner_held else lp.owner()
-    try:
-        # Journal, then publish the output and the ledger. Replay checks
-        # each step against the journal.
-        out_sha = tree_sha256(staging) if os.path.isdir(staging) and os.listdir(staging) else None
-        led_sha = artifacts.sha256_file(rledger) if os.path.exists(rledger) else None
-        journal = record.get("publish")
-        if journal is None:
-            record["publish"] = journal = {"output_sha256": out_sha, "ledger_sha256": led_sha}
-            write_dispatch(path, record)
-        elif journal != {"output_sha256": out_sha, "ledger_sha256": led_sha}:
-            raise TransportError("the remote evidence changed since publication began")
+        record["published_partial"] = True
+    if mine:
+        validate_entry(remote[mine[0]], record)
+    spent = sum(e["core_hours"] for e in remote)
+    if rdoc is not None and not _finite(spent):
+        raise TransportError("the remote ledger's spend is not finite")
+    # The output: an ok attempt must have a complete, valid output, equal
+    # to the remote one; anything else keeps the remote evidence.
+    out_sha = tree_sha256(staging) if os.path.isdir(staging) and os.listdir(staging) else None
+    ok = bool(mine) and remote[mine[0]]["status"] == "ok"
+    if ok:
+        if out_sha is None:
+            raise TransportError(f"{attempt} settled ok but its output is missing")
+        if out_sha != remote_out_sha:
+            raise TransportError(f"the staged output of {attempt} differs from the remote one")
+        lp = loopmod.Loop(root)
+        try:
+            ident = lp.identity(record["phase"], staging)
+        except loopmod.LOAD_ERRORS as e:
+            raise TransportError(f"{attempt} settled ok but its output is invalid: {e}") from None
+        record["output_identity"] = ident
+    led_sha = artifacts.sha256_file(rledger) if os.path.exists(rledger) else None
+    # Journal, then publish the output and the ledger, under the ledger's
+    # own lock; replay checks each step against the journal.
+    journal = record.get("publish")
+    if journal is None:
+        record["publish"] = journal = {"output_sha256": out_sha, "ledger_sha256": led_sha}
+        write_dispatch(path, record)
+    elif journal != {"output_sha256": out_sha, "ledger_sha256": led_sha}:
+        raise TransportError("the remote evidence changed since publication began")
+    with open(ledger + ".lock", "a+") as llock:
+        fcntl.flock(llock, fcntl.LOCK_EX)
         if out_sha is not None:
             if os.path.isdir(d) and not os.listdir(d):
                 os.rmdir(d)
             if os.path.exists(d):
-                if tree_sha256(d) != out_sha:
+                # A replay: the loop may have written its descriptor since.
+                if tree_sha256(d, exclude_files=("attempt.json",)) != out_sha:
                     raise TransportError(f"{d} already holds a different output: not overwritten")
                 shutil.rmtree(staging)
             else:
                 os.replace(staging, d)
+            fsync_tree(d)
         else:
             shutil.rmtree(staging, ignore_errors=True)
         if led_sha is not None:
@@ -478,26 +624,29 @@ def reconcile_one(root: str, path: str, owner_held: bool) -> dict:
                 raise TransportError("the local ledger changed since the dispatch")
             with open(rledger, "rb") as f:
                 artifacts.write_atomic(ledger, f.read())
-        crash_point("after-publish")
-        record["imported"] = True
-        record["imported_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-        record["ledger_tail"] = remote[len(sent) :]
-        write_dispatch(path, record)
-    finally:
-        if lock is not None:
-            lock.close()
-        if os.path.exists(rledger):
-            os.remove(rledger)
+    # Lineage before the acknowledgement: the loop's own chain check over
+    # the published evidence (checkpoint, window, config). A broken link
+    # keeps the remote evidence.
+    try:
+        lp = loopmod.Loop(root)
+        lp.chain(lp.ledger.entries())
+    except loopmod.Stop as e:
+        raise TransportError(f"the imported {attempt} breaks the loop's lineage: {e.reason} {e.inputs}") from None
+    crash_point("after-publish")
+    record["imported"] = True
+    record["imported_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    record["ledger_tail"] = remote[len(sent) :]
+    write_dispatch(path, record)
+    if os.path.exists(rledger):
+        os.remove(rledger)
     return cleanup(t, record, path)
 
 
 def cleanup(t, record: dict, path: str) -> dict:
-    """After the acknowledgement only: the container, the attempt payload
-    and the pushed inputs on the host, then a by-name check."""
+    """After the acknowledgement only: the container, then everything in
+    the host's root mirror but the ledger, then a by-name check."""
     name = record["container"]
     t.docker_rm(name)
-    # The host root mirrors one phase at a time: everything but the
-    # ledger goes.
     t.clear_root()
     left = t.docker_ps_by_name(name)
     if left:
@@ -505,6 +654,37 @@ def cleanup(t, record: dict, path: str) -> dict:
     record["closed"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     write_dispatch(path, record)
     return record
+
+
+def provision(args) -> dict:
+    """Deploys the reviewed source archive and the uv binary to a host,
+    once, and records the evidence: the archive and uv digests and the
+    deployed tree hash that every dispatch then checks."""
+    import tarfile
+    import tempfile
+
+    t = transport(args.host)
+    if t.exists("src"):
+        raise TransportError(f"{args.host} already has a source tree: remove it first")
+    with tempfile.TemporaryDirectory() as tmp:
+        src = os.path.join(tmp, "src")
+        with tarfile.open(args.archive) as tar:
+            tar.extractall(src, filter="data")
+        tree = tree_sha256(src)
+        t.push(src, "src")
+    t.push(args.uv, "uv")
+    got = t.tree_sha256("src")
+    if got != tree:
+        raise TransportError(f"the deployed source on {args.host} is {got}, not {tree}")
+    evidence = {
+        "host": args.host,
+        "archive_sha256": artifacts.sha256_file(args.archive),
+        "uv_sha256": artifacts.sha256_file(args.uv),
+        "source_tree_sha256": tree,
+        "provisioned": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+    }
+    print(json.dumps(evidence, sort_keys=True))
+    return evidence
 
 
 # ------------------------------------------------------------------- main
@@ -518,25 +698,44 @@ def main(argv=None) -> int:
     r.add_argument("--host", required=True)
     r.add_argument("--cpuset", required=True)
     r.add_argument("--root", required=True)
+    r.add_argument("--source-tree-sha256", required=True, help="the reviewed tree, from provision")
     c = sub.add_parser("reconcile")
     c.add_argument("--root", required=True)
     c.add_argument("--owner-held", action="store_true", help="called by loop.py, which holds the owner lock")
+    v = sub.add_parser("provision")
+    v.add_argument("--host", required=True)
+    v.add_argument("--archive", required=True)
+    v.add_argument("--uv", required=True)
     if "--" in argv:
         i = argv.index("--")
         args, phase_argv = p.parse_args(argv[:i]), argv[i + 1 :]
     else:
         args, phase_argv = p.parse_args(argv), []
+    if args.command == "provision":
+        provision(args)
+        return 0
     root = os.path.abspath(args.root)
     if args.command == "run":
         if not phase_argv:
             p.error("run needs -- TOOL ARGS")
         path = dispatch(args, phase_argv)
-        rec = reconcile_one(root, path, owner_held=True)
+        rec = reconcile_one(root, path)
         print(json.dumps({"attempt": rec["attempt"], "exit_code": rec.get("exit_code"), "closed": rec["closed"]}))
         return 0
-    for path in open_dispatches(root):
-        rec = reconcile_one(root, path, owner_held=args.owner_held)
-        print(json.dumps({"attempt": rec["attempt"], "closed": rec["closed"]}))
+    lock = None
+    if not args.owner_held:
+        # Standalone: the owner lock first, before any dispatch is read or
+        # any host is contacted.
+        import loop as loopmod
+
+        lock = loopmod.Loop(root).owner()
+    try:
+        for path in open_dispatches(root):
+            rec = reconcile_one(root, path)
+            print(json.dumps({"attempt": rec["attempt"], "closed": rec["closed"]}))
+    finally:
+        if lock is not None:
+            lock.close()
     return 0
 
 

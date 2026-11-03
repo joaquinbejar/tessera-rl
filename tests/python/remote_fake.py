@@ -72,7 +72,7 @@ class FakeHost:
     def _rec(self, name: str) -> str:
         return os.path.join(self.base, "containers", name + ".json")
 
-    def docker_run(self, name: str, cpuset: str, hostname: str, argv: list[str]) -> None:
+    def docker_run(self, name: str, cpuset: str, hostname: str, argv: list[str], deadline_s: float = 0) -> None:
         if os.path.exists(self._rec(name)):
             raise remote.TransportError(f"container {name} exists")
         host_argv = []
@@ -83,9 +83,20 @@ class FakeHost:
                 a = os.path.join(EXAMPLE, os.path.basename(a))
             host_argv.append(a)
         exitf = self._rec(name) + ".exit"
-        script = "import subprocess, sys; rc = subprocess.call(sys.argv[2:]); open(sys.argv[1], 'w').write(str(rc))"
+        # The container's own deadline, as `timeout` in the real one: it
+        # holds without the driver.
+        script = (
+            "import os, signal, subprocess, sys\n"
+            "p = subprocess.Popen(sys.argv[3:])\n"  # in this group: a kill takes all of it
+            "try:\n    rc = p.wait(timeout=float(sys.argv[2]))\n"
+            "except subprocess.TimeoutExpired:\n"
+            "    open(sys.argv[1], 'w').write('124')\n"
+            "    os.killpg(os.getpgrp(), signal.SIGKILL)\n"
+            "open(sys.argv[1], 'w').write(str(rc))\n"
+        )
+        deadline = deadline_s or 3600.0
         env = {k: v for k, v in os.environ.items() if not k.startswith("REMOTE_TEST_CRASH")}
-        proc = subprocess.Popen([sys.executable, "-c", script, exitf, sys.executable, *host_argv],
+        proc = subprocess.Popen([sys.executable, "-c", script, exitf, str(deadline), sys.executable, *host_argv],
                                 start_new_session=True, env=env, stdout=open(self._rec(name) + ".log", "w"),
                                 stderr=subprocess.STDOUT)  # fmt: skip
         with open(self._rec(name), "w") as f:
@@ -112,6 +123,25 @@ class FakeHost:
     def docker_logs(self, name: str) -> str:
         p = self._rec(name) + ".log"
         return open(p).read() if os.path.exists(p) else ""
+
+    def docker_kill(self, name: str) -> None:
+        rec = self._rec(name)
+        if os.path.exists(rec) and not os.path.exists(rec + ".exit"):
+            pid = json.load(open(rec))["pid"]
+            try:
+                os.killpg(pid, signal.SIGKILL)
+            except (ProcessLookupError, PermissionError):
+                pass
+            import time
+
+            for _ in range(100):
+                try:
+                    os.kill(pid, 0)
+                    time.sleep(0.05)
+                except ProcessLookupError:
+                    break
+            with open(rec + ".exit", "w") as f:
+                f.write("137")
 
     def docker_rm(self, name: str) -> None:
         rec = self._rec(name)

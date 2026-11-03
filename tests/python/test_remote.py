@@ -25,7 +25,8 @@ import remote  # noqa: E402
 import remote_fake  # noqa: E402
 from test_loop import bot_binary, identities, make_root  # noqa: E402
 
-HOSTS = {"selfplay": ("swarmer02", "0-31"), "train": ("swarmer02", "0"), "look": ("xaskar", "2")}
+# The cpusets match the tiny loop's 1-core phases.
+HOSTS = {"selfplay": ("swarmer02", "0"), "train": ("swarmer02", "0"), "look": ("xaskar", "2")}
 
 
 @pytest.fixture(scope="module")
@@ -42,9 +43,33 @@ def env_for(tmp_path, crash=None):
     return env
 
 
+def provision_hosts(tmp_path):
+    """Deploys a stand-in source tree and uv to both stand-in hosts, as
+    `remote.py provision` does on the real ones; returns the tree hash."""
+    import tarfile
+
+    src = tmp_path / "src-archive"
+    src.mkdir(parents=True)
+    (src / "README").write_text("the reviewed source tree (stand-in)\n")
+    archive = tmp_path / "src.tar"
+    with tarfile.open(archive, "w") as tar:
+        tar.add(src, arcname=".")
+    uv = tmp_path / "uv"
+    uv.write_bytes(b"uv stand-in")
+    tree = None
+    for host in ("swarmer02", "xaskar"):
+        p = subprocess.run([sys.executable, str(EXAMPLE / "remote.py"), "provision", "--host", host,
+                            "--archive", str(archive), "--uv", str(uv)], env=env_for(tmp_path),
+                           capture_output=True, text=True, check=True)  # fmt: skip
+        tree = json.loads(p.stdout)["source_tree_sha256"]
+    return tree
+
+
 def remote_root(tmp_path, bot, **over):
+    tree = provision_hosts(tmp_path)
     runners = {
-        phase: f"{{python}} {EXAMPLE / 'remote.py'} run --host {h} --cpuset {c} --root {tmp_path / 'root'} -- {{tool}} {{args}}"
+        phase: f"{{python}} {EXAMPLE / 'remote.py'} run --host {h} --cpuset {c} --root {tmp_path / 'root'} "
+        f"--source-tree-sha256 {tree} -- {{tool}} {{args}}"
         for phase, (h, c) in HOSTS.items()
     }
     reconcile = f"{{python}} {EXAMPLE / 'remote.py'} reconcile --root {{root}} --owner-held"
@@ -173,7 +198,7 @@ def test_remote_open_dispatch_refuses_a_new_one(tmp_path, bot):
     root = remote_root(tmp_path, bot)
     r = drive(root, env_for(tmp_path, "mid-push"))
     assert r.returncode != 0
-    args = type("A", (), {"root": str(root), "host": "swarmer02", "cpuset": "0"})()
+    args = type("A", (), {"root": str(root), "host": "swarmer02", "cpuset": "0", "source_tree_sha256": "x"})()
     with pytest.raises(remote.TransportError, match="open dispatch"):
         remote.dispatch(args, ["selfplay.py", "--attempt", "x", "--out", str(root / "gen-000" / "selfplay-9")])
 
@@ -213,8 +238,9 @@ def test_remote_ssh_docker_command_uses_absolute_bind_mounts_only(monkeypatch):
         return subprocess.CompletedProcess(cmd, 0, "/home/u\n", "")
 
     monkeypatch.setattr(remote.SSH, "_ssh", fake)
-    remote.SSH("swarmer02").docker_run("tessera-m3-x", "0-31", "swarmer02", ["/work/tessera/examples/a.py", "--x"])
+    remote.SSH("swarmer02").docker_run("tessera-m3-x", "0-31", "swarmer02", ["/work/tessera/examples/a.py", "--x"], 1800)
     cmd = seen[-1]
+    assert "timeout --kill-after 30 1800 sh -c" in cmd, "the deadline lives in the container"
     assert cmd.startswith("docker run -d --name tessera-m3-x ")
     mounts = [cmd.split()[i + 1] for i, t in enumerate(cmd.split()) if t == "-v"]
     assert mounts and all(m.startswith("/home/u/") for m in mounts), mounts
@@ -257,15 +283,178 @@ def test_remote_overdue_container_is_killed_and_recorded(tmp_path, monkeypatch):
     monkeypatch.setenv("REMOTE_TEST_HOSTS", str(tmp_path / "hosts"))
     monkeypatch.setenv("REMOTE_POLL_S", "0.1")
     host = remote_fake.FakeHost("swarmer02")
-    host.docker_run("tessera-m3-hang", "0", "swarmer02", ["-c", "import time; time.sleep(600)"])
+    host.docker_run("tessera-m3-hang", "0", "swarmer02", ["-c", "import time; time.sleep(600)"], 3600)
     path = tmp_path / "x.dispatch.json"
     record = {"container": "tessera-m3-hang", "dispatched_epoch": time.time() - 10_000, "wall_cap_s": 60.0}
     state = remote.wait_or_kill(host, record, str(path))
-    assert state is None and record["killed_overdue"]["deadline_epoch"] < time.time()
-    assert json.loads(path.read_text())["killed_overdue"] == record["killed_overdue"]
+    assert state == ("exited", 137) and record["killed_overdue"]["deadline_epoch"] < time.time()
+    saved = json.loads(path.read_text())
+    assert saved["killed_overdue"] == record["killed_overdue"] and saved["published_partial"] is True
+    assert host.docker_ps_by_name("tessera-m3-hang"), "killed, not removed: cleanup removes it later"
+    host.docker_rm("tessera-m3-hang")
 
 
 def test_remote_container_names_are_unique_per_experiment(tmp_path, bot):
     a = remote_root(tmp_path / "a", bot)
     b = remote_root(tmp_path / "b", bot, **{"--base": 7})
     assert cname(a, "g000-selfplay-0") != cname(b, "g000-selfplay-0")
+
+
+class Stub:
+    """subprocess.run for the SSH class: canned results per command."""
+
+    def __init__(self, table):
+        self.table, self.seen = table, []
+
+    def __call__(self, argv, **kw):
+        cmd = argv[-1] if argv[0] == "ssh" else " ".join(argv)
+        self.seen.append(cmd)
+        for key, (rc, out, err) in self.table.items():
+            if key in cmd:
+                return subprocess.CompletedProcess(argv, rc, out, err)
+        return subprocess.CompletedProcess(argv, 0, "", "")
+
+
+def test_remote_ssh_failure_is_never_read_as_gone(monkeypatch):
+    stub = Stub({"": (255, "", "ssh: connect to host swarmer02: Connection refused")})
+    monkeypatch.setattr(remote.subprocess, "run", stub)
+    h = remote.SSH("swarmer02")
+    for call in (lambda: h.docker_state("n"), lambda: h.docker_ps_by_name("n"), lambda: h.exists("root/x"),
+                 lambda: h.isdir("root/x")):  # fmt: skip
+        with pytest.raises(remote.TransportError, match="255"):
+            call()
+
+
+def test_remote_ssh_docker_state_absent_only_on_no_such_object(monkeypatch):
+    h = remote.SSH("swarmer02")
+    monkeypatch.setattr(remote.subprocess, "run", Stub({"docker inspect": (1, "", "Error: No such object: n")}))
+    assert h.docker_state("n") is None
+    monkeypatch.setattr(remote.subprocess, "run", Stub({"docker inspect": (1, "", "permission denied on the socket")}))
+    with pytest.raises(remote.TransportError):
+        h.docker_state("n")
+    monkeypatch.setattr(remote.subprocess, "run", Stub({"docker inspect": (0, "running 0\n", "")}))
+    assert h.docker_state("n") == ("running", None)
+    monkeypatch.setattr(remote.subprocess, "run", Stub({"docker inspect": (0, "exited 3\n", "")}))
+    assert h.docker_state("n") == ("exited", 3)
+    monkeypatch.setattr(remote.subprocess, "run", Stub({"test -e": (2, "", "bad")}))
+    with pytest.raises(remote.TransportError):
+        h.exists("root/x")
+
+
+def test_remote_ssh_commands_render_valid_templates(monkeypatch):
+    stub = Stub({"docker ps": (0, "tessera-m3-n Up 1 minute\n", ""), "docker inspect": (0, "running 0\n", "")})
+    monkeypatch.setattr(remote.subprocess, "run", stub)
+    h = remote.SSH("swarmer02")
+    assert h.docker_ps_by_name("tessera-m3-n") == "tessera-m3-n Up 1 minute"
+    assert "--format '{{.Names}} {{.Status}}'" in stub.seen[-1]
+    h.docker_state("tessera-m3-n")
+    assert "--format '{{.State.Status}} {{.State.ExitCode}}'" in stub.seen[-1]
+    monkeypatch.setattr(remote.subprocess, "run", Stub({"docker ps": (1, "", "boom")}))
+    with pytest.raises(remote.TransportError):
+        h.docker_ps_by_name("tessera-m3-n")
+
+
+def test_remote_partial_attempts_are_never_packed(tmp_path):
+    import assets
+
+    d = tmp_path / "gen-000" / "selfplay-0"
+    d.mkdir(parents=True)
+    assert not assets.published_partial(str(d))
+    (tmp_path / "gen-000" / "selfplay-0.dispatch.json").write_text(json.dumps({"published_partial": True}))
+    assert assets.published_partial(str(d))
+
+
+def crashed_after_start(tmp_path, bot):
+    """A root whose first dispatch (self-play) finished remotely while the
+    driver was dead: open, unimported, the remote result in place."""
+    root = remote_root(tmp_path, bot)
+    r = drive(root, env_for(tmp_path, "after-start"))
+    assert r.returncode != 0
+    exitf = tmp_path / "hosts" / "swarmer02" / "containers" / f"{cname(root, 'g000-selfplay-0')}.json.exit"
+    wait_for(exitf.exists)
+    return root, tmp_path / "hosts" / "swarmer02" / "root"
+
+
+def reconcile(tmp_path, root):
+    return subprocess.run([sys.executable, str(EXAMPLE / "remote.py"), "reconcile", "--root", str(root)],
+                          env=env_for(tmp_path), capture_output=True, text=True, timeout=300)  # fmt: skip
+
+
+@pytest.mark.parametrize("damage", ["corrupt", "missing"])
+def test_remote_ok_attempt_with_bad_output_is_refused_and_kept(tmp_path, bot, damage):
+    root, hroot = crashed_after_start(tmp_path, bot)
+    out = hroot / "gen-000" / "selfplay-0"
+    if damage == "corrupt":
+        (out / "manifest.json").write_text("CORRUPT NOT JSON")
+    else:
+        import shutil
+
+        shutil.rmtree(out)
+    p = reconcile(tmp_path, root)
+    assert p.returncode != 0 and ("invalid" in p.stderr or "missing" in p.stderr), p.stderr[-500:]
+    d = dispatches(root)[0]
+    assert not d.get("imported") and d["closed"] is None
+    assert (hroot / "ledger.json").exists() and (damage == "missing" or out.exists()), "remote evidence kept"
+    assert not (root / "gen-000" / "selfplay-0").exists()
+
+
+def test_remote_local_ledger_changed_since_dispatch_is_refused(tmp_path, bot):
+    """A concurrent writer of the local ledger after the dispatch."""
+    from ledger import Ledger
+
+    root, _ = crashed_after_start(tmp_path, bot)
+    Ledger(str(root / "ledger.json"), 1.0).reserve("intruder 1", 1, 1)
+    p = reconcile(tmp_path, root)
+    assert p.returncode != 0 and "TransportError" in p.stderr
+    assert not dispatches(root)[0].get("imported")
+
+
+def test_remote_entry_validation_rules():
+    record = {"cores": 32, "wall_cap_s": 900.0}
+    good = {"run": "g 1", "cores": 32, "deadline_s": 900.0, "wall_s": 600.0, "core_hours": round(600 * 32 / 3600, 6),
+            "status": "ok"}  # fmt: skip
+    remote.validate_entry(good, record)
+    remote.validate_entry({**good, "status": "interrupted (settled by hand at the full reservation)", "wall_s": None,
+                           "core_hours": 8.0}, record)  # fmt: skip
+    bad = [
+        {**good, "cores": 0}, {**good, "cores": 16}, {**good, "deadline_s": 0}, {**good, "deadline_s": 901},
+        {**good, "core_hours": -1}, {**good, "core_hours": float("nan")}, {**good, "core_hours": 1.0},
+        {**good, "status": "running"}, {**good, "status": "weird"}, {**good, "wall_s": None},
+        {**good, "status": "interrupted", "core_hours": 1.0},
+    ]  # fmt: skip
+    for e in bad:
+        with pytest.raises(remote.TransportError):
+            remote.validate_entry(e, record)
+
+
+def test_remote_stale_source_is_refused_before_reserve(tmp_path, bot):
+    root = remote_root(tmp_path, bot)
+    (tmp_path / "hosts" / "swarmer02" / "src" / "README").write_text("a stale checkout\n")
+    r = drive(root, env_for(tmp_path))
+    assert last_stop(r) in ("failed", "transport")
+    assert runs(root) == [], "nothing was reserved or run"
+    assert not list((tmp_path / "hosts" / "swarmer02" / "containers").glob("*.json"))
+
+
+def test_remote_container_deadline_holds_without_the_driver(tmp_path, monkeypatch):
+    monkeypatch.setenv("REMOTE_TEST_HOSTS", str(tmp_path / "hosts"))
+    host = remote_fake.FakeHost("swarmer02")
+    host.docker_run("tessera-m3-setup-hang", "0", "swarmer02", ["-c", "import time; time.sleep(600)"], 1.0)
+    wait_for(lambda: host.docker_state("tessera-m3-setup-hang") == ("exited", 124), timeout=20)
+    host.docker_rm("tessera-m3-setup-hang")
+
+
+def test_remote_owner_busy_reconcile_touches_nothing(tmp_path, bot, monkeypatch):
+    import fcntl
+
+    root, hroot = crashed_after_start(tmp_path, bot)
+    calls = []
+    monkeypatch.setattr(remote, "transport", lambda host: calls.append(host))
+    before = {p: p.read_bytes() for p in pathlib.Path(root).rglob("*") if p.is_file() and p.name != "loop.lock"}
+    with open(root / "loop.lock", "a+") as held:
+        fcntl.flock(held, fcntl.LOCK_EX)
+        with pytest.raises(SystemExit, match="another loop"):
+            remote.main(["reconcile", "--root", str(root)])
+    assert calls == []
+    after = {p: p.read_bytes() for p in pathlib.Path(root).rglob("*") if p.is_file() and p.name != "loop.lock"}
+    assert after == before
