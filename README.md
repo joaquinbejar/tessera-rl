@@ -50,10 +50,10 @@ Known limits of 0.1.0:
   aarch64 and macOS (aarch64); Windows is not in CI. The last Windows
   runs were on 2026-11-01: a native hand check of the Python Win64
   floating-point boundary at `cc5c97d` (pull request #29), and GitHub's
-  Windows CI of the Rust workspace, last green at `105be6c`. The Python
-  native boundary has changed since (the x87 control-word thunk of pull
-  request #47, and the search callouts), so the Win64 thunk in this
-  release has never run on Windows.
+  Windows CI of the Rust workspace, last green on main at `105be6c`.
+  Both the Rust code (search and engine) and the Python native boundary
+  have changed since. In particular the Win64 thunk in this release has
+  never run on Windows.
 
 ## Environments
 
