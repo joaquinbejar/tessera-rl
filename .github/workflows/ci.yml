@@ -17,13 +17,18 @@ env:
 # The toolchain comes from rust-toolchain.toml; rustup installs it on first use.
 
 # Every job runs on the owner's self-hosted runners (one runner instance
-# per host). Each self-hosted job runs only on a push or on a pull request
-# from a branch of this repository: a pull request from a fork never runs
-# code on those machines. No workflow uses pull_request_target or secrets.
+# per host). Each self-hosted job is skipped for a pull request from a fork
+# that leaves this workflow unchanged. That is not a protection on its own:
+# a fork's pull request runs the workflow files of its own head, so it can
+# edit this guard or add a workflow. The repository setting that requires
+# approval before workflows run for all outside contributors is the control
+# that must stay on; by default a fork's run is never approved, and a
+# maintainer who has read the code pushes it to a branch of this repository
+# for CI. No workflow uses pull_request_target or secrets.
 jobs:
   fmt:
     runs-on: [self-hosted, xaskar]
-    # Self-hosted: never for a pull request from a fork (see the header).
+    # Skipped for an unmodified fork pull request (see the header).
     if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -32,7 +37,7 @@ jobs:
   clippy-test:
     name: clippy and test (${{ matrix.os }})
     runs-on: [self-hosted, "${{ matrix.os }}"]
-    # Self-hosted: never for a pull request from a fork (see the header).
+    # Skipped for an unmodified fork pull request (see the header).
     if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
     strategy:
       fail-fast: false
@@ -81,7 +86,7 @@ jobs:
   # outside the production dependency graph.
   fuzz-check:
     runs-on: [self-hosted, xaskar]
-    # Self-hosted: never for a pull request from a fork (see the header).
+    # Skipped for an unmodified fork pull request (see the header).
     if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -94,7 +99,7 @@ jobs:
   musl:
     name: test (${{ matrix.target }})
     runs-on: [self-hosted, "${{ matrix.os }}"]
-    # Self-hosted: never for a pull request from a fork (see the header).
+    # Skipped for an unmodified fork pull request (see the header).
     if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
     strategy:
       fail-fast: false
@@ -130,7 +135,7 @@ jobs:
   math-diff:
     name: math differential (${{ matrix.os }})
     runs-on: [self-hosted, "${{ matrix.os }}"]
-    # Self-hosted: never for a pull request from a fork (see the header).
+    # Skipped for an unmodified fork pull request (see the header).
     if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
     strategy:
       fail-fast: false
@@ -146,7 +151,7 @@ jobs:
 
   loom:
     runs-on: [self-hosted, xaskar]
-    # Self-hosted: never for a pull request from a fork (see the header).
+    # Skipped for an unmodified fork pull request (see the header).
     if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -158,7 +163,7 @@ jobs:
 
   msrv:
     runs-on: [self-hosted, xaskar]
-    # Self-hosted: never for a pull request from a fork (see the header).
+    # Skipped for an unmodified fork pull request (see the header).
     if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -167,7 +172,7 @@ jobs:
 
   docs:
     runs-on: [self-hosted, xaskar]
-    # Self-hosted: never for a pull request from a fork (see the header).
+    # Skipped for an unmodified fork pull request (see the header).
     if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -177,7 +182,7 @@ jobs:
 
   readme:
     runs-on: [self-hosted, xaskar]
-    # Self-hosted: never for a pull request from a fork (see the header).
+    # Skipped for an unmodified fork pull request (see the header).
     if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -188,7 +193,7 @@ jobs:
 
   deny:
     runs-on: [self-hosted, xaskar]
-    # Self-hosted: never for a pull request from a fork (see the header).
+    # Skipped for an unmodified fork pull request (see the header).
     if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -200,7 +205,7 @@ jobs:
   # ADR-0003 rule 7). uv is pinned; it fetches CPython 3.11 itself.
   python:
     runs-on: [self-hosted, xaskar]
-    # Self-hosted: never for a pull request from a fork (see the header).
+    # Skipped for an unmodified fork pull request (see the header).
     if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -224,7 +229,7 @@ jobs:
     # the baselines (benches/gungraun/environment.toml), which check
     # verifies; the runner removes the container after the job.
     runs-on: [self-hosted, xaskar]
-    # Self-hosted: never for a pull request from a fork (see the header).
+    # Skipped for an unmodified fork pull request (see the header).
     if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
     container:
       # The baseline's image, by digest (benches/gungraun/environment.toml).
