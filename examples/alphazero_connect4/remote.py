@@ -88,9 +88,11 @@ class TransportError(RuntimeError):
     """A remote step failed; the dispatch stays open for reconcile."""
 
 
-def crash_point(name: str) -> None:
-    """Tests: the whole driver (this process group) dies here."""
-    if os.environ.get("REMOTE_TEST_CRASH") == name:
+def crash_point(name: str, attempt: str | None = None) -> None:
+    """Tests: the whole driver (this process group) dies here, optionally
+    only for one attempt (``REMOTE_TEST_CRASH_ATTEMPT``)."""
+    only = os.environ.get("REMOTE_TEST_CRASH_ATTEMPT")
+    if os.environ.get("REMOTE_TEST_CRASH") == name and (only is None or only == attempt):
         import signal
 
         os.killpg(os.getpgrp(), signal.SIGKILL)
@@ -189,8 +191,11 @@ class SSH:
                       check=False)  # fmt: skip
         if r.returncode != 0:
             # Absent only when docker says so; any other failure is not
-            # evidence that the container is gone.
-            if "No such object" in r.stderr or "No such container" in r.stderr:
+            # evidence that the container is gone. Docker 29 writes
+            # "error: no such object", older versions "Error: No such
+            # object", so the match ignores case.
+            err = r.stderr.lower()
+            if "no such object" in err or "no such container" in err:
                 return None
             raise TransportError(f"{self.host}: docker inspect {name} exited {r.returncode}: {r.stderr.strip()[:300]}")
         status, code = r.stdout.split()
@@ -372,7 +377,7 @@ def dispatch(args, argv: list[str]) -> str:
     }
     path = d + ".dispatch.json"
     write_dispatch(path, record)
-    crash_point("after-dispatch")
+    crash_point("after-dispatch", record["attempt"])
     t = transport(args.host)
     # The deployed source must be the reviewed tree (provision with
     # `remote.py provision`).
@@ -542,6 +547,22 @@ def reconcile_one(root: str, path: str) -> dict:
         remote = sent  # never started: no container was ever created
     else:
         raise TransportError(f"no ledger on {record['host']}: no evidence of what the attempt did")
+    # Never pushed: the dispatch died before its push, so the host still
+    # holds an earlier phase's ledger, a prefix of the one sent. Every
+    # condition is required; anything else stays with accept_ledger. The
+    # stale copy is dropped so that publication can never replace the
+    # local ledger with it.
+    stale_ledger = None
+    if (
+        rdoc is not None
+        and not record["started"]
+        and state is None
+        and remote == sent[: len(remote)]
+        and not t.docker_ps_by_name(name)
+    ):
+        stale_ledger = {"entries": len(remote), "sha256": artifacts.sha256_file(rledger)}
+        os.remove(rledger)
+        rdoc, remote = None, sent
     rel = f"root/{record['attempt_dir']}"
     remote_out_sha = None
     if t.exists(rel):
@@ -560,6 +581,7 @@ def reconcile_one(root: str, path: str) -> dict:
         record["not_started_evidence"] = {
             "docker_ps_by_name": t.docker_ps_by_name(name) if state is None else f"exited {state[1]}",
             "remote_ledger_entries": len(remote),
+            "stale_remote_ledger": stale_ledger,
             "checked": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         }
     elif remote[mine[0]]["status"] == "running":

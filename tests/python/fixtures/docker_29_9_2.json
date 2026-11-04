@@ -1,0 +1,24 @@
+{
+  "docker_version": "29.9.2 client and server",
+  "captured": "2026-11-04, read-only, on xaskar and swarmer02 (identical on both)",
+  "commands": {
+    "inspect_absent": {
+      "cmd": "docker inspect --format '{{.State.Status}} {{.State.ExitCode}}' tessera-m3-fixture-absent",
+      "returncode": 1,
+      "stdout": "\n",
+      "stderr": "error: no such object: tessera-m3-fixture-absent\n"
+    },
+    "ps_absent": {
+      "cmd": "docker ps -a --filter name=^tessera-m3-fixture-absent$ --format '{{.Names}} {{.Status}}'",
+      "returncode": 0,
+      "stdout": "",
+      "stderr": ""
+    },
+    "logs_absent": {
+      "cmd": "docker logs tessera-m3-fixture-absent 2>&1",
+      "returncode": 1,
+      "stdout": "Error response from daemon: No such container: tessera-m3-fixture-absent\n",
+      "stderr": ""
+    }
+  }
+}
