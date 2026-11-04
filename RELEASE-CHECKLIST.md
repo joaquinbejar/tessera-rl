@@ -9,6 +9,10 @@ release.
 
 - [ ] All release PRs are merged: the facade prelude and `debug-checks`, the
       README, and this CHANGELOG and checklist.
+- [ ] The last PR before the freeze sets the release date in the CHANGELOG
+      heading (`## [0.1.0] - YYYY-MM-DD`). Nothing changes the tree after
+      the freeze: the tag, the packages and the release are all built from
+      the frozen SHA.
 - [ ] Record the frozen `main` SHA. Nothing merges after it until the tag.
 - [ ] `make pre-push` is green on a clean checkout of that SHA.
 - [ ] The full CI matrix is green on that SHA.
@@ -20,27 +24,44 @@ release.
 
 ## 2. Packages
 
-Publish order, each depending only on the ones before it:
-`tessera-rl-num`, `tessera-rl-macros`, `tessera-rl-core`,
+The eight crates depend on each other at 0.1.0, which is not on crates.io
+yet, so a single crate cannot be packaged or dry-run on its own before the
+ones it depends on are published. Package, verify and publish them
+together, in one cargo command: cargo orders them by dependency
+(`tessera-rl-num`, `tessera-rl-core`, `tessera-rl-macros`,
 `tessera-rl-engine`, `tessera-rl-classic`, `tessera-rl-games`,
-`tessera-rl-search`, `tessera-rl`.
+`tessera-rl-search`, `tessera-rl`), verifies each against the others
+through a local overlay, and on a real publish waits for each to appear in
+the index before the next.
 
-- [ ] `cargo package --locked -p <each of the 8>` packages and verifies
-      every crate on the frozen SHA.
+From a fresh clone of the frozen SHA, with a fresh target directory (a
+stale `target/package` from another revision can break verification):
+
+```text
+git clone <repo> release && cd release && git checkout <frozen SHA>
+export CARGO_TARGET_DIR="$PWD/../release-target"
+cargo publish --dry-run --locked \
+  -p tessera-rl-num -p tessera-rl-macros -p tessera-rl-core \
+  -p tessera-rl-engine -p tessera-rl-classic -p tessera-rl-games \
+  -p tessera-rl-search -p tessera-rl
+```
+
+- [ ] The dry run packages and verifies all eight crates and ends with
+      "aborting upload due to dry run" for each.
 - [ ] Each package contains only its `src/`, `tests/`, `benches/`,
-      `README.md` and manifest. Path-only dev-dependencies
-      (`tessera-rl-connect4-ref`, and the facade and core in
-      `tessera-rl-macros`) are stripped from the published manifests.
+      `README.md` and manifest (`tar -tzf
+      $CARGO_TARGET_DIR/package/<crate>-0.1.0.crate`). Path-only
+      dev-dependencies (`tessera-rl-connect4-ref`, and the facade and core
+      in `tessera-rl-macros`) are absent from the published manifests.
 - [ ] The facade's package README is the full repository README.
-- [ ] `cargo publish -p <crate>` in the order above. The six crates already
-      on crates.io at 0.0.1 are owned by the maintainer; `tessera-rl-games`
-      and `tessera-rl-search` are new names.
+- [ ] The same command without `--dry-run` publishes the eight crates. The
+      six crates already on crates.io at 0.0.1 are owned by the maintainer;
+      `tessera-rl-games` and `tessera-rl-search` are new names.
 - [ ] After publishing: a throwaway crate with `tessera-rl = "0.1.0"`
       resolves from crates.io and builds the downstream toy environment.
 
 ## 3. Tag and release
 
-- [ ] Set the CHANGELOG date for 0.1.0.
 - [ ] Create the annotated tag `v0.1.0` on the frozen SHA and push it.
 - [ ] Create the GitHub release from the CHANGELOG section.
 - [ ] docs.rs builds every crate.
