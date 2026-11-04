@@ -15,6 +15,7 @@ members = [
     "tools/bench-runner",
     "tools/connect4-ref",
     "tools/spikes/layout",
+    "tests/downstream",
     "crates/tessera-rl-py",
 ]
 # The fuzz targets build with nightly and cargo-fuzz, outside the workspace.
@@ -28,6 +29,7 @@ default-members = [
     "crates/tessera-rl-classic",
     "crates/tessera-rl-games",
     "crates/tessera-rl-search",
+    "tests/downstream",
 ]
 
 [workspace.package]

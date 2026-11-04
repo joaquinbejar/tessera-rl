@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
+# A downstream consumer of the public API, as market-maker-rs will use it:
+# it depends on the facade `tessera-rl` only, never on the inner crates.
+
+[package]
+name = "tessera-rl-downstream-test"
+description = "Integration test of the public API from a downstream crate that depends on the facade only"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+tessera-rl.workspace = true
+
+[lints]
+workspace = true

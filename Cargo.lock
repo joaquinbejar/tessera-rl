@@ -871,6 +871,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "tessera-rl-downstream-test"
+version = "0.1.0"
+dependencies = [
+ "tessera-rl",
+]
+
+[[package]]
 name = "tessera-rl-engine"
 version = "0.1.0"
 dependencies = [
