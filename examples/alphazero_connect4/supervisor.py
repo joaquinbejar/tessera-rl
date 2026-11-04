@@ -105,6 +105,13 @@ def run(script: str, argv: list[str], work, *, ledger: str, budget_core_hours: f
             os.killpg(proc.pid, signal.SIGKILL)
         except ProcessLookupError:
             pass
+        except PermissionError:
+            # macOS answers EPERM for a group whose remaining members are
+            # all exiting (zombies), which happens under load right after
+            # the child returns. The group is then already dying; the
+            # leader is still killed directly in case it is not.
+            if proc.poll() is None:
+                proc.kill()
 
     def on_term(signum, _frame):
         kill_group()
