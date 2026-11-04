@@ -13,7 +13,8 @@
 use core::num::{NonZeroU32, NonZeroUsize};
 
 use tessera_rl::engine::{
-    ActionInput, AutoReset, EnvPool, NoMasks, PoolOptions, Record, Reseed, SyncOptions,
+    ActionInput, AutoReset, DecodedRecord, EngineError, EnvPool, NoMasks, PoolOptions, Record,
+    Reseed, SyncOptions,
 };
 use tessera_rl::num::identity::Seed;
 use tessera_rl_downstream_test::{Quote, QuoteConfig};
@@ -190,4 +191,27 @@ fn test_downstream_reward_is_the_exact_change_in_marked_value() {
             );
         }
     }
+}
+
+#[test]
+fn test_downstream_import_validates_the_inventory_bound_including_i32_min() {
+    let mut p = pool(7, None);
+    let _ = run(&mut p, 0, 3);
+    let good = DecodedRecord::from(p.snapshot(0).unwrap());
+    let before = p.state_hash(1).unwrap();
+    for inventory in [11, -11, i32::MIN] {
+        let mut state = *good.state();
+        state.inventory = inventory;
+        let bad = DecodedRecord::from_parts(*good.header(), state).unwrap();
+        assert!(
+            matches!(
+                p.import(&[1], &[bad]),
+                Err(EngineError::Invariant { index: 0, .. })
+            ),
+            "inventory {inventory} is refused"
+        );
+        assert_eq!(p.state_hash(1).unwrap(), before, "nothing is written");
+    }
+    p.import(&[1], &[good]).unwrap();
+    assert_eq!(p.state_hash(1).unwrap(), p.state_hash(0).unwrap());
 }

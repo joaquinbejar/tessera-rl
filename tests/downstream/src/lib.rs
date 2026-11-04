@@ -145,7 +145,9 @@ impl Environment for Quote {
 /// Imported states must respect the inventory bound and the episode length.
 impl Validate for Quote {
     fn validate(cfg: &QuoteConfig, state: &QuoteState) -> Result<(), InvariantViolation> {
-        if state.inventory.abs() > cfg.max_inventory {
+        // unsigned_abs: `abs` overflows on i32::MIN (a panic in debug, a
+        // wrong answer in release), and imported states are untrusted.
+        if state.inventory.unsigned_abs() > cfg.max_inventory.unsigned_abs() {
             return Err(InvariantViolation {
                 code: "inventory beyond its bound",
             });
