@@ -17,12 +17,14 @@ env:
 # The toolchain comes from rust-toolchain.toml; rustup installs it on first use.
 
 # Every job runs on the owner's self-hosted runners (one runner instance
-# per host). The repository is private: if it is ever made public, require
-# approval for fork pull requests first, or they would run on those
-# machines.
+# per host). Each self-hosted job runs only on a push or on a pull request
+# from a branch of this repository: a pull request from a fork never runs
+# code on those machines. No workflow uses pull_request_target or secrets.
 jobs:
   fmt:
     runs-on: [self-hosted, xaskar]
+    # Self-hosted: never for a pull request from a fork (see the header).
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - run: cargo fmt --all -- --check
@@ -30,6 +32,8 @@ jobs:
   clippy-test:
     name: clippy and test (${{ matrix.os }})
     runs-on: [self-hosted, "${{ matrix.os }}"]
+    # Self-hosted: never for a pull request from a fork (see the header).
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
     strategy:
       fail-fast: false
       matrix:
@@ -77,6 +81,8 @@ jobs:
   # outside the production dependency graph.
   fuzz-check:
     runs-on: [self-hosted, xaskar]
+    # Self-hosted: never for a pull request from a fork (see the header).
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
@@ -88,6 +94,8 @@ jobs:
   musl:
     name: test (${{ matrix.target }})
     runs-on: [self-hosted, "${{ matrix.os }}"]
+    # Self-hosted: never for a pull request from a fork (see the header).
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
     strategy:
       fail-fast: false
       matrix:
@@ -122,6 +130,8 @@ jobs:
   math-diff:
     name: math differential (${{ matrix.os }})
     runs-on: [self-hosted, "${{ matrix.os }}"]
+    # Self-hosted: never for a pull request from a fork (see the header).
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
     strategy:
       fail-fast: false
       matrix:
@@ -136,6 +146,8 @@ jobs:
 
   loom:
     runs-on: [self-hosted, xaskar]
+    # Self-hosted: never for a pull request from a fork (see the header).
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - run: cargo test -p tessera-rl-engine --lib --release --locked -- gang storage
@@ -146,6 +158,8 @@ jobs:
 
   msrv:
     runs-on: [self-hosted, xaskar]
+    # Self-hosted: never for a pull request from a fork (see the header).
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - run: rustup toolchain install 1.95.0 --profile minimal
@@ -153,6 +167,8 @@ jobs:
 
   docs:
     runs-on: [self-hosted, xaskar]
+    # Self-hosted: never for a pull request from a fork (see the header).
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - run: cargo doc --workspace --no-deps --all-features --locked
@@ -161,6 +177,8 @@ jobs:
 
   readme:
     runs-on: [self-hosted, xaskar]
+    # Self-hosted: never for a pull request from a fork (see the header).
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: taiki-e/install-action@86f7a0ffb25f40114606501a311ebcfaf882ea32 # v2.88.0
@@ -170,6 +188,8 @@ jobs:
 
   deny:
     runs-on: [self-hosted, xaskar]
+    # Self-hosted: never for a pull request from a fork (see the header).
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
@@ -180,6 +200,8 @@ jobs:
   # ADR-0003 rule 7). uv is pinned; it fetches CPython 3.11 itself.
   python:
     runs-on: [self-hosted, xaskar]
+    # Self-hosted: never for a pull request from a fork (see the header).
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
@@ -202,6 +224,8 @@ jobs:
     # the baselines (benches/gungraun/environment.toml), which check
     # verifies; the runner removes the container after the job.
     runs-on: [self-hosted, xaskar]
+    # Self-hosted: never for a pull request from a fork (see the header).
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
     container:
       # The baseline's image, by digest (benches/gungraun/environment.toml).
       image: rust:1.99.1@sha256:09027f873d45b8ecd1dc86f1fa13b7a62b875c961f017a0e331267b350430137
