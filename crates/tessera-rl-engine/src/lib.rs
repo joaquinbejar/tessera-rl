@@ -35,3 +35,9 @@ pub use outputs::Outputs;
 pub use pool::{EnvPool, Reseed};
 pub use record::{DecodedRecord, PoolContext, Record};
 pub use validate::ActionInput;
+
+/// Whether this build has the `debug-checks` feature (SPEC 5.5): strict
+/// legality checks at the validation boundary, and an invalid agent event
+/// poisons the pool. Lets a downstream crate confirm that the feature it
+/// asked for on the facade reached the engine.
+pub const DEBUG_CHECKS: bool = cfg!(feature = "debug-checks");
