@@ -59,17 +59,33 @@ Before the repository is made public:
       classified.
 - [ ] The CI guard is merged: no self-hosted job runs for a pull request
       from a fork (see the CI note below).
-- [ ] Coordinator: at the flip, set the repository to require approval
-      before workflows run for all outside contributors.
+- [ ] The persistence and host credentials of the three self-hosted
+      runners (xaskar, m4-linux-arm64, m4) have been reviewed: what a job
+      can reach on each host, and what it can leave behind.
+
+The flip, by the coordinator, in this order:
+
+1. [ ] Disable GitHub Actions on the repository.
+2. [ ] Make the repository public.
+3. [ ] Set workflow approval to **all outside contributors** (not only
+       first-time contributors).
+4. [ ] Read the setting back and confirm it.
+5. [ ] Re-enable GitHub Actions.
+6. [ ] If a fork is available, test once with an unmodified fork pull
+       request: no self-hosted job may run.
+
+Approver rule: by default a workflow run from a fork is never approved. A
+maintainer reads the contribution and pushes it to a branch of this
+repository, where CI runs.
 - [ ] The specification, the ADRs and the agent notes stay out of the
       repository (decided for 0.1.0); the CHANGELOG states that code
       comments cite them.
 
 CI note: every job of `ci.yml` runs on self-hosted runners. The guard
-skips them for pull requests from forks, but a fork's pull request runs the
-workflow file from its own head and can remove the guard. The approval
-setting is the control that holds: approve a fork's workflow run only after
-reading any change it makes under `.github/`.
+only skips them for a fork pull request that leaves the workflow unchanged:
+a fork's pull request runs the workflow files of its own head, so it can
+edit the guard or add a workflow. The approval setting is the control that
+must stay on.
 
 ## 5. After the release
 
