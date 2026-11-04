@@ -16,7 +16,8 @@ properties that fast environment libraries rarely offer together:
   simultaneous, sequential and mixed turns in one `Environment` trait.
 
 Environments are plain-data Rust structs with a few derives. The engine
-runs many instances in one pool (inline, or on pinned worker threads)
+runs many instances in one pool (inline, or on worker threads pinned
+where the OS allows)
 with zero allocations per step. Python bindings expose them through a
 Gymnasium-compatible interface.
 
@@ -45,6 +46,9 @@ Known limits of 0.1.0:
 - Issue #43, an intermittent allocation count in one Sync-mode test seen
   once on CI, is open and unreproduced.
 - No throughput figure is published with this release.
+- CI covers Linux x86-64, Linux aarch64 and macOS (aarch64). Windows is
+  not in CI: Windows x86-64 was last checked by hand, natively, on
+  2026-11-01 at commit `cc5c97d` (pull request #29).
 
 ## Environments
 
@@ -77,7 +81,10 @@ paths through it. The minimum supported Rust version is 1.95 (edition
 The Python package is not published to `PyPI` in this release. Build it
 from a checkout with [maturin](https://www.maturin.rs/):
 
+`maturin develop` installs into the active virtual environment:
+
 ```
+python -m venv .venv && source .venv/bin/activate
 pip install maturin
 maturin develop --release
 ```
@@ -187,7 +194,8 @@ assert_eq!(pool.state_hash(3)?, pool.state_hash(0)?);
 ```
 
 With the `Sync` mode, `with_workers(SyncOptions::new(n))` runs the same
-pool on `n` pinned worker threads, with bit-identical results.
+pool on `n` worker threads (pinned where the OS allows), with
+bit-identical results.
 
 From Python:
 
@@ -254,6 +262,10 @@ We welcome contributions to this project! If you would like to contribute, pleas
 3. Make your changes and ensure that the project still builds and all tests pass (`make pre-push`).
 4. Commit your changes and push your branch to your forked repository.
 5. Submit a pull request to the main repository.
+
+CI does not run for pull requests from forks: it runs on the maintainer's
+own machines. A maintainer reviews the contribution and pushes it to a
+branch of this repository, where CI runs. See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 If you have any questions, issues, or would like to provide feedback, please feel free to contact the project
 maintainer:

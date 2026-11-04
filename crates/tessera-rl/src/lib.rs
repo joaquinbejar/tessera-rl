@@ -16,7 +16,8 @@
 //!   simultaneous, sequential and mixed turns in one `Environment` trait.
 //!
 //! Environments are plain-data Rust structs with a few derives. The engine
-//! runs many instances in one pool (inline, or on pinned worker threads)
+//! runs many instances in one pool (inline, or on worker threads pinned
+//! where the OS allows)
 //! with zero allocations per step. Python bindings expose them through a
 //! Gymnasium-compatible interface.
 //!
@@ -45,6 +46,9 @@
 //! - Issue #43, an intermittent allocation count in one Sync-mode test seen
 //!   once on CI, is open and unreproduced.
 //! - No throughput figure is published with this release.
+//! - CI covers Linux x86-64, Linux aarch64 and macOS (aarch64). Windows is
+//!   not in CI: Windows x86-64 was last checked by hand, natively, on
+//!   2026-11-01 at commit `cc5c97d` (pull request #29).
 //!
 //! ## Environments
 //!
@@ -77,7 +81,10 @@
 //! The Python package is not published to `PyPI` in this release. Build it
 //! from a checkout with [maturin](https://www.maturin.rs/):
 //!
+//! `maturin develop` installs into the active virtual environment:
+//!
 //! ```text
+//! python -m venv .venv && source .venv/bin/activate
 //! pip install maturin
 //! maturin develop --release
 //! ```
@@ -190,7 +197,8 @@
 //! ```
 //!
 //! With the `Sync` mode, `with_workers(SyncOptions::new(n))` runs the same
-//! pool on `n` pinned worker threads, with bit-identical results.
+//! pool on `n` worker threads (pinned where the OS allows), with
+//! bit-identical results.
 //!
 //! From Python:
 //!

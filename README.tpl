@@ -12,6 +12,10 @@ We welcome contributions to this project! If you would like to contribute, pleas
 4. Commit your changes and push your branch to your forked repository.
 5. Submit a pull request to the main repository.
 
+CI does not run for pull requests from forks: it runs on the maintainer's
+own machines. A maintainer reviews the contribution and pushes it to a
+branch of this repository, where CI runs. See [CONTRIBUTING.md](CONTRIBUTING.md).
+
 If you have any questions, issues, or would like to provide feedback, please feel free to contact the project
 maintainer:
 
