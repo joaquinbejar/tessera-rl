@@ -49,15 +49,19 @@ by dependency (`tessera-rl-num`, `tessera-rl-core`, `tessera-rl-macros`,
 through a local overlay registry, and on a real publish waits for each to
 appear in the index before the next.
 
-Always from a fresh clone of the frozen SHA, with a fresh target directory.
-A `target/package/tmp-registry` left by an earlier packaging run of another
-revision breaks verification with a cargo internal error ("no hash listed
-for tessera-rl-num v0.1.0"); that is what failed in one review run, while a
-clean run passed.
+Always from a fresh clone of the frozen SHA, with a fresh target directory
+and a **writable Cargo home** (`$CARGO_HOME`, by default `~/.cargo`).
+Verification unpacks the eight overlay packages into the Cargo home's
+registry. When the Cargo home cannot be written (a sandbox, or read-only
+permissions), cargo 1.99.1 fails while verifying `tessera-rl-core` with the
+misleading internal error "no hash listed for tessera-rl-num v0.1.0". This
+was reproduced with a read-only copy of a Cargo home, and the same command
+passes with a writable one; it is what failed in one review run.
 
 ```text
 git clone <repo> release && cd release && git checkout <frozen SHA>
 export CARGO_TARGET_DIR="$PWD/../release-target"
+test -w "${CARGO_HOME:-$HOME/.cargo}"   # must succeed
 cargo package --locked \
   -p tessera-rl-num -p tessera-rl-macros -p tessera-rl-core \
   -p tessera-rl-engine -p tessera-rl-classic -p tessera-rl-games \
@@ -122,10 +126,16 @@ The flip, by the coordinator, in this order:
 6. [ ] If a fork is available, test once with an unmodified fork pull
        request: no self-hosted job may run.
 
-Fallback, if GitHub refuses step 3 while Actions are disabled: take the
-three self-hosted runners offline, enable Actions, set the approval to all
-outside contributors, read it back, and only then bring the runners back
-online.
+Fallback, if GitHub refuses step 3 while Actions are disabled:
+
+1. Take the three self-hosted runners offline.
+2. Enable Actions, set the approval to all outside contributors, and read
+   it back.
+3. Cancel every workflow run created while Actions were enabled without
+   that setting, and confirm that no run is queued, waiting or in
+   progress. The new setting does not gate a run queued before it was
+   set.
+4. Only then bring the runners back online.
 
 Approver rule: by default a workflow run from a fork is never approved. A
 maintainer reads the contribution and pushes it to a branch of this
