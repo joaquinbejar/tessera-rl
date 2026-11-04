@@ -10,7 +10,7 @@
 //! This crate is the facade: it re-exports the workspace crates, following
 //! the layered workspace layout of SPEC section 4.1 and ADR-0021.
 //!
-//! Most authors need only the [`prelude`]:
+//! Most authors need only the `prelude`:
 //!
 //! ```
 //! use tessera_rl::prelude::*;
@@ -19,7 +19,7 @@
 //! # Features
 //!
 //! - `debug-checks`: strict checks at the validation boundary (SPEC 5.5),
-//!   forwarded to the engine; [`engine::DEBUG_CHECKS`] reports whether it
+//!   forwarded to the engine; `engine::DEBUG_CHECKS` reports whether it
 //!   is on.
 
 pub use tessera_rl_classic as classic;

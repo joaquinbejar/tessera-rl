@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! A toy single-agent quoting environment written as a downstream crate
-//! would write it: through the facade `tessera-rl` only, with the derive
-//! macros resolving their paths through it.
+//! would write it: through the facade `tessera-rl` only, with one
+//! `use tessera_rl::prelude::*`, and the derive macros resolving their
+//! paths through the facade.
 //!
 //! The agent quotes a bid and an ask around a mid price that moves by a
 //! random tick each step. Each side is filled when the move reaches it.
@@ -14,14 +15,7 @@
 //! - Observation: `Box(i32, [3])`: inventory, mid minus its start, steps.
 //! - Ends: terminated after `length` steps.
 
-use tessera_rl::core::io::{Actions, ObsWriter};
-use tessera_rl::core::space::Space;
-use tessera_rl::core::{
-    AgentSlot, Environment, EpisodeEnd, InvariantViolation, NoAdaptive, ObsLeaf, Observation,
-    RecordHeader, SpaceError, StepOut, Tier, Validate,
-};
-use tessera_rl::macros::{EnvConfig, EnvState, Observation};
-use tessera_rl::num::rng::{ObsRng, StepRng};
+use tessera_rl::prelude::*;
 
 /// The mid price at reset, in ticks.
 pub const START_MID: i64 = 10_000;
