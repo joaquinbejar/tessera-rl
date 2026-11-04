@@ -46,9 +46,14 @@
 //! - Issue #43, an intermittent allocation count in one Sync-mode test seen
 //!   once on CI, is open and unreproduced.
 //! - No throughput figure is published with this release.
-//! - CI covers Linux x86-64, Linux aarch64 and macOS (aarch64). Windows is
-//!   not in CI: Windows x86-64 was last checked by hand, natively, on
-//!   2026-11-01 at commit `cc5c97d` (pull request #29).
+//! - **0.1.0 is unverified on Windows.** CI covers Linux x86-64, Linux
+//!   aarch64 and macOS (aarch64); Windows is not in CI. The last Windows
+//!   runs were on 2026-11-01: a native hand check of the Python Win64
+//!   floating-point boundary at `cc5c97d` (pull request #29), and GitHub's
+//!   Windows CI of the Rust workspace, last green at `105be6c`. The Python
+//!   native boundary has changed since (the x87 control-word thunk of pull
+//!   request #47, and the search callouts), so the Win64 thunk in this
+//!   release has never run on Windows.
 //!
 //! ## Environments
 //!
@@ -79,9 +84,9 @@
 //! 2024).
 //!
 //! The Python package is not published to `PyPI` in this release. Build it
-//! from a checkout with [maturin](https://www.maturin.rs/):
-//!
-//! `maturin develop` installs into the active virtual environment:
+//! from a checkout with [maturin](https://www.maturin.rs/), whose `develop`
+//! command installs into the active virtual environment, so create and
+//! activate one first (the `source` line is for Unix shells):
 //!
 //! ```text
 //! python -m venv .venv && source .venv/bin/activate
