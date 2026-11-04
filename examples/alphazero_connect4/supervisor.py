@@ -35,8 +35,9 @@ from ledger import BudgetExceeded, Ledger
 EXIT_DEADLINE = 124
 CLEANUP_GRACE_S = 2.0
 # How long a group kill refused with EPERM is retried before the run is
-# failed closed (see `kill_group` in `run`).
-KILL_CONFIRM_S = 1.0
+# failed closed (see `kill_group` in `run`); inside CLEANUP_GRACE_S.
+KILL_CONFIRM_S = 1.5
+NOT_CONFIRMED = "the process group was not confirmed gone (killpg EPERM)"
 
 
 class Clock:
@@ -132,9 +133,10 @@ def run(script: str, argv: list[str], work, *, ledger: str, budget_core_hours: f
         return False
 
     def on_term(signum, _frame):
-        kill_group()
+        gone = kill_group()
         proc.wait()
-        led.settle(index, time.monotonic() - start, f"interrupted by signal {signum}")
+        status = f"interrupted by signal {signum}" + ("" if gone else f" ({NOT_CONFIRMED})")
+        led.settle(index, time.monotonic() - start, status)
         os._exit(128 + signum)
 
     signal.signal(signal.SIGTERM, on_term)
@@ -150,7 +152,7 @@ def run(script: str, argv: list[str], work, *, ledger: str, budget_core_hours: f
     if not gone:
         # Fail closed: never settle ok, nor as a clean deadline kill, while a
         # member of the group may still be running.
-        status, code = "failed: the process group was not confirmed gone (killpg EPERM)", 1
+        status, code = f"failed: {NOT_CONFIRMED}", 1
     elif rc is None or rc == -signal.SIGKILL:
         status, code = f"killed at the deadline ({work_s:.1f} s of work)", EXIT_DEADLINE
     elif rc == 0:

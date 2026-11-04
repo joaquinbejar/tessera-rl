@@ -14,6 +14,7 @@ import json
 import os
 import pathlib
 import signal
+import subprocess
 import sys
 import time
 
@@ -27,7 +28,7 @@ REAL_KILLPG = os.killpg
 # The child's own watchdog kills its group at the deadline; with killpg
 # neutralised in the child, only the supervisor's direct kill of the leader
 # can end it.
-NEUTRALISED = 'setattr(__import__("os"), "killpg", lambda *a: None); time.sleep(60)'
+NEUTRALISED = "import os; os.killpg = lambda *a: None; time.sleep(60)"
 
 CHILD = """
 import pathlib, subprocess, sys, time
@@ -46,13 +47,18 @@ sys.exit(supervisor.run(__file__, sys.argv[1:], work, ledger="", budget_core_hou
 
 
 def alive(pid):
+    """Whether ``pid`` runs; a zombie does not. Fails if ``ps`` cannot
+    inspect a process that exists, rather than reading that as dead."""
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
         return False
-    # A zombie still answers; ps tells them apart.
-    stat = os.popen(f"ps -o stat= -p {pid}").read().strip()
-    return bool(stat) and not stat.startswith("Z")
+    # A zombie still answers the signal check; ps tells them apart.
+    r = subprocess.run(["ps", "-o", "stat=", "-p", str(pid)], capture_output=True, text=True)
+    stat = r.stdout.strip()
+    if r.returncode != 0 or not stat:
+        raise AssertionError(f"cannot inspect pid {pid}: ps exited {r.returncode}: {r.stderr.strip()}")
+    return not stat.startswith("Z")
 
 
 def run(tmp_path, monkeypatch, *, refusals, body="pass", wall_cap_s=30.0):
@@ -117,3 +123,41 @@ def test_supervisor_persistent_eperm_at_the_deadline_fails_closed(tmp_path, monk
         assert entries[0]["wall_s"] < 30, "the leader is still killed directly"
     finally:
         cleanup(pid)
+
+
+SUPERVISED = """
+import os, sys
+sys.path.insert(0, {example!r})
+import supervisor
+
+def eperm(pgid, sig):
+    raise PermissionError(1, "Operation not permitted")
+
+os.killpg = eperm
+supervisor.KILL_CONFIRM_S = 0.3
+sys.exit(supervisor.run({child!r}, [], None, ledger={ledger!r}, budget_core_hours=1.0, cores=1,
+                        wall_cap_s=30.0, out={out!r}, name="t"))
+"""
+
+
+def test_supervisor_sigterm_with_a_refused_group_kill_says_so_in_the_status(tmp_path):
+    """on_term with a persistent EPERM: the settled status keeps the
+    accepted "interrupted by signal" prefix and names the refusal."""
+    pidfile = tmp_path / "descendant.pid"
+    child = tmp_path / "child.py"
+    child.write_text(CHILD.format(example=str(EXAMPLE), pidfile=str(pidfile), body=NEUTRALISED))
+    ledger = tmp_path / "ledger.json"
+    sup = tmp_path / "supervised.py"
+    sup.write_text(SUPERVISED.format(example=str(EXAMPLE), child=str(child), ledger=str(ledger),
+                                     out=str(tmp_path / "out")))  # fmt: skip
+    p = subprocess.Popen([sys.executable, str(sup)])
+    end = time.monotonic() + 30
+    while not pidfile.exists() and time.monotonic() < end:
+        time.sleep(0.05)
+    p.send_signal(signal.SIGTERM)
+    try:
+        assert p.wait(timeout=30) == 128 + signal.SIGTERM
+        status = json.loads(ledger.read_text())["entries"][0]["status"]
+        assert status == f"interrupted by signal {signal.SIGTERM} ({supervisor.NOT_CONFIRMED})"
+    finally:
+        cleanup(int(pidfile.read_text()))
