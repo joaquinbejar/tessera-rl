@@ -7,7 +7,7 @@ format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project uses [Semantic Versioning](https://semver.org/). Before 1.0
 the API is not stable, and any 0.x release may break it.
 
-## [0.1.0] - unreleased
+## [0.1.0] - 2026-11-04
 
 The first functional release. Six of these crate names were reserved on
 crates.io at 0.0.1; `tessera-rl-games` and `tessera-rl-search` are new.
@@ -61,6 +61,9 @@ crates.io at 0.0.1; `tessera-rl-games` and `tessera-rl-search` are new.
   example's training loop still uses single-tree search. The measurement is
   shared-host throughput on one machine, not a published benchmark.
 - **No throughput figure** is published with this release.
+- **Windows is not in CI.** CI covers Linux x86-64, Linux aarch64 and macOS
+  (aarch64). Windows x86-64 was last checked by hand, natively, on
+  2026-11-01 at commit `cc5c97d` (pull request #29).
 - **Planned, not implemented:** PettingZoo and PufferLib adapters,
   `Async` and `Pipelined` modes, persisted snapshots, Othello, Go 9x9 and
   Leduc hold'em (phase 2); SIMD lanes, JAX and GPU paths, Snake, Pong and
@@ -70,7 +73,7 @@ crates.io at 0.0.1; `tessera-rl-games` and `tessera-rl-search` are new.
 
 ### Known deviations from the specification
 
-Code comments and these notes cite a project specification ("SPEC") and
+Code, comments and documents cite a project specification ("SPEC") and
 architecture decision records ("ADR-00nn") that are not published in this
 repository, so a reader cannot open them. Where the specification and the
 code disagree, the specification is the target, and these are open
@@ -92,8 +95,10 @@ defects:
   been reproduced: 1,200 earlier runs, then 5,000 runs in a local Linux
   container and 10,000 on an x86-64 Linux host (two variants, 4 pinned
   CPUs). The GitHub-hosted environment could not be retested because of
-  account billing. The test now records each counted allocation (thread,
-  size and kernel), so a recurrence will be diagnosable. The assertion
+  account billing. The test now records each counted allocation (its size,
+  the thread and its name, whether the thread was in a step or reset kernel
+  or in neither, and that thread's kernel call count), so a recurrence will
+  be diagnosable. The assertion
   stays at zero allocations.
 
 ### Notes for dependent crates
