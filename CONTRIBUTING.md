@@ -1,26 +1,37 @@
 <!-- SPDX-License-Identifier: MIT OR Apache-2.0 -->
 
-# Contributing to Tessera
+# Contributing
 
-Thank you for your interest in Tessera.
+Contributions are welcome.
 
-## License of contributions
+1. Fork the repository.
+2. Create a new branch for your feature or bug fix.
+3. Make your changes and ensure that the project still builds and all tests
+   pass: `make pre-push` is the local gate (formatting, clippy with
+   `-D warnings`, the Rust and Python tests, documentation and the README
+   check).
+4. Commit your changes and push your branch to your fork.
+5. Submit a pull request to the main repository.
 
-Tessera is dual licensed under the MIT license and the Apache License,
-Version 2.0, at your option (ADR-0020).
+CI does not run for pull requests from forks: it runs on the maintainer's
+own machines. A maintainer reviews the contribution and pushes it to a
+branch of this repository, where CI runs.
 
-Contributions follow the inbound = outbound rule: unless you explicitly state
-otherwise, any contribution intentionally submitted for inclusion in the work
-by you, as defined in the Apache-2.0 license, shall be dual licensed as above,
-without any additional terms or conditions.
+Before you start:
 
-## Before you open a pull request
+- Open an issue before a design change, so it can be discussed first.
+- Code, comments, docs, commits and pull requests are in English.
+- Commit messages follow [Conventional Commits](https://www.conventionalcommits.org/)
+  (`feat:`, `fix:`, `docs:`, `test:`, `ci:`, `chore:`, with a scope where it
+  helps).
+- Keep a pull request to one concern.
+- Every source file starts with the SPDX header
+  `SPDX-License-Identifier: MIT OR Apache-2.0` in its comment syntax.
+- After adding or changing a dependency, run `make deny` (cargo-deny:
+  licences, advisories and sources).
+- The README is generated from the facade crate's documentation and
+  `README.tpl` with `cargo-readme` (`make readme`); edit those, not
+  `README.md`.
 
-- Open an issue first for design changes, so they can be discussed before
-  any code is written.
-- Start every new file with the SPDX header
-  `SPDX-License-Identifier: MIT OR Apache-2.0`, in the comment syntax of the
-  file type.
-- Use conventional commits and keep one concern per pull request.
-- Run `make pre-push` and make sure it passes; run `make deny` after any
-  dependency change.
+Contributions are dual licensed under MIT OR Apache-2.0, as described in the
+README.
