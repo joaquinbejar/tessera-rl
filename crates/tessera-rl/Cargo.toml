@@ -3,7 +3,7 @@
 [package]
 name = "tessera-rl"
 description = "Fast, deterministic, forkable reinforcement learning environments in Rust"
-readme = "README.md"
+readme = "../../README.md"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

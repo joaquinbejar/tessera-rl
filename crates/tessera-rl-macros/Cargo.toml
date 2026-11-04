@@ -24,8 +24,10 @@ quote.workspace = true
 syn.workspace = true
 
 [dev-dependencies]
-tessera-rl.workspace = true
-tessera-rl-core.workspace = true
+# Path-only: crates.io strips them, so publishing this crate does not
+# need the facade or core (published after it) on crates.io first.
+tessera-rl = { path = "../tessera-rl" }
+tessera-rl-core = { path = "../tessera-rl-core" }
 tessera-rl-num.workspace = true
 trybuild.workspace = true
 
