@@ -61,9 +61,13 @@ crates.io at 0.0.1; `tessera-rl-games` and `tessera-rl-search` are new.
   example's training loop still uses single-tree search. The measurement is
   shared-host throughput on one machine, not a published benchmark.
 - **No throughput figure** is published with this release.
-- **Windows is not in CI.** CI covers Linux x86-64, Linux aarch64 and macOS
-  (aarch64). Windows x86-64 was last checked by hand, natively, on
-  2026-11-01 at commit `cc5c97d` (pull request #29).
+- **0.1.0 is unverified on Windows.** CI covers Linux x86-64, Linux
+  aarch64 and macOS (aarch64); Windows is not in CI. The last Windows runs
+  were on 2026-11-01: a native hand check of the Python Win64
+  floating-point boundary at `cc5c97d` (#29), and GitHub's Windows CI of
+  the Rust workspace, last green at `105be6c`. The Python native boundary
+  changed after that (the x87 control-word thunk of #47, and the search
+  callouts), so the Win64 thunk in this release has never run on Windows.
 - **Planned, not implemented:** PettingZoo and PufferLib adapters,
   `Async` and `Pipelined` modes, persisted snapshots, Othello, Go 9x9 and
   Leduc hold'em (phase 2); SIMD lanes, JAX and GPU paths, Snake, Pong and
