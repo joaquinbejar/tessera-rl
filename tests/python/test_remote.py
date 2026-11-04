@@ -530,3 +530,82 @@ def test_remote_exited_container_with_open_entry_is_settled_conservatively(tmp_p
     assert (a0, a1, s1) == ("g000-selfplay-0", "g000-selfplay-1", "ok") and s0.startswith("interrupted (settled")
     first = next(d for d in dispatches(root) if d["attempt"] == "g000-selfplay-0")
     assert first["terminal_evidence"]["docker_state"] == ["exited", 137] and first["published_partial"]
+
+
+def _crash_at_look_dispatch(tmp_path, bot):
+    """One generation whose look dispatch dies before its push: the host
+    of the look never received this ledger."""
+    root = remote_root(tmp_path, bot)
+    env = env_for(tmp_path, "after-dispatch")
+    env["REMOTE_TEST_CRASH_ATTEMPT"] = "g000-look-0"
+    r = drive(root, env)
+    assert r.returncode != 0
+    d = next(x for x in dispatches(root) if x["attempt"] == "g000-look-0")
+    assert d["started"] is False and d["closed"] is None
+    return root
+
+
+def _host_ledger(tmp_path, root, entries):
+    """Puts an earlier phase's ledger on the look's host, as the cleanup of
+    a previous look leaves it."""
+    doc = json.loads((root / "ledger.json").read_text())
+    doc["entries"] = entries
+    p = tmp_path / "hosts" / "xaskar" / "root" / "ledger.json"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps(doc))
+    return p
+
+
+def _reconcile(tmp_path, root):
+    return subprocess.run([sys.executable, str(EXAMPLE / "remote.py"), "reconcile", "--root", str(root)],
+                          env=env_for(tmp_path), capture_output=True, text=True, timeout=120)  # fmt: skip
+
+
+def test_remote_never_pushed_dispatch_with_a_stale_prefix_ledger_closes_charging_nothing(tmp_path, bot):
+    root = _crash_at_look_dispatch(tmp_path, bot)
+    sent = json.loads((root / "ledger.json").read_text())["entries"]
+    stale = _host_ledger(tmp_path, root, sent[:1])
+    before = remote.artifacts.sha256_file(str(root / "ledger.json"))
+    p = _reconcile(tmp_path, root)
+    assert p.returncode == 0, p.stderr
+    assert remote.artifacts.sha256_file(str(root / "ledger.json")) == before, "the local ledger is never replaced"
+    d = next(x for x in dispatches(root) if x["attempt"] == "g000-look-0")
+    assert d["closed"] and d["imported"] and d["ledger_tail"] == []
+    ev = d["not_started_evidence"]
+    assert ev["docker_ps_by_name"] == "" and ev["stale_remote_ledger"]["entries"] == 1
+    assert ev["stale_remote_ledger"]["sha256"] == remote.artifacts.sha256_file(str(stale))
+    assert not (root / "ledger.json.staging").exists()
+    r = drive(root, env_for(tmp_path))
+    assert r.returncode == 0, r.stderr
+    assert last_stop(r) == "K_max"
+    assert runs(root)[-1] == ("g000-look-1", "ok") and "g000-look-0" not in [a for a, _ in runs(root)]
+    assert host_clean(tmp_path) == []
+
+
+def test_remote_never_pushed_dispatch_with_a_non_prefix_ledger_is_refused(tmp_path, bot):
+    root = _crash_at_look_dispatch(tmp_path, bot)
+    sent = json.loads((root / "ledger.json").read_text())["entries"]
+    _host_ledger(tmp_path, root, [{**sent[0], "core_hours": sent[0]["core_hours"] + 1}])
+    before = remote.artifacts.sha256_file(str(root / "ledger.json"))
+    p = _reconcile(tmp_path, root)
+    assert p.returncode != 0 and "exact prefix" in p.stderr
+    assert remote.artifacts.sha256_file(str(root / "ledger.json")) == before
+    d = next(x for x in dispatches(root) if x["attempt"] == "g000-look-0")
+    assert d["closed"] is None and not d.get("imported")
+
+
+def test_remote_prefix_ledger_with_the_container_present_is_not_read_as_not_started(tmp_path, bot):
+    root = _crash_at_look_dispatch(tmp_path, bot)
+    sent = json.loads((root / "ledger.json").read_text())["entries"]
+    _host_ledger(tmp_path, root, sent[:1])
+    # The container exists (exited), so the dispatch may have run.
+    rec = tmp_path / "hosts" / "xaskar" / "containers" / f"{cname(root, 'g000-look-0')}.json"
+    rec.parent.mkdir(parents=True, exist_ok=True)
+    rec.write_text(json.dumps({"pid": 0, "argv": []}))
+    (rec.parent / (rec.name + ".exit")).write_text("0")
+    before = remote.artifacts.sha256_file(str(root / "ledger.json"))
+    p = _reconcile(tmp_path, root)
+    assert p.returncode != 0 and "exact prefix" in p.stderr
+    assert remote.artifacts.sha256_file(str(root / "ledger.json")) == before
+    d = next(x for x in dispatches(root) if x["attempt"] == "g000-look-0")
+    assert d["closed"] is None and "not_started_evidence" not in d
