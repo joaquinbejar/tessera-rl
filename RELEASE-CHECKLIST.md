@@ -69,6 +69,14 @@ cargo package --locked \
 cargo publish --dry-run --locked <the same eight -p flags>
 ```
 
+- [ ] Manifest metadata meets the crates.io server-side limits, which
+      neither `cargo package` nor `cargo publish --dry-run` checks: at most
+      5 keywords, each at most 20 characters, ASCII letters, digits, `_`,
+      `-` or `+`, starting with a letter or digit; every category a valid
+      crates.io slug (`https://crates.io/api/v1/categories/<slug>`);
+      `description` and `license` present in every crate; each `.crate`
+      file under 10 MB. (The first real publish of 0.1.0 was refused for a
+      22-character keyword.)
 - [ ] `cargo package` packages all eight and prints `Verifying` for each,
       with no error (not `--no-verify`).
 - [ ] `cargo publish --dry-run` ends with "aborting upload due to dry run"

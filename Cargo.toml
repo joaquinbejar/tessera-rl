@@ -40,7 +40,7 @@ license = "MIT OR Apache-2.0"
 authors = ["Joaquín Béjar <jb@taunais.com>"]
 repository = "https://github.com/joaquinbejar/tessera-rl"
 homepage = "https://github.com/joaquinbejar/tessera-rl"
-keywords = ["reinforcement-learning", "gymnasium", "simulation", "multi-agent"]
+keywords = ["reinforcement", "gymnasium", "simulation", "multi-agent"]
 categories = ["science", "simulation"]
 
 [workspace.dependencies]
