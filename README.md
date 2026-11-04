@@ -10,7 +10,17 @@ PettingZoo and PufferLib compatible interfaces.
 This crate is the facade: it re-exports the workspace crates, following
 the layered workspace layout of SPEC section 4.1 and ADR-0021.
 
-Status: phase 1a scaffold.
+Most authors need only the [`prelude`]:
+
+```rust
+use tessera_rl::prelude::*;
+```
+
+# Features
+
+- `debug-checks`: strict checks at the validation boundary (SPEC 5.5),
+  forwarded to the engine; [`engine::DEBUG_CHECKS`] reports whether it
+  is on.
 
 ## License
 

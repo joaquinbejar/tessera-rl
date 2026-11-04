@@ -14,6 +14,11 @@ homepage.workspace = true
 keywords.workspace = true
 categories.workspace = true
 
+[features]
+# SPEC 5.5: strict checks at the validation boundary, forwarded to the
+# engine (see `tessera_rl::engine::DEBUG_CHECKS`).
+debug-checks = ["tessera-rl-engine/debug-checks"]
+
 [dependencies]
 tessera-rl-core.workspace = true
 tessera-rl-num.workspace = true
