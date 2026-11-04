@@ -24,6 +24,11 @@ import supervisor  # noqa: E402
 
 REAL_KILLPG = os.killpg
 
+# The child's own watchdog kills its group at the deadline; with killpg
+# neutralised in the child, only the supervisor's direct kill of the leader
+# can end it.
+NEUTRALISED = 'setattr(__import__("os"), "killpg", lambda *a: None); time.sleep(60)'
+
 CHILD = """
 import pathlib, subprocess, sys, time
 sys.path.insert(0, {example!r})
@@ -97,7 +102,7 @@ def test_supervisor_persistent_eperm_after_return_fails_closed(tmp_path, monkeyp
 
 
 def test_supervisor_transient_eperm_at_the_deadline_kills_child_and_descendant(tmp_path, monkeypatch):
-    rc, entries, pid = run(tmp_path, monkeypatch, refusals=3, body="time.sleep(60)", wall_cap_s=3.0)
+    rc, entries, pid = run(tmp_path, monkeypatch, refusals=3, body=NEUTRALISED, wall_cap_s=3.0)
     time.sleep(0.2)
     assert rc == supervisor.EXIT_DEADLINE
     assert entries[0]["status"].startswith("killed at the deadline") and entries[0]["wall_s"] < 30
@@ -105,7 +110,7 @@ def test_supervisor_transient_eperm_at_the_deadline_kills_child_and_descendant(t
 
 
 def test_supervisor_persistent_eperm_at_the_deadline_fails_closed(tmp_path, monkeypatch):
-    rc, entries, pid = run(tmp_path, monkeypatch, refusals=-1, body="time.sleep(60)", wall_cap_s=3.0)
+    rc, entries, pid = run(tmp_path, monkeypatch, refusals=-1, body=NEUTRALISED, wall_cap_s=3.0)
     try:
         assert rc == 1
         assert entries[0]["status"].startswith("failed: the process group was not confirmed gone")

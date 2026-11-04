@@ -36,7 +36,7 @@ EXIT_DEADLINE = 124
 CLEANUP_GRACE_S = 2.0
 # How long a group kill refused with EPERM is retried before the run is
 # failed closed (see `kill_group` in `run`).
-KILL_CONFIRM_S = 5.0
+KILL_CONFIRM_S = 1.0
 
 
 class Clock:
@@ -104,26 +104,32 @@ def run(script: str, argv: list[str], work, *, ledger: str, budget_core_hours: f
     )
 
     def kill_group() -> bool:
-        """Kills the child's group; returns False when the kill was refused
-        until ``KILL_CONFIRM_S`` passed, so a member may still be alive."""
+        """Kills the child's group. Returns False only when an EPERM could
+        not be followed by ESRCH within ``KILL_CONFIRM_S``, so a member may
+        still be alive."""
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+            return True
+        except ProcessLookupError:
+            return True
+        except PermissionError:
+            # macOS answers EPERM for a group whose remaining members are
+            # exiting (zombies), under load right after the child returns.
+            # Only ESRCH proves the group is empty: retry until it does.
+            pass
         end = time.monotonic() + KILL_CONFIRM_S
-        while True:
+        while time.monotonic() < end:
+            # Reaps the leader if it has exited; kills it directly if not.
+            if proc.poll() is None:
+                proc.kill()
             try:
                 os.killpg(proc.pid, signal.SIGKILL)
-                return True
             except ProcessLookupError:
                 return True
             except PermissionError:
-                # macOS answers EPERM for a group whose remaining members
-                # are exiting (zombies), under load right after the child
-                # returns. Retried until the group is gone (ESRCH) or the
-                # kill goes through; the leader is killed directly if it
-                # still runs.
-                if proc.poll() is None:
-                    proc.kill()
-                if time.monotonic() >= end:
-                    return False
-                time.sleep(0.05)
+                pass
+            time.sleep(0.05)
+        return False
 
     def on_term(signum, _frame):
         kill_group()
