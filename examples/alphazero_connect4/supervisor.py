@@ -34,6 +34,9 @@ from ledger import BudgetExceeded, Ledger
 
 EXIT_DEADLINE = 124
 CLEANUP_GRACE_S = 2.0
+# How long a group kill refused with EPERM is retried before the run is
+# failed closed (see `kill_group` in `run`).
+KILL_CONFIRM_S = 5.0
 
 
 class Clock:
@@ -100,18 +103,27 @@ def run(script: str, argv: list[str], work, *, ledger: str, budget_core_hours: f
         start_new_session=True,
     )
 
-    def kill_group():
-        try:
-            os.killpg(proc.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
-        except PermissionError:
-            # macOS answers EPERM for a group whose remaining members are
-            # all exiting (zombies), which happens under load right after
-            # the child returns. The group is then already dying; the
-            # leader is still killed directly in case it is not.
-            if proc.poll() is None:
-                proc.kill()
+    def kill_group() -> bool:
+        """Kills the child's group; returns False when the kill was refused
+        until ``KILL_CONFIRM_S`` passed, so a member may still be alive."""
+        end = time.monotonic() + KILL_CONFIRM_S
+        while True:
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+                return True
+            except ProcessLookupError:
+                return True
+            except PermissionError:
+                # macOS answers EPERM for a group whose remaining members
+                # are exiting (zombies), under load right after the child
+                # returns. Retried until the group is gone (ESRCH) or the
+                # kill goes through; the leader is killed directly if it
+                # still runs.
+                if proc.poll() is None:
+                    proc.kill()
+                if time.monotonic() >= end:
+                    return False
+                time.sleep(0.05)
 
     def on_term(signum, _frame):
         kill_group()
@@ -125,11 +137,15 @@ def run(script: str, argv: list[str], work, *, ledger: str, budget_core_hours: f
         rc = proc.wait(timeout=max(0.0, work_deadline - time.monotonic()))
     except subprocess.TimeoutExpired:
         rc = None
-    kill_group()
+    gone = kill_group()
     proc.wait()
     wall = time.monotonic() - start
     names = exit_names or {}
-    if rc is None or rc == -signal.SIGKILL:
+    if not gone:
+        # Fail closed: never settle ok, nor as a clean deadline kill, while a
+        # member of the group may still be running.
+        status, code = "failed: the process group was not confirmed gone (killpg EPERM)", 1
+    elif rc is None or rc == -signal.SIGKILL:
         status, code = f"killed at the deadline ({work_s:.1f} s of work)", EXIT_DEADLINE
     elif rc == 0:
         status, code = "ok", 0
