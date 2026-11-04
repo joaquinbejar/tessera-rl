@@ -189,8 +189,11 @@ class SSH:
                       check=False)  # fmt: skip
         if r.returncode != 0:
             # Absent only when docker says so; any other failure is not
-            # evidence that the container is gone.
-            if "No such object" in r.stderr or "No such container" in r.stderr:
+            # evidence that the container is gone. Docker 29 writes
+            # "error: no such object", older versions "Error: No such
+            # object", so the match ignores case.
+            err = r.stderr.lower()
+            if "no such object" in err or "no such container" in err:
                 return None
             raise TransportError(f"{self.host}: docker inspect {name} exited {r.returncode}: {r.stderr.strip()[:300]}")
         status, code = r.stdout.split()

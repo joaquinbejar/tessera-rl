@@ -341,6 +341,32 @@ def test_remote_ssh_docker_state_absent_only_on_no_such_object(monkeypatch):
         h.exists("root/x")
 
 
+def _docker_fixture(key):
+    path = os.path.join(os.path.dirname(__file__), "fixtures", "docker_29_9_2.json")
+    with open(path, encoding="utf-8") as f:
+        c = json.load(f)["commands"][key]
+    return c["returncode"], c["stdout"], c["stderr"]
+
+
+def test_remote_ssh_docker_29_missing_name_reads_as_absent(monkeypatch):
+    # Verbatim Docker 29.9.2 output captured from both hosts: lowercase
+    # "error: no such object" on stderr and a lone newline on stdout.
+    h = remote.SSH("xaskar")
+    monkeypatch.setattr(remote.subprocess, "run", Stub({"docker inspect": _docker_fixture("inspect_absent")}))
+    assert h.docker_state("tessera-m3-fixture-absent") is None
+    monkeypatch.setattr(remote.subprocess, "run", Stub({"docker ps": _docker_fixture("ps_absent")}))
+    assert h.docker_ps_by_name("tessera-m3-fixture-absent") == ""
+    monkeypatch.setattr(remote.subprocess, "run", Stub({"docker logs": _docker_fixture("logs_absent")}))
+    assert "No such container" in h.docker_logs("tessera-m3-fixture-absent")
+
+
+def test_remote_ssh_docker_state_older_and_newer_wording_both_absent(monkeypatch):
+    h = remote.SSH("xaskar")
+    for err in ("Error: No such object: n", "error: no such object: n", "Error response from daemon: No such container: n"):
+        monkeypatch.setattr(remote.subprocess, "run", Stub({"docker inspect": (1, "\n", err)}))
+        assert h.docker_state("n") is None
+
+
 def test_remote_ssh_commands_render_valid_templates(monkeypatch):
     stub = Stub({"docker ps": (0, "tessera-m3-n Up 1 minute\n", ""), "docker inspect": (0, "running 0\n", "")})
     monkeypatch.setattr(remote.subprocess, "run", stub)
