@@ -49,22 +49,32 @@ Publish order, each depending only on the ones before it:
 
 Before the repository is made public:
 
-- [ ] Secret scan of the full history, all refs: no findings.
+- [ ] Secret scan of the full history, all refs: no findings. The audit
+      for this release scanned the local and `origin` refs only. Before the
+      flip, fetch the pull request refs too (`git fetch origin
+      '+refs/pull/*:refs/remotes/pull/*'`) and rescan, since they become
+      public with the repository.
 - [ ] Scan of tracked files and history for internal hostnames, IP
       addresses, local paths and private service names, each finding
       classified.
-- [ ] Self-hosted runners cannot run code from outside contributors (see
-      the CI note below).
-- [ ] Decide whether the specification and the ADRs are published. They
-      are not tracked in git, so a public reader cannot open the
-      `SPEC` and `ADR` references in code comments.
+- [ ] The CI guard is merged: no self-hosted job runs for a pull request
+      from a fork (see the CI note below).
+- [ ] Coordinator: at the flip, set the repository to require approval
+      before workflows run for all outside contributors.
+- [ ] The specification, the ADRs and the agent notes stay out of the
+      repository (decided for 0.1.0); the CHANGELOG states that code
+      comments cite them.
 
-CI note: every job of `ci.yml` runs on self-hosted runners and is triggered
-by `pull_request`. On a public repository, a pull request from a fork would
-run its code on those machines. Close this before the repository is public.
+CI note: every job of `ci.yml` runs on self-hosted runners. The guard
+skips them for pull requests from forks, but a fork's pull request runs the
+workflow file from its own head and can remove the guard. The approval
+setting is the control that holds: approve a fork's workflow run only after
+reading any change it makes under `.github/`.
 
 ## 5. After the release
 
 - [ ] Announce the release with its stated limits (CHANGELOG, "Not
       included" and "Known deviations").
 - [ ] Open the next development section in the CHANGELOG.
+- [ ] Follow-up: a GitHub-hosted CI job for pull requests from forks, once
+      hosted runners can be tested on the public repository.

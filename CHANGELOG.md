@@ -70,8 +70,10 @@ crates.io at 0.0.1; `tessera-rl-games` and `tessera-rl-search` are new.
 
 ### Known deviations from the specification
 
-The project specification is not shipped with this release. Where it and
-the code disagree, the specification is the target, and these are open
+Code comments and these notes cite a project specification ("SPEC") and
+architecture decision records ("ADR-00nn") that are not published in this
+repository, so a reader cannot open them. Where the specification and the
+code disagree, the specification is the target, and these are open
 defects:
 
 - `debug-checks` does not provide the NaN detection and allocation
