@@ -53,10 +53,10 @@ fn test_id_buffers_batch_buffers_run_out_and_come_back() {
     assert_eq!(pool.acquire(true), None, "one full buffer");
     assert_ne!(a.index(), b.index());
     let index = a.index();
-    let _ = pool.release(a);
+    assert!(pool.release(a).is_ok());
     assert_eq!(pool.acquire(false).map(|h| h.index()), Some(index));
-    let _ = pool.release(b);
-    let _ = pool.release(full);
+    assert!(pool.release(b).is_ok());
+    assert!(pool.release(full).is_ok());
 }
 
 #[cfg(not(loom))]
@@ -67,11 +67,17 @@ fn test_id_buffers_entries_stay_with_their_handle_across_another_acquire() {
     pool.fill(&a, &[3, 1], &[7, 9]).unwrap();
     let b = pool.acquire(false).unwrap();
     pool.fill(&b, &[0, 2], &[5, 5]).unwrap();
-    assert_eq!(pool.entries(&a).collect::<Vec<_>>(), [(3, 7), (1, 9)]);
+    assert_eq!(
+        pool.entries(&a).unwrap().collect::<Vec<_>>(),
+        [(3, 7), (1, 9)]
+    );
     // Releasing in either order leaves the other buffer intact.
-    let _ = pool.release(b);
-    assert_eq!(pool.entries(&a).collect::<Vec<_>>(), [(3, 7), (1, 9)]);
-    let _ = pool.release(a);
+    assert!(pool.release(b).is_ok());
+    assert_eq!(
+        pool.entries(&a).unwrap().collect::<Vec<_>>(),
+        [(3, 7), (1, 9)]
+    );
+    assert!(pool.release(a).is_ok());
 }
 
 #[cfg(not(loom))]
@@ -88,8 +94,11 @@ fn test_id_buffers_fill_that_does_not_fit_is_refused_and_writes_nothing() {
         })
     );
     assert!(pool.fill(&a, &[4], &[0, 0]).is_err());
-    assert_eq!(pool.entries(&a).collect::<Vec<_>>(), [(1, 0), (2, 0)]);
-    let _ = pool.release(a);
+    assert_eq!(
+        pool.entries(&a).unwrap().collect::<Vec<_>>(),
+        [(1, 0), (2, 0)]
+    );
+    assert!(pool.release(a).is_ok());
 }
 
 #[cfg(not(loom))]
@@ -97,10 +106,13 @@ fn test_id_buffers_fill_that_does_not_fit_is_refused_and_writes_nothing() {
 fn test_id_buffers_release_reports_a_registered_waiter() {
     let pool = IdBufferPool::new(2, 1).unwrap();
     let a = pool.acquire(false).unwrap();
-    assert!(!pool.release(a), "no waiter, no wake");
+    assert!(!pool.release(a).unwrap(), "no waiter, no wake");
     let a = pool.acquire(false).unwrap();
     let _value = pool.signal().register();
-    assert!(pool.release(a), "a registered waiter must be woken");
+    assert!(
+        pool.release(a).unwrap(),
+        "a registered waiter must be woken"
+    );
     pool.signal().unregister();
 }
 
@@ -122,7 +134,7 @@ fn test_id_buffers_drop_between_flag_clear_and_free_makes_acquire_wait() {
             thread::spawn(move || {
                 // The token's drop: clear its id flag, then free its buffer.
                 id_live.store(false, Ordering::Release);
-                let _wake = pool.release(a);
+                assert!(pool.release(a).is_ok());
             })
         };
         // The caller: wait until id 0 is free to resend (its completion is
@@ -146,7 +158,32 @@ fn test_id_buffers_drop_between_flag_clear_and_free_makes_acquire_wait() {
         };
         assert_ne!(handle.index(), b.index(), "B's buffer stays held");
         dropper.join().unwrap();
-        let _ = pool.release(handle);
-        let _ = pool.release(b);
+        assert!(pool.release(handle).is_ok());
+        assert!(pool.release(b).is_ok());
     });
+}
+
+#[cfg(not(loom))]
+#[test]
+fn test_id_buffers_foreign_handle_is_refused_and_changes_neither_pool() {
+    let a_pool = IdBufferPool::new(1, 1).unwrap();
+    let b_pool = IdBufferPool::new(1, 1).unwrap();
+    let ha = a_pool.acquire(false).unwrap();
+    let hb = b_pool.acquire(false).unwrap();
+    assert_eq!(ha.index(), hb.index(), "same index, different pools");
+    a_pool.fill(&ha, &[0], &[4]).unwrap();
+    // B's handle cannot touch A: fill, entries and release are refused.
+    assert_eq!(
+        a_pool.fill(&hb, &[0], &[9]),
+        Err(BufferError::ForeignHandle)
+    );
+    assert_eq!(a_pool.entries(&hb).err(), Some(BufferError::ForeignHandle));
+    let hb = a_pool.release(hb).unwrap_err();
+    // A's buffer is still held, with its contents.
+    assert_eq!(a_pool.acquire(false), None, "A's live buffer was not freed");
+    assert_eq!(a_pool.entries(&ha).unwrap().collect::<Vec<_>>(), [(0, 4)]);
+    // B's handle still releases to B.
+    assert!(b_pool.release(hb).is_ok());
+    assert!(b_pool.acquire(false).is_some());
+    assert!(a_pool.release(ha).is_ok());
 }

@@ -47,6 +47,12 @@ pub enum BufferError {
         /// The batch size.
         batch_size: usize,
     },
+    /// The handle belongs to another pool. Neither pool is changed.
+    #[error("the buffer handle belongs to another id buffer pool")]
+    ForeignHandle,
+    /// Every pool identity has been used (after `u64::MAX` pools).
+    #[error("id buffer pool identities are exhausted")]
+    PoolIdsExhausted,
     /// The ids to store do not fit the buffer, or ids and generations
     /// differ in length.
     #[error("{len} ids do not fit a buffer of {capacity}")]
@@ -82,6 +88,7 @@ impl IdBuffer {
 /// [`IdBufferPool::release`]. It is neither `Clone` nor `Copy`.
 #[derive(Debug, PartialEq, Eq)]
 pub struct BufferHandle {
+    pool: u64,
     index: usize,
 }
 
@@ -93,9 +100,28 @@ impl BufferHandle {
     }
 }
 
-/// The pool of id buffers.
+/// The next pool identity. Only uniqueness matters, so this is a plain
+/// process-wide counter, outside the loom model.
+static NEXT_POOL: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+
+/// A fresh pool identity, advanced with checked arithmetic.
+fn next_pool_id() -> Result<u64, BufferError> {
+    use core::sync::atomic::Ordering::Relaxed;
+    let mut id = NEXT_POOL.load(Relaxed);
+    loop {
+        let next = id.checked_add(1).ok_or(BufferError::PoolIdsExhausted)?;
+        match NEXT_POOL.compare_exchange_weak(id, next, Relaxed, Relaxed) {
+            Ok(_) => return Ok(id),
+            Err(current) => id = current,
+        }
+    }
+}
+
+/// The pool of id buffers. Each pool has its own identity, carried by its
+/// handles, so a handle from another pool is refused.
 #[derive(Debug)]
 pub struct IdBufferPool {
+    id: u64,
     /// The batch buffers, then the full buffer.
     buffers: Box<[IdBuffer]>,
     batch_size: usize,
@@ -108,7 +134,8 @@ impl IdBufferPool {
     ///
     /// # Errors
     ///
-    /// [`BufferError::Size`] unless `1 <= batch_size <= n`.
+    /// [`BufferError::Size`] unless `1 <= batch_size <= n`;
+    /// [`BufferError::PoolIdsExhausted`] after `u64::MAX` pools.
     pub fn new(n: usize, batch_size: usize) -> Result<Self, BufferError> {
         if batch_size == 0 || batch_size > n || u32::try_from(n).is_err() {
             return Err(BufferError::Size { n, batch_size });
@@ -119,6 +146,7 @@ impl IdBufferPool {
             .chain(core::iter::once(IdBuffer::new(n)))
             .collect();
         Ok(Self {
+            id: next_pool_id()?,
             buffers,
             batch_size,
             n,
@@ -155,7 +183,10 @@ impl IdBufferPool {
                 .free
                 .compare_exchange(true, false, Ordering::Acquire, Ordering::Relaxed)
                 .ok()
-                .map(|_| BufferHandle { index })
+                .map(|_| BufferHandle {
+                    pool: self.id,
+                    index,
+                })
         })
     }
 
@@ -163,22 +194,20 @@ impl IdBufferPool {
     ///
     /// # Errors
     ///
-    /// [`BufferError::Length`] if they do not fit or differ in length;
-    /// nothing is written then.
+    /// [`BufferError::ForeignHandle`] if the handle belongs to another pool;
+    /// [`BufferError::Length`] if they do not fit or differ in length.
+    /// Nothing is written then.
     pub fn fill(
         &self,
         handle: &BufferHandle,
         ids: &[u32],
         generations: &[u64],
     ) -> Result<(), BufferError> {
-        let buffer = self.buffer(handle);
-        let capacity = buffer.map_or(0, |b| b.ids.len());
+        let buffer = self.buffer(handle)?;
+        let capacity = buffer.ids.len();
         let error = BufferError::Length {
             len: ids.len(),
             capacity,
-        };
-        let Some(buffer) = buffer else {
-            return Err(error);
         };
         if ids.len() > capacity || ids.len() != generations.len() {
             return Err(error);
@@ -197,38 +226,46 @@ impl IdBufferPool {
         Ok(())
     }
 
-    /// The ids and generations stored in the handle's buffer, in order.
-    pub fn entries<'a>(&'a self, handle: &BufferHandle) -> impl Iterator<Item = (u32, u64)> + 'a {
-        let buffer = self.buffer(handle);
-        let len = buffer.map_or(0, |b| {
-            usize::try_from(b.len.load(Ordering::Relaxed)).unwrap_or(0)
-        });
-        buffer
-            .into_iter()
-            .flat_map(|b| b.ids.iter().zip(b.generations.iter()))
+    /// The ids and generations stored in the handle's buffer, in order. The
+    /// iterator borrows both the pool and the handle.
+    ///
+    /// # Errors
+    ///
+    /// [`BufferError::ForeignHandle`] if the handle belongs to another pool.
+    pub fn entries<'a>(
+        &'a self,
+        handle: &'a BufferHandle,
+    ) -> Result<impl Iterator<Item = (u32, u64)> + 'a, BufferError> {
+        let buffer = self.buffer(handle)?;
+        let len = usize::try_from(buffer.len.load(Ordering::Relaxed)).unwrap_or(0);
+        Ok(buffer
+            .ids
+            .iter()
+            .zip(buffer.generations.iter())
             .take(len)
             .map(|(id, generation)| {
                 (
                     id.load(Ordering::Relaxed),
                     generation.load(Ordering::Relaxed),
                 )
-            })
+            }))
     }
 
     /// Releases the handle's buffer from any thread: sets its `free` flag
     /// (Release), then notifies the signal. Returns whether a waiter is
     /// registered and must be woken.
+    ///
+    /// # Errors
+    ///
+    /// A handle from another pool is handed back unchanged, and neither
+    /// pool is changed, so it can still be released to its own pool.
     #[must_use = "a registered waiter must be woken"]
-    #[expect(
-        clippy::needless_pass_by_value,
-        reason = "release consumes the handle so it cannot be used again"
-    )]
-    pub fn release(&self, handle: BufferHandle) -> bool {
-        let BufferHandle { index } = handle;
-        if let Some(buffer) = self.buffers.get(index) {
-            buffer.free.store(true, Ordering::Release);
-        }
-        self.signal.notify()
+    pub fn release(&self, handle: BufferHandle) -> Result<bool, BufferHandle> {
+        let Ok(buffer) = self.buffer(&handle) else {
+            return Err(handle);
+        };
+        buffer.free.store(true, Ordering::Release);
+        Ok(self.signal.notify())
     }
 
     /// The batch size of the pool.
@@ -243,8 +280,13 @@ impl IdBufferPool {
         self.n
     }
 
-    fn buffer(&self, handle: &BufferHandle) -> Option<&IdBuffer> {
-        self.buffers.get(handle.index)
+    fn buffer(&self, handle: &BufferHandle) -> Result<&IdBuffer, BufferError> {
+        if handle.pool != self.id {
+            return Err(BufferError::ForeignHandle);
+        }
+        self.buffers
+            .get(handle.index)
+            .ok_or(BufferError::ForeignHandle)
     }
 }
 

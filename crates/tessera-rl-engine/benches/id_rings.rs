@@ -40,7 +40,7 @@ fn rings(c: &mut Criterion) {
     c.bench_function("id_rings/buffer_acquire_release", |b| {
         b.iter(|| {
             let h = pool.acquire(black_box(false)).unwrap();
-            black_box(pool.release(h));
+            black_box(pool.release(h).unwrap());
         });
     });
 }

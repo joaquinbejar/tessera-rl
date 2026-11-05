@@ -43,11 +43,11 @@ fn test_alloc_rings_stalled_id_and_buffer_cycling_do_not_allocate() {
         let b = pool.acquire(false).unwrap();
         let c = pool.acquire(false).unwrap();
         pool.fill(&b, &[1, 2], &generations).unwrap();
-        let _ = std::hint::black_box(pool.entries(&b).count());
+        let _ = std::hint::black_box(pool.entries(&b).unwrap().count());
         let (first, second) = if round % 2 == 0 { (b, a) } else { (a, b) };
-        let _ = pool.release(first);
-        let _ = pool.release(c);
-        let _ = pool.release(second);
+        assert!(pool.release(first).is_ok());
+        assert!(pool.release(c).is_ok());
+        assert!(pool.release(second).is_ok());
     }
     done.push(stalled).unwrap();
     let last = done.pop().unwrap();
