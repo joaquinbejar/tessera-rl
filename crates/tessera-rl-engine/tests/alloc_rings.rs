@@ -7,12 +7,43 @@
 //! out of order. One test per binary, since the counting allocator counts
 //! on every thread.
 
-#[expect(dead_code, reason = "the shared test environments are not used here")]
-mod common;
+use std::alloc::{GlobalAlloc, Layout, System};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
-#[expect(dead_code, reason = "this test uses only the counting allocator")]
-#[path = "common/alloc_diag.rs"]
-mod alloc_diag;
+/// Counts allocations on every thread while enabled. The shared counting
+/// allocator of `common/alloc_diag.rs` needs the test environments of
+/// `common`, which this binary does not use, so it has its own.
+struct Counting;
+
+static COUNTING: AtomicBool = AtomicBool::new(false);
+static COUNT: AtomicU64 = AtomicU64::new(0);
+
+#[expect(unsafe_code, reason = "test-only counting allocator")]
+// SAFETY: every call forwards to `System` with the same arguments; the
+// counter is a side effect only.
+unsafe impl GlobalAlloc for Counting {
+    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+        if COUNTING.load(Ordering::Relaxed) {
+            COUNT.fetch_add(1, Ordering::Relaxed);
+        }
+        // SAFETY: the caller's contract for `alloc` is passed through.
+        unsafe { System.alloc(layout) }
+    }
+    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+        // SAFETY: the caller's contract for `dealloc` is passed through.
+        unsafe { System.dealloc(ptr, layout) }
+    }
+    unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
+        if COUNTING.load(Ordering::Relaxed) {
+            COUNT.fetch_add(1, Ordering::Relaxed);
+        }
+        // SAFETY: the caller's contract for `realloc` is passed through.
+        unsafe { System.realloc(ptr, layout, new_size) }
+    }
+}
+
+#[global_allocator]
+static ALLOCATOR: Counting = Counting;
 
 use tessera_rl_engine::rings::{CompletionRing, IdBufferPool, SubmitRing};
 
@@ -28,7 +59,7 @@ fn test_alloc_rings_stalled_id_and_buffer_cycling_do_not_allocate() {
     }
     let stalled = submit.claim().unwrap().unwrap();
     let generations = [0_u64, 0];
-    alloc_diag::start();
+    COUNTING.store(true, Ordering::SeqCst);
     for round in 0..100_000_u64 {
         for _ in 1..n {
             let id = submit.claim().unwrap().unwrap();
@@ -51,12 +82,8 @@ fn test_alloc_rings_stalled_id_and_buffer_cycling_do_not_allocate() {
     }
     done.push(stalled).unwrap();
     let last = done.pop().unwrap();
-    let count = alloc_diag::stop();
+    COUNTING.store(false, Ordering::SeqCst);
+    let count = COUNT.load(Ordering::SeqCst);
     assert_eq!(last, Some(stalled));
-    assert_eq!(
-        count,
-        0,
-        "allocations in the measured window:\n{}",
-        alloc_diag::report()
-    );
+    assert_eq!(count, 0, "allocations in the measured window");
 }
