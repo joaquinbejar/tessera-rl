@@ -14,12 +14,14 @@
 //! - The information state of an agent is its slot, its card, the moves,
 //!   the last die and the pile: the opponent's card is hidden.
 
+use core::marker::PhantomData;
 use tessera_rl_core::io::{ActionWriter, Actions, MaskWriter, ObsWriter};
 use tessera_rl_core::space::Space;
+
 use tessera_rl_core::{
-    ActionMask, AgentSlot, Determinize, Environment, EpisodeEnd, ImperfectInformation,
-    InvariantViolation, NoAdaptive, ObsLeaf, Observation, RecordHeader, SpaceError, StepOut, Tier,
-    TurnStructure, Validate,
+    ActionMask, AdaptiveValues, AgentSlot, Determinize, Environment, EpisodeEnd,
+    ImperfectInformation, InvariantViolation, NoAdaptive, ObsLeaf, Observation, RecordHeader,
+    SpaceError, StepOut, Tier, TurnStructure, Validate,
 };
 use tessera_rl_macros::{EnvConfig, EnvState, Observation};
 use tessera_rl_num::rng::{ObsRng, StepRng};
@@ -32,8 +34,10 @@ pub const MOVES: u32 = 6;
 #[derive(EnvConfig, Debug, Clone, PartialEq, Eq)]
 pub struct DiceConfig {
     /// A broken sampler for the refusal tests: 0 none, 1 a sample with
-    /// another information state, 2 a sample in which nobody acts.
-    #[config(default = 0, range = 0..=2)]
+    /// another information state, 2 a sample in which nobody acts, 3 a
+    /// sampler that panics, 4 a sample that fails `Validate`, 5 a sample
+    /// with another information state only after three moves.
+    #[config(default = 0, range = 0..=5)]
     pub sabotage: u32,
 }
 
@@ -65,8 +69,25 @@ pub struct DiceObs {
     pub view: ObsLeaf<u32>,
 }
 
+/// Hidden Dice with adaptive values `A`: [`Dice`] has none.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub struct Dice;
+pub struct DiceWith<A>(PhantomData<A>);
+
+/// Hidden Dice.
+pub type Dice = DiceWith<NoAdaptive>;
+
+/// One adaptive value, for the refusal of ADR-0046's Rule.
+#[derive(EnvState, Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[repr(C)]
+pub struct Level {
+    pub level: u64,
+}
+
+impl AdaptiveValues<DiceConfig> for Level {
+    fn from_config(_: &DiceConfig) -> Self {
+        Self { level: 1 }
+    }
+}
 
 fn bound(n: u32) -> core::num::NonZeroU32 {
     core::num::NonZeroU32::new(n).unwrap_or(core::num::NonZeroU32::MIN)
@@ -76,12 +97,12 @@ fn slot(i: usize) -> Option<AgentSlot> {
     AgentSlot::new(u16::try_from(i).ok()?, 2)
 }
 
-impl Environment for Dice {
+impl<A: AdaptiveValues<DiceConfig> + Send> Environment for DiceWith<A> {
     type State = DiceState;
     type Config = DiceConfig;
     type Obs = DiceObs;
     type Action = ();
-    type Header = RecordHeader<2, NoAdaptive>;
+    type Header = RecordHeader<2, A>;
 
     const MAX_AGENTS: usize = 2;
     const TIER: Tier = Tier::CrossPlatform;
@@ -160,7 +181,7 @@ impl Environment for Dice {
     }
 }
 
-impl ActionMask for Dice {
+impl<A: AdaptiveValues<DiceConfig> + Send> ActionMask for DiceWith<A> {
     fn action_mask(_: &DiceConfig, _: &DiceState, _: AgentSlot, out: &mut MaskWriter<'_>) {
         out.set(0, true);
         out.set(1, true);
@@ -171,7 +192,7 @@ impl ActionMask for Dice {
     }
 }
 
-impl Validate for Dice {
+impl<A: AdaptiveValues<DiceConfig> + Send> Validate for DiceWith<A> {
     fn validate(_: &DiceConfig, s: &DiceState) -> Result<(), InvariantViolation> {
         if s.cards.iter().any(|&c| c >= CARDS) || s.die >= DIE || s.moves > MOVES || s.stall > 1 {
             return Err(InvariantViolation {
@@ -182,7 +203,7 @@ impl Validate for Dice {
     }
 }
 
-impl ImperfectInformation for Dice {
+impl<A: AdaptiveValues<DiceConfig> + Send> ImperfectInformation for DiceWith<A> {
     type InfoState = DiceInfo;
 
     fn info_state(_: &DiceConfig, s: &DiceState, agent: AgentSlot) -> DiceInfo {
@@ -197,8 +218,9 @@ impl ImperfectInformation for Dice {
     }
 }
 
-impl Determinize for Dice {
+impl<A: AdaptiveValues<DiceConfig> + Send> Determinize for DiceWith<A> {
     fn sample(cfg: &DiceConfig, info: &DiceInfo, rng: &mut StepRng, state: &mut DiceState) {
+        assert!(cfg.sabotage != 3, "a sampler that panics");
         let me = (info.me as usize).min(1);
         let mut cards = [0; 2];
         if let Some(c) = cards.get_mut(me) {
@@ -210,8 +232,9 @@ impl Determinize for Dice {
         *state = DiceState {
             cards,
             moves: info.moves,
-            die: info.die,
-            pile: info.pile + u32::from(cfg.sabotage == 1),
+            die: if cfg.sabotage == 4 { DIE } else { info.die },
+            pile: info.pile
+                + u32::from(cfg.sabotage == 1 || (cfg.sabotage == 5 && info.moves == 3)),
             stall: u32::from(cfg.sabotage == 2),
         };
     }

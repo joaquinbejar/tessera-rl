@@ -139,3 +139,18 @@ fn test_search_commit_after_an_empty_stage_replays_nothing() {
     assert_eq!(s.edge_stats(root, 1).unwrap().visits, 3);
     s.release(c).unwrap();
 }
+
+/// The privileged label alone changes the tree hash: one tree, one
+/// record, only the mode differs.
+#[test]
+fn test_search_privileged_label_alone_changes_the_tree_hash() {
+    let mut s = search(4, Eviction::Strict);
+    let root = s.root();
+    let _child = expand(&mut s, root, 3).unwrap();
+    let unlabelled = s.tree_hash();
+    s.mode = crate::determinize::RootMode::Privileged;
+    assert!(s.is_privileged());
+    assert_ne!(s.tree_hash(), unlabelled);
+    s.mode = crate::determinize::RootMode::Full;
+    assert_eq!(s.tree_hash(), unlabelled);
+}

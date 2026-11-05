@@ -16,12 +16,14 @@
 )]
 
 mod env;
+mod fog;
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use core::num::NonZeroU32;
 
-use env::{CARDS, DIE, Dice, DiceConfig, MOVES, NOISE};
+use env::{CARDS, DIE, Dice, DiceConfig, DiceWith, Level, MOVES, NOISE};
+use fog::{Fog, FogConfig};
 use tessera_rl_core::encoding::encode_to_vec;
 use tessera_rl_core::{AgentSlot, Environment, ImperfectInformation, RecordLayout};
 use tessera_rl_engine::{
@@ -29,9 +31,10 @@ use tessera_rl_engine::{
 };
 use tessera_rl_num::identity::{LogicalId, Seed, StreamId};
 use tessera_rl_num::key::derive_key;
+use tessera_rl_num::rng::{RngAuthority, StepRng};
 use tessera_rl_search::{
     Determinization, Evaluator, EvaluatorError, Mcts, PuctConfig, ROLLOUT, SAMPLER, SearchError,
-    SearchOptions, SearchPool, rollout_salt, sampler_identity, sampler_salt,
+    SearchOptions, SearchPool, rollout_identity, rollout_salt, sampler_identity, sampler_salt,
 };
 
 type Pool = SearchPool<Dice, Masked>;
@@ -223,7 +226,10 @@ fn searched(root: &Record<Dice>, index: u64) -> (u64, Vec<u32>, Vec<u8>) {
     let mut c = PuctConfig::default();
     c.simulations = 96;
     c.batch_size = 4;
-    let mut m = Mcts::new(det(root, how(5, index)), c).unwrap();
+    // Through `set_root_determinized`, from a pool made on another sample.
+    let mut pool = det(root, how(5, index + 1000));
+    pool.set_root_determinized(root, how(5, index)).unwrap();
+    let mut m = Mcts::new(pool, c).unwrap();
     m.run(&mut Canned).unwrap();
     let mut visits = vec![0; 2];
     m.root_visits(&mut visits);
@@ -393,6 +399,15 @@ fn test_determinize_consistency_samples_keep_the_info_state_and_pass_checks() {
             let s = det(&r, how(seed + 40, i));
             let d = *s.record(s.root()).unwrap();
             assert_eq!(info_bytes(&d, 0), info_bytes(&r, 0));
+            // The output header: the copied step clock (nonzero once a
+            // move was played) and the rollout identity.
+            let (out, from) = (d.header().engine(), r.header().engine());
+            assert_eq!(out.identity.step_index(), from.identity.step_index());
+            assert_eq!(out.episode_steps, from.episode_steps);
+            assert_eq!(out.episode_steps, moves.len() as u32);
+            assert_eq!(out.identity.seed(), Seed::new(seed + 40));
+            assert_eq!(out.identity.branch_salt(), rollout_salt(i));
+            assert!(!out.pending_reset.get() && out.end_kind == 0 && !out.fresh.get());
             for (k, row) in d.header().agents().iter().enumerate() {
                 let slot = agent(k as u16);
                 assert_eq!(
@@ -418,7 +433,6 @@ fn test_determinize_consistency_samples_keep_the_info_state_and_pass_checks() {
 #[test]
 fn test_determinize_sampling_leaves_the_root_unchanged_in_any_order() {
     let r = root(9, &[0, 1]);
-    let before = r.to_bytes();
     let mut s = det(&r, how(1, 0));
     let mut forward = Vec::new();
     for i in [0, 1, 2] {
@@ -430,7 +444,6 @@ fn test_determinize_sampling_leaves_the_root_unchanged_in_any_order() {
         assert_eq!(root_bytes(&s), forward[k]);
     }
     assert_ne!(forward[0], forward[1], "indices give different samples");
-    assert_eq!(r.to_bytes(), before);
 }
 
 /// ADR-0046 test 8: each refusal is its typed error and leaves the tree
@@ -554,14 +567,224 @@ fn test_determinize_privileged_label_is_in_the_results_and_the_tree_hash() {
     assert!(!same.is_privileged());
     assert_eq!(plain.tree_hash(), same.tree_hash());
 
-    let labelled = SearchPool::<Dice, Masked>::new_privileged(
+    // A privileged and an unlabelled tree over one record differ only
+    // by the label: the unit test in the crate compares them.
+}
+
+/// ADR-0046 test 4, the real path: the sampler draws with the sampler
+/// identity on the dynamics stream. The opponent's card equals the first
+/// draw of a `StepRng` built independently from `sampler_identity`, at
+/// samples where the rollout identity or the observation stream would
+/// give another card.
+#[test]
+fn test_determinize_sampler_draws_with_the_sampler_identity_on_dynamics() {
+    let r = root(6, &[1, 0, 1]);
+    let auth = RngAuthority::engine_only();
+    let card = |id: &tessera_rl_num::identity::RngIdentity, stream| {
+        StepRng::new(&auth, id, stream).below_u32(NonZeroU32::new(CARDS).unwrap())
+    };
+    let mut telling = 0;
+    for i in 0..32 {
+        let expected = card(&sampler_identity(Seed::new(13), i), StreamId::DYNAMICS);
+        let rollout = card(&rollout_identity(Seed::new(13), i, 0), StreamId::DYNAMICS);
+        let obs = card(&sampler_identity(Seed::new(13), i), StreamId::OBS_NOISE);
+        let s = det(&r, how(13, i));
+        assert_eq!(
+            s.record(s.root()).unwrap().state().cards[1],
+            expected,
+            "sample {i}"
+        );
+        telling += usize::from(expected != rollout && expected != obs);
+    }
+    assert!(telling >= 8, "{telling} samples tell the identities apart");
+}
+
+/// The copied step clock has a consequence: a root one step before the
+/// step limit gives a determinized child truncated at the same step as
+/// the real one.
+#[test]
+fn test_determinize_step_clock_truncates_at_the_same_step() {
+    let limit = NonZeroU32::new(3);
+    let mut real = EnvPool::<Dice, Masked>::with_masks(
         cfg(),
+        PoolOptions {
+            max_episode_steps: limit,
+            ..options(1, 8)
+        },
+    )
+    .unwrap();
+    real.reset_all(Reseed::Keep).unwrap();
+    play(&mut real, 0, &[1, 1]);
+    let r = real.snapshot(0).unwrap();
+    play(&mut real, 0, &[0]);
+    let true_end = real.snapshot(0).unwrap().header().engine().end_kind;
+    assert_eq!(true_end, 2, "the real step truncates");
+
+    let limited = |c, mut o: PoolOptions| {
+        o.max_episode_steps = limit;
+        EnvPool::with_masks(c, o)
+    };
+    let mut s =
+        SearchPool::new_determinized(cfg(), search_options(), &r, how(3, 0), limited).unwrap();
+    let root_h = s.root();
+    assert_eq!(s.record(root_h).unwrap().header().engine().episode_steps, 2);
+    let mut out = [root_h];
+    s.expand(&[(root_h, 0)], &mut out).unwrap();
+    assert!(s.is_terminal(out[0]).unwrap());
+    let child = s.record(out[0]).unwrap().header().engine();
+    assert_eq!((child.end_kind, child.episode_steps), (true_end, 3));
+}
+
+fn fog_root<const MIXED: bool>(seed: u64, steps: u32) -> Record<Fog<MIXED>> {
+    let mut p = EnvPool::<Fog<MIXED>, Masked>::with_masks(FogConfig {}, options(1, seed)).unwrap();
+    p.reset_all(Reseed::Keep).unwrap();
+    for _ in 0..steps {
+        p.step(ActionInput {
+            discrete: &[0; 3],
+            continuous: &[],
+        })
+        .unwrap();
+    }
+    p.snapshot(0).unwrap()
+}
+
+fn fog_det<const MIXED: bool>(r: &Record<Fog<MIXED>>, i: u64) -> Record<Fog<MIXED>> {
+    let s = SearchPool::<Fog<MIXED>, Masked>::new_determinized(
+        FogConfig {},
         search_options(),
-        &rec,
+        r,
+        how(17, i),
         EnvPool::with_masks,
     )
     .unwrap();
-    let unlabelled = det(&rec, how(1, 0));
-    assert!(labelled.is_privileged());
-    assert_ne!(labelled.tree_hash(), unlabelled.tree_hash());
+    *s.record(s.root()).unwrap()
+}
+
+/// The output rows of a root with a dead slot (1) and a respawned slot
+/// (2, generation 1): `alive` and `generation` are copied, and `acting`
+/// follows the recomputation rule. Under `Mixed`, `acting` is
+/// `Environment::acting` of the sample, which differs from the root's
+/// when the hidden coins differ; a dead slot never acts.
+#[test]
+fn test_determinize_rows_copy_alive_and_generation_and_recompute_mixed_acting() {
+    let r = fog_root::<true>(4, 3);
+    let rows = r.header().agents();
+    assert_eq!(
+        rows.iter().map(|x| x.alive.get()).collect::<Vec<_>>(),
+        [true, false, true]
+    );
+    assert_eq!(
+        rows.iter().map(|x| x.generation).collect::<Vec<_>>(),
+        [0, 0, 1]
+    );
+    let mut differs = 0;
+    for i in 0..16 {
+        let d = fog_det(&r, i);
+        for (k, (out, from)) in d.header().agents().iter().zip(rows).enumerate() {
+            assert_eq!((out.alive, out.generation), (from.alive, from.generation));
+            let expected = out.alive.get()
+                && <Fog<true> as Environment>::acting(&FogConfig {}, d.state(), agent3(k));
+            assert_eq!(out.acting.get(), expected, "sample {i} slot {k}");
+            differs += usize::from(out.acting != from.acting);
+        }
+        assert!(
+            !d.header().agents()[1].acting.get(),
+            "the dead slot does not act"
+        );
+    }
+    assert!(differs > 0, "some sample recomputes another acting row");
+}
+
+/// Under `Simultaneous`, every alive slot acts and the dead one does not,
+/// whatever `Environment::acting` says of the sample.
+#[test]
+fn test_determinize_simultaneous_acting_is_every_alive_slot() {
+    let r = fog_root::<false>(4, 3);
+    let mut acting_false = 0;
+    for i in 0..16 {
+        let d = fog_det(&r, i);
+        for (k, out) in d.header().agents().iter().enumerate() {
+            assert_eq!(out.acting, out.alive, "sample {i} slot {k}");
+            acting_false += usize::from(
+                out.alive.get()
+                    && !<Fog<false> as Environment>::acting(&FogConfig {}, d.state(), agent3(k)),
+            );
+        }
+        assert_eq!(d.header().agents()[2].generation, 1);
+    }
+    assert!(acting_false > 0, "the rule is not Environment::acting");
+}
+
+fn agent3(k: usize) -> AgentSlot {
+    AgentSlot::new(k as u16, 3).unwrap()
+}
+
+/// Author code runs contained and on a validated sample: a panicking
+/// sampler is a typed error, and so is a sample that fails `Validate`.
+#[test]
+fn test_determinize_author_panics_and_invalid_samples_are_typed_errors() {
+    let r = root(4, &[1]);
+    assert_eq!(
+        err(det_with(DiceConfig { sabotage: 3 }, &r, how(1, 0))),
+        SearchError::AuthorPanicked
+    );
+    assert!(matches!(
+        err(det_with(DiceConfig { sabotage: 4 }, &r, how(1, 0))),
+        SearchError::SampleInvariant { .. }
+    ));
+}
+
+/// ADR-0046 Rule: an environment with an adaptive field cannot be
+/// determinized yet.
+#[test]
+fn test_determinize_adaptive_environments_are_refused() {
+    let mut p = EnvPool::<DiceWith<Level>, Masked>::with_masks(cfg(), options(1, 2)).unwrap();
+    p.reset_all(Reseed::Keep).unwrap();
+    let r = p.snapshot(0).unwrap();
+    let made = SearchPool::<DiceWith<Level>, Masked>::new_determinized(
+        cfg(),
+        search_options(),
+        &r,
+        how(1, 0),
+        EnvPool::with_masks,
+    );
+    assert_eq!(err(made), SearchError::AdaptiveDeterminize);
+}
+
+/// No node slot, staging buffer or scratch row keeps the full root,
+/// after construction and after `set_root_determinized`.
+#[test]
+fn test_determinize_no_buffer_keeps_the_full_root() {
+    let r = root(5, &[1, 0]);
+    let mut s = det(&r, how(2, 0));
+    assert!(!s.holds_record(&r));
+    let other = root(6, &[0]);
+    s.set_root_determinized(&other, how(2, 1)).unwrap();
+    assert!(!s.holds_record(&other) && !s.holds_record(&r));
+    let sampled = *s.record(s.root()).unwrap();
+    assert!(s.buffers_hold_only(&sampled), "refilled with the sample");
+    let h = s.root();
+    let mut out = [h];
+    s.expand(&[(h, 0)], &mut out).unwrap();
+    assert!(!s.holds_record(&other));
+    // A sample refused after the root passed the readiness checks.
+    let mut late = det_with(DiceConfig { sabotage: 5 }, &r, how(2, 0)).unwrap();
+    let three = root(5, &[1, 0, 1]);
+    let refused = late.set_root_determinized(&three, how(2, 1));
+    assert!(matches!(
+        err(refused),
+        SearchError::InconsistentSample { .. }
+    ));
+    assert!(!late.holds_record(&three));
+    // A refused root does not stay either.
+    let short = |c, mut o: PoolOptions| {
+        o.max_episode_steps = NonZeroU32::new(2);
+        EnvPool::with_masks(c, o)
+    };
+    let mut limited =
+        SearchPool::new_determinized(cfg(), search_options(), &r, how(2, 0), short).unwrap();
+    let longer = root(5, &[1, 0, 1]);
+    let refused = limited.set_root_determinized(&longer, how(2, 1));
+    assert!(matches!(err(refused), SearchError::RootNotReady { .. }));
+    assert!(!limited.holds_record(&longer) && !limited.holds_record(&r));
 }
