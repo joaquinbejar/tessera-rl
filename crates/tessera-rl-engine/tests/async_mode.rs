@@ -540,6 +540,7 @@ fn test_async_send_batch_resends_a_token() {
             continuous: &[],
         },
     )
+    .map_err(|e| e.error)
     .unwrap();
     let mut seen = 0;
     while seen < usize::try_from(N).unwrap() {
@@ -547,16 +548,55 @@ fn test_async_send_batch_resends_a_token() {
     }
     let mut q = asy(AutoReset::NextStep, 1);
     let foreign = q.reset_all(Reseed::Keep).unwrap();
-    assert_eq!(
-        p.send_batch(
+    let err = p
+        .send_batch(
             foreign,
             ActionInput {
                 discrete: &a,
-                continuous: &[]
-            }
-        ),
-        Err(EngineError::WrongPool)
+                continuous: &[],
+            },
+        )
+        .unwrap_err();
+    assert_eq!(err.error, EngineError::WrongPool);
+    assert!(err.token.is_some(), "the foreign token is handed back");
+}
+
+#[test]
+fn test_async_refused_send_batch_hands_the_token_back_unchanged() {
+    let mut p = asy(AutoReset::NextStep, 2);
+    drop(p.reset_all(Reseed::Keep).unwrap());
+    let ids: Vec<u32> = (0..10).collect();
+    send(&mut p, &ids, &rows_for(&ids, &[0; 100]));
+    let t = p.recv().unwrap();
+    let got: Vec<u32> = t.ids().collect();
+    let before: Vec<Vec<u64>> = got.iter().map(|&id| token_frame(&t, id)).collect();
+    let g = p.generation(got[0]).unwrap();
+    // Too few actions: refused, and the token comes back.
+    let err = p
+        .send_batch(
+            t,
+            ActionInput {
+                discrete: &[0, 0],
+                continuous: &[],
+            },
+        )
+        .unwrap_err();
+    assert!(matches!(err.error, EngineError::ActionLength { .. }));
+    let t = err.token.unwrap();
+    assert_eq!(t.ids().collect::<Vec<_>>(), got);
+    for (k, &id) in got.iter().enumerate() {
+        assert_eq!(token_frame(&t, id), before[k], "unchanged");
+    }
+    assert_eq!(p.generation(got[0]).unwrap(), g, "nothing moved");
+    // Its ids are still covered, and the token can be resent.
+    assert_eq!(
+        p.send(&got, input(&rows_for(&got, &[1; 100]))),
+        Err(EngineError::Borrowed { id: got[0] })
     );
+    p.send_batch(t, input(&rows_for(&got, &[1; 100])))
+        .map_err(|e| e.error)
+        .unwrap();
+    drop(p.recv().unwrap());
 }
 
 #[test]

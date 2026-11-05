@@ -63,6 +63,9 @@ pub(crate) struct BatchMode<E: Environment, M: MaskProvider<E>> {
     /// Ids pushed to the completion ring and not yet popped, plus ids the
     /// caller staged for its next batch: what a [`BatchWaiter`] waits for.
     pub(crate) ready: Arc<ReadyCount>,
+    /// Test-only jitter before each claimed step, in microseconds.
+    #[cfg(test)]
+    jitter_us: u32,
 }
 
 /// The number of ids ready for a batch, shared with a [`BatchWaiter`].
@@ -111,6 +114,7 @@ where
         n: usize,
         batch_size: usize,
         workers: usize,
+        #[cfg(test)] jitter_us: u32,
     ) -> Result<Arc<Self>, EngineError> {
         let ring_err = |_| EngineError::Options {
             option: "num_envs",
@@ -141,6 +145,8 @@ where
                 count: AtomicUsize::new(0),
                 batch_size: AtomicUsize::new(batch_size),
             }),
+            #[cfg(test)]
+            jitter_us,
         });
         // The job's data pointer comes from the `Arc` itself, not from the
         // `&mut` below, so it stays valid under later shared borrows.
@@ -193,19 +199,60 @@ where
     /// call's alone while it runs (invariants 3 and 4). Only the caller sets
     /// those flags, under `&mut` of the mode's wrapper, so they cannot
     /// change during `f`.
+    ///
+    /// With `owner`, the ids are exactly that token's (a resend): they are
+    /// covered by it instead of being uncovered. The token is held by value
+    /// for the whole call, so no view of its rows can be alive, and it is
+    /// handed back with the result.
     pub(crate) fn admit<R>(
         &self,
         ids: &[u32],
         seen: &mut [Bool8],
+        owner: Option<BatchToken<E, M>>,
         f: impl FnOnce(&mut Admitted<'_, E::Header>) -> Result<R, EngineError>,
-    ) -> Result<R, EngineError> {
-        check_send_ids(ids, seen, &self.in_flight, &self.live)?;
-        // SAFETY: every id passed `check_send_ids` above, so no worker and no
-        // token touches its rows; `ids` repeats no id; the buffers stay in
-        // place while `&self` is held (invariants 1, 3 and 4).
+    ) -> (Result<R, EngineError>, Option<BatchToken<E, M>>) {
+        let checked = match &owner {
+            None => check_send_ids(ids, seen, &self.in_flight, &self.live),
+            Some(token) => self.check_owned(token, ids, seen),
+        };
+        if let Err(e) = checked {
+            return (Err(e), owner);
+        }
+        // SAFETY: every id passed the checks above: no worker touches its
+        // rows, and no live view of them exists (no token covers them, or the
+        // one that does is held by value here); `ids` repeats no id; the
+        // buffers stay in place while `&self` is held (invariants 1, 3, 4).
         #[expect(unsafe_code, reason = "audited module: admitted rows")]
         let mut rows = unsafe { self.rows.admitted(ids) };
-        f(&mut rows)
+        (f(&mut rows), owner)
+    }
+
+    /// The checks of a resend: `ids` are exactly `token`'s, in its order,
+    /// and none is in flight.
+    fn check_owned(
+        &self,
+        token: &BatchToken<E, M>,
+        ids: &[u32],
+        seen: &mut [Bool8],
+    ) -> Result<(), EngineError> {
+        if ids.is_empty() {
+            return Err(EngineError::EmptySend);
+        }
+        crate::validate::check_ids(ids, seen)?;
+        if !token.ids().eq(ids.iter().copied()) {
+            return Err(EngineError::WrongPool);
+        }
+        for &id in ids {
+            let i = usize::try_from(id).unwrap_or(usize::MAX);
+            if self
+                .in_flight
+                .get(i)
+                .is_none_or(|f| f.load(Ordering::Acquire))
+            {
+                return Err(EngineError::InFlight { id });
+            }
+        }
+        Ok(())
     }
 
     /// Instance `id`'s masks, `[A, mask length]`, for the debug-checks
@@ -301,6 +348,8 @@ unsafe fn run_drain<E: Environment, M: MaskProvider<E>>(data: *const (), worker:
                 return;
             }
         };
+        #[cfg(test)]
+        jitter(mode, id);
         let i = usize::try_from(id).unwrap_or(usize::MAX);
         // SAFETY: id `i` was claimed by this worker alone (the ring hands
         // each admitted id out once) and no token covers it (the send checked
@@ -314,6 +363,22 @@ unsafe fn run_drain<E: Environment, M: MaskProvider<E>>(data: *const (), worker:
         // Release on the slot sequence; the caller pops with Acquire).
         complete(mode, id);
     }
+}
+
+/// Test-only: sleeps a pseudo-random time before stepping `id`, so that
+/// completion order varies far more than send order alone makes it.
+#[cfg(test)]
+fn jitter<E: Environment, M: MaskProvider<E>>(mode: &BatchMode<E, M>, id: u32) {
+    if mode.jitter_us == 0 {
+        return;
+    }
+    let salt = mode.stepped.load(Ordering::Relaxed) as u64;
+    let mut z = (u64::from(id) << 32 ^ salt).wrapping_add(0x9e37_79b9_7f4a_7c15);
+    z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+    z ^= z >> 31;
+    let micros = z % u64::from(mode.jitter_us);
+    std::thread::sleep(core::time::Duration::from_micros(micros));
 }
 
 /// Pushes `id` to the completion ring, retrying while it is transiently

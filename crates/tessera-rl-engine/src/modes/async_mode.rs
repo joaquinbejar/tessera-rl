@@ -22,6 +22,16 @@
 //! adaptive state to refuse yet; and no environment uses lane (`SoA`) layouts, so
 //! [`EngineError::LaneEnvUnsupported`] has no trigger yet (ADR-0047
 //! section 8). Both refusals belong where those features land.
+//!
+//! # Performance
+//!
+//! Async is currently much slower per round than Sync. Workers claim one
+//! instance at a time and the waits poll in 100 µs steps. An indicative
+//! local measurement (`benches/async_step.rs`, a loaded Mac): a round of
+//! 256 instances received in batches of 64 took about 183 µs on the park
+//! backend and 58 µs on the native one, against 15 µs and 9 µs for one Sync
+//! step of the same pool. Batch claiming and wake-based waits are tracked in
+//! issue #83.
 
 use core::num::NonZeroUsize;
 use core::time::Duration;
@@ -80,6 +90,19 @@ impl<E: Environment, M: MaskProvider<E>> core::fmt::Debug for AsyncBuildError<E,
             .field("pool", &self.pool.is_some())
             .finish()
     }
+}
+
+/// A `send_batch` that was refused. With the token handed back (`Some`),
+/// nothing changed. `None` only if publication failed after validation and
+/// the token had ended: the ids' action rows then hold the new actions and
+/// their generations have moved, and they are admitted to the submission
+/// ring; a later `recv` returns them, or reports why it cannot.
+#[derive(Debug)]
+pub struct SendBatchError<E: Environment, M: MaskProvider<E>> {
+    /// Why the send was refused.
+    pub error: EngineError,
+    /// The token, unchanged.
+    pub token: Option<BatchToken<E, M>>,
 }
 
 /// `AsyncPool::into_pool` refused because a token is alive; the wrapper is
@@ -192,7 +215,15 @@ where
             return Err(lost(EngineError::WorkerDied));
         };
         let workers = runtime.workers;
-        let mode = BatchMode::new(pool, n, batch, workers).map_err(lost)?;
+        let mode = BatchMode::new(
+            pool,
+            n,
+            batch,
+            workers,
+            #[cfg(test)]
+            faults.jitter_us,
+        )
+        .map_err(lost)?;
         Ok(AsyncPool {
             runtime: Workers(Some(runtime)),
             mode,
@@ -568,7 +599,12 @@ where
     /// [`EngineError::Borrowed`], [`EngineError::SequenceExhausted`] or a
     /// validation error; nothing changed then.
     pub fn send(&mut self, ids: &[u32], actions: ActionInput<'_>) -> Result<(), EngineError> {
-        self.admit(ids, actions)?;
+        self.admit(ids, actions, None).0?;
+        self.launch(ids)
+    }
+
+    /// Publishes admitted ids whose covering token (if any) has ended.
+    fn launch(&mut self, ids: &[u32]) -> Result<(), EngineError> {
         // Validation passed: the generations move before publication, so a
         // view is stale before any worker writes (ADR-0047 section 5).
         for &id in ids {
@@ -604,7 +640,31 @@ where
         }
     }
 
-    fn admit(&mut self, ids: &[u32], actions: ActionInput<'_>) -> Result<(), EngineError> {
+    fn admit(
+        &mut self,
+        ids: &[u32],
+        actions: ActionInput<'_>,
+        owner: Option<BatchToken<E, M>>,
+    ) -> (Result<(), EngineError>, Option<BatchToken<E, M>>) {
+        if let Err(e) = self.precheck(ids) {
+            return (Err(e), owner);
+        }
+        let mode = &self.mode;
+        let layout = mode.pool.action_layout();
+        let auto_reset = mode.pool.options.auto_reset;
+        mode.admit(ids, &mut self.seen, owner, |rows| {
+            crate::entry::canonical(|| {
+                #[cfg(feature = "debug-checks")]
+                if M::ENABLED {
+                    legality(mode, rows, ids, layout, actions)?;
+                }
+                check_and_copy_subset_actions(layout, auto_reset, rows, actions)
+            })
+        })
+    }
+
+    /// The checks of a send that need no rows.
+    fn precheck(&self, ids: &[u32]) -> Result<(), EngineError> {
         if self.is_poisoned() {
             return Err(EngineError::Poisoned);
         }
@@ -622,42 +682,42 @@ where
                 return Err(EngineError::SequenceExhausted);
             }
         }
-        let mode = &self.mode;
-        let layout = mode.pool.action_layout();
-        let auto_reset = mode.pool.options.auto_reset;
-        mode.admit(ids, &mut self.seen, |rows| {
-            crate::entry::canonical(|| {
-                #[cfg(feature = "debug-checks")]
-                if M::ENABLED {
-                    legality(mode, rows, ids, layout, actions)?;
-                }
-                check_and_copy_subset_actions(layout, auto_reset, rows, actions)
-            })
-        })
+        Ok(())
     }
 
     /// Sends every id of `token` with `actions` (one row block per id, in
-    /// the token's order). The token is consumed whether or not the send is
-    /// accepted.
+    /// the token's order), consuming the token.
     ///
     /// # Errors
     ///
-    /// [`EngineError::WrongPool`] for another pool's token, or any error of
-    /// [`Self::send`].
+    /// Hands the token back with [`EngineError::WrongPool`] for another
+    /// pool's token, [`EngineError::Poisoned`], [`EngineError::WorkerDied`],
+    /// [`EngineError::SequenceExhausted`] or a validation error; nothing
+    /// changed then. See [`SendBatchError`] for the one case without it.
     pub fn send_batch(
         &mut self,
         token: BatchToken<E, M>,
         actions: ActionInput<'_>,
-    ) -> Result<(), EngineError> {
+    ) -> Result<(), SendBatchError<E, M>> {
         if !token.belongs_to(&self.mode) {
-            return Err(EngineError::WrongPool);
+            return Err(SendBatchError {
+                error: EngineError::WrongPool,
+                token: Some(token),
+            });
         }
         let mut ids = core::mem::take(&mut self.scratch);
         ids.clear();
         ids.extend(token.ids());
-        // The token ends here (Release on its flags), before admission.
-        drop(token);
-        let result = self.send(&ids, actions);
+        let (admitted, token) = self.admit(&ids, actions, Some(token));
+        let result = if let Err(error) = admitted {
+            Err(SendBatchError { error, token })
+        } else {
+            // The token ends here (Release on its flags), before the ids are
+            // published.
+            drop(token);
+            self.launch(&ids)
+                .map_err(|error| SendBatchError { error, token: None })
+        };
         self.scratch = ids;
         result
     }

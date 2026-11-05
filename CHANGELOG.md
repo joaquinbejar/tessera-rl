@@ -21,7 +21,12 @@ the API is not stable, and any 0.x release may break it.
   refuse while a token is alive or a sent instance still runs. Every
   instance's trajectory is bit-identical to Sync with the same actions, for
   any worker count and send order; batch membership depends on timing.
-  Rust only for now; the Python binding follows.
+  It is currently much slower per round than Sync (indicative, on a loaded
+  Mac: about 183 µs on park and 58 µs on native for a round of 256
+  instances in batches of 64, against 15 µs and 9 µs for one Sync step),
+  because workers claim one instance at a time and waits poll; batch
+  claiming and wake-based waits are tracked in #83. Rust only for now; the
+  Python binding follows.
 - **Pipelined mode** (`tessera-rl-engine`): `EnvPool::pipelined` moves a
   pool into two fixed halves stepped by its own workers. `send` consumes a
   `HalfToken` with that half's actions and starts its step; `recv`,
