@@ -933,3 +933,33 @@ fn test_review_received_batch_illegal_action_is_atomic() {
         .unwrap();
     drop(p.recv().unwrap());
 }
+
+// TR nit on #84: too few ids for a batch must not hide a step's panic behind
+// `BatchUnreachable`.
+
+#[test]
+fn test_async_panic_outranks_batch_unreachable() {
+    let mut p = asy_with(
+        AutoReset::NextStep,
+        2,
+        BATCH,
+        CountConfig {
+            panic_at: 1,
+            length: 9,
+            ..CountConfig::default()
+        },
+    );
+    drop(p.reset_all(Reseed::Keep).unwrap());
+    let ids = [0, 1, 2];
+    assert!(ids.len() < BATCH);
+    send(&mut p, &ids, &rows_for(&ids, &[0; 100]));
+    let tries = if cfg!(miri) { 2_000 } else { 1_000_000 };
+    let seen = (0..tries).find_map(|_| match p.recv().map(|_| ()) {
+        Err(EngineError::BatchUnreachable { .. }) => {
+            std::thread::yield_now();
+            None
+        }
+        other => Some(other),
+    });
+    assert_eq!(seen, Some(Err(EngineError::Panicked)));
+}
