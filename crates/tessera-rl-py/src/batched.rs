@@ -939,14 +939,22 @@ mod tests {
 
     #[test]
     fn test_async_flag_is_set_inside_restore_all_and_restore() {
+        // One pool per writer: the first panic poisons, which keeps the flag.
         let ops = asynced(&CountConfig::default(), BatchOutputs::Indexed);
         ops.reset_all(&ResetSeed::Keep).unwrap();
-        let (all, one) = (ops.snapshot_all().unwrap(), ops.snapshot(5).unwrap());
+        let one = ops.snapshot(5).unwrap();
         let flag = ops.unsettled_flag();
+        assert!(!flag.load(Ordering::Acquire));
         let seen = crate::split::reset_probe::flag_at_restore_panic(&flag, || {
             assert!(ops.restore(&[5], &[one], 0).is_err());
         });
         assert_eq!(seen, Some(true), "views must read stale during restore");
+        ops.close();
+        let ops = asynced(&CountConfig::default(), BatchOutputs::Indexed);
+        ops.reset_all(&ResetSeed::Keep).unwrap();
+        let all = ops.snapshot_all().unwrap();
+        let flag = ops.unsettled_flag();
+        assert!(!flag.load(Ordering::Acquire));
         let seen = crate::split::reset_probe::flag_at_restore_panic(&flag, || {
             assert!(ops.restore_all(&all).is_err());
         });
@@ -1120,6 +1128,15 @@ mod tests {
         assert!(
             ops.settled_at().1 > before,
             "epochs moved before the flag cleared"
+        );
+        // restore(ids), likewise.
+        let out = deliver(&*ops, &[0, 1], out.seq);
+        let record = ops.snapshot(6).unwrap();
+        let before = ops.settled_at().1;
+        ops.restore(&[6], &[record], out.seq).unwrap();
+        assert!(
+            ops.settled_at().1 > before,
+            "restore bumped before the flag cleared"
         );
         ops.close();
     }
