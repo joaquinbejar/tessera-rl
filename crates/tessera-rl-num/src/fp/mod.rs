@@ -144,6 +144,7 @@ fn call_opaque<R>(f: impl FnOnce() -> R) -> R {
 
 /// An empty assembly block with an opaque memory effect.
 #[inline]
+#[cfg(not(miri))]
 #[expect(unsafe_code, reason = "audited module: compiler barrier")]
 fn compiler_barrier() {
     // SAFETY: the template is empty, so no instruction executes; it touches
@@ -152,6 +153,13 @@ fn compiler_barrier() {
     unsafe {
         core::arch::asm!("", options(nostack));
     }
+}
+
+/// Under Miri, which cannot run inline assembly, a compiler fence.
+#[inline]
+#[cfg(miri)]
+fn compiler_barrier() {
+    core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
 }
 
 /// Test-only: runs `f` with flush-to-zero (and, on x86-64,

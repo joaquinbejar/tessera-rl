@@ -2,6 +2,7 @@
 
 //! MXCSR access on x86-64.
 
+#[cfg(not(miri))]
 use core::arch::asm;
 
 pub(super) type Control = u32;
@@ -56,6 +57,7 @@ pub(super) const fn restored(saved: Control, current: Control) -> Control {
 // No `nomem`, `readonly` or `preserves_flags`: these instructions must act
 // as compiler barriers for floating-point code around them.
 
+#[cfg(not(miri))]
 #[inline]
 #[expect(unsafe_code, reason = "audited module: reads MXCSR")]
 pub(super) fn read() -> Control {
@@ -69,6 +71,7 @@ pub(super) fn read() -> Control {
     value
 }
 
+#[cfg(not(miri))]
 #[inline]
 #[expect(unsafe_code, reason = "audited module: writes MXCSR")]
 pub(super) fn write(control: Control) {
@@ -80,6 +83,24 @@ pub(super) fn write(control: Control) {
     unsafe {
         asm!("ldmxcsr [{}]", in(reg) &raw const control, options(nostack));
     }
+}
+
+// Under Miri, which cannot run inline assembly, the control register is
+// emulated per thread, starting at the hardware default, so code that
+// enters the canonical environment can be checked for undefined behaviour.
+#[cfg(miri)]
+std::thread_local! {
+    static EMULATED: core::cell::Cell<Control> = const { core::cell::Cell::new(0x1F80) };
+}
+
+#[cfg(miri)]
+pub(super) fn read() -> Control {
+    EMULATED.with(core::cell::Cell::get)
+}
+
+#[cfg(miri)]
+pub(super) fn write(control: Control) {
+    EMULATED.with(|c| c.set(control));
 }
 
 #[cfg(any(test, feature = "test-hooks"))]

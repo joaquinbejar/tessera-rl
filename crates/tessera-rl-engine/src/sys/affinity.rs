@@ -6,7 +6,7 @@
 
 /// Logical core ids the OS reports, if it reports them. On Windows only
 /// ids below 64 are usable (`core_affinity` builds a 64-bit mask).
-#[cfg(not(loom))]
+#[cfg(not(any(loom, miri)))]
 pub(crate) fn available_cores() -> Option<Vec<usize>> {
     let ids = core_affinity::get_core_ids()?;
     Some(
@@ -17,13 +17,15 @@ pub(crate) fn available_cores() -> Option<Vec<usize>> {
     )
 }
 
-#[cfg(loom)]
+/// No reported cores under loom or Miri (which cannot call the OS
+/// affinity functions): workers run unpinned.
+#[cfg(any(loom, miri))]
 pub(crate) fn available_cores() -> Option<Vec<usize>> {
     None
 }
 
 /// Pins the current thread to logical core `core`, if the OS allows it.
-#[cfg(not(loom))]
+#[cfg(not(any(loom, miri)))]
 pub(crate) fn pin_current(core: usize) {
     let pinned = std::panic::catch_unwind(|| {
         core_affinity::set_for_current(core_affinity::CoreId { id: core })
@@ -33,5 +35,5 @@ pub(crate) fn pin_current(core: usize) {
     }
 }
 
-#[cfg(loom)]
+#[cfg(any(loom, miri))]
 pub(crate) fn pin_current(_: usize) {}
