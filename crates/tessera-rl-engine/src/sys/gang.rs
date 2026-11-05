@@ -40,10 +40,11 @@
 //! side: the waiter sees the change or the waker sees the waiter. LLVM may
 //! lower the idempotent RMW to a full barrier and a plain load (on x86-64 a
 //! `lock or` on the stack, then a load), so the guarantee in hardware terms
-//! is: the waker's store, a full barrier, then the counter load. A waker therefore skips the wake syscall when
-//! nobody is parked, without relying on store-load ordering. No waker is stored
-//! for a job without one: with the park backend such a job's waiter polls
-//! with `park_timeout(100 µs)`. A job with a waker (Sync's `run`, whose
+//! is: the waker's store, a full barrier, then the counter load. That
+//! barrier is what orders the store before the load, so no plain store
+//! and load pair is relied on. A waker therefore skips the wake syscall
+//! when nobody is parked. No waker is stored for a job without one: with
+//! the park backend such a job's waiter polls with `park_timeout(100 µs)`. A job with a waker (Sync's `run`, whose
 //! submitter is its waiter) is unparked directly, as before.
 //!
 //! # Panics and a dead worker
