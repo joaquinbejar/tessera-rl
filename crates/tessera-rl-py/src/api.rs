@@ -58,6 +58,15 @@ impl<'a> Kwargs<'a> {
         self.get(key).map(|v| capi::to_u32(g, v, key)).transpose()
     }
 
+    pub(crate) fn i32(&self, g: Gil, key: &str) -> CResult<Option<i32>> {
+        self.get(key)
+            .map(|v| {
+                let x = capi::to_i64(g, v, key)?;
+                i32::try_from(x).map_err(|_| capi::out_of_range(g, key))
+            })
+            .transpose()
+    }
+
     pub(crate) fn u64(&self, g: Gil, key: &str) -> CResult<Option<u64>> {
         self.get(key).map(|v| capi::to_u64(g, v, key)).transpose()
     }
@@ -250,6 +259,21 @@ pub(crate) fn make_othello(g: Gil, kwargs: Option<Ref<'_>>) -> CResult<Inner> {
     let args = pool_args(g, &kw, 128)?;
     let ops = g
         .detach(|| crate::env::othello(&args))
+        .map_err(|e| to_py(g, e))?;
+    Ok(Inner::new(ops, borrowed))
+}
+
+/// `make_go9(**kwargs)`: the pool of a Go 9x9 environment object. A game
+/// lasts at most 162 plies; `max_episode_steps` defaults to 200, so it never
+/// truncates a game.
+pub(crate) fn make_go9(g: Gil, kwargs: Option<Ref<'_>>) -> CResult<Inner> {
+    let kw = Kwargs::parse(g, kwargs)?;
+    kw.check(g, &[&POOL_KEYS, &["outputs", "komi_half_points"]])?;
+    let borrowed = borrowed(g, &kw)?;
+    let args = pool_args(g, &kw, 200)?;
+    let komi = kw.i32(g, "komi_half_points")?;
+    let ops = g
+        .detach(|| crate::env::go9(&args, komi))
         .map_err(|e| to_py(g, e))?;
     Ok(Inner::new(ops, borrowed))
 }

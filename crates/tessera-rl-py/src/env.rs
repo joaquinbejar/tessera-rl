@@ -14,7 +14,9 @@ use tessera_rl_engine::{
     ActionInput, AsyncOptions, AutoReset, DecodedRecord, EngineError, EnvPool, MAX_LEAVES,
     MaskProvider, Masked, NoMasks, PipelinedOptions, PoolOptions, Reseed, SyncOptions,
 };
-use tessera_rl_games::{Connect4, Connect4Config, Leduc, LeducConfig, Othello, OthelloConfig};
+use tessera_rl_games::{
+    Connect4, Connect4Config, Go9, Go9Config, Leduc, LeducConfig, Othello, OthelloConfig,
+};
 use tessera_rl_num::identity::Seed;
 
 /// Errors of the bindings: the engine's, plus record decoding and argument
@@ -499,6 +501,18 @@ pub(crate) fn othello(args: &PoolArgs) -> Result<Box<dyn PoolOps>, BindError> {
     let (options, n) = options(args)?;
     let same_step = options.auto_reset == AutoReset::SameStep;
     let pool = EnvPool::<Othello, Masked>::with_masks(cfg.clone(), options)?;
+    finish(&cfg, pool, args, n, same_step)
+}
+
+/// A Go 9x9 pool (`tessera/Go9-v1`), with masks and Sequential turns.
+pub(crate) fn go9(args: &PoolArgs, komi: Option<i32>) -> Result<Box<dyn PoolOps>, BindError> {
+    let d = Go9Config::default();
+    let cfg = Go9Config {
+        komi_half_points: komi.unwrap_or(d.komi_half_points),
+    };
+    let (options, n) = options(args)?;
+    let same_step = options.auto_reset == AutoReset::SameStep;
+    let pool = EnvPool::<Go9, Masked>::with_masks(cfg.clone(), options)?;
     finish(&cfg, pool, args, n, same_step)
 }
 

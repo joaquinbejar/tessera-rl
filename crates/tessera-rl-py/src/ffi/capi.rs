@@ -711,7 +711,13 @@ pub(crate) fn to_f64(g: Gil, v: Ref<'_>, what: &str) -> CResult<f64> {
 /// An exact `int` in `u32` range.
 pub(crate) fn to_u32(g: Gil, v: Ref<'_>, what: &str) -> CResult<u32> {
     let x = to_u64(g, v, what)?;
-    u32::try_from(x).map_err(|_| raise(g, type_error(), &format!("{what} is out of range")))
+    u32::try_from(x).map_err(|_| out_of_range(g, what))
+}
+
+/// The error of an integer outside its type.
+#[cold]
+pub(crate) fn out_of_range(g: Gil, what: &str) -> Raised {
+    raise(g, type_error(), &format!("{what} is out of range"))
 }
 
 /// An exact `bool`.
