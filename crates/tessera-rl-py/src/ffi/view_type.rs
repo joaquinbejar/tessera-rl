@@ -116,14 +116,14 @@ pub(crate) fn new_view(
         })?;
     let stale = match track {
         Track::Storage => Stale::Storage(Arc::clone(storage)),
-        Track::Half(gens, half, taken, poisoned) => {
-            Stale::Half(gens.clone(), half, taken, Arc::clone(poisoned))
+        Track::Half(gens, half, taken, unsettled) => {
+            Stale::Half(gens.clone(), half, taken, Arc::clone(unsettled))
         }
-        Track::Ids(gens, ids, epochs, poisoned) => Stale::Ids(
+        Track::Ids(gens, ids, epochs, unsettled) => Stale::Ids(
             gens.clone(),
             Arc::clone(ids),
             Arc::clone(epochs),
-            Arc::clone(poisoned),
+            Arc::clone(unsettled),
         ),
     };
     let owner: dlpack::Owner = storage.clone();
@@ -144,7 +144,7 @@ pub(crate) fn new_gather_view(
     buffer: &Arc<GatherBuffer>,
     spec: &ViewSpec,
     taken: u64,
-    poisoned: &Arc<AtomicBool>,
+    unsettled: &Arc<AtomicBool>,
 ) -> CResult<Mine> {
     let (ptr, bytes) = buffer
         .region(spec.field)
@@ -156,7 +156,7 @@ pub(crate) fn new_gather_view(
         ptr,
         bytes,
         owner,
-        Stale::Gather(Arc::clone(buffer), Arc::clone(poisoned)),
+        Stale::Gather(Arc::clone(buffer), Arc::clone(unsettled)),
         taken,
     )
 }
@@ -358,9 +358,9 @@ pub(super) unsafe extern "C" fn is_stale(
         let v = unsafe { view(g, slf) }?;
         let stale = match &v.stale {
             Stale::Storage(storage) => storage.generation() != v.generation,
-            Stale::Half(gens, half, taken, poisoned) => half_stale(gens, *half, *taken, poisoned),
-            Stale::Ids(gens, ids, epochs, poisoned) => ids_stale(gens, ids, epochs, poisoned),
-            Stale::Gather(buffer, poisoned) => gather_stale(buffer, v.generation, poisoned),
+            Stale::Half(gens, half, taken, unsettled) => half_stale(gens, *half, *taken, unsettled),
+            Stale::Ids(gens, ids, epochs, unsettled) => ids_stale(gens, ids, epochs, unsettled),
+            Stale::Gather(buffer, unsettled) => gather_stale(buffer, v.generation, unsettled),
         };
         Ok(capi::boolean(g, stale))
     })

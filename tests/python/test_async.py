@@ -241,8 +241,8 @@ def test_async_failed_writer_leaves_a_pending_delivery_repeatable(monkeypatch):
     # stored tokens: a wrong seed count, and an id out of range.
     with pytest.raises(t.ArgumentError):
         env._native.reset([1])
-    with pytest.raises(t.ArgumentError):
-        env.reset(ids=[99])
+    with pytest.raises(t.ConcurrencyError, match="(?i)in flight"):
+        env.reset(ids=[5])
     # Ids of the pending batch stay refused, and it repeats.
     with pytest.raises(t.ConcurrencyError, match="(?i)in flight"):
         env.send([0], zeros([0]))
@@ -580,15 +580,17 @@ def test_async_failed_restore_ids_leaves_pending_and_views_usable(monkeypatch):
     monkeypatch.setattr(env, "_batch", interrupted)
     with pytest.raises(KeyboardInterrupt):
         env.recv()
-    # An id count mismatch, and an id of the pending batch.
-    with pytest.raises(t.ArgumentError):
-        env.restore([4, 5], [record])
-    assert not t.is_stale(rewards)
+    # Any partial writer waits for the pending batch, and changes nothing.
     with pytest.raises(t.ConcurrencyError, match="(?i)in flight"):
-        env.restore([calls and 2], [record])
+        env.restore([4], [record])
+    assert not t.is_stale(rewards)
     got = env.recv()
     assert calls[0] == calls[1]
     assert sorted(got.ids.tolist()) == [2, 3]
+    # With nothing pending, an id count mismatch fails in the engine.
+    with pytest.raises(t.ArgumentError):
+        env.restore([4, 5], [record])
+    assert not t.is_stale(rewards)
     env.send([2, 3], zeros([2, 3]))
     assert sorted(env.recv().ids.tolist()) == [2, 3]
 
@@ -645,3 +647,49 @@ def test_async_indexed_rows_are_bit_identical_to_sync_in_every_field(workers, en
         assert sorted(seen) == every
     assert ended
     env.close()
+
+
+def test_async_successful_restore_ids_makes_indexed_views_stale():
+    env = asy(8, 4, gather="indexed")
+    env.reset()
+    record = env.snapshot(6)
+    env.send([0, 1, 2, 3], zeros(range(4)))
+    rewards = env.recv().step.rewards
+    assert not t.is_stale(rewards)
+    env.restore([6], [record])
+    assert t.is_stale(rewards), "the writer dropped this view's token"
+
+
+def test_async_successful_restore_ids_leaves_gathered_views_fresh():
+    env = asy(8, 4)
+    env.reset()
+    record = env.snapshot(6)
+    env.send([0, 1, 2, 3], zeros(range(4)))
+    rewards = env.recv().step.rewards
+    env.restore([6], [record])
+    assert not t.is_stale(rewards)
+
+
+def test_async_interrupted_recv_refuses_a_disjoint_writer_and_replays_fresh(monkeypatch):
+    env = asy(8, 2, gather="indexed")
+    env.reset()
+    env.send([0, 1], zeros([0, 1]))
+    real = env._batch
+    calls = []
+
+    def interrupted(out):
+        calls.append(out["seq"])
+        if len(calls) == 1:
+            raise KeyboardInterrupt
+        return real(out)
+
+    monkeypatch.setattr(env, "_batch", interrupted)
+    with pytest.raises(KeyboardInterrupt):
+        env.recv()
+    with pytest.raises(t.ConcurrencyError, match="(?i)in flight"):
+        env.reset(ids=[5])
+    got = env.recv()
+    assert sorted(got.ids.tolist()) == [0, 1]
+    assert not t.is_stale(got.step.rewards), "the replay is usable"
+    env.reset(ids=[5])
+    assert t.is_stale(got.step.rewards)

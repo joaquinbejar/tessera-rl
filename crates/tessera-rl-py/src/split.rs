@@ -25,16 +25,16 @@ use tessera_rl_num::identity::Seed;
 
 use crate::env::{BindError, Layout, Owned, PoolOps, ResetSeed};
 
-/// Whether a half view's window has ended: its half has a new generation, or
-/// the pool is poisoned, whose rows a failed writer may have partly written.
-/// Poison advances no generation (ADR-0047 section 5).
+/// Whether a half view's window has ended: its half has a new generation, a
+/// writer is running, or the pool is poisoned, whose rows a failed writer may
+/// have partly written. Neither advances a generation (ADR-0047 section 5).
 pub(crate) fn half_stale(
     generations: &HalfGenerations,
     half: usize,
     taken: u64,
-    poisoned: &AtomicBool,
+    unsettled: &AtomicBool,
 ) -> bool {
-    poisoned.load(Ordering::Acquire) || generations.half(half) != Some(taken)
+    unsettled.load(Ordering::Acquire) || generations.half(half) != Some(taken)
 }
 
 /// One half's outputs: which half, its generation captured under the mutex
@@ -67,8 +67,8 @@ pub(crate) trait SplitOps: Send + Sync {
     fn storage(&self) -> Arc<OutputStorage>;
     fn halves(&self) -> [Range<usize>; 2];
     fn half_generations(&self) -> HalfGenerations;
-    /// Set while the pool is poisoned, as of its last call; views read it.
-    fn poison_flag(&self) -> Arc<AtomicBool>;
+    /// Set while a writer runs or the pool is poisoned; views read it.
+    fn unsettled_flag(&self) -> Arc<AtomicBool>;
     /// Held by the one running `recv`.
     fn receiving(&self) -> &AtomicBool;
     fn waiter(&self) -> &Waiter;
@@ -124,7 +124,7 @@ struct SplitPool<E: Environment, M: MaskProvider<E>> {
     storage: Arc<OutputStorage>,
     halves: [Range<usize>; 2],
     generations: HalfGenerations,
-    poisoned: Arc<AtomicBool>,
+    unsettled: Arc<AtomicBool>,
     /// A record to size snapshot buffers with.
     template: Record<E>,
     receiving: AtomicBool,
@@ -186,9 +186,18 @@ where
             .map_err(|_| BindError::Engine(EngineError::Poisoned))
     }
 
-    /// Publishes the pool's poison to views, before the call returns.
-    fn note_poison(&self, pool: &PipelinedPool<E, M>) {
-        self.poisoned.store(pool.is_poisoned(), Ordering::Release);
+    /// Views read stale from here until `settle`: a writer rewrites rows
+    /// before the engine moves their generations (ADR-0047 section 5). The
+    /// fence orders this store before the writer's row writes.
+    fn unsettle(&self) {
+        self.unsettled.store(true, Ordering::Release);
+        core::sync::atomic::fence(Ordering::SeqCst);
+    }
+
+    /// Publishes the outcome before the call returns, after anything else a
+    /// view reads has moved: the pool's poison keeps views stale.
+    fn settle(&self, pool: &PipelinedPool<E, M>) {
+        self.unsettled.store(pool.is_poisoned(), Ordering::Release);
     }
 
     fn output(&self, half: usize, seq: u64, token: &HalfToken<E, M>, owned: bool) -> HalfOutput {
@@ -222,8 +231,8 @@ where
         self.generations.clone()
     }
 
-    fn poison_flag(&self) -> Arc<AtomicBool> {
-        Arc::clone(&self.poisoned)
+    fn unsettled_flag(&self) -> Arc<AtomicBool> {
+        Arc::clone(&self.unsettled)
     }
 
     fn receiving(&self) -> &AtomicBool {
@@ -250,8 +259,9 @@ where
                 Reseed::Each(&seeds)
             }
         };
+        self.unsettle();
         let result = pool.reset_all(reseed);
-        self.note_poison(pool);
+        self.settle(pool);
         let [a, b] = result?;
         let out = [self.output(0, 0, &a, owned), self.output(1, 0, &b, owned)];
         state.tokens = [Some(a), Some(b)];
@@ -286,7 +296,7 @@ where
                 continuous: &[],
             },
         );
-        self.note_poison(pool);
+        self.settle(pool);
         result.map_err(|e| {
             if let Some(slot) = state.tokens.get_mut(index) {
                 *slot = e.token;
@@ -309,7 +319,7 @@ where
             });
         }
         let received = pool.try_recv();
-        self.note_poison(pool);
+        self.settle(pool);
         let Some(token) = received? else {
             let oldest = pool.oldest_half().unwrap_or(0);
             return Ok(Polled::Running(usize::try_from(oldest).unwrap_or(0)));
@@ -349,8 +359,9 @@ where
         let pool = state.pool.as_mut().ok_or_else(closed)?;
         // The FFI release, as in `reset`.
         state.tokens = [None, None];
+        self.unsettle();
         let restored = pool.restore_all(&taken.records, &taken.cycles);
-        self.note_poison(pool);
+        self.settle(pool);
         restored?;
         let a = pool.idle_token(0)?;
         let b = pool.idle_token(1)?;
@@ -464,7 +475,7 @@ where
         storage,
         halves,
         generations,
-        poisoned: Arc::new(AtomicBool::new(false)),
+        unsettled: Arc::new(AtomicBool::new(false)),
         template,
         receiving: AtomicBool::new(false),
         waiter,
@@ -476,6 +487,51 @@ where
 #[cfg(test)]
 #[path = "../../tessera-rl-engine/tests/common/mod.rs"]
 pub(crate) mod common;
+
+#[cfg(test)]
+pub(crate) mod reset_probe {
+    //! Reads a flag from inside a writer: the fixture's `panic_on_reset`
+    //! asserts during the reset, which calls the panic hook there.
+
+    use core::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{Arc, Mutex, PoisonError};
+
+    /// Serializes the tests that panic in reset, as the hook is global.
+    pub(crate) static RESET_PANICS: Mutex<()> = Mutex::new(());
+
+    /// The value of `flag` at the first injected reset panic in `run`.
+    pub(crate) fn flag_at_reset_panic(flag: &Arc<AtomicBool>, run: impl FnOnce()) -> Option<bool> {
+        let _serial = RESET_PANICS.lock().unwrap_or_else(PoisonError::into_inner);
+        let seen: Arc<Mutex<Option<bool>>> = Arc::new(Mutex::new(None));
+        let previous = Arc::new(std::panic::take_hook());
+        {
+            let (flag, seen, previous) =
+                (Arc::clone(flag), Arc::clone(&seen), Arc::clone(&previous));
+            std::panic::set_hook(Box::new(move |info| {
+                let message = info
+                    .payload()
+                    .downcast_ref::<&str>()
+                    .map(|s| (*s).to_owned())
+                    .or_else(|| info.payload().downcast_ref::<String>().cloned())
+                    .unwrap_or_default();
+                if message.contains("injected reset panic") {
+                    let mut slot = seen.lock().unwrap_or_else(PoisonError::into_inner);
+                    if slot.is_none() {
+                        *slot = Some(flag.load(Ordering::Acquire));
+                    }
+                } else {
+                    previous(info);
+                }
+            }));
+        }
+        run();
+        drop(std::panic::take_hook());
+        if let Ok(previous) = Arc::try_unwrap(previous) {
+            std::panic::set_hook(previous);
+        }
+        *seen.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -582,14 +638,31 @@ mod tests {
     /// A panic during a reset advances no generation, yet a view must not
     /// report fresh over rows the reset may have partly written.
     #[test]
+    fn test_split_flag_is_set_inside_a_writer() {
+        let split = counter(&super::common::CountConfig {
+            panic_on_reset: true,
+            ..super::common::CountConfig::default()
+        });
+        let flag = split.unsettled_flag();
+        let seen = super::reset_probe::flag_at_reset_panic(&flag, || {
+            assert!(split.reset(&ResetSeed::Keep, false).is_err());
+        });
+        assert_eq!(seen, Some(true), "views must read stale during the write");
+        split.close();
+    }
+
+    #[test]
     fn test_split_panic_during_reset_makes_views_stale() {
+        let _serial = super::reset_probe::RESET_PANICS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let split = counter(&super::common::CountConfig {
             panic_on_reset: true,
             ..super::common::CountConfig::default()
         });
         let gens = split.half_generations();
         let taken = gens.half(0).unwrap();
-        let flag = split.poison_flag();
+        let flag = split.unsettled_flag();
         assert!(!half_stale(&gens, 0, taken, &flag));
         assert!(split.reset(&ResetSeed::Keep, false).is_err());
         assert!(split.is_poisoned());
@@ -609,7 +682,7 @@ mod tests {
         });
         split.reset(&ResetSeed::Keep, false).unwrap();
         let gens = split.half_generations();
-        let flag = split.poison_flag();
+        let flag = split.unsettled_flag();
         let other = gens.half(1).unwrap();
         let rows = split.halves()[0].len() * <super::common::Counter as Environment>::MAX_AGENTS;
         split.send(0, &vec![0; rows], 0).unwrap();

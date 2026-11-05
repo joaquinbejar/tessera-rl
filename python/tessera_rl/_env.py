@@ -123,7 +123,15 @@ class Env:
     ``send`` or mutation of the batch's ids succeeds, or when ``reset(ids=...)``
     or ``restore`` succeeds on any ids: those writers release every batch's
     borrow, even over rows they do not write. A refused call leaves all arrays
-    fresh, and a poisoned pool makes all of them stale, for good. ``reset()`` returns all
+    fresh, and a poisoned pool makes all of them stale, for good.
+
+    In both split-phase modes, every array reads stale while a writer
+    (``reset``, ``restore``, ``restore_all``) runs, gathered ones included. After
+    a refused writer they read fresh again.
+
+    In Async, ``reset(ids=...)`` and ``restore`` also raise a retryable
+    ``ConcurrencyError`` while a ``recv`` result has not reached its caller
+    (an interrupted ``recv``): call ``recv`` again first. ``reset()`` returns all
     instances as one batch; ``reset(ids=...)`` and ``restore`` return nothing
     and the next ``recv`` delivers those ids. ``snapshot(id)`` needs every sent
     id to have finished, not only ``id`` (issue #85): it raises a retryable

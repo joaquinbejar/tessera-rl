@@ -46,9 +46,9 @@ pub(crate) fn ids_stale(
     generations: &IdGenerations,
     ids: &[BatchId],
     epochs: &[AtomicU64],
-    poisoned: &AtomicBool,
+    unsettled: &AtomicBool,
 ) -> bool {
-    poisoned.load(Ordering::Acquire)
+    unsettled.load(Ordering::Acquire)
         || ids.iter().any(|b| {
             generations.id(b.id) != Some(b.generation)
                 || epochs
@@ -58,8 +58,8 @@ pub(crate) fn ids_stale(
 }
 
 /// Whether a gathered view written at `taken` has ended.
-pub(crate) fn gather_stale(buffer: &GatherBuffer, taken: u64, poisoned: &AtomicBool) -> bool {
-    poisoned.load(Ordering::Acquire) || buffer.generation() != taken
+pub(crate) fn gather_stale(buffer: &GatherBuffer, taken: u64, unsettled: &AtomicBool) -> bool {
+    unsettled.load(Ordering::Acquire) || buffer.generation() != taken
 }
 
 /// One batch: its ids in completion order and how to read its rows.
@@ -87,8 +87,11 @@ pub(crate) trait AsyncOps: Send + Sync {
     fn storage(&self) -> Arc<OutputStorage>;
     fn id_generations(&self) -> IdGenerations;
     fn release_epochs(&self) -> ReleaseEpochs;
-    /// Set while the pool is poisoned, as of its last call; views read it.
-    fn poison_flag(&self) -> Arc<AtomicBool>;
+    /// The gather generation and epoch total when the flag last settled.
+    #[cfg(test)]
+    fn settled_at(&self) -> (u64, u64);
+    /// Set while a writer runs or the pool is poisoned; views read it.
+    fn unsettled_flag(&self) -> Arc<AtomicBool>;
     fn gather(&self) -> Option<Arc<GatherBuffer>>;
     fn receiving(&self) -> &AtomicBool;
     fn waiter(&self) -> &BatchWaiter;
@@ -223,6 +226,15 @@ impl<E: Environment, M: MaskProvider<E>> State<E, M> {
         }
     }
 
+    /// A partial writer waits for any unacknowledged delivery: dropping its
+    /// token would make the delivery repeat with views already stale.
+    fn refuse_while_pending(&self) -> Result<(), BindError> {
+        match self.pending.as_ref().and_then(|(out, _)| out.ids.first()) {
+            Some(b) => Err(BindError::Engine(EngineError::InFlight { id: b.id })),
+            None => Ok(()),
+        }
+    }
+
     /// Ids a caller may not know were delivered count as in flight.
     fn check_pending(&self, ids: &[u32]) -> Result<(), BindError> {
         if let Some((out, _)) = &self.pending
@@ -245,7 +257,9 @@ struct BatchedPool<E: Environment, M: MaskProvider<E>> {
     storage: Arc<OutputStorage>,
     generations: IdGenerations,
     epochs: ReleaseEpochs,
-    poisoned: Arc<AtomicBool>,
+    unsettled: Arc<AtomicBool>,
+    #[cfg(test)]
+    settled_at: Mutex<(u64, u64)>,
     buffer: Option<Arc<GatherBuffer>>,
     receiving: AtomicBool,
     waiter: BatchWaiter,
@@ -321,9 +335,30 @@ where
             .map_err(|_| BindError::Engine(EngineError::Poisoned))
     }
 
-    /// Publishes the pool's poison to views, before the call returns.
-    fn note_poison(&self, pool: &AsyncPool<E, M>) {
-        self.poisoned.store(pool.is_poisoned(), Ordering::Release);
+    /// Views read stale from here until `settle`: a writer rewrites rows
+    /// before the engine moves their generations (ADR-0047 section 5). The
+    /// fence orders this store before the writer's row writes.
+    fn unsettle(&self) {
+        self.unsettled.store(true, Ordering::Release);
+        core::sync::atomic::fence(Ordering::SeqCst);
+    }
+
+    /// Publishes the outcome before the call returns, after anything else a
+    /// view reads has moved: the pool's poison keeps views stale.
+    fn settle(&self, pool: &AsyncPool<E, M>) {
+        #[cfg(test)]
+        self.record_settle();
+        self.unsettled.store(pool.is_poisoned(), Ordering::Release);
+    }
+
+    /// What views read at the moment the flag is cleared.
+    #[cfg(test)]
+    fn record_settle(&self) {
+        let gather = self.buffer.as_ref().map_or(0, |b| b.generation());
+        let epochs = self.epochs.iter().map(|e| e.load(Ordering::Acquire)).sum();
+        if let Ok(mut at) = self.settled_at.lock() {
+            *at = (gather, epochs);
+        }
     }
 
     fn epoch(&self, id: u32) -> u64 {
@@ -365,7 +400,8 @@ where
                 for (k, b) in ids.iter().enumerate() {
                     let start = k.saturating_mul(row_bytes);
                     row_of(token, b.id, spec.field, |at, bytes| {
-                        writer.write(spec.field, start.saturating_add(at), bytes);
+                        let fits = writer.write(spec.field, start.saturating_add(at), bytes);
+                        debug_assert!(fits, "a gathered row fits its region");
                     });
                 }
                 sizes.push((spec.field, row_bytes.saturating_mul(ids.len())));
@@ -437,8 +473,13 @@ where
         Arc::clone(&self.epochs)
     }
 
-    fn poison_flag(&self) -> Arc<AtomicBool> {
-        Arc::clone(&self.poisoned)
+    #[cfg(test)]
+    fn settled_at(&self) -> (u64, u64) {
+        self.settled_at.lock().map_or((0, 0), |at| *at)
+    }
+
+    fn unsettled_flag(&self) -> Arc<AtomicBool> {
+        Arc::clone(&self.unsettled)
     }
 
     fn gather(&self) -> Option<Arc<GatherBuffer>> {
@@ -459,12 +500,20 @@ where
         let pool = state.pool.as_mut().ok_or_else(closed)?;
         state.stored.release_all();
         let mut seeds = Vec::new();
-        let result = pool.reset_all(reseed_of(seed, &mut seeds));
-        self.note_poison(pool);
-        let token = result?;
+        self.unsettle();
+        let token = match pool.reset_all(reseed_of(seed, &mut seeds)) {
+            Ok(token) => token,
+            Err(e) => {
+                self.settle(pool);
+                return Err(e.into());
+            }
+        };
         // Every generation moved, so nothing depends on the dropped tokens.
         state.stored.covered.fill(false);
+        // Gathering moves the buffer's generation: old gathered views must
+        // not read fresh in between.
         let out = self.output(&mut state.gather, 0, &token);
+        self.settle(pool);
         state.stored.put(token);
         state.pending = None;
         Ok(out)
@@ -474,14 +523,17 @@ where
         let mut guard = self.lock()?;
         let state = &mut *guard;
         state.acknowledge(delivered);
-        state.check_pending(ids)?;
+        state.refuse_while_pending()?;
         let pool = state.pool.as_mut().ok_or_else(closed)?;
         state.stored.release_all();
         let mut seeds = Vec::new();
+        self.unsettle();
         let result = pool.reset(ids, reseed_of(seed, &mut seeds));
-        self.note_poison(pool);
+        if result.is_ok() {
+            state.stored.bump_covered(&self.epochs);
+        }
+        self.settle(pool);
         result?;
-        state.stored.bump_covered(&self.epochs);
         Ok(())
     }
 
@@ -499,7 +551,7 @@ where
                 continuous: &[],
             },
         );
-        self.note_poison(pool);
+        self.settle(pool);
         result?;
         state.stored.uncover(ids);
         Ok(())
@@ -519,7 +571,7 @@ where
             });
         }
         let received = pool.try_recv();
-        self.note_poison(pool);
+        self.settle(pool);
         let Some(token) = received? else {
             return Ok(BatchPolled::Running);
         };
@@ -560,13 +612,16 @@ where
         let mut guard = self.lock()?;
         let state = &mut *guard;
         state.acknowledge(delivered);
-        state.check_pending(ids)?;
+        state.refuse_while_pending()?;
         let pool = state.pool.as_mut().ok_or_else(closed)?;
         state.stored.release_all();
+        self.unsettle();
         let result = pool.restore(ids, &records);
-        self.note_poison(pool);
+        if result.is_ok() {
+            state.stored.bump_covered(&self.epochs);
+        }
+        self.settle(pool);
         result?;
-        state.stored.bump_covered(&self.epochs);
         Ok(())
     }
 
@@ -588,15 +643,18 @@ where
         let pool = state.pool.as_mut().ok_or_else(closed)?;
         state.stored.release_all();
         let recovering = pool.is_poisoned();
+        self.unsettle();
         let result = pool.restore_all(&taken.records);
-        self.note_poison(pool);
-        result?;
-        state.stored.covered.fill(false);
-        // Poison is gone, and this writes no batch: old gathered views must
-        // stay stale after a recovery.
-        if recovering && let Some(writer) = state.gather.as_mut() {
-            writer.begin();
+        if result.is_ok() {
+            state.stored.covered.fill(false);
+            // This writes no batch: old gathered views must stay stale after
+            // a recovery, and move before the flag clears.
+            if recovering && let Some(writer) = state.gather.as_mut() {
+                writer.begin();
+            }
         }
+        self.settle(pool);
+        result?;
         state.pending = None;
         Ok(())
     }
@@ -756,7 +814,9 @@ where
         storage,
         generations,
         epochs: (0..num_envs).map(|_| AtomicU64::new(0)).collect(),
-        poisoned: Arc::new(AtomicBool::new(false)),
+        unsettled: Arc::new(AtomicBool::new(false)),
+        #[cfg(test)]
+        settled_at: Mutex::new((0, 0)),
         buffer,
         receiving: AtomicBool::new(false),
         waiter,
@@ -852,7 +912,27 @@ mod tests {
     /// A panic in a writer moves no generation, yet both kinds of view must
     /// report stale over rows it may have partly written.
     #[test]
+    fn test_async_flag_is_set_inside_a_writer() {
+        let ops = asynced(
+            &CountConfig {
+                panic_on_reset: true,
+                ..CountConfig::default()
+            },
+            BatchOutputs::Indexed,
+        );
+        let flag = ops.unsettled_flag();
+        let seen = crate::split::reset_probe::flag_at_reset_panic(&flag, || {
+            assert!(ops.reset_all(&ResetSeed::Keep).is_err());
+        });
+        assert_eq!(seen, Some(true), "views must read stale during the write");
+        ops.close();
+    }
+
+    #[test]
     fn test_async_panic_during_writer_makes_every_view_stale() {
+        let _serial = crate::split::reset_probe::RESET_PANICS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         for outputs in [BatchOutputs::Gathered, BatchOutputs::Indexed] {
             let ops = asynced(
                 &CountConfig {
@@ -863,7 +943,7 @@ mod tests {
             );
             let gens = ops.id_generations();
             let epochs = ops.release_epochs();
-            let flag = ops.poison_flag();
+            let flag = ops.unsettled_flag();
             let ids = [BatchId {
                 id: 0,
                 generation: gens.id(0).unwrap(),
@@ -903,7 +983,7 @@ mod tests {
                 let (gens, epochs, flag) = (
                     ops.id_generations(),
                     ops.release_epochs(),
-                    ops.poison_flag(),
+                    ops.unsettled_flag(),
                 );
                 let buffer = ops.gather();
                 assert!(!ids_stale(&gens, &first.ids, &epochs, &flag));
@@ -964,6 +1044,60 @@ mod tests {
         }
     }
 
+    /// Stale views never revive: what ends them has moved before the flag
+    /// clears, on every recovery and every writer that drops tokens.
+    #[test]
+    fn test_async_gather_and_epochs_move_before_the_flag_clears() {
+        for by_restore in [false, true] {
+            let ops = asynced(
+                &CountConfig {
+                    panic_at: 1,
+                    length: 9,
+                    ..CountConfig::default()
+                },
+                BatchOutputs::Gathered,
+            );
+            ops.reset_all(&ResetSeed::Keep).unwrap();
+            let taken = ops.snapshot_all().unwrap();
+            let every: Vec<u32> = (0..N).collect();
+            let actions = vec![0; every.len() * <Counter as Environment>::MAX_AGENTS];
+            ops.send(&every, &actions, 0).unwrap();
+            let mut delivered = 0;
+            loop {
+                match ops.try_recv(delivered) {
+                    Ok(BatchPolled::Batch(out)) => delivered = out.seq,
+                    Ok(BatchPolled::Running) => {
+                        let _ = ops.waiter().wait_ready(Duration::from_millis(1));
+                    }
+                    Ok(BatchPolled::Busy) => panic!("one thread only"),
+                    Err(_) => break,
+                }
+            }
+            let buffer = ops.gather().unwrap();
+            let old = buffer.generation();
+            if by_restore {
+                ops.restore_all(&taken).unwrap();
+            } else {
+                ops.reset_all(&ResetSeed::Keep).unwrap();
+            }
+            assert!(
+                ops.settled_at().0 > old,
+                "gather moved before the flag cleared"
+            );
+            ops.close();
+        }
+        let ops = asynced(&CountConfig::default(), BatchOutputs::Indexed);
+        ops.reset_all(&ResetSeed::Keep).unwrap();
+        let out = deliver(&*ops, &[0, 1], 0);
+        let before = ops.settled_at().1;
+        ops.reset(&[5], &ResetSeed::Keep, out.seq).unwrap();
+        assert!(
+            ops.settled_at().1 > before,
+            "epochs moved before the flag cleared"
+        );
+        ops.close();
+    }
+
     /// Dropping a token ends an indexed view of unwritten ids only when the
     /// writer succeeds, and moves no generation for those rows.
     #[test]
@@ -974,7 +1108,7 @@ mod tests {
         let (gens, epochs, flag) = (
             ops.id_generations(),
             ops.release_epochs(),
-            ops.poison_flag(),
+            ops.unsettled_flag(),
         );
         assert!(!ids_stale(&gens, &out.ids, &epochs, &flag));
         // Refused after releasing the tokens: an id out of range.

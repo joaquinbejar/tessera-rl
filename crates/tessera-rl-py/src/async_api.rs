@@ -20,7 +20,7 @@ use crate::view::{half_view_set, view_set};
 /// A batch: `{ids, seq, outputs}`. Gathered and owned outputs have one row
 /// per id in `ids`, in that order; indexed views have all N rows.
 fn batch_output(g: Gil, inner: &Inner, ops: &dyn AsyncOps, out: &BatchOutput) -> CResult<Mine> {
-    let poisoned = ops.poison_flag();
+    let unsettled = ops.unsettled_flag();
     let outputs = if let Some(owned) = &out.owned {
         owned_dict(g, owned)?
     } else if let Some(buffer) = ops.gather() {
@@ -28,7 +28,7 @@ fn batch_output(g: Gil, inner: &Inner, ops: &dyn AsyncOps, out: &BatchOutput) ->
         let set = inner.with(g, |p| Ok(half_view_set(p.layout(), &rows)))?;
         let set = set.ok_or_else(no_format(g))?;
         views_dict(g, &set, |spec| {
-            new_gather_view(g, &buffer, spec, out.gathered, &poisoned)
+            new_gather_view(g, &buffer, spec, out.gathered, &unsettled)
         })?
     } else {
         let set = inner.with(g, |p| Ok(view_set(p.layout())))?;
@@ -40,7 +40,7 @@ fn batch_output(g: Gil, inner: &Inner, ops: &dyn AsyncOps, out: &BatchOutput) ->
                 g,
                 &storage,
                 spec,
-                Track::Ids(&generations, &out.ids, &epochs, &poisoned),
+                Track::Ids(&generations, &out.ids, &epochs, &unsettled),
             )
         })?
     };

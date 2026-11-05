@@ -479,13 +479,13 @@ fn half_output(g: Gil, inner: &Inner, split: &dyn SplitOps, out: &HalfOutput) ->
         })?;
         let set = set.ok_or_else(no_format(g))?;
         let generations = split.half_generations();
-        let poisoned = split.poison_flag();
+        let unsettled = split.unsettled_flag();
         views_dict(g, &set, |spec| {
             new_view(
                 g,
                 &storage,
                 spec,
-                Track::Half(&generations, out.half, out.generation, &poisoned),
+                Track::Half(&generations, out.half, out.generation, &unsettled),
             )
         })?
     };
