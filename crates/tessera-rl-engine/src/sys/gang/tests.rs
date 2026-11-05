@@ -25,11 +25,17 @@ fn options(workers: usize) -> GangOptions {
 /// The same options blocking with the address wait: native outside loom,
 /// the futex mock under loom.
 fn address_options(workers: usize) -> GangOptions {
-    #[cfg(not(loom))]
+    // Miri cannot run the native address-wait syscalls: it uses park, so
+    // only the wait primitive differs, never the job protocol.
+    #[cfg(all(not(loom), not(miri)))]
     {
         let mut opts = options(workers);
         opts.native = crate::sys::Native::detect();
         opts
+    }
+    #[cfg(all(not(loom), miri))]
+    {
+        options(workers)
     }
     #[cfg(loom)]
     {
@@ -125,7 +131,7 @@ fn test_gang_drop_right_after_run() {
 #[cfg(not(loom))]
 #[test]
 fn test_gang_many_workers_many_epochs() {
-    epochs(&options(7), 7, 50);
+    epochs(&options(7), 7, if cfg!(miri) { 3 } else { 50 });
 }
 
 #[test]
@@ -166,38 +172,116 @@ impl Counted {
     }
 }
 
-/// Two jobs published before any worker can observe either: both run, in
-/// order, and both waits return.
+/// Per-worker markers: `a[w]` is set when worker `w` has run job A, and
+/// `order_violations` counts B calls on a worker that had not run A yet.
+struct Order {
+    a: Vec<AtomicUsize>,
+    a_calls: AtomicUsize,
+    b_calls: AtomicUsize,
+    order_violations: AtomicUsize,
+}
+
+impl Order {
+    fn new(workers: usize) -> Arc<Self> {
+        Arc::new(Self {
+            a: (0..workers).map(|_| AtomicUsize::new(0)).collect(),
+            a_calls: AtomicUsize::new(0),
+            b_calls: AtomicUsize::new(0),
+            order_violations: AtomicUsize::new(0),
+        })
+    }
+}
+
+/// Two jobs published before any worker can observe either: both run,
+/// each worker runs A before B (its own A marker is set when it starts B;
+/// other workers may still be in A), and both waits return.
 fn two_published(opts: &GangOptions) {
-    let first = Counted::new();
-    let second = Counted::new();
-    let (a, b) = (Arc::clone(&first.count), Arc::clone(&second.count));
-    let second_seen = Arc::clone(&second.count);
-    let saw_first_complete = Arc::new(AtomicUsize::new(0));
-    let saw = Arc::clone(&saw_first_complete);
-    let fa = move |_w: usize| {
-        a.fetch_add(1, Ordering::SeqCst);
+    let workers = opts.workers.get();
+    let order = Order::new(workers);
+    let (oa, ob) = (Arc::clone(&order), Arc::clone(&order));
+    let fa = move |w: usize| {
+        oa.a[w].store(1, Ordering::SeqCst);
+        oa.a_calls.fetch_add(1, Ordering::SeqCst);
     };
-    let fb = move |_w: usize| {
-        // A worker runs job 1 before job 2, so its own job 1 call is done.
-        if second_seen.load(Ordering::SeqCst) == 0 {
-            saw.fetch_add(1, Ordering::SeqCst);
+    let fb = move |w: usize| {
+        if ob.a[w].load(Ordering::SeqCst) != 1 {
+            ob.order_violations.fetch_add(1, Ordering::SeqCst);
         }
-        b.fetch_add(1, Ordering::SeqCst);
+        ob.b_calls.fetch_add(1, Ordering::SeqCst);
     };
     let ja = Job::new(&fa, None);
     let jb = Job::new(&fb, None);
     let mut gang = Gang::new(opts).unwrap();
-    {
-        submit(&mut gang, &ja).unwrap();
-        submit(&mut gang, &jb).unwrap();
-    }
+    submit(&mut gang, &ja).unwrap();
+    submit(&mut gang, &jb).unwrap();
     assert!(!gang.wait().unwrap());
-    assert_eq!(first.get(), opts.workers.get());
+    assert_eq!(order.a_calls.load(Ordering::SeqCst), workers);
     assert!(!gang.wait().unwrap());
-    assert_eq!(second.get(), opts.workers.get());
-    assert!(saw_first_complete.load(Ordering::SeqCst) >= 1);
+    assert_eq!(order.b_calls.load(Ordering::SeqCst), workers);
+    assert_eq!(
+        order.order_violations.load(Ordering::SeqCst),
+        0,
+        "a worker ran B before its own A"
+    );
     drop(gang);
+}
+
+/// Slot reuse with two jobs outstanding: A and B in flight, A waited, then
+/// C reuses A's slot while B is still in flight. Each job runs exactly once
+/// per worker with its own closure, so C cannot overwrite B's live slot.
+fn slot_reuse(opts: &GangOptions) {
+    let workers = opts.workers.get();
+    let counts: Arc<Vec<AtomicUsize>> = Arc::new((0..3).map(|_| AtomicUsize::new(0)).collect());
+    let (ca, cb, cc) = (
+        Arc::clone(&counts),
+        Arc::clone(&counts),
+        Arc::clone(&counts),
+    );
+    let fa = move |_w: usize| {
+        ca[0].fetch_add(1, Ordering::SeqCst);
+    };
+    let fb = move |_w: usize| {
+        cb[1].fetch_add(1, Ordering::SeqCst);
+    };
+    let fc = move |_w: usize| {
+        cc[2].fetch_add(1, Ordering::SeqCst);
+    };
+    let (ja, jb, jc) = (
+        Job::new(&fa, None),
+        Job::new(&fb, None),
+        Job::new(&fc, None),
+    );
+    let mut gang = Gang::new(opts).unwrap();
+    submit(&mut gang, &ja).unwrap();
+    submit(&mut gang, &jb).unwrap();
+    assert_eq!(
+        submit(&mut gang, &jc),
+        Err(EngineError::GangQueue { in_flight: 2 }),
+        "a third job may not take a live slot"
+    );
+    assert!(!gang.wait().unwrap());
+    assert_eq!(counts[0].load(Ordering::SeqCst), workers);
+    submit(&mut gang, &jc).unwrap();
+    assert!(!gang.wait().unwrap());
+    assert_eq!(counts[1].load(Ordering::SeqCst), workers);
+    assert!(!gang.wait().unwrap());
+    assert_eq!(counts[2].load(Ordering::SeqCst), workers);
+    assert_eq!(counts[0].load(Ordering::SeqCst), workers);
+    drop(gang);
+}
+
+#[test]
+fn test_gang_slot_reuse_with_two_jobs_outstanding_keeps_each_job() {
+    model(|| slot_reuse(&options(1)));
+}
+
+#[cfg(not(loom))]
+#[test]
+fn test_gang_slot_reuse_on_many_workers_keeps_each_job() {
+    for _ in 0..if cfg!(miri) { 2 } else { 200 } {
+        slot_reuse(&options(3));
+        slot_reuse(&address_options(3));
+    }
 }
 
 #[test]
@@ -213,7 +297,7 @@ fn test_gang_two_jobs_published_with_address_wait_run_both() {
 #[cfg(not(loom))]
 #[test]
 fn test_gang_two_jobs_published_on_many_workers_run_both() {
-    for _ in 0..200 {
+    for _ in 0..if cfg!(miri) { 2 } else { 200 } {
         two_published(&options(4));
         two_published(&address_options(4));
     }

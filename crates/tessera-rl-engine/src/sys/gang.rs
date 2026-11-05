@@ -687,7 +687,9 @@ fn worker_main(shared: &Shared, worker: usize, core: Option<usize>, fail: bool, 
         if let Some(core) = core {
             pin_current(core);
         }
-        #[cfg(not(loom))]
+        // Miri cannot run the FP control-register asm; only that call is
+        // stubbed, the job protocol runs unchanged.
+        #[cfg(not(any(loom, miri)))]
         tessera_rl_num::fp::establish_canonical();
     }));
     if started.is_err() {
@@ -804,7 +806,7 @@ fn run_job(shared: &Shared, slot: &JobSlot, worker: usize, seen: &mut Seen, die:
         "injected worker death outside the job's catch"
     );
     let completed = catch(|| {
-        #[cfg(not(loom))]
+        #[cfg(not(any(loom, miri)))]
         if tessera_rl_num::fp::ensure_canonical() {
             shared.fp_resets.fetch_add(1, Ordering::Relaxed);
         }
