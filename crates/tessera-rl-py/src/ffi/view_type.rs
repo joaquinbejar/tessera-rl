@@ -16,30 +16,63 @@ use std::sync::Arc;
 use core::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
 
 use pyo3::ffi;
-use tessera_rl_engine::{HalfGenerations, OutputDtype, OutputStorage};
+use tessera_rl_engine::{HalfGenerations, IdGenerations, OutputDtype, OutputStorage};
 
 use super::capi::{self, CResult, Gil, Mine, Ref};
+use super::gather::GatherBuffer;
 
 use super::tables::{
     method, method_end, method_kw, slot_dealloc, slot_doc, slot_end, slot_getbuffer, slot_methods,
 };
 use super::{Table, dispose, dlpack, entry, entry_status, thunks};
+use crate::batched::{BatchId, ReleaseEpochs, gather_stale, ids_stale};
 use crate::errors::{Kind, error};
 use crate::split::half_stale;
 use crate::view::{Elem, ViewSpec, row_window};
 
 /// What a view object owns.
 struct View {
-    storage: Arc<OutputStorage>,
+    /// Keeps `data` alive.
+    owner: dlpack::Owner,
+    stale: Stale,
     data: *const u8,
     bytes: usize,
     generation: u64,
-    /// The half this view covers and its generation when taken (ADR-0047
-    /// section 5); `None` in Sync mode.
-    half: Option<(HalfGenerations, usize, u64, Arc<AtomicBool>)>,
     elem: Elem,
     shape: Box<[isize]>,
     strides: Box<[isize]>,
+}
+
+/// What ends a view's borrow window.
+enum Stale {
+    /// A write of the output storage: Sync mode.
+    Storage(Arc<OutputStorage>),
+    /// A send of the view's half, or poison. It ignores the storage's
+    /// generation, which a refused call can move (ADR-0047 section 5).
+    Half(HalfGenerations, usize, u64, Arc<AtomicBool>),
+    /// A send or mutation of any of the view's ids, a successful writer that
+    /// dropped its token, or poison.
+    Ids(
+        IdGenerations,
+        Arc<[BatchId]>,
+        ReleaseEpochs,
+        Arc<AtomicBool>,
+    ),
+    /// The next write of the gather buffer (the next `recv`), or poison.
+    Gather(Arc<GatherBuffer>, Arc<AtomicBool>),
+}
+
+/// How a storage view tracks staleness.
+#[derive(Clone, Copy)]
+pub(crate) enum Track<'a> {
+    Storage,
+    Half(&'a HalfGenerations, usize, u64, &'a Arc<AtomicBool>),
+    Ids(
+        &'a IdGenerations,
+        &'a Arc<[BatchId]>,
+        &'a ReleaseEpochs,
+        &'a Arc<AtomicBool>,
+    ),
 }
 
 /// The C layout of an `OutputView` object.
@@ -66,21 +99,86 @@ pub(crate) fn new_view(
     g: Gil,
     storage: &Arc<OutputStorage>,
     spec: &ViewSpec,
-    half: Option<(&HalfGenerations, usize, u64, &Arc<AtomicBool>)>,
+    track: Track<'_>,
 ) -> CResult<Mine> {
     let region = storage
         .region(spec.field)
         .ok_or_else(|| error(g, Kind::Argument, format!("no output {:?}", spec.field)))?;
-    let bytes = region.len.checked_mul(region_itemsize(region.dtype));
+    let bytes = region
+        .len
+        .checked_mul(region_itemsize(region.dtype))
+        .ok_or_else(|| {
+            error(
+                g,
+                Kind::Argument,
+                format!("output {:?} too large", spec.field),
+            )
+        })?;
+    let stale = match track {
+        Track::Storage => Stale::Storage(Arc::clone(storage)),
+        Track::Half(gens, half, taken, unsettled) => {
+            Stale::Half(gens.clone(), half, taken, Arc::clone(unsettled))
+        }
+        Track::Ids(gens, ids, epochs, unsettled) => Stale::Ids(
+            gens.clone(),
+            Arc::clone(ids),
+            Arc::clone(epochs),
+            Arc::clone(unsettled),
+        ),
+    };
+    let owner: dlpack::Owner = storage.clone();
+    build_view(
+        g,
+        spec,
+        region.ptr,
+        bytes,
+        owner,
+        stale,
+        storage.generation(),
+    )
+}
+
+/// A new view of `spec` in the gather buffer, written at generation `taken`.
+pub(crate) fn new_gather_view(
+    g: Gil,
+    buffer: &Arc<GatherBuffer>,
+    spec: &ViewSpec,
+    taken: u64,
+    unsettled: &Arc<AtomicBool>,
+) -> CResult<Mine> {
+    let (ptr, bytes) = buffer
+        .region(spec.field)
+        .ok_or_else(|| error(g, Kind::Argument, format!("no output {:?}", spec.field)))?;
+    let owner: dlpack::Owner = buffer.clone();
+    build_view(
+        g,
+        spec,
+        ptr,
+        bytes,
+        owner,
+        Stale::Gather(Arc::clone(buffer), Arc::clone(unsettled)),
+        taken,
+    )
+}
+
+/// A view of the rows of `spec` in a region of `region_bytes` bytes at `ptr`.
+fn build_view(
+    g: Gil,
+    spec: &ViewSpec,
+    ptr: *const u8,
+    region_bytes: usize,
+    owner: dlpack::Owner,
+    stale: Stale,
+    generation: u64,
+) -> CResult<Mine> {
     let row_bytes = spec
         .shape
         .iter()
         .skip(1)
         .try_fold(spec.elem.itemsize, |acc, &d| acc.checked_mul(d));
     let rows = spec.shape.first().copied().unwrap_or(0);
-    let window = bytes.zip(row_bytes).and_then(|(bytes, row_bytes)| {
-        row_window(bytes, row_bytes, spec.total_rows, spec.first_row, rows)
-    });
+    let window =
+        row_bytes.and_then(|r| row_window(region_bytes, r, spec.total_rows, spec.first_row, rows));
     let Some((offset, bytes)) = window else {
         return Err(error(
             g,
@@ -112,13 +210,13 @@ pub(crate) fn new_view(
     isize::try_from(bytes).map_err(|_| too_large())?;
     c_int::try_from(shape.len()).map_err(|_| too_large())?;
     let view = View {
-        storage: Arc::clone(storage),
+        owner,
+        stale,
         // SAFETY: `row_window` checked that `offset + bytes` fits the
         // region's bytes, so the offset stays inside its allocation.
-        data: unsafe { region.ptr.add(offset) },
+        data: unsafe { ptr.add(offset) },
         bytes,
-        generation: storage.generation(),
-        half: half.map(|(gens, h, taken, poisoned)| (gens.clone(), h, taken, Arc::clone(poisoned))),
+        generation,
         elem: spec.elem,
         shape,
         strides: strides.into_boxed_slice(),
@@ -258,11 +356,11 @@ pub(super) unsafe extern "C" fn is_stale(
     entry(|g| {
         // SAFETY: CPython passes `self` of an `OutputView` method.
         let v = unsafe { view(g, slf) }?;
-        // A half view ignores the storage's generation, which a refused call
-        // can move without writing (ADR-0047 section 5).
-        let stale = match &v.half {
-            Some((gens, h, taken, poisoned)) => half_stale(gens, *h, *taken, poisoned),
-            None => v.storage.generation() != v.generation,
+        let stale = match &v.stale {
+            Stale::Storage(storage) => storage.generation() != v.generation,
+            Stale::Half(gens, half, taken, unsettled) => half_stale(gens, *half, *taken, unsettled),
+            Stale::Ids(gens, ids, epochs, unsettled) => ids_stale(gens, ids, epochs, unsettled),
+            Stale::Gather(buffer, unsettled) => gather_stale(buffer, v.generation, unsettled),
         };
         Ok(capi::boolean(g, stale))
     })
@@ -356,9 +454,8 @@ pub(super) unsafe extern "C" fn dlpack(
             Some(max) => int_pair(g, max, "max_version")?.0 >= 1,
             None => false,
         };
-        let owner: dlpack::Owner = v.storage.clone();
         let src = dlpack::Source {
-            owner: &owner,
+            owner: &v.owner,
             data: v.data,
             dl_code: v.elem.dl_code,
             itemsize: v.elem.itemsize,

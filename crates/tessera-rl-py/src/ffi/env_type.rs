@@ -107,6 +107,7 @@ noargs!(outputs, api::outputs);
 noargs!(is_poisoned, api::is_poisoned);
 noargs!(close, api::close);
 varargs!(recv, api::recv);
+varargs!(restore, crate::async_api::restore);
 noargs!(snapshot_all, api::snapshot_all);
 varargs!(restore_all, api::restore_all);
 varargs!(send, api::send);
@@ -116,7 +117,7 @@ varargs!(snapshot, api::snapshot);
 varargs!(import_record, api::import_record);
 varargs!(fork, api::fork);
 
-static METHODS: Table<[ffi::PyMethodDef; 14]> = Table([
+static METHODS: Table<[ffi::PyMethodDef; 15]> = Table([
     method(
         c"layout",
         thunks::LAYOUT,
@@ -176,6 +177,12 @@ static METHODS: Table<[ffi::PyMethodDef; 14]> = Table([
         thunks::RECV,
         ffi::METH_VARARGS,
         c"recv(delivered) -> the oldest sent half's outputs",
+    ),
+    method(
+        c"restore",
+        thunks::RESTORE,
+        ffi::METH_VARARGS,
+        c"restore(ids, snapshots, delivered)",
     ),
     method(
         c"snapshot_all",

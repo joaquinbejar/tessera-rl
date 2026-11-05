@@ -46,7 +46,7 @@ pub use layout::MAX_LEAVES;
 pub use masks::{IllegalActionPolicy, MaskProvider, Masked, NoMasks};
 #[cfg(not(loom))]
 pub use modes::async_mode::{
-    AsyncBuildError, AsyncIntoPoolError, AsyncOptions, AsyncPool, SendBatchError,
+    AsyncBuildError, AsyncIntoPoolError, AsyncOptions, AsyncPool, IdGenerations, SendBatchError,
 };
 #[cfg(not(loom))]
 pub use modes::pipelined::{

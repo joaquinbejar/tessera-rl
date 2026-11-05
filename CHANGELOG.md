@@ -81,6 +81,14 @@ the API is not stable, and any 0.x release may break it.
   pool's containment (the canonical floating-point scope, a panic caught
   and reported as `None`).
 
+### Fixed
+
+- **Stale views during a writer** (`tessera-rl` Python, merged in #88):
+  borrowed Pipelined arrays reported `is_stale() == False` while `reset` or
+  `restore_all` rewrote their rows, because the generations move only after
+  the write. Every split-phase array now reads stale from before a writer's
+  first write until it ends, and fresh again if it was refused.
+
 ## [0.1.0] - 2026-11-04
 
 The first functional release. Six of these crate names were reserved on

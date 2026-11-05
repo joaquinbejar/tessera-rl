@@ -618,6 +618,7 @@ thunk!(IMPORT_RECORD: CFunction = thunk_import_record => env_type::import_record
 thunk!(FORK: CFunction = thunk_fork => env_type::fork : fn(Obj, Obj) -> Obj);
 thunk!(SEND: CFunction = thunk_send => env_type::send : fn(Obj, Obj) -> Obj);
 thunk!(RECV: CFunction = thunk_recv => env_type::recv : fn(Obj, Obj) -> Obj);
+thunk!(RESTORE: CFunction = thunk_restore => env_type::restore : fn(Obj, Obj) -> Obj);
 thunk!(SNAPSHOT_ALL: CFunction = thunk_snapshot_all => env_type::snapshot_all : fn(Obj, Obj) -> Obj);
 thunk!(RESTORE_ALL: CFunction = thunk_restore_all => env_type::restore_all : fn(Obj, Obj) -> Obj);
 thunk!(SNAPSHOT_DEALLOC: Destructor = thunk_snapshot_dealloc => snapshot_type::dealloc : fn(Obj) -> ());
