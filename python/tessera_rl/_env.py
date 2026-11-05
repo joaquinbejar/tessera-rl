@@ -144,12 +144,19 @@ class Env:
         ``recv`` returns it. An exception raised after the native call
         returned loses nothing either: the next ``recv`` returns that half
         again, and until then it counts as in flight for ``send``.
+
+        One limit remains: once this method acknowledges the result, a signal
+        handler that raises in the caller's frame before the result is bound
+        loses it. No Python function can close that. Whether CPython can run
+        handlers between the acknowledgement and the return is not verified
+        for any version; the code keeps that gap to one attribute store.
+
+        If the thread that received a result exits before acknowledging it,
+        ``recv`` on other threads stays refused with ``ConcurrencyError``
+        until ``reset``, ``restore_all`` or ``close``.
         """
         out = self._native.recv(self._delivered)
         step = self._half(out)
-        # The last things here: storing an attribute and returning are not
-        # points where CPython runs signal handlers, so once acknowledged
-        # the result reaches the caller's frame.
         self._delivered = out["seq"]
         return step
 

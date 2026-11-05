@@ -137,9 +137,7 @@ def test_pipelined_step_and_sync_calls_raise_wrong_mode():
         sync.recv()
 
 
-def test_make_async_and_unknown_modes_are_refused():
-    with pytest.raises(t.ArgumentError, match="not available yet"):
-        t.make("tessera/CartPole-v1", mode="async")
+def test_make_unknown_modes_are_refused():
     with pytest.raises(t.ArgumentError, match="mode must be"):
         t.make("tessera/CartPole-v1", mode="fast")
 
@@ -230,6 +228,10 @@ def test_pipelined_interrupted_recv_leaves_the_step_in_flight():
                 pool.recv()
     finally:
         signal.setitimer(signal.ITIMER_REAL, 0)
+        # A tick already raised may still reach another thread: under the
+        # default disposition it would kill the process.
+        armed[0] = False
+        time.sleep(0.05)
         signal.signal(signal.SIGALRM, previous)
     assert interrupted
     env.close()
@@ -450,3 +452,60 @@ def test_pipelined_restore_all_is_refused_with_work_or_a_foreign_snapshot():
     sync = t.make("tessera/CartPole-v1", num_envs=2)
     with pytest.raises(t.ArgumentError, match="not available in sync mode"):
         sync.snapshot_all()
+
+
+@pytest.mark.parametrize("writer", ["reset", "restore_all"])
+def test_pipelined_failed_writer_leaves_a_pending_delivery_repeatable(writer, monkeypatch):
+    env = pipelined(outputs="owned")
+    env.reset()
+    taken = env.snapshot_all()
+    env.send(0, actions(4, 0))
+    env.send(1, actions(4, 0))
+    real = env._half
+    calls = []
+
+    def interrupted(out):
+        calls.append(out["seq"])
+        if len(calls) == 1:
+            raise KeyboardInterrupt
+        return real(out)
+
+    monkeypatch.setattr(env, "_half", interrupted)
+    with pytest.raises(KeyboardInterrupt):
+        env.recv()
+    # Half 1 is unreceived, so the writer fails, after releasing the tokens.
+    with pytest.raises(t.ConcurrencyError):
+        env.reset() if writer == "reset" else env.restore_all(taken)
+    with pytest.raises(t.ConcurrencyError, match="in flight"):
+        env.send(0, actions(4, 1))
+    got = env.recv()
+    assert (got.half, calls[0]) == (0, calls[1])
+    assert env.recv().half == 1
+    env.send(0, actions(4, 1))
+    assert env.recv().half == 0
+
+
+@pytest.mark.parametrize("clear", ["reset", "restore_all", "close"])
+def test_pipelined_dead_delivery_thread_refuses_recv_until_cleared(clear):
+    env = pipelined()
+    env.reset()
+    taken = env.snapshot_all()
+    env.send(0, actions(4, 0))
+    thread = threading.Thread(target=lambda: env._native.recv(env._delivered))
+    thread.start()
+    thread.join(30)
+    with pytest.raises(t.ConcurrencyError, match="ConcurrentRecv"):
+        env.recv()
+    if clear == "reset":
+        env.reset()
+    elif clear == "restore_all":
+        env.restore_all(taken)
+    else:
+        env.close()
+        with pytest.raises(t.ArgumentError, match="closed"):
+            env.recv()
+        return
+    with pytest.raises(t.ConcurrencyError, match="(?i)nothing"):
+        env.recv()
+    env.send(0, actions(4, 0))
+    assert env.recv().half == 0
