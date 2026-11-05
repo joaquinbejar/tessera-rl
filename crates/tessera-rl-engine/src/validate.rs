@@ -371,8 +371,8 @@ pub(crate) fn check_send_half(
 /// that cycle is committed. Cycles 0 and 1 read the initial context.
 /// `committed` is the newest committed cycle, if any.
 #[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "used by the split-phase modes (ADR-0047)")
+    loom,
+    allow(dead_code, reason = "the split-phase modes are not built under loom")
 )]
 pub(crate) fn check_cycle(cycle: u64, committed: Option<u64>) -> Result<(), EngineError> {
     let Some(needed) = cycle.checked_sub(2) else {
@@ -388,8 +388,8 @@ pub(crate) fn check_cycle(cycle: u64, committed: Option<u64>) -> Result<(), Engi
 /// in flight or ready, and in Async enough of them exist to fill a batch.
 /// `batch_size` is 1 in Pipelined, where a half is one result.
 #[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "used by the split-phase modes (ADR-0047)")
+    loom,
+    allow(dead_code, reason = "the split-phase modes are not built under loom")
 )]
 pub(crate) fn check_recv(in_flight: u32, ready: u32, batch_size: u32) -> Result<(), EngineError> {
     if in_flight == 0 && ready == 0 {
@@ -480,8 +480,8 @@ pub(crate) fn check_and_copy_subset_actions<H: RecordLayout, R: AdmittedRows<H>>
 /// borrowed; `first_id` is the id of their first instance, for errors.
 /// `input` holds one row block per instance of the half, in order.
 #[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "used by the split-phase modes (ADR-0047)")
+    loom,
+    allow(dead_code, reason = "the split-phase modes are not built under loom")
 )]
 pub(crate) fn check_and_copy_range_actions<H: RecordLayout>(
     layout: &ActionLayout,
