@@ -402,7 +402,7 @@ where
     pub fn contain<R>(&self, f: impl FnOnce(&E::Config) -> R) -> Option<R> {
         let cfg = &self.cfg;
         let mut out = None;
-        if crate::sys::catch(|| out = Some(fp::with_canonical(|| f(cfg)))) {
+        if crate::sys::catch(|| out = Some(crate::entry::canonical(|| f(cfg)))) {
             out
         } else {
             None
