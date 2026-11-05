@@ -65,8 +65,8 @@ impl Generations {
 
     /// The generation of instance `id`.
     #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "read by the Async mode (ADR-0047)")
+        loom,
+        allow(dead_code, reason = "the split-phase modes are not built under loom")
     )]
     pub(crate) fn id(&self, id: usize) -> Result<u64, GenerationError> {
         cell(&self.ids, id).map(|c| c.load(Ordering::Acquire))

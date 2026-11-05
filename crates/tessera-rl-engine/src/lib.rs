@@ -37,11 +37,15 @@ pub mod rings {
 }
 
 #[cfg(not(loom))]
+#[cfg(not(loom))]
+pub use buffer::batch::{BatchToken, BatchWaiter};
 pub use buffer::pipeline::{HalfToken, Waiter};
 pub use buffer::{OutputDtype, OutputField, OutputRegion, OutputStorage};
 pub use error::EngineError;
 pub use layout::MAX_LEAVES;
 pub use masks::{IllegalActionPolicy, MaskProvider, Masked, NoMasks};
+#[cfg(not(loom))]
+pub use modes::async_mode::{AsyncBuildError, AsyncIntoPoolError, AsyncOptions, AsyncPool};
 #[cfg(not(loom))]
 pub use modes::pipelined::{
     CycleState, IntoPoolError, IntoPoolErrorKind, PipelinedBuildError, PipelinedOptions,

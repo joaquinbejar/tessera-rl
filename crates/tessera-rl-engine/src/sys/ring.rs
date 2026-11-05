@@ -235,6 +235,18 @@ impl SubmitRing {
     pub fn claim(&self) -> Result<Option<u32>, RingError> {
         self.ring.pop()
     }
+
+    /// [`Self::push`] through a shared reference, for a mode whose ring sits
+    /// in its shared allocation. The queue is safe for any number of
+    /// producers; the caller keeps the single-producer protocol (only the
+    /// mode's `&mut self` methods push).
+    #[cfg_attr(
+        loom,
+        allow(dead_code, reason = "the split-phase modes are not built under loom")
+    )]
+    pub(crate) fn push_shared(&self, id: u32) -> Result<(), RingError> {
+        self.ring.push(id)
+    }
 }
 
 /// The completion ring: workers push, the caller pops (MPSC).
@@ -277,6 +289,18 @@ impl CompletionRing {
     ///
     /// [`RingError::Exhausted`] if the positions are exhausted.
     pub fn pop(&mut self) -> Result<Option<u32>, RingError> {
+        self.ring.pop()
+    }
+
+    /// [`Self::pop`] through a shared reference, for a mode whose ring sits
+    /// in its shared allocation. The queue is safe for any number of
+    /// consumers; the caller keeps the single-consumer protocol (only the
+    /// mode's `&mut self` methods pop).
+    #[cfg_attr(
+        loom,
+        allow(dead_code, reason = "the split-phase modes are not built under loom")
+    )]
+    pub(crate) fn pop_shared(&self) -> Result<Option<u32>, RingError> {
         self.ring.pop()
     }
 }

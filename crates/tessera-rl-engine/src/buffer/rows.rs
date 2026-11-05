@@ -64,6 +64,31 @@ impl<H: Copy> RawRows<H> {
         }
     }
 
+    /// The same rows from raw parts already taken by the caller (the
+    /// Async mode takes them with the rest of its raw chunk, so no second
+    /// `&mut` of the buffers is needed). The parts must describe buffers of
+    /// `[instances]`, `[instances, agents, dh]` and `[instances, agents,
+    /// ch]` (invariant 1).
+    #[cfg(not(loom))]
+    pub(super) const fn from_parts(
+        instances: usize,
+        agents: usize,
+        (dh, ch): (usize, usize),
+        headers: Raw<H>,
+        discrete: Raw<i32>,
+        continuous: Raw<f32>,
+    ) -> Self {
+        Self {
+            instances,
+            agents,
+            dh,
+            ch,
+            headers,
+            discrete,
+            continuous,
+        }
+    }
+
     /// The rows of `ids`, by position.
     ///
     /// # Safety
@@ -74,8 +99,8 @@ impl<H: Copy> RawRows<H> {
     /// it). `ids` must not repeat an id.
     #[expect(unsafe_code, reason = "audited module: token-guarded rows")]
     #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "used by the split-phase modes (ADR-0047)")
+        loom,
+        allow(dead_code, reason = "the split-phase modes are not built under loom")
     )]
     pub(crate) unsafe fn admitted<'a>(&'a self, ids: &'a [u32]) -> Admitted<'a, H> {
         Admitted { raw: self, ids }

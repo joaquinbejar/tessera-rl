@@ -310,8 +310,8 @@ fn copy_row<T: Copy>(
 /// live token. The flags are read with Acquire, so a token dropped on
 /// another thread is seen with every read it made.
 #[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "used by the split-phase modes (ADR-0047)")
+    loom,
+    allow(dead_code, reason = "the split-phase modes are not built under loom")
 )]
 pub(crate) fn check_send_ids(
     ids: &[u32],
@@ -442,8 +442,8 @@ pub(crate) trait AdmittedRows<H> {
 /// so a failure writes nothing. The ids must already have passed
 /// [`check_send_ids`].
 #[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "used by the split-phase modes (ADR-0047)")
+    loom,
+    allow(dead_code, reason = "the split-phase modes are not built under loom")
 )]
 pub(crate) fn check_and_copy_subset_actions<H: RecordLayout, R: AdmittedRows<H>>(
     layout: &ActionLayout,
