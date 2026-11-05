@@ -27,7 +27,7 @@ jobs:
       - run: rustup toolchain install nightly --profile minimal --component miri
       - run: cargo +nightly miri setup
       - run: cargo +nightly miri test -p tessera-rl-core --locked
-      - run: "cargo +nightly miri test -p tessera-rl-engine --lib --locked buffer::"
+      - run: "cargo +nightly miri test -p tessera-rl-engine --lib --locked -- buffer:: validate::"
       # The gang's job publication and trampoline (ADR-0047); FP control
       # asm and address waits are stubbed under cfg(miri), the protocol is not.
       - run: "cargo +nightly miri test -p tessera-rl-engine --lib --locked sys::gang::"

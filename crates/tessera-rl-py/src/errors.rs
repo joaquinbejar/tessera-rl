@@ -10,7 +10,8 @@
 //!   RecordError        records that fail decoding or import checks
 //!   PendingResetError  stepping an instance that waits for its reset
 //!   PoisonedError      the environment is poisoned (or a worker failed)
-//!   ConcurrencyError   a concurrent or nested call on one environment
+//!   ConcurrencyError   a concurrent or nested call, or a split-phase state
+//!                      error (in flight, borrowed, nothing to receive)
 //!   ExhaustedError     a step, episode or branch counter would overflow
 //!   FloatingPointEnvironmentError
 //!                      a call rejected for non-default caller FP controls
