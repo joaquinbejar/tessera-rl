@@ -12,6 +12,8 @@ pub(crate) use loom::sync::atomic::{
     AtomicBool, AtomicPtr, AtomicU32, AtomicU64, AtomicUsize, Ordering,
 };
 #[cfg(loom)]
+pub(crate) use loom::sync::{Condvar, Mutex};
+#[cfg(loom)]
 pub(crate) use loom::thread;
 
 #[cfg(not(loom))]

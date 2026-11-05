@@ -343,6 +343,8 @@ where
             pin,
             #[cfg(not(loom))]
             native,
+            #[cfg(loom)]
+            mock_futex: false,
             #[cfg(test)]
             faults,
         })?;
