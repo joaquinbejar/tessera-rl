@@ -641,6 +641,9 @@ where
     /// Starts the next step of the instances `ids` with `actions` (one row
     /// block per id, in the order of `ids`).
     ///
+    /// With two jobs already in flight, this waits for the oldest to finish
+    /// before publishing, so a send can block for as long as that job runs.
+    ///
     /// # Errors
     ///
     /// [`EngineError::Poisoned`], [`EngineError::WorkerDied`],
@@ -888,30 +891,8 @@ where
         }
     }
 
-    /// One step of a receive: gather completed ids, then either hand out a
-    /// batch or make progress (blocking on the oldest job with `block`).
-    fn poll(&mut self, block: bool) -> Result<Option<BatchToken<E, M>>, EngineError> {
-        // A panic not yet reported is reported once as `Panicked` below; a
-        // reported one is `Poisoned`.
-        if self.poisoned {
-            return Err(EngineError::Poisoned);
-        }
-        // Progress first: a refusal below must not leave admitted ids
-        // unstepped.
-        if !self.dead() {
-            self.pump(false)?;
-        }
-        let outstanding = u32::try_from(self.outstanding).unwrap_or(u32::MAX);
-        let staged = u32::try_from(self.stage.len()).unwrap_or(u32::MAX);
-        let batch = u32::try_from(self.batch).unwrap_or(u32::MAX);
-        check_recv(outstanding.saturating_sub(staged), staged, batch)?;
-        while self.stage.len() < self.batch {
-            match self.mode.complete.pop_shared() {
-                Ok(Some(id)) => self.stage.push(id),
-                Ok(None) => break,
-                Err(_) => return Err(EngineError::SequenceExhausted),
-            }
-        }
+    /// Poisons the wrapper and reports a dead worker or a step's panic.
+    fn check_failed(&mut self) -> Result<(), EngineError> {
         if self.dead() {
             self.poisoned = true;
             return Err(EngineError::WorkerDied);
@@ -925,6 +906,37 @@ where
             self.poisoned = true;
             return Err(EngineError::Panicked);
         }
+        Ok(())
+    }
+
+    /// One step of a receive: gather completed ids, then either hand out a
+    /// batch or make progress (blocking on the oldest job with `block`).
+    fn poll(&mut self, block: bool) -> Result<Option<BatchToken<E, M>>, EngineError> {
+        // A panic not yet reported is reported once as `Panicked` below; a
+        // reported one is `Poisoned`.
+        if self.poisoned {
+            return Err(EngineError::Poisoned);
+        }
+        // Progress first: a refusal below must not leave admitted ids
+        // unstepped.
+        if !self.dead() {
+            self.pump(false)?;
+        }
+        // A failure outranks the reachability refusal: with too few ids for a
+        // batch, `BatchUnreachable` would otherwise hide the panic for good.
+        self.check_failed()?;
+        let outstanding = u32::try_from(self.outstanding).unwrap_or(u32::MAX);
+        let staged = u32::try_from(self.stage.len()).unwrap_or(u32::MAX);
+        let batch = u32::try_from(self.batch).unwrap_or(u32::MAX);
+        check_recv(outstanding.saturating_sub(staged), staged, batch)?;
+        while self.stage.len() < self.batch {
+            match self.mode.complete.pop_shared() {
+                Ok(Some(id)) => self.stage.push(id),
+                Ok(None) => break,
+                Err(_) => return Err(EngineError::SequenceExhausted),
+            }
+        }
+        self.check_failed()?;
         if self.stage.len() == self.batch {
             return self.hand_out();
         }
