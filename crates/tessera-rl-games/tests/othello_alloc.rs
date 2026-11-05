@@ -74,12 +74,17 @@ fn test_othello_reset_and_steps_through_auto_reset_do_not_allocate() {
             ..PoolOptions::new(NonZeroU32::new(8).unwrap(), Seed::new(1))
         };
         let mut pool = EnvPool::<Othello, Masked>::with_masks(OthelloConfig {}, options).unwrap();
-        // Scattered squares; an illegal one is the no-op, so games finish.
-        let actions: Vec<i32> = (0..16).map(|i| (i * 37) % 65).collect();
+        let mut actions = vec![0i32; 16];
         let mut ended = false;
         let n = allocations(|| {
             let _ = std::hint::black_box(pool.reset_all(Reseed::Keep));
             for _ in 0..200 {
+                // The first legal action of each row, read from the masks.
+                let masks = pool.outputs().masks();
+                for (row, action) in masks.chunks(65).zip(actions.iter_mut()) {
+                    let first = row.iter().position(|f| f.get()).unwrap_or(64);
+                    *action = i32::try_from(first).unwrap();
+                }
                 let input = ActionInput {
                     discrete: &actions,
                     continuous: &[],
