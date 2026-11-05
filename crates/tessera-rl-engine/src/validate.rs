@@ -3,6 +3,9 @@
 //! The validation boundary (ADR-0028): every check runs before any
 //! instance is mutated.
 
+use core::ops::Range;
+use core::sync::atomic::{AtomicBool, Ordering};
+
 use tessera_rl_core::{Bool8, RecordLayout};
 
 use crate::error::EngineError;
@@ -71,12 +74,36 @@ fn check_inputs<H: RecordLayout>(
     discrete_len: usize,
     continuous_len: usize,
 ) -> Result<(), EngineError> {
-    let agents = H::AGENTS;
-    let (dh, ch) = (layout.discrete.len(), layout.continuous.len());
     check_len("discrete", discrete_len, input.discrete.len())?;
     check_len("continuous", continuous_len, input.continuous.len())?;
-    for (index, header) in headers.iter().enumerate() {
+    check_rows(
+        layout,
+        auto_reset,
+        headers,
+        input,
+        (0..headers.len()).map(|i| (i, i)),
+    )
+}
+
+/// Checks the instances named by `rows`: each item is `(position, id)`,
+/// where `position` indexes the row block of `input` and `id` the header.
+fn check_rows<H: RecordLayout>(
+    layout: &ActionLayout,
+    auto_reset: AutoReset,
+    headers: &[H],
+    input: ActionInput<'_>,
+    rows: impl Iterator<Item = (usize, usize)>,
+) -> Result<(), EngineError> {
+    let agents = H::AGENTS;
+    let (dh, ch) = (layout.discrete.len(), layout.continuous.len());
+    for (position, index) in rows {
         let instance = u32::try_from(index).unwrap_or(u32::MAX);
+        let Some(header) = headers.get(index) else {
+            return Err(EngineError::InstanceOutOfRange {
+                id: instance,
+                num_envs: u32::try_from(headers.len()).unwrap_or(u32::MAX),
+            });
+        };
         let engine = header.engine();
         if engine.pending_reset.get() {
             // Never reset, or frozen in Disabled mode: the caller must reset.
@@ -110,7 +137,7 @@ fn check_inputs<H: RecordLayout>(
                 continue;
             }
             let agent = u16::try_from(slot).unwrap_or(u16::MAX);
-            let base = index * agents + slot;
+            let base = position * agents + slot;
             for (head, &n) in layout.discrete.iter().enumerate() {
                 let value = input.discrete.get(base * dh + head).copied().unwrap_or(-1);
                 if u32::try_from(value).map_or(true, |v| v >= n) {
@@ -209,3 +236,262 @@ fn copy_row<T: Copy>(required: bool, src: &[T], dst: &mut [T], start: usize, len
         _ => dst.fill(zero),
     }
 }
+
+// Split-phase modes (ADR-0047): the checks of `send` and `recv` over
+// caller-side state, and the action copy restricted to the admitted rows.
+// Each check runs before anything is mutated, so a failure leaves every
+// buffer and flag as it was.
+
+/// Checks an Async `send(ids)`: the call names at least one instance, every
+/// id is in range and appears once, and none is in flight or covered by a
+/// live token. The flags are read with Acquire, so a token dropped on
+/// another thread is seen with every read it made.
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "used by the split-phase modes (ADR-0047)")
+)]
+pub(crate) fn check_send_ids(
+    ids: &[u32],
+    seen: &mut [Bool8],
+    in_flight: &[AtomicBool],
+    live: &[AtomicBool],
+) -> Result<(), EngineError> {
+    if ids.is_empty() {
+        return Err(EngineError::EmptySend);
+    }
+    check_ids(ids, seen)?;
+    for &id in ids {
+        let index = usize::try_from(id).unwrap_or(usize::MAX);
+        if in_flight
+            .get(index)
+            .is_some_and(|f| f.load(Ordering::Acquire))
+        {
+            return Err(EngineError::InFlight { id });
+        }
+        if live.get(index).is_some_and(|f| f.load(Ordering::Acquire)) {
+            return Err(EngineError::Borrowed { id });
+        }
+    }
+    Ok(())
+}
+
+/// Checks a Pipelined `send(half)` and returns the half's index: it is 0
+/// or 1 and is neither in flight nor covered by a live token.
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "used by the split-phase modes (ADR-0047)")
+)]
+pub(crate) fn check_send_half(
+    half: u32,
+    in_flight: &[AtomicBool; 2],
+    live: &[AtomicBool; 2],
+) -> Result<usize, EngineError> {
+    let (index, short) = match half {
+        0 => (0, 0_u8),
+        1 => (1, 1_u8),
+        _ => return Err(EngineError::InvalidHalf { half }),
+    };
+    if in_flight
+        .get(index)
+        .is_some_and(|f| f.load(Ordering::Acquire))
+    {
+        return Err(EngineError::HalfInFlight { half: short });
+    }
+    if live.get(index).is_some_and(|f| f.load(Ordering::Acquire)) {
+        return Err(EngineError::HalfBorrowed { half: short });
+    }
+    Ok(index)
+}
+
+/// Pipelined cycle admission (ADR-0047 section 6): a half's step of cycle
+/// `cycle` reads context version `cycle - 2`, so it is admitted only once
+/// that cycle is committed. Cycles 0 and 1 read the initial context.
+/// `committed` is the newest committed cycle, if any.
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "used by the split-phase modes (ADR-0047)")
+)]
+pub(crate) fn check_cycle(cycle: u64, committed: Option<u64>) -> Result<(), EngineError> {
+    let Some(needed) = cycle.checked_sub(2) else {
+        return Ok(());
+    };
+    match committed {
+        Some(done) if done >= needed => Ok(()),
+        _ => Err(EngineError::CycleAhead { cycle, needed }),
+    }
+}
+
+/// Checks that a `recv` can return without waiting forever: something is
+/// in flight or ready, and in Async enough of them exist to fill a batch.
+/// `batch_size` is 1 in Pipelined, where a half is one result.
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "used by the split-phase modes (ADR-0047)")
+)]
+pub(crate) fn check_recv(in_flight: u32, ready: u32, batch_size: u32) -> Result<(), EngineError> {
+    if in_flight == 0 && ready == 0 {
+        return Err(EngineError::NothingInFlight);
+    }
+    if in_flight.saturating_add(ready) < batch_size {
+        return Err(EngineError::BatchUnreachable {
+            in_flight,
+            ready,
+            batch_size,
+        });
+    }
+    Ok(())
+}
+
+/// Validates the actions of an Async `send(ids)` and copies them into the
+/// rows of those ids only. `input` holds one row block per id, in `ids`
+/// order. The ids must already have passed [`check_send_ids`]. Rows of
+/// other instances are never written, since workers may be reading them.
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "used by the split-phase modes (ADR-0047)")
+)]
+pub(crate) fn check_and_copy_subset_actions<H: RecordLayout>(
+    layout: &ActionLayout,
+    auto_reset: AutoReset,
+    headers: &[H],
+    ids: &[u32],
+    input: ActionInput<'_>,
+    discrete_out: &mut [i32],
+    continuous_out: &mut [f32],
+) -> Result<(), EngineError> {
+    let rows = ids
+        .iter()
+        .enumerate()
+        .map(|(position, &id)| (position, usize::try_from(id).unwrap_or(usize::MAX)));
+    check_and_copy_rows(
+        layout,
+        auto_reset,
+        headers,
+        ids.len(),
+        rows,
+        input,
+        discrete_out,
+        continuous_out,
+    )
+}
+
+/// Validates the actions of a Pipelined `send(half)` and copies them into
+/// the rows of `range` only. `input` holds one row block per instance of
+/// the range, in order.
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "used by the split-phase modes (ADR-0047)")
+)]
+pub(crate) fn check_and_copy_range_actions<H: RecordLayout>(
+    layout: &ActionLayout,
+    auto_reset: AutoReset,
+    headers: &[H],
+    range: Range<usize>,
+    input: ActionInput<'_>,
+    discrete_out: &mut [i32],
+    continuous_out: &mut [f32],
+) -> Result<(), EngineError> {
+    if range.start > range.end || range.end > headers.len() {
+        return Err(EngineError::InstanceOutOfRange {
+            id: u32::try_from(range.end).unwrap_or(u32::MAX),
+            num_envs: u32::try_from(headers.len()).unwrap_or(u32::MAX),
+        });
+    }
+    let count = range.len();
+    let start = range.start;
+    let rows = range.map(move |index| (index - start, index));
+    check_and_copy_rows(
+        layout,
+        auto_reset,
+        headers,
+        count,
+        rows,
+        input,
+        discrete_out,
+        continuous_out,
+    )
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "one private helper behind the two public shapes"
+)]
+fn check_and_copy_rows<H: RecordLayout>(
+    layout: &ActionLayout,
+    auto_reset: AutoReset,
+    headers: &[H],
+    count: usize,
+    rows: impl Iterator<Item = (usize, usize)> + Clone,
+    input: ActionInput<'_>,
+    discrete_out: &mut [i32],
+    continuous_out: &mut [f32],
+) -> Result<(), EngineError> {
+    let agents = H::AGENTS;
+    let (dh, ch) = (layout.discrete.len(), layout.continuous.len());
+    let block = count.saturating_mul(agents);
+    check_len("discrete", block.saturating_mul(dh), input.discrete.len())?;
+    check_len(
+        "continuous",
+        block.saturating_mul(ch),
+        input.continuous.len(),
+    )?;
+    let full = headers.len().saturating_mul(agents);
+    check_len("discrete", full.saturating_mul(dh), discrete_out.len())?;
+    check_len("continuous", full.saturating_mul(ch), continuous_out.len())?;
+    check_rows(layout, auto_reset, headers, input, rows.clone())?;
+    // Validated: copy the admitted rows only.
+    for (position, index) in rows {
+        let Some(header) = headers.get(index) else {
+            continue;
+        };
+        let pending = header.engine().pending_reset.get();
+        for (slot, row) in header.agents().iter().enumerate() {
+            let required = !pending && row.alive.get() && row.acting.get();
+            let from = position * agents + slot;
+            let to = index * agents + slot;
+            copy_block(
+                required,
+                input.discrete,
+                from * dh,
+                discrete_out,
+                to * dh,
+                dh,
+                0,
+            );
+            copy_block(
+                required,
+                input.continuous,
+                from * ch,
+                continuous_out,
+                to * ch,
+                ch,
+                0.0,
+            );
+        }
+    }
+    Ok(())
+}
+
+fn copy_block<T: Copy>(
+    required: bool,
+    src: &[T],
+    from: usize,
+    dst: &mut [T],
+    to: usize,
+    len: usize,
+    zero: T,
+) {
+    let (Some(from_end), Some(to_end)) = (from.checked_add(len), to.checked_add(len)) else {
+        return;
+    };
+    let Some(dst) = dst.get_mut(to..to_end) else {
+        return;
+    };
+    match src.get(from..from_end) {
+        Some(src) if required => dst.copy_from_slice(src),
+        _ => dst.fill(zero),
+    }
+}
+
+#[cfg(test)]
+mod tests;
