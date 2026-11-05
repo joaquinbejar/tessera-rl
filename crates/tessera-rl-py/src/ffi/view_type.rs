@@ -32,8 +32,12 @@ use crate::view::{Elem, ViewSpec, row_window};
 
 /// What a view object owns.
 struct View {
-    /// Keeps `data` alive.
+    /// Keeps `data` alive; owns memory, never threads, so dropping it in a
+    /// forked child is safe.
     owner: dlpack::Owner,
+    /// The fork generation this view was taken in: in a child it reads stale,
+    /// as the copied rows may hold a step that was running at the fork.
+    born: u64,
     stale: Stale,
     data: *const u8,
     bytes: usize,
@@ -210,6 +214,7 @@ fn build_view(
     isize::try_from(bytes).map_err(|_| too_large())?;
     c_int::try_from(shape.len()).map_err(|_| too_large())?;
     let view = View {
+        born: super::fork::generation(),
         owner,
         stale,
         // SAFETY: `row_window` checked that `offset + bytes` fits the
@@ -356,6 +361,9 @@ pub(super) unsafe extern "C" fn is_stale(
     entry(|g| {
         // SAFETY: CPython passes `self` of an `OutputView` method.
         let v = unsafe { view(g, slf) }?;
+        if v.born != super::fork::generation() {
+            return Ok(capi::boolean(g, true));
+        }
         let stale = match &v.stale {
             Stale::Storage(storage) => storage.generation() != v.generation,
             Stale::Half(gens, half, taken, unsettled) => half_stale(gens, *half, *taken, unsettled),

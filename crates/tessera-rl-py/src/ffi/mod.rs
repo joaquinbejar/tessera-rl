@@ -73,6 +73,7 @@ mod boundary;
 pub(crate) mod capi;
 mod dlpack;
 mod env_type;
+pub(crate) mod fork;
 pub(crate) mod gather;
 pub(crate) mod inner;
 mod module;

@@ -538,7 +538,9 @@ impl Waiter {
             if start.elapsed() >= timeout {
                 return false;
             }
-            std::thread::park_timeout(core::time::Duration::from_micros(100));
+            // A sleep, not a park: nobody unparks this thread, and on macOS a
+            // park traps in the child of a multithreaded parent (issue #93).
+            std::thread::sleep(core::time::Duration::from_micros(100));
         }
     }
 
@@ -554,7 +556,9 @@ impl Waiter {
             if start.elapsed() >= timeout {
                 return false;
             }
-            std::thread::park_timeout(core::time::Duration::from_micros(100));
+            // A sleep, not a park: nobody unparks this thread, and on macOS a
+            // park traps in the child of a multithreaded parent (issue #93).
+            std::thread::sleep(core::time::Duration::from_micros(100));
         }
     }
 }

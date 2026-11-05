@@ -58,7 +58,7 @@ use super::boundary::{
     tessera_fp_caller_controls, tessera_fp_callout_returned, tessera_fp_enter, tessera_fp_leave,
 };
 use super::dlpack::{self, DLManagedTensor, DLManagedTensorVersioned};
-use super::{env_type, module, search_group_type, search_type, snapshot_type, view_type};
+use super::{env_type, fork, module, search_group_type, search_type, snapshot_type, view_type};
 
 /// `PyCFunction`: `(self, args) -> object`.
 pub(crate) type CFunction =
@@ -618,6 +618,7 @@ thunk!(STEP: CFunction = thunk_step => env_type::step : fn(Obj, Obj) -> Obj);
 thunk!(SNAPSHOT: CFunction = thunk_snapshot => env_type::snapshot : fn(Obj, Obj) -> Obj);
 thunk!(IMPORT_RECORD: CFunction = thunk_import_record => env_type::import_record : fn(Obj, Obj) -> Obj);
 thunk!(FORK: CFunction = thunk_fork => env_type::fork : fn(Obj, Obj) -> Obj);
+thunk!(AFTER_FORK: CFunction = thunk_after_fork => fork::after_in_child : fn(Obj, Obj) -> Obj);
 thunk!(SEND: CFunction = thunk_send => env_type::send : fn(Obj, Obj) -> Obj);
 thunk!(RECV: CFunction = thunk_recv => env_type::recv : fn(Obj, Obj) -> Obj);
 thunk!(RESTORE: CFunction = thunk_restore => env_type::restore : fn(Obj, Obj) -> Obj);
@@ -1107,6 +1108,9 @@ callout!(c_tuple_set_item => ffi::PyTuple_SetItem : fn(Obj, ffi::Py_ssize_t, Obj
 callout!(c_dict_set_item_string => ffi::PyDict_SetItemString : fn(Obj, CStr, Obj) -> c_int);
 callout!(c_decref => ffi::Py_DecRef : fn(Obj) -> ());
 callout!(c_object_call => ffi::PyObject_CallObject : fn(Obj, Obj) -> Obj);
+callout!(c_import_module => ffi::PyImport_ImportModule : fn(CStr) -> Obj);
+callout!(c_getattr_string => ffi::PyObject_GetAttrString : fn(Obj, CStr) -> Obj);
+callout!(c_object_call_kw => ffi::PyObject_Call : fn(Obj, Obj, Obj) -> Obj);
 callout!(c_err_clear => ffi::PyErr_Clear : fn() -> ());
 callout!(c_check_signals => ffi::PyErr_CheckSignals : fn() -> c_int);
 callout!(c_long_as_i64 => ffi::PyLong_AsLongLong : fn(Obj) -> i64);

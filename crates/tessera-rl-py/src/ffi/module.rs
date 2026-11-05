@@ -13,7 +13,7 @@ use super::boundary::{self, Policy};
 use super::capi::{self, Ref};
 use super::tables::{method, method_end};
 use super::{
-    Table, entry, env_type, search_group_type, search_type, snapshot_type, thunks, view_type,
+    Table, entry, env_type, fork, search_group_type, search_type, snapshot_type, thunks, view_type,
 };
 use crate::errors::{Kind, error};
 
@@ -126,6 +126,12 @@ const METHOD_COUNT: usize = if cfg!(feature = "test-hooks") { 17 } else { 16 };
 
 static METHODS: Table<[ffi::PyMethodDef; METHOD_COUNT]> = Table([
     method(
+        c"_after_fork_child",
+        thunks::AFTER_FORK,
+        ffi::METH_NOARGS,
+        c"The after_in_child hook of the fork guard.",
+    ),
+    method(
         c"version",
         thunks::VERSION,
         ffi::METH_NOARGS,
@@ -205,6 +211,7 @@ pub(super) unsafe extern "C" fn init() -> *mut ffi::PyObject {
         snapshot_type::register(g, module.as_ref())?;
         search_type::register(g, module.as_ref())?;
         search_group_type::register(g, module.as_ref())?;
+        fork::register(g, module.as_ref())?;
         Ok(module)
     })
 }

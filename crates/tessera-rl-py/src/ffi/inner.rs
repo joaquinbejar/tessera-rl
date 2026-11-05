@@ -25,6 +25,8 @@ pub(crate) struct Inner<T: ?Sized = dyn PoolOps> {
     busy: AtomicBool,
     /// Output mode, fixed at construction: borrowed views or owned copies.
     borrowed: bool,
+    /// The fork generation this object was created in.
+    born: u64,
 }
 
 /// Releases the reentrancy guard on drop.
@@ -44,12 +46,27 @@ impl<T: ?Sized> Inner<T> {
             ops: UnsafeCell::new(Some(ops)),
             busy: AtomicBool::new(false),
             borrowed,
+            born: super::fork::generation(),
         }
     }
 
     /// Whether calls return borrowed views (else owned copies).
     pub(crate) const fn borrowed(&self) -> bool {
         self.borrowed
+    }
+
+    /// Whether this object was created before a fork of this process: its
+    /// workers do not exist here, and its locks may be held forever.
+    pub(crate) fn inherited(&self) -> bool {
+        self.born != super::fork::generation()
+    }
+
+    /// Refuses an inherited object, before touching any of its state.
+    pub(crate) fn check_fork(&self, g: Gil) -> CResult<()> {
+        if self.inherited() {
+            return Err(error(g, Kind::Forked, super::fork::REFUSAL.to_owned()));
+        }
+        Ok(())
     }
 
     fn acquire(&self, g: Gil) -> CResult<Busy<'_>> {

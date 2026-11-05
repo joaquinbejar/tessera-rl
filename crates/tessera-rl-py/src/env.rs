@@ -12,7 +12,7 @@ use tessera_rl_core::space::{BoxBounds, DType, Space};
 use tessera_rl_core::{DecodeError, Environment, TurnStructure, Validate};
 use tessera_rl_engine::{
     ActionInput, AsyncOptions, AutoReset, DecodedRecord, EngineError, EnvPool, MAX_LEAVES,
-    MaskProvider, Masked, NoMasks, PipelinedOptions, PoolOptions, Reseed, SyncOptions,
+    MaskProvider, Masked, NoMasks, PipelinedOptions, PoolOptions, Reseed, SyncOptions, WaitBackend,
 };
 use tessera_rl_games::{
     Connect4, Connect4Config, Go9, Go9Config, Leduc, LeducConfig, Othello, OthelloConfig,
@@ -398,6 +398,17 @@ fn options(args: &PoolArgs) -> Result<(PoolOptions, usize), BindError> {
     Ok((options, n))
 }
 
+/// The wait backend for new workers. On macOS `thread::park` is a libdispatch
+/// semaphore, which traps in the child of a multithreaded parent (`SIGTRAP`,
+/// issue #93), so a pool made in a forked child waits on the address instead.
+fn wait_backend() -> WaitBackend {
+    if cfg!(target_os = "macos") && crate::ffi::fork::generation() != 0 {
+        WaitBackend::Native
+    } else {
+        WaitBackend::Auto
+    }
+}
+
 /// The environment object of `pool`, in the mode of `args`. Pipelined mode
 /// needs workers, one by default.
 pub(crate) fn finish<E, M>(
@@ -422,7 +433,8 @@ where
         let Pooled { pool, layout } = pooled;
         let storage = pool.outputs().storage();
         let template = pool.snapshot(0)?;
-        let options = PipelinedOptions::new(workers.unwrap_or(NonZeroUsize::MIN));
+        let mut options = PipelinedOptions::new(workers.unwrap_or(NonZeroUsize::MIN));
+        options.sync.wait = wait_backend();
         let pool = pool
             .pipelined(options)
             .map_err(|e| BindError::Engine(e.error))?;
@@ -434,7 +446,8 @@ where
         let Pooled { pool, layout } = pooled;
         let storage = pool.outputs().storage();
         let template = pool.snapshot(0)?;
-        let options = AsyncOptions::new(workers.unwrap_or(NonZeroUsize::MIN), batch);
+        let mut options = AsyncOptions::new(workers.unwrap_or(NonZeroUsize::MIN), batch);
+        options.sync.wait = wait_backend();
         let pool = pool
             .async_mode(options)
             .map_err(|e| BindError::Engine(e.error))?;
@@ -442,7 +455,11 @@ where
     }
     let Pooled { pool, layout } = pooled;
     let pool = match workers {
-        Some(w) => pool.with_workers(SyncOptions::new(w))?,
+        Some(w) => {
+            let mut options = SyncOptions::new(w);
+            options.wait = wait_backend();
+            pool.with_workers(options)?
+        }
         None => pool,
     };
     Ok(Box::new(Pooled { pool, layout }))

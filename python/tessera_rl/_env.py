@@ -146,6 +146,13 @@ class Env:
     wake-based waits. Prefer Sync or Pipelined unless you need out-of-order
     batches.
 
+    Fork: an ``Env`` does not survive ``os.fork``, whatever its mode or
+    ``workers``. In the child, every call raises ``ForkError``, except ``close``,
+    which does nothing. Dropping it leaks the pool in the child and never joins.
+    Arrays taken before the fork stay readable, always read stale, and may hold
+    rows of a step that was running at the fork. Create a new ``Env`` in the
+    child, or use the spawn start method.
+
     Snapshots of split-phase modes are opaque, restore only the environment
     that took them, and cannot be saved.
     """
