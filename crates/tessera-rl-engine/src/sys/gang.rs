@@ -133,6 +133,10 @@ pub(crate) struct Faults {
     /// this many microseconds (a pseudo-random amount per claim), so that
     /// completion order varies widely between runs (ADR-0047 injected
     /// jitter). Zero: no delay.
+    #[cfg_attr(
+        loom,
+        allow(dead_code, reason = "the split-phase modes are not built under loom")
+    )]
     pub(crate) jitter_us: u32,
 }
 
