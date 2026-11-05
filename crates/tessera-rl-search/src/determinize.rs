@@ -115,8 +115,10 @@ where
     ///
     /// # Errors
     ///
-    /// The errors of [`Self::new`] other than the information check, and
-    /// those of [`Self::set_root_determinized`].
+    /// [`SearchError::AdaptiveDeterminize`] for an environment with
+    /// adaptive fields (ADR-0046); the errors of [`Self::new`] other than
+    /// the information check; those of [`Self::set_root_determinized`]
+    /// other than [`SearchError::NotDeterminized`].
     pub fn new_determinized(
         cfg: E::Config,
         options: SearchOptions,
@@ -180,10 +182,13 @@ where
     /// # Errors
     ///
     /// [`SearchError::NotDeterminized`] on a pool not made by
-    /// [`Self::new_determinized`]; the errors of the determinization
-    /// (a root waiting for its reset, a root that fails the readiness
-    /// checks, an inconsistent sample); those of [`Self::set_root`]. On
-    /// error the tree is unchanged.
+    /// [`Self::new_determinized`]; the errors of the determinization:
+    /// [`SearchError::PendingResetRoot`], [`SearchError::RootNotReady`],
+    /// [`SearchError::AuthorPanicked`] (a contained panic in author code),
+    /// [`SearchError::SampleInvariant`], [`SearchError::InconsistentSample`],
+    /// [`SearchError::SampleNotSingleActor`], [`SearchError::SampleField`]
+    /// and scratch pool errors; those of [`Self::set_root`]. On error the
+    /// tree is unchanged.
     pub fn set_root_determinized(
         &mut self,
         root: &Record<E>,
@@ -195,7 +200,6 @@ where
         if self.mode != RootMode::Determinized {
             return Err(SearchError::NotDeterminized);
         }
-        refuse_adaptive::<E>()?;
         let record = self.determinize(root, how)?;
         self.replace_root(&record)
     }

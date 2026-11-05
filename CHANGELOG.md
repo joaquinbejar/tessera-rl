@@ -33,7 +33,10 @@ the API is not stable, and any 0.x release may break it.
   determinized tree is never re-rooted. `SearchPool::new_privileged`
   searches the full record and is labelled by `is_privileged`;
   `SearchPool::new` still refuses imperfect information.
-- **Engine** (`tessera-rl-engine`): `EnvPool::config`.
+- **Engine** (`tessera-rl-engine`): `EnvPool::config`, and `EnvPool::contain`,
+  which runs author code that reads only the configuration under the
+  pool's containment (the canonical floating-point scope, a panic caught
+  and reported as `None`).
 
 ## [0.1.0] - 2026-11-04
 
