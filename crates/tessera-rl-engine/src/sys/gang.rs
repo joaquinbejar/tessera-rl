@@ -129,6 +129,15 @@ pub(crate) struct Faults {
     /// Like `die_in_epoch`, but before the worker reads the job (and so
     /// before it clones the job's waker).
     pub(crate) die_before_job: Option<usize>,
+    /// Async mode only: before stepping a claimed id, a worker sleeps up to
+    /// this many microseconds (a pseudo-random amount per claim), so that
+    /// completion order varies widely between runs (ADR-0047 injected
+    /// jitter). Zero: no delay.
+    #[cfg_attr(
+        loom,
+        allow(dead_code, reason = "the split-phase modes are not built under loom")
+    )]
+    pub(crate) jitter_us: u32,
 }
 
 /// A type-erased job: `call(data, worker)` on every worker.

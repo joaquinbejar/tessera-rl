@@ -146,12 +146,12 @@ pub struct PipelinedPool<E: Environment, M: MaskProvider<E>> {
 /// The mode's workers; dropping them drains every job in flight, then
 /// shuts the gang down and joins it.
 #[derive(Debug)]
-struct Workers(Option<SyncRuntime>);
+pub(crate) struct Workers(pub(crate) Option<SyncRuntime>);
 
 impl Workers {
     /// Waits for every job in flight; returns whether any of them panicked
     /// (or could not be waited for).
-    fn drain(&mut self) -> bool {
+    pub(crate) fn drain(&mut self) -> bool {
         let mut failed = false;
         if let Some(rt) = self.0.as_mut() {
             while rt.gang.in_flight() > 0 {

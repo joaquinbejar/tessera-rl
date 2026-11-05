@@ -146,3 +146,60 @@ fn test_pipelined_worker_death_reports_worker_died_permanently() {
     );
     assert_eq!(p.idle_token(0).map(|_| ()), Err(EngineError::Poisoned));
 }
+
+/// A worker that dies in an Async drain job: `recv` reports `WorkerDied`
+/// (the surviving worker drains the ring, so nothing hangs), and every later
+/// send or writer reports the death permanently (ADR-0047 section 7).
+#[cfg(not(loom))]
+#[test]
+fn test_async_worker_death_reports_worker_died_permanently() {
+    let options = PoolOptions {
+        chunk_size: NonZeroU32::new(4).unwrap(),
+        ..PoolOptions::new(NonZeroU32::new(32).unwrap(), Seed::new(1))
+    };
+    let faults = Faults {
+        die_in_epoch: Some(1),
+        ..Faults::default()
+    };
+    let mut p = EnvPool::<Ticker>::new(TickConfig {}, options)
+        .unwrap()
+        .async_faults(
+            crate::AsyncOptions::new(NonZeroUsize::new(2).unwrap(), NonZeroUsize::new(4).unwrap()),
+            faults,
+        )
+        .unwrap();
+    drop(p.reset_all(Reseed::Keep).unwrap());
+    let ids: Vec<u32> = (0..8).collect();
+    let actions = [0_i32; 8];
+    let input = crate::ActionInput {
+        discrete: &actions,
+        continuous: &[],
+    };
+    p.send(&ids, input).unwrap();
+    let mut seen = None;
+    for _ in 0..4 {
+        match p.recv() {
+            Ok(t) => drop(t),
+            Err(e) => {
+                seen = Some(e);
+                break;
+            }
+        }
+    }
+    assert_eq!(seen, Some(EngineError::WorkerDied));
+    assert!(p.is_poisoned());
+    assert!(matches!(
+        p.send(
+            &[20],
+            crate::ActionInput {
+                discrete: &[0],
+                continuous: &[]
+            }
+        ),
+        Err(EngineError::Poisoned | EngineError::WorkerDied)
+    ));
+    assert_eq!(
+        p.reset_all(Reseed::Keep).map(|_| ()),
+        Err(EngineError::WorkerDied)
+    );
+}

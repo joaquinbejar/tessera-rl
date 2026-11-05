@@ -310,8 +310,8 @@ fn copy_row<T: Copy>(
 /// live token. The flags are read with Acquire, so a token dropped on
 /// another thread is seen with every read it made.
 #[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "used by the split-phase modes (ADR-0047)")
+    loom,
+    allow(dead_code, reason = "the split-phase modes are not built under loom")
 )]
 pub(crate) fn check_send_ids(
     ids: &[u32],
@@ -443,9 +443,33 @@ pub(crate) trait AdmittedRows<H> {
 /// [`check_send_ids`].
 #[cfg_attr(
     not(test),
-    expect(dead_code, reason = "used by the split-phase modes (ADR-0047)")
+    expect(
+        dead_code,
+        reason = "the mode runs the checks and the copy separately; tests use both at once"
+    )
+)]
+#[cfg_attr(
+    all(test, loom),
+    allow(dead_code, reason = "the split-phase modes are not built under loom")
 )]
 pub(crate) fn check_and_copy_subset_actions<H: RecordLayout, R: AdmittedRows<H>>(
+    layout: &ActionLayout,
+    auto_reset: AutoReset,
+    rows: &mut R,
+    input: ActionInput<'_>,
+) -> Result<(), EngineError> {
+    check_subset_actions(layout, auto_reset, rows, input)?;
+    copy_subset_actions(layout, rows, input)
+}
+
+/// The checks of [`check_and_copy_subset_actions`] without the copy, so a
+/// caller can run more checks (the `debug-checks` legality pass) between
+/// the validation and the copy, in Sync's order.
+#[cfg_attr(
+    loom,
+    allow(dead_code, reason = "the split-phase modes are not built under loom")
+)]
+pub(crate) fn check_subset_actions<H: RecordLayout, R: AdmittedRows<H>>(
     layout: &ActionLayout,
     auto_reset: AutoReset,
     rows: &mut R,
@@ -469,8 +493,23 @@ pub(crate) fn check_and_copy_subset_actions<H: RecordLayout, R: AdmittedRows<H>>
         check_row_lengths(&row, agents, dh, ch)?;
         check_one(layout, auto_reset, row.header, id, position, input)?;
     }
-    // Validated: copy, one admitted row at a time.
-    for position in 0..count {
+    Ok(())
+}
+
+/// The copy of [`check_and_copy_subset_actions`], after its checks passed:
+/// one admitted row at a time.
+#[cfg_attr(
+    loom,
+    allow(dead_code, reason = "the split-phase modes are not built under loom")
+)]
+pub(crate) fn copy_subset_actions<H: RecordLayout, R: AdmittedRows<H>>(
+    layout: &ActionLayout,
+    rows: &mut R,
+    input: ActionInput<'_>,
+) -> Result<(), EngineError> {
+    let agents = H::AGENTS;
+    let (dh, ch) = (layout.discrete.len(), layout.continuous.len());
+    for position in 0..rows.len() {
         let (_, mut row) = admitted(rows, position)?;
         copy_instance(&mut row, input, position, agents, dh, ch);
     }

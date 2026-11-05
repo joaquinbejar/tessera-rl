@@ -361,3 +361,75 @@ fn test_ring_stalled_id_while_others_cycle_loses_nothing() {
     assert_eq!(done.pop().unwrap(), Some(stalled));
     assert_eq!(done.pop().unwrap(), None);
 }
+
+/// A pop whose free position would overflow reports `Exhausted` before it
+/// takes the position: the head does not move and the id stays in the ring
+/// (the order of the checks in `pop`, TR on #79).
+#[cfg(not(loom))]
+#[test]
+fn test_ring_pop_reports_exhaustion_before_taking_a_position() {
+    let pos = usize::MAX - 1;
+    let ring = super::IdRing::at_position(2, pos).unwrap();
+    ring.push(7).unwrap();
+    // `pos + capacity` overflows, so the pop cannot compute the slot's next
+    // free sequence: it must refuse without consuming the position.
+    for _ in 0..3 {
+        assert_eq!(ring.pop(), Err(RingError::Exhausted));
+        assert_eq!(ring.head.load(Ordering::Relaxed), pos, "no position taken");
+    }
+    // A push at the last position cannot compute its next tail either.
+    assert_eq!(ring.push(8), Err(RingError::Exhausted));
+}
+
+/// A claim paused inside its slot (after taking the position, before
+/// freeing the slot) while the other ids cycle through the ring: the
+/// producer may see `Full` transiently and retries, as the Async send does;
+/// every id is delivered exactly once and nothing is lost (ADR-0047 section
+/// 7, the carried requirement from #78).
+#[test]
+fn test_ring_claim_paused_while_other_ids_cycle_delivers_every_id_once() {
+    model(|| {
+        let ring = Arc::new(SharedSubmit::new(2));
+        ring.push(0).unwrap();
+        ring.push(1).unwrap();
+        let seen = Arc::new([AtomicU32::new(0), AtomicU32::new(0)]);
+        let paused = {
+            let ring = Arc::clone(&ring);
+            let seen = Arc::clone(&seen);
+            thread::spawn(move || {
+                if let Some(id) = ring.claim() {
+                    seen.get(id as usize)
+                        .expect("a stale id")
+                        .fetch_add(1, Ordering::Relaxed);
+                }
+            })
+        };
+        // The main thread cycles whichever id it gets: claim it, count it,
+        // and push it back once (retrying while the paused claim still holds
+        // its slot), then claim it again.
+        let mut cycled = None;
+        if let Some(id) = ring.claim() {
+            seen.get(id as usize)
+                .expect("a stale id")
+                .fetch_add(1, Ordering::Relaxed);
+            while ring.push(id).is_err() {
+                thread::yield_now();
+            }
+            cycled = Some(id);
+        }
+        paused.join().unwrap();
+        while let Some(id) = ring.claim() {
+            seen.get(id as usize)
+                .expect("a stale id")
+                .fetch_add(1, Ordering::Relaxed);
+        }
+        for (id, count) in seen.iter().enumerate() {
+            let want = if cycled == u32::try_from(id).ok() {
+                2
+            } else {
+                1
+            };
+            assert_eq!(count.load(Ordering::Relaxed), want, "id {id}");
+        }
+    });
+}

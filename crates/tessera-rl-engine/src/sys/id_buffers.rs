@@ -229,7 +229,9 @@ impl IdBufferPool {
         if ids.len() > capacity {
             return Err(error);
         }
-        let len = u32::try_from(ids.len()).map_err(|_| error)?;
+        // Cannot fail: a buffer holds at most `n <= 2^31` ids (checked in
+        // `new`), so a length that fits the buffer fits a `u32`.
+        let len = u32::try_from(ids.len()).unwrap_or(u32::MAX);
         for ((slot, gen_slot), (&id, &generation)) in buffer
             .ids
             .iter()

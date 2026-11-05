@@ -30,6 +30,10 @@
 //! full; a push on a full ring returns [`RingError::Full`] and never
 //! overwrites a slot.
 //!
+//! This floor of two is an interpretation of ADR-0047 section 7, which
+//! states the capacity as "the next power of two at or above N": for
+//! `N = 1` the rings hold two slots, one more than the ADR's literal rule.
+//!
 //! **Transient `Full` and empty.** An operation can be paused after it has
 //! claimed a position and before it publishes the slot's new sequence. A
 //! push then sees `Full` behind a pop that has taken an id but not yet freed
@@ -121,6 +125,22 @@ impl IdRing {
 
     fn capacity(&self) -> usize {
         self.slots.len()
+    }
+
+    /// A ring whose next push and pop are both at position `pos`, as if
+    /// `pos` ids had already passed through it (exhaustion tests).
+    #[cfg(all(test, not(loom)))]
+    fn at_position(n: usize, pos: usize) -> Result<Self, RingError> {
+        let ring = Self::new(n)?;
+        for k in 0..ring.capacity() {
+            let p = pos.wrapping_add(k);
+            if let Some(slot) = ring.slot(p) {
+                slot.seq.store(p, Ordering::Relaxed);
+            }
+        }
+        ring.head.store(pos, Ordering::Relaxed);
+        ring.tail.store(pos, Ordering::Relaxed);
+        Ok(ring)
     }
 
     fn slot(&self, pos: usize) -> Option<&Slot> {
@@ -235,6 +255,19 @@ impl SubmitRing {
     pub fn claim(&self) -> Result<Option<u32>, RingError> {
         self.ring.pop()
     }
+
+    /// [`Self::push`] through a shared reference, for a mode whose ring sits
+    /// in its shared allocation. The queue is safe for any number of
+    /// producers; the caller keeps the single-producer protocol (only the
+    /// mode's `&mut self` methods push).
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::push`].
+    #[doc(hidden)]
+    pub fn push_shared(&self, id: u32) -> Result<(), RingError> {
+        self.ring.push(id)
+    }
 }
 
 /// The completion ring: workers push, the caller pops (MPSC).
@@ -277,6 +310,19 @@ impl CompletionRing {
     ///
     /// [`RingError::Exhausted`] if the positions are exhausted.
     pub fn pop(&mut self) -> Result<Option<u32>, RingError> {
+        self.ring.pop()
+    }
+
+    /// [`Self::pop`] through a shared reference, for a mode whose ring sits
+    /// in its shared allocation. The queue is safe for any number of
+    /// consumers; the caller keeps the single-consumer protocol (only the
+    /// mode's `&mut self` methods pop).
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::pop`].
+    #[doc(hidden)]
+    pub fn pop_shared(&self) -> Result<Option<u32>, RingError> {
         self.ring.pop()
     }
 }

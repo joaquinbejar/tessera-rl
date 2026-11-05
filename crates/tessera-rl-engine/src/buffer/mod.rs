@@ -40,6 +40,8 @@
 //!    worker views are created and dropped inside the job, and the caller's
 //!    output views are returned only after `run`.
 
+#[cfg(not(loom))]
+pub(crate) mod batch;
 #[cfg_attr(
     loom,
     allow(dead_code, reason = "the split-phase modes are not built under loom")
