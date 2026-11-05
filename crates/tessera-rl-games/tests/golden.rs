@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! Golden suites (ADR-0009, ADR-0024 layer 2) and cross-thread runs (SPEC
-//! 8.5) for Connect Four and Leduc hold'em: every scenario matches its committed fixture in
-//! Inline mode and with 1, 2, 7 and 64 workers. The harness is the one of
-//! the classic crate.
+//! 8.5) for Connect Four and Leduc hold'em: every scenario matches its
+//! committed fixture in Inline mode and with 1, 2, 7 and 64 workers. The
+//! harness is the one of the classic crate.
 
 #![expect(clippy::panic, reason = "test setup: a failure is the assertion")]
 
