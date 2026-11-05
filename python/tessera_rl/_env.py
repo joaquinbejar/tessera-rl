@@ -60,6 +60,20 @@ class Step(NamedTuple):
     acting: np.ndarray
 
 
+class HalfStep(NamedTuple):
+    """One half's outputs in Pipelined mode (ADR-0047).
+
+    ``ids`` are the instances of the half; ``step`` holds their rows only,
+    so its first dimension is ``len(ids)``. In ``borrowed`` mode the arrays
+    stay valid until this half's next ``send``, or a ``reset``: the other
+    half's ``send`` does not end them.
+    """
+
+    half: int
+    ids: range
+    step: Step
+
+
 class Env:
     """A pool of ``num_envs`` instances of one environment.
 
@@ -71,6 +85,13 @@ class Env:
     method calls: the Python work around the native call (converting
     actions, wrapping outputs) can interleave with other threads, so
     serialize calls on one ``Env`` yourself.
+
+    With ``mode="pipelined"`` (ADR-0047) the pool has two fixed halves,
+    ``halves``, stepped with ``send`` and ``recv``; ``step`` raises
+    ``ArgumentError``. Here one thread may ``send`` while another waits in
+    ``recv``; a second concurrent ``recv`` raises ``ConcurrencyError``.
+    ``snapshot``, ``import_record``, ``fork`` and ``reset`` with ids are
+    not available in this mode yet.
     """
 
     def __init__(self, native: _native.Env):
@@ -83,12 +104,47 @@ class Env:
         #: ``"simultaneous"``, ``"sequential"`` or ``"mixed"`` (ADR-0013).
         self.turns: str = layout["turns"]
         self.outputs: str = layout["outputs"]
+        #: The instance ids of the two halves, in Pipelined mode; else ``None``.
+        self.halves: tuple[range, range] | None = None
+        if "halves" in layout:
+            (a, b), (c, d) = layout["halves"]
+            self.halves = (range(a, b), range(c, d))
         self._leaves = [(name or "obs", np.dtype(dtype), tuple(shape)) for name, dtype, shape, *_ in layout["leaves"]]
 
-    def reset(self, seed: int | None = None) -> Step:
-        """Resets every instance; a new seed base if ``seed`` is given."""
+    def reset(self, seed: int | None = None) -> Step | list[HalfStep]:
+        """Resets every instance; a new seed base if ``seed`` is given.
+
+        In Pipelined mode it returns one ``HalfStep`` per half, and it needs
+        every sent half received first (``ConcurrencyError``), except to
+        recover a poisoned pool.
+        """
         out = self._native.reset() if seed is None else self._native.reset(_index(seed, "seed"))
+        if self.halves is not None:
+            return [self._half(h) for h in out]
         return self._wrap(out)
+
+    def send(self, half: int, actions) -> None:
+        """Starts the next step of ``half`` (Pipelined mode). ``actions`` has
+        one int per agent row of the half, ``(len(halves[half]), agents)``,
+        under the rules of ``step``. Ends the borrow window of that half's
+        arrays. ``ConcurrencyError`` if the half is two cycles ahead of what
+        the other half has finished.
+        """
+        acts = _discrete_actions(actions)
+        self._native.send(_index(half, "half"), acts.tobytes())
+
+    def recv(self) -> HalfStep:
+        """Waits for the oldest sent half and returns its outputs.
+
+        The wait is interruptible: an exception from a signal handler
+        (``KeyboardInterrupt``) leaves the step in flight, and a later
+        ``recv`` returns it.
+        """
+        return self._half(self._native.recv())
+
+    def _half(self, out: dict) -> HalfStep:
+        ids = range(out["start"], out["end"])
+        return HalfStep(out["half"], ids, self._wrap(out["outputs"], len(ids)))
 
     def step(self, actions) -> Step:
         """One step. ``actions`` has one int per agent row, ``(num_envs, agents)``.
@@ -102,8 +158,8 @@ class Env:
             raise _native.ActionError(f"expected {self.num_envs * self.agents} actions, got {acts.size}")
         return self._wrap(self._native.step(acts.tobytes()))
 
-    def _wrap(self, out: dict) -> Step:
-        n, a = self.num_envs, self.agents
+    def _wrap(self, out: dict, rows: int | None = None) -> Step:
+        n, a = self.num_envs if rows is None else rows, self.agents
         if self.outputs == "borrowed":
             # Zero-copy, read-only arrays over the native views (the buffer
             # protocol carries dtype and shape).
@@ -199,7 +255,7 @@ def _index(value, what: str) -> int:
 
 
 #: Keyword arguments the native constructors take as strings.
-_STRING_OPTIONS = {"auto_reset", "outputs"}
+_STRING_OPTIONS = {"auto_reset", "outputs", "mode"}
 
 
 def native_kwargs(**kwargs) -> dict:
@@ -246,7 +302,10 @@ def make(env_id: str, num_envs: int = 1, seed: int = 0, outputs: str = "borrowed
     ``outputs`` is ``"borrowed"`` (default: read-only zero-copy views valid
     until the next call) or ``"owned"`` (fresh arrays). Pool options:
     ``max_episode_steps``, ``auto_reset`` (``"next_step"``,
-    ``"same_step"`` or ``"disabled"``), ``chunk_size``, ``workers``. Tag also
+    ``"same_step"`` or ``"disabled"``), ``chunk_size``, ``workers``,
+    ``mode`` (``"sync"``, the default, or ``"pipelined"``, which takes
+    ``workers``, 1 by default, and needs at least two chunks; ``"async"`` is
+    not available yet). Tag also
     takes its config fields (``width``, ``height``, ``pursuers``,
     ``evaders``, ``slip``, ``radius``). Connect Four takes no config;
     its ``max_episode_steps`` defaults to 64, above the 42 plies of a game.

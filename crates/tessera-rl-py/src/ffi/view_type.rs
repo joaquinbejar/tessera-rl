@@ -25,6 +25,7 @@ use super::tables::{
 };
 use super::{Table, dispose, dlpack, entry, entry_status, thunks};
 use crate::errors::{Kind, error};
+use crate::split::HalfGenerations;
 use crate::view::{Elem, ViewSpec};
 
 /// What a view object owns.
@@ -33,6 +34,9 @@ struct View {
     data: *const u8,
     bytes: usize,
     generation: u64,
+    /// The half this view covers and its generation when taken (ADR-0047
+    /// section 5); `None` in Sync mode.
+    half: Option<(HalfGenerations, usize, u64)>,
     elem: Elem,
     shape: Box<[isize]>,
     strides: Box<[isize]>,
@@ -58,16 +62,31 @@ const fn region_itemsize(dtype: OutputDtype) -> usize {
 }
 
 /// A new view of `spec` in `storage`, at the storage's current generation.
-pub(crate) fn new_view(g: Gil, storage: &Arc<OutputStorage>, spec: &ViewSpec) -> CResult<Mine> {
+pub(crate) fn new_view(
+    g: Gil,
+    storage: &Arc<OutputStorage>,
+    spec: &ViewSpec,
+    half: Option<(&HalfGenerations, usize)>,
+) -> CResult<Mine> {
     let region = storage
         .region(spec.field)
         .ok_or_else(|| error(g, Kind::Argument, format!("no output {:?}", spec.field)))?;
     let bytes = region.len.checked_mul(region_itemsize(region.dtype));
-    let elements = spec
+    let row_elements = spec
         .shape
         .iter()
+        .skip(1)
         .try_fold(1usize, |acc, &d| acc.checked_mul(d));
-    if bytes.is_none() || elements.and_then(|e| e.checked_mul(spec.elem.itemsize)) != bytes {
+    let row_bytes = row_elements.and_then(|e| e.checked_mul(spec.elem.itemsize));
+    let rows = spec.shape.first().copied().unwrap_or(0);
+    let in_range = spec
+        .first_row
+        .checked_add(rows)
+        .is_some_and(|end| end <= spec.total_rows);
+    if bytes.is_none()
+        || !in_range
+        || row_bytes.and_then(|r| r.checked_mul(spec.total_rows)) != bytes
+    {
         return Err(error(
             g,
             Kind::Argument,
@@ -93,16 +112,27 @@ pub(crate) fn new_view(g: Gil, storage: &Arc<OutputStorage>, spec: &ViewSpec) ->
         *stride = acc;
         acc = acc.checked_mul(dim).ok_or_else(too_large)?;
     }
-    let bytes = bytes.ok_or_else(too_large)?;
+    let row_bytes = row_bytes.ok_or_else(too_large)?;
+    let bytes = row_bytes.checked_mul(rows).ok_or_else(too_large)?;
+    let offset = row_bytes
+        .checked_mul(spec.first_row)
+        .ok_or_else(too_large)?;
     // The buffer protocol describes sizes and dimensions as `Py_ssize_t`
     // and `int`: refuse now what `getbuffer` could not describe.
     isize::try_from(bytes).map_err(|_| too_large())?;
     c_int::try_from(shape.len()).map_err(|_| too_large())?;
     let view = View {
         storage: Arc::clone(storage),
-        data: region.ptr,
+        // SAFETY: `first_row + rows <= total_rows` and the region holds
+        // `row_bytes * total_rows` bytes (checked above), so the offset stays
+        // inside the region's allocation.
+        data: unsafe { region.ptr.add(offset) },
         bytes,
         generation: storage.generation(),
+        half: half.map(|(gens, h)| {
+            let taken = gens.get(h).map_or(0, |s| s.load(Ordering::Acquire));
+            (Arc::clone(gens), h, taken)
+        }),
         elem: spec.elem,
         shape,
         strides: strides.into_boxed_slice(),
@@ -242,7 +272,14 @@ pub(super) unsafe extern "C" fn is_stale(
     entry(|g| {
         // SAFETY: CPython passes `self` of an `OutputView` method.
         let v = unsafe { view(g, slf) }?;
-        Ok(capi::boolean(g, v.storage.generation() != v.generation))
+        let half_moved = v.half.as_ref().is_some_and(|(gens, h, taken)| {
+            gens.get(*h)
+                .is_none_or(|s| s.load(Ordering::Acquire) != *taken)
+        });
+        Ok(capi::boolean(
+            g,
+            half_moved || v.storage.generation() != v.generation,
+        ))
     })
 }
 

@@ -5,6 +5,7 @@
 //! `unsafe` here; the view objects live in `ffi::view_type`.
 
 use core::ffi::CStr;
+use core::ops::Range;
 
 use tessera_rl_engine::{OutputDtype, OutputField};
 
@@ -62,7 +63,11 @@ const fn region_elem(dtype: OutputDtype) -> Option<Elem> {
 pub(crate) struct ViewSpec {
     pub(crate) field: OutputField,
     pub(crate) elem: Elem,
+    /// The exported rows: `shape[0]` of them from `first_row`, out of the
+    /// region's `total_rows` (a half's rows in split-phase modes).
     pub(crate) shape: Vec<usize>,
+    pub(crate) first_row: usize,
+    pub(crate) total_rows: usize,
 }
 
 /// The views of one call's outputs, keyed as the owned dict is.
@@ -94,6 +99,8 @@ pub(crate) fn view_set(layout: &Layout) -> Option<ViewSet> {
                     field: field(i),
                     elem: leaf_elem(leaf.dtype)?,
                     shape,
+                    first_row: 0,
+                    total_rows: n,
                 })
             })
             .collect::<Option<Vec<_>>>()
@@ -109,6 +116,8 @@ pub(crate) fn view_set(layout: &Layout) -> Option<ViewSet> {
             field,
             elem: region_elem(dtype)?,
             shape: shape.to_vec(),
+            first_row: 0,
+            total_rows: n,
         })
     };
     let per_agent = [n, a];
@@ -157,6 +166,21 @@ pub(crate) fn view_set(layout: &Layout) -> Option<ViewSet> {
     })
 }
 
+/// The view set of the rows `rows` of `layout`; `None` as [`view_set`].
+pub(crate) fn half_view_set(layout: &Layout, rows: &Range<usize>) -> Option<ViewSet> {
+    let mut set = view_set(layout)?;
+    let specs = set
+        .observations
+        .iter_mut()
+        .chain(set.terminal_observations.iter_mut())
+        .chain(set.others.iter_mut().map(|(_, spec)| spec));
+    for spec in specs {
+        spec.first_row = rows.start;
+        *spec.shape.first_mut()? = rows.len();
+    }
+    Some(set)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -186,5 +210,9 @@ mod tests {
         assert_eq!(masks.shape, vec![3, 2, 5]);
         assert_eq!(set.terminal_observations[0].shape, vec![3, 2, 4]);
         assert_eq!(leaf_elem("complex64"), None);
+        let half = half_view_set(&layout, &(1..3)).unwrap();
+        assert_eq!(half.observations[0].shape, vec![2, 2, 4]);
+        assert_eq!(half.observations[0].first_row, 1);
+        assert_eq!(half.observations[0].total_rows, 3);
     }
 }

@@ -615,6 +615,8 @@ thunk!(STEP: CFunction = thunk_step => env_type::step : fn(Obj, Obj) -> Obj);
 thunk!(SNAPSHOT: CFunction = thunk_snapshot => env_type::snapshot : fn(Obj, Obj) -> Obj);
 thunk!(IMPORT_RECORD: CFunction = thunk_import_record => env_type::import_record : fn(Obj, Obj) -> Obj);
 thunk!(FORK: CFunction = thunk_fork => env_type::fork : fn(Obj, Obj) -> Obj);
+thunk!(SEND: CFunction = thunk_send => env_type::send : fn(Obj, Obj) -> Obj);
+thunk!(RECV: CFunction = thunk_recv => env_type::recv : fn(Obj, Obj) -> Obj);
 thunk!(DEALLOC: Destructor = thunk_dealloc => env_type::dealloc : fn(Obj) -> ());
 thunk!(MAKE_SEARCH: CFunctionKw = thunk_make_search => search_type::make_search : fn(Obj, Obj, Obj) -> Obj);
 thunk!(SEARCH_LAYOUT: CFunction = thunk_search_layout => search_type::layout : fn(Obj, Obj) -> Obj);

@@ -4,11 +4,20 @@
 //! (ADR-0041 callouts). Arguments are read only from exact built-in types;
 //! the Python layer converts anything else before calling.
 
-use crate::env::{PoolArgs, PoolOps, ResetSeed, TagFields};
+use core::sync::atomic::{AtomicBool, Ordering};
+use core::time::Duration;
+
+use std::sync::Arc;
+
+use tessera_rl_engine::{EngineError, OutputStorage};
+
+use crate::env::{BindError, Owned, PoolArgs, PoolOps, ResetSeed, TagFields};
 use crate::errors::{Kind, error, to_py};
-use crate::ffi::capi::{self, CResult, Gil, Mine, Ref};
+use crate::ffi::capi::{self, CResult, Gil, Mine, Raised, Ref};
 use crate::ffi::inner::Inner;
 use crate::ffi::view_type::new_view;
+use crate::split::{HalfGenerations, HalfOutput, SplitOps};
+use crate::view::{ViewSet, half_view_set};
 
 /// Keyword arguments, as exact `(str, value)` pairs.
 pub(crate) struct Kwargs<'a>(Vec<(String, Ref<'a>)>);
@@ -62,7 +71,8 @@ impl<'a> Kwargs<'a> {
     }
 }
 
-const POOL_KEYS: [&str; 6] = [
+const POOL_KEYS: [&str; 7] = [
+    "mode",
     "num_envs",
     "seed",
     "max_episode_steps",
@@ -85,8 +95,28 @@ fn borrowed(g: Gil, kw: &Kwargs<'_>) -> CResult<bool> {
     }
 }
 
+/// The `mode`: `"sync"` (the default) or `"pipelined"`: whether it is
+/// Pipelined. Async is refused until its engine mode lands.
+fn pipelined(g: Gil, kw: &Kwargs<'_>) -> CResult<bool> {
+    match kw.string(g, "mode")?.as_deref() {
+        None | Some("sync") => Ok(false),
+        Some("pipelined") => Ok(true),
+        Some("async") => Err(error(
+            g,
+            Kind::Argument,
+            "mode \"async\" is not available yet".to_owned(),
+        )),
+        Some(other) => Err(error(
+            g,
+            Kind::Argument,
+            format!("mode must be \"sync\" or \"pipelined\", not {other:?}"),
+        )),
+    }
+}
+
 fn pool_args(g: Gil, kw: &Kwargs<'_>, default_limit: u32) -> CResult<PoolArgs> {
     Ok(PoolArgs {
+        pipelined: pipelined(g, kw)?,
         num_envs: kw.u32(g, "num_envs")?.unwrap_or(1),
         seed: kw.u64(g, "seed")?.unwrap_or(0),
         max_episode_steps: Some(kw.u32(g, "max_episode_steps")?.unwrap_or(default_limit)),
@@ -216,6 +246,16 @@ pub(crate) fn layout(g: Gil, inner: &Inner) -> CResult<Mine> {
         )?;
         capi::dict_set(g, &d, c"terminal", &capi::boolean(g, l.terminal))?;
         capi::dict_set(g, &d, c"leaves", &leaves)?;
+        if let Some(split) = ops.split() {
+            let halves = list_of(
+                g,
+                split
+                    .halves()
+                    .iter()
+                    .map(|r| capi::tuple(g, vec![int(g, r.start)?, int(g, r.end)?])),
+            )?;
+            capi::dict_set(g, &d, c"halves", &halves)?;
+        }
         Ok(d)
     })
 }
@@ -287,11 +327,156 @@ pub(crate) fn reset(g: Gil, inner: &Inner, args: Ref<'_>) -> CResult<Mine> {
         .flatten()
         .map(|v| u32_list(g, v, "ids"))
         .transpose()?;
+    if let Some(split) = split_of(g, inner)? {
+        if ids.is_some() {
+            return Err(to_py(
+                g,
+                BindError::Engine(EngineError::WrongMode {
+                    call: "reset with ids",
+                    mode: "pipelined",
+                }),
+            ));
+        }
+        let owned = !inner.borrowed();
+        let halves = g
+            .detach(|| split.reset(&seed, owned))
+            .map_err(|e| to_py(g, e))?;
+        return list_of(
+            g,
+            halves.iter().map(|out| half_output(g, inner, &*split, out)),
+        );
+    }
     inner.with(g, |ops| {
         g.detach(|| ops.reset(ids.as_deref(), &seed))
             .map_err(|e| to_py(g, e))?;
         outputs_of(g, inner, ops)
     })
+}
+
+/// Little-endian int32 actions, from exact `bytes`.
+fn actions_of(g: Gil, actions: Ref<'_>) -> CResult<Vec<i32>> {
+    let raw = capi::bytes_of(g, actions, "actions")?;
+    if raw.len() % 4 != 0 {
+        return Err(error(
+            g,
+            Kind::Action,
+            "actions must be int32 values".to_owned(),
+        ));
+    }
+    Ok(raw
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|c| i32::from_le_bytes(*c))
+        .collect())
+}
+
+/// The split-phase operations of `inner`, cloned so the guard is not held
+/// while they run.
+fn split_of(g: Gil, inner: &Inner) -> CResult<Option<Arc<dyn SplitOps>>> {
+    inner.with(g, |ops| Ok(ops.split()))
+}
+
+/// As [`split_of`]; a closed environment has none (`close` is idempotent).
+fn split_of_open(g: Gil, inner: &Inner) -> CResult<Option<Arc<dyn SplitOps>>> {
+    inner.peek(g, |ops| ops.and_then(PoolOps::split))
+}
+
+fn require_split(g: Gil, inner: &Inner, call: &'static str) -> CResult<Arc<dyn SplitOps>> {
+    split_of(g, inner)?.ok_or_else(|| {
+        to_py(
+            g,
+            BindError::Engine(EngineError::WrongMode { call, mode: "sync" }),
+        )
+    })
+}
+
+/// One half's outputs: `{half, start, end, outputs}`.
+fn half_output(g: Gil, inner: &Inner, split: &dyn SplitOps, out: &HalfOutput) -> CResult<Mine> {
+    let rows = split
+        .halves()
+        .get(out.half)
+        .cloned()
+        .ok_or_else(|| error(g, Kind::Argument, "no such half".to_owned()))?;
+    let outputs = if let Some(owned) = &out.owned {
+        owned_dict(g, owned)?
+    } else {
+        let (set, storage) = inner.with(g, |ops| {
+            Ok((half_view_set(ops.layout(), &rows), ops.storage()))
+        })?;
+        let set = set.ok_or_else(no_format(g))?;
+        let generations = split.half_generations();
+        views_dict(g, &set, &storage, Some((&generations, out.half)))?
+    };
+    let d = capi::dict(g)?;
+    capi::dict_set(g, &d, c"half", &int(g, out.half)?)?;
+    capi::dict_set(g, &d, c"start", &int(g, rows.start)?)?;
+    capi::dict_set(g, &d, c"end", &int(g, rows.end)?)?;
+    capi::dict_set(g, &d, c"outputs", &outputs)?;
+    Ok(d)
+}
+
+/// `send(half, actions: bytes)`: starts the next step of `half`; `actions`
+/// are little-endian int32, one per agent row of the half.
+pub(crate) fn send(g: Gil, inner: &Inner, args: Ref<'_>) -> CResult<Mine> {
+    let a: [Ref<'_>; 2] = exactly(g, args, "send")?;
+    let [half, actions] = a;
+    let half = capi::to_u32(g, half, "half")?;
+    let actions = actions_of(g, actions)?;
+    let split = require_split(g, inner, "send")?;
+    g.detach(|| split.send(half, &actions))
+        .map_err(|e| to_py(g, e))?;
+    Ok(capi::none(g))
+}
+
+/// Ends the one running `recv` on drop.
+struct Receiving<'a>(&'a AtomicBool);
+
+impl Drop for Receiving<'_> {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::Release);
+    }
+}
+
+/// How long one wait of `recv` lasts with the interpreter released.
+const RECV_WAIT: Duration = Duration::from_millis(50);
+
+/// `recv()`: waits for the oldest sent half and returns its outputs. It
+/// waits in bounded steps, outside the mutex and with the interpreter
+/// released, and runs signal handlers between them: an exception they raise
+/// leaves the step in flight, and a later `recv` returns it. One `recv` at a
+/// time: a second one raises `ConcurrencyError` at once.
+pub(crate) fn recv(g: Gil, inner: &Inner) -> CResult<Mine> {
+    let split = require_split(g, inner, "recv")?;
+    if split
+        .receiving()
+        .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
+        .is_err()
+    {
+        return Err(error(
+            g,
+            Kind::Concurrency,
+            "ConcurrentRecv: another recv on this environment is running".to_owned(),
+        ));
+    }
+    let _receiving = Receiving(split.receiving());
+    let owned = !inner.borrowed();
+    loop {
+        let received = g
+            .detach(|| split.try_recv(owned))
+            .map_err(|e| to_py(g, e))?;
+        if let Some(out) = received {
+            return half_output(g, inner, &*split, &out);
+        }
+        g.detach(|| {
+            // A ready half that is not the oldest: wait a moment instead of
+            // spinning on the oldest.
+            if split.waiter().wait_ready(RECV_WAIT) {
+                std::thread::sleep(Duration::from_micros(100));
+            }
+        });
+        capi::check_signals(g)?;
+    }
 }
 
 /// `step(actions: bytes)`: one step; `actions` are little-endian int32,
@@ -301,20 +486,7 @@ pub(crate) fn reset(g: Gil, inner: &Inner, args: Ref<'_>) -> CResult<Mine> {
 pub(crate) fn step(g: Gil, inner: &Inner, args: Ref<'_>) -> CResult<Mine> {
     let a: [Ref<'_>; 1] = exactly(g, args, "step")?;
     let [actions] = a;
-    let raw = capi::bytes_of(g, actions, "actions")?;
-    if raw.len() % 4 != 0 {
-        return Err(error(
-            g,
-            Kind::Action,
-            "actions must be int32 values".to_owned(),
-        ));
-    }
-    let actions: Vec<i32> = raw
-        .as_chunks::<4>()
-        .0
-        .iter()
-        .map(|c| i32::from_le_bytes(*c))
-        .collect();
+    let actions = actions_of(g, actions)?;
     inner.with(g, |ops| {
         g.detach(|| ops.step(&actions)).map_err(|e| to_py(g, e))?;
         outputs_of(g, inner, ops)
@@ -324,6 +496,15 @@ pub(crate) fn step(g: Gil, inner: &Inner, args: Ref<'_>) -> CResult<Mine> {
 /// `outputs()`: the last call's outputs, as borrowed views or owned
 /// copies (the environment's `outputs` mode).
 pub(crate) fn outputs(g: Gil, inner: &Inner) -> CResult<Mine> {
+    if split_of(g, inner)?.is_some() {
+        return Err(to_py(
+            g,
+            BindError::Engine(EngineError::WrongMode {
+                call: "outputs",
+                mode: "pipelined",
+            }),
+        ));
+    }
     inner.with(g, |ops| outputs_of(g, inner, ops))
 }
 
@@ -332,7 +513,11 @@ fn outputs_of(g: Gil, inner: &Inner, ops: &dyn PoolOps) -> CResult<Mine> {
     if inner.borrowed() {
         return borrowed_views(g, ops);
     }
-    let o = ops.outputs();
+    owned_dict(g, &ops.outputs())
+}
+
+/// Owned copies as a dict of `bytearray`s.
+fn owned_dict(g: Gil, o: &Owned) -> CResult<Mine> {
     let d = capi::dict(g)?;
     let obs = list_of(
         g,
@@ -361,36 +546,49 @@ fn outputs_of(g: Gil, inner: &Inner, ops: &dyn PoolOps) -> CResult<Mine> {
     Ok(d)
 }
 
-/// Borrowed views of every output (ADR-0003): read-only, valid until the
-/// next call that writes outputs.
-fn borrowed_views(g: Gil, ops: &dyn PoolOps) -> CResult<Mine> {
-    let Some(set) = crate::view::view_set(ops.layout()) else {
-        return Err(error(
+fn no_format(g: Gil) -> impl FnOnce() -> Raised {
+    move || {
+        error(
             g,
             Kind::Argument,
             "an observation dtype has no buffer format".to_owned(),
-        ));
-    };
-    let storage = ops.storage();
+        )
+    }
+}
+
+/// Borrowed views of every output (ADR-0003): read-only, valid until the
+/// next call that writes outputs.
+fn borrowed_views(g: Gil, ops: &dyn PoolOps) -> CResult<Mine> {
+    let set = crate::view::view_set(ops.layout()).ok_or_else(no_format(g))?;
+    views_dict(g, &set, &ops.storage(), None)
+}
+
+/// The views of `set`, tied to a half's generation in split-phase modes.
+fn views_dict(
+    g: Gil,
+    set: &ViewSet,
+    storage: &Arc<OutputStorage>,
+    half: Option<(&HalfGenerations, usize)>,
+) -> CResult<Mine> {
     let d = capi::dict(g)?;
     let obs = list_of(
         g,
         set.observations
             .iter()
-            .map(|spec| new_view(g, &storage, spec)),
+            .map(|spec| new_view(g, storage, spec, half)),
     )?;
     capi::dict_set(g, &d, c"observations", &obs)?;
     let term = list_of(
         g,
         set.terminal_observations
             .iter()
-            .map(|spec| new_view(g, &storage, spec)),
+            .map(|spec| new_view(g, storage, spec, half)),
     )?;
     capi::dict_set(g, &d, c"terminal_observations", &term)?;
     for (key, spec) in &set.others {
         let key =
             std::ffi::CString::new(*key).map_err(|_| error(g, Kind::Argument, "key".to_owned()))?;
-        capi::dict_set(g, &d, &key, &new_view(g, &storage, spec)?)?;
+        capi::dict_set(g, &d, &key, &new_view(g, storage, spec, half)?)?;
     }
     Ok(d)
 }
@@ -433,12 +631,19 @@ pub(crate) fn fork(g: Gil, inner: &Inner, args: Ref<'_>) -> CResult<Mine> {
 
 /// `is_poisoned() -> bool`.
 pub(crate) fn is_poisoned(g: Gil, inner: &Inner) -> CResult<Mine> {
-    inner.with(g, |ops| Ok(capi::boolean(g, ops.is_poisoned())))
+    inner.with(g, |ops| {
+        // Detached: in split-phase modes this takes the binding mutex.
+        let poisoned = g.detach(|| ops.is_poisoned());
+        Ok(capi::boolean(g, poisoned))
+    })
 }
 
 /// `close()`: frees the pool; idempotent. It takes the reentrancy guard
 /// like every other call, so it cannot free a pool another thread is using.
 pub(crate) fn close(g: Gil, inner: &Inner) -> CResult<Mine> {
+    if let Some(split) = split_of_open(g, inner)? {
+        g.detach(|| split.close());
+    }
     let ops = inner.take(g)?;
     g.detach(move || drop(ops));
     Ok(capi::none(g))

@@ -106,13 +106,15 @@ noargs!(layout, api::layout);
 noargs!(outputs, api::outputs);
 noargs!(is_poisoned, api::is_poisoned);
 noargs!(close, api::close);
+noargs!(recv, api::recv);
+varargs!(send, api::send);
 varargs!(reset, api::reset);
 varargs!(step, api::step);
 varargs!(snapshot, api::snapshot);
 varargs!(import_record, api::import_record);
 varargs!(fork, api::fork);
 
-static METHODS: Table<[ffi::PyMethodDef; 10]> = Table([
+static METHODS: Table<[ffi::PyMethodDef; 12]> = Table([
     method(
         c"layout",
         thunks::LAYOUT,
@@ -160,6 +162,18 @@ static METHODS: Table<[ffi::PyMethodDef; 10]> = Table([
         thunks::IMPORT_RECORD,
         ffi::METH_VARARGS,
         c"import_record(id, record)",
+    ),
+    method(
+        c"send",
+        thunks::SEND,
+        ffi::METH_VARARGS,
+        c"send(half, actions: bytes of int32)",
+    ),
+    method(
+        c"recv",
+        thunks::RECV,
+        ffi::METH_NOARGS,
+        c"recv() -> the oldest sent half's outputs",
     ),
     method(c"fork", thunks::FORK, ffi::METH_VARARGS, c"fork(src, dst)"),
     method_end(),

@@ -81,6 +81,13 @@ impl<T: ?Sized> Inner<T> {
         f(ops)
     }
 
+    /// Runs `f` on the pool, if still open, under the guard.
+    pub(crate) fn peek<R>(&self, g: Gil, f: impl FnOnce(Option<&T>) -> R) -> CResult<R> {
+        let _busy = self.acquire(g)?;
+        // SAFETY: as in `with`: `busy` is held.
+        Ok(f(unsafe { &*self.ops.get() }.as_deref()))
+    }
+
     /// Takes the pool out under the guard (closing); idempotent.
     pub(crate) fn take(&self, g: Gil) -> CResult<Option<Box<T>>> {
         let _busy = self.acquire(g)?;

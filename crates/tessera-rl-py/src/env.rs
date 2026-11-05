@@ -12,7 +12,7 @@ use tessera_rl_core::space::{BoxBounds, DType, Space};
 use tessera_rl_core::{DecodeError, Environment, TurnStructure, Validate};
 use tessera_rl_engine::{
     ActionInput, AutoReset, DecodedRecord, EngineError, EnvPool, MAX_LEAVES, MaskProvider, Masked,
-    NoMasks, PoolOptions, Reseed, SyncOptions,
+    NoMasks, PipelinedOptions, PoolOptions, Reseed, SyncOptions,
 };
 use tessera_rl_games::{Connect4, Connect4Config, Leduc, LeducConfig};
 use tessera_rl_num::identity::Seed;
@@ -80,7 +80,7 @@ pub(crate) struct Layout {
 }
 
 /// Copies of one call's outputs (`owned` mode).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub(crate) struct Owned {
     /// One buffer per leaf, `[N, A, leaf]`.
     pub(crate) observations: Vec<Vec<u8>>,
@@ -116,6 +116,10 @@ pub(crate) trait PoolOps: Send {
     fn import(&mut self, id: u32, bytes: &[u8]) -> Result<(), BindError>;
     fn fork(&mut self, src: u32, dst: &[u32]) -> Result<(), BindError>;
     fn is_poisoned(&self) -> bool;
+    /// The split-phase operations, in Pipelined mode.
+    fn split(&self) -> Option<std::sync::Arc<dyn crate::split::SplitOps>> {
+        None
+    }
 }
 
 struct Pooled<E: Environment, M: MaskProvider<E>> {
@@ -357,6 +361,8 @@ pub(crate) struct PoolArgs {
     pub(crate) auto_reset: String,
     pub(crate) chunk_size: Option<u32>,
     pub(crate) workers: usize,
+    /// Pipelined mode (ADR-0047) instead of Sync.
+    pub(crate) pipelined: bool,
 }
 
 fn options(args: &PoolArgs) -> Result<(PoolOptions, usize), BindError> {
@@ -384,20 +390,41 @@ fn options(args: &PoolArgs) -> Result<(PoolOptions, usize), BindError> {
     Ok((options, n))
 }
 
-fn with_workers<E, M>(pool: EnvPool<E, M>, workers: usize) -> Result<EnvPool<E, M>, BindError>
+/// The environment object of `pool`, in the mode of `args`. Pipelined mode
+/// needs workers, one by default.
+fn finish<E, M>(
+    cfg: &E::Config,
+    pool: EnvPool<E, M>,
+    args: &PoolArgs,
+    n: usize,
+    terminal: bool,
+) -> Result<Box<dyn PoolOps>, BindError>
 where
-    E: Environment,
-    E::Config: Sync,
-    E::Header: Send,
-    E::State: Send,
+    E: Environment + Validate + 'static,
+    E::Config: Send + Sync,
+    E::Header: Send + Sync,
+    E::State: Send + Sync,
     <E::Header as tessera_rl_core::RecordLayout>::Adaptive:
         tessera_rl_core::AdaptiveValues<E::Config>,
-    M: MaskProvider<E>,
+    M: MaskProvider<E> + Send + Sync + 'static,
 {
-    match NonZeroUsize::new(workers) {
-        Some(w) => Ok(pool.with_workers(SyncOptions::new(w))?),
-        None => Ok(pool),
+    let workers = NonZeroUsize::new(args.workers);
+    let pooled = Pooled::new(cfg, pool, n, terminal)?;
+    if args.pipelined {
+        let Pooled { pool, layout } = pooled;
+        let storage = pool.outputs().storage();
+        let options = PipelinedOptions::new(workers.unwrap_or(NonZeroUsize::MIN));
+        let pool = pool
+            .pipelined(options)
+            .map_err(|e| BindError::Engine(e.error))?;
+        return Ok(crate::split::pipelined(pool, storage, layout));
     }
+    let Pooled { pool, layout } = pooled;
+    let pool = match workers {
+        Some(w) => pool.with_workers(SyncOptions::new(w))?,
+        None => pool,
+    };
+    Ok(Box::new(Pooled { pool, layout }))
 }
 
 /// A CartPole pool (`tessera/CartPole-v1`).
@@ -405,11 +432,8 @@ pub(crate) fn cartpole(args: &PoolArgs) -> Result<Box<dyn PoolOps>, BindError> {
     let cfg = CartPoleConfig::default();
     let (options, n) = options(args)?;
     let same_step = options.auto_reset == AutoReset::SameStep;
-    let pool = with_workers(
-        EnvPool::<CartPole, NoMasks>::new(cfg.clone(), options)?,
-        args.workers,
-    )?;
-    Ok(Box::new(Pooled::new(&cfg, pool, n, same_step)?))
+    let pool = EnvPool::<CartPole, NoMasks>::new(cfg.clone(), options)?;
+    finish(&cfg, pool, args, n, same_step)
 }
 
 /// The Tag config fields, by name, as Python passes them.
@@ -436,11 +460,8 @@ pub(crate) fn tag(args: &PoolArgs, fields: &TagFields) -> Result<Box<dyn PoolOps
     };
     let (options, n) = options(args)?;
     let same_step = options.auto_reset == AutoReset::SameStep;
-    let pool = with_workers(
-        EnvPool::<Tag, Masked>::with_masks(cfg.clone(), options)?,
-        args.workers,
-    )?;
-    Ok(Box::new(Pooled::new(&cfg, pool, n, same_step)?))
+    let pool = EnvPool::<Tag, Masked>::with_masks(cfg.clone(), options)?;
+    finish(&cfg, pool, args, n, same_step)
 }
 
 /// A Connect Four pool (`tessera/Connect4-v1`), with masks and
@@ -449,11 +470,8 @@ pub(crate) fn connect4(args: &PoolArgs) -> Result<Box<dyn PoolOps>, BindError> {
     let cfg = Connect4Config {};
     let (options, n) = options(args)?;
     let same_step = options.auto_reset == AutoReset::SameStep;
-    let pool = with_workers(
-        EnvPool::<Connect4, Masked>::with_masks(cfg.clone(), options)?,
-        args.workers,
-    )?;
-    Ok(Box::new(Pooled::new(&cfg, pool, n, same_step)?))
+    let pool = EnvPool::<Connect4, Masked>::with_masks(cfg.clone(), options)?;
+    finish(&cfg, pool, args, n, same_step)
 }
 
 /// A Leduc hold'em pool (`tessera/Leduc-v1`), with masks and Sequential
@@ -462,9 +480,6 @@ pub(crate) fn leduc(args: &PoolArgs) -> Result<Box<dyn PoolOps>, BindError> {
     let cfg = LeducConfig {};
     let (options, n) = options(args)?;
     let same_step = options.auto_reset == AutoReset::SameStep;
-    let pool = with_workers(
-        EnvPool::<Leduc, Masked>::with_masks(cfg.clone(), options)?,
-        args.workers,
-    )?;
-    Ok(Box::new(Pooled::new(&cfg, pool, n, same_step)?))
+    let pool = EnvPool::<Leduc, Masked>::with_masks(cfg.clone(), options)?;
+    finish(&cfg, pool, args, n, same_step)
 }

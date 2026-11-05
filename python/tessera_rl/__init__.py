@@ -33,7 +33,7 @@ API changes (pre-release; the package is not published yet):
   ``Env`` gained ``turns``.
 """
 
-from tessera_rl._env import Env, Step, is_stale, make
+from tessera_rl._env import Env, HalfStep, Step, is_stale, make
 from tessera_rl._native import (
     ActionError,
     ArgumentError,
@@ -59,6 +59,7 @@ __all__ = [
     "ConcurrencyError",
     "ConfigError",
     "Env",
+    "HalfStep",
     "EvaluatorError",
     "ExhaustedError",
     "FloatingPointEnvironmentError",
