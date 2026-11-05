@@ -9,9 +9,7 @@ import pytest
 
 import tessera_rl as t
 
-# Async is smaller: gathering a token looks each id up linearly, so its
-# whole-pool reset is quadratic in N (about 1 s per round at 2^16).
-SIZES = {"sync": (1 << 16, 300), "pipelined": (1 << 16, 300), "async": (1 << 14, 100)}
+SIZES = {"sync": (1 << 16, 300), "pipelined": (1 << 16, 300), "async": (1 << 16, 300)}
 
 
 def make(mode, n):

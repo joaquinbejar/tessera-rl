@@ -84,7 +84,13 @@ impl GatherWriter {
 
     /// Ends the window of every view; the next generation's writes follow.
     pub(crate) fn begin(&mut self) -> u64 {
-        self.0.generation.fetch_add(1, Ordering::AcqRel) + 1
+        let next = self.0.generation.fetch_add(1, Ordering::AcqRel) + 1;
+        // The row writes that follow are not atomics, so the increment alone
+        // does not order them: this fence pairs with the Acquire fence of the
+        // stale checks (a seqlock writer). Python reads rows without Rust
+        // atomics, so at that boundary this is best effort, not a guarantee.
+        core::sync::atomic::fence(Ordering::SeqCst);
+        next
     }
 
     /// Writes `bytes` at byte offset `at` of `field`; false if it does not

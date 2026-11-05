@@ -18,8 +18,8 @@ use std::thread::ThreadId;
 
 use tessera_rl_core::{AdaptiveValues, Bool8, Environment, RecordLayout};
 use tessera_rl_engine::{
-    ActionInput, AsyncPool, BatchToken, BatchWaiter, EngineError, IdGenerations, MaskProvider,
-    OutputField, OutputStorage, Record, Reseed,
+    ActionInput, AsyncPool, BatchRow, BatchToken, BatchWaiter, EngineError, IdGenerations,
+    MaskProvider, OutputField, OutputStorage, Record, Reseed,
 };
 use tessera_rl_num::identity::Seed;
 
@@ -48,6 +48,11 @@ pub(crate) fn ids_stale(
     epochs: &[AtomicU64],
     unsettled: &AtomicBool,
 ) -> bool {
+    // A row read before this call is not ordered by an Acquire load alone: this
+    // fence pairs with the writer's fence after it sets the flag or moves the
+    // generation (a seqlock reader). Python reads rows without Rust atomics, so
+    // at that boundary this is best effort, not a guarantee.
+    core::sync::atomic::fence(Ordering::Acquire);
     unsettled.load(Ordering::Acquire)
         || ids.iter().any(|b| {
             generations.id(b.id) != Some(b.generation)
@@ -59,6 +64,11 @@ pub(crate) fn ids_stale(
 
 /// Whether a gathered view written at `taken` has ended.
 pub(crate) fn gather_stale(buffer: &GatherBuffer, taken: u64, unsettled: &AtomicBool) -> bool {
+    // A row read before this call is not ordered by an Acquire load alone: this
+    // fence pairs with the writer's fence after it sets the flag or moves the
+    // generation (a seqlock reader). Python reads rows without Rust atomics, so
+    // at that boundary this is best effort, not a guarantee.
+    core::sync::atomic::fence(Ordering::Acquire);
     unsettled.load(Ordering::Acquire) || buffer.generation() != taken
 }
 
@@ -286,35 +296,34 @@ fn flag_bytes(row: &[Bool8], mut put: impl FnMut(usize, &[u8])) {
     }
 }
 
-/// Copies the row of `id` in `field` through `put(offset in the row, bytes)`.
+/// Copies `row` in `field` through `put(offset in the row, bytes)`.
 fn row_of<E: Environment, M: MaskProvider<E>>(
-    token: &BatchToken<E, M>,
-    id: u32,
+    row: &BatchRow<'_, E, M>,
     field: OutputField,
     mut put: impl FnMut(usize, &[u8]),
 ) {
     match field {
         OutputField::Observation(leaf) => {
-            if let Some(row) = token.observation(leaf, id) {
-                put(0, row);
+            if let Some(bytes) = row.observation(leaf) {
+                put(0, bytes);
             }
         }
         OutputField::TerminalObservation(leaf) => {
-            if let Some(row) = token.terminal_observation(leaf, id) {
-                put(0, row);
+            if let Some(bytes) = row.terminal_observation(leaf) {
+                put(0, bytes);
             }
         }
-        OutputField::Rewards => f32_bytes(token.rewards(id).unwrap_or(&[]), put),
-        OutputField::AgentTerminated => flag_bytes(token.agent_terminated(id).unwrap_or(&[]), put),
-        OutputField::AgentTruncated => flag_bytes(token.agent_truncated(id).unwrap_or(&[]), put),
-        OutputField::Alive => flag_bytes(token.alive(id).unwrap_or(&[]), put),
-        OutputField::Acting => flag_bytes(token.acting(id).unwrap_or(&[]), put),
-        OutputField::Masks => flag_bytes(token.masks(id).unwrap_or(&[]), put),
+        OutputField::Rewards => f32_bytes(row.rewards().unwrap_or(&[]), put),
+        OutputField::AgentTerminated => flag_bytes(row.agent_terminated().unwrap_or(&[]), put),
+        OutputField::AgentTruncated => flag_bytes(row.agent_truncated().unwrap_or(&[]), put),
+        OutputField::Alive => flag_bytes(row.alive().unwrap_or(&[]), put),
+        OutputField::Acting => flag_bytes(row.acting().unwrap_or(&[]), put),
+        OutputField::Masks => flag_bytes(row.masks().unwrap_or(&[]), put),
         OutputField::EpisodeTerminated => {
-            put(0, &[token.episode_terminated(id).map_or(0, Bool8::to_byte)]);
+            put(0, &[row.episode_terminated().map_or(0, Bool8::to_byte)]);
         }
         OutputField::EpisodeTruncated => {
-            put(0, &[token.episode_truncated(id).map_or(0, Bool8::to_byte)]);
+            put(0, &[row.episode_truncated().map_or(0, Bool8::to_byte)]);
         }
         _ => {}
     }
@@ -375,11 +384,11 @@ where
         token: &BatchToken<E, M>,
     ) -> BatchOutput {
         let ids: Arc<[BatchId]> = token
-            .ids()
-            .map(|id| BatchId {
-                id,
-                generation: token.generation(id).unwrap_or(0),
-                released: self.epoch(id),
+            .rows()
+            .map(|row| BatchId {
+                id: row.id(),
+                generation: row.generation(),
+                released: self.epoch(row.id()),
             })
             .collect();
         let (mut gathered, mut owned) = (0, None);
@@ -397,9 +406,9 @@ where
                     .iter()
                     .skip(1)
                     .fold(spec.elem.itemsize, |acc, &d| acc.saturating_mul(d));
-                for (k, b) in ids.iter().enumerate() {
+                for (k, row) in token.rows().enumerate() {
                     let start = k.saturating_mul(row_bytes);
-                    row_of(token, b.id, spec.field, |at, bytes| {
+                    row_of(&row, spec.field, |at, bytes| {
                         let fits = writer.write(spec.field, start.saturating_add(at), bytes);
                         debug_assert!(fits, "a gathered row fits its region");
                     });
@@ -925,6 +934,23 @@ mod tests {
             assert!(ops.reset_all(&ResetSeed::Keep).is_err());
         });
         assert_eq!(seen, Some(true), "views must read stale during the write");
+        ops.close();
+    }
+
+    #[test]
+    fn test_async_flag_is_set_inside_restore_all_and_restore() {
+        let ops = asynced(&CountConfig::default(), BatchOutputs::Indexed);
+        ops.reset_all(&ResetSeed::Keep).unwrap();
+        let (all, one) = (ops.snapshot_all().unwrap(), ops.snapshot(5).unwrap());
+        let flag = ops.unsettled_flag();
+        let seen = crate::split::reset_probe::flag_at_restore_panic(&flag, || {
+            assert!(ops.restore(&[5], &[one], 0).is_err());
+        });
+        assert_eq!(seen, Some(true), "views must read stale during restore");
+        let seen = crate::split::reset_probe::flag_at_restore_panic(&flag, || {
+            assert!(ops.restore_all(&all).is_err());
+        });
+        assert_eq!(seen, Some(true), "views must read stale during restore_all");
         ops.close();
     }
 
