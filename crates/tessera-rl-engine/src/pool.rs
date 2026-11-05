@@ -387,6 +387,12 @@ where
         &self.options
     }
 
+    /// The environment configuration of the pool.
+    #[must_use]
+    pub const fn config(&self) -> &E::Config {
+        &self.cfg
+    }
+
     /// The outputs of the last call.
     #[must_use]
     pub const fn outputs(&self) -> &Outputs {
