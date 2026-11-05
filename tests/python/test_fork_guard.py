@@ -246,6 +246,17 @@ def test_hook_registered_before_import_gets_fork_error(call, tmp_path):
     assert "CHILD 0\n" in out, out
 
 
+def test_early_hook_reset_of_an_idle_sync_env_gets_fork_error(tmp_path):
+    body = EARLY_HOOK.format(call="env.reset()")
+    body = body.replace('workers=2, mode="pipelined")', "workers=2)")
+    body = body.replace('    env.send(0, np.zeros(len(env.halves[0]), dtype=np.int32))\n', "")
+    body = body.replace("    env.recv()\n", "")
+    code, out = run(body, tmp_path, prelude="")
+    assert code == 0, out
+    assert "EARLY ['ForkError']" in out, out
+    assert "CHILD 0\n" in out, out
+
+
 def test_direct_libc_fork_is_covered(tmp_path):
     """A C extension calling fork directly runs no Python at-fork hook. PyDLL
     keeps the interpreter lock across the call, so the child can run Python."""

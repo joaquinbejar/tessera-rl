@@ -153,6 +153,9 @@ class Env:
     rows of a step that was running at the fork. Create a new ``Env`` in the
     child, or use the spawn start method.
 
+    On macOS before 14.4, creating an ``Env`` with worker threads in a forked
+    child raises ``ForkError``: use ``workers=0`` in Sync mode, or spawn.
+
     On macOS, a child that first imports ``tessera_rl`` after the fork is not
     known to be one, so its new pools use the default blocking wait, which can
     trap with ``SIGTRAP`` if the parent's libdispatch state marks it unsafe. A

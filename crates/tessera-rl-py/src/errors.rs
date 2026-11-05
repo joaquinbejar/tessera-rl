@@ -216,6 +216,7 @@ pub(crate) fn to_py(g: Gil, e: BindError) -> Raised {
         BindError::Engine(e) => error(g, engine_kind(&e), e.to_string()),
         BindError::Decode(e) => error(g, Kind::Record, e.to_string()),
         BindError::Argument(message) => error(g, Kind::Argument, message),
+        BindError::Forked(message) => error(g, Kind::Forked, message),
         BindError::Search(tessera_rl_search::SearchError::Evaluator(e)) => {
             error(g, Kind::Evaluator, e.to_string())
         }

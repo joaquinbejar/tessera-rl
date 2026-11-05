@@ -57,6 +57,7 @@ pub use options::{AutoReset, CHUNK_RANGE, PoolOptions, SyncOptions, WaitBackend}
 pub use outputs::Outputs;
 pub use pool::{EnvPool, Reseed};
 pub use record::{DecodedRecord, PoolContext, Record};
+pub use sys::native_wait_available;
 pub use validate::ActionInput;
 
 /// Whether this build has the `debug-checks` feature (SPEC 5.5): strict
