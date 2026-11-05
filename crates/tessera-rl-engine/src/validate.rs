@@ -3,14 +3,12 @@
 //! The validation boundary (ADR-0028): every check runs before any
 //! instance is mutated.
 
-use core::ops::Range;
-use core::sync::atomic::{AtomicBool, Ordering};
-
 use tessera_rl_core::{Bool8, RecordLayout};
 
 use crate::error::EngineError;
 use crate::layout::ActionLayout;
 use crate::options::AutoReset;
+use crate::sys::sync::{AtomicBool, Ordering};
 
 /// Caller-provided actions for every instance, `[N, A, heads]`.
 #[derive(Debug, Clone, Copy)]
@@ -96,8 +94,6 @@ fn check_rows<H: RecordLayout>(
     input: ActionInput<'_>,
     rows: impl Iterator<Item = (usize, usize)>,
 ) -> Result<(), EngineError> {
-    let agents = H::AGENTS;
-    let (dh, ch) = (layout.discrete.len(), layout.continuous.len());
     for (position, index) in rows {
         let instance = u32::try_from(index).unwrap_or(u32::MAX);
         let Some(header) = headers.get(index) else {
@@ -106,67 +102,83 @@ fn check_rows<H: RecordLayout>(
                 num_envs: u32::try_from(headers.len()).unwrap_or(u32::MAX),
             });
         };
-        let engine = header.engine();
-        if engine.pending_reset.get() {
-            // Never reset, or frozen in Disabled mode: the caller must reset.
-            if engine.fresh.get() || auto_reset == AutoReset::Disabled {
-                return Err(EngineError::PendingReset { id: instance });
-            }
-            // NextStep: this instance resets instead of stepping.
-            if engine.identity.episode_index() == u32::MAX {
-                return Err(EngineError::CounterExhausted {
-                    id: instance,
-                    counter: "episode_index",
-                });
-            }
-            continue;
+        check_one(layout, auto_reset, header, instance, position, input)?;
+    }
+    Ok(())
+}
+
+/// Every check of one instance: `header` is instance `instance`, whose
+/// actions are row block `position` of `input`.
+fn check_one<H: RecordLayout>(
+    layout: &ActionLayout,
+    auto_reset: AutoReset,
+    header: &H,
+    instance: u32,
+    position: usize,
+    input: ActionInput<'_>,
+) -> Result<(), EngineError> {
+    let agents = H::AGENTS;
+    let (dh, ch) = (layout.discrete.len(), layout.continuous.len());
+    let engine = header.engine();
+    if engine.pending_reset.get() {
+        // Never reset, or frozen in Disabled mode: the caller must reset.
+        if engine.fresh.get() || auto_reset == AutoReset::Disabled {
+            return Err(EngineError::PendingReset { id: instance });
         }
-        // SameStep may reset any instance in this pass.
-        if auto_reset == AutoReset::SameStep && engine.identity.episode_index() == u32::MAX {
+        // NextStep: this instance resets instead of stepping.
+        if engine.identity.episode_index() == u32::MAX {
             return Err(EngineError::CounterExhausted {
                 id: instance,
                 counter: "episode_index",
             });
         }
-        if engine.episode_steps == u32::MAX {
-            return Err(EngineError::CounterExhausted {
-                id: instance,
-                counter: "step_index",
-            });
+        return Ok(());
+    }
+    // SameStep may reset any instance in this pass.
+    if auto_reset == AutoReset::SameStep && engine.identity.episode_index() == u32::MAX {
+        return Err(EngineError::CounterExhausted {
+            id: instance,
+            counter: "episode_index",
+        });
+    }
+    if engine.episode_steps == u32::MAX {
+        return Err(EngineError::CounterExhausted {
+            id: instance,
+            counter: "step_index",
+        });
+    }
+    for (slot, row) in header.agents().iter().enumerate() {
+        if !(row.alive.get() && row.acting.get()) {
+            continue;
         }
-        for (slot, row) in header.agents().iter().enumerate() {
-            if !(row.alive.get() && row.acting.get()) {
-                continue;
+        let agent = u16::try_from(slot).unwrap_or(u16::MAX);
+        let base = position * agents + slot;
+        for (head, &n) in layout.discrete.iter().enumerate() {
+            let value = input.discrete.get(base * dh + head).copied().unwrap_or(-1);
+            if u32::try_from(value).map_or(true, |v| v >= n) {
+                return Err(EngineError::DiscreteOutOfRange {
+                    instance,
+                    agent,
+                    head: u32::try_from(head).unwrap_or(u32::MAX),
+                    value,
+                    n,
+                });
             }
-            let agent = u16::try_from(slot).unwrap_or(u16::MAX);
-            let base = position * agents + slot;
-            for (head, &n) in layout.discrete.iter().enumerate() {
-                let value = input.discrete.get(base * dh + head).copied().unwrap_or(-1);
-                if u32::try_from(value).map_or(true, |v| v >= n) {
-                    return Err(EngineError::DiscreteOutOfRange {
-                        instance,
-                        agent,
-                        head: u32::try_from(head).unwrap_or(u32::MAX),
-                        value,
-                        n,
-                    });
-                }
-            }
-            for (head, &(low, high)) in layout.continuous.iter().enumerate() {
-                let value = input
-                    .continuous
-                    .get(base * ch + head)
-                    .copied()
-                    .unwrap_or(f32::NAN);
-                let wide = f64::from(value);
-                if !value.is_finite() || wide < low || wide > high {
-                    return Err(EngineError::ContinuousOutOfRange {
-                        instance,
-                        agent,
-                        head: u32::try_from(head).unwrap_or(u32::MAX),
-                        value,
-                    });
-                }
+        }
+        for (head, &(low, high)) in layout.continuous.iter().enumerate() {
+            let value = input
+                .continuous
+                .get(base * ch + head)
+                .copied()
+                .unwrap_or(f32::NAN);
+            let wide = f64::from(value);
+            if !value.is_finite() || wide < low || wide > high {
+                return Err(EngineError::ContinuousOutOfRange {
+                    instance,
+                    agent,
+                    head: u32::try_from(head).unwrap_or(u32::MAX),
+                    value,
+                });
             }
         }
     }
@@ -200,10 +212,19 @@ pub(crate) fn check_and_copy_actions<H: RecordLayout>(
         for (slot, row) in header.agents().iter().enumerate() {
             let required = !pending && row.alive.get() && row.acting.get();
             let base = index * agents + slot;
-            copy_row(required, input.discrete, discrete_out, base * dh, dh, 0);
+            copy_row(
+                required,
+                input.discrete,
+                base * dh,
+                discrete_out,
+                base * dh,
+                dh,
+                0,
+            );
             copy_row(
                 required,
                 input.continuous,
+                base * ch,
                 continuous_out,
                 base * ch,
                 ch,
@@ -222,6 +243,11 @@ fn expected_len(
     factors: &[usize],
     actual: usize,
 ) -> Result<usize, EngineError> {
+    // A zero factor makes the product zero whatever the others are, so it
+    // is checked first and never reported as an overflow.
+    if factors.contains(&0) {
+        return Ok(0);
+    }
     let mut product: usize = 1;
     for &factor in factors {
         match product.checked_mul(factor) {
@@ -250,14 +276,25 @@ fn check_len(buffer: &'static str, expected: usize, actual: usize) -> Result<(),
     }
 }
 
-fn copy_row<T: Copy>(required: bool, src: &[T], dst: &mut [T], start: usize, len: usize, zero: T) {
-    let Some(end) = start.checked_add(len) else {
+/// Copies `len` values from `src[from..]` to `dst[to..]` when the action is
+/// required, and zeroes them otherwise. Out-of-bounds requests are skipped;
+/// every caller checked the lengths first.
+fn copy_row<T: Copy>(
+    required: bool,
+    src: &[T],
+    from: usize,
+    dst: &mut [T],
+    to: usize,
+    len: usize,
+    zero: T,
+) {
+    let (Some(from_end), Some(to_end)) = (from.checked_add(len), to.checked_add(len)) else {
         return;
     };
-    let Some(dst) = dst.get_mut(start..end) else {
+    let Some(dst) = dst.get_mut(to..to_end) else {
         return;
     };
-    match src.get(start..end) {
+    match src.get(from..from_end) {
         Some(src) if required => dst.copy_from_slice(src),
         _ => dst.fill(zero),
     }
@@ -372,42 +409,76 @@ pub(crate) fn check_recv(in_flight: u32, ready: u32, batch_size: u32) -> Result<
     Ok(())
 }
 
+/// The rows of one instance admitted to a split-phase send: its header,
+/// read only, and its action rows, `[A, heads]`.
+pub(crate) struct ActionRow<'a, H> {
+    /// The instance header.
+    pub(crate) header: &'a H,
+    /// Discrete actions of the instance, `[A, discrete heads]`.
+    pub(crate) discrete: &'a mut [i32],
+    /// Continuous actions of the instance, `[A, continuous heads]`.
+    pub(crate) continuous: &'a mut [f32],
+}
+
+/// Access to the rows of the ids an Async `send` admits, by position in the
+/// call. An implementation hands out only those rows, one at a time, so no
+/// reference ever spans a row another thread may use (ADR-0047 invariants
+/// 3 and 4). The engine implementation is backed by `instance_view`.
+pub(crate) trait AdmittedRows<H> {
+    /// The number of admitted ids.
+    fn len(&self) -> usize;
+    /// The id at `position`.
+    fn id(&self, position: usize) -> Option<u32>;
+    /// The rows of the id at `position`.
+    fn row(&mut self, position: usize) -> Option<ActionRow<'_, H>>;
+}
+
 /// Validates the actions of an Async `send(ids)` and copies them into the
-/// rows of those ids only. `input` holds one row block per id, in `ids`
-/// order. The ids must already have passed [`check_send_ids`]. Rows of
-/// other instances are never written, since workers may be reading them.
+/// rows of those ids only. `input` holds one row block per id, in the order
+/// of `rows`. All ids are validated in a first pass and copied in a second,
+/// so a failure writes nothing. The ids must already have passed
+/// [`check_send_ids`].
 #[cfg_attr(
     not(test),
     expect(dead_code, reason = "used by the split-phase modes (ADR-0047)")
 )]
-pub(crate) fn check_and_copy_subset_actions<H: RecordLayout>(
+pub(crate) fn check_and_copy_subset_actions<H: RecordLayout, R: AdmittedRows<H>>(
     layout: &ActionLayout,
     auto_reset: AutoReset,
-    headers: &[H],
-    ids: &[u32],
+    rows: &mut R,
     input: ActionInput<'_>,
-    discrete_out: &mut [i32],
-    continuous_out: &mut [f32],
 ) -> Result<(), EngineError> {
-    let rows = ids
-        .iter()
-        .enumerate()
-        .map(|(position, &id)| (position, usize::try_from(id).unwrap_or(usize::MAX)));
-    check_and_copy_rows(
-        layout,
-        auto_reset,
-        headers,
-        ids.len(),
-        rows,
-        input,
-        discrete_out,
-        continuous_out,
-    )
+    let agents = H::AGENTS;
+    let (dh, ch) = (layout.discrete.len(), layout.continuous.len());
+    let count = rows.len();
+    for (buffer, heads, actual) in [
+        ("discrete", dh, input.discrete.len()),
+        ("continuous", ch, input.continuous.len()),
+    ] {
+        check_len(
+            buffer,
+            expected_len(buffer, &[count, agents, heads], actual)?,
+            actual,
+        )?;
+    }
+    for position in 0..count {
+        let (id, row) = admitted(rows, position)?;
+        check_row_lengths(&row, agents, dh, ch)?;
+        check_one(layout, auto_reset, row.header, id, position, input)?;
+    }
+    // Validated: copy, one admitted row at a time.
+    for position in 0..count {
+        let (_, mut row) = admitted(rows, position)?;
+        copy_instance(&mut row, input, position, agents, dh, ch);
+    }
+    Ok(())
 }
 
 /// Validates the actions of a Pipelined `send(half)` and copies them into
-/// the rows of `range` only. `input` holds one row block per instance of
-/// the range, in order.
+/// the half's rows. `headers`, `discrete_out` and `continuous_out` are the
+/// half's own views (from `range_view`), so nothing outside the half is
+/// borrowed; `first_id` is the id of their first instance, for errors.
+/// `input` holds one row block per instance of the half, in order.
 #[cfg_attr(
     not(test),
     expect(dead_code, reason = "used by the split-phase modes (ADR-0047)")
@@ -415,86 +486,55 @@ pub(crate) fn check_and_copy_subset_actions<H: RecordLayout>(
 pub(crate) fn check_and_copy_range_actions<H: RecordLayout>(
     layout: &ActionLayout,
     auto_reset: AutoReset,
+    first_id: usize,
     headers: &[H],
-    range: Range<usize>,
-    input: ActionInput<'_>,
-    discrete_out: &mut [i32],
-    continuous_out: &mut [f32],
-) -> Result<(), EngineError> {
-    if range.start > range.end || range.end > headers.len() {
-        return Err(EngineError::InstanceOutOfRange {
-            id: u32::try_from(range.end).unwrap_or(u32::MAX),
-            num_envs: u32::try_from(headers.len()).unwrap_or(u32::MAX),
-        });
-    }
-    let count = range.len();
-    let start = range.start;
-    let rows = range.map(move |index| (index - start, index));
-    check_and_copy_rows(
-        layout,
-        auto_reset,
-        headers,
-        count,
-        rows,
-        input,
-        discrete_out,
-        continuous_out,
-    )
-}
-
-#[expect(
-    clippy::too_many_arguments,
-    reason = "one private helper behind the two public shapes"
-)]
-fn check_and_copy_rows<H: RecordLayout>(
-    layout: &ActionLayout,
-    auto_reset: AutoReset,
-    headers: &[H],
-    count: usize,
-    rows: impl Iterator<Item = (usize, usize)> + Clone,
     input: ActionInput<'_>,
     discrete_out: &mut [i32],
     continuous_out: &mut [f32],
 ) -> Result<(), EngineError> {
     let agents = H::AGENTS;
     let (dh, ch) = (layout.discrete.len(), layout.continuous.len());
-    let n = headers.len();
-    let lengths = [
-        ("discrete", [count, agents, dh], input.discrete.len()),
-        ("continuous", [count, agents, ch], input.continuous.len()),
-        ("discrete", [n, agents, dh], discrete_out.len()),
-        ("continuous", [n, agents, ch], continuous_out.len()),
-    ];
-    for (buffer, factors, actual) in lengths {
-        let expected = expected_len(buffer, &factors, actual)?;
-        check_len(buffer, expected, actual)?;
+    let count = headers.len();
+    for (buffer, heads, actual) in [
+        ("discrete", dh, input.discrete.len()),
+        ("continuous", ch, input.continuous.len()),
+        ("discrete", dh, discrete_out.len()),
+        ("continuous", ch, continuous_out.len()),
+    ] {
+        check_len(
+            buffer,
+            expected_len(buffer, &[count, agents, heads], actual)?,
+            actual,
+        )?;
     }
-    check_rows(layout, auto_reset, headers, input, rows.clone())?;
-    // Validated: copy the admitted rows only.
-    for (position, index) in rows {
-        let Some(header) = headers.get(index) else {
-            continue;
-        };
+    for (position, header) in headers.iter().enumerate() {
+        let id = first_id
+            .checked_add(position)
+            .and_then(|i| u32::try_from(i).ok())
+            .unwrap_or(u32::MAX);
+        check_one(layout, auto_reset, header, id, position, input)?;
+    }
+    // Validated: copy, zeroing slots whose actions are not required.
+    for (position, header) in headers.iter().enumerate() {
         let pending = header.engine().pending_reset.get();
         for (slot, row) in header.agents().iter().enumerate() {
             let required = !pending && row.alive.get() && row.acting.get();
-            let from = position * agents + slot;
-            let to = index * agents + slot;
-            copy_block(
+            let at = position * agents + slot;
+            copy_row(
                 required,
                 input.discrete,
-                from * dh,
+                at * dh,
                 discrete_out,
-                to * dh,
+                at * dh,
                 dh,
                 0,
             );
-            copy_block(
+            copy_row(
                 required,
                 input.continuous,
-                from * ch,
+                at * ch,
                 continuous_out,
-                to * ch,
+                at * ch,
                 ch,
                 0.0,
             );
@@ -503,24 +543,69 @@ fn check_and_copy_rows<H: RecordLayout>(
     Ok(())
 }
 
-fn copy_block<T: Copy>(
-    required: bool,
-    src: &[T],
-    from: usize,
-    dst: &mut [T],
-    to: usize,
-    len: usize,
-    zero: T,
+/// The id and rows at `position`; a missing row is an implementation bug,
+/// reported as an out-of-range id rather than a panic.
+fn admitted<H, R: AdmittedRows<H>>(
+    rows: &mut R,
+    position: usize,
+) -> Result<(u32, ActionRow<'_, H>), EngineError> {
+    let id = rows.id(position).unwrap_or(u32::MAX);
+    let num_envs = u32::try_from(rows.len()).unwrap_or(u32::MAX);
+    match rows.row(position) {
+        Some(row) => Ok((id, row)),
+        None => Err(EngineError::InstanceOutOfRange { id, num_envs }),
+    }
+}
+
+fn check_row_lengths<H>(
+    row: &ActionRow<'_, H>,
+    agents: usize,
+    dh: usize,
+    ch: usize,
+) -> Result<(), EngineError> {
+    for (buffer, heads, actual) in [
+        ("discrete", dh, row.discrete.len()),
+        ("continuous", ch, row.continuous.len()),
+    ] {
+        check_len(
+            buffer,
+            expected_len(buffer, &[agents, heads], actual)?,
+            actual,
+        )?;
+    }
+    Ok(())
+}
+
+fn copy_instance<H: RecordLayout>(
+    row: &mut ActionRow<'_, H>,
+    input: ActionInput<'_>,
+    position: usize,
+    agents: usize,
+    dh: usize,
+    ch: usize,
 ) {
-    let (Some(from_end), Some(to_end)) = (from.checked_add(len), to.checked_add(len)) else {
-        return;
-    };
-    let Some(dst) = dst.get_mut(to..to_end) else {
-        return;
-    };
-    match src.get(from..from_end) {
-        Some(src) if required => dst.copy_from_slice(src),
-        _ => dst.fill(zero),
+    let pending = row.header.engine().pending_reset.get();
+    for (slot, agent) in row.header.agents().iter().enumerate() {
+        let required = !pending && agent.alive.get() && agent.acting.get();
+        let from = position * agents + slot;
+        copy_row(
+            required,
+            input.discrete,
+            from * dh,
+            row.discrete,
+            slot * dh,
+            dh,
+            0,
+        );
+        copy_row(
+            required,
+            input.continuous,
+            from * ch,
+            row.continuous,
+            slot * ch,
+            ch,
+            0.0,
+        );
     }
 }
 
