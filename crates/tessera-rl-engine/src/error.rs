@@ -155,6 +155,16 @@ pub enum EngineError {
     /// any more.
     #[error("an engine worker died; the pool cannot step in Sync mode")]
     WorkerDied,
+    /// The worker gang's job sequence cannot be advanced (ADR-0047).
+    #[error("the worker job sequence is exhausted")]
+    SequenceExhausted,
+    /// A job was submitted while two were already in flight, or a wait was
+    /// made with nothing in flight (ADR-0047).
+    #[error("the worker gang has {in_flight} jobs in flight")]
+    GangQueue {
+        /// Jobs in flight when the call was made.
+        in_flight: u64,
+    },
     /// An engine was created inside an engine worker (ADR-0005).
     #[error("engines cannot be created inside an engine worker")]
     NestedEngine,
