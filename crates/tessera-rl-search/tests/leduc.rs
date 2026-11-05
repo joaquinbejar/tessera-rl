@@ -81,8 +81,12 @@ fn root(seed: u64, moves: &[u32]) -> Record<Leduc> {
 }
 
 fn how(seed: u64, sample_index: u64) -> Determinization {
+    how_as(0, seed, sample_index)
+}
+
+fn how_as(a: u16, seed: u64, sample_index: u64) -> Determinization {
     Determinization {
-        agent: agent(0),
+        agent: agent(a),
         sampler_seed: Seed::new(seed),
         sample_index,
     }
@@ -108,20 +112,25 @@ fn step_rng(id: &RngIdentity) -> StepRng {
     StepRng::new(&RngAuthority::engine_only(), id, StreamId::DYNAMICS)
 }
 
-/// The opponent's card the sampler must draw for agent 0 at `how`.
+/// The opponent's card the sampler must draw for `how.agent`.
 fn sampled_card(r: &Record<Leduc>, how: Determinization) -> u32 {
-    let info = Leduc::info_state(&CFG, r.state(), agent(0));
+    let info = Leduc::info_state(&CFG, r.state(), how.agent);
     let id = sampler_identity(how.sampler_seed, how.sample_index);
     draw(&mut step_rng(&id), &[info.card, info.public])
 }
 
-/// The largest group of roots with one information state for agent 0
-/// after two checks (the public card dealt), varying the hidden
+/// The searching agents and root histories: agent 0 to move after two
+/// checks (the public card dealt), agent 1 to move after one check, and
+/// agent 1 not to move after two checks.
+const CASES: [(u16, &[u32]); 3] = [(0, &[CALL, CALL]), (1, &[CALL]), (1, &[CALL, CALL])];
+
+/// The largest group of roots with one information state for agent `a`
+/// after `moves`, varying the hidden
 /// card, the seed, the lineage, the episode index and the salt. The
 /// accumulators are zero in every running hand (rewards come at the end,
 /// and an illegal action is an error under `debug-checks`): Hidden Dice
 /// varies them.
-fn equal_info_roots() -> Vec<Record<Leduc>> {
+fn equal_info_roots(a: u16, moves: &[u32]) -> Vec<Record<Leduc>> {
     let mut groups: BTreeMap<Vec<u8>, Vec<Record<Leduc>>> = BTreeMap::new();
     for seed in 0..200 {
         for (lineage, extra, branched) in [
@@ -131,8 +140,8 @@ fn equal_info_roots() -> Vec<Record<Leduc>> {
             (0, false, true),
             (2, true, true),
         ] {
-            let r = root_with(seed, lineage, extra, branched, &[CALL, CALL]);
-            groups.entry(info_bytes(&r, 0)).or_default().push(r);
+            let r = root_with(seed, lineage, extra, branched, moves);
+            groups.entry(info_bytes(&r, a)).or_default().push(r);
         }
     }
     groups.into_values().max_by_key(Vec::len).unwrap()
@@ -147,23 +156,27 @@ fn distinct<T: Ord>(rs: &[Record<Leduc>], f: impl Fn(&Record<Leduc>) -> T) -> us
 /// (here) the accumulators cannot vary between valid roots.
 #[test]
 fn test_leduc_sample_noninterference_equal_info_gives_identical_records() {
-    let roots = equal_info_roots();
-    assert!(roots.len() >= 8, "{}", roots.len());
-    assert!(distinct(&roots, |r| r.state().cards[1]) > 1, "hidden card");
-    let e = |r: &Record<Leduc>| r.header().engine().identity;
-    assert!(distinct(&roots, |r| e(r).seed().get()) > 1);
-    assert!(distinct(&roots, |r| e(r).logical_id().get()) > 1);
-    assert!(distinct(&roots, |r| e(r).branch_salt().get()) > 1);
-    assert!(distinct(&roots, |r| e(r).episode_index()) > 1);
-    for index in 0..6 {
-        let first = out(&det(&roots[0], how(77, index)));
-        assert_eq!(
-            first.state().cards[1],
-            sampled_card(&roots[0], how(77, index))
+    for (a, moves) in CASES {
+        let (me, them) = (usize::from(a), 1 - usize::from(a));
+        let roots = equal_info_roots(a, moves);
+        assert!(roots.len() >= 8, "{}", roots.len());
+        assert!(
+            distinct(&roots, |r| r.state().cards[them]) > 1,
+            "hidden card"
         );
-        assert_eq!(first.state().cards[0], roots[0].state().cards[0]);
-        for r in &roots[1..] {
-            assert_eq!(out(&det(r, how(77, index))).to_bytes(), first.to_bytes());
+        let e = |r: &Record<Leduc>| r.header().engine().identity;
+        assert!(distinct(&roots, |r| e(r).seed().get()) > 1);
+        assert!(distinct(&roots, |r| e(r).logical_id().get()) > 1);
+        assert!(distinct(&roots, |r| e(r).branch_salt().get()) > 1);
+        assert!(distinct(&roots, |r| e(r).episode_index()) > 1);
+        for index in 0..6 {
+            let h = how_as(a, 77, index);
+            let first = out(&det(&roots[0], h));
+            assert_eq!(first.state().cards[them], sampled_card(&roots[0], h));
+            assert_eq!(first.state().cards[me], roots[0].state().cards[me]);
+            for r in &roots[1..] {
+                assert_eq!(out(&det(r, h)).to_bytes(), first.to_bytes());
+            }
         }
     }
 }
@@ -193,12 +206,13 @@ impl Evaluator<Leduc> for Canned {
     }
 }
 
-fn searched(root: &Record<Leduc>, index: u64) -> (u64, Vec<u32>) {
+fn searched(a: u16, root: &Record<Leduc>, index: u64) -> (u64, Vec<u32>) {
     let mut c = PuctConfig::default();
     c.simulations = 96;
     c.batch_size = 4;
-    let mut pool = det(root, how(5, index + 1000));
-    pool.set_root_determinized(root, how(5, index)).unwrap();
+    let mut pool = det(root, how_as(a, 5, index + 1000));
+    pool.set_root_determinized(root, how_as(a, 5, index))
+        .unwrap();
     let mut m = Mcts::new(pool, c).unwrap();
     m.run(&mut Canned).unwrap();
     assert!(!m.is_privileged());
@@ -210,12 +224,14 @@ fn searched(root: &Record<Leduc>, index: u64) -> (u64, Vec<u32>) {
 /// ADR-0046 test 2.
 #[test]
 fn test_leduc_search_noninterference_equal_info_gives_identical_search() {
-    let roots = equal_info_roots();
-    for index in 0..2 {
-        let first = searched(&roots[0], index);
-        assert!(first.1.iter().sum::<u32>() > 0);
-        for r in &roots[1..] {
-            assert_eq!(searched(r, index), first, "sample {index}");
+    for (a, moves) in CASES {
+        let roots = equal_info_roots(a, moves);
+        for index in 0..2 {
+            let first = searched(a, &roots[0], index);
+            assert!(first.1.iter().sum::<u32>() > 0);
+            for r in &roots[1..] {
+                assert_eq!(searched(a, r, index), first, "agent {a} sample {index}");
+            }
         }
     }
 }
@@ -275,25 +291,32 @@ fn test_leduc_no_future_chance_public_card_follows_the_deck() {
 /// is in the output header.
 #[test]
 fn test_leduc_domain_separation_sampler_draw_is_pinned() {
-    let r = root(6, &[CALL]);
-    let info = Leduc::info_state(&CFG, r.state(), agent(0));
-    let seen = [info.card, info.public];
-    let mut telling = 0;
-    for i in 0..48 {
-        let sampler = sampler_identity(Seed::new(13), i);
-        let expected = draw(&mut step_rng(&sampler), &seen);
-        let rollout = draw(&mut step_rng(&rollout_identity(Seed::new(13), i, 0)), &seen);
-        let obs = draw(
-            &mut StepRng::new(&RngAuthority::engine_only(), &sampler, StreamId::OBS_NOISE),
-            &seen,
-        );
-        let d = out(&det(&r, how(13, i)));
-        assert_eq!(d.state().cards[1], expected, "sample {i}");
-        assert_eq!(d.header().engine().identity.branch_salt(), rollout_salt(i));
-        assert_ne!(sampler.branch_salt(), rollout_salt(i));
-        telling += usize::from(expected != rollout && expected != obs);
+    for (a, moves) in CASES {
+        let them = 1 - usize::from(a);
+        let r = root(6, moves);
+        let info = Leduc::info_state(&CFG, r.state(), agent(a));
+        let seen = [info.card, info.public];
+        let mut telling = 0;
+        for i in 0..48 {
+            let sampler = sampler_identity(Seed::new(13), i);
+            let expected = draw(&mut step_rng(&sampler), &seen);
+            let rollout = draw(&mut step_rng(&rollout_identity(Seed::new(13), i, 0)), &seen);
+            let obs = draw(
+                &mut StepRng::new(&RngAuthority::engine_only(), &sampler, StreamId::OBS_NOISE),
+                &seen,
+            );
+            let d = out(&det(&r, how_as(a, 13, i)));
+            assert_eq!(d.state().cards[them], expected, "agent {a} sample {i}");
+            assert_eq!(
+                d.state().cards[usize::from(a)],
+                r.state().cards[usize::from(a)]
+            );
+            assert_eq!(d.header().engine().identity.branch_salt(), rollout_salt(i));
+            assert_ne!(sampler.branch_salt(), rollout_salt(i));
+            telling += usize::from(expected != rollout && expected != obs);
+        }
+        assert!(telling >= 8, "{telling}");
     }
-    assert!(telling >= 8, "{telling}");
 }
 
 fn projection(r: &Record<Leduc>) -> Vec<u8> {
@@ -350,25 +373,33 @@ fn test_leduc_consistency_samples_keep_the_info_state_and_pass_checks() {
         (3, &[CALL, CALL]),
         (4, &[RAISE, RAISE, CALL, RAISE]),
     ] {
-        let r = root(seed, moves);
-        for i in 0..8 {
-            let d = out(&det(&r, how(seed + 40, i)));
-            assert_eq!(info_bytes(&d, 0), info_bytes(&r, 0));
-            assert_eq!(d.state().cards[1], sampled_card(&r, how(seed + 40, i)));
-            let (o, from) = (d.header().engine(), r.header().engine());
+        let rt = root(seed, moves);
+        for (a, i) in [0, 1].into_iter().flat_map(|a| (0..8).map(move |i| (a, i))) {
+            let plan = how_as(a, seed + 40, i);
+            let sample = out(&det(&rt, plan));
+            assert_eq!(info_bytes(&sample, a), info_bytes(&rt, a));
+            assert_eq!(
+                sample.state().cards[1 - usize::from(a)],
+                sampled_card(&rt, plan)
+            );
+            assert_eq!(
+                sample.state().cards[usize::from(a)],
+                rt.state().cards[usize::from(a)]
+            );
+            let (o, from) = (sample.header().engine(), rt.header().engine());
             assert_eq!(o.identity.step_index(), from.identity.step_index());
             assert_eq!(o.episode_steps, moves.len() as u32);
             assert_eq!(o.identity.seed(), Seed::new(seed + 40));
             assert_eq!(o.identity.logical_id(), LogicalId::DEFAULT);
             assert_eq!(o.identity.episode_index(), 0);
             assert!(!o.pending_reset.get() && o.end_kind == 0 && !o.fresh.get());
-            for (k, row) in d.header().agents().iter().enumerate() {
+            for (k, row) in sample.header().agents().iter().enumerate() {
                 assert_eq!(
                     row.acting.get(),
-                    Leduc::acting(&CFG, d.state(), agent(k as u16))
+                    Leduc::acting(&CFG, sample.state(), agent(k as u16))
                 );
                 assert!(row.alive.get());
-                assert_eq!(row.generation, r.header().agents()[k].generation);
+                assert_eq!(row.generation, rt.header().agents()[k].generation);
                 assert_eq!(
                     (
                         row.episode_return,
@@ -378,8 +409,8 @@ fn test_leduc_consistency_samples_keep_the_info_state_and_pass_checks() {
                     (0.0, 0, 0)
                 );
             }
-            let mut p = EnvPool::<Leduc, Masked>::with_masks(CFG, options(1, 0)).unwrap();
-            p.import(&[0], &[DecodedRecord::from(d)]).unwrap();
+            let mut check = EnvPool::<Leduc, Masked>::with_masks(CFG, options(1, 0)).unwrap();
+            check.import(&[0], &[DecodedRecord::from(sample)]).unwrap();
         }
     }
 }
