@@ -55,3 +55,11 @@ def test_grid_gym_vector_steps_a_batch():
     _, rewards, terminated, _, _ = env.step(np.array([NORTH, NORTH]))
     assert rewards.tolist() == [-1.0, -1.0] and terminated.all()
     env.close()
+
+
+def test_grid_gym_spreads_a_single_bound_over_the_whole_leaf():
+    env = gymnasium.make(ID, size=4).unwrapped
+    box = env.observation_space["pixels"]
+    assert box.shape == (3, 4, 4)
+    assert (box.low == 0).all() and (box.high == 255).all()
+    env.close()

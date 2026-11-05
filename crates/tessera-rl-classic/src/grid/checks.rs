@@ -1,43 +1,14 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! Import validation and the scripted baseline of the reference grid world,
-//! apart from the environment itself so that it stays the short example of
-//! SPEC section 10.
-
-use core::num::NonZeroU32;
+//! which an author may omit: everything the environment needs to run is in
+//! the parent module, the example of SPEC section 10.
 
 use tessera_rl_core::io::ActionWriter;
 use tessera_rl_core::{AgentSlot, HeaderView, Heuristic, InvariantViolation, Phase, Validate};
 use tessera_rl_num::rng::StepRng;
 
 use super::{Grid, GridConfig, GridState};
-
-impl GridState {
-    /// The agent's column and row as integers.
-    #[must_use]
-    pub const fn cell(&self) -> (i32, i32) {
-        (self.pos[0].to_raw() >> 16, self.pos[1].to_raw() >> 16)
-    }
-
-    /// Whether the cell at `col`, `row` is on in `channel`, on a grid whose
-    /// last row and column are `last`.
-    pub(super) fn lit(&self, channel: u32, col: i32, row: i32, last: i32) -> bool {
-        match channel {
-            0 => (col, row) == self.cell(),
-            1 => (col, row) == (i32::from(self.goal[0]), i32::from(self.goal[1])),
-            _ => row == 0 || col == 0 || row == last || col == last,
-        }
-    }
-}
-
-/// A goal uniform on every cell but the top left one.
-pub(super) fn draw_goal(cells: u16, rng: &mut StepRng) -> [i16; 2] {
-    let n = u32::from(cells);
-    let others = NonZeroU32::new(n * n - 1).unwrap_or(NonZeroU32::MIN);
-    let k = rng.below_u32(others) + 1;
-    let coord = |v: u32| i16::try_from(v).unwrap_or(0);
-    [coord(k % n), coord(k / n)]
-}
 
 /// Imported states: a goal on the grid other than the start, a whole-cell
 /// position on the grid or one cell off it, flags that say where the agent

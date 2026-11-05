@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! The reference grid world (`tessera/Grid-v1`), SPEC 10 and goal G6: walk to
-//! a goal drawn at reset. Actions: north, south, east, west. +1 on the goal, -1
-//! off the grid, both terminal; truncated at `max_steps`. Observation channels,
-//! 0 or 255: the agent, the goal, the edge cells.
+//! The reference grid world (`tessera/Grid-v1`), SPEC 10 and goal G6: walk to a
+//! goal drawn at reset. +1 on the goal, -1 off the grid, truncated at `max_steps`.
 
 mod checks;
+
+use core::num::NonZeroU32;
 
 use tessera_rl_core::io::{Actions, ObsWriter};
 use tessera_rl_core::space::Space;
@@ -21,8 +21,6 @@ use tessera_rl_num::rng::{ObsRng, StepRng};
 pub const ENV_ID: &str = "tessera/Grid-v1";
 /// Environment version.
 pub const ENV_VERSION: u32 = 1;
-/// Choices of the action head.
-pub const ACTIONS: u32 = 4;
 const ONE: Fx32 = Fx32::from_raw(1 << 16);
 
 /// Grid state, as SPEC section 10 writes it: 16 bytes, no padding.
@@ -39,6 +37,14 @@ pub struct GridState {
     pub reached_goal: Bool8,
     /// Whether the agent left the grid.
     pub out_of_bounds: Bool8,
+}
+
+impl GridState {
+    /// The agent's column and row as integers.
+    #[must_use]
+    pub const fn cell(&self) -> (i32, i32) {
+        (self.pos[0].to_raw() >> 16, self.pos[1].to_raw() >> 16)
+    }
 }
 
 /// Grid configuration.
@@ -79,13 +85,17 @@ impl Environment for Grid {
     }
 
     fn action_space(_: &GridConfig) -> Result<Space, SpaceError> {
-        Ok(Space::Discrete { n: ACTIONS })
+        Ok(Space::Discrete { n: 4 })
     }
 
     /// The agent starts at the top left; the goal is uniform on the rest.
     fn reset(cfg: &GridConfig, rng: &mut StepRng, s: &mut GridState) {
+        let n = u32::from(cfg.size);
+        let others = NonZeroU32::new(n * n - 1).unwrap_or(NonZeroU32::MIN);
+        let k = rng.below_u32(others) + 1;
+        let coord = |v: u32| i16::try_from(v).unwrap_or(0);
         *s = GridState {
-            goal: checks::draw_goal(cfg.size, rng),
+            goal: [coord(k % n), coord(k / n)],
             ..GridState::default()
         };
     }
@@ -110,13 +120,12 @@ impl Environment for Grid {
         s.steps += 1;
         let (col, row) = s.cell();
         let size = i32::from(cfg.size);
-        if !(0..size).contains(&col) || !(0..size).contains(&row) {
-            s.out_of_bounds = Bool8::TRUE;
-            out.set_reward(agent, -1.0);
-            out.end_episode(EpisodeEnd::Terminated);
-        } else if (col, row) == (i32::from(s.goal[0]), i32::from(s.goal[1])) {
-            s.reached_goal = Bool8::TRUE;
-            out.set_reward(agent, 1.0);
+        let off = !(0..size).contains(&col) || !(0..size).contains(&row);
+        let won = (col, row) == (i32::from(s.goal[0]), i32::from(s.goal[1]));
+        s.out_of_bounds = Bool8::from(off);
+        s.reached_goal = Bool8::from(won);
+        if off || won {
+            out.set_reward(agent, if won { 1.0 } else { -1.0 });
             out.end_episode(EpisodeEnd::Terminated);
         } else if s.steps >= cfg.max_steps {
             out.end_episode(EpisodeEnd::Truncated);
@@ -133,16 +142,15 @@ impl Environment for Grid {
         let Some(mut leaf) = out.leaf_mut(GridObs::PIXELS) else {
             return;
         };
-        let size = i32::from(cfg.size);
-        let mut k = 0;
-        for channel in 0..3 {
-            for row in 0..size {
-                for col in 0..size {
-                    let on = s.lit(channel, col, row, size - 1);
-                    leaf.set(k, if on { 255 } else { 0 });
-                    k += 1;
-                }
-            }
+        let n = i32::from(cfg.size);
+        let cells = usize::from(cfg.size) * usize::from(cfg.size);
+        let goal = (i32::from(s.goal[0]), i32::from(s.goal[1]));
+        for (k, (row, col)) in (0..n).flat_map(|r| (0..n).map(move |c| (r, c))).enumerate() {
+            let edge = row == 0 || col == 0 || row == n - 1 || col == n - 1;
+            let lit = |on: bool| if on { 255 } else { 0 };
+            leaf.set(k, lit((col, row) == s.cell()));
+            leaf.set(cells + k, lit((col, row) == goal));
+            leaf.set(2 * cells + k, lit(edge));
         }
     }
 }
