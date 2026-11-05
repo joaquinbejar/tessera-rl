@@ -4,28 +4,43 @@
 //! Audited `unsafe` module.
 //!
 //! Sync mode splits a pool-wide [`Chunk`] into its raw parts and hands each
-//! worker `&mut` views of *its own* chunks only.
+//! worker `&mut` views of *its own* chunks only. The split-phase modes
+//! (ADR-0047) also build views of a Pipelined half or of one instance
+//! ([`RawChunk::range_view`], [`RawChunk::instance_view`]): a caller views
+//! only the rows a live token covers, while workers write the rows of an
+//! admitted job or claim.
 //!
 //! # Invariants
 //!
-//! 1. The buffers are never reallocated after construction: the pool never
-//!    pushes to or resizes them, so pointers taken at the start of an epoch
-//!    stay valid for the whole epoch. The pointers are to the heap data
-//!    (record arrays, and the shared output storage of [`storage`]), not to
-//!    the pool, so moving the pool between calls is fine.
+//! 1. The buffers, and in the split-phase modes the shared context that
+//!    holds them, never move or reallocate while any job or claim is
+//!    outstanding: the pool never pushes to or resizes them, so pointers
+//!    taken when a job is published stay valid until it completes. The
+//!    pointers are to the heap data (record arrays, and the shared output
+//!    storage of [`storage`]), not to the pool, so moving the pool, or a
+//!    mode wrapper, while no reference is live is fine.
 //! 2. Chunk ranges are disjoint by construction: chunk `c` covers instances
 //!    `c * size .. min((c + 1) * size, n)`, and worker `w` takes the chunks
 //!    `c` with `c % workers == w`, so no two workers, and no two chunks of
 //!    one worker at a time, ever view the same element (checked in debug
 //!    builds and by tests).
-//! 3. The caller touches nothing between the epoch's Release and its
-//!    Acquire of `pending == 0`: `par_chunks` takes the pool-wide chunk by
-//!    value (borrowing the pool mutably through `&mut self` of every public
-//!    entry point) and returns only after the gang's `run` returns.
-//! 4. No reference to the buffers survives the epoch: worker views are
-//!    created and dropped inside the job, and the caller's output views are
-//!    returned only after `run`.
+//! 3. The caller forms references only to rows covered by a live token,
+//!    and workers only to the rows of an admitted job or claim. In Sync
+//!    mode this is the whole-epoch rule: `par_chunks` takes the pool-wide
+//!    chunk by value (borrowing the pool mutably through `&mut self` of
+//!    every public entry point) and returns only after the gang's `run`
+//!    returns, so the caller touches nothing between the epoch's Release
+//!    and its Acquire of `pending == 0`.
+//! 4. A row belongs to at most one live token or one admitted job or claim
+//!    at a time. Admission is ordered after the end of the token that
+//!    covered the row (the token's live flag, cleared with Release and
+//!    checked with Acquire), and the workers' writes before completion are
+//!    ordered before the next token is created (Release on completion,
+//!    Acquire in `recv`). In Sync mode no reference survives the epoch:
+//!    worker views are created and dropped inside the job, and the caller's
+//!    output views are returned only after `run`.
 
+mod generations;
 mod storage;
 
 use core::ops::Range;
@@ -39,6 +54,7 @@ use crate::pool::Chunk;
 use crate::sys::Gang;
 use crate::sys::sync::{AtomicBool, Ordering};
 
+use generations::HALVES;
 pub(crate) use storage::{Buf, StorageBuilder};
 pub use storage::{OutputDtype, OutputField, OutputRegion, OutputStorage};
 
@@ -311,6 +327,70 @@ impl<E: Environment> RawChunk<E> {
     }
 }
 
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "used by the split-phase modes (ADR-0047)")
+)]
+impl<E: Environment> RawChunk<E> {
+    /// The views of the instances in `r`, or `None` if `r` is reversed or
+    /// reaches past the last instance. No slice covers a row outside `r`.
+    ///
+    /// # Safety
+    ///
+    /// Invariants 1, 3 and 4: every row of `r` is covered by a live token
+    /// held by the caller (or belongs to the calling worker's admitted job
+    /// or claim), so no other live view or write covers it, and the buffers
+    /// stay alive and in place for `'a`.
+    #[expect(unsafe_code, reason = "audited module: token-guarded views")]
+    unsafe fn range_view<'a>(&self, r: Range<usize>) -> Option<Chunk<'a, E>> {
+        if r.start > r.end || r.end > self.instances {
+            return None;
+        }
+        // SAFETY: `r` lies inside the instances, so every per-instance view
+        // stays inside its buffer; the caller guarantees the rows are
+        // exclusively its own for `'a` (invariants 1, 3 and 4).
+        Some(unsafe { self.chunk(&r) })
+    }
+
+    /// The views of instance `id` alone, or `None` if `id` is out of range.
+    ///
+    /// # Safety
+    ///
+    /// As [`Self::range_view`], for the one row `id`.
+    #[expect(unsafe_code, reason = "audited module: token-guarded views")]
+    unsafe fn instance_view<'a>(&self, id: usize) -> Option<Chunk<'a, E>> {
+        let end = id.checked_add(1)?;
+        // SAFETY: forwarded to the caller's guarantee for row `id`.
+        unsafe { self.range_view(id..end) }
+    }
+}
+
+/// The two Pipelined halves of `instances` with chunks of `size`
+/// (ADR-0047 section 8): split at the chunk boundary nearest `instances / 2`,
+/// ties to the lower boundary. `None` if either half would be empty, which
+/// the mode reports as `HalfTooSmall`.
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "used by the split-phase modes (ADR-0047)")
+)]
+#[must_use]
+pub(crate) fn half_ranges(instances: usize, size: usize) -> Option<[Range<usize>; HALVES]> {
+    let size = size.max(1);
+    let chunks = instances.div_ceil(size);
+    // Interior boundaries are `k * size` for `k` in `1..chunks`; compare
+    // `|2 * boundary - instances|` to stay in integers.
+    let mut best: Option<(usize, usize)> = None;
+    for k in 1..chunks {
+        let boundary = k.checked_mul(size)?;
+        let distance = boundary.checked_mul(2)?.abs_diff(instances);
+        if best.is_none_or(|(_, d)| distance < d) {
+            best = Some((boundary, distance));
+        }
+    }
+    let (split, _) = best?;
+    Some([0..split, split..instances])
+}
+
 /// The instances of chunk `c`.
 pub(crate) fn chunk_range(c: usize, size: usize, instances: usize) -> Range<usize> {
     // Overflow means `c` is past the last chunk: an empty range at the end.
@@ -377,7 +457,7 @@ mod tests {
     };
     use tessera_rl_num::rng::{ObsRng, StepRng};
 
-    use super::{Raw, RawChunk, chunk_range};
+    use super::{Raw, RawChunk, chunk_range, half_ranges};
     use crate::layout::Leaf;
     use crate::outputs::Outputs;
     use crate::pool::Chunk;
@@ -588,6 +668,145 @@ mod tests {
                 }
             }
             assert!(owner.iter().all(Option::is_some));
+        }
+    }
+
+    /// Builds a probe pool of `n` instances, runs `f` on its raw parts and
+    /// returns the outputs and states for checking.
+    fn with_raw(n: usize, f: impl FnOnce(&RawChunk<Probe>)) -> (Outputs, Vec<ProbeState>) {
+        let leaves = [Leaf { bytes: 3 }, Leaf { bytes: 1 }];
+        let mut outputs = Outputs::new(n, 2, &leaves, true, 2).unwrap();
+        let mut headers = vec![RecordHeader::<2, NoAdaptive>::state_default(); n];
+        let mut states = vec![ProbeState(0); n];
+        let mut discrete = vec![0i32; n * 2];
+        let mut continuous: Vec<f32> = Vec::new();
+        let mut penalties: Vec<f32> = Vec::new();
+        let mut penalized: Vec<Bool8> = Vec::new();
+        let raw = RawChunk::<Probe>::new(
+            Chunk {
+                headers: &mut headers,
+                states: &mut states,
+                discrete: &mut discrete,
+                continuous: &mut continuous,
+                penalties: &mut penalties,
+                penalized: &mut penalized,
+                outputs: outputs.view_all(),
+            },
+            1,
+            0,
+        );
+        f(&raw);
+        (outputs, states)
+    }
+
+    #[test]
+    fn test_half_ranges_split_at_the_nearest_chunk_boundary() {
+        // (instances, chunk size, expected split)
+        for (n, size, split) in [
+            (7, 3, 3),    // boundaries 3 and 6; 3.5 is nearest 3
+            (8, 2, 4),    // exact middle
+            (9, 3, 3),    // 3 and 6 tie around 4.5: the lower one
+            (10, 4, 4),   // boundaries 4 and 8
+            (6, 4, 4),    // one interior boundary, uneven halves
+            (100, 7, 49), // N not a multiple of the chunk size
+            (1024, 64, 512),
+        ] {
+            let [a, b] = half_ranges(n, size).unwrap();
+            assert_eq!(
+                (a.clone(), b.clone()),
+                (0..split, split..n),
+                "n {n} size {size}"
+            );
+            assert_eq!(split % size, 0, "the split is a chunk boundary");
+        }
+    }
+
+    #[test]
+    fn test_half_ranges_without_two_chunks_is_none() {
+        for (n, size) in [(0, 4), (1, 1), (3, 4), (4, 4)] {
+            assert_eq!(half_ranges(n, size), None, "n {n} size {size}");
+        }
+        assert_eq!(half_ranges(2, 1), Some([0..1, 1..2]));
+    }
+
+    /// Range and instance views stay inside the instances: reversed or
+    /// out-of-range requests are refused, the empty range at the end is a
+    /// valid empty view (run under Miri in the nightly job).
+    #[test]
+    #[expect(unsafe_code, reason = "exercises the audited views")]
+    fn test_raw_chunk_range_view_refuses_out_of_range_rows() {
+        const N: usize = 5;
+        let _unused = with_raw(N, |raw| {
+            // SAFETY: each view is dropped before the next is built, so no
+            // two live views overlap, and the buffers outlive them.
+            assert!(unsafe { raw.range_view(0..N + 1) }.is_none());
+            #[expect(clippy::reversed_empty_ranges, reason = "the refused case")]
+            let reversed = 3..2;
+            // SAFETY: as above.
+            assert!(unsafe { raw.range_view(reversed) }.is_none());
+            // SAFETY: as above.
+            assert!(unsafe { raw.instance_view(N) }.is_none());
+            // SAFETY: as above.
+            assert!(unsafe { raw.instance_view(usize::MAX) }.is_none());
+            // SAFETY: as above.
+            let end = unsafe { raw.range_view(N..N) }.unwrap();
+            assert!(end.states.is_empty() && end.outputs.rewards.is_empty());
+            // SAFETY: as above; `end` is no longer used.
+            let last = unsafe { raw.instance_view(N - 1) }.unwrap();
+            assert_eq!(last.states.len(), 1);
+            assert_eq!(last.discrete.len(), 2);
+            assert_eq!(last.outputs.rewards.len(), 2);
+            assert_eq!(last.outputs.observations[0].len(), 6);
+            assert_eq!(last.outputs.masks.len(), 4);
+        });
+    }
+
+    /// Two threads hold views of the two halves at once, while a third set
+    /// of single-instance views on the first thread covers its own rows one
+    /// at a time; with N not a multiple of the chunk size every element ends
+    /// up written by exactly its owner (run under Miri in the nightly job).
+    #[test]
+    #[expect(unsafe_code, reason = "exercises the audited views")]
+    fn test_raw_chunk_half_and_instance_views_never_overlap() {
+        const N: usize = 7;
+        let halves = half_ranges(N, 3).unwrap();
+        let [first_half, second_half] = halves.clone();
+        let (outputs, states) = with_raw(N, |raw| {
+            std::thread::scope(|scope| {
+                // Half A: one view per instance, built and dropped in turn.
+                scope.spawn(move || {
+                    for id in first_half {
+                        // SAFETY: half A's rows belong to this thread only
+                        // and each instance view is dropped before the next.
+                        let one = unsafe { raw.instance_view(id) }.unwrap();
+                        one.states[0].0 = u32::try_from(id).unwrap() + 1;
+                        one.outputs.rewards.fill(1.0);
+                        one.outputs.observations[0].fill(1);
+                    }
+                });
+                // Half B: one view of the whole half.
+                scope.spawn(move || {
+                    // SAFETY: half B's rows belong to this thread only.
+                    let half = unsafe { raw.range_view(second_half) }.unwrap();
+                    for s in half.states.iter_mut() {
+                        s.0 = 100;
+                    }
+                    half.outputs.rewards.fill(2.0);
+                    half.outputs.observations[0].fill(2);
+                });
+            });
+        });
+        let [lower, _] = halves;
+        for (i, state_now) in states.iter().enumerate() {
+            let (state, reward, byte) = if lower.contains(&i) {
+                (u32::try_from(i).unwrap() + 1, 1.0, 1)
+            } else {
+                (100, 2.0, 2)
+            };
+            assert_eq!(state_now.0, state, "instance {i}");
+            assert_eq!(&outputs.rewards()[i * 2..i * 2 + 2], &[reward; 2]);
+            let row = &outputs.observation(0).unwrap()[i * 6..(i + 1) * 6];
+            assert!(row.iter().all(|&v| v == byte), "instance {i}");
         }
     }
 }
