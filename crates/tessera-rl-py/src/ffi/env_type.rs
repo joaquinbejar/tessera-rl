@@ -274,9 +274,10 @@ maker!(make_tag, api::make_tag);
 maker!(make_connect4, api::make_connect4);
 maker!(make_leduc, api::make_leduc);
 maker!(make_othello, api::make_othello);
+maker!(make_go9, api::make_go9);
 
 /// The module-level constructors, for the module's method table.
-pub(super) const MAKERS: [ffi::PyMethodDef; 5] = [
+pub(super) const MAKERS: [ffi::PyMethodDef; 6] = [
     method_kw(
         c"make_cartpole",
         thunks::MAKE_CARTPOLE,
@@ -301,5 +302,10 @@ pub(super) const MAKERS: [ffi::PyMethodDef; 5] = [
         c"make_othello",
         thunks::MAKE_OTHELLO,
         c"make_othello(**pool_options) -> Env",
+    ),
+    method_kw(
+        c"make_go9",
+        thunks::MAKE_GO9,
+        c"make_go9(**pool_options, komi_half_points=15) -> Env",
     ),
 ];

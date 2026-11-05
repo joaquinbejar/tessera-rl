@@ -74,6 +74,14 @@ the API is not stable, and any 0.x release may break it.
   validation, golden fixtures, continuation tests, perft against an
   independent reference, a scripted baseline and a step bench. In Python it
   is available through `make` and the PettingZoo `aec_env`.
+- **Go 9x9** (`tessera/Go9-v1`, `tessera-rl-games`): Tromp-Taylor area
+  scoring and positional superko, with suicide illegal, a scored cap of 162
+  plies and a configurable komi, default 7.5. `Discrete(82)` with masks and
+  sequential turns; rewards of +1, -1 or 0. The state holds exact past
+  positions, about 3.9 KB. Import validation replays the history; golden
+  fixtures, continuation tests, an independent reference, a scripted baseline
+  and step and fork benches. In Python it is available through `make` and the
+  PettingZoo `aec_env`.
 - **Python search**: `Search.is_privileged`, `False` for every search
   Python can build today.
 - **Engine** (`tessera-rl-engine`): `EnvPool::config`, and `EnvPool::contain`,

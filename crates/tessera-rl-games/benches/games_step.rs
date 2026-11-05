@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! Inline step cost of Connect Four, Othello and Leduc hold'em: full pool steps (auto-reset on) with
+//! Inline step cost of Connect Four, Othello, Go 9x9 and Leduc hold'em: full pool steps (auto-reset on) with
 //! masks, the acting-agent update and the turn check.
 
 #![expect(clippy::unwrap_used, reason = "bench setup unwraps")]
@@ -10,7 +10,9 @@ use std::hint::black_box;
 
 use criterion::{Criterion, criterion_group, criterion_main};
 use tessera_rl_engine::{ActionInput, EnvPool, Masked, PoolOptions, Reseed};
-use tessera_rl_games::{Connect4, Connect4Config, Leduc, LeducConfig, Othello, OthelloConfig};
+use tessera_rl_games::{
+    Connect4, Connect4Config, Go9, Go9Config, Leduc, LeducConfig, Othello, OthelloConfig,
+};
 use tessera_rl_num::identity::Seed;
 
 const N: u32 = 1024;
@@ -64,7 +66,32 @@ fn bench(c: &mut Criterion) {
             black_box(out.rewards());
         });
     });
+    // Go 9x9: scattered points; an illegal one is the pass.
+    let points: Vec<i32> = (0..N * 2).map(|i| ((i * 37) % 82).cast_signed()).collect();
+    let mut go = EnvPool::<Go9, Masked>::with_masks(Go9Config::default(), options).unwrap();
+    go.reset_all(Reseed::Keep).unwrap();
+    group.bench_function("go9", |b| {
+        b.iter(|| {
+            let out = go
+                .step(ActionInput {
+                    discrete: &points,
+                    continuous: &[],
+                })
+                .unwrap();
+            black_box(out.rewards());
+        });
+    });
     group.finish();
+    // What the exact superko history costs search: the state is about 3.9 KB.
+    let mut forks = c.benchmark_group("go9_record");
+    let dst: Vec<u32> = (1..N).collect();
+    forks.bench_function("snapshot", |b| {
+        b.iter(|| black_box(go.snapshot(0).unwrap()));
+    });
+    forks.bench_function("fork_1023", |b| {
+        b.iter(|| go.fork(0, black_box(&dst)).unwrap());
+    });
+    forks.finish();
 }
 
 criterion_group!(benches, bench);

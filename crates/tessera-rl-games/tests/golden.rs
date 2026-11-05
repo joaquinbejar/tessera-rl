@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! Golden suites (ADR-0009, ADR-0024 layer 2) and cross-thread runs (SPEC
-//! 8.5) for Connect Four, Othello and Leduc hold'em: every scenario matches its
+//! 8.5) for Connect Four, Othello, Go 9x9 and Leduc hold'em: every scenario matches its
 //! committed fixture in Inline mode and with 1, 2, 7 and 64 workers. The
 //! harness is the one of the classic crate.
 
@@ -12,7 +12,9 @@ mod support;
 
 use support::{Scenario, check, run};
 use tessera_rl_engine::{AutoReset, EnvPool, Masked};
-use tessera_rl_games::{Connect4, Connect4Config, Leduc, LeducConfig, Othello, OthelloConfig};
+use tessera_rl_games::{
+    Connect4, Connect4Config, Go9, Go9Config, Leduc, LeducConfig, Othello, OthelloConfig,
+};
 
 impl support::GoldenEnv for Connect4 {
     const ENV_ID: &'static str = tessera_rl_games::connect4::ENV_ID;
@@ -137,4 +139,45 @@ fn test_golden_othello_next_step_matches_fixture_on_every_mode() {
 #[test]
 fn test_golden_othello_same_step_matches_fixture_on_every_mode() {
     check_othello(&othello("othello-v1-same-step", AutoReset::SameStep));
+}
+
+impl support::GoldenEnv for Go9 {
+    const ENV_ID: &'static str = tessera_rl_games::go9::ENV_ID;
+    const ENV_VERSION: u32 = tessera_rl_games::go9::ENV_VERSION;
+}
+
+fn go9(name: &'static str, auto_reset: AutoReset) -> Scenario<Go9Config> {
+    Scenario {
+        name,
+        cfg: Go9Config::default(),
+        seed: 4_112_026,
+        num_envs: 16,
+        chunk: 4,
+        auto_reset,
+        // Above the cap of 162 plies: the limit never truncates.
+        max_episode_steps: 200,
+        steps: 400,
+        reseed_at: 200,
+        reseed_ids: &[1, 12],
+        reseed_seed: 7_777,
+    }
+}
+
+fn check_go9(s: &Scenario<Go9Config>) {
+    let build = |cfg, options| {
+        EnvPool::<Go9, Masked>::with_masks(cfg, options).unwrap_or_else(|e| panic!("{e}"))
+    };
+    for workers in WORKERS {
+        check(s.name, &run::<Go9, _>(s, build, workers));
+    }
+}
+
+#[test]
+fn test_golden_go9_next_step_matches_fixture_on_every_mode() {
+    check_go9(&go9("go9-v1-next-step", AutoReset::NextStep));
+}
+
+#[test]
+fn test_golden_go9_same_step_matches_fixture_on_every_mode() {
+    check_go9(&go9("go9-v1-same-step", AutoReset::SameStep));
 }

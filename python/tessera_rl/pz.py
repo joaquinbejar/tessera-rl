@@ -11,6 +11,7 @@ Environment               Turns        Adapters
 ``tessera/Connect4-v1``   sequential   ``aec_env``
 ``tessera/Leduc-v1``      sequential   ``aec_env``
 ``tessera/Othello-v1``    sequential   ``aec_env``
+``tessera/Go9-v1``        sequential   ``aec_env``
 ========================  ===========  ============================
 
 - A simultaneous environment is Parallel natively. Its AEC form buffers
@@ -63,6 +64,7 @@ _ENVS = {
     "tessera/Connect4-v1": (_native.make_connect4, frozenset({"aec"})),
     "tessera/Leduc-v1": (_native.make_leduc, frozenset({"aec"})),
     "tessera/Othello-v1": (_native.make_othello, frozenset({"aec"})),
+    "tessera/Go9-v1": (_native.make_go9, frozenset({"aec"})),
 }
 
 
