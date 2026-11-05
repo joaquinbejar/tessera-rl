@@ -14,7 +14,7 @@ use tessera_rl_engine::{
     ActionInput, AutoReset, DecodedRecord, EngineError, EnvPool, MAX_LEAVES, MaskProvider, Masked,
     NoMasks, PoolOptions, Reseed, SyncOptions,
 };
-use tessera_rl_games::{Connect4, Connect4Config, Leduc, LeducConfig};
+use tessera_rl_games::{Connect4, Connect4Config, Leduc, LeducConfig, Othello, OthelloConfig};
 use tessera_rl_num::identity::Seed;
 
 /// Errors of the bindings: the engine's, plus record decoding and argument
@@ -451,6 +451,18 @@ pub(crate) fn connect4(args: &PoolArgs) -> Result<Box<dyn PoolOps>, BindError> {
     let same_step = options.auto_reset == AutoReset::SameStep;
     let pool = with_workers(
         EnvPool::<Connect4, Masked>::with_masks(cfg.clone(), options)?,
+        args.workers,
+    )?;
+    Ok(Box::new(Pooled::new(&cfg, pool, n, same_step)?))
+}
+
+/// An Othello pool (`tessera/Othello-v1`), with masks and Sequential turns.
+pub(crate) fn othello(args: &PoolArgs) -> Result<Box<dyn PoolOps>, BindError> {
+    let cfg = OthelloConfig {};
+    let (options, n) = options(args)?;
+    let same_step = options.auto_reset == AutoReset::SameStep;
+    let pool = with_workers(
+        EnvPool::<Othello, Masked>::with_masks(cfg.clone(), options)?,
         args.workers,
     )?;
     Ok(Box::new(Pooled::new(&cfg, pool, n, same_step)?))

@@ -606,6 +606,7 @@ thunk!(MAKE_CARTPOLE: CFunctionKw = thunk_make_cartpole => env_type::make_cartpo
 thunk!(MAKE_TAG: CFunctionKw = thunk_make_tag => env_type::make_tag : fn(Obj, Obj, Obj) -> Obj);
 thunk!(MAKE_CONNECT4: CFunctionKw = thunk_make_connect4 => env_type::make_connect4 : fn(Obj, Obj, Obj) -> Obj);
 thunk!(MAKE_LEDUC: CFunctionKw = thunk_make_leduc => env_type::make_leduc : fn(Obj, Obj, Obj) -> Obj);
+thunk!(MAKE_OTHELLO: CFunctionKw = thunk_make_othello => env_type::make_othello : fn(Obj, Obj, Obj) -> Obj);
 thunk!(LAYOUT: CFunction = thunk_layout => env_type::layout : fn(Obj, Obj) -> Obj);
 thunk!(OUTPUTS: CFunction = thunk_outputs => env_type::outputs : fn(Obj, Obj) -> Obj);
 thunk!(IS_POISONED: CFunction = thunk_is_poisoned => env_type::is_poisoned : fn(Obj, Obj) -> Obj);

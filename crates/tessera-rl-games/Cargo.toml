@@ -2,7 +2,7 @@
 
 [package]
 name = "tessera-rl-games"
-description = "Tessera board and card game environments: Connect Four and Leduc hold'em"
+description = "Tessera board and card game environments: Connect Four, Othello and Leduc hold'em"
 readme = "README.md"
 version.workspace = true
 edition.workspace = true

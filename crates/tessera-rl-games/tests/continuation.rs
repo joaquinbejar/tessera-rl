@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! Continuation tests (SPEC 9.1, normative; ADR-0010) for Connect Four,
-//! with the harness of the classic crate. Connect Four draws no
+//! Continuation tests (SPEC 9.1, normative; ADR-0010) for Connect Four
+//! and Othello, with the harness of the classic crate. Neither draws
 //! randomness, so `fork_branched` replays the same game: the harness
 //! checks that it does not diverge.
 
@@ -10,7 +10,7 @@ mod support;
 
 use support::continuation::Case;
 use tessera_rl_engine::{AutoReset, EnvPool, Masked};
-use tessera_rl_games::{Connect4, Connect4Config};
+use tessera_rl_games::{Connect4, Connect4Config, Othello, OthelloConfig};
 
 #[expect(clippy::unwrap_used, reason = "test setup: a failure is the assertion")]
 fn connect4(auto_reset: AutoReset) -> Case<Connect4, Masked> {
@@ -32,4 +32,26 @@ fn test_continuation_connect4_next_step_restores_identically_everywhere() {
 #[test]
 fn test_continuation_connect4_same_step_restores_identically_everywhere() {
     connect4(AutoReset::SameStep).check_all(50);
+}
+
+#[expect(clippy::unwrap_used, reason = "test setup: a failure is the assertion")]
+fn othello(auto_reset: AutoReset) -> Case<Othello, Masked> {
+    Case {
+        cfg: OthelloConfig {},
+        build: |cfg, options| EnvPool::with_masks(cfg, options).unwrap(),
+        auto_reset,
+        limit: 128,
+        deaths: false,
+        branches: false,
+    }
+}
+
+#[test]
+fn test_continuation_othello_next_step_restores_identically_everywhere() {
+    othello(AutoReset::NextStep).check_all(50);
+}
+
+#[test]
+fn test_continuation_othello_same_step_restores_identically_everywhere() {
+    othello(AutoReset::SameStep).check_all(50);
 }
