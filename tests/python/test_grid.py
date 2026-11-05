@@ -63,3 +63,13 @@ def test_grid_gym_spreads_a_single_bound_over_the_whole_leaf():
     assert box.shape == (3, 4, 4)
     assert (box.low == 0).all() and (box.high == 255).all()
     env.close()
+
+
+def test_gym_bounds_are_one_for_all_or_one_per_element():
+    leaf = lambda low, high, shape: {"leaves": [("", "u1", shape, low, high)]}  # noqa: E731
+    box = tg._single_space(leaf(list(range(6)), [9] * 6, [2, 3]))
+    assert box.low.tolist() == [[0, 1, 2], [3, 4, 5]]
+    assert tg._single_space(leaf([1, 2, 3, 4], [9] * 4, [4, 1])).low.ravel().tolist() == [1, 2, 3, 4]
+    assert (tg._single_space(leaf([1], [9], [2, 2])).low == 1).all()
+    with pytest.raises(ValueError, match="reshape"):
+        tg._single_space(leaf([1, 2, 3, 4], [9] * 4, [4, 4]))

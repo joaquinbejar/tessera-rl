@@ -89,13 +89,18 @@ def _native_env(env_id: str, num_envs: int, seed: int, mode: AutoresetMode, outp
     return native, layout
 
 
+def _bounds(values, shape) -> np.ndarray:
+    """A leaf's flat bounds in its shape: one per element, or one for all."""
+    arr = np.asarray(values, dtype=np.float64)
+    return np.full(shape, arr.item()) if arr.size == 1 else arr.reshape(shape)
+
+
 def _single_space(layout) -> spaces.Space:
     boxes = {}
     for name, dtype, shape, low, high in layout["leaves"]:
         dt = np.dtype(dtype)
-        # A leaf declares one bound per element or a single one for all.
-        lo = np.broadcast_to(np.asarray(low, dtype=np.float64), shape)
-        hi = np.broadcast_to(np.asarray(high, dtype=np.float64), shape)
+        lo = _bounds(low, shape)
+        hi = _bounds(high, shape)
         boxes[name or "obs"] = spaces.Box(low=lo.astype(dt), high=hi.astype(dt), shape=tuple(shape), dtype=dt)
     if list(boxes) == ["obs"]:
         return boxes["obs"]
