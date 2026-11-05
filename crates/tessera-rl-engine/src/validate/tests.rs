@@ -159,8 +159,10 @@ fn test_check_recv_nothing_or_too_little_never_waits() {
 /// its rows, copied out of and back into a full `[N, A]` action buffer.
 struct Owned {
     ids: Vec<u32>,
+    instances: usize,
     headers: Vec<H>,
     discrete: Vec<Vec<i32>>,
+    continuous: Vec<Vec<f32>>,
 }
 
 impl AdmittedRows<H> for Owned {
@@ -168,15 +170,23 @@ impl AdmittedRows<H> for Owned {
         self.ids.len()
     }
 
+    fn instances(&self) -> usize {
+        self.instances
+    }
+
     fn id(&self, position: usize) -> Option<u32> {
         self.ids.get(position).copied()
     }
 
     fn row(&mut self, position: usize) -> Option<ActionRow<'_, H>> {
+        let continuous = match self.continuous.get_mut(position) {
+            Some(c) => c.as_mut_slice(),
+            None => &mut [],
+        };
         Some(ActionRow {
             header: self.headers.get(position)?,
             discrete: self.discrete.get_mut(position)?,
-            continuous: &mut [],
+            continuous,
         })
     }
 }
@@ -192,6 +202,8 @@ fn subset(
     let mut out = vec![SENTINEL; hs.len() * AGENTS];
     let mut rows = Owned {
         ids: ids.to_vec(),
+        instances: hs.len(),
+        continuous: Vec::new(),
         headers: ids.iter().map(|&id| hs[id as usize]).collect(),
         discrete: ids
             .iter()
@@ -400,4 +412,162 @@ fn test_expected_len_overflow_is_an_action_length_error() {
     assert_eq!(expected_len("discrete", &[4, 2, 0], 0), Ok(0));
     // A zero factor wins over an overflowing product.
     assert_eq!(expected_len("discrete", &[usize::MAX, 2, 0], 0), Ok(0));
+}
+
+/// One discrete head with 3 choices and one continuous head.
+fn layout_c() -> ActionLayout {
+    ActionLayout {
+        discrete: vec![3],
+        continuous: vec![(-1.0, 1.0)],
+    }
+}
+
+const SENTINEL_C: f32 = 9.0;
+
+#[test]
+fn test_subset_copy_continuous_head_out_of_order_ids_takes_each_source_position() {
+    let hs = headers(4);
+    let ids = [3_u32, 1];
+    let mut out_d = vec![SENTINEL; 4 * AGENTS];
+    let mut out_c = vec![SENTINEL_C; 4 * AGENTS];
+    let rows_of = |v: &[f32], id: u32| v[id as usize * AGENTS..(id as usize + 1) * AGENTS].to_vec();
+    let mut rows = Owned {
+        ids: ids.to_vec(),
+        instances: hs.len(),
+        headers: ids.iter().map(|&id| hs[id as usize]).collect(),
+        discrete: ids
+            .iter()
+            .map(|&id| out_d[id as usize * AGENTS..(id as usize + 1) * AGENTS].to_vec())
+            .collect(),
+        continuous: ids.iter().map(|&id| rows_of(&out_c, id)).collect(),
+    };
+    let input = ActionInput {
+        discrete: &[1, 2, 0, 2],
+        continuous: &[0.5, -0.5, 0.25, -0.25],
+    };
+    check_and_copy_subset_actions(&layout_c(), AutoReset::NextStep, &mut rows, input).unwrap();
+    for ((&id, d), c) in ids.iter().zip(&rows.discrete).zip(&rows.continuous) {
+        let span = id as usize * AGENTS..(id as usize + 1) * AGENTS;
+        out_d[span.clone()].copy_from_slice(d);
+        out_c[span].copy_from_slice(c);
+    }
+    assert_eq!(
+        out_c,
+        [
+            SENTINEL_C, SENTINEL_C, 0.25, -0.25, SENTINEL_C, SENTINEL_C, 0.5, -0.5
+        ]
+    );
+    assert_eq!(out_d, [SENTINEL, SENTINEL, 0, 2, SENTINEL, SENTINEL, 1, 2]);
+}
+
+#[test]
+fn test_range_copy_continuous_head_copies_every_value_of_the_half() {
+    let hs = headers(4);
+    let mut out_d = vec![SENTINEL; 4 * AGENTS];
+    let mut out_c = vec![SENTINEL_C; 4 * AGENTS];
+    let input = ActionInput {
+        discrete: &[2, 1, 0, 1],
+        continuous: &[0.1, 0.2, 0.3, 0.4],
+    };
+    check_and_copy_range_actions(
+        &layout_c(),
+        AutoReset::NextStep,
+        2,
+        &hs[2..4],
+        input,
+        &mut out_d[4..8],
+        &mut out_c[4..8],
+    )
+    .unwrap();
+    assert_eq!(
+        out_c,
+        [
+            SENTINEL_C, SENTINEL_C, SENTINEL_C, SENTINEL_C, 0.1, 0.2, 0.3, 0.4
+        ]
+    );
+    assert_eq!(out_d[4..8], [2, 1, 0, 1]);
+}
+
+#[test]
+fn test_subset_copy_empty_continuous_source_with_a_head_is_a_length_error() {
+    let hs = headers(4);
+    let mut rows = Owned {
+        ids: vec![1],
+        instances: hs.len(),
+        headers: vec![hs[1]],
+        discrete: vec![vec![SENTINEL; AGENTS]],
+        continuous: vec![vec![SENTINEL_C; AGENTS]],
+    };
+    let input = ActionInput {
+        discrete: &[0, 0],
+        continuous: &[],
+    };
+    let err = check_and_copy_subset_actions(&layout_c(), AutoReset::NextStep, &mut rows, input);
+    assert!(
+        matches!(
+            err,
+            Err(EngineError::ActionLength {
+                buffer: "continuous",
+                ..
+            })
+        ),
+        "{err:?}"
+    );
+    assert_eq!(rows.continuous[0], [SENTINEL_C; AGENTS], "nothing written");
+}
+
+#[test]
+fn test_subset_copy_short_row_is_a_length_error_before_any_copy() {
+    let hs = headers(4);
+    // The admitted row of id 1 is one value short: the row-length guard
+    // refuses before the copy pass, so id 3 stays untouched too.
+    let mut rows = Owned {
+        ids: vec![3, 1],
+        instances: hs.len(),
+        headers: vec![hs[3], hs[1]],
+        discrete: vec![vec![SENTINEL; AGENTS], vec![SENTINEL; AGENTS - 1]],
+        continuous: Vec::new(),
+    };
+    let err = check_and_copy_subset_actions(
+        &layout(),
+        AutoReset::NextStep,
+        &mut rows,
+        input(&[1, 2, 0, 2]),
+    );
+    assert!(
+        matches!(err, Err(EngineError::ActionLength { .. })),
+        "{err:?}"
+    );
+    assert_eq!(
+        rows.discrete[0], [SENTINEL; AGENTS],
+        "the first id is not copied"
+    );
+}
+
+#[test]
+fn test_subset_copy_missing_row_reports_the_pool_size() {
+    struct Missing;
+    impl AdmittedRows<H> for Missing {
+        fn len(&self) -> usize {
+            1
+        }
+        fn instances(&self) -> usize {
+            10
+        }
+        fn id(&self, _: usize) -> Option<u32> {
+            Some(42)
+        }
+        fn row(&mut self, _: usize) -> Option<ActionRow<'_, H>> {
+            None
+        }
+    }
+    let err =
+        check_and_copy_subset_actions(&layout(), AutoReset::NextStep, &mut Missing, input(&[0, 0]));
+    assert_eq!(
+        err,
+        Err(EngineError::InstanceOutOfRange {
+            id: 42,
+            num_envs: 10
+        })
+    );
 }

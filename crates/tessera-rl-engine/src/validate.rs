@@ -423,10 +423,13 @@ pub(crate) struct ActionRow<'a, H> {
 /// Access to the rows of the ids an Async `send` admits, by position in the
 /// call. An implementation hands out only those rows, one at a time, so no
 /// reference ever spans a row another thread may use (ADR-0047 invariants
-/// 3 and 4). The engine implementation is backed by `instance_view`.
+/// 3 and 4). The engine implementation is `buffer::rows::Admitted`, from
+/// `RawRows::admitted`.
 pub(crate) trait AdmittedRows<H> {
     /// The number of admitted ids.
     fn len(&self) -> usize;
+    /// The number of instances in the pool (for out-of-range errors).
+    fn instances(&self) -> usize;
     /// The id at `position`.
     fn id(&self, position: usize) -> Option<u32>;
     /// The rows of the id at `position`.
@@ -476,7 +479,9 @@ pub(crate) fn check_and_copy_subset_actions<H: RecordLayout, R: AdmittedRows<H>>
 
 /// Validates the actions of a Pipelined `send(half)` and copies them into
 /// the half's rows. `headers`, `discrete_out` and `continuous_out` are the
-/// half's own views (from `range_view`), so nothing outside the half is
+/// half's own views (the Pipelined mode takes them from
+/// `RawChunk::range_view`; `RawRows::range` gives the same rows), so nothing
+/// outside the half is
 /// borrowed; `first_id` is the id of their first instance, for errors.
 /// `input` holds one row block per instance of the half, in order.
 #[cfg_attr(
@@ -550,7 +555,7 @@ fn admitted<H, R: AdmittedRows<H>>(
     position: usize,
 ) -> Result<(u32, ActionRow<'_, H>), EngineError> {
     let id = rows.id(position).unwrap_or(u32::MAX);
-    let num_envs = u32::try_from(rows.len()).unwrap_or(u32::MAX);
+    let num_envs = u32::try_from(rows.instances()).unwrap_or(u32::MAX);
     match rows.row(position) {
         Some(row) => Ok((id, row)),
         None => Err(EngineError::InstanceOutOfRange { id, num_envs }),
