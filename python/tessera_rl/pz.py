@@ -34,8 +34,10 @@ auto-reset disabled: call ``reset`` to start a new episode.
 Actions are checked before anything changes: each must be an exact
 integer scalar in ``[0, n)`` (integer types, or floats with no fractional
 part); anything else, including ``None`` for a live agent in AEC, raises
-``ActionError`` and
-leaves the environment, and in AEC the buffered cycle, as it was. A legal
+``ActionError`` and leaves the environment, and in AEC the buffered
+cycle, as it was. In Parallel, a name outside ``possible_agents`` raises
+``ActionError``, and actions for agents already known to be dead are
+ignored. A legal
 index that the mask marks illegal, such as a move into a full Connect Four
 column, is replaced by the environment's no-op (ADR-0028); it is not an
 error.
