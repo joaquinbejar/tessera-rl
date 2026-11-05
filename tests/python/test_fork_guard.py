@@ -79,9 +79,9 @@ PRELUDE = textwrap.dedent(
 )
 
 
-def run(body, tmp_path, timeout=int(os.environ.get("FORK_TEST_TIMEOUT", "60"))):
+def run(body, tmp_path, timeout=int(os.environ.get("FORK_TEST_TIMEOUT", "60")), prelude=PRELUDE):
     proc = subprocess.Popen(
-        [sys.executable, "-c", PRELUDE + textwrap.dedent(body)],
+        [sys.executable, "-c", prelude + textwrap.dedent(body)],
         cwd=tmp_path,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
@@ -204,4 +204,75 @@ def test_guard_survives_a_second_fork_and_a_child_pool_in_a_grandchild(tmp_path)
         tmp_path,
     )
     assert code == 0, out
+    assert "CHILD 0\n" in out, out
+
+
+EARLY_HOOK = """
+    import os, sys
+    result = []
+    env = None
+
+    def early():
+        try:
+            {call}
+            result.append("not refused")
+        except BaseException as e:
+            result.append(type(e).__name__)
+
+    # Registered before tessera_rl is imported, so it runs first in the child.
+    os.register_at_fork(after_in_child=early)
+    import numpy as np
+    import tessera_rl as t
+
+    env = t.make("tessera/CartPole-v1", num_envs=4096, seed=7, chunk_size=64, workers=2, mode="pipelined")
+    env.reset()
+    env.send(0, np.zeros(len(env.halves[0]), dtype=np.int32))
+    pid = os.fork()
+    if pid == 0:
+        print("EARLY", result, flush=True)
+        sys.exit(0)
+    print("CHILD", os.waitpid(pid, 0)[1], flush=True)
+    env.recv()
+    env.close()
+    sys.exit(0)
+"""
+
+
+@pytest.mark.parametrize("call", ["env._native.layout()", "env.reset()", "env.recv()"])
+def test_hook_registered_before_import_gets_fork_error(call, tmp_path):
+    code, out = run(EARLY_HOOK.format(call=call), tmp_path, prelude="")
+    assert code == 0, out
+    assert "EARLY ['ForkError']" in out, out
+    assert "CHILD 0\n" in out, out
+
+
+def test_direct_libc_fork_is_covered(tmp_path):
+    """A C extension calling fork directly runs no Python at-fork hook. PyDLL
+    keeps the interpreter lock across the call, so the child can run Python."""
+    code, out = run(
+        """
+        import ctypes
+        env = build("pipelined", 2)
+        first(env, "pipelined")
+        launch(env, "pipelined")
+        stop.set()
+        time.sleep(0.05)
+        pid = ctypes.PyDLL(None).fork()
+        if pid == 0:
+            try:
+                env.reset()
+                print("NOT REFUSED", flush=True)
+            except t.ForkError:
+                print("REFUSED", flush=True)
+            del env
+            os._exit(0)
+        print("CHILD", os.waitpid(pid, 0)[1], flush=True)
+        finish(env, "pipelined")
+        env.close()
+        sys.exit(0)
+        """,
+        tmp_path,
+    )
+    assert code == 0, out
+    assert "REFUSED" in out and "NOT REFUSED" not in out, out
     assert "CHILD 0\n" in out, out

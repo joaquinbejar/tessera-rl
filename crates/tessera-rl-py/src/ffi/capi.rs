@@ -425,33 +425,6 @@ pub(crate) fn call(_g: Gil, callable: Ref<'_>, args: &Mine) -> CResult<Mine> {
     Mine::container(unsafe { thunks::c_object_call(callable.as_ptr(), args.as_ref().as_ptr()) })
 }
 
-/// `os.register_at_fork(after_in_child=module.<name>)` (callouts: importing and
-/// calling run Python code).
-#[cfg(not(windows))]
-pub(crate) fn register_after_fork_in_child(g: Gil, module: Ref<'_>, name: &CStr) -> CResult<()> {
-    // SAFETY: attached; a static name.
-    let os = Mine::container(unsafe { thunks::c_import_module(c"os".as_ptr()) })?;
-    // SAFETY: attached; a live module and a static name.
-    let register = Mine::container(unsafe {
-        thunks::c_getattr_string(os.as_ref().as_ptr(), c"register_at_fork".as_ptr())
-    })?;
-    // SAFETY: attached; a live module and a method of its table.
-    let hook =
-        Mine::container(unsafe { thunks::c_getattr_string(module.as_ptr(), name.as_ptr()) })?;
-    let kwargs = dict(g)?;
-    dict_set(g, &kwargs, c"after_in_child", &hook)?;
-    let args = tuple(g, Vec::new())?;
-    // SAFETY: attached; a live callable, our tuple and dict, borrowed for the call.
-    Mine::container(unsafe {
-        thunks::c_object_call_kw(
-            register.as_ref().as_ptr(),
-            args.as_ref().as_ptr(),
-            kwargs.as_ref().as_ptr(),
-        )
-    })?;
-    Ok(())
-}
-
 /// Discards the pending exception (callout: dropping it may run
 /// finalizers).
 pub(crate) fn clear_pending(_g: Gil) {

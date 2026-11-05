@@ -153,6 +153,12 @@ class Env:
     rows of a step that was running at the fork. Create a new ``Env`` in the
     child, or use the spawn start method.
 
+    On macOS, a child that first imports ``tessera_rl`` after the fork is not
+    known to be one, so its new pools use the default blocking wait, which can
+    trap with ``SIGTRAP`` if the parent's libdispatch state marks it unsafe. A
+    parent with plain Python threads did not reproduce this. Import before
+    forking, or use the spawn start method.
+
     Snapshots of split-phase modes are opaque, restore only the environment
     that took them, and cannot be saved.
     """
