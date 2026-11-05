@@ -5,6 +5,7 @@
 //! `unsafe` here; the view objects live in `ffi::view_type`.
 
 use core::ffi::CStr;
+use core::ops::Range;
 
 use tessera_rl_engine::{OutputDtype, OutputField};
 
@@ -62,7 +63,11 @@ const fn region_elem(dtype: OutputDtype) -> Option<Elem> {
 pub(crate) struct ViewSpec {
     pub(crate) field: OutputField,
     pub(crate) elem: Elem,
+    /// The exported rows: `shape[0]` of them from `first_row`, out of the
+    /// region's `total_rows` (a half's rows in split-phase modes).
     pub(crate) shape: Vec<usize>,
+    pub(crate) first_row: usize,
+    pub(crate) total_rows: usize,
 }
 
 /// The views of one call's outputs, keyed as the owned dict is.
@@ -94,6 +99,8 @@ pub(crate) fn view_set(layout: &Layout) -> Option<ViewSet> {
                     field: field(i),
                     elem: leaf_elem(leaf.dtype)?,
                     shape,
+                    first_row: 0,
+                    total_rows: n,
                 })
             })
             .collect::<Option<Vec<_>>>()
@@ -109,6 +116,8 @@ pub(crate) fn view_set(layout: &Layout) -> Option<ViewSet> {
             field,
             elem: region_elem(dtype)?,
             shape: shape.to_vec(),
+            first_row: 0,
+            total_rows: n,
         })
     };
     let per_agent = [n, a];
@@ -157,10 +166,66 @@ pub(crate) fn view_set(layout: &Layout) -> Option<ViewSet> {
     })
 }
 
+/// The byte offset and length of `rows` rows from `first_row`, in a region
+/// of exactly `total_rows` rows of `row_bytes` bytes each and `region_bytes`
+/// bytes in all; `None` if they do not fit or overflow.
+#[must_use]
+pub(crate) fn row_window(
+    region_bytes: usize,
+    row_bytes: usize,
+    total_rows: usize,
+    first_row: usize,
+    rows: usize,
+) -> Option<(usize, usize)> {
+    if row_bytes.checked_mul(total_rows)? != region_bytes
+        || first_row.checked_add(rows)? > total_rows
+    {
+        return None;
+    }
+    Some((
+        row_bytes.checked_mul(first_row)?,
+        row_bytes.checked_mul(rows)?,
+    ))
+}
+
+/// The view set of the rows `rows` of `layout`; `None` as [`view_set`].
+pub(crate) fn half_view_set(layout: &Layout, rows: &Range<usize>) -> Option<ViewSet> {
+    let mut set = view_set(layout)?;
+    let specs = set
+        .observations
+        .iter_mut()
+        .chain(set.terminal_observations.iter_mut())
+        .chain(set.others.iter_mut().map(|(_, spec)| spec));
+    for spec in specs {
+        spec.first_row = rows.start;
+        *spec.shape.first_mut()? = rows.len();
+    }
+    Some(set)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::env::Leaf;
+
+    #[test]
+    fn test_row_window_stays_inside_the_region() {
+        let region = [0u8; 24];
+        for first in 0..=4 {
+            for rows in 0..=4 - first {
+                let (offset, len) = row_window(24, 6, 4, first, rows).unwrap();
+                assert_eq!(
+                    region.get(offset..offset + len).map(<[u8]>::len),
+                    Some(rows * 6)
+                );
+            }
+        }
+        assert_eq!(row_window(24, 6, 4, 3, 2), None);
+        assert_eq!(row_window(24, 6, 4, usize::MAX, 1), None);
+        assert_eq!(row_window(25, 6, 4, 0, 1), None);
+        assert_eq!(row_window(usize::MAX, usize::MAX, 2, 0, 1), None);
+        assert_eq!(row_window(0, 0, 4, 1, 2), Some((0, 0)));
+    }
 
     #[test]
     fn test_view_set_shapes_follow_the_layout() {
@@ -186,5 +251,9 @@ mod tests {
         assert_eq!(masks.shape, vec![3, 2, 5]);
         assert_eq!(set.terminal_observations[0].shape, vec![3, 2, 4]);
         assert_eq!(leaf_elem("complex64"), None);
+        let half = half_view_set(&layout, &(1..3)).unwrap();
+        assert_eq!(half.observations[0].shape, vec![2, 2, 4]);
+        assert_eq!(half.observations[0].first_row, 1);
+        assert_eq!(half.observations[0].total_rows, 3);
     }
 }

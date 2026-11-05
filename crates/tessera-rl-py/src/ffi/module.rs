@@ -12,7 +12,9 @@ use pyo3::ffi;
 use super::boundary::{self, Policy};
 use super::capi::{self, Ref};
 use super::tables::{method, method_end};
-use super::{Table, entry, env_type, search_group_type, search_type, thunks, view_type};
+use super::{
+    Table, entry, env_type, search_group_type, search_type, snapshot_type, thunks, view_type,
+};
 use crate::errors::{Kind, error};
 
 pub(super) unsafe extern "C" fn version(
@@ -197,6 +199,7 @@ pub(super) unsafe extern "C" fn init() -> *mut ffi::PyObject {
         crate::errors::register(g, module.as_ref())?;
         env_type::register(g, module.as_ref())?;
         view_type::register(g, module.as_ref())?;
+        snapshot_type::register(g, module.as_ref())?;
         search_type::register(g, module.as_ref())?;
         search_group_type::register(g, module.as_ref())?;
         Ok(module)

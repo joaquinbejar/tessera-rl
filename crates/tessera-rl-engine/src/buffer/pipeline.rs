@@ -520,6 +520,28 @@ pub struct Waiter {
 }
 
 impl Waiter {
+    /// Waits up to `timeout` until half `half` is ready; returns whether it
+    /// is. Polls in short bounded steps, as [`Self::wait_ready`]. A half out
+    /// of range is never ready.
+    #[must_use]
+    pub fn wait_half(&self, half: usize, timeout: core::time::Duration) -> bool {
+        let start = std::time::Instant::now();
+        loop {
+            if self
+                .ready
+                .ready
+                .get(half)
+                .is_some_and(|f| f.load(Ordering::Acquire))
+            {
+                return true;
+            }
+            if start.elapsed() >= timeout {
+                return false;
+            }
+            std::thread::park_timeout(core::time::Duration::from_micros(100));
+        }
+    }
+
     /// Waits up to `timeout` until a sent half is ready; returns whether
     /// one is. Polls in short bounded steps.
     #[must_use]

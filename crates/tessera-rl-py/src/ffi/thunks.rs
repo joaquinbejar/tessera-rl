@@ -58,7 +58,7 @@ use super::boundary::{
     tessera_fp_caller_controls, tessera_fp_callout_returned, tessera_fp_enter, tessera_fp_leave,
 };
 use super::dlpack::{self, DLManagedTensor, DLManagedTensorVersioned};
-use super::{env_type, module, search_group_type, search_type, view_type};
+use super::{env_type, module, search_group_type, search_type, snapshot_type, view_type};
 
 /// `PyCFunction`: `(self, args) -> object`.
 pub(crate) type CFunction =
@@ -615,6 +615,11 @@ thunk!(STEP: CFunction = thunk_step => env_type::step : fn(Obj, Obj) -> Obj);
 thunk!(SNAPSHOT: CFunction = thunk_snapshot => env_type::snapshot : fn(Obj, Obj) -> Obj);
 thunk!(IMPORT_RECORD: CFunction = thunk_import_record => env_type::import_record : fn(Obj, Obj) -> Obj);
 thunk!(FORK: CFunction = thunk_fork => env_type::fork : fn(Obj, Obj) -> Obj);
+thunk!(SEND: CFunction = thunk_send => env_type::send : fn(Obj, Obj) -> Obj);
+thunk!(RECV: CFunction = thunk_recv => env_type::recv : fn(Obj, Obj) -> Obj);
+thunk!(SNAPSHOT_ALL: CFunction = thunk_snapshot_all => env_type::snapshot_all : fn(Obj, Obj) -> Obj);
+thunk!(RESTORE_ALL: CFunction = thunk_restore_all => env_type::restore_all : fn(Obj, Obj) -> Obj);
+thunk!(SNAPSHOT_DEALLOC: Destructor = thunk_snapshot_dealloc => snapshot_type::dealloc : fn(Obj) -> ());
 thunk!(DEALLOC: Destructor = thunk_dealloc => env_type::dealloc : fn(Obj) -> ());
 thunk!(MAKE_SEARCH: CFunctionKw = thunk_make_search => search_type::make_search : fn(Obj, Obj, Obj) -> Obj);
 thunk!(SEARCH_LAYOUT: CFunction = thunk_search_layout => search_type::layout : fn(Obj, Obj) -> Obj);

@@ -13,10 +13,10 @@ use core::ffi::c_int;
 use core::ptr;
 use std::sync::Arc;
 
-use core::sync::atomic::{AtomicPtr, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
 
 use pyo3::ffi;
-use tessera_rl_engine::{OutputDtype, OutputStorage};
+use tessera_rl_engine::{HalfGenerations, OutputDtype, OutputStorage};
 
 use super::capi::{self, CResult, Gil, Mine, Ref};
 
@@ -25,7 +25,8 @@ use super::tables::{
 };
 use super::{Table, dispose, dlpack, entry, entry_status, thunks};
 use crate::errors::{Kind, error};
-use crate::view::{Elem, ViewSpec};
+use crate::split::half_stale;
+use crate::view::{Elem, ViewSpec, row_window};
 
 /// What a view object owns.
 struct View {
@@ -33,6 +34,9 @@ struct View {
     data: *const u8,
     bytes: usize,
     generation: u64,
+    /// The half this view covers and its generation when taken (ADR-0047
+    /// section 5); `None` in Sync mode.
+    half: Option<(HalfGenerations, usize, u64, Arc<AtomicBool>)>,
     elem: Elem,
     shape: Box<[isize]>,
     strides: Box<[isize]>,
@@ -58,22 +62,32 @@ const fn region_itemsize(dtype: OutputDtype) -> usize {
 }
 
 /// A new view of `spec` in `storage`, at the storage's current generation.
-pub(crate) fn new_view(g: Gil, storage: &Arc<OutputStorage>, spec: &ViewSpec) -> CResult<Mine> {
+pub(crate) fn new_view(
+    g: Gil,
+    storage: &Arc<OutputStorage>,
+    spec: &ViewSpec,
+    half: Option<(&HalfGenerations, usize, u64, &Arc<AtomicBool>)>,
+) -> CResult<Mine> {
     let region = storage
         .region(spec.field)
         .ok_or_else(|| error(g, Kind::Argument, format!("no output {:?}", spec.field)))?;
     let bytes = region.len.checked_mul(region_itemsize(region.dtype));
-    let elements = spec
+    let row_bytes = spec
         .shape
         .iter()
-        .try_fold(1usize, |acc, &d| acc.checked_mul(d));
-    if bytes.is_none() || elements.and_then(|e| e.checked_mul(spec.elem.itemsize)) != bytes {
+        .skip(1)
+        .try_fold(spec.elem.itemsize, |acc, &d| acc.checked_mul(d));
+    let rows = spec.shape.first().copied().unwrap_or(0);
+    let window = bytes.zip(row_bytes).and_then(|(bytes, row_bytes)| {
+        row_window(bytes, row_bytes, spec.total_rows, spec.first_row, rows)
+    });
+    let Some((offset, bytes)) = window else {
         return Err(error(
             g,
             Kind::Argument,
             format!("output {:?} does not match its layout", spec.field),
         ));
-    }
+    };
     let too_large = || {
         capi::raise(
             g,
@@ -93,16 +107,18 @@ pub(crate) fn new_view(g: Gil, storage: &Arc<OutputStorage>, spec: &ViewSpec) ->
         *stride = acc;
         acc = acc.checked_mul(dim).ok_or_else(too_large)?;
     }
-    let bytes = bytes.ok_or_else(too_large)?;
     // The buffer protocol describes sizes and dimensions as `Py_ssize_t`
     // and `int`: refuse now what `getbuffer` could not describe.
     isize::try_from(bytes).map_err(|_| too_large())?;
     c_int::try_from(shape.len()).map_err(|_| too_large())?;
     let view = View {
         storage: Arc::clone(storage),
-        data: region.ptr,
+        // SAFETY: `row_window` checked that `offset + bytes` fits the
+        // region's bytes, so the offset stays inside its allocation.
+        data: unsafe { region.ptr.add(offset) },
         bytes,
         generation: storage.generation(),
+        half: half.map(|(gens, h, taken, poisoned)| (gens.clone(), h, taken, Arc::clone(poisoned))),
         elem: spec.elem,
         shape,
         strides: strides.into_boxed_slice(),
@@ -242,7 +258,13 @@ pub(super) unsafe extern "C" fn is_stale(
     entry(|g| {
         // SAFETY: CPython passes `self` of an `OutputView` method.
         let v = unsafe { view(g, slf) }?;
-        Ok(capi::boolean(g, v.storage.generation() != v.generation))
+        // A half view ignores the storage's generation, which a refused call
+        // can move without writing (ADR-0047 section 5).
+        let stale = match &v.half {
+            Some((gens, h, taken, poisoned)) => half_stale(gens, *h, *taken, poisoned),
+            None => v.storage.generation() != v.generation,
+        };
+        Ok(capi::boolean(g, stale))
     })
 }
 

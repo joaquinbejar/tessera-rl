@@ -128,6 +128,20 @@ impl CycleState {
     }
 }
 
+/// Reads the export generations of a Pipelined pool's halves from any
+/// thread (ADR-0047 section 5). A generation moves before the send that
+/// moves it publishes its job.
+#[derive(Debug, Clone)]
+pub struct HalfGenerations(Arc<Generations>);
+
+impl HalfGenerations {
+    /// The generation of half `half`; `None` for a half other than 0 or 1.
+    #[must_use]
+    pub fn half(&self, half: usize) -> Option<u64> {
+        self.0.half(half).ok()
+    }
+}
+
 /// A pool in Pipelined mode (ADR-0047). It never derefs to [`EnvPool`];
 /// [`Self::into_pool`] gives the pool back.
 pub struct PipelinedPool<E: Environment, M: MaskProvider<E>> {
@@ -135,7 +149,7 @@ pub struct PipelinedPool<E: Environment, M: MaskProvider<E>> {
     // joins the workers before the mode's `Arc` below is released.
     runtime: Workers,
     mode: Arc<Mode<E, M>>,
-    generations: Generations,
+    generations: Arc<Generations>,
     /// Sent halves in send order (FIFO), oldest first.
     order: [usize; HALVES],
     queued: usize,
@@ -267,7 +281,7 @@ where
         Ok(PipelinedPool {
             runtime: Workers(Some(runtime)),
             mode: Mode::new(pool, halves, size, workers),
-            generations: Generations::new(n),
+            generations: Arc::new(Generations::new(n)),
             order: [0; HALVES],
             queued: 0,
             cycles: CycleState::initial(),
@@ -333,6 +347,21 @@ where
     pub fn generation(&self, half: u32) -> Result<u64, EngineError> {
         let index = usize::try_from(half).unwrap_or(usize::MAX);
         self.generations.half(index).map_err(gen_error)
+    }
+
+    /// A handle reading the halves' generations from any thread.
+    #[must_use]
+    pub fn half_generations(&self) -> HalfGenerations {
+        HalfGenerations(Arc::clone(&self.generations))
+    }
+
+    /// The oldest sent half not yet received, the one `recv` returns next.
+    #[must_use]
+    pub fn oldest_half(&self) -> Option<u32> {
+        if self.queued == 0 {
+            return None;
+        }
+        self.order.first().and_then(|&h| u32::try_from(h).ok())
     }
 
     /// A [`Waiter`] that waits for a ready half from any thread.
@@ -881,7 +910,7 @@ where
                 pool: Box::new(Self {
                     runtime: Workers(rt),
                     mode,
-                    generations: Generations::new(0),
+                    generations: Arc::new(Generations::new(0)),
                     order: [0; HALVES],
                     queued: 0,
                     cycles: CycleState::initial(),

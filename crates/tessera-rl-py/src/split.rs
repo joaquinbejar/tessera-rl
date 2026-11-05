@@ -1,0 +1,636 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
+//! The split-phase side of an environment object (ADR-0047 section 9): the
+//! Pipelined pool and its stored tokens behind a binding mutex. No `unsafe`
+//! here.
+//!
+//! The mutex is held only for non-waiting sections and always taken with
+//! the interpreter released, and no Python code runs under it, so a thread
+//! blocked on it never holds the interpreter. `recv` waits outside it, so
+//! another thread may `send` meanwhile.
+
+use core::any::Any;
+use core::ops::Range;
+use core::sync::atomic::{AtomicBool, Ordering};
+
+use std::sync::{Arc, Mutex, MutexGuard};
+use std::thread::ThreadId;
+
+use tessera_rl_core::{AdaptiveValues, Environment, RecordLayout};
+use tessera_rl_engine::{
+    ActionInput, CycleState, EngineError, HalfGenerations, HalfToken, MAX_LEAVES, MaskProvider,
+    OutputStorage, PipelinedPool, Record, Reseed, Waiter,
+};
+use tessera_rl_num::identity::Seed;
+
+use crate::env::{BindError, Layout, Owned, PoolOps, ResetSeed};
+
+/// Whether a half view's window has ended: its half has a new generation, or
+/// the pool is poisoned, whose rows a failed writer may have partly written.
+/// Poison advances no generation (ADR-0047 section 5).
+pub(crate) fn half_stale(
+    generations: &HalfGenerations,
+    half: usize,
+    taken: u64,
+    poisoned: &AtomicBool,
+) -> bool {
+    poisoned.load(Ordering::Acquire) || generations.half(half) != Some(taken)
+}
+
+/// One half's outputs: which half, its generation captured under the mutex
+/// together with its token, and a copy of its rows in `owned` mode.
+#[derive(Debug, Clone)]
+pub(crate) struct HalfOutput {
+    pub(crate) half: usize,
+    /// The delivery number of a `recv` (0 for `reset` and `restore_all`).
+    pub(crate) seq: u64,
+    pub(crate) generation: u64,
+    pub(crate) owned: Option<Arc<Owned>>,
+}
+
+/// What one non-waiting receive found.
+#[derive(Debug)]
+pub(crate) enum Polled {
+    /// A half, new or not yet acknowledged.
+    Half(HalfOutput),
+    /// The half that must finish next is still running.
+    Running(usize),
+    /// Another thread has a delivery it has not acknowledged yet.
+    Busy,
+}
+
+/// A whole-pool snapshot, opaque outside the pool that made it.
+pub(crate) type Snapshot = Arc<dyn Any + Send + Sync>;
+
+/// What a split-phase environment object can do, whatever the environment.
+pub(crate) trait SplitOps: Send + Sync {
+    fn storage(&self) -> Arc<OutputStorage>;
+    fn halves(&self) -> [Range<usize>; 2];
+    fn half_generations(&self) -> HalfGenerations;
+    /// Set while the pool is poisoned, as of its last call; views read it.
+    fn poison_flag(&self) -> Arc<AtomicBool>;
+    /// Held by the one running `recv`.
+    fn receiving(&self) -> &AtomicBool;
+    fn waiter(&self) -> &Waiter;
+    /// Resets every instance; the stored tokens are released first, and
+    /// both halves' new tokens are stored.
+    fn reset(&self, seed: &ResetSeed, owned: bool) -> Result<[HalfOutput; 2], BindError>;
+    /// Starts `half`'s next step. `delivered` acknowledges deliveries up to
+    /// that number; a half delivered but not acknowledged counts as in
+    /// flight, since its caller may never have seen it.
+    fn send(&self, half: u32, actions: &[i32], delivered: u64) -> Result<(), BindError>;
+    /// The oldest half, without waiting. A delivery stays stored until
+    /// `delivered` acknowledges it, and repeats until then, so a signal
+    /// raised after the native call returned loses nothing.
+    fn try_recv(&self, owned: bool, delivered: u64) -> Result<Polled, BindError>;
+    /// Captures every record and the cycle state; no work may be in flight.
+    fn snapshot_all(&self) -> Result<Snapshot, BindError>;
+    /// Restores a snapshot of this same pool and returns both halves.
+    fn restore_all(&self, snapshot: &Snapshot, owned: bool) -> Result<[HalfOutput; 2], BindError>;
+    fn is_poisoned(&self) -> bool;
+    /// Drains and joins the workers; idempotent.
+    fn close(&self);
+}
+
+struct State<E: Environment, M: MaskProvider<E>> {
+    pool: Option<PipelinedPool<E, M>>,
+    /// The token of each returned half, the borrow behind its NumPy views.
+    tokens: [Option<HalfToken<E, M>>; 2],
+    /// The last delivery, until acknowledged, and the thread it went to.
+    pending: Option<(HalfOutput, ThreadId)>,
+    last_seq: u64,
+}
+
+impl<E: Environment, M: MaskProvider<E>> State<E, M> {
+    fn acknowledge(&mut self, delivered: u64) {
+        if self
+            .pending
+            .as_ref()
+            .is_some_and(|(out, _)| out.seq <= delivered)
+        {
+            self.pending = None;
+        }
+    }
+}
+
+struct Taken<E: Environment> {
+    owner: Arc<OutputStorage>,
+    records: Vec<Record<E>>,
+    cycles: CycleState,
+}
+
+struct SplitPool<E: Environment, M: MaskProvider<E>> {
+    state: Mutex<State<E, M>>,
+    storage: Arc<OutputStorage>,
+    halves: [Range<usize>; 2],
+    generations: HalfGenerations,
+    poisoned: Arc<AtomicBool>,
+    /// A record to size snapshot buffers with.
+    template: Record<E>,
+    receiving: AtomicBool,
+    waiter: Waiter,
+    terminal: bool,
+}
+
+fn closed() -> BindError {
+    BindError::Argument("the environment is closed".to_owned())
+}
+
+fn flags(v: &[tessera_rl_core::Bool8]) -> Vec<u8> {
+    v.iter().map(|f| f.to_byte()).collect()
+}
+
+fn copy_token<E: Environment, M: MaskProvider<E>>(
+    token: &HalfToken<E, M>,
+    terminal: bool,
+) -> Owned {
+    Owned {
+        observations: (0..MAX_LEAVES)
+            .map_while(|leaf| token.observation(leaf).map(<[u8]>::to_vec))
+            .collect(),
+        terminal_observations: if terminal {
+            (0..MAX_LEAVES)
+                .map_while(|leaf| token.terminal_observation(leaf).map(<[u8]>::to_vec))
+                .collect()
+        } else {
+            Vec::new()
+        },
+        rewards: token
+            .rewards()
+            .iter()
+            .flat_map(|r| r.to_le_bytes())
+            .collect(),
+        agent_terminated: flags(token.agent_terminated()),
+        agent_truncated: flags(token.agent_truncated()),
+        alive: flags(token.alive()),
+        acting: flags(token.acting()),
+        episode_terminated: flags(token.episode_terminated()),
+        episode_truncated: flags(token.episode_truncated()),
+        masks: flags(token.masks()),
+    }
+}
+
+impl<E, M> SplitPool<E, M>
+where
+    E: Environment,
+    M: MaskProvider<E>,
+    E::Config: Send + Sync,
+    E::Header: Send + Sync,
+    E::State: Send + Sync,
+    <E::Header as RecordLayout>::Adaptive: AdaptiveValues<E::Config>,
+{
+    fn lock(&self) -> Result<MutexGuard<'_, State<E, M>>, BindError> {
+        // Poisoned only by a panic in a section of this module.
+        self.state
+            .lock()
+            .map_err(|_| BindError::Engine(EngineError::Poisoned))
+    }
+
+    /// Publishes the pool's poison to views, before the call returns.
+    fn note_poison(&self, pool: &PipelinedPool<E, M>) {
+        self.poisoned.store(pool.is_poisoned(), Ordering::Release);
+    }
+
+    fn output(&self, half: usize, seq: u64, token: &HalfToken<E, M>, owned: bool) -> HalfOutput {
+        HalfOutput {
+            half,
+            seq,
+            generation: self.generations.half(half).unwrap_or(0),
+            owned: owned.then(|| Arc::new(copy_token(token, self.terminal))),
+        }
+    }
+}
+
+impl<E, M> SplitOps for SplitPool<E, M>
+where
+    E: Environment,
+    M: MaskProvider<E>,
+    E::Config: Send + Sync,
+    E::Header: Send + Sync,
+    E::State: Send + Sync,
+    <E::Header as RecordLayout>::Adaptive: AdaptiveValues<E::Config>,
+{
+    fn storage(&self) -> Arc<OutputStorage> {
+        Arc::clone(&self.storage)
+    }
+
+    fn halves(&self) -> [Range<usize>; 2] {
+        self.halves.clone()
+    }
+
+    fn half_generations(&self) -> HalfGenerations {
+        self.generations.clone()
+    }
+
+    fn poison_flag(&self) -> Arc<AtomicBool> {
+        Arc::clone(&self.poisoned)
+    }
+
+    fn receiving(&self) -> &AtomicBool {
+        &self.receiving
+    }
+
+    fn waiter(&self) -> &Waiter {
+        &self.waiter
+    }
+
+    fn reset(&self, seed: &ResetSeed, owned: bool) -> Result<[HalfOutput; 2], BindError> {
+        let mut guard = self.lock()?;
+        let state = &mut *guard;
+        let pool = state.pool.as_mut().ok_or_else(closed)?;
+        // The FFI release (ADR-0047 section 9): NumPy views are not Rust
+        // references and keep the overwrite semantics.
+        state.tokens = [None, None];
+        let seeds: Vec<Option<Seed>>;
+        let reseed = match seed {
+            ResetSeed::Keep => Reseed::Keep,
+            ResetSeed::Base(s) => Reseed::Base(Seed::new(*s)),
+            ResetSeed::List(list) => {
+                seeds = list.iter().map(|s| s.map(Seed::new)).collect();
+                Reseed::Each(&seeds)
+            }
+        };
+        let result = pool.reset_all(reseed);
+        self.note_poison(pool);
+        let [a, b] = result?;
+        let out = [self.output(0, 0, &a, owned), self.output(1, 0, &b, owned)];
+        state.tokens = [Some(a), Some(b)];
+        state.pending = None;
+        Ok(out)
+    }
+
+    fn send(&self, half: u32, actions: &[i32], delivered: u64) -> Result<(), BindError> {
+        let mut guard = self.lock()?;
+        let state = &mut *guard;
+        state.acknowledge(delivered);
+        let pool = state.pool.as_mut().ok_or_else(closed)?;
+        let index = usize::try_from(half).unwrap_or(usize::MAX);
+        if state
+            .pending
+            .as_ref()
+            .is_some_and(|(out, _)| out.half == index)
+        {
+            return Err(BindError::Engine(EngineError::HalfInFlight {
+                half: u8::try_from(half).unwrap_or(u8::MAX),
+            }));
+        }
+        let stored = state.tokens.get_mut(index).and_then(Option::take);
+        let token = match stored {
+            Some(token) => token,
+            None => pool.idle_token(half)?,
+        };
+        let result = pool.send(
+            token,
+            ActionInput {
+                discrete: actions,
+                continuous: &[],
+            },
+        );
+        self.note_poison(pool);
+        result.map_err(|e| {
+            if let Some(slot) = state.tokens.get_mut(index) {
+                *slot = e.token;
+            }
+            BindError::Engine(e.error)
+        })
+    }
+
+    fn try_recv(&self, owned: bool, delivered: u64) -> Result<Polled, BindError> {
+        let mut guard = self.lock()?;
+        let state = &mut *guard;
+        state.acknowledge(delivered);
+        let pool = state.pool.as_mut().ok_or_else(closed)?;
+        let me = std::thread::current().id();
+        if let Some((out, owner)) = &state.pending {
+            return Ok(if *owner == me {
+                Polled::Half(out.clone())
+            } else {
+                Polled::Busy
+            });
+        }
+        let received = pool.try_recv();
+        self.note_poison(pool);
+        let Some(token) = received? else {
+            let oldest = pool.oldest_half().unwrap_or(0);
+            return Ok(Polled::Running(usize::try_from(oldest).unwrap_or(0)));
+        };
+        let half = usize::try_from(token.half()).unwrap_or(usize::MAX);
+        state.last_seq = state.last_seq.saturating_add(1);
+        let out = self.output(half, state.last_seq, &token, owned);
+        if let Some(slot) = state.tokens.get_mut(half) {
+            *slot = Some(token);
+        }
+        state.pending = Some((out.clone(), me));
+        Ok(Polled::Half(out))
+    }
+
+    fn snapshot_all(&self) -> Result<Snapshot, BindError> {
+        let guard = self.lock()?;
+        let pool = guard.pool.as_ref().ok_or_else(closed)?;
+        let n = self.halves.iter().map(ExactSizeIterator::len).sum();
+        let mut records = vec![self.template; n];
+        let cycles = pool.snapshot_all(&mut records)?;
+        Ok(Arc::new(Taken::<E> {
+            owner: Arc::clone(&self.storage),
+            records,
+            cycles,
+        }))
+    }
+
+    fn restore_all(&self, snapshot: &Snapshot, owned: bool) -> Result<[HalfOutput; 2], BindError> {
+        let taken = snapshot
+            .downcast_ref::<Taken<E>>()
+            .filter(|t| Arc::ptr_eq(&t.owner, &self.storage))
+            .ok_or_else(|| {
+                BindError::Argument("a snapshot restores only the pool that took it".to_owned())
+            })?;
+        let mut guard = self.lock()?;
+        let state = &mut *guard;
+        let pool = state.pool.as_mut().ok_or_else(closed)?;
+        // The FFI release, as in `reset`.
+        state.tokens = [None, None];
+        let restored = pool.restore_all(&taken.records, &taken.cycles);
+        self.note_poison(pool);
+        restored?;
+        let a = pool.idle_token(0)?;
+        let b = pool.idle_token(1)?;
+        let out = [self.output(0, 0, &a, owned), self.output(1, 0, &b, owned)];
+        state.tokens = [Some(a), Some(b)];
+        state.pending = None;
+        Ok(out)
+    }
+
+    fn is_poisoned(&self) -> bool {
+        self.lock().map_or(true, |s| {
+            s.pool.as_ref().is_some_and(PipelinedPool::is_poisoned)
+        })
+    }
+
+    fn close(&self) {
+        let taken = self.lock().ok().map(|mut state| {
+            state.pending = None;
+            let tokens = core::mem::take(&mut state.tokens);
+            (tokens, state.pool.take())
+        });
+        // Outside the mutex: this drains and joins the workers.
+        drop(taken);
+    }
+}
+
+/// A Pipelined environment object behind [`PoolOps`]. Every operation of
+/// the mode goes through [`SplitOps`]; the rest are refused.
+struct SplitHandle {
+    ops: Arc<dyn SplitOps>,
+    layout: Layout,
+}
+
+fn wrong_mode(call: &'static str) -> BindError {
+    BindError::Engine(EngineError::WrongMode {
+        call,
+        mode: "pipelined",
+    })
+}
+
+impl PoolOps for SplitHandle {
+    fn layout(&self) -> &Layout {
+        &self.layout
+    }
+
+    fn reset(&mut self, _ids: Option<&[u32]>, _seed: &ResetSeed) -> Result<(), BindError> {
+        Err(wrong_mode("reset"))
+    }
+
+    fn step(&mut self, _actions: &[i32]) -> Result<(), BindError> {
+        Err(wrong_mode("step"))
+    }
+
+    fn outputs(&self) -> Owned {
+        Owned::default()
+    }
+
+    fn storage(&self) -> Arc<OutputStorage> {
+        self.ops.storage()
+    }
+
+    fn snapshot(&self, _id: u32) -> Result<Vec<u8>, BindError> {
+        Err(wrong_mode("snapshot"))
+    }
+
+    fn import(&mut self, _id: u32, _bytes: &[u8]) -> Result<(), BindError> {
+        Err(wrong_mode("import_record"))
+    }
+
+    fn fork(&mut self, _src: u32, _dst: &[u32]) -> Result<(), BindError> {
+        Err(wrong_mode("fork"))
+    }
+
+    fn is_poisoned(&self) -> bool {
+        self.ops.is_poisoned()
+    }
+
+    fn split(&self) -> Option<Arc<dyn SplitOps>> {
+        Some(Arc::clone(&self.ops))
+    }
+}
+
+/// The environment object of a Pipelined `pool`, whose outputs live in
+/// `storage`.
+pub(crate) fn pipelined<E, M>(
+    pool: PipelinedPool<E, M>,
+    storage: Arc<OutputStorage>,
+    template: Record<E>,
+    layout: Layout,
+) -> Box<dyn PoolOps>
+where
+    E: Environment,
+    M: MaskProvider<E> + Send + Sync + 'static,
+    E: 'static,
+    E::Config: Send + Sync,
+    E::Header: Send + Sync,
+    E::State: Send + Sync,
+    <E::Header as RecordLayout>::Adaptive: AdaptiveValues<E::Config>,
+{
+    let usize_of = |v: u32| usize::try_from(v).unwrap_or(usize::MAX);
+    let halves = pool.halves().map(|r| usize_of(r.start)..usize_of(r.end));
+    let waiter = pool.waiter();
+    let generations = pool.half_generations();
+    let ops: Arc<dyn SplitOps> = Arc::new(SplitPool {
+        state: Mutex::new(State {
+            pool: Some(pool),
+            tokens: [None, None],
+            pending: None,
+            last_seq: 0,
+        }),
+        storage,
+        halves,
+        generations,
+        poisoned: Arc::new(AtomicBool::new(false)),
+        template,
+        receiving: AtomicBool::new(false),
+        waiter,
+        terminal: layout.terminal,
+    });
+    Box::new(SplitHandle { ops, layout })
+}
+
+#[cfg(test)]
+#[path = "../../tessera-rl-engine/tests/common/mod.rs"]
+mod common;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::env::{PoolArgs, cartpole};
+
+    fn split() -> (Box<dyn PoolOps>, Arc<dyn SplitOps>) {
+        let ops = cartpole(&PoolArgs {
+            num_envs: 8,
+            seed: 1,
+            max_episode_steps: None,
+            auto_reset: "next_step".to_owned(),
+            chunk_size: Some(2),
+            workers: 1,
+            pipelined: true,
+        })
+        .unwrap();
+        let split = ops.split().unwrap();
+        (ops, split)
+    }
+
+    fn received(split: &dyn SplitOps, delivered: u64) -> HalfOutput {
+        loop {
+            match split.try_recv(false, delivered).unwrap() {
+                Polled::Half(out) => return out,
+                Polled::Running(h) => {
+                    let _ = split
+                        .waiter()
+                        .wait_half(h, core::time::Duration::from_millis(50));
+                }
+                Polled::Busy => panic!("no other thread receives"),
+            }
+        }
+    }
+
+    /// The generation a delivery carries is the one under the mutex: a send
+    /// on another thread before its views are built cannot make them fresh.
+    #[test]
+    fn test_split_delivery_generation_predates_a_later_send() {
+        let (_ops, split) = split();
+        split.reset(&ResetSeed::Keep, false).unwrap();
+        split.send(0, &[0; 4], 0).unwrap();
+        let out = received(&*split, 0);
+        assert_eq!(out.generation, split.half_generations().half(0).unwrap());
+        split.send(0, &[0; 4], out.seq).unwrap();
+        assert_ne!(out.generation, split.half_generations().half(0).unwrap());
+        split.close();
+    }
+
+    #[test]
+    fn test_split_generation_moves_on_accepted_send_only() {
+        let (_ops, split) = split();
+        split.reset(&ResetSeed::Keep, false).unwrap();
+        let before = split.half_generations().half(0).unwrap();
+        assert!(split.send(0, &[0; 3], 0).is_err());
+        assert_eq!(split.half_generations().half(0).unwrap(), before);
+        split.send(0, &[0; 4], 0).unwrap();
+        assert_ne!(split.half_generations().half(0).unwrap(), before);
+        split.close();
+    }
+
+    #[test]
+    fn test_split_unacknowledged_delivery_repeats_and_blocks_its_send() {
+        let (_ops, split) = split();
+        split.reset(&ResetSeed::Keep, false).unwrap();
+        split.send(0, &[0; 4], 0).unwrap();
+        let first = received(&*split, 0);
+        let again = received(&*split, 0);
+        assert_eq!((first.seq, first.half), (again.seq, again.half));
+        assert!(split.send(0, &[0; 4], 0).is_err());
+        split.send(0, &[0; 4], first.seq).unwrap();
+        split.close();
+    }
+
+    fn counter(cfg: &super::common::CountConfig) -> Arc<dyn SplitOps> {
+        let mut options = tessera_rl_engine::PoolOptions::new(
+            core::num::NonZeroU32::new(8).unwrap(),
+            Seed::new(1),
+        );
+        options.chunk_size = core::num::NonZeroU32::new(2).unwrap();
+        let pool =
+            tessera_rl_engine::EnvPool::<super::common::Counter, tessera_rl_engine::NoMasks>::new(
+                cfg.clone(),
+                options,
+            )
+            .unwrap();
+        let args = PoolArgs {
+            num_envs: 8,
+            seed: 1,
+            max_episode_steps: None,
+            auto_reset: "next_step".to_owned(),
+            chunk_size: Some(2),
+            workers: 2,
+            pipelined: true,
+        };
+        crate::env::finish(cfg, pool, &args, 8, false)
+            .unwrap()
+            .split()
+            .unwrap()
+    }
+
+    /// A panic during a reset advances no generation, yet a view must not
+    /// report fresh over rows the reset may have partly written.
+    #[test]
+    fn test_split_panic_during_reset_makes_views_stale() {
+        let split = counter(&super::common::CountConfig {
+            panic_on_reset: true,
+            ..super::common::CountConfig::default()
+        });
+        let gens = split.half_generations();
+        let taken = gens.half(0).unwrap();
+        let flag = split.poison_flag();
+        assert!(!half_stale(&gens, 0, taken, &flag));
+        assert!(split.reset(&ResetSeed::Keep, false).is_err());
+        assert!(split.is_poisoned());
+        assert_eq!(gens.half(0), Some(taken), "no generation advanced");
+        assert!(half_stale(&gens, 0, taken, &flag));
+        split.close();
+    }
+
+    /// A step's panic marks the other half's views too; a recovering reset
+    /// gives new views that are fresh, and old ones stay stale.
+    #[test]
+    fn test_split_poison_ends_views_and_recovery_clears_it() {
+        let split = counter(&super::common::CountConfig {
+            panic_at: 1,
+            length: 9,
+            ..super::common::CountConfig::default()
+        });
+        split.reset(&ResetSeed::Keep, false).unwrap();
+        let gens = split.half_generations();
+        let flag = split.poison_flag();
+        let other = gens.half(1).unwrap();
+        let rows = split.halves()[0].len() * <super::common::Counter as Environment>::MAX_AGENTS;
+        split.send(0, &vec![0; rows], 0).unwrap();
+        let failed = loop {
+            match split.try_recv(false, 0) {
+                Ok(Polled::Running(h)) => {
+                    let _ = split
+                        .waiter()
+                        .wait_half(h, core::time::Duration::from_millis(1));
+                }
+                Ok(other) => panic!("expected a panic, got {other:?}"),
+                Err(e) => break e,
+            }
+        };
+        assert!(matches!(
+            failed,
+            BindError::Engine(EngineError::Panicked | EngineError::Poisoned)
+        ));
+        assert!(half_stale(&gens, 1, other, &flag));
+        split.reset(&ResetSeed::Keep, false).unwrap();
+        assert!(half_stale(&gens, 1, other, &flag), "old view stays stale");
+        let fresh = gens.half(1).unwrap();
+        assert!(!half_stale(&gens, 1, fresh, &flag), "new view is fresh");
+        split.close();
+    }
+}

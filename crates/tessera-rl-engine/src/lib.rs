@@ -50,8 +50,8 @@ pub use modes::async_mode::{
 };
 #[cfg(not(loom))]
 pub use modes::pipelined::{
-    CycleState, IntoPoolError, IntoPoolErrorKind, PipelinedBuildError, PipelinedOptions,
-    PipelinedPool, SendError,
+    CycleState, HalfGenerations, IntoPoolError, IntoPoolErrorKind, PipelinedBuildError,
+    PipelinedOptions, PipelinedPool, SendError,
 };
 pub use options::{AutoReset, CHUNK_RANGE, PoolOptions, SyncOptions, WaitBackend};
 pub use outputs::Outputs;

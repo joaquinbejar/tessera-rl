@@ -290,24 +290,18 @@ impl ActionMask for Counter {
 pub struct Bomb;
 
 impl Drop for Bomb {
-    #[expect(
-        clippy::panic,
-        reason = "a payload whose drop panics, for the poisoning tests"
-    )]
     fn drop(&mut self) {
         std::thread::sleep(std::time::Duration::from_millis(300));
-        std::panic::panic_any("bomb defused too late");
+        std::panic::resume_unwind(Box::new("bomb defused too late"));
     }
 }
 
-#[expect(clippy::panic, reason = "panic injection for poisoning tests")]
 fn throw_bomb() {
-    std::panic::panic_any(Bomb);
+    std::panic::resume_unwind(Box::new(Bomb));
 }
 
-#[expect(clippy::panic, reason = "panic injection for poisoning tests")]
 fn panic_now() {
-    panic!("injected step panic");
+    std::panic::resume_unwind(Box::new("injected step panic"));
 }
 
 const _: fn() = || {

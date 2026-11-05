@@ -599,6 +599,11 @@ pub(crate) fn tuple_items<'a>(g: Gil, t: Ref<'a>, what: &str) -> CResult<Vec<Ref
 }
 
 /// Whether `r` is an exact `list` (no exception either way).
+/// Whether `r` is exactly of `ty`, one of our heap types.
+pub(crate) fn is_instance_of(r: Ref<'_>, ty: *mut ffi::PyObject) -> bool {
+    r.is_exact(ty.cast())
+}
+
 pub(crate) fn is_list(r: Ref<'_>) -> bool {
     r.is_exact(&raw mut ffi::PyList_Type)
 }
