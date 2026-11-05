@@ -39,8 +39,11 @@ use super::sync::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 /// An id-buffer pool operation that cannot complete.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum BufferError {
-    /// The sizes are not `1 <= batch_size <= n`.
-    #[error("an id buffer pool needs 1 <= batch_size <= n, got batch_size {batch_size}, n {n}")]
+    /// The sizes are not `1 <= batch_size <= n <= 2^31`, the bound of the
+    /// id rings.
+    #[error(
+        "an id buffer pool needs 1 <= batch_size <= n <= 2^31, got batch_size {batch_size}, n {n}"
+    )]
     Size {
         /// The number of instances.
         n: usize,
@@ -53,8 +56,15 @@ pub enum BufferError {
     /// Every pool identity has been used (after `u64::MAX` pools).
     #[error("id buffer pool identities are exhausted")]
     PoolIdsExhausted,
-    /// The ids to store do not fit the buffer, or ids and generations
-    /// differ in length.
+    /// Ids and generations differ in length.
+    #[error("{ids} ids but {generations} generations")]
+    LengthMismatch {
+        /// The number of ids given.
+        ids: usize,
+        /// The number of generations given.
+        generations: usize,
+    },
+    /// The ids to store do not fit the buffer.
     #[error("{len} ids do not fit a buffer of {capacity}")]
     Length {
         /// The number of ids given.
@@ -134,10 +144,10 @@ impl IdBufferPool {
     ///
     /// # Errors
     ///
-    /// [`BufferError::Size`] unless `1 <= batch_size <= n`;
+    /// [`BufferError::Size`] unless `1 <= batch_size <= n <= 2^31`;
     /// [`BufferError::PoolIdsExhausted`] after `u64::MAX` pools.
     pub fn new(n: usize, batch_size: usize) -> Result<Self, BufferError> {
-        if batch_size == 0 || batch_size > n || u32::try_from(n).is_err() {
+        if batch_size == 0 || batch_size > n || n > super::ring::MAX_IDS {
             return Err(BufferError::Size { n, batch_size });
         }
         let batches = n / batch_size;
@@ -195,7 +205,8 @@ impl IdBufferPool {
     /// # Errors
     ///
     /// [`BufferError::ForeignHandle`] if the handle belongs to another pool;
-    /// [`BufferError::Length`] if they do not fit or differ in length.
+    /// [`BufferError::LengthMismatch`] if they differ in length;
+    /// [`BufferError::Length`] if they do not fit.
     /// Nothing is written then.
     pub fn fill(
         &self,
@@ -205,11 +216,17 @@ impl IdBufferPool {
     ) -> Result<(), BufferError> {
         let buffer = self.buffer(handle)?;
         let capacity = buffer.ids.len();
+        if ids.len() != generations.len() {
+            return Err(BufferError::LengthMismatch {
+                ids: ids.len(),
+                generations: generations.len(),
+            });
+        }
         let error = BufferError::Length {
             len: ids.len(),
             capacity,
         };
-        if ids.len() > capacity || ids.len() != generations.len() {
+        if ids.len() > capacity {
             return Err(error);
         }
         let len = u32::try_from(ids.len()).map_err(|_| error)?;

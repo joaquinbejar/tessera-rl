@@ -94,7 +94,7 @@ struct IdRing {
 
 /// The largest number of ids a ring accepts: ids are `u32`, and the
 /// capacity must stay a power of two that fits in `usize`.
-const MAX_IDS: usize = 1 << 31;
+pub(crate) const MAX_IDS: usize = 1 << 31;
 
 impl IdRing {
     fn new(n: usize) -> Result<Self, RingError> {
@@ -165,7 +165,12 @@ impl IdRing {
         loop {
             let slot = self.slot(pos).ok_or(RingError::Exhausted)?;
             let seq = slot.seq.load(Ordering::Acquire);
+            // Both positions are computed before the claim, so exhaustion is
+            // reported without taking a position.
             let filled = pos.checked_add(1).ok_or(RingError::Exhausted)?;
+            let free = pos
+                .checked_add(self.capacity())
+                .ok_or(RingError::Exhausted)?;
             match seq.cmp(&filled) {
                 core::cmp::Ordering::Equal => match self.head.compare_exchange(
                     pos,
@@ -175,9 +180,6 @@ impl IdRing {
                 ) {
                     Ok(_) => {
                         let id = slot.id.load(Ordering::Relaxed);
-                        let free = pos
-                            .checked_add(self.capacity())
-                            .ok_or(RingError::Exhausted)?;
                         slot.seq.store(free, Ordering::Release);
                         return Ok(Some(id));
                     }
