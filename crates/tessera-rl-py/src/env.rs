@@ -413,11 +413,12 @@ where
     if args.pipelined {
         let Pooled { pool, layout } = pooled;
         let storage = pool.outputs().storage();
+        let template = pool.snapshot(0)?;
         let options = PipelinedOptions::new(workers.unwrap_or(NonZeroUsize::MIN));
         let pool = pool
             .pipelined(options)
             .map_err(|e| BindError::Engine(e.error))?;
-        return Ok(crate::split::pipelined(pool, storage, layout));
+        return Ok(crate::split::pipelined(pool, storage, template, layout));
     }
     let Pooled { pool, layout } = pooled;
     let pool = match workers {

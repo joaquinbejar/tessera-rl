@@ -16,7 +16,7 @@ use std::sync::Arc;
 use core::sync::atomic::{AtomicPtr, Ordering};
 
 use pyo3::ffi;
-use tessera_rl_engine::{OutputDtype, OutputStorage};
+use tessera_rl_engine::{HalfGenerations, OutputDtype, OutputStorage};
 
 use super::capi::{self, CResult, Gil, Mine, Ref};
 
@@ -25,8 +25,7 @@ use super::tables::{
 };
 use super::{Table, dispose, dlpack, entry, entry_status, thunks};
 use crate::errors::{Kind, error};
-use crate::split::HalfGenerations;
-use crate::view::{Elem, ViewSpec};
+use crate::view::{Elem, ViewSpec, row_window};
 
 /// What a view object owns.
 struct View {
@@ -66,33 +65,28 @@ pub(crate) fn new_view(
     g: Gil,
     storage: &Arc<OutputStorage>,
     spec: &ViewSpec,
-    half: Option<(&HalfGenerations, usize)>,
+    half: Option<(&HalfGenerations, usize, u64)>,
 ) -> CResult<Mine> {
     let region = storage
         .region(spec.field)
         .ok_or_else(|| error(g, Kind::Argument, format!("no output {:?}", spec.field)))?;
     let bytes = region.len.checked_mul(region_itemsize(region.dtype));
-    let row_elements = spec
+    let row_bytes = spec
         .shape
         .iter()
         .skip(1)
-        .try_fold(1usize, |acc, &d| acc.checked_mul(d));
-    let row_bytes = row_elements.and_then(|e| e.checked_mul(spec.elem.itemsize));
+        .try_fold(spec.elem.itemsize, |acc, &d| acc.checked_mul(d));
     let rows = spec.shape.first().copied().unwrap_or(0);
-    let in_range = spec
-        .first_row
-        .checked_add(rows)
-        .is_some_and(|end| end <= spec.total_rows);
-    if bytes.is_none()
-        || !in_range
-        || row_bytes.and_then(|r| r.checked_mul(spec.total_rows)) != bytes
-    {
+    let window = bytes.zip(row_bytes).and_then(|(bytes, row_bytes)| {
+        row_window(bytes, row_bytes, spec.total_rows, spec.first_row, rows)
+    });
+    let Some((offset, bytes)) = window else {
         return Err(error(
             g,
             Kind::Argument,
             format!("output {:?} does not match its layout", spec.field),
         ));
-    }
+    };
     let too_large = || {
         capi::raise(
             g,
@@ -112,27 +106,18 @@ pub(crate) fn new_view(
         *stride = acc;
         acc = acc.checked_mul(dim).ok_or_else(too_large)?;
     }
-    let row_bytes = row_bytes.ok_or_else(too_large)?;
-    let bytes = row_bytes.checked_mul(rows).ok_or_else(too_large)?;
-    let offset = row_bytes
-        .checked_mul(spec.first_row)
-        .ok_or_else(too_large)?;
     // The buffer protocol describes sizes and dimensions as `Py_ssize_t`
     // and `int`: refuse now what `getbuffer` could not describe.
     isize::try_from(bytes).map_err(|_| too_large())?;
     c_int::try_from(shape.len()).map_err(|_| too_large())?;
     let view = View {
         storage: Arc::clone(storage),
-        // SAFETY: `first_row + rows <= total_rows` and the region holds
-        // `row_bytes * total_rows` bytes (checked above), so the offset stays
-        // inside the region's allocation.
+        // SAFETY: `row_window` checked that `offset + bytes` fits the
+        // region's bytes, so the offset stays inside its allocation.
         data: unsafe { region.ptr.add(offset) },
         bytes,
         generation: storage.generation(),
-        half: half.map(|(gens, h)| {
-            let taken = gens.get(h).map_or(0, |s| s.load(Ordering::Acquire));
-            (Arc::clone(gens), h, taken)
-        }),
+        half: half.map(|(gens, h, taken)| (gens.clone(), h, taken)),
         elem: spec.elem,
         shape,
         strides: strides.into_boxed_slice(),
@@ -272,10 +257,10 @@ pub(super) unsafe extern "C" fn is_stale(
     entry(|g| {
         // SAFETY: CPython passes `self` of an `OutputView` method.
         let v = unsafe { view(g, slf) }?;
-        let half_moved = v.half.as_ref().is_some_and(|(gens, h, taken)| {
-            gens.get(*h)
-                .is_none_or(|s| s.load(Ordering::Acquire) != *taken)
-        });
+        let half_moved = v
+            .half
+            .as_ref()
+            .is_some_and(|(gens, h, taken)| gens.half(*h) != Some(*taken));
         Ok(capi::boolean(
             g,
             half_moved || v.storage.generation() != v.generation,

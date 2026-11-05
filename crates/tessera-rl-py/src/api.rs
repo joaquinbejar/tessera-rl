@@ -9,14 +9,15 @@ use core::time::Duration;
 
 use std::sync::Arc;
 
-use tessera_rl_engine::{EngineError, OutputStorage};
+use tessera_rl_engine::{EngineError, HalfGenerations, OutputStorage};
 
 use crate::env::{BindError, Owned, PoolArgs, PoolOps, ResetSeed, TagFields};
 use crate::errors::{Kind, error, to_py};
 use crate::ffi::capi::{self, CResult, Gil, Mine, Raised, Ref};
 use crate::ffi::inner::Inner;
+use crate::ffi::snapshot_type;
 use crate::ffi::view_type::new_view;
-use crate::split::{HalfGenerations, HalfOutput, SplitOps};
+use crate::split::{HalfOutput, Polled, SplitOps};
 use crate::view::{ViewSet, half_view_set};
 
 /// Keyword arguments, as exact `(str, value)` pairs.
@@ -406,25 +407,33 @@ fn half_output(g: Gil, inner: &Inner, split: &dyn SplitOps, out: &HalfOutput) ->
         })?;
         let set = set.ok_or_else(no_format(g))?;
         let generations = split.half_generations();
-        views_dict(g, &set, &storage, Some((&generations, out.half)))?
+        views_dict(
+            g,
+            &set,
+            &storage,
+            Some((&generations, out.half, out.generation)),
+        )?
     };
     let d = capi::dict(g)?;
     capi::dict_set(g, &d, c"half", &int(g, out.half)?)?;
+    capi::dict_set(g, &d, c"seq", &capi::int_u64(g, out.seq)?)?;
     capi::dict_set(g, &d, c"start", &int(g, rows.start)?)?;
     capi::dict_set(g, &d, c"end", &int(g, rows.end)?)?;
     capi::dict_set(g, &d, c"outputs", &outputs)?;
     Ok(d)
 }
 
-/// `send(half, actions: bytes)`: starts the next step of `half`; `actions`
-/// are little-endian int32, one per agent row of the half.
+/// `send(half, actions: bytes, delivered)`: starts the next step of `half`;
+/// `actions` are little-endian int32, one per agent row of the half.
+/// `delivered` is the last `seq` the caller holds.
 pub(crate) fn send(g: Gil, inner: &Inner, args: Ref<'_>) -> CResult<Mine> {
-    let a: [Ref<'_>; 2] = exactly(g, args, "send")?;
-    let [half, actions] = a;
+    let a: [Ref<'_>; 3] = exactly(g, args, "send")?;
+    let [half, actions, delivered] = a;
+    let delivered = capi::to_u64(g, delivered, "delivered")?;
     let half = capi::to_u32(g, half, "half")?;
     let actions = actions_of(g, actions)?;
     let split = require_split(g, inner, "send")?;
-    g.detach(|| split.send(half, &actions))
+    g.detach(|| split.send(half, &actions, delivered))
         .map_err(|e| to_py(g, e))?;
     Ok(capi::none(g))
 }
@@ -438,43 +447,68 @@ impl Drop for Receiving<'_> {
     }
 }
 
+const CONCURRENT_RECV: &str = "ConcurrentRecv: another recv on this environment is running";
+
+/// `snapshot_all()`: an opaque whole-pool snapshot, for `restore_all` on
+/// this same environment. No work may be in flight.
+pub(crate) fn snapshot_all(g: Gil, inner: &Inner) -> CResult<Mine> {
+    let split = require_split(g, inner, "snapshot_all")?;
+    let taken = g.detach(|| split.snapshot_all()).map_err(|e| to_py(g, e))?;
+    snapshot_type::new_object(g, taken)
+}
+
+/// `restore_all(snapshot)`: restores every instance and the cycle state and
+/// returns both halves, as `reset`.
+pub(crate) fn restore_all(g: Gil, inner: &Inner, args: Ref<'_>) -> CResult<Mine> {
+    let a: [Ref<'_>; 1] = exactly(g, args, "restore_all")?;
+    let [snapshot] = a;
+    let snapshot = snapshot_type::snapshot_of(g, snapshot)?;
+    let split = require_split(g, inner, "restore_all")?;
+    let owned = !inner.borrowed();
+    let halves = g
+        .detach(|| split.restore_all(&snapshot, owned))
+        .map_err(|e| to_py(g, e))?;
+    list_of(
+        g,
+        halves.iter().map(|out| half_output(g, inner, &*split, out)),
+    )
+}
+
 /// How long one wait of `recv` lasts with the interpreter released.
 const RECV_WAIT: Duration = Duration::from_millis(50);
 
-/// `recv()`: waits for the oldest sent half and returns its outputs. It
+/// `recv(delivered)`: waits for the oldest sent half and returns its outputs. It
 /// waits in bounded steps, outside the mutex and with the interpreter
 /// released, and runs signal handlers between them: an exception they raise
 /// leaves the step in flight, and a later `recv` returns it. One `recv` at a
-/// time: a second one raises `ConcurrencyError` at once.
-pub(crate) fn recv(g: Gil, inner: &Inner) -> CResult<Mine> {
+/// time: a second one raises `ConcurrencyError` at once. The result repeats
+/// until `delivered` reaches its `seq`, so a signal raised after this returns
+/// loses nothing.
+pub(crate) fn recv(g: Gil, inner: &Inner, args: Ref<'_>) -> CResult<Mine> {
+    let a: [Ref<'_>; 1] = exactly(g, args, "recv")?;
+    let [delivered] = a;
+    let delivered = capi::to_u64(g, delivered, "delivered")?;
     let split = require_split(g, inner, "recv")?;
     if split
         .receiving()
         .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
         .is_err()
     {
-        return Err(error(
-            g,
-            Kind::Concurrency,
-            "ConcurrentRecv: another recv on this environment is running".to_owned(),
-        ));
+        return Err(error(g, Kind::Concurrency, CONCURRENT_RECV.to_owned()));
     }
     let _receiving = Receiving(split.receiving());
     let owned = !inner.borrowed();
     loop {
-        let received = g
-            .detach(|| split.try_recv(owned))
+        let polled = g
+            .detach(|| split.try_recv(owned, delivered))
             .map_err(|e| to_py(g, e))?;
-        if let Some(out) = received {
-            return half_output(g, inner, &*split, &out);
-        }
-        g.detach(|| {
-            // A ready half that is not the oldest: wait a moment instead of
-            // spinning on the oldest.
-            if split.waiter().wait_ready(RECV_WAIT) {
-                std::thread::sleep(Duration::from_micros(100));
+        match polled {
+            Polled::Half(out) => return half_output(g, inner, &*split, &out),
+            Polled::Busy => return Err(error(g, Kind::Concurrency, CONCURRENT_RECV.to_owned())),
+            Polled::Running(half) => {
+                let _ = g.detach(|| split.waiter().wait_half(half, RECV_WAIT));
             }
-        });
+        }
         capi::check_signals(g)?;
     }
 }
@@ -568,7 +602,7 @@ fn views_dict(
     g: Gil,
     set: &ViewSet,
     storage: &Arc<OutputStorage>,
-    half: Option<(&HalfGenerations, usize)>,
+    half: Option<(&HalfGenerations, usize, u64)>,
 ) -> CResult<Mine> {
     let d = capi::dict(g)?;
     let obs = list_of(

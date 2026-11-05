@@ -106,7 +106,9 @@ noargs!(layout, api::layout);
 noargs!(outputs, api::outputs);
 noargs!(is_poisoned, api::is_poisoned);
 noargs!(close, api::close);
-noargs!(recv, api::recv);
+varargs!(recv, api::recv);
+noargs!(snapshot_all, api::snapshot_all);
+varargs!(restore_all, api::restore_all);
 varargs!(send, api::send);
 varargs!(reset, api::reset);
 varargs!(step, api::step);
@@ -114,7 +116,7 @@ varargs!(snapshot, api::snapshot);
 varargs!(import_record, api::import_record);
 varargs!(fork, api::fork);
 
-static METHODS: Table<[ffi::PyMethodDef; 12]> = Table([
+static METHODS: Table<[ffi::PyMethodDef; 14]> = Table([
     method(
         c"layout",
         thunks::LAYOUT,
@@ -167,13 +169,25 @@ static METHODS: Table<[ffi::PyMethodDef; 12]> = Table([
         c"send",
         thunks::SEND,
         ffi::METH_VARARGS,
-        c"send(half, actions: bytes of int32)",
+        c"send(half, actions: bytes of int32, delivered)",
     ),
     method(
         c"recv",
         thunks::RECV,
+        ffi::METH_VARARGS,
+        c"recv(delivered) -> the oldest sent half's outputs",
+    ),
+    method(
+        c"snapshot_all",
+        thunks::SNAPSHOT_ALL,
         ffi::METH_NOARGS,
-        c"recv() -> the oldest sent half's outputs",
+        c"snapshot_all() -> an opaque whole-pool snapshot",
+    ),
+    method(
+        c"restore_all",
+        thunks::RESTORE_ALL,
+        ffi::METH_VARARGS,
+        c"restore_all(snapshot) -> both halves' outputs",
     ),
     method(c"fork", thunks::FORK, ffi::METH_VARARGS, c"fork(src, dst)"),
     method_end(),

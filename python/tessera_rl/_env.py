@@ -91,11 +91,14 @@ class Env:
     ``ArgumentError``. Here one thread may ``send`` while another waits in
     ``recv``; a second concurrent ``recv`` raises ``ConcurrencyError``.
     ``snapshot``, ``import_record``, ``fork`` and ``reset`` with ids are
-    not available in this mode yet.
+    not available in this mode yet; ``snapshot_all`` and ``restore_all``
+    are.
     """
 
     def __init__(self, native: _native.Env):
         self._native = native
+        #: The last split-phase delivery this object handed out.
+        self._delivered = 0
         layout = native.layout()
         self.num_envs: int = layout["num_envs"]
         self.agents: int = layout["agents"]
@@ -131,16 +134,38 @@ class Env:
         the other half has finished.
         """
         acts = _discrete_actions(actions)
-        self._native.send(_index(half, "half"), acts.tobytes())
+        self._native.send(_index(half, "half"), acts.tobytes(), self._delivered)
 
     def recv(self) -> HalfStep:
         """Waits for the oldest sent half and returns its outputs.
 
         The wait is interruptible: an exception from a signal handler
         (``KeyboardInterrupt``) leaves the step in flight, and a later
-        ``recv`` returns it.
+        ``recv`` returns it. An exception raised after the native call
+        returned loses nothing either: the next ``recv`` returns that half
+        again, and until then it counts as in flight for ``send``.
         """
-        return self._half(self._native.recv())
+        out = self._native.recv(self._delivered)
+        step = self._half(out)
+        # The last things here: storing an attribute and returning are not
+        # points where CPython runs signal handlers, so once acknowledged
+        # the result reaches the caller's frame.
+        self._delivered = out["seq"]
+        return step
+
+    def snapshot_all(self) -> _native.PoolSnapshot:
+        """An opaque snapshot of every instance and the cycles (Pipelined
+        mode). It restores only this environment and cannot be saved. No sent
+        half may be unreceived (``ConcurrencyError``); arrays stay valid.
+        """
+        return self._native.snapshot_all()
+
+    def restore_all(self, snapshot) -> list[HalfStep]:
+        """Restores a snapshot of this environment; one ``HalfStep`` per half,
+        as ``reset``. Needs every sent half received, except to recover a
+        poisoned pool.
+        """
+        return [self._half(h) for h in self._native.restore_all(snapshot)]
 
     def _half(self, out: dict) -> HalfStep:
         ids = range(out["start"], out["end"])

@@ -21,26 +21,64 @@ def actions(k, step):
     return (np.arange(k) + step) % 2
 
 
-def test_pipelined_cycle_is_bit_identical_to_sync_per_half():
+#: Per-agent output keys, and the keys with one value per instance.
+ROW_KEYS = ("rewards", "agent_terminated", "agent_truncated", "alive", "acting", "masks")
+EPISODE_KEYS = ("episode_terminated", "episode_truncated")
+
+
+def assert_rows_equal(sync_out, half_out, ids, n):
+    """Every output field of ``half_out`` equals rows ``ids`` of ``sync_out``."""
+
+    def check(key, whole, part):
+        whole, part = bytes(whole), bytes(part)
+        row = len(whole) // n
+        assert part == whole[row * ids.start : row * ids.stop], key
+
+    for key in (*ROW_KEYS, *EPISODE_KEYS):
+        check(key, sync_out[key], half_out[key])
+    for key in ("observations", "terminal_observations"):
+        assert len(sync_out[key]) == len(half_out[key]), key
+        for whole, part in zip(sync_out[key], half_out[key], strict=True):
+            check(key, whole, part)
+
+
+@pytest.mark.parametrize(
+    ("env_id", "auto_reset"),
+    [
+        ("tessera/CartPole-v1", "same_step"),
+        ("tessera/CartPole-v1", "next_step"),
+        ("tessera/Tag-v1", "same_step"),
+    ],
+)
+def test_pipelined_cycle_is_bit_identical_to_sync_in_every_field(env_id, auto_reset):
     n = 8
-    sync = t.make("tessera/CartPole-v1", num_envs=n, seed=7, outputs="owned")
+    common = dict(num_envs=n, seed=7, outputs="owned", auto_reset=auto_reset, max_episode_steps=5)
+    sync = t.make(env_id, **common)
+    env = t.make(env_id, mode="pipelined", chunk_size=2, **common)
     sync.reset()
-    env = pipelined(n, outputs="owned")
     env.reset()
-    a, b = env.halves
-    assert (a.start, a.stop, b.start, b.stop) == (0, 4, 4, 8)
-    for step in range(100):
-        all_actions = actions(n, step)
-        expected = sync.step(all_actions)
-        env.send(0, all_actions[a.start : a.stop])
-        env.send(1, all_actions[b.start : b.stop])
-        for half in (0, 1):
-            got = env.recv()
-            assert got.half == half
-            ids = got.ids
-            assert got.step.observations["obs"].tobytes() == expected.observations["obs"][ids.start : ids.stop].tobytes()
-            assert got.step.rewards.tobytes() == expected.rewards[ids.start : ids.stop].tobytes()
-            assert np.array_equal(got.step.episode_terminated, expected.episode_terminated[ids.start : ids.stop])
+    agents = sync.agents
+    ended = terminal_rows = 0
+    rng = np.random.default_rng(3)
+    for _ in range(40):
+        # Action 0 is legal for every agent of both environments' rows when
+        # sampled from {0}; CartPole also samples its second action.
+        high = 2 if env_id.endswith("CartPole-v1") else 1
+        acts = rng.integers(0, high, size=n * agents, dtype=np.int32)
+        expected = sync._native.step(acts.tobytes())
+        for half, ids in enumerate(env.halves):
+            part = acts[ids.start * agents : ids.stop * agents]
+            env._native.send(half, part.tobytes(), env._delivered)
+        for half, ids in enumerate(env.halves):
+            got = env._native.recv(env._delivered)
+            env._delivered = got["seq"]
+            assert got["half"] == half
+            assert_rows_equal(expected, got["outputs"], ids, n)
+        ended += sum(expected["episode_terminated"]) + sum(expected["episode_truncated"])
+        terminal_rows += len(expected["terminal_observations"])
+    assert ended, "no episode ended, so the end flags were not exercised"
+    if auto_reset == "same_step":
+        assert terminal_rows, "no terminal observations were compared"
     env.close()
 
 
@@ -181,16 +219,10 @@ def test_pipelined_interrupted_recv_leaves_the_step_in_flight():
             except Stop:
                 armed[0] = False
                 assert not env.is_poisoned
-                try:
-                    got = env.recv()
-                    interrupted = True
-                except t.ConcurrencyError:
-                    # The handler ran in Python after the native recv had
-                    # returned: nothing to retry, so not an interrupted wait.
-                    got = None
+                got = env.recv()
+                interrupted = True
             armed[0] = False
-            if got is not None:
-                assert got.step.observations["obs"].tobytes() == want.step.observations["obs"].tobytes()
+            assert got.step.observations["obs"].tobytes() == want.step.observations["obs"].tobytes()
             if interrupted:
                 break
             for pool in (env, reference):
@@ -297,11 +329,124 @@ def test_pipelined_close_with_work_in_flight_then_calls_refuse():
         env.send(0, actions(4, 0))
 
 
-def test_pipelined_views_outlive_a_dropped_environment():
-    env = pipelined()
+def test_pipelined_view_over_running_rows_outlives_the_dropped_environment():
+    env = pipelined(outputs="borrowed")
+    reference = pipelined(outputs="owned")
     first, _ = env.reset()
+    reference.reset()
     obs = first.step.observations["obs"]
-    before = obs.copy()
-    env.send(1, actions(4, 0))
-    del env
-    assert np.array_equal(obs, before)
+    env.send(0, actions(4, 0))
+    assert t.is_stale(obs)
+    # Half 0's rows are the ones running: dropping drains that step, and the
+    # view then shows its result.
+    del env, first
+    reference.send(0, actions(4, 0))
+    assert obs.tobytes() == reference.recv().step.observations["obs"].tobytes()
+
+
+def test_pipelined_view_is_stale_before_any_worker_write():
+    n = 1 << 14
+    env = pipelined(n, chunk_size=64, workers=1)
+    half = len(env.halves[0])
+    obs = env.reset()[0].step.observations["obs"]
+    other = env.halves[1]
+    violations = []
+    stop = threading.Event()
+
+    def watcher(array, original):
+        # Rows that changed while the view still reads fresh would be a
+        # write ahead of the generation. Read first, then ask.
+        while not stop.is_set():
+            changed = array.tobytes() != original
+            if changed and not t.is_stale(array):
+                violations.append(True)
+                return
+
+    for step in range(30):
+        current = env.reset()[0].step.observations["obs"] if step else obs
+        original = current.tobytes()
+        stop.clear()
+        thread = threading.Thread(target=watcher, args=(current, original))
+        thread.start()
+        env.send(0, actions(half, step))
+        env.recv()
+        stop.set()
+        thread.join(30)
+    assert len(other) == n - half
+    assert not violations
+
+
+def test_pipelined_result_survives_an_exception_after_native_recv(monkeypatch):
+    env = pipelined(outputs="owned")
+    env.reset()
+    env.send(0, actions(4, 0))
+    real = env._half
+    calls = []
+
+    def interrupted(out):
+        calls.append(out["seq"])
+        if len(calls) == 1:
+            # What a signal handler raising right after the native call does.
+            raise KeyboardInterrupt
+        return real(out)
+
+    monkeypatch.setattr(env, "_half", interrupted)
+    with pytest.raises(KeyboardInterrupt):
+        env.recv()
+    # Not yet seen by the caller: still in flight for send.
+    with pytest.raises(t.ConcurrencyError, match="in flight"):
+        env.send(0, actions(4, 1))
+    got = env.recv()
+    assert got.half == 0
+    assert calls[0] == calls[1]
+    assert not t.is_stale(got.step.rewards)
+    # Delivered once: the next recv has nothing, and the half can go again.
+    with pytest.raises(t.ConcurrencyError, match="(?i)nothing"):
+        env.recv()
+    env.send(0, actions(4, 1))
+    env.recv()
+
+
+def test_pipelined_snapshot_all_restores_identical_futures():
+    env = pipelined(outputs="owned")
+    env.reset()
+    for half in (0, 1):
+        env.send(half, actions(4, 0))
+    env.recv()
+    with pytest.raises(t.ConcurrencyError):
+        env.snapshot_all()
+    env.recv()
+    taken = env.snapshot_all()
+
+    def play():
+        out = []
+        for step in range(1, 6):
+            for half in (0, 1):
+                env.send(half, actions(4, step))
+            out += [env.recv().step.observations["obs"].tobytes() for _ in (0, 1)]
+        return out
+
+    first = play()
+    halves = env.restore_all(taken)
+    assert [h.half for h in halves] == [0, 1]
+    assert play() == first
+
+
+def test_pipelined_restore_all_is_refused_with_work_or_a_foreign_snapshot():
+    env = pipelined()
+    env.reset()
+    other = pipelined()
+    other.reset()
+    with pytest.raises(t.ArgumentError, match="only the pool"):
+        env.restore_all(other.snapshot_all())
+    with pytest.raises(TypeError):
+        env.restore_all(b"bytes")
+    taken = env.snapshot_all()
+    env.send(0, actions(4, 0))
+    with pytest.raises(t.ConcurrencyError):
+        env.restore_all(taken)
+    env.recv()
+    assert len(env.restore_all(taken)) == 2
+    sync = t.make("tessera/CartPole-v1", num_envs=2)
+    with pytest.raises(t.ArgumentError, match="not available in sync mode"):
+        sync.snapshot_all()
