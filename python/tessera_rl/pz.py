@@ -30,6 +30,14 @@ Observations are dicts of the environment's leaves plus ``action_mask``
 (``int8``, one entry per action). Outputs are always owned copies, so
 they stay valid across steps. One adapter runs one instance with
 auto-reset disabled: call ``reset`` to start a new episode.
+
+Actions are checked before anything changes: each must be an exact
+integer in ``[0, n)`` (integer types, or floats with no fractional part),
+for an agent in ``agents``; anything else raises ``ActionError`` and
+leaves the environment, and in AEC the buffered cycle, as it was. A legal
+index that the mask marks illegal, such as a move into a full Connect Four
+column, is replaced by the environment's no-op (ADR-0028); it is not an
+error.
 """
 
 from __future__ import annotations
@@ -37,10 +45,11 @@ from __future__ import annotations
 import numpy as np
 from gymnasium import spaces
 from pettingzoo import AECEnv, ParallelEnv
-from pettingzoo.utils.conversions import parallel_to_aec
+from pettingzoo.utils.conversions import parallel_to_aec_wrapper
+from pettingzoo.utils.wrappers import OrderEnforcingWrapper
 
 from tessera_rl import _native
-from tessera_rl._env import Env, native_kwargs
+from tessera_rl._env import Env, _discrete_actions, native_kwargs
 
 #: Native constructors and the PettingZoo interfaces each environment
 #: declares (ADR-0013). Anything else is refused at construction.
@@ -50,8 +59,11 @@ _ENVS = {
 }
 
 
-def _native_pool(env_id: str, adapter: str, seed: int | None, kwargs: dict) -> Env:
-    """One instance of ``env_id`` for ``adapter``, refused if undeclared."""
+def _native_pool(env_id: str, adapter: str, seed: int | None, kwargs: dict) -> tuple[Env, list[int]]:
+    """One instance of ``env_id`` for ``adapter``, refused if undeclared,
+    and the slots alive at reset. The slots are read from a probe pool
+    that is then closed, so the returned pool has not started an episode
+    and its first ``reset`` is the seed's first episode."""
     try:
         maker, declared = _ENVS[env_id]
     except KeyError:
@@ -66,17 +78,33 @@ def _native_pool(env_id: str, adapter: str, seed: int | None, kwargs: dict) -> E
     options = native_kwargs(
         num_envs=1, seed=0 if seed is None else seed, outputs="owned", auto_reset="disabled", **kwargs
     )
-    return Env(maker(**options))
+    probe = Env(maker(**options))
+    try:
+        slots = [int(i) for i in np.flatnonzero(probe.reset().alive[0])]
+    finally:
+        probe.close()
+    return Env(maker(**options)), slots
+
+
+def _exact_action(value, n: int) -> int:
+    """``value`` as an exact action index in ``[0, n)``; ``ActionError``
+    otherwise (the native contract: no truncation, no rounding)."""
+    arr = _discrete_actions(np.asarray(value).reshape(-1))
+    if arr.size != 1:
+        raise _native.ActionError(f"an action is one integer, got {np.asarray(value).size} values")
+    action = int(arr[0])
+    if not 0 <= action < n:
+        raise _native.ActionError(f"action {action} is outside [0, {n})")
+    return action
 
 
 class _Agents:
     """Spaces, names and per-agent views of a one-instance pool."""
 
-    def __init__(self, env: Env, env_id: str):
+    def __init__(self, pool: tuple[Env, list[int]], env_id: str):
+        env, self.slots = pool
         self.env = env
         self.env_id = env_id
-        first = env.reset()
-        self.slots = [int(i) for i in np.flatnonzero(first.alive[0])]
         self.names = [f"agent_{i}" for i in self.slots]
         self.slot_of = dict(zip(self.names, self.slots, strict=True))
         layout = env._native.layout()
@@ -92,10 +120,12 @@ class _Agents:
         leaves["action_mask"] = spaces.Box(low=0, high=1, shape=(n,), dtype=np.int8)
         self.observation_space = spaces.Dict(leaves)
         self.action_space = spaces.Discrete(n)
-        self.last = first
+        self.last = None
 
     def observe(self, slot: int) -> dict:
         step = self.last
+        if step is None:
+            raise _native.ArgumentError("call reset() before observing")
         obs = {name: np.array(arr[0, slot]) for name, arr in step.observations.items()}
         if step.masks is not None:
             obs["action_mask"] = step.masks[0, slot].astype(np.int8)
@@ -134,12 +164,18 @@ class TesseraParallelEnv(ParallelEnv):
         return {n: self._a.observe(self._a.slot_of[n]) for n in self.agents}, {n: {} for n in self.agents}
 
     def step(self, actions):
+        # Everything is checked before the pool is touched.
+        unknown = [n for n in actions if n not in self.agents]
+        if unknown:
+            raise _native.ActionError(f"actions for agents that are not live: {unknown}")
         missing = [n for n in self.agents if n not in actions]
         if missing:
             raise _native.ActionError(f"no action for live agents {missing}")
+        n = self._a.action_space.n
+        checked = {name: _exact_action(actions[name], n) for name in self.agents}
         acts = np.zeros((1, self._a.env.agents), dtype=np.int32)
-        for name in self.agents:
-            acts[0, self._a.slot_of[name]] = int(actions[name])
+        for name, action in checked.items():
+            acts[0, self._a.slot_of[name]] = action
         self._a.last = self._a.env.step(acts)
         obs, rewards, terms, truncs, infos = {}, {}, {}, {}, {}
         for name in self.agents:
@@ -169,7 +205,14 @@ class TesseraAECEnv(AECEnv):
         self.metadata = {**self.metadata, "name": env_id}
         self.render_mode = None
         self.possible_agents = list(self._a.names)
-        self._start()
+        # No reset here: the first reset() is the seed's first episode.
+        self.agents = list(self.possible_agents)
+        self.rewards = {n: 0.0 for n in self.agents}
+        self._cumulative_rewards = {n: 0.0 for n in self.agents}
+        self.terminations = {n: False for n in self.agents}
+        self.truncations = {n: False for n in self.agents}
+        self.infos = {n: {} for n in self.agents}
+        self.agent_selection = self.agents[0]
 
     def observation_space(self, agent):
         return self._a.observation_space
@@ -204,9 +247,10 @@ class TesseraAECEnv(AECEnv):
         if self.terminations[agent] or self.truncations[agent]:
             self._was_dead_step(action)
             return
+        checked = _exact_action(action, self._a.action_space.n)
         self._cumulative_rewards[agent] = 0.0
         acts = np.zeros((1, self._a.env.agents), dtype=np.int32)
-        acts[0, self._a.slot_of[agent]] = int(action)
+        acts[0, self._a.slot_of[agent]] = checked
         self._a.last = self._a.env.step(acts)
         for name in self.agents:
             reward, terminated, truncated = self._a.flags(self._a.slot_of[name])
@@ -241,8 +285,20 @@ def aec_env(env_id: str, seed: int | None = None, **kwargs) -> AECEnv:
     if "aec" not in declared:
         raise _native.ArgumentError(f"{env_id} declares {sorted(declared)}, not 'aec' (ADR-0013)")
     if "parallel" in declared:
-        return parallel_to_aec(TesseraParallelEnv(env_id, seed=seed, **kwargs))
+        return OrderEnforcingWrapper(_CheckedCycle(TesseraParallelEnv(env_id, seed=seed, **kwargs)))
     return TesseraAECEnv(env_id, seed=seed, **kwargs)
+
+
+class _CheckedCycle(parallel_to_aec_wrapper):
+    """Cycle buffering (PettingZoo's ``parallel_to_aec``) that checks each
+    action when it is buffered, so an invalid one leaves the buffered
+    cycle and the environment as they were."""
+
+    def step(self, action):
+        agent = self.agent_selection
+        if action is not None and not (self.terminations[agent] or self.truncations[agent]):
+            action = _exact_action(action, self.action_space(agent).n)
+        super().step(action)
 
 
 def turn_masked_env(env_id: str, seed: int | None = None, **kwargs):

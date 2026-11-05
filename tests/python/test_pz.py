@@ -7,10 +7,10 @@ buffering, and equality with the native pool."""
 import numpy as np
 import pytest
 
-pz_test = pytest.importorskip("pettingzoo.test")
+import pettingzoo.test as pz_test
 
-import tessera_rl  # noqa: E402
-from tessera_rl import _native, pz  # noqa: E402
+import tessera_rl
+from tessera_rl import _native, pz
 
 TAG = "tessera/Tag-v1"
 C4 = "tessera/Connect4-v1"
@@ -34,6 +34,27 @@ def test_pz_tag_passes_the_aec_api_test_through_cycle_buffering():
 
 def test_pz_connect4_passes_the_aec_api_test():
     pz_test.api_test(pz.aec_env(C4, seed=1), num_cycles=300, verbose_progress=False)
+
+
+def test_pz_small_tag_passes_the_api_tests_with_agents_removed():
+    # Crowded enough that evaders are caught and leave mid-episode.
+    pz_test.parallel_api_test(pz.parallel_env(TAG, seed=5, **SMALL_TAG), num_cycles=300)
+    pz_test.api_test(pz.aec_env(TAG, seed=5, **SMALL_TAG), num_cycles=400, verbose_progress=False)
+
+
+def test_pz_seed_tests_pass():
+    pz_test.parallel_seed_test(lambda: pz.parallel_env(TAG, **SMALL_TAG), num_cycles=200)
+    pz_test.seed_test(lambda: pz.aec_env(TAG, **SMALL_TAG), num_cycles=200)
+    pz_test.seed_test(lambda: pz.aec_env(C4), num_cycles=200)
+
+
+def test_pz_construction_does_not_consume_the_first_episode():
+    native = tessera_rl.make(TAG, num_envs=1, seed=4, outputs="owned", auto_reset="disabled", **SMALL_TAG)
+    first = native.reset()
+    obs, _ = pz.parallel_env(TAG, seed=4, **SMALL_TAG).reset()
+    for a in obs:
+        np.testing.assert_array_equal(obs[a]["window"], first.observations["window"][0, int(a.split("_")[1])])
+    native.close()
 
 
 @pytest.mark.parametrize(
@@ -146,3 +167,75 @@ def test_pz_connect4_terminal_rewards_reach_both_players_in_the_final_step():
     while env.agents:
         env.step(None)  # each finished agent leaves
     assert env.agents == []
+
+
+INVALID = [1.9, -1, 5, 7.5, "2", None]
+
+
+@pytest.mark.parametrize("bad", INVALID)
+def test_pz_parallel_invalid_action_raises_and_changes_nothing(bad):
+    env = pz.parallel_env(TAG, seed=2, **SMALL_TAG)
+    obs, _ = env.reset(seed=2)
+    good = {a: 0 for a in env.agents}
+    first = env.agents[0]
+    with pytest.raises(_native.ActionError):
+        env.step({**good, first: bad})
+    # The pool did not step: the same actions now give the same result as a
+    # fresh environment's first step.
+    ref = pz.parallel_env(TAG, seed=2, **SMALL_TAG)
+    ref.reset(seed=2)
+    a, b = env.step(good), ref.step(good)
+    for agent in a[0]:
+        np.testing.assert_array_equal(a[0][agent]["window"], b[0][agent]["window"])
+    assert a[1] == b[1]
+
+
+def test_pz_parallel_refuses_actions_for_agents_that_are_not_live():
+    env = pz.parallel_env(TAG, seed=2, **SMALL_TAG)
+    env.reset(seed=2)
+    with pytest.raises(_native.ActionError):
+        env.step({**{a: 0 for a in env.agents}, "agent_7": 0})
+    with pytest.raises(_native.ActionError):
+        env.step({**{a: 0 for a in env.agents}, "nobody": 0})
+
+
+@pytest.mark.parametrize("bad", [b for b in INVALID if b is not None])
+def test_pz_tag_aec_invalid_action_keeps_the_buffered_cycle(bad):
+    env = pz.aec_env(TAG, seed=2, **SMALL_TAG)
+    env.reset(seed=2)
+    env.step(1)  # the first agent's action is buffered
+    second = env.agent_selection
+    with pytest.raises(_native.ActionError):
+        env.step(bad)
+    assert env.agent_selection == second, "the cycle did not advance"
+    ref = pz.aec_env(TAG, seed=2, **SMALL_TAG)
+    ref.reset(seed=2)
+    ref.step(1)
+    # Complete the cycle in both with the same actions: the environment
+    # steps once, with the same buffered actions, so they stay equal.
+    for e in (env, ref):
+        for _ in range(len(e.agents) - 1):
+            e.step(0)
+    for agent in env.agents:
+        np.testing.assert_array_equal(env.observe(agent)["window"], ref.observe(agent)["window"])
+    assert env.rewards == ref.rewards
+
+
+@pytest.mark.parametrize("bad", [1.9, -1, 7, 7.5, "2"])
+def test_pz_connect4_invalid_action_raises_and_changes_nothing(bad):
+    env = pz.aec_env(C4, seed=0)
+    env.reset(seed=0)
+    env.step(3)
+    before = env.observe("agent_1")["board"].copy()
+    with pytest.raises(_native.ActionError):
+        env.step(bad)
+    assert env.agent_selection == "agent_1"
+    np.testing.assert_array_equal(env.observe("agent_1")["board"], before)
+
+
+def test_pz_connect4_full_column_is_the_engine_noop_not_an_error():
+    env = pz.aec_env(C4, seed=0)
+    env.reset(seed=0)
+    _c4_play(env, [0, 0, 0, 0, 0, 0])  # column 0 is full
+    assert env.observe(env.agent_selection)["action_mask"][0] == 0
+    env.step(0)  # legal index, masked illegal: replaced by the no-op (ADR-0028)
