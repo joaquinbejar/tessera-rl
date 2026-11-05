@@ -15,6 +15,8 @@
 )]
 
 mod api;
+mod async_api;
+mod batched;
 mod env;
 mod errors;
 mod ffi;

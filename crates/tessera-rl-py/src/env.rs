@@ -11,8 +11,8 @@ use tessera_rl_core::encoding::decode_from_slice;
 use tessera_rl_core::space::{BoxBounds, DType, Space};
 use tessera_rl_core::{DecodeError, Environment, TurnStructure, Validate};
 use tessera_rl_engine::{
-    ActionInput, AutoReset, DecodedRecord, EngineError, EnvPool, MAX_LEAVES, MaskProvider, Masked,
-    NoMasks, PipelinedOptions, PoolOptions, Reseed, SyncOptions,
+    ActionInput, AsyncOptions, AutoReset, DecodedRecord, EngineError, EnvPool, MAX_LEAVES,
+    MaskProvider, Masked, NoMasks, PipelinedOptions, PoolOptions, Reseed, SyncOptions,
 };
 use tessera_rl_games::{Connect4, Connect4Config, Leduc, LeducConfig, Othello, OthelloConfig};
 use tessera_rl_num::identity::Seed;
@@ -118,6 +118,10 @@ pub(crate) trait PoolOps: Send {
     fn is_poisoned(&self) -> bool;
     /// The split-phase operations, in Pipelined mode.
     fn split(&self) -> Option<std::sync::Arc<dyn crate::split::SplitOps>> {
+        None
+    }
+    /// The Async operations, in Async mode.
+    fn batched(&self) -> Option<std::sync::Arc<dyn crate::batched::AsyncOps>> {
         None
     }
 }
@@ -363,6 +367,8 @@ pub(crate) struct PoolArgs {
     pub(crate) workers: usize,
     /// Pipelined mode (ADR-0047) instead of Sync.
     pub(crate) pipelined: bool,
+    /// Async mode (ADR-0047) with its batch size and outputs.
+    pub(crate) asynced: Option<(usize, crate::batched::BatchOutputs)>,
 }
 
 fn options(args: &PoolArgs) -> Result<(PoolOptions, usize), BindError> {
@@ -419,6 +425,18 @@ where
             .pipelined(options)
             .map_err(|e| BindError::Engine(e.error))?;
         return Ok(crate::split::pipelined(pool, storage, template, layout));
+    }
+    if let Some((batch, outputs)) = args.asynced {
+        let batch = NonZeroUsize::new(batch)
+            .ok_or_else(|| BindError::Argument("batch_size must be at least 1".to_owned()))?;
+        let Pooled { pool, layout } = pooled;
+        let storage = pool.outputs().storage();
+        let template = pool.snapshot(0)?;
+        let options = AsyncOptions::new(workers.unwrap_or(NonZeroUsize::MIN), batch);
+        let pool = pool
+            .async_mode(options)
+            .map_err(|e| BindError::Engine(e.error))?;
+        return crate::batched::batched(pool, storage, template, layout, outputs);
     }
     let Pooled { pool, layout } = pooled;
     let pool = match workers {

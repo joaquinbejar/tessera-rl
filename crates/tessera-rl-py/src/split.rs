@@ -475,7 +475,7 @@ where
 
 #[cfg(test)]
 #[path = "../../tessera-rl-engine/tests/common/mod.rs"]
-mod common;
+pub(crate) mod common;
 
 #[cfg(test)]
 mod tests {
@@ -491,6 +491,7 @@ mod tests {
             chunk_size: Some(2),
             workers: 1,
             pipelined: true,
+            asynced: None,
         })
         .unwrap();
         let split = ops.split().unwrap();
@@ -570,6 +571,7 @@ mod tests {
             chunk_size: Some(2),
             workers: 2,
             pipelined: true,
+            asynced: None,
         };
         crate::env::finish(cfg, pool, &args, 8, false)
             .unwrap()

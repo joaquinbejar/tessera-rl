@@ -74,6 +74,20 @@ class HalfStep(NamedTuple):
     step: Step
 
 
+class AsyncStep(NamedTuple):
+    """One batch in Async mode (ADR-0047).
+
+    ``ids`` lists the batch's instances in the order they completed. With the
+    default ``gather="gathered"`` (and in ``owned`` mode) ``step`` has one row
+    per entry of ``ids``, in that order. With ``gather="indexed"`` every array
+    of ``step`` has all ``num_envs`` rows and only the rows of ``ids`` belong
+    to this batch: read those, the others may be running.
+    """
+
+    ids: np.ndarray
+    step: Step
+
+
 class Env:
     """A pool of ``num_envs`` instances of one environment.
 
@@ -86,17 +100,49 @@ class Env:
     actions, wrapping outputs) can interleave with other threads, so
     serialize calls on one ``Env`` yourself.
 
-    With ``mode="pipelined"`` (ADR-0047) the pool has two fixed halves,
-    ``halves``, stepped with ``send`` and ``recv``; ``step`` raises
-    ``ArgumentError``. Here one thread may ``send`` while another waits in
-    ``recv``; a second concurrent ``recv`` raises ``ConcurrencyError``.
-    ``snapshot``, ``import_record``, ``fork`` and ``reset`` with ids are
-    not available in this mode yet; ``snapshot_all`` and ``restore_all``
-    are.
+    Split-phase modes (ADR-0047): a step stays in flight after ``send``
+    returns, and ``step`` raises ``ArgumentError``. One thread may ``send``
+    while another waits in ``recv``; a second concurrent ``recv`` raises
+    ``ConcurrencyError`` naming ``ConcurrentRecv``. Writers (``reset``,
+    ``restore``, ``restore_all``) raise ``ConcurrencyError`` while sent work
+    still runs, and that error is retryable.
+
+    ``mode="pipelined"``: two fixed halves, ``halves``. ``send(half, actions)``
+    and ``recv() -> HalfStep``, oldest sent half first. A half's arrays stay
+    valid until its next ``send`` or a ``reset``. ``snapshot``,
+    ``import_record``, ``fork`` and ``reset`` with ids are refused;
+    ``snapshot_all`` and ``restore_all`` work.
+
+    ``mode="async"`` with ``batch_size``: ``send(ids, actions)`` and
+    ``recv() -> AsyncStep``, the first ``batch_size`` ids to finish. Batch
+    membership depends on timing; each instance's trajectory does not.
+    By default a batch is gathered into one buffer reused at every ``recv``,
+    so its arrays go stale at the next ``recv``, not the next ``send``: a
+    deliberate deviation from ADR-0006 that ADR-0047 records. Pass
+    ``gather="indexed"`` for arrays over all rows, which go stale when a
+    ``send`` or mutation of the batch's ids succeeds, or when ``reset(ids=...)``
+    or ``restore`` succeeds on any ids: those writers release every batch's
+    borrow, even over rows they do not write. A refused call leaves all arrays
+    fresh, and a poisoned pool makes all of them stale, for good. ``reset()`` returns all
+    instances as one batch; ``reset(ids=...)`` and ``restore`` return nothing
+    and the next ``recv`` delivers those ids. ``snapshot(id)`` needs every sent
+    id to have finished, not only ``id`` (issue #85): it raises a retryable
+    ``ConcurrencyError`` until then, and returns an opaque record for
+    ``restore``, not bytes. ``import_record`` and ``fork`` are refused.
+
+    Async is currently much slower per round than Sync: workers claim one
+    instance at a time and waits poll. Issue #83 tracks batch claiming and
+    wake-based waits. Prefer Sync or Pipelined unless you need out-of-order
+    batches.
+
+    Snapshots of split-phase modes are opaque, restore only the environment
+    that took them, and cannot be saved.
     """
 
-    def __init__(self, native: _native.Env):
+    def __init__(self, native: _native.Env, mode: str = "sync", indexed: bool = False):
         self._native = native
+        #: ``"sync"``, ``"pipelined"`` or ``"async"``.
+        self.mode: str = mode
         #: The last split-phase delivery this object handed out.
         self._delivered = 0
         layout = native.layout()
@@ -112,38 +158,56 @@ class Env:
         if "halves" in layout:
             (a, b), (c, d) = layout["halves"]
             self.halves = (range(a, b), range(c, d))
+        self._indexed: bool = indexed
         self._leaves = [(name or "obs", np.dtype(dtype), tuple(shape)) for name, dtype, shape, *_ in layout["leaves"]]
 
-    def reset(self, seed: int | None = None) -> Step | list[HalfStep]:
+    def reset(self, seed: int | None = None, ids=None) -> Step | list[HalfStep] | AsyncStep | None:
         """Resets every instance; a new seed base if ``seed`` is given.
 
-        In Pipelined mode it returns one ``HalfStep`` per half, and it needs
-        every sent half received first (``ConcurrencyError``), except to
-        recover a poisoned pool.
+        Pipelined: one ``HalfStep`` per half. Async: one ``AsyncStep`` of all
+        instances, or with ``ids`` nothing, as the next ``recv`` delivers
+        them. Both need every sent id finished (``ConcurrencyError``),
+        except to recover a poisoned pool.
         """
-        out = self._native.reset() if seed is None else self._native.reset(_index(seed, "seed"))
-        if self.halves is not None:
+        seed = None if seed is None else _index(seed, "seed")
+        if ids is not None:
+            if self.mode != "async":
+                raise _native.ArgumentError(f"reset with ids is not available in {self.mode} mode")
+            self._native.reset(seed, [_index(i, "ids") for i in ids], self._delivered)
+            return None
+        out = self._native.reset() if seed is None else self._native.reset(seed)
+        if self.mode == "pipelined":
             return [self._half(h) for h in out]
+        if self.mode == "async":
+            return self._batch(out)
         return self._wrap(out)
 
-    def send(self, half: int, actions) -> None:
-        """Starts the next step of ``half`` (Pipelined mode). ``actions`` has
-        one int per agent row of the half, ``(len(halves[half]), agents)``,
-        under the rules of ``step``. Ends the borrow window of that half's
-        arrays. ``ConcurrencyError`` if the half is two cycles ahead of what
-        the other half has finished.
-        """
-        acts = _discrete_actions(actions)
-        self._native.send(_index(half, "half"), acts.tobytes(), self._delivered)
+    def send(self, target, actions) -> None:
+        """Starts steps. Pipelined: ``target`` is a half and ``actions`` has
+        one int per agent row of it; it ends that half's arrays' window.
+        Async: ``target`` is a list of ids and ``actions`` one int per agent
+        row of them, in that order. Rules as ``step``.
 
-    def recv(self) -> HalfStep:
-        """Waits for the oldest sent half and returns its outputs.
+        ``ConcurrencyError`` while the target is in flight or was delivered
+        to a ``recv`` that was interrupted before returning, or, in
+        Pipelined, two cycles ahead of the other half.
+        """
+        acts = _discrete_actions(actions).tobytes()
+        if self.mode == "async":
+            target = [_index(i, "ids") for i in target]
+        else:
+            target = _index(target, "half")
+        self._native.send(target, acts, self._delivered)
+
+    def recv(self) -> HalfStep | AsyncStep:
+        """Waits for the next result: the oldest sent half (Pipelined) or the
+        first full batch (Async).
 
         The wait is interruptible: an exception from a signal handler
-        (``KeyboardInterrupt``) leaves the step in flight, and a later
+        (``KeyboardInterrupt``) leaves the work in flight, and a later
         ``recv`` returns it. An exception raised after the native call
-        returned loses nothing either: the next ``recv`` returns that half
-        again, and until then it counts as in flight for ``send``.
+        returned loses nothing either: the next ``recv`` returns that result
+        again, and until then its ids count as in flight for ``send``.
 
         One limit remains: once this method acknowledges the result, a signal
         handler that raises in the caller's frame before the result is bound
@@ -156,26 +220,37 @@ class Env:
 
         If the thread that received a result exits before acknowledging it,
         ``recv`` on other threads stays refused with ``ConcurrencyError``
-        until ``reset``, ``restore_all`` or ``close``.
+        until ``reset`` of all instances, ``restore_all`` or ``close``.
         """
         out = self._native.recv(self._delivered)
-        step = self._half(out)
+        result = self._batch(out) if self.mode == "async" else self._half(out)
         self._delivered = out["seq"]
-        return step
+        return result
 
     def snapshot_all(self) -> _native.PoolSnapshot:
-        """An opaque snapshot of every instance and the cycles (Pipelined
-        mode). It restores only this environment and cannot be saved. No sent
-        half may be unreceived (``ConcurrencyError``); arrays stay valid.
+        """An opaque snapshot of every instance (split-phase modes). It
+        restores only this environment and cannot be saved. All sent work must
+        be finished (``ConcurrencyError``, retryable); arrays stay valid.
         """
         return self._native.snapshot_all()
 
-    def restore_all(self, snapshot) -> list[HalfStep]:
-        """Restores a snapshot of this environment; one ``HalfStep`` per half,
-        as ``reset``. Needs every sent half received, except to recover a
-        poisoned pool.
+    def restore_all(self, snapshot) -> list[HalfStep] | None:
+        """Restores a snapshot of this environment. Pipelined: one
+        ``HalfStep`` per half. Async: nothing; send next. Needs all sent work
+        finished, except to recover a poisoned pool.
         """
-        return [self._half(h) for h in self._native.restore_all(snapshot)]
+        out = self._native.restore_all(snapshot)
+        return None if out is None else [self._half(h) for h in out]
+
+    def restore(self, ids, snapshots) -> None:
+        """Restores ``ids`` from one-instance ``snapshot`` records (Async
+        mode); the next ``recv`` delivers them."""
+        self._native.restore([_index(i, "ids") for i in ids], list(snapshots), self._delivered)
+
+    def _batch(self, out: dict) -> AsyncStep:
+        ids = np.array(out["ids"], dtype=np.uint32)
+        rows = None if self._indexed else len(ids)
+        return AsyncStep(ids, self._wrap(out["outputs"], rows))
 
     def _half(self, out: dict) -> HalfStep:
         ids = range(out["start"], out["end"])
@@ -226,7 +301,8 @@ class Env:
         )
 
     def snapshot(self, index: int) -> bytes:
-        """The canonical record of instance ``index``."""
+        """The canonical record of instance ``index``; in Async mode an opaque
+        record for ``restore`` (see the class notes)."""
         return self._native.snapshot(_index(index, "index"))
 
     def import_record(self, index: int, record: bytes) -> None:
@@ -290,7 +366,7 @@ def _index(value, what: str) -> int:
 
 
 #: Keyword arguments the native constructors take as strings.
-_STRING_OPTIONS = {"auto_reset", "outputs", "mode"}
+_STRING_OPTIONS = {"auto_reset", "outputs", "mode", "gather"}
 
 
 def native_kwargs(**kwargs) -> dict:
@@ -338,9 +414,10 @@ def make(env_id: str, num_envs: int = 1, seed: int = 0, outputs: str = "borrowed
     until the next call) or ``"owned"`` (fresh arrays). Pool options:
     ``max_episode_steps``, ``auto_reset`` (``"next_step"``,
     ``"same_step"`` or ``"disabled"``), ``chunk_size``, ``workers``,
-    ``mode`` (``"sync"``, the default, or ``"pipelined"``, which takes
-    ``workers``, 1 by default, and needs at least two chunks; ``"async"`` is
-    not available yet). Tag also
+    ``mode`` (``"sync"``, the default; ``"pipelined"``, which needs at least
+    two chunks; or ``"async"``, which needs ``batch_size`` and takes ``gather``,
+    ``"gathered"`` by default or ``"indexed"``). Split-phase modes default to
+    one worker; see ``Env``. Tag also
     takes its config fields (``width``, ``height``, ``pursuers``,
     ``evaders``, ``slip``, ``radius``). Connect Four takes no config;
     its ``max_episode_steps`` defaults to 64, above the 42 plies of a game.
@@ -360,4 +437,6 @@ def make(env_id: str, num_envs: int = 1, seed: int = 0, outputs: str = "borrowed
         maker = makers[env_id]
     except KeyError:
         raise _native.ArgumentError(f"unknown environment {env_id!r}; known: {sorted(makers)}") from None
-    return Env(maker(**native_kwargs(num_envs=num_envs, seed=seed, outputs=outputs, **kwargs)))
+    mode = str(kwargs.get("mode") or "sync")
+    indexed = kwargs.get("gather") == "indexed"
+    return Env(maker(**native_kwargs(num_envs=num_envs, seed=seed, outputs=outputs, **kwargs)), mode, indexed)

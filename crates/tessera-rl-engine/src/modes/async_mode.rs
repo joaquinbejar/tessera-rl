@@ -61,6 +61,20 @@ use crate::validate::{
     ActionInput, check_recv, check_send_ids, check_subset_actions, copy_subset_actions,
 };
 
+/// Reads the export generations of an Async pool's ids from any thread
+/// (ADR-0047 section 5). A generation moves before the send that moves it
+/// admits its id.
+#[derive(Debug, Clone)]
+pub struct IdGenerations(Arc<Generations>);
+
+impl IdGenerations {
+    /// The generation of `id`; `None` out of range.
+    #[must_use]
+    pub fn id(&self, id: u32) -> Option<u64> {
+        self.0.id(usize::try_from(id).ok()?).ok()
+    }
+}
+
 /// Options of the Async mode: the workers, as in Sync mode, and the batch
 /// size of `recv`.
 #[derive(Debug, Clone)]
@@ -129,7 +143,7 @@ pub struct AsyncPool<E: Environment, M: MaskProvider<E>> {
     // joins the workers before the mode's `Arc` below is released.
     runtime: Workers,
     mode: Arc<BatchMode<E, M>>,
-    generations: Generations,
+    generations: Arc<Generations>,
     seen: Vec<Bool8>,
     /// Completed ids popped for the next batch.
     stage: Vec<u32>,
@@ -239,7 +253,7 @@ where
         Ok(AsyncPool {
             runtime: Workers(Some(runtime)),
             mode,
-            generations: Generations::new(n),
+            generations: Arc::new(Generations::new(n)),
             seen: vec![Bool8::FALSE; n],
             stage: Vec::with_capacity(n),
             stage_gens: Vec::with_capacity(n),
@@ -313,7 +327,13 @@ where
         }
     }
 
-    /// A [`BatchWaiter`] that waits for a ready batch from any thread.
+    /// A handle reading the ids' generations from any thread.
+    #[must_use]
+    pub fn id_generations(&self) -> IdGenerations {
+        IdGenerations(Arc::clone(&self.generations))
+    }
+
+    /// A [`BatchWaiter`] that waits for a full batch from any thread.
     #[must_use]
     pub fn waiter(&self) -> BatchWaiter {
         BatchWaiter {
@@ -1091,7 +1111,7 @@ where
                     pool: Box::new(Self {
                         runtime: Workers(rt),
                         mode,
-                        generations: Generations::new(n),
+                        generations: Arc::new(Generations::new(n)),
                         seen: vec![Bool8::FALSE; n],
                         stage: Vec::new(),
                         stage_gens: Vec::new(),
