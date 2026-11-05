@@ -173,12 +173,12 @@ impl Counted {
 }
 
 /// Per-worker markers: `a[w]` is set when worker `w` has run job A, and
-/// `order_violations` counts B calls on a worker that had not run A yet.
+/// `violations` counts B calls on a worker that had not run A yet.
 struct Order {
     a: Vec<AtomicUsize>,
     a_calls: AtomicUsize,
     b_calls: AtomicUsize,
-    order_violations: AtomicUsize,
+    violations: AtomicUsize,
 }
 
 impl Order {
@@ -187,7 +187,7 @@ impl Order {
             a: (0..workers).map(|_| AtomicUsize::new(0)).collect(),
             a_calls: AtomicUsize::new(0),
             b_calls: AtomicUsize::new(0),
-            order_violations: AtomicUsize::new(0),
+            violations: AtomicUsize::new(0),
         })
     }
 }
@@ -205,7 +205,7 @@ fn two_published(opts: &GangOptions) {
     };
     let fb = move |w: usize| {
         if ob.a[w].load(Ordering::SeqCst) != 1 {
-            ob.order_violations.fetch_add(1, Ordering::SeqCst);
+            ob.violations.fetch_add(1, Ordering::SeqCst);
         }
         ob.b_calls.fetch_add(1, Ordering::SeqCst);
     };
@@ -219,7 +219,7 @@ fn two_published(opts: &GangOptions) {
     assert!(!gang.wait().unwrap());
     assert_eq!(order.b_calls.load(Ordering::SeqCst), workers);
     assert_eq!(
-        order.order_violations.load(Ordering::SeqCst),
+        order.violations.load(Ordering::SeqCst),
         0,
         "a worker ran B before its own A"
     );
