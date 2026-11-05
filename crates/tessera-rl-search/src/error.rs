@@ -153,6 +153,29 @@ pub enum SearchError {
         /// What did not hold.
         reason: &'static str,
     },
+    /// The sampled state violates the environment's invariants
+    /// (`Validate`).
+    #[error("the sampled state is invalid: {violation}")]
+    SampleInvariant {
+        /// The violated invariant.
+        violation: tessera_rl_core::InvariantViolation,
+    },
+    /// The sampled record has a field with an invalid bit pattern.
+    #[error("the sampled record has an invalid field: {source}")]
+    SampleField {
+        /// The decoding error of the field.
+        source: tessera_rl_core::DecodeError,
+    },
+    /// Author code (`Determinize::sample`, `Validate`, `info_state` or
+    /// `acting`) panicked while a root was determinized. The panic was
+    /// contained; the tree and the scratch pool are unchanged.
+    #[error("environment code panicked while a root was determinized")]
+    AuthorPanicked,
+    /// The environment has adaptive fields: ADR-0046 allows no
+    /// determinization until adaptive values have a route into the
+    /// information state.
+    #[error("an environment with adaptive fields cannot be determinized yet (ADR-0046)")]
+    AdaptiveDeterminize,
     /// A `Sequential` sample without exactly one acting agent.
     #[error("{acting} acting agents in a Sequential sample; exactly one is required")]
     SampleNotSingleActor {

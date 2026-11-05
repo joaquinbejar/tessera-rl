@@ -12,7 +12,7 @@
 //! recomputes `acting` and zeroes the rest. It then passes the engine's
 //! import checks before it enters the tree.
 
-use tessera_rl_core::encoding::encode_to_vec;
+use tessera_rl_core::encoding::{Canonical, encode_to_vec};
 use tessera_rl_core::{
     AdaptiveValues, AgentSlot, Determinize, Environment, RecordLayout, StateInit, TurnStructure,
     Validate,
@@ -127,12 +127,13 @@ where
     where
         E: Determinize + Validate,
     {
+        refuse_adaptive::<E>()?;
         let mut pool = Self::build_pool(cfg, options, root, build)?;
+        // No slot, buffer or scratch row keeps a copy of the full root:
+        // `determinize` refills the buffers and the scratch rows, and every
+        // node slot takes the determinized record.
         let record = pool.determinize(root, how)?;
-        // No slot or buffer keeps a copy of the full root.
         pool.records.fill(record);
-        pool.child_records.fill(record);
-        pool.load_records.fill(record);
         pool.replace_root(&record)?;
         pool.mode = RootMode::Determinized;
         Ok(pool)
@@ -194,12 +195,49 @@ where
         if self.mode != RootMode::Determinized {
             return Err(SearchError::NotDeterminized);
         }
+        refuse_adaptive::<E>()?;
         let record = self.determinize(root, how)?;
         self.replace_root(&record)
     }
 
+    /// Whether a copy of `record` is held anywhere in the pool: a node
+    /// slot, a staging buffer or a row of the scratch pool. A test aid
+    /// for ADR-0046 (no buffer of a determinized pool keeps the full
+    /// root); it allocates and scans everything.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn holds_record(&self, record: &Record<E>) -> bool {
+        let hash = record.hash();
+        let in_scratch =
+            (0..self.batch).any(|id| self.scratch.snapshot(id).is_ok_and(|r| r.hash() == hash));
+        in_scratch
+            || self
+                .records
+                .iter()
+                .chain(&self.child_records)
+                .chain(&self.load_records)
+                .any(|r| r.hash() == hash)
+    }
+
+    /// Whether every staging buffer and every scratch row holds exactly
+    /// `record`. A test aid for ADR-0046; it allocates and scans
+    /// everything.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn buffers_hold_only(&self, record: &Record<E>) -> bool {
+        let hash = record.hash();
+        (0..self.batch).all(|id| self.scratch.snapshot(id).is_ok_and(|r| r.hash() == hash))
+            && self
+                .child_records
+                .iter()
+                .chain(&self.load_records)
+                .all(|r| r.hash() == hash)
+    }
+
     /// Builds the determinized record of `root`. The tree is never
-    /// touched; the scratch pool is, and every expansion reloads it.
+    /// touched. The scratch pool is, and every expansion reloads it; on
+    /// success its rows and the staging buffers hold the determinized
+    /// record, on error the record they held before (never the root).
     fn determinize(
         &mut self,
         root: &Record<E>,
@@ -208,82 +246,108 @@ where
     where
         E: Determinize + Validate,
     {
-        let engine = root.header().engine();
-        if engine.pending_reset.get() {
+        if root.header().engine().pending_reset.get() {
             return Err(SearchError::PendingResetRoot);
         }
         let row = [0_u32];
         // Readiness: the root passes the import checks of an initialized
         // record. `restore_all` first recovers a scratch pool an earlier
-        // failed step poisoned.
-        self.load_records.fill(*root);
+        // failed step poisoned, and then removes the root again.
         self.scratch.restore_all(&self.load_records)?;
-        self.scratch
-            .import(&row, &[DecodedRecord::from(*root)])
-            .map_err(|source| SearchError::RootNotReady { source })?;
+        let ready = self.scratch.import(&row, &[DecodedRecord::from(*root)]);
+        self.scratch.restore_all(&self.load_records)?;
+        ready.map_err(|source| SearchError::RootNotReady { source })?;
 
-        let cfg = self.scratch.config();
-        let info = E::info_state(cfg, root.state(), how.agent);
-        let auth = RngAuthority::engine_only();
-        let mut rng = StepRng::new(
-            &auth,
-            &sampler_identity(how.sampler_seed, how.sample_index),
-            StreamId::DYNAMICS,
-        );
-        let mut state = <E::State as StateInit>::state_default();
-        E::sample(cfg, &info, &mut rng, &mut state);
-        if rng.exhausted() {
-            return Err(SearchError::InconsistentSample {
-                reason: "the sampler exhausted its RNG counters",
-            });
-        }
-        if encode_to_vec(&E::info_state(cfg, &state, how.agent)) != encode_to_vec(&info) {
-            return Err(SearchError::InconsistentSample {
-                reason: "the sampled state has a different information state",
-            });
-        }
-
-        let mut source = *root.header();
-        let mut header = <E::Header as StateInit>::state_default();
-        *header.adaptive_mut() = *source.adaptive_mut();
-        {
-            let out = header.engine_mut();
-            out.identity = rollout_identity(
-                how.sampler_seed,
-                how.sample_index,
-                engine.identity.step_index(),
-            );
-            out.episode_steps = engine.episode_steps;
-        }
-        let mut acting = 0_usize;
-        for (slot, (out, from)) in header
-            .agents_mut()
-            .iter_mut()
-            .zip(source.agents())
-            .enumerate()
-        {
-            out.generation = from.generation;
-            out.alive = from.alive;
-            let acts = from.alive.get()
-                && (E::TURNS == TurnStructure::Simultaneous
-                    || u16::try_from(slot)
-                        .ok()
-                        .and_then(|s| AgentSlot::new(s, E::MAX_AGENTS))
-                        .is_some_and(|s| E::acting(cfg, &state, s)));
-            out.acting = acts.into();
-            acting += usize::from(acts);
-        }
-        if E::TURNS == TurnStructure::Sequential && acting != 1 {
-            return Err(SearchError::SampleNotSingleActor { acting });
-        }
-        let decoded = DecodedRecord::from_parts(header, state).map_err(|_| {
-            SearchError::InconsistentSample {
-                reason: "the sampled state has an invalid field",
-            }
-        })?;
+        let (header, state) = self
+            .scratch
+            .contain(|cfg| sampled_record::<E>(cfg, root, how))
+            .ok_or(SearchError::AuthorPanicked)??;
+        let decoded = DecodedRecord::from_parts(header, state)
+            .map_err(|source| SearchError::SampleField { source })?;
         self.scratch.import(&row, &[decoded])?;
-        Ok(self.scratch.snapshot(0)?)
+        let record = self.scratch.snapshot(0)?;
+        self.load_records.fill(record);
+        self.child_records.fill(record);
+        self.scratch.restore_all(&self.load_records)?;
+        Ok(record)
     }
+}
+
+/// ADR-0046 Rule: an environment with an adaptive field cannot be
+/// determinized until a route for adaptive values into the information
+/// state exists.
+fn refuse_adaptive<E: Environment>() -> Result<(), SearchError> {
+    if <<E::Header as RecordLayout>::Adaptive as Canonical>::ENCODED_LEN != 0 {
+        return Err(SearchError::AdaptiveDeterminize);
+    }
+    Ok(())
+}
+
+/// The author part of a determinization, run under the scratch pool's
+/// containment: the sample, its validation, its information state and
+/// the header with the recomputed `acting` row.
+fn sampled_record<E: Determinize + Validate>(
+    cfg: &E::Config,
+    root: &Record<E>,
+    how: Determinization,
+) -> Result<(E::Header, E::State), SearchError> {
+    let info = E::info_state(cfg, root.state(), how.agent);
+    let auth = RngAuthority::engine_only();
+    let mut rng = StepRng::new(
+        &auth,
+        &sampler_identity(how.sampler_seed, how.sample_index),
+        StreamId::DYNAMICS,
+    );
+    let mut state = <E::State as StateInit>::state_default();
+    E::sample(cfg, &info, &mut rng, &mut state);
+    if rng.exhausted() {
+        return Err(SearchError::InconsistentSample {
+            reason: "the sampler exhausted its RNG counters",
+        });
+    }
+    // Author code reads the sample only after it is valid.
+    E::validate(cfg, &state).map_err(|violation| SearchError::SampleInvariant { violation })?;
+    if encode_to_vec(&E::info_state(cfg, &state, how.agent)) != encode_to_vec(&info) {
+        return Err(SearchError::InconsistentSample {
+            reason: "the sampled state has a different information state",
+        });
+    }
+
+    let engine = root.header().engine();
+    let mut source = *root.header();
+    let mut header = <E::Header as StateInit>::state_default();
+    *header.adaptive_mut() = *source.adaptive_mut();
+    {
+        let out = header.engine_mut();
+        out.identity = rollout_identity(
+            how.sampler_seed,
+            how.sample_index,
+            engine.identity.step_index(),
+        );
+        out.episode_steps = engine.episode_steps;
+    }
+    let mut acting = 0_usize;
+    for (slot, (out, from)) in header
+        .agents_mut()
+        .iter_mut()
+        .zip(source.agents())
+        .enumerate()
+    {
+        out.generation = from.generation;
+        out.alive = from.alive;
+        let acts = from.alive.get()
+            && (E::TURNS == TurnStructure::Simultaneous
+                || u16::try_from(slot)
+                    .ok()
+                    .and_then(|s| AgentSlot::new(s, E::MAX_AGENTS))
+                    .is_some_and(|s| E::acting(cfg, &state, s)));
+        out.acting = acts.into();
+        acting += usize::from(acts);
+    }
+    if E::TURNS == TurnStructure::Sequential && acting != 1 {
+        return Err(SearchError::SampleNotSingleActor { acting });
+    }
+    Ok((header, state))
 }
 
 #[cfg(test)]
