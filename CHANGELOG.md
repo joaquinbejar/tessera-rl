@@ -21,6 +21,19 @@ the API is not stable, and any 0.x release may break it.
   declared by no environment yet. Not yet tested: agent respawn, which
   ADR-0013 requires, because no shipped environment spawns agents; the
   test lands with the first one that does (#71).
+- **Search** (`tessera-rl-search`): player-perspective search on
+  imperfect-information environments. `SearchPool::new_determinized` and
+  `set_root_determinized` root the tree at a state sampled by
+  `Determinize` from the searching agent's information state, with a
+  caller's sampler seed and sample index. The root's hidden state and RNG
+  lineage never reach the search: the sampler and the rollout draw with
+  their own identities (the `SAMPLER` and `ROLLOUT` branch labels), the
+  header keeps only the step clock, `alive`, `generation` and adaptive
+  values, and the record passes the engine's import checks. A
+  determinized tree is never re-rooted. `SearchPool::new_privileged`
+  searches the full record and is labelled by `is_privileged`;
+  `SearchPool::new` still refuses imperfect information.
+- **Engine** (`tessera-rl-engine`): `EnvPool::config`.
 
 ## [0.1.0] - 2026-11-04
 
