@@ -34,7 +34,8 @@
 //! | Core, engine, macros, numerics (phase 1a) | Implemented: the `Environment` trait and spaces, the canonical encoding and state hashes, the `Sync` and `Inline` pools, auto-reset modes, poisoning, snapshot, restore, fork and branched fork |
 //! | Python and Gymnasium (phase 1b) | Implemented: `PyO3` bindings (abi3, Python 3.11+), a Gymnasium 1.x `Env` and `VectorEnv`, owned and borrowed outputs |
 //! | Masks, turns, search (phase 2, partial) | Implemented: action masks, `Sequential` and `Mixed` turns, `SearchPool` and a batched PUCT MCTS helper, Connect Four, an AlphaZero-style Connect Four example |
-//! | PettingZoo and PufferLib adapters, `Async`/`Pipelined` modes, persisted snapshots, Othello, Go, Leduc hold'em | Planned (phase 2), not in 0.1.0 |
+//! | PettingZoo adapters (phase 2) | On `main`, after 0.1.0: `tessera_rl.pz` with AEC and Parallel for Tag and AEC for Connect Four, passing the official PettingZoo API tests; not in the 0.1.0 packages |
+//! | PufferLib adapter, `Async`/`Pipelined` modes, persisted snapshots, Othello, Go, Leduc hold'em | Planned (phase 2) |
 //! | SIMD lanes, JAX and GPU paths, more classic games | Planned (phase 3) |
 //! | RTS, market simulator, card games, league tooling, viewer | Planned (phase 4) |
 //!
@@ -215,6 +216,10 @@
 //!
 //! and, with the `gymnasium` extra, `tessera_rl.gym` provides `TesseraEnv` and
 //! `TesseraVectorEnv` for Gymnasium 1.x.
+//!
+//! With the `pettingzoo` extra, `tessera_rl.pz.parallel_env` and
+//! `tessera_rl.pz.aec_env` expose the multi-agent environments, each only
+//! through the PettingZoo interfaces it declares.
 //!
 //! ## Crates
 //!

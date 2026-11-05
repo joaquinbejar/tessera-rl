@@ -7,6 +7,19 @@ format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project uses [Semantic Versioning](https://semver.org/). Before 1.0
 the API is not stable, and any 0.x release may break it.
 
+## [Unreleased]
+
+### Added
+
+- **PettingZoo adapters** (`tessera_rl.pz`, with the `pettingzoo` extra):
+  `parallel_env` and `aec_env`. Each environment declares the interfaces
+  it supports and any other request is refused at construction: Tag is
+  Parallel natively and AEC through cycle buffering, Connect Four is AEC
+  only. They pass the official PettingZoo API tests, and tests cover
+  terminal reward timing, agent death, a conditional second-player
+  decision and equality with the native pool. `turn_masked_env` is
+  declared by no environment yet.
+
 ## [0.1.0] - 2026-11-04
 
 The first functional release. Six of these crate names were reserved on
