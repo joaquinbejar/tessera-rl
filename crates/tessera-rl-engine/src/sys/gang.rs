@@ -17,9 +17,9 @@
 //! is `SequenceExhausted`). Job `s` uses slot `s & 1`.
 //!
 //! 1. `submit` writes the slot's `panicked = false`, `pending = workers`
-//!    and job pointer, then stores `published = s`, then increments the
-//!    wake word, and wakes the workers only if some are parked (all
-//!    `SeqCst`). A slot is reused for `s + 2` only after `wait` observed its
+//!    and job pointer, then stores `published = s` (Release), then
+//!    increments the wake word, and wakes the workers only if some are
+//!    parked. A slot is reused for `s + 2` only after `wait` observed its
 //!    `pending == 0`, so at most two jobs are ever in flight.
 //! 2. Each worker keeps the next sequence it must run and runs every
 //!    published job in order before it may sleep. To sleep it loads the
@@ -29,7 +29,7 @@
 //! 3. A worker decrements the slot's `pending` once per job, and that
 //!    decrement is its last access to the job. The worker that brings it to
 //!    zero wakes the waiter if one is parked.
-//! 4. `wait` waits for the oldest job's `pending == 0` with `SeqCst`, which
+//! 4. `wait` waits for the oldest job's `pending == 0` with Acquire, which
 //!    makes every worker's writes visible, and frees its slot.
 //!
 //! Waits spin for a bounded budget, then block. Blocking registers in a
@@ -161,7 +161,7 @@ impl MockFutex {
             .lock
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if word.load(Ordering::SeqCst) == expected {
+        if word.load(Ordering::Acquire) == expected {
             drop(
                 self.cv
                     .wait(guard)
@@ -316,7 +316,7 @@ impl Shared {
     }
 
     /// Waits until `ready()` holds: a bounded spin, then blocking on `word`
-    /// with registration in `parked` and a recheck (`SeqCst`). The word is
+    /// with registration in `parked` (an `AcqRel` RMW) and a recheck. The word is
     /// loaded before `ready` is rechecked, so a change made after the
     /// condition became true is never missed. `poll` makes the park backend
     /// sleep with a timeout instead of waiting for an unpark.
@@ -337,14 +337,14 @@ impl Shared {
                 spin_loop();
                 continue;
             }
-            let value = word.load(Ordering::SeqCst);
-            parked.fetch_add(1, Ordering::SeqCst);
+            let value = word.load(Ordering::Acquire);
+            parked.fetch_add(1, Ordering::AcqRel);
             if ready() {
-                parked.fetch_sub(1, Ordering::SeqCst);
+                parked.fetch_sub(1, Ordering::AcqRel);
                 return;
             }
             self.block(word, value, poll);
-            parked.fetch_sub(1, Ordering::SeqCst);
+            parked.fetch_sub(1, Ordering::AcqRel);
         }
     }
 
@@ -542,17 +542,18 @@ impl Gang {
         } else {
             self.polled_even = polled;
         }
-        slot.panicked.store(false, Ordering::SeqCst);
-        slot.pending.store(self.count, Ordering::SeqCst);
+        slot.panicked.store(false, Ordering::Release);
+        slot.pending.store(self.count, Ordering::Release);
         slot.job
-            .store(core::ptr::from_ref(job).cast_mut(), Ordering::SeqCst);
+            .store(core::ptr::from_ref(job).cast_mut(), Ordering::Release);
         // Publication: `published` before the word (module docs, step 1).
-        shared.published.store(seq, Ordering::SeqCst);
-        shared.word.fetch_add(1, Ordering::SeqCst);
+        shared.published.store(seq, Ordering::Release);
+        shared.word.fetch_add(1, Ordering::AcqRel);
         // An RMW, not a load: it orders against a parking worker's RMW on
         // the same counter, so one of the two sees the other (no store-load
-        // reordering, which SeqCst loads alone would rely on).
-        if shared.parked.fetch_add(0, Ordering::SeqCst) > 0 {
+        // reordering, which a Dekker check with loads would rely on). AcqRel
+        // suffices: the later RMW in the counter's order acquires the other.
+        if shared.parked.fetch_add(0, Ordering::AcqRel) > 0 {
             shared.wake(&shared.word, self.workers.iter().map(|(t, _)| t));
         }
         self.submitted = seq;
@@ -573,7 +574,7 @@ impl Gang {
         shared.wait_until(
             &slot.pending,
             &slot.waiters,
-            || slot.pending.load(Ordering::SeqCst) == 0,
+            || slot.pending.load(Ordering::Acquire) == 0,
             polled,
         );
         Ok(self.complete(seq))
@@ -587,7 +588,7 @@ impl Gang {
     )]
     pub(crate) fn try_wait(&mut self) -> Result<Option<bool>, EngineError> {
         let seq = self.oldest()?;
-        if self.shared.slot(seq).pending.load(Ordering::SeqCst) != 0 {
+        if self.shared.slot(seq).pending.load(Ordering::Acquire) != 0 {
             return Ok(None);
         }
         Ok(Some(self.complete(seq)))
@@ -607,11 +608,11 @@ impl Gang {
     fn complete(&mut self, seq: u64) -> bool {
         let shared = &*self.shared;
         let slot = shared.slot(seq);
-        slot.job.store(core::ptr::null_mut(), Ordering::SeqCst);
+        slot.job.store(core::ptr::null_mut(), Ordering::Release);
         self.completed = seq;
-        let panicked = slot.panicked.load(Ordering::SeqCst);
+        let panicked = slot.panicked.load(Ordering::Acquire);
         if panicked {
-            shared.poisoned.store(true, Ordering::SeqCst);
+            shared.poisoned.store(true, Ordering::Release);
         }
         panicked
     }
@@ -622,7 +623,7 @@ impl Gang {
         expect(dead_code, reason = "used by the split-phase modes (ADR-0047)")
     )]
     pub(crate) fn poisoned(&self) -> bool {
-        self.shared.poisoned.load(Ordering::SeqCst)
+        self.shared.poisoned.load(Ordering::Acquire)
     }
 
     /// Clears the sticky poison flag after a recovery; needs no job in
@@ -637,7 +638,7 @@ impl Gang {
                 in_flight: self.in_flight(),
             });
         }
-        self.shared.poisoned.store(false, Ordering::SeqCst);
+        self.shared.poisoned.store(false, Ordering::Release);
         Ok(())
     }
 
@@ -657,8 +658,8 @@ impl Drop for Gang {
             }
         }
         let shared = &*self.shared;
-        shared.shutdown.store(true, Ordering::SeqCst);
-        shared.word.fetch_add(1, Ordering::SeqCst);
+        shared.shutdown.store(true, Ordering::Release);
+        shared.word.fetch_add(1, Ordering::AcqRel);
         shared.wake(&shared.word, self.workers.iter().map(|(t, _)| t));
         for (_, join) in &mut self.workers {
             if let Some(join) = join.take()
@@ -705,7 +706,7 @@ fn worker_main(shared: &Shared, worker: usize, core: Option<usize>, fail: bool, 
     let mut draining = false;
     loop {
         // Run every published job, in order, before sleeping (step 2).
-        while shared.published.load(Ordering::SeqCst) >= next {
+        while shared.published.load(Ordering::Acquire) >= next {
             let slot = shared.slot(next);
             if draining {
                 drain_job(shared, slot);
@@ -718,7 +719,7 @@ fn worker_main(shared: &Shared, worker: usize, core: Option<usize>, fail: bool, 
                     if !seen.decremented {
                         // The job may not have run for this worker's
                         // chunks: it reports a panic, so the pool poisons.
-                        slot.panicked.store(true, Ordering::SeqCst);
+                        slot.panicked.store(true, Ordering::Release);
                         let waker = seen.waker.take().or_else(|| job_waker(slot));
                         decrement(shared, slot, waker.as_ref());
                     }
@@ -731,15 +732,15 @@ fn worker_main(shared: &Shared, worker: usize, core: Option<usize>, fail: bool, 
                 None => return,
             };
         }
-        if shared.shutdown.load(Ordering::SeqCst) {
+        if shared.shutdown.load(Ordering::Acquire) {
             return;
         }
         shared.wait_until(
             &shared.word,
             &shared.parked,
             || {
-                shared.published.load(Ordering::SeqCst) >= next
-                    || shared.shutdown.load(Ordering::SeqCst)
+                shared.published.load(Ordering::Acquire) >= next
+                    || shared.shutdown.load(Ordering::Acquire)
             },
             false,
         );
@@ -756,10 +757,10 @@ struct Seen {
 /// This worker's decrement of the slot's `pending`, its last access to the
 /// job; the last one wakes the waiter if it is parked.
 fn decrement(shared: &Shared, slot: &JobSlot, waker: Option<&thread::Thread>) {
-    // SeqCst: releases this worker's writes (and `panicked`) to the waiter,
+    // AcqRel: releases this worker's writes (and `panicked`) to the waiter,
     // and orders the decrement before the `waiters` check (module docs).
-    if slot.pending.fetch_sub(1, Ordering::SeqCst) == 1
-        && slot.waiters.fetch_add(0, Ordering::SeqCst) > 0
+    if slot.pending.fetch_sub(1, Ordering::AcqRel) == 1
+        && slot.waiters.fetch_add(0, Ordering::AcqRel) > 0
     {
         // Park unparks the job's waker; a job without one has a polling
         // waiter. The other backends wake by address.
@@ -769,7 +770,7 @@ fn decrement(shared: &Shared, slot: &JobSlot, waker: Option<&thread::Thread>) {
 
 /// A drainer's share of a job: no call, a reported panic, the decrement.
 fn drain_job(shared: &Shared, slot: &JobSlot) {
-    slot.panicked.store(true, Ordering::SeqCst);
+    slot.panicked.store(true, Ordering::Release);
     let waker = job_waker(slot);
     decrement(shared, slot, waker.as_ref());
 }
@@ -777,7 +778,7 @@ fn drain_job(shared: &Shared, slot: &JobSlot) {
 /// The waker of the slot's job, read before this worker's decrement.
 #[expect(unsafe_code, reason = "audited module: job pointer")]
 fn job_waker(slot: &JobSlot) -> Option<thread::Thread> {
-    let job = slot.job.load(Ordering::SeqCst);
+    let job = slot.job.load(Ordering::Acquire);
     if job.is_null() {
         return None;
     }
@@ -793,7 +794,7 @@ fn run_job(shared: &Shared, slot: &JobSlot, worker: usize, seen: &mut Seen, die:
         !die.before_job,
         "injected worker death before the job is read"
     );
-    let job = slot.job.load(Ordering::SeqCst);
+    let job = slot.job.load(Ordering::Acquire);
     // SAFETY: the submitter stored a pointer to a live `Job` before the
     // `published` store this worker observed, and keeps it alive until the
     // slot's `pending` reaches zero, which needs this worker's decrement
@@ -815,7 +816,7 @@ fn run_job(shared: &Shared, slot: &JobSlot, worker: usize, seen: &mut Seen, die:
         unsafe { call(data, worker) };
     });
     if !completed {
-        slot.panicked.store(true, Ordering::SeqCst);
+        slot.panicked.store(true, Ordering::Release);
     }
     // The payload is already disposed of; nothing that can panic follows.
     seen.decremented = true;
