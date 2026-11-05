@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! Golden suites (ADR-0009, ADR-0024 layer 2) and cross-thread runs (SPEC
-//! 8.5) for Connect Four and Leduc hold'em: every scenario matches its
+//! 8.5) for Connect Four, Othello and Leduc hold'em: every scenario matches its
 //! committed fixture in Inline mode and with 1, 2, 7 and 64 workers. The
 //! harness is the one of the classic crate.
 
@@ -12,7 +12,7 @@ mod support;
 
 use support::{Scenario, check, run};
 use tessera_rl_engine::{AutoReset, EnvPool, Masked};
-use tessera_rl_games::{Connect4, Connect4Config, Leduc, LeducConfig};
+use tessera_rl_games::{Connect4, Connect4Config, Leduc, LeducConfig, Othello, OthelloConfig};
 
 impl support::GoldenEnv for Connect4 {
     const ENV_ID: &'static str = tessera_rl_games::connect4::ENV_ID;
@@ -96,4 +96,45 @@ fn test_golden_leduc_next_step_matches_fixture_on_every_mode() {
 #[test]
 fn test_golden_leduc_same_step_matches_fixture_on_every_mode() {
     check_leduc(&leduc("leduc-v1-same-step", AutoReset::SameStep));
+}
+
+impl support::GoldenEnv for Othello {
+    const ENV_ID: &'static str = tessera_rl_games::othello::ENV_ID;
+    const ENV_VERSION: u32 = tessera_rl_games::othello::ENV_VERSION;
+}
+
+fn othello(name: &'static str, auto_reset: AutoReset) -> Scenario<OthelloConfig> {
+    Scenario {
+        name,
+        cfg: OthelloConfig {},
+        seed: 3_112_026,
+        num_envs: 16,
+        chunk: 4,
+        auto_reset,
+        // Above the 119 plies of the longest game: the limit never truncates.
+        max_episode_steps: 128,
+        steps: 300,
+        reseed_at: 150,
+        reseed_ids: &[1, 12],
+        reseed_seed: 6_666,
+    }
+}
+
+fn check_othello(s: &Scenario<OthelloConfig>) {
+    let build = |cfg, options| {
+        EnvPool::<Othello, Masked>::with_masks(cfg, options).unwrap_or_else(|e| panic!("{e}"))
+    };
+    for workers in WORKERS {
+        check(s.name, &run::<Othello, _>(s, build, workers));
+    }
+}
+
+#[test]
+fn test_golden_othello_next_step_matches_fixture_on_every_mode() {
+    check_othello(&othello("othello-v1-next-step", AutoReset::NextStep));
+}
+
+#[test]
+fn test_golden_othello_same_step_matches_fixture_on_every_mode() {
+    check_othello(&othello("othello-v1-same-step", AutoReset::SameStep));
 }

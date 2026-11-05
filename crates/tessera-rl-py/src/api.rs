@@ -197,6 +197,20 @@ pub(crate) fn make_leduc(g: Gil, kwargs: Option<Ref<'_>>) -> CResult<Inner> {
     Ok(Inner::new(ops, borrowed))
 }
 
+/// `make_othello(**kwargs)`: the pool of an Othello environment object. A
+/// game lasts at most 119 plies; `max_episode_steps` defaults to 128, so it
+/// never truncates a game.
+pub(crate) fn make_othello(g: Gil, kwargs: Option<Ref<'_>>) -> CResult<Inner> {
+    let kw = Kwargs::parse(g, kwargs)?;
+    kw.check(g, &[&POOL_KEYS, &["outputs"]])?;
+    let borrowed = borrowed(g, &kw)?;
+    let args = pool_args(g, &kw, 128)?;
+    let ops = g
+        .detach(|| crate::env::othello(&args))
+        .map_err(|e| to_py(g, e))?;
+    Ok(Inner::new(ops, borrowed))
+}
+
 fn int(g: Gil, v: usize) -> CResult<Mine> {
     capi::int_u64(g, u64::try_from(v).unwrap_or(u64::MAX))
 }

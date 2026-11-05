@@ -35,7 +35,7 @@ change in any 0.x release.
 | Python and Gymnasium (phase 1b) | Implemented: `PyO3` bindings (abi3, Python 3.11+), a Gymnasium 1.x `Env` and `VectorEnv`, owned and borrowed outputs |
 | Masks, turns, search (phase 2, partial) | Implemented: action masks, `Sequential` and `Mixed` turns, `SearchPool` and a batched PUCT MCTS helper, Connect Four, an AlphaZero-style Connect Four example |
 | PettingZoo adapters (phase 2) | On `main`, after 0.1.0: `tessera_rl.pz` with AEC and Parallel for Tag and AEC for Connect Four, passing the official PettingZoo API tests; not in the 0.1.0 packages |
-| PufferLib adapter, `Async`/`Pipelined` modes, persisted snapshots, Othello, Go, Leduc hold'em | Planned (phase 2) |
+| PufferLib adapter, `Async`/`Pipelined` modes, persisted snapshots, Go | Planned (phase 2) |
 | SIMD lanes, JAX and GPU paths, more classic games | Planned (phase 3) |
 | RTS, market simulator, card games, league tooling, viewer | Planned (phase 4) |
 
@@ -64,6 +64,7 @@ Known limits of 0.1.0:
 | `tessera/Tag-v1` | `tessera-rl-classic` | 2 to 8 | `Discrete(5)`, masked, simultaneous |
 | `tessera/Connect4-v1` | `tessera-rl-games` | 2 | `Discrete(7)`, masked, sequential |
 | `tessera/Leduc-v1` | `tessera-rl-games` | 2 | `Discrete(3)`, masked, sequential, imperfect information |
+| `tessera/Othello-v1` | `tessera-rl-games` | 2 | `Discrete(65)`, masked, sequential, forced pass |
 
 Leduc hold'em rewards and returns are normalized to `[-1, 1]`:
 multiplying them by 13 gives chips.

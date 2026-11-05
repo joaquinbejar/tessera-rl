@@ -68,6 +68,12 @@ the API is not stable, and any 0.x release may break it.
   player cannot see) and passes the eight determinized search tests;
   golden fixtures, a scripted baseline and a step bench. In Python it is
   available through `make` and the PettingZoo `aec_env`.
+- **Othello** (`tessera/Othello-v1`, `tessera-rl-games`): the 8 x 8 game
+  with `Discrete(65)` (one action per square and a forced pass), masks,
+  sequential turns and rewards of +1, -1 or 0 by disc count. Import
+  validation, golden fixtures, continuation tests, perft against an
+  independent reference, a scripted baseline and a step bench. In Python it
+  is available through `make` and the PettingZoo `aec_env`.
 - **Python search**: `Search.is_privileged`, `False` for every search
   Python can build today.
 - **Engine** (`tessera-rl-engine`): `EnvPool::config`, and `EnvPool::contain`,
