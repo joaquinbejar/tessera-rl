@@ -21,11 +21,24 @@
 //!
 //! # Capacity
 //!
-//! The capacity is the next power of two at or above `n`, the number of
-//! instances. At most `n` ids are ever live, because of backpressure (one
-//! step in flight per instance), so admission can never overflow a ring.
-//! When `n` is a power of two a ring can be exactly full; a push on a full
-//! ring returns [`RingError::Full`] and never overwrites a slot.
+//! The capacity is the next power of two at or above `max(n, 2)`, where
+//! `n` is the number of instances. The queue needs at least two slots: with
+//! one, a slot's sequence `p + 1` would mean both "position `p` filled" and
+//! "position `p + 1` free", and a second push would overwrite the first id.
+//! At most `n` ids are ever live, because of backpressure (one step in
+//! flight per instance). When `n` is a power of two a ring can be exactly
+//! full; a push on a full ring returns [`RingError::Full`] and never
+//! overwrites a slot.
+//!
+//! **Transient `Full` and empty.** An operation can be paused after it has
+//! claimed a position and before it publishes the slot's new sequence. A
+//! push then sees `Full` behind a pop that has taken an id but not yet freed
+//! its slot, and a pop sees an empty ring behind a push that has reserved a
+//! slot but not yet filled it. Both clear as soon as the paused thread
+//! resumes. So "at most `n` live ids" does not make a push infallible: the
+//! Async wrapper must treat `Full` from an admitted push as "retry after the
+//! stalled operation finishes", never as success, and a consumer that sees
+//! an empty ring must not conclude that nothing is in flight.
 //!
 //! Positions only grow, by one per push and per pop, and are advanced with
 //! checked arithmetic: [`RingError::Exhausted`] after `usize::MAX`
@@ -89,6 +102,7 @@ impl IdRing {
             return Err(RingError::Size { n, max: MAX_IDS });
         }
         let capacity = n
+            .max(2)
             .checked_next_power_of_two()
             .ok_or(RingError::Size { n, max: MAX_IDS })?;
         let slots = (0..capacity)
@@ -194,7 +208,7 @@ impl SubmitRing {
         })
     }
 
-    /// The number of slots, a power of two at or above `n`.
+    /// The number of slots, a power of two at or above `max(n, 2)`.
     #[must_use]
     pub fn capacity(&self) -> usize {
         self.ring.capacity()
@@ -204,8 +218,9 @@ impl SubmitRing {
     ///
     /// # Errors
     ///
-    /// [`RingError::Full`] if the ring is full, [`RingError::Exhausted`] if
-    /// its positions are exhausted. The ring is unchanged on an error.
+    /// [`RingError::Full`] if the ring is full, including transiently behind
+    /// a paused claim (see the module docs); [`RingError::Exhausted`] if its
+    /// positions are exhausted. The ring is unchanged on an error.
     pub fn push(&mut self, id: u32) -> Result<(), RingError> {
         self.ring.push(id)
     }
@@ -238,7 +253,7 @@ impl CompletionRing {
         })
     }
 
-    /// The number of slots, a power of two at or above `n`.
+    /// The number of slots, a power of two at or above `max(n, 2)`.
     #[must_use]
     pub fn capacity(&self) -> usize {
         self.ring.capacity()

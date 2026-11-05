@@ -19,10 +19,97 @@ fn model(f: impl Fn() + Sync + Send + 'static) {
 #[cfg(not(loom))]
 #[test]
 fn test_ring_capacity_is_the_next_power_of_two() {
-    assert_eq!(SubmitRing::new(1).unwrap().capacity(), 1);
+    assert_eq!(SubmitRing::new(1).unwrap().capacity(), 2);
+    assert_eq!(SubmitRing::new(2).unwrap().capacity(), 2);
     assert_eq!(SubmitRing::new(3).unwrap().capacity(), 4);
     assert_eq!(CompletionRing::new(4).unwrap().capacity(), 4);
     assert_eq!(CompletionRing::new(5).unwrap().capacity(), 8);
+}
+
+#[cfg(not(loom))]
+#[test]
+fn test_ring_single_id_never_overwrites_and_refuses_a_third_push() {
+    // N = 1 gets two slots, so a second push without a pop cannot reuse the
+    // first slot (with one slot it would overwrite id 7).
+    let mut ring = SubmitRing::new(1).unwrap();
+    ring.push(7).unwrap();
+    ring.push(8).unwrap();
+    assert_eq!(ring.push(9), Err(RingError::Full { capacity: 2 }));
+    assert_eq!(ring.claim().unwrap(), Some(7));
+    assert_eq!(ring.claim().unwrap(), Some(8));
+    assert_eq!(ring.claim().unwrap(), None);
+}
+
+#[test]
+fn test_ring_single_id_producer_and_consumer_deliver_every_lap() {
+    model(|| {
+        let ring = Arc::new(SharedCompletion::new(1));
+        let producer = {
+            let ring = Arc::clone(&ring);
+            thread::spawn(move || {
+                for id in 0..2 {
+                    while ring.push(id).is_err() {
+                        thread::yield_now();
+                    }
+                }
+            })
+        };
+        let mut got = Vec::new();
+        while got.len() < 2 {
+            match ring.pop() {
+                Some(id) => got.push(id),
+                None => thread::yield_now(),
+            }
+        }
+        producer.join().unwrap();
+        assert_eq!(got, [0, 1], "in order, nothing overwritten");
+    });
+}
+
+/// A pop paused between taking its position and freeing the slot makes a
+/// concurrent push see `Full` although only one id is then live; the push
+/// succeeds once the pop finishes, and nothing is overwritten or lost.
+#[test]
+fn test_ring_push_behind_a_paused_pop_sees_full_transiently_then_succeeds() {
+    model(|| {
+        let ring = Arc::new(SharedCompletion::new(2));
+        ring.push(0).unwrap();
+        ring.push(1).unwrap();
+        let consumer = {
+            let ring = Arc::clone(&ring);
+            thread::spawn(move || ring.pop())
+        };
+        while ring.push(2).is_err() {
+            thread::yield_now();
+        }
+        let first = consumer.join().unwrap();
+        assert_eq!(first, Some(0));
+        assert_eq!(ring.pop(), Some(1));
+        assert_eq!(ring.pop(), Some(2));
+        assert_eq!(ring.pop(), None);
+    });
+}
+
+/// A push paused between reserving its position and filling the slot makes
+/// a concurrent pop see an empty ring; the id appears once the push
+/// finishes.
+#[test]
+fn test_ring_pop_behind_a_paused_push_sees_empty_transiently_then_gets_the_id() {
+    model(|| {
+        let ring = Arc::new(SharedCompletion::new(2));
+        let producer = {
+            let ring = Arc::clone(&ring);
+            thread::spawn(move || ring.push(5).unwrap())
+        };
+        let id = loop {
+            if let Some(id) = ring.pop() {
+                break id;
+            }
+            thread::yield_now();
+        };
+        producer.join().unwrap();
+        assert_eq!(id, 5);
+    });
 }
 
 #[cfg(not(loom))]
