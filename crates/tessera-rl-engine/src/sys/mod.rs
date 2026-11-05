@@ -10,14 +10,19 @@
 //! Waits use the native address-wait primitive where it is enabled
 //! (`native`), otherwise park and unpark.
 //!
+//! The Async id rings (`ring`) and the token id buffers (`id_buffers`)
+//! are built on atomics only and need no `unsafe` (ADR-0047).
+//!
 //! Pinning uses the `core_affinity` crate, approved by the coordinator as a
 //! dependency for this purpose (best effort, failures logged).
 
 mod affinity;
 mod gang;
+pub(crate) mod id_buffers;
 #[cfg(not(loom))]
 mod native;
 mod panics;
+pub(crate) mod ring;
 pub(crate) mod sync;
 
 pub(crate) use affinity::available_cores;
