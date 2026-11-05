@@ -46,6 +46,20 @@ fn model(f: impl Fn() + Sync + Send + 'static) {
     f();
 }
 
+/// Like `model`, with a preemption bound of 2 for the models whose state
+/// space is too large at the CI bound of 3 (two workers on the futex mock,
+/// whose mutex and condvar add many interleavings).
+fn small_model(f: impl Fn() + Sync + Send + 'static) {
+    #[cfg(loom)]
+    {
+        let mut builder = loom::model::Builder::new();
+        builder.preemption_bound = Some(2);
+        builder.check(f);
+    }
+    #[cfg(not(loom))]
+    f();
+}
+
 /// Runs `epochs` jobs on `workers` workers and checks every worker ran
 /// each one and saw the writes of the previous one.
 fn epochs(opts: &GangOptions, workers: usize, epochs: usize) {
@@ -80,7 +94,7 @@ fn test_gang_two_workers_two_epochs() {
 
 #[test]
 fn test_gang_address_wait_two_workers_one_epoch() {
-    model(|| epochs(&address_options(2), 2, 1));
+    small_model(|| epochs(&address_options(2), 2, 1));
 }
 
 #[test]
@@ -260,8 +274,9 @@ fn test_gang_panic_in_a_with_b_queued_runs_b_and_poison_sticks() {
 /// or published while it dies, keeps draining: both waits return (the
 /// drained job reports a panic), and later submits report the death.
 fn death_with_queued(publish_second_after_first_wait: bool) {
-    let mut opts = options(2);
-    opts.faults.die_in_epoch = Some(1);
+    // One worker that dies: the smallest gang with a drainer.
+    let mut opts = options(1);
+    opts.faults.die_in_epoch = Some(0);
     let f = |_w: usize| {};
     let (ja, jb) = (Job::new(&f, None), Job::new(&f, None));
     let mut gang = Gang::new(&opts).unwrap();

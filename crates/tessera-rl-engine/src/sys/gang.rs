@@ -564,7 +564,7 @@ impl Gang {
     /// Like `wait`, but returns `None` at once if the oldest job is still
     /// running.
     #[cfg_attr(
-        not(test),
+        any(not(test), loom),
         expect(dead_code, reason = "used by the split-phase modes (ADR-0047)")
     )]
     pub(crate) fn try_wait(&mut self) -> Result<Option<bool>, EngineError> {
