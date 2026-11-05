@@ -32,8 +32,9 @@ they stay valid across steps. One adapter runs one instance with
 auto-reset disabled: call ``reset`` to start a new episode.
 
 Actions are checked before anything changes: each must be an exact
-integer in ``[0, n)`` (integer types, or floats with no fractional part),
-for an agent in ``agents``; anything else raises ``ActionError`` and
+integer scalar in ``[0, n)`` (integer types, or floats with no fractional
+part); anything else, including ``None`` for a live agent in AEC, raises
+``ActionError`` and
 leaves the environment, and in AEC the buffered cycle, as it was. A legal
 index that the mask marks illegal, such as a move into a full Connect Four
 column, is replaced by the environment's no-op (ADR-0028); it is not an
@@ -88,11 +89,15 @@ def _native_pool(env_id: str, adapter: str, seed: int | None, kwargs: dict) -> t
 
 def _exact_action(value, n: int) -> int:
     """``value`` as an exact action index in ``[0, n)``; ``ActionError``
-    otherwise (the native contract: no truncation, no rounding)."""
-    arr = _discrete_actions(np.asarray(value).reshape(-1))
-    if arr.size != 1:
-        raise _native.ActionError(f"an action is one integer, got {np.asarray(value).size} values")
-    action = int(arr[0])
+    otherwise (the native contract: no truncation, no rounding). An action
+    is one scalar: lists, arrays and ``None`` are refused."""
+    try:
+        arr = np.asarray(value)
+    except (TypeError, ValueError) as e:
+        raise _native.ActionError(f"an action is one integer: {e}") from None
+    if arr.ndim != 0:
+        raise _native.ActionError(f"an action is one integer, not shape {arr.shape}")
+    action = int(_discrete_actions(arr.reshape(1))[0])
     if not 0 <= action < n:
         raise _native.ActionError(f"action {action} is outside [0, {n})")
     return action
@@ -164,10 +169,12 @@ class TesseraParallelEnv(ParallelEnv):
         return {n: self._a.observe(self._a.slot_of[n]) for n in self.agents}, {n: {} for n in self.agents}
 
     def step(self, actions):
-        # Everything is checked before the pool is touched.
-        unknown = [n for n in actions if n not in self.agents]
+        # Everything is checked before the pool is touched. Actions for
+        # agents that are known but no longer live are ignored, so the usual
+        # `{a: policy(obs[a]) for a in obs}` loop works across a death.
+        unknown = [n for n in actions if n not in self.possible_agents]
         if unknown:
-            raise _native.ActionError(f"actions for agents that are not live: {unknown}")
+            raise _native.ActionError(f"actions for unknown agents: {unknown}")
         missing = [n for n in self.agents if n not in actions]
         if missing:
             raise _native.ActionError(f"no action for live agents {missing}")
@@ -296,7 +303,8 @@ class _CheckedCycle(parallel_to_aec_wrapper):
 
     def step(self, action):
         agent = self.agent_selection
-        if action is not None and not (self.terminations[agent] or self.truncations[agent]):
+        # A live agent's action is always checked, so None raises here.
+        if not (self.terminations[agent] or self.truncations[agent]):
             action = _exact_action(action, self.action_space(agent).n)
         super().step(action)
 

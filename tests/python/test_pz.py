@@ -169,7 +169,7 @@ def test_pz_connect4_terminal_rewards_reach_both_players_in_the_final_step():
     assert env.agents == []
 
 
-INVALID = [1.9, -1, 5, 7.5, "2", None]
+INVALID = [1.9, -1, 5, 7.5, "2", None, [1], [1, 2], [[1], [1, 2]]]
 
 
 @pytest.mark.parametrize("bad", INVALID)
@@ -190,16 +190,29 @@ def test_pz_parallel_invalid_action_raises_and_changes_nothing(bad):
     assert a[1] == b[1]
 
 
-def test_pz_parallel_refuses_actions_for_agents_that_are_not_live():
+def test_pz_parallel_refuses_unknown_agent_names():
     env = pz.parallel_env(TAG, seed=2, **SMALL_TAG)
     env.reset(seed=2)
     with pytest.raises(_native.ActionError):
-        env.step({**{a: 0 for a in env.agents}, "agent_7": 0})
+        env.step({**{a: 0 for a in env.agents}, "agent_7": 0})  # a slot that never lived
     with pytest.raises(_native.ActionError):
         env.step({**{a: 0 for a in env.agents}, "nobody": 0})
 
 
-@pytest.mark.parametrize("bad", [b for b in INVALID if b is not None])
+def test_pz_parallel_policy_loop_over_obs_works_across_a_death():
+    env = pz.parallel_env(TAG, seed=5, **SMALL_TAG)
+    obs, _ = env.reset(seed=5)
+    died = False
+    while env.agents:
+        before = set(env.agents)
+        # The natural loop: one action per key of the last observations,
+        # including agents that died in the previous step.
+        obs, _, terms, truncs, _ = env.step({a: int(np.flatnonzero(obs[a]["action_mask"])[0]) if obs[a]["action_mask"].any() else 0 for a in obs})
+        died |= bool(before - set(env.agents)) and bool(env.agents)
+    assert died, "an agent died before the end and the loop kept going"
+
+
+@pytest.mark.parametrize("bad", INVALID)
 def test_pz_tag_aec_invalid_action_keeps_the_buffered_cycle(bad):
     env = pz.aec_env(TAG, seed=2, **SMALL_TAG)
     env.reset(seed=2)
@@ -221,7 +234,7 @@ def test_pz_tag_aec_invalid_action_keeps_the_buffered_cycle(bad):
     assert env.rewards == ref.rewards
 
 
-@pytest.mark.parametrize("bad", [1.9, -1, 7, 7.5, "2"])
+@pytest.mark.parametrize("bad", [1.9, -1, 7, 7.5, "2", None, [1], [1, 2], [[1], [1, 2]]])
 def test_pz_connect4_invalid_action_raises_and_changes_nothing(bad):
     env = pz.aec_env(C4, seed=0)
     env.reset(seed=0)
@@ -237,5 +250,7 @@ def test_pz_connect4_full_column_is_the_engine_noop_not_an_error():
     env = pz.aec_env(C4, seed=0)
     env.reset(seed=0)
     _c4_play(env, [0, 0, 0, 0, 0, 0])  # column 0 is full
-    assert env.observe(env.agent_selection)["action_mask"][0] == 0
+    mover = env.agent_selection
+    assert env.observe(mover)["action_mask"][0] == 0
     env.step(0)  # legal index, masked illegal: replaced by the no-op (ADR-0028)
+    assert env.agent_selection != mover, "the no-op still passed the turn"
