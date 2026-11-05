@@ -906,3 +906,30 @@ fn test_review_snapshot_idle_id_while_other_id_runs() {
     drop(p.recv().unwrap());
     p.snapshot(1).unwrap();
 }
+
+// Codex's #84 r2 probe (attachment 1013), as a regression test: a
+// received batch refused for an illegal action changes nothing.
+
+#[cfg(feature = "debug-checks")]
+#[test]
+fn test_review_received_batch_illegal_action_is_atomic() {
+    let mut p = asy_with(AutoReset::NextStep, 2, 1, cfg());
+    drop(p.reset_all(Reseed::Keep).unwrap());
+    p.send(&[0], input(&[0, 0])).unwrap();
+    let t = p.recv().unwrap();
+    let frame = token_frame(&t, 0);
+    let generation = p.generation(0).unwrap();
+    let err = p.send_batch(t, input(&[2, 0])).unwrap_err();
+    assert!(matches!(
+        err.error,
+        EngineError::IllegalAction { instance: 0, .. }
+    ));
+    let t = err.token.unwrap();
+    assert_eq!(token_frame(&t, 0), frame);
+    assert_eq!(p.generation(0).unwrap(), generation);
+    assert_eq!(p.recv().map(|_| ()), Err(EngineError::NothingInFlight));
+    p.send_batch(t, input(&[0, 0]))
+        .map_err(|e| e.error)
+        .unwrap();
+    drop(p.recv().unwrap());
+}
