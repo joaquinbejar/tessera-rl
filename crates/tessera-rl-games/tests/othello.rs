@@ -339,7 +339,9 @@ fn invalid(r: &Result<(), EngineError>) -> bool {
     )
 }
 
+const LAST_PLY: &str = "a last ply that the board cannot explain";
 const D3: u32 = 19;
+const C3: u32 = 18;
 const C4: u32 = 26;
 const F5: u32 = 37;
 const E6: u32 = 44;
@@ -623,12 +625,66 @@ fn test_othello_validate_rejects_a_pass_with_a_placement_available() {
 }
 
 #[test]
+fn test_othello_validate_rejects_more_plies_than_the_bound() {
+    let full = OthelloState {
+        stones: [0x0000_0000_ffff_ffff, 0xffff_ffff_0000_0000],
+        moves: 120,
+        ..OthelloState::default()
+    };
+    assert_eq!(Othello::validate(&CFG, &full).unwrap_err().code, LAST_PLY);
+}
+
+#[test]
+fn test_othello_validate_rejects_a_last_placement_with_a_pass_per_placement() {
+    let mut s = OthelloState::start();
+    s.play(D3);
+    s.play(C3);
+    assert_eq!(Othello::validate(&CFG, &s), Ok(()));
+    // Two placements and two passes, white last with c3, d4, e5 in line.
+    let padded = OthelloState { moves: 4, ..s };
+    assert_eq!(Othello::validate(&CFG, &padded).unwrap_err().code, LAST_PLY);
+}
+
+/// Only connectivity rejects this: the corner disc is far from the rest,
+/// and its count, with one pass, fits the plies.
+#[test]
+fn test_othello_validate_rejects_a_disconnected_disc() {
+    let mut s = OthelloState::start();
+    s.play(D3);
+    s.play(C3);
+    s.stones[0] |= square(7, 7);
+    s.moves = 4;
+    assert_eq!(
+        Othello::validate(&CFG, &s).unwrap_err().code,
+        "discs that are not one connected group"
+    );
+    s.stones[0] &= !square(7, 7);
+    s.moves = 2;
+    assert_eq!(Othello::validate(&CFG, &s), Ok(()));
+}
+
+/// The last mover holds two adjacent discs but no three in line, and the
+/// count leaves no pass, so nothing explains its placement.
+#[test]
+fn test_othello_validate_rejects_a_placement_without_three_in_line() {
+    let start = OthelloState::start();
+    let s = OthelloState {
+        stones: [start.stones[0], start.stones[1] | square(2, 2)],
+        moves: 1,
+        ..start
+    };
+    assert_eq!(Othello::validate(&CFG, &s).unwrap_err().code, LAST_PLY);
+}
+
+#[test]
 fn test_othello_validate_accepts_the_pass_a_game_really_played() {
     let mut s = first_pass_position();
     s.play(PASS);
     assert_eq!(Othello::validate(&CFG, &s), Ok(()));
 }
 
+/// The engine refuses a running record without an actor, whether the
+/// header's acting flags are stale or follow the finished board.
 #[test]
 fn test_othello_import_rejects_a_running_episode_on_a_finished_board() {
     let mut p = pool();
@@ -637,6 +693,9 @@ fn test_othello_import_rejects_a_running_episode_on_a_finished_board() {
     assert_eq!(Othello::validate(&CFG, &target), Ok(()));
     let before = p.state_hash(0).unwrap();
     assert!(invalid(&import(&mut p, target)));
+    let good = DecodedRecord::from(p.snapshot(0).unwrap());
+    let stale = DecodedRecord::from_parts(*good.header(), target).unwrap();
+    assert!(p.import(&[0], &[stale]).is_err());
     assert!(!p.is_poisoned());
     assert_eq!(p.state_hash(0).unwrap(), before);
 }
@@ -707,13 +766,12 @@ fn test_othello_perturbed_imports_stay_total_when_accepted() {
             let discs: u32 = s.stones.map(u64::count_ones).iter().sum();
             assert!(discs >= START_DISCS);
             let mut t = s;
-            let mut left = 2 * 60;
+            assert!(s.moves <= MAX_PLIES, "{s:?}");
             while !t.is_over() {
                 let legal = legal_actions(&t);
                 assert!(!legal.is_empty(), "{t:?}");
                 t.play(rng.pick(&legal));
-                left -= 1;
-                assert!(left > 0, "{s:?} does not end");
+                assert!(t.moves <= MAX_PLIES, "{s:?} passes the bound");
             }
         }
     }

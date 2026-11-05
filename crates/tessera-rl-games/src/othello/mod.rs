@@ -284,13 +284,14 @@ impl ActionMask for Othello {
 }
 
 /// Whether the side that just moved holds a disc it could have placed
-/// last: off the centre, with two of its discs in line next to it (the
-/// flipped disc and the one that bracketed it).
+/// last, with two of its discs in line next to it (the flipped disc and the
+/// one that bracketed it). The centre need not be excluded: such a line has
+/// two ends two squares apart, and the centre cannot hold both.
 const fn could_have_placed(mover: u64) -> bool {
     let mut dir = 0;
     while dir < DIRECTIONS {
         let next = shift(mover, dir);
-        if mover & next & shift(next, dir) & !CENTRE != 0 {
+        if mover & next & shift(next, dir) != 0 {
             return true;
         }
         dir += 1;
@@ -302,8 +303,10 @@ const fn could_have_placed(mover: u64) -> bool {
 /// connected group, plies that match the discs (every ply a placement or a
 /// pass, and at most one pass per placement), the exact starting board at
 /// ply 0, and a last ply that the board can explain. That ply was a
-/// placement by the side not to move, or its pass, which needs a pass left
-/// in the count, no placement for it and one for the side to move. These
+/// placement by the side not to move, which leaves fewer passes than
+/// placements (a pass only fills a gap between two placements), or its
+/// pass, which needs no placement for it and one for the side to move. So
+/// no accepted state exceeds [`MAX_PLIES`]. These
 /// are necessary conditions, not a proof that a game reaches the state.
 impl Validate for Othello {
     fn validate(_: &OthelloConfig, state: &OthelloState) -> Result<(), InvariantViolation> {
@@ -334,7 +337,7 @@ impl Validate for Othello {
             };
         }
         let (me, opp) = state.sides();
-        let by_placement = placements > 0 && could_have_placed(opp);
+        let by_placement = passes < placements && could_have_placed(opp);
         let by_pass = passes > 0 && legal_squares(opp, me) == 0 && legal_squares(me, opp) != 0;
         if !by_placement && !by_pass {
             return invalid("a last ply that the board cannot explain");
@@ -343,15 +346,15 @@ impl Validate for Othello {
     }
 
     /// ADR-0040: before the first reset the state is exactly the initial
-    /// value; once reset, both slots are alive, and a running episode is
-    /// not a finished game.
+    /// value; once reset, both slots are alive. A running episode on a
+    /// finished board needs no check here: nobody acts on it, and the
+    /// engine refuses a running sequential record without an actor.
     fn validate_record(
         cfg: &OthelloConfig,
         header: &HeaderView<'_>,
         state: &OthelloState,
     ) -> Result<(), InvariantViolation> {
-        let phase = header.phase();
-        if phase == Phase::NeverReset {
+        if header.phase() == Phase::NeverReset {
             if *state != OthelloState::default() {
                 return Err(InvariantViolation {
                     code: "a state other than the initial value before the first reset",
@@ -363,11 +366,6 @@ impl Validate for Othello {
         if !(0..MAX_AGENTS).all(|k| header.agent(k).is_some_and(|v| v.alive)) {
             return Err(InvariantViolation {
                 code: "a player that is not alive",
-            });
-        }
-        if phase == Phase::Active && state.is_over() {
-            return Err(InvariantViolation {
-                code: "a running episode on a finished board",
             });
         }
         Ok(())
