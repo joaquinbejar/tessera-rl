@@ -1032,8 +1032,8 @@ where
     M: MaskProvider<E>,
 {
     /// A digest of the whole tree (records, nodes, edges, rewards, the free
-    /// list, the root and the counter), for tests of atomicity and of
-    /// determinism.
+    /// list, the root and the counter, and the privileged label when
+    /// set), for tests of atomicity and of determinism.
     #[must_use]
     pub fn tree_hash(&self) -> u64 {
         let mut out = Encoder::new(HashSink::new());
@@ -1063,6 +1063,12 @@ where
         }
         out.write_bytes(&self.root.to_le_bytes());
         out.write_bytes(&self.next_alloc.to_le_bytes());
+        // A privileged tree never hashes equal to a non-privileged one.
+        // The label is folded in only when set, so every other hash,
+        // golden values included, is unchanged.
+        if self.mode == crate::determinize::RootMode::Privileged {
+            out.write_bytes(b"privileged");
+        }
         out.sink().digest()
     }
 }

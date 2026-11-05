@@ -242,6 +242,14 @@ where
         self.obs_bytes
     }
 
+    /// Whether the search runs on full records of an imperfect-information
+    /// environment (`SearchPool::new_privileged`): its results see hidden
+    /// state and must be labelled as such.
+    #[must_use]
+    pub fn is_privileged(&self) -> bool {
+        self.pool.is_privileged()
+    }
+
     /// Search calls completed (the persistent call counter).
     #[must_use]
     pub const fn calls(&self) -> u64 {
