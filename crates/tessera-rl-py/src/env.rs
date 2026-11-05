@@ -480,11 +480,8 @@ pub(crate) fn othello(args: &PoolArgs) -> Result<Box<dyn PoolOps>, BindError> {
     let cfg = OthelloConfig {};
     let (options, n) = options(args)?;
     let same_step = options.auto_reset == AutoReset::SameStep;
-    let pool = with_workers(
-        EnvPool::<Othello, Masked>::with_masks(cfg.clone(), options)?,
-        args.workers,
-    )?;
-    Ok(Box::new(Pooled::new(&cfg, pool, n, same_step)?))
+    let pool = EnvPool::<Othello, Masked>::with_masks(cfg.clone(), options)?;
+    finish(&cfg, pool, args, n, same_step)
 }
 
 /// A Leduc hold'em pool (`tessera/Leduc-v1`), with masks and Sequential
