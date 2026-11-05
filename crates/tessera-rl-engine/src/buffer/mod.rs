@@ -40,7 +40,16 @@
 //!    worker views are created and dropped inside the job, and the caller's
 //!    output views are returned only after `run`.
 
+#[cfg_attr(
+    loom,
+    allow(dead_code, reason = "the split-phase modes are not built under loom")
+)]
 mod generations;
+pub(crate) mod live;
+#[cfg(all(test, loom))]
+mod live_model;
+#[cfg(not(loom))]
+pub(crate) mod pipeline;
 pub(crate) mod rows;
 mod storage;
 
@@ -56,6 +65,8 @@ use crate::sys::Gang;
 use crate::sys::sync::{AtomicBool, Ordering};
 
 use generations::HALVES;
+#[cfg(not(loom))]
+pub(crate) use generations::{GenerationError, Generations};
 pub(crate) use storage::{Buf, StorageBuilder};
 pub use storage::{OutputDtype, OutputField, OutputRegion, OutputStorage};
 
@@ -245,54 +256,54 @@ impl<E: Environment> RawChunk<E> {
             .zip(self.observations)
             .zip(self.terminal.into_iter().zip(leaf_bytes))
         {
-            // SAFETY: invariants 1 and 2 for range `r` (one leaf row per agent).
+            // SAFETY: invariants 1 to 4 for range `r` (one leaf row per agent).
             *view = unsafe { raw.view(r, a * bytes) };
             // SAFETY: as above, for the terminal buffer of the same leaf.
             *term = unsafe { raw_term.view(r, a * bytes) };
         }
-        // SAFETY: invariants 1 and 2 for range `r` (1 elements per instance).
+        // SAFETY: invariants 1 to 4 for range `r` (1 elements per instance).
         let headers = unsafe { self.headers.view(r, 1) };
-        // SAFETY: invariants 1 and 2 for range `r` (1 elements per instance).
+        // SAFETY: invariants 1 to 4 for range `r` (1 elements per instance).
         let states = unsafe { self.states.view(r, 1) };
-        // SAFETY: invariants 1 and 2 for range `r` (a * self.dh elements per instance).
+        // SAFETY: invariants 1 to 4 for range `r` (a * self.dh elements per instance).
         let discrete = unsafe { self.discrete.view(r, a * self.dh) };
-        // SAFETY: invariants 1 and 2 for range `r` (a * self.ch elements per instance).
+        // SAFETY: invariants 1 to 4 for range `r` (a * self.ch elements per instance).
         let continuous = unsafe { self.continuous.view(r, a * self.ch) };
-        // SAFETY: invariants 1 and 2 for range `r` (a elements per instance).
+        // SAFETY: invariants 1 to 4 for range `r` (a elements per instance).
         let penalties = unsafe { self.penalties.view(r, a) };
-        // SAFETY: invariants 1 and 2 for range `r` (a elements per instance).
+        // SAFETY: invariants 1 to 4 for range `r` (a elements per instance).
         let penalized = unsafe { self.penalized.view(r, a) };
-        // SAFETY: invariants 1 and 2 for range `r` (a elements per instance).
+        // SAFETY: invariants 1 to 4 for range `r` (a elements per instance).
         let rewards = unsafe { self.rewards.view(r, a) };
-        // SAFETY: invariants 1 and 2 for range `r` (a elements per instance).
+        // SAFETY: invariants 1 to 4 for range `r` (a elements per instance).
         let agent_terminated = unsafe { self.agent_terminated.view(r, a) };
-        // SAFETY: invariants 1 and 2 for range `r` (a elements per instance).
+        // SAFETY: invariants 1 to 4 for range `r` (a elements per instance).
         let agent_truncated = unsafe { self.agent_truncated.view(r, a) };
-        // SAFETY: invariants 1 and 2 for range `r` (a elements per instance).
+        // SAFETY: invariants 1 to 4 for range `r` (a elements per instance).
         let died = unsafe { self.died.view(r, a) };
-        // SAFETY: invariants 1 and 2 for range `r` (a elements per instance).
+        // SAFETY: invariants 1 to 4 for range `r` (a elements per instance).
         let spawned = unsafe { self.spawned.view(r, a) };
-        // SAFETY: invariants 1 and 2 for range `r` (a elements per instance).
+        // SAFETY: invariants 1 to 4 for range `r` (a elements per instance).
         let invalid_agent_event = unsafe { self.invalid_agent_event.view(r, a) };
-        // SAFETY: invariants 1 and 2 for range `r` (a elements per instance).
+        // SAFETY: invariants 1 to 4 for range `r` (a elements per instance).
         let alive = unsafe { self.alive.view(r, a) };
-        // SAFETY: invariants 1 and 2 for range `r` (a elements per instance).
+        // SAFETY: invariants 1 to 4 for range `r` (a elements per instance).
         let acting = unsafe { self.acting.view(r, a) };
-        // SAFETY: invariants 1 and 2 for range `r` (a elements per instance).
+        // SAFETY: invariants 1 to 4 for range `r` (a elements per instance).
         let generations = unsafe { self.generations.view(r, a) };
-        // SAFETY: invariants 1 and 2 for range `r` (1 elements per instance).
+        // SAFETY: invariants 1 to 4 for range `r` (1 elements per instance).
         let episode_terminated = unsafe { self.episode_terminated.view(r, 1) };
-        // SAFETY: invariants 1 and 2 for range `r` (1 elements per instance).
+        // SAFETY: invariants 1 to 4 for range `r` (1 elements per instance).
         let episode_truncated = unsafe { self.episode_truncated.view(r, 1) };
-        // SAFETY: invariants 1 and 2 for range `r` (1 elements per instance).
+        // SAFETY: invariants 1 to 4 for range `r` (1 elements per instance).
         let episode_return = unsafe { self.episode_return.view(r, 1) };
-        // SAFETY: invariants 1 and 2 for range `r` (1 elements per instance).
+        // SAFETY: invariants 1 to 4 for range `r` (1 elements per instance).
         let episode_length = unsafe { self.episode_length.view(r, 1) };
-        // SAFETY: invariants 1 and 2 for range `r` (1 elements per instance).
+        // SAFETY: invariants 1 to 4 for range `r` (1 elements per instance).
         let episode_illegal_actions = unsafe { self.episode_illegal_actions.view(r, 1) };
-        // SAFETY: invariants 1 and 2 for range `r` (1 elements per instance).
+        // SAFETY: invariants 1 to 4 for range `r` (1 elements per instance).
         let episode_invalid_agent_events = unsafe { self.episode_invalid_agent_events.view(r, 1) };
-        // SAFETY: invariants 1 and 2 for range `r` (a * self.mask_len elements per instance).
+        // SAFETY: invariants 1 to 4 for range `r` (a * self.mask_len elements per instance).
         let masks = unsafe { self.masks.view(r, a * self.mask_len) };
         Chunk {
             headers,
@@ -329,8 +340,8 @@ impl<E: Environment> RawChunk<E> {
 }
 
 #[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "used by the split-phase modes (ADR-0047)")
+    loom,
+    allow(dead_code, reason = "the split-phase modes are not built under loom")
 )]
 impl<E: Environment> RawChunk<E> {
     /// The views of the instances in `r`, or `None` if `r` is reversed or
@@ -359,6 +370,10 @@ impl<E: Environment> RawChunk<E> {
     ///
     /// As [`Self::range_view`], for the one row `id`.
     #[expect(unsafe_code, reason = "audited module: token-guarded views")]
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "used by the Async mode (ADR-0047)")
+    )]
     unsafe fn instance_view<'a>(&self, id: usize) -> Option<Chunk<'a, E>> {
         let end = id.checked_add(1)?;
         // SAFETY: forwarded to the caller's guarantee for row `id`.
@@ -371,24 +386,32 @@ impl<E: Environment> RawChunk<E> {
 /// ties to the lower boundary. `None` if either half would be empty, which
 /// the mode reports as `HalfTooSmall`.
 #[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "used by the split-phase modes (ADR-0047)")
+    loom,
+    allow(dead_code, reason = "the split-phase modes are not built under loom")
 )]
 #[must_use]
-pub(crate) fn half_ranges(instances: usize, size: usize) -> Option<[Range<usize>; HALVES]> {
-    let size = size.max(1);
+pub(crate) fn half_ranges(
+    instances: usize,
+    size: core::num::NonZeroUsize,
+) -> Option<[Range<usize>; HALVES]> {
+    let size = size.get();
     let chunks = instances.div_ceil(size);
-    // Interior boundaries are `k * size` for `k` in `1..chunks`; compare
-    // `|2 * boundary - instances|` to stay in integers.
-    let mut best: Option<(usize, usize)> = None;
-    for k in 1..chunks {
-        let boundary = k.checked_mul(size)?;
-        let distance = boundary.checked_mul(2)?.abs_diff(instances);
-        if best.is_none_or(|(_, d)| distance < d) {
-            best = Some((boundary, distance));
-        }
-    }
-    let (split, _) = best?;
+    let last = chunks.checked_sub(1).filter(|&k| k >= 1)?;
+    // Interior boundaries are `k * size` for `k` in `1..chunks`. The nearest
+    // to `instances / 2` is `k0 = instances / (2 * size)` or `k0 + 1`;
+    // compare `|2 * boundary - instances|` to stay in integers.
+    let k0 = instances / size.checked_mul(2)?;
+    let distance = |k: usize| -> Option<usize> {
+        Some(k.checked_mul(size)?.checked_mul(2)?.abs_diff(instances))
+    };
+    let low = k0.clamp(1, last);
+    let high = k0.saturating_add(1).clamp(1, last);
+    let k = if distance(high)? < distance(low)? {
+        high
+    } else {
+        low
+    };
+    let split = k.checked_mul(size)?;
     Some([0..split, split..instances])
 }
 
@@ -459,6 +482,10 @@ mod tests {
     use tessera_rl_num::rng::{ObsRng, StepRng};
 
     use super::{Raw, RawChunk, chunk_range, half_ranges};
+
+    fn nz(n: usize) -> core::num::NonZeroUsize {
+        core::num::NonZeroUsize::new(n).unwrap()
+    }
     use crate::layout::Leaf;
     use crate::outputs::Outputs;
     use crate::pool::Chunk;
@@ -712,7 +739,7 @@ mod tests {
             (100, 7, 49), // N not a multiple of the chunk size
             (1024, 64, 512),
         ] {
-            let [a, b] = half_ranges(n, size).unwrap();
+            let [a, b] = half_ranges(n, nz(size)).unwrap();
             assert_eq!(
                 (a.clone(), b.clone()),
                 (0..split, split..n),
@@ -725,9 +752,9 @@ mod tests {
     #[test]
     fn test_half_ranges_without_two_chunks_is_none() {
         for (n, size) in [(0, 4), (1, 1), (3, 4), (4, 4)] {
-            assert_eq!(half_ranges(n, size), None, "n {n} size {size}");
+            assert_eq!(half_ranges(n, nz(size)), None, "n {n} size {size}");
         }
-        assert_eq!(half_ranges(2, 1), Some([0..1, 1..2]));
+        assert_eq!(half_ranges(2, nz(1)), Some([0..1, 1..2]));
     }
 
     /// Range and instance views stay inside the instances: reversed or
@@ -762,15 +789,15 @@ mod tests {
         });
     }
 
-    /// Two threads hold views of the two halves at once, while a third set
-    /// of single-instance views on the first thread covers its own rows one
-    /// at a time; with N not a multiple of the chunk size every element ends
-    /// up written by exactly its owner (run under Miri in the nightly job).
+    /// Two threads write at once: the first through one instance view at a
+    /// time over half A, the second through one view of all of half B. With
+    /// N not a multiple of the chunk size, every element ends up written by
+    /// exactly its owner (run under Miri in the nightly job).
     #[test]
     #[expect(unsafe_code, reason = "exercises the audited views")]
     fn test_raw_chunk_half_and_instance_views_never_overlap() {
         const N: usize = 7;
-        let halves = half_ranges(N, 3).unwrap();
+        let halves = half_ranges(N, nz(3)).unwrap();
         let [first_half, second_half] = halves.clone();
         let (outputs, states) = with_raw(N, |raw| {
             std::thread::scope(|scope| {

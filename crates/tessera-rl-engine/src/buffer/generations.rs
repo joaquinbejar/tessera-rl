@@ -47,10 +47,6 @@ pub(crate) struct Generations {
     halves: [AtomicU64; HALVES],
 }
 
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "used by the split-phase modes (ADR-0047)")
-)]
 impl Generations {
     /// Counters for `n` instances, all at zero.
     #[must_use]
@@ -68,6 +64,10 @@ impl Generations {
     }
 
     /// The generation of instance `id`.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "read by the Async mode (ADR-0047)")
+    )]
     pub(crate) fn id(&self, id: usize) -> Result<u64, GenerationError> {
         cell(&self.ids, id).map(|c| c.load(Ordering::Acquire))
     }

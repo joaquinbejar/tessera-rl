@@ -155,7 +155,7 @@ jobs:
     if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - run: cargo test -p tessera-rl-engine --lib --release --locked -- gang storage ring id_buffers
+      - run: cargo test -p tessera-rl-engine --lib --release --locked -- gang storage ring id_buffers live_model
         env:
           RUSTFLAGS: --cfg loom
           LOOM_MAX_PREEMPTIONS: "3"
