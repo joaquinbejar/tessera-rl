@@ -631,11 +631,12 @@ pub(crate) fn fork(g: Gil, inner: &Inner, args: Ref<'_>) -> CResult<Mine> {
 
 /// `is_poisoned() -> bool`.
 pub(crate) fn is_poisoned(g: Gil, inner: &Inner) -> CResult<Mine> {
-    inner.with(g, |ops| {
-        // Detached: in split-phase modes this takes the binding mutex.
-        let poisoned = g.detach(|| ops.is_poisoned());
-        Ok(capi::boolean(g, poisoned))
-    })
+    if let Some(split) = split_of(g, inner)? {
+        // Detached and outside the guard: this takes the binding mutex.
+        let poisoned = g.detach(|| split.is_poisoned());
+        return Ok(capi::boolean(g, poisoned));
+    }
+    inner.with(g, |ops| Ok(capi::boolean(g, ops.is_poisoned())))
 }
 
 /// `close()`: frees the pool; idempotent. It takes the reentrancy guard
