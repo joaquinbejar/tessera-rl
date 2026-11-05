@@ -41,6 +41,7 @@
 //!    output views are returned only after `run`.
 
 mod generations;
+pub(crate) mod rows;
 mod storage;
 
 use core::ops::Range;
