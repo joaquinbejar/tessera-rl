@@ -23,6 +23,13 @@
 //! [`EngineError::LaneEnvUnsupported`] has no trigger yet (ADR-0047
 //! section 8). Both refusals belong where those features land.
 //!
+//! # Snapshots
+//!
+//! `snapshot` needs whole-pool quiescence today; per-row snapshot through
+//! raw parts is tracked in issue #85. This is a recorded deviation from
+//! design D11, which asks only that the snapshotted rows be quiescent. The
+//! snapshotted id itself must also not be in flight (`InFlight`).
+//!
 //! # Performance
 //!
 //! Async is currently much slower per round than Sync. Workers claim one
@@ -346,7 +353,14 @@ where
         // A send that found two jobs already past their last claim published
         // nothing, so admitted ids can wait in the ring with no job left:
         // publish until every admitted id is stepped (or no worker is left).
-        while self.running() != 0 && !self.dead() {
+        // A panicked claim (positions exhausted) makes no progress: stop.
+        while self.running() != 0
+            && !self.dead()
+            && !self
+                .mode
+                .panicked
+                .load(core::sync::atomic::Ordering::Acquire)
+        {
             let mode = Arc::clone(&self.mode);
             let published = self.runtime().and_then(|rt| publish(&mut rt.gang, &mode));
             drop(mode);
@@ -374,6 +388,9 @@ where
             return Err(EngineError::WorkerDied);
         }
         if self.running() != 0 && !recovery {
+            // Make progress on admitted ids first, so a caller retrying
+            // after `NotQuiescent` is never stuck.
+            self.pump(false)?;
             return Err(EngineError::NotQuiescent);
         }
         // Every id has finished (or this is a recovery): the jobs end at
@@ -568,15 +585,21 @@ where
         self.deliver(ids)
     }
 
-    /// The record of instance `id`, which must not be running or covered.
+    /// The record of instance `id`. The id itself must not be in flight
+    /// (`InFlight`), and no sent id may still be running anywhere: the
+    /// snapshot needs whole-pool quiescence today (see the module docs).
     ///
     /// # Errors
     ///
-    /// [`EngineError::InFlight`] for a sent id not yet received,
-    /// [`EngineError::NotQuiescent`] while any sent id still runs (the
-    /// snapshot reads through the whole pool's buffers),
-    /// [`EngineError::Poisoned`], or any error of [`EnvPool::snapshot`].
-    pub fn snapshot(&self, id: u32) -> Result<Record<E>, EngineError> {
+    /// [`EngineError::WorkerDied`] after a worker died,
+    /// [`EngineError::Poisoned`], [`EngineError::InFlight`] for a sent id
+    /// not yet received, [`EngineError::NotQuiescent`] while any sent id
+    /// still runs (the call makes progress on them first, so a retry
+    /// succeeds), or any error of [`EnvPool::snapshot`].
+    pub fn snapshot(&mut self, id: u32) -> Result<Record<E>, EngineError> {
+        if self.dead() {
+            return Err(EngineError::WorkerDied);
+        }
         if self.is_poisoned() {
             return Err(EngineError::Poisoned);
         }
@@ -590,8 +613,9 @@ where
             return Err(EngineError::InFlight { id });
         }
         // `EnvPool::snapshot` reads through slices over every instance, so
-        // no worker may be writing any row meanwhile (ADR-0047 section 3).
+        // no worker may be writing any row meanwhile.
         if self.running() != 0 {
+            self.pump(false)?;
             return Err(EngineError::NotQuiescent);
         }
         self.mode.pool.snapshot(id)
@@ -781,30 +805,37 @@ where
         result
     }
 
-    /// Reaps finished jobs and publishes a drain job when ids wait in the
-    /// submission ring. With `eager`, a job is published whenever fewer than
-    /// two are in flight (a send); otherwise only when none is (a receive).
-    fn pump(&mut self, eager: bool) -> Result<(), EngineError> {
+    /// Reaps finished jobs, then publishes a drain job when admitted ids
+    /// have not been stepped. With `after_push` (a send), a job is always
+    /// published after the send's last push, waiting for the oldest job
+    /// first if two are in flight: a job published after a push claims that
+    /// id, so admitted ids can never wait in the ring with no job left to
+    /// claim them. Otherwise a job is published only when none is in flight
+    /// (`recv`, writers and snapshots, which make progress on whatever a
+    /// send left).
+    fn pump(&mut self, after_push: bool) -> Result<(), EngineError> {
         let running = self.running();
         let mode = Arc::clone(&self.mode);
         let rt = self.runtime()?;
+        let mut panicked = false;
         while rt.gang.in_flight() > 0 {
             match rt.gang.try_wait()? {
-                Some(panicked) => {
-                    if panicked {
-                        mode.panicked
-                            .store(true, core::sync::atomic::Ordering::Release);
-                    }
-                }
+                Some(p) => panicked |= p,
                 None => break,
             }
         }
-        let limit = if eager { 2 } else { 1 };
-        let result = if running > 0 && rt.gang.in_flight() < limit {
+        if after_push && rt.gang.in_flight() >= 2 {
+            panicked |= rt.gang.wait()?;
+        }
+        let result = if running > 0 && (after_push || rt.gang.in_flight() == 0) {
             publish(&mut rt.gang, &mode)
         } else {
             Ok(())
         };
+        if panicked {
+            mode.panicked
+                .store(true, core::sync::atomic::Ordering::Release);
+        }
         drop(mode);
         result
     }
@@ -864,6 +895,11 @@ where
         // reported one is `Poisoned`.
         if self.poisoned {
             return Err(EngineError::Poisoned);
+        }
+        // Progress first: a refusal below must not leave admitted ids
+        // unstepped.
+        if !self.dead() {
+            self.pump(false)?;
         }
         let outstanding = u32::try_from(self.outstanding).unwrap_or(u32::MAX);
         let staged = u32::try_from(self.stage.len()).unwrap_or(u32::MAX);

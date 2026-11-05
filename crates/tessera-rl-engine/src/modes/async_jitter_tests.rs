@@ -299,3 +299,73 @@ fn test_async_unpublished_ids_are_stepped_by_the_drain() {
         );
     }
 }
+
+/// A pool left with admitted ids no job will claim (three ids, batches of
+/// ten): `recv`, `reset_all` and `snapshot` each make progress on them, so
+/// a caller retrying them is never stuck (TR M1 on #84).
+#[test]
+fn test_async_recv_reset_all_and_snapshot_make_progress_on_unclaimed_ids() {
+    let make = || {
+        let mut pool = Pool::new(WalkConfig {}, options(AutoReset::NextStep))
+            .unwrap()
+            .async_mode(AsyncOptions::new(
+                NonZeroUsize::new(2).unwrap(),
+                NonZeroUsize::new(10).unwrap(),
+            ))
+            .unwrap();
+        drop(pool.reset_all(Reseed::Keep).unwrap());
+        pool.send_unpublished(
+            &[0, 1, 2],
+            ActionInput {
+                discrete: &[1, 1, 1],
+                continuous: &[],
+            },
+        )
+        .unwrap();
+        pool
+    };
+    let tries = if cfg!(miri) { 200 } else { 100_000 };
+    // `recv` refuses (three ids cannot fill a batch of ten), but steps them:
+    // a snapshot then succeeds without any other call.
+    let mut pool = make();
+    for _ in 0..3 {
+        assert!(matches!(
+            pool.recv().map(|_| ()),
+            Err(crate::EngineError::BatchUnreachable { .. })
+        ));
+    }
+    let ok = (0..tries).any(|_| match pool.snapshot(5) {
+        Ok(_) => true,
+        Err(crate::EngineError::NotQuiescent) => {
+            std::thread::yield_now();
+            false
+        }
+        Err(e) => panic!("unexpected {e:?}"),
+    });
+    assert!(ok, "recv stepped the unclaimed ids");
+    // `reset_all` alone makes progress.
+    let mut pool = make();
+    let ok = (0..tries).any(|_| match pool.reset_all(Reseed::Keep) {
+        Ok(t) => {
+            drop(t);
+            true
+        }
+        Err(crate::EngineError::NotQuiescent) => {
+            std::thread::yield_now();
+            false
+        }
+        Err(e) => panic!("unexpected {e:?}"),
+    });
+    assert!(ok, "reset_all stepped the unclaimed ids");
+    // `snapshot` alone makes progress.
+    let mut pool = make();
+    let ok = (0..tries).any(|_| match pool.snapshot(5) {
+        Ok(_) => true,
+        Err(crate::EngineError::NotQuiescent) => {
+            std::thread::yield_now();
+            false
+        }
+        Err(e) => panic!("unexpected {e:?}"),
+    });
+    assert!(ok, "snapshot stepped the unclaimed ids");
+}
