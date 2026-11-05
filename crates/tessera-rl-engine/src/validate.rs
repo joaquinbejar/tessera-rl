@@ -359,7 +359,10 @@ pub(crate) fn check_recv(in_flight: u32, ready: u32, batch_size: u32) -> Result<
         return Err(EngineError::NothingInFlight);
     }
     // An overflowing sum exceeds any u32 batch size, so it is reachable.
-    if in_flight.checked_add(ready).is_some_and(|sum| sum < batch_size) {
+    if in_flight
+        .checked_add(ready)
+        .is_some_and(|sum| sum < batch_size)
+    {
         return Err(EngineError::BatchUnreachable {
             in_flight,
             ready,
