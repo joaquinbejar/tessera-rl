@@ -19,7 +19,7 @@
 //! 1. `submit` writes the slot's `panicked = false`, `pending = workers`
 //!    and job pointer, then stores `published = s`, then increments the
 //!    wake word, and wakes the workers only if some are parked (all
-//!    SeqCst). A slot is reused for `s + 2` only after `wait` observed its
+//!    `SeqCst`). A slot is reused for `s + 2` only after `wait` observed its
 //!    `pending == 0`, so at most two jobs are ever in flight.
 //! 2. Each worker keeps the next sequence it must run and runs every
 //!    published job in order before it may sleep. To sleep it loads the
@@ -29,7 +29,7 @@
 //! 3. A worker decrements the slot's `pending` once per job, and that
 //!    decrement is its last access to the job. The worker that brings it to
 //!    zero wakes the waiter if one is parked.
-//! 4. `wait` waits for the oldest job's `pending == 0` with SeqCst, which
+//! 4. `wait` waits for the oldest job's `pending == 0` with `SeqCst`, which
 //!    makes every worker's writes visible, and frees its slot.
 //!
 //! Waits spin for a bounded budget, then block. Blocking registers in a
@@ -220,7 +220,8 @@ struct Shared {
     word: AtomicU32,
     /// Workers parked on `word`.
     parked: AtomicU32,
-    slots: [JobSlot; 2],
+    even: JobSlot,
+    odd: JobSlot,
     shutdown: AtomicBool,
     poisoned: AtomicBool,
     dead: AtomicBool,
@@ -244,7 +245,8 @@ pub(crate) struct Gang {
     submitted: u64,
     completed: u64,
     /// Whether each slot's job has no waker (its waiter polls on park).
-    polled: [bool; 2],
+    polled_even: bool,
+    polled_odd: bool,
 }
 
 impl core::fmt::Debug for Gang {
@@ -285,11 +287,16 @@ unsafe fn trampoline<F: Fn(usize) + Sync>(data: *const (), worker: usize) {
 }
 
 /// The slot of sequence `seq`.
-fn slot_index(seq: u64) -> usize {
-    usize::from(seq & 1 == 1)
+fn is_odd(seq: u64) -> bool {
+    seq & 1 == 1
 }
 
 impl Shared {
+    /// The slot of sequence `seq`.
+    fn slot(&self, seq: u64) -> &JobSlot {
+        if is_odd(seq) { &self.odd } else { &self.even }
+    }
+
     /// Waits until `done(word)` holds: a bounded spin, then blocking. Used
     /// at startup, where the creator is the only waiter.
     fn wait_on(&self, word: &AtomicU32, mut done: impl FnMut(u32) -> bool) -> u32 {
@@ -309,7 +316,7 @@ impl Shared {
     }
 
     /// Waits until `ready()` holds: a bounded spin, then blocking on `word`
-    /// with registration in `parked` and a recheck (SeqCst). The word is
+    /// with registration in `parked` and a recheck (`SeqCst`). The word is
     /// loaded before `ready` is rechecked, so a change made after the
     /// condition became true is never missed. `poll` makes the park backend
     /// sleep with a timeout instead of waiting for an unpark.
@@ -400,7 +407,8 @@ impl Gang {
             published: AtomicU64::new(0),
             word: AtomicU32::new(0),
             parked: AtomicU32::new(0),
-            slots: [JobSlot::new(), JobSlot::new()],
+            even: JobSlot::new(),
+            odd: JobSlot::new(),
             shutdown: AtomicBool::new(false),
             poisoned: AtomicBool::new(false),
             dead: AtomicBool::new(false),
@@ -431,7 +439,8 @@ impl Gang {
             count,
             submitted: 0,
             completed: 0,
-            polled: [false; 2],
+            polled_even: false,
+            polled_odd: false,
         };
         for w in 0..options.workers.get() {
             let shared = Arc::clone(&gang.shared);
@@ -512,7 +521,7 @@ impl Gang {
     /// `job`, and the closure it points to, must stay valid until the
     /// `wait` (or `try_wait`) that returns this job's result.
     #[expect(unsafe_code, reason = "audited module: job publication")]
-    pub(crate) unsafe fn submit(&mut self, job: *const Job) -> Result<(), EngineError> {
+    pub(crate) unsafe fn submit(&mut self, job: &Job) -> Result<(), EngineError> {
         let shared = &*self.shared;
         if shared.dead.load(Ordering::Acquire) {
             return Err(EngineError::WorkerDied);
@@ -526,13 +535,17 @@ impl Gang {
             .submitted
             .checked_add(1)
             .ok_or(EngineError::SequenceExhausted)?;
-        let i = slot_index(seq);
-        let slot = &shared.slots[i];
-        // SAFETY: the caller keeps `job` valid until its wait (contract).
-        self.polled[i] = unsafe { &*job }.waker.is_none();
+        let slot = shared.slot(seq);
+        let polled = job.waker.is_none();
+        if is_odd(seq) {
+            self.polled_odd = polled;
+        } else {
+            self.polled_even = polled;
+        }
         slot.panicked.store(false, Ordering::SeqCst);
         slot.pending.store(self.count, Ordering::SeqCst);
-        slot.job.store(job.cast_mut(), Ordering::SeqCst);
+        slot.job
+            .store(core::ptr::from_ref(job).cast_mut(), Ordering::SeqCst);
         // Publication: `published` before the word (module docs, step 1).
         shared.published.store(seq, Ordering::SeqCst);
         shared.word.fetch_add(1, Ordering::SeqCst);
@@ -549,16 +562,21 @@ impl Gang {
     /// Waits for the oldest job in flight and frees its slot. Returns
     /// whether any call of it panicked.
     pub(crate) fn wait(&mut self) -> Result<bool, EngineError> {
-        let (seq, i) = self.oldest()?;
+        let seq = self.oldest()?;
+        let polled = if is_odd(seq) {
+            self.polled_odd
+        } else {
+            self.polled_even
+        };
         let shared = &*self.shared;
-        let slot = &shared.slots[i];
+        let slot = shared.slot(seq);
         shared.wait_until(
             &slot.pending,
             &slot.waiters,
             || slot.pending.load(Ordering::SeqCst) == 0,
-            self.polled[i],
+            polled,
         );
-        Ok(self.complete(seq, i))
+        Ok(self.complete(seq))
     }
 
     /// Like `wait`, but returns `None` at once if the oldest job is still
@@ -568,14 +586,14 @@ impl Gang {
         expect(dead_code, reason = "used by the split-phase modes (ADR-0047)")
     )]
     pub(crate) fn try_wait(&mut self) -> Result<Option<bool>, EngineError> {
-        let (seq, i) = self.oldest()?;
-        if self.shared.slots[i].pending.load(Ordering::SeqCst) != 0 {
+        let seq = self.oldest()?;
+        if self.shared.slot(seq).pending.load(Ordering::SeqCst) != 0 {
             return Ok(None);
         }
-        Ok(Some(self.complete(seq, i)))
+        Ok(Some(self.complete(seq)))
     }
 
-    fn oldest(&self) -> Result<(u64, usize), EngineError> {
+    fn oldest(&self) -> Result<u64, EngineError> {
         if self.in_flight() == 0 {
             return Err(EngineError::GangQueue { in_flight: 0 });
         }
@@ -583,12 +601,12 @@ impl Gang {
             .completed
             .checked_add(1)
             .ok_or(EngineError::SequenceExhausted)?;
-        Ok((seq, slot_index(seq)))
+        Ok(seq)
     }
 
-    fn complete(&mut self, seq: u64, i: usize) -> bool {
+    fn complete(&mut self, seq: u64) -> bool {
         let shared = &*self.shared;
-        let slot = &shared.slots[i];
+        let slot = shared.slot(seq);
         slot.job.store(core::ptr::null_mut(), Ordering::SeqCst);
         self.completed = seq;
         let panicked = slot.panicked.load(Ordering::SeqCst);
@@ -686,7 +704,7 @@ fn worker_main(shared: &Shared, worker: usize, core: Option<usize>, fail: bool, 
     loop {
         // Run every published job, in order, before sleeping (step 2).
         while shared.published.load(Ordering::SeqCst) >= next {
-            let slot = &shared.slots[slot_index(next)];
+            let slot = shared.slot(next);
             if draining {
                 drain_job(shared, slot);
             } else {

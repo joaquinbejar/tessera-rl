@@ -39,6 +39,17 @@ fn address_options(workers: usize) -> GangOptions {
     }
 }
 
+/// Submits `job`. Every test keeps its jobs and closures alive until the
+/// gang has waited for them: they are declared before the gang (dropped
+/// after its draining drop), or outlive a joined waiter thread.
+fn submit(gang: &mut Gang, job: &Job) -> Result<(), EngineError> {
+    // SAFETY: see above; the job outlives the wait that returns its result.
+    #[expect(unsafe_code, reason = "test of the audited submit")]
+    unsafe {
+        gang.submit(job)
+    }
+}
+
 fn model(f: impl Fn() + Sync + Send + 'static) {
     #[cfg(loom)]
     loom::model(f);
@@ -177,11 +188,9 @@ fn two_published(opts: &GangOptions) {
     let ja = Job::new(&fa, None);
     let jb = Job::new(&fb, None);
     let mut gang = Gang::new(opts).unwrap();
-    // SAFETY: the jobs and closures outlive the gang (declared before it).
-    #[expect(unsafe_code, reason = "test of the audited submit")]
-    unsafe {
-        gang.submit(&ja).unwrap();
-        gang.submit(&jb).unwrap();
+    {
+        submit(&mut gang, &ja).unwrap();
+        submit(&mut gang, &jb).unwrap();
     }
     assert!(!gang.wait().unwrap());
     assert_eq!(first.get(), opts.workers.get());
@@ -220,10 +229,8 @@ fn drop_in_flight(jobs: usize) {
     let job = Job::new(&f, None);
     let mut gang = Gang::new(&address_options(1)).unwrap();
     for _ in 0..jobs {
-        // SAFETY: `job` and `f` outlive the gang, whose drop drains.
-        #[expect(unsafe_code, reason = "test of the audited submit")]
-        unsafe {
-            gang.submit(&job).unwrap();
+        {
+            submit(&mut gang, &job).unwrap();
         }
     }
     drop(gang);
@@ -253,11 +260,9 @@ fn test_gang_panic_in_a_with_b_queued_runs_b_and_poison_sticks() {
         };
         let (ja, jb) = (Job::new(&fa, None), Job::new(&fb, None));
         let mut gang = Gang::new(&options(1)).unwrap();
-        // SAFETY: the jobs outlive the gang.
-        #[expect(unsafe_code, reason = "test of the audited submit")]
-        unsafe {
-            gang.submit(&ja).unwrap();
-            gang.submit(&jb).unwrap();
+        {
+            submit(&mut gang, &ja).unwrap();
+            submit(&mut gang, &jb).unwrap();
         }
         assert!(gang.wait().unwrap());
         assert!(!gang.wait().unwrap());
@@ -280,13 +285,11 @@ fn death_with_queued(publish_second_after_first_wait: bool) {
     let f = |_w: usize| {};
     let (ja, jb) = (Job::new(&f, None), Job::new(&f, None));
     let mut gang = Gang::new(&opts).unwrap();
-    // SAFETY: the jobs outlive the gang.
-    #[expect(unsafe_code, reason = "test of the audited submit")]
-    let queued = unsafe {
-        gang.submit(&ja).unwrap();
+    let queued = {
+        submit(&mut gang, &ja).unwrap();
         // The worker may already be dead when the second job is published:
         // then the submit reports it; otherwise the job is drained.
-        !publish_second_after_first_wait && gang.submit(&jb).is_ok()
+        !publish_second_after_first_wait && submit(&mut gang, &jb).is_ok()
     };
     assert!(
         gang.wait().unwrap(),
@@ -296,15 +299,11 @@ fn death_with_queued(publish_second_after_first_wait: bool) {
         return;
     }
     if publish_second_after_first_wait {
-        // SAFETY: as above.
-        #[expect(unsafe_code, reason = "test of the audited submit")]
-        let second = unsafe { gang.submit(&jb) };
+        let second = { submit(&mut gang, &jb) };
         assert_eq!(second, Err(EngineError::WorkerDied));
     } else {
         assert!(gang.wait().unwrap(), "the drained job reports a panic");
-        // SAFETY: as above.
-        #[expect(unsafe_code, reason = "test of the audited submit")]
-        let third = unsafe { gang.submit(&ja) };
+        let third = { submit(&mut gang, &ja) };
         assert_eq!(third, Err(EngineError::WorkerDied));
     }
 }
@@ -322,19 +321,16 @@ fn test_gang_publication_after_death_reports_worker_died() {
 /// A job submitted on one thread and waited for on another, with no waker
 /// and no spinning: the waiter registers at wait time and rechecks, so the
 /// completion is never missed (counted wakes on the address path).
-fn cross_thread_wait(opts: GangOptions) {
+fn cross_thread_wait(opts: &GangOptions) {
     let counted = Arc::new(Counted::new());
     let c = Arc::clone(&counted.count);
     let f = move |_w: usize| {
         c.fetch_add(1, Ordering::SeqCst);
     };
     let job = Job::new(&f, None);
-    let mut gang = Gang::new(&opts).unwrap();
-    // SAFETY: `job` and `f` live on this stack until the waiter thread,
-    // which owns the gang and waits for the job, has been joined.
-    #[expect(unsafe_code, reason = "test of the audited submit")]
-    unsafe {
-        gang.submit(&job).unwrap();
+    let mut gang = Gang::new(opts).unwrap();
+    {
+        submit(&mut gang, &job).unwrap();
     }
     let seen = Arc::clone(&counted);
     let waiter = crate::sys::sync::thread::spawn(move || {
@@ -353,7 +349,7 @@ fn test_gang_wait_on_another_thread_with_address_wait_completes() {
     model(|| {
         let mut opts = address_options(1);
         opts.spin = 0;
-        cross_thread_wait(opts);
+        cross_thread_wait(&opts);
     });
 }
 
@@ -362,7 +358,7 @@ fn test_gang_wait_on_another_thread_with_park_polling_completes() {
     model(|| {
         let mut opts = options(1);
         opts.spin = 0;
-        cross_thread_wait(opts);
+        cross_thread_wait(&opts);
     });
 }
 
@@ -378,10 +374,8 @@ fn test_gang_try_wait_returns_none_then_the_result() {
     };
     let job = Job::new(&f, None);
     let mut gang = Gang::new(&options(1)).unwrap();
-    // SAFETY: the job outlives the gang.
-    #[expect(unsafe_code, reason = "test of the audited submit")]
-    unsafe {
-        gang.submit(&job).unwrap();
+    {
+        submit(&mut gang, &job).unwrap();
     }
     assert_eq!(gang.try_wait(), Ok(None));
     gate.store(true, std::sync::atomic::Ordering::SeqCst);
@@ -396,13 +390,11 @@ fn test_gang_queue_limits_are_typed_errors() {
     let job = Job::new(&f, None);
     let mut gang = Gang::new(&options(1)).unwrap();
     assert_eq!(gang.wait(), Err(EngineError::GangQueue { in_flight: 0 }));
-    // SAFETY: the job outlives the gang.
-    #[expect(unsafe_code, reason = "test of the audited submit")]
-    unsafe {
-        gang.submit(&job).unwrap();
-        gang.submit(&job).unwrap();
+    {
+        submit(&mut gang, &job).unwrap();
+        submit(&mut gang, &job).unwrap();
         assert_eq!(
-            gang.submit(&job),
+            submit(&mut gang, &job),
             Err(EngineError::GangQueue { in_flight: 2 })
         );
     }
@@ -427,9 +419,7 @@ fn test_gang_sequence_overflow_is_sequence_exhausted() {
     // Skip ahead; no job is in flight, and the workers have run none.
     gang.submitted = u64::MAX;
     gang.completed = u64::MAX;
-    // SAFETY: the job outlives the gang; the submit is refused anyway.
-    #[expect(unsafe_code, reason = "test of the audited submit")]
-    let refused = unsafe { gang.submit(&job) };
+    let refused = { submit(&mut gang, &job) };
     assert_eq!(refused, Err(EngineError::SequenceExhausted));
     // Restore consistent counters so the drop's drain has nothing to do.
     gang.submitted = 0;
