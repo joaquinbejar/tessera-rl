@@ -290,6 +290,16 @@ fn test_gang_two_jobs_published_before_any_worker_runs_both() {
 }
 
 #[test]
+fn test_gang_two_jobs_published_on_two_workers_with_park_run_both() {
+    small_model(|| two_published(&options(2)));
+}
+
+#[test]
+fn test_gang_two_jobs_published_on_two_workers_with_address_wait_run_both() {
+    small_model(|| two_published(&address_options(2)));
+}
+
+#[test]
 fn test_gang_two_jobs_published_with_address_wait_run_both() {
     model(|| two_published(&address_options(1)));
 }
@@ -367,7 +377,13 @@ fn death_with_queued(publish_second_after_first_wait: bool) {
     let mut opts = options(1);
     opts.faults.die_in_epoch = Some(0);
     let f = |_w: usize| {};
-    let (ja, jb) = (Job::new(&f, None), Job::new(&f, None));
+    // B counts its calls: the dead worker must run no job code for it.
+    let b_calls = Counted::new();
+    let bc = Arc::clone(&b_calls.count);
+    let fb = move |_w: usize| {
+        bc.fetch_add(1, Ordering::SeqCst);
+    };
+    let (ja, jb) = (Job::new(&f, None), Job::new(&fb, None));
     let mut gang = Gang::new(&opts).unwrap();
     let queued = {
         submit(&mut gang, &ja).unwrap();
@@ -387,6 +403,7 @@ fn death_with_queued(publish_second_after_first_wait: bool) {
         assert_eq!(second, Err(EngineError::WorkerDied));
     } else {
         assert!(gang.wait().unwrap(), "the drained job reports a panic");
+        assert_eq!(b_calls.get(), 0, "a dead worker ran a queued job's code");
         let third = { submit(&mut gang, &ja) };
         assert_eq!(third, Err(EngineError::WorkerDied));
     }

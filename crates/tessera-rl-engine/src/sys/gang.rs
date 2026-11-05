@@ -34,10 +34,13 @@
 //!
 //! Waits spin for a bounded budget, then block. Blocking registers in a
 //! parked counter with an RMW and then rechecks the condition; a waker
-//! makes its change, then reads the counter with an RMW (`fetch_add(0)`).
-//! Both RMWs are on the same counter, so whichever comes second in its
-//! modification order sees the other's side: the waiter sees the change or
-//! the waker sees the waiter. A waker therefore skips the wake syscall when
+//! makes its change, then reads the counter with a SeqCst RMW
+//! (`fetch_add(0)`). In the memory model both RMWs are on the same counter,
+//! so whichever comes second in its modification order sees the other's
+//! side: the waiter sees the change or the waker sees the waiter. LLVM may
+//! lower the idempotent RMW to a full barrier and a plain load (on x86-64 a
+//! `lock or` on the stack, then a load), so the guarantee in hardware terms
+//! is: the waker's store, a full barrier, then the counter load. A waker therefore skips the wake syscall when
 //! nobody is parked, without relying on store-load ordering. No waker is stored
 //! for a job without one: with the park backend such a job's waiter polls
 //! with `park_timeout(100 µs)`. A job with a waker (Sync's `run`, whose
@@ -156,6 +159,13 @@ struct MockFutex {
 
 #[cfg(loom)]
 impl MockFutex {
+    fn new() -> Self {
+        Self {
+            lock: super::sync::Mutex::new(()),
+            cv: super::sync::Condvar::new(),
+        }
+    }
+
     fn wait(&self, word: &AtomicU32, expected: u32) {
         let guard = self
             .lock
@@ -231,8 +241,10 @@ struct Shared {
     creator: thread::Thread,
     spin: u32,
     backend: Backend,
+    /// One futex mock per waited address, as an address wait has: the wake
+    /// word, each slot's `pending`, and `ready`.
     #[cfg(loom)]
-    mock: MockFutex,
+    mocks: [MockFutex; 4],
 }
 
 /// Persistent worker threads running published jobs in sequence.
@@ -292,6 +304,21 @@ fn is_odd(seq: u64) -> bool {
 }
 
 impl Shared {
+    /// The futex mock of `word`'s address.
+    #[cfg(loom)]
+    fn mock(&self, word: &AtomicU32) -> &MockFutex {
+        let [w, even, odd, ready] = &self.mocks;
+        if core::ptr::eq(word, &self.even.pending) {
+            even
+        } else if core::ptr::eq(word, &self.odd.pending) {
+            odd
+        } else if core::ptr::eq(word, &self.ready) {
+            ready
+        } else {
+            w
+        }
+    }
+
     /// The slot of sequence `seq`.
     fn slot(&self, seq: u64) -> &JobSlot {
         if is_odd(seq) { &self.odd } else { &self.even }
@@ -365,7 +392,7 @@ impl Shared {
             #[cfg(not(loom))]
             Backend::Native(native) => native.wait(word, value),
             #[cfg(loom)]
-            Backend::Mock => self.mock.wait(word, value),
+            Backend::Mock => self.mock(word).wait(word, value),
         }
     }
 
@@ -384,8 +411,7 @@ impl Shared {
             Backend::Native(native) => native.wake_all(word),
             #[cfg(loom)]
             Backend::Mock => {
-                let _ = word;
-                self.mock.wake();
+                self.mock(word).wake();
             }
         }
     }
@@ -426,10 +452,12 @@ impl Gang {
                 Backend::Park
             },
             #[cfg(loom)]
-            mock: MockFutex {
-                lock: super::sync::Mutex::new(()),
-                cv: super::sync::Condvar::new(),
-            },
+            mocks: [
+                MockFutex::new(),
+                MockFutex::new(),
+                MockFutex::new(),
+                MockFutex::new(),
+            ],
         });
         // Dropping `gang` on any early return shuts down and joins the
         // workers spawned so far (the construction guard).
@@ -549,9 +577,10 @@ impl Gang {
         // Publication: `published` before the word (module docs, step 1).
         shared.published.store(seq, Ordering::SeqCst);
         shared.word.fetch_add(1, Ordering::SeqCst);
-        // An RMW, not a load: it orders against a parking worker's RMW on
-        // the same counter, so one of the two sees the other (no store-load
-        // reordering, which SeqCst loads alone would rely on).
+        // A SeqCst RMW, not a load: it orders against a parking worker's
+        // RMW on the same counter, so one of the two sees the other. It may
+        // be lowered to a full barrier and a plain load (x86-64: `lock or`
+        // on the stack, then a load): store, full barrier, load.
         if shared.parked.fetch_add(0, Ordering::SeqCst) > 0 {
             shared.wake(&shared.word, self.workers.iter().map(|(t, _)| t));
         }
@@ -679,7 +708,7 @@ struct Death {
 
 /// Startup, then the job loop. A panic outside a job marks the gang dead and
 /// turns the worker into a drainer.
-fn worker_main(shared: &Shared, worker: usize, core: Option<usize>, fail: bool, die: Death) {
+fn worker_main(shared: &Shared, worker: usize, core: Option<usize>, fail: bool, mut die: Death) {
     let started = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         assert!(!fail, "injected worker startup failure");
         #[cfg(not(loom))]
@@ -713,7 +742,10 @@ fn worker_main(shared: &Shared, worker: usize, core: Option<usize>, fail: bool, 
                 // Everything that can panic runs inside `run_job`'s catch,
                 // before its decrement; this outer catch is a backstop.
                 let mut seen = Seen::default();
-                if !catch(|| run_job(shared, slot, worker, &mut seen, die)) {
+                // Injected deaths are one-shot: a later job never re-fires
+                // them, so only `draining` keeps a dead worker from running.
+                let fault = core::mem::take(&mut die);
+                if !catch(|| run_job(shared, slot, worker, &mut seen, fault)) {
                     shared.dead.store(true, Ordering::Release);
                     if !seen.decremented {
                         // The job may not have run for this worker's
