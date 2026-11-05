@@ -181,7 +181,7 @@ def test_pipelined_reset_with_work_in_flight_is_refused_then_works():
     assert len(env.reset()) == 2
 
 
-@pytest.mark.skipif(not hasattr(signal, "setitimer"), reason="needs setitimer")
+@pytest.mark.skipif(not hasattr(signal, "pthread_kill"), reason="needs pthread_kill")
 def test_pipelined_interrupted_recv_leaves_the_step_in_flight():
     """A handler raising during the wait propagates, and the same step is
     received afterwards, identical to an uninterrupted reference."""
@@ -203,8 +203,17 @@ def test_pipelined_interrupted_recv_leaves_the_step_in_flight():
     reference.reset()
     half = len(env.halves[0])
     interrupted = False
-    previous = signal.signal(signal.SIGALRM, handler)
-    signal.setitimer(signal.ITIMER_REAL, 1e-5, 1e-5)
+    done = threading.Event()
+    main = threading.main_thread().ident
+
+    def ticks():
+        while not done.is_set():
+            signal.pthread_kill(main, signal.SIGUSR1)
+            time.sleep(1e-4)
+
+    previous = signal.signal(signal.SIGUSR1, handler)
+    ticker = threading.Thread(target=ticks)
+    ticker.start()
     try:
         for step in range(500):
             acts = actions(half, step)
@@ -227,12 +236,11 @@ def test_pipelined_interrupted_recv_leaves_the_step_in_flight():
                 pool.send(1, actions(len(pool.halves[1]), step))
                 pool.recv()
     finally:
-        signal.setitimer(signal.ITIMER_REAL, 0)
-        # A tick already raised may still reach another thread: under the
-        # default disposition it would kill the process.
         armed[0] = False
-        time.sleep(0.05)
-        signal.signal(signal.SIGALRM, previous)
+        done.set()
+        # Every tick has been sent before the handler goes back.
+        ticker.join()
+        signal.signal(signal.SIGUSR1, previous)
     assert interrupted
     env.close()
 
@@ -509,3 +517,26 @@ def test_pipelined_dead_delivery_thread_refuses_recv_until_cleared(clear):
         env.recv()
     env.send(0, actions(4, 0))
     assert env.recv().half == 0
+
+
+def test_pipelined_half_view_exports_its_own_rows_through_dlpack():
+    n = 8
+    env = pipelined(n)
+    reference = pipelined(n, outputs="owned")
+    env.reset()
+    reference.reset()
+    second = env.halves[1]
+    assert second.start > 0
+    env.send(1, actions(len(second), 0))
+    reference.send(1, actions(len(second), 0))
+    want = reference.recv()
+    out = env._native.recv(env._delivered)
+    env._delivered = out["seq"]
+    view = out["outputs"]["observations"][0]
+    arr = np.from_dlpack(view)
+    assert arr.shape == (len(second), 1, 4)
+    assert not arr.flags.writeable
+    assert arr.__array_interface__["data"][0] == np.asarray(view).__array_interface__["data"][0]
+    assert arr.tobytes() == want.step.observations["obs"].tobytes()
+    env.close()
+    reference.close()
