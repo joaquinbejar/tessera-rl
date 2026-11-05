@@ -148,6 +148,28 @@ impl Job {
             waker,
         }
     }
+
+    /// A job calling `call(data, worker)`, for a caller that keeps its own
+    /// data at a stable address (the split-phase modes, ADR-0047). It never
+    /// carries a waker: its waiter polls.
+    ///
+    /// # Safety
+    ///
+    /// `call(data, worker)` must be sound to run on every worker, from any
+    /// thread, while the job is in flight; `data` must stay valid until the
+    /// `wait` that returns the job's result.
+    #[expect(unsafe_code, reason = "audited module: type-erased job call")]
+    #[cfg_attr(
+        loom,
+        allow(dead_code, reason = "the split-phase modes are not built under loom")
+    )]
+    pub(crate) unsafe fn from_raw(call: unsafe fn(*const (), usize), data: *const ()) -> Self {
+        Self {
+            call,
+            data,
+            waker: None,
+        }
+    }
 }
 
 /// A futex-like wait for loom, behind the same `wait` and `wake`
@@ -513,6 +535,16 @@ impl Gang {
         Ok(gang)
     }
 
+    /// Whether a worker died (a panic outside a job); after that every
+    /// submit fails with `WorkerDied` and only drop remains.
+    #[cfg_attr(
+        loom,
+        allow(dead_code, reason = "the split-phase modes are not built under loom")
+    )]
+    pub(crate) fn dead(&self) -> bool {
+        self.shared.dead.load(Ordering::Acquire)
+    }
+
     /// Number of workers.
     pub(crate) fn workers(&self) -> usize {
         self.workers.len()
@@ -613,8 +645,8 @@ impl Gang {
     /// Like `wait`, but returns `None` at once if the oldest job is still
     /// running.
     #[cfg_attr(
-        any(not(test), loom),
-        expect(dead_code, reason = "used by the split-phase modes (ADR-0047)")
+        loom,
+        allow(dead_code, reason = "the split-phase modes are not built under loom")
     )]
     pub(crate) fn try_wait(&mut self) -> Result<Option<bool>, EngineError> {
         let seq = self.oldest()?;
@@ -648,20 +680,12 @@ impl Gang {
     }
 
     /// Whether a job panicked since the last `clear_poison`.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "used by the split-phase modes (ADR-0047)")
-    )]
     pub(crate) fn poisoned(&self) -> bool {
         self.shared.poisoned.load(Ordering::SeqCst)
     }
 
     /// Clears the sticky poison flag after a recovery; needs no job in
     /// flight.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "used by the split-phase modes (ADR-0047)")
-    )]
     pub(crate) fn clear_poison(&mut self) -> Result<(), EngineError> {
         if self.in_flight() != 0 {
             return Err(EngineError::GangQueue {
