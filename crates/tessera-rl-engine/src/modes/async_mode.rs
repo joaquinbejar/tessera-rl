@@ -891,8 +891,6 @@ where
         }
     }
 
-    /// One step of a receive: gather completed ids, then either hand out a
-    /// batch or make progress (blocking on the oldest job with `block`).
     /// Poisons the wrapper and reports a dead worker or a step's panic.
     fn check_failed(&mut self) -> Result<(), EngineError> {
         if self.dead() {
@@ -911,6 +909,8 @@ where
         Ok(())
     }
 
+    /// One step of a receive: gather completed ids, then either hand out a
+    /// batch or make progress (blocking on the oldest job with `block`).
     fn poll(&mut self, block: bool) -> Result<Option<BatchToken<E, M>>, EngineError> {
         // A panic not yet reported is reported once as `Panicked` below; a
         // reported one is `Poisoned`.
