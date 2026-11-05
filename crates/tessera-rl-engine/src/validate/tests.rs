@@ -386,3 +386,25 @@ fn test_subset_and_range_agree_with_the_full_copy() {
     assert_eq!(full, range);
     assert_eq!(full, subset);
 }
+
+#[test]
+fn test_expected_len_overflow_is_an_action_length_error() {
+    assert_eq!(
+        expected_len("discrete", &[usize::MAX, 2, 1], 7),
+        Err(EngineError::ActionLength {
+            buffer: "discrete",
+            expected: usize::MAX,
+            actual: 7
+        })
+    );
+    assert_eq!(
+        expected_len("continuous", &[2, usize::MAX / 2 + 1], 0),
+        Err(EngineError::ActionLength {
+            buffer: "continuous",
+            expected: usize::MAX,
+            actual: 0
+        })
+    );
+    assert_eq!(expected_len("discrete", &[4, 2, 3], 24), Ok(24));
+    assert_eq!(expected_len("discrete", &[4, 2, 0], 0), Ok(0));
+}

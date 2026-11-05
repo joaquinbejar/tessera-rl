@@ -54,15 +54,17 @@ pub(crate) fn check_actions_only<H: RecordLayout>(
     headers: &[H],
     input: ActionInput<'_>,
 ) -> Result<(), EngineError> {
-    let rows = headers.len().saturating_mul(H::AGENTS);
-    check_inputs(
-        layout,
-        auto_reset,
-        headers,
-        input,
-        rows.saturating_mul(layout.discrete.len()),
-        rows.saturating_mul(layout.continuous.len()),
-    )
+    let discrete = expected_len(
+        "discrete",
+        &[headers.len(), H::AGENTS, layout.discrete.len()],
+        input.discrete.len(),
+    )?;
+    let continuous = expected_len(
+        "continuous",
+        &[headers.len(), H::AGENTS, layout.continuous.len()],
+        input.continuous.len(),
+    )?;
+    check_inputs(layout, auto_reset, headers, input, discrete, continuous)
 }
 
 /// Every check of the validation boundary, without mutation.
@@ -212,6 +214,30 @@ pub(crate) fn check_and_copy_actions<H: RecordLayout>(
     Ok(())
 }
 
+/// The product of `factors`, with checked arithmetic. An overflow is an
+/// `ActionLength` error whose `expected` is `usize::MAX`: no real buffer
+/// can hold that many values, so the call is refused before any copy.
+fn expected_len(
+    buffer: &'static str,
+    factors: &[usize],
+    actual: usize,
+) -> Result<usize, EngineError> {
+    let mut product: usize = 1;
+    for &factor in factors {
+        match product.checked_mul(factor) {
+            Some(next) => product = next,
+            None => {
+                return Err(EngineError::ActionLength {
+                    buffer,
+                    expected: usize::MAX,
+                    actual,
+                });
+            }
+        }
+    }
+    Ok(product)
+}
+
 fn check_len(buffer: &'static str, expected: usize, actual: usize) -> Result<(), EngineError> {
     if expected == actual {
         Ok(())
@@ -332,7 +358,8 @@ pub(crate) fn check_recv(in_flight: u32, ready: u32, batch_size: u32) -> Result<
     if in_flight == 0 && ready == 0 {
         return Err(EngineError::NothingInFlight);
     }
-    if in_flight.saturating_add(ready) < batch_size {
+    // An overflowing sum exceeds any u32 batch size, so it is reachable.
+    if in_flight.checked_add(ready).is_some_and(|sum| sum < batch_size) {
         return Err(EngineError::BatchUnreachable {
             in_flight,
             ready,
@@ -428,16 +455,17 @@ fn check_and_copy_rows<H: RecordLayout>(
 ) -> Result<(), EngineError> {
     let agents = H::AGENTS;
     let (dh, ch) = (layout.discrete.len(), layout.continuous.len());
-    let block = count.saturating_mul(agents);
-    check_len("discrete", block.saturating_mul(dh), input.discrete.len())?;
-    check_len(
-        "continuous",
-        block.saturating_mul(ch),
-        input.continuous.len(),
-    )?;
-    let full = headers.len().saturating_mul(agents);
-    check_len("discrete", full.saturating_mul(dh), discrete_out.len())?;
-    check_len("continuous", full.saturating_mul(ch), continuous_out.len())?;
+    let n = headers.len();
+    let lengths = [
+        ("discrete", [count, agents, dh], input.discrete.len()),
+        ("continuous", [count, agents, ch], input.continuous.len()),
+        ("discrete", [n, agents, dh], discrete_out.len()),
+        ("continuous", [n, agents, ch], continuous_out.len()),
+    ];
+    for (buffer, factors, actual) in lengths {
+        let expected = expected_len(buffer, &factors, actual)?;
+        check_len(buffer, expected, actual)?;
+    }
     check_rows(layout, auto_reset, headers, input, rows.clone())?;
     // Validated: copy the admitted rows only.
     for (position, index) in rows {
