@@ -463,8 +463,8 @@ fn test_subset_copy_continuous_head_out_of_order_ids_takes_each_source_position(
 #[test]
 fn test_range_copy_continuous_head_copies_every_value_of_the_half() {
     let hs = headers(4);
-    let mut out_d = vec![SENTINEL; 4 * AGENTS];
-    let mut out_c = vec![SENTINEL_C; 4 * AGENTS];
+    let mut out_d = [SENTINEL; 4 * AGENTS];
+    let mut out_c = [SENTINEL_C; 4 * AGENTS];
     let input = ActionInput {
         discrete: &[2, 1, 0, 1],
         continuous: &[0.1, 0.2, 0.3, 0.4],
