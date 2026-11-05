@@ -18,7 +18,9 @@ the API is not stable, and any 0.x release may break it.
   only. They pass the official PettingZoo API tests, and tests cover
   terminal reward timing, agent death, a conditional second-player
   decision and equality with the native pool. `turn_masked_env` is
-  declared by no environment yet.
+  declared by no environment yet. Not yet tested: agent respawn, which
+  ADR-0013 requires, because no shipped environment spawns agents; the
+  test lands with the first one that does (#71).
 
 ## [0.1.0] - 2026-11-04
 
