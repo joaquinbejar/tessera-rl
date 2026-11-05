@@ -15,9 +15,9 @@
 //!   the last die and the pile: the opponent's card is hidden.
 
 use core::marker::PhantomData;
+
 use tessera_rl_core::io::{ActionWriter, Actions, MaskWriter, ObsWriter};
 use tessera_rl_core::space::Space;
-
 use tessera_rl_core::{
     ActionMask, AdaptiveValues, AgentSlot, Determinize, Environment, EpisodeEnd,
     ImperfectInformation, InvariantViolation, NoAdaptive, ObsLeaf, Observation, RecordHeader,
@@ -36,8 +36,9 @@ pub struct DiceConfig {
     /// A broken sampler for the refusal tests: 0 none, 1 a sample with
     /// another information state, 2 a sample in which nobody acts, 3 a
     /// sampler that panics, 4 a sample that fails `Validate`, 5 a sample
-    /// with another information state only after three moves.
-    #[config(default = 0, range = 0..=5)]
+    /// with another information state only after three moves, 6 a step
+    /// that panics (action 1 after one move).
+    #[config(default = 0, range = 0..=6)]
     pub sabotage: u32,
 }
 
@@ -129,7 +130,7 @@ impl<A: AdaptiveValues<DiceConfig> + Send> Environment for DiceWith<A> {
     }
 
     fn step(
-        _: &DiceConfig,
+        cfg: &DiceConfig,
         state: &mut DiceState,
         actions: &Actions<'_, ()>,
         rng: &mut StepRng,
@@ -144,6 +145,10 @@ impl<A: AdaptiveValues<DiceConfig> + Send> Environment for DiceWith<A> {
             .and_then(|a| u32::try_from(a).ok())
             .unwrap_or(0)
             .min(1);
+        assert!(
+            !(cfg.sabotage == 6 && state.moves == 1 && action == 1),
+            "a step that panics"
+        );
         state.die = rng.below_u32(bound(DIE));
         state.pile += action + state.die;
         state.moves += 1;

@@ -530,7 +530,7 @@ fn test_determinize_new_refuses_and_new_privileged_labels_imperfect_information(
 /// equal, while non-privileged hashes are unchanged (the golden hashes
 /// of the perfect-information tests check that).
 #[test]
-fn test_determinize_privileged_label_is_in_the_results_and_the_tree_hash() {
+fn test_determinize_privileged_label_is_in_the_mcts_results() {
     use tessera_rl_games::{Connect4, Connect4Config};
 
     let rec = root(2, &[1]);
@@ -787,4 +787,23 @@ fn test_determinize_no_buffer_keeps_the_full_root() {
     let refused = limited.set_root_determinized(&longer, how(2, 1));
     assert!(matches!(err(refused), SearchError::RootNotReady { .. }));
     assert!(!limited.holds_record(&longer) && !limited.holds_record(&r));
+}
+
+/// A failed expansion poisons the scratch pool (a contained kernel
+/// panic); the next determinization recovers it before its checks.
+#[test]
+fn test_determinize_recovers_a_scratch_pool_poisoned_by_a_failed_step() {
+    let c = DiceConfig { sabotage: 6 };
+    let mut s = det_with(c, &root(4, &[1]), how(1, 0)).unwrap();
+    let h = s.root();
+    let mut out = [h];
+    assert!(matches!(
+        s.expand(&[(h, 1)], &mut out),
+        Err(SearchError::Engine(_))
+    ));
+    let other = root(5, &[0, 1]);
+    let new_root = s.set_root_determinized(&other, how(1, 1)).unwrap();
+    let rec = *s.record(new_root).unwrap();
+    assert_eq!(info_bytes(&rec, 0), info_bytes(&other, 0));
+    assert!(s.buffers_hold_only(&rec));
 }
