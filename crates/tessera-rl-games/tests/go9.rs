@@ -813,6 +813,19 @@ fn test_go9_validate_rejects_a_broken_history() {
     let mut floating = base;
     floating.history[1] = pack(1u128 << at(0, 0), 1u128 << at(8, 8) | 1u128 << at(7, 7));
     rejected(&floating, "a history entry that is not one legal placement");
+    // Black placed on a white point, with white keeping it: the new stone is
+    // single and nothing is captured, so only the empty-point check refuses.
+    let mut on_white = state_of(&[at(0, 0), at(0, 1)]);
+    let (b, w) = on_white.sets();
+    let (b2, w2) = (b | 1u128 << at(0, 1), w);
+    on_white.history[2] = pack(b2, w2);
+    on_white.placements = 3;
+    on_white.moves = 3;
+    on_white.stones = [
+        [b2 as u64, (b2 >> 64) as u64],
+        [w2 as u64, (w2 >> 64) as u64],
+    ];
+    rejected(&on_white, "a history entry that is not one legal placement");
     let mut stones = base;
     stones.stones = [[1, 0], [0, 0]];
     rejected(&stones, "stones other than the last history entry");
