@@ -170,6 +170,13 @@ class Search:
         """A digest of the whole tree (for tests of determinism)."""
         return self._native.tree_hash()
 
+    @property
+    def is_privileged(self) -> bool:
+        """Whether the search reads the full state of an
+        imperfect-information environment, hidden cards included. Always
+        ``False`` for perfect-information environments."""
+        return self._native.is_privileged()
+
 
 class GroupFailure(NamedTuple):
     """The last failed group call: the slot it belongs to (``None`` for an
