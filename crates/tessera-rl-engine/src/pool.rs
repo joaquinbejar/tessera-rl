@@ -730,35 +730,14 @@ where
         if !M::ENABLED {
             return Ok(());
         }
-        let a = E::MAX_AGENTS;
-        let dh = self.actions.discrete.len();
-        let mask_len = self.outputs.mask_len;
-        for (i, header) in self.headers.iter().enumerate() {
-            if header.engine().pending_reset.get() {
-                continue;
-            }
-            for (slot, row) in header.agents().iter().enumerate() {
-                if !(row.alive.get() && row.acting.get()) {
-                    continue;
-                }
-                let k = i * a + slot;
-                let heads = discrete.get(k * dh..(k + 1) * dh).unwrap_or(&[]);
-                let mask = self
-                    .outputs
-                    .masks()
-                    .get(k * mask_len..(k + 1) * mask_len)
-                    .unwrap_or(&[]);
-                if let Some(head) = first_illegal(heads, &self.actions.discrete, mask) {
-                    return Err(EngineError::IllegalAction {
-                        instance: u32::try_from(i).unwrap_or(u32::MAX),
-                        agent: u16::try_from(slot).unwrap_or(u16::MAX),
-                        head: u32::try_from(head).unwrap_or(u32::MAX),
-                        value: heads.get(head).copied().unwrap_or(0),
-                    });
-                }
-            }
-        }
-        Ok(())
+        legality_rows(
+            &self.headers,
+            0,
+            discrete,
+            &self.actions.discrete,
+            self.outputs.masks(),
+            self.outputs.mask_len,
+        )
     }
 
     /// Steps every instance with `actions` (Inline mode).
@@ -1124,6 +1103,45 @@ fn replace_illegal_one<E: Environment, M: MaskProvider<E>>(
             "ActionMask::noop wrote a continuous action outside its bounds"
         );
     }
+}
+
+/// The legality pass of the validation boundary (masked pools): the first
+/// alive, acting slot of an instance whose discrete action the mask forbids
+/// is an `IllegalAction`. `headers`, `discrete` (`[rows, A, dh]`) and
+/// `masks` (`[rows, A, mask_len]`) cover the same rows, the first of which
+/// is instance `first`; Sync passes the whole pool, Pipelined one half.
+pub(crate) fn legality_rows<H: RecordLayout>(
+    headers: &[H],
+    first: usize,
+    discrete: &[i32],
+    sizes: &[u32],
+    masks: &[Bool8],
+    mask_len: usize,
+) -> Result<(), EngineError> {
+    let a = H::AGENTS;
+    let dh = sizes.len();
+    for (i, header) in headers.iter().enumerate() {
+        if header.engine().pending_reset.get() {
+            continue;
+        }
+        for (slot, row) in header.agents().iter().enumerate() {
+            if !(row.alive.get() && row.acting.get()) {
+                continue;
+            }
+            let k = i * a + slot;
+            let heads = discrete.get(k * dh..(k + 1) * dh).unwrap_or(&[]);
+            let mask = masks.get(k * mask_len..(k + 1) * mask_len).unwrap_or(&[]);
+            if let Some(head) = first_illegal(heads, sizes, mask) {
+                return Err(EngineError::IllegalAction {
+                    instance: u32::try_from(first + i).unwrap_or(u32::MAX),
+                    agent: u16::try_from(slot).unwrap_or(u16::MAX),
+                    head: u32::try_from(head).unwrap_or(u32::MAX),
+                    value: heads.get(head).copied().unwrap_or(0),
+                });
+            }
+        }
+    }
+    Ok(())
 }
 
 /// The first discrete head whose value the mask forbids, if any.

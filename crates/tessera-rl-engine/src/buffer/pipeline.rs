@@ -84,13 +84,14 @@ where
 {
 }
 
-// SAFETY: as for `Send` above.
+// SAFETY: as for `Send` above; shared `&Mode` also reaches the states
+// (snapshots read them while tokens are alive), so they must be `Sync`.
 #[expect(unsafe_code, reason = "audited module: shared mode allocation")]
 unsafe impl<E: Environment, M: MaskProvider<E>> Sync for Mode<E, M>
 where
     E::Config: Send + Sync,
     E::Header: Send + Sync,
-    E::State: Send,
+    E::State: Send + Sync,
 {
 }
 
@@ -472,11 +473,29 @@ impl<E: Environment, M: MaskProvider<E>> HalfToken<E, M> {
         self.view(&self.mode.raw.episode_length, 1)
     }
 
+    /// Illegal actions in the episode, `[half]`.
+    #[must_use]
+    pub fn episode_illegal_actions(&self) -> &[f32] {
+        self.view(&self.mode.raw.episode_illegal_actions, 1)
+    }
+
+    /// Invalid agent events in the episode, `[half]`.
+    #[must_use]
+    pub fn episode_invalid_agent_events(&self) -> &[f32] {
+        self.view(&self.mode.raw.episode_invalid_agent_events, 1)
+    }
+
     /// Action masks, `[half, A, mask length]`.
     #[must_use]
     pub fn masks(&self) -> &[Bool8] {
         let per = self.agents().saturating_mul(self.mode.raw.mask_len);
         self.view(&self.mode.raw.masks, per)
+    }
+
+    /// Mask values per agent.
+    #[cfg(feature = "debug-checks")]
+    pub(crate) fn mask_len(&self) -> usize {
+        self.mode.raw.mask_len
     }
 
     /// Invalid agent events of the last step, `[half, A]`.

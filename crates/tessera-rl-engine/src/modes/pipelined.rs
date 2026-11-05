@@ -54,15 +54,36 @@ impl PipelinedOptions {
     }
 }
 
-/// A send that was refused: nothing changed and the token is handed back
-/// (`None` only if the gang refused the job after the token had ended, in
-/// which case [`PipelinedPool::idle_token`] gives a new one).
+/// A send that was refused. With the token handed back (`Some`), nothing
+/// changed. `None` only if the gang refused the job after validation and
+/// the token had ended: then the half's action rows hold the new actions
+/// and its generation has moved (any old view reads as stale), but no row
+/// of outputs or state changed; [`PipelinedPool::idle_token`] gives a new
+/// token.
 #[derive(Debug)]
 pub struct SendError<E: Environment, M: MaskProvider<E>> {
     /// Why the send was refused.
     pub error: EngineError,
     /// The token, unchanged.
     pub token: Option<HalfToken<E, M>>,
+}
+
+/// `EnvPool::pipelined` refused; the pool is handed back when the refusal
+/// came before it was converted (`HalfTooSmall`, already in Sync mode).
+pub struct PipelinedBuildError<E: Environment, M: MaskProvider<E>> {
+    /// Why.
+    pub error: EngineError,
+    /// The pool, unchanged, if it was not consumed.
+    pub pool: Option<Box<EnvPool<E, M>>>,
+}
+
+impl<E: Environment, M: MaskProvider<E>> core::fmt::Debug for PipelinedBuildError<E, M> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("PipelinedBuildError")
+            .field("error", &self.error)
+            .field("pool", &self.pool.is_some())
+            .finish()
+    }
 }
 
 /// Why `into_pool` refused.
@@ -126,20 +147,26 @@ pub struct PipelinedPool<E: Environment, M: MaskProvider<E>> {
 struct Workers(Option<SyncRuntime>);
 
 impl Workers {
-    fn drain(&mut self) {
+    /// Waits for every job in flight; returns whether any of them panicked
+    /// (or could not be waited for).
+    fn drain(&mut self) -> bool {
+        let mut failed = false;
         if let Some(rt) = self.0.as_mut() {
             while rt.gang.in_flight() > 0 {
-                if rt.gang.wait().is_err() {
+                let Ok(panicked) = rt.gang.wait() else {
+                    failed = true;
                     break;
-                }
+                };
+                failed |= panicked;
             }
         }
+        failed
     }
 }
 
 impl Drop for Workers {
     fn drop(&mut self) {
-        self.drain();
+        let _ = self.drain();
     }
 }
 
@@ -158,7 +185,7 @@ where
     M: MaskProvider<E>,
     E::Config: Send + Sync,
     E::Header: Send + Sync,
-    E::State: Send,
+    E::State: Send + Sync,
     <E::Header as RecordLayout>::Adaptive: AdaptiveValues<E::Config>,
 {
     /// Moves the pool into Pipelined mode with its own workers
@@ -167,30 +194,69 @@ where
     ///
     /// # Errors
     ///
-    /// [`EngineError::HalfTooSmall`] if the pool has fewer than two chunks;
-    /// [`EngineError::Options`] if the pool already runs in Sync mode; any
-    /// error of [`EnvPool::with_workers`].
-    pub fn pipelined(self, options: PipelinedOptions) -> Result<PipelinedPool<E, M>, EngineError> {
+    /// [`EngineError::HalfTooSmall`] if the pool has fewer than two chunks
+    /// and [`EngineError::Options`] if it already runs in Sync mode, both
+    /// with the pool handed back; any error of [`EnvPool::with_workers`],
+    /// without it.
+    pub fn pipelined(
+        self,
+        options: PipelinedOptions,
+    ) -> Result<PipelinedPool<E, M>, PipelinedBuildError<E, M>> {
+        self.pipelined_inner(
+            options,
+            #[cfg(test)]
+            crate::sys::Faults::default(),
+        )
+    }
+
+    /// [`Self::pipelined`] with test-only fault injection.
+    #[cfg(test)]
+    pub(crate) fn pipelined_faults(
+        self,
+        options: PipelinedOptions,
+        faults: crate::sys::Faults,
+    ) -> Result<PipelinedPool<E, M>, PipelinedBuildError<E, M>> {
+        self.pipelined_inner(options, faults)
+    }
+
+    fn pipelined_inner(
+        self,
+        options: PipelinedOptions,
+        #[cfg(test)] faults: crate::sys::Faults,
+    ) -> Result<PipelinedPool<E, M>, PipelinedBuildError<E, M>> {
+        let refuse = |pool: Self, error| PipelinedBuildError {
+            error,
+            pool: Some(Box::new(pool)),
+        };
         if self.workers() != 0 {
-            return Err(EngineError::Options {
-                option: "workers",
-                reason: "the pool already runs in Sync mode",
-            });
+            return Err(refuse(
+                self,
+                EngineError::Options {
+                    option: "workers",
+                    reason: "the pool already runs in Sync mode",
+                },
+            ));
         }
         let size = chunk_size(&self.options);
         let chunk = self.options.chunk_size.get();
         let n = self.num_envs_usize();
-        let nonzero = core::num::NonZeroUsize::new(size)
-            .ok_or(EngineError::HalfTooSmall { chunk_size: chunk })?;
-        let halves =
-            half_ranges(n, nonzero).ok_or(EngineError::HalfTooSmall { chunk_size: chunk })?;
-        let mut pool = self.with_workers_inner(
-            options.sync,
-            #[cfg(test)]
-            crate::sys::Faults::default(),
-        )?;
+        let halves = core::num::NonZeroUsize::new(size).and_then(|s| half_ranges(n, s));
+        let Some(halves) = halves else {
+            return Err(refuse(
+                self,
+                EngineError::HalfTooSmall { chunk_size: chunk },
+            ));
+        };
+        let lost = |error| PipelinedBuildError { error, pool: None };
+        let mut pool = self
+            .with_workers_inner(
+                options.sync,
+                #[cfg(test)]
+                faults,
+            )
+            .map_err(lost)?;
         let Some(runtime) = pool.take_runtime() else {
-            return Err(EngineError::WorkerDied);
+            return Err(lost(EngineError::WorkerDied));
         };
         let workers = runtime.workers;
         Ok(PipelinedPool {
@@ -224,7 +290,7 @@ where
     M: MaskProvider<E>,
     E::Config: Send + Sync,
     E::Header: Send + Sync,
-    E::State: Send,
+    E::State: Send + Sync,
     <E::Header as RecordLayout>::Adaptive: AdaptiveValues<E::Config>,
 {
     /// The environment configuration.
@@ -284,11 +350,24 @@ where
         self.mode.live.iter().any(crate::buffer::live::is_live)
     }
 
-    /// Waits for every job in flight and discards it (recovery and drop).
+    /// Waits for every job in flight and discards it (recovery and
+    /// `into_pool`). A drained job that panicked poisons the wrapper.
     fn drain(&mut self) {
-        self.runtime.drain();
-        for flag in &self.mode.in_flight {
+        let mut failed = self.runtime.drain();
+        for (h, (flag, ready)) in self
+            .mode
+            .in_flight
+            .iter()
+            .zip(&self.mode.ready.ready)
+            .enumerate()
+        {
+            failed |=
+                flag.load(core::sync::atomic::Ordering::Acquire) && half_panicked(&self.mode, h);
             flag.store(false, core::sync::atomic::Ordering::Release);
+            ready.store(false, core::sync::atomic::Ordering::Release);
+        }
+        if failed {
+            self.poisoned = true;
         }
         self.queued = 0;
     }
@@ -324,12 +403,9 @@ where
         )
     }
 
-    /// After a writer: new raw parts, both halves and every instance get a
-    /// new generation, the cycles start over, and the poison is cleared.
+    /// After a successful writer: both halves and every instance get a new
+    /// generation, the cycles take `cycles`, and the poison is cleared.
     fn after_write(&mut self, cycles: CycleState) -> Result<(), EngineError> {
-        if let Some(mode) = Arc::get_mut(&mut self.mode) {
-            mode.rebuild();
-        }
         for h in 0..HALVES {
             self.generations.advance_half(h).map_err(gen_error)?;
         }
@@ -363,11 +439,8 @@ where
         &mut self,
         reseed: Reseed<'_>,
     ) -> Result<[HalfToken<E, M>; HALVES], EngineError> {
-        let recovery = self.poisoned;
-        let mode = self.exclusive(recovery)?;
-        let reset = mode.pool.reset_all(reseed).map(|_| ());
+        self.write(|pool| pool.reset_all(reseed).map(|_| ()))?;
         self.after_write(CycleState::initial())?;
-        reset?;
         self.tokens()
     }
 
@@ -383,11 +456,27 @@ where
         records: &[Record<E>],
         cycles: &CycleState,
     ) -> Result<(), EngineError> {
-        let recovery = self.poisoned;
+        self.write(|pool| pool.restore_all(records))?;
+        self.after_write(cycles.clone())
+    }
+
+    /// Runs a caller-side writer on the pool (ADR-0047 section 3). The raw
+    /// parts are taken again whatever the outcome (the `&mut` invalidated
+    /// them). A failure changes no generation, cycle or poison, except that
+    /// a writer which poisoned the pool (a panic) poisons the wrapper.
+    fn write(
+        &mut self,
+        f: impl FnOnce(&mut EnvPool<E, M>) -> Result<(), EngineError>,
+    ) -> Result<(), EngineError> {
+        let recovery = self.is_poisoned();
         let mode = self.exclusive(recovery)?;
-        let restored = mode.pool.restore_all(records);
-        self.after_write(cycles.clone())?;
-        restored
+        let result = f(&mut mode.pool);
+        let poisoned = mode.pool.is_poisoned();
+        mode.rebuild();
+        if result.is_err() && poisoned {
+            self.poisoned = true;
+        }
+        result
     }
 
     /// Captures every record into `out` and returns the cycle state.
@@ -414,9 +503,14 @@ where
     ///
     /// # Errors
     ///
+    /// [`EngineError::Poisoned`] on a poisoned pool,
     /// [`EngineError::InvalidHalf`], [`EngineError::HalfInFlight`] or
     /// [`EngineError::HalfBorrowed`].
     pub fn idle_token(&self, half: u32) -> Result<HalfToken<E, M>, EngineError> {
+        // A poisoned pool's rows may be partly written: no new views.
+        if self.is_poisoned() {
+            return Err(EngineError::Poisoned);
+        }
         let index = match half {
             0 => 0,
             1 => 1,
@@ -442,7 +536,8 @@ where
     /// Hands the token back with [`EngineError::WrongPool`],
     /// [`EngineError::Poisoned`], [`EngineError::WorkerDied`],
     /// [`EngineError::CycleAhead`], [`EngineError::SequenceExhausted`] or a
-    /// validation error; nothing changed.
+    /// validation error; nothing changed. See [`SendError`] for the one
+    /// case without the token.
     pub fn send(
         &mut self,
         token: HalfToken<E, M>,
@@ -501,6 +596,19 @@ where
         let auto_reset = mode.pool.options.auto_reset;
         mode.with_half_rows(token, |first, headers, discrete, continuous| {
             crate::entry::canonical(|| {
+                // debug-checks: the same legality pass as Sync's step, on
+                // the half, before anything is copied (ADR-0047 ruling 6).
+                #[cfg(feature = "debug-checks")]
+                if M::ENABLED {
+                    crate::pool::legality_rows(
+                        headers,
+                        first,
+                        actions.discrete,
+                        &layout.discrete,
+                        token.masks(),
+                        token.mask_len(),
+                    )?;
+                }
                 check_and_copy_range_actions(
                     layout, auto_reset, first, headers, actions, discrete, continuous,
                 )
@@ -619,7 +727,7 @@ where
         self.check_turns(&token)?;
         #[cfg(feature = "debug-checks")]
         self.check_agent_events(&token)?;
-        self.reduce(half, &token);
+        crate::entry::canonical(|| self.reduce(half, &token));
         Ok(token)
     }
 
@@ -737,6 +845,7 @@ where
             });
         }
         self.drain();
+        let poisoned = self.is_poisoned();
         let Self {
             mut runtime, mode, ..
         } = self;
@@ -746,6 +855,11 @@ where
                 let mut pool = mode.into_pool();
                 if let Some(rt) = rt {
                     pool.put_runtime(rt);
+                }
+                // A failed job left rows partly written: the pool stays
+                // poisoned, so only a full reset or restore reads it again.
+                if poisoned {
+                    pool.poisoned = true;
                 }
                 Ok(pool)
             }

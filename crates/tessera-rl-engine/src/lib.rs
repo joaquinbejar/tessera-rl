@@ -44,7 +44,8 @@ pub use layout::MAX_LEAVES;
 pub use masks::{IllegalActionPolicy, MaskProvider, Masked, NoMasks};
 #[cfg(not(loom))]
 pub use modes::pipelined::{
-    CycleState, IntoPoolError, IntoPoolErrorKind, PipelinedOptions, PipelinedPool, SendError,
+    CycleState, IntoPoolError, IntoPoolErrorKind, PipelinedBuildError, PipelinedOptions,
+    PipelinedPool, SendError,
 };
 pub use options::{AutoReset, CHUNK_RANGE, PoolOptions, SyncOptions, WaitBackend};
 pub use outputs::Outputs;

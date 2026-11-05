@@ -74,72 +74,110 @@ fn actions(t: usize) -> Vec<i32> {
         .collect()
 }
 
-/// Everything a token returns, as bits.
-fn token_frame(t: &Token) -> Vec<u64> {
-    let mut v: Vec<u64> = t
-        .observation(0)
-        .unwrap()
-        .iter()
-        .map(|&b| u64::from(b))
-        .collect();
+/// Everything a token returns, as bits, plus the step counters.
+fn token_frame<E: tessera_rl_core::Environment, M: tessera_rl_engine::MaskProvider<E>>(
+    t: &HalfToken<E, M>,
+) -> Vec<u64> {
+    let mut v: Vec<u64> = Vec::new();
+    if let Some(obs) = t.observation(0) {
+        v.extend(obs.iter().map(|&b| u64::from(b)));
+    }
     v.extend(t.rewards().iter().map(|r| u64::from(r.to_bits())));
     for flags in [
         t.agent_terminated(),
         t.agent_truncated(),
         t.alive(),
+        t.acting(),
         t.masks(),
+        t.episode_terminated(),
+        t.episode_truncated(),
     ] {
         v.extend(flags.iter().map(|f| u64::from(f.get())));
     }
-    v.extend(t.episode_terminated().iter().map(|f| u64::from(f.get())));
-    v.extend(t.episode_return().iter().map(|r| u64::from(r.to_bits())));
+    v.extend(t.generations().iter().map(|&g| u64::from(g)));
+    for stats in [
+        t.episode_return(),
+        t.episode_length(),
+        t.episode_illegal_actions(),
+        t.episode_invalid_agent_events(),
+    ] {
+        v.extend(stats.iter().map(|r| u64::from(r.to_bits())));
+    }
     if let Some(term) = t.terminal_observation(0) {
         v.extend(term.iter().map(|&b| u64::from(b)));
+    }
+    for id in t.ids() {
+        let (e, s) = t.step_counter(id).unwrap();
+        v.extend([u64::from(e), u64::from(s)]);
     }
     v
 }
 
-/// The same rows of a Sync pool's outputs.
-fn pool_frame(pool: &Pool, ids: core::ops::Range<u32>) -> Vec<u64> {
+/// The same rows of a Sync pool's outputs, in the order of `token_frame`.
+fn pool_frame<E, M>(pool: &EnvPool<E, M>, ids: core::ops::Range<u32>) -> Vec<u64>
+where
+    E: tessera_rl_core::Environment,
+    M: tessera_rl_engine::MaskProvider<E>,
+    E::Config: Sync,
+    E::Header: Send,
+    E::State: Send,
+    <E::Header as tessera_rl_core::RecordLayout>::Adaptive:
+        tessera_rl_core::AdaptiveValues<E::Config>,
+{
     let out = pool.outputs();
-    let a = 2;
+    let n = out.episode_return().len();
     let (s, e) = (
         usize::try_from(ids.start).unwrap(),
         usize::try_from(ids.end).unwrap(),
     );
-    let leaf = out.observation(0).unwrap();
-    let per = leaf.len() / usize::try_from(N).unwrap();
-    let mut v: Vec<u64> = leaf[s * per..e * per]
-        .iter()
-        .map(|&b| u64::from(b))
-        .collect();
-    v.extend(
-        out.rewards()[s * a..e * a]
-            .iter()
-            .map(|r| u64::from(r.to_bits())),
-    );
-    let masks = out.masks();
-    let mper = masks.len() / usize::try_from(N).unwrap();
-    for (flags, per) in [
-        (out.agent_terminated(), a),
-        (out.agent_truncated(), a),
-        (out.alive(), a),
-        (masks, mper),
-    ] {
-        v.extend(flags[s * per..e * per].iter().map(|f| u64::from(f.get())));
+    let rows = |len: usize| {
+        let per = len / n;
+        s * per..e * per
+    };
+    let mut v: Vec<u64> = Vec::new();
+    if let Some(obs) = out.observation(0) {
+        v.extend(obs[rows(obs.len())].iter().map(|&b| u64::from(b)));
     }
+    let rewards = out.rewards();
     v.extend(
-        out.episode_terminated()[s..e]
-            .iter()
-            .map(|f| u64::from(f.get())),
-    );
-    v.extend(
-        out.episode_return()[s..e]
+        rewards[rows(rewards.len())]
             .iter()
             .map(|r| u64::from(r.to_bits())),
     );
+    for flags in [
+        out.agent_terminated(),
+        out.agent_truncated(),
+        out.alive(),
+        out.acting(),
+        out.masks(),
+        out.episode_terminated(),
+        out.episode_truncated(),
+    ] {
+        v.extend(flags[rows(flags.len())].iter().map(|f| u64::from(f.get())));
+    }
+    let gens = out.generations();
+    v.extend(gens[rows(gens.len())].iter().map(|&g| u64::from(g)));
+    for stats in [
+        out.episode_return(),
+        out.episode_length(),
+        out.episode_illegal_actions(),
+        out.episode_invalid_agent_events(),
+    ] {
+        v.extend(
+            stats[rows(stats.len())]
+                .iter()
+                .map(|r| u64::from(r.to_bits())),
+        );
+    }
     if let Some(term) = out.terminal_observation(0) {
-        v.extend(term[s * per..e * per].iter().map(|&b| u64::from(b)));
+        v.extend(term[rows(term.len())].iter().map(|&b| u64::from(b)));
+    }
+    for id in ids {
+        let identity = tessera_rl_core::RecordLayout::engine(pool.header(id).unwrap()).identity;
+        v.extend([
+            u64::from(identity.episode_index()),
+            u64::from(identity.step_index()),
+        ]);
     }
     v
 }
@@ -265,10 +303,13 @@ fn test_pipelined_too_few_chunks_is_half_too_small() {
     let r = Pool::with_masks(cfg(), options)
         .unwrap()
         .pipelined(PipelinedOptions::new(NonZeroUsize::new(1).unwrap()));
-    assert!(matches!(
-        r,
-        Err(EngineError::HalfTooSmall { chunk_size: CHUNK })
-    ));
+    let Err(err) = r else {
+        panic!("one chunk cannot be split");
+    };
+    assert_eq!(err.error, EngineError::HalfTooSmall { chunk_size: CHUNK });
+    // The pool is handed back, still usable.
+    let mut pool = *err.pool.unwrap();
+    pool.reset_all(Reseed::Keep).unwrap();
 }
 
 #[test]
@@ -561,8 +602,360 @@ fn test_pipelined_already_sync_pool_is_refused() {
             NonZeroUsize::new(1).unwrap(),
         ))
         .unwrap();
-    assert!(matches!(
-        p.pipelined(PipelinedOptions::new(NonZeroUsize::new(1).unwrap())),
-        Err(EngineError::Options { .. })
-    ));
+    let Err(err) = p.pipelined(PipelinedOptions::new(NonZeroUsize::new(1).unwrap())) else {
+        panic!("a Sync pool cannot be pipelined");
+    };
+    assert!(matches!(err.error, EngineError::Options { .. }));
+    assert!(err.pool.is_some(), "the pool is handed back");
+}
+
+/// Under `debug-checks`, an action the mask forbids is refused by Sync's
+/// step and by a Pipelined send alike, and the send changes nothing.
+#[cfg(feature = "debug-checks")]
+#[test]
+fn test_pipelined_debug_checks_refuse_what_sync_refuses_and_mutate_nothing() {
+    // Action 2 for agent 0 of instance 1 is masked illegal by Counter.
+    let mut bad = actions(0);
+    bad[2] = 2;
+    let mut sync = sync_pool(AutoReset::NextStep);
+    sync.reset_all(Reseed::Keep).unwrap();
+    let sync_err = sync
+        .step(ActionInput {
+            discrete: &bad,
+            continuous: &[],
+        })
+        .map(|_| ())
+        .unwrap_err();
+    assert!(
+        matches!(sync_err, EngineError::IllegalAction { instance: 1, .. }),
+        "{sync_err:?}"
+    );
+    let mut p = piped(AutoReset::NextStep, 2, cfg());
+    let [a, _b] = p.reset_all(Reseed::Keep).unwrap();
+    let halves = p.halves();
+    let before = token_frame(&a);
+    let generation = p.generation(0).unwrap();
+    let err = p
+        .send(
+            a,
+            ActionInput {
+                discrete: &half_actions(&bad, &halves[0]),
+                continuous: &[],
+            },
+        )
+        .unwrap_err();
+    assert_eq!(err.error, sync_err);
+    let a = err.token.unwrap();
+    assert_eq!(token_frame(&a), before);
+    assert_eq!(p.generation(0).unwrap(), generation);
+    assert_eq!(p.recv().map(|_| ()), Err(EngineError::NothingInFlight));
+    // The token still sends legal actions.
+    send(&mut p, a, &half_actions(&actions(0), &halves[0]));
+    let _a = p.recv().unwrap();
+}
+
+// Codex's #82 reproduction probes (attachment 987), as regression tests.
+
+#[test]
+fn test_review_failed_recovery_keeps_poison() {
+    let mut p = piped(
+        AutoReset::NextStep,
+        2,
+        CountConfig {
+            panic_at: 1,
+            ..cfg()
+        },
+    );
+    let [a, b] = p.reset_all(Reseed::Keep).unwrap();
+    drop(b);
+    let h = p.halves()[0].clone();
+    send(&mut p, a, &half_actions(&actions(0), &h));
+    assert_eq!(p.recv().map(|_| ()), Err(EngineError::Panicked));
+    let before = p.generation(0).unwrap();
+    assert!(p.reset_all(Reseed::Each(&[])).is_err());
+    assert!(p.is_poisoned(), "failed reset cleared poison");
+    assert_eq!(p.generation(0).unwrap(), before);
+}
+
+#[test]
+fn test_review_into_pool_keeps_poison() {
+    let mut p = piped(
+        AutoReset::NextStep,
+        2,
+        CountConfig {
+            panic_at: 1,
+            ..cfg()
+        },
+    );
+    let [a, b] = p.reset_all(Reseed::Keep).unwrap();
+    drop(b);
+    let h = p.halves()[0].clone();
+    send(&mut p, a, &half_actions(&actions(0), &h));
+    assert_eq!(p.recv().map(|_| ()), Err(EngineError::Panicked));
+    let pool = p.into_pool().map_err(|e| e.kind).unwrap();
+    assert!(pool.is_poisoned(), "conversion cleared poison");
+    assert!(pool.state(0).is_none(), "partially written state exposed");
+}
+
+#[test]
+fn test_review_failed_restore_keeps_cycles_and_generations() {
+    let template = sync_pool(AutoReset::NextStep).snapshot(0).unwrap();
+    let mut p = piped(AutoReset::NextStep, 2, cfg());
+    let [a, b] = p.reset_all(Reseed::Keep).unwrap();
+    let mut records = vec![template; N as usize];
+    let initial = p.snapshot_all(&mut records).unwrap();
+    let h = p.halves();
+    send(&mut p, a, &half_actions(&actions(0), &h[0]));
+    send(&mut p, b, &half_actions(&actions(0), &h[1]));
+    drop(p.recv().unwrap());
+    drop(p.recv().unwrap());
+    let before = p.snapshot_all(&mut records).unwrap();
+    let generation_before = p.generation(0).unwrap();
+    assert!(p.restore_all(&[], &initial).is_err());
+    let after = p.snapshot_all(&mut records).unwrap();
+    assert_eq!(before, after, "failed restore changed cycles");
+    assert_eq!(p.generation(0).unwrap(), generation_before);
+}
+
+#[test]
+fn test_pipelined_failed_reset_on_a_healthy_pool_keeps_generation_and_cycles() {
+    let mut p = piped(AutoReset::NextStep, 2, cfg());
+    let tokens = p.reset_all(Reseed::Keep).unwrap();
+    drop(tokens);
+    let before = (p.generation(0).unwrap(), p.generation(1).unwrap());
+    assert!(p.reset_all(Reseed::Each(&[])).is_err());
+    assert_eq!((p.generation(0).unwrap(), p.generation(1).unwrap()), before);
+    assert!(!p.is_poisoned());
+    let _tokens = p.reset_all(Reseed::Keep).unwrap();
+}
+
+#[test]
+fn test_pipelined_idle_token_on_a_poisoned_pool_is_refused() {
+    let mut p = piped(
+        AutoReset::NextStep,
+        2,
+        CountConfig {
+            panic_at: 1,
+            ..cfg()
+        },
+    );
+    let [a, b] = p.reset_all(Reseed::Keep).unwrap();
+    drop(b);
+    let h = p.halves()[0].clone();
+    send(&mut p, a, &half_actions(&actions(0), &h));
+    assert_eq!(p.recv().map(|_| ()), Err(EngineError::Panicked));
+    assert_eq!(p.idle_token(1).map(|_| ()), Err(EngineError::Poisoned));
+}
+
+#[test]
+fn test_pipelined_recovery_clears_the_ready_flags() {
+    let mut p = piped(
+        AutoReset::NextStep,
+        2,
+        CountConfig {
+            panic_at: 1,
+            ..cfg()
+        },
+    );
+    let waiter = p.waiter();
+    let [a, b] = p.reset_all(Reseed::Keep).unwrap();
+    let halves = p.halves();
+    send(&mut p, a, &half_actions(&actions(0), &halves[0]));
+    send(&mut p, b, &half_actions(&actions(0), &halves[1]));
+    assert_eq!(p.recv().map(|_| ()), Err(EngineError::Panicked));
+    // Recovery drains half B: no half is ready afterwards.
+    let tokens = p.reset_all(Reseed::Keep).unwrap();
+    assert!(!waiter.wait_ready(Duration::from_millis(1)));
+    drop(tokens);
+}
+
+/// A token read and dropped on another thread, then `idle_token` and a
+/// send on this thread: the token's end orders its reads before the
+/// worker's writes (under Miri, any race on the real rows is reported).
+#[test]
+fn test_pipelined_token_dropped_on_another_thread_then_reclaimed_and_sent() {
+    let mut p = piped(AutoReset::NextStep, 2, cfg());
+    let [a, b] = p.reset_all(Reseed::Keep).unwrap();
+    let reader = std::thread::spawn(move || {
+        let sum: f32 = a.rewards().iter().sum();
+        let frame = token_frame(&a);
+        drop(a);
+        (sum, frame.len())
+    });
+    let (_, len) = reader.join().unwrap();
+    assert!(len > 0);
+    let a = p.idle_token(0).unwrap();
+    let h = p.halves()[0].clone();
+    send(&mut p, a, &half_actions(&actions(0), &h));
+    let a = p.recv().unwrap();
+    assert_eq!(a.half(), 0);
+    drop(b);
+}
+
+/// The wrapper moves (into a box, through a function) while a half is in
+/// flight; the job keeps running on the shared allocation.
+#[test]
+fn test_pipelined_wrapper_moved_while_a_half_is_in_flight() {
+    fn relay(p: Box<Piped>) -> Box<Piped> {
+        p
+    }
+    let mut p = piped(AutoReset::NextStep, 2, cfg());
+    let [a, b] = p.reset_all(Reseed::Keep).unwrap();
+    let h = p.halves()[0].clone();
+    send(&mut p, a, &half_actions(&actions(0), &h));
+    let mut moved = relay(Box::new(p));
+    let a = moved.recv().unwrap();
+    assert_eq!(a.half(), 0);
+    let mut back = *moved;
+    drop((a, b));
+    let _tokens = back.reset_all(Reseed::Keep).unwrap();
+}
+
+mod drift {
+    //! A one-agent environment with one continuous action head: the state
+    //! accumulates the action, the reward is the action, and episodes end
+    //! after five steps.
+
+    use tessera_rl_core::io::{Actions, ObsWriter};
+    use tessera_rl_core::space::{BoxBounds, DType, Space};
+    use tessera_rl_core::{
+        AgentSlot, EpisodeEnd, NoAdaptive, RecordHeader, SpaceError, StepOut, Tier,
+    };
+    use tessera_rl_macros::{EnvConfig, EnvState};
+    use tessera_rl_num::rng::{ObsRng, StepRng};
+
+    #[derive(EnvState, Debug, Clone, Copy, Default)]
+    #[repr(C)]
+    pub struct Pos {
+        pub x: f32,
+        pub steps: u32,
+    }
+
+    #[derive(EnvConfig, Debug, Clone)]
+    pub struct DriftConfig {}
+
+    pub struct Drift;
+
+    impl tessera_rl_core::Environment for Drift {
+        type State = Pos;
+        type Config = DriftConfig;
+        type Obs = ();
+        type Action = ();
+        type Header = RecordHeader<1, NoAdaptive>;
+
+        const MAX_AGENTS: usize = 1;
+        const TIER: Tier = Tier::CrossPlatform;
+
+        fn observation_space(_: &DriftConfig) -> Result<Space, SpaceError> {
+            Ok(Space::Discrete { n: 2 })
+        }
+
+        fn action_space(_: &DriftConfig) -> Result<Space, SpaceError> {
+            Ok(Space::Box {
+                shape: vec![1],
+                dtype: DType::F32,
+                bounds: BoxBounds::Float {
+                    low: vec![-1.0],
+                    high: vec![1.0],
+                },
+            })
+        }
+
+        fn reset(_: &DriftConfig, rng: &mut StepRng, state: &mut Pos) {
+            state.x = f32::from(u8::try_from(rng.next_u32() % 4).unwrap_or(0)) * 0.25;
+            state.steps = 0;
+        }
+
+        fn step(
+            _: &DriftConfig,
+            state: &mut Pos,
+            actions: &Actions<'_, ()>,
+            _: &mut StepRng,
+            out: &mut StepOut<'_>,
+        ) {
+            let a = actions.continuous(AgentSlot::FIRST, 0).unwrap_or(0.0);
+            state.x += a;
+            state.steps += 1;
+            out.set_reward(AgentSlot::FIRST, a);
+            if state.steps >= 5 {
+                out.end_episode(EpisodeEnd::Terminated);
+            }
+        }
+
+        fn observe(
+            _: &DriftConfig,
+            _: &Pos,
+            _: AgentSlot,
+            _: &mut ObsRng,
+            _: &mut ObsWriter<'_, '_, ()>,
+        ) {
+        }
+    }
+}
+
+#[test]
+fn test_pipelined_continuous_head_matches_sync_bit_for_bit() {
+    use drift::{Drift, DriftConfig};
+    let count = 40_u32;
+    let options = PoolOptions {
+        chunk_size: NonZeroU32::new(8).unwrap(),
+        ..PoolOptions::new(NonZeroU32::new(count).unwrap(), Seed::new(5))
+    };
+    let conts = |t: usize| -> Vec<f32> {
+        (0..usize::try_from(count).unwrap())
+            .map(|k| f32::from(u8::try_from((k * 3 + t) % 5).unwrap()) * 0.25 - 0.5)
+            .collect()
+    };
+    let mut reference = EnvPool::<Drift>::new(DriftConfig {}, options).unwrap();
+    reference.reset_all(Reseed::Keep).unwrap();
+    let mut piped_pool = EnvPool::<Drift>::new(DriftConfig {}, options)
+        .unwrap()
+        .pipelined(PipelinedOptions::new(NonZeroUsize::new(3).unwrap()))
+        .unwrap();
+    let halves = piped_pool.halves();
+    let [mut a, mut b] = piped_pool.reset_all(Reseed::Keep).unwrap();
+    let span = |r: &core::ops::Range<u32>| {
+        usize::try_from(r.start).unwrap()..usize::try_from(r.end).unwrap()
+    };
+    for t in 0..12 {
+        let c = conts(t);
+        reference
+            .step(ActionInput {
+                discrete: &[],
+                continuous: &c,
+            })
+            .unwrap();
+        for (tok, h) in [(a, &halves[0]), (b, &halves[1])] {
+            piped_pool
+                .send(
+                    tok,
+                    ActionInput {
+                        discrete: &[],
+                        continuous: &c[span(h)],
+                    },
+                )
+                .map_err(|e| e.error)
+                .unwrap();
+        }
+        a = piped_pool.recv().unwrap();
+        b = piped_pool.recv().unwrap();
+        assert_eq!(
+            token_frame(&a),
+            pool_frame(&reference, halves[0].clone()),
+            "t {t}"
+        );
+        assert_eq!(
+            token_frame(&b),
+            pool_frame(&reference, halves[1].clone()),
+            "t {t}"
+        );
+    }
+    drop((a, b));
+    let pool = piped_pool.into_pool().map_err(|e| e.kind).unwrap();
+    for i in 0..count {
+        assert_eq!(
+            pool.state_hash(i).unwrap(),
+            reference.state_hash(i).unwrap()
+        );
+    }
 }
