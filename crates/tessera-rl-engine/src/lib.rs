@@ -37,8 +37,8 @@ pub mod rings {
 }
 
 #[cfg(not(loom))]
-#[cfg(not(loom))]
 pub use buffer::batch::{BatchToken, BatchWaiter};
+#[cfg(not(loom))]
 pub use buffer::pipeline::{HalfToken, Waiter};
 pub use buffer::{OutputDtype, OutputField, OutputRegion, OutputStorage};
 pub use error::EngineError;
