@@ -50,7 +50,9 @@ use crate::options::SyncOptions;
 use crate::pool::{EnvPool, Reseed, SyncRuntime};
 use crate::record::Record;
 use crate::sys::ring::RingError;
-use crate::validate::{ActionInput, check_and_copy_subset_actions, check_recv, check_send_ids};
+use crate::validate::{
+    ActionInput, check_recv, check_send_ids, check_subset_actions, copy_subset_actions,
+};
 
 /// Options of the Async mode: the workers, as in Sync mode, and the batch
 /// size of `recv`.
@@ -215,6 +217,9 @@ where
             return Err(lost(EngineError::WorkerDied));
         };
         let workers = runtime.workers;
+        // An already poisoned pool stays poisoned: only a full reset or
+        // restore of the wrapper recovers it, as everywhere else.
+        let poisoned = pool.is_poisoned();
         let mode = BatchMode::new(
             pool,
             n,
@@ -235,7 +240,7 @@ where
             submitted: 0,
             outstanding: 0,
             batch,
-            poisoned: false,
+            poisoned,
         })
     }
 }
@@ -654,11 +659,15 @@ where
         let auto_reset = mode.pool.options.auto_reset;
         mode.admit(ids, &mut self.seen, owner, |rows| {
             crate::entry::canonical(|| {
+                // The same order as Sync: the boundary checks first, then
+                // (debug-checks) the legality pass, then the copy, so the same
+                // input gives the same error (ADR-0047 ruling 6).
+                check_subset_actions(layout, auto_reset, rows, actions)?;
                 #[cfg(feature = "debug-checks")]
                 if M::ENABLED {
                     legality(mode, rows, ids, layout, actions)?;
                 }
-                check_and_copy_subset_actions(layout, auto_reset, rows, actions)
+                copy_subset_actions(layout, rows, actions)
             })
         })
     }

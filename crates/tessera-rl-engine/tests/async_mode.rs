@@ -670,3 +670,52 @@ fn test_async_debug_checks_refuse_what_sync_refuses_and_mutate_nothing() {
     assert_eq!(err, sync_err);
     assert_eq!(p.generation(id).unwrap(), g, "nothing changed");
 }
+
+#[test]
+fn test_async_poisoned_conversion_stays_poisoned_and_reset_all_recovers() {
+    let mut pool = Pool::with_masks(
+        CountConfig {
+            panic_at: 1,
+            ..cfg()
+        },
+        options(AutoReset::NextStep),
+    )
+    .unwrap();
+    pool.reset_all(Reseed::Keep).unwrap();
+    assert_eq!(
+        pool.step(input(&all_actions(0))).map(|_| ()),
+        Err(EngineError::Panicked)
+    );
+    let mut p = pool
+        .async_mode(AsyncOptions::new(
+            NonZeroUsize::new(2).unwrap(),
+            NonZeroUsize::new(BATCH).unwrap(),
+        ))
+        .unwrap();
+    assert!(p.is_poisoned(), "incoming EnvPool poison was lost");
+    assert_eq!(p.send(&[0], input(&[0, 0])), Err(EngineError::Poisoned));
+    assert_eq!(p.recv().map(|_| ()), Err(EngineError::Poisoned));
+    drop(p.reset_all(Reseed::Keep).unwrap());
+    assert!(!p.is_poisoned());
+}
+
+/// Under `debug-checks`, a value out of the head's range reports the same
+/// error in Async as in Sync (the range check runs before legality).
+#[cfg(feature = "debug-checks")]
+#[test]
+fn test_async_debug_checks_out_of_range_value_reports_what_sync_reports() {
+    let mut bad = all_actions(0);
+    bad[2] = 99;
+    let mut sync = sync_pool(AutoReset::NextStep);
+    sync.reset_all(Reseed::Keep).unwrap();
+    let sync_err = sync.step(input(&bad)).map(|_| ()).unwrap_err();
+    assert!(
+        !matches!(sync_err, EngineError::IllegalAction { .. }),
+        "{sync_err:?}"
+    );
+    let mut p = asy(AutoReset::NextStep, 2);
+    drop(p.reset_all(Reseed::Keep).unwrap());
+    // Instance 1 holds the bad value; send it with instance 0, in that order.
+    let err = p.send(&[0, 1], input(&bad[..4])).unwrap_err();
+    assert_eq!(err, sync_err);
+}
