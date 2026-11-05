@@ -179,10 +179,11 @@ fn engine_kind(e: &EngineError) -> Kind {
         | EngineError::WorkerStartup { .. }
         | EngineError::InvalidAgentEvent { .. }
         | EngineError::TurnOrder { .. } => Kind::Poisoned,
-        EngineError::NestedEngine => Kind::Concurrency,
+        EngineError::NestedEngine | EngineError::GangQueue { .. } => Kind::Concurrency,
         EngineError::CounterExhausted { .. }
         | EngineError::BranchCounterExhausted
-        | EngineError::StorageIdsExhausted => Kind::Exhausted,
+        | EngineError::StorageIdsExhausted
+        | EngineError::SequenceExhausted => Kind::Exhausted,
     }
 }
 

@@ -28,5 +28,8 @@ jobs:
       - run: cargo +nightly miri setup
       - run: cargo +nightly miri test -p tessera-rl-core --locked
       - run: "cargo +nightly miri test -p tessera-rl-engine --lib --locked buffer::"
+      # The gang's job publication and trampoline (ADR-0047); FP control
+      # asm and address waits are stubbed under cfg(miri), the protocol is not.
+      - run: "cargo +nightly miri test -p tessera-rl-engine --lib --locked sys::gang::"
       # DLPack export ownership (ADR-0003 rule 1), without an interpreter.
       - run: cargo +nightly miri test -p tessera-rl-py --lib --locked ffi::dlpack
