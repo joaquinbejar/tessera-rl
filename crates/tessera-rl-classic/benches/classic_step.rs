@@ -11,7 +11,9 @@ use std::hint::black_box;
 
 use criterion::{Criterion, criterion_group, criterion_main};
 use tessera_rl_classic::cartpole::physics;
-use tessera_rl_classic::{CartPole, CartPoleConfig, Grid, GridConfig, Tag, TagConfig};
+use tessera_rl_classic::{
+    CartPole, CartPoleConfig, Grid, GridConfig, KeyDoor, KeyDoorConfig, Tag, TagConfig,
+};
 use tessera_rl_engine::{ActionInput, EnvPool, Masked, NoMasks, PoolOptions, Reseed};
 use tessera_rl_num::identity::Seed;
 
@@ -71,6 +73,22 @@ fn bench(c: &mut Criterion) {
             let out = grid
                 .step(ActionInput {
                     discrete: &grid_actions,
+                    continuous: &[],
+                })
+                .unwrap();
+            black_box(out.rewards());
+        });
+    });
+    // Key and door: turns are always legal, so this exercises masks and views.
+    let keydoor_cfg = KeyDoorConfig { size: 8, agents: 4 };
+    let turn: Vec<i32> = vec![1; (N * 4) as usize];
+    let mut keydoor = EnvPool::<KeyDoor, Masked>::with_masks(keydoor_cfg, options()).unwrap();
+    keydoor.reset_all(Reseed::Keep).unwrap();
+    group.bench_function("keydoor", |b| {
+        b.iter(|| {
+            let out = keydoor
+                .step(ActionInput {
+                    discrete: &turn,
                     continuous: &[],
                 })
                 .unwrap();

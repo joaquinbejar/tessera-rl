@@ -211,6 +211,20 @@ pub(crate) fn make_grid(g: Gil, kwargs: Option<Ref<'_>>) -> CResult<Inner> {
     Ok(Inner::new(ops, borrowed))
 }
 
+/// `make_keydoor(**kwargs)`: the pool of a key and door environment object;
+/// `max_episode_steps` defaults to 512.
+pub(crate) fn make_keydoor(g: Gil, kwargs: Option<Ref<'_>>) -> CResult<Inner> {
+    let kw = Kwargs::parse(g, kwargs)?;
+    kw.check(g, &[&POOL_KEYS, &["outputs", "size", "agents"]])?;
+    let borrowed = borrowed(g, &kw)?;
+    let args = pool_args(g, &kw, 512)?;
+    let (size, agents) = (kw.u32(g, "size")?, kw.u32(g, "agents")?);
+    let ops = g
+        .detach(|| crate::env::keydoor(&args, size, agents))
+        .map_err(|e| to_py(g, e))?;
+    Ok(Inner::new(ops, borrowed))
+}
+
 const TAG_KEYS: [&str; 7] = [
     "width", "height", "pursuers", "evaders", "slip", "radius", "outputs",
 ];

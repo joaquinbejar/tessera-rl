@@ -87,6 +87,14 @@ the API is not stable, and any 0.x release may break it.
   at reset, `Discrete(4)` and a full view. Golden fixtures, continuation tests,
   a test reference, a scripted baseline and a step bench. In Python it is
   available through `make` and the Gymnasium adapter.
+- **Key and door** (`tessera/GridKeyDoor-v1`, `tessera-rl-classic`): a world
+  generated at each reset from the instance's stream, seen from each agent's
+  position and facing, for 1 to 4 cooperative agents; `Discrete(5)` with masks
+  and simultaneous turns resolved in slot order. There is no occlusion, unlike
+  MiniGrid-style vision. A solver test plays every sampled world to the end;
+  golden fixtures, continuation tests, a test reference, a scripted baseline and
+  a step bench. In Python it is available through `make` and the PettingZoo
+  adapters.
 - **Python search**: `Search.is_privileged`, `False` for every search
   Python can build today.
 - **Engine** (`tessera-rl-engine`): `EnvPool::config`, and `EnvPool::contain`,

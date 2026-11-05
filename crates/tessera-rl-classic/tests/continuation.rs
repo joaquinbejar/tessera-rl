@@ -17,7 +17,9 @@ mod support;
 
 use support::continuation::Case;
 use tessera_rl_classic::cartpole::MAX_EPISODE_STEPS;
-use tessera_rl_classic::{CartPole, CartPoleConfig, Grid, GridConfig, Tag, TagConfig};
+use tessera_rl_classic::{
+    CartPole, CartPoleConfig, Grid, GridConfig, KeyDoor, KeyDoorConfig, Tag, TagConfig,
+};
 use tessera_rl_engine::{AutoReset, EnvPool, Masked, NoMasks};
 
 fn cartpole(auto_reset: AutoReset) -> Case<CartPole, NoMasks> {
@@ -93,4 +95,28 @@ fn test_continuation_grid_next_step_restores_identically_everywhere() {
 #[test]
 fn test_continuation_grid_same_step_restores_identically_everywhere() {
     grid(AutoReset::SameStep).check_all(50);
+}
+
+#[expect(clippy::unwrap_used, reason = "test setup: a failure is the assertion")]
+fn keydoor(auto_reset: AutoReset) -> Case<KeyDoor, Masked> {
+    Case {
+        cfg: KeyDoorConfig { size: 6, agents: 3 },
+        build: |cfg, options| EnvPool::with_masks(cfg, options).unwrap(),
+        auto_reset,
+        limit: 40,
+        deaths: false,
+        // A new world is drawn at each reset, and the step limit forces resets
+        // within the harness's horizon, so a branch diverges there.
+        branches: true,
+    }
+}
+
+#[test]
+fn test_continuation_keydoor_next_step_restores_identically_everywhere() {
+    keydoor(AutoReset::NextStep).check_all(50);
+}
+
+#[test]
+fn test_continuation_keydoor_same_step_restores_identically_everywhere() {
+    keydoor(AutoReset::SameStep).check_all(50);
 }
