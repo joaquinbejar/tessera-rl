@@ -51,6 +51,11 @@ workspace = true
 name = "sync_step"
 harness = false
 
+# Pipelined send and recv against a Sync step (ADR-0047).
+[[bench]]
+name = "pipelined_step"
+harness = false
+
 # Async id ring push and pop (ADR-0047).
 [[bench]]
 name = "id_rings"

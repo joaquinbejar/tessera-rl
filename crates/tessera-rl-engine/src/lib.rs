@@ -17,6 +17,8 @@ mod error;
 mod fault_tests;
 mod layout;
 mod masks;
+#[cfg(not(loom))]
+mod modes;
 mod options;
 mod outputs;
 mod pool;
@@ -34,10 +36,17 @@ pub mod rings {
     pub use crate::sys::ring::{CompletionRing, RingError, Signal, SubmitRing};
 }
 
+#[cfg(not(loom))]
+pub use buffer::pipeline::{HalfToken, Waiter};
 pub use buffer::{OutputDtype, OutputField, OutputRegion, OutputStorage};
 pub use error::EngineError;
 pub use layout::MAX_LEAVES;
 pub use masks::{IllegalActionPolicy, MaskProvider, Masked, NoMasks};
+#[cfg(not(loom))]
+pub use modes::pipelined::{
+    CycleState, IntoPoolError, IntoPoolErrorKind, PipelinedBuildError, PipelinedOptions,
+    PipelinedPool, SendError,
+};
 pub use options::{AutoReset, CHUNK_RANGE, PoolOptions, SyncOptions, WaitBackend};
 pub use outputs::Outputs;
 pub use pool::{EnvPool, Reseed};

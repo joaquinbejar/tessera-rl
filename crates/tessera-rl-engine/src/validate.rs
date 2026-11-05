@@ -371,8 +371,8 @@ pub(crate) fn check_send_half(
 /// that cycle is committed. Cycles 0 and 1 read the initial context.
 /// `committed` is the newest committed cycle, if any.
 #[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "used by the split-phase modes (ADR-0047)")
+    loom,
+    allow(dead_code, reason = "the split-phase modes are not built under loom")
 )]
 pub(crate) fn check_cycle(cycle: u64, committed: Option<u64>) -> Result<(), EngineError> {
     let Some(needed) = cycle.checked_sub(2) else {
@@ -388,8 +388,8 @@ pub(crate) fn check_cycle(cycle: u64, committed: Option<u64>) -> Result<(), Engi
 /// in flight or ready, and in Async enough of them exist to fill a batch.
 /// `batch_size` is 1 in Pipelined, where a half is one result.
 #[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "used by the split-phase modes (ADR-0047)")
+    loom,
+    allow(dead_code, reason = "the split-phase modes are not built under loom")
 )]
 pub(crate) fn check_recv(in_flight: u32, ready: u32, batch_size: u32) -> Result<(), EngineError> {
     if in_flight == 0 && ready == 0 {
@@ -423,10 +423,13 @@ pub(crate) struct ActionRow<'a, H> {
 /// Access to the rows of the ids an Async `send` admits, by position in the
 /// call. An implementation hands out only those rows, one at a time, so no
 /// reference ever spans a row another thread may use (ADR-0047 invariants
-/// 3 and 4). The engine implementation is backed by `instance_view`.
+/// 3 and 4). The engine implementation is `buffer::rows::Admitted`, from
+/// `RawRows::admitted`.
 pub(crate) trait AdmittedRows<H> {
     /// The number of admitted ids.
     fn len(&self) -> usize;
+    /// The number of instances in the pool (for out-of-range errors).
+    fn instances(&self) -> usize;
     /// The id at `position`.
     fn id(&self, position: usize) -> Option<u32>;
     /// The rows of the id at `position`.
@@ -476,12 +479,20 @@ pub(crate) fn check_and_copy_subset_actions<H: RecordLayout, R: AdmittedRows<H>>
 
 /// Validates the actions of a Pipelined `send(half)` and copies them into
 /// the half's rows. `headers`, `discrete_out` and `continuous_out` are the
-/// half's own views (from `range_view`), so nothing outside the half is
-/// borrowed; `first_id` is the id of their first instance, for errors.
+/// half's own views (the Pipelined mode takes them from the half's raw
+/// action parts, `RawRows::range` gives the same rows), so nothing outside
+/// the half is borrowed; `first_id` is the id of their first instance, for errors.
 /// `input` holds one row block per instance of the half, in order.
 #[cfg_attr(
     not(test),
-    expect(dead_code, reason = "used by the split-phase modes (ADR-0047)")
+    expect(
+        dead_code,
+        reason = "the mode runs the checks and the copy separately; tests use both at once"
+    )
+)]
+#[cfg_attr(
+    all(test, loom),
+    allow(dead_code, reason = "the split-phase modes are not built under loom")
 )]
 pub(crate) fn check_and_copy_range_actions<H: RecordLayout>(
     layout: &ActionLayout,
@@ -492,14 +503,42 @@ pub(crate) fn check_and_copy_range_actions<H: RecordLayout>(
     discrete_out: &mut [i32],
     continuous_out: &mut [f32],
 ) -> Result<(), EngineError> {
+    check_range_actions(
+        layout,
+        auto_reset,
+        first_id,
+        headers,
+        input,
+        (discrete_out.len(), continuous_out.len()),
+    )?;
+    copy_range_actions(layout, headers, input, discrete_out, continuous_out);
+    Ok(())
+}
+
+/// The checks of [`check_and_copy_range_actions`] without the copy, so a
+/// caller can run more checks (the `debug-checks` legality pass) between
+/// the validation and the copy. `out_lens` are the lengths of the half's
+/// discrete and continuous action rows.
+#[cfg_attr(
+    loom,
+    allow(dead_code, reason = "the split-phase modes are not built under loom")
+)]
+pub(crate) fn check_range_actions<H: RecordLayout>(
+    layout: &ActionLayout,
+    auto_reset: AutoReset,
+    first_id: usize,
+    headers: &[H],
+    input: ActionInput<'_>,
+    out_lens: (usize, usize),
+) -> Result<(), EngineError> {
     let agents = H::AGENTS;
     let (dh, ch) = (layout.discrete.len(), layout.continuous.len());
     let count = headers.len();
     for (buffer, heads, actual) in [
         ("discrete", dh, input.discrete.len()),
         ("continuous", ch, input.continuous.len()),
-        ("discrete", dh, discrete_out.len()),
-        ("continuous", ch, continuous_out.len()),
+        ("discrete", dh, out_lens.0),
+        ("continuous", ch, out_lens.1),
     ] {
         check_len(
             buffer,
@@ -514,7 +553,24 @@ pub(crate) fn check_and_copy_range_actions<H: RecordLayout>(
             .unwrap_or(u32::MAX);
         check_one(layout, auto_reset, header, id, position, input)?;
     }
-    // Validated: copy, zeroing slots whose actions are not required.
+    Ok(())
+}
+
+/// The copy of [`check_and_copy_range_actions`], after its checks passed:
+/// slots whose actions are not required are zeroed.
+#[cfg_attr(
+    loom,
+    allow(dead_code, reason = "the split-phase modes are not built under loom")
+)]
+pub(crate) fn copy_range_actions<H: RecordLayout>(
+    layout: &ActionLayout,
+    headers: &[H],
+    input: ActionInput<'_>,
+    discrete_out: &mut [i32],
+    continuous_out: &mut [f32],
+) {
+    let agents = H::AGENTS;
+    let (dh, ch) = (layout.discrete.len(), layout.continuous.len());
     for (position, header) in headers.iter().enumerate() {
         let pending = header.engine().pending_reset.get();
         for (slot, row) in header.agents().iter().enumerate() {
@@ -540,7 +596,6 @@ pub(crate) fn check_and_copy_range_actions<H: RecordLayout>(
             );
         }
     }
-    Ok(())
 }
 
 /// The id and rows at `position`; a missing row is an implementation bug,
@@ -550,7 +605,7 @@ fn admitted<H, R: AdmittedRows<H>>(
     position: usize,
 ) -> Result<(u32, ActionRow<'_, H>), EngineError> {
     let id = rows.id(position).unwrap_or(u32::MAX);
-    let num_envs = u32::try_from(rows.len()).unwrap_or(u32::MAX);
+    let num_envs = u32::try_from(rows.instances()).unwrap_or(u32::MAX);
     match rows.row(position) {
         Some(row) => Ok((id, row)),
         None => Err(EngineError::InstanceOutOfRange { id, num_envs }),

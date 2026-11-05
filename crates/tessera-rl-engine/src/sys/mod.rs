@@ -28,7 +28,7 @@ pub(crate) mod sync;
 pub(crate) use affinity::available_cores;
 #[cfg(test)]
 pub(crate) use gang::Faults;
-pub(crate) use gang::{Gang, GangOptions};
+pub(crate) use gang::{Gang, GangOptions, Job};
 #[cfg(not(loom))]
 pub(crate) use native::Native;
 pub(crate) use panics::catch;

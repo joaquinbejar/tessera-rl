@@ -26,9 +26,10 @@ pub(crate) struct RawRows<H> {
 }
 
 impl<H: Copy> RawRows<H> {
-    /// Takes the raw parts of the buffers. The borrows end here; the parts
-    /// stay valid while the buffers are not moved or reallocated
-    /// (invariant 1).
+    /// Takes the raw parts of the buffers, `[N]`, `[N, agents, dh]` and
+    /// `[N, agents, ch]`. Build it while nothing is in flight: the `&mut`
+    /// borrows end here, and the parts stay valid while the buffers are not
+    /// moved, reallocated or borrowed mutably again (invariant 1).
     #[cfg_attr(
         not(test),
         expect(dead_code, reason = "used by the split-phase modes (ADR-0047)")
@@ -41,6 +42,17 @@ impl<H: Copy> RawRows<H> {
         dh: usize,
         ch: usize,
     ) -> Self {
+        let rows = headers.len().saturating_mul(agents);
+        debug_assert_eq!(
+            discrete.len(),
+            rows.saturating_mul(dh),
+            "discrete buffer size"
+        );
+        debug_assert_eq!(
+            continuous.len(),
+            rows.saturating_mul(ch),
+            "continuous buffer size"
+        );
         Self {
             instances: headers.len(),
             agents,
@@ -111,6 +123,10 @@ impl<H: Copy> AdmittedRows<H> for Admitted<'_, H> {
         self.ids.len()
     }
 
+    fn instances(&self) -> usize {
+        self.raw.instances
+    }
+
     fn id(&self, position: usize) -> Option<u32> {
         self.ids.get(position).copied()
     }
@@ -177,6 +193,14 @@ mod tests {
         }
     }
 
+    /// One discrete head and one continuous head.
+    fn layout_c() -> ActionLayout {
+        ActionLayout {
+            discrete: vec![3],
+            continuous: vec![(-1.0, 1.0)],
+        }
+    }
+
     /// A raw pointer that may cross threads: the test writes only rows the
     /// main thread never admits.
     struct Shared<T>(*mut T);
@@ -194,12 +218,13 @@ mod tests {
     fn test_raw_rows_subset_copy_while_another_row_is_written_no_race() {
         let mut headers: Vec<H> = (0..N).map(|_| running()).collect();
         let mut discrete = vec![9_i32; N * A];
-        let mut continuous: Vec<f32> = Vec::new();
-        let raw = RawRows::new(&mut headers, &mut discrete, &mut continuous, A, 1, 0);
+        let mut continuous = vec![9.0_f32; N * A];
+        let raw = RawRows::new(&mut headers, &mut discrete, &mut continuous, A, 1, 1);
         let hdr_ptr = Shared(raw.headers.ptr);
         let act_ptr = Shared(raw.discrete.ptr);
+        let cont_ptr = Shared(raw.continuous.ptr);
         let worker = std::thread::spawn(move || {
-            let (h, d) = (hdr_ptr, act_ptr);
+            let (h, d, c) = (hdr_ptr, act_ptr, cont_ptr);
             for i in 0..20_u32 {
                 // SAFETY: row 0 is never admitted by the main thread, and the
                 // buffers outlive the join below.
@@ -211,22 +236,36 @@ mod tests {
                 let second = unsafe { d.0.add(1) };
                 // SAFETY: as above.
                 unsafe { ptr::write(second, 1) };
+                // SAFETY: as above, the first continuous action of row 0.
+                unsafe { ptr::write(c.0, 0.75) };
             }
         });
         let ids = [3_u32, 1];
         let acts = [1, 2, 0, 2];
+        let conts = [0.5_f32, -0.5, 0.25, -0.25];
         let input = ActionInput {
             discrete: &acts,
-            continuous: &[],
+            continuous: &conts,
         };
         for _ in 0..5 {
             // SAFETY: ids 3 and 1 are this thread's alone; the worker
             // touches only row 0, and the buffers outlive this scope.
             let mut rows = unsafe { raw.admitted(&ids) };
-            check_and_copy_subset_actions(&layout(), AutoReset::NextStep, &mut rows, input)
+            check_and_copy_subset_actions(&layout_c(), AutoReset::NextStep, &mut rows, input)
                 .unwrap();
         }
         worker.join().unwrap();
+        assert_eq!(
+            &continuous[2..4],
+            &[0.25, -0.25],
+            "id 1 takes source position 1"
+        );
+        assert_eq!(
+            &continuous[6..8],
+            &[0.5, -0.5],
+            "id 3 takes source position 0"
+        );
+        assert_eq!(&continuous[4..6], &[9.0, 9.0], "row 2 was not admitted");
         assert_eq!(&discrete[2..4], &[0, 2]);
         assert_eq!(&discrete[6..8], &[1, 2]);
         assert_eq!(&discrete[4..6], &[9, 9], "row 2 was not admitted");
@@ -239,12 +278,13 @@ mod tests {
     fn test_raw_rows_range_copy_while_the_other_half_is_written_no_race() {
         let mut headers: Vec<H> = (0..N).map(|_| running()).collect();
         let mut discrete = vec![9_i32; N * A];
-        let mut continuous: Vec<f32> = Vec::new();
-        let raw = RawRows::new(&mut headers, &mut discrete, &mut continuous, A, 1, 0);
+        let mut continuous = vec![9.0_f32; N * A];
+        let raw = RawRows::new(&mut headers, &mut discrete, &mut continuous, A, 1, 1);
         let hdr_ptr = Shared(raw.headers.ptr);
         let act_ptr = Shared(raw.discrete.ptr);
+        let cont_ptr = Shared(raw.continuous.ptr);
         let worker = std::thread::spawn(move || {
-            let (h, d) = (hdr_ptr, act_ptr);
+            let (h, d, c) = (hdr_ptr, act_ptr, cont_ptr);
             for i in 0..20_u32 {
                 // SAFETY: half 0 (rows 0 and 1) is never borrowed by the
                 // main thread, and the buffers outlive the join below.
@@ -255,21 +295,27 @@ mod tests {
                 let last = unsafe { d.0.add(3) };
                 // SAFETY: as above.
                 unsafe { ptr::write(last, 1) };
+                // SAFETY: as above, the last continuous action of row 1.
+                let last_c = unsafe { c.0.add(3) };
+                // SAFETY: as above.
+                unsafe { ptr::write(last_c, 0.75) };
             }
         });
         let acts = [2, 1, 0, 1];
+        let conts = [0.1_f32, 0.2, 0.3, 0.4];
         let input = ActionInput {
             discrete: &acts,
-            continuous: &[],
+            continuous: &conts,
         };
         for _ in 0..5 {
             // SAFETY: half 1 (rows 2 and 3) is this thread's alone.
             let (h, d, c) = unsafe { raw.range(2..4) }.unwrap();
-            check_and_copy_range_actions(&layout(), AutoReset::NextStep, 2, h, input, d, c)
+            check_and_copy_range_actions(&layout_c(), AutoReset::NextStep, 2, h, input, d, c)
                 .unwrap();
         }
         worker.join().unwrap();
         assert_eq!(&discrete[4..8], &[2, 1, 0, 1]);
+        assert_eq!(&continuous[4..8], &[0.1, 0.2, 0.3, 0.4]);
     }
 
     #[test]
@@ -298,7 +344,7 @@ mod tests {
         );
         assert!(matches!(
             err,
-            Err(EngineError::InstanceOutOfRange { id: 7, .. })
+            Err(EngineError::InstanceOutOfRange { id: 7, num_envs: 4 })
         ));
     }
 }

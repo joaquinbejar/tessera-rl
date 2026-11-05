@@ -104,13 +104,66 @@ pub struct EnvPool<E: Environment, M: MaskProvider<E> = NoMasks> {
     _masks: PhantomData<M>,
 }
 
+#[cfg_attr(
+    loom,
+    allow(dead_code, reason = "the split-phase modes are not built under loom")
+)]
+impl<E: Environment, M: MaskProvider<E>> EnvPool<E, M> {
+    /// Takes the workers out of the pool (the split-phase modes own them,
+    /// ADR-0047); the pool is left in Inline mode.
+    pub(crate) fn take_runtime(&mut self) -> Option<SyncRuntime> {
+        self.sync.take()
+    }
+
+    /// Gives the workers back (`into_pool` of a split-phase mode).
+    pub(crate) fn put_runtime(&mut self, runtime: SyncRuntime) {
+        self.sync = Some(runtime);
+    }
+
+    /// The read-only context of a step, for the split-phase modes.
+    pub(crate) fn step_ctx(&self) -> StepCtx<'_, E> {
+        StepCtx {
+            cfg: &self.cfg,
+            authority: &self.authority,
+            layout: &self.actions,
+            policy: self.options.illegal_action,
+            limit: self
+                .options
+                .max_episode_steps
+                .map(core::num::NonZeroU32::get),
+            auto_reset: self.options.auto_reset,
+        }
+    }
+
+    /// The action layout of the pool.
+    pub(crate) fn action_layout(&self) -> &ActionLayout {
+        &self.actions
+    }
+
+    /// The pool-wide chunk and the discrete and continuous heads per agent,
+    /// for the split-phase modes to take raw parts of (ADR-0047).
+    pub(crate) fn chunk_all(&mut self) -> (Chunk<'_, E>, (usize, usize)) {
+        let heads = (self.actions.discrete.len(), self.actions.continuous.len());
+        let chunk = Chunk {
+            headers: &mut self.headers,
+            states: &mut self.states,
+            discrete: &mut self.discrete,
+            continuous: &mut self.continuous,
+            penalties: &mut self.penalties,
+            penalized: &mut self.penalized,
+            outputs: self.outputs.view_all(),
+        };
+        (chunk, heads)
+    }
+}
+
 /// Workers of a pool in Sync mode. Dropping it shuts them down and joins
 /// them.
 #[derive(Debug)]
-struct SyncRuntime {
-    gang: Gang,
-    workers: usize,
-    native: bool,
+pub(crate) struct SyncRuntime {
+    pub(crate) gang: Gang,
+    pub(crate) workers: usize,
+    pub(crate) native: bool,
     _registration: Registration,
 }
 
@@ -287,7 +340,7 @@ where
         self.with_workers_inner(options, faults)
     }
 
-    fn with_workers_inner(
+    pub(crate) fn with_workers_inner(
         mut self,
         options: SyncOptions,
         #[cfg(test)] faults: crate::sys::Faults,
@@ -677,35 +730,14 @@ where
         if !M::ENABLED {
             return Ok(());
         }
-        let a = E::MAX_AGENTS;
-        let dh = self.actions.discrete.len();
-        let mask_len = self.outputs.mask_len;
-        for (i, header) in self.headers.iter().enumerate() {
-            if header.engine().pending_reset.get() {
-                continue;
-            }
-            for (slot, row) in header.agents().iter().enumerate() {
-                if !(row.alive.get() && row.acting.get()) {
-                    continue;
-                }
-                let k = i * a + slot;
-                let heads = discrete.get(k * dh..(k + 1) * dh).unwrap_or(&[]);
-                let mask = self
-                    .outputs
-                    .masks()
-                    .get(k * mask_len..(k + 1) * mask_len)
-                    .unwrap_or(&[]);
-                if let Some(head) = first_illegal(heads, &self.actions.discrete, mask) {
-                    return Err(EngineError::IllegalAction {
-                        instance: u32::try_from(i).unwrap_or(u32::MAX),
-                        agent: u16::try_from(slot).unwrap_or(u16::MAX),
-                        head: u32::try_from(head).unwrap_or(u32::MAX),
-                        value: heads.get(head).copied().unwrap_or(0),
-                    });
-                }
-            }
-        }
-        Ok(())
+        legality_rows(
+            &self.headers,
+            0,
+            discrete,
+            &self.actions.discrete,
+            self.outputs.masks(),
+            self.outputs.mask_len,
+        )
     }
 
     /// Steps every instance with `actions` (Inline mode).
@@ -864,7 +896,7 @@ fn select_native(choice: WaitBackend) -> Option<crate::sys::Native> {
 }
 
 /// Instances per chunk.
-fn chunk_size(options: &PoolOptions) -> usize {
+pub(crate) fn chunk_size(options: &PoolOptions) -> usize {
     usize::try_from(options.chunk_size.get()).unwrap_or(usize::MAX)
 }
 
@@ -1071,6 +1103,45 @@ fn replace_illegal_one<E: Environment, M: MaskProvider<E>>(
             "ActionMask::noop wrote a continuous action outside its bounds"
         );
     }
+}
+
+/// The legality pass of the validation boundary (masked pools): the first
+/// alive, acting slot of an instance whose discrete action the mask forbids
+/// is an `IllegalAction`. `headers`, `discrete` (`[rows, A, dh]`) and
+/// `masks` (`[rows, A, mask_len]`) cover the same rows, the first of which
+/// is instance `first`; Sync passes the whole pool, Pipelined one half.
+pub(crate) fn legality_rows<H: RecordLayout>(
+    headers: &[H],
+    first: usize,
+    discrete: &[i32],
+    sizes: &[u32],
+    masks: &[Bool8],
+    mask_len: usize,
+) -> Result<(), EngineError> {
+    let a = H::AGENTS;
+    let dh = sizes.len();
+    for (i, header) in headers.iter().enumerate() {
+        if header.engine().pending_reset.get() {
+            continue;
+        }
+        for (slot, row) in header.agents().iter().enumerate() {
+            if !(row.alive.get() && row.acting.get()) {
+                continue;
+            }
+            let k = i * a + slot;
+            let heads = discrete.get(k * dh..(k + 1) * dh).unwrap_or(&[]);
+            let mask = masks.get(k * mask_len..(k + 1) * mask_len).unwrap_or(&[]);
+            if let Some(head) = first_illegal(heads, sizes, mask) {
+                return Err(EngineError::IllegalAction {
+                    instance: u32::try_from(first + i).unwrap_or(u32::MAX),
+                    agent: u16::try_from(slot).unwrap_or(u16::MAX),
+                    head: u32::try_from(head).unwrap_or(u32::MAX),
+                    value: heads.get(head).copied().unwrap_or(0),
+                });
+            }
+        }
+    }
+    Ok(())
 }
 
 /// The first discrete head whose value the mask forbids, if any.

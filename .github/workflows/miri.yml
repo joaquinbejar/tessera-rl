@@ -33,5 +33,8 @@ jobs:
       - run: "cargo +nightly miri test -p tessera-rl-engine --lib --locked sys::gang::"
       # The Async id rings and token id buffers (ADR-0047): atomics only.
       - run: "cargo +nightly miri test -p tessera-rl-engine --lib --locked -- sys::ring:: sys::id_buffers::"
+      # The Pipelined mode end to end (ADR-0047); the 64-worker comparison is
+      # too slow under Miri and runs natively.
+      - run: "cargo +nightly miri test -p tessera-rl-engine --test pipelined --locked -- --skip bit_for_bit"
       # DLPack export ownership (ADR-0003 rule 1), without an interpreter.
       - run: cargo +nightly miri test -p tessera-rl-py --lib --locked ffi::dlpack

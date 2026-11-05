@@ -11,6 +11,16 @@ the API is not stable, and any 0.x release may break it.
 
 ### Added
 
+- **Pipelined mode** (`tessera-rl-engine`): `EnvPool::pipelined` moves a
+  pool into two fixed halves stepped by its own workers. `send` consumes a
+  `HalfToken` with that half's actions and starts its step; `recv`,
+  `try_recv` and `recv_timeout` return the oldest sent half as a new token,
+  whose views borrow the token, so one half's outputs stay readable while
+  the other runs. A half may not run two cycles ahead (`CycleAhead`);
+  writers (`reset_all`, `restore_all`, `into_pool`) refuse while a token is
+  alive or work is in flight. Every half batch is bit-identical to the same
+  rows of a Sync step with the same actions, for any worker count. Rust
+  only for now; the Python binding follows.
 - **PettingZoo adapters** (`tessera_rl.pz`, with the `pettingzoo` extra):
   `parallel_env` and `aec_env`. Each environment declares the interfaces
   it supports and any other request is refused at construction: Tag is
