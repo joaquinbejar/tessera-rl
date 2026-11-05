@@ -387,6 +387,28 @@ where
         &self.options
     }
 
+    /// The environment configuration of the pool.
+    #[must_use]
+    pub const fn config(&self) -> &E::Config {
+        &self.cfg
+    }
+
+    /// Runs author code that reads only the configuration (for example
+    /// `Determinize::sample` for a search root) under the pool's
+    /// containment: inside the canonical floating-point environment, with
+    /// a panic caught and its payload disposed of safely (ADR-0028,
+    /// ADR-0037). Returns `None` if `f` panicked. The pool is not touched,
+    /// so it is not poisoned. With `panic = "abort"` a panic aborts.
+    pub fn contain<R>(&self, f: impl FnOnce(&E::Config) -> R) -> Option<R> {
+        let cfg = &self.cfg;
+        let mut out = None;
+        if crate::sys::catch(|| out = Some(crate::entry::canonical(|| f(cfg)))) {
+            out
+        } else {
+            None
+        }
+    }
+
     /// The outputs of the last call.
     #[must_use]
     pub const fn outputs(&self) -> &Outputs {

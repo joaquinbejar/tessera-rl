@@ -133,6 +133,8 @@ pub struct SearchPool<E: Environment, M: MaskProvider<E>> {
     pub(crate) child_rewards: Vec<f32>,
     pub(crate) child_masks: Vec<bool>,
     pub(crate) journal: crate::journal::Journal<E>,
+    /// How the root was made (ADR-0035, ADR-0046).
+    pub(crate) mode: crate::determinize::RootMode,
 }
 
 fn options_error(option: &'static str, reason: &'static str) -> SearchError {
@@ -186,6 +188,17 @@ where
         if !E::PERFECT_INFORMATION {
             return Err(SearchError::ImperfectInformation);
         }
+        Self::build_pool(cfg, options, root, build)
+    }
+
+    /// [`Self::new`] without the information check: the shared body of
+    /// every constructor.
+    pub(crate) fn build_pool(
+        cfg: E::Config,
+        options: SearchOptions,
+        root: &Record<E>,
+        build: impl FnOnce(E::Config, PoolOptions) -> Result<EnvPool<E, M>, EngineError>,
+    ) -> Result<Self, SearchError> {
         let Ok(Space::Discrete { n: actions }) = E::action_space(&cfg) else {
             return Err(SearchError::UnsupportedActions);
         };
@@ -243,8 +256,9 @@ where
             child_rewards: vec![0.0; idx(batch).saturating_mul(agents)],
             child_masks: vec![true; idx(batch).saturating_mul(idx(actions))],
             journal: crate::journal::Journal::new(cap, cap.saturating_mul(idx(actions)), agents),
+            mode: crate::determinize::RootMode::Full,
         };
-        pool.set_root(root)?;
+        pool.replace_root(root)?;
         Ok(pool)
     }
 
@@ -629,6 +643,9 @@ where
     /// freed).
     pub fn reroot(&mut self, h: NodeHandle) -> Result<(), SearchError> {
         let slot = self.resolve(h)?;
+        if self.mode == crate::determinize::RootMode::Determinized {
+            return Err(SearchError::DeterminizedReroot);
+        }
         self.mark_subtree(slot);
         if let Some(held) = self.held_outside() {
             return Err(SearchError::Held { slot: held });
@@ -664,9 +681,19 @@ where
     ///
     /// # Errors
     ///
-    /// A held node, an exhausted allocation counter, or no usable slot
-    /// (nothing is changed).
+    /// [`SearchError::DeterminizedPool`] on a pool made by
+    /// `new_determinized`, whose roots come only from
+    /// `set_root_determinized`; a held node, an exhausted allocation
+    /// counter, or no usable slot (nothing is changed).
     pub fn set_root(&mut self, record: &Record<E>) -> Result<NodeHandle, SearchError> {
+        if self.mode == crate::determinize::RootMode::Determinized {
+            return Err(SearchError::DeterminizedPool);
+        }
+        self.replace_root(record)
+    }
+
+    /// [`Self::set_root`] without the mode check.
+    pub(crate) fn replace_root(&mut self, record: &Record<E>) -> Result<NodeHandle, SearchError> {
         self.protected.fill(false);
         if let Some(held) = self.held_outside() {
             return Err(SearchError::Held { slot: held });
@@ -1005,8 +1032,8 @@ where
     M: MaskProvider<E>,
 {
     /// A digest of the whole tree (records, nodes, edges, rewards, the free
-    /// list, the root and the counter), for tests of atomicity and of
-    /// determinism.
+    /// list, the root and the counter, and the privileged label when
+    /// set), for tests of atomicity and of determinism.
     #[must_use]
     pub fn tree_hash(&self) -> u64 {
         let mut out = Encoder::new(HashSink::new());
@@ -1036,6 +1063,12 @@ where
         }
         out.write_bytes(&self.root.to_le_bytes());
         out.write_bytes(&self.next_alloc.to_le_bytes());
+        // A privileged tree never hashes equal to a non-privileged one.
+        // The label is folded in only when set, so every other hash,
+        // golden values included, is unchanged.
+        if self.mode == crate::determinize::RootMode::Privileged {
+            out.write_bytes(b"privileged");
+        }
         out.sink().digest()
     }
 }

@@ -73,8 +73,14 @@ fn entries() -> Vec<u64> {
     once("restore_pool_context", || p.restore_pool_context(ctx)).unwrap();
     once("state_hash", || p.state_hash(0)).unwrap();
     once("step", || p.step(ACT).map(|_| ())).unwrap();
+    // A subnormal result: flushed to zero outside the canonical scope.
+    let half = once("contain", || {
+        p.contain(|_| core::hint::black_box(f32::MIN_POSITIVE) / 2.0)
+    })
+    .unwrap();
     (0..2)
         .map(|i| p.snapshot(i).unwrap().hash().get())
+        .chain([u64::from(half.to_bits())])
         .collect()
 }
 

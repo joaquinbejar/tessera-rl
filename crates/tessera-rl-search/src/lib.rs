@@ -9,6 +9,7 @@
 //! everything before it changes the tree, so an error leaves the tree and
 //! its counters exactly as they were.
 
+mod determinize;
 mod error;
 mod evaluator;
 mod evict;
@@ -20,6 +21,10 @@ mod noise;
 mod options;
 mod pool;
 
+pub use determinize::{
+    Determinization, ROLLOUT, SAMPLER, rollout_identity, rollout_salt, sampler_identity,
+    sampler_salt,
+};
 pub use error::SearchError;
 pub use evaluator::{Evaluator, EvaluatorError, LeafBatch, PRIOR_SUM_TOLERANCE};
 pub use group::{
