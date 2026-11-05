@@ -30,6 +30,8 @@ tessera-rl-games.workspace = true
 tessera-rl-search.workspace = true
 
 [dev-dependencies]
+# The shared panic-injection fixture of the engine's tests.
+tessera-rl-macros = { workspace = true }
 # Hostile floating-point modes for the boundary tests (ADR-0041).
 tessera-rl-num = { workspace = true, features = ["test-hooks"] }
 

@@ -407,11 +407,12 @@ fn half_output(g: Gil, inner: &Inner, split: &dyn SplitOps, out: &HalfOutput) ->
         })?;
         let set = set.ok_or_else(no_format(g))?;
         let generations = split.half_generations();
+        let poisoned = split.poison_flag();
         views_dict(
             g,
             &set,
             &storage,
-            Some((&generations, out.half, out.generation)),
+            Some((&generations, out.half, out.generation, &poisoned)),
         )?
     };
     let d = capi::dict(g)?;
@@ -602,7 +603,7 @@ fn views_dict(
     g: Gil,
     set: &ViewSet,
     storage: &Arc<OutputStorage>,
-    half: Option<(&HalfGenerations, usize, u64)>,
+    half: Option<(&HalfGenerations, usize, u64, &Arc<AtomicBool>)>,
 ) -> CResult<Mine> {
     let d = capi::dict(g)?;
     let obs = list_of(

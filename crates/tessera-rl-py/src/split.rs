@@ -11,7 +11,7 @@
 
 use core::any::Any;
 use core::ops::Range;
-use core::sync::atomic::AtomicBool;
+use core::sync::atomic::{AtomicBool, Ordering};
 
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread::ThreadId;
@@ -24,6 +24,18 @@ use tessera_rl_engine::{
 use tessera_rl_num::identity::Seed;
 
 use crate::env::{BindError, Layout, Owned, PoolOps, ResetSeed};
+
+/// Whether a half view's window has ended: its half has a new generation, or
+/// the pool is poisoned, whose rows a failed writer may have partly written.
+/// Poison advances no generation (ADR-0047 section 5).
+pub(crate) fn half_stale(
+    generations: &HalfGenerations,
+    half: usize,
+    taken: u64,
+    poisoned: &AtomicBool,
+) -> bool {
+    poisoned.load(Ordering::Acquire) || generations.half(half) != Some(taken)
+}
 
 /// One half's outputs: which half, its generation captured under the mutex
 /// together with its token, and a copy of its rows in `owned` mode.
@@ -55,6 +67,8 @@ pub(crate) trait SplitOps: Send + Sync {
     fn storage(&self) -> Arc<OutputStorage>;
     fn halves(&self) -> [Range<usize>; 2];
     fn half_generations(&self) -> HalfGenerations;
+    /// Set while the pool is poisoned, as of its last call; views read it.
+    fn poison_flag(&self) -> Arc<AtomicBool>;
     /// Held by the one running `recv`.
     fn receiving(&self) -> &AtomicBool;
     fn waiter(&self) -> &Waiter;
@@ -110,6 +124,7 @@ struct SplitPool<E: Environment, M: MaskProvider<E>> {
     storage: Arc<OutputStorage>,
     halves: [Range<usize>; 2],
     generations: HalfGenerations,
+    poisoned: Arc<AtomicBool>,
     /// A record to size snapshot buffers with.
     template: Record<E>,
     receiving: AtomicBool,
@@ -171,6 +186,11 @@ where
             .map_err(|_| BindError::Engine(EngineError::Poisoned))
     }
 
+    /// Publishes the pool's poison to views, before the call returns.
+    fn note_poison(&self, pool: &PipelinedPool<E, M>) {
+        self.poisoned.store(pool.is_poisoned(), Ordering::Release);
+    }
+
     fn output(&self, half: usize, seq: u64, token: &HalfToken<E, M>, owned: bool) -> HalfOutput {
         HalfOutput {
             half,
@@ -202,6 +222,10 @@ where
         self.generations.clone()
     }
 
+    fn poison_flag(&self) -> Arc<AtomicBool> {
+        Arc::clone(&self.poisoned)
+    }
+
     fn receiving(&self) -> &AtomicBool {
         &self.receiving
     }
@@ -226,7 +250,9 @@ where
                 Reseed::Each(&seeds)
             }
         };
-        let [a, b] = pool.reset_all(reseed)?;
+        let result = pool.reset_all(reseed);
+        self.note_poison(pool);
+        let [a, b] = result?;
         let out = [self.output(0, 0, &a, owned), self.output(1, 0, &b, owned)];
         state.tokens = [Some(a), Some(b)];
         state.pending = None;
@@ -260,6 +286,7 @@ where
                 continuous: &[],
             },
         );
+        self.note_poison(pool);
         result.map_err(|e| {
             if let Some(slot) = state.tokens.get_mut(index) {
                 *slot = e.token;
@@ -281,7 +308,9 @@ where
                 Polled::Busy
             });
         }
-        let Some(token) = pool.try_recv()? else {
+        let received = pool.try_recv();
+        self.note_poison(pool);
+        let Some(token) = received? else {
             let oldest = pool.oldest_half().unwrap_or(0);
             return Ok(Polled::Running(usize::try_from(oldest).unwrap_or(0)));
         };
@@ -320,7 +349,9 @@ where
         let pool = state.pool.as_mut().ok_or_else(closed)?;
         // The FFI release, as in `reset`.
         state.tokens = [None, None];
-        pool.restore_all(&taken.records, &taken.cycles)?;
+        let restored = pool.restore_all(&taken.records, &taken.cycles);
+        self.note_poison(pool);
+        restored?;
         let a = pool.idle_token(0)?;
         let b = pool.idle_token(1)?;
         let out = [self.output(0, 0, &a, owned), self.output(1, 0, &b, owned)];
@@ -433,6 +464,7 @@ where
         storage,
         halves,
         generations,
+        poisoned: Arc::new(AtomicBool::new(false)),
         template,
         receiving: AtomicBool::new(false),
         waiter,
@@ -440,6 +472,10 @@ where
     });
     Box::new(SplitHandle { ops, layout })
 }
+
+#[cfg(test)]
+#[path = "../../tessera-rl-engine/tests/common/mod.rs"]
+mod common;
 
 #[cfg(test)]
 mod tests {
@@ -511,6 +547,90 @@ mod tests {
         assert_eq!((first.seq, first.half), (again.seq, again.half));
         assert!(split.send(0, &[0; 4], 0).is_err());
         split.send(0, &[0; 4], first.seq).unwrap();
+        split.close();
+    }
+
+    fn counter(cfg: &super::common::CountConfig) -> Arc<dyn SplitOps> {
+        let mut options = tessera_rl_engine::PoolOptions::new(
+            core::num::NonZeroU32::new(8).unwrap(),
+            Seed::new(1),
+        );
+        options.chunk_size = core::num::NonZeroU32::new(2).unwrap();
+        let pool =
+            tessera_rl_engine::EnvPool::<super::common::Counter, tessera_rl_engine::NoMasks>::new(
+                cfg.clone(),
+                options,
+            )
+            .unwrap();
+        let args = PoolArgs {
+            num_envs: 8,
+            seed: 1,
+            max_episode_steps: None,
+            auto_reset: "next_step".to_owned(),
+            chunk_size: Some(2),
+            workers: 2,
+            pipelined: true,
+        };
+        crate::env::finish(cfg, pool, &args, 8, false)
+            .unwrap()
+            .split()
+            .unwrap()
+    }
+
+    /// A panic during a reset advances no generation, yet a view must not
+    /// report fresh over rows the reset may have partly written.
+    #[test]
+    fn test_split_panic_during_reset_makes_views_stale() {
+        let split = counter(&super::common::CountConfig {
+            panic_on_reset: true,
+            ..super::common::CountConfig::default()
+        });
+        let gens = split.half_generations();
+        let taken = gens.half(0).unwrap();
+        let flag = split.poison_flag();
+        assert!(!half_stale(&gens, 0, taken, &flag));
+        assert!(split.reset(&ResetSeed::Keep, false).is_err());
+        assert!(split.is_poisoned());
+        assert_eq!(gens.half(0), Some(taken), "no generation advanced");
+        assert!(half_stale(&gens, 0, taken, &flag));
+        split.close();
+    }
+
+    /// A step's panic marks the other half's views too; a recovering reset
+    /// gives new views that are fresh, and old ones stay stale.
+    #[test]
+    fn test_split_poison_ends_views_and_recovery_clears_it() {
+        let split = counter(&super::common::CountConfig {
+            panic_at: 1,
+            length: 9,
+            ..super::common::CountConfig::default()
+        });
+        split.reset(&ResetSeed::Keep, false).unwrap();
+        let gens = split.half_generations();
+        let flag = split.poison_flag();
+        let other = gens.half(1).unwrap();
+        let rows = split.halves()[0].len() * <super::common::Counter as Environment>::MAX_AGENTS;
+        split.send(0, &vec![0; rows], 0).unwrap();
+        let failed = loop {
+            match split.try_recv(false, 0) {
+                Ok(Polled::Running(h)) => {
+                    let _ = split
+                        .waiter()
+                        .wait_half(h, core::time::Duration::from_millis(1));
+                }
+                Ok(other) => panic!("expected a panic, got {other:?}"),
+                Err(e) => break e,
+            }
+        };
+        assert!(matches!(
+            failed,
+            BindError::Engine(EngineError::Panicked | EngineError::Poisoned)
+        ));
+        assert!(half_stale(&gens, 1, other, &flag));
+        split.reset(&ResetSeed::Keep, false).unwrap();
+        assert!(half_stale(&gens, 1, other, &flag), "old view stays stale");
+        let fresh = gens.half(1).unwrap();
+        assert!(!half_stale(&gens, 1, fresh, &flag), "new view is fresh");
         split.close();
     }
 }

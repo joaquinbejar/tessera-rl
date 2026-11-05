@@ -392,7 +392,7 @@ fn options(args: &PoolArgs) -> Result<(PoolOptions, usize), BindError> {
 
 /// The environment object of `pool`, in the mode of `args`. Pipelined mode
 /// needs workers, one by default.
-fn finish<E, M>(
+pub(crate) fn finish<E, M>(
     cfg: &E::Config,
     pool: EnvPool<E, M>,
     args: &PoolArgs,
