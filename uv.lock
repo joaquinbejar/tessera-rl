@@ -751,6 +751,9 @@ dependencies = [
 gymnasium = [
     { name = "gymnasium" },
 ]
+pettingzoo = [
+    { name = "pettingzoo" },
+]
 
 [package.dev-dependencies]
 conformance = [
@@ -765,6 +768,7 @@ conformance = [
 test = [
     { name = "gymnasium" },
     { name = "numpy" },
+    { name = "pettingzoo" },
     { name = "pytest" },
 ]
 torch = [
@@ -776,8 +780,9 @@ torch = [
 requires-dist = [
     { name = "gymnasium", marker = "extra == 'gymnasium'", specifier = ">=1.4.0,<2" },
     { name = "numpy", specifier = ">=1.26.4" },
+    { name = "pettingzoo", marker = "extra == 'pettingzoo'", specifier = ">=1.27.0,<2" },
 ]
-provides-extras = ["gymnasium"]
+provides-extras = ["gymnasium", "pettingzoo"]
 
 [package.metadata.requires-dev]
 conformance = [
@@ -792,6 +797,7 @@ conformance = [
 test = [
     { name = "gymnasium", specifier = "==1.4.0" },
     { name = "numpy", specifier = "==2.4.6" },
+    { name = "pettingzoo", specifier = "==1.27.0" },
     { name = "pytest", specifier = "==9.2.0" },
 ]
 torch = [

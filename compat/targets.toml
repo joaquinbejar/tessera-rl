@@ -38,8 +38,8 @@ pettingzoo = "1.24.1"
 numpy = "1.26.4"
 
 # Profiles for `make check-targets PROFILE=...`: which targets must be
-# installed (required: a missing one fails the check) and which belong to a
-# later phase (deferred: listed, never failed). Every name refers to a pin
+# installed (required: a missing one fails the check) and which are only
+# reported (deferred: listed with their state, never failed). Every name refers to a pin
 # above in the profile's environment.
 # The bare tool environment (no dependency group): only Python is checked.
 [profile.b1]
@@ -49,13 +49,13 @@ deferred = ["gymnasium", "pettingzoo", "numpy", "torch", "jax", "onnxruntime"]
 
 [profile.test]
 env = "main"
-required = ["numpy", "gymnasium"]
-deferred = ["pettingzoo", "torch", "jax", "onnxruntime"]
+required = ["numpy", "gymnasium", "pettingzoo"]
+deferred = ["torch", "jax", "onnxruntime"]
 
 [profile.torch]
 env = "main"
-required = ["numpy", "gymnasium", "torch"]
-deferred = ["pettingzoo", "jax", "onnxruntime"]
+required = ["numpy", "gymnasium", "pettingzoo", "torch"]
+deferred = ["jax", "onnxruntime"]
 
 [profile.conformance]
 env = "main"

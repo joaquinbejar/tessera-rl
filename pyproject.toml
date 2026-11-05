@@ -13,6 +13,8 @@ dependencies = ["numpy>=1.26.4"]
 [project.optional-dependencies]
 # tessera_rl.gym (the Gymnasium 1.x vector adapter).
 gymnasium = ["gymnasium>=1.4.0,<2"]
+# tessera_rl.pz (the PettingZoo AEC and Parallel adapters).
+pettingzoo = ["pettingzoo>=1.27.0,<2"]
 
 [build-system]
 requires = ["maturin>=1.16,<2"]
@@ -29,6 +31,7 @@ test = [
     "pytest==9.2.0",
     "numpy==2.4.6",
     "gymnasium==1.4.0",
+    "pettingzoo==1.27.0",
 ]
 # Only for the PyTorch DLPack and read-only tests (pytest marker `torch`).
 torch = ["torch==2.15.0"]
