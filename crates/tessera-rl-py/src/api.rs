@@ -196,6 +196,21 @@ pub(crate) fn make_cartpole(g: Gil, kwargs: Option<Ref<'_>>) -> CResult<Inner> {
     Ok(Inner::new(ops, borrowed))
 }
 
+/// `make_grid(**kwargs)`: the pool of a reference grid world environment
+/// object. The world truncates at `max_steps`, and the engine's own limit is
+/// set above the largest value, so it never acts first.
+pub(crate) fn make_grid(g: Gil, kwargs: Option<Ref<'_>>) -> CResult<Inner> {
+    let kw = Kwargs::parse(g, kwargs)?;
+    kw.check(g, &[&POOL_KEYS, &["outputs", "size", "max_steps"]])?;
+    let borrowed = borrowed(g, &kw)?;
+    let args = pool_args(g, &kw, 10_001)?;
+    let (size, max_steps) = (kw.u32(g, "size")?, kw.u32(g, "max_steps")?);
+    let ops = g
+        .detach(|| crate::env::grid(&args, size, max_steps))
+        .map_err(|e| to_py(g, e))?;
+    Ok(Inner::new(ops, borrowed))
+}
+
 const TAG_KEYS: [&str; 7] = [
     "width", "height", "pursuers", "evaders", "slip", "radius", "outputs",
 ];

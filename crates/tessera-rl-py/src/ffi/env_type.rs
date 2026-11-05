@@ -271,13 +271,14 @@ macro_rules! maker {
 
 maker!(make_cartpole, api::make_cartpole);
 maker!(make_tag, api::make_tag);
+maker!(make_grid, api::make_grid);
 maker!(make_connect4, api::make_connect4);
 maker!(make_leduc, api::make_leduc);
 maker!(make_othello, api::make_othello);
 maker!(make_go9, api::make_go9);
 
 /// The module-level constructors, for the module's method table.
-pub(super) const MAKERS: [ffi::PyMethodDef; 6] = [
+pub(super) const MAKERS: [ffi::PyMethodDef; 7] = [
     method_kw(
         c"make_cartpole",
         thunks::MAKE_CARTPOLE,
@@ -307,5 +308,10 @@ pub(super) const MAKERS: [ffi::PyMethodDef; 6] = [
         c"make_go9",
         thunks::MAKE_GO9,
         c"make_go9(**pool_options, komi_half_points=15) -> Env",
+    ),
+    method_kw(
+        c"make_grid",
+        thunks::MAKE_GRID,
+        c"make_grid(**pool_options, size=16, max_steps=200) -> Env",
     ),
 ];

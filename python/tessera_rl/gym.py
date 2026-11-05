@@ -58,7 +58,7 @@ from tessera_rl import _native
 from tessera_rl._env import _discrete_actions, native_kwargs
 
 #: Single-agent environments the adapter exposes.
-_MAKERS = {"tessera/CartPole-v1": _native.make_cartpole}
+_MAKERS = {"tessera/CartPole-v1": _native.make_cartpole, "tessera/Grid-v1": _native.make_grid}
 
 _NATIVE_MODE = {
     AutoresetMode.NEXT_STEP: "next_step",
@@ -93,8 +93,9 @@ def _single_space(layout) -> spaces.Space:
     boxes = {}
     for name, dtype, shape, low, high in layout["leaves"]:
         dt = np.dtype(dtype)
-        lo = np.asarray(low, dtype=np.float64).reshape(shape)
-        hi = np.asarray(high, dtype=np.float64).reshape(shape)
+        # A leaf declares one bound per element or a single one for all.
+        lo = np.broadcast_to(np.asarray(low, dtype=np.float64), shape)
+        hi = np.broadcast_to(np.asarray(high, dtype=np.float64), shape)
         boxes[name or "obs"] = spaces.Box(low=lo.astype(dt), high=hi.astype(dt), shape=tuple(shape), dtype=dt)
     if list(boxes) == ["obs"]:
         return boxes["obs"]

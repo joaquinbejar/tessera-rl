@@ -82,6 +82,11 @@ the API is not stable, and any 0.x release may break it.
   fixtures, continuation tests, an independent reference, a scripted baseline
   and step and fork benches. In Python it is available through `make` and the
   PettingZoo `aec_env`.
+- **Reference grid world** (`tessera/Grid-v1`, `tessera-rl-classic`): the
+  example of SPEC section 10, with its 16-byte state; one agent, a goal drawn
+  at reset, `Discrete(4)` and a full view. Golden fixtures, continuation tests,
+  a test reference, a scripted baseline and a step bench. In Python it is
+  available through `make` and the Gymnasium adapter.
 - **Python search**: `Search.is_privileged`, `False` for every search
   Python can build today.
 - **Engine** (`tessera-rl-engine`): `EnvPool::config`, and `EnvPool::contain`,

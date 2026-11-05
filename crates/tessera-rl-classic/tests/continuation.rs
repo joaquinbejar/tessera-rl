@@ -17,7 +17,7 @@ mod support;
 
 use support::continuation::Case;
 use tessera_rl_classic::cartpole::MAX_EPISODE_STEPS;
-use tessera_rl_classic::{CartPole, CartPoleConfig, Tag, TagConfig};
+use tessera_rl_classic::{CartPole, CartPoleConfig, Grid, GridConfig, Tag, TagConfig};
 use tessera_rl_engine::{AutoReset, EnvPool, Masked, NoMasks};
 
 fn cartpole(auto_reset: AutoReset) -> Case<CartPole, NoMasks> {
@@ -66,4 +66,31 @@ fn test_continuation_tag_next_step_restores_identically_everywhere() {
 #[test]
 fn test_continuation_tag_same_step_restores_identically_everywhere() {
     tag(AutoReset::SameStep).check_all(50);
+}
+
+#[expect(clippy::unwrap_used, reason = "test setup: a failure is the assertion")]
+fn grid(auto_reset: AutoReset) -> Case<Grid, NoMasks> {
+    Case {
+        cfg: GridConfig {
+            size: 6,
+            max_steps: 40,
+        },
+        build: |cfg, options| EnvPool::new(cfg, options).unwrap(),
+        auto_reset,
+        limit: 64,
+        deaths: false,
+        // The goal is drawn at each reset, and walks here end within the
+        // harness's horizon, so a branch diverges at its next auto-reset.
+        branches: true,
+    }
+}
+
+#[test]
+fn test_continuation_grid_next_step_restores_identically_everywhere() {
+    grid(AutoReset::NextStep).check_all(50);
+}
+
+#[test]
+fn test_continuation_grid_same_step_restores_identically_everywhere() {
+    grid(AutoReset::SameStep).check_all(50);
 }
