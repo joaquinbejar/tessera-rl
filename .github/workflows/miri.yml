@@ -31,5 +31,7 @@ jobs:
       # The gang's job publication and trampoline (ADR-0047); FP control
       # asm and address waits are stubbed under cfg(miri), the protocol is not.
       - run: "cargo +nightly miri test -p tessera-rl-engine --lib --locked sys::gang::"
+      # The Async id rings and token id buffers (ADR-0047): atomics only.
+      - run: "cargo +nightly miri test -p tessera-rl-engine --lib --locked -- sys::ring:: sys::id_buffers::"
       # DLPack export ownership (ADR-0003 rule 1), without an interpreter.
       - run: cargo +nightly miri test -p tessera-rl-py --lib --locked ffi::dlpack
