@@ -257,6 +257,40 @@ fn test_signal_waiter_never_misses_a_notify() {
     });
 }
 
+/// The counted-wake protocol as a backend uses it: the waiter blocks, and
+/// only a notifier whose `notify` returned `true` wakes it. A notify that
+/// skips a registered waiter (or a registration the notifier cannot see)
+/// leaves the waiter blocked, which the model reports.
+#[test]
+fn test_signal_counted_wake_wakes_exactly_when_a_waiter_is_registered() {
+    model(|| {
+        let signal = Arc::new(Signal::new());
+        let ready = Arc::new(AtomicU32::new(0));
+        let woken = Arc::new(AtomicU32::new(0));
+        let notifier = {
+            let signal = Arc::clone(&signal);
+            let ready = Arc::clone(&ready);
+            let woken = Arc::clone(&woken);
+            thread::spawn(move || {
+                ready.store(1, Ordering::SeqCst);
+                if signal.notify() {
+                    // The backend's wake.
+                    woken.store(1, Ordering::SeqCst);
+                }
+            })
+        };
+        let _value = signal.register();
+        if ready.load(Ordering::SeqCst) == 0 {
+            // Blocked until the backend wakes this waiter.
+            while woken.load(Ordering::SeqCst) == 0 {
+                thread::yield_now();
+            }
+        }
+        signal.unregister();
+        notifier.join().unwrap();
+    });
+}
+
 /// A submission ring shared by `Arc` in the tests: the real caller owns
 /// its ring with `&mut`, which a test cannot share with spawned threads, so
 /// this adapter reaches the producer side through `&self`. Only the model's
@@ -305,13 +339,7 @@ fn test_ring_stalled_id_while_others_cycle_loses_nothing() {
     // One id is claimed and held (a stalled instance) while the others are
     // submitted, claimed, completed and resubmitted many times.
     let n = 4;
-    let rounds = if cfg!(miri) {
-        50
-    } else if cfg!(loom) {
-        0
-    } else {
-        100_000
-    };
+    let rounds = if cfg!(miri) { 50 } else { 100_000 };
     let mut submit = SubmitRing::new(n).unwrap();
     let mut done = CompletionRing::new(n).unwrap();
     for id in 0..u32::try_from(n).unwrap() {
