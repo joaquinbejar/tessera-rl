@@ -831,3 +831,40 @@ fn test_othello_baseline_beats_a_uniform_player() {
     }
     assert_eq!(wins, 866, "{wins} wins of {games}");
 }
+
+// The two review probes of PR 86, kept as written apart from the names.
+#[test]
+fn test_othello_validate_rejects_a_120_ply_terminal_board() {
+    let s = OthelloState {
+        stones: [0x0000_0000_ffff_ffff, 0xffff_ffff_0000_0000],
+        moves: 120,
+        ..OthelloState::default()
+    };
+    assert!(s.is_over());
+    assert!(s.moves > MAX_PLIES);
+    assert!(
+        Othello::validate(&CFG, &s).is_err(),
+        "Validate accepted a terminal state beyond MAX_PLIES"
+    );
+}
+
+#[test]
+fn test_othello_import_rejects_a_120_ply_terminal_board() {
+    let mut p = pool();
+    for a in WIPEOUT {
+        play(&mut p, a);
+    }
+    let rec = DecodedRecord::from(p.snapshot(0).unwrap());
+    let s = OthelloState {
+        stones: [0x0000_0000_ffff_ffff, 0xffff_ffff_0000_0000],
+        moves: 120,
+        ..OthelloState::default()
+    };
+    let bad = DecodedRecord::from_parts(*rec.header(), s).unwrap();
+    let before = p.state_hash(0).unwrap();
+    assert!(
+        p.import(&[0], &[bad]).is_err(),
+        "import accepted a terminal state beyond MAX_PLIES"
+    );
+    assert_eq!(p.state_hash(0).unwrap(), before);
+}
