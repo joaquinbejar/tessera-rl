@@ -36,9 +36,16 @@ jobs:
       # The Pipelined mode end to end (ADR-0047); the 64-worker comparison is
       # too slow under Miri and runs natively.
       - run: "cargo +nightly miri test -p tessera-rl-engine --test pipelined --locked -- --skip bit_for_bit"
-      # The Async mode end to end (ADR-0047); the 64-worker comparison is too
-      # slow under Miri and runs natively, and the forgotten-token test leaks
-      # its allocation by design (`mem::forget`).
-      - run: "cargo +nightly miri test -p tessera-rl-engine --test async_mode --locked -- --skip per_instance --skip forgotten"
+      # The Async mode end to end (ADR-0047), including the snapshot taken
+      # while other ids run; under Miri the per-instance identity test runs
+      # with 2 workers only.
+      - run: "cargo +nightly miri test -p tessera-rl-engine --test async_mode --locked -- --skip forgotten"
+      # The forgotten-token test leaks its allocation by design (`mem::forget`).
+      - run: "cargo +nightly miri test -p tessera-rl-engine --test async_mode --locked -- forgotten"
+        env:
+          MIRIFLAGS: -Zmiri-env-forward=PROPTEST_DISABLE_FAILURE_PERSISTENCE -Zmiri-ignore-leaks
+      # The Async injected-jitter identity test and the drain of unpublished
+      # ids, with 2 workers under Miri.
+      - run: "cargo +nightly miri test -p tessera-rl-engine --lib --locked modes::async_jitter_tests::"
       # DLPack export ownership (ADR-0003 rule 1), without an interpreter.
       - run: cargo +nightly miri test -p tessera-rl-py --lib --locked ffi::dlpack

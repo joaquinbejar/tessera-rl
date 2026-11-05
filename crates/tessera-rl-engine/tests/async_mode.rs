@@ -26,7 +26,8 @@ use tessera_rl_num::identity::Seed;
 const N: u32 = 100;
 const CHUNK: u32 = 8;
 const BATCH: usize = 10;
-const STEPS: usize = 12;
+/// Steps per instance in the identity test (fewer under Miri).
+const STEPS: usize = if cfg!(miri) { 3 } else { 12 };
 
 type Pool = EnvPool<Counter, Masked>;
 type Asy = AsyncPool<Counter, Masked>;
@@ -227,7 +228,9 @@ fn test_async_matches_sync_per_instance_for_1_2_7_and_64_workers() {
         let hashes: Vec<u64> = (0..N)
             .map(|i| reference.state_hash(i).unwrap().get())
             .collect();
-        for workers in [1, 2, 7, 64] {
+        // Under Miri, one small-worker run keeps the job short.
+        let counts: &[usize] = if cfg!(miri) { &[2] } else { &[1, 2, 7, 64] };
+        for &workers in counts {
             // Batches of one, so every id comes back as soon as it is done
             // and the run never waits on a batch it cannot fill.
             let mut p = asy_with(mode, workers, 1, cfg());
@@ -718,4 +721,188 @@ fn test_async_debug_checks_out_of_range_value_reports_what_sync_reports() {
     // Instance 1 holds the bad value; send it with instance 0, in that order.
     let err = p.send(&[0, 1], input(&bad[..4])).unwrap_err();
     assert_eq!(err, sync_err);
+}
+
+/// A snapshot while other ids run would read through the whole pool's
+/// buffers while workers write some rows: it is refused (Miri checks the
+/// accepted case has no race).
+#[test]
+fn test_async_snapshot_while_other_ids_run_is_refused_or_race_free() {
+    let mut p = asy(AutoReset::NextStep, 2);
+    drop(p.reset_all(Reseed::Keep).unwrap());
+    let ids: Vec<u32> = (1..41).collect();
+    send(&mut p, &ids, &rows_for(&ids, &[0; 100]));
+    match p.snapshot(0) {
+        Ok(_) | Err(EngineError::NotQuiescent) => {}
+        Err(e) => panic!("unexpected {e:?}"),
+    }
+    // Once every sent id has finished, the snapshot is accepted.
+    let mut got = 0;
+    while got < ids.len() {
+        got += p.recv().unwrap().len();
+    }
+    p.snapshot(0).unwrap();
+}
+
+/// An id discarded by `reset_all` (completed, not yet received) can be sent
+/// again and is never delivered twice.
+#[test]
+fn test_async_ids_discarded_by_reset_all_are_sendable_and_never_delivered() {
+    let mut p = asy(AutoReset::NextStep, 2);
+    drop(p.reset_all(Reseed::Keep).unwrap());
+    // Three ids cannot fill a batch of ten: they complete and wait.
+    send(&mut p, &[0, 1, 2], &rows_for(&[0, 1, 2], &[0; 100]));
+    let all = loop {
+        match p.reset_all(Reseed::Keep) {
+            Ok(t) => break t,
+            Err(EngineError::NotQuiescent) => std::thread::yield_now(),
+            Err(e) => panic!("unexpected {e:?}"),
+        }
+    };
+    drop(all);
+    let ids: Vec<u32> = (0..10).collect();
+    send(&mut p, &ids, &rows_for(&ids, &[0; 100]));
+    let t = p.recv().unwrap();
+    let mut got: Vec<u32> = t.ids().collect();
+    got.sort_unstable();
+    assert_eq!(got, ids, "each id once, none of the discarded ones again");
+    drop(t);
+    assert_eq!(p.recv().map(|_| ()), Err(EngineError::NothingInFlight));
+}
+
+/// Under `debug-checks`, a resent token runs the same legality pass as a
+/// send: an action Sync refuses is refused, and the token comes back.
+#[cfg(feature = "debug-checks")]
+#[test]
+fn test_async_debug_checks_send_batch_refuses_what_sync_refuses() {
+    let mut reference = sync_pool(AutoReset::NextStep);
+    reference.reset_all(Reseed::Keep).unwrap();
+    let mut bad = all_actions(0);
+    let mut refused = None;
+    for k in 0..bad.len() {
+        let mut probe = bad.clone();
+        probe[k] = 2;
+        if let Err(e) = reference.step(input(&probe))
+            && matches!(e, EngineError::IllegalAction { .. })
+        {
+            bad = probe;
+            refused = Some(e);
+            break;
+        }
+    }
+    let sync_err = refused.unwrap();
+    let mut p = asy(AutoReset::NextStep, 2);
+    let all = p.reset_all(Reseed::Keep).unwrap();
+    let err = p.send_batch(all, input(&bad)).unwrap_err();
+    assert_eq!(err.error, sync_err);
+    assert!(err.token.is_some(), "the token comes back");
+}
+
+// Codex's #84 probes (attachment 999), as regression tests.
+
+#[cfg(feature = "debug-checks")]
+#[test]
+fn test_review_send_batch_checks_mask_legality() {
+    let mut p = asy(AutoReset::NextStep, 2);
+    let token = p.reset_all(Reseed::Keep).unwrap();
+    let mut bad = all_actions(0);
+    bad[0] = 2;
+    let result = p.send_batch(token, input(&bad));
+    assert!(
+        matches!(result, Err(ref e) if matches!(e.error, EngineError::IllegalAction { .. })),
+        "send_batch accepted a masked-illegal action"
+    );
+}
+
+mod review_gate {
+    use super::{CountConfig, Counter};
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use tessera_rl_core::Environment;
+
+    pub static STARTED: AtomicBool = AtomicBool::new(false);
+    pub static RELEASE: AtomicBool = AtomicBool::new(false);
+
+    /// `Counter`, with a step that waits for the test to release it.
+    pub struct Gated;
+
+    impl Environment for Gated {
+        type State = <Counter as Environment>::State;
+        type Header = <Counter as Environment>::Header;
+        type Config = CountConfig;
+        type Obs = <Counter as Environment>::Obs;
+        type Action = ();
+        const MAX_AGENTS: usize = 2;
+        const TIER: tessera_rl_core::Tier = tessera_rl_core::Tier::CrossPlatform;
+        fn observation_space(
+            cfg: &CountConfig,
+        ) -> Result<tessera_rl_core::space::Space, tessera_rl_core::SpaceError> {
+            Counter::observation_space(cfg)
+        }
+        fn action_space(
+            cfg: &CountConfig,
+        ) -> Result<tessera_rl_core::space::Space, tessera_rl_core::SpaceError> {
+            Counter::action_space(cfg)
+        }
+        fn reset(
+            cfg: &CountConfig,
+            rng: &mut tessera_rl_num::rng::StepRng,
+            state: &mut Self::State,
+        ) {
+            Counter::reset(cfg, rng, state);
+        }
+        fn observe(
+            cfg: &CountConfig,
+            state: &Self::State,
+            agent: tessera_rl_core::AgentSlot,
+            rng: &mut tessera_rl_num::rng::ObsRng,
+            out: &mut tessera_rl_core::io::ObsWriter<'_, '_, Self::Obs>,
+        ) {
+            Counter::observe(cfg, state, agent, rng, out);
+        }
+        fn step(
+            cfg: &CountConfig,
+            state: &mut Self::State,
+            actions: &tessera_rl_core::io::Actions<'_, ()>,
+            rng: &mut tessera_rl_num::rng::StepRng,
+            out: &mut tessera_rl_core::StepOut<'_>,
+        ) {
+            STARTED.store(true, Ordering::SeqCst);
+            while !RELEASE.load(Ordering::SeqCst) {
+                std::thread::yield_now();
+            }
+            Counter::step(cfg, state, actions, rng, out);
+        }
+    }
+}
+
+/// A snapshot of an idle id while a worker is inside another id's step is
+/// refused (it would read every row through the pool's buffers); Miri runs
+/// this case.
+#[test]
+fn test_review_snapshot_idle_id_while_other_id_runs() {
+    use review_gate::{Gated, RELEASE, STARTED};
+    use std::sync::atomic::Ordering;
+    STARTED.store(false, Ordering::SeqCst);
+    RELEASE.store(false, Ordering::SeqCst);
+    let opt = PoolOptions {
+        chunk_size: NonZeroU32::new(1).unwrap(),
+        ..PoolOptions::new(NonZeroU32::new(2).unwrap(), Seed::new(1))
+    };
+    let mut p = EnvPool::<Gated>::new(cfg(), opt)
+        .unwrap()
+        .async_mode(AsyncOptions::new(
+            NonZeroUsize::new(1).unwrap(),
+            NonZeroUsize::new(1).unwrap(),
+        ))
+        .unwrap();
+    drop(p.reset_all(Reseed::Keep).unwrap());
+    p.send(&[0], input(&[0, 0])).unwrap();
+    while !STARTED.load(Ordering::SeqCst) {
+        std::thread::yield_now();
+    }
+    let result = p.snapshot(1);
+    RELEASE.store(true, Ordering::SeqCst);
+    assert_eq!(result.map(|_| ()), Err(EngineError::NotQuiescent));
+    drop(p.recv().unwrap());
+    p.snapshot(1).unwrap();
 }

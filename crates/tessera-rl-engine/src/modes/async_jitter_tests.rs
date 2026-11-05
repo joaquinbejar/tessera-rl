@@ -102,7 +102,7 @@ impl Environment for Walker {
 type Pool = EnvPool<Walker, NoMasks>;
 
 const N: u32 = 40;
-const STEPS: usize = 6;
+const STEPS: usize = if cfg!(miri) { 2 } else { 6 };
 
 fn options(mode: AutoReset) -> PoolOptions {
     PoolOptions {
@@ -187,7 +187,9 @@ fn test_async_injected_jitter_matches_sync_per_instance_for_1_2_7_and_64_workers
                 .unwrap();
             frames.push((0..N).map(|i| pool_frame(&reference, i)).collect());
         }
-        for workers in [1, 2, 7, 64] {
+        // Under Miri, one small-worker run keeps the job short.
+        let counts: &[usize] = if cfg!(miri) { &[2] } else { &[1, 2, 7, 64] };
+        for &workers in counts {
             let faults = Faults {
                 jitter_us: 300,
                 ..Faults::default()
@@ -252,5 +254,48 @@ fn test_async_injected_jitter_matches_sync_per_instance_for_1_2_7_and_64_workers
                 assert!(sorted > 0, "{workers} workers: completions were reordered");
             }
         }
+    }
+}
+
+/// Ids a send admitted with no job left to claim them (both jobs were past
+/// their last claim) are still stepped when the pool is drained: `into_pool`
+/// hands them back stepped, exactly as Sync steps them (TR m1 on #84).
+#[test]
+fn test_async_unpublished_ids_are_stepped_by_the_drain() {
+    let count = usize::try_from(N).unwrap();
+    let mut reference = Pool::new(WalkConfig {}, options(AutoReset::NextStep)).unwrap();
+    reference.reset_all(Reseed::Keep).unwrap();
+    let a: Vec<i32> = (0..count).flat_map(|i| row(0, i)).collect();
+    reference
+        .step(ActionInput {
+            discrete: &a,
+            continuous: &[],
+        })
+        .unwrap();
+    let mut pool = Pool::new(WalkConfig {}, options(AutoReset::NextStep))
+        .unwrap()
+        .async_mode(AsyncOptions::new(
+            NonZeroUsize::new(2).unwrap(),
+            NonZeroUsize::new(1).unwrap(),
+        ))
+        .unwrap();
+    drop(pool.reset_all(Reseed::Keep).unwrap());
+    let ids: Vec<u32> = (0..N).collect();
+    pool.send_unpublished(
+        &ids,
+        ActionInput {
+            discrete: &a,
+            continuous: &[],
+        },
+    )
+    .unwrap();
+    let back = pool.into_pool().map_err(|_| ()).unwrap();
+    assert!(!back.is_poisoned());
+    for id in 0..N {
+        assert_eq!(
+            back.state_hash(id).unwrap(),
+            reference.state_hash(id).unwrap(),
+            "id {id} was stepped once"
+        );
     }
 }

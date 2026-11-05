@@ -256,18 +256,24 @@ where
     }
 
     /// Instance `id`'s masks, `[A, mask length]`, for the debug-checks
-    /// legality pass of a send; `None` unless `id` is neither in flight nor
-    /// covered by a token (so nobody else touches its rows).
+    /// legality pass of a send. `owned` says the send's caller holds the
+    /// token that covers `id` by value (a resend), so no view of it is alive;
+    /// otherwise `id` must be uncovered. `None` if `id` is in flight or its
+    /// coverage does not match (then nobody else is known to leave its rows
+    /// alone, and the caller must refuse the send rather than skip the
+    /// check).
     #[cfg(feature = "debug-checks")]
-    pub(crate) fn idle_masks(&self, id: usize) -> Option<&[Bool8]> {
-        let busy = |flags: &[AtomicBool]| flags.get(id).is_none_or(|f| f.load(Ordering::Acquire));
-        if busy(&self.in_flight) || busy(&self.live) {
+    pub(crate) fn send_masks(&self, id: usize, owned: bool) -> Option<&[Bool8]> {
+        let set = |flags: &[AtomicBool]| flags.get(id).map(|f| f.load(Ordering::Acquire));
+        if set(&self.in_flight) != Some(false) || set(&self.live) != Some(owned) {
             return None;
         }
         let per = self.raw.agents.saturating_mul(self.raw.mask_len);
-        // SAFETY: `id` is idle (checked above), so no worker and no token
-        // writes its rows while `&self` is held (invariants 3 and 4).
-        #[expect(unsafe_code, reason = "audited module: idle rows")]
+        // SAFETY: `id` is not in flight and is either uncovered or covered
+        // by a token its caller holds by value (checked above), so no worker
+        // and no view writes or reads its rows mutably while `&self` is held
+        // (invariants 3 and 4).
+        #[expect(unsafe_code, reason = "audited module: admitted rows")]
         let view = unsafe { shared_view(&self.raw.masks, &(id..id.saturating_add(1)), per) };
         Some(view)
     }

@@ -342,7 +342,20 @@ where
     /// Waits for every job in flight (recovery and `into_pool`). A drained
     /// job that panicked poisons the wrapper.
     fn drain(&mut self) {
-        if self.runtime.drain()
+        let mut failed = self.runtime.drain();
+        // A send that found two jobs already past their last claim published
+        // nothing, so admitted ids can wait in the ring with no job left:
+        // publish until every admitted id is stepped (or no worker is left).
+        while self.running() != 0 && !self.dead() {
+            let mode = Arc::clone(&self.mode);
+            let published = self.runtime().and_then(|rt| publish(&mut rt.gang, &mode));
+            drop(mode);
+            if published.is_err() {
+                break;
+            }
+            failed |= self.runtime.drain();
+        }
+        if failed
             || self
                 .mode
                 .panicked
@@ -560,6 +573,8 @@ where
     /// # Errors
     ///
     /// [`EngineError::InFlight`] for a sent id not yet received,
+    /// [`EngineError::NotQuiescent`] while any sent id still runs (the
+    /// snapshot reads through the whole pool's buffers),
     /// [`EngineError::Poisoned`], or any error of [`EnvPool::snapshot`].
     pub fn snapshot(&self, id: u32) -> Result<Record<E>, EngineError> {
         if self.is_poisoned() {
@@ -573,6 +588,11 @@ where
             .is_some_and(|f| f.load(core::sync::atomic::Ordering::Acquire))
         {
             return Err(EngineError::InFlight { id });
+        }
+        // `EnvPool::snapshot` reads through slices over every instance, so
+        // no worker may be writing any row meanwhile (ADR-0047 section 3).
+        if self.running() != 0 {
+            return Err(EngineError::NotQuiescent);
         }
         self.mode.pool.snapshot(id)
     }
@@ -632,6 +652,34 @@ where
         self.pump(true)
     }
 
+    /// Test-only: a send whose ids are admitted to the ring with no drain
+    /// job published, the state a send leaves when two jobs are already past
+    /// their last claim.
+    #[cfg(test)]
+    pub(crate) fn send_unpublished(
+        &mut self,
+        ids: &[u32],
+        actions: ActionInput<'_>,
+    ) -> Result<(), EngineError> {
+        self.admit(ids, actions, None).0?;
+        for &id in ids {
+            self.generations
+                .advance_id(usize::try_from(id).unwrap_or(usize::MAX))
+                .map_err(|_| EngineError::SequenceExhausted)?;
+            if let Some(flag) = self
+                .mode
+                .in_flight
+                .get(usize::try_from(id).unwrap_or(usize::MAX))
+            {
+                flag.store(true, core::sync::atomic::Ordering::Release);
+            }
+            self.push_submission(id)?;
+        }
+        self.submitted = self.submitted.saturating_add(ids.len());
+        self.outstanding = self.outstanding.saturating_add(ids.len());
+        Ok(())
+    }
+
     /// Admits `id`, retrying while the ring is transiently full behind a
     /// paused claim (ADR-0047 section 7): at most N ids are outstanding, so
     /// the slot frees as soon as the claimer resumes.
@@ -657,6 +705,8 @@ where
         let mode = &self.mode;
         let layout = mode.pool.action_layout();
         let auto_reset = mode.pool.options.auto_reset;
+        #[cfg(feature = "debug-checks")]
+        let resend = owner.is_some();
         mode.admit(ids, &mut self.seen, owner, |rows| {
             crate::entry::canonical(|| {
                 // The same order as Sync: the boundary checks first, then
@@ -665,7 +715,7 @@ where
                 check_subset_actions(layout, auto_reset, rows, actions)?;
                 #[cfg(feature = "debug-checks")]
                 if M::ENABLED {
-                    legality(mode, rows, ids, layout, actions)?;
+                    legality(mode, rows, ids, layout, actions, resend)?;
                 }
                 copy_subset_actions(layout, rows, actions)
             })
@@ -1023,12 +1073,21 @@ fn legality<E: Environment, M: MaskProvider<E>, R: crate::validate::AdmittedRows
     ids: &[u32],
     layout: &crate::layout::ActionLayout,
     actions: ActionInput<'_>,
+    owned: bool,
 ) -> Result<(), EngineError> {
     let per = <E::Header as RecordLayout>::AGENTS.saturating_mul(layout.discrete.len());
     for (position, &id) in ids.iter().enumerate() {
         let i = usize::try_from(id).unwrap_or(usize::MAX);
-        let (Some(row), Some(masks)) = (rows.row(position), mode.idle_masks(i)) else {
-            continue;
+        // Never skip the check: an id whose masks cannot be read refuses the
+        // send (the admission checks make this unreachable).
+        let Some(masks) = mode.send_masks(i, owned) else {
+            return Err(EngineError::Borrowed { id });
+        };
+        let Some(row) = rows.row(position) else {
+            return Err(EngineError::InstanceOutOfRange {
+                id,
+                num_envs: u32::try_from(rows.instances()).unwrap_or(u32::MAX),
+            });
         };
         let start = position.saturating_mul(per);
         let input = actions
