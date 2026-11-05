@@ -20,9 +20,10 @@
 //!   in the pot and the loser its negation; a fold loses what the folder
 //!   put in. At showdown a pair with the public card wins, then the
 //!   higher rank; equal ranks split (0 to both). Every other step pays 0.
-//!   Rewards are in units of [`MAX_CONTRIBUTION`] chips (the largest a
-//!   player can lose), so they lie in `[-1, 1]` as two-player zero-sum
-//!   search requires (ADR-0043).
+//!   Rewards and returns are normalized: they are in units of
+//!   [`MAX_CONTRIBUTION`] (13) chips, the most a player can lose, so they
+//!   lie in `[-1, 1]` as two-player zero-sum search requires (ADR-0043).
+//!   Multiplying a reward or a return by 13 gives chips.
 //! - Ends: terminated on a fold or a showdown; at most 8 actions.
 //! - Observation: `Box(u8, [OBS_LEN])` from the observer's view: own
 //!   rank, public rank (3 before the deal), round, whether the observer

@@ -321,3 +321,30 @@ fn test_leduc_heuristic_plays_whole_hands_to_the_end() {
         assert!(steps <= 8);
     }
 }
+
+#[test]
+fn test_leduc_exact_chip_outcome_maps_to_chips_over_thirteen() {
+    use tessera_rl_games::leduc::MAX_CONTRIBUTION;
+    // Raise, raise, call; raise, call: each player has 1 + 4 + 4 = 9 in.
+    // Find a seed where slot 0 wins the showdown outright.
+    for seed in 0..512 {
+        let mut p = pool(seed);
+        for a in [RAISE, RAISE, CALL, RAISE, CALL] {
+            play(&mut p, a);
+        }
+        assert!(terminated(&p));
+        let s = *p.state(0).unwrap();
+        assert_eq!(s.contributions, [9, 9]);
+        if s.showdown() != 1 {
+            continue;
+        }
+        let [r0, r1] = rewards(&p);
+        assert_eq!(r0, 9.0 / 13.0);
+        assert_eq!(r1, -9.0 / 13.0);
+        assert_eq!(r0 + r1, 0.0, "zero-sum");
+        assert_eq!(MAX_CONTRIBUTION, 13);
+        assert_eq!((r0 * 13.0).round(), 9.0, "times 13 is chips");
+        return;
+    }
+    panic!("no seed where slot 0 wins");
+}

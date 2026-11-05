@@ -65,6 +65,9 @@
 //! | `tessera/Connect4-v1` | `tessera-rl-games` | 2 | `Discrete(7)`, masked, sequential |
 //! | `tessera/Leduc-v1` | `tessera-rl-games` | 2 | `Discrete(3)`, masked, sequential, imperfect information |
 //!
+//! Leduc hold'em rewards and returns are normalized to `[-1, 1]`:
+//! multiplying them by 13 gives chips.
+//!
 //! ## Installation
 //!
 //! From crates.io:
