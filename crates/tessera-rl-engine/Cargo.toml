@@ -58,6 +58,10 @@ harness = false
 
 # Async id ring push and pop (ADR-0047).
 [[bench]]
+name = "async_step"
+harness = false
+
+[[bench]]
 name = "id_rings"
 harness = false
 

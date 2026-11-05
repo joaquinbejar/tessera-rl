@@ -424,7 +424,11 @@ fn test_ring_claim_paused_while_other_ids_cycle_delivers_every_id_once() {
                 .fetch_add(1, Ordering::Relaxed);
         }
         for (id, count) in seen.iter().enumerate() {
-            let want = if cycled == u32::try_from(id).ok() { 2 } else { 1 };
+            let want = if cycled == u32::try_from(id).ok() {
+                2
+            } else {
+                1
+            };
             assert_eq!(count.load(Ordering::Relaxed), want, "id {id}");
         }
     });

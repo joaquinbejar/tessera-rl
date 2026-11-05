@@ -260,11 +260,12 @@ impl SubmitRing {
     /// in its shared allocation. The queue is safe for any number of
     /// producers; the caller keeps the single-producer protocol (only the
     /// mode's `&mut self` methods push).
-    #[cfg_attr(
-        loom,
-        allow(dead_code, reason = "the split-phase modes are not built under loom")
-    )]
-    pub(crate) fn push_shared(&self, id: u32) -> Result<(), RingError> {
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::push`].
+    #[doc(hidden)]
+    pub fn push_shared(&self, id: u32) -> Result<(), RingError> {
         self.ring.push(id)
     }
 }
@@ -316,11 +317,12 @@ impl CompletionRing {
     /// in its shared allocation. The queue is safe for any number of
     /// consumers; the caller keeps the single-consumer protocol (only the
     /// mode's `&mut self` methods pop).
-    #[cfg_attr(
-        loom,
-        allow(dead_code, reason = "the split-phase modes are not built under loom")
-    )]
-    pub(crate) fn pop_shared(&self) -> Result<Option<u32>, RingError> {
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::pop`].
+    #[doc(hidden)]
+    pub fn pop_shared(&self) -> Result<Option<u32>, RingError> {
         self.ring.pop()
     }
 }
