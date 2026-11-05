@@ -165,6 +165,90 @@ pub enum EngineError {
         /// Jobs in flight when the call was made.
         in_flight: u64,
     },
+    /// An instance was sent and not yet returned by `recv` (ADR-0047).
+    #[error("instance {id} is in flight")]
+    InFlight {
+        /// The id.
+        id: u32,
+    },
+    /// A half was sent and not yet returned by `recv` (ADR-0047).
+    #[error("half {half} is in flight")]
+    HalfInFlight {
+        /// The half, 0 or 1.
+        half: u8,
+    },
+    /// A live token still covers the instance, so its rows cannot be
+    /// written (ADR-0047).
+    #[error("instance {id} is borrowed by a live token")]
+    Borrowed {
+        /// The id.
+        id: u32,
+    },
+    /// A live token still covers the half (ADR-0047).
+    #[error("half {half} is borrowed by a live token")]
+    HalfBorrowed {
+        /// The half, 0 or 1.
+        half: u8,
+    },
+    /// A token from another pool was passed (ADR-0047).
+    #[error("the token belongs to another pool")]
+    WrongPool,
+    /// A half index other than 0 or 1 (ADR-0047).
+    #[error("half {half} does not exist; a pool has halves 0 and 1")]
+    InvalidHalf {
+        /// The half given.
+        half: u32,
+    },
+    /// The call does not exist in this execution mode (ADR-0047).
+    #[error("{call} is not available in {mode} mode")]
+    WrongMode {
+        /// The call.
+        call: &'static str,
+        /// The pool's mode.
+        mode: &'static str,
+    },
+    /// `recv` was called with nothing in flight and nothing ready
+    /// (ADR-0047). It never waits.
+    #[error("nothing is in flight")]
+    NothingInFlight,
+    /// An Async `recv` can never fill a batch: fewer ids are in flight or
+    /// ready than the batch size (ADR-0047). It never waits.
+    #[error("{in_flight} in flight and {ready} ready cannot fill a batch of {batch_size}")]
+    BatchUnreachable {
+        /// Ids in flight.
+        in_flight: u32,
+        /// Ids completed and not yet returned, including ids pushed by
+        /// `reset(ids)` and `restore(ids)`.
+        ready: u32,
+        /// The batch size.
+        batch_size: u32,
+    },
+    /// Work is admitted to workers and not yet completed (ADR-0047).
+    #[error("the pool is not quiescent: work is in flight")]
+    NotQuiescent,
+    /// A Pipelined half was sent for cycle `cycle` before the context
+    /// version of cycle `cycle - 2` was committed (ADR-0047).
+    #[error("cycle {cycle} cannot start before cycle {needed} is committed")]
+    CycleAhead {
+        /// The cycle the send would start.
+        cycle: u64,
+        /// The cycle whose commit it needs.
+        needed: u64,
+    },
+    /// An Async `send` named no instance (ADR-0047).
+    #[error("a send must name at least one instance")]
+    EmptySend,
+    /// The pool cannot be split into two halves of whole chunks
+    /// (ADR-0047).
+    #[error("the pool cannot be split into two halves of chunks of {chunk_size}")]
+    HalfTooSmall {
+        /// The chunk size.
+        chunk_size: u32,
+    },
+    /// Async does not support `SoA` lane environments yet (ADR-0047,
+    /// ADR-0002).
+    #[error("Async mode does not support SoA lane environments")]
+    LaneEnvUnsupported,
     /// An engine was created inside an engine worker (ADR-0005).
     #[error("engines cannot be created inside an engine worker")]
     NestedEngine,

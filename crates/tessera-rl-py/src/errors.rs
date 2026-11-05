@@ -159,13 +159,19 @@ fn engine_kind(e: &EngineError) -> Kind {
         EngineError::Config(_)
         | EngineError::Space(_)
         | EngineError::UnsupportedSpace { .. }
-        | EngineError::Options { .. } => Kind::Config,
+        | EngineError::Options { .. }
+        | EngineError::HalfTooSmall { .. }
+        | EngineError::LaneEnvUnsupported => Kind::Config,
         EngineError::InstanceOutOfRange { .. }
         | EngineError::DuplicateInstance { .. }
         | EngineError::SeedCount { .. }
         | EngineError::RecordCount { .. }
         | EngineError::LabelCount { .. }
-        | EngineError::DuplicateLabel { .. } => Kind::Argument,
+        | EngineError::DuplicateLabel { .. }
+        | EngineError::WrongPool
+        | EngineError::InvalidHalf { .. }
+        | EngineError::WrongMode { .. }
+        | EngineError::EmptySend => Kind::Argument,
         EngineError::ActionLength { .. }
         | EngineError::DiscreteOutOfRange { .. }
         | EngineError::ContinuousOutOfRange { .. }
@@ -179,7 +185,16 @@ fn engine_kind(e: &EngineError) -> Kind {
         | EngineError::WorkerStartup { .. }
         | EngineError::InvalidAgentEvent { .. }
         | EngineError::TurnOrder { .. } => Kind::Poisoned,
-        EngineError::NestedEngine | EngineError::GangQueue { .. } => Kind::Concurrency,
+        EngineError::NestedEngine
+        | EngineError::GangQueue { .. }
+        | EngineError::InFlight { .. }
+        | EngineError::HalfInFlight { .. }
+        | EngineError::Borrowed { .. }
+        | EngineError::HalfBorrowed { .. }
+        | EngineError::NothingInFlight
+        | EngineError::BatchUnreachable { .. }
+        | EngineError::NotQuiescent
+        | EngineError::CycleAhead { .. } => Kind::Concurrency,
         EngineError::CounterExhausted { .. }
         | EngineError::BranchCounterExhausted
         | EngineError::StorageIdsExhausted
