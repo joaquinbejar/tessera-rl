@@ -520,22 +520,22 @@ fn test_determinize_new_refuses_and_new_privileged_labels_imperfect_information(
 fn test_determinize_privileged_label_is_in_the_results_and_the_tree_hash() {
     use tessera_rl_games::{Connect4, Connect4Config};
 
-    let r = root(2, &[1]);
-    let mut c = PuctConfig::default();
-    c.simulations = 16;
-    c.batch_size = 4;
-    let p = SearchPool::<Dice, Masked>::new_privileged(
+    let rec = root(2, &[1]);
+    let mut puct = PuctConfig::default();
+    puct.simulations = 16;
+    puct.batch_size = 4;
+    let privileged = SearchPool::<Dice, Masked>::new_privileged(
         cfg(),
         search_options(),
-        &r,
+        &rec,
         EnvPool::with_masks,
     )
     .unwrap();
-    let mut m = Mcts::new(p, c).unwrap();
-    m.run(&mut Canned).unwrap();
-    assert!(m.is_privileged());
-    let d = Mcts::new(det(&r, how(1, 0)), c).unwrap();
-    assert!(!d.is_privileged());
+    let mut mcts = Mcts::new(privileged, puct).unwrap();
+    mcts.run(&mut Canned).unwrap();
+    assert!(mcts.is_privileged());
+    let plain_det = Mcts::new(det(&rec, how(1, 0)), puct).unwrap();
+    assert!(!plain_det.is_privileged());
 
     // The same perfect-information record, through `new` and through
     // `new_privileged` (which does not label it): equal hashes. A
@@ -547,20 +547,21 @@ fn test_determinize_privileged_label_is_in_the_results_and_the_tree_hash() {
     .unwrap();
     p4.reset_all(Reseed::Keep).unwrap();
     let r4 = p4.snapshot(0).unwrap();
-    let o = search_options();
-    let plain = SearchPool::new(Connect4Config {}, o, &r4, EnvPool::with_masks).unwrap();
-    let same = SearchPool::new_privileged(Connect4Config {}, o, &r4, EnvPool::with_masks).unwrap();
+    let opts = search_options();
+    let plain = SearchPool::new(Connect4Config {}, opts, &r4, EnvPool::with_masks).unwrap();
+    let same =
+        SearchPool::new_privileged(Connect4Config {}, opts, &r4, EnvPool::with_masks).unwrap();
     assert!(!same.is_privileged());
     assert_eq!(plain.tree_hash(), same.tree_hash());
 
     let labelled = SearchPool::<Dice, Masked>::new_privileged(
         cfg(),
         search_options(),
-        &r,
+        &rec,
         EnvPool::with_masks,
     )
     .unwrap();
-    let unlabelled = det(&r, how(1, 0));
+    let unlabelled = det(&rec, how(1, 0));
     assert!(labelled.is_privileged());
     assert_ne!(labelled.tree_hash(), unlabelled.tree_hash());
 }
