@@ -18,7 +18,6 @@ use tessera_rl_engine::{
     ActionInput, AutoReset, DecodedRecord, EngineError, EnvPool, Masked, PoolOptions, Reseed,
 };
 use tessera_rl_games::leduc::{CALL, FOLD, MAX_CONTRIBUTION, NO_CARD, RAISE, draw};
-
 use tessera_rl_games::{Leduc, LeducConfig, LeducState};
 use tessera_rl_num::identity::{LogicalId, RngIdentity, Seed, StreamId};
 use tessera_rl_num::rng::{RngAuthority, StepRng};
@@ -572,6 +571,68 @@ fn test_leduc_import_refuses_stakes_the_history_does_not_lead_to() {
         assert!(invalid(&import_state(&mut q, wrong)), "{wrong:?}");
     }
     assert!(import_state(&mut q, s).is_ok());
+
+    // A full first round (four actions): no bit above them may be set.
+    let mut full = pool(2);
+    for a in [CALL, RAISE, RAISE, CALL] {
+        play(&mut full, a);
+    }
+    let s = *full.state(0).unwrap();
+    assert_eq!(s.history_len[0], 4);
+    let mut high = s;
+    high.history[0] |= 1 << 20;
+    assert!(invalid(&import_state(&mut full, high)));
+    assert!(import_state(&mut full, s).is_ok());
+}
+
+/// Histories whose betting fields are exactly what the actions lead to,
+/// so only the legality of an action refuses them.
+#[test]
+fn test_leduc_validate_refuses_illegal_actions_in_a_consistent_history() {
+    use tessera_rl_core::Validate;
+    let initial = LeducState {
+        cards: [0, 1],
+        public: NO_CARD,
+        contributions: [1, 1],
+        ..LeducState::default()
+    };
+    // Raise, raise, raise: 3, then 5, then 7 for slot 0.
+    let third_raise = LeducState {
+        history: [0b11_11_11, 0],
+        history_len: [3, 0],
+        contributions: [7, 5],
+        raises: 3,
+        to_move: 1,
+        ..initial
+    };
+    assert!(Leduc::validate(&CFG, &third_raise).is_err());
+    let two_raises = LeducState {
+        history: [0b11_11, 0],
+        history_len: [2, 0],
+        contributions: [3, 5],
+        raises: 2,
+        to_move: 0,
+        ..initial
+    };
+    assert!(Leduc::validate(&CFG, &two_raises).is_ok());
+    // A fold with no bet to answer, which would end the hand.
+    let fold = LeducState {
+        history: [0b01, 0],
+        history_len: [1, 0],
+        done: 1,
+        ..initial
+    };
+    assert!(Leduc::validate(&CFG, &fold).is_err());
+    let raise_fold = LeducState {
+        history: [0b01_11, 0],
+        history_len: [2, 0],
+        contributions: [3, 1],
+        raises: 1,
+        to_move: 1,
+        done: 1,
+        ..initial
+    };
+    assert!(Leduc::validate(&CFG, &raise_fold).is_ok());
 }
 
 /// Every legal continuation of `p`'s instance keeps rewards in [-1, 1] and
@@ -653,7 +714,7 @@ fn test_leduc_every_accepted_import_keeps_rewards_and_stakes_in_bounds() {
             3 => s.to_move = w(&mut draws, 3),
             4 => s.raises = w(&mut draws, 4),
             5 => s.contributions[w(&mut draws, 2) as usize] = w(&mut draws, 15),
-            6 => s.history[w(&mut draws, 2) as usize] ^= 1 << w(&mut draws, 8),
+            6 => s.history[w(&mut draws, 2) as usize] ^= 1 << w(&mut draws, 32),
             _ => s.history_len[w(&mut draws, 2) as usize] = w(&mut draws, 6),
         }
         if Leduc::validate(&CFG, &s).is_ok() && !reachable.contains(&s) {

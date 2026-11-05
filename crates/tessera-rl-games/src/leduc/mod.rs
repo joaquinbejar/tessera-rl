@@ -259,7 +259,8 @@ impl LeducState {
                 }
                 b.bet(action);
             }
-            if n < ROUND_ACTIONS && h >> (2 * n) != 0 {
+            // `n` is at most 4, so the shift is at most 8 bits.
+            if h >> (2 * n) != 0 {
                 return None;
             }
         }
@@ -291,7 +292,6 @@ impl LeducState {
     }
 }
 
-/// `n` chips in units of [`MAX_CONTRIBUTION`].
 /// What a betting action ends.
 enum Bet {
     /// The round goes on.
@@ -304,6 +304,7 @@ enum Bet {
     Showdown,
 }
 
+/// `n` chips in units of [`MAX_CONTRIBUTION`].
 #[expect(clippy::cast_precision_loss, reason = "contributions are at most 13")]
 fn chips(n: u32) -> f32 {
     n as f32 / MAX_CONTRIBUTION as f32
@@ -518,8 +519,8 @@ impl ImperfectInformation for Leduc {
 
 /// Draws the opponent's card from the cards the observer cannot see: the
 /// deck less its own card and the public card, five before the deal and
-/// four after it. The public card,
-/// when not dealt yet, stays undealt: it is drawn at step time.
+/// four after it. The public card, when not dealt yet, stays undealt: it
+/// is drawn at step time.
 impl Determinize for Leduc {
     fn sample(_: &LeducConfig, info: &LeducInfo, rng: &mut StepRng, state: &mut LeducState) {
         let me = (info.me & 1) as usize;
