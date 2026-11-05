@@ -14,8 +14,8 @@ minimum = "3.11"
 # 3.15 is added when it is released.
 tested = ["3.11", "3.12", "3.13", "3.14"]
 
-# The main conformance environment: the Gymnasium adapter (phase 1b), the
-# PettingZoo adapters, JAX and onnxruntime (later phases).
+# The main conformance environment: the Gymnasium and PettingZoo adapters,
+# then JAX and onnxruntime (later phases).
 [env.main]
 gymnasium = "1.4.0"
 pettingzoo = "1.27.0"

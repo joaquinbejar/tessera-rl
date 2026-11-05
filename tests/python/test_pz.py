@@ -199,6 +199,11 @@ def test_pz_parallel_refuses_unknown_agent_names():
         env.step({**{a: 0 for a in env.agents}, "nobody": 0})
 
 
+def _first_legal(mask):
+    legal = np.flatnonzero(mask)
+    return int(legal[0]) if legal.size else 0
+
+
 def test_pz_parallel_policy_loop_over_obs_works_across_a_death():
     env = pz.parallel_env(TAG, seed=5, **SMALL_TAG)
     obs, _ = env.reset(seed=5)
@@ -207,7 +212,8 @@ def test_pz_parallel_policy_loop_over_obs_works_across_a_death():
         before = set(env.agents)
         # The natural loop: one action per key of the last observations,
         # including agents that died in the previous step.
-        obs, _, terms, truncs, _ = env.step({a: int(np.flatnonzero(obs[a]["action_mask"])[0]) if obs[a]["action_mask"].any() else 0 for a in obs})
+        actions = {a: _first_legal(obs[a]["action_mask"]) for a in obs}
+        obs, _, terms, truncs, _ = env.step(actions)
         died |= bool(before - set(env.agents)) and bool(env.agents)
     assert died, "an agent died before the end and the loop kept going"
 
