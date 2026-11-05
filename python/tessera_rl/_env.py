@@ -147,9 +147,12 @@ class Env:
 
         One limit remains: once this method acknowledges the result, a signal
         handler that raises in the caller's frame before the result is bound
-        loses it. No Python function can close that. Whether CPython can run
-        handlers between the acknowledgement and the return is not verified
-        for any version; the code keeps that gap to one attribute store.
+        loses it. No Python function can close that. The same happens if a
+        handler runs inside this method after the acknowledgement, which a
+        trace function installed with ``sys.settrace`` makes possible on the
+        return line. Whether CPython can run handlers there without one is not
+        verified for any version; the code keeps that gap to one attribute
+        store.
 
         If the thread that received a result exits before acknowledging it,
         ``recv`` on other threads stays refused with ``ConcurrencyError``

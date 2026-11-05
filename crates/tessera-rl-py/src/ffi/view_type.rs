@@ -257,14 +257,14 @@ pub(super) unsafe extern "C" fn is_stale(
     entry(|g| {
         // SAFETY: CPython passes `self` of an `OutputView` method.
         let v = unsafe { view(g, slf) }?;
-        let half_moved = v
-            .half
-            .as_ref()
-            .is_some_and(|(gens, h, taken)| gens.half(*h) != Some(*taken));
-        Ok(capi::boolean(
-            g,
-            half_moved || v.storage.generation() != v.generation,
-        ))
+        // A half view follows its half's generation alone: a refused call
+        // can move the storage's generation without writing (ADR-0047
+        // section 5).
+        let stale = match &v.half {
+            Some((gens, h, taken)) => gens.half(*h) != Some(*taken),
+            None => v.storage.generation() != v.generation,
+        };
+        Ok(capi::boolean(g, stale))
     })
 }
 

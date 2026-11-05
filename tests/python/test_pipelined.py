@@ -540,3 +540,17 @@ def test_pipelined_half_view_exports_its_own_rows_through_dlpack():
     assert arr.tobytes() == want.step.observations["obs"].tobytes()
     env.close()
     reference.close()
+
+
+def test_pipelined_refused_reset_leaves_views_fresh_and_a_real_one_ends_them():
+    env = pipelined()
+    first, second = env.reset()
+    with pytest.raises(t.ArgumentError):
+        env._native.reset([])
+    assert not t.is_stale(first.step.rewards)
+    assert not t.is_stale(second.step.rewards)
+    env.reset()
+    assert t.is_stale(first.step.rewards)
+    assert t.is_stale(second.step.rewards)
+    env.close()
+
