@@ -16,6 +16,9 @@
 //!   `h8` is 63), and 64 is the pass. The mask (ADR-0014) marks the legal
 //!   placements; the pass is legal exactly when there are none, so it is
 //!   forced. The no-op is the lowest legal square, else the pass.
+//!   Every slot's mask row describes the side to move, as in Connect Four:
+//!   read it together with the acting mask. On a finished board only the
+//!   pass is set, and nobody acts.
 //! - Rewards: +1 to the side with more discs and -1 to the other in the
 //!   final step; 0 to both on equal counts and on every other step.
 //!   Empty squares are not awarded.
