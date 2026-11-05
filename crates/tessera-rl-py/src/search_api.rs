@@ -288,6 +288,12 @@ pub(crate) fn tree_hash(g: Gil, inner: &SearchInner) -> CResult<Mine> {
     capi::int_u64(g, h)
 }
 
+/// `is_privileged() -> bool`.
+pub(crate) fn is_privileged(g: Gil, inner: &SearchInner) -> CResult<Mine> {
+    let flag = inner.with(g, |ops| Ok(ops.is_privileged()))?;
+    Ok(capi::boolean(g, flag))
+}
+
 /// The single positional argument of `signature`.
 pub(crate) fn one_arg<'a>(g: Gil, args: Ref<'a>, signature: &str) -> CResult<[Ref<'a>; 1]> {
     let items = capi::tuple_items(g, args, signature)?;

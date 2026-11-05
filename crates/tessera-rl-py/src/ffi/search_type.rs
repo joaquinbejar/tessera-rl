@@ -105,11 +105,12 @@ noargs!(layout, api::layout);
 noargs!(root_visits, api::root_visits);
 noargs!(calls, api::calls);
 noargs!(tree_hash, api::tree_hash);
+noargs!(is_privileged, api::is_privileged);
 varargs!(set_root, api::set_root);
 varargs!(run, api::run);
 varargs!(select_action, api::select_action);
 
-static METHODS: Table<[ffi::PyMethodDef; 8]> = Table([
+static METHODS: Table<[ffi::PyMethodDef; 9]> = Table([
     method(
         c"layout",
         thunks::SEARCH_LAYOUT,
@@ -151,6 +152,12 @@ static METHODS: Table<[ffi::PyMethodDef; 8]> = Table([
         thunks::SEARCH_TREE_HASH,
         ffi::METH_NOARGS,
         c"A digest of the whole tree.",
+    ),
+    method(
+        c"is_privileged",
+        thunks::SEARCH_IS_PRIVILEGED,
+        ffi::METH_NOARGS,
+        c"Whether the search reads hidden state (ADR-0046).",
     ),
     method_end(),
 ]);

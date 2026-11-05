@@ -108,6 +108,9 @@ pub(crate) trait SearchOps: Send {
     fn calls(&self) -> u64;
     /// The tree digest.
     fn tree_hash(&self) -> u64;
+    /// Whether the search reads the full state of an imperfect-information
+    /// environment (ADR-0046).
+    fn is_privileged(&self) -> bool;
 }
 
 struct Searcher<E: Environment, M: MaskProvider<E>> {
@@ -163,6 +166,10 @@ where
 
     fn tree_hash(&self) -> u64 {
         self.mcts.pool().tree_hash()
+    }
+
+    fn is_privileged(&self) -> bool {
+        self.mcts.is_privileged()
     }
 }
 

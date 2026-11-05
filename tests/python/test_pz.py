@@ -260,3 +260,28 @@ def test_pz_connect4_full_column_is_the_engine_noop_not_an_error():
     assert env.observe(mover)["action_mask"][0] == 0
     env.step(0)  # legal index, masked illegal: replaced by the no-op (ADR-0028)
     assert env.agent_selection != mover, "the no-op still passed the turn"
+
+
+LEDUC = "tessera/Leduc-v1"
+
+
+def test_pz_leduc_passes_the_aec_api_and_seed_tests():
+    pz_test.api_test(pz.aec_env(LEDUC, seed=1), num_cycles=300, verbose_progress=False)
+    pz_test.seed_test(lambda: pz.aec_env(LEDUC), num_cycles=200)
+
+
+def test_pz_leduc_is_never_parallel():
+    with pytest.raises(_native.ArgumentError):
+        pz.parallel_env(LEDUC)
+
+
+def test_pz_leduc_fold_after_a_raise_pays_the_folders_ante():
+    env = pz.aec_env(LEDUC, seed=0)
+    env.reset(seed=0)
+    assert env.agent_selection == "agent_0"
+    assert list(env.observe("agent_0")["action_mask"]) == [0, 1, 1], "no bet to fold against"
+    env.step(2)  # raise
+    assert list(env.observe("agent_1")["action_mask"]) == [1, 1, 1]
+    env.step(0)  # fold
+    assert env.terminations == {"agent_0": True, "agent_1": True}
+    assert env.rewards == pytest.approx({"agent_0": 1 / 13, "agent_1": -1 / 13})

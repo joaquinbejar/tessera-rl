@@ -443,3 +443,7 @@ def test_search_mixed_terminal_and_nonterminal_batches():
     assert s.root_visits().sum() == 200
     assert sum(sizes) < 200, "terminal leaves are not sent to the evaluator"
     assert s.select_action(0.0) == 0
+
+
+def test_search_connect4_is_not_privileged():
+    assert Search().is_privileged is False

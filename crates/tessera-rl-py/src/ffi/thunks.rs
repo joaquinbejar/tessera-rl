@@ -605,6 +605,7 @@ thunk!(BUILD_PROFILE: CFunction = thunk_build_profile => module::build_profile :
 thunk!(MAKE_CARTPOLE: CFunctionKw = thunk_make_cartpole => env_type::make_cartpole : fn(Obj, Obj, Obj) -> Obj);
 thunk!(MAKE_TAG: CFunctionKw = thunk_make_tag => env_type::make_tag : fn(Obj, Obj, Obj) -> Obj);
 thunk!(MAKE_CONNECT4: CFunctionKw = thunk_make_connect4 => env_type::make_connect4 : fn(Obj, Obj, Obj) -> Obj);
+thunk!(MAKE_LEDUC: CFunctionKw = thunk_make_leduc => env_type::make_leduc : fn(Obj, Obj, Obj) -> Obj);
 thunk!(LAYOUT: CFunction = thunk_layout => env_type::layout : fn(Obj, Obj) -> Obj);
 thunk!(OUTPUTS: CFunction = thunk_outputs => env_type::outputs : fn(Obj, Obj) -> Obj);
 thunk!(IS_POISONED: CFunction = thunk_is_poisoned => env_type::is_poisoned : fn(Obj, Obj) -> Obj);
@@ -623,6 +624,7 @@ thunk!(SEARCH_ROOT_VISITS: CFunction = thunk_search_root_visits => search_type::
 thunk!(SEARCH_SELECT_ACTION: CFunction = thunk_search_select_action => search_type::select_action : fn(Obj, Obj) -> Obj);
 thunk!(SEARCH_CALLS: CFunction = thunk_search_calls => search_type::calls : fn(Obj, Obj) -> Obj);
 thunk!(SEARCH_TREE_HASH: CFunction = thunk_search_tree_hash => search_type::tree_hash : fn(Obj, Obj) -> Obj);
+thunk!(SEARCH_IS_PRIVILEGED: CFunction = thunk_search_is_privileged => search_type::is_privileged : fn(Obj, Obj) -> Obj);
 thunk!(SEARCH_DEALLOC: Destructor = thunk_search_dealloc => search_type::dealloc : fn(Obj) -> ());
 thunk!(MAKE_SEARCH_GROUP: CFunctionKw = thunk_make_search_group => search_group_type::make_search_group : fn(Obj, Obj, Obj) -> Obj);
 thunk!(GROUP_LAYOUT: CFunction = thunk_group_layout => search_group_type::layout : fn(Obj, Obj) -> Obj);

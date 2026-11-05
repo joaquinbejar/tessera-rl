@@ -250,11 +250,14 @@ def make(env_id: str, num_envs: int = 1, seed: int = 0, outputs: str = "borrowed
     takes its config fields (``width``, ``height``, ``pursuers``,
     ``evaders``, ``slip``, ``radius``). Connect Four takes no config;
     its ``max_episode_steps`` defaults to 64, above the 42 plies of a game.
+    Leduc hold'em takes no config either; its ``max_episode_steps``
+    defaults to 16, above the 8 actions of a hand.
     """
     makers = {
         "tessera/CartPole-v1": _native.make_cartpole,
         "tessera/Tag-v1": _native.make_tag,
         "tessera/Connect4-v1": _native.make_connect4,
+        "tessera/Leduc-v1": _native.make_leduc,
     }
     try:
         maker = makers[env_id]

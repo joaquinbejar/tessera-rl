@@ -33,6 +33,17 @@ the API is not stable, and any 0.x release may break it.
   determinized tree is never re-rooted. `SearchPool::new_privileged`
   searches the full record and is labelled by `is_privileged`;
   `SearchPool::new` still refuses imperfect information.
+- **Leduc hold'em** (`tessera/Leduc-v1`, `tessera-rl-games`): a
+  two-player poker game with a hidden card per player and a public card
+  dealt at step time from `StepRng`; `Discrete(3)` (fold, check or call,
+  raise) with masks, sequential turns, rewards in units of the largest
+  stake so they lie in `[-1, 1]`. It implements `ImperfectInformation`
+  and `Determinize` (the opponent's card drawn from the cards the
+  player cannot see) and passes the eight determinized search tests;
+  golden fixtures, a scripted baseline and a step bench. In Python it is
+  available through `make` and the PettingZoo `aec_env`.
+- **Python search**: `Search.is_privileged`, `False` for every search
+  Python can build today.
 - **Engine** (`tessera-rl-engine`): `EnvPool::config`, and `EnvPool::contain`,
   which runs author code that reads only the configuration under the
   pool's containment (the canonical floating-point scope, a panic caught
