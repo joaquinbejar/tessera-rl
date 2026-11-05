@@ -51,10 +51,7 @@ pub(crate) fn new_object(g: Gil, snapshot: Snapshot) -> CResult<Mine> {
 /// The snapshot held by `obj`, which must be exactly a `PoolSnapshot`.
 pub(crate) fn snapshot_of(g: Gil, obj: Ref<'_>) -> CResult<Snapshot> {
     let raw = obj.as_ptr();
-    // SAFETY: `raw` is a live object while attached; reading its type runs
-    // no code.
-    let is_ours =
-        unsafe { ffi::Py_TYPE(raw) }.cast::<ffi::PyObject>() == TYPE.load(Ordering::Acquire);
+    let is_ours = capi::is_instance_of(obj, TYPE.load(Ordering::Acquire));
     if !is_ours {
         return Err(capi::raise(
             g,
