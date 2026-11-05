@@ -18,6 +18,7 @@ use tessera_rl_engine::{
     ActionInput, AutoReset, DecodedRecord, EngineError, EnvPool, Masked, PoolOptions, Reseed,
 };
 use tessera_rl_games::leduc::{CALL, FOLD, MAX_CONTRIBUTION, NO_CARD, RAISE, draw};
+
 use tessera_rl_games::{Leduc, LeducConfig, LeducState};
 use tessera_rl_num::identity::{LogicalId, RngIdentity, Seed, StreamId};
 use tessera_rl_num::rng::{RngAuthority, StepRng};
@@ -161,6 +162,8 @@ fn test_leduc_fold_loses_the_folders_contribution() {
     play(&mut p, RAISE);
     play(&mut p, FOLD);
     assert!(terminated(&p));
+    assert_eq!(p.state(0).unwrap().done, 1, "the hand is over");
+    assert!(p.outputs().acting().iter().all(|a| !a.get()), "nobody acts");
     assert_eq!(rewards(&p), [1.0 / 13.0, -1.0 / 13.0]);
 }
 
@@ -347,4 +350,329 @@ fn test_leduc_exact_chip_outcome_maps_to_chips_over_thirteen() {
         return;
     }
     panic!("no seed where slot 0 wins");
+}
+
+/// The observation of `k`, from the rules: own rank, public rank, round,
+/// whether `k` is to move, both contributions (own first), raises, the
+/// histories and their lengths. Never the opponent's card.
+fn expected_obs(s: &LeducState, k: usize) -> Vec<u8> {
+    let to_move = u32::from(s.done == 0 && s.mover() == k);
+    [
+        s.cards[k],
+        s.public,
+        s.round,
+        to_move,
+        s.contributions[k],
+        s.contributions[1 - k],
+        s.raises,
+        s.history[0],
+        s.history[1],
+        s.history_len[0],
+        s.history_len[1],
+    ]
+    .iter()
+    .map(|&v| u8::try_from(v).unwrap())
+    .collect()
+}
+
+fn obs_of(bytes: &[u8], k: usize) -> Vec<u8> {
+    bytes[k * OBS..(k + 1) * OBS].to_vec()
+}
+
+const OBS: usize = tessera_rl_games::leduc::OBS_LEN;
+
+/// Hands covering a fold in each round, a showdown after raises and
+/// check-check rounds.
+const HANDS: [&[u32]; 5] = [
+    &[CALL, CALL, CALL, CALL],
+    &[RAISE, FOLD],
+    &[CALL, RAISE, RAISE, CALL, RAISE, FOLD],
+    &[RAISE, RAISE, CALL, RAISE, RAISE, CALL],
+    &[CALL, CALL, RAISE, CALL],
+];
+
+/// Another rank for slot `j` that the deck allows, if any.
+fn other_card(s: &LeducState, j: usize) -> Option<u32> {
+    (0..3).find(|&c| {
+        c != s.cards[j] && {
+            let mut x = *s;
+            x.cards[j] = c;
+            let n = |r| x.cards.iter().filter(|&&v| v == r).count() + usize::from(x.public == r);
+            (0..3).all(|r| n(r) <= 2)
+        }
+    })
+}
+
+fn import_state(p: &mut EnvPool<Leduc, Masked>, s: LeducState) -> Result<(), EngineError> {
+    let h = *p.snapshot(0).unwrap().header();
+    p.import(&[0], &[DecodedRecord::from_parts(h, s).unwrap()])
+}
+
+#[test]
+fn test_leduc_observation_bytes_match_the_rules_and_hide_the_opponents_card() {
+    for seed in 0..24 {
+        for hand in HANDS {
+            let mut p = pool(seed);
+            let mut positions = 0;
+            for step in 0..=hand.len() {
+                let s = *p.state(0).unwrap();
+                let bytes = p.outputs().observation(0).unwrap().to_vec();
+                for k in 0..2 {
+                    assert_eq!(
+                        obs_of(&bytes, k),
+                        expected_obs(&s, k),
+                        "seed {seed} step {step}"
+                    );
+                    // Only the opponent's card changes: k sees the same bytes.
+                    if let Some(c) = other_card(&s, 1 - k) {
+                        let mut q = pool(seed);
+                        let mut moved = s;
+                        moved.cards[1 - k] = c;
+                        let h = *p.snapshot(0).unwrap().header();
+                        q.import(&[0], &[DecodedRecord::from_parts(h, moved).unwrap()])
+                            .unwrap();
+                        let other = q.outputs().observation(0).unwrap().to_vec();
+                        assert_eq!(
+                            obs_of(&other, k),
+                            obs_of(&bytes, k),
+                            "seed {seed} step {step}"
+                        );
+                        assert_ne!(obs_of(&other, 1 - k), obs_of(&bytes, 1 - k), "its own card");
+                        positions += 1;
+                    }
+                }
+                if let Some(&a) = hand.get(step) {
+                    play(&mut p, a);
+                }
+            }
+            assert!(
+                terminated(&p),
+                "the hand ends: the last position is terminal"
+            );
+            assert!(positions > 0);
+        }
+    }
+}
+
+#[test]
+fn test_leduc_terminal_observation_matches_the_rules_and_hides_the_opponents_card() {
+    let same_step = |seed| {
+        let options = PoolOptions {
+            auto_reset: AutoReset::SameStep,
+            ..PoolOptions::new(NonZeroU32::MIN, Seed::new(seed))
+        };
+        let mut p = EnvPool::<Leduc, Masked>::with_masks(CFG, options).unwrap();
+        p.reset_all(Reseed::Keep).unwrap();
+        p
+    };
+    for seed in 0..24 {
+        for hand in HANDS {
+            let (last, before) = hand.split_last().unwrap();
+            let mut reference = pool(seed);
+            for &a in hand {
+                play(&mut reference, a);
+            }
+            let end = *reference.state(0).unwrap();
+            let mut p = same_step(seed);
+            for &a in before {
+                play(&mut p, a);
+            }
+            let pre = *p.state(0).unwrap();
+            let header = *p.snapshot(0).unwrap().header();
+            play(&mut p, *last);
+            let terminal = p.outputs().terminal_observation(0).unwrap().to_vec();
+            for k in 0..2 {
+                assert_eq!(obs_of(&terminal, k), expected_obs(&end, k), "seed {seed}");
+                let Some(c) = other_card(&pre, 1 - k) else {
+                    continue;
+                };
+                // A fold keeps the cards; a showdown deals no card after
+                // the last action, so the alternative stays valid.
+                let mut moved = pre;
+                moved.cards[1 - k] = c;
+                let mut q = same_step(seed);
+                q.import(&[0], &[DecodedRecord::from_parts(header, moved).unwrap()])
+                    .unwrap();
+                play(&mut q, *last);
+                let other = q.outputs().terminal_observation(0).unwrap().to_vec();
+                assert_eq!(obs_of(&other, k), obs_of(&terminal, k), "seed {seed}");
+            }
+        }
+    }
+}
+
+#[test]
+fn test_leduc_never_reset_record_round_trips_and_continues() {
+    let options = PoolOptions {
+        auto_reset: AutoReset::Disabled,
+        ..PoolOptions::new(NonZeroU32::MIN, Seed::new(21))
+    };
+    let mut fresh = EnvPool::<Leduc, Masked>::with_masks(CFG, options).unwrap();
+    let rec = fresh.snapshot(0).unwrap();
+    let bytes = rec.to_bytes();
+    let decoded: DecodedRecord<Leduc> =
+        tessera_rl_core::encoding::decode_from_slice(&bytes).unwrap();
+    let mut q = EnvPool::<Leduc, Masked>::with_masks(CFG, options).unwrap();
+    q.import(&[0], &[decoded]).unwrap();
+    assert_eq!(*q.state(0).unwrap(), LeducState::default());
+    // The continuation equals a pool that never left the initial value.
+    fresh.reset_all(Reseed::Keep).unwrap();
+    q.reset_all(Reseed::Keep).unwrap();
+    for a in [RAISE, CALL, CALL, CALL] {
+        play(&mut fresh, a);
+        play(&mut q, a);
+        assert_eq!(
+            fresh.snapshot(0).unwrap().to_bytes(),
+            q.snapshot(0).unwrap().to_bytes()
+        );
+    }
+    // Before the first reset, only the initial value is accepted.
+    let odd = LeducState {
+        cards: [1, 0],
+        ..LeducState::default()
+    };
+    let mut r = EnvPool::<Leduc, Masked>::with_masks(CFG, options).unwrap();
+    let h = *r.snapshot(0).unwrap().header();
+    assert!(invalid(
+        &r.import(&[0], &[DecodedRecord::from_parts(h, odd).unwrap()])
+    ));
+}
+
+#[test]
+fn test_leduc_import_refuses_stakes_the_history_does_not_lead_to() {
+    let mut p = pool(2);
+    let before = p.snapshot(0).unwrap().to_bytes();
+    let inflated = LeducState {
+        cards: [2, 0],
+        contributions: [13, 13],
+        ..*p.state(0).unwrap()
+    };
+    assert!(invalid(&import_state(&mut p, inflated)));
+    assert_eq!(
+        p.snapshot(0).unwrap().to_bytes(),
+        before,
+        "the pool is unchanged"
+    );
+    // A legal history must match its betting fields exactly.
+    let mut q = pool(2);
+    play(&mut q, RAISE);
+    let s = *q.state(0).unwrap();
+    for wrong in [
+        LeducState { raises: 0, ..s },
+        LeducState { to_move: 0, ..s },
+        LeducState {
+            contributions: [5, 1],
+            ..s
+        },
+        LeducState {
+            history: [0b10, 0],
+            ..s
+        },
+    ] {
+        assert!(invalid(&import_state(&mut q, wrong)), "{wrong:?}");
+    }
+    assert!(import_state(&mut q, s).is_ok());
+}
+
+/// Every legal continuation of `p`'s instance keeps rewards in [-1, 1] and
+/// contributions within `MAX_CONTRIBUTION`.
+fn explore(p: &mut EnvPool<Leduc, Masked>, depth: u32) -> u32 {
+    let at = p.snapshot(0).unwrap();
+    let s = *at.state();
+    let mut leaves = 0;
+    for a in [FOLD, CALL, RAISE] {
+        let legal = match a {
+            FOLD => s.facing_bet(),
+            RAISE => s.raises < 2,
+            _ => true,
+        };
+        if !legal {
+            continue;
+        }
+        p.restore(0, &at).unwrap();
+        play(p, a);
+        let after = *p.state(0).unwrap();
+        assert!(
+            after.contributions.iter().all(|&c| c <= MAX_CONTRIBUTION),
+            "{after:?}"
+        );
+        assert!(
+            rewards(p).iter().all(|r| r.abs() <= 1.0),
+            "{:?} {after:?}",
+            rewards(p)
+        );
+        if terminated(p) {
+            leaves += 1;
+        } else {
+            assert!(depth < 8, "a hand longer than 8 actions");
+            leaves += explore(p, depth + 1);
+        }
+    }
+    p.restore(0, &at).unwrap();
+    leaves
+}
+
+/// The acting row of the header for `s`.
+fn with_acting(
+    mut h: <Leduc as tessera_rl_core::Environment>::Header,
+    s: &LeducState,
+) -> <Leduc as tessera_rl_core::Environment>::Header {
+    use tessera_rl_core::{Bool8, Environment, RecordLayout};
+    for (k, row) in h.agents_mut().iter_mut().enumerate() {
+        row.acting = Bool8::from(Leduc::acting(&CFG, s, agent(u16::try_from(k).unwrap())));
+    }
+    h
+}
+
+#[test]
+fn test_leduc_every_accepted_import_keeps_rewards_and_stakes_in_bounds() {
+    use tessera_rl_core::Validate;
+    let mut accepted = 0;
+    let mut draws = rng(77, 3);
+    let mut candidates = Vec::new();
+    // Reachable states: every position of every hand, with every deal.
+    let mut reachable = Vec::new();
+    for seed in 0..32 {
+        for hand in HANDS {
+            let mut p = pool(seed);
+            for &a in hand {
+                reachable.push(*p.state(0).unwrap());
+                play(&mut p, a);
+            }
+        }
+    }
+    // Random perturbations of them, of any field, kept when Validate
+    // accepts them: most are refused.
+    let w = |g: &mut StepRng, n: u32| g.below_u32(NonZeroU32::new(n).unwrap());
+    for _ in 0..200_000 {
+        let mut s = reachable[w(&mut draws, u32::try_from(reachable.len()).unwrap()) as usize];
+        match w(&mut draws, 8) {
+            0 => s.cards[w(&mut draws, 2) as usize] = w(&mut draws, 4),
+            1 => s.public = w(&mut draws, 4),
+            2 => s.round = w(&mut draws, 3),
+            3 => s.to_move = w(&mut draws, 3),
+            4 => s.raises = w(&mut draws, 4),
+            5 => s.contributions[w(&mut draws, 2) as usize] = w(&mut draws, 15),
+            6 => s.history[w(&mut draws, 2) as usize] ^= 1 << w(&mut draws, 8),
+            _ => s.history_len[w(&mut draws, 2) as usize] = w(&mut draws, 6),
+        }
+        if Leduc::validate(&CFG, &s).is_ok() && !reachable.contains(&s) {
+            candidates.push(s);
+        }
+    }
+    let random = candidates.len();
+    assert!(random >= 20, "{random} random states accepted");
+    candidates.extend(reachable);
+    let mut p = pool(1);
+    let base = *p.snapshot(0).unwrap().header();
+    for s in candidates {
+        if s.done != 0 {
+            continue;
+        }
+        let rec = DecodedRecord::from_parts(with_acting(base, &s), s).unwrap();
+        p.import(&[0], &[rec]).unwrap();
+        assert!(explore(&mut p, 0) > 0);
+        accepted += 1;
+    }
+    assert!(accepted > 160, "{accepted}");
 }

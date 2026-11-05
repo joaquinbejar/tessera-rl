@@ -192,6 +192,80 @@ impl LeducState {
         }
     }
 
+    /// Applies a legal `action` of the mover to the betting fields, with
+    /// what it ends. The deal of the public card is the caller's: the
+    /// round advances, `public` is left as it is.
+    fn bet(&mut self, action: u32) -> Bet {
+        let me = self.mover();
+        let theirs = self.contributions.get(1 - me).copied().unwrap_or(0);
+        self.push(action);
+        match action {
+            FOLD => {
+                self.done = 1;
+                Bet::Fold
+            }
+            RAISE => {
+                let size = if self.round == 0 { 2 } else { 4 };
+                if let Some(c) = self.contributions.get_mut(me) {
+                    *c = theirs + size;
+                }
+                self.raises += 1;
+                self.to_move = u32::from(me == 0);
+                Bet::Open
+            }
+            _ => {
+                if let Some(c) = self.contributions.get_mut(me) {
+                    *c = theirs;
+                }
+                if self.round_actions() < 2 {
+                    self.to_move = u32::from(me == 0);
+                    Bet::Open
+                } else if self.round == 0 {
+                    self.round = 1;
+                    self.raises = 0;
+                    self.to_move = 0;
+                    Bet::Deal
+                } else {
+                    self.done = 1;
+                    Bet::Showdown
+                }
+            }
+        }
+    }
+
+    /// The betting fields its history leads to from the antes, or `None`
+    /// when the history is not a legal sequence of actions.
+    fn replayed(&self) -> Option<Self> {
+        let mut b = Self {
+            contributions: [1, 1],
+            ..Self::default()
+        };
+        for round in 0..2_usize {
+            let h = self.history.get(round).copied()?;
+            let n = self.history_len.get(round).copied()?;
+            if n > ROUND_ACTIONS {
+                return None;
+            }
+            for i in 0..n {
+                let entry = (h >> (2 * i)) & 3;
+                let action = entry.checked_sub(1)?;
+                let legal = match action {
+                    FOLD => b.facing_bet(),
+                    RAISE => b.raises < MAX_RAISES,
+                    _ => true,
+                };
+                if b.done != 0 || b.round as usize != round || !legal {
+                    return None;
+                }
+                b.bet(action);
+            }
+            if n < ROUND_ACTIONS && h >> (2 * n) != 0 {
+                return None;
+            }
+        }
+        Some(b)
+    }
+
     fn round_actions(&self) -> u32 {
         self.history_len
             .get((self.round & 1) as usize)
@@ -218,6 +292,18 @@ impl LeducState {
 }
 
 /// `n` chips in units of [`MAX_CONTRIBUTION`].
+/// What a betting action ends.
+enum Bet {
+    /// The round goes on.
+    Open,
+    /// The first round is over: the public card is dealt.
+    Deal,
+    /// A fold ends the hand.
+    Fold,
+    /// The second round is over: the hand goes to showdown.
+    Showdown,
+}
+
 #[expect(clippy::cast_precision_loss, reason = "contributions are at most 13")]
 fn chips(n: u32) -> f32 {
     n as f32 / MAX_CONTRIBUTION as f32
@@ -282,49 +368,27 @@ impl Environment for Leduc {
             Some(RAISE) if state.raises < MAX_RAISES => RAISE,
             _ => CALL,
         };
-        state.push(action);
-        let [c0, c1] = state.contributions;
         let mine = state.contributions.get(me).copied().unwrap_or(0);
-        let theirs = state.contributions.get(1 - me).copied().unwrap_or(0);
-        match action {
-            FOLD => {
+        match state.bet(action) {
+            Bet::Open => {}
+            Bet::Deal => state.public = draw(rng, &state.cards),
+            Bet::Fold => {
                 out.set_reward(mover, -chips(mine));
                 out.set_reward(other, chips(mine));
-                state.done = 1;
                 out.end_episode(EpisodeEnd::Terminated);
             }
-            RAISE => {
-                let size = if state.round == 0 { 2 } else { 4 };
-                if let Some(c) = state.contributions.get_mut(me) {
-                    *c = theirs + size;
-                }
-                state.raises += 1;
-                state.to_move = u32::from(me == 0);
-            }
-            _ => {
-                if let Some(c) = state.contributions.get_mut(me) {
-                    *c = theirs;
-                }
-                if state.round_actions() < 2 {
-                    state.to_move = u32::from(me == 0);
-                } else if state.round == 0 {
-                    state.public = draw(rng, &state.cards);
-                    state.round = 1;
-                    state.raises = 0;
-                    state.to_move = 0;
-                } else {
-                    let pot = c0.max(c1);
-                    let r = chips(pot)
-                        * match state.showdown() {
-                            1 => 1.0,
-                            -1 => -1.0,
-                            _ => 0.0,
-                        };
-                    out.set_reward(s0, r);
-                    out.set_reward(s1, -r);
-                    state.done = 1;
-                    out.end_episode(EpisodeEnd::Terminated);
-                }
+            Bet::Showdown => {
+                let [c0, c1] = state.contributions;
+                let pot = c0.max(c1);
+                let r = chips(pot)
+                    * match state.showdown() {
+                        1 => 1.0,
+                        -1 => -1.0,
+                        _ => 0.0,
+                    };
+                out.set_reward(s0, r);
+                out.set_reward(s1, -r);
+                out.end_episode(EpisodeEnd::Terminated);
             }
         }
     }
@@ -375,8 +439,9 @@ impl ActionMask for Leduc {
 }
 
 /// Imported states: ranks in range with at most two copies dealt, the
-/// public card dealt exactly in the second round, bounded counters and
-/// histories, and contributions in range.
+/// public card dealt exactly in the second round, and a history that is
+/// a legal betting sequence from the antes whose result is exactly the
+/// round, the side to move, the raises, the contributions and `done`.
 impl Validate for Leduc {
     fn validate(_: &LeducConfig, s: &LeducState) -> Result<(), InvariantViolation> {
         let invalid = |code| Err(InvariantViolation { code });
@@ -392,47 +457,39 @@ impl Validate for Leduc {
         if s.round > 1 || (s.public != NO_CARD) != (s.round == 1) {
             return invalid("the public card and the round disagree");
         }
-        if s.to_move > 1 || s.done > 1 || s.raises > MAX_RAISES {
-            return invalid("a counter out of range");
-        }
-        let fits = |h: u32, n: u32| n <= ROUND_ACTIONS && (n == ROUND_ACTIONS || h >> (2 * n) == 0);
-        if !s
-            .history
-            .iter()
-            .zip(s.history_len.iter())
-            .all(|(&h, &n)| fits(h, n))
-        {
-            return invalid("a history out of range");
-        }
-        if s.contributions
-            .iter()
-            .any(|&c| c == 0 || c > MAX_CONTRIBUTION)
-        {
-            return invalid("a contribution out of range");
+        // The betting fields are the ones the history leads to, so every
+        // legal continuation stays within the stakes the rules allow.
+        let Some(b) = s.replayed() else {
+            return invalid("a history that is not a legal betting sequence");
+        };
+        let betting = |x: &LeducState| (x.round, x.to_move, x.raises, x.contributions, x.done);
+        if betting(&b) != betting(s) {
+            return invalid("betting fields that the history does not lead to");
         }
         Ok(())
     }
 
-    /// ADR-0040: once reset, both slots are alive, and a running episode
-    /// is not a finished hand.
+    /// ADR-0040: before the first reset the state is exactly the initial
+    /// value; once reset, both slots are alive. A running episode on a
+    /// finished hand needs no check here: nobody acts on it, and the
+    /// engine refuses a running sequential record without an actor.
     fn validate_record(
         cfg: &LeducConfig,
         header: &HeaderView<'_>,
         state: &LeducState,
     ) -> Result<(), InvariantViolation> {
-        Self::validate(cfg, state)?;
-        let phase = header.phase();
-        if phase == Phase::NeverReset {
+        if header.phase() == Phase::NeverReset {
+            if *state != LeducState::default() {
+                return Err(InvariantViolation {
+                    code: "a state other than the initial value before the first reset",
+                });
+            }
             return Ok(());
         }
+        Self::validate(cfg, state)?;
         if !(0..MAX_AGENTS).all(|k| header.agent(k).is_some_and(|v| v.alive)) {
             return Err(InvariantViolation {
                 code: "a player that is not alive",
-            });
-        }
-        if phase == Phase::Active && state.done != 0 {
-            return Err(InvariantViolation {
-                code: "a running episode on a finished hand",
             });
         }
         Ok(())
@@ -459,8 +516,9 @@ impl ImperfectInformation for Leduc {
     }
 }
 
-/// Draws the opponent's card from the four cards the observer cannot see
-/// (the deck less its own card and the public card). The public card,
+/// Draws the opponent's card from the cards the observer cannot see: the
+/// deck less its own card and the public card, five before the deal and
+/// four after it. The public card,
 /// when not dealt yet, stays undealt: it is drawn at step time.
 impl Determinize for Leduc {
     fn sample(_: &LeducConfig, info: &LeducInfo, rng: &mut StepRng, state: &mut LeducState) {
