@@ -26,6 +26,14 @@ mod snapshot;
 mod sys;
 mod validate;
 
+/// The Async id rings and token id buffers (ADR-0047), exposed only for
+/// the engine's own benchmarks and allocation tests. Not a stable API.
+#[doc(hidden)]
+pub mod rings {
+    pub use crate::sys::id_buffers::{BufferError, BufferHandle, IdBufferPool};
+    pub use crate::sys::ring::{CompletionRing, RingError, Signal, SubmitRing};
+}
+
 pub use buffer::{OutputDtype, OutputField, OutputRegion, OutputStorage};
 pub use error::EngineError;
 pub use layout::MAX_LEAVES;
