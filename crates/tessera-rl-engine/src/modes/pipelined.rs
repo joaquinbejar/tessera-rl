@@ -33,7 +33,9 @@ use crate::masks::MaskProvider;
 use crate::options::SyncOptions;
 use crate::pool::{EnvPool, Reseed, SyncRuntime, chunk_size};
 use crate::record::Record;
-use crate::validate::{ActionInput, check_and_copy_range_actions, check_cycle, check_recv};
+use crate::validate::{
+    ActionInput, check_cycle, check_range_actions, check_recv, copy_range_actions,
+};
 
 const HALVES: usize = 2;
 
@@ -259,6 +261,9 @@ where
             return Err(lost(EngineError::WorkerDied));
         };
         let workers = runtime.workers;
+        // An already poisoned pool stays poisoned: only a full reset or
+        // restore of the wrapper recovers it, as everywhere else.
+        let poisoned = pool.is_poisoned();
         Ok(PipelinedPool {
             runtime: Workers(Some(runtime)),
             mode: Mode::new(pool, halves, size, workers),
@@ -266,7 +271,7 @@ where
             order: [0; HALVES],
             queued: 0,
             cycles: CycleState::initial(),
-            poisoned: false,
+            poisoned,
         })
     }
 
@@ -491,7 +496,7 @@ where
         if self.queued != 0 {
             return Err(EngineError::NotQuiescent);
         }
-        if self.poisoned {
+        if self.is_poisoned() {
             return Err(EngineError::Poisoned);
         }
         self.mode.pool.snapshot_all(out)?;
@@ -577,7 +582,7 @@ where
         if !token.belongs_to(&self.mode) {
             return Err(EngineError::WrongPool);
         }
-        if self.poisoned {
+        if self.is_poisoned() {
             return Err(EngineError::Poisoned);
         }
         if self.dead() {
@@ -596,8 +601,17 @@ where
         let auto_reset = mode.pool.options.auto_reset;
         mode.with_half_rows(token, |first, headers, discrete, continuous| {
             crate::entry::canonical(|| {
-                // debug-checks: the same legality pass as Sync's step, on
-                // the half, before anything is copied (ADR-0047 ruling 6).
+                // The same order as Sync: the boundary checks first, then
+                // (debug-checks) the legality pass, then the copy, so the
+                // same input gives the same error (ADR-0047 ruling 6).
+                check_range_actions(
+                    layout,
+                    auto_reset,
+                    first,
+                    headers,
+                    actions,
+                    (discrete.len(), continuous.len()),
+                )?;
                 #[cfg(feature = "debug-checks")]
                 if M::ENABLED {
                     crate::pool::legality_rows(
@@ -609,9 +623,8 @@ where
                         token.mask_len(),
                     )?;
                 }
-                check_and_copy_range_actions(
-                    layout, auto_reset, first, headers, actions, discrete, continuous,
-                )
+                copy_range_actions(layout, headers, actions, discrete, continuous);
+                Ok::<(), EngineError>(())
             })
         })
         .ok_or(EngineError::WrongPool)??;
@@ -696,7 +709,7 @@ where
     }
 
     fn check_recv(&self) -> Result<(), EngineError> {
-        if self.poisoned {
+        if self.is_poisoned() {
             return Err(EngineError::Poisoned);
         }
         let queued = u32::try_from(self.queued).unwrap_or(u32::MAX);

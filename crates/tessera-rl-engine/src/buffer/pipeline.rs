@@ -163,12 +163,19 @@ where
         }
         let range = self.halves.get(token.half)?.clone();
         let first = range.start;
+        let a = self.raw.agents;
+        // Only the action rows are borrowed mutably; the headers (and the
+        // masks a caller may read through `token`) stay shared views.
         // SAFETY: `token` covers the half, so no worker and no other view
-        // touches its rows while `token` is borrowed (invariants 3 and 4);
-        // the buffers are in place (invariant 1, `rebuild` after writers).
+        // touches its action rows while `token` is borrowed (invariants 3
+        // and 4); the buffers are in place (invariant 1, `rebuild` after
+        // writers).
         #[expect(unsafe_code, reason = "audited module: token-guarded views")]
-        let chunk = unsafe { self.raw.range_view(range) }?;
-        Some(f(first, chunk.headers, chunk.discrete, chunk.continuous))
+        let discrete = unsafe { self.raw.discrete.view(&range, a * self.raw.dh) };
+        // SAFETY: as above, the continuous action rows of the half.
+        #[expect(unsafe_code, reason = "audited module: token-guarded views")]
+        let continuous = unsafe { self.raw.continuous.view(&range, a * self.raw.ch) };
+        Some(f(first, token.headers(), discrete, continuous))
     }
 }
 

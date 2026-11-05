@@ -959,3 +959,93 @@ fn test_pipelined_continuous_head_matches_sync_bit_for_bit() {
         );
     }
 }
+
+// Codex's #82 r2 probe (attachment 989), as a regression test.
+
+#[test]
+fn test_review_pipelined_conversion_preserves_existing_poison() {
+    let mut pool = EnvPool::<Counter, Masked>::with_masks(
+        CountConfig {
+            panic_at: 1,
+            ..cfg()
+        },
+        options(AutoReset::NextStep),
+    )
+    .unwrap();
+    pool.reset_all(Reseed::Keep).unwrap();
+    assert_eq!(
+        pool.step(ActionInput {
+            discrete: &actions(0),
+            continuous: &[]
+        })
+        .map(|_| ()),
+        Err(EngineError::Panicked)
+    );
+    assert!(pool.is_poisoned());
+    let p = pool
+        .pipelined(PipelinedOptions::new(NonZeroUsize::new(2).unwrap()))
+        .unwrap();
+    assert!(p.is_poisoned(), "incoming EnvPool poison was lost");
+    assert_eq!(p.idle_token(0).map(|_| ()), Err(EngineError::Poisoned));
+}
+
+#[test]
+fn test_pipelined_poisoned_conversion_recovers_with_reset_all() {
+    let mut pool = EnvPool::<Counter, Masked>::with_masks(
+        CountConfig {
+            panic_at: 1,
+            ..cfg()
+        },
+        options(AutoReset::NextStep),
+    )
+    .unwrap();
+    pool.reset_all(Reseed::Keep).unwrap();
+    assert!(
+        pool.step(ActionInput {
+            discrete: &actions(0),
+            continuous: &[],
+        })
+        .is_err()
+    );
+    let mut p = pool
+        .pipelined(PipelinedOptions::new(NonZeroUsize::new(2).unwrap()))
+        .unwrap();
+    assert!(p.is_poisoned());
+    let _tokens = p.reset_all(Reseed::Keep).unwrap();
+    assert!(!p.is_poisoned());
+}
+
+/// Under `debug-checks`, a value out of the head's range reports the same
+/// error in Pipelined as in Sync (the range check runs before legality).
+#[cfg(feature = "debug-checks")]
+#[test]
+fn test_pipelined_debug_checks_out_of_range_value_reports_what_sync_reports() {
+    let mut bad = actions(0);
+    bad[2] = 99;
+    let mut sync = sync_pool(AutoReset::NextStep);
+    sync.reset_all(Reseed::Keep).unwrap();
+    let sync_err = sync
+        .step(ActionInput {
+            discrete: &bad,
+            continuous: &[],
+        })
+        .map(|_| ())
+        .unwrap_err();
+    let mut p = piped(AutoReset::NextStep, 2, cfg());
+    let [a, _b] = p.reset_all(Reseed::Keep).unwrap();
+    let halves = p.halves();
+    let err = p
+        .send(
+            a,
+            ActionInput {
+                discrete: &half_actions(&bad, &halves[0]),
+                continuous: &[],
+            },
+        )
+        .unwrap_err();
+    assert!(
+        !matches!(sync_err, EngineError::IllegalAction { .. }),
+        "{sync_err:?}"
+    );
+    assert_eq!(err.error, sync_err);
+}
