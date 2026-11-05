@@ -34,7 +34,7 @@
 //!
 //! Waits spin for a bounded budget, then block. Blocking registers in a
 //! parked counter with an RMW and then rechecks the condition; a waker
-//! makes its change, then reads the counter with a SeqCst RMW
+//! makes its change, then reads the counter with a `SeqCst` RMW
 //! (`fetch_add(0)`). In the memory model both RMWs are on the same counter,
 //! so whichever comes second in its modification order sees the other's
 //! side: the waiter sees the change or the waker sees the waiter. LLVM may
