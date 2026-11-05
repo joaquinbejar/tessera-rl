@@ -13,7 +13,7 @@ use core::num::NonZeroUsize;
 use loom::cell::UnsafeCell;
 
 use super::live::{claim, is_live, release};
-use crate::sys::sync::{Arc, AtomicBool, thread};
+use crate::sys::sync::{Arc, AtomicBool, Ordering, thread};
 use crate::sys::{Faults, Gang, GangOptions, Job};
 
 /// One shadow row per half.
@@ -109,7 +109,8 @@ fn test_live_model_reader_on_a_while_worker_writes_b() {
 }
 
 /// Model 10: a token on A is read and dropped on one thread; another
-/// thread admits A once it sees the token ended, and a worker writes A.
+/// thread claims a new token on A (as `idle_token` does), sends it (its end
+/// is the release before publication) and a worker writes A.
 #[test]
 fn test_live_model_token_dropped_on_one_thread_then_sent_on_another() {
     loom::model(|| {
@@ -124,9 +125,15 @@ fn test_live_model_token_dropped_on_one_thread_then_sent_on_another() {
             release(&reader_rows.live[0]);
             seen
         });
-        while is_live(&rows.live[0]) {
+        // Wait (Relaxed, so it orders nothing) until the reader's token has
+        // ended, then claim A as `idle_token` does: the claim's Acquire alone
+        // must order the reader's read before the worker's write.
+        while rows.live[0].load(Ordering::Relaxed) {
             thread::yield_now();
         }
+        assert!(claim(&rows.live[0]), "idle_token on A");
+        // `send` consumes the new token: it ends before the job is published.
+        release(&rows.live[0]);
         let mut gang = Gang::new(&options()).unwrap();
         send_and_wait(&mut gang, &rows, 0, 10);
         assert!(claim(&rows.live[0]), "token on A after recv");
