@@ -198,8 +198,9 @@ fn toward(facing: u8, want: u8, at_facing: i32) -> i32 {
 
 /// Scripted baseline (deterministic, one step): with no holder, walk to the
 /// key and take it. The holder walks to the cell before the door and opens it.
-/// The others step off that cell and wait. Once the door is open, all walk to
-/// the goal. An agent blocked by another waits.
+/// The others wait, giving way to the holder. Once the door is open, all walk
+/// to the goal, by any free neighbour nearer it. It can still deadlock: the
+/// solved share is pinned by a test, and below one for several agents.
 impl Heuristic for KeyDoor {
     fn act(
         cfg: &KeyDoorConfig,
@@ -243,12 +244,41 @@ fn choose(cfg: &KeyDoorConfig, s: &KeyDoorState, me: usize) -> i32 {
         }
         return walk(cfg, s, me, facing, (col, row), &[before_door]);
     }
-    if (col, row) == before_door {
-        for f in [0u8, 2, 3] {
-            let (dc, dr) = step_of(f);
-            if s.can_enter(cfg, col + dc, row + dr, me) {
-                return toward(facing, f, FORWARD);
-            }
+    step_aside(cfg, s, me, facing, (col, row), before_door)
+}
+
+/// A waiting agent gives way: if it stands on the door's approach and the
+/// holder is right behind it, or on the cell before the door, it moves to a
+/// free cell no nearer the door. Otherwise it waits.
+fn step_aside(
+    cfg: &KeyDoorConfig,
+    s: &KeyDoorState,
+    me: usize,
+    facing: u8,
+    (col, row): (i32, i32),
+    before_door: (i32, i32),
+) -> i32 {
+    let d = distances(cfg, s, &[before_door]);
+    let at = |c: i32, r: i32| {
+        usize::try_from(r * 16 + c)
+            .ok()
+            .and_then(|i| d.get(i).copied())
+            .unwrap_or(u16::MAX)
+    };
+    let mine = at(col, row);
+    let Some(&[hc, hr]) = s.pos.get(usize::from(s.key_holder)) else {
+        return WAIT;
+    };
+    let (hc, hr) = (i32::from(hc), i32::from(hr));
+    let in_the_way = (col - hc).abs() + (row - hr).abs() == 1 && mine < at(hc, hr);
+    if mine != 0 && !in_the_way {
+        return WAIT;
+    }
+    for f in 0u8..4 {
+        let (dc, dr) = step_of(f);
+        let (x, y) = (col + dc, row + dr);
+        if s.can_enter(cfg, x, y, me) && at(x, y) >= mine {
+            return toward(facing, f, FORWARD);
         }
     }
     WAIT
@@ -291,10 +321,11 @@ fn walk(
     for f in 0u8..4 {
         let (dc, dr) = step_of(f);
         let (x, y) = (col + dc, row + dr);
-        if (0..n).contains(&x) && (0..n).contains(&y) && at(x, y) < here {
-            if toward(facing, f, FORWARD) == FORWARD && !s.can_enter(cfg, x, y, me) {
-                return WAIT;
-            }
+        if (0..n).contains(&x)
+            && (0..n).contains(&y)
+            && at(x, y) < here
+            && s.can_enter(cfg, x, y, me)
+        {
             return toward(facing, f, FORWARD);
         }
     }

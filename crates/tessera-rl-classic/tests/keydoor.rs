@@ -420,9 +420,10 @@ fn solve(c: &KeyDoorConfig, seed: u64) -> bool {
         && out.rewards()[..c.agents as usize].iter().all(|&r| r == 1.0)
 }
 
-/// Every generated world is solvable, for each agent count.
+/// Sampled solvability: the solver finishes all 2,400 generated worlds drawn
+/// here, across agent counts and sizes. This is not a proof for every seed.
 #[test]
-fn test_keydoor_solver_finishes_every_generated_world() {
+fn test_keydoor_solver_finishes_all_sampled_worlds() {
     for agents in 1..=4 {
         for size in [6, 7, 8, 16] {
             for seed in 0..150 {
@@ -518,13 +519,18 @@ fn test_keydoor_following_is_refused_in_both_slot_orders() {
         let mut row = [WAIT; 4];
         row[leader] = FORWARD;
         row[follower] = FORWARD;
-        if p.step(ActionInput {
-            discrete: &row,
-            continuous: &[],
-        })
-        .is_ok()
-        {
-            assert_eq!(state(&p).pos[follower], before, "replaced by the no-op");
+        let stepped = p
+            .step(ActionInput {
+                discrete: &row,
+                continuous: &[],
+            })
+            .map(|_| ());
+        if let Err(e) = stepped {
+            // `debug-checks`: rejected atomically.
+            assert!(matches!(e, EngineError::IllegalAction { .. }), "{e:?}");
+        } else {
+            // Default: replaced by the no-op.
+            assert_eq!(state(&p).pos[follower], before);
             assert_eq!(state(&p).pos[leader], [2, 2]);
         }
     }
@@ -858,5 +864,5 @@ fn test_keydoor_baseline_solved_share_is_pinned() {
             }
         }
     }
-    assert_eq!(solved, [200, 158, 125, 106], "of 200 each");
+    assert_eq!(solved, [200, 200, 199, 192], "of 200 each");
 }

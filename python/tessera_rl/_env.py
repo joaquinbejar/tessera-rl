@@ -450,8 +450,8 @@ def make(env_id: str, num_envs: int = 1, seed: int = 0, outputs: str = "borrowed
     its ``max_episode_steps`` defaults to 64, above the 42 plies of a game.
     The reference grid world takes ``size`` and ``max_steps``; it truncates
     by itself. Key and door takes ``size`` and ``agents``; its
-    ``max_episode_steps`` defaults to 512. Leduc hold'em takes no config either; its ``max_episode_steps``
-    defaults to 16, above the 8 actions of a hand. Othello takes no config
+    ``max_episode_steps`` defaults to 512. Leduc hold'em takes no config
+    either; its ``max_episode_steps`` defaults to 16, above the 8 actions of a hand. Othello takes no config
     either; its ``max_episode_steps`` defaults to 128, above the 119 plies
     of the longest game. Go 9x9 takes ``komi_half_points`` (default 15, that
     is 7.5); its ``max_episode_steps`` defaults to 200, above the cap of 162
