@@ -46,8 +46,8 @@ uses reset seed 0, later keeps the seeds. ``Multiprocessing`` itself raises on
 its layout from a temporary pool, so a driver env in a parent holds no pool at a
 fork. Do not reset a driver env, or hold other Tessera pools in the parent,
 before forking: an inherited pool refuses in the child. This module never sets a
-start method. Spawn is tested at the pins on macOS. Fork is tested on Linux arm64
-with PufferLib's pure-Python source, not at the pinned lock. Spawn needs an
+start method. Spawn is tested at the pins on macOS. Fork is tested on Linux x86-64
+at the pins. Spawn needs an
 importable creator and a ``__main__`` guard. Forkserver is not tested.
 
 **Multiprocessing hangs on a raise.** PufferLib 3.0.0's worker has no exception
