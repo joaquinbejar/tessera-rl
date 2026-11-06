@@ -211,14 +211,15 @@ class Clock:
     The hard limit is the supervisor's kill; this lets a cell that would
     not fit be skipped and reported as missing instead of being cut."""
 
-    def __init__(self, deadline_epoch: float):
+    def __init__(self, deadline_epoch: float, skips: bool = True):
         self.deadline_epoch = deadline_epoch
+        self.skips = skips
 
     def left(self) -> float:
         return self.deadline_epoch - time.time()
 
     def check(self, projected_s: float, what: str) -> None:
-        if projected_s > self.left():
+        if self.skips and projected_s > self.left():
             raise BudgetExceeded(f"{what}: {projected_s:.1f} s projected, {self.left():.1f} s left")
 
 
@@ -661,7 +662,9 @@ def _watchdog(deadline_epoch: float, parent: int) -> None:
 def child(args) -> int:
     threading.Thread(target=_watchdog, args=(args.child_deadline_epoch, os.getppid()), daemon=True).start()
     configure_torch(1)
-    clock = Clock(args.child_deadline_epoch)
+    # A test that needs the kill must not depend on how long startup took.
+    no_skip = os.environ.get("PILOT_TEST_NO_SKIP") == "1" and args.source_sha == "test"
+    clock = Clock(args.child_deadline_epoch, skips=not no_skip)
     params = {k: v for k, v in vars(args).items() if k != "child_deadline_epoch"}
     report: dict = {"command": args.command, "params": params, "config_sha256": canonical_hash(params)}
     report["provenance"] = provenance(args)

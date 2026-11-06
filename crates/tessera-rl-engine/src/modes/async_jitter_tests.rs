@@ -369,3 +369,53 @@ fn test_async_recv_reset_all_and_snapshot_make_progress_on_unclaimed_ids() {
     });
     assert!(ok, "snapshot stepped the unclaimed ids");
 }
+
+/// A worker sleeps right after its id counts as stepped: with the entry made
+/// visible first, the last `recv` would return while the id still counted as
+/// running, and a writer or snapshot would refuse with nothing to wait for
+/// (the CI flake of `alloc_async`, ADR-0047 section 3).
+#[test]
+fn test_async_a_received_id_is_never_counted_as_running() {
+    let faults = Faults {
+        jitter_us: 300,
+        ..Faults::default()
+    };
+    let mut pool = Pool::new(WalkConfig {}, options(AutoReset::NextStep))
+        .unwrap()
+        .async_faults(
+            AsyncOptions::new(
+                NonZeroUsize::new(4).unwrap(),
+                NonZeroUsize::new(N as usize).unwrap(),
+            ),
+            faults,
+        )
+        .unwrap();
+    drop(pool.reset_all(Reseed::Keep).unwrap());
+    let ids: Vec<u32> = (0..N).collect();
+    let actions = vec![1; ids.len()];
+    let rounds = if cfg!(miri) { 3 } else { 200 };
+    for round in 0..rounds {
+        pool.send(
+            &ids,
+            ActionInput {
+                discrete: &actions,
+                continuous: &[],
+            },
+        )
+        .unwrap();
+        // Polling, as a blocking `recv` waits for the job and hides the race.
+        loop {
+            if let Some(t) = pool.try_recv().unwrap() {
+                drop(t);
+                break;
+            }
+            std::thread::yield_now();
+        }
+        if round % 2 == 0 {
+            pool.snapshot(0).unwrap();
+        } else {
+            pool.reset(&ids, Reseed::Keep).unwrap();
+            drop(pool.recv().unwrap());
+        }
+    }
+}

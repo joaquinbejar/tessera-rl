@@ -389,7 +389,15 @@ fn jitter<E: Environment, M: MaskProvider<E>>(mode: &BatchMode<E, M>, id: u32) {
 
 /// Pushes `id` to the completion ring, retrying while it is transiently
 /// full behind a paused pop (ADR-0047 section 7, the ring's module docs).
+///
+/// The id counts as stepped before its entry is visible: a caller that received
+/// every id must find nothing running, whatever this worker does next
+/// (ADR-0047 section 3). Only ring bookkeeping remains, which no row reader
+/// touches, and a writer drains the job before it starts.
 fn complete<E: Environment, M: MaskProvider<E>>(mode: &BatchMode<E, M>, id: u32) {
+    mode.stepped.fetch_add(1, Ordering::Release);
+    #[cfg(test)]
+    jitter(mode, id);
     loop {
         match mode.complete.push(id) {
             Ok(()) => break,
@@ -401,7 +409,6 @@ fn complete<E: Environment, M: MaskProvider<E>>(mode: &BatchMode<E, M>, id: u32)
         }
     }
     mode.ready.count.fetch_add(1, Ordering::Release);
-    mode.stepped.fetch_add(1, Ordering::Release);
 }
 
 /// Publishes the drain job of `mode` to `gang`.
