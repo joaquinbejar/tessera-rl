@@ -14,6 +14,7 @@ import os
 import signal
 import subprocess
 import sys
+import time
 
 import numpy as np
 import pufferlib
@@ -29,18 +30,28 @@ TAG = "tessera/Tag-v1"
 SCENARIOS = os.path.join(os.path.dirname(__file__), "scenarios.py")
 
 
+def start_scenario(*args):
+    """A scenario in its own process group, tied to this process by a pipe."""
+    read_end, write_end = os.pipe()
+    p = subprocess.Popen(
+        [sys.executable, SCENARIOS, *map(str, args)], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        start_new_session=True, pass_fds=(read_end,), env={**os.environ, "SCENARIO_LIFELINE": str(read_end)},
+    )  # fmt: skip
+    os.close(read_end)
+    return p, write_end
+
+
 def scenario(*args, timeout=300):
     """Runs a scenario; on a timeout, kills the recorded process group."""
-    p = subprocess.Popen(
-        [sys.executable, SCENARIOS, *map(str, args)],
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True,
-    )  # fmt: skip
+    p, lifeline = start_scenario(*args)
     try:
         out, err = p.communicate(timeout=timeout)
     except subprocess.TimeoutExpired:
         os.killpg(p.pid, signal.SIGKILL)
         out, err = p.communicate()
         pytest.fail(f"{args} timed out\n{out[-800:]}\n{err[-2000:]}")
+    finally:
+        os.close(lifeline)
     # A scenario exits at once; its Multiprocessing children must go with it.
     try:
         os.killpg(p.pid, signal.SIGKILL)
@@ -443,3 +454,43 @@ def test_smoke_training(env_id, rnn):
     assert out["finite"]
     assert out["global_step"] >= 8192
     assert out["checks"] >= 1
+
+
+def alive(pid):
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    return True
+
+
+def test_scenario_group_dies_with_its_runner_by_any_means():
+    p, lifeline = start_scenario("hold")
+    try:
+        for line in p.stdout:
+            if line.startswith("PIDS "):
+                pids = [int(v) for v in line.split()[1:]]
+                break
+        assert all(alive(pid) for pid in pids)
+        os.close(lifeline)
+        lifeline = None
+        p.wait(timeout=30)
+        deadline = time.monotonic() + 30
+        while alive(pids[1]) and time.monotonic() < deadline:
+            time.sleep(0.05)
+        assert not alive(pids[1])
+    finally:
+        if lifeline is not None:
+            os.close(lifeline)
+        try:
+            os.killpg(p.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+
+
+def test_is_stale_is_true_for_arrays_step_just_returned():
+    env = TesseraPufferEnv(CARTPOLE, num_envs=2)
+    obs, _ = env.reset(seed=1)
+    assert not t.is_stale(obs)
+    assert t.is_stale(env.step(np.zeros(2, dtype=np.int32))[0])
+    env.close()

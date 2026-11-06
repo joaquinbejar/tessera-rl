@@ -53,3 +53,14 @@ Result on macOS arm64, 2026-11-01, main `988b1a4` plus this PR:
 ## Outcome (P2-M8)
 
 Option (b): `tessera_rl.puffer` shares the engine's buffers on the native backend and copies once per step on `vector.Serial` and `vector.Multiprocessing`, which pass buffers they own. `bench_adapter.py` measures this; no performance claim rests on a development machine.
+
+Figures from `bench_adapter.py`, in steps per second, at the lock on a development Mac, each case for 1.5 s. They are indicative only. Raw and native use `workers=0` in one process; Serial and Multiprocessing split N across 2 envs, so the columns are not fully comparable.
+
+| Env, N | raw | native | Serial 2 | Multiprocessing 2 |
+| --- | --- | --- | --- | --- |
+| CartPole 1 | 171449 | 128034 | 113431 | 136752 |
+| CartPole 64 | 7908492 | 5221078 | 2740100 | 3595805 |
+| CartPole 4096 | 29306910 | 26440188 | 24107985 | 42919475 |
+| Tag 1 | 1254254 | 1008382 | 895552 | 1108690 |
+| Tag 64 | 17775743 | 15705697 | 12062255 | 18656983 |
+| Tag 4096 | 22031104 | 21336012 | 20693172 | 40060654 |

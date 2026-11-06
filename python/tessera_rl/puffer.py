@@ -27,7 +27,8 @@ copy. They keep the overwrite semantics of borrowed outputs: a later step or
 reset changes them in place. ``torch.as_tensor`` warns once per process that they
 are not writable; nothing must write through it. ``vector.Serial`` and
 ``vector.Multiprocessing`` pass buffers they own, so those backends cost one copy
-per step.
+per step. ``tessera_rl.is_stale`` does not apply to these arrays: the views are
+taken once, so it reports ``True`` even for arrays ``step`` has just returned.
 
 **Seeds.** ``vector.make`` drops its ``seed`` argument, so it has no effect. Use
 ``reset(seed=r)``. A reset derives the base of its instance seeds with

@@ -5,7 +5,11 @@ on a raise and the trainer has hung at exit. Prints one JSON line."""
 import json
 import multiprocessing
 import os
+import signal
+import subprocess
 import sys
+import threading
+import time
 import traceback
 
 import numpy as np
@@ -105,10 +109,11 @@ def _train(env_id, use_rnn, num_envs):
     while trainer.global_step < config["total_timesteps"]:
         trainer.evaluate()
         # Whatever the update does, it must not write into the engine's rows.
-        before = vec.observations.tobytes(), vec.rewards.tobytes()
+        arrays = (vec.observations, vec.rewards, vec.terminals, vec.truncations)
+        before = [a.tobytes() for a in arrays]
         trainer.train()
         checks += 1
-        assert (vec.observations.tobytes(), vec.rewards.tobytes()) == before, "trainer wrote into a view"
+        assert [a.tobytes() for a in arrays] == before, "trainer wrote into a view"
         losses.extend(float(v) for v in trainer.losses.values())
     finite = bool(losses) and bool(np.isfinite(np.asarray(losses)).all())
     return {"global_step": int(trainer.global_step), "finite": finite, "checks": checks}
@@ -119,7 +124,28 @@ def smoke(env_id, use_rnn):
     return _train(env_id, use_rnn == "rnn", num_envs)
 
 
+def die_with_the_runner():
+    """The runner holds a pipe's write end: if it dies by any means, even SIGKILL,
+    this group goes too, Multiprocessing workers included."""
+    fd = int(os.environ["SCENARIO_LIFELINE"])
+
+    def watch():
+        os.read(fd, 1)
+        os.killpg(0, signal.SIGKILL)
+
+    threading.Thread(target=watch, daemon=True).start()
+
+
+def hold():
+    """For the lifeline test: a child in this group, then waits."""
+    child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(600)"])
+    sys.stdout.write(f"\nPIDS {os.getpid()} {child.pid}\n")
+    sys.stdout.flush()
+    time.sleep(600)
+
+
 def main():
+    die_with_the_runner()
     name, *args = sys.argv[1:]
     conv = [int(a) if a.lstrip("-").isdigit() else a for a in args]
     try:
