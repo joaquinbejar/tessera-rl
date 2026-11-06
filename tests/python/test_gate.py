@@ -510,12 +510,6 @@ def test_gate_finalize_recovers_after_the_parent_died(tmp_path, done_root, as_fo
     final = json.loads((pathlib.Path(args.out) / "gate.json").read_text())
     assert final["pass"] is True and final["settlement"]["status"] == "ok"
     assert gate.recover(str(root)) == final  # idempotent, unchanged
-    # A failed settlement recovers as pass null.
-    os.remove(pathlib.Path(args.out) / "gate.json")
-    doc = json.loads(pathlib.Path(args.ledger).read_text())
-    doc["entries"][-1]["status"] = "failed: killed"
-    pathlib.Path(args.ledger).write_text(json.dumps(doc))
-    assert gate.recover(str(root))["pass"] is None
 
 
 def test_gate_finalize_and_recover_never_rewrite_the_ledger(tmp_path, done_root, as_formal, bot, monkeypatch):
@@ -542,13 +536,13 @@ def test_gate_finalize_and_recover_never_rewrite_the_ledger(tmp_path, done_root,
     # The normal path.
     gate.finalize(args, 0, "gate")
     assert ledger.read_bytes() == before
-    os.remove(pathlib.Path(args.out) / "gate.json")
+    written = (pathlib.Path(args.out) / "gate.json").read_bytes()
     # Owner busy: refused, nothing written.
     with open(root / "loop.lock", "a+") as held:
         fcntl.flock(held, fcntl.LOCK_EX)
         with pytest.raises(SystemExit, match="another loop"):
             gate.recover(str(root))
-    assert not (pathlib.Path(args.out) / "gate.json").exists()
+    assert (pathlib.Path(args.out) / "gate.json").read_bytes() == written
     # Success, then an idempotent repeat.
     first = gate.recover(str(root))
     assert first["pass"] is True and gate.recover(str(root)) == first
@@ -1222,7 +1216,8 @@ def test_gate_main_exits_nonzero_when_interrupted(tmp_path, done_root, as_formal
 
 
 @pytest.mark.parametrize("case", ["nonzero", "failed-settlement", "missing-settlement"])
-def test_gate_invalid_finalize_and_its_recovery_hold_no_score(tmp_path, done_root, as_formal, bot, monkeypatch, case):
+@pytest.mark.parametrize("recovered", [False, True])
+def test_gate_invalid_finalize_and_its_recovery_hold_no_score(tmp_path, done_root, as_formal, bot, monkeypatch, case, recovered):
     from ledger import Ledger
 
     root, _, sha, _ = selected_root(tmp_path, done_root)
@@ -1234,12 +1229,14 @@ def test_gate_invalid_finalize_and_its_recovery_hold_no_score(tmp_path, done_roo
         led = Ledger(args.ledger, 1)
         i, _ = led.reserve("gate 20261103T000000Z", 1, 60)
         led.settle(i, 1, "ok" if case == "nonzero" else "failed: killed")
-    first = gate.finalize(args, 1 if case == "nonzero" else 0, "gate")
-    assert first["pass"] is None and first["meets_815"] is None and first["provisional_diagnostics"]["rule_wins"] == 900
-    if case != "nonzero":  # a nonzero exit is not in the ledger: recovery reads the exit from it
-        os.remove(pathlib.Path(args.out) / "gate.json")
-        again = gate.recover(str(root))
-        assert again["pass"] is None and again["meets_815"] is None and again["rule"]["wins"] is None
+    if recovered and case != "nonzero":  # the parent died first; a nonzero exit is only known to it
+        first = gate.recover(str(root))
+    else:
+        first = gate.finalize(args, 1 if case == "nonzero" else 0, "gate")
+    assert first["pass"] is None and first["meets_815"] is None and first["rule"]["wins"] is None
+    assert first["provisional_diagnostics"]["rule_wins"] == 900
+    assert json.loads(pathlib.Path(args.attempts_journal).read_text().splitlines()[-1])["disposition"] == "consumed-no-verdict"
+    assert gate.recover(str(root)) == first
 
 
 def test_gate_at_use_reloads_the_look_evidence(tmp_path, done_root, as_formal, bot, monkeypatch):
@@ -1300,3 +1297,29 @@ def test_gate_compare_real_child_fails_after_provisional_then_rerun_publishes(co
     before = published.read_bytes()
     assert subprocess.run(argv, env=env, capture_output=True, timeout=120).returncode == 0
     assert published.read_bytes() == before
+
+
+@pytest.mark.parametrize("name", ["run/gate.json", "claim.json", "ledger.json"])
+def test_gate_compare_refuses_files_changed_after_settlement(compared, name):
+    ns, directory, *_ = compared
+    path = pathlib.Path(directory) / name
+    doc = json.loads(path.read_text())
+    doc["note"] = "rewritten"
+    path.write_text(json.dumps(doc))
+    with pytest.raises(gate.Refused):
+        gate.compare_work(ns, directory, FakeClock())
+
+
+@pytest.mark.parametrize("how", ["absent", "differs"])
+def test_gate_recover_never_rebuilds_against_a_settled_journal(tmp_path, done_root, as_formal, bot, monkeypatch, how):
+    root, _, sha, _ = selected_root(tmp_path, done_root)
+    args, _ = preflight_and_claim(formal_argv(root, sha, bot))
+    fake_bot(monkeypatch, 700)
+    assert finish_attempt(args)["pass"] is False
+    path = pathlib.Path(args.out) / "gate.json"
+    if how == "absent":
+        path.unlink()
+    else:
+        path.write_bytes(artifacts.canonical_json({**json.loads(path.read_text()), "pass": True}))
+    with pytest.raises(gate.Refused, match="settlement stands"):
+        gate.recover(str(root))

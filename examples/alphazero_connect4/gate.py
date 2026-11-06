@@ -613,6 +613,20 @@ def parse(argv):
     return args
 
 
+def check_terminal(directory: str, report: str) -> None:
+    """A settled journal decision stands: no score is rebuilt against it."""
+    claim_path = os.path.join(directory, "claim.json")
+    if not os.path.exists(claim_path):
+        return
+    with open(claim_path, encoding="utf-8") as f:
+        block = json.load(f).get("attempt")
+    settled = attempts.settlement(block) if block else None
+    if settled is None:
+        return
+    if not os.path.exists(report) or artifacts.sha256_file(report) != settled.get("report_sha256"):
+        raise Refused("the journal's settlement stands, and gate.json is absent or not the one it names")
+
+
 def recover(root: str, development: str | None = None, journal: str | None = None) -> dict:
     """``gate.py finalize --root``: recovery when the parent died after the
     child settled but before it wrote ``gate.json``. It holds the loop's
@@ -631,6 +645,7 @@ def recover(root: str, development: str | None = None, journal: str | None = Non
         existing = os.path.join(run, "gate.json")
         ledger = os.path.join(directory, "ledger.json")
         entry = settlement(ledger, "gate")
+        check_terminal(directory, existing)
         if os.path.exists(existing):
             with open(existing, encoding="utf-8") as f:
                 final = json.load(f)
@@ -722,6 +737,9 @@ def settled_attempt(directory: str) -> tuple[dict, list, dict]:
         settled = attempts.settlement(block)
         if settled is None or settled["disposition"] == "consumed-no-verdict":
             raise Refused("the journal holds no evaluated settlement for this attempt")
+        if (settled.get("report_sha256") != artifacts.sha256(raw) or settled.get("claim_sha256") != artifacts.sha256_file(claim_path)
+                or settled.get("ledger_sha256") != artifacts.sha256_file(os.path.join(directory, "ledger.json"))):  # fmt: skip
+            raise Refused("the files are not the ones the journal's settlement names")
     identity = {"gate_json_sha256": artifacts.sha256(raw), "log_sha256": report["log_sha256"],
                 "claim_sha256": artifacts.sha256_file(claim_path), "checkpoint": report["checkpoint"],
                 "ledger_entry": ledger_entry}  # fmt: skip
