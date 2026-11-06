@@ -36,7 +36,8 @@ Multiprocessing workers, and only its constructor seeds identify an env; instanc
 ``k`` has seed ``base + k``. Ranges of two envs meeting is improbable, about
 ``E**2 * N / 2**64``, not impossible. Both seeds must be in ``0..2**32``, or
 ``ArgumentError``; keep the root reset seed below ``2**31`` on Multiprocessing,
-which adds to it first. The same seeds on the same backend and layout give the
+which adds to it first: a child refuses a sum outside the range, and the parent
+then hangs. The same seeds on the same backend and layout give the
 same bytes; backends and layouts differ from each other. ``reset(None)`` first
 uses reset seed 0, later keeps the seeds. ``Multiprocessing`` itself raises on
 ``reset(None)``: unsupported there.
@@ -45,8 +46,9 @@ uses reset seed 0, later keeps the seeds. ``Multiprocessing`` itself raises on
 its layout from a temporary pool, so a driver env in a parent holds no pool at a
 fork. Do not reset a driver env, or hold other Tessera pools in the parent,
 before forking: an inherited pool refuses in the child. This module never sets a
-start method. Fork and spawn are tested; spawn needs an importable creator and a
-``__main__`` guard. Forkserver is not tested.
+start method. Spawn is tested at the pins on macOS. Fork is tested on Linux arm64
+with PufferLib's pure-Python source, not at the pinned lock. Spawn needs an
+importable creator and a ``__main__`` guard. Forkserver is not tested.
 
 **Multiprocessing hangs on a raise.** PufferLib 3.0.0's worker has no exception
 reply: a raise prints in the child and the parent's ``recv`` blocks forever. What
