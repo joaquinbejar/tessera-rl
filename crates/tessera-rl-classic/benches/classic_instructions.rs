@@ -2,7 +2,8 @@
 
 //! Instruction counts of the classic kernels (ADR-0025 PR gate, gungraun):
 //! the CartPole physics step, and one full pool step (auto-reset on,
-//! observation writing included) for CartPole and Tag. Setup runs outside
+//! observation writing included) for CartPole and Tag, and one CartPole
+//! step in steady state. Setup runs outside
 //! the measured region, and the pool benchmarks return their inputs so
 //! that dropping them is not counted either. Linux only (Valgrind); see `make gungraun`.
 
@@ -32,6 +33,44 @@ fn cartpole(n: u32) -> (EnvPool<CartPole, NoMasks>, Vec<i32>) {
     let mut pool = EnvPool::new(CartPoleConfig::default(), options(n)).unwrap();
     pool.reset_all(Reseed::Keep).unwrap();
     (pool, (0..n).map(|i| i32::from(i % 2 == 0)).collect())
+}
+
+/// Settling steps before the steady-state measurement: enough that most
+/// episodes have reset at least once (untrained CartPole episodes last tens of
+/// steps), so the measured step carries a steady mix of resets.
+const SETTLE_STEPS: usize = 300;
+
+/// xorshift64: a fixed pseudo-random action stream, independent of the engine.
+fn xorshift(s: &mut u64) -> u64 {
+    *s ^= *s << 13;
+    *s ^= *s >> 7;
+    *s ^= *s << 17;
+    *s
+}
+
+/// A CartPole pool in steady state, and the next batch of random actions.
+/// It resets, then takes `SETTLE_STEPS` steps with a fixed xorshift action
+/// sequence, all outside the measured region. Every input is fixed, so the
+/// state reached is the same on every run.
+fn cartpole_steady(n: u32) -> (EnvPool<CartPole, NoMasks>, Vec<i32>) {
+    let mut pool = EnvPool::new(CartPoleConfig::default(), options(n)).unwrap();
+    pool.reset_all(Reseed::Keep).unwrap();
+    let mut seed = 0x9e37_79b9_7f4a_7c15_u64;
+    let mut row = || -> Vec<i32> {
+        (0..n)
+            .map(|_| i32::from(xorshift(&mut seed) & 1 == 1))
+            .collect()
+    };
+    for _ in 0..SETTLE_STEPS {
+        let actions = row();
+        pool.step(ActionInput {
+            discrete: &actions,
+            continuous: &[],
+        })
+        .unwrap();
+    }
+    let next = row();
+    (pool, next)
 }
 
 /// A reset Tag pool and one batch of moves (illegal ones become no-ops).
@@ -71,6 +110,24 @@ fn cartpole_pool_step(
     (pool, actions)
 }
 
+// One step of a CartPole pool in steady state (see `cartpole_steady`), with
+// random actions: the per-instance step cost with resets mixed in, which a
+// fresh pool's first step does not show.
+#[library_benchmark]
+#[bench::n1024(setup = cartpole_steady, args = (1024))]
+fn cartpole_pool_steady(
+    (mut pool, actions): (EnvPool<CartPole, NoMasks>, Vec<i32>),
+) -> (EnvPool<CartPole, NoMasks>, Vec<i32>) {
+    let out = pool
+        .step(ActionInput {
+            discrete: black_box(&actions),
+            continuous: &[],
+        })
+        .unwrap();
+    black_box(out.rewards().first().copied());
+    (pool, actions)
+}
+
 #[library_benchmark]
 #[bench::n256(setup = tag, args = (256))]
 fn tag_pool_step(
@@ -88,7 +145,12 @@ fn tag_pool_step(
 
 library_benchmark_group!(
     name = classic,
-    benchmarks = [cartpole_physics, cartpole_pool_step, tag_pool_step]
+    benchmarks = [
+        cartpole_physics,
+        cartpole_pool_step,
+        cartpole_pool_steady,
+        tag_pool_step
+    ]
 );
 
 /// The glibc dispatch pin of every instruction-count run.
