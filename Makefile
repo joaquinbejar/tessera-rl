@@ -4,7 +4,7 @@
 # maturin's default of macOS 11. Ignored on other platforms.
 export MACOSX_DEPLOYMENT_TARGET := 13.0
 
-.PHONY: fmt fmt-check clippy test doc readme readme-check pre-push deny check-targets puffer-test compat-test py-entries py-callouts py-test py-test-hooks py-test-torch pre-push-torch gym-equivalence reference-training learning-test learning-calibrate bench bench-quick bench-kernels gungraun gungraun-bless connect4-calibration search-strength
+.PHONY: gungraun-threaded fmt fmt-check clippy test doc readme readme-check pre-push deny check-targets puffer-test compat-test py-entries py-callouts py-test py-test-hooks py-test-torch pre-push-torch gym-equivalence reference-training learning-test learning-calibrate bench bench-quick bench-kernels gungraun gungraun-bless connect4-calibration search-strength
 
 fmt:
 	cargo fmt --all
@@ -163,6 +163,10 @@ bench-kernels:
 # committed baseline in benches/gungraun; Linux only (skipped elsewhere).
 gungraun:
 	scripts/gungraun.sh check
+
+# Threaded Sync instruction counts (#76): a report, not part of the gate.
+gungraun-threaded:
+	cargo bench --locked -p tessera-rl-engine --bench threaded_instructions
 
 # Records a new instruction-count baseline (benches/gungraun/README.md says
 # when and who approves).
