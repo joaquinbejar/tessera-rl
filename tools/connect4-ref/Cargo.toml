@@ -12,6 +12,7 @@ authors.workspace = true
 repository.workspace = true
 
 [dependencies]
+tessera-rl-games = { workspace = true }
 
 [lints]
 workspace = true

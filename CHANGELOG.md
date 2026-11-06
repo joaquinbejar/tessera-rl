@@ -12,6 +12,8 @@ the API is not stable, and any 0.x release may break it.
 ### Added
 
 - **Pipelined in the PufferLib adapter** (`make_puffer(..., mode="pipelined")`): native backend only, equal halves. No speed gain has been measured.
+- **Connect Four best-response measurement** (`tools/connect4-ref`): an open-loop search per held-out slot against
+  the pinned bot and an independent replay of its lines. A reference tool, not part of any gate.
 - **PufferLib adapter** (`tessera_rl.puffer`): a native `PufferEnv` in Sync mode for CartPole and Tag at PufferLib 3.0.0, zero copy on the native backend and one copy per step on the vector backends. Limits, including hangs under `Multiprocessing` when a worker raises, are in the module docs.
 - **Threaded Sync instruction counts** (`make gungraun-threaded`, #76): caller and job-body counts of a step,
   a report outside the gate.
