@@ -481,6 +481,13 @@ def finalize(args, rc: int, name: str) -> dict:
     if report is None:
         why.append("no complete provisional report")
     if not args.any_openings and not quiescent(args.gate_dir, entry):
+        if not why:
+            # Nothing is wrong yet but the group: no result is written, and
+            # `gate.py finalize` rebuilds the verdict once it answers ESRCH.
+            final = {"kind": "p2-g1-gate", "pass": None, "interrupted": True,
+                     "attempt_invalid_because": ["the process group is not confirmed gone"]}  # fmt: skip
+            print(json.dumps(final))
+            return final
         why.append("the process group is not confirmed gone")
     final = {
         **(report or {"kind": "p2-g1-gate", "gate_run": not args.any_openings}),
@@ -895,8 +902,8 @@ def main(argv=None) -> int:
             budget_core_hours=args.budget_core_hours, cores=args.cores, wall_cap_s=args.wall_cap_s,
             out=args.out, name=name, spawn_record=None if args.any_openings else os.path.join(args.gate_dir, SPAWN),
         )  # fmt: skip
-        if supervisor.child_flag(argv) is None:
-            finalize(args, rc, name)
+        if supervisor.child_flag(argv) is None and finalize(args, rc, name).get("interrupted"):
+            return rc or 1
         return rc
 
     if args.any_openings or supervisor.child_flag(argv) is not None:

@@ -1162,25 +1162,63 @@ def test_gate_development_checkpoint_must_be_a_digest(tmp_path, bad):
         gate.gate_dir(str(tmp_path), bad)
 
 
-def test_gate_settled_ledger_with_a_live_group_is_not_quiescent(tmp_path, done_root, as_formal, bot, monkeypatch):
-    """An ok settlement proves nothing while the recorded group answers: the
-    verdict is withheld and the journal stays unsettled."""
+def live_spawn(args):
+    proc = subprocess.Popen(["sleep", "30"], start_new_session=True)
+    artifacts.write_atomic(os.path.join(args.gate_dir, gate.SPAWN),
+                           artifacts.canonical_json({"host": socket.gethostname(), "pgid": proc.pid}))  # fmt: skip
+    return proc
+
+
+def test_gate_only_a_live_group_leaves_the_attempt_interrupted(tmp_path, done_root, as_formal, bot, monkeypatch):
+    """An ok settlement proves nothing while the recorded group answers: no
+    result yet, and recovery gives the true verdict once the group ends."""
     monkeypatch.setattr(gate, "QUIESCE_WAIT_S", 0.1)
     root, _, sha, _ = selected_root(tmp_path, done_root)
     args, _ = preflight_and_claim(formal_argv(root, sha, bot))
     fake_bot(monkeypatch, 900)
-    proc = subprocess.Popen(["sleep", "30"], start_new_session=True)
+    journal = pathlib.Path(args.attempts_journal)
+    proc = live_spawn(args)
     try:
-        artifacts.write_atomic(os.path.join(args.gate_dir, gate.SPAWN),
-                               artifacts.canonical_json({"host": socket.gethostname(), "pgid": proc.pid}))  # fmt: skip
-        final = finish_attempt(args)
-        assert final["pass"] is None and any("not confirmed gone" in w for w in final["attempt_invalid_because"])
-        assert not any('"settled"' in x for x in pathlib.Path(args.attempts_journal).read_text().splitlines())
+        held = finish_attempt(args)
+        assert held["interrupted"] is True and held["pass"] is None
+        assert not (pathlib.Path(args.out) / "gate.json").exists()
+        assert (pathlib.Path(args.out) / gate.PROVISIONAL).exists()
+        assert not any('"settled"' in x for x in journal.read_text().splitlines())
+        with pytest.raises(gate.Refused, match="not confirmed gone"):
+            gate.recover(str(root))
+    finally:
+        proc.kill()
+        proc.wait()
+    final = gate.recover(str(root))
+    assert final["pass"] is True and final["meets_815"] is True and final["attempt_invalid_because"] == []
+    assert final["rule"]["wins"] == 900 and final["wdl"] == [900, 0, 100] and "provisional_diagnostics" not in final
+    assert json.loads(journal.read_text().splitlines()[-1])["disposition"] == "met-815"
+
+
+def test_gate_a_live_group_with_another_reason_is_a_null_verdict(tmp_path, done_root, as_formal, bot, monkeypatch):
+    monkeypatch.setattr(gate, "QUIESCE_WAIT_S", 0.1)
+    root, _, sha, _ = selected_root(tmp_path, done_root)
+    args, _ = preflight_and_claim(formal_argv(root, sha, bot))
+    fake_bot(monkeypatch, 900)
+    journal = pathlib.Path(args.attempts_journal)
+    proc = live_spawn(args)
+    try:
+        final = finish_attempt(args, "failed: child exit 1", 1)
+        assert final["pass"] is None and "interrupted" not in final and len(final["attempt_invalid_because"]) == 3
+        assert (pathlib.Path(args.out) / "gate.json").exists()
+        assert not any('"settled"' in x for x in journal.read_text().splitlines())
     finally:
         proc.kill()
         proc.wait()
     assert gate.recover(str(root))["pass"] is None
-    assert any('"settled"' in x for x in pathlib.Path(args.attempts_journal).read_text().splitlines())
+    assert json.loads(journal.read_text().splitlines()[-1])["disposition"] == "consumed-no-verdict"
+
+
+def test_gate_main_exits_nonzero_when_interrupted(tmp_path, done_root, as_formal, bot, monkeypatch):
+    root, _, sha, _ = selected_root(tmp_path, done_root)
+    monkeypatch.setattr(gate.supervisor, "run", lambda *a, **k: 0)
+    monkeypatch.setattr(gate, "finalize", lambda *a: {"interrupted": True})
+    assert gate.main(formal_argv(root, sha, bot)) == 1
 
 
 @pytest.mark.parametrize("case", ["nonzero", "failed-settlement", "missing-settlement"])
