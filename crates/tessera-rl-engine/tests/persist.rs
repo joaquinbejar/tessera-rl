@@ -652,3 +652,56 @@ proptest::proptest! {
         proptest::prop_assert_eq!(encode_to_vec(&back[0]), encode_to_vec(&DecodedRecord::from(p.snapshot(0).unwrap())));
     }
 }
+
+/// `file` with `extra` inserted in its descriptor at `at` bytes in.
+fn with_descriptor_bytes(file: &[u8], at: usize, extra: &[u8]) -> Vec<u8> {
+    let len_at = assets_at(file) + 2;
+    let len = usize::from(u16::from_le_bytes([file[len_at], file[len_at + 1]]));
+    assert!(at <= len);
+    let mut out = file[..len_at].to_vec();
+    out.extend_from_slice(&u16::try_from(len + extra.len()).unwrap().to_le_bytes());
+    out.extend_from_slice(&file[len_at + 2..len_at + 2 + at]);
+    out.extend_from_slice(extra);
+    out.extend_from_slice(&file[len_at + 2 + at..]);
+    reseal(&mut out);
+    out
+}
+
+fn refused_descriptor<T>(r: &Result<T, PersistError>) -> bool {
+    matches!(
+        r,
+        Err(PersistError::Incompatible {
+            field: "descriptor"
+        })
+    )
+}
+
+#[test]
+fn test_persist_cross_platform_descriptor_must_be_empty() {
+    let p = masked(1);
+    let bad = with_descriptor_bytes(&file(&p, &[0]), 0, b"x");
+    assert!(refused_descriptor(&p.decode_with(&bad, LIMITS, None)));
+}
+
+#[test]
+fn test_persist_same_platform_descriptor_has_no_extra_bytes() {
+    let p = same_pool();
+    let f = p.encode_with(&[0], LIB, Some("id")).unwrap();
+    let len_at = assets_at(&f) + 2;
+    let len = usize::from(u16::from_le_bytes([f[len_at], f[len_at + 1]]));
+    // Past the last part.
+    let bad = with_descriptor_bytes(&f, len, b"x");
+    assert!(refused_descriptor(&p.decode_with(&bad, LIMITS, Some("id"))));
+    // Inside the feature part: past it, and its length grown by one.
+    let d = &f[len_at + 2..len_at + 2 + len];
+    let mut at = 1;
+    for _ in 0..2 {
+        at += 2 + usize::from(u16::from_le_bytes([d[at], d[at + 1]]));
+    }
+    let features = usize::from(u16::from_le_bytes([d[at], d[at + 1]]));
+    let mut bad = with_descriptor_bytes(&f, at + 2 + features, b"x");
+    let part = len_at + 2 + at;
+    bad[part..part + 2].copy_from_slice(&u16::try_from(features + 1).unwrap().to_le_bytes());
+    reseal(&mut bad);
+    assert!(refused_descriptor(&p.decode_with(&bad, LIMITS, Some("id"))));
+}
