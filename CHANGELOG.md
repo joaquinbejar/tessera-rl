@@ -11,6 +11,8 @@ the API is not stable, and any 0.x release may break it.
 
 ### Changed
 
+- **Sync action copy, one agent with one discrete head** (`tessera-rl-engine`): copied by a direct loop instead of a
+  per-row slice copy, for raw environment step throughput. Validation and results are unchanged.
 - **`EnvPool::outputs` returns `Result<&Outputs, EngineError>`** and refuses a poisoned pool with `Poisoned`
   (ADR-0028, SPEC 5.4); a source-breaking change. Python's `outputs()` refuses too, in borrowed and owned modes.
 

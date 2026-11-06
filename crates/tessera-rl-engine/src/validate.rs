@@ -3,7 +3,7 @@
 //! The validation boundary (ADR-0028): every check runs before any
 //! instance is mutated.
 
-use tessera_rl_core::{Bool8, RecordLayout};
+use tessera_rl_core::{AgentRow, Bool8, RecordLayout};
 
 use crate::error::EngineError;
 use crate::layout::ActionLayout;
@@ -207,10 +207,57 @@ pub(crate) fn check_and_copy_actions<H: RecordLayout>(
         continuous_out.len(),
     )?;
     // Validated: copy, zeroing slots whose actions are not required.
+    if is_single_discrete(agents, dh, ch) {
+        copy_single_discrete(headers, input.discrete, discrete_out);
+    } else {
+        copy_all_rows(layout, headers, input, discrete_out, continuous_out);
+    }
+    Ok(())
+}
+
+/// The shape with a direct copy: one agent, one discrete head, no continuous
+/// head. Every other shape takes [`copy_all_rows`].
+#[inline]
+const fn is_single_discrete(agents: usize, discrete_heads: usize, continuous_heads: usize) -> bool {
+    agents == 1 && discrete_heads == 1 && continuous_heads == 0
+}
+
+/// Whether an agent's action is required: its instance steps (no pending
+/// reset), and the agent is alive and acting.
+#[inline]
+fn is_required(pending: bool, row: &AgentRow) -> bool {
+    !pending && row.alive.get() && row.acting.get()
+}
+
+/// [`copy_all_rows`] for the single-discrete shape: one value per instance,
+/// copied when required and zero otherwise, without a per-row slice copy.
+/// The lengths were checked by `check_inputs`.
+fn copy_single_discrete<H: RecordLayout>(headers: &[H], input: &[i32], out: &mut [i32]) {
+    for ((dst, &value), header) in out.iter_mut().zip(input).zip(headers) {
+        let pending = header.engine().pending_reset.get();
+        let required = header
+            .agents()
+            .first()
+            .is_some_and(|row| is_required(pending, row));
+        *dst = if required { value } else { 0 };
+    }
+}
+
+/// The copy of every row of every shape, zeroing rows that are not
+/// required. The lengths were checked by `check_inputs`.
+fn copy_all_rows<H: RecordLayout>(
+    layout: &ActionLayout,
+    headers: &[H],
+    input: ActionInput<'_>,
+    discrete_out: &mut [i32],
+    continuous_out: &mut [f32],
+) {
+    let agents = H::AGENTS;
+    let (dh, ch) = (layout.discrete.len(), layout.continuous.len());
     for (index, header) in headers.iter().enumerate() {
         let pending = header.engine().pending_reset.get();
         for (slot, row) in header.agents().iter().enumerate() {
-            let required = !pending && row.alive.get() && row.acting.get();
+            let required = is_required(pending, row);
             let base = index * agents + slot;
             copy_row(
                 required,
@@ -232,7 +279,6 @@ pub(crate) fn check_and_copy_actions<H: RecordLayout>(
             );
         }
     }
-    Ok(())
 }
 
 /// The product of `factors`, with checked arithmetic. An overflow is an

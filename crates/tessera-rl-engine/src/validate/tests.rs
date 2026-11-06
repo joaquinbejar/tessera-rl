@@ -571,3 +571,221 @@ fn test_subset_copy_missing_row_reports_the_pool_size() {
         })
     );
 }
+
+// Candidate C: the single-discrete copy (one agent, one discrete head, no
+// continuous head) against the generic copy of every row.
+
+type H1 = RecordHeader<1, NoAdaptive>;
+
+/// An instance with one agent; `pattern` picks one of its states.
+fn single(pattern: usize) -> H1 {
+    let mut h = H1::state_default();
+    h.engine.pending_reset = Bool8::FALSE;
+    h.engine.fresh = Bool8::FALSE;
+    h.agents[0].alive = Bool8::TRUE;
+    h.agents[0].acting = Bool8::TRUE;
+    match pattern % 4 {
+        1 => h.agents[0].alive = Bool8::FALSE,
+        2 => h.agents[0].acting = Bool8::FALSE,
+        3 => h.engine.pending_reset = Bool8::TRUE,
+        _ => {}
+    }
+    h
+}
+
+/// The generic copy on the same inputs, after the same checks.
+fn generic(
+    layout: &ActionLayout,
+    hs: &[H1],
+    input: ActionInput<'_>,
+    discrete: &mut [i32],
+    continuous: &mut [f32],
+) {
+    copy_all_rows(layout, hs, input, discrete, continuous);
+}
+
+#[test]
+fn test_single_discrete_shape_is_selected_only_for_one_agent_one_discrete_head() {
+    assert!(is_single_discrete(1, 1, 0));
+    assert!(!is_single_discrete(2, 1, 0));
+    assert!(!is_single_discrete(1, 2, 0));
+    assert!(!is_single_discrete(1, 1, 1));
+    assert!(!is_single_discrete(1, 0, 1));
+}
+
+#[test]
+fn test_single_discrete_copy_matches_the_generic_copy_on_mixed_headers() {
+    for mode in [AutoReset::NextStep, AutoReset::SameStep] {
+        let hs: Vec<H1> = (0..13).map(single).collect();
+        // Garbage in rows that are not required: never validated, stored as 0.
+        let acts: Vec<i32> = (0..13)
+            .map(|i| if i % 4 == 0 { (i % 3) as i32 } else { -7 })
+            .collect();
+        let mut fast = vec![SENTINEL; 13];
+        check_and_copy_actions(&layout(), mode, &hs, input(&acts), &mut fast, &mut []).unwrap();
+        let mut slow = vec![SENTINEL; 13];
+        generic(&layout(), &hs, input(&acts), &mut slow, &mut []);
+        assert_eq!(fast, slow, "{mode:?}");
+        for (i, &v) in fast.iter().enumerate() {
+            let expected = if i % 4 == 0 { acts[i] } else { 0 };
+            assert_eq!(v, expected, "row {i} in {mode:?}");
+        }
+    }
+}
+
+#[test]
+fn test_single_discrete_refusals_change_neither_buffer() {
+    let hs: Vec<H1> = (0..5).map(|_| single(0)).collect();
+    // An invalid value on the last row, with valid early rows.
+    let mut out = vec![SENTINEL; 5];
+    let err = check_and_copy_actions(
+        &layout(),
+        AutoReset::NextStep,
+        &hs,
+        input(&[0, 1, 2, 0, 3]),
+        &mut out,
+        &mut [],
+    );
+    assert!(matches!(
+        err,
+        Err(EngineError::DiscreteOutOfRange { instance: 4, .. })
+    ));
+    assert!(
+        out.iter().all(|&v| v == SENTINEL),
+        "no row copied before the error"
+    );
+    // Wrong input length.
+    let err = check_and_copy_actions(
+        &layout(),
+        AutoReset::NextStep,
+        &hs,
+        input(&[0; 4]),
+        &mut out,
+        &mut [],
+    );
+    assert!(matches!(err, Err(EngineError::ActionLength { .. })));
+    assert!(out.iter().all(|&v| v == SENTINEL));
+    // Disabled with a pending instance on the last row.
+    let mut pending = hs.clone();
+    pending[4].engine.pending_reset = Bool8::TRUE;
+    let err = check_and_copy_actions(
+        &layout(),
+        AutoReset::Disabled,
+        &pending,
+        input(&[0; 5]),
+        &mut out,
+        &mut [],
+    );
+    assert_eq!(err, Err(EngineError::PendingReset { id: 4 }));
+    assert!(out.iter().all(|&v| v == SENTINEL));
+    // An exhausted step counter on the last row.
+    let mut tired = hs.clone();
+    tired[4].engine.episode_steps = u32::MAX;
+    let err = check_and_copy_actions(
+        &layout(),
+        AutoReset::NextStep,
+        &tired,
+        input(&[0; 5]),
+        &mut out,
+        &mut [],
+    );
+    assert_eq!(
+        err,
+        Err(EngineError::CounterExhausted {
+            id: 4,
+            counter: "step_index"
+        })
+    );
+    assert!(out.iter().all(|&v| v == SENTINEL));
+    // An exhausted episode counter under SameStep.
+    let mut ended = hs.clone();
+    ended[4].engine.identity = RngIdentity::from_parts(
+        Seed::new(1),
+        BranchSalt::ROOT,
+        LogicalId::new(4),
+        u32::MAX,
+        0,
+    );
+    let err = check_and_copy_actions(
+        &layout(),
+        AutoReset::SameStep,
+        &ended,
+        input(&[0; 5]),
+        &mut out,
+        &mut [],
+    );
+    assert_eq!(
+        err,
+        Err(EngineError::CounterExhausted {
+            id: 4,
+            counter: "episode_index"
+        })
+    );
+    assert!(out.iter().all(|&v| v == SENTINEL));
+    // A fresh instance that was never reset.
+    let mut fresh = hs;
+    fresh[4].engine.pending_reset = Bool8::TRUE;
+    fresh[4].engine.fresh = Bool8::TRUE;
+    let err = check_and_copy_actions(
+        &layout(),
+        AutoReset::NextStep,
+        &fresh,
+        input(&[0; 5]),
+        &mut out,
+        &mut [],
+    );
+    assert_eq!(err, Err(EngineError::PendingReset { id: 4 }));
+    assert!(out.iter().all(|&v| v == SENTINEL));
+}
+
+#[test]
+fn test_fallback_shapes_still_copy_every_row() {
+    // Two agents, one discrete head: the existing shape of this file.
+    let mut hs = headers(3);
+    hs[1].agents[1].acting = Bool8::FALSE;
+    let mut out = vec![SENTINEL; 6];
+    check_and_copy_actions(
+        &layout(),
+        AutoReset::NextStep,
+        &hs,
+        input(&[0, 1, 2, -1, 1, 0]),
+        &mut out,
+        &mut [],
+    )
+    .unwrap();
+    assert_eq!(out, [0, 1, 2, 0, 1, 0]);
+    // One agent, a discrete and a continuous head.
+    let one: Vec<H1> = (0..4).map(single).collect();
+    let mut d = vec![SENTINEL; 4];
+    let mut c = vec![f32::NAN; 4];
+    check_and_copy_actions(
+        &layout_c(),
+        AutoReset::NextStep,
+        &one,
+        ActionInput {
+            discrete: &[2, -9, -9, -9],
+            continuous: &[0.5, 9.0, 9.0, 9.0],
+        },
+        &mut d,
+        &mut c,
+    )
+    .unwrap();
+    assert_eq!(d, [2, 0, 0, 0]);
+    assert_eq!(c, [0.5, 0.0, 0.0, 0.0]);
+    // One agent, two discrete heads.
+    let two = ActionLayout {
+        discrete: vec![3, 4],
+        continuous: Vec::new(),
+    };
+    let mut d = vec![SENTINEL; 8];
+    check_and_copy_actions(
+        &two,
+        AutoReset::NextStep,
+        &one,
+        input(&[2, 3, -1, -1, -1, -1, -1, -1]),
+        &mut d,
+        &mut [],
+    )
+    .unwrap();
+    assert_eq!(d, [2, 3, 0, 0, 0, 0, 0, 0]);
+}
