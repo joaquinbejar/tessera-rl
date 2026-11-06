@@ -40,8 +40,13 @@
 //! step of the same pool. Batch claiming and wake-based waits are tracked in
 //! issue #83.
 
+use crate::masks::PersistMask;
+use crate::persist::{DecodeLimits, PersistError};
+use crate::record::DecodedRecord;
 use core::num::NonZeroUsize;
 use core::time::Duration;
+use tessera_rl_core::Persist;
+use tessera_rl_core::config::CanonicalConfig;
 
 use std::sync::Arc;
 use std::time::Instant;
@@ -1199,4 +1204,96 @@ fn legality<E: Environment, M: MaskProvider<E>, R: crate::validate::AdmittedRows
         )?;
     }
     Ok(())
+}
+
+/// Persisted snapshots (ADR-0011).
+impl<E, M> AsyncPool<E, M>
+where
+    E: Persist,
+    E::Config: CanonicalConfig + Send + Sync,
+    E::Header: Send + Sync,
+    E::State: Send + Sync,
+    M: PersistMask<E> + Send + Sync,
+    <E::Header as RecordLayout>::Adaptive: AdaptiveValues<E::Config>,
+{
+    /// Checks records against this pool without writing anything, so a caller can
+    /// refuse a bad file before giving up its tokens. It establishes no trust:
+    /// `import_all` checks again. It reads the config and options by place, forming no
+    /// `&EnvPool` beside the workers, so it needs no quiescence and works on a poisoned
+    /// pool. A panic in `Validate` unwinds, as in `import`, with nothing written.
+    ///
+    /// # Errors
+    ///
+    /// [`EngineError::WorkerDied`] after a worker died, [`EngineError::RecordCount`],
+    /// [`EngineError::InvalidRecord`] or [`EngineError::Invariant`].
+    pub fn check_records(&self, records: &[DecodedRecord<E>]) -> Result<(), EngineError> {
+        if self.dead() {
+            return Err(EngineError::WorkerDied);
+        }
+        let (cfg, options) = (&self.mode.pool.cfg, &self.mode.pool.options);
+        let instances = options.num_envs.get();
+        if u32::try_from(records.len()) != Ok(instances) {
+            return Err(EngineError::RecordCount {
+                records: records.len(),
+                instances: usize::try_from(instances).unwrap_or(usize::MAX),
+            });
+        }
+        crate::entry::canonical(|| {
+            records
+                .iter()
+                .enumerate()
+                .try_for_each(|(i, r)| crate::snapshot::check_record::<E>(cfg, options, i, r))
+        })
+    }
+
+    /// The file holding the records of `ids`, as [`EnvPool::encode`]. No sent id may still be running or waiting to be received.
+    ///
+    /// # Errors
+    ///
+    /// [`EngineError::NotQuiescent`] and [`EngineError::Poisoned`], in a
+    /// [`PersistError`], or any error of [`EnvPool::encode`].
+    pub fn encode(&self, ids: &[u32]) -> Result<Vec<u8>, PersistError> {
+        // Poison first: a poisoned pool never gets quiescent by waiting.
+        if self.is_poisoned() {
+            return Err(EngineError::Poisoned.into());
+        }
+        if self.outstanding != 0 {
+            return Err(EngineError::NotQuiescent.into());
+        }
+        self.mode.pool.encode(ids)
+    }
+
+    /// Checks a file against this pool's config and options and returns its untrusted
+    /// records. Reads them by place, forming no `&EnvPool` beside the workers,
+    /// so it needs no quiescence and works on a poisoned pool, whose recovery
+    /// is [`Self::import_all`].
+    ///
+    /// # Errors
+    ///
+    /// As [`EnvPool::decode`].
+    pub fn decode(
+        &self,
+        bytes: &[u8],
+        limits: DecodeLimits,
+    ) -> Result<Vec<DecodedRecord<E>>, PersistError> {
+        crate::persist::decode_file::<E, M>(
+            &self.mode.pool.cfg,
+            &self.mode.pool.options,
+            bytes,
+            limits,
+            crate::persist::BUILD_ID,
+        )
+    }
+
+    /// Imports untrusted records into every instance. As [`Self::restore_all`]:
+    /// completed ids not yet received are discarded.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::restore_all`], or any error of [`EnvPool::import_all`].
+    pub fn import_all(&mut self, records: &[DecodedRecord<E>]) -> Result<(), EngineError> {
+        let recovery = self.is_poisoned();
+        self.write(recovery, |pool| pool.import_all(records))?;
+        self.after_full_write()
+    }
 }

@@ -25,7 +25,7 @@ use tessera_rl_core::{AdaptiveValues, DecodeError, Persist, RecordLayout, Tier};
 
 use crate::error::EngineError;
 use crate::masks::{IllegalActionPolicy, PersistMask};
-use crate::options::AutoReset;
+use crate::options::{AutoReset, PoolOptions};
 use crate::pool::EnvPool;
 use crate::record::DecodedRecord;
 
@@ -260,13 +260,13 @@ fn descriptor_matches(
     }
 }
 
-fn identity<E, M>(pool: &EnvPool<E, M>) -> Result<Identity, PersistError>
+fn identity<E, M>(cfg: &E::Config, options: &PoolOptions) -> Result<Identity, PersistError>
 where
     E: Persist,
     E::Config: CanonicalConfig,
     M: PersistMask<E>,
 {
-    let (illegal_kind, penalty_bits) = match (M::ENABLED, pool.options.illegal_action) {
+    let (illegal_kind, penalty_bits) = match (M::ENABLED, options.illegal_action) {
         (true, IllegalActionPolicy::Penalize(r)) => (1, r.to_bits()),
         _ => (0, 0),
     };
@@ -281,19 +281,18 @@ where
             Tier::SamePlatform => 1,
         },
         mask_provider: M::PROVIDER_ID,
-        auto_reset: match pool.options.auto_reset {
+        auto_reset: match options.auto_reset {
             AutoReset::NextStep => 0,
             AutoReset::SameStep => 1,
             AutoReset::Disabled => 2,
         },
         illegal_kind,
         penalty_bits,
-        max_episode_steps: pool
-            .options
+        max_episode_steps: options
             .max_episode_steps
             .map_or(0, core::num::NonZeroU32::get),
         env_version: E::ENV_VERSION,
-        config_hash: config_hash(E::ENV_ID, E::ENV_VERSION, &pool.cfg)
+        config_hash: config_hash(E::ENV_ID, E::ENV_VERSION, cfg)
             .map_err(|e| PersistError::Engine(e.into()))?,
         record_len,
         env_id: E::ENV_ID,
@@ -540,7 +539,7 @@ where
         bytes: &[u8],
         limits: DecodeLimits,
     ) -> Result<Vec<DecodedRecord<E>>, PersistError> {
-        self.decode_inner(bytes, limits, BUILD_ID)
+        decode_file::<E, M>(&self.cfg, &self.options, bytes, limits, BUILD_ID)
     }
 
     /// [`EnvPool::encode`] with its build inputs as parameters. It substitutes the
@@ -573,7 +572,7 @@ where
         limits: DecodeLimits,
         build_id: Option<&str>,
     ) -> Result<Vec<DecodedRecord<E>>, PersistError> {
-        self.decode_inner(bytes, limits, build_id)
+        decode_file::<E, M>(&self.cfg, &self.options, bytes, limits, build_id)
     }
 
     fn encode_inner(
@@ -585,7 +584,7 @@ where
         if self.poisoned {
             return Err(EngineError::Poisoned.into());
         }
-        let id = identity(self)?;
+        let id = identity::<E, M>(&self.cfg, &self.options)?;
         let file_descriptor = descriptor(E::TIER, build_id)?;
         let count = u32::try_from(ids.len()).map_err(|_| PersistError::InvalidField {
             field: "instance_count",
@@ -626,73 +625,82 @@ where
         out.extend_from_slice(&sum.to_le_bytes());
         Ok(out)
     }
+}
 
-    fn decode_inner(
-        &self,
-        bytes: &[u8],
-        limits: DecodeLimits,
-        build_id: Option<&str>,
-    ) -> Result<Vec<DecodedRecord<E>>, PersistError> {
-        // Before scanning a file no limit could admit.
-        if u64_of(bytes.len()) > limits.max_decoded_bytes {
-            return Err(PersistError::TooLarge {
-                bytes: u64_of(bytes.len()),
-                limit: limits.max_decoded_bytes,
-            });
-        }
-        let mut r = Reader(bytes);
-        if r.array::<8>()? != MAGIC {
-            return Err(PersistError::BadMagic);
-        }
-        // Before the checksum, so a later format reports its version.
-        let found = r.u32()?;
-        if found != FORMAT_VERSION {
-            return Err(PersistError::UnsupportedFormat { found });
-        }
-        let body_len = bytes
-            .len()
-            .checked_sub(CHECKSUM_LEN)
-            .ok_or(PersistError::Truncated)?;
-        let (body, stored) = bytes
-            .split_at_checked(body_len)
-            .ok_or(PersistError::Truncated)?;
-        if checksum(body).to_le_bytes() != stored {
-            return Err(PersistError::Checksum);
-        }
-        let mut r = Reader(body);
-        let file = FileHeader::read(&mut r)?;
-        file.check_fields()?;
-        file.check_against(&identity(self)?, E::TIER, build_id)?;
-        let (count, record_len) = (file.count, file.record_len);
-        let limit = limits.max_instances.min(self.options.num_envs.get());
-        if count > limit {
-            return Err(PersistError::TooManyInstances { count, limit });
-        }
-        let n = usize::try_from(count).map_err(|_| PersistError::PayloadLength)?;
-        let len = usize::try_from(record_len).map_err(|_| PersistError::PayloadLength)?;
-        if n.checked_mul(len) != Some(r.0.len()) {
-            return Err(PersistError::PayloadLength);
-        }
-        let held = n
-            .checked_mul(size_of::<DecodedRecord<E>>())
-            .and_then(|b| b.checked_add(bytes.len()))
-            .map_or(u64::MAX, u64_of);
-        if held > limits.max_decoded_bytes {
-            return Err(PersistError::TooLarge {
-                bytes: held,
-                limit: limits.max_decoded_bytes,
-            });
-        }
-        let mut out = Vec::new();
-        out.try_reserve_exact(n)
-            .map_err(|_| PersistError::Allocation)?;
-        for (index, chunk) in r.0.chunks_exact(len.max(1)).enumerate() {
-            let record = decode_from_slice(chunk)
-                .map_err(|source| PersistError::Record { index, source })?;
-            out.push(record);
-        }
-        Ok(out)
+/// Checks a file against a pool's config and options and returns its untrusted
+/// records. A function of those two immutable values alone, so a split-phase wrapper
+/// reaches them by place, forming no `&EnvPool` beside its workers.
+pub(crate) fn decode_file<E, M>(
+    cfg: &E::Config,
+    options: &PoolOptions,
+    bytes: &[u8],
+    limits: DecodeLimits,
+    build_id: Option<&str>,
+) -> Result<Vec<DecodedRecord<E>>, PersistError>
+where
+    E: Persist,
+    E::Config: CanonicalConfig,
+    M: PersistMask<E>,
+{
+    // Before scanning a file no limit could admit.
+    if u64_of(bytes.len()) > limits.max_decoded_bytes {
+        return Err(PersistError::TooLarge {
+            bytes: u64_of(bytes.len()),
+            limit: limits.max_decoded_bytes,
+        });
     }
+    let mut r = Reader(bytes);
+    if r.array::<8>()? != MAGIC {
+        return Err(PersistError::BadMagic);
+    }
+    // Before the checksum, so a later format reports its version.
+    let found = r.u32()?;
+    if found != FORMAT_VERSION {
+        return Err(PersistError::UnsupportedFormat { found });
+    }
+    let body_len = bytes
+        .len()
+        .checked_sub(CHECKSUM_LEN)
+        .ok_or(PersistError::Truncated)?;
+    let (body, stored) = bytes
+        .split_at_checked(body_len)
+        .ok_or(PersistError::Truncated)?;
+    if checksum(body).to_le_bytes() != stored {
+        return Err(PersistError::Checksum);
+    }
+    let mut r = Reader(body);
+    let file = FileHeader::read(&mut r)?;
+    file.check_fields()?;
+    file.check_against(&identity::<E, M>(cfg, options)?, E::TIER, build_id)?;
+    let (count, record_len) = (file.count, file.record_len);
+    let limit = limits.max_instances.min(options.num_envs.get());
+    if count > limit {
+        return Err(PersistError::TooManyInstances { count, limit });
+    }
+    let n = usize::try_from(count).map_err(|_| PersistError::PayloadLength)?;
+    let len = usize::try_from(record_len).map_err(|_| PersistError::PayloadLength)?;
+    if n.checked_mul(len) != Some(r.0.len()) {
+        return Err(PersistError::PayloadLength);
+    }
+    let held = n
+        .checked_mul(size_of::<DecodedRecord<E>>())
+        .and_then(|b| b.checked_add(bytes.len()))
+        .map_or(u64::MAX, u64_of);
+    if held > limits.max_decoded_bytes {
+        return Err(PersistError::TooLarge {
+            bytes: held,
+            limit: limits.max_decoded_bytes,
+        });
+    }
+    let mut out = Vec::new();
+    out.try_reserve_exact(n)
+        .map_err(|_| PersistError::Allocation)?;
+    for (index, chunk) in r.0.chunks_exact(len.max(1)).enumerate() {
+        let record =
+            decode_from_slice(chunk).map_err(|source| PersistError::Record { index, source })?;
+        out.push(record);
+    }
+    Ok(out)
 }
 
 #[cfg(test)]

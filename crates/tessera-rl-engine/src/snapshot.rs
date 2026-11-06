@@ -316,92 +316,11 @@ where
         })
     }
 
-    /// Checks an untrusted record: the engine header against this pool,
-    /// then the environment's invariants.
     fn check_import(&self, index: usize, record: &DecodedRecord<E>) -> Result<(), EngineError>
     where
         E: Validate,
     {
-        let invalid = |reason| Err(EngineError::InvalidRecord { index, reason });
-        let header = record.header();
-        let engine = header.engine();
-        let pending = engine.pending_reset.get();
-        if !pending && engine.end_kind != 0 {
-            return invalid("an episode end without a pending reset");
-        }
-        if pending && !engine.fresh.get() && engine.end_kind == 0 {
-            return invalid("a pending reset without an episode end");
-        }
-        // The engine sets `fresh` only on a never-reset record: pending
-        // reset, no episode end, no steps, episode and step index 0. Any
-        // other `fresh` record would make the next reset reuse an episode
-        // index, and with it RNG counters (ADR-0007).
-        if engine.fresh.get()
-            && !(pending
-                && engine.end_kind == 0
-                && engine.episode_steps == 0
-                && engine.identity.episode_index() == 0
-                && engine.identity.step_index() == 0)
-        {
-            return invalid("a fresh record that is not a never-reset record");
-        }
-        if engine.identity.step_index() != engine.episode_steps {
-            return invalid("the RNG step index differs from the episode steps");
-        }
-        if let Some(limit) = self.options.max_episode_steps
-            && engine.episode_steps > limit.get()
-        {
-            return invalid("an episode longer than the step limit");
-        }
-        if pending && !engine.fresh.get() && self.options.auto_reset == AutoReset::SameStep {
-            return invalid("a pending reset in same_step mode");
-        }
-        for row in header.agents() {
-            if row.acting.get() && !row.alive.get() {
-                return invalid("an acting agent that is not alive");
-            }
-            if row.illegal_actions > engine.episode_steps {
-                return invalid("more illegal actions than steps");
-            }
-            if u32::from(row.invalid_agent_events) > engine.episode_steps {
-                return invalid("more invalid agent events than steps");
-            }
-            if !row.episode_return.is_finite() {
-                return invalid("a non-finite episode return");
-            }
-        }
-        let view = tessera_rl_core::HeaderView::of(header);
-        E::validate_record(&self.cfg, &view, record.state())
-            .map_err(|violation| EngineError::Invariant { index, violation })?;
-        // Turn order (ADR-0013), checked only after the record passed
-        // `validate_record`, so `acting` never sees an invalid state:
-        // outside a pending reset, the acting flags
-        // of a non-simultaneous environment are exactly the ones its
-        // `acting` names for this state, so a record cannot make a waiting
-        // agent act.
-        if E::TURNS != TurnStructure::Simultaneous && !pending {
-            for (slot, row) in header.agents().iter().enumerate() {
-                let expected = row.alive.get()
-                    && u16::try_from(slot)
-                        .ok()
-                        .and_then(|s| AgentSlot::new(s, E::MAX_AGENTS))
-                        .is_some_and(|s| E::acting(&self.cfg, record.state(), s));
-                if row.acting.get() != expected {
-                    return invalid("acting flags that differ from the environment's turn order");
-                }
-            }
-            // A Sequential game that goes on has exactly one (alive) agent
-            // to move; a record without one would let the next step run on
-            // an ignored action. Mixed may have none.
-            if E::TURNS == TurnStructure::Sequential
-                && header.agents().iter().filter(|r| r.acting.get()).count() != 1
-            {
-                return invalid(
-                    "a Sequential record that goes on without exactly one acting agent",
-                );
-            }
-        }
-        Ok(())
+        check_record::<E>(&self.cfg, &self.options, index, record)
     }
 
     /// Restores untrusted records (decoded from bytes) into `ids`, in
@@ -461,6 +380,94 @@ where
             Ok(())
         })
     }
+}
+
+/// Checks an untrusted record: the engine header against this pool,
+/// then the environment's invariants.
+pub(crate) fn check_record<E: Environment + Validate>(
+    cfg: &E::Config,
+    options: &crate::options::PoolOptions,
+    index: usize,
+    record: &DecodedRecord<E>,
+) -> Result<(), EngineError> {
+    let invalid = |reason| Err(EngineError::InvalidRecord { index, reason });
+    let header = record.header();
+    let engine = header.engine();
+    let pending = engine.pending_reset.get();
+    if !pending && engine.end_kind != 0 {
+        return invalid("an episode end without a pending reset");
+    }
+    if pending && !engine.fresh.get() && engine.end_kind == 0 {
+        return invalid("a pending reset without an episode end");
+    }
+    // The engine sets `fresh` only on a never-reset record: pending
+    // reset, no episode end, no steps, episode and step index 0. Any
+    // other `fresh` record would make the next reset reuse an episode
+    // index, and with it RNG counters (ADR-0007).
+    if engine.fresh.get()
+        && !(pending
+            && engine.end_kind == 0
+            && engine.episode_steps == 0
+            && engine.identity.episode_index() == 0
+            && engine.identity.step_index() == 0)
+    {
+        return invalid("a fresh record that is not a never-reset record");
+    }
+    if engine.identity.step_index() != engine.episode_steps {
+        return invalid("the RNG step index differs from the episode steps");
+    }
+    if let Some(limit) = options.max_episode_steps
+        && engine.episode_steps > limit.get()
+    {
+        return invalid("an episode longer than the step limit");
+    }
+    if pending && !engine.fresh.get() && options.auto_reset == AutoReset::SameStep {
+        return invalid("a pending reset in same_step mode");
+    }
+    for row in header.agents() {
+        if row.acting.get() && !row.alive.get() {
+            return invalid("an acting agent that is not alive");
+        }
+        if row.illegal_actions > engine.episode_steps {
+            return invalid("more illegal actions than steps");
+        }
+        if u32::from(row.invalid_agent_events) > engine.episode_steps {
+            return invalid("more invalid agent events than steps");
+        }
+        if !row.episode_return.is_finite() {
+            return invalid("a non-finite episode return");
+        }
+    }
+    let view = tessera_rl_core::HeaderView::of(header);
+    E::validate_record(cfg, &view, record.state())
+        .map_err(|violation| EngineError::Invariant { index, violation })?;
+    // Turn order (ADR-0013), checked only after the record passed
+    // `validate_record`, so `acting` never sees an invalid state:
+    // outside a pending reset, the acting flags
+    // of a non-simultaneous environment are exactly the ones its
+    // `acting` names for this state, so a record cannot make a waiting
+    // agent act.
+    if E::TURNS != TurnStructure::Simultaneous && !pending {
+        for (slot, row) in header.agents().iter().enumerate() {
+            let expected = row.alive.get()
+                && u16::try_from(slot)
+                    .ok()
+                    .and_then(|s| AgentSlot::new(s, E::MAX_AGENTS))
+                    .is_some_and(|s| E::acting(cfg, record.state(), s));
+            if row.acting.get() != expected {
+                return invalid("acting flags that differ from the environment's turn order");
+            }
+        }
+        // A Sequential game that goes on has exactly one (alive) agent
+        // to move; a record without one would let the next step run on
+        // an ignored action. Mixed may have none.
+        if E::TURNS == TurnStructure::Sequential
+            && header.agents().iter().filter(|r| r.acting.get()).count() != 1
+        {
+            return invalid("a Sequential record that goes on without exactly one acting agent");
+        }
+    }
+    Ok(())
 }
 
 /// The ids as indices; ids were validated before this is called.

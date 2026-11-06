@@ -10,6 +10,7 @@
 //!   RecordError        records that fail decoding or import checks
 //!   PendingResetError  stepping an instance that waits for its reset
 //!   PoisonedError      the environment is poisoned (or a worker failed)
+//!   PersistError       a persisted file that is damaged, malformed or mismatched
 //!   ConcurrencyError   a concurrent or nested call, or a split-phase state
 //!                      error (in flight, borrowed, nothing to receive)
 //!   ExhaustedError     a step, episode or branch counter would overflow
@@ -43,9 +44,10 @@ pub(crate) enum Kind {
     Search,
     Evaluator,
     Forked,
+    Persist,
 }
 
-const KINDS: [(Kind, &str, &std::ffi::CStr); 13] = [
+const KINDS: [(Kind, &str, &std::ffi::CStr); 14] = [
     (
         Kind::Base,
         "TesseraError",
@@ -111,11 +113,16 @@ const KINDS: [(Kind, &str, &std::ffi::CStr); 13] = [
         "ForkError",
         c"An environment created before os.fork() was used in the child.",
     ),
+    (
+        Kind::Persist,
+        "PersistError",
+        c"A persisted file that is damaged, malformed or does not match this environment.",
+    ),
 ];
 
 /// The classes, created once at module initialization; null before.
-static TYPES: [AtomicPtr<ffi::PyObject>; 13] =
-    [const { AtomicPtr::new(core::ptr::null_mut()) }; 13];
+static TYPES: [AtomicPtr<ffi::PyObject>; KINDS.len()] =
+    [const { AtomicPtr::new(core::ptr::null_mut()) }; KINDS.len()];
 
 fn index(kind: Kind) -> usize {
     KINDS.iter().position(|(k, _, _)| *k == kind).unwrap_or(0)
@@ -217,6 +224,10 @@ pub(crate) fn to_py(g: Gil, e: BindError) -> Raised {
         BindError::Decode(e) => error(g, Kind::Record, e.to_string()),
         BindError::Argument(message) => error(g, Kind::Argument, message),
         BindError::Forked(message) => error(g, Kind::Forked, message),
+        BindError::Persist(tessera_rl_engine::PersistError::Engine(e)) => {
+            error(g, engine_kind(&e), e.to_string())
+        }
+        BindError::Persist(e) => error(g, Kind::Persist, e.to_string()),
         BindError::Search(tessera_rl_search::SearchError::Evaluator(e)) => {
             error(g, Kind::Evaluator, e.to_string())
         }

@@ -145,8 +145,10 @@ varargs!(step, api::step);
 varargs!(snapshot, api::snapshot);
 varargs!(import_record, api::import_record);
 varargs!(fork, api::fork);
+varargs!(encode, api::encode);
+varargs!(load, api::load);
 
-static METHODS: Table<[ffi::PyMethodDef; 15]> = Table([
+static METHODS: Table<[ffi::PyMethodDef; 17]> = Table([
     method(
         c"layout",
         thunks::LAYOUT,
@@ -194,6 +196,18 @@ static METHODS: Table<[ffi::PyMethodDef; 15]> = Table([
         thunks::IMPORT_RECORD,
         ffi::METH_VARARGS,
         c"import_record(id, record)",
+    ),
+    method(
+        c"encode",
+        thunks::ENCODE,
+        ffi::METH_VARARGS,
+        c"encode(ids) -> bytes",
+    ),
+    method(
+        c"load",
+        thunks::LOAD,
+        ffi::METH_VARARGS,
+        c"load(data, ids, max_instances, max_decoded_bytes)",
     ),
     method(
         c"send",

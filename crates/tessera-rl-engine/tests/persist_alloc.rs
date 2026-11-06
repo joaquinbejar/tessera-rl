@@ -151,8 +151,3 @@ fn test_persist_refused_counts_never_reach_the_allocator_on_either_tier() {
     let good = q.encode_with(&[0], "fixture", Some("build")).unwrap();
     refused_counts(&good, &|b, l| q.decode_with(b, l, Some("build")).is_err());
 }
-
-impl Persist for Counter {
-    const ENV_ID: &'static str = "tessera/Counter-v1";
-    const ENV_VERSION: u32 = 1;
-}

@@ -75,6 +75,11 @@ impl Environment for ObservePanicCounter {
     }
 }
 
+impl tessera_rl_core::Persist for ObservePanicCounter {
+    const ENV_ID: &'static str = "tessera/ObservePanic-v1";
+    const ENV_VERSION: u32 = 1;
+}
+
 impl Validate for ObservePanicCounter {
     fn validate(cfg: &CountConfig, state: &Counts) -> Result<(), InvariantViolation> {
         Counter::validate(cfg, state)

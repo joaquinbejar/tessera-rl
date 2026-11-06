@@ -12,6 +12,9 @@
 
 use core::any::Any;
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use tessera_rl_core::Persist;
+use tessera_rl_core::config::CanonicalConfig;
+use tessera_rl_engine::{DecodeLimits, PersistMask};
 
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread::ThreadId;
@@ -114,6 +117,11 @@ pub(crate) trait AsyncOps: Send + Sync {
     -> Result<(), BindError>;
     fn snapshot_all(&self) -> Result<Snapshot, BindError>;
     fn restore_all(&self, snapshot: &Snapshot) -> Result<(), BindError>;
+    /// The persisted file of `ids`; no sent id may be outstanding.
+    fn encode(&self, ids: &[u32]) -> Result<Vec<u8>, BindError>;
+    /// Loads a persisted file into every instance. A refused file leaves
+    /// tokens, views and deliveries as they were.
+    fn load(&self, bytes: &[u8], limits: DecodeLimits) -> Result<(), BindError>;
     fn is_poisoned(&self) -> bool;
     /// Drains and joins the workers; idempotent.
     fn close(&self);
@@ -463,9 +471,9 @@ fn reseed_of<'a>(seed: &ResetSeed, seeds: &'a mut Vec<Option<Seed>>) -> Reseed<'
 
 impl<E, M> AsyncOps for BatchedPool<E, M>
 where
-    E: Environment + 'static,
-    M: MaskProvider<E> + Send + Sync + 'static,
-    E::Config: Send + Sync,
+    E: Persist + 'static,
+    M: PersistMask<E> + Send + Sync + 'static,
+    E::Config: CanonicalConfig + Send + Sync,
     E::Header: Send + Sync,
     E::State: Send + Sync,
     <E::Header as RecordLayout>::Adaptive: AdaptiveValues<E::Config>,
@@ -668,6 +676,36 @@ where
         Ok(())
     }
 
+    fn encode(&self, ids: &[u32]) -> Result<Vec<u8>, BindError> {
+        let guard = self.lock()?;
+        let pool = guard.pool.as_ref().ok_or_else(closed)?;
+        Ok(pool.encode(ids)?)
+    }
+
+    fn load(&self, bytes: &[u8], limits: DecodeLimits) -> Result<(), BindError> {
+        let mut guard = self.lock()?;
+        let state = &mut *guard;
+        let pool = state.pool.as_mut().ok_or_else(closed)?;
+        // Everything that can refuse the file comes before the tokens go.
+        let records = pool.decode(bytes, limits)?;
+        pool.check_records(&records)?;
+        state.stored.release_all();
+        let recovering = pool.is_poisoned();
+        self.unsettle();
+        let result = pool.import_all(&records);
+        if result.is_ok() {
+            state.stored.covered.fill(false);
+            // As `restore_all`: old gathered views stay stale after a recovery.
+            if recovering && let Some(writer) = state.gather.as_mut() {
+                writer.begin();
+            }
+        }
+        self.settle(pool);
+        result?;
+        state.pending = None;
+        Ok(())
+    }
+
     fn is_poisoned(&self) -> bool {
         self.lock().map_or(true, |s| {
             s.pool.as_ref().is_some_and(AsyncPool::is_poisoned)
@@ -742,6 +780,19 @@ impl PoolOps for AsyncHandle {
         Err(wrong_mode("import_record"))
     }
 
+    fn encode(&self, _ids: &[u32]) -> Result<Vec<u8>, BindError> {
+        Err(wrong_mode("encode"))
+    }
+
+    fn load(
+        &mut self,
+        _bytes: &[u8],
+        _ids: Option<&[u32]>,
+        _limits: tessera_rl_engine::DecodeLimits,
+    ) -> Result<(), BindError> {
+        Err(wrong_mode("load"))
+    }
+
     fn fork(&mut self, _src: u32, _dst: &[u32]) -> Result<(), BindError> {
         Err(wrong_mode("fork"))
     }
@@ -775,9 +826,9 @@ pub(crate) fn batched<E, M>(
     outputs: BatchOutputs,
 ) -> Result<Box<dyn PoolOps>, BindError>
 where
-    E: Environment + 'static,
-    M: MaskProvider<E> + Send + Sync + 'static,
-    E::Config: Send + Sync,
+    E: Persist + 'static,
+    M: PersistMask<E> + Send + Sync + 'static,
+    E::Config: CanonicalConfig + Send + Sync,
     E::Header: Send + Sync,
     E::State: Send + Sync,
     <E::Header as RecordLayout>::Adaptive: AdaptiveValues<E::Config>,
@@ -873,6 +924,55 @@ mod tests {
         options.chunk_size = NonZeroU32::new(2).unwrap();
         let pool = EnvPool::<Counter, NoMasks>::new(cfg.clone(), options).unwrap();
         finish(&cfg, pool, a, 8, false).unwrap()
+    }
+
+    fn damaged(file: &[u8]) -> Vec<u8> {
+        let mut bad = file.to_vec();
+        if let Some(last) = bad.last_mut() {
+            *last ^= 1;
+        }
+        bad
+    }
+
+    #[test]
+    fn test_async_load_refuses_a_bad_file_and_recovers_from_poison() {
+        let ops = panicking(&args(false, Some((2, BatchOutputs::Gathered))));
+        let ops = ops.batched().unwrap();
+        ops.reset_all(&ResetSeed::Keep).unwrap();
+        let ids: Vec<u32> = (0..N).collect();
+        let file = ops.encode(&ids).unwrap();
+        let limits = tessera_rl_engine::DecodeLimits::default();
+        let actions = vec![0; ids.len() * <Counter as Environment>::MAX_AGENTS];
+        ops.send(&ids, &actions, 0).unwrap();
+        while !ops.is_poisoned() {
+            let _ = ops.try_recv(0);
+            std::thread::yield_now();
+        }
+        assert!(ops.encode(&[]).is_err());
+        assert!(ops.load(&damaged(&file), limits).is_err());
+        assert!(ops.is_poisoned());
+        ops.load(&file, limits).unwrap();
+        assert!(!ops.is_poisoned());
+        assert_eq!(ops.encode(&ids).unwrap(), file);
+        ops.close();
+    }
+
+    #[test]
+    fn test_sync_load_with_every_id_recovers_from_poison_and_with_ids_does_not() {
+        let mut ops = panicking(&args(false, None));
+        ops.reset(None, &ResetSeed::Keep).unwrap();
+        let ids: Vec<u32> = (0..N).collect();
+        let file = ops.encode(&ids).unwrap();
+        let limits = tessera_rl_engine::DecodeLimits::default();
+        let actions = vec![0; ids.len() * <Counter as Environment>::MAX_AGENTS];
+        assert!(ops.step(&actions).is_err());
+        assert!(ops.is_poisoned());
+        assert!(ops.encode(&[]).is_err());
+        assert!(ops.load(&file, Some(&ids), limits).is_err());
+        assert!(ops.is_poisoned());
+        ops.load(&file, None, limits).unwrap();
+        assert!(!ops.is_poisoned());
+        assert_eq!(ops.encode(&ids).unwrap(), file);
     }
 
     #[test]

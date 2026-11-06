@@ -163,7 +163,8 @@ class Env:
     forking, or use the spawn start method.
 
     Snapshots of split-phase modes are opaque, restore only the environment
-    that took them, and cannot be saved.
+    that took them, and cannot be saved; ``encode`` and ``load`` make files that
+    can, in every mode.
     """
 
     def __init__(self, native: _native.Env, mode: str = "sync", indexed: bool = False):
@@ -335,6 +336,34 @@ class Env:
     def import_record(self, index: int, record: bytes) -> None:
         """Imports an (untrusted) record into instance ``index``."""
         self._native.import_record(_index(index, "index"), bytes(record))
+
+    def encode(self, ids=None) -> bytes:
+        """A persisted file of ``ids``, or of every instance: fresh ``bytes``.
+
+        It can be saved and loaded by another process, into any mode, by an
+        environment with the same id, version, config and step options. A file holds
+        full state and is privileged: a Leduc file holds the hidden cards, so
+        share it knowingly and never feed it to a player's view. It holds
+        instance records only, no pool-level state.
+        """
+        if ids is None:
+            ids = range(self.num_envs)
+        return self._native.encode([_index(i, "ids") for i in ids])
+
+    def load(self, data: bytes, ids=None, max_instances=None, max_decoded_bytes=None):
+        """Loads a file from ``encode``, atomically: a refused file changes nothing.
+
+        ``data`` must be exactly ``bytes``; copy a ``bytearray`` or ``memoryview``
+        first with ``bytes(x)``, as other threads could write it during decoding.
+        ``ids=None`` loads every instance, and the file must hold ``num_envs``
+        records; it also recovers a poisoned environment. A list of ``ids`` is for
+        Sync mode only. Returns what ``restore_all`` returns in this mode.
+        Defaults: at most 2**24 instances and 1 GiB. Raises ``PersistError`` for a
+        damaged, malformed or mismatched file.
+        """
+        if ids is not None:
+            ids = [_index(i, "ids") for i in ids]
+        return self._native.load(data, ids, max_instances, max_decoded_bytes)
 
     def fork(self, src: int, dst: list[int]) -> None:
         """Copies instance ``src`` into every instance of ``dst``."""
