@@ -918,6 +918,20 @@ mod tests {
         finish(cfg, pool, &a, 8, false).unwrap().batched().unwrap()
     }
 
+    /// As [`asynced`], with an environment that can panic in `observe`.
+    fn asynced_observe_panic() -> Arc<dyn AsyncOps> {
+        let cfg = CountConfig::default();
+        let mut options = PoolOptions::new(NonZeroU32::new(N).unwrap(), Seed::new(1));
+        options.chunk_size = NonZeroU32::new(2).unwrap();
+        let pool = EnvPool::<crate::observe_panic::ObservePanicCounter, NoMasks>::new(
+            cfg.clone(),
+            options,
+        )
+        .unwrap();
+        let a = args(false, Some((2, BatchOutputs::Indexed)));
+        finish(&cfg, pool, &a, 8, false).unwrap().batched().unwrap()
+    }
+
     /// A panic in a writer moves no generation, yet both kinds of view must
     /// report stale over rows it may have partly written.
     #[test]
@@ -940,7 +954,7 @@ mod tests {
     #[test]
     fn test_async_flag_is_set_inside_restore_all_and_restore() {
         // One pool per writer: the first panic poisons, which keeps the flag.
-        let ops = asynced(&CountConfig::default(), BatchOutputs::Indexed);
+        let ops = asynced_observe_panic();
         ops.reset_all(&ResetSeed::Keep).unwrap();
         let one = ops.snapshot(5).unwrap();
         let flag = ops.unsettled_flag();
@@ -950,7 +964,7 @@ mod tests {
         });
         assert_eq!(seen, Some(true), "views must read stale during restore");
         ops.close();
-        let ops = asynced(&CountConfig::default(), BatchOutputs::Indexed);
+        let ops = asynced_observe_panic();
         ops.reset_all(&ResetSeed::Keep).unwrap();
         let all = ops.snapshot_all().unwrap();
         let flag = ops.unsettled_flag();

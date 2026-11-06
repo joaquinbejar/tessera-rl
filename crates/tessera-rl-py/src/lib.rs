@@ -20,6 +20,8 @@ mod batched;
 mod env;
 mod errors;
 mod ffi;
+#[cfg(test)]
+mod observe_panic;
 mod search;
 mod search_api;
 mod search_group_api;

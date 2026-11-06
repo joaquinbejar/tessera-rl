@@ -518,12 +518,12 @@ pub(crate) mod reset_probe {
         struct Off;
         impl Drop for Off {
             fn drop(&mut self) {
-                super::common::PANIC_IN_OBSERVE.with(|p| p.set(false));
+                crate::observe_panic::PANIC_IN_OBSERVE.with(|p| p.set(false));
             }
         }
-        super::common::PANIC_IN_OBSERVE.with(|p| p.set(true));
+        crate::observe_panic::PANIC_IN_OBSERVE.with(|p| p.set(true));
         let _off = Off;
-        flag_at_panic(flag, super::common::OBSERVE_PANIC, run)
+        flag_at_panic(flag, crate::observe_panic::OBSERVE_PANIC, run)
     }
 
     fn flag_at_panic(
@@ -638,17 +638,24 @@ mod tests {
     }
 
     fn counter(cfg: &super::common::CountConfig) -> Arc<dyn SplitOps> {
+        env_pool::<super::common::Counter>(cfg)
+    }
+
+    fn env_pool<E>(cfg: &super::common::CountConfig) -> Arc<dyn SplitOps>
+    where
+        E: Environment<Config = super::common::CountConfig> + tessera_rl_core::Validate + 'static,
+        E::Header: Send + Sync,
+        E::State: Send + Sync,
+        <E::Header as RecordLayout>::Adaptive: AdaptiveValues<super::common::CountConfig>,
+    {
         let mut options = tessera_rl_engine::PoolOptions::new(
             core::num::NonZeroU32::new(8).unwrap(),
             Seed::new(1),
         );
         options.chunk_size = core::num::NonZeroU32::new(2).unwrap();
         let pool =
-            tessera_rl_engine::EnvPool::<super::common::Counter, tessera_rl_engine::NoMasks>::new(
-                cfg.clone(),
-                options,
-            )
-            .unwrap();
+            tessera_rl_engine::EnvPool::<E, tessera_rl_engine::NoMasks>::new(cfg.clone(), options)
+                .unwrap();
         let args = PoolArgs {
             num_envs: 8,
             seed: 1,
@@ -683,7 +690,9 @@ mod tests {
 
     #[test]
     fn test_split_flag_is_set_inside_restore_all() {
-        let split = counter(&super::common::CountConfig::default());
+        let split = env_pool::<crate::observe_panic::ObservePanicCounter>(
+            &super::common::CountConfig::default(),
+        );
         split.reset(&ResetSeed::Keep, false).unwrap();
         let taken = split.snapshot_all().unwrap();
         let flag = split.unsettled_flag();
