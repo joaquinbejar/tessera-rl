@@ -112,6 +112,7 @@ fn pool() -> EnvPool<Adder, Masked> {
     p
 }
 
+#[cfg(not(feature = "debug-checks"))]
 #[test]
 fn test_single_action_masked_pool_replaces_illegal_actions_by_the_noop() {
     let mut p = pool();
@@ -129,4 +130,22 @@ fn test_single_action_masked_pool_replaces_illegal_actions_by_the_noop() {
         .map(|i| p.header(i).unwrap().agents[0].illegal_actions)
         .collect();
     assert_eq!(counts, [0, 1, 0, 1]);
+}
+
+/// With `debug-checks`, an illegal action is an error (ADR-0014), on this
+/// shape as on any other.
+#[cfg(feature = "debug-checks")]
+#[test]
+fn test_single_action_masked_pool_refuses_an_illegal_action_under_debug_checks() {
+    let mut p = pool();
+    let err = p
+        .step(ActionInput {
+            discrete: &[1, 2, 0, 2],
+            continuous: &[],
+        })
+        .map(|_| ());
+    assert!(matches!(
+        err,
+        Err(tessera_rl_engine::EngineError::IllegalAction { instance: 1, .. })
+    ));
 }
