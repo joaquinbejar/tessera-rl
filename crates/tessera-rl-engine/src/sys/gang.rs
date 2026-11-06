@@ -524,7 +524,8 @@ impl Gang {
                         Death {
                             after_waker: faults.die_in_epoch == Some(w),
                             before_job: faults.die_before_job == Some(w),
-                            death_gate: faults.death_gate,
+                            #[cfg(test)]
+                            gate: faults.death_gate,
                         },
                     );
                     #[cfg(not(test))]
@@ -743,7 +744,8 @@ impl Drop for Gang {
 struct Death {
     after_waker: bool,
     before_job: bool,
-    death_gate: Option<&'static core::sync::atomic::AtomicBool>,
+    #[cfg(test)]
+    gate: Option<&'static core::sync::atomic::AtomicBool>,
 }
 
 /// Startup, then the job loop. A panic outside a job marks the gang dead and
@@ -875,7 +877,7 @@ fn run_job(shared: &Shared, slot: &JobSlot, worker: usize, seen: &mut Seen, die:
     let (call, data) = (job.call, job.data);
     #[cfg(test)]
     if die.after_waker
-        && let Some(gate) = die.death_gate
+        && let Some(gate) = die.gate
     {
         while !gate.load(core::sync::atomic::Ordering::Acquire) {
             std::thread::yield_now();
