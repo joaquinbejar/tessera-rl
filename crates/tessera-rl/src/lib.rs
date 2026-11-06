@@ -63,6 +63,7 @@
 //! | `tessera/CartPole-v1` | `tessera-rl-classic` | 1 | `Discrete(2)` |
 //! | `tessera/Tag-v1` | `tessera-rl-classic` | 2 to 8 | `Discrete(5)`, masked, simultaneous |
 //! | `tessera/Grid-v1` | `tessera-rl-classic` | 1 | `Discrete(4)` |
+//! | `tessera/GridKeyDoor-v1` | `tessera-rl-classic` | 1 to 4 | `Discrete(5)`, masked, simultaneous, generated worlds |
 //! | `tessera/Connect4-v1` | `tessera-rl-games` | 2 | `Discrete(7)`, masked, sequential |
 //! | `tessera/Leduc-v1` | `tessera-rl-games` | 2 | `Discrete(3)`, masked, sequential, imperfect information |
 //! | `tessera/Othello-v1` | `tessera-rl-games` | 2 | `Discrete(65)`, masked, sequential, forced pass |

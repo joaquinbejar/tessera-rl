@@ -12,7 +12,9 @@ use support::{
     Bless, BlessReason, Scenario, bless_decision, bless_into, check, committed, compare_text, run,
 };
 use tessera_rl_classic::cartpole::MAX_EPISODE_STEPS;
-use tessera_rl_classic::{CartPole, CartPoleConfig, Grid, GridConfig, Tag, TagConfig};
+use tessera_rl_classic::{
+    CartPole, CartPoleConfig, Grid, GridConfig, KeyDoor, KeyDoorConfig, Tag, TagConfig,
+};
 use tessera_rl_engine::{AutoReset, EnvPool, Masked, NoMasks};
 
 impl support::GoldenEnv for CartPole {
@@ -290,4 +292,44 @@ fn test_golden_grid_next_step_matches_fixture_on_every_mode() {
 #[test]
 fn test_golden_grid_same_step_matches_fixture_on_every_mode() {
     check_grid(&grid("grid-v1-same-step", AutoReset::SameStep));
+}
+
+impl support::GoldenEnv for KeyDoor {
+    const ENV_ID: &'static str = tessera_rl_classic::keydoor::ENV_ID;
+    const ENV_VERSION: u32 = tessera_rl_classic::keydoor::ENV_VERSION;
+}
+
+fn keydoor(name: &'static str, agents: u32, auto_reset: AutoReset) -> Scenario<KeyDoorConfig> {
+    Scenario {
+        name,
+        cfg: KeyDoorConfig { size: 6, agents },
+        seed: 6_112_026,
+        num_envs: 16,
+        chunk: 4,
+        auto_reset,
+        max_episode_steps: 60,
+        steps: 300,
+        reseed_at: 150,
+        reseed_ids: &[1, 12],
+        reseed_seed: 9_999,
+    }
+}
+
+fn check_keydoor(s: &Scenario<KeyDoorConfig>) {
+    let build = |cfg, options| {
+        EnvPool::<KeyDoor, Masked>::with_masks(cfg, options).unwrap_or_else(|e| panic!("{e}"))
+    };
+    for workers in WORKERS {
+        check(s.name, &run::<KeyDoor, _>(s, build, workers));
+    }
+}
+
+#[test]
+fn test_golden_keydoor_one_agent_next_step_matches_fixture_on_every_mode() {
+    check_keydoor(&keydoor("keydoor-v1-a1-next-step", 1, AutoReset::NextStep));
+}
+
+#[test]
+fn test_golden_keydoor_three_agents_same_step_matches_fixture_on_every_mode() {
+    check_keydoor(&keydoor("keydoor-v1-a3-same-step", 3, AutoReset::SameStep));
 }

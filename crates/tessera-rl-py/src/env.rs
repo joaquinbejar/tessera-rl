@@ -6,7 +6,9 @@
 
 use core::num::{NonZeroU32, NonZeroUsize};
 
-use tessera_rl_classic::{CartPole, CartPoleConfig, Grid, GridConfig, Tag, TagConfig};
+use tessera_rl_classic::{
+    CartPole, CartPoleConfig, Grid, GridConfig, KeyDoor, KeyDoorConfig, Tag, TagConfig,
+};
 use tessera_rl_core::encoding::decode_from_slice;
 use tessera_rl_core::space::{BoxBounds, DType, Space};
 use tessera_rl_core::{DecodeError, Environment, TurnStructure, Validate};
@@ -512,6 +514,23 @@ pub(crate) fn grid(
     let (options, n) = options(args)?;
     let same_step = options.auto_reset == AutoReset::SameStep;
     let pool = EnvPool::<Grid, NoMasks>::new(cfg.clone(), options)?;
+    finish(&cfg, pool, args, n, same_step)
+}
+
+/// A key and door pool (`tessera/GridKeyDoor-v1`), with masks.
+pub(crate) fn keydoor(
+    args: &PoolArgs,
+    size: Option<u32>,
+    agents: Option<u32>,
+) -> Result<Box<dyn PoolOps>, BindError> {
+    let d = KeyDoorConfig::default();
+    let cfg = KeyDoorConfig {
+        size: size.unwrap_or(d.size),
+        agents: agents.unwrap_or(d.agents),
+    };
+    let (options, n) = options(args)?;
+    let same_step = options.auto_reset == AutoReset::SameStep;
+    let pool = EnvPool::<KeyDoor, Masked>::with_masks(cfg.clone(), options)?;
     finish(&cfg, pool, args, n, same_step)
 }
 
