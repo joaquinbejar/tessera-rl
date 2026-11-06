@@ -12,6 +12,9 @@ the API is not stable, and any 0.x release may break it.
 ### Added
 
 - **PufferLib adapter** (`tessera_rl.puffer`): a native `PufferEnv` in Sync mode for CartPole and Tag at PufferLib 3.0.0, zero copy on the native backend and one copy per step on the vector backends. Limits, including hangs under `Multiprocessing` when a worker raises, are in the module docs.
+- **Threaded Sync instruction counts** (`make gungraun-threaded`, #76): caller and job-body counts of a step,
+  a report outside the gate.
+
 - **Async mode** (`tessera-rl-engine`): `EnvPool::async_mode` sends any
   subsets of instances with their actions and receives them in batches of
   `batch_size`, the first ready, as a `BatchToken` whose views borrow the
