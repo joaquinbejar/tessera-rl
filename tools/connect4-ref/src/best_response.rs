@@ -15,7 +15,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Condvar, Mutex};
 use std::thread;
 
-/// The held-out openings, SHA-256 `3276d2d0...cc49` (checked by the run plan).
+/// The held-out openings, SHA-256 `3276d2d0...cc49` (asserted by `scripts/best_response_report.py`; this crate has no SHA-256).
 pub const HELDOUT: &str = include_str!("../../../compat/connect4/openings-heldout.txt");
 /// Pass 1 cap, candidate nodes per slot.
 pub const PASS1_CAP: u64 = 1_000_000;
@@ -186,6 +186,8 @@ pub fn search_slot<R: Fn(&Position) -> Option<u32>>(
 
 struct Sched {
     next: usize,
+    admit: usize,
+    stopped: bool,
     spent: u64,
     running: BTreeMap<usize, u64>,
     results: Vec<Option<Outcome>>,
@@ -195,7 +197,8 @@ struct Sched {
 /// starts only if the charges of every lower slot plus its own cap fit: the
 /// decision a serial run would take, so results do not depend on scheduling and
 /// executed work never exceeds the budget. A slot that does not fit is
-/// `None`: not started. Returns the results and the budget left.
+/// `None`: not started. Slots are admitted strictly in index order, so a later
+/// slot cannot pass a lower one that waits. Returns the results and the budget left.
 pub fn run_budgeted<F: Fn(usize, u64) -> Outcome + Sync>(
     n: usize,
     cap: u64,
@@ -205,6 +208,8 @@ pub fn run_budgeted<F: Fn(usize, u64) -> Outcome + Sync>(
 ) -> (Vec<Option<Outcome>>, u64) {
     let state = Mutex::new(Sched {
         next: 0,
+        admit: 0,
+        stopped: false,
         spent: 0,
         running: BTreeMap::new(),
         results: vec![None; n],
@@ -221,19 +226,26 @@ pub fn run_budgeted<F: Fn(usize, u64) -> Outcome + Sync>(
                     }
                     g.next += 1;
                     loop {
-                        let reserved: u64 = g.spent + g.running.values().sum::<u64>();
-                        if reserved + cap <= budget {
-                            break;
-                        }
-                        if g.running.is_empty() {
-                            // Over budget; so is every later slot, by the same sum.
-                            cv.notify_all();
-                            drop(g);
+                        if g.stopped {
                             return;
+                        }
+                        if g.admit == i {
+                            let reserved: u64 = g.spent + g.running.values().sum::<u64>();
+                            if reserved + cap <= budget {
+                                break;
+                            }
+                            if g.running.is_empty() {
+                                // Over budget; so is every later slot, by the same sum.
+                                g.stopped = true;
+                                cv.notify_all();
+                                return;
+                            }
                         }
                         let Ok(w) = cv.wait(g) else { return };
                         g = w;
                     }
+                    g.admit += 1;
+                    cv.notify_all();
                     g.running.insert(i, cap);
                     drop(g);
                     let o = search(i, cap);
@@ -329,9 +341,9 @@ mod tests {
         let p = fill(Position::new(), 41).expect("a fourless filling");
         let a = run(p, true, &first_legal, true);
         assert_eq!(a, run(p, true, &first_legal, true));
+        assert_eq!(a.class, Class::Exhausted, "the last cell makes no four");
         let b = run(p, true, &first_legal, false);
         assert_eq!(a.class, b.class, "memo agrees with no memo");
-        assert!(matches!(a.class, Class::Exhausted | Class::Win(_)));
     }
 
     #[test]
@@ -345,30 +357,35 @@ mod tests {
 
     #[test]
     fn test_best_response_table_limit_is_a_cap() {
-        let bot = Bot::new(1);
+        // The forced loss above: its one node finishes with no win, and may not store.
+        let bot = Bot::new(0);
         let r = |q: &Position| bot.choose(q);
-        // A blocking opponent: some node finishes with no win before a win appears.
         let o = search_slot(
-            pos(""),
+            pos("33445"),
             true,
             &r,
-            (1_000_000, 0),
+            (1_000, 0),
             true,
             &AtomicBool::new(false),
         );
-        assert!(matches!(o.class, Class::Unresolved | Class::Win(_)));
+        assert_eq!(o.class, Class::Unresolved);
         assert_eq!(o.table, 0);
     }
 
     #[test]
     fn test_best_response_abort_is_not_a_result() {
-        let bot = Bot::new(1);
+        // Held-out opening 135, candidate second: an exhausted slot of over 4096
+        // nodes, so the flag is seen at its first check, before any result.
+        let (j, moves) = openings()
+            .into_iter()
+            .find(|o| o.0 == 135)
+            .expect("opening");
+        let bot = Bot::new(crate::calibrate::TIE_BASE + j);
         let r = |q: &Position| bot.choose(q);
         let stop = AtomicBool::new(true);
-        // Depth-first from a hard reply: the check runs every 4096 nodes.
-        let hard = |q: &Position| r(q);
-        let o = search_slot(pos(""), true, &hard, (1_000_000, 1_000_000), false, &stop);
-        assert!(matches!(o.class, Class::Aborted | Class::Win(_)));
+        let o = search_slot(pos(&moves), false, &r, CAPS, false, &stop);
+        assert_eq!(o.class, Class::Aborted);
+        assert_eq!(o.nodes, 4096);
     }
 
     #[test]
@@ -437,6 +454,27 @@ mod tests {
         assert!(serial.iter().any(Option::is_none), "the budget ran out");
         let spent: u64 = serial.iter().flatten().map(|o| o.nodes).sum();
         assert!(spent <= 1000);
+    }
+
+    /// Later slots finish first and charge near the cap, so slots wait near the
+    /// budget in a different order on each run.
+    #[test]
+    fn test_best_response_schedule_admits_in_index_order_near_the_budget() {
+        let charge = |i: usize, _cap: u64| {
+            thread::sleep(std::time::Duration::from_millis(((40 - i) % 4) as u64));
+            Outcome {
+                class: Class::Exhausted,
+                nodes: (i as u64 * 53) % 60 + 40,
+                table: 0,
+            }
+        };
+        let (serial, left) = run_budgeted(40, 100, 1500, 1, charge);
+        assert!(serial.iter().any(Option::is_none), "the budget ran out");
+        for _ in 0..10 {
+            let (par, l) = run_budgeted(40, 100, 1500, 8, charge);
+            assert_eq!(par, serial);
+            assert_eq!(l, left);
+        }
     }
 
     #[test]

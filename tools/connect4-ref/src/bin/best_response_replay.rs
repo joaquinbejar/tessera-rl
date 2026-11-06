@@ -3,8 +3,11 @@
 //! Replays every line of a best-response line file through the reference bot
 //! and the engine's port, independently of the search: it reads the opening
 //! file itself, recomputes each tie seed, plays on the port's own board and
-//! asserts every bot reply and the final win. `best_response_replay LINES`.
+//! asserts every bot reply and the final win. Each slot appears once, and the
+//! slots are exactly the win class of the results.
+//! `best_response_replay LINES RESULTS`.
 
+use std::collections::BTreeSet;
 use std::fmt::Write as _;
 use std::process::ExitCode;
 use tessera_rl_connect4_ref::board::Position;
@@ -92,12 +95,32 @@ fn replay(line: &str) -> Result<(), String> {
 
 fn main() -> ExitCode {
     let path = std::env::args().nth(1).unwrap_or_default();
-    let Ok(text) = std::fs::read_to_string(&path) else {
+    let results = std::env::args().nth(2).unwrap_or_default();
+    let (Ok(text), Ok(classes)) = (
+        std::fs::read_to_string(&path),
+        std::fs::read_to_string(&results),
+    ) else {
         return ExitCode::FAILURE;
     };
+    let wins: BTreeSet<(&str, &str)> = classes
+        .lines()
+        .filter_map(|l| {
+            let mut f = l.split('\t');
+            let slot = (f.next()?, f.next()?);
+            (f.next()? == "win").then_some(slot)
+        })
+        .collect();
+    let mut seen = BTreeSet::new();
     let (mut ok, mut report) = (0u32, String::new());
     let mut bad = 0u32;
     for l in text.lines() {
+        let mut f = l.split_whitespace();
+        let slot = (f.next().unwrap_or(""), f.next().unwrap_or(""));
+        if !seen.insert(slot) {
+            bad += 1;
+            let _ = writeln!(report, "FAIL {l}: duplicate slot");
+            continue;
+        }
         match replay(l) {
             Ok(()) => ok += 1,
             Err(e) => {
@@ -105,6 +128,13 @@ fn main() -> ExitCode {
                 let _ = writeln!(report, "FAIL {l}: {e}");
             }
         }
+    }
+    if seen != wins {
+        bad += 1;
+        let _ = writeln!(
+            report,
+            "FAIL the slots differ from the win class of the results"
+        );
     }
     let _ = writeln!(report, "replayed ok {ok} failed {bad}");
     let _ = std::io::Write::write_all(&mut std::io::stdout(), report.as_bytes());
