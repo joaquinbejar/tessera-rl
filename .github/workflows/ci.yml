@@ -222,6 +222,21 @@ jobs:
       - run: uv run --locked --python 3.11 --group test --group torch python -c "import tessera_rl._native"
       - run: make py-test-torch
 
+  # The PufferLib adapter at its own pins (compat/pufferlib). x86-64: PufferLib
+  # 3.0.0 does not build on linux-arm64. Timeouts kill the process group.
+  pufferlib:
+    runs-on: [self-hosted, xaskar]
+    timeout-minutes: 60
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          # Self-hosted runners: the post step would delete rustup from ~/.cargo/bin.
+          cache-bin: "false"
+      - run: pipx install uv==0.13.6
+      - run: make puffer-test
+
   # Instruction-count gate (ADR-0025 level 1): gungraun against the
   # committed baseline, in the baseline's image (benches/gungraun/README.md).
   gungraun:
