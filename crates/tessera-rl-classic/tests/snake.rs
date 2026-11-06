@@ -29,8 +29,8 @@ use tessera_rl_core::io::ActionWriter;
 use tessera_rl_core::space::{BoxBounds, DType, Space};
 use tessera_rl_core::{AgentSlot, Bool8, EnvConfig, Environment, Heuristic, Validate};
 use tessera_rl_engine::{
-    ActionInput, AutoReset, DecodedRecord, EngineError, EnvPool, Masked, NoMasks, PoolOptions,
-    Reseed,
+    ActionInput, AutoReset, DecodeLimits, DecodedRecord, EngineError, EnvPool, Masked, NoMasks,
+    PoolOptions, Reseed,
 };
 use tessera_rl_num::identity::{LogicalId, RngIdentity, Seed, StreamId};
 use tessera_rl_num::rng::{RngAuthority, StepRng};
@@ -743,13 +743,26 @@ fn test_snake_import_checks_alive_flags_and_running_episodes() {
     assert_eq!(Snake::validate(&c, &s), Ok(()));
     assert!(invalid(&import(&mut p, s)));
     assert_eq!(p.state_hash(0).unwrap(), before);
-    // Nobody alive, in a running episode.
+    // Nobody alive in a running episode, with food, the header and the state
+    // agreeing and no slot acting: only `validate_record` refuses it.
     let good = DecodedRecord::from(p.snapshot(0).unwrap());
     let mut header = *good.header();
-    header.agents[0].alive = Bool8::FALSE;
-    header.agents[1].alive = Bool8::FALSE;
-    let rec = DecodedRecord::from_parts(header, SnakeState::default()).unwrap();
-    assert!(invalid(&p.import(&[0], &[rec])));
+    for agent in &mut header.agents {
+        agent.alive = Bool8::FALSE;
+        agent.acting = Bool8::FALSE;
+    }
+    let empty = SnakeState {
+        food: 9,
+        ..SnakeState::default()
+    };
+    assert_eq!(Snake::validate(&c, &empty), Ok(()));
+    let rec = DecodedRecord::from_parts(header, empty).unwrap();
+    match p.import(&[0], &[rec]) {
+        Err(EngineError::Invariant { violation, .. }) => {
+            assert_eq!(violation.code, "a running episode with every agent dead");
+        }
+        other => panic!("{other:?}"),
+    }
     // An unused slot alive or acting.
     let one = config(8, 1, OBS_STATE);
     let mut q = pool(&one, 1);
@@ -760,6 +773,47 @@ fn test_snake_import_checks_alive_flags_and_running_episodes() {
         header.agents[1].acting = Bool8::new(acting);
         let bad = DecodedRecord::from_parts(header, *good.state()).unwrap();
         assert!(invalid(&q.import(&[0], &[bad])), "{alive} {acting}");
+    }
+}
+
+#[test]
+fn test_snake_import_refuses_a_live_agent_that_is_not_acting() {
+    let c = config(8, 1, OBS_STATE);
+    let mut p = pool(&c, 1);
+    let good = DecodedRecord::from(p.snapshot(0).unwrap());
+    let before = p.state_hash(0).unwrap();
+    let mut header = *good.header();
+    header.agents[0].acting = Bool8::FALSE;
+    let bad = DecodedRecord::from_parts(header, *good.state()).unwrap();
+    match p.import(&[0], &[bad]) {
+        Err(EngineError::Invariant { violation, .. }) => {
+            assert_eq!(
+                violation.code,
+                "a used slot acting other than exactly when alive"
+            );
+        }
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(
+        p.state_hash(0).unwrap(),
+        before,
+        "a refusal changes nothing"
+    );
+    // A persisted file decodes to records that pass the same check.
+    let bytes = p.encode(&[0]).unwrap();
+    let decoded = p.decode(&bytes, DecodeLimits::default()).unwrap();
+    let mut header = *decoded[0].header();
+    header.agents[0].acting = Bool8::FALSE;
+    let bad = DecodedRecord::from_parts(header, *decoded[0].state()).unwrap();
+    assert!(invalid(&p.import(&[0], &[bad])));
+    assert_eq!(p.state_hash(0).unwrap(), before);
+    // The valid record imports and continues as the pool it came from.
+    let mut q = pool(&c, 1);
+    q.import(&[0], &[good]).unwrap();
+    for acts in [[E, N], [N, N], [W, N]] {
+        step(&mut p, acts);
+        step(&mut q, acts);
+        assert_eq!(q.state_hash(0).unwrap(), p.state_hash(0).unwrap());
     }
 }
 
@@ -831,7 +885,9 @@ fn baseline(c: &SnakeConfig, s: &SnakeState, k: u16) -> u8 {
     discrete[0] as u8
 }
 
-/// The baseline's mean food per episode within a bound, pinned per agent count.
+/// The baseline's food within a bound, summed over seeds, pinned per agent
+/// count. The baseline feeds the goldens, so any change to `Heuristic::act`
+/// moves this pin and needs a new `ENV_VERSION` with new fixtures.
 #[test]
 fn test_snake_baseline_food_is_pinned() {
     let mut food = [0u32; 2];

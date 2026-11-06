@@ -28,7 +28,8 @@
 //!     float arithmetic: planes of own head, own body, other head, other body
 //!     and food, each row-major. A dead agent's planes are zero.
 
-mod checks;
+mod baseline;
+mod validate;
 
 use core::num::NonZeroU32;
 
@@ -289,6 +290,7 @@ impl SnakeState {
             *h = u16::try_from(next).unwrap_or(0);
         }
         if eats && let Some(l) = self.len.get_mut(slot) {
+            // At most `size * size` <= 1024 cells, as food needs a free cell.
             *l += 1;
         }
         if let Some(f) = self.facing.get_mut(slot) {
