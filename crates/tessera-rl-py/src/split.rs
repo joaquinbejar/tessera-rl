@@ -34,6 +34,11 @@ pub(crate) fn half_stale(
     taken: u64,
     unsettled: &AtomicBool,
 ) -> bool {
+    // A row read before this call is not ordered by an Acquire load alone: this
+    // fence pairs with the writer's fence after it sets the flag or moves the
+    // generation (a seqlock reader). Python reads rows without Rust atomics, so
+    // at that boundary this is best effort, not a guarantee.
+    core::sync::atomic::fence(Ordering::Acquire);
     unsettled.load(Ordering::Acquire) || generations.half(half) != Some(taken)
 }
 
@@ -496,11 +501,36 @@ pub(crate) mod reset_probe {
     use core::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, Mutex, PoisonError};
 
-    /// Serializes the tests that panic in reset, as the hook is global.
+    /// Serializes the tests that panic in a writer, as the hook is global.
     pub(crate) static RESET_PANICS: Mutex<()> = Mutex::new(());
 
     /// The value of `flag` at the first injected reset panic in `run`.
     pub(crate) fn flag_at_reset_panic(flag: &Arc<AtomicBool>, run: impl FnOnce()) -> Option<bool> {
+        flag_at_panic(flag, "injected reset panic", run)
+    }
+
+    /// The value of `flag` at the first injected restore panic in `run`,
+    /// a panic in `observe` on this thread.
+    pub(crate) fn flag_at_restore_panic(
+        flag: &Arc<AtomicBool>,
+        run: impl FnOnce(),
+    ) -> Option<bool> {
+        struct Off;
+        impl Drop for Off {
+            fn drop(&mut self) {
+                super::common::PANIC_IN_OBSERVE.with(|p| p.set(false));
+            }
+        }
+        super::common::PANIC_IN_OBSERVE.with(|p| p.set(true));
+        let _off = Off;
+        flag_at_panic(flag, super::common::OBSERVE_PANIC, run)
+    }
+
+    fn flag_at_panic(
+        flag: &Arc<AtomicBool>,
+        wanted: &'static str,
+        run: impl FnOnce(),
+    ) -> Option<bool> {
         let _serial = RESET_PANICS.lock().unwrap_or_else(PoisonError::into_inner);
         let seen: Arc<Mutex<Option<bool>>> = Arc::new(Mutex::new(None));
         let previous = Arc::new(std::panic::take_hook());
@@ -514,7 +544,7 @@ pub(crate) mod reset_probe {
                     .map(|s| (*s).to_owned())
                     .or_else(|| info.payload().downcast_ref::<String>().cloned())
                     .unwrap_or_default();
-                if message.contains("injected reset panic") {
+                if message.contains(wanted) {
                     let mut slot = seen.lock().unwrap_or_else(PoisonError::into_inner);
                     if slot.is_none() {
                         *slot = Some(flag.load(Ordering::Acquire));
@@ -646,6 +676,19 @@ mod tests {
         let flag = split.unsettled_flag();
         let seen = super::reset_probe::flag_at_reset_panic(&flag, || {
             assert!(split.reset(&ResetSeed::Keep, false).is_err());
+        });
+        assert_eq!(seen, Some(true), "views must read stale during the write");
+        split.close();
+    }
+
+    #[test]
+    fn test_split_flag_is_set_inside_restore_all() {
+        let split = counter(&super::common::CountConfig::default());
+        split.reset(&ResetSeed::Keep, false).unwrap();
+        let taken = split.snapshot_all().unwrap();
+        let flag = split.unsettled_flag();
+        let seen = super::reset_probe::flag_at_restore_panic(&flag, || {
+            assert!(split.restore_all(&taken, false).is_err());
         });
         assert_eq!(seen, Some(true), "views must read stale during the write");
         split.close();

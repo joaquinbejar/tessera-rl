@@ -693,3 +693,19 @@ def test_async_interrupted_recv_refuses_a_disjoint_writer_and_replays_fresh(monk
     assert not t.is_stale(got.step.rewards), "the replay is usable"
     env.reset(ids=[5])
     assert t.is_stale(got.step.rewards)
+
+
+def test_async_batch_in_non_id_order_gathers_each_ids_own_rows():
+    n = 8
+    env = asy(n, n, outputs="owned", seed=9)
+    env.reset()
+    env.send(list(reversed(range(n))), zeros(range(n)))
+    got = env.recv()
+    # Workers claim in send order, so one worker delivers ids reversed.
+    assert got.ids.tolist() == list(reversed(range(n)))
+    sync = t.make("tessera/CartPole-v1", num_envs=n, seed=9, outputs="owned")
+    sync.reset()
+    want = sync.step(zeros(range(n))).observations["obs"]
+    for pos, i in enumerate(got.ids.tolist()):
+        assert got.step.observations["obs"][pos].tobytes() == want[i].tobytes()
+    assert len({want[i].tobytes() for i in range(n)}) == n, "rows differ, so order matters"

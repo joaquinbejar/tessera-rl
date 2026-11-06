@@ -993,3 +993,31 @@ fn test_async_nothing_runs_once_every_id_is_received() {
         }
     }
 }
+
+// TR nit on the O(ids) gather: `rows` reads what the per-id accessors read.
+
+#[test]
+fn test_async_token_rows_match_the_per_id_accessors() {
+    let mut p = asy(AutoReset::NextStep, 2);
+    drop(p.reset_all(Reseed::Keep).unwrap());
+    let ids: Vec<u32> = (0..N).take(BATCH).collect();
+    send(&mut p, &ids, &rows_for(&ids, &[0; 100]));
+    let t = p.recv().unwrap();
+    let mut seen = 0;
+    for row in t.rows() {
+        let id = row.id();
+        assert_eq!(Some(row.generation()), t.generation(id));
+        assert_eq!(row.observation(0), t.observation(0, id));
+        assert_eq!(row.rewards(), t.rewards(id));
+        assert_eq!(row.agent_terminated(), t.agent_terminated(id));
+        assert_eq!(row.agent_truncated(), t.agent_truncated(id));
+        assert_eq!(row.alive(), t.alive(id));
+        assert_eq!(row.acting(), t.acting(id));
+        assert_eq!(row.masks(), t.masks(id));
+        assert_eq!(row.episode_terminated(), t.episode_terminated(id));
+        assert_eq!(row.episode_truncated(), t.episode_truncated(id));
+        seen += 1;
+    }
+    assert_eq!(seen, BATCH);
+    assert!(t.rows().map(|r| r.id()).eq(t.ids()));
+}

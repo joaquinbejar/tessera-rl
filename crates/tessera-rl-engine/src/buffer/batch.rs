@@ -531,6 +531,16 @@ impl<E: Environment, M: MaskProvider<E>> BatchToken<E, M> {
         self.entries().map(|(id, _)| id)
     }
 
+    /// Every id of the batch with its rows, in the order they completed. Each
+    /// row costs O(1), where the per-id accessors search the batch.
+    pub fn rows(&self) -> impl Iterator<Item = BatchRow<'_, E, M>> + '_ {
+        self.entries().map(|(id, generation)| BatchRow {
+            token: self,
+            id,
+            generation,
+        })
+    }
+
     /// The export generation of `id` when the batch was received
     /// (ADR-0047 section 5), if `id` is in the batch.
     #[must_use]
@@ -544,18 +554,18 @@ impl<E: Environment, M: MaskProvider<E>> BatchToken<E, M> {
         self.entries().any(|(i, _)| i == id)
     }
 
-    /// The rows of `id`, if it is in the batch.
-    fn row(&self, id: u32) -> Option<Range<usize>> {
+    /// A shared view of `per` elements of `id`'s rows.
+    fn view<T>(&self, raw: &Raw<T>, id: u32, per: usize) -> Option<&[T]> {
         if !self.contains(id) {
             return None;
         }
-        let i = usize::try_from(id).ok()?;
-        (i < self.mode.raw.instances).then(|| i..i + 1)
+        self.view_covered(raw, id, per)
     }
 
-    /// A shared view of `per` elements of `id`'s rows.
-    fn view<T>(&self, raw: &Raw<T>, id: u32, per: usize) -> Option<&[T]> {
-        let r = self.row(id)?;
+    /// As [`Self::view`], for an id taken from this token's own entries.
+    fn view_covered<T>(&self, raw: &Raw<T>, id: u32, per: usize) -> Option<&[T]> {
+        let i = usize::try_from(id).ok()?;
+        let r = (i < self.mode.raw.instances).then(|| i..i + 1)?;
         // SAFETY: the token covers `id`, so no worker writes its rows while
         // `self` is borrowed and every other view of them is shared
         // (invariants 3 and 4); the buffers are in place (invariant 1).
@@ -689,15 +699,121 @@ impl<E: Environment, M: MaskProvider<E>> BatchToken<E, M> {
         self.one(&self.mode.raw.episode_invalid_agent_events, id)
     }
 
-    /// The header of `id`, for the mode's turn check.
-    pub(crate) fn header_of(&self, id: u32) -> Option<&E::Header> {
-        self.header(id)
-    }
-
     /// Invalid agent events of `id` in the last step, `[A]`.
     #[cfg(feature = "debug-checks")]
     pub(crate) fn invalid_agent_event(&self, id: u32) -> Option<&[Bool8]> {
         self.view(&self.mode.raw.invalid_agent_event, id, self.agents())
+    }
+}
+
+/// One id of a [`BatchToken`] with its rows. It can only come from the token's
+/// own entries, so it exposes only that token's rows (ADR-0047 section 1).
+pub struct BatchRow<'a, E: Environment, M: MaskProvider<E>> {
+    token: &'a BatchToken<E, M>,
+    id: u32,
+    generation: u64,
+}
+
+impl<'a, E: Environment, M: MaskProvider<E>> BatchRow<'a, E, M> {
+    /// The instance id.
+    #[must_use]
+    pub const fn id(&self) -> u32 {
+        self.id
+    }
+
+    /// The export generation of the id when the batch was received.
+    #[must_use]
+    pub const fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    fn view<T>(&self, raw: &'a Raw<T>, per: usize) -> Option<&'a [T]> {
+        self.token.view_covered(raw, self.id, per)
+    }
+
+    fn agent_view<T>(&self, raw: &'a Raw<T>) -> Option<&'a [T]> {
+        self.view(raw, self.token.agents())
+    }
+
+    /// Observations of leaf `leaf`, `[A, leaf bytes]`.
+    #[must_use]
+    pub fn observation(&self, leaf: usize) -> Option<&'a [u8]> {
+        let raw = self.token.mode.raw.observations.get(leaf)?;
+        let per = self
+            .token
+            .agents()
+            .checked_mul(self.token.leaf_bytes(leaf)?)?;
+        self.view(raw, per)
+    }
+
+    /// Final observations of leaf `leaf`, `[A, leaf bytes]` (`SameStep`
+    /// auto-reset).
+    #[must_use]
+    pub fn terminal_observation(&self, leaf: usize) -> Option<&'a [u8]> {
+        let raw = self.token.mode.raw.terminal.get(leaf)?;
+        let per = self
+            .token
+            .agents()
+            .checked_mul(self.token.leaf_bytes(leaf)?)?;
+        self.view(raw, per)
+    }
+
+    /// Rewards, `[A]`.
+    #[must_use]
+    pub fn rewards(&self) -> Option<&'a [f32]> {
+        self.agent_view(&self.token.mode.raw.rewards)
+    }
+
+    /// Agents terminated in the last step, `[A]`.
+    #[must_use]
+    pub fn agent_terminated(&self) -> Option<&'a [Bool8]> {
+        self.agent_view(&self.token.mode.raw.agent_terminated)
+    }
+
+    /// Agents truncated in the last step, `[A]`.
+    #[must_use]
+    pub fn agent_truncated(&self) -> Option<&'a [Bool8]> {
+        self.agent_view(&self.token.mode.raw.agent_truncated)
+    }
+
+    /// Alive agent slots, `[A]`.
+    #[must_use]
+    pub fn alive(&self) -> Option<&'a [Bool8]> {
+        self.agent_view(&self.token.mode.raw.alive)
+    }
+
+    /// Acting agent slots, `[A]`.
+    #[must_use]
+    pub fn acting(&self) -> Option<&'a [Bool8]> {
+        self.agent_view(&self.token.mode.raw.acting)
+    }
+
+    /// Action masks, `[A, mask length]`.
+    #[must_use]
+    pub fn masks(&self) -> Option<&'a [Bool8]> {
+        let raw = &self.token.mode.raw;
+        self.view(&raw.masks, self.token.agents().saturating_mul(raw.mask_len))
+    }
+
+    /// Whether the episode terminated in the last step.
+    #[must_use]
+    pub fn episode_terminated(&self) -> Option<Bool8> {
+        self.view(&self.token.mode.raw.episode_terminated, 1)?
+            .first()
+            .copied()
+    }
+
+    /// Whether the episode was truncated in the last step.
+    #[must_use]
+    pub fn episode_truncated(&self) -> Option<Bool8> {
+        self.view(&self.token.mode.raw.episode_truncated, 1)?
+            .first()
+            .copied()
+    }
+
+    /// The header, for the mode's turn check.
+    pub(crate) fn header(&self) -> Option<&'a E::Header> {
+        self.view(&self.token.mode.raw.headers, 1)?.first()
     }
 }
 

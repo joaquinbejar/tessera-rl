@@ -131,7 +131,10 @@ class Env:
 
     In Async, ``reset(ids=...)`` and ``restore`` also raise a retryable
     ``ConcurrencyError`` while a ``recv`` result has not reached its caller
-    (an interrupted ``recv``): call ``recv`` again first. ``reset()`` returns all
+    (an interrupted ``recv``): call ``recv`` again first. The error may name an
+    id outside the call, an id of that result. If the thread holding that result
+    has exited, ``recv`` cannot clear it: only ``reset`` of all instances,
+    ``restore_all`` or ``close`` can. ``reset()`` returns all
     instances as one batch; ``reset(ids=...)`` and ``restore`` return nothing
     and the next ``recv`` delivers those ids. ``snapshot(id)`` needs every sent
     id to have finished, not only ``id`` (issue #85): it raises a retryable

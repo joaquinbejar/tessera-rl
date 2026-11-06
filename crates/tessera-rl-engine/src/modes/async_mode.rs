@@ -1029,8 +1029,9 @@ where
         if E::TURNS != TurnStructure::Sequential {
             return Ok(());
         }
-        for id in token.ids() {
-            let Some(header) = token.header_of(id) else {
+        for row in token.rows() {
+            let id = row.id();
+            let Some(header) = row.header() else {
                 continue;
             };
             if header.engine().pending_reset.get() {
