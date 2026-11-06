@@ -136,6 +136,108 @@ def smoke(env_id, use_rnn):
     return _train(env_id, use_rnn == "rnn", num_envs)
 
 
+def _config(env_id, use_rnn):
+    return dict(
+        env=env_id, seed=1, torch_deterministic=True, cpu_offload=False, device="cpu", optimizer="adam",
+        anneal_lr=True, precision="float32", total_timesteps=8192, learning_rate=0.001, gamma=0.99, gae_lambda=0.9,
+        update_epochs=1, clip_coef=0.2, vf_coef=2.0, vf_clip_coef=0.2, max_grad_norm=1.5, ent_coef=0.001,
+        adam_beta1=0.95, adam_beta2=0.999, adam_eps=1e-12, data_dir="experiments", checkpoint_interval=200,
+        batch_size="auto", minibatch_size=256, max_minibatch_size=256, bptt_horizon=16, compile=False,
+        compile_mode="max-autotune-no-cudagraphs", compile_fullgraph=True, vtrace_rho_clip=1.0, vtrace_c_clip=1.0,
+        prio_alpha=0.8, prio_beta0=0.2, use_rnn=use_rnn,
+    )  # fmt: skip
+
+
+def smoke_pipelined(env_id, use_rnn):
+    """Short episodes and a short log interval, so the trainer sees logs."""
+    from pufferlib import models, pufferl
+
+    rnn = use_rnn == "rnn"
+    n, chunk = {"tessera/CartPole-v1": (64, 2), "tessera/Tag-v1": (8, 4)}[env_id]
+    vec = pufferlib.vector.make(
+        make_puffer(env_id, num_envs=n, chunk_size=chunk, mode="pipelined", log_interval=8, max_episode_steps=10)
+    )
+    config = _config(env_id, rnn)
+    policy = models.Default(vec, hidden_size=32)
+    if rnn:
+        policy = models.LSTMWrapper(vec, policy, input_size=32, hidden_size=32)
+    trainer = pufferl.PuffeRL(config, vec, policy)
+    losses, logged = [], []
+    while trainer.global_step < config["total_timesteps"]:
+        stats = trainer.evaluate()
+        logged.extend(stats.get("episode_length", []))
+        assert vec.observations is None, "an output array outlived its send"
+        trainer.train()
+        losses.extend(float(v) for v in trainer.losses.values())
+    return {
+        "global_step": int(trainer.global_step),
+        "finite": bool(losses) and bool(np.isfinite(np.asarray(losses)).all()),
+        "logged": len(logged),
+        "bounded": all(1 <= v <= 10 for v in logged),
+        "half": vec.agents_per_batch,
+    }
+
+
+def pipelined_refused(backend, start):
+    multiprocessing.set_start_method(start)
+    try:
+        pufferlib.vector.make(
+            make_puffer("tessera/CartPole-v1", num_envs=8, chunk_size=2, mode="pipelined"),
+            backend=getattr(pufferlib.vector, backend), num_envs=2,
+            **({"num_workers": 2} if backend == "Multiprocessing" else {}),
+        )  # fmt: skip
+    except t.ArgumentError as e:
+        return {"refused": "native backend" in str(e)}
+    return {"refused": False}
+
+
+def pipelined_fork_guard(workers):
+    env = make_puffer("tessera/CartPole-v1", num_envs=1024, chunk_size=64, mode="pipelined", workers=workers)()
+    env.reset(seed=1)
+    env.recv()
+    env.send(np.zeros(env.agents_per_batch, dtype=np.int32))
+    env.recv()
+    env.send(np.zeros(env.agents_per_batch, dtype=np.int32))  # Both halves are in flight.
+    pid = os.fork()
+    if pid == 0:
+        code = 1
+        try:
+            env.recv()
+        except t.ForkError:
+            code = 0
+        fresh = make_puffer("tessera/CartPole-v1", num_envs=8, chunk_size=2, mode="pipelined", workers=workers)()
+        fresh.reset(seed=1)
+        fresh.recv()
+        fresh.close()
+        sys.exit(code)  # A real exit, with the inherited pool still there.
+    _, status = os.waitpid(pid, 0)
+    env.recv()
+    env.close()
+    return {"child": os.waitstatus_to_exitcode(status)}
+
+
+def pipelined_fork_queued(sent_first):
+    """Fork with initial halves still queued; ``sent_first`` is 0 or 1 halves sent."""
+    env = make_puffer("tessera/CartPole-v1", num_envs=8, chunk_size=2, mode="pipelined", workers=2)()
+    env.reset(seed=1)
+    for _ in range(sent_first):
+        env.recv()
+        env.send(np.zeros(env.agents_per_batch, dtype=np.int32))
+    queued = len(env._queue)
+    pid = os.fork()
+    if pid == 0:
+        code = 1
+        try:
+            env.recv()
+        except t.ForkError:
+            code = 0 if len(env._queue) == queued else 2
+        os._exit(code)
+    _, status = os.waitpid(pid, 0)
+    got = env.recv()
+    env.close()
+    return {"child": os.waitstatus_to_exitcode(status), "parent_first_id": int(got[5][0])}
+
+
 def die_with_the_runner():
     """The runner holds a pipe's write end: if it dies by any means, even SIGKILL,
     this group goes too, Multiprocessing workers included."""
@@ -162,6 +264,8 @@ def main():
     conv = [int(a) if a.lstrip("-").isdigit() else a for a in args]
     try:
         out = globals()[name](*conv)
+    except SystemExit:
+        raise  # A forked child's real exit, which the fork guard test needs.
     except BaseException:
         # PuffeRL starts a non-daemon thread, so a normal exit would hang.
         traceback.print_exc()
