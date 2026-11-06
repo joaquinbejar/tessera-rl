@@ -603,6 +603,7 @@ thunk!(FAIL_AFTER: CFunction = thunk_fail_after => module::fail_after : fn(Obj, 
 thunk!(FP_BOUNDARY: CFunction = thunk_fp_boundary => module::fp_boundary : fn(Obj, Obj) -> Obj);
 thunk!(BUILD_PROFILE: CFunction = thunk_build_profile => module::build_profile : fn(Obj, Obj) -> Obj);
 thunk!(MAKE_CARTPOLE: CFunctionKw = thunk_make_cartpole => env_type::make_cartpole : fn(Obj, Obj, Obj) -> Obj);
+thunk!(MAKE_GRID: CFunctionKw = thunk_make_grid => env_type::make_grid : fn(Obj, Obj, Obj) -> Obj);
 thunk!(MAKE_TAG: CFunctionKw = thunk_make_tag => env_type::make_tag : fn(Obj, Obj, Obj) -> Obj);
 thunk!(MAKE_CONNECT4: CFunctionKw = thunk_make_connect4 => env_type::make_connect4 : fn(Obj, Obj, Obj) -> Obj);
 thunk!(MAKE_LEDUC: CFunctionKw = thunk_make_leduc => env_type::make_leduc : fn(Obj, Obj, Obj) -> Obj);

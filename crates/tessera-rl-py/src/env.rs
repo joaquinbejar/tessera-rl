@@ -6,7 +6,7 @@
 
 use core::num::{NonZeroU32, NonZeroUsize};
 
-use tessera_rl_classic::{CartPole, CartPoleConfig, Tag, TagConfig};
+use tessera_rl_classic::{CartPole, CartPoleConfig, Grid, GridConfig, Tag, TagConfig};
 use tessera_rl_core::encoding::decode_from_slice;
 use tessera_rl_core::space::{BoxBounds, DType, Space};
 use tessera_rl_core::{DecodeError, Environment, TurnStructure, Validate};
@@ -454,6 +454,26 @@ pub(crate) fn cartpole(args: &PoolArgs) -> Result<Box<dyn PoolOps>, BindError> {
     let (options, n) = options(args)?;
     let same_step = options.auto_reset == AutoReset::SameStep;
     let pool = EnvPool::<CartPole, NoMasks>::new(cfg.clone(), options)?;
+    finish(&cfg, pool, args, n, same_step)
+}
+
+/// A reference grid world pool (`tessera/Grid-v1`). A value too large for the
+/// config's type becomes the largest one, which its range rejects.
+pub(crate) fn grid(
+    args: &PoolArgs,
+    size: Option<u32>,
+    max_steps: Option<u32>,
+) -> Result<Box<dyn PoolOps>, BindError> {
+    let d = GridConfig::default();
+    let field =
+        |v: Option<u32>, default: u16| v.map_or(default, |x| u16::try_from(x).unwrap_or(u16::MAX));
+    let cfg = GridConfig {
+        size: field(size, d.size),
+        max_steps: field(max_steps, d.max_steps),
+    };
+    let (options, n) = options(args)?;
+    let same_step = options.auto_reset == AutoReset::SameStep;
+    let pool = EnvPool::<Grid, NoMasks>::new(cfg.clone(), options)?;
     finish(&cfg, pool, args, n, same_step)
 }
 

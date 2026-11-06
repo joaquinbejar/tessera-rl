@@ -12,8 +12,8 @@ use support::{
     Bless, BlessReason, Scenario, bless_decision, bless_into, check, committed, compare_text, run,
 };
 use tessera_rl_classic::cartpole::MAX_EPISODE_STEPS;
-use tessera_rl_classic::{CartPole, CartPoleConfig, Tag, TagConfig};
-use tessera_rl_engine::{AutoReset, EnvPool, Masked};
+use tessera_rl_classic::{CartPole, CartPoleConfig, Grid, GridConfig, Tag, TagConfig};
+use tessera_rl_engine::{AutoReset, EnvPool, Masked, NoMasks};
 
 impl support::GoldenEnv for CartPole {
     const ENV_ID: &'static str = tessera_rl_classic::cartpole::ENV_ID;
@@ -246,4 +246,48 @@ fn test_golden_bless_of_current_output_is_unchanged() {
         ),
         Ok(Bless::Unchanged)
     );
+}
+
+impl support::GoldenEnv for Grid {
+    const ENV_ID: &'static str = tessera_rl_classic::grid::ENV_ID;
+    const ENV_VERSION: u32 = tessera_rl_classic::grid::ENV_VERSION;
+}
+
+fn grid(name: &'static str, auto_reset: AutoReset) -> Scenario<GridConfig> {
+    Scenario {
+        name,
+        cfg: GridConfig {
+            size: 6,
+            max_steps: 40,
+        },
+        seed: 5_112_026,
+        num_envs: 16,
+        chunk: 4,
+        auto_reset,
+        // Above `max_steps`: the world truncates by itself.
+        max_episode_steps: 64,
+        steps: 300,
+        reseed_at: 150,
+        reseed_ids: &[1, 12],
+        reseed_seed: 8_888,
+    }
+}
+
+fn check_grid(s: &Scenario<GridConfig>) {
+    let build = |cfg, options| {
+        EnvPool::<Grid, NoMasks>::new(cfg, options).unwrap_or_else(|e| panic!("{e}"))
+    };
+    for workers in WORKERS {
+        check(s.name, &run::<Grid, _>(s, build, workers));
+    }
+}
+
+#[test]
+fn test_golden_grid_next_step_matches_fixture_on_every_mode() {
+    check_grid(&grid("grid-v1-next-step", AutoReset::NextStep));
+}
+
+#[test]
+fn test_golden_grid_same_step_matches_fixture_on_every_mode() {
+    check_grid(&grid("grid-v1-same-step", AutoReset::SameStep));
 }

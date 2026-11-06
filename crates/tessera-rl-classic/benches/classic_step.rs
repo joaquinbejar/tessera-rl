@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! Inline step cost of the classic environments: the CartPole physics
-//! kernel alone, and full pool steps (auto-reset on) for CartPole and Tag.
+//! kernel alone, and full pool steps (auto-reset on) for CartPole, Tag and the
+//! reference grid world.
 
 #![expect(clippy::unwrap_used, reason = "bench setup unwraps")]
 
@@ -10,8 +11,8 @@ use std::hint::black_box;
 
 use criterion::{Criterion, criterion_group, criterion_main};
 use tessera_rl_classic::cartpole::physics;
-use tessera_rl_classic::{CartPole, CartPoleConfig, Tag, TagConfig};
-use tessera_rl_engine::{ActionInput, EnvPool, Masked, PoolOptions, Reseed};
+use tessera_rl_classic::{CartPole, CartPoleConfig, Grid, GridConfig, Tag, TagConfig};
+use tessera_rl_engine::{ActionInput, EnvPool, Masked, NoMasks, PoolOptions, Reseed};
 use tessera_rl_num::identity::Seed;
 
 const N: u32 = 1024;
@@ -56,6 +57,20 @@ fn bench(c: &mut Criterion) {
             let out = tag
                 .step(ActionInput {
                     discrete: &tag_actions,
+                    continuous: &[],
+                })
+                .unwrap();
+            black_box(out.rewards());
+        });
+    });
+    let grid_actions: Vec<i32> = (0..N).map(|i| (i % 4).cast_signed()).collect();
+    let mut grid = EnvPool::<Grid, NoMasks>::new(GridConfig::default(), options()).unwrap();
+    grid.reset_all(Reseed::Keep).unwrap();
+    group.bench_function("grid", |b| {
+        b.iter(|| {
+            let out = grid
+                .step(ActionInput {
+                    discrete: &grid_actions,
                     continuous: &[],
                 })
                 .unwrap();
