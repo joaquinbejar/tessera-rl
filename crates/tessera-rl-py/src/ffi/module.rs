@@ -205,7 +205,7 @@ pub(super) unsafe extern "C" fn init() -> *mut ffi::PyObject {
         snapshot_type::register(g, module.as_ref())?;
         search_type::register(g, module.as_ref())?;
         search_group_type::register(g, module.as_ref())?;
-        fork::register();
+        fork::register(g)?;
         Ok(module)
     })
 }

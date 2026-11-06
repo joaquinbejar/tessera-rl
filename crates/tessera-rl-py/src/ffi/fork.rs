@@ -14,6 +14,8 @@
 
 use core::sync::atomic::{AtomicU64, Ordering};
 
+use super::capi::{self, CResult, Gil};
+
 /// Moved once in each forked child, before any other thread can exist there.
 static GENERATION: AtomicU64 = AtomicU64::new(0);
 
@@ -36,7 +38,12 @@ extern "C" fn after_in_child() {
 }
 
 /// Registers the handler once, at module initialization. Windows has no fork.
-pub(super) fn register() {
+///
+/// # Errors
+///
+/// A failed registration (ENOMEM) raises, so the import fails: a silently absent
+/// guard would bring back the hangs and traps of a forked child.
+pub(super) fn register(g: Gil) -> CResult<()> {
     #[cfg(not(windows))]
     {
         unsafe extern "C" {
@@ -49,9 +56,18 @@ pub(super) fn register() {
         // SAFETY: a libc function with this C signature; the handler is a
         // `'static` function that stays loaded, as the module is never unloaded
         // while the interpreter lives, and it is registered once, as the module
-        // has one initialization (`m_size` is -1). It fails only with ENOMEM,
-        // which leaves the guard off rather than unsound memory.
+        // has one initialization (`m_size` is -1).
         #[expect(unsafe_code, reason = "audited module: one libc registration")]
-        let _ = unsafe { pthread_atfork(None, None, Some(after_in_child)) };
+        let status = unsafe { pthread_atfork(None, None, Some(after_in_child)) };
+        if status != 0 {
+            return Err(capi::raise(
+                g,
+                capi::runtime_error(),
+                "pthread_atfork failed: the fork guard cannot be installed",
+            ));
+        }
     }
+    #[cfg(windows)]
+    let _ = g;
+    Ok(())
 }
