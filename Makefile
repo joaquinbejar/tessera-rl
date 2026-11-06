@@ -32,6 +32,9 @@ readme-check:
 
 pre-push: fmt-check clippy test doc readme-check compat-test py-entries py-callouts py-test py-test-hooks
 
+check-build-id:
+	scripts/check_build_id.sh
+
 deny:
 	cargo deny check
 

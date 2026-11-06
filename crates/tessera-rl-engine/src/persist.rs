@@ -34,6 +34,10 @@ pub const MAGIC: [u8; 8] = *b"TESSERA\x1a";
 /// The format this library reads and writes.
 pub const FORMAT_VERSION: u32 = 1;
 
+/// `TESSERA_BUILD_ID` as compiled into this engine, for the rebuild check.
+#[doc(hidden)]
+pub const BUILD_ID: Option<&str> = option_env!("TESSERA_BUILD_ID");
+
 const RAW_CANONICAL: u8 = 0;
 const MAX_ENV_ID: usize = 256;
 const MAX_LIBRARY_VERSION: usize = 64;
@@ -441,11 +445,7 @@ where
     /// [`PersistError::BuildIdRequired`] for a `same-platform` environment
     /// built without `TESSERA_BUILD_ID`.
     pub fn encode(&self, ids: &[u32]) -> Result<Vec<u8>, PersistError> {
-        self.encode_with(
-            ids,
-            env!("CARGO_PKG_VERSION"),
-            option_env!("TESSERA_BUILD_ID"),
-        )
+        self.encode_with(ids, env!("CARGO_PKG_VERSION"), BUILD_ID)
     }
 
     /// Checks a file against this pool and returns its records, still
@@ -461,7 +461,7 @@ where
         bytes: &[u8],
         limits: DecodeLimits,
     ) -> Result<Vec<DecodedRecord<E>>, PersistError> {
-        self.decode_with(bytes, limits, option_env!("TESSERA_BUILD_ID"))
+        self.decode_with(bytes, limits, BUILD_ID)
     }
 
     /// [`EnvPool::encode`] with its build inputs as parameters. For fixtures

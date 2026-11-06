@@ -56,7 +56,7 @@ pub use modes::pipelined::{
 };
 pub use options::{AutoReset, CHUNK_RANGE, PoolOptions, SyncOptions, WaitBackend};
 pub use outputs::Outputs;
-pub use persist::{DecodeLimits, FORMAT_VERSION, MAGIC, PersistError};
+pub use persist::{BUILD_ID, DecodeLimits, FORMAT_VERSION, MAGIC, PersistError};
 pub use pool::{EnvPool, Reseed};
 pub use record::{DecodedRecord, PoolContext, Record};
 #[cfg(not(loom))]

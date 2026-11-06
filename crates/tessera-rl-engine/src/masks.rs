@@ -65,10 +65,37 @@ mod sealed {
 /// different masks or no-ops, so a custom provider cannot persist in format 1.
 /// [`MaskProvider`] itself stays open.
 ///
-/// ```compile_fail
-/// use tessera_rl_engine::{EnvPool, MaskProvider, PersistMask};
+/// A custom provider compiles:
+///
+/// ```
+/// use tessera_rl_core::io::{ActionWriter, MaskWriter};
+/// use tessera_rl_core::{AgentSlot, Environment};
+/// use tessera_rl_engine::MaskProvider;
+///
 /// struct Mine;
-/// impl tessera_rl_engine::PersistMask<()> for Mine {
+/// impl<E: Environment> MaskProvider<E> for Mine {
+///     const ENABLED: bool = true;
+///     fn write_mask(_: &E::Config, _: &E::State, _: AgentSlot, _: &mut MaskWriter<'_>) {}
+///     fn noop(_: &E::Config, _: &E::State, _: AgentSlot, _: &mut ActionWriter<'_>) {}
+/// }
+/// ```
+///
+/// The same provider with this one added impl does not, because `Mine` is not
+/// `Sealed`. `compile_fail` cannot pin that reason on stable, which does not check
+/// the error code; the twin above is what rules out the other causes.
+///
+/// ```compile_fail,E0277
+/// use tessera_rl_core::io::{ActionWriter, MaskWriter};
+/// use tessera_rl_core::{AgentSlot, Environment};
+/// use tessera_rl_engine::{MaskProvider, PersistMask};
+///
+/// struct Mine;
+/// impl<E: Environment> MaskProvider<E> for Mine {
+///     const ENABLED: bool = true;
+///     fn write_mask(_: &E::Config, _: &E::State, _: AgentSlot, _: &mut MaskWriter<'_>) {}
+///     fn noop(_: &E::Config, _: &E::State, _: AgentSlot, _: &mut ActionWriter<'_>) {}
+/// }
+/// impl<E: Environment> PersistMask<E> for Mine {
 ///     const PROVIDER_ID: u8 = 2;
 /// }
 /// ```
