@@ -839,6 +839,20 @@ fn test_brickwall_validate_names_each_rejection() {
     parked.score = 216;
     rejected(&parked, "an empty wall outside the final terminal state");
     rejected(&edit(&|s| s.lives = 0), "no balls outside a terminal state");
+    // TR: no balls and the final empty wall at once, which the kernel never
+    // produces.
+    let mut both = state(&pool(&c, 1));
+    both.wait = 0;
+    both.bricks = [0, 0];
+    both.refills = 1;
+    both.score = 432;
+    assert_eq!(
+        BrickWall::validate(&c, &both),
+        Ok(()),
+        "the final terminal state"
+    );
+    both.lives = 0;
+    rejected(&both, "no balls and an empty wall at once");
     let mut idle = state(&pool(&c, 1));
     idle.wait = 0;
     rejected(&idle, "a parked ball with no wait in play");

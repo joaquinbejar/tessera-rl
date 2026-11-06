@@ -10,17 +10,17 @@ use super::{
     PADDLE_MAX, ROWS, SERVE, SERVE_WAIT, SPEED_X, SPEED_Y, WALL_POINTS, fx, points,
 };
 
-/// Points of the cleared bricks of the current wall.
-fn cleared_points(s: &BrickWallState) -> u16 {
-    let mut total = 0;
+/// Points of the cleared bricks of the current wall, at most 216.
+fn cleared_points(s: &BrickWallState) -> Option<u16> {
+    let mut total: u16 = 0;
     for row in 0..ROWS {
         for col in 0..COLS {
             if !s.has(row, col) {
-                total += points(row);
+                total = total.checked_add(points(row))?;
             }
         }
     }
-    total
+    Some(total)
 }
 
 /// Whether `s` is one of the two terminal states: parked with no wait, and
@@ -69,6 +69,9 @@ impl Validate for BrickWall {
         }
         let lost = s.lives == 0;
         let won = s.empty();
+        if lost && won {
+            return invalid("no balls and an empty wall at once");
+        }
         if won && !(s.refills == 1 && is_terminal(s)) {
             return invalid("an empty wall outside the final terminal state");
         }
@@ -78,8 +81,11 @@ impl Validate for BrickWall {
         if is_terminal(s) && !lost && !won {
             return invalid("a parked ball with no wait in play");
         }
-        let expected = WALL_POINTS * u16::from(s.refills) + cleared_points(s);
-        if s.score != expected || s.score > MAX_SCORE {
+        let expected = WALL_POINTS
+            .checked_mul(u16::from(s.refills))
+            .zip(cleared_points(s))
+            .and_then(|(walls, bricks)| walls.checked_add(bricks));
+        if expected != Some(s.score) || s.score > MAX_SCORE {
             return invalid("a score that disagrees with the cleared bricks");
         }
         Ok(())
