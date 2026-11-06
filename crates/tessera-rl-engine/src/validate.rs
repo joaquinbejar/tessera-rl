@@ -252,31 +252,32 @@ fn copy_all_rows<H: RecordLayout>(
     discrete_out: &mut [i32],
     continuous_out: &mut [f32],
 ) {
-    let agents = H::AGENTS;
     let (dh, ch) = (layout.discrete.len(), layout.continuous.len());
-    for (index, header) in headers.iter().enumerate() {
+    // Row offsets advance by one row's width instead of multiplying out per
+    // row: rows are laid out instance by instance, agent by agent, so row k
+    // starts at k * dh and k * ch. Left as products, LLVM recomputed them with
+    // a multiply per row once this loop lived beside the fast path
+    // (connect4_pool_step +0.5% Ir on candidate C, x86-64).
+    let (mut d_at, mut c_at) = (0usize, 0usize);
+    for header in headers {
         let pending = header.engine().pending_reset.get();
-        for (slot, row) in header.agents().iter().enumerate() {
+        for row in header.agents() {
             let required = is_required(pending, row);
-            let base = index * agents + slot;
-            copy_row(
-                required,
-                input.discrete,
-                base * dh,
-                discrete_out,
-                base * dh,
-                dh,
-                0,
-            );
+            copy_row(required, input.discrete, d_at, discrete_out, d_at, dh, 0);
             copy_row(
                 required,
                 input.continuous,
-                base * ch,
+                c_at,
                 continuous_out,
-                base * ch,
+                c_at,
                 ch,
                 0.0,
             );
+            // `check_inputs` bounded every offset by the buffer lengths.
+            let (Some(d), Some(c)) = (d_at.checked_add(dh), c_at.checked_add(ch)) else {
+                return;
+            };
+            (d_at, c_at) = (d, c);
         }
     }
 }
