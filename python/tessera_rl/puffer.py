@@ -57,7 +57,8 @@ this env can raise in a worker: ``ActionError`` (out-of-range action);
 ``Poisoned``, ``Panicked`` and ``WorkerDied`` after a panic in an environment;
 ``ArgumentError`` (seed out of range, a step before reset); ``ForkError`` (an
 inherited pool). The constructor validates every option in the parent, but
-the host can still refuse threads at the first reset, within ``MAX_WORKERS``. Use a timeout around such runs. A process that raises after
+the host can still refuse threads at the first reset, within ``MAX_WORKERS``.
+Use a timeout around such runs. A process that raises after
 ``PuffeRL`` starts also never exits: its ``Utilization`` thread is not a daemon.
 
 **Platform.** PufferLib 3.0.0 does not build on linux-arm64: its sdist links an
