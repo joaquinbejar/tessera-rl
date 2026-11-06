@@ -554,7 +554,7 @@ where
     }))
 }
 
-/// A pool whose second step panics (`make py-test-hooks`). Never in a release wheel.
+/// A pool whose first step panics (`make py-test-hooks`). Never in a release wheel.
 #[cfg(feature = "test-hooks")]
 pub(crate) fn panic_counter(args: &PoolArgs) -> Result<Box<dyn PoolOps>, BindError> {
     use crate::split::common::{CountConfig, Counter};

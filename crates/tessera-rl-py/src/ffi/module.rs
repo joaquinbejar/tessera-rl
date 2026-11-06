@@ -175,7 +175,7 @@ static METHODS: Table<[ffi::PyMethodDef; METHOD_COUNT]> = Table([
     super::tables::method_kw(
         c"_make_panic_counter",
         thunks::MAKE_PANIC_COUNTER,
-        c"Test hook: a pool whose second step panics.",
+        c"Test hook: a pool whose first step panics.",
     ),
     #[cfg(feature = "test-hooks")]
     method(

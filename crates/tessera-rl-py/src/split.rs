@@ -329,7 +329,7 @@ where
         state.acknowledge(delivered);
         let pool = state.pool.as_mut().ok_or_else(closed)?;
         let me = std::thread::current().id();
-        // Health first: a cached delivery is not returned after a panic. It is
+        // Health first: a cached delivery is not returned once the pool is known poisoned. It is
         // lost; recovery clears it, and the next delivery has a new seq.
         if pool.is_poisoned() {
             let refused = pool.try_recv().map(|_| ());
