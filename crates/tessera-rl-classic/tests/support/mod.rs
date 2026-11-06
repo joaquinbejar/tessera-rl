@@ -22,6 +22,10 @@
 //! `tests/README.md`).
 
 #![allow(
+    clippy::unwrap_used,
+    reason = "a read after a successful call cannot be poisoned"
+)]
+#![allow(
     dead_code,
     reason = "each test binary uses a different part of the harness"
 )]
