@@ -161,3 +161,23 @@ def test_supervisor_sigterm_with_a_refused_group_kill_says_so_in_the_status(tmp_
         assert status == f"interrupted by signal {signal.SIGTERM} ({supervisor.NOT_CONFIRMED})"
     finally:
         cleanup(int(pidfile.read_text()))
+
+
+def test_supervisor_spawn_record_names_the_child_group_and_starts_empty(tmp_path, monkeypatch):
+    """An empty record first, then the group: a parent dying between them
+    leaves a group that a recovery cannot account for, never a false ESRCH."""
+    record = tmp_path / "spawn.json"
+    seen = []
+    real_popen = supervisor.subprocess.Popen
+
+    def popen(*a, **k):
+        seen.append(json.loads(record.read_text()))
+        return real_popen(*a, **k)
+
+    monkeypatch.setattr(supervisor.subprocess, "Popen", popen)
+    script = tmp_path / "child.py"
+    script.write_text("import sys\nsys.exit(0)\n")
+    rc = supervisor.run(str(script), [], None, ledger=str(tmp_path / "l.json"), budget_core_hours=1.0, cores=1,
+                        wall_cap_s=30.0, out=str(tmp_path / "out"), name="t", spawn_record=str(record))  # fmt: skip
+    assert rc == 0 and seen[0]["pgid"] is None
+    assert json.loads(record.read_text())["pgid"] > 0

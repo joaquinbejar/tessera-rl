@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: MIT OR Apache-2.0
-"""The P2-G1 gate (P2-M3 PR 4, ADR-0042), supervised and one shot.
+"""The P2-G1 gate (P2-M3 PR 4, ADR-0042, rule of ADR-0048), supervised and one shot.
 
 The gate plays the selected checkpoint, and only that one (never the final
 checkpoint), against the ADR-0042 bot on the 500 pinned evaluation
@@ -9,14 +9,16 @@ the same loop (``botmatch.play``): 100 simulations, batch 8, capacity
 ``TIE_BASE + j``, where ``j`` is the opening's index in the evaluation
 file.
 
-**Pass rule** (ADR-0042 section 5). Both must hold:
-- at least 900 wins out of 1,000;
-- the two-sided Wilson lower bound at z = 1.96 is at least 0.90.
+**Pass rule** (ADR-0048, superseding ADR-0042 section 5): at least 815 wins of
+1,000, the frozen solver's published score. Draws are non-wins. No interval
+decides it: the nominal Wilson bound is descriptive. A complete, valid, formal
+attempt records ``pass`` as true or false. A development run has ``pass`` null
+with ``meets_815``, as the ADR leaves closing the gate on it to the owner.
+``pass`` is also null for an incomplete, inapplicable or diagnostic run. A
+report with no ``rule_id`` is under ADR-0042, and keeps that meaning.
 
-Draws are non-wins. A complete, valid, formal gate records ``pass`` as true
-or false. ``pass`` is null only for an incomplete, inapplicable or
-diagnostic run. The interval is nominal: the games come in pairs per
-opening and may repeat.
+**Eligibility and attempts** (ADR-0048 section 3): the selected look won at least
+336 of 400, and ``attempts.py`` records one formal attempt across loop roots.
 
 **Formal flow.** Everything happens under the loop's owner lock, with the
 gate's paths fixed under the loop root: ``<root>/gate/`` holds the claim,
@@ -31,8 +33,12 @@ the gate ledger and the run output.
    - the expected and registered bot binary;
    - the registered runtime;
    - the frozen search;
-   - a budget that funds the full wall cap.
-2. The claim: an atomic ``mkdir <root>/gate`` and a durable
+   - a budget that funds the full wall cap;
+   - a selected look of at least 336 of 400;
+   - for a formal attempt, a pinned solver binary, as the report needs the
+     comparison.
+2. The claim: the journal's admission, an atomic ``mkdir <root>/gate``
+   (``gate-dev-<digest>`` for development) and a durable
    ``claim.json``, plus a ``gate-claim`` entry in the loop's audit log. A
    second gate is refused whatever ``--out`` or ledger it names, because
    the directory exists. An interrupted or evaluated attempt stays
@@ -51,10 +57,16 @@ evaluation file and any alias of it (the same device and inode, through a
 symlink or a hard link) before opening or hashing it, and then refuses a
 byte-identical copy.
 
+**Comparison** (``compare``): after a valid settled attempt, the solver plays the
+evaluation openings against the bot, and ``run/comparison.json`` reports the
+discordant slots. It never touches ``gate.json``, and it stays refused until
+``SOLVER_SLOTS_SHA256`` is pinned.
+
 Usage (formal)::
 
     python examples/alphazero_connect4/gate.py --root LOOP_ROOT --selection-sha256 SHA \\
-        --bot BOT --bot-sha256 SHA --source-sha SHA --budget-core-hours 1 --wall-cap-s 2400
+        --attempt formal --attempts-journal JOURNAL --bot BOT --bot-sha256 SHA \\
+        --source-sha SHA --budget-core-hours 1 --wall-cap-s 2400
 """
 
 from __future__ import annotations
@@ -67,6 +79,8 @@ for _var in ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS"):
 import argparse  # noqa: E402
 import json  # noqa: E402
 import math  # noqa: E402
+import socket  # noqa: E402
+import subprocess  # noqa: E402
 import sys  # noqa: E402
 import time  # noqa: E402
 
@@ -75,6 +89,7 @@ import torch  # noqa: E402
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import artifacts  # noqa: E402
+import attempts  # noqa: E402
 import botmatch  # noqa: E402
 import ckpt  # noqa: E402
 import game  # noqa: E402
@@ -93,33 +108,53 @@ EVAL_SHA256 = "54a1cea7e6fe70d53a039bc27176486953c8bb6a243353175128526702360475"
 # The frozen protocol: (sims, batch size, capacity, openings).
 FROZEN = (100, 8, 8192, 500)
 GAMES = 1000
-WINS_MIN = 900
-LB_MIN = 0.90
-Z = 1.96  # two-sided 95%; the one-sided 1.645 reading is excluded (ADR-0042)
+RULE_ID = "adr-0048-wins-815"
+RULE_FAMILY = "p2-g1-adr-0048"
+WINS_MIN = 815
+# Held-out eligibility: the solver's score there (ADR-0048 section 3).
+ELIGIBLE_WINS = 336
+LOOK_GAMES = 400
+Z = 1.96  # descriptive only
+INTERVAL_NOTE = ("nominal two-sided Wilson z=1.96, as if the games were independent Bernoulli trials; "
+                 "they come in pairs per opening and may repeat; it does not decide the gate")  # fmt: skip
+DEVELOPMENT_CLAIM = "fixed-benchmark development result: says nothing on generalization"
+# The solver_slots binary built in the registered image; None until an approved
+# build. `compare` and formal preflight refuse until then.
+SOLVER_SLOTS_SHA256: str | None = None
+SOLVER_SOURCES = {
+    "tools/connect4-ref/src/bot.rs": "b21c14c26fc77054951c7aa44c139237e0299dc6aa376fa417ae1765bc9ef646",
+    "tools/connect4-ref/src/solver.rs": "2927b3f6e49c8defcd5b2348989131cfe2733033cefb44fdce121f2de1e9d19c",
+    "tools/connect4-ref/src/board.rs": "664eb16cbbc6d44ddd58a99cfad0e14af6e7dec6c21976f44a255a28bd7a7040",
+    "tools/connect4-ref/src/calibrate.rs": "4d97d0cdeb8c013747c81d6ad67b178cfe0d3fb51e924cc2f0755e98697e08ca",
+}
 
 
 class Refused(SystemExit):
     """A gate precondition does not hold; nothing of the gate set was read."""
 
 
-def passes(wins: int, games: int) -> dict:
-    """The ADR-0042 section 5 rule. ``pass`` is true or false on exactly
-    1,000 games, and null otherwise."""
-    lb = h2h.wilson_lower(wins / games, games, Z) if games else 0.0
+def passes(wins: int, games: int, label: str | None = "formal") -> dict:
+    """The ADR-0048 rule. ``pass`` is true or false only on exactly 1,000 games
+    of a formal attempt; a short or overlong gate is invalid, never false."""
+    full = games == GAMES
+    met = wins >= WINS_MIN if full else None
     return {
+        "rule_id": RULE_ID,
         "wins": wins,
         "games": games,
-        "wilson_lower_z1.96": lb,
-        "wins_at_least_900": wins >= WINS_MIN,
-        "lower_bound_at_least_0.90": lb >= LB_MIN,
-        # A short or overlong gate is invalid: no verdict, never false.
-        "pass": (wins >= WINS_MIN and lb >= LB_MIN) if games == GAMES else None,
-        "invalid_because": None if games == GAMES else f"{games} games, not {GAMES}",
+        "wins_at_least_815": met,
+        "pass": met if label == "formal" else None,
+        "invalid_because": None if full else f"{games} games, not {GAMES}",
     }
 
 
-def gate_dir(root: str) -> str:
-    return os.path.join(root, "gate")
+def descriptive(wins: int, games: int) -> dict:
+    return {"wilson_lower_z1.96": h2h.wilson_lower(wins / games, games, Z) if games else 0.0, "note": INTERVAL_NOTE}
+
+
+def gate_dir(root: str, development: str | None = None) -> str:
+    """The claim's directory: one formal per root, one per development checkpoint."""
+    return os.path.join(root, f"gate-dev-{development[:16]}" if development else "gate")
 
 
 def configure_torch() -> None:
@@ -182,14 +217,46 @@ def check_candidate(path: str, expected_sha: str, bot: str, bot_sha256: str, arg
     return meta, observed
 
 
+def check_eligible(wins, games) -> None:
+    """ADR-0048 section 3, from a look's verified report."""
+    if games != LOOK_GAMES or not (isinstance(wins, int) and 0 <= wins <= games):
+        raise Refused(f"the qualifying look has {wins} wins of {games} games, not of {LOOK_GAMES}")
+    if wins < ELIGIBLE_WINS:
+        raise Refused(f"the selected look won {wins} of {games}, under the {ELIGIBLE_WINS} needed")
+
+
+def look_evidence(lp, entry: dict) -> dict:
+    """The eligibility evidence, from the selected look's verified report."""
+    gen, _, n = entry["look"].split("-")
+    try:
+        report = look.load(lp.attempt_dir(int(gen[1:]), "look", int(n)))
+    except artifacts.Incomplete as e:
+        raise Refused(f"the selected look's report: {e}") from None
+    for field, value in (("checkpoint", entry["checkpoint"]), ("wins", entry["wins"]), ("log_sha256", entry["log_sha256"])):
+        if report[field] != value:
+            raise Refused(f"the selected look's {field} is not the manifest's")
+    check_eligible(report["wins"], report["games"])
+    return {"look": entry["look"], "wins": report["wins"], "games": report["games"], "log_sha256": report["log_sha256"]}
+
+
 def preflight(args, lp) -> dict:
     """Every formal check; the caller holds the owner lock. Returns the
     claim to record."""
     manifest, path = snapshot(lp, os.path.join(args.root, "selection-manifest.json"), args.selection_sha256)
-    meta, observed = check_candidate(path, manifest["selected"]["checkpoint"], args.bot, args.bot_sha256, args)
+    selected = manifest["selected"]
+    if args.attempt == "development" and args.development_checkpoint != selected["checkpoint"]:
+        raise Refused("the development checkpoint is not the one this selection names")
+    meta, observed = check_candidate(path, selected["checkpoint"], args.bot, args.bot_sha256, args)
     check_resources(args)
+    entry = next(e for e in manifest["eligible_looks"] if e["checkpoint"] == selected["checkpoint"]
+                 and e["generation"] == selected["generation"])  # fmt: skip
+    evidence = look_evidence(lp, entry)
+    if args.attempt == "formal" and SOLVER_SLOTS_SHA256 is None:
+        raise Refused("no solver binary is pinned: the comparison ADR-0048 requires would refuse")
     return {
         "kind": "p2-g1-gate-claim",
+        "rule_id": RULE_ID,
+        "look_evidence": evidence,
         "selection_sha256": args.selection_sha256,
         "selected": manifest["selected"],
         "checkpoint_path": os.path.relpath(path, args.root),
@@ -223,16 +290,19 @@ def fsync_dir(path: str) -> None:
 
 
 def claim(args, lp, record: dict) -> None:
-    """The durable, irreversible claim: an atomic mkdir, its parent entry
-    synced, then the record and the audit entry, all before any read of
-    the evaluation set."""
-    try:
-        os.mkdir(gate_dir(args.root))
-    except FileExistsError:
-        raise Refused("a gate was already claimed on this loop root; a retry needs the owner's decision") from None
+    """The durable, irreversible claim: the journal's admission, an atomic
+    mkdir, its parent entry synced, then the record and the audit entry, all
+    before any read of the evaluation set. A crash after the journal entry
+    spends the attempt: nothing could prove the file stayed unread."""
+    if os.path.exists(args.gate_dir):
+        raise Refused("a gate was already claimed on this loop root; a retry needs the owner's decision")
+    block = attempts.claim(args.attempts_journal, EVAL_SHA256, RULE_FAMILY, args.create_journal, args.attempt,
+                           args.root, record["checkpoint_sha256"])  # fmt: skip
+    record["attempt"] = block
+    os.mkdir(args.gate_dir)
     fsync_dir(args.root)
-    artifacts.write_atomic(os.path.join(gate_dir(args.root), "claim.json"), artifacts.canonical_json(record))
-    fsync_dir(gate_dir(args.root))
+    artifacts.write_atomic(os.path.join(args.gate_dir, "claim.json"), artifacts.canonical_json(record))
+    fsync_dir(args.gate_dir)
     lp.append_selection({"type": "gate-claim", **record})
     fsync_dir(args.root)
 
@@ -285,12 +355,14 @@ def work(args, clock) -> int:
     configure_torch()
     formal = not args.any_openings
     if formal:
-        with open(os.path.join(gate_dir(args.root), "claim.json"), encoding="utf-8") as f:
+        with open(os.path.join(args.gate_dir, "claim.json"), encoding="utf-8") as f:
             record = json.load(f)
         if record["selection_sha256"] != args.selection_sha256:
             raise Refused("the claim is for another selection")
         path = os.path.join(args.root, record["checkpoint_path"])
         meta, observed = check_candidate(path, record["checkpoint_sha256"], args.bot, args.bot_sha256, args)
+        evidence = record["look_evidence"]
+        check_eligible(evidence["wins"], evidence["games"])
         openings = formal_openings()
         openings_sha = EVAL_SHA256
     else:
@@ -310,8 +382,8 @@ def work(args, clock) -> int:
     results, logs, pairs = played["results"], played["logs"], played["pairs"]
     wins = sum(1 for r in results if r > 0)
     draws = sum(1 for r in results if r == 0)
-    rule = passes(wins, len(results))
-    complete = formal and len(results) == GAMES
+    label = record["attempt"]["label"] if record else None
+    rule = passes(wins, len(results), label)
     protocol = {
         "checkpoint": meta["sha256"],
         "openings_sha256": openings_sha,
@@ -337,11 +409,13 @@ def work(args, clock) -> int:
         "pair_wins": {str(k): pairs.count(k) for k in (2, 1, 0)},
         "distinct_games": distinct_games(openings, logs),
         "openings_covered": len(openings),
+        "rule_id": RULE_ID,
         "rule": rule,
-        "pass": rule["pass"] if complete else None,
-        "interval_note": "nominal two-sided Wilson z=1.96, as if the games were independent Bernoulli trials; "
-        "they come in pairs per opening and may repeat, so it is a stricter descriptive criterion, "
-        "not calibrated coverage",
+        "pass": rule["pass"],
+        "meets_815": rule["wins_at_least_815"] if formal else None,
+        "descriptive": descriptive(wins, len(results)),
+        "attempt": record["attempt"] if record else None,
+        "look_evidence": record["look_evidence"] if record else None,
         "log_sha256": artifacts.sha256(log_bytes),
         # Recomputed at the end: the set played is the set pinned.
         "openings_sha256_at_end": eval_sha_now() if formal else openings_sha,
@@ -351,8 +425,11 @@ def work(args, clock) -> int:
         "note": "the exit code and the spend are in this gate's ledger entry",
         "provenance": provenance.block(args.source_sha, protocol),
     }
+    if label == "development":
+        report["claim"] = DEVELOPMENT_CLAIM
     if formal and report["openings_sha256_at_end"] != EVAL_SHA256:
-        report["pass"] = None
+        report["pass"] = report["meets_815"] = rule["pass"] = rule["wins_at_least_815"] = None
+        rule["invalid_because"] = "the evaluation file changed during the games"
     # Nothing is written before every game is played, and this is only
     # provisional: the parent finalizes it after the ok settlement.
     artifacts.write_atomic(os.path.join(args.out, "gate-log.json"), log_bytes)
@@ -362,6 +439,7 @@ def work(args, clock) -> int:
 
 
 PROVISIONAL = "gate.provisional.json"
+SPAWN = "spawn.json"
 
 
 def settlement(ledger: str, name: str) -> dict | None:
@@ -402,13 +480,64 @@ def finalize(args, rc: int, name: str) -> dict:
     final.pop("provisional_pass", None)
     artifacts.write_atomic(os.path.join(args.out, "gate.json"), artifacts.canonical_json(final))
     print(json.dumps({"gate_run": final["gate_run"], "games": final.get("games"), "pass": final["pass"]}))
+    if not args.any_openings:
+        settle_journal(args.gate_dir, entry, final)
     return final
+
+
+def quiescent(directory: str, entry: dict | None) -> bool:
+    """Whether the supervised run has certainly stopped. A settlement with the
+    group confirmed gone proves it; otherwise only the recorded group answering
+    ESRCH does. A reused group id can only keep this false."""
+    if entry is not None and entry["status"] != "running" and supervisor.NOT_CONFIRMED not in entry["status"]:
+        return True
+    path = os.path.join(directory, SPAWN)
+    if not os.path.exists(path):
+        return entry is None  # nothing reserved, so nothing was started
+    with open(path, encoding="utf-8") as f:
+        spawn = json.load(f)
+    if spawn["pgid"] is None or spawn["host"] != socket.gethostname():
+        return False
+    try:
+        os.killpg(spawn["pgid"], 0)
+    except ProcessLookupError:
+        return True
+    except OSError:
+        return False
+    return False
+
+
+def settle_journal(directory: str, entry: dict | None, final: dict) -> bool:
+    """The attempt's terminal journal event, once the run has certainly
+    stopped; returns whether it could be written. An attempt with no journal
+    block predates ADR-0048 and has nothing to settle."""
+    claim_path = os.path.join(directory, "claim.json")
+    if not os.path.exists(claim_path):
+        return True
+    with open(claim_path, encoding="utf-8") as f:
+        block = json.load(f).get("attempt")
+    if block is None:
+        return True
+    if not quiescent(directory, entry):
+        return False
+    met = final.get("meets_815") if not final.get("attempt_invalid_because") else None
+    disposition = {True: "evaluated-passed", False: "evaluated-failed", None: "consumed-no-verdict"}[met]
+    ledger = os.path.join(directory, "ledger.json")
+    report = os.path.join(directory, "run", "gate.json")
+    digest = lambda p: artifacts.sha256_file(p) if os.path.exists(p) else None  # noqa: E731
+    attempts.settle(block, disposition, {"claim_sha256": digest(claim_path), "report_sha256": digest(report),
+                                         "ledger_sha256": digest(ledger)})  # fmt: skip
+    return True
 
 
 def parse(argv):
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     p.add_argument("--root", help="formal: the formal loop root; the gate's paths are fixed under it")
     p.add_argument("--selection-sha256", help="formal: the committed selection-manifest.json digest")
+    p.add_argument("--attempt", choices=attempts.LABELS, help="formal or development: the attempt's label (required)")
+    p.add_argument("--attempts-journal", help="formal or development: the benchmark's journal (required)")
+    p.add_argument("--create-journal", action="store_true", help="a new journal: a visible departure, recorded")
+    p.add_argument("--development-checkpoint", help="development: the digest this selection names (required)")
     p.add_argument("--any-openings", action="store_true", help="diagnostic: never a gate")
     p.add_argument("--openings", help="diagnostic: the fixture openings (required)")
     p.add_argument("--checkpoint", help="diagnostic: the checkpoint (formal: the selected one, from the root)")
@@ -428,45 +557,221 @@ def parse(argv):
     if args.any_openings:
         if not (args.openings and args.checkpoint and args.out and args.ledger):
             p.error("a diagnostic run needs --openings, --checkpoint, --out and --ledger")
-        if args.root or args.selection_sha256:
-            p.error("a diagnostic run names no selection")
+        if args.root or args.selection_sha256 or args.attempt or args.attempts_journal or args.create_journal:
+            p.error("a diagnostic run names no selection and no attempt")
     else:
         if not (args.root and args.selection_sha256):
             p.error("the formal gate needs --root and --selection-sha256")
         if args.openings or args.checkpoint or args.out or args.ledger:
             p.error("the formal gate takes no --openings, --checkpoint, --out or --ledger: they are fixed")
-        args.out = os.path.join(gate_dir(args.root), "run")
-        args.ledger = os.path.join(gate_dir(args.root), "ledger.json")
+        if not (args.attempt and args.attempts_journal):
+            p.error("the gate needs --attempt and --attempts-journal")
+        if (args.attempt == "development") != bool(args.development_checkpoint):
+            p.error("--development-checkpoint goes with a development attempt, and only there")
+        args.gate_dir = gate_dir(args.root, args.development_checkpoint)
+        args.out = os.path.join(args.gate_dir, "run")
+        args.ledger = os.path.join(args.gate_dir, "ledger.json")
     return args
 
 
-def recover(root: str) -> dict:
+def recover(root: str, development: str | None = None) -> dict:
     """``gate.py finalize --root``: recovery when the parent died after the
     child settled but before it wrote ``gate.json``. It holds the loop's
     owner lock (refused when busy), reads a plain snapshot of the gate
     ledger (never rewriting it or settling a running entry), and rebuilds
-    the result from the provisional report under the same rules. The
-    settled status stands for the exit: the supervisor writes ``ok`` only
-    on exit 0. An existing ``gate.json`` is returned unchanged. It writes
-    nothing but ``gate.json``."""
+    the result from the provisional report under the same rules, which keeps
+    an older report's rule. It runs nothing, and settles the journal only once
+    the run has certainly stopped; otherwise the attempt stays interrupted. An
+    existing ``gate.json`` is returned unchanged."""
     lock = loopmod.Loop(root).owner()
     try:
-        run = os.path.join(gate_dir(root), "run")
+        directory = gate_dir(root, development)
+        run = os.path.join(directory, "run")
         existing = os.path.join(run, "gate.json")
+        ledger = os.path.join(directory, "ledger.json")
+        entry = settlement(ledger, "gate")
         if os.path.exists(existing):
             with open(existing, encoding="utf-8") as f:
-                return json.load(f)
-        if not os.path.exists(os.path.join(gate_dir(root), "claim.json")):
+                final = json.load(f)
+            settle_journal(directory, entry, final)
+            return final
+        if not os.path.exists(os.path.join(directory, "claim.json")):
             raise Refused("no gate was claimed on this loop root")
-        ledger = os.path.join(gate_dir(root), "ledger.json")
-        entry = settlement(ledger, "gate")
-        if entry is None or entry["status"] == "running":
+        if entry is not None and entry["status"] == "running" and not os.path.exists(os.path.join(directory, SPAWN)):
             raise Refused("the gate has no settled ledger entry yet")
-        args = argparse.Namespace(out=run, ledger=ledger, any_openings=False)
+        if not quiescent(directory, entry):
+            raise Refused("the gate has no settled ledger entry yet, or its process group is not confirmed gone: "
+                          "the attempt stays interrupted")  # fmt: skip
+        args = argparse.Namespace(out=run, ledger=ledger, any_openings=False, gate_dir=directory)
         os.makedirs(run, exist_ok=True)
-        return finalize(args, 0 if entry["status"] == "ok" else 1, "gate")
+        return finalize(args, 0 if entry is not None and entry["status"] == "ok" else 1, "gate")
     finally:
         lock.close()
+
+
+# ---------------------------------------------------------------- compare
+
+
+def mcnemar_exact(b: int, c: int) -> float:
+    """The two-sided exact McNemar value; nominal, as the slots are dependent."""
+    n = b + c
+    if n == 0:
+        return 1.0
+    return min(1.0, 2 * sum(math.comb(n, i) for i in range(min(b, c) + 1)) / 2**n)
+
+
+def compare_openings() -> str:
+    """The comparison's reader of the evaluation set: hash and compare only;
+    the solver reads it, and only after a settled attempt."""
+    if artifacts.sha256_file(EVAL) != EVAL_SHA256:
+        raise Refused("the evaluation openings are not the pinned ones")
+    return EVAL
+
+
+def settled_attempt(directory: str) -> tuple[dict, list]:
+    """A complete, valid attempt's report and log, all checked before use. The
+    report's ``complete`` flag is not enough: ``finalize`` also writes it on an
+    invalid attempt."""
+    path = os.path.join(directory, "run", "gate.json")
+    if not os.path.exists(path):
+        raise Refused("no gate.json: no settled attempt to compare")
+    with open(path, "rb") as f:
+        raw = f.read()
+    report = json.loads(raw)
+    if (report.get("attempt_invalid_because") != [] or report.get("exit_code") != 0
+            or (report.get("settlement") or {}).get("status") != "ok" or report.get("rule_id") != RULE_ID
+            or report.get("games") != GAMES or report.get("openings_sha256_at_end") != EVAL_SHA256
+            or report.get("protocol", {}).get("openings_sha256") != EVAL_SHA256):  # fmt: skip
+        raise Refused("gate.json is not a complete valid attempt")
+    with open(os.path.join(directory, "run", "gate-log.json"), "rb") as f:
+        log_bytes = f.read()
+    if artifacts.sha256(log_bytes) != report.get("log_sha256"):
+        raise Refused("the gate log is not the one the report names")
+    logs = json.loads(log_bytes)
+    slots = [(row[0], row[1]) for row in logs]
+    if sorted(slots) != sorted((j, first) for j in range(GAMES // 2) for first in (True, False)):
+        raise Refused("the gate log is not exactly the expected slots")
+    results = [row[2] for row in logs]
+    wins, draws = sum(r > 0 for r in results), sum(r == 0 for r in results)
+    if report.get("wdl") != [wins, draws, GAMES - wins - draws]:
+        raise Refused("the gate log does not match the report's counts")
+    return report, logs
+
+
+def read_slots(path: str) -> dict | None:
+    """The solver's exact row set, by ``(j, candidate first)``; None if it is
+    not."""
+    seats = {"candidate_first": True, "candidate_second": False}
+    rows = {}
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            parts = line.rstrip("\n").split("\t")
+            if len(parts) != 3 or not parts[0].isdecimal() or parts[1] not in seats or parts[2] not in ("win", "draw", "loss"):
+                return None
+            key = (int(parts[0]), seats[parts[1]])
+            if key in rows:
+                return None
+            rows[key] = parts[2]
+    return rows
+
+
+def join(logs: list, solver: dict) -> dict:
+    """The discordant slots, by the seat both sides name."""
+    won = {(row[0], row[1]) for row in logs if row[2] > 0}
+    best = {k for k, v in solver.items() if v == "win"}
+    only = lambda keys: sorted([j, "candidate_first" if first else "candidate_second"] for j, first in keys)  # noqa: E731
+    return {
+        "solver_wins": len(best),
+        "candidate_only_win_slots": only(won - best),
+        "solver_only_win_slots": only(best - won),
+        "mcnemar_exact_two_sided_nominal": mcnemar_exact(len(won - best), len(best - won)),
+        "mcnemar_note": "nominal: the two colour slots of an opening are dependent and games can repeat",
+    }
+
+
+def compare_inputs(args, directory: str) -> dict:
+    report, _ = settled_attempt(directory)
+    return {
+        "gate_json_sha256": artifacts.sha256_file(os.path.join(directory, "run", "gate.json")),
+        "log_sha256": report["log_sha256"],
+        "checkpoint": report["checkpoint"],
+        "openings_sha256": EVAL_SHA256,
+        "solver_slots_sha256": args.solver_slots_bin_sha256,
+        "solver_sources": SOLVER_SOURCES,
+    }
+
+
+def compare_work(args, directory: str, clock) -> int:
+    """Runs the solver and publishes the comparison, atomically; never touches
+    ``gate.json``. Exit 1 is the ``failed`` outcome: nothing is published."""
+    inputs = compare_inputs(args, directory)
+    _, logs = settled_attempt(directory)
+    work_dir = os.path.join(directory, "compare")
+    os.makedirs(work_dir, exist_ok=True)
+    slots_path = os.path.join(work_dir, "solver-slots.tsv")
+    done = subprocess.run([args.solver_slots_bin, compare_openings(), slots_path, str(args.threads)],
+                          timeout=max(1.0, clock.left()), check=False)  # fmt: skip
+    if done.returncode != 0:
+        return 1
+    if eval_sha_now() != EVAL_SHA256:
+        raise Refused("the evaluation file changed during the comparison")
+    result = {"kind": "p2-g1-comparison", "rule_id": RULE_ID, "inputs": inputs, "threads": args.threads,
+              "note": "descriptive: nothing here decides the gate, and gate.json is unchanged"}  # fmt: skip
+    solver = read_slots(slots_path)
+    expected = {(j, first) for j in range(GAMES // 2) for first in (True, False)}
+    if solver is None or set(solver) != expected:
+        result |= {"outcome": "invalid", "invalid_because": "the solver's rows are not exactly the expected slots"}
+    else:
+        wins = sum(v == "win" for v in solver.values())
+        if wins != WINS_MIN:
+            result |= {"outcome": "invalid", "solver_wins": wins, "matches_published_815": False,
+                       "invalid_because": "the solver did not reproduce its published 815: investigate; the bar stays 815"}  # fmt: skip
+        else:
+            result |= {"outcome": "complete", "matches_published_815": True, **join(logs, solver)}
+    artifacts.write_atomic(os.path.join(directory, "run", "comparison.json"), artifacts.canonical_json(result))
+    return 0
+
+
+def compare_main(argv: list[str]) -> int:
+    p = argparse.ArgumentParser(prog="gate.py compare", description="The solver comparison of a settled attempt")
+    p.add_argument("--root", required=True)
+    p.add_argument("--development-checkpoint")
+    p.add_argument("--solver-slots-bin", required=True)
+    p.add_argument("--solver-slots-bin-sha256", required=True)
+    p.add_argument("--threads", type=int, required=True)
+    p.add_argument("--wall-cap-s", type=float, required=True)
+    p.add_argument("--budget-core-hours", type=float, required=True)
+    args = p.parse_args(supervisor.strip_child_flag(argv))
+    directory = gate_dir(args.root, args.development_checkpoint)
+    if SOLVER_SLOTS_SHA256 is None:
+        raise Refused("no solver binary is pinned: the comparison stays refused until an approved build")
+    if not args.threads > 0:
+        raise Refused("the comparison needs at least one thread")
+    if args.solver_slots_bin_sha256 != SOLVER_SLOTS_SHA256 or artifacts.sha256_file(args.solver_slots_bin) != SOLVER_SLOTS_SHA256:
+        raise Refused("the solver binary is not the pinned one")
+    for rel, sha in SOLVER_SOURCES.items():
+        if artifacts.sha256_file(os.path.join(REPO, rel)) != sha:
+            raise Refused(f"{rel} is not the pinned source")
+    if supervisor.child_flag(argv) is None:
+        budget, cap = args.budget_core_hours, args.wall_cap_s
+        if not (math.isfinite(budget) and budget > 0 and math.isfinite(cap) and cap > supervisor.CLEANUP_GRACE_S
+                and budget * 3600 >= args.threads * cap):  # fmt: skip
+            raise Refused("the comparison's budget does not fund its wall cap")
+        inputs = compare_inputs(args, directory)
+        done = os.path.join(directory, "run", "comparison.json")
+        if os.path.exists(done):
+            with open(done, encoding="utf-8") as f:
+                if json.load(f)["inputs"] != inputs:
+                    raise Refused("a comparison with other inputs exists; it is never replaced")
+            return 0
+    rc = supervisor.run(__file__, ["compare", *argv], lambda clock: compare_work(args, directory, clock),
+                        ledger=os.path.join(directory, "compare-ledger.json"), budget_core_hours=args.budget_core_hours,
+                        cores=args.threads, wall_cap_s=args.wall_cap_s, out=os.path.join(directory, "compare"),
+                        name="compare", fresh_out=False)  # fmt: skip
+    if supervisor.child_flag(argv) is None and rc != 0:
+        artifacts.write_atomic(os.path.join(directory, "compare", "outcome.json"),
+                               artifacts.canonical_json({"outcome": "failed", "exit_code": rc}))  # fmt: skip
+    return rc
 
 
 def main(argv=None) -> int:
@@ -474,8 +779,12 @@ def main(argv=None) -> int:
     if argv[:1] == ["finalize"]:
         p = argparse.ArgumentParser(prog="gate.py finalize", description=recover.__doc__.splitlines()[0])
         p.add_argument("--root", required=True)
-        recover(p.parse_args(argv[1:]).root)
+        p.add_argument("--development-checkpoint")
+        done = p.parse_args(argv[1:])
+        recover(done.root, done.development_checkpoint)
         return 0
+    if argv[:1] == ["compare"]:
+        return compare_main(argv[1:])
     args = parse(argv)
 
     name = "gate" if not args.any_openings else "diagnostic-gate"
@@ -484,7 +793,7 @@ def main(argv=None) -> int:
         rc = supervisor.run(
             __file__, argv, lambda clock: work(args, clock), ledger=args.ledger,
             budget_core_hours=args.budget_core_hours, cores=args.cores, wall_cap_s=args.wall_cap_s,
-            out=args.out, name=name,
+            out=args.out, name=name, spawn_record=None if args.any_openings else os.path.join(args.gate_dir, SPAWN),
         )  # fmt: skip
         if supervisor.child_flag(argv) is None:
             finalize(args, rc, name)
