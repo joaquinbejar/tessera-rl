@@ -48,11 +48,15 @@ fn xorshift(s: &mut u64) -> u64 {
     *s
 }
 
-/// A CartPole pool in steady state, and the next batch of random actions.
+/// Steps measured by the steady-state kernel (freeze r4).
+const MEASURED_STEPS: usize = 64;
+
+/// A CartPole pool in steady state, and the next `MEASURED_STEPS` batches of
+/// random actions, all drawn here so the generator is not measured.
 /// It resets, then takes `SETTLE_STEPS` steps with a fixed xorshift action
 /// sequence, all outside the measured region. Every input is fixed, so the
 /// state reached is the same on every run.
-fn cartpole_steady(n: u32) -> (EnvPool<CartPole, NoMasks>, Vec<i32>) {
+fn cartpole_steady(n: u32) -> (EnvPool<CartPole, NoMasks>, Vec<Vec<i32>>) {
     let mut pool = EnvPool::new(CartPoleConfig::default(), options(n)).unwrap();
     pool.reset_all(Reseed::Keep).unwrap();
     let mut seed = 0x9e37_79b9_7f4a_7c15_u64;
@@ -69,8 +73,8 @@ fn cartpole_steady(n: u32) -> (EnvPool<CartPole, NoMasks>, Vec<i32>) {
         })
         .unwrap();
     }
-    let next = row();
-    (pool, next)
+    let rows = (0..MEASURED_STEPS).map(|_| row()).collect();
+    (pool, rows)
 }
 
 /// A reset Tag pool and one batch of moves (illegal ones become no-ops).
@@ -110,22 +114,25 @@ fn cartpole_pool_step(
     (pool, actions)
 }
 
-// One step of a CartPole pool in steady state (see `cartpole_steady`), with
-// random actions: the per-instance step cost with resets mixed in, which a
-// fresh pool's first step does not show.
+// `MEASURED_STEPS` steps of a CartPole pool in steady state (see
+// `cartpole_steady`), with random actions drawn in setup: the per-instance step
+// cost with resets mixed in over many steps, which a fresh pool's first step
+// does not show.
 #[library_benchmark]
 #[bench::n1024(setup = cartpole_steady, args = (1024))]
 fn cartpole_pool_steady(
-    (mut pool, actions): (EnvPool<CartPole, NoMasks>, Vec<i32>),
-) -> (EnvPool<CartPole, NoMasks>, Vec<i32>) {
-    let out = pool
-        .step(ActionInput {
-            discrete: black_box(&actions),
-            continuous: &[],
-        })
-        .unwrap();
-    black_box(out.rewards().first().copied());
-    (pool, actions)
+    (mut pool, rows): (EnvPool<CartPole, NoMasks>, Vec<Vec<i32>>),
+) -> (EnvPool<CartPole, NoMasks>, Vec<Vec<i32>>) {
+    for actions in &rows {
+        let out = pool
+            .step(ActionInput {
+                discrete: black_box(actions),
+                continuous: &[],
+            })
+            .unwrap();
+        black_box(out.rewards().first().copied());
+    }
+    (pool, rows)
 }
 
 #[library_benchmark]

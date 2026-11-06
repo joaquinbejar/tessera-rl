@@ -28,7 +28,7 @@ docker run --rm --security-opt seccomp=unconfined \
 | --- | --- |
 | `classic_instructions::cartpole_physics` | 1,000 CartPole physics steps |
 | `classic_instructions::cartpole_pool_step` | One Inline pool step, 1,024 CartPole instances, auto-reset and observation writing |
-| `classic_instructions::cartpole_pool_steady` | One Inline pool step, 1,024 CartPole instances in steady state: 300 settling steps of fixed xorshift actions in setup, then one step of random actions, resets mixed in. The target for per-instance step changes, where `cartpole_pool_step` measures a fresh pool's first step |
+| `classic_instructions::cartpole_pool_steady` | 64 Inline pool steps, 1,024 CartPole instances in steady state: 300 settling steps of fixed xorshift actions in setup, then 64 measured steps whose random action rows are drawn in setup, resets mixed in. The target for per-instance step changes, where `cartpole_pool_step` measures a fresh pool's first step |
 | `classic_instructions::tag_pool_step` | One Inline pool step, 256 Tag instances (masks on) |
 | `snapshot_instructions::step_inline` | One Inline pool step, 1,024 instances of the engine's counter test environment |
 | `snapshot_instructions::snapshot_all_copy` | `snapshot_all` into a preallocated buffer (copy only) |
