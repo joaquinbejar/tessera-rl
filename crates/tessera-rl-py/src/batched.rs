@@ -1081,6 +1081,10 @@ mod tests {
     fn deliver(ops: &dyn AsyncOps, ids: &[u32], delivered: u64) -> BatchOutput {
         let actions = vec![0; ids.len() * <Counter as Environment>::MAX_AGENTS];
         ops.send(ids, &actions, delivered).unwrap();
+        recv_batch(ops, delivered)
+    }
+
+    fn recv_batch(ops: &dyn AsyncOps, delivered: u64) -> BatchOutput {
         loop {
             match ops.try_recv(delivered).unwrap() {
                 BatchPolled::Batch(out) => return out,
@@ -1138,13 +1142,21 @@ mod tests {
         ops.reset_all(&ResetSeed::Keep).unwrap();
         let out = deliver(&*ops, &[0, 1], 0);
         let before = ops.settled_at().1;
-        ops.reset(&[5], &ResetSeed::Keep, out.seq).unwrap();
+        ops.reset(&[4, 5], &ResetSeed::Keep, out.seq).unwrap();
         assert!(
             ops.settled_at().1 > before,
             "epochs moved before the flag cleared"
         );
-        // restore(ids), likewise.
+        // restore(ids), likewise. The reset ids are delivered by the next recv: they
+        // fill that batch, so the next one is exactly the sent ids. Were one of them
+        // still running, the snapshot would rightly be `NotQuiescent`.
+        let out = recv_batch(&*ops, out.seq);
+        let reset: Vec<u32> = out.ids.iter().map(|b| b.id).collect();
+        assert_eq!(reset, [4, 5]);
         let out = deliver(&*ops, &[0, 1], out.seq);
+        let mut sent: Vec<u32> = out.ids.iter().map(|b| b.id).collect();
+        sent.sort_unstable();
+        assert_eq!(sent, [0, 1]);
         let record = ops.snapshot(6).unwrap();
         let before = ops.settled_at().1;
         ops.restore(&[6], &[record], out.seq).unwrap();
