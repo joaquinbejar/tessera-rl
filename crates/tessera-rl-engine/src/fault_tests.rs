@@ -157,7 +157,10 @@ fn recv_until_death(p: &mut crate::AsyncPool<Ticker, crate::NoMasks>, ids: &[u32
         discrete: &actions,
         continuous: &[],
     };
-    p.send(ids, input).unwrap();
+    // The death can already have happened, so this send can report it too.
+    if let Err(e) = p.send(ids, input) {
+        return e;
+    }
     for _ in 0..100_000 {
         match p.recv() {
             Ok(t) => drop(t),
