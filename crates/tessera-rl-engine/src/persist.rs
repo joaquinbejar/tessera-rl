@@ -498,6 +498,26 @@ where
 {
     /// The file holding the records of `ids`, in that order (SPEC 9.2).
     ///
+    /// A borrow window excludes it, as `encode` cannot run while a step's
+    /// outputs are held:
+    ///
+    /// ```compile_fail,E0502
+    /// use tessera_rl_core::Persist;
+    /// use tessera_rl_engine::{ActionInput, EnvPool, NoMasks};
+    /// fn f<E: Persist>(p: &mut EnvPool<E, NoMasks>, a: ActionInput<'_>)
+    /// where
+    ///     E::Config: tessera_rl_core::config::CanonicalConfig + Sync,
+    ///     E::Header: Send,
+    ///     E::State: Send,
+    ///     <E::Header as tessera_rl_core::RecordLayout>::Adaptive:
+    ///         tessera_rl_core::AdaptiveValues<E::Config>,
+    /// {
+    ///     let held = p.step(a).unwrap();
+    ///     let _ = p.encode(&[0]);
+    ///     let _ = held.rewards();
+    /// }
+    /// ```
+    ///
     /// # Errors
     ///
     /// Returns a [`PersistError`] on a poisoned pool or an unknown id, or
