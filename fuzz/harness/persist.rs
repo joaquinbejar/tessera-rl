@@ -44,7 +44,7 @@ where
         assert_eq!(payload, bytes[start..bytes.len() - 8], "decoded records are not canonical");
         let ids: Vec<u32> = (0..u32::try_from(records.len()).unwrap_or(0)).collect();
         if pool.import(&ids, &records).is_ok() {
-            let rows = pool.outputs().rewards().len();
+            let rows = pool.outputs().unwrap().rewards().len();
             let _ = pool.step(ActionInput { discrete: &vec![0; rows], continuous: &[] });
         }
     }

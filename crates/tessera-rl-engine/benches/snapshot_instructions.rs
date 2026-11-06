@@ -40,7 +40,7 @@ fn pool() -> Pool {
     )
     .unwrap();
     p.reset_all(Reseed::Keep).unwrap();
-    let actions = vec![0; p.outputs().rewards().len()];
+    let actions = vec![0; p.outputs().unwrap().rewards().len()];
     p.step(ActionInput {
         discrete: &actions,
         continuous: &[],
@@ -51,7 +51,7 @@ fn pool() -> Pool {
 
 fn with_actions() -> (Pool, Vec<i32>) {
     let p = pool();
-    let actions = vec![1; p.outputs().rewards().len()];
+    let actions = vec![1; p.outputs().unwrap().rewards().len()];
     (p, actions)
 }
 

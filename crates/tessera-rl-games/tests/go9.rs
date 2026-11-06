@@ -331,7 +331,7 @@ fn play(p: &mut EnvPool<Go9, Masked>, action: u32) {
 
 fn mask(p: &EnvPool<Go9, Masked>, agent: usize) -> Vec<u32> {
     let n = ACTIONS as usize;
-    p.outputs().masks()[agent * n..(agent + 1) * n]
+    p.outputs().unwrap().masks()[agent * n..(agent + 1) * n]
         .iter()
         .enumerate()
         .filter(|(_, f)| f.get())
@@ -438,7 +438,7 @@ fn test_go9_observation_is_from_each_players_view() {
     let mut p = pool();
     play(&mut p, at(4, 4));
     play(&mut p, at(0, 0));
-    let obs = p.outputs().observation(0).unwrap().to_vec();
+    let obs = p.outputs().unwrap().observation(0).unwrap().to_vec();
     assert_eq!(obs.len(), 2 * 162);
     let cell =
         |agent: usize, channel: usize, sq: u32| obs[agent * 162 + channel * 81 + sq as usize];
@@ -614,10 +614,14 @@ fn test_go9_non_capturing_placement_is_barred_by_superko() {
 fn test_go9_two_passes_end_with_komi_deciding_an_empty_board() {
     let mut p = pool();
     play(&mut p, PASS);
-    assert!(!p.outputs().episode_terminated()[0].get());
+    assert!(!p.outputs().unwrap().episode_terminated()[0].get());
     play(&mut p, PASS);
-    assert!(p.outputs().episode_terminated()[0].get());
-    assert_eq!(p.outputs().rewards()[..2], [-1.0, 1.0], "white by komi");
+    assert!(p.outputs().unwrap().episode_terminated()[0].get());
+    assert_eq!(
+        p.outputs().unwrap().rewards()[..2],
+        [-1.0, 1.0],
+        "white by komi"
+    );
 }
 
 #[test]
@@ -645,8 +649,8 @@ fn test_go9_even_komi_tie_pays_nothing() {
     let mut p = pool_with(AutoReset::Disabled, c);
     play(&mut p, PASS);
     play(&mut p, PASS);
-    assert!(p.outputs().episode_terminated()[0].get());
-    assert_eq!(p.outputs().rewards()[..2], [0.0, 0.0]);
+    assert!(p.outputs().unwrap().episode_terminated()[0].get());
+    assert_eq!(p.outputs().unwrap().rewards()[..2], [0.0, 0.0]);
 }
 
 #[test]
@@ -666,7 +670,7 @@ fn test_go9_cap_scores_as_a_termination_at_ply_162() {
                 PASS
             };
             s.play(a);
-            assert!(!p.outputs().episode_terminated()[0].get());
+            assert!(!p.outputs().unwrap().episode_terminated()[0].get());
             play(&mut p, a);
         }
         if s.moves == MAX_PLIES {
@@ -677,11 +681,11 @@ fn test_go9_cap_scores_as_a_termination_at_ply_162() {
     assert!(capped, "no game reached the cap");
     assert_eq!(s.moves, 162);
     assert!(s.passes_in_row < 2);
-    assert!(p.outputs().episode_terminated()[0].get());
-    assert!(!p.outputs().episode_truncated()[0].get());
+    assert!(p.outputs().unwrap().episode_terminated()[0].get());
+    assert!(!p.outputs().unwrap().episode_truncated()[0].get());
     let margin = s.margin_half_points(15);
     let r = f32::from(i8::from(margin > 0) - i8::from(margin < 0));
-    assert_eq!(p.outputs().rewards()[..2], [r, -r]);
+    assert_eq!(p.outputs().unwrap().rewards()[..2], [r, -r]);
 }
 
 #[test]

@@ -61,8 +61,14 @@ where
     M: MaskProvider<E>,
     <E::Header as RecordLayout>::Adaptive: AdaptiveValues<E::Config>,
 {
-    let rows = p.outputs().rewards().len();
-    let masks: Vec<bool> = p.outputs().masks().iter().map(|m| m.get()).collect();
+    let rows = p.outputs().unwrap().rewards().len();
+    let masks: Vec<bool> = p
+        .outputs()
+        .unwrap()
+        .masks()
+        .iter()
+        .map(|m| m.get())
+        .collect();
     let mut acts = Vec::with_capacity(rows);
     for row in 0..rows {
         let mut pick = (row as u32)
@@ -108,7 +114,10 @@ where
             drive(&mut a, t, width);
             drive(&mut c, t, width);
             assert_eq!(c.state_hash(0).unwrap(), a.state_hash(0).unwrap());
-            assert_eq!(c.outputs().rewards(), a.outputs().rewards());
+            assert_eq!(
+                c.outputs().unwrap().rewards(),
+                a.outputs().unwrap().rewards()
+            );
         }
     }
 }

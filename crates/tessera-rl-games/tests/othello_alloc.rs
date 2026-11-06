@@ -80,7 +80,7 @@ fn test_othello_reset_and_steps_through_auto_reset_do_not_allocate() {
             let _ = std::hint::black_box(pool.reset_all(Reseed::Keep));
             for _ in 0..200 {
                 // The first legal action of each row, read from the masks.
-                let masks = pool.outputs().masks();
+                let masks = pool.outputs().unwrap().masks();
                 for (row, action) in masks.chunks(65).zip(actions.iter_mut()) {
                     let first = row.iter().position(|f| f.get()).unwrap_or(64);
                     *action = i32::try_from(first).unwrap();

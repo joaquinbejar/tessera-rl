@@ -261,7 +261,7 @@ fn test_determinize_search_noninterference_equal_info_gives_identical_search() {
 fn noise(record: &Record<Dice>) -> u32 {
     let mut p = EnvPool::<Dice, Masked>::with_masks(cfg(), options(1, 0)).unwrap();
     p.restore(0, record).unwrap();
-    let bytes = p.outputs().observation(0).unwrap();
+    let bytes = p.outputs().unwrap().observation(0).unwrap();
     u32::from_le_bytes(bytes[12..16].try_into().unwrap())
 }
 

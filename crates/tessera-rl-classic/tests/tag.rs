@@ -75,7 +75,7 @@ fn scripted(p: &EnvPool<Tag, Masked>, cfg: &TagConfig, n: u32, evaders_stay: boo
 /// `actions` with every move the current mask forbids replaced by stay, so
 /// the tests also pass with the strict `debug-checks` feature.
 fn legal(p: &EnvPool<Tag, Masked>, mut actions: Vec<i32>) -> Vec<i32> {
-    let masks = p.outputs().masks();
+    let masks = p.outputs().unwrap().masks();
     for (row, a) in actions.iter_mut().enumerate() {
         let index = usize::try_from(*a).unwrap();
         if !masks[row * 5 + index].get() {

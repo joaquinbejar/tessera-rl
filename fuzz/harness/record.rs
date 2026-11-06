@@ -7,6 +7,11 @@
 //! raise an invalid agent event (ADR-0040: import rejects records whose
 //! header and state disagree).
 
+#![allow(
+    clippy::unwrap_used,
+    reason = "a read after a successful call cannot be poisoned"
+)]
+
 use core::num::NonZeroU32;
 
 use tessera_rl_classic::{Tag, TagConfig};
@@ -66,10 +71,12 @@ pub fn run(data: &[u8]) -> Outcome {
     {
         let ended = p
             .outputs()
+            .unwrap()
             .episode_terminated()
             .get(1)
             .is_some_and(|f| f.get())
             || p.outputs()
+                .unwrap()
                 .episode_truncated()
                 .get(1)
                 .is_some_and(|f| f.get());

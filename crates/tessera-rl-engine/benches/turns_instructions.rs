@@ -47,7 +47,7 @@ fn masked_counter() -> (EnvPool<Counter, Masked>, Vec<i32>) {
     };
     let mut p = EnvPool::with_masks(cfg, options()).unwrap();
     p.reset_all(Reseed::Keep).unwrap();
-    let actions = vec![1; p.outputs().rewards().len()];
+    let actions = vec![1; p.outputs().unwrap().rewards().len()];
     (p, actions)
 }
 
@@ -58,7 +58,7 @@ fn sequential_race() -> (EnvPool<RaceEnv, Masked>, Vec<i32>) {
     };
     let mut p = EnvPool::with_masks(cfg, options()).unwrap();
     p.reset_all(Reseed::Keep).unwrap();
-    let actions = vec![1; p.outputs().rewards().len()];
+    let actions = vec![1; p.outputs().unwrap().rewards().len()];
     (p, actions)
 }
 

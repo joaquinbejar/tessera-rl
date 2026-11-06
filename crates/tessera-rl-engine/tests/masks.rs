@@ -53,7 +53,7 @@ fn step<M: tessera_rl_engine::MaskProvider<Counter>>(
 fn test_masks_are_written_for_the_current_state() {
     let p = masked(IllegalActionPolicy::Noop);
     let t = Bool8::TRUE;
-    assert_eq!(p.outputs().masks(), [t, t, Bool8::FALSE, t, t, t]);
+    assert_eq!(p.outputs().unwrap().masks(), [t, t, Bool8::FALSE, t, t, t]);
 }
 
 #[cfg(not(feature = "debug-checks"))]
@@ -71,7 +71,7 @@ fn test_illegal_action_replaced_by_noop_and_counted() {
     assert_eq!(illegal.header(0).unwrap().agents[1].illegal_actions, 0);
     // Counted in the episode stats when the episode ends.
     step(&mut illegal, &[2, 2]);
-    assert_eq!(illegal.outputs().episode_illegal_actions(), [2.0]);
+    assert_eq!(illegal.outputs().unwrap().episode_illegal_actions(), [2.0]);
 }
 
 #[cfg(not(feature = "debug-checks"))]
@@ -93,7 +93,7 @@ fn test_pools_without_masks_have_no_mask_buffer_and_accept_the_action() {
     };
     let mut p = EnvPool::<Counter>::new(cfg, options(IllegalActionPolicy::Noop)).unwrap();
     p.reset_all(Reseed::Keep).unwrap();
-    assert_eq!(p.outputs().masks(), []);
+    assert_eq!(p.outputs().unwrap().masks(), []);
     step(&mut p, &[2, 1]);
     assert_eq!(p.header(0).unwrap().agents[0].illegal_actions, 0);
 }

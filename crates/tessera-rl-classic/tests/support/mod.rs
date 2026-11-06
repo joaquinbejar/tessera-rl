@@ -22,6 +22,10 @@
 //! `tests/README.md`).
 
 #![allow(
+    clippy::unwrap_used,
+    reason = "a read after a successful call cannot be poisoned"
+)]
+#![allow(
     dead_code,
     reason = "each test binary uses a different part of the harness"
 )]
@@ -182,8 +186,8 @@ where
 {
     let a = E::MAX_AGENTS;
     let n = choices::<E>(cfg);
-    let masks = p.outputs().masks();
-    let instances = p.outputs().rewards().len() / a;
+    let masks = p.outputs().unwrap().masks();
+    let instances = p.outputs().unwrap().rewards().len() / a;
     let mut out = vec![0; instances * a];
     let mut rng = heuristic_rng();
     for i in 0..instances {
@@ -247,7 +251,7 @@ where
     E: Pooled,
     M: MaskProvider<E>,
 {
-    let out: &Outputs = p.outputs();
+    let out: &Outputs = p.outputs().unwrap();
     let a = E::MAX_AGENTS;
     let instances = out.rewards().len() / a;
     let mut records = Vec::new();
@@ -310,7 +314,7 @@ where
     E: Pooled,
     M: MaskProvider<E>,
 {
-    let instances = p.outputs().rewards().len() / E::MAX_AGENTS;
+    let instances = p.outputs().unwrap().rewards().len() / E::MAX_AGENTS;
     (0..u32::try_from(instances).unwrap_or(0))
         .filter_map(|id| {
             let (h, s) = (p.header(id)?, p.state(id)?);

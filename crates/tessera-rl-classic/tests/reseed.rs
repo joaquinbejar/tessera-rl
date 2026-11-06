@@ -28,7 +28,7 @@ const SEED: u64 = 5;
 
 /// Observations and state hash of one instance.
 fn view<E: Pooled, M: MaskProvider<E>>(p: &EnvPool<E, M>, id: u32) -> (Vec<u8>, u64) {
-    let out = p.outputs();
+    let out = p.outputs().unwrap();
     let n = out.rewards().len() / E::MAX_AGENTS;
     let i = usize::try_from(id).unwrap();
     let mut obs = Vec::new();

@@ -105,8 +105,8 @@ proptest! {
         let mut ended = false;
         for row in choices {
             let state = *p.state(0).unwrap();
-            let masks = p.outputs().masks().to_vec();
-            let alive = p.outputs().alive().to_vec();
+            let masks = p.outputs().unwrap().masks().to_vec();
+            let alive = p.outputs().unwrap().alive().to_vec();
             // The mask is exactly legality from the agent's cell.
             for agent in 0..cfg.agents() {
                 if !alive[agent].get() {

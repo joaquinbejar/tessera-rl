@@ -124,7 +124,7 @@ where
     <E::Header as tessera_rl_core::RecordLayout>::Adaptive:
         tessera_rl_core::AdaptiveValues<E::Config>,
 {
-    let out = pool.outputs();
+    let out = pool.outputs().unwrap();
     let n = out.episode_return().len();
     let (s, e) = (
         usize::try_from(ids.start).unwrap(),
@@ -503,6 +503,30 @@ fn test_pipelined_token_outlives_the_wrapper() {
     // The rows stay readable through the token after the workers are gone.
     assert_eq!(token_frame(&a), before);
     drop((a, b));
+}
+
+/// A held token of the idle half stays readable while the other half panics.
+#[test]
+fn test_pipelined_idle_half_token_survives_the_other_halfs_panic() {
+    let mut p = piped(
+        AutoReset::NextStep,
+        4,
+        CountConfig {
+            panic_at: 1,
+            length: 9,
+            ..CountConfig::default()
+        },
+    );
+    let [a, b] = p.reset_all(Reseed::Keep).unwrap();
+    let halves = p.halves();
+    let before = b.rewards().to_vec();
+    send(&mut p, a, &half_actions(&actions(0), &halves[0]));
+    assert_eq!(p.recv().map(|_| ()), Err(EngineError::Panicked));
+    assert!(p.is_poisoned());
+    assert_eq!(b.rewards(), before.as_slice());
+    drop(b);
+    drop(p.reset_all(Reseed::Keep).unwrap());
+    assert!(!p.is_poisoned());
 }
 
 #[test]

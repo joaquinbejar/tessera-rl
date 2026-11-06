@@ -126,7 +126,7 @@ fn token_frame(t: &Token, id: u32) -> Vec<u64> {
 
 /// The same row of a Sync pool's outputs, in the order of `token_frame`.
 fn pool_frame(pool: &Pool, id: u32) -> Vec<u64> {
-    let out = pool.outputs();
+    let out = pool.outputs().unwrap();
     let n = out.episode_return().len();
     let i = usize::try_from(id).unwrap();
     let rows = |len: usize| {

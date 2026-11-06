@@ -37,14 +37,20 @@ fn agree(p: &EnvPool<Connect4, Masked>, r: &Position, ctx: &str) {
     assert_eq!(s.moves, r.moves(), "{ctx}: plies");
     assert_eq!(s.stones[me], r.current(), "{ctx}: side to move");
     assert_eq!(s.stones[1 - me], r.opponent(), "{ctx}: opponent");
-    let acting: Vec<bool> = p.outputs().acting().iter().map(|f| f.get()).collect();
-    let over = p.outputs().episode_terminated()[0].get();
+    let acting: Vec<bool> = p
+        .outputs()
+        .unwrap()
+        .acting()
+        .iter()
+        .map(|f| f.get())
+        .collect();
+    let over = p.outputs().unwrap().episode_terminated()[0].get();
     if over {
         assert_eq!(acting, [false, false], "{ctx}: nobody acts after the end");
         return;
     }
     assert_eq!(acting, [me == 0, me == 1], "{ctx}: acting");
-    let mask = &p.outputs().masks()[me * 7..me * 7 + 7];
+    let mask = &p.outputs().unwrap().masks()[me * 7..me * 7 + 7];
     for col in 0..7u32 {
         assert_eq!(
             mask[col as usize].get(),
@@ -68,9 +74,9 @@ fn play(p: &mut EnvPool<Connect4, Masked>, r: &mut Position, col: u32, ctx: &str
     .unwrap();
     r.play_col(col);
     let draw = !wins && r.moves() == 42;
-    let over = p.outputs().episode_terminated()[0].get();
+    let over = p.outputs().unwrap().episode_terminated()[0].get();
     assert_eq!(over, wins || draw, "{ctx}: end of game");
-    let rewards = p.outputs().rewards();
+    let rewards = p.outputs().unwrap().rewards();
     let expected = if wins {
         let mut e = [-1.0, -1.0];
         e[me] = 1.0;

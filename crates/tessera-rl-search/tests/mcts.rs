@@ -568,7 +568,7 @@ fn test_mcts_lazy_observations_equal_an_eager_restore_of_each_leaf() {
     for (r, obs) in &ev.seen {
         p.restore_all(core::slice::from_ref(r)).unwrap();
         let me = r.state().to_move();
-        let eager = &p.outputs().observation(0).unwrap()[me * 84..me * 84 + 84];
+        let eager = &p.outputs().unwrap().observation(0).unwrap()[me * 84..me * 84 + 84];
         assert_eq!(obs.as_slice(), eager);
     }
 }

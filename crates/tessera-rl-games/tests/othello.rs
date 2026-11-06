@@ -307,7 +307,7 @@ fn play(p: &mut EnvPool<Othello, Masked>, action: u32) {
 
 fn mask(p: &EnvPool<Othello, Masked>, agent: usize) -> Vec<u32> {
     let n = ACTIONS as usize;
-    p.outputs().masks()[agent * n..(agent + 1) * n]
+    p.outputs().unwrap().masks()[agent * n..(agent + 1) * n]
         .iter()
         .enumerate()
         .filter(|(_, f)| f.get())
@@ -316,7 +316,12 @@ fn mask(p: &EnvPool<Othello, Masked>, agent: usize) -> Vec<u32> {
 }
 
 fn acting(p: &EnvPool<Othello, Masked>) -> Vec<bool> {
-    p.outputs().acting().iter().map(|f| f.get()).collect()
+    p.outputs()
+        .unwrap()
+        .acting()
+        .iter()
+        .map(|f| f.get())
+        .collect()
 }
 
 /// Imports `state` under the header of the running pool, with the acting
@@ -406,7 +411,7 @@ fn test_othello_placement_flips_every_bracketed_line_in_all_directions() {
 #[test]
 fn test_othello_observation_is_from_each_players_view() {
     let p = pool();
-    let obs = p.outputs().observation(0).unwrap().to_vec();
+    let obs = p.outputs().unwrap().observation(0).unwrap().to_vec();
     assert_eq!(obs.len(), 2 * 128);
     let at = |agent: usize, channel: usize, sq: usize| obs[agent * 128 + channel * 64 + sq];
     let (d4, e4) = (27, 28);
@@ -433,15 +438,19 @@ fn wipeout_game() -> OthelloState {
 fn test_othello_win_by_wipeout_rewards_and_ends_with_empty_squares() {
     let mut p = pool();
     for a in WIPEOUT {
-        assert_eq!(p.outputs().rewards()[..2], [0.0, 0.0], "before {a}");
+        assert_eq!(
+            p.outputs().unwrap().rewards()[..2],
+            [0.0, 0.0],
+            "before {a}"
+        );
         play(&mut p, a);
     }
     let end = wipeout_game();
     assert_eq!(*p.state(0).unwrap(), end);
     assert_eq!(end.stones[1], 0, "white holds nothing");
     assert!(end.is_over());
-    assert!(p.outputs().episode_terminated()[0].get());
-    assert_eq!(p.outputs().rewards()[..2], [1.0, -1.0]);
+    assert!(p.outputs().unwrap().episode_terminated()[0].get());
+    assert_eq!(p.outputs().unwrap().rewards()[..2], [1.0, -1.0]);
 }
 
 #[test]
@@ -465,8 +474,8 @@ fn test_othello_equal_discs_at_the_end_is_a_draw() {
         s.play(a);
         play(&mut p, a);
     }
-    assert!(p.outputs().episode_terminated()[0].get());
-    assert_eq!(p.outputs().rewards()[..2], [0.0, 0.0]);
+    assert!(p.outputs().unwrap().episode_terminated()[0].get());
+    assert_eq!(p.outputs().unwrap().rewards()[..2], [0.0, 0.0]);
 }
 
 #[test]
@@ -545,7 +554,7 @@ fn test_othello_auto_reset_starts_a_fresh_board() {
     for a in WIPEOUT {
         play(&mut p, a);
     }
-    assert!(p.outputs().episode_terminated()[0].get());
+    assert!(p.outputs().unwrap().episode_terminated()[0].get());
     assert_eq!(*p.state(0).unwrap(), OthelloState::start());
 }
 

@@ -580,6 +580,14 @@ where
         state.acknowledge(delivered);
         let pool = state.pool.as_mut().ok_or_else(closed)?;
         let me = std::thread::current().id();
+        // Health first: a cached delivery is not returned after a panic. It is
+        // lost; recovery clears it, and the next delivery has a new seq.
+        if pool.is_poisoned() {
+            let refused = pool.try_recv().map(|_| ());
+            self.settle(pool);
+            refused?;
+            return Err(BindError::Engine(EngineError::Poisoned));
+        }
         if let Some((out, owner)) = &state.pending {
             return Ok(if *owner == me {
                 BatchPolled::Batch(out.clone())
@@ -764,8 +772,8 @@ impl PoolOps for AsyncHandle {
         Err(wrong_mode("step"))
     }
 
-    fn outputs(&self) -> Owned {
-        Owned::default()
+    fn outputs(&self) -> Result<Owned, BindError> {
+        Ok(Owned::default())
     }
 
     fn storage(&self) -> Arc<OutputStorage> {
@@ -1289,6 +1297,56 @@ mod tests {
         ops.reset(&[5], &ResetSeed::Keep, out.seq).unwrap();
         assert!(ids_stale(&gens, &out.ids, &epochs, &flag), "dropped: stale");
         assert_eq!(gens.id(0), Some(out.ids[0].generation), "row not written");
+        ops.close();
+    }
+
+    /// A delivery cached and unacknowledged when another id panics is refused,
+    /// not returned (Codex's repro).
+    #[test]
+    fn test_async_cached_delivery_refuses_poison() {
+        let cfg = CountConfig {
+            panic_at: 2,
+            length: 9,
+            ..CountConfig::default()
+        };
+        let mut options = PoolOptions::new(NonZeroU32::new(N).unwrap(), Seed::new(1));
+        options.chunk_size = NonZeroU32::new(2).unwrap();
+        let pool = EnvPool::<Counter, NoMasks>::new(cfg.clone(), options).unwrap();
+        let a = args(false, Some((1, BatchOutputs::Gathered)));
+        let ops = finish(&cfg, pool, &a, 8, false).unwrap().batched().unwrap();
+        ops.reset_all(&ResetSeed::Keep).unwrap();
+        let receive = |ack| loop {
+            match ops.try_recv(ack).unwrap() {
+                BatchPolled::Batch(out) => return out,
+                BatchPolled::Running => std::thread::yield_now(),
+                BatchPolled::Busy => panic!("one thread only"),
+            }
+        };
+        ops.send(&[1], &[0, 0], 0).unwrap();
+        let first = receive(0);
+        ops.send(&[0], &[0, 0], first.seq).unwrap();
+        let second = receive(first.seq);
+        assert!(second.seq > first.seq);
+        ops.send(&[1], &[0, 0], first.seq).unwrap();
+        while !ops.is_poisoned() {
+            std::thread::yield_now();
+        }
+        assert!(matches!(
+            ops.try_recv(first.seq),
+            Err(BindError::Engine(
+                EngineError::Poisoned | EngineError::Panicked
+            ))
+        ));
+        assert!(matches!(
+            ops.try_recv(first.seq),
+            Err(BindError::Engine(EngineError::Poisoned))
+        ));
+        ops.reset_all(&ResetSeed::Keep).unwrap();
+        ops.send(&[0], &[0, 0], 0).unwrap();
+        assert!(
+            receive(0).seq > second.seq,
+            "the lost delivery is not replayed"
+        );
         ops.close();
     }
 }

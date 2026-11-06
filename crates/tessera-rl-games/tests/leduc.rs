@@ -47,19 +47,19 @@ fn play(p: &mut EnvPool<Leduc, Masked>, action: u32) {
 }
 
 fn rewards(p: &EnvPool<Leduc, Masked>) -> [f32; 2] {
-    let r = p.outputs().rewards();
+    let r = p.outputs().unwrap().rewards();
     [r[0], r[1]]
 }
 
 fn mask(p: &EnvPool<Leduc, Masked>, agent: usize) -> Vec<bool> {
-    p.outputs().masks()[agent * 3..agent * 3 + 3]
+    p.outputs().unwrap().masks()[agent * 3..agent * 3 + 3]
         .iter()
         .map(|f| f.get())
         .collect()
 }
 
 fn terminated(p: &EnvPool<Leduc, Masked>) -> bool {
-    p.outputs().episode_terminated()[0].get()
+    p.outputs().unwrap().episode_terminated()[0].get()
 }
 
 fn agent(i: u16) -> AgentSlot {
@@ -87,8 +87,8 @@ fn test_leduc_reset_deals_two_private_cards_and_antes_one_each() {
             (s.public, s.round, s.contributions, s.to_move),
             (NO_CARD, 0, [1, 1], 0)
         );
-        assert!(p.outputs().acting()[0].get());
-        assert!(!p.outputs().acting()[1].get());
+        assert!(p.outputs().unwrap().acting()[0].get());
+        assert!(!p.outputs().unwrap().acting()[1].get());
     }
 }
 
@@ -162,7 +162,10 @@ fn test_leduc_fold_loses_the_folders_contribution() {
     play(&mut p, FOLD);
     assert!(terminated(&p));
     assert_eq!(p.state(0).unwrap().done, 1, "the hand is over");
-    assert!(p.outputs().acting().iter().all(|a| !a.get()), "nobody acts");
+    assert!(
+        p.outputs().unwrap().acting().iter().all(|a| !a.get()),
+        "nobody acts"
+    );
     assert_eq!(rewards(&p), [1.0 / 13.0, -1.0 / 13.0]);
 }
 
@@ -415,7 +418,7 @@ fn test_leduc_observation_bytes_match_the_rules_and_hide_the_opponents_card() {
             let mut positions = 0;
             for step in 0..=hand.len() {
                 let s = *p.state(0).unwrap();
-                let bytes = p.outputs().observation(0).unwrap().to_vec();
+                let bytes = p.outputs().unwrap().observation(0).unwrap().to_vec();
                 for k in 0..2 {
                     assert_eq!(
                         obs_of(&bytes, k),
@@ -430,7 +433,7 @@ fn test_leduc_observation_bytes_match_the_rules_and_hide_the_opponents_card() {
                         let h = *p.snapshot(0).unwrap().header();
                         q.import(&[0], &[DecodedRecord::from_parts(h, moved).unwrap()])
                             .unwrap();
-                        let other = q.outputs().observation(0).unwrap().to_vec();
+                        let other = q.outputs().unwrap().observation(0).unwrap().to_vec();
                         assert_eq!(
                             obs_of(&other, k),
                             obs_of(&bytes, k),
@@ -479,7 +482,12 @@ fn test_leduc_terminal_observation_matches_the_rules_and_hides_the_opponents_car
             let pre = *p.state(0).unwrap();
             let header = *p.snapshot(0).unwrap().header();
             play(&mut p, *last);
-            let terminal = p.outputs().terminal_observation(0).unwrap().to_vec();
+            let terminal = p
+                .outputs()
+                .unwrap()
+                .terminal_observation(0)
+                .unwrap()
+                .to_vec();
             for k in 0..2 {
                 assert_eq!(obs_of(&terminal, k), expected_obs(&end, k), "seed {seed}");
                 let Some(c) = other_card(&pre, 1 - k) else {
@@ -493,7 +501,12 @@ fn test_leduc_terminal_observation_matches_the_rules_and_hides_the_opponents_car
                 q.import(&[0], &[DecodedRecord::from_parts(header, moved).unwrap()])
                     .unwrap();
                 play(&mut q, *last);
-                let other = q.outputs().terminal_observation(0).unwrap().to_vec();
+                let other = q
+                    .outputs()
+                    .unwrap()
+                    .terminal_observation(0)
+                    .unwrap()
+                    .to_vec();
                 assert_eq!(obs_of(&other, k), obs_of(&terminal, k), "seed {seed}");
             }
         }

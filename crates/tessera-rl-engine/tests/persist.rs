@@ -436,8 +436,14 @@ fn test_persist_import_of_a_bad_last_record_changes_nothing() {
     let mut p = masked(3);
     step(&mut p, 3);
     let hashes: Vec<_> = (0..3).map(|i| p.state_hash(i).unwrap()).collect();
-    let obs = p.outputs().rewards().to_vec();
-    let masks: Vec<bool> = p.outputs().masks().iter().map(|m| m.get()).collect();
+    let obs = p.outputs().unwrap().rewards().to_vec();
+    let masks: Vec<bool> = p
+        .outputs()
+        .unwrap()
+        .masks()
+        .iter()
+        .map(|m| m.get())
+        .collect();
     let mut records = p.decode_with(&file(&p, &[0, 1, 2]), LIMITS, None).unwrap();
     let mut s = *records[2].state();
     s.strict = -1.0; // bit-valid, refused by `Validate`
@@ -447,8 +453,14 @@ fn test_persist_import_of_a_bad_last_record_changes_nothing() {
         (0..3).map(|i| p.state_hash(i).unwrap()).collect::<Vec<_>>(),
         hashes
     );
-    assert_eq!(p.outputs().rewards(), obs);
-    let after: Vec<bool> = p.outputs().masks().iter().map(|m| m.get()).collect();
+    assert_eq!(p.outputs().unwrap().rewards(), obs);
+    let after: Vec<bool> = p
+        .outputs()
+        .unwrap()
+        .masks()
+        .iter()
+        .map(|m| m.get())
+        .collect();
     assert_eq!(after, masks);
 }
 

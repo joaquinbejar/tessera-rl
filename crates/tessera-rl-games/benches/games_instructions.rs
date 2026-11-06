@@ -31,7 +31,7 @@ fn connect4(n: u32) -> (EnvPool<Connect4, Masked>, Vec<i32>) {
     let options = PoolOptions::new(NonZeroU32::new(n).unwrap(), Seed::new(1));
     let mut pool = EnvPool::with_masks(Connect4Config {}, options).unwrap();
     pool.reset_all(Reseed::Keep).unwrap();
-    let rows = pool.outputs().rewards().len();
+    let rows = pool.outputs().unwrap().rewards().len();
     let batch = |k: usize| -> Vec<i32> {
         (0..rows)
             .map(|i| i32::try_from((i * 3 + k * 5) % 7).unwrap())

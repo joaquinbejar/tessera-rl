@@ -93,7 +93,13 @@ fn bench(c: &mut Criterion) {
     let mut draw = 0x1234_5678_u64;
     group.bench_function("keydoor", |b| {
         b.iter(|| {
-            for (row, action) in keydoor.outputs().masks().chunks(5).zip(policy.iter_mut()) {
+            for (row, action) in keydoor
+                .outputs()
+                .unwrap()
+                .masks()
+                .chunks(5)
+                .zip(policy.iter_mut())
+            {
                 draw = draw.wrapping_mul(0x5851_f42d_4c95_7f2d).wrapping_add(1);
                 let pick = usize::try_from((draw >> 33) % 5).unwrap();
                 let first = (0..5)

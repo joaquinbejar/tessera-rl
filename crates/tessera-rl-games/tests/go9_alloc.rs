@@ -81,7 +81,7 @@ fn test_go9_reset_and_steps_through_auto_reset_do_not_allocate() {
             for _ in 0..400 {
                 // The first legal action of each row, read from the masks: games run
                 // to the board's limits, with captures and superko scans.
-                let masks = pool.outputs().masks();
+                let masks = pool.outputs().unwrap().masks();
                 for (row, action) in masks.chunks(82).zip(actions.iter_mut()) {
                     let first = row.iter().position(|f| f.get()).unwrap_or(81);
                     *action = i32::try_from(first).unwrap();

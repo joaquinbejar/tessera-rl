@@ -42,7 +42,7 @@ fn act(values: &[i32]) -> ActionInput<'_> {
 }
 
 fn obs(p: &EnvPool<CartPole>, i: usize) -> [f32; 4] {
-    let bytes = &p.outputs().observation(0).unwrap()[i * 16..(i + 1) * 16];
+    let bytes = &p.outputs().unwrap().observation(0).unwrap()[i * 16..(i + 1) * 16];
     core::array::from_fn(|k| f32::from_le_bytes(bytes[k * 4..k * 4 + 4].try_into().unwrap()))
 }
 
@@ -157,7 +157,13 @@ fn test_cartpole_heuristic_balances_to_truncation() {
         let out = p.step(act(&actions)).unwrap();
         assert!(out.episode_terminated().iter().all(|f| !f.get()));
     }
-    assert!(p.outputs().episode_truncated().iter().all(|f| f.get()));
+    assert!(
+        p.outputs()
+            .unwrap()
+            .episode_truncated()
+            .iter()
+            .all(|f| f.get())
+    );
 }
 
 /// Gymnasium's `TimeLimit`: a terminal step that reaches the limit reports

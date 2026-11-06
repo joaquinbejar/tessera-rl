@@ -116,6 +116,8 @@ pub struct SearchPool<E: Environment, M: MaskProvider<E>> {
     pub(crate) batch: u32,
     pub(crate) eviction: Eviction,
     pub(crate) scratch: EnvPool<E, M>,
+    /// Bytes of one agent's observation, a shape fixed at construction.
+    obs_row_bytes: usize,
     // Per-call working storage, allocated at construction.
     pub(crate) protected: Vec<bool>,
     pub(crate) doomed: Vec<bool>,
@@ -230,7 +232,14 @@ where
         scratch.reset_all(Reseed::Keep)?;
         let cap = idx(capacity);
         let agents = E::MAX_AGENTS;
+        let rows = idx(batch).saturating_mul(agents).max(1);
+        let outputs = scratch.outputs()?;
+        let obs_row_bytes = (0..tessera_rl_engine::MAX_LEAVES)
+            .map_while(|l| outputs.observation(l).map(<[u8]>::len))
+            .map(|len| len / rows)
+            .sum();
         let mut pool = Self {
+            obs_row_bytes,
             records: vec![*root; cap],
             nodes: vec![Node::FREE; cap],
             edges: vec![Edge::EMPTY; cap.saturating_mul(idx(actions))],
@@ -804,7 +813,7 @@ where
         // failed step (a contained kernel panic): every row is rewritten,
         // so nothing of the failed step survives.
         self.scratch.restore_all(&self.load_records)?;
-        let masks = self.scratch.outputs().masks();
+        let masks = self.scratch.outputs()?.masks();
         if !masks.is_empty() {
             let width = idx(self.actions);
             for (row, p) in self.planned.iter().enumerate() {
@@ -889,7 +898,7 @@ where
             if let Some(r) = self.child_records.get_mut(row) {
                 *r = record;
             }
-            let outputs = self.scratch.outputs();
+            let outputs = self.scratch.outputs()?;
             let terminal = outputs
                 .episode_terminated()
                 .get(row)
@@ -975,21 +984,17 @@ where
     }
 
     /// Bytes of one agent's observation (every observation leaf, in order).
-    pub(crate) fn obs_row_bytes(&self) -> usize {
-        let rows = idx(self.batch).saturating_mul(self.agents).max(1);
-        (0..tessera_rl_engine::MAX_LEAVES)
-            .map_while(|l| self.scratch.outputs().observation(l).map(<[u8]>::len))
-            .map(|len| len / rows)
-            .sum()
+    pub(crate) const fn obs_row_bytes(&self) -> usize {
+        self.obs_row_bytes
     }
 
     /// Where the scratch rows' observations are read from.
-    pub(crate) fn obs_source(&self) -> ObsSource<'_> {
-        ObsSource {
-            outputs: self.scratch.outputs(),
+    pub(crate) fn obs_source(&self) -> Result<ObsSource<'_>, SearchError> {
+        Ok(ObsSource {
+            outputs: self.scratch.outputs()?,
             rows: idx(self.batch).saturating_mul(self.agents).max(1),
             agents: self.agents,
-        }
+        })
     }
 }
 
@@ -1075,4 +1080,47 @@ where
 
 fn slot_rewards(slot: u32, agents: usize) -> usize {
     idx(slot).saturating_mul(agents)
+}
+
+#[cfg(test)]
+#[path = "../tests/support/fragile.rs"]
+mod fragile;
+
+#[cfg(test)]
+mod poison_tests {
+    use super::fragile::{CountConfig, Fragile};
+    use super::*;
+    use core::num::NonZeroU32;
+    use tessera_rl_engine::{NoMasks, PoolOptions};
+    use tessera_rl_num::identity::Seed;
+
+    /// A failed expansion poisons the scratch pool: the observation source
+    /// refuses rather than read rows, and the cached size stays right.
+    #[test]
+    fn test_obs_source_refuses_a_poisoned_scratch_pool() {
+        let mut p = EnvPool::<Fragile>::new(
+            CountConfig {},
+            PoolOptions::new(NonZeroU32::MIN, Seed::new(1)),
+        )
+        .unwrap();
+        p.reset_all(Reseed::Keep).unwrap();
+        let mut s = SearchPool::<Fragile, NoMasks>::new(
+            CountConfig {},
+            SearchOptions::new(NonZeroU32::new(8).unwrap(), NonZeroU32::new(2).unwrap()),
+            &p.snapshot(0).unwrap(),
+            EnvPool::new,
+        )
+        .unwrap();
+        let bytes = s.obs_row_bytes();
+        assert!(bytes > 0);
+        assert!(s.obs_source().is_ok());
+        let root = s.root();
+        let mut out = [root; 2];
+        s.expand(&[(root, 1), (root, 2)], &mut out).unwrap_err();
+        assert!(matches!(
+            s.obs_source(),
+            Err(SearchError::Engine(EngineError::Poisoned))
+        ));
+        assert_eq!(s.obs_row_bytes(), bytes);
+    }
 }

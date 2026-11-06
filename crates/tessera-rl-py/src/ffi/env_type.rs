@@ -322,6 +322,8 @@ macro_rules! maker {
     };
 }
 
+#[cfg(feature = "test-hooks")]
+maker!(make_panic_counter, api::make_panic_counter);
 maker!(make_cartpole, api::make_cartpole);
 maker!(make_tag, api::make_tag);
 maker!(make_grid, api::make_grid);

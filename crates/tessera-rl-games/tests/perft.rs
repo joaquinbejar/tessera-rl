@@ -70,12 +70,12 @@ fn perft_engine(p: &mut EnvPool<Connect4, Masked>, depth: u32) -> u64 {
     if depth == 0 {
         return 1;
     }
-    if p.outputs().episode_terminated()[0].get() {
+    if p.outputs().unwrap().episode_terminated()[0].get() {
         return 0;
     }
     let me = p.state(0).unwrap().to_move();
     let legal: Vec<i32> = (0..7)
-        .filter(|&c| p.outputs().masks()[me * 7 + c].get())
+        .filter(|&c| p.outputs().unwrap().masks()[me * 7 + c].get())
         .map(|c| i32::try_from(c).unwrap())
         .collect();
     let rec = p.snapshot(0).unwrap();
