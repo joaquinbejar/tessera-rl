@@ -1322,6 +1322,25 @@ def test_gate_compare_refuses_a_disposition_other_than_the_report(compared):
         gate.settled_attempt(directory)
 
 
+@pytest.mark.parametrize("name", ["run/gate.json", "claim.json", "ledger.json", "disposition"])
+def test_gate_recover_refuses_an_inconsistent_terminal_journal(compared, name):
+    ns, directory, *_ = compared
+    run = pathlib.Path(directory)
+    if name == "disposition":
+        report = json.loads((run / "run" / "gate.json").read_text())
+        journal = pathlib.Path(report["attempt"]["journal"])
+        lines = journal.read_text().splitlines(keepends=True)
+        last = json.loads(lines[-1])
+        last["disposition"] = "below-815" if last["disposition"] == "met-815" else "met-815"
+        journal.write_text("".join(lines[:-1]) + json.dumps(last) + "\n")
+    else:
+        doc = json.loads((run / name).read_text())
+        doc["note"] = "rewritten"
+        (run / name).write_text(json.dumps(doc))
+    with pytest.raises(gate.Refused):
+        gate.check_terminal(directory, str(run / "run" / "gate.json"))
+
+
 @pytest.mark.parametrize("how", ["absent", "differs"])
 def test_gate_recover_never_rebuilds_against_a_settled_journal(tmp_path, done_root, as_formal, bot, monkeypatch, how):
     root, _, sha, _ = selected_root(tmp_path, done_root)

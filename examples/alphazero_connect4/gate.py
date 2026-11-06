@@ -613,18 +613,32 @@ def parse(argv):
     return args
 
 
-def check_terminal(directory: str, report: str) -> None:
-    """A settled journal decision stands: no score is rebuilt against it."""
+def check_terminal(directory: str, report: str) -> dict | None:
+    """A settled journal decision stands: the three files must be the ones it
+    names, and its disposition and label must agree with the report, or nothing
+    is rebuilt or compared. Returns the settlement, if there is one."""
     claim_path = os.path.join(directory, "claim.json")
     if not os.path.exists(claim_path):
-        return
+        return None
     with open(claim_path, encoding="utf-8") as f:
         block = json.load(f).get("attempt")
     settled = attempts.settlement(block) if block else None
     if settled is None:
-        return
+        return None
     if not os.path.exists(report) or artifacts.sha256_file(report) != settled.get("report_sha256"):
         raise Refused("the journal's settlement stands, and gate.json is absent or not the one it names")
+    ledger = os.path.join(directory, "ledger.json")
+    if (artifacts.sha256_file(claim_path) != settled.get("claim_sha256")
+            or (artifacts.sha256_file(ledger) if os.path.exists(ledger) else None) != settled.get("ledger_sha256")):  # fmt: skip
+        raise Refused("the files are not the ones the journal's settlement names")
+    with open(report, encoding="utf-8") as f:
+        final = json.load(f)
+    met = final.get("meets_815") if not final.get("attempt_invalid_because") else None
+    if settled["disposition"] != {True: "met-815", False: "below-815", None: "consumed-no-verdict"}.get(met):
+        raise Refused("the journal's disposition is not the report's score")
+    if final.get("attempt", block) != block or (block["label"] == "development" and final.get("pass") is not None):
+        raise Refused("the report's label is not the journal's attempt")
+    return settled
 
 
 def recover(root: str, development: str | None = None, journal: str | None = None) -> dict:
@@ -734,14 +748,9 @@ def settled_attempt(directory: str) -> tuple[dict, list, dict]:
         raise Refused("the gate log does not match the report's counts")
     block = report.get("attempt")
     if block is not None:
-        settled = attempts.settlement(block)
+        settled = check_terminal(directory, path)
         if settled is None or settled["disposition"] == "consumed-no-verdict":
             raise Refused("the journal holds no evaluated settlement for this attempt")
-        if (settled.get("report_sha256") != artifacts.sha256(raw) or settled.get("claim_sha256") != artifacts.sha256_file(claim_path)
-                or settled.get("ledger_sha256") != artifacts.sha256_file(os.path.join(directory, "ledger.json"))):  # fmt: skip
-            raise Refused("the files are not the ones the journal's settlement names")
-        if settled["disposition"] != {True: "met-815", False: "below-815"}.get(report.get("meets_815")):
-            raise Refused("the journal's disposition is not the report's score")
     identity = {"gate_json_sha256": artifacts.sha256(raw), "log_sha256": report["log_sha256"],
                 "claim_sha256": artifacts.sha256_file(claim_path), "checkpoint": report["checkpoint"],
                 "ledger_entry": ledger_entry}  # fmt: skip
