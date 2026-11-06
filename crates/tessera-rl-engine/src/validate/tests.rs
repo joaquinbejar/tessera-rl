@@ -619,7 +619,7 @@ fn test_single_discrete_copy_matches_the_generic_copy_on_mixed_headers() {
         let hs: Vec<H1> = (0..13).map(single).collect();
         // Garbage in rows that are not required: never validated, stored as 0.
         let acts: Vec<i32> = (0..13)
-            .map(|i| if i % 4 == 0 { (i % 3) as i32 } else { -7 })
+            .map(|i| if i % 4 == 0 { i % 3 } else { -7 })
             .collect();
         let mut fast = vec![SENTINEL; 13];
         check_and_copy_actions(&layout(), mode, &hs, input(&acts), &mut fast, &mut []).unwrap();
