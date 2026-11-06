@@ -431,3 +431,8 @@ impl ActionMask for KeyDoor {
         out.set_discrete(0, WAIT);
     }
 }
+
+impl tessera_rl_core::Persist for KeyDoor {
+    const ENV_ID: &'static str = ENV_ID;
+    const ENV_VERSION: u32 = ENV_VERSION;
+}

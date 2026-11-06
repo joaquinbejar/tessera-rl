@@ -568,3 +568,8 @@ impl Heuristic for Leduc {
         out.set_discrete(0, i32::try_from(action).unwrap_or(1));
     }
 }
+
+impl tessera_rl_core::Persist for Leduc {
+    const ENV_ID: &'static str = ENV_ID;
+    const ENV_VERSION: u32 = ENV_VERSION;
+}

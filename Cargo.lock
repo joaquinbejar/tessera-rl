@@ -891,6 +891,7 @@ dependencies = [
  "loom",
  "proptest",
  "tessera-rl-core",
+ "tessera-rl-engine",
  "tessera-rl-macros",
  "tessera-rl-num",
  "thiserror",

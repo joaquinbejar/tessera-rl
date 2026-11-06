@@ -541,3 +541,8 @@ impl Heuristic for Go9 {
         out.set_discrete(0, best.cast_signed());
     }
 }
+
+impl tessera_rl_core::Persist for Go9 {
+    const ENV_ID: &'static str = ENV_ID;
+    const ENV_VERSION: u32 = ENV_VERSION;
+}

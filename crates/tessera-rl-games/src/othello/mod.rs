@@ -427,3 +427,8 @@ impl Heuristic for Othello {
         out.set_discrete(0, i32::try_from(best).unwrap_or(0));
     }
 }
+
+impl tessera_rl_core::Persist for Othello {
+    const ENV_ID: &'static str = ENV_ID;
+    const ENV_VERSION: u32 = ENV_VERSION;
+}

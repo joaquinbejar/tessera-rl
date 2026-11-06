@@ -22,7 +22,7 @@ tessera-rl-macros.workspace = true
 [dev-dependencies]
 criterion.workspace = true
 gungraun.workspace = true
-tessera-rl-engine.workspace = true
+tessera-rl-engine = { workspace = true, features = ["test-hooks"] }
 # The M0 reference tools (ADR-0042), for the equivalence tests only.
 tessera-rl-connect4-ref = { path = "../../tools/connect4-ref" }
 

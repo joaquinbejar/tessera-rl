@@ -18,8 +18,10 @@ cargo-fuzz = true
 libfuzzer-sys = "0.4"
 tessera-rl-core = { path = "../crates/tessera-rl-core" }
 tessera-rl-num = { path = "../crates/tessera-rl-num" }
-tessera-rl-engine = { path = "../crates/tessera-rl-engine" }
+tessera-rl-engine = { path = "../crates/tessera-rl-engine", features = ["test-hooks"] }
 tessera-rl-classic = { path = "../crates/tessera-rl-classic" }
+tessera-rl-games = { path = "../crates/tessera-rl-games" }
+tessera-rl-macros = { path = "../crates/tessera-rl-macros" }
 
 # Not part of the main workspace.
 [workspace]
@@ -48,6 +50,55 @@ bench = false
 [[bin]]
 name = "decode"
 path = "fuzz_targets/decode.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "persist_tag"
+path = "fuzz_targets/persist_tag.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "persist_cartpole"
+path = "fuzz_targets/persist_cartpole.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "persist_keydoor"
+path = "fuzz_targets/persist_keydoor.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "persist_connect4"
+path = "fuzz_targets/persist_connect4.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "persist_go9"
+path = "fuzz_targets/persist_go9.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "persist_leduc"
+path = "fuzz_targets/persist_leduc.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "persist_same_platform"
+path = "fuzz_targets/persist_same_platform.rs"
 test = false
 doc = false
 bench = false

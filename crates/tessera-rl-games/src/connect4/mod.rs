@@ -332,3 +332,8 @@ impl Heuristic for Connect4 {
         out.set_discrete(0, i32::try_from(col).unwrap_or(0));
     }
 }
+
+impl tessera_rl_core::Persist for Connect4 {
+    const ENV_ID: &'static str = ENV_ID;
+    const ENV_VERSION: u32 = ENV_VERSION;
+}

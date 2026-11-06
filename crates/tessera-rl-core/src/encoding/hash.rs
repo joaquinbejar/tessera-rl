@@ -73,3 +73,10 @@ impl Default for Encoder<HashSink> {
         Self::new(HashSink::new())
     }
 }
+
+/// XXH3-64 of `bytes`: the checksum of persisted files (ADR-0011). It detects
+/// accidents and is not authentication.
+#[must_use]
+pub fn checksum(bytes: &[u8]) -> u64 {
+    xxhash_rust::xxh3::xxh3_64(bytes)
+}

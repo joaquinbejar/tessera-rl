@@ -18,6 +18,8 @@ categories.workspace = true
 # Strict checks (SPEC 5.5): illegal actions reject the call atomically
 # instead of being replaced. Off by default.
 debug-checks = []
+# Substitutes the build identity of persisted files: fixtures, tests and fuzz only.
+test-hooks = []
 
 [dependencies]
 tessera-rl-core.workspace = true
@@ -36,6 +38,11 @@ windows-sys.workspace = true
 
 [target.'cfg(loom)'.dev-dependencies]
 loom.workspace = true
+
+# Not under loom: cargo would build the plain library for this self-dependency
+# under cfg(loom), without the dev-dependency above.
+[target.'cfg(not(loom))'.dev-dependencies]
+tessera-rl-engine = { path = ".", features = ["test-hooks"] }
 
 [dev-dependencies]
 proptest.workspace = true
