@@ -76,9 +76,11 @@ def strip_child_flag(argv: list[str]) -> list[str]:
 
 def run(script: str, argv: list[str], work, *, ledger: str, budget_core_hours: float, cores: int,
         wall_cap_s: float, out: str, name: str, exit_names: dict[int, str] | None = None,
-        fresh_out: bool = True) -> int:
+        fresh_out: bool = True, spawn_record: str | None = None) -> int:
     """Runs ``work`` supervised (see the module docs); returns the exit
-    code."""
+    code. ``spawn_record`` holds the child's process group: written with no
+    group before the start and with it after, so a recovery can tell a child
+    that never started from one it cannot account for."""
     deadline = child_flag(argv)
     if deadline is not None:
         threading.Thread(target=_watchdog, args=(deadline, os.getppid()), daemon=True).start()
@@ -99,10 +101,15 @@ def run(script: str, argv: list[str], work, *, ledger: str, budget_core_hours: f
         return EXIT_DEADLINE
     work_deadline = start + work_s
     deadline_epoch = time.time() + (work_deadline - time.monotonic())
+    host = socket.gethostname()
+    if spawn_record:
+        artifacts.write_atomic(spawn_record, artifacts.canonical_json({"host": host, "pgid": None}))
     proc = subprocess.Popen(
         [sys.executable, os.path.abspath(script), *argv, "--child-deadline-epoch", repr(deadline_epoch)],
         start_new_session=True,
     )
+    if spawn_record:
+        artifacts.write_atomic(spawn_record, artifacts.canonical_json({"host": host, "pgid": proc.pid}))
 
     def kill_group() -> bool:
         """Kills the child's group. Returns False only when an EPERM could

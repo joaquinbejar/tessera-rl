@@ -12,6 +12,8 @@ the API is not stable, and any 0.x release may break it.
 ### Added
 
 - Persisted snapshots (ADR-0011): `EnvPool::encode` and `decode` for the custom flat format, on Sync pools, with the `Persist` and `PersistMask` traits. Decoded records stay untrusted until `import`. Same-platform files need an explicit `TESSERA_BUILD_ID`. Files hold full state and are privileged.
+- **The P2-G1 gate under ADR-0048** (`examples/alphazero_connect4/gate.py`): at least 815 of 1,000 wins, held-out
+  eligibility, an attempts journal across loop roots, and a solver comparison step (`solver_slots`), refused until pinned.
 - **Pipelined in the PufferLib adapter** (`make_puffer(..., mode="pipelined")`): native backend only, equal halves. No speed gain has been measured.
 - **Connect Four best-response measurement** (`tools/connect4-ref`): an open-loop search per held-out slot against
   the pinned bot and an independent replay of its lines. A reference tool, not part of any gate.
