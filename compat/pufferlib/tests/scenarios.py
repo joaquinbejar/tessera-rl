@@ -59,6 +59,31 @@ def multiprocessing_identity(start, workers_inner, envs, procs, reset_seed, form
     return {"diffs": diffs, "distinct": distinct, "total": total, "driver_has_pool": driver_has_pool}
 
 
+def lifecycle(start):
+    multiprocessing.set_start_method(start)
+    vec = pufferlib.vector.make(
+        make_puffer("tessera/CartPole-v1", num_envs=2, workers=2),
+        backend=pufferlib.vector.Multiprocessing, num_envs=4, num_workers=2,
+    )  # fmt: skip
+    driver_has_pool = vec.driver_env._env is not None
+    vec.reset(seed=1)
+    for _ in range(50):
+        vec.step(np.zeros(vec.num_agents, dtype=np.int32))
+    vec.close()
+    return {"driver_has_pool": driver_has_pool, "closed": True}
+
+
+def root_above_range(start, root):
+    """A root that a child refuses: the parent's reset blocks. One-off probe."""
+    multiprocessing.set_start_method(start)
+    vec = pufferlib.vector.make(
+        make_puffer("tessera/CartPole-v1", num_envs=2),
+        backend=pufferlib.vector.Multiprocessing, num_envs=4, num_workers=2,
+    )  # fmt: skip
+    vec.reset(seed=root)
+    return {"returned": True}
+
+
 def _train(env_id, use_rnn, num_envs):
     from pufferlib import models, pufferl
 

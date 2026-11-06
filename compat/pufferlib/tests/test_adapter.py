@@ -245,7 +245,9 @@ def test_conformance_shapes_and_seven_tuple():
     assert env.agents_per_batch == env.num_agents
     assert env.action_space.shape == (env.num_agents,)
     obs, infos = env.reset(seed=1)
-    assert env.observation_space.contains(obs.astype(env.observation_space.dtype)) or obs.shape[0] == env.num_agents
+    assert obs.shape == env.observation_space.shape
+    assert obs.dtype == env.observation_space.dtype
+    assert env.observation_space.contains(np.array(obs))
     assert infos == []
     env.async_reset(seed=1)
     env.send(np.zeros(env.num_agents, dtype=np.int32))
@@ -301,12 +303,104 @@ def test_invalid_pool_options_fail_at_construction():
         TesseraPufferEnv(CARTPOLE, num_envs=0)
 
 
-def test_out_of_range_action_raises_and_illegal_is_a_noop():
+def test_out_of_range_action_raises():
     env = TesseraPufferEnv(TAG, num_envs=1)
     env.reset(seed=1)
     with pytest.raises(t.ActionError):
         env.step(np.full(env.num_agents, 99, dtype=np.int32))
     env.close()
+
+
+def test_illegal_action_matches_the_noop_byte_for_byte():
+    n = 4
+    env = TesseraPufferEnv(TAG, num_envs=n, log_interval=None)
+    env.reset(seed=1)
+    base = env.instance_seed_base
+    ref = t.make(TAG, num_envs=n, seed=base, auto_reset="same_step", outputs="owned")
+    ref.reset(base)
+    rng = np.random.default_rng(6)
+    replaced = 0
+    for _ in range(100):
+        masks = np.array(env.action_masks)
+        acts = np.zeros(env.num_agents, dtype=np.int32)
+        for row, legal in enumerate(masks):
+            illegal = np.flatnonzero(~legal)
+            if illegal.size:
+                acts[row] = rng.choice(illegal)
+                replaced += 1
+        assert_same(ref.step(np.zeros(env.num_agents, dtype=np.int32)), env.step(acts))
+    assert replaced > 0, "no illegal action was ever available"
+    env.close()
+    ref.close()
+
+
+def test_terminal_observations_hold_the_final_observation():
+    n = 4
+    env = TesseraPufferEnv(CARTPOLE, num_envs=n, log_interval=None)
+    env.reset(seed=1)
+    base = env.instance_seed_base
+    ref = t.make(CARTPOLE, num_envs=n, seed=base, auto_reset="disabled", outputs="owned")
+    ref.reset(base)
+    acts = np.zeros(n, dtype=np.int32)
+    for _ in range(500):
+        env.step(acts)
+        want = ref.step(acts)
+        if want.episode_terminated.any():
+            break
+    ended = np.flatnonzero(want.episode_terminated)
+    assert ended.size, "no episode ended"
+    assert env.terminals[ended].all()
+    assert env.terminal_observations[ended].tobytes() == leaf(want)[ended].reshape(ended.size, -1).tobytes()
+    # The observation returned is already the next episode's.
+    assert env.observations[ended].tobytes() != env.terminal_observations[ended].tobytes()
+    env.close()
+    ref.close()
+
+
+def invert_mix(base):
+    """The (constructor, reset) pair of a base: the mix is a bijection."""
+    mask = (1 << 64) - 1
+
+    def unshift(z, k):
+        out = z
+        for _ in range(64 // k + 1):
+            out = z ^ (out >> k)
+        return out
+
+    z = unshift(base, 31)
+    z = (z * pow(0x94D049BB133111EB, -1, 1 << 64)) & mask
+    z = unshift(z, 27)
+    z = (z * pow(0xBF58476D1CE4E5B9, -1, 1 << 64)) & mask
+    z = unshift(z, 30)
+    return z >> 32, z & 0xFFFFFFFF
+
+
+def test_base_at_the_top_of_u64_wraps_like_the_engine():
+    top = 2**64 - 2
+    c, r = invert_mix(top)
+    assert mix_seed(c, r) == top
+    env = TesseraPufferEnv(CARTPOLE, num_envs=4, seed=c, log_interval=None)
+    obs, _ = env.reset(seed=r)
+    assert env.instance_seed_base == top
+    # Instances top, top + 1, then 0 and 1 modulo 2**64 (SPEC 8.1).
+    low = t.make(CARTPOLE, num_envs=2, seed=0, auto_reset="same_step", outputs="owned")
+    assert leaf(low.reset(0)).tobytes() == obs[2:].tobytes()
+    env.step(np.zeros(4, dtype=np.int32))
+    env.close()
+    low.close()
+
+
+@pytest.mark.parametrize("start", ["spawn", "fork"] if sys.platform == "linux" else ["spawn"])
+def test_root_reset_seed_at_the_supported_limit_is_accepted_by_every_child(start):
+    out = scenario("multiprocessing_identity", start, 0, 8, 4, 2**31 - 1, timeout=180)
+    assert out["diffs"] == 0
+    assert out["distinct"] == out["total"]
+
+
+@pytest.mark.parametrize("start", ["spawn", "fork"] if sys.platform == "linux" else ["spawn"])
+def test_multiprocessing_closes_and_exits_cleanly(start):
+    out = scenario("lifecycle", start, timeout=120)
+    assert out == {"driver_has_pool": False, "closed": True}
 
 
 def test_logging_means_over_finished_episodes():
