@@ -14,6 +14,10 @@
 //!   `trampoline`: chunk claiming and the environment's work, setup's reset
 //!   included. Not a worker's idle loop or its wake-up.
 //!
+//! Measured per thread (arm64, 16 steps): `caller` has all its count on the
+//! calling thread and 0 on each worker; `jobs` has 0 on the calling thread and
+//! about a quarter on each of the 4 workers.
+//!
 //! Neither counts the kernel: futex time, context switches and wake-up latency
 //! are invisible here, and so are effects of code layout on real caches and
 //! branch prediction, which is what wall-clock runs see.
