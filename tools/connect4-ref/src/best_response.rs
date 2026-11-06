@@ -477,6 +477,32 @@ mod tests {
         }
     }
 
+    /// Codex's probe: slot 0 holds its reservation while the others must wait, and
+    /// each charges one node, so only the lowest waiting slots may run.
+    #[test]
+    fn test_best_response_schedule_runs_the_lowest_slots_when_forced_to_wait() {
+        let charge = |i: usize, _cap: u64| {
+            if i == 0 {
+                thread::sleep(std::time::Duration::from_millis(15));
+            }
+            Outcome {
+                class: Class::Exhausted,
+                nodes: 1,
+                table: 0,
+            }
+        };
+        let ran = |r: &[Option<Outcome>]| {
+            let run = r.iter().enumerate().filter(|(_, x)| x.is_some());
+            run.map(|(i, _)| i).collect::<Vec<_>>()
+        };
+        let (serial, _) = run_budgeted(20, 100, 105, 1, charge);
+        assert_eq!(ran(&serial), [0, 1, 2, 3, 4, 5]);
+        for _ in 0..10 {
+            let (par, _) = run_budgeted(20, 100, 105, 5, charge);
+            assert_eq!(ran(&par), [0, 1, 2, 3, 4, 5]);
+        }
+    }
+
     #[test]
     fn test_best_response_heldout_has_200_openings() {
         let o = openings();
