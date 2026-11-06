@@ -90,6 +90,13 @@ doc = false
 bench = false
 
 [[bin]]
+name = "persist_paddleduel"
+path = "fuzz_targets/persist_paddleduel.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "persist_connect4"
 path = "fuzz_targets/persist_connect4.rs"
 test = false

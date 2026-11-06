@@ -238,6 +238,40 @@ pub(crate) fn make_keydoor(g: Gil, kwargs: Option<Ref<'_>>) -> CResult<Inner> {
     Ok(Inner::new(ops, borrowed))
 }
 
+/// `make_paddleduel(**kwargs)`: the pool of a paddle duel environment
+/// object; `obs` is `"pixels"` (the default) or `"state"`; `max_episode_steps`
+/// defaults to 5000 decisions.
+pub(crate) fn make_paddleduel(g: Gil, kwargs: Option<Ref<'_>>) -> CResult<Inner> {
+    let kw = Kwargs::parse(g, kwargs)?;
+    kw.check(
+        g,
+        &[
+            &POOL_KEYS,
+            &[
+                "outputs",
+                "agents",
+                "frameskip",
+                "max_score",
+                "bounce",
+                "obs",
+            ],
+        ],
+    )?;
+    let borrowed = borrowed(g, &kw)?;
+    let args = pool_args(g, &kw, 5000)?;
+    let fields = crate::env::PaddleDuelFields {
+        agents: kw.u32(g, "agents")?,
+        frameskip: kw.u32(g, "frameskip")?,
+        max_score: kw.u32(g, "max_score")?,
+        bounce: kw.u32(g, "bounce")?,
+    };
+    let obs = kw.string(g, "obs")?;
+    let ops = g
+        .detach(|| crate::env::paddleduel(&args, &fields, obs.as_deref()))
+        .map_err(|e| to_py(g, e))?;
+    Ok(Inner::new(ops, borrowed))
+}
+
 /// `make_brickwall(**kwargs)`: the pool of a brick wall environment object;
 /// `obs` is `"pixels"` (the default) or `"state"`; `max_episode_steps`
 /// defaults to 4000 decisions.

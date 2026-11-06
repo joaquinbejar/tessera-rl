@@ -103,6 +103,15 @@ the API is not stable, and any 0.x release may break it.
   at reset, `Discrete(4)` and a full view. Golden fixtures, continuation tests,
   a test reference, a scripted baseline and a step bench. In Python it is
   available through `make` and the Gymnasium adapter.
+- **Paddle duel** (`tessera/PaddleDuel-v1`, `tessera-rl-classic`): two
+  paddles and a ball in `Fx32`, one agent against a scripted paddle or two
+  agents, with original rules and rendering: a 30-frame serve, crossing-based
+  hits that take spin from the paddle's move, games to `max_score`, `frameskip`
+  and a `bounce` reward in config, slot 1 seeing a mirrored world, and an `obs`
+  choice of 84 x 84 grayscale pixels (the default) or a 9-field state vector.
+  Golden fixtures, continuation, a test reference in raw integer arithmetic and
+  a reference rasterizer, a scripted baseline and step benches. In Python it is
+  available through `make` and the PettingZoo adapters.
 - **Brick wall** (`tessera/BrickWall-v1`, `tessera-rl-classic`): a paddle, a
   ball and a wall of 108 bricks in `Fx32`, with original rules, scoring and
   rendering: a 30-frame serve, two walls, `lives` and `frameskip` in config,

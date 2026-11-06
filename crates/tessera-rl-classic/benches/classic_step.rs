@@ -13,7 +13,7 @@ use criterion::{Criterion, criterion_group, criterion_main};
 use tessera_rl_classic::cartpole::physics;
 use tessera_rl_classic::{
     BrickWall, BrickWallConfig, CartPole, CartPoleConfig, Grid, GridConfig, KeyDoor, KeyDoorConfig,
-    Snake, SnakeConfig, Tag, TagConfig,
+    PaddleDuel, PaddleDuelConfig, Snake, SnakeConfig, Tag, TagConfig,
 };
 use tessera_rl_engine::{ActionInput, EnvPool, Masked, NoMasks, PoolOptions, Reseed};
 use tessera_rl_num::identity::Seed;
@@ -119,6 +119,7 @@ fn bench(c: &mut Criterion) {
     });
     snake(&mut group);
     brickwall(&mut group);
+    paddleduel(&mut group);
     group.finish();
 }
 
@@ -188,6 +189,46 @@ fn brickwall(group: &mut criterion::BenchmarkGroup<'_, criterion::measurement::W
         pool.reset_all(Reseed::Keep).unwrap();
         let mut policy = vec![1i32; N as usize];
         let mut draw = 0x0bad_cafe_u64;
+        group.bench_function(name, |b| {
+            b.iter(|| {
+                for action in &mut policy {
+                    draw = draw.wrapping_mul(0x5851_f42d_4c95_7f2d).wrapping_add(1);
+                    *action = i32::try_from((draw >> 33) % 3).unwrap();
+                }
+                let out = pool
+                    .step(ActionInput {
+                        discrete: &policy,
+                        continuous: &[],
+                    })
+                    .unwrap();
+                black_box(out.rewards());
+            });
+        });
+    }
+}
+
+/// Paddle duel: two agents under a seeded random policy, frameskip 4; points
+/// end episodes at the default score, which reset at once. Both observations.
+fn paddleduel(group: &mut criterion::BenchmarkGroup<'_, criterion::measurement::WallTime>) {
+    for (name, obs) in [
+        (
+            "paddleduel_pixels",
+            tessera_rl_classic::paddleduel::OBS_PIXELS,
+        ),
+        (
+            "paddleduel_state",
+            tessera_rl_classic::paddleduel::OBS_STATE,
+        ),
+    ] {
+        let cfg = PaddleDuelConfig {
+            agents: 2,
+            obs,
+            ..PaddleDuelConfig::default()
+        };
+        let mut pool = EnvPool::<PaddleDuel, NoMasks>::new(cfg, options()).unwrap();
+        pool.reset_all(Reseed::Keep).unwrap();
+        let mut policy = vec![1i32; (N * 2) as usize];
+        let mut draw = 0x00de_cade_u64;
         group.bench_function(name, |b| {
             b.iter(|| {
                 for action in &mut policy {

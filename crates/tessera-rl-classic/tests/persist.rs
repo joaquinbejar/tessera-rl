@@ -7,7 +7,7 @@ mod support;
 
 use tessera_rl_classic::{
     BrickWall, BrickWallConfig, CartPole, CartPoleConfig, Grid, GridConfig, KeyDoor, KeyDoorConfig,
-    Snake, SnakeConfig, Tag, TagConfig,
+    PaddleDuel, PaddleDuelConfig, Snake, SnakeConfig, Tag, TagConfig,
 };
 use tessera_rl_core::Persist;
 use tessera_rl_engine::{EnvPool, Masked, NoMasks};
@@ -97,5 +97,24 @@ fn test_persist_brickwall_continues_and_matches_its_fixture() {
     assert_eq!(
         <BrickWall as Persist>::ENV_VERSION,
         tessera_rl_classic::brickwall::ENV_VERSION
+    );
+}
+
+#[test]
+fn test_persist_paddleduel_continues_and_matches_its_fixture() {
+    let cfg = PaddleDuelConfig {
+        agents: 2,
+        ..PaddleDuelConfig::default()
+    };
+    let build = |o| EnvPool::<PaddleDuel, NoMasks>::new(cfg.clone(), o).unwrap();
+    support::check_continuation(&build, 3);
+    support::check_fixture("persist-paddleduel", env!("CARGO_MANIFEST_DIR"), &build, 3);
+    assert_eq!(
+        <PaddleDuel as Persist>::ENV_ID,
+        tessera_rl_classic::paddleduel::ENV_ID
+    );
+    assert_eq!(
+        <PaddleDuel as Persist>::ENV_VERSION,
+        tessera_rl_classic::paddleduel::ENV_VERSION
     );
 }

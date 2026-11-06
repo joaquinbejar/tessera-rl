@@ -19,7 +19,7 @@ use support::continuation::Case;
 use tessera_rl_classic::cartpole::MAX_EPISODE_STEPS;
 use tessera_rl_classic::{
     BrickWall, BrickWallConfig, CartPole, CartPoleConfig, Grid, GridConfig, KeyDoor, KeyDoorConfig,
-    Snake, SnakeConfig, Tag, TagConfig,
+    PaddleDuel, PaddleDuelConfig, Snake, SnakeConfig, Tag, TagConfig,
 };
 use tessera_rl_engine::{AutoReset, EnvPool, Masked, NoMasks};
 
@@ -174,4 +174,33 @@ fn test_continuation_brickwall_next_step_restores_identically_everywhere() {
 #[test]
 fn test_continuation_brickwall_same_step_restores_identically_everywhere() {
     brickwall(AutoReset::SameStep).check_all(50);
+}
+
+#[expect(clippy::unwrap_used, reason = "test setup: a failure is the assertion")]
+fn paddleduel(auto_reset: AutoReset) -> Case<PaddleDuel, NoMasks> {
+    Case {
+        cfg: PaddleDuelConfig {
+            agents: 2,
+            frameskip: 4,
+            max_score: 1,
+            bounce: 1,
+            obs: tessera_rl_classic::paddleduel::OBS_STATE,
+        },
+        build: |cfg, options| EnvPool::new(cfg, options).unwrap(),
+        auto_reset,
+        limit: 40,
+        deaths: false,
+        // A serve draws its speeds, so a branch diverges there.
+        branches: true,
+    }
+}
+
+#[test]
+fn test_continuation_paddleduel_next_step_restores_identically_everywhere() {
+    paddleduel(AutoReset::NextStep).check_all(50);
+}
+
+#[test]
+fn test_continuation_paddleduel_same_step_restores_identically_everywhere() {
+    paddleduel(AutoReset::SameStep).check_all(50);
 }

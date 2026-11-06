@@ -8,7 +8,7 @@ use core::num::{NonZeroU32, NonZeroUsize};
 
 use tessera_rl_classic::{
     BrickWall, BrickWallConfig, CartPole, CartPoleConfig, Grid, GridConfig, KeyDoor, KeyDoorConfig,
-    Snake, SnakeConfig, Tag, TagConfig,
+    PaddleDuel, PaddleDuelConfig, Snake, SnakeConfig, Tag, TagConfig,
 };
 use tessera_rl_core::encoding::decode_from_slice;
 use tessera_rl_core::space::{BoxBounds, DType, Space};
@@ -612,6 +612,45 @@ pub(crate) fn keydoor(
     let (options, n) = options(args)?;
     let same_step = options.auto_reset == AutoReset::SameStep;
     let pool = EnvPool::<KeyDoor, Masked>::with_masks(cfg.clone(), options)?;
+    finish(&cfg, pool, args, n, same_step)
+}
+
+/// The paddle duel config fields, by name, as Python passes them.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct PaddleDuelFields {
+    pub(crate) agents: Option<u32>,
+    pub(crate) frameskip: Option<u32>,
+    pub(crate) max_score: Option<u32>,
+    pub(crate) bounce: Option<u32>,
+}
+
+/// A paddle duel pool (`tessera/PaddleDuel-v1`). `obs` names the observation.
+pub(crate) fn paddleduel(
+    args: &PoolArgs,
+    f: &PaddleDuelFields,
+    obs: Option<&str>,
+) -> Result<Box<dyn PoolOps>, BindError> {
+    use tessera_rl_classic::paddleduel::{OBS_PIXELS, OBS_STATE};
+    let d = PaddleDuelConfig::default();
+    let obs = match obs {
+        None | Some("pixels") => OBS_PIXELS,
+        Some("state") => OBS_STATE,
+        Some(other) => {
+            return Err(BindError::Argument(format!(
+                "obs must be \"pixels\" or \"state\", not {other:?}"
+            )));
+        }
+    };
+    let cfg = PaddleDuelConfig {
+        agents: f.agents.unwrap_or(d.agents),
+        frameskip: f.frameskip.unwrap_or(d.frameskip),
+        max_score: f.max_score.unwrap_or(d.max_score),
+        bounce: f.bounce.unwrap_or(d.bounce),
+        obs,
+    };
+    let (options, n) = options(args)?;
+    let same_step = options.auto_reset == AutoReset::SameStep;
+    let pool = EnvPool::<PaddleDuel, NoMasks>::new(cfg.clone(), options)?;
     finish(&cfg, pool, args, n, same_step)
 }
 
