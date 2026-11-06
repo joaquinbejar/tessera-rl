@@ -238,3 +238,10 @@ def test_smoke_training_and_logging_through_the_trainer(env_id, rnn):
 @pytest.mark.parametrize("workers", [1, 2])
 def test_fork_guard_with_both_halves_in_flight(workers):
     assert scenario("pipelined_fork_guard", workers, timeout=120) == {"child": 0}
+
+
+@pytest.mark.skipif(not hasattr(__import__("os"), "fork"), reason="needs fork")
+@pytest.mark.parametrize(("sent", "first_id"), [(0, 0), (1, 4)])
+def test_fork_guard_refuses_a_queued_initial_half(sent, first_id):
+    out = scenario("pipelined_fork_queued", sent, timeout=120)
+    assert out == {"child": 0, "parent_first_id": first_id}

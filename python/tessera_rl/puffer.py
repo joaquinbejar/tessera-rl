@@ -435,9 +435,13 @@ class TesseraPufferPipelinedEnv(TesseraPufferEnv):
         if self._current is not None:
             raise _native.ArgumentError(f"recv before half {self._current} was sent")
         sent = not self._queue
-        half = self._env.recv() if sent else self._queue[0]
-        if not sent:
-            self._queue.pop(0)
+        if sent:
+            half = self._env.recv()
+        else:
+            # A queued half needs no native call, but the fork guard must still
+            # refuse it in a child: any native entry does, before any lock.
+            _ = self._env.is_poisoned
+            half = self._queue.pop(0)
         self.observations, self.rewards, self.terminals, self.truncations = self._flat(half)
         self._current = half.half
         ids = half.ids

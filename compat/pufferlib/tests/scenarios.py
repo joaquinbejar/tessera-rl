@@ -216,6 +216,28 @@ def pipelined_fork_guard(workers):
     return {"child": os.waitstatus_to_exitcode(status)}
 
 
+def pipelined_fork_queued(sent_first):
+    """Fork with initial halves still queued; ``sent_first`` is 0 or 1 halves sent."""
+    env = make_puffer("tessera/CartPole-v1", num_envs=8, chunk_size=2, mode="pipelined", workers=2)()
+    env.reset(seed=1)
+    for _ in range(sent_first):
+        env.recv()
+        env.send(np.zeros(env.agents_per_batch, dtype=np.int32))
+    queued = len(env._queue)
+    pid = os.fork()
+    if pid == 0:
+        code = 1
+        try:
+            env.recv()
+        except t.ForkError:
+            code = 0 if len(env._queue) == queued else 2
+        os._exit(code)
+    _, status = os.waitpid(pid, 0)
+    got = env.recv()
+    env.close()
+    return {"child": os.waitstatus_to_exitcode(status), "parent_first_id": int(got[5][0])}
+
+
 def die_with_the_runner():
     """The runner holds a pipe's write end: if it dies by any means, even SIGKILL,
     this group goes too, Multiprocessing workers included."""
