@@ -39,8 +39,12 @@ windows-sys.workspace = true
 [target.'cfg(loom)'.dev-dependencies]
 loom.workspace = true
 
-[dev-dependencies]
+# Not under loom: cargo would build the plain library for this self-dependency
+# under cfg(loom), without the dev-dependency above.
+[target.'cfg(not(loom))'.dev-dependencies]
 tessera-rl-engine = { path = ".", features = ["test-hooks"] }
+
+[dev-dependencies]
 proptest.workspace = true
 criterion.workspace = true
 gungraun.workspace = true

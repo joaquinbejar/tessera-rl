@@ -6,7 +6,17 @@
 set -euo pipefail
 
 build() {
-    TESSERA_BUILD_ID="$1" cargo build -p tessera-rl-engine --locked 2>&1
+    # Plain text whatever CARGO_TERM_COLOR says: colour codes would hide the
+    # "Compiling" line, failing the first check and passing the second vacuously.
+    # A build that printed no "Finished" proves nothing either way.
+    local out
+    out=$(TESSERA_BUILD_ID="$1" cargo build -p tessera-rl-engine --locked --color never 2>&1)
+    grep -q 'Finished' <<<"$out" || {
+        echo "the build printed no Finished line:"
+        echo "$out"
+        exit 1
+    }
+    echo "$out"
 }
 
 check() {
