@@ -229,6 +229,10 @@ jobs:
       # explicitly, and check that the extension imports.
       - run: uv sync --locked --python 3.11 --group test --group torch --reinstall-package tessera-rl
       - run: uv run --locked --python 3.11 --group test --group torch python -c "import tessera_rl._native"
+      # The hooks wheel first: the target reinstalls the default wheel even on a
+      # failure, and the next step proves no hook leaked into later tests.
+      - run: make py-test-hooks
+      - run: uv run --locked --python 3.11 python -c "import tessera_rl._native as n; assert not hasattr(n, '_make_panic_counter')"
       - run: make py-test-torch
 
   # The PufferLib adapter at its own pins (compat/pufferlib). x86-64: PufferLib
