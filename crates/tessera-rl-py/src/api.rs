@@ -716,11 +716,6 @@ pub(crate) fn outputs(g: Gil, inner: &Inner) -> CResult<Mine> {
 /// The outputs dict, built inside the admitted call that produced them.
 fn outputs_of(g: Gil, inner: &Inner, ops: &dyn PoolOps) -> CResult<Mine> {
     if inner.borrowed() {
-        // A view made now would take the current generation and read rows a
-        // panic left partly written, so a borrowed call refuses as well.
-        if ops.is_poisoned() {
-            return Err(to_py(g, BindError::Engine(EngineError::Poisoned)));
-        }
         return borrowed_views(g, ops);
     }
     owned_dict(g, &ops.outputs().map_err(|e| to_py(g, e))?)
@@ -770,7 +765,7 @@ pub(crate) fn no_format(g: Gil) -> impl FnOnce() -> Raised {
 /// next call that writes outputs.
 fn borrowed_views(g: Gil, ops: &dyn PoolOps) -> CResult<Mine> {
     let set = crate::view::view_set(ops.layout()).ok_or_else(no_format(g))?;
-    let storage = ops.storage();
+    let storage = ops.readable_storage().map_err(|e| to_py(g, e))?;
     views_dict(g, &set, |spec| new_view(g, &storage, spec, Track::Storage))
 }
 

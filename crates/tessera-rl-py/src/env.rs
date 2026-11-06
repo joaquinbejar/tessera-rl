@@ -127,6 +127,16 @@ pub(crate) trait PoolOps: Send {
     fn outputs(&self) -> Result<Owned, BindError>;
     /// The shared output storage, for borrowed views.
     fn storage(&self) -> std::sync::Arc<tessera_rl_engine::OutputStorage>;
+    /// The storage for new borrowed views: a view made on a poisoned pool would
+    /// take the current generation and read rows a panic left partly written.
+    fn readable_storage(
+        &self,
+    ) -> Result<std::sync::Arc<tessera_rl_engine::OutputStorage>, BindError> {
+        if self.is_poisoned() {
+            return Err(BindError::Engine(EngineError::Poisoned));
+        }
+        Ok(self.storage())
+    }
     fn snapshot(&self, id: u32) -> Result<Vec<u8>, BindError>;
     fn import(&mut self, id: u32, bytes: &[u8]) -> Result<(), BindError>;
     /// The persisted file of `ids` (ADR-0011).
@@ -544,7 +554,6 @@ where
     }))
 }
 
-/// A CartPole pool (`tessera/CartPole-v1`).
 /// A pool whose second step panics (`make py-test-hooks`). Never in a release wheel.
 #[cfg(feature = "test-hooks")]
 pub(crate) fn panic_counter(args: &PoolArgs) -> Result<Box<dyn PoolOps>, BindError> {
@@ -559,6 +568,7 @@ pub(crate) fn panic_counter(args: &PoolArgs) -> Result<Box<dyn PoolOps>, BindErr
     finish(&cfg, pool, args, n, false)
 }
 
+/// A CartPole pool (`tessera/CartPole-v1`).
 pub(crate) fn cartpole(args: &PoolArgs) -> Result<Box<dyn PoolOps>, BindError> {
     let cfg = CartPoleConfig::default();
     let (options, n) = options(args)?;
@@ -717,6 +727,10 @@ mod tests {
         ));
         assert_ne!(storage.generation(), before, "an old view is stale");
         assert_eq!(ops.storage().bytes(), storage.bytes());
+        assert!(matches!(
+            ops.readable_storage(),
+            Err(BindError::Engine(EngineError::Poisoned))
+        ));
         assert!(!copy.rewards.is_empty(), "the owned copy is unchanged");
         ops.reset(None, &ResetSeed::Keep).unwrap();
         assert!(ops.outputs().is_ok());

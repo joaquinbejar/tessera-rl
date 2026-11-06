@@ -189,7 +189,8 @@ impl OutputStorage {
         self.bytes
     }
 
-    /// The region of `field`, if the pool has it.
+    /// The region of `field`, if the pool has it. Rows of a poisoned pool have
+    /// no defined contents.
     #[must_use]
     pub fn region(&self, field: OutputField) -> Option<OutputRegion> {
         let e = self.entries.iter().find(|e| e.field == field)?;

@@ -329,6 +329,14 @@ where
         state.acknowledge(delivered);
         let pool = state.pool.as_mut().ok_or_else(closed)?;
         let me = std::thread::current().id();
+        // Health first: a cached delivery is not returned after a panic. It is
+        // lost; recovery clears it, and the next delivery has a new seq.
+        if pool.is_poisoned() {
+            let refused = pool.try_recv().map(|_| ());
+            self.settle(pool);
+            refused?;
+            return Err(BindError::Engine(EngineError::Poisoned));
+        }
         if let Some((out, owner)) = &state.pending {
             return Ok(if *owner == me {
                 Polled::Half(out.clone())
@@ -925,6 +933,58 @@ mod tests {
         assert!(half_stale(&gens, 1, other, &flag), "old view stays stale");
         let fresh = gens.half(1).unwrap();
         assert!(!half_stale(&gens, 1, fresh, &flag), "new view is fresh");
+        split.close();
+    }
+
+    /// Pipelined learns of a panic only on collecting the job, so a half cached
+    /// and unacknowledged is still delivered before that: its rows are the other
+    /// half's, not written by the panic. Acknowledging it collects the panic, and
+    /// from then on every poll refuses, the old ack included.
+    #[test]
+    fn test_split_cached_delivery_then_collected_panic_refuses() {
+        let split = counter(&super::common::CountConfig {
+            panic_at: 2,
+            length: 9,
+            ..super::common::CountConfig::default()
+        });
+        split.reset(&ResetSeed::Keep, false).unwrap();
+        let rows = |h: usize| {
+            vec![0; split.halves()[h].len() * <super::common::Counter as Environment>::MAX_AGENTS]
+        };
+        let receive = |ack| loop {
+            match split.try_recv(false, ack).unwrap() {
+                Polled::Half(out) => return out,
+                Polled::Running(_) => std::thread::yield_now(),
+                Polled::Busy => panic!("one thread only"),
+            }
+        };
+        split.send(0, &rows(0), 0).unwrap();
+        let first = receive(0);
+        split.send(1, &rows(1), first.seq).unwrap();
+        let second = receive(first.seq);
+        assert_eq!(second.half, 1);
+        split.send(0, &rows(0), first.seq).unwrap();
+        assert!(matches!(
+            split.try_recv(false, first.seq),
+            Ok(Polled::Half(out)) if out.seq == second.seq
+        ));
+        assert!(!split.is_poisoned());
+        let collected = loop {
+            match split.try_recv(false, second.seq) {
+                Ok(Polled::Running(_)) => std::thread::yield_now(),
+                other => break other,
+            }
+        };
+        assert!(matches!(
+            collected,
+            Err(BindError::Engine(EngineError::Panicked))
+        ));
+        assert!(split.is_poisoned());
+        assert!(matches!(
+            split.try_recv(false, first.seq),
+            Err(BindError::Engine(EngineError::Poisoned))
+        ));
+        split.reset(&ResetSeed::Keep, false).unwrap();
         split.close();
     }
 }

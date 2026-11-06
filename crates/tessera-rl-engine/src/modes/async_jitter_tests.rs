@@ -612,7 +612,7 @@ fn test_async_snapshot_refuses_a_panic_between_its_two_checks() {
 }
 
 /// With id 1 paused inside its step, a token of id 0 stays readable and its
-/// generation unmoved; the release panics, and only recovery reads again.
+/// generation unmoved; the release panics, and recovery clears the poison.
 #[test]
 fn test_async_idle_token_readable_while_a_step_is_paused_then_panics() {
     let _serial = BOOM_SERIAL.lock().unwrap();
