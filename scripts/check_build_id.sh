@@ -12,8 +12,9 @@ build() {
     local out
     out=$(TESSERA_BUILD_ID="$1" cargo build -p tessera-rl-engine --locked --color never 2>&1)
     grep -q 'Finished' <<<"$out" || {
-        echo "the build printed no Finished line:"
-        echo "$out"
+        # To stderr: stdout goes to a command substitution, and would be lost.
+        echo "the build printed no Finished line:" >&2
+        echo "$out" >&2
         exit 1
     }
     echo "$out"

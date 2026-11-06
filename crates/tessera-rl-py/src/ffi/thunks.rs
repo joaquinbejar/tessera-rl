@@ -619,6 +619,8 @@ thunk!(STEP: CFunction = thunk_step => env_type::step : fn(Obj, Obj) -> Obj);
 thunk!(SNAPSHOT: CFunction = thunk_snapshot => env_type::snapshot : fn(Obj, Obj) -> Obj);
 thunk!(IMPORT_RECORD: CFunction = thunk_import_record => env_type::import_record : fn(Obj, Obj) -> Obj);
 thunk!(FORK: CFunction = thunk_fork => env_type::fork : fn(Obj, Obj) -> Obj);
+thunk!(ENCODE: CFunction = thunk_encode => env_type::encode : fn(Obj, Obj) -> Obj);
+thunk!(LOAD: CFunction = thunk_load => env_type::load : fn(Obj, Obj) -> Obj);
 thunk!(SEND: CFunction = thunk_send => env_type::send : fn(Obj, Obj) -> Obj);
 thunk!(RECV: CFunction = thunk_recv => env_type::recv : fn(Obj, Obj) -> Obj);
 thunk!(RESTORE: CFunction = thunk_restore => env_type::restore : fn(Obj, Obj) -> Obj);

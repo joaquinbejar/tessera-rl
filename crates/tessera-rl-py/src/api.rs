@@ -804,6 +804,72 @@ pub(crate) fn import_record(g: Gil, inner: &Inner, args: Ref<'_>) -> CResult<Min
     })
 }
 
+/// `encode(ids: list[int]) -> bytes`: the persisted file of `ids` (ADR-0011).
+pub(crate) fn encode(g: Gil, inner: &Inner, args: Ref<'_>) -> CResult<Mine> {
+    let a: [Ref<'_>; 1] = exactly(g, args, "encode")?;
+    let [ids] = a;
+    let ids = u32_list(g, ids, "ids")?;
+    let file = if let Some(ops) = batched_of(g, inner)? {
+        g.detach(|| ops.encode(&ids)).map_err(|e| to_py(g, e))?
+    } else if let Some(split) = split_of(g, inner)? {
+        g.detach(|| split.encode(&ids)).map_err(|e| to_py(g, e))?
+    } else {
+        inner.with(g, |ops| {
+            g.detach(|| ops.encode(&ids)).map_err(|e| to_py(g, e))
+        })?
+    };
+    capi::bytes(g, &file)
+}
+
+/// `load(data: bytes, ids, max_instances, max_decoded_bytes)`: loads a persisted
+/// file. `data` must be exactly `bytes`: it is immutable, and the argument tuple
+/// keeps it alive while the interpreter is released.
+pub(crate) fn load(g: Gil, inner: &Inner, args: Ref<'_>) -> CResult<Mine> {
+    let a: [Ref<'_>; 4] = exactly(g, args, "load")?;
+    let [data, ids, max_instances, max_decoded_bytes] = a;
+    let data = capi::bytes_of(g, data, "data")?;
+    let mut limits = tessera_rl_engine::DecodeLimits::default();
+    if !max_instances.is_none() {
+        limits.max_instances = capi::to_u32(g, max_instances, "max_instances")?;
+    }
+    if !max_decoded_bytes.is_none() {
+        limits.max_decoded_bytes = capi::to_u64(g, max_decoded_bytes, "max_decoded_bytes")?;
+    }
+    let ids = if ids.is_none() {
+        None
+    } else {
+        Some(u32_list(g, ids, "ids")?)
+    };
+    let batched = batched_of(g, inner)?;
+    let split = split_of(g, inner)?;
+    if ids.is_some() && (batched.is_some() || split.is_some()) {
+        return Err(to_py(
+            g,
+            BindError::Argument("load with ids is available only in sync mode".to_owned()),
+        ));
+    }
+    if let Some(ops) = batched {
+        g.detach(|| ops.load(data, limits))
+            .map_err(|e| to_py(g, e))?;
+        return Ok(capi::none(g));
+    }
+    if let Some(split) = split {
+        let owned = !inner.borrowed();
+        let halves = g
+            .detach(|| split.load(data, limits, owned))
+            .map_err(|e| to_py(g, e))?;
+        return list_of(
+            g,
+            halves.iter().map(|out| half_output(g, inner, &*split, out)),
+        );
+    }
+    inner.with(g, |ops| {
+        g.detach(|| ops.load(data, ids.as_deref(), limits))
+            .map_err(|e| to_py(g, e))?;
+        Ok(capi::none(g))
+    })
+}
+
 /// `fork(src, dst: list[int])`: copies instance `src` into `dst`.
 pub(crate) fn fork(g: Gil, inner: &Inner, args: Ref<'_>) -> CResult<Mine> {
     let a: [Ref<'_>; 2] = exactly(g, args, "fork")?;

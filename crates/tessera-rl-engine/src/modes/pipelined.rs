@@ -19,8 +19,13 @@
 //! no pool-level adaptive subsystem yet, so the reduction is a test-only
 //! sum of rewards.
 
+use crate::masks::PersistMask;
+use crate::persist::{DecodeLimits, PersistError};
+use crate::record::DecodedRecord;
 use core::ops::Range;
 use core::time::Duration;
+use tessera_rl_core::Persist;
+use tessera_rl_core::config::CanonicalConfig;
 
 use std::sync::Arc;
 
@@ -937,4 +942,109 @@ const fn slot2(cycle: u64) -> usize {
 
 const fn slot3(cycle: u64) -> usize {
     (cycle % 3) as usize
+}
+
+/// Persisted snapshots (ADR-0011).
+impl<E, M> PipelinedPool<E, M>
+where
+    E: Persist,
+    E::Config: CanonicalConfig + Send + Sync,
+    E::Header: Send + Sync,
+    E::State: Send + Sync,
+    M: PersistMask<E> + Send + Sync,
+    <E::Header as RecordLayout>::Adaptive: AdaptiveValues<E::Config>,
+{
+    /// Checks records against this pool without writing anything, so a caller can
+    /// refuse a bad file before giving up its tokens. It establishes no trust:
+    /// `import_all` checks again. It reads the config and options by place, forming no
+    /// `&EnvPool` beside the workers, so it works on a poisoned pool, even with work still
+    /// running. On a healthy pool it refuses work in flight, as `import_all` would, so a
+    /// retryable refusal also comes before the caller gives up its tokens. A panic in
+    /// `Validate` unwinds, as in `import`, with nothing written.
+    ///
+    /// # Errors
+    ///
+    /// [`EngineError::WorkerDied`] after a worker died, [`EngineError::NotQuiescent`],
+    /// [`EngineError::RecordCount`],
+    /// [`EngineError::InvalidRecord`] or [`EngineError::Invariant`].
+    pub fn check_records(&self, records: &[DecodedRecord<E>]) -> Result<(), EngineError> {
+        if self.dead() {
+            return Err(EngineError::WorkerDied);
+        }
+        // As `import_all`, whose recovery on a poisoned pool drains first.
+        if !self.is_poisoned() && self.queued != 0 {
+            return Err(EngineError::NotQuiescent);
+        }
+        let (cfg, options) = (&self.mode.pool.cfg, &self.mode.pool.options);
+        let instances = options.num_envs.get();
+        if u32::try_from(records.len()) != Ok(instances) {
+            return Err(EngineError::RecordCount {
+                records: records.len(),
+                instances: usize::try_from(instances).unwrap_or(usize::MAX),
+            });
+        }
+        crate::entry::canonical(|| {
+            records
+                .iter()
+                .enumerate()
+                .try_for_each(|(i, r)| crate::snapshot::check_record::<E>(cfg, options, i, r))
+        })
+    }
+
+    /// The file holding the records of `ids`, as [`EnvPool::encode`]. Tokens may be alive, as in [`Self::snapshot_all`]; no work may be in flight.
+    ///
+    /// # Errors
+    ///
+    /// [`EngineError::NotQuiescent`] and [`EngineError::Poisoned`], in a
+    /// [`PersistError`], or any error of [`EnvPool::encode`].
+    pub fn encode(&self, ids: &[u32]) -> Result<Vec<u8>, PersistError> {
+        if self.dead() {
+            return Err(EngineError::WorkerDied.into());
+        }
+        // Poison first: a poisoned pool never gets quiescent by waiting.
+        if self.is_poisoned() {
+            return Err(EngineError::Poisoned.into());
+        }
+        if self.queued != 0 {
+            return Err(EngineError::NotQuiescent.into());
+        }
+        self.mode.pool.encode(ids)
+    }
+
+    /// Checks a file against this pool's config and options and returns its untrusted
+    /// records. Reads them by place, forming no `&EnvPool` beside the workers,
+    /// so it needs no quiescence and works on a poisoned pool, whose recovery
+    /// is [`Self::import_all`].
+    ///
+    /// # Errors
+    ///
+    /// As [`EnvPool::decode`].
+    pub fn decode(
+        &self,
+        bytes: &[u8],
+        limits: DecodeLimits,
+    ) -> Result<Vec<DecodedRecord<E>>, PersistError> {
+        crate::persist::decode_file::<E, M>(
+            &self.mode.pool.cfg,
+            &self.mode.pool.options,
+            bytes,
+            limits,
+            crate::persist::BUILD_ID,
+        )
+    }
+
+    /// Imports untrusted records into every instance. A file holds no cycle state, so
+    /// the cycle restarts, as after [`Self::reset_all`]. That moves no trajectory
+    /// today: no pool-level adaptive subsystem exists, and the reduction is test-only.
+    /// When reduction becomes real, this must refuse or the format must grow, as an
+    /// instance file lacks exactly that context (ADR-0047). Get tokens with
+    /// [`Self::idle_token`].
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::restore_all`], or any error of [`EnvPool::import_all`].
+    pub fn import_all(&mut self, records: &[DecodedRecord<E>]) -> Result<(), EngineError> {
+        self.write(|pool| pool.import_all(records))?;
+        self.after_write(CycleState::initial())
+    }
 }

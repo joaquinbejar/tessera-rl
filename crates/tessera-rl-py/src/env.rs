@@ -29,12 +29,20 @@ pub(crate) enum BindError {
     Engine(EngineError),
     /// A record that does not decode.
     Decode(DecodeError),
+    /// A persisted file refused, or an engine error around one.
+    Persist(tessera_rl_engine::PersistError),
     /// An argument the bindings reject before reaching the engine.
     Argument(String),
     /// A pool that cannot be built in a forked child.
     Forked(String),
     /// A search error (ADR-0043), the evaluator's included.
     Search(tessera_rl_search::SearchError),
+}
+
+impl From<tessera_rl_engine::PersistError> for BindError {
+    fn from(e: tessera_rl_engine::PersistError) -> Self {
+        Self::Persist(e)
+    }
 }
 
 impl From<EngineError> for BindError {
@@ -120,6 +128,15 @@ pub(crate) trait PoolOps: Send {
     fn storage(&self) -> std::sync::Arc<tessera_rl_engine::OutputStorage>;
     fn snapshot(&self, id: u32) -> Result<Vec<u8>, BindError>;
     fn import(&mut self, id: u32, bytes: &[u8]) -> Result<(), BindError>;
+    /// The persisted file of `ids` (ADR-0011).
+    fn encode(&self, ids: &[u32]) -> Result<Vec<u8>, BindError>;
+    /// Loads a persisted file into `ids`, or into every instance.
+    fn load(
+        &mut self,
+        bytes: &[u8],
+        ids: Option<&[u32]>,
+        limits: tessera_rl_engine::DecodeLimits,
+    ) -> Result<(), BindError>;
     fn fork(&mut self, src: u32, dst: &[u32]) -> Result<(), BindError>;
     fn is_poisoned(&self) -> bool;
     /// The split-phase operations, in Pipelined mode.
@@ -279,13 +296,13 @@ where
 
 impl<E, M> PoolOps for Pooled<E, M>
 where
-    E: Environment + Validate,
-    E::Config: Send + Sync,
+    E: tessera_rl_core::Persist,
+    E::Config: tessera_rl_core::config::CanonicalConfig + Send + Sync,
     E::Header: Send,
     E::State: Send,
     <E::Header as tessera_rl_core::RecordLayout>::Adaptive:
         tessera_rl_core::AdaptiveValues<E::Config>,
-    M: MaskProvider<E> + Send,
+    M: tessera_rl_engine::PersistMask<E> + Send,
 {
     fn layout(&self) -> &Layout {
         &self.layout
@@ -349,6 +366,25 @@ where
     fn import(&mut self, id: u32, bytes: &[u8]) -> Result<(), BindError> {
         let record = decode_from_slice::<DecodedRecord<E>>(bytes).map_err(BindError::Decode)?;
         self.pool.import(&[id], &[record])?;
+        Ok(())
+    }
+
+    fn encode(&self, ids: &[u32]) -> Result<Vec<u8>, BindError> {
+        Ok(self.pool.encode(ids)?)
+    }
+
+    fn load(
+        &mut self,
+        bytes: &[u8],
+        ids: Option<&[u32]>,
+        limits: tessera_rl_engine::DecodeLimits,
+    ) -> Result<(), BindError> {
+        let records = self.pool.decode(bytes, limits)?;
+        match ids {
+            Some(ids) => self.pool.import(ids, &records)?,
+            // The recovery path on a poisoned pool.
+            None => self.pool.import_all(&records)?,
+        }
         Ok(())
     }
 
@@ -442,13 +478,13 @@ pub(crate) fn finish<E, M>(
     terminal: bool,
 ) -> Result<Box<dyn PoolOps>, BindError>
 where
-    E: Environment + Validate + 'static,
-    E::Config: Send + Sync,
+    E: tessera_rl_core::Persist + 'static,
+    E::Config: tessera_rl_core::config::CanonicalConfig + Send + Sync,
     E::Header: Send + Sync,
     E::State: Send + Sync,
     <E::Header as tessera_rl_core::RecordLayout>::Adaptive:
         tessera_rl_core::AdaptiveValues<E::Config>,
-    M: MaskProvider<E> + Send + Sync + 'static,
+    M: tessera_rl_engine::PersistMask<E> + Send + Sync + 'static,
 {
     let workers = NonZeroUsize::new(args.workers);
     let pooled = Pooled::new(cfg, pool, n, terminal)?;

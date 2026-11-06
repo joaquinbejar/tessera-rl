@@ -12,6 +12,9 @@
 use core::any::Any;
 use core::ops::Range;
 use core::sync::atomic::{AtomicBool, Ordering};
+use tessera_rl_core::Persist;
+use tessera_rl_core::config::CanonicalConfig;
+use tessera_rl_engine::{DecodeLimits, PersistMask};
 
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread::ThreadId;
@@ -92,6 +95,16 @@ pub(crate) trait SplitOps: Send + Sync {
     fn snapshot_all(&self) -> Result<Snapshot, BindError>;
     /// Restores a snapshot of this same pool and returns both halves.
     fn restore_all(&self, snapshot: &Snapshot, owned: bool) -> Result<[HalfOutput; 2], BindError>;
+    /// The persisted file of `ids`; no work may be in flight.
+    fn encode(&self, ids: &[u32]) -> Result<Vec<u8>, BindError>;
+    /// Loads a persisted file into every instance and returns both halves. A
+    /// refused file leaves tokens, views and deliveries as they were.
+    fn load(
+        &self,
+        bytes: &[u8],
+        limits: DecodeLimits,
+        owned: bool,
+    ) -> Result<[HalfOutput; 2], BindError>;
     fn is_poisoned(&self) -> bool;
     /// Drains and joins the workers; idempotent.
     fn close(&self);
@@ -217,9 +230,9 @@ where
 
 impl<E, M> SplitOps for SplitPool<E, M>
 where
-    E: Environment,
-    M: MaskProvider<E>,
-    E::Config: Send + Sync,
+    E: Persist,
+    M: PersistMask<E> + Send + Sync,
+    E::Config: CanonicalConfig + Send + Sync,
     E::Header: Send + Sync,
     E::State: Send + Sync,
     <E::Header as RecordLayout>::Adaptive: AdaptiveValues<E::Config>,
@@ -376,6 +389,38 @@ where
         Ok(out)
     }
 
+    fn encode(&self, ids: &[u32]) -> Result<Vec<u8>, BindError> {
+        let guard = self.lock()?;
+        let pool = guard.pool.as_ref().ok_or_else(closed)?;
+        Ok(pool.encode(ids)?)
+    }
+
+    fn load(
+        &self,
+        bytes: &[u8],
+        limits: DecodeLimits,
+        owned: bool,
+    ) -> Result<[HalfOutput; 2], BindError> {
+        let mut guard = self.lock()?;
+        let state = &mut *guard;
+        let pool = state.pool.as_mut().ok_or_else(closed)?;
+        // Everything that can refuse the file comes before the tokens go.
+        let records = pool.decode(bytes, limits)?;
+        pool.check_records(&records)?;
+        // The FFI release, as in `reset`.
+        state.tokens = [None, None];
+        self.unsettle();
+        let imported = pool.import_all(&records);
+        self.settle(pool);
+        imported?;
+        let a = pool.idle_token(0)?;
+        let b = pool.idle_token(1)?;
+        let out = [self.output(0, 0, &a, owned), self.output(1, 0, &b, owned)];
+        state.tokens = [Some(a), Some(b)];
+        state.pending = None;
+        Ok(out)
+    }
+
     fn is_poisoned(&self) -> bool {
         self.lock().map_or(true, |s| {
             s.pool.as_ref().is_some_and(PipelinedPool::is_poisoned)
@@ -436,6 +481,19 @@ impl PoolOps for SplitHandle {
         Err(wrong_mode("import_record"))
     }
 
+    fn encode(&self, _ids: &[u32]) -> Result<Vec<u8>, BindError> {
+        Err(wrong_mode("encode"))
+    }
+
+    fn load(
+        &mut self,
+        _bytes: &[u8],
+        _ids: Option<&[u32]>,
+        _limits: tessera_rl_engine::DecodeLimits,
+    ) -> Result<(), BindError> {
+        Err(wrong_mode("load"))
+    }
+
     fn fork(&mut self, _src: u32, _dst: &[u32]) -> Result<(), BindError> {
         Err(wrong_mode("fork"))
     }
@@ -458,10 +516,10 @@ pub(crate) fn pipelined<E, M>(
     layout: Layout,
 ) -> Box<dyn PoolOps>
 where
-    E: Environment,
-    M: MaskProvider<E> + Send + Sync + 'static,
+    E: Persist,
+    M: PersistMask<E> + Send + Sync + 'static,
     E: 'static,
-    E::Config: Send + Sync,
+    E::Config: CanonicalConfig + Send + Sync,
     E::Header: Send + Sync,
     E::State: Send + Sync,
     <E::Header as RecordLayout>::Adaptive: AdaptiveValues<E::Config>,
@@ -643,7 +701,7 @@ mod tests {
 
     fn env_pool<E>(cfg: &super::common::CountConfig) -> Arc<dyn SplitOps>
     where
-        E: Environment<Config = super::common::CountConfig> + tessera_rl_core::Validate + 'static,
+        E: Environment<Config = super::common::CountConfig> + Persist + 'static,
         E::Header: Send + Sync,
         E::State: Send + Sync,
         <E::Header as RecordLayout>::Adaptive: AdaptiveValues<super::common::CountConfig>,
@@ -674,6 +732,99 @@ mod tests {
 
     /// A panic during a reset advances no generation, yet a view must not
     /// report fresh over rows the reset may have partly written.
+    #[test]
+    fn test_split_load_refuses_a_bad_file_and_recovers_from_poison() {
+        let split = counter(&super::common::CountConfig {
+            panic_at: 1,
+            length: 9,
+            ..super::common::CountConfig::default()
+        });
+        split.reset(&ResetSeed::Keep, true).unwrap();
+        let ids: Vec<u32> = (0..8).collect();
+        let file = split.encode(&ids).unwrap();
+        let limits = tessera_rl_engine::DecodeLimits::default();
+        let mut bad = file.clone();
+        if let Some(last) = bad.last_mut() {
+            *last ^= 1;
+        }
+        // A refused file changes no generation, so views stay fresh.
+        assert!(split.load(&bad, limits, true).is_err());
+        assert!(
+            !split
+                .unsettled_flag()
+                .load(core::sync::atomic::Ordering::Acquire)
+        );
+        let width = split.halves()[0].len() * 2;
+        split.send(0, &vec![0; width], 0).unwrap();
+        while !split.is_poisoned() {
+            let _ = split.try_recv(true, 0);
+            std::thread::yield_now();
+        }
+        assert!(split.encode(&[]).is_err());
+        assert!(split.load(&bad, limits, true).is_err());
+        assert!(split.is_poisoned());
+        split.load(&file, limits, true).unwrap();
+        assert!(!split.is_poisoned());
+        assert_eq!(split.encode(&ids).unwrap(), file);
+        split.close();
+    }
+
+    /// `file` with a record that decodes and `Validate` refuses, resealed.
+    fn invariant_refused(file: &[u8]) -> Vec<u8> {
+        let mut bad = file.to_vec();
+        let state = bad.len() - 8 - size_of::<super::common::Counts>();
+        // `steps`, after the two `value` fields.
+        bad[state + 8..state + 12].copy_from_slice(&u32::MAX.to_le_bytes());
+        let n = bad.len() - 8;
+        let sum = tessera_rl_core::encoding::checksum(&bad[..n]);
+        bad[n..].copy_from_slice(&sum.to_le_bytes());
+        bad
+    }
+
+    #[test]
+    fn test_split_load_refuses_before_giving_up_the_tokens() {
+        let split = counter(&super::common::CountConfig {
+            length: 9,
+            ..super::common::CountConfig::default()
+        });
+        split.reset(&ResetSeed::Keep, true).unwrap();
+        let ids: Vec<u32> = (0..8).collect();
+        let file = split.encode(&ids).unwrap();
+        let limits = tessera_rl_engine::DecodeLimits::default();
+        let width = split.halves()[0].len() * 2;
+        // A record `Validate` refuses: both halves can still be sent.
+        let bad = invariant_refused(&file);
+        assert!(matches!(
+            split.load(&bad, limits, true),
+            Err(BindError::Engine(
+                tessera_rl_engine::EngineError::Invariant { .. }
+            ))
+        ));
+        split.send(0, &vec![0; width], 0).unwrap();
+        // A good file with work in flight: retryable, and the idle half's token stays.
+        assert!(matches!(
+            split.load(&file, limits, true),
+            Err(BindError::Engine(
+                tessera_rl_engine::EngineError::NotQuiescent
+            ))
+        ));
+        split.send(1, &vec![0; width], 0).unwrap();
+        let mut seq = 0;
+        for _ in 0..2 {
+            loop {
+                if let Polled::Half(out) = split.try_recv(true, seq).unwrap() {
+                    seq = out.seq;
+                    break;
+                }
+                std::thread::yield_now();
+            }
+        }
+        let _ = split.try_recv(true, seq);
+        split.load(&file, limits, true).unwrap();
+        assert_eq!(split.encode(&ids).unwrap(), file);
+        split.close();
+    }
+
     #[test]
     fn test_split_flag_is_set_inside_a_writer() {
         let split = counter(&super::common::CountConfig {

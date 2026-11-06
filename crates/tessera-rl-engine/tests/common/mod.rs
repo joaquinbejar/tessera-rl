@@ -241,6 +241,11 @@ impl Environment for Counter {
 }
 
 /// The invariant of a counter: it never runs past its episode length.
+impl tessera_rl_core::Persist for Counter {
+    const ENV_ID: &'static str = "tessera/Counter-v1";
+    const ENV_VERSION: u32 = 1;
+}
+
 impl tessera_rl_core::Validate for Counter {
     fn validate(
         cfg: &CountConfig,
