@@ -1310,6 +1310,18 @@ def test_gate_compare_refuses_files_changed_after_settlement(compared, name):
         gate.compare_work(ns, directory, FakeClock())
 
 
+def test_gate_compare_refuses_a_disposition_other_than_the_report(compared):
+    _, directory, *_ = compared
+    report = json.loads((pathlib.Path(directory) / "run" / "gate.json").read_text())
+    journal = pathlib.Path(report["attempt"]["journal"])
+    lines = journal.read_text().splitlines(keepends=True)
+    last = json.loads(lines[-1])
+    last["disposition"] = "below-815" if last["disposition"] == "met-815" else "met-815"
+    journal.write_text("".join(lines[:-1]) + json.dumps(last) + "\n")
+    with pytest.raises(gate.Refused, match="disposition"):
+        gate.settled_attempt(directory)
+
+
 @pytest.mark.parametrize("how", ["absent", "differs"])
 def test_gate_recover_never_rebuilds_against_a_settled_journal(tmp_path, done_root, as_formal, bot, monkeypatch, how):
     root, _, sha, _ = selected_root(tmp_path, done_root)

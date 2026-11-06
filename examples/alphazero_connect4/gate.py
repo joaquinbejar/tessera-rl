@@ -740,6 +740,8 @@ def settled_attempt(directory: str) -> tuple[dict, list, dict]:
         if (settled.get("report_sha256") != artifacts.sha256(raw) or settled.get("claim_sha256") != artifacts.sha256_file(claim_path)
                 or settled.get("ledger_sha256") != artifacts.sha256_file(os.path.join(directory, "ledger.json"))):  # fmt: skip
             raise Refused("the files are not the ones the journal's settlement names")
+        if settled["disposition"] != {True: "met-815", False: "below-815"}.get(report.get("meets_815")):
+            raise Refused("the journal's disposition is not the report's score")
     identity = {"gate_json_sha256": artifacts.sha256(raw), "log_sha256": report["log_sha256"],
                 "claim_sha256": artifacts.sha256_file(claim_path), "checkpoint": report["checkpoint"],
                 "ledger_entry": ledger_entry}  # fmt: skip
