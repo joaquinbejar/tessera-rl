@@ -260,6 +260,8 @@ fn copy_all_rows<H: RecordLayout>(
     // (connect4_pool_step +0.5% Ir on candidate C, x86-64).
     let (mut d_at, mut c_at) = (0usize, 0usize);
     for header in headers {
+        // The running offsets assume every header has exactly `H::AGENTS` rows.
+        debug_assert_eq!(header.agents().len(), H::AGENTS);
         let pending = header.engine().pending_reset.get();
         for row in header.agents() {
             let required = is_required(pending, row);
