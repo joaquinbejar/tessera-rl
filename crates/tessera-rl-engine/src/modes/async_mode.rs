@@ -536,6 +536,9 @@ where
 
     /// Checks ids for a partial writer: the same rules as a send.
     fn check_partial(&mut self, ids: &[u32]) -> Result<(), EngineError> {
+        if self.dead() {
+            return Err(EngineError::WorkerDied);
+        }
         if self.is_poisoned() {
             return Err(EngineError::Poisoned);
         }
@@ -793,11 +796,12 @@ where
 
     /// The checks of a send that need no rows.
     fn precheck(&self, ids: &[u32]) -> Result<(), EngineError> {
-        if self.is_poisoned() {
-            return Err(EngineError::Poisoned);
-        }
+        // Dead first: `is_poisoned` includes it, and the death is the error.
         if self.dead() {
             return Err(EngineError::WorkerDied);
+        }
+        if self.is_poisoned() {
+            return Err(EngineError::Poisoned);
         }
         for &id in ids {
             let g = self

@@ -265,13 +265,26 @@ fn test_async_worker_death_after_all_ids_are_delivered_reports_nothing_in_flight
         std::thread::yield_now();
     }
     assert_eq!(p.recv().map(|_| ()), Err(EngineError::NothingInFlight));
+    let mut records = vec![p.snapshot(0).unwrap(); 32];
+    assert!(!p.is_poisoned());
     GATE.store(true, core::sync::atomic::Ordering::Release);
-    let seen = recv_until_death(&mut p, &ids);
-    assert!(
-        matches!(seen, EngineError::WorkerDied | EngineError::Poisoned),
-        "{seen:?}"
+    // The death is visible with no `recv` in between.
+    let visible = (0..10_000_000).any(|_| {
+        std::thread::yield_now();
+        p.is_poisoned()
+    });
+    assert!(visible, "a dead worker poisons the wrapper");
+    assert_eq!(p.snapshot_all(&mut records), Err(EngineError::Poisoned));
+    assert_eq!(
+        p.send(
+            &ids,
+            crate::ActionInput {
+                discrete: &actions,
+                continuous: &[],
+            },
+        ),
+        Err(EngineError::WorkerDied)
     );
-    assert!(p.is_poisoned());
     assert_eq!(
         p.reset_all(Reseed::Keep).map(|_| ()),
         Err(EngineError::WorkerDied)

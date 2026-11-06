@@ -96,6 +96,10 @@ the API is not stable, and any 0.x release may break it.
 
 ### Fixed
 
+- **Async after a panic or a death** (`tessera-rl-engine`): `snapshot` re-checks
+  poison after its quiescence check, so a step that panicked in between cannot expose
+  a partly written row; `is_poisoned` is true once a worker died; `wait_ready` no
+  longer reports ready for a moment when a receive pops an id before its worker counts it.
 - **Async writers right after the last `recv`** (`tessera-rl-engine`): a writer or a
   snapshot could refuse with a retryable `NotQuiescent` although every id had been
   received, because a worker counted an id as stepped after making it visible. It
