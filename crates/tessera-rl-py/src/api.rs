@@ -183,6 +183,19 @@ fn pool_args(g: Gil, kw: &Kwargs<'_>, default_limit: u32) -> CResult<PoolArgs> {
     })
 }
 
+/// `_make_panic_counter(**kwargs)` (test hooks only): a pool that panics.
+#[cfg(feature = "test-hooks")]
+pub(crate) fn make_panic_counter(g: Gil, kwargs: Option<Ref<'_>>) -> CResult<Inner> {
+    let kw = Kwargs::parse(g, kwargs)?;
+    kw.check(g, &[&POOL_KEYS, &["outputs"]])?;
+    let borrowed = borrowed(g, &kw)?;
+    let args = pool_args(g, &kw, 100)?;
+    let ops = g
+        .detach(|| crate::env::panic_counter(&args))
+        .map_err(|e| to_py(g, e))?;
+    Ok(Inner::new(ops, borrowed))
+}
+
 /// `make_cartpole(**kwargs)`: the pool of a CartPole environment object.
 /// `max_episode_steps` defaults to 500 (`CartPole-v1`).
 pub(crate) fn make_cartpole(g: Gil, kwargs: Option<Ref<'_>>) -> CResult<Inner> {

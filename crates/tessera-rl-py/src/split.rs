@@ -547,7 +547,7 @@ where
     Box::new(SplitHandle { ops, layout })
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-hooks"))]
 #[path = "../../tessera-rl-engine/tests/common/mod.rs"]
 pub(crate) mod common;
 

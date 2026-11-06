@@ -533,6 +533,7 @@ fn test_async_id_stepped_but_unpublished_is_neither_delivered_nor_overwritten() 
 struct Boomer;
 
 static BOOM: AtomicBool = AtomicBool::new(false);
+static BOOM_SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 impl Environment for Boomer {
     type State = Walk;
@@ -587,6 +588,8 @@ impl Environment for Boomer {
 /// nothing runs any more, but a row may be partly written (issue #97).
 #[test]
 fn test_async_snapshot_refuses_a_panic_between_its_two_checks() {
+    let _serial = BOOM_SERIAL.lock().unwrap();
+    BOOM.store(false, Ordering::Release);
     let mut pool = EnvPool::<Boomer, NoMasks>::new(WalkConfig {}, options(AutoReset::NextStep))
         .unwrap()
         .async_mode(AsyncOptions::new(NonZeroUsize::MIN, NonZeroUsize::MIN))
@@ -606,4 +609,40 @@ fn test_async_snapshot_refuses_a_panic_between_its_two_checks() {
         Err(crate::EngineError::Poisoned)
     ));
     drop(pool.reset_all(Reseed::Keep).unwrap());
+}
+
+/// With id 1 paused inside its step, a token of id 0 stays readable and its
+/// generation unmoved; the release panics, and only recovery reads again.
+#[test]
+fn test_async_idle_token_readable_while_a_step_is_paused_then_panics() {
+    let _serial = BOOM_SERIAL.lock().unwrap();
+    BOOM.store(false, Ordering::Release);
+    let mut pool = EnvPool::<Boomer, NoMasks>::new(WalkConfig {}, options(AutoReset::NextStep))
+        .unwrap()
+        .async_mode(AsyncOptions::new(NonZeroUsize::MIN, NonZeroUsize::MIN))
+        .unwrap();
+    drop(pool.reset_all(Reseed::Keep).unwrap());
+    let act = |d| ActionInput {
+        discrete: d,
+        continuous: &[],
+    };
+    pool.send(&[0], act(&[1])).unwrap();
+    let held = pool.recv().unwrap();
+    let (rewards, generation) = (held.rewards(0).unwrap().to_vec(), held.generation(0));
+    pool.send(&[1], act(&[2])).unwrap();
+    assert!(matches!(
+        pool.snapshot(0),
+        Err(crate::EngineError::NotQuiescent)
+    ));
+    assert_eq!(held.rewards(0).unwrap(), rewards.as_slice());
+    assert_eq!(held.generation(0), generation);
+    BOOM.store(true, Ordering::Release);
+    assert!(matches!(
+        pool.recv().map(|_| ()),
+        Err(crate::EngineError::Panicked)
+    ));
+    assert!(pool.is_poisoned());
+    drop(held);
+    drop(pool.reset_all(Reseed::Keep).unwrap());
+    assert!(!pool.is_poisoned());
 }

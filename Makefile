@@ -82,7 +82,7 @@ py-test:
 py-test-hooks:
 	MATURIN_PEP517_ARGS="--features test-hooks" uv sync --locked --python 3.11 --reinstall-package tessera-rl; \
 	status=$$?; \
-	if [ $$status -eq 0 ]; then uv run --locked --python 3.11 pytest -q tests/python/test_fp_boundary.py; status=$$?; fi; \
+	if [ $$status -eq 0 ]; then uv run --locked --python 3.11 pytest -q tests/python/test_fp_boundary.py tests/python/test_poison_outputs.py; status=$$?; fi; \
 	uv sync --locked --python 3.11 --reinstall-package tessera-rl || status=1; \
 	exit $$status
 

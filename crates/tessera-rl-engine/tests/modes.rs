@@ -193,6 +193,21 @@ fn test_outputs_refused_while_poisoned_and_generation_ends_old_views() {
 }
 
 #[test]
+fn test_outputs_refused_until_restore_all_recovers() {
+    let cfg = CountConfig {
+        panic_at: 1,
+        length: 10,
+        ..CountConfig::default()
+    };
+    let mut p = pool(AutoReset::NextStep, cfg);
+    let record = p.snapshot(0).unwrap();
+    assert_eq!(step(&mut p).map(|_| ()), Err(EngineError::Panicked));
+    assert_eq!(p.outputs().map(|_| ()), Err(EngineError::Poisoned));
+    p.restore_all(&[record]).unwrap();
+    assert!(p.outputs().is_ok());
+}
+
+#[test]
 fn test_panic_during_recovery_stays_poisoned() {
     let cfg = CountConfig {
         panic_on_reset: true,

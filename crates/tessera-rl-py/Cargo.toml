@@ -18,7 +18,7 @@ crate-type = ["cdylib"]
 [features]
 # Test-only failure injection (`_native._fail_after`), for the ADR-0041
 # unwind tests (`make py-test-hooks`). Never in a release wheel.
-test-hooks = []
+test-hooks = ["dep:tessera-rl-macros"]
 
 [dependencies]
 pyo3.workspace = true
@@ -28,6 +28,8 @@ tessera-rl-engine.workspace = true
 tessera-rl-classic.workspace = true
 tessera-rl-games.workspace = true
 tessera-rl-search.workspace = true
+# The panic-injection fixture, behind `test-hooks` only.
+tessera-rl-macros = { workspace = true, optional = true }
 
 [dev-dependencies]
 # The shared panic-injection fixture of the engine's tests.

@@ -317,12 +317,13 @@ where
         Ok((out, warmups))
     }
 
-    fn memory(&self) -> (usize, usize, usize) {
-        (
+    fn memory(&self) -> Result<(usize, usize, usize), Error> {
+        let out = self.pool.outputs().map_err(Error::from)?;
+        Ok((
             Record::<E>::record_size(),
-            self.pool.outputs().map_or(0, |o| o.masks().len()),
-            self.pool.outputs().map_or(0, |o| o.storage().bytes()),
-        )
+            out.masks().len(),
+            out.storage().bytes(),
+        ))
     }
 }
 
@@ -421,7 +422,7 @@ where
             )
         }
         "memory" => {
-            let (record, mask, storage) = bench.memory();
+            let (record, mask, storage) = bench.memory()?;
             format!(
                 r#""metric": "memory", "record_bytes_per_instance": {record}, "mask_bytes_per_step": {mask}, "output_storage_bytes": {storage}"#
             )

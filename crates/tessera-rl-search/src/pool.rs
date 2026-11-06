@@ -1081,3 +1081,46 @@ where
 fn slot_rewards(slot: u32, agents: usize) -> usize {
     idx(slot).saturating_mul(agents)
 }
+
+#[cfg(test)]
+#[path = "../tests/support/fragile.rs"]
+mod fragile;
+
+#[cfg(test)]
+mod poison_tests {
+    use super::fragile::{CountConfig, Fragile};
+    use super::*;
+    use core::num::NonZeroU32;
+    use tessera_rl_engine::{NoMasks, PoolOptions};
+    use tessera_rl_num::identity::Seed;
+
+    /// A failed expansion poisons the scratch pool: the observation source
+    /// refuses rather than read rows, and the cached size stays right.
+    #[test]
+    fn test_obs_source_refuses_a_poisoned_scratch_pool() {
+        let mut p = EnvPool::<Fragile>::new(
+            CountConfig {},
+            PoolOptions::new(NonZeroU32::MIN, Seed::new(1)),
+        )
+        .unwrap();
+        p.reset_all(Reseed::Keep).unwrap();
+        let mut s = SearchPool::<Fragile, NoMasks>::new(
+            CountConfig {},
+            SearchOptions::new(NonZeroU32::new(8).unwrap(), NonZeroU32::new(2).unwrap()),
+            &p.snapshot(0).unwrap(),
+            EnvPool::new,
+        )
+        .unwrap();
+        let bytes = s.obs_row_bytes();
+        assert!(bytes > 0);
+        assert!(s.obs_source().is_ok());
+        let root = s.root();
+        let mut out = [root; 2];
+        s.expand(&[(root, 1), (root, 2)], &mut out).unwrap_err();
+        assert!(matches!(
+            s.obs_source(),
+            Err(SearchError::Engine(EngineError::Poisoned))
+        ));
+        assert_eq!(s.obs_row_bytes(), bytes);
+    }
+}

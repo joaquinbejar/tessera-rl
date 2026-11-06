@@ -545,6 +545,20 @@ where
 }
 
 /// A CartPole pool (`tessera/CartPole-v1`).
+/// A pool whose second step panics (`make py-test-hooks`). Never in a release wheel.
+#[cfg(feature = "test-hooks")]
+pub(crate) fn panic_counter(args: &PoolArgs) -> Result<Box<dyn PoolOps>, BindError> {
+    use crate::split::common::{CountConfig, Counter};
+    let cfg = CountConfig {
+        panic_at: 1,
+        length: 9,
+        ..CountConfig::default()
+    };
+    let (options, n) = options(args)?;
+    let pool = EnvPool::<Counter, NoMasks>::new(cfg.clone(), options)?;
+    finish(&cfg, pool, args, n, false)
+}
+
 pub(crate) fn cartpole(args: &PoolArgs) -> Result<Box<dyn PoolOps>, BindError> {
     let cfg = CartPoleConfig::default();
     let (options, n) = options(args)?;

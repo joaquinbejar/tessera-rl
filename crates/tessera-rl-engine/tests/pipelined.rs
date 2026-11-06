@@ -505,6 +505,30 @@ fn test_pipelined_token_outlives_the_wrapper() {
     drop((a, b));
 }
 
+/// A held token of the idle half stays readable while the other half panics.
+#[test]
+fn test_pipelined_idle_half_token_survives_the_other_halfs_panic() {
+    let mut p = piped(
+        AutoReset::NextStep,
+        4,
+        CountConfig {
+            panic_at: 1,
+            length: 9,
+            ..CountConfig::default()
+        },
+    );
+    let [a, b] = p.reset_all(Reseed::Keep).unwrap();
+    let halves = p.halves();
+    let before = b.rewards().to_vec();
+    send(&mut p, a, &half_actions(&actions(0), &halves[0]));
+    assert_eq!(p.recv().map(|_| ()), Err(EngineError::Panicked));
+    assert!(p.is_poisoned());
+    assert_eq!(b.rewards(), before.as_slice());
+    drop(b);
+    drop(p.reset_all(Reseed::Keep).unwrap());
+    assert!(!p.is_poisoned());
+}
+
 #[test]
 fn test_pipelined_worker_panic_poisons_and_reset_all_recovers() {
     let mut p = piped(

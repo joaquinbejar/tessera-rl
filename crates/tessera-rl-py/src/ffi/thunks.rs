@@ -602,6 +602,8 @@ thunk!(FP_NON_CANONICAL_ENTRIES: CFunction = thunk_fp_non_canonical_entries => m
 thunk!(FAIL_AFTER: CFunction = thunk_fail_after => module::fail_after : fn(Obj, Obj) -> Obj);
 thunk!(FP_BOUNDARY: CFunction = thunk_fp_boundary => module::fp_boundary : fn(Obj, Obj) -> Obj);
 thunk!(BUILD_PROFILE: CFunction = thunk_build_profile => module::build_profile : fn(Obj, Obj) -> Obj);
+#[cfg(feature = "test-hooks")]
+thunk!(MAKE_PANIC_COUNTER: CFunctionKw = thunk_make_panic_counter => env_type::make_panic_counter : fn(Obj, Obj, Obj) -> Obj);
 thunk!(MAKE_CARTPOLE: CFunctionKw = thunk_make_cartpole => env_type::make_cartpole : fn(Obj, Obj, Obj) -> Obj);
 thunk!(MAKE_GRID: CFunctionKw = thunk_make_grid => env_type::make_grid : fn(Obj, Obj, Obj) -> Obj);
 thunk!(MAKE_KEYDOOR: CFunctionKw = thunk_make_keydoor => env_type::make_keydoor : fn(Obj, Obj, Obj) -> Obj);
