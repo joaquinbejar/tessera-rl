@@ -131,15 +131,17 @@ fn test_pipelined_worker_death_reports_worker_died_permanently() {
         continuous: &[],
     };
     p.send(a, input).map_err(|e| e.error).unwrap();
+    // The death is visible with no `recv` in between.
+    let visible = (0..10_000_000).any(|_| {
+        std::thread::yield_now();
+        p.is_poisoned()
+    });
+    assert!(visible, "a dead worker poisons the wrapper");
+    let err = p.send(b, input).unwrap_err();
+    assert_eq!(err.error, EngineError::WorkerDied);
+    drop(err);
     assert_eq!(p.recv().map(|_| ()), Err(EngineError::WorkerDied));
     assert!(p.is_poisoned());
-    let err = p.send(b, input).unwrap_err();
-    assert!(
-        matches!(err.error, EngineError::Poisoned | EngineError::WorkerDied),
-        "{:?}",
-        err.error
-    );
-    drop(err);
     assert_eq!(
         p.reset_all(Reseed::Keep).map(|_| ()),
         Err(EngineError::WorkerDied)
@@ -283,6 +285,10 @@ fn test_async_worker_death_after_all_ids_are_delivered_reports_nothing_in_flight
                 continuous: &[],
             },
         ),
+        Err(EngineError::WorkerDied)
+    );
+    assert_eq!(
+        p.reset(&[0], Reseed::Keep).map(|_| ()),
         Err(EngineError::WorkerDied)
     );
     assert_eq!(

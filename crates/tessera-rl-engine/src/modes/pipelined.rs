@@ -335,7 +335,7 @@ where
     /// Whether a panic or a dead worker poisoned the pool.
     #[must_use]
     pub fn is_poisoned(&self) -> bool {
-        self.poisoned || self.runtime.0.as_ref().is_some_and(|rt| rt.gang.poisoned())
+        self.poisoned || self.dead() || self.runtime.0.as_ref().is_some_and(|rt| rt.gang.poisoned())
     }
 
     /// The export generation of half `half` (ADR-0047 section 5): it moves
@@ -611,11 +611,12 @@ where
         if !token.belongs_to(&self.mode) {
             return Err(EngineError::WrongPool);
         }
-        if self.is_poisoned() {
-            return Err(EngineError::Poisoned);
-        }
+        // Dead first: `is_poisoned` includes it, and the death is the error.
         if self.dead() {
             return Err(EngineError::WorkerDied);
+        }
+        if self.is_poisoned() {
+            return Err(EngineError::Poisoned);
         }
         let half = usize::try_from(token.half()).unwrap_or(usize::MAX);
         let sent = self.cycles.sent.get(half).copied().unwrap_or(u64::MAX);
@@ -738,6 +739,9 @@ where
     }
 
     fn check_recv(&self) -> Result<(), EngineError> {
+        if self.dead() {
+            return Err(EngineError::WorkerDied);
+        }
         if self.is_poisoned() {
             return Err(EngineError::Poisoned);
         }
