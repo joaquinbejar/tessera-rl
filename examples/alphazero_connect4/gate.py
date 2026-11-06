@@ -79,6 +79,7 @@ for _var in ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS"):
 import argparse  # noqa: E402
 import json  # noqa: E402
 import math  # noqa: E402
+import re  # noqa: E402
 import socket  # noqa: E402
 import subprocess  # noqa: E402
 import sys  # noqa: E402
@@ -114,6 +115,7 @@ WINS_MIN = 815
 # Held-out eligibility: the solver's score there (ADR-0048 section 3).
 ELIGIBLE_WINS = 336
 LOOK_GAMES = 400
+LOOK_PROTOCOL = look.FROZEN
 Z = 1.96  # descriptive only
 INTERVAL_NOTE = ("nominal two-sided Wilson z=1.96, as if the games were independent Bernoulli trials; "
                  "they come in pairs per opening and may repeat; it does not decide the gate")  # fmt: skip
@@ -154,6 +156,8 @@ def descriptive(wins: int, games: int) -> dict:
 
 def gate_dir(root: str, development: str | None = None) -> str:
     """The claim's directory: one formal per root, one per development checkpoint."""
+    if development is not None and not re.fullmatch(r"[0-9a-f]{64}", development):
+        raise Refused("--development-checkpoint is not a sha256 hex digest")
     return os.path.join(root, f"gate-dev-{development[:16]}" if development else "gate")
 
 
@@ -235,6 +239,9 @@ def look_evidence(lp, entry: dict) -> dict:
     for field, value in (("checkpoint", entry["checkpoint"]), ("wins", entry["wins"]), ("log_sha256", entry["log_sha256"])):
         if report[field] != value:
             raise Refused(f"the selected look's {field} is not the manifest's")
+    protocol = report["protocol"]
+    if (protocol["sims"], protocol["batch_size"], protocol["capacity"], protocol["openings"]) != LOOK_PROTOCOL:
+        raise Refused("the selected look is not on the frozen protocol")
     check_eligible(report["wins"], report["games"])
     return {"look": entry["look"], "wins": report["wins"], "games": report["games"], "log_sha256": report["log_sha256"]}
 
@@ -362,7 +369,10 @@ def work(args, clock) -> int:
         path = os.path.join(args.root, record["checkpoint_path"])
         meta, observed = check_candidate(path, record["checkpoint_sha256"], args.bot, args.bot_sha256, args)
         evidence = record["look_evidence"]
-        check_eligible(evidence["wins"], evidence["games"])
+        again = look_evidence(loopmod.Loop(args.root), {"look": evidence["look"], "checkpoint": record["checkpoint_sha256"],
+                                                        "wins": evidence["wins"], "log_sha256": evidence["log_sha256"]})  # fmt: skip
+        if again != evidence:
+            raise Refused("the look evidence is not the claim's")
         openings = formal_openings()
         openings_sha = EVAL_SHA256
     else:
@@ -440,6 +450,7 @@ def work(args, clock) -> int:
 
 PROVISIONAL = "gate.provisional.json"
 SPAWN = "spawn.json"
+QUIESCE_WAIT_S = 2.0
 
 
 def settlement(ledger: str, name: str) -> dict | None:
@@ -469,6 +480,8 @@ def finalize(args, rc: int, name: str) -> dict:
         why.append(f"the ledger entry is {entry['status'] if entry else 'missing'}, not ok")
     if report is None:
         why.append("no complete provisional report")
+    if not args.any_openings and not quiescent(args.gate_dir, entry):
+        why.append("the process group is not confirmed gone")
     final = {
         **(report or {"kind": "p2-g1-gate", "gate_run": not args.any_openings}),
         "pass": None if why or report is None else report["provisional_pass"],
@@ -478,6 +491,20 @@ def finalize(args, rc: int, name: str) -> dict:
         "complete": True,
     }
     final.pop("provisional_pass", None)
+    if why:
+        # An invalid attempt has no score to read, at any level.
+        if "meets_815" in final:
+            final["meets_815"] = None
+        # The counts stay only as diagnostics of a run with no result.
+        final["provisional_diagnostics"] = {k: final.pop(k) for k in ("wdl", "by_colour", "pair_wins", "distinct_games")
+                                            if k in final}  # fmt: skip
+        rule = final.get("rule")
+        if rule:
+            rule["pass"] = None
+            if "wins_at_least_815" in rule:
+                final["provisional_diagnostics"]["rule_wins"] = rule["wins"]
+                rule["wins"] = rule["wins_at_least_815"] = None
+            rule["invalid_because"] = "; ".join(why)
     artifacts.write_atomic(os.path.join(args.out, "gate.json"), artifacts.canonical_json(final))
     print(json.dumps({"gate_run": final["gate_run"], "games": final.get("games"), "pass": final["pass"]}))
     if not args.any_openings:
@@ -486,25 +513,30 @@ def finalize(args, rc: int, name: str) -> dict:
 
 
 def quiescent(directory: str, entry: dict | None) -> bool:
-    """Whether the supervised run has certainly stopped. A settlement with the
-    group confirmed gone proves it; otherwise only the recorded group answering
-    ESRCH does. A reused group id can only keep this false."""
-    if entry is not None and entry["status"] != "running" and supervisor.NOT_CONFIRMED not in entry["status"]:
-        return True
+    """Whether the supervised run has certainly stopped. A recorded group must
+    answer ESRCH, whatever the ledger says, as the supervisor's kill does not
+    wait for it; a short poll lets a killed group finish. Unknown is false, and
+    a reused group id can only keep it false. With no record no child was ever
+    started, as the record is written first; only a running or unconfirmed entry
+    then stays unknown."""
     path = os.path.join(directory, SPAWN)
     if not os.path.exists(path):
-        return entry is None  # nothing reserved, so nothing was started
+        return entry is None or (entry["status"] != "running" and supervisor.NOT_CONFIRMED not in entry["status"])
     with open(path, encoding="utf-8") as f:
         spawn = json.load(f)
     if spawn["pgid"] is None or spawn["host"] != socket.gethostname():
         return False
-    try:
-        os.killpg(spawn["pgid"], 0)
-    except ProcessLookupError:
-        return True
-    except OSError:
-        return False
-    return False
+    end = time.monotonic() + QUIESCE_WAIT_S
+    while True:
+        try:
+            os.killpg(spawn["pgid"], 0)
+        except ProcessLookupError:
+            return True
+        except OSError:
+            pass
+        if time.monotonic() >= end:
+            return False
+        time.sleep(0.05)
 
 
 def settle_journal(directory: str, entry: dict | None, final: dict) -> bool:
@@ -521,7 +553,7 @@ def settle_journal(directory: str, entry: dict | None, final: dict) -> bool:
     if not quiescent(directory, entry):
         return False
     met = final.get("meets_815") if not final.get("attempt_invalid_because") else None
-    disposition = {True: "evaluated-passed", False: "evaluated-failed", None: "consumed-no-verdict"}[met]
+    disposition = {True: "met-815", False: "below-815", None: "consumed-no-verdict"}[met]
     ledger = os.path.join(directory, "ledger.json")
     report = os.path.join(directory, "run", "gate.json")
     digest = lambda p: artifacts.sha256_file(p) if os.path.exists(p) else None  # noqa: E731
@@ -574,7 +606,7 @@ def parse(argv):
     return args
 
 
-def recover(root: str, development: str | None = None) -> dict:
+def recover(root: str, development: str | None = None, journal: str | None = None) -> dict:
     """``gate.py finalize --root``: recovery when the parent died after the
     child settled but before it wrote ``gate.json``. It holds the loop's
     owner lock (refused when busy), reads a plain snapshot of the gate
@@ -582,10 +614,12 @@ def recover(root: str, development: str | None = None) -> dict:
     the result from the provisional report under the same rules, which keeps
     an older report's rule. It runs nothing, and settles the journal only once
     the run has certainly stopped; otherwise the attempt stays interrupted. An
-    existing ``gate.json`` is returned unchanged."""
+    existing ``gate.json`` is returned unchanged. A crash or a failed mkdir
+    after the journal entry leaves no claim file: given ``journal``, the entry
+    of this root is settled with no verdict, and never claimed afresh."""
+    directory = gate_dir(root, development)
     lock = loopmod.Loop(root).owner()
     try:
-        directory = gate_dir(root, development)
         run = os.path.join(directory, "run")
         existing = os.path.join(run, "gate.json")
         ledger = os.path.join(directory, "ledger.json")
@@ -596,7 +630,15 @@ def recover(root: str, development: str | None = None) -> dict:
             settle_journal(directory, entry, final)
             return final
         if not os.path.exists(os.path.join(directory, "claim.json")):
-            raise Refused("no gate was claimed on this loop root")
+            label = "development" if development else "formal"
+            block = journal and attempts.open_attempt(journal, EVAL_SHA256, RULE_FAMILY, root, label, development)
+            if not block:
+                raise Refused("no gate was claimed on this loop root")
+            if not quiescent(directory, entry):
+                raise Refused("the process group is not confirmed gone: the attempt stays interrupted")
+            attempts.settle(block, "consumed-no-verdict", {"claim_sha256": None, "report_sha256": None, "ledger_sha256": None})
+            return {"kind": "p2-g1-gate", "pass": None, "attempt": block,
+                    "attempt_invalid_because": ["the claim file was never written"]}  # fmt: skip
         if entry is not None and entry["status"] == "running" and not os.path.exists(os.path.join(directory, SPAWN)):
             raise Refused("the gate has no settled ledger entry yet")
         if not quiescent(directory, entry):
@@ -628,10 +670,11 @@ def compare_openings() -> str:
     return EVAL
 
 
-def settled_attempt(directory: str) -> tuple[dict, list]:
-    """A complete, valid attempt's report and log, all checked before use. The
-    report's ``complete`` flag is not enough: ``finalize`` also writes it on an
-    invalid attempt."""
+def settled_attempt(directory: str) -> tuple[dict, list, dict]:
+    """One validated snapshot of a complete, valid attempt: its report, log and
+    identity, bound to the actual claim and to the gate ledger's own settled
+    entry. The report's ``complete`` flag is not enough: ``finalize`` also writes
+    it on an invalid attempt. A refusal leaves the gate's score alone."""
     path = os.path.join(directory, "run", "gate.json")
     if not os.path.exists(path):
         raise Refused("no gate.json: no settled attempt to compare")
@@ -643,11 +686,23 @@ def settled_attempt(directory: str) -> tuple[dict, list]:
             or report.get("games") != GAMES or report.get("openings_sha256_at_end") != EVAL_SHA256
             or report.get("protocol", {}).get("openings_sha256") != EVAL_SHA256):  # fmt: skip
         raise Refused("gate.json is not a complete valid attempt")
+    ledger_entry = settlement(os.path.join(directory, "ledger.json"), "gate")
+    if ledger_entry is None or ledger_entry["status"] != "ok" or ledger_entry != report["settlement"]:
+        raise Refused("the gate ledger's own entry is not the report's ok settlement")
+    claim_path = os.path.join(directory, "claim.json")
+    if not os.path.exists(claim_path):
+        raise Refused("no claim for this attempt")
+    with open(claim_path, encoding="utf-8") as f:
+        record = json.load(f)
+    if record.get("checkpoint_sha256") != report.get("checkpoint") or record.get("attempt") != report.get("attempt"):
+        raise Refused("the report is not this claim's attempt")
     with open(os.path.join(directory, "run", "gate-log.json"), "rb") as f:
         log_bytes = f.read()
     if artifacts.sha256(log_bytes) != report.get("log_sha256"):
         raise Refused("the gate log is not the one the report names")
     logs = json.loads(log_bytes)
+    if any(type(row[0]) is not int or type(row[1]) is not bool or row[2] not in (1.0, 0.0, -1.0) for row in logs):
+        raise Refused("the gate log holds an unknown slot or outcome")
     slots = [(row[0], row[1]) for row in logs]
     if sorted(slots) != sorted((j, first) for j in range(GAMES // 2) for first in (True, False)):
         raise Refused("the gate log is not exactly the expected slots")
@@ -655,7 +710,15 @@ def settled_attempt(directory: str) -> tuple[dict, list]:
     wins, draws = sum(r > 0 for r in results), sum(r == 0 for r in results)
     if report.get("wdl") != [wins, draws, GAMES - wins - draws]:
         raise Refused("the gate log does not match the report's counts")
-    return report, logs
+    block = report.get("attempt")
+    if block is not None:
+        settled = attempts.settlement(block)
+        if settled is None or settled["disposition"] == "consumed-no-verdict":
+            raise Refused("the journal holds no evaluated settlement for this attempt")
+    identity = {"gate_json_sha256": artifacts.sha256(raw), "log_sha256": report["log_sha256"],
+                "claim_sha256": artifacts.sha256_file(claim_path), "checkpoint": report["checkpoint"],
+                "ledger_entry": ledger_entry}  # fmt: skip
+    return report, logs, identity
 
 
 def read_slots(path: str) -> dict | None:
@@ -689,12 +752,17 @@ def join(logs: list, solver: dict) -> dict:
     }
 
 
-def compare_inputs(args, directory: str) -> dict:
-    report, _ = settled_attempt(directory)
+PROVISIONAL_COMPARISON = "comparison.provisional.json"
+
+
+def compare_inputs(args, identity: dict) -> dict:
+    observed = h2h.runtime()
+    if not observed["registered"]:
+        raise Refused("not the registered runtime the solver binary is pinned for")
     return {
-        "gate_json_sha256": artifacts.sha256_file(os.path.join(directory, "run", "gate.json")),
-        "log_sha256": report["log_sha256"],
-        "checkpoint": report["checkpoint"],
+        **identity,
+        "image_digest": observed["image_digest"],
+        "runtime": observed,
         "openings_sha256": EVAL_SHA256,
         "solver_slots_sha256": args.solver_slots_bin_sha256,
         "solver_sources": SOLVER_SOURCES,
@@ -702,10 +770,10 @@ def compare_inputs(args, directory: str) -> dict:
 
 
 def compare_work(args, directory: str, clock) -> int:
-    """Runs the solver and publishes the comparison, atomically; never touches
-    ``gate.json``. Exit 1 is the ``failed`` outcome: nothing is published."""
-    inputs = compare_inputs(args, directory)
-    _, logs = settled_attempt(directory)
+    """Runs the solver and writes a provisional comparison; never touches
+    ``gate.json``. Exit 1 is the ``failed`` outcome. The parent publishes."""
+    _, logs, identity = settled_attempt(directory)
+    inputs = compare_inputs(args, identity)
     work_dir = os.path.join(directory, "compare")
     os.makedirs(work_dir, exist_ok=True)
     slots_path = os.path.join(work_dir, "solver-slots.tsv")
@@ -728,8 +796,27 @@ def compare_work(args, directory: str, clock) -> int:
                        "invalid_because": "the solver did not reproduce its published 815: investigate; the bar stays 815"}  # fmt: skip
         else:
             result |= {"outcome": "complete", "matches_published_815": True, **join(logs, solver)}
-    artifacts.write_atomic(os.path.join(directory, "run", "comparison.json"), artifacts.canonical_json(result))
+    artifacts.write_atomic(os.path.join(work_dir, PROVISIONAL_COMPARISON), artifacts.canonical_json(result))
     return 0
+
+
+def publish_comparison(directory: str, rc: int, inputs: dict) -> bool:
+    """``run/comparison.json``, only after exit 0 and an ok ledger entry; a
+    crash before this publishes nothing, and a rerun computes it again."""
+    work_dir = os.path.join(directory, "compare")
+    entry = settlement(os.path.join(directory, "compare-ledger.json"), "compare")
+    provisional = os.path.join(work_dir, PROVISIONAL_COMPARISON)
+    if rc != 0 or entry is None or entry["status"] != "ok" or not os.path.exists(provisional):
+        status = entry["status"] if entry else "missing"
+        artifacts.write_atomic(os.path.join(work_dir, "outcome.json"),
+                               artifacts.canonical_json({"outcome": "failed", "exit_code": rc, "ledger": status}))  # fmt: skip
+        return False
+    with open(provisional, "rb") as f:
+        raw = f.read()
+    if json.loads(raw)["inputs"] != inputs:
+        raise Refused("the child compared other inputs than the parent validated")
+    artifacts.write_atomic(os.path.join(directory, "run", "comparison.json"), raw)
+    return True
 
 
 def compare_main(argv: list[str]) -> int:
@@ -752,26 +839,38 @@ def compare_main(argv: list[str]) -> int:
     for rel, sha in SOLVER_SOURCES.items():
         if artifacts.sha256_file(os.path.join(REPO, rel)) != sha:
             raise Refused(f"{rel} is not the pinned source")
-    if supervisor.child_flag(argv) is None:
-        budget, cap = args.budget_core_hours, args.wall_cap_s
-        if not (math.isfinite(budget) and budget > 0 and math.isfinite(cap) and cap > supervisor.CLEANUP_GRACE_S
-                and budget * 3600 >= args.threads * cap):  # fmt: skip
-            raise Refused("the comparison's budget does not fund its wall cap")
-        inputs = compare_inputs(args, directory)
+    work = lambda clock: compare_work(args, directory, clock)  # noqa: E731
+    run = lambda: supervisor.run(__file__, ["compare", *argv], work,  # noqa: E731
+                                 ledger=os.path.join(directory, "compare-ledger.json"),
+                                 budget_core_hours=args.budget_core_hours, cores=args.threads,
+                                 wall_cap_s=args.wall_cap_s, out=os.path.join(directory, "compare"),
+                                 name="compare", fresh_out=False)  # fmt: skip
+    if supervisor.child_flag(argv) is not None:
+        return run()
+    budget, cap = args.budget_core_hours, args.wall_cap_s
+    if not (math.isfinite(budget) and budget > 0 and math.isfinite(cap) and cap > supervisor.CLEANUP_GRACE_S
+            and budget * 3600 >= args.threads * cap):  # fmt: skip
+        raise Refused("the comparison's budget does not fund its wall cap")
+    lock = loopmod.Loop(args.root).owner()
+    try:
+        inputs = compare_inputs(args, settled_attempt(directory)[2])
         done = os.path.join(directory, "run", "comparison.json")
         if os.path.exists(done):
             with open(done, encoding="utf-8") as f:
                 if json.load(f)["inputs"] != inputs:
                     raise Refused("a comparison with other inputs exists; it is never replaced")
+            entry = settlement(os.path.join(directory, "compare-ledger.json"), "compare")
+            if entry is None or entry["status"] != "ok":
+                raise Refused("the published comparison has no ok ledger entry")
             return 0
-    rc = supervisor.run(__file__, ["compare", *argv], lambda clock: compare_work(args, directory, clock),
-                        ledger=os.path.join(directory, "compare-ledger.json"), budget_core_hours=args.budget_core_hours,
-                        cores=args.threads, wall_cap_s=args.wall_cap_s, out=os.path.join(directory, "compare"),
-                        name="compare", fresh_out=False)  # fmt: skip
-    if supervisor.child_flag(argv) is None and rc != 0:
-        artifacts.write_atomic(os.path.join(directory, "compare", "outcome.json"),
-                               artifacts.canonical_json({"outcome": "failed", "exit_code": rc}))  # fmt: skip
-    return rc
+        provisional = os.path.join(directory, "compare", PROVISIONAL_COMPARISON)
+        if os.path.exists(provisional):
+            os.remove(provisional)
+        rc = run()
+        publish_comparison(directory, rc, inputs)
+        return rc
+    finally:
+        lock.close()
 
 
 def main(argv=None) -> int:
@@ -780,8 +879,9 @@ def main(argv=None) -> int:
         p = argparse.ArgumentParser(prog="gate.py finalize", description=recover.__doc__.splitlines()[0])
         p.add_argument("--root", required=True)
         p.add_argument("--development-checkpoint")
+        p.add_argument("--attempts-journal", help="settles an attempt whose claim file was never written")
         done = p.parse_args(argv[1:])
-        recover(done.root, done.development_checkpoint)
+        recover(done.root, done.development_checkpoint, done.attempts_journal)
         return 0
     if argv[:1] == ["compare"]:
         return compare_main(argv[1:])

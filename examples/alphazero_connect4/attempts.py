@@ -20,7 +20,7 @@ import uuid
 
 import artifacts
 
-DISPOSITIONS = ("evaluated-passed", "evaluated-failed", "consumed-no-verdict")
+DISPOSITIONS = ("met-815", "below-815", "consumed-no-verdict")
 LABELS = ("formal", "development")
 
 
@@ -52,6 +52,9 @@ def _append(path: str, record: dict, prev: bytes) -> None:
 
 def _load(path: str, benchmark: str, family: str) -> tuple[list[dict], bytes]:
     """The validated entries, without the header, and the last line's bytes."""
+    # The lock is by path: a hard link would split it, so none is allowed.
+    if os.stat(path).st_nlink != 1:
+        raise JournalError(f"{path}: has another hard link, which would split the lock")
     with open(path, "rb") as f:
         raw = f.read()
     if not raw.endswith(b"\n"):
@@ -70,7 +73,7 @@ def _load(path: str, benchmark: str, family: str) -> tuple[list[dict], bytes]:
                 raise JournalError(f"{path}: not the journal of this benchmark")
             continue
         event, attempt = rec.get("event"), rec.get("attempt")
-        if event == "claimed" and attempt not in claimed and rec.get("label") in LABELS:
+        if event == "claimed" and attempt not in claimed and rec.get("label") in LABELS and isinstance(rec.get("checkpoint"), str):
             claimed.add(attempt)
         elif event == "settled" and attempt in claimed and attempt not in settled and rec.get("disposition") in DISPOSITIONS:
             settled.add(attempt)
@@ -137,6 +140,29 @@ def claim(path: str, benchmark: str, family: str, create: bool, label: str, root
                        "checkpoint": checkpoint, "time": _stamp()}, last)  # fmt: skip
         return {"id": attempt, "label": label, "journal": real, "journal_sha256": artifacts.sha256_file(real),
                 "journal_created": created, "benchmark": benchmark, "rule_family": family}  # fmt: skip
+
+
+def settlement(block: dict) -> dict | None:
+    """The attempt's terminal event, if it has one."""
+    with _Locked(block["journal"]):
+        entries, _ = _load(block["journal"], block["benchmark"], block["rule_family"])
+    return next((e for e in entries if e["event"] == "settled" and e["attempt"] == block["id"]), None)
+
+
+def open_attempt(path: str, benchmark: str, family: str, root: str, label: str, checkpoint: str | None) -> dict | None:
+    """An unsettled claim of this root, for a crash that left no claim file.
+    It only finds an existing attempt, and never creates one."""
+    real = os.path.realpath(path)
+    if not os.path.exists(real):
+        raise JournalError(f"{real}: no journal")
+    with _Locked(real):
+        entries, _ = _load(real, benchmark, family)
+    done = {e["attempt"] for e in entries if e["event"] == "settled"}
+    for e in entries:
+        if (e["event"] == "claimed" and e["attempt"] not in done and e.get("root") == os.path.realpath(root)
+                and e["label"] == label and (checkpoint is None or e["checkpoint"] == checkpoint)):  # fmt: skip
+            return {"id": e["attempt"], "label": label, "journal": real, "benchmark": benchmark, "rule_family": family}
+    return None
 
 
 def settle(block: dict, disposition: str, digests: dict) -> None:

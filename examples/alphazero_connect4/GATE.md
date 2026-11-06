@@ -14,7 +14,7 @@
 - **Pass** (ADR-0048, `rule_id` `adr-0048-wins-815`): at least 815 wins of 1,000, the frozen solver's published score. Draws are non-wins. No interval decides it, and a pass makes no statistical claim.
 
   A complete, valid, formal attempt records `pass` as true or false. A development run has `pass` null at both levels, with `meets_815` and a reduced `claim`, as ADR-0048 leaves closing the gate on it to the owner. A short or inapplicable result has both null, and a diagnostic run has no verdict. The nominal Wilson bound is in `descriptive`: the games come in pairs and may repeat, and it does not decide the gate. A report with no `rule_id` is under ADR-0042, and keeps that meaning.
-- **Eligibility:** the selected look won at least 336 of 400 held-out games, from its verified report, carried into the claim.
+- **Eligibility:** the selected look won at least 336 of 400 held-out games, from its verified report, carried into the claim and reloaded at use, with its digest, count and frozen protocol.
 - **Report:** `gate.json` and `gate-log.json` hold:
   - W/D/L, overall and per colour;
   - per-pair results, distinct games and openings covered;
@@ -54,8 +54,12 @@ The claim syncs the root directory after the `mkdir`, then the claim file and th
 - **Format:** an append-only JSONL file with a header naming the evaluation digest and rule family, each line holding the previous line's digest. A claim and one terminal `settled` event. Malformed, truncated or unknown content fails closed. A missing file needs `--create-journal`, recorded in the attempt's report.
 - **Admission:** one lock across validating, checking and appending. A formal attempt is refused after any claim. A development run is refused until a formal attempt has settled, while any attempt lacks a settlement, and for a checkpoint with any entry.
 - **States:** active (claimed, owner lock held), interrupted (claimed, no lock, no settlement), settled.
-- **Recovery:** `gate.py finalize` runs nothing and settles an interrupted attempt only once the run has certainly stopped: a settlement with the group confirmed gone, or the recorded process group answering ESRCH. Otherwise it stays interrupted and development stays refused. It never creates a formal claim.
+- **Recovery:** `gate.py finalize` runs nothing and settles an interrupted attempt only once the run has certainly stopped: the recorded process group answering ESRCH, whatever the ledger says. With no record no child was started. Otherwise it stays interrupted and development stays refused. It never creates a formal claim.
 - **A crash after the claim and before the first evaluation read still spends the attempt.** Nothing could prove the file stayed unread. Anything else is the owner's decision.
+- **No claim file:** after a crash or a failed `mkdir` following the journal entry, `gate.py finalize --root ROOT --attempts-journal JOURNAL` settles the root's entry as `consumed-no-verdict`, under the same quiescence rule.
+- **Dispositions:** `met-815`, `below-815` and `consumed-no-verdict`. They state the score: a development run that meets 815 closes nothing.
+- **Development is narrower than the ADR:** a run evaluates only the checkpoint its root's selection names, while ADR-0048 allows any checkpoint. Another one needs a root whose selection names it.
+- **Hard links** to the journal are refused, as they would split its lock.
 - **Limit:** a record against mistakes, not a security boundary or a complete enforcement of the global rule: another file escapes it. So the owner or coordinator also records each attempt in a shared note.
 
 ## The registered bot
@@ -67,8 +71,13 @@ A formal run uses the existing binary registered in `look.REGISTERED_BOTS`, dige
 ADR-0048's report needs the discordant slots against the solver, and the repo holds only its totals: a committed per-slot file would put evaluation data in the repo before the blind attempt. `gate.py compare` runs `solver_slots` on the evaluation openings after a valid settled attempt, supervised and bounded, and writes `run/comparison.json`.
 
 - **Refused** until `SOLVER_SLOTS_SHA256` is pinned from an approved build in the registered image, so a formal attempt cannot start before then. It is also refused on any invalid input: an invalid attempt, a log not matching its digest or counts, unexpected slots, or sources other than the pinned ones. Running it needs its own authorization.
+- **Publication:** the child writes a provisional comparison. The parent, holding the root's owner lock, publishes `run/comparison.json` only after exit 0 and an ok ledger entry. A rerun with a published file checks that entry, and the inputs include the registered build environment. The attempt needs an evaluated settlement in the journal.
 - **Outcomes:** `complete`; `invalid`, for unexpected rows or a solver total other than 815, with no McNemar value and the bar still 815; `failed`, in `compare/outcome.json`, publishing nothing. A rerun with the same inputs changes nothing, and other inputs are refused.
 - **It never touches `gate.json`.** A failed or missing comparison leaves the score and verdict intact, but ADR-0048's report is delivered only with a complete comparison.
+
+## Before the first real use
+
+The tests run `compare` through a real child from a copied script. The formal `main` has not run through one. Before any formal run, rehearse both through a real child, on synthetic openings with the pin set by a scratch copy of the tool, and report the result.
 
 ## Blindness
 
