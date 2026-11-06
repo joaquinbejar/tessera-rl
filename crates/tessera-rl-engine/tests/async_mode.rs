@@ -963,3 +963,33 @@ fn test_async_panic_outranks_batch_unreachable() {
     });
     assert_eq!(seen, Some(Err(EngineError::Panicked)));
 }
+
+// A received id is stepped: a writer or a snapshot right after the last `recv`
+// finds nothing running (ADR-0047 section 3), however late the worker's own
+// bookkeeping runs. CI flake on `alloc_async`, a race the loop can hit.
+
+#[test]
+fn test_async_nothing_runs_once_every_id_is_received() {
+    let rounds = if cfg!(miri) { 20 } else { 20_000 };
+    let mut p = asy(AutoReset::NextStep, 4);
+    drop(p.reset_all(Reseed::Keep).unwrap());
+    let ids: Vec<u32> = (0..N).take(BATCH).collect();
+    let rows = rows_for(&ids, &[0; 100]);
+    for round in 0..rounds {
+        send(&mut p, &ids, &rows);
+        // Polling, as a blocking `recv` waits for the job and hides the race.
+        loop {
+            if let Some(t) = p.try_recv().unwrap() {
+                drop(t);
+                break;
+            }
+            std::thread::yield_now();
+        }
+        if round % 2 == 0 {
+            p.reset(&ids, Reseed::Keep).unwrap();
+            drop(p.recv().unwrap());
+        } else {
+            p.snapshot(0).unwrap();
+        }
+    }
+}

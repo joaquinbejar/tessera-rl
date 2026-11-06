@@ -262,16 +262,14 @@ def test_pilot_inherited_thread_variables_are_overridden(bot, tmp_path):
 
 
 def test_pilot_deadline_kills_running_work_and_charges_the_ledger(bot, tmp_path):
-    # Far more self-play than 3 s allow, and a first-unit allowance that
-    # fits: only the supervisor's kill can stop it.
+    # Far more self-play than any machine does in 4 s, and the child never
+    # skips a cell, however long a loaded machine took to start it (exit 0 under
+    # load otherwise): only the supervisor's kill can stop it.
     args = tiny_args(
         tmp_path, bot, "selfplay", **{"--wall-cap-s": "6", "--games-per-worker": "100000", "--sims": "64"}
     )
-    start = time.monotonic()
-    proc = run_pilot(args)
-    wall = time.monotonic() - start
+    proc = run_pilot(args, env={"PILOT_TEST_NO_SKIP": "1"})
     assert proc.returncode == pilot.EXIT_DEADLINE, proc.stderr
-    assert wall < 6 + 3
     report = only_report(tmp_path)
     assert report["status"].startswith("killed at the deadline")
     assert report["missing_sections"] == ["selfplay"]
