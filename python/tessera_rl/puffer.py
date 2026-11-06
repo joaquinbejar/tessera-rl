@@ -51,6 +51,22 @@ start method. Spawn is tested at the pins on macOS. Fork is tested on Linux x86-
 at the pins. Spawn needs an
 importable creator and a ``__main__`` guard. Forkserver is not tested.
 
+**Pipelined.** ``make_puffer(env_id, num_envs=64, chunk_size=2, mode="pipelined")``
+gives :class:`TesseraPufferPipelinedEnv`, on the native backend only: under
+``vector.Serial`` or ``vector.Multiprocessing`` it refuses in the parent, which it
+detects by looking for those backends' constructors in the call stack. The two
+halves must be equal, or ``ArgumentError`` naming the sizes; a chunk size that
+cannot split the pool raises the engine's ``ConfigError`` (64 instances need a
+``chunk_size`` of 32 or less). ``recv`` returns one half's rows and ``send`` pairs
+with the half last received, and between ``send`` and the next ``recv`` the env
+holds no output arrays, so nothing handed to a trainer spans a running half. Rows
+returned by ``recv`` stay valid until that half's next ``send``. Interrupted while
+waiting, a ``recv`` can be called again and returns the same half. There is no
+``step`` and no ``terminal_observations``, as the wrapper's half does not carry
+them. With adaptive state a half reads a context two cycles old (ADR-0047 section
+6); CartPole and Tag have none. No speed gain has been measured; ADR-0006 is the
+reason for this mode.
+
 **Multiprocessing hangs on a raise.** PufferLib 3.0.0's worker has no exception
 reply: a raise prints in the child and the parent's ``recv`` blocks forever. What
 this env can raise in a worker: ``ActionError`` (out-of-range action);
@@ -67,6 +83,7 @@ amd64 ``libraylib.a``.
 
 from __future__ import annotations
 
+import sys
 from functools import partial
 
 import numpy as np
@@ -137,6 +154,18 @@ def _single_leaf(leaves: list) -> tuple:
         names = [leaf[0] for leaf in leaves]
         raise _native.ArgumentError(f"PufferLib needs one observation Box, this environment has leaves {names}")
     return leaves[0]
+
+
+def _in_vector_backend() -> bool:
+    """Whether a PufferLib vector backend is constructing this env, or running it
+    in a worker. Its driver env gets no ``buf``, so nothing else tells it from the
+    native backend, and a refusal in a worker would hang the parent."""
+    frame = sys._getframe(1)
+    while frame is not None:
+        if frame.f_globals.get("__name__") == "pufferlib.vector" and frame.f_code.co_name != "make":
+            return True
+        frame = frame.f_back
+    return False
 
 
 def _check_env_id(env_id: str) -> None:
@@ -303,9 +332,138 @@ class TesseraPufferEnv(pufferlib.PufferEnv):
             self._env.close()
 
 
+class TesseraPufferPipelinedEnv(TesseraPufferEnv):
+    """Two equal halves on the native backend; see the module notes."""
+
+    def __init__(self, env_id: str, num_envs: int = 2, buf=None, seed: int | None = 0, workers: int = 1, **kwargs):
+        if buf is not None or _in_vector_backend():
+            raise _native.ArgumentError(
+                "Pipelined is for the native backend only: use pufferlib.vector.make without a backend"
+            )
+        super().__init__(env_id, num_envs=num_envs, seed=seed, workers=workers, **kwargs)
+        self._make_args["mode"] = "pipelined"
+        self._make_args["workers"] = max(1, self._make_args["workers"])
+        # Refuses here what only a Pipelined pool can tell, as ConfigError.
+        probe = make(env_id, **self._make_args)
+        try:
+            first, second = probe.halves
+        finally:
+            probe.close()
+        if len(first) != len(second):
+            raise _native.ArgumentError(
+                f"Pipelined needs equal halves, these have {len(first)} and {len(second)} instances"
+            )
+        self._half_agents = len(first) * self._agents
+        self._half_masks = np.ones(self._half_agents, dtype=bool)
+        self._queue: list = []
+        self._current: int | None = None
+        self.observations = self.rewards = self.terminals = self.truncations = None
+        self.masks = self.agent_ids = None
+
+    @property
+    def agents_per_batch(self) -> int:
+        return self._half_agents
+
+    @property
+    def agent_per_batch(self) -> int:
+        return self._half_agents
+
+    @property
+    def terminal_observations(self) -> np.ndarray:
+        raise _native.ArgumentError("terminal_observations is not available in Pipelined mode")
+
+    def _flat(self, half) -> tuple:
+        n = self._half_agents
+        out = half.step
+        obs = out.observations[next(iter(out.observations))]
+        return (
+            obs.reshape((n, *self.single_observation_space.shape)),
+            out.rewards.reshape(n),
+            out.agent_terminated.reshape(n),
+            out.agent_truncated.reshape(n),
+        )
+
+    def reset(self, seed: int | None = None):
+        """Queues both halves' first outputs for ``recv``; returns half 0's rows."""
+        first = self._env is None
+        base = None if seed is None and not first else mix_seed(self._constructor_seed, 0 if seed is None else seed)
+        if first:
+            self._env = make(self._env_id, seed=base, **self._make_args)
+        halves = self._env.reset(base)
+        if base is not None:
+            self.instance_seed_base = base
+        self._queue = list(halves)
+        self._current = None
+        self.observations = self.rewards = self.terminals = self.truncations = None
+        self._episode_return[:] = 0.0
+        self._episode_length[:] = 0
+        self._tick = 0
+        self._finished = [0.0, 0, 0]
+        self.infos = []
+        return self._flat(halves[0])[0], self.infos
+
+    def step(self, actions):
+        raise _native.ArgumentError("Pipelined has no step: use send and recv")
+
+    def send(self, actions) -> None:
+        """Starts the next step of the half last received."""
+        self._require_reset("send")
+        if self._current is None:
+            raise _native.ArgumentError("send without a half: call recv first")
+        self._env.send(self._current, actions)
+        self._current = None
+        self.observations = self.rewards = self.terminals = self.truncations = None
+
+    def recv(self):
+        """One half: ``(obs, rewards, terminals, truncations, infos, ids, masks)``."""
+        self._require_reset("recv")
+        if self._current is not None:
+            raise _native.ArgumentError(f"recv before half {self._current} was sent")
+        sent = not self._queue
+        half = self._env.recv() if sent else self._queue[0]
+        if not sent:
+            self._queue.pop(0)
+        self.observations, self.rewards, self.terminals, self.truncations = self._flat(half)
+        self._current = half.half
+        ids = half.ids
+        self.agent_ids = np.arange(ids.start * self._agents, ids.stop * self._agents)
+        self.masks = self._half_masks
+        out = half.step
+        if out.masks is not None:
+            self._masks = out.masks.reshape((self._half_agents, -1))
+        self.infos = self._log_half(ids, out) if sent and self._log_interval is not None else []
+        return (self.observations, self.rewards, self.terminals, self.truncations,
+                self.infos, self.agent_ids, self.masks)  # fmt: skip
+
+    def _log_half(self, ids, out) -> list:
+        rows = slice(ids.start * self._agents, ids.stop * self._agents)
+        self._episode_return[rows] += self.rewards
+        self._episode_length[rows] += 1
+        self._tick += 1
+        ended = out.episode_terminated | out.episode_truncated
+        if ended.any():
+            done = np.zeros(self.num_agents, dtype=bool)
+            done[rows] = np.repeat(ended, self._agents)
+            self._finished[0] += float(self._episode_return[done].sum())
+            self._finished[1] += int(self._episode_length[done].sum())
+            self._finished[2] += int(done.sum())
+            self._episode_return[done] = 0.0
+            self._episode_length[done] = 0
+        if self._tick % self._log_interval != 0 or self._finished[2] == 0:
+            return []
+        total, length, n = self._finished
+        self._finished = [0.0, 0, 0]
+        return [{"episode_return": total / n, "episode_length": length / n, "n": n}]
+
+
 def make_puffer(env_id: str, num_envs: int = 1, **kwargs):
     """A creator of :class:`TesseraPufferEnv` for ``pufferlib.vector.make``,
     usable with spawn. ``num_envs`` is instances per env object; the keyword
-    arguments are the env's, including an environment's config fields."""
+    arguments are the env's, including an environment's config fields; ``mode`` is
+    ``"sync"`` (default) or ``"pipelined"``."""
     _check_env_id(env_id)
-    return partial(TesseraPufferEnv, env_id, num_envs=num_envs, **kwargs)
+    mode = kwargs.pop("mode", "sync")
+    if mode not in ("sync", "pipelined"):
+        raise _native.ArgumentError(f"mode must be sync or pipelined here, not {mode!r}")
+    cls = TesseraPufferEnv if mode == "sync" else TesseraPufferPipelinedEnv
+    return partial(cls, env_id, num_envs=num_envs, **kwargs)
