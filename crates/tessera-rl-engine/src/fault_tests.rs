@@ -170,7 +170,8 @@ fn recv_until_death(p: &mut crate::AsyncPool<Ticker, crate::NoMasks>, ids: &[u32
             Err(e) => return e,
         }
     }
-    unreachable!("the injected worker death never showed");
+    // The injected death never showed: the callers' assertions fail on this.
+    EngineError::NothingInFlight
 }
 
 /// A worker that dies in an Async drain job: `recv` reports `WorkerDied`
