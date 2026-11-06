@@ -50,10 +50,11 @@ def test_half_local_identity_against_a_pipelined_reference(env_id, n, chunk, wor
     ref.close()
 
 
-def test_no_array_spans_the_running_half_under_load():
+@pytest.mark.parametrize(("env_id", "n"), [(CARTPOLE, 1 << 14), (TAG, 1 << 10)])
+def test_no_array_spans_the_running_half_under_load(env_id, n):
     hogs = [subprocess.Popen([sys.executable, "-c", "while True: pass"]) for _ in range(6)]
     try:
-        env = env_of(n=1 << 14, chunk=64, workers=2, log_interval=None)
+        env = env_of(env_id, n, 64, workers=2, log_interval=None)
         env.reset(seed=1)
         half = env.agents_per_batch
         assert half == env.num_agents // 2
@@ -71,6 +72,7 @@ def test_no_array_spans_the_running_half_under_load():
                 assert (o.tobytes(), r.tobytes(), d.tobytes(), tr.tobytes()) == before
             env.send(np.ones(half, dtype=np.int32))
             assert env.observations is None and env.rewards is None
+            assert env.action_masks is None
         env.recv()
         env.close()
     finally:
@@ -147,6 +149,39 @@ def test_step_and_terminal_observations_are_refused():
     with pytest.raises(t.ArgumentError, match="not available"):
         _ = env.terminal_observations
     env.close()
+
+
+def test_tag_masks_are_the_halfs_own_and_gone_between_send_and_recv():
+    n, chunk = 8, 4
+    env = env_of(TAG, n, chunk, log_interval=None)
+    assert env.action_masks is None
+    env.reset(seed=3)
+    assert env.action_masks is None
+    base = mix_seed(0, 3)
+    ref = t.make(TAG, num_envs=n, seed=base, auto_reset="same_step", mode="pipelined", chunk_size=chunk)
+    want = list(ref.reset(base))
+    rng = np.random.default_rng(1)
+    saw_illegal = False
+    for k in range(100):
+        env.recv()
+        h = want[k] if k < 2 else ref.recv()
+        assert env.action_masks.shape == (env.agents_per_batch, env.single_action_space.n)
+        assert env.action_masks.tobytes() == h.step.masks.tobytes()
+        saw_illegal |= not env.action_masks.all()
+        acts = rng.integers(0, env.single_action_space.n, env.agents_per_batch, dtype=np.int32)
+        env.send(acts)
+        assert env.action_masks is None
+        ref.send(h.half, acts)
+    assert saw_illegal, "the masks never refused anything"
+    env.recv()
+    ref.recv()
+    env.close()
+    ref.close()
+
+
+def test_zero_workers_are_refused():
+    with pytest.raises(t.ArgumentError, match="at least 1"):
+        TesseraPufferPipelinedEnv(CARTPOLE, num_envs=8, chunk_size=2, workers=0)
 
 
 def test_unequal_halves_are_refused_naming_the_sizes():

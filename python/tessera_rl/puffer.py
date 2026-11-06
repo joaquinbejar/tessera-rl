@@ -53,13 +53,19 @@ importable creator and a ``__main__`` guard. Forkserver is not tested.
 
 **Pipelined.** ``make_puffer(env_id, num_envs=64, chunk_size=2, mode="pipelined")``
 gives :class:`TesseraPufferPipelinedEnv`, on the native backend only: under
-``vector.Serial`` or ``vector.Multiprocessing`` it refuses in the parent, which it
-detects by looking for those backends' constructors in the call stack. The two
+the pinned backends, ``vector.Serial`` and ``vector.Multiprocessing``, it refuses in
+the parent, which it detects by looking for those backends' constructors in the
+call stack; that ``vector.Ray`` is refused the same way is from reading only, as it
+is not tested. A list of creators whose first is Sync passes the driver and raises
+in the child, which is a parent hang under Multiprocessing. ``workers`` must be at
+least 1. The constructor's probe of the halves starts real worker threads, closed
+before it returns. ``log_interval`` counts half-steps. The two
 halves must be equal, or ``ArgumentError`` naming the sizes; a chunk size that
 cannot split the pool raises the engine's ``ConfigError`` (64 instances need a
 ``chunk_size`` of 32 or less). ``recv`` returns one half's rows and ``send`` pairs
 with the half last received, and between ``send`` and the next ``recv`` the env
-holds no output arrays, so nothing handed to a trainer spans a running half. Rows
+holds no output arrays, and ``action_masks`` is ``None``, so nothing handed to a
+trainer spans a running half. Rows
 returned by ``recv`` stay valid until that half's next ``send``. Interrupted while
 waiting, a ``recv`` can be called again and returns the same half. There is no
 ``step`` and no ``terminal_observations``, as the wrapper's half does not carry
@@ -340,9 +346,10 @@ class TesseraPufferPipelinedEnv(TesseraPufferEnv):
             raise _native.ArgumentError(
                 "Pipelined is for the native backend only: use pufferlib.vector.make without a backend"
             )
+        if _workers(workers) < 1:
+            raise _native.ArgumentError("workers must be at least 1 in Pipelined mode, got 0")
         super().__init__(env_id, num_envs=num_envs, seed=seed, workers=workers, **kwargs)
         self._make_args["mode"] = "pipelined"
-        self._make_args["workers"] = max(1, self._make_args["workers"])
         # Refuses here what only a Pipelined pool can tell, as ConfigError.
         probe = make(env_id, **self._make_args)
         try:
@@ -367,6 +374,12 @@ class TesseraPufferPipelinedEnv(TesseraPufferEnv):
     @property
     def agent_per_batch(self) -> int:
         return self._half_agents
+
+    @property
+    def action_masks(self) -> np.ndarray | None:
+        """The current half's masks, ``(half agents, choices)``; ``None`` between
+        ``send`` and ``recv``, as a worker is writing those rows, and after ``reset``."""
+        return self._masks
 
     @property
     def terminal_observations(self) -> np.ndarray:
@@ -394,6 +407,7 @@ class TesseraPufferPipelinedEnv(TesseraPufferEnv):
             self.instance_seed_base = base
         self._queue = list(halves)
         self._current = None
+        self._masks = None
         self.observations = self.rewards = self.terminals = self.truncations = None
         self._episode_return[:] = 0.0
         self._episode_length[:] = 0
@@ -412,6 +426,7 @@ class TesseraPufferPipelinedEnv(TesseraPufferEnv):
             raise _native.ArgumentError("send without a half: call recv first")
         self._env.send(self._current, actions)
         self._current = None
+        self._masks = None
         self.observations = self.rewards = self.terminals = self.truncations = None
 
     def recv(self):
