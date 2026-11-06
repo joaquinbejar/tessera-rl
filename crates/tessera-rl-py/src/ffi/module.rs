@@ -122,7 +122,7 @@ pub(super) unsafe extern "C" fn fail_after(
     })
 }
 
-const METHOD_COUNT: usize = if cfg!(feature = "test-hooks") { 20 } else { 18 };
+const METHOD_COUNT: usize = if cfg!(feature = "test-hooks") { 21 } else { 19 };
 
 static METHODS: Table<[ffi::PyMethodDef; METHOD_COUNT]> = Table([
     method(
@@ -170,6 +170,7 @@ static METHODS: Table<[ffi::PyMethodDef; METHOD_COUNT]> = Table([
     env_type::MAKERS[6],
     env_type::MAKERS[7],
     env_type::MAKERS[8],
+    env_type::MAKERS[9],
     search_type::MAKER,
     search_group_type::MAKER,
     #[cfg(feature = "test-hooks")]

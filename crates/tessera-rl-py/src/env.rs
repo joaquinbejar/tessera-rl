@@ -7,8 +7,8 @@
 use core::num::{NonZeroU32, NonZeroUsize};
 
 use tessera_rl_classic::{
-    CartPole, CartPoleConfig, Grid, GridConfig, KeyDoor, KeyDoorConfig, Snake, SnakeConfig, Tag,
-    TagConfig,
+    BrickWall, BrickWallConfig, CartPole, CartPoleConfig, Grid, GridConfig, KeyDoor, KeyDoorConfig,
+    Snake, SnakeConfig, Tag, TagConfig,
 };
 use tessera_rl_core::encoding::decode_from_slice;
 use tessera_rl_core::space::{BoxBounds, DType, Space};
@@ -612,6 +612,35 @@ pub(crate) fn keydoor(
     let (options, n) = options(args)?;
     let same_step = options.auto_reset == AutoReset::SameStep;
     let pool = EnvPool::<KeyDoor, Masked>::with_masks(cfg.clone(), options)?;
+    finish(&cfg, pool, args, n, same_step)
+}
+
+/// A brick wall pool (`tessera/BrickWall-v1`). `obs` names the observation.
+pub(crate) fn brickwall(
+    args: &PoolArgs,
+    frameskip: Option<u32>,
+    lives: Option<u32>,
+    obs: Option<&str>,
+) -> Result<Box<dyn PoolOps>, BindError> {
+    use tessera_rl_classic::brickwall::{OBS_PIXELS, OBS_STATE};
+    let d = BrickWallConfig::default();
+    let obs = match obs {
+        None | Some("pixels") => OBS_PIXELS,
+        Some("state") => OBS_STATE,
+        Some(other) => {
+            return Err(BindError::Argument(format!(
+                "obs must be \"pixels\" or \"state\", not {other:?}"
+            )));
+        }
+    };
+    let cfg = BrickWallConfig {
+        frameskip: frameskip.unwrap_or(d.frameskip),
+        lives: lives.unwrap_or(d.lives),
+        obs,
+    };
+    let (options, n) = options(args)?;
+    let same_step = options.auto_reset == AutoReset::SameStep;
+    let pool = EnvPool::<BrickWall, NoMasks>::new(cfg.clone(), options)?;
     finish(&cfg, pool, args, n, same_step)
 }
 

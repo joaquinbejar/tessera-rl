@@ -18,8 +18,8 @@ mod support;
 use support::continuation::Case;
 use tessera_rl_classic::cartpole::MAX_EPISODE_STEPS;
 use tessera_rl_classic::{
-    CartPole, CartPoleConfig, Grid, GridConfig, KeyDoor, KeyDoorConfig, Snake, SnakeConfig, Tag,
-    TagConfig,
+    BrickWall, BrickWallConfig, CartPole, CartPoleConfig, Grid, GridConfig, KeyDoor, KeyDoorConfig,
+    Snake, SnakeConfig, Tag, TagConfig,
 };
 use tessera_rl_engine::{AutoReset, EnvPool, Masked, NoMasks};
 
@@ -147,4 +147,31 @@ fn test_continuation_snake_next_step_restores_identically_everywhere() {
 #[test]
 fn test_continuation_snake_same_step_restores_identically_everywhere() {
     snake(AutoReset::SameStep).check_all(50);
+}
+
+#[expect(clippy::unwrap_used, reason = "test setup: a failure is the assertion")]
+fn brickwall(auto_reset: AutoReset) -> Case<BrickWall, NoMasks> {
+    Case {
+        cfg: BrickWallConfig {
+            frameskip: 4,
+            lives: 1,
+            obs: tessera_rl_classic::brickwall::OBS_STATE,
+        },
+        build: |cfg, options| EnvPool::new(cfg, options).unwrap(),
+        auto_reset,
+        limit: 40,
+        deaths: false,
+        // A serve draws its speed, so a branch diverges there.
+        branches: true,
+    }
+}
+
+#[test]
+fn test_continuation_brickwall_next_step_restores_identically_everywhere() {
+    brickwall(AutoReset::NextStep).check_all(50);
+}
+
+#[test]
+fn test_continuation_brickwall_same_step_restores_identically_everywhere() {
+    brickwall(AutoReset::SameStep).check_all(50);
 }

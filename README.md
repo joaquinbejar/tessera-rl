@@ -65,6 +65,7 @@ Known limits of 0.1.0:
 | `tessera/Grid-v1` | `tessera-rl-classic` | 1 | `Discrete(4)` |
 | `tessera/GridKeyDoor-v1` | `tessera-rl-classic` | 1 to 4 | `Discrete(5)`, masked, simultaneous, generated worlds |
 | `tessera/Snake-v1` | `tessera-rl-classic` | 1 to 2 | `Discrete(4)`, masked, simultaneous, pixel or state observation |
+| `tessera/BrickWall-v1` | `tessera-rl-classic` | 1 | `Discrete(3)`, frameskip, pixel or state observation |
 | `tessera/Connect4-v1` | `tessera-rl-games` | 2 | `Discrete(7)`, masked, sequential |
 | `tessera/Leduc-v1` | `tessera-rl-games` | 2 | `Discrete(3)`, masked, sequential, imperfect information |
 | `tessera/Othello-v1` | `tessera-rl-games` | 2 | `Discrete(65)`, masked, sequential, forced pass |

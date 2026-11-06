@@ -6,8 +6,8 @@
 mod support;
 
 use tessera_rl_classic::{
-    CartPole, CartPoleConfig, Grid, GridConfig, KeyDoor, KeyDoorConfig, Snake, SnakeConfig, Tag,
-    TagConfig,
+    BrickWall, BrickWallConfig, CartPole, CartPoleConfig, Grid, GridConfig, KeyDoor, KeyDoorConfig,
+    Snake, SnakeConfig, Tag, TagConfig,
 };
 use tessera_rl_core::Persist;
 use tessera_rl_engine::{EnvPool, Masked, NoMasks};
@@ -82,5 +82,20 @@ fn test_persist_snake_continues_and_matches_its_fixture() {
     assert_eq!(
         <Snake as Persist>::ENV_VERSION,
         tessera_rl_classic::snake::ENV_VERSION
+    );
+}
+
+#[test]
+fn test_persist_brickwall_continues_and_matches_its_fixture() {
+    let build = |o| EnvPool::<BrickWall, NoMasks>::new(BrickWallConfig::default(), o).unwrap();
+    support::check_continuation(&build, 3);
+    support::check_fixture("persist-brickwall", env!("CARGO_MANIFEST_DIR"), &build, 3);
+    assert_eq!(
+        <BrickWall as Persist>::ENV_ID,
+        tessera_rl_classic::brickwall::ENV_ID
+    );
+    assert_eq!(
+        <BrickWall as Persist>::ENV_VERSION,
+        tessera_rl_classic::brickwall::ENV_VERSION
     );
 }
