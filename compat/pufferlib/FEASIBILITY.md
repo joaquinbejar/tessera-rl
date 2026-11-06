@@ -49,3 +49,7 @@ Result on macOS arm64, 2026-11-01, main `988b1a4` plus this PR:
 
    M8 must pick one, with a benchmark.
 4. **Multi-leaf observations.** PufferLib's native env requires `Box` observations, so Dict or Tuple observation spaces need a flattening adapter (ADR-0014 leaves are contiguous only when their dtypes match).
+
+## Outcome (P2-M8)
+
+Option (b): `tessera_rl.puffer` shares the engine's buffers on the native backend and copies once per step on `vector.Serial` and `vector.Multiprocessing`, which pass buffers they own. `bench_adapter.py` measures this; no performance claim rests on a development machine.

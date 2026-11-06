@@ -4,7 +4,7 @@
 # maturin's default of macOS 11. Ignored on other platforms.
 export MACOSX_DEPLOYMENT_TARGET := 13.0
 
-.PHONY: fmt fmt-check clippy test doc readme readme-check pre-push deny check-targets compat-test py-entries py-callouts py-test py-test-hooks py-test-torch pre-push-torch gym-equivalence reference-training learning-test learning-calibrate bench bench-quick bench-kernels gungraun gungraun-bless connect4-calibration search-strength
+.PHONY: fmt fmt-check clippy test doc readme readme-check pre-push deny check-targets puffer-test compat-test py-entries py-callouts py-test py-test-hooks py-test-torch pre-push-torch gym-equivalence reference-training learning-test learning-calibrate bench bench-quick bench-kernels gungraun gungraun-bless connect4-calibration search-strength
 
 fmt:
 	cargo fmt --all
@@ -89,6 +89,11 @@ py-test-torch:
 	uv sync --locked --python 3.11 --group test --group torch
 	uv run --locked --python 3.11 --group test --group torch pytest -q tests/python
 	uv sync --locked --python 3.11
+
+# The PufferLib adapter at the pins of compat/pufferlib, from a temporary
+# directory: importing PufferLib creates a `resources` symlink in the cwd.
+puffer-test:
+	python3 scripts/puffer_test.py
 
 # SPEC 18 CartPole equivalence with the pinned Gymnasium: JSON report
 # (the gate itself runs in py-test, tests/python/test_gym_equivalence.py).
