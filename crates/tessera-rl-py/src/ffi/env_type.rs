@@ -328,13 +328,14 @@ maker!(make_cartpole, api::make_cartpole);
 maker!(make_tag, api::make_tag);
 maker!(make_grid, api::make_grid);
 maker!(make_keydoor, api::make_keydoor);
+maker!(make_snake, api::make_snake);
 maker!(make_connect4, api::make_connect4);
 maker!(make_leduc, api::make_leduc);
 maker!(make_othello, api::make_othello);
 maker!(make_go9, api::make_go9);
 
 /// The module-level constructors, for the module's method table.
-pub(super) const MAKERS: [ffi::PyMethodDef; 8] = [
+pub(super) const MAKERS: [ffi::PyMethodDef; 9] = [
     method_kw(
         c"make_cartpole",
         thunks::MAKE_CARTPOLE,
@@ -374,5 +375,10 @@ pub(super) const MAKERS: [ffi::PyMethodDef; 8] = [
         c"make_keydoor",
         thunks::MAKE_KEYDOOR,
         c"make_keydoor(**pool_options, size=8, agents=1) -> Env",
+    ),
+    method_kw(
+        c"make_snake",
+        thunks::MAKE_SNAKE,
+        c"make_snake(**pool_options, size=16, agents=1, obs=\"pixels\") -> Env",
     ),
 ];

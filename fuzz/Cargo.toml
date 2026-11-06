@@ -76,6 +76,13 @@ doc = false
 bench = false
 
 [[bin]]
+name = "persist_snake"
+path = "fuzz_targets/persist_snake.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "persist_connect4"
 path = "fuzz_targets/persist_connect4.rs"
 test = false

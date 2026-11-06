@@ -238,6 +238,21 @@ pub(crate) fn make_keydoor(g: Gil, kwargs: Option<Ref<'_>>) -> CResult<Inner> {
     Ok(Inner::new(ops, borrowed))
 }
 
+/// `make_snake(**kwargs)`: the pool of a snake environment object; `obs` is
+/// `"pixels"` (the default) or `"state"`; `max_episode_steps` defaults to 1000.
+pub(crate) fn make_snake(g: Gil, kwargs: Option<Ref<'_>>) -> CResult<Inner> {
+    let kw = Kwargs::parse(g, kwargs)?;
+    kw.check(g, &[&POOL_KEYS, &["outputs", "size", "agents", "obs"]])?;
+    let borrowed = borrowed(g, &kw)?;
+    let args = pool_args(g, &kw, 1000)?;
+    let (size, agents) = (kw.u32(g, "size")?, kw.u32(g, "agents")?);
+    let obs = kw.string(g, "obs")?;
+    let ops = g
+        .detach(|| crate::env::snake(&args, size, agents, obs.as_deref()))
+        .map_err(|e| to_py(g, e))?;
+    Ok(Inner::new(ops, borrowed))
+}
+
 const TAG_KEYS: [&str; 7] = [
     "width", "height", "pursuers", "evaders", "slip", "radius", "outputs",
 ];

@@ -13,7 +13,8 @@ use support::{
 };
 use tessera_rl_classic::cartpole::MAX_EPISODE_STEPS;
 use tessera_rl_classic::{
-    CartPole, CartPoleConfig, Grid, GridConfig, KeyDoor, KeyDoorConfig, Tag, TagConfig,
+    CartPole, CartPoleConfig, Grid, GridConfig, KeyDoor, KeyDoorConfig, Snake, SnakeConfig, Tag,
+    TagConfig,
 };
 use tessera_rl_engine::{AutoReset, EnvPool, Masked, NoMasks};
 
@@ -332,4 +333,65 @@ fn test_golden_keydoor_one_agent_next_step_matches_fixture_on_every_mode() {
 #[test]
 fn test_golden_keydoor_three_agents_same_step_matches_fixture_on_every_mode() {
     check_keydoor(&keydoor("keydoor-v1-a3-same-step", 3, AutoReset::SameStep));
+}
+
+impl support::GoldenEnv for Snake {
+    const ENV_ID: &'static str = tessera_rl_classic::snake::ENV_ID;
+    const ENV_VERSION: u32 = tessera_rl_classic::snake::ENV_VERSION;
+}
+
+fn snake(
+    name: &'static str,
+    agents: u32,
+    obs: u32,
+    auto_reset: AutoReset,
+) -> Scenario<SnakeConfig> {
+    Scenario {
+        name,
+        cfg: SnakeConfig {
+            size: 8,
+            agents,
+            obs,
+        },
+        seed: 6_112_027,
+        num_envs: 16,
+        chunk: 4,
+        auto_reset,
+        max_episode_steps: 80,
+        steps: 300,
+        reseed_at: 150,
+        reseed_ids: &[1, 12],
+        reseed_seed: 9_999,
+    }
+}
+
+fn check_snake(s: &Scenario<SnakeConfig>) {
+    let build = |cfg, options| {
+        EnvPool::<Snake, Masked>::with_masks(cfg, options).unwrap_or_else(|e| panic!("{e}"))
+    };
+    for workers in WORKERS {
+        check(s.name, &run::<Snake, _>(s, build, workers));
+    }
+}
+
+#[test]
+fn test_golden_snake_one_agent_pixels_next_step_matches_fixture_on_every_mode() {
+    let obs = tessera_rl_classic::snake::OBS_PIXELS;
+    check_snake(&snake(
+        "snake-v1-a1-pixels-next-step",
+        1,
+        obs,
+        AutoReset::NextStep,
+    ));
+}
+
+#[test]
+fn test_golden_snake_two_agents_state_same_step_matches_fixture_on_every_mode() {
+    let obs = tessera_rl_classic::snake::OBS_STATE;
+    check_snake(&snake(
+        "snake-v1-a2-state-same-step",
+        2,
+        obs,
+        AutoReset::SameStep,
+    ));
 }

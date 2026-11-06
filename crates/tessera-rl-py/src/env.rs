@@ -7,7 +7,8 @@
 use core::num::{NonZeroU32, NonZeroUsize};
 
 use tessera_rl_classic::{
-    CartPole, CartPoleConfig, Grid, GridConfig, KeyDoor, KeyDoorConfig, Tag, TagConfig,
+    CartPole, CartPoleConfig, Grid, GridConfig, KeyDoor, KeyDoorConfig, Snake, SnakeConfig, Tag,
+    TagConfig,
 };
 use tessera_rl_core::encoding::decode_from_slice;
 use tessera_rl_core::space::{BoxBounds, DType, Space};
@@ -611,6 +612,35 @@ pub(crate) fn keydoor(
     let (options, n) = options(args)?;
     let same_step = options.auto_reset == AutoReset::SameStep;
     let pool = EnvPool::<KeyDoor, Masked>::with_masks(cfg.clone(), options)?;
+    finish(&cfg, pool, args, n, same_step)
+}
+
+/// A snake pool (`tessera/Snake-v1`), with masks. `obs` names the observation.
+pub(crate) fn snake(
+    args: &PoolArgs,
+    size: Option<u32>,
+    agents: Option<u32>,
+    obs: Option<&str>,
+) -> Result<Box<dyn PoolOps>, BindError> {
+    use tessera_rl_classic::snake::{OBS_PIXELS, OBS_STATE};
+    let d = SnakeConfig::default();
+    let obs = match obs {
+        None | Some("pixels") => OBS_PIXELS,
+        Some("state") => OBS_STATE,
+        Some(other) => {
+            return Err(BindError::Argument(format!(
+                "obs must be \"pixels\" or \"state\", not {other:?}"
+            )));
+        }
+    };
+    let cfg = SnakeConfig {
+        size: size.unwrap_or(d.size),
+        agents: agents.unwrap_or(d.agents),
+        obs,
+    };
+    let (options, n) = options(args)?;
+    let same_step = options.auto_reset == AutoReset::SameStep;
+    let pool = EnvPool::<Snake, Masked>::with_masks(cfg.clone(), options)?;
     finish(&cfg, pool, args, n, same_step)
 }
 

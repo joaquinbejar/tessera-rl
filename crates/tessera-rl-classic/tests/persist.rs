@@ -6,7 +6,8 @@
 mod support;
 
 use tessera_rl_classic::{
-    CartPole, CartPoleConfig, Grid, GridConfig, KeyDoor, KeyDoorConfig, Tag, TagConfig,
+    CartPole, CartPoleConfig, Grid, GridConfig, KeyDoor, KeyDoorConfig, Snake, SnakeConfig, Tag,
+    TagConfig,
 };
 use tessera_rl_core::Persist;
 use tessera_rl_engine::{EnvPool, Masked, NoMasks};
@@ -62,5 +63,24 @@ fn test_persist_keydoor_continues_and_matches_its_fixture() {
     assert_eq!(
         <KeyDoor as Persist>::ENV_VERSION,
         tessera_rl_classic::keydoor::ENV_VERSION
+    );
+}
+
+#[test]
+fn test_persist_snake_continues_and_matches_its_fixture() {
+    let cfg = SnakeConfig {
+        agents: 2,
+        ..SnakeConfig::default()
+    };
+    let build = |o| EnvPool::<Snake, Masked>::with_masks(cfg.clone(), o).unwrap();
+    support::check_continuation(&build, 4);
+    support::check_fixture("persist-snake", env!("CARGO_MANIFEST_DIR"), &build, 4);
+    assert_eq!(
+        <Snake as Persist>::ENV_ID,
+        tessera_rl_classic::snake::ENV_ID
+    );
+    assert_eq!(
+        <Snake as Persist>::ENV_VERSION,
+        tessera_rl_classic::snake::ENV_VERSION
     );
 }

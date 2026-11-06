@@ -12,7 +12,8 @@ use std::hint::black_box;
 use criterion::{Criterion, criterion_group, criterion_main};
 use tessera_rl_classic::cartpole::physics;
 use tessera_rl_classic::{
-    CartPole, CartPoleConfig, Grid, GridConfig, KeyDoor, KeyDoorConfig, Tag, TagConfig,
+    CartPole, CartPoleConfig, Grid, GridConfig, KeyDoor, KeyDoorConfig, Snake, SnakeConfig, Tag,
+    TagConfig,
 };
 use tessera_rl_engine::{ActionInput, EnvPool, Masked, NoMasks, PoolOptions, Reseed};
 use tessera_rl_num::identity::Seed;
@@ -116,8 +117,54 @@ fn bench(c: &mut Criterion) {
             black_box(out.rewards());
         });
     });
+    snake(&mut group);
     group.finish();
 }
 
 criterion_group!(benches, bench);
 criterion_main!(benches);
+
+/// Snake: two agents on the default board under a seeded policy over each
+/// row's mask; deaths end episodes, which reset at once. Both observations,
+/// as `pixels` is the default users measure.
+fn snake(group: &mut criterion::BenchmarkGroup<'_, criterion::measurement::WallTime>) {
+    for (name, obs) in [
+        ("snake_pixels", tessera_rl_classic::snake::OBS_PIXELS),
+        ("snake_state", tessera_rl_classic::snake::OBS_STATE),
+    ] {
+        let cfg = SnakeConfig {
+            agents: 2,
+            obs,
+            ..SnakeConfig::default()
+        };
+        let mut snake = EnvPool::<Snake, Masked>::with_masks(cfg, options()).unwrap();
+        snake.reset_all(Reseed::Keep).unwrap();
+        let mut policy = vec![1i32; (N * 2) as usize];
+        let mut draw = 0x9abc_def0_u64;
+        group.bench_function(name, |b| {
+            b.iter(|| {
+                for (row, action) in snake
+                    .outputs()
+                    .unwrap()
+                    .masks()
+                    .chunks(4)
+                    .zip(policy.iter_mut())
+                {
+                    draw = draw.wrapping_mul(0x5851_f42d_4c95_7f2d).wrapping_add(1);
+                    let pick = usize::try_from((draw >> 33) % 4).unwrap();
+                    let first = (0..4)
+                        .map(|k| (pick + k) % 4)
+                        .find(|&a| row.get(a).is_some_and(|f| f.get()));
+                    *action = i32::try_from(first.unwrap_or(0)).unwrap();
+                }
+                let out = snake
+                    .step(ActionInput {
+                        discrete: &policy,
+                        continuous: &[],
+                    })
+                    .unwrap();
+                black_box(out.rewards());
+            });
+        });
+    }
+}
