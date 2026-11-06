@@ -66,6 +66,19 @@ unsafe fn inner<'a>(g: Gil, slf: *mut ffi::PyObject) -> CResult<&'a Inner> {
         .ok_or_else(|| capi::raise(g, capi::runtime_error(), "Env object not initialized"))
 }
 
+/// The state of `slf`, refusing an object inherited through a fork before any
+/// lock or flag of it is touched.
+///
+/// # Safety
+///
+/// As [`inner`].
+unsafe fn guarded<'a>(g: Gil, slf: *mut ffi::PyObject) -> CResult<&'a Inner> {
+    // SAFETY: per the contract.
+    let inner = unsafe { inner(g, slf) }?;
+    inner.check_fork(g)?;
+    Ok(inner)
+}
+
 /// A method without arguments, calling `$api(g, &Inner)`.
 macro_rules! noargs {
     ($impl_fn:ident, $api:path) => {
@@ -75,7 +88,7 @@ macro_rules! noargs {
         ) -> *mut ffi::PyObject {
             entry(|g| {
                 // SAFETY: CPython passes `self` of an `Env` method.
-                let inner = unsafe { inner(g, slf) }?;
+                let inner = unsafe { guarded(g, slf) }?;
                 $api(g, inner)
             })
         }
@@ -91,7 +104,7 @@ macro_rules! varargs {
         ) -> *mut ffi::PyObject {
             entry(|g| {
                 // SAFETY: CPython passes `self` of an `Env` method.
-                let inner = unsafe { inner(g, slf) }?;
+                let inner = unsafe { guarded(g, slf) }?;
                 // SAFETY: METH_VARARGS passes a borrowed tuple, alive for
                 // the call.
                 let args = unsafe { Ref::from_ptr(args) }
@@ -105,7 +118,23 @@ macro_rules! varargs {
 noargs!(layout, api::layout);
 noargs!(outputs, api::outputs);
 noargs!(is_poisoned, api::is_poisoned);
-noargs!(close, api::close);
+
+/// `close()`: on an inherited object a no-op, as `dealloc`: it neither joins
+/// nor refuses, so `with` blocks and cleanup paths in a child still finish.
+pub(super) unsafe extern "C" fn close(
+    slf: *mut ffi::PyObject,
+    _args: *mut ffi::PyObject,
+) -> *mut ffi::PyObject {
+    entry(|g| {
+        // SAFETY: CPython passes `self` of an `Env` method.
+        let inner = unsafe { inner(g, slf) }?;
+        if inner.inherited() {
+            return Ok(capi::none(g));
+        }
+        api::close(g, inner)
+    })
+}
+
 varargs!(recv, api::recv);
 varargs!(restore, crate::async_api::restore);
 noargs!(snapshot_all, api::snapshot_all);
@@ -214,6 +243,16 @@ pub(super) unsafe extern "C" fn dealloc(obj: *mut ffi::PyObject) {
         let boxed = unsafe { Box::from_raw(raw) };
         // SAFETY: CPython calls tp_dealloc attached.
         let g = unsafe { Gil::assume() };
+        if boxed.inherited() {
+            // SAFETY-relevant, no `unsafe` here: this runs only in a forked
+            // child, whose copy of the workers does not exist and whose locks
+            // may be held forever, so `Drop` could hang or abort. The memory
+            // is leaked by design, for the rest of the child's life.
+            core::mem::forget(boxed);
+            // SAFETY: `obj` is a live `Env` instance, in its tp_dealloc.
+            unsafe { capi::free_instance(obj) };
+            return;
+        }
         // Dropping a pool joins its workers: detached. A panic is
         // contained and its payload disposed of without unwinding.
         if let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {

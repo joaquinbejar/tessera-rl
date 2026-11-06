@@ -12,7 +12,7 @@ use tessera_rl_core::space::{BoxBounds, DType, Space};
 use tessera_rl_core::{DecodeError, Environment, TurnStructure, Validate};
 use tessera_rl_engine::{
     ActionInput, AsyncOptions, AutoReset, DecodedRecord, EngineError, EnvPool, MAX_LEAVES,
-    MaskProvider, Masked, NoMasks, PipelinedOptions, PoolOptions, Reseed, SyncOptions,
+    MaskProvider, Masked, NoMasks, PipelinedOptions, PoolOptions, Reseed, SyncOptions, WaitBackend,
 };
 use tessera_rl_games::{
     Connect4, Connect4Config, Go9, Go9Config, Leduc, LeducConfig, Othello, OthelloConfig,
@@ -29,6 +29,8 @@ pub(crate) enum BindError {
     Decode(DecodeError),
     /// An argument the bindings reject before reaching the engine.
     Argument(String),
+    /// A pool that cannot be built in a forked child.
+    Forked(String),
     /// A search error (ADR-0043), the evaluator's included.
     Search(tessera_rl_search::SearchError),
 }
@@ -398,6 +400,36 @@ fn options(args: &PoolArgs) -> Result<(PoolOptions, usize), BindError> {
     Ok((options, n))
 }
 
+/// The wait backend for new workers. On macOS `thread::park` is a libdispatch
+/// semaphore, which traps in the child of a multithreaded parent (`SIGTRAP`,
+/// issue #93), so a pool made in a forked child waits on the address instead.
+/// `None` where it must not be built at all: that wait is missing too, and it
+/// would fall back to park (macOS before 14.4).
+#[must_use]
+fn pick_wait(macos: bool, forked: bool, native: bool) -> Option<WaitBackend> {
+    match (macos && forked, native) {
+        (false, _) => Some(WaitBackend::Auto),
+        (true, true) => Some(WaitBackend::Native),
+        (true, false) => None,
+    }
+}
+
+fn wait_backend() -> Result<WaitBackend, BindError> {
+    pick_wait(
+        cfg!(target_os = "macos"),
+        crate::ffi::fork::generation() != 0,
+        tessera_rl_engine::native_wait_available(),
+    )
+    .ok_or_else(|| {
+        BindError::Forked(
+            "worker threads cannot wait safely in a forked child on this macOS, which has no \
+             native address wait (needs 14.4): use workers=0 in Sync mode, or the spawn start \
+             method"
+                .to_owned(),
+        )
+    })
+}
+
 /// The environment object of `pool`, in the mode of `args`. Pipelined mode
 /// needs workers, one by default.
 pub(crate) fn finish<E, M>(
@@ -422,7 +454,8 @@ where
         let Pooled { pool, layout } = pooled;
         let storage = pool.outputs().storage();
         let template = pool.snapshot(0)?;
-        let options = PipelinedOptions::new(workers.unwrap_or(NonZeroUsize::MIN));
+        let mut options = PipelinedOptions::new(workers.unwrap_or(NonZeroUsize::MIN));
+        options.sync.wait = wait_backend()?;
         let pool = pool
             .pipelined(options)
             .map_err(|e| BindError::Engine(e.error))?;
@@ -434,7 +467,8 @@ where
         let Pooled { pool, layout } = pooled;
         let storage = pool.outputs().storage();
         let template = pool.snapshot(0)?;
-        let options = AsyncOptions::new(workers.unwrap_or(NonZeroUsize::MIN), batch);
+        let mut options = AsyncOptions::new(workers.unwrap_or(NonZeroUsize::MIN), batch);
+        options.sync.wait = wait_backend()?;
         let pool = pool
             .async_mode(options)
             .map_err(|e| BindError::Engine(e.error))?;
@@ -442,7 +476,11 @@ where
     }
     let Pooled { pool, layout } = pooled;
     let pool = match workers {
-        Some(w) => pool.with_workers(SyncOptions::new(w))?,
+        Some(w) => {
+            let mut options = SyncOptions::new(w);
+            options.wait = wait_backend()?;
+            pool.with_workers(options)?
+        }
         None => pool,
     };
     Ok(Box::new(Pooled { pool, layout }))
@@ -544,4 +582,17 @@ pub(crate) fn leduc(args: &PoolArgs) -> Result<Box<dyn PoolOps>, BindError> {
     let same_step = options.auto_reset == AutoReset::SameStep;
     let pool = EnvPool::<Leduc, Masked>::with_masks(cfg.clone(), options)?;
     finish(&cfg, pool, args, n, same_step)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_pick_wait_refuses_a_forked_macos_child_without_native_wait() {
+        assert_eq!(pick_wait(true, true, false), None);
+        assert_eq!(pick_wait(true, true, true), Some(WaitBackend::Native));
+        assert_eq!(pick_wait(true, false, false), Some(WaitBackend::Auto));
+        assert_eq!(pick_wait(false, true, false), Some(WaitBackend::Auto));
+    }
 }

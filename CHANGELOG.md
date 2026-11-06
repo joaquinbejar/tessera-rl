@@ -103,6 +103,11 @@ the API is not stable, and any 0.x release may break it.
 - **Async batch cost** (`tessera-rl` Python): gathering a batch searched the
   token per id and per field, quadratic in its size. It now takes one pass, through
   the new `BatchToken::rows`.
+- **Fork safety** (`tessera-rl` Python, #93): a forked child using an environment
+  created before the fork hung, or crashed on macOS. In the child such an object now
+  raises the new `ForkError` from every call except `close`, and neither `close`,
+  dropping it nor interpreter exit joins its workers. A new environment made in the
+  child works normally.
 - **Stale views during a writer** (`tessera-rl` Python, merged in #88):
   borrowed Pipelined arrays reported `is_stale() == False` while `reset` or
   `restore_all` rewrote their rows, because the generations move only after

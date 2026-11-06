@@ -13,6 +13,7 @@
 //!   ConcurrencyError   a concurrent or nested call, or a split-phase state
 //!                      error (in flight, borrowed, nothing to receive)
 //!   ExhaustedError     a step, episode or branch counter would overflow
+//!   ForkError          an environment made before os.fork() used in the child
 //!   FloatingPointEnvironmentError
 //!                      a call rejected for non-default caller FP controls
 //!                      (strict policy, ADR-0041)
@@ -41,9 +42,10 @@ pub(crate) enum Kind {
     FloatingPoint,
     Search,
     Evaluator,
+    Forked,
 }
 
-const KINDS: [(Kind, &str, &std::ffi::CStr); 12] = [
+const KINDS: [(Kind, &str, &std::ffi::CStr); 13] = [
     (
         Kind::Base,
         "TesseraError",
@@ -104,11 +106,16 @@ const KINDS: [(Kind, &str, &std::ffi::CStr); 12] = [
         "EvaluatorError",
         c"The search evaluator failed or returned an invalid response; the tree is unchanged.",
     ),
+    (
+        Kind::Forked,
+        "ForkError",
+        c"An environment created before os.fork() was used in the child.",
+    ),
 ];
 
 /// The classes, created once at module initialization; null before.
-static TYPES: [AtomicPtr<ffi::PyObject>; 12] =
-    [const { AtomicPtr::new(core::ptr::null_mut()) }; 12];
+static TYPES: [AtomicPtr<ffi::PyObject>; 13] =
+    [const { AtomicPtr::new(core::ptr::null_mut()) }; 13];
 
 fn index(kind: Kind) -> usize {
     KINDS.iter().position(|(k, _, _)| *k == kind).unwrap_or(0)
@@ -209,6 +216,7 @@ pub(crate) fn to_py(g: Gil, e: BindError) -> Raised {
         BindError::Engine(e) => error(g, engine_kind(&e), e.to_string()),
         BindError::Decode(e) => error(g, Kind::Record, e.to_string()),
         BindError::Argument(message) => error(g, Kind::Argument, message),
+        BindError::Forked(message) => error(g, Kind::Forked, message),
         BindError::Search(tessera_rl_search::SearchError::Evaluator(e)) => {
             error(g, Kind::Evaluator, e.to_string())
         }
