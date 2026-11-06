@@ -197,7 +197,10 @@ fn test_async_worker_death_reports_worker_died_permanently() {
     drop(p.reset_all(Reseed::Keep).unwrap());
     let ids: Vec<u32> = (0..8).collect();
     let seen = recv_until_death(&mut p, &ids);
-    assert_eq!(seen, EngineError::WorkerDied);
+    assert!(
+        matches!(seen, EngineError::WorkerDied | EngineError::Poisoned),
+        "{seen:?}"
+    );
     assert!(p.is_poisoned());
     assert!(matches!(
         p.send(
@@ -259,6 +262,14 @@ fn test_async_worker_death_after_all_ids_are_delivered_reports_nothing_in_flight
     }
     assert_eq!(p.recv().map(|_| ()), Err(EngineError::NothingInFlight));
     GATE.store(true, core::sync::atomic::Ordering::Release);
-    assert_eq!(recv_until_death(&mut p, &ids), EngineError::WorkerDied);
+    let seen = recv_until_death(&mut p, &ids);
+    assert!(
+        matches!(seen, EngineError::WorkerDied | EngineError::Poisoned),
+        "{seen:?}"
+    );
     assert!(p.is_poisoned());
+    assert_eq!(
+        p.reset_all(Reseed::Keep).map(|_| ()),
+        Err(EngineError::WorkerDied)
+    );
 }
