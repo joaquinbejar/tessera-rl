@@ -3,8 +3,13 @@
 //! A two-agent test environment: each agent adds its action plus a random
 //! bonus to its counter; agent 1 dies when its counter passes `kill_at`;
 //! the episode terminates after `length` steps.
+//!
+//! The benches run this environment too, so a change here moves their numbers
+//! (`sync_step`, the instruction counts) without any engine change: keep per-step
+//! work out of it, and put test switches read per instance in a separate
+//! environment. A thread-local read in `observe` once cost `sync_step_256` about 8%
+//! and made it bimodal, on one host.
 
-use core::cell::Cell;
 use tessera_rl_core::io::{ActionWriter, Actions, MaskWriter, ObsWriter};
 use tessera_rl_core::space::Space;
 use tessera_rl_core::{
@@ -221,7 +226,6 @@ impl Environment for Counter {
         rng: &mut ObsRng,
         out: &mut ObsWriter<'_, '_, CountObs>,
     ) {
-        assert!(!PANIC_IN_OBSERVE.with(Cell::get), "{OBSERVE_PANIC}");
         let draw = rng.next_u32();
         let noise = if cfg.ignore_rng {
             0
@@ -296,15 +300,6 @@ impl Drop for Bomb {
         std::thread::sleep(std::time::Duration::from_millis(300));
         std::panic::resume_unwind(Box::new("bomb defused too late"));
     }
-}
-
-/// The message of the panic [`PANIC_IN_OBSERVE`] injects.
-pub const OBSERVE_PANIC: &str = "injected observe panic";
-
-thread_local! {
-    /// Panic in `observe` on this thread: a caller-side writer such as
-    /// `restore` observes on the calling thread, and workers never see it.
-    pub static PANIC_IN_OBSERVE: Cell<bool> = const { Cell::new(false) };
 }
 
 fn throw_bomb() {
