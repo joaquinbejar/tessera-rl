@@ -268,13 +268,17 @@ def test_pilot_deadline_kills_running_work_and_charges_the_ledger(bot, tmp_path)
     args = tiny_args(
         tmp_path, bot, "selfplay", **{"--wall-cap-s": "6", "--games-per-worker": "100000", "--sims": "64"}
     )
+    start = time.monotonic()
     proc = run_pilot(args, env={"PILOT_TEST_NO_SKIP": "1"})
+    wall = time.monotonic() - start
     assert proc.returncode == pilot.EXIT_DEADLINE, proc.stderr
     report = only_report(tmp_path)
     assert report["status"].startswith("killed at the deadline")
     assert report["missing_sections"] == ["selfplay"]
     (entry,) = json.loads((tmp_path / "ledger.json").read_text())["entries"]
     assert entry["status"].startswith("killed") and 0 < entry["wall_s"] <= 6
+    # Loose on purpose: a late kill still shows, on however loaded a machine.
+    assert wall < 60
 
 
 def test_pilot_supervisor_kills_native_work_that_holds_the_gil_and_charges_it_unclamped(bot, tmp_path):

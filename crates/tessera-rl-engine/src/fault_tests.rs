@@ -147,6 +147,32 @@ fn test_pipelined_worker_death_reports_worker_died_permanently() {
     assert_eq!(p.idle_token(0).map(|_| ()), Err(EngineError::Poisoned));
 }
 
+/// Receives, and sends again while nothing is left, until the injected death
+/// shows: the surviving worker can finish every id before the other worker
+/// reaches its death point, and `recv` then rightly says `NothingInFlight`.
+#[cfg(not(loom))]
+fn recv_until_death(p: &mut crate::AsyncPool<Ticker, crate::NoMasks>, ids: &[u32]) -> EngineError {
+    let actions = vec![0_i32; ids.len()];
+    let input = crate::ActionInput {
+        discrete: &actions,
+        continuous: &[],
+    };
+    p.send(ids, input).unwrap();
+    for _ in 0..100_000 {
+        match p.recv() {
+            Ok(t) => drop(t),
+            Err(EngineError::NothingInFlight) => {
+                std::thread::yield_now();
+                if let Err(e) = p.send(ids, input) {
+                    return e;
+                }
+            }
+            Err(e) => return e,
+        }
+    }
+    unreachable!("the injected worker death never showed");
+}
+
 /// A worker that dies in an Async drain job: `recv` reports `WorkerDied`
 /// (the surviving worker drains the ring, so nothing hangs), and every later
 /// send or writer reports the death permanently (ADR-0047 section 7).
@@ -170,23 +196,8 @@ fn test_async_worker_death_reports_worker_died_permanently() {
         .unwrap();
     drop(p.reset_all(Reseed::Keep).unwrap());
     let ids: Vec<u32> = (0..8).collect();
-    let actions = [0_i32; 8];
-    let input = crate::ActionInput {
-        discrete: &actions,
-        continuous: &[],
-    };
-    p.send(&ids, input).unwrap();
-    let mut seen = None;
-    for _ in 0..4 {
-        match p.recv() {
-            Ok(t) => drop(t),
-            Err(e) => {
-                seen = Some(e);
-                break;
-            }
-        }
-    }
-    assert_eq!(seen, Some(EngineError::WorkerDied));
+    let seen = recv_until_death(&mut p, &ids);
+    assert_eq!(seen, EngineError::WorkerDied);
     assert!(p.is_poisoned());
     assert!(matches!(
         p.send(
@@ -202,4 +213,52 @@ fn test_async_worker_death_reports_worker_died_permanently() {
         p.reset_all(Reseed::Keep).map(|_| ()),
         Err(EngineError::WorkerDied)
     );
+}
+
+/// The forced schedule of that test's CI failure: the dying worker waits until
+/// the other one has delivered every id, so `recv` has nothing to report yet.
+#[cfg(not(loom))]
+#[test]
+fn test_async_worker_death_after_all_ids_are_delivered_reports_nothing_in_flight_first() {
+    static GATE: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+    let options = PoolOptions {
+        chunk_size: NonZeroU32::new(4).unwrap(),
+        ..PoolOptions::new(NonZeroU32::new(32).unwrap(), Seed::new(1))
+    };
+    let faults = Faults {
+        die_in_epoch: Some(1),
+        death_gate: Some(&GATE),
+        ..Faults::default()
+    };
+    let mut p = EnvPool::<Ticker>::new(TickConfig {}, options)
+        .unwrap()
+        .async_faults(
+            crate::AsyncOptions::new(NonZeroUsize::new(2).unwrap(), NonZeroUsize::new(4).unwrap()),
+            faults,
+        )
+        .unwrap();
+    drop(p.reset_all(Reseed::Keep).unwrap());
+    let ids: Vec<u32> = (0..8).collect();
+    let actions = [0_i32; 8];
+    p.send(
+        &ids,
+        crate::ActionInput {
+            discrete: &actions,
+            continuous: &[],
+        },
+    )
+    .unwrap();
+    // `try_recv`: a blocking `recv` would wait for the held worker's job.
+    let mut batches = 0;
+    while batches < 2 {
+        if let Some(t) = p.try_recv().unwrap() {
+            drop(t);
+            batches += 1;
+        }
+        std::thread::yield_now();
+    }
+    assert_eq!(p.recv().map(|_| ()), Err(EngineError::NothingInFlight));
+    GATE.store(true, core::sync::atomic::Ordering::Release);
+    assert_eq!(recv_until_death(&mut p, &ids), EngineError::WorkerDied);
+    assert!(p.is_poisoned());
 }

@@ -75,6 +75,14 @@ impl IdGenerations {
     }
 }
 
+#[cfg(test)]
+std::thread_local! {
+    /// Runs inside the next `snapshot` of this thread, between its poison
+    /// check and its quiescence check, which then waits for the running ids.
+    pub(crate) static SNAPSHOT_HOOK: core::cell::Cell<Option<fn()>> =
+        const { core::cell::Cell::new(None) };
+}
+
 /// Options of the Async mode: the workers, as in Sync mode, and the batch
 /// size of `recv`.
 #[derive(Debug, Clone)]
@@ -632,11 +640,24 @@ where
         {
             return Err(EngineError::InFlight { id });
         }
+        #[cfg(test)]
+        if let Some(hook) = SNAPSHOT_HOOK.take() {
+            hook();
+            while self.running() != 0 {
+                std::thread::yield_now();
+            }
+        }
         // `EnvPool::snapshot` reads through slices over every instance, so
         // no worker may be writing any row meanwhile.
         if self.running() != 0 {
             self.pump(false)?;
             return Err(EngineError::NotQuiescent);
+        }
+        // Again: a step that panicked after the check above has finished now
+        // (its panic flag is ordered before `stepped`), leaving a row partly
+        // written.
+        if self.is_poisoned() {
+            return Err(EngineError::Poisoned);
         }
         self.mode.pool.snapshot(id)
     }

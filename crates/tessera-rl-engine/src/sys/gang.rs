@@ -129,6 +129,9 @@ pub(crate) struct Faults {
     /// Like `die_in_epoch`, but before the worker reads the job (and so
     /// before it clones the job's waker).
     pub(crate) die_before_job: Option<usize>,
+    /// `die_in_epoch` waits for this flag first, to force a schedule where the
+    /// other workers finish everything before the death.
+    pub(crate) death_gate: Option<&'static core::sync::atomic::AtomicBool>,
     /// Async mode only: before stepping a claimed id, a worker sleeps up to
     /// this many microseconds (a pseudo-random amount per claim), so that
     /// completion order varies widely between runs (ADR-0047 injected
@@ -521,6 +524,7 @@ impl Gang {
                         Death {
                             after_waker: faults.die_in_epoch == Some(w),
                             before_job: faults.die_before_job == Some(w),
+                            death_gate: faults.death_gate,
                         },
                     );
                     #[cfg(not(test))]
@@ -739,6 +743,7 @@ impl Drop for Gang {
 struct Death {
     after_waker: bool,
     before_job: bool,
+    death_gate: Option<&'static core::sync::atomic::AtomicBool>,
 }
 
 /// Startup, then the job loop. A panic outside a job marks the gang dead and
@@ -868,6 +873,14 @@ fn run_job(shared: &Shared, slot: &JobSlot, worker: usize, seen: &mut Seen, die:
     let job = unsafe { &*job };
     seen.waker.clone_from(&job.waker);
     let (call, data) = (job.call, job.data);
+    #[cfg(test)]
+    if die.after_waker
+        && let Some(gate) = die.death_gate
+    {
+        while !gate.load(core::sync::atomic::Ordering::Acquire) {
+            std::thread::yield_now();
+        }
+    }
     assert!(
         !die.after_waker,
         "injected worker death outside the job's catch"
