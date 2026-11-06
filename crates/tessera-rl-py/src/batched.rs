@@ -764,8 +764,8 @@ impl PoolOps for AsyncHandle {
         Err(wrong_mode("step"))
     }
 
-    fn outputs(&self) -> Owned {
-        Owned::default()
+    fn outputs(&self) -> Result<Owned, BindError> {
+        Ok(Owned::default())
     }
 
     fn storage(&self) -> Arc<OutputStorage> {

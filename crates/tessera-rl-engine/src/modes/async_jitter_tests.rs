@@ -145,7 +145,7 @@ fn token_frame(t: &BatchToken<Walker, NoMasks>, id: u32) -> Vec<u64> {
 }
 
 fn pool_frame(pool: &Pool, id: u32) -> Vec<u64> {
-    let out = pool.outputs();
+    let out = pool.outputs().unwrap();
     let i = usize::try_from(id).unwrap();
     let a = 1;
     let obs = out.observation(0).unwrap();

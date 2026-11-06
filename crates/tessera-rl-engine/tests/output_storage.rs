@@ -28,7 +28,7 @@ fn pool(n: u32) -> Pool {
 }
 
 fn step(p: &mut Pool) {
-    let actions = vec![1; p.outputs().rewards().len()];
+    let actions = vec![1; p.outputs().unwrap().rewards().len()];
     p.step(ActionInput {
         discrete: &actions,
         continuous: &[],
@@ -37,7 +37,7 @@ fn step(p: &mut Pool) {
 }
 
 fn bytes_of(p: &Pool, field: OutputField) -> Vec<u8> {
-    let storage = p.outputs().storage();
+    let storage = p.outputs().unwrap().storage();
     let region = storage.region(field).unwrap();
     let size = match region.dtype {
         OutputDtype::F32 | OutputDtype::U32 => 4,
@@ -56,6 +56,7 @@ fn test_output_storage_regions_match_the_typed_accessors() {
     step(&mut p);
     let rewards: Vec<u8> = p
         .outputs()
+        .unwrap()
         .rewards()
         .iter()
         .flat_map(|r| r.to_le_bytes())
@@ -63,10 +64,11 @@ fn test_output_storage_regions_match_the_typed_accessors() {
     assert_eq!(bytes_of(&p, OutputField::Rewards), rewards);
     assert_eq!(
         bytes_of(&p, OutputField::Observation(0)),
-        p.outputs().observation(0).unwrap()
+        p.outputs().unwrap().observation(0).unwrap()
     );
     let alive: Vec<u8> = p
         .outputs()
+        .unwrap()
         .alive()
         .iter()
         .map(|b| u8::from(b.get()))
@@ -77,10 +79,10 @@ fn test_output_storage_regions_match_the_typed_accessors() {
 #[test]
 fn test_output_storage_every_writing_call_increments_generation() {
     let mut p = pool(4);
-    let storage = p.outputs().storage();
+    let storage = p.outputs().unwrap().storage();
     let mut last = storage.generation();
     let mut check = |what: &str, p: &Pool| {
-        let g = p.outputs().storage().generation();
+        let g = p.outputs().unwrap().storage().generation();
         assert!(g > last, "{what} did not start a new generation");
         last = g;
     };
@@ -115,7 +117,7 @@ fn test_output_storage_every_writing_call_increments_generation() {
 fn test_output_storage_rejected_call_keeps_generation() {
     let mut p = pool(2);
     p.reset_all(Reseed::Keep).unwrap();
-    let g = p.outputs().storage().generation();
+    let g = p.outputs().unwrap().storage().generation();
     let wrong = [0; 1];
     assert!(
         p.step(ActionInput {
@@ -124,7 +126,7 @@ fn test_output_storage_rejected_call_keeps_generation() {
         })
         .is_err()
     );
-    assert_eq!(p.outputs().storage().generation(), g);
+    assert_eq!(p.outputs().unwrap().storage().generation(), g);
 }
 
 #[test]
@@ -133,7 +135,7 @@ fn test_output_storage_outlives_the_pool() {
     p.reset_all(Reseed::Keep).unwrap();
     step(&mut p);
     let before = bytes_of(&p, OutputField::Rewards);
-    let storage = p.outputs().storage();
+    let storage = p.outputs().unwrap().storage();
     drop(p);
     let region = storage.region(OutputField::Rewards).unwrap();
     // SAFETY: `storage` keeps the allocation alive after the pool is gone;

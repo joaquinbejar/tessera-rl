@@ -74,7 +74,7 @@ fn branched(seed: u64, labels: [u64; 2], ignore_rng: bool) -> Trajectory {
     (0..40)
         .map(|_| {
             step(&mut p, &[1; 6]);
-            let out = p.outputs();
+            let out = p.outputs().unwrap();
             let obs = out.observation(0).unwrap();
             let per = obs.len() / 3;
             [1usize, 2].map(|i| {

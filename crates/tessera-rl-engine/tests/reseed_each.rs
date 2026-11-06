@@ -28,7 +28,7 @@ fn pool(cfg: CountConfig) -> Pool {
 }
 
 fn step(p: &mut Pool) -> Result<(), EngineError> {
-    let actions = vec![0; p.outputs().rewards().len()];
+    let actions = vec![0; p.outputs().unwrap().rewards().len()];
     p.step(ActionInput {
         discrete: &actions,
         continuous: &[],
@@ -58,7 +58,7 @@ fn test_reseed_each_rejects_the_whole_request_before_writing() {
     let mut p = pool(CountConfig::default());
     step(&mut p).unwrap();
     let hashes: Vec<_> = (0..3).map(|i| p.state_hash(i).unwrap()).collect();
-    let generation = p.outputs().storage().generation();
+    let generation = p.outputs().unwrap().storage().generation();
     let each = [Some(Seed::new(7)), None];
     assert!(matches!(
         p.reset(&[0, 99], Reseed::Each(&each)),
@@ -75,7 +75,7 @@ fn test_reseed_each_rejects_the_whole_request_before_writing() {
     let after: Vec<_> = (0..3).map(|i| p.state_hash(i).unwrap()).collect();
     assert_eq!(after, hashes, "no record changed");
     assert_eq!(
-        p.outputs().storage().generation(),
+        p.outputs().unwrap().storage().generation(),
         generation,
         "no output written"
     );

@@ -83,7 +83,7 @@ fn test_edge_tag_actions_of_empty_and_caught_slots_are_ignored() {
         }
     }
     let e = caught.expect("a capture that does not end the episode");
-    assert!(!p.outputs().alive()[e].get());
+    assert!(!p.outputs().unwrap().alive()[e].get());
     // The caught evader's action is ignored: out of range is accepted.
     let mut acts = [0; A];
     acts[e] = -7;

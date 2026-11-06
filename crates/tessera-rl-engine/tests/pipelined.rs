@@ -124,7 +124,7 @@ where
     <E::Header as tessera_rl_core::RecordLayout>::Adaptive:
         tessera_rl_core::AdaptiveValues<E::Config>,
 {
-    let out = pool.outputs();
+    let out = pool.outputs().unwrap();
     let n = out.episode_return().len();
     let (s, e) = (
         usize::try_from(ids.start).unwrap(),

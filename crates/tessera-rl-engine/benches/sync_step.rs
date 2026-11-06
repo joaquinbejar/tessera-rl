@@ -54,7 +54,7 @@ fn bench(c: &mut Criterion) {
                 {
                     p.reset_all(Reseed::Keep).unwrap();
                 }
-                black_box(p.outputs().rewards());
+                black_box(p.outputs().unwrap().rewards());
             });
         });
     };

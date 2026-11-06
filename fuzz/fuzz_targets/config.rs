@@ -41,7 +41,7 @@ fuzz_target!(|data: &[u8]| {
         Ok(mut p) => {
             assert!(valid, "an invalid config built a pool");
             p.reset_all(Reseed::Keep).unwrap();
-            let acts = vec![0; p.outputs().rewards().len()];
+            let acts = vec![0; p.outputs().unwrap().rewards().len()];
             p.step(ActionInput {
                 discrete: &acts,
                 continuous: &[],

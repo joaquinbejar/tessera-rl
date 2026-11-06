@@ -125,12 +125,14 @@ fn test_terminal_buffer_exists_only_in_same_step() {
     assert!(
         pool(AutoReset::NextStep, short())
             .outputs()
+            .unwrap()
             .terminal_observation(0)
             .is_none()
     );
     assert!(
         pool(AutoReset::SameStep, short())
             .outputs()
+            .unwrap()
             .terminal_observation(0)
             .is_some()
     );
@@ -170,6 +172,24 @@ fn test_panic_in_step_poisons_and_full_reset_recovers() {
     );
     p.reset_all(Reseed::Keep).unwrap();
     assert!(!p.is_poisoned());
+}
+
+#[test]
+fn test_outputs_refused_while_poisoned_and_generation_ends_old_views() {
+    let cfg = CountConfig {
+        panic_at: 1,
+        length: 10,
+        ..CountConfig::default()
+    };
+    let mut p = pool(AutoReset::NextStep, cfg);
+    let storage = p.outputs().unwrap().storage();
+    let before = storage.generation();
+    assert_eq!(step(&mut p).map(|_| ()), Err(EngineError::Panicked));
+    assert_eq!(p.outputs().map(|_| ()), Err(EngineError::Poisoned));
+    assert_ne!(storage.generation(), before, "old views are stale");
+    assert!(storage.bytes() > 0, "the captured identity stays usable");
+    p.reset_all(Reseed::Keep).unwrap();
+    assert!(p.outputs().is_ok(), "recovery reads again");
 }
 
 #[test]

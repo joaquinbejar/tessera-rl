@@ -59,7 +59,7 @@ struct Frame {
 }
 
 fn frame(p: &Pool, i: usize) -> Frame {
-    let out = p.outputs();
+    let out = p.outputs().unwrap();
     let rows = |len: usize| i * len..(i + 1) * len;
     let mask_len = out.masks().len() / out.rewards().len();
     let bits = |b: &[tessera_rl_core::Bool8]| b.iter().map(|f| f.get()).collect::<Vec<_>>();
@@ -205,7 +205,7 @@ fn test_restore_recomputes_observations_and_masks() {
         (copied.obs, copied.masks, copied.hash),
         (before.obs, before.masks, before.hash)
     );
-    assert_eq!(a.outputs().rewards()[2..4], [0.0, 0.0]);
+    assert_eq!(a.outputs().unwrap().rewards()[2..4], [0.0, 0.0]);
 }
 
 #[test]
@@ -218,7 +218,7 @@ fn test_restore_clears_terminal_observation_rows() {
     run(&mut a, 0, &SCRIPT[..2]);
     // Instance 0 just ended an episode: its terminal rows are set.
     assert!(
-        a.outputs().terminal_observation(0).unwrap()[..16]
+        a.outputs().unwrap().terminal_observation(0).unwrap()[..16]
             .iter()
             .any(|&b| b != 0)
     );
@@ -227,9 +227,12 @@ fn test_restore_clears_terminal_observation_rows() {
     a.restore(1, &snap).unwrap();
     let mut b = pool_with(3, 9, cfg, AutoReset::SameStep);
     b.restore(2, &snap).unwrap();
-    assert_eq!(a.outputs().terminal_observation(0).unwrap()[..32], [0; 32]);
     assert_eq!(
-        b.outputs().terminal_observation(0).unwrap()[32..48],
+        a.outputs().unwrap().terminal_observation(0).unwrap()[..32],
+        [0; 32]
+    );
+    assert_eq!(
+        b.outputs().unwrap().terminal_observation(0).unwrap()[32..48],
         [0; 16]
     );
 }

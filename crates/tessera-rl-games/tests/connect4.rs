@@ -59,18 +59,23 @@ fn play_all(p: &mut EnvPool<Connect4, Masked>, seq: &str) {
 }
 
 fn acting(p: &EnvPool<Connect4, Masked>) -> Vec<bool> {
-    p.outputs().acting().iter().map(|f| f.get()).collect()
+    p.outputs()
+        .unwrap()
+        .acting()
+        .iter()
+        .map(|f| f.get())
+        .collect()
 }
 
 fn mask(p: &EnvPool<Connect4, Masked>, agent: usize) -> Vec<bool> {
-    p.outputs().masks()[agent * 7..agent * 7 + 7]
+    p.outputs().unwrap().masks()[agent * 7..agent * 7 + 7]
         .iter()
         .map(|f| f.get())
         .collect()
 }
 
 fn terminated(p: &EnvPool<Connect4, Masked>) -> bool {
-    p.outputs().episode_terminated()[0].get()
+    p.outputs().unwrap().episode_terminated()[0].get()
 }
 
 #[test]
@@ -110,7 +115,7 @@ fn test_connect4_observation_is_from_each_players_view() {
     let mut p = pool();
     play(&mut p, 3);
     play(&mut p, 0);
-    let obs = p.outputs().observation(0).unwrap().to_vec();
+    let obs = p.outputs().unwrap().observation(0).unwrap().to_vec();
     assert_eq!(obs.len(), 2 * 84);
     // Row 5 is the bottom row: slot 0's stone in column 3, slot 1's in 0.
     let at = |agent: usize, channel: usize, row: usize, col: usize| {
@@ -128,11 +133,17 @@ fn test_connect4_vertical_win_rewards_the_first_player() {
     let mut p = pool();
     play_all(&mut p, "010101");
     assert!(!terminated(&p));
-    assert_eq!(p.outputs().rewards(), [0.0, 0.0]);
+    assert_eq!(p.outputs().unwrap().rewards(), [0.0, 0.0]);
     play(&mut p, 0);
-    assert_eq!(p.outputs().rewards(), [1.0, -1.0]);
+    assert_eq!(p.outputs().unwrap().rewards(), [1.0, -1.0]);
     assert!(terminated(&p));
-    assert!(p.outputs().agent_terminated().iter().all(|f| f.get()));
+    assert!(
+        p.outputs()
+            .unwrap()
+            .agent_terminated()
+            .iter()
+            .all(|f| f.get())
+    );
 }
 
 #[test]
@@ -141,7 +152,7 @@ fn test_connect4_horizontal_win_rewards_the_second_player() {
     // Slot 1 builds the bottom row in columns 1 to 4 while slot 0 plays
     // columns 6 and 5.
     play_all(&mut p, "61625364");
-    assert_eq!(p.outputs().rewards(), [-1.0, 1.0]);
+    assert_eq!(p.outputs().unwrap().rewards(), [-1.0, 1.0]);
     assert!(terminated(&p));
 }
 
@@ -152,7 +163,7 @@ fn test_connect4_diagonal_win_ends_the_game() {
     play_all(&mut p, "0112232336");
     assert!(!terminated(&p));
     play(&mut p, 3);
-    assert_eq!(p.outputs().rewards(), [1.0, -1.0]);
+    assert_eq!(p.outputs().unwrap().rewards(), [1.0, -1.0]);
     assert!(terminated(&p));
 }
 
@@ -163,7 +174,7 @@ fn test_connect4_full_board_without_four_is_a_draw() {
     assert!(!terminated(&p));
     play_all(&mut p, &DRAW[41..]);
     assert!(terminated(&p));
-    assert_eq!(p.outputs().rewards(), [0.0, 0.0]);
+    assert_eq!(p.outputs().unwrap().rewards(), [0.0, 0.0]);
     assert_eq!(p.state(0).unwrap().moves, 42);
 }
 

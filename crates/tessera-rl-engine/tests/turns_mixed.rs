@@ -162,7 +162,12 @@ fn step(p: &mut EnvPool<PhaseEnv>, act: [i32; 2]) {
 }
 
 fn acting(p: &EnvPool<PhaseEnv>) -> Vec<bool> {
-    p.outputs().acting().iter().map(|f| f.get()).collect()
+    p.outputs()
+        .unwrap()
+        .acting()
+        .iter()
+        .map(|f| f.get())
+        .collect()
 }
 
 #[test]

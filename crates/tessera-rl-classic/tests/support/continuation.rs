@@ -49,7 +49,7 @@ struct Frame {
 }
 
 fn frame<E: Pooled, M: MaskProvider<E>>(p: &EnvPool<E, M>, id: u32, same_step: bool) -> Frame {
-    let out = p.outputs();
+    let out = p.outputs().unwrap();
     let a = E::MAX_AGENTS;
     let n = out.rewards().len() / a;
     let i = usize::try_from(id).unwrap();
@@ -327,7 +327,7 @@ where
         for k in 1..=2_000 {
             let acts = actions(&p, &self.cfg, SEED, k);
             step(&mut p, &acts);
-            let out = p.outputs();
+            let out = p.outputs().unwrap();
             let ended = out.episode_terminated()[s].get() || out.episode_truncated()[s].get();
             if ended {
                 return (k, death);

@@ -80,7 +80,7 @@ fn bench(c: &mut Criterion) {
                 if sync_pool.step(input(&all)).is_err() {
                     sync_pool.reset_all(Reseed::Keep).unwrap();
                 }
-                black_box(sync_pool.outputs().rewards());
+                black_box(sync_pool.outputs().unwrap().rewards());
             });
         });
     }

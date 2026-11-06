@@ -38,7 +38,7 @@ fn cartpole(n: u32) -> (EnvPool<CartPole, NoMasks>, Vec<i32>) {
 fn tag(n: u32) -> (EnvPool<Tag, Masked>, Vec<i32>) {
     let mut pool = EnvPool::with_masks(TagConfig::default(), options(n)).unwrap();
     pool.reset_all(Reseed::Keep).unwrap();
-    let rows = pool.outputs().rewards().len();
+    let rows = pool.outputs().unwrap().rewards().len();
     (
         pool,
         (0..rows).map(|i| i32::try_from(i % 5).unwrap()).collect(),

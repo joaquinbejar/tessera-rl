@@ -465,8 +465,8 @@ impl PoolOps for SplitHandle {
         Err(wrong_mode("step"))
     }
 
-    fn outputs(&self) -> Owned {
-        Owned::default()
+    fn outputs(&self) -> Result<Owned, BindError> {
+        Ok(Owned::default())
     }
 
     fn storage(&self) -> Arc<OutputStorage> {
@@ -728,6 +728,22 @@ mod tests {
             .unwrap()
             .split()
             .unwrap()
+    }
+
+    /// Healthy, the half not sent stays fresh while the other half runs.
+    #[test]
+    fn test_split_idle_half_stays_fresh_while_healthy() {
+        let split = counter(&super::common::CountConfig {
+            length: 9,
+            ..super::common::CountConfig::default()
+        });
+        split.reset(&ResetSeed::Keep, false).unwrap();
+        let (gens, flag) = (split.half_generations(), split.unsettled_flag());
+        let idle = gens.half(1).unwrap();
+        let rows = split.halves()[0].len() * <super::common::Counter as Environment>::MAX_AGENTS;
+        split.send(0, &vec![0; rows], 0).unwrap();
+        assert!(!half_stale(&gens, 1, idle, &flag));
+        split.close();
     }
 
     /// A panic during a reset advances no generation, yet a view must not

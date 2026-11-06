@@ -50,7 +50,7 @@ fn pool_on(
 
 /// Everything a step returns, plus every state hash.
 fn snapshot_outputs(p: &EnvPool<Counter, Masked>) -> Vec<u64> {
-    let out = p.outputs();
+    let out = p.outputs().unwrap();
     let mut v: Vec<u64> = out
         .observation(0)
         .unwrap()

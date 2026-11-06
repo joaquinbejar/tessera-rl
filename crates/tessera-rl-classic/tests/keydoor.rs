@@ -232,7 +232,7 @@ impl Lcg {
 }
 
 fn masks(p: &Pool, k: usize) -> Vec<i32> {
-    p.outputs().masks()[k * 5..(k + 1) * 5]
+    p.outputs().unwrap().masks()[k * 5..(k + 1) * 5]
         .iter()
         .enumerate()
         .filter(|(_, f)| f.get())
@@ -242,7 +242,7 @@ fn masks(p: &Pool, k: usize) -> Vec<i32> {
 
 /// Slot `k`'s observation: the `view` leaf and the `carrying` flag.
 fn view(p: &Pool, k: usize) -> (Vec<u8>, u8) {
-    let out = p.outputs();
+    let out = p.outputs().unwrap();
     let views = out.observation(0).unwrap();
     let flags = out.observation(1).unwrap();
     (views[k * 245..(k + 1) * 245].to_vec(), flags[k])
@@ -415,7 +415,7 @@ fn solve(c: &KeyDoorConfig, seed: u64) -> bool {
             return false;
         }
     }
-    let out = p.outputs();
+    let out = p.outputs().unwrap();
     out.episode_terminated()[0].get()
         && out.rewards()[..c.agents as usize].iter().all(|&r| r == 1.0)
 }
@@ -472,12 +472,16 @@ fn test_keydoor_random_play_matches_the_reference() {
             assert_eq!(KeyDoor::validate(&c, &s), Ok(()), "seed {seed}");
             let all = r.done.iter().all(|&d| d);
             assert_eq!(
-                p.outputs().episode_terminated()[0].get(),
+                p.outputs().unwrap().episode_terminated()[0].get(),
                 all,
                 "seed {seed}"
             );
             let pay = if all { 1.0 } else { 0.0 };
-            assert!(p.outputs().rewards()[..r.agents].iter().all(|&x| x == pay));
+            assert!(
+                p.outputs().unwrap().rewards()[..r.agents]
+                    .iter()
+                    .all(|&x| x == pay)
+            );
             keys += i32::from(r.holder.is_some());
             doors += i32::from(s.door_open.get());
             if all {
@@ -582,12 +586,12 @@ fn test_keydoor_the_goal_pays_only_when_the_last_agent_arrives() {
     step_one(&mut p, 0, FORWARD);
     assert!(state(&p).is_finished(0));
     assert_eq!(masks(&p, 0), [WAIT], "a finished agent may only wait");
-    assert!(!p.outputs().episode_terminated()[0].get());
-    assert_eq!(p.outputs().rewards()[..2], [0.0, 0.0]);
+    assert!(!p.outputs().unwrap().episode_terminated()[0].get());
+    assert_eq!(p.outputs().unwrap().rewards()[..2], [0.0, 0.0]);
     assert!(masks(&p, 1).contains(&FORWARD), "the goal holds both");
     step_one(&mut p, 1, FORWARD);
-    assert!(p.outputs().episode_terminated()[0].get());
-    assert_eq!(p.outputs().rewards()[..2], [1.0, 1.0]);
+    assert!(p.outputs().unwrap().episode_terminated()[0].get());
+    assert_eq!(p.outputs().unwrap().rewards()[..2], [1.0, 1.0]);
 }
 
 #[test]
@@ -647,7 +651,7 @@ fn test_keydoor_auto_reset_draws_a_new_world() {
     };
     import(&mut p, s).unwrap();
     step_one(&mut p, 0, FORWARD);
-    assert!(p.outputs().episode_terminated()[0].get());
+    assert!(p.outputs().unwrap().episode_terminated()[0].get());
     assert_eq!(state(&p).key_holder, NO_HOLDER);
     assert!(!state(&p).door_open.get());
 }
@@ -857,7 +861,7 @@ fn test_keydoor_baseline_solved_share_is_pinned() {
                     assert!(s.is_legal(&c, k, a), "{s:?} {k} {a}");
                 }
                 step(&mut p, &acts);
-                if p.outputs().episode_terminated()[0].get() {
+                if p.outputs().unwrap().episode_terminated()[0].get() {
                     solved[agents as usize - 1] += 1;
                     break;
                 }

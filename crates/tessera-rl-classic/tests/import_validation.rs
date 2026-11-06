@@ -34,7 +34,7 @@ fn tag_pool(n: u32, cfg: TagConfig, auto_reset: AutoReset) -> EnvPool<Tag, Maske
 }
 
 fn stay(p: &mut EnvPool<Tag, Masked>) {
-    let acts = vec![0; p.outputs().rewards().len()];
+    let acts = vec![0; p.outputs().unwrap().rewards().len()];
     p.step(ActionInput {
         discrete: &acts,
         continuous: &[],
@@ -78,7 +78,7 @@ fn with_capture() -> (EnvPool<Tag, Masked>, TagConfig) {
             stay(&mut p);
             let s = p.state(0).unwrap();
             let caught = s.caught[1..3].iter().filter(|c| c.get()).count();
-            let ended = p.outputs().episode_terminated()[0].get();
+            let ended = p.outputs().unwrap().episode_terminated()[0].get();
             if caught == 1 && !ended {
                 return (p, cfg);
             }
@@ -138,7 +138,7 @@ fn test_import_and_import_all_are_atomic_when_a_later_record_fails() {
         stay(&mut p);
     }
     let before = [p.snapshot(0).unwrap().hash(), p.snapshot(1).unwrap().hash()];
-    let rewards = p.outputs().rewards().to_vec();
+    let rewards = p.outputs().unwrap().rewards().to_vec();
     let (h, s) = parts(&p, 1);
     let good = record(h, s);
     let (mut bad_h, bad_s) = parts(&p, 0);
@@ -154,7 +154,7 @@ fn test_import_and_import_all_are_atomic_when_a_later_record_fails() {
         [p.snapshot(0).unwrap().hash(), p.snapshot(1).unwrap().hash()],
         before
     );
-    assert_eq!(p.outputs().rewards(), rewards.as_slice());
+    assert_eq!(p.outputs().unwrap().rewards(), rewards.as_slice());
     assert!(!p.is_poisoned());
 }
 
@@ -192,11 +192,14 @@ fn test_import_accepts_every_record_the_engine_produces() {
     p.reset_all(Reseed::Keep).unwrap();
     for _ in 0..400 {
         stay(&mut p);
-        if p.outputs().episode_terminated()[0].get() {
+        if p.outputs().unwrap().episode_terminated()[0].get() {
             break;
         }
     }
-    assert!(p.outputs().episode_terminated()[0].get(), "no termination");
+    assert!(
+        p.outputs().unwrap().episode_terminated()[0].get(),
+        "no termination"
+    );
     let (h, s) = parts(&p, 0);
     p.import(&[0], &[record(h, s)]).unwrap();
     accepted += 1;
@@ -217,7 +220,7 @@ fn test_import_accepts_every_record_the_engine_produces() {
     .unwrap();
     p.reset_all(Reseed::Keep).unwrap();
     stay(&mut p);
-    assert!(p.outputs().episode_truncated()[0].get());
+    assert!(p.outputs().unwrap().episode_truncated()[0].get());
     let (h, s) = parts(&p, 0);
     p.import(&[0], &[record(h, s)]).unwrap();
     accepted += 1;

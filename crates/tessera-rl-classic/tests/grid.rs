@@ -169,7 +169,7 @@ fn test_grid_random_walks_match_the_reference() {
             }
             steps += 1;
             step(&mut p, a);
-            let out = p.outputs();
+            let out = p.outputs().unwrap();
             let off = col < 0 || row < 0 || col >= size || row >= size;
             let won = (col, row) == goal;
             assert_eq!(p.state(0).unwrap().cell(), (col, row), "seed {seed}");
@@ -214,12 +214,14 @@ fn test_grid_random_walks_match_the_reference() {
 fn test_grid_edge_cell_is_on_the_grid_and_one_more_step_falls_off() {
     let mut p = pool(3);
     step(&mut p, 2);
-    assert!(!p.outputs().episode_terminated()[0].get() || p.state(0).unwrap().goal == [1, 0]);
+    assert!(
+        !p.outputs().unwrap().episode_terminated()[0].get() || p.state(0).unwrap().goal == [1, 0]
+    );
     let mut q = pool(3);
     step(&mut q, 0);
     assert!(q.state(0).unwrap().out_of_bounds.get());
-    assert!(q.outputs().episode_terminated()[0].get());
-    assert_eq!(q.outputs().rewards()[0], -1.0);
+    assert!(q.outputs().unwrap().episode_terminated()[0].get());
+    assert_eq!(q.outputs().unwrap().rewards()[0], -1.0);
 }
 
 #[test]
@@ -229,7 +231,7 @@ fn test_grid_auto_reset_draws_a_new_goal_from_the_stream() {
     let mut goals = BTreeSet::from([first]);
     for _ in 0..40 {
         step(&mut p, 0);
-        assert!(p.outputs().episode_terminated()[0].get());
+        assert!(p.outputs().unwrap().episode_terminated()[0].get());
         assert_eq!(p.state(0).unwrap().cell(), (0, 0));
         goals.insert(p.state(0).unwrap().goal);
     }
@@ -345,13 +347,13 @@ fn test_grid_baseline_reaches_every_goal_by_the_shortest_walk() {
         let goal = p.state(0).unwrap().goal;
         let shortest = i32::from(goal[0]) + i32::from(goal[1]);
         let mut steps = 0;
-        while !p.outputs().episode_terminated()[0].get() {
+        while !p.outputs().unwrap().episode_terminated()[0].get() {
             let a = baseline(p.state(0).unwrap());
             step(&mut p, a);
             steps += 1;
             assert!(steps <= shortest, "seed {seed}");
         }
         assert_eq!(steps, shortest, "seed {seed}");
-        assert_eq!(p.outputs().rewards()[0], 1.0);
+        assert_eq!(p.outputs().unwrap().rewards()[0], 1.0);
     }
 }

@@ -592,7 +592,7 @@ where
                 continue;
             }
             let Some(m) = self.slots.get(i) else { continue };
-            let g = m.gathered();
+            let g = m.gathered().map_err(at(i))?;
             source.get_or_insert(g.source);
             self.records.extend_from_slice(g.records);
             self.picks.extend_from_slice(g.picks);

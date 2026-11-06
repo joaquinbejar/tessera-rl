@@ -9,6 +9,11 @@ the API is not stable, and any 0.x release may break it.
 
 ## [Unreleased]
 
+### Changed
+
+- **`EnvPool::outputs` returns `Result<&Outputs, EngineError>`** and refuses a poisoned pool with `Poisoned`
+  (ADR-0028, SPEC 5.4); a source-breaking change. Python's `outputs()` refuses too, in borrowed and owned modes.
+
 ### Added
 
 - **Persisted snapshots in every mode**: `encode`, `decode`, `check_records` and `import_all` on `PipelinedPool` and `AsyncPool`, and `Env.encode` and `Env.load` in Python, with a new `PersistError`. Files are mode-independent and hold full state, so they are privileged. A file holds no cycle state.

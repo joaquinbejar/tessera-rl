@@ -50,7 +50,12 @@ fn step(p: &mut EnvPool<RaceEnv, Masked>, act: [i32; 2]) {
 }
 
 fn acting(p: &EnvPool<RaceEnv, Masked>) -> Vec<bool> {
-    p.outputs().acting().iter().map(|f| f.get()).collect()
+    p.outputs()
+        .unwrap()
+        .acting()
+        .iter()
+        .map(|f| f.get())
+        .collect()
 }
 
 fn total(p: &EnvPool<RaceEnv, Masked>) -> u32 {
@@ -82,7 +87,10 @@ fn test_turns_non_acting_action_is_ignored() {
     );
     assert_eq!(a.header(0), b.header(0));
     assert_eq!(a.state_hash(0).unwrap(), b.state_hash(0).unwrap());
-    assert_eq!(a.outputs().rewards(), b.outputs().rewards());
+    assert_eq!(
+        a.outputs().unwrap().rewards(),
+        b.outputs().unwrap().rewards()
+    );
 }
 
 #[cfg(not(feature = "debug-checks"))]
@@ -136,7 +144,7 @@ fn test_turns_terminal_reward_reaches_both_agents_in_the_final_step() {
         step(&mut p, [1, 1]);
     }
     step(&mut p, [0, 0]);
-    let out = p.outputs();
+    let out = p.outputs().unwrap();
     assert_eq!(out.rewards(), [-1.0, 1.0]);
     assert!(out.agent_terminated().iter().all(|f| f.get()));
     assert_eq!(out.episode_terminated(), [Bool8::TRUE]);
@@ -150,13 +158,16 @@ fn test_turns_snapshot_and_restore_continue_the_turn_order() {
     let mut seen = Vec::new();
     for act in [[1, 1], [0, 0], [1, 1]] {
         step(&mut p, act);
-        seen.push((acting(&p), p.outputs().rewards().to_vec()));
+        seen.push((acting(&p), p.outputs().unwrap().rewards().to_vec()));
     }
     p.restore(0, &rec).unwrap();
     assert_eq!(acting(&p), [false, true]);
     for (k, act) in [[1, 1], [0, 0], [1, 1]].into_iter().enumerate() {
         step(&mut p, act);
-        assert_eq!((acting(&p), p.outputs().rewards().to_vec()), seen[k]);
+        assert_eq!(
+            (acting(&p), p.outputs().unwrap().rewards().to_vec()),
+            seen[k]
+        );
     }
 }
 

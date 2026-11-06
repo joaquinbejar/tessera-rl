@@ -94,7 +94,7 @@ fn test_inline_reset_and_step_do_not_allocate() {
         let _ = std::hint::black_box(pool.reset(&ids, Reseed::Base(Seed::new(2))));
     });
     assert_eq!(n, 0);
-    assert!(pool.outputs().rewards().iter().any(|&r| r > 0.0));
+    assert!(pool.outputs().unwrap().rewards().iter().any(|&r| r > 0.0));
 }
 
 #[test]

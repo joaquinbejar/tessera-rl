@@ -123,7 +123,8 @@ pub(crate) trait PoolOps: Send {
     /// Resets every instance, or only `ids`.
     fn reset(&mut self, ids: Option<&[u32]>, seed: &ResetSeed) -> Result<(), BindError>;
     fn step(&mut self, actions: &[i32]) -> Result<(), BindError>;
-    fn outputs(&self) -> Owned;
+    /// The last call's outputs; refused on a poisoned pool.
+    fn outputs(&self) -> Result<Owned, BindError>;
     /// The shared output storage, for borrowed views.
     fn storage(&self) -> std::sync::Arc<tessera_rl_engine::OutputStorage>;
     fn snapshot(&self, id: u32) -> Result<Vec<u8>, BindError>;
@@ -152,6 +153,8 @@ pub(crate) trait PoolOps: Send {
 struct Pooled<E: Environment, M: MaskProvider<E>> {
     pool: EnvPool<E, M>,
     layout: Layout,
+    /// Captured while healthy: identity and regions for views, no row values.
+    storage: std::sync::Arc<tessera_rl_engine::OutputStorage>,
 }
 
 fn dtype_name(dtype: DType) -> &'static str {
@@ -227,6 +230,7 @@ where
         pool: EnvPool<E, M>,
         num_envs: usize,
         terminal: bool,
+        storage: std::sync::Arc<tessera_rl_engine::OutputStorage>,
     ) -> Result<Self, BindError> {
         let mut obs = Vec::new();
         leaves(
@@ -247,6 +251,7 @@ where
             0
         };
         Ok(Self {
+            storage,
             pool,
             layout: Layout {
                 num_envs,
@@ -329,8 +334,8 @@ where
         Ok(())
     }
 
-    fn outputs(&self) -> Owned {
-        let out = self.pool.outputs();
+    fn outputs(&self) -> Result<Owned, BindError> {
+        let out = self.pool.outputs()?;
         let observations = (0..MAX_LEAVES)
             .map_while(|leaf| out.observation(leaf).map(<[u8]>::to_vec))
             .collect();
@@ -341,7 +346,7 @@ where
         } else {
             Vec::new()
         };
-        Owned {
+        Ok(Owned {
             terminal_observations,
             observations,
             rewards: out.rewards().iter().flat_map(|r| r.to_le_bytes()).collect(),
@@ -352,11 +357,11 @@ where
             episode_terminated: flags(out.episode_terminated()),
             episode_truncated: flags(out.episode_truncated()),
             masks: flags(out.masks()),
-        }
+        })
     }
 
     fn storage(&self) -> std::sync::Arc<tessera_rl_engine::OutputStorage> {
-        self.pool.outputs().storage()
+        std::sync::Arc::clone(&self.storage)
     }
 
     fn snapshot(&self, id: u32) -> Result<Vec<u8>, BindError> {
@@ -487,10 +492,14 @@ where
     M: tessera_rl_engine::PersistMask<E> + Send + Sync + 'static,
 {
     let workers = NonZeroUsize::new(args.workers);
-    let pooled = Pooled::new(cfg, pool, n, terminal)?;
+    let storage = pool.outputs()?.storage();
+    let pooled = Pooled::new(cfg, pool, n, terminal, storage)?;
     if args.pipelined {
-        let Pooled { pool, layout } = pooled;
-        let storage = pool.outputs().storage();
+        let Pooled {
+            pool,
+            layout,
+            storage,
+        } = pooled;
         let template = pool.snapshot(0)?;
         let mut options = PipelinedOptions::new(workers.unwrap_or(NonZeroUsize::MIN));
         options.sync.wait = wait_backend()?;
@@ -502,8 +511,11 @@ where
     if let Some((batch, outputs)) = args.asynced {
         let batch = NonZeroUsize::new(batch)
             .ok_or_else(|| BindError::Argument("batch_size must be at least 1".to_owned()))?;
-        let Pooled { pool, layout } = pooled;
-        let storage = pool.outputs().storage();
+        let Pooled {
+            pool,
+            layout,
+            storage,
+        } = pooled;
         let template = pool.snapshot(0)?;
         let mut options = AsyncOptions::new(workers.unwrap_or(NonZeroUsize::MIN), batch);
         options.sync.wait = wait_backend()?;
@@ -512,7 +524,11 @@ where
             .map_err(|e| BindError::Engine(e.error))?;
         return crate::batched::batched(pool, storage, template, layout, outputs);
     }
-    let Pooled { pool, layout } = pooled;
+    let Pooled {
+        pool,
+        layout,
+        storage,
+    } = pooled;
     let pool = match workers {
         Some(w) => {
             let mut options = SyncOptions::new(w);
@@ -521,7 +537,11 @@ where
         }
         None => pool,
     };
-    Ok(Box::new(Pooled { pool, layout }))
+    Ok(Box::new(Pooled {
+        pool,
+        layout,
+        storage,
+    }))
 }
 
 /// A CartPole pool (`tessera/CartPole-v1`).
@@ -642,6 +662,51 @@ pub(crate) fn leduc(args: &PoolArgs) -> Result<Box<dyn PoolOps>, BindError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::split::common::{CountConfig, Counter};
+
+    fn poisonable() -> Box<dyn PoolOps> {
+        let cfg = CountConfig {
+            panic_at: 1,
+            length: 9,
+            ..CountConfig::default()
+        };
+        let options = PoolOptions::new(NonZeroU32::new(8).unwrap(), Seed::new(1));
+        let pool = EnvPool::<Counter, NoMasks>::new(cfg.clone(), options).unwrap();
+        let args = PoolArgs {
+            num_envs: 8,
+            seed: 1,
+            max_episode_steps: None,
+            auto_reset: "next_step".to_owned(),
+            chunk_size: None,
+            workers: 0,
+            pipelined: false,
+            asynced: None,
+        };
+        finish(&cfg, pool, &args, 8, false).unwrap()
+    }
+
+    /// Owned copies from before the panic stay valid, a new read is refused,
+    /// the captured storage stays usable for teardown, and old views go stale.
+    #[test]
+    fn test_outputs_refused_while_poisoned_and_recovered_by_reset() {
+        let mut ops = poisonable();
+        ops.reset(None, &ResetSeed::Keep).unwrap();
+        let copy = ops.outputs().unwrap();
+        let storage = ops.storage();
+        let before = storage.generation();
+        let actions = vec![0; copy.rewards.len() / 4];
+        assert!(ops.step(&actions).is_err());
+        assert!(ops.is_poisoned());
+        assert!(matches!(
+            ops.outputs(),
+            Err(BindError::Engine(EngineError::Poisoned))
+        ));
+        assert_ne!(storage.generation(), before, "an old view is stale");
+        assert_eq!(ops.storage().bytes(), storage.bytes());
+        assert!(!copy.rewards.is_empty(), "the owned copy is unchanged");
+        ops.reset(None, &ResetSeed::Keep).unwrap();
+        assert!(ops.outputs().is_ok());
+    }
 
     #[test]
     fn test_pick_wait_refuses_a_forked_macos_child_without_native_wait() {

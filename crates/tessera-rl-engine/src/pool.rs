@@ -465,9 +465,17 @@ where
     }
 
     /// The outputs of the last call.
-    #[must_use]
-    pub const fn outputs(&self) -> &Outputs {
-        &self.outputs
+    ///
+    /// # Errors
+    ///
+    /// [`EngineError::Poisoned`] on a poisoned pool (ADR-0028), whose rows may
+    /// be partly written, until [`Self::reset_all`] or a full restore recovers
+    /// it. Runs no environment code.
+    pub const fn outputs(&self) -> Result<&Outputs, EngineError> {
+        if self.poisoned {
+            return Err(EngineError::Poisoned);
+        }
+        Ok(&self.outputs)
     }
 
     /// Number of discrete and continuous action heads per agent.

@@ -413,7 +413,7 @@ where
         self.pool.load_records.fill(record);
         self.pool.scratch.restore_all(&self.pool.load_records)?;
         let width = idx(self.pool.actions);
-        let masks = self.pool.scratch.outputs().masks();
+        let masks = self.pool.scratch.outputs()?.masks();
         for (a, l) in self.legal.iter_mut().enumerate() {
             *l = masks.is_empty() || masks.get(agent * width + a).is_some_and(|m| m.get());
         }
@@ -448,7 +448,7 @@ where
         let ob = self.obs_bytes;
         let mut batch = LeafBatch::new(
             &self.eval_records,
-            self.pool.obs_source(),
+            self.pool.obs_source()?,
             &self.eval_picks,
             self.obs_buf.get_mut(..ob).unwrap_or(&mut []),
             ob,
@@ -702,7 +702,7 @@ where
         let ob = self.obs_bytes;
         let mut batch = LeafBatch::new(
             &self.eval_records,
-            self.pool.obs_source(),
+            self.pool.obs_source()?,
             &self.eval_picks,
             self.obs_buf.get_mut(..k * ob).unwrap_or(&mut []),
             ob,
@@ -784,7 +784,7 @@ where
     /// The gathered leaves for a group batch: their records, their scratch
     /// rows and movers, their legal actions (`eval_len() * actions`), and
     /// the scratch pool's observation source.
-    pub(crate) fn gathered(&self) -> Gathered<'_, E> {
+    pub(crate) fn gathered(&self) -> Result<Gathered<'_, E>, SearchError> {
         let k = self.eval_records.len();
         let width = idx(self.pool.actions);
         let legal: &[bool] = if self.root_batch {
@@ -793,12 +793,12 @@ where
         } else {
             self.leaf_legal.get(..k * width).unwrap_or(&[])
         };
-        Gathered {
+        Ok(Gathered {
             records: &self.eval_records,
             picks: &self.eval_picks,
             legal,
-            source: self.pool.obs_source(),
-        }
+            source: self.pool.obs_source()?,
+        })
     }
 
     /// Writes a group response for the gathered leaves into this tree's

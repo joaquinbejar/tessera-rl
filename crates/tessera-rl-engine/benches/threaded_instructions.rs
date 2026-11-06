@@ -61,7 +61,7 @@ fn pool(wait: WaitBackend) -> (EnvPool<Counter>, Vec<i32>) {
         .with_workers(sync)
         .unwrap();
     p.reset_all(Reseed::Keep).unwrap();
-    let actions = vec![1; p.outputs().rewards().len()];
+    let actions = vec![1; p.outputs().unwrap().rewards().len()];
     (p, actions)
 }
 
@@ -80,7 +80,7 @@ fn steps((mut p, actions): (EnvPool<Counter>, Vec<i32>)) -> (EnvPool<Counter>, V
             continuous: &[],
         })
         .unwrap();
-        black_box(p.outputs().rewards());
+        black_box(p.outputs().unwrap().rewards());
     }
     (p, actions)
 }

@@ -66,10 +66,12 @@ pub fn run(data: &[u8]) -> Outcome {
     {
         let ended = p
             .outputs()
+            .unwrap()
             .episode_terminated()
             .get(1)
             .is_some_and(|f| f.get())
             || p.outputs()
+                .unwrap()
                 .episode_truncated()
                 .get(1)
                 .is_some_and(|f| f.get());

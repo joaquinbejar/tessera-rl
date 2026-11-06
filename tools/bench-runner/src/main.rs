@@ -177,7 +177,7 @@ where
         else {
             return Err(usage("the runner drives a Discrete action space"));
         };
-        let rows = pool.outputs().rewards().len();
+        let rows = pool.outputs().map_err(Error::from)?.rewards().len();
         let batches = (0..ACTION_BATCHES)
             .map(|b| actions(rows, choices, u64::try_from(b).map_err(|_| usage("batch"))?))
             .collect::<Result<_, _>>()?;
@@ -320,8 +320,8 @@ where
     fn memory(&self) -> (usize, usize, usize) {
         (
             Record::<E>::record_size(),
-            self.pool.outputs().masks().len(),
-            self.pool.outputs().storage().bytes(),
+            self.pool.outputs().map_or(0, |o| o.masks().len()),
+            self.pool.outputs().map_or(0, |o| o.storage().bytes()),
         )
     }
 }
