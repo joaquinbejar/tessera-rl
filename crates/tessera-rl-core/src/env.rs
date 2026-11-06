@@ -182,6 +182,18 @@ pub trait Heuristic: Environment {
     );
 }
 
+/// Identity for persisted snapshots (ADR-0011).
+///
+/// Format 1 covers only environments with no external immutable assets:
+/// implementing this for one that has them is a contract violation, as
+/// the file could not identify its assets.
+pub trait Persist: Validate {
+    /// The versioned environment id, `tessera/<Name>-v<N>`.
+    const ENV_ID: &'static str;
+    /// The environment version.
+    const ENV_VERSION: u32;
+}
+
 /// Immutable shared data, content-addressed (SPEC 17).
 pub trait EnvAssets: Environment {
     /// The asset bundle, shared read-only by every instance.

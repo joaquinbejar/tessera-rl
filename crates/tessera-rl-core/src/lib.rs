@@ -31,7 +31,7 @@ pub use bool8::Bool8;
 pub use encoding::{Canonical, StateHash};
 pub use env::{
     ActionMask, Determinize, EnvAssets, EnvConfig, EnvState, Environment, Heuristic,
-    ImperfectInformation, Render, Validate,
+    ImperfectInformation, Persist, Render, Validate,
 };
 pub use error::{ConfigError, CoreError, DecodeError, EncodeError, InvariantViolation, SpaceError};
 pub use header::{AdaptiveValues, AgentRow, EngineHeader, NoAdaptive, RecordHeader, RecordLayout};

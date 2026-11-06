@@ -439,3 +439,8 @@ impl ImperfectInformation for Tag {
         }
     }
 }
+
+impl tessera_rl_core::Persist for Tag {
+    const ENV_ID: &'static str = ENV_ID;
+    const ENV_VERSION: u32 = ENV_VERSION;
+}

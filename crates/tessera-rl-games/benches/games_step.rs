@@ -9,7 +9,7 @@ use core::num::NonZeroU32;
 use std::hint::black_box;
 
 use criterion::{Criterion, criterion_group, criterion_main};
-use tessera_rl_engine::{ActionInput, EnvPool, Masked, PoolOptions, Reseed};
+use tessera_rl_engine::{ActionInput, DecodeLimits, EnvPool, Masked, PoolOptions, Reseed};
 use tessera_rl_games::{
     Connect4, Connect4Config, Go9, Go9Config, Leduc, LeducConfig, Othello, OthelloConfig,
 };
@@ -94,5 +94,21 @@ fn bench(c: &mut Criterion) {
     forks.finish();
 }
 
-criterion_group!(benches, bench);
+fn persist(c: &mut Criterion) {
+    let options = PoolOptions::new(NonZeroU32::new(N).unwrap(), Seed::new(1));
+    let mut pool = EnvPool::<Go9, Masked>::with_masks(Go9Config::default(), options).unwrap();
+    pool.reset_all(Reseed::Keep).unwrap();
+    let ids: Vec<u32> = (0..N).collect();
+    let file = pool.encode(&ids).unwrap();
+    let mut group = c.benchmark_group("persist_go9_1024");
+    group.bench_function("encode", |b| {
+        b.iter(|| black_box(pool.encode(&ids).unwrap()));
+    });
+    group.bench_function("decode", |b| {
+        b.iter(|| black_box(pool.decode(&file, DecodeLimits::default()).unwrap()));
+    });
+    group.finish();
+}
+
+criterion_group!(benches, bench, persist);
 criterion_main!(benches);

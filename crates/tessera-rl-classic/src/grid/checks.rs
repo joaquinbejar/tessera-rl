@@ -14,6 +14,11 @@ use super::{Grid, GridConfig, GridState};
 /// position on the grid or one cell off it, flags that say where the agent
 /// stands, and a step count the walk from the start allows (at least the
 /// distance, same parity, at most `max_steps`).
+impl tessera_rl_core::Persist for Grid {
+    const ENV_ID: &'static str = super::ENV_ID;
+    const ENV_VERSION: u32 = super::ENV_VERSION;
+}
+
 impl Validate for Grid {
     fn validate(cfg: &GridConfig, s: &GridState) -> Result<(), InvariantViolation> {
         let invalid = |code| Err(InvariantViolation { code });

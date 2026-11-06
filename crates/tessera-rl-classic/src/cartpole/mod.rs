@@ -200,3 +200,8 @@ impl Heuristic for CartPole {
         out.set_discrete(0, i32::from(theta + 0.5 * theta_dot > 0.0));
     }
 }
+
+impl tessera_rl_core::Persist for CartPole {
+    const ENV_ID: &'static str = ENV_ID;
+    const ENV_VERSION: u32 = ENV_VERSION;
+}

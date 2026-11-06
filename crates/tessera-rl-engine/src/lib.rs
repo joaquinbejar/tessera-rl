@@ -21,6 +21,7 @@ mod masks;
 mod modes;
 mod options;
 mod outputs;
+mod persist;
 mod pool;
 mod record;
 mod registry;
@@ -43,7 +44,7 @@ pub use buffer::pipeline::{HalfToken, Waiter};
 pub use buffer::{OutputDtype, OutputField, OutputRegion, OutputStorage};
 pub use error::EngineError;
 pub use layout::MAX_LEAVES;
-pub use masks::{IllegalActionPolicy, MaskProvider, Masked, NoMasks};
+pub use masks::{IllegalActionPolicy, MaskProvider, Masked, NoMasks, PersistMask};
 #[cfg(not(loom))]
 pub use modes::async_mode::{
     AsyncBuildError, AsyncIntoPoolError, AsyncOptions, AsyncPool, IdGenerations, SendBatchError,
@@ -55,6 +56,7 @@ pub use modes::pipelined::{
 };
 pub use options::{AutoReset, CHUNK_RANGE, PoolOptions, SyncOptions, WaitBackend};
 pub use outputs::Outputs;
+pub use persist::{DecodeLimits, FORMAT_VERSION, MAGIC, PersistError};
 pub use pool::{EnvPool, Reseed};
 pub use record::{DecodedRecord, PoolContext, Record};
 #[cfg(not(loom))]

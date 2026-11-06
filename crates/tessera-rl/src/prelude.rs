@@ -12,12 +12,12 @@ pub use crate::core::space::{BoxBounds, DType, Space};
 pub use crate::core::{
     ActionMask, AgentSlot, Bool8, Determinize, EnvAssets, EnvConfig, EnvState, Environment,
     EpisodeEnd, Heuristic, ImperfectInformation, InvariantViolation, LeafId, NoAdaptive, ObsLeaf,
-    Observation, Pool, RecordHeader, Render, Reserved, SpaceError, StateEnum, StateHash, StepOut,
-    Tier, TurnStructure, Validate,
+    Observation, Persist, Pool, RecordHeader, Render, Reserved, SpaceError, StateEnum, StateHash,
+    StepOut, Tier, TurnStructure, Validate,
 };
 pub use crate::engine::{
-    ActionInput, AutoReset, DecodedRecord, EngineError, EnvPool, Masked, NoMasks, PoolContext,
-    PoolOptions, Record, Reseed, SyncOptions,
+    ActionInput, AutoReset, DecodeLimits, DecodedRecord, EngineError, EnvPool, Masked, NoMasks,
+    PersistError, PoolContext, PoolOptions, Record, Reseed, SyncOptions,
 };
 pub use crate::macros::{EnvConfig, EnvState, Observation, StateEnum};
 pub use crate::num::identity::Seed;

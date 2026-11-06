@@ -54,6 +54,37 @@ impl<E: ActionMask> MaskProvider<E> for Masked {
     }
 }
 
+mod sealed {
+    pub trait Sealed {}
+    impl Sealed for super::NoMasks {}
+    impl Sealed for super::Masked {}
+}
+
+/// The mask providers a persisted file can name (ADR-0011): the built-in
+/// two, sealed. An enabled flag alone would conflate providers with
+/// different masks or no-ops, so a custom provider cannot persist in format 1.
+/// [`MaskProvider`] itself stays open.
+///
+/// ```compile_fail
+/// use tessera_rl_engine::{EnvPool, MaskProvider, PersistMask};
+/// struct Mine;
+/// impl tessera_rl_engine::PersistMask<()> for Mine {
+///     const PROVIDER_ID: u8 = 2;
+/// }
+/// ```
+pub trait PersistMask<E: Environment>: MaskProvider<E> + sealed::Sealed {
+    /// The provider's byte in the file.
+    const PROVIDER_ID: u8;
+}
+
+impl<E: Environment> PersistMask<E> for NoMasks {
+    const PROVIDER_ID: u8 = 0;
+}
+
+impl<E: ActionMask> PersistMask<E> for Masked {
+    const PROVIDER_ID: u8 = 1;
+}
+
 /// What happens to an action that is valid but illegal under the mask.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub enum IllegalActionPolicy {
