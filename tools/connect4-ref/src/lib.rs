@@ -10,6 +10,7 @@
     reason = "board quantities (plies, cells, scores) are at most 42 and fit in i32"
 )]
 
+pub mod best_response;
 pub mod board;
 pub mod bot;
 pub mod calibrate;
