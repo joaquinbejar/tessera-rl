@@ -9,8 +9,8 @@
 //! the pool's branch counter is not in it.
 //!
 //! `decode` returns untrusted records, which enter a pool only through
-//! `import` or `import_all`. Nothing here casts bytes, and nothing is
-//! allocated before the bounds are checked. The checksum detects accidents; it
+//! `import` or `import_all`. Nothing here casts bytes, and `decode` allocates
+//! nothing before the bounds are checked. The checksum detects accidents; it
 //! is not authentication, and a match skips no check.
 //!
 //! A `same-platform` file requires an explicit `TESSERA_BUILD_ID`, whose
@@ -155,28 +155,29 @@ struct Identity {
     config_hash: u64,
     record_len: u32,
     env_id: &'static str,
-    descriptor: Vec<u8>,
 }
 
-/// Compile-time target features this identity distinguishes, sorted.
-fn features() -> String {
-    let all = [
-        ("aes", cfg!(target_feature = "aes")),
-        ("avx", cfg!(target_feature = "avx")),
-        ("avx2", cfg!(target_feature = "avx2")),
-        ("avx512f", cfg!(target_feature = "avx512f")),
-        ("bmi1", cfg!(target_feature = "bmi1")),
-        ("bmi2", cfg!(target_feature = "bmi2")),
-        ("fma", cfg!(target_feature = "fma")),
-        ("lzcnt", cfg!(target_feature = "lzcnt")),
-        ("neon", cfg!(target_feature = "neon")),
-        ("popcnt", cfg!(target_feature = "popcnt")),
-        ("sse2", cfg!(target_feature = "sse2")),
-        ("sse4.1", cfg!(target_feature = "sse4.1")),
-        ("sse4.2", cfg!(target_feature = "sse4.2")),
-    ];
-    let on: Vec<&str> = all.iter().filter(|f| f.1).map(|f| f.0).collect();
-    on.join(",")
+/// Compile-time target features this descriptor names, sorted. A partial list,
+/// and `target_env` (gnu, musl) is not in the descriptor either: the build id's
+/// producer carries the guarantee for all flags and settings.
+const FEATURES: [(&str, bool); 13] = [
+    ("aes", cfg!(target_feature = "aes")),
+    ("avx", cfg!(target_feature = "avx")),
+    ("avx2", cfg!(target_feature = "avx2")),
+    ("avx512f", cfg!(target_feature = "avx512f")),
+    ("bmi1", cfg!(target_feature = "bmi1")),
+    ("bmi2", cfg!(target_feature = "bmi2")),
+    ("fma", cfg!(target_feature = "fma")),
+    ("lzcnt", cfg!(target_feature = "lzcnt")),
+    ("neon", cfg!(target_feature = "neon")),
+    ("popcnt", cfg!(target_feature = "popcnt")),
+    ("sse2", cfg!(target_feature = "sse2")),
+    ("sse4.1", cfg!(target_feature = "sse4.1")),
+    ("sse4.2", cfg!(target_feature = "sse4.2")),
+];
+
+fn features() -> impl Iterator<Item = &'static str> {
+    FEATURES.iter().filter(|f| f.1).map(|f| f.0)
 }
 
 fn push_part(out: &mut Vec<u8>, part: &[u8]) {
@@ -185,33 +186,81 @@ fn push_part(out: &mut Vec<u8>, part: &[u8]) {
     out.extend_from_slice(part);
 }
 
-/// The descriptor of a tier; a `same-platform` one needs the build id, with
-/// no fallback.
+/// The build id a `same-platform` file needs, with no fallback.
+fn required_id(build_id: Option<&str>) -> Result<&str, PersistError> {
+    let id = build_id
+        .filter(|id| !id.is_empty())
+        .ok_or(PersistError::BuildIdRequired)?;
+    if id.len() > MAX_BUILD_ID {
+        return Err(PersistError::FieldTooLong {
+            field: "build id",
+            len: id.len(),
+            cap: MAX_BUILD_ID,
+        });
+    }
+    Ok(id)
+}
+
+/// The descriptor of a tier, for writing.
 fn descriptor(tier: Tier, build_id: Option<&str>) -> Result<Vec<u8>, PersistError> {
     match tier {
         Tier::CrossPlatform => Ok(Vec::new()),
         Tier::SamePlatform => {
-            let id = build_id
-                .filter(|id| !id.is_empty())
-                .ok_or(PersistError::BuildIdRequired)?;
-            if id.len() > MAX_BUILD_ID {
-                return Err(PersistError::FieldTooLong {
-                    field: "build id",
-                    len: id.len(),
-                    cap: MAX_BUILD_ID,
-                });
-            }
+            let id = required_id(build_id)?;
             let mut out = vec![DESCRIPTOR_VERSION];
             push_part(&mut out, std::env::consts::OS.as_bytes());
             push_part(&mut out, std::env::consts::ARCH.as_bytes());
-            push_part(&mut out, features().as_bytes());
+            let joined = features().collect::<Vec<_>>().join(",");
+            push_part(&mut out, joined.as_bytes());
             push_part(&mut out, id.as_bytes());
             Ok(out)
         }
     }
 }
 
-fn identity<E, M>(pool: &EnvPool<E, M>, build_id: Option<&str>) -> Result<Identity, PersistError>
+/// Whether a file's descriptor is this build's. Allocates nothing: it runs
+/// before the bounds are checked.
+fn descriptor_matches(
+    file: &[u8],
+    tier: Tier,
+    build_id: Option<&str>,
+) -> Result<bool, PersistError> {
+    match tier {
+        Tier::CrossPlatform => Ok(file.is_empty()),
+        Tier::SamePlatform => {
+            let id = required_id(build_id)?;
+            let mut r = Reader(file);
+            let part = |r: &mut Reader<'_>, want: &[u8]| -> bool {
+                r.capped("descriptor", MAX_DESCRIPTOR)
+                    .is_ok_and(|got| got == want)
+            };
+            if r.u8().ok() != Some(DESCRIPTOR_VERSION)
+                || !part(&mut r, std::env::consts::OS.as_bytes())
+                || !part(&mut r, std::env::consts::ARCH.as_bytes())
+            {
+                return Ok(false);
+            }
+            let Ok(mut rest) = r.capped("descriptor", MAX_DESCRIPTOR) else {
+                return Ok(false);
+            };
+            for (i, feature) in features().enumerate() {
+                if i > 0 {
+                    let Some(tail) = rest.strip_prefix(b",") else {
+                        return Ok(false);
+                    };
+                    rest = tail;
+                }
+                let Some(tail) = rest.strip_prefix(feature.as_bytes()) else {
+                    return Ok(false);
+                };
+                rest = tail;
+            }
+            Ok(rest.is_empty() && part(&mut r, id.as_bytes()) && r.0.is_empty())
+        }
+    }
+}
+
+fn identity<E, M>(pool: &EnvPool<E, M>) -> Result<Identity, PersistError>
 where
     E: Persist,
     E::Config: CanonicalConfig,
@@ -248,7 +297,6 @@ where
             .map_err(|e| PersistError::Engine(e.into()))?,
         record_len,
         env_id: E::ENV_ID,
-        descriptor: descriptor(E::TIER, build_id)?,
     })
 }
 
@@ -405,7 +453,12 @@ impl<'a> FileHeader<'a> {
         Ok(())
     }
 
-    fn check_against(&self, id: &Identity) -> Result<(), PersistError> {
+    fn check_against(
+        &self,
+        id: &Identity,
+        tier: Tier,
+        build_id: Option<&str>,
+    ) -> Result<(), PersistError> {
         same("env_id", &self.env_id, &id.env_id.as_bytes())?;
         same("env_version", &self.env_version, &id.env_version)?;
         same("tier", &self.tier, &id.tier)?;
@@ -420,7 +473,13 @@ impl<'a> FileHeader<'a> {
             &id.max_episode_steps,
         )?;
         same("record_len", &self.record_len, &id.record_len)?;
-        same("descriptor", &self.descriptor, &id.descriptor.as_slice())
+        if descriptor_matches(self.descriptor, tier, build_id)? {
+            Ok(())
+        } else {
+            Err(PersistError::Incompatible {
+                field: "descriptor",
+            })
+        }
     }
 }
 
@@ -445,7 +504,7 @@ where
     /// [`PersistError::BuildIdRequired`] for a `same-platform` environment
     /// built without `TESSERA_BUILD_ID`.
     pub fn encode(&self, ids: &[u32]) -> Result<Vec<u8>, PersistError> {
-        self.encode_with(ids, env!("CARGO_PKG_VERSION"), BUILD_ID)
+        self.encode_inner(ids, env!("CARGO_PKG_VERSION"), BUILD_ID)
     }
 
     /// Checks a file against this pool and returns its records, still
@@ -461,23 +520,53 @@ where
         bytes: &[u8],
         limits: DecodeLimits,
     ) -> Result<Vec<DecodedRecord<E>>, PersistError> {
-        self.decode_with(bytes, limits, BUILD_ID)
+        self.decode_inner(bytes, limits, BUILD_ID)
     }
 
-    /// [`EnvPool::encode`] with its build inputs as parameters. For fixtures
-    /// and tests, whose bytes must not change with each release.
+    /// [`EnvPool::encode`] with its build inputs as parameters. It substitutes the
+    /// build identity, so it exists only for fixtures, tests and fuzzing, behind the
+    /// `test-hooks` feature, and must never be exposed to Python.
     ///
     /// # Errors
     ///
     /// As [`EnvPool::encode`].
-    #[doc(hidden)]
+    #[cfg(feature = "test-hooks")]
     pub fn encode_with(
         &self,
         ids: &[u32],
         library_version: &str,
         build_id: Option<&str>,
     ) -> Result<Vec<u8>, PersistError> {
-        let id = identity(self, build_id)?;
+        self.encode_inner(ids, library_version, build_id)
+    }
+
+    /// [`EnvPool::decode`] with the build id as a parameter; see
+    /// [`EnvPool::encode_with`].
+    ///
+    /// # Errors
+    ///
+    /// As [`EnvPool::decode`].
+    #[cfg(feature = "test-hooks")]
+    pub fn decode_with(
+        &self,
+        bytes: &[u8],
+        limits: DecodeLimits,
+        build_id: Option<&str>,
+    ) -> Result<Vec<DecodedRecord<E>>, PersistError> {
+        self.decode_inner(bytes, limits, build_id)
+    }
+
+    fn encode_inner(
+        &self,
+        ids: &[u32],
+        library_version: &str,
+        build_id: Option<&str>,
+    ) -> Result<Vec<u8>, PersistError> {
+        if self.poisoned {
+            return Err(EngineError::Poisoned.into());
+        }
+        let id = identity(self)?;
+        let file_descriptor = descriptor(E::TIER, build_id)?;
         let count = u32::try_from(ids.len()).map_err(|_| PersistError::InvalidField {
             field: "instance_count",
         })?;
@@ -508,7 +597,7 @@ where
             MAX_LIBRARY_VERSION,
         )?;
         out.extend_from_slice(&0u16.to_le_bytes()); // asset_count
-        push_capped(&mut out, "descriptor", &id.descriptor, MAX_DESCRIPTOR)?;
+        push_capped(&mut out, "descriptor", &file_descriptor, MAX_DESCRIPTOR)?;
         for &i in ids {
             let record = DecodedRecord::<E>::from(self.snapshot(i)?);
             out.extend_from_slice(&encode_to_vec(&record));
@@ -518,13 +607,7 @@ where
         Ok(out)
     }
 
-    /// [`EnvPool::decode`] with the build id as a parameter, for tests.
-    ///
-    /// # Errors
-    ///
-    /// As [`EnvPool::decode`].
-    #[doc(hidden)]
-    pub fn decode_with(
+    fn decode_inner(
         &self,
         bytes: &[u8],
         limits: DecodeLimits,
@@ -559,7 +642,7 @@ where
         let mut r = Reader(body);
         let file = FileHeader::read(&mut r)?;
         file.check_fields()?;
-        file.check_against(&identity(self, build_id)?)?;
+        file.check_against(&identity(self)?, E::TIER, build_id)?;
         let (count, record_len) = (file.count, file.record_len);
         let limit = limits.max_instances.min(self.options.num_envs.get());
         if count > limit {

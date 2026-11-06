@@ -84,13 +84,6 @@ jobs:
   # on stable (the targets themselves run nightly in fuzz.yml). It is not
   # under cargo deny: libfuzzer-sys compiles LLVM's C++ libFuzzer and is
   # outside the production dependency graph.
-  build-id:
-    runs-on: [self-hosted, xaskar]
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      # A changed TESSERA_BUILD_ID rebuilds the engine and reaches it (ADR-0011).
-      - run: scripts/check_build_id.sh
-
   fuzz-check:
     runs-on: [self-hosted, xaskar]
     # Skipped for an unmodified fork pull request (see the header).
@@ -155,6 +148,15 @@ jobs:
           # Self-hosted runners: the post step would delete rustup from ~/.cargo/bin.
           cache-bin: "false"
       - run: cargo run -p tessera-rl-math-oracle --release --locked -- diff ${{ github.run_id }} 1000000
+
+  build-id:
+    runs-on: [self-hosted, xaskar]
+    # Skipped for an unmodified fork pull request (see the header).
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # A changed TESSERA_BUILD_ID rebuilds the engine and reaches it (ADR-0011).
+      - run: scripts/check_build_id.sh
 
   loom:
     runs-on: [self-hosted, xaskar]

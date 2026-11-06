@@ -20,11 +20,13 @@ check() {
 a="check-a-$$"
 b="check-b-$$"
 build "$a" >/dev/null
-if ! build "$b" | grep -q 'Compiling tessera-rl-engine'; then
+first=$(build "$b")
+if ! grep -q 'Compiling tessera-rl-engine' <<<"$first"; then
     echo "a changed id did not rebuild the engine"
     exit 1
 fi
-if build "$b" | grep -q 'Compiling tessera-rl-engine'; then
+second=$(build "$b")
+if grep -q 'Compiling tessera-rl-engine' <<<"$second"; then
     echo "a repeated id rebuilt the engine"
     exit 1
 fi

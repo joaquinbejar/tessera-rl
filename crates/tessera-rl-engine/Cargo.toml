@@ -18,6 +18,8 @@ categories.workspace = true
 # Strict checks (SPEC 5.5): illegal actions reject the call atomically
 # instead of being replaced. Off by default.
 debug-checks = []
+# Substitutes the build identity of persisted files: fixtures, tests and fuzz only.
+test-hooks = []
 
 [dependencies]
 tessera-rl-core.workspace = true
@@ -38,6 +40,7 @@ windows-sys.workspace = true
 loom.workspace = true
 
 [dev-dependencies]
+tessera-rl-engine = { path = ".", features = ["test-hooks"] }
 proptest.workspace = true
 criterion.workspace = true
 gungraun.workspace = true

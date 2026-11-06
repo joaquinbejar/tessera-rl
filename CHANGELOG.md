@@ -10,8 +10,8 @@ the API is not stable, and any 0.x release may break it.
 ## [Unreleased]
 
 ### Added
-- Persisted snapshots (ADR-0011): `EnvPool::encode` and `decode` for the custom flat format, on Sync pools, with the `Persist` and `PersistMask` traits. Decoded records stay untrusted until `import`. Same-platform files need an explicit `TESSERA_BUILD_ID`. Files hold full state and are privileged.
 
+- Persisted snapshots (ADR-0011): `EnvPool::encode` and `decode` for the custom flat format, on Sync pools, with the `Persist` and `PersistMask` traits. Decoded records stay untrusted until `import`. Same-platform files need an explicit `TESSERA_BUILD_ID`. Files hold full state and are privileged.
 - **Pipelined in the PufferLib adapter** (`make_puffer(..., mode="pipelined")`): native backend only, equal halves. No speed gain has been measured.
 - **Connect Four best-response measurement** (`tools/connect4-ref`): an open-loop search per held-out slot against
   the pinned bot and an independent replay of its lines. A reference tool, not part of any gate.

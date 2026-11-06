@@ -473,6 +473,10 @@ fn test_persist_poison_refuses_encode_and_decode_recovers() {
         p.encode_with(&[0], LIB, None),
         Err(PersistError::Engine(EngineError::Poisoned))
     ));
+    assert!(matches!(
+        p.encode(&[]),
+        Err(PersistError::Engine(EngineError::Poisoned))
+    ));
     let records = p.decode(&f, LIMITS).unwrap();
     p.import_all(&records).unwrap();
     assert!(p.encode_with(&[0], LIB, None).is_ok());

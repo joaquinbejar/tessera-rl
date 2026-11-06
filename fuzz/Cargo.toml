@@ -18,7 +18,7 @@ cargo-fuzz = true
 libfuzzer-sys = "0.4"
 tessera-rl-core = { path = "../crates/tessera-rl-core" }
 tessera-rl-num = { path = "../crates/tessera-rl-num" }
-tessera-rl-engine = { path = "../crates/tessera-rl-engine" }
+tessera-rl-engine = { path = "../crates/tessera-rl-engine", features = ["test-hooks"] }
 tessera-rl-classic = { path = "../crates/tessera-rl-classic" }
 tessera-rl-games = { path = "../crates/tessera-rl-games" }
 tessera-rl-macros = { path = "../crates/tessera-rl-macros" }

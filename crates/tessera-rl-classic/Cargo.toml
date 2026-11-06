@@ -23,7 +23,7 @@ tessera-rl-macros.workspace = true
 proptest.workspace = true
 criterion.workspace = true
 gungraun.workspace = true
-tessera-rl-engine.workspace = true
+tessera-rl-engine = { workspace = true, features = ["test-hooks"] }
 
 [lints]
 workspace = true
