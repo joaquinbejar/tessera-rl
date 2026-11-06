@@ -241,9 +241,10 @@ fn test_persist_pipelined_refuses_with_work_in_flight_and_decodes_regardless() {
         Err(PersistError::Engine(EngineError::NotQuiescent))
     ));
     let records = p.decode(&start, LIMITS).unwrap();
-    p.check_records(&records).unwrap();
+    assert_eq!(p.check_records(&records), Err(EngineError::NotQuiescent));
     assert_eq!(p.import_all(&records), Err(EngineError::NotQuiescent));
     drop(p.recv().unwrap());
+    p.check_records(&records).unwrap();
     assert!(p.encode(&[0]).is_ok());
 }
 
@@ -266,11 +267,12 @@ fn test_persist_async_refuses_unreceived_ids_and_decodes_regardless() {
         Err(PersistError::Engine(EngineError::NotQuiescent))
     ));
     let records = p.decode(&start, LIMITS).unwrap();
-    p.check_records(&records).unwrap();
+    assert_eq!(p.check_records(&records), Err(EngineError::NotQuiescent));
     let mut got = 0;
     while got < all.len() {
         got += p.recv().unwrap().ids().count();
     }
+    p.check_records(&records).unwrap();
     assert!(p.encode(&[0]).is_ok());
 }
 

@@ -1219,16 +1219,23 @@ where
     /// Checks records against this pool without writing anything, so a caller can
     /// refuse a bad file before giving up its tokens. It establishes no trust:
     /// `import_all` checks again. It reads the config and options by place, forming no
-    /// `&EnvPool` beside the workers, so it needs no quiescence and works on a poisoned
-    /// pool. A panic in `Validate` unwinds, as in `import`, with nothing written.
+    /// `&EnvPool` beside the workers, so it works on a poisoned pool, even with work still
+    /// running. On a healthy pool it refuses work in flight, as `import_all` would, so a
+    /// retryable refusal also comes before the caller gives up its tokens. A panic in
+    /// `Validate` unwinds, as in `import`, with nothing written.
     ///
     /// # Errors
     ///
-    /// [`EngineError::WorkerDied`] after a worker died, [`EngineError::RecordCount`],
+    /// [`EngineError::WorkerDied`] after a worker died, [`EngineError::NotQuiescent`],
+    /// [`EngineError::RecordCount`],
     /// [`EngineError::InvalidRecord`] or [`EngineError::Invariant`].
     pub fn check_records(&self, records: &[DecodedRecord<E>]) -> Result<(), EngineError> {
         if self.dead() {
             return Err(EngineError::WorkerDied);
+        }
+        // As `import_all`, whose recovery on a poisoned pool drains first.
+        if !self.is_poisoned() && self.outstanding != 0 {
+            return Err(EngineError::NotQuiescent);
         }
         let (cfg, options) = (&self.mode.pool.cfg, &self.mode.pool.options);
         let instances = options.num_envs.get();
@@ -1253,6 +1260,9 @@ where
     /// [`EngineError::NotQuiescent`] and [`EngineError::Poisoned`], in a
     /// [`PersistError`], or any error of [`EnvPool::encode`].
     pub fn encode(&self, ids: &[u32]) -> Result<Vec<u8>, PersistError> {
+        if self.dead() {
+            return Err(EngineError::WorkerDied.into());
+        }
         // Poison first: a poisoned pool never gets quiescent by waiting.
         if self.is_poisoned() {
             return Err(EngineError::Poisoned.into());

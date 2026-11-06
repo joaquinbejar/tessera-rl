@@ -351,7 +351,9 @@ class Env:
         return self._native.encode([_index(i, "ids") for i in ids])
 
     def load(self, data: bytes, ids=None, max_instances=None, max_decoded_bytes=None):
-        """Loads a file from ``encode``, atomically: a refused file changes nothing.
+        """Loads a file from ``encode``. A file refused for its bytes, its records or
+        work in flight changes nothing, and views stay readable. Past those checks only
+        a panic while writing can fail, which poisons as any writer does.
 
         ``data`` must be exactly ``bytes``; copy a ``bytearray`` or ``memoryview``
         first with ``bytes(x)``, as other threads could write it during decoding.

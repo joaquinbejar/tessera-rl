@@ -769,6 +769,62 @@ mod tests {
         split.close();
     }
 
+    /// `file` with a record that decodes and `Validate` refuses, resealed.
+    fn invariant_refused(file: &[u8]) -> Vec<u8> {
+        let mut bad = file.to_vec();
+        let state = bad.len() - 8 - size_of::<super::common::Counts>();
+        // `steps`, after the two `value` fields.
+        bad[state + 8..state + 12].copy_from_slice(&u32::MAX.to_le_bytes());
+        let n = bad.len() - 8;
+        let sum = tessera_rl_core::encoding::checksum(&bad[..n]);
+        bad[n..].copy_from_slice(&sum.to_le_bytes());
+        bad
+    }
+
+    #[test]
+    fn test_split_load_refuses_before_giving_up_the_tokens() {
+        let split = counter(&super::common::CountConfig {
+            length: 9,
+            ..super::common::CountConfig::default()
+        });
+        split.reset(&ResetSeed::Keep, true).unwrap();
+        let ids: Vec<u32> = (0..8).collect();
+        let file = split.encode(&ids).unwrap();
+        let limits = tessera_rl_engine::DecodeLimits::default();
+        let width = split.halves()[0].len() * 2;
+        // A record `Validate` refuses: both halves can still be sent.
+        let bad = invariant_refused(&file);
+        assert!(matches!(
+            split.load(&bad, limits, true),
+            Err(BindError::Engine(
+                tessera_rl_engine::EngineError::Invariant { .. }
+            ))
+        ));
+        split.send(0, &vec![0; width], 0).unwrap();
+        // A good file with work in flight: retryable, and the idle half's token stays.
+        assert!(matches!(
+            split.load(&file, limits, true),
+            Err(BindError::Engine(
+                tessera_rl_engine::EngineError::NotQuiescent
+            ))
+        ));
+        split.send(1, &vec![0; width], 0).unwrap();
+        let mut seq = 0;
+        for _ in 0..2 {
+            loop {
+                if let Polled::Half(out) = split.try_recv(true, seq).unwrap() {
+                    seq = out.seq;
+                    break;
+                }
+                std::thread::yield_now();
+            }
+        }
+        let _ = split.try_recv(true, seq);
+        split.load(&file, limits, true).unwrap();
+        assert_eq!(split.encode(&ids).unwrap(), file);
+        split.close();
+    }
+
     #[test]
     fn test_split_flag_is_set_inside_a_writer() {
         let split = counter(&super::common::CountConfig {

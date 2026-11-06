@@ -1,7 +1,9 @@
 # SPDX-License-Identifier: MIT OR Apache-2.0
 """Persisted files through ``Env.encode`` and ``Env.load`` (ADR-0011), in every mode."""
 
+import sys
 import threading
+import time
 
 import numpy as np
 import pytest
@@ -40,10 +42,11 @@ def test_persist_round_trip_in_sync_gives_the_same_file(env_id):
     env.close()
 
 
+@pytest.mark.parametrize("env_id", ["tessera/Tag-v1", "tessera/Connect4-v1"])
 @pytest.mark.parametrize("mode", ["pipelined", "async"])
-def test_persist_a_sync_file_loads_in_split_modes_and_back(mode):
-    data = sync_file()
-    env = make(mode)
+def test_persist_a_sync_file_loads_in_split_modes_and_back(mode, env_id):
+    data = sync_file(env_id)
+    env = make(mode, env=env_id)
     env.reset()
     out = env.load(data)
     if mode == "pipelined":
@@ -131,20 +134,36 @@ def test_persist_another_config_is_refused():
 
 
 def test_persist_load_releases_the_interpreter():
+    # With a long switch interval, the other thread gets the interpreter back from a
+    # short run of these calls only if the native call lets go of it.
     data = sync_file()
     env = make()
     env.reset()
-    done = threading.Event()
+    ticks = [0]
+    stop = threading.Event()
+    started = threading.Event()
 
     def other():
-        done.set()
+        started.set()
+        while not stop.is_set():
+            ticks[0] += 1
+            time.sleep(0.0001)
 
+    previous = sys.getswitchinterval()
     thread = threading.Thread(target=other)
     thread.start()
-    for _ in range(200):
-        env.load(data)
-    thread.join()
-    assert done.is_set()
+    started.wait()
+    sys.setswitchinterval(5)
+    try:
+        before = ticks[0]
+        for _ in range(200):
+            env.load(data)
+        moved = ticks[0] - before
+    finally:
+        sys.setswitchinterval(previous)
+        stop.set()
+        thread.join()
+    assert moved > 0
     env.close()
 
 
