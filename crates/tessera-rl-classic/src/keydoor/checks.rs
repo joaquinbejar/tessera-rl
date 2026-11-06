@@ -97,10 +97,21 @@ impl Validate for KeyDoor {
             return Ok(());
         }
         Self::validate(cfg, s)?;
-        if !(0..cfg.agents as usize).all(|k| header.agent(k).is_some_and(|v| v.alive)) {
-            return Err(InvariantViolation {
-                code: "an agent that is not alive",
-            });
+        for slot in 0..header.agents() {
+            let Some(view) = header.agent(slot) else {
+                continue;
+            };
+            if slot < cfg.agents as usize {
+                if !view.alive {
+                    return Err(InvariantViolation {
+                        code: "an agent that is not alive",
+                    });
+                }
+            } else if view.alive || view.acting {
+                return Err(InvariantViolation {
+                    code: "an unused slot that is alive or acting",
+                });
+            }
         }
         if phase == Phase::Active && s.all_finished(cfg) {
             return Err(InvariantViolation {

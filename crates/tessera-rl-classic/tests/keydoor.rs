@@ -758,6 +758,22 @@ fn test_keydoor_import_rejects_everyone_finished_as_running_and_a_dead_agent() {
 }
 
 #[test]
+fn test_keydoor_import_rejects_an_unused_slot_alive_or_acting() {
+    let c = config(8, 1);
+    let mut p = pool(&c, 1);
+    let good = DecodedRecord::from(p.snapshot(0).unwrap());
+    let before = p.state_hash(0).unwrap();
+    for (alive, acting) in [(true, true), (true, false), (false, true)] {
+        let mut header = *good.header();
+        header.agents[1].alive = Bool8::new(alive);
+        header.agents[1].acting = Bool8::new(acting);
+        let bad = DecodedRecord::from_parts(header, *good.state()).unwrap();
+        assert!(invalid(&p.import(&[0], &[bad])), "{alive} {acting}");
+        assert_eq!(p.state_hash(0).unwrap(), before);
+    }
+}
+
+#[test]
 fn test_keydoor_never_reset_record_round_trips_and_refuses_anything_else() {
     let c = config(8, 2);
     let options = PoolOptions::new(NonZeroU32::MIN, Seed::new(1));
