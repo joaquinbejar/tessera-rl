@@ -35,6 +35,7 @@ pub(crate) use panics::catch;
 
 /// Whether [`crate::WaitBackend::Native`] has a real address wait here; without
 /// one it falls back to park.
+#[cfg(not(loom))]
 #[must_use]
 pub fn native_wait_available() -> bool {
     native::Native::detect().is_some()
