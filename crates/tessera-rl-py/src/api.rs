@@ -238,6 +238,22 @@ pub(crate) fn make_keydoor(g: Gil, kwargs: Option<Ref<'_>>) -> CResult<Inner> {
     Ok(Inner::new(ops, borrowed))
 }
 
+/// `make_brickwall(**kwargs)`: the pool of a brick wall environment object;
+/// `obs` is `"pixels"` (the default) or `"state"`; `max_episode_steps`
+/// defaults to 4000 decisions.
+pub(crate) fn make_brickwall(g: Gil, kwargs: Option<Ref<'_>>) -> CResult<Inner> {
+    let kw = Kwargs::parse(g, kwargs)?;
+    kw.check(g, &[&POOL_KEYS, &["outputs", "frameskip", "lives", "obs"]])?;
+    let borrowed = borrowed(g, &kw)?;
+    let args = pool_args(g, &kw, 4000)?;
+    let (frameskip, lives) = (kw.u32(g, "frameskip")?, kw.u32(g, "lives")?);
+    let obs = kw.string(g, "obs")?;
+    let ops = g
+        .detach(|| crate::env::brickwall(&args, frameskip, lives, obs.as_deref()))
+        .map_err(|e| to_py(g, e))?;
+    Ok(Inner::new(ops, borrowed))
+}
+
 /// `make_snake(**kwargs)`: the pool of a snake environment object; `obs` is
 /// `"pixels"` (the default) or `"state"`; `max_episode_steps` defaults to 1000.
 pub(crate) fn make_snake(g: Gil, kwargs: Option<Ref<'_>>) -> CResult<Inner> {

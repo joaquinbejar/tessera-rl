@@ -12,8 +12,8 @@ use std::hint::black_box;
 use criterion::{Criterion, criterion_group, criterion_main};
 use tessera_rl_classic::cartpole::physics;
 use tessera_rl_classic::{
-    CartPole, CartPoleConfig, Grid, GridConfig, KeyDoor, KeyDoorConfig, Snake, SnakeConfig, Tag,
-    TagConfig,
+    BrickWall, BrickWallConfig, CartPole, CartPoleConfig, Grid, GridConfig, KeyDoor, KeyDoorConfig,
+    Snake, SnakeConfig, Tag, TagConfig,
 };
 use tessera_rl_engine::{ActionInput, EnvPool, Masked, NoMasks, PoolOptions, Reseed};
 use tessera_rl_num::identity::Seed;
@@ -118,6 +118,7 @@ fn bench(c: &mut Criterion) {
         });
     });
     snake(&mut group);
+    brickwall(&mut group);
     group.finish();
 }
 
@@ -158,6 +159,42 @@ fn snake(group: &mut criterion::BenchmarkGroup<'_, criterion::measurement::WallT
                     *action = i32::try_from(first.unwrap_or(0)).unwrap();
                 }
                 let out = snake
+                    .step(ActionInput {
+                        discrete: &policy,
+                        continuous: &[],
+                    })
+                    .unwrap();
+                black_box(out.rewards());
+            });
+        });
+    }
+}
+
+/// Brick wall: the default config under a seeded random policy, frameskip 4;
+/// misses end episodes, which reset at once. Both observations.
+fn brickwall(group: &mut criterion::BenchmarkGroup<'_, criterion::measurement::WallTime>) {
+    for (name, obs) in [
+        (
+            "brickwall_pixels",
+            tessera_rl_classic::brickwall::OBS_PIXELS,
+        ),
+        ("brickwall_state", tessera_rl_classic::brickwall::OBS_STATE),
+    ] {
+        let cfg = BrickWallConfig {
+            obs,
+            ..BrickWallConfig::default()
+        };
+        let mut pool = EnvPool::<BrickWall, NoMasks>::new(cfg, options()).unwrap();
+        pool.reset_all(Reseed::Keep).unwrap();
+        let mut policy = vec![1i32; N as usize];
+        let mut draw = 0x0bad_cafe_u64;
+        group.bench_function(name, |b| {
+            b.iter(|| {
+                for action in &mut policy {
+                    draw = draw.wrapping_mul(0x5851_f42d_4c95_7f2d).wrapping_add(1);
+                    *action = i32::try_from((draw >> 33) % 3).unwrap();
+                }
+                let out = pool
                     .step(ActionInput {
                         discrete: &policy,
                         continuous: &[],

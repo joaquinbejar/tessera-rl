@@ -103,6 +103,13 @@ the API is not stable, and any 0.x release may break it.
   at reset, `Discrete(4)` and a full view. Golden fixtures, continuation tests,
   a test reference, a scripted baseline and a step bench. In Python it is
   available through `make` and the Gymnasium adapter.
+- **Brick wall** (`tessera/BrickWall-v1`, `tessera-rl-classic`): a paddle, a
+  ball and a wall of 108 bricks in `Fx32`, with original rules, scoring and
+  rendering: a 30-frame serve, two walls, `lives` and `frameskip` in config,
+  and an `obs` choice of 84 x 84 grayscale pixels (the default) or a 116-field
+  state vector. Golden fixtures, continuation, a test reference in raw integer
+  arithmetic and a reference rasterizer, a scripted baseline and step benches.
+  In Python it is available through `make` and the Gymnasium adapter.
 - **Snake** (`tessera/Snake-v1`, `tessera-rl-classic`): one or two agents
   on a square board of side 6 to 32, simultaneous moves with no slot priority,
   `Discrete(4)` with reversal masked, and an `obs` choice of 84 x 84 grayscale

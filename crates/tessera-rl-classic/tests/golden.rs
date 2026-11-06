@@ -13,8 +13,8 @@ use support::{
 };
 use tessera_rl_classic::cartpole::MAX_EPISODE_STEPS;
 use tessera_rl_classic::{
-    CartPole, CartPoleConfig, Grid, GridConfig, KeyDoor, KeyDoorConfig, Snake, SnakeConfig, Tag,
-    TagConfig,
+    BrickWall, BrickWallConfig, CartPole, CartPoleConfig, Grid, GridConfig, KeyDoor, KeyDoorConfig,
+    Snake, SnakeConfig, Tag, TagConfig,
 };
 use tessera_rl_engine::{AutoReset, EnvPool, Masked, NoMasks};
 
@@ -391,6 +391,60 @@ fn test_golden_snake_two_agents_state_same_step_matches_fixture_on_every_mode() 
     check_snake(&snake(
         "snake-v1-a2-state-same-step",
         2,
+        obs,
+        AutoReset::SameStep,
+    ));
+}
+
+impl support::GoldenEnv for BrickWall {
+    const ENV_ID: &'static str = tessera_rl_classic::brickwall::ENV_ID;
+    const ENV_VERSION: u32 = tessera_rl_classic::brickwall::ENV_VERSION;
+}
+
+fn brickwall(name: &'static str, obs: u32, auto_reset: AutoReset) -> Scenario<BrickWallConfig> {
+    Scenario {
+        name,
+        cfg: BrickWallConfig {
+            frameskip: 4,
+            lives: 2,
+            obs,
+        },
+        seed: 6_112_028,
+        num_envs: 16,
+        chunk: 4,
+        auto_reset,
+        max_episode_steps: 200,
+        steps: 600,
+        reseed_at: 300,
+        reseed_ids: &[1, 12],
+        reseed_seed: 9_999,
+    }
+}
+
+fn check_brickwall(s: &Scenario<BrickWallConfig>) {
+    let build = |cfg, options| {
+        EnvPool::<BrickWall, NoMasks>::new(cfg, options).unwrap_or_else(|e| panic!("{e}"))
+    };
+    for workers in WORKERS {
+        check(s.name, &run::<BrickWall, _>(s, build, workers));
+    }
+}
+
+#[test]
+fn test_golden_brickwall_pixels_next_step_matches_fixture_on_every_mode() {
+    let obs = tessera_rl_classic::brickwall::OBS_PIXELS;
+    check_brickwall(&brickwall(
+        "brickwall-v1-pixels-next-step",
+        obs,
+        AutoReset::NextStep,
+    ));
+}
+
+#[test]
+fn test_golden_brickwall_state_same_step_matches_fixture_on_every_mode() {
+    let obs = tessera_rl_classic::brickwall::OBS_STATE;
+    check_brickwall(&brickwall(
+        "brickwall-v1-state-same-step",
         obs,
         AutoReset::SameStep,
     ));

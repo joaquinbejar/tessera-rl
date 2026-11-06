@@ -58,7 +58,14 @@ from tessera_rl import _native
 from tessera_rl._env import _discrete_actions, native_kwargs
 
 #: Single-agent environments the adapter exposes.
-_MAKERS = {"tessera/CartPole-v1": _native.make_cartpole, "tessera/Grid-v1": _native.make_grid}
+_MAKERS = {
+    "tessera/CartPole-v1": _native.make_cartpole,
+    "tessera/Grid-v1": _native.make_grid,
+    "tessera/BrickWall-v1": _native.make_brickwall,
+}
+
+#: The registered time limit, where it is not 500.
+_LIMITS = {"tessera/BrickWall-v1": 4000}
 
 _NATIVE_MODE = {
     AutoresetMode.NEXT_STEP: "next_step",
@@ -317,7 +324,7 @@ def _register() -> None:
             id=env_id,
             entry_point="tessera_rl.gym:TesseraEnv",
             vector_entry_point="tessera_rl.gym:TesseraVectorEnv",
-            max_episode_steps=500,
+            max_episode_steps=_LIMITS.get(env_id, 500),
             kwargs={"env_id": env_id},
         )
 
