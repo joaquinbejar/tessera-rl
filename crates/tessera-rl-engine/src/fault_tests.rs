@@ -287,10 +287,7 @@ fn test_async_worker_death_after_all_ids_are_delivered_reports_nothing_in_flight
         ),
         Err(EngineError::WorkerDied)
     );
-    assert_eq!(
-        p.reset(&[0], Reseed::Keep).map(|_| ()),
-        Err(EngineError::WorkerDied)
-    );
+    assert_eq!(p.reset(&[0], Reseed::Keep), Err(EngineError::WorkerDied));
     assert_eq!(
         p.reset_all(Reseed::Keep).map(|_| ()),
         Err(EngineError::WorkerDied)
