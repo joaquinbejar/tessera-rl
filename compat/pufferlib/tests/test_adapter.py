@@ -494,3 +494,20 @@ def test_is_stale_is_true_for_arrays_step_just_returned():
     assert not t.is_stale(obs)
     assert t.is_stale(env.step(np.zeros(2, dtype=np.int32))[0])
     env.close()
+
+
+@pytest.mark.parametrize("bad", [-1, "invalid", 1.0, True, None, puffer.MAX_WORKERS + 1, 2**40])
+def test_invalid_workers_are_refused_at_construction(bad):
+    with pytest.raises(t.ArgumentError, match="workers"):
+        TesseraPufferEnv(CARTPOLE, workers=bad)
+
+
+@pytest.mark.parametrize("start", ["spawn", "fork"] if sys.platform == "linux" else ["spawn"])
+def test_invalid_workers_raise_in_the_multiprocessing_parent(start):
+    assert scenario("invalid_workers_in_parent", start, timeout=60) == {"raised": True}
+
+
+@pytest.mark.parametrize("kw", [{"chunk_size": 0}, {"width": 0}, {"unknown": 1}])
+def test_other_options_are_refused_at_construction(kw):
+    with pytest.raises((t.ArgumentError, t.ConfigError)):
+        TesseraPufferEnv(TAG, num_envs=8, **kw)

@@ -56,7 +56,8 @@ reply: a raise prints in the child and the parent's ``recv`` blocks forever. Wha
 this env can raise in a worker: ``ActionError`` (out-of-range action);
 ``Poisoned``, ``Panicked`` and ``WorkerDied`` after a panic in an environment;
 ``ArgumentError`` (seed out of range, a step before reset); ``ForkError`` (an
-inherited pool). Use a timeout around such runs. A process that raises after
+inherited pool). The constructor validates every option in the parent, but
+the host can still refuse threads at the first reset, within ``MAX_WORKERS``. Use a timeout around such runs. A process that raises after
 ``PuffeRL`` starts also never exits: its ``Utilization`` thread is not a daemon.
 
 **Platform.** PufferLib 3.0.0 does not build on linux-arm64: its sdist links an
@@ -84,6 +85,10 @@ except Exception as e:  # PermissionError in a read-only directory, among others
 #: Environments tested through this adapter.
 SUPPORTED = frozenset({"tessera/CartPole-v1", "tessera/Tag-v1"})
 
+#: Above this a worker count is refused here, rather than failing to start threads
+#: at the first reset, which is a parent hang under Multiprocessing.
+MAX_WORKERS = 1024
+
 _U32 = 1 << 32
 _U64_MASK = (1 << 64) - 1
 
@@ -110,6 +115,13 @@ def _seed(value, what: str) -> int:
     if not 0 <= v < _U32:
         raise _native.ArgumentError(f"{what} must be in 0..2**32, got {v}; it is never truncated")
     return v
+
+
+def _workers(value) -> int:
+    """The worker count, refused in the constructor: the probe is threadless."""
+    if type(value) is not int or not 0 <= value <= MAX_WORKERS:
+        raise _native.ArgumentError(f"workers must be an int in 0..={MAX_WORKERS}, got {value!r}")
+    return value
 
 
 def _bound(values: list, shape: list, dtype: str) -> np.ndarray:
@@ -156,7 +168,7 @@ class TesseraPufferEnv(pufferlib.PufferEnv):
         if log_interval is not None and _index(log_interval, "log_interval") < 1:
             raise _native.ArgumentError("log_interval must be at least 1, or None")
         self._constructor_seed = _seed(0 if seed is None else seed, "constructor seed")
-        self._make_args = {"num_envs": num_envs, "workers": workers, "auto_reset": auto_reset, **env_kwargs}
+        self._make_args = {"num_envs": num_envs, "workers": _workers(workers), "auto_reset": auto_reset, **env_kwargs}
         self._env_id = env_id
         self._log_interval = log_interval
         self._env = None

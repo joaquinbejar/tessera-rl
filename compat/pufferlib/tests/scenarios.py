@@ -77,6 +77,18 @@ def lifecycle(start):
     return {"driver_has_pool": driver_has_pool, "closed": True}
 
 
+def invalid_workers_in_parent(start):
+    multiprocessing.set_start_method(start)
+    try:
+        pufferlib.vector.make(
+            make_puffer("tessera/CartPole-v1", num_envs=2, workers=-1),
+            backend=pufferlib.vector.Multiprocessing, num_envs=4, num_workers=2,
+        )  # fmt: skip
+    except t.ArgumentError as e:
+        return {"raised": "workers" in str(e)}
+    return {"raised": False}
+
+
 def root_above_range(start, root):
     """A root that a child refuses: the parent's reset blocks. One-off probe."""
     multiprocessing.set_start_method(start)
