@@ -103,6 +103,13 @@ the API is not stable, and any 0.x release may break it.
   at reset, `Discrete(4)` and a full view. Golden fixtures, continuation tests,
   a test reference, a scripted baseline and a step bench. In Python it is
   available through `make` and the Gymnasium adapter.
+- **Snake** (`tessera/Snake-v1`, `tessera-rl-classic`): one or two agents
+  on a square board of side 6 to 32, simultaneous moves with no slot priority,
+  `Discrete(4)` with reversal masked, and an `obs` choice of 84 x 84 grayscale
+  pixels (the default) or flat `f32` flags. Fixed state of 4,110 bytes at every
+  size. Each collision rule has its own test; golden fixtures, continuation, a
+  test reference and rasterizer, a scripted baseline and step benches. In Python
+  it is available through `make` and the PettingZoo adapters.
 - **Key and door** (`tessera/GridKeyDoor-v1`, `tessera-rl-classic`): a world
   generated at each reset from the instance's stream, seen from each agent's
   position and facing, for 1 to 4 cooperative agents; `Discrete(5)` with masks
