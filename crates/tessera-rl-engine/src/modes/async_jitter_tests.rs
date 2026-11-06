@@ -17,6 +17,10 @@ use tessera_rl_macros::{EnvConfig, EnvState, Observation};
 use tessera_rl_num::identity::Seed;
 use tessera_rl_num::rng::{ObsRng, StepRng};
 
+use core::sync::atomic::{AtomicBool, Ordering};
+
+use crate::buffer::batch::{GATE_AFTER_PUSH, GATE_BEFORE_PUSH, GATE_OPEN, GATE_REACHED};
+use crate::modes::async_mode::SNAPSHOT_HOOK;
 use crate::sys::Faults;
 use crate::{
     ActionInput, AsyncOptions, AutoReset, BatchToken, EnvPool, NoMasks, PoolOptions, Reseed,
@@ -100,6 +104,7 @@ impl Environment for Walker {
 }
 
 type Pool = EnvPool<Walker, NoMasks>;
+type AsyncPoolOf = crate::AsyncPool<Walker, NoMasks>;
 
 const N: u32 = 40;
 const STEPS: usize = if cfg!(miri) { 2 } else { 6 };
@@ -418,4 +423,187 @@ fn test_async_a_received_id_is_never_counted_as_running() {
             drop(pool.recv().unwrap());
         }
     }
+}
+
+/// Serializes the tests that use the process-wide gates of `complete`.
+static GATES: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Opens the gates even if an assertion fails, so that no worker stays held.
+struct OpenGates;
+
+impl Drop for OpenGates {
+    fn drop(&mut self) {
+        GATE_OPEN.store(true, Ordering::Release);
+    }
+}
+
+fn gated(gate: u32) -> (AsyncPoolOf, OpenGates) {
+    GATE_REACHED.store(false, Ordering::Release);
+    GATE_OPEN.store(false, Ordering::Release);
+    let open = OpenGates;
+    let pool = Pool::new(WalkConfig {}, options(AutoReset::NextStep))
+        .unwrap()
+        .async_faults(
+            AsyncOptions::new(NonZeroUsize::MIN, NonZeroUsize::MIN),
+            Faults {
+                jitter_us: gate,
+                ..Faults::default()
+            },
+        )
+        .unwrap();
+    (pool, open)
+}
+
+fn wait_for_gate() {
+    while !GATE_REACHED.load(Ordering::Acquire) {
+        std::thread::yield_now();
+    }
+}
+
+/// A receive that pops an id before its worker counts it leaves the ready
+/// count below zero for a moment, which must not read as a ready batch.
+#[test]
+fn test_async_waiter_is_not_ready_while_the_count_is_below_zero() {
+    let _lock = GATES
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let (mut pool, open) = gated(GATE_AFTER_PUSH);
+    drop(pool.reset_all(Reseed::Keep).unwrap());
+    let waiter = pool.waiter();
+    pool.send(
+        &[1],
+        ActionInput {
+            discrete: &[1],
+            continuous: &[],
+        },
+    )
+    .unwrap();
+    wait_for_gate();
+    let token = loop {
+        if let Some(t) = pool.try_recv().unwrap() {
+            break t;
+        }
+        std::thread::yield_now();
+    };
+    assert!(!waiter.wait_ready(core::time::Duration::ZERO));
+    drop(token);
+    drop(open);
+}
+
+/// Codex's probe of #96: with an id's rows written and counted as stepped but
+/// its completion unpublished, nothing is delivered early, its own snapshot
+/// still refuses, and a writer drains the job before it writes.
+#[test]
+fn test_async_id_stepped_but_unpublished_is_neither_delivered_nor_overwritten() {
+    let _lock = GATES
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let (mut pool, open) = gated(GATE_BEFORE_PUSH);
+    drop(pool.reset_all(Reseed::Keep).unwrap());
+    pool.send(
+        &[1],
+        ActionInput {
+            discrete: &[1],
+            continuous: &[],
+        },
+    )
+    .unwrap();
+    wait_for_gate();
+    assert!(pool.try_recv().unwrap().is_none());
+    let record = pool.snapshot(0).unwrap();
+    assert!(matches!(
+        pool.snapshot(1),
+        Err(crate::EngineError::InFlight { .. })
+    ));
+    let mut records = vec![record; N as usize];
+    assert!(matches!(
+        pool.snapshot_all(&mut records),
+        Err(crate::EngineError::NotQuiescent)
+    ));
+    let opener = std::thread::spawn(|| {
+        std::thread::sleep(core::time::Duration::from_millis(1));
+        GATE_OPEN.store(true, Ordering::Release);
+    });
+    drop(pool.reset_all(Reseed::Keep).unwrap());
+    opener.join().unwrap();
+    drop(open);
+}
+
+/// A step that waits for [`BOOM`], then panics with action 2.
+struct Boomer;
+
+static BOOM: AtomicBool = AtomicBool::new(false);
+
+impl Environment for Boomer {
+    type State = Walk;
+    type Config = WalkConfig;
+    type Obs = WalkObs;
+    type Action = ();
+    type Header = RecordHeader<1, NoAdaptive>;
+
+    const MAX_AGENTS: usize = 1;
+    const TIER: Tier = Tier::CrossPlatform;
+
+    fn observation_space(cfg: &WalkConfig) -> Result<Space, SpaceError> {
+        Walker::observation_space(cfg)
+    }
+
+    fn action_space(cfg: &WalkConfig) -> Result<Space, SpaceError> {
+        Walker::action_space(cfg)
+    }
+
+    fn reset(cfg: &WalkConfig, rng: &mut StepRng, state: &mut Walk) {
+        Walker::reset(cfg, rng, state);
+    }
+
+    fn step(
+        cfg: &WalkConfig,
+        state: &mut Walk,
+        actions: &Actions<'_, ()>,
+        rng: &mut StepRng,
+        out: &mut StepOut<'_>,
+    ) {
+        if actions.discrete(AgentSlot::FIRST, 0) == Some(2) {
+            while !BOOM.load(Ordering::Acquire) {
+                std::thread::yield_now();
+            }
+            std::panic::resume_unwind(Box::new("injected step panic"));
+        }
+        Walker::step(cfg, state, actions, rng, out);
+    }
+
+    fn observe(
+        cfg: &WalkConfig,
+        state: &Walk,
+        slot: AgentSlot,
+        rng: &mut ObsRng,
+        out: &mut ObsWriter<'_, '_, WalkObs>,
+    ) {
+        Walker::observe(cfg, state, slot, rng, out);
+    }
+}
+
+/// A step panics between `snapshot`'s poison check and its quiescence check:
+/// nothing runs any more, but a row may be partly written (issue #97).
+#[test]
+fn test_async_snapshot_refuses_a_panic_between_its_two_checks() {
+    let mut pool = EnvPool::<Boomer, NoMasks>::new(WalkConfig {}, options(AutoReset::NextStep))
+        .unwrap()
+        .async_mode(AsyncOptions::new(NonZeroUsize::MIN, NonZeroUsize::MIN))
+        .unwrap();
+    drop(pool.reset_all(Reseed::Keep).unwrap());
+    pool.send(
+        &[1],
+        ActionInput {
+            discrete: &[2],
+            continuous: &[],
+        },
+    )
+    .unwrap();
+    SNAPSHOT_HOOK.set(Some(|| BOOM.store(true, Ordering::Release)));
+    assert!(matches!(
+        pool.snapshot(0),
+        Err(crate::EngineError::Poisoned)
+    ));
+    drop(pool.reset_all(Reseed::Keep).unwrap());
 }

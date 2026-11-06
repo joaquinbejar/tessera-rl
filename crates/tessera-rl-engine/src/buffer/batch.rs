@@ -62,6 +62,7 @@ pub(crate) struct BatchMode<E: Environment, M: MaskProvider<E>> {
     pub(crate) stepped: AtomicUsize,
     /// Ids pushed to the completion ring and not yet popped, plus ids the
     /// caller staged for its next batch: what a [`BatchWaiter`] waits for.
+    /// It wraps below zero for a moment between a pop and the push's count.
     pub(crate) ready: Arc<ReadyCount>,
     /// Test-only jitter before each claimed step, in microseconds.
     #[cfg(test)]
@@ -375,7 +376,7 @@ unsafe fn run_drain<E: Environment, M: MaskProvider<E>>(data: *const (), worker:
 /// completion order varies far more than send order alone makes it.
 #[cfg(test)]
 fn jitter<E: Environment, M: MaskProvider<E>>(mode: &BatchMode<E, M>, id: u32) {
-    if mode.jitter_us == 0 {
+    if mode.jitter_us == 0 || mode.jitter_us >= GATE_AFTER_PUSH {
         return;
     }
     let salt = mode.stepped.load(Ordering::Relaxed) as u64;
@@ -397,7 +398,10 @@ fn jitter<E: Environment, M: MaskProvider<E>>(mode: &BatchMode<E, M>, id: u32) {
 fn complete<E: Environment, M: MaskProvider<E>>(mode: &BatchMode<E, M>, id: u32) {
     mode.stepped.fetch_add(1, Ordering::Release);
     #[cfg(test)]
-    jitter(mode, id);
+    {
+        hold_at(mode, GATE_BEFORE_PUSH);
+        jitter(mode, id);
+    }
     loop {
         match mode.complete.push(id) {
             Ok(()) => break,
@@ -408,7 +412,38 @@ fn complete<E: Environment, M: MaskProvider<E>>(mode: &BatchMode<E, M>, id: u32)
             }
         }
     }
+    #[cfg(test)]
+    {
+        hold_at(mode, GATE_AFTER_PUSH);
+        jitter(mode, id);
+    }
     mode.ready.count.fetch_add(1, Ordering::Release);
+}
+
+/// A `jitter_us` that holds a worker in [`complete`] before its push.
+#[cfg(test)]
+pub(crate) const GATE_BEFORE_PUSH: u32 = u32::MAX;
+/// A `jitter_us` that holds a worker in [`complete`] after its push.
+#[cfg(test)]
+pub(crate) const GATE_AFTER_PUSH: u32 = u32::MAX - 1;
+/// Set by a worker held at a gate.
+#[cfg(test)]
+pub(crate) static GATE_REACHED: core::sync::atomic::AtomicBool =
+    core::sync::atomic::AtomicBool::new(false);
+/// Opens the gates.
+#[cfg(test)]
+pub(crate) static GATE_OPEN: core::sync::atomic::AtomicBool =
+    core::sync::atomic::AtomicBool::new(false);
+
+/// Holds this worker while the mode is gated at `gate`, to force a schedule.
+#[cfg(test)]
+fn hold_at<E: Environment, M: MaskProvider<E>>(mode: &BatchMode<E, M>, gate: u32) {
+    if mode.jitter_us == gate {
+        GATE_REACHED.store(true, Ordering::Release);
+        while !GATE_OPEN.load(Ordering::Acquire) {
+            std::thread::yield_now();
+        }
+    }
 }
 
 /// Publishes the drain job of `mode` to `gang`.
@@ -832,7 +867,9 @@ impl BatchWaiter {
         let start = std::time::Instant::now();
         loop {
             let need = self.ready.batch_size.load(Ordering::Relaxed);
-            if self.ready.count.load(Ordering::Acquire) >= need {
+            // Signed: a receive can pop an id before its worker counts it, so
+            // the count is briefly below zero, which means nothing is ready.
+            if self.ready.count.load(Ordering::Acquire).cast_signed() >= need.cast_signed() {
                 return true;
             }
             if start.elapsed() >= timeout {
