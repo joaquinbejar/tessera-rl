@@ -309,6 +309,7 @@ where
     #[must_use]
     pub fn is_poisoned(&self) -> bool {
         self.poisoned
+            || self.dead()
             || self
                 .mode
                 .panicked
