@@ -16,6 +16,10 @@ the API is not stable, and any 0.x release may break it.
 
 ### Added
 
+- **Snake and paddle duel in the Gymnasium adapter** with one agent: `tessera/Snake-v1` and
+  `tessera/PaddleDuel-v1` are registered with `agents=1` (time limits 1000 and 5000) and read slot 0 of
+  the native rows; `agents=2` is refused in favour of PettingZoo. Snake's reverse action is a no-op
+  there, as the adapter exposes no mask. `layout()` gains `initial_agents`, the initial population.
 - **Persisted snapshots in every mode**: `encode`, `decode`, `check_records` and `import_all` on `PipelinedPool` and `AsyncPool`, and `Env.encode` and `Env.load` in Python, with a new `PersistError`. Files are mode-independent and hold full state, so they are privileged. A file holds no cycle state.
 - Persisted snapshots (ADR-0011): `EnvPool::encode` and `decode` for the custom flat format, on Sync pools, with the `Persist` and `PersistMask` traits. Decoded records stay untrusted until `import`. Same-platform files need an explicit `TESSERA_BUILD_ID`. Files hold full state and are privileged.
 - **The P2-G1 gate under ADR-0048** (`examples/alphazero_connect4/gate.py`): at least 815 of 1,000 wins, held-out

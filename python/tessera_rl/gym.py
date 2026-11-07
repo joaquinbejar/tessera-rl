@@ -29,6 +29,13 @@ trains PPO on ``tessera/CartPole-v1`` through it and gates it against the
 same PPO on Gymnasium's ``CartPole-v1``. That validates this adapter; it
 is not a drop-in compatibility claim for SB3, RLlib or Tianshou.
 
+Snake-v1 and PaddleDuel-v1 are exposed with ``agents=1`` (PaddleDuel's
+agent is the left paddle against the scripted right one); ``agents=2``
+is refused, use the PettingZoo adapter. Snake's action space is plain
+``Discrete(4)`` without its mask: the reverse of the current heading is
+an illegal action the engine treats as a no-op (``IllegalActionPolicy::Noop``),
+so the snake keeps its heading, with no error and no penalty.
+
 Seeding: ``seed=None`` at construction draws one 64-bit seed from OS
 entropy and exposes it as ``construction_seed``, so the run can be
 reproduced by passing it back; a given seed is deterministic.
@@ -62,10 +69,21 @@ _MAKERS = {
     "tessera/CartPole-v1": _native.make_cartpole,
     "tessera/Grid-v1": _native.make_grid,
     "tessera/BrickWall-v1": _native.make_brickwall,
+    "tessera/Snake-v1": _native.make_snake,
+    "tessera/PaddleDuel-v1": _native.make_paddleduel,
 }
 
+#: Two-slot environments admitted with one agent (registered with
+#: ``agents=1``). Admission rests on a lifetime invariant of each kernel:
+#: with ``agents=1`` only slot 0 is ever alive or acting (their headers are
+#: ``NoAdaptive`` and the kernels never bring slot 1 to life), so the
+#: adapter reads and writes slot 0 of each row. ``initial_agents == 1``
+#: alone is not admission: a dynamic population could start with one agent
+#: and grow, which needs an explicit capability contract.
+_SLOT0 = frozenset({"tessera/Snake-v1", "tessera/PaddleDuel-v1"})
+
 #: The registered time limit, where it is not 500.
-_LIMITS = {"tessera/BrickWall-v1": 4000}
+_LIMITS = {"tessera/BrickWall-v1": 4000, "tessera/Snake-v1": 1000, "tessera/PaddleDuel-v1": 5000}
 
 _NATIVE_MODE = {
     AutoresetMode.NEXT_STEP: "next_step",
@@ -88,11 +106,14 @@ def _native_env(env_id: str, num_envs: int, seed: int, mode: AutoresetMode, outp
         maker = _MAKERS[env_id]
     except KeyError:
         raise _native.ArgumentError(f"unknown single-agent environment {env_id!r}; known: {sorted(_MAKERS)}") from None
+    if env_id in _SLOT0:
+        kwargs = {"agents": 1, **kwargs}
     native = maker(**native_kwargs(num_envs=num_envs, seed=seed, auto_reset=_NATIVE_MODE[mode], outputs=outputs, **kwargs))
     layout = native.layout()
-    if layout["agents"] != 1:
+    if layout["agents"] != 1 and (env_id not in _SLOT0 or layout["initial_agents"] != 1):
         native.close()
-        raise _native.ArgumentError(f"{env_id} is multi-agent; use the PettingZoo adapter")
+        n = layout["initial_agents"]
+        raise _native.ArgumentError(f"{env_id} with agents={n} is multi-agent; use the PettingZoo adapter")
     return native, layout
 
 
@@ -153,6 +174,11 @@ class TesseraVectorEnv(VectorEnv):
         self.observation_space = batch_space(self.single_observation_space, self.num_envs)
         self.action_space = batch_space(self.single_action_space, self.num_envs)
         self._names = [name or "obs" for name, *_ in layout["leaves"]]
+        #: Row width of the native outputs (capacity); the adapter uses slot 0.
+        self._agents: int = layout["agents"]
+        # Slot 0 carries the action; the other slots are never alive or
+        # acting, and the engine zeroes them in validation anyway.
+        self._actions = np.zeros((self.num_envs, self._agents), dtype="<i4")
         self._shapes = [(np.dtype(dtype), tuple(shape)) for _, dtype, shape, *_ in layout["leaves"]]
 
     # -- outputs -------------------------------------------------------------
@@ -161,7 +187,8 @@ class TesseraVectorEnv(VectorEnv):
         if self.outputs == "borrowed":
             return np.asarray(buf)[:, 0]
         dtype, shape = self._shapes[k]
-        return np.frombuffer(buf, dtype=dtype).reshape((self.num_envs, *shape))
+        rows = np.frombuffer(buf, dtype=dtype).reshape((self.num_envs, self._agents, *shape))
+        return rows[:, 0] if self._agents == 1 else rows[:, 0].copy()
 
     def _obs(self, bufs):
         leaves = {name: self._leaf(buf, k) for k, (name, buf) in enumerate(zip(self._names, bufs, strict=True))}
@@ -214,13 +241,19 @@ class TesseraVectorEnv(VectorEnv):
         acts = _discrete_actions(actions)
         if acts.size != self.num_envs:
             raise _native.ActionError(f"expected {self.num_envs} actions, got {acts.size}")
-        out = self._native.step(acts.tobytes())
+        if self._agents == 1:
+            out = self._native.step(acts.tobytes())
+        else:
+            self._actions[:, 0] = acts.reshape(self.num_envs)
+            out = self._native.step(self._actions.tobytes())
         terminated = self._flags(out, "episode_terminated")
         truncated = self._flags(out, "episode_truncated")
         if self.outputs == "borrowed":
             rewards = np.asarray(out["rewards"])[:, 0]
         else:
-            rewards = np.frombuffer(out["rewards"], dtype="<f4")
+            rewards = np.frombuffer(out["rewards"], dtype="<f4").reshape(self.num_envs, self._agents)[:, 0]
+            if self._agents != 1:
+                rewards = rewards.copy()
         info = self._info(out, terminated | truncated)
         return self._obs(out["observations"]), rewards, terminated, truncated, info
 
@@ -325,7 +358,7 @@ def _register() -> None:
             entry_point="tessera_rl.gym:TesseraEnv",
             vector_entry_point="tessera_rl.gym:TesseraVectorEnv",
             max_episode_steps=_LIMITS.get(env_id, 500),
-            kwargs={"env_id": env_id},
+            kwargs={"env_id": env_id, "agents": 1} if env_id in _SLOT0 else {"env_id": env_id},
         )
 
 

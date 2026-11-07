@@ -223,7 +223,8 @@ env = tessera_rl.make("tessera/CartPole-v1", num_envs=8, seed=0)
 ```
 
 and, with the `gymnasium` extra, `tessera_rl.gym` provides `TesseraEnv` and
-`TesseraVectorEnv` for Gymnasium 1.x.
+`TesseraVectorEnv` for Gymnasium 1.x; Snake and paddle duel are exposed there
+with one agent (`agents=1`), and with two through PettingZoo.
 
 With the `pettingzoo` extra, `tessera_rl.pz.parallel_env` and
 `tessera_rl.pz.aec_env` expose the multi-agent environments, each only
