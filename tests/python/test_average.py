@@ -329,6 +329,35 @@ def test_look_verify_accepts_a_real_m3_look_report_shape():
     assert average.verify_look(report, report["checkpoint"]) == {"wins": 310, "eligible": True, "candidate": False}
 
 
+def test_look_verify_refuses_counts_that_are_not_nonnegative_integers():
+    # Each report below keeps every sum and equation consistent, so only the
+    # type and sign rule can refuse it.
+    cases = []
+    report, sha = look_report()
+    report["wdl"] = [336, 4.0, 60]
+    report["by_colour"] = {"bot_first": [168, 2.0, 30], "candidate_first": [168, 2, 30]}
+    cases.append(("float", report))
+    report, sha = look_report()
+    report["wdl"] = [336, -2, 66]
+    report["by_colour"] = {"bot_first": [168, -1, 33], "candidate_first": [168, -1, 33]}
+    cases.append(("negative", report))
+    report, sha = look_report(wins=336)
+    report["games"] = 400.0
+    cases.append(("float games", report))
+    report, sha = look_report(wins=1)
+    report["wins"] = True
+    report["wdl"] = [True, 4, 395]
+    report["by_colour"] = {"bot_first": [True, 2, 197], "candidate_first": [0, 2, 198]}
+    cases.append(("bool", report))
+    for name, r in cases:
+        with pytest.raises(average.Refused, match="nonnegative integers"):
+            average.verify_look(r, sha)
+    report, sha = look_report()
+    report["by_colour"] = [[168, 2, 30], [168, 2, 30]]
+    with pytest.raises(average.Refused, match="mapping"):
+        average.verify_look(report, sha)
+
+
 def test_look_verify_refuses_other_runtime_protocol_or_checkpoint():
     report, sha = look_report()
     report["runtime"]["cpuset"] = "0-7"

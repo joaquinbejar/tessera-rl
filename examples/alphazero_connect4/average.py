@@ -291,6 +291,11 @@ def preflight(observed: dict | None = None) -> None:
         raise Refused(f"not the registered look runtime: {bad}")
 
 
+def is_count(value) -> bool:
+    """A nonnegative integer; ``bool`` is not a count."""
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
+
 def frozen_protocol(checkpoint_sha: str) -> dict:
     """The protocol block a look of ``checkpoint_sha`` must report, field
     for field: ADR-0048's frozen budget on the pinned held-out set, with the
@@ -324,6 +329,13 @@ def verify_look(report: dict, checkpoint_sha: str) -> dict:
     games = 2 * want["openings"]
     wdl = report.get("wdl")
     colours = report.get("by_colour", {})
+    if not isinstance(colours, dict):
+        raise Refused("the look's colour counts are not a mapping")
+    counts = [report.get("games"), report.get("wins")]
+    for c in [wdl, *colours.values()]:
+        counts.extend(c if isinstance(c, list) else [c])
+    if not all(is_count(v) for v in counts):
+        raise Refused("the look's counts are not all nonnegative integers")
     if (
         report.get("games") != games
         or not isinstance(wdl, list)
