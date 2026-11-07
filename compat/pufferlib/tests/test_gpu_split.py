@@ -9,10 +9,14 @@ Covered:
   environment, stops its monitor and leaves no child process;
 - the sync mode's attribution is exclusive: the categories add up to at most
   the wall, with a nonnegative remainder;
-- CUDA requested without CUDA stops with its own exit code, and CUDA
-  initialised before the vector environment is refused;
-- the driver's per-round shuffle is fixed, and a timed-out run's whole process
-  group is killed, with nothing left.
+- CUDA requested without CUDA stops with its own exit code, no CUDA call
+  (is_available included) happens before the vector environment exists, and
+  CUDA initialised before it is refused;
+- the env probe drains its warm-up and times each send with its matching
+  recv, so no transition is left pending;
+- the driver's per-round shuffle is fixed, only the first CUDA trainer run
+  gets the long timeout, and a timed-out run's whole process group is
+  killed, with nothing left.
 """
 
 import json
@@ -20,6 +24,7 @@ import os
 import pathlib
 import subprocess
 import sys
+import time
 
 import pytest
 
@@ -100,24 +105,86 @@ def test_gpu_split_sync_attribution_is_exclusive(tmp_path):
     rc, record, log = run_split(tmp_path, "ocean-serial", "sync", "cpu", *SMALL)
     assert rc == 0, log
     exclusive = record["exclusive_s"]
-    assert set(exclusive) == set(split.CATEGORIES)
-    assert all(v >= 0 for v in exclusive.values())
+    overhead = record["parent_overhead_s"]
+    assert set(exclusive) == set(split.CHILDREN) and set(overhead) == set(split.PARENTS)
+    assert all(v >= 0 for v in [*exclusive.values(), *overhead.values()])
     assert record["unattributed_s"] >= 0
-    assert abs(sum(exclusive.values()) + record["unattributed_s"] - record["wall_s"]) < 1e-9
+    total = sum(exclusive.values()) + sum(overhead.values()) + record["unattributed_s"]
+    assert abs(total - record["wall_s"]) < 1e-9
     assert record["pufferl_sha256"] and record["pufferl_sync_sha256"]
+    assert record["profile_frequency"] == 1
 
 
 def test_gpu_split_e2e_keeps_the_profiler_out_of_the_window(tmp_path):
     rc, record, log = run_split(tmp_path, "ocean-serial", "e2e", "cpu", *SMALL)
     assert rc == 0, log
     assert "exclusive_s" not in record and record["epochs_timed"] == 2
+    assert record["profile_frequency"] == 10**9
 
 
 @pytest.mark.skipif(__import__("torch").cuda.is_available(), reason="needs a host without CUDA")
 def test_gpu_split_cuda_without_cuda_stops_with_its_exit_code(tmp_path):
-    rc, record, _ = run_split(tmp_path, "ocean-serial", "e2e", "cuda", *SMALL)
+    rc, record, _ = run_split(tmp_path, "ocean-mp", "e2e", "cuda", *SMALL)
     assert rc == split.EXIT_NO_CUDA
     assert "is_available" in record["error"]
+    assert record["children_left"] == [] and record["monitors_left"] == []
+
+
+def test_gpu_split_no_cuda_call_before_the_vecenv(monkeypatch, capsys):
+    import torch
+
+    calls = []
+    real_make = split.make_vecenv
+
+    def make(*a, **k):
+        calls.append("make_vecenv")
+        return real_make(*a, **k)
+
+    def available():
+        calls.append("is_available")
+        return False
+
+    monkeypatch.setattr(split, "make_vecenv", make)
+    monkeypatch.setattr(torch.cuda, "is_available", available)
+    monkeypatch.setattr(torch.cuda, "device_count", lambda: calls.append("device_count") or 0)
+    monkeypatch.setattr(torch.cuda, "get_device_name", lambda *a: calls.append("get_device_name") or "")
+    assert split.main(["ocean-serial", "e2e", "cuda", *SMALL]) == split.EXIT_NO_CUDA
+    assert calls == ["make_vecenv", "is_available"]
+    capsys.readouterr()
+
+
+class AsyncFakeVec:
+    """recv blocks until the last send's transition completes; counts what is
+    still pending."""
+
+    num_agents = 4
+
+    class single_action_space:
+        n = 2
+
+    def __init__(self, delay):
+        self.delay, self.pending, self.sends, self.recvs = delay, 0, 0, 0
+
+    def async_reset(self, seed=None):
+        self.pending = 1
+
+    def send(self, actions):
+        assert self.pending == 0, "send while a transition is pending"
+        self.pending, self.sends = 1, self.sends + 1
+
+    def recv(self):
+        assert self.pending == 1, "recv with nothing pending"
+        time.sleep(self.delay)
+        self.pending, self.recvs = 0, self.recvs + 1
+
+
+def test_gpu_split_env_probe_completes_every_timed_transition():
+    fake = AsyncFakeVec(delay=0.002)
+    out = split.run_env(fake, steps=50, warmup=5)
+    assert fake.pending == 0
+    assert fake.sends == 55 and fake.recvs == 56
+    assert out["steps"] == 50 * fake.num_agents
+    assert out["wall_s"] >= 50 * 0.002
 
 
 def test_gpu_split_refuses_cuda_initialised_before_the_vecenv(monkeypatch, capsys):
@@ -148,10 +215,24 @@ def test_gpu_split_driver_kills_the_whole_group_on_timeout(tmp_path):
     # A "run" that leaves a background child in its group and never finishes.
     fake = "sh -c 'sleep 60 & sleep 60' fake"
     rc = driver.main(["--python", fake, "--out", str(out), "--device", "cpu", "--rounds", "1",
-                      "--cases", "ocean-serial", "--modes", "e2e", "--first-timeout", "2"])  # fmt: skip
+                      "--cases", "ocean-serial", "--modes", "e2e", "--timeout", "2"])  # fmt: skip
     row = json.loads(out.read_text().splitlines()[0])
     assert row["timed_out"] is True and row["group_left"] == [] and row["result"] is None
     assert rc == 1
+
+
+def test_gpu_split_driver_gives_the_long_timeout_to_the_first_cuda_trainer_run_only(tmp_path):
+    out = tmp_path / "r.jsonl"
+    fake = "sh -c 'sleep 3' fake"
+    driver.main(["--python", fake, "--out", str(out), "--device", "cuda", "--rounds", "1",
+                 "--cases", "ocean-serial,ocean-mp", "--modes", "env,e2e,sync",
+                 "--timeout", "1", "--first-timeout", "10"])  # fmt: skip
+    rows = [json.loads(x) for x in out.read_text().splitlines()]
+    long = [r for r in rows if r["timeout_s"] == 10]
+    assert len(long) == 1 and long[0]["mode"] != "env" and not long[0]["timed_out"]
+    first_trainer = next(r for r in rows if r["mode"] != "env")
+    assert long[0] is first_trainer
+    assert all(r["timed_out"] and r["timeout_s"] == 1 for r in rows if r is not first_trainer)
 
 
 def test_gpu_split_driver_records_a_real_run(tmp_path):

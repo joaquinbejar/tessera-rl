@@ -5,8 +5,10 @@ Every (case, mode) pair runs once per round, in an order shuffled per round
 with a fixed seed, each in a fresh temporary working directory (importing
 PufferLib creates ``resources`` in the cwd) and in its own process group.
 
-- A run is killed at ``--timeout`` seconds, the first run of the session at
-  ``--first-timeout`` (it includes CUDA context creation and cuDNN autotune).
+- A run is killed at ``--timeout`` seconds. The session's first CUDA trainer
+  run (mode ``e2e`` or ``sync`` on ``cuda``) gets ``--first-timeout``, as it
+  includes CUDA context creation and cuDNN autotune; env-only runs never
+  create a CUDA context and never get it.
 - After every run, timed out or not, the whole process group is killed, and
   the driver checks that no process of that group remains; one that does is
   recorded and stops the session.
@@ -131,9 +133,14 @@ def main(argv=None) -> int:
         if m not in MODES:
             p.error(f"unknown mode {m}")
     status = 0
-    for n, (r, i, case, mode) in enumerate(plan(cases, modes, args.rounds)):
+    first_cuda_pending = args.device == "cuda"
+    for r, i, case, mode in plan(cases, modes, args.rounds):
         command = [*shlex.split(args.python), SPLIT, case, mode, args.device, *shlex.split(args.split_args)]
-        out = one_run(command, args.first_timeout if n == 0 else args.timeout)
+        first = first_cuda_pending and mode != "env"
+        if first:
+            first_cuda_pending = False
+        out = one_run(command, args.first_timeout if first else args.timeout)
+        out["timeout_s"] = args.first_timeout if first else args.timeout
         row = {"round": r, "position": i, "case": case, "mode": mode, **out}
         with open(args.out, "a") as f:
             f.write(json.dumps(row) + "\n")

@@ -37,18 +37,25 @@ The configuration is PufferLib's `cartpole.ini` over `default.ini`:
 - **`sync`:** synchronised phase costs. This mode runs the trainer from the patched copy, profiled every epoch, with flat exclusive attribution:
   - every interval between two profiler calls is charged to the one name most recently started;
   - the interval after `end()` is charged to no name;
-  - so the categories add up to at most the run's wall, and the rest is `unattributed_s`.
+  - the intervals charged to a parent, from `eval` or `train` starting to its first child, are reported apart as `parent_overhead_s`, not as phases;
+  - so the child categories plus that overhead add up to at most the run's wall, and the rest is `unattributed_s`.
+
+  The synchronize wait at each call fires before `perf_counter` is read, so it is charged to the phase before the call, the one that queued the GPU work. `parent_overhead_s` holds only the small gaps before a parent's first child, near zero by construction; it does not measure the `eval` or `train` phase. Profiling runs every epoch (frequency 1, recorded as `profile_frequency`), so the per-epoch cost of the synchronize points and the timer reads is part of this run's wall.
+
+  This flat attribution is an explicit instrumentation amendment to the plan's wording ("exclusive categories, children only"). It keeps the plan's sync points.
 
   This is needed because PufferLib's own `Profile` is not exclusive. Inside the minibatch loop `train_misc` is pushed with `nest=True` without popping the entry before it, so its numbers overlap. They are kept as `pufferlib_profile_s_not_additive`, for reference only. The flat attribution hooks the same synchronize points as the patch: it calls the patched `Profile` first, then reads `perf_counter`.
 
   Synchronising changes overlap and scheduling, so `sync` is a cost breakdown of a different run, not a share of `e2e`.
-- **`env`:** environment only. The same vector environment and agent count, random actions, no policy, 300 warm-up steps and then the timed steps. It is CPU work. It measures env throughput and is not a bound: random actions change trajectories, resets and cache behaviour, and drop the policy transfers.
+- **`env`:** environment only. The same vector environment and agent count, random actions and no policy:
+  - the reset and 300 warm-up steps are received before timing starts, so nothing is pending when it does;
+  - each timed step is a `send` followed by its matching `recv`, so the last transition completes inside the window, asynchronous Multiprocessing included. It is CPU work. It measures env throughput and is not a bound: random actions change trajectories, resets and cache behaviour, and drop the policy transfers.
 
 No environment share of the training critical path is inferred from these modes.
 
 ## Process rules, as the plan states them
 
-- **CUDA order:** CUDA is never initialised before the vector environment and its fork workers exist. `split.py` checks `torch.cuda.is_initialized()` before building it and refuses the run otherwise (exit 4). Without CUDA, a `cuda` run stops with exit 3.
+- **CUDA order:** no CUDA call of any kind happens before the vector environment and its fork workers exist, since even `torch.cuda.is_available()` may initialise the driver. Before building it, `split.py` reads only `torch.cuda.is_initialized()`, which is torch's own flag, and refuses the run if it is set (exit 4). `is_available()` and the device name come after the workers exist. Without CUDA, a `cuda` run cleans up and stops with exit 3. A test checks the call order.
 - **Cleanup in `try`/`finally`:**
   - every PufferLib `Utilization` monitor thread is stopped and joined, including one left behind by a trainer whose construction failed;
   - the vector environment is closed;
@@ -60,7 +67,7 @@ No environment share of the training critical path is inferred from these modes.
   - kills the group after every run, whether it succeeded or timed out, and checks that no process of the group is left (zombies awaiting reaping excepted);
   - stops the session if one is left.
 
-  The timeouts are 100 s per run and 300 s for the session's first run.
+  The timeouts are 100 s per run. Only the session's first CUDA trainer run (`e2e` or `sync` on `cuda`) gets 300 s, as it includes context creation and cuDNN autotune; env-only runs never get it. Each row records the timeout it had.
 - **Recorded per run:**
   - the advantage backend: `cpu-fallback` unless PufferLib found `nvcc`;
   - the device name;

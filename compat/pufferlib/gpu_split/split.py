@@ -177,13 +177,16 @@ def run_env(vec, steps: int, warmup: int = 300) -> dict:
     space = vec.single_action_space
     actions = [rng.integers(0, space.n, size=n, dtype=np.int32) for _ in range(256)]
     vec.async_reset(seed=1)
+    vec.recv()
     for i in range(warmup):
-        vec.recv()
         vec.send(actions[i % 256])
+        vec.recv()
+    # Nothing is pending here. Each timed step is a send and its matching recv,
+    # so the last transition completes inside the window.
     start = time.perf_counter()
     for i in range(steps):
+        vec.send(actions[(warmup + i) % 256])
         vec.recv()
-        vec.send(actions[i % 256])
     wall = time.perf_counter() - start
     return {"steps": steps * n, "wall_s": wall, "sps": steps * n / wall}
 
@@ -256,12 +259,21 @@ def run_trainer(module, vec, cfg: dict, mode: str, epochs: int, device: str) -> 
         synchronize(torch, device)
         wall = time.perf_counter() - start
         steps = int(trainer.global_step) - step0
-        out = {"steps": steps, "wall_s": wall, "sps": steps / wall, "batch": trainer.config["batch_size"]}
+        out = {
+            "steps": steps,
+            "wall_s": wall,
+            "sps": steps / wall,
+            "batch": trainer.config["batch_size"],
+            "profile_frequency": trainer.profile.frequency,
+        }
         if mode == "sync":
             flat = trainer.profile.flat
-            exclusive = {n: flat[n] - flat0.get(n, 0.0) for n in flat}
-            out["exclusive_s"] = exclusive
-            out["unattributed_s"] = wall - sum(exclusive.values())
+            delta = {n: flat[n] - flat0.get(n, 0.0) for n in flat}
+            out["exclusive_s"] = {n: delta[n] for n in CHILDREN}
+            # Time between a parent's start and its first child: overhead,
+            # not a phase.
+            out["parent_overhead_s"] = {n: delta[n] for n in PARENTS}
+            out["unattributed_s"] = wall - sum(delta.values())
             end = {n: trainer.profile.profiles[n]["elapsed"] for n in CATEGORIES}
             out["pufferlib_profile_s_not_additive"] = {n: end[n] - base[n] for n in CATEGORIES}
         return out
@@ -298,22 +310,26 @@ def main(argv=None) -> int:
 
     torch.set_num_threads(args.threads)
     record = {"case": args.case, "mode": args.mode, "device": args.device, "scale": args.scale, "threads": args.threads}
-    if args.device == "cuda" and not torch.cuda.is_available():
-        # is_available does not create a context; the run stops here.
-        print(json.dumps({**record, "error": "torch.cuda.is_available() is false"}), flush=True)
-        return EXIT_NO_CUDA
+    # No CUDA call of any kind before the vector environment and its fork
+    # workers exist: even torch.cuda.is_available() may initialise the driver.
+    # is_initialized() only reads torch's own flag.
     record["cuda_initialized_before_vecenv"] = bool(torch.cuda.is_initialized())
     if record["cuda_initialized_before_vecenv"]:
         print(json.dumps({**record, "error": "CUDA was initialised before the vector environment"}), flush=True)
         return 4
 
     before = children()
+    status = None
     vec = None
     scratch = tempfile.mkdtemp(prefix="gpu-split-")
     try:
         vec = make_vecenv(args.case, AGENTS[args.scale])
         record["workers"] = [pid for pid in children() if pid not in before]
         if args.device == "cuda":
+            if not torch.cuda.is_available():
+                record["error"] = "torch.cuda.is_available() is false"
+                status = EXIT_NO_CUDA
+                return status
             record["device_name"] = torch.cuda.get_device_name(0)
         if args.mode == "env":
             result = run_env(vec, args.env_steps)
@@ -335,6 +351,8 @@ def main(argv=None) -> int:
         record["children_after_close"] = children()
         record["children_left"] = reap([pid for pid in record["children_after_close"] if pid not in before])
         shutil.rmtree(scratch)
+        if status is not None:
+            print(json.dumps(record), flush=True)
 
     import numpy
     import pufferlib
