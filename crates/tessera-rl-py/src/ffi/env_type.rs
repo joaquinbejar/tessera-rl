@@ -330,13 +330,14 @@ maker!(make_grid, api::make_grid);
 maker!(make_keydoor, api::make_keydoor);
 maker!(make_snake, api::make_snake);
 maker!(make_brickwall, api::make_brickwall);
+maker!(make_paddleduel, api::make_paddleduel);
 maker!(make_connect4, api::make_connect4);
 maker!(make_leduc, api::make_leduc);
 maker!(make_othello, api::make_othello);
 maker!(make_go9, api::make_go9);
 
 /// The module-level constructors, for the module's method table.
-pub(super) const MAKERS: [ffi::PyMethodDef; 10] = [
+pub(super) const MAKERS: [ffi::PyMethodDef; 11] = [
     method_kw(
         c"make_cartpole",
         thunks::MAKE_CARTPOLE,
@@ -386,5 +387,10 @@ pub(super) const MAKERS: [ffi::PyMethodDef; 10] = [
         c"make_brickwall",
         thunks::MAKE_BRICKWALL,
         c"make_brickwall(**pool_options, frameskip=4, lives=5, obs=\"pixels\") -> Env",
+    ),
+    method_kw(
+        c"make_paddleduel",
+        thunks::MAKE_PADDLEDUEL,
+        c"make_paddleduel(**pool_options, agents=1, frameskip=4, max_score=11, bounce=1, obs=\"pixels\") -> Env",
     ),
 ];

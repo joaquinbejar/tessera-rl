@@ -14,7 +14,7 @@ use support::{
 use tessera_rl_classic::cartpole::MAX_EPISODE_STEPS;
 use tessera_rl_classic::{
     BrickWall, BrickWallConfig, CartPole, CartPoleConfig, Grid, GridConfig, KeyDoor, KeyDoorConfig,
-    Snake, SnakeConfig, Tag, TagConfig,
+    PaddleDuel, PaddleDuelConfig, Snake, SnakeConfig, Tag, TagConfig,
 };
 use tessera_rl_engine::{AutoReset, EnvPool, Masked, NoMasks};
 
@@ -445,6 +445,69 @@ fn test_golden_brickwall_state_same_step_matches_fixture_on_every_mode() {
     let obs = tessera_rl_classic::brickwall::OBS_STATE;
     check_brickwall(&brickwall(
         "brickwall-v1-state-same-step",
+        obs,
+        AutoReset::SameStep,
+    ));
+}
+
+impl support::GoldenEnv for PaddleDuel {
+    const ENV_ID: &'static str = tessera_rl_classic::paddleduel::ENV_ID;
+    const ENV_VERSION: u32 = tessera_rl_classic::paddleduel::ENV_VERSION;
+}
+
+fn paddleduel(
+    name: &'static str,
+    agents: u32,
+    obs: u32,
+    auto_reset: AutoReset,
+) -> Scenario<PaddleDuelConfig> {
+    Scenario {
+        name,
+        cfg: PaddleDuelConfig {
+            agents,
+            frameskip: 4,
+            max_score: 2,
+            bounce: 1,
+            obs,
+        },
+        seed: 6_112_029,
+        num_envs: 16,
+        chunk: 4,
+        auto_reset,
+        max_episode_steps: 200,
+        steps: 600,
+        reseed_at: 300,
+        reseed_ids: &[1, 12],
+        reseed_seed: 9_999,
+    }
+}
+
+fn check_paddleduel(s: &Scenario<PaddleDuelConfig>) {
+    let build = |cfg, options| {
+        EnvPool::<PaddleDuel, NoMasks>::new(cfg, options).unwrap_or_else(|e| panic!("{e}"))
+    };
+    for workers in WORKERS {
+        check(s.name, &run::<PaddleDuel, _>(s, build, workers));
+    }
+}
+
+#[test]
+fn test_golden_paddleduel_one_agent_pixels_next_step_matches_fixture_on_every_mode() {
+    let obs = tessera_rl_classic::paddleduel::OBS_PIXELS;
+    check_paddleduel(&paddleduel(
+        "paddleduel-v1-a1-pixels-next-step",
+        1,
+        obs,
+        AutoReset::NextStep,
+    ));
+}
+
+#[test]
+fn test_golden_paddleduel_two_agents_state_same_step_matches_fixture_on_every_mode() {
+    let obs = tessera_rl_classic::paddleduel::OBS_STATE;
+    check_paddleduel(&paddleduel(
+        "paddleduel-v1-a2-state-same-step",
+        2,
         obs,
         AutoReset::SameStep,
     ));

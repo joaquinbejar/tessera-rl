@@ -23,7 +23,7 @@ jobs:
       # Serial on the one host.
       max-parallel: 1
       matrix:
-        target: [actions, config, record, decode, persist_tag, persist_cartpole, persist_keydoor, persist_snake, persist_brickwall, persist_connect4, persist_go9, persist_leduc, persist_same_platform]
+        target: [actions, config, record, decode, persist_tag, persist_cartpole, persist_keydoor, persist_snake, persist_brickwall, persist_paddleduel, persist_connect4, persist_go9, persist_leduc, persist_same_platform]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - run: rustup toolchain install nightly --profile minimal

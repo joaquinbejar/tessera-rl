@@ -484,7 +484,9 @@ def make(env_id: str, num_envs: int = 1, seed: int = 0, outputs: str = "borrowed
     ``max_episode_steps`` defaults to 512. Snake takes ``size``, ``agents``
     and ``obs`` (``"pixels"`` or ``"state"``); its ``max_episode_steps`` defaults
     to 1000. Brick wall takes ``frameskip``, ``lives`` and ``obs``; its
-    ``max_episode_steps`` defaults to 4000 decisions. Leduc hold'em takes no config
+    ``max_episode_steps`` defaults to 4000 decisions. Paddle duel takes
+    ``agents``, ``frameskip``, ``max_score``, ``bounce`` and ``obs``; its
+    ``max_episode_steps`` defaults to 5000 decisions. Leduc hold'em takes no config
     either; its ``max_episode_steps`` defaults to 16, above the 8 actions of a hand. Othello takes no config
     either; its ``max_episode_steps`` defaults to 128, above the 119 plies
     of the longest game. Go 9x9 takes ``komi_half_points`` (default 15, that
@@ -498,6 +500,7 @@ def make(env_id: str, num_envs: int = 1, seed: int = 0, outputs: str = "borrowed
         "tessera/GridKeyDoor-v1": _native.make_keydoor,
         "tessera/Snake-v1": _native.make_snake,
         "tessera/BrickWall-v1": _native.make_brickwall,
+        "tessera/PaddleDuel-v1": _native.make_paddleduel,
         "tessera/Connect4-v1": _native.make_connect4,
         "tessera/Leduc-v1": _native.make_leduc,
         "tessera/Othello-v1": _native.make_othello,
