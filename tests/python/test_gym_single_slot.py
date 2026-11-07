@@ -123,11 +123,13 @@ def test_gym_single_slot_same_step_final_obs_is_slot_zero(env_id, obs):
 
 @pytest.mark.parametrize(("env_id", "obs"), CASES)
 def test_gym_single_slot_owned_outputs_do_not_alias(env_id, obs):
-    env = tg.make(env_id, num_envs=2, seed=4, obs=obs, autoreset_mode="same_step", max_episode_steps=5)
+    # A one-step limit ends every episode on each step, so final_obs is set.
+    env = tg.make(env_id, num_envs=2, seed=4, obs=obs, autoreset_mode="same_step", max_episode_steps=1)
     env.reset()
     a = np.zeros(2, dtype=np.int64)
     o1, r1, _, _, info = env.step(a)
-    finals = [info["final_obs"][i] for i in np.flatnonzero(info.get("_final_obs", np.zeros(2, bool)))]
+    finals = [info["final_obs"][i] for i in np.flatnonzero(info["_final_obs"])]
+    assert finals, "no final_obs to check"
     keep = (np.array(o1), np.array(r1), [np.array(f) for f in finals])
     for _ in range(6):
         o2, r2, _, _, _ = env.step(a + 1)
@@ -162,6 +164,12 @@ def test_gym_single_slot_time_limits_follow_the_registration(env_id, limit):
 
 
 def test_gym_snake_reverse_action_is_a_noop():
+    probe = _native(SNAKE, "state", 1, 21, AutoresetMode.NEXT_STEP)
+    mask = np.asarray(probe.reset().masks).reshape(-1)[:4]
+    probe.close()
+    assert mask.sum() == 3, "the spawn mask forbids exactly the reverse"
+    reverse = int(np.flatnonzero(mask == 0)[0])
+    heading = (reverse + 2) % 4
     nexts = []
     for a in range(4):
         env = tg.make(SNAKE, num_envs=1, seed=21, obs="state")
@@ -174,9 +182,11 @@ def test_gym_snake_reverse_action_is_a_noop():
         nexts.append(o.tobytes())
         env.close()
         native.close()
-    # Four moves from the spawn: the reverse is the heading kept, so exactly
-    # two actions give the same next observation.
-    assert len(set(nexts)) == 3
+    # The reverse keeps the heading; the two turns differ from it and from
+    # each other.
+    assert nexts[reverse] == nexts[heading]
+    turns = [nexts[d] for d in range(4) if d not in (reverse, heading)]
+    assert len({*turns, nexts[heading]}) == 3
 
 
 @pytest.mark.parametrize(("env_id", "agents"), [(SNAKE, 1), (SNAKE, 2), (PADDLE, 1), (PADDLE, 2)])
