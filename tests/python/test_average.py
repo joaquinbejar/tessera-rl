@@ -26,6 +26,8 @@ pytestmark = pytest.mark.torch
 EXAMPLE = pathlib.Path(__file__).parents[2] / "examples" / "alphazero_connect4"
 sys.path.insert(0, str(EXAMPLE))
 
+import io  # noqa: E402
+
 import artifacts  # noqa: E402
 import augment  # noqa: E402
 import average  # noqa: E402
@@ -58,6 +60,21 @@ def write_window(directory, n, seed):
     with open(os.path.join(directory, "shard-0.bin"), "wb") as f:
         f.write(data)
     return artifacts.write_manifest(directory, {"files": [{"name": "shard-0.bin", "sha256": artifacts.sha256(data)}]})
+
+
+def write_raw(path, state, size="tiny"):
+    """A checkpoint written byte for byte from ``state`` with a consistent
+    manifest, bypassing ``ckpt.save`` and any ``Net``; returns its digest."""
+    buf = io.BytesIO()
+    torch.save(state, buf)
+    data = buf.getvalue()
+    digest = artifacts.sha256(data)
+    with open(path, "wb") as f:
+        f.write(data)
+    manifest = {"sha256": digest, "size": size, "complete": True}
+    with open(os.path.splitext(path)[0] + ".json", "wb") as f:
+        f.write(artifacts.canonical_json(manifest))
+    return digest
 
 
 # ----------------------------------------------------------------- averaging
@@ -113,18 +130,48 @@ def test_average_refuses_a_schema_difference(tmp_path):
         average.load_inputs([a, b], [da, db])
 
 
-def test_average_refuses_an_unexpected_non_floating_entry(tmp_path, monkeypatch):
-    a, da = save_net(tmp_path, "a", 1)
-    real = ckpt.load
+def test_average_refuses_a_serialized_dtype_change(tmp_path):
+    state = netmod.build("tiny", 1).state_dict()
+    key = next(k for k, v in state.items() if v.is_floating_point())
+    state[key] = state[key].double()
+    path = str(tmp_path / "f64.pt")
+    digest = write_raw(path, state)
+    with pytest.raises(average.Refused, match="float64"):
+        average.load_inputs([path], [digest])
 
-    def with_extra(path):
-        model, m = real(path)
-        model.register_buffer("extra_steps", torch.zeros((), dtype=torch.int64))
-        return model, m
 
-    monkeypatch.setattr(ckpt, "load", with_extra)
+def test_average_refuses_serialized_reordered_keys(tmp_path):
+    state = netmod.build("tiny", 1).state_dict()
+    keys = list(state)
+    reordered = {k: state[k] for k in [keys[1], keys[0], *keys[2:]]}
+    path = str(tmp_path / "reordered.pt")
+    digest = write_raw(path, reordered)
+    with pytest.raises(average.Refused, match="key order"):
+        average.load_inputs([path], [digest])
+
+
+def test_average_refuses_an_unexpected_non_floating_entry(tmp_path):
+    state = netmod.build("tiny", 1).state_dict()
+    state["extra_steps"] = torch.zeros((), dtype=torch.int64)
+    path = str(tmp_path / "extra.pt")
+    digest = write_raw(path, state)
+    with pytest.raises(average.Refused, match="key order"):
+        average.load_inputs([path], [digest])
+    check = dict(netmod.build("tiny", 1).state_dict())
+    wkey = next(k for k, v in check.items() if v.is_floating_point())
+    check[wkey] = check[wkey].to(torch.int64)
+    reference = netmod.build("tiny", 1).state_dict()
+    reference[wkey] = reference[wkey].to(torch.int64)
     with pytest.raises(average.Refused, match="non-floating"):
-        average.load_inputs([a], [da])
+        average.check_schema("x", check, reference)
+
+
+def test_average_accepts_a_raw_state_that_matches_the_schema(tmp_path):
+    state = netmod.build("tiny", 1).state_dict()
+    path = str(tmp_path / "raw.pt")
+    digest = write_raw(path, state)
+    states, size = average.load_inputs([path], [digest])
+    assert size == "tiny" and list(states[0]) == list(state)
 
 
 # --------------------------------------------------------------- calibration
@@ -232,15 +279,18 @@ def test_look_preflight_accepts_only_the_registered_runtime():
             average.preflight(dict(average.LOOK_RUNTIME, **{field: value}))
 
 
-def look_report(**over):
+def look_report(wins=336, **over):
     sha = "a" * 64
     report = {
         "checkpoint": sha,
         "complete": True,
         "eligible": True,
-        "wins": 336,
+        "games": 400,
+        "wins": wins,
+        "wdl": [wins, 4, 396 - wins],
+        "by_colour": {"bot_first": [wins // 2, 2, 198 - wins // 2], "candidate_first": [wins - wins // 2, 2, 198 - (wins - wins // 2)]},
         "runtime": dict(average.LOOK_RUNTIME),
-        "protocol": {"checkpoint": sha, "sims": 100, "batch_size": 8, "capacity": 8192, "openings": 200},
+        "protocol": average.frozen_protocol(sha),
     }
     report.update(over)
     return report, sha
@@ -253,14 +303,62 @@ def test_look_verify_reports_the_candidate_rule():
     assert average.verify_look(report, sha)["candidate"] is False
 
 
+def test_look_verify_accepts_a_real_m3_look_report_shape():
+    report = {
+        "checkpoint": "d9cc322d4175ae0dda4d6a3bd741a1ef6b67465e4b62198e7b64c54011f8901c",
+        "complete": True,
+        "eligible": True,
+        "games": 400,
+        "wins": 310,
+        "wdl": [310, 12, 78],
+        "by_colour": {"bot_first": [139, 9, 52], "candidate_first": [171, 3, 26]},
+        "runtime": dict(average.LOOK_RUNTIME, boot_id="67bcf7e8", cpu_model="i7-12700H", mem_total="64302580 kB"),
+        "protocol": {
+            "batch_size": 8,
+            "bot_sha256": "ef274131e42f270222d907cd054b43aa19df1577f8a6bca2555b7f9bf311f857",
+            "capacity": 8192,
+            "checkpoint": "d9cc322d4175ae0dda4d6a3bd741a1ef6b67465e4b62198e7b64c54011f8901c",
+            "openings": 200,
+            "openings_sha256": "3276d2d044c911ed29c36f2d42690697f19a4bac0183e3a77b1af3c5af72cc49",
+            "search_seed": 20261102,
+            "sims": 100,
+            "size": "medium",
+            "tie_base": 9103431398621970432,
+        },
+    }
+    assert average.verify_look(report, report["checkpoint"]) == {"wins": 310, "eligible": True, "candidate": False}
+
+
 def test_look_verify_refuses_other_runtime_protocol_or_checkpoint():
     report, sha = look_report()
     report["runtime"]["cpuset"] = "0-7"
     with pytest.raises(average.Refused):
         average.verify_look(report, sha)
+    for field, value in (
+        ("sims", 400),
+        ("openings_sha256", "0" * 64),
+        ("bot_sha256", "0" * 64),
+        ("search_seed", 1),
+        ("tie_base", 0),
+        ("size", "small"),
+        ("checkpoint", "b" * 64),
+    ):
+        report, sha = look_report()
+        report["protocol"][field] = value
+        with pytest.raises(average.Refused, match="frozen"):
+            average.verify_look(report, sha)
     report, sha = look_report()
-    report["protocol"]["sims"] = 400
+    report["protocol"]["extra"] = 1
     with pytest.raises(average.Refused, match="frozen"):
+        average.verify_look(report, sha)
+    for over in ({"wins": 300}, {"games": 398}, {"wdl": [336, 4, 50]}):
+        report, sha = look_report()
+        report.update(over)
+        with pytest.raises(average.Refused, match="consistent"):
+            average.verify_look(report, sha)
+    report, sha = look_report()
+    report["by_colour"]["bot_first"] = [100, 2, 98]
+    with pytest.raises(average.Refused, match="consistent"):
         average.verify_look(report, sha)
     report, sha = look_report(eligible=False)
     with pytest.raises(average.Refused, match="eligible"):

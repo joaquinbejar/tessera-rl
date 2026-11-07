@@ -46,6 +46,7 @@ for _var in ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS"):
     os.environ[_var] = "1"
 
 import argparse  # noqa: E402
+import io  # noqa: E402
 import json  # noqa: E402
 import sys  # noqa: E402
 
@@ -56,7 +57,9 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import artifacts  # noqa: E402
 import ckpt  # noqa: E402
+import botmatch  # noqa: E402
 import h2h  # noqa: E402
+import look  # noqa: E402
 import provenance  # noqa: E402
 import train_step  # noqa: E402
 
@@ -109,30 +112,59 @@ def is_running_stat(name: str) -> bool:
     return name.endswith("running_mean") or name.endswith("running_var")
 
 
+def raw_state(path: str, want: str) -> tuple[dict, str]:
+    """The serialized state dict exactly as stored, before any ``Net`` is
+    built, and the net size from the manifest. The file's digest must match
+    its manifest and ``want``."""
+    m = ckpt.manifest(path)
+    with open(path, "rb") as f:
+        data = f.read()
+    digest = artifacts.sha256(data)
+    if digest != m.get("sha256") or m.get("complete") is not True:
+        raise artifacts.Incomplete(f"{path}: checkpoint does not match its manifest")
+    if digest != want:
+        raise Refused(f"{path}: digest {digest}, expected {want}")
+    state = torch.load(io.BytesIO(data), weights_only=True)
+    if not isinstance(state, dict):
+        raise Refused(f"{path}: not a state dict")
+    return state, m["size"]
+
+
+def check_schema(path: str, state: dict, reference: dict) -> None:
+    """Refuses any difference from ``reference`` in keys, key order, shape
+    or dtype, and any non-floating entry other than a counter."""
+    if list(state) != list(reference):
+        raise Refused(f"{path}: keys or key order differ from the expected schema")
+    for k, t in state.items():
+        r = reference[k]
+        if not isinstance(t, torch.Tensor) or t.shape != r.shape or t.dtype != r.dtype:
+            got = f"{t.dtype} {tuple(t.shape)}" if isinstance(t, torch.Tensor) else type(t).__name__
+            raise Refused(f"{path}: {k} is {got}, expected {r.dtype} {tuple(r.shape)}")
+        if not t.is_floating_point() and not is_counter(k):
+            raise Refused(f"{path}: {k} is a non-floating entry other than num_batches_tracked")
+
+
 def load_inputs(paths: list[str], expected: list[str]) -> tuple[list[dict], str]:
-    """The inputs' state dicts and their common net size. Refuses a digest
-    other than ``expected`` (in order), or any schema difference."""
+    """The inputs' serialized state dicts and their common net size.
+    Refuses a digest other than ``expected`` (in order). Every raw state
+    must match, key for key and in order, the schema of a freshly built net
+    of the manifest's size, so a dtype or order difference in a file is
+    refused rather than cast away by ``load_state_dict``."""
+    import net as netmod
+
     if len(paths) != len(expected) or not paths:
         raise Refused(f"{len(paths)} inputs for {len(expected)} expected digests")
-    states, size = [], None
+    states, size, reference = [], None, None
     for path, want in zip(paths, expected):
-        model, m = ckpt.load(path)
-        if m["sha256"] != want:
-            raise Refused(f"{path}: digest {m['sha256']}, expected {want}")
+        state, s = raw_state(path, want)
         if size is None:
-            size = m["size"]
-        elif m["size"] != size:
-            raise Refused(f"{path}: size {m['size']}, expected {size}")
-        states.append(model.state_dict())
-    first = states[0]
-    for path, s in zip(paths, states):
-        if list(s) != list(first):
-            raise Refused(f"{path}: keys or key order differ from {paths[0]}")
-        for k, t in s.items():
-            if t.shape != first[k].shape or t.dtype != first[k].dtype:
-                raise Refused(f"{path}: {k} is {t.dtype} {tuple(t.shape)}, expected {first[k].dtype} {tuple(first[k].shape)}")
-            if not t.is_floating_point() and not is_counter(k):
-                raise Refused(f"{path}: {k} is a non-floating entry other than num_batches_tracked")
+            size = s
+            reference = netmod.Net(*netmod.SIZES[size]).state_dict()
+        elif s != size:
+            raise Refused(f"{path}: size {s}, expected {size}")
+        check_schema(path, state, reference)
+        ckpt.check_finite(state, path)
+        states.append(state)
     return states, size
 
 
@@ -259,15 +291,50 @@ def preflight(observed: dict | None = None) -> None:
         raise Refused(f"not the registered look runtime: {bad}")
 
 
+def frozen_protocol(checkpoint_sha: str) -> dict:
+    """The protocol block a look of ``checkpoint_sha`` must report, field
+    for field: ADR-0048's frozen budget on the pinned held-out set, with the
+    registered bot for the registered image and the M3 seeds."""
+    return {
+        "checkpoint": checkpoint_sha,
+        "sims": look.FROZEN[0],
+        "batch_size": look.FROZEN[1],
+        "capacity": look.FROZEN[2],
+        "openings": look.FROZEN[3],
+        "openings_sha256": look.HELDOUT_SHA256,
+        "bot_sha256": look.REGISTERED_BOTS[h2h.REGISTERED_IMAGE],
+        "search_seed": botmatch.SEARCH_SEED,
+        "tie_base": botmatch.TIE_BASE,
+        "size": "medium",
+    }
+
+
 def verify_look(report: dict, checkpoint_sha: str) -> dict:
-    """Checks a look report: the averaged checkpoint, the registered runtime
-    and the frozen protocol, and that ``look.py`` called it eligible."""
+    """Checks a look report on its own evidence, not only ``eligible``: the
+    averaged checkpoint, the registered runtime, every field of the frozen
+    protocol, and counts that agree with each other."""
     preflight(report.get("runtime", {}))
-    proto = report.get("protocol", {})
-    if report.get("checkpoint") != checkpoint_sha or proto.get("checkpoint") != checkpoint_sha:
+    if report.get("checkpoint") != checkpoint_sha:
         raise Refused(f"the report is for {report.get('checkpoint')}, not {checkpoint_sha}")
-    if (proto.get("sims"), proto.get("batch_size"), proto.get("capacity"), proto.get("openings")) != (100, 8, 8192, 200):
-        raise Refused(f"not the frozen protocol: {proto}")
+    want = frozen_protocol(checkpoint_sha)
+    proto = report.get("protocol", {})
+    bad = {k: proto.get(k) for k, v in want.items() if proto.get(k) != v}
+    if bad or set(proto) != set(want):
+        raise Refused(f"not the frozen protocol: {bad or sorted(set(proto) ^ set(want))}")
+    games = 2 * want["openings"]
+    wdl = report.get("wdl")
+    colours = report.get("by_colour", {})
+    if (
+        report.get("games") != games
+        or not isinstance(wdl, list)
+        or len(wdl) != 3
+        or sum(wdl) != games
+        or report.get("wins") != wdl[0]
+        or sorted(colours) != ["bot_first", "candidate_first"]
+        or any(len(c) != 3 or sum(c) != want["openings"] for c in colours.values())
+        or [sum(c[i] for c in colours.values()) for i in range(3)] != wdl
+    ):
+        raise Refused("the look's game counts are not consistent")
     if report.get("eligible") is not True or report.get("complete") is not True:
         raise Refused("the look is not complete and eligible")
     return {"wins": report["wins"], "eligible": True, "candidate": report["wins"] >= 336}
