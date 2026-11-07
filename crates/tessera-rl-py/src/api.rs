@@ -404,6 +404,7 @@ pub(crate) fn layout(g: Gil, inner: &Inner) -> CResult<Mine> {
         let d = capi::dict(g)?;
         capi::dict_set(g, &d, c"num_envs", &int(g, l.num_envs)?)?;
         capi::dict_set(g, &d, c"agents", &int(g, l.agents)?)?;
+        capi::dict_set(g, &d, c"initial_agents", &int(g, l.initial_agents)?)?;
         capi::dict_set(
             g,
             &d,

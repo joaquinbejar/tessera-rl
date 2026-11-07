@@ -232,6 +232,7 @@ mod tests {
         let layout = Layout {
             num_envs: 3,
             agents: 2,
+            initial_agents: 2,
             leaves: vec![Leaf {
                 name: String::new(),
                 dtype: "float32",

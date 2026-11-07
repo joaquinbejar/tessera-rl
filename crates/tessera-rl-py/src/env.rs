@@ -84,6 +84,9 @@ pub(crate) enum ResetSeed {
 pub(crate) struct Layout {
     pub(crate) num_envs: usize,
     pub(crate) agents: usize,
+    /// `Environment::initial_agents(cfg)`: the initial population, not a
+    /// bound on which slots can ever act (`agents` is the capacity).
+    pub(crate) initial_agents: usize,
     pub(crate) leaves: Vec<Leaf>,
     pub(crate) action_choices: u32,
     pub(crate) mask_len: usize,
@@ -267,6 +270,7 @@ where
             layout: Layout {
                 num_envs,
                 agents: E::MAX_AGENTS,
+                initial_agents: E::initial_agents(cfg),
                 leaves: obs,
                 action_choices,
                 mask_len,
