@@ -111,7 +111,7 @@ py-test-wheels:
 	uv sync --locked --python 3.11
 
 # The installed wheel against the committed golden fixtures: the Rust golden
-# tests write their actions, and the wheel replays them. Uses the wheel that
+# tests write their actions, and the wheel replays whole fixtures. Uses the wheel that
 # uv sync builds here; wheels.yml runs the tool on the real artifacts.
 GOLDEN_ACTIONS ?= target/golden-actions
 wheel-golden:

@@ -11,15 +11,14 @@ Inputs: the fixtures, and the `.actions` files written by the Rust golden tests
 under `TESSERA_GOLDEN_ACTIONS` (the actions depend on state through the scripted
 baseline, which Python cannot reach).
 
-What is compared, stated plainly:
+Every call of every fixture is compared, the mid-run reseed and the `final`
+line included, through the native layer that the wheel ships. `records` is the
+XXH3-64 of each instance's canonical `snapshot` bytes, so it covers all of the
+persistent header and state.
 
-- the fields the Python API exposes: obs, rewards, masks, the four flag arrays
-  and alive, acting. Not records, terminal_obs, generations or the episode
-  statistics;
-- calls `t = 0` up to the one before the fixture's mid-run reseed. A partial
-  reset with a new seed is not available in Sync mode from Python, so the
-  fixture's later lines cannot be reproduced. The fixture's `final` line is
-  not compared either.
+Omitted, stated plainly: the output arrays `generations`, `episode_return`,
+`episode_length`, `episode_illegal` and `episode_invalid_agent_events`. The wheel
+does not expose them, so no user of it can read them. The report lists them.
 """
 
 from __future__ import annotations
@@ -40,7 +39,9 @@ WORKERS = (0, 1, 2, 7, 64)
 OUTPUTS = ("borrowed", "owned")
 AUTO_RESET = {"NextStep": "next_step", "SameStep": "same_step"}
 COMPARED = (
+    "records",
     "obs",
+    "terminal_obs",
     "rewards",
     "masks",
     "agent_terminated",
@@ -49,6 +50,13 @@ COMPARED = (
     "episode_truncated",
     "alive",
     "acting",
+)
+OMITTED = (
+    "generations",
+    "episode_return",
+    "episode_length",
+    "episode_illegal",
+    "episode_invalid_agent_events",
 )
 
 _CROWDED = {"pursuers": 4, "evaders": 4, "slip": 300}
@@ -83,13 +91,17 @@ CONFIGS = {
 }
 
 
-def parse_fixture(text: str) -> tuple[dict, dict[int, dict[str, str]]]:
-    """(header, {t: {field: digest}}) of a format 3 fixture."""
+def parse_fixture(text: str) -> tuple[dict, dict[int, dict[str, str]], list[str]]:
+    """(header, {t: {field: digest}}, final hashes) of a format 3 fixture."""
     header: dict[str, str] = {}
     lines: dict[int, dict[str, str]] = {}
     fields: list[str] | None = None
+    final: list[str] | None = None
     for raw in text.splitlines():
-        if not raw or raw.startswith("#") or raw.startswith("final "):
+        if not raw or raw.startswith("#"):
+            continue
+        if raw.startswith("final "):
+            final = raw.split()[1:]
             continue
         if "=" in raw:
             key, value = raw.split("=", 1)
@@ -105,29 +117,49 @@ def parse_fixture(text: str) -> tuple[dict, dict[int, dict[str, str]]]:
         lines[int(parts[0])] = dict(zip(fields, parts[1:], strict=True))
     if header.get("format") != "3":
         raise ValueError(f"unsupported fixture format {header.get('format')!r}")
-    return header, lines
+    if final is None:
+        raise ValueError("a fixture without a final line")
+    return header, lines, final
 
 
-def reseed_step(header: dict) -> int:
-    return int(header["reseed"].split(":", 1)[0])
+def parse_reseed(header: dict) -> tuple[int, list[int], int]:
+    """(step, ids, seed) of the fixture's mid-run reseed."""
+    step, ids, seed = header["reseed"].split(":")
+    return int(step), json.loads(ids), int(seed)
 
 
-def digests(step, digest64) -> dict[str, str]:
-    """The fixture's digests of the Python-visible outputs of one call."""
+def digests(env, raw: dict, same_step: bool, digest64) -> dict[str, str]:
+    """The fixture's digests of one call, from the native output `raw`."""
 
     def hex_of(data: bytes) -> str:
         return f"{digest64(data):016x}"
 
-    obs = b"".join(np.asarray(v).tobytes() for v in step.observations.values())
-    out = {"obs": hex_of(obs), "masks": hex_of(b"" if step.masks is None else np.asarray(step.masks).tobytes())}
+    def field(name):
+        return bytes(raw[name]) if raw.get(name) is not None else b""
+
+    terminal = bytearray()
+    ended = np.frombuffer(field("episode_terminated"), np.uint8)
+    truncated = np.frombuffer(field("episode_truncated"), np.uint8)
+    if same_step:
+        for leaf in raw["terminal_observations"]:
+            data = bytes(leaf)
+            per = len(data) // env.num_envs
+            for i in np.flatnonzero(ended | truncated):
+                terminal += data[int(i) * per : (int(i) + 1) * per]
+    records = b"".join(digest64(env.snapshot(i)).to_bytes(8, "little") for i in range(env.num_envs))
+    out = {
+        "records": hex_of(records),
+        "obs": hex_of(b"".join(bytes(v) for v in raw["observations"])),
+        "terminal_obs": hex_of(bytes(terminal)),
+    }
     for name in COMPARED:
         if name not in out:
-            out[name] = hex_of(np.asarray(getattr(step, name)).tobytes())
+            out[name] = hex_of(field(name))
     return out
 
 
-def replay(name: str, header: dict, lines: dict, actions: bytes, workers: int, outputs: str, make, digest64) -> dict:
-    """Replays one fixture; returns the mismatching calls."""
+def replay(name: str, header: dict, lines: dict, final: list[str], actions: bytes, workers: int, outputs: str, make, digest64) -> dict:
+    """Replays one whole fixture; returns the mismatching calls."""
     env = make(
         header["env_id"],
         num_envs=int(header["num_envs"]),
@@ -139,31 +171,37 @@ def replay(name: str, header: dict, lines: dict, actions: bytes, workers: int, o
         max_episode_steps=int(header["max_episode_steps"]),
         **CONFIGS[name],
     )
-    last = reseed_step(header) - 1
-    rows = env.num_envs * env.agents
-    expected = int(header["steps"]) * rows * 4
-    if len(actions) != expected:
+    steps = int(header["steps"])
+    if len(actions) != steps * env.num_envs * env.agents * 4:
         env.close()
-        raise ValueError(f"{name}: {len(actions)} action bytes, expected {expected}")
+        raise ValueError(f"{name}: {len(actions)} action bytes, expected {steps * env.num_envs * env.agents * 4}")
     every = np.frombuffer(actions, dtype="<i4").reshape(-1, env.num_envs, env.agents)
+    same_step = header["auto_reset"] == "SameStep"
+    at, ids, seed = parse_reseed(header)
     mismatches = []
+    final_ok = False
     try:
-        step = env.reset()
-        for t in range(last + 1):
+        raw = env._native.reset()
+        for t in range(steps + 1):
             if t > 0:
-                step = env.step(every[t - 1])
-            got = digests(step, digest64)
+                if t == at:
+                    env._native.reset(seed, ids)
+                raw = env._native.step(every[t - 1].tobytes())
+            got = digests(env, raw, same_step, digest64)
             bad = [f for f in COMPARED if got[f] != lines[t][f]]
             if bad:
                 mismatches.append({"t": t, "fields": bad})
+        hashes = [f"{digest64(env.snapshot(i)):016x}" for i in range(env.num_envs)]
+        final_ok = hashes == final
     finally:
         env.close()
     return {
         "fixture": name,
         "workers": workers,
         "outputs": outputs,
-        "calls": last + 1,
+        "calls": steps + 1,
         "mismatches": mismatches,
+        "final_ok": final_ok,
     }
 
 
@@ -177,15 +215,16 @@ def run(actions_dir: pathlib.Path, make, digest64) -> dict:
         raise ValueError(f"fixtures and CONFIGS differ: {sorted(set(found) ^ set(CONFIGS))}")
     results = []
     for name, path in found.items():
-        header, lines = parse_fixture(path.read_text(encoding="utf-8"))
+        header, lines, final = parse_fixture(path.read_text(encoding="utf-8"))
         actions = (actions_dir / f"{name}.actions").read_bytes()
         for workers in WORKERS:
             for outputs in OUTPUTS:
-                results.append(replay(name, header, lines, actions, workers, outputs, make, digest64))
+                results.append(replay(name, header, lines, final, actions, workers, outputs, make, digest64))
     return {
         "compared_fields": list(COMPARED),
+        "omitted_fields": list(OMITTED),
         "results": results,
-        "passed": bool(results) and not any(r["mismatches"] for r in results),
+        "passed": bool(results) and all(r["final_ok"] and not r["mismatches"] for r in results),
     }
 
 
@@ -201,7 +240,7 @@ def main(argv=None) -> int:
     report = run(args.actions, t.make, xxhash.xxh3_64_intdigest)
     report["build_profile"] = t._native.build_profile()
     args.out.write_text(json.dumps(report, indent=1), encoding="utf-8")
-    failed = [r for r in report["results"] if r["mismatches"]]
+    failed = [r for r in report["results"] if r["mismatches"] or not r["final_ok"]]
     print(json.dumps({"passed": report["passed"], "runs": len(report["results"]), "failed": len(failed)}))
     return 0 if report["passed"] else 1
 
