@@ -26,8 +26,8 @@ pub const X_THRESHOLD: f64 = 2.4;
 /// as Gymnasium does (`12 * 2 * pi / 360`).
 pub const THETA_THRESHOLD: f64 = 12.0 * 2.0 * core::f64::consts::PI / 360.0;
 
-const TOTAL_MASS: f64 = MASS_POLE + MASS_CART;
-const POLEMASS_LENGTH: f64 = MASS_POLE * LENGTH;
+pub(super) const TOTAL_MASS: f64 = MASS_POLE + MASS_CART;
+pub(super) const POLEMASS_LENGTH: f64 = MASS_POLE * LENGTH;
 
 /// One Euler step of `[x, x_dot, theta, theta_dot]` under `push_right`.
 #[must_use]

@@ -854,6 +854,7 @@ dependencies = [
  "tessera-rl-engine",
  "tessera-rl-macros",
  "tessera-rl-num",
+ "tessera-rl-simd",
 ]
 
 [[package]]
@@ -965,6 +966,14 @@ dependencies = [
  "tessera-rl-engine",
  "tessera-rl-games",
  "tessera-rl-macros",
+ "tessera-rl-num",
+ "thiserror",
+]
+
+[[package]]
+name = "tessera-rl-simd"
+version = "0.1.0"
+dependencies = [
  "tessera-rl-num",
  "thiserror",
 ]

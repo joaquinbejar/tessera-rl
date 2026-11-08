@@ -27,6 +27,7 @@
 //! `acos`, `sinh`, `cosh`, `asinh`, `acosh`, `atanh`, `exp2`, `exp_m1`,
 //! `log2`, `log10`, `ln_1p`, `cbrt`, `pow`, `gamma` and `ln_gamma`.
 
+pub mod lane;
 mod vendor;
 
 /// The current math version.

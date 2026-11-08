@@ -17,9 +17,12 @@ categories.workspace = true
 [dependencies]
 tessera-rl-core.workspace = true
 tessera-rl-num.workspace = true
+tessera-rl-simd.workspace = true
 tessera-rl-macros.workspace = true
 
 [dev-dependencies]
+# The hostile floating-point mode of the lane differential.
+tessera-rl-num = { workspace = true, features = ["test-hooks"] }
 proptest.workspace = true
 criterion.workspace = true
 gungraun.workspace = true

@@ -53,6 +53,7 @@ jobs:
           # Self-hosted runners: the post step would delete rustup from ~/.cargo/bin.
           cache-bin: "false"
       - run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+      - run: python3 scripts/check_simd_disasm.py
       - run: cargo test --workspace --all-features --locked
       - run: cargo test --workspace --locked
       # The downstream consumer alone: no workspace feature unification can
