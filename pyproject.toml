@@ -15,6 +15,9 @@ dependencies = ["numpy>=1.26.4"]
 gymnasium = ["gymnasium>=1.4.0,<2"]
 # tessera_rl.pz (the PettingZoo AEC and Parallel adapters).
 pettingzoo = ["pettingzoo>=1.27.0,<2"]
+# tessera_rl.jax (the ordered-callback JAX handles, SPEC 15.2). Pinned
+# exactly: the ordering guarantees are tested on this version only.
+jax = ["jax==0.10.2", "jaxlib==0.10.2"]
 
 [build-system]
 requires = ["maturin>=1.16,<2"]
@@ -35,6 +38,8 @@ test = [
 ]
 # Only for the PyTorch DLPack and read-only tests (pytest marker `torch`).
 torch = ["torch==2.15.0"]
+# Only for the JAX handle tests (pytest marker `jax`).
+jax = ["jax==0.10.2", "jaxlib==0.10.2"]
 # Every [env.main] pin of compat/targets.toml, so the lock proves they
 # resolve together (make check-targets installs and verifies all of them).
 conformance = [
@@ -47,7 +52,10 @@ conformance = [
 ]
 
 [tool.pytest.ini_options]
-markers = ["torch: needs PyTorch (the `torch` dependency group)"]
+markers = [
+    "torch: needs PyTorch (the `torch` dependency group)",
+    "jax: needs JAX (the `jax` dependency group)",
+]
 # Gymnasium's env checker warns about the infinite velocity bounds of
 # CartPole's observation space; it warns identically for Gymnasium's own
 # CartPole-v1, whose space ours equals.

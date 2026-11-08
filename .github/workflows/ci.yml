@@ -234,6 +234,8 @@ jobs:
       - run: make py-test-hooks
       - run: uv run --locked --python 3.11 python -c "import tessera_rl._native as n; assert not hasattr(n, '_make_panic_counter')"
       - run: make py-test-torch
+      # The JAX handles (marker `jax`, SPEC 15.2) at the pinned jax and jaxlib.
+      - run: make py-test-jax
 
   # The PufferLib adapter at its own pins (compat/pufferlib). x86-64: PufferLib
   # 3.0.0 does not build on linux-arm64. Timeouts kill the process group.
