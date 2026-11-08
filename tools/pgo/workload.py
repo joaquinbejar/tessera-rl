@@ -13,6 +13,7 @@ closed before returning, as profile counters are written at normal exit.
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import pathlib
 import sys
 
@@ -20,6 +21,20 @@ import numpy as np
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import evidence  # noqa: E402
+
+
+CONTROL = "control/interpreter-only"
+
+
+def control() -> int:
+    """Pure Python work with the module imported: the feasibility gate's control
+    that interpreter work is not attributed to `_native`."""
+    import tessera_rl  # noqa: F401
+
+    total = 0
+    for i in range(2_000_000):
+        total += i % 7
+    return total
 
 
 def choose(rng, masks, shape, choices: int) -> np.ndarray:
@@ -124,15 +139,20 @@ def run_scenario(s: evidence.Scenario, manifest: dict, steps: int | None = None)
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--manifest", required=True)
-    parser.add_argument("--scenario", required=True)
+    parser.add_argument("--scenario", required=True, help=f"a manifest scenario, or {CONTROL}")
     parser.add_argument("--steps", type=int, default=None)
+    parser.add_argument("--workers", type=int, default=None, help="override, for the worker-thread control")
     args = parser.parse_args(argv)
+    if args.scenario == CONTROL:
+        control()
+        return 0
     manifest = evidence.load_manifest(args.manifest)
     found = [s for s in evidence.scenarios(manifest) if s.name == args.scenario]
     if len(found) != 1:
         print(f"unknown scenario {args.scenario!r}", file=sys.stderr)
         return 2
-    run_scenario(found[0], manifest, args.steps)
+    scenario = found[0] if args.workers is None else dataclasses.replace(found[0], workers=args.workers)
+    run_scenario(scenario, manifest, args.steps)
     return 0
 
 

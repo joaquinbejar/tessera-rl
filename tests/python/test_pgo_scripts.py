@@ -105,3 +105,71 @@ def test_pgo_callgrind_cost_is_the_difference_of_two_lengths(tmp_path):
 
     cost = callgrind.cost_of("py", "m", s, tmp_path, runner=runner)
     assert calls == [s.steps, 2 * s.steps] and cost.ir == 1000
+
+
+def test_pgo_workload_control_and_worker_override_run():
+    assert callable(workload.control) and callgrind.CONTROL == workload.CONTROL
+    args = ["--manifest", MANIFEST_PATH, "--scenario", "threaded/CartPole-v1", "--steps", "2", "--workers", "0"]
+    assert workload.main(args) == 0
+
+
+def test_pgo_thread_files_sort_numerically(tmp_path):
+    out = tmp_path / "x.callgrind"
+    for suffix in ("1", "10", "2", "notes"):
+        pathlib.Path(f"{out}-{suffix}").write_text("")
+    assert [p.name.rsplit("-", 1)[1] for p in callgrind.thread_files(out)] == ["1", "2", "10"]
+
+
+THREAD = "positions: line\nevents: Ir Bcm Bim I1mr D1mr D1mw ILmr DLmr DLmw\nob=(1) /x/_native.so\n1 {} 6000 0 0 0 0 0 0 0\n"
+
+
+class FakeValgrind:
+    """Writes Callgrind files as a function of scenario and steps."""
+
+    def __init__(self, control_ir=10, per_step=100, jitter=lambda run: 0, caller_only=False):
+        self.calls, self.control_ir, self.per_step, self.jitter, self.caller_only = [], control_ir, per_step, jitter, caller_only
+        self.counts = {}
+
+    def __call__(self, argv, check):
+        out = next(a.split("=", 1)[1] for a in argv if a.startswith("--callgrind-out-file="))
+        scenario = argv[argv.index("--scenario") + 1]
+        steps = int(argv[argv.index("--steps") + 1])
+        self.calls.append((scenario, steps, out))
+        if scenario == callgrind.CONTROL:
+            pathlib.Path(out).write_text(THREAD.format(self.control_ir))
+        elif "--separate-threads=yes" in argv:
+            pathlib.Path(f"{out}-1").write_text(THREAD.format(1000))
+            pathlib.Path(f"{out}-2").write_text(THREAD.format(0 if self.caller_only else 5000))
+        else:
+            n = self.counts[scenario] = self.counts.get(scenario, 0) + 1
+            pathlib.Path(out).write_text(THREAD.format(1000 + steps * self.per_step * 1000 + self.jitter(n)))
+
+
+def gate(tmp_path, **kw):
+    runner = FakeValgrind(**kw)
+    return callgrind.feasibility("py", MANIFEST_PATH, MANIFEST, tmp_path, runner), runner
+
+
+def test_pgo_feasibility_passes_a_clean_fake(tmp_path):
+    report, runner = gate(tmp_path)
+    assert report["passed"] is True and report["usable"] is True and len(report["gating"]) == 16
+    entry = report["scenarios"]["split-phase/CartPole-v1"]
+    assert entry["workers"]["kind"] == "per-thread" and entry["workers"]["share"] == pytest.approx(5 / 6)
+    assert report["scenarios"]["threaded/CartPole-v1"]["workers"]["kind"] == "against-inline"
+    assert report["scenarios"]["state/CartPole-v1"]["linear"] is True
+    assert len(report["scenarios"]["state/CartPole-v1"]["aa_ir"]) == 5
+
+
+def test_pgo_feasibility_fails_when_the_interpreter_leaks(tmp_path):
+    assert gate(tmp_path, control_ir=10**12)[0]["passed"] is False
+
+
+def test_pgo_feasibility_fails_without_worker_thread_cost(tmp_path):
+    report, _ = gate(tmp_path, caller_only=True)
+    assert report["passed"] is False and report["scenarios"]["split-phase/CartPole-v1"]["workers"]["passed"] is False
+
+
+def test_pgo_feasibility_marks_an_unstable_ir_as_not_gating(tmp_path):
+    report, _ = gate(tmp_path, jitter=lambda run: 10**9 * run**2)
+    assert report["gating"] == [] and report["passed"] is False
+
