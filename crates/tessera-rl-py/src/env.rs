@@ -8,7 +8,8 @@ use core::num::{NonZeroU32, NonZeroUsize};
 
 use tessera_rl_classic::{
     BrickWall, BrickWallConfig, CartPole, CartPoleConfig, Grid, GridConfig, KeyDoor, KeyDoorConfig,
-    PaddleDuel, PaddleDuelConfig, Snake, SnakeConfig, Tag, TagConfig,
+    MountainCar, MountainCarConfig, PaddleDuel, PaddleDuelConfig, Snake, SnakeConfig, Tag,
+    TagConfig,
 };
 use tessera_rl_core::encoding::decode_from_slice;
 use tessera_rl_core::space::{BoxBounds, DType, Space};
@@ -579,6 +580,15 @@ pub(crate) fn cartpole(args: &PoolArgs) -> Result<Box<dyn PoolOps>, BindError> {
     let (options, n) = options(args)?;
     let same_step = options.auto_reset == AutoReset::SameStep;
     let pool = EnvPool::<CartPole, NoMasks>::new(cfg.clone(), options)?;
+    finish(&cfg, pool, args, n, same_step)
+}
+
+/// A mountain car pool (`tessera/MountainCar-v1`).
+pub(crate) fn mountaincar(args: &PoolArgs) -> Result<Box<dyn PoolOps>, BindError> {
+    let cfg = MountainCarConfig::default();
+    let (options, n) = options(args)?;
+    let same_step = options.auto_reset == AutoReset::SameStep;
+    let pool = EnvPool::<MountainCar, NoMasks>::new(cfg.clone(), options)?;
     finish(&cfg, pool, args, n, same_step)
 }
 

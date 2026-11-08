@@ -67,6 +67,7 @@ from tessera_rl._env import _discrete_actions, native_kwargs
 #: Single-agent environments the adapter exposes.
 _MAKERS = {
     "tessera/CartPole-v1": _native.make_cartpole,
+    "tessera/MountainCar-v1": _native.make_mountaincar,
     "tessera/Grid-v1": _native.make_grid,
     "tessera/BrickWall-v1": _native.make_brickwall,
     "tessera/Snake-v1": _native.make_snake,
@@ -83,7 +84,7 @@ _MAKERS = {
 _SLOT0 = frozenset({"tessera/Snake-v1", "tessera/PaddleDuel-v1"})
 
 #: The registered time limit, where it is not 500.
-_LIMITS = {"tessera/BrickWall-v1": 4000, "tessera/Snake-v1": 1000, "tessera/PaddleDuel-v1": 5000}
+_LIMITS = {"tessera/MountainCar-v1": 200, "tessera/BrickWall-v1": 4000, "tessera/Snake-v1": 1000, "tessera/PaddleDuel-v1": 5000}
 
 _NATIVE_MODE = {
     AutoresetMode.NEXT_STEP: "next_step",

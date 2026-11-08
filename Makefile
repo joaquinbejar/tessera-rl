@@ -109,11 +109,13 @@ py-test-jax:
 puffer-test:
 	python3 scripts/puffer_test.py
 
-# SPEC 18 CartPole equivalence with the pinned Gymnasium: JSON report
+# SPEC 18 CartPole and mountain car equivalence with the pinned Gymnasium:
+# JSON report for CartPole, exit status for both
 # (the gate itself runs in py-test, tests/python/test_gym_equivalence.py).
 gym-equivalence:
 	uv sync --locked --python 3.11
 	uv run --locked --python 3.11 python tools/gym_equivalence.py
+	uv run --locked --python 3.11 python tools/gym_equivalence_mountaincar.py > /dev/null
 
 # SPEC 14.2 reference training: PPO on tessera/CartPole-v1 through the
 # Gymnasium adapter, Gymnasium's CartPole-v1 as the control and broken

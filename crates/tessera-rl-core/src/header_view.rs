@@ -2,7 +2,8 @@
 
 //! A read-only, lifecycle-aware view of a record header for
 //! `Validate::validate_record` (ADR-0040): per-slot liveness and
-//! generations, the episode step counter and the record's phase. RNG
+//! generations, the episode step counter, the record's phase and how the
+//! last episode ended. RNG
 //! identity and statistics are not exposed. Building a view grants no
 //! trust: acceptance is decided by the engine's import checks.
 
@@ -39,6 +40,7 @@ pub struct HeaderView<'a> {
     agents: &'a [AgentRow],
     episode_steps: u32,
     phase: Phase,
+    end_kind: u8,
 }
 
 impl<'a> HeaderView<'a> {
@@ -59,6 +61,7 @@ impl<'a> HeaderView<'a> {
             agents: header.agents(),
             episode_steps: engine.episode_steps,
             phase,
+            end_kind: engine.end_kind,
         }
     }
 
@@ -66,6 +69,20 @@ impl<'a> HeaderView<'a> {
     #[must_use]
     pub const fn phase(&self) -> Phase {
         self.phase
+    }
+
+    /// The last episode ended terminated (alone or with `truncated`, a
+    /// terminal step at the step limit). Meaningful in `PendingReset`.
+    #[must_use]
+    pub const fn terminated(&self) -> bool {
+        self.end_kind & 1 != 0
+    }
+
+    /// The last episode ended truncated (the step limit, alone or with
+    /// `terminated`). Meaningful in `PendingReset`.
+    #[must_use]
+    pub const fn truncated(&self) -> bool {
+        self.end_kind & 2 != 0
     }
 
     /// Transitions taken in the current episode.
@@ -117,5 +134,24 @@ mod tests {
         let slot = view.agent(1).unwrap();
         assert!(slot.alive && !slot.acting && slot.generation == 3);
         assert!(view.agent(2).is_none());
+    }
+
+    #[test]
+    fn test_header_view_end_flags_follow_end_kind() {
+        let mut h = RecordHeader::<1, NoAdaptive>::state_default();
+        for (kind, terminated, truncated) in [
+            (0, false, false),
+            (1, true, false),
+            (2, false, true),
+            (3, true, true),
+        ] {
+            h.engine.end_kind = kind;
+            let view = HeaderView::of(&h);
+            assert_eq!(
+                (view.terminated(), view.truncated()),
+                (terminated, truncated),
+                "end_kind {kind}"
+            );
+        }
     }
 }

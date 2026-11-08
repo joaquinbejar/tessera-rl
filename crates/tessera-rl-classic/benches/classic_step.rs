@@ -13,7 +13,8 @@ use criterion::{Criterion, criterion_group, criterion_main};
 use tessera_rl_classic::cartpole::physics;
 use tessera_rl_classic::{
     BrickWall, BrickWallConfig, CartPole, CartPoleConfig, Grid, GridConfig, KeyDoor, KeyDoorConfig,
-    PaddleDuel, PaddleDuelConfig, Snake, SnakeConfig, Tag, TagConfig,
+    MountainCar, MountainCarConfig, PaddleDuel, PaddleDuelConfig, Snake, SnakeConfig, Tag,
+    TagConfig,
 };
 use tessera_rl_engine::{ActionInput, EnvPool, Masked, NoMasks, PoolOptions, Reseed};
 use tessera_rl_num::identity::Seed;
@@ -120,6 +121,7 @@ fn bench(c: &mut Criterion) {
     snake(&mut group);
     brickwall(&mut group);
     paddleduel(&mut group);
+    mountaincar(&mut group);
     group.finish();
 }
 
@@ -245,4 +247,29 @@ fn paddleduel(group: &mut criterion::BenchmarkGroup<'_, criterion::measurement::
             });
         });
     }
+}
+
+/// Mountain car: a seeded random policy; episodes truncate at 200 and
+/// reset at once.
+fn mountaincar(group: &mut criterion::BenchmarkGroup<'_, criterion::measurement::WallTime>) {
+    let mut pool =
+        EnvPool::<MountainCar, NoMasks>::new(MountainCarConfig::default(), options()).unwrap();
+    pool.reset_all(Reseed::Keep).unwrap();
+    let mut policy = vec![1i32; N as usize];
+    let mut draw = 0x0dd_ba11_u64;
+    group.bench_function("mountaincar", |b| {
+        b.iter(|| {
+            for action in &mut policy {
+                draw = draw.wrapping_mul(0x5851_f42d_4c95_7f2d).wrapping_add(1);
+                *action = i32::try_from((draw >> 33) % 3).unwrap();
+            }
+            let out = pool
+                .step(ActionInput {
+                    discrete: &policy,
+                    continuous: &[],
+                })
+                .unwrap();
+            black_box(out.rewards());
+        });
+    });
 }
