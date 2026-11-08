@@ -82,6 +82,15 @@ def test_env_pipelined_send_carries_floats():
         assert bits(e.recv().step.rewards[:, 0]) == bits([0.5, -0.5])
 
 
+def test_env_async_send_carries_floats():
+    with env(2, mode="async", batch_size=2, workers=1) as e:
+        e.reset()
+        e.send([0, 1], np.array([0.5, -0.5], dtype=np.float32))
+        got = e.recv()
+        by_id = dict(zip(got.ids.tolist(), got.step.rewards[:, 0].tolist(), strict=True))
+        assert by_id == {0: 0.5, 1: -0.5}
+
+
 def test_gym_space_is_float32_box(vec):
     s = vec.single_action_space
     assert (s.shape, s.dtype, s.low[0], s.high[0]) == ((1,), np.float32, -2.0, 2.0)
@@ -98,8 +107,9 @@ def test_gym_clips_in_float32(vec, shape):
     assert bits(vec.step(acts)[1]) == bits([2.0, -2.0])
 
 
-def test_gym_casts_before_clipping(vec):
-    # Above 2.0 in f64, but rounds to exactly 2.0 in f32; below 2.0 is kept.
+def test_gym_rounds_into_the_bound(vec):
+    # Above 2.0 in f64, but rounds to exactly 2.0 in f32. Not a test of the
+    # cast/clip order: the two agree for a bound exact in float32.
     acts = np.array([2.0 + 1e-12, 1.0], dtype=np.float64)
     assert bits(vec.step(acts)[1]) == bits([2.0, 1.0])
 
