@@ -6,9 +6,9 @@
 mod support;
 
 use tessera_rl_classic::{
-    BrickWall, BrickWallConfig, CartPole, CartPoleConfig, Grid, GridConfig, KeyDoor, KeyDoorConfig,
-    MountainCar, MountainCarConfig, PaddleDuel, PaddleDuelConfig, Snake, SnakeConfig, Tag,
-    TagConfig,
+    Acrobot, AcrobotConfig, BrickWall, BrickWallConfig, CartPole, CartPoleConfig, Grid, GridConfig,
+    KeyDoor, KeyDoorConfig, MountainCar, MountainCarConfig, PaddleDuel, PaddleDuelConfig, Snake,
+    SnakeConfig, Tag, TagConfig,
 };
 use tessera_rl_core::Persist;
 use tessera_rl_engine::{EnvPool, Masked, NoMasks};
@@ -132,5 +132,20 @@ fn test_persist_mountaincar_continues_and_matches_its_fixture() {
     assert_eq!(
         <MountainCar as Persist>::ENV_VERSION,
         tessera_rl_classic::mountaincar::ENV_VERSION
+    );
+}
+
+#[test]
+fn test_persist_acrobot_continues_and_matches_its_fixture() {
+    let build = |o| EnvPool::<Acrobot, NoMasks>::new(AcrobotConfig::default(), o).unwrap();
+    support::check_continuation(&build, 2);
+    support::check_fixture("persist-acrobot", env!("CARGO_MANIFEST_DIR"), &build, 2);
+    assert_eq!(
+        <Acrobot as Persist>::ENV_ID,
+        tessera_rl_classic::acrobot::ENV_ID
+    );
+    assert_eq!(
+        <Acrobot as Persist>::ENV_VERSION,
+        tessera_rl_classic::acrobot::ENV_VERSION
     );
 }

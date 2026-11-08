@@ -12,9 +12,9 @@ use std::hint::black_box;
 use criterion::{Criterion, criterion_group, criterion_main};
 use tessera_rl_classic::cartpole::physics;
 use tessera_rl_classic::{
-    BrickWall, BrickWallConfig, CartPole, CartPoleConfig, Grid, GridConfig, KeyDoor, KeyDoorConfig,
-    MountainCar, MountainCarConfig, PaddleDuel, PaddleDuelConfig, Snake, SnakeConfig, Tag,
-    TagConfig,
+    Acrobot, AcrobotConfig, BrickWall, BrickWallConfig, CartPole, CartPoleConfig, Grid, GridConfig,
+    KeyDoor, KeyDoorConfig, MountainCar, MountainCarConfig, PaddleDuel, PaddleDuelConfig, Snake,
+    SnakeConfig, Tag, TagConfig,
 };
 use tessera_rl_engine::{ActionInput, EnvPool, Masked, NoMasks, PoolOptions, Reseed};
 use tessera_rl_num::identity::Seed;
@@ -122,6 +122,7 @@ fn bench(c: &mut Criterion) {
     brickwall(&mut group);
     paddleduel(&mut group);
     mountaincar(&mut group);
+    acrobot(&mut group);
     group.finish();
 }
 
@@ -258,6 +259,30 @@ fn mountaincar(group: &mut criterion::BenchmarkGroup<'_, criterion::measurement:
     let mut policy = vec![1i32; N as usize];
     let mut draw = 0x0dd_ba11_u64;
     group.bench_function("mountaincar", |b| {
+        b.iter(|| {
+            for action in &mut policy {
+                draw = draw.wrapping_mul(0x5851_f42d_4c95_7f2d).wrapping_add(1);
+                *action = i32::try_from((draw >> 33) % 3).unwrap();
+            }
+            let out = pool
+                .step(ActionInput {
+                    discrete: &policy,
+                    continuous: &[],
+                })
+                .unwrap();
+            black_box(out.rewards());
+        });
+    });
+}
+
+/// Acrobot: a seeded random policy; episodes truncate at 500 and
+/// reset at once.
+fn acrobot(group: &mut criterion::BenchmarkGroup<'_, criterion::measurement::WallTime>) {
+    let mut pool = EnvPool::<Acrobot, NoMasks>::new(AcrobotConfig::default(), options()).unwrap();
+    pool.reset_all(Reseed::Keep).unwrap();
+    let mut policy = vec![1i32; N as usize];
+    let mut draw = 0x0dd_ba11_u64;
+    group.bench_function("acrobot", |b| {
         b.iter(|| {
             for action in &mut policy {
                 draw = draw.wrapping_mul(0x5851_f42d_4c95_7f2d).wrapping_add(1);

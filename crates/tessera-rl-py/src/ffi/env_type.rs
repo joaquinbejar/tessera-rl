@@ -325,6 +325,7 @@ macro_rules! maker {
 #[cfg(feature = "test-hooks")]
 maker!(make_panic_counter, api::make_panic_counter);
 maker!(make_cartpole, api::make_cartpole);
+maker!(make_acrobot, api::make_acrobot);
 maker!(make_mountaincar, api::make_mountaincar);
 maker!(make_tag, api::make_tag);
 maker!(make_grid, api::make_grid);
@@ -338,11 +339,16 @@ maker!(make_othello, api::make_othello);
 maker!(make_go9, api::make_go9);
 
 /// The module-level constructors, for the module's method table.
-pub(super) const MAKERS: [ffi::PyMethodDef; 12] = [
+pub(super) const MAKERS: [ffi::PyMethodDef; 13] = [
     method_kw(
         c"make_cartpole",
         thunks::MAKE_CARTPOLE,
         c"make_cartpole(**pool_options) -> Env",
+    ),
+    method_kw(
+        c"make_acrobot",
+        thunks::MAKE_ACROBOT,
+        c"make_acrobot(**pool_options) -> Env",
     ),
     method_kw(
         c"make_mountaincar",
