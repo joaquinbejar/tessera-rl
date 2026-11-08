@@ -1,0 +1,135 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: MIT OR Apache-2.0
+"""The shipment decision on x86-64 (docs/reviews/pgo-wheels-design.md r5,
+section 6), from measured costs, the feasibility report and determinism results.
+
+    decide.py --manifest M --kernels K --feasibility F --w0 C --w1 C --determinism D
+              [--w2h C --w2f C] --out R
+
+`--w0` and the others are `costs.json` files of callgrind.py. `--determinism` is
+JSON: {"W1": true, "W2F": false}, from section 7 on those exact wheels.
+
+Without W2 inputs only W1 is decided. The kernel list is loaded before any W2
+comparison, so an unfilled list refuses it. Nothing here has seen real data.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import pathlib
+import sys
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+import callgrind  # noqa: E402
+import evidence  # noqa: E402
+
+
+class Refused(ValueError):
+    """The inputs cannot support a decision."""
+
+
+def _costs(report: dict) -> dict[str, evidence.Cost]:
+    return {k: evidence.Cost(v) for k, v in report["costs"].items()}
+
+
+def _check(reports: dict, feasibility: dict, manifest_sha: str, all_scenarios) -> None:
+    if feasibility.get("passed") is not True:
+        raise Refused("the feasibility gate has not passed")
+    if feasibility["sha256"]["manifest"] != manifest_sha:
+        raise Refused("the feasibility report is for another manifest")
+    names = {s.name for s in all_scenarios}
+    wheels = {}
+    for label, report in reports.items():
+        if report["sha256"]["manifest"] != manifest_sha:
+            raise Refused(f"{label}: costs are for another manifest")
+        if set(report["costs"]) != names:
+            raise Refused(f"{label}: costs do not cover exactly the manifest")
+        wheel = report["sha256"]["wheel"]
+        if wheel in wheels:
+            raise Refused(f"{label} and {wheels[wheel]} are the same wheel")
+        wheels[wheel] = label
+
+
+def decide(reports: dict, feasibility: dict, deterministic: dict, manifest_path: str, kernels_path: str) -> dict:
+    manifest = evidence.load_manifest(manifest_path)
+    all_scenarios = evidence.scenarios(manifest)
+    manifest_sha = callgrind.sha256_of(manifest_path)
+    _check(reports, feasibility, manifest_sha, all_scenarios)
+    sets = evidence.Sets(
+        tuple(feasibility["gating"]),
+        tuple(feasibility["mispredict"]),
+        feasibility["usable"],
+        feasibility["mispredict_available"],
+    )
+    w0, w1 = _costs(reports["W0"]), _costs(reports["W1"])
+    w1_ok = evidence.accept_w1(w1, w0, sets.gating, deterministic.get("W1") is True)
+    out: dict = {
+        "w1_accepted": w1_ok,
+        "wheels": {k: v["sha256"]["wheel"] for k, v in reports.items()},
+        "manifest_sha256": manifest_sha,
+        "w1_ir_ratio": evidence.geomean([w1[n].ir / w0[n].ir for n in sets.gating]),
+    }
+    w2_ok = False
+    if "W2F" in reports or "W2H" in reports:
+        if not {"W2F", "W2H"} <= set(reports):
+            raise Refused("W2F and W2H are needed together")
+        evidence.load_kernels(kernels_path)
+        out["kernels_sha256"] = callgrind.sha256_of(kernels_path)
+        w2f, w2h = _costs(reports["W2F"]), _costs(reports["W2H"])
+        w2_ok = evidence.accept_w2f(w2f, w2h, w1, all_scenarios, sets, w1_ok, deterministic.get("W2F") is True)
+        out["w2f_accepted"] = w2_ok
+        holdout = {s.name for s in all_scenarios if s.holdout}
+        trained = [n for n in sets.gating if n not in holdout]
+        out["w2f_ir_ratio"] = evidence.geomean([w2f[n].ir / w1[n].ir for n in trained])
+    out["ship"] = evidence.ship(w1_ok, w2_ok)
+    out["claim"] = wording(out, manifest["version"])
+    return out
+
+
+def wording(out: dict, version: int) -> str:
+    """The only allowed claim (section 6): Callgrind on Linux x86-64, the `_native`
+    object only, these scenarios. Never time, SPS or other platforms."""
+    if out["ship"] == "W0":
+        return "No change: the default release wheel ships."
+    if out["ship"] == "W1":
+        pct, against = 100 * (1 - out["w1_ir_ratio"]), "the default release wheel"
+    else:
+        pct, against = 100 * (1 - out["w2f_ir_ratio"]), "the LTO wheel"
+    return (
+        f"{pct:.1f}% fewer instructions than {against} inside the _native object, "
+        f"under Callgrind on Linux x86-64, in the gating scenarios of manifest v{version}. "
+        "Not a time or SPS claim, and it excludes allocator and runtime work."
+    )
+
+
+def main(argv=None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    for name in ("manifest", "kernels", "feasibility", "w0", "w1", "determinism", "out"):
+        parser.add_argument(f"--{name}", required=True)
+    parser.add_argument("--w2h")
+    parser.add_argument("--w2f")
+    args = parser.parse_args(argv)
+
+    def load(path):
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
+
+    reports = {"W0": load(args.w0), "W1": load(args.w1)}
+    if args.w2h:
+        reports["W2H"] = load(args.w2h)
+    if args.w2f:
+        reports["W2F"] = load(args.w2f)
+    try:
+        result = decide(reports, load(args.feasibility), load(args.determinism), args.manifest, args.kernels)
+    except (Refused, ValueError, KeyError) as e:
+        print(f"refused: {type(e).__name__}: {e}", file=sys.stderr)
+        return 2
+    with open(args.out, "w", encoding="utf-8") as f:
+        json.dump(result, f, indent=1)
+    print(result["ship"])
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

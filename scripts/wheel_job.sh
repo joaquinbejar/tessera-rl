@@ -65,3 +65,6 @@ cd "$WHEEL_RUN/run"
 nice -n 10 "$venv/bin/python" -I "$root/tools/wheel_golden.py" \
     --actions "$WHEEL_RUN/golden-actions" --out "$root/golden-report.json"
 nice -n 10 "$venv/bin/python" -I -m pytest -q -p no:cacheprovider "$root/tests/python" --rootdir "$root"
+
+cd "$root"
+scripts/wheel_num_tests.sh

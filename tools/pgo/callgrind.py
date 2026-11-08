@@ -158,13 +158,13 @@ def main(argv=None, platform=sys.platform) -> int:
     parser.add_argument("--out-dir", required=True, type=pathlib.Path)
     parser.add_argument("--python", default=sys.executable)
     parser.add_argument("--feasibility", action="store_true", help="the gate of section 5, on W1")
-    parser.add_argument("--wheel", default=None, help="the exact wheel measured (needed by --feasibility)")
+    parser.add_argument("--wheel", default=None, help="the exact wheel measured")
     args = parser.parse_args(argv)
     if not args.approved_window:
         print("refused: Callgrind runs need --approved-window (design section 8)", file=sys.stderr)
         return 2
-    if args.feasibility and not args.wheel:
-        print("refused: --feasibility needs --wheel, the exact artifact measured", file=sys.stderr)
+    if not args.wheel:
+        print("refused: a measurement needs --wheel, the exact artifact measured", file=sys.stderr)
         return 2
     if platform != "linux":
         print("refused: Valgrind needs Linux", file=sys.stderr)
@@ -185,7 +185,8 @@ def main(argv=None, platform=sys.platform) -> int:
         s.name: cost_of(args.python, args.manifest, s, args.out_dir).events
         for s in evidence.scenarios(manifest)
     }
-    (args.out_dir / "costs.json").write_text(json.dumps({"approved_window": args.approved_window, "costs": costs}, indent=1))
+    sha256 = {"wheel": sha256_of(args.wheel), "manifest": sha256_of(args.manifest)}
+    (args.out_dir / "costs.json").write_text(json.dumps({"approved_window": args.approved_window, "sha256": sha256, "costs": costs}, indent=1))
     return 0
 
 
