@@ -86,7 +86,7 @@ pub(crate) trait SplitOps: Send + Sync {
     /// Starts `half`'s next step. `delivered` acknowledges deliveries up to
     /// that number; a half delivered but not acknowledged counts as in
     /// flight, since its caller may never have seen it.
-    fn send(&self, half: u32, actions: &[i32], delivered: u64) -> Result<(), BindError>;
+    fn send(&self, half: u32, actions: ActionInput<'_>, delivered: u64) -> Result<(), BindError>;
     /// The oldest half, without waiting. A delivery stays stored until
     /// `delivered` acknowledges it, and repeats until then, so a signal
     /// raised after the native call returned loses nothing.
@@ -287,7 +287,7 @@ where
         Ok(out)
     }
 
-    fn send(&self, half: u32, actions: &[i32], delivered: u64) -> Result<(), BindError> {
+    fn send(&self, half: u32, actions: ActionInput<'_>, delivered: u64) -> Result<(), BindError> {
         let mut guard = self.lock()?;
         let state = &mut *guard;
         state.acknowledge(delivered);
@@ -307,13 +307,7 @@ where
             Some(token) => token,
             None => pool.idle_token(half)?,
         };
-        let result = pool.send(
-            token,
-            ActionInput {
-                discrete: actions,
-                continuous: &[],
-            },
-        );
+        let result = pool.send(token, actions);
         self.settle(pool);
         result.map_err(|e| {
             if let Some(slot) = state.tokens.get_mut(index) {
@@ -469,7 +463,7 @@ impl PoolOps for SplitHandle {
         Err(wrong_mode("reset"))
     }
 
-    fn step(&mut self, _actions: &[i32]) -> Result<(), BindError> {
+    fn step(&mut self, _actions: ActionInput<'_>) -> Result<(), BindError> {
         Err(wrong_mode("step"))
     }
 
@@ -670,10 +664,12 @@ mod tests {
     fn test_split_delivery_generation_predates_a_later_send() {
         let (_ops, split) = split();
         split.reset(&ResetSeed::Keep, false).unwrap();
-        split.send(0, &[0; 4], 0).unwrap();
+        split.send(0, crate::env::discrete(&[0; 4]), 0).unwrap();
         let out = received(&*split, 0);
         assert_eq!(out.generation, split.half_generations().half(0).unwrap());
-        split.send(0, &[0; 4], out.seq).unwrap();
+        split
+            .send(0, crate::env::discrete(&[0; 4]), out.seq)
+            .unwrap();
         assert_ne!(out.generation, split.half_generations().half(0).unwrap());
         split.close();
     }
@@ -683,9 +679,9 @@ mod tests {
         let (_ops, split) = split();
         split.reset(&ResetSeed::Keep, false).unwrap();
         let before = split.half_generations().half(0).unwrap();
-        assert!(split.send(0, &[0; 3], 0).is_err());
+        assert!(split.send(0, crate::env::discrete(&[0; 3]), 0).is_err());
         assert_eq!(split.half_generations().half(0).unwrap(), before);
-        split.send(0, &[0; 4], 0).unwrap();
+        split.send(0, crate::env::discrete(&[0; 4]), 0).unwrap();
         assert_ne!(split.half_generations().half(0).unwrap(), before);
         split.close();
     }
@@ -694,12 +690,14 @@ mod tests {
     fn test_split_unacknowledged_delivery_repeats_and_blocks_its_send() {
         let (_ops, split) = split();
         split.reset(&ResetSeed::Keep, false).unwrap();
-        split.send(0, &[0; 4], 0).unwrap();
+        split.send(0, crate::env::discrete(&[0; 4]), 0).unwrap();
         let first = received(&*split, 0);
         let again = received(&*split, 0);
         assert_eq!((first.seq, first.half), (again.seq, again.half));
-        assert!(split.send(0, &[0; 4], 0).is_err());
-        split.send(0, &[0; 4], first.seq).unwrap();
+        assert!(split.send(0, crate::env::discrete(&[0; 4]), 0).is_err());
+        split
+            .send(0, crate::env::discrete(&[0; 4]), first.seq)
+            .unwrap();
         split.close();
     }
 
@@ -749,7 +747,9 @@ mod tests {
         let (gens, flag) = (split.half_generations(), split.unsettled_flag());
         let idle = gens.half(1).unwrap();
         let rows = split.halves()[0].len() * <super::common::Counter as Environment>::MAX_AGENTS;
-        split.send(0, &vec![0; rows], 0).unwrap();
+        split
+            .send(0, crate::env::discrete(&vec![0; rows]), 0)
+            .unwrap();
         assert!(!half_stale(&gens, 1, idle, &flag));
         split.close();
     }
@@ -779,7 +779,9 @@ mod tests {
                 .load(core::sync::atomic::Ordering::Acquire)
         );
         let width = split.halves()[0].len() * 2;
-        split.send(0, &vec![0; width], 0).unwrap();
+        split
+            .send(0, crate::env::discrete(&vec![0; width]), 0)
+            .unwrap();
         while !split.is_poisoned() {
             let _ = split.try_recv(true, 0);
             std::thread::yield_now();
@@ -824,7 +826,9 @@ mod tests {
                 tessera_rl_engine::EngineError::Invariant { .. }
             ))
         ));
-        split.send(0, &vec![0; width], 0).unwrap();
+        split
+            .send(0, crate::env::discrete(&vec![0; width]), 0)
+            .unwrap();
         // A good file with work in flight: retryable, and the idle half's token stays.
         assert!(matches!(
             split.load(&file, limits, true),
@@ -832,7 +836,9 @@ mod tests {
                 tessera_rl_engine::EngineError::NotQuiescent
             ))
         ));
-        split.send(1, &vec![0; width], 0).unwrap();
+        split
+            .send(1, crate::env::discrete(&vec![0; width]), 0)
+            .unwrap();
         let mut seq = 0;
         for _ in 0..2 {
             loop {
@@ -912,7 +918,9 @@ mod tests {
         let flag = split.unsettled_flag();
         let other = gens.half(1).unwrap();
         let rows = split.halves()[0].len() * <super::common::Counter as Environment>::MAX_AGENTS;
-        split.send(0, &vec![0; rows], 0).unwrap();
+        split
+            .send(0, crate::env::discrete(&vec![0; rows]), 0)
+            .unwrap();
         let failed = loop {
             match split.try_recv(false, 0) {
                 Ok(Polled::Running(h)) => {
@@ -958,12 +966,16 @@ mod tests {
                 Polled::Busy => panic!("one thread only"),
             }
         };
-        split.send(0, &rows(0), 0).unwrap();
+        split.send(0, crate::env::discrete(&rows(0)), 0).unwrap();
         let first = receive(0);
-        split.send(1, &rows(1), first.seq).unwrap();
+        split
+            .send(1, crate::env::discrete(&rows(1)), first.seq)
+            .unwrap();
         let second = receive(first.seq);
         assert_eq!(second.half, 1);
-        split.send(0, &rows(0), first.seq).unwrap();
+        split
+            .send(0, crate::env::discrete(&rows(0)), first.seq)
+            .unwrap();
         assert!(matches!(
             split.try_recv(false, first.seq),
             Ok(Polled::Half(out)) if out.seq == second.seq

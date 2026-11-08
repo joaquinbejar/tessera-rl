@@ -110,7 +110,7 @@ pub(crate) trait AsyncOps: Send + Sync {
     fn waiter(&self) -> &BatchWaiter;
     fn reset_all(&self, seed: &ResetSeed) -> Result<BatchOutput, BindError>;
     fn reset(&self, ids: &[u32], seed: &ResetSeed, delivered: u64) -> Result<(), BindError>;
-    fn send(&self, ids: &[u32], actions: &[i32], delivered: u64) -> Result<(), BindError>;
+    fn send(&self, ids: &[u32], actions: ActionInput<'_>, delivered: u64) -> Result<(), BindError>;
     fn try_recv(&self, delivered: u64) -> Result<BatchPolled, BindError>;
     fn snapshot(&self, id: u32) -> Result<Snapshot, BindError>;
     fn restore(&self, ids: &[u32], snapshots: &[Snapshot], delivered: u64)
@@ -554,20 +554,14 @@ where
         Ok(())
     }
 
-    fn send(&self, ids: &[u32], actions: &[i32], delivered: u64) -> Result<(), BindError> {
+    fn send(&self, ids: &[u32], actions: ActionInput<'_>, delivered: u64) -> Result<(), BindError> {
         let mut guard = self.lock()?;
         let state = &mut *guard;
         state.acknowledge(delivered);
         state.check_pending(ids)?;
         let pool = state.pool.as_mut().ok_or_else(closed)?;
         state.stored.release(ids);
-        let result = pool.send(
-            ids,
-            ActionInput {
-                discrete: actions,
-                continuous: &[],
-            },
-        );
+        let result = pool.send(ids, actions);
         self.settle(pool);
         result?;
         state.stored.uncover(ids);
@@ -768,7 +762,7 @@ impl PoolOps for AsyncHandle {
         Err(wrong_mode("reset"))
     }
 
-    fn step(&mut self, _actions: &[i32]) -> Result<(), BindError> {
+    fn step(&mut self, _actions: ActionInput<'_>) -> Result<(), BindError> {
         Err(wrong_mode("step"))
     }
 
@@ -951,7 +945,7 @@ mod tests {
         let file = ops.encode(&ids).unwrap();
         let limits = tessera_rl_engine::DecodeLimits::default();
         let actions = vec![0; ids.len() * <Counter as Environment>::MAX_AGENTS];
-        ops.send(&ids, &actions, 0).unwrap();
+        ops.send(&ids, crate::env::discrete(&actions), 0).unwrap();
         while !ops.is_poisoned() {
             let _ = ops.try_recv(0);
             std::thread::yield_now();
@@ -973,7 +967,7 @@ mod tests {
         let file = ops.encode(&ids).unwrap();
         let limits = tessera_rl_engine::DecodeLimits::default();
         let actions = vec![0; ids.len() * <Counter as Environment>::MAX_AGENTS];
-        assert!(ops.step(&actions).is_err());
+        assert!(ops.step(crate::env::discrete(&actions)).is_err());
         assert!(ops.is_poisoned());
         assert!(ops.encode(&[]).is_err());
         assert!(ops.load(&file, Some(&ids), limits).is_err());
@@ -990,7 +984,7 @@ mod tests {
         ops.reset_all(&ResetSeed::Keep).unwrap();
         let ids: Vec<u32> = (0..N).collect();
         let actions = vec![0; ids.len() * <Counter as Environment>::MAX_AGENTS];
-        ops.send(&ids, &actions, 0).unwrap();
+        ops.send(&ids, crate::env::discrete(&actions), 0).unwrap();
         let mut failed = None;
         let mut delivered = 0;
         for _ in 0..10_000 {
@@ -1145,7 +1139,7 @@ mod tests {
                 assert!(!ids_stale(&gens, &first.ids, &epochs, &flag));
                 let every: Vec<u32> = (0..N).collect();
                 let actions = vec![0; every.len() * <Counter as Environment>::MAX_AGENTS];
-                ops.send(&every, &actions, 0).unwrap();
+                ops.send(&every, crate::env::discrete(&actions), 0).unwrap();
                 let mut delivered = 0;
                 let mut last = None;
                 loop {
@@ -1155,7 +1149,10 @@ mod tests {
                             let ids: Vec<u32> = out.ids.iter().map(|b| b.id).collect();
                             let actions = vec![0; ids.len() * <Counter as Environment>::MAX_AGENTS];
                             last = Some(out);
-                            if ops.send(&ids, &actions, delivered).is_err() {
+                            if ops
+                                .send(&ids, crate::env::discrete(&actions), delivered)
+                                .is_err()
+                            {
                                 break;
                             }
                         }
@@ -1188,7 +1185,8 @@ mod tests {
 
     fn deliver(ops: &dyn AsyncOps, ids: &[u32], delivered: u64) -> BatchOutput {
         let actions = vec![0; ids.len() * <Counter as Environment>::MAX_AGENTS];
-        ops.send(ids, &actions, delivered).unwrap();
+        ops.send(ids, crate::env::discrete(&actions), delivered)
+            .unwrap();
         recv_batch(ops, delivered)
     }
 
@@ -1221,7 +1219,7 @@ mod tests {
             let taken = ops.snapshot_all().unwrap();
             let every: Vec<u32> = (0..N).collect();
             let actions = vec![0; every.len() * <Counter as Environment>::MAX_AGENTS];
-            ops.send(&every, &actions, 0).unwrap();
+            ops.send(&every, crate::env::discrete(&actions), 0).unwrap();
             let mut delivered = 0;
             loop {
                 match ops.try_recv(delivered) {
@@ -1322,12 +1320,14 @@ mod tests {
                 BatchPolled::Busy => panic!("one thread only"),
             }
         };
-        ops.send(&[1], &[0, 0], 0).unwrap();
+        ops.send(&[1], crate::env::discrete(&[0, 0]), 0).unwrap();
         let first = receive(0);
-        ops.send(&[0], &[0, 0], first.seq).unwrap();
+        ops.send(&[0], crate::env::discrete(&[0, 0]), first.seq)
+            .unwrap();
         let second = receive(first.seq);
         assert!(second.seq > first.seq);
-        ops.send(&[1], &[0, 0], first.seq).unwrap();
+        ops.send(&[1], crate::env::discrete(&[0, 0]), first.seq)
+            .unwrap();
         while !ops.is_poisoned() {
             std::thread::yield_now();
         }
@@ -1342,7 +1342,7 @@ mod tests {
             Err(BindError::Engine(EngineError::Poisoned))
         ));
         ops.reset_all(&ResetSeed::Keep).unwrap();
-        ops.send(&[0], &[0, 0], 0).unwrap();
+        ops.send(&[0], crate::env::discrete(&[0, 0]), 0).unwrap();
         assert!(
             receive(0).seq > second.seq,
             "the lost delivery is not replayed"

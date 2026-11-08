@@ -324,6 +324,8 @@ macro_rules! maker {
 
 #[cfg(feature = "test-hooks")]
 maker!(make_panic_counter, api::make_panic_counter);
+#[cfg(feature = "test-hooks")]
+maker!(make_continuous_probe, api::make_continuous_probe);
 maker!(make_cartpole, api::make_cartpole);
 maker!(make_acrobot, api::make_acrobot);
 maker!(make_mountaincar, api::make_mountaincar);

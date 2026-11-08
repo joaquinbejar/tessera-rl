@@ -9,7 +9,7 @@ use core::time::Duration;
 
 use std::sync::Arc;
 
-use tessera_rl_engine::EngineError;
+use tessera_rl_engine::{ActionInput, EngineError};
 
 use crate::batched::{AsyncOps, BatchOutputs};
 use crate::env::{BindError, Owned, PoolArgs, PoolOps, ResetSeed, TagFields};
@@ -192,6 +192,19 @@ pub(crate) fn make_panic_counter(g: Gil, kwargs: Option<Ref<'_>>) -> CResult<Inn
     let args = pool_args(g, &kw, 100)?;
     let ops = g
         .detach(|| crate::env::panic_counter(&args))
+        .map_err(|e| to_py(g, e))?;
+    Ok(Inner::new(ops, borrowed))
+}
+
+/// `_make_continuous_probe(**kwargs)` (test hooks only): one continuous head.
+#[cfg(feature = "test-hooks")]
+pub(crate) fn make_continuous_probe(g: Gil, kwargs: Option<Ref<'_>>) -> CResult<Inner> {
+    let kw = Kwargs::parse(g, kwargs)?;
+    kw.check(g, &[&POOL_KEYS, &["outputs"]])?;
+    let borrowed = borrowed(g, &kw)?;
+    let args = pool_args(g, &kw, 100)?;
+    let ops = g
+        .detach(|| crate::env::continuous_probe(&args))
         .map_err(|e| to_py(g, e))?;
     Ok(Inner::new(ops, borrowed))
 }
@@ -437,6 +450,11 @@ pub(crate) fn layout(g: Gil, inner: &Inner) -> CResult<Mine> {
             c"action_choices",
             &capi::int_u64(g, l.action_choices.into())?,
         )?;
+        let bounds = match l.action_bounds {
+            Some((low, high)) => capi::tuple(g, vec![capi::float(g, low)?, capi::float(g, high)?])?,
+            None => capi::none(g),
+        };
+        capi::dict_set(g, &d, c"action_bounds", &bounds)?;
         capi::dict_set(g, &d, c"mask_len", &int(g, l.mask_len)?)?;
         capi::dict_set(g, &d, c"turns", &capi::string(g, l.turns)?)?;
         let mode = if inner.borrowed() {
@@ -580,21 +598,44 @@ pub(crate) fn reset(g: Gil, inner: &Inner, args: Ref<'_>) -> CResult<Mine> {
 }
 
 /// Little-endian int32 actions, from exact `bytes`.
-fn actions_of(g: Gil, actions: Ref<'_>) -> CResult<Vec<i32>> {
+fn actions_of(g: Gil, inner: &Inner, actions: Ref<'_>) -> CResult<Wire> {
+    let continuous = inner.with(g, |ops| Ok(ops.layout().action_bounds.is_some()))?;
     let raw = capi::bytes_of(g, actions, "actions")?;
     if raw.len() % 4 != 0 {
+        let what = if continuous { "float32" } else { "int32" };
         return Err(error(
             g,
             Kind::Action,
-            "actions must be int32 values".to_owned(),
+            format!("actions must be {what} values"),
         ));
     }
-    Ok(raw
-        .as_chunks::<4>()
-        .0
-        .iter()
-        .map(|c| i32::from_le_bytes(*c))
-        .collect())
+    let words = raw.as_chunks::<4>().0.iter();
+    Ok(if continuous {
+        Wire::Continuous(words.map(|c| f32::from_le_bytes(*c)).collect())
+    } else {
+        Wire::Discrete(words.map(|c| i32::from_le_bytes(*c)).collect())
+    })
+}
+
+/// One call's decoded actions, typed by the pool's action head.
+enum Wire {
+    Discrete(Vec<i32>),
+    Continuous(Vec<f32>),
+}
+
+impl Wire {
+    fn input(&self) -> ActionInput<'_> {
+        match self {
+            Self::Discrete(discrete) => ActionInput {
+                discrete,
+                continuous: &[],
+            },
+            Self::Continuous(continuous) => ActionInput {
+                discrete: &[],
+                continuous,
+            },
+        }
+    }
 }
 
 /// The split-phase operations of `inner`, cloned so the guard is not held
@@ -657,7 +698,7 @@ fn half_output(g: Gil, inner: &Inner, split: &dyn SplitOps, out: &HalfOutput) ->
 }
 
 /// `send(half, actions: bytes, delivered)`: starts the next step of `half`;
-/// `actions` are little-endian int32, one per agent row of the half.
+/// `actions` are little-endian int32 (float32 for a continuous head), one per agent row of the half.
 /// `delivered` is the last `seq` the caller holds.
 pub(crate) fn send(g: Gil, inner: &Inner, args: Ref<'_>) -> CResult<Mine> {
     let a: [Ref<'_>; 3] = exactly(g, args, "send")?;
@@ -665,15 +706,15 @@ pub(crate) fn send(g: Gil, inner: &Inner, args: Ref<'_>) -> CResult<Mine> {
     let delivered = capi::to_u64(g, delivered, "delivered")?;
     if let Some(ops) = batched_of(g, inner)? {
         let ids = u32_list(g, half, "ids")?;
-        let actions = actions_of(g, actions)?;
-        g.detach(|| ops.send(&ids, &actions, delivered))
+        let actions = actions_of(g, inner, actions)?;
+        g.detach(|| ops.send(&ids, actions.input(), delivered))
             .map_err(|e| to_py(g, e))?;
         return Ok(capi::none(g));
     }
     let half = capi::to_u32(g, half, "half")?;
-    let actions = actions_of(g, actions)?;
+    let actions = actions_of(g, inner, actions)?;
     let split = require_split(g, inner, "send")?;
-    g.detach(|| split.send(half, &actions, delivered))
+    g.detach(|| split.send(half, actions.input(), delivered))
         .map_err(|e| to_py(g, e))?;
     Ok(capi::none(g))
 }
@@ -773,9 +814,10 @@ pub(crate) fn recv(g: Gil, inner: &Inner, args: Ref<'_>) -> CResult<Mine> {
 pub(crate) fn step(g: Gil, inner: &Inner, args: Ref<'_>) -> CResult<Mine> {
     let a: [Ref<'_>; 1] = exactly(g, args, "step")?;
     let [actions] = a;
-    let actions = actions_of(g, actions)?;
+    let actions = actions_of(g, inner, actions)?;
     inner.with(g, |ops| {
-        g.detach(|| ops.step(&actions)).map_err(|e| to_py(g, e))?;
+        g.detach(|| ops.step(actions.input()))
+            .map_err(|e| to_py(g, e))?;
         outputs_of(g, inner, ops)
     })
 }

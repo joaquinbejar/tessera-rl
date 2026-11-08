@@ -177,6 +177,9 @@ class Env:
         self.num_envs: int = layout["num_envs"]
         self.agents: int = layout["agents"]
         self.action_choices: int = layout["action_choices"]
+        #: Inclusive ``(low, high)`` of a continuous environment's one float32
+        #: head; ``None`` for a discrete one (``action_choices`` is then > 0).
+        self.action_bounds: tuple[float, float] | None = layout["action_bounds"]
         self._mask_len: int = layout["mask_len"]
         #: ``"simultaneous"``, ``"sequential"`` or ``"mixed"`` (ADR-0013).
         self.turns: str = layout["turns"]
@@ -220,7 +223,7 @@ class Env:
         to a ``recv`` that was interrupted before returning, or, in
         Pipelined, two cycles ahead of the other half.
         """
-        acts = _discrete_actions(actions).tobytes()
+        acts = self._actions(actions).tobytes()
         if self.mode == "async":
             target = [_index(i, "ids") for i in target]
         else:
@@ -287,14 +290,20 @@ class Env:
     def step(self, actions) -> Step:
         """One step. ``actions`` has one int per agent row, ``(num_envs, agents)``.
 
-        Actions are discrete: every value must be an exact integer in the
-        int32 range (integer dtypes, or floats with no fractional part).
-        Anything else raises ``ActionError`` before the pool is touched.
+        Discrete actions: every value must be an exact integer in the int32
+        range (integer dtypes, or floats with no fractional part). Continuous
+        actions: real numbers, shape ``(num_envs,)`` or ``(num_envs, 1)``,
+        converted to float32 (nearest) and refused, not clipped, if NaN,
+        infinite or out of bounds. Anything else raises ``ActionError``
+        before the pool is touched.
         """
-        acts = _discrete_actions(actions)
+        acts = self._actions(actions)
         if acts.size != self.num_envs * self.agents:
             raise _native.ActionError(f"expected {self.num_envs * self.agents} actions, got {acts.size}")
         return self._wrap(self._native.step(acts.tobytes()))
+
+    def _actions(self, actions) -> np.ndarray:
+        return _discrete_actions(actions) if self.action_bounds is None else _continuous_actions(actions)
 
     def _wrap(self, out: dict, rows: int | None = None) -> Step:
         n, a = self.num_envs if rows is None else rows, self.agents
@@ -409,6 +418,35 @@ def _discrete_actions(actions) -> np.ndarray:
     elif arr.size:
         raise _native.ActionError(f"actions must be integers, got dtype {arr.dtype}")
     return np.ascontiguousarray(arr, dtype="<i4")
+
+
+def _real_array(actions) -> np.ndarray:
+    """``actions`` as an array of one real number per row, shape ``(n,)`` or
+    ``(n, 1)``, flattened; ``ActionError`` otherwise."""
+    try:
+        arr = np.asarray(actions)
+    except (TypeError, ValueError) as e:
+        raise _native.ActionError(f"actions are not an array: {e}") from None
+    if arr.dtype.kind not in "fiu":
+        raise _native.ActionError(f"continuous actions must be real numbers, got dtype {arr.dtype}")
+    if arr.ndim == 2 and arr.shape[1] == 1:
+        return arr.reshape(-1)
+    if arr.ndim != 1:
+        raise _native.ActionError(f"continuous actions have shape (n,) or (n, 1), not {arr.shape}")
+    return arr
+
+
+def _to_float32(arr: np.ndarray) -> np.ndarray:
+    """Contiguous little-endian float32, rounded to nearest. A value beyond
+    the float32 range becomes infinite, which the caller or the pool refuses."""
+    with np.errstate(over="ignore"):
+        return np.ascontiguousarray(arr, dtype="<f4")
+
+
+def _continuous_actions(actions) -> np.ndarray:
+    """``actions`` as flat little-endian float32 (design 4.3); bounds, NaN
+    and infinities are the pool's to refuse."""
+    return _to_float32(_real_array(actions))
 
 
 def _index(value, what: str) -> int:
