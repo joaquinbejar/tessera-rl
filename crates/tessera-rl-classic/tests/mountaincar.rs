@@ -95,7 +95,7 @@ fn test_mountaincar_reset_is_uniform_on_the_valley_floor_at_rest() {
     let mut high = f64::MIN;
     for i in 0..4096 {
         let [position, velocity] = state(&p, i);
-        assert!((-0.6..-0.4).contains(&position), "{position}");
+        assert!((-0.6..=-0.4).contains(&position), "{position}");
         assert_eq!(velocity.to_bits(), 0);
         low = low.min(position);
         high = high.max(position);

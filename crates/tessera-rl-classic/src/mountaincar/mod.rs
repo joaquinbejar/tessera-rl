@@ -8,7 +8,8 @@
 //! - Action: `Discrete(3)`; 0 accelerates left, 1 does nothing, 2
 //!   accelerates right.
 //! - Reward: -1 per step, including the terminating one.
-//! - Reset: position uniform in `[-0.6, -0.4)`, velocity 0.
+//! - Reset: position uniform in `[-0.6, -0.4]` (half-open up to rounding, as
+//!   Gymnasium's uniform), velocity 0.
 //! - Ends: terminated at the goal (`position >= 0.5` with
 //!   `velocity >= 0`). Truncation is the engine's step limit with
 //!   `TimeLimit` semantics: `MountainCar-v1` is this environment with
