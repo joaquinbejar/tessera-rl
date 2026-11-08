@@ -4,7 +4,7 @@
 # maturin's default of macOS 11. Ignored on other platforms.
 export MACOSX_DEPLOYMENT_TARGET := 13.0
 
-.PHONY: check-build-id gungraun-threaded fmt fmt-check clippy test doc readme readme-check pre-push deny check-targets wheel-golden py-test-wheels puffer-test py-test-jax pre-push-jax compat-test py-entries py-callouts py-test py-test-hooks py-test-torch pre-push-torch gym-equivalence reference-training learning-test learning-calibrate bench bench-quick bench-kernels gungraun gungraun-bless connect4-calibration search-strength
+.PHONY: dashboard dashboard-check check-build-id gungraun-threaded fmt fmt-check clippy test doc readme readme-check pre-push deny check-targets wheel-golden py-test-wheels puffer-test py-test-jax pre-push-jax compat-test py-entries py-callouts py-test py-test-hooks py-test-torch pre-push-torch gym-equivalence reference-training learning-test learning-calibrate bench bench-quick bench-kernels gungraun gungraun-bless connect4-calibration search-strength
 
 fmt:
 	cargo fmt --all
@@ -30,7 +30,7 @@ readme:
 readme-check:
 	cargo readme -r crates/tessera-rl -t $(CURDIR)/README.tpl --no-title --no-license --no-indent-headings | diff -u README.md -
 
-pre-push: fmt-check clippy test doc readme-check compat-test py-entries py-callouts py-test py-test-hooks py-test-wheels
+pre-push: fmt-check clippy test doc readme-check compat-test py-entries py-callouts py-test py-test-hooks py-test-wheels dashboard-check
 
 check-build-id:
 	scripts/check_build_id.sh
@@ -170,6 +170,14 @@ bench:
 	uv sync --locked --python 3.11
 	mkdir -p target/bench
 	uv run --locked --python 3.11 python tools/bench/bench.py $(if $(MACHINE),--machine $(MACHINE)) --runs $(RUNS) --out target/bench/report.json
+
+# The static page from the committed results; runs no benchmark.
+dashboard:
+	uv run --locked --python 3.11 python tools/dashboard/build.py
+
+# Every committed result file parses and is admissible (in pre-push).
+dashboard-check:
+	uv run --locked --python 3.11 python tools/dashboard/build.py --check
 
 # A short smoke run of every configuration (never valid for claims).
 bench-quick:
