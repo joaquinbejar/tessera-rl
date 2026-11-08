@@ -99,3 +99,11 @@ undocumented_unsafe_blocks = "deny"
 unimplemented = "deny"
 unreachable = "deny"
 unwrap_used = "deny"
+
+# Release wheels (docs/reviews/pgo-wheels-design.md). `release` itself, which
+# the tests, the benches and the instruction baseline use, does not change.
+[profile.wheel]
+inherits = "release"
+lto = "fat"
+codegen-units = 1
+panic = "unwind"

@@ -234,6 +234,8 @@ jobs:
       - run: make py-test-hooks
       - run: uv run --locked --python 3.11 python -c "import tessera_rl._native as n; assert not hasattr(n, '_make_panic_counter')"
       - run: make py-test-torch
+      # The tool that anchors wheels to the golden fixtures (wheels.yml runs it).
+      - run: make py-test-wheels
       # The JAX handles (marker `jax`, SPEC 15.2) at the pinned jax and jaxlib.
       - run: make py-test-jax
 

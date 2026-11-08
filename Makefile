@@ -4,7 +4,7 @@
 # maturin's default of macOS 11. Ignored on other platforms.
 export MACOSX_DEPLOYMENT_TARGET := 13.0
 
-.PHONY: check-build-id gungraun-threaded fmt fmt-check clippy test doc readme readme-check pre-push deny check-targets puffer-test py-test-jax pre-push-jax compat-test py-entries py-callouts py-test py-test-hooks py-test-torch pre-push-torch gym-equivalence reference-training learning-test learning-calibrate bench bench-quick bench-kernels gungraun gungraun-bless connect4-calibration search-strength
+.PHONY: check-build-id gungraun-threaded fmt fmt-check clippy test doc readme readme-check pre-push deny check-targets wheel-golden py-test-wheels puffer-test py-test-jax pre-push-jax compat-test py-entries py-callouts py-test py-test-hooks py-test-torch pre-push-torch gym-equivalence reference-training learning-test learning-calibrate bench bench-quick bench-kernels gungraun gungraun-bless connect4-calibration search-strength
 
 fmt:
 	cargo fmt --all
@@ -30,7 +30,7 @@ readme:
 readme-check:
 	cargo readme -r crates/tessera-rl -t $(CURDIR)/README.tpl --no-title --no-license --no-indent-headings | diff -u README.md -
 
-pre-push: fmt-check clippy test doc readme-check compat-test py-entries py-callouts py-test py-test-hooks
+pre-push: fmt-check clippy test doc readme-check compat-test py-entries py-callouts py-test py-test-hooks py-test-wheels
 
 check-build-id:
 	scripts/check_build_id.sh
@@ -102,6 +102,22 @@ py-test-torch:
 py-test-jax:
 	uv sync --locked --python 3.11 --group test --group jax
 	uv run --locked --python 3.11 --group test --group jax pytest -q tests/python/test_jax.py
+	uv sync --locked --python 3.11
+
+# The unit tests of tools/wheel_golden.py, then the default environment again.
+py-test-wheels:
+	uv sync --locked --python 3.11 --group test --group wheels
+	uv run --locked --python 3.11 --group test --group wheels pytest -q tests/python/test_wheel_golden.py
+	uv sync --locked --python 3.11
+
+# The installed wheel against the committed golden fixtures: the Rust golden
+# tests write their actions, and the wheel replays whole fixtures. Uses the wheel that
+# uv sync builds here; wheels.yml runs the tool on the real artifacts.
+GOLDEN_ACTIONS ?= target/golden-actions
+wheel-golden:
+	TESSERA_GOLDEN_ACTIONS=$(abspath $(GOLDEN_ACTIONS)) cargo test --release --locked -p tessera-rl-classic -p tessera-rl-games --test golden
+	uv sync --locked --python 3.11 --group test --group wheels
+	uv run --locked --python 3.11 --group test --group wheels python tools/wheel_golden.py --actions $(GOLDEN_ACTIONS) --out $(GOLDEN_ACTIONS)/report.json
 	uv sync --locked --python 3.11
 
 # The PufferLib adapter at the pins of compat/pufferlib, from a temporary
