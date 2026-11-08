@@ -66,6 +66,10 @@ _GRID = {"size": 6, "max_steps": 40}
 CONFIGS = {
     "cartpole-v1-next-step": {},
     "cartpole-v1-same-step": {},
+    "mountaincar-v1-next-step": {},
+    "mountaincar-v1-same-step": {},
+    "acrobot-v1-next-step": {},
+    "acrobot-v1-same-step": {},
     "tag-v1-default-next-step": {},
     "tag-v1-default-same-step": {},
     "tag-v1-crowded-next-step": _CROWDED,

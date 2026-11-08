@@ -72,7 +72,7 @@ def test_wheel_golden_parse_refuses_a_bad_fixture(bad):
 
 def test_wheel_golden_every_real_fixture_parses_and_has_a_config():
     found = tool.fixtures()
-    assert set(found) == set(tool.CONFIGS) and len(found) == 24
+    assert set(found) == set(tool.CONFIGS) and len(found) == 28
     for path in found.values():
         header, lines, final = tool.parse_fixture(path.read_text(encoding="utf-8"))
         assert tool.parse_reseed(header)[0] in lines and header["auto_reset"] in tool.AUTO_RESET

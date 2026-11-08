@@ -30,7 +30,7 @@ readme:
 readme-check:
 	cargo readme -r crates/tessera-rl -t $(CURDIR)/README.tpl --no-title --no-license --no-indent-headings | diff -u README.md -
 
-pre-push: fmt-check clippy test doc readme-check compat-test py-entries py-callouts py-test py-test-hooks
+pre-push: fmt-check clippy test doc readme-check compat-test py-entries py-callouts py-test py-test-hooks py-test-wheels
 
 check-build-id:
 	scripts/check_build_id.sh
