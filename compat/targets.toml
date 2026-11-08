@@ -57,6 +57,12 @@ env = "main"
 required = ["numpy", "gymnasium", "pettingzoo", "torch"]
 deferred = ["jax", "onnxruntime"]
 
+# The JAX handle tests (make py-test-jax).
+[profile.jax]
+env = "main"
+required = ["numpy", "jax"]
+deferred = ["gymnasium", "pettingzoo", "torch", "onnxruntime"]
+
 [profile.conformance]
 env = "main"
 required = ["gymnasium", "pettingzoo", "numpy", "torch", "jax", "onnxruntime"]

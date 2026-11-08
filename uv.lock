@@ -751,6 +751,10 @@ dependencies = [
 gymnasium = [
     { name = "gymnasium" },
 ]
+jax = [
+    { name = "jax" },
+    { name = "jaxlib" },
+]
 pettingzoo = [
     { name = "pettingzoo" },
 ]
@@ -764,6 +768,10 @@ conformance = [
     { name = "pettingzoo" },
     { name = "torch", version = "2.15.0", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform != 'linux'" },
     { name = "torch", version = "2.15.0+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "sys_platform == 'linux'" },
+]
+jax = [
+    { name = "jax" },
+    { name = "jaxlib" },
 ]
 test = [
     { name = "gymnasium" },
@@ -779,10 +787,12 @@ torch = [
 [package.metadata]
 requires-dist = [
     { name = "gymnasium", marker = "extra == 'gymnasium'", specifier = ">=1.4.0,<2" },
+    { name = "jax", marker = "extra == 'jax'", specifier = "==0.10.2" },
+    { name = "jaxlib", marker = "extra == 'jax'", specifier = "==0.10.2" },
     { name = "numpy", specifier = ">=1.26.4" },
     { name = "pettingzoo", marker = "extra == 'pettingzoo'", specifier = ">=1.27.0,<2" },
 ]
-provides-extras = ["gymnasium", "pettingzoo"]
+provides-extras = ["gymnasium", "pettingzoo", "jax"]
 
 [package.metadata.requires-dev]
 conformance = [
@@ -793,6 +803,10 @@ conformance = [
     { name = "pettingzoo", specifier = "==1.27.0" },
     { name = "torch", marker = "sys_platform != 'linux'", specifier = "==2.15.0" },
     { name = "torch", marker = "sys_platform == 'linux'", specifier = "==2.15.0", index = "https://download.pytorch.org/whl/cpu" },
+]
+jax = [
+    { name = "jax", specifier = "==0.10.2" },
+    { name = "jaxlib", specifier = "==0.10.2" },
 ]
 test = [
     { name = "gymnasium", specifier = "==1.4.0" },

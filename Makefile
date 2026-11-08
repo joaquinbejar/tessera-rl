@@ -4,7 +4,7 @@
 # maturin's default of macOS 11. Ignored on other platforms.
 export MACOSX_DEPLOYMENT_TARGET := 13.0
 
-.PHONY: check-build-id gungraun-threaded fmt fmt-check clippy test doc readme readme-check pre-push deny check-targets puffer-test compat-test py-entries py-callouts py-test py-test-hooks py-test-torch pre-push-torch gym-equivalence reference-training learning-test learning-calibrate bench bench-quick bench-kernels gungraun gungraun-bless connect4-calibration search-strength
+.PHONY: check-build-id gungraun-threaded fmt fmt-check clippy test doc readme readme-check pre-push deny check-targets puffer-test py-test-jax pre-push-jax compat-test py-entries py-callouts py-test py-test-hooks py-test-torch pre-push-torch gym-equivalence reference-training learning-test learning-calibrate bench bench-quick bench-kernels gungraun gungraun-bless connect4-calibration search-strength
 
 fmt:
 	cargo fmt --all
@@ -39,7 +39,7 @@ deny:
 	cargo deny check
 
 # The Python tool environment matches compat/targets.toml for a profile
-# (b1, test, torch, conformance or pufferlib; default conformance).
+# (b1, test, torch, jax, conformance or pufferlib; default conformance).
 PROFILE ?= conformance
 check-targets:
 ifeq ($(PROFILE),pufferlib)
@@ -54,6 +54,9 @@ else ifeq ($(PROFILE),test)
 else ifeq ($(PROFILE),torch)
 	uv sync --locked --python 3.11 --group test --group torch
 	uv run --locked --python 3.11 --group test --group torch python scripts/check_targets.py torch
+else ifeq ($(PROFILE),jax)
+	uv sync --locked --python 3.11 --group test --group jax
+	uv run --locked --python 3.11 --group test --group jax python scripts/check_targets.py jax
 else
 	uv sync --locked --python 3.11 --all-groups
 	uv run --locked --python 3.11 --all-groups python scripts/check_targets.py $(PROFILE)
@@ -92,6 +95,13 @@ py-test-hooks:
 py-test-torch:
 	uv sync --locked --python 3.11 --group test --group torch
 	uv run --locked --python 3.11 --group test --group torch pytest -q tests/python
+	uv sync --locked --python 3.11
+
+# The JAX handle tests (marker `jax`, pinned jax and jaxlib), then the
+# default environment again.
+py-test-jax:
+	uv sync --locked --python 3.11 --group test --group jax
+	uv run --locked --python 3.11 --group test --group jax pytest -q tests/python/test_jax.py
 	uv sync --locked --python 3.11
 
 # The PufferLib adapter at the pins of compat/pufferlib, from a temporary
@@ -179,3 +189,6 @@ gungraun-bless:
 
 # pre-push plus the PyTorch tests (downloads PyTorch on first use).
 pre-push-torch: pre-push py-test-torch
+
+# pre-push plus the JAX handle tests (downloads JAX on first use).
+pre-push-jax: pre-push py-test-jax
