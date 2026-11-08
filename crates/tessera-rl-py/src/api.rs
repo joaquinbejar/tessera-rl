@@ -209,6 +209,19 @@ pub(crate) fn make_cartpole(g: Gil, kwargs: Option<Ref<'_>>) -> CResult<Inner> {
     Ok(Inner::new(ops, borrowed))
 }
 
+/// `make_mountaincar(**kwargs)`: the pool of a mountain car environment
+/// object. `max_episode_steps` defaults to 200 (`MountainCar-v0`).
+pub(crate) fn make_mountaincar(g: Gil, kwargs: Option<Ref<'_>>) -> CResult<Inner> {
+    let kw = Kwargs::parse(g, kwargs)?;
+    kw.check(g, &[&POOL_KEYS, &["outputs"]])?;
+    let borrowed = borrowed(g, &kw)?;
+    let args = pool_args(g, &kw, tessera_rl_classic::mountaincar::MAX_EPISODE_STEPS)?;
+    let ops = g
+        .detach(|| crate::env::mountaincar(&args))
+        .map_err(|e| to_py(g, e))?;
+    Ok(Inner::new(ops, borrowed))
+}
+
 /// `make_grid(**kwargs)`: the pool of a reference grid world environment
 /// object. The world truncates at `max_steps`, and the engine's own limit is
 /// set above the largest value, so it never acts first.

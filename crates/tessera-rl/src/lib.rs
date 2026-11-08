@@ -61,6 +61,7 @@
 //! | Id | Crate | Agents | Action |
 //! | --- | --- | --- | --- |
 //! | `tessera/CartPole-v1` | `tessera-rl-classic` | 1 | `Discrete(2)` |
+//! | `tessera/MountainCar-v1` | `tessera-rl-classic` | 1 | `Discrete(3)`, Gymnasium `MountainCar-v0` dynamics |
 //! | `tessera/Tag-v1` | `tessera-rl-classic` | 2 to 8 | `Discrete(5)`, masked, simultaneous |
 //! | `tessera/Grid-v1` | `tessera-rl-classic` | 1 | `Discrete(4)` |
 //! | `tessera/GridKeyDoor-v1` | `tessera-rl-classic` | 1 to 4 | `Discrete(5)`, masked, simultaneous, generated worlds |

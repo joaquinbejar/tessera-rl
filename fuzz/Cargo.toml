@@ -83,6 +83,13 @@ doc = false
 bench = false
 
 [[bin]]
+name = "persist_mountaincar"
+path = "fuzz_targets/persist_mountaincar.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "persist_brickwall"
 path = "fuzz_targets/persist_brickwall.rs"
 test = false

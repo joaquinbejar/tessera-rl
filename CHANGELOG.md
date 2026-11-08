@@ -116,6 +116,15 @@ the API is not stable, and any 0.x release may break it.
   Golden fixtures, continuation, a test reference in raw integer arithmetic and
   a reference rasterizer, a scripted baseline and step benches. In Python it is
   available through `make` and the PettingZoo adapters.
+- **Mountain car** (`tessera/MountainCar-v1`, `tessera-rl-classic`): Gymnasium
+  `MountainCar-v0` dynamics, rewards and termination in f64 with frozen math,
+  cross-platform tier, a 200-step limit. One-step equivalence with the pinned
+  Gymnasium 1.4.0 within SPEC 18 tolerances over 100,000 sampled states and goal,
+  wall and speed-clip edges (`tools/gym_equivalence_mountaincar.py`). Golden
+  fixtures, continuation, import validation by phase and end flags, a scripted
+  baseline, a step bench and a persist fuzz target. In Python it is available
+  through `make` and the Gymnasium adapter. `HeaderView` gains `terminated` and
+  `truncated`, the end flags of a pending-reset record.
 - **Brick wall** (`tessera/BrickWall-v1`, `tessera-rl-classic`): a paddle, a
   ball and a wall of 108 bricks in `Fx32`, with original rules, scoring and
   rendering: a 30-frame serve, two walls, `lives` and `frameskip` in config,

@@ -14,7 +14,8 @@ use support::{
 use tessera_rl_classic::cartpole::MAX_EPISODE_STEPS;
 use tessera_rl_classic::{
     BrickWall, BrickWallConfig, CartPole, CartPoleConfig, Grid, GridConfig, KeyDoor, KeyDoorConfig,
-    PaddleDuel, PaddleDuelConfig, Snake, SnakeConfig, Tag, TagConfig,
+    MountainCar, MountainCarConfig, PaddleDuel, PaddleDuelConfig, Snake, SnakeConfig, Tag,
+    TagConfig,
 };
 use tessera_rl_engine::{AutoReset, EnvPool, Masked, NoMasks};
 
@@ -509,6 +510,52 @@ fn test_golden_paddleduel_two_agents_state_same_step_matches_fixture_on_every_mo
         "paddleduel-v1-a2-state-same-step",
         2,
         obs,
+        AutoReset::SameStep,
+    ));
+}
+
+impl support::GoldenEnv for MountainCar {
+    const ENV_ID: &'static str = tessera_rl_classic::mountaincar::ENV_ID;
+    const ENV_VERSION: u32 = tessera_rl_classic::mountaincar::ENV_VERSION;
+}
+
+fn mountaincar(name: &'static str, auto_reset: AutoReset) -> Scenario<MountainCarConfig> {
+    Scenario {
+        name,
+        cfg: MountainCarConfig::default(),
+        seed: 8_112_026,
+        num_envs: 16,
+        chunk: 4,
+        auto_reset,
+        max_episode_steps: tessera_rl_classic::mountaincar::MAX_EPISODE_STEPS,
+        steps: 600,
+        reseed_at: 300,
+        reseed_ids: &[2, 11],
+        reseed_seed: 7_777,
+    }
+}
+
+fn check_mountaincar(s: &Scenario<MountainCarConfig>) {
+    let build = |cfg, options| {
+        EnvPool::<MountainCar, NoMasks>::new(cfg, options).unwrap_or_else(|e| panic!("{e}"))
+    };
+    for workers in WORKERS {
+        check(s.name, &run::<MountainCar, _>(s, build, workers));
+    }
+}
+
+#[test]
+fn test_golden_mountaincar_next_step_matches_fixture_on_every_mode() {
+    check_mountaincar(&mountaincar(
+        "mountaincar-v1-next-step",
+        AutoReset::NextStep,
+    ));
+}
+
+#[test]
+fn test_golden_mountaincar_same_step_matches_fixture_on_every_mode() {
+    check_mountaincar(&mountaincar(
+        "mountaincar-v1-same-step",
         AutoReset::SameStep,
     ));
 }
