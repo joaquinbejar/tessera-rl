@@ -116,6 +116,15 @@ the API is not stable, and any 0.x release may break it.
   Golden fixtures, continuation, a test reference in raw integer arithmetic and
   a reference rasterizer, a scripted baseline and step benches. In Python it is
   available through `make` and the PettingZoo adapters.
+- **Acrobot** (`tessera/Acrobot-v1`, `tessera-rl-classic`): Gymnasium `Acrobot-v1`
+  book dynamics with one RK4 step, in f64 with frozen math, cross-platform tier, a
+  500-step limit. One-step equivalence with the pinned Gymnasium 1.4.0 within SPEC 18
+  tolerances over 100,000 rollout states and a boundary set
+  (`tools/gym_equivalence_acrobot.py`). The tolerance is not met over the whole
+  domain: the tool also reports a uniform set with failures at near-zero velocities.
+  Golden fixtures, continuation, import validation, a scripted baseline, a step bench
+  and a persist fuzz target. In Python it is available through `make` and the
+  Gymnasium adapter.
 - **Mountain car** (`tessera/MountainCar-v1`, `tessera-rl-classic`): Gymnasium
   `MountainCar-v0` dynamics, rewards and termination in f64 with frozen math,
   cross-platform tier, a 200-step limit. One-step equivalence with the pinned

@@ -13,9 +13,9 @@ use support::{
 };
 use tessera_rl_classic::cartpole::MAX_EPISODE_STEPS;
 use tessera_rl_classic::{
-    BrickWall, BrickWallConfig, CartPole, CartPoleConfig, Grid, GridConfig, KeyDoor, KeyDoorConfig,
-    MountainCar, MountainCarConfig, PaddleDuel, PaddleDuelConfig, Snake, SnakeConfig, Tag,
-    TagConfig,
+    Acrobot, AcrobotConfig, BrickWall, BrickWallConfig, CartPole, CartPoleConfig, Grid, GridConfig,
+    KeyDoor, KeyDoorConfig, MountainCar, MountainCarConfig, PaddleDuel, PaddleDuelConfig, Snake,
+    SnakeConfig, Tag, TagConfig,
 };
 use tessera_rl_engine::{AutoReset, EnvPool, Masked, NoMasks};
 
@@ -558,4 +558,44 @@ fn test_golden_mountaincar_same_step_matches_fixture_on_every_mode() {
         "mountaincar-v1-same-step",
         AutoReset::SameStep,
     ));
+}
+
+impl support::GoldenEnv for Acrobot {
+    const ENV_ID: &'static str = tessera_rl_classic::acrobot::ENV_ID;
+    const ENV_VERSION: u32 = tessera_rl_classic::acrobot::ENV_VERSION;
+}
+
+fn acrobot(name: &'static str, auto_reset: AutoReset) -> Scenario<AcrobotConfig> {
+    Scenario {
+        name,
+        cfg: AcrobotConfig::default(),
+        seed: 8_112_027,
+        num_envs: 16,
+        chunk: 4,
+        auto_reset,
+        max_episode_steps: tessera_rl_classic::acrobot::MAX_EPISODE_STEPS,
+        steps: 600,
+        reseed_at: 300,
+        reseed_ids: &[3, 12],
+        reseed_seed: 8_888,
+    }
+}
+
+fn check_acrobot(s: &Scenario<AcrobotConfig>) {
+    let build = |cfg, options| {
+        EnvPool::<Acrobot, NoMasks>::new(cfg, options).unwrap_or_else(|e| panic!("{e}"))
+    };
+    for workers in WORKERS {
+        check(s.name, &run::<Acrobot, _>(s, build, workers));
+    }
+}
+
+#[test]
+fn test_golden_acrobot_next_step_matches_fixture_on_every_mode() {
+    check_acrobot(&acrobot("acrobot-v1-next-step", AutoReset::NextStep));
+}
+
+#[test]
+fn test_golden_acrobot_same_step_matches_fixture_on_every_mode() {
+    check_acrobot(&acrobot("acrobot-v1-same-step", AutoReset::SameStep));
 }

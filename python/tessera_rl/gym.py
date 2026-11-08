@@ -68,6 +68,7 @@ from tessera_rl._env import _discrete_actions, native_kwargs
 _MAKERS = {
     "tessera/CartPole-v1": _native.make_cartpole,
     "tessera/MountainCar-v1": _native.make_mountaincar,
+    "tessera/Acrobot-v1": _native.make_acrobot,
     "tessera/Grid-v1": _native.make_grid,
     "tessera/BrickWall-v1": _native.make_brickwall,
     "tessera/Snake-v1": _native.make_snake,

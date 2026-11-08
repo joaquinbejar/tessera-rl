@@ -116,6 +116,7 @@ gym-equivalence:
 	uv sync --locked --python 3.11
 	uv run --locked --python 3.11 python tools/gym_equivalence.py
 	uv run --locked --python 3.11 python tools/gym_equivalence_mountaincar.py > /dev/null
+	uv run --locked --python 3.11 python tools/gym_equivalence_acrobot.py > /dev/null
 
 # SPEC 14.2 reference training: PPO on tessera/CartPole-v1 through the
 # Gymnasium adapter, Gymnasium's CartPole-v1 as the control and broken

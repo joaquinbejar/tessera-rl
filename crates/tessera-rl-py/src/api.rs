@@ -209,6 +209,19 @@ pub(crate) fn make_cartpole(g: Gil, kwargs: Option<Ref<'_>>) -> CResult<Inner> {
     Ok(Inner::new(ops, borrowed))
 }
 
+/// `make_acrobot(**kwargs)`: the pool of an acrobot environment object.
+/// `max_episode_steps` defaults to 500 (`Acrobot-v1`).
+pub(crate) fn make_acrobot(g: Gil, kwargs: Option<Ref<'_>>) -> CResult<Inner> {
+    let kw = Kwargs::parse(g, kwargs)?;
+    kw.check(g, &[&POOL_KEYS, &["outputs"]])?;
+    let borrowed = borrowed(g, &kw)?;
+    let args = pool_args(g, &kw, tessera_rl_classic::acrobot::MAX_EPISODE_STEPS)?;
+    let ops = g
+        .detach(|| crate::env::acrobot(&args))
+        .map_err(|e| to_py(g, e))?;
+    Ok(Inner::new(ops, borrowed))
+}
+
 /// `make_mountaincar(**kwargs)`: the pool of a mountain car environment
 /// object. `max_episode_steps` defaults to 200 (`MountainCar-v0`).
 pub(crate) fn make_mountaincar(g: Gil, kwargs: Option<Ref<'_>>) -> CResult<Inner> {

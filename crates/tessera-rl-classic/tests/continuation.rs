@@ -18,9 +18,9 @@ mod support;
 use support::continuation::Case;
 use tessera_rl_classic::cartpole::MAX_EPISODE_STEPS;
 use tessera_rl_classic::{
-    BrickWall, BrickWallConfig, CartPole, CartPoleConfig, Grid, GridConfig, KeyDoor, KeyDoorConfig,
-    MountainCar, MountainCarConfig, PaddleDuel, PaddleDuelConfig, Snake, SnakeConfig, Tag,
-    TagConfig,
+    Acrobot, AcrobotConfig, BrickWall, BrickWallConfig, CartPole, CartPoleConfig, Grid, GridConfig,
+    KeyDoor, KeyDoorConfig, MountainCar, MountainCarConfig, PaddleDuel, PaddleDuelConfig, Snake,
+    SnakeConfig, Tag, TagConfig,
 };
 use tessera_rl_engine::{AutoReset, EnvPool, Masked, NoMasks};
 
@@ -227,4 +227,27 @@ fn test_continuation_mountaincar_next_step_restores_identically_everywhere() {
 #[test]
 fn test_continuation_mountaincar_same_step_restores_identically_everywhere() {
     mountaincar(AutoReset::SameStep).check_all(50);
+}
+
+fn acrobot(auto_reset: AutoReset) -> Case<Acrobot, NoMasks> {
+    Case {
+        cfg: AcrobotConfig::default(),
+        build: |cfg, options| EnvPool::new(cfg, options).unwrap(),
+        auto_reset,
+        // The dynamics draw nothing, so branches diverge only at a reset:
+        // a short limit puts resets inside the 50-step horizon.
+        limit: 40,
+        deaths: false,
+        branches: true,
+    }
+}
+
+#[test]
+fn test_continuation_acrobot_next_step_restores_identically_everywhere() {
+    acrobot(AutoReset::NextStep).check_all(50);
+}
+
+#[test]
+fn test_continuation_acrobot_same_step_restores_identically_everywhere() {
+    acrobot(AutoReset::SameStep).check_all(50);
 }
