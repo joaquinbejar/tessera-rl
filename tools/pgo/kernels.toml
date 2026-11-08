@@ -1,0 +1,8 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+#
+# The kernels that must have nonzero profile counts (design section 3). Kept out
+# of the manifest so that filling them does not change its version. Frozen at the
+# feasibility step, from real symbols, with its sha256 recorded beside the
+# manifest's. Empty until then: evidence.load_kernels refuses an empty list.
+
+kernels = []

@@ -10,10 +10,6 @@ action_seed = 1
 # The resolved default of PoolOptions (crates/tessera-rl-engine/src/options.rs).
 chunk_size = 64
 
-# Filled in the feasibility step, from real symbols, before any evidence: the
-# kernels that must have nonzero profile counts (design section 3).
-kernels = []
-
 [[group]]
 name = "state"
 envs = [

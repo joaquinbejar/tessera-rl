@@ -46,6 +46,9 @@ class Scenario:
     outputs: str
     kind: str
     holdout: bool
+    batch_size: int = 0
+    simulations: int = 0
+    batch: int = 0
 
     @property
     def single_threaded(self) -> bool:
@@ -70,8 +73,16 @@ def scenarios(manifest: dict) -> list[Scenario]:
                     outputs=g.get("outputs", "borrowed"),
                     kind=g.get("kind", "step"),
                     holdout=g.get("holdout", False),
+                    batch_size=g.get("batch_size", 0),
+                    simulations=g.get("simulations", 0),
+                    batch=g.get("batch", 0),
                 )
             )
+    for s in out:
+        if s.mode == "async" and not s.batch_size:
+            raise ValueError(f"{s.name}: async needs batch_size")
+        if s.kind == "search" and not (s.simulations and s.batch):
+            raise ValueError(f"{s.name}: search needs simulations and batch")
     names = [s.name for s in out]
     if len(names) != len(set(names)):
         raise ValueError("duplicate scenario names")
@@ -87,6 +98,15 @@ def load_manifest(path: str) -> dict:
         raise ValueError("the manifest has no integer version")
     scenarios(manifest)
     return manifest
+
+
+def load_kernels(path: str) -> list[str]:
+    """The frozen kernel list; refused until the feasibility step has filled it."""
+    with open(path, "rb") as f:
+        kernels = tomllib.load(f).get("kernels")
+    if not isinstance(kernels, list) or not kernels or not all(isinstance(k, str) and k for k in kernels):
+        raise ValueError("the kernel list must be a nonempty list of strings")
+    return kernels
 
 
 def training_set(all_scenarios: list[Scenario], holdout_build: bool) -> list[Scenario]:
@@ -162,6 +182,8 @@ def parse_callgrind(text: str) -> dict[str, Cost]:
             if events is None or current is None:
                 raise ValueError("a cost line before the events or an object")
             values = line.split()[positions:]
+            if len(values) > len(events):
+                raise ValueError(f"a cost line with too many values: {line[:60]!r}")
             row = totals.setdefault(current, [0] * len(events))
             for i, v in enumerate(values):
                 row[i] += int(v)
@@ -193,6 +215,28 @@ def linear(n: int, n2: int, n3: int) -> bool:
 
 def workers_collected(with_workers_ir: int, inline_ir: int) -> bool:
     return inline_ir > 0 and with_workers_ir >= MIN_WORKER_SHARE * inline_ir
+
+
+def non_caller_native(per_thread: list[str]) -> tuple[int, float]:
+    """(native Ir of the non-caller threads, its share of all native Ir), from
+    the `--separate-threads=yes` files in thread order, the caller first. A
+    thread that never entered `_native` counts as zero."""
+    irs = []
+    for text in per_thread:
+        objects = parse_callgrind(text)
+        native = [c.ir for name, c in objects.items() if os.path.basename(name).startswith(NATIVE_OBJECT)]
+        if len(native) > 1:
+            raise ValueError(f"expected at most one {NATIVE_OBJECT} object per thread")
+        irs.append(native[0] if native else 0)
+    if len(irs) < 2:
+        raise ValueError("need the caller's file and at least one other thread's")
+    total, others = sum(irs), sum(irs[1:])
+    return others, (others / total if total else 0.0)
+
+
+def worker_threads_collected(per_thread: list[str]) -> bool:
+    """Section 5 item 4, for modes that need workers."""
+    return non_caller_native(per_thread)[0] > 0
 
 
 def spread(values: list[int]) -> float:

@@ -195,3 +195,41 @@ def test_pgo_w2f_gates():
 @pytest.mark.parametrize(("w1", "w2", "want"), [(False, True, "W0"), (True, False, "W1"), (True, True, "W2F"), (False, False, "W0")])
 def test_pgo_ship_ladder(w1, w2, want):
     assert ev.ship(w1, w2) == want
+
+
+def test_pgo_kernels_are_refused_until_filled(tmp_path):
+    with pytest.raises(ValueError, match="nonempty"):
+        ev.load_kernels(str(ROOT / "tools" / "pgo" / "kernels.toml"))
+    for bad in ("kernels = [1]\n", 'kernels = ""\n', "x = 1\n"):
+        p = tmp_path / "k.toml"
+        p.write_text(bad)
+        with pytest.raises(ValueError, match="nonempty"):
+            ev.load_kernels(str(p))
+    p.write_text('kernels = ["step"]\n')
+    assert ev.load_kernels(str(p)) == ["step"]
+
+
+def test_pgo_manifest_needs_batch_size_and_search_options():
+    async_group = {"name": "a", "mode": "async", "envs": [{"id": "x/y"}], "num_envs": 1, "steps": 1}
+    with pytest.raises(ValueError, match="batch_size"):
+        ev.scenarios({"group": [async_group]})
+    search = {"name": "s", "kind": "search", "envs": [{"id": "x/y"}], "num_envs": 1, "steps": 1, "simulations": 8}
+    with pytest.raises(ValueError, match="simulations and batch"):
+        ev.scenarios({"group": [search]})
+
+
+def test_pgo_a_cost_line_with_too_many_values_is_refused():
+    with pytest.raises(ValueError, match="too many"):
+        ev.parse_callgrind(f"events: {EVENTS}\nob=(1) /a/_native.so\n1 {' '.join(['1'] * 14)}\n")
+
+
+def thread(ir, name="/a/_native.so"):
+    return f"positions: line\nevents: {EVENTS}\nob=(1) {name}\n1 {ir}\n"
+
+
+def test_pgo_non_caller_threads_are_measured():
+    assert ev.non_caller_native([thread(100), thread(300), thread(100, "/lib/libc.so")]) == (300, 0.75)
+    assert ev.worker_threads_collected([thread(100), thread(1)])
+    assert not ev.worker_threads_collected([thread(100), thread(9, "/lib/libc.so")])
+    with pytest.raises(ValueError, match="at least one other"):
+        ev.non_caller_native([thread(100)])
