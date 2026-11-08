@@ -26,13 +26,15 @@ import evidence  # noqa: E402
 CONTROL = "control/interpreter-only"
 
 
-def control() -> int:
-    """Pure Python work with the module imported: the feasibility gate's control
-    that interpreter work is not attributed to `_native`."""
+def control(steps: int = 1) -> int:
+    """Pure Python work with the module imported, proportional to `steps`: the
+    feasibility gate's control. Measured by difference like a scenario, so
+    importing the module (native work) cancels and only interpreter work
+    attributed to `_native` would remain."""
     import tessera_rl  # noqa: F401
 
     total = 0
-    for i in range(2_000_000):
+    for i in range(steps * 1_000_000):
         total += i % 7
     return total
 
@@ -144,7 +146,7 @@ def main(argv=None) -> int:
     parser.add_argument("--workers", type=int, default=None, help="override, for the worker-thread control")
     args = parser.parse_args(argv)
     if args.scenario == CONTROL:
-        control()
+        control(args.steps or 1)
         return 0
     manifest = evidence.load_manifest(args.manifest)
     found = [s for s in evidence.scenarios(manifest) if s.name == args.scenario]
