@@ -222,3 +222,8 @@ def test_pgo_decide_ir_claim_ignores_the_holdout(kernels):
     r["W2F"]["costs"]["holdout/Go9-v1"] = {"Ir": 985000, "Bcm": 5000, "Bim": 0}
     assert run(r, kernels)["w2f_ir_ratio"] == base
 
+
+
+def test_pgo_decide_any_recorded_failed_check_counts(kernels):
+    out = run(reports(), kernels, det={"W1": inputs("w1", golden_anchor=1)})
+    assert out["ship"] == "W0" and out["failed_checks"]["W1"] == ["golden_anchor"]
