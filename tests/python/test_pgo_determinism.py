@@ -139,3 +139,14 @@ def test_pgo_determinism_trace_hashes_every_field_per_instance(change):
     got = digests(step)
     assert got[1] != base[1] and got[0] == base[0] and got[2] == base[2]
 
+
+def test_pgo_determinism_compare_writes_the_wheels(report, tmp_path, capsys):
+    a, b = tmp_path / "a.json", tmp_path / "b.json"
+    a.write_text(json.dumps({**report, "wheel_sha256": "w0"}))
+    b.write_text(json.dumps({**report, "wheel_sha256": "w1"}))
+    out = tmp_path / "r.json"
+    assert det.main(["compare", str(a), str(b), "--out", str(out)]) == 0
+    saved = json.loads(out.read_text())
+    assert saved["passed"] is True and saved["wheels"] == ["w0", "w1"]
+    capsys.readouterr()
+

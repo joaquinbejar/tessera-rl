@@ -56,15 +56,22 @@ TESSERA_GOLDEN_ACTIONS="$WHEEL_RUN/golden-actions" nice -n 10 \
 
 # A directory of its own and -I, so that the installed wheel is what is imported.
 root="$PWD"
+wheel="$(ls "$root"/dist/*.whl)"
 venv="$WHEEL_RUN/venv"
 uv venv --python 3.11 "$venv"
 uv pip install --python "$venv/bin/python" dist/*.whl numpy==2.4.6 xxhash==4.0.2 \
     pytest==9.2.0 gymnasium==1.4.0 pettingzoo==1.27.0
 mkdir -p "$WHEEL_RUN/run"
 cd "$WHEEL_RUN/run"
+# Every check runs, and its exit status is recorded against the wheel's sha256.
+anchor=0 suite=0 num=0
 nice -n 10 "$venv/bin/python" -I "$root/tools/wheel_golden.py" \
-    --actions "$WHEEL_RUN/golden-actions" --out "$root/golden-report.json"
-nice -n 10 "$venv/bin/python" -I -m pytest -q -p no:cacheprovider "$root/tests/python" --rootdir "$root"
+    --actions "$WHEEL_RUN/golden-actions" --out "$root/golden-report.json" || anchor=$?
+nice -n 10 "$venv/bin/python" -I -m pytest -q -p no:cacheprovider "$root/tests/python" --rootdir "$root" || suite=$?
+nice -n 10 "$venv/bin/python" -I "$root/tools/pgo/determinism.py" record --wheel "$wheel" --out "$root/determinism.json"
 
 cd "$root"
-scripts/wheel_num_tests.sh
+scripts/wheel_num_tests.sh || num=$?
+"$venv/bin/python" -I tools/pgo/checks.py --wheel "$wheel" --out checks.json \
+    golden_anchor="$anchor" python_suite="$suite" num_tests="$num"
+[ "$anchor" -eq 0 ] && [ "$suite" -eq 0 ] && [ "$num" -eq 0 ]

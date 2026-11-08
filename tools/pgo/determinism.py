@@ -3,8 +3,8 @@
 """Behaviour of an installed candidate wheel against W0, and across targets
 (docs/reviews/pgo-wheels-design.md r5, section 7, items 2 to 4).
 
-    determinism.py record --out w1.json      # in the wheel's own environment
-    determinism.py compare w0.json w1.json   # exit 1 on any difference
+    determinism.py record --wheel W.whl --out w1.json     # in the wheel's own environment
+    determinism.py compare w0.json w1.json --out r.json   # exit 1 on any difference
 
 Each instance's outputs are hashed row by row, so Sync, Pipelined and Async runs
 are comparable although Async batches depend on timing. Actions depend only on
@@ -285,14 +285,19 @@ def main(argv=None) -> int:
     sub = parser.add_subparsers(dest="command", required=True)
     r = sub.add_parser("record")
     r.add_argument("--out", required=True)
+    r.add_argument("--wheel", required=True, help="the exact wheel installed here")
     c = sub.add_parser("compare")
     c.add_argument("reports", nargs="+")
+    c.add_argument("--out", default=None, help="the result, with the wheels compared, for decide.py")
     args = parser.parse_args(argv)
     if args.command == "record":
         import tessera_rl as t
 
+        report = record(t)
+        with open(args.wheel, "rb") as f:
+            report["wheel_sha256"] = hashlib.file_digest(f, "sha256").hexdigest()
         with open(args.out, "w", encoding="utf-8") as f:
-            json.dump(record(t), f)
+            json.dump(report, f)
         return 0
     if len(args.reports) < 2:
         print("compare needs at least two reports", file=sys.stderr)
@@ -302,7 +307,11 @@ def main(argv=None) -> int:
         with open(path, encoding="utf-8") as f:
             reports.append(json.load(f))
     found = [d for other in reports[1:] for d in differences(reports[0], other)]
-    print(json.dumps({"passed": not found, "differences": found[:50], "count": len(found)}))
+    result = {"passed": not found, "differences": found[:50], "count": len(found), "wheels": [r.get("wheel_sha256") for r in reports]}
+    if args.out:
+        with open(args.out, "w", encoding="utf-8") as f:
+            json.dump(result, f, indent=1)
+    print(json.dumps(result))
     return 0 if not found else 1
 
 

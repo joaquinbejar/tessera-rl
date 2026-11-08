@@ -252,3 +252,15 @@ def test_pgo_feasibility_records_hashes_and_needs_the_wheel(tmp_path, monkeypatc
     saved = json.loads((out / "feasibility.json").read_text())
     assert saved["sha256"]["wheel"] == hashlib.sha256(b"abc").hexdigest()
     assert set(saved["sha256"]) == {"wheel", "manifest", "kernels"}
+
+
+def test_pgo_checks_writes_statuses_tied_to_the_wheel(tmp_path):
+    checks = load("checks")
+    wheel = tmp_path / "w.whl"
+    wheel.write_bytes(b"abc")
+    out = tmp_path / "c.json"
+    assert checks.main(["--wheel", str(wheel), "--out", str(out), "python_suite=0", "num_tests=3"]) == 0
+    saved = json.loads(out.read_text())
+    assert saved["wheel_sha256"] == hashlib.sha256(b"abc").hexdigest() and saved["checks"]["num_tests"] == 3
+    assert checks.main(["--wheel", str(wheel), "--out", str(out), "bad"]) == 2
+
