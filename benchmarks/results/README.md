@@ -6,6 +6,9 @@ The inputs of the benchmark dashboard (`make dashboard`). One JSON file per
 run, schema `tessera-dashboard-result/1`, wrapping an unchanged
 `tools/bench/bench.py` report.
 
+File names follow `<UTC date>-<machine>-<short commit>.json`; this is a
+convention, and the builder does not check it.
+
 Admission: a file enters through a reviewed PR, and is never edited once
 merged. A correction adds a new file with `"supersedes": "<file name>"`.
 Only measured results belong here; test fixtures do not.

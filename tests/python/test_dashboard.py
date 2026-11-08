@@ -196,6 +196,15 @@ def test_supersession_refused(root, links, bad, text):
         assert got[name].status == st.INVALID and text in " ".join(got[name].reasons)
 
 
+def test_supersession_by_invalid_file_changes_nothing(root):
+    dirty = report()
+    dirty["environment"]["software"]["git_dirty"] = True
+    put(root, "a.json", seal(report()))
+    put(root, "b.json", seal(dirty, supersedes="a.json"))
+    got = statuses(root)
+    assert (got["a.json"].status, got["b.json"].status) == (st.VALID, st.INVALID)
+
+
 def test_admit_refuses_file_outside_results(root):
     outside = root / "elsewhere.json"
     outside.write_text(json.dumps(seal(report())))

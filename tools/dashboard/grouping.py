@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 
+# `tessera_rl` tracks the commit, which is the axis of a trend.
 SOFTWARE_OUTSIDE_KEY = frozenset({"git", "git_dirty", "tessera_rl"})
 
 
