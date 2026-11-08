@@ -6,8 +6,11 @@ import copy
 import importlib.util
 import json
 import pathlib
+import re
 import sys
+from typing import NamedTuple
 
+import numpy as np
 import pytest
 
 _TOOL = pathlib.Path(__file__).parents[2] / "tools" / "pgo" / "determinism.py"
@@ -87,3 +90,52 @@ def test_pgo_determinism_compare_command(report, tmp_path, capsys):
     assert det.main(["compare", str(a), str(b)]) == 1
     assert det.main(["compare", str(a)]) == 2
     capsys.readouterr()
+
+
+def test_pgo_determinism_covers_every_registered_environment():
+    source = (pathlib.Path(t.__file__).parent / "_env.py").read_text()
+    block = source[source.index("makers = {") :]
+    block = block[: block.index("}")]
+    registered = set(re.findall(r'"(tessera/[^"]+)"', block))
+    assert registered and registered == {env_id for env_id, _ in det.ENVS.values()}
+
+
+class FakeStep(NamedTuple):
+    observations: dict
+    rewards: np.ndarray
+    episode_terminated: np.ndarray
+    masks: np.ndarray | None
+
+
+def fake_step():
+    return FakeStep(
+        {"obs": np.zeros((3, 2), np.uint8)},
+        np.zeros(3, np.float32),
+        np.zeros(3, np.bool_),
+        np.zeros((3, 2), np.bool_),
+    )
+
+
+def digests(step):
+    trace = det.Trace(3)
+    trace.add(range(3), step)
+    return trace.result()
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        lambda s: s.observations["obs"].__setitem__((1, 0), 1),
+        lambda s: s.rewards.__setitem__(1, 1.0),
+        lambda s: s.episode_terminated.__setitem__(1, True),
+        lambda s: s.masks.__setitem__((1, 1), True),
+    ],
+    ids=["obs", "reward", "flag", "mask"],
+)
+def test_pgo_determinism_trace_hashes_every_field_per_instance(change):
+    base = digests(fake_step())
+    step = fake_step()
+    change(step)
+    got = digests(step)
+    assert got[1] != base[1] and got[0] == base[0] and got[2] == base[2]
+

@@ -14,6 +14,9 @@ borrowed against owned, continuation) are recorded and must hold.
 Items 5 (the Python suite) and 6 (the num crate's tests under the profile) are
 commands of the wheel job, not of this tool. A difference blocks the wheel and is
 a bug; the goldens are never re-blessed for it.
+
+Discrete actions only: an environment with continuous actions (Pendulum, when it
+lands) needs a continuous path here, a stated gap.
 """
 
 from __future__ import annotations
@@ -37,6 +40,8 @@ CONTINUE_STEPS = 20
 
 ENVS = {
     "cartpole": ("tessera/CartPole-v1", {}),
+    "mountaincar": ("tessera/MountainCar-v1", {}),
+    "acrobot": ("tessera/Acrobot-v1", {}),
     "tag": ("tessera/Tag-v1", {"pursuers": 2, "evaders": 2}),
     "grid": ("tessera/Grid-v1", {}),
     "keydoor": ("tessera/GridKeyDoor-v1", {}),
