@@ -34,7 +34,8 @@ runs them in program order. ``jax.pure_callback`` is never used.
   ``close``.
 - **Floating point.** XLA's CPU threads may run with flush-to-zero set. The
   native boundary computes under canonical controls anyway (ADR-0041) and
-  warns once per process; trajectories are bit-identical to the native API.
+  warns once per process. Under JAX that ``RuntimeWarning`` is expected and
+  harmless: trajectories are bit-identical to the native API.
 
 JAX and jaxlib are pinned exactly (the ``jax`` extra). Another version raises
 ``ImportError``; ``TESSERA_JAX_UNPINNED=1`` overrides that check at your own
@@ -214,7 +215,10 @@ class Env:
             value = _env._index(seed, "seed")
             if not 0 <= value < 2**64:
                 raise _native.ArgumentError(f"seed {value} is outside the 64-bit seed range")
-            return io_callback(lambda: self._host_reset(value), self._spec, ordered=True)
+            # As a (hi, lo) operand of the one traced-seed callback: a new
+            # closure per seed would grow JAX's callback caches without bound.
+            pair = np.array([value >> 32, value & 0xFFFFFFFF], dtype=_U32)
+            return io_callback(self._host_reset_traced, self._spec, pair, ordered=True)
         dtype = getattr(seed, "dtype", None)
         shape = tuple(getattr(seed, "shape", ()) or ())
         if dtype is None or np.dtype(dtype) != _U32 or shape not in ((), (2,)):

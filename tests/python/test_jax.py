@@ -381,6 +381,22 @@ def test_jax_seeds_match_native(make_seed, value):
         assert_same(jax.jit(lambda: env.reset(make_seed()))(), want)
 
 
+def test_jax_static_seeds_share_one_callback(monkeypatch):
+    callbacks = []
+    real = tjax.io_callback
+
+    def recording(cb, *a, **k):
+        callbacks.append(cb)
+        return real(cb, *a, **k)
+
+    monkeypatch.setattr(tjax, "io_callback", recording)
+    ref = native("tessera/CartPole-v1", 1, 0)
+    with tjax.make("tessera/CartPole-v1", num_envs=1, seed=0) as env:
+        for seed in (1, 2**33 + 1, 12345):
+            assert_same(env.reset(seed), ref.reset(seed))
+    assert len(callbacks) == 3 and all(cb == callbacks[0] for cb in callbacks)
+
+
 def test_jax_bad_seeds_are_refused():
     with tjax.make("tessera/CartPole-v1", num_envs=1, seed=0) as env:
         for bad in (jnp.int32(3), jnp.array([1, 2, 3], jnp.uint32), np.float32(1)):
