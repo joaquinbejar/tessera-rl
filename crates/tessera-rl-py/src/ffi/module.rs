@@ -122,7 +122,7 @@ pub(super) unsafe extern "C" fn fail_after(
     })
 }
 
-const METHOD_COUNT: usize = if cfg!(feature = "test-hooks") { 24 } else { 22 };
+const METHOD_COUNT: usize = if cfg!(feature = "test-hooks") { 25 } else { 22 };
 
 static METHODS: Table<[ffi::PyMethodDef; METHOD_COUNT]> = Table([
     method(
@@ -181,6 +181,12 @@ static METHODS: Table<[ffi::PyMethodDef; METHOD_COUNT]> = Table([
         c"_make_panic_counter",
         thunks::MAKE_PANIC_COUNTER,
         c"Test hook: a pool whose first step panics.",
+    ),
+    #[cfg(feature = "test-hooks")]
+    super::tables::method_kw(
+        c"_make_continuous_probe",
+        thunks::MAKE_CONTINUOUS_PROBE,
+        c"Test hook: a pool with one continuous head.",
     ),
     #[cfg(feature = "test-hooks")]
     method(

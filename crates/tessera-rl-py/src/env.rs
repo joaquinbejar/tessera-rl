@@ -80,6 +80,15 @@ pub(crate) enum ResetSeed {
     List(Vec<Option<u64>>),
 }
 
+/// Discrete actions as an engine input (unit tests).
+#[cfg(test)]
+pub(crate) fn discrete(actions: &[i32]) -> ActionInput<'_> {
+    ActionInput {
+        discrete: actions,
+        continuous: &[],
+    }
+}
+
 /// The fixed layout of a pool's outputs.
 #[derive(Debug, Clone)]
 pub(crate) struct Layout {
@@ -89,7 +98,11 @@ pub(crate) struct Layout {
     /// bound on which slots can ever act (`agents` is the capacity).
     pub(crate) initial_agents: usize,
     pub(crate) leaves: Vec<Leaf>,
+    /// Choices of the one discrete head; 0 for a continuous environment.
     pub(crate) action_choices: u32,
+    /// Inclusive bounds of the one continuous `f32` head, if that is the
+    /// action space.
+    pub(crate) action_bounds: Option<(f64, f64)>,
     pub(crate) mask_len: usize,
     /// Turn structure (ADR-0013): `"simultaneous"`, `"sequential"` or
     /// `"mixed"`.
@@ -127,7 +140,7 @@ pub(crate) trait PoolOps: Send {
     fn layout(&self) -> &Layout;
     /// Resets every instance, or only `ids`.
     fn reset(&mut self, ids: Option<&[u32]>, seed: &ResetSeed) -> Result<(), BindError>;
-    fn step(&mut self, actions: &[i32]) -> Result<(), BindError>;
+    fn step(&mut self, actions: ActionInput<'_>) -> Result<(), BindError>;
     /// The last call's outputs; refused on a poisoned pool.
     fn outputs(&self) -> Result<Owned, BindError>;
     /// The shared output storage, for borrowed views.
@@ -253,13 +266,10 @@ where
             "",
             &mut obs,
         )?;
-        let Space::Discrete { n: action_choices } =
-            E::action_space(cfg).map_err(EngineError::from)?
-        else {
-            return Err(BindError::Argument(
-                "action spaces other than Discrete are not exposed yet".to_owned(),
-            ));
-        };
+        let (action_choices, action_bounds) = action_head(
+            &E::action_space(cfg).map_err(EngineError::from)?,
+            E::MAX_AGENTS,
+        )?;
         let mask_len = if M::ENABLED {
             usize::try_from(action_choices).unwrap_or(0)
         } else {
@@ -274,6 +284,7 @@ where
                 initial_agents: E::initial_agents(cfg),
                 leaves: obs,
                 action_choices,
+                action_bounds,
                 mask_len,
                 turns: match E::TURNS {
                     TurnStructure::Simultaneous => "simultaneous",
@@ -342,11 +353,8 @@ where
         Ok(())
     }
 
-    fn step(&mut self, actions: &[i32]) -> Result<(), BindError> {
-        self.pool.step(ActionInput {
-            discrete: actions,
-            continuous: &[],
-        })?;
+    fn step(&mut self, actions: ActionInput<'_>) -> Result<(), BindError> {
+        self.pool.step(actions)?;
         Ok(())
     }
 
@@ -560,6 +568,27 @@ where
     }))
 }
 
+/// The action head the Python layer can drive: one `Discrete`, or, for a
+/// single-agent environment, one `f32` box element (design section 4.3).
+fn action_head(space: &Space, agents: usize) -> Result<(u32, Option<(f64, f64)>), BindError> {
+    match space {
+        Space::Discrete { n } => return Ok((*n, None)),
+        Space::Box {
+            shape,
+            dtype: DType::F32,
+            bounds: BoxBounds::Float { low, high },
+        } if agents == 1 && shape.as_slice() == [1] => {
+            if let ([low], [high]) = (low.as_slice(), high.as_slice()) {
+                return Ok((0, Some((*low, *high))));
+            }
+        }
+        _ => {}
+    }
+    Err(BindError::Argument(
+        "only Discrete and single-agent one-element f32 Box action spaces are exposed".to_owned(),
+    ))
+}
+
 /// A pool whose first step panics (`make py-test-hooks`). Never in a release wheel.
 #[cfg(feature = "test-hooks")]
 pub(crate) fn panic_counter(args: &PoolArgs) -> Result<Box<dyn PoolOps>, BindError> {
@@ -572,6 +601,19 @@ pub(crate) fn panic_counter(args: &PoolArgs) -> Result<Box<dyn PoolOps>, BindErr
     let (options, n) = options(args)?;
     let pool = EnvPool::<Counter, NoMasks>::new(cfg.clone(), options)?;
     finish(&cfg, pool, args, n, false)
+}
+
+/// A pool with one continuous head (`make py-test-hooks`). Never in a release
+/// wheel.
+#[cfg(feature = "test-hooks")]
+pub(crate) fn continuous_probe(args: &PoolArgs) -> Result<Box<dyn PoolOps>, BindError> {
+    use crate::continuous_probe::ContinuousProbe;
+    use crate::split::common::CountConfig;
+    let cfg = CountConfig::default();
+    let (options, n) = options(args)?;
+    let same_step = options.auto_reset == AutoReset::SameStep;
+    let pool = EnvPool::<ContinuousProbe, NoMasks>::new(cfg.clone(), options)?;
+    finish(&cfg, pool, args, n, same_step)
 }
 
 /// A CartPole pool (`tessera/CartPole-v1`).
@@ -840,7 +882,7 @@ mod tests {
         let storage = ops.storage();
         let before = storage.generation();
         let actions = vec![0; copy.rewards.len() / 4];
-        assert!(ops.step(&actions).is_err());
+        assert!(ops.step(discrete(&actions)).is_err());
         assert!(ops.is_poisoned());
         assert!(matches!(
             ops.outputs(),

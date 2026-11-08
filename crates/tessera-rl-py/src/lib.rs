@@ -17,6 +17,8 @@
 mod api;
 mod async_api;
 mod batched;
+#[cfg(feature = "test-hooks")]
+mod continuous_probe;
 mod env;
 mod errors;
 mod ffi;

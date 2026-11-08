@@ -168,6 +168,8 @@ class Env:
     def __init__(self, pool: _env.Env):
         if pool.mode != "sync" or pool.outputs != "owned":
             raise _native.ArgumentError("tessera_rl.jax needs a sync pool with owned outputs")
+        if pool.action_bounds is not None:
+            raise _native.ArgumentError("tessera_rl.jax is discrete only")
         self._pool = pool
         self.num_envs: int = pool.num_envs
         self.agents: int = pool.agents

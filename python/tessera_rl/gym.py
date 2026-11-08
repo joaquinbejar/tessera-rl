@@ -62,7 +62,7 @@ except ImportError as e:  # pragma: no cover - exercised only without gymnasium
 import numpy as np
 
 from tessera_rl import _native
-from tessera_rl._env import _discrete_actions, native_kwargs
+from tessera_rl._env import _discrete_actions, _real_array, _to_float32, native_kwargs
 
 #: Single-agent environments the adapter exposes.
 _MAKERS = {
@@ -172,7 +172,12 @@ class TesseraVectorEnv(VectorEnv):
         self.metadata = {"autoreset_mode": mode}
         self.render_mode = None
         self.single_observation_space = _single_space(layout)
-        self.single_action_space = spaces.Discrete(layout["action_choices"])
+        self._bounds = layout["action_bounds"]
+        if self._bounds is None:
+            self.single_action_space = spaces.Discrete(layout["action_choices"])
+        else:
+            low, high = (np.float32(b) for b in self._bounds)
+            self.single_action_space = spaces.Box(low=low, high=high, shape=(1,), dtype=np.float32)
         self.observation_space = batch_space(self.single_observation_space, self.num_envs)
         self.action_space = batch_space(self.single_action_space, self.num_envs)
         self._names = [name or "obs" for name, *_ in layout["leaves"]]
@@ -219,6 +224,14 @@ class TesseraVectorEnv(VectorEnv):
             info["_final_info"] = done.copy()
         return info
 
+    def _clipped(self, actions) -> np.ndarray:
+        """Cast to float32, then clip in float32 (design 4.3): NaN is
+        refused, infinities clip."""
+        acts = _to_float32(_real_array(actions))
+        if np.isnan(acts).any():
+            raise _native.ActionError("actions must not be NaN")
+        return np.clip(acts, self.single_action_space.low, self.single_action_space.high).astype("<f4")
+
     # -- Gymnasium API -------------------------------------------------------
 
     def reset(self, *, seed: int | list[int | None] | None = None, options: dict | None = None):
@@ -240,7 +253,7 @@ class TesseraVectorEnv(VectorEnv):
         return self._obs(out["observations"]), {}
 
     def step(self, actions):
-        acts = _discrete_actions(actions)
+        acts = _discrete_actions(actions) if self._bounds is None else self._clipped(actions)
         if acts.size != self.num_envs:
             raise _native.ActionError(f"expected {self.num_envs} actions, got {acts.size}")
         if self._agents == 1:
@@ -290,6 +303,8 @@ class TesseraEnv(gymnasium.Env):
         return _first(obs), {}
 
     def step(self, action):
+        if self._vec._bounds is not None and np.ndim(action) not in (0, 1):
+            raise _native.ActionError(f"an action is a scalar or shape (1,), not {np.shape(action)}")
         obs, rewards, terminated, truncated, _ = self._vec.step(np.asarray([action]))
         return _first(obs), float(rewards[0]), bool(terminated[0]), bool(truncated[0]), {}
 
