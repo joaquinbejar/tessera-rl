@@ -84,11 +84,13 @@ jobs:
           path: |
             dist/*.whl
             golden-report.json
+            checks.json
+            determinism.json
       # The workspace is bind-mounted, so the container's end does not clean it,
       # and its files are root's.
       - if: always()
         run: |
-          rm -rf "$WHEEL_RUN" dist golden-report.json
+          rm -rf "$WHEEL_RUN" dist golden-report.json checks.json determinism.json
           chown -R "$(stat -c %u:%g "$GITHUB_WORKSPACE/..")" "$GITHUB_WORKSPACE"
 
   macos:
@@ -107,5 +109,7 @@ jobs:
           path: |
             dist/*.whl
             golden-report.json
+            checks.json
+            determinism.json
       - if: always()
-        run: rm -rf "$WHEEL_RUN" dist golden-report.json
+        run: rm -rf "$WHEEL_RUN" dist golden-report.json checks.json determinism.json
