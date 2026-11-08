@@ -50,6 +50,34 @@ def test_acrobot_equivalence_gate_detects_a_wrong_transition(sampled):
     assert report["state"] > 0
 
 
+def test_acrobot_equivalence_boundary_set_covers_every_class(sampled):
+    states, _, ref = sampled
+    cover = eq.boundary_coverage(states, ref, N)
+    print(cover)
+    assert all(cover.values()), cover
+
+
+def test_acrobot_equivalence_short_trajectories_report(sampled):
+    report = eq.trajectories(sampled[0][:N])
+    print(report)
+    assert report["episodes"] == 1000 and report["length"] == 50
+    assert report["compared_steps"] == report["expected_steps"] > 0
+
+
+def test_acrobot_equivalence_trajectories_stop_at_termination():
+    # The first start ends on its first step, the second runs the whole plan.
+    starts = np.array([[2.0, 0.0, 5.0, 0.0], [0.0, 0.0, 0.0, 0.0]])
+    plans = np.ones((2, 5), dtype=np.int32)
+    report = eq.trajectories(starts, starts=starts, plans=plans)
+    assert report["reference_terminated_episodes"] == 1
+    assert report["compared_steps"] == report["expected_steps"] == 1 + 5
+    assert report["flag_mismatches"] == 0 and report["reward_mismatches"] == 0
+
+
+def test_acrobot_equivalence_truncates_with_time_limit():
+    assert eq.truncation()["mismatches"] == 0
+
+
 def test_acrobot_equivalence_uniform_set_stays_fixed():
     # Reported, not gated; its size and seed must not drift.
     states, _ = eq.spread(N // 5, SEED + 1)

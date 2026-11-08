@@ -319,6 +319,121 @@ def compare(ours, ref):
     return report
 
 
+def boundary_coverage(states, ref, n: int) -> dict:
+    """How many gated edge states fall in each class, from the reference's
+    next states, so that no class can be lost silently."""
+    pi = np.pi
+    cover = dict.fromkeys(
+        (
+            "height_in_band",
+            "height_gated_below",
+            "height_gated_above",
+            "wrap_theta1",
+            "wrap_theta2",
+            "dtheta1_bound_pos",
+            "dtheta1_bound_neg",
+            "dtheta2_bound_pos",
+            "dtheta2_bound_neg",
+        ),
+        0,
+    )
+    for before, r in zip(states[n:], ref[n:], strict=True):
+        nxt = r[0]
+        gap = height(nxt) - 1.0
+        cover["height_in_band"] += int(abs(gap) < 1e-9)
+        cover["height_gated_below"] += int(-3e-9 < gap <= -1e-9)
+        cover["height_gated_above"] += int(1e-9 <= gap < 3e-9)
+        cover["wrap_theta1"] += int(abs(nxt[0] - before[0]) > pi)
+        cover["wrap_theta2"] += int(abs(nxt[1] - before[1]) > pi)
+        for axis, bound, name in ((2, 4 * pi, "dtheta1"), (3, 9 * pi, "dtheta2")):
+            cover[f"{name}_bound_pos"] += int(before[axis] >= np.nextafter(bound, 0.0))
+            cover[f"{name}_bound_neg"] += int(before[axis] <= -np.nextafter(bound, 0.0))
+    return cover
+
+
+def trajectories(states, episodes: int = 1000, length: int = 50, seed: int = 7, starts=None, plans=None):
+    """SPEC 18 secondary check, descriptive and not gated: ``episodes``
+    injected starts with ``length`` replayed actions, each compared up to
+    its reference end. Reports the observed divergence."""
+    rng = np.random.default_rng(seed)
+    if starts is None:
+        starts = states[rng.choice(len(states), size=episodes, replace=False)]
+    if plans is None:
+        plans = rng.integers(3, size=(len(starts), length)).astype(np.int32)
+    episodes, length = len(starts), plans.shape[1]
+    ref = _ref_env()
+    env = tessera_rl.make(ID, num_envs=episodes, seed=1, outputs="owned", auto_reset="next_step", max_episode_steps=0)
+    native = env._native
+    native.reset(1)
+    for i in range(episodes):
+        native.import_record(i, native.snapshot(i)[: -STATE.size] + STATE.pack(*starts[i]))
+    expected = []
+    for i in range(episodes):
+        ref.state = np.array(starts[i], dtype=np.float64)
+        steps = []
+        for a in plans[i]:
+            obs, reward, term, _, _ = ref.step(int(a))
+            steps.append((np.array(ref.state, dtype=np.float64), obs, float(reward), bool(term)))
+            if term:
+                break
+        expected.append(steps)
+    report = {
+        "episodes": episodes,
+        "length": length,
+        "expected_steps": sum(len(e) for e in expected),
+        "compared_steps": 0,
+        "reference_terminated_episodes": sum(e[-1][3] for e in expected),
+        "max_ulps": 0,
+        "max_absolute": 0.0,
+        "max_relative": 0.0,
+        "max_obs_absolute": 0.0,
+        "reward_mismatches": 0,
+        "flag_mismatches": 0,
+    }
+    for k in range(length):
+        out = native.step(plans[:, k].astype("<i4").tobytes())
+        obs = np.frombuffer(out["observations"][0], dtype="<f4").reshape(episodes, OBS)
+        rewards = np.frombuffer(out["rewards"], dtype="<f4")
+        term = np.frombuffer(out["episode_terminated"], dtype=np.bool_)
+        for i in range(episodes):
+            if k >= len(expected[i]):
+                continue
+            ref_state, ref_obs, ref_reward, ref_term = expected[i][k]
+            ours = STATE.unpack(native.snapshot(i)[-STATE.size :])
+            report["compared_steps"] += 1
+            for a, b in zip(ours, ref_state, strict=True):
+                report["max_ulps"] = max(report["max_ulps"], ulps(float(a), float(b)))
+                report["max_absolute"] = max(report["max_absolute"], abs(float(a) - float(b)))
+                if b != 0:
+                    report["max_relative"] = max(report["max_relative"], abs(float(a) - float(b)) / abs(float(b)))
+            report["max_obs_absolute"] = max(report["max_obs_absolute"], float(np.max(np.abs(obs[i] - ref_obs))))
+            report["reward_mismatches"] += int(float(rewards[i]) != ref_reward)
+            report["flag_mismatches"] += int(bool(term[i]) != ref_term)
+    env.close()
+    ref.close()
+    return report
+
+
+def truncation(seeds=range(10), limit: int = 500):
+    """Truncation against Gymnasium's TimeLimit: the zero torque from the
+    same seeded reset never terminates, so both truncate at ``limit``."""
+    mismatches, compared = 0, 0
+    for seed in seeds:
+        theirs = gymnasium.make(REF, max_episode_steps=limit)
+        ours = gymnasium.make(ID, max_episode_steps=limit)
+        theirs.reset(seed=seed)
+        ours.reset(seed=seed)
+        for k in range(1, limit + 1):
+            _, _, rt, rtr, _ = theirs.step(1)
+            _, _, ot, otr, _ = ours.step(1)
+            compared += 1
+            expect = k == limit
+            mismatches += int((rt, rtr) != (False, expect) or (ot, otr) != (False, expect))
+        theirs.close()
+        ours.close()
+    return {"episodes": len(list(seeds)), "limit": limit, "compared_steps": compared, "mismatches": mismatches}
+
+
 def run(n: int = 100_000, seed: int = 2026) -> dict:
     states, actions = gate_set(n, seed)
     ref = reference(states, actions)
@@ -333,13 +448,17 @@ def run(n: int = 100_000, seed: int = 2026) -> dict:
         "boundary_states": len(states) - n,
         "seed": seed,
         "one_step": {mode: compare(one_step(states, actions, mode), ref) for mode in MODES},
+        "boundary_coverage": boundary_coverage(states, ref, n),
+        "trajectories": trajectories(states[:n]),
+        "truncation": truncation(),
         "uniform_domain": {mode: compare(one_step(uniform, uniform_actions, mode), uniform_ref) for mode in MODES},
     }
 
 
 def gate_passes(report: dict) -> bool:
     keys = ("state", "obs", "reward", "terminated", "truncated")
-    return all(all(r[k] == 0 for k in keys) for r in report["one_step"].values())
+    one_step = all(all(r[k] == 0 for k in keys) for r in report["one_step"].values())
+    return one_step and report["truncation"]["mismatches"] == 0 and all(report["boundary_coverage"].values())
 
 
 if __name__ == "__main__":
