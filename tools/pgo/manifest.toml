@@ -1,0 +1,97 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+#
+# The PGO training and evidence manifest (docs/reviews/pgo-wheels-design.md r4,
+# section 4). Frozen before any evidence: a change makes a new version and
+# invalidates earlier evidence. All seeds are 1.
+
+version = 1
+seed = 1
+action_seed = 1
+# The resolved default of PoolOptions (crates/tessera-rl-engine/src/options.rs).
+chunk_size = 64
+
+# Filled in the feasibility step, from real symbols, before any evidence: the
+# kernels that must have nonzero profile counts (design section 3).
+kernels = []
+
+[[group]]
+name = "state"
+envs = [
+  { id = "tessera/CartPole-v1" },
+  { id = "tessera/Tag-v1", config = { pursuers = 2, evaders = 2 } },
+  { id = "tessera/Grid-v1" },
+  { id = "tessera/GridKeyDoor-v1" },
+  { id = "tessera/Snake-v1", config = { obs = "state" } },
+  { id = "tessera/BrickWall-v1", config = { obs = "state" } },
+]
+num_envs = 1024
+steps = 2000
+
+[[group]]
+name = "pixels"
+envs = [
+  { id = "tessera/Snake-v1", config = { obs = "pixels" } },
+  { id = "tessera/BrickWall-v1", config = { obs = "pixels" } },
+]
+num_envs = 256
+steps = 500
+
+[[group]]
+name = "games"
+envs = [{ id = "tessera/Connect4-v1" }, { id = "tessera/Othello-v1" }, { id = "tessera/Leduc-v1" }]
+num_envs = 1024
+steps = 2000
+
+[[group]]
+name = "holdout"
+holdout = true
+envs = [{ id = "tessera/PaddleDuel-v1", config = { obs = "state" } }, { id = "tessera/Go9-v1" }]
+num_envs = 256
+steps = 1000
+
+[[group]]
+name = "owned"
+envs = [{ id = "tessera/CartPole-v1" }]
+num_envs = 1024
+steps = 2000
+outputs = "owned"
+
+[[group]]
+name = "threaded"
+workers = 2
+envs = [{ id = "tessera/CartPole-v1", num_envs = 1024 }, { id = "tessera/Snake-v1", num_envs = 256, config = { obs = "pixels" } }]
+steps = 1000
+
+[[group]]
+name = "split-phase"
+mode = "pipelined"
+workers = 2
+envs = [{ id = "tessera/CartPole-v1" }]
+num_envs = 1024
+steps = 1000
+
+[[group]]
+name = "holdout-split-phase"
+holdout = true
+mode = "async"
+workers = 2
+batch_size = 256
+envs = [{ id = "tessera/CartPole-v1" }]
+num_envs = 1024
+steps = 1000
+
+[[group]]
+name = "state-operations"
+kind = "state-operations"
+envs = [{ id = "tessera/Connect4-v1" }]
+num_envs = 64
+steps = 500
+
+[[group]]
+name = "search"
+kind = "search"
+envs = [{ id = "tessera/Connect4-v1" }]
+num_envs = 1
+steps = 200
+simulations = 256
+batch = 8
