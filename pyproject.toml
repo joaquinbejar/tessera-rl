@@ -40,6 +40,8 @@ test = [
 torch = ["torch==2.15.0"]
 # Only for the JAX handle tests (pytest marker `jax`).
 jax = ["jax==0.10.2", "jaxlib==0.10.2"]
+# Only for tools/wheel_golden.py (XXH3-64, the digest of the golden fixtures).
+wheels = ["xxhash==4.0.2"]
 # Every [env.main] pin of compat/targets.toml, so the lock proves they
 # resolve together (make check-targets installs and verifies all of them).
 conformance = [

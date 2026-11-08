@@ -38,6 +38,7 @@
 pub mod continuation;
 
 use core::num::{NonZeroU32, NonZeroUsize};
+use std::io::Write as _;
 use std::path::PathBuf;
 
 use tessera_rl_core::config::{CanonicalConfig, config_hash};
@@ -347,6 +348,7 @@ where
             .unwrap_or_else(|e| panic!("workers: {e}"));
     }
     let same_step = scenario.auto_reset == AutoReset::SameStep;
+    let mut dump = action_dump(scenario.name, workers);
     let mut lines = header::<E>(scenario);
     p.reset_all(Reseed::Keep)
         .unwrap_or_else(|e| panic!("reset: {e}"));
@@ -360,6 +362,11 @@ where
             .unwrap_or_else(|e| panic!("reseed: {e}"));
         }
         let acts = actions(&p, &scenario.cfg, scenario.seed, t);
+        if let Some(file) = dump.as_mut() {
+            let bytes: Vec<u8> = acts.iter().flat_map(|a| a.to_le_bytes()).collect();
+            file.write_all(&bytes)
+                .unwrap_or_else(|e| panic!("action dump: {e}"));
+        }
         p.step(ActionInput {
             discrete: &acts,
             continuous: &[],
@@ -373,6 +380,24 @@ where
         .collect();
     lines.push(format!("final {}", finals.join(" ")));
     lines
+}
+
+/// With `TESSERA_GOLDEN_ACTIONS=<dir>`, the Inline run of a scenario writes
+/// its actions (little-endian `i32`, every step in order) to
+/// `<dir>/<name>.actions`, for `tools/wheel_golden.py` to replay through an
+/// installed wheel. The run still checks the committed fixture, so the file
+/// holds the actions that produce it. The actions depend on environment
+/// state through the scripted baseline, which Python cannot reach.
+fn action_dump(name: &str, workers: Option<usize>) -> Option<std::fs::File> {
+    let dir = PathBuf::from(std::env::var_os("TESSERA_GOLDEN_ACTIONS")?);
+    if workers.is_some() {
+        return None;
+    }
+    std::fs::create_dir_all(&dir).unwrap_or_else(|e| panic!("action dump: {e}"));
+    Some(
+        std::fs::File::create(dir.join(format!("{name}.actions")))
+            .unwrap_or_else(|e| panic!("action dump: {e}")),
+    )
 }
 
 fn step_line(t: u32, digests: &[u64]) -> String {
