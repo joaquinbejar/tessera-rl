@@ -40,6 +40,8 @@ class Fake(w.Host):
             quiet_gap_s=0.01,
             stop_timeout_s=5.0,
             first_sample_timeout_s=5.0,
+            settle_timeout_s=0.2,
+            settle_poll_s=0.01,
         )
         self.fake_load = kw.pop("load", 0.1)
         self.fake_runners = kw.pop("runners", [])
@@ -335,3 +337,52 @@ def test_wall_r7_session_runs_the_configured_caffeinate(tmp_path, monkeypatch):
     assert len(alive) == 4
     with pytest.raises(ProcessLookupError):
         os.kill(int(pid_file.read_text()), 0)
+
+
+def test_wall_r7_second_case_waits_for_the_first_cases_load(tmp_path):
+    host = Fake(tmp_path)
+    load = {"n": 0}
+
+    def decaying():
+        load["n"] += 1
+        return 4.0 if load["n"] < 5 else 0.1
+
+    host.load = decaying
+    rec = case(host, tmp_path)
+    assert rec["status"] == "measured", rec
+    assert rec["settle_s"] > 0
+
+
+def test_wall_r7_load_that_never_settles_is_refused_with_its_wait(tmp_path):
+    rec = case(Fake(tmp_path, load=2.0), tmp_path)
+    assert rec["status"] == "refused" and "load" in rec["reason"] and rec["settle_s"] >= 0.2
+
+
+def test_wall_r7_settle_timeout_is_frozen():
+    assert w.SETTLE_TIMEOUT_S == 600.0
+
+
+@pytest.mark.parametrize("body", ["", "echo '[1]'", "echo '{\"ns\": 0, \"digest\": \"d\"}'"])
+def test_wall_r7_malformed_harness_output_invalidates(tmp_path, body):
+    bad = script(tmp_path / "bad", body + "\n")
+    rec = case(Fake(tmp_path), tmp_path, base=bad)
+    assert rec["status"] == "invalid" and any("harness failed" in p for p in rec["problems"])
+
+
+def test_wall_r7_never_overwrites_raw_evidence(tmp_path):
+    (tmp_path / "cartpole_inline.jsonl").write_text("old")
+    rec = case(Fake(tmp_path), tmp_path)
+    assert rec["status"] == "refused" and "exists" in rec["reason"]
+    assert (tmp_path / "cartpole_inline.jsonl").read_text() == "old"
+
+
+def test_wall_r7_each_case_is_kept_when_it_ends(tmp_path, monkeypatch):
+    def fake(_host, _b, _h, c, _o):
+        if c == "tag_inline":
+            raise RuntimeError("crash")
+        return {"case": c, "status": "invalid", "problems": ["x"]}
+
+    monkeypatch.setattr(w, "run_case", fake)
+    with pytest.raises(RuntimeError):
+        w.aa(Fake(tmp_path), "b", str(tmp_path))
+    assert (tmp_path / "cartpole_w2.result.json").exists()

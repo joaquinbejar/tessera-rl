@@ -17,6 +17,9 @@ perf/clear-per-chunk (26f3323), as does the harness. The contract with the
 harness `per_instance_wall CASE`: the last line of its stdout is JSON with at
 least "ns" and "digest".
 
+A foreign process that exits between two `ps` readings contributes nothing, so
+short bursts are undercounted, as r7 states.
+
 It has run only against fakes: never on the M4.
 """
 
@@ -44,6 +47,8 @@ RESAMPLES = 10_000
 POWERMETRICS = ["/usr/bin/powermetrics", "-i", "2000", "-n", "10800", "--samplers", "cpu_power,thermal"]
 SAMPLE_S = 2.0
 LOAD_LIMIT = 1.0
+#: Longest wait before a case for the 1-minute load to fall under the limit.
+SETTLE_TIMEOUT_S = 600.0
 QUIET_READINGS = 3
 TARGET_CHANGE = -0.03
 REGRESSION_CHANGE = 0.03
@@ -232,6 +237,8 @@ class Host:
     quiet_gap_s: float = 1.0
     stop_timeout_s: float = 2 * SAMPLE_S + 3.0
     first_sample_timeout_s: float = 30.0
+    settle_timeout_s: float = SETTLE_TIMEOUT_S
+    settle_poll_s: float = 5.0
 
     def read(self, command: list[str]) -> str:
         return subprocess.run(command, capture_output=True, text=True, check=True).stdout
@@ -242,6 +249,15 @@ class Host:
     def runners(self) -> list[str]:
         out = self.read(["ps", "-A", "-o", "comm="])
         return sorted({x.strip() for x in out.splitlines() if x.strip().rsplit("/", 1)[-1] in RUNNER_NAMES})
+
+
+def settle(host: Host) -> float:
+    """Waits, bounded, for the previous case's load to decay; the seconds waited.
+    The refusal check still runs afterwards, once."""
+    start = time.monotonic()
+    while host.load() >= LOAD_LIMIT and time.monotonic() - start < host.settle_timeout_s:
+        time.sleep(host.settle_poll_s)
+    return time.monotonic() - start
 
 
 def quiet_refusal(host: Host) -> str | None:
@@ -321,6 +337,11 @@ def run_pairs(base: str, head: str, case: str, log) -> list[float] | str:
 def run_case(host: Host, base: str, head: str, case: str, out_dir: str) -> dict:
     """One case: refused, invalid or measured. Never retried."""
     record: dict = {"case": case, "status": "refused"}
+    log_path = os.path.join(out_dir, f"{case}.jsonl")
+    if os.path.exists(log_path):
+        record["reason"] = f"{log_path} exists: raw evidence is never overwritten"
+        return record
+    record["settle_s"] = settle(host)
     refusal = quiet_refusal(host)
     if refusal:
         record["reason"] = refusal
@@ -337,10 +358,10 @@ def run_case(host: Host, base: str, head: str, case: str, out_dir: str) -> dict:
             record["reason"] = "the sampler gave no first sample"
             return record
         monitor.start()
-        with open(os.path.join(out_dir, f"{case}.jsonl"), "w", encoding="utf-8") as log:
+        with open(log_path, "x", encoding="utf-8") as log:
             try:
                 changes = run_pairs(base, head, case, log)
-            except (subprocess.CalledProcessError, OSError, ValueError, KeyError) as e:
+            except (subprocess.CalledProcessError, OSError, ValueError, KeyError, IndexError, TypeError, ZeroDivisionError) as e:
                 changes = f"the harness failed: {e}"
         monitor.halt.set()
         monitor.join()
@@ -387,6 +408,13 @@ def awake(host: Host):
         process.wait(10)
 
 
+def keep(row: dict, out_dir: str) -> dict:
+    """Writes a case's record as soon as it ends, so a later crash loses none."""
+    with open(os.path.join(out_dir, f"{row['case']}.result.json"), "w", encoding="utf-8") as f:
+        json.dump(row, f)
+    return row
+
+
 def aa(host: Host, binary: str, out_dir: str) -> dict:
     rows = []
     with awake(host):
@@ -394,7 +422,7 @@ def aa(host: Host, binary: str, out_dir: str) -> dict:
             row = run_case(host, binary, binary, case, out_dir)
             if row["status"] == "measured":
                 row["aa"] = aa_verdict(row["changes"])
-            rows.append(row)
+            rows.append(keep(row, out_dir))
     usable = all(r["status"] == "measured" and r["aa"]["passed"] for r in rows)
     return {"mode": "aa", "host_usable": usable, "cases": rows}
 
@@ -406,7 +434,7 @@ def compare(host: Host, base: str, head: str, out_dir: str) -> dict:
             row = run_case(host, base, head, case, out_dir)
             if row["status"] == "measured":
                 row["ci95"] = interval(row["changes"], 0.95)
-            rows.append(row)
+            rows.append(keep(row, out_dir))
     return {"mode": "compare", "cases": rows, **compare_verdict(rows)}
 
 
