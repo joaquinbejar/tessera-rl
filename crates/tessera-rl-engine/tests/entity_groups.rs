@@ -12,7 +12,7 @@ use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
 
 use tessera_rl_core::io::{ActionWriter, Actions, MaskWriter, ObsWriter};
-use tessera_rl_core::space::Space;
+use tessera_rl_core::space::{BoxBounds, DType, Space};
 use tessera_rl_core::{
     ActionMask, AgentSlot, Bool8, Environment, HeaderView, InvariantViolation, NoAdaptive, ObsLeaf,
     Observation, Persist, RecordHeader, RecordLayout, SpaceError, StepOut, Tier, Validate,
@@ -34,6 +34,9 @@ struct SquadConfig {
     /// agents differ and other heads stay as the array holds them.
     #[config(default = false)]
     partial_noop: bool,
+    /// Adds a `Box` head beside the discrete ones, which ADR-0051 refuses.
+    #[config(default = false)]
+    with_box: bool,
 }
 
 #[derive(EnvState, Debug, Clone, Copy, PartialEq, Default)]
@@ -67,10 +70,24 @@ impl Environment for Squad {
         SquadObs::space(cfg)
     }
 
-    fn action_space(_: &SquadConfig) -> Result<Space, SpaceError> {
-        Ok(Space::MultiDiscrete {
+    fn action_space(cfg: &SquadConfig) -> Result<Space, SpaceError> {
+        let orders = Space::MultiDiscrete {
             nvec: [3, 4].repeat(UNITS),
-        })
+        };
+        if !cfg.with_box {
+            return Ok(orders);
+        }
+        Ok(Space::Tuple(vec![
+            orders,
+            Space::Box {
+                shape: vec![1],
+                dtype: DType::F32,
+                bounds: BoxBounds::Float {
+                    low: vec![-1.0],
+                    high: vec![1.0],
+                },
+            },
+        ]))
     }
 
     fn reset(_: &SquadConfig, _: &mut StepRng, state: &mut SquadState) {
@@ -176,7 +193,10 @@ fn options(n: u32, policy: IllegalActionPolicy) -> PoolOptions {
 }
 
 fn cfg(partial_noop: bool) -> SquadConfig {
-    SquadConfig { partial_noop }
+    SquadConfig {
+        partial_noop,
+        with_box: false,
+    }
 }
 
 fn pool(policy: IllegalActionPolicy) -> Pool {
@@ -368,6 +388,22 @@ fn test_groups_out_of_range_child_is_refused_before_legality_in_every_mode() {
 }
 
 #[test]
+fn test_groups_beside_a_continuous_head_are_refused_at_construction() {
+    let with_box = SquadConfig {
+        partial_noop: false,
+        with_box: true,
+    };
+    let built =
+        EnvPool::<Squad, Masked>::with_masks(with_box, options(1, IllegalActionPolicy::Noop));
+    assert!(matches!(
+        built.map(|_| ()),
+        Err(EngineError::InvalidMaskLayout {
+            what: "entity groups beside continuous heads"
+        })
+    ));
+}
+
+#[test]
 fn test_groups_mask_head_shape_reports_each_block() {
     let p = pool(IllegalActionPolicy::Noop);
     let root = p.mask_head_shape(2).unwrap();
@@ -425,6 +461,107 @@ fn test_groups_fall_back_the_same_in_pipelined_and_async() {
     asy.send(&[0], input(&orders)).unwrap();
     let done = asy.recv().unwrap();
     assert_eq!(obs_of(done.observation(0, 0).unwrap())[..3], [0, 10, 22]);
+}
+
+/// A seeded mix of legal and illegal orders for every agent of `n` instances.
+fn orders(n: usize, s: &mut u64) -> Vec<i32> {
+    (0..n * 2 * HEADS)
+        .map(|k| {
+            *s = s.wrapping_mul(0x5851_f42d_4c95_7f2d).wrapping_add(1);
+            i32::try_from((*s >> 33) % if k % 2 == 0 { 3 } else { 4 }).unwrap()
+        })
+        .collect()
+}
+
+fn fnv(hash: u64, word: u64) -> u64 {
+    word.to_le_bytes().iter().fold(hash, |h, b| {
+        (h ^ u64::from(*b)).wrapping_mul(0x0100_0000_01b3)
+    })
+}
+
+/// Folds what a step left: state hash, illegal counts and the mask row.
+fn fold_step(mut hash: u64, p: &Pool, masks: &[Bool8]) -> u64 {
+    for i in 0..4 {
+        hash = fnv(hash, p.state_hash(i).unwrap().get());
+        let record = DecodedRecord::from(p.snapshot(i).unwrap());
+        for row in &record.header().agents {
+            hash = fnv(hash, u64::from(row.illegal_actions));
+        }
+    }
+    masks.iter().fold(hash, |h, m| fnv(h, u64::from(m.get())))
+}
+
+const STEPS: usize = 64;
+const SPLIT: usize = 23;
+const FNV_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
+
+fn golden_pool(workers: Option<usize>) -> Pool {
+    let mut p: Pool =
+        EnvPool::with_masks(cfg(true), options(4, IllegalActionPolicy::Noop)).unwrap();
+    if let Some(w) = workers {
+        p = p
+            .with_workers(SyncOptions::new(NonZeroUsize::new(w).unwrap()))
+            .unwrap();
+    }
+    p.reset_all(Reseed::Keep).unwrap();
+    p
+}
+
+fn golden_run(workers: Option<usize>) -> u64 {
+    let mut p = golden_pool(workers);
+    let (mut s, mut hash) = (0x7e55_u64, FNV_BASIS);
+    for _ in 0..STEPS {
+        let row = orders(4, &mut s);
+        let masks = p.step(input(&row)).unwrap().masks().to_vec();
+        hash = fold_step(hash, &p, &masks);
+    }
+    hash
+}
+
+/// Fixture golden of design section "Tests": any change to the group
+/// fallback, the row layout or the mask bytes moves it.
+const SQUAD_GOLDEN: u64 = 0x8b50_5ff9_f26f_6750;
+
+#[test]
+fn test_groups_golden_is_identical_across_workers() {
+    if DEBUG_CHECKS {
+        return;
+    }
+    let inline = golden_run(None);
+    assert_eq!(inline, SQUAD_GOLDEN, "{inline:#x}");
+    assert_eq!(golden_run(Some(1)), inline);
+    assert_eq!(golden_run(Some(3)), inline);
+}
+
+#[test]
+fn test_groups_continue_through_snapshot_and_restore_on_the_same_trajectory() {
+    if DEBUG_CHECKS {
+        return;
+    }
+    let mut p = golden_pool(None);
+    let (mut s, mut hash) = (0x7e55_u64, FNV_BASIS);
+    let mut records = Vec::new();
+    let mut saved = (0, 0);
+    for step in 0..STEPS {
+        if step == SPLIT {
+            records = (0..4).map(|i| p.snapshot(i).unwrap()).collect();
+            saved = (s, hash);
+        }
+        let row = orders(4, &mut s);
+        let masks = p.step(input(&row)).unwrap().masks().to_vec();
+        hash = fold_step(hash, &p, &masks);
+    }
+    let whole = hash;
+    // Restored into a fresh pool whose masks must be re-derived from state.
+    let mut q = golden_pool(None);
+    q.restore_all(&records).unwrap();
+    (s, hash) = saved;
+    for _ in SPLIT..STEPS {
+        let row = orders(4, &mut s);
+        let masks = q.step(input(&row)).unwrap().masks().to_vec();
+        hash = fold_step(hash, &q, &masks);
+    }
+    assert_eq!(hash, whole);
 }
 
 struct Counting;

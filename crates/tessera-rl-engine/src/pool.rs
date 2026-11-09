@@ -138,7 +138,6 @@ impl<E: Environment, M: MaskProvider<E>> EnvPool<E, M> {
         }
     }
 
-    /// The action layout of the pool.
     /// Where discrete head `head`'s block lies in an agent's mask row, and
     /// its shape (SPEC 11.3); `None` without masks or past the last head.
     #[must_use]
@@ -146,6 +145,7 @@ impl<E: Environment, M: MaskProvider<E>> EnvPool<E, M> {
         self.actions.mask.shape(head, &self.actions.discrete)
     }
 
+    /// The action layout of the pool.
     pub(crate) fn action_layout(&self) -> &ActionLayout {
         &self.actions
     }
@@ -1171,6 +1171,9 @@ fn fallback_groups<E: Environment, M: MaskProvider<E>>(
 ) {
     // Zero-filled on each use: a head the author leaves unwritten is 0.
     let mut scratch = [0i32; MAX_GROUPED_HEADS];
+    // `MaskLayout::build` caps grouped heads at the scratch's length, so this
+    // cannot fail; the assert says so rather than letting the row run quietly.
+    debug_assert!(heads.len() <= MAX_GROUPED_HEADS);
     let Some(noop) = scratch.get_mut(..heads.len()) else {
         return;
     };
@@ -1186,8 +1189,20 @@ fn fallback_groups<E: Environment, M: MaskProvider<E>>(
             to.copy_from_slice(from);
         }
         if cfg!(any(debug_assertions, feature = "debug-checks")) {
+            // The range first: `first_illegal`'s own check is off in a
+            // release build with `debug-checks`, and an out-of-range no-op
+            // could land on another row's legal entry.
+            let in_range = heads
+                .get(range.clone())
+                .zip(layout.heads.get(range.clone()))
+                .is_some_and(|(values, entries)| {
+                    values
+                        .iter()
+                        .zip(entries)
+                        .all(|(&v, e)| usize::try_from(v).is_ok_and(|v| v < e.size))
+                });
             assert!(
-                first_illegal(heads, layout, range, mask).is_none(),
+                in_range && first_illegal(heads, layout, range, mask).is_none(),
                 "ActionMask::noop wrote a group its mask forbids (ADR-0051)"
             );
         }
@@ -1238,6 +1253,7 @@ pub(crate) fn legality_rows<H: RecordLayout>(
 /// The first head of `range` whose value the mask forbids, parents first.
 /// Reads each conditional head's row through its parents' values; a head
 /// whose parent is illegal is never reached. Range validation has run.
+/// A row shorter than `range` reads as illegal at its first missing head.
 pub(crate) fn first_illegal(
     heads: &[i32],
     layout: &MaskLayout,

@@ -104,6 +104,12 @@ impl MaskLayout {
             let Ok(size) = usize::try_from(n) else {
                 return Ok(None);
             };
+            if declared[0].is_none() && declared[1].is_some() {
+                return bad("a head declares a second parent without a first");
+            }
+            if declared[0].is_some() && declared[0] == declared[1] {
+                return bad("a head declares the same parent twice");
+            }
             let mut list = [None, None];
             let mut stride = size;
             // Right to left: the last parent varies fastest.
@@ -424,6 +430,16 @@ mod mask_tests {
         refused(
             MaskLayout::build(&[2; 4], &across, Some(2), false),
             "a head's parent lies outside its entity group",
+        );
+        let twice = [[None, None], [Some(0), Some(0)], [None, None], [None, None]];
+        refused(
+            MaskLayout::build(&[2; 4], &twice, None, false),
+            "a head declares the same parent twice",
+        );
+        let gap = [[None, None], [None, Some(0)], [None, None], [None, None]];
+        refused(
+            MaskLayout::build(&[2; 4], &gap, None, false),
+            "a head declares a second parent without a first",
         );
         let big = vec![2u32; MAX_GROUPED_HEADS + 1];
         let parents = vec![[None, None]; big.len()];
