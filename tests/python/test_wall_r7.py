@@ -293,3 +293,45 @@ def test_wall_r7_frozen_constants():
     assert (w.PAIRS, w.ORDER_SEED, w.BOOT_SEED, w.RESAMPLES) == (20, 20261106, 20261107, 10_000)
     assert (w.LOAD_LIMIT, w.QUIET_PROCESS_LIMIT, w.MEAN_FOREIGN_LIMIT, w.INTERVAL_FOREIGN_LIMIT) == (1.0, 0.25, 0.5, 1.5)
     assert w.CASES == ("cartpole_inline", "cartpole_w2", "tag_inline", "connect4_inline")
+
+
+def test_wall_r7_quiet_readings_are_spaced(tmp_path):
+    import time as t
+
+    host = Fake(tmp_path)
+    host.quiet_gap_s = 0.05
+    stamps = []
+    original = host.read
+
+    def read(command):
+        stamps.append(t.monotonic())
+        return original(command)
+
+    host.read = read
+    assert w.quiet_refusal(host) is None
+    assert all(b - a >= host.quiet_gap_s for a, b in zip(stamps, stamps[1:]))
+
+
+def test_wall_r7_session_runs_the_configured_caffeinate(tmp_path, monkeypatch):
+    import os
+    import time as t
+
+    pid_file = tmp_path / "caff.pid"
+    host = Fake(tmp_path)
+    host.caffeinate = [script(tmp_path / "caff2", f"echo $$ > {pid_file}\nexec sleep 60\n")]
+    alive = []
+
+    def fake(_host, _b, _h, c, _o):
+        for _ in range(200):
+            if pid_file.exists() and pid_file.read_text().strip():
+                break
+            t.sleep(0.01)
+        os.kill(int(pid_file.read_text()), 0)
+        alive.append(c)
+        return {"case": c, "status": "invalid", "problems": ["x"]}
+
+    monkeypatch.setattr(w, "run_case", fake)
+    w.aa(host, "b", str(tmp_path))
+    assert len(alive) == 4
+    with pytest.raises(ProcessLookupError):
+        os.kill(int(pid_file.read_text()), 0)
