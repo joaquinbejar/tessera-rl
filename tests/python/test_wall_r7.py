@@ -29,10 +29,13 @@ class Fake(w.Host):
         lines = kw.pop("samples", "while :; do printf '{}'; sleep 0.05; done".format(SAMPLE.format(level=level).replace("\n", "\\n")))
         ps = script(tmp / "ps", kw.pop("ps", "echo '1 0 0:00.00'"))
         pmset = script(tmp / "pmset", kw.pop("pmset", "echo 'No thermal warning level has been recorded'"))
+        caffeinate = script(tmp / "caff", "exec sleep 60\n")
         super().__init__(
             powermetrics=[script(tmp / "pm", lines)],
             ps=[ps],
             pmset=[pmset],
+            pmset_power=[pmset],
+            caffeinate=[caffeinate],
             sample_s=0.05,
             quiet_gap_s=0.01,
             stop_timeout_s=5.0,
@@ -110,7 +113,7 @@ def test_wall_r7_interval_matches_the_pairs_tool_quantiles():
     import random as r
     import statistics as s
 
-    x = [0.01 * i - 0.1 for i in range(20)]
+    x = [r.Random(11 + i).random() for i in range(20)]
     b = r.Random(w.BOOT_SEED)
     m = sorted(s.median(b.choices(x, k=20)) for _ in range(w.RESAMPLES))
     assert w.interval(x, 0.95) == (m[int(0.025 * w.RESAMPLES)], m[int(0.975 * w.RESAMPLES) - 1])
@@ -191,9 +194,9 @@ def test_wall_r7_aa_needs_every_case(tmp_path, monkeypatch):
         return {"case": c, "status": "measured", "changes": [(-1) ** i * 0.001 for i in range(20)]}
 
     monkeypatch.setattr(w, "run_case", fake)
-    assert w.aa(object(), "b", str(tmp_path))["host_usable"] is False
+    assert w.aa(Fake(tmp_path), "b", str(tmp_path))["host_usable"] is False
     monkeypatch.setattr(w, "run_case", lambda _h, _b, _a, c, _o: {"case": c, "status": "measured", "changes": [(-1) ** i * 0.001 for i in range(20)]})
-    r = w.aa(object(), "b", str(tmp_path))
+    r = w.aa(Fake(tmp_path), "b", str(tmp_path))
     assert r["host_usable"] is True and len(r["cases"]) == 4
 
 
@@ -207,3 +210,73 @@ def test_wall_r7_contains_zero_is_tested_at_98_75_not_95():
     x = [-0.005] * 5 + [0.001 * (i + 1) for i in range(15)]
     assert w.interval(x, 0.95)[0] > 0.0
     assert w.aa_verdict(x)["contains_zero"]
+
+
+def test_wall_r7_quiet_check_takes_three_readings(tmp_path):
+    host = Fake(tmp_path)
+    calls = []
+    original = host.read
+    host.read = lambda c: calls.append(c) or original(c)
+    assert w.quiet_refusal(host) is None
+    assert len(calls) == 1 + w.QUIET_READINGS == 4
+
+
+def test_wall_r7_two_busy_processes_add_up():
+    prev = {5: (1, 0.0), 6: (1, 0.0)}
+    high = {5: (1, 1.8), 6: (1, 1.8)}
+    assert w.interval_foreign(prev, high, 2.0, set()) == pytest.approx(1.8)
+    assert w.foreign_invalid([0.0, 0.0, 0.0, 1.8])
+    low = {5: (1, 0.6), 6: (1, 0.6)}
+    assert w.foreign_invalid([w.interval_foreign(prev, low, 2.0, set())] * 3)
+
+
+def test_wall_r7_pair_order_is_the_seeded_one(tmp_path):
+    import json
+    import random
+
+    case(Fake(tmp_path), tmp_path)
+    rows = [json.loads(x) for x in (tmp_path / "cartpole_inline.jsonl").read_text().splitlines()]
+    order = random.Random(w.ORDER_SEED)
+    expected = [b for _ in range(w.PAIRS) for b in order.sample(["base", "head"], 2)]
+    assert [x["build"] for x in rows] == expected and len({tuple(expected[i : i + 2]) for i in range(0, 40, 2)}) == 2
+
+
+def test_wall_r7_compare_verdict_applies_both_limits():
+    def rows(target, other):
+        return [{"case": c, "status": "measured", "ci95": target if c == "cartpole_inline" else other} for c in w.CASES]
+
+    good = w.compare_verdict(rows([-0.08, -0.04], [-0.01, 0.01]))
+    assert good == {"complete": True, "target_met": True, "no_regression": True}
+    assert w.compare_verdict(rows([-0.08, -0.03], [-0.01, 0.01]))["target_met"] is False
+    assert w.compare_verdict(rows([-0.08, -0.04], [0.04, 0.05]))["no_regression"] is False
+    assert w.compare_verdict([{"case": "x", "status": "invalid"}])["complete"] is False
+
+
+def test_wall_r7_records_pmset_before_and_after(tmp_path):
+    rec = case(Fake(tmp_path), tmp_path)
+    assert len(rec["pmset_before"]) == 2 and len(rec["pmset_after"]) == 2
+
+
+def test_wall_r7_awake_ends_its_child(tmp_path):
+    host = Fake(tmp_path)
+    seen = []
+    real = w.subprocess.Popen
+
+    def popen(*a, **k):
+        seen.append(real(*a, **k))
+        return seen[-1]
+
+    w.subprocess.Popen = popen
+    try:
+        with w.awake(host):
+            assert seen[0].poll() is None
+    finally:
+        w.subprocess.Popen = real
+    assert seen[0].poll() is not None
+
+
+def test_wall_r7_half_width_limit_is_one_and_a_half_percent():
+    x = [(-1) ** i * 0.01 * (1 + i / 10) for i in range(20)]
+    v = w.aa_verdict(x)
+    assert w.AA_HALF_WIDTH_LIMIT == 0.015 < v["half_width"] < 0.03
+    assert v["contains_zero"] and not v["passed"]

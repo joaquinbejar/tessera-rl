@@ -8,14 +8,21 @@
 Runs the frozen four cases of `per_instance_wall`, 20 pairs each, under r7's
 quiet checks, foreign-CPU sampling and thermal sampling. `aa` compares a binary
 with itself and applies the host gate. A case that is refused or invalid is
-reported and never retried. The pairing and bootstrap are those of
-tools/bench/per_instance_pairs.py.
+reported and never retried.
+
+The reference for pairing and bootstrap is r6's description in
+docs/reviews/per-instance-freeze.md; the code was written to match
+tools/bench/per_instance_pairs.py, which exists only on the local branch
+perf/clear-per-chunk (26f3323), as does the harness. The contract with the
+harness `per_instance_wall CASE`: the last line of its stdout is JSON with at
+least "ns" and "digest".
 
 It has run only against fakes: never on the M4.
 """
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import random
@@ -25,6 +32,7 @@ import subprocess
 import sys
 import threading
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 
 CASES = ("cartpole_inline", "cartpole_w2", "tag_inline", "connect4_inline")
@@ -36,6 +44,9 @@ RESAMPLES = 10_000
 POWERMETRICS = ["/usr/bin/powermetrics", "-i", "2000", "-n", "10800", "--samplers", "cpu_power,thermal"]
 SAMPLE_S = 2.0
 LOAD_LIMIT = 1.0
+QUIET_READINGS = 3
+TARGET_CHANGE = -0.03
+REGRESSION_CHANGE = 0.03
 QUIET_PROCESS_LIMIT = 0.25
 MEAN_FOREIGN_LIMIT = 0.5
 INTERVAL_FOREIGN_LIMIT = 1.5
@@ -90,6 +101,11 @@ def foreign_per_process(previous, current, seconds: float, own: set[int]) -> dic
     return out
 
 
+def interval_foreign(previous, current, seconds: float, own: set[int]) -> float:
+    """Total CPUs used outside `own` over the interval."""
+    return sum(foreign_per_process(previous, current, seconds, own).values())
+
+
 def foreign_invalid(intervals: list[float]) -> str | None:
     if not intervals:
         return "no foreign-CPU interval"
@@ -115,7 +131,8 @@ def thermal_levels(lines) -> list[str]:
 
 
 def thermal_invalid(levels: list[str]) -> str | None:
-    """No level at all invalidates: without one, throttling is not detected."""
+    """Any level above nominal invalidates. A case always has a level, since
+    its first-sample wait requires one: the empty branch is a guard, not a rule."""
     if not levels:
         return "no thermal pressure level was read"
     bad = sorted({x for x in levels if x != "Nominal"})
@@ -146,6 +163,17 @@ def aa_verdict(changes: list[float]) -> dict:
     }
 
 
+def compare_verdict(rows: list[dict]) -> dict:
+    """r7's target on `cartpole_inline` and non-regression on the others."""
+    by_case = {r["case"]: r for r in rows}
+    complete = all(r["status"] == "measured" for r in rows)
+    if not complete:
+        return {"complete": False, "target_met": None, "no_regression": None}
+    target = by_case["cartpole_inline"]["ci95"][1] < TARGET_CHANGE
+    others = [r["ci95"][0] > REGRESSION_CHANGE for r in rows if r["case"] != "cartpole_inline"]
+    return {"complete": True, "target_met": target, "no_regression": not any(others)}
+
+
 class Sampler:
     """The resident powermetrics of one case. Being root's, it is ended by
     closing the read end of its pipe; end of output before `stop` invalidates."""
@@ -174,7 +202,15 @@ class Sampler:
     def stop(self, timeout: float) -> bool:
         """Closes the pipe and waits for the end; False if it is still running."""
         self.stopping = True
-        os.close(self.process.stdout.fileno())
+        # The descriptor, not the wrapper: closing the wrapper would block on
+        # the lock its reading thread holds. The wrapper is dropped so that its
+        # finalizer does not report the descriptor as already closed.
+        stream = self.process.stdout
+        os.close(stream.fileno())
+        self.thread.join(timeout)
+        self.process.stdout = None
+        with contextlib.suppress(OSError):
+            stream.close()
         try:
             self.process.wait(timeout)
         except subprocess.TimeoutExpired:
@@ -189,6 +225,8 @@ class Host:
     powermetrics: list[str] = field(default_factory=lambda: ["sudo", "-n", *POWERMETRICS])
     ps: list[str] = field(default_factory=lambda: ["ps", "-A", "-o", "pid=,ppid=,cputime="])
     pmset: list[str] = field(default_factory=lambda: ["pmset", "-g", "therm"])
+    pmset_power: list[str] = field(default_factory=lambda: ["pmset", "-g"])
+    caffeinate: list[str] = field(default_factory=lambda: ["caffeinate", "-dimsu"])
     root: int = field(default_factory=os.getpid)
     sample_s: float = SAMPLE_S
     quiet_gap_s: float = 1.0
@@ -216,7 +254,7 @@ def quiet_refusal(host: Host) -> str | None:
         return f"runner processes present: {runners}"
     previous = parse_ps(host.read(host.ps))
     start = time.monotonic()
-    for _ in range(3):
+    for _ in range(QUIET_READINGS):
         time.sleep(host.quiet_gap_s)
         current = parse_ps(host.read(host.ps))
         now = time.monotonic()
@@ -248,7 +286,7 @@ class Monitor(threading.Thread):
                 current = parse_ps(host.read(host.ps))
                 now = time.monotonic()
                 own = own_tree(current, host.root)
-                self.intervals.append(sum(foreign_per_process(previous, current, now - start, own).values()))
+                self.intervals.append(interval_foreign(previous, current, now - start, own))
                 previous, start = current, now
                 text = host.read(host.pmset)
                 self.pmset.append(text)
@@ -287,9 +325,13 @@ def run_case(host: Host, base: str, head: str, case: str, out_dir: str) -> dict:
     if refusal:
         record["reason"] = refusal
         return record
+    problems = []
+    try:
+        record["pmset_before"] = [host.read(host.pmset_power), host.read(host.pmset)]
+    except (subprocess.CalledProcessError, OSError) as e:
+        problems.append(f"pmset failed before the case: {e}")
     sampler = Sampler(host.powermetrics)
     monitor = Monitor(host)
-    problems = []
     try:
         if not sampler.first.wait(host.first_sample_timeout_s) or sampler.ended_early:
             record["reason"] = "the sampler gave no first sample"
@@ -307,6 +349,10 @@ def run_case(host: Host, base: str, head: str, case: str, out_dir: str) -> dict:
         ended_early = sampler.ended_early
         gone = sampler.stop(host.stop_timeout_s)
         sampler.thread.join(5)
+    try:
+        record["pmset_after"] = [host.read(host.pmset_power), host.read(host.pmset)]
+    except (subprocess.CalledProcessError, OSError) as e:
+        problems.append(f"pmset failed after the case: {e}")
     if ended_early:
         problems.append("the sampler's output ended during the case")
     if not gone:
@@ -330,25 +376,38 @@ def run_case(host: Host, base: str, head: str, case: str, out_dir: str) -> dict:
     return record
 
 
+@contextmanager
+def awake(host: Host):
+    """Keeps the machine awake for the session, as a child in the own tree."""
+    process = subprocess.Popen(host.caffeinate)
+    try:
+        yield
+    finally:
+        process.terminate()
+        process.wait(10)
+
+
 def aa(host: Host, binary: str, out_dir: str) -> dict:
     rows = []
-    for case in CASES:
-        row = run_case(host, binary, binary, case, out_dir)
-        if row["status"] == "measured":
-            row["aa"] = aa_verdict(row["changes"])
-        rows.append(row)
+    with awake(host):
+        for case in CASES:
+            row = run_case(host, binary, binary, case, out_dir)
+            if row["status"] == "measured":
+                row["aa"] = aa_verdict(row["changes"])
+            rows.append(row)
     usable = all(r["status"] == "measured" and r["aa"]["passed"] for r in rows)
     return {"mode": "aa", "host_usable": usable, "cases": rows}
 
 
 def compare(host: Host, base: str, head: str, out_dir: str) -> dict:
     rows = []
-    for case in CASES:
-        row = run_case(host, base, head, case, out_dir)
-        if row["status"] == "measured":
-            row["ci95"] = interval(row["changes"], 0.95)
-        rows.append(row)
-    return {"mode": "compare", "cases": rows}
+    with awake(host):
+        for case in CASES:
+            row = run_case(host, base, head, case, out_dir)
+            if row["status"] == "measured":
+                row["ci95"] = interval(row["changes"], 0.95)
+            rows.append(row)
+    return {"mode": "compare", "cases": rows, **compare_verdict(rows)}
 
 
 def main(argv=None) -> int:
