@@ -20,6 +20,7 @@
 //! Transactions on Systems, Man, and Cybernetics SMC-13(5), 1983,
 //! <https://doi.org/10.1109/TSMC.1983.6313077>.
 
+pub mod lane;
 pub mod physics;
 
 use tessera_rl_core::io::{ActionWriter, Actions, ObsWriter};

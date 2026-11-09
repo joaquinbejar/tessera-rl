@@ -6,6 +6,7 @@ members = [
     "crates/tessera-rl",
     "crates/tessera-rl-core",
     "crates/tessera-rl-num",
+    "crates/tessera-rl-simd",
     "crates/tessera-rl-macros",
     "crates/tessera-rl-engine",
     "crates/tessera-rl-classic",
@@ -24,6 +25,7 @@ default-members = [
     "crates/tessera-rl",
     "crates/tessera-rl-core",
     "crates/tessera-rl-num",
+    "crates/tessera-rl-simd",
     "crates/tessera-rl-macros",
     "crates/tessera-rl-engine",
     "crates/tessera-rl-classic",
@@ -47,6 +49,7 @@ categories = ["science", "simulation"]
 tessera-rl = { path = "crates/tessera-rl", version = "0.1.0" }
 tessera-rl-core = { path = "crates/tessera-rl-core", version = "0.1.0" }
 tessera-rl-num = { path = "crates/tessera-rl-num", version = "0.1.0" }
+tessera-rl-simd = { path = "crates/tessera-rl-simd", version = "0.1.0" }
 tessera-rl-macros = { path = "crates/tessera-rl-macros", version = "0.1.0" }
 tessera-rl-engine = { path = "crates/tessera-rl-engine", version = "0.1.0" }
 tessera-rl-classic = { path = "crates/tessera-rl-classic", version = "0.1.0" }
