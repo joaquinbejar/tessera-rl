@@ -30,7 +30,8 @@ fn floor_mod(a: f64) -> f64 {
     if r < 0.0 { r + TWO_PI } else { r }
 }
 
-/// The angle wrapped to `[-pi, pi)`, as Gymnasium's `angle_normalize`.
+/// The angle wrapped to `[-pi, pi]`, as Gymnasium's `angle_normalize`; `+pi`
+/// occurs only by rounding, just below `-pi`.
 #[must_use]
 #[inline]
 pub fn angle_normalize(x: f64) -> f64 {
@@ -66,12 +67,13 @@ mod tests {
     use core::f64::consts::PI;
 
     #[test]
-    fn test_angle_normalize_wraps_to_the_half_open_interval() {
+    fn test_angle_normalize_wraps_into_the_interval() {
         assert_eq!(angle_normalize(0.0), 0.0);
         assert_eq!(angle_normalize(PI), -PI);
         assert_eq!(angle_normalize(-PI), -PI);
         assert!((-PI..PI).contains(&angle_normalize(f64::MAX)));
         assert!((-PI..PI).contains(&angle_normalize(-1e300)));
+        assert_eq!(angle_normalize((-PI).next_down()), PI);
     }
 
     #[test]
