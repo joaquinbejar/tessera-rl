@@ -23,6 +23,8 @@ const NAME: usize = 48;
 /// One recorded allocation, all atomics so that writing needs no lock.
 struct Event {
     size: AtomicUsize,
+    /// Whether the allocating thread is the one running the test.
+    own: AtomicBool,
     name: [AtomicU8; NAME],
     name_len: AtomicUsize,
 }
@@ -33,6 +35,7 @@ struct Event {
 )]
 const EMPTY: Event = Event {
     size: AtomicUsize::new(0),
+    own: AtomicBool::new(false),
     name: [const { AtomicU8::new(0) }; NAME],
     name_len: AtomicUsize::new(0),
 };
@@ -45,6 +48,8 @@ static COUNT: AtomicU64 = AtomicU64::new(0);
 thread_local! {
     /// Set while this thread records: nested allocations are not counted.
     static RECORDING: Cell<bool> = const { Cell::new(false) };
+    /// Set on the thread that runs the test, before any window.
+    static OWN_THREAD: Cell<bool> = const { Cell::new(false) };
 }
 
 /// Counts one allocation of `size` bytes and records it.
@@ -56,6 +61,7 @@ fn count(size: usize) {
     let slot = NEXT.fetch_add(1, Ordering::Relaxed);
     if let Some(e) = TABLE.get(slot) {
         e.size.store(size, Ordering::Relaxed);
+        e.own.store(OWN_THREAD.with(Cell::get), Ordering::Relaxed);
         // `thread::current` is safe here: no counted window spans a thread's
         // exit of the kind that would make it panic, and an allocation under
         // the guard is not counted.
@@ -81,8 +87,8 @@ fn stop() -> u64 {
     COUNT.load(Ordering::Relaxed)
 }
 
-/// `(thread, size)` of the recorded events of the last window.
-fn recorded() -> Vec<(String, usize)> {
+/// `(thread, size, own thread)` of the recorded events of the last window.
+fn recorded() -> Vec<(String, usize, bool)> {
     let n = NEXT.load(Ordering::Relaxed).min(EVENTS);
     TABLE
         .iter()
@@ -98,6 +104,7 @@ fn recorded() -> Vec<(String, usize)> {
             (
                 String::from_utf8_lossy(&bytes).into_owned(),
                 e.size.load(Ordering::Relaxed),
+                e.own.load(Ordering::Relaxed),
             )
         })
         .collect()
@@ -106,8 +113,9 @@ fn recorded() -> Vec<(String, usize)> {
 fn report(total: u64) -> String {
     let mut out = String::new();
     let events = recorded();
-    for (thread, size) in &events {
-        let _ = writeln!(out, "{size} bytes on thread {thread:?}");
+    for (thread, size, own) in &events {
+        let whose = if *own { "the test's own" } else { "another" };
+        let _ = writeln!(out, "{size} bytes on {whose} thread, {thread:?}");
     }
     let shown = u64::try_from(events.len()).unwrap_or(u64::MAX);
     if total > shown {
@@ -165,7 +173,7 @@ fn check_the_recording_names_another_thread() {
     assert!(
         recorded()
             .iter()
-            .any(|(t, s)| t == "alloc-probe" && *s == 1234),
+            .any(|(t, s, own)| t == "alloc-probe" && *s == 1234 && !*own),
         "the recording missed a known allocation:\n{}",
         report(total)
     );
@@ -175,6 +183,7 @@ use tessera_rl_engine::rings::{CompletionRing, IdBufferPool, SubmitRing};
 
 #[test]
 fn test_alloc_rings_stalled_id_and_buffer_cycling_do_not_allocate() {
+    OWN_THREAD.with(|o| o.set(true));
     check_the_recording_names_another_thread();
     let n = 8_usize;
     let mut submit = SubmitRing::new(n).unwrap();
