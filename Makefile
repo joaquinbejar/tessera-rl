@@ -4,7 +4,7 @@
 # maturin's default of macOS 11. Ignored on other platforms.
 export MACOSX_DEPLOYMENT_TARGET := 13.0
 
-.PHONY: simd-disasm dashboard dashboard-check check-build-id gungraun-threaded fmt fmt-check clippy test doc readme readme-check pre-push deny check-targets wheel-golden py-test-wheels puffer-test py-test-jax pre-push-jax compat-test py-entries py-callouts py-test py-test-hooks py-test-torch pre-push-torch gym-equivalence reference-training learning-test learning-calibrate bench bench-quick bench-kernels gungraun gungraun-bless connect4-calibration search-strength
+.PHONY: fuzz-check simd-disasm dashboard dashboard-check check-build-id gungraun-threaded fmt fmt-check clippy test doc readme readme-check pre-push deny check-targets wheel-golden py-test-wheels puffer-test py-test-jax pre-push-jax compat-test py-entries py-callouts py-test py-test-hooks py-test-torch pre-push-torch gym-equivalence reference-training learning-test learning-calibrate bench bench-quick bench-kernels gungraun gungraun-bless connect4-calibration search-strength
 
 fmt:
 	cargo fmt --all
@@ -30,7 +30,7 @@ readme:
 readme-check:
 	cargo readme -r crates/tessera-rl -t $(CURDIR)/README.tpl --no-title --no-license --no-indent-headings | diff -u README.md -
 
-pre-push: fmt-check clippy test doc readme-check compat-test py-entries py-callouts py-test py-test-hooks py-test-wheels dashboard-check simd-disasm
+pre-push: fmt-check clippy test doc readme-check compat-test py-entries py-callouts py-test py-test-hooks py-test-wheels dashboard-check simd-disasm fuzz-check
 
 check-build-id:
 	scripts/check_build_id.sh
@@ -65,6 +65,10 @@ endif
 # Tests of the compat tooling (the target checker).
 compat-test:
 	uv run --locked --python 3.11 --only-group test pytest -q tests/compat
+
+# The fuzz crate is outside the workspace; its lockfile must stay current.
+fuzz-check:
+	cargo check --manifest-path fuzz/Cargo.toml --locked
 
 # No fused operation in the release lane kernels of this architecture.
 simd-disasm:
