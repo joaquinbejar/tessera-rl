@@ -192,13 +192,15 @@ def run_trainer(env, device: str, mode: str, epochs: int, minibatch: int) -> dic
     phases.reset()
     synchronize()
     start = time.perf_counter()
+    timed = 0
     for _ in range(epochs - 1):
         trainer.collect()
         trainer.learn()
+        timed += 1
     synchronize()
     wall = time.perf_counter() - start
-    steps = (epochs - 1) * BPTT * trainer.agents
-    out = {"steps": steps, "wall_s": wall, "sps": steps / wall, "batch": BPTT * trainer.agents, "minibatch": minibatch}
+    steps = timed * BPTT * trainer.agents
+    out = {"epochs_timed": timed, "steps": steps, "wall_s": wall, "sps": steps / wall, "batch": BPTT * trainer.agents, "minibatch": minibatch}
     if mode == "sync":
         out["exclusive_s"] = dict(phases.totals)
         out["unattributed_s"] = wall - sum(phases.totals.values())
@@ -268,7 +270,6 @@ def main(argv=None) -> int:
         record.update(run_env(env, args.env_steps))
     else:
         record.update(run_trainer(env, args.device, args.mode, args.epochs, MINIBATCH[args.scale]))
-        record["epochs_timed"] = args.epochs - 1
     print(json.dumps(record), flush=True)
     return 0
 

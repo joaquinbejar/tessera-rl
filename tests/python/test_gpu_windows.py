@@ -119,14 +119,51 @@ def test_driver_keeps_only_the_result_line():
 
 def test_driver_first_cuda_trainer_gets_the_long_timeout(tmp_path, monkeypatch):
     seen = []
-    monkeypatch.setattr(driver, "one_run", lambda c, t: seen.append((c, t)) or {"rc": 0, "timed_out": False, "left": [], "result": None, "tail": ""})
-    assert driver.main(["--out", str(tmp_path / "o"), "--device", "cuda", "--rounds", "1", "--timeout", "1", "--first-timeout", "9"]) == 0
+    monkeypatch.setattr(driver, "one_run", lambda c, t, w: seen.append((c, t)) or {"rc": 0, "timed_out": False, "left": [], "result": None, "tail": ""})
+    assert driver.main(["--out", str(tmp_path / "o"), "--device", "cuda", "--work-dir", str(tmp_path), "--rounds", "1", "--timeout", "1", "--first-timeout", "9"]) == 0
     long = [(c, t) for c, t in seen if t == 9]
     assert len(long) == 1 and "env" not in long[0][0]
     assert seen.index(long[0]) == min(i for i, (c, _) in enumerate(seen) if "env" not in c)
 
 
 def test_driver_leftover_process_stops_the_session(tmp_path, monkeypatch):
-    monkeypatch.setattr(driver, "one_run", lambda c, t: {"rc": 0, "timed_out": False, "left": [123], "result": None, "tail": ""})
-    assert driver.main(["--out", str(tmp_path / "o"), "--device", "cpu"]) == driver.EXIT_LEFTOVER
+    monkeypatch.setattr(driver, "one_run", lambda c, t, w: {"rc": 0, "timed_out": False, "left": [123], "result": None, "tail": ""})
+    assert driver.main(["--out", str(tmp_path / "o"), "--device", "cpu", "--work-dir", str(tmp_path)]) == driver.EXIT_LEFTOVER
     assert len((tmp_path / "o").read_text().splitlines()) == 1
+
+
+class _Proc:
+    def __init__(self, ppid, created, error=False):
+        self._ppid, self._created, self._error = ppid, created, error
+
+    def ppid(self):
+        if self._error:
+            raise psutil.NoSuchProcess(1)
+        return self._ppid
+
+    def create_time(self):
+        return self._created
+
+
+def test_driver_orphans_are_found_by_parent_and_start_time():
+    child, old_pid_reuse, stranger = _Proc(10, 5.0), _Proc(10, 1.0), _Proc(99, 6.0)
+    gone = _Proc(10, 5.0, error=True)
+    assert driver.orphans([child, old_pid_reuse, stranger, gone], {10}, 2.0) == [child]
+
+
+def test_driver_records_a_child_killed_after_a_normal_exit(tmp_path):
+    pid_file = tmp_path / "child.pid"
+    code = (
+        "import pathlib,subprocess,sys,time;"
+        "c=subprocess.Popen([sys.executable,'-c','import time;time.sleep(60)']);"
+        f"pathlib.Path({str(pid_file)!r}).write_text(str(c.pid));"
+        "time.sleep(1)"
+    )
+    out = driver.one_run([sys.executable, "-c", code], timeout=30)
+    assert out["rc"] == 0 and out["killed_after_exit"] == [int(pid_file.read_text())] and out["left"] == []
+
+
+def test_driver_runs_inside_the_work_dir_and_removes_it(tmp_path):
+    code = "import os;print('{\\"case\\": \\"' + os.path.basename(os.path.dirname(os.getcwd())) + '\\"}')"
+    out = driver.one_run([sys.executable, "-c", code], timeout=30, work_dir=str(tmp_path))
+    assert out["result"] == {"case": tmp_path.name} and list(tmp_path.iterdir()) == []
