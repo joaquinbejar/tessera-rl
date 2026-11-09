@@ -167,3 +167,33 @@ def test_driver_runs_inside_the_work_dir_and_removes_it(tmp_path):
     code = "import json,os;print(json.dumps({'case': os.path.basename(os.path.dirname(os.getcwd()))}))"
     out = driver.one_run([sys.executable, "-c", code], timeout=30, work_dir=str(tmp_path))
     assert out["result"] == {"case": tmp_path.name} and list(tmp_path.iterdir()) == []
+
+
+def test_driver_one_run_kills_an_orphan_of_its_root(monkeypatch):
+    real_popen = subprocess.Popen
+    roots = []
+
+    def popen(*args, **kwargs):
+        roots.append(real_popen(*args, **kwargs))
+        return roots[-1]
+
+    class Orphan(_Proc):
+        pid = 424242
+        killed = 0
+
+        def kill(self):
+            Orphan.killed += 1
+
+        def wait(self, timeout=None):
+            return 0
+
+        def is_running(self):
+            return False
+
+    orphan = Orphan(None, time.time() + 3600)
+    orphan.ppid = lambda: roots[-1].pid
+    stranger = Orphan(1, time.time() + 3600)
+    monkeypatch.setattr(driver.subprocess, "Popen", popen)
+    monkeypatch.setattr(driver.psutil, "process_iter", lambda: [orphan, stranger])
+    out = driver.one_run([sys.executable, "-c", "pass"], timeout=30)
+    assert out["killed_after_exit"] == [424242] and Orphan.killed == 1 and out["left"] == []
