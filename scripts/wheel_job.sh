@@ -67,7 +67,13 @@ cd "$WHEEL_RUN/run"
 anchor=0 suite=0 num=0
 nice -n 10 "$venv/bin/python" -I "$root/tools/wheel_golden.py" \
     --actions "$WHEEL_RUN/golden-actions" --out "$root/golden-report.json" || anchor=$?
-nice -n 10 "$venv/bin/python" -I -m pytest -q -p no:cacheprovider "$root/tests/python" --rootdir "$root" || suite=$?
+# test_bench.py is the only exclusion: it builds the bench runner with cargo and
+# reads it from the repository's target/, which this job redirects. It has no
+# wheel surface and is tested in CI's python job. test_pilot, test_loop and
+# test_gate skip here because the venv has no torch: adding torch to it needs a
+# decision about them.
+nice -n 10 "$venv/bin/python" -I -m pytest -q -p no:cacheprovider "$root/tests/python" --rootdir "$root" \
+    --ignore="$root/tests/python/test_bench.py" || suite=$?
 nice -n 10 "$venv/bin/python" -I "$root/tools/pgo/determinism.py" record --wheel "$wheel" --out "$root/determinism.json"
 
 cd "$root"
