@@ -4,6 +4,10 @@
 # to the whole committed golden fixtures and runs the Python suite against it
 # (docs/reviews/pgo-wheels-design.md, section 7). No LTO, no PGO, no publishing.
 #
+# aarch64 Linux is deferred: the m4-linux-arm64 runner has no docker client, so
+# a job container cannot start there (run 42618212792). W0 is x86_64 Linux and
+# macOS until that runner can run one.
+#
 # Manual only, and each dispatch names the coordinator's approval of a window:
 # these runners are shared. The first dispatch is also the first test of this
 # workflow and must be announced as such.
@@ -62,15 +66,12 @@ jobs:
           - runner: xaskar
             target: x86_64-unknown-linux-gnu
             image: quay.io/pypa/manylinux_2_28_x86_64@sha256:9555ba6c479fa69a2aa80ad1dc57154a60d562b19df159361d9379a02beb1e36
-            limits: --cpuset-cpus=12-15
+            # --init: PID 1 must reap orphans, or the suite's process tests see
+            # zombies as alive (hypothesis from run 42618212792, tested by the next run).
+            # --user: the runner's user, so nothing in the workspace ends up root's.
+            limits: --cpuset-cpus=12-15 --init --user 1000:1000
             rustup_sha: b1c8cb14e30889e7e2999e6b69e62d9e9b9ffc0f4df8180564d306d9680e6c55
             uv_sha: f29c3e94ffabd7e6f3ba521dba169a9b7ec12100bf3257087f0f24f6123f3645
-          - runner: m4-linux-arm64
-            target: aarch64-unknown-linux-gnu
-            image: quay.io/pypa/manylinux_2_28_aarch64@sha256:cb37f0d66c8a75abb93cf6085cad1f1427cd7208f0c0fc48359bb1eea9924f21
-            limits: --cpus=4
-            rustup_sha: 9f608c142e0e38a78957d0661ba1dfaf0b6fb37184cfaa4b9a0aa57af6184282
-            uv_sha: 229e194255c7958d86d56e8790d969a6f74736592133f0dfd0076f754c642c1d
     container:
       image: ${{ matrix.image }}
       options: ${{ matrix.limits }}
@@ -83,19 +84,18 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - run: scripts/wheel_job.sh "${{ matrix.target }}" manylinux_2_28 "${{ matrix.rustup_sha }}" "${{ matrix.uv_sha }}"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
         with:
+          if-no-files-found: warn
           name: wheel-${{ matrix.target }}
           path: |
             dist/*.whl
             golden-report.json
             checks.json
             determinism.json
-      # The workspace is bind-mounted, so the container's end does not clean it,
-      # and its files are root's.
+      # The workspace is bind-mounted, so the container's end does not clean it.
       - if: always()
-        run: |
-          rm -rf "$WHEEL_RUN" dist golden-report.json checks.json determinism.json
-          chown -R "$(stat -c %u:%g "$GITHUB_WORKSPACE/..")" "$GITHUB_WORKSPACE"
+        run: rm -rf "$WHEEL_RUN" dist golden-report.json checks.json determinism.json
 
   macos:
     needs: linux
@@ -108,7 +108,9 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - run: scripts/wheel_job.sh aarch64-apple-darwin "" 63752a1919a3a4793173ec70f8f212621a7ce38ba6a246095984482f4de20f9f 60fbd5c8a1ed681845eea28d9d622fcde03c51e91a43465b64a1e17db1ed3472
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
         with:
+          if-no-files-found: warn
           name: wheel-aarch64-apple-darwin
           path: |
             dist/*.whl
