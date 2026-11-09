@@ -164,6 +164,6 @@ def test_driver_records_a_child_killed_after_a_normal_exit(tmp_path):
 
 
 def test_driver_runs_inside_the_work_dir_and_removes_it(tmp_path):
-    code = "import os;print('{\\"case\\": \\"' + os.path.basename(os.path.dirname(os.getcwd())) + '\\"}')"
+    code = "import json,os;print(json.dumps({'case': os.path.basename(os.path.dirname(os.getcwd()))}))"
     out = driver.one_run([sys.executable, "-c", code], timeout=30, work_dir=str(tmp_path))
     assert out["result"] == {"case": tmp_path.name} and list(tmp_path.iterdir()) == []
