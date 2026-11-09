@@ -394,3 +394,18 @@ def test_wall_r7_rerun_leaves_the_first_results_intact(tmp_path):
     saved = (tmp_path / "tag_inline.result.json").read_bytes()
     w.keep({"case": "tag_inline", "status": "refused"}, str(tmp_path))
     assert (tmp_path / "tag_inline.result.json").read_bytes() == saved
+
+
+def test_wall_r7_settle_is_bounded(tmp_path):
+    host = Fake(tmp_path)
+    calls = {"n": 0}
+
+    def high():
+        # An unbounded loop fails here instead of hanging the suite.
+        calls["n"] += 1
+        assert calls["n"] < 5000, "settle did not stop at its timeout"
+        return 2.0
+
+    host.load = high
+    waited = w.settle(host)
+    assert host.settle_timeout_s <= waited <= host.settle_timeout_s + 10 * host.settle_poll_s + 0.5
