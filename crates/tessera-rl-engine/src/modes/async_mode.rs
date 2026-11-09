@@ -1198,7 +1198,7 @@ fn legality<E: Environment, M: MaskProvider<E>, R: crate::validate::AdmittedRows
             core::slice::from_ref(row.header),
             i,
             input,
-            &layout.discrete,
+            &layout.mask,
             masks,
             mode.mask_len(),
         )?;
@@ -1237,6 +1237,7 @@ where
         if !self.is_poisoned() && self.outstanding != 0 {
             return Err(EngineError::NotQuiescent);
         }
+        let groups = self.mode.pool.action_layout().mask.count();
         let (cfg, options) = (&self.mode.pool.cfg, &self.mode.pool.options);
         let instances = options.num_envs.get();
         if u32::try_from(records.len()) != Ok(instances) {
@@ -1246,10 +1247,9 @@ where
             });
         }
         crate::entry::canonical(|| {
-            records
-                .iter()
-                .enumerate()
-                .try_for_each(|(i, r)| crate::snapshot::check_record::<E>(cfg, options, i, r))
+            records.iter().enumerate().try_for_each(|(i, r)| {
+                crate::snapshot::check_record::<E>(cfg, options, groups, i, r)
+            })
         })
     }
 

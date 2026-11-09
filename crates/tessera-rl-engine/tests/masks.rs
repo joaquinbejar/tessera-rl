@@ -275,6 +275,7 @@ fn test_check_actions_reports_only_required_illegal_actions() {
             instance: 0,
             agent: 0,
             head: 0,
+            group: 0,
             value: 2
         })
     );
@@ -306,6 +307,7 @@ fn test_debug_checks_reject_illegal_actions_atomically() {
             instance: 0,
             agent: 0,
             head: 0,
+            group: 0,
             value: 2
         })
     );

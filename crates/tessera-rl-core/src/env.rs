@@ -140,6 +140,21 @@ pub trait ActionMask: Environment {
     /// an illegal action (ADR-0028). There is no default: the author
     /// defines it.
     fn noop(cfg: &Self::Config, state: &Self::State, agent: AgentSlot, out: &mut ActionWriter<'_>);
+
+    /// Parents of discrete head `head`, earlier heads whose values select
+    /// its mask row (SPEC 11.3, at most two). Called at construction only.
+    #[must_use]
+    fn head_parents(_cfg: &Self::Config, _head: usize) -> [Option<u16>; 2] {
+        [None, None]
+    }
+
+    /// Discrete heads per entity group, for per-entity illegal-action
+    /// fallback (ADR-0051); `None` keeps one agent-wide group. Called at
+    /// construction only.
+    #[must_use]
+    fn entity_group_heads(_cfg: &Self::Config) -> Option<core::num::NonZeroU16> {
+        None
+    }
 }
 
 /// Imperfect information: the per-agent information state (ADR-0035).

@@ -176,7 +176,8 @@ fn engine_kind(e: &EngineError) -> Kind {
         | EngineError::UnsupportedSpace { .. }
         | EngineError::Options { .. }
         | EngineError::HalfTooSmall { .. }
-        | EngineError::LaneEnvUnsupported => Kind::Config,
+        | EngineError::LaneEnvUnsupported
+        | EngineError::InvalidMaskLayout { .. } => Kind::Config,
         EngineError::InstanceOutOfRange { .. }
         | EngineError::DuplicateInstance { .. }
         | EngineError::SeedCount { .. }

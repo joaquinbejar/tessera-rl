@@ -215,6 +215,7 @@ mod tests {
         ActionLayout {
             discrete: vec![3],
             continuous: Vec::new(),
+            ..ActionLayout::default()
         }
     }
 
@@ -223,6 +224,7 @@ mod tests {
         ActionLayout {
             discrete: vec![3],
             continuous: vec![(-1.0, 1.0)],
+            ..ActionLayout::default()
         }
     }
 

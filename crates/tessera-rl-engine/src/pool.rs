@@ -10,6 +10,7 @@
 
 use core::marker::PhantomData;
 
+use tessera_rl_core::AgentRow;
 use tessera_rl_core::error::ConfigError;
 use tessera_rl_core::io::{ActionWriter, Actions, MaskWriter, ObsWriter};
 use tessera_rl_core::{
@@ -22,7 +23,9 @@ use tessera_rl_num::rng::{ObsRng, RngAuthority, StepRng};
 
 use crate::buffer::par_chunks;
 use crate::error::EngineError;
-use crate::layout::{ActionLayout, MAX_LEAVES, obs_leaves};
+use crate::layout::{
+    ActionLayout, MAX_GROUPED_HEADS, MAX_LEAVES, MaskHeadShape, MaskLayout, obs_leaves,
+};
 use crate::masks::{IllegalActionPolicy, MaskProvider, Masked, NoMasks};
 #[cfg(not(loom))]
 use crate::options::WaitBackend;
@@ -136,6 +139,13 @@ impl<E: Environment, M: MaskProvider<E>> EnvPool<E, M> {
     }
 
     /// The action layout of the pool.
+    /// Where discrete head `head`'s block lies in an agent's mask row, and
+    /// its shape (SPEC 11.3); `None` without masks or past the last head.
+    #[must_use]
+    pub fn mask_head_shape(&self, head: usize) -> Option<MaskHeadShape> {
+        self.actions.mask.shape(head, &self.actions.discrete)
+    }
+
     pub(crate) fn action_layout(&self) -> &ActionLayout {
         &self.actions
     }
@@ -238,33 +248,12 @@ where
         obs_space.validate()?;
         let action_space = E::action_space(&cfg)?;
         action_space.validate()?;
-        let actions = ActionLayout::from_space(&action_space)?;
+        let mut actions = ActionLayout::from_space(&action_space)?;
         let leaves = obs_leaves(&obs_space)?;
 
         let num_envs = usize::try_from(options.num_envs.get()).map_err(|_| too_large())?;
         let rows = num_envs.checked_mul(E::MAX_AGENTS).ok_or_else(too_large)?;
-        let mask_len = if M::ENABLED {
-            let len = actions
-                .discrete
-                .iter()
-                .try_fold(0usize, |acc, &n| acc.checked_add(usize::try_from(n).ok()?));
-            // Checked before any allocation (SPEC 11.3).
-            let bytes = len
-                .and_then(|len| rows.checked_mul(len))
-                .and_then(|b| u64::try_from(b).ok());
-            let budget = options.mask_budget_bytes;
-            match (len, bytes) {
-                (Some(len), Some(bytes)) if bytes <= budget => len,
-                (_, bytes) => {
-                    return Err(EngineError::MaskBudgetExceeded {
-                        bytes: bytes.unwrap_or(u64::MAX),
-                        budget,
-                    });
-                }
-            }
-        } else {
-            0
-        };
+        let mask_len = mask_len_of::<E, M>(&cfg, &mut actions, rows, options.mask_budget_bytes)?;
         let outputs = Outputs::new(
             num_envs,
             E::MAX_AGENTS,
@@ -742,7 +731,7 @@ where
             &self.headers,
             0,
             discrete,
-            &self.actions.discrete,
+            &self.actions.mask,
             self.outputs.masks(),
             self.outputs.mask_len,
         )
@@ -1075,7 +1064,22 @@ fn replace_illegal_one<E: Environment, M: MaskProvider<E>>(
             .get(k * mask_len..(k + 1) * mask_len)
             .unwrap_or(&[]);
         let heads = discrete.get(k * dh..(k + 1) * dh).unwrap_or(&[]);
-        if first_illegal(heads, &layout.discrete, mask).is_none() {
+        let Some(first) = first_illegal(heads, &layout.mask, 0..dh, mask) else {
+            continue;
+        };
+        if layout.mask.group_heads != 0 {
+            let agent = AgentSlot::new(u16::try_from(slot).unwrap_or(u16::MAX), a);
+            let (Some(row_heads), Some(agent)) = (discrete.get_mut(k * dh..(k + 1) * dh), agent)
+            else {
+                continue;
+            };
+            fallback_groups::<E, M>(cfg, state, agent, row_heads, &layout.mask, mask, first, row);
+            if let IllegalActionPolicy::Penalize(r) = policy
+                && let (Some(p), Some(f)) = (penalties.get_mut(k), penalized.get_mut(k))
+            {
+                *p = r;
+                *f = Bool8::TRUE;
+            }
             continue;
         }
         // Counts saturate at u32::MAX per episode (documented).
@@ -1113,6 +1117,83 @@ fn replace_illegal_one<E: Environment, M: MaskProvider<E>>(
     }
 }
 
+/// Builds the mask layout into `actions` and returns the row length, 0
+/// without masks. Refused before any allocation (SPEC 11.3).
+fn mask_len_of<E: Environment, M: MaskProvider<E>>(
+    cfg: &E::Config,
+    actions: &mut ActionLayout,
+    rows: usize,
+    budget: u64,
+) -> Result<usize, EngineError> {
+    if !M::ENABLED {
+        return Ok(0);
+    }
+    let parents: Vec<_> = (0..actions.discrete.len())
+        .map(|head| M::head_parents(cfg, head))
+        .collect();
+    let groups = M::entity_group_heads(cfg).map(|g| usize::from(g.get()));
+    let built = MaskLayout::build(
+        &actions.discrete,
+        &parents,
+        groups,
+        !actions.continuous.is_empty(),
+    )?;
+    let bytes = built
+        .as_ref()
+        .and_then(|m| rows.checked_mul(m.len))
+        .and_then(|b| u64::try_from(b).ok());
+    match (built, bytes) {
+        (Some(mask), Some(bytes)) if bytes <= budget => {
+            let len = mask.len;
+            actions.mask = mask;
+            Ok(len)
+        }
+        (_, bytes) => Err(EngineError::MaskBudgetExceeded {
+            bytes: bytes.unwrap_or(u64::MAX),
+            budget,
+        }),
+    }
+}
+
+/// ADR-0051: each illegal entity group, from the one holding `first` on,
+/// takes its heads from one `noop`, counted per group.
+#[cold]
+#[expect(clippy::too_many_arguments, reason = "the views of one agent's row")]
+fn fallback_groups<E: Environment, M: MaskProvider<E>>(
+    cfg: &E::Config,
+    state: &E::State,
+    agent: AgentSlot,
+    heads: &mut [i32],
+    layout: &MaskLayout,
+    mask: &[Bool8],
+    first: usize,
+    row: &mut AgentRow,
+) {
+    // Zero-filled on each use: a head the author leaves unwritten is 0.
+    let mut scratch = [0i32; MAX_GROUPED_HEADS];
+    let Some(noop) = scratch.get_mut(..heads.len()) else {
+        return;
+    };
+    M::noop(cfg, state, agent, &mut ActionWriter::new(noop, &mut []));
+    let size = layout.group_heads;
+    for group in first / size..layout.group_count {
+        let range = group * size..(group + 1) * size;
+        if first_illegal(heads, layout, range.clone(), mask).is_none() {
+            continue;
+        }
+        row.illegal_actions = row.illegal_actions.saturating_add(1);
+        if let (Some(to), Some(from)) = (heads.get_mut(range.clone()), noop.get(range.clone())) {
+            to.copy_from_slice(from);
+        }
+        if cfg!(any(debug_assertions, feature = "debug-checks")) {
+            assert!(
+                first_illegal(heads, layout, range, mask).is_none(),
+                "ActionMask::noop wrote a group its mask forbids (ADR-0051)"
+            );
+        }
+    }
+}
+
 /// The legality pass of the validation boundary (masked pools): the first
 /// alive, acting slot of an instance whose discrete action the mask forbids
 /// is an `IllegalAction`. `headers`, `discrete` (`[rows, A, dh]`) and
@@ -1122,12 +1203,12 @@ pub(crate) fn legality_rows<H: RecordLayout>(
     headers: &[H],
     first: usize,
     discrete: &[i32],
-    sizes: &[u32],
+    layout: &MaskLayout,
     masks: &[Bool8],
     mask_len: usize,
 ) -> Result<(), EngineError> {
     let a = H::AGENTS;
-    let dh = sizes.len();
+    let dh = layout.heads.len();
     for (i, header) in headers.iter().enumerate() {
         if header.engine().pending_reset.get() {
             continue;
@@ -1139,11 +1220,13 @@ pub(crate) fn legality_rows<H: RecordLayout>(
             let k = i * a + slot;
             let heads = discrete.get(k * dh..(k + 1) * dh).unwrap_or(&[]);
             let mask = masks.get(k * mask_len..(k + 1) * mask_len).unwrap_or(&[]);
-            if let Some(head) = first_illegal(heads, sizes, mask) {
+            if let Some(head) = first_illegal(heads, layout, 0..dh, mask) {
                 return Err(EngineError::IllegalAction {
                     instance: u32::try_from(first + i).unwrap_or(u32::MAX),
                     agent: u16::try_from(slot).unwrap_or(u16::MAX),
                     head: u32::try_from(head).unwrap_or(u32::MAX),
+                    group: u32::try_from(head.checked_div(layout.group_heads).unwrap_or(0))
+                        .unwrap_or(u32::MAX),
                     value: heads.get(head).copied().unwrap_or(0),
                 });
             }
@@ -1152,18 +1235,37 @@ pub(crate) fn legality_rows<H: RecordLayout>(
     Ok(())
 }
 
-/// The first discrete head whose value the mask forbids, if any.
-pub(crate) fn first_illegal(heads: &[i32], sizes: &[u32], mask: &[Bool8]) -> Option<usize> {
-    let mut offset = 0usize;
-    for (head, (&value, &n)) in heads.iter().zip(sizes).enumerate() {
+/// The first head of `range` whose value the mask forbids, parents first.
+/// Reads each conditional head's row through its parents' values; a head
+/// whose parent is illegal is never reached. Range validation has run.
+pub(crate) fn first_illegal(
+    heads: &[i32],
+    layout: &MaskLayout,
+    range: core::ops::Range<usize>,
+    mask: &[Bool8],
+) -> Option<usize> {
+    for head in range {
+        let (Some(&value), Some(entry)) = (heads.get(head), layout.heads.get(head)) else {
+            return Some(head);
+        };
+        let mut offset = Some(entry.offset);
+        for (parent, stride) in entry.parents.iter().flatten() {
+            let chosen = heads.get(*parent).and_then(|&v| usize::try_from(v).ok());
+            offset = offset
+                .zip(chosen)
+                .and_then(|(o, c)| o.checked_add(c.checked_mul(*stride)?));
+        }
+        debug_assert!(
+            usize::try_from(value).is_ok_and(|v| v < entry.size),
+            "a head's value out of its range reached the mask reader"
+        );
         let legal = usize::try_from(value)
             .ok()
-            .and_then(|v| mask.get(offset.checked_add(v)?))
+            .and_then(|v| mask.get(offset?.checked_add(v)?))
             .is_some_and(|m| m.get());
         if !legal {
             return Some(head);
         }
-        offset = offset.saturating_add(usize::try_from(n).unwrap_or(0));
     }
     None
 }
