@@ -10,7 +10,9 @@
 //! Each counted allocation also records its thread and size, so a failure
 //! names its source: this test once saw 2 allocations on aarch64 musl, cause
 //! not proven (run 42613007854). The count stays on every thread on purpose
-//! until a repeat says where they come from.
+//! until a repeat says where they come from. A thread started during a window
+//! shows up too: std allocates its name on the new thread before its code
+//! runs, an event no test code made.
 
 use core::cell::Cell;
 use std::alloc::{GlobalAlloc, Layout, System};
@@ -54,17 +56,21 @@ thread_local! {
 
 /// Counts one allocation of `size` bytes and records it.
 fn count(size: usize) {
-    if !COUNTING.load(Ordering::Acquire) || RECORDING.with(|r| r.replace(true)) {
+    if !COUNTING.load(Ordering::Acquire) || RECORDING.try_with(|r| r.replace(true)).unwrap_or(true)
+    {
         return;
     }
     COUNT.fetch_add(1, Ordering::Relaxed);
     let slot = NEXT.fetch_add(1, Ordering::Relaxed);
     if let Some(e) = TABLE.get(slot) {
         e.size.store(size, Ordering::Relaxed);
-        e.own.store(OWN_THREAD.with(Cell::get), Ordering::Relaxed);
-        // `thread::current` is safe here: no counted window spans a thread's
-        // exit of the kind that would make it panic, and an allocation under
-        // the guard is not counted.
+        e.own.store(
+            OWN_THREAD.try_with(Cell::get).unwrap_or(false),
+            Ordering::Relaxed,
+        );
+        // Reading the name is best effort. `thread::current` may panic or
+        // abort for an allocation made during a thread's start or exit, which
+        // would turn the report into a crash: red, never a false pass.
         let thread = std::thread::current();
         let name = thread.name().unwrap_or("<unnamed>").as_bytes();
         let n = name.len().min(NAME);
@@ -73,7 +79,7 @@ fn count(size: usize) {
         }
         e.name_len.store(n, Ordering::Relaxed);
     }
-    RECORDING.with(|r| r.set(false));
+    let _ = RECORDING.try_with(|r| r.set(false));
 }
 
 fn start() {
