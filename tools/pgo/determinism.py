@@ -15,8 +15,8 @@ Items 5 (the Python suite) and 6 (the num crate's tests under the profile) are
 commands of the wheel job, not of this tool. A difference blocks the wheel and is
 a bug; the goldens are never re-blessed for it.
 
-Discrete actions only: an environment with continuous actions (Pendulum, when it
-lands) needs a continuous path here, a stated gap.
+Discrete actions only: an environment with continuous actions (Pendulum,
+``CONTINUOUS_GAP``) needs a continuous path here, a stated gap.
 """
 
 from __future__ import annotations
@@ -37,6 +37,9 @@ SEED = 20261108
 SNAPSHOT_STEPS = (50, 200)
 CONTINUE_AT = 100
 CONTINUE_STEPS = 20
+
+#: Registered environments this tool cannot drive yet (discrete actions only).
+CONTINUOUS_GAP = frozenset({"tessera/Pendulum-v1"})
 
 ENVS = {
     "cartpole": ("tessera/CartPole-v1", {}),

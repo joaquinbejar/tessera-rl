@@ -70,6 +70,8 @@ CONFIGS = {
     "mountaincar-v1-same-step": {},
     "acrobot-v1-next-step": {},
     "acrobot-v1-same-step": {},
+    "pendulum-v1-next-step": {},
+    "pendulum-v1-same-step": {},
     "tag-v1-default-next-step": {},
     "tag-v1-default-same-step": {},
     "tag-v1-crowded-next-step": _CROWDED,
@@ -179,7 +181,7 @@ def replay(name: str, header: dict, lines: dict, final: list[str], actions: byte
     if len(actions) != steps * env.num_envs * env.agents * 4:
         env.close()
         raise ValueError(f"{name}: {len(actions)} action bytes, expected {steps * env.num_envs * env.agents * 4}")
-    every = np.frombuffer(actions, dtype="<i4").reshape(-1, env.num_envs, env.agents)
+    every = np.frombuffer(actions, dtype="<f4" if env.action_bounds is not None else "<i4").reshape(-1, env.num_envs, env.agents)
     same_step = header["auto_reset"] == "SameStep"
     at, ids, seed = parse_reseed(header)
     mismatches = []
