@@ -145,6 +145,10 @@ static ALLOCATOR: Counting = Counting;
 
 /// The recording works, on another thread than the test's: one binary, one
 /// test, so it runs before the measured window, which clears it.
+#[expect(
+    clippy::unwrap_used,
+    reason = "test helper: a failure should stop the test"
+)]
 fn check_the_recording_names_another_thread() {
     let probe = std::thread::Builder::new()
         .name("alloc-probe".to_owned())
@@ -159,7 +163,9 @@ fn check_the_recording_names_another_thread() {
     probe.join().unwrap();
     let total = stop();
     assert!(
-        recorded().iter().any(|(t, s)| t == "alloc-probe" && *s == 1234),
+        recorded()
+            .iter()
+            .any(|(t, s)| t == "alloc-probe" && *s == 1234),
         "the recording missed a known allocation:\n{}",
         report(total)
     );
