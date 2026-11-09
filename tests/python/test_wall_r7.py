@@ -109,19 +109,21 @@ def test_wall_r7_aa_uses_both_levels():
     assert v["ci98_75"][0] <= v["ci95"][0] and v["ci95"][1] <= v["ci98_75"][1]
 
 
-def test_wall_r7_interval_matches_the_pairs_tool_quantiles():
+def test_wall_r7_interval_takes_the_frozen_order_statistics(monkeypatch):
+    # Every resampled "median" distinct, so both indices are pinned exactly.
+    counter = iter(range(w.RESAMPLES))
+    monkeypatch.setattr(w.statistics, "median", lambda _x: next(counter))
+    assert w.interval([0.0, 1.0], 0.95) == (250, 9749)
+
+
+def test_wall_r7_interval_resamples_with_the_frozen_seed():
     import random as r
     import statistics as s
 
-    # Many values, so that neighbouring resampled medians differ and both
-    # indices are pinned.
-    g = r.Random(11)
-    x = [g.random() for _ in range(400)]
+    x = [0.01 * i for i in range(20)]
     b = r.Random(w.BOOT_SEED)
-    m = sorted(s.median(b.choices(x, k=400)) for _ in range(w.RESAMPLES))
-    low, high = int(0.025 * w.RESAMPLES), int(0.975 * w.RESAMPLES) - 1
-    assert m[low] != m[low - 1] and m[low] != m[low + 1] and m[high] != m[high + 1] and m[high] != m[high - 1]
-    assert w.interval(x, 0.95) == (m[low], m[high])
+    m = sorted(s.median(b.choices(x, k=20)) for _ in range(w.RESAMPLES))
+    assert w.interval(x, 0.95) == (m[250], m[9749])
 
 
 def test_wall_r7_measures_a_quiet_case(tmp_path):
