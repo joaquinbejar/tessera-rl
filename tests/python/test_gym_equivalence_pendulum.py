@@ -3,7 +3,9 @@
 the kernel's raw reward (test-hooks build)."""
 
 import importlib.util
+import json
 import pathlib
+import platform
 
 import numpy as np
 import pytest
@@ -30,10 +32,12 @@ def test_pendulum_gate_seed_and_size_are_the_committed_ones():
 
 
 @pytest.mark.parametrize("mode", eq.MODES)
-def test_pendulum_equivalence_matches_gymnasium_within_adr_0050(sampled, mode):
+def test_pendulum_equivalence_matches_gymnasium_within_adr_0050(sampled, mode, capsys):
     states, actions, ref, raw = sampled
     report = eq.compare(eq.one_step(states, actions, mode), ref, states, actions, raw)
-    print(mode, report)
+    # ADR-0050 asks for the exact-match counts on each platform: in the CI log.
+    with capsys.disabled():
+        print("\nADR-0050", platform.platform(), platform.libc_ver(), mode, json.dumps(report))
     assert report["states"] > eq.GATE_STATES and report["speed_clips"] > 0
     for key in eq.KEYS:
         assert report[key] == 0, (key, report)
