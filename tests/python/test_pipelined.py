@@ -217,11 +217,11 @@ def test_pipelined_interrupted_recv_leaves_the_step_in_flight():
     try:
         for step in range(500):
             acts = actions(half, step)
+            # env's recv comes right after its send, so that its step is still
+            # running; waiting on the reference first left nothing to interrupt.
             env.send(0, acts)
-            reference.send(0, acts)
-            want = reference.recv()
-            armed[0] = True
             try:
+                armed[0] = True
                 got = env.recv()
             except Stop:
                 armed[0] = False
@@ -229,6 +229,8 @@ def test_pipelined_interrupted_recv_leaves_the_step_in_flight():
                 got = env.recv()
                 interrupted = True
             armed[0] = False
+            reference.send(0, acts)
+            want = reference.recv()
             assert got.step.observations["obs"].tobytes() == want.step.observations["obs"].tobytes()
             if interrupted:
                 break
