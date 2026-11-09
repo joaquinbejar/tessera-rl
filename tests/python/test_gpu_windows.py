@@ -96,17 +96,19 @@ def test_driver_plan_is_eighteen_runs_in_a_fixed_shuffle():
     assert [x[2:] for x in runs[:6]] != [x[2:] for x in runs[6:12]]
 
 
-def test_driver_timeout_kills_the_run_and_its_child():
+def test_driver_timeout_kills_the_run_and_its_child(tmp_path):
+    pid_file = tmp_path / "child.pid"
     code = (
-        "import subprocess,sys,time;"
-        "subprocess.Popen([sys.executable,'-c','import time;time.sleep(60)']);"
+        "import pathlib,subprocess,sys,time;"
+        "c=subprocess.Popen([sys.executable,'-c','import time;time.sleep(60)']);"
+        f"pathlib.Path({str(pid_file)!r}).write_text(str(c.pid));"
         "time.sleep(60)"
     )
-    before = {p.pid for p in psutil.Process().children(recursive=True)}
     out = driver.one_run([sys.executable, "-c", code], timeout=1.5)
     assert out["timed_out"] and out["left"] == [] and out["result"] is None
+    child = int(pid_file.read_text())
     time.sleep(0.2)
-    assert {p.pid for p in psutil.Process().children(recursive=True) if p.status() != psutil.STATUS_ZOMBIE} <= before
+    assert not psutil.pid_exists(child) or psutil.Process(child).status() == psutil.STATUS_ZOMBIE
 
 
 def test_driver_keeps_only_the_result_line():
