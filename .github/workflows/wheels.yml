@@ -39,10 +39,14 @@ jobs:
           WINDOW: ${{ inputs.approved_window }}
         run: |
           echo "approved window: $WINDOW"
+          # Run 42064531284 (CI, feat/pipelined, PR #82, merged) has been reported
+          # queued since 2026-11-05, and GitHub refuses to cancel or delete it. The
+          # owner approved this one exception on 2026-11-09, by id and only while
+          # that run is reported queued. Nothing else is ignored.
           for status in in_progress queued; do
             curl -fsSL -H "Authorization: Bearer $TOKEN" \
               "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/runs?status=$status&per_page=100" \
-              | python3 -c 'import json,os,sys; me=int(os.environ["GITHUB_RUN_ID"]); o=[r["name"] for r in json.load(sys.stdin)["workflow_runs"] if r["id"]!=me]; print(o); sys.exit(1 if o else 0)'
+              | python3 -c 'import json,os,sys; me=int(os.environ["GITHUB_RUN_ID"]); o=[r["name"] for r in json.load(sys.stdin)["workflow_runs"] if r["id"]!=me and not (r["id"]==42064531284 and r["status"]=="queued")]; print(o); sys.exit(1 if o else 0)'
           done
 
   linux:
