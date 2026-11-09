@@ -201,3 +201,9 @@ def test_wall_r7_failing_binary_invalidates_and_stops_the_sampler(tmp_path):
     bad = script(tmp_path / "bad", "exit 3\n")
     rec = case(Fake(tmp_path), tmp_path, base=bad)
     assert rec["status"] == "invalid" and any("harness failed" in p for p in rec["problems"])
+
+
+def test_wall_r7_contains_zero_is_tested_at_98_75_not_95():
+    x = [-0.005] * 5 + [0.001 * (i + 1) for i in range(15)]
+    assert w.interval(x, 0.95)[0] > 0.0
+    assert w.aa_verdict(x)["contains_zero"]
