@@ -287,3 +287,9 @@ def test_wall_r7_half_width_limit_is_one_and_a_half_percent():
     v = w.aa_verdict(x)
     assert w.AA_HALF_WIDTH_LIMIT == 0.015 < v["half_width"] < 0.03
     assert v["contains_zero"] and not v["passed"]
+
+
+def test_wall_r7_frozen_constants():
+    assert (w.PAIRS, w.ORDER_SEED, w.BOOT_SEED, w.RESAMPLES) == (20, 20261106, 20261107, 10_000)
+    assert (w.LOAD_LIMIT, w.QUIET_PROCESS_LIMIT, w.MEAN_FOREIGN_LIMIT, w.INTERVAL_FOREIGN_LIMIT) == (1.0, 0.25, 0.5, 1.5)
+    assert w.CASES == ("cartpole_inline", "cartpole_w2", "tag_inline", "connect4_inline")
