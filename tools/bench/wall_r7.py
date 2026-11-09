@@ -410,8 +410,10 @@ def awake(host: Host):
 
 def keep(row: dict, out_dir: str) -> dict:
     """Writes a case's record as soon as it ends, so a later crash loses none."""
-    with open(os.path.join(out_dir, f"{row['case']}.result.json"), "w", encoding="utf-8") as f:
-        json.dump(row, f)
+    path = os.path.join(out_dir, f"{row['case']}.result.json")
+    if not os.path.exists(path):  # a rerun over used evidence never replaces it
+        with open(path, "x", encoding="utf-8") as f:
+            json.dump(row, f)
     return row
 
 

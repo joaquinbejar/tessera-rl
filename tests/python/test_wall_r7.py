@@ -386,3 +386,11 @@ def test_wall_r7_each_case_is_kept_when_it_ends(tmp_path, monkeypatch):
     with pytest.raises(RuntimeError):
         w.aa(Fake(tmp_path), "b", str(tmp_path))
     assert (tmp_path / "cartpole_w2.result.json").exists()
+
+
+def test_wall_r7_rerun_leaves_the_first_results_intact(tmp_path):
+    first = {"case": "tag_inline", "status": "measured"}
+    w.keep(first, str(tmp_path))
+    saved = (tmp_path / "tag_inline.result.json").read_bytes()
+    w.keep({"case": "tag_inline", "status": "refused"}, str(tmp_path))
+    assert (tmp_path / "tag_inline.result.json").read_bytes() == saved
