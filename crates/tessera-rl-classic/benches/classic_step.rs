@@ -13,8 +13,8 @@ use criterion::{Criterion, criterion_group, criterion_main};
 use tessera_rl_classic::cartpole::physics;
 use tessera_rl_classic::{
     Acrobot, AcrobotConfig, BrickWall, BrickWallConfig, CartPole, CartPoleConfig, Grid, GridConfig,
-    KeyDoor, KeyDoorConfig, MountainCar, MountainCarConfig, PaddleDuel, PaddleDuelConfig, Snake,
-    SnakeConfig, Tag, TagConfig,
+    KeyDoor, KeyDoorConfig, MountainCar, MountainCarConfig, PaddleDuel, PaddleDuelConfig, Pendulum,
+    PendulumConfig, Snake, SnakeConfig, Tag, TagConfig,
 };
 use tessera_rl_engine::{ActionInput, EnvPool, Masked, NoMasks, PoolOptions, Reseed};
 use tessera_rl_num::identity::Seed;
@@ -122,6 +122,7 @@ fn bench(c: &mut Criterion) {
     brickwall(&mut group);
     paddleduel(&mut group);
     mountaincar(&mut group);
+    pendulum(&mut group);
     acrobot(&mut group);
     group.finish();
 }
@@ -292,6 +293,24 @@ fn acrobot(group: &mut criterion::BenchmarkGroup<'_, criterion::measurement::Wal
                 .step(ActionInput {
                     discrete: &policy,
                     continuous: &[],
+                })
+                .unwrap();
+            black_box(out.rewards());
+        });
+    });
+}
+
+/// Pendulum: a fixed cycle of torques; episodes truncate and reset.
+fn pendulum(group: &mut criterion::BenchmarkGroup<'_, criterion::measurement::WallTime>) {
+    let mut pool = EnvPool::<Pendulum, NoMasks>::new(PendulumConfig::default(), options()).unwrap();
+    pool.reset_all(Reseed::Keep).unwrap();
+    let policy = vec![1.5f32; N as usize];
+    group.bench_function("pendulum", |b| {
+        b.iter(|| {
+            let out = pool
+                .step(ActionInput {
+                    discrete: &[],
+                    continuous: &policy,
                 })
                 .unwrap();
             black_box(out.rewards());

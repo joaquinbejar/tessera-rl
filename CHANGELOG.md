@@ -116,6 +116,11 @@ the API is not stable, and any 0.x release may break it.
   Golden fixtures, continuation, a test reference in raw integer arithmetic and
   a reference rasterizer, a scripted baseline and step benches. In Python it is
   available through `make` and the PettingZoo adapters.
+- **Pendulum** (`tessera/Pendulum-v1`, `tessera-rl-classic`): Gymnasium
+  `Pendulum-v1` dynamics and rewards in the reference's mixed f32 and f64,
+  continuous torque, a 200-step limit, and the frozen `math::fmod`. Rewards are
+  compared with Gymnasium within the derived bound of ADR-0050, not exactly
+  (`tools/gym_equivalence_pendulum.py`).
 - **Acrobot** (`tessera/Acrobot-v1`, `tessera-rl-classic`): Gymnasium `Acrobot-v1`
   book dynamics with one RK4 step, in f64 with frozen math, cross-platform tier, a
   500-step limit. One-step equivalence with the pinned Gymnasium 1.4.0 within SPEC 18

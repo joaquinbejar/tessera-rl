@@ -22,7 +22,7 @@ use super::{Pooled, actions};
 use tessera_rl_core::encoding::StateHasher;
 use tessera_rl_core::{Heuristic, StateHash};
 use tessera_rl_engine::{
-    ActionInput, AutoReset, DecodedRecord, EnvPool, MAX_LEAVES, MaskProvider, PoolOptions, Reseed,
+    AutoReset, DecodedRecord, EnvPool, MAX_LEAVES, MaskProvider, PoolOptions, Reseed,
 };
 use tessera_rl_num::identity::Seed;
 
@@ -114,12 +114,8 @@ fn frame<E: Pooled, M: MaskProvider<E>>(p: &EnvPool<E, M>, id: u32, same_step: b
     }
 }
 
-fn step<E: Pooled, M: MaskProvider<E>>(p: &mut EnvPool<E, M>, acts: &[i32]) {
-    p.step(ActionInput {
-        discrete: acts,
-        continuous: &[],
-    })
-    .unwrap();
+fn step<E: Pooled, M: MaskProvider<E>>(p: &mut EnvPool<E, M>, cfg: &E::Config, acts: &[i32]) {
+    super::input_of::<E, _>(cfg, acts, |input| p.step(input).map(|_| ()).unwrap());
 }
 
 /// Generated actions for `p` with instance `dst`'s row replaced by `row`.
@@ -189,14 +185,14 @@ where
         p.reset_all(Reseed::Keep).unwrap();
         for k in 1..=t {
             let acts = actions(&p, &self.cfg, SEED, k);
-            step(&mut p, &acts);
+            step(&mut p, &self.cfg, &acts);
         }
         let record = p.snapshot(SRC).unwrap();
         let (mut rows, mut frames) = (Vec::new(), Vec::new());
         for k in 1..=K {
             let acts = actions(&p, &self.cfg, SEED, t + k);
             rows.push(acts[s * a..(s + 1) * a].to_vec());
-            step(&mut p, &acts);
+            step(&mut p, &self.cfg, &acts);
             frames.push(frame(&p, SRC, self.same_step()));
         }
         (record, rows, frames, p)
@@ -208,7 +204,7 @@ where
             .map(|(k, row)| {
                 let t = u32::try_from(k).unwrap();
                 let acts = with_row(p, &self.cfg, t, dst, row);
-                step(p, &acts);
+                step(p, &self.cfg, &acts);
                 frame(p, dst, self.same_step())
             })
             .collect()
@@ -270,14 +266,14 @@ where
         p.reset_all(Reseed::Keep).unwrap();
         for k in 1..=t {
             let acts = actions(&p, &self.cfg, SEED, k);
-            step(&mut p, &acts);
+            step(&mut p, &self.cfg, &acts);
         }
         p.fork(SRC, &[OTHER_SLOT]).unwrap();
         let mut b = self.pool(N, SEED);
         b.reset_all(Reseed::Keep).unwrap();
         for k in 1..=t {
             let acts = actions(&b, &self.cfg, SEED, k);
-            step(&mut b, &acts);
+            step(&mut b, &self.cfg, &acts);
         }
         b.fork_branched(SRC, &[OTHER_SLOT], None).unwrap();
         let a = E::MAX_AGENTS;
@@ -290,7 +286,7 @@ where
             let mut acts = actions(&p, &self.cfg, SEED, t + k);
             let row = acts[s * a..(s + 1) * a].to_vec();
             acts[o * a..(o + 1) * a].copy_from_slice(&row);
-            step(&mut p, &acts);
+            step(&mut p, &self.cfg, &acts);
             let (x, y) = (
                 frame(&p, SRC, self.same_step()),
                 frame(&p, OTHER_SLOT, self.same_step()),
@@ -307,7 +303,7 @@ where
             if frame(&b, SRC, false).masks != frame(&b, OTHER_SLOT, false).masks {
                 acts[o * a..(o + 1) * a].copy_from_slice(&legal[o * a..(o + 1) * a]);
             }
-            step(&mut b, &acts);
+            step(&mut b, &self.cfg, &acts);
             diverged |= frame(&b, SRC, false).state != frame(&b, OTHER_SLOT, false).state;
         }
         assert_eq!(
@@ -326,7 +322,7 @@ where
         let mut death = None;
         for k in 1..=2_000 {
             let acts = actions(&p, &self.cfg, SEED, k);
-            step(&mut p, &acts);
+            step(&mut p, &self.cfg, &acts);
             let out = p.outputs().unwrap();
             let ended = out.episode_terminated()[s].get() || out.episode_truncated()[s].get();
             if ended {

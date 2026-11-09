@@ -94,7 +94,7 @@ py-test-hooks:
 	MATURIN_PEP517_ARGS="--features test-hooks" uv sync --locked --python 3.11 --reinstall-package tessera-rl; \
 	status=$$?; \
 	if [ $$status -eq 0 ]; then uv run --locked --python 3.11 python -c "import tessera_rl._native as n; assert hasattr(n, '_make_panic_counter'), 'not a test-hooks build'"; status=$$?; fi; \
-	if [ $$status -eq 0 ]; then uv run --locked --python 3.11 pytest -q tests/python/test_fp_boundary.py tests/python/test_poison_outputs.py tests/python/test_continuous_actions.py; status=$$?; fi; \
+	if [ $$status -eq 0 ]; then uv run --locked --python 3.11 pytest -q tests/python/test_fp_boundary.py tests/python/test_poison_outputs.py tests/python/test_continuous_actions.py tests/python/test_gym_equivalence_pendulum.py; status=$$?; fi; \
 	uv sync --locked --python 3.11 --reinstall-package tessera-rl || status=1; \
 	exit $$status
 

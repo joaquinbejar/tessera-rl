@@ -19,8 +19,8 @@ use support::continuation::Case;
 use tessera_rl_classic::cartpole::MAX_EPISODE_STEPS;
 use tessera_rl_classic::{
     Acrobot, AcrobotConfig, BrickWall, BrickWallConfig, CartPole, CartPoleConfig, Grid, GridConfig,
-    KeyDoor, KeyDoorConfig, MountainCar, MountainCarConfig, PaddleDuel, PaddleDuelConfig, Snake,
-    SnakeConfig, Tag, TagConfig,
+    KeyDoor, KeyDoorConfig, MountainCar, MountainCarConfig, PaddleDuel, PaddleDuelConfig, Pendulum,
+    PendulumConfig, Snake, SnakeConfig, Tag, TagConfig,
 };
 use tessera_rl_engine::{AutoReset, EnvPool, Masked, NoMasks};
 
@@ -250,4 +250,26 @@ fn test_continuation_acrobot_next_step_restores_identically_everywhere() {
 #[test]
 fn test_continuation_acrobot_same_step_restores_identically_everywhere() {
     acrobot(AutoReset::SameStep).check_all(50);
+}
+
+fn pendulum(auto_reset: AutoReset) -> Case<Pendulum, NoMasks> {
+    Case {
+        cfg: PendulumConfig::default(),
+        build: |cfg, options| EnvPool::new(cfg, options).unwrap(),
+        auto_reset,
+        // The dynamics draw nothing, so branches diverge only at a reset.
+        limit: 40,
+        deaths: false,
+        branches: true,
+    }
+}
+
+#[test]
+fn test_continuation_pendulum_next_step_restores_identically_everywhere() {
+    pendulum(AutoReset::NextStep).check_all(50);
+}
+
+#[test]
+fn test_continuation_pendulum_same_step_restores_identically_everywhere() {
+    pendulum(AutoReset::SameStep).check_all(50);
 }

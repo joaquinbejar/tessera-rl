@@ -608,6 +608,9 @@ thunk!(MAKE_PANIC_COUNTER: CFunctionKw = thunk_make_panic_counter => env_type::m
 thunk!(MAKE_CONTINUOUS_PROBE: CFunctionKw = thunk_make_continuous_probe => env_type::make_continuous_probe : fn(Obj, Obj, Obj) -> Obj);
 thunk!(MAKE_ACROBOT: CFunctionKw = thunk_make_acrobot => env_type::make_acrobot : fn(Obj, Obj, Obj) -> Obj);
 thunk!(MAKE_MOUNTAINCAR: CFunctionKw = thunk_make_mountaincar => env_type::make_mountaincar : fn(Obj, Obj, Obj) -> Obj);
+#[cfg(feature = "test-hooks")]
+thunk!(PENDULUM_REWARDS: CFunction = thunk_pendulum_rewards => module::pendulum_rewards : fn(Obj, Obj) -> Obj);
+thunk!(MAKE_PENDULUM: CFunctionKw = thunk_make_pendulum => env_type::make_pendulum : fn(Obj, Obj, Obj) -> Obj);
 thunk!(MAKE_CARTPOLE: CFunctionKw = thunk_make_cartpole => env_type::make_cartpole : fn(Obj, Obj, Obj) -> Obj);
 thunk!(MAKE_GRID: CFunctionKw = thunk_make_grid => env_type::make_grid : fn(Obj, Obj, Obj) -> Obj);
 thunk!(MAKE_KEYDOOR: CFunctionKw = thunk_make_keydoor => env_type::make_keydoor : fn(Obj, Obj, Obj) -> Obj);

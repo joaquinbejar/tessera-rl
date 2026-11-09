@@ -7,8 +7,8 @@ mod support;
 
 use tessera_rl_classic::{
     Acrobot, AcrobotConfig, BrickWall, BrickWallConfig, CartPole, CartPoleConfig, Grid, GridConfig,
-    KeyDoor, KeyDoorConfig, MountainCar, MountainCarConfig, PaddleDuel, PaddleDuelConfig, Snake,
-    SnakeConfig, Tag, TagConfig,
+    KeyDoor, KeyDoorConfig, MountainCar, MountainCarConfig, PaddleDuel, PaddleDuelConfig, Pendulum,
+    PendulumConfig, Snake, SnakeConfig, Tag, TagConfig,
 };
 use tessera_rl_core::Persist;
 use tessera_rl_engine::{EnvPool, Masked, NoMasks};
@@ -147,5 +147,20 @@ fn test_persist_acrobot_continues_and_matches_its_fixture() {
     assert_eq!(
         <Acrobot as Persist>::ENV_VERSION,
         tessera_rl_classic::acrobot::ENV_VERSION
+    );
+}
+
+#[test]
+fn test_persist_pendulum_continues_and_matches_its_fixture() {
+    let build = |o| EnvPool::<Pendulum, NoMasks>::new(PendulumConfig::default(), o).unwrap();
+    support::check_continuation(&build, 0);
+    support::check_fixture("persist-pendulum", env!("CARGO_MANIFEST_DIR"), &build, 0);
+    assert_eq!(
+        <Pendulum as Persist>::ENV_ID,
+        tessera_rl_classic::pendulum::ENV_ID
+    );
+    assert_eq!(
+        <Pendulum as Persist>::ENV_VERSION,
+        tessera_rl_classic::pendulum::ENV_VERSION
     );
 }
