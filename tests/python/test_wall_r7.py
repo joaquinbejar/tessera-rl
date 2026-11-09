@@ -113,10 +113,15 @@ def test_wall_r7_interval_matches_the_pairs_tool_quantiles():
     import random as r
     import statistics as s
 
-    x = [r.Random(11 + i).random() for i in range(20)]
+    # Many values, so that neighbouring resampled medians differ and both
+    # indices are pinned.
+    g = r.Random(11)
+    x = [g.random() for _ in range(400)]
     b = r.Random(w.BOOT_SEED)
-    m = sorted(s.median(b.choices(x, k=20)) for _ in range(w.RESAMPLES))
-    assert w.interval(x, 0.95) == (m[int(0.025 * w.RESAMPLES)], m[int(0.975 * w.RESAMPLES) - 1])
+    m = sorted(s.median(b.choices(x, k=400)) for _ in range(w.RESAMPLES))
+    low, high = int(0.025 * w.RESAMPLES), int(0.975 * w.RESAMPLES) - 1
+    assert m[low] != m[low - 1] and m[low] != m[low + 1] and m[high] != m[high + 1] and m[high] != m[high - 1]
+    assert w.interval(x, 0.95) == (m[low], m[high])
 
 
 def test_wall_r7_measures_a_quiet_case(tmp_path):
