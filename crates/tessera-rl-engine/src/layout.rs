@@ -65,6 +65,11 @@ pub(crate) struct MaskLayout {
     pub(crate) group_heads: usize,
     /// Groups: 1 when none are declared.
     pub(crate) group_count: usize,
+    /// Each head's choice count, as the action space gives them.
+    pub(crate) sizes: Vec<u32>,
+    /// No head has a parent: the row is the heads' blocks end to end, and
+    /// the reader takes the flat path that predates conditional masks.
+    pub(crate) flat: bool,
 }
 
 impl MaskLayout {
@@ -143,11 +148,14 @@ impl MaskLayout {
             };
             offset = next;
         }
+        let flat = heads.iter().all(|h| h.parents == [None, None]);
         Ok(Some(Self {
             heads,
             len: offset,
             group_heads,
             group_count,
+            sizes: sizes.to_vec(),
+            flat,
         }))
     }
 
@@ -314,23 +322,12 @@ fn elements(shape: &[u32]) -> Result<usize, EngineError> {
 mod mask_tests {
     use super::{MAX_GROUPED_HEADS, MaskLayout};
     use crate::EngineError;
-    use crate::pool::first_illegal;
+    use crate::pool::{first_illegal, first_illegal_conditional, first_illegal_flat};
     use tessera_rl_core::Bool8;
 
-    /// Today's reader, kept as the reference for flat layouts.
+    /// The flat reader predates conditional masks and is the reference.
     fn reference(heads: &[i32], sizes: &[u32], mask: &[Bool8]) -> Option<usize> {
-        let mut offset = 0usize;
-        for (head, (&value, &n)) in heads.iter().zip(sizes).enumerate() {
-            let legal = usize::try_from(value)
-                .ok()
-                .and_then(|v| mask.get(offset.checked_add(v)?))
-                .is_some_and(|m| m.get());
-            if !legal {
-                return Some(head);
-            }
-            offset = offset.saturating_add(usize::try_from(n).unwrap_or(0));
-        }
-        None
+        first_illegal_flat(heads, sizes, mask)
     }
 
     fn refused(built: Result<Option<MaskLayout>, EngineError>, what: &str) {
@@ -362,10 +359,11 @@ mod mask_tests {
             let mask: Vec<Bool8> = (0..len).map(|_| Bool8::new(next() & 3 != 0)).collect();
             let flat = MaskLayout::flat(&sizes).unwrap();
             assert_eq!(flat.len, usize::try_from(len).unwrap());
-            assert_eq!(
-                first_illegal(&heads, &flat, 0..n, &mask),
-                reference(&heads, &sizes, &mask)
-            );
+            assert!(flat.flat);
+            let want = reference(&heads, &sizes, &mask);
+            // Both the general reader and the dispatch agree with it.
+            assert_eq!(first_illegal_conditional(&heads, &flat, 0..n, &mask), want);
+            assert_eq!(first_illegal(&heads, &flat, 0..n, &mask), want);
         }
     }
 

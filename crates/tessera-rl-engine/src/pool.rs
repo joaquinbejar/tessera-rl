@@ -954,10 +954,17 @@ pub(crate) fn step_chunk<E: Environment, M: MaskProvider<E>>(
         }
         if M::ENABLED {
             // Inside the panic catch: the author's noop may panic.
-            replace_illegal_one::<E, M>(
-                cfg, policy, header, state, outputs, layout, discrete, continuous, penalties,
-                penalized, i,
-            );
+            if layout.mask.flat && layout.mask.group_heads == 0 {
+                replace_illegal_one::<E, M>(
+                    cfg, policy, header, state, outputs, layout, discrete, continuous, penalties,
+                    penalized, i,
+                );
+            } else {
+                replace_illegal_conditional::<E, M>(
+                    cfg, policy, header, state, outputs, layout, discrete, continuous, penalties,
+                    penalized, i,
+                );
+            }
         }
         let rows = i * E::MAX_AGENTS;
         let view = Actions::new(
@@ -1031,6 +1038,9 @@ pub(crate) fn run_kernels(poisoned: &mut bool, f: impl FnOnce()) -> Result<(), E
 /// environment's no-op, counts them and marks penalties (ADR-0028). Runs
 /// before the kernel, against the masks of the current state. There is no
 /// rollback: if a later kernel panics, counters already incremented stay.
+/// This is the path of layouts without parents or groups, unchanged since
+/// before ADR-0051 so that its cost stays where it was (gungraun's `turns`
+/// benches); the others take [`replace_illegal_conditional`].
 #[expect(
     clippy::too_many_arguments,
     reason = "one instance's illegal-action pass"
@@ -1064,22 +1074,7 @@ fn replace_illegal_one<E: Environment, M: MaskProvider<E>>(
             .get(k * mask_len..(k + 1) * mask_len)
             .unwrap_or(&[]);
         let heads = discrete.get(k * dh..(k + 1) * dh).unwrap_or(&[]);
-        let Some(first) = first_illegal(heads, &layout.mask, 0..dh, mask) else {
-            continue;
-        };
-        if layout.mask.group_heads != 0 {
-            let agent = AgentSlot::new(u16::try_from(slot).unwrap_or(u16::MAX), a);
-            let (Some(row_heads), Some(agent)) = (discrete.get_mut(k * dh..(k + 1) * dh), agent)
-            else {
-                continue;
-            };
-            fallback_groups::<E, M>(cfg, state, agent, row_heads, &layout.mask, mask, first, row);
-            if let IllegalActionPolicy::Penalize(r) = policy
-                && let (Some(p), Some(f)) = (penalties.get_mut(k), penalized.get_mut(k))
-            {
-                *p = r;
-                *f = Bool8::TRUE;
-            }
+        if first_illegal_flat(heads, &layout.discrete, mask).is_none() {
             continue;
         }
         // Counts saturate at u32::MAX per episode (documented).
@@ -1090,6 +1085,100 @@ fn replace_illegal_one<E: Environment, M: MaskProvider<E>>(
             *p = r;
             *f = Bool8::TRUE;
         }
+        let (Some(disc), Some(cont), Some(agent)) = (
+            discrete.get_mut(k * dh..(k + 1) * dh),
+            continuous.get_mut(k * ch..(k + 1) * ch),
+            AgentSlot::new(u16::try_from(slot).unwrap_or(u16::MAX), a),
+        ) else {
+            continue;
+        };
+        disc.fill(0);
+        cont.fill(0.0);
+        M::noop(cfg, state, agent, &mut ActionWriter::new(disc, cont));
+        debug_assert!(
+            disc.iter()
+                .zip(&layout.discrete)
+                .all(|(&v, &n)| u32::try_from(v).is_ok_and(|v| v < n)),
+            "ActionMask::noop wrote a discrete action outside its range"
+        );
+        debug_assert!(
+            cont.iter()
+                .zip(&layout.continuous)
+                .all(|(&v, &(low, high))| {
+                    v.is_finite() && (low..=high).contains(&f64::from(v))
+                }),
+            "ActionMask::noop wrote a continuous action outside its bounds"
+        );
+    }
+}
+
+/// Replaces illegal-but-valid actions of instance `i` with the
+/// environment's no-op, counts them and marks penalties (ADR-0028). Runs
+/// before the kernel, against the masks of the current state. There is no
+/// rollback: if a later kernel panics, counters already incremented stay.
+/// The path of layouts with conditional heads or entity groups (ADR-0051).
+#[inline(never)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "one instance's illegal-action pass"
+)]
+fn replace_illegal_conditional<E: Environment, M: MaskProvider<E>>(
+    cfg: &E::Config,
+    policy: IllegalActionPolicy,
+    header: &mut E::Header,
+    state: &E::State,
+    outputs: &OutputsView<'_>,
+    layout: &ActionLayout,
+    discrete: &mut [i32],
+    continuous: &mut [f32],
+    penalties: &mut [f32],
+    penalized: &mut [Bool8],
+    i: usize,
+) {
+    let a = E::MAX_AGENTS;
+    let (dh, ch) = (layout.discrete.len(), layout.continuous.len());
+    let mask_len = outputs.mask_len;
+    for (slot, row) in header.agents_mut().iter_mut().enumerate() {
+        let k = i * a + slot;
+        if let Some(f) = penalized.get_mut(k) {
+            *f = Bool8::FALSE;
+        }
+        if !(row.alive.get() && row.acting.get()) {
+            continue;
+        }
+        let mask = outputs
+            .masks
+            .get(k * mask_len..(k + 1) * mask_len)
+            .unwrap_or(&[]);
+        let heads = discrete.get(k * dh..(k + 1) * dh).unwrap_or(&[]);
+        let Some(first) = first_illegal(heads, &layout.mask, 0..dh, mask) else {
+            continue;
+        };
+        // The penalty is once per agent on both paths (ADR-0051).
+        if let IllegalActionPolicy::Penalize(r) = policy
+            && let (Some(p), Some(f)) = (penalties.get_mut(k), penalized.get_mut(k))
+        {
+            *p = r;
+            *f = Bool8::TRUE;
+        }
+        if layout.mask.group_heads != 0 {
+            // Out of line, so that pools without groups keep the code they
+            // had before ADR-0051 (gungraun's `turns` benches).
+            fallback_groups::<E, M>(
+                cfg,
+                state,
+                slot,
+                discrete,
+                k,
+                &layout.mask,
+                mask,
+                first,
+                row,
+            );
+            continue;
+        }
+        // Counts saturate at u32::MAX per episode (documented).
+        row.illegal_actions = row.illegal_actions.saturating_add(1);
         let (Some(disc), Some(cont), Some(agent)) = (
             discrete.get_mut(k * dh..(k + 1) * dh),
             continuous.get_mut(k * ch..(k + 1) * ch),
@@ -1158,17 +1247,24 @@ fn mask_len_of<E: Environment, M: MaskProvider<E>>(
 /// ADR-0051: each illegal entity group, from the one holding `first` on,
 /// takes its heads from one `noop`, counted per group.
 #[cold]
+#[inline(never)]
 #[expect(clippy::too_many_arguments, reason = "the views of one agent's row")]
 fn fallback_groups<E: Environment, M: MaskProvider<E>>(
     cfg: &E::Config,
     state: &E::State,
-    agent: AgentSlot,
-    heads: &mut [i32],
+    slot: usize,
+    discrete: &mut [i32],
+    k: usize,
     layout: &MaskLayout,
     mask: &[Bool8],
     first: usize,
     row: &mut AgentRow,
 ) {
+    let dh = layout.heads.len();
+    let agent = AgentSlot::new(u16::try_from(slot).unwrap_or(u16::MAX), E::MAX_AGENTS);
+    let (Some(heads), Some(agent)) = (discrete.get_mut(k * dh..(k + 1) * dh), agent) else {
+        return;
+    };
     // Zero-filled on each use: a head the author leaves unwritten is 0.
     let mut scratch = [0i32; MAX_GROUPED_HEADS];
     // `MaskLayout::build` caps grouped heads at the scratch's length, so this
@@ -1250,11 +1346,45 @@ pub(crate) fn legality_rows<H: RecordLayout>(
     Ok(())
 }
 
+/// The first head of `range` whose value the mask forbids. A layout
+/// without parents read whole takes the flat reader, so pools that declare
+/// no conditional heads pay what they paid before ADR-0051 (gungraun's
+/// `turns` benches); everything else takes the conditional reader.
+#[inline]
+pub(crate) fn first_illegal(
+    heads: &[i32],
+    layout: &MaskLayout,
+    range: core::ops::Range<usize>,
+    mask: &[Bool8],
+) -> Option<usize> {
+    if layout.flat && range.start == 0 && range.end == layout.sizes.len() {
+        first_illegal_flat(heads, &layout.sizes, mask)
+    } else {
+        first_illegal_conditional(heads, layout, range, mask)
+    }
+}
+
+/// The reader that predates conditional masks: heads' blocks end to end.
+pub(crate) fn first_illegal_flat(heads: &[i32], sizes: &[u32], mask: &[Bool8]) -> Option<usize> {
+    let mut offset = 0usize;
+    for (head, (&value, &n)) in heads.iter().zip(sizes).enumerate() {
+        let legal = usize::try_from(value)
+            .ok()
+            .and_then(|v| mask.get(offset.checked_add(v)?))
+            .is_some_and(|m| m.get());
+        if !legal {
+            return Some(head);
+        }
+        offset = offset.saturating_add(usize::try_from(n).unwrap_or(0));
+    }
+    None
+}
+
 /// The first head of `range` whose value the mask forbids, parents first.
 /// Reads each conditional head's row through its parents' values; a head
 /// whose parent is illegal is never reached. Range validation has run.
 /// A row shorter than `range` reads as illegal at its first missing head.
-pub(crate) fn first_illegal(
+pub(crate) fn first_illegal_conditional(
     heads: &[i32],
     layout: &MaskLayout,
     range: core::ops::Range<usize>,
