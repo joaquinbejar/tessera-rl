@@ -13,7 +13,6 @@ Covered:
 - a changed input refused, and a second owner refused.
 """
 
-import fcntl
 import json
 import math
 import os
@@ -26,6 +25,8 @@ import numpy as np
 import pytest
 
 torch = pytest.importorskip("torch")
+# The loop locks its files with fcntl, which exists only on POSIX.
+fcntl = pytest.importorskip("fcntl", reason="POSIX only: the loop uses fcntl")
 pytestmark = pytest.mark.torch
 
 EXAMPLE = pathlib.Path(__file__).parents[2] / "examples" / "alphazero_connect4"
