@@ -6,12 +6,14 @@
 //! This crate is built in stages (`docs/reviews/rts-design.md`, section 10).
 //! Stage 2 starts here with the pieces that do not depend on the engine:
 //! the grid ([`world`]), the seeded map generator ([`mapgen`]), the unit
-//! table ([`units`]) and the move resolution of a tick ([`resolve`]). The
+//! table ([`units`]), the move resolution of a tick ([`resolve`]) and the
+//! flow fields the scripted bots walk ([`flow`]). The
 //! `Environment` itself, its masks and its bots follow in later changes.
 //!
 //! Everything here is integer arithmetic: no float enters a transition
 //! (ADR-0008), which `clippy::float_arithmetic` enforces per module.
 
+pub mod flow;
 pub mod mapgen;
 pub mod resolve;
 pub mod units;

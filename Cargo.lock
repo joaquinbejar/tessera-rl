@@ -958,6 +958,7 @@ dependencies = [
 name = "tessera-rl-rts"
 version = "0.1.0"
 dependencies = [
+ "criterion",
  "tessera-rl-core",
 ]
 
