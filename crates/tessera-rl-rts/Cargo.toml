@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
+[package]
+name = "tessera-rl-rts"
+description = "Tessera's RTS environment (tessera/RTS-v1): world, map generator and turn resolution"
+readme = "README.md"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+tessera-rl-core.workspace = true
+
+[lints]
+workspace = true
