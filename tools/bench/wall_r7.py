@@ -354,8 +354,12 @@ def run_case(host: Host, base: str, head: str, case: str, out_dir: str) -> dict:
     sampler = Sampler(host.powermetrics)
     monitor = Monitor(host)
     try:
-        if not sampler.first.wait(host.first_sample_timeout_s) or sampler.ended_early:
+        if not sampler.first.wait(host.first_sample_timeout_s):
             record["reason"] = "the sampler gave no first sample"
+            return record
+        if sampler.ended_early:
+            gave = any("Current pressure level" in line for line in sampler.lines)
+            record["reason"] = "the sampler ended before the case began" if gave else "the sampler gave no first sample"
             return record
         monitor.start()
         with open(log_path, "x", encoding="utf-8") as log:

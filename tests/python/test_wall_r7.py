@@ -3,6 +3,7 @@
 
 import importlib.util
 import stat
+import time
 import sys
 from pathlib import Path
 
@@ -173,6 +174,21 @@ def test_wall_r7_sampler_ending_during_the_case_invalidates(tmp_path):
 def test_wall_r7_sampler_without_a_first_sample_is_refused(tmp_path):
     rec = case(Fake(tmp_path, samples="exit 0"), tmp_path)
     assert rec["status"] == "refused" and "first sample" in rec["reason"]
+
+
+def test_wall_r7_sampler_dying_after_its_first_sample_is_refused_with_its_own_reason(tmp_path, monkeypatch):
+    samples = "printf '{}'; exit 0".format(SAMPLE.format(level="Nominal").replace("\n", "\\n"))
+    host = Fake(tmp_path, samples=samples)
+    wait = w.threading.Event.wait
+
+    def late(self, timeout=None):  # the main thread wakes only after the sampler's EOF
+        got = wait(self, timeout)
+        time.sleep(0.3)
+        return got
+
+    monkeypatch.setattr(w.threading.Event, "wait", late)
+    rec = case(host, tmp_path)
+    assert rec["status"] == "refused" and rec["reason"] == "the sampler ended before the case began"
 
 
 def test_wall_r7_ps_failure_invalidates(tmp_path):
