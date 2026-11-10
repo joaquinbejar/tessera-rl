@@ -60,7 +60,14 @@ shopt -u nullglob
 [ "${#wheels[@]}" -eq 1 ] || { echo "pgo_w1_build: expected one wheel, found ${#wheels[@]}" >&2; exit 1; }
 sha256 "${wheels[0]}" > "$run/dist/w1.sha256"
 
-uv venv --python 3.11 "$run/venv"
+# Only a uv-managed Python under $w1/python: the measurement image has no
+# /opt/python, so a venv on the manylinux interpreter would not run there.
+uv venv --python 3.11 "$run/venv" --python-preference only-managed
+interp="$(readlink -f "$run/venv/bin/python")"
+case "$interp" in
+    "$run"/*) ;;
+    *) echo "pgo_w1_build: the venv's python resolves outside the run dir: $interp" >&2; exit 1 ;;
+esac
 uv pip install --python "$run/venv/bin/python" "${wheels[0]}" "numpy==$NUMPY_VERSION"
 "$run/venv/bin/python" -I -c "import tessera_rl._native"
 echo "pgo_w1_build: W1 $(cat "$run/dist/w1.sha256")"

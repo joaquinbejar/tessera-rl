@@ -29,7 +29,7 @@ def uv_tarball(log: Path) -> bytes:
     with tarfile.open(fileobj=buf, mode="w:gz") as t:
         for name, body in {
             "uvx": f'echo "uvx $*" >> {log}\nfor a in "$@"; do [ "$prev" = --out ] && touch "$a/tessera_rl-0.1.0-cp311-abi3-manylinux_2_28_x86_64.whl"; prev="$a"; done\n',
-            "uv": f'echo "uv $*" >> {log}\nif [ "$1" = venv ]; then mkdir -p "$4/bin"; printf "#!/bin/sh\\necho py \\"\\$*\\" >> {log}\\n" > "$4/bin/python"; chmod +x "$4/bin/python"; fi\n',
+            "uv": f'echo "uv $*" >> {log}\nif [ "$1" = venv ]; then mkdir -p "$4/bin"; if [ -n "$FAKE_SYSTEM_PY" ]; then ln -s "$FAKE_SYSTEM_PY" "$4/bin/python"; else printf "#!/bin/sh\\necho py \\"\\$*\\" >> {log}\\n" > "$4/bin/python"; chmod +x "$4/bin/python"; fi; fi\n',
         }.items():
             data = ("#!/bin/sh\n" + body).encode()
             info = tarfile.TarInfo(f"uv-x86_64-unknown-linux-gnu/{name}")
@@ -52,9 +52,11 @@ def setup(tmp_path: Path, rustup_ok: bool = True):
     return bin_dir, log, rustup_sha, digest(payload / "uv.tar.gz")
 
 
-def run(tmp_path, rustup_ok=True):
+def run(tmp_path, rustup_ok=True, system_py=None):
     bin_dir, log, rsha, usha = setup(tmp_path, rustup_ok)
     env = {**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}"}
+    if system_py:
+        env["FAKE_SYSTEM_PY"] = str(system_py)
     out = tmp_path / "run"
     p = subprocess.run(["bash", str(SCRIPT), rsha, usha, str(out)], env=env, capture_output=True, text=True, check=False)
     return p, out, log.read_text() if log.exists() else ""
@@ -74,6 +76,24 @@ def test_pgo_w1_build_makes_the_venv_with_the_wheel_and_numpy_only(tmp_path):
     install = [x for x in log.splitlines() if x.startswith("uv pip install")]
     assert len(install) == 1 and install[0].endswith("numpy==2.4.6") and ".whl" in install[0]
     assert "py -I -c import tessera_rl._native" in log
+
+
+def test_pgo_w1_build_asks_uv_for_a_managed_python_only(tmp_path):
+    p, out, log = run(tmp_path)
+    assert p.returncode == 0, p.stderr
+    venv = [x for x in log.splitlines() if x.startswith("uv venv")]
+    assert len(venv) == 1 and "--python-preference only-managed" in venv[0]
+
+
+def test_pgo_w1_build_refuses_a_venv_on_an_interpreter_outside_the_run_dir(tmp_path):
+    # The pgo-feas-2026-11-10-n failure: a venv on the image's /opt/python.
+    system = tmp_path / "opt" / "python"
+    system.parent.mkdir()
+    system.write_text("#!/bin/sh\n")
+    system.chmod(0o755)
+    p, out, log = run(tmp_path, system_py=system)
+    assert p.returncode != 0 and "resolves outside the run dir" in p.stderr
+    assert "uv pip install" not in log
 
 
 def test_pgo_w1_build_refuses_a_tool_with_the_wrong_hash(tmp_path):
