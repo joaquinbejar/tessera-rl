@@ -38,7 +38,7 @@ use crate::world::{Dir, Grid, MAX_CELLS, Team, Terrain};
 /// Versioned environment id (ADR-0023).
 pub const ENV_ID: &str = "tessera/RTS-v1";
 /// Environment version, bumped with any change to its outputs.
-pub const ENV_VERSION: u32 = 1;
+pub const ENV_VERSION: u32 = 2;
 /// Agent slots: one per side.
 pub const MAX_AGENTS: usize = 2;
 /// State unit slots per side.
@@ -112,6 +112,9 @@ pub struct RtsState {
     pub units: [Unit; UNIT_SLOTS],
     /// [`Terrain`] bytes, row-major; cells past the grid are open.
     pub terrain: [u8; MAX_CELLS],
+    /// Explored cells, row-major: bit 0 for side Zero, bit 1 for side One
+    /// (sides of the map, not agent slots); cells past the grid are 0.
+    pub explored: [u8; MAX_CELLS],
     /// Ore of side Zero and side One.
     pub ore: [u32; 2],
     /// Decisions played.
@@ -125,6 +128,7 @@ impl Default for RtsState {
         Self {
             units: [Unit::default(); UNIT_SLOTS],
             terrain: [0; MAX_CELLS],
+            explored: [0; MAX_CELLS],
             ore: [0; 2],
             decisions: 0,
             ticks: 0,
@@ -920,6 +924,7 @@ impl Environment for Rts {
                 debug_assert!(placed.is_some(), "a starting Drone has a cell and a slot");
             }
         }
+        crate::fog::explore(cfg, s);
     }
 
     fn step(
@@ -948,6 +953,8 @@ impl Environment for Rts {
         }
         let end = decide(cfg, s, &orders);
         s.decisions = s.decisions.saturating_add(1);
+        // Explored grows at the end of each decision only (ruling 2).
+        crate::fog::explore(cfg, s);
         if let Some(alive) = end {
             for a in 0..MAX_AGENTS {
                 let Some(agent) = u16::try_from(a)
@@ -1056,6 +1063,9 @@ impl Validate for Rts {
         }
         if s.decisions > cfg.step_limit {
             return violation("more decisions than the step limit");
+        }
+        if let Err(code) = crate::fog::check_explored(cfg, s) {
+            return violation(code);
         }
         for team in [Team::Zero, Team::One] {
             let units = s.units.get(slots(cfg, team)).unwrap_or(&[]);

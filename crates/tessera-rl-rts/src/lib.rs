@@ -16,6 +16,7 @@
 pub mod bots;
 pub mod env;
 pub mod flow;
+pub mod fog;
 pub mod mapgen;
 pub mod resolve;
 pub mod units;

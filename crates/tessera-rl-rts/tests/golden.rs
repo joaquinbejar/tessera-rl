@@ -129,7 +129,7 @@ fn golden_run(workers: Option<usize>) -> u64 {
 
 /// Pinned on macOS arm64; any change to the rules, the masks or the
 /// encoding moves it.
-const RTS_GOLDEN: u64 = 0x73d2_5fff_be44_e95e;
+const RTS_GOLDEN: u64 = 0x7dcd_1abc_14aa_2177;
 
 /// The stage 2 fields of one state, folded field by field: units, terrain,
 /// ore, decisions and ticks. A field that a later stage adds is not read.

@@ -24,7 +24,7 @@ use tessera_rl_rts::env::{
     HEADS_PER_UNIT, MASK_PER_UNIT, N_TYPES, SIDE_SLOTS, WINDOW, WINDOW_CELLS, order_type,
 };
 use tessera_rl_rts::units::{Kind, Unit};
-use tessera_rl_rts::world::{Grid, Terrain};
+use tessera_rl_rts::world::{Grid, Team, Terrain};
 use tessera_rl_rts::{Rts, RtsConfig, RtsState};
 
 type Pool = EnvPool<Rts, Masked>;
@@ -84,6 +84,21 @@ fn world(zero: &[Unit], one: &[Unit], ore: [u32; 2]) -> RtsState {
     s
 }
 
+/// `s` with each side's explored bits set to what it sees now, as reset
+/// would leave them; a hand-built state is otherwise refused (visible
+/// cells must be explored).
+fn with_explored(cfg: &RtsConfig, mut s: RtsState) -> RtsState {
+    for team in [Team::Zero, Team::One] {
+        let seen = tessera_rl_rts::fog::visible(cfg, &s, team);
+        for (bits, &v) in s.explored.iter_mut().zip(seen.iter()) {
+            if v {
+                *bits |= tessera_rl_rts::fog::side_bit(team);
+            }
+        }
+    }
+    s
+}
+
 struct Game {
     pool: Pool,
     cfg: RtsConfig,
@@ -108,6 +123,7 @@ impl Game {
         let mut pool: Pool = EnvPool::with_masks(cfg.clone(), options).unwrap();
         pool.reset_all(Reseed::Keep).unwrap();
         let header = *DecodedRecord::from(pool.snapshot(0).unwrap()).header();
+        let s = with_explored(&cfg, s);
         pool.import(&[0], &[DecodedRecord::from_parts(header, s).unwrap()])
             .unwrap();
         Self {
@@ -482,7 +498,8 @@ fn test_scenario_foundry_build_then_striker_production_spends_and_places() {
 }
 
 /// `s` seen from the other side: units swapped between sides and
-/// mirrored, ore swapped, terrain mirrored.
+/// mirrored, ore swapped, terrain and explored mirrored (explored bits
+/// swapped with the sides).
 fn mirrored(s: &RtsState) -> RtsState {
     let g = grid();
     let mut m = *s;
@@ -496,6 +513,8 @@ fn mirrored(s: &RtsState) -> RtsState {
     m.ore = [s.ore[1], s.ore[0]];
     for cell in 0..g.cells() {
         m.terrain[usize::from(g.mirror(cell))] = s.terrain[usize::from(cell)];
+        let e = s.explored[usize::from(cell)];
+        m.explored[usize::from(g.mirror(cell))] = ((e & 1) << 1) | ((e >> 1) & 1);
     }
     m
 }
