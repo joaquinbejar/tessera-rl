@@ -7,6 +7,8 @@ import sys
 import pytest
 
 torch = pytest.importorskip("torch")
+# The example locks its ledger with fcntl, which exists only on POSIX.
+pytest.importorskip("fcntl", reason="POSIX only: the example uses fcntl")
 pytestmark = pytest.mark.torch
 
 EXAMPLE = pathlib.Path(__file__).parents[2] / "examples" / "alphazero_connect4"
