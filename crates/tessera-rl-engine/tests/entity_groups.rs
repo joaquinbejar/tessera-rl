@@ -428,6 +428,11 @@ fn test_groups_without_parents_fall_back_per_unit() {
     p.step(input(&both([2, 2, 1, 0, 1, 3]))).unwrap();
     assert_eq!(p.state(0).unwrap().last[0], [22, 10, 0]);
     assert_eq!(illegal_count(&p), 2);
+    // Illegal, legal, illegal: the legal unit between them keeps its order,
+    // so each group is read alone, not the whole row from it on.
+    p.step(input(&both([1, 3, 1, 2, 1, 3]))).unwrap();
+    assert_eq!(p.state(0).unwrap().last[0], [0, 12, 0]);
+    assert_eq!(illegal_count(&p), 4);
 }
 
 #[test]
