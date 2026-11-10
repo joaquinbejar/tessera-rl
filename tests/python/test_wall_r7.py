@@ -45,6 +45,13 @@ class Fake(w.Host):
         )
         self.fake_load = kw.pop("load", 0.1)
         self.fake_runners = kw.pop("runners", [])
+        self.tmp = str(tmp)
+
+    def read(self, command):
+        # Hermetic: only the fakes under tmp may run, never a real host command.
+        if not str(command[0]).startswith(self.tmp):
+            raise AssertionError(f"real host command leaked into a test: {command}")
+        return super().read(command)
 
     def load(self):
         return self.fake_load
@@ -154,8 +161,11 @@ def test_wall_r7_hot_machine_invalidates(tmp_path):
 
 
 def test_wall_r7_sampler_ending_during_the_case_invalidates(tmp_path):
-    samples = "printf '{}'; exit 0".format(SAMPLE.format(level="Nominal").replace("\n", "\\n"))
-    slow = script(tmp_path / "slow", "sleep 0.05; echo '{\"ns\": 1, \"digest\": \"d\"}'\n")
+    # The sampler ends only once the harness has run, so its end falls inside
+    # the case on any runner, never before the first-sample check.
+    started = tmp_path / "started"
+    samples = "printf '{}'; while [ ! -e {} ]; do sleep 0.01; done; exit 0".format(SAMPLE.format(level="Nominal").replace("\n", "\\n"), started)
+    slow = script(tmp_path / "slow", f"touch {started}; sleep 0.05; echo '{{\"ns\": 1, \"digest\": \"d\"}}'\n")
     rec = case(Fake(tmp_path, samples=samples), tmp_path, base=slow)
     assert rec["status"] == "invalid" and any("ended during" in p for p in rec["problems"])
 
@@ -409,3 +419,15 @@ def test_wall_r7_settle_is_bounded(tmp_path):
     host.load = high
     waited = w.settle(host)
     assert host.settle_timeout_s <= waited <= host.settle_timeout_s + 10 * host.settle_poll_s + 0.5
+
+
+def test_wall_r7_fake_host_never_reads_the_real_machine(tmp_path, monkeypatch):
+    monkeypatch.setattr(w.os, "getloadavg", lambda: pytest.fail("real load read"))
+    host = Fake(tmp_path)
+    with pytest.raises(AssertionError, match="leaked"):
+        host.read(["ps", "-A", "-o", "comm="])
+    assert host.load() == 0.1 and host.runners() == []
+    for command in (host.powermetrics, host.ps, host.pmset, host.pmset_power, host.caffeinate):
+        assert command[0].startswith(str(tmp_path))
+    rec = case(host, tmp_path)
+    assert rec["status"] == "measured"
