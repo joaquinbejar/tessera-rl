@@ -73,6 +73,7 @@ def test_a_killed_runner_leaves_no_child_of_the_build(tmp_path):
     assert not alive(pid)
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX only: the fake uvx is a sh script")
 def test_a_failing_build_fails_the_run(tmp_path):
     env = fake_uvx(tmp_path, "exit 7\n")
     assert subprocess.run([sys.executable, str(SCRIPT)], env=env, timeout=60, capture_output=True).returncode == 7

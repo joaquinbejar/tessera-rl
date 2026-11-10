@@ -8,6 +8,10 @@ from pathlib import Path
 
 import pytest
 
+# The driver is for the M4 (powermetrics, pmset, ps) and its fakes are sh
+# scripts; neither exists on Windows.
+pytestmark = pytest.mark.skipif(sys.platform == "win32", reason="POSIX only: the r7 driver and its sh fakes")
+
 _TOOL = Path(__file__).resolve().parents[2] / "tools" / "bench" / "wall_r7.py"
 _spec = importlib.util.spec_from_file_location("wall_r7", _TOOL)
 w = importlib.util.module_from_spec(_spec)

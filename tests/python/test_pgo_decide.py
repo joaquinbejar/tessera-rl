@@ -13,6 +13,8 @@ import sys
 
 import pytest
 
+POSIX_SH = pytest.mark.skipif(os.name == "nt", reason="POSIX only: scripts/wheel_num_tests.sh runs as a sh script")
+
 ROOT = pathlib.Path(__file__).parents[2]
 TOOLS = ROOT / "tools" / "pgo"
 sys.path.insert(0, str(TOOLS))
@@ -164,21 +166,25 @@ def num_tests(tmp_path, **env):
     return subprocess.run([str(ROOT / "scripts" / "wheel_num_tests.sh")], capture_output=True, text=True, env=environ)
 
 
+@POSIX_SH
 def test_pgo_num_tests_default_is_release(tmp_path):
     p = num_tests(tmp_path)
     assert p.returncode == 0 and p.stdout.strip() == "|test -p tessera-rl-num --release --all-features --locked"
 
 
+@POSIX_SH
 def test_pgo_num_tests_use_the_wheel_profile_without_release(tmp_path):
     p = num_tests(tmp_path, WHEEL_CARGO_PROFILE="wheel")
     assert "--profile wheel" in p.stdout and "--release" not in p.stdout
 
 
+@POSIX_SH
 def test_pgo_num_tests_apply_the_profile(tmp_path):
     p = num_tests(tmp_path, WHEEL_CARGO_PROFILE="wheel", WHEEL_PROFILE_USE="/abs/m.profdata")
     assert p.stdout.startswith("-Cprofile-use=/abs/m.profdata|")
 
 
+@POSIX_SH
 @pytest.mark.parametrize("env", [{"WHEEL_PROFILE_USE": "/abs/m"}, {"WHEEL_CARGO_PROFILE": "wheel", "WHEEL_PROFILE_USE": "rel"}])
 def test_pgo_num_tests_refuse_a_bad_profile_setup(tmp_path, env):
     assert num_tests(tmp_path, **env).returncode == 2

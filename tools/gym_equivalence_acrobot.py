@@ -56,6 +56,36 @@ def ulps(a: float, b: float) -> int:
     return abs(key(a) - key(b))
 
 
+def ulps32(a: float, b: float) -> int:
+    def key(v: float) -> int:
+        bits = struct.unpack("<i", struct.pack("<f", v))[0]
+        return -(2**31) - bits if bits < 0 else bits
+
+    return abs(key(a) - key(b))
+
+
+def obs_mismatch(index: int, state, ours, ref) -> dict:
+    """Everything a failing observation needs to be diagnosed from one run:
+    the rollout index, the reference next state, and each differing component
+    with both values, float32 ulps and relative error. Diagnostics only: the
+    comparison itself is unchanged."""
+    ours32 = np.asarray(ours, dtype=np.float32)
+    ref32 = np.asarray(ref, dtype=np.float32)
+    components = []
+    for j, (a, b) in enumerate(zip(ours32.tolist(), ref32.tolist(), strict=True)):
+        if a != b:
+            components.append(
+                {
+                    "component": j,
+                    "ours": float.hex(float(a)),
+                    "ref": float.hex(float(b)),
+                    "ulps32": ulps32(a, b),
+                    "relative": abs(a - b) / abs(b) if b != 0 else None,
+                }
+            )
+    return {"index": index, "state": [float.hex(float(v)) for v in state], "components": components}
+
+
 def close(a: float, b: float) -> bool:
     return ulps(a, b) <= 4 or abs(a - b) <= 1e-12 * abs(b)
 
@@ -274,6 +304,7 @@ def compare(ours, ref):
         "state": 0,
         "state_examples": [],
         "obs": 0,
+        "obs_examples": [],
         "reward": 0,
         "terminated": 0,
         "truncated": 0,
@@ -286,7 +317,7 @@ def compare(ours, ref):
         "reference_terminations": 0,
         "compared_through_terminal_obs": 0,
     }
-    for (n_ours, o_ours, r_ours, t_ours, tr_ours), (n_ref, o_ref, r_ref, t_ref, tr_ref) in zip(ours, ref, strict=True):
+    for index, ((n_ours, o_ours, r_ours, t_ours, tr_ours), (n_ref, o_ref, r_ref, t_ref, tr_ref)) in enumerate(zip(ours, ref, strict=True)):
         near = abs(height(n_ref) - 1.0) < 1e-9
         report["near_threshold"] += int(near)
         report["reference_terminations"] += int(t_ref)
@@ -307,6 +338,8 @@ def compare(ours, ref):
             report["state"] += int(bad)
         if not np.all(np.abs(o_ours - o_ref) <= np.spacing(np.abs(o_ref).astype(np.float32))):
             report["obs"] += 1
+            if len(report["obs_examples"]) < 5:
+                report["obs_examples"].append(obs_mismatch(index, n_ref, o_ours, o_ref))
         if tr_ours != tr_ref:
             report["truncated"] += 1
         if near:
