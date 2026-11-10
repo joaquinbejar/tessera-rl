@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! `tessera/RTS-v1`: the Environment (stage 2, no fog).
+//! `tessera/RTS-v1`: the Environment (stage 3: fog).
 //!
 //! - Agents: two, one per side; `seat_swap` chooses which side agent slot 0
 //!   plays (`rts-design.md` section 13, item 1). Turns are simultaneous.
@@ -12,9 +12,12 @@
 //!   and 13).
 //! - Transition: `decision_ticks` ticks per step, each in the fixed order
 //!   of section 4 and section 13; integer only.
-//! - Observation: a minimal `[4, size, size]` of `u8` in the side's frame
-//!   (terrain, own kinds, enemy kinds, own hit points). The observation
-//!   planes and fog of stage 3 replace it.
+//! - Observation: `[9, size, size]` planes of `u8` in the side's frame and
+//!   a `[2]` global leaf of `u16`, under fog: the enemy is read only on
+//!   cells the side sees now, terrain only where it has explored
+//!   ([`crate::fog`], `rts-design.md` section 14). The search pool refuses
+//!   the environment (`PERFECT_INFORMATION` is `false`); no
+//!   `ImperfectInformation` is implemented, since nothing requires it yet.
 //! - Reward: +1 win, -1 loss, 0 draw, at the end only.
 
 #![deny(clippy::float_arithmetic)]
@@ -62,7 +65,9 @@ pub const START_ORE: u32 = 5;
 /// Drones each side starts with, placed as a production would be.
 pub const START_DRONES: usize = 1;
 /// Observation channels.
-pub const CHANNELS: u32 = 4;
+pub const CHANNELS: u32 = 9;
+/// Entries of the global observation leaf: own ore, decisions played.
+pub const GLOBALS: u32 = 2;
 
 /// The `type` head.
 pub mod order_type {
@@ -136,13 +141,22 @@ impl Default for RtsState {
     }
 }
 
-/// The minimal stage 2 observation.
+/// A side's observation under fog (`rts-design.md` section 14, ruling 3).
 #[derive(Observation)]
 pub struct RtsObs {
-    /// `[channel, row, column]` in the side's frame: terrain byte, own unit
-    /// kind, enemy unit kind, own unit hit points.
+    /// `[channel, row, column]` in the side's frame:
+    /// 0 terrain where explored, else 0 (channel 2 tells an unexplored
+    /// cell from open terrain);
+    /// 1 visible now; 2 explored by this side;
+    /// 3 own unit kind; 4 own hit points; 5 own carry; 6 own progress;
+    /// 7 enemy unit kind and 8 enemy hit points, on visible cells only.
     #[space(box(low = 0, high = 255, dtype = u8, shape = |c: &RtsConfig| [CHANNELS, u32::from(c.size), u32::from(c.size)]))]
     pub planes: ObsLeaf<u8>,
+    /// Own ore, clamped at 65535 (the observation only, never the state),
+    /// and the decisions played as a share of the step limit, in units of
+    /// 1/65535.
+    #[space(box(low = 0, high = 65535, dtype = u16, shape = |_: &RtsConfig| [GLOBALS]))]
+    pub globals: ObsLeaf<u16>,
 }
 
 /// The RTS environment.
@@ -879,6 +893,9 @@ impl Environment for Rts {
     type Header = RecordHeader<MAX_AGENTS, NoAdaptive>;
 
     const MAX_AGENTS: usize = MAX_AGENTS;
+    /// Fog hides the enemy, so the search pool refuses this environment
+    /// (ADR-0035).
+    const PERFECT_INFORMATION: bool = false;
     const TIER: Tier = Tier::CrossPlatform;
 
     fn observation_space(cfg: &RtsConfig) -> Result<Space, SpaceError> {
@@ -986,28 +1003,70 @@ impl Environment for Rts {
         _: &mut ObsRng,
         out: &mut ObsWriter<'_, '_, RtsObs>,
     ) {
-        let Some(mut leaf) = out.leaf_mut(RtsObs::PLANES) else {
-            return;
-        };
-        let gr = grid(cfg);
         let team = side_of_agent(cfg, agent.index());
-        let occ = occupancy(s);
-        let cells = usize::from(gr.cells());
-        for y in 0..gr.size() {
-            for x in 0..gr.size() {
-                let Some(cell) = frame_cell(gr, team, x, y) else {
-                    continue;
-                };
-                let pos = usize::from(y) * usize::from(gr.size()) + usize::from(x);
-                leaf.set(pos, s.terrain.get(usize::from(cell)).copied().unwrap_or(0));
-                let (own, enemy, hp) = match unit_at(s, &occ, cell) {
-                    Some((j, u)) if side_of_slot(j) == team => (u.kind, 0, u.hp),
-                    Some((_, u)) => (0, u.kind, 0),
-                    None => (0, 0, 0),
-                };
-                leaf.set(cells + pos, own);
-                leaf.set(2 * cells + pos, enemy);
-                leaf.set(3 * cells + pos, hp);
+        if let Some(mut leaf) = out.leaf_mut(RtsObs::PLANES) {
+            write_planes(cfg, s, team, |i, v| {
+                let _ = leaf.set(i, v);
+            });
+        }
+        if let Some(mut leaf) = out.leaf_mut(RtsObs::GLOBALS) {
+            let [ore, played] = globals(cfg, s, team);
+            let _ = leaf.set(0, ore);
+            let _ = leaf.set(1, played);
+        }
+    }
+}
+
+/// The global leaf of `team`: own ore clamped at `u16::MAX` (a documented
+/// observation-only clamp), and decisions played in units of 1/65535 of
+/// the step limit.
+fn globals(cfg: &RtsConfig, s: &RtsState, team: Team) -> [u16; 2] {
+    let ore = s.ore.get(index_of(team)).copied().unwrap_or(0);
+    let ore = u16::try_from(ore).unwrap_or(u16::MAX);
+    let limit = u64::from(cfg.step_limit.max(1));
+    let played = u64::from(s.decisions.min(cfg.step_limit)) * u64::from(u16::MAX) / limit;
+    [ore, u16::try_from(played).unwrap_or(u16::MAX)]
+}
+
+/// Writes `team`'s planes through `set(index, byte)`. Enemy units are read
+/// only on cells `team` sees now, terrain only where it has explored.
+fn write_planes(cfg: &RtsConfig, s: &RtsState, team: Team, mut set: impl FnMut(usize, u8)) {
+    let gr = grid(cfg);
+    let occ = occupancy(s);
+    let seen = crate::fog::visible(cfg, s, team);
+    let cells = usize::from(gr.cells());
+    for y in 0..gr.size() {
+        for x in 0..gr.size() {
+            let Some(cell) = frame_cell(gr, team, x, y) else {
+                continue;
+            };
+            let pos = usize::from(y) * usize::from(gr.size()) + usize::from(x);
+            let visible = seen.get(usize::from(cell)).copied().unwrap_or(false);
+            let explored = crate::fog::explored(s, team, cell);
+            let terrain = if explored {
+                s.terrain.get(usize::from(cell)).copied().unwrap_or(0)
+            } else {
+                0
+            };
+            let mut planes = [0u8; 9];
+            planes[0] = terrain;
+            planes[1] = u8::from(visible);
+            planes[2] = u8::from(explored);
+            match unit_at(s, &occ, cell) {
+                Some((j, u)) if side_of_slot(j) == team => {
+                    planes[3] = u.kind;
+                    planes[4] = u.hp;
+                    planes[5] = u.carry;
+                    planes[6] = u8::try_from(u.progress).unwrap_or(u8::MAX);
+                }
+                Some((_, u)) if visible => {
+                    planes[7] = u.kind;
+                    planes[8] = u.hp;
+                }
+                _ => {}
+            }
+            for (k, &v) in planes.iter().enumerate() {
+                set(k * cells + pos, v);
             }
         }
     }

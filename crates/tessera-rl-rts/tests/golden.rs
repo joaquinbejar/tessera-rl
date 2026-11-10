@@ -202,6 +202,38 @@ fn test_rts_dynamics_are_unchanged_by_fog() {
     assert_eq!(hash, DYNAMICS_GOLDEN, "{hash:#x}");
 }
 
+/// Both observation leaves of every agent, folded over 300 decisions of the
+/// golden's seeded legal play, inline and with 3 workers.
+fn observation_run(workers: Option<usize>) -> u64 {
+    let c = cfg(12, 6);
+    let mut p = pool(c, 2, 2026, workers);
+    let mut rng = Rng(0x0b5e_u64);
+    let mut masks = ready(&mut p);
+    let mut hash = 0xcbf2_9ce4_8422_2325_u64;
+    for _ in 0..300 {
+        let a = legal_actions(&mut rng, &masks, 2, 6);
+        let out = p.step(input(&a)).unwrap();
+        for leaf in 0..2 {
+            for &b in out.observation(leaf).unwrap() {
+                hash = fnv(hash, u64::from(b));
+            }
+        }
+        masks = out.masks().to_vec();
+    }
+    hash
+}
+
+/// Pinned on macOS arm64 for `ENV_VERSION` 2: the fogged planes and the
+/// globals.
+const OBSERVATION_GOLDEN: u64 = 0x9d9f_7aea_f2d9_8a81;
+
+#[test]
+fn test_rts_observation_golden_is_pinned_and_identical_across_workers() {
+    let inline = observation_run(None);
+    assert_eq!(inline, OBSERVATION_GOLDEN, "{inline:#x}");
+    assert_eq!(observation_run(Some(3)), inline);
+}
+
 #[test]
 fn test_rts_golden_is_pinned_and_identical_across_workers() {
     let inline = golden_run(None);

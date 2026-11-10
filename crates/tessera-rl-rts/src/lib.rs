@@ -7,8 +7,8 @@
 //! Stage 2: the grid ([`world`]), the seeded map generator ([`mapgen`]),
 //! the unit table ([`units`]), the move resolution of a tick ([`resolve`]),
 //! the flow fields ([`flow`]), the environment itself ([`env`](mod@env))
-//! and the scripted bots ([`bots`]). Fog and the observation planes follow
-//! in stage 3.
+//! and the scripted bots ([`bots`]). Stage 3: fog of war and explored
+//! memory ([`fog`]) and the fogged observation.
 //!
 //! Everything here is integer arithmetic: no float enters a transition
 //! (ADR-0008), which `clippy::float_arithmetic` enforces per module.
