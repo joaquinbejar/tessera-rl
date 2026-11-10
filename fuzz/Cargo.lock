@@ -249,6 +249,7 @@ dependencies = [
  "tessera-rl-games",
  "tessera-rl-macros",
  "tessera-rl-num",
+ "tessera-rl-rts",
 ]
 
 [[package]]
@@ -273,6 +274,15 @@ dependencies = [
 [[package]]
 name = "tessera-rl-num"
 version = "0.1.0"
+
+[[package]]
+name = "tessera-rl-rts"
+version = "0.1.0"
+dependencies = [
+ "tessera-rl-core",
+ "tessera-rl-macros",
+ "tessera-rl-num",
+]
 
 [[package]]
 name = "tessera-rl-simd"

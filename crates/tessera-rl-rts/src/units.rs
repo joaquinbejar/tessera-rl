@@ -8,7 +8,8 @@
 
 #![deny(clippy::float_arithmetic)]
 
-use tessera_rl_core::Bool8;
+use tessera_rl_core::{Bool8, Reserved};
+use tessera_rl_macros::EnvState;
 
 /// A unit kind. 0 is reserved for an empty slot in [`Unit::kind`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -129,8 +130,8 @@ impl Kind {
 }
 
 /// One unit slot, 16 bytes of plain data (ADR-0029). An empty slot is all
-/// zero. Identity is `(slot, generation)`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+/// zero but its generation. Identity is `(slot, generation)`.
+#[derive(EnvState, Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[repr(C)]
 pub struct Unit {
     /// The cell it stands on.
@@ -152,7 +153,7 @@ pub struct Unit {
     /// [`Kind`] being produced, 0 for none.
     pub producing: u8,
     /// Zero.
-    pub pad: u8,
+    pub pad: Reserved<1>,
     /// Occupants of this slot so far, modulo 2^32.
     pub generation: u32,
 }
