@@ -217,6 +217,7 @@ fn test_rush_strikers_both_advance_down_a_shared_corridor() {
     s.units[1] = unit(Kind::Striker, at(2, 5));
     s.units[2] = unit(Kind::Striker, at(3, 5));
     s.units[SIDE_SLOTS] = unit(Kind::Core, at(11, 5));
+    let s = known(&c, s);
     let a = row(&c, &s, 0, Bot::Rush, &mut rng(0));
     let east = i32::from(move_index(Team::Zero, Dir::East));
     for k in [1usize, 2] {
@@ -236,9 +237,9 @@ fn fnv(hash: u64, word: u64) -> u64 {
 /// hashes folded. Both games reach combat (asserted), so the fighters'
 /// orders are in the hash. Pinned on macOS arm64; any change to a bot, the
 /// rules or the masks moves it.
-const BOT_GOLDEN: u64 = 0xf917_a49f_18a8_a2a4;
-/// A seed where Rush beats Prospector inside 600 decisions.
-const GOLDEN_SEED: u64 = 14;
+const BOT_GOLDEN: u64 = 0x3eb6_2927_d0c4_d294;
+/// A seed where Rush reaches Prospector under fog inside 600 decisions.
+const GOLDEN_SEED: u64 = 9;
 
 #[test]
 fn test_bots_golden_is_pinned() {
@@ -334,6 +335,14 @@ fn test_rush_economy_delivers_ore_and_finishes_a_foundry() {
 }
 
 /// An open 12-by-12 map with both Cores in opposite corners.
+/// `s` with the whole map explored by both sides, so a hand-built state's
+/// terrain is known to its bots (under fog an unexplored cell reads open).
+fn known(c: &RtsConfig, mut s: RtsState) -> RtsState {
+    let cells = usize::from(c.size) * usize::from(c.size);
+    s.explored[..cells].fill(3);
+    s
+}
+
 fn open_state() -> (RtsConfig, Grid, RtsState) {
     let c = cfg(12, 8);
     let g = Grid::new(12).unwrap();
@@ -418,6 +427,7 @@ fn test_a_carrier_goes_first_past_a_lower_slot_drone() {
         ..unit(Kind::Drone, at(5, 5))
     };
     s.units[SIDE_SLOTS] = unit(Kind::Core, at(11, 5));
+    let s = known(&c, s);
     let a = row(&c, &s, 0, Bot::Rush, &mut rng(0));
     let west = i32::from(move_index(Team::Zero, Dir::West));
     assert_eq!(order(&a, 1), (order_type::MOVE, west, 0));
@@ -507,4 +517,61 @@ fn test_bots_write_a_noop_for_every_empty_slot() {
             }
         }
     }
+}
+
+#[test]
+fn test_rush_heads_for_the_mirror_of_its_core_until_an_enemy_structure_is_seen() {
+    // Size 16: side Zero's Core at (0, 0), so the mirror is (15, 15). A
+    // Striker at (8, 0) with nothing in sight walks south or east toward
+    // it; with an enemy Foundry seen to its west it turns west.
+    let c = cfg(16, 4);
+    let g = Grid::new(16).unwrap();
+    let at = |x, y| g.index(x, y).unwrap();
+    let mut s = RtsState::default();
+    s.units[0] = unit(Kind::Core, at(0, 0));
+    s.units[1] = unit(Kind::Striker, at(8, 0));
+    s.units[SIDE_SLOTS] = unit(Kind::Core, at(15, 15));
+    let s = known(&c, s);
+    let south = i32::from(move_index(Team::Zero, Dir::South));
+    let east = i32::from(move_index(Team::Zero, Dir::East));
+    let (t, i, _) = order(&row(&c, &s, 0, Bot::Rush, &mut rng(0)), 1);
+    assert_eq!(t, order_type::MOVE);
+    assert!(i == south || i == east, "toward (15, 15): {i}");
+    let mut seen = s;
+    seen.units[SIDE_SLOTS + 1] = unit(Kind::Foundry, at(5, 0));
+    let west = i32::from(move_index(Team::Zero, Dir::West));
+    assert_eq!(
+        order(&row(&c, &seen, 0, Bot::Rush, &mut rng(0)), 1),
+        (order_type::MOVE, west, 0)
+    );
+}
+
+#[test]
+fn test_a_drone_that_knows_no_ore_walks_to_the_nearest_unexplored_cell() {
+    // Only the band x <= 5 is explored, with no ore in it: the Drone at
+    // (3, 3) walks east toward x = 6. With ore known at (1, 3), it walks
+    // west to it.
+    let c = cfg(16, 4);
+    let g = Grid::new(16).unwrap();
+    let at = |x, y| g.index(x, y).unwrap();
+    let mut s = RtsState::default();
+    s.units[0] = unit(Kind::Core, at(0, 0));
+    s.units[1] = unit(Kind::Drone, at(3, 3));
+    s.units[SIDE_SLOTS] = unit(Kind::Core, at(15, 15));
+    for y in 0..16 {
+        for x in 0..=5 {
+            s.explored[usize::from(at(x, y))] = 1;
+        }
+    }
+    let east = i32::from(move_index(Team::Zero, Dir::East));
+    assert_eq!(
+        order(&row(&c, &s, 0, Bot::Rush, &mut rng(0)), 1),
+        (order_type::MOVE, east, 0)
+    );
+    s.terrain[usize::from(at(1, 3))] = Terrain::Ore as u8;
+    let west = i32::from(move_index(Team::Zero, Dir::West));
+    assert_eq!(
+        order(&row(&c, &s, 0, Bot::Rush, &mut rng(0)), 1),
+        (order_type::MOVE, west, 0)
+    );
 }

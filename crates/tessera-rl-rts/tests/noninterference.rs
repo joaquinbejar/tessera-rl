@@ -239,12 +239,33 @@ fn enemy_unshown(
     Some(m)
 }
 
-const EDITS: [(&str, Edit); 8] = [
+/// Every unexplored cell with no unit walled: paths through the unknown
+/// would change if a field read hidden terrain.
+fn wall_unexplored(
+    c: &RtsConfig,
+    s: &RtsState,
+    team: Team,
+    _: &dyn Fn(u16) -> bool,
+) -> Option<RtsState> {
+    let g = Grid::new(c.size).unwrap();
+    let mut m = *s;
+    let mut any = false;
+    for n in 0..g.cells() {
+        if s.explored[usize::from(n)] & side_bit(team) == 0 && !occupied(s, n) {
+            m.terrain[usize::from(n)] = Terrain::Wall as u8;
+            any = true;
+        }
+    }
+    any.then_some(m)
+}
+
+const EDITS: [(&str, Edit); 9] = [
     ("move a hidden enemy", move_hidden),
     ("add a hidden enemy", add_hidden),
     ("remove a hidden enemy", remove_hidden),
     ("hit points of a hidden enemy", hp_hidden),
     ("terrain of an unexplored cell", terrain_unexplored),
+    ("walls on every unexplored cell", wall_unexplored),
     ("the enemy's explored bits", enemy_explored),
     ("the enemy's slot numbering", permute_enemy),
     ("enemy facts never shown", enemy_unshown),
@@ -349,4 +370,51 @@ fn test_noninterference_control_visible_edits_change_the_view() {
         .unwrap();
     }
     assert_eq!(changed, [true; 4]);
+}
+
+/// The scripted bots read only their side's view: their action rows are
+/// identical under every hidden-fact edit (stage 3 plan r2, PR 2).
+#[test]
+fn test_noninterference_bots_ignore_every_hidden_fact() {
+    let mut applied = [0usize; EDITS.len()];
+    for (size, seed) in [(12, 1), (16, 9), (24, 3)] {
+        let c = cfg(size);
+        let mut p = pool(&c, seed);
+        let mut r = [rng(1), rng(2)];
+        for k in 0..240 {
+            let s = *p.state(0).unwrap();
+            if k % 8 == 0 {
+                for team in [Team::Zero, Team::One] {
+                    let seen = visible(&c, &s, team);
+                    let hidden = |cell: u16| !seen[usize::from(cell)];
+                    for (e, (name, edit)) in EDITS.iter().enumerate() {
+                        let Some(m) = edit(&c, &s, team, &hidden) else {
+                            continue;
+                        };
+                        applied[e] += 1;
+                        for bot in [Bot::Rush, Bot::Prospector, Bot::RandomLegal] {
+                            assert_eq!(
+                                bot_row(&c, &m, team, bot, &mut rng(5)),
+                                bot_row(&c, &s, team, bot, &mut rng(5)),
+                                "{bot:?}: {name}, {team:?}, size {size} step {k}"
+                            );
+                        }
+                    }
+                }
+            }
+            let a = [
+                bot_row(&c, &s, Team::Zero, Bot::Rush, &mut r[0]),
+                bot_row(&c, &s, Team::One, Bot::Prospector, &mut r[1]),
+            ]
+            .concat();
+            p.step(ActionInput {
+                discrete: &a,
+                continuous: &[],
+            })
+            .unwrap();
+        }
+    }
+    for (e, (name, _)) in EDITS.iter().enumerate() {
+        assert!(applied[e] > 0, "never applied: {name}");
+    }
 }

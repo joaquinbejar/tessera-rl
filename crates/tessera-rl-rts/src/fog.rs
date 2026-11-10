@@ -92,3 +92,40 @@ pub(crate) fn check_explored(cfg: &RtsConfig, s: &RtsState) -> Result<(), &'stat
     }
     Ok(())
 }
+
+/// The state as `team` knows it: the side view the scripted bots read
+/// (`rts-design.md` section 14, ruling 5). Enemy units are kept only on
+/// cells `team` sees now, without the facts the observation never shows
+/// (carry, counter, progress, production); terrain is kept only where
+/// `team` has explored, open elsewhere; the enemy's ore and explored bits
+/// are cleared. A plain copy on the stack: no allocation.
+#[must_use]
+pub fn seen(cfg: &RtsConfig, s: &RtsState, team: Team) -> RtsState {
+    let sees = visible(cfg, s, team);
+    let mut v = *s;
+    for (slot, u) in v.units.iter_mut().enumerate() {
+        if crate::env::side_of_slot(slot) == team || !u.alive.get() {
+            continue;
+        }
+        if sees.get(usize::from(u.cell)).copied().unwrap_or(false) {
+            u.carry = 0;
+            u.counter = 0;
+            u.progress = 0;
+            u.producing = 0;
+        } else {
+            *u = crate::units::Unit::default();
+        }
+        u.generation = 0;
+    }
+    let own = side_bit(team);
+    for (cell, (t, e)) in v.terrain.iter_mut().zip(v.explored.iter_mut()).enumerate() {
+        if *e & own == 0 && cell < usize::from(grid(cfg).cells()) {
+            *t = crate::world::Terrain::Open as u8;
+        }
+        *e &= own;
+    }
+    if let Some(o) = v.ore.get_mut(1 - crate::env::index_of(team)) {
+        *o = 0;
+    }
+    v
+}

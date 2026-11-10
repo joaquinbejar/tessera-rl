@@ -15,10 +15,11 @@
 //! Only [`Bot::RandomLegal`] draws, from the `StepRng` the caller passes.
 //! Win rates among the bots are measured, never assumed here.
 //!
-//! The bots read the whole state, enemy positions included. That is fair
-//! only without fog: section 5 says a field reads only what its side sees
-//! or remembers, so once stage 3 adds fog these bots must build their
-//! fields through the side's visibility, or they are cheating opponents.
+//! Under fog the bots read only their side's view ([`crate::fog::seen`]):
+//! enemy units in sight, terrain where explored (open elsewhere), their
+//! own units and ore. With no enemy structure in sight, Strikers head for
+//! the mirror of their own Core's cell (`rts-design.md` section 14,
+//! ruling 5).
 
 #![deny(clippy::float_arithmetic)]
 
@@ -96,6 +97,8 @@ struct Fields {
     enemy_units: Field,
     ore: Field,
     own_core: Field,
+    /// Unexplored cells: where a Drone that knows no ore goes to look.
+    frontier: Field,
 }
 
 impl Fields {
@@ -117,18 +120,36 @@ impl Fields {
             enemy_units: Field::default(),
             ore: Field::default(),
             own_core: Field::default(),
+            frontier: Field::default(),
         };
+        // Enemy structures in sight; with none, the mirror of the own
+        // Core's cell, public knowledge since Cores never move and the map
+        // is mirror-symmetric (ruling 5).
         let es = cells_of(s, |i, k| enemy(i) && k.is_structure());
-        fields
-            .enemy_structures
-            .build(g, es.into_iter().filter(|&c| c != u16::MAX), passable);
+        let core = cells_of(s, |i, k| !enemy(i) && k == Kind::Core);
+        let known = es.iter().any(|&c| c != u16::MAX);
+        let mirror = core
+            .iter()
+            .filter(|&&c| c != u16::MAX && !known)
+            .map(|&c| g.mirror(c));
+        fields.enemy_structures.build(
+            g,
+            es.into_iter().filter(|&c| c != u16::MAX).chain(mirror),
+            passable,
+        );
         let eu = cells_of(s, |i, _| enemy(i));
         fields
             .enemy_units
             .build(g, eu.into_iter().filter(|&c| c != u16::MAX), passable);
         let ore = (0..g.cells()).filter(|&c| terrain_at(s, c) == Some(Terrain::Ore));
         fields.ore.build(g, ore, passable);
-        let core = cells_of(s, |i, k| !enemy(i) && k == Kind::Core);
+        let own = crate::fog::side_bit(team);
+        let unexplored = (0..g.cells()).filter(|&c| {
+            s.explored
+                .get(usize::from(c))
+                .is_some_and(|&b| b & own == 0)
+        });
+        fields.frontier.build(g, unexplored, passable);
         fields
             .own_core
             .build(g, core.into_iter().filter(|&c| c != u16::MAX), passable);
@@ -288,8 +309,10 @@ fn economy(w: &Walker<'_>, carry: u8, cell: u16, f: &Fields, block: &Block) -> O
             .or_else(|| w.walk(cell, &f.own_core, block))
             .unwrap_or(NOOP);
     }
+    // With no ore explored yet, look for some.
     adjacent(w.g, w.team, cell, order_type::HARVEST, 0, block)
         .or_else(|| w.walk(cell, &f.ore, block))
+        .or_else(|| w.walk(cell, &f.frontier, block))
         .unwrap_or(NOOP)
 }
 
@@ -305,6 +328,9 @@ impl Bot {
         out: &mut ActionWriter<'_>,
     ) {
         let team = side_of_agent(cfg, agent.index());
+        // Everything below reads the side's view only (ruling 5).
+        let view = crate::fog::seen(cfg, s, team);
+        let s = &view;
         let g = grid(cfg);
         let occ = occupancy(s);
         let fields = (self != Self::RandomLegal).then(|| Fields::build(cfg, s, team));

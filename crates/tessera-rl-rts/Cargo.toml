@@ -36,3 +36,8 @@ harness = false
 [[bench]]
 name = "step"
 harness = false
+
+# One bot decision under fog; local only, no claim.
+[[bench]]
+name = "bots"
+harness = false
