@@ -14,6 +14,11 @@
 //!
 //! Only [`Bot::RandomLegal`] draws, from the `StepRng` the caller passes.
 //! Win rates among the bots are measured, never assumed here.
+//!
+//! The bots read the whole state, enemy positions included. That is fair
+//! only without fog: section 5 says a field reads only what its side sees
+//! or remembers, so once stage 3 adds fog these bots must build their
+//! fields through the side's visibility, or they are cheating opponents.
 
 #![deny(clippy::float_arithmetic)]
 
@@ -106,18 +111,6 @@ impl Fields {
         };
         // Obstacles are terrain and structures, never mobile units.
         let passable = |cell: u16| terrain_at(s, cell) == Some(Terrain::Open) && !structure(cell);
-        let cells_of = |want: &dyn Fn(usize, Kind) -> bool| {
-            let mut out = [u16::MAX; crate::env::UNIT_SLOTS];
-            for (i, u) in s.units.iter().enumerate() {
-                if let Some(k) = unit_kind(u)
-                    && want(i, k)
-                    && let Some(o) = out.get_mut(i)
-                {
-                    *o = u.cell;
-                }
-            }
-            out
-        };
         let enemy = |i: usize| side_of_slot(i) != team;
         let mut fields = Self {
             enemy_structures: Field::default(),
@@ -125,22 +118,36 @@ impl Fields {
             ore: Field::default(),
             own_core: Field::default(),
         };
-        let es = cells_of(&|i, k| enemy(i) && k.is_structure());
+        let es = cells_of(s, |i, k| enemy(i) && k.is_structure());
         fields
             .enemy_structures
             .build(g, es.into_iter().filter(|&c| c != u16::MAX), passable);
-        let eu = cells_of(&|i, _| enemy(i));
+        let eu = cells_of(s, |i, _| enemy(i));
         fields
             .enemy_units
             .build(g, eu.into_iter().filter(|&c| c != u16::MAX), passable);
         let ore = (0..g.cells()).filter(|&c| terrain_at(s, c) == Some(Terrain::Ore));
         fields.ore.build(g, ore, passable);
-        let core = cells_of(&|i, k| !enemy(i) && k == Kind::Core);
+        let core = cells_of(s, |i, k| !enemy(i) && k == Kind::Core);
         fields
             .own_core
             .build(g, core.into_iter().filter(|&c| c != u16::MAX), passable);
         fields
     }
+}
+
+/// The cells of the units `want` selects, [`u16::MAX`] elsewhere.
+fn cells_of(s: &RtsState, want: impl Fn(usize, Kind) -> bool) -> [u16; crate::env::UNIT_SLOTS] {
+    let mut out = [u16::MAX; crate::env::UNIT_SLOTS];
+    for (i, u) in s.units.iter().enumerate() {
+        if let Some(k) = unit_kind(u)
+            && want(i, k)
+            && let Some(o) = out.get_mut(i)
+        {
+            *o = u.cell;
+        }
+    }
+    out
 }
 
 /// The window index, in `team`'s frame, of `to` seen from `from`.
@@ -305,26 +312,30 @@ impl Bot {
         let ore = s.ore.get(index_of(team)).copied().unwrap_or(0);
         let mut block = Block([false; MASK_PER_UNIT]);
         for (u, slot) in slots(cfg, team).enumerate() {
-            let Some(unit) = s.units.get(slot).copied() else {
-                continue;
-            };
-            let Some(kind) = unit_kind(&unit) else {
-                continue;
-            };
-            unit_mask(cfg, s, &occ, team, slot, &mut block.0);
-            let order = match (self, fields.as_ref()) {
-                (Self::RandomLegal, _) => random(&block, rng),
-                (_, Some(f)) => {
-                    let w = Walker {
-                        g,
-                        team,
-                        s,
-                        occ: &occ,
-                        slot,
-                    };
-                    self.scripted(&w, kind, &unit, &census, ore, f, &block)
-                }
-                (_, None) => NOOP,
+            // Every slot is written, an empty one with a no-op, so a reused
+            // buffer never keeps a dead unit's order.
+            let order = match s.units.get(slot).copied() {
+                Some(unit) => match unit_kind(&unit) {
+                    Some(kind) => {
+                        unit_mask(cfg, s, &occ, team, slot, &mut block.0);
+                        match (self, fields.as_ref()) {
+                            (Self::RandomLegal, _) => random(&block, rng),
+                            (_, Some(f)) => {
+                                let w = Walker {
+                                    g,
+                                    team,
+                                    s,
+                                    occ: &occ,
+                                    slot,
+                                };
+                                self.scripted(&w, kind, &unit, &census, ore, f, &block)
+                            }
+                            (_, None) => NOOP,
+                        }
+                    }
+                    None => NOOP,
+                },
+                None => NOOP,
             };
             let base = u * HEADS_PER_UNIT;
             let _ = out.set_discrete(base, order.0);
