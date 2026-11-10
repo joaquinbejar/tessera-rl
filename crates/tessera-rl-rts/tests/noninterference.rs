@@ -217,7 +217,7 @@ fn permute_enemy(
 }
 
 /// Enemy facts never shown, even where visible: carry, progress,
-/// production, counter, and the enemy's ore.
+/// production, counter, whether it is finished, and the enemy's ore.
 fn enemy_unshown(
     c: &RtsConfig,
     s: &RtsState,
@@ -232,6 +232,7 @@ fn enemy_unshown(
             u.progress = u.progress.wrapping_add(3);
             u.producing = Kind::Lancer as u8;
             u.counter = u.counter.wrapping_add(1);
+            u.finished = Bool8::new(!u.finished.get());
         }
     }
     let e = usize::from(team == Team::Zero);

@@ -100,7 +100,7 @@ pub(crate) fn check_explored(cfg: &RtsConfig, s: &RtsState) -> Result<(), &'stat
 /// - own units, terrain where explored and own ore are kept;
 /// - enemy units are kept only on cells `team` sees now, without the
 ///   facts the observation never shows (carry, counter, progress,
-///   production, generation), and packed into the enemy's slots in cell
+///   production, generation, whether it is finished), and packed into the enemy's slots in cell
 ///   order, so the enemy's slot numbering is hidden too;
 /// - terrain is open where `team` has not explored; the enemy's ore and
 ///   explored bits are cleared.
@@ -129,6 +129,7 @@ pub fn seen(cfg: &RtsConfig, s: &RtsState, team: Team) -> RtsState {
                 progress: 0,
                 producing: 0,
                 generation: 0,
+                finished: tessera_rl_core::Bool8::TRUE,
                 ..*u
             };
             n += 1;
