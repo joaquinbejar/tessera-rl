@@ -16,9 +16,12 @@ categories.workspace = true
 
 [dependencies]
 tessera-rl-core.workspace = true
+tessera-rl-num.workspace = true
+tessera-rl-macros.workspace = true
 
 [dev-dependencies]
 criterion.workspace = true
+tessera-rl-engine = { workspace = true, features = ["test-hooks"] }
 
 [lints]
 workspace = true
