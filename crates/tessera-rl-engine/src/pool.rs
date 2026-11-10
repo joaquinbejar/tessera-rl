@@ -1038,9 +1038,9 @@ pub(crate) fn run_kernels(poisoned: &mut bool, f: impl FnOnce()) -> Result<(), E
 /// environment's no-op, counts them and marks penalties (ADR-0028). Runs
 /// before the kernel, against the masks of the current state. There is no
 /// rollback: if a later kernel panics, counters already incremented stay.
-/// This is the path of layouts without parents or groups, unchanged since
-/// before ADR-0051 so that its cost stays where it was (gungraun's `turns`
-/// benches); the others take [`replace_illegal_conditional`].
+/// This is the path of layouts without parents or groups, with the same
+/// reads as before ADR-0051 so that its cost stays where it was (gungraun's
+/// `turns` benches); the others take [`replace_illegal_conditional`].
 #[expect(
     clippy::too_many_arguments,
     reason = "one instance's illegal-action pass"

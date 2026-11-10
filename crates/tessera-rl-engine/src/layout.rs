@@ -325,7 +325,8 @@ mod mask_tests {
     use crate::pool::{first_illegal, first_illegal_conditional, first_illegal_flat};
     use tessera_rl_core::Bool8;
 
-    /// The flat reader predates conditional masks and is the reference.
+    /// The flat reader predates conditional masks: this is a cross-check
+    /// between the two production readers, not an independent reference.
     fn reference(heads: &[i32], sizes: &[u32], mask: &[Bool8]) -> Option<usize> {
         first_illegal_flat(heads, sizes, mask)
     }
@@ -335,6 +336,22 @@ mod mask_tests {
             Err(EngineError::InvalidMaskLayout { what: got }) => assert_eq!(got, what),
             other => panic!("{other:?}"),
         }
+    }
+
+    #[test]
+    fn test_reader_on_a_flat_grouped_layout_reads_only_its_range() {
+        // Two groups of two root heads; head 0 illegal, group 1 legal.
+        let l = MaskLayout::build(&[2; 4], &[[None, None]; 4], Some(2), false)
+            .unwrap()
+            .unwrap();
+        assert!(l.flat);
+        let mask: Vec<Bool8> = [false, true, true, true, true, true, true, true]
+            .into_iter()
+            .map(Bool8::new)
+            .collect();
+        let heads = [0, 0, 1, 1];
+        assert_eq!(first_illegal(&heads, &l, 0..4, &mask), Some(0));
+        assert_eq!(first_illegal(&heads, &l, 2..4, &mask), None);
     }
 
     #[test]

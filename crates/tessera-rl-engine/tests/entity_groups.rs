@@ -37,6 +37,10 @@ struct SquadConfig {
     /// Adds a `Box` head beside the discrete ones, which ADR-0051 refuses.
     #[config(default = false)]
     with_box: bool,
+    /// Groups with no parents: `target` is a root, its four choices legal
+    /// except 3.
+    #[config(default = false)]
+    flat: bool,
 }
 
 #[derive(EnvState, Debug, Clone, Copy, PartialEq, Default)]
@@ -128,7 +132,23 @@ impl Environment for Squad {
 }
 
 impl ActionMask for Squad {
-    fn action_mask(_: &SquadConfig, state: &SquadState, _: AgentSlot, out: &mut MaskWriter<'_>) {
+    fn action_mask(cfg: &SquadConfig, state: &SquadState, _: AgentSlot, out: &mut MaskWriter<'_>) {
+        if cfg.flat {
+            // Per unit: type row (3), then one target row (4).
+            for u in 0..UNITS {
+                let base = u * 7;
+                for t in 0..3usize {
+                    out.set(
+                        base + t,
+                        !(u == 1 && t == 2 && state.steps.is_multiple_of(2)),
+                    );
+                }
+                for c in 0..4usize {
+                    out.set(base + 3 + c, c != 3);
+                }
+            }
+            return;
+        }
         // Per unit: type row (3), then four target choices per type (12).
         for u in 0..UNITS {
             let base = u * 15;
@@ -149,8 +169,8 @@ impl ActionMask for Squad {
         // Otherwise every head stays zero: type 0, target 0, legal.
     }
 
-    fn head_parents(_: &SquadConfig, head: usize) -> [Option<u16>; 2] {
-        if head % 2 == 1 {
+    fn head_parents(cfg: &SquadConfig, head: usize) -> [Option<u16>; 2] {
+        if head % 2 == 1 && !cfg.flat {
             [Some(u16::try_from(head - 1).unwrap()), None]
         } else {
             [None, None]
@@ -196,6 +216,7 @@ fn cfg(partial_noop: bool) -> SquadConfig {
     SquadConfig {
         partial_noop,
         with_box: false,
+        flat: false,
     }
 }
 
@@ -388,10 +409,33 @@ fn test_groups_out_of_range_child_is_refused_before_legality_in_every_mode() {
 }
 
 #[test]
+fn test_groups_without_parents_fall_back_per_unit() {
+    if DEBUG_CHECKS {
+        return;
+    }
+    let flat = SquadConfig {
+        partial_noop: false,
+        with_box: false,
+        flat: true,
+    };
+    let mut p: Pool = EnvPool::with_masks(flat, options(1, IllegalActionPolicy::Noop)).unwrap();
+    p.reset_all(Reseed::Keep).unwrap();
+    // Unit 0 illegal (target 3); units 1 and 2 legal and must keep orders.
+    p.step(input(&both([1, 3, 1, 2, 2, 1]))).unwrap();
+    assert_eq!(p.state(0).unwrap().last[0], [0, 12, 21]);
+    assert_eq!(illegal_count(&p), 1);
+    // Only unit 2 illegal: the earlier groups are untouched.
+    p.step(input(&both([2, 2, 1, 0, 1, 3]))).unwrap();
+    assert_eq!(p.state(0).unwrap().last[0], [22, 10, 0]);
+    assert_eq!(illegal_count(&p), 2);
+}
+
+#[test]
 fn test_groups_beside_a_continuous_head_are_refused_at_construction() {
     let with_box = SquadConfig {
         partial_noop: false,
         with_box: true,
+        flat: false,
     };
     let built =
         EnvPool::<Squad, Masked>::with_masks(with_box, options(1, IllegalActionPolicy::Noop));
