@@ -183,6 +183,26 @@ fn pool_args(g: Gil, kw: &Kwargs<'_>, default_limit: u32) -> CResult<PoolArgs> {
     })
 }
 
+/// The kernel's raw f64 reward of each `(f64, f64, f32)` little-endian row
+/// (test hooks only, ADR-0050).
+#[cfg(feature = "test-hooks")]
+pub(crate) fn pendulum_rewards(rows: &[u8]) -> Vec<u8> {
+    let (rows, _) = rows.as_chunks::<20>();
+    let mut out = Vec::with_capacity(rows.len() * 8);
+    tessera_rl_num::fp::with_canonical(|| {
+        for row in rows {
+            let (theta, rest) = row.split_at(8);
+            let (theta_dot, u) = rest.split_at(8);
+            let read = |b: &[u8]| f64::from_le_bytes(b.try_into().unwrap_or([0; 8]));
+            let u = f32::from_le_bytes(u.try_into().unwrap_or([0; 4]));
+            let reward =
+                tessera_rl_classic::pendulum::physics::reward([read(theta), read(theta_dot)], u);
+            out.extend_from_slice(&reward.to_le_bytes());
+        }
+    });
+    out
+}
+
 /// `_make_panic_counter(**kwargs)` (test hooks only): a pool that panics.
 #[cfg(feature = "test-hooks")]
 pub(crate) fn make_panic_counter(g: Gil, kwargs: Option<Ref<'_>>) -> CResult<Inner> {
@@ -205,6 +225,19 @@ pub(crate) fn make_continuous_probe(g: Gil, kwargs: Option<Ref<'_>>) -> CResult<
     let args = pool_args(g, &kw, 100)?;
     let ops = g
         .detach(|| crate::env::continuous_probe(&args))
+        .map_err(|e| to_py(g, e))?;
+    Ok(Inner::new(ops, borrowed))
+}
+
+/// `make_pendulum(**kwargs)`: the pool of a pendulum environment object.
+/// `max_episode_steps` defaults to 200 (`Pendulum-v1`).
+pub(crate) fn make_pendulum(g: Gil, kwargs: Option<Ref<'_>>) -> CResult<Inner> {
+    let kw = Kwargs::parse(g, kwargs)?;
+    kw.check(g, &[&POOL_KEYS, &["outputs"]])?;
+    let borrowed = borrowed(g, &kw)?;
+    let args = pool_args(g, &kw, tessera_rl_classic::pendulum::MAX_EPISODE_STEPS)?;
+    let ops = g
+        .detach(|| crate::env::pendulum(&args))
         .map_err(|e| to_py(g, e))?;
     Ok(Inner::new(ops, borrowed))
 }

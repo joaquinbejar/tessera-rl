@@ -27,8 +27,11 @@
 //! `acos`, `sinh`, `cosh`, `asinh`, `acosh`, `atanh`, `exp2`, `exp_m1`,
 //! `log2`, `log10`, `ln_1p`, `cbrt`, `pow`, `gamma` and `ln_gamma`.
 
+mod fmod;
 pub mod lane;
 mod vendor;
+
+pub use fmod::fmod;
 
 /// The current math version.
 pub const MATH_VERSION: u32 = 1;

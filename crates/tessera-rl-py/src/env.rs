@@ -8,8 +8,8 @@ use core::num::{NonZeroU32, NonZeroUsize};
 
 use tessera_rl_classic::{
     Acrobot, AcrobotConfig, BrickWall, BrickWallConfig, CartPole, CartPoleConfig, Grid, GridConfig,
-    KeyDoor, KeyDoorConfig, MountainCar, MountainCarConfig, PaddleDuel, PaddleDuelConfig, Snake,
-    SnakeConfig, Tag, TagConfig,
+    KeyDoor, KeyDoorConfig, MountainCar, MountainCarConfig, PaddleDuel, PaddleDuelConfig, Pendulum,
+    PendulumConfig, Snake, SnakeConfig, Tag, TagConfig,
 };
 use tessera_rl_core::encoding::decode_from_slice;
 use tessera_rl_core::space::{BoxBounds, DType, Space};
@@ -613,6 +613,15 @@ pub(crate) fn continuous_probe(args: &PoolArgs) -> Result<Box<dyn PoolOps>, Bind
     let (options, n) = options(args)?;
     let same_step = options.auto_reset == AutoReset::SameStep;
     let pool = EnvPool::<ContinuousProbe, NoMasks>::new(cfg.clone(), options)?;
+    finish(&cfg, pool, args, n, same_step)
+}
+
+/// A pendulum pool (`tessera/Pendulum-v1`).
+pub(crate) fn pendulum(args: &PoolArgs) -> Result<Box<dyn PoolOps>, BindError> {
+    let cfg = PendulumConfig::default();
+    let (options, n) = options(args)?;
+    let same_step = options.auto_reset == AutoReset::SameStep;
+    let pool = EnvPool::<Pendulum, NoMasks>::new(cfg.clone(), options)?;
     finish(&cfg, pool, args, n, same_step)
 }
 

@@ -106,6 +106,24 @@ pub(super) unsafe extern "C" fn fp_non_canonical_entries(
     entry(|g| capi::int_u64(g, tessera_rl_num::fp::non_canonical_entries()))
 }
 
+/// `_pendulum_rewards(rows)` (test hooks only): the kernel's raw f64 reward
+/// of each little-endian `(f64 theta, f64 theta_dot, f32 u)` row, for the
+/// ADR-0050 gate: the public reward is f32.
+#[cfg(feature = "test-hooks")]
+pub(super) unsafe extern "C" fn pendulum_rewards(
+    _module: *mut ffi::PyObject,
+    arg: *mut ffi::PyObject,
+) -> *mut ffi::PyObject {
+    entry(|g| {
+        // SAFETY: METH_O passes a borrowed object, alive for the call.
+        let arg = unsafe { Ref::from_ptr(arg) }
+            .ok_or_else(|| capi::raise(g, capi::type_error(), "missing argument"))?;
+        let rows = capi::bytes_of(g, arg, "rows")?;
+        let out = crate::api::pendulum_rewards(rows);
+        capi::bytes(g, &out)
+    })
+}
+
 /// `_fail_after(n)` (test hooks only): the `n`-th next container insertion
 /// fails.
 #[cfg(feature = "test-hooks")]
@@ -122,7 +140,7 @@ pub(super) unsafe extern "C" fn fail_after(
     })
 }
 
-const METHOD_COUNT: usize = if cfg!(feature = "test-hooks") { 25 } else { 22 };
+const METHOD_COUNT: usize = if cfg!(feature = "test-hooks") { 27 } else { 23 };
 
 static METHODS: Table<[ffi::PyMethodDef; METHOD_COUNT]> = Table([
     method(
@@ -174,6 +192,7 @@ static METHODS: Table<[ffi::PyMethodDef; METHOD_COUNT]> = Table([
     env_type::MAKERS[10],
     env_type::MAKERS[11],
     env_type::MAKERS[12],
+    env_type::MAKERS[13],
     search_type::MAKER,
     search_group_type::MAKER,
     #[cfg(feature = "test-hooks")]
@@ -187,6 +206,13 @@ static METHODS: Table<[ffi::PyMethodDef; METHOD_COUNT]> = Table([
         c"_make_continuous_probe",
         thunks::MAKE_CONTINUOUS_PROBE,
         c"Test hook: a pool with one continuous head.",
+    ),
+    #[cfg(feature = "test-hooks")]
+    method(
+        c"_pendulum_rewards",
+        thunks::PENDULUM_REWARDS,
+        ffi::METH_O,
+        c"Test hook: the kernel's f64 rewards of (theta, theta_dot, u) rows.",
     ),
     #[cfg(feature = "test-hooks")]
     method(

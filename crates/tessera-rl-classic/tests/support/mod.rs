@@ -176,6 +176,82 @@ pub fn choices<E: Environment>(cfg: &E::Config) -> u32 {
     }
 }
 
+/// Bounds of a single continuous head, if that is the action space.
+pub fn continuous_bounds<E: Environment>(cfg: &E::Config) -> Option<(f64, f64)> {
+    match E::action_space(cfg) {
+        Ok(Space::Box {
+            bounds: tessera_rl_core::space::BoxBounds::Float { low, high },
+            ..
+        }) => Some((*low.first()?, *high.first()?)),
+        _ => None,
+    }
+}
+
+/// The engine input of generated actions: a continuous environment's rows
+/// hold the `f32` action's bits, so the harness keeps one action type.
+pub fn input_of<E: Environment, R>(
+    cfg: &E::Config,
+    acts: &[i32],
+    apply: impl FnOnce(ActionInput<'_>) -> R,
+) -> R {
+    if continuous_bounds::<E>(cfg).is_some() {
+        let floats: Vec<f32> = acts
+            .iter()
+            .map(|a| f32::from_bits(a.cast_unsigned()))
+            .collect();
+        apply(ActionInput {
+            discrete: &[],
+            continuous: &floats,
+        })
+    } else {
+        apply(ActionInput {
+            discrete: acts,
+            continuous: &[],
+        })
+    }
+}
+
+/// `mix-heuristic-v1` for one continuous head: one in four the baseline, the
+/// rest uniform in the bounds; the `f32` bits as `i32`.
+#[expect(
+    clippy::cast_possible_truncation,
+    clippy::many_single_char_names,
+    reason = "the action is float32; index arithmetic"
+)]
+fn continuous_actions<E, M>(
+    p: &EnvPool<E, M>,
+    cfg: &E::Config,
+    (low, high): (f64, f64),
+    seed: u64,
+    t: u32,
+) -> Vec<i32>
+where
+    E: Pooled + Heuristic,
+    M: MaskProvider<E>,
+{
+    let a = E::MAX_AGENTS;
+    let instances = p.outputs().unwrap().rewards().len() / a;
+    let mut out = vec![0; instances * a];
+    for (row, slot) in out.iter_mut().enumerate() {
+        let x = mix(seed ^ (u64::from(t) << 32) ^ ((row as u64) << 4));
+        let value = if x.is_multiple_of(4) {
+            let mut cont = [0.0_f32];
+            let i = u32::try_from(row / a).unwrap_or(0);
+            if let (Some(state), Some(agent)) = (p.state(i), AgentSlot::new(0, a)) {
+                let mut writer = ActionWriter::new(&mut [], &mut cont);
+                E::act(cfg, state, agent, &mut heuristic_rng(), &mut writer);
+            }
+            cont[0]
+        } else {
+            #[expect(clippy::cast_precision_loss, reason = "a test distribution")]
+            let unit = ((x >> 11) as f64) / ((1u64 << 53) as f64);
+            (low + (high - low) * unit) as f32
+        };
+        *slot = value.to_bits().cast_signed();
+    }
+    out
+}
+
 /// Actions `mix-heuristic-v1` for step `t`: per instance and slot, one in
 /// four is the scripted baseline, the rest uniform; a choice the mask
 /// forbids becomes the baseline.
@@ -185,6 +261,9 @@ where
     E: Pooled + Heuristic,
     M: MaskProvider<E>,
 {
+    if let Some(bounds) = continuous_bounds::<E>(cfg) {
+        return continuous_actions(p, cfg, bounds, seed, t);
+    }
     let a = E::MAX_AGENTS;
     let n = choices::<E>(cfg);
     let masks = p.outputs().unwrap().masks();
@@ -367,9 +446,8 @@ where
             file.write_all(&bytes)
                 .unwrap_or_else(|e| panic!("action dump: {e}"));
         }
-        p.step(ActionInput {
-            discrete: &acts,
-            continuous: &[],
+        input_of::<E, _>(&scenario.cfg, &acts, |input| {
+            p.step(input).map(|_| ()).map_err(|e| e.to_string())
         })
         .unwrap_or_else(|e| panic!("step {t}: {e}"));
         lines.push(step_line(t, &record_digests(&p, same_step)));

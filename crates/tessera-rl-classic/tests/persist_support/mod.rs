@@ -61,6 +61,22 @@ where
     M: MaskProvider<E>,
     <E::Header as RecordLayout>::Adaptive: AdaptiveValues<E::Config>,
 {
+    if width == 0 {
+        // One continuous head: a scripted torque, half-integer in range.
+        let rows = p.outputs().unwrap().rewards().len();
+        let torques: Vec<f32> = (0..rows)
+            .map(|row| {
+                let step = u16::try_from((row + t as usize) % 5).unwrap();
+                f32::from(step) * 0.5 - 1.0
+            })
+            .collect();
+        p.step(ActionInput {
+            discrete: &[],
+            continuous: &torques,
+        })
+        .unwrap();
+        return;
+    }
     let rows = p.outputs().unwrap().rewards().len();
     let masks: Vec<bool> = p
         .outputs()

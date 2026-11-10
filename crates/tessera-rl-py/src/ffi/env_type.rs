@@ -327,6 +327,7 @@ maker!(make_panic_counter, api::make_panic_counter);
 #[cfg(feature = "test-hooks")]
 maker!(make_continuous_probe, api::make_continuous_probe);
 maker!(make_cartpole, api::make_cartpole);
+maker!(make_pendulum, api::make_pendulum);
 maker!(make_acrobot, api::make_acrobot);
 maker!(make_mountaincar, api::make_mountaincar);
 maker!(make_tag, api::make_tag);
@@ -341,7 +342,7 @@ maker!(make_othello, api::make_othello);
 maker!(make_go9, api::make_go9);
 
 /// The module-level constructors, for the module's method table.
-pub(super) const MAKERS: [ffi::PyMethodDef; 13] = [
+pub(super) const MAKERS: [ffi::PyMethodDef; 14] = [
     method_kw(
         c"make_cartpole",
         thunks::MAKE_CARTPOLE,
@@ -356,6 +357,11 @@ pub(super) const MAKERS: [ffi::PyMethodDef; 13] = [
         c"make_mountaincar",
         thunks::MAKE_MOUNTAINCAR,
         c"make_mountaincar(**pool_options) -> Env",
+    ),
+    method_kw(
+        c"make_pendulum",
+        thunks::MAKE_PENDULUM,
+        c"make_pendulum(**pool_options) -> Env",
     ),
     method_kw(
         c"make_tag",

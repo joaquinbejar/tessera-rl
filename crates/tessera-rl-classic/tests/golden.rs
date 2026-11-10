@@ -14,8 +14,8 @@ use support::{
 use tessera_rl_classic::cartpole::MAX_EPISODE_STEPS;
 use tessera_rl_classic::{
     Acrobot, AcrobotConfig, BrickWall, BrickWallConfig, CartPole, CartPoleConfig, Grid, GridConfig,
-    KeyDoor, KeyDoorConfig, MountainCar, MountainCarConfig, PaddleDuel, PaddleDuelConfig, Snake,
-    SnakeConfig, Tag, TagConfig,
+    KeyDoor, KeyDoorConfig, MountainCar, MountainCarConfig, PaddleDuel, PaddleDuelConfig, Pendulum,
+    PendulumConfig, Snake, SnakeConfig, Tag, TagConfig,
 };
 use tessera_rl_engine::{AutoReset, EnvPool, Masked, NoMasks};
 
@@ -598,4 +598,44 @@ fn test_golden_acrobot_next_step_matches_fixture_on_every_mode() {
 #[test]
 fn test_golden_acrobot_same_step_matches_fixture_on_every_mode() {
     check_acrobot(&acrobot("acrobot-v1-same-step", AutoReset::SameStep));
+}
+
+impl support::GoldenEnv for Pendulum {
+    const ENV_ID: &'static str = tessera_rl_classic::pendulum::ENV_ID;
+    const ENV_VERSION: u32 = tessera_rl_classic::pendulum::ENV_VERSION;
+}
+
+fn pendulum(name: &'static str, auto_reset: AutoReset) -> Scenario<PendulumConfig> {
+    Scenario {
+        name,
+        cfg: PendulumConfig::default(),
+        seed: 9_112_026,
+        num_envs: 16,
+        chunk: 4,
+        auto_reset,
+        max_episode_steps: tessera_rl_classic::pendulum::MAX_EPISODE_STEPS,
+        steps: 600,
+        reseed_at: 300,
+        reseed_ids: &[2, 11],
+        reseed_seed: 7_777,
+    }
+}
+
+fn check_pendulum(s: &Scenario<PendulumConfig>) {
+    let build = |cfg, options| {
+        EnvPool::<Pendulum, NoMasks>::new(cfg, options).unwrap_or_else(|e| panic!("{e}"))
+    };
+    for workers in WORKERS {
+        check(s.name, &run::<Pendulum, _>(s, build, workers));
+    }
+}
+
+#[test]
+fn test_golden_pendulum_next_step_matches_fixture_on_every_mode() {
+    check_pendulum(&pendulum("pendulum-v1-next-step", AutoReset::NextStep));
+}
+
+#[test]
+fn test_golden_pendulum_same_step_matches_fixture_on_every_mode() {
+    check_pendulum(&pendulum("pendulum-v1-same-step", AutoReset::SameStep));
 }

@@ -90,6 +90,13 @@ doc = false
 bench = false
 
 [[bin]]
+name = "persist_pendulum"
+path = "fuzz_targets/persist_pendulum.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "persist_mountaincar"
 path = "fuzz_targets/persist_mountaincar.rs"
 test = false
