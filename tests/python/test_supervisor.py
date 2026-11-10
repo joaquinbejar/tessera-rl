@@ -18,6 +18,11 @@ import subprocess
 import sys
 import time
 
+import pytest
+
+# The supervisor kills process groups and its ledger uses fcntl: POSIX only.
+pytest.importorskip("fcntl", reason="POSIX only: process groups and fcntl")
+
 EXAMPLE = pathlib.Path(__file__).parents[2] / "examples" / "alphazero_connect4"
 sys.path.insert(0, str(EXAMPLE))
 
