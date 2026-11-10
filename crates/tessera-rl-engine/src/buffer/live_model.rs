@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! Loom models of the Pipelined borrow window (ADR-0047 models 8 and 10).
+//! Loom models of the split-phase borrow window (ADR-0047 models 8 and 10)
+//! and of the Async per-row snapshot (issue #85).
 //!
 //! The mode itself is not built under loom (its pool and kernels are too
 //! large to model), so the models run the real live-flag functions of
@@ -139,6 +140,45 @@ fn test_live_model_token_dropped_on_one_thread_then_sent_on_another() {
         assert!(claim(&rows.live[0]), "token on A after recv");
         assert_eq!(read(&rows, 0), 10);
         assert_eq!(reader.join().unwrap(), 1);
+        drop(gang);
+    });
+}
+
+/// Issue #85: the caller snapshots an idle row (never admitted, so its
+/// in-flight flag is clear) while a published job is still writing another
+/// row, before the caller waits for it; after the wait (the `recv`), the
+/// written row is read too and shows the worker's write.
+#[test]
+fn test_live_model_idle_row_snapshot_while_worker_writes_another() {
+    loom::model(|| {
+        let rows = Arc::new(Rows {
+            cells: [UnsafeCell::new(1), UnsafeCell::new(2)],
+            live: [AtomicBool::new(false), AtomicBool::new(false)],
+        });
+        let worker_rows = Arc::clone(&rows);
+        let f = move |_w: usize| {
+            // SAFETY: row 1 is admitted to this job alone; the caller reads
+            // it only after `wait`. Loom checks the ordering.
+            #[expect(
+                unsafe_code,
+                reason = "audited module: loom model of the borrow window"
+            )]
+            worker_rows.cells[1].with_mut(|p| unsafe { *p = 20 });
+        };
+        let job = Job::new(&f, None);
+        let mut gang = Gang::new(&options()).unwrap();
+        // SAFETY: `job` and `f` live on this stack until `wait` returns below.
+        #[expect(
+            unsafe_code,
+            reason = "audited module: loom model of the borrow window"
+        )]
+        unsafe {
+            gang.submit(&job).unwrap();
+        }
+        // The snapshot of idle row 0, concurrent with the worker on row 1.
+        assert_eq!(read(&rows, 0), 1);
+        assert!(!gang.wait().unwrap());
+        assert_eq!(read(&rows, 1), 20, "the received row shows the write");
         drop(gang);
     });
 }

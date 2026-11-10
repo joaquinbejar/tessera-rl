@@ -306,10 +306,11 @@ fn test_async_unpublished_ids_are_stepped_by_the_drain() {
 }
 
 /// A pool left with admitted ids no job will claim (three ids, batches of
-/// ten): `recv`, `reset_all` and `snapshot` each make progress on them, so
-/// a caller retrying them is never stuck (TR M1 on #84).
+/// ten): `recv` and `reset_all` each make progress on them, so a caller
+/// retrying them is never stuck (TR M1 on #84). `snapshot` of an idle id
+/// needs no progress at all (issue #85), and an unclaimed id is `InFlight`.
 #[test]
-fn test_async_recv_reset_all_and_snapshot_make_progress_on_unclaimed_ids() {
+fn test_async_recv_and_reset_all_make_progress_on_unclaimed_ids() {
     let make = || {
         let mut pool = Pool::new(WalkConfig {}, options(AutoReset::NextStep))
             .unwrap()
@@ -330,8 +331,7 @@ fn test_async_recv_reset_all_and_snapshot_make_progress_on_unclaimed_ids() {
         pool
     };
     let tries = if cfg!(miri) { 200 } else { 100_000 };
-    // `recv` refuses (three ids cannot fill a batch of ten), but steps them:
-    // a snapshot then succeeds without any other call.
+    // `recv` refuses (three ids cannot fill a batch of ten), but steps them.
     let mut pool = make();
     for _ in 0..3 {
         assert!(matches!(
@@ -339,13 +339,9 @@ fn test_async_recv_reset_all_and_snapshot_make_progress_on_unclaimed_ids() {
             Err(crate::EngineError::BatchUnreachable { .. })
         ));
     }
-    let ok = (0..tries).any(|_| match pool.snapshot(5) {
-        Ok(_) => true,
-        Err(crate::EngineError::NotQuiescent) => {
-            std::thread::yield_now();
-            false
-        }
-        Err(e) => panic!("unexpected {e:?}"),
+    let ok = (0..tries).any(|_| {
+        std::thread::yield_now();
+        pool.running_ids() == 0
     });
     assert!(ok, "recv stepped the unclaimed ids");
     // `reset_all` alone makes progress.
@@ -362,17 +358,15 @@ fn test_async_recv_reset_all_and_snapshot_make_progress_on_unclaimed_ids() {
         Err(e) => panic!("unexpected {e:?}"),
     });
     assert!(ok, "reset_all stepped the unclaimed ids");
-    // `snapshot` alone makes progress.
+    // A snapshot of an idle id succeeds at once, and steps nothing; an
+    // unclaimed id is refused.
     let mut pool = make();
-    let ok = (0..tries).any(|_| match pool.snapshot(5) {
-        Ok(_) => true,
-        Err(crate::EngineError::NotQuiescent) => {
-            std::thread::yield_now();
-            false
-        }
-        Err(e) => panic!("unexpected {e:?}"),
-    });
-    assert!(ok, "snapshot stepped the unclaimed ids");
+    pool.snapshot(5).unwrap();
+    assert_eq!(pool.running_ids(), 3);
+    assert_eq!(
+        pool.snapshot(1).map(|_| ()),
+        Err(crate::EngineError::InFlight { id: 1 })
+    );
 }
 
 /// A worker sleeps right after its id counts as stepped: with the entry made
@@ -529,6 +523,40 @@ fn test_async_id_stepped_but_unpublished_is_neither_delivered_nor_overwritten() 
     drop(open);
 }
 
+/// An id completed and pushed to the completion ring but not yet received
+/// is still `InFlight` for `snapshot` (issue #85), while an idle id is
+/// snapshotted unchanged; once received, the id is snapshotted too.
+#[test]
+fn test_async_snapshot_completed_but_unreceived_id_is_in_flight() {
+    let _lock = GATES
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let (mut pool, open) = gated(GATE_AFTER_PUSH);
+    drop(pool.reset_all(Reseed::Keep).unwrap());
+    let idle = pool.snapshot(0).unwrap().to_bytes();
+    pool.send(
+        &[1],
+        ActionInput {
+            discrete: &[1],
+            continuous: &[],
+        },
+    )
+    .unwrap();
+    wait_for_gate();
+    assert_eq!(pool.running_ids(), 0);
+    assert_eq!(
+        pool.snapshot(1).map(|_| ()),
+        Err(crate::EngineError::InFlight { id: 1 })
+    );
+    assert_eq!(pool.snapshot(0).unwrap().to_bytes(), idle);
+    GATE_OPEN.store(true, Ordering::Release);
+    let token = pool.recv().unwrap();
+    assert!(token.contains(1));
+    pool.snapshot(1).unwrap();
+    drop(token);
+    drop(open);
+}
+
 /// A step that waits for [`BOOM`], then panics with action 2.
 struct Boomer;
 
@@ -611,8 +639,9 @@ fn test_async_snapshot_refuses_a_panic_between_its_two_checks() {
     drop(pool.reset_all(Reseed::Keep).unwrap());
 }
 
-/// With id 1 paused inside its step, a token of id 0 stays readable and its
-/// generation unmoved; the release panics, and recovery clears the poison.
+/// With id 1 paused inside its step, a token of id 0 stays readable, its
+/// generation unmoved and its snapshot unchanged; the release panics, and
+/// recovery clears the poison.
 #[test]
 fn test_async_idle_token_readable_while_a_step_is_paused_then_panics() {
     let _serial = BOOM_SERIAL.lock().unwrap();
@@ -629,11 +658,15 @@ fn test_async_idle_token_readable_while_a_step_is_paused_then_panics() {
     pool.send(&[0], act(&[1])).unwrap();
     let held = pool.recv().unwrap();
     let (rewards, generation) = (held.rewards(0).unwrap().to_vec(), held.generation(0));
+    let quiescent = pool.snapshot(0).unwrap().to_bytes();
     pool.send(&[1], act(&[2])).unwrap();
-    assert!(matches!(
-        pool.snapshot(0),
-        Err(crate::EngineError::NotQuiescent)
-    ));
+    // Id 0 is idle (covered by `held`) while id 1 runs: its snapshot is
+    // taken through its own row, byte-identical to the quiescent one.
+    assert_eq!(pool.snapshot(0).unwrap().to_bytes(), quiescent);
+    assert_eq!(
+        pool.snapshot(1).map(|_| ()),
+        Err(crate::EngineError::InFlight { id: 1 })
+    );
     assert_eq!(held.rewards(0).unwrap(), rewards.as_slice());
     assert_eq!(held.generation(0), generation);
     BOOM.store(true, Ordering::Release);

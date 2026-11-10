@@ -723,25 +723,28 @@ fn test_async_debug_checks_out_of_range_value_reports_what_sync_reports() {
     assert_eq!(err, sync_err);
 }
 
-/// A snapshot while other ids run would read through the whole pool's
-/// buffers while workers write some rows: it is refused (Miri checks the
-/// accepted case has no race).
+/// A snapshot of an idle id while other ids run reads that row alone
+/// (issue #85): it is accepted and byte-identical to the snapshot of the
+/// same row at quiescence (Miri checks it has no race); a sent id is
+/// `InFlight` until received.
 #[test]
-fn test_async_snapshot_while_other_ids_run_is_refused_or_race_free() {
+fn test_async_snapshot_idle_id_while_other_ids_run_matches_quiescent() {
     let mut p = asy(AutoReset::NextStep, 2);
     drop(p.reset_all(Reseed::Keep).unwrap());
+    let quiescent = p.snapshot(0).unwrap().to_bytes();
     let ids: Vec<u32> = (1..41).collect();
     send(&mut p, &ids, &rows_for(&ids, &[0; 100]));
-    match p.snapshot(0) {
-        Ok(_) | Err(EngineError::NotQuiescent) => {}
-        Err(e) => panic!("unexpected {e:?}"),
-    }
-    // Once every sent id has finished, the snapshot is accepted.
+    assert_eq!(p.snapshot(0).unwrap().to_bytes(), quiescent);
+    assert_eq!(
+        p.snapshot(40).map(|_| ()),
+        Err(EngineError::InFlight { id: 40 })
+    );
     let mut got = 0;
     while got < ids.len() {
         got += p.recv().unwrap().len();
     }
-    p.snapshot(0).unwrap();
+    assert_eq!(p.snapshot(0).unwrap().to_bytes(), quiescent);
+    p.snapshot(40).unwrap();
 }
 
 /// An id discarded by `reset_all` (completed, not yet received) can be sent
@@ -876,8 +879,8 @@ mod review_gate {
 }
 
 /// A snapshot of an idle id while a worker is inside another id's step is
-/// refused (it would read every row through the pool's buffers); Miri runs
-/// this case.
+/// accepted and equals the quiescent one (issue #85); the running id is
+/// `InFlight`. Miri runs this case.
 #[test]
 fn test_review_snapshot_idle_id_while_other_id_runs() {
     use review_gate::{Gated, RELEASE, STARTED};
@@ -896,15 +899,18 @@ fn test_review_snapshot_idle_id_while_other_id_runs() {
         ))
         .unwrap();
     drop(p.reset_all(Reseed::Keep).unwrap());
+    let quiescent = p.snapshot(1).unwrap().to_bytes();
     p.send(&[0], input(&[0, 0])).unwrap();
     while !STARTED.load(Ordering::SeqCst) {
         std::thread::yield_now();
     }
-    let result = p.snapshot(1);
+    let result = p.snapshot(1).map(|r| r.to_bytes());
+    let running = p.snapshot(0).map(|_| ());
     RELEASE.store(true, Ordering::SeqCst);
-    assert_eq!(result.map(|_| ()), Err(EngineError::NotQuiescent));
+    assert_eq!(result, Ok(quiescent.clone()));
+    assert_eq!(running, Err(EngineError::InFlight { id: 0 }));
     drop(p.recv().unwrap());
-    p.snapshot(1).unwrap();
+    assert_eq!(p.snapshot(1).unwrap().to_bytes(), quiescent);
 }
 
 // Codex's #84 r2 probe (attachment 1013), as a regression test: a

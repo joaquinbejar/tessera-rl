@@ -25,10 +25,10 @@
 //!
 //! # Snapshots
 //!
-//! `snapshot` needs whole-pool quiescence today; per-row snapshot through
-//! raw parts is tracked in issue #85. This is a recorded deviation from
-//! design D11, which asks only that the snapshotted rows be quiescent. The
-//! snapshotted id itself must also not be in flight (`InFlight`).
+//! `snapshot(id)` needs only row `id` to be idle (design D11, issue #85):
+//! it refuses an id sent or reset and not yet received (`InFlight`), and
+//! reads the row through its own raw parts while other ids run.
+//! `snapshot_all` still needs every id received (`NotQuiescent`).
 //!
 //! # Performance
 //!
@@ -622,32 +622,26 @@ where
         self.deliver(ids)
     }
 
-    /// The record of instance `id`. The id itself must not be in flight
-    /// (`InFlight`), and no sent id may still be running anywhere: the
-    /// snapshot needs whole-pool quiescence today (see the module docs).
+    /// The record of instance `id`. Only that row must be idle: other ids
+    /// may be in flight meanwhile (ADR-0047 section 3, issue #85). The
+    /// record is read through the raw parts of row `id` alone, never
+    /// through slices over the pool, and is byte-identical to the one the
+    /// same row gives at quiescence. A live token covering `id` does not
+    /// block it.
     ///
     /// # Errors
     ///
     /// [`EngineError::WorkerDied`] after a worker died,
-    /// [`EngineError::Poisoned`], [`EngineError::InFlight`] for a sent id
-    /// not yet received, [`EngineError::NotQuiescent`] while any sent id
-    /// still runs (the call makes progress on them first, so a retry
-    /// succeeds), or any error of [`EnvPool::snapshot`].
+    /// [`EngineError::Poisoned`] (also if a step panicked during the call),
+    /// [`EngineError::InFlight`] for an id sent (or reset) and not yet
+    /// received, whatever its stage (in the ring, being stepped, completed),
+    /// or [`EngineError::InstanceOutOfRange`] for an unknown id.
     pub fn snapshot(&mut self, id: u32) -> Result<Record<E>, EngineError> {
         if self.dead() {
             return Err(EngineError::WorkerDied);
         }
         if self.is_poisoned() {
             return Err(EngineError::Poisoned);
-        }
-        let i = usize::try_from(id).unwrap_or(usize::MAX);
-        if self
-            .mode
-            .in_flight
-            .get(i)
-            .is_some_and(|f| f.load(core::sync::atomic::Ordering::Acquire))
-        {
-            return Err(EngineError::InFlight { id });
         }
         #[cfg(test)]
         if let Some(hook) = SNAPSHOT_HOOK.take() {
@@ -656,19 +650,20 @@ where
                 std::thread::yield_now();
             }
         }
-        // `EnvPool::snapshot` reads through slices over every instance, so
-        // no worker may be writing any row meanwhile.
-        if self.running() != 0 {
-            self.pump(false)?;
-            return Err(EngineError::NotQuiescent);
-        }
-        // Again: a step that panicked after the check above has finished now
-        // (its panic flag is ordered before `stepped`), leaving a row partly
-        // written.
+        let record = self.mode.idle_record(id)?;
+        // A step of another id that panicked during the read poisons the
+        // pool (ADR-0028): refuse rather than hand out a record from a
+        // poisoned pool, as `EnvPool::snapshot` does.
         if self.is_poisoned() {
             return Err(EngineError::Poisoned);
         }
-        self.mode.pool.snapshot(id)
+        Ok(record)
+    }
+
+    /// Test-only: ids admitted and not yet stepped.
+    #[cfg(test)]
+    pub(crate) fn running_ids(&self) -> usize {
+        self.running()
     }
 
     /// Captures every record into `out`; no sent id may still be running
