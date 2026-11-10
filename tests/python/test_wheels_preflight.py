@@ -11,6 +11,9 @@ from pathlib import Path
 
 import pytest
 
+# The preflight is a bash step of a Linux workflow and its fakes are sh scripts.
+pytestmark = pytest.mark.skipif(os.name == "nt", reason="POSIX only: a bash workflow step with sh fakes")
+
 WORKFLOW = Path(__file__).resolve().parents[2] / ".github" / "workflows" / "wheels.yml"
 ZOMBIE = 42064531284
 ME = 7

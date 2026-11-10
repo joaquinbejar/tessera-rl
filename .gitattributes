@@ -7,4 +7,5 @@
 # Files pinned by SHA-256 (ADR-0042 openings) or compared byte for byte
 # (gungraun baselines): LF everywhere.
 compat/connect4/*.txt text eol=lf
+tools/connect4-ref/src/*.rs text eol=lf
 benches/gungraun/**/*.base@* text eol=lf

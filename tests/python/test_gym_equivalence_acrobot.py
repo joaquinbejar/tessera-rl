@@ -50,6 +50,23 @@ def test_acrobot_equivalence_gate_detects_a_wrong_transition(sampled):
     assert report["state"] > 0
 
 
+def test_acrobot_equivalence_obs_mismatch_names_index_component_and_values(sampled):
+    states, actions, ref = sampled
+    k = 8
+    ours = eq.one_step(states[:k], actions[:k], "next_step")
+    n, o, r, t, tr = ours[3]
+    o = np.array(o, copy=True)
+    o[2] = np.nextafter(np.float32(o[2]), np.float32(np.inf)) + np.float32(1e-3)
+    ours[3] = (n, o, r, t, tr)
+    report = eq.compare(ours, ref[:k])
+    assert report["obs"] == 1
+    (example,) = report["obs_examples"]
+    assert example["index"] == 3 and len(example["state"]) == 4
+    (component,) = example["components"]
+    assert component["component"] == 2 and component["ulps32"] > 0 and component["relative"] is not None
+    assert float.fromhex(component["ours"]) == float(np.float32(o[2]))
+
+
 def test_acrobot_equivalence_boundary_set_covers_every_class(sampled):
     states, _, ref = sampled
     cover = eq.boundary_coverage(states, ref, N)
