@@ -157,14 +157,14 @@ enum Order {
     Produce(Kind),
 }
 
-const fn index_of(team: Team) -> usize {
+pub(crate) const fn index_of(team: Team) -> usize {
     match team {
         Team::Zero => 0,
         Team::One => 1,
     }
 }
 
-const fn side_of_slot(slot: usize) -> Team {
+pub(crate) const fn side_of_slot(slot: usize) -> Team {
     if slot < SIDE_SLOTS {
         Team::Zero
     } else {
@@ -181,7 +181,7 @@ pub fn side_of_agent(cfg: &RtsConfig, agent: usize) -> Team {
 
 /// The grid of `cfg`. `size` is validated to `MIN_SIZE..=MAX_SIZE` at
 /// construction, so the fallback is never taken.
-fn grid(cfg: &RtsConfig) -> Grid {
+pub(crate) fn grid(cfg: &RtsConfig) -> Grid {
     Grid::new(cfg.size).unwrap_or(MIN_GRID)
 }
 
@@ -199,12 +199,12 @@ const fn unreachable_grid() -> Grid {
 }
 
 /// The state slots of `team` in use under `cfg`.
-fn slots(cfg: &RtsConfig, team: Team) -> core::ops::Range<usize> {
+pub(crate) fn slots(cfg: &RtsConfig, team: Team) -> core::ops::Range<usize> {
     let base = index_of(team) * SIDE_SLOTS;
     base..base + usize::from(cfg.max_units)
 }
 
-fn unit_kind(u: &Unit) -> Option<Kind> {
+pub(crate) fn unit_kind(u: &Unit) -> Option<Kind> {
     if u.alive.get() {
         Kind::from_byte(u.kind)
     } else {
@@ -213,7 +213,7 @@ fn unit_kind(u: &Unit) -> Option<Kind> {
 }
 
 /// The cell of a target window index from `from`, in `team`'s frame.
-fn window_cell(g: Grid, team: Team, from: u16, index: u16) -> Option<u16> {
+pub(crate) fn window_cell(g: Grid, team: Team, from: u16, index: u16) -> Option<u16> {
     let half = i32::from(WINDOW / 2);
     let (fx, fy) = (
         i32::from(index % WINDOW) - half,
@@ -246,7 +246,7 @@ pub fn move_index(team: Team, dir: Dir) -> u16 {
 }
 
 /// Which unit stands on each cell, [`NONE`] if none.
-fn occupancy(s: &RtsState) -> [u16; MAX_CELLS] {
+pub(crate) fn occupancy(s: &RtsState) -> [u16; MAX_CELLS] {
     let mut occ = [NONE; MAX_CELLS];
     for (i, u) in s.units.iter().enumerate() {
         if u.alive.get()
@@ -258,13 +258,13 @@ fn occupancy(s: &RtsState) -> [u16; MAX_CELLS] {
     occ
 }
 
-fn terrain_at(s: &RtsState, cell: u16) -> Option<Terrain> {
+pub(crate) fn terrain_at(s: &RtsState, cell: u16) -> Option<Terrain> {
     s.terrain
         .get(usize::from(cell))
         .and_then(|&b| Terrain::from_byte(b))
 }
 
-fn unit_at(s: &RtsState, occ: &[u16; MAX_CELLS], cell: u16) -> Option<(usize, Unit)> {
+pub(crate) fn unit_at(s: &RtsState, occ: &[u16; MAX_CELLS], cell: u16) -> Option<(usize, Unit)> {
     let i = usize::from(*occ.get(usize::from(cell))?);
     s.units.get(i).map(|u| (i, *u))
 }
@@ -288,7 +288,7 @@ fn product_index(kind: Kind) -> Option<usize> {
 
 /// The legality of one unit's three rows, as one block of
 /// [`MASK_PER_UNIT`] bytes: `[type 6][target 6 x 81][product 6 x 4]`.
-fn unit_mask(
+pub(crate) fn unit_mask(
     cfg: &RtsConfig,
     s: &RtsState,
     occ: &[u16; MAX_CELLS],

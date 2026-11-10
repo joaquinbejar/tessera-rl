@@ -6,13 +6,14 @@
 //! This crate is built in stages (`docs/reviews/rts-design.md`, section 10).
 //! Stage 2: the grid ([`world`]), the seeded map generator ([`mapgen`]),
 //! the unit table ([`units`]), the move resolution of a tick ([`resolve`]),
-//! the flow fields the scripted bots walk ([`flow`]) and the environment
-//! itself ([`env`](mod@env)). Fog, the observation planes and the bots
-//! follow in later stages.
+//! the flow fields ([`flow`]), the environment itself ([`env`](mod@env))
+//! and the scripted bots ([`bots`]). Fog and the observation planes follow
+//! in stage 3.
 //!
 //! Everything here is integer arithmetic: no float enters a transition
 //! (ADR-0008), which `clippy::float_arithmetic` enforces per module.
 
+pub mod bots;
 pub mod env;
 pub mod flow;
 pub mod mapgen;
