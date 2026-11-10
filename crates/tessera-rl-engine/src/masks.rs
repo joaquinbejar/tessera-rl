@@ -20,6 +20,16 @@ pub trait MaskProvider<E: Environment>: 'static {
 
     /// Writes the no-op action of `agent`.
     fn noop(cfg: &E::Config, state: &E::State, agent: AgentSlot, out: &mut ActionWriter<'_>);
+
+    /// Parents of discrete head `head`.
+    fn head_parents(_cfg: &E::Config, _head: usize) -> [Option<u16>; 2] {
+        [None, None]
+    }
+
+    /// Discrete heads per entity group, if declared (ADR-0051).
+    fn entity_group_heads(_cfg: &E::Config) -> Option<core::num::NonZeroU16> {
+        None
+    }
 }
 
 /// No masks: every valid action is legal.
@@ -51,6 +61,14 @@ impl<E: ActionMask> MaskProvider<E> for Masked {
     #[inline]
     fn noop(cfg: &E::Config, state: &E::State, agent: AgentSlot, out: &mut ActionWriter<'_>) {
         E::noop(cfg, state, agent, out);
+    }
+
+    fn head_parents(cfg: &E::Config, head: usize) -> [Option<u16>; 2] {
+        E::head_parents(cfg, head)
+    }
+
+    fn entity_group_heads(cfg: &E::Config) -> Option<core::num::NonZeroU16> {
+        E::entity_group_heads(cfg)
     }
 }
 

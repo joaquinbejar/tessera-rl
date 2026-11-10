@@ -320,7 +320,13 @@ where
     where
         E: Validate,
     {
-        check_record::<E>(&self.cfg, &self.options, index, record)
+        check_record::<E>(
+            &self.cfg,
+            &self.options,
+            self.action_layout().mask.count(),
+            index,
+            record,
+        )
     }
 
     /// Restores untrusted records (decoded from bytes) into `ids`, in
@@ -387,6 +393,7 @@ where
 pub(crate) fn check_record<E: Environment + Validate>(
     cfg: &E::Config,
     options: &crate::options::PoolOptions,
+    group_count: u32,
     index: usize,
     record: &DecodedRecord<E>,
 ) -> Result<(), EngineError> {
@@ -428,7 +435,8 @@ pub(crate) fn check_record<E: Environment + Validate>(
         if row.acting.get() && !row.alive.get() {
             return invalid("an acting agent that is not alive");
         }
-        if row.illegal_actions > engine.episode_steps {
+        // ADR-0051: one count per entity group each step.
+        if row.illegal_actions > engine.episode_steps.saturating_mul(group_count) {
             return invalid("more illegal actions than steps");
         }
         if u32::from(row.invalid_agent_events) > engine.episode_steps {

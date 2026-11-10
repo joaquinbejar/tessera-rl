@@ -43,7 +43,7 @@ pub use buffer::batch::{BatchRow, BatchToken, BatchWaiter};
 pub use buffer::pipeline::{HalfToken, Waiter};
 pub use buffer::{OutputDtype, OutputField, OutputRegion, OutputStorage};
 pub use error::EngineError;
-pub use layout::MAX_LEAVES;
+pub use layout::{MAX_GROUPED_HEADS, MAX_LEAVES, MaskHeadShape};
 pub use masks::{IllegalActionPolicy, MaskProvider, Masked, NoMasks, PersistMask};
 #[cfg(not(loom))]
 pub use modes::async_mode::{

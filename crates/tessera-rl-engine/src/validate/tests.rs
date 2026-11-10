@@ -34,6 +34,7 @@ fn layout() -> ActionLayout {
     ActionLayout {
         discrete: vec![3],
         continuous: Vec::new(),
+        ..ActionLayout::default()
     }
 }
 
@@ -419,6 +420,7 @@ fn layout_c() -> ActionLayout {
     ActionLayout {
         discrete: vec![3],
         continuous: vec![(-1.0, 1.0)],
+        ..ActionLayout::default()
     }
 }
 

@@ -273,8 +273,16 @@ pub enum EngineError {
         agent: u16,
         /// Head.
         head: u32,
+        /// Entity group of the head (ADR-0051); 0 when none are declared.
+        group: u32,
         /// The value.
         value: i32,
+    },
+    /// The action heads' mask declaration is invalid (ADR-0051, SPEC 11.3).
+    #[error("invalid mask layout: {what}")]
+    InvalidMaskLayout {
+        /// The rule broken.
+        what: &'static str,
     },
     /// The mask buffer would exceed the pool's mask budget (SPEC 11.3).
     #[error("mask buffer needs {bytes} bytes, over the budget of {budget}")]
