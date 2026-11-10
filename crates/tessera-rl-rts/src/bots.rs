@@ -309,7 +309,10 @@ fn economy(w: &Walker<'_>, carry: u8, cell: u16, f: &Fields, block: &Block) -> O
             .or_else(|| w.walk(cell, &f.own_core, block))
             .unwrap_or(NOOP);
     }
-    // With no ore explored yet, look for some.
+    // With no ore explored yet, look for some: walk the frontier of
+    // unexplored cells (ruling 5). With nothing unexplored and no ore
+    // known the Drone idles; every ore node being reachable (mapgen), that
+    // does not happen on generated maps.
     adjacent(w.g, w.team, cell, order_type::HARVEST, 0, block)
         .or_else(|| w.walk(cell, &f.ore, block))
         .or_else(|| w.walk(cell, &f.frontier, block))

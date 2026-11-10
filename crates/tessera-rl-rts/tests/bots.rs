@@ -575,3 +575,60 @@ fn test_a_drone_that_knows_no_ore_walks_to_the_nearest_unexplored_cell() {
         (order_type::MOVE, west, 0)
     );
 }
+
+#[test]
+fn test_a_scouting_drone_acts_as_a_mirror_image_on_either_side() {
+    // The frontier tie-break goes through the side's frame: a Drone that
+    // knows no ore, with a symmetric unexplored region, picks the mirrored
+    // move on the other side.
+    let c = cfg(16, 4);
+    let g = Grid::new(16).unwrap();
+    let at = |x, y| g.index(x, y).unwrap();
+    let mut s = RtsState::default();
+    s.units[0] = unit(Kind::Core, at(0, 0));
+    s.units[1] = unit(Kind::Drone, at(3, 3));
+    s.units[SIDE_SLOTS] = unit(Kind::Core, at(15, 15));
+    // Explored: the square x, y <= 6, so (3, 3) is equidistant from the
+    // unexplored band east and south: a tie the frame order breaks.
+    for y in 0..=6 {
+        for x in 0..=6 {
+            s.explored[usize::from(at(x, y))] = 1;
+        }
+    }
+    let m = mirrored(&c, &s);
+    let a = row(&c, &s, 0, Bot::Rush, &mut rng(0));
+    assert_eq!(a[HEADS_PER_UNIT], order_type::MOVE);
+    assert_eq!(a, row(&c, &m, 1, Bot::Rush, &mut rng(0)));
+}
+
+#[test]
+fn test_every_side_finds_ore_on_generated_maps() {
+    // Every ore node is reachable (the generator's guarantee), so a side
+    // whose Drones scout explores an ore cell within a bounded number of
+    // decisions; with nothing unexplored and no ore known a Drone would
+    // idle, which this pins as unreachable in practice.
+    const BOUND: u32 = 60;
+    for size in [12u16, 16, 24, 32] {
+        for seed in 0..10 {
+            let c = cfg(size, 8);
+            let mut p = pool(&c, seed);
+            let mut r = [rng(1), rng(2)];
+            let mut found = [false; 2];
+            for _ in 0..BOUND {
+                let s = *p.state(0).unwrap();
+                for (k, bit) in [1u8, 2].into_iter().enumerate() {
+                    found[k] |= (0..usize::from(size) * usize::from(size)).any(|cell| {
+                        s.explored[cell] & bit != 0 && s.terrain[cell] == Terrain::Ore as u8
+                    });
+                }
+                let a = [
+                    row(&c, &s, 0, Bot::Rush, &mut r[0]),
+                    row(&c, &s, 1, Bot::Prospector, &mut r[1]),
+                ]
+                .concat();
+                p.step(input(&a)).unwrap();
+            }
+            assert_eq!(found, [true; 2], "size {size} seed {seed}");
+        }
+    }
+}
