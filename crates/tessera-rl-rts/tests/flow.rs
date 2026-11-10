@@ -237,3 +237,18 @@ fn test_flow_field_reads_past_the_last_grid_are_unreachable() {
     assert_eq!(field.distance(64), UNREACHABLE);
     assert_eq!(field.distance(1023), UNREACHABLE);
 }
+
+#[test]
+fn test_flow_field_a_mover_on_a_cell_left_out_of_passable_stays() {
+    // The documented contract: `passable` must include the movers' cells.
+    let g = Grid::new(8).unwrap();
+    let all_open = [Terrain::Open as u8; MAX_CELLS];
+    let unit = g.index(3, 3).unwrap();
+    let goal = g.index(6, 3).unwrap();
+    let mut field = Field::default();
+    field.build(g, [goal], |c| c != unit && open(&all_open)(c));
+    assert_eq!(field.distance(unit), UNREACHABLE);
+    assert_eq!(field.descend(g, unit, Team::Zero), None);
+    field.build(g, [goal], open(&all_open));
+    assert_eq!(field.descend(g, unit, Team::Zero), Some(Dir::East));
+}

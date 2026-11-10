@@ -110,6 +110,10 @@ impl Field {
     /// neighbour of lowest distance strictly below its own, ties broken by
     /// the team's fixed order. `None` when the cell is unreachable or no
     /// neighbour is closer, so a unit never moves toward an unreachable goal.
+    ///
+    /// The unit's own distance is read, so the `passable` of the last build
+    /// must hold for every cell a mover stands on (an occupied cell counted
+    /// as an obstacle would read as unreachable and the unit would stay).
     #[must_use]
     pub fn descend(&self, grid: Grid, cell: u16, team: Team) -> Option<Dir> {
         let here = self.distance(cell);
