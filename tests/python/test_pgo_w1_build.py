@@ -82,3 +82,39 @@ def test_pgo_w1_build_writes_only_under_the_run_dir(tmp_path, name):
     p, out, _ = run(tmp_path)
     assert p.returncode == 0 and (out / name).exists()
     assert {x.name for x in tmp_path.iterdir()} == {"fake", "payload", "log", "run"}
+
+
+def test_pgo_w1_build_pins_the_same_tools_as_the_w0_job():
+    import re
+
+    def pins(path):
+        return dict(re.findall(r"^(RUSTUP_VERSION|UV_VERSION|MATURIN_VERSION)=(\S+)$", path.read_text(), re.M))
+
+    w0 = pins(SCRIPT.parent / "wheel_job.sh")
+    assert set(w0) == {"RUSTUP_VERSION", "UV_VERSION", "MATURIN_VERSION"} and pins(SCRIPT) == w0
+    assert "numpy==2.4.6" in (SCRIPT.parent / "wheel_job.sh").read_text() and "NUMPY_VERSION=2.4.6" in SCRIPT.read_text()
+
+
+def test_pgo_w1_build_no_wheel_fails_with_the_count_message(tmp_path):
+    bin_dir, log, rsha, usha = setup(tmp_path)
+    uvx = tmp_path / "payload" / "uv.tar.gz"
+    import tarfile as t
+    import io as i
+
+    buf = i.BytesIO()
+    with t.open(fileobj=buf, mode="w:gz") as tar:
+        for name, body in {"uvx": "exit 0\n", "uv": "exit 0\n"}.items():
+            data = ("#!/bin/sh\n" + body).encode()
+            info = t.TarInfo(f"uv-x86_64-unknown-linux-gnu/{name}")
+            info.size, info.mode = len(data), 0o755
+            tar.addfile(info, i.BytesIO(data))
+    uvx.write_bytes(buf.getvalue())
+    usha = hashlib.sha256(uvx.read_bytes()).hexdigest()
+    env = {**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}"}
+    p = subprocess.run(["bash", str(SCRIPT), rsha, usha, str(tmp_path / "run")], env=env, capture_output=True, text=True, check=False)
+    assert p.returncode != 0 and "expected one wheel, found 0" in p.stderr
+
+
+def test_pgo_w1_build_sets_a_writable_home(tmp_path):
+    p, out, _ = run(tmp_path)
+    assert p.returncode == 0 and (out / "w1" / "home").is_dir()

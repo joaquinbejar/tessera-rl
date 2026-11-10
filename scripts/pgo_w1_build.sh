@@ -25,7 +25,9 @@ NUMPY_VERSION=2.4.6
 w1="$run/w1"
 export RUSTUP_HOME="$w1/rustup" CARGO_HOME="$w1/cargo" CARGO_TARGET_DIR="$w1/target"
 export UV_CACHE_DIR="$w1/uv-cache" UV_PYTHON_INSTALL_DIR="$w1/python"
-mkdir -p "$w1/bin" "$CARGO_HOME/bin" "$run/dist"
+# A bare `docker run --user` leaves HOME at /, which is not writable.
+export HOME="$w1/home"
+mkdir -p "$HOME" "$w1/bin" "$CARGO_HOME/bin" "$run/dist"
 export PATH="$w1/bin:$CARGO_HOME/bin:$PATH"
 
 sha256() {
@@ -52,7 +54,9 @@ tar -xzf "$w1/uv.tar.gz" -C "$w1/bin" --strip-components=1
 uvx --python 3.11 "maturin==$MATURIN_VERSION" build --locked --profile wheel \
     --target "$target" --compatibility manylinux_2_28 --out "$run/dist"
 
+shopt -s nullglob
 wheels=("$run"/dist/*.whl)
+shopt -u nullglob
 [ "${#wheels[@]}" -eq 1 ] || { echo "pgo_w1_build: expected one wheel, found ${#wheels[@]}" >&2; exit 1; }
 sha256 "${wheels[0]}" > "$run/dist/w1.sha256"
 
