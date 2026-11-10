@@ -11,6 +11,10 @@ from pathlib import Path
 
 import pytest
 
+# scripts/pgo_w1_build.sh is a bash step of a Linux container run, and its
+# fakes are sh scripts; neither runs on Windows.
+pytestmark = pytest.mark.skipif(os.name == "nt", reason="POSIX only: a bash build script with sh fakes")
+
 SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "pgo_w1_build.sh"
 
 
