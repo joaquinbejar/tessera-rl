@@ -93,7 +93,8 @@ pub struct RtsConfig {
     #[config(default = 4, range = 1..=16)]
     pub decision_ticks: u16,
     /// Unit slots per side.
-    #[config(default = 64, range = 1..=128)]
+    /// At least the Core, the starting Drones and one free slot.
+    #[config(default = 64, range = 3..=128)]
     pub max_units: u16,
     /// Decisions before a draw by truncation.
     #[config(default = 2000, range = 1..=100_000)]
@@ -115,7 +116,7 @@ pub struct RtsState {
     pub ore: [u32; 2],
     /// Decisions played.
     pub decisions: u32,
-    /// Ticks played.
+    /// Ticks played, modulo 2^32 (an explicit, documented wrap).
     pub ticks: u32,
 }
 
@@ -214,13 +215,16 @@ fn unit_kind(u: &Unit) -> Option<Kind> {
 /// The cell of a target window index from `from`, in `team`'s frame.
 fn window_cell(g: Grid, team: Team, from: u16, index: u16) -> Option<u16> {
     let half = i32::from(WINDOW / 2);
-    let (mut dx, mut dy) = (
+    let (fx, fy) = (
         i32::from(index % WINDOW) - half,
         i32::from(index / WINDOW) - half,
     );
-    if team == Team::One {
-        (dx, dy) = (-dx, -dy);
-    }
+    // The side's frame (rule 9): `in_frame` is the identity or a half turn.
+    let (dx, dy) = if Dir::North.in_frame(team) == Dir::North {
+        (fx, fy)
+    } else {
+        (-fx, -fy)
+    };
     let (x, y) = g.coords(from);
     let nx = u16::try_from(i32::from(x) + dx).ok()?;
     let ny = u16::try_from(i32::from(y) + dy).ok()?;
@@ -232,11 +236,8 @@ fn window_cell(g: Grid, team: Team, from: u16, index: u16) -> Option<u16> {
 #[must_use]
 pub fn move_index(team: Team, dir: Dir) -> u16 {
     let half = WINDOW / 2;
-    let d = match team {
-        Team::Zero => dir,
-        Team::One => dir.mirrored(),
-    };
-    match d {
+    // A map direction in the side's frame: the half turn is its own inverse.
+    match dir.in_frame(team) {
         Dir::North => (half - 1) * WINDOW + half,
         Dir::South => (half + 1) * WINDOW + half,
         Dir::West => half * WINDOW + half - 1,
@@ -749,7 +750,8 @@ fn build_and_produce(
         let Some(p) = Kind::from_byte(u.producing) else {
             continue;
         };
-        if !u.alive.get() {
+        // A unit at 0 hit points does nothing more in this tick.
+        if !u.alive.get() || u.hp == 0 {
             continue;
         }
         let ticks = u16::from(p.stats().build_ticks);
@@ -901,16 +903,21 @@ impl Environment for Rts {
             ..RtsState::default()
         };
         for (team, &core) in [Team::Zero, Team::One].iter().zip(map.cores.iter()) {
-            let _ = spawn(cfg, s, *team, Kind::Core, core, true);
+            let placed = spawn(cfg, s, *team, Kind::Core, core, true);
+            debug_assert!(
+                placed.is_some(),
+                "max_units >= 3 leaves a slot for the Core"
+            );
             for _ in 0..START_DRONES {
                 let occ = occupancy(s);
                 let cell = g.neighbours(core, *team).into_iter().flatten().find(|&n| {
                     terrain_at(s, n) == Some(Terrain::Open)
                         && occ.get(usize::from(n)) == Some(&NONE)
                 });
-                if let Some(cell) = cell {
-                    let _ = spawn(cfg, s, *team, Kind::Drone, cell, true);
-                }
+                // The clear zone keeps a neighbour of the Core open, and
+                // max_units >= 3 keeps a slot: both always succeed.
+                let placed = cell.and_then(|c| spawn(cfg, s, *team, Kind::Drone, c, true));
+                debug_assert!(placed.is_some(), "a starting Drone has a cell and a slot");
             }
         }
     }
@@ -1049,6 +1056,23 @@ impl Validate for Rts {
         }
         if s.decisions > cfg.step_limit {
             return violation("more decisions than the step limit");
+        }
+        for team in [Team::Zero, Team::One] {
+            let units = s.units.get(slots(cfg, team)).unwrap_or(&[]);
+            let empty = units.iter().filter(|u| !u.alive.get()).count();
+            let producing = units
+                .iter()
+                .filter(|u| u.alive.get() && u.producing != 0)
+                .count();
+            if producing > empty {
+                return violation("more productions than empty slots to place them");
+            }
+            let core = units
+                .iter()
+                .any(|u| u.alive.get() && u.kind == Kind::Core as u8 && u.finished.get());
+            if !core {
+                return violation("a side without a finished Core in a live episode");
+            }
         }
         let mut seen = [false; MAX_CELLS];
         for (i, unit) in s.units.iter().enumerate() {

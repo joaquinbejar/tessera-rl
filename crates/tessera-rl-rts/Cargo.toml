@@ -29,3 +29,8 @@ workspace = true
 [[bench]]
 name = "flow"
 harness = false
+
+# The step through the engine; local only, no claim.
+[[bench]]
+name = "step"
+harness = false

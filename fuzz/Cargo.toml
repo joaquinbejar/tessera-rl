@@ -21,6 +21,7 @@ tessera-rl-num = { path = "../crates/tessera-rl-num" }
 tessera-rl-engine = { path = "../crates/tessera-rl-engine", features = ["test-hooks"] }
 tessera-rl-classic = { path = "../crates/tessera-rl-classic" }
 tessera-rl-games = { path = "../crates/tessera-rl-games" }
+tessera-rl-rts = { path = "../crates/tessera-rl-rts" }
 tessera-rl-macros = { path = "../crates/tessera-rl-macros" }
 
 # Not part of the main workspace.
@@ -141,6 +142,13 @@ bench = false
 [[bin]]
 name = "persist_same_platform"
 path = "fuzz_targets/persist_same_platform.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "persist_rts"
+path = "fuzz_targets/persist_rts.rs"
 test = false
 doc = false
 bench = false
