@@ -64,7 +64,7 @@ fn test_mirror_window_maps_offset_to_its_negation() {
 
 #[test]
 fn test_counter_speed_4_and_6_step_on_the_right_ticks() {
-    for speed in [4u8, 6] {
+    for speed in [Kind::Drone.stats().speed, Kind::Lancer.stats().speed] {
         let (mut c, mut steps) = (0u8, Vec::new());
         for tick in 1..=24 {
             let (n, s) = advance_counter(c, speed);
@@ -79,7 +79,7 @@ fn test_counter_speed_4_and_6_step_on_the_right_ticks() {
     // A Lancer (speed 6) at 4 ticks per decision: 2 cells per 3 decisions.
     let (mut c, mut cells) = (0u8, 0);
     for _ in 0..3 * 4 {
-        let (n, s) = advance_counter(c, 6);
+        let (n, s) = advance_counter(c, Kind::Lancer.stats().speed);
         c = n;
         cells += u8::from(s);
     }
@@ -97,4 +97,32 @@ fn test_unit_is_16_bytes_and_zero_is_empty() {
     }
     assert_eq!(Kind::from_byte(0), None);
     assert_eq!(Kind::from_byte(6), None);
+}
+
+#[test]
+fn test_kind_table_pins_design_section_3() {
+    // (hp, cost, build ticks, speed, range, damage, sight)
+    let table = [
+        (Kind::Core, (12, 0, 0, 0, 0, 0, 4)),
+        (Kind::Foundry, (6, 5, 16, 0, 0, 0, 3)),
+        (Kind::Drone, (1, 1, 8, 4, 0, 0, 3)),
+        (Kind::Striker, (4, 2, 12, 4, 1, 2, 3)),
+        (Kind::Lancer, (2, 3, 16, 6, 3, 1, 4)),
+    ];
+    for (k, (hp, cost, build, speed, range, damage, sight)) in table {
+        let s = k.stats();
+        assert_eq!(
+            (
+                s.hp,
+                s.cost,
+                s.build_ticks,
+                s.speed,
+                s.range,
+                s.damage,
+                s.sight
+            ),
+            (hp, cost, build, speed, range, damage, sight),
+            "{k:?}"
+        );
+    }
 }

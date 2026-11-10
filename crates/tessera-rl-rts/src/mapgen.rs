@@ -4,8 +4,10 @@
 //!
 //! Each attempt places the two Cores at fixed mirrored cells, then wall
 //! pairs and ore pairs at drawn cells and their 180-degree images, keeping
-//! a clear zone around each Core. An attempt is accepted when a flood fill
-//! from Core 0 reaches Core 1 and a 4-neighbour of every ore node. After
+//! a clear zone around each Core. An attempt is accepted when it placed
+//! exactly [`ORE_PAIRS`] ore pairs and a flood fill from Core 0 reaches
+//! Core 1 and a 4-neighbour of every ore node, so every map has the same
+//! economy. After
 //! [`MAP_RETRIES`] rejected attempts the generator returns the fixed open
 //! fallback map, which passes the same checks.
 //!
@@ -20,7 +22,7 @@ use crate::world::{Dir, Grid, MAX_CELLS, Team, Terrain};
 
 /// Attempts before the fallback map.
 pub const MAP_RETRIES: u32 = 16;
-/// Ore nodes per team.
+/// Ore nodes per team, on every map, the fallback included.
 pub const ORE_PAIRS: u32 = 3;
 /// Draws spent on ore per attempt; unplaceable draws are skipped.
 pub const ORE_DRAWS: u32 = 8 * ORE_PAIRS;
@@ -54,8 +56,8 @@ pub const fn wall_draws(grid: Grid) -> u32 {
 pub fn generate(grid: Grid, mut draw: impl FnMut(NonZeroU32) -> u32) -> Map {
     let cores = core_cells(grid);
     for attempt in 1..=MAP_RETRIES {
-        let terrain = attempt_terrain(grid, cores, &mut draw);
-        if accepts(grid, &terrain, cores) {
+        let (terrain, placed) = attempt_terrain(grid, cores, &mut draw);
+        if placed == ORE_PAIRS && accepts(grid, &terrain, cores) {
             return Map {
                 terrain,
                 cores,
@@ -101,7 +103,7 @@ fn attempt_terrain(
     grid: Grid,
     cores: [u16; 2],
     draw: &mut impl FnMut(NonZeroU32) -> u32,
-) -> [u8; MAX_CELLS] {
+) -> ([u8; MAX_CELLS], u32) {
     let mut terrain = [Terrain::Open as u8; MAX_CELLS];
     let bound = NonZeroU32::new(u32::from(grid.cells())).unwrap_or(NonZeroU32::MIN);
     for _ in 0..wall_draws(grid) {
@@ -125,15 +127,16 @@ fn attempt_terrain(
             placed += 1;
         }
     }
-    terrain
+    (terrain, placed)
 }
 
-/// The fixed open map: no walls, ore at `(6, 1)` and `(7, 2)` and their
-/// mirrors: four distinct nodes outside the clear zones at every size.
+/// The fixed open map: no walls, [`ORE_PAIRS`] ore nodes per team at
+/// `(6, 1)`, `(7, 1)` and `(7, 2)` and their mirrors, distinct and outside
+/// the clear zones at every size.
 #[must_use]
 pub fn fallback_terrain(grid: Grid, cores: [u16; 2]) -> [u8; MAX_CELLS] {
     let mut terrain = [Terrain::Open as u8; MAX_CELLS];
-    for (x, y) in [(6, 1), (7, 2)] {
+    for (x, y) in [(6, 1), (7, 1), (7, 2)] {
         if let Some(cell) = grid.index(x, y)
             && !clear(grid, cores, cell)
         {
@@ -143,8 +146,9 @@ pub fn fallback_terrain(grid: Grid, cores: [u16; 2]) -> [u8; MAX_CELLS] {
     terrain
 }
 
-/// The acceptance check: from Core 0, over open cells, Core 1 and a
-/// 4-neighbour of every ore node are reached.
+/// The reachability half of the acceptance check: from Core 0, over open
+/// cells, Core 1 and a 4-neighbour of every ore node are reached. The ore
+/// count is checked by [`generate`].
 #[must_use]
 pub fn accepts(grid: Grid, terrain: &[u8; MAX_CELLS], cores: [u16; 2]) -> bool {
     let reached = flood(grid, terrain, cores[0]);

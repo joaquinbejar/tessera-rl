@@ -11,9 +11,10 @@
 use core::num::NonZeroU32;
 
 use tessera_rl_rts::mapgen::{
-    MAP_RETRIES, Map, ORE_DRAWS, accepts, core_cells, fallback_terrain, generate, wall_draws,
+    CLEAR_RADIUS, MAP_RETRIES, Map, ORE_DRAWS, ORE_PAIRS, accepts, core_cells, fallback_terrain,
+    generate, wall_draws,
 };
-use tessera_rl_rts::world::{Grid, Terrain};
+use tessera_rl_rts::world::{Grid, MAX_CELLS, Terrain};
 
 /// A seeded draw for tests (xorshift), below the bound.
 fn seeded(seed: u64) -> impl FnMut(NonZeroU32) -> u32 {
@@ -24,6 +25,19 @@ fn seeded(seed: u64) -> impl FnMut(NonZeroU32) -> u32 {
         s ^= s << 17;
         u32::try_from(s % u64::from(bound.get())).unwrap()
     }
+}
+
+fn ore_nodes(g: Grid, terrain: &[u8; MAX_CELLS]) -> u32 {
+    let n = (0..g.cells())
+        .filter(|&c| terrain[usize::from(c)] == Terrain::Ore as u8)
+        .count();
+    u32::try_from(n).unwrap()
+}
+
+fn clear_zones_open(g: Grid, m: &Map) -> bool {
+    (0..g.cells())
+        .filter(|&c| m.cores.iter().any(|&k| g.chebyshev(k, c) <= CLEAR_RADIUS))
+        .all(|c| m.terrain[usize::from(c)] == Terrain::Open as u8)
 }
 
 fn symmetric(g: Grid, m: &Map) -> bool {
@@ -43,11 +57,17 @@ fn test_mapgen_seed_sweep_is_symmetric_and_connected() {
             for c in m.cores {
                 assert_eq!(m.terrain[usize::from(c)], Terrain::Open as u8);
             }
+            assert_eq!(
+                ore_nodes(g, &m.terrain),
+                2 * ORE_PAIRS,
+                "size {size} seed {seed}"
+            );
+            assert!(clear_zones_open(g, &m), "size {size} seed {seed}");
             fallbacks += u32::from(m.fallback);
         }
     }
-    // The fallback is a rare path, not the usual one.
-    assert!(fallbacks < 50, "{fallbacks}");
+    // The fallback is a rare path, not the usual one, even at size 8.
+    assert!(fallbacks < 100, "{fallbacks}");
 }
 
 #[test]
@@ -104,9 +124,40 @@ fn test_mapgen_fallback_map_is_symmetric_connected_and_has_ore_at_every_size() {
         };
         assert!(symmetric(g, &m));
         assert!(accepts(g, &terrain, cores));
-        let ore = (0..g.cells())
-            .filter(|&c| terrain[usize::from(c)] == Terrain::Ore as u8)
-            .count();
-        assert_eq!(ore, 4, "size {size}");
+        assert_eq!(ore_nodes(g, &terrain), 2 * ORE_PAIRS, "size {size}");
+        assert!(clear_zones_open(g, &m));
     }
+}
+
+#[test]
+fn test_mapgen_walled_in_ore_is_refused() {
+    // The fallback map with walls around one ore node: Core 1 is still
+    // reached, but no neighbour of that node is.
+    let g = Grid::new(16).unwrap();
+    let cores = core_cells(g);
+    let mut terrain = fallback_terrain(g, cores);
+    assert!(accepts(g, &terrain, cores));
+    let ore = (0..g.cells())
+        .find(|&c| terrain[usize::from(c)] == Terrain::Ore as u8)
+        .unwrap();
+    let (x, y) = g.coords(ore);
+    for (dx, dy) in [
+        (-1i32, -1i32),
+        (0, -1),
+        (1, -1),
+        (-1, 0),
+        (1, 0),
+        (-1, 1),
+        (0, 1),
+        (1, 1),
+    ] {
+        let (nx, ny) = (i32::from(x) + dx, i32::from(y) + dy);
+        if let (Ok(nx), Ok(ny)) = (u16::try_from(nx), u16::try_from(ny))
+            && let Some(n) = g.index(nx, ny)
+            && terrain[usize::from(n)] == Terrain::Open as u8
+        {
+            terrain[usize::from(n)] = Terrain::Wall as u8;
+        }
+    }
+    assert!(!accepts(g, &terrain, cores));
 }

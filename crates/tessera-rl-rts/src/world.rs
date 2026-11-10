@@ -42,12 +42,13 @@ impl Terrain {
     }
 }
 
-/// One of the two teams; team 0 is agent slot 0.
+/// One of the two teams, as a side of the map. Which agent slot plays
+/// which side is the environment's business, not the grid's.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Team {
-    /// Agent slot 0.
+    /// The side whose Core stands at `mapgen::CORE_XY`.
     Zero,
-    /// Agent slot 1.
+    /// The side whose Core stands at its mirror.
     One,
 }
 
@@ -76,13 +77,27 @@ pub enum Dir {
 }
 
 impl Dir {
-    /// The fixed neighbour order in `team`'s frame: team 1's is the
-    /// 180-degree image of team 0's.
+    /// The fixed neighbour order: N, E, S, W in the acting team's frame
+    /// (rule 9). The one helper for every direction-ordered choice.
     #[must_use]
     pub const fn order(team: Team) -> [Self; 4] {
+        let o = [Self::North, Self::East, Self::South, Self::West];
+        [
+            o[0].in_frame(team),
+            o[1].in_frame(team),
+            o[2].in_frame(team),
+            o[3].in_frame(team),
+        ]
+    }
+
+    /// A direction of `team`'s frame as a direction on the map: team 0's
+    /// frame is the map's, team 1's is its 180-degree rotation. The frame
+    /// is the team's side of the map, not its agent slot.
+    #[must_use]
+    pub const fn in_frame(self, team: Team) -> Self {
         match team {
-            Team::Zero => [Self::North, Self::East, Self::South, Self::West],
-            Team::One => [Self::South, Self::West, Self::North, Self::East],
+            Team::Zero => self,
+            Team::One => self.mirrored(),
         }
     }
 
