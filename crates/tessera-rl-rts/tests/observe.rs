@@ -202,3 +202,83 @@ fn test_observe_search_pool_refuses_the_fogged_environment() {
     let pool = SearchPool::<Rts, Masked>::new(c, search, &root, EnvPool::with_masks);
     assert!(matches!(pool, Err(SearchError::ImperfectInformation)));
 }
+
+#[test]
+fn test_observe_own_finished_and_producing_planes_on_both_sides() {
+    let c = cfg(16);
+    let g = Grid::new(16).unwrap();
+    let cell = |x, y| g.index(x, y).unwrap();
+    let mut s = RtsState::default();
+    // Side Zero: a Core producing a Drone, an unfinished Foundry at
+    // progress 0 (the case a policy could not tell before).
+    s.units[0] = Unit {
+        producing: Kind::Drone as u8,
+        progress: 1,
+        ..unit(Kind::Core, cell(1, 1))
+    };
+    s.units[1] = Unit {
+        finished: Bool8::FALSE,
+        hp: 1,
+        ..unit(Kind::Foundry, cell(3, 1))
+    };
+    // Side One mirrors it, plus a visible enemy of side Zero next to an
+    // own unit, unfinished and producing: planes 9 and 10 stay 0 there.
+    s.units[SIDE_SLOTS] = Unit {
+        producing: Kind::Drone as u8,
+        progress: 1,
+        ..unit(Kind::Core, cell(14, 14))
+    };
+    s.units[SIDE_SLOTS + 1] = Unit {
+        finished: Bool8::FALSE,
+        hp: 1,
+        ..unit(Kind::Foundry, cell(12, 14))
+    };
+    s.units[2] = Unit {
+        finished: Bool8::FALSE,
+        hp: 1,
+        ..unit(Kind::Foundry, cell(12, 12))
+    };
+    s.units[SIDE_SLOTS + 2] = Unit {
+        producing: Kind::Striker as u8,
+        progress: 1,
+        ..unit(Kind::Foundry, cell(4, 4))
+    };
+    for a in [0u16, 1] {
+        let (p, _) = observe(&c, &s, a);
+        // In each side's frame its own Core is at (1, 1), its unfinished
+        // Foundry at (3, 1).
+        assert_eq!(
+            (at(&p, 16, 9, 1, 1), at(&p, 16, 10, 1, 1)),
+            (1, Kind::Drone as u8),
+            "agent {a}"
+        );
+        assert_eq!(
+            (at(&p, 16, 9, 3, 1), at(&p, 16, 10, 3, 1)),
+            (0, 0),
+            "agent {a}"
+        );
+        // Every enemy unit's cell, seen or not, is 0 on both planes.
+        for (x, y) in [(14, 14), (12, 14), (12, 12), (4, 4)] {
+            let (fx, fy) = if a == 0 { (x, y) } else { (15 - x, 15 - y) };
+            let enemy = if a == 0 {
+                [(14, 14), (12, 14), (4, 4)]
+            } else {
+                [(1, 1), (3, 1), (12, 12)]
+            };
+            if enemy.contains(&(x, y)) {
+                assert_eq!(
+                    (at(&p, 16, 9, fx, fy), at(&p, 16, 10, fx, fy)),
+                    (0, 0),
+                    "agent {a} ({x}, {y})"
+                );
+            }
+        }
+    }
+    // Side One's own Foundry at (4, 4) map, producing a Striker, is
+    // finished and producing in its planes, at frame (11, 11).
+    let (q, _) = observe(&c, &s, 1);
+    assert_eq!(
+        (at(&q, 16, 9, 11, 11), at(&q, 16, 10, 11, 11)),
+        (1, Kind::Striker as u8)
+    );
+}

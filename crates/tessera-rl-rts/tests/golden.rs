@@ -225,7 +225,7 @@ fn observation_run(workers: Option<usize>) -> u64 {
 
 /// Pinned on macOS arm64 for `ENV_VERSION` 2: the fogged planes and the
 /// globals.
-const OBSERVATION_GOLDEN: u64 = 0x9d9f_7aea_f2d9_8a81;
+const OBSERVATION_GOLDEN: u64 = 0xe4d2_fa41_d533_cc23;
 
 #[test]
 fn test_rts_observation_golden_is_pinned_and_identical_across_workers() {

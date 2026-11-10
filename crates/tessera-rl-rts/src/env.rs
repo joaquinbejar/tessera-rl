@@ -12,7 +12,7 @@
 //!   and 13).
 //! - Transition: `decision_ticks` ticks per step, each in the fixed order
 //!   of section 4 and section 13; integer only.
-//! - Observation: `[9, size, size]` planes of `u8` in the side's frame and
+//! - Observation: `[11, size, size]` planes of `u8` in the side's frame and
 //!   a `[2]` global leaf of `u16`, under fog: the enemy is read only on
 //!   cells the side sees now, terrain only where it has explored
 //!   ([`crate::fog`], `rts-design.md` section 14). The search pool refuses
@@ -65,7 +65,7 @@ pub const START_ORE: u32 = 5;
 /// Drones each side starts with, placed as a production would be.
 pub const START_DRONES: usize = 1;
 /// Observation channels.
-pub const CHANNELS: u32 = 9;
+pub const CHANNELS: u32 = 11;
 /// Entries of the global observation leaf: own ore, decisions played.
 pub const GLOBALS: u32 = 2;
 
@@ -149,7 +149,9 @@ pub struct RtsObs {
     /// cell from open terrain);
     /// 1 visible now; 2 explored by this side;
     /// 3 own unit kind; 4 own hit points; 5 own carry; 6 own progress;
-    /// 7 enemy unit kind and 8 enemy hit points, on visible cells only.
+    /// 7 enemy unit kind and 8 enemy hit points, on visible cells only;
+    /// 9 own unit finished; 10 own unit's production (its kind byte, 0 if
+    /// none).
     #[space(box(low = 0, high = 255, dtype = u8, shape = |c: &RtsConfig| [CHANNELS, u32::from(c.size), u32::from(c.size)]))]
     pub planes: ObsLeaf<u8>,
     /// Own ore, clamped at 65535 (the observation only, never the state),
@@ -1048,7 +1050,7 @@ fn write_planes(cfg: &RtsConfig, s: &RtsState, team: Team, mut set: impl FnMut(u
             } else {
                 0
             };
-            let mut planes = [0u8; 9];
+            let mut planes = [0u8; 11];
             planes[0] = terrain;
             planes[1] = u8::from(visible);
             planes[2] = u8::from(explored);
@@ -1058,6 +1060,8 @@ fn write_planes(cfg: &RtsConfig, s: &RtsState, team: Team, mut set: impl FnMut(u
                     planes[4] = u.hp;
                     planes[5] = u.carry;
                     planes[6] = u8::try_from(u.progress).unwrap_or(u8::MAX);
+                    planes[9] = u8::from(u.finished.get());
+                    planes[10] = u.producing;
                 }
                 Some((_, u)) if visible => {
                     planes[7] = u.kind;
