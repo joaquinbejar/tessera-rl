@@ -20,6 +20,8 @@ pub const UNREACHABLE: u16 = u16::MAX;
 /// needs. Reused across steps; [`Field::build`] overwrites it.
 #[derive(Clone)]
 pub struct Field {
+    /// Cells of the grid of the last build; reads past it are unreachable.
+    cells: u16,
     dist: [u16; MAX_CELLS],
     queue: [u16; MAX_CELLS],
 }
@@ -27,6 +29,7 @@ pub struct Field {
 impl Default for Field {
     fn default() -> Self {
         Self {
+            cells: 0,
             dist: [UNREACHABLE; MAX_CELLS],
             queue: [0; MAX_CELLS],
         }
@@ -44,7 +47,8 @@ impl Field {
         goals: impl IntoIterator<Item = u16>,
         passable: impl Fn(u16) -> bool,
     ) {
-        let cells = usize::from(grid.cells());
+        self.cells = grid.cells();
+        let cells = usize::from(self.cells);
         if let Some(live) = self.dist.get_mut(..cells) {
             live.fill(UNREACHABLE);
         }
@@ -89,9 +93,13 @@ impl Field {
         }
     }
 
-    /// The distance of `cell`, [`UNREACHABLE`] if no goal is reachable.
+    /// The distance of `cell`, [`UNREACHABLE`] if no goal is reachable or
+    /// `cell` is outside the grid of the last build.
     #[must_use]
     pub fn distance(&self, cell: u16) -> u16 {
+        if cell >= self.cells {
+            return UNREACHABLE;
+        }
         self.dist
             .get(usize::from(cell))
             .copied()

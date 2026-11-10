@@ -212,3 +212,28 @@ fn test_flow_field_choices_commute_with_the_mirror_on_generated_maps() {
         }
     }
 }
+
+#[test]
+fn test_flow_field_goals_outside_the_grid_are_ignored() {
+    let g = Grid::new(8).unwrap();
+    let map = generate(g, seeded(11));
+    let mut with = Field::default();
+    let mut without = Field::default();
+    // 64 is one past the last cell of size 8; 1023 the last of the largest grid.
+    with.build(g, [map.cores[1], 64, 1023], open(&map.terrain));
+    without.build(g, [map.cores[1]], open(&map.terrain));
+    for c in 0..g.cells() {
+        assert_eq!(with.distance(c), without.distance(c), "cell {c}");
+    }
+}
+
+#[test]
+fn test_flow_field_reads_past_the_last_grid_are_unreachable() {
+    let all_open = [Terrain::Open as u8; MAX_CELLS];
+    let mut field = Field::default();
+    field.build(Grid::new(32).unwrap(), [0u16], open(&all_open));
+    field.build(Grid::new(8).unwrap(), [0u16], open(&all_open));
+    assert_eq!(field.distance(63), 14);
+    assert_eq!(field.distance(64), UNREACHABLE);
+    assert_eq!(field.distance(1023), UNREACHABLE);
+}
