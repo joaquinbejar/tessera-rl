@@ -739,13 +739,13 @@ fn test_async_idle_token_readable_while_a_step_is_paused_then_panics() {
 
 /// How long a test of run claims may take before it fails by name instead
 /// of hanging the binary (Miri runs far slower).
-pub(super) const WATCHDOG: core::time::Duration =
+pub(crate) const WATCHDOG: core::time::Duration =
     core::time::Duration::from_secs(if cfg!(miri) { 1_200 } else { 30 });
 
 /// Runs `f` on its own thread and fails, naming `what`, if it has not
 /// finished within [`WATCHDOG`]: a broken claim or ring then fails the test
 /// instead of hanging it. A panic in `f` is passed on.
-pub(super) fn within(what: &str, f: impl FnOnce() + Send + 'static) {
+pub(crate) fn within(what: &str, f: impl FnOnce() + Send + 'static) {
     let (done, finished) = std::sync::mpsc::channel();
     let body = std::thread::spawn(move || {
         f();
