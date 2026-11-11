@@ -34,9 +34,11 @@
 //!
 //! Workers claim runs of ids, at most `ceil(batch_size / workers)` per
 //! claim (issue #83), and push a run's ids to the completion ring only after
-//! the whole run is stepped. The waits still poll in 100 µs steps on the
-//! park backend and in `recv_timeout` (ADR-0047 section 7); wake-based waits
-//! need a decision beyond ADR-0047 (issue #83). Measure with
+//! the whole run is stepped. A worker notifies a counted completion signal
+//! once per pushed claim; `recv`, `recv_timeout` and a native
+//! [`BatchWaiter`] register on it and wake when a batch is ready instead of
+//! polling, with a 100 µs fallback for liveness only (ADR-0056 decisions 2
+//! to 4). Measure with
 //! `benches/async_step.rs` (`async_round_256`) and the instruction count of
 //! `benches/async_instructions.rs`.
 
@@ -251,18 +253,25 @@ where
             return Err(lost(EngineError::WorkerDied));
         };
         let workers = runtime.workers;
+        let native = runtime.gang.native();
         // An already poisoned pool stays poisoned: only a full reset or
         // restore of the wrapper recovers it, as everywhere else.
         let poisoned = pool.is_poisoned();
-        let mode = BatchMode::new(
+        #[cfg_attr(not(test), expect(unused_mut, reason = "set by tests only"))]
+        let mut mode = BatchMode::new(
             pool,
             n,
             batch,
             workers,
+            native,
             #[cfg(test)]
             faults.jitter_us,
         )
         .map_err(lost)?;
+        #[cfg(test)]
+        if let Some(mode) = Arc::get_mut(&mut mode) {
+            mode.wake_fallback_off = faults.wake_fallback_off;
+        }
         Ok(AsyncPool {
             runtime: Workers(Some(runtime)),
             mode,
@@ -943,11 +952,41 @@ where
             if let Some(token) = self.poll(false)? {
                 return Ok(Some(token));
             }
-            if start.elapsed() >= timeout {
+            let Some(left) = timeout
+                .checked_sub(start.elapsed())
+                .filter(|left| !left.is_zero())
+            else {
                 return Ok(None);
-            }
-            std::thread::park_timeout(Duration::from_micros(100));
+            };
+            self.wait_completion(left);
         }
+    }
+
+    /// Waits for a worker's completion wake (ADR-0056 decision 2): until a
+    /// full batch is ready, a step panicked, a worker died, or every
+    /// admitted id is stepped; at most `timeout`, and at most the 100 µs
+    /// liveness fallback, which covers a failure that sends no wake (a
+    /// worker that dies outside its job). The wait is a batch boundary
+    /// (SPEC 5.5): it only decides when the caller looks again.
+    fn wait_completion(&self, timeout: Duration) {
+        let ready = || {
+            self.mode.ready.full()
+                || self
+                    .mode
+                    .panicked
+                    .load(core::sync::atomic::Ordering::Acquire)
+                || self.dead()
+                || self.running() == 0
+        };
+        #[cfg(test)]
+        let fallback = if self.mode.wake_fallback_off {
+            Duration::from_secs(60)
+        } else {
+            crate::sys::PARK_POLL
+        };
+        #[cfg(not(test))]
+        let fallback = crate::sys::PARK_POLL;
+        self.mode.ready.wait(ready, timeout.min(fallback));
     }
 
     /// Poisons the wrapper and reports a dead worker or a step's panic.
@@ -1013,16 +1052,8 @@ where
         }
         self.pump(false)?;
         if block {
-            let rt = self.runtime()?;
-            if rt.gang.in_flight() > 0 {
-                if rt.gang.wait()? {
-                    self.mode
-                        .panicked
-                        .store(true, core::sync::atomic::Ordering::Release);
-                }
-            } else {
-                std::thread::park_timeout(Duration::from_micros(100));
-            }
+            // A job still in flight is reaped by `pump` on the next attempt.
+            self.wait_completion(Duration::MAX);
         }
         Ok(None)
     }
