@@ -198,9 +198,10 @@ def test_pgo_ship_ladder(w1, w2, want):
 
 
 def test_pgo_kernels_are_refused_until_filled(tmp_path):
-    with pytest.raises(ValueError, match="nonempty"):
-        ev.load_kernels(str(ROOT / "tools" / "pgo" / "kernels.toml"))
-    for bad in ("kernels = [1]\n", 'kernels = ""\n', "x = 1\n"):
+    # The repository list is filled (frozen with the W2 build tooling); an empty
+    # or malformed list is still refused.
+    assert ev.load_kernels(str(ROOT / "tools" / "pgo" / "kernels.toml"))
+    for bad in ("kernels = []\n", "kernels = [1]\n", 'kernels = ""\n', "x = 1\n"):
         p = tmp_path / "k.toml"
         p.write_text(bad)
         with pytest.raises(ValueError, match="nonempty"):

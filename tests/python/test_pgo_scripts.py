@@ -247,13 +247,16 @@ def test_pgo_feasibility_records_hashes_and_needs_the_wheel(tmp_path, monkeypatc
     wheel = tmp_path / "w.whl"
     wheel.write_bytes(b"abc")
     monkeypatch.setattr(callgrind, "feasibility", lambda *a: {"passed": True})
+    monkeypatch.setattr(callgrind, "environment", fake_environment())
     out = tmp_path / "o"
     base = ["--approved-window", "x", "--manifest", MANIFEST_PATH, "--out-dir", str(out), "--feasibility"]
     assert callgrind.main(base, platform="linux") == 2
     assert callgrind.main([*base, "--wheel", str(wheel)], platform="linux") == 0
     saved = json.loads((out / "feasibility.json").read_text())
     assert saved["sha256"]["wheel"] == hashlib.sha256(b"abc").hexdigest()
-    assert set(saved["sha256"]) == {"wheel", "manifest", "kernels"}
+    assert set(saved["sha256"]) == {"wheel", "manifest", "python", "valgrind", "cpu_model", "cpu_flags"}, \
+        "the full stamp, without the kernel list"
+    assert len(saved["kernels_sha256"]) == 64
 
 
 def test_pgo_checks_writes_statuses_tied_to_the_wheel(tmp_path):
@@ -285,8 +288,20 @@ def test_pgo_select_refuses_unknown_and_repeated_names():
         callgrind.select(MANIFEST, [callgrind.CONTROL, callgrind.CONTROL])
 
 
-def fake_environment(toolchain="vg-1"):
-    return lambda args: {**callgrind.hashes(args), "python": "py-sha", "valgrind": toolchain}
+def fake_environment(toolchain="vg-1", **override):
+    return lambda args: {**callgrind.hashes(args), "python": "py-sha", "valgrind": toolchain,
+                         "cpu_model": "Some CPU 12", "cpu_flags": "flags-a", **override}
+
+
+def old_stamp(out, files, wheel_path, **override):
+    """Stamps written before the kernel list left the stamp: the same fields,
+    plus `kernels`, as the gate on swarmer03 wrote them."""
+    st = {"wheel": hashlib.sha256(wheel_path.read_bytes()).hexdigest(),
+          "manifest": hashlib.sha256(pathlib.Path(MANIFEST_PATH).read_bytes()).hexdigest(),
+          "kernels": "k" * 64, "python": "py-sha", "valgrind": "vg-1",
+          "cpu_model": "Some CPU 12", "cpu_flags": "flags-a", **override}
+    for f in files:
+        callgrind.stamp_path(f).write_text(json.dumps(st, sort_keys=True))
 
 
 def run_parts(tmp_path, groups, toolchain="vg-1", runner=None):
@@ -460,6 +475,7 @@ def test_pgo_adopt_stamps_listed_files_after_checking_them(tmp_path, monkeypatch
     listing.write_text("# header\n" + "".join(f"{hashlib.sha256(f.read_bytes()).hexdigest()} {f.name} Ir=1\n" for f in files))
     wheel = tmp_path / "w.whl"
     wheel.write_bytes(b"abc")
+    old_stamp(out, files, wheel)
     monkeypatch.setattr(callgrind, "environment", fake_environment())
     assert callgrind.main(adopt_args(out, wheel, listing), platform="linux") == 0
     assert all(callgrind.stamp_path(f).exists() for f in files)
@@ -652,3 +668,128 @@ def test_pgo_a_part_on_an_unstampable_host_is_refused(tmp_path, monkeypatch):
     args = ["--approved-window", "x", "--manifest", MANIFEST_PATH, "--out-dir", str(tmp_path / "o"), "--feasibility",
             "--wheel", str(wheel), "--scenario", "state/Grid-v1"]
     assert callgrind.main(args, platform="linux") == 2 and callgrind.STAMP is None
+
+
+def test_pgo_a_part_times_each_unit(tmp_path, capsys):
+    part = callgrind.measure_only("py", MANIFEST_PATH, MANIFEST, tmp_path, ["state/Grid-v1"], FakeValgrind())
+    assert list(part["unit_seconds"]) == part["units"]
+    assert all(s >= 0 for s in part["unit_seconds"].values())
+    lines = [l for l in capsys.readouterr().out.splitlines() if l.startswith("unit ")]
+    assert [l.split()[1] for l in lines] == part["units"]
+
+
+def gate_files(tmp_path):
+    out = tmp_path / "o"
+    out.mkdir()
+    callgrind.measure_only("py", MANIFEST_PATH, MANIFEST, out, ["state/CartPole-v1"], FakeValgrind())
+    files = sorted(out.glob("*.callgrind"))
+    listing = tmp_path / "KEPT.txt"
+    listing.write_text("".join(f"{hashlib.sha256(f.read_bytes()).hexdigest()} {f.name}\n" for f in files))
+    wheel = tmp_path / "w.whl"
+    wheel.write_bytes(b"abc")
+    return out, files, listing, wheel
+
+
+def test_pgo_an_old_stamp_file_is_not_reused_without_adopt(tmp_path):
+    out, files, _, wheel = gate_files(tmp_path)
+    old_stamp(out, files, wheel)
+    again = FakeValgrind()
+    run_parts(tmp_path, [["state/CartPole-v1"]], runner=again)
+    assert len(again.calls) == 11, "a stamp with the kernels key never matches silently"
+
+
+@pytest.mark.parametrize("field", ["wheel", "python", "valgrind", "cpu_model", "cpu_flags"])
+def test_pgo_adopt_refuses_an_old_stamp_that_differs_in_any_other_field(tmp_path, monkeypatch, field):
+    out, files, listing, wheel = gate_files(tmp_path)
+    old_stamp(out, files, wheel, **{field: "other"})
+    before = {f: callgrind.stamp_path(f).read_text() for f in files}
+    monkeypatch.setattr(callgrind, "environment", fake_environment())
+    assert callgrind.main(adopt_args(out, wheel, listing), platform="linux") == 2
+    assert {f: callgrind.stamp_path(f).read_text() for f in files} == before, "nothing restamped"
+
+
+def test_pgo_adopt_refuses_a_file_without_a_stamp(tmp_path, monkeypatch):
+    out, files, listing, wheel = gate_files(tmp_path)
+    monkeypatch.setattr(callgrind, "environment", fake_environment())
+    assert callgrind.main(adopt_args(out, wheel, listing), platform="linux") == 2
+
+
+def test_pgo_merge_of_adopted_and_new_files_needs_equal_reduced_stamps(tmp_path, monkeypatch):
+    names = all_names()
+    adopted = [callgrind.CONTROL, "state/CartPole-v1"]
+    out = tmp_path / "o"
+    out.mkdir()
+    callgrind.measure_only("py", MANIFEST_PATH, MANIFEST, out, adopted, FakeValgrind())
+    files = sorted(out.glob("*.callgrind"))
+    listing = tmp_path / "KEPT.txt"
+    listing.write_text("".join(f"{hashlib.sha256(f.read_bytes()).hexdigest()} {f.name}\n" for f in files))
+    wheel = tmp_path / "w.whl"
+    wheel.write_bytes(b"abc")
+    old_stamp(out, files, wheel)
+    monkeypatch.setattr(callgrind, "environment", fake_environment())
+    assert callgrind.main(adopt_args(out, wheel, listing), platform="linux") == 0
+    with pytest.MonkeyPatch.context() as m:
+        m.setattr(callgrind, "environment", fake_environment())
+        run_parts(tmp_path, [adopted, [n for n in names if n not in adopted]])
+    assert merge_now(out, wheel) == 0
+    # The same, but the new part on other CPU flags: the merge refuses.
+    out2 = tmp_path / "p"
+    out2.mkdir()
+    callgrind.measure_only("py", MANIFEST_PATH, MANIFEST, out2, adopted, FakeValgrind())
+    files2 = sorted(out2.glob("*.callgrind"))
+    listing2 = tmp_path / "KEPT2.txt"
+    listing2.write_text("".join(f"{hashlib.sha256(f.read_bytes()).hexdigest()} {f.name}\n" for f in files2))
+    old_stamp(out2, files2, wheel)
+    assert callgrind.main(adopt_args(out2, wheel, listing2), platform="linux") == 0
+    args = ["--approved-window", "x", "--manifest", MANIFEST_PATH, "--out-dir", str(out2), "--feasibility",
+            "--wheel", str(wheel)]
+    with pytest.MonkeyPatch.context() as m:
+        m.setattr(callgrind.subprocess, "run", FakeValgrind())
+        m.setattr(callgrind, "environment", fake_environment())
+        assert callgrind.main([*args, *sum((["--scenario", n] for n in adopted), [])], platform="linux") == 0
+        m.setattr(callgrind, "environment", fake_environment(cpu_flags="flags-b"))
+        rest = [n for n in names if n not in adopted]
+        assert callgrind.main([*args, *sum((["--scenario", n] for n in rest), [])], platform="linux") == 0
+    assert merge_now(out2, wheel) == 2
+
+
+def plain_costs(tmp_path, wheel_bytes, env):
+    """costs.json of one wheel through callgrind.py's real plain mode."""
+    wheel = tmp_path / f"{wheel_bytes.decode()}.whl"
+    wheel.write_bytes(wheel_bytes)
+    out = tmp_path / f"c-{wheel_bytes.decode()}"
+    with pytest.MonkeyPatch.context() as m:
+        m.setattr(callgrind.subprocess, "run", FakeValgrind())
+        m.setattr(callgrind, "environment", env)
+        assert callgrind.main(["--approved-window", "x", "--manifest", MANIFEST_PATH, "--out-dir", str(out),
+                               "--wheel", str(wheel)], platform="linux") == 0
+    return json.loads((out / "costs.json").read_text()), hashlib.sha256(wheel_bytes).hexdigest()
+
+
+def decide_on_real_outputs(tmp_path, w0_env, w1_env):
+    decide = load("decide")
+    # The gate: parts and merge on the W1 bytes ("abc", run_parts' wheel), under fake_environment().
+    out, wheel, _ = run_parts(tmp_path, [all_names()])
+    assert merge_now(out, wheel) == 0
+    feas = json.loads((out / "feasibility.json").read_text())
+    w0, w0_sha = plain_costs(tmp_path / "w0", b"w0", w0_env)
+    w1, w1_sha = plain_costs(tmp_path / "w1", b"abc", w1_env)
+    seventh = {"W1": {"checks": {"wheel_sha256": w1_sha, "checks": {"python_suite": 0, "num_tests": 0}},
+                      "compare": {"passed": True, "wheels": [w0_sha, w1_sha]}}}
+    kernels = str(TOOLS / "kernels.toml")
+    return decide.decide({"W0": w0, "W1": w1}, feas, seventh, MANIFEST_PATH, kernels), decide
+
+
+def test_pgo_decide_accepts_real_outputs_under_one_stamp(tmp_path):
+    for d in ("w0", "w1"):
+        (tmp_path / d).mkdir()
+    result, _ = decide_on_real_outputs(tmp_path, fake_environment(), fake_environment())
+    assert "ship" in result
+
+
+@pytest.mark.parametrize("override", [{"cpu_flags": "flags-b"}, {"cpu_model": "Other CPU"}, {"toolchain": "vg-2"}])
+def test_pgo_decide_refuses_real_outputs_from_another_host_or_toolchain(tmp_path, override):
+    for d in ("w0", "w1"):
+        (tmp_path / d).mkdir()
+    with pytest.raises(Exception, match="another stamp"):
+        decide_on_real_outputs(tmp_path, fake_environment(**override), fake_environment())
