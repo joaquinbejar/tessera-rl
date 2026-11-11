@@ -370,3 +370,11 @@ def test_pgo_w2_build_and_decide_freeze_the_same_kernel_list():
     sha = hashlib.sha256(KERNELS.read_bytes()).hexdigest()
     assert re.search(rf"^KERNELS_SHA256={sha}$", SCRIPT.read_text(), re.M)
     assert f'KERNELS_SHA256 = "{sha}"' in (ROOT / "tools" / "pgo" / "decide.py").read_text()
+
+
+def test_pgo_kernels_a_kernel_with_holdout_and_trained_rows_is_not_holdout_only(tmp_path):
+    k = tmp_path / "kernels.toml"
+    k.write_text(KERNELS.read_text().replace(
+        '"tessera_rl_engine+step_chunk+tessera_rl_games+Go9" = ["holdout/Go9-v1"]',
+        '"tessera_rl_engine+step_chunk+tessera_rl_games+Go9" = ["holdout/Go9-v1", "games/Othello-v1"]'))
+    assert "tessera_rl_engine+step_chunk+tessera_rl_games+Go9" not in coverage.holdout_only(str(k), str(MANIFEST))

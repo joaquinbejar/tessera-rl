@@ -793,3 +793,112 @@ def test_pgo_decide_refuses_real_outputs_from_another_host_or_toolchain(tmp_path
         (tmp_path / d).mkdir()
     with pytest.raises(Exception, match="another stamp"):
         decide_on_real_outputs(tmp_path, fake_environment(**override), fake_environment())
+
+
+def costs_args(out, wheel, *extra):
+    return ["--approved-window", "x", "--manifest", MANIFEST_PATH, "--out-dir", str(out), "--costs",
+            "--wheel", str(wheel), *extra]
+
+
+def costs_merge(out, wheel):
+    return callgrind.main(["--manifest", MANIFEST_PATH, "--out-dir", str(out), "--costs", "--merge",
+                           "--wheel", str(wheel)], platform="darwin")
+
+
+def run_costs_parts(out, wheel, groups, runner=None, env=None):
+    for names in groups:
+        with pytest.MonkeyPatch.context() as m:
+            m.setattr(callgrind.subprocess, "run", runner or FakeValgrind())
+            m.setattr(callgrind, "environment", env or fake_environment())
+            args = costs_args(out, wheel, *sum((["--pair", n] for n in names), []))
+            assert callgrind.main(args, platform="linux") == 0
+
+
+def test_pgo_costs_from_a_gates_own_parts(tmp_path):
+    out, wheel, _ = run_parts(tmp_path, [all_names()])
+    assert costs_merge(out, wheel) == 0, "W1's costs come from the gate's files, no new run"
+    report = json.loads((out / "costs.json").read_text())
+    assert set(report["costs"]) == {s.name for s in ALL}
+    assert set(report["sha256"]) == {"wheel", "manifest", "python", "valgrind", "cpu_model", "cpu_flags"}
+    assert all(len(v) == 5 for v in report["aa_ir"].values())
+
+
+def test_pgo_costs_parts_merge_to_the_median_of_five_pairs(tmp_path):
+    name = "state/Grid-v1"
+    grid = next(s for s in ALL if s.name == name)
+    bump = {".aa0": 500, ".aa1": 10, ".aa2": 30, ".aa3": 40, ".aa4": 20}
+
+    def cost(scenario, steps, out, ir):
+        tag = next((t for t in bump if t + ".callgrind" in out), None)
+        return ir + (bump[tag] if scenario == name and tag and steps == 2 * grid.steps else 0)
+
+    out = tmp_path / "w0"
+    wheel = tmp_path / "w0.whl"
+    wheel.write_bytes(b"w0")
+    units = callgrind.aa_units(MANIFEST)
+    run_costs_parts(out, wheel, [units[0::2], units[1::2]], runner=FakeValgrind(cost=cost))
+    assert costs_merge(out, wheel) == 0
+    report = json.loads((out / "costs.json").read_text())
+    base = min(report["aa_ir"][name]) - 10
+    assert report["costs"][name]["Ir"] == base + 30, "the median of 10, 20, 30, 40, 500, not their mean"
+
+
+def test_pgo_costs_refuse_non_aa_units(tmp_path):
+    wheel = tmp_path / "w.whl"
+    wheel.write_bytes(b"w")
+    with pytest.MonkeyPatch.context() as m:
+        m.setattr(callgrind, "environment", fake_environment())
+        assert callgrind.main(costs_args(tmp_path / "o", wheel, "--pair", "state/Grid-v1#lin"), platform="linux") == 2
+        assert callgrind.main(costs_args(tmp_path / "o", wheel, "--pair", callgrind.CONTROL), platform="linux") == 2
+
+
+def test_pgo_costs_merge_refuses_a_missing_unit_or_file(tmp_path):
+    out = tmp_path / "w0"
+    wheel = tmp_path / "w0.whl"
+    wheel.write_bytes(b"w0")
+    units = callgrind.aa_units(MANIFEST)
+    run_costs_parts(out, wheel, [units[:-1]])
+    assert costs_merge(out, wheel) == 2 and not (out / "costs.json").exists()
+    run_costs_parts(out, wheel, [units[-1:]])
+    next(out.glob("state_Tag-v1-2-2.4000.aa3.callgrind")).unlink()
+    assert costs_merge(out, wheel) == 3 and not (out / "costs.json").exists()
+
+
+def test_pgo_decide_runs_on_costs_and_gate_from_the_real_pipeline(tmp_path):
+    decide = load("decide")
+    out, w1_wheel, _ = run_parts(tmp_path, [all_names()])
+    assert merge_now(out, w1_wheel) == 0 and costs_merge(out, w1_wheel) == 0
+    w0_out = tmp_path / "w0"
+    w0_wheel = tmp_path / "w0.whl"
+    w0_wheel.write_bytes(b"w0")
+    units = callgrind.aa_units(MANIFEST)
+    run_costs_parts(w0_out, w0_wheel, [units[0::3], units[1::3], units[2::3]])
+    assert costs_merge(w0_out, w0_wheel) == 0
+    feas = json.loads((out / "feasibility.json").read_text())
+    w1 = json.loads((out / "costs.json").read_text())
+    w0 = json.loads((w0_out / "costs.json").read_text())
+    sha = lambda p: hashlib.sha256(p.read_bytes()).hexdigest()  # noqa: E731
+    seventh = {"W1": {"checks": {"wheel_sha256": sha(w1_wheel), "checks": {"python_suite": 0, "num_tests": 0}},
+                      "compare": {"passed": True, "wheels": [sha(w0_wheel), sha(w1_wheel)]}}}
+    result = decide.decide({"W0": w0, "W1": w1}, feas, seventh, MANIFEST_PATH, str(TOOLS / "kernels.toml"))
+    assert result["ship"] in ("W0", "W1")
+    # W0 measured on another CPU: refused.
+    w0_other = tmp_path / "w0b"
+    run_costs_parts(w0_other, w0_wheel, [units], env=fake_environment(cpu_flags="flags-b"))
+    assert costs_merge(w0_other, w0_wheel) == 0
+    with pytest.raises(decide.Refused, match="another stamp"):
+        decide.decide({"W0": json.loads((w0_other / "costs.json").read_text()), "W1": w1}, feas, seventh,
+                      MANIFEST_PATH, str(TOOLS / "kernels.toml"))
+
+
+def test_pgo_costs_probe_on_a_wheel_is_reused_by_its_parts(tmp_path):
+    out = tmp_path / "w0"
+    wheel = tmp_path / "w0.whl"
+    wheel.write_bytes(b"w0")
+    with pytest.MonkeyPatch.context() as m:
+        m.setattr(callgrind.subprocess, "run", FakeValgrind())
+        m.setattr(callgrind, "environment", fake_environment())
+        assert callgrind.main(costs_args(out, wheel, "--probe", "--scenario", "state/Grid-v1"), platform="linux") == 0
+    again = FakeValgrind()
+    run_costs_parts(out, wheel, [[f"state/Grid-v1#aa{i}" for i in range(5)]], runner=again)
+    assert len(again.calls) == 9, "the probe's N run is aa0's first file"
