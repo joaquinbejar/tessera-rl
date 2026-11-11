@@ -4,9 +4,11 @@
 # to the whole committed golden fixtures and runs the Python suite against it
 # (docs/reviews/pgo-wheels-design.md, section 7). No LTO, no PGO, no publishing.
 #
-# aarch64 Linux is deferred: the m4-linux-arm64 runner has no docker client, so
-# a job container cannot start there (run 42618212792). W0 is x86_64 Linux and
-# macOS until that runner can run one.
+# aarch64 Linux runs on a GitHub-hosted arm64 runner (issue #149, owner decision
+# of 2026-11-11): the self-hosted m4-linux-arm64 runner is itself a container
+# with no Docker socket, so a job container cannot start there (run 42618212792).
+# It is the only hosted job; it builds in the pinned manylinux_2_28_aarch64 image
+# with the same script as x86_64.
 #
 # Manual only, and each dispatch names the coordinator's approval of a window:
 # these runners are shared. The first dispatch is also the first test of this
@@ -96,6 +98,50 @@ jobs:
       # The workspace is bind-mounted, so the container's end does not clean it.
       - if: always()
         run: rm -rf "$WHEEL_RUN" dist golden-report.json checks.json determinism.json
+
+  linux-aarch64:
+    # GitHub-hosted (free for public repositories): no owner machine is involved.
+    # The workflow is workflow_dispatch only, and this guard keeps the job off any
+    # other event and off forks even if the triggers ever grow.
+    needs: preflight
+    if: github.event_name == 'workflow_dispatch' && github.repository == 'joaquinbejar/tessera-rl'
+    name: W0 (aarch64-unknown-linux-gnu)
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    container:
+      # Tag 2026.11.07-1, the same tag as the x86_64 image above.
+      image: quay.io/pypa/manylinux_2_28_aarch64@sha256:cb37f0d66c8a75abb93cf6085cad1f1427cd7208f0c0fc48359bb1eea9924f21
+      # --init as on x86_64: the suite's process tests need PID 1 to reap orphans.
+      # No --user: the hosted runner's uid is not 1000 and its VM is discarded
+      # after the job, so root-owned files leave nothing behind. No --cpuset-cpus:
+      # the runner is not shared.
+      options: --init
+    defaults:
+      run:
+        shell: bash
+    env:
+      WHEEL_RUN: ${{ github.workspace }}/.wheel-run
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: scripts/wheel_job.sh aarch64-unknown-linux-gnu manylinux_2_28 9f608c142e0e38a78957d0661ba1dfaf0b6fb37184cfaa4b9a0aa57af6184282 229e194255c7958d86d56e8790d969a6f74736592133f0dfd0076f754c642c1d
+      # The suite above already imports the wheel in this image; this states it
+      # on its own line, with the glibc symbol versions the wheel needs.
+      - name: Smoke import in the manylinux_2_28 image
+        run: |
+          auditwheel show dist/*.whl
+          "$WHEEL_RUN/venv/bin/python" -I -c 'import tessera_rl, platform; print(platform.machine(), platform.libc_ver(), tessera_rl._native.build_profile())'
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          if-no-files-found: warn
+          name: wheel-aarch64-unknown-linux-gnu
+          path: |
+            dist/*.whl
+            golden-report.json
+            checks.json
+            determinism.json
 
   macos:
     needs: linux
