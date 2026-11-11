@@ -77,6 +77,7 @@ def test_rts_evaluation_make_env_uses_the_protocol_config_and_the_side(monkeypat
         ev.make_env(Hyper(), seed)
     assert [s[0] for s in seen] == [ev.ENV_ID] * 2
     assert [s[1]["seat_swap"] for s in seen] == [False, True]
+    assert [s[1]["seed"] for s in seen] == [2_000_000, 2_000_001]
     assert all((s[1]["size"], s[1]["max_units"], s[1]["decision_ticks"], s[1]["step_limit"]) == (16, 16, 4, 600)
                for s in seen)  # fmt: skip
 
@@ -137,6 +138,13 @@ def test_rts_evaluation_only_the_protocol_seeds_give_a_pass_field(monkeypatch):
         r = ev.evaluate(Agent(11, 8, 2, 8, 6, 81, 4), SMALL, "h", "h")
         assert r["protocol"] is True and r["passes"] is want and r["n"] == 400
         assert r["seeds"] == {"first": 2_000_000, "last": 2_000_399, "count": 400}
+    # Any other 400 seeds, or the 400 with one repeated, are not the protocol.
+    monkeypatch.setattr(ev, "play", lambda agent, env, seed: "win")
+    shifted = range(2_000_001, 2_000_401)
+    repeated = [*list(ev.EVAL_SEEDS)[:399], 2_000_000]
+    for seeds in (shifted, repeated):
+        r = ev.evaluate(Agent(11, 8, 2, 8, 6, 81, 4), SMALL, "h", "h", seeds=seeds)
+        assert r["protocol"] is False and "passes" not in r
 
 
 class FakeGame:

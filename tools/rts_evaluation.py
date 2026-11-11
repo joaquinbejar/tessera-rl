@@ -11,7 +11,9 @@ record, and its evaluation against Rush.
   over the protocol's 400 evaluation seeds, 2,000,000 to 2,000,399, each
   played once. Evaluation seed s is one game by itself: a one-environment
   ``tessera/RTS-vsRush-v1`` pool constructed with seed s and reset with seed
-  s, side Zero for even s and side One for odd s (``seat_swap`` = s odd). So
+  s, side Zero for even s and side One for odd s (``seat_swap`` = s odd). The
+  construction seed is passed as s although reset(seed=s) reseeds the
+  instance, because the protocol's definition names both. So
   a seed's game does not depend on the pool size, on the order of the seeds
   or on which other seeds were played (tested). A game is a win only when it
   terminates with the learner's reward +1; a loss, a draw and a truncation
@@ -130,6 +132,10 @@ def evaluate(agent: Agent, h: Hyper, authorization: str, frozen_sha256: str, see
     """The final policy over the evaluation seeds, each played once. Refused
     without the frozen protocol's sha256 (the seeds are used once)."""
     authorize(authorization, frozen_sha256)
+    seeds = list(seeds)
+    # The seeds as given, before playing: a repeated seed or any other 400
+    # seeds is not the protocol's evaluation.
+    protocol = seeds == list(EVAL_SEEDS)
     torch.set_num_threads(1)
     agent.eval()
     games = {}
@@ -140,8 +146,7 @@ def evaluate(agent: Agent, h: Hyper, authorization: str, frozen_sha256: str, see
         finally:
             env.close()
     wins = sum(1 for o in games.values() if o == "win")
-    played = list(games)
-    protocol = played == list(EVAL_SEEDS)
+    played = seeds
     result = {"games": games, "wins": wins, "n": len(games), "lower": wilson_lower(wins, len(games)),
               "seeds": {"first": played[0], "last": played[-1], "count": len(played)}, "protocol": protocol}  # fmt: skip
     if protocol:
