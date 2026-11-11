@@ -32,7 +32,7 @@ jobs:
       # asm and address waits are stubbed under cfg(miri), the protocol is not.
       - run: "cargo +nightly miri test -p tessera-rl-engine --lib --locked sys::gang::"
       # The Async id rings and token id buffers (ADR-0047): atomics only.
-      - run: "cargo +nightly miri test -p tessera-rl-engine --lib --locked -- sys::ring:: sys::id_buffers::"
+      - run: "cargo +nightly miri test -p tessera-rl-engine --lib --locked -- sys::ring:: sys::id_buffers:: sys::waiter::"
       # The Pipelined mode end to end (ADR-0047); the 64-worker comparison is
       # too slow under Miri and runs natively.
       - run: "cargo +nightly miri test -p tessera-rl-engine --test pipelined --locked -- --skip bit_for_bit"
@@ -46,6 +46,6 @@ jobs:
           MIRIFLAGS: -Zmiri-env-forward=PROPTEST_DISABLE_FAILURE_PERSISTENCE -Zmiri-ignore-leaks
       # The Async injected-jitter identity test and the drain of unpublished
       # ids, with 2 workers under Miri.
-      - run: "cargo +nightly miri test -p tessera-rl-engine --lib --locked modes::async_jitter_tests::"
+      - run: "cargo +nightly miri test -p tessera-rl-engine --lib --locked -- modes::async_jitter_tests:: modes::async_wake_tests::"
       # DLPack export ownership (ADR-0003 rule 1), without an interpreter.
       - run: cargo +nightly miri test -p tessera-rl-py --lib --locked ffi::dlpack

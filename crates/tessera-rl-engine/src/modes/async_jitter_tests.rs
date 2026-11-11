@@ -30,16 +30,16 @@ use crate::{
 
 #[derive(EnvState, Debug, Clone, Copy, PartialEq, Default)]
 #[repr(C)]
-struct Walk {
+pub(super) struct Walk {
     value: i32,
     steps: u32,
 }
 
 #[derive(EnvConfig, Debug, Clone)]
-struct WalkConfig {}
+pub(super) struct WalkConfig {}
 
 #[derive(Observation)]
-struct WalkObs {
+pub(super) struct WalkObs {
     #[space(box(low = -1_000_000, high = 1_000_000, shape = [1]))]
     value: ObsLeaf<i32>,
 }
@@ -47,7 +47,7 @@ struct WalkObs {
 /// One agent adds its action and a random bit to a counter; the episode
 /// ends after four steps. The random bits make each trajectory depend on the
 /// instance's own RNG stream, so a mixed-up instance shows.
-struct Walker;
+pub(super) struct Walker;
 
 impl Environment for Walker {
     type State = Walk;
@@ -105,13 +105,13 @@ impl Environment for Walker {
     }
 }
 
-type Pool = EnvPool<Walker, NoMasks>;
+pub(super) type Pool = EnvPool<Walker, NoMasks>;
 type AsyncPoolOf = crate::AsyncPool<Walker, NoMasks>;
 
-const N: u32 = 40;
+pub(super) const N: u32 = 40;
 const STEPS: usize = if cfg!(miri) { 2 } else { 6 };
 
-fn options(mode: AutoReset) -> PoolOptions {
+pub(super) fn options(mode: AutoReset) -> PoolOptions {
     PoolOptions {
         auto_reset: mode,
         chunk_size: NonZeroU32::new(8).unwrap(),
@@ -422,7 +422,7 @@ fn test_async_a_received_id_is_never_counted_as_running() {
 }
 
 /// Serializes the tests that use the process-wide gates of `complete`.
-static GATES: std::sync::Mutex<()> = std::sync::Mutex::new(());
+pub(super) static GATES: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// Opens the gates even if an assertion fails, so that no worker stays held.
 struct OpenGates;
@@ -450,7 +450,7 @@ fn gated(gate: u32) -> (AsyncPoolOf, OpenGates) {
     (pool, open)
 }
 
-fn wait_for_gate() {
+pub(super) fn wait_for_gate() {
     while !GATE_REACHED.load(Ordering::Acquire) {
         std::thread::yield_now();
     }
@@ -705,13 +705,13 @@ fn test_async_idle_token_readable_while_a_step_is_paused_then_panics() {
 
 /// How long a test of run claims may take before it fails by name instead
 /// of hanging the binary (Miri runs far slower).
-const WATCHDOG: core::time::Duration =
+pub(super) const WATCHDOG: core::time::Duration =
     core::time::Duration::from_secs(if cfg!(miri) { 1_200 } else { 30 });
 
 /// Runs `f` on its own thread and fails, naming `what`, if it has not
 /// finished within [`WATCHDOG`]: a broken claim or ring then fails the test
 /// instead of hanging it. A panic in `f` is passed on.
-fn within(what: &str, f: impl FnOnce() + Send + 'static) {
+pub(super) fn within(what: &str, f: impl FnOnce() + Send + 'static) {
     let (done, finished) = std::sync::mpsc::channel();
     let body = std::thread::spawn(move || {
         f();
@@ -730,12 +730,12 @@ fn within(what: &str, f: impl FnOnce() + Send + 'static) {
     }
 }
 
-fn all_ids() -> (Vec<u32>, Vec<i32>) {
+pub(super) fn all_ids() -> (Vec<u32>, Vec<i32>) {
     ((0..N).collect(), vec![1; N as usize])
 }
 
 /// Clears the held id and opens the gates even if an assertion fails.
-struct ReleaseHeld;
+pub(super) struct ReleaseHeld;
 
 impl Drop for ReleaseHeld {
     fn drop(&mut self) {

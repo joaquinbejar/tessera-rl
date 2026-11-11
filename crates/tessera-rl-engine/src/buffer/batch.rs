@@ -44,6 +44,7 @@ use crate::pool::{EnvPool, step_chunk};
 use crate::record::Record;
 use crate::sys::id_buffers::{BufferHandle, IdBufferPool};
 use crate::sys::ring::{CompletionRing, RingError, SubmitRing};
+use crate::sys::waiter::Completion;
 use crate::sys::{Gang, Job};
 use crate::validate::check_send_ids;
 
@@ -77,13 +78,33 @@ pub(crate) struct BatchMode<E: Environment, M: MaskProvider<E>> {
     /// Test-only: the largest claim any worker made.
     #[cfg(test)]
     pub(crate) max_claim: AtomicUsize,
+    /// Test-only: the receiver's waits have no liveness fallback.
+    #[cfg(test)]
+    pub(crate) wake_fallback_off: bool,
+    /// Test-only: this worker panics outside the per-step catch.
+    #[cfg(test)]
+    pub(crate) job_panic: Option<usize>,
 }
 
-/// The number of ids ready for a batch, shared with a [`BatchWaiter`].
-#[derive(Debug, Default)]
+/// The number of ids ready for a batch, shared with a [`BatchWaiter`], and
+/// the gang's completion wake its waiters block on (ADR-0056 decision 2).
+#[derive(Debug)]
 pub(crate) struct ReadyCount {
     pub(crate) count: AtomicUsize,
     pub(crate) batch_size: AtomicUsize,
+    /// Counted wakes: a worker notifies once per pushed claim, after
+    /// `count` moved; a dying worker notifies it too (the gang's backstop).
+    pub(crate) wake: Arc<Completion>,
+}
+
+impl ReadyCount {
+    /// Whether a full batch is ready. Signed: a receive can pop an id
+    /// before its worker counts it, so the count is briefly below zero,
+    /// which means nothing is ready.
+    pub(crate) fn full(&self) -> bool {
+        let need = self.batch_size.load(Ordering::Relaxed);
+        self.count.load(Ordering::Acquire).cast_signed() >= need.cast_signed()
+    }
 }
 
 // SAFETY: `BatchMode` is shared by the caller, its tokens and the workers.
@@ -125,6 +146,7 @@ where
         n: usize,
         batch_size: usize,
         workers: usize,
+        wake: Arc<Completion>,
         #[cfg(test)] jitter_us: u32,
     ) -> Result<Arc<Self>, EngineError> {
         let ring_err = |_| EngineError::Options {
@@ -156,11 +178,16 @@ where
             ready: Arc::new(ReadyCount {
                 count: AtomicUsize::new(0),
                 batch_size: AtomicUsize::new(batch_size),
+                wake,
             }),
             #[cfg(test)]
             jitter_us,
             #[cfg(test)]
             max_claim: AtomicUsize::new(0),
+            #[cfg(test)]
+            wake_fallback_off: false,
+            #[cfg(test)]
+            job_panic: None,
         });
         // The job's data pointer comes from the `Arc` itself, not from the
         // `&mut` below, so it stays valid under later shared borrows.
@@ -421,6 +448,8 @@ unsafe fn run_drain<E: Environment, M: MaskProvider<E>>(data: *const (), worker:
         return;
     }
     let ctx = mode.pool.step_ctx();
+    #[cfg(test)]
+    job_panic(mode, worker);
     let mut run = [0u32; CLAIM_RUN];
     loop {
         let out = run.get_mut(..mode.claim).unwrap_or(&mut []);
@@ -433,6 +462,8 @@ unsafe fn run_drain<E: Environment, M: MaskProvider<E>>(data: *const (), worker:
             }
             Err(_) => {
                 mode.panicked.store(true, Ordering::Relaxed);
+                // A failure: wake the receiver to report it.
+                mode.ready.wake.notify();
                 return;
             }
         };
@@ -548,6 +579,30 @@ fn complete<E: Environment, M: MaskProvider<E>>(mode: &BatchMode<E, M>, ids: &[u
         }
     }
     mode.ready.count.fetch_add(ids.len(), Ordering::Release);
+    // One counted wake per pushed claim, after the ready count moved
+    // (ADR-0056 decision 2). A panicked step's claim is pushed too, so this
+    // also wakes the receiver to report the panic.
+    mode.ready.wake.notify();
+}
+
+/// Opens the injected job-level panic of [`job_panic`].
+#[cfg(test)]
+pub(crate) static JOB_PANIC_GATE: AtomicBool = AtomicBool::new(false);
+/// Set by the worker just before its injected job-level panic.
+#[cfg(test)]
+pub(crate) static JOB_PANIC_REACHED: AtomicBool = AtomicBool::new(false);
+
+/// Test-only: a panic in the drain job outside the per-step catch, on the
+/// worker the mode names, once [`JOB_PANIC_GATE`] opens.
+#[cfg(test)]
+fn job_panic<E: Environment, M: MaskProvider<E>>(mode: &BatchMode<E, M>, worker: usize) {
+    if mode.job_panic == Some(worker) {
+        while !JOB_PANIC_GATE.load(Ordering::Acquire) {
+            std::thread::yield_now();
+        }
+        JOB_PANIC_REACHED.store(true, Ordering::Release);
+        std::panic::resume_unwind(Box::new("injected job-level panic"));
+    }
 }
 
 /// A `jitter_us` that holds a worker in [`complete`] before its push.
@@ -1013,23 +1068,36 @@ pub struct BatchWaiter {
 
 impl BatchWaiter {
     /// Waits up to `timeout` until a full batch of ids is ready; returns
-    /// whether one is. Polls in short bounded steps.
+    /// whether one is. With a native wait backend it registers on the
+    /// completion signal and waits on its address until the deadline; on
+    /// park it sleeps in short bounded steps (ADR-0056 decisions 3 and 4).
     #[must_use]
     pub fn wait_ready(&self, timeout: core::time::Duration) -> bool {
         let start = std::time::Instant::now();
         loop {
-            let need = self.ready.batch_size.load(Ordering::Relaxed);
-            // Signed: a receive can pop an id before its worker counts it, so
-            // the count is briefly below zero, which means nothing is ready.
-            if self.ready.count.load(Ordering::Acquire).cast_signed() >= need.cast_signed() {
+            if self.ready.full() {
                 return true;
             }
-            if start.elapsed() >= timeout {
+            let Some(left) = timeout
+                .checked_sub(start.elapsed())
+                .filter(|l| !l.is_zero())
+            else {
                 return false;
+            };
+            match self.ready.wake.native() {
+                Some(native) => {
+                    let signal = self.ready.wake.signal();
+                    let value = signal.register();
+                    if !self.ready.full() {
+                        native.wait_timeout(signal.word(), value, left);
+                    }
+                    signal.unregister();
+                }
+                // A sleep, not a park: this handle has no thread to register
+                // in the waiter cell, and on macOS a park traps in the child
+                // of a multithreaded parent (issue #93).
+                None => std::thread::sleep(left.min(core::time::Duration::from_micros(100))),
             }
-            // A sleep, not a park: nobody unparks this thread, and on macOS a
-            // park traps in the child of a multithreaded parent (issue #93).
-            std::thread::sleep(core::time::Duration::from_micros(100));
         }
     }
 }
