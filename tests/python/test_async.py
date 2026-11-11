@@ -459,36 +459,19 @@ def test_async_snapshot_and_restore_give_identical_futures():
         env.restore_all(other.snapshot_all())
 
 
-def test_async_snapshot_of_an_idle_id_is_not_quiescent_while_another_runs_then_succeeds():
+def test_async_snapshot_of_an_idle_id_while_others_run_succeeds():
+    # Issue #85: only the snapshotted id must be idle. The Async record is
+    # opaque here; its byte identity with the quiescent one is tested in Rust.
     n = 1 << 14
     env = asy(n, n - 1, workers=1)
     env.reset()
     others = list(range(1, n))
-    refused = False
-    for _ in range(200):
-        env.send(others, zeros(others))
-        try:
-            env.snapshot(0)
-        except t.ConcurrencyError as e:
-            # Id 0 was never sent, so this is NotQuiescent, not InFlight, whose
-            # message names an instance.
-            assert "not quiescent" in str(e), str(e)
-            refused = True
-        else:
-            env.recv()
-            continue
-        # Retry until the work has finished; the refusal also pumps.
-        for _ in range(10**7):
-            try:
-                env.snapshot(0)
-                break
-            except t.ConcurrencyError:
-                time.sleep(1e-4)
-        else:
-            pytest.fail("snapshot never succeeded")
-        env.recv()
-        break
-    assert refused, "no send was still running when snapshot ran"
+    env.send(others, zeros(others))
+    env.snapshot(0)
+    with pytest.raises(t.ConcurrencyError, match="instance 1 is in flight"):
+        env.snapshot(1)
+    env.recv()
+    env.snapshot(1)
     assert not env.is_poisoned
 
 

@@ -1254,8 +1254,7 @@ mod tests {
             "epochs moved before the flag cleared"
         );
         // restore(ids), likewise. The reset ids are delivered by the next recv: they
-        // fill that batch, so the next one is exactly the sent ids. Were one of them
-        // still running, the snapshot would rightly be `NotQuiescent`.
+        // fill that batch, so the next one is exactly the sent ids.
         let out = recv_batch(&*ops, out.seq);
         let reset: Vec<u32> = out.ids.iter().map(|b| b.id).collect();
         assert_eq!(reset, [4, 5]);

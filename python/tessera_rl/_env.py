@@ -136,10 +136,10 @@ class Env:
     has exited, ``recv`` cannot clear it: only ``reset`` of all instances,
     ``restore_all`` or ``close`` can. ``reset()`` returns all
     instances as one batch; ``reset(ids=...)`` and ``restore`` return nothing
-    and the next ``recv`` delivers those ids. ``snapshot(id)`` needs every sent
-    id to have finished, not only ``id`` (issue #85): it raises a retryable
-    ``ConcurrencyError`` until then, and returns an opaque record for
-    ``restore``, not bytes. ``import_record`` and ``fork`` are refused.
+    and the next ``recv`` delivers those ids. ``snapshot(id)`` needs only ``id``
+    to be idle (issue #85): other ids may run meanwhile, and it raises a
+    retryable ``ConcurrencyError`` while ``id`` itself is sent and not yet
+    received. It returns an opaque record for ``restore``, not bytes. ``import_record`` and ``fork`` are refused.
 
     Async is currently much slower per round than Sync: workers claim one
     instance at a time and waits poll. Issue #83 tracks batch claiming and

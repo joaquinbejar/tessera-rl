@@ -37,6 +37,7 @@ use super::{Raw, RawChunk};
 use crate::error::EngineError;
 use crate::masks::MaskProvider;
 use crate::pool::{EnvPool, step_chunk};
+use crate::record::Record;
 use crate::sys::id_buffers::{BufferHandle, IdBufferPool};
 use crate::sys::ring::{CompletionRing, RingError, SubmitRing};
 use crate::sys::{Gang, Job};
@@ -279,6 +280,43 @@ where
         Some(view)
     }
 
+    /// The record (header and state) of instance `id`, read through the raw
+    /// parts of that one row (issue #85, ADR-0047 section 3: snapshots only
+    /// read). Unlike [`EnvPool::snapshot`], it forms no slice over the pool's
+    /// record arrays, so it is sound while workers write other rows.
+    ///
+    /// # Errors
+    ///
+    /// [`EngineError::InFlight`] if `id` is sent (or reset) and not yet
+    /// received, whether it waits in the ring, is being stepped, or has
+    /// completed but not been returned by `recv`: a worker may write its
+    /// rows. [`EngineError::InstanceOutOfRange`] for an unknown id.
+    pub(crate) fn idle_record(&self, id: u32) -> Result<Record<E>, EngineError> {
+        let i = usize::try_from(id).unwrap_or(usize::MAX);
+        let (Some(flag), true, true) = (
+            self.in_flight.get(i),
+            i < self.raw.headers.len,
+            i < self.raw.states.len,
+        ) else {
+            return Err(EngineError::InstanceOutOfRange {
+                id,
+                num_envs: u32::try_from(self.raw.instances).unwrap_or(u32::MAX),
+            });
+        };
+        if flag.load(Ordering::Acquire) {
+            return Err(EngineError::InFlight { id });
+        }
+        Ok(Record {
+            // SAFETY: see `read_idle_row`; row `i` is not in flight (checked
+            // above) and is below the headers' length.
+            #[expect(unsafe_code, reason = "audited module: idle row snapshot")]
+            header: unsafe { read_idle_row(&self.raw.headers, i) },
+            // SAFETY: as above, for the states.
+            #[expect(unsafe_code, reason = "audited module: idle row snapshot")]
+            state: unsafe { read_idle_row(&self.raw.states, i) },
+        })
+    }
+
     /// Mask values per agent.
     #[cfg(feature = "debug-checks")]
     pub(crate) const fn mask_len(&self) -> usize {
@@ -306,6 +344,31 @@ unsafe fn shared_view<'a, T>(raw: &Raw<T>, r: &Range<usize>, per: usize) -> &'a 
     // (invariant 1); the caller guarantees nobody writes these rows while it
     // lives (invariants 3 and 4).
     unsafe { core::slice::from_raw_parts(first.cast_const(), end - start) }
+}
+
+/// Copies element `i` of `raw` (one row of a per-instance record array),
+/// forming no reference to the buffer or to any other row.
+///
+/// # Safety
+///
+/// `i < raw.len`, the buffer is live (invariant 1), and row `i` is not in
+/// flight while the caller holds the `&BatchMode` that `raw` belongs to:
+/// only the caller sets the in-flight flags, under `&mut` of the mode's
+/// wrapper, so the flag cannot be set during the read, and no worker holds
+/// or forms a reference to row `i` (workers touch only claimed, in-flight
+/// rows: invariants 3 and 4). The row's last step happened before its
+/// completion push (Release), which `recv` popped (Acquire) on the caller's
+/// thread before it cleared the flag. A live token may cover row `i`, but
+/// its views are shared, so a read alongside them is sound. Workers may hold
+/// `&mut` views of other rows meanwhile; this read does not alias them.
+#[expect(unsafe_code, reason = "audited module: idle row snapshot")]
+unsafe fn read_idle_row<T: Copy>(raw: &Raw<T>, i: usize) -> T {
+    debug_assert!(i < raw.len, "row {i} out of {}", raw.len);
+    // SAFETY: `i < len` keeps the offset inside the live buffer (caller).
+    let row = unsafe { raw.ptr.add(i) };
+    // SAFETY: `row` is aligned and initialised (an element of the live
+    // buffer), and no worker writes it during the read (caller).
+    unsafe { row.read() }
 }
 
 /// A placeholder job that is never published.
