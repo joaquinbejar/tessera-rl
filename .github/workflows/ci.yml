@@ -26,13 +26,13 @@ env:
 # maintainer who has read the code pushes it to a branch of this repository
 # for CI. No workflow uses pull_request_target or secrets.
 #
-# Linux x86-64 jobs that need only the Rust toolchains run on any host with
-# the linux-x64 label (xaskar or flumix) and print the host and CPU first.
-# Pinned to xaskar: gungraun (its baselines belong to that CPU and image),
-# musl (musl-gcc is installed there only), readme (install-action needs jq),
-# deny (a Docker action), python and pufferlib (pipx), and the matrix jobs
-# "clippy and test (xaskar)" and "math differential (xaskar)", whose names
-# are merge conditions.
+# Linux x86-64 jobs that need no Docker and no host-specific state run on
+# any host with the linux-x64 label (xaskar or flumix) and print the host
+# and CPU first. Pinned to xaskar: python (until issues #197 and #174 are
+# fixed), gungraun (its baselines belong to that CPU and image), musl
+# (musl-gcc is installed there only), deny (a Docker action), and the
+# matrix jobs "clippy and test (xaskar)" and "math differential (xaskar)",
+# whose names are merge conditions.
 jobs:
   fmt:
     runs-on: [self-hosted, linux-x64]
@@ -211,10 +211,12 @@ jobs:
           RUSTDOCFLAGS: -D warnings
 
   readme:
-    runs-on: [self-hosted, xaskar]
+    runs-on: [self-hosted, linux-x64]
     # Skipped for an unmodified fork pull request (see the header).
     if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
     steps:
+      # Two hosts carry linux-x64: the log names the one that ran this job.
+      - run: hostname && grep -m1 'model name' /proc/cpuinfo
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: taiki-e/install-action@86f7a0ffb25f40114606501a311ebcfaf882ea32 # v2.88.0
         with:
@@ -263,10 +265,12 @@ jobs:
   # The PufferLib adapter at its own pins (compat/pufferlib). x86-64: PufferLib
   # 3.0.0 does not build on linux-arm64. Timeouts kill the process group.
   pufferlib:
-    runs-on: [self-hosted, xaskar]
+    runs-on: [self-hosted, linux-x64]
     timeout-minutes: 60
     if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
     steps:
+      # Two hosts carry linux-x64: the log names the one that ran this job.
+      - run: hostname && grep -m1 'model name' /proc/cpuinfo
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
