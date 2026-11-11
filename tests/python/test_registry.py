@@ -20,6 +20,7 @@ SHIPPED = {
     "tessera/Othello-v1": (1, 2, "cross-platform", True),
     "tessera/PaddleDuel-v1": (1, 2, "cross-platform", True),
     "tessera/Pendulum-v1": (1, 1, "cross-platform", True),
+    "tessera/RTS-v1": (2, 2, "cross-platform", False),
     "tessera/Snake-v1": (1, 2, "cross-platform", True),
     "tessera/Tag-v1": (1, 8, "cross-platform", False),
 }
