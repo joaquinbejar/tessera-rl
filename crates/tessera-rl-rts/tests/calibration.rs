@@ -27,6 +27,7 @@ fn small() -> RtsConfig {
         max_units: 8,
         step_limit: 300,
         seat_swap: false,
+        opponent: 0,
     }
 }
 
