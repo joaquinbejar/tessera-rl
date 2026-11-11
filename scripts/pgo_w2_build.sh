@@ -32,7 +32,7 @@ tool="$6"
 target=x86_64-unknown-linux-gnu
 # The gate's manifest and the frozen kernel list (tools/pgo/decide.py KERNELS_SHA256).
 MANIFEST_SHA256=7f4a45761254d24aef9f86f3f7ce3df5d1595fba34274e0454c16114b8ac36f1
-KERNELS_SHA256=17568af9055c133ea8b5356dd02287e98a7e7330c863231b7c270fe0516cdd52
+KERNELS_SHA256=444a6fb9b0bf61313eb70e714b3f71ef485db3f2b836c82de90e7e88d0f721e7
 
 RUSTUP_VERSION=1.29.3
 UV_VERSION=0.13.6
@@ -130,7 +130,8 @@ build "-Cprofile-use=$w/merged.profdata -Cllvm-args=-pgo-warn-missing-function" 
 whl="$(one_wheel "$dist")"
 
 # 6 and the coverage acceptance.
-"$py" -I "$tool/tools/pgo/coverage.py" --kernels "$tool/tools/pgo/kernels.toml" --profile "$w/profile.txt" \
+"$py" -I "$tool/tools/pgo/coverage.py" --kernels "$tool/tools/pgo/kernels.toml" \
+    --manifest "$tool/tools/pgo/manifest.toml" --profile "$w/profile.txt" \
     --build-log "$w/final.log" --wheel "$whl" --variant "$variant" --out "$dist/coverage.json"
 
 printf '%s  %s\n%s  %s\n' "$(sha256 "$whl")" "$(basename "$whl")" "$(sha256 "$w/merged.profdata")" merged.profdata \

@@ -3,14 +3,15 @@
 """The profile coverage acceptance of a PGO wheel (docs/reviews/pgo-wheels-design.md,
 section 3), and the check that the final wheel carries no instrumentation.
 
-    coverage.py --kernels tools/pgo/kernels.toml --profile show.txt --build-log final.log \\
+    coverage.py --kernels tools/pgo/kernels.toml --manifest tools/pgo/manifest.toml --profile show.txt --build-log final.log \\
         --wheel W --variant full|holdout --out coverage.json
 
 `--profile` is the output of `llvm-profdata show --all-functions --counts` (the
 `Block counts:` line of each function; without `--counts` no count is printed).
 For W2F (`--variant full`) a profile is usable only if every kernel has a
-function with a nonzero count; for W2H (`--variant holdout`) every kernel but
-the holdout ones must be nonzero and the holdout ones must be zero. In both, the
+function with a nonzero count; for W2H (`--variant holdout`) the kernels that
+only holdout rows reach (kernels.toml [rows] and the manifest) must be zero and
+every other kernel nonzero. In both, the
 final build must report no control-flow-hash mismatch for a function of a
 `tessera_rl` crate. Functions without a profile are counted, not gated. Exit 0
 when usable. The formats are those of the pinned toolchain (fixtures under
@@ -115,23 +116,35 @@ def check(kernels: list[str], show: str, build_log: str, wheel: pathlib.Path, ho
             "functions_without_profile": missing, "instrumented_objects": instrumented}
 
 
-def load_holdout(path: str) -> list[str]:
-    with open(path, "rb") as f:
-        value = tomllib.load(f).get("holdout_kernels")
-    if not isinstance(value, list) or not value or not all(isinstance(k, str) and k for k in value):
-        raise ValueError("holdout_kernels must be a nonempty list of strings")
-    return value
+def holdout_only(kernels_path: str, manifest_path: str) -> list[str]:
+    """The kernels reached only by holdout rows, from the [rows] table of the
+    kernel list and the manifest's holdout flags. Refuses a list where a kernel
+    has no rows, a row is not in the manifest, or a manifest row reaches no kernel."""
+    with open(kernels_path, "rb") as f:
+        data = tomllib.load(f)
+    kernels, rows = data.get("kernels") or [], data.get("rows") or {}
+    scenarios = {s.name: s for s in evidence.scenarios(evidence.load_manifest(manifest_path))}
+    if set(rows) != set(kernels):
+        raise ValueError(f"[rows] must name exactly the kernels; differ: {sorted(set(rows) ^ set(kernels))}")
+    unknown = sorted({r for v in rows.values() for r in v} - set(scenarios))
+    if unknown or any(not v for v in rows.values()):
+        raise ValueError(f"every kernel needs manifest rows; unknown {unknown}")
+    uncovered = sorted(set(scenarios) - {r for v in rows.values() for r in v})
+    if uncovered:
+        raise ValueError(f"manifest rows that reach no kernel: {uncovered}")
+    return [k for k in kernels if all(scenarios[r].holdout for r in rows[k])]
 
 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    for name in ("--kernels", "--profile", "--build-log", "--wheel", "--out"):
+    for name in ("--kernels", "--manifest", "--profile", "--build-log", "--wheel", "--out"):
         parser.add_argument(name, required=True)
     parser.add_argument("--variant", choices=("full", "holdout"), required=True)
     args = parser.parse_args(argv)
     try:
         kernels = evidence.load_kernels(args.kernels)
-        holdout = load_holdout(args.kernels) if args.variant == "holdout" else None
+        zero = holdout_only(args.kernels, args.manifest)
+        holdout = zero if args.variant == "holdout" else None
     except ValueError as e:
         print(f"refused: {e}", file=sys.stderr)
         return 2

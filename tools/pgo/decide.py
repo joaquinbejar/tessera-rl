@@ -30,7 +30,7 @@ import evidence  # noqa: E402
 
 # The frozen kernel list (tools/pgo/kernels.toml at its freeze, the merge of
 # the PR that filled it). A decision with W2 inputs refuses any other list.
-KERNELS_SHA256 = "17568af9055c133ea8b5356dd02287e98a7e7330c863231b7c270fe0516cdd52"
+KERNELS_SHA256 = "444a6fb9b0bf61313eb70e714b3f71ef485db3f2b836c82de90e7e88d0f721e7"
 
 
 class Refused(ValueError):

@@ -18,16 +18,21 @@
 # preceded by another digit (an identifier that starts with `_` or a digit has
 # v0's `_` separator, as `7__native`). Each kernel names its crate.
 #
-# Scope (TR F5): the environment step kernel of every manifest environment
-# type, plus the native paths of the manifest's other training rows: the MCTS
-# stage of the search row, the record import of the state-operations row, and
-# the pipelined split-phase step. The threaded rows run the same step_chunk
-# instances on their workers. The holdout's Async split-phase row has no kernel
-# of its own: it is held out of W2H and steps through CartPole's step_chunk.
+# Scope (TR F5, ruling 70150): the profile must reach the hot native path of
+# every manifest row. So the list is the environment step kernel of every
+# environment type, the MCTS stage of the search row, the record import of the
+# state-operations row (Sync `import_record`: in Sync mode this row does not
+# reach the memcpy `restore` path, design r5), the pipelined split-phase step,
+# the threaded rows' worker step (the gang trampoline over par_chunks), and the
+# Async batch drain of the holdout split-phase row. Each entry is a function
+# that is its own symbol in W1's `_native.abi3.so` (checked against
+# tests/python/fixtures/pgo/w1-kernel-symbols.txt), chosen from W1's symbols
+# and the manifest alone; no instrumented build or profile was looked at.
 #
-# `holdout_kernels` are the kernels only the holdout rows reach. W2H trains
-# without them, so its acceptance requires them at ZERO (the holdout was really
-# held out) and every other kernel nonzero; W2F requires every kernel nonzero.
+# [rows] names, per kernel, the manifest rows that reach it. A kernel reached
+# only by holdout rows must be ZERO in W2H (trained without the holdout: the
+# check that it was really held out) and nonzero in W2F; any other kernel must
+# be nonzero in both. Every manifest row reaches at least one kernel.
 
 kernels = [
     "tessera_rl_engine+step_chunk+tessera_rl_classic+CartPole",
@@ -44,9 +49,26 @@ kernels = [
     "tessera_rl_search+mcts+collect_and_stage+tessera_rl_games+Connect4",
     "_native+env_type+import_record",
     "_native+split+pipelined+tessera_rl_classic+CartPole",
+    "tessera_rl_engine+gang+trampoline+par_chunks+step_inner+tessera_rl_classic+CartPole",
+    "tessera_rl_engine+gang+trampoline+par_chunks+step_inner+tessera_rl_classic+Snake",
+    "tessera_rl_engine+batch+run_drain+tessera_rl_classic+CartPole",
 ]
 
-holdout_kernels = [
-    "tessera_rl_engine+step_chunk+tessera_rl_classic+PaddleDuel",
-    "tessera_rl_engine+step_chunk+tessera_rl_games+Go9",
-]
+[rows]
+"tessera_rl_engine+step_chunk+tessera_rl_classic+CartPole" = ["state/CartPole-v1", "owned/CartPole-v1"]
+"tessera_rl_engine+step_chunk+tessera_rl_classic+Tag" = ["state/Tag-v1-2-2"]
+"tessera_rl_engine+step_chunk+tessera_rl_classic+Grid" = ["state/Grid-v1"]
+"tessera_rl_engine+step_chunk+tessera_rl_classic+KeyDoor" = ["state/GridKeyDoor-v1"]
+"tessera_rl_engine+step_chunk+tessera_rl_classic+Snake" = ["state/Snake-v1-state", "pixels/Snake-v1-pixels"]
+"tessera_rl_engine+step_chunk+tessera_rl_classic+BrickWall" = ["state/BrickWall-v1-state", "pixels/BrickWall-v1-pixels"]
+"tessera_rl_engine+step_chunk+tessera_rl_games+Connect4" = ["games/Connect4-v1"]
+"tessera_rl_engine+step_chunk+tessera_rl_games+Othello" = ["games/Othello-v1"]
+"tessera_rl_engine+step_chunk+tessera_rl_games+Leduc" = ["games/Leduc-v1"]
+"tessera_rl_engine+step_chunk+tessera_rl_classic+PaddleDuel" = ["holdout/PaddleDuel-v1-state"]
+"tessera_rl_engine+step_chunk+tessera_rl_games+Go9" = ["holdout/Go9-v1"]
+"tessera_rl_search+mcts+collect_and_stage+tessera_rl_games+Connect4" = ["search/Connect4-v1"]
+"_native+env_type+import_record" = ["state-operations/Connect4-v1"]
+"_native+split+pipelined+tessera_rl_classic+CartPole" = ["split-phase/CartPole-v1"]
+"tessera_rl_engine+gang+trampoline+par_chunks+step_inner+tessera_rl_classic+CartPole" = ["threaded/CartPole-v1"]
+"tessera_rl_engine+gang+trampoline+par_chunks+step_inner+tessera_rl_classic+Snake" = ["threaded/Snake-v1-pixels"]
+"tessera_rl_engine+batch+run_drain+tessera_rl_classic+CartPole" = ["holdout-split-phase/CartPole-v1"]

@@ -250,8 +250,11 @@ def test_pgo_coverage_refuses_an_instrumented_wheel(tmp_path):
     assert not r["usable"] and r["instrumented_objects"] == ["tessera_rl/_native.abi3.so"]
 
 
+MANIFEST = ROOT / "tools" / "pgo" / "manifest.toml"
+
+
 def frozen():
-    return evidence_mod().load_kernels(str(KERNELS)), coverage.load_holdout(str(KERNELS))
+    return evidence_mod().load_kernels(str(KERNELS)), coverage.holdout_only(str(KERNELS), str(MANIFEST))
 
 
 def evidence_mod():
@@ -265,6 +268,25 @@ def test_pgo_kernels_each_match_exactly_one_real_w1_symbol():
         hits = [s for s in W1_SYMBOLS if all(coverage.contains(s, p) for p in k.split("+"))]
         assert len(hits) == 1, (k, hits)
     assert set(holdout) <= set(kernels)
+
+
+def test_pgo_kernels_holdout_only_set_follows_the_rows():
+    _, holdout = frozen()
+    assert holdout == ["tessera_rl_engine+step_chunk+tessera_rl_classic+PaddleDuel",
+                       "tessera_rl_engine+step_chunk+tessera_rl_games+Go9",
+                       "tessera_rl_engine+batch+run_drain+tessera_rl_classic+CartPole"]
+
+
+@pytest.mark.parametrize("edit, match", [
+    (lambda t: t.replace('["state/Tag-v1-2-2"]', '["state/Nope-v1"]'), "unknown"),
+    (lambda t: t.replace('["search/Connect4-v1"]', '["games/Connect4-v1"]'), "reach no kernel"),
+    (lambda t: t.replace('"_native+env_type+import_record" = ["state-operations/Connect4-v1"]\n', ""), "exactly the kernels"),
+])
+def test_pgo_kernels_rows_are_checked(tmp_path, edit, match):
+    k = tmp_path / "kernels.toml"
+    k.write_text(edit(KERNELS.read_text()))
+    with pytest.raises(ValueError, match=match):
+        coverage.holdout_only(str(k), str(MANIFEST))
 
 
 def profile_of(nonzero: set[str], kernels: list[str]) -> str:
@@ -302,8 +324,9 @@ def test_pgo_coverage_main_refuses_an_empty_kernel_list(tmp_path):
     k.write_text("kernels = []\nholdout_kernels = []\n")
     (tmp_path / "show.txt").write_text(SHOW)
     (tmp_path / "final.log").write_text("")
-    args = ["--kernels", str(k), "--profile", str(tmp_path / "show.txt"), "--build-log", str(tmp_path / "final.log"),
-            "--wheel", str(wheel_with(tmp_path, b"clean")), "--variant", "full", "--out", str(tmp_path / "c.json")]
+    args = ["--kernels", str(k), "--manifest", str(MANIFEST), "--profile", str(tmp_path / "show.txt"), "--build-log",
+            str(tmp_path / "final.log"), "--wheel", str(wheel_with(tmp_path, b"clean")), "--variant", "full",
+            "--out", str(tmp_path / "c.json")]
     assert coverage.main(args) == 2
 
 
@@ -311,7 +334,7 @@ def test_pgo_coverage_main_writes_the_result(tmp_path):
     kernels, holdout = frozen()
     (tmp_path / "show.txt").write_text(profile_of(set(kernels) - set(holdout), kernels))
     (tmp_path / "final.log").write_text("")
-    args = ["--kernels", str(KERNELS), "--profile", str(tmp_path / "show.txt"), "--build-log",
+    args = ["--kernels", str(KERNELS), "--manifest", str(MANIFEST), "--profile", str(tmp_path / "show.txt"), "--build-log",
             str(tmp_path / "final.log"), "--wheel", str(wheel_with(tmp_path, b"clean")), "--out", str(tmp_path / "c.json")]
     assert coverage.main([*args, "--variant", "holdout"]) == 0
     assert json.loads((tmp_path / "c.json").read_text())["variant"] == "holdout"
