@@ -25,12 +25,22 @@ env:
 # that must stay on; by default a fork's run is never approved, and a
 # maintainer who has read the code pushes it to a branch of this repository
 # for CI. No workflow uses pull_request_target or secrets.
+#
+# Linux x86-64 jobs that need only the Rust toolchains run on any host with
+# the linux-x64 label (xaskar or flumix) and print the host and CPU first.
+# Pinned to xaskar: gungraun (its baselines belong to that CPU and image),
+# musl (musl-gcc is installed there only), readme (install-action needs jq),
+# deny (a Docker action), python and pufferlib (pipx), and the matrix jobs
+# "clippy and test (xaskar)" and "math differential (xaskar)", whose names
+# are merge conditions.
 jobs:
   fmt:
-    runs-on: [self-hosted, xaskar]
+    runs-on: [self-hosted, linux-x64]
     # Skipped for an unmodified fork pull request (see the header).
     if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
     steps:
+      # Two hosts carry linux-x64: the log names the one that ran this job.
+      - run: hostname && grep -m1 'model name' /proc/cpuinfo
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - run: cargo fmt --all -- --check
 
@@ -86,10 +96,12 @@ jobs:
   # under cargo deny: libfuzzer-sys compiles LLVM's C++ libFuzzer and is
   # outside the production dependency graph.
   fuzz-check:
-    runs-on: [self-hosted, xaskar]
+    runs-on: [self-hosted, linux-x64]
     # Skipped for an unmodified fork pull request (see the header).
     if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
     steps:
+      # Two hosts carry linux-x64: the log names the one that ran this job.
+      - run: hostname && grep -m1 'model name' /proc/cpuinfo
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
@@ -151,19 +163,23 @@ jobs:
       - run: cargo run -p tessera-rl-math-oracle --release --locked -- diff ${{ github.run_id }} 1000000
 
   build-id:
-    runs-on: [self-hosted, xaskar]
+    runs-on: [self-hosted, linux-x64]
     # Skipped for an unmodified fork pull request (see the header).
     if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
     steps:
+      # Two hosts carry linux-x64: the log names the one that ran this job.
+      - run: hostname && grep -m1 'model name' /proc/cpuinfo
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # A changed TESSERA_BUILD_ID rebuilds the engine and reaches it (ADR-0011).
       - run: scripts/check_build_id.sh
 
   loom:
-    runs-on: [self-hosted, xaskar]
+    runs-on: [self-hosted, linux-x64]
     # Skipped for an unmodified fork pull request (see the header).
     if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
     steps:
+      # Two hosts carry linux-x64: the log names the one that ran this job.
+      - run: hostname && grep -m1 'model name' /proc/cpuinfo
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - run: cargo test -p tessera-rl-engine --lib --release --locked -- gang storage ring id_buffers live_model
         env:
@@ -172,19 +188,23 @@ jobs:
           CARGO_TARGET_DIR: target/loom
 
   msrv:
-    runs-on: [self-hosted, xaskar]
+    runs-on: [self-hosted, linux-x64]
     # Skipped for an unmodified fork pull request (see the header).
     if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
     steps:
+      # Two hosts carry linux-x64: the log names the one that ran this job.
+      - run: hostname && grep -m1 'model name' /proc/cpuinfo
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - run: rustup toolchain install 1.95.0 --profile minimal
       - run: cargo +1.95.0 check --workspace --all-targets --locked
 
   docs:
-    runs-on: [self-hosted, xaskar]
+    runs-on: [self-hosted, linux-x64]
     # Skipped for an unmodified fork pull request (see the header).
     if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
     steps:
+      # Two hosts carry linux-x64: the log names the one that ran this job.
+      - run: hostname && grep -m1 'model name' /proc/cpuinfo
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - run: cargo doc --workspace --no-deps --all-features --locked
         env:
