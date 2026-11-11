@@ -433,3 +433,154 @@ fn test_ring_claim_paused_while_other_ids_cycle_delivers_every_id_once() {
         }
     });
 }
+
+/// A run claim takes `ceil(k / share)` of the `k` ids it finds, at most
+/// `out.len()`, oldest first; an empty ring gives zero.
+#[cfg(not(loom))]
+#[test]
+fn test_ring_claim_run_takes_its_share_in_order() {
+    let mut ring = SubmitRing::new(16).unwrap();
+    for id in 0..10 {
+        ring.push(id).unwrap();
+    }
+    let mut out = [u32::MAX; 8];
+    // 8 found (bounded by `out`), shared by 3: ceil(8 / 3) = 3.
+    assert_eq!(ring.claim_run(&mut out, 3).unwrap(), 3);
+    assert_eq!(out[..3], [0, 1, 2]);
+    assert_eq!(out[3], u32::MAX, "nothing written past the run");
+    // 7 left, one claimer: all 7.
+    assert_eq!(ring.claim_run(&mut out, 1).unwrap(), 7);
+    assert_eq!(out[..7], [3, 4, 5, 6, 7, 8, 9]);
+    assert_eq!(ring.claim_run(&mut out, 1).unwrap(), 0);
+    // A share of zero counts as one; an empty `out` claims nothing.
+    ring.push(11).unwrap();
+    assert_eq!(ring.claim_run(&mut [], 1).unwrap(), 0);
+    assert_eq!(ring.claim_run(&mut out, 0).unwrap(), 1);
+    assert_eq!(out[0], 11);
+}
+
+/// A run push fills only the free slots and reports how many; a full ring
+/// refuses the run and overwrites nothing.
+#[cfg(not(loom))]
+#[test]
+fn test_ring_push_run_fills_a_prefix_then_reports_full() {
+    let mut ring = CompletionRing::new(4).unwrap();
+    ring.push(9).unwrap();
+    assert_eq!(ring.push_run(&[0, 1, 2, 3, 4]).unwrap(), 3, "3 slots free");
+    assert_eq!(ring.push_run(&[5]), Err(RingError::Full { capacity: 4 }));
+    assert_eq!(ring.push_run(&[]).unwrap(), 0);
+    for want in [9, 0, 1, 2] {
+        assert_eq!(ring.pop().unwrap(), Some(want));
+    }
+    assert_eq!(ring.pop().unwrap(), None);
+    // Across the wrap: a run that crosses the end of the slot array.
+    assert_eq!(ring.push_run(&[5, 6, 7]).unwrap(), 3);
+    let mut seen = Vec::new();
+    while let Some(id) = ring.pop().unwrap() {
+        seen.push(id);
+    }
+    assert_eq!(seen, [5, 6, 7]);
+}
+
+/// Run operations at the end of the positions report `Exhausted` before
+/// taking a position, as the single ones do.
+#[cfg(not(loom))]
+#[test]
+fn test_ring_run_ops_report_exhaustion_before_taking_a_position() {
+    let pos = usize::MAX - 1;
+    let ring = super::IdRing::at_position(2, pos).unwrap();
+    ring.push(7).unwrap();
+    let mut out = [0u32; 2];
+    assert_eq!(ring.pop_run(&mut out, 1), Err(RingError::Exhausted));
+    assert_eq!(ring.head.load(Ordering::Relaxed), pos, "no position taken");
+    assert_eq!(ring.push_run(&[8]), Err(RingError::Exhausted));
+    assert_eq!(
+        ring.tail.load(Ordering::Relaxed),
+        pos + 1,
+        "no position taken"
+    );
+}
+
+/// Two run claimers race the single producer's run push across a wrapped
+/// ring: every id is delivered exactly once, whatever the claims' sizes.
+#[test]
+fn test_ring_claim_run_two_claimers_wrap_and_deliver_exactly_once() {
+    fn count(seen: &[AtomicU32; 2], ids: &[u32]) {
+        for &id in ids {
+            seen.get(id as usize)
+                .expect("a stale id")
+                .fetch_add(1, Ordering::Relaxed);
+        }
+    }
+    model(|| {
+        let ring = Arc::new(super::IdRing::new(2).unwrap());
+        for id in 10..12 {
+            ring.push(id).unwrap();
+            assert_eq!(ring.pop().unwrap(), Some(id));
+        }
+        let seen = Arc::new([AtomicU32::new(0), AtomicU32::new(0)]);
+        let claimers: Vec<_> = (0..2)
+            .map(|_| {
+                let ring = Arc::clone(&ring);
+                let seen = Arc::clone(&seen);
+                thread::spawn(move || {
+                    let mut out = [0u32; 2];
+                    let k = ring.pop_run(&mut out, 1).unwrap();
+                    count(&seen, &out[..k]);
+                })
+            })
+            .collect();
+        assert_eq!(ring.push_run(&[0, 1]).unwrap(), 2);
+        for c in claimers {
+            c.join().unwrap();
+        }
+        let mut out = [0u32; 2];
+        loop {
+            let k = ring.pop_run(&mut out, 1).unwrap();
+            if k == 0 {
+                break;
+            }
+            count(&seen, &out[..k]);
+        }
+        for c in seen.iter() {
+            assert_eq!(c.load(Ordering::Relaxed), 1, "every id exactly once");
+        }
+    });
+}
+
+/// Two run producers race the single consumer: every id arrives exactly
+/// once, and each producer's ids arrive in its order.
+#[test]
+fn test_ring_push_run_two_producers_one_consumer_deliver_exactly_once() {
+    model(|| {
+        let ring = Arc::new(super::IdRing::new(4).unwrap());
+        let producers: Vec<_> = [[0u32, 1], [2, 3]]
+            .into_iter()
+            .map(|ids| {
+                let ring = Arc::clone(&ring);
+                thread::spawn(move || {
+                    let mut rest: &[u32] = &ids;
+                    while !rest.is_empty() {
+                        let k = ring.push_run(rest).unwrap();
+                        rest = &rest[k..];
+                    }
+                })
+            })
+            .collect();
+        let mut got = Vec::new();
+        if let Some(id) = ring.pop().unwrap() {
+            got.push(id);
+        }
+        for p in producers {
+            p.join().unwrap();
+        }
+        while let Some(id) = ring.pop().unwrap() {
+            got.push(id);
+        }
+        let mut sorted = got.clone();
+        sorted.sort_unstable();
+        assert_eq!(sorted, [0, 1, 2, 3], "every id exactly once");
+        let pos = |id| got.iter().position(|&g| g == id).unwrap();
+        assert!(pos(0) < pos(1) && pos(2) < pos(3), "per-producer order");
+    });
+}

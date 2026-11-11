@@ -5,8 +5,8 @@
 //!
 //! [`EnvPool::async_mode`] moves the pool into one shared allocation and
 //! takes its workers. [`AsyncPool::send`] admits ids with their actions into
-//! the submission ring; workers claim them one at a time and push each to
-//! the completion ring; [`AsyncPool::recv`] returns the first `batch_size`
+//! the submission ring; workers claim them in runs and push them to the
+//! completion ring; [`AsyncPool::recv`] returns the first `batch_size`
 //! completed ids as a [`BatchToken`]. Results borrow the token, and an id
 //! cannot be sent again while a token covers it (ADR-0047 section 1).
 //! Determinism is per instance: batch membership depends on timing, an
@@ -32,13 +32,11 @@
 //!
 //! # Performance
 //!
-//! Async is currently much slower per round than Sync. Workers claim one
-//! instance at a time and the waits poll in 100 µs steps. An indicative
-//! local measurement (`benches/async_step.rs`, a loaded Mac): a round of
-//! 256 instances received in batches of 64 took about 183 µs on the park
-//! backend and 58 µs on the native one, against 15 µs and 9 µs for one Sync
-//! step of the same pool. Batch claiming and wake-based waits are tracked in
-//! issue #83.
+//! Async is currently slower per round than Sync. Workers claim runs of
+//! ids (issue #83), but the waits still poll in 100 µs steps on the park
+//! backend and in `recv_timeout` (ADR-0047 section 7); wake-based waits
+//! need a decision beyond ADR-0047 (issue #83). Measure with
+//! `benches/async_step.rs` (`async_round_256`).
 
 use crate::masks::PersistMask;
 use crate::persist::{DecodeLimits, PersistError};

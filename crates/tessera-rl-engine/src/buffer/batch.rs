@@ -8,10 +8,14 @@
 //! tokens and the per-id flags. Workers reach it only through the drain
 //! job's data pointer, taken from `Arc::as_ptr`; they hold no `Arc`.
 //!
-//! The drain job claims ids from the submission ring one at a time (dynamic
-//! claiming, ADR-0047 section 7), steps each claimed instance alone and
-//! pushes it to the completion ring. A job ends when the submission ring is
-//! empty; the caller publishes another when ids remain unclaimed.
+//! The drain job claims runs of ids from the submission ring (dynamic
+//! claiming, ADR-0047 section 7; a claim takes its share of the ids it
+//! finds, issue #83), steps each run of consecutive ids as one chunk and
+//! pushes the claimed ids to the completion ring. Every step reads and
+//! writes only its own instance's rows, so an instance's outputs do not
+//! depend on how ids are grouped into claims or chunks. A job ends when the
+//! submission ring is empty; the caller publishes another when ids remain
+//! unclaimed.
 //!
 //! A [`BatchToken`] is the caller's exclusive right to read the rows of its
 //! ids (invariants 3 and 4 of the module): it sets each id's live flag when
@@ -409,30 +413,61 @@ unsafe fn run_drain<E: Environment, M: MaskProvider<E>>(data: *const (), worker:
         return;
     }
     let ctx = mode.pool.step_ctx();
+    let mut run = [0u32; CLAIM_RUN];
     loop {
-        let id = match mode.submit.claim() {
-            Ok(Some(id)) => id,
-            Ok(None) => return,
+        let claimed = match mode.submit.claim_run(&mut run, mode.workers) {
+            Ok(0) => return,
+            Ok(k) => run.get(..k).unwrap_or(&[]),
             Err(_) => {
                 mode.panicked.store(true, Ordering::Relaxed);
                 return;
             }
         };
-        #[cfg(test)]
-        jitter(mode, id);
-        let i = usize::try_from(id).unwrap_or(usize::MAX);
-        // SAFETY: id `i` was claimed by this worker alone (the ring hands
-        // each admitted id out once) and no token covers it (the send checked
-        // its live flag with Acquire before admitting it): invariants 3, 4.
-        if let Some(mut chunk) = unsafe { mode.raw.range_view(i..i.saturating_add(1)) }
-            && !crate::sys::catch(|| step_chunk::<E, M>(&ctx, &mut chunk))
-        {
-            mode.panicked.store(true, Ordering::Relaxed);
+        let mut rest = claimed;
+        while let Some(&first) = rest.first() {
+            let len = consecutive(rest);
+            #[cfg(test)]
+            for &id in rest.get(..len).unwrap_or(&[]) {
+                jitter(mode, id);
+            }
+            let start = usize::try_from(first).unwrap_or(usize::MAX);
+            let end = start.saturating_add(len);
+            // SAFETY: ids `start..end` were claimed by this worker alone (the
+            // ring hands each admitted id out once, and `rest` repeats none)
+            // and no token covers them (the send checked each live flag with
+            // Acquire before admitting it): invariants 3, 4.
+            let view = unsafe { mode.raw.range_view(start..end) };
+            if let Some(mut chunk) = view
+                && !crate::sys::catch(|| step_chunk::<E, M>(&ctx, &mut chunk))
+            {
+                mode.panicked.store(true, Ordering::Relaxed);
+            }
+            rest = rest.get(len..).unwrap_or(&[]);
         }
-        // The id's writes happen before its completion entry (the ring's
-        // Release on the slot sequence; the caller pops with Acquire).
-        complete(mode, id);
+        // The ids' writes happen before their completion entries (the ring's
+        // Release on each slot sequence; the caller pops with Acquire).
+        complete(mode, claimed);
     }
+}
+
+/// The most ids one claim of the drain job takes from the submission ring
+/// (issue #83). A claim takes `ceil(k / workers)` of the `k` ids it finds,
+/// up to this many, so a backlog is split among the workers.
+const CLAIM_RUN: usize = 64;
+
+/// The length of the leading run of consecutive ids of `ids` (`a, a + 1,
+/// ...`), at least one if `ids` is not empty. Such a run is stepped as one
+/// chunk; each instance's step reads and writes only its own rows, so the
+/// result per instance does not depend on how ids are grouped.
+fn consecutive(ids: &[u32]) -> usize {
+    let mut len = usize::from(!ids.is_empty());
+    while let (Some(&prev), Some(&next)) = (ids.get(len.wrapping_sub(1)), ids.get(len)) {
+        if prev.checked_add(1) != Some(next) {
+            break;
+        }
+        len += 1;
+    }
+    len
 }
 
 /// Test-only: sleeps a pseudo-random time before stepping `id`, so that
@@ -451,23 +486,28 @@ fn jitter<E: Environment, M: MaskProvider<E>>(mode: &BatchMode<E, M>, id: u32) {
     std::thread::sleep(core::time::Duration::from_micros(micros));
 }
 
-/// Pushes `id` to the completion ring, retrying while it is transiently
-/// full behind a paused pop (ADR-0047 section 7, the ring's module docs).
+/// Pushes the stepped `ids` to the completion ring, in order, retrying
+/// while it is transiently full behind a paused pop (ADR-0047 section 7, the
+/// ring's module docs).
 ///
-/// The id counts as stepped before its entry is visible: a caller that received
-/// every id must find nothing running, whatever this worker does next
-/// (ADR-0047 section 3). Only ring bookkeeping remains, which no row reader
-/// touches, and a writer drains the job before it starts.
-fn complete<E: Environment, M: MaskProvider<E>>(mode: &BatchMode<E, M>, id: u32) {
-    mode.stepped.fetch_add(1, Ordering::Release);
+/// The ids count as stepped before any of their entries is visible: a
+/// caller that received every id must find nothing running, whatever this
+/// worker does next (ADR-0047 section 3). Only ring bookkeeping remains,
+/// which no row reader touches, and a writer drains the job before it
+/// starts.
+fn complete<E: Environment, M: MaskProvider<E>>(mode: &BatchMode<E, M>, ids: &[u32]) {
+    mode.stepped.fetch_add(ids.len(), Ordering::Release);
     #[cfg(test)]
     {
         hold_at(mode, GATE_BEFORE_PUSH);
-        jitter(mode, id);
+        for &id in ids {
+            jitter(mode, id);
+        }
     }
-    loop {
-        match mode.complete.push(id) {
-            Ok(()) => break,
+    let mut rest = ids;
+    while !rest.is_empty() {
+        match mode.complete.push_run(rest) {
+            Ok(k) => rest = rest.get(k..).unwrap_or(&[]),
             Err(RingError::Full { .. }) => std::thread::yield_now(),
             Err(_) => {
                 mode.panicked.store(true, Ordering::Relaxed);
@@ -478,9 +518,11 @@ fn complete<E: Environment, M: MaskProvider<E>>(mode: &BatchMode<E, M>, id: u32)
     #[cfg(test)]
     {
         hold_at(mode, GATE_AFTER_PUSH);
-        jitter(mode, id);
+        for &id in ids {
+            jitter(mode, id);
+        }
     }
-    mode.ready.count.fetch_add(1, Ordering::Release);
+    mode.ready.count.fetch_add(ids.len(), Ordering::Release);
 }
 
 /// A `jitter_us` that holds a worker in [`complete`] before its push.
@@ -942,5 +984,22 @@ impl BatchWaiter {
             // park traps in the child of a multithreaded parent (issue #93).
             std::thread::sleep(core::time::Duration::from_micros(100));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::consecutive;
+
+    /// A run of consecutive ids ends at the first gap, a descent or a
+    /// repeat, and at `u32::MAX`, which has no successor.
+    #[test]
+    fn test_consecutive_run_ends_at_the_first_gap_expected() {
+        assert_eq!(consecutive(&[]), 0);
+        assert_eq!(consecutive(&[7]), 1);
+        assert_eq!(consecutive(&[3, 4, 5, 7, 8]), 3);
+        assert_eq!(consecutive(&[5, 4]), 1);
+        assert_eq!(consecutive(&[5, 5]), 1);
+        assert_eq!(consecutive(&[u32::MAX - 1, u32::MAX, 0]), 2);
     }
 }
