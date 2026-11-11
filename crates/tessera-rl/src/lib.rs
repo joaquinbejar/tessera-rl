@@ -289,4 +289,8 @@ pub use tessera_rl_macros as macros;
 pub use tessera_rl_num as num;
 pub use tessera_rl_search as search;
 
+/// Environment registration (SPEC 10, ADR-0032, ADR-0054).
+pub use tessera_rl_core::envs;
+pub use tessera_rl_core::register;
+
 pub mod prelude;

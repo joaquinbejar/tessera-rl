@@ -41,6 +41,9 @@ pub const ENV_ID: &str = "tessera/CartPole-v1";
 /// Environment version, bumped with any change to its outputs.
 pub const ENV_VERSION: u32 = 1;
 
+// Registration under the versioned id (SPEC 10, ADR-0054).
+tessera_rl_core::register!(CartPole, id = "tessera/CartPole-v1");
+
 /// Half-width of the reset distribution.
 const RESET_BOUND: f64 = 0.05;
 

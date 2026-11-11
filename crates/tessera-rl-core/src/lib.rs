@@ -18,6 +18,7 @@ pub mod encoding;
 pub mod agent;
 pub mod config;
 pub mod env;
+pub mod envs;
 pub mod error;
 pub mod header;
 pub mod header_view;

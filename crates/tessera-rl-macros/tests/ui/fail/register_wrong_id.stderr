@@ -1,0 +1,7 @@
+error[E0080]: evaluation panicked: register!: the id must equal the environment's Persist::ENV_ID
+ --> tests/ui/fail/register_wrong_id.rs:4:1
+  |
+4 | tessera_rl::register!(tessera_rl::classic::Grid, id = "tessera/Grid-v2");
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ evaluation of `_` failed here
+  |
+  = note: this error originates in the macro `$crate::panic::panic_2021` which comes from the expansion of the macro `tessera_rl::register` (in Nightly builds, run with -Z macro-backtrace for more info)

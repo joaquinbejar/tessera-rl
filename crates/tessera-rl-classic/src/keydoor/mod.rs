@@ -45,6 +45,9 @@ use tessera_rl_num::rng::{ObsRng, StepRng};
 pub const ENV_ID: &str = "tessera/GridKeyDoor-v1";
 /// Environment version, bumped with any change to its outputs.
 pub const ENV_VERSION: u32 = 1;
+
+// Registration under the versioned id (SPEC 10, ADR-0054).
+tessera_rl_core::register!(KeyDoor, id = "tessera/GridKeyDoor-v1");
 /// Agent slots.
 pub const MAX_AGENTS: usize = 4;
 /// Turn left.

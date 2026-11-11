@@ -38,6 +38,9 @@ use grid::{ACTIONS, Cell, STAY, distance, moved, place};
 pub const ENV_ID: &str = "tessera/Tag-v1";
 /// Environment version, bumped with any change to its outputs.
 pub const ENV_VERSION: u32 = 1;
+
+// Registration under the versioned id (SPEC 10, ADR-0054).
+tessera_rl_core::register!(Tag, id = "tessera/Tag-v1");
 /// Agent slots.
 pub const MAX_AGENTS: usize = 8;
 /// Largest observation radius.

@@ -39,6 +39,9 @@ pub const ENV_ID: &str = "tessera/Pendulum-v1";
 /// Environment version, bumped with any change to its outputs.
 pub const ENV_VERSION: u32 = 1;
 
+// Registration under the versioned id (SPEC 10, ADR-0054).
+tessera_rl_core::register!(Pendulum, id = "tessera/Pendulum-v1");
+
 /// Pendulum configuration: version 1 has no parameters (`g` is fixed at 10).
 #[derive(EnvConfig, Debug, Clone, PartialEq, Eq)]
 pub struct PendulumConfig {}

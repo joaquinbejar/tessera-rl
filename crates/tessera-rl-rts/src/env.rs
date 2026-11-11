@@ -42,6 +42,9 @@ use crate::world::{Dir, Grid, MAX_CELLS, Team, Terrain};
 pub const ENV_ID: &str = "tessera/RTS-v1";
 /// Environment version, bumped with any change to its outputs.
 pub const ENV_VERSION: u32 = 2;
+
+// Registration under the versioned id (SPEC 10, ADR-0054).
+tessera_rl_core::register!(Rts, id = "tessera/RTS-v1");
 /// Agent slots: one per side.
 pub const MAX_AGENTS: usize = 2;
 /// State unit slots per side.
