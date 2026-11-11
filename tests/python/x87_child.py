@@ -5,12 +5,17 @@ tests drive) is shown once per process, and the precondition scenarios
 end in a hardware fault.
 
 Usage: python x87_child.py SCENARIO. Prints one JSON object, unless the
-scenario is expected to die with SIGFPE.
+scenario is expected to die with a hardware fault (SIGFPE on System V, an
+NTSTATUS float code on Win64).
 
 The x86-64 registers are read and written raw, through small native stubs
 in an executable page (written while read-write, then made read-execute):
-``fegetround`` reads only the x87 control word on glibc, so it cannot tell
-the two registers apart. System V x86-64 only (Linux and macOS).
+``fegetround`` reads only the x87 control word on glibc, and the UCRT's
+``_controlfp_s`` acts on MXCSR on x64, so neither can tell the two
+registers apart. System V x86-64 (Linux and macOS) and Win64 (#163); the
+Win64 stubs use the caller-allocated home space at ``[rsp+8]`` (Win64 has
+no red zone) and take their argument in ``ecx``. Every stub is a leaf that
+never moves ``rsp``. Encodings checked with ``llvm-objdump``.
 """
 
 import ctypes
@@ -29,6 +34,9 @@ import tessera_rl as t
 # (everything but the six status flags).
 X87_DEFINED = 0x1F3F
 MXCSR_CONTROL = 0xFFC0
+# The System V process default (64-bit precision). On Win64 the CRT starts
+# with 0x027F (53-bit precision); main() reads the start value there
+# instead of assuming it.
 X87_DEFAULT = 0x037F
 MXCSR_DEFAULT = 0x1F80
 # A caller x87 word: double precision, round up, all masked.
@@ -60,21 +68,85 @@ _STUBS = {
 }
 
 
-class Raw:
-    """The native stubs. Raises OSError where an executable mapping is
-    refused (SELinux execmem, a hardened runtime)."""
+_STUBS_WIN64 = {
+    # stmxcsr [rsp+8]; mov eax, [rsp+8]; ret
+    "mxcsr": ("0fae5c24088b442408c3", ctypes.c_uint32, []),
+    # mov [rsp+8], ecx; ldmxcsr [rsp+8]; ret
+    "set_mxcsr": ("894c24080fae542408c3", None, [ctypes.c_uint32]),
+    # fnstcw [rsp+8]; movzx eax, word [rsp+8]; ret
+    "x87": ("d97c24080fb7442408c3", ctypes.c_uint32, []),
+    # mov [rsp+8], cx; fldcw [rsp+8]; ret
+    "set_x87": ("66894c2408d96c2408c3", None, [ctypes.c_uint32]),
+    # fnstsw ax; movzx eax, ax; ret
+    "x87_status": ("dfe00fb7c0c3", ctypes.c_uint32, []),
+    # fnstenv [rsp+8]; or word [rsp+12], 4; fldenv [rsp+8]; ret. The
+    # 28-byte environment fits the 32 bytes of home space. fnstenv masks
+    # every x87 exception after storing and fldenv reloads the stored
+    # control word, so the word is unchanged across the stub; only the
+    # divide-by-zero status flag is set, pending if the word unmasks it.
+    "raise_x87_ze": ("d9742408"
+                     "66834c240c04d9642408"
+                     "c3", None, []),
+}
 
-    def __init__(self):
-        code = b"".join(bytes.fromhex(h).ljust(32, b"\xcc") for h, _, _ in _STUBS.values())
-        self._map = mmap.mmap(-1, mmap.PAGESIZE, prot=mmap.PROT_READ | mmap.PROT_WRITE)
-        self._map.write(code)
-        base = ctypes.addressof(ctypes.c_char.from_buffer(self._map))
+WIN64 = sys.platform == "win32"
+
+
+def _executable_page(code):
+    """``code`` in a read-execute page; its base address and an owner that
+    keeps the page alive."""
+    if not WIN64:
+        page = mmap.mmap(-1, mmap.PAGESIZE, prot=mmap.PROT_READ | mmap.PROT_WRITE)
+        page.write(code)
+        base = ctypes.addressof(ctypes.c_char.from_buffer(page))
         libc = ctypes.CDLL(None, use_errno=True)
         libc.mprotect.argtypes = [ctypes.c_void_p, ctypes.c_size_t, ctypes.c_int]
         if libc.mprotect(base, mmap.PAGESIZE, mmap.PROT_READ | mmap.PROT_EXEC) != 0:
             raise OSError(ctypes.get_errno(), "mprotect to read-execute refused")
-        for i, (name, (_, restype, argtypes)) in enumerate(_STUBS.items()):
-            setattr(self, name, ctypes.CFUNCTYPE(restype, *argtypes)(base + 32 * i))
+        return base, page
+    k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    k32.VirtualAlloc.argtypes = [ctypes.c_void_p, ctypes.c_size_t, ctypes.c_uint32, ctypes.c_uint32]
+    k32.VirtualAlloc.restype = ctypes.c_void_p
+    k32.VirtualProtect.argtypes = [ctypes.c_void_p, ctypes.c_size_t, ctypes.c_uint32,
+                                   ctypes.POINTER(ctypes.c_uint32)]
+    k32.VirtualProtect.restype = ctypes.c_int
+    k32.FlushInstructionCache.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t]
+    k32.FlushInstructionCache.restype = ctypes.c_int
+    k32.GetCurrentProcess.restype = ctypes.c_void_p
+    mem_commit_reserve, page_rw, page_rx = 0x3000, 0x04, 0x20
+    base = k32.VirtualAlloc(None, 4096, mem_commit_reserve, page_rw)
+    if not base:
+        raise ctypes.WinError(ctypes.get_last_error())
+    ctypes.memmove(base, code, len(code))
+    old = ctypes.c_uint32()
+    # A refusal here (arbitrary code guard) becomes a named skip.
+    if not k32.VirtualProtect(base, 4096, page_rx, ctypes.byref(old)):
+        raise ctypes.WinError(ctypes.get_last_error())
+    k32.FlushInstructionCache(k32.GetCurrentProcess(), base, 4096)
+    # The page lives as long as the process: the child is short-lived.
+    return base, None
+
+
+class Raw:
+    """The native stubs. Raises OSError where an executable mapping is
+    refused (SELinux execmem, a hardened runtime, Windows ACG). ``last``
+    names the stub called most recently, so a hardware exception that
+    ctypes converts into OSError on Windows can be attributed."""
+
+    def __init__(self):
+        stubs = _STUBS_WIN64 if WIN64 else _STUBS
+        code = b"".join(bytes.fromhex(h).ljust(32, b"\xcc") for h, _, _ in stubs.values())
+        base, self._page = _executable_page(code)
+        self.last = None
+        for i, (name, (_, restype, argtypes)) in enumerate(stubs.items()):
+            setattr(self, name, self._named(name, ctypes.CFUNCTYPE(restype, *argtypes)(base + 32 * i)))
+
+    def _named(self, name, fn):
+        def call(*args):
+            self.last = name
+            return fn(*args)
+
+        return call
 
     def words(self):
         """[x87 control word, MXCSR control bits], masked to defined bits."""
@@ -82,9 +154,50 @@ class Raw:
 
 
 def supported():
-    if sys.platform == "win32" or platform.machine().lower() not in ("x86_64", "amd64"):
-        return "the raw x87 probes run on System V x86-64 only"
+    if platform.machine().lower() not in ("x86_64", "amd64"):
+        return "the raw x87 probes run on x86-64 only"
     return None
+
+
+def no_error_dialogs():
+    """Win64: an unhandled exception ends the process without a Windows
+    Error Reporting dialog, so a faulting child never hangs the session."""
+    if WIN64:
+        sem_failcriticalerrors, sem_nogpfaulterrorbox = 0x0001, 0x0002
+        ctypes.windll.kernel32.SetErrorMode(sem_failcriticalerrors | sem_nogpfaulterrorbox)
+
+
+def ucrt_view():
+    """Win64: what the UCRT reports (``_controlfp_s``, ``_statusfp``).
+    Recorded beside the raw words, never asserted: ADR-0044 does not take
+    a CRT abstraction as evidence of the physical x87 word."""
+    if not WIN64:
+        return None
+    ucrt = ctypes.CDLL("ucrtbase")
+    ucrt._controlfp_s.argtypes = [ctypes.POINTER(ctypes.c_uint), ctypes.c_uint, ctypes.c_uint]
+    ucrt._controlfp_s.restype = ctypes.c_int
+    ucrt._statusfp.argtypes = []
+    ucrt._statusfp.restype = ctypes.c_uint
+    cw = ctypes.c_uint()
+    err = ucrt._controlfp_s(ctypes.byref(cw), 0, 0)
+    return {"controlfp_s": cw.value, "controlfp_s_err": err, "statusfp": ucrt._statusfp()}
+
+
+def self_test(raw):
+    """The stubs read back what they write, and the MXCSR stub leaves the
+    x87 word alone. A failure fails the scenario, never skips it."""
+    start = raw.x87()
+    seen = []
+    for v in (X87_CALLER, X87_HOST):
+        raw.set_x87(v)
+        seen.append(raw.x87() & X87_DEFINED)
+    raw.set_x87(X87_CALLER)
+    raw.set_mxcsr(MXCSR_TOWARDZERO)
+    seen.append(raw.x87() & X87_DEFINED)
+    raw.set_mxcsr(MXCSR_DEFAULT)
+    raw.set_x87(start)
+    want = [v & X87_DEFINED for v in (X87_CALLER, X87_HOST, X87_CALLER)]
+    return {"ok": seen == want, "seen": seen, "want": want}
 
 
 def env_episode():
@@ -121,7 +234,9 @@ def warn_hook(action):
 
 
 def main(scenario):
+    global X87_DEFAULT
     result = {"scenario": scenario}
+    no_error_dialogs()
     why = supported()
     if why is None:
         try:
@@ -132,6 +247,17 @@ def main(scenario):
         result["skipped"] = why
         print(json.dumps(result))
         return
+
+    result["initial"] = raw.words()
+    if WIN64:
+        # The raw start word, unmasked, so the child puts back exactly what
+        # it found; reports stay masked.
+        X87_DEFAULT = raw.x87()
+        result["ucrt_initial"] = ucrt_view()
+    result["self_test"] = self_test(raw)
+    if not result["self_test"]["ok"]:
+        print(json.dumps(result))
+        raise SystemExit(3)
 
     if scenario == "entry":
         # An x87-only caller change (MXCSR canonical): preserved, not
@@ -153,17 +279,33 @@ def main(scenario):
         # binding, and the results do not change.
         import ctypes.util
 
-        libm = ctypes.CDLL(ctypes.util.find_library("m"))
         clean = env_episode()
+        if WIN64:
+            # The UCRT's fesetround on x64 is not assumed to write the x87
+            # word: whether it did is recorded, and the x87 word is then
+            # set toward zero raw, so both registers are hostile as on
+            # System V.
+            libm = ctypes.CDLL("ucrtbase")
+            libm.fesetround.argtypes = [ctypes.c_int]
+            libm.fesetround.restype = ctypes.c_int
+            toward_zero = 0x0300  # the UCRT's FE_TOWARDZERO
+        else:
+            libm = ctypes.CDLL(ctypes.util.find_library("m"))
+            toward_zero = 0x0C00  # glibc's and macOS's FE_TOWARDZERO
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            assert libm.fesetround(0x0C00) == 0  # FE_TOWARDZERO
+            assert libm.fesetround(toward_zero) == 0
             try:
+                if WIN64:
+                    result["crt_wrote_x87"] = (raw.x87() >> 10) & 3 == 3
+                    raw.set_x87(raw.x87() | 0x0C00)
                 want = raw.words()
                 hostile = env_episode()
                 result["after"] = raw.words()
             finally:
                 libm.fesetround(0)
+                if WIN64:
+                    raw.set_x87(X87_DEFAULT)
         result["want"] = want
         result["want_is_toward_zero"] = (want[0] >> 10) & 3 == 3 and (want[1] >> 13) & 3 == 3
         result["identical"] = hostile == clean
@@ -207,6 +349,9 @@ def main(scenario):
             seen["hook_entry"] = raw.words()
             raw.set_x87(X87_HOST)
             raw.set_mxcsr(MXCSR_DEFAULT)
+            # The restore is shown, not only the end state: the hook's own
+            # word is in force inside the callout.
+            seen["hook_x87"] = raw.x87() & X87_DEFINED
             if scenario == "callout_nested":
                 t.make("tessera/CartPole-v1", seed=2, outputs="owned").reset()
                 seen["after_nested"] = raw.words()
@@ -228,6 +373,8 @@ def main(scenario):
         result["outcome"] = outcome
         result["after"] = after
         result["hook_entry"] = seen.get("hook_entry")
+        result["hook_x87"] = seen.get("hook_x87")
+        result["want_hook_x87"] = X87_HOST & X87_DEFINED
         result["after_nested"] = seen.get("after_nested")
         result["want"] = [X87_CALLER & X87_DEFINED, MXCSR_TOWARDZERO & MXCSR_CONTROL]
         result["want_nested"] = [X87_HOST & X87_DEFINED, MXCSR_DEFAULT & MXCSR_CONTROL]
@@ -237,7 +384,10 @@ def main(scenario):
         # - newly unmasked: masked when raised, the caller's word unmasks it;
         # - current unmasked (the caller masks everything): the hook's own
         #   word unmasks it, so it is pending when the callback returns.
-        # The violating scenarios are expected to die with SIGFPE.
+        # The violating scenarios are expected to die with a hardware fault
+        # in engine code: SIGFPE on System V, an NTSTATUS float code on
+        # Win64. On Win64 ctypes turns a hardware exception inside a stub
+        # into OSError; that is reported as its own outcome, with the stub.
         caller = X87_DEFAULT
         hook_word = X87_DEFAULT
         if scenario == "pending_masked_newly_unmasked":
@@ -258,12 +408,19 @@ def main(scenario):
             status = raw.x87_status()
             return status
 
-        status, after = under(raw, caller, MXCSR_TOWARDZERO, call)
+        try:
+            status, after = under(raw, caller, MXCSR_TOWARDZERO, call)
+        except OSError as e:
+            print(json.dumps({"scenario": scenario, "outcome": "ctypes_oserror",
+                              "stub": raw.last, "winerror": str(e)}))
+            raise SystemExit(4) from None
         result["status_ze"] = bool(status & X87_ZE)
         result["after"] = after
         result["want"] = [caller & X87_DEFINED, MXCSR_TOWARDZERO & MXCSR_CONTROL]
     else:
         raise SystemExit(f"unknown scenario {scenario}")
+    if WIN64:
+        result["ucrt_final"] = ucrt_view()
     print(json.dumps(result))
 
 
