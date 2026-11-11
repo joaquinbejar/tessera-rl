@@ -239,10 +239,20 @@ def next_state(agent: Agent, state) -> tuple[torch.Tensor, torch.Tensor]:
     return next_value, torch.as_tensor(state[2], dtype=torch.float32)
 
 
+# The sha256 of the frozen protocol (docs/reviews/ppo-protocols/rts.md at its
+# freeze). None until the freeze PR, reviewed with the protocol's revision,
+# sets it: while it is None nothing can train or evaluate from this
+# repository, whatever a caller passes (TR on the runner, R1).
+FROZEN_PROTOCOL_SHA256: str | None = None
+
+
 def authorize(authorization: str, frozen_sha256: str) -> None:
-    """Refuses unless ``authorization`` equals the non-empty frozen sha256."""
-    if not frozen_sha256 or authorization != frozen_sha256:
-        raise PermissionError("no training run without the frozen protocol's sha256 as authorization")
+    """Refuses unless the repository's frozen protocol sha256 is set and
+    both ``frozen_sha256`` and ``authorization`` equal it."""
+    if FROZEN_PROTOCOL_SHA256 is None:
+        raise PermissionError("the protocol is not frozen in this repository: no run")
+    if frozen_sha256 != FROZEN_PROTOCOL_SHA256 or authorization != FROZEN_PROTOCOL_SHA256:
+        raise PermissionError("no run without the frozen protocol's sha256 as authorization")
 
 
 def train(seed: int, h: Hyper, authorization: str, frozen_sha256: str) -> Agent:

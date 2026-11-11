@@ -16,11 +16,19 @@ torch = pytest.importorskip("torch")
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2] / "tools"))
 
 import rts_evaluation as ev  # noqa: E402
+import rts_training  # noqa: E402
 import rts_policy  # noqa: E402
 from rts_policy import Agent  # noqa: E402
 from rts_training import Hyper  # noqa: E402
 
 SMALL = Hyper(num_envs=2, num_steps=4, size=8, max_units=8, step_limit=40)
+
+
+@pytest.fixture(autouse=True)
+def _frozen_h(monkeypatch):
+    """Tests stand the repository's frozen protocol sha256 in as "h"; the
+    real constant stays None until the freeze PR (see the None test)."""
+    monkeypatch.setattr(rts_training, "FROZEN_PROTOCOL_SHA256", "h")
 
 
 class Reached(Exception):
