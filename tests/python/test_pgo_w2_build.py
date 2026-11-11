@@ -183,11 +183,24 @@ def test_pgo_w2_build_refuses_a_training_without_profraw(tmp_path):
     assert sum(1 for x in log.splitlines() if x.startswith("uvx ")) == 1, "no final build"
 
 
+# The refused set, as scripts/pgo_w2_build.sh names it (pgo_candidate_checks.sh and the L1 run
+# script name the same), plus the CARGO_PROFILE_* / CARGO_TARGET_* pattern.
 REFUSED = ["RUSTFLAGS", "RUSTDOCFLAGS", "CARGO_ENCODED_RUSTFLAGS", "CARGO_ENCODED_RUSTDOCFLAGS", "CARGO_BUILD_RUSTFLAGS",
-           "CARGO_BUILD_RUSTDOCFLAGS", "CARGO_TARGET_DIR", "CARGO_BUILD_TARGET_DIR", "CARGO_BUILD_TARGET",
-           "RUSTC_WRAPPER", "RUSTC_WORKSPACE_WRAPPER", "RUSTC",
-           "CARGO_BUILD_RUSTC_WRAPPER", "CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER", "CARGO_BUILD_RUSTC", "CARGO_TERM_COLOR"]
-PATTERNED = ["CARGO_PROFILE_WHEEL_OPT_LEVEL", "CARGO_PROFILE_RELEASE_LTO", "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS"]
+           "CARGO_BUILD_RUSTDOCFLAGS", "CARGO_BUILD_TARGET", "CARGO_BUILD_TARGET_DIR", "RUSTC", "RUSTC_WRAPPER",
+           "RUSTC_WORKSPACE_WRAPPER", "CARGO_BUILD_RUSTC", "CARGO_BUILD_RUSTC_WRAPPER", "CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER"]
+REFUSED_PATTERN = ("CARGO_PROFILE_", "CARGO_TARGET_")
+PATTERNED = ["CARGO_TARGET_DIR", "CARGO_PROFILE_WHEEL_OPT_LEVEL", "CARGO_PROFILE_RELEASE_LTO",
+             "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS", "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER"]
+# Scrubbed by the fixtures (CI sets it) but not refused by the script: it only colours cargo's
+# output and changes nothing that is built.
+COSMETIC = {"CARGO_TERM_COLOR"}
+
+
+def test_pgo_w2_build_names_the_refused_set():
+    text = SCRIPT.read_text()
+    start = text.index('BUILD_VARS="') + len('BUILD_VARS="')
+    assert sorted(text[start:text.index('"', start)].split()) == sorted(REFUSED)
+    assert "grep -Eq '^CARGO_(PROFILE|TARGET)_[A-Za-z0-9_]*='" in text
 
 
 @posix
@@ -197,16 +210,19 @@ def test_pgo_w2_build_refuses_an_ambient_build_variable_before_any_fetch(tmp_pat
     p, out, log = run(tmp_path, extra={name: value})
     assert p.returncode == 2, p.stderr
     msg = (f"pgo_w2_build: {name} is set in the environment; refused" if name in REFUSED
-           else "pgo_w2_build: a CARGO_PROFILE_* or per-target RUSTFLAGS variable is set; refused")
+           else f"pgo_w2_build: {name} set in the environment; refused")
     assert msg in p.stderr
     assert log == "" and not out.exists()
 
 
 def test_pgo_w2_build_refuses_everything_the_fixtures_scrub():
-    # The fixtures' scrub list must stay inside the script's refusal list, so a test that passes
-    # only because the fixture scrubbed a variable still proves the real script refuses it.
-    assert set(AMBIENT_BUILD) <= set(REFUSED)
-    assert all(k in REFUSED or k.startswith(AMBIENT_BUILD_PREFIX) for k in HOSTILE)
+    # The fixtures' scrub list, less the cosmetic set, must stay inside the script's refused set,
+    # so a test that passes only because the fixture scrubbed a variable still proves the real
+    # script refuses it.
+    refused = lambda k: k in REFUSED or k.startswith(REFUSED_PATTERN)  # noqa: E731
+    assert all(refused(k) for k in set(AMBIENT_BUILD) - COSMETIC)
+    assert AMBIENT_BUILD_PREFIX.startswith(REFUSED_PATTERN)
+    assert all(refused(k) for k in set(HOSTILE) - COSMETIC)
 
 
 @posix
@@ -219,7 +235,7 @@ def test_pgo_w2_build_refuses_the_hostile_environment_unscrubbed(tmp_path, monke
     out = tmp_path / "run"
     p = subprocess.run(["bash", str(SCRIPT), rsha, usha, str(out), "full", str(source_tree(tmp_path)), str(ROOT)],
                        env=env, capture_output=True, text=True, check=False, cwd=tmp_path)
-    assert p.returncode == 2 and "is set in the environment; refused" in p.stderr, p.stderr
+    assert p.returncode == 2 and "set in the environment; refused" in p.stderr, p.stderr
     assert not log.exists() and not out.exists()
 
 
