@@ -358,3 +358,118 @@ def test_rts_training_seats_step_keeps_each_half_in_its_rows():
     assert masks[0][:, 0, 0].tolist() == [False, True]
     assert masks[1][:, 0, 0, 0].tolist() == [True, False]
     assert masks[2][:, 0, 0, 0].tolist() == [False, True]
+
+
+# -- TR on #214 round 2: zero_grad, final_obs rows, train's own body -----------
+
+
+def test_rts_training_update_equals_an_independent_loop_with_zero_grad():
+    """The update on a synthetic batch (no environment) equals a loop written
+    here: same rng order, zero_grad, backward, clip, step per minibatch. A
+    missing zero_grad accumulates gradients and diverges."""
+    h = Hyper(num_envs=2, num_steps=8, size=8, max_units=8, num_minibatches=4, update_epochs=2)
+    n = h.num_envs * h.num_steps
+    a1, mb = _synthetic(h, n, seed=3)
+    a2 = agent(h)
+    a2.load_state_dict(a1.state_dict())
+    batch = {k: v.reshape(h.num_steps, h.num_envs, *v.shape[1:]) for k, v in mb.items()
+             if k not in ("advantages", "returns")}  # fmt: skip
+    batch["rewards"] = torch.randn(h.num_steps, h.num_envs, generator=torch.Generator().manual_seed(4))
+    batch["dones"] = torch.zeros(h.num_steps, h.num_envs)
+    nv, nd = torch.zeros(h.num_envs), torch.zeros(h.num_envs)
+    o1 = torch.optim.Adam(a1.parameters(), lr=1e-3, eps=1e-5)
+    update(a1, o1, h, batch, nv, nd, np.random.default_rng(7))
+    # The independent loop.
+    o2 = torch.optim.Adam(a2.parameters(), lr=1e-3, eps=1e-5)
+    adv, ret = gae(batch["rewards"], batch["values"], batch["dones"], nv, nd, h.gamma, h.gae_lambda)
+    flat = {k: v.reshape(-1, *v.shape[2:]) for k, v in batch.items()}
+    flat["advantages"], flat["returns"] = adv.reshape(-1), ret.reshape(-1)
+    rng, size = np.random.default_rng(7), n
+    for _ in range(h.update_epochs):
+        order = rng.permutation(size)
+        for start in range(0, size, size // h.num_minibatches):
+            idx = torch.as_tensor(order[start : start + size // h.num_minibatches])
+            loss, _ = ppo_loss(a2, h, {k: v[idx] for k, v in flat.items()})
+            o2.zero_grad()
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(a2.parameters(), h.max_grad_norm)
+            o2.step()
+    for p1, p2 in zip(a1.parameters(), a2.parameters()):
+        assert torch.allclose(p1, p2, atol=1e-6)
+
+
+class FakeSeatsLateRow(FakeSeats):
+    """Row 0 runs on; row 1 is truncated at step 2 with its own final
+    observation (planes 9). A final observation read from the wrong row gets
+    row 0's zeros."""
+
+    def step(self, actions):
+        self.t += 1
+        trunc = np.array([False, self.t == 2])
+        infos = [{}, {}]
+        if self.t == 2:
+            infos[1] = {"final_obs": np.array([{"planes": np.full((11, self.h.size, self.h.size), 9, np.uint8),
+                                                "globals": np.zeros(2, np.uint16)}], dtype=object)}  # fmt: skip
+        return self.obs(self.t), np.array([1.0, 2.0], np.float32), np.array([False, False]), trunc, self.masks(), infos
+
+
+def test_rts_training_rollout_bootstraps_a_later_row_from_its_own_final_obs():
+    h = Hyper(num_envs=2, num_steps=3, size=8, max_units=8)
+    a = agent(h)
+    a.value = lambda planes, globals_: planes.float().mean(dim=(1, 2, 3))
+    env = FakeSeatsLateRow(h)
+    batch, _ = rollout(a, env, h, (env.obs(0), env.masks(), np.zeros(2, bool)))
+    assert batch["rewards"][1, 1].item() == pytest.approx(2.0 + h.gamma * 9.0)
+    assert batch["rewards"][1, 0].item() == pytest.approx(1.0)
+
+
+def test_rts_training_train_body_wires_its_parts(monkeypatch):
+    """train's own loop with recorders for Seats, rollout, next_state and
+    update: nothing real runs (no environment, no rollout, no optimizer
+    step). Pins the call order, the learning rate each update sees
+    (lr_at(0..2)), the hand-off from next_state to update, one rng passed to
+    every update, one CPU thread, envs closed and the agent returned."""
+    h = Hyper(num_envs=2, num_steps=4, size=8, max_units=8, total_steps=3 * 2 * 4)
+    calls, seen = [], []
+
+    class RecSeats:
+        def __init__(self, hh, seed):
+            calls.append(("seats", seed))
+
+        def reset(self, seed):
+            calls.append(("reset", seed))
+            return {"planes": None}, None
+
+        def close(self):
+            calls.append(("close",))
+
+    def rec_rollout(ag, envs, hh, state):
+        calls.append(("rollout",))
+        return {"k": len(calls)}, ("obs", "masks", np.array([True, False]))
+
+    def rec_next_state(ag, state):
+        calls.append(("next_state",))
+        return torch.tensor([float(len(calls)), 0.0]), torch.tensor([1.0, 0.0])
+
+    def rec_update(ag, opt, hh, batch, nv, nd, rng):
+        calls.append(("update",))
+        seen.append((opt.param_groups[0]["lr"], nv.tolist(), nd.tolist(), id(rng), torch.get_num_threads()))
+        return {}
+
+    monkeypatch.setattr(rts_training, "Seats", RecSeats)
+    monkeypatch.setattr(rts_training, "rollout", rec_rollout)
+    monkeypatch.setattr(rts_training, "next_state", rec_next_state)
+    monkeypatch.setattr(rts_training, "update", rec_update)
+    threads = torch.get_num_threads()
+    try:
+        torch.set_num_threads(4)
+        got = train(5, h, "h", "h")
+    finally:
+        torch.set_num_threads(threads)
+    assert isinstance(got, Agent)
+    assert calls == [("seats", 5), ("reset", 5)] + [("rollout",), ("next_state",), ("update",)] * 3 + [("close",)]
+    assert [s[0] for s in seen] == [lr_at(u, 3, h) for u in range(3)]
+    assert [s[1] for s in seen] == [[4.0, 0.0], [7.0, 0.0], [10.0, 0.0]]
+    assert all(s[2] == [1.0, 0.0] for s in seen)
+    assert len({s[3] for s in seen}) == 1
+    assert all(s[4] == 1 for s in seen)
