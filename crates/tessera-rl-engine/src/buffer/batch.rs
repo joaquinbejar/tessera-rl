@@ -42,10 +42,9 @@ use crate::error::EngineError;
 use crate::masks::MaskProvider;
 use crate::pool::{EnvPool, step_chunk};
 use crate::record::Record;
-use crate::sys::Native;
 use crate::sys::id_buffers::{BufferHandle, IdBufferPool};
-use crate::sys::ring::{CompletionRing, RingError, Signal, SubmitRing};
-use crate::sys::waiter::{WaiterCell, park_wait};
+use crate::sys::ring::{CompletionRing, RingError, SubmitRing};
+use crate::sys::waiter::Completion;
 use crate::sys::{Gang, Job};
 use crate::validate::check_send_ids;
 
@@ -85,54 +84,17 @@ pub(crate) struct BatchMode<E: Environment, M: MaskProvider<E>> {
 }
 
 /// The number of ids ready for a batch, shared with a [`BatchWaiter`], and
-/// the completion signal its waiters block on (ADR-0056 decision 2).
-#[derive(Debug, Default)]
+/// the gang's completion wake its waiters block on (ADR-0056 decision 2).
+#[derive(Debug)]
 pub(crate) struct ReadyCount {
     pub(crate) count: AtomicUsize,
     pub(crate) batch_size: AtomicUsize,
     /// Counted wakes: a worker notifies once per pushed claim, after
-    /// `count` moved.
-    signal: Signal,
-    /// The receiver's handle on the park backend (ADR-0056 decision 3).
-    cell: WaiterCell,
-    /// The workers' native wait primitive; `None` on park.
-    native: Option<Native>,
+    /// `count` moved; a dying worker notifies it too (the gang's backstop).
+    pub(crate) wake: Arc<Completion>,
 }
 
 impl ReadyCount {
-    /// Announces a change of `count` (or a failure) made before this call,
-    /// and wakes a registered waiter. Nobody registered: two atomic RMWs,
-    /// no syscall, no lock.
-    pub(crate) fn notify(&self) {
-        if self.signal.notify() {
-            match self.native {
-                Some(native) => native.wake_all(self.signal.word()),
-                None => self.cell.unpark(),
-            }
-        }
-    }
-
-    /// One wait of the receiver: registers, rechecks `ready`, and blocks at
-    /// most `timeout` if it does not hold (an address wait, or a park whose
-    /// timeout is the liveness fallback). May return early; the caller
-    /// rechecks. The receiver is one thread at a time (`&mut` of its pool).
-    pub(crate) fn wait(&self, ready: impl FnOnce() -> bool, timeout: core::time::Duration) {
-        match self.native {
-            Some(native) => {
-                let value = self.signal.register();
-                if !ready() {
-                    native.wait_timeout(self.signal.word(), value, timeout);
-                }
-                self.signal.unregister();
-            }
-            None => {
-                park_wait(&self.signal, &self.cell, ready, || {
-                    std::thread::park_timeout(timeout);
-                });
-            }
-        }
-    }
-
     /// Whether a full batch is ready. Signed: a receive can pop an id
     /// before its worker counts it, so the count is briefly below zero,
     /// which means nothing is ready.
@@ -181,7 +143,7 @@ where
         n: usize,
         batch_size: usize,
         workers: usize,
-        native: Option<Native>,
+        wake: Arc<Completion>,
         #[cfg(test)] jitter_us: u32,
     ) -> Result<Arc<Self>, EngineError> {
         let ring_err = |_| EngineError::Options {
@@ -213,9 +175,7 @@ where
             ready: Arc::new(ReadyCount {
                 count: AtomicUsize::new(0),
                 batch_size: AtomicUsize::new(batch_size),
-                signal: Signal::new(),
-                cell: WaiterCell::new(),
-                native,
+                wake,
             }),
             #[cfg(test)]
             jitter_us,
@@ -496,7 +456,7 @@ unsafe fn run_drain<E: Environment, M: MaskProvider<E>>(data: *const (), worker:
             Err(_) => {
                 mode.panicked.store(true, Ordering::Relaxed);
                 // A failure: wake the receiver to report it.
-                mode.ready.notify();
+                mode.ready.wake.notify();
                 return;
             }
         };
@@ -615,7 +575,7 @@ fn complete<E: Environment, M: MaskProvider<E>>(mode: &BatchMode<E, M>, ids: &[u
     // One counted wake per pushed claim, after the ready count moved
     // (ADR-0056 decision 2). A panicked step's claim is pushed too, so this
     // also wakes the receiver to report the panic.
-    mode.ready.notify();
+    mode.ready.wake.notify();
 }
 
 /// A `jitter_us` that holds a worker in [`complete`] before its push.
@@ -1097,9 +1057,9 @@ impl BatchWaiter {
             else {
                 return false;
             };
-            match self.ready.native {
+            match self.ready.wake.native() {
                 Some(native) => {
-                    let signal = &self.ready.signal;
+                    let signal = self.ready.wake.signal();
                     let value = signal.register();
                     if !self.ready.full() {
                         native.wait_timeout(signal.word(), value, left);

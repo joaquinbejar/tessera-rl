@@ -37,8 +37,10 @@
 //! the whole run is stepped. A worker notifies a counted completion signal
 //! once per pushed claim; `recv`, `recv_timeout` and a native
 //! [`BatchWaiter`] register on it and wake when a batch is ready instead of
-//! polling, with a 100 µs fallback for liveness only (ADR-0056 decisions 2
-//! to 4). Measure with
+//! polling; a worker that dies notifies it too. On a native backend the
+//! waits have no periodic wake; on park, `recv` keeps a 100 µs
+//! `park_timeout` as a liveness fallback only, and `BatchWaiter` keeps its
+//! 100 µs sleep (ADR-0056 decisions 2 to 4, issue #93). Measure with
 //! `benches/async_step.rs` (`async_round_256`) and the instruction count of
 //! `benches/async_instructions.rs`.
 
@@ -253,7 +255,7 @@ where
             return Err(lost(EngineError::WorkerDied));
         };
         let workers = runtime.workers;
-        let native = runtime.gang.native();
+        let wake = runtime.gang.completion();
         // An already poisoned pool stays poisoned: only a full reset or
         // restore of the wrapper recovers it, as everywhere else.
         let poisoned = pool.is_poisoned();
@@ -263,13 +265,15 @@ where
             n,
             batch,
             workers,
-            native,
+            wake,
             #[cfg(test)]
             faults.jitter_us,
         )
         .map_err(lost)?;
+        // Never vacuous: a wake test that asked for no fallback must get it.
         #[cfg(test)]
-        if let Some(mode) = Arc::get_mut(&mut mode) {
+        {
+            let mode = Arc::get_mut(&mut mode).expect("the new mode is not shared yet");
             mode.wake_fallback_off = faults.wake_fallback_off;
         }
         Ok(AsyncPool {
@@ -958,17 +962,28 @@ where
             else {
                 return Ok(None);
             };
-            self.wait_completion(left);
+            self.wait_completion(Some(left));
         }
     }
 
     /// Waits for a worker's completion wake (ADR-0056 decision 2): until a
     /// full batch is ready, a step panicked, a worker died, or every
-    /// admitted id is stepped; at most `timeout`, and at most the 100 µs
-    /// liveness fallback, which covers a failure that sends no wake (a
-    /// worker that dies outside its job). The wait is a batch boundary
-    /// (SPEC 5.5): it only decides when the caller looks again.
-    fn wait_completion(&self, timeout: Duration) {
+    /// admitted id is stepped, at most `timeout` (`None`: no deadline). On a
+    /// native backend there is no periodic wake, so each of these conditions
+    /// is notified where it becomes true:
+    ///
+    /// - a full batch and every id stepped: the worker's notify after a
+    ///   claim's push and ready count (`complete`), and the stepped count
+    ///   moves before that push;
+    /// - a panic in a step: that claim is still pushed and notified; a
+    ///   claim that fails (positions exhausted) notifies after it marks the
+    ///   panic;
+    /// - a death: the gang's backstop notifies after it sets `dead`.
+    ///
+    /// On park, a lost unpark is covered by the 100 µs `park_timeout`
+    /// (decision 3). The wait is a batch boundary (SPEC 5.5): it only
+    /// decides when the caller looks again.
+    fn wait_completion(&self, timeout: Option<Duration>) {
         let ready = || {
             self.mode.ready.full()
                 || self
@@ -978,6 +993,8 @@ where
                 || self.dead()
                 || self.running() == 0
         };
+        // Park only: wake tests turn the fallback off, so a lost unpark
+        // hangs and their watchdog names it.
         #[cfg(test)]
         let fallback = if self.mode.wake_fallback_off {
             Duration::from_secs(60)
@@ -986,7 +1003,7 @@ where
         };
         #[cfg(not(test))]
         let fallback = crate::sys::PARK_POLL;
-        self.mode.ready.wait(ready, timeout.min(fallback));
+        self.mode.ready.wake.wait(ready, timeout, fallback);
     }
 
     /// Poisons the wrapper and reports a dead worker or a step's panic.
@@ -1053,7 +1070,7 @@ where
         self.pump(false)?;
         if block {
             // A job still in flight is reaped by `pump` on the next attempt.
-            self.wait_completion(Duration::MAX);
+            self.wait_completion(None);
         }
         Ok(None)
     }

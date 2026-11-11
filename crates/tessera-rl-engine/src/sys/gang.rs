@@ -141,10 +141,11 @@ pub(crate) struct Faults {
         allow(dead_code, reason = "the split-phase modes are not built under loom")
     )]
     pub(crate) jitter_us: u32,
-    /// Async mode only: the receiver's waits drop their 100 µs liveness
-    /// fallback (they wait up to a minute), so only a worker's wake ends
-    /// them. Wake tests use it to turn a missed wake into a hang that their
-    /// watchdog reports by name.
+    /// Async mode on park only: the receiver's park drops its 100 µs
+    /// liveness fallback (it waits up to a minute), so only a worker's
+    /// unpark ends it. Wake tests use it to turn a missed wake into a hang
+    /// that their watchdog reports by name. Native waits have no fallback
+    /// to turn off.
     #[cfg_attr(
         loom,
         allow(dead_code, reason = "the split-phase modes are not built under loom")
@@ -286,6 +287,11 @@ struct Shared {
     creator: thread::Thread,
     spin: u32,
     backend: Backend,
+    /// The Async mode's completion wake (ADR-0056 decision 2); the backstop
+    /// notifies it when a worker dies, so a receiver blocked without a
+    /// periodic wake sees the death.
+    #[cfg(not(loom))]
+    completion: Arc<super::waiter::Completion>,
     /// One futex mock per waited address, as an address wait has: the wake
     /// word, each slot's `pending`, and `ready`.
     #[cfg(loom)]
@@ -490,6 +496,8 @@ impl Gang {
             spin: options.spin,
             #[cfg(not(loom))]
             backend: options.native.map_or(Backend::Park, Backend::Native),
+            #[cfg(not(loom))]
+            completion: Arc::new(super::waiter::Completion::new(options.native)),
             #[cfg(loom)]
             backend: if options.mock_futex {
                 Backend::Mock
@@ -568,13 +576,11 @@ impl Gang {
         self.shared.dead.load(Ordering::Acquire)
     }
 
-    /// The native wait primitive the workers use, `None` on park.
+    /// The completion wake on the workers' backend, notified by a worker
+    /// that dies outside its job (and by the Async mode's workers).
     #[cfg(not(loom))]
-    pub(crate) fn native(&self) -> Option<super::Native> {
-        match self.shared.backend {
-            Backend::Park => None,
-            Backend::Native(native) => Some(native),
-        }
+    pub(crate) fn completion(&self) -> Arc<super::waiter::Completion> {
+        Arc::clone(&self.shared.completion)
     }
 
     /// Number of workers.
@@ -807,6 +813,11 @@ fn worker_main(shared: &Shared, worker: usize, core: Option<usize>, fail: bool, 
                 let fault = core::mem::take(&mut die);
                 if !catch(|| run_job(shared, slot, worker, &mut seen, fault)) {
                     shared.dead.store(true, Ordering::Release);
+                    // A receiver blocked on the completion wake has no
+                    // periodic wake on a native backend: tell it (ADR-0056
+                    // decision 2, a death is a failure that ends its wait).
+                    #[cfg(not(loom))]
+                    shared.completion.notify();
                     if !seen.decremented {
                         // The job may not have run for this worker's
                         // chunks: it reports a panic, so the pool poisons.

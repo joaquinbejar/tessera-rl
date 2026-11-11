@@ -235,3 +235,64 @@ fn test_async_waiter_park_expires_then_sees_the_batch() {
 fn test_async_waiter_native_expires_then_is_woken_by_the_count() {
     waiter_wakes(WaitBackend::Native);
 }
+
+/// Opens [`DEATH_GATE`] on every exit path, so a held worker never keeps
+/// the pool's `Drop` waiting.
+struct OpenDeath;
+
+impl Drop for OpenDeath {
+    fn drop(&mut self) {
+        DEATH_GATE.store(true, Ordering::Release);
+    }
+}
+
+/// Holds the dying worker until the receiver is blocked.
+static DEATH_GATE: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+static DEATH_SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// The only worker dies outside its job (the gang's backstop) while `recv`
+/// is blocked with no periodic wake: the backstop's notify ends the wait and
+/// `recv` reports `WorkerDied` instead of hanging (ADR-0056 decision 2).
+fn recv_blocked_sees_a_death(wait: WaitBackend) {
+    let _serial = DEATH_SERIAL
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    DEATH_GATE.store(false, Ordering::Release);
+    let _open = OpenDeath;
+    within("a blocked recv sees a worker's death", move || {
+        let _open = OpenDeath;
+        let mut opts = AsyncOptions::new(NonZeroUsize::MIN, NonZeroUsize::MIN);
+        opts.sync.wait = wait;
+        let mut pool = Pool::new(WalkConfig {}, options(AutoReset::NextStep))
+            .unwrap()
+            .async_faults(
+                opts,
+                Faults {
+                    die_in_epoch: Some(0),
+                    death_gate: Some(&DEATH_GATE),
+                    wake_fallback_off: true,
+                    ..Faults::default()
+                },
+            )
+            .unwrap();
+        drop(pool.reset_all(Reseed::Keep).unwrap());
+        send(&mut pool, &[1]);
+        let opener = std::thread::spawn(|| {
+            std::thread::sleep(Duration::from_millis(20));
+            DEATH_GATE.store(true, Ordering::Release);
+        });
+        let result = pool.recv().map(|t| t.len());
+        opener.join().unwrap();
+        assert_eq!(result, Err(crate::EngineError::WorkerDied));
+    });
+}
+
+#[test]
+fn test_async_recv_blocked_native_reports_a_worker_death() {
+    recv_blocked_sees_a_death(WaitBackend::Native);
+}
+
+#[test]
+fn test_async_recv_blocked_park_reports_a_worker_death() {
+    recv_blocked_sees_a_death(WaitBackend::Park);
+}

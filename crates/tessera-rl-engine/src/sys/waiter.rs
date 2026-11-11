@@ -42,6 +42,11 @@
 //! receiver that already left its wait; the receiver's `park_timeout`
 //! covers any other loss, so a lost unpark costs latency, never liveness.
 //!
+//! A notifier's unpark that lands after the receiver left its wait leaves
+//! the park token set on the receiver's thread, so that thread's next
+//! unrelated park returns early once. That is benign: every caller of
+//! `park` rechecks its condition.
+//!
 //! The cell is preallocated, and cloning a `Thread` is a reference-count
 //! increment, not an allocation.
 
@@ -188,6 +193,85 @@ pub(crate) fn park_wait(
         cell.retract();
     }
     done
+}
+
+/// The completion wake of the Async mode (ADR-0056 decision 2): a counted
+/// signal, the park backend's waiter cell, and the workers' backend. The
+/// gang owns it, so a worker that dies outside its job (the backstop that
+/// sets `dead`) notifies it too; the Async mode's workers notify it once
+/// per pushed claim.
+#[cfg(not(loom))]
+#[derive(Debug, Default)]
+pub(crate) struct Completion {
+    signal: Signal,
+    cell: WaiterCell,
+    native: Option<super::Native>,
+}
+
+#[cfg(not(loom))]
+impl Completion {
+    /// A completion wake for the workers' backend (`None`: park).
+    #[must_use]
+    pub(crate) fn new(native: Option<super::Native>) -> Self {
+        Self {
+            signal: Signal::new(),
+            cell: WaiterCell::new(),
+            native,
+        }
+    }
+
+    /// The native backend, `None` on park.
+    #[must_use]
+    pub(crate) fn native(&self) -> Option<super::Native> {
+        self.native
+    }
+
+    /// The counted signal (for `BatchWaiter`'s own registration).
+    #[must_use]
+    pub(crate) fn signal(&self) -> &Signal {
+        &self.signal
+    }
+
+    /// Announces a change made before this call and wakes a registered
+    /// waiter. Nobody registered: two atomic RMWs, no syscall, no lock.
+    pub(crate) fn notify(&self) {
+        if self.signal.notify() {
+            match self.native {
+                Some(native) => native.wake_all(self.signal.word()),
+                None => self.cell.unpark(),
+            }
+        }
+    }
+
+    /// One wait of the receiver (one thread at a time): registers,
+    /// rechecks `ready`, and blocks if it does not hold. Native: on the
+    /// signal's address, untimed for `None`, else at most the timeout; there
+    /// is no periodic wake, so every exit condition must be notified. Park:
+    /// a park of at most `min(timeout, park_fallback)`, the timeout being
+    /// the liveness fallback of decision 3. May return early; the caller
+    /// rechecks.
+    pub(crate) fn wait(
+        &self,
+        ready: impl FnOnce() -> bool,
+        timeout: Option<core::time::Duration>,
+        park_fallback: core::time::Duration,
+    ) {
+        if let Some(native) = self.native {
+            let value = self.signal.register();
+            if !ready() {
+                match timeout {
+                    None => native.wait(self.signal.word(), value),
+                    Some(t) => native.wait_timeout(self.signal.word(), value, t),
+                }
+            }
+            self.signal.unregister();
+        } else {
+            let sleep = timeout.map_or(park_fallback, |t| t.min(park_fallback));
+            park_wait(&self.signal, &self.cell, ready, || {
+                thread::park_timeout(sleep);
+            });
+        }
+    }
 }
 
 #[cfg(test)]
