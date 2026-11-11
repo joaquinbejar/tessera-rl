@@ -175,3 +175,94 @@ fn test_waiter_cell_publish_with_a_registered_waiter_writes_nothing() {
     assert!(cell.publish(&signal), "the cell is empty again");
     cell.retract();
 }
+
+/// Runs `f` on its own thread (so no park token is left over from another
+/// test) and fails, naming `what`, if it has not finished within 30 s.
+#[cfg(not(loom))]
+fn within(what: &str, f: impl FnOnce() + Send + 'static) {
+    let watchdog = core::time::Duration::from_secs(if cfg!(miri) { 1_200 } else { 30 });
+    let (done, finished) = std::sync::mpsc::channel();
+    let body = std::thread::spawn(move || {
+        f();
+        let _ = done.send(());
+    });
+    match finished.recv_timeout(watchdog) {
+        Ok(()) => body.join().unwrap(),
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+            panic!("{what}: did not finish within {watchdog:?}")
+        }
+        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+            if let Err(payload) = body.join() {
+                std::panic::resume_unwind(payload);
+            }
+        }
+    }
+}
+
+/// `Completion::wait` with `ready` already true returns at once with no
+/// notify, no deadline and (park) a fallback of a minute: the recheck after
+/// the registration is what keeps a notify that landed just before the
+/// registration from being lost, since a native wait has no periodic wake.
+#[cfg(not(loom))]
+fn ready_returns_at_once(native: Option<crate::sys::Native>) {
+    within("Completion::wait with ready true", move || {
+        let completion = super::Completion::new(native);
+        completion.wait(|| true, None, core::time::Duration::from_secs(60));
+        assert_eq!(completion.signal().waiters(), 0);
+    });
+}
+
+/// A notify made before the wait does not end it: the wait registers on the
+/// word's current value, so with `ready` false it lasts until its timeout.
+/// Only a lower bound is asserted (other test suites may load the machine).
+#[cfg(not(loom))]
+fn earlier_notify_does_not_end_the_wait(native: Option<crate::sys::Native>) {
+    within("Completion::wait after an earlier notify", move || {
+        let completion = super::Completion::new(native);
+        completion.notify();
+        let timeout = core::time::Duration::from_millis(50);
+        let start = std::time::Instant::now();
+        completion.wait(|| false, Some(timeout), core::time::Duration::from_secs(60));
+        let elapsed = start.elapsed();
+        assert!(
+            elapsed >= timeout.mul_f32(0.8),
+            "the wait ended before its timeout: {elapsed:?}"
+        );
+        assert_eq!(completion.signal().waiters(), 0);
+    });
+}
+
+#[cfg(not(loom))]
+#[test]
+fn test_completion_wait_park_ready_recheck_returns_at_once() {
+    ready_returns_at_once(None);
+}
+
+#[cfg(not(loom))]
+#[test]
+fn test_completion_wait_park_earlier_notify_waits_until_the_timeout() {
+    earlier_notify_does_not_end_the_wait(None);
+}
+
+/// Native only, not under Miri: the address wait is an FFI call. Skipped
+/// (with a warning) where this system has no native wait.
+#[cfg(all(not(loom), not(miri)))]
+#[test]
+fn test_completion_wait_native_ready_recheck_returns_at_once() {
+    let Some(native) = crate::sys::Native::detect() else {
+        tracing::warn!("no native wait primitive here; the test is skipped");
+        return;
+    };
+    ready_returns_at_once(Some(native));
+}
+
+/// Native only, not under Miri, as above.
+#[cfg(all(not(loom), not(miri)))]
+#[test]
+fn test_completion_wait_native_earlier_notify_waits_until_the_timeout() {
+    let Some(native) = crate::sys::Native::detect() else {
+        tracing::warn!("no native wait primitive here; the test is skipped");
+        return;
+    };
+    earlier_notify_does_not_end_the_wait(Some(native));
+}
