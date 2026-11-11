@@ -262,7 +262,10 @@ class TesseraVectorEnv(VectorEnv):
             # Multi-head actions, shape ``(num_envs, heads)``, checked as the
             # native ``Env.step`` checks them, into slot 0.
             heads = len(self._nvec)
-            arr = np.asarray(actions)
+            try:
+                arr = np.asarray(actions)
+            except (TypeError, ValueError) as e:
+                raise _native.ActionError(f"actions are not an array: {e}") from None
             if arr.shape != (self.num_envs, heads):
                 raise _native.ActionError(f"actions have shape ({self.num_envs}, {heads}), got {arr.shape}")
             self._actions[:, 0] = _multi_actions(arr.reshape(self.num_envs, 1, heads), 1, self._nvec)[:, 0]

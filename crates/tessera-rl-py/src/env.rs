@@ -278,14 +278,16 @@ where
         // One agent's mask row: the end of its last head block, as the
         // engine lays them out (SPEC 11.3); 0 without masks.
         let mask_len = if M::ENABLED {
-            (0..action_nvec.len())
-                .filter_map(|h| pool.mask_head_shape(h))
-                .map(|m| {
-                    let parents: usize = m.parent_sizes.iter().flatten().product();
-                    m.offset + parents * m.size
-                })
-                .max()
-                .unwrap_or(0)
+            let mut end = 0;
+            for h in 0..action_nvec.len() {
+                // With masks, the engine lays out every discrete head.
+                let m = pool.mask_head_shape(h).ok_or_else(|| {
+                    BindError::Argument(format!("discrete head {h} has no mask block"))
+                })?;
+                let parents: usize = m.parent_sizes.iter().flatten().product();
+                end = end.max(m.offset + parents * m.size);
+            }
+            end
         } else {
             0
         };
@@ -594,7 +596,14 @@ type ActionHead = (u32, Option<(f64, f64)>, Vec<u32>);
 fn action_head(space: &Space, agents: usize) -> Result<ActionHead, BindError> {
     match space {
         Space::Discrete { n } => return Ok((*n, None, vec![*n])),
-        Space::MultiDiscrete { nvec } => return Ok((0, None, nvec.clone())),
+        // One head is Discrete(n) in all but name: report its choices.
+        Space::MultiDiscrete { nvec } => {
+            let choices = match nvec.as_slice() {
+                [n] => *n,
+                _ => 0,
+            };
+            return Ok((choices, None, nvec.clone()));
+        }
         Space::Box {
             shape,
             dtype: DType::F32,
@@ -892,6 +901,38 @@ pub(crate) fn leduc(args: &PoolArgs) -> Result<Box<dyn PoolOps>, BindError> {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn test_action_head_discrete_multi_and_box() {
+        use super::action_head;
+        assert_eq!(
+            action_head(&Space::Discrete { n: 4 }, 2).unwrap(),
+            (4, None, vec![4])
+        );
+        assert_eq!(
+            action_head(&Space::MultiDiscrete { nvec: vec![5] }, 2).unwrap(),
+            (5, None, vec![5])
+        );
+        assert_eq!(
+            action_head(&Space::MultiDiscrete { nvec: vec![3, 5] }, 2).unwrap(),
+            (0, None, vec![3, 5])
+        );
+        let float = |shape: Vec<u32>| Space::Box {
+            shape,
+            dtype: DType::F32,
+            bounds: BoxBounds::Float {
+                low: vec![-1.0],
+                high: vec![1.0],
+            },
+        };
+        assert_eq!(
+            action_head(&float(vec![1]), 1).unwrap(),
+            (0, Some((-1.0, 1.0)), vec![])
+        );
+        assert!(action_head(&float(vec![1]), 2).is_err());
+        assert!(action_head(&float(vec![2]), 1).is_err());
+    }
+
     use super::*;
     use crate::split::common::{CountConfig, Counter};
 

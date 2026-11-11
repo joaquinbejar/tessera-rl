@@ -129,3 +129,42 @@ def test_single_env_takes_one_row_of_heads(monkeypatch):
     with pytest.raises(_native.ActionError):
         e.step(np.array([2]))
     e.close()
+
+
+SEND_BAD = [
+    np.zeros((2, 1), dtype=np.int32),  # wrong ndim
+    rows((3, 0), (0, 0)),  # out of range
+    np.zeros((3, 1, 2), dtype=np.int32),  # wrong row count
+]
+
+
+@pytest.mark.parametrize("bad", SEND_BAD)
+def test_env_async_send_refuses_before_the_pool_is_touched(bad):
+    with env(2, mode="async", batch_size=2, workers=1) as e:
+        e.reset()
+        e.send([0, 1], rows((1, 1), (1, 1)))
+        e.recv()
+        with pytest.raises(_native.ActionError):
+            e.send([0, 1], bad)
+        # Nothing was admitted: both ids are still idle, and the next send
+        # is the one stepped.
+        e.send([0, 1], rows((2, 1), (0, 3)))
+        got = e.recv()
+        by_id = dict(zip(got.ids.tolist(), got.step.rewards[:, 0].tolist(), strict=True))
+        assert by_id == {0: 21.0, 1: 3.0}
+
+
+@pytest.mark.parametrize("bad", SEND_BAD)
+def test_env_pipelined_send_refuses_before_the_pool_is_touched(bad):
+    with env(4, mode="pipelined", chunk_size=2, workers=1) as e:
+        e.reset()
+        with pytest.raises(_native.ActionError):
+            e.send(0, bad)
+        e.send(0, rows((1, 2), (2, 0)))
+        assert e.recv().step.rewards[:, 0].tolist() == [12.0, 20.0]
+
+
+def test_gym_refuses_a_ragged_input(vec):
+    with pytest.raises(_native.ActionError):
+        vec.step([[1, 2], [1]])
+

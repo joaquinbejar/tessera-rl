@@ -170,6 +170,8 @@ class Env:
             raise _native.ArgumentError("tessera_rl.jax needs a sync pool with owned outputs")
         if pool.action_bounds is not None:
             raise _native.ArgumentError("tessera_rl.jax is discrete only")
+        if len(pool.action_nvec) > 1:
+            raise _native.ArgumentError("tessera_rl.jax takes one action head; the pool has several")
         self._pool = pool
         self.num_envs: int = pool.num_envs
         self.agents: int = pool.agents
