@@ -156,6 +156,10 @@ class _Agents:
             leaves[name or "obs"] = spaces.Box(low=lo, high=hi, shape=tuple(shape), dtype=dt)
         self.nvec = tuple(env.action_nvec)
         if len(self.nvec) > 1:
+            # The conditional masks are what an agent of a multi-head
+            # environment acts on: one without masks is not supported.
+            if not env.mask_heads:
+                raise _native.ArgumentError(f"{env_id} has several action heads and no masks; not supported")
             self.action_space = spaces.MultiDiscrete(np.asarray(self.nvec, dtype=np.int64))
         else:
             n = env.action_choices

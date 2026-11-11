@@ -155,3 +155,49 @@ def test_pz_rts_seat_swap_renames_the_agents_sides():
         assert (o1[a]["planes"] == o2[a]["planes"]).all()
     plain.close()
     swapped.close()
+
+
+def legal(rng, masks):
+    """One agent's legal action from its own ``infos`` masks: per unit a
+    type, then a target and a product under it (test_rts.py's draw)."""
+    t, tg, p = masks
+    out = []
+    for u in range(t.shape[0]):
+        ty = int(rng.choice(np.flatnonzero(t[u])))
+        out += [ty, int(rng.choice(np.flatnonzero(tg[u, ty]))), int(rng.choice(np.flatnonzero(p[u, ty])))]
+    return np.asarray(out, dtype=np.int64)
+
+
+@pytest.mark.parametrize("swap", [False, True])
+def test_pz_rts_legal_play_matches_the_native_pool_with_per_agent_masks(swap):
+    # Each agent acts on its own masks with its own generator, so the sides
+    # diverge: a slot mix-up in actions or in masks shows (TR on PR C).
+    kw = {**SMALL, "size": 10, "max_units": 6, "step_limit": 200, "seat_swap": swap}
+    heads = kw["max_units"] * 3
+    e = pz.parallel_env(RTS, seed=3, **kw)
+    native = tessera_rl.make(RTS, num_envs=1, seed=3, outputs="owned", auto_reset="disabled", **kw)
+    _, infos = e.reset()
+    out = native.reset()
+    rngs = {"agent_0": np.random.default_rng(1), "agent_1": np.random.default_rng(2)}
+    differed = False
+    for step in range(40):
+        views = head_views(out.masks, native.mask_heads, native.entity_group_heads)
+        for k in range(2):
+            for got, want in zip(infos[f"agent_{k}"]["action_masks"], views, strict=True):
+                assert (got == want[0, k]).all(), f"step {step} agent_{k}"
+        differed |= any(
+            (a != b).any() for a, b in zip(infos["agent_0"]["action_masks"], infos["agent_1"]["action_masks"], strict=True)
+        )
+        acts = {a: legal(rngs[a], infos[a]["action_masks"]) for a in e.agents}
+        obs, rewards, _, _, infos = e.step(acts)
+        rows = np.stack([acts["agent_0"], acts["agent_1"]])[None].astype(np.int32)
+        assert rows.shape == (1, 2, heads)
+        out = native.step(rows)
+        assert e._a.env.state_hash(0) == native.state_hash(0), f"step {step}"
+        for k in range(2):
+            for leaf, arr in out.observations.items():
+                assert (obs[f"agent_{k}"][leaf] == arr[0, k]).all()
+            assert rewards[f"agent_{k}"] == out.rewards[0, k]
+    assert differed, "the two agents' masks never differed: the check cannot tell the slots apart"
+    e.close()
+    native.close()
