@@ -39,7 +39,7 @@ def test_rts_evaluation_constants_are_the_protocols():
 def test_rts_evaluation_wilson_lower_bound_crosses_the_gate_at_260_of_400():
     assert ev.wilson_lower(259, 400) == pytest.approx(0.5995, abs=1e-4)
     assert ev.wilson_lower(260, 400) == pytest.approx(0.6020, abs=1e-4)
-    assert not ev.seed_passes(259) and ev.seed_passes(260)
+    assert not ev.seed_passes(259, 400) and ev.seed_passes(260, 400)
     with pytest.raises(ValueError):
         ev.wilson_lower(0, 0)
 
@@ -51,6 +51,12 @@ def test_rts_evaluation_verdict_needs_every_seed():
     assert not v["passes"] and [s for s, r in v["per_seed"].items() if not r["passes"]] == [3]
     with pytest.raises(ValueError):
         ev.verdict(dict.fromkeys(range(4), 400))
+    # E1: no N parameter, and wins outside 0..400 are refused.
+    with pytest.raises(TypeError):
+        ev.verdict(dict.fromkeys(range(5), 40), n=50)
+    for bad in (401, -1, 260.0):
+        with pytest.raises(ValueError):
+            ev.verdict({**dict.fromkeys(range(5), 260), 2: bad})
 
 
 def test_rts_evaluation_sides_by_parity_and_outcomes():
@@ -112,6 +118,25 @@ def test_rts_evaluation_counts_wins_over_each_seed_once(monkeypatch):
     assert (r["wins"], r["n"]) == (2, 5) and r["games"] == outcomes
     assert r["lower"] == pytest.approx(ev.wilson_lower(2, 5))
     assert inside == 1
+    # E1: not the protocol's seeds, so not the gate: no "passes".
+    assert r["protocol"] is False and "passes" not in r
+    assert r["seeds"] == {"first": 10, "last": 14, "count": 5}
+
+
+def test_rts_evaluation_only_the_protocol_seeds_give_a_pass_field(monkeypatch):
+    """With recorders (nothing real runs), the exact 400 evaluation seeds
+    give protocol True and a passes field; 260 wins pass, 259 do not."""
+    class Env:
+        def close(self):
+            pass
+
+    for wins, want in ((260, True), (259, False)):
+        winners = set(list(ev.EVAL_SEEDS)[:wins])
+        monkeypatch.setattr(ev, "make_env", lambda h, seed: Env())
+        monkeypatch.setattr(ev, "play", lambda agent, env, seed, w=winners: "win" if seed in w else "loss")
+        r = ev.evaluate(Agent(11, 8, 2, 8, 6, 81, 4), SMALL, "h", "h")
+        assert r["protocol"] is True and r["passes"] is want and r["n"] == 400
+        assert r["seeds"] == {"first": 2_000_000, "last": 2_000_399, "count": 400}
 
 
 class FakeGame:
@@ -176,3 +201,47 @@ def test_rts_evaluation_play_runs_on_the_real_environment_untrained():
         assert ev.play(Agent(11, 8, 2, 8, 6, 81, 4), env, 5) in {"win", "loss", "draw", "truncated"}
     finally:
         env.close()
+
+
+
+class Recording:
+    """Wraps an env and keeps the last observation's bytes."""
+
+    def __init__(self, env):
+        self.env, self.last = env, None
+
+    def reset(self, seed):
+        return self.env.reset(seed=seed)
+
+    def step(self, actions):
+        out = self.env.step(actions)
+        self.last = out[0]["planes"].tobytes() + out[0]["globals"].tobytes()
+        return out
+
+    def close(self):
+        self.env.close()
+
+
+def test_rts_evaluation_a_seeds_game_does_not_depend_on_order_or_company():
+    """E2: evaluation seed s is one game by itself. Two seeds played with one
+    agent in both orders (tiny config, not evaluation seeds) give the same
+    outcome and the same final observation each time."""
+    import hashlib
+
+    torch.manual_seed(0)
+    a = Agent(11, 8, 2, 8, 6, 81, 4)
+    h = Hyper(size=8, max_units=8, step_limit=30)
+
+    def run(order):
+        res = {}
+        for seed in order:
+            env = Recording(ev.make_env(h, seed))
+            try:
+                res[seed] = (ev.play(a, env, seed), hashlib.sha256(env.last).hexdigest())
+            finally:
+                env.close()
+        return res
+
+    first, second = run([5, 6]), run([6, 5])
+    assert first == second
+    assert run([6]) == {6: first[6]}

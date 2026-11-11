@@ -9,12 +9,24 @@ record, and its evaluation against Rush.
   protocol's frozen sha256, the thread count and the versions.
 - ``evaluate``: deterministic actions (argmax under the conditional masks)
   over the protocol's 400 evaluation seeds, 2,000,000 to 2,000,399, each
-  played once: side Zero on even seeds, side One on odd seeds (two pools,
-  ``seat_swap`` false and true). A game is a win only when it terminates
-  with the learner's reward +1; a loss, a draw and a truncation are not.
+  played once. Evaluation seed s is one game by itself: a one-environment
+  ``tessera/RTS-vsRush-v1`` pool constructed with seed s and reset with seed
+  s, side Zero for even s and side One for odd s (``seat_swap`` = s odd). So
+  a seed's game does not depend on the pool size, on the order of the seeds
+  or on which other seeds were played (tested). A game is a win only when it
+  terminates with the learner's reward +1; a loss, a draw and a truncation
+  are not. Only a run over exactly ``EVAL_SEEDS`` is the protocol's: any
+  other seed list returns ``protocol: False`` and no ``passes``.
 - ``verdict``: per training seed, the Wilson 95% lower bound of its win
   rate must be at least 0.60 (owner, 2026-11-11), and every one of the five
   seeds must pass (owner, 2026-11-11).
+
+Not here (the next PR, the runner that glues train, save, evaluate and
+verdict and writes the result file): binding the policy to its record. The
+runner must check the record's protocol sha256 against the frozen one, its
+Hyper against ``Hyper()``, the decisions trained against ``total_steps``,
+and refuse a second evaluation of a training seed that already has a result
+file (the seeds are used once).
 
 No evaluation is authorized by this file: ``evaluate`` refuses unless given
 the frozen protocol's sha256, as ``train`` does, because the evaluation
@@ -57,14 +69,20 @@ def wilson_lower(k: int, n: int, z: float = WILSON_Z) -> float:
     return (c - h) / d
 
 
-def seed_passes(wins: int, n: int = len(EVAL_SEEDS)) -> bool:
+def seed_passes(wins: int, n: int) -> bool:
     return wilson_lower(wins, n) >= GATE
 
 
-def verdict(wins_per_seed: dict[int, int], n: int = len(EVAL_SEEDS)) -> dict:
-    """The protocol's pass rule: every training seed passes."""
+def verdict(wins_per_seed: dict[int, int]) -> dict:
+    """The protocol's pass rule over its N = 400 evaluation games per
+    training seed: every training seed passes. Takes no N: a result over
+    other seeds is not the gate."""
+    n = len(EVAL_SEEDS)
     if sorted(wins_per_seed) != list(range(TRAINING_SEEDS)):
         raise ValueError(f"need the wins of training seeds 0..{TRAINING_SEEDS - 1}, got {sorted(wins_per_seed)}")
+    bad = {s: w for s, w in wins_per_seed.items() if not (isinstance(w, int) and 0 <= w <= n)}
+    if bad:
+        raise ValueError(f"wins must be integers in 0..{n}: {bad}")
     per = {s: {"wins": w, "n": n, "lower": wilson_lower(w, n), "passes": seed_passes(w, n)}
            for s, w in sorted(wins_per_seed.items())}  # fmt: skip
     return {"per_seed": per, "passes": all(v["passes"] for v in per.values())}
@@ -122,8 +140,13 @@ def evaluate(agent: Agent, h: Hyper, authorization: str, frozen_sha256: str, see
         finally:
             env.close()
     wins = sum(1 for o in games.values() if o == "win")
-    return {"games": games, "wins": wins, "n": len(games), "lower": wilson_lower(wins, len(games)),
-            "passes": seed_passes(wins, len(games))}  # fmt: skip
+    played = list(games)
+    protocol = played == list(EVAL_SEEDS)
+    result = {"games": games, "wins": wins, "n": len(games), "lower": wilson_lower(wins, len(games)),
+              "seeds": {"first": played[0], "last": played[-1], "count": len(played)}, "protocol": protocol}  # fmt: skip
+    if protocol:
+        result["passes"] = seed_passes(wins, len(games))
+    return result
 
 
 def record(seed: int, h: Hyper, frozen_sha256: str) -> dict:
