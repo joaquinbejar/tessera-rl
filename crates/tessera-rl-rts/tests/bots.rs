@@ -632,3 +632,51 @@ fn test_every_side_finds_ore_on_generated_maps() {
         }
     }
 }
+
+/// A side never orders two of its units into one cell in one decision: such
+/// a contest is refused for both (rule 1), and the bots repeated it every
+/// decision, freezing Rush's economy in most calibration games (stage 5a).
+#[test]
+fn test_scripted_bots_never_move_two_units_into_one_cell() {
+    let c = cfg(16, 16);
+    let g = Grid::new(16).unwrap();
+    for seed in 0..6 {
+        let mut p = pool(&c, seed);
+        let mut r = [rng(1), rng(2)];
+        for k in 0..200 {
+            let s = *p.state(0).unwrap();
+            for (agent, bot) in [(0u16, Bot::Rush), (1, Bot::Prospector)] {
+                let a = row(&c, &s, agent, bot, &mut rng(3));
+                let team = if agent == 0 { Team::Zero } else { Team::One };
+                let base = if agent == 0 { 0 } else { SIDE_SLOTS };
+                let mut targets = Vec::new();
+                for u in 0..usize::from(c.max_units) {
+                    let (t, i) = (a[u * HEADS_PER_UNIT], a[u * HEADS_PER_UNIT + 1]);
+                    if t != order_type::MOVE {
+                        continue;
+                    }
+                    let from = s.units[base + u].cell;
+                    let to = Dir::order(team)
+                        .into_iter()
+                        .find(|&d| i32::from(move_index(team, d)) == i)
+                        .and_then(|d| g.step(from, d))
+                        .unwrap();
+                    assert!(
+                        !targets.contains(&to),
+                        "{bot:?} seed {seed} step {k}: two units into {to}"
+                    );
+                    targets.push(to);
+                }
+            }
+            let a = [
+                row(&c, &s, 0, Bot::Rush, &mut r[0]),
+                row(&c, &s, 1, Bot::Prospector, &mut r[1]),
+            ]
+            .concat();
+            let out = p.step(input(&a)).unwrap();
+            if out.episode_terminated()[0].get() || out.episode_truncated()[0].get() {
+                break;
+            }
+        }
+    }
+}
