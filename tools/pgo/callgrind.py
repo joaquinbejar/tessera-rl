@@ -14,6 +14,7 @@ import argparse
 import hashlib
 import json
 import pathlib
+import re
 import statistics
 import subprocess
 import sys
@@ -252,10 +253,16 @@ def measure_only(python: str, manifest_path: str, manifest: dict, out_dir: pathl
     by_name = {s.name: s for s in evidence.scenarios(manifest)}
     reused: list[str] = []
     done = []
+    seconds = {}
     for unit in select(manifest, names):
+        start = time.monotonic()
         run_unit(python, manifest_path, by_name, unit, out_dir, runner, reused)
+        seconds[unit] = round(time.monotonic() - start, 1)
+        # One line per unit as it ends, so a run's log shows progress and
+        # actual against modelled time unit by unit.
+        print(f"unit {unit} {seconds[unit]} s", flush=True)
         done.append(unit)
-    return {"units": done, "reused_files": reused}
+    return {"units": done, "unit_seconds": seconds, "reused_files": reused}
 
 
 def _run(argv, check):
@@ -303,11 +310,14 @@ def sha256_of(path: str) -> str:
 
 
 def hashes(args) -> dict:
-    return {
-        "wheel": sha256_of(args.wheel),
-        "manifest": sha256_of(args.manifest),
-        "kernels": sha256_of(str(pathlib.Path(args.manifest).parent / "kernels.toml")),
-    }
+    """The measured inputs. The kernel list is not one: it enters no Ir, only
+    the coverage acceptance of a PGO profile, so it is recorded beside the
+    stamp (`kernels_sha256`) and not in it."""
+    return {"wheel": sha256_of(args.wheel), "manifest": sha256_of(args.manifest)}
+
+
+def kernels_sha256(args) -> str:
+    return sha256_of(str(pathlib.Path(args.manifest).parent / "kernels.toml"))
 
 
 def cpu(cpuinfo: str = "/proc/cpuinfo") -> dict:
@@ -342,8 +352,11 @@ def environment(args, cpuinfo: str = "/proc/cpuinfo") -> dict:
 def adopt(listing: pathlib.Path, out_dir: pathlib.Path) -> list[str]:
     """Stamps finished files of an earlier window with the current STAMP, after
     checking each against the window's record (`<sha256> <name> ...` lines,
-    as KEPT.txt). All or nothing: a missing, unfinished or changed file
-    refuses the whole adoption. The caller shows the toolchain is the same."""
+    as KEPT.txt). Every file must carry a stamp of its own that equals the
+    current one in every field but `kernels` (the field older stamps had);
+    a file without a stamp, or with any other field different, is refused.
+    All or nothing: a missing, unfinished, changed or differently stamped file
+    refuses the whole adoption."""
     wanted = []
     for line in listing.read_text(encoding="utf-8").splitlines():
         parts = line.split()
@@ -357,6 +370,13 @@ def adopt(listing: pathlib.Path, out_dir: pathlib.Path) -> list[str]:
             raise ValueError(f"{name} is missing or unfinished")
         if sha256_of(str(path)) != digest:
             raise ValueError(f"{name} does not match its recorded sha256")
+        side = stamp_path(path)
+        if not side.exists():
+            raise ValueError(f"{name} has no stamp; it cannot be adopted")
+        old = {k: v for k, v in json.loads(side.read_text(encoding="utf-8")).items() if k != "kernels"}
+        if old != STAMP:
+            diff = sorted(k for k in set(old) | set(STAMP or {}) if old.get(k) != (STAMP or {}).get(k))
+            raise ValueError(f"{name} was measured under another stamp (fields {diff})")
     for _, name in wanted:
         stamp(out_dir / name)
     return [name for _, name in wanted]
@@ -371,7 +391,10 @@ def merge(args) -> int:
         return 2
     global STAMP
     want = hashes(args)
-    parts = sorted(args.out_dir.glob("feasibility.part.*.json"))
+    # The gate reads only gate parts. Costs read both kinds: a wheel's costs
+    # parts, or, for W1, the gate's own parts, whose A/A units are the same files.
+    kinds = ("feasibility", "costs") if args.costs else ("feasibility",)
+    parts = sorted(p for k in kinds for p in args.out_dir.glob(f"{k}.part.*.json"))
     if not parts:
         print("refused: no part reports to merge", file=sys.stderr)
         return 2
@@ -397,6 +420,8 @@ def merge(args) -> int:
         seen |= set(part["units"])
         windows.append(part.get("approved_window"))
     manifest = evidence.load_manifest(args.manifest)
+    if args.costs:
+        return merge_costs(args, manifest, parts, seen, env, windows)
     every = set(all_units(manifest))
     if seen != every:
         print(f"refused: the parts must cover every unit of the gate exactly once; missing "
@@ -415,8 +440,49 @@ def merge(args) -> int:
     report["merged_parts"] = [p.name for p in parts]
     report["approved_window"] = sorted({w for w in windows if w})
     report["sha256"] = env
+    report["kernels_sha256"] = kernels_sha256(args)
     (args.out_dir / "feasibility.json").write_text(json.dumps(report, indent=1))
     return 0 if report["passed"] else 1
+
+
+def aa_units(manifest: dict) -> list[str]:
+    """The units a wheel's costs need: the five A/A pairs of every scenario."""
+    return [u for u in all_units(manifest) if re.search(r"#aa[0-9]+$", u)]
+
+
+def merge_costs(args, manifest: dict, parts: list, seen: set, env: dict, windows: list) -> int:
+    """A wheel's costs.json from the finished files of every part: per scenario,
+    the median of each event over its five A/A pairs (N and 2N, by difference).
+    Each event's median is taken on its own, so Ir and a misprediction count
+    may come from different pairs; on the gating set, whose A/A spread is
+    exactly 0, they cannot differ. The parts must cover every A/A unit; a
+    gate's parts (which also hold the control, linearity and worker units)
+    serve as they are, so W1's costs come from the gate's own, untouched
+    directory: its part reports and files carry the same stamp (with the
+    older `kernels` field), which then stays in costs.json, where decide.py
+    ignores it. Every file is read under the parts' stamp, exactly. Runs no
+    Valgrind."""
+    global STAMP
+    missing = sorted(set(aa_units(manifest)) - seen)
+    if missing:
+        print(f"refused: the parts do not cover every A/A unit; missing {missing}", file=sys.stderr)
+        return 2
+    STAMP = env
+    costs, aa = {}, {}
+    try:
+        for s in evidence.scenarios(manifest):
+            pairs = [cost_of(args.python, args.manifest, s, args.out_dir, refuse, f".aa{i}") for i in range(AA_RUNS)]
+            costs[s.name] = {k: int(statistics.median(p.events[k] for p in pairs)) for k in pairs[0].events}
+            aa[s.name] = [p.ir for p in pairs]
+    except MissingRun as e:
+        print(f"refused: no finished file with this provenance for {e}; no costs are written", file=sys.stderr)
+        return 3
+    finally:
+        STAMP = None
+    report = {"sha256": env, "kernels_sha256": kernels_sha256(args), "costs": costs, "aa_ir": aa,
+              "merged_parts": [p.name for p in parts], "approved_window": sorted({w for w in windows if w})}
+    (args.out_dir / "costs.json").write_text(json.dumps(report, indent=1))
+    return 0
 
 
 def _main(argv, platform) -> int:
@@ -426,6 +492,9 @@ def _main(argv, platform) -> int:
     parser.add_argument("--out-dir", required=True, type=pathlib.Path)
     parser.add_argument("--python", default=sys.executable)
     parser.add_argument("--feasibility", action="store_true", help="the gate of section 5, on W1")
+    parser.add_argument("--costs", action="store_true",
+                        help="a wheel's costs for decide.py: with --pair, its A/A units only; with --merge, "
+                        "costs.json as the per-event median of the five pairs")
     parser.add_argument("--wheel", default=None, help="the exact wheel measured")
     parser.add_argument("--scenario", "--pair", action="append", default=None, metavar="NAME[#UNIT]",
                         help="with --feasibility: run only these scenarios, or single units of one as NAME#aa0.."
@@ -440,8 +509,14 @@ def _main(argv, platform) -> int:
     parser.add_argument("--merge", action="store_true",
                         help="with --feasibility: evaluate the gate from finished files only, never running Valgrind")
     args = parser.parse_args(argv)
-    if (args.scenario or args.merge or args.adopt) and not args.feasibility:
-        print("refused: --scenario, --adopt and --merge apply to --feasibility", file=sys.stderr)
+    if args.feasibility and args.costs:
+        print("refused: --feasibility and --costs are two modes", file=sys.stderr)
+        return 2
+    if args.costs and args.adopt:
+        print("refused: --adopt runs with --feasibility", file=sys.stderr)
+        return 2
+    if (args.scenario or args.merge or args.adopt) and not (args.feasibility or args.costs):
+        print("refused: --scenario, --adopt and --merge apply to --feasibility or --costs", file=sys.stderr)
         return 2
     if args.adopt and (args.scenario or args.merge):
         print("refused: --adopt runs alone", file=sys.stderr)
@@ -468,16 +543,22 @@ def _main(argv, platform) -> int:
     global STAMP
     if args.scenario:
         try:
-            select(manifest, args.scenario)
+            chosen = select(manifest, args.scenario)
         except ValueError as e:
             print(f"refused: {e}", file=sys.stderr)
             return 2
-    if args.adopt or args.scenario:
-        try:
-            STAMP = environment(args)
-        except ValueError as e:
-            print(f"refused: {e}", file=sys.stderr)
+        other = [u for u in chosen if not re.search(r"#aa[0-9]+$", u)]
+        if args.costs and other and not args.probe:
+            print(f"refused: --costs runs A/A units only, not {other}", file=sys.stderr)
             return 2
+    # Every run that measures stamps its files and its report with the full
+    # stamp (inputs, interpreter, Valgrind, CPU), so a report compared across
+    # wheels later can be checked field by field (decide.py).
+    try:
+        STAMP = environment(args)
+    except ValueError as e:
+        print(f"refused: {e}", file=sys.stderr)
+        return 2
     if args.feasibility and args.adopt:
         try:
             names = adopt(args.adopt, args.out_dir)
@@ -486,9 +567,10 @@ def _main(argv, platform) -> int:
             return 2
         (args.out_dir / "feasibility.adopted.json").write_text(
             json.dumps({"adopted": names, "listing": sha256_of(str(args.adopt)), "sha256": STAMP,
+                        "kernels_sha256": kernels_sha256(args),
                         "approved_window": args.approved_window}, indent=1))
         return 0
-    if args.feasibility and args.scenario and args.probe:
+    if (args.feasibility or args.costs) and args.scenario and args.probe:
         try:
             found = probe(args.python, args.manifest, manifest, args.out_dir, args.scenario, runner=_run)
         except ValueError as e:
@@ -496,10 +578,11 @@ def _main(argv, platform) -> int:
             return 2
         found["approved_window"] = args.approved_window
         found["sha256"] = STAMP
+        found["kernels_sha256"] = kernels_sha256(args)
         label = hashlib.sha256("\n".join(sorted(found["probe"])).encode()).hexdigest()[:12]
         (args.out_dir / f"feasibility.probe.{label}.json").write_text(json.dumps(found, indent=1))
         return 0
-    if args.feasibility and args.scenario:
+    if (args.feasibility or args.costs) and args.scenario:
         try:
             part = measure_only(args.python, args.manifest, manifest, args.out_dir, args.scenario, runner=_run)
         except ValueError as e:
@@ -507,21 +590,25 @@ def _main(argv, platform) -> int:
             return 2
         part["approved_window"] = args.approved_window
         part["sha256"] = STAMP
+        part["kernels_sha256"] = kernels_sha256(args)
         label = hashlib.sha256("\n".join(part["units"]).encode()).hexdigest()[:12]
-        (args.out_dir / f"feasibility.part.{label}.json").write_text(json.dumps(part, indent=1))
+        kind = "costs" if args.costs else "feasibility"
+        (args.out_dir / f"{kind}.part.{label}.json").write_text(json.dumps(part, indent=1))
         return 0
     if args.feasibility:
         report = feasibility(args.python, args.manifest, manifest, args.out_dir)
         report["approved_window"] = args.approved_window
-        report["sha256"] = hashes(args)
+        report["sha256"] = STAMP
+        report["kernels_sha256"] = kernels_sha256(args)
         (args.out_dir / "feasibility.json").write_text(json.dumps(report, indent=1))
         return 0 if report["passed"] else 1
     costs = {
-        s.name: cost_of(args.python, args.manifest, s, args.out_dir).events
+        s.name: cost_of(args.python, args.manifest, s, args.out_dir, runner=_run).events
         for s in evidence.scenarios(manifest)
     }
-    sha256 = {"wheel": sha256_of(args.wheel), "manifest": sha256_of(args.manifest)}
-    (args.out_dir / "costs.json").write_text(json.dumps({"approved_window": args.approved_window, "sha256": sha256, "costs": costs}, indent=1))
+    (args.out_dir / "costs.json").write_text(json.dumps(
+        {"approved_window": args.approved_window, "sha256": STAMP, "kernels_sha256": kernels_sha256(args), "costs": costs},
+        indent=1))
     return 0
 
 

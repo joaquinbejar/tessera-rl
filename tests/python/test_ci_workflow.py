@@ -16,8 +16,17 @@ FORK_GUARD = (
     "github.event.pull_request.head.repo.full_name == github.repository"
 )
 HOST_PRINT = "- run: hostname && grep -m1 'model name' /proc/cpuinfo"
-MOVED = ["fmt", "fuzz-check", "build-id", "loom", "msrv", "docs"]
-ON_XASKAR = ["gungraun", "readme", "deny", "python", "pufferlib"]
+MOVED = [
+    "fmt",
+    "fuzz-check",
+    "build-id",
+    "loom",
+    "msrv",
+    "docs",
+    "readme",
+    "pufferlib",
+]
+ON_XASKAR = ["python", "gungraun", "deny"]
 
 
 def _jobs(text):

@@ -14,8 +14,12 @@ A tool's ``main`` calls ``run(argv, work, ...)``. Without
 
 The child runs ``work(args, clock)``, whose return value is its exit code.
 A watchdog thread in the child kills the group when the supervisor is gone
-or the deadline passes. Native code holding the GIL can starve that
-thread, so the supervisor's own kill is the real limit.
+(its pid, passed as ``--supervisor-pid``, is no longer the child's parent:
+see orphan.py) or the deadline passes. The tools run that check before
+their heavy imports and ``run`` again when it arms the watchdog, so a
+supervisor that died while the child was starting is seen at once. Native
+code holding the GIL can starve the thread, so the supervisor's own kill
+is the real limit.
 """
 
 from __future__ import annotations
@@ -30,6 +34,7 @@ import threading
 import time
 
 import artifacts
+import orphan
 from ledger import BudgetExceeded, Ledger
 
 EXIT_DEADLINE = 124
@@ -54,11 +59,12 @@ class Clock:
             raise BudgetExceeded(f"{what}: {projected_s:.1f} s projected, {self.left():.1f} s left")
 
 
-def _watchdog(deadline_epoch: float, parent: int) -> None:
+def _watchdog(deadline_epoch: float, supervisor_pid: int) -> None:
     while True:
-        if time.time() >= deadline_epoch or os.getppid() != parent:
+        if time.time() >= deadline_epoch:
             os.killpg(0, signal.SIGKILL)
-        time.sleep(0.2)
+        orphan.check(supervisor_pid)
+        time.sleep(orphan.POLL_S)
 
 
 def child_flag(argv: list[str]) -> float | None:
@@ -68,10 +74,12 @@ def child_flag(argv: list[str]) -> float | None:
 
 
 def strip_child_flag(argv: list[str]) -> list[str]:
-    if "--child-deadline-epoch" not in argv:
-        return argv
-    i = argv.index("--child-deadline-epoch")
-    return argv[:i] + argv[i + 2 :]
+    """``argv`` without the internal flags the supervisor adds for its child."""
+    for flag in ("--child-deadline-epoch", orphan.FLAG):
+        if flag in argv:
+            i = argv.index(flag)
+            argv = argv[:i] + argv[i + 2 :]
+    return argv
 
 
 def run(script: str, argv: list[str], work, *, ledger: str, budget_core_hours: float, cores: int,
@@ -83,7 +91,13 @@ def run(script: str, argv: list[str], work, *, ledger: str, budget_core_hours: f
     that never started from one it cannot account for."""
     deadline = child_flag(argv)
     if deadline is not None:
-        threading.Thread(target=_watchdog, args=(deadline, os.getppid()), daemon=True).start()
+        supervisor_pid = orphan.supervisor_pid(argv)
+        if supervisor_pid is None:
+            raise SystemExit("supervisor: the child needs --supervisor-pid")
+        # A supervisor SIGKILLed while the child was importing is seen here,
+        # not at the work deadline.
+        orphan.check(supervisor_pid)
+        threading.Thread(target=_watchdog, args=(deadline, supervisor_pid), daemon=True).start()
         return work(Clock(deadline))
     if fresh_out:
         # Never reuse an earlier run's output (checked before anything is
@@ -105,7 +119,15 @@ def run(script: str, argv: list[str], work, *, ledger: str, budget_core_hours: f
     if spawn_record:
         artifacts.write_atomic(spawn_record, artifacts.canonical_json({"host": host, "pgid": None}))
     proc = subprocess.Popen(
-        [sys.executable, os.path.abspath(script), *argv, "--child-deadline-epoch", repr(deadline_epoch)],
+        [
+            sys.executable,
+            os.path.abspath(script),
+            *argv,
+            "--child-deadline-epoch",
+            repr(deadline_epoch),
+            orphan.FLAG,
+            str(os.getpid()),
+        ],
         start_new_session=True,
     )
     if spawn_record:

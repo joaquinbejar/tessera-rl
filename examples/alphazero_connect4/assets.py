@@ -49,10 +49,20 @@ MANIFEST = "assets-manifest.json"
 
 def _tar(src: str, dst: str) -> None:
     """A tarball whose bytes depend on the content only (sorted names,
-    zeroed times and owners). The descriptor stays out: it is kept."""
+    zeroed times and owners, a fixed mode). The descriptor stays out: it is
+    kept.
+
+    Only regular files are members (the walk adds files, never
+    directories). The mode is fixed at 0o644, what a umask 0022 host
+    writes, so the bytes do not depend on the host's umask or on the
+    0o644 that ``restore``'s data filter leaves (#197). Any other member
+    type (a symlink) is refused: its mode and target are host dependent."""
 
     def clean(info):
+        if not info.isreg():
+            raise SystemExit(f"{info.name}: only regular files are packed")
         info.mtime, info.uid, info.gid, info.uname, info.gname = 0, 0, 0, "", ""
+        info.mode = 0o644
         return info
 
     with tarfile.open(dst + ".tmp", "w", format=tarfile.PAX_FORMAT) as tar:

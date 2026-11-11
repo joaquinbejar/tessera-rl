@@ -21,7 +21,7 @@ use tessera_rl_engine::{
 };
 use tessera_rl_num::identity::{LogicalId, RngIdentity, Seed, StreamId};
 use tessera_rl_num::rng::{RngAuthority, StepRng};
-use tessera_rl_rts::bots::Bot;
+use tessera_rl_rts::bots::{Bot, PROSPECTOR_ARMY};
 use tessera_rl_rts::env::{HEADS_PER_UNIT, SIDE_SLOTS, UNIT_SLOTS, move_index, order_type};
 use tessera_rl_rts::units::{Kind, Unit};
 use tessera_rl_rts::world::{Dir, Grid, Team, Terrain};
@@ -237,7 +237,7 @@ fn fnv(hash: u64, word: u64) -> u64 {
 /// hashes folded. Both games reach combat (asserted), so the fighters'
 /// orders are in the hash. Pinned on macOS arm64; any change to a bot, the
 /// rules or the masks moves it.
-const BOT_GOLDEN: u64 = 0x3eb6_2927_d0c4_d294;
+const BOT_GOLDEN: u64 = 0x4632_458a_ef96_a836;
 /// A seed where Rush reaches Prospector under fog inside 600 decisions.
 const GOLDEN_SEED: u64 = 9;
 
@@ -386,15 +386,16 @@ fn test_rush_foundry_orders_strikers_and_prospector_lancers() {
 }
 
 #[test]
-fn test_prospector_fighters_hold_at_three_and_advance_at_four() {
-    for army in [3u16, 4] {
+fn test_prospector_fighters_hold_below_the_army_and_advance_at_it() {
+    let full = u16::try_from(PROSPECTOR_ARMY).unwrap();
+    for army in [full - 1, full] {
         let (c, g, mut s) = open_state();
         for k in 0..army {
             s.units[1 + usize::from(k)] = unit(Kind::Lancer, g.index(2 + k, 0).unwrap());
         }
         let a = row(&c, &s, 0, Bot::Prospector, &mut rng(0));
         for u in 1..=usize::from(army) {
-            let want = if army < 4 {
+            let want = if army < full {
                 order_type::NOOP
             } else {
                 order_type::MOVE
@@ -629,6 +630,54 @@ fn test_every_side_finds_ore_on_generated_maps() {
                 p.step(input(&a)).unwrap();
             }
             assert_eq!(found, [true; 2], "size {size} seed {seed}");
+        }
+    }
+}
+
+/// A side never orders two of its units into one cell in one decision: such
+/// a contest is refused for both (rule 1), and the bots repeated it every
+/// decision, freezing Rush's economy in most calibration games (stage 5a).
+#[test]
+fn test_scripted_bots_never_move_two_units_into_one_cell() {
+    let c = cfg(16, 16);
+    let g = Grid::new(16).unwrap();
+    for seed in 0..6 {
+        let mut p = pool(&c, seed);
+        let mut r = [rng(1), rng(2)];
+        for k in 0..200 {
+            let s = *p.state(0).unwrap();
+            for (agent, bot) in [(0u16, Bot::Rush), (1, Bot::Prospector)] {
+                let a = row(&c, &s, agent, bot, &mut rng(3));
+                let team = if agent == 0 { Team::Zero } else { Team::One };
+                let base = if agent == 0 { 0 } else { SIDE_SLOTS };
+                let mut targets = Vec::new();
+                for u in 0..usize::from(c.max_units) {
+                    let (t, i) = (a[u * HEADS_PER_UNIT], a[u * HEADS_PER_UNIT + 1]);
+                    if t != order_type::MOVE {
+                        continue;
+                    }
+                    let from = s.units[base + u].cell;
+                    let to = Dir::order(team)
+                        .into_iter()
+                        .find(|&d| i32::from(move_index(team, d)) == i)
+                        .and_then(|d| g.step(from, d))
+                        .unwrap();
+                    assert!(
+                        !targets.contains(&to),
+                        "{bot:?} seed {seed} step {k}: two units into {to}"
+                    );
+                    targets.push(to);
+                }
+            }
+            let a = [
+                row(&c, &s, 0, Bot::Rush, &mut r[0]),
+                row(&c, &s, 1, Bot::Prospector, &mut r[1]),
+            ]
+            .concat();
+            let out = p.step(input(&a)).unwrap();
+            if out.episode_terminated()[0].get() || out.episode_truncated()[0].get() {
+                break;
+            }
         }
     }
 }

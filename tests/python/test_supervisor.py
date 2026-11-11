@@ -98,9 +98,10 @@ def cleanup(pid):
 
 def test_supervisor_transient_eperm_after_return_kills_the_descendant_and_settles_ok(tmp_path, monkeypatch):
     rc, entries, pid = run(tmp_path, monkeypatch, refusals=3)
-    time.sleep(0.2)
     assert rc == 0 and [e["status"] for e in entries] == ["ok"]
-    assert not alive(pid), "the retried group kill reached the descendant"
+    # Polled, not read at a fixed instant: a loaded machine delays a
+    # SIGKILLed process's exit; one the kill missed sleeps 120 s.
+    assert wait_for(lambda: gone(pid), GONE_BOUND_S), "the retried group kill reached the descendant"
 
 
 def test_supervisor_persistent_eperm_after_return_fails_closed(tmp_path, monkeypatch):
@@ -114,10 +115,9 @@ def test_supervisor_persistent_eperm_after_return_fails_closed(tmp_path, monkeyp
 
 def test_supervisor_transient_eperm_at_the_deadline_kills_child_and_descendant(tmp_path, monkeypatch):
     rc, entries, pid = run(tmp_path, monkeypatch, refusals=3, body=NEUTRALISED, wall_cap_s=3.0)
-    time.sleep(0.2)
     assert rc == supervisor.EXIT_DEADLINE
     assert entries[0]["status"].startswith("killed at the deadline") and entries[0]["wall_s"] < 30
-    assert not alive(pid)
+    assert wait_for(lambda: gone(pid), GONE_BOUND_S)
 
 
 def test_supervisor_persistent_eperm_at_the_deadline_fails_closed(tmp_path, monkeypatch):
@@ -186,3 +186,84 @@ def test_supervisor_spawn_record_names_the_child_group_and_starts_empty(tmp_path
                         wall_cap_s=30.0, out=str(tmp_path / "out"), name="t", spawn_record=str(record))  # fmt: skip
     assert rc == 0 and seen[0]["pgid"] is None
     assert json.loads(record.read_text())["pgid"] > 0
+
+
+GATED_CHILD = """
+import pathlib, subprocess, sys, time
+sys.path.insert(0, {example!r})
+import supervisor
+
+def work(clock):
+    d = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(120)"])
+    pathlib.Path({pidfile!r}).write_text(str(d.pid))
+    time.sleep(120)
+    return 0
+
+sys.exit(supervisor.run(__file__, sys.argv[1:], work, ledger={ledger!r}, budget_core_hours=1.0, cores=1,
+                        wall_cap_s=60.0, out={out!r}, name="gated"))
+"""
+
+START_GATE = pathlib.Path(__file__).with_name("start_gate")
+# An orphaned child is seen within one watchdog poll once it runs; the bound
+# is many polls because a loaded machine delays a SIGKILLed process's exit,
+# and far below the work deadline (60 s minus the cleanup grace) at which a
+# child that missed the death would stop.
+GONE_BOUND_S = 50 * 0.2
+
+
+def wait_for(condition, bound_s):
+    end = time.monotonic() + bound_s
+    while not condition():
+        if time.monotonic() >= end:
+            return False
+        time.sleep(0.05)
+    return True
+
+
+def gone(pid):
+    """Whether ``pid`` no longer runs. Unlike ``alive``, a process that
+    exits between the signal check and ``ps`` reads as gone: this is
+    polled while the process is being killed."""
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return True
+    stat = subprocess.run(["ps", "-o", "stat=", "-p", str(pid)], capture_output=True, text=True).stdout.strip()
+    return not stat or stat.startswith("Z")
+
+
+def test_supervisor_killed_while_its_child_starts_takes_the_child_at_once(tmp_path):
+    """The supervisor is SIGKILLed while its child is still starting (held
+    by the test-only start gate before any line of the child's script
+    runs). Released, the child sees it is orphaned when it arms its
+    watchdog and kills its group, instead of running to the work deadline;
+    the dead supervisor's reservation is charged once, in full."""
+    from ledger import Ledger
+
+    assert GONE_BOUND_S < 60 - supervisor.CLEANUP_GRACE_S
+    gate, pidfile, ledger = tmp_path / "gate", tmp_path / "descendant.pid", tmp_path / "ledger.json"
+    script = tmp_path / "child.py"
+    script.write_text(GATED_CHILD.format(example=str(EXAMPLE), pidfile=str(pidfile), ledger=str(ledger),
+                                         out=str(tmp_path / "out")))  # fmt: skip
+    path = os.pathsep.join(filter(None, [str(START_GATE), os.environ.get("PYTHONPATH")]))
+    env = {**os.environ, "PYTHONPATH": path, "TESSERA_TEST_START_GATE": str(gate)}
+    sup = subprocess.Popen([sys.executable, str(script)], env=env)
+    held = pathlib.Path(str(gate) + ".held")
+    try:
+        assert wait_for(held.exists, 60), "the child reached the start gate"
+        child = int(held.read_text())
+    finally:
+        sup.kill()
+        sup.wait()
+    gate.write_text("")
+    try:
+        assert wait_for(lambda: gone(child), GONE_BOUND_S), "the orphaned child ran on"
+        assert not pidfile.exists(), "the orphaned child started no work"
+    finally:
+        cleanup(child)
+        if pidfile.exists():
+            cleanup(int(pidfile.read_text()))
+    led = Ledger(str(ledger), budget_core_hours=1.0)
+    (entry,) = led.entries()
+    assert entry["status"].startswith("interrupted") and entry["core_hours"] == pytest.approx(60 / 3600, abs=1e-5)
+    assert led.spent_core_hours() == pytest.approx(60 / 3600, abs=1e-5)

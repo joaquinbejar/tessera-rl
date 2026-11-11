@@ -432,6 +432,50 @@ def test_loop_assets_are_content_addressed(tmp_path, clean_run):
         assets.pack(str(a), str(tmp_path / "out-c"), "another-tag")
 
 
+@pytest.mark.parametrize("umask", [0o002, 0o022, 0o077])
+def test_loop_asset_repacks_identically_after_restore_under_any_umask(tmp_path, clean_run, umask):
+    """#197: the archive does not record the host's file modes, so an
+    evicted and restored attempt repacks to the same bytes and entry."""
+    import tarfile
+
+    import assets
+
+    old = os.umask(umask)
+    try:
+        # Written under the umask, as a loop on that host writes them.
+        root = shutil.copytree(clean_run[0], tmp_path / "root", copy_function=shutil.copyfile)
+        d = root / "gen-000" / "selfplay-0"
+        shard = next(d.glob("shard-*"))
+        assert shard.stat().st_mode & 0o777 == 0o666 & ~umask
+        shard.chmod(shard.stat().st_mode | 0o100)  # an executable bit is not recorded either
+        out = tmp_path / "out"
+        m = assets.pack(str(root), str(out), "p2-m3-train-test")
+        sp = next(a for a in m["assets"] if a["attempt"] == "g000-selfplay-0")
+        before = (out / sp["name"]).read_bytes()
+        with tarfile.open(out / sp["name"]) as tar:
+            assert {(t.type, t.mode) for t in tar.getmembers()} == {(tarfile.REGTYPE, 0o644)}
+        assets.evict(str(root), str(out / sp["name"]))
+        assets.restore(str(root), str(out / sp["name"]))
+        # Restore writes the recorded 0o644 (an explicit chmod, not the umask).
+        assert {p.stat().st_mode & 0o777 for p in d.rglob("*") if p.is_file() and p.name != "attempt.json"} == {0o644}
+        m2 = assets.pack(str(root), str(out), "p2-m3-train-test")
+    finally:
+        os.umask(old)
+    assert next(a for a in m2["assets"] if a["name"] == sp["name"]) == sp
+    assert (out / sp["name"]).read_bytes() == before
+
+
+def test_loop_asset_refuses_a_symlink_member(tmp_path):
+    import assets
+
+    src = tmp_path / "a"
+    src.mkdir()
+    (src / "f").write_bytes(b"x")
+    (src / "link").symlink_to("f")
+    with pytest.raises(SystemExit, match="only regular files"):
+        assets._tar(str(src), str(tmp_path / "o.tar"))
+
+
 def test_loop_look_is_eligible_only_with_the_registered_bot_and_a_medium_net(monkeypatch, bot):
     import look
 

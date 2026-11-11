@@ -2,6 +2,7 @@
 """The Async mode from Python (ADR-0047 section 9): per-instance identity
 with Sync, batches, output windows, delivery, interruption and threads."""
 
+import itertools
 import signal
 import threading
 import time
@@ -274,6 +275,11 @@ def test_async_signal_after_native_recv_keeps_the_batch(monkeypatch):
         env.recv()
 
 
+# How long a test keeps retrying until a SIGUSR1 tick lands inside a blocking
+# recv; seconds, far above what it takes (#195).
+INTERRUPT_BUDGET_S = 60.0
+
+
 @pytest.mark.skipif(not hasattr(signal, "pthread_kill"), reason="needs pthread_kill")
 def test_async_interrupted_recv_keeps_the_work():
     class Stop(Exception):
@@ -303,7 +309,12 @@ def test_async_interrupted_recv_keeps_the_work():
     ticker = threading.Thread(target=ticks)
     ticker.start()
     try:
-        for _ in range(30):
+        # Bounded by the observed interruption and a generous time budget,
+        # not by a count that assumes the platform's sleep granularity (#195).
+        deadline = time.monotonic() + INTERRUPT_BUDGET_S
+        for _ in itertools.count():
+            if time.monotonic() >= deadline:
+                break
             env.send(every, zeros(every))
             armed[0] = True
             try:
