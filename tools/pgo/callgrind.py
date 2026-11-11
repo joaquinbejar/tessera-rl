@@ -310,11 +310,28 @@ def hashes(args) -> dict:
     }
 
 
+def cpu(cpuinfo: str = "/proc/cpuinfo") -> dict:
+    """The host CPU as the guest sees it: Ir can depend on the CPU features
+    (ifunc-selected libc routines, runtime SIMD dispatch), so files measured
+    on two hosts are not interchangeable unless shown equal. The model name
+    and a hash of the first processor's feature flags."""
+    model, flags = None, None
+    for line in pathlib.Path(cpuinfo).read_text(encoding="utf-8").splitlines():
+        key, _, value = line.partition(":")
+        key, value = key.strip(), value.strip()
+        if key == "model name" and model is None:
+            model = value
+        elif key == "flags" and flags is None:
+            flags = hashlib.sha256(" ".join(sorted(value.split())).encode()).hexdigest()
+    return {"cpu_model": model, "cpu_flags": flags}
+
+
 def environment(args) -> dict:
-    """`hashes` plus the measuring toolchain: Ir depends on the interpreter
-    binary and the Valgrind build, not only on the wheel."""
+    """`hashes` plus the measuring toolchain and host: Ir depends on the
+    interpreter binary, the Valgrind build and the CPU features, not only on
+    the wheel."""
     version = subprocess.run(["valgrind", "--version"], check=True, capture_output=True, text=True).stdout.strip()
-    return {**hashes(args), "python": sha256_of(str(pathlib.Path(args.python).resolve())), "valgrind": version}
+    return {**hashes(args), "python": sha256_of(str(pathlib.Path(args.python).resolve())), "valgrind": version, **cpu()}
 
 
 def adopt(listing: pathlib.Path, out_dir: pathlib.Path) -> list[str]:

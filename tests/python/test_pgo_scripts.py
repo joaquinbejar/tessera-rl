@@ -577,3 +577,16 @@ def test_pgo_merge_refuses_a_part_report_of_the_older_format(tmp_path):
     old["scenarios"] = old.pop("units")
     part.write_text(json.dumps(old))
     assert merge_now(out, wheel) == 2 and not (out / "feasibility.json").exists()
+
+
+def test_pgo_cpu_reads_the_model_and_hashes_the_flags_order_free(tmp_path):
+    a = tmp_path / "a"
+    a.write_text("processor\t: 0\nmodel name\t: Some CPU 12\nflags\t\t: sse2 avx2 fma\n\n"
+                 "processor\t: 1\nmodel name\t: Some CPU 12\nflags\t\t: sse2 avx2 fma\n")
+    b = tmp_path / "b"
+    b.write_text("model name\t: Some CPU 12\nflags\t\t: fma sse2 avx2\n")
+    c = tmp_path / "c"
+    c.write_text("model name\t: Some CPU 12\nflags\t\t: sse2 avx2\n")
+    assert callgrind.cpu(str(a)) == callgrind.cpu(str(b))
+    assert callgrind.cpu(str(a))["cpu_model"] == "Some CPU 12"
+    assert callgrind.cpu(str(a))["cpu_flags"] != callgrind.cpu(str(c))["cpu_flags"], "a missing feature is another host"
