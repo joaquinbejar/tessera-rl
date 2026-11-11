@@ -368,7 +368,8 @@ def _main(argv, platform) -> int:
                         help="with --scenario: only the first N-step run of each, timed, for the window's projection")
     parser.add_argument("--adopt", type=pathlib.Path, default=None, metavar="LISTING",
                         help="with --feasibility: stamp an earlier window's finished files listed with their "
-                        "sha256 (as KEPT.txt) with this toolchain; all or nothing")
+                        "sha256 (as KEPT.txt) with this toolchain; all or nothing. Per-thread sets are checked by "
+                        "the stamp of their base name, so adopted per-thread files are measured again")
     parser.add_argument("--merge", action="store_true",
                         help="with --feasibility: evaluate the gate from finished files only, never running Valgrind")
     args = parser.parse_args(argv)

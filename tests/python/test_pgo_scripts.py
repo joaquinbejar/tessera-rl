@@ -6,6 +6,7 @@ import hashlib
 import importlib.util
 import json
 import pathlib
+import subprocess
 import sys
 
 import numpy as np
@@ -479,3 +480,38 @@ def test_pgo_adopt_is_all_or_nothing(tmp_path, monkeypatch):
     monkeypatch.setattr(callgrind, "environment", fake_environment())
     assert callgrind.main(adopt_args(out, wheel, listing), platform="linux") == 2
     assert not any(callgrind.stamp_path(f).exists() for f in files)
+
+
+def test_pgo_per_thread_reuse_needs_the_stamp(tmp_path, monkeypatch):
+    s = next(x for x in ALL if x.name == "split-phase/CartPole-v1")
+    out = tmp_path / f"{s.name.replace('/', '_')}.threads.callgrind"
+    pathlib.Path(f"{out}-1").write_text(THREAD.format(1000))
+    pathlib.Path(f"{out}-2").write_text(THREAD.format(5000))
+    monkeypatch.setattr(callgrind, "STAMP", {"toolchain": "now"})
+    # Unstamped: rerun under a part, missing under a merge.
+    with pytest.raises(callgrind.MissingRun):
+        callgrind.worker_control("py", MANIFEST_PATH, s, tmp_path, callgrind.refuse)
+    callgrind.stamp_path(out).write_text(json.dumps({"toolchain": "other"}))
+    runner = FakeValgrind()
+    callgrind.worker_control("py", MANIFEST_PATH, s, tmp_path, runner)
+    assert len(runner.calls) == 1
+    again = FakeValgrind()
+    callgrind.worker_control("py", MANIFEST_PATH, s, tmp_path, again)
+    assert again.calls == [], "the rerun's own stamp makes it reusable"
+
+
+def test_pgo_a_failed_rerun_leaves_no_stamp_on_the_old_file(tmp_path, monkeypatch):
+    s = ALL[0]
+    out = tmp_path / f"{s.name.replace('/', '_')}.{s.steps}.callgrind"
+    out.write_text(THREAD.format(7))
+    callgrind.stamp_path(out).write_text(json.dumps({"toolchain": "other"}))
+    monkeypatch.setattr(callgrind, "STAMP", {"toolchain": "now"})
+
+    def dies(argv, check):
+        raise subprocess.CalledProcessError(1, argv)
+
+    with pytest.raises(subprocess.CalledProcessError):
+        callgrind.measure("py", "m", s.name, s.steps, tmp_path, dies)
+    assert not callgrind.stamp_path(out).exists()
+    with pytest.raises(callgrind.MissingRun):
+        callgrind.measure("py", "m", s.name, s.steps, tmp_path, callgrind.refuse)
