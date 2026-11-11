@@ -62,7 +62,7 @@ except ImportError as e:  # pragma: no cover - exercised only without gymnasium
 import numpy as np
 
 from tessera_rl import _native
-from tessera_rl._env import _discrete_actions, _real_array, _to_float32, native_kwargs
+from tessera_rl._env import _discrete_actions, _multi_actions, _real_array, _to_float32, native_kwargs
 
 #: Single-agent environments the adapter exposes.
 _MAKERS = {
@@ -174,7 +174,10 @@ class TesseraVectorEnv(VectorEnv):
         self.render_mode = None
         self.single_observation_space = _single_space(layout)
         self._bounds = layout["action_bounds"]
-        if self._bounds is None:
+        self._nvec = tuple(layout["action_nvec"])
+        if len(self._nvec) > 1:
+            self.single_action_space = spaces.MultiDiscrete(np.asarray(self._nvec, dtype=np.int64))
+        elif self._bounds is None:
             self.single_action_space = spaces.Discrete(layout["action_choices"])
         else:
             low, high = (np.float32(b) for b in self._bounds)
@@ -186,7 +189,8 @@ class TesseraVectorEnv(VectorEnv):
         self._agents: int = layout["agents"]
         # Slot 0 carries the action; the other slots are never alive or
         # acting, and the engine zeroes them in validation anyway.
-        self._actions = np.zeros((self.num_envs, self._agents), dtype="<i4")
+        heads = (len(self._nvec),) if len(self._nvec) > 1 else ()
+        self._actions = np.zeros((self.num_envs, self._agents, *heads), dtype="<i4")
         self._shapes = [(np.dtype(dtype), tuple(shape)) for _, dtype, shape, *_ in layout["leaves"]]
 
     # -- outputs -------------------------------------------------------------
@@ -254,14 +258,24 @@ class TesseraVectorEnv(VectorEnv):
         return self._obs(out["observations"]), {}
 
     def step(self, actions):
-        acts = _discrete_actions(actions) if self._bounds is None else self._clipped(actions)
-        if acts.size != self.num_envs:
-            raise _native.ActionError(f"expected {self.num_envs} actions, got {acts.size}")
-        if self._agents == 1:
-            out = self._native.step(acts.tobytes())
-        else:
-            self._actions[:, 0] = acts.reshape(self.num_envs)
+        if len(self._nvec) > 1:
+            # Multi-head actions, shape ``(num_envs, heads)``, checked as the
+            # native ``Env.step`` checks them, into slot 0.
+            heads = len(self._nvec)
+            arr = np.asarray(actions)
+            if arr.shape != (self.num_envs, heads):
+                raise _native.ActionError(f"actions have shape ({self.num_envs}, {heads}), got {arr.shape}")
+            self._actions[:, 0] = _multi_actions(arr.reshape(self.num_envs, 1, heads), 1, self._nvec)[:, 0]
             out = self._native.step(self._actions.tobytes())
+        else:
+            acts = _discrete_actions(actions) if self._bounds is None else self._clipped(actions)
+            if acts.size != self.num_envs:
+                raise _native.ActionError(f"expected {self.num_envs} actions, got {acts.size}")
+            if self._agents == 1:
+                out = self._native.step(acts.tobytes())
+            else:
+                self._actions[:, 0] = acts.reshape(self.num_envs)
+                out = self._native.step(self._actions.tobytes())
         terminated = self._flags(out, "episode_terminated")
         truncated = self._flags(out, "episode_truncated")
         if self.outputs == "borrowed":

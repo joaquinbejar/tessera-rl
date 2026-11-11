@@ -180,6 +180,11 @@ class Env:
         #: Inclusive ``(low, high)`` of a continuous environment's one float32
         #: head; ``None`` for a discrete one (``action_choices`` is then > 0).
         self.action_bounds: tuple[float, float] | None = layout["action_bounds"]
+        #: Choices per discrete head of one agent (SPEC 11.1): ``(n,)`` for
+        #: ``Discrete(n)``, ``nvec`` for ``MultiDiscrete(nvec)``, ``()`` for a
+        #: continuous environment. With more than one head, actions have
+        #: shape ``(rows, agents, heads)``.
+        self.action_nvec: tuple[int, ...] = tuple(layout["action_nvec"])
         self._mask_len: int = layout["mask_len"]
         #: ``"simultaneous"``, ``"sequential"`` or ``"mixed"`` (ADR-0013).
         self.turns: str = layout["turns"]
@@ -288,7 +293,9 @@ class Env:
         return HalfStep(out["half"], ids, self._wrap(out["outputs"], len(ids)))
 
     def step(self, actions) -> Step:
-        """One step. ``actions`` has one int per agent row, ``(num_envs, agents)``.
+        """One step. ``actions`` has one int per agent row, ``(num_envs, agents)``;
+        with several discrete heads (``MultiDiscrete``), one int per head,
+        ``(num_envs, agents, heads)``, each in ``[0, action_nvec[k])``.
 
         Discrete actions: every value must be an exact integer in the int32
         range (integer dtypes, or floats with no fractional part). Continuous
@@ -298,12 +305,17 @@ class Env:
         before the pool is touched.
         """
         acts = self._actions(actions)
-        if acts.size != self.num_envs * self.agents:
-            raise _native.ActionError(f"expected {self.num_envs * self.agents} actions, got {acts.size}")
+        per_row = len(self.action_nvec) if len(self.action_nvec) > 1 else 1
+        if acts.size != self.num_envs * self.agents * per_row:
+            raise _native.ActionError(f"expected {self.num_envs * self.agents * per_row} actions, got {acts.size}")
         return self._wrap(self._native.step(acts.tobytes()))
 
     def _actions(self, actions) -> np.ndarray:
-        return _discrete_actions(actions) if self.action_bounds is None else _continuous_actions(actions)
+        if self.action_bounds is not None:
+            return _continuous_actions(actions)
+        if len(self.action_nvec) > 1:
+            return _multi_actions(actions, self.agents, self.action_nvec)
+        return _discrete_actions(actions)
 
     def _wrap(self, out: dict, rows: int | None = None) -> Step:
         n, a = self.num_envs if rows is None else rows, self.agents
@@ -418,6 +430,23 @@ def _discrete_actions(actions) -> np.ndarray:
     elif arr.size:
         raise _native.ActionError(f"actions must be integers, got dtype {arr.dtype}")
     return np.ascontiguousarray(arr, dtype="<i4")
+
+
+def _multi_actions(actions, agents: int, nvec: tuple[int, ...]) -> np.ndarray:
+    """Multi-head actions, shape ``(rows, agents, heads)``, as contiguous
+    little-endian int32: integers (as for one head), each head in
+    ``[0, nvec[k])``; ``ActionError`` otherwise, before the pool is touched."""
+    try:
+        arr = np.asarray(actions)
+    except (TypeError, ValueError) as e:
+        raise _native.ActionError(f"actions are not an array: {e}") from None
+    heads = len(nvec)
+    if arr.ndim != 3 or arr.shape[1:] != (agents, heads):
+        raise _native.ActionError(f"actions have shape (rows, {agents}, {heads}), got {arr.shape}")
+    acts = _discrete_actions(arr)
+    if acts.size and ((acts < 0) | (acts >= np.asarray(nvec, dtype=np.int64))).any():
+        raise _native.ActionError(f"an action is out of range for its head (choices {list(nvec)})")
+    return acts
 
 
 def _real_array(actions) -> np.ndarray:

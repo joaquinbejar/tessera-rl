@@ -229,6 +229,19 @@ pub(crate) fn make_continuous_probe(g: Gil, kwargs: Option<Ref<'_>>) -> CResult<
     Ok(Inner::new(ops, borrowed))
 }
 
+/// `_make_multi_probe(**kwargs)` (test hooks only): two discrete heads.
+#[cfg(feature = "test-hooks")]
+pub(crate) fn make_multi_probe(g: Gil, kwargs: Option<Ref<'_>>) -> CResult<Inner> {
+    let kw = Kwargs::parse(g, kwargs)?;
+    kw.check(g, &[&POOL_KEYS, &["outputs"]])?;
+    let borrowed = borrowed(g, &kw)?;
+    let args = pool_args(g, &kw, 100)?;
+    let ops = g
+        .detach(|| crate::env::multi_probe(&args))
+        .map_err(|e| to_py(g, e))?;
+    Ok(Inner::new(ops, borrowed))
+}
+
 /// `make_pendulum(**kwargs)`: the pool of a pendulum environment object.
 /// `max_episode_steps` defaults to 200 (`Pendulum-v1`).
 pub(crate) fn make_pendulum(g: Gil, kwargs: Option<Ref<'_>>) -> CResult<Inner> {
@@ -483,6 +496,8 @@ pub(crate) fn layout(g: Gil, inner: &Inner) -> CResult<Mine> {
             c"action_choices",
             &capi::int_u64(g, l.action_choices.into())?,
         )?;
+        let nvec = list_of(g, l.action_nvec.iter().map(|&n| capi::int_u64(g, n.into())))?;
+        capi::dict_set(g, &d, c"action_nvec", &nvec)?;
         let bounds = match l.action_bounds {
             Some((low, high)) => capi::tuple(g, vec![capi::float(g, low)?, capi::float(g, high)?])?,
             None => capi::none(g),

@@ -217,6 +217,8 @@ class TesseraPufferEnv(pufferlib.PufferEnv):
             layout = probe._native.layout()
             if layout["action_bounds"] is not None:
                 raise _native.ArgumentError(f"{env_id} has continuous actions; the PufferLib adapter is discrete only")
+            if len(layout["action_nvec"]) > 1:
+                raise _native.ArgumentError(f"{env_id} has several action heads; the PufferLib adapter takes one")
             _, dtype, shape, low, high = _single_leaf(layout["leaves"])
             self._instances, self._agents = probe.num_envs, probe.agents
             choices = probe.action_choices

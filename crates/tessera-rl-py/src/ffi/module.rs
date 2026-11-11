@@ -140,7 +140,7 @@ pub(super) unsafe extern "C" fn fail_after(
     })
 }
 
-const METHOD_COUNT: usize = if cfg!(feature = "test-hooks") { 27 } else { 23 };
+const METHOD_COUNT: usize = if cfg!(feature = "test-hooks") { 28 } else { 23 };
 
 static METHODS: Table<[ffi::PyMethodDef; METHOD_COUNT]> = Table([
     method(
@@ -206,6 +206,12 @@ static METHODS: Table<[ffi::PyMethodDef; METHOD_COUNT]> = Table([
         c"_make_continuous_probe",
         thunks::MAKE_CONTINUOUS_PROBE,
         c"Test hook: a pool with one continuous head.",
+    ),
+    #[cfg(feature = "test-hooks")]
+    super::tables::method_kw(
+        c"_make_multi_probe",
+        thunks::MAKE_MULTI_PROBE,
+        c"Test hook: a pool with two discrete heads, MultiDiscrete([3, 5]).",
     ),
     #[cfg(feature = "test-hooks")]
     method(

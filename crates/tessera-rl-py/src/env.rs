@@ -98,8 +98,13 @@ pub(crate) struct Layout {
     /// bound on which slots can ever act (`agents` is the capacity).
     pub(crate) initial_agents: usize,
     pub(crate) leaves: Vec<Leaf>,
-    /// Choices of the one discrete head; 0 for a continuous environment.
+    /// Choices of the one discrete head; 0 for a continuous or a
+    /// multi-head environment.
     pub(crate) action_choices: u32,
+    /// Choices per discrete head of one agent (SPEC 11.1): `[n]` for
+    /// `Discrete(n)`, `nvec` for `MultiDiscrete(nvec)`, empty for a
+    /// continuous environment.
+    pub(crate) action_nvec: Vec<u32>,
     /// Inclusive bounds of the one continuous `f32` head, if that is the
     /// action space.
     pub(crate) action_bounds: Option<(f64, f64)>,
@@ -266,12 +271,21 @@ where
             "",
             &mut obs,
         )?;
-        let (action_choices, action_bounds) = action_head(
+        let (action_choices, action_bounds, action_nvec) = action_head(
             &E::action_space(cfg).map_err(EngineError::from)?,
             E::MAX_AGENTS,
         )?;
+        // One agent's mask row: the end of its last head block, as the
+        // engine lays them out (SPEC 11.3); 0 without masks.
         let mask_len = if M::ENABLED {
-            usize::try_from(action_choices).unwrap_or(0)
+            (0..action_nvec.len())
+                .filter_map(|h| pool.mask_head_shape(h))
+                .map(|m| {
+                    let parents: usize = m.parent_sizes.iter().flatten().product();
+                    m.offset + parents * m.size
+                })
+                .max()
+                .unwrap_or(0)
         } else {
             0
         };
@@ -284,6 +298,7 @@ where
                 initial_agents: E::initial_agents(cfg),
                 leaves: obs,
                 action_choices,
+                action_nvec,
                 action_bounds,
                 mask_len,
                 turns: match E::TURNS {
@@ -570,22 +585,30 @@ where
 
 /// The action head the Python layer can drive: one `Discrete`, or, for a
 /// single-agent environment, one `f32` box element (design section 4.3).
-fn action_head(space: &Space, agents: usize) -> Result<(u32, Option<(f64, f64)>), BindError> {
+/// One agent's action head: `(choices, bounds, nvec)`.
+type ActionHead = (u32, Option<(f64, f64)>, Vec<u32>);
+
+/// The action head of one agent: `(choices, bounds, nvec)`. `choices` is
+/// the one discrete head's (0 otherwise), `bounds` the one continuous
+/// head's, `nvec` the choices per discrete head.
+fn action_head(space: &Space, agents: usize) -> Result<ActionHead, BindError> {
     match space {
-        Space::Discrete { n } => return Ok((*n, None)),
+        Space::Discrete { n } => return Ok((*n, None, vec![*n])),
+        Space::MultiDiscrete { nvec } => return Ok((0, None, nvec.clone())),
         Space::Box {
             shape,
             dtype: DType::F32,
             bounds: BoxBounds::Float { low, high },
         } if agents == 1 && shape.as_slice() == [1] => {
             if let ([low], [high]) = (low.as_slice(), high.as_slice()) {
-                return Ok((0, Some((*low, *high))));
+                return Ok((0, Some((*low, *high)), Vec::new()));
             }
         }
         _ => {}
     }
     Err(BindError::Argument(
-        "only Discrete and single-agent one-element f32 Box action spaces are exposed".to_owned(),
+        "only Discrete, MultiDiscrete and single-agent one-element f32 Box action spaces are exposed"
+            .to_owned(),
     ))
 }
 
@@ -600,6 +623,18 @@ pub(crate) fn panic_counter(args: &PoolArgs) -> Result<Box<dyn PoolOps>, BindErr
     };
     let (options, n) = options(args)?;
     let pool = EnvPool::<Counter, NoMasks>::new(cfg.clone(), options)?;
+    finish(&cfg, pool, args, n, false)
+}
+
+/// A pool with two discrete heads, `MultiDiscrete([3, 5])` (`make
+/// py-test-hooks`). Never in a release wheel.
+#[cfg(feature = "test-hooks")]
+pub(crate) fn multi_probe(args: &PoolArgs) -> Result<Box<dyn PoolOps>, BindError> {
+    use crate::multi_probe::MultiProbe;
+    use crate::split::common::CountConfig;
+    let cfg = CountConfig::default();
+    let (options, n) = options(args)?;
+    let pool = EnvPool::<MultiProbe, Masked>::with_masks(cfg.clone(), options)?;
     finish(&cfg, pool, args, n, false)
 }
 

@@ -97,6 +97,8 @@ def _native_pool(env_id: str, adapter: str, seed: int | None, kwargs: dict) -> t
     try:
         if probe.action_bounds is not None:
             raise _native.ArgumentError(f"{env_id} has continuous actions; the PettingZoo adapter is discrete only")
+        if len(probe.action_nvec) > 1:
+            raise _native.ArgumentError(f"{env_id} has several action heads; the PettingZoo adapter takes one")
         slots = [int(i) for i in np.flatnonzero(probe.reset().alive[0])]
     finally:
         probe.close()
