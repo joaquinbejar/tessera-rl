@@ -311,10 +311,13 @@ def hashes(args) -> dict:
 
 
 def cpu(cpuinfo: str = "/proc/cpuinfo") -> dict:
-    """The host CPU as the guest sees it: Ir can depend on the CPU features
-    (ifunc-selected libc routines, runtime SIMD dispatch), so files measured
-    on two hosts are not interchangeable unless shown equal. The model name
-    and a hash of the first processor's feature flags."""
+    """The host CPU as the kernel reports it. Valgrind shows its guest a CPUID
+    of its own, derived from the host's, so the host flags are the proxy: Ir
+    can depend on the CPU features (ifunc-selected libc routines, runtime SIMD
+    dispatch), and files measured on two hosts are not interchangeable unless
+    shown equal. The model name and a hash of the first processor's feature
+    flags; raises ValueError when either is missing, so two hosts can never
+    stamp equal by both lacking them."""
     model, flags = None, None
     for line in pathlib.Path(cpuinfo).read_text(encoding="utf-8").splitlines():
         key, _, value = line.partition(":")
@@ -323,15 +326,17 @@ def cpu(cpuinfo: str = "/proc/cpuinfo") -> dict:
             model = value
         elif key == "flags" and flags is None:
             flags = hashlib.sha256(" ".join(sorted(value.split())).encode()).hexdigest()
+    if not model or not flags:
+        raise ValueError(f"{cpuinfo} has no 'model name' or 'flags' line; the host cannot be stamped")
     return {"cpu_model": model, "cpu_flags": flags}
 
 
-def environment(args) -> dict:
+def environment(args, cpuinfo: str = "/proc/cpuinfo") -> dict:
     """`hashes` plus the measuring toolchain and host: Ir depends on the
     interpreter binary, the Valgrind build and the CPU features, not only on
     the wheel."""
     version = subprocess.run(["valgrind", "--version"], check=True, capture_output=True, text=True).stdout.strip()
-    return {**hashes(args), "python": sha256_of(str(pathlib.Path(args.python).resolve())), "valgrind": version, **cpu()}
+    return {**hashes(args), "python": sha256_of(str(pathlib.Path(args.python).resolve())), "valgrind": version, **cpu(cpuinfo)}
 
 
 def adopt(listing: pathlib.Path, out_dir: pathlib.Path) -> list[str]:
@@ -468,7 +473,11 @@ def _main(argv, platform) -> int:
             print(f"refused: {e}", file=sys.stderr)
             return 2
     if args.adopt or args.scenario:
-        STAMP = environment(args)
+        try:
+            STAMP = environment(args)
+        except ValueError as e:
+            print(f"refused: {e}", file=sys.stderr)
+            return 2
     if args.feasibility and args.adopt:
         try:
             names = adopt(args.adopt, args.out_dir)
