@@ -456,6 +456,9 @@ where
             rt.gang.clear_poison()?;
         }
         self.poisoned = false;
+        // No half is in flight here (the writer had exclusive access).
+        #[cfg(feature = "debug-checks")]
+        self.mode.pool.discard_allocations();
         Ok(())
     }
 

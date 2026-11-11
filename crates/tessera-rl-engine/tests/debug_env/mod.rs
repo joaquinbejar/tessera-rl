@@ -62,6 +62,13 @@ pub struct ProbeConfig {
     /// Allocate in `reset` (outside any chunk step).
     #[config(default = false)]
     pub alloc_on_reset: bool,
+    /// Panic in `step` at this step (0: never).
+    #[config(default = 0)]
+    pub panic_at: u32,
+    /// Spawn the live agent again at this step, an invalid agent event
+    /// (0: never).
+    #[config(default = 0)]
+    pub spawn_alive_at: u32,
 }
 
 #[derive(Observation)]
@@ -136,6 +143,11 @@ impl Environment for ProbeEnv {
         if cfg.alloc_always || state.steps == cfg.alloc_at {
             allocate(cfg.alloc_kind);
         }
+        if state.steps == cfg.spawn_alive_at {
+            out.agent_spawned(AgentSlot::FIRST);
+        }
+        // Panic injection for the recovery tests.
+        assert!(state.steps != cfg.panic_at, "injected step panic");
         let reward = if state.steps == cfg.nan_reward_at {
             f32::NAN
         } else {

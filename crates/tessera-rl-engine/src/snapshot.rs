@@ -139,6 +139,8 @@ where
             }
             pool.reobserve(0..records.len())?;
             pool.poisoned = false;
+            #[cfg(feature = "debug-checks")]
+            pool.discard_allocations();
             Ok(())
         })
     }
@@ -383,6 +385,8 @@ where
             }
             pool.reobserve(0..records.len())?;
             pool.poisoned = false;
+            #[cfg(feature = "debug-checks")]
+            pool.discard_allocations();
             Ok(())
         })
     }

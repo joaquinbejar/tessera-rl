@@ -615,6 +615,8 @@ where
             })?;
         }
         self.poisoned = false;
+        #[cfg(feature = "debug-checks")]
+        self.discard_allocations();
         self.check_turns()?;
         #[cfg(feature = "debug-checks")]
         self.check_nan(0..n)?;
@@ -905,6 +907,15 @@ where
             }
             None => Ok(()),
         }
+    }
+
+    /// `debug-checks`: drops the allocation count left by a failed call
+    /// (a panic, or a check that failed before `check_allocations`). Every
+    /// path that clears the poison calls it, so a recovered pool starts
+    /// from zero (ADR-0055).
+    #[cfg(feature = "debug-checks")]
+    pub(crate) fn discard_allocations(&self) {
+        let _ = self.allocs.take();
     }
 
     /// `debug-checks`: the first NaN in the rewards or state of `indices`,
