@@ -411,6 +411,13 @@ fn test_async_recv_job_level_panic_before_registration_native_ends_the_wait() {
     recv_sees_a_job_panic(WaitBackend::Native, PanicAt::BeforeRegistration);
 }
 
+/// The Park variant does NOT pin the wait predicate's job-panic term: with
+/// that term removed it can still pass, because a park token left by an
+/// earlier unpark ends one park early and `poll` then reports the panic. In
+/// production that is acceptable: a Park wait is bounded by the accepted
+/// 100 µs fallback, so the term costs latency at most, never liveness. It is
+/// liveness-critical only on native, and the native variant above catches
+/// its removal; do not read this test as coverage of that term.
 #[test]
 fn test_async_recv_job_level_panic_before_registration_park_ends_the_wait() {
     recv_sees_a_job_panic(WaitBackend::Park, PanicAt::BeforeRegistration);
