@@ -234,12 +234,22 @@ impl Completion {
 
     /// Announces a change made before this call and wakes a registered
     /// waiter. Nobody registered: two atomic RMWs, no syscall, no lock.
+    #[inline]
     pub(crate) fn notify(&self) {
         if self.signal.notify() {
-            match self.native {
-                Some(native) => native.wake_all(self.signal.word()),
-                None => self.cell.unpark(),
-            }
+            self.wake();
+        }
+    }
+
+    /// The wake through the backend, only when a waiter is registered. Out
+    /// of line, so the notify inlined into a worker's loop stays two RMWs
+    /// and a branch.
+    #[cold]
+    #[inline(never)]
+    fn wake(&self) {
+        match self.native {
+            Some(native) => native.wake_all(self.signal.word()),
+            None => self.cell.unpark(),
         }
     }
 
