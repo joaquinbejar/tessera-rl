@@ -15,8 +15,9 @@ Items 5 (the Python suite) and 6 (the num crate's tests under the profile) are
 commands of the wheel job, not of this tool. A difference blocks the wheel and is
 a bug; the goldens are never re-blessed for it.
 
-Discrete actions only: an environment with continuous actions (Pendulum,
-``CONTINUOUS_GAP``) needs a continuous path here, a stated gap.
+One discrete head only: an environment with continuous actions (Pendulum,
+``CONTINUOUS_GAP``) or with several heads (RTS, ``MULTI_HEAD_GAP``) needs its
+own action path here, a stated gap.
 """
 
 from __future__ import annotations
@@ -40,6 +41,11 @@ CONTINUE_STEPS = 20
 
 #: Registered environments this tool cannot drive yet (discrete actions only).
 CONTINUOUS_GAP = frozenset({"tessera/Pendulum-v1"})
+#: Registered environments with several discrete heads (MultiDiscrete): the
+#: actions here are one per agent row, a stated gap like the continuous one.
+MULTI_HEAD_GAP = frozenset({"tessera/RTS-v1"})
+#: Every stated gap.
+GAPS = CONTINUOUS_GAP | MULTI_HEAD_GAP
 
 ENVS = {
     "cartpole": ("tessera/CartPole-v1", {}),

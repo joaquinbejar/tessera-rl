@@ -22,6 +22,7 @@ use tessera_rl_games::{
     Connect4, Connect4Config, Go9, Go9Config, Leduc, LeducConfig, Othello, OthelloConfig,
 };
 use tessera_rl_num::identity::Seed;
+use tessera_rl_rts::{Rts, RtsConfig};
 
 /// Errors of the bindings: the engine's, plus record decoding and argument
 /// errors detected here.
@@ -109,6 +110,11 @@ pub(crate) struct Layout {
     /// action space.
     pub(crate) action_bounds: Option<(f64, f64)>,
     pub(crate) mask_len: usize,
+    /// Each discrete head's block in an agent's mask row (SPEC 11.3):
+    /// `(offset, parent sizes, choices)`; empty without masks.
+    pub(crate) mask_heads: Vec<(usize, Vec<usize>, usize)>,
+    /// Discrete heads per entity group (ADR-0051); 0 when none.
+    pub(crate) entity_group_heads: usize,
     /// Turn structure (ADR-0013): `"simultaneous"`, `"sequential"` or
     /// `"mixed"`.
     pub(crate) turns: &'static str,
@@ -161,6 +167,20 @@ pub(crate) trait PoolOps: Send {
         Ok(self.storage())
     }
     fn snapshot(&self, id: u32) -> Result<Vec<u8>, BindError>;
+    /// Illegal-but-valid actions replaced in instance `id`'s current
+    /// episode, per agent slot (the record header's statistic). Sync mode
+    /// only; the split-phase modes refuse it.
+    fn illegal_actions(&self, _id: u32) -> Result<Vec<u32>, BindError> {
+        Err(BindError::Argument(
+            "illegal_actions is available in sync mode only".to_owned(),
+        ))
+    }
+    /// Instance `id`'s state hash, the one Rust's goldens fold (sync mode).
+    fn state_hash(&self, _id: u32) -> Result<u64, BindError> {
+        Err(BindError::Argument(
+            "state_hash is available in sync mode only".to_owned(),
+        ))
+    }
     fn import(&mut self, id: u32, bytes: &[u8]) -> Result<(), BindError>;
     /// The persisted file of `ids` (ADR-0011).
     fn encode(&self, ids: &[u32]) -> Result<Vec<u8>, BindError>;
@@ -275,19 +295,30 @@ where
             &E::action_space(cfg).map_err(EngineError::from)?,
             E::MAX_AGENTS,
         )?;
-        // One agent's mask row: the end of its last head block, as the
-        // engine lays them out (SPEC 11.3); 0 without masks.
-        let mask_len = if M::ENABLED {
-            let mut end = 0;
+        // Each head's block in an agent's mask row, as the engine lays them
+        // out (SPEC 11.3); none without masks.
+        let mut mask_heads: Vec<(usize, Vec<usize>, usize)> = Vec::new();
+        if M::ENABLED {
             for h in 0..action_nvec.len() {
                 // With masks, the engine lays out every discrete head.
                 let m = pool.mask_head_shape(h).ok_or_else(|| {
                     BindError::Argument(format!("discrete head {h} has no mask block"))
                 })?;
-                let parents: usize = m.parent_sizes.iter().flatten().product();
-                end = end.max(m.offset + parents * m.size);
+                mask_heads.push((
+                    m.offset,
+                    m.parent_sizes.iter().flatten().copied().collect(),
+                    m.size,
+                ));
             }
-            end
+        }
+        // One agent's mask row: the end of its last head block.
+        let mask_len = mask_heads
+            .iter()
+            .map(|(offset, parents, size)| offset + parents.iter().product::<usize>() * size)
+            .max()
+            .unwrap_or(0);
+        let entity_group_heads = if M::ENABLED {
+            M::entity_group_heads(cfg).map_or(0, |g| usize::from(g.get()))
         } else {
             0
         };
@@ -303,6 +334,8 @@ where
                 action_nvec,
                 action_bounds,
                 mask_len,
+                mask_heads,
+                entity_group_heads,
                 turns: match E::TURNS {
                     TurnStructure::Simultaneous => "simultaneous",
                     TurnStructure::Sequential => "sequential",
@@ -407,6 +440,21 @@ where
 
     fn snapshot(&self, id: u32) -> Result<Vec<u8>, BindError> {
         Ok(self.pool.snapshot(id)?.to_bytes())
+    }
+
+    fn state_hash(&self, id: u32) -> Result<u64, BindError> {
+        Ok(self.pool.state_hash(id)?.get())
+    }
+
+    fn illegal_actions(&self, id: u32) -> Result<Vec<u32>, BindError> {
+        use tessera_rl_core::RecordLayout as _;
+        let record = self.pool.snapshot(id)?;
+        Ok(record
+            .header()
+            .agents()
+            .iter()
+            .map(|a| a.illegal_actions)
+            .collect())
     }
 
     fn import(&mut self, id: u32, bytes: &[u8]) -> Result<(), BindError> {
@@ -855,6 +903,40 @@ pub(crate) fn tag(args: &PoolArgs, fields: &TagFields) -> Result<Box<dyn PoolOps
     let (options, n) = options(args)?;
     let same_step = options.auto_reset == AutoReset::SameStep;
     let pool = EnvPool::<Tag, Masked>::with_masks(cfg.clone(), options)?;
+    finish(&cfg, pool, args, n, same_step)
+}
+
+/// The RTS config fields, by name, as Python passes them.
+#[derive(Debug, Default)]
+pub(crate) struct RtsFields {
+    pub(crate) size: Option<u32>,
+    pub(crate) decision_ticks: Option<u32>,
+    pub(crate) max_units: Option<u32>,
+    pub(crate) step_limit: Option<u32>,
+    pub(crate) seat_swap: Option<bool>,
+}
+
+/// An RTS pool (`tessera/RTS-v1`), with masks: two agents, simultaneous
+/// turns, three discrete heads per unit slot grouped per unit (ADR-0051).
+/// An order on an empty or dead slot other than the no-op `(0, 0, 0)`
+/// counts as illegal, per slot.
+pub(crate) fn rts(args: &PoolArgs, fields: &RtsFields) -> Result<Box<dyn PoolOps>, BindError> {
+    let d = RtsConfig::default();
+    let small = |v: Option<u32>, default: u16, what: &str| {
+        v.map_or(Ok(default), |v| {
+            u16::try_from(v).map_err(|_| BindError::Argument(format!("{what} is out of range")))
+        })
+    };
+    let cfg = RtsConfig {
+        size: small(fields.size, d.size, "size")?,
+        decision_ticks: small(fields.decision_ticks, d.decision_ticks, "decision_ticks")?,
+        max_units: small(fields.max_units, d.max_units, "max_units")?,
+        step_limit: fields.step_limit.unwrap_or(d.step_limit),
+        seat_swap: fields.seat_swap.unwrap_or(d.seat_swap),
+    };
+    let (options, n) = options(args)?;
+    let same_step = options.auto_reset == AutoReset::SameStep;
+    let pool = EnvPool::<Rts, Masked>::with_masks(cfg.clone(), options)?;
     finish(&cfg, pool, args, n, same_step)
 }
 

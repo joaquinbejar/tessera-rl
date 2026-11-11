@@ -11,6 +11,7 @@ Environment                 Turns        Adapters
 ``tessera/GridKeyDoor-v1``  simultaneous ``parallel_env``, ``aec_env``
 ``tessera/Snake-v1``        simultaneous ``parallel_env``, ``aec_env``
 ``tessera/PaddleDuel-v1``   simultaneous ``parallel_env``, ``aec_env``
+``tessera/RTS-v1``          simultaneous ``parallel_env``
 ``tessera/Connect4-v1``     sequential   ``aec_env``
 ``tessera/Leduc-v1``        sequential   ``aec_env``
 ``tessera/Othello-v1``      sequential   ``aec_env``
@@ -33,7 +34,19 @@ of an episode every agent still alive gets its final reward and flag in
 the same step (ADR-0013).
 
 Observations are dicts of the environment's leaves plus ``action_mask``
-(``int8``, one entry per action). Outputs are always owned copies, so
+(``int8``, one entry per action).
+
+An environment with several discrete heads (``MultiDiscrete``, the RTS:
+three heads per unit slot) has ``MultiDiscrete(nvec)`` as its action
+space, and an action is one integer per head. Its heads are conditional,
+which a Gymnasium ``MultiDiscrete`` mask (one independent mask per
+component) cannot express, so its observations carry no ``action_mask``.
+The masks are in ``infos[agent]``, and nothing else is (SPEC 11.3):
+``"action_mask"`` is the root head only (for the RTS ``[units, types]``),
+and ``"action_masks"`` every head's mask, one array per head of an entity
+group in the shapes of ``tessera_rl.masks`` (``[units, types]``,
+``[units, types, window]``, ``[units, types, products]``). An order other than the no-op on an empty or dead unit slot
+counts as an illegal action: give empty slots zeros. Outputs are always owned copies, so
 they stay valid across steps. One adapter runs one instance with
 auto-reset disabled: call ``reset`` to start a new episode.
 
@@ -58,7 +71,8 @@ from pettingzoo.utils.conversions import parallel_to_aec_wrapper
 from pettingzoo.utils.wrappers import OrderEnforcingWrapper
 
 from tessera_rl import _native
-from tessera_rl._env import Env, _discrete_actions, native_kwargs
+from tessera_rl._env import Env, _discrete_actions, _multi_actions, native_kwargs
+from tessera_rl.masks import head_views
 
 #: Native constructors and the PettingZoo interfaces each environment
 #: declares (ADR-0013). Anything else is refused at construction.
@@ -71,6 +85,9 @@ _ENVS = {
     "tessera/Leduc-v1": (_native.make_leduc, frozenset({"aec"})),
     "tessera/Othello-v1": (_native.make_othello, frozenset({"aec"})),
     "tessera/Go9-v1": (_native.make_go9, frozenset({"aec"})),
+    # Simultaneous; Parallel only for now (cycle buffering of a multi-head
+    # environment is not designed yet).
+    "tessera/RTS-v1": (_native.make_rts, frozenset({"parallel"})),
 }
 
 
@@ -97,8 +114,6 @@ def _native_pool(env_id: str, adapter: str, seed: int | None, kwargs: dict) -> t
     try:
         if probe.action_bounds is not None:
             raise _native.ArgumentError(f"{env_id} has continuous actions; the PettingZoo adapter is discrete only")
-        if len(probe.action_nvec) > 1:
-            raise _native.ArgumentError(f"{env_id} has several action heads; the PettingZoo adapter takes one")
         slots = [int(i) for i in np.flatnonzero(probe.reset().alive[0])]
     finally:
         probe.close()
@@ -139,21 +154,61 @@ class _Agents:
             hi = np.broadcast_to(np.asarray(high, dtype=np.float64).ravel(), (int(np.prod(shape)),))
             lo, hi = lo.reshape(shape).astype(dt), hi.reshape(shape).astype(dt)
             leaves[name or "obs"] = spaces.Box(low=lo, high=hi, shape=tuple(shape), dtype=dt)
-        n = env.action_choices
-        leaves["action_mask"] = spaces.Box(low=0, high=1, shape=(n,), dtype=np.int8)
+        self.nvec = tuple(env.action_nvec)
+        if len(self.nvec) > 1:
+            # The conditional masks are what an agent of a multi-head
+            # environment acts on: one without masks is not supported.
+            if not env.mask_heads:
+                raise _native.ArgumentError(f"{env_id} has several action heads and no masks; not supported")
+            self.action_space = spaces.MultiDiscrete(np.asarray(self.nvec, dtype=np.int64))
+        else:
+            n = env.action_choices
+            leaves["action_mask"] = spaces.Box(low=0, high=1, shape=(n,), dtype=np.int8)
+            self.action_space = spaces.Discrete(n)
         self.observation_space = spaces.Dict(leaves)
-        self.action_space = spaces.Discrete(n)
         self.last = None
+
+    @property
+    def multi(self) -> bool:
+        return len(self.nvec) > 1
+
+    def head_masks(self, slot: int) -> tuple[np.ndarray, ...]:
+        """Every head's mask of agent ``slot``, owned copies (multi-head)."""
+        m = self.last.masks[:, slot : slot + 1]
+        return tuple(np.array(v[0, 0], dtype=np.int8) for v in head_views(m, self.env.mask_heads, self.env.entity_group_heads))
+
+    def info(self, slot: int) -> dict:
+        """``infos[agent]``: that agent's head masks for a multi-head
+        environment (R2: nothing else), else empty."""
+        if not self.multi:
+            return {}
+        heads = self.head_masks(slot)
+        return {"action_mask": heads[0], "action_masks": heads}
+
+    def check(self, value):
+        """One agent's action, checked: an index, or one per head."""
+        if not self.multi:
+            return _exact_action(value, self.action_space.n)
+        try:
+            arr = np.asarray(value)
+        except (TypeError, ValueError) as e:
+            raise _native.ActionError(f"an action is one integer per head: {e}") from None
+        if arr.shape != (len(self.nvec),):
+            raise _native.ActionError(f"an action has shape ({len(self.nvec)},), not {arr.shape}")
+        return _multi_actions(arr.reshape(1, 1, -1), 1, self.nvec)[0, 0]
 
     def observe(self, slot: int) -> dict:
         step = self.last
         if step is None:
             raise _native.ArgumentError("call reset() before observing")
         obs = {name: np.array(arr[0, slot]) for name, arr in step.observations.items()}
-        if step.masks is not None:
-            obs["action_mask"] = step.masks[0, slot].astype(np.int8)
-        else:
-            obs["action_mask"] = np.ones(self.env.action_choices, dtype=np.int8)
+        # A multi-head environment's conditional masks are in infos (see
+        # the module doc).
+        if not self.multi:
+            if step.masks is not None:
+                obs["action_mask"] = step.masks[0, slot].astype(np.int8)
+            else:
+                obs["action_mask"] = np.ones(self.env.action_choices, dtype=np.int8)
         return obs
 
     def flags(self, slot: int) -> tuple[float, bool, bool]:
@@ -184,7 +239,8 @@ class TesseraParallelEnv(ParallelEnv):
     def reset(self, seed=None, options=None):
         self._a.last = self._a.env.reset(seed)
         self.agents = [n for n, s in zip(self._a.names, self._a.slots, strict=True) if self._a.last.alive[0, s]]
-        return {n: self._a.observe(self._a.slot_of[n]) for n in self.agents}, {n: {} for n in self.agents}
+        obs = {n: self._a.observe(self._a.slot_of[n]) for n in self.agents}
+        return obs, {n: self._a.info(self._a.slot_of[n]) for n in self.agents}
 
     def step(self, actions):
         # Everything is checked before the pool is touched. Actions for
@@ -196,9 +252,9 @@ class TesseraParallelEnv(ParallelEnv):
         missing = [n for n in self.agents if n not in actions]
         if missing:
             raise _native.ActionError(f"no action for live agents {missing}")
-        n = self._a.action_space.n
-        checked = {name: _exact_action(actions[name], n) for name in self.agents}
-        acts = np.zeros((1, self._a.env.agents), dtype=np.int32)
+        checked = {name: self._a.check(actions[name]) for name in self.agents}
+        heads = (len(self._a.nvec),) if self._a.multi else ()
+        acts = np.zeros((1, self._a.env.agents, *heads), dtype=np.int32)
         for name, action in checked.items():
             acts[0, self._a.slot_of[name]] = action
         self._a.last = self._a.env.step(acts)
@@ -207,7 +263,7 @@ class TesseraParallelEnv(ParallelEnv):
             slot = self._a.slot_of[name]
             obs[name] = self._a.observe(slot)
             rewards[name], terms[name], truncs[name] = self._a.flags(slot)
-            infos[name] = {}
+            infos[name] = self._a.info(slot)
         self.agents = [n for n in self.agents if not (terms[n] or truncs[n])]
         return obs, rewards, terms, truncs, infos
 

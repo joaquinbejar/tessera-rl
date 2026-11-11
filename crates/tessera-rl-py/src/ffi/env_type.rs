@@ -143,12 +143,14 @@ varargs!(send, api::send);
 varargs!(reset, api::reset);
 varargs!(step, api::step);
 varargs!(snapshot, api::snapshot);
+varargs!(illegal_actions, api::illegal_actions);
+varargs!(state_hash, api::state_hash);
 varargs!(import_record, api::import_record);
 varargs!(fork, api::fork);
 varargs!(encode, api::encode);
 varargs!(load, api::load);
 
-static METHODS: Table<[ffi::PyMethodDef; 17]> = Table([
+static METHODS: Table<[ffi::PyMethodDef; 19]> = Table([
     method(
         c"layout",
         thunks::LAYOUT,
@@ -190,6 +192,18 @@ static METHODS: Table<[ffi::PyMethodDef; 17]> = Table([
         thunks::SNAPSHOT,
         ffi::METH_VARARGS,
         c"snapshot(id) -> bytes",
+    ),
+    method(
+        c"illegal_actions",
+        thunks::ILLEGAL_ACTIONS,
+        ffi::METH_VARARGS,
+        c"illegal_actions(id) -> per-agent illegal actions this episode",
+    ),
+    method(
+        c"state_hash",
+        thunks::STATE_HASH,
+        ffi::METH_VARARGS,
+        c"state_hash(id) -> the instance's state hash",
     ),
     method(
         c"import_record",
@@ -333,6 +347,7 @@ maker!(make_pendulum, api::make_pendulum);
 maker!(make_acrobot, api::make_acrobot);
 maker!(make_mountaincar, api::make_mountaincar);
 maker!(make_tag, api::make_tag);
+maker!(make_rts, api::make_rts);
 maker!(make_grid, api::make_grid);
 maker!(make_keydoor, api::make_keydoor);
 maker!(make_snake, api::make_snake);
@@ -344,7 +359,7 @@ maker!(make_othello, api::make_othello);
 maker!(make_go9, api::make_go9);
 
 /// The module-level constructors, for the module's method table.
-pub(super) const MAKERS: [ffi::PyMethodDef; 14] = [
+pub(super) const MAKERS: [ffi::PyMethodDef; 15] = [
     method_kw(
         c"make_cartpole",
         thunks::MAKE_CARTPOLE,
@@ -369,6 +384,11 @@ pub(super) const MAKERS: [ffi::PyMethodDef; 14] = [
         c"make_tag",
         thunks::MAKE_TAG,
         c"make_tag(**pool_options, **tag_config) -> Env",
+    ),
+    method_kw(
+        c"make_rts",
+        thunks::MAKE_RTS,
+        c"make_rts(**pool_options, **rts_config) -> Env",
     ),
     method_kw(
         c"make_connect4",

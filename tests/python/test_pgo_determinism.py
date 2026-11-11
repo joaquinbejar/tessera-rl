@@ -97,7 +97,7 @@ def test_pgo_determinism_covers_every_registered_environment():
     block = source[source.index("makers = {") :]
     block = block[: block.index("}")]
     registered = set(re.findall(r'"(tessera/[^"]+)"', block))
-    assert registered and registered - det.CONTINUOUS_GAP == {env_id for env_id, _ in det.ENVS.values()}
+    assert registered and registered - det.GAPS == {env_id for env_id, _ in det.ENVS.values()}
 
 
 class FakeStep(NamedTuple):
