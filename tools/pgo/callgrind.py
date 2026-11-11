@@ -364,6 +364,10 @@ def merge(args) -> int:
             print(f"refused: {p.name} was measured with another toolchain: {got} != {env}", file=sys.stderr)
             return 2
         env = got
+        if "units" not in part:
+            print(f"refused: {p.name} is a part report of the older format (no units); delete it, it is not merged",
+                  file=sys.stderr)
+            return 2
         overlap = seen & set(part["units"])
         if overlap:
             print(f"refused: {p.name} repeats units of another part: {sorted(overlap)}", file=sys.stderr)

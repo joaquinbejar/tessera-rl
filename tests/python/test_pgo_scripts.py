@@ -568,3 +568,12 @@ def test_pgo_merge_refuses_a_missing_or_repeated_unit(tmp_path):
 def test_pgo_probe_takes_scenarios_not_units(tmp_path):
     with pytest.raises(ValueError, match="not units"):
         callgrind.probe("py", MANIFEST_PATH, MANIFEST, tmp_path, ["state/Grid-v1#aa0"], FakeValgrind())
+
+
+def test_pgo_merge_refuses_a_part_report_of_the_older_format(tmp_path):
+    out, wheel, _ = run_parts(tmp_path, [callgrind.all_units(MANIFEST)])
+    part = next(out.glob("feasibility.part.*.json"))
+    old = json.loads(part.read_text())
+    old["scenarios"] = old.pop("units")
+    part.write_text(json.dumps(old))
+    assert merge_now(out, wheel) == 2 and not (out / "feasibility.json").exists()
