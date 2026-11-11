@@ -2,6 +2,7 @@
 """tools/pgo: the workload at tiny lengths on the local wheel, and the training
 and Callgrind entry points without running either. No Valgrind here."""
 
+import argparse
 import hashlib
 import importlib.util
 import json
@@ -577,3 +578,75 @@ def test_pgo_merge_refuses_a_part_report_of_the_older_format(tmp_path):
     old["scenarios"] = old.pop("units")
     part.write_text(json.dumps(old))
     assert merge_now(out, wheel) == 2 and not (out / "feasibility.json").exists()
+
+
+def test_pgo_cpu_reads_the_model_and_hashes_the_flags_order_free(tmp_path):
+    a = tmp_path / "a"
+    a.write_text("processor\t: 0\nmodel name\t: Some CPU 12\nflags\t\t: sse2 avx2 fma\n\n"
+                 "processor\t: 1\nmodel name\t: Some CPU 12\nflags\t\t: sse2 avx2 fma\n")
+    b = tmp_path / "b"
+    b.write_text("model name\t: Some CPU 12\nflags\t\t: fma sse2 avx2\n")
+    c = tmp_path / "c"
+    c.write_text("model name\t: Some CPU 12\nflags\t\t: sse2 avx2\n")
+    assert callgrind.cpu(str(a)) == callgrind.cpu(str(b))
+    assert callgrind.cpu(str(a))["cpu_model"] == "Some CPU 12"
+    assert callgrind.cpu(str(a))["cpu_flags"] != callgrind.cpu(str(c))["cpu_flags"], "a missing feature is another host"
+
+
+def test_pgo_cpu_refuses_a_cpuinfo_without_model_or_flags(tmp_path):
+    arm = tmp_path / "arm"
+    arm.write_text("processor\t: 0\nFeatures\t: fp asimd\nCPU implementer\t: 0x41\n")
+    with pytest.raises(ValueError, match="cannot be stamped"):
+        callgrind.cpu(str(arm))
+
+
+def test_pgo_environment_stamps_the_cpu(tmp_path, monkeypatch):
+    wheel = tmp_path / "w.whl"
+    wheel.write_bytes(b"abc")
+    info = tmp_path / "cpuinfo"
+    info.write_text("model name\t: Some CPU 12\nflags\t\t: sse2 avx2\n")
+
+    class Done:
+        stdout = "valgrind-3.24.0\n"
+
+    monkeypatch.setattr(callgrind.subprocess, "run", lambda *a, **k: Done())
+    args = argparse.Namespace(wheel=str(wheel), manifest=MANIFEST_PATH, python=sys.executable)
+    env = callgrind.environment(args, cpuinfo=str(info))
+    assert env["cpu_model"] == "Some CPU 12" and env["cpu_flags"] == callgrind.cpu(str(info))["cpu_flags"]
+    assert env["valgrind"] == "valgrind-3.24.0"
+
+
+def test_pgo_a_part_reruns_a_file_measured_on_another_cpu(tmp_path, monkeypatch):
+    def env(flags):
+        return lambda args: {**callgrind.hashes(args), "python": "py-sha", "valgrind": "vg-1",
+                             "cpu_model": "Some CPU 12", "cpu_flags": flags}
+
+    wheel = tmp_path / "w.whl"
+    wheel.write_bytes(b"abc")
+    out = tmp_path / "o"
+    args = ["--approved-window", "x", "--manifest", MANIFEST_PATH, "--out-dir", str(out), "--feasibility",
+            "--wheel", str(wheel), "--scenario", "state/Grid-v1"]
+    first = FakeValgrind()
+    with pytest.MonkeyPatch.context() as m:
+        m.setattr(callgrind.subprocess, "run", first)
+        m.setattr(callgrind, "environment", env("flags-a"))
+        assert callgrind.main(args, platform="linux") == 0
+    again = FakeValgrind()
+    with pytest.MonkeyPatch.context() as m:
+        m.setattr(callgrind.subprocess, "run", again)
+        m.setattr(callgrind, "environment", env("flags-b"))
+        assert callgrind.main(args, platform="linux") == 0
+    assert len(again.calls) == len(first.calls) == 11
+
+
+def test_pgo_a_part_on_an_unstampable_host_is_refused(tmp_path, monkeypatch):
+    wheel = tmp_path / "w.whl"
+    wheel.write_bytes(b"abc")
+
+    def no_cpu(args):
+        raise ValueError("no 'model name' or 'flags' line; the host cannot be stamped")
+
+    monkeypatch.setattr(callgrind, "environment", no_cpu)
+    args = ["--approved-window", "x", "--manifest", MANIFEST_PATH, "--out-dir", str(tmp_path / "o"), "--feasibility",
+            "--wheel", str(wheel), "--scenario", "state/Grid-v1"]
+    assert callgrind.main(args, platform="linux") == 2 and callgrind.STAMP is None
