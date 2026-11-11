@@ -28,6 +28,11 @@ import callgrind  # noqa: E402
 import evidence  # noqa: E402
 
 
+# The frozen kernel list (tools/pgo/kernels.toml at its freeze, the merge of
+# the PR that filled it). A decision with W2 inputs refuses any other list.
+KERNELS_SHA256 = "939daa4a846f46663d7bcdf56bf2a4b84bb3da218d219b546c02eeb9c18ae35c"
+
+
 class Refused(ValueError):
     """The inputs cannot support a decision."""
 
@@ -75,6 +80,17 @@ def _check(reports: dict, feasibility: dict, manifest_sha: str, all_scenarios) -
         if wheel in wheels:
             raise Refused(f"{label} and {wheels[wheel]} are the same wheel")
         wheels[wheel] = label
+    # Files compared across wheels differ in the wheel hash by design; every
+    # other field of the stamp (manifest, interpreter, Valgrind, CPU) must be
+    # equal on both sides, and equal to the feasibility gate's.
+    def rest(stamp: dict) -> dict:
+        return {k: v for k, v in stamp.items() if k not in ("wheel", "kernels")}
+    base_stamp = rest(feasibility["sha256"])
+    for label, report in reports.items():
+        if rest(report["sha256"]) != base_stamp:
+            diff = sorted(k for k in set(base_stamp) | set(rest(report["sha256"]))
+                          if base_stamp.get(k) != rest(report["sha256"]).get(k))
+            raise Refused(f"{label}: measured under another stamp than the gate (fields {diff})")
 
 
 def decide(reports: dict, feasibility: dict, seventh: dict, manifest_path: str, kernels_path: str) -> dict:
@@ -105,6 +121,8 @@ def decide(reports: dict, feasibility: dict, seventh: dict, manifest_path: str, 
             raise Refused("W2F and W2H are needed together")
         evidence.load_kernels(kernels_path)
         out["kernels_sha256"] = callgrind.sha256_of(kernels_path)
+        if out["kernels_sha256"] != KERNELS_SHA256:
+            raise Refused(f"the kernel list is not the frozen one: {out['kernels_sha256']} != {KERNELS_SHA256}")
         w2f, w2h = _costs(reports["W2F"]), _costs(reports["W2H"])
         failed["W2F"] = section7("W2F", seventh.get("W2F"), reports["W2F"]["sha256"]["wheel"], base)
         w2_ok = evidence.accept_w2f(w2f, w2h, w1, all_scenarios, sets, w1_ok, not failed["W2F"])

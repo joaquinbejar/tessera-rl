@@ -1,8 +1,31 @@
 # SPDX-License-Identifier: MIT OR Apache-2.0
 #
 # The kernels that must have nonzero profile counts (design section 3). Kept out
-# of the manifest so that filling them does not change its version. Frozen at the
-# feasibility step, from real symbols, with its sha256 recorded beside the
-# manifest's. Empty until then: evidence.load_kernels refuses an empty list.
+# of the manifest so that filling them does not change its version, and out of
+# the measurement stamp (the list enters no Ir).
+#
+# Filled on 2026-11-11 from the real symbols of the W1 wheel of the feasibility
+# gate (tessera_rl-0.1.0-cp311-abi3-manylinux_2_28_x86_64.whl, sha256
+# ad64a5e1b5b8b283bd87f77bd8d5e441aa2f2f4a4a22aca44eef9da59b26dfdf, built from
+# ac92079): one `tessera_rl_engine::pool::step_chunk` instance per environment
+# type of the manifest, each a distinct v0-mangled symbol of `_native.abi3.so`.
+# The design said "frozen at the feasibility step"; that did not happen, and the
+# freeze point is the merge commit of the PR that adds this list, before any W2
+# profile or coverage output exists.
+#
+# A kernel matches a profile function whose v0-mangled name contains every
+# `+`-separated part, each as a length-prefixed identifier (`10step_chunk`).
 
-kernels = []
+kernels = [
+    "step_chunk+CartPole",
+    "step_chunk+Tag",
+    "step_chunk+Grid",
+    "step_chunk+KeyDoor",
+    "step_chunk+Snake",
+    "step_chunk+BrickWall",
+    "step_chunk+Connect4",
+    "step_chunk+Othello",
+    "step_chunk+Leduc",
+    "step_chunk+PaddleDuel",
+    "step_chunk+Go9",
+]
