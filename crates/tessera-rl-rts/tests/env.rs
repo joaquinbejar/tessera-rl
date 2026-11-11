@@ -36,6 +36,7 @@ fn cfg(size: u16, max_units: u16) -> RtsConfig {
         max_units,
         step_limit: 400,
         seat_swap: false,
+        opponent: 0,
     }
 }
 
@@ -292,6 +293,7 @@ fn test_rts_seat_swap_changes_only_naming() {
     let c = cfg(12, 6);
     let swapped = RtsConfig {
         seat_swap: true,
+        opponent: 0,
         ..c.clone()
     };
     assert_eq!(side_of_agent(&c, 0), Team::Zero);

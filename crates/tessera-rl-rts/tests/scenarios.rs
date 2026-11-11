@@ -38,6 +38,7 @@ fn config(units: u16, ticks: u16) -> RtsConfig {
         max_units: units,
         step_limit: 400,
         seat_swap: false,
+        opponent: 0,
     }
 }
 

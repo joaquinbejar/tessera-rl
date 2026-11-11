@@ -110,6 +110,28 @@ pub struct RtsConfig {
     /// Whether agent slot 0 plays side One.
     #[config(default = false)]
     pub seat_swap: bool,
+    /// A scripted opponent in agent slot 1 (RTS stage 5c): 0 none (two
+    /// agents), 1 Rush, 2 Prospector, 3 Random-legal ([`OPPONENTS`]). With
+    /// one, the pool has one agent, the learner in slot 0 (on side One
+    /// with `seat_swap`); the opponent's orders come from its bot, which
+    /// reads only its own side's view (`fog::seen`), inside the step.
+    #[config(default = 0, range = 0..=3)]
+    pub opponent: u8,
+}
+
+/// The scripted opponents by their `RtsConfig::opponent` code (1 to 3).
+pub const OPPONENTS: [crate::bots::Bot; 3] = [
+    crate::bots::Bot::Rush,
+    crate::bots::Bot::Prospector,
+    crate::bots::Bot::RandomLegal,
+];
+
+/// The scripted opponent of `cfg`, if any.
+#[must_use]
+pub fn opponent_of(cfg: &RtsConfig) -> Option<crate::bots::Bot> {
+    usize::from(cfg.opponent)
+        .checked_sub(1)
+        .and_then(|i| OPPONENTS.get(i).copied())
 }
 
 /// RTS state. The all-zero default is the state before the first reset.
@@ -903,6 +925,15 @@ impl Environment for Rts {
     const PERFECT_INFORMATION: bool = false;
     const TIER: Tier = Tier::CrossPlatform;
 
+    /// Two agents, or one, the learner in slot 0, with a scripted opponent.
+    fn initial_agents(cfg: &RtsConfig) -> usize {
+        if opponent_of(cfg).is_some() {
+            1
+        } else {
+            MAX_AGENTS
+        }
+    }
+
     fn observation_space(cfg: &RtsConfig) -> Result<Space, SpaceError> {
         RtsObs::space(cfg)
     }
@@ -953,10 +984,20 @@ impl Environment for Rts {
         cfg: &RtsConfig,
         s: &mut RtsState,
         actions: &Actions<'_, ()>,
-        _: &mut StepRng,
+        rng: &mut StepRng,
         out: &mut StepOut<'_>,
     ) {
         let mut orders = [Order::None; UNIT_SLOTS];
+        // The scripted opponent's orders, written before the transition
+        // from the state at the start of the decision: its bot reads only
+        // its side's view and, for Random-legal alone, draws from the step
+        // stream here, once per decision (stage 5 plan r2, O4).
+        let mut scripted = [0i32; SIDE_SLOTS * HEADS_PER_UNIT];
+        let bot = opponent_of(cfg);
+        if let (Some(bot), Some(agent)) = (bot, AgentSlot::new(1, MAX_AGENTS)) {
+            let mut w = ActionWriter::new(&mut scripted, &mut []);
+            bot.act(cfg, s, agent, rng, &mut w);
+        }
         for a in 0..MAX_AGENTS {
             let Some(agent) = u16::try_from(a)
                 .ok()
@@ -966,7 +1007,13 @@ impl Environment for Rts {
             };
             let team = side_of_agent(cfg, a);
             for (u, slot) in slots(cfg, team).enumerate() {
-                let head = |k: usize| actions.discrete(agent, u * HEADS_PER_UNIT + k).unwrap_or(0);
+                let head = |k: usize| {
+                    if bot.is_some() && a == 1 {
+                        scripted.get(u * HEADS_PER_UNIT + k).copied().unwrap_or(0)
+                    } else {
+                        actions.discrete(agent, u * HEADS_PER_UNIT + k).unwrap_or(0)
+                    }
+                };
                 let o = decode(cfg, s, team, slot, [head(0), head(1), head(2)]);
                 if let Some(o_slot) = orders.get_mut(slot) {
                     *o_slot = o;
@@ -985,6 +1032,10 @@ impl Environment for Rts {
                 else {
                     continue;
                 };
+                // The scripted seat is no agent: nothing of it is surfaced.
+                if a >= Self::initial_agents(cfg) {
+                    continue;
+                }
                 let side = index_of(side_of_agent(cfg, a));
                 let mine = alive.get(side).copied().unwrap_or(false);
                 let theirs = alive.get(1 - side).copied().unwrap_or(false);
