@@ -82,6 +82,11 @@ harness = false
 name = "threaded_instructions"
 harness = false
 
+# Instruction count of an Async round's drain job (issue #83), in the gate.
+[[bench]]
+name = "async_instructions"
+harness = false
+
 # Instruction counts of masked and turn-based steps (P2-M1a).
 [[bench]]
 name = "turns_instructions"

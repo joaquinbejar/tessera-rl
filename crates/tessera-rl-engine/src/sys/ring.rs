@@ -210,6 +210,134 @@ impl IdRing {
             }
         }
     }
+
+    /// Pushes a prefix of `ids` into consecutive slots with one claim of the
+    /// tail, and returns its length (at least one).
+    ///
+    /// The free slots from the tail are counted first (each sequence loaded
+    /// with Acquire, as in [`Self::push`]); a slot whose sequence equals its
+    /// position stays free until the producer that owns that position fills
+    /// it, so the slots counted before a successful compare-and-swap of the
+    /// tail are this call's alone. Each slot is then filled and published
+    /// with its own Release store, exactly as a single push does.
+    fn push_run(&self, ids: &[u32]) -> Result<usize, RingError> {
+        if ids.is_empty() {
+            return Ok(0);
+        }
+        let mut pos = self.tail.load(Ordering::Relaxed);
+        'claim: loop {
+            let mut free = 0;
+            while free < ids.len() {
+                let Some(p) = pos.checked_add(free) else {
+                    break;
+                };
+                let slot = self.slot(p).ok_or(RingError::Exhausted)?;
+                match slot.seq.load(Ordering::Acquire).cmp(&p) {
+                    core::cmp::Ordering::Equal => free += 1,
+                    // Another producer took the position: start again from
+                    // the current tail.
+                    core::cmp::Ordering::Greater if free == 0 => {
+                        pos = self.tail.load(Ordering::Relaxed);
+                        continue 'claim;
+                    }
+                    // Not free (full) or already taken: the run ends here.
+                    _ => break,
+                }
+            }
+            if free == 0 {
+                return Err(RingError::Full {
+                    capacity: self.capacity(),
+                });
+            }
+            let end = pos.checked_add(free).ok_or(RingError::Exhausted)?;
+            match self
+                .tail
+                .compare_exchange(pos, end, Ordering::Relaxed, Ordering::Relaxed)
+            {
+                Ok(_) => {
+                    for (k, &id) in ids.iter().take(free).enumerate() {
+                        // `pos + k < end`, checked above.
+                        let p = pos + k;
+                        if let Some(slot) = self.slot(p) {
+                            slot.id.store(id, Ordering::Relaxed);
+                            slot.seq.store(p + 1, Ordering::Release);
+                        }
+                    }
+                    return Ok(free);
+                }
+                Err(current) => pos = current,
+            }
+        }
+    }
+
+    /// Pops a run of consecutive ids into `out` with one claim of the head
+    /// and returns its length; zero if the ring is (transiently) empty.
+    ///
+    /// Up to `out.len() * share` filled slots from the head are counted, and
+    /// `min(ceil(filled / share), out.len())` of them are taken, so `share`
+    /// claimers that arrive together split a backlog instead of the first
+    /// taking it all.
+    /// A filled slot stays filled until the consumer that owns its position
+    /// empties it, so the slots counted before a successful compare-and-swap
+    /// of the head are this call's alone. Every slot's next free sequence is
+    /// computed before the claim, so exhaustion is reported without taking a
+    /// position, as in [`Self::pop`].
+    fn pop_run(&self, out: &mut [u32], share: usize) -> Result<usize, RingError> {
+        if out.is_empty() {
+            return Ok(0);
+        }
+        let mut pos = self.head.load(Ordering::Relaxed);
+        'claim: loop {
+            let scan = out.len().saturating_mul(share.max(1));
+            let mut filled = 0;
+            while filled < scan {
+                let Some(want) = pos
+                    .checked_add(filled)
+                    .and_then(|p| p.checked_add(1).map(|w| (p, w)))
+                else {
+                    break;
+                };
+                let slot = self.slot(want.0).ok_or(RingError::Exhausted)?;
+                match slot.seq.load(Ordering::Acquire).cmp(&want.1) {
+                    core::cmp::Ordering::Equal => filled += 1,
+                    // Another consumer took the position: start again from
+                    // the current head.
+                    core::cmp::Ordering::Greater if filled == 0 => {
+                        pos = self.head.load(Ordering::Relaxed);
+                        continue 'claim;
+                    }
+                    // Not free (full) or already taken: the run ends here.
+                    _ => break,
+                }
+            }
+            if filled == 0 {
+                return Ok(0);
+            }
+            let take = filled.div_ceil(share.max(1)).min(out.len());
+            let end = pos.checked_add(take).ok_or(RingError::Exhausted)?;
+            // The largest next free sequence of the run, `end - 1 + capacity`.
+            (end - 1)
+                .checked_add(self.capacity())
+                .ok_or(RingError::Exhausted)?;
+            match self
+                .head
+                .compare_exchange(pos, end, Ordering::Relaxed, Ordering::Relaxed)
+            {
+                Ok(_) => {
+                    for (k, out) in out.iter_mut().take(take).enumerate() {
+                        // `pos + k + capacity <= end - 1 + capacity`, checked.
+                        let p = pos + k;
+                        if let Some(slot) = self.slot(p) {
+                            *out = slot.id.load(Ordering::Relaxed);
+                            slot.seq.store(p + self.capacity(), Ordering::Release);
+                        }
+                    }
+                    return Ok(take);
+                }
+                Err(current) => pos = current,
+            }
+        }
+    }
 }
 
 /// The submission ring: the caller pushes, workers claim (SPMC).
@@ -254,6 +382,21 @@ impl SubmitRing {
     /// [`RingError::Exhausted`] if the positions are exhausted.
     pub fn claim(&self) -> Result<Option<u32>, RingError> {
         self.ring.pop()
+    }
+
+    /// Claims a run of the oldest admitted ids into `out`, at most
+    /// `out.len()`, with one claim of the head: `min(ceil(k / share),
+    /// out.len())` of the `k` ids found (up to `out.len() * share` are
+    /// looked at), so `share` workers split a backlog.
+    /// Returns how many were claimed; zero if none is visible. Ids leave in
+    /// admission order, each exactly once, as with [`Self::claim`].
+    ///
+    /// # Errors
+    ///
+    /// [`RingError::Exhausted`] if the positions are exhausted; nothing is
+    /// claimed then.
+    pub fn claim_run(&self, out: &mut [u32], share: usize) -> Result<usize, RingError> {
+        self.ring.pop_run(out, share)
     }
 
     /// [`Self::push`] through a shared reference, for a mode whose ring sits
@@ -302,6 +445,19 @@ impl CompletionRing {
     /// its positions are exhausted.
     pub fn push(&self, id: u32) -> Result<(), RingError> {
         self.ring.push(id)
+    }
+
+    /// Reports a prefix of `ids` complete, in order, with one claim of the
+    /// tail, and returns its length (at least one when `ids` is not empty).
+    /// Workers share this side.
+    ///
+    /// # Errors
+    ///
+    /// [`RingError::Full`] if no slot is free (also transiently, behind a
+    /// paused pop), [`RingError::Exhausted`] if the positions are
+    /// exhausted; nothing is pushed then.
+    pub fn push_run(&self, ids: &[u32]) -> Result<usize, RingError> {
+        self.ring.push_run(ids)
     }
 
     /// Pops the oldest completed id, if any. Only the caller consumes.

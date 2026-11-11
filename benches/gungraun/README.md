@@ -37,6 +37,7 @@ docker run --rm --security-opt seccomp=unconfined \
 | `snapshot_instructions::fork_branched_with_reobserve` | `fork_branched` of instance 0 into the other 1,023 |
 | `turns_instructions::masked_step` | One Inline pool step, 1,024 instances of the counter environment with masks on (mask writing) |
 | `turns_instructions::sequential_step` | One Inline pool step, 1,024 instances of the Sequential race fixture (target 100) with masks on: masks, the acting update and the turn check |
+| `async_instructions::drain` | One Async round on one worker: 256 counter instances sent at once and received in batches of 64. Only the drain job (`run_drain`) is counted: run claims, chunk steps and completion pushes. Not the caller, whose polling depends on the scheduler (issue #83) |
 | `games_instructions::connect4_pool_step` | One Inline mid-game pool step, 1,024 Connect Four instances 10 plies in (masks, the acting update and the turn check). Auto-reset is enabled but not exercised: no game ends in the measured step |
 | `games_instructions::bot_choose` | The pinned P2-G1 bot's choice (depth 4) on 32 fixed mid-game positions |
 | `search_instructions::expand_batch` | One batched expansion of the 7 children of the empty Connect Four board (restore, one scratch step, snapshot, commit) |
