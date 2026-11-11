@@ -540,7 +540,9 @@ def test_pgo_units_cover_the_full_gate_runs_exactly(tmp_path):
     for unit in callgrind.all_units(MANIFEST):
         callgrind.measure_only("py", MANIFEST_PATH, MANIFEST, tmp_path / "u", [unit], split)
     def outs(r):
-        return sorted(next(a.split("=", 1)[1] for a in argv if a.startswith("--callgrind-out-file=")).split("/")[-1] for argv in r.calls)
+        # pathlib, not split("/"): the out paths use the platform's separator.
+        return sorted(pathlib.Path(next(a.split("=", 1)[1] for a in argv if a.startswith("--callgrind-out-file="))).name
+                      for argv in r.calls)
     assert outs(split) == outs(full), "the units run exactly the files of the full gate"
 
 
