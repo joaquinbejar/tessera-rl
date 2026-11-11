@@ -102,5 +102,7 @@ impl Native {
     }
 }
 
-#[cfg(all(test, not(miri)))]
+// FFI calls: native only, not under Miri.
+#[cfg(test)]
+#[cfg(not(miri))]
 mod tests;
