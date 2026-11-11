@@ -28,11 +28,10 @@ env:
 #
 # Linux x86-64 jobs that need no Docker and no host-specific state run on
 # any host with the linux-x64 label (xaskar or flumix) and print the host
-# and CPU first. Pinned to xaskar: python (until issues #197 and #174 are
-# fixed), gungraun (its baselines belong to that CPU and image), musl
-# (musl-gcc is installed there only), deny (a Docker action), and the
-# matrix jobs "clippy and test (xaskar)" and "math differential (xaskar)",
-# whose names are merge conditions.
+# and CPU first. Pinned to xaskar: gungraun (its baselines belong to that
+# CPU and image), musl (musl-gcc is installed there only), deny (a Docker
+# action), and the matrix jobs "clippy and test (xaskar)" and "math
+# differential (xaskar)", whose names are merge conditions.
 jobs:
   fmt:
     runs-on: [self-hosted, linux-x64]
@@ -236,10 +235,12 @@ jobs:
   # The Python tests, including the PyTorch consumer tests (marker `torch`,
   # ADR-0003 rule 7). uv is pinned; it fetches CPython 3.11 itself.
   python:
-    runs-on: [self-hosted, xaskar]
+    runs-on: [self-hosted, linux-x64]
     # Skipped for an unmodified fork pull request (see the header).
     if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
     steps:
+      # Two hosts carry linux-x64: the log names the one that ran this job.
+      - run: hostname && grep -m1 'model name' /proc/cpuinfo
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:

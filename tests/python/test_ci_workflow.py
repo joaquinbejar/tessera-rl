@@ -25,8 +25,9 @@ MOVED = [
     "docs",
     "readme",
     "pufferlib",
+    "python",
 ]
-ON_XASKAR = ["python", "gungraun", "deny"]
+ON_XASKAR = ["gungraun", "deny"]
 
 
 def _jobs(text):
