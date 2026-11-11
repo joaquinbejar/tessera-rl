@@ -185,7 +185,7 @@ def test_pgo_w2_build_refuses_a_training_without_profraw(tmp_path):
 
 REFUSED = ["RUSTFLAGS", "RUSTDOCFLAGS", "CARGO_ENCODED_RUSTFLAGS", "CARGO_ENCODED_RUSTDOCFLAGS", "CARGO_BUILD_RUSTFLAGS",
            "CARGO_BUILD_RUSTDOCFLAGS", "CARGO_TARGET_DIR", "CARGO_BUILD_TARGET_DIR", "CARGO_BUILD_TARGET",
-           "RUSTC_WRAPPER", "RUSTC_WORKSPACE_WRAPPER", "RUSTC"]
+           "RUSTC_WRAPPER", "RUSTC_WORKSPACE_WRAPPER", "RUSTC", "CARGO_TERM_COLOR"]
 PATTERNED = ["CARGO_PROFILE_WHEEL_OPT_LEVEL", "CARGO_PROFILE_RELEASE_LTO", "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS"]
 
 
@@ -199,6 +199,27 @@ def test_pgo_w2_build_refuses_an_ambient_build_variable_before_any_fetch(tmp_pat
            else "pgo_w2_build: a CARGO_PROFILE_* or per-target RUSTFLAGS variable is set; refused")
     assert msg in p.stderr
     assert log == "" and not out.exists()
+
+
+def test_pgo_w2_build_refuses_everything_the_fixtures_scrub():
+    # The fixtures' scrub list must stay inside the script's refusal list, so a test that passes
+    # only because the fixture scrubbed a variable still proves the real script refuses it.
+    assert set(AMBIENT_BUILD) <= set(REFUSED)
+    assert all(k in REFUSED or k.startswith(AMBIENT_BUILD_PREFIX) for k in HOSTILE)
+
+
+@posix
+def test_pgo_w2_build_refuses_the_hostile_environment_unscrubbed(tmp_path, monkeypatch):
+    # The real script under the caller's environment as is, not through clean_environ().
+    for k, v in HOSTILE.items():
+        monkeypatch.setenv(k, v)
+    _, log, rsha, usha = fakes(tmp_path)
+    env = {**os.environ, "PATH": f"{tmp_path / 'fake'}:{os.environ['PATH']}"}
+    out = tmp_path / "run"
+    p = subprocess.run(["bash", str(SCRIPT), rsha, usha, str(out), "full", str(source_tree(tmp_path)), str(ROOT)],
+                       env=env, capture_output=True, text=True, check=False, cwd=tmp_path)
+    assert p.returncode == 2 and "is set in the environment; refused" in p.stderr, p.stderr
+    assert not log.exists() and not out.exists()
 
 
 @posix
