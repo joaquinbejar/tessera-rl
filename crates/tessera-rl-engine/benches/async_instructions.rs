@@ -42,7 +42,10 @@ const GLIBC_TUNABLES: &str = include_str!("../../../benches/gungraun/GLIBC_TUNAB
 library_benchmark_group!(
     name = async_mode;
     config = LibraryBenchmarkConfig::default().tool(
-        Callgrind::with_args(["--toggle-collect=*batch*run_drain*"]).entry_point(EntryPoint::None)
+        // Threads are not separated: the gate (scripts/gungraun.sh) reads one
+        // callgrind file per bench, and the drain runs on a worker thread.
+        Callgrind::with_args(["--toggle-collect=*batch*run_drain*", "--separate-threads=no"])
+            .entry_point(EntryPoint::None)
     );
     benchmarks = drain
 );
