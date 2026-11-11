@@ -468,7 +468,8 @@ unsafe fn run_drain<E: Environment, M: MaskProvider<E>>(data: *const (), worker:
 /// Unmeasured: it only bounds the buffer; [`claim_limit`] decides.
 const CLAIM_RUN: usize = 64;
 
-/// The most ids one claim takes (issue #83, ADR-0056 draft):
+/// The most ids one claim takes (issue #83; the claim rule of ADR-0056
+/// decision 1):
 /// `min(ceil(batch_size / workers), CLAIM_RUN)`, at least 1. A claim also
 /// takes at most `ceil(found / workers)` of the ids it finds
 /// ([`SubmitRing::claim_run`]). A worker pushes its claim only after
