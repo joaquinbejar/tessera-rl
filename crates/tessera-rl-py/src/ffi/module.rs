@@ -106,6 +106,14 @@ pub(super) unsafe extern "C" fn fp_non_canonical_entries(
     entry(|g| capi::int_u64(g, tessera_rl_num::fp::non_canonical_entries()))
 }
 
+/// The Python name of a determinism tier (SPEC 8.4).
+fn tier_name(tier: tessera_rl_core::Tier) -> &'static str {
+    match tier {
+        tessera_rl_core::Tier::CrossPlatform => "cross-platform",
+        tessera_rl_core::Tier::SamePlatform => "same-platform",
+    }
+}
+
 /// `registered_envs()`: every environment registered in this build, in id
 /// order, as `(id, version, max_agents, tier, perfect_information)` tuples
 /// (ADR-0054 item 6). `version` is the outputs version (`ENV_VERSION`),
@@ -120,10 +128,7 @@ pub(super) unsafe extern "C" fn registered_envs(
             .map_err(|e| error(g, Kind::Config, e.to_string()))?;
         let list = capi::list(g)?;
         for r in records {
-            let tier = match r.tier() {
-                tessera_rl_core::Tier::CrossPlatform => "cross-platform",
-                tessera_rl_core::Tier::SamePlatform => "same-platform",
-            };
+            let tier = tier_name(r.tier());
             let max_agents =
                 u64::try_from(r.max_agents()).map_err(|_| capi::out_of_range(g, "max_agents"))?;
             let item = capi::tuple(
@@ -300,4 +305,16 @@ pub(super) unsafe extern "C" fn init() -> *mut ffi::PyObject {
         fork::register(g)?;
         Ok(module)
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::tier_name;
+    use tessera_rl_core::Tier;
+
+    #[test]
+    fn test_tier_name_both_tiers_their_python_names() {
+        assert_eq!(tier_name(Tier::CrossPlatform), "cross-platform");
+        assert_eq!(tier_name(Tier::SamePlatform), "same-platform");
+    }
 }

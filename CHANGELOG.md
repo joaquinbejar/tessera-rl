@@ -21,6 +21,8 @@ the API is not stable, and any 0.x release may break it.
   information kind. `tessera_rl::envs::registered()` lists the records sorted by id and returns
   `RegistryError::DuplicateId` at first lookup. Every shipped environment is registered;
   `tessera_rl._native.registered_envs()` lists them in Python. Adds the `inventory` dependency.
+  Still deferred (#63): the record's capabilities and constructor, and `tessera_rl.make(id)` through the
+  `tessera_rl.envs` entry points.
 - **Snake and paddle duel in the Gymnasium adapter** with one agent: `tessera/Snake-v1` and
   `tessera/PaddleDuel-v1` are registered with `agents=1` (time limits 1000 and 5000) and read slot 0 of
   the native rows; `agents=2` is refused in favour of PettingZoo. Snake's reverse action is a no-op
@@ -280,9 +282,7 @@ defects:
 - `debug-checks` does not provide the NaN detection and allocation
   tracking the specification requires (#62). This release is knowingly
   non-conformant with that requirement.
-- `tessera_rl::register!` is not implemented (#63). Since implemented as a metadata record and a
-  lookup (see Unreleased); the record's capabilities and constructor, and `tessera_rl.make(id)` through
-  the `tessera_rl.envs` entry points, are still deferred (ADR-0054).
+- `tessera_rl::register!` is not implemented (#63).
 - There is no typed `Discrete<N>` action type, and the specification's
   authoring example does not compile: it also omits `type Header`,
   `observation_space` and `action_space`, which the trait requires (#64).
