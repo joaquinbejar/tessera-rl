@@ -85,6 +85,23 @@ def test_pgo_control_command_exits_one_on_a_difference(tmp_path):
     assert control.main(["check", str(ok), str(exp)]) == 1
 
 
+@pytest.mark.parametrize("change", ["remove", "valgrind", "wheel"])
+def test_pgo_control_expected_refuses_a_gate_file_stamped_otherwise(tmp_path, change):
+    out, _, want = gate_and_expected(tmp_path)
+    name = next(iter(want["native_ir"]))
+    steps = next(x.steps for x in ALL if x.name == name)
+    side = out / f"{name.replace('/', '_')}.{steps}.aa0.callgrind.stamp.json"
+    if change == "remove":
+        side.unlink()
+    else:
+        st = json.loads(side.read_text())
+        st[change] = "other"
+        side.write_text(json.dumps(st))
+    feas = json.loads((out / "feasibility.json").read_text())
+    with pytest.raises(ValueError, match="stamp"):
+        control.expected(out, feas, MANIFEST)
+
+
 def test_pgo_control_refuses_an_expected_file_without_the_stamp(tmp_path):
     _, wheel, want = gate_and_expected(tmp_path)
     want.pop("stamp")
@@ -133,6 +150,30 @@ def test_pgo_layout_costs_covers_every_aa_unit_once():
     units = [u for b in r["parts"] for u in b["pairs"]]
     assert sorted(units) == sorted(callgrind.aa_units(MANIFEST)) and len(units) == len(set(units)) == 100
     assert r["unit_s"][f"{ALL[0].name}#aa0"] == 20.0 and r["unit_s"][f"{ALL[0].name}#aa3"] == 30.0
+
+
+def test_pgo_layout_costs_balances_the_parts():
+    for n in (2, 3, 7):
+        r = layout_costs.layout(probe_seconds(), MANIFEST, n)
+        assert r["largest_part_s"] <= r["total_s"] / n + max(r["unit_s"].values()) + 0.1
+        assert all(b["pairs"] for b in r["parts"])
+
+
+SMALL = {"group": [{"name": "g", "steps": 10, "num_envs": 1, "envs": [{"id": "x/A"}, {"id": "x/B"}]}]}
+
+
+def test_pgo_layout_costs_gives_the_fixed_layout_of_a_small_fixture():
+    # Worked by hand: aa1-4 cost 30, aa0 20; longest first, ties by unit name, onto the least
+    # loaded part, ties by part index.
+    probe = {"g/A": {"seconds": 10.0}, "g/B": {"seconds": 10.0}}
+    r = layout_costs.layout(probe, SMALL, 3)
+    assert [b["pairs"] for b in r["parts"]] == [
+        ["g/A#aa1", "g/A#aa4", "g/B#aa3"],
+        ["g/A#aa2", "g/B#aa1", "g/B#aa4"],
+        ["g/A#aa3", "g/B#aa2", "g/A#aa0", "g/B#aa0"],
+    ]
+    assert [b["modelled_s"] for b in r["parts"]] == [90.0, 90.0, 100.0]
+    assert r["units"] == 10 and r["total_s"] == 280.0
 
 
 def test_pgo_layout_costs_refuses_a_missing_probe_and_stops_past_the_budget(tmp_path):
@@ -223,8 +264,15 @@ def test_pgo_candidate_checks_install_the_given_wheel_and_run_every_check(tmp_pa
     assert "num_tests WHEEL_CARGO_PROFILE=wheel" in log
     for needle in ("wheel_golden.py", "-m pytest", "determinism.py record", "checks.py", "determinism.py compare"):
         assert needle in log, needle
-    compare = next(x for x in log.splitlines() if "determinism.py compare" in x)
-    assert str(tmp_path / "w0-det.json") in compare
+    run = tmp_path / "run"
+    lines = log.splitlines()
+    record = next(x for x in lines if "determinism.py record" in x)
+    assert record.endswith(f"record --wheel {tmp_path / 'w.whl'} --out {run / 'determinism.json'}")
+    compare = next(x for x in lines if "determinism.py compare" in x)
+    assert compare.endswith(f"compare {tmp_path / 'w0-det.json'} {run / 'determinism.json'} --out {run / 'compare.json'}")
+    checks = next(x for x in lines if "checks.py" in x)
+    assert checks.endswith(f"checks.py --wheel {tmp_path / 'w.whl'} --out {run / 'checks.json'} "
+                           "golden_anchor=0 python_suite=0 num_tests=0")
 
 
 @posix
@@ -232,7 +280,10 @@ def test_pgo_candidate_checks_install_the_given_wheel_and_run_every_check(tmp_pa
 def test_pgo_candidate_checks_fail_when_any_check_fails(tmp_path, which):
     p, log = candidate(tmp_path, fail=which)
     assert p.returncode != 0 and f"{which}=1" in p.stdout
-    assert "checks.py" in log, "the statuses are still recorded"
+    checks = next(x for x in log.splitlines() if "checks.py" in x)
+    statuses = {"anchor": "golden_anchor", "suite": "python_suite", "num": "num_tests"}
+    want = " ".join(f"{v}={1 if k == which else 0}" for k, v in statuses.items())
+    assert checks.endswith(f"--out {tmp_path / 'run' / 'checks.json'} {want}"), "checks.json records the failure"
 
 
 @posix
@@ -241,9 +292,22 @@ def test_pgo_candidate_checks_refuse_a_wheel_other_than_the_named_one(tmp_path):
     assert p.returncode == 2 and "not the candidate" in p.stderr and "uv pip install" not in log
 
 
+BUILD_VARS = ["RUSTFLAGS", "RUSTDOCFLAGS", "CARGO_ENCODED_RUSTFLAGS", "CARGO_ENCODED_RUSTDOCFLAGS",
+              "CARGO_BUILD_RUSTFLAGS", "CARGO_BUILD_RUSTDOCFLAGS", "CARGO_BUILD_TARGET", "CARGO_BUILD_TARGET_DIR",
+              "RUSTC", "RUSTC_WRAPPER", "RUSTC_WORKSPACE_WRAPPER", "CARGO_BUILD_RUSTC", "CARGO_BUILD_RUSTC_WRAPPER",
+              "CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER", "CARGO_TARGET_DIR", "CARGO_PROFILE_WHEEL_LTO",
+              "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS"]
+
+
 @posix
-@pytest.mark.parametrize("var", ["RUSTFLAGS", "RUSTDOCFLAGS", "CARGO_TARGET_DIR", "CARGO_ENCODED_RUSTFLAGS",
-                                 "CARGO_PROFILE_WHEEL_LTO"])
+def test_pgo_candidate_checks_name_the_refused_set():
+    text = SCRIPT.read_text()
+    named = text[text.index('BUILD_VARS="') + 12:text.index('"', text.index('BUILD_VARS="') + 12)].split()
+    assert sorted(named) == sorted(v for v in BUILD_VARS if not v.startswith(("CARGO_PROFILE_", "CARGO_TARGET_")))
+
+
+@posix
+@pytest.mark.parametrize("var", BUILD_VARS)
 def test_pgo_candidate_checks_refuse_an_ambient_build_setting(tmp_path, var):
     p, log = candidate(tmp_path, extra={var: "-D warnings"})
     assert p.returncode == 2 and "refused" in p.stderr

@@ -4,7 +4,9 @@
 r4): from the wheel's own probe reports, the A/A units of every scenario with a
 modelled cost (aa0 2t, its N run being the probe; aa1 to aa4 3t; t the probe's
 seconds), longest first onto the least loaded part. Ties broken by unit name, so
-the layout is deterministic.
+the layout is deterministic. Stamps are not checked here beyond one wheel: the
+layout only places units on CPUs and decides nothing; the measured files' stamps
+are enforced by `callgrind.py --merge` and `decide.py`.
 
     layout_costs.py PROBE_DIR MANIFEST N BUDGET_S > layout.json
 

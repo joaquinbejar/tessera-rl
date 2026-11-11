@@ -7,8 +7,8 @@ gate measured for the same N-step runs, since its A/A spread was exactly 0.
     control.py expected --gate-out OUT --feasibility F --manifest M --out expected.json
     control.py check PROBE_DIR expected.json
 
-`expected` reads the gate's own finished `aa0` N-step files (no Valgrind) and
-pins, per gating scenario, their native Ir, with the gate's stamp. `check` reads
+`expected` reads the gate's own finished `aa0` N-step files (no Valgrind),
+each of whose stamp sidecars must equal the gate report's stamp, and pins, per gating scenario, their native Ir, with the gate's stamp. `check` reads
 the probe reports a window wrote in PROBE_DIR (callgrind.py --probe) and exits 1
 on any scenario that differs by even one instruction, is missing, was probed
 twice, was probed on another wheel, or under a stamp whose other fields
@@ -37,6 +37,12 @@ def expected(gate_out: pathlib.Path, feasibility: dict, manifest: dict) -> dict:
     for name in feasibility["gating"]:
         s = by_name[name]
         path = gate_out / f"{name.replace('/', '_')}.{s.steps}.aa0.callgrind"
+        side = path.with_name(path.name + ".stamp.json")
+        if not side.exists():
+            raise ValueError(f"{path.name} has no stamp sidecar")
+        st = json.loads(side.read_text(encoding="utf-8"))
+        if st.get("wheel") != feasibility["sha256"]["wheel"] or _rest(st) != _rest(feasibility["sha256"]):
+            raise ValueError(f"{path.name} is stamped differently from the gate's report")
         values[name] = evidence.native_cost(evidence.parse_callgrind(path.read_text(encoding="utf-8"))).ir
     if not values:
         raise ValueError("the gate names no gating scenario")
