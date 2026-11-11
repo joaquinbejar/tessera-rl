@@ -22,6 +22,15 @@ rustup_sha="$4"
 uv_sha="$5"
 w0_det="$6"
 : "${WHEEL_RUN:?the per-run directory}"
+# The build environment is the script's own: an ambient flag or target directory would change
+# what the checks build and test without leaving a trace, so it is refused, not inherited.
+for v in RUSTFLAGS RUSTDOCFLAGS CARGO_ENCODED_RUSTFLAGS CARGO_ENCODED_RUSTDOCFLAGS CARGO_BUILD_RUSTFLAGS \
+    CARGO_BUILD_RUSTDOCFLAGS CARGO_TARGET_DIR CARGO_BUILD_TARGET_DIR CARGO_BUILD_TARGET CARGO_PROFILE_RELEASE_LTO; do
+    if [ -n "${!v+x}" ]; then echo "pgo_candidate_checks: $v is set in the environment; refused" >&2; exit 2; fi
+done
+if env | grep -q '^CARGO_PROFILE_\|^CARGO_TARGET_[A-Z0-9_]*_RUSTFLAGS='; then
+    echo "pgo_candidate_checks: a CARGO_PROFILE_* or per-target RUSTFLAGS variable is set; refused" >&2; exit 2
+fi
 target=x86_64-unknown-linux-gnu
 
 RUSTUP_VERSION=1.29.3

@@ -165,7 +165,14 @@ def tool(path: pathlib.Path, body: str) -> None:
     path.chmod(path.stat().st_mode | stat.S_IXUSR)
 
 
-def candidate(tmp_path, fail="", wrong_sha=False):
+def clean_environ():
+    """The caller's environment without its build settings (CI sets RUSTFLAGS
+    at workflow level), so the script under test sees only what the test gives."""
+    return {k: v for k, v in os.environ.items()
+            if not (k.startswith("CARGO_") or k in ("RUSTFLAGS", "RUSTDOCFLAGS", "RUSTC_WRAPPER"))}
+
+
+def candidate(tmp_path, fail="", wrong_sha=False, extra=None):
     """Fakes for every tool the script calls; `fail` names a check that exits 1."""
     log, fake, payload = tmp_path / "log", tmp_path / "fake", tmp_path / "payload"
     payload.mkdir()
@@ -190,7 +197,7 @@ def candidate(tmp_path, fail="", wrong_sha=False):
     (tmp_path / "w.whl").write_bytes(b"w1")
     (tmp_path / "w0-det.json").write_text("{}")
     digest = lambda p: hashlib.sha256(p.read_bytes()).hexdigest()  # noqa: E731
-    env = {**os.environ, "PATH": f"{fake}:{os.environ['PATH']}", "WHEEL_RUN": str(tmp_path / "run")}
+    env = {**clean_environ(), "PATH": f"{fake}:{os.environ['PATH']}", "WHEEL_RUN": str(tmp_path / "run"), **(extra or {})}
     sha = "0" * 64 if wrong_sha else digest(tmp_path / "w.whl")
     p = subprocess.run(["bash", str(SCRIPT), str(tmp_path / "w.whl"), sha, "wheel", digest(payload / "rustup-init"),
                         digest(payload / "uv.tar.gz"), str(tmp_path / "w0-det.json")],
@@ -224,3 +231,12 @@ def test_pgo_candidate_checks_fail_when_any_check_fails(tmp_path, which):
 def test_pgo_candidate_checks_refuse_a_wheel_other_than_the_named_one(tmp_path):
     p, log = candidate(tmp_path, wrong_sha=True)
     assert p.returncode == 2 and "not the candidate" in p.stderr and "uv pip install" not in log
+
+
+@posix
+@pytest.mark.parametrize("var", ["RUSTFLAGS", "RUSTDOCFLAGS", "CARGO_TARGET_DIR", "CARGO_ENCODED_RUSTFLAGS",
+                                 "CARGO_PROFILE_WHEEL_LTO"])
+def test_pgo_candidate_checks_refuse_an_ambient_build_setting(tmp_path, var):
+    p, log = candidate(tmp_path, extra={var: "-D warnings"})
+    assert p.returncode == 2 and "refused" in p.stderr
+    assert log == "", "nothing fetched, built or installed"
