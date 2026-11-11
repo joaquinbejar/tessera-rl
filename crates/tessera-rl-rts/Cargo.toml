@@ -41,3 +41,8 @@ harness = false
 [[bench]]
 name = "bots"
 harness = false
+
+# RTS stage 5a: calibration among scripted bots; offline, not in a step path.
+[[example]]
+name = "rts_calibration"
+path = "examples/rts_calibration/main.rs"
