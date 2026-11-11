@@ -1,0 +1,40 @@
+Counters:
+  tessera_rl_toy.bc1b6d4064f51703-cgu.0;_RNCINvNtCsdnanKjkF2cC_3std2rt10lang_startuE0Csg9hYg79FHZD_14tessera_rl_toy:
+    Hash: 0x0a4d0ad3efffffff
+    Counters: 1
+    Block counts: [1]
+  tessera_rl_toy.bc1b6d4064f51703-cgu.0;_RNvCsg9hYg79FHZD_14tessera_rl_toy4cold:
+    Hash: 0x0a4d0ad3efffffff
+    Counters: 1
+    Block counts: [0]
+  tessera_rl_toy.bc1b6d4064f51703-cgu.0;_RNSNvYNCINvNtCsdnanKjkF2cC_3std2rt10lang_startuE0INtNtNtCs3bJEMBXHbwl_4core3ops8function6FnOnceuE9call_once6vtableCsg9hYg79FHZD_14tessera_rl_toy:
+    Hash: 0x0a4d0ad3efffffff
+    Counters: 1
+    Block counts: [0]
+  tessera_rl_toy.bc1b6d4064f51703-cgu.0;_RINvNtNtCsdnanKjkF2cC_3std3sys9backtrace28___rust_begin_short_backtraceFEuuECsg9hYg79FHZD_14tessera_rl_toy:
+    Hash: 0x025f5c817fffffff
+    Counters: 1
+    Block counts: [1]
+  main:
+    Hash: 0x0a4d0ad3efffffff
+    Counters: 1
+    Block counts: [1]
+  tessera_rl_toy.bc1b6d4064f51703-cgu.0;_RINvNtCs3bJEMBXHbwl_4core3ptr9drop_glueNtNtCsdnanKjkF2cC_3std3env4ArgsECsg9hYg79FHZD_14tessera_rl_toy:
+    Hash: 0x0b15abf2775ee593
+    Counters: 4
+    Block counts: [0, 0, 1, 1]
+  tessera_rl_toy.bc1b6d4064f51703-cgu.0;_RNvCsg9hYg79FHZD_14tessera_rl_toy3hot:
+    Hash: 0x0209aa3e1d398548
+    Counters: 2
+    Block counts: [1000, 1]
+  _RNvCsg9hYg79FHZD_14tessera_rl_toy4main:
+    Hash: 0x056e49beb168e298
+    Counters: 6
+    Block counts: [1, 1, 1, 0, 0, 0]
+Instrumentation level: IR  entry_first = 0  instrument_loop_entries = 0
+Functions shown: 8
+Total functions: 8
+Maximum function count: 1000
+Maximum internal block count: 1
+Total number of blocks: 17
+Total count: 1009
