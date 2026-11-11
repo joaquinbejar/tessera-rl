@@ -14,7 +14,7 @@
 #[path = "../examples/rts_calibration/games.rs"]
 mod games;
 
-use games::{Outcome, column, outcome_of, pairing, play, rng, wilson};
+use games::{Outcome, Summary, column, independent_counts, outcome_of, pairing, play, rng, wilson};
 use tessera_rl_num::identity::{LogicalId, RngIdentity, Seed, StreamId};
 use tessera_rl_num::rng::{RngAuthority, StepRng};
 use tessera_rl_rts::RtsConfig;
@@ -122,4 +122,30 @@ fn test_calibration_bot_generators_never_equal_the_environments() {
             assert_ne!(bot, draws(env(seat)), "seed {seed} seat {seat}");
         }
     }
+}
+
+/// R1 on the calibration record: two scripted bots give mirror games, so
+/// their intervals count one game per seed; with Random-legal both seats
+/// count. The choice follows the bots, not the results.
+#[test]
+fn test_calibration_independent_games_count_one_per_seed_for_two_scripted_bots() {
+    let c = small();
+    let rp = pairing(&c, Bot::Rush, Bot::Prospector, 0..6);
+    assert_eq!(rp.by_seat[0], rp.by_seat[1]);
+    let u = independent_counts(&rp, Bot::Rush, Bot::Prospector);
+    assert_eq!(u, rp.by_seat[0]);
+    assert_eq!(u.iter().sum::<u32>(), 6);
+    let rr = pairing(&c, Bot::Rush, Bot::RandomLegal, 0..6);
+    let u = independent_counts(&rr, Bot::Rush, Bot::RandomLegal);
+    assert_eq!(u.iter().sum::<u32>(), 12);
+}
+
+#[test]
+#[should_panic(expected = "mirror games")]
+fn test_calibration_independent_counts_refuse_scripted_seats_that_disagree() {
+    let s = Summary {
+        by_seat: [[3, 1, 0, 0], [2, 2, 0, 0]],
+        ..Summary::default()
+    };
+    let _ = independent_counts(&s, Bot::Rush, Bot::Prospector);
 }
