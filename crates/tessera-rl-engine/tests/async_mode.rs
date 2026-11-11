@@ -747,6 +747,32 @@ fn test_async_snapshot_idle_id_while_other_ids_run_matches_quiescent() {
     p.snapshot(40).unwrap();
 }
 
+/// The bounds guard in front of the raw row read: an unknown id is
+/// `InstanceOutOfRange`, never read as another row, both with nothing in
+/// flight and with sent ids not yet received.
+#[test]
+fn test_async_snapshot_out_of_range_id_is_refused_with_and_without_traffic() {
+    let mut p = asy(AutoReset::NextStep, 2);
+    drop(p.reset_all(Reseed::Keep).unwrap());
+    let n = p.num_envs();
+    let check = |p: &mut Asy| {
+        for id in [n, u32::MAX] {
+            assert_eq!(
+                p.snapshot(id).map(|_| ()),
+                Err(EngineError::InstanceOutOfRange { id, num_envs: n })
+            );
+        }
+    };
+    check(&mut p);
+    let ids: Vec<u32> = (1..41).collect();
+    send(&mut p, &ids, &rows_for(&ids, &[0; 100]));
+    check(&mut p);
+    let mut got = 0;
+    while got < ids.len() {
+        got += p.recv().unwrap().len();
+    }
+}
+
 /// An id discarded by `reset_all` (completed, not yet received) can be sent
 /// again and is never delivered twice.
 #[test]

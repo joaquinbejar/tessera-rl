@@ -563,6 +563,23 @@ struct Boomer;
 static BOOM: AtomicBool = AtomicBool::new(false);
 static BOOM_SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
+/// Releases a step paused on [`BOOM`] on every exit path, a failed
+/// assertion included, so the pool's `Drop` (which drains the paused job)
+/// never waits forever. Declare it after the pool: it drops first.
+struct ReleaseBoom;
+
+impl Drop for ReleaseBoom {
+    fn drop(&mut self) {
+        BOOM.store(true, Ordering::Release);
+    }
+}
+
+fn boom_serial() -> std::sync::MutexGuard<'static, ()> {
+    BOOM_SERIAL
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
 impl Environment for Boomer {
     type State = Walk;
     type Config = WalkConfig;
@@ -616,12 +633,13 @@ impl Environment for Boomer {
 /// nothing runs any more, but a row may be partly written (issue #97).
 #[test]
 fn test_async_snapshot_refuses_a_panic_between_its_two_checks() {
-    let _serial = BOOM_SERIAL.lock().unwrap();
+    let _serial = boom_serial();
     BOOM.store(false, Ordering::Release);
     let mut pool = EnvPool::<Boomer, NoMasks>::new(WalkConfig {}, options(AutoReset::NextStep))
         .unwrap()
         .async_mode(AsyncOptions::new(NonZeroUsize::MIN, NonZeroUsize::MIN))
         .unwrap();
+    let _release = ReleaseBoom;
     drop(pool.reset_all(Reseed::Keep).unwrap());
     pool.send(
         &[1],
@@ -644,7 +662,7 @@ fn test_async_snapshot_refuses_a_panic_between_its_two_checks() {
 /// recovery clears the poison.
 #[test]
 fn test_async_idle_token_readable_while_a_step_is_paused_then_panics() {
-    let _serial = BOOM_SERIAL.lock().unwrap();
+    let _serial = boom_serial();
     BOOM.store(false, Ordering::Release);
     let mut pool = EnvPool::<Boomer, NoMasks>::new(WalkConfig {}, options(AutoReset::NextStep))
         .unwrap()
@@ -659,17 +677,20 @@ fn test_async_idle_token_readable_while_a_step_is_paused_then_panics() {
     let held = pool.recv().unwrap();
     let (rewards, generation) = (held.rewards(0).unwrap().to_vec(), held.generation(0));
     let quiescent = pool.snapshot(0).unwrap().to_bytes();
+    let release = ReleaseBoom;
     pool.send(&[1], act(&[2])).unwrap();
     // Id 0 is idle (covered by `held`) while id 1 runs: its snapshot is
-    // taken through its own row, byte-identical to the quiescent one.
-    assert_eq!(pool.snapshot(0).unwrap().to_bytes(), quiescent);
-    assert_eq!(
-        pool.snapshot(1).map(|_| ()),
-        Err(crate::EngineError::InFlight { id: 1 })
-    );
-    assert_eq!(held.rewards(0).unwrap(), rewards.as_slice());
-    assert_eq!(held.generation(0), generation);
-    BOOM.store(true, Ordering::Release);
+    // taken through its own row, byte-identical to the quiescent one. The
+    // results are collected while id 1 is paused and checked after its
+    // release, so a regression fails instead of hanging in `Drop`.
+    let idle = pool.snapshot(0).map(|r| r.to_bytes());
+    let running = pool.snapshot(1).map(|_| ());
+    let (rewards_now, generation_now) = (held.rewards(0).map(<[f32]>::to_vec), held.generation(0));
+    drop(release);
+    assert_eq!(idle, Ok(quiescent));
+    assert_eq!(running, Err(crate::EngineError::InFlight { id: 1 }));
+    assert_eq!(rewards_now, Some(rewards));
+    assert_eq!(generation_now, generation);
     assert!(matches!(
         pool.recv().map(|_| ()),
         Err(crate::EngineError::Panicked)

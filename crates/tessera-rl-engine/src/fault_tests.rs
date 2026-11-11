@@ -266,10 +266,15 @@ fn test_async_worker_death_after_all_ids_are_delivered_reports_nothing_in_flight
         }
         std::thread::yield_now();
     }
-    assert_eq!(p.recv().map(|_| ()), Err(EngineError::NothingInFlight));
-    let mut records = vec![p.snapshot(0).unwrap(); 32];
-    assert!(!p.is_poisoned());
+    // Collected while the worker is held and checked after the gate opens,
+    // so a failure ends the test instead of hanging in the pool's `Drop`.
+    let nothing = p.recv().map(|_| ());
+    let snapshot = p.snapshot(0);
+    let early_poison = p.is_poisoned();
     GATE.store(true, core::sync::atomic::Ordering::Release);
+    assert_eq!(nothing, Err(EngineError::NothingInFlight));
+    assert!(!early_poison);
+    let mut records = vec![snapshot.unwrap(); 32];
     // The death is visible with no `recv` in between.
     let visible = (0..10_000_000).any(|_| {
         std::thread::yield_now();

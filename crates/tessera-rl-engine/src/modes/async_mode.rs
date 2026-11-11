@@ -627,7 +627,9 @@ where
     /// record is read through the raw parts of row `id` alone, never
     /// through slices over the pool, and is byte-identical to the one the
     /// same row gives at quiescence. A live token covering `id` does not
-    /// block it.
+    /// block it. A panic in another id's step during the call still refuses
+    /// the snapshot with `Poisoned`: a conservative choice, consistent with
+    /// ADR-0028, although row `id` itself is intact.
     ///
     /// # Errors
     ///
