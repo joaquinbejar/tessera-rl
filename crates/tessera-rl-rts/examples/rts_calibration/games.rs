@@ -39,10 +39,43 @@ pub struct Game {
 }
 
 /// The bots' generators of game `seed`: one per seat, from the seed alone,
-/// so a game is a function of (config, bots, seed).
-fn rng(seed: u64, seat: u32) -> StepRng {
+/// so a game is a function of (config, bots, seed). They draw from
+/// `StreamId::OPPONENT`, the stream reserved for scripted opponents, so no
+/// bot shares a stream with the environment's own generator (`DYNAMICS`,
+/// which also draws the map at reset) on either seat.
+#[must_use]
+pub fn rng(seed: u64, seat: u32) -> StepRng {
     let identity = RngIdentity::new(Seed::new(seed), LogicalId::new(seat));
-    StepRng::new(&RngAuthority::engine_only(), &identity, StreamId::DYNAMICS)
+    StepRng::new(&RngAuthority::engine_only(), &identity, StreamId::OPPONENT)
+}
+
+/// How a step ended the game, if it did: truncation, else the terminal
+/// rewards of seat Zero and seat One (a draw when neither is positive).
+#[must_use]
+pub fn outcome_of(terminated: bool, truncated: bool, rewards: [f32; 2]) -> Option<Outcome> {
+    if truncated {
+        return Some(Outcome::Truncated);
+    }
+    if !terminated {
+        return None;
+    }
+    Some(match (rewards[0] > 0.0, rewards[1] > 0.0) {
+        (true, false) => Outcome::ZeroWins,
+        (false, true) => Outcome::OneWins,
+        _ => Outcome::Draw,
+    })
+}
+
+/// The summary column of a game where bot A sat in `seat`: 0 A won, 1 B
+/// won, 2 draw, 3 truncated.
+#[must_use]
+pub fn column(seat: usize, outcome: Outcome) -> usize {
+    match (seat, outcome) {
+        (0, Outcome::ZeroWins) | (1, Outcome::OneWins) => 0,
+        (_, Outcome::ZeroWins | Outcome::OneWins) => 1,
+        (_, Outcome::Draw) => 2,
+        (_, Outcome::Truncated) => 3,
+    }
 }
 
 /// Plays one game from reset with seed `seed`: `bots[0]` in seat Zero
@@ -80,19 +113,12 @@ pub fn play(cfg: &RtsConfig, bots: [Bot; 2], seed: u64) -> Game {
             })
             .expect("legal scripted orders");
         decisions += 1;
-        if out.episode_truncated()[0].get() {
-            return Game {
-                outcome: Outcome::Truncated,
-                decisions,
-            };
-        }
-        if out.episode_terminated()[0].get() {
-            let r = out.rewards();
-            let outcome = match (r[0] > 0.0, r[1] > 0.0) {
-                (true, false) => Outcome::ZeroWins,
-                (false, true) => Outcome::OneWins,
-                _ => Outcome::Draw,
-            };
+        let r = out.rewards();
+        if let Some(outcome) = outcome_of(
+            out.episode_terminated()[0].get(),
+            out.episode_truncated()[0].get(),
+            [r[0], r[1]],
+        ) {
             return Game { outcome, decisions };
         }
     }
@@ -122,23 +148,7 @@ pub fn pairing(cfg: &RtsConfig, first: Bot, second: Bot, seeds: core::ops::Range
                 [second, first]
             };
             let g = play(cfg, bots, seed);
-            let a_won = matches!(
-                (seat, g.outcome),
-                (0, Outcome::ZeroWins) | (1, Outcome::OneWins)
-            );
-            let b_won = matches!(
-                (seat, g.outcome),
-                (0, Outcome::OneWins) | (1, Outcome::ZeroWins)
-            );
-            let k = if a_won {
-                0
-            } else if b_won {
-                1
-            } else if g.outcome == Outcome::Draw {
-                2
-            } else {
-                3
-            };
+            let k = column(seat, g.outcome);
             sum.by_seat[seat][k] += 1;
             sum.lengths.push(g.decisions);
             if g.outcome != Outcome::Truncated {

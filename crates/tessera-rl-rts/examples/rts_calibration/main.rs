@@ -38,6 +38,12 @@ const PAIRINGS: [(&str, Bot, Bot); 3] = [
     ("prospector-random", Bot::Prospector, Bot::RandomLegal),
 ];
 
+/// The arguments the tool takes; anything else is refused, so a typo can
+/// never silently fall back to a default in a pre-registered run.
+const KEYS: [&str; 6] = [
+    "--seeds", "--size", "--units", "--ticks", "--limit", "--out",
+];
+
 fn arg(args: &[String], key: &str) -> Option<String> {
     args.iter()
         .position(|a| a == key)
@@ -124,6 +130,13 @@ fn summary_json(name: &str, s: &Summary) -> String {
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
+    let mut rest = args.iter().skip(1);
+    while let Some(key) = rest.next() {
+        if !KEYS.contains(&key.as_str()) || rest.next().is_none() {
+            eprintln!("refused: unknown argument or missing value: {key:?}; known: {KEYS:?}");
+            std::process::exit(2);
+        }
+    }
     let seeds = arg(&args, "--seeds").unwrap_or_else(|| "0..200".to_owned());
     let (lo, hi) = seeds
         .split_once("..")
@@ -136,9 +149,27 @@ fn main() {
         step_limit: num(&args, "--limit", 600),
         seat_swap: false,
     };
+    eprintln!(
+        "config: size {} decision_ticks {} max_units {} step_limit {}; seeds {lo}..{hi}, {} games per seat per pairing",
+        cfg.size,
+        cfg.decision_ticks,
+        cfg.max_units,
+        cfg.step_limit,
+        hi.saturating_sub(lo)
+    );
+    // What the record freezes travels with the measurement: the environment
+    // version and the bots' constants (knob 1).
     let mut json = format!(
-        "{{\"config\": {{\"size\": {}, \"decision_ticks\": {}, \"max_units\": {}, \"step_limit\": {}}}, \"seeds\": [{lo}, {hi}], \"pairings\": {{",
-        cfg.size, cfg.decision_ticks, cfg.max_units, cfg.step_limit
+        "{{\"env_version\": {}, \"bots\": {{\"RUSH_DRONES\": {}, \"PROSPECTOR_DRONES\": {}, \"PROSPECTOR_ARMY\": {}}}, \"config\": {{\"size\": {}, \"decision_ticks\": {}, \"max_units\": {}, \"step_limit\": {}}}, \"seeds\": [{lo}, {hi}], \"games_per_seat\": {}, \"pairings\": {{",
+        tessera_rl_rts::env::ENV_VERSION,
+        tessera_rl_rts::bots::RUSH_DRONES,
+        tessera_rl_rts::bots::PROSPECTOR_DRONES,
+        tessera_rl_rts::bots::PROSPECTOR_ARMY,
+        cfg.size,
+        cfg.decision_ticks,
+        cfg.max_units,
+        cfg.step_limit,
+        hi.saturating_sub(lo)
     );
     for (i, (name, a, b)) in PAIRINGS.iter().enumerate() {
         eprintln!("{name} over seeds {lo}..{hi}");
