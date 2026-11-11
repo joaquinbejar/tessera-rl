@@ -200,6 +200,8 @@ fn engine_kind(e: &EngineError) -> Kind {
         | EngineError::WorkerDied
         | EngineError::WorkerStartup { .. }
         | EngineError::InvalidAgentEvent { .. }
+        | EngineError::NanDetected { .. }
+        | EngineError::AllocationInChunkStep { .. }
         | EngineError::TurnOrder { .. } => Kind::Poisoned,
         EngineError::NestedEngine
         | EngineError::GangQueue { .. }
@@ -215,6 +217,9 @@ fn engine_kind(e: &EngineError) -> Kind {
         | EngineError::BranchCounterExhausted
         | EngineError::StorageIdsExhausted
         | EngineError::SequenceExhausted => Kind::Exhausted,
+        // `EngineError` is non-exhaustive (ADR-0055): a variant added later
+        // raises the base class until it is mapped here.
+        _ => Kind::Base,
     }
 }
 

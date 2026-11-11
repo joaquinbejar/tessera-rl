@@ -37,6 +37,11 @@ impl Canonical for f32 {
     const ENCODED_LEN: usize = 4;
 
     #[inline]
+    fn first_nan(&self) -> Option<&'static str> {
+        self.is_nan().then_some("f32")
+    }
+
+    #[inline]
     fn encode<S: Sink>(&self, out: &mut Encoder<S>) {
         out.write_bytes(&self.to_bits().to_le_bytes());
     }
@@ -56,6 +61,11 @@ impl Canonical for f32 {
 
 impl Canonical for f64 {
     const ENCODED_LEN: usize = 8;
+
+    #[inline]
+    fn first_nan(&self) -> Option<&'static str> {
+        self.is_nan().then_some("f64")
+    }
 
     #[inline]
     fn encode<S: Sink>(&self, out: &mut Encoder<S>) {
@@ -183,6 +193,10 @@ impl<T: Canonical + StateInit, const N: usize> Canonical for [T; N] {
             *item = T::decode(input)?;
         }
         Ok(items)
+    }
+    #[inline]
+    fn first_nan(&self) -> Option<&'static str> {
+        self.iter().find_map(Canonical::first_nan)
     }
 }
 

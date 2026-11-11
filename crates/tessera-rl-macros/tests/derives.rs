@@ -131,6 +131,60 @@ fn test_env_state_allow_nan_field_accepts_nan_only_where_marked() {
     ));
 }
 
+/// A state nesting `Noisy` behind an array and a pool, after a clean float.
+#[derive(EnvState, Debug, Clone, Copy, PartialEq, Default)]
+#[repr(C)]
+struct Nested {
+    first: f64,
+    inner: [Noisy; 2],
+    pool: Pool<f32, 4>,
+    tail: Reserved<4>,
+}
+
+#[test]
+fn test_env_state_first_nan_skips_allow_nan_fields_and_names_the_field() {
+    let nan = f32::from_bits(0x7fc0_0042);
+    let clean = Noisy {
+        noise: [0.0, 1.0],
+        level: 0.5,
+    };
+    assert_eq!(clean.first_nan(), None);
+    // The allowed field is skipped.
+    let allowed = Noisy {
+        noise: [nan, nan],
+        ..clean
+    };
+    assert_eq!(allowed.first_nan(), None);
+    assert_eq!(
+        Noisy {
+            level: nan,
+            ..clean
+        }
+        .first_nan(),
+        Some("level")
+    );
+}
+
+#[test]
+fn test_env_state_first_nan_reports_the_first_top_level_field_in_order() {
+    let nan = f32::from_bits(0x7fc0_0042);
+    let clean = Nested::default();
+    assert_eq!(clean.first_nan(), None);
+    let mut inner = clean;
+    inner.inner[1].level = nan;
+    assert_eq!(inner.first_nan(), Some("inner"));
+    // An allowed NaN deep inside stays allowed.
+    let mut allowed = clean;
+    allowed.inner[0].noise[1] = nan;
+    assert_eq!(allowed.first_nan(), None);
+    let mut both = inner;
+    both.first = f64::NAN;
+    assert_eq!(both.first_nan(), Some("first"));
+    let mut pooled = clean;
+    let _ = pooled.pool.insert(nan);
+    assert_eq!(pooled.first_nan(), Some("pool"));
+}
+
 #[test]
 fn test_state_enum_with_discriminants_one_and_two() {
     assert_eq!(Phase::default(), Phase::Opening);

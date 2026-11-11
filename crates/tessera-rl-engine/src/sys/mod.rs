@@ -17,6 +17,8 @@
 //! dependency for this purpose (best effort, failures logged).
 
 mod affinity;
+#[cfg(feature = "debug-checks")]
+pub(crate) mod alloc_track;
 mod gang;
 pub(crate) mod id_buffers;
 #[cfg(not(loom))]

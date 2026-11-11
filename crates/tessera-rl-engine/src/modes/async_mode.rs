@@ -1048,7 +1048,11 @@ where
         self.stage.clear();
         self.check_turns(&token)?;
         #[cfg(feature = "debug-checks")]
-        self.check_agent_events(&token)?;
+        {
+            self.check_agent_events(&token)?;
+            self.check_allocations()?;
+            self.check_nan(&token)?;
+        }
         Ok(Some(token))
     }
 
@@ -1098,6 +1102,46 @@ where
             }
         }
         Ok(())
+    }
+
+    /// `debug-checks`: an allocation inside a chunk step of this pool
+    /// (any batch) poisons it (ADR-0055).
+    #[cfg(feature = "debug-checks")]
+    fn check_allocations(&mut self) -> Result<(), EngineError> {
+        match crate::nan_check::allocation_error(self.mode.pool.allocs.take()) {
+            Some(e) => {
+                self.poisoned = true;
+                Err(e)
+            }
+            None => Ok(()),
+        }
+    }
+
+    /// `debug-checks`: the first NaN in the rewards or state of the
+    /// returned ids, in id order, poisons the pool (ADR-0055).
+    #[cfg(feature = "debug-checks")]
+    fn check_nan(&mut self, token: &BatchToken<E, M>) -> Result<(), EngineError> {
+        // The lowest id with a NaN, without allocating: batch order is
+        // completion order, which depends on timing.
+        let mut first: Option<(u32, EngineError)> = None;
+        for id in token.ids() {
+            if first.as_ref().is_some_and(|(f, _)| *f < id) {
+                continue;
+            }
+            let (Some(rewards), Some(state)) = (token.rewards(id), token.state(id)) else {
+                continue;
+            };
+            if let Some(e) = crate::nan_check::instance_nan(id, rewards, state) {
+                first = Some((id, e));
+            }
+        }
+        match first {
+            Some((_, e)) => {
+                self.poisoned = true;
+                Err(e)
+            }
+            None => Ok(()),
+        }
     }
 
     /// Gives the pool back, with its workers, in Sync mode.

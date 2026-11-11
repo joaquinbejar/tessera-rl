@@ -680,6 +680,12 @@ impl<E: Environment, M: MaskProvider<E>> BatchToken<E, M> {
         self.view(&self.mode.raw.headers, id, 1)?.first()
     }
 
+    /// The state of `id` (the `debug-checks` NaN trap).
+    #[cfg(feature = "debug-checks")]
+    pub(crate) fn state(&self, id: u32) -> Option<&E::State> {
+        self.view(&self.mode.raw.states, id, 1)?.first()
+    }
+
     /// The step counter of `id` (episode index, step index), if `id` is in
     /// the batch.
     #[must_use]

@@ -253,7 +253,7 @@ a crates.io crate.
 
 | Feature | Effect |
 | --- | --- |
-| `debug-checks` | Strict legality checks at the validation boundary (illegal masked actions fail the call), and an invalid agent event poisons the pool; `engine::DEBUG_CHECKS` reports whether it is on |
+| `debug-checks` | Strict legality checks at the validation boundary (illegal masked actions fail the call), and an invalid agent event, a NaN in state or rewards (outside `#[state(allow_nan)]` fields) or, with `engine::debug::TrackingAllocator` installed, an allocation inside a chunk step poisons the pool (ADR-0055); `engine::DEBUG_CHECKS` reports whether it is on |
 
 ## Rules for environment authors
 

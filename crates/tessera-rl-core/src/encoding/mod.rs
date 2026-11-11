@@ -52,6 +52,20 @@ pub trait Canonical: Sized {
     /// Returns a [`DecodeError`] if the input is too short or a field holds
     /// an invalid value.
     fn decode(input: &mut Decoder<'_>) -> Result<Self, DecodeError>;
+
+    /// The first field that holds a NaN that is not allowed (ADR-0055), for
+    /// the `debug-checks` NaN trap: `None` if there is none.
+    ///
+    /// `f32` and `f64` report NaN, arrays and `Pool` forward to their
+    /// elements, and `#[derive(EnvState)]` returns the name of the first
+    /// field (in declaration order, skipping `#[state(allow_nan)]` fields)
+    /// that holds one. The default reports nothing, which is right for
+    /// types that cannot hold a float; an impl for a type that can hold an
+    /// `f32` or `f64` MUST override it.
+    #[inline]
+    fn first_nan(&self) -> Option<&'static str> {
+        None
+    }
 }
 
 /// Encodes `value` into `buf`, which must be exactly

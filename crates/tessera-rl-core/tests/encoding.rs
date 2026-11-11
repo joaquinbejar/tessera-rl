@@ -147,6 +147,27 @@ fn test_decode_rejects_nan_without_allow_nan() {
     );
 }
 
+/// ADR-0055: floats report NaN (any payload), arrays and pools forward to
+/// their elements, and float-free types report nothing.
+#[test]
+fn test_first_nan_floats_arrays_and_pools_report_nan_only() {
+    let nan32 = f32::from_bits(0x7fc0_0001);
+    assert_eq!(1.5_f32.first_nan(), None);
+    assert_eq!(f32::INFINITY.first_nan(), None);
+    assert!(nan32.first_nan().is_some());
+    assert!(f64::from_bits(0x7ff8_0000_0000_0002).first_nan().is_some());
+    assert_eq!((-0.0_f64).first_nan(), None);
+    assert_eq!([0.0_f32, 1.0].first_nan(), None);
+    assert!([0.0_f32, nan32].first_nan().is_some());
+    let mut pool = Pool::<f32, 4>::default();
+    let _ = pool.insert(1.0);
+    assert_eq!(pool.first_nan(), None);
+    let _ = pool.insert(nan32);
+    assert!(pool.first_nan().is_some());
+    assert_eq!(7_u32.first_nan(), None);
+    assert_eq!(Bool8::TRUE.first_nan(), None);
+}
+
 #[test]
 fn test_decode_rejects_invalid_field_bytes() {
     let good = encode_to_vec(&toy());
