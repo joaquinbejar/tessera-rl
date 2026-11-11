@@ -9,7 +9,8 @@ the layout is deterministic.
     layout_costs.py PROBE_DIR MANIFEST N BUDGET_S > layout.json
 
 Exit 1 when the largest part projects past BUDGET_S (the window does not start
-the parts), 2 when a scenario has no probe.
+the parts), 2 when a scenario has no probe, is probed twice, or the probe
+reports name more than one wheel or none.
 """
 
 from __future__ import annotations
@@ -45,11 +46,24 @@ def layout(probe: dict, manifest: dict, n: int) -> dict:
 
 def main(argv=None) -> int:
     argv = sys.argv[1:] if argv is None else argv
-    probe_dir, manifest_path, n, budget = pathlib.Path(argv[0]), argv[1], int(argv[2]), float(argv[3])
-    probe = {}
-    for p in sorted(probe_dir.glob("feasibility.probe.*.json")):
-        probe.update(json.loads(p.read_text(encoding="utf-8"))["probe"])
     try:
+        probe_dir, manifest_path, n, budget = pathlib.Path(argv[0]), argv[1], int(argv[2]), float(argv[3])
+        if len(argv) != 4 or n < 1:
+            raise ValueError
+    except (IndexError, ValueError):
+        print("usage: layout_costs.py PROBE_DIR MANIFEST N BUDGET_S (N >= 1)", file=sys.stderr)
+        return 2
+    probe, wheels = {}, set()
+    try:
+        for p in sorted(probe_dir.glob("feasibility.probe.*.json")):
+            report = json.loads(p.read_text(encoding="utf-8"))
+            wheels.add((report.get("sha256") or {}).get("wheel"))
+            for name, r in report["probe"].items():
+                if name in probe:
+                    raise ValueError(f"{name} probed twice")
+                probe[name] = r
+        if len(wheels) != 1 or None in wheels:
+            raise ValueError(f"probe reports name wheels {sorted(map(str, wheels))}, not exactly one")
         result = layout(probe, evidence.load_manifest(manifest_path), n)
     except ValueError as e:
         print(f"refused: {e}", file=sys.stderr)

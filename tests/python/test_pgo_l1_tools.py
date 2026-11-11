@@ -85,6 +85,37 @@ def test_pgo_control_command_exits_one_on_a_difference(tmp_path):
     assert control.main(["check", str(ok), str(exp)]) == 1
 
 
+def test_pgo_control_stops_on_another_stamp(tmp_path):
+    _, wheel, want = gate_and_expected(tmp_path)
+    probe = probe_w1(tmp_path, wheel, env=fake_environment(toolchain="vg-2"))
+    problems = control.check(probe, want)
+    assert any("stamp differs" in p and "valgrind" in p for p in problems)
+
+
+def test_pgo_control_ignores_the_gates_kernels_field(tmp_path):
+    _, wheel, want = gate_and_expected(tmp_path)
+    probe = probe_w1(tmp_path, wheel, env=fake_environment(kernels="k" * 64))
+    assert control.check(probe, want) == []
+
+
+def test_pgo_control_stops_on_a_scenario_probed_twice(tmp_path):
+    _, wheel, want = gate_and_expected(tmp_path)
+    probe = probe_w1(tmp_path, wheel)
+    report = next(probe.glob("feasibility.probe.*.json"))
+    (probe / "feasibility.probe.copy.json").write_text(report.read_text())
+    assert any("probed twice" in p for p in control.check(probe, want))
+
+
+def test_pgo_control_expected_refuses_a_missing_gate_file(tmp_path):
+    out, _, want = gate_and_expected(tmp_path)
+    name = next(iter(want["native_ir"]))
+    steps = next(x.steps for x in ALL if x.name == name)
+    (out / f"{name.replace('/', '_')}.{steps}.aa0.callgrind").unlink()
+    args = ["expected", "--gate-out", str(out), "--feasibility", str(out / "feasibility.json"),
+            "--manifest", MANIFEST_PATH, "--out", str(tmp_path / "e.json")]
+    assert control.main(args) == 2 and not (tmp_path / "e.json").exists()
+
+
 def probe_seconds(scale=1.0):
     return {s.name: {"seconds": 10.0 * scale * (i + 1), "ir": 1} for i, s in enumerate(ALL)}
 
@@ -103,11 +134,29 @@ def test_pgo_layout_costs_refuses_a_missing_probe_and_stops_past_the_budget(tmp_
         layout_costs.layout(p, MANIFEST, 7)
     d = tmp_path / "probe"
     d.mkdir()
-    (d / "feasibility.probe.x.json").write_text(json.dumps({"probe": probe_seconds()}))
+    stamp = {"sha256": {"wheel": "w0"}}
+    (d / "feasibility.probe.x.json").write_text(json.dumps({"probe": probe_seconds(), **stamp}))
     assert layout_costs.main([str(d), MANIFEST_PATH, "7", "1e9"]) == 0
     assert layout_costs.main([str(d), MANIFEST_PATH, "7", "10"]) == 1
-    (d / "feasibility.probe.x.json").write_text(json.dumps({"probe": p}))
+    (d / "feasibility.probe.x.json").write_text(json.dumps({"probe": p, **stamp}))
     assert layout_costs.main([str(d), MANIFEST_PATH, "7", "1e9"]) == 2
+
+
+def test_pgo_layout_costs_refuses_mixed_wheels_duplicates_and_bad_arguments(tmp_path):
+    d = tmp_path / "probe"
+    d.mkdir()
+    all_probe = probe_seconds()
+    first = dict(list(all_probe.items())[:10])
+    rest = dict(list(all_probe.items())[10:])
+    (d / "feasibility.probe.a.json").write_text(json.dumps({"probe": first, "sha256": {"wheel": "w0"}}))
+    (d / "feasibility.probe.b.json").write_text(json.dumps({"probe": rest, "sha256": {"wheel": "w1"}}))
+    assert layout_costs.main([str(d), MANIFEST_PATH, "7", "1e9"]) == 2
+    (d / "feasibility.probe.b.json").write_text(json.dumps({"probe": rest, "sha256": {"wheel": "w0"}}))
+    assert layout_costs.main([str(d), MANIFEST_PATH, "7", "1e9"]) == 0
+    (d / "feasibility.probe.c.json").write_text(json.dumps({"probe": first, "sha256": {"wheel": "w0"}}))
+    assert layout_costs.main([str(d), MANIFEST_PATH, "7", "1e9"]) == 2
+    assert layout_costs.main([str(d), MANIFEST_PATH, "0", "1e9"]) == 2
+    assert layout_costs.main([str(d), MANIFEST_PATH]) == 2
 
 
 def tool(path: pathlib.Path, body: str) -> None:
