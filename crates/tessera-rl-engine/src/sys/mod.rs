@@ -10,6 +10,9 @@
 //! Waits use the native address-wait primitive where it is enabled
 //! (`native`), otherwise park and unpark.
 //!
+//! `waiter` holds the park backend's registered waiter of the Async mode
+//! (ADR-0056 decision 3), with its own `unsafe` cell and loom model.
+//!
 //! The Async id rings (`ring`) and the token id buffers (`id_buffers`)
 //! are built on atomics only and need no `unsafe` (ADR-0047).
 //!
@@ -26,10 +29,13 @@ mod native;
 mod panics;
 pub(crate) mod ring;
 pub(crate) mod sync;
+pub(crate) mod waiter;
 
 pub(crate) use affinity::available_cores;
 #[cfg(test)]
 pub(crate) use gang::Faults;
+#[cfg(not(loom))]
+pub(crate) use gang::PARK_POLL;
 pub(crate) use gang::{Gang, GangOptions, Job};
 #[cfg(not(loom))]
 pub(crate) use native::Native;

@@ -92,7 +92,7 @@ use super::sync::{
 /// How long a waiter without a stored waker sleeps per poll on the park
 /// backend (ADR-0047).
 #[cfg(not(loom))]
-const PARK_POLL: core::time::Duration = core::time::Duration::from_micros(100);
+pub(crate) const PARK_POLL: core::time::Duration = core::time::Duration::from_micros(100);
 
 /// Options of a gang.
 #[derive(Debug, Clone)]
@@ -141,6 +141,15 @@ pub(crate) struct Faults {
         allow(dead_code, reason = "the split-phase modes are not built under loom")
     )]
     pub(crate) jitter_us: u32,
+    /// Async mode only: the receiver's waits drop their 100 µs liveness
+    /// fallback (they wait up to a minute), so only a worker's wake ends
+    /// them. Wake tests use it to turn a missed wake into a hang that their
+    /// watchdog reports by name.
+    #[cfg_attr(
+        loom,
+        allow(dead_code, reason = "the split-phase modes are not built under loom")
+    )]
+    pub(crate) wake_fallback_off: bool,
 }
 
 /// A type-erased job: `call(data, worker)` on every worker.
@@ -557,6 +566,15 @@ impl Gang {
     )]
     pub(crate) fn dead(&self) -> bool {
         self.shared.dead.load(Ordering::Acquire)
+    }
+
+    /// The native wait primitive the workers use, `None` on park.
+    #[cfg(not(loom))]
+    pub(crate) fn native(&self) -> Option<super::Native> {
+        match self.shared.backend {
+            Backend::Park => None,
+            Backend::Native(native) => Some(native),
+        }
     }
 
     /// Number of workers.

@@ -521,6 +521,12 @@ impl Signal {
         value
     }
 
+    /// The number of registered waiters (`SeqCst`).
+    #[must_use]
+    pub fn waiters(&self) -> u32 {
+        self.parked.load(Ordering::SeqCst)
+    }
+
     /// Ends a registration.
     pub fn unregister(&self) {
         self.parked.fetch_sub(1, Ordering::SeqCst);
