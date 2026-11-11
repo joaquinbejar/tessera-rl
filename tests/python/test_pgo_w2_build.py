@@ -27,6 +27,33 @@ WHEEL = "tessera_rl-0.1.0-cp311-abi3-manylinux_2_28_x86_64.whl"
 W1_SCRIPT = ROOT / "scripts" / "pgo_w1_build.sh"
 
 
+# The caller's build environment the fixtures drop before spawning a build script,
+# so a test sees only what the script itself sets (CI exports RUSTFLAGS=-D warnings
+# workflow-wide; a developer may export any of these). An explicit list, not an
+# empty environment: the scripts still need PATH, HOME and the rest.
+#   RUSTFLAGS, CARGO_ENCODED_RUSTFLAGS, CARGO_BUILD_RUSTFLAGS: compiler flags; the fake
+#     maturin logs RUSTFLAGS and the W1/W2 equality test compares it.
+#   CARGO_PROFILE_* (prefix), RUSTC_WRAPPER, CARGO_BUILD_TARGET: change the build
+#     cargo would run; they land in the fake maturin's environment dump.
+#   RUSTDOCFLAGS, CARGO_TARGET_DIR: set by other CI jobs; the fake maturin logs
+#     CARGO_TARGET_DIR, and both land in the environment dump.
+#   CARGO_TERM_COLOR: set workflow-wide by CI; lands in the environment dump.
+AMBIENT_BUILD = ("RUSTFLAGS", "CARGO_ENCODED_RUSTFLAGS", "CARGO_BUILD_RUSTFLAGS", "RUSTC_WRAPPER",
+                 "CARGO_BUILD_TARGET", "RUSTDOCFLAGS", "CARGO_TARGET_DIR", "CARGO_TERM_COLOR")
+AMBIENT_BUILD_PREFIX = "CARGO_PROFILE_"
+HOSTILE = {"RUSTFLAGS": "-D warnings", "RUSTDOCFLAGS": "-D warnings", "CARGO_TARGET_DIR": "/nonexistent/target",
+           "CARGO_TERM_COLOR": "always", "CARGO_ENCODED_RUSTFLAGS": "-Cdebuginfo=2", "CARGO_BUILD_RUSTFLAGS": "-Copt-level=0",
+           "CARGO_PROFILE_WHEEL_OPT_LEVEL": "0", "RUSTC_WRAPPER": "/nonexistent/wrapper",
+           "CARGO_BUILD_TARGET": "aarch64-unknown-linux-gnu"}
+
+
+def clean_environ(path_prefix) -> dict:
+    env = {k: v for k, v in os.environ.items()
+           if k not in AMBIENT_BUILD and not k.startswith(AMBIENT_BUILD_PREFIX)}
+    env["PATH"] = f"{path_prefix}:{os.environ['PATH']}"
+    return env
+
+
 def tool(path: Path, body: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("#!/bin/sh\n" + body)
@@ -67,7 +94,7 @@ def fakes(tmp_path, llvm=("23", "23"), profraw=True):
          f'echo "profdata $*" >> {log}\ncase "$1" in --version) echo "  LLVM version {llvm[1]}.1.1-rust-1.99.1-stable";; '
          'merge) shift; [ "$1" = -o ] && echo data > "$2";; show) echo "  k:"; echo "    Block counts: [5]";; esac\n')
     digest = lambda p: hashlib.sha256(p.read_bytes()).hexdigest()  # noqa: E731
-    env = {**os.environ, "PATH": f"{fake}:{os.environ['PATH']}"}
+    env = clean_environ(fake)
     return env, log, digest(payload / "rustup-init"), digest(payload / "uv.tar.gz")
 
 
@@ -180,7 +207,12 @@ def build_env(path: Path, run_dir: Path, own: str) -> dict:
 
 
 @posix
-def test_pgo_w2_final_build_equals_w1_build_except_the_pgo_flags(tmp_path):
+@pytest.mark.parametrize("ambient", [False, True], ids=["clean", "hostile"])
+def test_pgo_w2_final_build_equals_w1_build_except_the_pgo_flags(tmp_path, monkeypatch, ambient):
+    # "hostile": the caller's build environment as CI sets it (and worse) must not reach the fakes.
+    if ambient:
+        for k, v in HOSTILE.items():
+            monkeypatch.setenv(k, v)
     # W1: scripts/pgo_w1_build.sh as it was at ac92079 (unchanged since), run from the source tree.
     w1_dir, w2_dir = tmp_path / "a", tmp_path / "b"
     w1_dir.mkdir()
