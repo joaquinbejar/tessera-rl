@@ -39,6 +39,14 @@ from __future__ import annotations
 
 import os
 
+import orphan
+
+# A supervised child checks its supervisor before the heavy imports
+# (orphan.py); a spawned pool worker re-imports this file as __mp_main__,
+# with its parent's argv, and must not.
+if __name__ == "__main__":
+    orphan.check_argv()
+
 for _var in ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS"):
     os.environ[_var] = "1"
 
