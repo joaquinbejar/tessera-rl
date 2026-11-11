@@ -203,3 +203,73 @@ def test_orphan_pilot_uses_the_shared_group_kill():
     assert "orphan.kill_group(proc)" in src
     assert "os.killpg(proc.pid" not in src
     assert 'f"failed: {orphan.NOT_CONFIRMED}"' in src
+
+
+# pilot.py's supervisor, driven with a trivial child: pilot.__file__ points at
+# a script that exits at once, so the supervise path runs without the bot or
+# a model, and os.killpg refuses every group kill (#202, TR on #210).
+PILOT_SUPERVISED = """
+import argparse, os, sys, time
+sys.path.insert(0, {example!r})
+import pilot
+
+def eperm(pgid, sig):
+    raise PermissionError(1, "Operation not permitted")
+
+os.killpg = eperm
+pilot.__file__ = {child!r}
+args = argparse.Namespace(out={out!r}, ledger={ledger!r}, budget_core_hours=1.0, cores=1, wall_cap_s=30.0,
+                          command="infer")
+sys.exit(pilot.supervise(args, []))
+"""
+
+QUICK_CHILD = "import sys; sys.exit(0)\n"
+SLEEPY_CHILD = "import os, time; os.killpg = lambda *a: None; time.sleep(60)\n"
+
+
+def _pilot_supervised(tmp_path, child_code):
+    child = tmp_path / "child.py"
+    child.write_text(child_code)
+    sup = tmp_path / "supervised.py"
+    ledger = tmp_path / "ledger.json"
+    sup.write_text(PILOT_SUPERVISED.format(example=str(EXAMPLE), child=str(child), out=str(tmp_path / "out"),
+                                           ledger=str(ledger)))  # fmt: skip
+    return sup, ledger
+
+
+def _status(ledger):
+    import json
+
+    (entry,) = json.loads(ledger.read_text())["entries"]
+    return entry["status"]
+
+
+@pytest.mark.torch
+def test_orphan_pilot_fails_closed_when_the_group_kill_is_refused(tmp_path):
+    """#202: a child that returned 0, then a group kill refused for the whole
+    confirmation window: pilot exits 1 and settles "failed: ... not
+    confirmed gone", never "ok"."""
+    pytest.importorskip("torch")  # pilot.py imports it at module level
+    sup, ledger = _pilot_supervised(tmp_path, QUICK_CHILD)
+    p = subprocess.run([sys.executable, str(sup)], capture_output=True, text=True, timeout=120)
+    assert p.returncode == 1, p.stderr
+    assert _status(ledger) == f"failed: {orphan.NOT_CONFIRMED}"
+
+
+@pytest.mark.torch
+def test_orphan_pilot_sigterm_with_a_refused_kill_says_so_in_the_status(tmp_path):
+    """#202: SIGTERM while the child runs, with every group kill refused: the
+    settled status keeps "interrupted by signal" and names the refusal."""
+    pytest.importorskip("torch")  # pilot.py imports it at module level
+    sup, ledger = _pilot_supervised(tmp_path, SLEEPY_CHILD)
+    p = subprocess.Popen([sys.executable, str(sup)])
+    try:
+        # The reservation is written before the child starts.
+        assert _wait(lambda: ledger.exists() and '"entries"' in ledger.read_text(), 60)
+        time.sleep(1.0)
+        p.send_signal(signal.SIGTERM)
+        assert p.wait(timeout=60) == 128 + signal.SIGTERM
+        assert _status(ledger) == f"interrupted by signal {signal.SIGTERM} ({orphan.NOT_CONFIRMED})"
+    finally:
+        if p.poll() is None:
+            p.kill()
