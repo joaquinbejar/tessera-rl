@@ -159,7 +159,7 @@ def test_pgo_w2_build_refuses_a_training_without_profraw(tmp_path):
 @pytest.mark.parametrize("bad", ["w2", "both"])
 def test_pgo_w2_build_refuses_a_bad_variant(tmp_path, bad):
     p, _, _ = run(tmp_path, variant=bad)
-    assert p.returncode == 2 and "full or holdout" in p.stderr
+    assert p.returncode == 2 and "full, holdout or check" in p.stderr
 
 
 @posix
@@ -370,3 +370,44 @@ def test_pgo_w2_build_and_decide_freeze_the_same_kernel_list():
     sha = hashlib.sha256(KERNELS.read_bytes()).hexdigest()
     assert re.search(rf"^KERNELS_SHA256={sha}$", SCRIPT.read_text(), re.M)
     assert f'KERNELS_SHA256 = "{sha}"' in (ROOT / "tools" / "pgo" / "decide.py").read_text()
+
+
+def test_pgo_kernels_a_kernel_with_holdout_and_trained_rows_is_not_holdout_only(tmp_path):
+    k = tmp_path / "kernels.toml"
+    k.write_text(KERNELS.read_text().replace(
+        '"tessera_rl_engine+step_chunk+tessera_rl_games+Go9" = ["holdout/Go9-v1"]',
+        '"tessera_rl_engine+step_chunk+tessera_rl_games+Go9" = ["holdout/Go9-v1", "games/Othello-v1"]'))
+    assert "tessera_rl_engine+step_chunk+tessera_rl_games+Go9" not in coverage.holdout_only(str(k), str(MANIFEST))
+
+
+@posix
+def test_pgo_w2_build_check_variant_is_a_short_instrumented_training_and_a_parse(tmp_path):
+    p, out, log = run(tmp_path, variant="check")
+    assert p.returncode == 0, p.stderr
+    builds = [x for x in log.splitlines() if x.startswith("uvx ")]
+    assert len(builds) == 1 and "-Cprofile-generate=" in builds[0], "the instrumented build only"
+    train = [x for x in log.splitlines() if "train.py" in x]
+    assert len(train) == 1 and "--steps 8" in train[0] and "--holdout-build" not in train[0]
+    cov = [x for x in log.splitlines() if "coverage.py" in x]
+    assert len(cov) == 1 and "--variant check" in cov[0] and "--wheel" not in cov[0]
+    assert not (out / "dist-check").exists() or not list((out / "dist-check").glob("*.whl"))
+
+
+def test_pgo_coverage_check_variant_needs_one_kernel_counted(tmp_path):
+    kernels, _ = frozen()
+    base = ["--kernels", str(KERNELS), "--manifest", str(MANIFEST), "--variant", "check", "--out", str(tmp_path / "c.json")]
+    (tmp_path / "one.txt").write_text(profile_of({kernels[0]}, kernels))
+    assert coverage.main([*base, "--profile", str(tmp_path / "one.txt")]) == 0
+    (tmp_path / "none.txt").write_text(profile_of(set(), kernels))
+    assert coverage.main([*base, "--profile", str(tmp_path / "none.txt")]) == 1
+    # A show without --counts parses to nothing: the check refuses it.
+    plain = "\n".join(l for l in profile_of(set(kernels), kernels).splitlines() if "Block counts" not in l)
+    (tmp_path / "plain.txt").write_text(plain)
+    assert coverage.main([*base, "--profile", str(tmp_path / "plain.txt")]) == 1
+
+
+def test_pgo_coverage_full_needs_the_wheel_and_the_build_log(tmp_path):
+    (tmp_path / "s.txt").write_text(SHOW)
+    args = ["--kernels", str(KERNELS), "--manifest", str(MANIFEST), "--profile", str(tmp_path / "s.txt"),
+            "--variant", "full", "--out", str(tmp_path / "c.json")]
+    assert coverage.main(args) == 2
