@@ -62,6 +62,7 @@ except ImportError as e:  # pragma: no cover - exercised only without gymnasium
 import numpy as np
 
 from tessera_rl import _native
+from tessera_rl.masks import head_views
 from tessera_rl._env import _discrete_actions, _multi_actions, _real_array, _to_float32, native_kwargs
 
 #: Single-agent environments the adapter exposes.
@@ -74,6 +75,7 @@ _MAKERS = {
     "tessera/BrickWall-v1": _native.make_brickwall,
     "tessera/Snake-v1": _native.make_snake,
     "tessera/PaddleDuel-v1": _native.make_paddleduel,
+    **{env_id: _native.make_rts for env_id in ("tessera/RTS-vsRush-v1", "tessera/RTS-vsProspector-v1", "tessera/RTS-vsRandom-v1")},
 }
 
 #: Two-slot environments admitted with one agent (registered with
@@ -84,6 +86,17 @@ _MAKERS = {
 #: alone is not admission: a dynamic population could start with one agent
 #: and grow, which needs an explicit capability contract.
 _SLOT0 = frozenset({"tessera/Snake-v1", "tessera/PaddleDuel-v1"})
+
+#: RTS against a frozen scripted opponent (stage 5c), by Gymnasium id; the
+#: id names the opponent and fixes `opponent`, which a caller cannot pass.
+#: These are Gymnasium ids only, not environment ids: the registered
+#: environment stays tessera/RTS-v1. Admission rests on the RTS opponent
+#: contract: with an opponent `initial_agents` is 1 and the scripted seat
+#: (slot 1) is never alive, acting, rewarded or masked, so the adapter reads
+#: and writes slot 0. Masks are conditional per unit: they come in `info`
+#: (`action_mask`, the root head, and `action_masks`, every head, in the
+#: tessera_rl.masks shapes), not in the observation.
+_SCRIPTED = {"tessera/RTS-vsRush-v1": 1, "tessera/RTS-vsProspector-v1": 2, "tessera/RTS-vsRandom-v1": 3}
 
 #: The registered time limit, where it is not 500.
 _LIMITS = {"tessera/Pendulum-v1": 200, "tessera/MountainCar-v1": 200, "tessera/BrickWall-v1": 4000, "tessera/Snake-v1": 1000, "tessera/PaddleDuel-v1": 5000}
@@ -111,9 +124,13 @@ def _native_env(env_id: str, num_envs: int, seed: int, mode: AutoresetMode, outp
         raise _native.ArgumentError(f"unknown single-agent environment {env_id!r}; known: {sorted(_MAKERS)}") from None
     if env_id in _SLOT0:
         kwargs = {"agents": 1, **kwargs}
+    if env_id in _SCRIPTED:
+        if "opponent" in kwargs:
+            raise _native.ArgumentError(f"{env_id} fixes its opponent; use another id to change it")
+        kwargs = {**kwargs, "opponent": _SCRIPTED[env_id]}
     native = maker(**native_kwargs(num_envs=num_envs, seed=seed, auto_reset=_NATIVE_MODE[mode], outputs=outputs, **kwargs))
     layout = native.layout()
-    if layout["agents"] != 1 and (env_id not in _SLOT0 or layout["initial_agents"] != 1):
+    if layout["agents"] != 1 and (env_id not in _SLOT0 | _SCRIPTED.keys() or layout["initial_agents"] != 1):
         native.close()
         n = layout["initial_agents"]
         raise _native.ArgumentError(f"{env_id} with agents={n} is multi-agent; use the PettingZoo adapter")
@@ -175,6 +192,8 @@ class TesseraVectorEnv(VectorEnv):
         self.single_observation_space = _single_space(layout)
         self._bounds = layout["action_bounds"]
         self._nvec = tuple(layout["action_nvec"])
+        self._mask_heads = tuple((o, tuple(p), z) for o, p, z in layout["mask_heads"])
+        self._groups = layout["entity_group_heads"]
         if len(self._nvec) > 1:
             self.single_action_space = spaces.MultiDiscrete(np.asarray(self._nvec, dtype=np.int64))
         elif self._bounds is None:
@@ -214,7 +233,7 @@ class TesseraVectorEnv(VectorEnv):
         return np.frombuffer(out[key], dtype=np.bool_)
 
     def _info(self, out, done) -> dict:
-        info: dict = {}
+        info: dict = self._mask_info(out)
         if self.metadata["autoreset_mode"] is AutoresetMode.SAME_STEP and done.any():
             final = self._obs(out["terminal_observations"])
             final_obs = np.full(self.num_envs, None, dtype=object)
@@ -228,6 +247,18 @@ class TesseraVectorEnv(VectorEnv):
             info["final_info"] = {}
             info["_final_info"] = done.copy()
         return info
+
+    def _mask_info(self, out) -> dict:
+        """A multi-head environment's masks of slot 0, owned copies: the
+        root head as ``action_mask`` and every head as ``action_masks``."""
+        if len(self._nvec) <= 1 or not self._mask_heads:
+            return {}
+        if self.outputs == "borrowed":
+            m = np.asarray(out["masks"])
+        else:
+            m = np.frombuffer(out["masks"], dtype=np.bool_).reshape(self.num_envs, self._agents, -1)
+        heads = tuple(np.array(v[:, 0], dtype=np.int8) for v in head_views(m[:, :1], self._mask_heads, self._groups))
+        return {"action_mask": heads[0], "action_masks": heads}
 
     def _clipped(self, actions) -> np.ndarray:
         """Cast to float32, then clip in float32 (design 4.3): NaN is
@@ -255,7 +286,7 @@ class TesseraVectorEnv(VectorEnv):
             raise _native.ArgumentError(f"unsupported reset options {sorted(options)}")
         native_seed = None if all(s is None for s in seeds) else seeds
         out = self._native.reset(native_seed, ids)
-        return self._obs(out["observations"]), {}
+        return self._obs(out["observations"]), self._mask_info(out)
 
     def step(self, actions):
         if len(self._nvec) > 1:
@@ -317,17 +348,26 @@ class TesseraEnv(gymnasium.Env):
         super().reset(seed=seed)
         if options:
             raise _native.ArgumentError(f"unsupported reset options {sorted(options)}")
-        obs, _ = self._vec.reset(seed=seed)
-        return _first(obs), {}
+        obs, info = self._vec.reset(seed=seed)
+        return _first(obs), _first_info(info)
 
     def step(self, action):
         if self._vec._bounds is not None and np.ndim(action) not in (0, 1):
             raise _native.ActionError(f"an action is a scalar or shape (1,), not {np.shape(action)}")
-        obs, rewards, terminated, truncated, _ = self._vec.step(np.asarray([action]))
-        return _first(obs), float(rewards[0]), bool(terminated[0]), bool(truncated[0]), {}
+        obs, rewards, terminated, truncated, info = self._vec.step(np.asarray([action]))
+        return _first(obs), float(rewards[0]), bool(terminated[0]), bool(truncated[0]), _first_info(info)
 
     def close(self):
         self._vec.close()
+
+
+def _first_info(info: dict) -> dict:
+    """Instance 0's masks of a one-instance vector info, if any."""
+    out = {}
+    if "action_mask" in info:
+        out["action_mask"] = info["action_mask"][0]
+        out["action_masks"] = tuple(h[0] for h in info["action_masks"])
+    return out
 
 
 def _seed_vector(seed, n: int) -> list[int | None]:
@@ -392,7 +432,8 @@ def _register() -> None:
             id=env_id,
             entry_point="tessera_rl.gym:TesseraEnv",
             vector_entry_point="tessera_rl.gym:TesseraVectorEnv",
-            max_episode_steps=_LIMITS.get(env_id, 500),
+            # A scripted RTS game ends at its own step_limit: no wrapper.
+            max_episode_steps=None if env_id in _SCRIPTED else _LIMITS.get(env_id, 500),
             kwargs={"env_id": env_id, "agents": 1} if env_id in _SLOT0 else {"env_id": env_id},
         )
 

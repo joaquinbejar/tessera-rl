@@ -148,6 +148,7 @@ fn main() {
         max_units: num(&args, "--units", 16),
         step_limit: num(&args, "--limit", 600),
         seat_swap: false,
+        opponent: 0,
     };
     eprintln!(
         "config: size {} decision_ticks {} max_units {} step_limit {}; seeds {lo}..{hi}, {} games per seat per pairing",

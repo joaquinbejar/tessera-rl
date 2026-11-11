@@ -392,12 +392,13 @@ pub(crate) fn make_snake(g: Gil, kwargs: Option<Ref<'_>>) -> CResult<Inner> {
     Ok(Inner::new(ops, borrowed))
 }
 
-const RTS_KEYS: [&str; 6] = [
+const RTS_KEYS: [&str; 7] = [
     "size",
     "decision_ticks",
     "max_units",
     "step_limit",
     "seat_swap",
+    "opponent",
     "outputs",
 ];
 
@@ -416,6 +417,7 @@ pub(crate) fn make_rts(g: Gil, kwargs: Option<Ref<'_>>) -> CResult<Inner> {
         max_units: kw.u32(g, "max_units")?,
         step_limit: kw.u32(g, "step_limit")?,
         seat_swap: kw.bool(g, "seat_swap")?,
+        opponent: kw.u32(g, "opponent")?,
     };
     let ops = g
         .detach(|| crate::env::rts(&args, &fields))
