@@ -106,6 +106,47 @@ pub(super) unsafe extern "C" fn fp_non_canonical_entries(
     entry(|g| capi::int_u64(g, tessera_rl_num::fp::non_canonical_entries()))
 }
 
+/// The Python name of a determinism tier (SPEC 8.4).
+fn tier_name(tier: tessera_rl_core::Tier) -> &'static str {
+    match tier {
+        tessera_rl_core::Tier::CrossPlatform => "cross-platform",
+        tessera_rl_core::Tier::SamePlatform => "same-platform",
+    }
+}
+
+/// `registered_envs()`: every environment registered in this build, in id
+/// order, as `(id, version, max_agents, tier, perfect_information)` tuples
+/// (ADR-0054 item 6). `version` is the outputs version (`ENV_VERSION`),
+/// not the `-vN` suffix of the id. A duplicate id raises the configuration
+/// error.
+pub(super) unsafe extern "C" fn registered_envs(
+    _module: *mut ffi::PyObject,
+    _args: *mut ffi::PyObject,
+) -> *mut ffi::PyObject {
+    entry(|g| {
+        let records = tessera_rl_core::envs::registered()
+            .map_err(|e| error(g, Kind::Config, e.to_string()))?;
+        let list = capi::list(g)?;
+        for r in records {
+            let tier = tier_name(r.tier());
+            let max_agents =
+                u64::try_from(r.max_agents()).map_err(|_| capi::out_of_range(g, "max_agents"))?;
+            let item = capi::tuple(
+                g,
+                vec![
+                    capi::string(g, r.id())?,
+                    capi::int_u64(g, u64::from(r.version()))?,
+                    capi::int_u64(g, max_agents)?,
+                    capi::string(g, tier)?,
+                    capi::boolean(g, r.perfect_information()),
+                ],
+            )?;
+            capi::list_append(g, &list, &item)?;
+        }
+        Ok(list)
+    })
+}
+
 /// `_pendulum_rewards(rows)` (test hooks only): the kernel's raw f64 reward
 /// of each little-endian `(f64 theta, f64 theta_dot, f32 u)` row, for the
 /// ADR-0050 gate: the public reward is f32.
@@ -140,7 +181,7 @@ pub(super) unsafe extern "C" fn fail_after(
     })
 }
 
-const METHOD_COUNT: usize = if cfg!(feature = "test-hooks") { 28 } else { 23 };
+const METHOD_COUNT: usize = if cfg!(feature = "test-hooks") { 29 } else { 24 };
 
 static METHODS: Table<[ffi::PyMethodDef; METHOD_COUNT]> = Table([
     method(
@@ -178,6 +219,12 @@ static METHODS: Table<[ffi::PyMethodDef; METHOD_COUNT]> = Table([
         thunks::BUILD_PROFILE,
         ffi::METH_NOARGS,
         c"The native build profile: release or debug.",
+    ),
+    method(
+        c"registered_envs",
+        thunks::REGISTERED_ENVS,
+        ffi::METH_NOARGS,
+        c"registered_envs() -> [(id, version, max_agents, tier, perfect_information)]; version is ENV_VERSION, not the id's -vN",
     ),
     env_type::MAKERS[0],
     env_type::MAKERS[1],
@@ -258,4 +305,16 @@ pub(super) unsafe extern "C" fn init() -> *mut ffi::PyObject {
         fork::register(g)?;
         Ok(module)
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::tier_name;
+    use tessera_rl_core::Tier;
+
+    #[test]
+    fn test_tier_name_both_tiers_their_python_names() {
+        assert_eq!(tier_name(Tier::CrossPlatform), "cross-platform");
+        assert_eq!(tier_name(Tier::SamePlatform), "same-platform");
+    }
 }

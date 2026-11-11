@@ -16,6 +16,13 @@ the API is not stable, and any 0.x release may break it.
 
 ### Added
 
+- **`tessera_rl::register!`** (SPEC 10, ADR-0032, ADR-0054): `register!(Env, id = "...")` requires `Persist`,
+  checks at compile time that the id equals `ENV_ID`, and records the id, version, agent count, tier and
+  information kind. `tessera_rl::envs::registered()` lists the records sorted by id and returns
+  `RegistryError::DuplicateId` at first lookup. Every shipped environment is registered;
+  `tessera_rl._native.registered_envs()` lists them in Python. Adds the `inventory` dependency.
+  Still deferred (#63): the record's capabilities and constructor, and `tessera_rl.make(id)` through the
+  `tessera_rl.envs` entry points.
 - **Snake and paddle duel in the Gymnasium adapter** with one agent: `tessera/Snake-v1` and
   `tessera/PaddleDuel-v1` are registered with `agents=1` (time limits 1000 and 5000) and read slot 0 of
   the native rows; `agents=2` is refused in favour of PettingZoo. Snake's reverse action is a no-op

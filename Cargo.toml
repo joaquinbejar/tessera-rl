@@ -64,6 +64,8 @@ criterion = { version = "0.8", default-features = false, features = ["cargo_benc
 # Instruction-count gate (ADR-0025); dev-only, pinned: the library must
 # match the gungraun-runner binary 0.20.0.
 gungraun = "=0.20.0"
+# Environment registration records (ADR-0032, ADR-0054).
+inventory = "0.3"
 proptest = { version = "1", default-features = false, features = ["std"] }
 # Only in tessera-rl-py, without the macros (ADR-0041: every entry is
 # registered through the thunk table).

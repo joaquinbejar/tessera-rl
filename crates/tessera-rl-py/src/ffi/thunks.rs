@@ -602,6 +602,7 @@ thunk!(FP_NON_CANONICAL_ENTRIES: CFunction = thunk_fp_non_canonical_entries => m
 thunk!(FAIL_AFTER: CFunction = thunk_fail_after => module::fail_after : fn(Obj, Obj) -> Obj);
 thunk!(FP_BOUNDARY: CFunction = thunk_fp_boundary => module::fp_boundary : fn(Obj, Obj) -> Obj);
 thunk!(BUILD_PROFILE: CFunction = thunk_build_profile => module::build_profile : fn(Obj, Obj) -> Obj);
+thunk!(REGISTERED_ENVS: CFunction = thunk_registered_envs => module::registered_envs : fn(Obj, Obj) -> Obj);
 #[cfg(feature = "test-hooks")]
 thunk!(MAKE_PANIC_COUNTER: CFunctionKw = thunk_make_panic_counter => env_type::make_panic_counter : fn(Obj, Obj, Obj) -> Obj);
 #[cfg(feature = "test-hooks")]

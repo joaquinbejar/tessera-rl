@@ -52,6 +52,9 @@ use board::{BOARD, POINTS, SIDE, group, neighbours, place};
 pub const ENV_ID: &str = "tessera/Go9-v1";
 /// Environment version, bumped with any change to its outputs.
 pub const ENV_VERSION: u32 = 1;
+
+// Registration under the versioned id (SPEC 10, ADR-0054).
+tessera_rl_core::register!(Go9, id = "tessera/Go9-v1");
 /// Agent slots.
 pub const MAX_AGENTS: usize = 2;
 /// The pass action.

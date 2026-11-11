@@ -44,6 +44,9 @@ pub const ENV_ID: &str = "tessera/MountainCar-v1";
 /// Environment version, bumped with any change to its outputs.
 pub const ENV_VERSION: u32 = 1;
 
+// Registration under the versioned id (SPEC 10, ADR-0054).
+tessera_rl_core::register!(MountainCar, id = "tessera/MountainCar-v1");
+
 /// The reset interval of the position, `[low, high)`.
 const RESET_LOW: f64 = -0.6;
 const RESET_HIGH: f64 = -0.4;

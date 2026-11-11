@@ -41,6 +41,9 @@ use board::{BOARD, CELLS, CENTRE_ORDER, HEIGHT, WIDTH, can_play, cell, has_four,
 pub const ENV_ID: &str = "tessera/Connect4-v1";
 /// Environment version, bumped with any change to its outputs.
 pub const ENV_VERSION: u32 = 1;
+
+// Registration under the versioned id (SPEC 10, ADR-0054).
+tessera_rl_core::register!(Connect4, id = "tessera/Connect4-v1");
 /// Agent slots.
 pub const MAX_AGENTS: usize = 2;
 /// Choices of the action head: one per column.
