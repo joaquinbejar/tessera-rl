@@ -170,6 +170,10 @@ the API is not stable, and any 0.x release may break it.
 
 ### Fixed
 
+- **SPEC 10 authoring example (#64), a 0.1.0 known deviation, resolved:** the SPEC now shows the real API
+  (ADR-0053). `type Action` stays an untyped marker (`()`); the example declares `type Header`,
+  `observation_space` and `action_space` and reads actions through `Actions<'_, ()>`. It is compiled verbatim
+  as `crates/tessera-rl/tests/spec10_example.rs`. Its `register!` line waits for ADR-0054 (#63).
 - **Async after a panic or a death** (`tessera-rl-engine`): `snapshot` re-checks
   poison after its quiescence check, so a step that panicked in between cannot expose
   a partly written row; `is_poisoned` is true once a worker died, in Pipelined too, and send, partial writers and `recv` report `WorkerDied`; `wait_ready` no
