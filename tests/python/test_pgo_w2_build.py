@@ -95,8 +95,9 @@ def source_tree(tmp_path) -> Path:
     return src
 
 
-def run(tmp_path, variant="full", llvm=("23", "23"), profraw=True, rel=False, swap=False):
+def run(tmp_path, variant="full", llvm=("23", "23"), profraw=True, rel=False, swap=False, extra=None):
     env, log, rsha, usha = fakes(tmp_path, llvm, profraw)
+    env.update(extra or {})
     src, tool_tree = source_tree(tmp_path), ROOT
     if swap:
         src, tool_tree = tool_tree, src
@@ -168,6 +169,36 @@ def test_pgo_w2_build_refuses_a_training_without_profraw(tmp_path):
     p, _, log = run(tmp_path, profraw=False)
     assert p.returncode != 0 and "no profraw" in p.stderr
     assert sum(1 for x in log.splitlines() if x.startswith("uvx ")) == 1, "no final build"
+
+
+REFUSED = ["RUSTFLAGS", "RUSTDOCFLAGS", "CARGO_ENCODED_RUSTFLAGS", "CARGO_ENCODED_RUSTDOCFLAGS", "CARGO_BUILD_RUSTFLAGS",
+           "CARGO_BUILD_RUSTDOCFLAGS", "CARGO_TARGET_DIR", "CARGO_BUILD_TARGET_DIR", "CARGO_BUILD_TARGET",
+           "RUSTC_WRAPPER", "RUSTC_WORKSPACE_WRAPPER", "RUSTC"]
+PATTERNED = ["CARGO_PROFILE_WHEEL_OPT_LEVEL", "CARGO_PROFILE_RELEASE_LTO", "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS"]
+
+
+@posix
+@pytest.mark.parametrize("name", REFUSED + PATTERNED)
+@pytest.mark.parametrize("value", ["x", ""], ids=["set", "empty"])
+def test_pgo_w2_build_refuses_an_ambient_build_variable_before_any_fetch(tmp_path, name, value):
+    p, out, log = run(tmp_path, extra={name: value})
+    assert p.returncode == 2, p.stderr
+    msg = (f"pgo_w2_build: {name} is set in the environment; refused" if name in REFUSED
+           else "pgo_w2_build: a CARGO_PROFILE_* or per-target RUSTFLAGS variable is set; refused")
+    assert msg in p.stderr
+    assert log == "" and not out.exists()
+
+
+@posix
+def test_pgo_w1_build_today_passes_an_ambient_rustflags_to_maturin(tmp_path):
+    # Documents scripts/pgo_w1_build.sh as frozen at ac92079: it does not refuse or clear an
+    # ambient RUSTFLAGS; W1's protection is the run script's start check and the control probe.
+    env, log, rsha, usha = fakes(tmp_path)
+    env["RUSTFLAGS"] = "-D warnings"
+    p = subprocess.run(["bash", str(W1_SCRIPT), rsha, usha, str(tmp_path / "run")], env=env, capture_output=True,
+                       text=True, check=False, cwd=source_tree(tmp_path))
+    assert p.returncode == 0, p.stderr
+    assert [x for x in log.read_text().splitlines() if x.startswith("uvx ")][0].count("RUSTFLAGS=-D warnings ") == 1
 
 
 @posix

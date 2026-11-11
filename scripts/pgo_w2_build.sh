@@ -52,6 +52,19 @@ for d in "$run" "$src" "$tool"; do
     case "$d" in /*) ;; *) echo "pgo_w2_build: run dir, src tree and tool tree must be absolute: $d" >&2; exit 2 ;; esac
 done
 
+# The build environment is the script's own: an ambient flag, target, profile setting,
+# wrapper or target directory would change what is built without leaving a trace, so it
+# is refused, not inherited (as in scripts/pgo_candidate_checks.sh). build() sets its own
+# RUSTFLAGS and CARGO_TARGET_DIR per call; an ambient one is refused all the same.
+for v in RUSTFLAGS RUSTDOCFLAGS CARGO_ENCODED_RUSTFLAGS CARGO_ENCODED_RUSTDOCFLAGS CARGO_BUILD_RUSTFLAGS \
+    CARGO_BUILD_RUSTDOCFLAGS CARGO_TARGET_DIR CARGO_BUILD_TARGET_DIR CARGO_BUILD_TARGET \
+    RUSTC_WRAPPER RUSTC_WORKSPACE_WRAPPER RUSTC; do
+    if [ -n "${!v+x}" ]; then echo "pgo_w2_build: $v is set in the environment; refused" >&2; exit 2; fi
+done
+if env | grep -q '^CARGO_PROFILE_\|^CARGO_TARGET_[A-Z0-9_]*_RUSTFLAGS='; then
+    echo "pgo_w2_build: a CARGO_PROFILE_* or per-target RUSTFLAGS variable is set; refused" >&2; exit 2
+fi
+
 w="$run/w2-$variant"
 dist="$run/dist-$variant"
 prof="$w/profraw"
