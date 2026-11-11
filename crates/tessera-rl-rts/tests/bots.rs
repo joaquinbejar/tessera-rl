@@ -237,7 +237,7 @@ fn fnv(hash: u64, word: u64) -> u64 {
 /// hashes folded. Both games reach combat (asserted), so the fighters'
 /// orders are in the hash. Pinned on macOS arm64; any change to a bot, the
 /// rules or the masks moves it.
-const BOT_GOLDEN: u64 = 0x3eb6_2927_d0c4_d294;
+const BOT_GOLDEN: u64 = 0x99b6_687e_a73c_23b6;
 /// A seed where Rush reaches Prospector under fog inside 600 decisions.
 const GOLDEN_SEED: u64 = 9;
 

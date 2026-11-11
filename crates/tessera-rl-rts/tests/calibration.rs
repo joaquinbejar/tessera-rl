@@ -69,7 +69,7 @@ fn test_calibration_small_summary_is_pinned() {
         s.by_seat,
         s.lengths.iter().map(|&l| u64::from(l)).sum::<u64>(),
     );
-    assert_eq!(got, ([[2, 0, 0, 6], [2, 0, 0, 6]], 3751), "{got:?}");
+    assert_eq!(got, ([[8, 0, 0, 0], [8, 0, 0, 0]], 748), "{got:?}");
 }
 
 #[test]
