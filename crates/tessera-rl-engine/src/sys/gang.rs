@@ -92,7 +92,7 @@ use super::sync::{
 /// How long a waiter without a stored waker sleeps per poll on the park
 /// backend (ADR-0047).
 #[cfg(not(loom))]
-const PARK_POLL: core::time::Duration = core::time::Duration::from_micros(100);
+pub(crate) const PARK_POLL: core::time::Duration = core::time::Duration::from_micros(100);
 
 /// Options of a gang.
 #[derive(Debug, Clone)]
@@ -141,6 +141,24 @@ pub(crate) struct Faults {
         allow(dead_code, reason = "the split-phase modes are not built under loom")
     )]
     pub(crate) jitter_us: u32,
+    /// Async mode on park only: the receiver's park drops its 100 µs
+    /// liveness fallback (it waits up to a minute), so only a worker's
+    /// unpark ends it. Wake tests use it to turn a missed wake into a hang
+    /// that their watchdog reports by name. Native waits have no fallback
+    /// to turn off.
+    #[cfg_attr(
+        loom,
+        allow(dead_code, reason = "the split-phase modes are not built under loom")
+    )]
+    pub(crate) wake_fallback_off: bool,
+    /// Async mode only: this worker panics in the drain job outside the
+    /// per-step catch (after [`crate::buffer::batch::JOB_PANIC_GATE`]
+    /// opens), a job-level panic.
+    #[cfg_attr(
+        loom,
+        allow(dead_code, reason = "the split-phase modes are not built under loom")
+    )]
+    pub(crate) job_panic: Option<usize>,
 }
 
 /// A type-erased job: `call(data, worker)` on every worker.
@@ -277,6 +295,11 @@ struct Shared {
     creator: thread::Thread,
     spin: u32,
     backend: Backend,
+    /// The Async mode's completion wake (ADR-0056 decision 2); the backstop
+    /// notifies it when a worker dies, so a receiver blocked without a
+    /// periodic wake sees the death.
+    #[cfg(not(loom))]
+    completion: Arc<super::waiter::Completion>,
     /// One futex mock per waited address, as an address wait has: the wake
     /// word, each slot's `pending`, and `ready`.
     #[cfg(loom)]
@@ -481,6 +504,8 @@ impl Gang {
             spin: options.spin,
             #[cfg(not(loom))]
             backend: options.native.map_or(Backend::Park, Backend::Native),
+            #[cfg(not(loom))]
+            completion: Arc::new(super::waiter::Completion::new(options.native)),
             #[cfg(loom)]
             backend: if options.mock_futex {
                 Backend::Mock
@@ -557,6 +582,13 @@ impl Gang {
     )]
     pub(crate) fn dead(&self) -> bool {
         self.shared.dead.load(Ordering::Acquire)
+    }
+
+    /// The completion wake on the workers' backend, notified by a worker
+    /// that dies outside its job (and by the Async mode's workers).
+    #[cfg(not(loom))]
+    pub(crate) fn completion(&self) -> Arc<super::waiter::Completion> {
+        Arc::clone(&self.shared.completion)
     }
 
     /// Number of workers.
@@ -654,6 +686,25 @@ impl Gang {
             polled,
         );
         Ok(self.complete(seq))
+    }
+
+    /// Whether a job still in flight (not yet waited for) has panicked:
+    /// its slot's `panicked`, stored before the panicking worker notifies
+    /// the completion wake. A receiver reads it to end its wait with the
+    /// panic before the job is reaped.
+    #[cfg_attr(
+        loom,
+        allow(dead_code, reason = "the split-phase modes are not built under loom")
+    )]
+    pub(crate) fn panicked_in_flight(&self) -> bool {
+        let mut seq = self.completed;
+        while seq < self.submitted {
+            seq += 1;
+            if self.shared.slot(seq).panicked.load(Ordering::SeqCst) {
+                return true;
+            }
+        }
+        false
     }
 
     /// Like `wait`, but returns `None` at once if the oldest job is still
@@ -789,6 +840,11 @@ fn worker_main(shared: &Shared, worker: usize, core: Option<usize>, fail: bool, 
                 let fault = core::mem::take(&mut die);
                 if !catch(|| run_job(shared, slot, worker, &mut seen, fault)) {
                     shared.dead.store(true, Ordering::Release);
+                    // A receiver blocked on the completion wake has no
+                    // periodic wake on a native backend: tell it (ADR-0056
+                    // decision 2, a death is a failure that ends its wait).
+                    #[cfg(not(loom))]
+                    shared.completion.notify();
                     if !seen.decremented {
                         // The job may not have run for this worker's
                         // chunks: it reports a panic, so the pool poisons.
@@ -898,6 +954,11 @@ fn run_job(shared: &Shared, slot: &JobSlot, worker: usize, seen: &mut Seen, die:
     });
     if !completed {
         slot.panicked.store(true, Ordering::SeqCst);
+        // A job-level panic (outside any per-item catch of the job) may
+        // leave work unfinished that a receiver waits for with no periodic
+        // wake; it reads `panicked_in_flight` (ADR-0056 decision 2).
+        #[cfg(not(loom))]
+        shared.completion.notify();
     }
     // The payload is already disposed of; nothing that can panic follows.
     seen.decremented = true;

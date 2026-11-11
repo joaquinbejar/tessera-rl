@@ -27,6 +27,33 @@ WHEEL = "tessera_rl-0.1.0-cp311-abi3-manylinux_2_28_x86_64.whl"
 W1_SCRIPT = ROOT / "scripts" / "pgo_w1_build.sh"
 
 
+# The caller's build environment the fixtures drop before spawning a build script,
+# so a test sees only what the script itself sets (CI exports RUSTFLAGS=-D warnings
+# workflow-wide; a developer may export any of these). An explicit list, not an
+# empty environment: the scripts still need PATH, HOME and the rest.
+#   RUSTFLAGS, CARGO_ENCODED_RUSTFLAGS, CARGO_BUILD_RUSTFLAGS: compiler flags; the fake
+#     maturin logs RUSTFLAGS and the W1/W2 equality test compares it.
+#   CARGO_PROFILE_* (prefix), RUSTC_WRAPPER, CARGO_BUILD_TARGET: change the build
+#     cargo would run; they land in the fake maturin's environment dump.
+#   RUSTDOCFLAGS, CARGO_TARGET_DIR: set by other CI jobs; the fake maturin logs
+#     CARGO_TARGET_DIR, and both land in the environment dump.
+#   CARGO_TERM_COLOR: set workflow-wide by CI; lands in the environment dump.
+AMBIENT_BUILD = ("RUSTFLAGS", "CARGO_ENCODED_RUSTFLAGS", "CARGO_BUILD_RUSTFLAGS", "RUSTC_WRAPPER",
+                 "CARGO_BUILD_TARGET", "RUSTDOCFLAGS", "CARGO_TARGET_DIR", "CARGO_TERM_COLOR")
+AMBIENT_BUILD_PREFIX = "CARGO_PROFILE_"
+HOSTILE = {"RUSTFLAGS": "-D warnings", "RUSTDOCFLAGS": "-D warnings", "CARGO_TARGET_DIR": "/nonexistent/target",
+           "CARGO_TERM_COLOR": "always", "CARGO_ENCODED_RUSTFLAGS": "-Cdebuginfo=2", "CARGO_BUILD_RUSTFLAGS": "-Copt-level=0",
+           "CARGO_PROFILE_WHEEL_OPT_LEVEL": "0", "RUSTC_WRAPPER": "/nonexistent/wrapper",
+           "CARGO_BUILD_TARGET": "aarch64-unknown-linux-gnu"}
+
+
+def clean_environ(path_prefix) -> dict:
+    env = {k: v for k, v in os.environ.items()
+           if k not in AMBIENT_BUILD and not k.startswith(AMBIENT_BUILD_PREFIX)}
+    env["PATH"] = f"{path_prefix}:{os.environ['PATH']}"
+    return env
+
+
 def tool(path: Path, body: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("#!/bin/sh\n" + body)
@@ -67,7 +94,7 @@ def fakes(tmp_path, llvm=("23", "23"), profraw=True):
          f'echo "profdata $*" >> {log}\ncase "$1" in --version) echo "  LLVM version {llvm[1]}.1.1-rust-1.99.1-stable";; '
          'merge) shift; [ "$1" = -o ] && echo data > "$2";; show) echo "  k:"; echo "    Block counts: [5]";; esac\n')
     digest = lambda p: hashlib.sha256(p.read_bytes()).hexdigest()  # noqa: E731
-    env = {**os.environ, "PATH": f"{fake}:{os.environ['PATH']}"}
+    env = clean_environ(fake)
     return env, log, digest(payload / "rustup-init"), digest(payload / "uv.tar.gz")
 
 
@@ -80,8 +107,9 @@ def source_tree(tmp_path) -> Path:
     return src
 
 
-def run(tmp_path, variant="full", llvm=("23", "23"), profraw=True, rel=False, swap=False):
+def run(tmp_path, variant="full", llvm=("23", "23"), profraw=True, rel=False, swap=False, extra=None):
     env, log, rsha, usha = fakes(tmp_path, llvm, profraw)
+    env.update(extra or {})
     src, tool_tree = source_tree(tmp_path), ROOT
     if swap:
         src, tool_tree = tool_tree, src
@@ -155,6 +183,74 @@ def test_pgo_w2_build_refuses_a_training_without_profraw(tmp_path):
     assert sum(1 for x in log.splitlines() if x.startswith("uvx ")) == 1, "no final build"
 
 
+# The refused set, as scripts/pgo_w2_build.sh names it (pgo_candidate_checks.sh and the L1 run
+# script name the same), plus the CARGO_PROFILE_* / CARGO_TARGET_* pattern.
+REFUSED = ["RUSTFLAGS", "RUSTDOCFLAGS", "CARGO_ENCODED_RUSTFLAGS", "CARGO_ENCODED_RUSTDOCFLAGS", "CARGO_BUILD_RUSTFLAGS",
+           "CARGO_BUILD_RUSTDOCFLAGS", "CARGO_BUILD_TARGET", "CARGO_BUILD_TARGET_DIR", "RUSTC", "RUSTC_WRAPPER",
+           "RUSTC_WORKSPACE_WRAPPER", "CARGO_BUILD_RUSTC", "CARGO_BUILD_RUSTC_WRAPPER", "CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER"]
+REFUSED_PATTERN = ("CARGO_PROFILE_", "CARGO_TARGET_")
+PATTERNED = ["CARGO_TARGET_DIR", "CARGO_PROFILE_WHEEL_OPT_LEVEL", "CARGO_PROFILE_RELEASE_LTO",
+             "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS", "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER"]
+# Scrubbed by the fixtures (CI sets it) but not refused by the script: it only colours cargo's
+# output and changes nothing that is built.
+COSMETIC = {"CARGO_TERM_COLOR"}
+
+
+def test_pgo_w2_build_names_the_refused_set():
+    text = SCRIPT.read_text()
+    start = text.index('BUILD_VARS="') + len('BUILD_VARS="')
+    assert sorted(text[start:text.index('"', start)].split()) == sorted(REFUSED)
+    assert "grep -Eq '^CARGO_(PROFILE|TARGET)_[A-Za-z0-9_]*='" in text
+
+
+@posix
+@pytest.mark.parametrize("name", REFUSED + PATTERNED)
+@pytest.mark.parametrize("value", ["x", ""], ids=["set", "empty"])
+def test_pgo_w2_build_refuses_an_ambient_build_variable_before_any_fetch(tmp_path, name, value):
+    p, out, log = run(tmp_path, extra={name: value})
+    assert p.returncode == 2, p.stderr
+    msg = (f"pgo_w2_build: {name} is set in the environment; refused" if name in REFUSED
+           else f"pgo_w2_build: {name} set in the environment; refused")
+    assert msg in p.stderr
+    assert log == "" and not out.exists()
+
+
+def test_pgo_w2_build_refuses_everything_the_fixtures_scrub():
+    # The fixtures' scrub list, less the cosmetic set, must stay inside the script's refused set,
+    # so a test that passes only because the fixture scrubbed a variable still proves the real
+    # script refuses it.
+    refused = lambda k: k in REFUSED or k.startswith(REFUSED_PATTERN)  # noqa: E731
+    assert all(refused(k) for k in set(AMBIENT_BUILD) - COSMETIC)
+    assert AMBIENT_BUILD_PREFIX.startswith(REFUSED_PATTERN)
+    assert all(refused(k) for k in set(HOSTILE) - COSMETIC)
+
+
+@posix
+def test_pgo_w2_build_refuses_the_hostile_environment_unscrubbed(tmp_path, monkeypatch):
+    # The real script under the caller's environment as is, not through clean_environ().
+    for k, v in HOSTILE.items():
+        monkeypatch.setenv(k, v)
+    _, log, rsha, usha = fakes(tmp_path)
+    env = {**os.environ, "PATH": f"{tmp_path / 'fake'}:{os.environ['PATH']}"}
+    out = tmp_path / "run"
+    p = subprocess.run(["bash", str(SCRIPT), rsha, usha, str(out), "full", str(source_tree(tmp_path)), str(ROOT)],
+                       env=env, capture_output=True, text=True, check=False, cwd=tmp_path)
+    assert p.returncode == 2 and "set in the environment; refused" in p.stderr, p.stderr
+    assert not log.exists() and not out.exists()
+
+
+@posix
+def test_pgo_w1_build_today_passes_an_ambient_rustflags_to_maturin(tmp_path):
+    # Documents scripts/pgo_w1_build.sh as frozen at ac92079: it does not refuse or clear an
+    # ambient RUSTFLAGS; W1's protection is the run script's start check and the control probe.
+    env, log, rsha, usha = fakes(tmp_path)
+    env["RUSTFLAGS"] = "-D warnings"
+    p = subprocess.run(["bash", str(W1_SCRIPT), rsha, usha, str(tmp_path / "run")], env=env, capture_output=True,
+                       text=True, check=False, cwd=source_tree(tmp_path))
+    assert p.returncode == 0, p.stderr
+    assert [x for x in log.read_text().splitlines() if x.startswith("uvx ")][0].count("RUSTFLAGS=-D warnings ") == 1
+
+
 @posix
 @pytest.mark.parametrize("bad", ["w2", "both"])
 def test_pgo_w2_build_refuses_a_bad_variant(tmp_path, bad):
@@ -180,7 +276,12 @@ def build_env(path: Path, run_dir: Path, own: str) -> dict:
 
 
 @posix
-def test_pgo_w2_final_build_equals_w1_build_except_the_pgo_flags(tmp_path):
+@pytest.mark.parametrize("ambient", [False, True], ids=["clean", "hostile"])
+def test_pgo_w2_final_build_equals_w1_build_except_the_pgo_flags(tmp_path, monkeypatch, ambient):
+    # "hostile": the caller's build environment as CI sets it (and worse) must not reach the fakes.
+    if ambient:
+        for k, v in HOSTILE.items():
+            monkeypatch.setenv(k, v)
     # W1: scripts/pgo_w1_build.sh as it was at ac92079 (unchanged since), run from the source tree.
     w1_dir, w2_dir = tmp_path / "a", tmp_path / "b"
     w1_dir.mkdir()

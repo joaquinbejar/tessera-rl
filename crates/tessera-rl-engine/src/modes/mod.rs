@@ -6,4 +6,6 @@
 #[cfg(test)]
 mod async_jitter_tests;
 pub(crate) mod async_mode;
+#[cfg(test)]
+mod async_wake_tests;
 pub(crate) mod pipelined;

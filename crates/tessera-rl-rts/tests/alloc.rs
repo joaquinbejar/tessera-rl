@@ -32,6 +32,7 @@ fn cfg(size: u16, max_units: u16) -> RtsConfig {
         max_units,
         step_limit: 400,
         seat_swap: false,
+        opponent: 0,
     }
 }
 

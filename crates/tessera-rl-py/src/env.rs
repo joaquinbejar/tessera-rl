@@ -914,6 +914,7 @@ pub(crate) struct RtsFields {
     pub(crate) max_units: Option<u32>,
     pub(crate) step_limit: Option<u32>,
     pub(crate) seat_swap: Option<bool>,
+    pub(crate) opponent: Option<u32>,
 }
 
 /// An RTS pool (`tessera/RTS-v1`), with masks: two agents, simultaneous
@@ -933,6 +934,9 @@ pub(crate) fn rts(args: &PoolArgs, fields: &RtsFields) -> Result<Box<dyn PoolOps
         max_units: small(fields.max_units, d.max_units, "max_units")?,
         step_limit: fields.step_limit.unwrap_or(d.step_limit),
         seat_swap: fields.seat_swap.unwrap_or(d.seat_swap),
+        opponent: fields.opponent.map_or(Ok(d.opponent), |v| {
+            u8::try_from(v).map_err(|_| BindError::Argument("opponent is out of range".to_owned()))
+        })?,
     };
     let (options, n) = options(args)?;
     let same_step = options.auto_reset == AutoReset::SameStep;

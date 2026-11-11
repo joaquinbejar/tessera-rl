@@ -52,6 +52,21 @@ for d in "$run" "$src" "$tool"; do
     case "$d" in /*) ;; *) echo "pgo_w2_build: run dir, src tree and tool tree must be absolute: $d" >&2; exit 2 ;; esac
 done
 
+# The build environment is the script's own: an ambient flag, target, profile setting,
+# compiler or wrapper would change what is built without leaving a trace, so it is refused,
+# not inherited. The refused set (scripts/pgo_candidate_checks.sh and the L1 run script name
+# the same): these names, and every name that starts with CARGO_PROFILE_ or CARGO_TARGET_
+# (CARGO_TARGET_DIR included, though build() sets its own per call).
+BUILD_VARS="RUSTFLAGS RUSTDOCFLAGS CARGO_ENCODED_RUSTFLAGS CARGO_ENCODED_RUSTDOCFLAGS CARGO_BUILD_RUSTFLAGS
+CARGO_BUILD_RUSTDOCFLAGS CARGO_BUILD_TARGET CARGO_BUILD_TARGET_DIR RUSTC RUSTC_WRAPPER RUSTC_WORKSPACE_WRAPPER
+CARGO_BUILD_RUSTC CARGO_BUILD_RUSTC_WRAPPER CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER"
+for v in $BUILD_VARS; do
+    if [ -n "${!v+x}" ]; then echo "pgo_w2_build: $v is set in the environment; refused" >&2; exit 2; fi
+done
+if env | grep -Eq '^CARGO_(PROFILE|TARGET)_[A-Za-z0-9_]*='; then
+    echo "pgo_w2_build: $(env | grep -Eo '^CARGO_(PROFILE|TARGET)_[A-Za-z0-9_]*' | tr '\n' ' ')set in the environment; refused" >&2; exit 2
+fi
+
 w="$run/w2-$variant"
 dist="$run/dist-$variant"
 prof="$w/profraw"

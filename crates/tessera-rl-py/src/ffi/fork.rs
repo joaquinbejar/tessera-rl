@@ -14,7 +14,7 @@
 
 use core::sync::atomic::{AtomicU64, Ordering};
 
-use super::capi::{self, CResult, Gil};
+use super::capi::{CResult, Gil};
 
 /// Moved once in each forked child, before any other thread can exist there.
 static GENERATION: AtomicU64 = AtomicU64::new(0);
@@ -43,6 +43,13 @@ extern "C" fn after_in_child() {
 ///
 /// A failed registration (ENOMEM) raises, so the import fails: a silently absent
 /// guard would bring back the hangs and traps of a forked child.
+#[cfg_attr(
+    windows,
+    expect(
+        clippy::unnecessary_wraps,
+        reason = "one signature on every platform: the registration can fail where fork exists"
+    )
+)]
 pub(super) fn register(g: Gil) -> CResult<()> {
     #[cfg(not(windows))]
     {
@@ -60,9 +67,9 @@ pub(super) fn register(g: Gil) -> CResult<()> {
         #[expect(unsafe_code, reason = "audited module: one libc registration")]
         let status = unsafe { pthread_atfork(None, None, Some(after_in_child)) };
         if status != 0 {
-            return Err(capi::raise(
+            return Err(super::capi::raise(
                 g,
-                capi::runtime_error(),
+                super::capi::runtime_error(),
                 "pthread_atfork failed: the fork guard cannot be installed",
             ));
         }

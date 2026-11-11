@@ -29,7 +29,7 @@ use std::fmt::Write as _;
 use tessera_rl_rts::RtsConfig;
 use tessera_rl_rts::bots::Bot;
 
-use crate::games::{Summary, pairing, wilson};
+use crate::games::{Summary, independent_counts, pairing, wilson};
 
 /// The pre-registered pairings, in order (plan r2, C1).
 const PAIRINGS: [(&str, Bot, Bot); 3] = [
@@ -88,10 +88,14 @@ fn interval(k: u32, n: u32) -> String {
 /// One pairing as JSON: counts per seat and in total, the decided rate, A's
 /// share of the decided games and B's, with Wilson intervals, the
 /// truncation rate and the length figures.
-fn summary_json(name: &str, s: &Summary) -> String {
+fn summary_json(name: &str, s: &Summary, first: Bot, second: Bot) -> String {
     let t: [u32; 4] = core::array::from_fn(|k| s.by_seat[0][k] + s.by_seat[1][k]);
+    // Rates and intervals over independent games (two scripted bots: one
+    // game per seed, games.rs `independent_counts`).
+    let u = independent_counts(s, first, second);
+    let n = u.iter().sum::<u32>();
+    let u_decided = u[0] + u[1] + u[2];
     let games = t.iter().sum::<u32>();
-    let decided = t[0] + t[1] + t[2];
     let mut out = String::new();
     let _ = write!(out, "\"{name}\": {{\"games\": {games}, ");
     let _ = write!(
@@ -104,22 +108,22 @@ fn summary_json(name: &str, s: &Summary) -> String {
     }
     let _ = write!(
         out,
-        "\"decided_rate\": {:.4}, \"decided_interval\": {}, ",
-        f64::from(decided) / f64::from(games.max(1)),
-        interval(decided, games)
+        "\"independent_games\": {n}, \"decided_rate\": {:.4}, \"decided_interval\": {}, ",
+        f64::from(u_decided) / f64::from(n.max(1)),
+        interval(u_decided, n)
     );
     let _ = write!(
         out,
         "\"a_share_of_decided\": {:.4}, \"a_interval\": {}, \"b_share_of_decided\": {:.4}, \"b_interval\": {}, ",
-        f64::from(t[0]) / f64::from(decided.max(1)),
-        interval(t[0], decided),
-        f64::from(t[1]) / f64::from(decided.max(1)),
-        interval(t[1], decided)
+        f64::from(u[0]) / f64::from(u_decided.max(1)),
+        interval(u[0], u_decided),
+        f64::from(u[1]) / f64::from(u_decided.max(1)),
+        interval(u[1], u_decided)
     );
     let _ = write!(
         out,
         "\"truncation_rate\": {:.4}, ",
-        f64::from(t[3]) / f64::from(games.max(1))
+        f64::from(u[3]) / f64::from(n.max(1))
     );
     lengths(&mut out, "lengths", &s.lengths);
     out.push_str(", ");
@@ -148,6 +152,7 @@ fn main() {
         max_units: num(&args, "--units", 16),
         step_limit: num(&args, "--limit", 600),
         seat_swap: false,
+        opponent: 0,
     };
     eprintln!(
         "config: size {} decision_ticks {} max_units {} step_limit {}; seeds {lo}..{hi}, {} games per seat per pairing",
@@ -177,7 +182,7 @@ fn main() {
         if i > 0 {
             json.push_str(", ");
         }
-        json.push_str(&summary_json(name, &s));
+        json.push_str(&summary_json(name, &s, *a, *b));
     }
     json.push_str("}}\n");
     match arg(&args, "--out") {

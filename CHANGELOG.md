@@ -11,6 +11,12 @@ the API is not stable, and any 0.x release may break it.
 
 ### Changed
 
+- **`RtsConfig` gains `opponent`** (RTS stage 5c): 0 keeps the two-agent game; 1 to 3 put a scripted Rush,
+  Prospector or Random-legal opponent in agent slot 1, played inside the step from its own side's view, and the pool
+  has one agent. Gymnasium ids `tessera/RTS-vsRush-v1`, `tessera/RTS-vsProspector-v1` and `tessera/RTS-vsRandom-v1`
+  fix it. The new field changes every RTS config hash, so an RTS file persisted before this change is refused
+  (`PersistError::Incompatible { field: "config_hash" }`), never misread; outputs with `opponent = 0` are unchanged and
+  `ENV_VERSION` stays 2 (RTS has been in no release).
 - **`EngineError` is `#[non_exhaustive]` and has two new variants**, `NanDetected` and `AllocationInChunkStep`
   (ADR-0055); a breaking change for downstream exhaustive matches, for the next incompatible version. Both are
   declared in every build and constructed only with `debug-checks`.

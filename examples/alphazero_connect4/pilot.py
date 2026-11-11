@@ -730,16 +730,15 @@ def supervise(args, argv) -> int:
         start_new_session=True,
     )
 
-    def kill_group():
-        try:
-            os.killpg(proc.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
+    def kill_group() -> bool:
+        # The shared helper retries macOS's EPERM for an exiting group (#202).
+        return orphan.kill_group(proc)
 
     def on_term(signum, _frame):
-        kill_group()
+        gone = kill_group()
         proc.wait()
-        ledger.settle(index, time.monotonic() - start, f"interrupted by signal {signum}")
+        status = f"interrupted by signal {signum}" + ("" if gone else f" ({orphan.NOT_CONFIRMED})")
+        ledger.settle(index, time.monotonic() - start, status)
         os._exit(128 + signum)
 
     signal.signal(signal.SIGTERM, on_term)
@@ -749,10 +748,13 @@ def supervise(args, argv) -> int:
     except subprocess.TimeoutExpired:
         rc = None
     # Whatever happened, no descendant outlives the run.
-    kill_group()
+    gone = kill_group()
     proc.wait()
     wall = time.monotonic() - start
-    if rc is None or rc == -signal.SIGKILL:
+    if not gone:
+        # Fail closed, as supervisor.py: never ok while a member may run on.
+        status, code = f"failed: {orphan.NOT_CONFIRMED}", 1
+    elif rc is None or rc == -signal.SIGKILL:
         status, code = f"killed at the deadline ({work_s:.1f} s of work)", EXIT_DEADLINE
     elif rc == 0:
         status, code = "ok", 0

@@ -81,6 +81,7 @@ fn test_bots_act_never_allocates() {
         max_units: 16,
         step_limit: 600,
         seat_swap: false,
+        opponent: 0,
     };
     let options = PoolOptions::new(NonZeroU32::new(1).unwrap(), Seed::new(14));
     let mut p: EnvPool<Rts, Masked> = EnvPool::with_masks(c.clone(), options).unwrap();

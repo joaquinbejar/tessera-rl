@@ -18,6 +18,33 @@ pytestmark = pytest.mark.skipif(os.name == "nt", reason="POSIX only: a bash buil
 SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "pgo_w1_build.sh"
 
 
+# The caller's build environment the fixtures drop before spawning a build script,
+# so a test sees only what the script itself sets (CI exports RUSTFLAGS=-D warnings
+# workflow-wide; a developer may export any of these). An explicit list, not an
+# empty environment: the scripts still need PATH, HOME and the rest.
+#   RUSTFLAGS, CARGO_ENCODED_RUSTFLAGS, CARGO_BUILD_RUSTFLAGS: compiler flags; the fake
+#     maturin logs RUSTFLAGS and the W1/W2 equality test compares it.
+#   CARGO_PROFILE_* (prefix), RUSTC_WRAPPER, CARGO_BUILD_TARGET: change the build
+#     cargo would run; they land in the fake maturin's environment dump.
+#   RUSTDOCFLAGS, CARGO_TARGET_DIR: set by other CI jobs; the fake maturin logs
+#     CARGO_TARGET_DIR, and both land in the environment dump.
+#   CARGO_TERM_COLOR: set workflow-wide by CI; lands in the environment dump.
+AMBIENT_BUILD = ("RUSTFLAGS", "CARGO_ENCODED_RUSTFLAGS", "CARGO_BUILD_RUSTFLAGS", "RUSTC_WRAPPER",
+                 "CARGO_BUILD_TARGET", "RUSTDOCFLAGS", "CARGO_TARGET_DIR", "CARGO_TERM_COLOR")
+AMBIENT_BUILD_PREFIX = "CARGO_PROFILE_"
+HOSTILE = {"RUSTFLAGS": "-D warnings", "RUSTDOCFLAGS": "-D warnings", "CARGO_TARGET_DIR": "/nonexistent/target",
+           "CARGO_TERM_COLOR": "always", "CARGO_ENCODED_RUSTFLAGS": "-Cdebuginfo=2", "CARGO_BUILD_RUSTFLAGS": "-Copt-level=0",
+           "CARGO_PROFILE_WHEEL_OPT_LEVEL": "0", "RUSTC_WRAPPER": "/nonexistent/wrapper",
+           "CARGO_BUILD_TARGET": "aarch64-unknown-linux-gnu"}
+
+
+def clean_environ(path_prefix) -> dict:
+    env = {k: v for k, v in os.environ.items()
+           if k not in AMBIENT_BUILD and not k.startswith(AMBIENT_BUILD_PREFIX)}
+    env["PATH"] = f"{path_prefix}:{os.environ['PATH']}"
+    return env
+
+
 def tool(bin_dir: Path, name: str, body: str) -> None:
     p = bin_dir / name
     p.write_text("#!/bin/sh\n" + body)
@@ -28,7 +55,7 @@ def uv_tarball(log: Path) -> bytes:
     buf = io.BytesIO()
     with tarfile.open(fileobj=buf, mode="w:gz") as t:
         for name, body in {
-            "uvx": f'echo "uvx $*" >> {log}\nfor a in "$@"; do [ "$prev" = --out ] && touch "$a/tessera_rl-0.1.0-cp311-abi3-manylinux_2_28_x86_64.whl"; prev="$a"; done\n',
+            "uvx": f'[ -z "$FAKE_ENV_DUMP" ] || env | sort > "$FAKE_ENV_DUMP"\necho "uvx $*" >> {log}\nfor a in "$@"; do [ "$prev" = --out ] && touch "$a/tessera_rl-0.1.0-cp311-abi3-manylinux_2_28_x86_64.whl"; prev="$a"; done\n',
             "uv": f'echo "uv $*" >> {log}\nif [ "$1" = venv ]; then mkdir -p "$4/bin"; if [ -n "$FAKE_SYSTEM_PY" ]; then ln -s "$FAKE_SYSTEM_PY" "$4/bin/python"; else printf "#!/bin/sh\\necho py \\"\\$*\\" >> {log}\\n" > "$4/bin/python"; chmod +x "$4/bin/python"; fi; fi\n',
         }.items():
             data = ("#!/bin/sh\n" + body).encode()
@@ -54,7 +81,7 @@ def setup(tmp_path: Path, rustup_ok: bool = True):
 
 def run(tmp_path, rustup_ok=True, system_py=None):
     bin_dir, log, rsha, usha = setup(tmp_path, rustup_ok)
-    env = {**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}"}
+    env = clean_environ(bin_dir)
     if system_py:
         env["FAKE_SYSTEM_PY"] = str(system_py)
     out = tmp_path / "run"
@@ -134,7 +161,7 @@ def test_pgo_w1_build_no_wheel_fails_with_the_count_message(tmp_path):
             tar.addfile(info, i.BytesIO(data))
     uvx.write_bytes(buf.getvalue())
     usha = hashlib.sha256(uvx.read_bytes()).hexdigest()
-    env = {**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}"}
+    env = clean_environ(bin_dir)
     p = subprocess.run(["bash", str(SCRIPT), rsha, usha, str(tmp_path / "run")], env=env, capture_output=True, text=True, check=False)
     assert p.returncode != 0 and "expected one wheel, found 0" in p.stderr
 
@@ -142,3 +169,18 @@ def test_pgo_w1_build_no_wheel_fails_with_the_count_message(tmp_path):
 def test_pgo_w1_build_sets_a_writable_home(tmp_path):
     p, out, _ = run(tmp_path)
     assert p.returncode == 0 and (out / "w1" / "home").is_dir()
+
+
+def test_pgo_w1_build_fixture_keeps_the_callers_build_environment_out(tmp_path, monkeypatch):
+    # Pins clean_environ(): with a hostile caller, the fake maturin sees none of it except
+    # CARGO_TARGET_DIR, which the script itself sets under the run dir.
+    for k, v in HOSTILE.items():
+        monkeypatch.setenv(k, v)
+    dump = tmp_path / "uvx.env"
+    monkeypatch.setenv("FAKE_ENV_DUMP", str(dump))
+    p, out, _ = run(tmp_path)
+    assert p.returncode == 0, p.stderr
+    seen = dict(line.partition("=")[::2] for line in dump.read_text().splitlines())
+    leaked = {k: seen[k] for k in HOSTILE if k in seen and k != "CARGO_TARGET_DIR"}
+    assert leaked == {}
+    assert seen["CARGO_TARGET_DIR"] == str(out / "w1" / "target")

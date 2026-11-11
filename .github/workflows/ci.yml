@@ -180,7 +180,7 @@ jobs:
       # Two hosts carry linux-x64: the log names the one that ran this job.
       - run: hostname && grep -m1 'model name' /proc/cpuinfo
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - run: cargo test -p tessera-rl-engine --lib --release --locked -- gang storage ring id_buffers live_model
+      - run: cargo test -p tessera-rl-engine --lib --release --locked -- gang storage ring id_buffers live_model waiter
         env:
           RUSTFLAGS: --cfg loom
           LOOM_MAX_PREEMPTIONS: "3"

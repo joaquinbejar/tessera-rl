@@ -159,6 +159,27 @@ pub fn pairing(cfg: &RtsConfig, first: Bot, second: Bot, seeds: core::ops::Range
     sum
 }
 
+/// The counts the intervals are computed over: A's wins, B's wins, draws,
+/// truncations, over independent games only. When both bots are scripted
+/// they draw nothing, so seed k's seat-swapped game is the exact mirror of
+/// its first game and adds no information: the counts are seat Zero's, one
+/// game per seed (the record's R1). The choice is made from the bots, not
+/// from the results; the mirror is checked, and a pairing whose seats
+/// disagree is refused. With Random-legal in the pairing the seats draw on
+/// different streams, and both seats count.
+#[must_use]
+pub fn independent_counts(s: &Summary, first: Bot, second: Bot) -> [u32; 4] {
+    if first != Bot::RandomLegal && second != Bot::RandomLegal {
+        assert_eq!(
+            s.by_seat[0], s.by_seat[1],
+            "two scripted bots must give mirror games in both seats"
+        );
+        s.by_seat[0]
+    } else {
+        core::array::from_fn(|k| s.by_seat[0][k] + s.by_seat[1][k])
+    }
+}
+
 /// The Wilson 95% interval of `k` successes in `n` trials, as (low, high).
 #[must_use]
 pub fn wilson(k: u32, n: u32) -> (f64, f64) {
