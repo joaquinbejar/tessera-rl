@@ -240,6 +240,7 @@ static METHODS: Table<[ffi::PyMethodDef; METHOD_COUNT]> = Table([
     env_type::MAKERS[11],
     env_type::MAKERS[12],
     env_type::MAKERS[13],
+    env_type::MAKERS[14],
     search_type::MAKER,
     search_group_type::MAKER,
     #[cfg(feature = "test-hooks")]

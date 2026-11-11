@@ -28,6 +28,7 @@ tessera-rl-engine.workspace = true
 tessera-rl-classic.workspace = true
 tessera-rl-games.workspace = true
 tessera-rl-search.workspace = true
+tessera-rl-rts.workspace = true
 # The panic-injection fixture, behind `test-hooks` only.
 tessera-rl-macros = { workspace = true, optional = true }
 

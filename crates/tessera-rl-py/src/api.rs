@@ -67,6 +67,10 @@ impl<'a> Kwargs<'a> {
             .transpose()
     }
 
+    pub(crate) fn bool(&self, g: Gil, key: &str) -> CResult<Option<bool>> {
+        self.get(key).map(|v| capi::to_bool(g, v, key)).transpose()
+    }
+
     pub(crate) fn u64(&self, g: Gil, key: &str) -> CResult<Option<u64>> {
         self.get(key).map(|v| capi::to_u64(g, v, key)).transpose()
     }
@@ -388,6 +392,37 @@ pub(crate) fn make_snake(g: Gil, kwargs: Option<Ref<'_>>) -> CResult<Inner> {
     Ok(Inner::new(ops, borrowed))
 }
 
+const RTS_KEYS: [&str; 6] = [
+    "size",
+    "decision_ticks",
+    "max_units",
+    "step_limit",
+    "seat_swap",
+    "outputs",
+];
+
+/// `make_rts(**kwargs)`: the pool of an RTS environment object
+/// (`tessera/RTS-v1`). Every `RtsConfig` field by name; the episode ends at
+/// the environment's own `step_limit` (in decisions), so
+/// `max_episode_steps` defaults to 0 (no extra limit).
+pub(crate) fn make_rts(g: Gil, kwargs: Option<Ref<'_>>) -> CResult<Inner> {
+    let kw = Kwargs::parse(g, kwargs)?;
+    kw.check(g, &[&POOL_KEYS, &RTS_KEYS])?;
+    let borrowed = borrowed(g, &kw)?;
+    let args = pool_args(g, &kw, 0)?;
+    let fields = crate::env::RtsFields {
+        size: kw.u32(g, "size")?,
+        decision_ticks: kw.u32(g, "decision_ticks")?,
+        max_units: kw.u32(g, "max_units")?,
+        step_limit: kw.u32(g, "step_limit")?,
+        seat_swap: kw.bool(g, "seat_swap")?,
+    };
+    let ops = g
+        .detach(|| crate::env::rts(&args, &fields))
+        .map_err(|e| to_py(g, e))?;
+    Ok(Inner::new(ops, borrowed))
+}
+
 const TAG_KEYS: [&str; 7] = [
     "width", "height", "pursuers", "evaders", "slip", "radius", "outputs",
 ];
@@ -504,6 +539,21 @@ pub(crate) fn layout(g: Gil, inner: &Inner) -> CResult<Mine> {
         };
         capi::dict_set(g, &d, c"action_bounds", &bounds)?;
         capi::dict_set(g, &d, c"mask_len", &int(g, l.mask_len)?)?;
+        let heads = list_of(
+            g,
+            l.mask_heads.iter().map(|(offset, parents, size)| {
+                capi::tuple(
+                    g,
+                    vec![
+                        int(g, *offset)?,
+                        list_of(g, parents.iter().map(|&p| int(g, p)))?,
+                        int(g, *size)?,
+                    ],
+                )
+            }),
+        )?;
+        capi::dict_set(g, &d, c"mask_heads", &heads)?;
+        capi::dict_set(g, &d, c"entity_group_heads", &int(g, l.entity_group_heads)?)?;
         capi::dict_set(g, &d, c"turns", &capi::string(g, l.turns)?)?;
         let mode = if inner.borrowed() {
             "borrowed"
@@ -983,6 +1033,29 @@ pub(crate) fn snapshot(g: Gil, inner: &Inner, args: Ref<'_>) -> CResult<Mine> {
     inner.with(g, |ops| {
         let bytes = ops.snapshot(id).map_err(|e| to_py(g, e))?;
         capi::bytes(g, &bytes)
+    })
+}
+
+/// `illegal_actions(id) -> list[int]`: instance `id`'s illegal-but-valid
+/// actions replaced in its current episode, per agent slot (sync mode).
+pub(crate) fn illegal_actions(g: Gil, inner: &Inner, args: Ref<'_>) -> CResult<Mine> {
+    let a: [Ref<'_>; 1] = exactly(g, args, "illegal_actions")?;
+    let [id] = a;
+    let id = capi::to_u32(g, id, "id")?;
+    inner.with(g, |ops| {
+        let counts = ops.illegal_actions(id).map_err(|e| to_py(g, e))?;
+        list_of(g, counts.iter().map(|&c| capi::int_u64(g, c.into())))
+    })
+}
+
+/// `state_hash(id) -> int`: instance `id`'s state hash (sync mode).
+pub(crate) fn state_hash(g: Gil, inner: &Inner, args: Ref<'_>) -> CResult<Mine> {
+    let a: [Ref<'_>; 1] = exactly(g, args, "state_hash")?;
+    let [id] = a;
+    let id = capi::to_u32(g, id, "id")?;
+    inner.with(g, |ops| {
+        let hash = ops.state_hash(id).map_err(|e| to_py(g, e))?;
+        capi::int_u64(g, hash)
     })
 }
 

@@ -621,6 +621,7 @@ thunk!(MAKE_SNAKE: CFunctionKw = thunk_make_snake => env_type::make_snake : fn(O
 thunk!(MAKE_BRICKWALL: CFunctionKw = thunk_make_brickwall => env_type::make_brickwall : fn(Obj, Obj, Obj) -> Obj);
 thunk!(MAKE_PADDLEDUEL: CFunctionKw = thunk_make_paddleduel => env_type::make_paddleduel : fn(Obj, Obj, Obj) -> Obj);
 thunk!(MAKE_TAG: CFunctionKw = thunk_make_tag => env_type::make_tag : fn(Obj, Obj, Obj) -> Obj);
+thunk!(MAKE_RTS: CFunctionKw = thunk_make_rts => env_type::make_rts : fn(Obj, Obj, Obj) -> Obj);
 thunk!(MAKE_CONNECT4: CFunctionKw = thunk_make_connect4 => env_type::make_connect4 : fn(Obj, Obj, Obj) -> Obj);
 thunk!(MAKE_LEDUC: CFunctionKw = thunk_make_leduc => env_type::make_leduc : fn(Obj, Obj, Obj) -> Obj);
 thunk!(MAKE_OTHELLO: CFunctionKw = thunk_make_othello => env_type::make_othello : fn(Obj, Obj, Obj) -> Obj);
@@ -632,6 +633,8 @@ thunk!(CLOSE: CFunction = thunk_close => env_type::close : fn(Obj, Obj) -> Obj);
 thunk!(RESET: CFunction = thunk_reset => env_type::reset : fn(Obj, Obj) -> Obj);
 thunk!(STEP: CFunction = thunk_step => env_type::step : fn(Obj, Obj) -> Obj);
 thunk!(SNAPSHOT: CFunction = thunk_snapshot => env_type::snapshot : fn(Obj, Obj) -> Obj);
+thunk!(STATE_HASH: CFunction = thunk_state_hash => env_type::state_hash : fn(Obj, Obj) -> Obj);
+thunk!(ILLEGAL_ACTIONS: CFunction = thunk_illegal_actions => env_type::illegal_actions : fn(Obj, Obj) -> Obj);
 thunk!(IMPORT_RECORD: CFunction = thunk_import_record => env_type::import_record : fn(Obj, Obj) -> Obj);
 thunk!(FORK: CFunction = thunk_fork => env_type::fork : fn(Obj, Obj) -> Obj);
 thunk!(ENCODE: CFunction = thunk_encode => env_type::encode : fn(Obj, Obj) -> Obj);

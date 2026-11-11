@@ -594,3 +594,14 @@ def test_jax_split_phase_modes_and_outputs_are_refused():
     for kw in ({"mode": "pipelined"}, {"mode": "async", "batch_size": 1}, {"outputs": "borrowed"}, {"batch_size": 1}):
         with pytest.raises(t.ArgumentError):
             tjax.make("tessera/CartPole-v1", num_envs=2, seed=0, **kw)
+
+
+def test_jax_refuses_a_multi_head_pool():
+    """RTS has three discrete heads per unit slot: refused at construction,
+    not inside the callback (RTS stage 4 PR A, TR's finding 4)."""
+    pool = native("tessera/RTS-v1", 1, 0)
+    try:
+        with pytest.raises(t.ArgumentError):
+            tjax.Env(pool)
+    finally:
+        pool.close()

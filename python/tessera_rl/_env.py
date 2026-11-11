@@ -186,6 +186,13 @@ class Env:
         #: shape ``(rows, agents, heads)``.
         self.action_nvec: tuple[int, ...] = tuple(layout["action_nvec"])
         self._mask_len: int = layout["mask_len"]
+        #: Each discrete head's block in an agent's mask row (SPEC 11.3):
+        #: ``(offset, parent sizes, choices)``; empty without masks.
+        self.mask_heads: tuple[tuple[int, tuple[int, ...], int], ...] = tuple(
+            (offset, tuple(parents), size) for offset, parents, size in layout["mask_heads"]
+        )
+        #: Discrete heads per entity group (ADR-0051), 0 when none.
+        self.entity_group_heads: int = layout["entity_group_heads"]
         #: ``"simultaneous"``, ``"sequential"`` or ``"mixed"`` (ADR-0013).
         self.turns: str = layout["turns"]
         self.outputs: str = layout["outputs"]
@@ -354,6 +361,20 @@ class Env:
         record for ``restore`` (see the class notes)."""
         return self._native.snapshot(_index(index, "index"))
 
+    def illegal_actions(self, index: int) -> list[int]:
+        """Illegal-but-valid actions replaced in instance ``index``'s current
+        episode, per agent slot (the record's statistic). Sync mode only.
+
+        With entity groups (ADR-0051, the RTS), each group counts on its
+        own: an order other than the no-op on an empty or dead unit slot
+        counts one."""
+        return self._native.illegal_actions(_index(index, "index"))
+
+    def state_hash(self, index: int) -> int:
+        """Instance ``index``'s state hash, as Rust's goldens fold it. Sync
+        mode only."""
+        return self._native.state_hash(_index(index, "index"))
+
     def import_record(self, index: int, record: bytes) -> None:
         """Imports an (untrusted) record into instance ``index``."""
         self._native.import_record(_index(index, "index"), bytes(record))
@@ -494,8 +515,12 @@ def _index(value, what: str) -> int:
 _STRING_OPTIONS = {"auto_reset", "outputs", "mode", "gather", "obs"}
 
 
+#: Constructor options passed as exact ``bool`` (the RTS ``seat_swap``).
+_BOOL_OPTIONS = frozenset({"seat_swap"})
+
+
 def native_kwargs(**kwargs) -> dict:
-    """Constructor options as exact ``int``/``str``/``None`` values for the
+    """Constructor options as exact ``int``/``str``/``bool``/``None`` values for the
     native module (see ``_index``)."""
     out = {}
     for key, value in kwargs.items():
@@ -503,6 +528,10 @@ def native_kwargs(**kwargs) -> dict:
             out[key] = None
         elif key in _STRING_OPTIONS:
             out[key] = str(value)
+        elif key in _BOOL_OPTIONS:
+            if not isinstance(value, (bool, np.bool_)):
+                raise TypeError(f"{key} must be a bool, got {type(value).__name__}")
+            out[key] = bool(value)
         else:
             out[key] = _index(value, key)
     return out
@@ -568,6 +597,7 @@ def make(env_id: str, num_envs: int = 1, seed: int = 0, outputs: str = "borrowed
         "tessera/Acrobot-v1": _native.make_acrobot,
         "tessera/Pendulum-v1": _native.make_pendulum,
         "tessera/Tag-v1": _native.make_tag,
+        "tessera/RTS-v1": _native.make_rts,
         "tessera/Grid-v1": _native.make_grid,
         "tessera/GridKeyDoor-v1": _native.make_keydoor,
         "tessera/Snake-v1": _native.make_snake,

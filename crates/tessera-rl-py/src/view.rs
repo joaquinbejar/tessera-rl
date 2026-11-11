@@ -244,6 +244,8 @@ mod tests {
             action_nvec: vec![2],
             action_bounds: None,
             mask_len: 5,
+            mask_heads: vec![(0, vec![], 2)],
+            entity_group_heads: 0,
             turns: "simultaneous",
             terminal: true,
         };
