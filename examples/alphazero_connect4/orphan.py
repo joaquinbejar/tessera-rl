@@ -18,8 +18,13 @@ from __future__ import annotations
 import os
 import signal
 import sys
+import time
 
 FLAG = "--supervisor-pid"
+# How long a group kill that macOS refused with EPERM is retried before the
+# group is reported as not confirmed gone.
+KILL_CONFIRM_S = 1.5
+NOT_CONFIRMED = "the process group was not confirmed gone (killpg EPERM)"
 # The watchdog's poll interval: an orphan is seen within one poll.
 POLL_S = 0.2
 
@@ -32,9 +37,46 @@ def supervisor_pid(argv: list[str]) -> int | None:
 
 def check(pid: int) -> None:
     """Kills this child's whole process group (its workers and the bot
-    included) if its parent is no longer the supervisor ``pid``."""
+    included) if its parent is no longer the supervisor ``pid``.
+
+    The group is killed only when this process leads it, as a child the
+    supervisor started in a new session does (issue #207). A process started
+    with the flag by hand, or by a caller that forgot the new session, shares
+    its caller's group; it then kills only itself, never its caller."""
     if os.getppid() != pid:
-        os.killpg(0, signal.SIGKILL)
+        if os.getpgid(0) == os.getpid():
+            os.killpg(0, signal.SIGKILL)
+        os.kill(os.getpid(), signal.SIGKILL)
+
+
+def kill_group(proc, confirm_s: float = KILL_CONFIRM_S) -> bool:
+    """Kills the group led by the child ``proc`` (a ``subprocess.Popen``
+    started in a new session). Returns False only when an EPERM could not be
+    followed by ESRCH within ``confirm_s``, so a member may still be alive.
+
+    macOS answers EPERM for a group whose remaining members are exiting
+    (zombies), under load right after the child returns (issue #202). Only
+    ESRCH proves the group is empty, so the kill is retried until it does,
+    killing and reaping the leader directly meanwhile."""
+    try:
+        os.killpg(proc.pid, signal.SIGKILL)
+        return True
+    except ProcessLookupError:
+        return True
+    except PermissionError:
+        pass
+    end = time.monotonic() + confirm_s
+    while time.monotonic() < end:
+        if proc.poll() is None:
+            proc.kill()
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            return True
+        except PermissionError:
+            pass
+        time.sleep(0.05)
+    return False
 
 
 def check_argv(argv: list[str] | None = None) -> None:
