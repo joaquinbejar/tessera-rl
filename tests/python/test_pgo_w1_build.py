@@ -18,15 +18,25 @@ pytestmark = pytest.mark.skipif(os.name == "nt", reason="POSIX only: a bash buil
 SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "pgo_w1_build.sh"
 
 
-# Variables of the caller's build environment (CI sets RUSTFLAGS and CARGO_TERM_COLOR
-# workflow-wide, other jobs RUSTDOCFLAGS and CARGO_TARGET_DIR) that the fake tools log
-# or that cargo and maturin read; the fixtures drop them so a test sees only what the
-# script itself sets.
-AMBIENT_BUILD = ("RUST", "CARGO", "MATURIN", "LLVM_PROFILE")
+# The caller's build environment the fixtures drop before spawning a build script,
+# so a test sees only what the script itself sets (CI exports RUSTFLAGS=-D warnings
+# workflow-wide; a developer may export any of these). An explicit list, not an
+# empty environment: the scripts still need PATH, HOME and the rest.
+#   RUSTFLAGS, CARGO_ENCODED_RUSTFLAGS, CARGO_BUILD_RUSTFLAGS: compiler flags; the fake
+#     maturin logs RUSTFLAGS and the W1/W2 equality test compares it.
+#   CARGO_PROFILE_* (prefix), RUSTC_WRAPPER, CARGO_BUILD_TARGET: change the build
+#     cargo would run; they land in the fake maturin's environment dump.
+#   RUSTDOCFLAGS, CARGO_TARGET_DIR: set by other CI jobs; the fake maturin logs
+#     CARGO_TARGET_DIR, and both land in the environment dump.
+#   CARGO_TERM_COLOR: set workflow-wide by CI; lands in the environment dump.
+AMBIENT_BUILD = ("RUSTFLAGS", "CARGO_ENCODED_RUSTFLAGS", "CARGO_BUILD_RUSTFLAGS", "RUSTC_WRAPPER",
+                 "CARGO_BUILD_TARGET", "RUSTDOCFLAGS", "CARGO_TARGET_DIR", "CARGO_TERM_COLOR")
+AMBIENT_BUILD_PREFIX = "CARGO_PROFILE_"
 
 
 def clean_environ(path_prefix) -> dict:
-    env = {k: v for k, v in os.environ.items() if not k.startswith(AMBIENT_BUILD)}
+    env = {k: v for k, v in os.environ.items()
+           if k not in AMBIENT_BUILD and not k.startswith(AMBIENT_BUILD_PREFIX)}
     env["PATH"] = f"{path_prefix}:{os.environ['PATH']}"
     return env
 
