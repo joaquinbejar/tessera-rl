@@ -51,7 +51,10 @@ def test_gym_masks_in_info_equal_the_native_head_views():
         views = head_views(out.masks, native.mask_heads, native.entity_group_heads)
         for got, want in zip(info["action_masks"], views, strict=True):
             assert (got == want[0, 0]).all()
+        # G2: the root mask is the type head, in its own shape.
+        assert info["action_mask"].shape == (SMALL["max_units"], 6)
         assert (info["action_mask"] == info["action_masks"][0]).all()
+        assert (info["action_mask"] == views[0][0, 0]).all()
         act = np.zeros(24, dtype=np.int64)
         _, _, term, trunc, info = e.step(act)
         out = native.step(np.zeros((1, 2, 24), dtype=np.int32))
@@ -65,3 +68,48 @@ def test_the_registered_environment_stays_rts_v1():
     ids = {row[0] for row in _native.registered_envs()}
     assert "tessera/RTS-v1" in ids
     assert not any(i.startswith("tessera/RTS-vs") for i in ids)
+
+
+def _trace(step, reset, n=40):
+    """State hashes over a fixed no-op action stream: the opponent's orders
+    change the state even where the learner's fog hides them."""
+    out = [reset()]
+    for _ in range(n):
+        obs, done = step()
+        out.append(obs)
+        if done:
+            break
+    return out
+
+
+@pytest.mark.parametrize("env_id", sorted(IDS))
+def test_gym_id_plays_its_named_opponent(env_id):
+    # G1: each id's trajectory under a fixed action stream equals the native
+    # make_rts(opponent=k) one for its own k and differs for the others.
+    e = gymnasium.make(env_id, **SMALL).unwrapped
+
+    def gym_reset():
+        e.reset(seed=6)
+        return e._vec._native.state_hash(0)
+
+    def gym_step():
+        _, _, term, trunc, _ = e.step(np.zeros(24, dtype=np.int64))
+        return e._vec._native.state_hash(0), bool(term or trunc)
+
+    got = _trace(gym_step, gym_reset)
+    e.close()
+    for code in IDS.values():
+        n = make("tessera/RTS-v1", num_envs=1, seed=6, outputs="owned", auto_reset="disabled", opponent=code, **SMALL)
+
+        def nat_reset(n=n):
+            n.reset(6)
+            return n.state_hash(0)
+
+        def nat_step(n=n):
+            out = n.step(np.zeros((1, 2, 24), dtype=np.int32))
+            return n.state_hash(0), bool(out.episode_terminated[0] or out.episode_truncated[0])
+
+        want = _trace(nat_step, nat_reset)
+        n.close()
+        same = got == want
+        assert same == (code == IDS[env_id]), (env_id, code)
