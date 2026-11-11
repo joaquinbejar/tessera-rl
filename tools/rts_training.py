@@ -47,7 +47,8 @@ class Hyper:
     """The protocol's frozen hyperparameters (CleanRL ``ppo.py`` defaults,
     ``num_envs`` 16 and ``num_steps`` 128)."""
 
-    total_steps: int = 1_740_800
+    # The owner's budget B (2026-11-11): 840 whole updates of 2,048 decisions.
+    total_steps: int = 1_720_320
     num_envs: int = 16
     num_steps: int = 128
     learning_rate: float = 2.5e-4
@@ -222,12 +223,41 @@ def update(agent: Agent, optimizer, h: Hyper, batch: dict, next_value, next_done
     return stats
 
 
+def lr_at(u: int, updates: int, h: Hyper) -> float:
+    """The learning rate of update ``u`` of ``updates`` (CleanRL's linear
+    anneal from ``learning_rate`` towards 0)."""
+    return (1.0 - u / updates) * h.learning_rate if h.anneal_lr else h.learning_rate
+
+
+def next_state(agent: Agent, state) -> tuple[torch.Tensor, torch.Tensor]:
+    """The bootstrap value and done flags after a rollout, from its final
+    state ``(obs, masks, done)``: V of the next observation, and whether
+    that observation starts a new episode."""
+    planes, globals_ = tensors(state[0])
+    with torch.no_grad():
+        next_value = agent.value(planes, globals_)
+    return next_value, torch.as_tensor(state[2], dtype=torch.float32)
+
+
+def authorize(authorization: str, frozen_sha256: str) -> None:
+    """Refuses unless ``authorization`` equals the non-empty frozen sha256."""
+    if not frozen_sha256 or authorization != frozen_sha256:
+        raise PermissionError("no training run without the frozen protocol's sha256 as authorization")
+
+
 def train(seed: int, h: Hyper, authorization: str, frozen_sha256: str) -> Agent:
     """A full training run. Refused unless ``authorization`` equals the
     protocol's frozen sha256 (``frozen_sha256``) and both are non-empty: a
-    run exists only after the freeze and the owner's authorization."""
-    if not frozen_sha256 or authorization != frozen_sha256:
-        raise PermissionError("no training run without the frozen protocol's sha256 as authorization")
+    run exists only after the freeze and the owner's authorization.
+
+    One CPU thread (``torch.set_num_threads(1)``), as the protocol's cost
+    figure. A smoke run (protocol: at most 3 updates, disclosed) goes through
+    here too, with ``Hyper(total_steps=3 * 2048)`` and the same authorization.
+    Saving the final policy and the record of seed, Hyper and versions, and
+    the evaluation, come in the next PR (the evaluation tool); this function
+    returns the agent only."""
+    authorize(authorization, frozen_sha256)
+    torch.set_num_threads(1)
     torch.manual_seed(seed)
     np.random.seed(seed)
     envs = Seats(h, seed)
@@ -235,16 +265,12 @@ def train(seed: int, h: Hyper, authorization: str, frozen_sha256: str) -> Agent:
     optimizer = torch.optim.Adam(agent.parameters(), lr=h.learning_rate, eps=1e-5)
     obs, masks = envs.reset(seed=seed)
     state = (obs, masks, np.zeros(h.num_envs, dtype=bool))
-    batch_size = h.num_envs * h.num_steps
-    updates = h.total_steps // batch_size
+    updates = h.total_steps // (h.num_envs * h.num_steps)
     rng = np.random.default_rng(seed)
     for u in range(updates):
-        if h.anneal_lr:
-            optimizer.param_groups[0]["lr"] = (1.0 - u / updates) * h.learning_rate
+        optimizer.param_groups[0]["lr"] = lr_at(u, updates, h)
         batch, state = rollout(agent, envs, h, state)
-        planes, globals_ = tensors(state[0])
-        with torch.no_grad():
-            next_value = agent.value(planes, globals_)
-        update(agent, optimizer, h, batch, next_value, torch.as_tensor(state[2], dtype=torch.float32), rng)
+        next_value, next_done = next_state(agent, state)
+        update(agent, optimizer, h, batch, next_value, next_done, rng)
     envs.close()
     return agent
