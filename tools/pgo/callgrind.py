@@ -391,7 +391,10 @@ def merge(args) -> int:
         return 2
     global STAMP
     want = hashes(args)
-    parts = sorted([*args.out_dir.glob("feasibility.part.*.json"), *args.out_dir.glob("costs.part.*.json")])
+    # The gate reads only gate parts. Costs read both kinds: a wheel's costs
+    # parts, or, for W1, the gate's own parts, whose A/A units are the same files.
+    kinds = ("feasibility", "costs") if args.costs else ("feasibility",)
+    parts = sorted(p for k in kinds for p in args.out_dir.glob(f"{k}.part.*.json"))
     if not parts:
         print("refused: no part reports to merge", file=sys.stderr)
         return 2

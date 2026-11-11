@@ -902,3 +902,33 @@ def test_pgo_costs_probe_on_a_wheel_is_reused_by_its_parts(tmp_path):
     again = FakeValgrind()
     run_costs_parts(out, wheel, [[f"state/Grid-v1#aa{i}" for i in range(5)]], runner=again)
     assert len(again.calls) == 9, "the probe's N run is aa0's first file"
+
+
+def test_pgo_gate_merge_ignores_costs_parts(tmp_path):
+    # A costs part in a gate's out dir neither completes nor spoils the gate merge.
+    out, wheel, _ = run_parts(tmp_path, [all_names()[:-1]])
+    run_costs_parts(out, wheel, [[u for u in callgrind.aa_units(MANIFEST) if u.startswith(all_names()[-1] + "#")]])
+    assert merge_now(out, wheel) == 2, "the gate's last scenario is not covered by a gate part"
+    run_parts(tmp_path, [all_names()[-1:]])
+    assert merge_now(out, wheel) == 0
+    report = json.loads((out / "feasibility.json").read_text())
+    assert all(p.startswith("feasibility.part.") for p in report["merged_parts"])
+
+
+def test_pgo_costs_merge_refuses_parts_from_another_stamp(tmp_path):
+    out = tmp_path / "w0"
+    wheel = tmp_path / "w0.whl"
+    wheel.write_bytes(b"w0")
+    units = callgrind.aa_units(MANIFEST)
+    run_costs_parts(out, wheel, [units[0::2]])
+    run_costs_parts(out, wheel, [units[1::2]], env=fake_environment(cpu_flags="flags-b"))
+    assert costs_merge(out, wheel) == 2 and not (out / "costs.json").exists()
+
+
+def test_pgo_costs_merge_refuses_overlapping_parts(tmp_path):
+    out = tmp_path / "w0"
+    wheel = tmp_path / "w0.whl"
+    wheel.write_bytes(b"w0")
+    units = callgrind.aa_units(MANIFEST)
+    run_costs_parts(out, wheel, [units[:60], units[50:]])
+    assert costs_merge(out, wheel) == 2 and not (out / "costs.json").exists()
