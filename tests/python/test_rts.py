@@ -207,3 +207,51 @@ def test_pufferlib_refuses_rts():
         pytest.skip("needs PufferLib (the puffer group)")
     with pytest.raises(_native.ArgumentError):
         puffer.make_puffer(ID)
+
+
+# -- config reaches Rust, and determinism (TR on PR B) ------------------------
+
+
+def play(e, steps, seeds):
+    """Legal play from per-instance generators, instance i drawing from
+    ``Rng(seeds[i])``, so an instance's actions depend on itself only."""
+    rngs = [Rng(s) for s in seeds]
+    masks = e.reset().masks.copy()
+    units = len(e.action_nvec) // 3
+    for _ in range(steps):
+        acts = np.concatenate([legal_actions(r, masks[i : i + 1], units) for i, r in enumerate(rngs)])
+        out = e.step(acts)
+        masks = out.masks.copy()
+    return out
+
+
+def test_seat_swap_reaches_rust_and_only_renames_the_sides():
+    # Agent 0 plays side Zero, or side One with seat_swap. Under the same
+    # actions the worlds differ (mirror images, different hashes), while
+    # agent 0's own view, in its side's frame, is the same.
+    runs = {}
+    for swap in (False, True):
+        with make(ID, num_envs=1, seed=5, outputs="owned", size=12, max_units=6, seat_swap=swap) as e:
+            out = play(e, 12, [11])
+            runs[swap] = (e.state_hash(0), {k: v[0, 0].copy() for k, v in out.observations.items()})
+    assert runs[False][0] != runs[True][0]
+    for k in runs[False][1]:
+        assert (runs[False][1][k] == runs[True][1][k]).all(), k
+
+
+def test_decision_ticks_changes_the_trajectory():
+    hashes = []
+    for ticks in (4, 2):
+        with make(ID, num_envs=1, seed=5, outputs="owned", size=12, max_units=6, decision_ticks=ticks) as e:
+            play(e, 8, [11])
+            hashes.append(e.state_hash(0))
+    assert hashes[0] != hashes[1]
+
+
+def test_trajectory_per_instance_is_identical_across_num_envs_and_workers():
+    got = []
+    for n, workers in ((2, 0), (6, 0), (6, 3)):
+        with make(ID, num_envs=n, seed=9, outputs="owned", size=12, max_units=6, workers=workers) as e:
+            play(e, 20, [100 + i for i in range(n)])
+            got.append([e.state_hash(i) for i in range(2)])
+    assert got[0] == got[1] == got[2]
