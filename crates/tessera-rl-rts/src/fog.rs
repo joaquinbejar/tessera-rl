@@ -92,3 +92,65 @@ pub(crate) fn check_explored(cfg: &RtsConfig, s: &RtsState) -> Result<(), &'stat
     }
     Ok(())
 }
+
+/// The state as `team` knows it: the side view the scripted bots read
+/// (`rts-design.md` section 14, ruling 5). It is a function of what `team`
+/// sees and has explored only, so two states that differ in hidden facts
+/// give byte-identical views:
+/// - own units, terrain where explored and own ore are kept;
+/// - enemy units are kept only on cells `team` sees now, without the
+///   facts the observation never shows (carry, counter, progress,
+///   production, generation, whether it is finished), and packed into the enemy's slots in cell
+///   order, so the enemy's slot numbering is hidden too;
+/// - terrain is open where `team` has not explored; the enemy's ore and
+///   explored bits are cleared.
+///
+/// A plain copy on the stack: no allocation.
+#[must_use]
+pub fn seen(cfg: &RtsConfig, s: &RtsState, team: Team) -> RtsState {
+    use crate::env::{SIDE_SLOTS, index_of, side_of_slot};
+    use crate::units::Unit;
+    let sees = visible(cfg, s, team);
+    let mut v = *s;
+    let enemy = 1 - index_of(team);
+    let base = enemy * SIDE_SLOTS;
+    let mut shown = [Unit::default(); SIDE_SLOTS];
+    let mut n = 0;
+    for (slot, u) in s.units.iter().enumerate() {
+        if side_of_slot(slot) == team || !u.alive.get() {
+            continue;
+        }
+        if sees.get(usize::from(u.cell)).copied().unwrap_or(false)
+            && let Some(out) = shown.get_mut(n)
+        {
+            *out = Unit {
+                carry: 0,
+                counter: 0,
+                progress: 0,
+                producing: 0,
+                generation: 0,
+                finished: tessera_rl_core::Bool8::TRUE,
+                ..*u
+            };
+            n += 1;
+        }
+    }
+    if let Some(packed) = shown.get_mut(..n) {
+        packed.sort_unstable_by_key(|u| u.cell);
+    }
+    if let Some(slots) = v.units.get_mut(base..base + SIDE_SLOTS) {
+        slots.copy_from_slice(&shown);
+    }
+    let own = side_bit(team);
+    let cells = usize::from(grid(cfg).cells());
+    for (cell, (t, e)) in v.terrain.iter_mut().zip(v.explored.iter_mut()).enumerate() {
+        if *e & own == 0 && cell < cells {
+            *t = crate::world::Terrain::Open as u8;
+        }
+        *e &= own;
+    }
+    if let Some(o) = v.ore.get_mut(enemy) {
+        *o = 0;
+    }
+    v
+}
