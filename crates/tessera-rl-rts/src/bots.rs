@@ -197,6 +197,8 @@ struct Walker<'a> {
     s: &'a RtsState,
     occ: &'a [u16; MAX_CELLS],
     slot: usize,
+    /// Cells an earlier unit of this side moves into this decision.
+    claimed: &'a [bool; MAX_CELLS],
 }
 
 impl Walker<'_> {
@@ -224,24 +226,27 @@ impl Walker<'_> {
     fn walk(&self, cell: u16, field: &Field, block: &Block) -> Option<Order> {
         let dir = field.descend(self.g, cell, self.team)?;
         let next = self.g.step(cell, dir)?;
-        match self.own_mobile_at(next) {
-            Some(j) if !self.first(j) => {
-                // Aside to a free cell, no farther from the goal if one
-                // exists, else any: the unit that goes first must get by.
-                let here = field.distance(cell);
-                let aside = |close: bool| {
-                    Dir::order(self.team).into_iter().find_map(|d| {
-                        let n = self.g.step(cell, d)?;
-                        let free = self.occ.get(usize::from(n)) == Some(&u16::MAX);
-                        (n != next && free && (!close || field.distance(n) <= here))
-                            .then(|| step_order(self.team, d, block))
-                            .flatten()
-                    })
-                };
-                aside(true).or_else(|| aside(false))
-            }
-            _ => step_order(self.team, dir, block),
+        let taken = |n: u16| self.claimed.get(usize::from(n)).copied().unwrap_or(false);
+        // Two own units ordered into one free cell are both refused (rule
+        // 1) and would repeat it every decision: a cell an earlier unit
+        // claimed this decision counts as occupied.
+        let blocked = taken(next) || matches!(self.own_mobile_at(next), Some(j) if !self.first(j));
+        if !blocked {
+            return step_order(self.team, dir, block);
         }
+        // Aside to a free cell, no farther from the goal if one
+        // exists, else any: the unit that goes first must get by.
+        let here = field.distance(cell);
+        let aside = |close: bool| {
+            Dir::order(self.team).into_iter().find_map(|d| {
+                let n = self.g.step(cell, d)?;
+                let free = self.occ.get(usize::from(n)) == Some(&u16::MAX) && !taken(n);
+                (n != next && free && (!close || field.distance(n) <= here))
+                    .then(|| step_order(self.team, d, block))
+                    .flatten()
+            })
+        };
+        aside(true).or_else(|| aside(false))
     }
 }
 
@@ -340,6 +345,7 @@ impl Bot {
         let census = census(cfg, s, team);
         let ore = s.ore.get(index_of(team)).copied().unwrap_or(0);
         let mut block = Block([false; MASK_PER_UNIT]);
+        let mut claimed = [false; MAX_CELLS];
         for (u, slot) in slots(cfg, team).enumerate() {
             // Every slot is written, an empty one with a no-op, so a reused
             // buffer never keeps a dead unit's order.
@@ -356,6 +362,7 @@ impl Bot {
                                     s,
                                     occ: &occ,
                                     slot,
+                                    claimed: &claimed,
                                 };
                                 self.scripted(&w, kind, &unit, &census, ore, f, &block)
                             }
@@ -366,6 +373,14 @@ impl Bot {
                 },
                 None => NOOP,
             };
+            // A move claims its target for the later units of this side.
+            if order.0 == order_type::MOVE
+                && let Some(from) = s.units.get(slot).map(|u| u.cell)
+                && let Some(to) = window_cell(g, team, from, order.1)
+                && let Some(c) = claimed.get_mut(usize::from(to))
+            {
+                *c = true;
+            }
             let base = u * HEADS_PER_UNIT;
             let _ = out.set_discrete(base, order.0);
             let _ = out.set_discrete(base + 1, i32::from(order.1));
