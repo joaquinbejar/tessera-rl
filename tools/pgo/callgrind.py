@@ -453,9 +453,15 @@ def aa_units(manifest: dict) -> list[str]:
 def merge_costs(args, manifest: dict, parts: list, seen: set, env: dict, windows: list) -> int:
     """A wheel's costs.json from the finished files of every part: per scenario,
     the median of each event over its five A/A pairs (N and 2N, by difference).
-    The parts must cover every A/A unit; a gate's parts (which also hold the
-    control, linearity and worker units) serve as they are, so W1's costs come
-    from the gate's own files. Runs no Valgrind."""
+    Each event's median is taken on its own, so Ir and a misprediction count
+    may come from different pairs; on the gating set, whose A/A spread is
+    exactly 0, they cannot differ. The parts must cover every A/A unit; a
+    gate's parts (which also hold the control, linearity and worker units)
+    serve as they are, so W1's costs come from the gate's own, untouched
+    directory: its part reports and files carry the same stamp (with the
+    older `kernels` field), which then stays in costs.json, where decide.py
+    ignores it. Every file is read under the parts' stamp, exactly. Runs no
+    Valgrind."""
     global STAMP
     missing = sorted(set(aa_units(manifest)) - seen)
     if missing:

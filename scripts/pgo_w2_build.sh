@@ -5,10 +5,13 @@
 # instrumented build, training with the manifest, merge, final build, the
 # profile coverage acceptance and the no-instrumentation check.
 #
-#   scripts/pgo_w2_build.sh <rustup sha256> <uv sha256> <run dir> <full|holdout> <src tree> <tool tree>
+#   scripts/pgo_w2_build.sh <rustup sha256> <uv sha256> <run dir> <full|holdout|check> <src tree> <tool tree>
 #
 # `full` makes W2F (trained on the whole manifest), `holdout` makes W2H
-# (without the holdout rows). Two trees, both absolute: <src tree> is W1's
+# (without the holdout rows). `check` is the short format check that opens
+# window L2: the instrumented build and a training of every scenario at
+# CHECK_STEPS steps, then the profile must parse and show one kernel nonzero;
+# no final build, no wheel. Two trees, both absolute: <src tree> is W1's
 # commit (ac92079), from which both wheels are built, as W1 was; <tool tree> is
 # the frozen tool commit, from which the manifest, train.py, the kernel list
 # and coverage.py are taken (at ac92079 the kernel list is empty and
@@ -42,7 +45,8 @@ NUMPY_VERSION=2.4.6
 case "$variant" in
     full) train_flag=() ;;
     holdout) train_flag=(--holdout-build) ;;
-    *) echo "pgo_w2_build: variant must be full or holdout, not $variant" >&2; exit 2 ;;
+    check) train_flag=(--steps "${CHECK_STEPS:-8}") ;;
+    *) echo "pgo_w2_build: variant must be full, holdout or check, not $variant" >&2; exit 2 ;;
 esac
 for d in "$run" "$src" "$tool"; do
     case "$d" in /*) ;; *) echo "pgo_w2_build: run dir, src tree and tool tree must be absolute: $d" >&2; exit 2 ;; esac
@@ -124,6 +128,13 @@ shopt -u nullglob
 "$profdata" merge -o "$w/merged.profdata" "${raws[@]}"
 [ -s "$w/merged.profdata" ] || { echo "pgo_w2_build: the merged profile is empty" >&2; exit 1; }
 "$profdata" show --all-functions --counts "$w/merged.profdata" > "$w/profile.txt"
+
+if [ "$variant" = check ]; then
+    "$py" -I "$tool/tools/pgo/coverage.py" --kernels "$tool/tools/pgo/kernels.toml" \
+        --manifest "$tool/tools/pgo/manifest.toml" --profile "$w/profile.txt" --variant check --out "$w/check.json"
+    echo "pgo_w2_build: format check passed ($w/check.json)"
+    exit 0
+fi
 
 # 4 and 5. Final build with the profile; maturin repairs for manylinux_2_28.
 build "-Cprofile-use=$w/merged.profdata -Cllvm-args=-pgo-warn-missing-function" "$w/target-use" "$dist" "$w/final.log"

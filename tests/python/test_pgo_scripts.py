@@ -66,7 +66,7 @@ def test_pgo_train_refuses_a_bad_profile_path(value):
 def test_pgo_train_runs_the_right_set(flag, count):
     seen = []
     env = {"LLVM_PROFILE_FILE": "/abs/%m_%p.profraw"}
-    assert train.main(["--manifest", MANIFEST_PATH, *flag], environ=env, run=lambda s, m: seen.append(s)) == 0
+    assert train.main(["--manifest", MANIFEST_PATH, *flag], environ=env, run=lambda s, m, steps=None: seen.append(s)) == 0
     assert len(seen) == count and (not flag or not any(s.holdout for s in seen))
 
 
@@ -932,3 +932,68 @@ def test_pgo_costs_merge_refuses_overlapping_parts(tmp_path):
     units = callgrind.aa_units(MANIFEST)
     run_costs_parts(out, wheel, [units[:60], units[50:]])
     assert costs_merge(out, wheel) == 2 and not (out / "costs.json").exists()
+
+
+def test_pgo_train_steps_override_reaches_every_scenario():
+    seen = []
+    env = {"LLVM_PROFILE_FILE": "/abs/%m_%p.profraw"}
+    assert train.main(["--manifest", MANIFEST_PATH, "--steps", "8"], environ=env,
+                      run=lambda s, m, steps: seen.append(steps)) == 0
+    assert seen and set(seen) == {8}
+
+
+@pytest.mark.parametrize("edit", ["other wheel", "other cpu", "no stamp"])
+def test_pgo_costs_merge_reads_every_file_under_the_parts_stamp(tmp_path, edit):
+    out = tmp_path / "w0"
+    wheel = tmp_path / "w0.whl"
+    wheel.write_bytes(b"w0")
+    run_costs_parts(out, wheel, [callgrind.aa_units(MANIFEST)])
+    side = callgrind.stamp_path(out / "state_Grid-v1.4000.aa2.callgrind")
+    st = json.loads(side.read_text())
+    if edit == "no stamp":
+        side.unlink()
+    else:
+        st["wheel" if edit == "other wheel" else "cpu_flags"] = "x"
+        side.write_text(json.dumps(st))
+    assert costs_merge(out, wheel) == 3 and not (out / "costs.json").exists()
+
+
+def old_format_gate(tmp_path):
+    """A gate directory as swarmer03 left it: part reports and file stamps with
+    the seven-field stamp that still had `kernels`."""
+    out, wheel, _ = run_parts(tmp_path, [all_names()[:10], all_names()[10:]])
+    for p in out.glob("feasibility.part.*.json"):
+        r = json.loads(p.read_text())
+        r["sha256"] = {**r["sha256"], "kernels": "k" * 64}
+        p.write_text(json.dumps(r))
+    for side in out.glob("*.stamp.json"):
+        st = json.loads(side.read_text())
+        side.write_text(json.dumps({**st, "kernels": "k" * 64}, sort_keys=True))
+    return out, wheel
+
+
+def test_pgo_w1_costs_from_the_untouched_old_format_gate(tmp_path):
+    out, wheel = old_format_gate(tmp_path)
+    assert merge_now(out, wheel) == 0, "the gate itself still merges"
+    assert costs_merge(out, wheel) == 0, "no adoption: the costs merge reads the gate as it is"
+    report = json.loads((out / "costs.json").read_text())
+    assert report["sha256"]["kernels"] == "k" * 64 and set(report["costs"]) == {s.name for s in ALL}
+
+
+def test_pgo_decide_on_the_old_format_gate_and_a_new_w0(tmp_path):
+    decide = load("decide")
+    out, w1_wheel = old_format_gate(tmp_path)
+    assert merge_now(out, w1_wheel) == 0 and costs_merge(out, w1_wheel) == 0
+    w0_out = tmp_path / "w0"
+    w0_wheel = tmp_path / "w0.whl"
+    w0_wheel.write_bytes(b"w0")
+    run_costs_parts(w0_out, w0_wheel, [callgrind.aa_units(MANIFEST)])
+    assert costs_merge(w0_out, w0_wheel) == 0
+    sha = lambda p: hashlib.sha256(p.read_bytes()).hexdigest()  # noqa: E731
+    seventh = {"W1": {"checks": {"wheel_sha256": sha(w1_wheel), "checks": {"python_suite": 0, "num_tests": 0}},
+                      "compare": {"passed": True, "wheels": [sha(w0_wheel), sha(w1_wheel)]}}}
+    result = decide.decide({"W0": json.loads((w0_out / "costs.json").read_text()),
+                            "W1": json.loads((out / "costs.json").read_text())},
+                           json.loads((out / "feasibility.json").read_text()), seventh, MANIFEST_PATH,
+                           str(TOOLS / "kernels.toml"))
+    assert result["ship"] in ("W0", "W1"), "the kernels field differs, every other field is equal"

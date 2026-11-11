@@ -23,9 +23,12 @@ import workload  # noqa: E402
 
 
 def main(argv=None, environ=os.environ, run=workload.run_scenario) -> int:
+    """`run` takes the scenario, the manifest and a steps override (None: the manifest's)."""
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--manifest", required=True)
     parser.add_argument("--holdout-build", action="store_true")
+    parser.add_argument("--steps", type=int, default=None,
+                        help="override every scenario's steps (the short format check before a long training)")
     args = parser.parse_args(argv)
     profile = environ.get("LLVM_PROFILE_FILE", "")
     if not profile or not os.path.isabs(profile) or "%p" not in profile:
@@ -34,7 +37,7 @@ def main(argv=None, environ=os.environ, run=workload.run_scenario) -> int:
     manifest = evidence.load_manifest(args.manifest)
     for scenario in evidence.training_set(evidence.scenarios(manifest), args.holdout_build):
         print(scenario.name, flush=True)
-        run(scenario, manifest)
+        run(scenario, manifest, args.steps)
     return 0
 
 

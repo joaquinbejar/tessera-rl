@@ -137,10 +137,17 @@ def holdout_only(kernels_path: str, manifest_path: str) -> list[str]:
 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    for name in ("--kernels", "--manifest", "--profile", "--build-log", "--wheel", "--out"):
+    for name in ("--kernels", "--manifest", "--profile", "--out"):
         parser.add_argument(name, required=True)
-    parser.add_argument("--variant", choices=("full", "holdout"), required=True)
+    for name in ("--build-log", "--wheel"):
+        parser.add_argument(name)
+    parser.add_argument("--variant", choices=("full", "holdout", "check"), required=True,
+                        help="check: the short format check before a long training; the profile must parse and "
+                        "show at least one kernel nonzero (no wheel, no build log needed)")
     args = parser.parse_args(argv)
+    if args.variant != "check" and not (args.build_log and args.wheel):
+        print("refused: --build-log and --wheel are needed but for --variant check", file=sys.stderr)
+        return 2
     try:
         kernels = evidence.load_kernels(args.kernels)
         zero = holdout_only(args.kernels, args.manifest)
@@ -148,6 +155,16 @@ def main(argv=None) -> int:
     except ValueError as e:
         print(f"refused: {e}", file=sys.stderr)
         return 2
+    if args.variant == "check":
+        found = counts(pathlib.Path(args.profile).read_text(encoding="utf-8"))
+        status = {k: kernel_count(k, found) for k in kernels}
+        result = {"usable": any(v > 0 for v in status.values()), "variant": "check", "kernels": status,
+                  "functions": len(found)}
+        pathlib.Path(args.out).write_text(json.dumps(result, indent=1))
+        if not result["usable"]:
+            print(f"refused: the format check found no kernel counted: {json.dumps(result)}", file=sys.stderr)
+            return 1
+        return 0
     result = check(kernels, pathlib.Path(args.profile).read_text(encoding="utf-8"),
                    pathlib.Path(args.build_log).read_text(encoding="utf-8", errors="replace"), pathlib.Path(args.wheel),
                    holdout)
