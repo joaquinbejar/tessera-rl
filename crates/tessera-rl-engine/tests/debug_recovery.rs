@@ -20,8 +20,9 @@ use core::num::{NonZeroU32, NonZeroUsize};
 use debug_env::{ProbeConfig, ProbeEnv};
 use tessera_rl_engine::debug::TrackingAllocator;
 use tessera_rl_engine::{
-    ActionInput, AsyncOptions, AsyncPool, AutoReset, BatchToken, EngineError, EnvPool, HalfToken,
-    NoMasks, PipelinedOptions, PipelinedPool, PoolOptions, Reseed, SyncOptions,
+    ActionInput, AsyncOptions, AsyncPool, AutoReset, BatchToken, CycleState, DecodedRecord,
+    EngineError, EnvPool, HalfToken, NoMasks, PipelinedOptions, PipelinedPool, PoolOptions, Record,
+    Reseed, SyncOptions,
 };
 use tessera_rl_num::identity::Seed;
 
@@ -126,8 +127,12 @@ impl Driver {
                 Ok(())
             }
             Self::Asy(p, token) => {
-                let t = token.take().unwrap();
-                p.send_batch(t, input(&ACTIONS)).map_err(|e| e.error)?;
+                if let Some(t) = token.take() {
+                    p.send_batch(t, input(&ACTIONS)).map_err(|e| e.error)?;
+                } else {
+                    let ids: Vec<u32> = (0..N).collect();
+                    p.send(&ids, input(&ACTIONS))?;
+                }
                 *token = Some(p.recv()?);
                 Ok(())
             }
@@ -135,15 +140,107 @@ impl Driver {
     }
 }
 
+/// The full writer that recovers the pool.
+#[derive(Clone, Copy)]
+enum Recovery {
+    Reset,
+    Restore,
+    Import,
+}
+
+/// What a full restore or import writes back: the records taken right
+/// after the first reset, and the Pipelined cycle state.
+struct Saved {
+    records: Vec<Record<ProbeEnv>>,
+    cycles: Option<CycleState>,
+}
+
+impl Driver {
+    /// Every record (no token may be in flight).
+    fn save(&mut self) -> Saved {
+        match self {
+            Self::Plain(p) => {
+                let mut records = vec![p.snapshot(0).unwrap(); N as usize];
+                p.snapshot_all(&mut records).unwrap();
+                Saved {
+                    records,
+                    cycles: None,
+                }
+            }
+            Self::Piped(p, _) => {
+                let mut records = vec![probe_record(); N as usize];
+                let cycles = p.snapshot_all(&mut records).unwrap();
+                Saved {
+                    records,
+                    cycles: Some(cycles),
+                }
+            }
+            Self::Asy(p, _) => {
+                let mut records = vec![probe_record(); N as usize];
+                p.snapshot_all(&mut records).unwrap();
+                Saved {
+                    records,
+                    cycles: None,
+                }
+            }
+        }
+    }
+
+    /// Recovers with a full restore or import of `saved`.
+    fn write_back(&mut self, how: Recovery, saved: &Saved) -> Result<(), EngineError> {
+        let decoded: Vec<DecodedRecord<ProbeEnv>> =
+            saved.records.iter().map(|r| (*r).into()).collect();
+        match (self, how) {
+            (d, Recovery::Reset) => d.reset(),
+            (Self::Plain(p), Recovery::Restore) => p.restore_all(&saved.records),
+            (Self::Plain(p), Recovery::Import) => p.import_all(&decoded),
+            (Self::Piped(p, token), Recovery::Restore) => {
+                *token = None;
+                p.restore_all(&saved.records, saved.cycles.as_ref().unwrap())?;
+                *token = Some(p.idle_token(0)?);
+                Ok(())
+            }
+            (Self::Piped(p, token), Recovery::Import) => {
+                *token = None;
+                p.import_all(&decoded)?;
+                *token = Some(p.idle_token(0)?);
+                Ok(())
+            }
+            // No token afterwards: the next step sends by id.
+            (Self::Asy(p, token), Recovery::Restore) => {
+                *token = None;
+                p.restore_all(&saved.records)
+            }
+            (Self::Asy(p, token), Recovery::Import) => {
+                *token = None;
+                p.import_all(&decoded)
+            }
+        }
+    }
+}
+
+/// A record of a freshly reset Inline pool, to size snapshot buffers.
+fn probe_record() -> Record<ProbeEnv> {
+    let mut p = plain(ProbeConfig::default());
+    p.reset_all(Reseed::Keep).unwrap();
+    p.snapshot(0).unwrap()
+}
+
 /// Step 1 passes, step 2 fails with `first`, a full reset recovers, and
 /// the clean step after it passes.
 fn recovers(mode: Mode, cfg: ProbeConfig, first: fn(&EngineError) -> bool) {
+    recovers_by(mode, cfg, first, Recovery::Reset);
+}
+
+/// As [`recovers`], recovering with `how`.
+fn recovers_by(mode: Mode, cfg: ProbeConfig, first: fn(&EngineError) -> bool, how: Recovery) {
     let mut d = Driver::new(mode, cfg);
     d.reset().unwrap();
+    let saved = d.save();
     d.step().unwrap();
     let err = d.step().unwrap_err();
     assert!(first(&err), "unexpected error {err:?}");
-    d.reset().unwrap();
+    d.write_back(how, &saved).unwrap();
     assert_eq!(d.step(), Ok(()), "a stale count failed the clean step");
 }
 
@@ -208,4 +305,47 @@ fn test_debug_recovery_pipelined_event_and_alloc_then_full_reset_steps_clean() {
 #[test]
 fn test_debug_recovery_async_event_and_alloc_then_full_reset_steps_clean() {
     recovers(Mode::Async, event_and_alloc_cfg(), invalid_event);
+}
+
+// Recovery through a full restore or import instead of a reset: each must
+// drop the count of the failed call as well.
+
+#[test]
+fn test_debug_recovery_inline_panic_then_restore_all_steps_clean() {
+    recovers_by(Mode::Inline, panic_cfg(), panicked, Recovery::Restore);
+}
+
+#[test]
+fn test_debug_recovery_sync_panic_then_import_all_steps_clean() {
+    recovers_by(Mode::Sync, panic_cfg(), panicked, Recovery::Import);
+}
+
+#[test]
+fn test_debug_recovery_pipelined_panic_then_restore_all_steps_clean() {
+    recovers_by(Mode::Pipelined, panic_cfg(), panicked, Recovery::Restore);
+}
+
+#[test]
+fn test_debug_recovery_pipelined_event_and_alloc_then_import_all_steps_clean() {
+    recovers_by(
+        Mode::Pipelined,
+        event_and_alloc_cfg(),
+        invalid_event,
+        Recovery::Import,
+    );
+}
+
+#[test]
+fn test_debug_recovery_async_panic_then_restore_all_steps_clean() {
+    recovers_by(Mode::Async, panic_cfg(), panicked, Recovery::Restore);
+}
+
+#[test]
+fn test_debug_recovery_async_event_and_alloc_then_import_all_steps_clean() {
+    recovers_by(
+        Mode::Async,
+        event_and_alloc_cfg(),
+        invalid_event,
+        Recovery::Import,
+    );
 }

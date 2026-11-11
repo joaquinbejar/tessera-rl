@@ -71,6 +71,19 @@ pub struct ProbeConfig {
     pub spawn_alive_at: u32,
 }
 
+/// Every state is valid: `import_all` needs the trait.
+impl tessera_rl_core::Validate for ProbeEnv {
+    fn validate(_: &ProbeConfig, _: &Probe) -> Result<(), tessera_rl_core::InvariantViolation> {
+        Ok(())
+    }
+}
+
+/// The split-phase `import_all` needs the trait.
+impl tessera_rl_core::Persist for ProbeEnv {
+    const ENV_ID: &'static str = "tessera/DebugProbe-v1";
+    const ENV_VERSION: u32 = 1;
+}
+
 #[derive(Observation)]
 pub struct ProbeObs {
     #[space(box(low = 0, high = 1_000_000, shape = [1]))]

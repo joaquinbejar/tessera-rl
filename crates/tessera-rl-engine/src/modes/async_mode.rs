@@ -493,9 +493,9 @@ where
             rt.gang.clear_poison()?;
         }
         self.poisoned = false;
-        // No id is in flight here (the writer had exclusive access).
-        #[cfg(feature = "debug-checks")]
-        self.mode.pool.discard_allocations();
+        // The allocation count of ADR-0055 was dropped by the pool's own
+        // full writer (`reset_all`, `restore_all`, `import_all`), which ran
+        // with exclusive access just before this.
         Ok(())
     }
 
