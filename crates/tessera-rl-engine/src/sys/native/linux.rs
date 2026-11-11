@@ -23,6 +23,30 @@ pub(super) fn wait(word: &AtomicU32, expected: u32) {
     }
 }
 
+/// Blocks while `word == expected`, at most `timeout`; may return early.
+#[expect(unsafe_code, reason = "audited module: futex system call")]
+pub(super) fn wait_timeout(word: &AtomicU32, expected: u32, timeout: core::time::Duration) {
+    // FUTEX_WAIT takes a relative timeout, measured on CLOCK_MONOTONIC.
+    // A timeout beyond `time_t` is clamped (the caller rechecks its
+    // deadline after any return).
+    let ts = libc::timespec {
+        tv_sec: libc::time_t::try_from(timeout.as_secs()).unwrap_or(libc::time_t::MAX),
+        tv_nsec: libc::c_long::try_from(timeout.subsec_nanos()).unwrap_or(0),
+    };
+    // SAFETY: as in `wait`, and `ts` is a valid `timespec` that lives for
+    // the call (`tv_nsec` below one second). ETIMEDOUT, EAGAIN and EINTR
+    // are all fine: callers re-check.
+    unsafe {
+        libc::syscall(
+            libc::SYS_futex,
+            word.as_ptr(),
+            libc::FUTEX_WAIT | libc::FUTEX_PRIVATE_FLAG,
+            expected,
+            core::ptr::from_ref(&ts),
+        );
+    }
+}
+
 #[expect(unsafe_code, reason = "audited module: futex system call")]
 pub(super) fn wake_all(word: &AtomicU32) {
     // SAFETY: FUTEX_WAKE with FUTEX_PRIVATE_FLAG only uses the address as a key to wake

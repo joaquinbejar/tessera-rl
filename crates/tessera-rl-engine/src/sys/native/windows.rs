@@ -23,6 +23,29 @@ pub(super) fn wait(word: &AtomicU32, expected: u32) {
     }
 }
 
+/// Blocks while `word == expected`, at most `timeout` rounded up to whole
+/// milliseconds (so a short wait never becomes a zero-time poll); may
+/// return early.
+#[expect(unsafe_code, reason = "audited module: WaitOnAddress")]
+pub(super) fn wait_timeout(word: &AtomicU32, expected: u32, timeout: core::time::Duration) {
+    // Below INFINITE (u32::MAX), which would wait without limit.
+    let ms = timeout
+        .as_nanos()
+        .div_ceil(1_000_000)
+        .min(u128::from(INFINITE - 1));
+    let ms = u32::try_from(ms).unwrap_or(INFINITE - 1);
+    // SAFETY: as in `wait`. A timeout returns FALSE with ERROR_TIMEOUT,
+    // which is ignored: callers re-check their deadline.
+    unsafe {
+        WaitOnAddress(
+            word.as_ptr().cast(),
+            core::ptr::from_ref(&expected).cast(),
+            4,
+            ms,
+        );
+    }
+}
+
 #[expect(unsafe_code, reason = "audited module: WakeByAddressAll")]
 pub(super) fn wake_all(word: &AtomicU32) {
     // SAFETY: the address is a live, aligned `AtomicU32`; it is only used
