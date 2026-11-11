@@ -174,16 +174,19 @@ def ucrt_view():
     if not WIN64:
         return None
     ucrt = ctypes.CDLL("ucrtbase")
+    ucrt._controlfp_s.argtypes = [ctypes.POINTER(ctypes.c_uint), ctypes.c_uint, ctypes.c_uint]
+    ucrt._controlfp_s.restype = ctypes.c_int
+    ucrt._statusfp.argtypes = []
+    ucrt._statusfp.restype = ctypes.c_uint
     cw = ctypes.c_uint()
     err = ucrt._controlfp_s(ctypes.byref(cw), 0, 0)
-    ucrt._statusfp.restype = ctypes.c_uint
     return {"controlfp_s": cw.value, "controlfp_s_err": err, "statusfp": ucrt._statusfp()}
 
 
 def self_test(raw):
     """The stubs read back what they write, and the MXCSR stub leaves the
     x87 word alone. A failure fails the scenario, never skips it."""
-    start = raw.x87() & X87_DEFINED
+    start = raw.x87()
     seen = []
     for v in (X87_CALLER, X87_HOST):
         raw.set_x87(v)
@@ -193,7 +196,7 @@ def self_test(raw):
     seen.append(raw.x87() & X87_DEFINED)
     raw.set_mxcsr(MXCSR_DEFAULT)
     raw.set_x87(start)
-    want = [X87_CALLER, X87_HOST, X87_CALLER]
+    want = [v & X87_DEFINED for v in (X87_CALLER, X87_HOST, X87_CALLER)]
     return {"ok": seen == want, "seen": seen, "want": want}
 
 
@@ -247,7 +250,9 @@ def main(scenario):
 
     result["initial"] = raw.words()
     if WIN64:
-        X87_DEFAULT = result["initial"][0]
+        # The raw start word, unmasked, so the child puts back exactly what
+        # it found; reports stay masked.
+        X87_DEFAULT = raw.x87()
         result["ucrt_initial"] = ucrt_view()
     result["self_test"] = self_test(raw)
     if not result["self_test"]["ok"]:
@@ -281,6 +286,8 @@ def main(scenario):
             # set toward zero raw, so both registers are hostile as on
             # System V.
             libm = ctypes.CDLL("ucrtbase")
+            libm.fesetround.argtypes = [ctypes.c_int]
+            libm.fesetround.restype = ctypes.c_int
             toward_zero = 0x0300  # the UCRT's FE_TOWARDZERO
         else:
             libm = ctypes.CDLL(ctypes.util.find_library("m"))

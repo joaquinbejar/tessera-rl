@@ -40,6 +40,7 @@ def child(scenario):
     proc = run(scenario)
     r = last_json(proc)
     assert proc.returncode == 0, (proc.returncode, r, proc.stderr)
+    assert r is not None, ("the child printed no report", proc.stdout, proc.stderr)
     if "skipped" in r:
         pytest.skip(r["skipped"])
     assert r["self_test"]["ok"], r["self_test"]
