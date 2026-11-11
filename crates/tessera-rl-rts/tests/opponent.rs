@@ -61,6 +61,12 @@ fn learner_rng() -> StepRng {
     StepRng::new(&RngAuthority::engine_only(), &id, StreamId::OPPONENT)
 }
 
+/// Slot 0's row of a per-agent output of a one-instance pool (two agent
+/// rows, slot 0 first).
+fn slot0<T: Clone>(rows: &[T]) -> Vec<T> {
+    rows.get(..rows.len() / 2).unwrap().to_vec()
+}
+
 fn input(a: &[i32]) -> ActionInput<'_> {
     ActionInput {
         discrete: a,
@@ -77,7 +83,8 @@ fn test_opponent_one_agent_and_none_keeps_two() {
 }
 
 /// The learner (Random-legal on its own generator) against a deterministic
-/// opponent equals a two-agent game whose slot 1 plays that bot.
+/// opponent equals a two-agent game whose slot 1 plays that bot: state,
+/// rewards, and the learner's observation leaves and mask row.
 #[test]
 fn test_opponent_game_equals_a_two_agent_pool_driven_by_the_bot() {
     for (code, bot) in [(1u8, Bot::Rush), (2, Bot::Prospector)] {
@@ -102,8 +109,24 @@ fn test_opponent_game_equals_a_two_agent_pool_driven_by_the_bot() {
                 let o1 = one.step(input(&a1)).unwrap();
                 let rew1 = o1.rewards()[0];
                 let done1 = o1.episode_terminated()[0].get() || o1.episode_truncated()[0].get();
+                let obs1: Vec<Vec<u8>> =
+                    (0..2).map(|l| slot0(o1.observation(l).unwrap())).collect();
+                let mask1 = slot0(o1.masks());
                 let o2 = two.step(input(&a2)).unwrap();
                 assert_eq!(rew1, o2.rewards()[0]);
+                // R2: the learner's own outputs, observation leaves and
+                // mask row, equal the two-agent pool's slot 0 at every
+                // step: the opponent changes nothing the learner observes
+                // beyond what the same bot in slot 1 does (the stage 3
+                // noninterference property, carried to the opponent case).
+                for (l, want) in obs1.iter().enumerate() {
+                    assert_eq!(
+                        *want,
+                        slot0(o2.observation(l).unwrap()),
+                        "leaf {l} step {k}"
+                    );
+                }
+                assert_eq!(mask1, slot0(o2.masks()), "mask step {k}");
                 if done1 {
                     break;
                 }
@@ -183,33 +206,40 @@ fn fnv(hash: u64, word: u64) -> u64 {
 }
 
 fn protocol(swap: bool) -> RtsConfig {
+    protocol_against(swap, 1)
+}
+
+fn protocol_against(swap: bool, opponent: u8) -> RtsConfig {
     RtsConfig {
         size: 16,
         decision_ticks: 4,
         max_units: 16,
         step_limit: 600,
         seat_swap: swap,
-        opponent: 1,
+        opponent,
     }
 }
 
 /// Plays the learner as `bot` (Random-legal on its own generator, or a
 /// scripted bot) against the Rush opponent at the protocol config; returns
 /// the fold of rewards and state hashes and the learner's final reward sum.
+fn versus_rush(swap: bool, seed: u64, bot: Bot) -> (u64, f32) {
+    versus(&protocol(swap), seed, bot)
+}
+
 #[expect(
     clippy::indexing_slicing,
     reason = "test fixture: one instance, slot 0"
 )]
-fn versus_rush(swap: bool, seed: u64, bot: Bot) -> (u64, f32) {
-    let c = protocol(swap);
-    let mut p = pool(&c, seed);
+fn versus(c: &RtsConfig, seed: u64, bot: Bot) -> (u64, f32) {
+    let mut p = pool(c, seed);
     let n = usize::from(c.max_units) * HEADS_PER_UNIT;
     let mut r = learner_rng();
     let mut hash = 0xcbf2_9ce4_8422_2325_u64;
     let mut total = 0.0f32;
     for _ in 0..600 {
         let s = *p.state(0).unwrap();
-        let mut a = row(&c, &s, 0, bot, &mut r);
+        let mut a = row(c, &s, 0, bot, &mut r);
         a.resize(2 * n, 0);
         let out = p.step(input(&a)).unwrap();
         total += out.rewards()[0];
@@ -248,4 +278,20 @@ fn test_opponent_seat_swapped_game_of_a_symmetric_learner_is_a_mirror() {
         let (_, one) = versus_rush(true, seed, Bot::Prospector);
         assert_eq!(zero.to_bits(), one.to_bits(), "seed {seed}");
     }
+}
+
+/// O4 and R1: the Random-legal opponent (code 3) draws from the step
+/// stream once per decision before the transition; the same seed gives the
+/// same game, and a scripted learner against it is pinned from both sides.
+const OPPONENT_RANDOM_GOLDEN: u64 = 0xf6ed_2423_7340_3f43;
+
+#[test]
+fn test_opponent_random_legal_is_deterministic_and_pinned() {
+    let a = versus(&protocol_against(false, 3), 9, Bot::Rush);
+    let b = versus(&protocol_against(true, 3), 9, Bot::Rush);
+    assert_eq!(a, versus(&protocol_against(false, 3), 9, Bot::Rush));
+    assert_eq!(b, versus(&protocol_against(true, 3), 9, Bot::Rush));
+    assert_ne!(a.0, versus(&protocol_against(false, 3), 10, Bot::Rush).0);
+    let got = fnv(a.0, b.0);
+    assert_eq!(got, OPPONENT_RANDOM_GOLDEN, "{got:#x}");
 }
