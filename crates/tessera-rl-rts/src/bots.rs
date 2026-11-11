@@ -53,10 +53,12 @@ pub enum Bot {
 
 /// Drones a Rush Core keeps before its Foundry.
 pub const RUSH_DRONES: usize = 2;
-/// Drones a Prospector Core grows to.
-pub const PROSPECTOR_DRONES: usize = 4;
-/// Fighters a Prospector gathers before it advances.
-pub const PROSPECTOR_ARMY: usize = 4;
+/// Drones a Prospector Core grows to. Frozen by the stage 5a tuning on
+/// seeds 0..200 (`docs/reviews/rts-calibration-record.md`).
+pub const PROSPECTOR_DRONES: usize = 5;
+/// Fighters a Prospector gathers before it advances. Frozen with
+/// [`PROSPECTOR_DRONES`].
+pub const PROSPECTOR_ARMY: usize = 2;
 
 /// The `product` index of each kind, as the action space numbers them.
 const PRODUCT_DRONE: i32 = 0;

@@ -21,7 +21,7 @@ use tessera_rl_engine::{
 };
 use tessera_rl_num::identity::{LogicalId, RngIdentity, Seed, StreamId};
 use tessera_rl_num::rng::{RngAuthority, StepRng};
-use tessera_rl_rts::bots::Bot;
+use tessera_rl_rts::bots::{Bot, PROSPECTOR_ARMY};
 use tessera_rl_rts::env::{HEADS_PER_UNIT, SIDE_SLOTS, UNIT_SLOTS, move_index, order_type};
 use tessera_rl_rts::units::{Kind, Unit};
 use tessera_rl_rts::world::{Dir, Grid, Team, Terrain};
@@ -386,15 +386,16 @@ fn test_rush_foundry_orders_strikers_and_prospector_lancers() {
 }
 
 #[test]
-fn test_prospector_fighters_hold_at_three_and_advance_at_four() {
-    for army in [3u16, 4] {
+fn test_prospector_fighters_hold_below_the_army_and_advance_at_it() {
+    let full = u16::try_from(PROSPECTOR_ARMY).unwrap();
+    for army in [full - 1, full] {
         let (c, g, mut s) = open_state();
         for k in 0..army {
             s.units[1 + usize::from(k)] = unit(Kind::Lancer, g.index(2 + k, 0).unwrap());
         }
         let a = row(&c, &s, 0, Bot::Prospector, &mut rng(0));
         for u in 1..=usize::from(army) {
-            let want = if army < 4 {
+            let want = if army < full {
                 order_type::NOOP
             } else {
                 order_type::MOVE
