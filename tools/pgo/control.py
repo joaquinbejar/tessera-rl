@@ -87,6 +87,10 @@ def main(argv=None) -> int:
         pathlib.Path(args.out).write_text(json.dumps(result, indent=1, sort_keys=True))
         return 0
     want = json.loads(pathlib.Path(args.expected).read_text(encoding="utf-8"))
+    missing = [k for k in ("wheel", "stamp", "native_ir") if k not in want]
+    if missing:
+        print(f"control: refused: {args.expected} has no {missing}; regenerate it with `control.py expected`", file=sys.stderr)
+        return 2
     problems = check(pathlib.Path(args.probe_dir), want)
     for line in problems:
         print(f"control: {line}", file=sys.stderr)

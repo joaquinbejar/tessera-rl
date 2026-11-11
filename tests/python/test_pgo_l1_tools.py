@@ -85,6 +85,14 @@ def test_pgo_control_command_exits_one_on_a_difference(tmp_path):
     assert control.main(["check", str(ok), str(exp)]) == 1
 
 
+def test_pgo_control_refuses_an_expected_file_without_the_stamp(tmp_path):
+    _, wheel, want = gate_and_expected(tmp_path)
+    want.pop("stamp")
+    exp = tmp_path / "expected.json"
+    exp.write_text(json.dumps(want))
+    assert control.main(["check", str(probe_w1(tmp_path, wheel)), str(exp)]) == 2
+
+
 def test_pgo_control_stops_on_another_stamp(tmp_path):
     _, wheel, want = gate_and_expected(tmp_path)
     probe = probe_w1(tmp_path, wheel, env=fake_environment(toolchain="vg-2"))
