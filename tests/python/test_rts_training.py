@@ -429,7 +429,7 @@ def test_rts_training_train_body_wires_its_parts(monkeypatch):
     step). Pins the call order, the learning rate each update sees
     (lr_at(0..2)), the hand-off from next_state to update, one rng passed to
     every update, one CPU thread, envs closed and the agent returned."""
-    h = Hyper(num_envs=2, num_steps=4, size=8, max_units=8, total_steps=3 * 2 * 4)
+    h = Hyper(num_envs=2, num_steps=4, size=8, max_units=8, total_steps=3 * 2 * 4 + 5)  # not a whole number of updates: 3 run
     calls, seen, opts = [], [], []
 
     class RecSeats:
@@ -468,6 +468,7 @@ def test_rts_training_train_body_wires_its_parts(monkeypatch):
     finally:
         torch.set_num_threads(threads)
     assert isinstance(got, Agent)
+    assert got.decisions_trained == 3 * 2 * 4
     assert calls == [("seats", 5), ("reset", 5)] + [("rollout",), ("next_state",), ("update",)] * 3 + [("close",)]
     assert [s[0] for s in seen] == [lr_at(u, 3, h) for u in range(3)]
     assert [s[1] for s in seen] == [[4.0, 0.0], [7.0, 0.0], [10.0, 0.0]]

@@ -142,7 +142,9 @@ def test_rts_evaluation_only_the_protocol_seeds_give_a_pass_field(monkeypatch):
     monkeypatch.setattr(ev, "play", lambda agent, env, seed: "win")
     shifted = range(2_000_001, 2_000_401)
     repeated = [*list(ev.EVAL_SEEDS)[:399], 2_000_000]
-    for seeds in (shifted, repeated):
+    reversed_ = list(ev.EVAL_SEEDS)[::-1]
+    plus_one = [*ev.EVAL_SEEDS, 2_000_000]
+    for seeds in (shifted, repeated, reversed_, plus_one):
         r = ev.evaluate(Agent(11, 8, 2, 8, 6, 81, 4), SMALL, "h", "h", seeds=seeds)
         assert r["protocol"] is False and "passes" not in r
 

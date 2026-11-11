@@ -273,4 +273,7 @@ def train(seed: int, h: Hyper, authorization: str, frozen_sha256: str) -> Agent:
         next_value, next_done = next_state(agent, state)
         update(agent, optimizer, h, batch, next_value, next_done, rng)
     envs.close()
+    # The decisions actually trained, for the run record (the runner checks
+    # them against the protocol's B).
+    agent.decisions_trained = updates * h.num_envs * h.num_steps
     return agent
