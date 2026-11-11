@@ -49,9 +49,10 @@ def feas(**over):
 
 
 @pytest.fixture
-def kernels(tmp_path):
+def kernels(tmp_path, monkeypatch):
     p = tmp_path / "kernels.toml"
     p.write_text('kernels = ["step"]\n')
+    monkeypatch.setattr(decide, "KERNELS_SHA256", hashlib.sha256(p.read_bytes()).hexdigest())
     return str(p)
 
 
@@ -233,3 +234,45 @@ def test_pgo_decide_ir_claim_ignores_the_holdout(kernels):
 def test_pgo_decide_any_recorded_failed_check_counts(kernels):
     out = run(reports(), kernels, det={"W1": inputs("w1", golden_anchor=1)})
     assert out["ship"] == "W0" and out["failed_checks"]["W1"] == ["golden_anchor"]
+
+
+STAMP_FIELDS = {"python": "py", "valgrind": "valgrind-3.24.0", "cpu_model": "Ryzen", "cpu_flags": "f1"}
+
+
+def stamped(r, f, **fields):
+    for rep in r.values():
+        rep["sha256"].update(STAMP_FIELDS)
+    f["sha256"].update(STAMP_FIELDS)
+    return r, f
+
+
+def test_pgo_decide_accepts_reports_whose_stamps_differ_only_in_the_wheel(kernels):
+    r, f = stamped(reports(w2f=950000), feas())
+    run(r, kernels, f)
+
+
+@pytest.mark.parametrize("field", ["python", "valgrind", "cpu_model", "cpu_flags"])
+@pytest.mark.parametrize("label", ["W0", "W2F"])
+def test_pgo_decide_refuses_a_report_measured_under_another_stamp(kernels, field, label):
+    r, f = stamped(reports(w2f=950000), feas())
+    r[label]["sha256"][field] = "other"
+    with pytest.raises(decide.Refused, match="another stamp"):
+        run(r, kernels, f)
+
+
+def test_pgo_decide_ignores_the_old_kernels_field_of_a_stamp(kernels):
+    r, f = stamped(reports(), feas())
+    f["sha256"]["kernels"] = "k" * 64  # the gate's stamp predates the kernel list leaving it
+    run(r, kernels, f)
+
+
+def test_pgo_decide_refuses_a_kernel_list_other_than_the_frozen_one(kernels, tmp_path):
+    other = tmp_path / "other.toml"
+    other.write_text('kernels = ["step", "more"]\n')
+    with pytest.raises(decide.Refused, match="not the frozen one"):
+        decide.decide(reports(w2f=950000), feas(), OK, MANIFEST, str(other))
+
+
+def test_pgo_decide_frozen_kernels_sha_is_the_repository_list():
+    path = pathlib.Path(MANIFEST).parent / "kernels.toml"
+    assert decide.KERNELS_SHA256 == hashlib.sha256(path.read_bytes()).hexdigest()
