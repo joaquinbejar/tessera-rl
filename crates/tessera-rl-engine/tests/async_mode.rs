@@ -29,6 +29,43 @@ const BATCH: usize = 10;
 /// Steps per instance in the identity test (fewer under Miri).
 const STEPS: usize = if cfg!(miri) { 3 } else { 12 };
 
+/// How long a test may take before it fails by name instead of hanging the
+/// binary (issue #182; Miri runs far slower), as the newer Async tests do.
+const WATCHDOG: Duration = Duration::from_secs(if cfg!(miri) { 1_200 } else { 30 });
+
+/// Runs `f` on its own thread and fails, naming `what`, if it has not
+/// finished within [`WATCHDOG`]: a broken ring or claim then fails the test
+/// by name instead of hanging it. A panic in `f` is passed on.
+#[expect(clippy::panic, reason = "the watchdog fails the test by name")]
+fn within(what: &str, f: impl FnOnce() + Send + 'static) {
+    let (done, finished) = std::sync::mpsc::channel();
+    let body = std::thread::spawn(move || {
+        f();
+        let _ = done.send(());
+    });
+    match finished.recv_timeout(WATCHDOG) {
+        Ok(()) => body.join().unwrap(),
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+            panic!("{what}: did not finish within {WATCHDOG:?}")
+        }
+        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+            if let Err(payload) = body.join() {
+                std::panic::resume_unwind(payload);
+            }
+        }
+    }
+}
+
+/// Releases the review gate's held step on every exit path of a test, the
+/// watchdog's included, so no worker stays held after a named failure.
+struct ReleaseReviewGate;
+
+impl Drop for ReleaseReviewGate {
+    fn drop(&mut self) {
+        review_gate::RELEASE.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
 type Pool = EnvPool<Counter, Masked>;
 type Asy = AsyncPool<Counter, Masked>;
 type Token = BatchToken<Counter, Masked>;
@@ -209,83 +246,85 @@ impl Lcg {
 
 #[test]
 fn test_async_matches_sync_per_instance_for_1_2_7_and_64_workers() {
-    for mode in [AutoReset::NextStep, AutoReset::SameStep] {
-        // The Sync reference: frames[t][i] after t steps.
-        let mut reference = sync_pool(mode);
-        reference.reset_all(Reseed::Keep).unwrap();
-        let mut frames: Vec<Vec<Vec<u64>>> =
-            vec![(0..N).map(|i| pool_frame(&reference, i)).collect()];
-        for t in 0..STEPS {
-            let a = all_actions(t);
-            reference
-                .step(ActionInput {
-                    discrete: &a,
-                    continuous: &[],
-                })
-                .unwrap();
-            frames.push((0..N).map(|i| pool_frame(&reference, i)).collect());
-        }
-        let hashes: Vec<u64> = (0..N)
-            .map(|i| reference.state_hash(i).unwrap().get())
-            .collect();
-        // Under Miri, one small-worker run keeps the job short.
-        let counts: &[usize] = if cfg!(miri) { &[2] } else { &[1, 2, 7, 64] };
-        for &workers in counts {
-            // Batches of one, so every id comes back as soon as it is done
-            // and the run never waits on a batch it cannot fill.
-            let mut p = asy_with(mode, workers, 1, cfg());
-            let first = p.reset_all(Reseed::Keep).unwrap();
-            for id in 0..N {
-                assert_eq!(
-                    token_frame(&first, id),
-                    frames[0][usize::try_from(id).unwrap()]
-                );
+    within("matches sync per instance for 1 2 7 and 64 workers", || {
+        for mode in [AutoReset::NextStep, AutoReset::SameStep] {
+            // The Sync reference: frames[t][i] after t steps.
+            let mut reference = sync_pool(mode);
+            reference.reset_all(Reseed::Keep).unwrap();
+            let mut frames: Vec<Vec<Vec<u64>>> =
+                vec![(0..N).map(|i| pool_frame(&reference, i)).collect()];
+            for t in 0..STEPS {
+                let a = all_actions(t);
+                reference
+                    .step(ActionInput {
+                        discrete: &a,
+                        continuous: &[],
+                    })
+                    .unwrap();
+                frames.push((0..N).map(|i| pool_frame(&reference, i)).collect());
             }
-            drop(first);
-            let n = usize::try_from(N).unwrap();
-            let mut step = vec![0_usize; n];
-            let mut idle: Vec<u32> = (0..N).collect();
-            let mut rng = Lcg(u64::try_from(workers).unwrap() * 31 + 7);
-            let mut done = 0;
-            while done < n {
-                // Send a random subset of the idle ids, in a random order.
-                let mut subset = Vec::new();
-                let take = 1 + usize::try_from(rng.next()).unwrap() % idle.len().max(1);
-                for _ in 0..take.min(idle.len()) {
-                    let k = usize::try_from(rng.next()).unwrap() % idle.len();
-                    subset.push(idle.swap_remove(k));
-                }
-                if !subset.is_empty() {
-                    let a = rows_for(&subset, &step);
-                    send(&mut p, &subset, &a);
-                }
-                let Some(t) = p.try_recv().unwrap() else {
-                    if idle.is_empty() || subset.is_empty() {
-                        // Everything is out: block for a batch.
-                        let t = p.recv().unwrap();
-                        check(&t, &mut step, &frames, &mut idle, &mut done, workers, mode);
-                    }
-                    continue;
-                };
-                check(&t, &mut step, &frames, &mut idle, &mut done, workers, mode);
-            }
-            // Drain what is still out, then compare the final states.
-            while p.recv().is_ok() {}
-            let pool = p.into_pool().map_err(|_| ()).unwrap();
-            let got: Vec<u64> = (0..N).map(|i| pool.state_hash(i).unwrap().get()).collect();
-            let want: Vec<u64> = (0..N)
-                .map(|i| {
-                    if step[usize::try_from(i).unwrap()] == STEPS {
-                        hashes[usize::try_from(i).unwrap()]
-                    } else {
-                        got[usize::try_from(i).unwrap()]
-                    }
-                })
+            let hashes: Vec<u64> = (0..N)
+                .map(|i| reference.state_hash(i).unwrap().get())
                 .collect();
-            assert_eq!(got, want, "{workers}, {mode:?}");
-            assert_eq!(pool.workers(), workers);
+            // Under Miri, one small-worker run keeps the job short.
+            let counts: &[usize] = if cfg!(miri) { &[2] } else { &[1, 2, 7, 64] };
+            for &workers in counts {
+                // Batches of one, so every id comes back as soon as it is done
+                // and the run never waits on a batch it cannot fill.
+                let mut p = asy_with(mode, workers, 1, cfg());
+                let first = p.reset_all(Reseed::Keep).unwrap();
+                for id in 0..N {
+                    assert_eq!(
+                        token_frame(&first, id),
+                        frames[0][usize::try_from(id).unwrap()]
+                    );
+                }
+                drop(first);
+                let n = usize::try_from(N).unwrap();
+                let mut step = vec![0_usize; n];
+                let mut idle: Vec<u32> = (0..N).collect();
+                let mut rng = Lcg(u64::try_from(workers).unwrap() * 31 + 7);
+                let mut done = 0;
+                while done < n {
+                    // Send a random subset of the idle ids, in a random order.
+                    let mut subset = Vec::new();
+                    let take = 1 + usize::try_from(rng.next()).unwrap() % idle.len().max(1);
+                    for _ in 0..take.min(idle.len()) {
+                        let k = usize::try_from(rng.next()).unwrap() % idle.len();
+                        subset.push(idle.swap_remove(k));
+                    }
+                    if !subset.is_empty() {
+                        let a = rows_for(&subset, &step);
+                        send(&mut p, &subset, &a);
+                    }
+                    let Some(t) = p.try_recv().unwrap() else {
+                        if idle.is_empty() || subset.is_empty() {
+                            // Everything is out: block for a batch.
+                            let t = p.recv().unwrap();
+                            check(&t, &mut step, &frames, &mut idle, &mut done, workers, mode);
+                        }
+                        continue;
+                    };
+                    check(&t, &mut step, &frames, &mut idle, &mut done, workers, mode);
+                }
+                // Drain what is still out, then compare the final states.
+                while p.recv().is_ok() {}
+                let pool = p.into_pool().map_err(|_| ()).unwrap();
+                let got: Vec<u64> = (0..N).map(|i| pool.state_hash(i).unwrap().get()).collect();
+                let want: Vec<u64> = (0..N)
+                    .map(|i| {
+                        if step[usize::try_from(i).unwrap()] == STEPS {
+                            hashes[usize::try_from(i).unwrap()]
+                        } else {
+                            got[usize::try_from(i).unwrap()]
+                        }
+                    })
+                    .collect();
+                assert_eq!(got, want, "{workers}, {mode:?}");
+                assert_eq!(pool.workers(), workers);
+            }
         }
-    }
+    });
 }
 
 /// Checks a received batch against the Sync frames and returns its ids
@@ -319,19 +358,21 @@ fn check(
 
 #[test]
 fn test_async_recv_errors_never_wait() {
-    let mut p = asy(AutoReset::NextStep, 2);
-    drop(p.reset_all(Reseed::Keep).unwrap());
-    assert_eq!(p.recv().map(|_| ()), Err(EngineError::NothingInFlight));
-    assert_eq!(p.try_recv().map(|_| ()), Err(EngineError::NothingInFlight));
-    send(&mut p, &[0, 1, 2], &rows_for(&[0, 1, 2], &[0; 100]));
-    assert_eq!(
-        p.recv().map(|_| ()),
-        Err(EngineError::BatchUnreachable {
-            in_flight: 3,
-            ready: 0,
-            batch_size: 10
-        })
-    );
+    within("recv errors never wait", || {
+        let mut p = asy(AutoReset::NextStep, 2);
+        drop(p.reset_all(Reseed::Keep).unwrap());
+        assert_eq!(p.recv().map(|_| ()), Err(EngineError::NothingInFlight));
+        assert_eq!(p.try_recv().map(|_| ()), Err(EngineError::NothingInFlight));
+        send(&mut p, &[0, 1, 2], &rows_for(&[0, 1, 2], &[0; 100]));
+        assert_eq!(
+            p.recv().map(|_| ()),
+            Err(EngineError::BatchUnreachable {
+                in_flight: 3,
+                ready: 0,
+                batch_size: 10
+            })
+        );
+    });
 }
 
 fn input(a: &[i32]) -> ActionInput<'_> {
@@ -343,363 +384,401 @@ fn input(a: &[i32]) -> ActionInput<'_> {
 
 #[test]
 fn test_async_send_errors_change_nothing() {
-    let mut p = asy(AutoReset::NextStep, 2);
-    let all = p.reset_all(Reseed::Keep).unwrap();
-    let a = rows_for(&[0, 1], &[0; 100]);
-    // Covered by the reset_all token.
-    assert_eq!(
-        p.send(&[0, 1], input(&a)),
-        Err(EngineError::Borrowed { id: 0 })
-    );
-    drop(all);
-    assert_eq!(p.send(&[], input(&[])), Err(EngineError::EmptySend));
-    assert!(p.send(&[1, 1], input(&a)).is_err());
-    assert!(p.send(&[0, 500], input(&a)).is_err());
-    assert!(matches!(
-        p.send(&[0, 1], input(&a[..2])),
-        Err(EngineError::ActionLength { .. })
-    ));
-    let g = p.generation(0).unwrap();
-    send(&mut p, &[0, 1], &a);
-    assert!(
-        p.generation(0).unwrap() > g,
-        "the generation moved at the send"
-    );
-    assert_eq!(
-        p.send(&[1, 2], input(&a)),
-        Err(EngineError::InFlight { id: 1 })
-    );
+    within("send errors change nothing", || {
+        let mut p = asy(AutoReset::NextStep, 2);
+        let all = p.reset_all(Reseed::Keep).unwrap();
+        let a = rows_for(&[0, 1], &[0; 100]);
+        // Covered by the reset_all token.
+        assert_eq!(
+            p.send(&[0, 1], input(&a)),
+            Err(EngineError::Borrowed { id: 0 })
+        );
+        drop(all);
+        assert_eq!(p.send(&[], input(&[])), Err(EngineError::EmptySend));
+        assert!(p.send(&[1, 1], input(&a)).is_err());
+        assert!(p.send(&[0, 500], input(&a)).is_err());
+        assert!(matches!(
+            p.send(&[0, 1], input(&a[..2])),
+            Err(EngineError::ActionLength { .. })
+        ));
+        let g = p.generation(0).unwrap();
+        send(&mut p, &[0, 1], &a);
+        assert!(
+            p.generation(0).unwrap() > g,
+            "the generation moved at the send"
+        );
+        assert_eq!(
+            p.send(&[1, 2], input(&a)),
+            Err(EngineError::InFlight { id: 1 })
+        );
+    });
 }
 
 #[test]
 fn test_async_tokens_across_recv_in_both_drop_orders() {
-    for first_dropped in [true, false] {
-        let mut p = asy_with(AutoReset::NextStep, 3, 2, cfg());
-        drop(p.reset_all(Reseed::Keep).unwrap());
-        let ids: Vec<u32> = (0..4).collect();
-        send(&mut p, &ids, &rows_for(&ids, &[0; 100]));
-        let a = p.recv().unwrap();
-        let a_ids: Vec<u32> = a.ids().collect();
-        let a_frame: Vec<Vec<u64>> = a_ids.iter().map(|&id| token_frame(&a, id)).collect();
-        let b = p.recv().unwrap();
-        let b_ids: Vec<u32> = b.ids().collect();
-        // A's ids and rows are untouched by B's recv.
-        assert_eq!(a.ids().collect::<Vec<_>>(), a_ids);
-        for (k, &id) in a_ids.iter().enumerate() {
-            assert_eq!(token_frame(&a, id), a_frame[k]);
+    within("tokens across recv in both drop orders", || {
+        for first_dropped in [true, false] {
+            let mut p = asy_with(AutoReset::NextStep, 3, 2, cfg());
+            drop(p.reset_all(Reseed::Keep).unwrap());
+            let ids: Vec<u32> = (0..4).collect();
+            send(&mut p, &ids, &rows_for(&ids, &[0; 100]));
+            let a = p.recv().unwrap();
+            let a_ids: Vec<u32> = a.ids().collect();
+            let a_frame: Vec<Vec<u64>> = a_ids.iter().map(|&id| token_frame(&a, id)).collect();
+            let b = p.recv().unwrap();
+            let b_ids: Vec<u32> = b.ids().collect();
+            // A's ids and rows are untouched by B's recv.
+            assert_eq!(a.ids().collect::<Vec<_>>(), a_ids);
+            for (k, &id) in a_ids.iter().enumerate() {
+                assert_eq!(token_frame(&a, id), a_frame[k]);
+            }
+            // B can be sent again while A stays protected.
+            let (kept, sent) = if first_dropped { (b, a) } else { (a, b) };
+            let sent_ids: Vec<u32> = sent.ids().collect();
+            let kept_ids: Vec<u32> = kept.ids().collect();
+            drop(sent);
+            send(&mut p, &sent_ids, &rows_for(&sent_ids, &[1; 100]));
+            assert_eq!(
+                p.send(
+                    &kept_ids,
+                    ActionInput {
+                        discrete: &rows_for(&kept_ids, &[1; 100]),
+                        continuous: &[]
+                    }
+                ),
+                Err(EngineError::Borrowed { id: kept_ids[0] })
+            );
+            let c = p.recv().unwrap();
+            assert_eq!(c.ids().collect::<Vec<_>>().len(), 2);
+            drop((kept, c));
+            let _ = b_ids;
         }
-        // B can be sent again while A stays protected.
-        let (kept, sent) = if first_dropped { (b, a) } else { (a, b) };
-        let sent_ids: Vec<u32> = sent.ids().collect();
-        let kept_ids: Vec<u32> = kept.ids().collect();
-        drop(sent);
-        send(&mut p, &sent_ids, &rows_for(&sent_ids, &[1; 100]));
-        assert_eq!(
-            p.send(
-                &kept_ids,
-                ActionInput {
-                    discrete: &rows_for(&kept_ids, &[1; 100]),
-                    continuous: &[]
-                }
-            ),
-            Err(EngineError::Borrowed { id: kept_ids[0] })
-        );
-        let c = p.recv().unwrap();
-        assert_eq!(c.ids().collect::<Vec<_>>().len(), 2);
-        drop((kept, c));
-        let _ = b_ids;
-    }
+    });
 }
 
 #[test]
 fn test_async_forgotten_token_keeps_its_ids_borrowed() {
-    let mut p = asy_with(AutoReset::NextStep, 2, 2, cfg());
-    drop(p.reset_all(Reseed::Keep).unwrap());
-    let ids: Vec<u32> = (0..4).collect();
-    send(&mut p, &ids, &rows_for(&ids, &[0; 100]));
-    let a = p.recv().unwrap();
-    let lost: Vec<u32> = a.ids().collect();
-    core::mem::forget(a);
-    let b = p.recv().unwrap();
-    let other: Vec<u32> = b.ids().collect();
-    drop(b);
-    assert_eq!(
-        p.send(
-            &lost,
-            ActionInput {
-                discrete: &rows_for(&lost, &[1; 100]),
-                continuous: &[]
-            }
-        ),
-        Err(EngineError::Borrowed { id: lost[0] })
-    );
-    // The other ids keep cycling, with buffers to spare.
-    for round in 0..20 {
-        send(&mut p, &other, &rows_for(&other, &[round + 1; 100]));
-        drop(p.recv().unwrap());
-    }
+    within("forgotten token keeps its ids borrowed", || {
+        let mut p = asy_with(AutoReset::NextStep, 2, 2, cfg());
+        drop(p.reset_all(Reseed::Keep).unwrap());
+        let ids: Vec<u32> = (0..4).collect();
+        send(&mut p, &ids, &rows_for(&ids, &[0; 100]));
+        let a = p.recv().unwrap();
+        let lost: Vec<u32> = a.ids().collect();
+        core::mem::forget(a);
+        let b = p.recv().unwrap();
+        let other: Vec<u32> = b.ids().collect();
+        drop(b);
+        assert_eq!(
+            p.send(
+                &lost,
+                ActionInput {
+                    discrete: &rows_for(&lost, &[1; 100]),
+                    continuous: &[]
+                }
+            ),
+            Err(EngineError::Borrowed { id: lost[0] })
+        );
+        // The other ids keep cycling, with buffers to spare.
+        for round in 0..20 {
+            send(&mut p, &other, &rows_for(&other, &[round + 1; 100]));
+            drop(p.recv().unwrap());
+        }
+    });
 }
 
 #[test]
 fn test_async_writers_refuse_while_a_token_lives_and_into_pool_hands_back() {
-    let mut p = asy(AutoReset::NextStep, 2);
-    let all = p.reset_all(Reseed::Keep).unwrap();
-    assert!(matches!(
-        p.reset_all(Reseed::Keep),
-        Err(EngineError::Borrowed { .. })
-    ));
-    assert!(matches!(
-        p.reset(&[5], Reseed::Keep),
-        Err(EngineError::Borrowed { .. })
-    ));
-    let p = match p.into_pool() {
-        Err(e) => *e.pool,
-        Ok(_) => panic!("a live token blocks into_pool"),
-    };
-    drop(all);
-    let mut p = p;
-    let ids: Vec<u32> = (0..10).collect();
-    send(&mut p, &ids, &rows_for(&ids, &[0; 100]));
-    drop(p.recv().unwrap());
-    p.into_pool().map_err(|_| ()).unwrap();
+    within(
+        "writers refuse while a token lives and into pool hands back",
+        || {
+            let mut p = asy(AutoReset::NextStep, 2);
+            let all = p.reset_all(Reseed::Keep).unwrap();
+            assert!(matches!(
+                p.reset_all(Reseed::Keep),
+                Err(EngineError::Borrowed { .. })
+            ));
+            assert!(matches!(
+                p.reset(&[5], Reseed::Keep),
+                Err(EngineError::Borrowed { .. })
+            ));
+            let p = match p.into_pool() {
+                Err(e) => *e.pool,
+                Ok(_) => panic!("a live token blocks into_pool"),
+            };
+            drop(all);
+            let mut p = p;
+            let ids: Vec<u32> = (0..10).collect();
+            send(&mut p, &ids, &rows_for(&ids, &[0; 100]));
+            drop(p.recv().unwrap());
+            p.into_pool().map_err(|_| ()).unwrap();
+        },
+    );
 }
 
 #[test]
 fn test_async_reset_and_restore_ids_are_delivered_by_recv() {
-    let mut p = asy_with(AutoReset::NextStep, 2, 2, cfg());
-    drop(p.reset_all(Reseed::Keep).unwrap());
-    let record: Record<Counter> = p.snapshot(3).unwrap();
-    p.reset(&[3, 4], Reseed::Keep).unwrap();
-    let t = p.recv().unwrap();
-    let mut got: Vec<u32> = t.ids().collect();
-    got.sort_unstable();
-    assert_eq!(got, vec![3, 4]);
-    drop(t);
-    p.restore(&[3], &[record]).unwrap();
-    send(&mut p, &[9], &rows_for(&[9], &[0; 100]));
-    let t = p.recv().unwrap();
-    let mut got: Vec<u32> = t.ids().collect();
-    got.sort_unstable();
-    assert_eq!(got, vec![3, 9]);
-    // A reset id is in flight until received.
-    drop(t);
-    p.reset(&[7], Reseed::Keep).unwrap();
-    assert_eq!(
-        p.reset(&[7], Reseed::Keep),
-        Err(EngineError::InFlight { id: 7 })
-    );
+    within("reset and restore ids are delivered by recv", || {
+        let mut p = asy_with(AutoReset::NextStep, 2, 2, cfg());
+        drop(p.reset_all(Reseed::Keep).unwrap());
+        let record: Record<Counter> = p.snapshot(3).unwrap();
+        p.reset(&[3, 4], Reseed::Keep).unwrap();
+        let t = p.recv().unwrap();
+        let mut got: Vec<u32> = t.ids().collect();
+        got.sort_unstable();
+        assert_eq!(got, vec![3, 4]);
+        drop(t);
+        p.restore(&[3], &[record]).unwrap();
+        send(&mut p, &[9], &rows_for(&[9], &[0; 100]));
+        let t = p.recv().unwrap();
+        let mut got: Vec<u32> = t.ids().collect();
+        got.sort_unstable();
+        assert_eq!(got, vec![3, 9]);
+        // A reset id is in flight until received.
+        drop(t);
+        p.reset(&[7], Reseed::Keep).unwrap();
+        assert_eq!(
+            p.reset(&[7], Reseed::Keep),
+            Err(EngineError::InFlight { id: 7 })
+        );
+    });
 }
 
 #[test]
 fn test_async_token_outlives_the_wrapper() {
-    let mut p = asy(AutoReset::NextStep, 2);
-    let all = p.reset_all(Reseed::Keep).unwrap();
-    let before = token_frame(&all, 42);
-    drop(p);
-    assert_eq!(token_frame(&all, 42), before);
+    within("token outlives the wrapper", || {
+        let mut p = asy(AutoReset::NextStep, 2);
+        let all = p.reset_all(Reseed::Keep).unwrap();
+        let before = token_frame(&all, 42);
+        drop(p);
+        assert_eq!(token_frame(&all, 42), before);
+    });
 }
 
 #[test]
 fn test_async_worker_panic_poisons_and_reset_all_recovers() {
-    let mut p = asy_with(
-        AutoReset::NextStep,
-        4,
-        BATCH,
-        CountConfig {
-            panic_at: 1,
-            length: 9,
-            ..CountConfig::default()
-        },
-    );
-    drop(p.reset_all(Reseed::Keep).unwrap());
-    let ids: Vec<u32> = (0..N).collect();
-    send(&mut p, &ids, &rows_for(&ids, &[0; 100]));
-    let mut seen = None;
-    for _ in 0..20 {
-        match p.recv() {
-            Ok(t) => drop(t),
-            Err(e) => {
-                seen = Some(e);
-                break;
+    within("worker panic poisons and reset all recovers", || {
+        let mut p = asy_with(
+            AutoReset::NextStep,
+            4,
+            BATCH,
+            CountConfig {
+                panic_at: 1,
+                length: 9,
+                ..CountConfig::default()
+            },
+        );
+        drop(p.reset_all(Reseed::Keep).unwrap());
+        let ids: Vec<u32> = (0..N).collect();
+        send(&mut p, &ids, &rows_for(&ids, &[0; 100]));
+        let mut seen = None;
+        for _ in 0..20 {
+            match p.recv() {
+                Ok(t) => drop(t),
+                Err(e) => {
+                    seen = Some(e);
+                    break;
+                }
             }
         }
-    }
-    assert_eq!(seen, Some(EngineError::Panicked));
-    assert!(p.is_poisoned());
-    assert_eq!(p.recv().map(|_| ()), Err(EngineError::Poisoned));
-    drop(p.reset_all(Reseed::Keep).unwrap());
-    assert!(!p.is_poisoned());
+        assert_eq!(seen, Some(EngineError::Panicked));
+        assert!(p.is_poisoned());
+        assert_eq!(p.recv().map(|_| ()), Err(EngineError::Poisoned));
+        drop(p.reset_all(Reseed::Keep).unwrap());
+        assert!(!p.is_poisoned());
+    });
 }
 
 #[test]
 fn test_async_send_batch_resends_a_token() {
-    let mut p = asy(AutoReset::NextStep, 2);
-    let all = p.reset_all(Reseed::Keep).unwrap();
-    let a = all_actions(0);
-    p.send_batch(
-        all,
-        ActionInput {
-            discrete: &a,
-            continuous: &[],
-        },
-    )
-    .map_err(|e| e.error)
-    .unwrap();
-    let mut seen = 0;
-    while seen < usize::try_from(N).unwrap() {
-        seen += p.recv().unwrap().len();
-    }
-    let mut q = asy(AutoReset::NextStep, 1);
-    let foreign = q.reset_all(Reseed::Keep).unwrap();
-    let err = p
-        .send_batch(
-            foreign,
+    within("send batch resends a token", || {
+        let mut p = asy(AutoReset::NextStep, 2);
+        let all = p.reset_all(Reseed::Keep).unwrap();
+        let a = all_actions(0);
+        p.send_batch(
+            all,
             ActionInput {
                 discrete: &a,
                 continuous: &[],
             },
         )
-        .unwrap_err();
-    assert_eq!(err.error, EngineError::WrongPool);
-    assert!(err.token.is_some(), "the foreign token is handed back");
+        .map_err(|e| e.error)
+        .unwrap();
+        let mut seen = 0;
+        while seen < usize::try_from(N).unwrap() {
+            seen += p.recv().unwrap().len();
+        }
+        let mut q = asy(AutoReset::NextStep, 1);
+        let foreign = q.reset_all(Reseed::Keep).unwrap();
+        let err = p
+            .send_batch(
+                foreign,
+                ActionInput {
+                    discrete: &a,
+                    continuous: &[],
+                },
+            )
+            .unwrap_err();
+        assert_eq!(err.error, EngineError::WrongPool);
+        assert!(err.token.is_some(), "the foreign token is handed back");
+    });
 }
 
 #[test]
 fn test_async_refused_send_batch_hands_the_token_back_unchanged() {
-    let mut p = asy(AutoReset::NextStep, 2);
-    drop(p.reset_all(Reseed::Keep).unwrap());
-    let ids: Vec<u32> = (0..10).collect();
-    send(&mut p, &ids, &rows_for(&ids, &[0; 100]));
-    let t = p.recv().unwrap();
-    let got: Vec<u32> = t.ids().collect();
-    let before: Vec<Vec<u64>> = got.iter().map(|&id| token_frame(&t, id)).collect();
-    let g = p.generation(got[0]).unwrap();
-    // Too few actions: refused, and the token comes back.
-    let err = p
-        .send_batch(
-            t,
-            ActionInput {
-                discrete: &[0, 0],
-                continuous: &[],
-            },
-        )
-        .unwrap_err();
-    assert!(matches!(err.error, EngineError::ActionLength { .. }));
-    let t = err.token.unwrap();
-    assert_eq!(t.ids().collect::<Vec<_>>(), got);
-    for (k, &id) in got.iter().enumerate() {
-        assert_eq!(token_frame(&t, id), before[k], "unchanged");
-    }
-    assert_eq!(p.generation(got[0]).unwrap(), g, "nothing moved");
-    // Its ids are still covered, and the token can be resent.
-    assert_eq!(
-        p.send(&got, input(&rows_for(&got, &[1; 100]))),
-        Err(EngineError::Borrowed { id: got[0] })
-    );
-    p.send_batch(t, input(&rows_for(&got, &[1; 100])))
-        .map_err(|e| e.error)
-        .unwrap();
-    drop(p.recv().unwrap());
+    within("refused send batch hands the token back unchanged", || {
+        let mut p = asy(AutoReset::NextStep, 2);
+        drop(p.reset_all(Reseed::Keep).unwrap());
+        let ids: Vec<u32> = (0..10).collect();
+        send(&mut p, &ids, &rows_for(&ids, &[0; 100]));
+        let t = p.recv().unwrap();
+        let got: Vec<u32> = t.ids().collect();
+        let before: Vec<Vec<u64>> = got.iter().map(|&id| token_frame(&t, id)).collect();
+        let g = p.generation(got[0]).unwrap();
+        // Too few actions: refused, and the token comes back.
+        let err = p
+            .send_batch(
+                t,
+                ActionInput {
+                    discrete: &[0, 0],
+                    continuous: &[],
+                },
+            )
+            .unwrap_err();
+        assert!(matches!(err.error, EngineError::ActionLength { .. }));
+        let t = err.token.unwrap();
+        assert_eq!(t.ids().collect::<Vec<_>>(), got);
+        for (k, &id) in got.iter().enumerate() {
+            assert_eq!(token_frame(&t, id), before[k], "unchanged");
+        }
+        assert_eq!(p.generation(got[0]).unwrap(), g, "nothing moved");
+        // Its ids are still covered, and the token can be resent.
+        assert_eq!(
+            p.send(&got, input(&rows_for(&got, &[1; 100]))),
+            Err(EngineError::Borrowed { id: got[0] })
+        );
+        p.send_batch(t, input(&rows_for(&got, &[1; 100])))
+            .map_err(|e| e.error)
+            .unwrap();
+        drop(p.recv().unwrap());
+    });
 }
 
 #[test]
 fn test_async_waiter_and_recv_timeout() {
-    let mut p = asy(AutoReset::NextStep, 2);
-    drop(p.reset_all(Reseed::Keep).unwrap());
-    let w = p.waiter();
-    let ids: Vec<u32> = (0..10).collect();
-    send(&mut p, &ids, &rows_for(&ids, &[0; 100]));
-    let t = loop {
-        if let Some(t) = p.recv_timeout(Duration::from_millis(50)).unwrap() {
-            break t;
-        }
-    };
-    assert_eq!(t.len(), BATCH);
-    assert!(!w.wait_ready(Duration::from_millis(1)));
+    within("waiter and recv timeout", || {
+        let mut p = asy(AutoReset::NextStep, 2);
+        drop(p.reset_all(Reseed::Keep).unwrap());
+        let w = p.waiter();
+        let ids: Vec<u32> = (0..10).collect();
+        send(&mut p, &ids, &rows_for(&ids, &[0; 100]));
+        let t = loop {
+            if let Some(t) = p.recv_timeout(Duration::from_millis(50)).unwrap() {
+                break t;
+            }
+        };
+        assert_eq!(t.len(), BATCH);
+        assert!(!w.wait_ready(Duration::from_millis(1)));
+    });
 }
 
 #[test]
 fn test_async_batch_larger_than_the_pool_is_refused_and_handed_back() {
-    let r = Pool::with_masks(cfg(), options(AutoReset::NextStep))
-        .unwrap()
-        .async_mode(AsyncOptions::new(
-            NonZeroUsize::new(1).unwrap(),
-            NonZeroUsize::new(101).unwrap(),
-        ));
-    let Err(err) = r else {
-        panic!("a batch larger than the pool");
-    };
-    assert!(matches!(err.error, EngineError::Options { .. }));
-    let mut pool = *err.pool.unwrap();
-    pool.reset_all(Reseed::Keep).unwrap();
+    within(
+        "batch larger than the pool is refused and handed back",
+        || {
+            let r = Pool::with_masks(cfg(), options(AutoReset::NextStep))
+                .unwrap()
+                .async_mode(AsyncOptions::new(
+                    NonZeroUsize::new(1).unwrap(),
+                    NonZeroUsize::new(101).unwrap(),
+                ));
+            let Err(err) = r else {
+                panic!("a batch larger than the pool");
+            };
+            assert!(matches!(err.error, EngineError::Options { .. }));
+            let mut pool = *err.pool.unwrap();
+            pool.reset_all(Reseed::Keep).unwrap();
+        },
+    );
 }
 
 #[cfg(feature = "debug-checks")]
 #[test]
 fn test_async_debug_checks_refuse_what_sync_refuses_and_mutate_nothing() {
-    let mut p = asy(AutoReset::NextStep, 2);
-    drop(p.reset_all(Reseed::Keep).unwrap());
-    let mut reference = sync_pool(AutoReset::NextStep);
-    reference.reset_all(Reseed::Keep).unwrap();
-    // Find an action the Sync step refuses.
-    let mut bad = all_actions(0);
-    let mut refused = None;
-    for k in 0..bad.len() {
-        let mut probe = bad.clone();
-        probe[k] = 2;
-        if let Err(e) = reference.step(ActionInput {
-            discrete: &probe,
-            continuous: &[],
-        }) && matches!(e, EngineError::IllegalAction { .. })
-        {
-            bad = probe;
-            refused = Some((k / 2, e));
-            break;
-        }
-    }
-    let (id, sync_err) = refused.unwrap();
-    let id = u32::try_from(id).unwrap();
-    let g = p.generation(id).unwrap();
-    let i = usize::try_from(id).unwrap();
-    let err = p
-        .send(
-            &[id],
-            ActionInput {
-                discrete: &bad[i * 2..i * 2 + 2],
-                continuous: &[],
-            },
-        )
-        .unwrap_err();
-    assert_eq!(err, sync_err);
-    assert_eq!(p.generation(id).unwrap(), g, "nothing changed");
+    within(
+        "debug checks refuse what sync refuses and mutate nothing",
+        || {
+            let mut p = asy(AutoReset::NextStep, 2);
+            drop(p.reset_all(Reseed::Keep).unwrap());
+            let mut reference = sync_pool(AutoReset::NextStep);
+            reference.reset_all(Reseed::Keep).unwrap();
+            // Find an action the Sync step refuses.
+            let mut bad = all_actions(0);
+            let mut refused = None;
+            for k in 0..bad.len() {
+                let mut probe = bad.clone();
+                probe[k] = 2;
+                if let Err(e) = reference.step(ActionInput {
+                    discrete: &probe,
+                    continuous: &[],
+                }) && matches!(e, EngineError::IllegalAction { .. })
+                {
+                    bad = probe;
+                    refused = Some((k / 2, e));
+                    break;
+                }
+            }
+            let (id, sync_err) = refused.unwrap();
+            let id = u32::try_from(id).unwrap();
+            let g = p.generation(id).unwrap();
+            let i = usize::try_from(id).unwrap();
+            let err = p
+                .send(
+                    &[id],
+                    ActionInput {
+                        discrete: &bad[i * 2..i * 2 + 2],
+                        continuous: &[],
+                    },
+                )
+                .unwrap_err();
+            assert_eq!(err, sync_err);
+            assert_eq!(p.generation(id).unwrap(), g, "nothing changed");
+        },
+    );
 }
 
 #[test]
 fn test_async_poisoned_conversion_stays_poisoned_and_reset_all_recovers() {
-    let mut pool = Pool::with_masks(
-        CountConfig {
-            panic_at: 1,
-            ..cfg()
+    within(
+        "poisoned conversion stays poisoned and reset all recovers",
+        || {
+            let mut pool = Pool::with_masks(
+                CountConfig {
+                    panic_at: 1,
+                    ..cfg()
+                },
+                options(AutoReset::NextStep),
+            )
+            .unwrap();
+            pool.reset_all(Reseed::Keep).unwrap();
+            assert_eq!(
+                pool.step(input(&all_actions(0))).map(|_| ()),
+                Err(EngineError::Panicked)
+            );
+            let mut p = pool
+                .async_mode(AsyncOptions::new(
+                    NonZeroUsize::new(2).unwrap(),
+                    NonZeroUsize::new(BATCH).unwrap(),
+                ))
+                .unwrap();
+            assert!(p.is_poisoned(), "incoming EnvPool poison was lost");
+            assert_eq!(p.send(&[0], input(&[0, 0])), Err(EngineError::Poisoned));
+            assert_eq!(p.recv().map(|_| ()), Err(EngineError::Poisoned));
+            drop(p.reset_all(Reseed::Keep).unwrap());
+            assert!(!p.is_poisoned());
         },
-        options(AutoReset::NextStep),
-    )
-    .unwrap();
-    pool.reset_all(Reseed::Keep).unwrap();
-    assert_eq!(
-        pool.step(input(&all_actions(0))).map(|_| ()),
-        Err(EngineError::Panicked)
     );
-    let mut p = pool
-        .async_mode(AsyncOptions::new(
-            NonZeroUsize::new(2).unwrap(),
-            NonZeroUsize::new(BATCH).unwrap(),
-        ))
-        .unwrap();
-    assert!(p.is_poisoned(), "incoming EnvPool poison was lost");
-    assert_eq!(p.send(&[0], input(&[0, 0])), Err(EngineError::Poisoned));
-    assert_eq!(p.recv().map(|_| ()), Err(EngineError::Poisoned));
-    drop(p.reset_all(Reseed::Keep).unwrap());
-    assert!(!p.is_poisoned());
 }
 
 /// Under `debug-checks`, a value out of the head's range reports the same
@@ -707,20 +786,25 @@ fn test_async_poisoned_conversion_stays_poisoned_and_reset_all_recovers() {
 #[cfg(feature = "debug-checks")]
 #[test]
 fn test_async_debug_checks_out_of_range_value_reports_what_sync_reports() {
-    let mut bad = all_actions(0);
-    bad[2] = 99;
-    let mut sync = sync_pool(AutoReset::NextStep);
-    sync.reset_all(Reseed::Keep).unwrap();
-    let sync_err = sync.step(input(&bad)).map(|_| ()).unwrap_err();
-    assert!(
-        !matches!(sync_err, EngineError::IllegalAction { .. }),
-        "{sync_err:?}"
+    within(
+        "debug checks out of range value reports what sync reports",
+        || {
+            let mut bad = all_actions(0);
+            bad[2] = 99;
+            let mut sync = sync_pool(AutoReset::NextStep);
+            sync.reset_all(Reseed::Keep).unwrap();
+            let sync_err = sync.step(input(&bad)).map(|_| ()).unwrap_err();
+            assert!(
+                !matches!(sync_err, EngineError::IllegalAction { .. }),
+                "{sync_err:?}"
+            );
+            let mut p = asy(AutoReset::NextStep, 2);
+            drop(p.reset_all(Reseed::Keep).unwrap());
+            // Instance 1 holds the bad value; send it with instance 0, in that order.
+            let err = p.send(&[0, 1], input(&bad[..4])).unwrap_err();
+            assert_eq!(err, sync_err);
+        },
     );
-    let mut p = asy(AutoReset::NextStep, 2);
-    drop(p.reset_all(Reseed::Keep).unwrap());
-    // Instance 1 holds the bad value; send it with instance 0, in that order.
-    let err = p.send(&[0, 1], input(&bad[..4])).unwrap_err();
-    assert_eq!(err, sync_err);
 }
 
 /// A snapshot of an idle id while other ids run reads that row alone
@@ -729,22 +813,27 @@ fn test_async_debug_checks_out_of_range_value_reports_what_sync_reports() {
 /// `InFlight` until received.
 #[test]
 fn test_async_snapshot_idle_id_while_other_ids_run_matches_quiescent() {
-    let mut p = asy(AutoReset::NextStep, 2);
-    drop(p.reset_all(Reseed::Keep).unwrap());
-    let quiescent = p.snapshot(0).unwrap().to_bytes();
-    let ids: Vec<u32> = (1..41).collect();
-    send(&mut p, &ids, &rows_for(&ids, &[0; 100]));
-    assert_eq!(p.snapshot(0).unwrap().to_bytes(), quiescent);
-    assert_eq!(
-        p.snapshot(40).map(|_| ()),
-        Err(EngineError::InFlight { id: 40 })
+    within(
+        "snapshot idle id while other ids run matches quiescent",
+        || {
+            let mut p = asy(AutoReset::NextStep, 2);
+            drop(p.reset_all(Reseed::Keep).unwrap());
+            let quiescent = p.snapshot(0).unwrap().to_bytes();
+            let ids: Vec<u32> = (1..41).collect();
+            send(&mut p, &ids, &rows_for(&ids, &[0; 100]));
+            assert_eq!(p.snapshot(0).unwrap().to_bytes(), quiescent);
+            assert_eq!(
+                p.snapshot(40).map(|_| ()),
+                Err(EngineError::InFlight { id: 40 })
+            );
+            let mut got = 0;
+            while got < ids.len() {
+                got += p.recv().unwrap().len();
+            }
+            assert_eq!(p.snapshot(0).unwrap().to_bytes(), quiescent);
+            p.snapshot(40).unwrap();
+        },
     );
-    let mut got = 0;
-    while got < ids.len() {
-        got += p.recv().unwrap().len();
-    }
-    assert_eq!(p.snapshot(0).unwrap().to_bytes(), quiescent);
-    p.snapshot(40).unwrap();
 }
 
 /// The bounds guard in front of the raw row read: an unknown id is
@@ -752,51 +841,61 @@ fn test_async_snapshot_idle_id_while_other_ids_run_matches_quiescent() {
 /// flight and with sent ids not yet received.
 #[test]
 fn test_async_snapshot_out_of_range_id_is_refused_with_and_without_traffic() {
-    let mut p = asy(AutoReset::NextStep, 2);
-    drop(p.reset_all(Reseed::Keep).unwrap());
-    let n = p.num_envs();
-    let check = |p: &mut Asy| {
-        for id in [n, u32::MAX] {
-            assert_eq!(
-                p.snapshot(id).map(|_| ()),
-                Err(EngineError::InstanceOutOfRange { id, num_envs: n })
-            );
-        }
-    };
-    check(&mut p);
-    let ids: Vec<u32> = (1..41).collect();
-    send(&mut p, &ids, &rows_for(&ids, &[0; 100]));
-    check(&mut p);
-    let mut got = 0;
-    while got < ids.len() {
-        got += p.recv().unwrap().len();
-    }
+    within(
+        "snapshot out of range id is refused with and without traffic",
+        || {
+            let mut p = asy(AutoReset::NextStep, 2);
+            drop(p.reset_all(Reseed::Keep).unwrap());
+            let n = p.num_envs();
+            let check = |p: &mut Asy| {
+                for id in [n, u32::MAX] {
+                    assert_eq!(
+                        p.snapshot(id).map(|_| ()),
+                        Err(EngineError::InstanceOutOfRange { id, num_envs: n })
+                    );
+                }
+            };
+            check(&mut p);
+            let ids: Vec<u32> = (1..41).collect();
+            send(&mut p, &ids, &rows_for(&ids, &[0; 100]));
+            check(&mut p);
+            let mut got = 0;
+            while got < ids.len() {
+                got += p.recv().unwrap().len();
+            }
+        },
+    );
 }
 
 /// An id discarded by `reset_all` (completed, not yet received) can be sent
 /// again and is never delivered twice.
 #[test]
 fn test_async_ids_discarded_by_reset_all_are_sendable_and_never_delivered() {
-    let mut p = asy(AutoReset::NextStep, 2);
-    drop(p.reset_all(Reseed::Keep).unwrap());
-    // Three ids cannot fill a batch of ten: they complete and wait.
-    send(&mut p, &[0, 1, 2], &rows_for(&[0, 1, 2], &[0; 100]));
-    let all = loop {
-        match p.reset_all(Reseed::Keep) {
-            Ok(t) => break t,
-            Err(EngineError::NotQuiescent) => std::thread::yield_now(),
-            Err(e) => panic!("unexpected {e:?}"),
-        }
-    };
-    drop(all);
-    let ids: Vec<u32> = (0..10).collect();
-    send(&mut p, &ids, &rows_for(&ids, &[0; 100]));
-    let t = p.recv().unwrap();
-    let mut got: Vec<u32> = t.ids().collect();
-    got.sort_unstable();
-    assert_eq!(got, ids, "each id once, none of the discarded ones again");
-    drop(t);
-    assert_eq!(p.recv().map(|_| ()), Err(EngineError::NothingInFlight));
+    within(
+        "ids discarded by reset all are sendable and never delivered",
+        || {
+            let mut p = asy(AutoReset::NextStep, 2);
+            drop(p.reset_all(Reseed::Keep).unwrap());
+            // Three ids cannot fill a batch of ten: they complete and wait.
+            send(&mut p, &[0, 1, 2], &rows_for(&[0, 1, 2], &[0; 100]));
+            let all = loop {
+                match p.reset_all(Reseed::Keep) {
+                    Ok(t) => break t,
+                    Err(EngineError::NotQuiescent) => std::thread::yield_now(),
+                    Err(e) => panic!("unexpected {e:?}"),
+                }
+            };
+            drop(all);
+            let ids: Vec<u32> = (0..10).collect();
+            send(&mut p, &ids, &rows_for(&ids, &[0; 100]));
+            let t = p.recv().unwrap();
+            let mut got: Vec<u32> = t.ids().collect();
+            got.sort_unstable();
+            assert_eq!(got, ids, "each id once, none of the discarded ones again");
+            drop(t);
+            assert_eq!(p.recv().map(|_| ()), Err(EngineError::NothingInFlight));
+        },
+    );
 }
 
 /// Under `debug-checks`, a resent token runs the same legality pass as a
@@ -804,27 +903,29 @@ fn test_async_ids_discarded_by_reset_all_are_sendable_and_never_delivered() {
 #[cfg(feature = "debug-checks")]
 #[test]
 fn test_async_debug_checks_send_batch_refuses_what_sync_refuses() {
-    let mut reference = sync_pool(AutoReset::NextStep);
-    reference.reset_all(Reseed::Keep).unwrap();
-    let mut bad = all_actions(0);
-    let mut refused = None;
-    for k in 0..bad.len() {
-        let mut probe = bad.clone();
-        probe[k] = 2;
-        if let Err(e) = reference.step(input(&probe))
-            && matches!(e, EngineError::IllegalAction { .. })
-        {
-            bad = probe;
-            refused = Some(e);
-            break;
+    within("debug checks send batch refuses what sync refuses", || {
+        let mut reference = sync_pool(AutoReset::NextStep);
+        reference.reset_all(Reseed::Keep).unwrap();
+        let mut bad = all_actions(0);
+        let mut refused = None;
+        for k in 0..bad.len() {
+            let mut probe = bad.clone();
+            probe[k] = 2;
+            if let Err(e) = reference.step(input(&probe))
+                && matches!(e, EngineError::IllegalAction { .. })
+            {
+                bad = probe;
+                refused = Some(e);
+                break;
+            }
         }
-    }
-    let sync_err = refused.unwrap();
-    let mut p = asy(AutoReset::NextStep, 2);
-    let all = p.reset_all(Reseed::Keep).unwrap();
-    let err = p.send_batch(all, input(&bad)).unwrap_err();
-    assert_eq!(err.error, sync_err);
-    assert!(err.token.is_some(), "the token comes back");
+        let sync_err = refused.unwrap();
+        let mut p = asy(AutoReset::NextStep, 2);
+        let all = p.reset_all(Reseed::Keep).unwrap();
+        let err = p.send_batch(all, input(&bad)).unwrap_err();
+        assert_eq!(err.error, sync_err);
+        assert!(err.token.is_some(), "the token comes back");
+    });
 }
 
 // Codex's #84 probes (attachment 999), as regression tests.
@@ -832,15 +933,17 @@ fn test_async_debug_checks_send_batch_refuses_what_sync_refuses() {
 #[cfg(feature = "debug-checks")]
 #[test]
 fn test_review_send_batch_checks_mask_legality() {
-    let mut p = asy(AutoReset::NextStep, 2);
-    let token = p.reset_all(Reseed::Keep).unwrap();
-    let mut bad = all_actions(0);
-    bad[0] = 2;
-    let result = p.send_batch(token, input(&bad));
-    assert!(
-        matches!(result, Err(ref e) if matches!(e.error, EngineError::IllegalAction { .. })),
-        "send_batch accepted a masked-illegal action"
-    );
+    within("test review send batch checks mask legality", || {
+        let mut p = asy(AutoReset::NextStep, 2);
+        let token = p.reset_all(Reseed::Keep).unwrap();
+        let mut bad = all_actions(0);
+        bad[0] = 2;
+        let result = p.send_batch(token, input(&bad));
+        assert!(
+            matches!(result, Err(ref e) if matches!(e.error, EngineError::IllegalAction { .. })),
+            "send_batch accepted a masked-illegal action"
+        );
+    });
 }
 
 mod review_gate {
@@ -909,34 +1012,37 @@ mod review_gate {
 /// `InFlight`. Miri runs this case.
 #[test]
 fn test_review_snapshot_idle_id_while_other_id_runs() {
-    use review_gate::{Gated, RELEASE, STARTED};
-    use std::sync::atomic::Ordering;
-    STARTED.store(false, Ordering::SeqCst);
-    RELEASE.store(false, Ordering::SeqCst);
-    let opt = PoolOptions {
-        chunk_size: NonZeroU32::new(1).unwrap(),
-        ..PoolOptions::new(NonZeroU32::new(2).unwrap(), Seed::new(1))
-    };
-    let mut p = EnvPool::<Gated>::new(cfg(), opt)
-        .unwrap()
-        .async_mode(AsyncOptions::new(
-            NonZeroUsize::new(1).unwrap(),
-            NonZeroUsize::new(1).unwrap(),
-        ))
-        .unwrap();
-    drop(p.reset_all(Reseed::Keep).unwrap());
-    let quiescent = p.snapshot(1).unwrap().to_bytes();
-    p.send(&[0], input(&[0, 0])).unwrap();
-    while !STARTED.load(Ordering::SeqCst) {
-        std::thread::yield_now();
-    }
-    let result = p.snapshot(1).map(|r| r.to_bytes());
-    let running = p.snapshot(0).map(|_| ());
-    RELEASE.store(true, Ordering::SeqCst);
-    assert_eq!(result, Ok(quiescent.clone()));
-    assert_eq!(running, Err(EngineError::InFlight { id: 0 }));
-    drop(p.recv().unwrap());
-    assert_eq!(p.snapshot(1).unwrap().to_bytes(), quiescent);
+    let _released = ReleaseReviewGate;
+    within("test review snapshot idle id while other id runs", || {
+        use review_gate::{Gated, RELEASE, STARTED};
+        use std::sync::atomic::Ordering;
+        STARTED.store(false, Ordering::SeqCst);
+        RELEASE.store(false, Ordering::SeqCst);
+        let opt = PoolOptions {
+            chunk_size: NonZeroU32::new(1).unwrap(),
+            ..PoolOptions::new(NonZeroU32::new(2).unwrap(), Seed::new(1))
+        };
+        let mut p = EnvPool::<Gated>::new(cfg(), opt)
+            .unwrap()
+            .async_mode(AsyncOptions::new(
+                NonZeroUsize::new(1).unwrap(),
+                NonZeroUsize::new(1).unwrap(),
+            ))
+            .unwrap();
+        drop(p.reset_all(Reseed::Keep).unwrap());
+        let quiescent = p.snapshot(1).unwrap().to_bytes();
+        p.send(&[0], input(&[0, 0])).unwrap();
+        while !STARTED.load(Ordering::SeqCst) {
+            std::thread::yield_now();
+        }
+        let result = p.snapshot(1).map(|r| r.to_bytes());
+        let running = p.snapshot(0).map(|_| ());
+        RELEASE.store(true, Ordering::SeqCst);
+        assert_eq!(result, Ok(quiescent.clone()));
+        assert_eq!(running, Err(EngineError::InFlight { id: 0 }));
+        drop(p.recv().unwrap());
+        assert_eq!(p.snapshot(1).unwrap().to_bytes(), quiescent);
+    });
 }
 
 // Codex's #84 r2 probe (attachment 1013), as a regression test: a
@@ -945,25 +1051,30 @@ fn test_review_snapshot_idle_id_while_other_id_runs() {
 #[cfg(feature = "debug-checks")]
 #[test]
 fn test_review_received_batch_illegal_action_is_atomic() {
-    let mut p = asy_with(AutoReset::NextStep, 2, 1, cfg());
-    drop(p.reset_all(Reseed::Keep).unwrap());
-    p.send(&[0], input(&[0, 0])).unwrap();
-    let t = p.recv().unwrap();
-    let frame = token_frame(&t, 0);
-    let generation = p.generation(0).unwrap();
-    let err = p.send_batch(t, input(&[2, 0])).unwrap_err();
-    assert!(matches!(
-        err.error,
-        EngineError::IllegalAction { instance: 0, .. }
-    ));
-    let t = err.token.unwrap();
-    assert_eq!(token_frame(&t, 0), frame);
-    assert_eq!(p.generation(0).unwrap(), generation);
-    assert_eq!(p.recv().map(|_| ()), Err(EngineError::NothingInFlight));
-    p.send_batch(t, input(&[0, 0]))
-        .map_err(|e| e.error)
-        .unwrap();
-    drop(p.recv().unwrap());
+    within(
+        "test review received batch illegal action is atomic",
+        || {
+            let mut p = asy_with(AutoReset::NextStep, 2, 1, cfg());
+            drop(p.reset_all(Reseed::Keep).unwrap());
+            p.send(&[0], input(&[0, 0])).unwrap();
+            let t = p.recv().unwrap();
+            let frame = token_frame(&t, 0);
+            let generation = p.generation(0).unwrap();
+            let err = p.send_batch(t, input(&[2, 0])).unwrap_err();
+            assert!(matches!(
+                err.error,
+                EngineError::IllegalAction { instance: 0, .. }
+            ));
+            let t = err.token.unwrap();
+            assert_eq!(token_frame(&t, 0), frame);
+            assert_eq!(p.generation(0).unwrap(), generation);
+            assert_eq!(p.recv().map(|_| ()), Err(EngineError::NothingInFlight));
+            p.send_batch(t, input(&[0, 0]))
+                .map_err(|e| e.error)
+                .unwrap();
+            drop(p.recv().unwrap());
+        },
+    );
 }
 
 // TR nit on #84: too few ids for a batch must not hide a step's panic behind
@@ -971,29 +1082,31 @@ fn test_review_received_batch_illegal_action_is_atomic() {
 
 #[test]
 fn test_async_panic_outranks_batch_unreachable() {
-    let mut p = asy_with(
-        AutoReset::NextStep,
-        2,
-        BATCH,
-        CountConfig {
-            panic_at: 1,
-            length: 9,
-            ..CountConfig::default()
-        },
-    );
-    drop(p.reset_all(Reseed::Keep).unwrap());
-    let ids = [0, 1, 2];
-    assert!(ids.len() < BATCH);
-    send(&mut p, &ids, &rows_for(&ids, &[0; 100]));
-    let tries = if cfg!(miri) { 2_000 } else { 1_000_000 };
-    let seen = (0..tries).find_map(|_| match p.recv().map(|_| ()) {
-        Err(EngineError::BatchUnreachable { .. }) => {
-            std::thread::yield_now();
-            None
-        }
-        other => Some(other),
+    within("panic outranks batch unreachable", || {
+        let mut p = asy_with(
+            AutoReset::NextStep,
+            2,
+            BATCH,
+            CountConfig {
+                panic_at: 1,
+                length: 9,
+                ..CountConfig::default()
+            },
+        );
+        drop(p.reset_all(Reseed::Keep).unwrap());
+        let ids = [0, 1, 2];
+        assert!(ids.len() < BATCH);
+        send(&mut p, &ids, &rows_for(&ids, &[0; 100]));
+        let tries = if cfg!(miri) { 2_000 } else { 1_000_000 };
+        let seen = (0..tries).find_map(|_| match p.recv().map(|_| ()) {
+            Err(EngineError::BatchUnreachable { .. }) => {
+                std::thread::yield_now();
+                None
+            }
+            other => Some(other),
+        });
+        assert_eq!(seen, Some(Err(EngineError::Panicked)));
     });
-    assert_eq!(seen, Some(Err(EngineError::Panicked)));
 }
 
 // A received id is stepped: a writer or a snapshot right after the last `recv`
@@ -1002,54 +1115,58 @@ fn test_async_panic_outranks_batch_unreachable() {
 
 #[test]
 fn test_async_nothing_runs_once_every_id_is_received() {
-    let rounds = if cfg!(miri) { 20 } else { 20_000 };
-    let mut p = asy(AutoReset::NextStep, 4);
-    drop(p.reset_all(Reseed::Keep).unwrap());
-    let ids: Vec<u32> = (0..N).take(BATCH).collect();
-    let rows = rows_for(&ids, &[0; 100]);
-    for round in 0..rounds {
-        send(&mut p, &ids, &rows);
-        // Polling, as a blocking `recv` waits for the job and hides the race.
-        loop {
-            if let Some(t) = p.try_recv().unwrap() {
-                drop(t);
-                break;
+    within("nothing runs once every id is received", || {
+        let rounds = if cfg!(miri) { 20 } else { 20_000 };
+        let mut p = asy(AutoReset::NextStep, 4);
+        drop(p.reset_all(Reseed::Keep).unwrap());
+        let ids: Vec<u32> = (0..N).take(BATCH).collect();
+        let rows = rows_for(&ids, &[0; 100]);
+        for round in 0..rounds {
+            send(&mut p, &ids, &rows);
+            // Polling, as a blocking `recv` waits for the job and hides the race.
+            loop {
+                if let Some(t) = p.try_recv().unwrap() {
+                    drop(t);
+                    break;
+                }
+                std::thread::yield_now();
             }
-            std::thread::yield_now();
+            if round % 2 == 0 {
+                p.reset(&ids, Reseed::Keep).unwrap();
+                drop(p.recv().unwrap());
+            } else {
+                p.snapshot(0).unwrap();
+            }
         }
-        if round % 2 == 0 {
-            p.reset(&ids, Reseed::Keep).unwrap();
-            drop(p.recv().unwrap());
-        } else {
-            p.snapshot(0).unwrap();
-        }
-    }
+    });
 }
 
 // TR nit on the O(ids) gather: `rows` reads what the per-id accessors read.
 
 #[test]
 fn test_async_token_rows_match_the_per_id_accessors() {
-    let mut p = asy(AutoReset::NextStep, 2);
-    drop(p.reset_all(Reseed::Keep).unwrap());
-    let ids: Vec<u32> = (0..N).take(BATCH).collect();
-    send(&mut p, &ids, &rows_for(&ids, &[0; 100]));
-    let t = p.recv().unwrap();
-    let mut seen = 0;
-    for row in t.rows() {
-        let id = row.id();
-        assert_eq!(Some(row.generation()), t.generation(id));
-        assert_eq!(row.observation(0), t.observation(0, id));
-        assert_eq!(row.rewards(), t.rewards(id));
-        assert_eq!(row.agent_terminated(), t.agent_terminated(id));
-        assert_eq!(row.agent_truncated(), t.agent_truncated(id));
-        assert_eq!(row.alive(), t.alive(id));
-        assert_eq!(row.acting(), t.acting(id));
-        assert_eq!(row.masks(), t.masks(id));
-        assert_eq!(row.episode_terminated(), t.episode_terminated(id));
-        assert_eq!(row.episode_truncated(), t.episode_truncated(id));
-        seen += 1;
-    }
-    assert_eq!(seen, BATCH);
-    assert!(t.rows().map(|r| r.id()).eq(t.ids()));
+    within("token rows match the per id accessors", || {
+        let mut p = asy(AutoReset::NextStep, 2);
+        drop(p.reset_all(Reseed::Keep).unwrap());
+        let ids: Vec<u32> = (0..N).take(BATCH).collect();
+        send(&mut p, &ids, &rows_for(&ids, &[0; 100]));
+        let t = p.recv().unwrap();
+        let mut seen = 0;
+        for row in t.rows() {
+            let id = row.id();
+            assert_eq!(Some(row.generation()), t.generation(id));
+            assert_eq!(row.observation(0), t.observation(0, id));
+            assert_eq!(row.rewards(), t.rewards(id));
+            assert_eq!(row.agent_terminated(), t.agent_terminated(id));
+            assert_eq!(row.agent_truncated(), t.agent_truncated(id));
+            assert_eq!(row.alive(), t.alive(id));
+            assert_eq!(row.acting(), t.acting(id));
+            assert_eq!(row.masks(), t.masks(id));
+            assert_eq!(row.episode_terminated(), t.episode_terminated(id));
+            assert_eq!(row.episode_truncated(), t.episode_truncated(id));
+            seen += 1;
+        }
+        assert_eq!(seen, BATCH);
+        assert!(t.rows().map(|r| r.id()).eq(t.ids()));
+    });
 }
