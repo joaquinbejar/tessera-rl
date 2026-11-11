@@ -15,16 +15,34 @@ import pytest
 CHILD = pathlib.Path(__file__).with_name("x87_child.py")
 
 
+WIN64 = sys.platform == "win32"
+# Win64 NTSTATUS codes for the precondition fault. 0xC000008E is expected
+# for an x87 divide-by-zero; 0xC00002B5 is the SIMD multiple-traps code,
+# kept until the first native session records the observed code (#163).
+WIN64_FAULTS = {0xC000008E, 0xC00002B5}
+TIMEOUT = 60
+
+
 def run(scenario):
-    return subprocess.run([sys.executable, str(CHILD), scenario], capture_output=True, text=True)
+    try:
+        return subprocess.run([sys.executable, str(CHILD), scenario], capture_output=True, text=True,
+                              timeout=TIMEOUT)
+    except subprocess.TimeoutExpired:
+        pytest.fail(f"x87 child {scenario!r} did not finish in {TIMEOUT} s")
+
+
+def last_json(proc):
+    lines = proc.stdout.strip().splitlines()
+    return json.loads(lines[-1]) if lines and lines[-1].startswith("{") else None
 
 
 def child(scenario):
     proc = run(scenario)
-    assert proc.returncode == 0, proc.stderr
-    r = json.loads(proc.stdout.strip().splitlines()[-1])
+    r = last_json(proc)
+    assert proc.returncode == 0, (proc.returncode, r, proc.stderr)
     if "skipped" in r:
         pytest.skip(r["skipped"])
+    assert r["self_test"]["ok"], r["self_test"]
     return r
 
 
@@ -56,6 +74,7 @@ def test_x87_reject_policy_ignores_the_x87_word_and_restores_it():
 def test_x87_callout_change_never_outlives_the_callout(scenario):
     r = child(scenario)
     assert r["hook_entry"] == r["want"], "the host runs under the caller's x87 word and MXCSR"
+    assert r["hook_x87"] == r["want_hook_x87"], "the host's own word is in force inside the callout"
     assert r["after"] == r["want"], "the host's change does not reach the caller"
     expected = {"callout": "ran", "callout_raises": "ValueError", "callout_interrupt": "KeyboardInterrupt"}
     assert r["outcome"] == expected[scenario]
@@ -77,7 +96,17 @@ def test_x87_precondition_supported_state_exits_cleanly():
 def test_x87_precondition_violation_faults_with_sigfpe(scenario):
     # ADR-0044: a pending unmasked x87 exception at a callback return is an
     # unsupported precondition; the restore faults (#MF) and the process
-    # dies with SIGFPE. It is never converted into a Python exception.
+    # dies: SIGFPE on System V, an NTSTATUS float code on Win64. It is never
+    # converted into a Python exception. Three outcomes are told apart: the
+    # fault, a ctypes OSError (Win64: a stub took the fault), and a normal
+    # return; only the first passes.
     child("entry")  # skips where the raw probes cannot run
     proc = run(scenario)
-    assert proc.returncode == -signal.SIGFPE, (proc.returncode, proc.stdout, proc.stderr)
+    r = last_json(proc)
+    assert not (r and r.get("outcome") == "ctypes_oserror"), f"a stub took the fault, not engine code: {r}"
+    assert r is None, f"the child returned normally: {r}"
+    if WIN64:
+        code = proc.returncode & 0xFFFFFFFF
+        assert code in WIN64_FAULTS, (hex(code), proc.stdout, proc.stderr)
+    else:
+        assert proc.returncode == -signal.SIGFPE, (proc.returncode, proc.stdout, proc.stderr)
