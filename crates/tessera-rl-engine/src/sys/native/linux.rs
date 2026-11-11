@@ -27,13 +27,14 @@ pub(super) fn wait(word: &AtomicU32, expected: u32) {
 #[expect(unsafe_code, reason = "audited module: futex system call")]
 pub(super) fn wait_timeout(word: &AtomicU32, expected: u32, timeout: core::time::Duration) {
     // FUTEX_WAIT takes a relative timeout, measured on CLOCK_MONOTONIC.
-    // A timeout beyond `time_t` saturates at `time_t::MAX` seconds (the
-    // caller rechecks its deadline after any return). The nanoseconds are
-    // below 10^9, so they always fit an `i32`, which converts into `c_long`
-    // infallibly whether it is 64-bit (every target built today) or 32-bit.
+    // Seconds beyond `i32::MAX` (about 68 years) saturate (the caller
+    // rechecks its deadline after any return). Both parts are `i32`, which
+    // convert infallibly into the fields whether `time_t` and `c_long` are
+    // 64-bit or 32-bit, without naming `time_t` (deprecated on musl).
+    let (secs, nanos) = super::timespec_parts(timeout);
     let ts = libc::timespec {
-        tv_sec: libc::time_t::try_from(timeout.as_secs()).unwrap_or(libc::time_t::MAX),
-        tv_nsec: libc::c_long::from(i32::try_from(timeout.subsec_nanos()).unwrap_or(0)),
+        tv_sec: secs.into(),
+        tv_nsec: nanos.into(),
     };
     // SAFETY: as in `wait`, and `ts` is a valid `timespec` that lives for
     // the call (`tv_nsec` below one second). ETIMEDOUT, EAGAIN and EINTR

@@ -20,6 +20,24 @@ mod macos;
 #[cfg(windows)]
 mod windows;
 
+/// A relative timeout as `timespec` parts `(seconds, nanoseconds)`, both
+/// `i32`, so each converts infallibly into the platform's field types
+/// whatever their width (`time_t` is 32-bit on some targets, and on musl the
+/// libc crate deprecates naming it). Seconds beyond `i32::MAX` (about 68
+/// years) saturate; every caller rechecks its deadline after any return.
+/// The nanoseconds are below 10^9 and always fit.
+#[cfg_attr(
+    not(any(target_os = "linux", test)),
+    expect(dead_code, reason = "only the Linux futex builds a timespec")
+)]
+#[must_use]
+pub(crate) fn timespec_parts(timeout: Duration) -> (i32, i32) {
+    (
+        i32::try_from(timeout.as_secs()).unwrap_or(i32::MAX),
+        i32::try_from(timeout.subsec_nanos()).unwrap_or(0),
+    )
+}
+
 /// A native wait primitive.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Native {
@@ -106,3 +124,27 @@ impl Native {
 #[cfg(test)]
 #[cfg(not(miri))]
 mod tests;
+
+// Pure arithmetic: runs on every platform, Miri included.
+#[cfg(test)]
+mod timespec_tests {
+    use super::{Duration, timespec_parts};
+
+    /// Zero, sub-second, normal and huge timeouts; seconds saturate at
+    /// `i32::MAX`, nanoseconds are kept.
+    #[test]
+    fn test_timespec_parts_saturates_seconds_and_keeps_nanos() {
+        assert_eq!(timespec_parts(Duration::ZERO), (0, 0));
+        assert_eq!(
+            timespec_parts(Duration::from_nanos(999_999_999)),
+            (0, 999_999_999)
+        );
+        assert_eq!(timespec_parts(Duration::new(5, 250)), (5, 250));
+        assert_eq!(
+            timespec_parts(Duration::from_secs(u64::from(i32::MAX.unsigned_abs()))),
+            (i32::MAX, 0)
+        );
+        assert_eq!(timespec_parts(Duration::new(u64::MAX, 7)), (i32::MAX, 7));
+        assert_eq!(timespec_parts(Duration::MAX), (i32::MAX, 999_999_999));
+    }
+}
