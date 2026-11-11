@@ -492,12 +492,14 @@ def _main(argv, platform) -> int:
         except ValueError as e:
             print(f"refused: {e}", file=sys.stderr)
             return 2
-    if args.adopt or args.scenario:
-        try:
-            STAMP = environment(args)
-        except ValueError as e:
-            print(f"refused: {e}", file=sys.stderr)
-            return 2
+    # Every run that measures stamps its files and its report with the full
+    # stamp (inputs, interpreter, Valgrind, CPU), so a report compared across
+    # wheels later can be checked field by field (decide.py).
+    try:
+        STAMP = environment(args)
+    except ValueError as e:
+        print(f"refused: {e}", file=sys.stderr)
+        return 2
     if args.feasibility and args.adopt:
         try:
             names = adopt(args.adopt, args.out_dir)
@@ -536,16 +538,17 @@ def _main(argv, platform) -> int:
     if args.feasibility:
         report = feasibility(args.python, args.manifest, manifest, args.out_dir)
         report["approved_window"] = args.approved_window
-        report["sha256"] = hashes(args)
+        report["sha256"] = STAMP
         report["kernels_sha256"] = kernels_sha256(args)
         (args.out_dir / "feasibility.json").write_text(json.dumps(report, indent=1))
         return 0 if report["passed"] else 1
     costs = {
-        s.name: cost_of(args.python, args.manifest, s, args.out_dir).events
+        s.name: cost_of(args.python, args.manifest, s, args.out_dir, runner=_run).events
         for s in evidence.scenarios(manifest)
     }
-    sha256 = {"wheel": sha256_of(args.wheel), "manifest": sha256_of(args.manifest)}
-    (args.out_dir / "costs.json").write_text(json.dumps({"approved_window": args.approved_window, "sha256": sha256, "costs": costs}, indent=1))
+    (args.out_dir / "costs.json").write_text(json.dumps(
+        {"approved_window": args.approved_window, "sha256": STAMP, "kernels_sha256": kernels_sha256(args), "costs": costs},
+        indent=1))
     return 0
 
 

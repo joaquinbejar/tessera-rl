@@ -199,3 +199,9 @@ def test_pgo_kernels_list_is_filled_and_matches_the_w1_symbols():
     import evidence
     kernels = evidence.load_kernels(str(ROOT / "tools" / "pgo" / "kernels.toml"))
     assert len(kernels) == 11 and all(k.startswith("step_chunk+") for k in kernels)
+
+
+def test_pgo_coverage_anchors_kernels_on_the_identifier_boundary(tmp_path):
+    show = "Counters:\n  _RINvNtCs1_17tessera_rl_engine4pool10step_chunkNtNtCs2_18tessera_rl_classic9longgrid14GridExtendedE:\n    Function count: 9\n"
+    r = coverage.check(["step_chunk+Grid"], show, "", wheel_with(tmp_path, b"clean"))
+    assert r["kernels"]["step_chunk+Grid"] == 0, "4Grid inside 14GridExtended is another identifier"

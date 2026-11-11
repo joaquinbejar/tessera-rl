@@ -247,13 +247,15 @@ def test_pgo_feasibility_records_hashes_and_needs_the_wheel(tmp_path, monkeypatc
     wheel = tmp_path / "w.whl"
     wheel.write_bytes(b"abc")
     monkeypatch.setattr(callgrind, "feasibility", lambda *a: {"passed": True})
+    monkeypatch.setattr(callgrind, "environment", fake_environment())
     out = tmp_path / "o"
     base = ["--approved-window", "x", "--manifest", MANIFEST_PATH, "--out-dir", str(out), "--feasibility"]
     assert callgrind.main(base, platform="linux") == 2
     assert callgrind.main([*base, "--wheel", str(wheel)], platform="linux") == 0
     saved = json.loads((out / "feasibility.json").read_text())
     assert saved["sha256"]["wheel"] == hashlib.sha256(b"abc").hexdigest()
-    assert set(saved["sha256"]) == {"wheel", "manifest"}, "the kernel list is not a measured input"
+    assert set(saved["sha256"]) == {"wheel", "manifest", "python", "valgrind", "cpu_model", "cpu_flags"}, \
+        "the full stamp, without the kernel list"
     assert len(saved["kernels_sha256"]) == 64
 
 
@@ -749,3 +751,45 @@ def test_pgo_merge_of_adopted_and_new_files_needs_equal_reduced_stamps(tmp_path,
         rest = [n for n in names if n not in adopted]
         assert callgrind.main([*args, *sum((["--scenario", n] for n in rest), [])], platform="linux") == 0
     assert merge_now(out2, wheel) == 2
+
+
+def plain_costs(tmp_path, wheel_bytes, env):
+    """costs.json of one wheel through callgrind.py's real plain mode."""
+    wheel = tmp_path / f"{wheel_bytes.decode()}.whl"
+    wheel.write_bytes(wheel_bytes)
+    out = tmp_path / f"c-{wheel_bytes.decode()}"
+    with pytest.MonkeyPatch.context() as m:
+        m.setattr(callgrind.subprocess, "run", FakeValgrind())
+        m.setattr(callgrind, "environment", env)
+        assert callgrind.main(["--approved-window", "x", "--manifest", MANIFEST_PATH, "--out-dir", str(out),
+                               "--wheel", str(wheel)], platform="linux") == 0
+    return json.loads((out / "costs.json").read_text()), hashlib.sha256(wheel_bytes).hexdigest()
+
+
+def decide_on_real_outputs(tmp_path, w0_env, w1_env):
+    decide = load("decide")
+    # The gate: parts and merge on the W1 bytes ("abc", run_parts' wheel), under fake_environment().
+    out, wheel, _ = run_parts(tmp_path, [all_names()])
+    assert merge_now(out, wheel) == 0
+    feas = json.loads((out / "feasibility.json").read_text())
+    w0, w0_sha = plain_costs(tmp_path / "w0", b"w0", w0_env)
+    w1, w1_sha = plain_costs(tmp_path / "w1", b"abc", w1_env)
+    seventh = {"W1": {"checks": {"wheel_sha256": w1_sha, "checks": {"python_suite": 0, "num_tests": 0}},
+                      "compare": {"passed": True, "wheels": [w0_sha, w1_sha]}}}
+    kernels = str(TOOLS / "kernels.toml")
+    return decide.decide({"W0": w0, "W1": w1}, feas, seventh, MANIFEST_PATH, kernels), decide
+
+
+def test_pgo_decide_accepts_real_outputs_under_one_stamp(tmp_path):
+    for d in ("w0", "w1"):
+        (tmp_path / d).mkdir()
+    result, _ = decide_on_real_outputs(tmp_path, fake_environment(), fake_environment())
+    assert "ship" in result
+
+
+@pytest.mark.parametrize("override", [{"cpu_flags": "flags-b"}, {"cpu_model": "Other CPU"}, {"toolchain": "vg-2"}])
+def test_pgo_decide_refuses_real_outputs_from_another_host_or_toolchain(tmp_path, override):
+    for d in ("w0", "w1"):
+        (tmp_path / d).mkdir()
+    with pytest.raises(Exception, match="another stamp"):
+        decide_on_real_outputs(tmp_path, fake_environment(**override), fake_environment())

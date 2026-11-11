@@ -50,8 +50,10 @@ def check(kernels: list[str], show: str, build_log: str, wheel: pathlib.Path) ->
     found = counts(show)
     kernel_status = {}
     for k in kernels:
-        parts = [f"{len(p)}{p}" for p in k.split("+")]
-        hits = {n: c for n, c in found.items() if all(p in n for p in parts)}
+        # Each part as a v0 length-prefixed identifier, anchored on its left:
+        # "4Grid" must not match inside "14Grid…" (another identifier).
+        parts = [re.compile(rf"(?<![0-9]){len(p)}{re.escape(p)}") for p in k.split("+")]
+        hits = {n: c for n, c in found.items() if all(p.search(n) for p in parts)}
         kernel_status[k] = max(hits.values()) if hits else 0
     mismatches = [l.strip() for l in build_log.splitlines() if MISMATCH.search(l) and "tessera_rl" in l]
     missing = sum(1 for l in build_log.splitlines() if MISSING.search(l))
