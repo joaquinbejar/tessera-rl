@@ -133,12 +133,24 @@ def test_persist_another_config_is_refused():
     env.close()
 
 
-def test_persist_load_releases_the_interpreter():
-    # With a long switch interval, the other thread gets the interpreter back from a
-    # short run of these calls only if the native call lets go of it.
-    data = sync_file()
-    env = make()
-    env.reset()
+# A switch interval far longer than any measured region: the helper thread only gets
+# the interpreter while the measured callable lets go of it (or the region blocks).
+SWITCH_INTERVAL_S = 5.0
+# Ticks the helper must make; more than one rules out a single stray switch.
+REQUIRED_TICKS = 3
+
+
+def ticks_while_calling(call, max_calls, budget_s):
+    """Call ``call()`` until a helper thread has ticked ``REQUIRED_TICKS`` times, or
+    until ``max_calls`` calls or ``budget_s`` seconds have run, whichever comes first.
+
+    Returns ``(calls, ticks)``. The helper ticks in a ``time.sleep`` loop, so it can
+    tick only when the main thread releases the interpreter. Stopping on ticks
+    rather than after a fixed count keeps the result independent of how coarse
+    ``time.sleep`` is on the platform (issue #179).
+    ``budget_s`` must stay well below ``SWITCH_INTERVAL_S``.
+    """
+    assert budget_s <= SWITCH_INTERVAL_S / 2
     ticks = [0]
     stop = threading.Event()
     started = threading.Event()
@@ -152,19 +164,54 @@ def test_persist_load_releases_the_interpreter():
     previous = sys.getswitchinterval()
     thread = threading.Thread(target=other)
     thread.start()
-    started.wait()
-    sys.setswitchinterval(5)
     try:
+        started.wait()
+        sys.setswitchinterval(SWITCH_INTERVAL_S)
+        # A blocking sleep hands the interpreter over once, so that any wait the
+        # helper began under the previous (short) interval is over before measuring.
+        time.sleep(0.01)
         before = ticks[0]
-        for _ in range(200):
-            env.load(data)
+        calls = 0
+        deadline = time.monotonic() + budget_s
+        while calls < max_calls and time.monotonic() < deadline:
+            call()
+            calls += 1
+            if ticks[0] - before >= REQUIRED_TICKS:
+                break
         moved = ticks[0] - before
     finally:
         sys.setswitchinterval(previous)
         stop.set()
         thread.join()
-    assert moved > 0
+    return calls, moved
+
+
+def test_persist_load_releases_the_interpreter():
+    data = sync_file()
+    env = make()
+    env.reset()
+    # The budget stays well below SWITCH_INTERVAL_S: past the interval the
+    # interpreter switches even if the call holds it, and the test would lose its
+    # teeth. On a native Windows host 2000 loads took about 8 ms with at least 10
+    # ticks, so 2 s is a margin of hundreds of times.
+    calls, moved = ticks_while_calling(lambda: env.load(data), max_calls=1_000_000, budget_s=2.0)
     env.close()
+    assert moved >= REQUIRED_TICKS, f"{calls} loads ran and the other thread ticked {moved} times"
+
+
+def test_persist_ticks_while_calling_python_holding_the_interpreter_sees_no_ticks():
+    # Negative control for the method above: pure Python never releases the
+    # interpreter before the switch interval, so the helper cannot tick. The region
+    # (about 50 ms) is two orders of magnitude below the 5 s interval, so an
+    # involuntary switch cannot happen within it.
+    def busy():
+        end = time.perf_counter() + 0.0005
+        while time.perf_counter() < end:
+            pass
+
+    calls, moved = ticks_while_calling(busy, max_calls=1_000_000, budget_s=0.05)
+    assert calls > 1
+    assert moved == 0, f"{calls} calls ran and the other thread ticked {moved} times"
 
 
 def test_persist_no_identity_override_reaches_python():
