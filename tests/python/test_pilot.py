@@ -284,14 +284,34 @@ def test_pilot_deadline_kills_running_work_and_charges_the_ledger(bot, tmp_path)
 
 
 def test_pilot_supervisor_kills_native_work_that_holds_the_gil_and_charges_it_unclamped(bot, tmp_path):
-    # The child sleeps 30 s in C with the GIL held: its watchdog thread
+    # The child sleeps HOLD_S in C with the GIL held: its watchdog thread
     # never runs, so only the supervisor's own deadline can stop it.
-    start = time.monotonic()
-    proc = run_pilot(tiny_args(tmp_path, bot, "train", **{"--wall-cap-s": "4"}), env={"PILOT_TEST_HOLD_GIL_S": "30"})
-    wall = time.monotonic() - start
-    assert proc.returncode == pilot.EXIT_DEADLINE, proc.stderr
-    assert wall < 4 + 3
-    (entry,) = json.loads((tmp_path / "ledger.json").read_text())["entries"]
+    hold_s = 30
+    ledger = tmp_path / "ledger.json"
+    proc = subprocess.Popen(
+        [sys.executable, str(EXAMPLE / "pilot.py"), *tiny_args(tmp_path, bot, "train", **{"--wall-cap-s": "4"})],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        env={**os.environ, "PILOT_TEST_HOLD_GIL_S": str(hold_s)},
+    )
+    try:
+        # The clock starts when the supervisor reserves (the ledger appears
+        # right before its deadline is armed), not at the interpreter's
+        # start: torch's import time under load is not what is under test.
+        armed = _wait_for(ledger.exists, 60)
+        assert armed is not None, "the supervisor reserved"
+        _, stderr = proc.communicate(timeout=hold_s + 60)
+        wall = time.monotonic() - armed
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait()
+    assert proc.returncode == pilot.EXIT_DEADLINE, stderr
+    # A supervisor that never kills waits out the native work (hold_s);
+    # one that does is done long before, however loaded the machine.
+    assert wall < hold_s
+    (entry,) = json.loads(ledger.read_text())["entries"]
     assert entry["status"].startswith("killed")
     # The charge is the measured wall, not a clamped value: the work
     # stopped at 4 - grace s, inside the 4 s reservation.
@@ -310,23 +330,95 @@ def test_pilot_sigkilled_supervisor_takes_its_workers_and_its_reservation(bot, t
     args = tiny_args(tmp_path, bot, "selfplay", **{"--wall-cap-s": "60", "--games-per-worker": "100000", "--sims": "64"})
     sup = subprocess.Popen([sys.executable, str(EXAMPLE / "pilot.py"), *args], stdout=subprocess.PIPE, text=True)
     ledger = tmp_path / "ledger.json"
-    deadline = time.monotonic() + 30
-    while not ledger.exists() and time.monotonic() < deadline:
-        time.sleep(0.1)
-    time.sleep(1.0)
-    child_pids = [
-        int(p) for p in subprocess.run(["pgrep", "-P", str(sup.pid)], capture_output=True, text=True).stdout.split()
-    ]
-    assert child_pids, "the supervisor started its child"
-    sup.kill()
-    sup.wait()
-    # The child's watchdog sees its parent gone and kills its group.
-    gone = time.monotonic() + 10
-    while time.monotonic() < gone and any(_exists(p) for p in child_pids):
-        time.sleep(0.1)
-    assert not any(_exists(p) for p in child_pids)
-    (entry,) = Ledger(str(ledger), budget_core_hours=1).entries()
-    assert entry["status"].startswith("interrupted") and entry["core_hours"] == pytest.approx(60 / 3600, abs=1e-5)
+    try:
+        # Ready when the child runs its self-play workers: then there are
+        # workers to take, however long a loaded machine took to start them.
+        assert _wait_for(lambda: _children(sup.pid), 60), "the supervisor started its child"
+        (child_pid,) = _children(sup.pid)
+        assert _wait_for(lambda: _children(child_pid), 60), "the child started its workers"
+        pids = [child_pid, *_children(child_pid)]
+    finally:
+        sup.kill()
+        sup.wait()
+    _assert_gone_long_before_the_deadline(pids)
+    _assert_charged_once_at_the_full_reservation(ledger, 60)
+
+
+def test_pilot_supervisor_killed_while_its_child_starts_takes_the_child_at_once(bot, tmp_path):
+    # The test-only start gate (start_gate/sitecustomize.py) holds the child
+    # before any line of pilot.py runs, so before it can check its
+    # supervisor: the supervisor dies inside that window deterministically.
+    gate = tmp_path / "gate"
+    env = start_gate_env(gate)
+    args = tiny_args(tmp_path, bot, "selfplay", **{"--wall-cap-s": "60", "--games-per-worker": "100000", "--sims": "64"})
+    sup = subprocess.Popen([sys.executable, str(EXAMPLE / "pilot.py"), *args], env=env)
+    try:
+        held = gate.with_suffix(".held")
+        assert _wait_for(held.exists, 60), "the child reached the start gate"
+        child_pid = int(held.read_text())
+    finally:
+        sup.kill()
+        sup.wait()
+    gate.write_text("")
+    # Without the check the child runs on to the work deadline (58 s).
+    _assert_gone_long_before_the_deadline([child_pid])
+    _assert_charged_once_at_the_full_reservation(tmp_path / "ledger.json", 60)
+
+
+START_GATE = pathlib.Path(__file__).with_name("start_gate")
+
+
+def start_gate_env(gate):
+    path = os.pathsep.join(filter(None, [str(START_GATE), os.environ.get("PYTHONPATH")]))
+    env = {**os.environ, "PYTHONPATH": path, "TESSERA_TEST_START_GATE": str(gate)}
+    env.pop("PILOT_INHERITED_THREAD_VARS", None)
+    return env
+
+
+# The child sees its supervisor gone within one watchdog poll; the bound is
+# many polls on purpose (a loaded machine delays the SIGKILLed processes'
+# exit), and still far below the work deadline at which an unguarded child
+# would stop (wall cap 60 s minus the cleanup grace).
+GONE_BOUND_S = 50 * 0.2  # 50 polls of the watchdog (orphan.POLL_S)
+
+
+def _assert_gone_long_before_the_deadline(pids):
+    assert GONE_BOUND_S < 60 - pilot.CLEANUP_GRACE_S
+    gone = _wait_for(lambda: not any(_exists(p) for p in pids), GONE_BOUND_S)
+    alive = [p for p in pids if _exists(p)]
+    for p in alive:  # never leave them running into the next test
+        try:
+            os.killpg(p, 9) if p == pids[0] else os.kill(p, 9)
+        except (ProcessLookupError, PermissionError):
+            pass
+    assert gone is not None, f"still alive {GONE_BOUND_S} s after the supervisor died: {alive}"
+
+
+def _assert_charged_once_at_the_full_reservation(ledger, wall_cap_s):
+    # The dead supervisor never settled: its entry is charged once, at the
+    # full reservation, exactly as on the watchdog's normal path.
+    led = Ledger(str(ledger), budget_core_hours=1)
+    (entry,) = led.entries()
+    assert entry["status"].startswith("interrupted")
+    assert entry["core_hours"] == pytest.approx(wall_cap_s / 3600, abs=1e-5)
+    assert led.spent_core_hours() == pytest.approx(wall_cap_s / 3600, abs=1e-5)
+
+
+def _wait_for(condition, bound_s):
+    """Polls ``condition`` until it holds or ``bound_s`` passes; returns the
+    monotonic time it first held, or None."""
+    end = time.monotonic() + bound_s
+    while True:
+        if condition():
+            return time.monotonic()
+        if time.monotonic() >= end:
+            return None
+        time.sleep(0.05)
+
+
+def _children(pid):
+    out = subprocess.run(["pgrep", "-P", str(pid)], capture_output=True, text=True).stdout
+    return [int(p) for p in out.split()]
 
 
 def _exists(pid):
