@@ -25,6 +25,29 @@ import evidence  # noqa: E402
 WORKLOAD = pathlib.Path(__file__).resolve().parent / "workload.py"
 CONTROL = "control/interpreter-only"
 AA_RUNS = 5
+# The provenance every file must carry to be reused: the hashes of the wheel,
+# manifest, kernels, interpreter and Valgrind it was measured with. main()
+# sets it for part, probe, adopt and merge runs; None (the library default
+# and the plain gate) reuses any finished file, as before.
+STAMP: dict | None = None
+
+
+def stamp_path(out: pathlib.Path) -> pathlib.Path:
+    return out.with_name(out.name + ".stamp.json")
+
+
+def stamped(out: pathlib.Path) -> bool:
+    """True when no stamp is required, or `out`'s sidecar carries this one."""
+    if STAMP is None:
+        return True
+    side = stamp_path(out)
+    return side.exists() and json.loads(side.read_text(encoding="utf-8")) == STAMP
+
+
+def stamp(out: pathlib.Path) -> None:
+    """Records the provenance of a run that has just finished successfully."""
+    if STAMP is not None:
+        stamp_path(out).write_text(json.dumps(STAMP, sort_keys=True))
 
 
 def command(python: str, manifest: str, scenario: str, steps: int, out: str, separate_threads: bool = False, extra: tuple[str, ...] = ()) -> list[str]:
@@ -71,11 +94,13 @@ def measure(python: str, manifest: str, scenario: str, steps: int, out_dir: path
     safe = scenario.replace("/", "_")
     out = out_dir / f"{safe}.{steps}{tag}.callgrind"
     found = _reusable(out)
-    if found is not None:
+    if found is not None and stamped(out):
         if reused is not None:
             reused.append(out.name)
         return found
+    stamp_path(out).unlink(missing_ok=True)
     runner(command(python, manifest, scenario, steps, str(out), extra=extra), check=True)
+    stamp(out)
     return evidence.native_cost(evidence.parse_callgrind(out.read_text(encoding="utf-8")))
 
 
@@ -105,12 +130,18 @@ def worker_control(python: str, manifest: str, s: evidence.Scenario, out_dir, ru
         return {"kind": "against-inline", "passed": evidence.workers_collected(threaded, inline)}
     out = out_dir / f"{s.name.replace('/', '_')}.threads.callgrind"
     found = thread_files(out)
-    if len(found) >= 2 and all("\ntotals:" in p.read_text(encoding="utf-8") for p in found):
+    if len(found) >= 2 and all("\ntotals:" in p.read_text(encoding="utf-8") for p in found) and stamped(out):
         # A finished per-thread run of an earlier window, reused like measure().
         if reused is not None:
             reused.extend(p.name for p in found)
     else:
+        # Callgrind does not remove an earlier run's files for higher thread
+        # numbers, so a rerun must not be read together with leftovers.
+        for stale in found:
+            stale.unlink()
+        stamp_path(out).unlink(missing_ok=True)
         runner(command(python, manifest, s.name, s.steps, str(out), separate_threads=True), check=True)
+        stamp(out)
         found = thread_files(out)
     texts = [p.read_text(encoding="utf-8") for p in found]
     others, share = evidence.non_caller_native(texts)
@@ -239,6 +270,36 @@ def hashes(args) -> dict:
     }
 
 
+def environment(args) -> dict:
+    """`hashes` plus the measuring toolchain: Ir depends on the interpreter
+    binary and the Valgrind build, not only on the wheel."""
+    version = subprocess.run(["valgrind", "--version"], check=True, capture_output=True, text=True).stdout.strip()
+    return {**hashes(args), "python": sha256_of(str(pathlib.Path(args.python).resolve())), "valgrind": version}
+
+
+def adopt(listing: pathlib.Path, out_dir: pathlib.Path) -> list[str]:
+    """Stamps finished files of an earlier window with the current STAMP, after
+    checking each against the window's record (`<sha256> <name> ...` lines,
+    as KEPT.txt). All or nothing: a missing, unfinished or changed file
+    refuses the whole adoption. The caller shows the toolchain is the same."""
+    wanted = []
+    for line in listing.read_text(encoding="utf-8").splitlines():
+        parts = line.split()
+        if len(parts) >= 2 and len(parts[0]) == 64 and all(c in "0123456789abcdef" for c in parts[0]):
+            wanted.append((parts[0], parts[1]))
+    if not wanted:
+        raise ValueError(f"{listing} lists no files")
+    for digest, name in wanted:
+        path = out_dir / name
+        if not path.exists() or _reusable(path) is None:
+            raise ValueError(f"{name} is missing or unfinished")
+        if sha256_of(str(path)) != digest:
+            raise ValueError(f"{name} does not match its recorded sha256")
+    for _, name in wanted:
+        stamp(out_dir / name)
+    return [name for _, name in wanted]
+
+
 def merge(args) -> int:
     """The gate from the finished files of every part. Runs no Valgrind, so it
     needs no window and no Linux. Every part report in the out dir must carry
@@ -246,17 +307,23 @@ def merge(args) -> int:
     if not args.wheel:
         print("refused: a merge needs --wheel, the exact artifact measured", file=sys.stderr)
         return 2
+    global STAMP
     want = hashes(args)
     parts = sorted(args.out_dir.glob("feasibility.part.*.json"))
     if not parts:
         print("refused: no part reports to merge", file=sys.stderr)
         return 2
-    windows, seen = [], set()
+    windows, seen, env = [], set(), None
     for p in parts:
         part = json.loads(p.read_text(encoding="utf-8"))
-        if part.get("sha256") != want:
-            print(f"refused: {p.name} was measured with other hashes: {part.get('sha256')} != {want}", file=sys.stderr)
+        got = part.get("sha256") or {}
+        if {k: got.get(k) for k in want} != want:
+            print(f"refused: {p.name} was measured with other hashes: {got} != {want}", file=sys.stderr)
             return 2
+        if env is not None and got != env:
+            print(f"refused: {p.name} was measured with another toolchain: {got} != {env}", file=sys.stderr)
+            return 2
+        env = got
         overlap = seen & set(part["scenarios"])
         if overlap:
             print(f"refused: {p.name} repeats scenarios of another part: {sorted(overlap)}", file=sys.stderr)
@@ -264,19 +331,29 @@ def merge(args) -> int:
         seen |= set(part["scenarios"])
         windows.append(part.get("approved_window"))
     manifest = evidence.load_manifest(args.manifest)
+    every = {CONTROL, *(s.name for s in evidence.scenarios(manifest))}
+    if seen != every:
+        print(f"refused: the parts must cover exactly the control and every scenario; missing "
+              f"{sorted(every - seen)}, extra {sorted(seen - every)}", file=sys.stderr)
+        return 2
+    # Every file read must carry the parts' provenance: a finished file of
+    # another window or toolchain counts as missing.
+    STAMP = env
     try:
         report = feasibility(args.python, args.manifest, manifest, args.out_dir, runner=refuse)
     except MissingRun as e:
-        print(f"refused: no finished file for {e}; the gate is not evaluated", file=sys.stderr)
+        print(f"refused: no finished file with this provenance for {e}; the gate is not evaluated", file=sys.stderr)
         return 3
+    finally:
+        STAMP = None
     report["merged_parts"] = [p.name for p in parts]
     report["approved_window"] = sorted({w for w in windows if w})
-    report["sha256"] = want
+    report["sha256"] = env
     (args.out_dir / "feasibility.json").write_text(json.dumps(report, indent=1))
     return 0 if report["passed"] else 1
 
 
-def main(argv=None, platform=sys.platform) -> int:
+def _main(argv, platform) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--approved-window", default=None)
     parser.add_argument("--manifest", required=True)
@@ -289,11 +366,17 @@ def main(argv=None, platform=sys.platform) -> int:
                         f"{CONTROL!r}); writes a part report and decides nothing")
     parser.add_argument("--probe", action="store_true",
                         help="with --scenario: only the first N-step run of each, timed, for the window's projection")
+    parser.add_argument("--adopt", type=pathlib.Path, default=None, metavar="LISTING",
+                        help="with --feasibility: stamp an earlier window's finished files listed with their "
+                        "sha256 (as KEPT.txt) with this toolchain; all or nothing")
     parser.add_argument("--merge", action="store_true",
                         help="with --feasibility: evaluate the gate from finished files only, never running Valgrind")
     args = parser.parse_args(argv)
-    if (args.scenario or args.merge) and not args.feasibility:
-        print("refused: --scenario and --merge apply to --feasibility", file=sys.stderr)
+    if (args.scenario or args.merge or args.adopt) and not args.feasibility:
+        print("refused: --scenario, --adopt and --merge apply to --feasibility", file=sys.stderr)
+        return 2
+    if args.adopt and (args.scenario or args.merge):
+        print("refused: --adopt runs alone", file=sys.stderr)
         return 2
     if args.probe and not args.scenario:
         print("refused: --probe needs --scenario", file=sys.stderr)
@@ -314,6 +397,25 @@ def main(argv=None, platform=sys.platform) -> int:
         return 2
     manifest = evidence.load_manifest(args.manifest)
     args.out_dir.mkdir(parents=True, exist_ok=True)
+    global STAMP
+    if args.scenario:
+        try:
+            select(manifest, args.scenario)
+        except ValueError as e:
+            print(f"refused: {e}", file=sys.stderr)
+            return 2
+    if args.adopt or args.scenario:
+        STAMP = environment(args)
+    if args.feasibility and args.adopt:
+        try:
+            names = adopt(args.adopt, args.out_dir)
+        except ValueError as e:
+            print(f"refused: {e}", file=sys.stderr)
+            return 2
+        (args.out_dir / "feasibility.adopted.json").write_text(
+            json.dumps({"adopted": names, "listing": sha256_of(str(args.adopt)), "sha256": STAMP,
+                        "approved_window": args.approved_window}, indent=1))
+        return 0
     if args.feasibility and args.scenario and args.probe:
         try:
             found = probe(args.python, args.manifest, manifest, args.out_dir, args.scenario, runner=_run)
@@ -321,7 +423,7 @@ def main(argv=None, platform=sys.platform) -> int:
             print(f"refused: {e}", file=sys.stderr)
             return 2
         found["approved_window"] = args.approved_window
-        found["sha256"] = hashes(args)
+        found["sha256"] = STAMP
         label = hashlib.sha256("\n".join(sorted(found["probe"])).encode()).hexdigest()[:12]
         (args.out_dir / f"feasibility.probe.{label}.json").write_text(json.dumps(found, indent=1))
         return 0
@@ -332,7 +434,7 @@ def main(argv=None, platform=sys.platform) -> int:
             print(f"refused: {e}", file=sys.stderr)
             return 2
         part["approved_window"] = args.approved_window
-        part["sha256"] = hashes(args)
+        part["sha256"] = STAMP
         label = hashlib.sha256("\n".join(part["scenarios"]).encode()).hexdigest()[:12]
         (args.out_dir / f"feasibility.part.{label}.json").write_text(json.dumps(part, indent=1))
         return 0
@@ -349,6 +451,14 @@ def main(argv=None, platform=sys.platform) -> int:
     sha256 = {"wheel": sha256_of(args.wheel), "manifest": sha256_of(args.manifest)}
     (args.out_dir / "costs.json").write_text(json.dumps({"approved_window": args.approved_window, "sha256": sha256, "costs": costs}, indent=1))
     return 0
+
+
+def main(argv=None, platform=sys.platform) -> int:
+    global STAMP
+    try:
+        return _main(argv, platform)
+    finally:
+        STAMP = None
 
 
 if __name__ == "__main__":
