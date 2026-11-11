@@ -2,6 +2,7 @@
 """The Pipelined mode from Python (ADR-0047 section 9): send and recv,
 borrow windows, staleness, interruption and threads."""
 
+import itertools
 import signal
 import threading
 import time
@@ -181,6 +182,11 @@ def test_pipelined_reset_with_work_in_flight_is_refused_then_works():
     assert len(env.reset()) == 2
 
 
+# How long a test keeps retrying until a SIGUSR1 tick lands inside a blocking
+# recv; seconds, far above what it takes (#195).
+INTERRUPT_BUDGET_S = 60.0
+
+
 @pytest.mark.skipif(not hasattr(signal, "pthread_kill"), reason="needs pthread_kill")
 def test_pipelined_interrupted_recv_leaves_the_step_in_flight():
     """A handler raising during the wait propagates, and the same step is
@@ -215,7 +221,12 @@ def test_pipelined_interrupted_recv_leaves_the_step_in_flight():
     ticker = threading.Thread(target=ticks)
     ticker.start()
     try:
-        for step in range(500):
+        # Bounded by the observed interruption and a generous time budget,
+        # not by a count that assumes the platform's sleep granularity (#195).
+        deadline = time.monotonic() + INTERRUPT_BUDGET_S
+        for step in itertools.count():
+            if time.monotonic() >= deadline:
+                break
             acts = actions(half, step)
             # env's recv comes right after its send, so that its step is still
             # running; waiting on the reference first left nothing to interrupt.
