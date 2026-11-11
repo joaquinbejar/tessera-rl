@@ -53,6 +53,8 @@ pub(crate) struct BatchMode<E: Environment, M: MaskProvider<E>> {
     raw: RawChunk<E>,
     rows: RawRows<E::Header>,
     workers: usize,
+    /// The most ids one claim takes (the claim rule of [`claim_limit`]).
+    claim: usize,
     pub(crate) submit: SubmitRing,
     pub(crate) complete: CompletionRing,
     pub(crate) buffers: IdBufferPool,
@@ -72,6 +74,9 @@ pub(crate) struct BatchMode<E: Environment, M: MaskProvider<E>> {
     /// Test-only jitter before each claimed step, in microseconds.
     #[cfg(test)]
     jitter_us: u32,
+    /// Test-only: the largest claim any worker made.
+    #[cfg(test)]
+    pub(crate) max_claim: AtomicUsize,
 }
 
 /// The number of ids ready for a batch, shared with a [`BatchWaiter`].
@@ -139,6 +144,7 @@ where
             raw,
             rows,
             workers,
+            claim: claim_limit(batch_size, workers),
             submit,
             complete,
             buffers,
@@ -153,6 +159,8 @@ where
             }),
             #[cfg(test)]
             jitter_us,
+            #[cfg(test)]
+            max_claim: AtomicUsize::new(0),
         });
         // The job's data pointer comes from the `Arc` itself, not from the
         // `&mut` below, so it stays valid under later shared borrows.
@@ -415,9 +423,14 @@ unsafe fn run_drain<E: Environment, M: MaskProvider<E>>(data: *const (), worker:
     let ctx = mode.pool.step_ctx();
     let mut run = [0u32; CLAIM_RUN];
     loop {
-        let claimed = match mode.submit.claim_run(&mut run, mode.workers) {
+        let out = run.get_mut(..mode.claim).unwrap_or(&mut []);
+        let claimed = match mode.submit.claim_run(out, mode.workers) {
             Ok(0) => return,
-            Ok(k) => run.get(..k).unwrap_or(&[]),
+            Ok(k) => {
+                #[cfg(test)]
+                mode.max_claim.fetch_max(k, Ordering::Relaxed);
+                run.get(..k).unwrap_or(&[])
+            }
             Err(_) => {
                 mode.panicked.store(true, Ordering::Relaxed);
                 return;
@@ -428,6 +441,7 @@ unsafe fn run_drain<E: Environment, M: MaskProvider<E>>(data: *const (), worker:
             let len = consecutive(rest);
             #[cfg(test)]
             for &id in rest.get(..len).unwrap_or(&[]) {
+                hold_id(mode, id);
                 jitter(mode, id);
             }
             let start = usize::try_from(first).unwrap_or(usize::MAX);
@@ -450,10 +464,20 @@ unsafe fn run_drain<E: Environment, M: MaskProvider<E>>(data: *const (), worker:
     }
 }
 
-/// The most ids one claim of the drain job takes from the submission ring
-/// (issue #83). A claim takes `ceil(k / workers)` of the `k` ids it finds,
-/// up to this many, so a backlog is split among the workers.
+/// An upper bound on any claim, the size of the drain job's stack buffer.
+/// Unmeasured: it only bounds the buffer; [`claim_limit`] decides.
 const CLAIM_RUN: usize = 64;
+
+/// The most ids one claim takes (issue #83, ADR-0056 draft):
+/// `min(ceil(batch_size / workers), CLAIM_RUN)`, at least 1. A claim also
+/// takes at most `ceil(found / workers)` of the ids it finds
+/// ([`SubmitRing::claim_run`]). A worker pushes its claim only after
+/// stepping all of it, so this bound makes the workers together complete
+/// about one batch per round of claims, and a stalled worker holds at most
+/// `ceil(batch_size / workers)` ids.
+fn claim_limit(batch_size: usize, workers: usize) -> usize {
+    batch_size.div_ceil(workers.max(1)).clamp(1, CLAIM_RUN)
+}
 
 /// The length of the leading run of consecutive ids of `ids` (`a, a + 1,
 /// ...`), at least one if `ids` is not empty. Such a run is stepped as one
@@ -474,7 +498,7 @@ fn consecutive(ids: &[u32]) -> usize {
 /// completion order varies far more than send order alone makes it.
 #[cfg(test)]
 fn jitter<E: Environment, M: MaskProvider<E>>(mode: &BatchMode<E, M>, id: u32) {
-    if mode.jitter_us == 0 || mode.jitter_us >= GATE_AFTER_PUSH {
+    if mode.jitter_us == 0 || mode.jitter_us >= GATE_HOLD_ID {
         return;
     }
     let salt = mode.stepped.load(Ordering::Relaxed) as u64;
@@ -531,6 +555,13 @@ pub(crate) const GATE_BEFORE_PUSH: u32 = u32::MAX;
 /// A `jitter_us` that holds a worker in [`complete`] after its push.
 #[cfg(test)]
 pub(crate) const GATE_AFTER_PUSH: u32 = u32::MAX - 1;
+/// A `jitter_us` that holds the worker about to step [`HELD_ID`].
+#[cfg(test)]
+pub(crate) const GATE_HOLD_ID: u32 = u32::MAX - 2;
+/// The id held under [`GATE_HOLD_ID`].
+#[cfg(test)]
+pub(crate) static HELD_ID: core::sync::atomic::AtomicU32 =
+    core::sync::atomic::AtomicU32::new(u32::MAX);
 /// Set by a worker held at a gate.
 #[cfg(test)]
 pub(crate) static GATE_REACHED: core::sync::atomic::AtomicBool =
@@ -548,6 +579,15 @@ fn hold_at<E: Environment, M: MaskProvider<E>>(mode: &BatchMode<E, M>, gate: u32
         while !GATE_OPEN.load(Ordering::Acquire) {
             std::thread::yield_now();
         }
+    }
+}
+
+/// Holds this worker before it steps `id` while the mode is gated at
+/// [`GATE_HOLD_ID`] and `id` is [`HELD_ID`].
+#[cfg(test)]
+fn hold_id<E: Environment, M: MaskProvider<E>>(mode: &BatchMode<E, M>, id: u32) {
+    if HELD_ID.load(Ordering::Acquire) == id {
+        hold_at(mode, GATE_HOLD_ID);
     }
 }
 
@@ -989,7 +1029,18 @@ impl BatchWaiter {
 
 #[cfg(test)]
 mod tests {
-    use super::consecutive;
+    use super::{CLAIM_RUN, claim_limit, consecutive};
+
+    /// A claim is at most `ceil(batch_size / workers)`, at least 1 and at
+    /// most the buffer.
+    #[test]
+    fn test_claim_limit_is_the_batch_share_bounded_expected() {
+        assert_eq!(claim_limit(1, 4), 1);
+        assert_eq!(claim_limit(5, 2), 3);
+        assert_eq!(claim_limit(64, 1), 64);
+        assert_eq!(claim_limit(1000, 1), CLAIM_RUN);
+        assert_eq!(claim_limit(8, 0), 8);
+    }
 
     /// A run of consecutive ids ends at the first gap, a descent or a
     /// repeat, and at `u32::MAX`, which has no successor.

@@ -444,13 +444,15 @@ fn test_ring_claim_run_takes_its_share_in_order() {
         ring.push(id).unwrap();
     }
     let mut out = [u32::MAX; 8];
-    // 8 found (bounded by `out`), shared by 3: ceil(8 / 3) = 3.
-    assert_eq!(ring.claim_run(&mut out, 3).unwrap(), 3);
-    assert_eq!(out[..3], [0, 1, 2]);
-    assert_eq!(out[3], u32::MAX, "nothing written past the run");
-    // 7 left, one claimer: all 7.
-    assert_eq!(ring.claim_run(&mut out, 1).unwrap(), 7);
-    assert_eq!(out[..7], [3, 4, 5, 6, 7, 8, 9]);
+    // 10 found, shared by 3: ceil(10 / 3) = 4.
+    assert_eq!(ring.claim_run(&mut out, 3).unwrap(), 4);
+    assert_eq!(out[..4], [0, 1, 2, 3]);
+    assert_eq!(out[4], u32::MAX, "nothing written past the run");
+    // 6 left, one claimer, at most 4 at a time: 4 then 2.
+    assert_eq!(ring.claim_run(&mut out[..4], 1).unwrap(), 4);
+    assert_eq!(out[..4], [4, 5, 6, 7]);
+    assert_eq!(ring.claim_run(&mut out, 1).unwrap(), 2);
+    assert_eq!(out[..2], [8, 9]);
     assert_eq!(ring.claim_run(&mut out, 1).unwrap(), 0);
     // A share of zero counts as one; an empty `out` claims nothing.
     ring.push(11).unwrap();
@@ -476,10 +478,35 @@ fn test_ring_push_run_fills_a_prefix_then_reports_full() {
     // Across the wrap: a run that crosses the end of the slot array.
     assert_eq!(ring.push_run(&[5, 6, 7]).unwrap(), 3);
     let mut seen = Vec::new();
-    while let Some(id) = ring.pop().unwrap() {
-        seen.push(id);
+    for _ in 0..BUDGET {
+        match ring.pop().unwrap() {
+            Some(id) => seen.push(id),
+            None => break,
+        }
     }
     assert_eq!(seen, [5, 6, 7]);
+}
+
+/// Every loop of the run tests is bounded, so a broken run operation fails
+/// its test by name instead of hanging the binary.
+const BUDGET: usize = 64;
+
+/// Run pushes and run claims cycle a two-slot ring for many laps: each claim
+/// frees its slots (or the next lap's push sees `Full`), and the ids come
+/// back in order.
+#[cfg(not(loom))]
+#[test]
+fn test_ring_run_ops_cycle_many_laps_and_free_their_slots() {
+    let ring = super::IdRing::new(2).unwrap();
+    let laps: u32 = if cfg!(miri) { 20 } else { 1_000 };
+    let mut out = [0u32; 2];
+    for lap in 0..laps {
+        let ids = [lap * 2, lap * 2 + 1];
+        assert_eq!(ring.push_run(&ids), Ok(2), "lap {lap}");
+        assert_eq!(ring.pop_run(&mut out, 1), Ok(2), "lap {lap}");
+        assert_eq!(out, ids, "lap {lap}");
+        assert_eq!(ring.pop_run(&mut out, 1), Ok(0), "lap {lap}: empty");
+    }
 }
 
 /// Run operations at the end of the positions report `Exhausted` before
@@ -535,13 +562,16 @@ fn test_ring_claim_run_two_claimers_wrap_and_deliver_exactly_once() {
             c.join().unwrap();
         }
         let mut out = [0u32; 2];
-        loop {
+        let mut empty = false;
+        for _ in 0..BUDGET {
             let k = ring.pop_run(&mut out, 1).unwrap();
             if k == 0 {
+                empty = true;
                 break;
             }
             count(&seen, &out[..k]);
         }
+        assert!(empty, "the ring drains within the budget");
         for c in seen.iter() {
             assert_eq!(c.load(Ordering::Relaxed), 1, "every id exactly once");
         }
@@ -560,10 +590,14 @@ fn test_ring_push_run_two_producers_one_consumer_deliver_exactly_once() {
                 let ring = Arc::clone(&ring);
                 thread::spawn(move || {
                     let mut rest: &[u32] = &ids;
-                    while !rest.is_empty() {
+                    for _ in 0..BUDGET {
+                        if rest.is_empty() {
+                            break;
+                        }
                         let k = ring.push_run(rest).unwrap();
                         rest = &rest[k..];
                     }
+                    assert!(rest.is_empty(), "pushed within the budget");
                 })
             })
             .collect();
@@ -574,8 +608,11 @@ fn test_ring_push_run_two_producers_one_consumer_deliver_exactly_once() {
         for p in producers {
             p.join().unwrap();
         }
-        while let Some(id) = ring.pop().unwrap() {
-            got.push(id);
+        for _ in 0..BUDGET {
+            match ring.pop().unwrap() {
+                Some(id) => got.push(id),
+                None => break,
+            }
         }
         let mut sorted = got.clone();
         sorted.sort_unstable();

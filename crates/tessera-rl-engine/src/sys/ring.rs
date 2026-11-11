@@ -273,9 +273,10 @@ impl IdRing {
     /// Pops a run of consecutive ids into `out` with one claim of the head
     /// and returns its length; zero if the ring is (transiently) empty.
     ///
-    /// Up to `out.len()` filled slots from the head are counted, and
-    /// `ceil(filled / share)` of them are taken, so `share` claimers that
-    /// arrive together split a backlog instead of the first taking it all.
+    /// Up to `out.len() * share` filled slots from the head are counted, and
+    /// `min(ceil(filled / share), out.len())` of them are taken, so `share`
+    /// claimers that arrive together split a backlog instead of the first
+    /// taking it all.
     /// A filled slot stays filled until the consumer that owns its position
     /// empties it, so the slots counted before a successful compare-and-swap
     /// of the head are this call's alone. Every slot's next free sequence is
@@ -287,8 +288,9 @@ impl IdRing {
         }
         let mut pos = self.head.load(Ordering::Relaxed);
         'claim: loop {
+            let scan = out.len().saturating_mul(share.max(1));
             let mut filled = 0;
-            while filled < out.len() {
+            while filled < scan {
                 let Some(want) = pos
                     .checked_add(filled)
                     .and_then(|p| p.checked_add(1).map(|w| (p, w)))
@@ -311,7 +313,7 @@ impl IdRing {
             if filled == 0 {
                 return Ok(0);
             }
-            let take = filled.div_ceil(share.max(1));
+            let take = filled.div_ceil(share.max(1)).min(out.len());
             let end = pos.checked_add(take).ok_or(RingError::Exhausted)?;
             // The largest next free sequence of the run, `end - 1 + capacity`.
             (end - 1)
@@ -383,8 +385,9 @@ impl SubmitRing {
     }
 
     /// Claims a run of the oldest admitted ids into `out`, at most
-    /// `out.len()`, with one claim of the head: `ceil(k / share)` of the `k`
-    /// ids found (up to `out.len()`), so `share` workers split a backlog.
+    /// `out.len()`, with one claim of the head: `min(ceil(k / share),
+    /// out.len())` of the `k` ids found (up to `out.len() * share` are
+    /// looked at), so `share` workers split a backlog.
     /// Returns how many were claimed; zero if none is visible. Ids leave in
     /// admission order, each exactly once, as with [`Self::claim`].
     ///

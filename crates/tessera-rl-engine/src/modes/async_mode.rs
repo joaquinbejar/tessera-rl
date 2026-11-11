@@ -32,11 +32,13 @@
 //!
 //! # Performance
 //!
-//! Async is currently slower per round than Sync. Workers claim runs of
-//! ids (issue #83), but the waits still poll in 100 µs steps on the park
-//! backend and in `recv_timeout` (ADR-0047 section 7); wake-based waits
+//! Workers claim runs of ids, at most `ceil(batch_size / workers)` per
+//! claim (issue #83), and push a run's ids to the completion ring only after
+//! the whole run is stepped. The waits still poll in 100 µs steps on the
+//! park backend and in `recv_timeout` (ADR-0047 section 7); wake-based waits
 //! need a decision beyond ADR-0047 (issue #83). Measure with
-//! `benches/async_step.rs` (`async_round_256`).
+//! `benches/async_step.rs` (`async_round_256`) and the instruction count of
+//! `benches/async_instructions.rs`.
 
 use crate::masks::PersistMask;
 use crate::persist::{DecodeLimits, PersistError};
@@ -658,6 +660,14 @@ where
             return Err(EngineError::Poisoned);
         }
         Ok(record)
+    }
+
+    /// Test-only: the largest claim a worker made.
+    #[cfg(test)]
+    pub(crate) fn max_claim(&self) -> usize {
+        self.mode
+            .max_claim
+            .load(core::sync::atomic::Ordering::Relaxed)
     }
 
     /// Test-only: ids admitted and not yet stepped.

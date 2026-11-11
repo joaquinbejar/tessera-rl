@@ -19,7 +19,9 @@ use tessera_rl_num::rng::{ObsRng, StepRng};
 
 use core::sync::atomic::{AtomicBool, Ordering};
 
-use crate::buffer::batch::{GATE_AFTER_PUSH, GATE_BEFORE_PUSH, GATE_OPEN, GATE_REACHED};
+use crate::buffer::batch::{
+    GATE_AFTER_PUSH, GATE_BEFORE_PUSH, GATE_HOLD_ID, GATE_OPEN, GATE_REACHED, HELD_ID,
+};
 use crate::modes::async_mode::SNAPSHOT_HOOK;
 use crate::sys::Faults;
 use crate::{
@@ -699,4 +701,163 @@ fn test_async_idle_token_readable_while_a_step_is_paused_then_panics() {
     drop(held);
     drop(pool.reset_all(Reseed::Keep).unwrap());
     assert!(!pool.is_poisoned());
+}
+
+/// How long a test of run claims may take before it fails by name instead
+/// of hanging the binary (Miri runs far slower).
+const WATCHDOG: core::time::Duration =
+    core::time::Duration::from_secs(if cfg!(miri) { 1_200 } else { 30 });
+
+/// Runs `f` on its own thread and fails, naming `what`, if it has not
+/// finished within [`WATCHDOG`]: a broken claim or ring then fails the test
+/// instead of hanging it. A panic in `f` is passed on.
+fn within(what: &str, f: impl FnOnce() + Send + 'static) {
+    let (done, finished) = std::sync::mpsc::channel();
+    let body = std::thread::spawn(move || {
+        f();
+        let _ = done.send(());
+    });
+    match finished.recv_timeout(WATCHDOG) {
+        Ok(()) => body.join().unwrap(),
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+            panic!("{what}: did not finish within {WATCHDOG:?}")
+        }
+        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+            if let Err(payload) = body.join() {
+                std::panic::resume_unwind(payload);
+            }
+        }
+    }
+}
+
+fn all_ids() -> (Vec<u32>, Vec<i32>) {
+    ((0..N).collect(), vec![1; N as usize])
+}
+
+/// Clears the held id and opens the gates even if an assertion fails.
+struct ReleaseHeld;
+
+impl Drop for ReleaseHeld {
+    fn drop(&mut self) {
+        HELD_ID.store(u32::MAX, Ordering::Release);
+        GATE_OPEN.store(true, Ordering::Release);
+    }
+}
+
+/// With batches of one and two workers, a worker held before stepping id 0
+/// holds only that id: a claim is at most `ceil(1 / 2) = 1` id, so every
+/// other id is stepped and received through the other worker meanwhile
+/// (issue #83). Under a claim of `ceil(found / workers)` the held worker
+/// would hold half the ids and the receive would stall.
+#[test]
+fn test_async_held_id_does_not_hold_other_batches_of_one_received() {
+    let _lock = GATES
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let _release = ReleaseHeld;
+    within("held id with batches of one", || {
+        let release = ReleaseHeld;
+        GATE_REACHED.store(false, Ordering::Release);
+        GATE_OPEN.store(false, Ordering::Release);
+        HELD_ID.store(0, Ordering::Release);
+        let mut pool = Pool::new(WalkConfig {}, options(AutoReset::NextStep))
+            .unwrap()
+            .async_faults(
+                AsyncOptions::new(NonZeroUsize::new(2).unwrap(), NonZeroUsize::MIN),
+                Faults {
+                    jitter_us: GATE_HOLD_ID,
+                    ..Faults::default()
+                },
+            )
+            .unwrap();
+        drop(pool.reset_all(Reseed::Keep).unwrap());
+        let (ids, actions) = all_ids();
+        pool.send(
+            &ids,
+            ActionInput {
+                discrete: &actions,
+                continuous: &[],
+            },
+        )
+        .unwrap();
+        wait_for_gate();
+        // Collected while id 0 is held, checked after the release.
+        let mut received = Vec::new();
+        let mut failed = None;
+        while received.len() + 1 < ids.len() {
+            match pool.try_recv() {
+                Ok(Some(token)) => received.extend(token.ids()),
+                Ok(None) => std::thread::yield_now(),
+                Err(e) => {
+                    failed = Some(e);
+                    break;
+                }
+            }
+        }
+        drop(release);
+        assert_eq!(failed, None);
+        let last: Vec<u32> = pool.recv().unwrap().ids().collect();
+        assert!(!received.contains(&0), "the held id was not received early");
+        assert_eq!(received.len(), ids.len() - 1);
+        assert_eq!(last, [0]);
+    });
+}
+
+/// No claim exceeds `ceil(batch_size / workers)`: with batches of 5 and two
+/// workers, the first claim, which finds every id, takes exactly 3.
+#[test]
+fn test_async_claim_never_exceeds_the_batch_share_bounded() {
+    within("claim size", || {
+        let mut pool = Pool::new(WalkConfig {}, options(AutoReset::NextStep))
+            .unwrap()
+            .async_mode(AsyncOptions::new(
+                NonZeroUsize::new(2).unwrap(),
+                NonZeroUsize::new(5).unwrap(),
+            ))
+            .unwrap();
+        drop(pool.reset_all(Reseed::Keep).unwrap());
+        let (ids, actions) = all_ids();
+        pool.send(
+            &ids,
+            ActionInput {
+                discrete: &actions,
+                continuous: &[],
+            },
+        )
+        .unwrap();
+        let mut received = 0;
+        while received < ids.len() {
+            received += pool.recv().unwrap().len();
+        }
+        assert_eq!(pool.max_claim(), 3);
+    });
+}
+
+/// After one worker steps a run of 4 ids, the ready count is 4, so a
+/// [`crate::BatchWaiter`] for batches of 4 sees a batch (issue #83: the
+/// count moves by the run's length, not by one per run).
+#[test]
+fn test_async_waiter_sees_a_batch_after_one_run_ready() {
+    within("waiter after a run", || {
+        let mut pool = Pool::new(WalkConfig {}, options(AutoReset::NextStep))
+            .unwrap()
+            .async_mode(AsyncOptions::new(
+                NonZeroUsize::MIN,
+                NonZeroUsize::new(4).unwrap(),
+            ))
+            .unwrap();
+        drop(pool.reset_all(Reseed::Keep).unwrap());
+        let waiter = pool.waiter();
+        pool.send(
+            &[0, 1, 2, 3],
+            ActionInput {
+                discrete: &[1, 1, 1, 1],
+                continuous: &[],
+            },
+        )
+        .unwrap();
+        assert!(waiter.wait_ready(core::time::Duration::from_secs(10)));
+        assert_eq!(pool.max_claim(), 4, "one run of 4");
+        assert_eq!(pool.recv().unwrap().len(), 4);
+    });
 }
