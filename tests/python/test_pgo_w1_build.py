@@ -18,6 +18,19 @@ pytestmark = pytest.mark.skipif(os.name == "nt", reason="POSIX only: a bash buil
 SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "pgo_w1_build.sh"
 
 
+# Variables of the caller's build environment (CI sets RUSTFLAGS and CARGO_TERM_COLOR
+# workflow-wide, other jobs RUSTDOCFLAGS and CARGO_TARGET_DIR) that the fake tools log
+# or that cargo and maturin read; the fixtures drop them so a test sees only what the
+# script itself sets.
+AMBIENT_BUILD = ("RUST", "CARGO", "MATURIN", "LLVM_PROFILE")
+
+
+def clean_environ(path_prefix) -> dict:
+    env = {k: v for k, v in os.environ.items() if not k.startswith(AMBIENT_BUILD)}
+    env["PATH"] = f"{path_prefix}:{os.environ['PATH']}"
+    return env
+
+
 def tool(bin_dir: Path, name: str, body: str) -> None:
     p = bin_dir / name
     p.write_text("#!/bin/sh\n" + body)
@@ -54,7 +67,7 @@ def setup(tmp_path: Path, rustup_ok: bool = True):
 
 def run(tmp_path, rustup_ok=True, system_py=None):
     bin_dir, log, rsha, usha = setup(tmp_path, rustup_ok)
-    env = {**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}"}
+    env = clean_environ(bin_dir)
     if system_py:
         env["FAKE_SYSTEM_PY"] = str(system_py)
     out = tmp_path / "run"
@@ -134,7 +147,7 @@ def test_pgo_w1_build_no_wheel_fails_with_the_count_message(tmp_path):
             tar.addfile(info, i.BytesIO(data))
     uvx.write_bytes(buf.getvalue())
     usha = hashlib.sha256(uvx.read_bytes()).hexdigest()
-    env = {**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}"}
+    env = clean_environ(bin_dir)
     p = subprocess.run(["bash", str(SCRIPT), rsha, usha, str(tmp_path / "run")], env=env, capture_output=True, text=True, check=False)
     assert p.returncode != 0 and "expected one wheel, found 0" in p.stderr
 

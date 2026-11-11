@@ -27,6 +27,21 @@ WHEEL = "tessera_rl-0.1.0-cp311-abi3-manylinux_2_28_x86_64.whl"
 W1_SCRIPT = ROOT / "scripts" / "pgo_w1_build.sh"
 
 
+# Variables of the caller's build environment (CI sets RUSTFLAGS and CARGO_TERM_COLOR
+# workflow-wide, other jobs RUSTDOCFLAGS and CARGO_TARGET_DIR) that the fake tools log
+# or that cargo and maturin read; the fixtures drop them so a test sees only what the
+# script itself sets.
+AMBIENT_BUILD = ("RUST", "CARGO", "MATURIN", "LLVM_PROFILE")
+HOSTILE = {"RUSTFLAGS": "-D warnings", "RUSTDOCFLAGS": "-D warnings", "CARGO_TARGET_DIR": "/nonexistent/target",
+           "CARGO_TERM_COLOR": "always", "CARGO_ENCODED_RUSTFLAGS": "-Cdebuginfo=2", "CARGO_BUILD_RUSTFLAGS": "-Copt-level=0"}
+
+
+def clean_environ(path_prefix) -> dict:
+    env = {k: v for k, v in os.environ.items() if not k.startswith(AMBIENT_BUILD)}
+    env["PATH"] = f"{path_prefix}:{os.environ['PATH']}"
+    return env
+
+
 def tool(path: Path, body: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("#!/bin/sh\n" + body)
@@ -67,7 +82,7 @@ def fakes(tmp_path, llvm=("23", "23"), profraw=True):
          f'echo "profdata $*" >> {log}\ncase "$1" in --version) echo "  LLVM version {llvm[1]}.1.1-rust-1.99.1-stable";; '
          'merge) shift; [ "$1" = -o ] && echo data > "$2";; show) echo "  k:"; echo "    Block counts: [5]";; esac\n')
     digest = lambda p: hashlib.sha256(p.read_bytes()).hexdigest()  # noqa: E731
-    env = {**os.environ, "PATH": f"{fake}:{os.environ['PATH']}"}
+    env = clean_environ(fake)
     return env, log, digest(payload / "rustup-init"), digest(payload / "uv.tar.gz")
 
 
@@ -180,7 +195,12 @@ def build_env(path: Path, run_dir: Path, own: str) -> dict:
 
 
 @posix
-def test_pgo_w2_final_build_equals_w1_build_except_the_pgo_flags(tmp_path):
+@pytest.mark.parametrize("ambient", [False, True], ids=["clean", "hostile"])
+def test_pgo_w2_final_build_equals_w1_build_except_the_pgo_flags(tmp_path, monkeypatch, ambient):
+    # "hostile": the caller's build environment as CI sets it (and worse) must not reach the fakes.
+    if ambient:
+        for k, v in HOSTILE.items():
+            monkeypatch.setenv(k, v)
     # W1: scripts/pgo_w1_build.sh as it was at ac92079 (unchanged since), run from the source tree.
     w1_dir, w2_dir = tmp_path / "a", tmp_path / "b"
     w1_dir.mkdir()
