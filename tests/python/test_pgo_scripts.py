@@ -264,3 +264,111 @@ def test_pgo_checks_writes_statuses_tied_to_the_wheel(tmp_path):
     assert saved["wheel_sha256"] == hashlib.sha256(b"abc").hexdigest() and saved["checks"]["num_tests"] == 3
     assert checks.main(["--wheel", str(wheel), "--out", str(out), "bad"]) == 2
 
+
+
+def test_pgo_measure_only_runs_the_named_scenarios(tmp_path):
+    runner = FakeValgrind()
+    part = callgrind.measure_only("py", MANIFEST_PATH, MANIFEST, tmp_path, ["state/Tag-v1-2-2", "state/CartPole-v1"], runner)
+    assert part["scenarios"] == ["state/CartPole-v1", "state/Tag-v1-2-2"], "manifest order"
+    ran = {a[a.index("--scenario") + 1] for a in runner.calls}
+    assert ran == {"state/CartPole-v1", "state/Tag-v1-2-2"}, "no control unless named"
+    assert len(runner.calls) == 22
+
+
+def test_pgo_select_refuses_unknown_and_repeated_names():
+    with pytest.raises(ValueError, match="unknown"):
+        callgrind.select(MANIFEST, ["state/Nope-v1"])
+    with pytest.raises(ValueError, match="twice"):
+        callgrind.select(MANIFEST, [callgrind.CONTROL, callgrind.CONTROL])
+
+
+def parts_then_merge(tmp_path, groups, drop=None):
+    wheel = tmp_path / "w.whl"
+    wheel.write_bytes(b"abc")
+    out = tmp_path / "o"
+    runner = FakeValgrind()
+    for names in groups:
+        args = ["--approved-window", "x", "--manifest", MANIFEST_PATH, "--out-dir", str(out), "--feasibility",
+                "--wheel", str(wheel)]
+        for n in names:
+            args += ["--scenario", n]
+        with pytest.MonkeyPatch.context() as m:
+            m.setattr(callgrind.subprocess, "run", runner)
+            assert callgrind.main(args, platform="linux") == 0
+    if drop:
+        for f in out.glob(drop):
+            f.unlink()
+    merged = callgrind.main(["--manifest", MANIFEST_PATH, "--out-dir", str(out), "--feasibility", "--merge",
+                             "--wheel", str(wheel)], platform="darwin")
+    return merged, out, runner
+
+
+def all_names():
+    return [callgrind.CONTROL, *(s.name for s in ALL)]
+
+
+def test_pgo_merge_of_disjoint_parts_equals_one_full_gate(tmp_path):
+    names = all_names()
+    merged, out, _ = parts_then_merge(tmp_path, [names[0::2], names[1::2]])
+    assert merged == 0
+    report = json.loads((out / "feasibility.json").read_text())
+    (tmp_path / "full").mkdir()
+    full, _ = gate(tmp_path / "full")
+    assert report["passed"] is True and report["gating"] == full["gating"]
+    assert {k: v["aa_ir"] for k, v in report["scenarios"].items()} == {k: v["aa_ir"] for k, v in full["scenarios"].items()}
+    assert len(report["merged_parts"]) == 2
+
+
+def test_pgo_merge_never_runs_valgrind_and_refuses_a_missing_file(tmp_path):
+    names = all_names()
+    merged, out, _ = parts_then_merge(tmp_path, [names], drop="state_Tag-v1-2-2.4000.aa3.callgrind")
+    assert merged == 3 and not (out / "feasibility.json").exists()
+
+
+def test_pgo_merge_refuses_parts_with_other_hashes(tmp_path):
+    names = all_names()
+    merged, out, _ = parts_then_merge(tmp_path, [names[:3]])
+    (tmp_path / "w.whl").write_bytes(b"other")
+    again = callgrind.main(["--manifest", MANIFEST_PATH, "--out-dir", str(out), "--feasibility", "--merge",
+                            "--wheel", str(tmp_path / "w.whl")], platform="darwin")
+    assert again == 2
+
+
+def test_pgo_merge_refuses_overlapping_parts(tmp_path):
+    names = all_names()
+    merged, _, _ = parts_then_merge(tmp_path, [names[:3], names[2:]])
+    assert merged == 2
+
+
+def test_pgo_part_runs_need_the_window_and_linux(tmp_path):
+    wheel = tmp_path / "w.whl"
+    wheel.write_bytes(b"abc")
+    base = ["--manifest", MANIFEST_PATH, "--out-dir", str(tmp_path / "o"), "--feasibility", "--wheel", str(wheel),
+            "--scenario", "state/CartPole-v1"]
+    assert callgrind.main(base, platform="linux") == 2
+    assert callgrind.main(["--approved-window", "x", *base], platform="darwin") == 2
+    assert callgrind.main(["--approved-window", "x", *base[:-2], "--scenario", "nope"], platform="linux") == 2
+
+
+def test_pgo_feasibility_reuses_finished_per_thread_files(tmp_path):
+    gate(tmp_path)
+    again = FakeValgrind()
+    second = callgrind.feasibility("py", MANIFEST_PATH, MANIFEST, tmp_path, again)
+    assert second["passed"] is True and again.calls == []
+
+
+def test_pgo_probe_runs_one_reusable_n_step_file_per_scenario(tmp_path):
+    runner = FakeValgrind()
+    found = callgrind.probe("py", MANIFEST_PATH, MANIFEST, tmp_path, [callgrind.CONTROL, "state/Grid-v1"], runner)
+    assert list(found["probe"]) == ["state/Grid-v1"] and len(runner.calls) == 1
+    again = FakeValgrind()
+    callgrind.measure_only("py", MANIFEST_PATH, MANIFEST, tmp_path, ["state/Grid-v1"], again)
+    assert len(again.calls) == 10, "the probe's file is the first run of the first A/A pair"
+
+
+def test_pgo_probe_needs_scenarios(tmp_path):
+    wheel = tmp_path / "w.whl"
+    wheel.write_bytes(b"abc")
+    args = ["--approved-window", "x", "--manifest", MANIFEST_PATH, "--out-dir", str(tmp_path), "--feasibility",
+            "--wheel", str(wheel), "--probe"]
+    assert callgrind.main(args, platform="linux") == 2
