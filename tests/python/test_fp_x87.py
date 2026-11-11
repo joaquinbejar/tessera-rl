@@ -16,10 +16,10 @@ CHILD = pathlib.Path(__file__).with_name("x87_child.py")
 
 
 WIN64 = sys.platform == "win32"
-# Win64 NTSTATUS codes for the precondition fault. 0xC000008E is expected
-# for an x87 divide-by-zero; 0xC00002B5 is the SIMD multiple-traps code,
-# kept until the first native session records the observed code (#163).
-WIN64_FAULTS = {0xC000008E, 0xC00002B5}
+# The Win64 NTSTATUS code of the precondition fault: STATUS_FLOAT_DIVIDE_BY_ZERO,
+# observed for both precondition scenarios in the native session on main
+# 26e5a5f (docs/reviews/win64-x87-validation-26e5a5f.md, #163).
+WIN64_FAULTS = {0xC000008E}
 TIMEOUT = 60
 
 
