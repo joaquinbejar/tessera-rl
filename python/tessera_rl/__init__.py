@@ -22,11 +22,11 @@ word is restored; the x87 status flags are left as host code set them.
 Precondition: code running in a callback must not leave an unmasked x87
 exception pending (an x87 status flag set whose exception is unmasked in
 the current control word or in the caller's). Restoring the control word
-then faults in hardware (``SIGFPE`` on Linux and macOS, the
-``STATUS_FLOAT_DIVIDE_BY_ZERO`` exception on Windows), which Tessera cannot
-turn into a Python exception. Win64 x87 preservation is validated natively
-on one host (Windows 10.0.26300, Python 3.11.18 MSVC build;
-``docs/reviews/win64-x87-validation-26e5a5f.md``, sha256 5b4378f1…).
+then faults in hardware (``SIGFPE`` on Linux and macOS; a floating-point
+exception status on Windows, ``STATUS_FLOAT_DIVIDE_BY_ZERO`` for a pending
+zero-divide), which Tessera cannot turn into a Python exception. Win64 x87
+preservation is validated natively on one host (Windows 10.0.26300, Python
+3.11.18 MSVC build; issue #163).
 
 API changes (pre-release; the package is not published yet):
 
