@@ -32,6 +32,10 @@ SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "pgo_w1_build.sh"
 AMBIENT_BUILD = ("RUSTFLAGS", "CARGO_ENCODED_RUSTFLAGS", "CARGO_BUILD_RUSTFLAGS", "RUSTC_WRAPPER",
                  "CARGO_BUILD_TARGET", "RUSTDOCFLAGS", "CARGO_TARGET_DIR", "CARGO_TERM_COLOR")
 AMBIENT_BUILD_PREFIX = "CARGO_PROFILE_"
+HOSTILE = {"RUSTFLAGS": "-D warnings", "RUSTDOCFLAGS": "-D warnings", "CARGO_TARGET_DIR": "/nonexistent/target",
+           "CARGO_TERM_COLOR": "always", "CARGO_ENCODED_RUSTFLAGS": "-Cdebuginfo=2", "CARGO_BUILD_RUSTFLAGS": "-Copt-level=0",
+           "CARGO_PROFILE_WHEEL_OPT_LEVEL": "0", "RUSTC_WRAPPER": "/nonexistent/wrapper",
+           "CARGO_BUILD_TARGET": "aarch64-unknown-linux-gnu"}
 
 
 def clean_environ(path_prefix) -> dict:
@@ -51,7 +55,7 @@ def uv_tarball(log: Path) -> bytes:
     buf = io.BytesIO()
     with tarfile.open(fileobj=buf, mode="w:gz") as t:
         for name, body in {
-            "uvx": f'echo "uvx $*" >> {log}\nfor a in "$@"; do [ "$prev" = --out ] && touch "$a/tessera_rl-0.1.0-cp311-abi3-manylinux_2_28_x86_64.whl"; prev="$a"; done\n',
+            "uvx": f'[ -z "$FAKE_ENV_DUMP" ] || env | sort > "$FAKE_ENV_DUMP"\necho "uvx $*" >> {log}\nfor a in "$@"; do [ "$prev" = --out ] && touch "$a/tessera_rl-0.1.0-cp311-abi3-manylinux_2_28_x86_64.whl"; prev="$a"; done\n',
             "uv": f'echo "uv $*" >> {log}\nif [ "$1" = venv ]; then mkdir -p "$4/bin"; if [ -n "$FAKE_SYSTEM_PY" ]; then ln -s "$FAKE_SYSTEM_PY" "$4/bin/python"; else printf "#!/bin/sh\\necho py \\"\\$*\\" >> {log}\\n" > "$4/bin/python"; chmod +x "$4/bin/python"; fi; fi\n',
         }.items():
             data = ("#!/bin/sh\n" + body).encode()
@@ -165,3 +169,18 @@ def test_pgo_w1_build_no_wheel_fails_with_the_count_message(tmp_path):
 def test_pgo_w1_build_sets_a_writable_home(tmp_path):
     p, out, _ = run(tmp_path)
     assert p.returncode == 0 and (out / "w1" / "home").is_dir()
+
+
+def test_pgo_w1_build_fixture_keeps_the_callers_build_environment_out(tmp_path, monkeypatch):
+    # Pins clean_environ(): with a hostile caller, the fake maturin sees none of it except
+    # CARGO_TARGET_DIR, which the script itself sets under the run dir.
+    for k, v in HOSTILE.items():
+        monkeypatch.setenv(k, v)
+    dump = tmp_path / "uvx.env"
+    monkeypatch.setenv("FAKE_ENV_DUMP", str(dump))
+    p, out, _ = run(tmp_path)
+    assert p.returncode == 0, p.stderr
+    seen = dict(line.partition("=")[::2] for line in dump.read_text().splitlines())
+    leaked = {k: seen[k] for k in HOSTILE if k in seen and k != "CARGO_TARGET_DIR"}
+    assert leaked == {}
+    assert seen["CARGO_TARGET_DIR"] == str(out / "w1" / "target")

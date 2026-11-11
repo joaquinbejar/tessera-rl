@@ -107,8 +107,9 @@ def source_tree(tmp_path) -> Path:
     return src
 
 
-def run(tmp_path, variant="full", llvm=("23", "23"), profraw=True, rel=False, swap=False):
+def run(tmp_path, variant="full", llvm=("23", "23"), profraw=True, rel=False, swap=False, extra=None):
     env, log, rsha, usha = fakes(tmp_path, llvm, profraw)
+    env.update(extra or {})
     src, tool_tree = source_tree(tmp_path), ROOT
     if swap:
         src, tool_tree = tool_tree, src
@@ -180,6 +181,74 @@ def test_pgo_w2_build_refuses_a_training_without_profraw(tmp_path):
     p, _, log = run(tmp_path, profraw=False)
     assert p.returncode != 0 and "no profraw" in p.stderr
     assert sum(1 for x in log.splitlines() if x.startswith("uvx ")) == 1, "no final build"
+
+
+# The refused set, as scripts/pgo_w2_build.sh names it (pgo_candidate_checks.sh and the L1 run
+# script name the same), plus the CARGO_PROFILE_* / CARGO_TARGET_* pattern.
+REFUSED = ["RUSTFLAGS", "RUSTDOCFLAGS", "CARGO_ENCODED_RUSTFLAGS", "CARGO_ENCODED_RUSTDOCFLAGS", "CARGO_BUILD_RUSTFLAGS",
+           "CARGO_BUILD_RUSTDOCFLAGS", "CARGO_BUILD_TARGET", "CARGO_BUILD_TARGET_DIR", "RUSTC", "RUSTC_WRAPPER",
+           "RUSTC_WORKSPACE_WRAPPER", "CARGO_BUILD_RUSTC", "CARGO_BUILD_RUSTC_WRAPPER", "CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER"]
+REFUSED_PATTERN = ("CARGO_PROFILE_", "CARGO_TARGET_")
+PATTERNED = ["CARGO_TARGET_DIR", "CARGO_PROFILE_WHEEL_OPT_LEVEL", "CARGO_PROFILE_RELEASE_LTO",
+             "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS", "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER"]
+# Scrubbed by the fixtures (CI sets it) but not refused by the script: it only colours cargo's
+# output and changes nothing that is built.
+COSMETIC = {"CARGO_TERM_COLOR"}
+
+
+def test_pgo_w2_build_names_the_refused_set():
+    text = SCRIPT.read_text()
+    start = text.index('BUILD_VARS="') + len('BUILD_VARS="')
+    assert sorted(text[start:text.index('"', start)].split()) == sorted(REFUSED)
+    assert "grep -Eq '^CARGO_(PROFILE|TARGET)_[A-Za-z0-9_]*='" in text
+
+
+@posix
+@pytest.mark.parametrize("name", REFUSED + PATTERNED)
+@pytest.mark.parametrize("value", ["x", ""], ids=["set", "empty"])
+def test_pgo_w2_build_refuses_an_ambient_build_variable_before_any_fetch(tmp_path, name, value):
+    p, out, log = run(tmp_path, extra={name: value})
+    assert p.returncode == 2, p.stderr
+    msg = (f"pgo_w2_build: {name} is set in the environment; refused" if name in REFUSED
+           else f"pgo_w2_build: {name} set in the environment; refused")
+    assert msg in p.stderr
+    assert log == "" and not out.exists()
+
+
+def test_pgo_w2_build_refuses_everything_the_fixtures_scrub():
+    # The fixtures' scrub list, less the cosmetic set, must stay inside the script's refused set,
+    # so a test that passes only because the fixture scrubbed a variable still proves the real
+    # script refuses it.
+    refused = lambda k: k in REFUSED or k.startswith(REFUSED_PATTERN)  # noqa: E731
+    assert all(refused(k) for k in set(AMBIENT_BUILD) - COSMETIC)
+    assert AMBIENT_BUILD_PREFIX.startswith(REFUSED_PATTERN)
+    assert all(refused(k) for k in set(HOSTILE) - COSMETIC)
+
+
+@posix
+def test_pgo_w2_build_refuses_the_hostile_environment_unscrubbed(tmp_path, monkeypatch):
+    # The real script under the caller's environment as is, not through clean_environ().
+    for k, v in HOSTILE.items():
+        monkeypatch.setenv(k, v)
+    _, log, rsha, usha = fakes(tmp_path)
+    env = {**os.environ, "PATH": f"{tmp_path / 'fake'}:{os.environ['PATH']}"}
+    out = tmp_path / "run"
+    p = subprocess.run(["bash", str(SCRIPT), rsha, usha, str(out), "full", str(source_tree(tmp_path)), str(ROOT)],
+                       env=env, capture_output=True, text=True, check=False, cwd=tmp_path)
+    assert p.returncode == 2 and "set in the environment; refused" in p.stderr, p.stderr
+    assert not log.exists() and not out.exists()
+
+
+@posix
+def test_pgo_w1_build_today_passes_an_ambient_rustflags_to_maturin(tmp_path):
+    # Documents scripts/pgo_w1_build.sh as frozen at ac92079: it does not refuse or clear an
+    # ambient RUSTFLAGS; W1's protection is the run script's start check and the control probe.
+    env, log, rsha, usha = fakes(tmp_path)
+    env["RUSTFLAGS"] = "-D warnings"
+    p = subprocess.run(["bash", str(W1_SCRIPT), rsha, usha, str(tmp_path / "run")], env=env, capture_output=True,
+                       text=True, check=False, cwd=source_tree(tmp_path))
+    assert p.returncode == 0, p.stderr
+    assert [x for x in log.read_text().splitlines() if x.startswith("uvx ")][0].count("RUSTFLAGS=-D warnings ") == 1
 
 
 @posix
