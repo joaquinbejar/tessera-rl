@@ -270,7 +270,8 @@ def test_pgo_checks_writes_statuses_tied_to_the_wheel(tmp_path):
 def test_pgo_measure_only_runs_the_named_scenarios(tmp_path):
     runner = FakeValgrind()
     part = callgrind.measure_only("py", MANIFEST_PATH, MANIFEST, tmp_path, ["state/Tag-v1-2-2", "state/CartPole-v1"], runner)
-    assert part["scenarios"] == ["state/CartPole-v1", "state/Tag-v1-2-2"], "manifest order"
+    assert [u.split("#")[0] for u in part["units"]][::6] == ["state/CartPole-v1", "state/Tag-v1-2-2"], "manifest order"
+    assert len(part["units"]) == 12
     ran = {a[a.index("--scenario") + 1] for a in runner.calls}
     assert ran == {"state/CartPole-v1", "state/Tag-v1-2-2"}, "no control unless named"
     assert len(runner.calls) == 22
@@ -515,3 +516,55 @@ def test_pgo_a_failed_rerun_leaves_no_stamp_on_the_old_file(tmp_path, monkeypatc
     assert not callgrind.stamp_path(out).exists()
     with pytest.raises(callgrind.MissingRun):
         callgrind.measure("py", "m", s.name, s.steps, tmp_path, callgrind.refuse)
+
+
+def test_pgo_select_expands_scenarios_into_units_and_refuses_repeats():
+    units = callgrind.select(MANIFEST, ["threaded/CartPole-v1", callgrind.CONTROL])
+    assert units[0] == callgrind.CONTROL
+    assert units[1:] == [f"threaded/CartPole-v1#aa{i}" for i in range(5)] + ["threaded/CartPole-v1#workers"]
+    assert callgrind.select(MANIFEST, ["state/Grid-v1#lin"]) == ["state/Grid-v1#lin"]
+    for bad in (["state/Grid-v1#workers"], ["threaded/CartPole-v1#lin"], ["state/Grid-v1#aa5"]):
+        with pytest.raises(ValueError, match="unknown"):
+            callgrind.select(MANIFEST, bad)
+    with pytest.raises(ValueError, match="twice"):
+        callgrind.select(MANIFEST, ["state/Grid-v1", "state/Grid-v1#aa2"])
+
+
+def test_pgo_units_cover_the_full_gate_runs_exactly(tmp_path):
+    (tmp_path / "f").mkdir()
+    full = FakeValgrind()
+    callgrind.feasibility("py", MANIFEST_PATH, MANIFEST, tmp_path / "f", full)
+    split = FakeValgrind()
+    (tmp_path / "u").mkdir()
+    for unit in callgrind.all_units(MANIFEST):
+        callgrind.measure_only("py", MANIFEST_PATH, MANIFEST, tmp_path / "u", [unit], split)
+    def outs(r):
+        return sorted(next(a.split("=", 1)[1] for a in argv if a.startswith("--callgrind-out-file=")).split("/")[-1] for argv in r.calls)
+    assert outs(split) == outs(full), "the units run exactly the files of the full gate"
+
+
+def test_pgo_merge_of_parts_split_by_pairs_equals_one_full_gate(tmp_path):
+    units = callgrind.all_units(MANIFEST)
+    groups = [units[i::4] for i in range(4)]
+    merged, out, _ = parts_then_merge(tmp_path, groups)
+    assert merged == 0
+    report = json.loads((out / "feasibility.json").read_text())
+    (tmp_path / "full").mkdir()
+    full, _ = gate(tmp_path / "full")
+    assert report["passed"] is True and report["gating"] == full["gating"]
+    assert {k: v["aa_ir"] for k, v in report["scenarios"].items()} == {k: v["aa_ir"] for k, v in full["scenarios"].items()}
+
+
+def test_pgo_merge_refuses_a_missing_or_repeated_unit(tmp_path):
+    units = callgrind.all_units(MANIFEST)
+    (tmp_path / "a").mkdir()
+    (tmp_path / "b").mkdir()
+    missing, _, _ = parts_then_merge(tmp_path / "a", [[u for u in units if u != "games/Othello-v1#aa3"]])
+    assert missing == 2
+    repeated, _, _ = parts_then_merge(tmp_path / "b", [units, ["games/Othello-v1#aa3"]])
+    assert repeated == 2
+
+
+def test_pgo_probe_takes_scenarios_not_units(tmp_path):
+    with pytest.raises(ValueError, match="not units"):
+        callgrind.probe("py", MANIFEST_PATH, MANIFEST, tmp_path, ["state/Grid-v1#aa0"], FakeValgrind())
