@@ -241,6 +241,7 @@ mod tests {
                 high: vec![1.0; 4],
             }],
             action_choices: 2,
+            action_nvec: vec![2],
             action_bounds: None,
             mask_len: 5,
             turns: "simultaneous",

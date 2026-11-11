@@ -606,6 +606,8 @@ thunk!(BUILD_PROFILE: CFunction = thunk_build_profile => module::build_profile :
 thunk!(MAKE_PANIC_COUNTER: CFunctionKw = thunk_make_panic_counter => env_type::make_panic_counter : fn(Obj, Obj, Obj) -> Obj);
 #[cfg(feature = "test-hooks")]
 thunk!(MAKE_CONTINUOUS_PROBE: CFunctionKw = thunk_make_continuous_probe => env_type::make_continuous_probe : fn(Obj, Obj, Obj) -> Obj);
+#[cfg(feature = "test-hooks")]
+thunk!(MAKE_MULTI_PROBE: CFunctionKw = thunk_make_multi_probe => env_type::make_multi_probe : fn(Obj, Obj, Obj) -> Obj);
 thunk!(MAKE_ACROBOT: CFunctionKw = thunk_make_acrobot => env_type::make_acrobot : fn(Obj, Obj, Obj) -> Obj);
 thunk!(MAKE_MOUNTAINCAR: CFunctionKw = thunk_make_mountaincar => env_type::make_mountaincar : fn(Obj, Obj, Obj) -> Obj);
 #[cfg(feature = "test-hooks")]
