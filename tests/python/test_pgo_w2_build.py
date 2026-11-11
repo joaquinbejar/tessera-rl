@@ -128,6 +128,21 @@ def test_pgo_w2_build_refuses_swapped_trees(tmp_path):
 
 
 @posix
+def test_pgo_w2_build_refuses_a_tool_tree_whose_manifest_is_not_the_gates(tmp_path):
+    env, log, rsha, usha = fakes(tmp_path)
+    tool_tree = tmp_path / "tool"
+    (tool_tree / "tools" / "pgo").mkdir(parents=True)
+    (tool_tree / "tools" / "pgo" / "kernels.toml").write_bytes(KERNELS.read_bytes())
+    m = bytearray((ROOT / "tools" / "pgo" / "manifest.toml").read_bytes())
+    m[-1:] = b" " if m[-1:] != b" " else b"\n"
+    (tool_tree / "tools" / "pgo" / "manifest.toml").write_bytes(bytes(m))
+    p = subprocess.run(["bash", str(SCRIPT), rsha, usha, str(tmp_path / "run"), "full", str(source_tree(tmp_path)),
+                        str(tool_tree)], env=env, capture_output=True, text=True, check=False, cwd=tmp_path)
+    text = log.read_text() if log.exists() else ""
+    assert p.returncode != 0 and "manifest is not the gate's" in p.stderr and "uvx " not in text
+
+
+@posix
 def test_pgo_w2_build_refuses_an_llvm_version_mismatch(tmp_path):
     p, _, log = run(tmp_path, llvm=("23", "22"))
     assert p.returncode != 0 and "does not match" in p.stderr and "uvx " not in log
@@ -207,17 +222,26 @@ FIX = ROOT / "tests" / "python" / "fixtures" / "pgo"
 # function changed (hash mismatch) and one was added (no profile data).
 SHOW = (FIX / "profdata-show-counts.txt").read_text()
 WARNINGS = (FIX / "profile-use-warnings.txt").read_text()
-# The v0 symbols of W1's _native.abi3.so (sha256 ad64a5e1...) that the frozen kernels match, from llvm-nm.
-W1_SYMBOLS = [l for l in (FIX / "w1-kernel-symbols.txt").read_text().splitlines() if l.startswith("_R")]
+# Every v0 defined symbol of W1's _native.abi3.so (sha256 ad64a5e1...), from llvm-nm, unfiltered.
+W1_SYMBOLS = [l for l in (FIX / "w1-v0-symbols.txt").read_text().splitlines() if l.startswith("_R")]
 KERNELS = ROOT / "tools" / "pgo" / "kernels.toml"
 
 
 def test_pgo_coverage_reads_block_counts_of_the_real_show_format():
     got = coverage.counts(SHOW)
+    assert len(W1_SYMBOLS) > 2000, "the full symbol list, not a pre-filtered one"
     hot = next(c for n, c in got.items() if n.endswith("14tessera_rl_toy3hot"))
     cold = next(c for n, c in got.items() if n.endswith("14tessera_rl_toy4cold"))
     assert hot == 1000 and cold == 0
     assert not any(";" in n for n in got), "the module prefix is stripped"
+
+
+def test_pgo_coverage_a_function_is_reached_by_its_largest_block_not_its_first():
+    # LLVM's counters need not include the entry block: [0, 7] is reached.
+    show = SHOW + "  m.cgu.0;_RNvCs1_14tessera_rl_toy7reached:\n    Hash: 0x1\n    Counters: 2\n    Block counts: [0, 7]\n" \
+                + "  m.cgu.0;_RNvCs1_14tessera_rl_toy6unseen:\n    Hash: 0x2\n    Counters: 3\n    Block counts: [0, 0, 0]\n"
+    got = coverage.counts(show)
+    assert got["_RNvCs1_14tessera_rl_toy7reached"] == 7 and got["_RNvCs1_14tessera_rl_toy6unseen"] == 0
 
 
 def test_pgo_coverage_without_counts_the_show_output_has_no_counts():
