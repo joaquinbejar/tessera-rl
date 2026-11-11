@@ -172,17 +172,58 @@ def scenario_runs(python: str, manifest_path: str, s: evidence.Scenario, out_dir
     return aa, entry
 
 
+LINEAR = "lin"
+WORKERS = "workers"
+
+
+def unit_names(s: evidence.Scenario) -> list[str]:
+    """The independent run units of one scenario: each A/A pair (N and 2N),
+    then the 3N linearity run (single-threaded) or the worker control."""
+    return [f"aa{i}" for i in range(AA_RUNS)] + [LINEAR if s.single_threaded else WORKERS]
+
+
+def all_units(manifest: dict) -> list[str]:
+    """Every unit of the gate, in run order: the control, then `name#unit`."""
+    return [CONTROL, *(f"{s.name}#{u}" for s in evidence.scenarios(manifest) for u in unit_names(s))]
+
+
 def select(manifest: dict, names: list[str]) -> list[str]:
-    """The named scenarios, in manifest order; `CONTROL` may be named too. An
-    unknown or repeated name is refused, so two containers cannot both be
-    given a scenario by a typo."""
-    known = [CONTROL, *(s.name for s in evidence.scenarios(manifest))]
-    unknown = [n for n in names if n not in known]
+    """The named units, in run order. A scenario name stands for all its units,
+    `name#unit` for one (`aa0`..`aa4`, `lin` or `workers`); `CONTROL` may be
+    named too. An unknown or repeated unit is refused, so two containers
+    cannot both be given one by a typo."""
+    by_name = {s.name: s for s in evidence.scenarios(manifest)}
+    wanted: list[str] = []
+    unknown = []
+    for n in names:
+        if n == CONTROL:
+            wanted.append(n)
+        elif n in by_name:
+            wanted += [f"{n}#{u}" for u in unit_names(by_name[n])]
+        elif "#" in n and n.split("#", 1)[0] in by_name and n.split("#", 1)[1] in unit_names(by_name[n.split("#", 1)[0]]):
+            wanted.append(n)
+        else:
+            unknown.append(n)
     if unknown:
-        raise ValueError(f"unknown scenarios: {unknown}")
-    if len(set(names)) != len(names):
-        raise ValueError("a scenario is named twice")
-    return [n for n in known if n in names]
+        raise ValueError(f"unknown scenarios or units: {unknown}")
+    if len(set(wanted)) != len(wanted):
+        raise ValueError("a unit is named twice")
+    return [u for u in all_units(manifest) if u in wanted]
+
+
+def run_unit(python: str, manifest_path: str, by_name: dict, unit: str, out_dir: pathlib.Path, runner=subprocess.run, reused: list | None = None) -> None:
+    """The runs of one unit; the files are the ones the full gate reads."""
+    if unit == CONTROL:
+        control_ir(python, manifest_path, out_dir, runner, reused)
+        return
+    name, part = unit.split("#", 1)
+    s = by_name[name]
+    if part == LINEAR:
+        measure(python, manifest_path, s.name, 3 * s.steps, out_dir, runner, ".aa0", reused=reused)
+    elif part == WORKERS:
+        worker_control(python, manifest_path, s, out_dir, runner, reused)
+    else:
+        cost_of(python, manifest_path, s, out_dir, runner, f".{part}", reused=reused)
 
 
 def probe(python: str, manifest_path: str, manifest: dict, out_dir: pathlib.Path, names: list[str], runner=subprocess.run) -> dict:
@@ -192,7 +233,9 @@ def probe(python: str, manifest_path: str, manifest: dict, out_dir: pathlib.Path
     by_name = {s.name: s for s in evidence.scenarios(manifest)}
     reused: list[str] = []
     seconds = {}
-    for name in select(manifest, names):
+    if any("#" in n for n in names):
+        raise ValueError("--probe takes scenario names, not units")
+    for name in dict.fromkeys(u.split("#", 1)[0] for u in select(manifest, names)):
         if name == CONTROL:
             continue
         s = by_name[name]
@@ -203,19 +246,16 @@ def probe(python: str, manifest_path: str, manifest: dict, out_dir: pathlib.Path
 
 
 def measure_only(python: str, manifest_path: str, manifest: dict, out_dir: pathlib.Path, names: list[str], runner=subprocess.run) -> dict:
-    """The runs of the named scenarios only, for one of several containers that
-    share a window on disjoint cpusets. Decides nothing: `--merge` evaluates the
-    gate from the finished files of every part."""
+    """The runs of the named scenarios or units only, for one of several
+    containers that share a window on disjoint cpusets. Decides nothing:
+    `--merge` evaluates the gate from the finished files of every part."""
     by_name = {s.name: s for s in evidence.scenarios(manifest)}
     reused: list[str] = []
     done = []
-    for name in select(manifest, names):
-        if name == CONTROL:
-            control_ir(python, manifest_path, out_dir, runner, reused)
-        else:
-            scenario_runs(python, manifest_path, by_name[name], out_dir, runner, reused)
-        done.append(name)
-    return {"scenarios": done, "reused_files": reused}
+    for unit in select(manifest, names):
+        run_unit(python, manifest_path, by_name, unit, out_dir, runner, reused)
+        done.append(unit)
+    return {"units": done, "reused_files": reused}
 
 
 def _run(argv, check):
@@ -324,16 +364,16 @@ def merge(args) -> int:
             print(f"refused: {p.name} was measured with another toolchain: {got} != {env}", file=sys.stderr)
             return 2
         env = got
-        overlap = seen & set(part["scenarios"])
+        overlap = seen & set(part["units"])
         if overlap:
-            print(f"refused: {p.name} repeats scenarios of another part: {sorted(overlap)}", file=sys.stderr)
+            print(f"refused: {p.name} repeats units of another part: {sorted(overlap)}", file=sys.stderr)
             return 2
-        seen |= set(part["scenarios"])
+        seen |= set(part["units"])
         windows.append(part.get("approved_window"))
     manifest = evidence.load_manifest(args.manifest)
-    every = {CONTROL, *(s.name for s in evidence.scenarios(manifest))}
+    every = set(all_units(manifest))
     if seen != every:
-        print(f"refused: the parts must cover exactly the control and every scenario; missing "
+        print(f"refused: the parts must cover every unit of the gate exactly once; missing "
               f"{sorted(every - seen)}, extra {sorted(seen - every)}", file=sys.stderr)
         return 2
     # Every file read must carry the parts' provenance: a finished file of
@@ -361,8 +401,9 @@ def _main(argv, platform) -> int:
     parser.add_argument("--python", default=sys.executable)
     parser.add_argument("--feasibility", action="store_true", help="the gate of section 5, on W1")
     parser.add_argument("--wheel", default=None, help="the exact wheel measured")
-    parser.add_argument("--scenario", action="append", default=None, metavar="NAME",
-                        help="with --feasibility: run only these scenarios (repeatable; the control is named "
+    parser.add_argument("--scenario", "--pair", action="append", default=None, metavar="NAME[#UNIT]",
+                        help="with --feasibility: run only these scenarios, or single units of one as NAME#aa0.."
+                        f"NAME#aa{AA_RUNS - 1}, NAME#{LINEAR} or NAME#{WORKERS} (repeatable; the control is named "
                         f"{CONTROL!r}); writes a part report and decides nothing")
     parser.add_argument("--probe", action="store_true",
                         help="with --scenario: only the first N-step run of each, timed, for the window's projection")
@@ -436,7 +477,7 @@ def _main(argv, platform) -> int:
             return 2
         part["approved_window"] = args.approved_window
         part["sha256"] = STAMP
-        label = hashlib.sha256("\n".join(part["scenarios"]).encode()).hexdigest()[:12]
+        label = hashlib.sha256("\n".join(part["units"]).encode()).hexdigest()[:12]
         (args.out_dir / f"feasibility.part.{label}.json").write_text(json.dumps(part, indent=1))
         return 0
     if args.feasibility:
