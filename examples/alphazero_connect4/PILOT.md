@@ -125,7 +125,10 @@ If either cell is missing because of the budget, the verdict is
   entry of another host blocks until it is settled by hand with
   `pilot.py ledger-settle --ledger PATH --index N --interrupted`, at its
   full reservation.
-- The child also kills its own group when the supervisor disappears. A
+- The child also kills its own group when the supervisor disappears, even
+  while the child is still starting: the supervisor passes its pid, and the
+  child compares it with its current parent before its heavy imports, again
+  when it arms its watchdog, and on every watchdog poll. A
   supervisor that died without settling (SIGKILL) leaves a `running`
   entry, which the next run settles at its full reservation.
 - Inside the deadline, a cell's first unit starts only if

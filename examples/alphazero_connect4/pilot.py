@@ -37,6 +37,16 @@ installed)::
 from __future__ import annotations
 
 import os
+import signal
+import sys
+
+import orphan
+
+# A supervised child checks its supervisor before the heavy imports
+# (orphan.py); a spawned pool worker re-imports this file as __mp_main__,
+# with its parent's argv, and must not.
+if __name__ == "__main__":
+    orphan.check_argv()
 
 # Library thread pools are pinned to 1 before torch is imported (P2-M3:
 # one thread, deterministic algorithms); an inherited value is recorded
@@ -60,11 +70,9 @@ import json  # noqa: E402
 import math  # noqa: E402
 import multiprocessing as mp  # noqa: E402
 import platform  # noqa: E402
-import signal  # noqa: E402
 import socket  # noqa: E402
 import statistics  # noqa: E402
 import subprocess  # noqa: E402
-import sys  # noqa: E402
 import threading  # noqa: E402
 import time  # noqa: E402
 
@@ -629,6 +637,7 @@ def parse(argv):
     p.add_argument("--seed", type=int, default=20261102)
     # Internal: set by the supervisor for the child.
     p.add_argument("--child-deadline-epoch", type=float, help=argparse.SUPPRESS)
+    p.add_argument("--supervisor-pid", type=int, help=argparse.SUPPRESS)
     args = p.parse_args(argv)
     if args.command in ("eval", "all") and not args.bot:
         p.error("eval needs --bot")
@@ -649,23 +658,31 @@ def parse(argv):
     return args
 
 
-def _watchdog(deadline_epoch: float, parent: int) -> None:
+WATCHDOG_POLL_S = orphan.POLL_S
+
+
+def _watchdog(deadline_epoch: float, supervisor_pid: int) -> None:
     """Kills the whole process group at the deadline, or as soon as the
     supervisor is gone (the child's own guard: a SIGKILLed supervisor
     cannot clean up)."""
     while True:
-        if time.time() >= deadline_epoch or os.getppid() != parent:
+        if time.time() >= deadline_epoch:
             os.killpg(0, signal.SIGKILL)
-        time.sleep(0.2)
+        orphan.check(supervisor_pid)
+        time.sleep(WATCHDOG_POLL_S)
 
 
 def child(args) -> int:
-    threading.Thread(target=_watchdog, args=(args.child_deadline_epoch, os.getppid()), daemon=True).start()
+    if args.supervisor_pid is None:
+        raise SystemExit("pilot: the child needs --supervisor-pid")
+    # Checked again at arming: the supervisor may have died during the imports.
+    orphan.check(args.supervisor_pid)
+    threading.Thread(target=_watchdog, args=(args.child_deadline_epoch, args.supervisor_pid), daemon=True).start()
     configure_torch(1)
     # A test that needs the kill must not depend on how long startup took.
     no_skip = os.environ.get("PILOT_TEST_NO_SKIP") == "1" and args.source_sha == "test"
     clock = Clock(args.child_deadline_epoch, skips=not no_skip)
-    params = {k: v for k, v in vars(args).items() if k != "child_deadline_epoch"}
+    params = {k: v for k, v in vars(args).items() if k not in ("child_deadline_epoch", "supervisor_pid")}
     report: dict = {"command": args.command, "params": params, "config_sha256": canonical_hash(params)}
     report["provenance"] = provenance(args)
     path = os.path.join(args.out, "report.json")
@@ -701,7 +718,15 @@ def supervise(args, argv) -> int:
     work_deadline = start + work_s
     deadline_epoch = time.time() + (work_deadline - time.monotonic())
     proc = subprocess.Popen(
-        [sys.executable, os.path.abspath(__file__), *argv, "--child-deadline-epoch", repr(deadline_epoch)],
+        [
+            sys.executable,
+            os.path.abspath(__file__),
+            *argv,
+            "--child-deadline-epoch",
+            repr(deadline_epoch),
+            "--supervisor-pid",
+            str(os.getpid()),
+        ],
         start_new_session=True,
     )
 
