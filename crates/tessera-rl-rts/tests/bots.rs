@@ -146,6 +146,9 @@ fn mirrored(c: &RtsConfig, s: &RtsState) -> RtsState {
     m.ore = [s.ore[1], s.ore[0]];
     for cell in 0..g.cells() {
         m.terrain[usize::from(g.mirror(cell))] = s.terrain[usize::from(cell)];
+        // The sides swap, so their explored bits swap too.
+        let e = s.explored[usize::from(cell)];
+        m.explored[usize::from(g.mirror(cell))] = ((e & 1) << 1) | ((e >> 1) & 1);
     }
     m
 }
@@ -233,7 +236,7 @@ fn fnv(hash: u64, word: u64) -> u64 {
 /// hashes folded. Both games reach combat (asserted), so the fighters'
 /// orders are in the hash. Pinned on macOS arm64; any change to a bot, the
 /// rules or the masks moves it.
-const BOT_GOLDEN: u64 = 0x3de6_d9f0_bbe2_6d05;
+const BOT_GOLDEN: u64 = 0xf917_a49f_18a8_a2a4;
 /// A seed where Rush beats Prospector inside 600 decisions.
 const GOLDEN_SEED: u64 = 14;
 

@@ -129,7 +129,110 @@ fn golden_run(workers: Option<usize>) -> u64 {
 
 /// Pinned on macOS arm64; any change to the rules, the masks or the
 /// encoding moves it.
-const RTS_GOLDEN: u64 = 0x73d2_5fff_be44_e95e;
+const RTS_GOLDEN: u64 = 0x7dcd_1abc_14aa_2177;
+
+/// The stage 2 fields of one state, folded field by field: units, terrain,
+/// ore, decisions and ticks. A field that a later stage adds is not read.
+fn fold_dynamics(mut hash: u64, s: &tessera_rl_rts::RtsState) -> u64 {
+    for u in &s.units {
+        for w in [
+            u64::from(u.cell),
+            u64::from(u.kind),
+            u64::from(u.hp),
+            u64::from(u.alive.get()),
+            u64::from(u.finished.get()),
+            u64::from(u.carry),
+            u64::from(u.counter),
+            u64::from(u.progress),
+            u64::from(u.producing),
+            u64::from(u.generation),
+        ] {
+            hash = fnv(hash, w);
+        }
+    }
+    for &t in &s.terrain {
+        hash = fnv(hash, u64::from(t));
+    }
+    for w in [
+        u64::from(s.ore[0]),
+        u64::from(s.ore[1]),
+        u64::from(s.decisions),
+        u64::from(s.ticks),
+    ] {
+        hash = fnv(hash, w);
+    }
+    hash
+}
+
+/// The golden's game with the state hash replaced by [`fold_dynamics`].
+fn dynamics_run() -> u64 {
+    let c = cfg(12, 6);
+    let mut p = pool(c, 2, 2026, None);
+    let mut rng = Rng(0x7e55_u64);
+    let mut masks = ready(&mut p);
+    let mut hash = 0xcbf2_9ce4_8422_2325_u64;
+    for _ in 0..96 {
+        let a = legal_actions(&mut rng, &masks, 2, 6);
+        let out = p.step(input(&a)).unwrap();
+        for r in out.rewards() {
+            hash = fnv(hash, u64::from(r.to_bits()));
+        }
+        masks = out.masks().to_vec();
+        hash = masks.iter().fold(hash, |h, m| fnv(h, u64::from(m.get())));
+        for i in 0..2 {
+            hash = fnv_state(hash, &p, i);
+        }
+    }
+    hash
+}
+
+fn fnv_state(hash: u64, p: &Pool, i: u32) -> u64 {
+    fold_dynamics(hash, p.state(i).unwrap())
+}
+
+/// Pinned on the stage 2 code (`rts-design.md` section 14, ruling 6): fog
+/// must not change units, terrain, ore, counters, rewards or masks, so
+/// this value never moves in stage 3, while [`RTS_GOLDEN`] moves with the
+/// state's new field.
+const DYNAMICS_GOLDEN: u64 = 0x1d8e_5670_c0d3_ad6f;
+
+#[test]
+fn test_rts_dynamics_are_unchanged_by_fog() {
+    let hash = dynamics_run();
+    assert_eq!(hash, DYNAMICS_GOLDEN, "{hash:#x}");
+}
+
+/// Both observation leaves of every agent, folded over 300 decisions of the
+/// golden's seeded legal play, inline and with 3 workers.
+fn observation_run(workers: Option<usize>) -> u64 {
+    let c = cfg(12, 6);
+    let mut p = pool(c, 2, 2026, workers);
+    let mut rng = Rng(0x0b5e_u64);
+    let mut masks = ready(&mut p);
+    let mut hash = 0xcbf2_9ce4_8422_2325_u64;
+    for _ in 0..300 {
+        let a = legal_actions(&mut rng, &masks, 2, 6);
+        let out = p.step(input(&a)).unwrap();
+        for leaf in 0..2 {
+            for &b in out.observation(leaf).unwrap() {
+                hash = fnv(hash, u64::from(b));
+            }
+        }
+        masks = out.masks().to_vec();
+    }
+    hash
+}
+
+/// Pinned on macOS arm64 for `ENV_VERSION` 2: the fogged planes and the
+/// globals.
+const OBSERVATION_GOLDEN: u64 = 0x9d9f_7aea_f2d9_8a81;
+
+#[test]
+fn test_rts_observation_golden_is_pinned_and_identical_across_workers() {
+    let inline = observation_run(None);
+    assert_eq!(inline, OBSERVATION_GOLDEN, "{inline:#x}");
+    assert_eq!(observation_run(Some(3)), inline);
+}
 
 #[test]
 fn test_rts_golden_is_pinned_and_identical_across_workers() {

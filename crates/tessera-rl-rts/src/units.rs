@@ -175,3 +175,16 @@ pub const fn advance_counter(counter: u8, speed: u8) -> (u8, bool) {
         (next, false)
     }
 }
+
+// Fog leaves the stage 2 masks unchanged (`rts-design.md` section 14,
+// ruling 4) because every target a mask can name is visible when it is
+// written: every kind sees its 4-neighbours (sight at least 1) and every
+// cell in its range (range at most sight).
+const _: () = {
+    let mut kinds: &[Kind] = &Kind::ALL;
+    while let [k, rest @ ..] = kinds {
+        let s = k.stats();
+        assert!(s.sight >= 1 && s.range <= s.sight);
+        kinds = rest;
+    }
+};

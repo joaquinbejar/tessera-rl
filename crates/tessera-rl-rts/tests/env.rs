@@ -123,6 +123,9 @@ fn mirrored(c: &RtsConfig, s: &RtsState) -> RtsState {
     m.ore = [s.ore[1], s.ore[0]];
     for cell in 0..g.cells() {
         m.terrain[usize::from(g.mirror(cell))] = s.terrain[usize::from(cell)];
+        // The sides swap, so their explored bits swap too.
+        let e = s.explored[usize::from(cell)];
+        m.explored[usize::from(g.mirror(cell))] = ((e & 1) << 1) | ((e >> 1) & 1);
     }
     m
 }

@@ -22,6 +22,8 @@ tessera-rl-macros.workspace = true
 [dev-dependencies]
 criterion.workspace = true
 tessera-rl-engine = { workspace = true, features = ["test-hooks"] }
+# The search pool refuses this environment under fog (ADR-0035).
+tessera-rl-search.workspace = true
 
 [lints]
 workspace = true
