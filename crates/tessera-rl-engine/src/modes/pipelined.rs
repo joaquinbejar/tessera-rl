@@ -456,6 +456,9 @@ where
             rt.gang.clear_poison()?;
         }
         self.poisoned = false;
+        // The allocation count of ADR-0055 was dropped by the pool's own
+        // full writer (`reset_all`, `restore_all`, `import_all`), which ran
+        // with exclusive access just before this.
         Ok(())
     }
 
@@ -777,7 +780,11 @@ where
         })?;
         self.check_turns(&token)?;
         #[cfg(feature = "debug-checks")]
-        self.check_agent_events(&token)?;
+        {
+            self.check_agent_events(&token)?;
+            self.check_allocations()?;
+            self.check_nan(&token)?;
+        }
         crate::entry::canonical(|| self.reduce(half, &token));
         Ok(token)
     }
@@ -820,6 +827,40 @@ where
                 instance: u32::try_from(first + k / a).unwrap_or(u32::MAX),
                 agent: u32::try_from(k % a).unwrap_or(u32::MAX),
             });
+        }
+        Ok(())
+    }
+
+    /// `debug-checks`: an allocation inside a chunk step of this pool
+    /// (either half) poisons it (ADR-0055).
+    #[cfg(feature = "debug-checks")]
+    fn check_allocations(&mut self) -> Result<(), EngineError> {
+        match crate::nan_check::allocation_error(self.mode.pool.allocs.take()) {
+            Some(e) => {
+                self.poisoned = true;
+                Err(e)
+            }
+            None => Ok(()),
+        }
+    }
+
+    /// `debug-checks`: the first NaN in the rewards or state of the
+    /// returned half, in id order, poisons the pool (ADR-0055).
+    #[cfg(feature = "debug-checks")]
+    fn check_nan(&mut self, token: &HalfToken<E, M>) -> Result<(), EngineError> {
+        let a = E::MAX_AGENTS.max(1);
+        let first = token.ids().start;
+        let rewards = token.rewards();
+        for (k, state) in token.states().iter().enumerate() {
+            let row = rewards.get(k * a..(k + 1) * a).unwrap_or(&[]);
+            let id = u32::try_from(k)
+                .ok()
+                .and_then(|k| first.checked_add(k))
+                .unwrap_or(u32::MAX);
+            if let Some(e) = crate::nan_check::instance_nan(id, row, state) {
+                self.poisoned = true;
+                return Err(e);
+            }
         }
         Ok(())
     }

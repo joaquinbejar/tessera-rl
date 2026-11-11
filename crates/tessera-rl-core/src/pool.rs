@@ -175,6 +175,12 @@ where
             None => Ok(Self { items, occupied }),
         }
     }
+    /// Every entry, occupied or not: inactive entries must equal the
+    /// default, which holds no NaN unless `T` allows it.
+    #[inline]
+    fn first_nan(&self) -> Option<&'static str> {
+        self.items.first_nan()
+    }
 }
 
 #[cfg(test)]

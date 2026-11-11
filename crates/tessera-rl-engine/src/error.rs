@@ -7,7 +7,10 @@ use thiserror::Error;
 
 /// Errors returned by pool construction and the validation boundary. On
 /// any error from `step` or `reset`, no instance was mutated.
+///
+/// Non-exhaustive (ADR-0055): match it with a wildcard arm.
 #[derive(Debug, Clone, PartialEq, Error)]
+#[non_exhaustive]
 pub enum EngineError {
     /// The environment config is invalid.
     #[error(transparent)]
@@ -304,6 +307,24 @@ pub enum EngineError {
         /// The agent slot.
         agent: u32,
     },
+    /// With `debug-checks`, a NaN in a reward or in a state field not
+    /// annotated `#[state(allow_nan)]` (ADR-0055). This is an environment
+    /// bug: the pool is poisoned. Never constructed without the feature.
+    #[error("instance {instance}: NaN in {site}")]
+    NanDetected {
+        /// The instance.
+        instance: u32,
+        /// Where the NaN is.
+        site: NanSite,
+    },
+    /// With `debug-checks` and the engine's `TrackingAllocator` installed,
+    /// environment code allocated inside a chunk step (ADR-0004, ADR-0055):
+    /// the pool is poisoned. Never constructed without the feature.
+    #[error("{count} allocations inside a chunk step")]
+    AllocationInChunkStep {
+        /// Allocations counted in the chunk steps of the call.
+        count: u64,
+    },
     /// The instance has not been reset yet, or its episode ended in
     /// `Disabled` auto-reset mode.
     #[error("instance {id} is pending reset")]
@@ -319,4 +340,28 @@ pub enum EngineError {
         /// `step_index` or `episode_index`.
         counter: &'static str,
     },
+}
+
+/// Where `debug-checks` found a NaN (ADR-0055).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NanSite {
+    /// The reward of an agent slot.
+    Reward {
+        /// The agent slot.
+        agent: u32,
+    },
+    /// A state field: the top-level field that holds the NaN.
+    State {
+        /// The field name.
+        field: &'static str,
+    },
+}
+
+impl core::fmt::Display for NanSite {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Reward { agent } => write!(f, "the reward of agent slot {agent}"),
+            Self::State { field } => write!(f, "state field `{field}`"),
+        }
+    }
 }

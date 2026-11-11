@@ -104,6 +104,9 @@ pub struct EnvPool<E: Environment, M: MaskProvider<E> = NoMasks> {
     penalized: Vec<Bool8>,
     pub(crate) branch_counter: u64,
     sync: Option<SyncRuntime>,
+    /// Allocations counted in this pool's chunk steps (ADR-0055).
+    #[cfg(feature = "debug-checks")]
+    pub(crate) allocs: crate::sys::alloc_track::AllocTally,
     _masks: PhantomData<M>,
 }
 
@@ -135,6 +138,8 @@ impl<E: Environment, M: MaskProvider<E>> EnvPool<E, M> {
                 .max_episode_steps
                 .map(core::num::NonZeroU32::get),
             auto_reset: self.options.auto_reset,
+            #[cfg(feature = "debug-checks")]
+            allocs: &self.allocs,
         }
     }
 
@@ -299,6 +304,8 @@ where
             penalized: vec![Bool8::FALSE; if M::ENABLED { rows } else { 0 }],
             branch_counter: 0,
             sync: None,
+            #[cfg(feature = "debug-checks")]
+            allocs: crate::sys::alloc_track::AllocTally::default(),
             _masks: PhantomData,
         })
     }
@@ -608,7 +615,12 @@ where
             })?;
         }
         self.poisoned = false;
-        self.check_turns()
+        #[cfg(feature = "debug-checks")]
+        self.discard_allocations();
+        self.check_turns()?;
+        #[cfg(feature = "debug-checks")]
+        self.check_nan(0..n)?;
+        Ok(())
     }
 
     /// Resets the instances `ids`, in the order given; other instances keep
@@ -630,8 +642,14 @@ where
         check_ids(ids, &mut self.seen)?;
         let indices = ids.iter().filter_map(|&id| usize::try_from(id).ok());
         self.check_reset(indices.clone(), ids.len(), reseed)?;
+        #[cfg(not(feature = "debug-checks"))]
         self.apply_reset(indices, reseed)?;
-        self.check_turns()
+        #[cfg(feature = "debug-checks")]
+        self.apply_reset(indices.clone(), reseed)?;
+        self.check_turns()?;
+        #[cfg(feature = "debug-checks")]
+        self.check_nan(indices)?;
+        Ok(())
     }
 
     fn check_reset(
@@ -779,6 +797,8 @@ where
             penalties,
             penalized,
             sync,
+            #[cfg(feature = "debug-checks")]
+            allocs,
             ..
         } = self;
         let ctx = StepCtx::<E> {
@@ -788,6 +808,8 @@ where
             policy: options.illegal_action,
             limit: options.max_episode_steps.map(core::num::NonZeroU32::get),
             auto_reset: options.auto_reset,
+            #[cfg(feature = "debug-checks")]
+            allocs,
         };
         let all = Chunk::<E> {
             headers,
@@ -814,7 +836,11 @@ where
         }
         self.check_turns()?;
         #[cfg(feature = "debug-checks")]
-        self.check_agent_events()?;
+        {
+            self.check_agent_events()?;
+            self.check_allocations()?;
+            self.check_nan(0..self.headers.len())?;
+        }
         Ok(())
     }
 
@@ -869,6 +895,48 @@ where
         }
         Ok(())
     }
+
+    /// `debug-checks`: an allocation counted inside a chunk step of this
+    /// pool poisons it (ADR-0055).
+    #[cfg(feature = "debug-checks")]
+    fn check_allocations(&mut self) -> Result<(), EngineError> {
+        match crate::nan_check::allocation_error(self.allocs.take()) {
+            Some(e) => {
+                self.poisoned = true;
+                Err(e)
+            }
+            None => Ok(()),
+        }
+    }
+
+    /// `debug-checks`: drops the allocation count left by a failed call
+    /// (a panic, or a check that failed before `check_allocations`). Every
+    /// path that clears the poison calls it, so a recovered pool starts
+    /// from zero (ADR-0055).
+    #[cfg(feature = "debug-checks")]
+    pub(crate) fn discard_allocations(&self) {
+        let _ = self.allocs.take();
+    }
+
+    /// `debug-checks`: the first NaN in the rewards or state of `indices`,
+    /// in order, poisons the pool (ADR-0055).
+    #[cfg(feature = "debug-checks")]
+    fn check_nan(&mut self, indices: impl Iterator<Item = usize>) -> Result<(), EngineError> {
+        let a = self.outputs.agents;
+        let rewards = self.outputs.rewards();
+        for i in indices {
+            let Some(state) = self.states.get(i) else {
+                continue;
+            };
+            let row = rewards.get(i * a..(i + 1) * a).unwrap_or(&[]);
+            let id = u32::try_from(i).unwrap_or(u32::MAX);
+            if let Some(e) = crate::nan_check::instance_nan(id, row, state) {
+                self.poisoned = true;
+                return Err(e);
+            }
+        }
+        Ok(())
+    }
 }
 
 /// The native wait primitive to use for `choice`, if any.
@@ -905,6 +973,9 @@ pub(crate) struct StepCtx<'a, E: Environment> {
     pub(crate) policy: IllegalActionPolicy,
     pub(crate) limit: Option<u32>,
     pub(crate) auto_reset: AutoReset,
+    /// The pool's allocation tally (ADR-0055).
+    #[cfg(feature = "debug-checks")]
+    pub(crate) allocs: &'a crate::sys::alloc_track::AllocTally,
 }
 
 /// The records, action rows and output rows of a range of instances,
@@ -925,6 +996,10 @@ pub(crate) fn step_chunk<E: Environment, M: MaskProvider<E>>(
     ctx: &StepCtx<'_, E>,
     chunk: &mut Chunk<'_, E>,
 ) {
+    // The bracket of ADR-0055 covers the whole chunk step: the illegal-action
+    // pass, step, observe, the mask writes and the auto-resets below.
+    #[cfg(feature = "debug-checks")]
+    let _bracket = crate::sys::alloc_track::ChunkBracket::enter(ctx.allocs);
     let StepCtx {
         cfg,
         authority,
@@ -932,6 +1007,7 @@ pub(crate) fn step_chunk<E: Environment, M: MaskProvider<E>>(
         policy,
         limit,
         auto_reset,
+        ..
     } = *ctx;
     let Chunk {
         headers,
@@ -1577,8 +1653,10 @@ fn step_one<E: Environment>(
             *r += p;
         }
         let reward = outputs.rewards.get(k).copied().unwrap_or(0.0);
+        // Under `debug-checks` a NaN is reported as `NanDetected` after the
+        // barrier (ADR-0055) instead of panicking here.
         debug_assert!(
-            reward.is_finite(),
+            reward.is_finite() || (cfg!(feature = "debug-checks") && reward.is_nan()),
             "non-finite reward for agent slot {slot}"
         );
         row.episode_return += reward;

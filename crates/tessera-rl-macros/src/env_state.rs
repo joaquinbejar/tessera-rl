@@ -59,6 +59,7 @@ struct FieldParts {
     encodes: Vec<TokenStream>,
     decodes: Vec<TokenStream>,
     inits: Vec<TokenStream>,
+    nans: Vec<TokenStream>,
 }
 
 impl FieldParts {
@@ -108,6 +109,16 @@ impl FieldParts {
             .push(quote!(#core::encoding::Canonical::encode(&self.#ident, out);));
         self.inits
             .push(quote!(#ident: <#ty as #core::StateInit>::state_default(),));
+        // Generated unconditionally: a `cfg` here would be evaluated
+        // against the deriving crate's features (ADR-0055).
+        if !nan {
+            let field = LitStr::new(&ident.to_string(), ident.span());
+            self.nans.push(quote! {
+                if #core::encoding::Canonical::first_nan(&self.#ident).is_some() {
+                    return ::core::option::Option::Some(#field);
+                }
+            });
+        }
         self.decodes.push(if nan {
             quote!(#ident: <#ty as #core::encoding::DecodeAllowNan>::decode_allow_nan(input)?,)
         } else {
@@ -150,6 +161,7 @@ pub(crate) fn derive(input: &DeriveInput) -> syn::Result<TokenStream> {
         encodes,
         decodes,
         inits,
+        nans,
     } = parts;
     if last.is_none() {
         return Err(syn::Error::new_spanned(
@@ -206,6 +218,12 @@ pub(crate) fn derive(input: &DeriveInput) -> syn::Result<TokenStream> {
                 input: &mut #core::encoding::Decoder<'_>,
             ) -> ::core::result::Result<Self, #core::DecodeError> {
                 ::core::result::Result::Ok(Self { #(#decodes)* })
+            }
+
+            #[inline]
+            fn first_nan(&self) -> ::core::option::Option<&'static str> {
+                #(#nans)*
+                ::core::option::Option::None
             }
         }
 

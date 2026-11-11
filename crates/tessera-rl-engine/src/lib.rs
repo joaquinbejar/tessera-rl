@@ -11,6 +11,8 @@
 //! views for workers) and `sys` (the worker gang).
 
 mod buffer;
+#[cfg(feature = "debug-checks")]
+pub mod debug;
 mod entry;
 mod error;
 #[cfg(test)]
@@ -19,6 +21,8 @@ mod layout;
 mod masks;
 #[cfg(not(loom))]
 mod modes;
+#[cfg(feature = "debug-checks")]
+mod nan_check;
 mod options;
 mod outputs;
 mod persist;
@@ -42,7 +46,7 @@ pub use buffer::batch::{BatchRow, BatchToken, BatchWaiter};
 #[cfg(not(loom))]
 pub use buffer::pipeline::{HalfToken, Waiter};
 pub use buffer::{OutputDtype, OutputField, OutputRegion, OutputStorage};
-pub use error::EngineError;
+pub use error::{EngineError, NanSite};
 pub use layout::{MAX_GROUPED_HEADS, MAX_LEAVES, MaskHeadShape};
 pub use masks::{IllegalActionPolicy, MaskProvider, Masked, NoMasks, PersistMask};
 #[cfg(not(loom))]
@@ -64,7 +68,8 @@ pub use sys::native_wait_available;
 pub use validate::ActionInput;
 
 /// Whether this build has the `debug-checks` feature (SPEC 5.5): strict
-/// legality checks at the validation boundary, and an invalid agent event
-/// poisons the pool. Lets a downstream crate confirm that the feature it
+/// legality checks at the validation boundary; an invalid agent event, a
+/// NaN in state or rewards, or an allocation inside a chunk step (with
+/// `debug::TrackingAllocator` installed) poisons the pool (ADR-0055). Lets a downstream crate confirm that the feature it
 /// asked for on the facade reached the engine.
 pub const DEBUG_CHECKS: bool = cfg!(feature = "debug-checks");

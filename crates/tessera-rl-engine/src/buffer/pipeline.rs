@@ -383,6 +383,12 @@ impl<E: Environment, M: MaskProvider<E>> HalfToken<E, M> {
         self.view(&self.mode.raw.headers, 1)
     }
 
+    /// The half's states, `[half]` (the `debug-checks` NaN trap).
+    #[cfg(feature = "debug-checks")]
+    pub(crate) fn states(&self) -> &[E::State] {
+        self.view(&self.mode.raw.states, 1)
+    }
+
     /// The step counter of instance `id` (episode index, step index), if
     /// `id` is in the half.
     #[must_use]
