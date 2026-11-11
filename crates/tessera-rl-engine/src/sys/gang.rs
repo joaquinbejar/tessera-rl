@@ -151,6 +151,14 @@ pub(crate) struct Faults {
         allow(dead_code, reason = "the split-phase modes are not built under loom")
     )]
     pub(crate) wake_fallback_off: bool,
+    /// Async mode only: this worker panics in the drain job outside the
+    /// per-step catch (after [`crate::buffer::batch::JOB_PANIC_GATE`]
+    /// opens), a job-level panic.
+    #[cfg_attr(
+        loom,
+        allow(dead_code, reason = "the split-phase modes are not built under loom")
+    )]
+    pub(crate) job_panic: Option<usize>,
 }
 
 /// A type-erased job: `call(data, worker)` on every worker.
@@ -680,6 +688,25 @@ impl Gang {
         Ok(self.complete(seq))
     }
 
+    /// Whether a job still in flight (not yet waited for) has panicked:
+    /// its slot's `panicked`, stored before the panicking worker notifies
+    /// the completion wake. A receiver reads it to end its wait with the
+    /// panic before the job is reaped.
+    #[cfg_attr(
+        loom,
+        allow(dead_code, reason = "the split-phase modes are not built under loom")
+    )]
+    pub(crate) fn panicked_in_flight(&self) -> bool {
+        let mut seq = self.completed;
+        while seq < self.submitted {
+            seq += 1;
+            if self.shared.slot(seq).panicked.load(Ordering::SeqCst) {
+                return true;
+            }
+        }
+        false
+    }
+
     /// Like `wait`, but returns `None` at once if the oldest job is still
     /// running.
     #[cfg_attr(
@@ -927,6 +954,11 @@ fn run_job(shared: &Shared, slot: &JobSlot, worker: usize, seen: &mut Seen, die:
     });
     if !completed {
         slot.panicked.store(true, Ordering::SeqCst);
+        // A job-level panic (outside any per-item catch of the job) may
+        // leave work unfinished that a receiver waits for with no periodic
+        // wake; it reads `panicked_in_flight` (ADR-0056 decision 2).
+        #[cfg(not(loom))]
+        shared.completion.notify();
     }
     // The payload is already disposed of; nothing that can panic follows.
     seen.decremented = true;

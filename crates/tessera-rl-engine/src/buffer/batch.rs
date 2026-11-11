@@ -81,6 +81,9 @@ pub(crate) struct BatchMode<E: Environment, M: MaskProvider<E>> {
     /// Test-only: the receiver's waits have no liveness fallback.
     #[cfg(test)]
     pub(crate) wake_fallback_off: bool,
+    /// Test-only: this worker panics outside the per-step catch.
+    #[cfg(test)]
+    pub(crate) job_panic: Option<usize>,
 }
 
 /// The number of ids ready for a batch, shared with a [`BatchWaiter`], and
@@ -183,6 +186,8 @@ where
             max_claim: AtomicUsize::new(0),
             #[cfg(test)]
             wake_fallback_off: false,
+            #[cfg(test)]
+            job_panic: None,
         });
         // The job's data pointer comes from the `Arc` itself, not from the
         // `&mut` below, so it stays valid under later shared borrows.
@@ -443,6 +448,8 @@ unsafe fn run_drain<E: Environment, M: MaskProvider<E>>(data: *const (), worker:
         return;
     }
     let ctx = mode.pool.step_ctx();
+    #[cfg(test)]
+    job_panic(mode, worker);
     let mut run = [0u32; CLAIM_RUN];
     loop {
         let out = run.get_mut(..mode.claim).unwrap_or(&mut []);
@@ -576,6 +583,26 @@ fn complete<E: Environment, M: MaskProvider<E>>(mode: &BatchMode<E, M>, ids: &[u
     // (ADR-0056 decision 2). A panicked step's claim is pushed too, so this
     // also wakes the receiver to report the panic.
     mode.ready.wake.notify();
+}
+
+/// Opens the injected job-level panic of [`job_panic`].
+#[cfg(test)]
+pub(crate) static JOB_PANIC_GATE: AtomicBool = AtomicBool::new(false);
+/// Set by the worker just before its injected job-level panic.
+#[cfg(test)]
+pub(crate) static JOB_PANIC_REACHED: AtomicBool = AtomicBool::new(false);
+
+/// Test-only: a panic in the drain job outside the per-step catch, on the
+/// worker the mode names, once [`JOB_PANIC_GATE`] opens.
+#[cfg(test)]
+fn job_panic<E: Environment, M: MaskProvider<E>>(mode: &BatchMode<E, M>, worker: usize) {
+    if mode.job_panic == Some(worker) {
+        while !JOB_PANIC_GATE.load(Ordering::Acquire) {
+            std::thread::yield_now();
+        }
+        JOB_PANIC_REACHED.store(true, Ordering::Release);
+        std::panic::resume_unwind(Box::new("injected job-level panic"));
+    }
 }
 
 /// A `jitter_us` that holds a worker in [`complete`] before its push.

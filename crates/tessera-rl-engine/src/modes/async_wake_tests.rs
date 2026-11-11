@@ -296,3 +296,122 @@ fn test_async_recv_blocked_native_reports_a_worker_death() {
 fn test_async_recv_blocked_park_reports_a_worker_death() {
     recv_blocked_sees_a_death(WaitBackend::Park);
 }
+
+/// Opens the job-level panic gate on every exit path.
+struct OpenJobPanic;
+
+impl Drop for OpenJobPanic {
+    fn drop(&mut self) {
+        crate::buffer::batch::JOB_PANIC_GATE.store(true, Ordering::Release);
+    }
+}
+
+/// A job-level panic: worker 0 panics in the drain job outside the per-step
+/// catch, while worker 1 holds id 1, so the job stays in flight and `pump`
+/// cannot reap it. With `before_recv` the panic has happened before `recv`
+/// is called; otherwise it happens while `recv` is blocked. Either way
+/// `recv` reports `Panicked` instead of blocking for ever with no periodic
+/// wake (ADR-0056 decision 2).
+/// When the job-level panic happens relative to `recv`.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PanicAt {
+    /// While `recv` is blocked.
+    Blocked,
+    /// Before `recv` is called.
+    BeforeRecv,
+    /// After `poll`'s failure checks and before the wait registers, so
+    /// only the wait's predicate can see it (its notify came first).
+    BeforeRegistration,
+}
+
+fn panic_now() {
+    use crate::buffer::batch::{JOB_PANIC_GATE, JOB_PANIC_REACHED};
+    JOB_PANIC_GATE.store(true, Ordering::Release);
+    while !JOB_PANIC_REACHED.load(Ordering::Acquire) {
+        std::thread::yield_now();
+    }
+    // The slot's flag and the notify follow the marker at once.
+    std::thread::sleep(Duration::from_millis(20));
+}
+
+fn recv_sees_a_job_panic(wait: WaitBackend, at: PanicAt) {
+    use crate::buffer::batch::{JOB_PANIC_GATE, JOB_PANIC_REACHED};
+    let _lock = gates();
+    JOB_PANIC_GATE.store(false, Ordering::Release);
+    JOB_PANIC_REACHED.store(false, Ordering::Release);
+    let _open = (ReleaseHeld, OpenJobPanic);
+    within("recv sees a job-level panic", move || {
+        HELD_ID.store(1, Ordering::Release);
+        GATE_REACHED.store(false, Ordering::Release);
+        GATE_OPEN.store(false, Ordering::Release);
+        let mut opts = AsyncOptions::new(NonZeroUsize::new(2).unwrap(), NonZeroUsize::MIN);
+        opts.sync.wait = wait;
+        let mut pool = Pool::new(WalkConfig {}, options(AutoReset::NextStep))
+            .unwrap()
+            .async_faults(
+                opts,
+                Faults {
+                    jitter_us: GATE_HOLD_ID,
+                    wake_fallback_off: true,
+                    job_panic: Some(0),
+                    ..Faults::default()
+                },
+            )
+            .unwrap();
+        // Declared after the pool, so they drop first and the pool's
+        // `Drop` never waits on a held worker.
+        let _open = (ReleaseHeld, OpenJobPanic);
+        drop(pool.reset_all(Reseed::Keep).unwrap());
+        send(&mut pool, &[1]);
+        wait_for_gate();
+        let opener = match at {
+            PanicAt::BeforeRecv => {
+                panic_now();
+                None
+            }
+            PanicAt::BeforeRegistration => {
+                super::async_mode::WAIT_HOOK.set(Some(panic_now));
+                None
+            }
+            PanicAt::Blocked => Some(std::thread::spawn(|| {
+                std::thread::sleep(Duration::from_millis(20));
+                JOB_PANIC_GATE.store(true, Ordering::Release);
+            })),
+        };
+        let result = pool.recv().map(|t| t.len());
+        if let Some(opener) = opener {
+            opener.join().unwrap();
+        }
+        assert_eq!(result, Err(crate::EngineError::Panicked));
+    });
+}
+
+#[test]
+fn test_async_recv_blocked_native_reports_a_job_level_panic() {
+    recv_sees_a_job_panic(WaitBackend::Native, PanicAt::Blocked);
+}
+
+#[test]
+fn test_async_recv_blocked_park_reports_a_job_level_panic() {
+    recv_sees_a_job_panic(WaitBackend::Park, PanicAt::Blocked);
+}
+
+#[test]
+fn test_async_recv_after_a_job_level_panic_native_reports_it_at_once() {
+    recv_sees_a_job_panic(WaitBackend::Native, PanicAt::BeforeRecv);
+}
+
+#[test]
+fn test_async_recv_after_a_job_level_panic_park_reports_it_at_once() {
+    recv_sees_a_job_panic(WaitBackend::Park, PanicAt::BeforeRecv);
+}
+
+#[test]
+fn test_async_recv_job_level_panic_before_registration_native_ends_the_wait() {
+    recv_sees_a_job_panic(WaitBackend::Native, PanicAt::BeforeRegistration);
+}
+
+#[test]
+fn test_async_recv_job_level_panic_before_registration_park_ends_the_wait() {
+    recv_sees_a_job_panic(WaitBackend::Park, PanicAt::BeforeRegistration);
+}

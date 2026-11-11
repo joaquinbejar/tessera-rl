@@ -86,6 +86,15 @@ impl IdGenerations {
 
 #[cfg(test)]
 std::thread_local! {
+    /// Runs at the start of this thread's next receiver wait, after `poll`
+    /// checked for failures and before the wait registers: a failure made
+    /// here is seen only by the wait's own predicate.
+    pub(crate) static WAIT_HOOK: core::cell::Cell<Option<fn()>> =
+        const { core::cell::Cell::new(None) };
+}
+
+#[cfg(test)]
+std::thread_local! {
     /// Runs inside the next `snapshot` of this thread, between its poison
     /// check and its quiescence check, which then waits for the running ids.
     pub(crate) static SNAPSHOT_HOOK: core::cell::Cell<Option<fn()>> =
@@ -275,6 +284,7 @@ where
         {
             let mode = Arc::get_mut(&mut mode).expect("the new mode is not shared yet");
             mode.wake_fallback_off = faults.wake_fallback_off;
+            mode.job_panic = faults.job_panic;
         }
         Ok(AsyncPool {
             runtime: Workers(Some(runtime)),
@@ -978,12 +988,20 @@ where
     /// - a panic in a step: that claim is still pushed and notified; a
     ///   claim that fails (positions exhausted) notifies after it marks the
     ///   panic;
+    /// - a job-level panic (outside the per-step catch, so the worker's
+    ///   claimed ids are never pushed): the gang's `run_job` notifies after
+    ///   it sets the slot's `panicked`, which `job_panicked` reads before the
+    ///   job is reaped;
     /// - a death: the gang's backstop notifies after it sets `dead`.
     ///
     /// On park, a lost unpark is covered by the 100 µs `park_timeout`
     /// (decision 3). The wait is a batch boundary (SPEC 5.5): it only
     /// decides when the caller looks again.
     fn wait_completion(&self, timeout: Option<Duration>) {
+        #[cfg(test)]
+        if let Some(hook) = WAIT_HOOK.take() {
+            hook();
+        }
         let ready = || {
             self.mode.ready.full()
                 || self
@@ -992,6 +1010,7 @@ where
                     .load(core::sync::atomic::Ordering::Acquire)
                 || self.dead()
                 || self.running() == 0
+                || self.job_panicked()
         };
         // Park only: wake tests turn the fallback off, so a lost unpark
         // hangs and their watchdog names it.
@@ -1006,6 +1025,15 @@ where
         self.mode.ready.wake.wait(ready, timeout, fallback);
     }
 
+    /// Whether a job still in flight panicked outside its per-step catch
+    /// (a job-level panic), before the job is reaped.
+    fn job_panicked(&self) -> bool {
+        self.runtime
+            .0
+            .as_ref()
+            .is_some_and(|rt| rt.gang.panicked_in_flight())
+    }
+
     /// Poisons the wrapper and reports a dead worker or a step's panic.
     fn check_failed(&mut self) -> Result<(), EngineError> {
         if self.dead() {
@@ -1017,6 +1045,7 @@ where
             .panicked
             .load(core::sync::atomic::Ordering::Acquire)
             || self.runtime.0.as_ref().is_some_and(|rt| rt.gang.poisoned())
+            || self.job_panicked()
         {
             self.poisoned = true;
             return Err(EngineError::Panicked);
