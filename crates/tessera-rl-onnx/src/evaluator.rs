@@ -272,13 +272,13 @@ fn read_model(path: &Path, cap: u64) -> Result<Vec<u8>, OnnxError> {
     Ok(bytes)
 }
 
-enum Built {
+pub(crate) enum Built {
     Provider(String),
     Model(String),
 }
 
 /// The session at the pinned settings, on the CPU execution provider only.
-fn build_session(
+pub(crate) fn build_session(
     env: &ort::environment::Environment,
     bytes: &[u8],
     options: &OnnxOptions,
@@ -549,3 +549,7 @@ fn widen_value(
 ) -> Result<(), String> {
     widen(value, ty, &[n], out).or_else(|_| widen(value, ty, &[n, 1], out))
 }
+
+#[cfg(test)]
+#[path = "evaluator_tests.rs"]
+mod tests;
