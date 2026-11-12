@@ -307,7 +307,10 @@ def test_pgo_w2_final_build_equals_w1_build_except_the_pgo_flags(tmp_path, monke
     e1 = build_env(Path(f"{w1_dir / 'log'}.env.0"), w1_dir / "run", "w1")
     e2 = build_env(Path(f"{w2_dir / 'log'}.env.1"), w2_dir / "run", "w2-full")
     differ = sorted(k for k in set(e1) | set(e2) if e1.get(k) != e2.get(k))
-    assert set(differ) <= {"RUSTFLAGS", "CARGO_TARGET_DIR", "PWD", "OLDPWD", "_"}, differ
+    # SHLVL is shell nesting depth, not a build input: bash 5 (Linux CI) decrements it when a
+    # subshell execs its last command, which W2's `(cd "$src" && ... uvx ...)` does and W1's
+    # top-level uvx does not; bash 3.2 (macOS /bin/bash) leaves it alone.
+    assert set(differ) <= {"RUSTFLAGS", "CARGO_TARGET_DIR", "PWD", "OLDPWD", "_", "SHLVL"}, differ
 
 
 def wheel_with(tmp_path, blob: bytes) -> Path:
