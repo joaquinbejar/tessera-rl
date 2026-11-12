@@ -178,90 +178,95 @@ fn pool_frame(pool: &Pool, id: u32) -> Vec<u64> {
 
 #[test]
 fn test_async_injected_jitter_matches_sync_per_instance_for_1_2_7_and_64_workers() {
-    let count = usize::try_from(N).unwrap();
-    for mode in [AutoReset::NextStep, AutoReset::SameStep] {
-        let mut reference = Pool::new(WalkConfig {}, options(mode)).unwrap();
-        reference.reset_all(Reseed::Keep).unwrap();
-        let mut frames: Vec<Vec<Vec<u64>>> =
-            vec![(0..N).map(|i| pool_frame(&reference, i)).collect()];
-        for step_t in 0..STEPS {
-            let a: Vec<i32> = (0..count).flat_map(|i| row(step_t, i)).collect();
-            reference
-                .step(ActionInput {
-                    discrete: &a,
-                    continuous: &[],
-                })
-                .unwrap();
-            frames.push((0..N).map(|i| pool_frame(&reference, i)).collect());
-        }
-        // Under Miri, one small-worker run keeps the job short.
-        let counts: &[usize] = if cfg!(miri) { &[2] } else { &[1, 2, 7, 64] };
-        for &workers in counts {
-            let faults = Faults {
-                jitter_us: 300,
-                ..Faults::default()
-            };
-            let mut pool = Pool::new(WalkConfig {}, options(mode))
-                .unwrap()
-                .async_faults(
-                    AsyncOptions::new(
-                        NonZeroUsize::new(workers).unwrap(),
-                        NonZeroUsize::new(1).unwrap(),
-                    ),
-                    faults,
-                )
-                .unwrap();
-            drop(pool.reset_all(Reseed::Keep).unwrap());
-            let mut step = vec![0_usize; count];
-            // Every instance is sent at once and resent as soon as it comes
-            // back, so the order of completions is the workers' jitter.
-            let ids: Vec<u32> = (0..N).collect();
-            let a: Vec<i32> = (0..count).flat_map(|i| row(0, i)).collect();
-            pool.send(
-                &ids,
-                ActionInput {
-                    discrete: &a,
-                    continuous: &[],
-                },
-            )
-            .unwrap();
-            let mut order = Vec::new();
-            let mut done = 0;
-            while done < count {
-                let token = pool.recv().unwrap();
-                let id = token.ids().next().unwrap();
-                let i = usize::try_from(id).unwrap();
-                step[i] += 1;
-                order.push(id);
-                assert_eq!(
-                    token_frame(&token, id),
-                    frames[step[i]][i],
-                    "{workers} workers, {mode:?}, id {id}, step {}",
-                    step[i]
-                );
-                if step[i] == STEPS {
-                    done += 1;
-                    drop(token);
-                    continue;
+    within(
+        "injected jitter matches sync per instance for 1 2 7 and 64 workers",
+        || {
+            let count = usize::try_from(N).unwrap();
+            for mode in [AutoReset::NextStep, AutoReset::SameStep] {
+                let mut reference = Pool::new(WalkConfig {}, options(mode)).unwrap();
+                reference.reset_all(Reseed::Keep).unwrap();
+                let mut frames: Vec<Vec<Vec<u64>>> =
+                    vec![(0..N).map(|i| pool_frame(&reference, i)).collect()];
+                for step_t in 0..STEPS {
+                    let a: Vec<i32> = (0..count).flat_map(|i| row(step_t, i)).collect();
+                    reference
+                        .step(ActionInput {
+                            discrete: &a,
+                            continuous: &[],
+                        })
+                        .unwrap();
+                    frames.push((0..N).map(|i| pool_frame(&reference, i)).collect());
                 }
-                let next = row(step[i], i);
-                pool.send_batch(
-                    token,
-                    ActionInput {
-                        discrete: &next,
-                        continuous: &[],
-                    },
-                )
-                .map_err(|e| e.error)
-                .unwrap();
+                // Under Miri, one small-worker run keeps the job short.
+                let counts: &[usize] = if cfg!(miri) { &[2] } else { &[1, 2, 7, 64] };
+                for &workers in counts {
+                    let faults = Faults {
+                        jitter_us: 300,
+                        ..Faults::default()
+                    };
+                    let mut pool = Pool::new(WalkConfig {}, options(mode))
+                        .unwrap()
+                        .async_faults(
+                            AsyncOptions::new(
+                                NonZeroUsize::new(workers).unwrap(),
+                                NonZeroUsize::new(1).unwrap(),
+                            ),
+                            faults,
+                        )
+                        .unwrap();
+                    drop(pool.reset_all(Reseed::Keep).unwrap());
+                    let mut step = vec![0_usize; count];
+                    // Every instance is sent at once and resent as soon as it comes
+                    // back, so the order of completions is the workers' jitter.
+                    let ids: Vec<u32> = (0..N).collect();
+                    let a: Vec<i32> = (0..count).flat_map(|i| row(0, i)).collect();
+                    pool.send(
+                        &ids,
+                        ActionInput {
+                            discrete: &a,
+                            continuous: &[],
+                        },
+                    )
+                    .unwrap();
+                    let mut order = Vec::new();
+                    let mut done = 0;
+                    while done < count {
+                        let token = pool.recv().unwrap();
+                        let id = token.ids().next().unwrap();
+                        let i = usize::try_from(id).unwrap();
+                        step[i] += 1;
+                        order.push(id);
+                        assert_eq!(
+                            token_frame(&token, id),
+                            frames[step[i]][i],
+                            "{workers} workers, {mode:?}, id {id}, step {}",
+                            step[i]
+                        );
+                        if step[i] == STEPS {
+                            done += 1;
+                            drop(token);
+                            continue;
+                        }
+                        let next = row(step[i], i);
+                        pool.send_batch(
+                            token,
+                            ActionInput {
+                                discrete: &next,
+                                continuous: &[],
+                            },
+                        )
+                        .map_err(|e| e.error)
+                        .unwrap();
+                    }
+                    if workers > 1 {
+                        // The jitter reordered completions: not plain send order.
+                        let sorted = order.windows(2).filter(|w| w[0] > w[1]).count();
+                        assert!(sorted > 0, "{workers} workers: completions were reordered");
+                    }
+                }
             }
-            if workers > 1 {
-                // The jitter reordered completions: not plain send order.
-                let sorted = order.windows(2).filter(|w| w[0] > w[1]).count();
-                assert!(sorted > 0, "{workers} workers: completions were reordered");
-            }
-        }
-    }
+        },
+    );
 }
 
 /// Ids a send admitted with no job left to claim them (both jobs were past
@@ -269,42 +274,44 @@ fn test_async_injected_jitter_matches_sync_per_instance_for_1_2_7_and_64_workers
 /// hands them back stepped, exactly as Sync steps them (TR m1 on #84).
 #[test]
 fn test_async_unpublished_ids_are_stepped_by_the_drain() {
-    let count = usize::try_from(N).unwrap();
-    let mut reference = Pool::new(WalkConfig {}, options(AutoReset::NextStep)).unwrap();
-    reference.reset_all(Reseed::Keep).unwrap();
-    let a: Vec<i32> = (0..count).flat_map(|i| row(0, i)).collect();
-    reference
-        .step(ActionInput {
-            discrete: &a,
-            continuous: &[],
-        })
+    within("unpublished ids are stepped by the drain", || {
+        let count = usize::try_from(N).unwrap();
+        let mut reference = Pool::new(WalkConfig {}, options(AutoReset::NextStep)).unwrap();
+        reference.reset_all(Reseed::Keep).unwrap();
+        let a: Vec<i32> = (0..count).flat_map(|i| row(0, i)).collect();
+        reference
+            .step(ActionInput {
+                discrete: &a,
+                continuous: &[],
+            })
+            .unwrap();
+        let mut pool = Pool::new(WalkConfig {}, options(AutoReset::NextStep))
+            .unwrap()
+            .async_mode(AsyncOptions::new(
+                NonZeroUsize::new(2).unwrap(),
+                NonZeroUsize::new(1).unwrap(),
+            ))
+            .unwrap();
+        drop(pool.reset_all(Reseed::Keep).unwrap());
+        let ids: Vec<u32> = (0..N).collect();
+        pool.send_unpublished(
+            &ids,
+            ActionInput {
+                discrete: &a,
+                continuous: &[],
+            },
+        )
         .unwrap();
-    let mut pool = Pool::new(WalkConfig {}, options(AutoReset::NextStep))
-        .unwrap()
-        .async_mode(AsyncOptions::new(
-            NonZeroUsize::new(2).unwrap(),
-            NonZeroUsize::new(1).unwrap(),
-        ))
-        .unwrap();
-    drop(pool.reset_all(Reseed::Keep).unwrap());
-    let ids: Vec<u32> = (0..N).collect();
-    pool.send_unpublished(
-        &ids,
-        ActionInput {
-            discrete: &a,
-            continuous: &[],
-        },
-    )
-    .unwrap();
-    let back = pool.into_pool().map_err(|_| ()).unwrap();
-    assert!(!back.is_poisoned());
-    for id in 0..N {
-        assert_eq!(
-            back.state_hash(id).unwrap(),
-            reference.state_hash(id).unwrap(),
-            "id {id} was stepped once"
-        );
-    }
+        let back = pool.into_pool().map_err(|_| ()).unwrap();
+        assert!(!back.is_poisoned());
+        for id in 0..N {
+            assert_eq!(
+                back.state_hash(id).unwrap(),
+                reference.state_hash(id).unwrap(),
+                "id {id} was stepped once"
+            );
+        }
+    });
 }
 
 /// A pool left with admitted ids no job will claim (three ids, batches of
@@ -313,62 +320,64 @@ fn test_async_unpublished_ids_are_stepped_by_the_drain() {
 /// needs no progress at all (issue #85), and an unclaimed id is `InFlight`.
 #[test]
 fn test_async_recv_and_reset_all_make_progress_on_unclaimed_ids() {
-    let make = || {
-        let mut pool = Pool::new(WalkConfig {}, options(AutoReset::NextStep))
-            .unwrap()
-            .async_mode(AsyncOptions::new(
-                NonZeroUsize::new(2).unwrap(),
-                NonZeroUsize::new(10).unwrap(),
-            ))
+    within("recv and reset all make progress on unclaimed ids", || {
+        let make = || {
+            let mut pool = Pool::new(WalkConfig {}, options(AutoReset::NextStep))
+                .unwrap()
+                .async_mode(AsyncOptions::new(
+                    NonZeroUsize::new(2).unwrap(),
+                    NonZeroUsize::new(10).unwrap(),
+                ))
+                .unwrap();
+            drop(pool.reset_all(Reseed::Keep).unwrap());
+            pool.send_unpublished(
+                &[0, 1, 2],
+                ActionInput {
+                    discrete: &[1, 1, 1],
+                    continuous: &[],
+                },
+            )
             .unwrap();
-        drop(pool.reset_all(Reseed::Keep).unwrap());
-        pool.send_unpublished(
-            &[0, 1, 2],
-            ActionInput {
-                discrete: &[1, 1, 1],
-                continuous: &[],
-            },
-        )
-        .unwrap();
-        pool
-    };
-    let tries = if cfg!(miri) { 200 } else { 100_000 };
-    // `recv` refuses (three ids cannot fill a batch of ten), but steps them.
-    let mut pool = make();
-    for _ in 0..3 {
-        assert!(matches!(
-            pool.recv().map(|_| ()),
-            Err(crate::EngineError::BatchUnreachable { .. })
-        ));
-    }
-    let ok = (0..tries).any(|_| {
-        std::thread::yield_now();
-        pool.running_ids() == 0
-    });
-    assert!(ok, "recv stepped the unclaimed ids");
-    // `reset_all` alone makes progress.
-    let mut pool = make();
-    let ok = (0..tries).any(|_| match pool.reset_all(Reseed::Keep) {
-        Ok(t) => {
-            drop(t);
-            true
+            pool
+        };
+        let tries = if cfg!(miri) { 200 } else { 100_000 };
+        // `recv` refuses (three ids cannot fill a batch of ten), but steps them.
+        let mut pool = make();
+        for _ in 0..3 {
+            assert!(matches!(
+                pool.recv().map(|_| ()),
+                Err(crate::EngineError::BatchUnreachable { .. })
+            ));
         }
-        Err(crate::EngineError::NotQuiescent) => {
+        let ok = (0..tries).any(|_| {
             std::thread::yield_now();
-            false
-        }
-        Err(e) => panic!("unexpected {e:?}"),
+            pool.running_ids() == 0
+        });
+        assert!(ok, "recv stepped the unclaimed ids");
+        // `reset_all` alone makes progress.
+        let mut pool = make();
+        let ok = (0..tries).any(|_| match pool.reset_all(Reseed::Keep) {
+            Ok(t) => {
+                drop(t);
+                true
+            }
+            Err(crate::EngineError::NotQuiescent) => {
+                std::thread::yield_now();
+                false
+            }
+            Err(e) => panic!("unexpected {e:?}"),
+        });
+        assert!(ok, "reset_all stepped the unclaimed ids");
+        // A snapshot of an idle id succeeds at once, and steps nothing; an
+        // unclaimed id is refused.
+        let mut pool = make();
+        pool.snapshot(5).unwrap();
+        assert_eq!(pool.running_ids(), 3);
+        assert_eq!(
+            pool.snapshot(1).map(|_| ()),
+            Err(crate::EngineError::InFlight { id: 1 })
+        );
     });
-    assert!(ok, "reset_all stepped the unclaimed ids");
-    // A snapshot of an idle id succeeds at once, and steps nothing; an
-    // unclaimed id is refused.
-    let mut pool = make();
-    pool.snapshot(5).unwrap();
-    assert_eq!(pool.running_ids(), 3);
-    assert_eq!(
-        pool.snapshot(1).map(|_| ()),
-        Err(crate::EngineError::InFlight { id: 1 })
-    );
 }
 
 /// A worker sleeps right after its id counts as stepped: with the entry made
@@ -377,48 +386,50 @@ fn test_async_recv_and_reset_all_make_progress_on_unclaimed_ids() {
 /// (the CI flake of `alloc_async`, ADR-0047 section 3).
 #[test]
 fn test_async_a_received_id_is_never_counted_as_running() {
-    let faults = Faults {
-        jitter_us: 300,
-        ..Faults::default()
-    };
-    let mut pool = Pool::new(WalkConfig {}, options(AutoReset::NextStep))
-        .unwrap()
-        .async_faults(
-            AsyncOptions::new(
-                NonZeroUsize::new(4).unwrap(),
-                NonZeroUsize::new(N as usize).unwrap(),
-            ),
-            faults,
-        )
-        .unwrap();
-    drop(pool.reset_all(Reseed::Keep).unwrap());
-    let ids: Vec<u32> = (0..N).collect();
-    let actions = vec![1; ids.len()];
-    let rounds = if cfg!(miri) { 3 } else { 200 };
-    for round in 0..rounds {
-        pool.send(
-            &ids,
-            ActionInput {
-                discrete: &actions,
-                continuous: &[],
-            },
-        )
-        .unwrap();
-        // Polling, as a blocking `recv` waits for the job and hides the race.
-        loop {
-            if let Some(t) = pool.try_recv().unwrap() {
-                drop(t);
-                break;
+    within("a received id is never counted as running", || {
+        let faults = Faults {
+            jitter_us: 300,
+            ..Faults::default()
+        };
+        let mut pool = Pool::new(WalkConfig {}, options(AutoReset::NextStep))
+            .unwrap()
+            .async_faults(
+                AsyncOptions::new(
+                    NonZeroUsize::new(4).unwrap(),
+                    NonZeroUsize::new(N as usize).unwrap(),
+                ),
+                faults,
+            )
+            .unwrap();
+        drop(pool.reset_all(Reseed::Keep).unwrap());
+        let ids: Vec<u32> = (0..N).collect();
+        let actions = vec![1; ids.len()];
+        let rounds = if cfg!(miri) { 3 } else { 200 };
+        for round in 0..rounds {
+            pool.send(
+                &ids,
+                ActionInput {
+                    discrete: &actions,
+                    continuous: &[],
+                },
+            )
+            .unwrap();
+            // Polling, as a blocking `recv` waits for the job and hides the race.
+            loop {
+                if let Some(t) = pool.try_recv().unwrap() {
+                    drop(t);
+                    break;
+                }
+                std::thread::yield_now();
             }
-            std::thread::yield_now();
+            if round % 2 == 0 {
+                pool.snapshot(0).unwrap();
+            } else {
+                pool.reset(&ids, Reseed::Keep).unwrap();
+                drop(pool.recv().unwrap());
+            }
         }
-        if round % 2 == 0 {
-            pool.snapshot(0).unwrap();
-        } else {
-            pool.reset(&ids, Reseed::Keep).unwrap();
-            drop(pool.recv().unwrap());
-        }
-    }
+    });
 }
 
 /// Serializes the tests that use the process-wide gates of `complete`.
@@ -463,27 +474,30 @@ fn test_async_waiter_is_not_ready_while_the_count_is_below_zero() {
     let _lock = GATES
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let (mut pool, open) = gated(GATE_AFTER_PUSH);
-    drop(pool.reset_all(Reseed::Keep).unwrap());
-    let waiter = pool.waiter();
-    pool.send(
-        &[1],
-        ActionInput {
-            discrete: &[1],
-            continuous: &[],
-        },
-    )
-    .unwrap();
-    wait_for_gate();
-    let token = loop {
-        if let Some(t) = pool.try_recv().unwrap() {
-            break t;
-        }
-        std::thread::yield_now();
-    };
-    assert!(!waiter.wait_ready(core::time::Duration::ZERO));
-    drop(token);
-    drop(open);
+    let _open = OpenGates;
+    within("waiter is not ready while the count is below zero", || {
+        let (mut pool, open) = gated(GATE_AFTER_PUSH);
+        drop(pool.reset_all(Reseed::Keep).unwrap());
+        let waiter = pool.waiter();
+        pool.send(
+            &[1],
+            ActionInput {
+                discrete: &[1],
+                continuous: &[],
+            },
+        )
+        .unwrap();
+        wait_for_gate();
+        let token = loop {
+            if let Some(t) = pool.try_recv().unwrap() {
+                break t;
+            }
+            std::thread::yield_now();
+        };
+        assert!(!waiter.wait_ready(core::time::Duration::ZERO));
+        drop(token);
+        drop(open);
+    });
 }
 
 /// Codex's probe of #96: with an id's rows written and counted as stepped but
@@ -494,35 +508,41 @@ fn test_async_id_stepped_but_unpublished_is_neither_delivered_nor_overwritten() 
     let _lock = GATES
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let (mut pool, open) = gated(GATE_BEFORE_PUSH);
-    drop(pool.reset_all(Reseed::Keep).unwrap());
-    pool.send(
-        &[1],
-        ActionInput {
-            discrete: &[1],
-            continuous: &[],
+    let _open = OpenGates;
+    within(
+        "id stepped but unpublished is neither delivered nor overwritten",
+        || {
+            let (mut pool, open) = gated(GATE_BEFORE_PUSH);
+            drop(pool.reset_all(Reseed::Keep).unwrap());
+            pool.send(
+                &[1],
+                ActionInput {
+                    discrete: &[1],
+                    continuous: &[],
+                },
+            )
+            .unwrap();
+            wait_for_gate();
+            assert!(pool.try_recv().unwrap().is_none());
+            let record = pool.snapshot(0).unwrap();
+            assert!(matches!(
+                pool.snapshot(1),
+                Err(crate::EngineError::InFlight { .. })
+            ));
+            let mut records = vec![record; N as usize];
+            assert!(matches!(
+                pool.snapshot_all(&mut records),
+                Err(crate::EngineError::NotQuiescent)
+            ));
+            let opener = std::thread::spawn(|| {
+                std::thread::sleep(core::time::Duration::from_millis(1));
+                GATE_OPEN.store(true, Ordering::Release);
+            });
+            drop(pool.reset_all(Reseed::Keep).unwrap());
+            opener.join().unwrap();
+            drop(open);
         },
-    )
-    .unwrap();
-    wait_for_gate();
-    assert!(pool.try_recv().unwrap().is_none());
-    let record = pool.snapshot(0).unwrap();
-    assert!(matches!(
-        pool.snapshot(1),
-        Err(crate::EngineError::InFlight { .. })
-    ));
-    let mut records = vec![record; N as usize];
-    assert!(matches!(
-        pool.snapshot_all(&mut records),
-        Err(crate::EngineError::NotQuiescent)
-    ));
-    let opener = std::thread::spawn(|| {
-        std::thread::sleep(core::time::Duration::from_millis(1));
-        GATE_OPEN.store(true, Ordering::Release);
-    });
-    drop(pool.reset_all(Reseed::Keep).unwrap());
-    opener.join().unwrap();
-    drop(open);
+    );
 }
 
 /// An id completed and pushed to the completion ring but not yet received
@@ -533,30 +553,33 @@ fn test_async_snapshot_completed_but_unreceived_id_is_in_flight() {
     let _lock = GATES
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let (mut pool, open) = gated(GATE_AFTER_PUSH);
-    drop(pool.reset_all(Reseed::Keep).unwrap());
-    let idle = pool.snapshot(0).unwrap().to_bytes();
-    pool.send(
-        &[1],
-        ActionInput {
-            discrete: &[1],
-            continuous: &[],
-        },
-    )
-    .unwrap();
-    wait_for_gate();
-    assert_eq!(pool.running_ids(), 0);
-    assert_eq!(
-        pool.snapshot(1).map(|_| ()),
-        Err(crate::EngineError::InFlight { id: 1 })
-    );
-    assert_eq!(pool.snapshot(0).unwrap().to_bytes(), idle);
-    GATE_OPEN.store(true, Ordering::Release);
-    let token = pool.recv().unwrap();
-    assert!(token.contains(1));
-    pool.snapshot(1).unwrap();
-    drop(token);
-    drop(open);
+    let _open = OpenGates;
+    within("snapshot completed but unreceived id is in flight", || {
+        let (mut pool, open) = gated(GATE_AFTER_PUSH);
+        drop(pool.reset_all(Reseed::Keep).unwrap());
+        let idle = pool.snapshot(0).unwrap().to_bytes();
+        pool.send(
+            &[1],
+            ActionInput {
+                discrete: &[1],
+                continuous: &[],
+            },
+        )
+        .unwrap();
+        wait_for_gate();
+        assert_eq!(pool.running_ids(), 0);
+        assert_eq!(
+            pool.snapshot(1).map(|_| ()),
+            Err(crate::EngineError::InFlight { id: 1 })
+        );
+        assert_eq!(pool.snapshot(0).unwrap().to_bytes(), idle);
+        GATE_OPEN.store(true, Ordering::Release);
+        let token = pool.recv().unwrap();
+        assert!(token.contains(1));
+        pool.snapshot(1).unwrap();
+        drop(token);
+        drop(open);
+    });
 }
 
 /// A step that waits for [`BOOM`], then panics with action 2.
@@ -636,27 +659,30 @@ impl Environment for Boomer {
 #[test]
 fn test_async_snapshot_refuses_a_panic_between_its_two_checks() {
     let _serial = boom_serial();
-    BOOM.store(false, Ordering::Release);
-    let mut pool = EnvPool::<Boomer, NoMasks>::new(WalkConfig {}, options(AutoReset::NextStep))
-        .unwrap()
-        .async_mode(AsyncOptions::new(NonZeroUsize::MIN, NonZeroUsize::MIN))
+    let _boom = ReleaseBoom;
+    within("snapshot refuses a panic between its two checks", || {
+        BOOM.store(false, Ordering::Release);
+        let mut pool = EnvPool::<Boomer, NoMasks>::new(WalkConfig {}, options(AutoReset::NextStep))
+            .unwrap()
+            .async_mode(AsyncOptions::new(NonZeroUsize::MIN, NonZeroUsize::MIN))
+            .unwrap();
+        let _release = ReleaseBoom;
+        drop(pool.reset_all(Reseed::Keep).unwrap());
+        pool.send(
+            &[1],
+            ActionInput {
+                discrete: &[2],
+                continuous: &[],
+            },
+        )
         .unwrap();
-    let _release = ReleaseBoom;
-    drop(pool.reset_all(Reseed::Keep).unwrap());
-    pool.send(
-        &[1],
-        ActionInput {
-            discrete: &[2],
-            continuous: &[],
-        },
-    )
-    .unwrap();
-    SNAPSHOT_HOOK.set(Some(|| BOOM.store(true, Ordering::Release)));
-    assert!(matches!(
-        pool.snapshot(0),
-        Err(crate::EngineError::Poisoned)
-    ));
-    drop(pool.reset_all(Reseed::Keep).unwrap());
+        SNAPSHOT_HOOK.set(Some(|| BOOM.store(true, Ordering::Release)));
+        assert!(matches!(
+            pool.snapshot(0),
+            Err(crate::EngineError::Poisoned)
+        ));
+        drop(pool.reset_all(Reseed::Keep).unwrap());
+    });
 }
 
 /// With id 1 paused inside its step, a token of id 0 stays readable, its
@@ -665,53 +691,61 @@ fn test_async_snapshot_refuses_a_panic_between_its_two_checks() {
 #[test]
 fn test_async_idle_token_readable_while_a_step_is_paused_then_panics() {
     let _serial = boom_serial();
-    BOOM.store(false, Ordering::Release);
-    let mut pool = EnvPool::<Boomer, NoMasks>::new(WalkConfig {}, options(AutoReset::NextStep))
-        .unwrap()
-        .async_mode(AsyncOptions::new(NonZeroUsize::MIN, NonZeroUsize::MIN))
-        .unwrap();
-    drop(pool.reset_all(Reseed::Keep).unwrap());
-    let act = |d| ActionInput {
-        discrete: d,
-        continuous: &[],
-    };
-    pool.send(&[0], act(&[1])).unwrap();
-    let held = pool.recv().unwrap();
-    let (rewards, generation) = (held.rewards(0).unwrap().to_vec(), held.generation(0));
-    let quiescent = pool.snapshot(0).unwrap().to_bytes();
-    let release = ReleaseBoom;
-    pool.send(&[1], act(&[2])).unwrap();
-    // Id 0 is idle (covered by `held`) while id 1 runs: its snapshot is
-    // taken through its own row, byte-identical to the quiescent one. The
-    // results are collected while id 1 is paused and checked after its
-    // release, so a regression fails instead of hanging in `Drop`.
-    let idle = pool.snapshot(0).map(|r| r.to_bytes());
-    let running = pool.snapshot(1).map(|_| ());
-    let (rewards_now, generation_now) = (held.rewards(0).map(<[f32]>::to_vec), held.generation(0));
-    drop(release);
-    assert_eq!(idle, Ok(quiescent));
-    assert_eq!(running, Err(crate::EngineError::InFlight { id: 1 }));
-    assert_eq!(rewards_now, Some(rewards));
-    assert_eq!(generation_now, generation);
-    assert!(matches!(
-        pool.recv().map(|_| ()),
-        Err(crate::EngineError::Panicked)
-    ));
-    assert!(pool.is_poisoned());
-    drop(held);
-    drop(pool.reset_all(Reseed::Keep).unwrap());
-    assert!(!pool.is_poisoned());
+    let _boom = ReleaseBoom;
+    within(
+        "idle token readable while a step is paused then panics",
+        || {
+            BOOM.store(false, Ordering::Release);
+            let mut pool =
+                EnvPool::<Boomer, NoMasks>::new(WalkConfig {}, options(AutoReset::NextStep))
+                    .unwrap()
+                    .async_mode(AsyncOptions::new(NonZeroUsize::MIN, NonZeroUsize::MIN))
+                    .unwrap();
+            drop(pool.reset_all(Reseed::Keep).unwrap());
+            let act = |d| ActionInput {
+                discrete: d,
+                continuous: &[],
+            };
+            pool.send(&[0], act(&[1])).unwrap();
+            let held = pool.recv().unwrap();
+            let (rewards, generation) = (held.rewards(0).unwrap().to_vec(), held.generation(0));
+            let quiescent = pool.snapshot(0).unwrap().to_bytes();
+            let release = ReleaseBoom;
+            pool.send(&[1], act(&[2])).unwrap();
+            // Id 0 is idle (covered by `held`) while id 1 runs: its snapshot is
+            // taken through its own row, byte-identical to the quiescent one. The
+            // results are collected while id 1 is paused and checked after its
+            // release, so a regression fails instead of hanging in `Drop`.
+            let idle = pool.snapshot(0).map(|r| r.to_bytes());
+            let running = pool.snapshot(1).map(|_| ());
+            let (rewards_now, generation_now) =
+                (held.rewards(0).map(<[f32]>::to_vec), held.generation(0));
+            drop(release);
+            assert_eq!(idle, Ok(quiescent));
+            assert_eq!(running, Err(crate::EngineError::InFlight { id: 1 }));
+            assert_eq!(rewards_now, Some(rewards));
+            assert_eq!(generation_now, generation);
+            assert!(matches!(
+                pool.recv().map(|_| ()),
+                Err(crate::EngineError::Panicked)
+            ));
+            assert!(pool.is_poisoned());
+            drop(held);
+            drop(pool.reset_all(Reseed::Keep).unwrap());
+            assert!(!pool.is_poisoned());
+        },
+    );
 }
 
 /// How long a test of run claims may take before it fails by name instead
 /// of hanging the binary (Miri runs far slower).
-pub(super) const WATCHDOG: core::time::Duration =
+pub(crate) const WATCHDOG: core::time::Duration =
     core::time::Duration::from_secs(if cfg!(miri) { 1_200 } else { 30 });
 
 /// Runs `f` on its own thread and fails, naming `what`, if it has not
 /// finished within [`WATCHDOG`]: a broken claim or ring then fails the test
 /// instead of hanging it. A panic in `f` is passed on.
-pub(super) fn within(what: &str, f: impl FnOnce() + Send + 'static) {
+pub(crate) fn within(what: &str, f: impl FnOnce() + Send + 'static) {
     let (done, finished) = std::sync::mpsc::channel();
     let body = std::thread::spawn(move || {
         f();

@@ -185,43 +185,48 @@ fn recv_until_death(p: &mut crate::AsyncPool<Ticker, crate::NoMasks>, ids: &[u32
 #[cfg(not(loom))]
 #[test]
 fn test_async_worker_death_reports_worker_died_permanently() {
-    let options = PoolOptions {
-        chunk_size: NonZeroU32::new(4).unwrap(),
-        ..PoolOptions::new(NonZeroU32::new(32).unwrap(), Seed::new(1))
-    };
-    let faults = Faults {
-        die_in_epoch: Some(1),
-        ..Faults::default()
-    };
-    let mut p = EnvPool::<Ticker>::new(TickConfig {}, options)
-        .unwrap()
-        .async_faults(
-            crate::AsyncOptions::new(NonZeroUsize::new(2).unwrap(), NonZeroUsize::new(4).unwrap()),
-            faults,
-        )
-        .unwrap();
-    drop(p.reset_all(Reseed::Keep).unwrap());
-    let ids: Vec<u32> = (0..8).collect();
-    let seen = recv_until_death(&mut p, &ids);
-    assert!(
-        matches!(seen, EngineError::WorkerDied | EngineError::Poisoned),
-        "{seen:?}"
-    );
-    assert!(p.is_poisoned());
-    assert!(matches!(
-        p.send(
-            &[20],
-            crate::ActionInput {
-                discrete: &[0],
-                continuous: &[]
-            }
-        ),
-        Err(EngineError::Poisoned | EngineError::WorkerDied)
-    ));
-    assert_eq!(
-        p.reset_all(Reseed::Keep).map(|_| ()),
-        Err(EngineError::WorkerDied)
-    );
+    crate::modes::within("async worker death reports worker died permanently", || {
+        let options = PoolOptions {
+            chunk_size: NonZeroU32::new(4).unwrap(),
+            ..PoolOptions::new(NonZeroU32::new(32).unwrap(), Seed::new(1))
+        };
+        let faults = Faults {
+            die_in_epoch: Some(1),
+            ..Faults::default()
+        };
+        let mut p = EnvPool::<Ticker>::new(TickConfig {}, options)
+            .unwrap()
+            .async_faults(
+                crate::AsyncOptions::new(
+                    NonZeroUsize::new(2).unwrap(),
+                    NonZeroUsize::new(4).unwrap(),
+                ),
+                faults,
+            )
+            .unwrap();
+        drop(p.reset_all(Reseed::Keep).unwrap());
+        let ids: Vec<u32> = (0..8).collect();
+        let seen = recv_until_death(&mut p, &ids);
+        assert!(
+            matches!(seen, EngineError::WorkerDied | EngineError::Poisoned),
+            "{seen:?}"
+        );
+        assert!(p.is_poisoned());
+        assert!(matches!(
+            p.send(
+                &[20],
+                crate::ActionInput {
+                    discrete: &[0],
+                    continuous: &[]
+                }
+            ),
+            Err(EngineError::Poisoned | EngineError::WorkerDied)
+        ));
+        assert_eq!(
+            p.reset_all(Reseed::Keep).map(|_| ()),
+            Err(EngineError::WorkerDied)
+        );
+    });
 }
 
 /// The forced schedule of that test's CI failure: the dying worker waits until
@@ -229,72 +234,81 @@ fn test_async_worker_death_reports_worker_died_permanently() {
 #[cfg(not(loom))]
 #[test]
 fn test_async_worker_death_after_all_ids_are_delivered_reports_nothing_in_flight_first() {
-    static GATE: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
-    let options = PoolOptions {
-        chunk_size: NonZeroU32::new(4).unwrap(),
-        ..PoolOptions::new(NonZeroU32::new(32).unwrap(), Seed::new(1))
-    };
-    let faults = Faults {
-        die_in_epoch: Some(1),
-        death_gate: Some(&GATE),
-        ..Faults::default()
-    };
-    let mut p = EnvPool::<Ticker>::new(TickConfig {}, options)
-        .unwrap()
-        .async_faults(
-            crate::AsyncOptions::new(NonZeroUsize::new(2).unwrap(), NonZeroUsize::new(4).unwrap()),
-            faults,
-        )
-        .unwrap();
-    drop(p.reset_all(Reseed::Keep).unwrap());
-    let ids: Vec<u32> = (0..8).collect();
-    let actions = [0_i32; 8];
-    p.send(
-        &ids,
-        crate::ActionInput {
-            discrete: &actions,
-            continuous: &[],
+    crate::modes::within(
+        "async worker death after all ids are delivered reports nothing in flight first",
+        || {
+            static GATE: core::sync::atomic::AtomicBool =
+                core::sync::atomic::AtomicBool::new(false);
+            let options = PoolOptions {
+                chunk_size: NonZeroU32::new(4).unwrap(),
+                ..PoolOptions::new(NonZeroU32::new(32).unwrap(), Seed::new(1))
+            };
+            let faults = Faults {
+                die_in_epoch: Some(1),
+                death_gate: Some(&GATE),
+                ..Faults::default()
+            };
+            let mut p = EnvPool::<Ticker>::new(TickConfig {}, options)
+                .unwrap()
+                .async_faults(
+                    crate::AsyncOptions::new(
+                        NonZeroUsize::new(2).unwrap(),
+                        NonZeroUsize::new(4).unwrap(),
+                    ),
+                    faults,
+                )
+                .unwrap();
+            drop(p.reset_all(Reseed::Keep).unwrap());
+            let ids: Vec<u32> = (0..8).collect();
+            let actions = [0_i32; 8];
+            p.send(
+                &ids,
+                crate::ActionInput {
+                    discrete: &actions,
+                    continuous: &[],
+                },
+            )
+            .unwrap();
+            // `try_recv`: a blocking `recv` would wait for the held worker's job.
+            let mut batches = 0;
+            while batches < 2 {
+                if let Some(t) = p.try_recv().unwrap() {
+                    drop(t);
+                    batches += 1;
+                }
+                std::thread::yield_now();
+            }
+            // Collected while the worker is held and checked after the gate opens,
+            // so a failure ends the test instead of hanging in the pool's `Drop`.
+            let nothing = p.recv().map(|_| ());
+            let snapshot = p.snapshot(0);
+            let early_poison = p.is_poisoned();
+            GATE.store(true, core::sync::atomic::Ordering::Release);
+            assert_eq!(nothing, Err(EngineError::NothingInFlight));
+            assert!(!early_poison);
+            let mut records = vec![snapshot.unwrap(); 32];
+            // The death is visible with no `recv` in between.
+            let visible = (0..10_000_000).any(|_| {
+                std::thread::yield_now();
+                p.is_poisoned()
+            });
+            assert!(visible, "a dead worker poisons the wrapper");
+            assert_eq!(p.snapshot_all(&mut records), Err(EngineError::Poisoned));
+            assert_eq!(
+                p.send(
+                    &ids,
+                    crate::ActionInput {
+                        discrete: &actions,
+                        continuous: &[],
+                    },
+                ),
+                Err(EngineError::WorkerDied)
+            );
+            assert_eq!(p.reset(&[0], Reseed::Keep), Err(EngineError::WorkerDied));
+            assert_eq!(
+                p.reset_all(Reseed::Keep).map(|_| ()),
+                Err(EngineError::WorkerDied)
+            );
         },
-    )
-    .unwrap();
-    // `try_recv`: a blocking `recv` would wait for the held worker's job.
-    let mut batches = 0;
-    while batches < 2 {
-        if let Some(t) = p.try_recv().unwrap() {
-            drop(t);
-            batches += 1;
-        }
-        std::thread::yield_now();
-    }
-    // Collected while the worker is held and checked after the gate opens,
-    // so a failure ends the test instead of hanging in the pool's `Drop`.
-    let nothing = p.recv().map(|_| ());
-    let snapshot = p.snapshot(0);
-    let early_poison = p.is_poisoned();
-    GATE.store(true, core::sync::atomic::Ordering::Release);
-    assert_eq!(nothing, Err(EngineError::NothingInFlight));
-    assert!(!early_poison);
-    let mut records = vec![snapshot.unwrap(); 32];
-    // The death is visible with no `recv` in between.
-    let visible = (0..10_000_000).any(|_| {
-        std::thread::yield_now();
-        p.is_poisoned()
-    });
-    assert!(visible, "a dead worker poisons the wrapper");
-    assert_eq!(p.snapshot_all(&mut records), Err(EngineError::Poisoned));
-    assert_eq!(
-        p.send(
-            &ids,
-            crate::ActionInput {
-                discrete: &actions,
-                continuous: &[],
-            },
-        ),
-        Err(EngineError::WorkerDied)
-    );
-    assert_eq!(p.reset(&[0], Reseed::Keep), Err(EngineError::WorkerDied));
-    assert_eq!(
-        p.reset_all(Reseed::Keep).map(|_| ()),
-        Err(EngineError::WorkerDied)
     );
 }

@@ -5,6 +5,9 @@
 
 #[cfg(test)]
 mod async_jitter_tests;
+/// The named test watchdog (issue #182), shared with the ring and fault tests.
+#[cfg(test)]
+pub(crate) use async_jitter_tests::within;
 pub(crate) mod async_mode;
 #[cfg(test)]
 mod async_wake_tests;
