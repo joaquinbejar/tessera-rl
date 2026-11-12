@@ -125,10 +125,10 @@ def test_fp_boundary_unmasked_simulated_raz_wi_checks_the_rest():
         pytest.skip(r["skipped"])
     assert r["enabled_set"] == 0 and r["enables_reason"] is not None
     assert "controls_after" in r and "flag_kept" in r, "the library ran with the hostile controls"
-    with pytest.warns(UserWarning, match="not checked"), pytest.raises(pytest.skip.Exception, match="read back as zero"):
-        check_unmasked(r, expect_traps=False)
-    with pytest.raises(AssertionError, match=EXPECT_TRAPS):
-        check_unmasked(r, expect_traps=True)
+    kind, reason = verdict(r, expect_traps=False)
+    assert kind == "skip" and "read back as zero" in reason
+    kind, message = verdict(r, expect_traps=True)
+    assert kind == "fail" and EXPECT_TRAPS in message
 
 
 def test_unmasked_skip_reason_zero_read_back_skips():
@@ -165,40 +165,81 @@ def _result(**kw):
 IGNORED = "this CPU does not implement trapped floating-point exceptions (FPCR enables read back as zero)"
 
 
+def verdict(r, expect_traps):
+    """check_unmasked as an outcome value, so a verdict unit test can never
+    end as skipped: ("pass", None), ("skip", reason) or ("fail", message)."""
+    try:
+        with warnings.catch_warnings(record=True):
+            warnings.simplefilter("always")
+            check_unmasked(r, expect_traps=expect_traps)
+    except pytest.skip.Exception as e:
+        return ("skip", str(e))
+    except AssertionError as e:
+        return ("fail", str(e))
+    return ("pass", None)
+
+
 def test_check_unmasked_enables_ignored_skips():
     r = _result(enabled_set=0, enabled_after=0, enables_reason=IGNORED)
-    with pytest.warns(UserWarning), pytest.raises(pytest.skip.Exception, match="read back as zero"):
-        check_unmasked(r, expect_traps=False)
+    kind, reason = verdict(r, expect_traps=False)
+    assert kind == "skip" and "read back as zero" in reason and "read back before the library: 0" in reason
+
+
+def test_check_unmasked_enables_ignored_warns_the_probe():
+    r = _result(enabled_set=0, enabled_after=0, enables_reason=IGNORED)
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        try:
+            check_unmasked(r, expect_traps=False)
+        except pytest.skip.Exception:
+            pass
+    assert any("not checked" in str(w.message) for w in caught)
 
 
 def test_check_unmasked_enables_ignored_with_traps_expected_fails():
     r = _result(enabled_set=0, enabled_after=0, enables_reason=IGNORED)
-    with pytest.raises(AssertionError, match=EXPECT_TRAPS):
-        check_unmasked(r, expect_traps=True)
+    kind, message = verdict(r, expect_traps=True)
+    assert kind == "fail" and EXPECT_TRAPS in message
+
+
+def test_check_unmasked_child_skip_with_traps_expected_fails():
+    kind, message = verdict({"cpu": "test", "skipped": "no feenableexcept"}, expect_traps=True)
+    assert kind == "fail" and EXPECT_TRAPS in message
 
 
 def test_check_unmasked_enables_ignored_still_checks_controls():
     # The skip covers the enables only: a lost rounding mode still fails.
     r = _result(enabled_set=0, enabled_after=0, enables_reason=IGNORED, controls_after=0)
-    with pytest.raises(AssertionError, match="controls are restored"):
-        check_unmasked(r, expect_traps=False)
+    kind, message = verdict(r, expect_traps=False)
+    assert kind == "fail" and "controls are restored" in message
 
 
 def test_check_unmasked_enables_ignored_still_checks_flags():
     r = _result(enabled_set=0, enabled_after=0, enables_reason=IGNORED, flag_kept=False)
-    with pytest.raises(AssertionError, match="keep a flag"):
-        check_unmasked(r, expect_traps=False)
+    kind, message = verdict(r, expect_traps=False)
+    assert kind == "fail" and "keep a flag" in message
+
+
+def test_check_unmasked_enables_ignored_still_checks_results():
+    r = _result(enabled_set=0, enabled_after=0, enables_reason=IGNORED, identical=False)
+    kind, _ = verdict(r, expect_traps=False)
+    assert kind == "fail"
+
+
+def test_check_unmasked_enables_set_then_zero_after_fails():
+    # Enables zero after the library but set before it: never a skip.
+    kind, message = verdict(_result(enabled_after=0), expect_traps=False)
+    assert kind == "fail" and "unmasked exceptions are restored" in message
 
 
 def test_check_unmasked_library_cleared_enables_fails():
-    # The enables took effect and the library left them cleared: a failure,
-    # never a skip.
-    with pytest.raises(AssertionError, match="unmasked exceptions are restored"):
-        check_unmasked(_result(enabled_after=0), expect_traps=False)
+    kind, message = verdict(_result(enabled_after=0), expect_traps=True)
+    assert kind == "fail" and "unmasked exceptions are restored" in message
 
 
 def test_check_unmasked_restored_enables_passes():
-    check_unmasked(_result(), expect_traps=False)
+    assert verdict(_result(), expect_traps=False) == ("pass", None)
+    assert verdict(_result(), expect_traps=True) == ("pass", None)
 
 
 @pytest.mark.torch
