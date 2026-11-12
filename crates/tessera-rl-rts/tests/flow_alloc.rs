@@ -1,66 +1,31 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! Building and descending a flow field never allocates (`rts-design.md`
-//! section 5; SPEC zero-allocation hot path). This file installs a counting
-//! global allocator for this test binary only; its `unsafe` only forwards
-//! to the system allocator.
+//! section 5; SPEC zero-allocation hot path). The counting allocator of
+//! `support/counting.rs` attributes allocator calls by thread (issue #43).
+//! This binary holds a single measuring test, which runs each scenario (the
+//! former tests, by name) with its own objects and windows, and reports
+//! every failing scenario together.
 
-#![expect(clippy::unwrap_used, reason = "test fixtures")]
+#![expect(
+    clippy::unwrap_used,
+    clippy::indexing_slicing,
+    reason = "test fixtures"
+)]
 
 use core::num::NonZeroU32;
-use std::alloc::{GlobalAlloc, Layout, System};
-use std::cell::Cell;
 
 use tessera_rl_rts::flow::Field;
 use tessera_rl_rts::mapgen::generate;
 use tessera_rl_rts::world::{Grid, Team, Terrain};
 
-thread_local! {
-    static COUNTING: Cell<bool> = const { Cell::new(false) };
-    static ALLOCATIONS: Cell<u64> = const { Cell::new(0) };
-}
+#[path = "support/counting.rs"]
+mod counting;
+use counting::window;
 
-struct Counting;
-
-#[expect(unsafe_code, reason = "test-only counting allocator")]
-// SAFETY: every method forwards to `System` with the same arguments; the
-// counters are const-initialized thread locals, which never allocate.
-unsafe impl GlobalAlloc for Counting {
-    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        count();
-        // SAFETY: forwarded unchanged; the caller upholds `alloc`'s contract.
-        unsafe { System.alloc(layout) }
-    }
-
-    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
-        // SAFETY: `ptr` was allocated by `System` with `layout`.
-        unsafe { System.dealloc(ptr, layout) }
-    }
-
-    unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
-        count();
-        // SAFETY: forwarded unchanged; the caller upholds `realloc`'s contract.
-        unsafe { System.realloc(ptr, layout, new_size) }
-    }
-}
-
-fn count() {
-    let _ = COUNTING.try_with(|on| {
-        if on.get() {
-            let _ = ALLOCATIONS.try_with(|n| n.set(n.get() + 1));
-        }
-    });
-}
-
-#[global_allocator]
-static GLOBAL: Counting = Counting;
-
+/// Allocation calls of the counted threads while `f` runs.
 fn allocations(f: impl FnOnce()) -> u64 {
-    ALLOCATIONS.with(|n| n.set(0));
-    COUNTING.with(|on| on.set(true));
-    f();
-    COUNTING.with(|on| on.set(false));
-    ALLOCATIONS.with(Cell::get)
+    window(f).1.calls
 }
 
 fn draw(seed: u64) -> impl FnMut(NonZeroU32) -> u32 {
@@ -73,12 +38,10 @@ fn draw(seed: u64) -> impl FnMut(NonZeroU32) -> u32 {
     }
 }
 
-#[test]
 fn test_flow_alloc_counter_detects_heap_use() {
     assert!(allocations(|| drop(std::hint::black_box(vec![1u8; 16]))) > 0);
 }
 
-#[test]
 fn test_flow_alloc_build_and_descend_do_not_allocate() {
     let g = Grid::new(32).unwrap();
     let map = generate(g, draw(5));
@@ -98,4 +61,24 @@ fn test_flow_alloc_build_and_descend_do_not_allocate() {
         }
     });
     assert_eq!(n, 0);
+}
+
+/// The scenarios this binary runs.
+const SCENARIOS: usize = 2;
+
+#[test]
+fn test_flow_alloc_scenarios_do_not_allocate() {
+    counting::scenarios(
+        SCENARIOS,
+        &[
+            (
+                "test_flow_alloc_counter_detects_heap_use",
+                test_flow_alloc_counter_detects_heap_use,
+            ),
+            (
+                "test_flow_alloc_build_and_descend_do_not_allocate",
+                test_flow_alloc_build_and_descend_do_not_allocate,
+            ),
+        ],
+    );
 }
