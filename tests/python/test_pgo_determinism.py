@@ -80,6 +80,69 @@ def test_pgo_determinism_actions_are_legal_and_fixed():
     assert det.action(1, 0, 5, 4, [False] * 4) == 0
 
 
+def test_pgo_determinism_rts_is_covered_not_a_gap():
+    assert "tessera/RTS-v1" not in det.GAPS and det.GAPS == det.CONTINUOUS_GAP
+    assert not hasattr(det, "MULTI_HEAD_GAP")
+    assert ("tessera/RTS-v1", {"size": 12, "max_units": 8}) in det.ENVS.values()
+
+
+@pytest.fixture(scope="module")
+def rts_report():
+    return det.record(t, envs=("rts",), workers=(0, 2), steps=12)
+
+
+def test_pgo_determinism_rts_every_mode_gives_the_sync_trajectory(rts_report):
+    runs, checks = rts_report["runs"], rts_report["checks"]
+    assert all(v is True for v in checks.values()), [k for k, v in checks.items() if v is not True]
+    for auto in det.AUTO_RESET:
+        sync = runs[f"rts/{auto}/sync/0/owned"]["trace"]
+        for mode in ("sync/2/borrowed", "pipelined/2/owned", "pipelined/2/borrowed", "async/2/owned", "async/2/borrowed"):
+            assert runs[f"rts/{auto}/{mode}"]["trace"] == sync, mode
+        assert f"rts/{auto}/continuation" in runs
+        assert {f"rts/{auto}/load", f"rts/{auto}/import", f"rts/{auto}/fork"} <= set(checks)
+
+
+def test_pgo_determinism_rts_record_is_stable(rts_report):
+    assert det.differences(rts_report, det.record(t, envs=("rts",), workers=(0, 2), steps=12)) == []
+
+
+def test_pgo_determinism_multi_action_is_legal_under_conditional_masks_and_fixed():
+    from tessera_rl.masks import head_views
+
+    env = det.make_env(t, "rts", "next_step", 0, "owned")
+    try:
+        layout = det._layout(env)
+        step = env.reset()
+        for s in range(1, 6):
+            acts = det.actions_for(range(env.num_envs), step, env.agents, env.action_choices, lambda _: s, layout)
+            again = det.actions_for(range(env.num_envs), step, env.agents, env.action_choices, lambda _: s, layout)
+            assert acts.shape == (env.num_envs, env.agents, len(env.action_nvec)) and (acts == again).all()
+            ty, tg, pr = head_views(step.masks, env.mask_heads, env.entity_group_heads)
+            u = acts.reshape(env.num_envs, env.agents, -1, 3)
+            for i, j, k in np.ndindex(u.shape[:3]):
+                a, b, c = (int(v) for v in u[i, j, k])
+                for mask, choice in ((ty[i, j, k], a), (tg[i, j, k, a], b), (pr[i, j, k, a], c)):
+                    assert mask[choice] or not mask.any()
+            step = env.step(acts)
+        assert (u[..., 0] != 0).any()
+    finally:
+        env.close()
+
+
+def test_pgo_determinism_multi_action_depends_on_instance_slot_and_t_only():
+    layout = (((0, (), 3), (3, (3,), 5)), 18, 2)
+    row = [True] * 36
+    base = det.multi_action(4, 1, 9, layout, row)
+    assert len(base) == 4
+    assert base == det.multi_action(4, 1, 9, layout, row)
+    assert len({tuple(det.multi_action(i, s, k, layout, row)) for i in range(3) for s in range(2) for k in range(3)}) > 1
+    only = [False] * 36
+    only[2] = True  # entity 0: type 2 only
+    only[3 + 2 * 5 + 4] = True  # entity 0, type 2: target 4 only
+    got = det.multi_action(4, 1, 9, layout, only)
+    assert got[:2] == [2, 4] and got[2:] == [0, 0]
+
+
 def test_pgo_determinism_compare_command(report, tmp_path, capsys):
     a, b = tmp_path / "a.json", tmp_path / "b.json"
     a.write_text(json.dumps(report))
