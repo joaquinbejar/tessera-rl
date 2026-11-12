@@ -11,6 +11,9 @@
 //! both terminal modes (terminal rows included), and the re-observation
 //! after restore, import, fork and load. Slot 1 can die and spawn again in
 //! the same row position, so a stale row from its earlier life would show.
+//! The step sequence also runs through a Sync pool with workers, the
+//! Pipelined mode and the Async mode: loud, then two quiet steps, so a mode
+//! that alternated buffers would show the sentinel from two steps earlier.
 
 #![expect(
     clippy::unwrap_used,
@@ -18,7 +21,7 @@
     reason = "tests: a failure is the assertion"
 )]
 
-use core::num::NonZeroU32;
+use core::num::{NonZeroU32, NonZeroUsize};
 
 use tessera_rl_core::io::{Actions, ObsWriter};
 use tessera_rl_core::space::Space;
@@ -27,7 +30,8 @@ use tessera_rl_core::{
     Persist, RecordHeader, SpaceError, StepOut, Tier, Validate,
 };
 use tessera_rl_engine::{
-    ActionInput, AutoReset, DecodeLimits, DecodedRecord, EnvPool, NoMasks, PoolOptions, Reseed,
+    ActionInput, AsyncOptions, AutoReset, DecodeLimits, DecodedRecord, EnvPool, NoMasks,
+    PipelinedOptions, PoolOptions, Reseed, SyncOptions,
 };
 use tessera_rl_macros::{EnvConfig, EnvState, Observation};
 use tessera_rl_num::identity::Seed;
@@ -362,4 +366,159 @@ fn test_observe_zero_load_over_sentinel_rows_is_zero() {
     p.import_all(&records).unwrap();
     observation(&p, 0, ZERO, "load");
     observation(&p, 1, ZERO, "load");
+}
+
+/// The step sequence every mode runs, instance-wide: agent 0's bits and
+/// the rows expected after the step.
+const SEQUENCE: [(i32, [Row; AGENTS]); 7] = [
+    (LOUD, FULL),
+    (QUIET, ZERO),
+    (QUIET, ZERO),
+    (LOUD, FULL),
+    (LOUD | KILL, [Row::Sentinel, Row::Zero]),
+    (QUIET | SPAWN, ZERO),
+    (QUIET, ZERO),
+];
+
+/// Number of instances and chunk size of the mode tests: four chunks, so
+/// the Pipelined halves have two instances each.
+const MODE_ENVS: u32 = 4;
+
+fn mode_options() -> PoolOptions {
+    PoolOptions {
+        auto_reset: AutoReset::Disabled,
+        chunk_size: NonZeroU32::MIN,
+        ..PoolOptions::new(NonZeroU32::new(MODE_ENVS).unwrap(), Seed::new(9))
+    }
+}
+
+/// Asserts one instance's rows of one leaf, `[A, leaf bytes]`.
+fn instance(found: &[u8], leaf: usize, want: [Row; AGENTS], what: &str) {
+    let n = LEAF_BYTES[leaf];
+    assert_eq!(found.len(), AGENTS * n, "{what}: row length");
+    for (slot, &w) in want.iter().enumerate() {
+        check(
+            &found[slot * n..(slot + 1) * n],
+            w,
+            &format!("{what}: slot {slot} leaf {leaf}"),
+        );
+    }
+}
+
+fn mode_actions(bits: i32, n: usize) -> Vec<i32> {
+    (0..n).flat_map(|_| [bits, QUIET]).collect()
+}
+
+#[test]
+fn test_observe_zero_sync_with_workers_over_sentinel_rows_is_zero() {
+    let mut p = Blinks::new(BlinkConfig::default(), mode_options())
+        .unwrap()
+        .with_workers(SyncOptions::new(NonZeroUsize::new(2).unwrap()))
+        .unwrap();
+    p.reset_all(Reseed::Keep).unwrap();
+    let n = usize::try_from(MODE_ENVS).unwrap();
+    for (t, &(bits, want)) in SEQUENCE.iter().enumerate() {
+        step(&mut p, &vec![bits; n]);
+        for i in 0..n {
+            observation(&p, i, want, &format!("sync workers, step {t}"));
+        }
+    }
+}
+
+#[test]
+fn test_observe_zero_pipelined_over_sentinel_rows_is_zero() {
+    let mut p = Blinks::new(BlinkConfig::default(), mode_options())
+        .unwrap()
+        .pipelined(PipelinedOptions::new(NonZeroUsize::new(2).unwrap()))
+        .unwrap();
+    let halves = p.halves();
+    let [mut ta, mut tb] = p.reset_all(Reseed::Keep).unwrap();
+    for (t, &(bits, want)) in SEQUENCE.iter().enumerate() {
+        for (h, token) in [ta, tb].into_iter().enumerate() {
+            let len = halves[h].len();
+            let actions = mode_actions(bits, len);
+            let sent = p.send(
+                token,
+                ActionInput {
+                    discrete: &actions,
+                    continuous: &[],
+                },
+            );
+            assert!(sent.is_ok(), "pipelined send, half {h}, step {t}");
+        }
+        ta = p.recv().unwrap();
+        tb = p.recv().unwrap();
+        for token in [&ta, &tb] {
+            let h = usize::try_from(token.half()).unwrap();
+            let len = halves[h].len();
+            for (leaf, &bytes) in LEAF_BYTES.iter().enumerate() {
+                let rows = token.observation(leaf).unwrap();
+                let width = AGENTS * bytes;
+                for k in 0..len {
+                    instance(
+                        &rows[k * width..(k + 1) * width],
+                        leaf,
+                        want,
+                        &format!("pipelined, step {t}, half {h}, instance {k}"),
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn test_observe_zero_async_over_sentinel_rows_is_zero() {
+    let mut p = Blinks::new(BlinkConfig::default(), mode_options())
+        .unwrap()
+        .async_mode(AsyncOptions::new(
+            NonZeroUsize::new(2).unwrap(),
+            NonZeroUsize::new(2).unwrap(),
+        ))
+        .unwrap();
+    drop(p.reset_all(Reseed::Keep).unwrap());
+    let ids: Vec<u32> = (0..MODE_ENVS).collect();
+    for (t, &(bits, want)) in SEQUENCE.iter().enumerate() {
+        let actions = mode_actions(bits, ids.len());
+        p.send(
+            &ids,
+            ActionInput {
+                discrete: &actions,
+                continuous: &[],
+            },
+        )
+        .unwrap();
+        let mut received = 0;
+        while received < ids.len() {
+            let token = p.recv().unwrap();
+            for id in token.ids() {
+                for leaf in 0..LEAF_BYTES.len() {
+                    instance(
+                        token.observation(leaf, id).unwrap(),
+                        leaf,
+                        want,
+                        &format!("async, step {t}, instance {id}"),
+                    );
+                }
+            }
+            received += token.len();
+        }
+    }
+}
+
+/// Terminal rows are a step output (ADR-0039): re-observation after a
+/// restore leaves none of an earlier episode's sentinel in them. On a step
+/// that ends no episode they are documented as stale (`Outputs::
+/// terminal_observation`), so the step path is not asserted here.
+#[test]
+fn test_observe_zero_same_step_restore_clears_sentinel_terminal_rows() {
+    let mut p = pool(1, AutoReset::SameStep);
+    let quiet = p.snapshot(0).unwrap();
+    step(&mut p, &[LOUD | END]);
+    terminal(&p, 0, FULL, "loud final observation");
+    step(&mut p, &[LOUD]);
+    observation(&p, 0, FULL, "loud step");
+    p.restore(0, &quiet).unwrap();
+    terminal(&p, 0, ZERO, "restore");
+    observation(&p, 0, ZERO, "restore");
 }

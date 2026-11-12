@@ -115,8 +115,8 @@ pub trait Environment: Sized + 'static {
     );
 
     /// Writes the observation of `agent`. Every leaf is zero on entry:
-    /// bytes left unwritten are zero in the output, and no earlier content
-    /// is visible (ADR-0058).
+    /// bytes left unwritten are zero in the output, no earlier content is
+    /// visible, and an implementation need not clear a leaf (ADR-0058).
     fn observe(
         cfg: &Self::Config,
         state: &Self::State,
