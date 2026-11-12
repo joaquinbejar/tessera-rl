@@ -11,13 +11,20 @@ are comparable although Async batches depend on timing. Actions depend only on
 the instance, its slot, the step and its mask. Internal equalities (worker counts,
 borrowed against owned, continuation) are recorded and must hold.
 
+Several discrete heads (``MultiDiscrete``, the RTS of SPEC 11.3) take one
+action per head and entity group (``action_nvec``, ``mask_heads``,
+``entity_group_heads``): per unit, the type is drawn from the type mask, then
+target and product from their masks conditioned on that type, each draw a
+function of (instance, slot, t, unit, head) alone (``multi_action``). An
+empty mask row plays choice 0, the no-op. Every mode runs for it; actions go
+to the pool as ``(rows, agents, heads)``.
+
 Items 5 (the Python suite) and 6 (the num crate's tests under the profile) are
 commands of the wheel job, not of this tool. A difference blocks the wheel and is
 a bug; the goldens are never re-blessed for it.
 
-One discrete head only: an environment with continuous actions (Pendulum,
-``CONTINUOUS_GAP``) or with several heads (RTS, ``MULTI_HEAD_GAP``) needs its
-own action path here, a stated gap.
+Discrete actions only: an environment with continuous actions (Pendulum,
+``CONTINUOUS_GAP``) needs its own action path here, a stated gap.
 """
 
 from __future__ import annotations
@@ -41,11 +48,8 @@ CONTINUE_STEPS = 20
 
 #: Registered environments this tool cannot drive yet (discrete actions only).
 CONTINUOUS_GAP = frozenset({"tessera/Pendulum-v1"})
-#: Registered environments with several discrete heads (MultiDiscrete): the
-#: actions here are one per agent row, a stated gap like the continuous one.
-MULTI_HEAD_GAP = frozenset({"tessera/RTS-v1"})
 #: Every stated gap.
-GAPS = CONTINUOUS_GAP | MULTI_HEAD_GAP
+GAPS = CONTINUOUS_GAP
 
 ENVS = {
     "cartpole": ("tessera/CartPole-v1", {}),
@@ -63,6 +67,10 @@ ENVS = {
     "othello": ("tessera/Othello-v1", {}),
     "go9": ("tessera/Go9-v1", {}),
     "leduc": ("tessera/Leduc-v1", {}),
+    # Few units, a small map: the per-unit Python draws stay cheap. The
+    # determinism of the protocol-size environment is covered by the RTS
+    # goldens, not by this tool.
+    "rts": ("tessera/RTS-v1", {"size": 12, "max_units": 8}),
 }
 
 
@@ -83,7 +91,62 @@ def action(instance: int, slot: int, t: int, choices: int, legal) -> int:
     return allowed[x % len(allowed)] if allowed else 0
 
 
-def actions_for(ids, step, agents: int, choices: int, t_of) -> list[int]:
+def _layout(env):
+    """The multi-head layout of ``env`` (``None`` for one discrete head):
+    the heads of one entity group as ``(offset, parents, size)``, the period
+    of an entity block in the mask row, and the entity count."""
+    nvec = tuple(env.action_nvec)
+    if len(nvec) <= 1:
+        return None
+    heads = list(env.mask_heads)
+    per = env.entity_group_heads or len(heads)
+    group = heads[:per]
+    entities = len(nvec) // per
+    # One entity: the period is multiplied by e = 0 and never used.
+    period = heads[per][0] if entities > 1 else 0
+    if group[0][1] != () or any(parents not in ((), (group[0][2],)) for _, parents, _ in group[1:]):
+        raise ValueError("multi-head actions: heads other than the first may only depend on it")
+    return group, period, entities
+
+
+def multi_action(instance: int, slot: int, t: int, layout, row) -> list[int]:
+    """Legal multi-head actions from (instance, slot, t) alone, one per head
+    of each entity group: the first head under its mask, then each later
+    head under its mask conditioned on the first head's choice. ``row`` is
+    the agent's flat mask row, or ``None`` (every choice legal)."""
+    group, period, entities = layout
+    key = mix((instance << 40) ^ (slot << 32) ^ t ^ SEED)
+    out = []
+    for e in range(entities):
+        first = 0
+        for h, (offset, parents, size) in enumerate(group):
+            x = mix(key ^ ((e << 8) | h))
+            if row is None:
+                choice = x % size
+            else:
+                start = e * period + offset + (first * size if parents else 0)
+                allowed = [i for i, ok in enumerate(row[start : start + size]) if ok]
+                choice = allowed[x % len(allowed)] if allowed else 0
+            if h == 0:
+                first = choice
+            out.append(choice)
+    return out
+
+
+def actions_for(ids, step, agents: int, choices: int, t_of, layout=None):
+    """One action per (instance, agent) row; with ``layout`` (multi-head),
+    an array ``(rows, agents, heads)`` of ``multi_action`` rows."""
+    if layout is not None:
+        import numpy as np
+
+        rows = [
+            [
+                multi_action(int(instance), slot, t_of(int(instance)), layout, None if step.masks is None else step.masks[row][slot].tolist())
+                for slot in range(agents)
+            ]
+            for row, instance in enumerate(ids)
+        ]
+        return np.array(rows, np.int32).reshape(len(rows), agents, -1)
     out = []
     for row, instance in enumerate(ids):
         for slot in range(agents):
@@ -121,7 +184,7 @@ def run_sync(env, steps: int = STEPS) -> dict:
     step = env.reset()
     trace.add(ids, step)
     for t in range(1, steps + 1):
-        acts = actions_for(ids, step, env.agents, env.action_choices, lambda _: t)
+        acts = actions_for(ids, step, env.agents, env.action_choices, lambda _: t, _layout(env))
         step = env.step(_array(acts, env))
         trace.add(ids, step)
         if t in SNAPSHOT_STEPS:
@@ -129,9 +192,11 @@ def run_sync(env, steps: int = STEPS) -> dict:
     return {"trace": trace.result(), "snapshots": snapshots}
 
 
-def _array(acts: list[int], env):
+def _array(acts, env):
     import numpy as np
 
+    if _layout(env) is not None:
+        return acts
     return np.array(acts, np.int32).reshape(-1, env.agents)
 
 
@@ -141,7 +206,7 @@ def run_pipelined(env, steps: int = STEPS) -> dict:
     received = [0, 0]
     for half in env.reset():
         trace.add(half.ids, half.step)
-        env.send(half.half, actions_for(half.ids, half.step, env.agents, env.action_choices, lambda i: 1))
+        env.send(half.half, actions_for(half.ids, half.step, env.agents, env.action_choices, lambda i: 1, _layout(env)))
     while min(received) < steps:
         out = env.recv()
         trace.add(out.ids, out.step)
@@ -150,7 +215,7 @@ def run_pipelined(env, steps: int = STEPS) -> dict:
             counts[i] += 1
         if received[out.half] < steps:
             next_t = received[out.half] + 1
-            env.send(out.half, actions_for(out.ids, out.step, env.agents, env.action_choices, lambda i: next_t))
+            env.send(out.half, actions_for(out.ids, out.step, env.agents, env.action_choices, lambda i: next_t, _layout(env)))
     return {"trace": trace.result()}
 
 
@@ -159,7 +224,7 @@ def run_async(env, steps: int = STEPS) -> dict:
     counts = [0] * env.num_envs
     batch = env.reset()
     trace.add(batch.ids, batch.step)
-    env.send(batch.ids.tolist(), actions_for(batch.ids, batch.step, env.agents, env.action_choices, lambda i: 1))
+    env.send(batch.ids.tolist(), actions_for(batch.ids, batch.step, env.agents, env.action_choices, lambda i: 1, _layout(env)))
     remaining = env.num_envs * steps
     while remaining:
         batch = env.recv()
@@ -175,7 +240,7 @@ def run_async(env, steps: int = STEPS) -> dict:
                 observations={k: v[rows] for k, v in batch.step.observations.items()},
                 **{f: (None if a is None else a[rows]) for f, a in zip(batch.step._fields, batch.step) if f != "observations"},
             )
-            env.send(ids, actions_for(ids, view, env.agents, env.action_choices, lambda i: counts[i] + 1))
+            env.send(ids, actions_for(ids, view, env.agents, env.action_choices, lambda i: counts[i] + 1, _layout(env)))
     return {"trace": trace.result()}
 
 
@@ -186,7 +251,7 @@ def continuation(t, name: str, auto_reset: str) -> dict:
     def advance(env, step, first: int, count: int) -> list[str]:
         trace = Trace(env.num_envs)
         for s in range(first, first + count):
-            acts = actions_for(ids, step, env.agents, env.action_choices, lambda _: s)
+            acts = actions_for(ids, step, env.agents, env.action_choices, lambda _: s, _layout(env))
             step = env.step(_array(acts, env))
             trace.add(ids, step)
         return trace.result()
@@ -194,7 +259,7 @@ def continuation(t, name: str, auto_reset: str) -> dict:
     env = make_env(t, name, auto_reset, 0, "owned")
     step = env.reset()
     for s in range(1, CONTINUE_AT + 1):
-        step = env.step(_array(actions_for(ids, step, env.agents, env.action_choices, lambda _: s), env))
+        step = env.step(_array(actions_for(ids, step, env.agents, env.action_choices, lambda _: s, _layout(env)), env))
     data = env.encode()
     records = [env.snapshot(i) for i in ids]
     held = step
@@ -220,16 +285,19 @@ def continuation(t, name: str, auto_reset: str) -> dict:
 
 def fork_equal(t, name: str, auto_reset: str) -> bool:
     """Forks of one instance, given the same actions, have the same outputs."""
+    import numpy as np
+
     env = make_env(t, name, auto_reset, 0, "owned")
     step = env.reset()
     ids = range(NUM_ENVS)
     for s in range(1, 31):
-        step = env.step(_array(actions_for(ids, step, env.agents, env.action_choices, lambda _: s), env))
+        step = env.step(_array(actions_for(ids, step, env.agents, env.action_choices, lambda _: s, _layout(env)), env))
     env.fork(0, [1])
     same = True
     for s in range(31, 41):
-        first = actions_for([0], _rows(step, [0]), env.agents, env.action_choices, lambda _: s)
-        acts = first * 2 + actions_for(range(2, NUM_ENVS), _rows(step, range(2, NUM_ENVS)), env.agents, env.action_choices, lambda _: s)
+        first = actions_for([0], _rows(step, [0]), env.agents, env.action_choices, lambda _: s, _layout(env))
+        rest = actions_for(range(2, NUM_ENVS), _rows(step, range(2, NUM_ENVS)), env.agents, env.action_choices, lambda _: s, _layout(env))
+        acts = first * 2 + rest if _layout(env) is None else np.concatenate([first, first, rest])
         step = env.step(_array(acts, env))
         same &= step.rewards[0].tobytes() == step.rewards[1].tobytes()
         same &= all(v[0].tobytes() == v[1].tobytes() for v in step.observations.values())
