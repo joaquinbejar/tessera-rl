@@ -25,18 +25,6 @@
 //! Every transcendental comes from `tessera_rl_num::math` (frozen libm,
 //! ADR-0008); `sqrt` is the IEEE square root.
 
-// One expectation for the module, not one per item: the Gumbel sampler is
-// unused until the Gumbel root (G2) lands, and Rust 1.95 raises `dead_code`
-// on fewer of its items than 1.99, so per-item expectations are unfulfilled
-// on the minimum toolchain.
-#![cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the Gumbel sampler is used by the Gumbel root (G2)"
-    )
-)]
-
 use tessera_rl_num::math;
 use tessera_rl_num::rng::StepRng;
 
@@ -315,4 +303,39 @@ mod tests {
             assert!((freq - p).abs() < 0.01, "action {a}: {freq} vs {p}");
         }
     }
+
+    /// A `k` where the frozen `math::ln` and macOS's system `f64::ln`
+    /// differ by one ulp in `g` (found by an offline scan of 2 million
+    /// `k`; the system value is `0xbfdb_2e4d_6369_3595`): swapping the
+    /// frozen logarithm for `f64::ln` fails this pin on that platform.
+    /// Clippy's `disallowed_methods` (ADR-0008) guards the same swap
+    /// everywhere at build time.
+    #[test]
+    fn test_noise_gumbel_variate_where_system_libm_differs_bits_pinned() {
+        assert_eq!(
+            gumbel_of(0x0003_77b2_fd56_a5b1).to_bits(),
+            0xbfdb_2e4d_6369_3594
+        );
+    }
+
+    /// The first eight `g` of a fixed identity (seed 7, logical id 0,
+    /// step 0) on `StreamId::SEARCH`, as literal bits: pins the mapping
+    /// from the search stream to `g` by data.
+    #[test]
+    fn test_noise_gumbel_search_stream_first_values_bits_pinned() {
+        let mut g = [0.0; 8];
+        gumbel(&mut rng(7), &mut g);
+        assert_eq!(g.map(f64::to_bits), SEARCH_STREAM_G);
+    }
+
+    const SEARCH_STREAM_G: [u64; 8] = [
+        0x4002_3259_9cab_4158,
+        0x3fe3_9997_2004_92fc,
+        0xbf9b_9414_c384_e2dd,
+        0x3ff7_366c_c112_9a08,
+        0x3ff6_8075_bcb1_62de,
+        0x3ffc_01b8_b19e_84c6,
+        0x3ff2_13bc_b32a_deca,
+        0x3fea_f98e_0943_d8e2,
+    ];
 }
