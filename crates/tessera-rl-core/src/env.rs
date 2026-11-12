@@ -114,7 +114,9 @@ pub trait Environment: Sized + 'static {
         out: &mut StepOut<'_>,
     );
 
-    /// Writes the observation of `agent`.
+    /// Writes the observation of `agent`. Every leaf is zero on entry:
+    /// bytes left unwritten are zero in the output, no earlier content is
+    /// visible, and an implementation need not clear a leaf (ADR-0058).
     fn observe(
         cfg: &Self::Config,
         state: &Self::State,

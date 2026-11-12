@@ -99,6 +99,7 @@ impl<'a> ActionWriter<'a> {
 
 /// Writes one agent's observation, leaf by leaf, as raw little-endian
 /// bytes of the leaf dtype.
+/// The engine hands every leaf zeroed (ADR-0058).
 #[derive(Debug)]
 pub struct ObsWriter<'a, 'b, O> {
     leaves: &'a mut [&'b mut [u8]],
@@ -106,7 +107,8 @@ pub struct ObsWriter<'a, 'b, O> {
 }
 
 impl<'a, 'b, O> ObsWriter<'a, 'b, O> {
-    /// Engine-only: views over one agent's leaf rows.
+    /// Engine-only: views over one agent's leaf rows. The caller must zero the
+    /// leaves first; `observe` implementations rely on it (ADR-0058).
     #[doc(hidden)]
     #[must_use]
     #[inline]
