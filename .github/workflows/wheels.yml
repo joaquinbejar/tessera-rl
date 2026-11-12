@@ -74,6 +74,9 @@ jobs:
             limits: --cpuset-cpus=12-15 --init --user 1000:1000
             rustup_sha: b1c8cb14e30889e7e2999e6b69e62d9e9b9ffc0f4df8180564d306d9680e6c55
             uv_sha: f29c3e94ffabd7e6f3ba521dba169a9b7ec12100bf3257087f0f24f6123f3645
+            # x86-64 implements trapped FP exceptions: the unmasked FP
+            # boundary test must check the trap enables, never skip (#225).
+            expect_fp_traps: "1"
     container:
       image: ${{ matrix.image }}
       options: ${{ matrix.limits }}
@@ -82,6 +85,7 @@ jobs:
         shell: bash
     env:
       WHEEL_RUN: ${{ github.workspace }}/.wheel-run
+      TESSERA_EXPECT_FP_TRAPS: ${{ matrix.expect_fp_traps }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - run: scripts/wheel_job.sh "${{ matrix.target }}" manylinux_2_28 "${{ matrix.rustup_sha }}" "${{ matrix.uv_sha }}"
