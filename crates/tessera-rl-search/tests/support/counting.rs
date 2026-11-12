@@ -138,6 +138,7 @@ pub fn window<R>(f: impl FnOnce() -> R) -> (R, i64) {
     MAIN_BYTES.store(0, Ordering::SeqCst);
     FOREIGN_CALLS.store(0, Ordering::SeqCst);
     FOREIGN_BYTES.store(0, Ordering::SeqCst);
+    FOREIGN_NAME.lock().unwrap().1 = 0;
     MINE.with(|m| m.set(0));
     MEASURING.with(|m| m.set(true));
     WINDOW.store(true, Ordering::SeqCst);
