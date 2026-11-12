@@ -20,7 +20,7 @@ use tessera_rl_search::{EvaluatorError, Eviction};
 /// The state behind a `Search` object.
 pub(crate) type SearchInner = Inner<dyn SearchOps>;
 
-pub(crate) const SEARCH_KEYS: [&str; 12] = [
+pub(crate) const SEARCH_KEYS: [&str; 16] = [
     "env_id",
     "capacity",
     "batch",
@@ -33,6 +33,10 @@ pub(crate) const SEARCH_KEYS: [&str; 12] = [
     "noise_alpha",
     "noise_epsilon",
     "seed",
+    "root",
+    "gumbel_m",
+    "c_visit",
+    "c_scale",
 ];
 
 /// Applies the search options in `kw` to `args`.
@@ -73,6 +77,39 @@ pub(crate) fn apply_options(g: Gil, kw: &Kwargs<'_>, args: &mut SearchArgs) -> C
     if let Some(v) = kw.u64(g, "seed")? {
         args.seed = v;
     }
+    match kw.string(g, "root")?.as_deref() {
+        None => {}
+        Some("puct") => args.gumbel_root = false,
+        Some("gumbel") => args.gumbel_root = true,
+        Some(other) => {
+            return Err(error(
+                g,
+                Kind::Argument,
+                format!("root must be \"puct\" or \"gumbel\", not {other:?}"),
+            ));
+        }
+    }
+    let mut gumbel_keys = false;
+    if let Some(v) = kw.u32(g, "gumbel_m")? {
+        args.gumbel.m = v;
+        gumbel_keys = true;
+    }
+    if let Some(v) = kw.f64(g, "c_visit")? {
+        args.gumbel.c_visit = v;
+        gumbel_keys = true;
+    }
+    if let Some(v) = kw.f64(g, "c_scale")? {
+        args.gumbel.c_scale = v;
+        gumbel_keys = true;
+    }
+    if gumbel_keys && !args.gumbel_root {
+        // Never silently ignored: the keywords mean the Gumbel root.
+        return Err(error(
+            g,
+            Kind::Argument,
+            "gumbel_m, c_visit and c_scale need root=\"gumbel\"".to_owned(),
+        ));
+    }
     match (kw.f64(g, "noise_alpha")?, kw.f64(g, "noise_epsilon")?) {
         (Some(alpha), Some(epsilon)) => *args = args.clone().with_noise(alpha, epsilon),
         (None, None) => {}
@@ -87,7 +124,7 @@ pub(crate) fn apply_options(g: Gil, kw: &Kwargs<'_>, args: &mut SearchArgs) -> C
     Ok(())
 }
 
-/// `make_search(**kwargs)`: a PUCT search object.
+/// `make_search(**kwargs)`: a PUCT or Gumbel-root search object.
 pub(crate) fn make_search(g: Gil, kwargs: Option<Ref<'_>>) -> CResult<SearchInner> {
     let kw = Kwargs::parse(g, kwargs)?;
     kw.check(g, &[&SEARCH_KEYS])?;
@@ -274,6 +311,40 @@ pub(crate) fn select_action(g: Gil, inner: &SearchInner, args: Ref<'_>) -> CResu
     let t = capi::to_f64(g, t, "temperature")?;
     let a = inner.with(g, |ops| ops.select_action(t).map_err(|e| to_py(g, e)))?;
     capi::int_u64(g, a.into())
+}
+
+/// `improved_policy() -> list[float] | None`.
+pub(crate) fn improved_policy(g: Gil, inner: &SearchInner) -> CResult<Mine> {
+    inner.with(g, |ops| floats(g, ops.improved_policy()))
+}
+
+/// `considered() -> list[int] | None`.
+pub(crate) fn considered(g: Gil, inner: &SearchInner) -> CResult<Mine> {
+    inner.with(g, |ops| ints(g, ops.considered()))
+}
+
+/// `None`, or a list of the floats.
+pub(crate) fn floats(g: Gil, v: Option<Vec<f64>>) -> CResult<Mine> {
+    let Some(v) = v else {
+        return Ok(capi::none(g));
+    };
+    let list = capi::list(g)?;
+    for x in v {
+        capi::list_append(g, &list, &capi::float(g, x)?)?;
+    }
+    Ok(list)
+}
+
+/// `None`, or a list of the integers.
+pub(crate) fn ints(g: Gil, v: Option<Vec<u32>>) -> CResult<Mine> {
+    let Some(v) = v else {
+        return Ok(capi::none(g));
+    };
+    let list = capi::list(g)?;
+    for x in v {
+        capi::list_append(g, &list, &capi::int_u64(g, x.into())?)?;
+    }
+    Ok(list)
 }
 
 /// `calls() -> int`.

@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: MIT OR Apache-2.0
 """PUCT search over a Tessera environment (ADR-0043), with a Python
-evaluator.
+evaluator, and an optional Gumbel root.
 
 ``Search.run(evaluator)`` performs one search call. The evaluator is called
 once per batch of leaves as ``evaluator(obs, legal, hashes)``:
@@ -47,6 +47,18 @@ or an ``Exception`` subclass alike, rolls the call back and is raised
 unchanged. Building the evaluator's arguments and reading its response
 allocate: the engine's zero-allocation guarantee covers the search itself,
 not the Python boundary.
+
+The Gumbel root (``root="gumbel"``, with ``gumbel_m``, ``c_visit`` and
+``c_scale``) replaces PUCT at the root by Gumbel-top-k sampling with
+sequential halving; interior nodes stay PUCT. After a call,
+``improved_policy()`` is the training target ``pi'`` and ``considered()``
+the sampled actions. It refuses Dirichlet root noise (``noise_alpha``) and
+``select_action`` with ``temperature > 0`` (the Gumbel draw already is the
+sampling). The evaluator protocol is unchanged. Under the Gumbel root, a
+search whose root was reached by rerooting a kept subtree evaluates that
+root once more (one extra row); no method here reroots (``set_root``
+starts a fresh tree, evaluated under both roots), so from Python the rows
+per call are the same as under PUCT.
 """
 
 from __future__ import annotations
@@ -117,12 +129,23 @@ def _bridge(evaluator, actions: int, leaves, obs_bytes: int, raised: list):
     return call
 
 
+def _array(values, dtype) -> np.ndarray | None:
+    return None if values is None else np.asarray(values, dtype=dtype)
+
+
 class Search:
     """A PUCT search. ``env_id`` is the environment (``tessera/Connect4-v1``);
     options: ``capacity`` (nodes, default 4096), ``batch`` (children stepped
     per batch, default 8), ``eviction`` (``"strict"`` or ``"oldest"``),
     ``c_puct``, ``fpu``, ``virtual_loss``, ``batch_size``, ``simulations``,
     ``noise_alpha`` with ``noise_epsilon`` (root Dirichlet noise), ``seed``.
+
+    ``root`` is ``"puct"`` (the default) or ``"gumbel"``; the Gumbel root
+    takes ``gumbel_m`` (actions sampled, at least 1, default 16),
+    ``c_visit`` (default 50.0) and ``c_scale`` (default 1.0), both finite
+    and non-negative. Those three keywords without ``root="gumbel"``, and
+    ``noise_alpha`` with it, raise ``ArgumentError`` or ``SearchError``.
+
     The search starts at a fresh game; ``set_root`` moves it."""
 
     def __init__(self, env_id: str = "tessera/Connect4-v1", **options):
@@ -158,8 +181,23 @@ class Search:
 
     def select_action(self, temperature: float = 0.0) -> int:
         """The most visited action at 0, else a draw proportional to
-        ``N^(1/T)`` from the last call's search stream."""
+        ``N^(1/T)`` from the last call's search stream. Under the Gumbel
+        root: the sequential-halving winner, and ``temperature`` must be 0
+        (``SearchError`` otherwise)."""
         return self._native.select_action(float(temperature))
+
+    def improved_policy(self) -> np.ndarray | None:
+        """The last Gumbel call's improved policy ``pi'``: float64 of shape
+        ``(actions,)``, summing to 1 over the root's legal actions and 0 on
+        the illegal ones. ``None`` under PUCT, before the first call and
+        after ``set_root``. A fresh array on every call."""
+        return _array(self._native.improved_policy(), np.float64)
+
+    def considered(self) -> np.ndarray | None:
+        """The actions the last Gumbel call sampled (``S_0``), in
+        descending ``g + logit`` order: uint32 of shape ``(min(gumbel_m,
+        legal),)``. ``None`` as for ``improved_policy``."""
+        return _array(self._native.considered(), np.uint32)
 
     @property
     def calls(self) -> int:
@@ -190,12 +228,14 @@ class GroupFailure(NamedTuple):
 
 
 class SearchGroup:
-    """Independent PUCT searches whose leaves share one evaluator call per
+    """Independent PUCT (or Gumbel-root) searches whose leaves share one evaluator call per
     round (ADR-0045), for self-play throughput.
 
     ``trees`` slots, each a full ``Search`` with its own tree, counter and
     search stream. ``options`` are shared, and ``slot_options``, a list of
-    one dict per slot, updates them per slot. A group call runs one search
+    one dict per slot, updates them per slot (``root``, ``gumbel_m``,
+    ``c_visit`` and ``c_scale`` included; the Gumbel keywords need
+    ``root="gumbel"`` in the same dict or before it). A group call runs one search
     call on every active slot, interleaved in slot order. There is one
     root batch, then each slot's root noise. Each round then collects every
     slot's leaves, makes one evaluator call on the concatenated batch
@@ -272,6 +312,14 @@ class SearchGroup:
 
     def select_action(self, i: int, temperature: float = 0.0) -> int:
         return self._native.select_action(i, float(temperature))
+
+    def improved_policy(self, i: int) -> np.ndarray | None:
+        """Slot ``i``'s ``Search.improved_policy``."""
+        return _array(self._native.improved_policy(i), np.float64)
+
+    def considered(self, i: int) -> np.ndarray | None:
+        """Slot ``i``'s ``Search.considered``."""
+        return _array(self._native.considered(i), np.uint32)
 
     def calls(self, i: int) -> int:
         return self._native.calls(i)
