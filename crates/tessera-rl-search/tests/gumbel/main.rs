@@ -772,6 +772,9 @@ impl Evaluator<Connect4> for Sizes {
     }
 }
 
+/// The root row, then each batch's evaluated leaves.
+const BATCH_SIZES: &[usize] = &[1, 7, 8, 6, 8, 8, 4, 8, 8, 4, 3];
+
 #[test]
 fn test_gumbel_batches_never_cross_a_phase() {
     let mut m = c4("", gumbel(64, 8, 16));
@@ -787,4 +790,137 @@ fn test_gumbel_batches_never_cross_a_phase() {
     }
     assert!(seen.contains(&21), "{:?}", ev.sizes);
     assert_eq!(*seen.last().unwrap(), 64);
+    // Phases of 21, 20, 20 and 3 visits (m' = 7, n = 64), batch 8: a
+    // batch stops early on a repeated unexpanded root edge, and never
+    // passes a phase end.
+    assert_eq!(ev.sizes, BATCH_SIZES);
+}
+
+/// Answers like `Canned`, except for the record `target` from its
+/// second sighting on: other priors (reversed) and, when `value`, the
+/// negated value.
+struct Second {
+    inner: Canned,
+    target: u64,
+    seen: u32,
+    priors: bool,
+    value: bool,
+}
+
+impl Evaluator<Connect4> for Second {
+    fn evaluate(
+        &mut self,
+        leaves: &[Record<Connect4>],
+        priors: &mut [f64],
+        values: &mut [f64],
+    ) -> Result<(), EvaluatorError> {
+        self.inner.evaluate(leaves, priors, values)?;
+        for (i, r) in leaves.iter().enumerate() {
+            if r.hash().get() != self.target {
+                continue;
+            }
+            self.seen += 1;
+            if self.seen < 2 {
+                continue;
+            }
+            if self.priors {
+                priors[i * 7..i * 7 + 7].reverse();
+            }
+            if self.value {
+                values[i] = -values[i];
+            }
+        }
+        Ok(())
+    }
+}
+
+/// What a re-evaluated root leaves: tree, root priors, `pi'`, `S_0`.
+type Reeval = (u64, Vec<u64>, Vec<u64>, Vec<u32>);
+
+fn reeval_print(m: &C4) -> Reeval {
+    let root = m.pool().root();
+    (
+        m.pool().tree_hash(),
+        (0..7)
+            .map(|a| m.pool().edge_stats(root, a).unwrap().prior.to_bits())
+            .collect(),
+        m.improved_policy()
+            .unwrap()
+            .iter()
+            .map(|p| p.to_bits())
+            .collect(),
+        m.considered().unwrap().to_vec(),
+    )
+}
+
+/// Runs a Gumbel call, reroots on its chosen action, then runs again with an
+/// evaluator whose second answer for the new root changes its priors
+/// and/or its value; `group` drives both calls through a one-slot plus
+/// one-other-slot group (the shared root batch).
+fn reeval_case(group: bool, priors: bool, value: bool) -> Reeval {
+    // 5 simulations over 7 actions: some root edges stay unvisited, so
+    // v_root enters pi' through v_mix.
+    let cfg = gumbel(5, 8, 16);
+    let mut first = c4("33", cfg);
+    first.run(&mut Canned::default()).unwrap();
+    let a = first.select_action(0.0).unwrap();
+    let child = first.pool().child(first.pool().root(), a).unwrap().unwrap();
+    let target = first.pool().record(child).unwrap().hash().get();
+    let mut ev = Second {
+        inner: Canned::default(),
+        target,
+        seen: 0,
+        priors,
+        value,
+    };
+    if group {
+        let mut g = SearchGroup::new(
+            &Connect4Config {},
+            vec![c4("", cfg), c4("33", cfg)],
+            DEFAULT_GROUP_BUDGET,
+        )
+        .unwrap();
+        g.run(&mut ev).unwrap();
+        let m = g.slot_mut(1).unwrap();
+        let child = m.pool().child(m.pool().root(), a).unwrap().unwrap();
+        m.pool_mut().reroot(child).unwrap();
+        g.run(&mut ev).unwrap();
+        assert_eq!(ev.seen, 2, "seen as a leaf, then once as the root");
+        reeval_print(g.slot(1).unwrap())
+    } else {
+        let mut m = c4("33", cfg);
+        m.run(&mut ev).unwrap();
+        let child = m.pool().child(m.pool().root(), a).unwrap().unwrap();
+        m.pool_mut().reroot(child).unwrap();
+        m.run(&mut ev).unwrap();
+        assert_eq!(ev.seen, 2, "seen as a leaf, then once as the root");
+        reeval_print(&m)
+    }
+}
+
+/// The root re-evaluation after a reroot keeps the priors of the first
+/// evaluation (other priors in the second answer change nothing) and
+/// takes `v_root` from the second answer (another value changes `pi'`),
+/// solo and in a group's shared root batch.
+#[test]
+fn test_gumbel_reroot_reevaluation_keeps_first_priors_and_takes_second_value() {
+    for group in [false, true] {
+        let same = reeval_case(group, false, false);
+        assert_eq!(
+            reeval_case(group, true, false),
+            same,
+            "group {group}: priors kept"
+        );
+        let value_only = reeval_case(group, false, true);
+        assert_ne!(
+            value_only.2, same.2,
+            "group {group}: v_root is the second value"
+        );
+        assert_eq!(value_only.1, same.1);
+        assert_eq!(
+            reeval_case(group, true, true),
+            value_only,
+            "group {group}: only the value is taken"
+        );
+    }
 }

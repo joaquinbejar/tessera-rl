@@ -20,12 +20,15 @@ use tessera_rl_engine::{ActionInput, AutoReset, EnvPool, Masked, PoolOptions, Re
 use tessera_rl_games::{Connect4, Connect4Config};
 use tessera_rl_num::identity::Seed;
 use tessera_rl_search::{
-    DEFAULT_GROUP_BUDGET, Eviction, Mcts, PuctConfig, SearchGroup, SearchOptions, SearchPool,
+    DEFAULT_GROUP_BUDGET, Eviction, GUMBEL_BYTES_PER_ACTION, GumbelConfig, Mcts, PuctConfig,
+    RootSelection, SearchGroup, SearchOptions, SearchPool,
 };
 
-/// Live heap bytes of the whole process (this binary's tests run one at a
-/// time: see `main`).
+/// Live heap bytes of the whole process; the tests that measure it hold
+/// `SERIAL`, so they run one at a time.
 static LIVE: AtomicI64 = AtomicI64::new(0);
+
+static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 struct Counting;
 
@@ -93,9 +96,22 @@ fn config(simulations: u32) -> PuctConfig {
 
 /// The root record is built before counting starts.
 fn measured(root: &Record<Connect4>, trees: usize, capacity: u32, batch: u32) -> (i64, u64) {
+    measured_with(root, trees, capacity, batch, false)
+}
+
+fn measured_with(
+    root: &Record<Connect4>,
+    trees: usize,
+    capacity: u32,
+    batch: u32,
+    gumbel: bool,
+) -> (i64, u64) {
     let before = LIVE.load(Ordering::Relaxed);
     let mut cfg = config(32);
     cfg.batch_size = batch;
+    if gumbel {
+        cfg.root = RootSelection::Gumbel(GumbelConfig::default());
+    }
     let slots = (0..trees)
         .map(|_| {
             let mut o = SearchOptions::new(
@@ -129,6 +145,7 @@ fn measured(root: &Record<Connect4>, trees: usize, capacity: u32, batch: u32) ->
 
 #[test]
 fn test_group_memory_bound_covers_the_retained_heap() {
+    let _serial = SERIAL.lock().unwrap();
     let root = record("");
     for (trees, capacity, batch) in [
         (1, 8, 8),
@@ -139,6 +156,28 @@ fn test_group_memory_bound_covers_the_retained_heap() {
         (8, 8_192, 8),
     ] {
         let (live, bound) = measured(&root, trees, capacity, batch);
+        assert!(
+            i64::try_from(bound).unwrap() >= live,
+            "trees {trees} capacity {capacity} batch {batch}: bound {bound} < retained {live}"
+        );
+    }
+}
+
+/// A Gumbel slot's bound exceeds the same slot's PUCT bound by exactly
+/// `GUMBEL_BYTES_PER_ACTION` per action, and still covers the retained
+/// heap.
+#[test]
+fn test_group_memory_gumbel_term_is_exact_and_covers_the_retained_heap() {
+    let _serial = SERIAL.lock().unwrap();
+    let root = record("");
+    for (trees, capacity, batch) in [(1, 8, 8), (4, 64, 1), (3, 4_096, 16)] {
+        let (_, puct) = measured_with(&root, trees, capacity, batch, false);
+        let (live, bound) = measured_with(&root, trees, capacity, batch, true);
+        assert_eq!(
+            bound - puct,
+            GUMBEL_BYTES_PER_ACTION * 7 * u64::try_from(trees).unwrap(),
+            "trees {trees}"
+        );
         assert!(
             i64::try_from(bound).unwrap() >= live,
             "trees {trees} capacity {capacity} batch {batch}: bound {bound} < retained {live}"

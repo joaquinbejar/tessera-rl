@@ -44,8 +44,10 @@ use tessera_rl_num::rng::StepRng;
 use crate::error::SearchError;
 use crate::noise;
 
-/// Bytes per action of one tree's Gumbel buffers, with twice the
-/// headroom (counted in the group memory bound for Gumbel slots only).
+/// Bytes per action counted for one tree's Gumbel buffers in the group
+/// memory bound (Gumbel slots only). The buffers take 80 bytes per action
+/// (`g`, logits and priors, 24; the root edge copies, 24; four `u32`
+/// action lists, 16; two policies, 16), so 128 leaves 1.6 times that.
 pub const GUMBEL_BYTES_PER_ACTION: u64 = 128;
 
 /// The Gumbel root's options.
@@ -570,6 +572,64 @@ mod tests {
         let some = [FLAT, none[0], none[0]];
         let d = decision(&GumbelConfig::default(), &some, &[0.0, 0.5, 0.5], 0.375);
         assert_eq!(d.v_mix.to_bits(), (0.375_f64 / 3.0).to_bits());
+    }
+
+    /// Drives the phases with every visit backed up and returns
+    /// `(survivors, phase_len)` per phase.
+    fn phases(m: u32, actions: usize, n: u32) -> Vec<(usize, u32)> {
+        let mut g = Gumbel::new(
+            GumbelConfig {
+                m,
+                ..GumbelConfig::default()
+            },
+            actions,
+            n,
+        );
+        g.setup(|_| (0.1, true));
+        let mut out = Vec::new();
+        while g.phase_left() > 0 {
+            out.push((g.survivors.len(), g.phase_len));
+            g.backed_up(idx(g.phase_len));
+            g.advance(|_| FLAT, Some(0.0)).unwrap();
+        }
+        out
+    }
+
+    /// The budget left after the last halving phase goes to the final
+    /// survivor; the sequences agree with an independent script.
+    #[test]
+    fn test_gumbel_phase_schedule_pinned_when_budget_is_left_after_halving() {
+        assert_eq!(phases(16, 7, 64), [(7, 21), (4, 20), (2, 20), (1, 3)]);
+        assert_eq!(
+            phases(16, 16, 100),
+            [(16, 16), (8, 24), (4, 24), (2, 24), (1, 12)]
+        );
+    }
+
+    /// The note's operation order `(v_root + (n / pi_vis) * pq) / (1 + n)`
+    /// differs in the last bit from `n * (pq / pi_vis)` here.
+    #[test]
+    fn test_gumbel_v_mix_operation_order_bits_pinned() {
+        let edges = [0.5, -0.25, 0.1].map(|value| RootEdge {
+            visits: 1,
+            value,
+            virtual_loss: 0,
+        });
+        let d = decision(&GumbelConfig::default(), &edges, &[0.3, 0.25, 0.2], 0.0625);
+        // The other order gives 0x3fbf_851e_b851_eb86.
+        assert_eq!(d.v_mix.to_bits(), 0x3fbf_851e_b851_eb85);
+    }
+
+    /// An illegal action with a positive prior is never considered and
+    /// gets `pi' = 0`.
+    #[test]
+    fn test_gumbel_illegal_action_with_prior_is_excluded() {
+        let mut g = Gumbel::new(GumbelConfig::default(), 4, 8);
+        g.setup(|a| (0.25, a != 2));
+        assert_eq!(g.considered, [0, 1, 3]);
+        g.finish(|_| FLAT, Some(0.0)).unwrap();
+        assert_eq!(g.policy[2].to_bits(), 0.0_f64.to_bits());
+        assert!(g.policy.iter().enumerate().all(|(a, &p)| a == 2 || p > 0.0));
     }
 
     #[test]
