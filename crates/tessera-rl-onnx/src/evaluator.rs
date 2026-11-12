@@ -284,21 +284,16 @@ pub(crate) fn build_session(
     options: &OnnxOptions,
 ) -> Result<Session, Built> {
     let model = |e: &dyn std::fmt::Display| Built::Model(e.to_string());
-    let cpu: Vec<_> = env
-        .devices()
-        .filter(|d| d.ep().is_ok_and(|ep| ep == CPU_PROVIDER))
-        .collect();
-    if cpu.len() != 1 {
-        return Err(Built::Provider(format!(
-            "{} devices of {CPU_PROVIDER}, expected exactly one",
-            cpu.len()
-        )));
-    }
+    let cpu = single_cpu(env.devices().map(|d| {
+        let ep = d.ep().ok().map(str::to_owned);
+        (d, ep)
+    }))
+    .map_err(Built::Provider)?;
     let builder = Session::builder(env).map_err(|e| model(&e))?;
     let mut builder = builder
         .with_auto_device(AutoDevicePolicy::PreferCPU)
         .map_err(|e| Built::Provider(e.to_string()))?
-        .with_devices(cpu, None)
+        .with_devices([cpu], None)
         .map_err(|e| Built::Provider(e.to_string()))?
         .with_optimization_level(GraphOptimizationLevel::Level1)
         .map_err(|e| model(&e))?
@@ -311,6 +306,22 @@ pub(crate) fn build_session(
         .with_inter_op_spinning(false)
         .map_err(|e| model(&e))?;
     builder.commit_from_memory(bytes).map_err(|e| model(&e))
+}
+
+/// The one device whose execution provider is the CPU one, from
+/// `(device, provider name)` pairs; none or several is an error.
+pub(crate) fn single_cpu<T>(
+    devices: impl IntoIterator<Item = (T, Option<String>)>,
+) -> Result<T, String> {
+    let mut cpu = devices
+        .into_iter()
+        .filter(|(_, ep)| ep.as_deref() == Some(CPU_PROVIDER))
+        .map(|(d, _)| d);
+    match (cpu.next(), cpu.next()) {
+        (Some(device), None) => Ok(device),
+        (None, _) => Err(format!("no device of {CPU_PROVIDER}")),
+        (Some(_), Some(_)) => Err(format!("more than one device of {CPU_PROVIDER}")),
+    }
 }
 
 fn element_type(dtype: DType) -> Option<TensorElementType> {

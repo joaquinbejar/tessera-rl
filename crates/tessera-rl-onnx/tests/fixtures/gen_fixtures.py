@@ -14,6 +14,12 @@ All models take Connect4's observation, input `board`, uint8 [N, 2, 6, 7]:
 - wrong_actions.onnx: as constant, but priors are [N, 6].
 - external.onnx with external.bin: as constant, but the priors' constant
   row comes from an initializer stored in an external-data file.
+- mlp_connect4.onnx: a small float32 MLP (84 -> 32 -> 7 priors by softmax,
+  and a tanh value [N, 1]) with weights from a seeded generator, for the
+  same-machine repeatability test.
+
+Two fixtures come from spike S1's generator, not from this script:
+s1_mlp.onnx and s1_fuse.onnx (their sha256 are checked by the tests).
 """
 
 import os
@@ -57,6 +63,33 @@ def model(input_name="board", actions=7, external=False):
     return m
 
 
+def mlp_connect4():
+    rng = np.random.default_rng(2026)
+    def w(name, *shape):
+        return numpy_helper.from_array((rng.standard_normal(shape) * 0.2).astype(np.float32), name)
+    board = helper.make_tensor_value_info("board", TensorProto.UINT8, ["N", 2, 6, 7])
+    priors = helper.make_tensor_value_info("priors", TensorProto.FLOAT, ["N", 7])
+    value = helper.make_tensor_value_info("value", TensorProto.FLOAT, ["N", 1])
+    flat = numpy_helper.from_array(np.array([-1, 84], dtype=np.int64), "flat")
+    nodes = [
+        helper.make_node("Cast", ["board"], ["x"], to=TensorProto.FLOAT),
+        helper.make_node("Reshape", ["x", "flat"], ["x2"]),
+        helper.make_node("Gemm", ["x2", "w1", "b1"], ["h"]),
+        helper.make_node("Relu", ["h"], ["hr"]),
+        helper.make_node("Gemm", ["hr", "w2", "b2"], ["logits"]),
+        helper.make_node("Softmax", ["logits"], ["priors"], axis=1),
+        helper.make_node("Gemm", ["hr", "w3", "b3"], ["v"]),
+        helper.make_node("Tanh", ["v"], ["value"]),
+    ]
+    inits = [flat, w("w1", 84, 32), w("b1", 32), w("w2", 32, 7), w("b2", 7), w("w3", 32, 1), w("b3", 1)]
+    graph = helper.make_graph(nodes, "tessera_onnx_mlp", [board], [priors, value], initializer=inits)
+    m = helper.make_model(graph, producer_name="tessera-rl gen_fixtures.py",
+                          opset_imports=[helper.make_opsetid("", OPSET)])
+    m.ir_version = IR
+    onnx.checker.check_model(m)
+    return m
+
+
 def main(out):
     out = Path(out)
     out.mkdir(parents=True, exist_ok=True)
@@ -65,6 +98,7 @@ def main(out):
     onnx.save(model(), "constant.onnx")
     onnx.save(model(input_name="obs"), "wrong_input.onnx")
     onnx.save(model(actions=6), "wrong_actions.onnx")
+    onnx.save(mlp_connect4(), "mlp_connect4.onnx")
     if Path("external.bin").exists():
         Path("external.bin").unlink()
     onnx.save(model(), "external.onnx", save_as_external_data=True,
