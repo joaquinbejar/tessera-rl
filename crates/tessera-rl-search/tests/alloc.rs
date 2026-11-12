@@ -3,73 +3,36 @@
 //! Expansion, eviction, re-rooting and clearing never allocate after
 //! construction (ADR-0004, ADR-0043 section 1).
 //!
-//! This file installs a counting global allocator for this test binary
-//! only; it is test code, not one of the audited `unsafe` modules, and its
-//! `unsafe` only forwards to the system allocator.
+//! The counting allocator of `support/counting.rs` attributes allocator
+//! calls by thread (issue #43). This binary holds a single measuring test,
+//! which runs each scenario (the former tests, by name) with its own
+//! objects and windows, and reports every failing scenario together.
+
+#![expect(
+    clippy::unwrap_used,
+    reason = "test scenarios: a failure is the assertion"
+)]
+
+#[path = "support/counting.rs"]
+mod counting;
 
 use core::num::NonZeroU32;
-use std::alloc::{GlobalAlloc, Layout, System};
-use std::cell::Cell;
+use counting::window;
 
 use tessera_rl_engine::{EnvPool, Masked, PoolOptions, Reseed};
 use tessera_rl_games::{Connect4, Connect4Config};
 use tessera_rl_num::identity::Seed;
 use tessera_rl_search::{Eviction, SearchOptions, SearchPool};
 
-thread_local! {
-    static COUNTING: Cell<bool> = const { Cell::new(false) };
-    static ALLOCATIONS: Cell<u64> = const { Cell::new(0) };
-}
-
-struct Counting;
-
-#[expect(unsafe_code, reason = "test-only counting allocator")]
-// SAFETY: every method forwards to `System` with the same arguments; the
-// counters are const-initialized thread locals, which never allocate.
-unsafe impl GlobalAlloc for Counting {
-    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        count();
-        // SAFETY: forwarded unchanged; the caller upholds `alloc`'s contract.
-        unsafe { System.alloc(layout) }
-    }
-
-    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
-        // SAFETY: `ptr` was allocated by `System` with `layout`.
-        unsafe { System.dealloc(ptr, layout) }
-    }
-
-    unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
-        count();
-        // SAFETY: forwarded unchanged; the caller upholds `realloc`'s contract.
-        unsafe { System.realloc(ptr, layout, new_size) }
-    }
-}
-
-fn count() {
-    let _ = COUNTING.try_with(|on| {
-        if on.get() {
-            let _ = ALLOCATIONS.try_with(|n| n.set(n.get() + 1));
-        }
-    });
-}
-
-#[global_allocator]
-static GLOBAL: Counting = Counting;
-
+/// Allocation calls of the counted threads while `f` runs.
 fn allocations(f: impl FnOnce()) -> u64 {
-    ALLOCATIONS.with(|n| n.set(0));
-    COUNTING.with(|on| on.set(true));
-    f();
-    COUNTING.with(|on| on.set(false));
-    ALLOCATIONS.with(Cell::get)
+    window(f).1.calls
 }
 
-#[test]
 fn test_counter_detects_heap_use() {
     assert!(allocations(|| drop(std::hint::black_box(vec![1u8; 16]))) > 0);
 }
 
-#[test]
 fn test_search_expand_evict_reroot_and_clear_do_not_allocate() {
     let mut p = EnvPool::<Connect4, Masked>::with_masks(
         Connect4Config {},
@@ -125,7 +88,6 @@ impl tessera_rl_search::Evaluator<Connect4> for Uniform {
     }
 }
 
-#[test]
 fn test_search_mcts_run_with_eviction_and_noise_does_not_allocate() {
     let mut p = EnvPool::<Connect4, Masked>::with_masks(
         Connect4Config {},
@@ -156,7 +118,6 @@ fn test_search_mcts_run_with_eviction_and_noise_does_not_allocate() {
 
 /// The Gumbel root (draws, top-k, halving, completed Q, `pi'`, the root
 /// re-evaluation after a reroot) allocates nothing per call.
-#[test]
 #[expect(clippy::many_single_char_names, reason = "as the tests above")]
 fn test_search_mcts_gumbel_run_with_reroot_does_not_allocate() {
     let mut p = EnvPool::<Connect4, Masked>::with_masks(
@@ -221,7 +182,6 @@ impl tessera_rl_search::Evaluator<Connect4> for Reads {
     }
 }
 
-#[test]
 #[expect(clippy::many_single_char_names, reason = "test setup")]
 fn test_search_mcts_batch_evaluator_path_does_not_allocate_and_leaves_no_virtual_loss() {
     let mut p = EnvPool::<Connect4, Masked>::with_masks(
@@ -249,4 +209,36 @@ fn test_search_mcts_batch_evaluator_path_does_not_allocate_and_leaves_no_virtual
     for a in 0..7 {
         assert_eq!(m.pool().edge_stats(r, a).unwrap().virtual_loss, 0);
     }
+}
+
+/// The scenarios this binary runs.
+const SCENARIOS: usize = 5;
+
+#[test]
+fn test_search_alloc_scenarios_do_not_allocate() {
+    counting::scenarios(
+        SCENARIOS,
+        &[
+            (
+                "test_counter_detects_heap_use",
+                test_counter_detects_heap_use,
+            ),
+            (
+                "test_search_expand_evict_reroot_and_clear_do_not_allocate",
+                test_search_expand_evict_reroot_and_clear_do_not_allocate,
+            ),
+            (
+                "test_search_mcts_run_with_eviction_and_noise_does_not_allocate",
+                test_search_mcts_run_with_eviction_and_noise_does_not_allocate,
+            ),
+            (
+                "test_search_mcts_gumbel_run_with_reroot_does_not_allocate",
+                test_search_mcts_gumbel_run_with_reroot_does_not_allocate,
+            ),
+            (
+                "test_search_mcts_batch_evaluator_path_does_not_allocate_and_leaves_no_virtual_loss",
+                test_search_mcts_batch_evaluator_path_does_not_allocate_and_leaves_no_virtual_loss,
+            ),
+        ],
+    );
 }
