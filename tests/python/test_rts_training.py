@@ -430,7 +430,7 @@ def test_rts_training_train_body_wires_its_parts(monkeypatch):
     (lr_at(0..2)), the hand-off from next_state to update, one rng passed to
     every update, one CPU thread, envs closed and the agent returned."""
     h = Hyper(num_envs=2, num_steps=4, size=8, max_units=8, total_steps=3 * 2 * 4)
-    calls, seen = [], []
+    calls, seen, opts = [], [], []
 
     class RecSeats:
         def __init__(self, hh, seed):
@@ -454,6 +454,7 @@ def test_rts_training_train_body_wires_its_parts(monkeypatch):
     def rec_update(ag, opt, hh, batch, nv, nd, rng):
         calls.append(("update",))
         seen.append((opt.param_groups[0]["lr"], nv.tolist(), nd.tolist(), id(rng), torch.get_num_threads()))
+        opts.append((type(opt), opt.defaults["eps"], opt.defaults["lr"]))
         return {}
 
     monkeypatch.setattr(rts_training, "Seats", RecSeats)
@@ -473,3 +474,5 @@ def test_rts_training_train_body_wires_its_parts(monkeypatch):
     assert all(s[2] == [1.0, 0.0] for s in seen)
     assert len({s[3] for s in seen}) == 1
     assert all(s[4] == 1 for s in seen)
+    # TR on #214: the optimizer and its eps are CleanRL's, frozen by the protocol.
+    assert opts and all(o == (torch.optim.Adam, 1e-5, h.learning_rate) for o in opts)
