@@ -42,7 +42,7 @@ run_mode() {
         export "$@"
         export CARGO_TARGET_DIR="$root/target/gungraun-profile-$mode"
         # Show that the profile override reached rustc.
-        cargo bench --locked --no-run -v "${benches[@]}" 2>&1 >/dev/null \
+        CARGO_TERM_COLOR=never cargo bench --locked --no-run -v "${benches[@]}" 2>&1 >/dev/null \
             | grep -E 'Running .*crate-name (tessera_rl_(games|search)|search_instructions) ' \
             | grep -oE 'crate-name [a-z_]+|-C (codegen-units|lto)=[^ ]+' | paste -sd' ' \
             | sed 's/^/gungraun-profiles: rustc flags ('"$mode"'): /'
