@@ -420,8 +420,8 @@ fn draw_pixels(cfg: &SnakeConfig, s: &SnakeState, me: usize, bytes: &mut [u8]) {
     }
 }
 
+/// `bytes` is zero on entry (ADR-0058): only the set flags are written.
 fn draw_flags(cfg: &SnakeConfig, s: &SnakeState, me: usize, bytes: &mut [u8]) {
-    bytes.fill(0);
     let cells = cfg.cells() as usize;
     let mut flag = |plane: usize, cell: u16| {
         let at = (plane * cells + usize::from(cell)) * 4;
