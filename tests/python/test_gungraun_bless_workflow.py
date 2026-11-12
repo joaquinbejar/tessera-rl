@@ -181,3 +181,27 @@ def test_gungraun_bless_no_run_block_calls_git():
     # first run on main. No step may depend on git working there.
     for script in _run_scripts(BLESS):
         assert not re.search(r"(^|[\s;&|(`$])git(\s|$)", script), script
+
+def _indent(line):
+    return len(line) - len(line.lstrip())
+
+
+def test_gungraun_bless_expressions_only_in_step_with_and_env_values():
+    # Allow-list: an expression may appear only as the value of a key under
+    # a step's `with:` or `env:` (step keys at 8 spaces, their entries at 10).
+    # Anywhere else (a run script, a shell, a name, an if, the job) it fails.
+    lines = BLESS.splitlines()
+    found = 0
+    for i, line in enumerate(lines):
+        if "${{" not in line:
+            continue
+        found += 1
+        assert _indent(line) == 10 and re.match(r"^ {10}[A-Za-z0-9_-]+: ", line), (i + 1, line)
+        parent = next(lines[j] for j in range(i - 1, -1, -1) if lines[j].strip() and _indent(lines[j]) < 10)
+        assert parent in ("        with:", "        env:"), (i + 1, line, parent)
+    assert found == 5
+
+
+def test_gungraun_bless_no_step_or_job_sets_a_shell():
+    assert not re.search(r"^\s*(?:- )?shell:", BLESS, re.M)
+    assert "defaults:" not in BLESS
