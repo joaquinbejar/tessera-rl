@@ -23,8 +23,12 @@ Items 5 (the Python suite) and 6 (the num crate's tests under the profile) are
 commands of the wheel job, not of this tool. A difference blocks the wheel and is
 a bug; the goldens are never re-blessed for it.
 
-Discrete actions only: an environment with continuous actions (Pendulum,
-``CONTINUOUS_GAP``) needs its own action path here, a stated gap.
+One continuous float32 head (``action_bounds``, Pendulum) takes
+``low + (high - low) * k / 2**16`` with ``k`` in ``[0, 2**16]`` drawn from
+(instance, slot, t) alone (``continuous_action``): every value is an exact
+float32 inside the bounds, computed by exact binary arithmetic, never by a
+platform-dependent float operation. Every mode runs for it too, and no
+registered environment is a gap.
 """
 
 from __future__ import annotations
@@ -33,6 +37,7 @@ import argparse
 import hashlib
 import json
 import sys
+from typing import NamedTuple
 
 WORKERS = (0, 1, 2, 7, 64)
 AUTO_RESET = ("next_step", "same_step")
@@ -46,10 +51,8 @@ SNAPSHOT_STEPS = (50, 200)
 CONTINUE_AT = 100
 CONTINUE_STEPS = 20
 
-#: Registered environments this tool cannot drive yet (discrete actions only).
-CONTINUOUS_GAP = frozenset({"tessera/Pendulum-v1"})
-#: Every stated gap.
-GAPS = CONTINUOUS_GAP
+#: Steps of the continuous action grid: ``k / 2**CONTINUOUS_BITS`` of the range.
+CONTINUOUS_BITS = 16
 
 ENVS = {
     "cartpole": ("tessera/CartPole-v1", {}),
@@ -71,7 +74,15 @@ ENVS = {
     # determinism of the protocol-size environment is covered by the RTS
     # goldens, not by this tool.
     "rts": ("tessera/RTS-v1", {"size": 12, "max_units": 8}),
+    "pendulum": ("tessera/Pendulum-v1", {}),
 }
+
+
+class Continuous(NamedTuple):
+    """The layout of one continuous float32 head: its inclusive bounds."""
+
+    low: float
+    high: float
 
 
 def mix(x: int) -> int:
@@ -91,10 +102,34 @@ def action(instance: int, slot: int, t: int, choices: int, legal) -> int:
     return allowed[x % len(allowed)] if allowed else 0
 
 
+def continuous_action(instance: int, slot: int, t: int, bounds: Continuous) -> float:
+    """A continuous action from (instance, slot, t) alone: the grid point
+    ``low + (high - low) * k / 2**16``, ``k`` in ``[0, 2**16]``.
+
+    No platform-dependent float operation is involved: ``k`` is a small
+    integer (exact as a double), dividing by a power of two is exact, and for
+    bounds whose range and low have few significant bits (Pendulum's
+    ``(-2, 2)``: every value is a multiple of ``2**-14`` below 4 in
+    magnitude, 17 significant bits at most) the product and the sum are
+    exact in IEEE double. The result is checked to be an exact float32 inside
+    the bounds, so a rounding anywhere raises instead of passing silently."""
+    import numpy as np
+
+    low, high = bounds
+    k = mix((instance << 40) ^ (slot << 32) ^ t ^ SEED) % ((1 << CONTINUOUS_BITS) + 1)
+    value = low + (high - low) * (k / (1 << CONTINUOUS_BITS))
+    if not (low <= value <= high) or float(np.float32(value)) != value:
+        raise ValueError(f"continuous action {value!r} is not an exact float32 in [{low}, {high}]")
+    return value
+
+
 def _layout(env):
-    """The multi-head layout of ``env`` (``None`` for one discrete head):
+    """``Continuous`` bounds for one continuous head, else the multi-head layout of ``env`` (``None`` for one discrete head):
     the heads of one entity group as ``(offset, parents, size)``, the period
     of an entity block in the mask row, and the entity count."""
+    bounds = getattr(env, "action_bounds", None)
+    if bounds is not None:
+        return Continuous(float(bounds[0]), float(bounds[1]))
     nvec = tuple(env.action_nvec)
     if len(nvec) <= 1:
         return None
@@ -135,7 +170,10 @@ def multi_action(instance: int, slot: int, t: int, layout, row) -> list[int]:
 
 def actions_for(ids, step, agents: int, choices: int, t_of, layout=None):
     """One action per (instance, agent) row; with ``layout`` (multi-head),
-    an array ``(rows, agents, heads)`` of ``multi_action`` rows."""
+    an array ``(rows, agents, heads)`` of ``multi_action`` rows; with
+    ``Continuous`` bounds, one ``continuous_action`` per row."""
+    if isinstance(layout, Continuous):
+        return [continuous_action(int(instance), slot, t_of(int(instance)), layout) for instance in ids for slot in range(agents)]
     if layout is not None:
         import numpy as np
 
@@ -195,7 +233,10 @@ def run_sync(env, steps: int = STEPS) -> dict:
 def _array(acts, env):
     import numpy as np
 
-    if _layout(env) is not None:
+    layout = _layout(env)
+    if isinstance(layout, Continuous):
+        return np.array(acts, np.float32).reshape(-1, env.agents)
+    if layout is not None:
         return acts
     return np.array(acts, np.int32).reshape(-1, env.agents)
 
@@ -297,7 +338,7 @@ def fork_equal(t, name: str, auto_reset: str) -> bool:
     for s in range(31, 41):
         first = actions_for([0], _rows(step, [0]), env.agents, env.action_choices, lambda _: s, _layout(env))
         rest = actions_for(range(2, NUM_ENVS), _rows(step, range(2, NUM_ENVS)), env.agents, env.action_choices, lambda _: s, _layout(env))
-        acts = first * 2 + rest if _layout(env) is None else np.concatenate([first, first, rest])
+        acts = first * 2 + rest if _layout(env) is None or isinstance(_layout(env), Continuous) else np.concatenate([first, first, rest])
         step = env.step(_array(acts, env))
         same &= step.rewards[0].tobytes() == step.rewards[1].tobytes()
         same &= all(v[0].tobytes() == v[1].tobytes() for v in step.observations.values())

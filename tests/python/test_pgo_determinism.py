@@ -81,8 +81,7 @@ def test_pgo_determinism_actions_are_legal_and_fixed():
 
 
 def test_pgo_determinism_rts_is_covered_not_a_gap():
-    assert "tessera/RTS-v1" not in det.GAPS and det.GAPS == det.CONTINUOUS_GAP
-    assert not hasattr(det, "MULTI_HEAD_GAP")
+    assert not hasattr(det, "GAPS") and not hasattr(det, "MULTI_HEAD_GAP")
     assert ("tessera/RTS-v1", {"size": 12, "max_units": 8}) in det.ENVS.values()
 
 
@@ -160,7 +159,7 @@ def test_pgo_determinism_covers_every_registered_environment():
     block = source[source.index("makers = {") :]
     block = block[: block.index("}")]
     registered = set(re.findall(r'"(tessera/[^"]+)"', block))
-    assert registered and registered - det.GAPS == {env_id for env_id, _ in det.ENVS.values()}
+    assert registered and registered == {env_id for env_id, _ in det.ENVS.values()}
 
 
 class FakeStep(NamedTuple):
@@ -257,3 +256,76 @@ def test_pgo_determinism_layout_one_entity_needs_no_private_mask_length():
     stub = _Stub((3, 5), [(0, (), 3), (3, (3,), 5)], 2)
     group, period, entities = det._layout(stub)
     assert list(group) == [(0, (), 3), (3, (3,), 5)] and period == 0 and entities == 1
+
+
+def test_pgo_determinism_pendulum_is_covered_not_a_gap():
+    assert not hasattr(det, "CONTINUOUS_GAP") and not hasattr(det, "GAPS")
+    assert ("tessera/Pendulum-v1", {}) in det.ENVS.values()
+
+
+@pytest.fixture(scope="module")
+def pendulum_report():
+    return det.record(t, envs=("pendulum",), workers=(0, 2), steps=12)
+
+
+def test_pgo_determinism_pendulum_every_mode_gives_the_sync_trajectory(pendulum_report):
+    runs, checks = pendulum_report["runs"], pendulum_report["checks"]
+    assert checks and all(v is True for v in checks.values()), [k for k, v in checks.items() if v is not True]
+    for auto in det.AUTO_RESET:
+        sync = runs[f"pendulum/{auto}/sync/0/owned"]["trace"]
+        for mode in ("sync/2/borrowed", "pipelined/2/owned", "pipelined/2/borrowed", "async/2/owned", "async/2/borrowed"):
+            assert runs[f"pendulum/{auto}/{mode}"]["trace"] == sync, mode
+
+
+def test_pgo_determinism_pendulum_record_is_stable(pendulum_report):
+    again = det.record(t, envs=("pendulum",), workers=(0, 2), steps=12)
+    assert det.differences(pendulum_report, again) == []
+
+
+PENDULUM = det.Continuous(-2.0, 2.0)
+
+
+def test_pgo_determinism_continuous_layout_reads_the_bounds():
+    env = t.make("tessera/Pendulum-v1", num_envs=2, seed=det.SEED)
+    try:
+        assert det._layout(env) == PENDULUM
+    finally:
+        env.close()
+
+
+def test_pgo_determinism_continuous_actions_are_in_bounds_exact_and_fixed():
+    values = [det.continuous_action(i, s, step, PENDULUM) for i in range(16) for s in range(2) for step in range(1, 60)]
+    assert all(-2.0 <= v <= 2.0 and float(np.float32(v)) == v for v in values)
+    assert len(set(values)) > 100
+    assert values == [det.continuous_action(i, s, step, PENDULUM) for i in range(16) for s in range(2) for step in range(1, 60)]
+    # Grid points: low + 4 * k / 2**16 with k = mix(key) % (2**16 + 1).
+    key = det.mix((3 << 40) ^ (0 << 32) ^ 7 ^ det.SEED) % 65537
+    assert det.continuous_action(3, 0, 7, PENDULUM) == -2.0 + 4.0 * key / 65536
+
+
+def test_pgo_determinism_continuous_actions_follow_other_bounds():
+    narrow = det.Continuous(0.5, 0.75)
+    values = [det.continuous_action(i, 0, step, narrow) for i in range(8) for step in range(1, 40)]
+    assert all(0.5 <= v <= 0.75 for v in values) and len(set(values)) > 50
+
+
+def test_pgo_determinism_continuous_inexact_bounds_raise():
+    with pytest.raises(ValueError, match="exact float32"):
+        for step in range(1, 50):
+            det.continuous_action(0, 0, step, det.Continuous(0.1, 1e9 + 0.3))
+
+
+@pytest.mark.parametrize(
+    "other",
+    [(4, 0, 7), (3, 1, 7), (3, 0, 8)],
+    ids=["instance", "slot", "t"],
+)
+def test_pgo_determinism_continuous_action_each_key_part_changes_it(other):
+    # Base key (instance 3, slot 0, t 7) against changing one part, SEED 20261108.
+    assert det.continuous_action(3, 0, 7, PENDULUM) != det.continuous_action(*other, PENDULUM)
+
+
+def test_pgo_determinism_continuous_actions_for_gives_one_float_per_row():
+    step = FakeStep({}, np.zeros((2, 1), np.float32), np.zeros((2, 1), bool), None)
+    acts = det.actions_for([5, 9], step, 1, 0, lambda i: i + 1, PENDULUM)
+    assert acts == [det.continuous_action(5, 0, 6, PENDULUM), det.continuous_action(9, 0, 10, PENDULUM)]
