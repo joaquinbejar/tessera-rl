@@ -240,10 +240,9 @@ def next_state(agent: Agent, state) -> tuple[torch.Tensor, torch.Tensor]:
 
 
 # The sha256 of the frozen protocol (docs/reviews/ppo-protocols/rts.md at its
-# freeze). None until the freeze PR, reviewed with the protocol's revision,
-# sets it: while it is None nothing can train or evaluate from this
-# repository, whatever a caller passes (TR on the runner, R1).
-FROZEN_PROTOCOL_SHA256: str | None = None
+# freeze, r5, approved by TR). The freeze is not the authorization: no run
+# starts without the owner's separate go (TR on the runner, R1).
+FROZEN_PROTOCOL_SHA256: str | None = "f367fe5855a3a3a4e89bb902f5449b3734f00c165796da1def6a8bb502ad8202"
 
 
 def authorize(authorization: str, frozen_sha256: str) -> None:

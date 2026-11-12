@@ -486,16 +486,16 @@ def test_rts_training_train_body_wires_its_parts(monkeypatch):
     assert opts and all(o == (torch.optim.Adam, 1e-5, h.learning_rate) for o in opts)
 
 
-def test_rts_training_nothing_runs_while_the_repository_has_no_frozen_hash(monkeypatch):
-    """R1 (b): the repository's constant is None until the freeze PR; with it
-    None every authorization is refused, a matching pair included; with it
-    set, only that value passes."""
+def test_rts_training_the_repository_pins_the_frozen_hash_and_only_it_authorizes(monkeypatch):
+    """R1 (b): the repository's constant is the frozen protocol's sha256
+    (r5) exactly; with it None every authorization is refused, a matching
+    pair included; with it set, only that value passes."""
     import ast
 
     tree = ast.parse(pathlib.Path(rts_training.__file__).read_text(encoding="utf-8"))
     (value,) = [n.value for n in tree.body if isinstance(n, ast.AnnAssign)
                 and getattr(n.target, "id", "") == "FROZEN_PROTOCOL_SHA256"]  # fmt: skip
-    assert isinstance(value, ast.Constant) and value.value is None
+    assert isinstance(value, ast.Constant) and value.value == "f367fe5855a3a3a4e89bb902f5449b3734f00c165796da1def6a8bb502ad8202"
     monkeypatch.setattr(rts_training, "FROZEN_PROTOCOL_SHA256", None)
     for a, f in (("h", "h"), ("", ""), ("x", "x")):
         with pytest.raises(PermissionError, match="not frozen"):
