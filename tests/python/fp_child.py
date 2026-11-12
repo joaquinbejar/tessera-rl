@@ -161,6 +161,18 @@ def run_episode(steps=60):
     return [o if isinstance(o, str) else o.hex() for o in out]
 
 
+def unmasked_skip_reason(enabled_set):
+    """Why the unmasked scenario cannot run, or None. ``enabled_set`` is
+    the trap enables read back right after the caller set them, before any
+    call into the library. On AArch64 the FPCR trap enables are optional:
+    a core without trapped floating-point exceptions ignores the write and
+    they read back as zero (issue #225). Only that read-back decides; the
+    value after the library call never does."""
+    if enabled_set == 0:
+        return "this CPU does not implement trapped floating-point exceptions (FPCR enables read back as zero)"
+    return None
+
+
 def main(scenario):
     result = {"scenario": scenario}
     if scenario == "identical":
@@ -247,6 +259,15 @@ def main(scenario):
         else:
             default = run_episode()
             LIBM.feenableexcept(FE_DIVBYZERO | FE_INVALID)
+            # Read the enables back before any call into the library: a CPU
+            # may ignore the write (issue #225).
+            result["enabled_set"] = LIBM.fegetexcept()
+            reason = unmasked_skip_reason(result["enabled_set"])
+            if reason is not None:
+                LIBM.fedisableexcept(FE_DIVBYZERO | FE_INVALID)
+                result["skipped"] = reason
+                print(json.dumps(result))
+                return
             hostile = run_episode()
             result["enabled_after"] = LIBM.fegetexcept()
             if WINDOWS:

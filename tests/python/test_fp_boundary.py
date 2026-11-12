@@ -67,14 +67,56 @@ def test_fp_boundary_search_callback_runs_under_the_caller_controls():
     assert r["restored_after_exception"], "the caller's mode after a failed run"
 
 
-def test_fp_boundary_unmasked_exceptions_never_trap():
-    r = child("unmasked")
+def check_unmasked(r):
+    """The verdict on an "unmasked" child result. It skips only when the
+    child skipped before calling the library (no feenableexcept, or the CPU
+    ignored the enables: issue #225); once the enables took effect every
+    assertion applies."""
     if "skipped" in r:
+        assert "enabled_after" not in r, "a skip is decided before the library runs"
         pytest.skip(r["skipped"])
+    assert r["enabled_set"] != 0, "the enables took effect before the call"
     assert r["identical"]
     assert r["enabled_after"] != 0, "the caller's unmasked exceptions are restored"
     if "raw_em_exact" in r:
         assert r["raw_em_exact"], "exactly divide-by-zero and invalid were unmasked"
+
+
+def test_fp_boundary_unmasked_exceptions_never_trap():
+    check_unmasked(child("unmasked"))
+
+
+def test_unmasked_skip_reason_zero_read_back_skips():
+    import fp_child
+
+    reason = fp_child.unmasked_skip_reason(0)
+    assert reason == (
+        "this CPU does not implement trapped floating-point exceptions (FPCR enables read back as zero)"
+    )
+
+
+def test_unmasked_skip_reason_enables_set_runs():
+    import fp_child
+
+    assert fp_child.unmasked_skip_reason(0x03) is None
+
+
+def test_check_unmasked_enables_ignored_skips():
+    r = {"enabled_set": 0, "skipped": "this CPU does not implement trapped floating-point exceptions"}
+    with pytest.raises(pytest.skip.Exception):
+        check_unmasked(r)
+
+
+def test_check_unmasked_library_cleared_enables_fails():
+    # The enables took effect and the library left them cleared: a failure,
+    # never a skip.
+    r = {"enabled_set": 0x03, "enabled_after": 0, "identical": True}
+    with pytest.raises(AssertionError, match="restored"):
+        check_unmasked(r)
+
+
+def test_check_unmasked_restored_enables_passes():
+    check_unmasked({"enabled_set": 0x03, "enabled_after": 0x03, "identical": True})
 
 
 @pytest.mark.torch
