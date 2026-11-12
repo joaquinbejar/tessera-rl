@@ -103,6 +103,8 @@ macro_rules! varargs {
 
 noargs!(layout, api::layout);
 noargs!(root_visits, api::root_visits);
+noargs!(improved_policy, api::improved_policy);
+noargs!(considered, api::considered);
 noargs!(calls, api::calls);
 noargs!(tree_hash, api::tree_hash);
 noargs!(is_privileged, api::is_privileged);
@@ -110,7 +112,7 @@ varargs!(set_root, api::set_root);
 varargs!(run, api::run);
 varargs!(select_action, api::select_action);
 
-static METHODS: Table<[ffi::PyMethodDef; 9]> = Table([
+static METHODS: Table<[ffi::PyMethodDef; 11]> = Table([
     method(
         c"layout",
         thunks::SEARCH_LAYOUT,
@@ -140,6 +142,18 @@ static METHODS: Table<[ffi::PyMethodDef; 9]> = Table([
         thunks::SEARCH_SELECT_ACTION,
         ffi::METH_VARARGS,
         c"select_action(temperature: float) -> int",
+    ),
+    method(
+        c"improved_policy",
+        thunks::SEARCH_IMPROVED_POLICY,
+        ffi::METH_NOARGS,
+        c"The last Gumbel call's improved policy, or None.",
+    ),
+    method(
+        c"considered",
+        thunks::SEARCH_CONSIDERED,
+        ffi::METH_NOARGS,
+        c"The actions the last Gumbel call considered, or None.",
     ),
     method(
         c"calls",
@@ -191,7 +205,7 @@ pub(super) unsafe extern "C" fn dealloc(obj: *mut ffi::PyObject) {
 static SLOTS: Table<[ffi::PyType_Slot; 4]> = Table([
     slot_dealloc(thunks::SEARCH_DEALLOC),
     slot_methods(&METHODS.0),
-    slot_doc(c"A PUCT search over an environment (use tessera_rl.search.Search)."),
+    slot_doc(c"A PUCT or Gumbel-root search over an environment (use tessera_rl.search.Search)."),
     slot_end(),
 ]);
 

@@ -652,6 +652,8 @@ thunk!(SEARCH_SET_ROOT: CFunction = thunk_search_set_root => search_type::set_ro
 thunk!(SEARCH_RUN: CFunction = thunk_search_run => search_type::run : fn(Obj, Obj) -> Obj);
 thunk!(SEARCH_ROOT_VISITS: CFunction = thunk_search_root_visits => search_type::root_visits : fn(Obj, Obj) -> Obj);
 thunk!(SEARCH_SELECT_ACTION: CFunction = thunk_search_select_action => search_type::select_action : fn(Obj, Obj) -> Obj);
+thunk!(SEARCH_IMPROVED_POLICY: CFunction = thunk_search_improved_policy => search_type::improved_policy : fn(Obj, Obj) -> Obj);
+thunk!(SEARCH_CONSIDERED: CFunction = thunk_search_considered => search_type::considered : fn(Obj, Obj) -> Obj);
 thunk!(SEARCH_CALLS: CFunction = thunk_search_calls => search_type::calls : fn(Obj, Obj) -> Obj);
 thunk!(SEARCH_TREE_HASH: CFunction = thunk_search_tree_hash => search_type::tree_hash : fn(Obj, Obj) -> Obj);
 thunk!(SEARCH_IS_PRIVILEGED: CFunction = thunk_search_is_privileged => search_type::is_privileged : fn(Obj, Obj) -> Obj);
@@ -665,6 +667,8 @@ thunk!(GROUP_ACTIVE: CFunction = thunk_group_active => search_group_type::active
 thunk!(GROUP_RUN: CFunction = thunk_group_run => search_group_type::run : fn(Obj, Obj) -> Obj);
 thunk!(GROUP_ROOT_VISITS: CFunction = thunk_group_root_visits => search_group_type::root_visits : fn(Obj, Obj) -> Obj);
 thunk!(GROUP_SELECT_ACTION: CFunction = thunk_group_select_action => search_group_type::select_action : fn(Obj, Obj) -> Obj);
+thunk!(GROUP_IMPROVED_POLICY: CFunction = thunk_group_improved_policy => search_group_type::improved_policy : fn(Obj, Obj) -> Obj);
+thunk!(GROUP_CONSIDERED: CFunction = thunk_group_considered => search_group_type::considered : fn(Obj, Obj) -> Obj);
 thunk!(GROUP_CALLS: CFunction = thunk_group_calls => search_group_type::calls : fn(Obj, Obj) -> Obj);
 thunk!(GROUP_TREE_HASH: CFunction = thunk_group_tree_hash => search_group_type::tree_hash : fn(Obj, Obj) -> Obj);
 thunk!(GROUP_DEALLOC: Destructor = thunk_group_dealloc => search_group_type::dealloc : fn(Obj) -> ());
