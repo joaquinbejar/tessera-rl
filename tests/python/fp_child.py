@@ -9,6 +9,7 @@ Usage: python fp_child.py SCENARIO. Prints one JSON object.
 import ctypes
 import ctypes.util
 import json
+import os
 import platform
 import sys
 import warnings
@@ -161,6 +162,71 @@ def run_episode(steps=60):
     return [o if isinstance(o, str) else o.hex() for o in out]
 
 
+# FPCR: RMode toward zero (bits 22-23), FZ (24), DN (25).
+FPCR_HOSTILE = (0b11 << 22) | (1 << 24) | (1 << 25)
+FE_OVERFLOW = 0x04 if ARM or WINDOWS else 0x08
+ALL_FLAGS = 0x1F if WINDOWS else (0x9F if ARM else 0x3F)
+GLIBC_ARM = ARM and sys.platform.startswith("linux")
+
+
+def cpu_name():
+    """The CPU as /proc/cpuinfo names it (model name, or the AArch64
+    implementer and part), else platform.processor()."""
+    try:
+        with open("/proc/cpuinfo") as f:
+            lines = f.read().splitlines()
+    except OSError:
+        return platform.processor() or platform.machine()
+    keys = ("model name", "CPU implementer", "CPU part", "CPU variant", "CPU revision")
+    found = {}
+    for line in lines:
+        k, _, v = line.partition(":")
+        k = k.strip()
+        if k in keys and k not in found:
+            found[k] = v.strip()
+    return "; ".join(f"{k}={found[k]}" for k in keys if k in found) or platform.machine()
+
+
+def read_controls():
+    """The raw control register, without status flags: FPCR on glibc
+    AArch64, MXCSR controls and the x87 control word on glibc x86-64, the
+    control word on Windows; None elsewhere."""
+    if WINDOWS:
+        return LIBM.raw_control()
+    if not sys.platform.startswith("linux"):
+        return None
+    env = (ctypes.c_uint8 * 32)()
+    assert LIBM.fegetenv(env) == 0
+    if ARM:
+        # glibc fenv_t on AArch64: { unsigned int __fpcr, __fpsr; }.
+        return int.from_bytes(bytes(env[0:4]), "little")
+    # glibc fenv_t on x86-64: x87 control word at 0, MXCSR at 28.
+    cw = int.from_bytes(bytes(env[0:2]), "little")
+    mxcsr = int.from_bytes(bytes(env[28:32]), "little") & ~0x3F
+    return (cw << 32) | mxcsr
+
+
+def write_fpcr(value):
+    """Writes FPCR on glibc AArch64 through fesetenv, keeping FPSR."""
+    assert GLIBC_ARM
+    env = (ctypes.c_uint8 * 32)()
+    assert LIBM.fegetenv(env) == 0
+    env[0:4] = list(value.to_bytes(4, "little"))
+    assert LIBM.fesetenv(env) == 0
+
+
+def unmasked_skip_reason(enabled_set):
+    """Why the unmasked scenario cannot run, or None. ``enabled_set`` is
+    the trap enables read back right after the caller set them, before any
+    call into the library. On AArch64 the FPCR trap enables are optional:
+    a core without trapped floating-point exceptions ignores the write and
+    they read back as zero (issue #225). Only that read-back decides; the
+    value after the library call never does."""
+    if enabled_set == 0:
+        return "this CPU does not implement trapped floating-point exceptions (FPCR enables read back as zero)"
+    return None
+
+
 def main(scenario):
     result = {"scenario": scenario}
     if scenario == "identical":
@@ -242,19 +308,55 @@ def main(scenario):
         result["unchanged"] = env.snapshot(0) == before
     elif scenario == "unmasked":
         # glibc and Windows: unmask divide-by-zero and invalid in the caller.
+        # Always reported, also on a skip: the CPU and the read-back probe
+        # (issue #225), so a CI log shows the mechanism.
+        result["cpu"] = cpu_name()
         if not hasattr(LIBM, "feenableexcept"):
             result["skipped"] = "no feenableexcept"
         else:
             default = run_episode()
+            original = read_controls()
+            result["enabled_requested"] = FE_DIVBYZERO | FE_INVALID
             LIBM.feenableexcept(FE_DIVBYZERO | FE_INVALID)
+            if os.environ.get("TESSERA_FP_CHILD_SIMULATE_RAZ") == "1":
+                # Test-only: behave as a core whose trap enables are RAZ/WI
+                # (the write is ignored), so that path runs on any CPU.
+                LIBM.fedisableexcept(FE_DIVBYZERO | FE_INVALID)
+            # Read the enables back before any call into the library: a CPU
+            # may ignore the write (issue #225). Only this read-back decides
+            # the skip.
+            result["enabled_set"] = LIBM.fegetexcept()
+            result["controls_with_enables"] = read_controls()
+            result["enables_reason"] = unmasked_skip_reason(result["enabled_set"])
+            if GLIBC_ARM:
+                # The rest of FPCR hostile too: round toward zero, FZ, DN.
+                write_fpcr(result["controls_with_enables"] | FPCR_HOSTILE)
+            result["controls_before"] = read_controls()
             hostile = run_episode()
+            result["controls_after"] = read_controls()
             result["enabled_after"] = LIBM.fegetexcept()
+            # ADR-0041 / ADR-0037: a sticky flag the caller raised survives
+            # native calls (only native calls in between: NumPy clears flags).
+            env = t.make("tessera/CartPole-v1", num_envs=2, seed=1)
+            native = env._native
+            native.reset()
+            acts = np.ones(2, dtype="<i4").tobytes()
+            LIBM.feclearexcept(ALL_FLAGS)
+            LIBM.feraiseexcept(FE_OVERFLOW)
+            result["flag_set"] = bool(LIBM.fetestexcept(FE_OVERFLOW))
+            native.step(acts)
+            native.step(acts)
+            result["flag_kept"] = bool(LIBM.fetestexcept(FE_OVERFLOW))
+            LIBM.feclearexcept(ALL_FLAGS)
             if WINDOWS:
                 # Independent of the shim's mapping: in the raw control word
                 # exactly _EM_ZERODIVIDE and _EM_INVALID are clear.
                 raw = LIBM.raw_control() & LIBM.ALL_FLAGS
                 result["raw_em_exact"] = raw == LIBM.ALL_FLAGS & ~(0x08 | 0x10)
             LIBM.fedisableexcept(FE_DIVBYZERO | FE_INVALID)
+            if GLIBC_ARM:
+                write_fpcr(original)
+            env.close()
             result["identical"] = hostile == default
     elif scenario == "probe":
         # codex R-PR26: an __index__ that changes the controls. The native

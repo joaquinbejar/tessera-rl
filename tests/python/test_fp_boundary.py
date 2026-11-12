@@ -3,17 +3,21 @@
 caller controls. Each scenario runs in a fresh process (fp_child.py)."""
 
 import json
+import os
 import pathlib
 import subprocess
 import sys
+import warnings
 
 import pytest
 
 CHILD = pathlib.Path(__file__).with_name("fp_child.py")
 
 
-def child(scenario, *flags):
-    proc = subprocess.run([sys.executable, *flags, str(CHILD), scenario], capture_output=True, text=True)
+def child(scenario, *flags, env=None):
+    proc = subprocess.run(
+        [sys.executable, *flags, str(CHILD), scenario], capture_output=True, text=True, env=env
+    )
     assert proc.returncode == 0, proc.stderr
     return json.loads(proc.stdout.strip().splitlines()[-1])
 
@@ -67,14 +71,175 @@ def test_fp_boundary_search_callback_runs_under_the_caller_controls():
     assert r["restored_after_exception"], "the caller's mode after a failed run"
 
 
-def test_fp_boundary_unmasked_exceptions_never_trap():
-    r = child("unmasked")
+EXPECT_TRAPS = "TESSERA_EXPECT_FP_TRAPS"
+
+
+def check_unmasked(r, expect_traps=None):
+    """The verdict on an "unmasked" child result.
+
+    Everything except the enables is asserted on every CPU: identical
+    results, the caller's controls (rounding, flush-to-zero, default NaN on
+    AArch64) restored, the caller's sticky flag kept. Only the enables
+    assertions are skipped, and only when the enables read back as zero
+    before any library call (issue #225). With TESSERA_EXPECT_FP_TRAPS=1 (a
+    CI job on hardware that implements traps) that case fails instead."""
+    if expect_traps is None:
+        expect_traps = os.environ.get(EXPECT_TRAPS) == "1"
+    probe = (
+        f"cpu: {r.get('cpu')}; enables requested: {r.get('enabled_requested')}; "
+        f"read back before the library: {r.get('enabled_set')}; controls: {r.get('controls_with_enables')}"
+    )
+    print(probe)
     if "skipped" in r:
-        pytest.skip(r["skipped"])
+        assert not expect_traps, f"{EXPECT_TRAPS}=1 but the scenario could not run: {r['skipped']}"
+        pytest.skip(f"{r['skipped']} ({probe})")
     assert r["identical"]
+    assert r["controls_after"] == r["controls_before"], "the caller's controls are restored"
+    if sys.platform != "win32":
+        assert r["flag_set"], "the flag is observable in this process"
+    if r["flag_set"]:
+        assert r["flag_kept"], "native calls keep a flag the caller raised"
+    if r["enables_reason"] is not None:
+        assert r["enabled_set"] == 0, "a skip is decided only by a zero read-back"
+        assert not expect_traps, f"{EXPECT_TRAPS}=1 but {r['enables_reason']} ({probe})"
+        # A warning too: `pytest -q` without -rs (the wheel job) still
+        # prints the warnings summary, so the probe reaches the CI log.
+        warnings.warn(f"FP trap enables not checked: {r['enables_reason']} ({probe})", stacklevel=2)
+        pytest.skip(f"enables assertions only: {r['enables_reason']} ({probe})")
+    assert r["enabled_set"] != 0, "the enables took effect before the call"
     assert r["enabled_after"] != 0, "the caller's unmasked exceptions are restored"
     if "raw_em_exact" in r:
         assert r["raw_em_exact"], "exactly divide-by-zero and invalid were unmasked"
+
+
+def test_fp_boundary_unmasked_exceptions_never_trap():
+    check_unmasked(child("unmasked"))
+
+
+def test_fp_boundary_unmasked_simulated_raz_wi_checks_the_rest():
+    # A core whose trap enables are RAZ/WI, simulated in the child: the
+    # hostile episode still runs and every other assertion applies; only
+    # the enables part is reported skipped.
+    r = child("unmasked", env={**os.environ, "TESSERA_FP_CHILD_SIMULATE_RAZ": "1"})
+    if "skipped" in r:
+        pytest.skip(r["skipped"])
+    assert r["enabled_set"] == 0 and r["enables_reason"] is not None
+    assert "controls_after" in r and "flag_kept" in r, "the library ran with the hostile controls"
+    kind, reason = verdict(r, expect_traps=False)
+    assert kind == "skip" and "read back as zero" in reason
+    kind, message = verdict(r, expect_traps=True)
+    assert kind == "fail" and EXPECT_TRAPS in message
+
+
+def test_unmasked_skip_reason_zero_read_back_skips():
+    import fp_child
+
+    reason = fp_child.unmasked_skip_reason(0)
+    assert reason == (
+        "this CPU does not implement trapped floating-point exceptions (FPCR enables read back as zero)"
+    )
+
+
+def test_unmasked_skip_reason_enables_set_runs():
+    import fp_child
+
+    assert fp_child.unmasked_skip_reason(0x03) is None
+
+
+def _result(**kw):
+    r = {
+        "cpu": "test",
+        "enabled_set": 0x03,
+        "enabled_after": 0x03,
+        "enables_reason": None,
+        "identical": True,
+        "controls_before": 7,
+        "controls_after": 7,
+        "flag_set": True,
+        "flag_kept": True,
+    }
+    r.update(kw)
+    return r
+
+
+IGNORED = "this CPU does not implement trapped floating-point exceptions (FPCR enables read back as zero)"
+
+
+def verdict(r, expect_traps):
+    """check_unmasked as an outcome value, so a verdict unit test can never
+    end as skipped: ("pass", None), ("skip", reason) or ("fail", message)."""
+    try:
+        with warnings.catch_warnings(record=True):
+            warnings.simplefilter("always")
+            check_unmasked(r, expect_traps=expect_traps)
+    except pytest.skip.Exception as e:
+        return ("skip", str(e))
+    except AssertionError as e:
+        return ("fail", str(e))
+    return ("pass", None)
+
+
+def test_check_unmasked_enables_ignored_skips():
+    r = _result(enabled_set=0, enabled_after=0, enables_reason=IGNORED)
+    kind, reason = verdict(r, expect_traps=False)
+    assert kind == "skip" and "read back as zero" in reason and "read back before the library: 0" in reason
+
+
+def test_check_unmasked_enables_ignored_warns_the_probe():
+    r = _result(enabled_set=0, enabled_after=0, enables_reason=IGNORED)
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        try:
+            check_unmasked(r, expect_traps=False)
+        except pytest.skip.Exception:
+            pass
+    assert any("not checked" in str(w.message) for w in caught)
+
+
+def test_check_unmasked_enables_ignored_with_traps_expected_fails():
+    r = _result(enabled_set=0, enabled_after=0, enables_reason=IGNORED)
+    kind, message = verdict(r, expect_traps=True)
+    assert kind == "fail" and EXPECT_TRAPS in message
+
+
+def test_check_unmasked_child_skip_with_traps_expected_fails():
+    kind, message = verdict({"cpu": "test", "skipped": "no feenableexcept"}, expect_traps=True)
+    assert kind == "fail" and EXPECT_TRAPS in message
+
+
+def test_check_unmasked_enables_ignored_still_checks_controls():
+    # The skip covers the enables only: a lost rounding mode still fails.
+    r = _result(enabled_set=0, enabled_after=0, enables_reason=IGNORED, controls_after=0)
+    kind, message = verdict(r, expect_traps=False)
+    assert kind == "fail" and "controls are restored" in message
+
+
+def test_check_unmasked_enables_ignored_still_checks_flags():
+    r = _result(enabled_set=0, enabled_after=0, enables_reason=IGNORED, flag_kept=False)
+    kind, message = verdict(r, expect_traps=False)
+    assert kind == "fail" and "keep a flag" in message
+
+
+def test_check_unmasked_enables_ignored_still_checks_results():
+    r = _result(enabled_set=0, enabled_after=0, enables_reason=IGNORED, identical=False)
+    kind, _ = verdict(r, expect_traps=False)
+    assert kind == "fail"
+
+
+def test_check_unmasked_enables_set_then_zero_after_fails():
+    # Enables zero after the library but set before it: never a skip.
+    kind, message = verdict(_result(enabled_after=0), expect_traps=False)
+    assert kind == "fail" and "unmasked exceptions are restored" in message
+
+
+def test_check_unmasked_library_cleared_enables_fails():
+    kind, message = verdict(_result(enabled_after=0), expect_traps=True)
+    assert kind == "fail" and "unmasked exceptions are restored" in message
+
+
+def test_check_unmasked_restored_enables_passes():
+    assert verdict(_result(), expect_traps=False) == ("pass", None)
+    assert verdict(_result(), expect_traps=True) == ("pass", None)
 
 
 @pytest.mark.torch
