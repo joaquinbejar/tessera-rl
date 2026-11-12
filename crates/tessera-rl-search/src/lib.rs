@@ -14,6 +14,7 @@ mod error;
 mod evaluator;
 mod evict;
 mod group;
+mod gumbel;
 mod handle;
 mod journal;
 mod mcts;
@@ -31,6 +32,7 @@ pub use group::{
     CAPACITY_EXTRA, DEFAULT_GROUP_BUDGET, FIXED_PER_TREE, GroupError, GroupFailure, MAX_TREES,
     SearchGroup,
 };
+pub use gumbel::{GUMBEL_BYTES_PER_ACTION, GumbelConfig, RootSelection};
 pub use handle::{EdgeStats, NodeHandle};
 pub use mcts::{Mcts, PUCT_FORMULA, PuctConfig, RootNoise};
 pub use options::{Eviction, SearchOptions};

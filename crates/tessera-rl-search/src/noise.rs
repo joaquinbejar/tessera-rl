@@ -110,7 +110,6 @@ pub(crate) fn dirichlet(alpha: f64, rng: &mut StepRng, out: &mut [f64]) {
 /// above the 52nd are ignored.
 #[must_use]
 #[inline]
-#[cfg_attr(not(test), expect(dead_code, reason = "used by the Gumbel root (G2)"))]
 pub(crate) fn open_unit(k: u64) -> f64 {
     /// `2^-53`, the scale of the open uniform.
     const OPEN_SCALE: f64 = 1.0 / 9_007_199_254_740_992.0;
@@ -125,7 +124,6 @@ pub(crate) fn open_unit(k: u64) -> f64 {
 /// The Gumbel variate `-ln(-ln u)` of the 52-bit `k`.
 #[must_use]
 #[inline]
-#[cfg_attr(not(test), expect(dead_code, reason = "used by the Gumbel root (G2)"))]
 pub(crate) fn gumbel_of(k: u64) -> f64 {
     -math::ln(-math::ln(open_unit(k)))
 }
@@ -133,7 +131,6 @@ pub(crate) fn gumbel_of(k: u64) -> f64 {
 /// Fills `out` with one Gumbel variate per action index, in index order:
 /// one `next_u64` per entry, so the stream position afterwards depends
 /// only on `out.len()`.
-#[cfg_attr(not(test), expect(dead_code, reason = "used by the Gumbel root (G2)"))]
 pub(crate) fn gumbel(rng: &mut StepRng, out: &mut [f64]) {
     for g in out.iter_mut() {
         *g = gumbel_of(rng.next_u64() >> 12);
@@ -306,4 +303,39 @@ mod tests {
             assert!((freq - p).abs() < 0.01, "action {a}: {freq} vs {p}");
         }
     }
+
+    /// A `k` where the frozen `math::ln` and macOS's system `f64::ln`
+    /// differ by one ulp in `g` (found by an offline scan of 2 million
+    /// `k`; the system value is `0xbfdb_2e4d_6369_3595`): swapping the
+    /// frozen logarithm for `f64::ln` fails this pin on that platform.
+    /// Clippy's `disallowed_methods` (ADR-0008) guards the same swap
+    /// everywhere at build time.
+    #[test]
+    fn test_noise_gumbel_variate_where_system_libm_differs_bits_pinned() {
+        assert_eq!(
+            gumbel_of(0x0003_77b2_fd56_a5b1).to_bits(),
+            0xbfdb_2e4d_6369_3594
+        );
+    }
+
+    /// The first eight `g` of a fixed identity (seed 7, logical id 0,
+    /// step 0) on `StreamId::SEARCH`, as literal bits: pins the mapping
+    /// from the search stream to `g` by data.
+    #[test]
+    fn test_noise_gumbel_search_stream_first_values_bits_pinned() {
+        let mut g = [0.0; 8];
+        gumbel(&mut rng(7), &mut g);
+        assert_eq!(g.map(f64::to_bits), SEARCH_STREAM_G);
+    }
+
+    const SEARCH_STREAM_G: [u64; 8] = [
+        0x4002_3259_9cab_4158,
+        0x3fe3_9997_2004_92fc,
+        0xbf9b_9414_c384_e2dd,
+        0x3ff7_366c_c112_9a08,
+        0x3ff6_8075_bcb1_62de,
+        0x3ffc_01b8_b19e_84c6,
+        0x3ff2_13bc_b32a_deca,
+        0x3fea_f98e_0943_d8e2,
+    ];
 }

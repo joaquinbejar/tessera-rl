@@ -25,6 +25,7 @@ use tessera_rl_num::rng::{RngAuthority, StepRng};
 
 use crate::error::SearchError;
 use crate::evaluator::{Evaluator, LeafBatch, validate_leaf};
+use crate::gumbel::{Gumbel, RootEdge, RootSelection};
 use crate::handle::NodeHandle;
 use crate::noise::dirichlet;
 use crate::pool::{NONE, SearchPool};
@@ -72,6 +73,9 @@ pub struct PuctConfig {
     pub simulations: u32,
     /// Root noise, off by default.
     pub noise: Option<RootNoise>,
+    /// Root action selection: PUCT (the default) or the Gumbel root,
+    /// which excludes `noise`.
+    pub root: RootSelection,
 }
 
 impl Default for PuctConfig {
@@ -83,6 +87,7 @@ impl Default for PuctConfig {
             batch_size: 8,
             simulations: 64,
             noise: None,
+            root: RootSelection::Puct,
         }
     }
 }
@@ -143,6 +148,13 @@ pub struct Mcts<E: Environment, M: MaskProvider<E>> {
     /// Whether the gathered batch is the root's (its legal actions are in
     /// `legal`, not `leaf_legal`).
     root_batch: bool,
+    /// The current root's evaluator value, keyed by the root node's
+    /// allocation number (current root only), and its copy at the start
+    /// of the call in progress (restored on rollback).
+    v_root: Option<(u64, f64)>,
+    saved_v_root: Option<(u64, f64)>,
+    /// The Gumbel root's state, under [`RootSelection::Gumbel`] only.
+    gumbel: Option<Gumbel>,
 }
 
 fn idx(v: u32) -> usize {
@@ -151,6 +163,31 @@ fn idx(v: u32) -> usize {
 
 fn count(n: u32) -> f64 {
     f64::from(n)
+}
+
+/// The root edge statistics of action index `a`.
+fn root_edge<E, M>(pool: &SearchPool<E, M>, a: usize) -> RootEdge
+where
+    E: Environment<
+            Config: Sync,
+            State: Send,
+            Header: Send + RecordLayout<Adaptive: AdaptiveValues<E::Config>>,
+        >,
+    M: MaskProvider<E>,
+{
+    let e = u32::try_from(a).ok().and_then(|a| pool.edge(pool.root, a));
+    e.map_or(
+        RootEdge {
+            visits: 0,
+            value: 0.0,
+            virtual_loss: 0,
+        },
+        |e| RootEdge {
+            visits: e.visits,
+            value: e.value,
+            virtual_loss: e.virtual_loss,
+        },
+    )
 }
 
 fn config_error(option: &'static str, reason: &'static str) -> SearchError {
@@ -171,7 +208,9 @@ where
     /// # Errors
     ///
     /// An invalid configuration: a non-finite `c_puct` or `fpu`, a batch
-    /// of 0 or above the pool's, no simulations, or invalid noise.
+    /// of 0 or above the pool's, no simulations, or invalid noise; under
+    /// the Gumbel root, `m = 0`, a negative or non-finite `c_visit` or
+    /// `c_scale`, or root noise (the two are refused together).
     pub fn new(pool: SearchPool<E, M>, cfg: PuctConfig) -> Result<Self, SearchError> {
         if !cfg.c_puct.is_finite() || cfg.c_puct < 0.0 {
             return Err(config_error("c_puct", "must be finite and non-negative"));
@@ -193,6 +232,33 @@ where
         {
             return Err(config_error("noise", "alpha > 0 and epsilon in [0, 1]"));
         }
+        let gumbel = match cfg.root {
+            RootSelection::Gumbel(g) => {
+                if cfg.noise.is_some() {
+                    return Err(config_error(
+                        "root",
+                        "the Gumbel root excludes Dirichlet root noise",
+                    ));
+                }
+                if g.m == 0 {
+                    return Err(config_error("gumbel.m", "must be at least 1"));
+                }
+                if !(g.c_visit.is_finite() && g.c_visit >= 0.0) {
+                    return Err(config_error(
+                        "gumbel.c_visit",
+                        "must be finite and non-negative",
+                    ));
+                }
+                if !(g.c_scale.is_finite() && g.c_scale >= 0.0) {
+                    return Err(config_error(
+                        "gumbel.c_scale",
+                        "must be finite and non-negative",
+                    ));
+                }
+                Some(Gumbel::new(g, idx(pool.actions()), cfg.simulations))
+            }
+            RootSelection::Puct => None,
+        };
         let (b, a) = (idx(cfg.batch_size), idx(pool.actions()));
         let obs_bytes = pool.obs_row_bytes();
         Ok(Self {
@@ -215,6 +281,9 @@ where
             root_priors: vec![0.0; a],
             noise: vec![0.0; a],
             legal: vec![false; a],
+            v_root: None,
+            saved_v_root: None,
+            gumbel,
             pool,
         })
     }
@@ -262,6 +331,38 @@ where
         for (a, o) in (0u32..).zip(out.iter_mut()) {
             *o = self.pool.edge(root, a).map_or(0, |e| e.visits);
         }
+    }
+
+    /// The improved policy `pi'` of the last Gumbel call (one entry per
+    /// action, `0` for illegal ones), or `None` under PUCT, before any
+    /// call, or once the root changed.
+    #[must_use]
+    pub fn improved_policy(&self) -> Option<&[f64]> {
+        self.gumbel.as_ref()?.improved_policy(self.root_key()?)
+    }
+
+    /// The actions `S_0` the last Gumbel call considered, in `g + l`
+    /// order, or `None` as for [`Self::improved_policy`].
+    #[must_use]
+    pub fn considered(&self) -> Option<&[u32]> {
+        self.gumbel.as_ref()?.considered(self.root_key()?)
+    }
+
+    /// The allocation number of the root node: the key of `v_root`.
+    fn root_key(&self) -> Option<u64> {
+        self.pool.node(self.pool.root).map(|n| n.alloc)
+    }
+
+    /// The Gumbel state's phase snapshot, for tests.
+    #[cfg(test)]
+    pub(crate) fn gumbel_snapshot(&self) -> Option<(u32, u32, u32, u32, bool, Vec<u32>)> {
+        self.gumbel.as_ref().map(crate::gumbel::Gumbel::snapshot)
+    }
+
+    /// The current root's evaluator value, if known.
+    fn root_value(&self) -> Option<f64> {
+        let key = self.root_key()?;
+        self.v_root.filter(|&(k, _)| k == key).map(|(_, v)| v)
     }
 
     /// The player to move at `slot` (its single acting agent).
@@ -336,6 +437,7 @@ where
         };
         let rng = self.search_rng()?;
         self.pool.begin();
+        self.saved_v_root = self.v_root;
         Ok(CallStart { calls, rng })
     }
 
@@ -344,11 +446,15 @@ where
         self.pool.finish();
         self.calls = calls;
         self.rng = Some(rng);
+        if let (Some(key), Some(g)) = (self.root_key(), self.gumbel.as_mut()) {
+            g.publish(key);
+        }
     }
 
     /// Restores the tree to its state at [`Self::call_begin`].
     pub(crate) fn call_rollback(&mut self) {
         self.pool.rollback();
+        self.v_root = self.saved_v_root;
     }
 
     /// Whether the root is terminal (a call on it is an error).
@@ -361,6 +467,12 @@ where
         !self.evaluated(self.pool.root)
     }
 
+    /// Whether the call must evaluate the root: it has no priors, or,
+    /// under the Gumbel root only, its value is unknown (after a reroot).
+    pub(crate) fn root_needs_eval(&self) -> bool {
+        self.root_unevaluated() || (self.gumbel.is_some() && self.root_value().is_none())
+    }
+
     fn run_inner(
         &mut self,
         evaluator: &mut impl Evaluator<E>,
@@ -370,7 +482,7 @@ where
             return Err(SearchError::TerminalNode);
         }
         evaluator.check()?;
-        if self.root_unevaluated() {
+        if self.root_needs_eval() {
             self.evaluate_root(evaluator)?;
         }
         let mut rng = start.rng.clone();
@@ -387,16 +499,58 @@ where
                 self.validate_staged(k)?;
             }
             self.commit_and_backup(k)?;
+            self.advance_phase()?;
             done = done.saturating_add(n.max(1));
         }
+        self.finish_root()?;
         Ok(rng)
     }
 
     /// The leaves to collect next after `done` simulations, or `None`
-    /// when the budget is spent.
+    /// when the budget is spent. Under the Gumbel root, at most the
+    /// visits left in the current phase: a batch never crosses a phase.
+    /// Pure: asking twice changes nothing.
     pub(crate) fn want(&self, done: u32) -> Option<u32> {
-        (done < self.cfg.simulations)
-            .then(|| (self.cfg.simulations - done).min(self.cfg.batch_size))
+        (done < self.cfg.simulations).then(|| {
+            let w = (self.cfg.simulations - done).min(self.cfg.batch_size);
+            self.gumbel.as_ref().map_or(w, |g| {
+                let left = g.phase_left();
+                debug_assert!(left > 0, "a Gumbel phase end without advance_phase");
+                w.min(left)
+            })
+        })
+    }
+
+    /// The Gumbel phase step, called once after each batch's
+    /// [`Self::commit_and_backup`] by every driver: when the current
+    /// phase's last visit is backed up, halves the survivors and starts
+    /// the next phase. At any other time, and under PUCT, it changes
+    /// nothing.
+    ///
+    /// # Errors
+    ///
+    /// [`SearchError::GumbelInvariant`] for a halving with pending
+    /// virtual loss or no root visit (unreachable; the call rolls back).
+    pub(crate) fn advance_phase(&mut self) -> Result<(), SearchError> {
+        let v_root = self.root_value();
+        let pool = &self.pool;
+        self.gumbel
+            .as_mut()
+            .map_or(Ok(()), |g| g.advance(|a| root_edge(pool, a), v_root))
+    }
+
+    /// The Gumbel call's end, after its last backup: the final action and
+    /// `pi'` (published at commit). Nothing under PUCT.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::advance_phase`].
+    pub(crate) fn finish_root(&mut self) -> Result<(), SearchError> {
+        let v_root = self.root_value();
+        let pool = &self.pool;
+        self.gumbel
+            .as_mut()
+            .map_or(Ok(()), |g| g.finish(|a| root_edge(pool, a), v_root))
     }
 
     /// Loads the root into the scratch pool and the evaluation lists, as a
@@ -425,8 +579,9 @@ where
         Ok(())
     }
 
-    /// Validates the root's response (in `raw_priors` and `values`, row 0)
-    /// and writes its priors.
+    /// Validates the root's response (in `raw_priors` and `values`, row 0),
+    /// keeps its value as `v_root` and writes its priors if it has none
+    /// (a rerooted root re-evaluated for its value keeps its priors).
     pub(crate) fn store_root(&mut self) -> Result<(), SearchError> {
         let width = idx(self.pool.actions);
         let value = self.values.first().copied().unwrap_or(f64::NAN);
@@ -437,7 +592,12 @@ where
             &self.legal,
             &mut self.priors,
         )?;
-        self.write_priors(self.pool.root);
+        if let Some(key) = self.root_key() {
+            self.v_root = Some((key, value));
+        }
+        if self.root_unevaluated() {
+            self.write_priors(self.pool.root);
+        }
         Ok(())
     }
 
@@ -483,6 +643,15 @@ where
         let root = self.pool.root;
         for (a, p) in (0u32..).zip(self.root_priors.iter_mut()) {
             *p = self.pool.edge(root, a).map_or(0.0, |e| e.prior);
+        }
+        if let Some(g) = self.gumbel.as_mut() {
+            let pool = &self.pool;
+            g.begin(rng, |a| {
+                u32::try_from(a)
+                    .ok()
+                    .and_then(|a| pool.edge(root, a))
+                    .map_or((0.0, false), |e| (e.prior, e.legal))
+            });
         }
         let Some(noise) = self.cfg.noise else {
             return;
@@ -589,8 +758,13 @@ where
         self.requests.clear();
         while u32::try_from(self.leaves.len()).unwrap_or(u32::MAX) < want {
             let mut s = self.pool.root;
+            let forced = self.gumbel.as_ref().map(|g| g.action(self.leaves.len()));
             let leaf = loop {
-                let Some(a) = self.select(s) else {
+                let pick = match forced {
+                    Some(f) if s == self.pool.root => f,
+                    _ => self.select(s),
+                };
+                let Some(a) = pick else {
                     return Err(SearchError::TerminalNode);
                 };
                 self.add_virtual_loss(s, a)?;
@@ -778,7 +952,11 @@ where
             self.priors = priors;
             self.write_priors(child);
         }
-        self.backup_all()
+        self.backup_all()?;
+        if let Some(g) = self.gumbel.as_mut() {
+            g.backed_up(self.leaves.len());
+        }
+        Ok(())
     }
 
     /// The gathered leaves for a group batch: their records, their scratch
@@ -814,6 +992,8 @@ where
     }
 
     /// Mixes this call's root noise into the root priors.
+    /// Under the Gumbel root, also draws `g` and builds `S_0` and the first
+    /// phase.
     pub(crate) fn prepare_noise(&mut self, rng: &mut StepRng) {
         self.prepare_root_priors(rng);
     }
@@ -913,7 +1093,9 @@ where
     /// # Errors
     ///
     /// No call has completed, a negative or non-finite temperature, or no
-    /// visited action.
+    /// visited action. Under the Gumbel root, `temperature` must be 0 and
+    /// the action is the last call's halving winner (its root must still
+    /// be the root).
     pub fn select_action(&mut self, temperature: f64) -> Result<u32, SearchError> {
         tessera_rl_num::fp::with_canonical(|| self.select_canonical(temperature))
     }
@@ -924,6 +1106,18 @@ where
                 "temperature",
                 "must be finite and non-negative",
             ));
+        }
+        if let Some(g) = self.gumbel.as_ref() {
+            if temperature != 0.0 {
+                return Err(config_error(
+                    "temperature",
+                    "must be 0 under the Gumbel root (pi' is the target)",
+                ));
+            }
+            return self
+                .root_key()
+                .and_then(|k| g.winner(k))
+                .ok_or(config_error("select_action", "run a search first"));
         }
         let root = self.pool.root;
         let visits = |a: u32| self.pool.edge(root, a).map_or(0, |e| e.visits);
@@ -977,3 +1171,7 @@ where
         last.ok_or(SearchError::TerminalNode)
     }
 }
+
+#[cfg(test)]
+#[path = "mcts_gumbel_tests.rs"]
+mod gumbel_tests;

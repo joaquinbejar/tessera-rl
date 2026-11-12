@@ -154,6 +154,40 @@ fn test_search_mcts_run_with_eviction_and_noise_does_not_allocate() {
     assert_eq!(n, 0, "a search call allocated {n} times");
 }
 
+/// The Gumbel root (draws, top-k, halving, completed Q, `pi'`, the root
+/// re-evaluation after a reroot) allocates nothing per call.
+#[test]
+#[expect(clippy::many_single_char_names, reason = "as the tests above")]
+fn test_search_mcts_gumbel_run_with_reroot_does_not_allocate() {
+    let mut p = EnvPool::<Connect4, Masked>::with_masks(
+        Connect4Config {},
+        PoolOptions::new(NonZeroU32::MIN, Seed::new(1)),
+    )
+    .unwrap();
+    p.reset_all(Reseed::Keep).unwrap();
+    let root = p.snapshot(0).unwrap();
+    let mut o = SearchOptions::new(NonZeroU32::new(256).unwrap(), NonZeroU32::new(8).unwrap());
+    o.eviction = Eviction::Oldest;
+    let pool = SearchPool::new(Connect4Config {}, o, &root, EnvPool::with_masks).unwrap();
+    let mut cfg = tessera_rl_search::PuctConfig::default();
+    cfg.simulations = 300;
+    cfg.root = tessera_rl_search::RootSelection::Gumbel(tessera_rl_search::GumbelConfig::default());
+    let mut m = tessera_rl_search::Mcts::new(pool, cfg).unwrap();
+    let n = allocations(|| {
+        for _ in 0..3 {
+            m.run(&mut Uniform).unwrap();
+            let a = m.select_action(0.0).unwrap();
+            std::hint::black_box(m.improved_policy());
+            let r = m.pool().root();
+            let child = m.pool().child(r, a).unwrap().unwrap();
+            m.pool_mut().reroot(child).unwrap();
+            m.run(&mut Uniform).unwrap();
+            m.pool_mut().set_root(&root).unwrap();
+        }
+    });
+    assert_eq!(n, 0, "a Gumbel search call allocated {n} times");
+}
+
 /// A native evaluator on the batch path: it reads every observation and
 /// mask (as a Python bridge would) and allocates nothing.
 struct Reads;

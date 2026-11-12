@@ -20,6 +20,7 @@ use thiserror::Error;
 
 use crate::error::SearchError;
 use crate::evaluator::{Evaluator, LeafBatch};
+use crate::gumbel::{GUMBEL_BYTES_PER_ACTION, RootSelection};
 use crate::mcts::{CallStart, Mcts, PuctConfig};
 use crate::options::SearchOptions;
 use crate::pool::SearchPool;
@@ -177,6 +178,8 @@ where
     ///   each counted with headroom;
     /// - [`FIXED_PER_TREE`] for fixed allocations (vector and pool
     ///   bookkeeping).
+    /// - for a Gumbel root only, [`GUMBEL_BYTES_PER_ACTION`] per action
+    ///   (its draws, logits, survivors and policies).
     ///
     /// Then come the group batch for the rows of every slot, and the
     /// per-slot call state. A counting-allocator test checks that this is
@@ -206,6 +209,13 @@ where
                 .checked_mul(cap)?
                 .checked_add(row.checked_mul(u64::from(batch))?)?
                 .checked_add(FIXED_PER_TREE)?;
+            let slot = if matches!(puct.root, RootSelection::Gumbel(_)) {
+                slot.checked_add(
+                    GUMBEL_BYTES_PER_ACTION.checked_mul(u64::try_from(actions).ok()?)?,
+                )?
+            } else {
+                slot
+            };
             bytes = bytes.checked_add(slot)?;
             rows = rows.checked_add(usize::try_from(puct.batch_size).ok()?.max(1))?;
         }
@@ -453,6 +463,11 @@ where
     fn call(&mut self, evaluator: &mut impl Evaluator<E>) -> Result<(), GroupError> {
         self.prologue(evaluator)?;
         while self.round(evaluator)? {}
+        for &i in &self.participants {
+            if let Some(m) = self.slots.get_mut(i) {
+                m.finish_root().map_err(at(i))?;
+            }
+        }
         Ok(())
     }
 
@@ -466,7 +481,7 @@ where
             let Some(m) = self.slots.get_mut(i) else {
                 continue;
             };
-            let unevaluated = m.root_unevaluated();
+            let unevaluated = m.root_needs_eval();
             if unevaluated {
                 m.load_root().map_err(at(i))?;
                 any_root = true;
@@ -565,6 +580,7 @@ where
             }
             let k = self.ranges.get(i).map_or(0, |r| r.1);
             m.commit_and_backup(k).map_err(at(i))?;
+            m.advance_phase().map_err(at(i))?;
             let n = self.collected.get(i).copied().unwrap_or(0);
             if let Some(d) = self.done.get_mut(i) {
                 *d = d.saturating_add(n.max(1));
@@ -651,3 +667,7 @@ where
         }
     }
 }
+
+#[cfg(test)]
+#[path = "group_gumbel_tests.rs"]
+mod gumbel_tests;

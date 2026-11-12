@@ -189,6 +189,14 @@ pub enum SearchError {
     /// `set_root` with a full record on a determinized pool.
     #[error("a determinized pool takes its roots from set_root_determinized")]
     DeterminizedPool,
+    /// A Gumbel root decision found a state its invariants exclude (a
+    /// halving with pending virtual loss, or no root visit); the call is
+    /// rolled back.
+    #[error("Gumbel root invariant: {reason}")]
+    GumbelInvariant {
+        /// What did not hold.
+        reason: &'static str,
+    },
     /// `set_root_determinized` on a pool not made by `new_determinized`.
     #[error("the pool was not made by new_determinized")]
     NotDeterminized,
