@@ -115,10 +115,12 @@ varargs!(active, api::active);
 varargs!(run, api::run);
 varargs!(root_visits, api::root_visits);
 varargs!(select_action, api::select_action);
+varargs!(improved_policy, api::improved_policy);
+varargs!(considered, api::considered);
 varargs!(calls, api::calls);
 varargs!(tree_hash, api::tree_hash);
 
-static METHODS: Table<[ffi::PyMethodDef; 11]> = Table([
+static METHODS: Table<[ffi::PyMethodDef; 13]> = Table([
     method(
         c"layout",
         thunks::GROUP_LAYOUT,
@@ -166,6 +168,18 @@ static METHODS: Table<[ffi::PyMethodDef; 11]> = Table([
         thunks::GROUP_SELECT_ACTION,
         ffi::METH_VARARGS,
         c"select_action(i, temperature: float) -> int",
+    ),
+    method(
+        c"improved_policy",
+        thunks::GROUP_IMPROVED_POLICY,
+        ffi::METH_VARARGS,
+        c"improved_policy(i): slot i's last Gumbel improved policy, or None.",
+    ),
+    method(
+        c"considered",
+        thunks::GROUP_CONSIDERED,
+        ffi::METH_VARARGS,
+        c"considered(i): the actions slot i's last Gumbel call considered, or None.",
     ),
     method(
         c"calls",

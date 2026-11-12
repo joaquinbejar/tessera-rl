@@ -19,8 +19,8 @@ use tessera_rl_engine::{ActionInput, AutoReset, EnvPool, Masked, PoolOptions, Re
 use tessera_rl_games::{Connect4, Connect4Config};
 use tessera_rl_num::identity::Seed;
 use tessera_rl_search::{
-    Evaluator, EvaluatorError, Eviction, Mcts, PuctConfig, RootNoise, SearchError, SearchOptions,
-    SearchPool,
+    Evaluator, EvaluatorError, Eviction, GumbelConfig, Mcts, PuctConfig, RootNoise, RootSelection,
+    SearchError, SearchOptions, SearchPool,
 };
 
 type C4 = Mcts<Connect4, Masked>;
@@ -572,3 +572,68 @@ fn test_mcts_lazy_observations_equal_an_eager_restore_of_each_leaf() {
         assert_eq!(obs.as_slice(), eager);
     }
 }
+
+/// One Gumbel call of 64 simulations from moves "33" with the canned
+/// evaluator: root visits, `considered` (in its `g + logit` order) and the
+/// bits of `pi'`.
+fn gumbel_golden(m: u32, c_visit: f64, c_scale: f64) -> ([u32; 7], Vec<u32>, Vec<u64>) {
+    let mut g = GumbelConfig::default();
+    g.m = m;
+    g.c_visit = c_visit;
+    g.c_scale = c_scale;
+    let mut cfg = config(64);
+    cfg.root = RootSelection::Gumbel(g);
+    let mut t = mcts_with("33", 4_096, Eviction::Strict, cfg);
+    t.run(&mut Canned::default()).unwrap();
+    let pi = t
+        .improved_policy()
+        .unwrap()
+        .iter()
+        .map(|p| p.to_bits())
+        .collect();
+    (visits(&t), t.considered().unwrap().to_vec(), pi)
+}
+
+/// The Gumbel golden at non-default, mutually distinct parameters, pinned
+/// by `tests/python/test_search_gumbel.py` too (same canned evaluator and
+/// configuration): the Python keywords reach the root unchanged. The
+/// `considered` golden pins its `g + logit` order. Swapping `c_visit` and
+/// `c_scale` gives a different result, so a swap cannot pass.
+#[test]
+fn test_mcts_gumbel_canned_non_default_parameters_match_the_golden() {
+    let (v, considered, pi) = gumbel_golden(5, 7.0, 0.25);
+    assert_eq!(v, GUMBEL_GOLDEN_VISITS, "visits");
+    assert_eq!(
+        considered, GUMBEL_GOLDEN_CONSIDERED,
+        "considered, in g + logit order"
+    );
+    assert_eq!(pi, GUMBEL_GOLDEN_PI, "pi' bits");
+    // c_visit and c_scale swapped: a different result, pinned too.
+    let (v, considered, pi) = gumbel_golden(5, 0.25, 7.0);
+    assert_eq!(v, GUMBEL_SWAPPED_VISITS, "swapped visits");
+    assert_eq!(considered, GUMBEL_GOLDEN_CONSIDERED, "swapped considered");
+    assert_eq!(pi, GUMBEL_SWAPPED_PI, "swapped pi' bits");
+    assert_ne!(GUMBEL_GOLDEN_VISITS, GUMBEL_SWAPPED_VISITS);
+}
+
+const GUMBEL_GOLDEN_VISITS: [u32; 7] = [0, 11, 4, 4, 21, 0, 24];
+const GUMBEL_GOLDEN_CONSIDERED: [u32; 5] = [6, 4, 1, 3, 2];
+const GUMBEL_GOLDEN_PI: [u64; 7] = [
+    4_584_876_839_956_315_614,
+    4_603_226_790_965_136_495,
+    4_591_534_291_073_510_997,
+    4_573_213_820_550_780_334,
+    4_597_435_002_197_361_655,
+    4_584_041_255_044_906_035,
+    4_586_914_687_407_492_570,
+];
+const GUMBEL_SWAPPED_VISITS: [u32; 7] = [0, 24, 11, 4, 21, 0, 4];
+const GUMBEL_SWAPPED_PI: [u64; 7] = [
+    4_414_899_172_717_906_835,
+    4_607_182_389_384_827_373,
+    4_374_495_790_669_612_832,
+    4_153_033_190_101_442_774,
+    4_524_821_441_167_259_493,
+    4_414_246_379_659_885_565,
+    4_188_508_303_190_178_019,
+];

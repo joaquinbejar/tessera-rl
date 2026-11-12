@@ -19,7 +19,7 @@ use crate::errors::{Kind, error, to_py};
 use crate::ffi::capi::{self, CResult, Gil, Mine, Raised, Ref};
 use crate::ffi::inner::Inner;
 use crate::search::{GroupOps, SearchArgs};
-use crate::search_api::{PyEval, SEARCH_KEYS, apply_options, one_arg};
+use crate::search_api::{PyEval, SEARCH_KEYS, apply_options, floats, ints, one_arg};
 
 /// The state behind a `SearchGroup` object.
 pub(crate) type GroupInner = Inner<dyn GroupOps>;
@@ -204,6 +204,26 @@ pub(crate) fn select_action(g: Gil, inner: &GroupInner, args: Ref<'_>) -> CResul
     let t = capi::to_f64(g, t, "temperature")?;
     let a = inner.with(g, |ops| ops.select_action(i, t).map_err(|e| to_py(g, e)))?;
     capi::int_u64(g, a.into())
+}
+
+/// `improved_policy(i) -> list[float] | None`.
+pub(crate) fn improved_policy(g: Gil, inner: &GroupInner, args: Ref<'_>) -> CResult<Mine> {
+    let [i] = one_arg(g, args, "improved_policy(i)")?;
+    let i = slot(g, i)?;
+    inner.with(g, |ops| {
+        let v = ops.improved_policy(i).map_err(|e| to_py(g, e))?;
+        floats(g, v)
+    })
+}
+
+/// `considered(i) -> list[int] | None`.
+pub(crate) fn considered(g: Gil, inner: &GroupInner, args: Ref<'_>) -> CResult<Mine> {
+    let [i] = one_arg(g, args, "considered(i)")?;
+    let i = slot(g, i)?;
+    inner.with(g, |ops| {
+        let v = ops.considered(i).map_err(|e| to_py(g, e))?;
+        ints(g, v)
+    })
 }
 
 /// `calls(i) -> int`.

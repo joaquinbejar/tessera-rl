@@ -1,12 +1,18 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! A counting global allocator with bounded raw diagnostics, for the
-//! allocation tests of the Sync scheduler (`alloc_sync.rs`) and the probes
-//! of the diagnostics themselves (`alloc_sync_probe.rs`). Each binary that
-//! includes this module installs the allocator.
+//! allocation tests of the threaded modes (`alloc_sync.rs`,
+//! `alloc_pipelined.rs`, `alloc_async.rs`), of the id rings
+//! (`alloc_rings.rs`) and the probes of the diagnostics themselves
+//! (`alloc_sync_probe.rs`). Each binary that includes this module installs
+//! the allocator and holds a single test.
 //!
-//! While counting is on, every allocation on every thread is counted
-//! first. Then, under a per-thread reentrancy guard, it claims a slot of a
+//! Inside a window, allocator calls are attributed by thread with the rule
+//! of `support/attribution.rs` (issue #43): the measuring thread (the one
+//! that called [`start`]) and the engine's gang workers are counted, the
+//! harness thread `main` is excluded and printed, and any other thread
+//! fails the window at [`stop`]. Each counted allocation, under a
+//! per-thread reentrancy guard, then claims a slot of a
 //! static table by an atomic index and stores raw data only: the size, a
 //! thread tag, up to [`NAME`] bytes of the thread's name, the kernel the
 //! thread is in (step, reset, or none: park, wake and the engine's own
@@ -19,6 +25,11 @@ use core::cell::Cell;
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::fmt::Write as _;
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicU64, AtomicUsize, Ordering};
+
+use attribution::{Class, delta};
+
+#[path = "../support/attribution.rs"]
+mod attribution;
 
 use super::common::{CountConfig, Counter, Counts};
 use tessera_rl_core::io::{ActionWriter, Actions, MaskWriter, ObsWriter};
@@ -34,7 +45,6 @@ pub const EVENTS: usize = 16;
 /// Bytes of the thread name kept per event.
 pub const NAME: usize = 24;
 
-static COUNTING: AtomicBool = AtomicBool::new(false);
 static ALLOCATIONS: AtomicU64 = AtomicU64::new(0);
 static NEXT: AtomicUsize = AtomicUsize::new(0);
 static THREAD_TAGS: AtomicU32 = AtomicU32::new(1);
@@ -80,30 +90,48 @@ thread_local! {
 /// allocation).
 pub static ALLOCATE_IN_STEP: AtomicBool = AtomicBool::new(false);
 
-/// Starts a counted window: the count and the table are cleared.
+/// Starts a counted window on this thread, the measuring one: the count
+/// and the table are cleared.
 ///
 /// The window is not a barrier: an allocation on another thread that
-/// passed the `COUNTING` check just before [`stop`] may still increment the
+/// passed the window check just before [`stop`] may still increment the
 /// count, or fill a table slot, after `stop` returns. Callers stop counting
 /// only once the code under test has returned (a completed step joins every
 /// worker), so the race can only add events, never hide one.
 pub fn start() {
     ALLOCATIONS.store(0, Ordering::Relaxed);
     NEXT.store(0, Ordering::Relaxed);
-    COUNTING.store(true, Ordering::Release);
+    attribution::begin();
 }
 
-/// Ends the counted window; returns the count.
+/// Ends the counted window; returns the count of the counted threads.
+///
+/// # Panics
+///
+/// If a thread other than the measuring one, a gang worker or `main`
+/// called the allocator in the window.
 pub fn stop() -> u64 {
-    COUNTING.store(false, Ordering::Release);
-    ALLOCATIONS.load(Ordering::Relaxed)
+    let tally = attribution::end();
+    let n = ALLOCATIONS.load(Ordering::Relaxed);
+    debug_assert!(n <= tally.calls, "recorded {n}, attributed {tally:?}");
+    n
+}
+
+/// Attributes one allocator call of `bytes` net; an allocation call of a
+/// counted thread is counted and recorded with its `size`.
+fn count(size: usize, bytes: i64, allocation: bool) {
+    if RECORDING.try_with(|r| r.replace(true)).unwrap_or(true) {
+        return;
+    }
+    let class = attribution::note(bytes, allocation);
+    if allocation && matches!(class, Some(Class::Measuring | Class::Worker)) {
+        record(size);
+    }
+    let _ = RECORDING.try_with(|r| r.set(false));
 }
 
 /// Counts one allocation of `size` bytes and records it.
-fn count(size: usize) {
-    if !COUNTING.load(Ordering::Acquire) || RECORDING.with(|r| r.replace(true)) {
-        return;
-    }
+fn record(size: usize) {
     ALLOCATIONS.fetch_add(1, Ordering::Relaxed);
     let slot = NEXT.fetch_add(1, Ordering::Relaxed);
     if let Some(e) = TABLE.get(slot) {
@@ -132,7 +160,6 @@ fn count(size: usize) {
         }
         e.name_len.store(n, Ordering::Relaxed);
     }
-    RECORDING.with(|r| r.set(false));
 }
 
 /// The counting allocator.
@@ -141,21 +168,23 @@ pub struct Counting;
 #[expect(unsafe_code, reason = "test-only counting allocator")]
 // SAFETY: every method forwards to `System` with the same arguments; the
 // counters are atomics and const-initialized thread locals, which never
-// allocate.
+// allocate, and the attribution reads `thread::current`, which does not
+// allocate on the threads it runs on.
 unsafe impl GlobalAlloc for Counting {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        count(layout.size());
+        count(layout.size(), delta(layout.size()), true);
         // SAFETY: forwarded unchanged; the caller upholds `alloc`'s contract.
         unsafe { System.alloc(layout) }
     }
 
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+        count(layout.size(), -delta(layout.size()), false);
         // SAFETY: `ptr` was allocated by `System` with `layout`.
         unsafe { System.dealloc(ptr, layout) }
     }
 
     unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
-        count(new_size);
+        count(new_size, delta(new_size) - delta(layout.size()), true);
         // SAFETY: forwarded unchanged; the caller upholds `realloc`'s contract.
         unsafe { System.realloc(ptr, layout, new_size) }
     }

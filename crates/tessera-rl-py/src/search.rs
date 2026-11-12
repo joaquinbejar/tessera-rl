@@ -21,8 +21,8 @@ use tessera_rl_engine::{
 use tessera_rl_games::{Connect4, Connect4Config};
 use tessera_rl_num::identity::Seed;
 use tessera_rl_search::{
-    DEFAULT_GROUP_BUDGET, Evaluator, EvaluatorError, Eviction, LeafBatch, Mcts, PuctConfig,
-    RootNoise, SearchError, SearchGroup, SearchOptions, SearchPool,
+    DEFAULT_GROUP_BUDGET, Evaluator, EvaluatorError, Eviction, GumbelConfig, LeafBatch, Mcts,
+    PuctConfig, RootNoise, RootSelection, SearchError, SearchGroup, SearchOptions, SearchPool,
 };
 
 use crate::env::BindError;
@@ -104,6 +104,12 @@ pub(crate) trait SearchOps: Send {
     fn root_visits(&self) -> Vec<u32>;
     /// The action to play (greedy at 0).
     fn select_action(&mut self, temperature: f64) -> Result<u32, BindError>;
+    /// The last Gumbel call's improved policy, `None` under PUCT, before
+    /// any call or once the root changed.
+    fn improved_policy(&self) -> Option<Vec<f64>>;
+    /// The last Gumbel call's considered actions `S_0`, `None` as for
+    /// [`Self::improved_policy`].
+    fn considered(&self) -> Option<Vec<u32>>;
     /// Completed calls.
     fn calls(&self) -> u64;
     /// The tree digest.
@@ -160,6 +166,14 @@ where
         Ok(self.mcts.select_action(temperature)?)
     }
 
+    fn improved_policy(&self) -> Option<Vec<f64>> {
+        self.mcts.improved_policy().map(<[f64]>::to_vec)
+    }
+
+    fn considered(&self) -> Option<Vec<u32>> {
+        self.mcts.considered().map(<[u32]>::to_vec)
+    }
+
     fn calls(&self) -> u64 {
         self.mcts.calls()
     }
@@ -179,7 +193,13 @@ pub(crate) struct SearchArgs {
     pub(crate) capacity: u32,
     pub(crate) batch: u32,
     pub(crate) eviction: Eviction,
+    /// The PUCT options; its `root` is set from the two fields below by
+    /// [`Self::config`].
     pub(crate) puct: PuctConfig,
+    /// Whether the root is the Gumbel root (`root="gumbel"`).
+    pub(crate) gumbel_root: bool,
+    /// The Gumbel root's options, used under `root="gumbel"` only.
+    pub(crate) gumbel: GumbelConfig,
     pub(crate) seed: u64,
 }
 
@@ -191,8 +211,21 @@ impl SearchArgs {
             batch: 8,
             eviction: Eviction::Strict,
             puct: PuctConfig::default(),
+            gumbel_root: false,
+            gumbel: GumbelConfig::default(),
             seed: 0,
         }
+    }
+
+    /// The search configuration, with the root selection applied.
+    pub(crate) fn config(&self) -> PuctConfig {
+        let mut cfg = self.puct;
+        cfg.root = if self.gumbel_root {
+            RootSelection::Gumbel(self.gumbel)
+        } else {
+            RootSelection::Puct
+        };
+        cfg
     }
 
     /// Sets root noise.
@@ -233,7 +266,7 @@ fn connect4_tree(args: &SearchArgs) -> Result<Connect4Tree, BindError> {
     );
     options.eviction = args.eviction;
     let pool = SearchPool::new(Connect4Config {}, options, &root, EnvPool::with_masks)?;
-    let mcts = Mcts::new(pool, args.puct)?;
+    let mcts = Mcts::new(pool, args.config())?;
     Ok((mcts, importer))
 }
 
@@ -277,6 +310,10 @@ pub(crate) trait GroupOps: Send {
     fn root_visits(&self, i: usize) -> Result<Vec<u32>, BindError>;
     /// Slot `i`'s action to play.
     fn select_action(&mut self, i: usize, temperature: f64) -> Result<u32, BindError>;
+    /// Slot `i`'s last Gumbel improved policy (see [`SearchOps`]).
+    fn improved_policy(&self, i: usize) -> Result<Option<Vec<f64>>, BindError>;
+    /// Slot `i`'s last Gumbel considered actions (see [`SearchOps`]).
+    fn considered(&self, i: usize) -> Result<Option<Vec<u32>>, BindError>;
     /// Slot `i`'s completed calls.
     fn calls(&self, i: usize) -> Result<u64, BindError>;
     /// Slot `i`'s tree digest.
@@ -392,6 +429,14 @@ where
         Ok(self.tree_mut(i)?.select_action(temperature)?)
     }
 
+    fn improved_policy(&self, i: usize) -> Result<Option<Vec<f64>>, BindError> {
+        Ok(self.tree(i)?.improved_policy().map(<[f64]>::to_vec))
+    }
+
+    fn considered(&self, i: usize) -> Result<Option<Vec<u32>>, BindError> {
+        Ok(self.tree(i)?.considered().map(<[u32]>::to_vec))
+    }
+
     fn calls(&self, i: usize) -> Result<u64, BindError> {
         Ok(self.tree(i)?.calls())
     }
@@ -419,7 +464,7 @@ pub(crate) fn connect4_group(slots: &[SearchArgs]) -> Result<Box<dyn GroupOps>, 
             let mut o =
                 SearchOptions::new(nonzero(a.capacity, "capacity")?, nonzero(a.batch, "batch")?);
             o.eviction = a.eviction;
-            Ok((o, a.puct))
+            Ok((o, a.config()))
         })
         .collect::<Result<Vec<_>, BindError>>()?;
     let bound = SearchGroup::<Connect4, Masked>::bound_bytes(&Connect4Config {}, &shapes);
