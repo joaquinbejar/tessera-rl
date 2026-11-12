@@ -4,7 +4,7 @@
 # maturin's default of macOS 11. Ignored on other platforms.
 export MACOSX_DEPLOYMENT_TARGET := 13.0
 
-.PHONY: fuzz-check simd-disasm dashboard dashboard-check check-build-id gungraun-threaded fmt fmt-check clippy test doc readme readme-check pre-push deny check-targets wheel-golden py-test-wheels puffer-test py-test-jax pre-push-jax compat-test py-entries py-callouts py-test py-test-hooks py-test-torch pre-push-torch gym-equivalence reference-training learning-test learning-calibrate bench bench-quick bench-kernels gungraun gungraun-bless connect4-calibration search-strength
+.PHONY: onnx-test fuzz-check simd-disasm dashboard dashboard-check check-build-id gungraun-threaded fmt fmt-check clippy test doc readme readme-check pre-push deny check-targets wheel-golden py-test-wheels puffer-test py-test-jax pre-push-jax compat-test py-entries py-callouts py-test py-test-hooks py-test-torch pre-push-torch gym-equivalence reference-training learning-test learning-calibrate bench bench-quick bench-kernels gungraun gungraun-bless connect4-calibration search-strength
 
 fmt:
 	cargo fmt --all
@@ -31,6 +31,20 @@ readme-check:
 	cargo readme -r crates/tessera-rl -t $(CURDIR)/README.tpl --no-title --no-license --no-indent-headings | diff -u README.md -
 
 pre-push: fmt-check clippy test doc readme-check compat-test py-entries py-callouts py-test py-test-hooks py-test-wheels dashboard-check simd-disasm fuzz-check
+
+# The audited ONNX Runtime version read against the real library (ADR-0057).
+# ONNXRUNTIME_LIB is the libonnxruntime of onnxruntime==1.31.1. Telemetry is
+# off and HOME is a fresh scratch directory under target/: no test loads the
+# runtime with telemetry enabled. CARGO_HOME and RUSTUP_HOME keep their real
+# locations.
+ONNX_TEST_HOME := $(CURDIR)/target/onnx-test-home
+onnx-test:
+	@test -n "$(ONNXRUNTIME_LIB)" || { echo "onnx-test: set ONNXRUNTIME_LIB to libonnxruntime 1.31.1" >&2; exit 2; }
+	rm -rf $(CURDIR)/target/onnx-test-home
+	mkdir -p $(CURDIR)/target/onnx-test-home
+	CARGO_HOME=$${CARGO_HOME:-$$HOME/.cargo} RUSTUP_HOME=$${RUSTUP_HOME:-$$HOME/.rustup} \
+	HOME=$(ONNX_TEST_HOME) ORT_DISABLE_TELEMETRY=1 TESSERA_ONNXRUNTIME_LIB="$(ONNXRUNTIME_LIB)" \
+	cargo test -p tessera-rl-onnx --features onnx --locked -- --include-ignored
 
 check-build-id:
 	scripts/check_build_id.sh

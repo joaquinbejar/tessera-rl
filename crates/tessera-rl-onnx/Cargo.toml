@@ -1,0 +1,29 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
+[package]
+name = "tessera-rl-onnx"
+description = "Tessera ONNX search evaluator: loading and checks of ONNX Runtime (ADR-0057)"
+readme = "README.md"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[features]
+default = []
+# ONNX Runtime through `ort` with dynamic loading (ADR-0057 section 6).
+# Off by default: without it the crate has no C dependency.
+onnx = ["dep:ort", "dep:libloading"]
+
+[dependencies]
+thiserror.workspace = true
+libloading = { workspace = true, optional = true }
+ort = { workspace = true, optional = true }
+
+[lints]
+workspace = true

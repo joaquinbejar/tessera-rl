@@ -13,6 +13,7 @@ members = [
     "crates/tessera-rl-games",
     "crates/tessera-rl-search",
     "crates/tessera-rl-rts",
+    "crates/tessera-rl-onnx",
     "tools/math-oracle",
     "tools/bench-runner",
     "tools/connect4-ref",
@@ -33,6 +34,7 @@ default-members = [
     "crates/tessera-rl-games",
     "crates/tessera-rl-search",
     "crates/tessera-rl-rts",
+    "crates/tessera-rl-onnx",
     "tests/downstream",
 ]
 
@@ -71,6 +73,12 @@ proptest = { version = "1", default-features = false, features = ["std"] }
 # registered through the thunk table).
 pyo3 = { version = "0.30", default-features = false, features = ["abi3-py311", "extension-module"] }
 libc = "0.2"
+# The ONNX evaluator (ADR-0057): `ort` pinned exactly (owner decision
+# 2026-11-12), dynamic loading only, no binaries downloaded at build time.
+# `libloading` is the version `ort` itself resolves; it is used directly
+# only by the audited `onnx::sys` version read.
+libloading = "0.9"
+ort = { version = "=2.0.0-rc.15", default-features = false, features = ["load-dynamic"] }
 loom = "0.7"
 proc-macro-crate = "3"
 proc-macro2 = "1"
@@ -86,7 +94,7 @@ xxhash-rust = { version = "0.8", default-features = false, features = ["xxh3"] }
 unexpected_cfgs = { level = "warn", check-cfg = ["cfg(loom)"] }
 missing_docs = "deny"
 # `deny`, not `forbid`: the audited modules (engine::buffer, engine::sys,
-# py::ffi, simd, core::encoding, num::fp) opt in with
+# py::ffi, simd, core::encoding, num::fp, onnx::sys) opt in with
 # `#[expect(unsafe_code, reason = "...")]`; every other module stays denied.
 unsafe_code = "deny"
 unsafe_op_in_unsafe_fn = "deny"
