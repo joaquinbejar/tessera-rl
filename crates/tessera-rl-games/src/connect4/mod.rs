@@ -236,6 +236,10 @@ impl Environment for Connect4 {
 /// Bytes of the observation board: two planes of `CELLS`.
 const BOARD_BYTES: usize = 2 * CELLS as usize;
 
+// observe writes the board as raw bytes, one per element: a dtype change
+// of `Connect4Obs::BOARD` must not compile silently.
+const _: tessera_rl_core::LeafId<u8> = Connect4Obs::BOARD;
+
 /// Writes the two planes, top row first, into `dst`.
 #[inline]
 fn write_planes(dst: &mut [u8; BOARD_BYTES], planes: [u64; 2]) {
