@@ -864,6 +864,54 @@ mod tests {
         );
     }
 
+    /// The FPCR trap enables (IOE, DZE, OFE, UFE, IXE: bits 8 to 12; IDE:
+    /// bit 15) are optional in AArch64: a core without trapped
+    /// floating-point exceptions reads them as zero and ignores writes
+    /// (RAZ/WI). Where they stick, a call through the boundary clears them
+    /// inside and restores exactly the caller's enables; where they read
+    /// back as zero, only that restoration assertion is skipped (issue
+    /// #229).
+    #[cfg(target_arch = "aarch64")]
+    #[test]
+    #[expect(
+        clippy::print_stdout,
+        reason = "the test reports what the CPU implements"
+    )]
+    fn test_thunk_trap_enables_where_writable_are_restored_exactly() {
+        const TRAP_ENABLES: fp::Control = (0b1_1111 << 8) | (1 << 15);
+        let enable = |c: fp::Control| c | TRAP_ENABLES;
+        // Written and read back with no call in between: what the CPU
+        // latches.
+        let ((), latched) = hostile::run(enable, || ());
+        let writable = latched & TRAP_ENABLES;
+        let (got, after) = hostile::run(enable, call6);
+        assert_eq!(got, expected(), "arguments and result pass through");
+        assert!(
+            INSIDE_CANONICAL.with(Cell::get),
+            "every trap enable is clear inside the call"
+        );
+        assert_eq!(
+            hostile::control_bits(after) & !TRAP_ENABLES,
+            hostile::control_bits(latched) & !TRAP_ENABLES,
+            "the caller's other control bits are restored"
+        );
+        std::println!(
+            "FPCR trap enables: requested {TRAP_ENABLES:#06x}, read back {writable:#06x}, after the call {:#06x}",
+            after & TRAP_ENABLES
+        );
+        if writable == 0 {
+            std::println!(
+                "FPCR trap enables read back as zero (RAZ/WI): this CPU does not implement trapped floating-point exceptions; restoration assertion skipped"
+            );
+            return;
+        }
+        assert_eq!(
+            after & TRAP_ENABLES,
+            writable,
+            "the caller's trap enables are restored exactly"
+        );
+    }
+
     /// The per-call cost of the boundary against a direct call (release,
     /// run with `--ignored --nocapture`).
     #[test]
