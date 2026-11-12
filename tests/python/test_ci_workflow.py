@@ -88,3 +88,12 @@ def test_ci_wheels_linux_x86_64_stays_on_xaskar():
 def test_ci_self_hosted_job_keeps_the_fork_guard(job):
     if "self-hosted" in _runs_on(job):
         assert FORK_GUARD in JOBS[job]
+
+
+def test_ci_python_job_expects_fp_traps():
+    # #225: on x86-64 the unmasked FP boundary test must not skip.
+    assert re.search(r'^    env:\n(?:      .*\n)*?      TESSERA_EXPECT_FP_TRAPS: "1"$', JOBS["python"], re.M)
+
+
+def test_ci_only_the_python_job_expects_fp_traps():
+    assert [j for j, body in JOBS.items() if "TESSERA_EXPECT_FP_TRAPS" in body] == ["python"]

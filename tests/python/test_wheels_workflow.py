@@ -66,3 +66,16 @@ def test_wheels_leaves_nothing_needing_a_chown():
 def test_wheel_job_excludes_only_the_bench_tests():
     assert re.findall(r"--ignore\S*", JOB) == ['--ignore="$root/tests/python/test_bench.py"']
     assert "--deselect" not in JOB
+
+
+def test_wheels_x86_64_expects_fp_traps_and_the_hosted_arm_job_does_not():
+    # #225: x86-64 implements trapped FP exceptions, so the unmasked FP
+    # boundary test must check the enables there; the hosted arm64 core
+    # may not, so its job leaves the variable unset.
+    linux = _job("linux")
+    entry = re.search(r"- runner: xaskar\n(.*?)\n    container:", linux, re.DOTALL).group(1)
+    assert "target: x86_64-unknown-linux-gnu" in entry
+    assert re.search(r'^            expect_fp_traps: "1"$', entry, re.M)
+    assert "      TESSERA_EXPECT_FP_TRAPS: ${{ matrix.expect_fp_traps }}\n" in linux
+    assert "TESSERA_EXPECT_FP_TRAPS" not in _job("linux-aarch64")
+    assert WORKFLOW.count("TESSERA_EXPECT_FP_TRAPS") == 1
