@@ -213,3 +213,47 @@ def test_pgo_determinism_compare_writes_the_wheels(report, tmp_path, capsys):
     assert saved["passed"] is True and saved["wheels"] == ["w0", "w1"]
     capsys.readouterr()
 
+
+
+# Two heads of 97 choices, both unconditioned, four entities: a draw that
+# ignored the instance, the slot, t, the unit or the head would repeat.
+_WIDE = (((0, (), 97), (97, (), 97)), 194, 4)
+_ALL = [True] * (194 * 4)
+
+
+@pytest.mark.parametrize(
+    "other",
+    [(5, 1, 9), (4, 0, 9), (4, 1, 10)],
+    ids=["instance", "slot", "t"],
+)
+def test_pgo_determinism_multi_action_each_key_part_changes_the_actions(other):
+    """TR S1 to S4: seeds (4, 1, 9) against one changed part each."""
+    assert det.multi_action(4, 1, 9, _WIDE, _ALL) != det.multi_action(*other, _WIDE, _ALL)
+
+
+def test_pgo_determinism_multi_action_units_and_heads_draw_apart():
+    """Within one call (seeds 4, 1, 9) the units differ and the two heads of
+    a unit are not one draw repeated."""
+    got = det.multi_action(4, 1, 9, _WIDE, _ALL)
+    units = [tuple(got[2 * e : 2 * e + 2]) for e in range(4)]
+    assert len(set(units)) == 4
+    assert any(a != b for a, b in units)
+
+
+class _Stub(NamedTuple):
+    action_nvec: tuple
+    mask_heads: list
+    entity_group_heads: int
+
+
+def test_pgo_determinism_layout_refuses_a_head_depending_on_another_than_the_first():
+    """TR S5: the third head depends on the second, not on the first."""
+    stub = _Stub((3, 4, 5), [(0, (), 3), (3, (3,), 4), (15, (4,), 5)], 3)
+    with pytest.raises(ValueError, match="only depend on"):
+        det._layout(stub)
+
+
+def test_pgo_determinism_layout_one_entity_needs_no_private_mask_length():
+    stub = _Stub((3, 5), [(0, (), 3), (3, (3,), 5)], 2)
+    group, period, entities = det._layout(stub)
+    assert list(group) == [(0, (), 3), (3, (3,), 5)] and period == 0 and entities == 1

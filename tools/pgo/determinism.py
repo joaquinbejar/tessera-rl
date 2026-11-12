@@ -67,7 +67,9 @@ ENVS = {
     "othello": ("tessera/Othello-v1", {}),
     "go9": ("tessera/Go9-v1", {}),
     "leduc": ("tessera/Leduc-v1", {}),
-    # Few units, a small map: the per-unit Python draws stay cheap.
+    # Few units, a small map: the per-unit Python draws stay cheap. The
+    # determinism of the protocol-size environment is covered by the RTS
+    # goldens, not by this tool.
     "rts": ("tessera/RTS-v1", {"size": 12, "max_units": 8}),
 }
 
@@ -100,7 +102,8 @@ def _layout(env):
     per = env.entity_group_heads or len(heads)
     group = heads[:per]
     entities = len(nvec) // per
-    period = heads[per][0] if entities > 1 else env._mask_len
+    # One entity: the period is multiplied by e = 0 and never used.
+    period = heads[per][0] if entities > 1 else 0
     if group[0][1] != () or any(parents not in ((), (group[0][2],)) for _, parents, _ in group[1:]):
         raise ValueError("multi-head actions: heads other than the first may only depend on it")
     return group, period, entities
