@@ -160,9 +160,11 @@ def test_gungraun_bless_records_the_blessed_commit_in_the_artifact_name():
     head = re.search(r"^      - id: head\n((?:        .*\n)+)", steps, re.M)
     assert head, "no step with id head"
     body = head.group(1)
-    assert 'sha="$(git rev-parse HEAD)"' in body
-    assert 'echo "blessed commit: $sha"' in body
-    assert 'echo "sha=$sha" >> "$GITHUB_OUTPUT"' in body
+    assert "COMMIT: ${{ steps.checkout.outputs.commit }}" in body
+    assert '[[ "$COMMIT" =~ ^[0-9a-f]{40}$ ]] ||' in body
+    assert 'echo "blessed commit: $COMMIT"' in body
+    assert 'echo "sha=$COMMIT" >> "$GITHUB_OUTPUT"' in body
+    assert re.search(r"^      - uses: actions/checkout@[0-9a-f]{40}.*\n        id: checkout\n", steps, re.M)
     assert steps.index("- id: head") < steps.index("scripts/gungraun.sh bless")
     name = _one(r"^          name: (gungraun-baseline-.*)$", JOB)
     assert name == "gungraun-baseline-${{ github.run_id }}-${{ steps.head.outputs.sha }}"
@@ -171,3 +173,11 @@ def test_gungraun_bless_records_the_blessed_commit_in_the_artifact_name():
 def test_gungraun_bless_job_has_a_timeout():
     minutes = int(_one(r"^    timeout-minutes: (\d+)$", JOB))
     assert 0 < minutes <= 180
+
+
+def test_gungraun_bless_no_run_block_calls_git():
+    # The job container runs as root over a workspace the runner user owns;
+    # git refuses such a repository ("dubious ownership"), which failed the
+    # first run on main. No step may depend on git working there.
+    for script in _run_scripts(BLESS):
+        assert not re.search(r"(^|[\s;&|(`$])git(\s|$)", script), script
