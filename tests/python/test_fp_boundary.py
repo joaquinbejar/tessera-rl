@@ -7,14 +7,17 @@ import os
 import pathlib
 import subprocess
 import sys
+import warnings
 
 import pytest
 
 CHILD = pathlib.Path(__file__).with_name("fp_child.py")
 
 
-def child(scenario, *flags):
-    proc = subprocess.run([sys.executable, *flags, str(CHILD), scenario], capture_output=True, text=True)
+def child(scenario, *flags, env=None):
+    proc = subprocess.run(
+        [sys.executable, *flags, str(CHILD), scenario], capture_output=True, text=True, env=env
+    )
     assert proc.returncode == 0, proc.stderr
     return json.loads(proc.stdout.strip().splitlines()[-1])
 
@@ -82,7 +85,10 @@ def check_unmasked(r, expect_traps=None):
     CI job on hardware that implements traps) that case fails instead."""
     if expect_traps is None:
         expect_traps = os.environ.get(EXPECT_TRAPS) == "1"
-    probe = f"cpu: {r.get('cpu')}; enables read back: {r.get('enabled_set')}; controls: {r.get('controls_with_enables')}"
+    probe = (
+        f"cpu: {r.get('cpu')}; enables requested: {r.get('enabled_requested')}; "
+        f"read back before the library: {r.get('enabled_set')}; controls: {r.get('controls_with_enables')}"
+    )
     print(probe)
     if "skipped" in r:
         assert not expect_traps, f"{EXPECT_TRAPS}=1 but the scenario could not run: {r['skipped']}"
@@ -96,6 +102,9 @@ def check_unmasked(r, expect_traps=None):
     if r["enables_reason"] is not None:
         assert r["enabled_set"] == 0, "a skip is decided only by a zero read-back"
         assert not expect_traps, f"{EXPECT_TRAPS}=1 but {r['enables_reason']} ({probe})"
+        # A warning too: `pytest -q` without -rs (the wheel job) still
+        # prints the warnings summary, so the probe reaches the CI log.
+        warnings.warn(f"FP trap enables not checked: {r['enables_reason']} ({probe})", stacklevel=2)
         pytest.skip(f"enables assertions only: {r['enables_reason']} ({probe})")
     assert r["enabled_set"] != 0, "the enables took effect before the call"
     assert r["enabled_after"] != 0, "the caller's unmasked exceptions are restored"
@@ -105,6 +114,21 @@ def check_unmasked(r, expect_traps=None):
 
 def test_fp_boundary_unmasked_exceptions_never_trap():
     check_unmasked(child("unmasked"))
+
+
+def test_fp_boundary_unmasked_simulated_raz_wi_checks_the_rest():
+    # A core whose trap enables are RAZ/WI, simulated in the child: the
+    # hostile episode still runs and every other assertion applies; only
+    # the enables part is reported skipped.
+    r = child("unmasked", env={**os.environ, "TESSERA_FP_CHILD_SIMULATE_RAZ": "1"})
+    if "skipped" in r:
+        pytest.skip(r["skipped"])
+    assert r["enabled_set"] == 0 and r["enables_reason"] is not None
+    assert "controls_after" in r and "flag_kept" in r, "the library ran with the hostile controls"
+    with pytest.warns(UserWarning, match="not checked"), pytest.raises(pytest.skip.Exception, match="read back as zero"):
+        check_unmasked(r, expect_traps=False)
+    with pytest.raises(AssertionError, match=EXPECT_TRAPS):
+        check_unmasked(r, expect_traps=True)
 
 
 def test_unmasked_skip_reason_zero_read_back_skips():
@@ -143,7 +167,7 @@ IGNORED = "this CPU does not implement trapped floating-point exceptions (FPCR e
 
 def test_check_unmasked_enables_ignored_skips():
     r = _result(enabled_set=0, enabled_after=0, enables_reason=IGNORED)
-    with pytest.raises(pytest.skip.Exception, match="read back as zero"):
+    with pytest.warns(UserWarning), pytest.raises(pytest.skip.Exception, match="read back as zero"):
         check_unmasked(r, expect_traps=False)
 
 

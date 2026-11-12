@@ -9,6 +9,7 @@ Usage: python fp_child.py SCENARIO. Prints one JSON object.
 import ctypes
 import ctypes.util
 import json
+import os
 import platform
 import sys
 import warnings
@@ -315,7 +316,12 @@ def main(scenario):
         else:
             default = run_episode()
             original = read_controls()
+            result["enabled_requested"] = FE_DIVBYZERO | FE_INVALID
             LIBM.feenableexcept(FE_DIVBYZERO | FE_INVALID)
+            if os.environ.get("TESSERA_FP_CHILD_SIMULATE_RAZ") == "1":
+                # Test-only: behave as a core whose trap enables are RAZ/WI
+                # (the write is ignored), so that path runs on any CPU.
+                LIBM.fedisableexcept(FE_DIVBYZERO | FE_INVALID)
             # Read the enables back before any call into the library: a CPU
             # may ignore the write (issue #225). Only this read-back decides
             # the skip.
