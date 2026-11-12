@@ -170,6 +170,11 @@ fn test_group_memory_bound_covers_the_retained_heap() {
 fn test_group_memory_gumbel_term_is_exact_and_covers_the_retained_heap() {
     let _serial = SERIAL.lock().unwrap();
     let root = record("");
+    // One discarded measurement of each first: one-time process
+    // allocations (lazy statics of the engine) must not land in either
+    // side of the difference.
+    let _ = measured_with(&root, 1, 8, 8, false);
+    let _ = measured_with(&root, 1, 8, 8, true);
     for (trees, capacity, batch) in [(1, 8, 8), (4, 64, 1), (3, 4_096, 16)] {
         let (puct_live, puct) = measured_with(&root, trees, capacity, batch, false);
         let (live, bound) = measured_with(&root, trees, capacity, batch, true);
