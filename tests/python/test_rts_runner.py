@@ -65,10 +65,21 @@ def protocol_result(wins, seed=0):
 @pytest.fixture
 def recorded(monkeypatch):
     """train returns an untrained agent marked with B decisions; evaluate
-    returns a protocol result with 300 wins. Records the calls."""
-    calls = []
+    returns a protocol result with 300 wins. Records the calls; with
+    ``calls.out`` set to the run directory it also records that the seed's
+    lock exists (holding the hash) when train starts, and the evaluation
+    marker when evaluate starts."""
+
+    class Calls(list):
+        out = None
+
+    calls = Calls()
 
     def fake_train(seed, h, a, f):
+        if calls.out is not None:
+            lock = rr.lock_path(calls.out, seed)
+            held = json.loads(lock.read_text()) if lock.exists() else {}
+            calls.append(("lock_before_train", held.get("sha256") == H and held.get("pid") == __import__("os").getpid()))
         calls.append(("train", seed, h == Hyper()))
         torch.manual_seed(seed)
         agent = Agent(11, h.size, 2, h.max_units, 6, 81, 4)
@@ -76,6 +87,8 @@ def recorded(monkeypatch):
         return agent
 
     def fake_evaluate(agent, h, a, f, seeds=ev.EVAL_SEEDS):
+        if calls.out is not None:
+            calls.append(("marker_before_evaluate", any(calls.out.glob("seed-*.evaluating"))))
         # S2: the evaluated policy is the one load returned, not the trained object.
         calls.append(("evaluate", getattr(agent, "loaded_from_disk", False)))
         r = protocol_result(300)
@@ -117,8 +130,10 @@ def test_rts_runner_refuses_a_second_run_of_a_seed_before_any_work(tmp_path, tri
 
 
 def test_rts_runner_trains_saves_checks_evaluates_and_writes_once(tmp_path, recorded, proto):
+    recorded.out = tmp_path
     r = rr.run_seed(3, tmp_path, proto, H, H)
-    assert recorded == [("train", 3, True), ("evaluate", True)]
+    assert recorded == [("lock_before_train", True), ("train", 3, True), ("marker_before_evaluate", True),
+                        ("evaluate", True)]  # fmt: skip
     assert rr.lock_path(tmp_path, 3).exists()
     saved = json.loads(rr.result_path(tmp_path, 3).read_text())
     assert saved["wins"] == 300 and saved["protocol"] is True and r["wins"] == 300
@@ -128,7 +143,7 @@ def test_rts_runner_trains_saves_checks_evaluates_and_writes_once(tmp_path, reco
     assert rr.policy_path(tmp_path, 3).exists()
     with pytest.raises(rr.Refused, match="used once"):
         rr.run_seed(3, tmp_path, proto, H, H)
-    assert len(recorded) == 2
+    assert len(recorded) == 4
 
 
 def _rec(**over):
@@ -239,3 +254,107 @@ def test_rts_runner_cli_exits_and_reports(tmp_path, tripped, proto, capsys):
     with pytest.raises(SystemExit) as e:
         rr.main(["seed", "0", "--out", str(tmp_path)])
     assert e.value.code != 0
+
+
+
+# -- crash rule: the evaluation marker and one rerun before it (TR, pre-read 5) --
+
+
+def _dead_pid():
+    p = __import__("subprocess").Popen([sys.executable, "-c", "pass"])
+    p.wait()
+    return p.pid
+
+
+def _crashed(dirpath, seed, marker=False, result=False, rerun=False, pid=None, host=None):
+    import socket
+
+    dirpath.mkdir(parents=True, exist_ok=True)
+    holder = {"sha256": H, "pid": _dead_pid() if pid is None else pid, "host": host or socket.gethostname()}
+    rr.lock_path(dirpath, seed).write_text(json.dumps(holder))
+    if marker:
+        rr.marker_path(dirpath, seed).write_text(H)
+    if result:
+        rr.result_path(dirpath, seed).write_text("{}")
+    if rerun:
+        rr.rerun_path(dirpath, seed).write_text("x")
+
+
+def test_rts_runner_reruns_a_seed_that_crashed_before_evaluation_once(tmp_path, recorded, proto):
+    old, new = tmp_path / "a", tmp_path / "b"
+    _crashed(old, 1)
+    recorded.out = new
+    r = rr.run_seed(1, new, proto, H, H, rerun_of=old)
+    assert r["rerun_of"] == str(old.resolve())
+    assert rr.rerun_path(new, 1).read_text() == str(old.resolve())
+    assert rr.lock_path(old, 1).exists()  # the crashed directory is kept
+    assert rr.taken_path(old, 1).read_text() == str(new.resolve())
+    assert ("train", 1, True) in recorded
+    # F1: once. A second rerun of the same crashed directory is refused before train.
+    trains = sum(1 for c in recorded if c[0] == "train")
+    with pytest.raises(rr.Refused, match="already rerun"):
+        rr.run_seed(1, tmp_path / "c", proto, H, H, rerun_of=old)
+    assert sum(1 for c in recorded if c[0] == "train") == trains
+
+
+@pytest.mark.parametrize("case", ["live_pid", "other_host", "plain_lock"])
+def test_rts_runner_refuses_to_rerun_a_seed_that_may_still_run(tmp_path, tripped, proto, case):
+    """F2: a lock without a marker is also a live run: refused while its pid
+    lives on this host, on another host, or when the lock names no process."""
+    old = tmp_path / "a"
+    if case == "plain_lock":
+        old.mkdir()
+        rr.lock_path(old, 1).write_text(H)
+    else:
+        _crashed(old, 1, pid=__import__("os").getpid() if case == "live_pid" else None,
+                 host="elsewhere" if case == "other_host" else None)  # fmt: skip
+    why = {"live_pid": "still running", "other_host": "not this host", "plain_lock": "does not name its process"}[case]
+    with pytest.raises(rr.Refused, match=why):
+        rr.run_seed(1, tmp_path / "b", proto, H, H, rerun_of=old)
+    assert not rr.taken_path(old, 1).exists()
+
+
+@pytest.mark.parametrize("case", ["marker", "result", "second_rerun", "same_dir", "no_lock"])
+def test_rts_runner_refuses_a_rerun_after_evaluation_began_or_twice(tmp_path, tripped, proto, case):
+    old, new = tmp_path / "a", tmp_path / "b"
+    if case == "no_lock":
+        old.mkdir()
+    else:
+        _crashed(old, 1, marker=case == "marker", result=case == "result", rerun=case == "second_rerun")
+    target = old if case == "same_dir" else new
+    with pytest.raises(rr.Refused):
+        rr.run_seed(1, target, proto, H, H, rerun_of=old)
+
+
+def test_rts_runner_verdict_finds_a_rerun_seed_in_its_own_directory(tmp_path):
+    a, b = tmp_path / "a", tmp_path / "b"
+    a.mkdir()
+    b.mkdir()
+    for s in range(4):
+        rr.result_path(a, s).write_text(json.dumps(protocol_result(260, seed=s)))
+    rr.result_path(b, 4).write_text(json.dumps(protocol_result(260, seed=4)))
+    v = rr.verdict([a, b], H)
+    assert v["passes"] and v["sources"][4]["dir"] == str(b.resolve())
+    rr.result_path(b, 3).write_text(json.dumps(protocol_result(260, seed=3)))
+    with pytest.raises(rr.Refused, match="several"):
+        rr.verdict([a, b], H)
+
+
+
+def test_rts_runner_verdict_checks_a_reruns_link_both_ways(tmp_path):
+    """F1: a result naming rerun_of counts only if the crashed directory's
+    rerun-taken names this directory; the verdict lists it."""
+    a, old, other = tmp_path / "a", tmp_path / "old", tmp_path / "other"
+    for d in (a, old, other):
+        d.mkdir()
+    for s in range(4):
+        rr.result_path(a, s).write_text(json.dumps(protocol_result(260, seed=s)))
+    r = protocol_result(260, seed=4)
+    r["rerun_of"] = str(old.resolve())
+    rr.result_path(other, 4).write_text(json.dumps(r))
+    rr.taken_path(old, 4).write_text(str((tmp_path / "elsewhere").resolve()))
+    with pytest.raises(rr.Refused, match="whose rerun is not this directory"):
+        rr.verdict([a, other], H)
+    rr.taken_path(old, 4).write_text(str(other.resolve()))
+    v = rr.verdict([a, other], H)
+    assert v["passes"] and v["sources"][4] == {"dir": str(other.resolve()), "rerun_of": str(old.resolve())}
