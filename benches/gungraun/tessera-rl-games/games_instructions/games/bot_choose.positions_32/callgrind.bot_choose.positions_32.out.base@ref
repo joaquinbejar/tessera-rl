@@ -1,8 +1,8 @@
 # callgrind format
 version: 1
 creator: callgrind-3.24.0
-pid: 5913
-cmd:  /work/tessera/target/release/deps/games_instructions-6d4de930c475e1f2 --gungraun-run d:d:000000 00000 00001 00000
+pid: 5918
+cmd:  /__w/tessera-rl/tessera-rl/target/bench-gate/deps/games_instructions-ec488158a91ef749 --gungraun-run d:d:000000 00000 00001 00000
 part: 1
 thread: 1
 
@@ -11,31 +11,22 @@ desc: I1 cache: 32768 B, 64 B, 8-way associative
 desc: D1 cache: 32768 B, 64 B, 8-way associative
 desc: LL cache: 8388608 B, 64 B, 16-way associative
 
-desc: Timerange: Basic block 0 - 2056227
+desc: Timerange: Basic block 0 - 2056090
 desc: Trigger: Program termination
 
 positions: line
 events: Ir Dr Dw I1mr D1mr D1mw ILmr DLmr DLmw
-summary: 18308003 1277181 586577 38 15 17 37 14
+summary: 18307970 1277179 586577 40 14 16 38 13
 
 
-ob=/work/tessera/target/release/deps/games_instructions-6d4de930c475e1f2
+ob=/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2
 fl=???
-fn=games_instructions::main
-cfn=games_instructions::games::__run
+fn=0x000000000001d2c0
+cob=/__w/tessera-rl/tessera-rl/target/bench-gate/deps/games_instructions-ec488158a91ef749
+cfi=???
+cfn=(below main)
 calls=1 0 
-0 18308003 1277181 586577 38 15 17 37 14
-
-fn=games_instructions::bot_choose::__gungraun_wrapper_mod::bot_choose
-0 30 5 12 3 1 0 3
-cfn=<tessera_rl_games::connect4::bot::Bot>::choose
-calls=1 0 
-0 735956 47579 21414 34 14 17 33 14
-0 186 31 62
-cfn=<tessera_rl_games::connect4::bot::Bot>::choose
-calls=31 0 
-0 17571657 1229555 565023
-0 174 11 66 1 0 0 1
+0 18307970 1277179 586577 40 14 16 38 13
 
 ob=/usr/lib/x86_64-linux-gnu/libc.so.6
 fl=./csu/../csu/libc-start.c
@@ -43,48 +34,14 @@ fn=__libc_start_main@@GLIBC_2.34
 cfi=./csu/../sysdeps/nptl/libc_start_call_main.h
 cfn=(below main)
 calls=1 29 
-360 18308003 1277181 586577 38 15 17 37 14
+360 18307970 1277179 586577 40 14 16 38 13
 
-fl=./csu/../sysdeps/nptl/libc_start_call_main.h
-fn=(below main)
-cob=/work/tessera/target/release/deps/games_instructions-6d4de930c475e1f2
-cfi=???
-cfn=main
-calls=1 0 
-58 18308003 1277181 586577 38 15 17 37 14
-
-ob=/work/tessera/target/release/deps/games_instructions-6d4de930c475e1f2
-fl=???
-fn=tessera_rl_games::connect4::bot::root_scores
-0 16180 738 2556 7 0 0 7
-cfn=tessera_rl_games::connect4::bot::negamax
-calls=214 0 
-0 18285186 1274376 583382 18 14 17 17 14
-0 1796 780 128
-
-fn=main
-cfn=std::rt::lang_start_internal
-calls=1 0 
-0 18308003 1277181 586577 38 15 17 37 14
-
-fn=games_instructions::bot_choose::__run_positions_32
-cfn=games_instructions::bot_choose::__gungraun_wrapper_id_mod_positions_32::positions_32
-calls=1 0 
-0 18308003 1277181 586577 38 15 17 37 14
-
-fn=tessera_rl_games::connect4::bot::negamax
-0 72691 9582 14566 10 1 4 10 1
-cfn=tessera_rl_games::connect4::bot::negamax'2
-calls=1399 0 
-0 18188962 1260498 568816 8 13 13 7 13
-
-ob=/usr/lib/x86_64-linux-gnu/libc.so.6
 fl=./string/../sysdeps/x86_64/multiarch/memmove-vec-unaligned-erms.S
 fn=memcpy@GLIBC_2.2.5
 211 8627
 217 8627
 218 8627
-220 8627 8627
+220 8627 8627 0 0 1 0 0 1
 221 8627
 222 8627
 392 8627
@@ -102,35 +59,35 @@ fn=memcpy@GLIBC_2.2.5
 451 8627
 452 8627
 461 8627 8627 0 0 1 0 0 1
-462 8627 8627 0 0 1 0 0 1
+462 8627 8627
 464 8627
 466 8627
-467 8627 8627
+467 8627 8627 0 0 1 0 0 1
 468 8627 8627
 471 8627
 473 8627
 475 8627
 477 17254
-483 8627 8627 0 0 1 0 0 1
+483 8627 8627
 484 8627 8627
 485 8627 8627
-486 8627 8627
+486 8627 8627 0 0 1 0 0 1
 487 8627
 488 8627 0 8627 0 0 1
-489 8627 0 8627 0 0 1
-490 8627 0 8627
+489 8627 0 8627
+490 8627 0 8627 0 0 1
 491 8627 0 8627
 492 8627
 493 8627
 494 8627
-483 60389 60389 0 0 6 0 0 6
+483 60389 60389
 484 60389 60389
 485 60389 60389
-486 60389 60389
+486 60389 60389 0 0 5 0 0 5
 487 60389
 488 60389 0 60389
-489 60389 0 60389 0 0 6
-490 60389 0 60389
+489 60389 0 60389
+490 60389 0 60389 0 0 5
 491 60389 0 60389
 492 60389
 493 60389
@@ -142,70 +99,106 @@ fn=memcpy@GLIBC_2.2.5
 501 8627 0 8627
 505 8627 8627
 
-ob=/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2
-fl=???
-fn=0x000000000001d2c0
-cob=/work/tessera/target/release/deps/games_instructions-6d4de930c475e1f2
+fl=./csu/../sysdeps/nptl/libc_start_call_main.h
+fn=(below main)
+cob=/__w/tessera-rl/tessera-rl/target/bench-gate/deps/games_instructions-ec488158a91ef749
 cfi=???
-cfn=(below main)
+cfn=main
 calls=1 0 
-0 18308003 1277181 586577 38 15 17 37 14
+58 18307970 1277179 586577 40 14 16 38 13
 
-ob=/work/tessera/target/release/deps/games_instructions-6d4de930c475e1f2
+ob=/__w/tessera-rl/tessera-rl/target/bench-gate/deps/games_instructions-ec488158a91ef749
 fl=???
-fn=tessera_rl_games::connect4::bot::negamax
-0 23533 4296
-
-fn=tessera_rl_games::connect4::bot::negamax'2
-0 2020357 145518 240990 0 0 4
-cfn=tessera_rl_games::connect4::bot::negamax'2
-calls=14707 0 
-0 34767737 2303975 920595 16 26 22 14 26
-0 266602 36014 8627 1 0 1 1
-cob=/usr/lib/x86_64-linux-gnu/libc.so.6
-cfi=./string/../sysdeps/x86_64/multiarch/memmove-vec-unaligned-erms.S
-cfn=memcpy@GLIBC_2.2.5
-calls=8627 211 
-0 1147391 336453 319199 1 9 8 0 9
-0 14754612 742513 0 6 4 0 6 4
-
 fn=std::sys::backtrace::__rust_begin_short_backtrace::<fn(), ()>
 cfn=games_instructions::main
 calls=1 0 
-0 18308003 1277181 586577 38 15 17 37 14
+0 18307970 1277179 586577 40 14 16 38 13
 
-fn=games_instructions::games::__run
-cfn=games_instructions::bot_choose::__run_positions_32
+fn=games_instructions::bot_choose::__gungraun_wrapper_mod::bot_choose
+0 30 5 12 3 1 0 3
+cfn=<tessera_rl_games::connect4::bot::Bot>::choose
 calls=1 0 
-0 18308003 1277181 586577 38 15 17 37 14
+0 735955 47579 21414 36 13 16 34 13
+0 186 31 62
+cfn=<tessera_rl_games::connect4::bot::Bot>::choose
+calls=31 0 
+0 17571625 1229553 565023
+0 174 11 66 1 0 0 1
+
+fn=tessera_rl_games::connect4::bot::root_scores
+0 16180 738 2556 6 0 0 6
+cfn=tessera_rl_games::connect4::bot::negamax
+calls=214 0 
+0 18285186 1274376 583382 18 13 16 16 13
+0 1796 780 128 1 0 0 1
+
+fn=main
+cfn=std::rt::lang_start_internal
+calls=1 0 
+0 18307970 1277179 586577 40 14 16 38 13
 
 fn=std::rt::lang_start::<()>::{closure#0}
 cfn=std::sys::backtrace::__rust_begin_short_backtrace::<fn(), ()>
 calls=1 0 
-0 18308003 1277181 586577 38 15 17 37 14
+0 18307970 1277179 586577 40 14 16 38 13
 
-fn=<tessera_rl_games::connect4::bot::Bot>::choose
-0 640 160 256 1 0 0 1
-cfn=tessera_rl_games::connect4::bot::root_scores
-calls=32 0 
-0 18303162 1275894 586066 25 14 17 24 14
-0 3811 1080 115 8 0 0 8
+fn=games_instructions::bot_choose::__run_positions_32
+cfn=games_instructions::bot_choose::__gungraun_wrapper_id_mod_positions_32::positions_32
+calls=1 0 
+0 18307970 1277179 586577 40 14 16 38 13
 
 fn=(below main)
 cob=/usr/lib/x86_64-linux-gnu/libc.so.6
 cfi=./csu/../csu/libc-start.c
 cfn=__libc_start_main@@GLIBC_2.34
 calls=1 242 
-0 18308003 1277181 586577 38 15 17 37 14
+0 18307970 1277179 586577 40 14 16 38 13
+
+fn=games_instructions::main
+cfn=games_instructions::games::__run
+calls=1 0 
+0 18307970 1277179 586577 40 14 16 38 13
+
+fn=games_instructions::games::__run
+cfn=games_instructions::bot_choose::__run_positions_32
+calls=1 0 
+0 18307970 1277179 586577 40 14 16 38 13
+
+fn=tessera_rl_games::connect4::bot::negamax
+0 72691 9582 14566 9 1 2 9 1
+cfn=tessera_rl_games::connect4::bot::negamax'2
+calls=1399 0 
+0 18188962 1260498 568816 9 12 14 7 12
+0 23533 4296
+
+fn=tessera_rl_games::connect4::bot::negamax'2
+0 2020357 145518 240990 0 0 6
+cfn=tessera_rl_games::connect4::bot::negamax'2
+calls=14707 0 
+0 34767737 2303975 920595 18 24 21 14 24
+0 266602 36014 8627 2 0 1 2
+cob=/usr/lib/x86_64-linux-gnu/libc.so.6
+cfi=./string/../sysdeps/x86_64/multiarch/memmove-vec-unaligned-erms.S
+cfn=memcpy@GLIBC_2.2.5
+calls=8627 211 
+0 1147391 336453 319199 1 9 7 0 9
+0 14754612 742513 0 6 3 0 5 3
 
 fn=std::rt::lang_start_internal
 cfn=std::rt::lang_start::<()>::{closure#0}
 calls=1 0 
-0 18308003 1277181 586577 38 15 17 37 14
+0 18307970 1277179 586577 40 14 16 38 13
+
+fn=<tessera_rl_games::connect4::bot::Bot>::choose
+0 640 160 256 2 0 0 2
+cfn=tessera_rl_games::connect4::bot::root_scores
+calls=32 0 
+0 18303162 1275894 586066 25 13 16 23 13
+0 3778 1078 115 9 0 0 9
 
 fn=games_instructions::bot_choose::__gungraun_wrapper_id_mod_positions_32::positions_32
 cfn=games_instructions::bot_choose::__gungraun_wrapper_mod::bot_choose
 calls=1 0 
-0 18308003 1277181 586577 38 15 17 37 14
+0 18307970 1277179 586577 40 14 16 38 13
 
-totals: 18308003 1277181 586577 38 15 17 37 14
+totals: 18307970 1277179 586577 40 14 16 38 13

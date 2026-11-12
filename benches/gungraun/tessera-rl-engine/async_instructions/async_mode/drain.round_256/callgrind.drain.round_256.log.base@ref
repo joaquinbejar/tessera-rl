@@ -1,27 +1,27 @@
-==4733== Callgrind, a call-graph generating cache profiler
-==4733== Copyright (C) 2002-2017, and GNU GPL'd, by Josef Weidendorfer et al.
-==4733== Using Valgrind-3.24.0 and LibVEX; rerun with -h for copyright info
-==4733== Command: /w/target/release/deps/async_instructions-5f16860063ef0907 --gungraun-run d:d:000000 00000 00000 00000
-==4733== Parent PID: 4730
-==4733== 
---4733-- warning: L3 cache found, using its data for the LL simulation.
-==4733== For interactive control, run 'callgrind_control -h'.
-==4733== 
-==4733== Events    : Ir Dr Dw I1mr D1mr D1mw ILmr DLmr DLmw
-==4733== Collected : 422504 78656 71774 145 515 318 140 1 51
-==4733== 
-==4733== I   refs:      422,504
-==4733== I1  misses:        145
-==4733== LLi misses:        140
-==4733== I1  miss rate:    0.03%
-==4733== LLi miss rate:    0.03%
-==4733== 
-==4733== D   refs:      150,430  (78,656 rd + 71,774 wr)
-==4733== D1  misses:        833  (   515 rd +    318 wr)
-==4733== LLd misses:         52  (     1 rd +     51 wr)
-==4733== D1  miss rate:     0.6% (   0.7%   +    0.4%  )
-==4733== LLd miss rate:     0.0% (   0.0%   +    0.1%  )
-==4733== 
-==4733== LL refs:           978  (   660 rd +    318 wr)
-==4733== LL misses:         192  (   141 rd +     51 wr)
-==4733== LL miss rate:      0.0% (   0.0%   +    0.1%  )
+==5896== Callgrind, a call-graph generating cache profiler
+==5896== Copyright (C) 2002-2017, and GNU GPL'd, by Josef Weidendorfer et al.
+==5896== Using Valgrind-3.24.0 and LibVEX; rerun with -h for copyright info
+==5896== Command: /__w/tessera-rl/tessera-rl/target/bench-gate/deps/async_instructions-b37237f20a47475e --gungraun-run d:d:000000 00000 00000 00000
+==5896== Parent PID: 5893
+==5896== 
+--5896-- warning: L3 cache found, using its data for the LL simulation.
+==5896== For interactive control, run 'callgrind_control -h'.
+==5896== 
+==5896== Events    : Ir Dr Dw I1mr D1mr D1mw ILmr DLmr DLmw
+==5896== Collected : 392820 74834 62525 136 527 340 132 2 57
+==5896== 
+==5896== I   refs:      392,820
+==5896== I1  misses:        136
+==5896== LLi misses:        132
+==5896== I1  miss rate:    0.03%
+==5896== LLi miss rate:    0.03%
+==5896== 
+==5896== D   refs:      137,359  (74,834 rd + 62,525 wr)
+==5896== D1  misses:        867  (   527 rd +    340 wr)
+==5896== LLd misses:         59  (     2 rd +     57 wr)
+==5896== D1  miss rate:     0.6% (   0.7%   +    0.5%  )
+==5896== LLd miss rate:     0.0% (   0.0%   +    0.1%  )
+==5896== 
+==5896== LL refs:         1,003  (   663 rd +    340 wr)
+==5896== LL misses:         191  (   134 rd +     57 wr)
+==5896== LL miss rate:      0.0% (   0.0%   +    0.1%  )
