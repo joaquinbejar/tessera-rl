@@ -25,18 +25,6 @@
 //! Every transcendental comes from `tessera_rl_num::math` (frozen libm,
 //! ADR-0008); `sqrt` is the IEEE square root.
 
-// One expectation for the module, not one per item: the Gumbel sampler is
-// unused until the Gumbel root (G2) lands, and Rust 1.95 raises `dead_code`
-// on fewer of its items than 1.99, so per-item expectations are unfulfilled
-// on the minimum toolchain.
-#![cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the Gumbel sampler is used by the Gumbel root (G2)"
-    )
-)]
-
 use tessera_rl_num::math;
 use tessera_rl_num::rng::StepRng;
 
