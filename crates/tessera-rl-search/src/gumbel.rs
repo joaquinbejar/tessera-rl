@@ -45,9 +45,10 @@ use crate::error::SearchError;
 use crate::noise;
 
 /// Bytes per action counted for one tree's Gumbel buffers in the group
-/// memory bound (Gumbel slots only). The buffers take 80 bytes per action
-/// (`g`, logits and priors, 24; the root edge copies, 24; four `u32`
-/// action lists, 16; two policies, 16), so 128 leaves 1.6 times that.
+/// memory bound (Gumbel slots only). The buffers take 72 bytes per action
+/// (`g`, logits and priors, 24; the root edge copies, 16; four `u32`
+/// action lists, 16; two policies, 16), measured by
+/// `tests/group_memory.rs`, so 128 leaves about 1.8 times that.
 pub const GUMBEL_BYTES_PER_ACTION: u64 = 128;
 
 /// The Gumbel root's options.
@@ -603,6 +604,12 @@ mod tests {
         assert_eq!(
             phases(16, 16, 100),
             [(16, 16), (8, 24), (4, 24), (2, 24), (1, 12)]
+        );
+        // Here the budget left after the last halving (30) exceeds
+        // floor(n / P) = 29: the last phase is not capped by it.
+        assert_eq!(
+            phases(19, 19, 149),
+            [(19, 19), (10, 20), (5, 25), (3, 27), (2, 28), (1, 30)]
         );
     }
 

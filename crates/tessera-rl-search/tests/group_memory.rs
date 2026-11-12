@@ -171,12 +171,19 @@ fn test_group_memory_gumbel_term_is_exact_and_covers_the_retained_heap() {
     let _serial = SERIAL.lock().unwrap();
     let root = record("");
     for (trees, capacity, batch) in [(1, 8, 8), (4, 64, 1), (3, 4_096, 16)] {
-        let (_, puct) = measured_with(&root, trees, capacity, batch, false);
+        let (puct_live, puct) = measured_with(&root, trees, capacity, batch, false);
         let (live, bound) = measured_with(&root, trees, capacity, batch, true);
-        assert_eq!(
-            bound - puct,
-            GUMBEL_BYTES_PER_ACTION * 7 * u64::try_from(trees).unwrap(),
-            "trees {trees}"
+        let t = u64::try_from(trees).unwrap();
+        // 128 bytes per action, 7 actions, written as numbers.
+        assert_eq!(bound - puct, 128 * 7 * t, "trees {trees}");
+        assert_eq!(GUMBEL_BYTES_PER_ACTION, 128);
+        // The Gumbel term alone covers what a Gumbel tree retains beyond
+        // the same PUCT tree (72 bytes per action, measured 504 per tree).
+        let extra = live - puct_live;
+        assert!(
+            extra > 0 && u64::try_from(extra).unwrap() <= GUMBEL_BYTES_PER_ACTION * 7 * t,
+            "trees {trees}: Gumbel retains {extra} more bytes, term {}",
+            GUMBEL_BYTES_PER_ACTION * 7 * t
         );
         assert!(
             i64::try_from(bound).unwrap() >= live,
