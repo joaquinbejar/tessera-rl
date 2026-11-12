@@ -25,6 +25,18 @@
 //! Every transcendental comes from `tessera_rl_num::math` (frozen libm,
 //! ADR-0008); `sqrt` is the IEEE square root.
 
+// One expectation for the module, not one per item: the Gumbel sampler is
+// unused until the Gumbel root (G2) lands, and Rust 1.95 raises `dead_code`
+// on fewer of its items than 1.99, so per-item expectations are unfulfilled
+// on the minimum toolchain.
+#![cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "the Gumbel sampler is used by the Gumbel root (G2)"
+    )
+)]
+
 use tessera_rl_num::math;
 use tessera_rl_num::rng::StepRng;
 
@@ -110,7 +122,6 @@ pub(crate) fn dirichlet(alpha: f64, rng: &mut StepRng, out: &mut [f64]) {
 /// above the 52nd are ignored.
 #[must_use]
 #[inline]
-#[cfg_attr(not(test), expect(dead_code, reason = "used by the Gumbel root (G2)"))]
 pub(crate) fn open_unit(k: u64) -> f64 {
     /// `2^-53`, the scale of the open uniform.
     const OPEN_SCALE: f64 = 1.0 / 9_007_199_254_740_992.0;
@@ -125,7 +136,6 @@ pub(crate) fn open_unit(k: u64) -> f64 {
 /// The Gumbel variate `-ln(-ln u)` of the 52-bit `k`.
 #[must_use]
 #[inline]
-#[cfg_attr(not(test), expect(dead_code, reason = "used by the Gumbel root (G2)"))]
 pub(crate) fn gumbel_of(k: u64) -> f64 {
     -math::ln(-math::ln(open_unit(k)))
 }
@@ -133,7 +143,6 @@ pub(crate) fn gumbel_of(k: u64) -> f64 {
 /// Fills `out` with one Gumbel variate per action index, in index order:
 /// one `next_u64` per entry, so the stream position afterwards depends
 /// only on `out.len()`.
-#[cfg_attr(not(test), expect(dead_code, reason = "used by the Gumbel root (G2)"))]
 pub(crate) fn gumbel(rng: &mut StepRng, out: &mut [f64]) {
     for g in out.iter_mut() {
         *g = gumbel_of(rng.next_u64() >> 12);
