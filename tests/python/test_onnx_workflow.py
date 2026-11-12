@@ -48,7 +48,9 @@ CLIPPY_TEST = _job("clippy-test")
 
 def _onnx_steps():
     steps = CLIPPY_TEST.split("    steps:\n", 1)[1]
-    return [s for s in re.split(r"^      - ", steps, flags=re.M) if "onnx" in s]
+    # A step's own first line (its run command) names onnx; comments that
+    # precede a step belong to the previous chunk and are not counted.
+    return [s for s in re.split(r"^      - ", steps, flags=re.M) if "onnx" in s.split("\n", 1)[0]]
 
 
 def test_onnx_wheels_and_libraries_are_pinned_by_sha256():

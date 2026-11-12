@@ -92,9 +92,13 @@ jobs:
       # The audited ONNX Runtime version read against the real library
       # (ADR-0057 section 4; owner's choice of 2026-11-12). The pinned wheel
       # is fetched by its sha256 into RUNNER_TEMP with the standard library
-      # only; nothing is installed. On Linux with Docker and the pinned image
-      # present, the test runs in an ephemeral container with no network;
-      # otherwise natively, with telemetry off and a scratch HOME.
+      # only; nothing is installed. Where it may load is set per leg by
+      # matrix.onnx_native (scripts/onnx_test.sh): xaskar `forbid`, only in
+      # an ephemeral no-network container with the pinned image already
+      # present, else exit 1; m4-linux-arm64 `if-no-docker`, that container
+      # if Docker is present (image absent: exit 1), natively only when there
+      # is no docker binary; m4 `always`, natively. Natively means telemetry
+      # off and a scratch HOME.
       - run: python3 scripts/fetch_onnxruntime.py "$RUNNER_TEMP/onnxruntime" > "$RUNNER_TEMP/onnxruntime.path"
       - run: scripts/onnx_test.sh "$(cat "$RUNNER_TEMP/onnxruntime.path")" "$ONNX_TEST_IMAGE"
         env:
