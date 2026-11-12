@@ -191,6 +191,10 @@ impl Environment for Connect4 {
         }
     }
 
+    // Deliberate: observe is then compiled with its caller, and its
+    // unrolling no longer depends on how this crate is split into codegen
+    // units (#232).
+    #[inline]
     fn observe(
         _: &Connect4Config,
         state: &Connect4State,
