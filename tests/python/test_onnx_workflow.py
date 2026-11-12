@@ -12,19 +12,29 @@ CI = (ROOT / ".github" / "workflows" / "ci.yml").read_text()
 FETCH = (ROOT / "scripts" / "fetch_onnxruntime.py").read_text()
 RUNNER = (ROOT / "scripts" / "onnx_test.sh").read_text()
 
-# PyPI's sha256 for each cp313 wheel of onnxruntime 1.31.1 (also recorded by
-# spike S1).
-PINNED = {
-    "onnxruntime-1.31.1-cp313-cp313-manylinux_2_28_x86_64.whl": (
-        "74a6a52994616c4d18b33db1e13c226333a70a6ba07480a5cab9c2a50dff1430"
+# The wheels whose library spike S1 examined (ADR-0057), and that library:
+# (wheel, wheel sha256 = PyPI's digest, library, library sha256).
+PINNED = [
+    (
+        "onnxruntime-1.31.1-cp313-cp313-manylinux_2_28_x86_64.whl",
+        "74a6a52994616c4d18b33db1e13c226333a70a6ba07480a5cab9c2a50dff1430",
+        "libonnxruntime.so.1.31.1",
+        "fc44112fbe06d7d689c57e11d3862031f64711007e4ee020f8eed5185fd2c1d3",
     ),
-    "onnxruntime-1.31.1-cp313-cp313-manylinux_2_28_aarch64.whl": (
-        "dcaedc50333876f3829ab966b242147f0e548229e29c36fe44622ecf748c25ee"
+    (
+        "onnxruntime-1.31.1-cp313-cp313-manylinux_2_28_aarch64.whl",
+        "dcaedc50333876f3829ab966b242147f0e548229e29c36fe44622ecf748c25ee",
+        "libonnxruntime.so.1.31.1",
+        "8aa3b76b28c778a2b1dd660d34161adb1d508c9ccd04ff9dc80e26eca5df8467",
     ),
-    "onnxruntime-1.31.1-cp313-cp313-macosx_14_0_arm64.whl": (
-        "e4ad067d36e2220218e085d7223283b2ee1bc73d887e811fd14d21cf901a11ee"
+    (
+        "onnxruntime-1.31.1-cp312-cp312-macosx_14_0_arm64.whl",
+        "96dd2564b10ea7153ad9c207e7cd8e5917cb3ba521e0e0a62ac03486fdc8d56c",
+        "libonnxruntime.1.31.1.dylib",
+        "d586cbe89effc085a09d3341b3cfbd5c322517f9d397aeb20814af21433f2b36",
     ),
-}
+]
+HEX64 = re.compile(r"\b[0-9a-f]{64}\b")
 
 
 def _job(name):
@@ -41,18 +51,31 @@ def _onnx_steps():
     return [s for s in re.split(r"^      - ", steps, flags=re.M) if "onnx" in s]
 
 
-def test_onnx_wheels_are_pinned_by_sha256():
-    for wheel, sha in PINNED.items():
-        assert re.search(rf'{re.escape(wheel)}",\n\s+"{sha}"', FETCH), wheel
-    assert "hashlib.sha256(data).hexdigest()" in FETCH
+def test_onnx_wheels_and_libraries_are_pinned_by_sha256():
+    for wheel, sha, library, library_sha in PINNED:
+        assert re.search(
+            rf'{re.escape(wheel)}",\n\s+"{sha}",\n\s+"{re.escape(library)}",\n\s+"{library_sha}"',
+            FETCH,
+        ), wheel
     assert "if got != sha256:" in FETCH
+    assert "if got != library_sha256:" in FETCH
+    # The library is checked before it is written.
+    assert FETCH.index("if got != library_sha256:") < FETCH.index("path.write_bytes(payload)")
+
+
+def test_onnx_pins_live_only_in_the_fetch_script():
+    pinned = {h for _, sha, _, lib in PINNED for h in (sha, lib)}
+    assert set(HEX64.findall(FETCH)) == pinned
+    for text in (CI, RUNNER):
+        assert not pinned & set(HEX64.findall(text))
+    assert "python3 scripts/fetch_onnxruntime.py" in CLIPPY_TEST
 
 
 def test_onnx_fetch_version_matches_compat_targets():
     targets = tomllib.loads((ROOT / "compat" / "targets.toml").read_text())
     pinned = targets["env"]["main"]["onnxruntime"]
     assert f'VERSION = "{pinned}"' in FETCH
-    assert all(f"onnxruntime-{pinned}-" in wheel for wheel in PINNED)
+    assert all(f"onnxruntime-{pinned}-" in wheel for wheel, *_ in PINNED)
 
 
 def test_onnx_fetch_installs_and_imports_nothing():
