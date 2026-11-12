@@ -78,7 +78,8 @@ def recorded(monkeypatch):
     def fake_train(seed, h, a, f):
         if calls.out is not None:
             lock = rr.lock_path(calls.out, seed)
-            calls.append(("lock_before_train", lock.exists() and lock.read_text() == H))
+            held = json.loads(lock.read_text()) if lock.exists() else {}
+            calls.append(("lock_before_train", held.get("sha256") == H and held.get("pid") == __import__("os").getpid()))
         calls.append(("train", seed, h == Hyper()))
         torch.manual_seed(seed)
         agent = Agent(11, h.size, 2, h.max_units, 6, 81, 4)
@@ -259,9 +260,18 @@ def test_rts_runner_cli_exits_and_reports(tmp_path, tripped, proto, capsys):
 # -- crash rule: the evaluation marker and one rerun before it (TR, pre-read 5) --
 
 
-def _crashed(dirpath, seed, marker=False, result=False, rerun=False):
+def _dead_pid():
+    p = __import__("subprocess").Popen([sys.executable, "-c", "pass"])
+    p.wait()
+    return p.pid
+
+
+def _crashed(dirpath, seed, marker=False, result=False, rerun=False, pid=None, host=None):
+    import socket
+
     dirpath.mkdir(parents=True, exist_ok=True)
-    rr.lock_path(dirpath, seed).write_text(H)
+    holder = {"sha256": H, "pid": _dead_pid() if pid is None else pid, "host": host or socket.gethostname()}
+    rr.lock_path(dirpath, seed).write_text(json.dumps(holder))
     if marker:
         rr.marker_path(dirpath, seed).write_text(H)
     if result:
@@ -278,7 +288,30 @@ def test_rts_runner_reruns_a_seed_that_crashed_before_evaluation_once(tmp_path, 
     assert r["rerun_of"] == str(old.resolve())
     assert rr.rerun_path(new, 1).read_text() == str(old.resolve())
     assert rr.lock_path(old, 1).exists()  # the crashed directory is kept
+    assert rr.taken_path(old, 1).read_text() == str(new.resolve())
     assert ("train", 1, True) in recorded
+    # F1: once. A second rerun of the same crashed directory is refused before train.
+    trains = sum(1 for c in recorded if c[0] == "train")
+    with pytest.raises(rr.Refused, match="already rerun"):
+        rr.run_seed(1, tmp_path / "c", proto, H, H, rerun_of=old)
+    assert sum(1 for c in recorded if c[0] == "train") == trains
+
+
+@pytest.mark.parametrize("case", ["live_pid", "other_host", "plain_lock"])
+def test_rts_runner_refuses_to_rerun_a_seed_that_may_still_run(tmp_path, tripped, proto, case):
+    """F2: a lock without a marker is also a live run: refused while its pid
+    lives on this host, on another host, or when the lock names no process."""
+    old = tmp_path / "a"
+    if case == "plain_lock":
+        old.mkdir()
+        rr.lock_path(old, 1).write_text(H)
+    else:
+        _crashed(old, 1, pid=__import__("os").getpid() if case == "live_pid" else None,
+                 host="elsewhere" if case == "other_host" else None)  # fmt: skip
+    why = {"live_pid": "still running", "other_host": "not this host", "plain_lock": "does not name its process"}[case]
+    with pytest.raises(rr.Refused, match=why):
+        rr.run_seed(1, tmp_path / "b", proto, H, H, rerun_of=old)
+    assert not rr.taken_path(old, 1).exists()
 
 
 @pytest.mark.parametrize("case", ["marker", "result", "second_rerun", "same_dir", "no_lock"])
@@ -300,7 +333,28 @@ def test_rts_runner_verdict_finds_a_rerun_seed_in_its_own_directory(tmp_path):
     for s in range(4):
         rr.result_path(a, s).write_text(json.dumps(protocol_result(260, seed=s)))
     rr.result_path(b, 4).write_text(json.dumps(protocol_result(260, seed=4)))
-    assert rr.verdict([a, b], H)["passes"]
+    v = rr.verdict([a, b], H)
+    assert v["passes"] and v["sources"][4]["dir"] == str(b.resolve())
     rr.result_path(b, 3).write_text(json.dumps(protocol_result(260, seed=3)))
     with pytest.raises(rr.Refused, match="several"):
         rr.verdict([a, b], H)
+
+
+
+def test_rts_runner_verdict_checks_a_reruns_link_both_ways(tmp_path):
+    """F1: a result naming rerun_of counts only if the crashed directory's
+    rerun-taken names this directory; the verdict lists it."""
+    a, old, other = tmp_path / "a", tmp_path / "old", tmp_path / "other"
+    for d in (a, old, other):
+        d.mkdir()
+    for s in range(4):
+        rr.result_path(a, s).write_text(json.dumps(protocol_result(260, seed=s)))
+    r = protocol_result(260, seed=4)
+    r["rerun_of"] = str(old.resolve())
+    rr.result_path(other, 4).write_text(json.dumps(r))
+    rr.taken_path(old, 4).write_text(str((tmp_path / "elsewhere").resolve()))
+    with pytest.raises(rr.Refused, match="whose rerun is not this directory"):
+        rr.verdict([a, other], H)
+    rr.taken_path(old, 4).write_text(str(other.resolve()))
+    v = rr.verdict([a, other], H)
+    assert v["passes"] and v["sources"][4] == {"dir": str(other.resolve()), "rerun_of": str(old.resolve())}

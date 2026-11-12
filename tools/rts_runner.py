@@ -19,8 +19,10 @@ The runner writes ``seed-<s>.evaluating`` before the first evaluation game.
 A crash before that marker (no evaluation game played) may be rerun once,
 with the same training seed, from scratch in a fresh directory
 (``--rerun-of OLD``: OLD must hold that seed's lock and neither the marker
-nor a result, and must not itself be a rerun); the crashed directory is
-kept and both are disclosed. A crash after the marker, or a second crash,
+nor a result, must not itself be a rerun, and its lock's process must be
+dead on this host); OLD is taken once, atomically
+(``seed-<s>.rerun-taken`` names the rerun's directory), and the rerun's
+result names OLD; the crashed directory is kept and both are disclosed. A crash after the marker, or a second crash,
 spends the seed: how it counts is the owner's decision in the protocol. After training it saves the
 policy with its record, loads it back, and evaluates it only if the record
 says the run is the protocol's: the frozen sha256, ``Hyper()`` exactly, and
@@ -38,6 +40,8 @@ import argparse
 import dataclasses
 import hashlib
 import json
+import os
+import socket
 import pathlib
 import sys
 
@@ -72,6 +76,21 @@ def rerun_path(out: pathlib.Path, seed: int) -> pathlib.Path:
     return out / f"seed-{seed}.rerun-of"
 
 
+def taken_path(old: pathlib.Path, seed: int) -> pathlib.Path:
+    """In the crashed directory: the one rerun of this seed, by its directory."""
+    return old / f"seed-{seed}.rerun-taken"
+
+
+def _alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
 def check_rerun(old: pathlib.Path, out: pathlib.Path, seed: int) -> None:
     """A rerun is allowed once, for a crash before any evaluation game."""
     if pathlib.Path(old).resolve() == pathlib.Path(out).resolve():
@@ -82,6 +101,15 @@ def check_rerun(old: pathlib.Path, out: pathlib.Path, seed: int) -> None:
         raise Refused(f"seed {seed} began its evaluation in {old}: it is spent, not rerun")
     if rerun_path(old, seed).exists():
         raise Refused(f"{old} is itself a rerun of seed {seed}: a second crash spends the seed")
+    # A lock without a marker is also what a run still training looks like.
+    try:
+        holder = json.loads(lock_path(old, seed).read_text())
+    except (ValueError, OSError) as e:
+        raise Refused(f"{lock_path(old, seed)} does not name its process: cannot tell a crash from a live run") from e
+    if holder.get("host") != socket.gethostname():
+        raise Refused(f"seed {seed} in {old} ran on {holder.get('host')!r}, not this host: rerun it there")
+    if _alive(int(holder.get("pid", -1))):
+        raise Refused(f"seed {seed} in {old} is still running (pid {holder.get('pid')}): not a crash")
 
 
 def check_protocol_file(path: pathlib.Path, frozen_sha256: str) -> None:
@@ -117,10 +145,18 @@ def run_seed(seed: int, out: pathlib.Path, protocol: pathlib.Path, authorization
         check_rerun(rerun_of, out, seed)
     if result_path(out, seed).exists() or policy_path(out, seed).exists():
         raise Refused(f"training seed {seed} already has a policy or a result in {out}: the seeds are used once")
+    if rerun_of is not None:
+        # The crashed directory is taken once, atomically, before any work:
+        # it names its one rerun.
+        try:
+            with open(taken_path(rerun_of, seed), "x", encoding="utf-8") as f:
+                f.write(str(pathlib.Path(out).resolve()))
+        except FileExistsError as e:
+            raise Refused(f"seed {seed} in {rerun_of} was already rerun ({taken_path(rerun_of, seed)})") from e
     try:
         # Taken atomically: two starts of one seed cannot both train.
         with open(lock_path(out, seed), "x", encoding="utf-8") as f:
-            f.write(frozen_sha256)
+            f.write(json.dumps({"sha256": frozen_sha256, "pid": os.getpid(), "host": socket.gethostname()}))
     except FileExistsError as e:
         raise Refused(f"training seed {seed} is already taken ({lock_path(out, seed)}): the seeds are used once") from e
     if rerun_of is not None:
@@ -150,7 +186,7 @@ def verdict(out, frozen_sha256: str) -> dict:
     wins counted from them and its passes recomputed."""
     outs = [pathlib.Path(o) for o in (out if isinstance(out, (list, tuple)) else [out])]
     seeds = [str(s) for s in ev.EVAL_SEEDS]
-    wins = {}
+    wins, sources = {}, {}
     for seed in range(ev.TRAINING_SEEDS):
         found = [result_path(o, seed) for o in outs if result_path(o, seed).exists()]
         if not found:
@@ -172,8 +208,17 @@ def verdict(out, frozen_sha256: str) -> dict:
             raise Refused(f"{path.name}: wins {r.get('wins')} but {counted} games won")
         if r.get("passes") != ev.seed_passes(counted, len(ev.EVAL_SEEDS)):
             raise Refused(f"{path.name}: passes does not follow from its wins")
+        source = {"dir": str(path.parent.resolve())}
+        if r.get("rerun_of"):
+            taken = taken_path(pathlib.Path(r["rerun_of"]), seed)
+            if not taken.exists() or taken.read_text() != str(path.parent.resolve()):
+                raise Refused(f"{path.name} names rerun_of {r['rerun_of']}, whose rerun is not this directory")
+            source["rerun_of"] = r["rerun_of"]
+        sources[seed] = source
         wins[seed] = counted
-    return ev.verdict(wins)
+    result = ev.verdict(wins)
+    result["sources"] = sources
+    return result
 
 
 def main(argv=None) -> int:
