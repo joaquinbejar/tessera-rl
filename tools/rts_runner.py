@@ -145,14 +145,6 @@ def run_seed(seed: int, out: pathlib.Path, protocol: pathlib.Path, authorization
         check_rerun(rerun_of, out, seed)
     if result_path(out, seed).exists() or policy_path(out, seed).exists():
         raise Refused(f"training seed {seed} already has a policy or a result in {out}: the seeds are used once")
-    if rerun_of is not None:
-        # The crashed directory is taken once, atomically, before any work:
-        # it names its one rerun.
-        try:
-            with open(taken_path(rerun_of, seed), "x", encoding="utf-8") as f:
-                f.write(str(pathlib.Path(out).resolve()))
-        except FileExistsError as e:
-            raise Refused(f"seed {seed} in {rerun_of} was already rerun ({taken_path(rerun_of, seed)})") from e
     try:
         # Taken atomically: two starts of one seed cannot both train.
         with open(lock_path(out, seed), "x", encoding="utf-8") as f:
@@ -160,6 +152,15 @@ def run_seed(seed: int, out: pathlib.Path, protocol: pathlib.Path, authorization
     except FileExistsError as e:
         raise Refused(f"training seed {seed} is already taken ({lock_path(out, seed)}): the seeds are used once") from e
     if rerun_of is not None:
+        # The crashed directory is taken once, atomically, after this
+        # directory's own lock and before any work: it names its one rerun.
+        # If this fails, the fresh directory holds only a lock and never
+        # trained: delete that directory and do not count it.
+        try:
+            with open(taken_path(rerun_of, seed), "x", encoding="utf-8") as f:
+                f.write(str(pathlib.Path(out).resolve()))
+        except FileExistsError as e:
+            raise Refused(f"seed {seed} in {rerun_of} was already rerun ({taken_path(rerun_of, seed)})") from e
         rerun_path(out, seed).write_text(str(pathlib.Path(rerun_of).resolve()))
     h = Hyper()
     agent = rts_training.train(seed, h, authorization, frozen_sha256)
@@ -209,6 +210,10 @@ def verdict(out, frozen_sha256: str) -> dict:
         if r.get("passes") != ev.seed_passes(counted, len(ev.EVAL_SEEDS)):
             raise Refused(f"{path.name}: passes does not follow from its wins")
         source = {"dir": str(path.parent.resolve())}
+        marker = rerun_path(path.parent, seed)
+        named = marker.read_text() if marker.exists() else None
+        if named != r.get("rerun_of"):
+            raise Refused(f"{path.name}: rerun_of {r.get('rerun_of')!r} disagrees with {marker.name} ({named!r})")
         if r.get("rerun_of"):
             taken = taken_path(pathlib.Path(r["rerun_of"]), seed)
             if not taken.exists() or taken.read_text() != str(path.parent.resolve()):
