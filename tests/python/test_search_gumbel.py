@@ -122,6 +122,8 @@ def test_gumbel_refusals_raise_the_existing_error_types():
                 Search(root="gumbel", **{key: bad})
     with pytest.raises(t.ArgumentError):
         Search(root="alphazero")
+    with pytest.raises(t.ArgumentError):
+        Search(root="puct", gumbel_m=4)
     for key, value in (("gumbel_m", 4), ("c_visit", 50.0), ("c_scale", 1.0)):
         with pytest.raises(t.ArgumentError):
             Search(**{key: value})
@@ -201,3 +203,75 @@ def test_puct_explicit_root_equals_default_and_the_rust_golden():
         assert s.improved_policy() is None and s.considered() is None
     assert default.tree_hash() == explicit.tree_hash()
     assert [default.select_action(1.0) for _ in range(8)] == [explicit.select_action(1.0) for _ in range(8)]
+
+
+# The Rust golden (crates/tessera-rl-search/tests/mcts.rs,
+# test_mcts_gumbel_canned_non_default_parameters_match_the_golden): one
+# Gumbel call of 64 simulations from moves "33", canned evaluator, at
+# m=5, c_visit=7.0, c_scale=0.25. CONSIDERED pins S_0's g + logit order.
+GUMBEL_VISITS = [0, 11, 4, 4, 21, 0, 24]
+GUMBEL_CONSIDERED = [6, 4, 1, 3, 2]
+GUMBEL_PI_BITS = [
+    4584876839956315614,
+    4603226790965136495,
+    4591534291073510997,
+    4573213820550780334,
+    4597435002197361655,
+    4584041255044906035,
+    4586914687407492570,
+]
+# The same with c_visit and c_scale swapped: a different result, so a swap
+# between the keywords (or in the native config) cannot pass.
+SWAPPED_VISITS = [0, 24, 11, 4, 21, 0, 4]
+SWAPPED_PI_BITS = [
+    4414899172717906835,
+    4607182389384827373,
+    4374495790669612832,
+    4153033190101442774,
+    4524821441167259493,
+    4414246379659885565,
+    4188508303190178019,
+]
+
+
+def test_gumbel_non_default_parameters_reproduce_the_rust_golden():
+    s = gumbel(gumbel_m=5, c_visit=7.0, c_scale=0.25)
+    s.run(canned)
+    assert s.root_visits().tolist() == GUMBEL_VISITS
+    assert s.considered().tolist() == GUMBEL_CONSIDERED
+    assert s.improved_policy().view(np.uint64).tolist() == GUMBEL_PI_BITS
+    swapped = gumbel(gumbel_m=5, c_visit=0.25, c_scale=7.0)
+    swapped.run(canned)
+    assert swapped.root_visits().tolist() == SWAPPED_VISITS
+    assert swapped.considered().tolist() == GUMBEL_CONSIDERED
+    assert swapped.improved_policy().view(np.uint64).tolist() == SWAPPED_PI_BITS
+
+
+def test_gumbel_defaults_equal_the_explicit_defaults():
+    a = gumbel()
+    b = gumbel(gumbel_m=16, c_visit=50.0, c_scale=1.0)
+    a.run(canned)
+    b.run(canned)
+    assert result(a) == result(b)
+
+
+def test_gumbel_group_slot_parameters_override_the_shared_ones():
+    g = SearchGroup(
+        2,
+        root="gumbel",
+        simulations=64,
+        gumbel_m=5,
+        c_visit=50.0,
+        c_scale=1.0,
+        slot_options=[{}, {"c_visit": 7.0, "c_scale": 0.25}],
+    )
+    for i in range(2):
+        g.set_root(i, root("33"))
+    g.run(canned)
+    s = gumbel(gumbel_m=5, c_visit=7.0, c_scale=0.25)
+    s.run(canned)
+    assert g.root_visits(1).tolist() == s.root_visits().tolist() == GUMBEL_VISITS
+    assert g.considered(1).tolist() == s.considered().tolist()
+    assert g.improved_policy(1).tobytes() == s.improved_policy().tobytes()
+    assert g.tree_hash(1) == s.tree_hash()
+    assert g.root_visits(0).tolist() != GUMBEL_VISITS
