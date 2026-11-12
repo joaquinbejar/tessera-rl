@@ -2,8 +2,14 @@
 """The gungraun-bless workflow (ADR-0059 section 5): it blesses in the gate's
 own environment, uploads one artifact, and can never write to the repository."""
 
+import os
 import re
+import shutil
+import subprocess
+import sys
 from pathlib import Path
+
+import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOWS = ROOT / ".github" / "workflows"
@@ -160,9 +166,12 @@ def test_gungraun_bless_records_the_blessed_commit_in_the_artifact_name():
     head = re.search(r"^      - id: head\n((?:        .*\n)+)", steps, re.M)
     assert head, "no step with id head"
     body = head.group(1)
-    assert 'sha="$(git rev-parse HEAD)"' in body
-    assert 'echo "blessed commit: $sha"' in body
-    assert 'echo "sha=$sha" >> "$GITHUB_OUTPUT"' in body
+    assert "COMMIT: ${{ steps.checkout.outputs.commit }}" in body
+    assert '"" | *[!0-9a-f]*) echo' in body
+    assert '[ "${#COMMIT}" -eq 40 ] ||' in body
+    assert 'echo "blessed commit: $COMMIT"' in body
+    assert 'echo "sha=$COMMIT" >> "$GITHUB_OUTPUT"' in body
+    assert re.search(r"^      - uses: actions/checkout@[0-9a-f]{40}.*\n        id: checkout\n", steps, re.M)
     assert steps.index("- id: head") < steps.index("scripts/gungraun.sh bless")
     name = _one(r"^          name: (gungraun-baseline-.*)$", JOB)
     assert name == "gungraun-baseline-${{ github.run_id }}-${{ steps.head.outputs.sha }}"
@@ -171,3 +180,123 @@ def test_gungraun_bless_records_the_blessed_commit_in_the_artifact_name():
 def test_gungraun_bless_job_has_a_timeout():
     minutes = int(_one(r"^    timeout-minutes: (\d+)$", JOB))
     assert 0 < minutes <= 180
+
+
+def test_gungraun_bless_no_run_block_calls_git():
+    # The job container runs as root over a workspace the runner user owns;
+    # git refuses such a repository ("dubious ownership"), which failed the
+    # first run on main. No step may depend on git working there.
+    for script in _run_scripts(BLESS):
+        assert not re.search(r"(^|[\s;&|(`$])git(\s|$)", script), script
+
+def _indent(line):
+    return len(line) - len(line.lstrip())
+
+
+def test_gungraun_bless_expressions_only_in_step_with_and_env_values():
+    # Allow-list: an expression may appear only as the value of a key under
+    # a step's `with:` or `env:` (step keys at 8 spaces, their entries at 10).
+    # Anywhere else (a run script, a shell, a name, an if, the job) it fails.
+    lines = BLESS.splitlines()
+    found = 0
+    for i, line in enumerate(lines):
+        if "${{" not in line:
+            continue
+        found += 1
+        assert _indent(line) == 10 and re.match(r"^ {10}[A-Za-z0-9_-]+: ", line), (i + 1, line)
+        parent = next(lines[j] for j in range(i - 1, -1, -1) if lines[j].strip() and _indent(lines[j]) < 10)
+        assert parent in ("        with:", "        env:"), (i + 1, line, parent)
+    assert found == 5
+
+
+def test_gungraun_bless_no_step_or_job_sets_a_shell():
+    assert not re.search(r"^\s*(?:- )?shell:", BLESS, re.M)
+    assert "defaults:" not in BLESS
+
+
+# Steps of a container job with no `shell:` run as `sh -e {0}`; /bin/sh is dash
+# in the gate's image. Bash-only syntax there fails at run time, which a parse
+# of the workflow cannot see.
+BASHISMS = [r"\[\[", r"\(\(", r"\bfunction\s", r"<<<", r"\$'", r"\bpipefail\b", r"\bdeclare\b",
+            r"\blocal\b", r"\$\{[A-Za-z_][A-Za-z0-9_]*:[0-9-]", r"\$\{[A-Za-z_][A-Za-z0-9_]*//", r"\[ [^]]* == ",
+            r"&>", r"\bsource\s", r"=~"]
+
+
+def test_gungraun_bless_run_blocks_have_no_bashism():
+    for script in _run_scripts(BLESS):
+        for pattern in BASHISMS:
+            assert not re.search(pattern, script), (pattern, script)
+
+
+def _dash():
+    found = shutil.which("dash")
+    if found is None and sys.platform.startswith("linux"):
+        pytest.fail("dash is not installed: the run blocks cannot be checked as the runner runs them")
+    if found is None:
+        pytest.skip("no dash on this host")
+    return found
+
+
+def _block(text):
+    """A run value as the runner writes it to its script file (block scalars dedented)."""
+    lines = text.splitlines()
+    if lines[0].strip() in ("|", "|-"):
+        body = lines[1:]
+        pad = min(len(line) - len(line.lstrip()) for line in body if line.strip())
+        return "\n".join(line[pad:] for line in body) + "\n"
+    return text.strip() + "\n"
+
+
+def test_gungraun_bless_run_blocks_parse_under_dash(tmp_path):
+    dash = _dash()
+    for k, script in enumerate(_run_scripts(BLESS)):
+        f = tmp_path / f"run{k}.sh"
+        f.write_text(_block(script))
+        p = subprocess.run([dash, "-n", str(f)], capture_output=True, text=True, check=False)
+        assert p.returncode == 0, (script, p.stderr)
+
+
+def test_gungraun_bless_run_blocks_pass_shellcheck_as_sh(tmp_path):
+    shellcheck = shutil.which("shellcheck")
+    if shellcheck is None:
+        pytest.skip("shellcheck is not installed")
+    for k, script in enumerate(_run_scripts(BLESS)):
+        f = tmp_path / f"run{k}.sh"
+        f.write_text(_block(script))
+        p = subprocess.run([shellcheck, "-s", "sh", "-S", "warning", str(f)], capture_output=True, text=True, check=False)
+        assert p.returncode == 0, (script, p.stdout)
+
+
+def _head_block():
+    return next(_block(s) for s in _run_scripts(BLESS) if "blessed commit" in s)
+
+
+@pytest.mark.parametrize(
+    "commit,ok",
+    [
+        ("0123456789abcdef0123456789abcdef01234567", True),
+        ("", False),
+        ("0123456789abcdef0123456789abcdef0123456", False),
+        ("0123456789abcdef0123456789abcdef012345678", False),
+        ("0123456789ABCDEF0123456789abcdef01234567", False),
+        ("0123456789abcdef0123456789abcdef0123456g", False),
+        ("0123456789abcdef 123456789abcdef01234567", False),
+    ],
+    ids=["40-hex", "empty", "39", "41", "uppercase", "non-hex", "space"],
+)
+def test_gungraun_bless_head_step_runs_under_sh_e(tmp_path, commit, ok):
+    dash = _dash()
+    f = tmp_path / "head.sh"
+    f.write_text(_head_block())
+    out = tmp_path / "output"
+    out.write_text("")
+    env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "COMMIT": commit, "GITHUB_OUTPUT": str(out)}
+    p = subprocess.run([dash, "-e", str(f)], env=env, capture_output=True, text=True, check=False, cwd=tmp_path)
+    if ok:
+        assert p.returncode == 0, p.stderr
+        assert p.stdout == f"blessed commit: {commit}\n"
+        assert out.read_text() == f"sha={commit}\n"
+    else:
+        assert p.returncode == 1, (p.returncode, p.stderr)
+        assert "no checked-out commit from the checkout step" in p.stderr
+        assert out.read_text() == ""
