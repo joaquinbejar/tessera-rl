@@ -116,3 +116,16 @@ def test_onnx_container_image_is_gungraun_digest():
     image = re.search(r"ONNX_TEST_IMAGE: (\S+)", CLIPPY_TEST).group(1)
     assert "@sha256:" in image
     assert f"image: {image}" in _job("gungraun")
+
+
+def test_onnx_native_mode_per_runner():
+    legs = dict(re.findall(r"- os: (\S+)\n\s+onnx_native: (\S+)", CLIPPY_TEST))
+    assert legs == {"xaskar": "forbid", "m4-linux-arm64": "if-no-docker", "m4": "always"}
+    assert "ONNX_TEST_NATIVE: ${{ matrix.onnx_native }}" in CLIPPY_TEST
+
+
+def test_onnx_runner_defaults_to_forbid_and_caps_the_container():
+    assert "mode=${ONNX_TEST_NATIVE:-forbid}" in RUNNER
+    run = RUNNER.split("docker run", 1)[1]
+    for flag in ("--cpus 2", "--memory 4g", "--memory-swap 4g", "size=2g"):
+        assert flag in run, flag

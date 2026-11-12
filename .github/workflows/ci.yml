@@ -55,6 +55,17 @@ jobs:
         # machine, with no runner; the Windows checks run there natively,
         # in short announced sessions.
         os: [xaskar, m4-linux-arm64, m4]
+        # Where the real ONNX Runtime may be loaded (owner's decision,
+        # 2026-11-12; scripts/onnx_test.sh): only in a no-network container
+        # on xaskar; natively on the M4's Linux VM only if it has no Docker;
+        # natively on macOS.
+        include:
+          - os: xaskar
+            onnx_native: forbid
+          - os: m4-linux-arm64
+            onnx_native: if-no-docker
+          - os: m4
+            onnx_native: always
     env:
       # No test loads ONNX Runtime with telemetry enabled (ADR-0057).
       ORT_DISABLE_TELEMETRY: "1"
@@ -88,6 +99,7 @@ jobs:
       - run: scripts/onnx_test.sh "$(cat "$RUNNER_TEMP/onnxruntime.path")" "$ONNX_TEST_IMAGE"
         env:
           ONNX_TEST_IMAGE: rust:1.99.1@sha256:09027f873d45b8ecd1dc86f1fa13b7a62b875c961f017a0e331267b350430137
+          ONNX_TEST_NATIVE: ${{ matrix.onnx_native }}
 
   # The native wait on Windows (WaitOnAddress) runs only on request until
   # this job passes; it is the precondition for `Auto` to use it there.
