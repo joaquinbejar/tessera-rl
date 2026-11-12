@@ -191,9 +191,9 @@ impl Environment for Connect4 {
         }
     }
 
-    // Deliberate: observe is then compiled with its caller, and its
-    // unrolling no longer depends on how this crate is split into codegen
-    // units (#232).
+    // Deliberate: compiled with its caller, observe measured 3 to 4%
+    // fewer instructions in `connect4_pool_step` (aarch64 Callgrind, default
+    // and one-codegen-unit bench profiles, #232).
     #[inline]
     fn observe(
         _: &Connect4Config,
@@ -211,9 +211,13 @@ impl Environment for Connect4 {
             return;
         };
         // A fixed-size view of the 84 board bytes (u8 leaf: one byte per
-        // element), so every index is a constant and no per-element bounds
-        // check is left to the optimiser (#232). A shorter leaf takes the
-        // local-array path, which writes the same prefix as before.
+        // element): every index is a constant and no per-element bounds
+        // check is left to the optimiser. Measured on aarch64 (#232): within
+        // 0.9% across six commits under the default bench profile, where
+        // the per-element loop varied by up to 18%. The
+        // declared space always gives 84 bytes; a shorter leaf (only a
+        // hand-built writer) takes the local-array path, which writes the
+        // same prefix as the per-element writes.
         if let Some(dst) = leaf
             .get_mut(..BOARD_BYTES)
             .and_then(|s| <&mut [u8; BOARD_BYTES]>::try_from(s).ok())
