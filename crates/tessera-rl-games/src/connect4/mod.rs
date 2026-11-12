@@ -191,6 +191,10 @@ impl Environment for Connect4 {
         }
     }
 
+    // Deliberate: compiled with its caller, observe measured 3 to 4%
+    // fewer instructions in `connect4_pool_step` (aarch64 Callgrind, default
+    // and one-codegen-unit bench profiles, #232).
+    #[inline]
     fn observe(
         _: &Connect4Config,
         state: &Connect4State,
@@ -203,17 +207,49 @@ impl Environment for Connect4 {
             state.stones.get(me).copied().unwrap_or(0),
             state.stones.get(1 - me).copied().unwrap_or(0),
         ];
-        let Some(mut leaf) = out.leaf_mut(Connect4Obs::BOARD) else {
+        let Some(leaf) = out.leaf(Connect4Obs::BOARD.index()) else {
             return;
         };
-        let (w, h) = (WIDTH as usize, HEIGHT as usize);
-        for (channel, stones) in planes.iter().enumerate() {
-            for top_row in 0..HEIGHT {
-                for col in 0..WIDTH {
-                    let row = HEIGHT - 1 - top_row;
-                    let k = channel * h * w + top_row as usize * w + col as usize;
-                    leaf.set(k, u8::from(stones & cell(col, row) != 0));
-                }
+        // A fixed-size view of the 84 board bytes (u8 leaf: one byte per
+        // element): every index is a constant and no per-element bounds
+        // check is left to the optimiser. Measured on aarch64 (#232): within
+        // 0.9% across six commits under the default bench profile, where
+        // the per-element loop varied by up to 18%. The
+        // declared space always gives 84 bytes; a shorter leaf (only a
+        // hand-built writer) takes the local-array path, which writes the
+        // same prefix as the per-element writes.
+        if let Some(dst) = leaf
+            .get_mut(..BOARD_BYTES)
+            .and_then(|s| <&mut [u8; BOARD_BYTES]>::try_from(s).ok())
+        {
+            write_planes(dst, planes);
+        } else {
+            let mut board = [0u8; BOARD_BYTES];
+            write_planes(&mut board, planes);
+            for (dst, src) in leaf.iter_mut().zip(board) {
+                *dst = src;
+            }
+        }
+    }
+}
+
+/// Bytes of the observation board: two planes of `CELLS`.
+const BOARD_BYTES: usize = 2 * CELLS as usize;
+
+// observe writes the board as raw bytes, one per element: a dtype change
+// of `Connect4Obs::BOARD` must not compile silently.
+const _: tessera_rl_core::LeafId<u8> = Connect4Obs::BOARD;
+
+/// Writes the two planes, top row first, into `dst`.
+#[inline]
+fn write_planes(dst: &mut [u8; BOARD_BYTES], planes: [u64; 2]) {
+    let (board, _) = dst.as_chunks_mut::<{ CELLS as usize }>();
+    for (plane, stones) in board.iter_mut().zip(planes) {
+        let (rows, _) = plane.as_chunks_mut::<{ WIDTH as usize }>();
+        for (cells, top_row) in rows.iter_mut().zip(0..HEIGHT) {
+            let row = HEIGHT - 1 - top_row;
+            for (byte, col) in cells.iter_mut().zip(0..WIDTH) {
+                *byte = u8::from(stones & cell(col, row) != 0);
             }
         }
     }
