@@ -23,7 +23,8 @@ root="$(cd "$(dirname "$0")/.." && pwd)"
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 
-benches=(-p tessera-rl-classic --bench classic_instructions -p tessera-rl-engine --bench snapshot_instructions --bench turns_instructions --bench async_instructions -p tessera-rl-games --bench games_instructions -p tessera-rl-search --bench search_instructions)
+# The bench list of scripts/gungraun.sh at this commit (no async_instructions yet).
+benches=(-p tessera-rl-classic --bench classic_instructions -p tessera-rl-engine --bench snapshot_instructions --bench turns_instructions -p tessera-rl-games --bench games_instructions -p tessera-rl-search --bench search_instructions)
 
 # "<case> <Ir> <baseline>" per measured case, from a gungraun log.
 parse() {
