@@ -1,17 +1,17 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! A refused persisted file allocates nothing before its bounds are checked
-//! (ADR-0011). One test: the counter is global.
+//! (ADR-0011). The counting allocator of `support/counting.rs` attributes
+//! allocator calls by thread (issue #43); this binary holds one test.
 
 #![expect(clippy::indexing_slicing, reason = "tests: a failure is the assertion")]
 
 mod common;
 
-use core::alloc::{GlobalAlloc, Layout};
-use core::cell::Cell;
+#[path = "support/counting.rs"]
+mod counting;
+
 use core::num::NonZeroU32;
-use core::sync::atomic::{AtomicUsize, Ordering};
-use std::alloc::System;
 
 use common::{CountConfig, Counter};
 use tessera_rl_core::encoding::checksum;
@@ -25,33 +25,6 @@ use tessera_rl_engine::{DecodeLimits, EnvPool, Masked, NoMasks, PoolOptions, Res
 use tessera_rl_macros::{EnvConfig, EnvState, Observation};
 use tessera_rl_num::identity::Seed;
 use tessera_rl_num::rng::{ObsRng, StepRng};
-
-struct Counting;
-static BIGGEST: AtomicUsize = AtomicUsize::new(0);
-
-std::thread_local! {
-    /// Only the test's own thread counts, not the harness's.
-    static COUNT_HERE: Cell<bool> = const { Cell::new(false) };
-}
-
-// SAFETY: forwards to `System`; only records the size.
-#[expect(unsafe_code, reason = "a counting allocator for this test")]
-unsafe impl GlobalAlloc for Counting {
-    unsafe fn alloc(&self, l: Layout) -> *mut u8 {
-        if COUNT_HERE.with(Cell::get) {
-            BIGGEST.fetch_max(l.size(), Ordering::Relaxed);
-        }
-        // SAFETY: the caller's layout.
-        unsafe { System.alloc(l) }
-    }
-    unsafe fn dealloc(&self, p: *mut u8, l: Layout) {
-        // SAFETY: the caller's pointer and layout.
-        unsafe { System.dealloc(p, l) }
-    }
-}
-
-#[global_allocator]
-static COUNTING: Counting = Counting;
 
 #[derive(EnvState, Debug, Clone, Copy, PartialEq, Default)]
 #[repr(C)]
@@ -117,7 +90,7 @@ impl Persist for Same {
     const ENV_VERSION: u32 = 1;
 }
 
-/// Decodes `good` with each refused count; the test's thread must not allocate.
+/// Decodes `good` with each refused count; no counted thread may allocate.
 fn refused_counts(good: &[u8], decode: &dyn Fn(&[u8], DecodeLimits) -> bool) {
     for (max_instances, count) in [(1 << 24, 5u32), (u32::MAX, u32::MAX)] {
         let mut bad = good.to_vec();
@@ -125,16 +98,13 @@ fn refused_counts(good: &[u8], decode: &dyn Fn(&[u8], DecodeLimits) -> bool) {
         let n = bad.len() - 8;
         let sum = checksum(&bad[..n]);
         bad[n..].copy_from_slice(&sum.to_le_bytes());
-        BIGGEST.store(0, Ordering::Relaxed);
         let limits = DecodeLimits {
             max_instances,
             max_decoded_bytes: u64::MAX,
         };
-        COUNT_HERE.with(|c| c.set(true));
-        let refused = decode(&bad, limits);
-        COUNT_HERE.with(|c| c.set(false));
+        let (refused, tally) = counting::window(|| decode(&bad, limits));
         assert!(refused);
-        assert_eq!(BIGGEST.load(Ordering::Relaxed), 0, "count {count}");
+        assert_eq!(tally.calls, 0, "count {count}: {tally:?}");
     }
 }
 
