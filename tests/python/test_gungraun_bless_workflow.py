@@ -113,3 +113,61 @@ def test_gungraun_bless_gives_the_workspace_back():
     assert _steps(GATE).rstrip().endswith(
         'run: chown -R "$(stat -c %u:%g "$GITHUB_WORKSPACE/..")" "$GITHUB_WORKSPACE"'
     )
+
+
+def _checkouts(job):
+    return re.findall(r"^      - uses: actions/checkout@[0-9a-f]{40}.*\n((?:        .*\n)*)", _steps(job), re.M)
+
+
+def test_gungraun_bless_checks_out_exactly_the_branch_input():
+    checkouts = _checkouts(JOB)
+    assert len(checkouts) == 1
+    assert len(re.findall(r"actions/checkout@", BLESS)) == 1
+    refs = re.findall(r"^          ref: (.*)$", checkouts[0], re.M)
+    assert refs == ["${{ inputs.branch }}"]
+
+
+def _run_scripts(text):
+    """The text of every `run:` value, block scalars included."""
+    lines, out, i = text.splitlines(), [], 0
+    while i < len(lines):
+        m = re.match(r"^(\s*)(?:- )?run: ?(.*)$", lines[i])
+        if not m:
+            i += 1
+            continue
+        indent, value = len(m.group(1)), m.group(2)
+        block = [value]
+        if value.strip() in ("|", ">", "|-", ">-"):
+            i += 1
+            while i < len(lines) and (not lines[i].strip() or len(lines[i]) - len(lines[i].lstrip()) > indent):
+                block.append(lines[i])
+                i += 1
+        else:
+            i += 1
+        out.append("\n".join(block))
+    return out
+
+
+def test_gungraun_bless_no_run_interpolates_an_expression():
+    scripts = _run_scripts(BLESS)
+    assert len(scripts) >= 6
+    for script in scripts:
+        assert "${{" not in script, script
+
+
+def test_gungraun_bless_records_the_blessed_commit_in_the_artifact_name():
+    steps = _steps(JOB)
+    head = re.search(r"^      - id: head\n((?:        .*\n)+)", steps, re.M)
+    assert head, "no step with id head"
+    body = head.group(1)
+    assert 'sha="$(git rev-parse HEAD)"' in body
+    assert 'echo "blessed commit: $sha"' in body
+    assert 'echo "sha=$sha" >> "$GITHUB_OUTPUT"' in body
+    assert steps.index("- id: head") < steps.index("scripts/gungraun.sh bless")
+    name = _one(r"^          name: (gungraun-baseline-.*)$", JOB)
+    assert name == "gungraun-baseline-${{ github.run_id }}-${{ steps.head.outputs.sha }}"
+
+
+def test_gungraun_bless_job_has_a_timeout():
+    minutes = int(_one(r"^    timeout-minutes: (\d+)$", JOB))
+    assert 0 < minutes <= 180

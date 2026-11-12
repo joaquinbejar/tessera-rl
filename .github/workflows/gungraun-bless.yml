@@ -33,6 +33,8 @@ jobs:
     # with write access can dispatch a workflow, and this one has no
     # pull_request trigger, so the ci.yml fork guard has nothing to guard.
     runs-on: [self-hosted, xaskar]
+    # A hung Valgrind would otherwise hold the gate's runner for six hours.
+    timeout-minutes: 90
     container:
       # The baseline's image, by digest (benches/gungraun/environment.toml).
       image: rust:1.99.1@sha256:09027f873d45b8ecd1dc86f1fa13b7a62b875c961f017a0e331267b350430137
@@ -44,6 +46,14 @@ jobs:
         with:
           ref: ${{ inputs.branch }}
           persist-credentials: false
+      # The commit this run blesses, for the author to quote and the reviewer
+      # to check against the pull request; it is part of the artifact's name.
+      - id: head
+        name: the blessed commit
+        run: |
+          sha="$(git rev-parse HEAD)"
+          echo "blessed commit: $sha"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
       - run: apt-get update && apt-get install -y valgrind=1:3.24.0-3
       - run: cargo install --locked gungraun-runner --version 0.20.0
       - run: scripts/gungraun.sh bless
@@ -54,7 +64,7 @@ jobs:
       - id: upload
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: gungraun-baseline-${{ github.run_id }}
+          name: gungraun-baseline-${{ github.run_id }}-${{ steps.head.outputs.sha }}
           if-no-files-found: error
           path: |
             benches/gungraun/**/*.base@ref
