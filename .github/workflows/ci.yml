@@ -55,6 +55,20 @@ jobs:
         # machine, with no runner; the Windows checks run there natively,
         # in short announced sessions.
         os: [xaskar, m4-linux-arm64, m4]
+        # Where the real ONNX Runtime may be loaded (owner's decision,
+        # 2026-11-12; scripts/onnx_test.sh): only in a no-network container
+        # on xaskar; natively on the M4's Linux VM only if it has no Docker;
+        # natively on macOS.
+        include:
+          - os: xaskar
+            onnx_native: forbid
+          - os: m4-linux-arm64
+            onnx_native: if-no-docker
+          - os: m4
+            onnx_native: always
+    env:
+      # No test loads ONNX Runtime with telemetry enabled (ADR-0057).
+      ORT_DISABLE_TELEMETRY: "1"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
@@ -75,6 +89,21 @@ jobs:
       # Release, without debug assertions: the FP boundary tests (ADR-0037)
       # only detect compiler motion in optimized builds.
       - run: cargo test -p tessera-rl-num --release --all-features --locked
+      # The audited ONNX Runtime version read against the real library
+      # (ADR-0057 section 4; owner's choice of 2026-11-12). The pinned wheel
+      # is fetched by its sha256 into RUNNER_TEMP with the standard library
+      # only; nothing is installed. Where it may load is set per leg by
+      # matrix.onnx_native (scripts/onnx_test.sh): xaskar `forbid`, only in
+      # an ephemeral no-network container with the pinned image already
+      # present, else exit 1; m4-linux-arm64 `if-no-docker`, that container
+      # if Docker is present (image absent: exit 1), natively only when there
+      # is no docker binary; m4 `always`, natively. Natively means telemetry
+      # off and a scratch HOME.
+      - run: python3 scripts/fetch_onnxruntime.py "$RUNNER_TEMP/onnxruntime" > "$RUNNER_TEMP/onnxruntime.path"
+      - run: scripts/onnx_test.sh "$(cat "$RUNNER_TEMP/onnxruntime.path")" "$ONNX_TEST_IMAGE"
+        env:
+          ONNX_TEST_IMAGE: rust:1.99.1@sha256:09027f873d45b8ecd1dc86f1fa13b7a62b875c961f017a0e331267b350430137
+          ONNX_TEST_NATIVE: ${{ matrix.onnx_native }}
 
   # The native wait on Windows (WaitOnAddress) runs only on request until
   # this job passes; it is the precondition for `Auto` to use it there.
@@ -196,6 +225,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - run: rustup toolchain install 1.95.0 --profile minimal
       - run: cargo +1.95.0 check --workspace --all-targets --locked
+      # The ONNX crate with its optional feature (ort declares 1.92).
+      - run: cargo +1.95.0 check -p tessera-rl-onnx --features onnx --all-targets --locked
 
   docs:
     runs-on: [self-hosted, linux-x64]
