@@ -3,10 +3,11 @@
 //! Positive probes of the allocation diagnostics in `common/alloc_diag.rs`
 //! (the assertion of `alloc_sync.rs` relies on them): known allocations in
 //! the step kernel on several workers are counted and attributed, a count
-//! past the table is reported as truncated, and allocations under the
-//! reentrancy guard are not counted. One test, because the counter is
-//! process-wide (it first checks `Tagged` against `Counter`, before any
-//! counted window).
+//! past the table is reported as truncated, allocations under the
+//! reentrancy guard are not counted, and the thread rule of issue #43
+//! holds (a foreign thread fails the window, `main` is excluded). One
+//! test, so no other test's thread runs inside a window (it first checks
+//! `Tagged` against `Counter`, before any counted window).
 
 mod common;
 
@@ -15,7 +16,9 @@ mod alloc_diag;
 
 use core::num::{NonZeroU32, NonZeroUsize};
 use std::collections::BTreeSet;
+use std::panic::catch_unwind;
 use std::sync::atomic::Ordering;
+use std::sync::{Arc, Barrier};
 
 use alloc_diag::{ALLOCATE_IN_STEP, EVENTS, RECORDING, Tagged};
 use common::CountConfig;
@@ -152,4 +155,44 @@ fn test_alloc_diagnostics_count_attribute_truncate_and_guard() {
     assert_eq!(after, 1);
     let (events, _) = alloc_diag::recorded();
     assert_eq!(events.first().map(|e| (e.size, e.kernel)), Some((5, 0)));
+    thread_rule();
+}
+
+/// The thread rule: a foreign named thread allocating in the window fails
+/// it at `stop`; one named `main` is excluded and not counted.
+#[expect(
+    clippy::unwrap_used,
+    reason = "test helper: a failure is the assertion"
+)]
+fn thread_rule() {
+    for (name, foreign) in [("intruder", true), ("main", false)] {
+        let go = Arc::new(Barrier::new(2));
+        let t = Arc::clone(&go);
+        let h = std::thread::Builder::new()
+            .name(name.to_owned())
+            .spawn(move || {
+                t.wait();
+                t.wait();
+                let v = std::hint::black_box(vec![0u8; 7]);
+                t.wait();
+                v
+            })
+            .unwrap();
+        go.wait();
+        alloc_diag::start();
+        go.wait();
+        go.wait();
+        let stopped = catch_unwind(alloc_diag::stop);
+        assert_eq!(h.join().unwrap().len(), 7);
+        match stopped {
+            Ok(n) => assert!(!foreign && n == 0, "{name}: counted {n}"),
+            Err(err) => {
+                let msg = err.downcast_ref::<String>().cloned().unwrap_or_default();
+                assert!(
+                    foreign && msg.contains("measurement disturbed by thread \"intruder\""),
+                    "{name}: {msg}"
+                );
+            }
+        }
+    }
 }
