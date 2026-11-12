@@ -16,11 +16,19 @@ torch = pytest.importorskip("torch")
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2] / "tools"))
 
 import rts_evaluation as ev  # noqa: E402
+import rts_training  # noqa: E402
 import rts_policy  # noqa: E402
 from rts_policy import Agent  # noqa: E402
 from rts_training import Hyper  # noqa: E402
 
 SMALL = Hyper(num_envs=2, num_steps=4, size=8, max_units=8, step_limit=40)
+
+
+@pytest.fixture(autouse=True)
+def _frozen_h(monkeypatch):
+    """Tests stand the repository's frozen protocol sha256 in as "h"; the
+    real constant stays None until the freeze PR (see the None test)."""
+    monkeypatch.setattr(rts_training, "FROZEN_PROTOCOL_SHA256", "h")
 
 
 class Reached(Exception):
@@ -142,7 +150,9 @@ def test_rts_evaluation_only_the_protocol_seeds_give_a_pass_field(monkeypatch):
     monkeypatch.setattr(ev, "play", lambda agent, env, seed: "win")
     shifted = range(2_000_001, 2_000_401)
     repeated = [*list(ev.EVAL_SEEDS)[:399], 2_000_000]
-    for seeds in (shifted, repeated):
+    reversed_ = list(ev.EVAL_SEEDS)[::-1]
+    plus_one = [*ev.EVAL_SEEDS, 2_000_000]
+    for seeds in (shifted, repeated, reversed_, plus_one):
         r = ev.evaluate(Agent(11, 8, 2, 8, 6, 81, 4), SMALL, "h", "h", seeds=seeds)
         assert r["protocol"] is False and "passes" not in r
 

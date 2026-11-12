@@ -22,6 +22,13 @@ from rts_training import Hyper, Seats, gae, lr_at, next_state, ppo_loss, rollout
 import tessera_rl.gym  # noqa: E402
 
 SMALL = Hyper(num_envs=4, num_steps=6, size=8, max_units=8, step_limit=40)
+
+
+@pytest.fixture(autouse=True)
+def _frozen_h(monkeypatch):
+    """Tests stand the repository's frozen protocol sha256 in as "h"; the
+    real constant stays None until the freeze PR (see the None test)."""
+    monkeypatch.setattr(rts_training, "FROZEN_PROTOCOL_SHA256", "h")
 T, W, P = 6, 81, 4
 
 
@@ -429,7 +436,7 @@ def test_rts_training_train_body_wires_its_parts(monkeypatch):
     step). Pins the call order, the learning rate each update sees
     (lr_at(0..2)), the hand-off from next_state to update, one rng passed to
     every update, one CPU thread, envs closed and the agent returned."""
-    h = Hyper(num_envs=2, num_steps=4, size=8, max_units=8, total_steps=3 * 2 * 4)
+    h = Hyper(num_envs=2, num_steps=4, size=8, max_units=8, total_steps=3 * 2 * 4 + 5)  # not a whole number of updates: 3 run
     calls, seen, opts = [], [], []
 
     class RecSeats:
@@ -468,6 +475,7 @@ def test_rts_training_train_body_wires_its_parts(monkeypatch):
     finally:
         torch.set_num_threads(threads)
     assert isinstance(got, Agent)
+    assert got.decisions_trained == 3 * 2 * 4
     assert calls == [("seats", 5), ("reset", 5)] + [("rollout",), ("next_state",), ("update",)] * 3 + [("close",)]
     assert [s[0] for s in seen] == [lr_at(u, 3, h) for u in range(3)]
     assert [s[1] for s in seen] == [[4.0, 0.0], [7.0, 0.0], [10.0, 0.0]]
@@ -476,3 +484,24 @@ def test_rts_training_train_body_wires_its_parts(monkeypatch):
     assert all(s[4] == 1 for s in seen)
     # TR on #214: the optimizer and its eps are CleanRL's, frozen by the protocol.
     assert opts and all(o == (torch.optim.Adam, 1e-5, h.learning_rate) for o in opts)
+
+
+def test_rts_training_nothing_runs_while_the_repository_has_no_frozen_hash(monkeypatch):
+    """R1 (b): the repository's constant is None until the freeze PR; with it
+    None every authorization is refused, a matching pair included; with it
+    set, only that value passes."""
+    import ast
+
+    tree = ast.parse(pathlib.Path(rts_training.__file__).read_text(encoding="utf-8"))
+    (value,) = [n.value for n in tree.body if isinstance(n, ast.AnnAssign)
+                and getattr(n.target, "id", "") == "FROZEN_PROTOCOL_SHA256"]  # fmt: skip
+    assert isinstance(value, ast.Constant) and value.value is None
+    monkeypatch.setattr(rts_training, "FROZEN_PROTOCOL_SHA256", None)
+    for a, f in (("h", "h"), ("", ""), ("x", "x")):
+        with pytest.raises(PermissionError, match="not frozen"):
+            rts_training.authorize(a, f)
+    monkeypatch.setattr(rts_training, "FROZEN_PROTOCOL_SHA256", "k")
+    rts_training.authorize("k", "k")
+    for a, f in (("h", "h"), ("k", "h"), ("h", "k")):
+        with pytest.raises(PermissionError):
+            rts_training.authorize(a, f)
