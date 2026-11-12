@@ -1,17 +1,18 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! A step of the RTS allocates nothing (SPEC 5.5): actions recorded from one
-//! run are replayed in a second pool under a counting allocator. One test
-//! per binary, since the allocator is global.
+//! run are replayed in a second pool under a counting allocator.
+//!
+//! The counting allocator of `support/counting.rs` attributes allocator
+//! calls by thread (issue #43). This binary holds a single measuring test,
+//! which runs each scenario (the former tests, by name) with its own
+//! objects and windows, and reports every failing scenario together.
 
 #![expect(
     clippy::unwrap_used,
     clippy::indexing_slicing,
     reason = "test fixtures"
 )]
-
-use std::alloc::{GlobalAlloc, Layout, System};
-use std::cell::Cell;
 
 use core::num::{NonZeroU32, NonZeroUsize};
 
@@ -104,32 +105,10 @@ fn input(a: &[i32]) -> ActionInput<'_> {
     }
 }
 
-struct Counting;
+#[path = "support/counting.rs"]
+mod counting;
+use counting::window;
 
-#[expect(unsafe_code, reason = "test-only counting allocator")]
-// SAFETY: every method forwards to `System` with the same arguments; the
-// counter is a const-initialized thread local, which never allocates.
-unsafe impl GlobalAlloc for Counting {
-    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        let _ = ALLOCATIONS.try_with(|n| n.set(n.get() + 1));
-        // SAFETY: forwarded unchanged.
-        unsafe { System.alloc(layout) }
-    }
-
-    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
-        // SAFETY: `ptr` was allocated by `System` with `layout`.
-        unsafe { System.dealloc(ptr, layout) }
-    }
-}
-
-#[global_allocator]
-static GLOBAL: Counting = Counting;
-
-thread_local! {
-    static ALLOCATIONS: Cell<u64> = const { Cell::new(0) };
-}
-
-#[test]
 fn test_rts_step_does_not_allocate() {
     let c = cfg(16, 12);
     let mut p = pool(c.clone(), 2, 17, None);
@@ -143,10 +122,25 @@ fn test_rts_step_does_not_allocate() {
     }
     let mut q = pool(c, 2, 17, None);
     ready(&mut q);
-    let before = ALLOCATIONS.with(Cell::get);
-    for a in &rows {
-        let _ = std::hint::black_box(q.step(input(a)).unwrap());
-    }
-    assert_eq!(ALLOCATIONS.with(Cell::get), before);
+    let ((), t) = window(|| {
+        for a in &rows {
+            let _ = std::hint::black_box(q.step(input(a)).unwrap());
+        }
+    });
+    assert_eq!(t.calls, 0, "a step allocated {} times", t.calls);
     assert_eq!(q.state_hash(0).unwrap(), p.state_hash(0).unwrap());
+}
+
+/// The scenarios this binary runs.
+const SCENARIOS: usize = 1;
+
+#[test]
+fn test_alloc_scenarios_do_not_allocate() {
+    counting::scenarios(
+        SCENARIOS,
+        &[(
+            "test_rts_step_does_not_allocate",
+            test_rts_step_does_not_allocate,
+        )],
+    );
 }

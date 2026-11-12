@@ -182,8 +182,10 @@ fn close() {
 /// Closes the window opened by [`begin`] and returns the counted tally.
 ///
 /// The window is not a barrier: a call on another thread that passed the
-/// window check just before it closed may still be added after, so the
-/// race can only add to a count, never hide one.
+/// window check just before it closed but adds to the counters after they
+/// were read here is not in the returned tally (the next [`begin`] zeroes
+/// it), the same as a call outside the window. Harmless here: the measured
+/// calls return only after the engine's workers are quiescent.
 ///
 /// # Panics
 ///
