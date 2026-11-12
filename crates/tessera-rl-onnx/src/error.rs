@@ -39,3 +39,68 @@ pub(crate) enum SysError {
         reason: String,
     },
 }
+
+/// Why the ONNX Runtime library was not loaded (ADR-0057 section 4).
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+#[non_exhaustive]
+pub enum OnnxError {
+    /// `ORT_DISABLE_TELEMETRY=1` is not set and telemetry was not
+    /// accepted explicitly; nothing was loaded and the environment was not
+    /// changed.
+    #[error(
+        "refusing to load ONNX Runtime: set {variable}=1 before loading it, \
+         or accept telemetry explicitly (TelemetryPolicy::Accept)"
+    )]
+    TelemetryNotDisabled {
+        /// The variable that must be `1`.
+        variable: &'static str,
+    },
+    /// No loadable library at the path.
+    #[error("no ONNX Runtime library at {path:?}: {reason}")]
+    MissingLibrary {
+        /// The path given.
+        path: PathBuf,
+        /// What failed.
+        reason: String,
+    },
+    /// The file is a library but not a usable ONNX Runtime.
+    #[error("{path:?} is not a usable ONNX Runtime library: {reason}")]
+    NotRuntime {
+        /// The path given.
+        path: PathBuf,
+        /// What failed.
+        reason: String,
+    },
+    /// The library's version is not the pinned one.
+    #[error("ONNX Runtime {found} at {path:?}; this build requires exactly {pinned}")]
+    Version {
+        /// The path given.
+        path: PathBuf,
+        /// The version the library reports.
+        found: String,
+        /// The pinned version.
+        pinned: &'static str,
+    },
+    /// `ort` failed to initialize the runtime from the library.
+    #[error("initializing ONNX Runtime from {path:?} failed: {reason}")]
+    Init {
+        /// The path given.
+        path: PathBuf,
+        /// `ort`'s message.
+        reason: String,
+    },
+    /// An earlier load in this process failed; no further load is tried.
+    #[error("an earlier ONNX Runtime load in this process failed: {first}")]
+    LoadFailedEarlier {
+        /// The first failure.
+        first: Box<OnnxError>,
+    },
+    /// Another library is already loaded in this process.
+    #[error("ONNX Runtime is already loaded from {loaded:?}; refusing {requested:?}")]
+    DifferentLibrary {
+        /// The library loaded first.
+        loaded: PathBuf,
+        /// The library asked for now.
+        requested: PathBuf,
+    },
+}

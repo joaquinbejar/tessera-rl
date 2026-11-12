@@ -21,7 +21,7 @@
 //! tests (`sys_tests.rs`) on every platform the crate is tested on.
 
 use std::ffi::{CStr, c_char};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use libloading::{Library, Symbol};
 
@@ -52,19 +52,10 @@ pub(crate) struct RuntimeLibrary {
     /// Held, never read: keeps the library loaded for as long as this
     /// value lives.
     _library: Library,
-    /// The path it was opened from.
-    path: PathBuf,
     /// The version it reports, for example `1.31.1`.
     version: String,
 }
 
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "used by the loader (ADR-0057 section 4), added next"
-    )
-)]
 impl RuntimeLibrary {
     /// Opens the library at `path` and reads its version.
     ///
@@ -111,7 +102,6 @@ impl RuntimeLibrary {
         };
         Ok(Self {
             _library: library,
-            path: path.to_path_buf(),
             version,
         })
     }
@@ -120,12 +110,6 @@ impl RuntimeLibrary {
     #[must_use]
     pub(crate) fn version(&self) -> &str {
         &self.version
-    }
-
-    /// The path the library was opened from.
-    #[must_use]
-    pub(crate) fn path(&self) -> &Path {
-        &self.path
     }
 }
 

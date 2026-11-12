@@ -7,7 +7,8 @@ Downloads the onnxruntime 1.31.1 wheel for this platform from PyPI's file URL,
 checks it against the sha256 pinned below, and extracts only the shared
 library (onnxruntime/capi/libonnxruntime.*) into <dest-dir>, after checking
 its own pinned sha256: no unchecked file is written next to it. It prints
-the library's path on stdout. Nothing is imported, loaded or installed, and
+the library's path on stdout, and both verified sha256 on stderr (for the
+job log). Nothing is imported, loaded or installed, and
 nothing is written outside <dest-dir>. Standard library only, so no tool has
 to be installed on the runner.
 
@@ -75,12 +76,14 @@ def main(argv):
     if got != sha256:
         sys.exit(f"fetch_onnxruntime.py: {wheel.name} has sha256 {got}, pinned {sha256}")
     wheel.write_bytes(data)
+    print(f"fetch_onnxruntime.py: wheel sha256 {got}  {wheel.name} (pinned, matches)", file=sys.stderr)
     with zipfile.ZipFile(wheel) as archive:
         member = f"onnxruntime/capi/{library}"
         payload = archive.read(member)
         got = hashlib.sha256(payload).hexdigest()
         if got != library_sha256:
             sys.exit(f"fetch_onnxruntime.py: {library} has sha256 {got}, pinned {library_sha256}")
+    print(f"fetch_onnxruntime.py: library sha256 {got}  {library} (pinned, matches)", file=sys.stderr)
     path = dest / library
     path.write_bytes(payload)
     print(path)

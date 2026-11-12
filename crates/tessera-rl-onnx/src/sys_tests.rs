@@ -130,7 +130,6 @@ fn test_sys_real_library_reports_pinned_version() {
 
     let runtime = RuntimeLibrary::open(&lib).unwrap();
     assert_eq!(runtime.version(), PINNED);
-    assert_eq!(runtime.path(), lib.as_path());
 
     for dir in telemetry_dirs(&home) {
         assert!(!dir.exists(), "telemetry directory appeared: {dir:?}");
