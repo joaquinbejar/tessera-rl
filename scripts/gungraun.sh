@@ -91,6 +91,9 @@ case "$mode" in
         cargo bench --locked "${benches[@]}" -- --home="$home" --baseline=ref --callgrind-limits='ir=2.0%' 2>&1 | tee "$log" || status=$?
         sums_after="$(cd "$home" && find . -name '*.base@ref' | sort | xargs sha256sum)"
         [ "$sums_before" = "$sums_after" ] || fail "check created or changed baseline files"
+        # MEASUREMENT ONLY (measure/gungraun-profiles): the Ir table under the
+        # (b) and (c) profiles; it never changes the exit status of check.
+        "$root/scripts/gungraun_profiles.sh" "$log" || true
         # A regression (gungraun exits 3) or a failed run is reported as is.
         [ "$status" -eq 0 ] || exit "$status"
         # Strip ANSI colours first: CI sets CARGO_TERM_COLOR=always, and
