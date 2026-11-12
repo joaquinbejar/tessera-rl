@@ -27,3 +27,8 @@ ort = { workspace = true, optional = true }
 
 [lints]
 workspace = true
+
+# The loader is process-wide: each case runs in a child process of its own.
+[[test]]
+name = "loader"
+required-features = ["onnx"]
