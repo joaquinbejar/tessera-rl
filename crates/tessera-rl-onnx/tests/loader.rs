@@ -233,26 +233,42 @@ fn test_loader_failed_load_then_real_library_is_failed_earlier() {
 
 #[test]
 #[ignore = "opens the real ONNX Runtime: run through `make onnx-test`"]
-fn test_loader_second_library_is_refused() {
-    const NAME: &str = "test_loader_second_library_is_refused";
+fn test_loader_library_identity_is_its_content_sha256() {
+    const NAME: &str = "test_loader_library_identity_is_its_content_sha256";
     if in_child(NAME) {
         let lib = lib_from_env();
-        let other = PathBuf::from(std::env::var_os("TESSERA_ONNX_COPY").unwrap());
-        load_runtime(&lib, TelemetryPolicy::RequireDisabled).unwrap();
+        let same = PathBuf::from(std::env::var_os("TESSERA_ONNX_SAME").unwrap());
+        let other = PathBuf::from(std::env::var_os("TESSERA_ONNX_OTHER").unwrap());
+        let a = load_runtime(&lib, TelemetryPolicy::RequireDisabled).unwrap();
+        // A byte-identical copy under another path is the same library.
+        let b = load_runtime(&same, TelemetryPolicy::RequireDisabled).unwrap();
+        assert!(std::ptr::eq(a, b));
+        // Other content is another library, refused before it is opened.
         let got = load_runtime(&other, TelemetryPolicy::RequireDisabled);
         assert!(
-            matches!(got, Err(OnnxError::DifferentLibrary { .. })),
+            matches!(&got, Err(OnnxError::DifferentLibrary { loaded_sha256, requested_sha256, .. })
+                if loaded_sha256 == a.sha256() && requested_sha256 != loaded_sha256),
             "{got:?}"
         );
         return;
     }
     let (lib, home) = real_library();
-    // A byte-identical copy under another path: another library by path,
-    // refused before it is opened.
-    let copy = home.join("copy").join(lib.file_name().unwrap());
-    std::fs::create_dir_all(copy.parent().unwrap()).unwrap();
-    std::fs::copy(&lib, &copy).unwrap();
-    run_child(NAME, &[], &[("TESSERA_ONNX_COPY", copy.to_str().unwrap())]);
-    std::fs::remove_dir_all(copy.parent().unwrap()).unwrap();
+    let dir = home.join("copies");
+    std::fs::create_dir_all(&dir).unwrap();
+    let same = dir.join("same").with_extension(lib.extension().unwrap());
+    std::fs::copy(&lib, &same).unwrap();
+    let mut bytes = std::fs::read(&lib).unwrap();
+    bytes.push(0);
+    let other = dir.join("other").with_extension(lib.extension().unwrap());
+    std::fs::write(&other, bytes).unwrap();
+    run_child(
+        NAME,
+        &[],
+        &[
+            ("TESSERA_ONNX_SAME", same.to_str().unwrap()),
+            ("TESSERA_ONNX_OTHER", other.to_str().unwrap()),
+        ],
+    );
+    std::fs::remove_dir_all(&dir).unwrap();
     assert_no_telemetry(&home);
 }

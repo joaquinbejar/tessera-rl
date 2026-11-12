@@ -95,12 +95,40 @@ pub enum OnnxError {
         /// The first failure.
         first: Box<OnnxError>,
     },
-    /// Another library is already loaded in this process.
-    #[error("ONNX Runtime is already loaded from {loaded:?}; refusing {requested:?}")]
+    /// Another library (by content sha256) is already loaded in this
+    /// process.
+    #[error(
+        "ONNX Runtime is already loaded from {loaded:?} (sha256 {loaded_sha256}); \
+         refusing {requested:?} (sha256 {requested_sha256})"
+    )]
     DifferentLibrary {
         /// The library loaded first.
         loaded: PathBuf,
+        /// Its sha256.
+        loaded_sha256: String,
         /// The library asked for now.
         requested: PathBuf,
+        /// Its sha256.
+        requested_sha256: String,
+    },
+    /// The CPU execution provider could not be selected as the only one.
+    #[error("cannot restrict the session to the CPU execution provider: {reason}")]
+    Provider {
+        /// What failed.
+        reason: String,
+    },
+    /// The model was refused or could not be read or parsed.
+    #[error("model {path:?}: {reason}")]
+    Model {
+        /// The model path.
+        path: PathBuf,
+        /// What failed.
+        reason: String,
+    },
+    /// The model's inputs or outputs do not match the environment.
+    #[error("the model does not match the environment: {what}")]
+    Contract {
+        /// What does not match.
+        what: String,
     },
 }

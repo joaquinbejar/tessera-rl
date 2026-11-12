@@ -4,7 +4,8 @@
 //!
 //! Order, on the first call in a process:
 //! 1. the telemetry gate ([`TelemetryPolicy`]), before anything is opened;
-//! 2. the explicit path, made canonical (`ORT_DYLIB_PATH` is never read);
+//! 2. the explicit path, made canonical (`ORT_DYLIB_PATH` is never read),
+//!    and the file's sha256 (read, not loaded);
 //! 3. the exact version, read from the library itself (`sys`);
 //! 4. `ort::init_from` with the same path, then one `ort` environment.
 //!
@@ -16,9 +17,10 @@
 //! `ort` has initialized is not sound. `ort` opens the same path again,
 //! which the dynamic loader resolves to the image already loaded.
 //!
-//! Libraries are identified by their canonical path. Identity by content
-//! (the library's sha256, which ADR-0057 records as provenance) comes with
-//! the provenance record.
+//! Libraries are identified by content: the sha256 of the file, read
+//! (not loaded) before the first load and before any comparison. A
+//! byte-identical file under another path is the same library; any other
+//! content is [`OnnxError::DifferentLibrary`] and is never opened.
 
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
@@ -38,10 +40,12 @@ pub struct Runtime {
     library: RuntimeLibrary,
     /// The canonical path it was loaded from.
     canonical: PathBuf,
+    /// The sha256 of the library file, lowercase hex.
+    sha256: String,
     /// Whether it was loaded with telemetry possibly enabled.
     telemetry_enabled: bool,
     /// The one `ort` environment of the process.
-    _environment: ort::environment::Environment,
+    environment: ort::environment::Environment,
 }
 
 impl Runtime {
@@ -55,6 +59,19 @@ impl Runtime {
     #[must_use]
     pub fn path(&self) -> &Path {
         &self.canonical
+    }
+
+    /// The sha256 of the library file, lowercase hex: the library's
+    /// identity (on macOS the same version ships different bytes in
+    /// different wheels).
+    #[must_use]
+    pub fn sha256(&self) -> &str {
+        &self.sha256
+    }
+
+    /// The process's `ort` environment.
+    pub(crate) fn environment(&self) -> &ort::environment::Environment {
+        &self.environment
     }
 
     /// Whether the runtime was loaded without `ORT_DISABLE_TELEMETRY=1`,
@@ -84,16 +101,22 @@ pub fn load_runtime(path: &Path, policy: TelemetryPolicy) -> Result<&'static Run
         path: path.to_path_buf(),
         reason: e.to_string(),
     })?;
+    let sha256 = crate::hash::file_sha256(&requested).map_err(|e| OnnxError::MissingLibrary {
+        path: path.to_path_buf(),
+        reason: e.to_string(),
+    })?;
     let mut fresh = false;
     let state = RUNTIME.get_or_init(|| {
         fresh = true;
-        init(&requested, telemetry_enabled)
+        init(&requested, sha256.clone(), telemetry_enabled)
     });
     match state {
-        Ok(runtime) if runtime.canonical == requested => Ok(runtime),
+        Ok(runtime) if runtime.sha256 == sha256 => Ok(runtime),
         Ok(runtime) => Err(OnnxError::DifferentLibrary {
             loaded: runtime.canonical.clone(),
+            loaded_sha256: runtime.sha256.clone(),
             requested,
+            requested_sha256: sha256,
         }),
         Err(first) if fresh => Err(first.clone()),
         Err(first) => Err(OnnxError::LoadFailedEarlier {
@@ -103,7 +126,7 @@ pub fn load_runtime(path: &Path, policy: TelemetryPolicy) -> Result<&'static Run
 }
 
 /// The first load of the process.
-fn init(path: &Path, telemetry_enabled: bool) -> Result<Runtime, OnnxError> {
+fn init(path: &Path, sha256: String, telemetry_enabled: bool) -> Result<Runtime, OnnxError> {
     let library = RuntimeLibrary::open(path).map_err(|e| from_sys(path, e))?;
     check_version(path, library.version())?;
     let init_err = |reason: String| OnnxError::Init {
@@ -119,8 +142,9 @@ fn init(path: &Path, telemetry_enabled: bool) -> Result<Runtime, OnnxError> {
     Ok(Runtime {
         library,
         canonical: path.to_path_buf(),
+        sha256,
         telemetry_enabled,
-        _environment: environment,
+        environment,
     })
 }
 
