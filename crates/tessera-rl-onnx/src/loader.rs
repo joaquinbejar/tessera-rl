@@ -208,4 +208,22 @@ mod tests {
             .expect("compat/targets.toml pins onnxruntime");
         assert_eq!(line.trim(), format!("onnxruntime = \"{PINNED_VERSION}\""));
     }
+
+    /// Ruling 4: the crate constant, compat/targets.toml and the `[onnx]`
+    /// extra of pyproject.toml name the same version.
+    #[test]
+    fn test_loader_pinned_version_matches_the_python_extra() {
+        let toml = std::fs::read_to_string(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../pyproject.toml"),
+        )
+        .unwrap();
+        let line = toml
+            .lines()
+            .find(|l| l.trim_start().starts_with("onnx = "))
+            .expect("pyproject.toml has the onnx extra");
+        assert_eq!(
+            line.trim(),
+            format!("onnx = [\"onnxruntime=={PINNED_VERSION}\"]")
+        );
+    }
 }

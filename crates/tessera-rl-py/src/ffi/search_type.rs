@@ -108,11 +108,28 @@ noargs!(considered, api::considered);
 noargs!(calls, api::calls);
 noargs!(tree_hash, api::tree_hash);
 noargs!(is_privileged, api::is_privileged);
+noargs!(run_onnx, crate::onnx_api::run_onnx);
+
+/// `attach_onnx(**kwargs)`: a method with keyword arguments only.
+pub(super) unsafe extern "C" fn attach_onnx(
+    slf: *mut ffi::PyObject,
+    _args: *mut ffi::PyObject,
+    kwargs: *mut ffi::PyObject,
+) -> *mut ffi::PyObject {
+    entry(|g| {
+        // SAFETY: CPython passes `self` of a `Search` method.
+        let inner = unsafe { inner(g, slf) }?;
+        // SAFETY: METH_VARARGS | METH_KEYWORDS passes a borrowed dict or
+        // null, alive for the call.
+        let kwargs = unsafe { Ref::from_ptr(kwargs) };
+        crate::onnx_api::attach_onnx(g, inner, kwargs)
+    })
+}
 varargs!(set_root, api::set_root);
 varargs!(run, api::run);
 varargs!(select_action, api::select_action);
 
-static METHODS: Table<[ffi::PyMethodDef; 11]> = Table([
+static METHODS: Table<[ffi::PyMethodDef; 13]> = Table([
     method(
         c"layout",
         thunks::SEARCH_LAYOUT,
@@ -172,6 +189,17 @@ static METHODS: Table<[ffi::PyMethodDef; 11]> = Table([
         thunks::SEARCH_IS_PRIVILEGED,
         ffi::METH_NOARGS,
         c"Whether the search reads hidden state (ADR-0046).",
+    ),
+    method_kw(
+        c"attach_onnx",
+        thunks::SEARCH_ATTACH_ONNX,
+        c"attach_onnx(model=, library=, accept_telemetry=, max_model_bytes=) -> dict",
+    ),
+    method(
+        c"run_onnx",
+        thunks::SEARCH_RUN_ONNX,
+        ffi::METH_NOARGS,
+        c"run_onnx(): one search call with the attached ONNX evaluator.",
     ),
     method_end(),
 ]);
@@ -240,6 +268,27 @@ pub(super) unsafe extern "C" fn make_search(
         new_object(g, inner)
     })
 }
+
+/// `onnx_load(library=, accept_telemetry=) -> dict`: loads ONNX Runtime.
+pub(super) unsafe extern "C" fn onnx_load(
+    _module: *mut ffi::PyObject,
+    _args: *mut ffi::PyObject,
+    kwargs: *mut ffi::PyObject,
+) -> *mut ffi::PyObject {
+    entry(|g| {
+        // SAFETY: METH_VARARGS | METH_KEYWORDS passes a borrowed dict or
+        // null, alive for the call.
+        let kwargs = unsafe { Ref::from_ptr(kwargs) };
+        crate::onnx_api::onnx_load(g, kwargs)
+    })
+}
+
+/// The module-level ONNX Runtime loader (ADR-0057).
+pub(super) const ONNX_LOAD: ffi::PyMethodDef = method_kw(
+    c"onnx_load",
+    thunks::ONNX_LOAD,
+    c"onnx_load(library=, accept_telemetry=False) -> dict",
+);
 
 /// The module-level constructor, for the module's method table.
 pub(super) const MAKER: ffi::PyMethodDef = method_kw(

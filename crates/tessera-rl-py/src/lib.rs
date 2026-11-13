@@ -26,6 +26,7 @@ mod ffi;
 mod multi_probe;
 #[cfg(test)]
 mod observe_panic;
+mod onnx_api;
 mod search;
 mod search_api;
 mod search_group_api;

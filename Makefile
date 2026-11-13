@@ -4,7 +4,7 @@
 # maturin's default of macOS 11. Ignored on other platforms.
 export MACOSX_DEPLOYMENT_TARGET := 13.0
 
-.PHONY: onnx-test fuzz-check simd-disasm dashboard dashboard-check check-build-id gungraun-threaded fmt fmt-check clippy test doc readme readme-check pre-push deny check-targets wheel-golden py-test-wheels puffer-test py-test-jax pre-push-jax compat-test py-entries py-callouts py-test py-test-hooks py-test-torch pre-push-torch gym-equivalence reference-training learning-test learning-calibrate bench bench-quick bench-kernels gungraun gungraun-bless connect4-calibration search-strength
+.PHONY: onnx-test py-test-onnx fuzz-check simd-disasm dashboard dashboard-check check-build-id gungraun-threaded fmt fmt-check clippy test doc readme readme-check pre-push deny check-targets wheel-golden py-test-wheels puffer-test py-test-jax pre-push-jax compat-test py-entries py-callouts py-test py-test-hooks py-test-torch pre-push-torch gym-equivalence reference-training learning-test learning-calibrate bench bench-quick bench-kernels gungraun gungraun-bless connect4-calibration search-strength
 
 fmt:
 	cargo fmt --all
@@ -104,6 +104,21 @@ py-test:
 
 # The ADR-0041 unwind tests against a wheel built with the `test-hooks`
 # feature (failure injection), then the default build again.
+# The Python ONNX evaluator against the real library (ADR-0057): the
+# extension built with the `onnx` feature and the `[onnx]` extra installed;
+# the tests run with telemetry off and a scratch HOME (not through uv, which
+# keeps its cache under the real HOME), then the default build is restored.
+py-test-onnx:
+	MATURIN_PEP517_ARGS="--features onnx" uv sync --locked --python 3.11 --extra onnx --reinstall-package tessera-rl; \
+	status=$$?; \
+	if [ $$status -eq 0 ]; then \
+	  rm -rf $(CURDIR)/target/onnx-test-home && mkdir -p $(CURDIR)/target/onnx-test-home && \
+	  HOME=$(ONNX_TEST_HOME) ORT_DISABLE_TELEMETRY=1 TESSERA_ONNX_TEST=1 \
+	  .venv/bin/python -m pytest -q -rA -p no:cacheprovider tests/python/test_onnx_evaluator.py; status=$$?; \
+	fi; \
+	uv sync --locked --python 3.11 --reinstall-package tessera-rl || status=1; \
+	exit $$status
+
 py-test-hooks:
 	MATURIN_PEP517_ARGS="--features test-hooks" uv sync --locked --python 3.11 --reinstall-package tessera-rl; \
 	status=$$?; \

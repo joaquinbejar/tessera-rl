@@ -15,6 +15,9 @@
 //!                      error (in flight, borrowed, nothing to receive)
 //!   ExhaustedError     a step, episode or branch counter would overflow
 //!   ForkError          an environment made before os.fork() used in the child
+//!   SearchError        a search call rejected or failed
+//!   EvaluatorError     the search evaluator failed or answered badly
+//!   OnnxError          the ONNX evaluator could not load its runtime or model
 //!   FloatingPointEnvironmentError
 //!                      a call rejected for non-default caller FP controls
 //!                      (strict policy, ADR-0041)
@@ -45,9 +48,10 @@ pub(crate) enum Kind {
     Evaluator,
     Forked,
     Persist,
+    Onnx,
 }
 
-const KINDS: [(Kind, &str, &std::ffi::CStr); 14] = [
+const KINDS: [(Kind, &str, &std::ffi::CStr); 15] = [
     (
         Kind::Base,
         "TesseraError",
@@ -117,6 +121,11 @@ const KINDS: [(Kind, &str, &std::ffi::CStr); 14] = [
         Kind::Persist,
         "PersistError",
         c"A persisted file that is damaged, malformed or does not match this environment.",
+    ),
+    (
+        Kind::Onnx,
+        "OnnxError",
+        c"The ONNX evaluator could not load ONNX Runtime or its model (ADR-0057); nothing was evaluated.",
     ),
 ];
 
@@ -238,5 +247,6 @@ pub(crate) fn to_py(g: Gil, e: BindError) -> Raised {
             error(g, Kind::Evaluator, e.to_string())
         }
         BindError::Search(e) => error(g, Kind::Search, e.to_string()),
+        BindError::Onnx(message) => error(g, Kind::Onnx, message),
     }
 }

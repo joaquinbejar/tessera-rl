@@ -63,6 +63,8 @@ per call are the same as under PUCT.
 
 from __future__ import annotations
 
+import types
+from pathlib import Path
 from typing import NamedTuple
 
 import numpy as np
@@ -162,7 +164,16 @@ class Search:
         self._native.set_root(bytes(record))
 
     def run(self, evaluator) -> None:
-        """One search call with ``evaluator`` (see the module docs)."""
+        """One search call with ``evaluator`` (see the module docs), or
+        with an ``OnnxEvaluator``, which runs in Rust without a callback."""
+        if isinstance(evaluator, OnnxEvaluator):
+            # One session per search: built on the first call with this
+            # evaluator, and again when another evaluator is passed.
+            if getattr(self, "_onnx", None) is not evaluator:
+                evaluator._attach(self._native)
+                self._onnx = evaluator
+            self._native.run_onnx()
+            return
         raised = []
         call = _bridge(evaluator, self.actions, self._leaves, self._obs_bytes, raised)
         try:
@@ -326,3 +337,93 @@ class SearchGroup:
 
     def tree_hash(self, i: int) -> int:
         return self._native.tree_hash(i)
+
+
+# The ONNX Runtime version the `[onnx]` extra installs and the evaluator
+# accepts, exactly (ADR-0057; tied to compat/targets.toml and the extra by
+# a test).
+ONNXRUNTIME_VERSION = "1.31.1"
+
+_LIBRARY_NAMES = {
+    "linux": f"libonnxruntime.so.{ONNXRUNTIME_VERSION}",
+    "darwin": f"libonnxruntime.{ONNXRUNTIME_VERSION}.dylib",
+}
+
+
+def _default_library() -> str:
+    """The library of the installed ``onnxruntime`` package, found without
+    importing it (its import would load a second runtime)."""
+    import importlib.util
+    import sys
+
+    name = _LIBRARY_NAMES.get(sys.platform)
+    if name is None:
+        raise _native.OnnxError(
+            f"the ONNX evaluator is not available on {sys.platform} (ADR-0057)"
+        )
+    spec = importlib.util.find_spec("onnxruntime")
+    if spec is None or not spec.submodule_search_locations:
+        raise _native.OnnxError(
+            "onnxruntime is not installed: install tessera-rl[onnx], "
+            "or pass library= the path of an ONNX Runtime "
+            f"{ONNXRUNTIME_VERSION} library"
+        )
+    root = Path(next(iter(spec.submodule_search_locations)))
+    return str(root / "capi" / name)
+
+
+class OnnxEvaluator:
+    """An ONNX model as a search evaluator (ADR-0057), for ``Search.run``.
+
+    ``model`` is the ``.onnx`` file, read once per search under
+    ``max_model_bytes`` (default 256 MiB); external-data files are refused.
+    ``library`` is the ONNX Runtime library; by default the one of the
+    installed ``onnxruntime`` package (``pip install tessera-rl[onnx]``),
+    located here without importing that package.
+
+    Construction loads ONNX Runtime once per process, and refuses with
+    ``OnnxError`` unless ``ORT_DISABLE_TELEMETRY=1`` is already set in the
+    environment, which is only read; ``accept_telemetry=True`` loads it
+    without that variable, and ONNX Runtime may then record telemetry.
+
+    Results are repeatable only on the same machine, with the same model
+    and library bytes, at one thread (ADR-0057 section 1); ``provenance``
+    records what they depend on.
+    """
+
+    def __init__(
+        self,
+        model,
+        *,
+        library=None,
+        accept_telemetry: bool = False,
+        max_model_bytes: int | None = None,
+    ):
+        self._model = str(Path(model))
+        self._accept = bool(accept_telemetry)
+        self._max = max_model_bytes
+        if library is None:
+            library = _default_library()
+        self._library = str(Path(library))
+        self._runtime = _native.onnx_load(
+            library=self._library, accept_telemetry=self._accept
+        )
+        self._provenance = None
+
+    @property
+    def provenance(self):
+        """What the results depend on: model and library sha256, library
+        path and version, provider, threads, optimization level, whether
+        telemetry was accepted, CPU; a read-only mapping, ``None`` before
+        the first search call."""
+        return self._provenance
+
+    def _attach(self, native) -> None:
+        kwargs = {
+            "model": self._model,
+            "library": self._library,
+            "accept_telemetry": self._accept,
+        }
+        if self._max is not None:
+            kwargs["max_model_bytes"] = int(self._max)
+        self._provenance = types.MappingProxyType(native.attach_onnx(**kwargs))

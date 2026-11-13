@@ -19,6 +19,9 @@ crate-type = ["cdylib"]
 # Test-only failure injection (`_native._fail_after`), for the ADR-0041
 # unwind tests (`make py-test-hooks`). Never in a release wheel.
 test-hooks = ["dep:tessera-rl-macros"]
+# The ONNX search evaluator (ADR-0057): ONNX Runtime loaded at run time,
+# from the `onnxruntime` package of the `[onnx]` extra or an explicit path.
+onnx = ["dep:tessera-rl-onnx", "tessera-rl-onnx/onnx"]
 
 [dependencies]
 pyo3.workspace = true
@@ -29,6 +32,7 @@ tessera-rl-classic.workspace = true
 tessera-rl-games.workspace = true
 tessera-rl-search.workspace = true
 tessera-rl-rts.workspace = true
+tessera-rl-onnx = { workspace = true, optional = true }
 # The panic-injection fixture, behind `test-hooks` only.
 tessera-rl-macros = { workspace = true, optional = true }
 

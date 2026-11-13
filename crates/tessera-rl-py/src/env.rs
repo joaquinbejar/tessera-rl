@@ -40,6 +40,9 @@ pub(crate) enum BindError {
     Forked(String),
     /// A search error (ADR-0043), the evaluator's included.
     Search(tessera_rl_search::SearchError),
+    /// The ONNX evaluator (ADR-0057): loading, model, contract, or a build
+    /// without the `onnx` feature.
+    Onnx(String),
 }
 
 impl From<tessera_rl_engine::PersistError> for BindError {

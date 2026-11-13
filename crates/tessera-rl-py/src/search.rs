@@ -90,6 +90,39 @@ impl<E: Environment> Evaluator<E> for Adapter<'_> {
     }
 }
 
+/// How Python asks for an ONNX evaluator (ADR-0057).
+#[derive(Debug, Clone)]
+#[cfg_attr(
+    not(feature = "onnx"),
+    expect(dead_code, reason = "read only by the onnx feature's evaluator")
+)]
+pub(crate) struct OnnxArgs {
+    /// The model file.
+    pub(crate) model: std::path::PathBuf,
+    /// The ONNX Runtime library, by explicit path.
+    pub(crate) library: std::path::PathBuf,
+    /// `accept_telemetry=True`.
+    pub(crate) accept_telemetry: bool,
+    /// The model size cap; the default when `None`.
+    pub(crate) max_model_bytes: Option<u64>,
+}
+
+/// An ONNX evaluator's provenance, as Python sees it (ADR-0057 section 3).
+#[derive(Debug, Clone)]
+pub(crate) struct OnnxInfo {
+    pub(crate) model_sha256: String,
+    pub(crate) library_path: String,
+    pub(crate) library_sha256: String,
+    pub(crate) library_version: String,
+    pub(crate) provider: &'static str,
+    pub(crate) intra_threads: usize,
+    pub(crate) inter_threads: usize,
+    pub(crate) optimization_level: &'static str,
+    pub(crate) telemetry_enabled: bool,
+    pub(crate) arch: &'static str,
+    pub(crate) cpu_model: Option<String>,
+}
+
 /// What a search object can do, whatever the environment.
 pub(crate) trait SearchOps: Send {
     /// Actions per node.
@@ -100,6 +133,15 @@ pub(crate) trait SearchOps: Send {
     fn set_root(&mut self, record: &[u8]) -> Result<(), BindError>;
     /// One search call.
     fn run(&mut self, eval: &mut dyn BatchEval) -> Result<(), BindError>;
+    /// Builds this search's ONNX evaluator (one session per search),
+    /// replacing any earlier one, and returns its provenance.
+    fn attach_onnx(&mut self, args: &OnnxArgs) -> Result<OnnxInfo, BindError>;
+    /// One search call with the attached ONNX evaluator; `check` polls for
+    /// interruptions before every batch.
+    fn run_onnx(
+        &mut self,
+        check: &mut dyn FnMut() -> Result<(), EvaluatorError>,
+    ) -> Result<(), BindError>;
     /// The root's visit counts.
     fn root_visits(&self) -> Vec<u32>;
     /// The action to play (greedy at 0).
@@ -123,6 +165,12 @@ struct Searcher<E: Environment, M: MaskProvider<E>> {
     mcts: Mcts<E, M>,
     /// A one-instance pool that validates imported roots.
     importer: EnvPool<E, M>,
+    /// The attached ONNX evaluator, if any.
+    #[cfg(feature = "onnx")]
+    onnx: Option<tessera_rl_onnx::OnnxEvaluator<E>>,
+    /// The environment's config, for building the ONNX evaluator.
+    #[cfg(feature = "onnx")]
+    cfg: E::Config,
 }
 
 impl<E, M> SearchOps for Searcher<E, M>
@@ -154,6 +202,61 @@ where
     fn run(&mut self, eval: &mut dyn BatchEval) -> Result<(), BindError> {
         self.mcts.run(&mut Adapter(eval))?;
         Ok(())
+    }
+
+    #[cfg(feature = "onnx")]
+    fn attach_onnx(&mut self, args: &OnnxArgs) -> Result<OnnxInfo, BindError> {
+        let mut options = tessera_rl_onnx::OnnxOptions::new(&args.library);
+        if args.accept_telemetry {
+            options.telemetry = tessera_rl_onnx::TelemetryPolicy::Accept;
+        }
+        if let Some(cap) = args.max_model_bytes {
+            options.max_model_bytes = cap;
+        }
+        let eval = tessera_rl_onnx::OnnxEvaluator::<E>::new(&self.cfg, &args.model, &options)
+            .map_err(|e| BindError::Onnx(e.to_string()))?;
+        let p = eval.provenance();
+        let info = OnnxInfo {
+            model_sha256: p.model_sha256.clone(),
+            library_path: p.library_path.display().to_string(),
+            library_sha256: p.library_sha256.clone(),
+            library_version: p.library_version.clone(),
+            provider: p.provider,
+            intra_threads: p.intra_threads,
+            inter_threads: p.inter_threads,
+            optimization_level: p.optimization_level,
+            telemetry_enabled: p.telemetry_enabled,
+            arch: p.arch,
+            cpu_model: p.cpu_model.clone(),
+        };
+        self.onnx = Some(eval);
+        Ok(info)
+    }
+
+    #[cfg(not(feature = "onnx"))]
+    fn attach_onnx(&mut self, _: &OnnxArgs) -> Result<OnnxInfo, BindError> {
+        Err(not_built())
+    }
+
+    #[cfg(feature = "onnx")]
+    fn run_onnx(
+        &mut self,
+        check: &mut dyn FnMut() -> Result<(), EvaluatorError>,
+    ) -> Result<(), BindError> {
+        let inner = self
+            .onnx
+            .as_mut()
+            .ok_or_else(|| BindError::Onnx("no ONNX evaluator attached".to_owned()))?;
+        self.mcts.run(&mut OnnxRun { inner, check })?;
+        Ok(())
+    }
+
+    #[cfg(not(feature = "onnx"))]
+    fn run_onnx(
+        &mut self,
+        _: &mut dyn FnMut() -> Result<(), EvaluatorError>,
+    ) -> Result<(), BindError> {
+        Err(not_built())
     }
 
     fn root_visits(&self) -> Vec<u32> {
@@ -273,7 +376,52 @@ fn connect4_tree(args: &SearchArgs) -> Result<Connect4Tree, BindError> {
 /// A Connect Four search (`tessera/Connect4-v1`), rooted at a fresh game.
 pub(crate) fn connect4(args: &SearchArgs) -> Result<Box<dyn SearchOps>, BindError> {
     let (mcts, importer) = connect4_tree(args)?;
-    Ok(Box::new(Searcher { mcts, importer }))
+    Ok(Box::new(Searcher {
+        mcts,
+        importer,
+        #[cfg(feature = "onnx")]
+        onnx: None,
+        #[cfg(feature = "onnx")]
+        cfg: Connect4Config {},
+    }))
+}
+
+/// The ONNX evaluator with the Python interruption poll.
+#[cfg(feature = "onnx")]
+struct OnnxRun<'a, E: Environment> {
+    inner: &'a mut tessera_rl_onnx::OnnxEvaluator<E>,
+    check: &'a mut dyn FnMut() -> Result<(), EvaluatorError>,
+}
+
+#[cfg(feature = "onnx")]
+impl<E: Environment> Evaluator<E> for OnnxRun<'_, E> {
+    fn evaluate(
+        &mut self,
+        records: &[Record<E>],
+        priors: &mut [f64],
+        values: &mut [f64],
+    ) -> Result<(), EvaluatorError> {
+        self.inner.evaluate(records, priors, values)
+    }
+
+    fn evaluate_batch(
+        &mut self,
+        batch: &mut LeafBatch<'_, E>,
+        priors: &mut [f64],
+        values: &mut [f64],
+    ) -> Result<(), EvaluatorError> {
+        self.inner.evaluate_batch(batch, priors, values)
+    }
+
+    fn check(&mut self) -> Result<(), EvaluatorError> {
+        (self.check)()
+    }
+}
+
+/// The error of a build without the `onnx` feature.
+#[cfg(not(feature = "onnx"))]
+fn not_built() -> BindError {
+    BindError::Onnx("this build of tessera-rl has no ONNX evaluator (the onnx feature)".to_owned())
 }
 
 /// The last failed group call, as Python sees it: its slot, its message,
