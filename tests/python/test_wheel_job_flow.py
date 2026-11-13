@@ -116,3 +116,31 @@ def test_wheel_job_release_profile_builds_one_wheel_and_no_comparison(tmp_path, 
     assert [x for x in lines if x.startswith("cargo test -p tessera-rl-num")] == [
         "cargo test -p tessera-rl-num --release --all-features --locked"]
     assert "profile=release anchor=0 suite=0 num=0 compare=0" in p.stdout
+
+
+@pytest.mark.parametrize("profile", [("release",), ("wheel",)], ids=["release", "wheel"])
+def test_wheel_job_builds_every_wheel_with_the_onnx_feature(tmp_path, profile):
+    p, lines, root, wr = run(tmp_path, *profile)
+    assert p.returncode == 0, p.stderr
+    builds = _builds(lines)
+    assert builds and all(" --features onnx" in b for b in builds), builds
+    text = "\n".join(lines)
+    # The smoke check: the installed wheel's python, -I -c, calling onnx_load once.
+    assert text.count("t._native.onnx_load(") == 1
+    assert "/venv/bin/python -I -c" in text.split("t._native.onnx_load(")[0].rsplit("\npy ", 1)[-1]
+    assert "onnx=0" in p.stdout
+
+
+def test_wheel_job_refuses_the_onnx_feature_on_other_targets(tmp_path):
+    root = tmp_path / "root"
+    (root / "scripts").mkdir(parents=True)
+    shutil.copy2(ROOT / "scripts" / "wheel_job.sh", root / "scripts" / "wheel_job.sh")
+    env = {k: v for k, v in os.environ.items() if k not in AMBIENT and not k.startswith(("CARGO_PROFILE_", "CARGO_TARGET_"))}
+    env["WHEEL_RUN"] = str(tmp_path / "wr")
+    fake = tmp_path / "fake"
+    fake.mkdir()
+    _tool(fake / "curl", "exit 1\n")
+    env["PATH"] = f"{fake}:{os.environ['PATH']}"
+    script = (root / "scripts" / "wheel_job.sh").read_text()
+    # The target check comes before any download.
+    assert script.index('case "$target" in') < script.index("fetch \"https://static.rust-lang.org")
