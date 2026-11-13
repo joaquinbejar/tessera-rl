@@ -35,6 +35,6 @@ def test_uv_install_nothing_is_installed_and_the_pinned_uv_is_checked(name):
 
 def test_uv_install_is_used_by_the_known_jobs():
     texts = _texts()
-    assert texts["ci.yml"].count(INSTALL) == 2  # python, pufferlib
+    assert texts["ci.yml"].count(INSTALL) == 3  # python, python-onnx, pufferlib
     assert texts["learning-test.yml"].count(INSTALL) == 1
     assert texts["reference-training.yml"].count(INSTALL) == 1

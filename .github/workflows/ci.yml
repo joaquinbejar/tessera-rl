@@ -326,7 +326,16 @@ jobs:
         with:
           # Self-hosted runners: the post step would delete rustup from ~/.cargo/bin.
           cache-bin: "false"
-      - run: pipx install uv==0.13.6
+      # uv 0.13.6 is installed on the runner by pipx; nothing is installed
+      # here. The runner service's PATH may lack pipx's bin directory: put
+      # that directory on the PATH of the later steps, only if the uv in it
+      # is exactly the pinned 0.13.6 (fail closed otherwise).
+      - run: |
+          d=$(pipx environment --value PIPX_BIN_DIR)
+          v=$("$d/uv" --version) || { echo "no runnable uv in pipx's bin directory $d" >&2; exit 1; }
+          case "$v" in "uv 0.13.6" | "uv 0.13.6 "*) ;; *) echo "uv in $d is '$v', not the pinned uv 0.13.6" >&2; exit 1 ;; esac
+          echo "$d" >> "$GITHUB_PATH"
+      - run: command -v uv >/dev/null || { echo "uv not on PATH" >&2; exit 1; }
       - run: python3 scripts/fetch_onnxruntime.py "$RUNNER_TEMP/onnxruntime" > "$RUNNER_TEMP/onnxruntime.path"
       # The extension with the onnx feature, without the [onnx] extra.
       - run: MATURIN_PEP517_ARGS="--features onnx" uv sync --locked --python 3.11 --group test --reinstall-package tessera-rl
