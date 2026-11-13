@@ -755,6 +755,9 @@ jax = [
     { name = "jax" },
     { name = "jaxlib" },
 ]
+onnx = [
+    { name = "onnxruntime" },
+]
 pettingzoo = [
     { name = "pettingzoo" },
 ]
@@ -793,9 +796,10 @@ requires-dist = [
     { name = "jax", marker = "extra == 'jax'", specifier = "==0.10.2" },
     { name = "jaxlib", marker = "extra == 'jax'", specifier = "==0.10.2" },
     { name = "numpy", specifier = ">=1.26.4" },
+    { name = "onnxruntime", marker = "extra == 'onnx'", specifier = "==1.31.1" },
     { name = "pettingzoo", marker = "extra == 'pettingzoo'", specifier = ">=1.27.0,<2" },
 ]
-provides-extras = ["gymnasium", "pettingzoo", "jax"]
+provides-extras = ["gymnasium", "pettingzoo", "jax", "onnx"]
 
 [package.metadata.requires-dev]
 conformance = [

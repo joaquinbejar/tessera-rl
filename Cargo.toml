@@ -59,6 +59,7 @@ tessera-rl-engine = { path = "crates/tessera-rl-engine", version = "0.1.0" }
 tessera-rl-classic = { path = "crates/tessera-rl-classic", version = "0.1.0" }
 tessera-rl-games = { path = "crates/tessera-rl-games", version = "0.1.0" }
 tessera-rl-search = { path = "crates/tessera-rl-search", version = "0.1.0" }
+tessera-rl-onnx = { path = "crates/tessera-rl-onnx", version = "0.1.0" }
 tessera-rl-rts = { path = "crates/tessera-rl-rts", version = "0.1.0" }
 
 core_affinity = "0.8"

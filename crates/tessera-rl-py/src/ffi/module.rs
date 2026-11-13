@@ -181,7 +181,7 @@ pub(super) unsafe extern "C" fn fail_after(
     })
 }
 
-const METHOD_COUNT: usize = if cfg!(feature = "test-hooks") { 30 } else { 25 };
+const METHOD_COUNT: usize = if cfg!(feature = "test-hooks") { 31 } else { 26 };
 
 static METHODS: Table<[ffi::PyMethodDef; METHOD_COUNT]> = Table([
     method(
@@ -243,6 +243,7 @@ static METHODS: Table<[ffi::PyMethodDef; METHOD_COUNT]> = Table([
     env_type::MAKERS[14],
     search_type::MAKER,
     search_group_type::MAKER,
+    search_type::ONNX_LOAD,
     #[cfg(feature = "test-hooks")]
     super::tables::method_kw(
         c"_make_panic_counter",

@@ -658,6 +658,9 @@ thunk!(SEARCH_CALLS: CFunction = thunk_search_calls => search_type::calls : fn(O
 thunk!(SEARCH_TREE_HASH: CFunction = thunk_search_tree_hash => search_type::tree_hash : fn(Obj, Obj) -> Obj);
 thunk!(SEARCH_IS_PRIVILEGED: CFunction = thunk_search_is_privileged => search_type::is_privileged : fn(Obj, Obj) -> Obj);
 thunk!(SEARCH_DEALLOC: Destructor = thunk_search_dealloc => search_type::dealloc : fn(Obj) -> ());
+thunk!(SEARCH_ATTACH_ONNX: CFunctionKw = thunk_search_attach_onnx => search_type::attach_onnx : fn(Obj, Obj, Obj) -> Obj);
+thunk!(SEARCH_RUN_ONNX: CFunction = thunk_search_run_onnx => search_type::run_onnx : fn(Obj, Obj) -> Obj);
+thunk!(ONNX_LOAD: CFunctionKw = thunk_onnx_load => search_type::onnx_load : fn(Obj, Obj, Obj) -> Obj);
 thunk!(MAKE_SEARCH_GROUP: CFunctionKw = thunk_make_search_group => search_group_type::make_search_group : fn(Obj, Obj, Obj) -> Obj);
 thunk!(GROUP_LAYOUT: CFunction = thunk_group_layout => search_group_type::layout : fn(Obj, Obj) -> Obj);
 thunk!(GROUP_LAST_FAILURE: CFunction = thunk_group_last_failure => search_group_type::last_failure : fn(Obj, Obj) -> Obj);

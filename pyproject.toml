@@ -18,6 +18,10 @@ pettingzoo = ["pettingzoo>=1.27.0,<2"]
 # tessera_rl.jax (the ordered-callback JAX handles, SPEC 15.2). Pinned
 # exactly: the ordering guarantees are tested on this version only.
 jax = ["jax==0.10.2", "jaxlib==0.10.2"]
+# tessera_rl.search.OnnxEvaluator (ADR-0057). Pinned exactly: the evaluator
+# accepts only this ONNX Runtime version (tessera_rl.search.ONNXRUNTIME_VERSION,
+# compat/targets.toml and the Rust crate's PINNED_VERSION; a test ties them).
+onnx = ["onnxruntime==1.31.1"]
 
 [build-system]
 requires = ["maturin>=1.16,<2"]
