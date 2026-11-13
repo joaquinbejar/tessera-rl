@@ -190,6 +190,37 @@ def test_onnx_model_refusals_are_onnx_errors(home):
     assert s.root_visits().sum() == 0
 
 
+def assert_no_telemetry(home: Path) -> None:
+    for d in (
+        home / ".cache/Microsoft/DeveloperTools/.onnxruntime",
+        home / "Library/Application Support/Microsoft/DeveloperTools/.onnxruntime",
+    ):
+        assert not d.exists(), f"telemetry directory appeared: {d}"
+
+
+@real
+def test_onnx_default_library_lookup_never_imports_onnxruntime(home):
+    """In a fresh interpreter: the default library lookup, construction and
+    a search call leave onnxruntime out of sys.modules."""
+    out = child(
+        f"""
+        import sys
+        from tessera_rl import search
+        onnx = search.OnnxEvaluator({str(FIXTURES / "constant.onnx")!r})
+        print("after construction:", "onnxruntime" in sys.modules)
+        s = search.Search("tessera/Connect4-v1", capacity=4096, simulations=50, seed=7)
+        s.run(onnx)
+        assert s.root_visits().sum() > 0
+        print("after run:", "onnxruntime" in sys.modules)
+        """,
+        unset_telemetry=False,
+    )
+    assert out.returncode == 0, out.stderr
+    assert "after construction: False" in out.stdout, out.stdout
+    assert "after run: False" in out.stdout, out.stdout
+    assert_no_telemetry(home)
+
+
 @real
 def test_onnx_works_next_to_the_onnxruntime_package(home):
     import onnxruntime  # noqa: F401  (its own runtime, in the same process)
@@ -198,3 +229,4 @@ def test_onnx_works_next_to_the_onnxruntime_package(home):
     s = fresh_search()
     s.run(onnx)
     assert s.root_visits().sum() > 0
+    assert_no_telemetry(home)

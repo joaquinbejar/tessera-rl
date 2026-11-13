@@ -114,7 +114,7 @@ py-test-onnx:
 	if [ $$status -eq 0 ]; then \
 	  rm -rf $(CURDIR)/target/onnx-test-home && mkdir -p $(CURDIR)/target/onnx-test-home && \
 	  HOME=$(ONNX_TEST_HOME) ORT_DISABLE_TELEMETRY=1 TESSERA_ONNX_TEST=1 \
-	  .venv/bin/python -m pytest -q -p no:cacheprovider tests/python/test_onnx_evaluator.py; status=$$?; \
+	  .venv/bin/python -m pytest -q -rA -p no:cacheprovider tests/python/test_onnx_evaluator.py; status=$$?; \
 	fi; \
 	uv sync --locked --python 3.11 --reinstall-package tessera-rl || status=1; \
 	exit $$status
