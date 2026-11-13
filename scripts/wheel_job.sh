@@ -1,10 +1,14 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT OR Apache-2.0
 #
-# One W0 wheel job of wheels.yml: verified tools, the build, the golden anchor
+# One wheel job of wheels.yml: verified tools, the build, the golden anchor
 # and the Python suite against the installed wheel.
 #
-#   scripts/wheel_job.sh <target> <compatibility or ""> <rustup sha256> <uv sha256>
+#   scripts/wheel_job.sh <target> <compatibility or ""> <rustup sha256> <uv sha256> <profile>
+#
+# <profile> is the Cargo profile maturin builds the extension with: `release`
+# (the default release profile) or `wheel` (fat LTO, one codegen unit;
+# Cargo.toml). Anything else is refused.
 #
 # Everything it writes goes under $WHEEL_RUN, which the workflow removes, except
 # dist/ and the report that it copies to the workspace for upload. Runs at nice 10.
@@ -14,6 +18,11 @@ target="$1"
 compatibility="$2"
 rustup_sha="$3"
 uv_sha="$4"
+profile="${5:-}"
+case "$profile" in
+    release | wheel) ;;
+    *) echo "wheel_job: profile must be release or wheel, got '$profile'" >&2; exit 2 ;;
+esac
 : "${WHEEL_RUN:?the per-run directory}"
 
 # The build environment is the script's own: an ambient flag, target, profile setting,
@@ -63,7 +72,7 @@ fetch "https://github.com/astral-sh/uv/releases/download/$UV_VERSION/uv-$target.
     "$WHEEL_RUN/uv.tar.gz" "$uv_sha"
 tar -xzf "$WHEEL_RUN/uv.tar.gz" -C "$WHEEL_RUN/bin" --strip-components=1
 
-args=(--release --locked --target "$target" --out dist)
+args=(--profile "$profile" --locked --target "$target" --out dist)
 [ -z "$compatibility" ] || args+=(--compatibility "$compatibility")
 nice -n 10 uvx --python 3.11 "maturin==$MATURIN_VERSION" build "${args[@]}"
 

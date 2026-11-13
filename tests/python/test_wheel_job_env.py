@@ -28,7 +28,7 @@ HOSTILE = {"RUSTFLAGS": "-D warnings", "CARGO_TERM_COLOR": "always", "CARGO_ENCO
 SCRUB = tuple(REFUSED)
 
 
-def run(tmp_path: Path, env: dict):
+def run(tmp_path: Path, env: dict, profile: str = "release"):
     """The real script with a logging curl first on PATH; returns the process, the log and WHEEL_RUN."""
     fake, log, wheel_run = tmp_path / "fake", tmp_path / "log", tmp_path / "wheel-run"
     fake.mkdir()
@@ -36,7 +36,7 @@ def run(tmp_path: Path, env: dict):
     curl.write_text(f"#!/bin/sh\necho \"curl $*\" >> {log}\nexit 1\n")
     curl.chmod(curl.stat().st_mode | stat.S_IXUSR)
     env = {**env, "PATH": f"{fake}:{env['PATH']}", "WHEEL_RUN": str(wheel_run)}
-    p = subprocess.run(["bash", str(SCRIPT), "x86_64-unknown-linux-gnu", "manylinux_2_28", "0" * 64, "0" * 64],
+    p = subprocess.run(["bash", str(SCRIPT), "x86_64-unknown-linux-gnu", "manylinux_2_28", "0" * 64, "0" * 64, profile],
                        env=env, capture_output=True, text=True, check=False, cwd=tmp_path)
     return p, log.read_text() if log.exists() else "", wheel_run
 
@@ -79,3 +79,18 @@ def test_wheel_job_clean_environment_passes_the_check(tmp_path, monkeypatch):
     p, log, wheel_run = run(tmp_path, clean())
     assert "refused" not in p.stderr
     assert log.startswith("curl ") and "rustup-init" in log and wheel_run.is_dir()
+
+
+@pytest.mark.parametrize("profile", ["", "bench", "dev", "Release", "wheel "], ids=["missing", "bench", "dev", "case", "space"])
+def test_wheel_job_refuses_a_profile_other_than_release_or_wheel(tmp_path, profile):
+    p, log, wheel_run = run(tmp_path, clean(), profile)
+    assert p.returncode == 2
+    assert "profile must be release or wheel" in p.stderr
+    assert log == "" and not wheel_run.exists()
+
+
+@pytest.mark.parametrize("profile", ["release", "wheel"])
+def test_wheel_job_accepts_release_and_wheel(tmp_path, profile):
+    p, log, wheel_run = run(tmp_path, clean(), profile)
+    assert "profile must be" not in p.stderr and "refused" not in p.stderr
+    assert log.startswith("curl ") and wheel_run.is_dir()

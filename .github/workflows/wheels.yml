@@ -1,8 +1,10 @@
 # SPDX-License-Identifier: MIT OR Apache-2.0
 #
-# Builds the W0 wheels (default release profile), anchors each installed wheel
-# to the whole committed golden fixtures and runs the Python suite against it
-# (docs/reviews/pgo-wheels-design.md, section 7). No LTO, no PGO, no publishing.
+# Builds the wheels, anchors each installed wheel to the whole committed golden
+# fixtures and runs the Python suite against it (docs/reviews/pgo-wheels-design.md,
+# section 7). Linux x86-64 builds with the `wheel` profile (fat LTO, one codegen
+# unit: W1, the owner's "Publicar W1"); the other targets with the default release
+# profile. No PGO, no publishing.
 #
 # aarch64 Linux runs on a GitHub-hosted arm64 runner (issue #149, owner decision
 # of 2026-11-11): the self-hosted m4-linux-arm64 runner is itself a container
@@ -57,7 +59,7 @@ jobs:
 
   linux:
     needs: preflight
-    name: W0 (${{ matrix.target }})
+    name: W1 (${{ matrix.target }})
     runs-on: [self-hosted, "${{ matrix.runner }}"]
     timeout-minutes: 90
     strategy:
@@ -77,6 +79,8 @@ jobs:
             # x86-64 implements trapped FP exceptions: the unmasked FP
             # boundary test must check the trap enables, never skip (#225).
             expect_fp_traps: "1"
+            # W1: fat LTO and one codegen unit (Cargo.toml [profile.wheel]).
+            profile: wheel
     container:
       image: ${{ matrix.image }}
       options: ${{ matrix.limits }}
@@ -88,7 +92,7 @@ jobs:
       TESSERA_EXPECT_FP_TRAPS: ${{ matrix.expect_fp_traps }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - run: scripts/wheel_job.sh "${{ matrix.target }}" manylinux_2_28 "${{ matrix.rustup_sha }}" "${{ matrix.uv_sha }}"
+      - run: scripts/wheel_job.sh "${{ matrix.target }}" manylinux_2_28 "${{ matrix.rustup_sha }}" "${{ matrix.uv_sha }}" "${{ matrix.profile }}"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
@@ -129,7 +133,7 @@ jobs:
       WHEEL_RUN: ${{ github.workspace }}/.wheel-run
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - run: scripts/wheel_job.sh aarch64-unknown-linux-gnu manylinux_2_28 9f608c142e0e38a78957d0661ba1dfaf0b6fb37184cfaa4b9a0aa57af6184282 229e194255c7958d86d56e8790d969a6f74736592133f0dfd0076f754c642c1d
+      - run: scripts/wheel_job.sh aarch64-unknown-linux-gnu manylinux_2_28 9f608c142e0e38a78957d0661ba1dfaf0b6fb37184cfaa4b9a0aa57af6184282 229e194255c7958d86d56e8790d969a6f74736592133f0dfd0076f754c642c1d release
       # The suite above already imports the wheel in this image; this states it
       # on its own line, with the glibc symbol versions the wheel needs.
       - name: Smoke import in the manylinux_2_28 image
@@ -156,7 +160,7 @@ jobs:
       WHEEL_RUN: ${{ github.workspace }}/.wheel-run
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - run: scripts/wheel_job.sh aarch64-apple-darwin "" 63752a1919a3a4793173ec70f8f212621a7ce38ba6a246095984482f4de20f9f 60fbd5c8a1ed681845eea28d9d622fcde03c51e91a43465b64a1e17db1ed3472
+      - run: scripts/wheel_job.sh aarch64-apple-darwin "" 63752a1919a3a4793173ec70f8f212621a7ce38ba6a246095984482f4de20f9f 60fbd5c8a1ed681845eea28d9d622fcde03c51e91a43465b64a1e17db1ed3472 release
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
