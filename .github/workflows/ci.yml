@@ -307,6 +307,36 @@ jobs:
       # The JAX handles (marker `jax`, SPEC 15.2) at the pinned jax and jaxlib.
       - run: make py-test-jax
 
+  # The Python ONNX evaluator (ADR-0057) with the extension's `onnx` feature,
+  # against the library fetched by its sha256 (scripts/fetch_onnxruntime.py;
+  # no onnxruntime package, so the tests that need it skip). On xaskar, as
+  # the owner chose for the Rust leg: the tests that load the library run in
+  # an ephemeral container with no network, and nothing else loads it. A
+  # macOS leg can come later (the M4 is reserved).
+  python-onnx:
+    runs-on: [self-hosted, xaskar]
+    # Skipped for an unmodified fork pull request (see the header).
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+    env:
+      # No test loads ONNX Runtime with telemetry enabled (ADR-0057).
+      ORT_DISABLE_TELEMETRY: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          # Self-hosted runners: the post step would delete rustup from ~/.cargo/bin.
+          cache-bin: "false"
+      - run: pipx install uv==0.13.6
+      - run: python3 scripts/fetch_onnxruntime.py "$RUNNER_TEMP/onnxruntime" > "$RUNNER_TEMP/onnxruntime.path"
+      # The extension with the onnx feature, without the [onnx] extra.
+      - run: MATURIN_PEP517_ARGS="--features onnx" uv sync --locked --python 3.11 --group test --reinstall-package tessera-rl
+      - run: scripts/py_onnx_test.sh "$(cat "$RUNNER_TEMP/onnxruntime.path")" "$ONNX_TEST_IMAGE"
+        env:
+          ONNX_TEST_IMAGE: rust:1.99.1@sha256:09027f873d45b8ecd1dc86f1fa13b7a62b875c961f017a0e331267b350430137
+      # The next job on this host gets the default build back.
+      - if: always()
+        run: uv sync --locked --python 3.11 --group test --reinstall-package tessera-rl
+
   # The PufferLib adapter at its own pins (compat/pufferlib). x86-64: PufferLib
   # 3.0.0 does not build on linux-arm64. Timeouts kill the process group.
   pufferlib:

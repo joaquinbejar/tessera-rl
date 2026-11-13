@@ -10,6 +10,7 @@ TESSERA_ONNX_TEST=1; they fail if the variable or the HOME is missing, and
 check afterwards that no telemetry directory appeared.
 """
 
+import importlib.util
 import os
 import re
 import subprocess
@@ -30,6 +31,16 @@ ROOT = Path(__file__).resolve().parents[2]
 FIXTURES = ROOT / "crates" / "tessera-rl-onnx" / "tests" / "fixtures"
 MISSING = "/nonexistent/tessera-onnx/libonnxruntime.so.1.31.1"
 REAL = os.environ.get("TESSERA_ONNX_TEST") == "1"
+# The library to load: an explicit path when TESSERA_ONNXRUNTIME_LIB is set
+# (CI: the library fetched by scripts/fetch_onnxruntime.py, without the
+# onnxruntime package), else the default lookup in the installed package.
+LIB = {"library": os.environ["TESSERA_ONNXRUNTIME_LIB"]} if os.environ.get("TESSERA_ONNXRUNTIME_LIB") else {}
+HAS_PACKAGE = importlib.util.find_spec("onnxruntime") is not None
+needs_package = pytest.mark.skipif(
+    not HAS_PACKAGE,
+    reason="needs the onnxruntime package ([onnx] extra); CI pins the library only, by sha256, "
+    "through scripts/fetch_onnxruntime.py",
+)
 
 
 def has_feature() -> bool:
@@ -155,7 +166,7 @@ def constant(obs, legal, hashes):
 
 @real
 def test_onnx_constant_model_equals_the_python_evaluator(home):
-    onnx = search.OnnxEvaluator(FIXTURES / "constant.onnx")
+    onnx = search.OnnxEvaluator(FIXTURES / "constant.onnx", **LIB)
     a, b = fresh_search(), fresh_search()
     for _ in range(3):
         a.run(constant)
@@ -166,7 +177,7 @@ def test_onnx_constant_model_equals_the_python_evaluator(home):
 
 @real
 def test_onnx_provenance_is_a_read_only_record(home):
-    onnx = search.OnnxEvaluator(FIXTURES / "constant.onnx")
+    onnx = search.OnnxEvaluator(FIXTURES / "constant.onnx", **LIB)
     assert onnx.provenance is None
     fresh_search().run(onnx)
     p = onnx.provenance
@@ -185,7 +196,7 @@ def test_onnx_provenance_is_a_read_only_record(home):
 
 @real
 def test_onnx_model_refusals_are_onnx_errors(home):
-    onnx = search.OnnxEvaluator(FIXTURES / "wrong_input.onnx")
+    onnx = search.OnnxEvaluator(FIXTURES / "wrong_input.onnx", **LIB)
     s = fresh_search()
     with pytest.raises(t.OnnxError, match="no input named"):
         s.run(onnx)
@@ -201,6 +212,7 @@ def assert_no_telemetry(home: Path) -> None:
 
 
 @real
+@needs_package
 def test_onnx_default_library_lookup_never_imports_onnxruntime(home):
     """In a fresh interpreter: the default library lookup, construction and
     a search call leave onnxruntime out of sys.modules."""
@@ -224,6 +236,7 @@ def test_onnx_default_library_lookup_never_imports_onnxruntime(home):
 
 
 @real
+@needs_package
 def test_onnx_works_next_to_the_onnxruntime_package(home):
     import onnxruntime  # noqa: F401  (its own runtime, in the same process)
 
@@ -241,7 +254,7 @@ def test_onnx_inference_releases_the_interpreter(home):
     released. The search releases it elsewhere too (environment steps), so
     the check compares rates, not counts: with the interpreter held during
     inference the other thread gets a few percent of its baseline."""
-    onnx = search.OnnxEvaluator(FIXTURES / "slow_connect4.onnx")
+    onnx = search.OnnxEvaluator(FIXTURES / "slow_connect4.onnx", **LIB)
     s = search.Search("tessera/Connect4-v1", capacity=4096, simulations=256, seed=7)
     ticks = 0
     stop = threading.Event()
