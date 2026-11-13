@@ -1,8 +1,8 @@
 # callgrind format
 version: 1
 creator: callgrind-3.24.0
-pid: 3799
-cmd:  /src/target/release/deps/classic_instructions-9c2edad6485955b6 --gungraun-run d:d:000000 00000 00000 00000
+pid: 5888
+cmd:  /__w/tessera-rl/tessera-rl/target/bench-gate/deps/classic_instructions-ca19820036c4660f --gungraun-run d:d:000000 00000 00000 00000
 part: 1
 thread: 1
 
@@ -11,120 +11,122 @@ desc: I1 cache: 32768 B, 64 B, 8-way associative
 desc: D1 cache: 32768 B, 64 B, 8-way associative
 desc: LL cache: 8388608 B, 64 B, 16-way associative
 
-desc: Timerange: Basic block 0 - 111743
+desc: Timerange: Basic block 0 - 111433
 desc: Trigger: Program termination
 
 positions: line
 events: Ir Dr Dw I1mr D1mr D1mw ILmr DLmr DLmw
-summary: 276347 74111 29789 49 16 0 49 16
+summary: 276347 74111 29789 50 17 0 50 16
 
 
-ob=/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2
+ob=/__w/tessera-rl/tessera-rl/target/bench-gate/deps/classic_instructions-ca19820036c4660f
 fl=???
-fn=0x000000000001d2c0
-cob=/src/target/release/deps/classic_instructions-9c2edad6485955b6
-cfi=???
-cfn=(below main)
+fn=std::rt::lang_start_internal
+cfn=std::rt::lang_start::<()>::{closure#0}
 calls=1 0 
-0 276347 74111 29789 49 16 0 49 16
-
-ob=/src/target/release/deps/classic_instructions-9c2edad6485955b6
-fl=???
-fn=std::rt::lang_start::<()>::{closure#0}
-cfn=std::sys::backtrace::__rust_begin_short_backtrace::<fn(), ()>
-calls=1 0 
-0 276347 74111 29789 49 16 0 49 16
-
-ob=/usr/lib/x86_64-linux-gnu/libc.so.6
-fl=./csu/../sysdeps/nptl/libc_start_call_main.h
-fn=(below main)
-cob=/src/target/release/deps/classic_instructions-9c2edad6485955b6
-cfi=???
-cfn=main
-calls=1 0 
-58 276347 74111 29789 49 16 0 49 16
-
-fl=./csu/../csu/libc-start.c
-fn=__libc_start_main@@GLIBC_2.34
-cfi=./csu/../sysdeps/nptl/libc_start_call_main.h
-cfn=(below main)
-calls=1 29 
-360 276347 74111 29789 49 16 0 49 16
-
-ob=/src/target/release/deps/classic_instructions-9c2edad6485955b6
-fl=???
-fn=classic_instructions::cartpole_physics::__gungraun_wrapper_id_mod_steps_1000::steps_1000
-cfn=classic_instructions::cartpole_physics::__gungraun_wrapper_mod::cartpole_physics
-calls=1 0 
-0 276347 74111 29789 49 16 0 49 16
-
-fn=(below main)
-cob=/usr/lib/x86_64-linux-gnu/libc.so.6
-cfi=./csu/../csu/libc-start.c
-cfn=__libc_start_main@@GLIBC_2.34
-calls=1 242 
-0 276347 74111 29789 49 16 0 49 16
+0 276347 74111 29789 50 17 0 50 16
 
 fn=classic_instructions::main
 cfn=classic_instructions::classic::__run
 calls=1 0 
-0 276347 74111 29789 49 16 0 49 16
+0 276347 74111 29789 50 17 0 50 16
+
+fn=classic_instructions::cartpole_physics::__gungraun_wrapper_id_mod_steps_1000::steps_1000
+cfn=classic_instructions::cartpole_physics::__gungraun_wrapper_mod::cartpole_physics
+calls=1 0 
+0 276347 74111 29789 50 17 0 50 16
 
 fn=classic_instructions::classic::__run
 cfn=classic_instructions::cartpole_physics::__run_steps_1000
 calls=1 0 
-0 276347 74111 29789 49 16 0 49 16
+0 276347 74111 29789 50 17 0 50 16
 
 fn=classic_instructions::cartpole_physics::__gungraun_wrapper_mod::cartpole_physics
-0 27 6 12 2 0 0 2
+0 27 6 12 2 1 0 2
 cfn=tessera_rl_num::math::vendor::cos::cos
 calls=1 0 
 0 49 12 0 5 7 0 5 7
 0 12987 4995 4995
 cfn=tessera_rl_num::math::vendor::cos::cos
 calls=999 0 
-0 102172 25686 9390 23 3 0 23 3
+0 102172 25686 9390 25 3 0 25 3
+
+ob=/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2
+fl=???
+fn=0x000000000001d2c0
+cob=/__w/tessera-rl/tessera-rl/target/bench-gate/deps/classic_instructions-ca19820036c4660f
+cfi=???
+cfn=(below main)
+calls=1 0 
+0 276347 74111 29789 50 17 0 50 16
+
+ob=/__w/tessera-rl/tessera-rl/target/bench-gate/deps/classic_instructions-ca19820036c4660f
+fl=???
+fn=classic_instructions::cartpole_physics::__gungraun_wrapper_mod::cartpole_physics
 0 3000 1000 2000
 cfn=tessera_rl_num::math::vendor::sin::sin
 calls=1000 0 
-0 101099 25402 9390 13 2 0 13 2
-0 57013 17010 4002 6 4 0 6 4
+0 101099 25402 9390 13 1 0 13 1
+0 57013 17010 4002 5 5 0 5 5
 
-fn=std::rt::lang_start_internal
-cfn=std::rt::lang_start::<()>::{closure#0}
+fn=main
+cfn=std::rt::lang_start_internal
 calls=1 0 
-0 276347 74111 29789 49 16 0 49 16
+0 276347 74111 29789 50 17 0 50 16
 
 fn=tessera_rl_num::math::vendor::sin::sin
-0 11281 427 939 4 2 0 4 2
+0 11281 427 939 4 1 0 4 1
 cfn=tessera_rl_num::math::vendor::rem_pio2::rem_pio2
 calls=939 0 
 0 53257 12817 8451
 0 36561 12158 0 9 0 0 9
 
 fn=tessera_rl_num::math::vendor::rem_pio2::rem_pio2
-0 106514 25634 16902 15 2 0 15 2
+0 106514 25634 16902 16 2 0 16 2
+
+fn=(below main)
+cob=/usr/lib/x86_64-linux-gnu/libc.so.6
+cfi=./csu/../csu/libc-start.c
+cfn=__libc_start_main@@GLIBC_2.34
+calls=1 242 
+0 276347 74111 29789 50 17 0 50 16
 
 fn=tessera_rl_num::math::vendor::cos::cos
 0 12379 732 939 5 7 0 5 7
 cfn=tessera_rl_num::math::vendor::rem_pio2::rem_pio2
 calls=939 0 
-0 53257 12817 8451 15 2 0 15 2
-0 36585 12149 0 8 1 0 8 1
-
-fn=main
-cfn=std::rt::lang_start_internal
-calls=1 0 
-0 276347 74111 29789 49 16 0 49 16
+0 53257 12817 8451 16 2 0 16 2
+0 36585 12149 0 9 1 0 9 1
 
 fn=std::sys::backtrace::__rust_begin_short_backtrace::<fn(), ()>
 cfn=classic_instructions::main
 calls=1 0 
-0 276347 74111 29789 49 16 0 49 16
+0 276347 74111 29789 50 17 0 50 16
+
+fn=std::rt::lang_start::<()>::{closure#0}
+cfn=std::sys::backtrace::__rust_begin_short_backtrace::<fn(), ()>
+calls=1 0 
+0 276347 74111 29789 50 17 0 50 16
 
 fn=classic_instructions::cartpole_physics::__run_steps_1000
 cfn=classic_instructions::cartpole_physics::__gungraun_wrapper_id_mod_steps_1000::steps_1000
 calls=1 0 
-0 276347 74111 29789 49 16 0 49 16
+0 276347 74111 29789 50 17 0 50 16
 
-totals: 276347 74111 29789 49 16 0 49 16
+ob=/usr/lib/x86_64-linux-gnu/libc.so.6
+fl=./csu/../csu/libc-start.c
+fn=__libc_start_main@@GLIBC_2.34
+cfi=./csu/../sysdeps/nptl/libc_start_call_main.h
+cfn=(below main)
+calls=1 29 
+360 276347 74111 29789 50 17 0 50 16
+
+fl=./csu/../sysdeps/nptl/libc_start_call_main.h
+fn=(below main)
+cob=/__w/tessera-rl/tessera-rl/target/bench-gate/deps/classic_instructions-ca19820036c4660f
+cfi=???
+cfn=main
+calls=1 0 
+58 276347 74111 29789 50 17 0 50 16
+
+totals: 276347 74111 29789 50 17 0 50 16

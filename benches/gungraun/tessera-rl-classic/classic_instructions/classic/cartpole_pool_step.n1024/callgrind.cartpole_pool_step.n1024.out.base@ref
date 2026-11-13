@@ -1,8 +1,8 @@
 # callgrind format
 version: 1
 creator: callgrind-3.24.0
-pid: 3800
-cmd:  /src/target/release/deps/classic_instructions-9c2edad6485955b6 --gungraun-run d:d:000000 00000 00001 00000
+pid: 5889
+cmd:  /__w/tessera-rl/tessera-rl/target/bench-gate/deps/classic_instructions-ca19820036c4660f --gungraun-run d:d:000000 00000 00001 00000
 part: 1
 thread: 1
 
@@ -11,99 +11,243 @@ desc: I1 cache: 32768 B, 64 B, 8-way associative
 desc: D1 cache: 32768 B, 64 B, 8-way associative
 desc: LL cache: 8388608 B, 64 B, 16-way associative
 
-desc: Timerange: Basic block 0 - 465887
+desc: Timerange: Basic block 0 - 448882
 desc: Trigger: Program termination
 
 positions: line
 events: Ir Dr Dw I1mr D1mr D1mw ILmr DLmr DLmw
-summary: 1046244 265583 181667 84 3426 933 84 10
+summary: 991148 252418 170553 124 3423 967 124 10
 
 
-ob=/src/target/release/deps/classic_instructions-9c2edad6485955b6
+ob=/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2
 fl=???
-fn=classic_instructions::classic::__run
-cfn=classic_instructions::cartpole_pool_step::__run_n1024
-calls=1 0 
-0 1046244 265583 181667 84 3426 933 84 10
-
-ob=/usr/lib/x86_64-linux-gnu/libc.so.6
-fl=./csu/../sysdeps/nptl/libc_start_call_main.h
-fn=(below main)
-cob=/src/target/release/deps/classic_instructions-9c2edad6485955b6
+fn=0x000000000001d2c0
+cob=/__w/tessera-rl/tessera-rl/target/bench-gate/deps/classic_instructions-ca19820036c4660f
 cfi=???
-cfn=main
+cfn=(below main)
 calls=1 0 
-58 1046244 265583 181667 84 3426 933 84 10
+0 991148 252418 170553 124 3423 967 124 10
 
-fl=./string/../sysdeps/x86_64/multiarch/memmove-vec-unaligned-erms.S
-fn=memcpy@GLIBC_2.2.5
-211 2053
-217 2053
-218 2053
-220 5 5 0 0 1
-221 5
-222 5
-
-ob=/src/target/release/deps/classic_instructions-9c2edad6485955b6
+ob=/__w/tessera-rl/tessera-rl/target/bench-gate/deps/classic_instructions-ca19820036c4660f
 fl=???
+fn=tessera_rl_num::fp::call_opaque::<core::result::Result<(), tessera_rl_engine::error::EngineError>, tessera_rl_engine::entry::canonical<core::result::Result<(), tessera_rl_engine::error::EngineError>, <tessera_rl_engine::pool::EnvPool<tessera_rl_classic::cartpole::CartPole>>::guarded<(), <tessera_rl_engine::pool::EnvPool<tessera_rl_classic::cartpole::CartPole>>::step::{closure#0}>::{closure#0}>::{closure#0}>
+0 73805 25625 1048 14 1829 0 14 1
+cob=/usr/lib/x86_64-linux-gnu/libc.so.6
+cfi=./string/../sysdeps/x86_64/multiarch/memmove-vec-unaligned-erms.S
+cfn=memcpy@GLIBC_2.2.5
+calls=1024 211 
+0 12288 3072 2048 0 65 65
+0 4096 4096 1024
+cob=/usr/lib/x86_64-linux-gnu/libc.so.6
+cfi=./string/../sysdeps/x86_64/multiarch/memmove-vec-unaligned-erms.S
+cfn=memcpy@GLIBC_2.2.5
+calls=1024 211 
+0 10240 1024
+0 1057 12 15 4 6 4 4
+cfn=<tessera_rl_engine::outputs::Outputs>::view_all
+calls=1 0 
+0 324 84 140 0 10 26
+0 402 202 200 50 0 10 50
+cfn=<tessera_rl_num::fp::FpGuard>::enter
+calls=1 0 
+0 13 3 3
+0 5 0 2 0 0 1
+cfn=tessera_rl_num::fp::call_opaque::<(), <tessera_rl_engine::pool::EnvPool<tessera_rl_classic::cartpole::CartPole>>::step_inner::{closure#1}>
+calls=1 0 
+0 888379 218133 165907 45 1494 829 45 9
+0 3 1 2 0 1 1
+cfn=<tessera_rl_num::fp::FpGuard as core::ops::drop::Drop>::drop
+calls=1 0 
+0 12 4 3
+0 18 7 8 3 2 2 3
+
 fn=(below main)
 cob=/usr/lib/x86_64-linux-gnu/libc.so.6
 cfi=./csu/../csu/libc-start.c
 cfn=__libc_start_main@@GLIBC_2.34
 calls=1 242 
-0 1046244 265583 181667 84 3426 933 84 10
+0 991148 252418 170553 124 3423 967 124 10
+
+fn=tessera_rl_num::rng::draws
+0 108544 10240 12288
+
+fn=tessera_rl_engine::pool::clear_instance
+0 25600 4096 6144
+cob=/usr/lib/x86_64-linux-gnu/libc.so.6
+cfi=./string/../sysdeps/x86_64/multiarch/memset-vec-unaligned-erms.S
+cfn=__memset_sse2_unaligned_erms
+calls=2048 199 
+0 17408 1024 1024 0 0 21
+0 13312 3072 1024
+cob=/usr/lib/x86_64-linux-gnu/libc.so.6
+cfi=./string/../sysdeps/x86_64/multiarch/memset-vec-unaligned-erms.S
+cfn=__memset_sse2_unaligned_erms
+calls=2048 199 
+0 15360 1024 2048 0 0 65
+0 35840 20480 7168 0 1 314
+cob=/usr/lib/x86_64-linux-gnu/libc.so.6
+cfi=./string/../sysdeps/x86_64/multiarch/memset-vec-unaligned-erms.S
+cfn=__memset_sse2_unaligned_erms
+calls=2048 199 
+0 17408 1024 1024 0 0 21
+0 7168 3072 1024
+cob=/usr/lib/x86_64-linux-gnu/libc.so.6
+cfi=./string/../sysdeps/x86_64/multiarch/memset-vec-unaligned-erms.S
+cfn=__memset_sse2_unaligned_erms
+calls=2048 199 
+0 17408 1024 1024 0 0 17
+0 7168 3072 1024
+cob=/usr/lib/x86_64-linux-gnu/libc.so.6
+cfi=./string/../sysdeps/x86_64/multiarch/memset-vec-unaligned-erms.S
+cfn=__memset_sse2_unaligned_erms
+calls=2048 199 
+0 17408 1024 1024 0 0 17
+0 7168 3072 1024
+cob=/usr/lib/x86_64-linux-gnu/libc.so.6
+cfi=./string/../sysdeps/x86_64/multiarch/memset-vec-unaligned-erms.S
+cfn=__memset_sse2_unaligned_erms
+calls=2048 199 
+0 17408 1024 1024 0 0 17
+0 2048 1024
+
+fn=<tessera_rl_num::fp::FpGuard as core::ops::drop::Drop>::drop
+0 24 8 6
+
+fn=<tessera_rl_classic::cartpole::CartPole as tessera_rl_core::env::Environment>::observe
+0 26624 9216 4096
+
+fn=tessera_rl_num::fp::call_opaque::<(), <tessera_rl_engine::pool::EnvPool<tessera_rl_classic::cartpole::CartPole>>::step_inner::{closure#1}>
+0 7 2 3 1 0 0 1
+cfn=tessera_rl_engine::pool::step_chunk::<tessera_rl_classic::cartpole::CartPole, tessera_rl_engine::masks::NoMasks>
+calls=1 0 
+0 888370 218130 165904 44 1493 829 44 9
+0 2 1 0 0 1
+
+fn=std::sys::backtrace::__rust_begin_short_backtrace::<fn(), ()>
+cfn=classic_instructions::main
+calls=1 0 
+0 991148 252418 170553 124 3423 967 124 10
+
+fn=std::rt::lang_start::<()>::{closure#0}
+cfn=std::sys::backtrace::__rust_begin_short_backtrace::<fn(), ()>
+calls=1 0 
+0 991148 252418 170553 124 3423 967 124 10
+
+fn=classic_instructions::cartpole_pool_step::__run_n1024
+cfn=classic_instructions::cartpole_pool_step::__gungraun_wrapper_id_mod_n1024::n1024
+calls=1 0 
+0 991148 252418 170553 124 3423 967 124 10
+
+fn=classic_instructions::cartpole_pool_step::__gungraun_wrapper_mod::cartpole_pool_step
+0 12 1 6 2 0 0 2
+cob=/usr/lib/x86_64-linux-gnu/libc.so.6
+cfi=./string/../sysdeps/x86_64/multiarch/memmove-vec-unaligned-erms.S
+cfn=memcpy@GLIBC_2.2.5
+calls=1 211 
+0 193 59 57 0 0 12
+0 16 5 7 1 0 0 1
+cfn=<tessera_rl_engine::pool::EnvPool<tessera_rl_classic::cartpole::CartPole>>::step
+calls=1 0 
+0 990708 252282 170420 119 3407 940 119 10
+0 16 6 3 1 1 0 1
+cob=/usr/lib/x86_64-linux-gnu/libc.so.6
+cfi=./string/../sysdeps/x86_64/multiarch/memmove-vec-unaligned-erms.S
+cfn=memcpy@GLIBC_2.2.5
+calls=1 211 
+0 193 59 57 0 14 15
+0 10 6 3 1 1 0 1
+
+fn=tessera_rl_engine::pool::step_one::<tessera_rl_classic::cartpole::CartPole>
+0 33792 7168 16384 3 1 0 3
+cfn=tessera_rl_engine::pool::clear_instance
+calls=1024 0 
+0 200704 44032 24576 0 1 472
+0 53248 11264 12288 4 0 0 4
+cfn=tessera_rl_num::rng::draws
+calls=1024 0 
+0 54272 5120 6144
+0 12288 5120 4096 1 1 0 1
+cfn=<tessera_rl_classic::cartpole::CartPole as tessera_rl_core::env::Environment>::step
+calls=1024 0 
+0 167424 50176 13312 14 592 0 14 9
+0 72704 31744 5120 9 256 100 9
+
+fn=tessera_rl_num::math::vendor::sin::sin
+0 31744 7168 0 4 1 0 4
+
+fn=std::rt::lang_start_internal
+cfn=std::rt::lang_start::<()>::{closure#0}
+calls=1 0 
+0 991148 252418 170553 124 3423 967 124 10
+
+fn=classic_instructions::cartpole_pool_step::__gungraun_wrapper_id_mod_n1024::n1024
+cfn=classic_instructions::cartpole_pool_step::__gungraun_wrapper_mod::cartpole_pool_step
+calls=1 0 
+0 991148 252418 170553 124 3423 967 124 10
+
+fn=<tessera_rl_classic::cartpole::CartPole as tessera_rl_core::env::Environment>::step
+0 18432 7680 4608 1 580 0 1 1
+cfn=tessera_rl_num::math::vendor::cos::cos
+calls=512 0 
+0 25088 6144
+0 1536 512 1536 1 1 0 1
+cfn=tessera_rl_num::math::vendor::cos::cos
+calls=512 0 
+0 25088 6144 0 4 6 0 4 5
+0 3072 2048 2048
+cfn=tessera_rl_num::math::vendor::sin::sin
+calls=1024 0 
+0 31744 7168 0 4 1 0 4
+0 62464 20480 5120 4 4 0 4 3
 
 fn=classic_instructions::main
 cfn=classic_instructions::classic::__run
 calls=1 0 
-0 1046244 265583 181667 84 3426 933 84 10
-
-ob=/usr/lib/x86_64-linux-gnu/libc.so.6
-fl=./string/../sysdeps/x86_64/multiarch/memmove-vec-unaligned-erms.S
-fn=memcpy@GLIBC_2.2.5
-308 2048
-309 2048
-311 2048
-315 2048
-316 1024
-317 1024
-325 1024 1024
-331 1024 1024 0 0 65
-332 1024 1024
-333 1024 0 1024 0 0 64
-334 1024 0 1024
-335 1024 1024
-
-ob=/src/target/release/deps/classic_instructions-9c2edad6485955b6
-fl=???
-fn=std::rt::lang_start_internal
-cfn=std::rt::lang_start::<()>::{closure#0}
-calls=1 0 
-0 1046244 265583 181667 84 3426 933 84 10
-
-fn=<tessera_rl_num::fp::FpGuard>::enter
-0 26 6 6
+0 991148 252418 170553 124 3423 967 124 10
 
 fn=<tessera_rl_engine::outputs::Outputs>::view_all
-0 102 9 72 0 5 6
+0 134 25 88 0 9 15
 cob=/usr/lib/x86_64-linux-gnu/libc.so.6
 cfi=./string/../sysdeps/x86_64/multiarch/memmove-vec-unaligned-erms.S
 cfn=memcpy@GLIBC_2.2.5
 calls=2 211 
-0 73 19 17 0 1 5
+0 73 19 17 0 1 4
 0 4 0 1
 cob=/usr/lib/x86_64-linux-gnu/libc.so.6
 cfi=./string/../sysdeps/x86_64/multiarch/memmove-vec-unaligned-erms.S
 cfn=memcpy@GLIBC_2.2.5
 calls=2 211 
 0 73 19 17 0 0 4
-0 44 23 19 0 5 5
+0 40 21 17 0 0 3
 
-fn=tessera_rl_num::rng::draws
-0 108544 10240 12288
+fn=<tessera_rl_engine::pool::EnvPool<tessera_rl_classic::cartpole::CartPole>>::step
+0 12 2 5 1 0 0 1
+cfn=<tessera_rl_num::fp::FpGuard>::enter
+calls=1 0 
+0 13 3 3
+0 6 0 2
+cfn=tessera_rl_num::fp::call_opaque::<core::result::Result<(), tessera_rl_engine::error::EngineError>, tessera_rl_engine::entry::canonical<core::result::Result<(), tessera_rl_engine::error::EngineError>, <tessera_rl_engine::pool::EnvPool<tessera_rl_classic::cartpole::CartPole>>::guarded<(), <tessera_rl_engine::pool::EnvPool<tessera_rl_classic::cartpole::CartPole>>::step::{closure#0}>::{closure#0}>::{closure#0}>
+calls=1 0 
+0 990642 252263 170400 116 3407 938 116 10
+0 3 1 2 1 0 0 1
+cfn=<tessera_rl_num::fp::FpGuard as core::ops::drop::Drop>::drop
+calls=1 0 
+0 12 4 3
+0 20 9 5 1 0 2 1
+
+fn=tessera_rl_num::math::vendor::cos::cos
+0 50176 12288 0 4 6 0 4 5
+
+fn=classic_instructions::classic::__run
+cfn=classic_instructions::cartpole_pool_step::__run_n1024
+calls=1 0 
+0 991148 252418 170553 124 3423 967 124 10
+
+fn=<tessera_rl_num::fp::FpGuard>::enter
+0 26 6 6
 
 fn=tessera_rl_engine::pool::observe_instance::<tessera_rl_classic::cartpole::CartPole, tessera_rl_engine::masks::NoMasks>
-0 82944 8192 48128 0 1 1
+0 82944 8192 48128 0 1
 cob=/usr/lib/x86_64-linux-gnu/libc.so.6
 cfi=./string/../sysdeps/x86_64/multiarch/memset-vec-unaligned-erms.S
 cfn=__memset_sse2_unaligned_erms
@@ -119,279 +263,112 @@ calls=2048 0
 0 26624 9216 4096
 0 8192 7168
 
-fn=tessera_rl_engine::validate::check_and_copy_actions::<tessera_rl_core::header::RecordHeader<1, tessera_rl_core::header::NoAdaptive>>
-0 96324 25617 11281 16 1832 1 16 1
-cob=/usr/lib/x86_64-linux-gnu/libc.so.6
-cfi=./string/../sysdeps/x86_64/multiarch/memmove-vec-unaligned-erms.S
-cfn=memcpy@GLIBC_2.2.5
-calls=1024 211 
-0 12288 3072 2048 0 65 64
-0 19456 10240 2048 1 0 0 1
-cob=/usr/lib/x86_64-linux-gnu/libc.so.6
-cfi=./string/../sysdeps/x86_64/multiarch/memmove-vec-unaligned-erms.S
-cfn=memcpy@GLIBC_2.2.5
-calls=1024 211 
-0 10240 1024
-0 8203 6152 1 3 0 1 3
-
-fn=tessera_rl_num::fp::call_opaque::<(), <tessera_rl_engine::pool::EnvPool<tessera_rl_classic::cartpole::CartPole>>::step_inner::{closure#1}>
-0 7 2 3 1 0 0 1
-cfn=tessera_rl_engine::pool::step_chunk::<tessera_rl_classic::cartpole::CartPole, tessera_rl_engine::masks::NoMasks>
-calls=1 0 
-0 898610 219154 165904 43 1493 804 43 9
-0 2 1 0 0 1
-
-fn=classic_instructions::cartpole_pool_step::__gungraun_wrapper_mod::cartpole_pool_step
-0 12 1 6 1 0 0 1
-cob=/usr/lib/x86_64-linux-gnu/libc.so.6
-cfi=./string/../sysdeps/x86_64/multiarch/memmove-vec-unaligned-erms.S
-cfn=memcpy@GLIBC_2.2.5
-calls=1 211 
-0 181 55 53 0 0 10
-0 16 5 7 2 0 0 2
-cfn=<tessera_rl_engine::pool::EnvPool<tessera_rl_classic::cartpole::CartPole>>::step
-calls=1 0 
-0 1045828 265455 181542 80 3411 909 80 10
-0 16 6 3 1 1 0 1
-cob=/usr/lib/x86_64-linux-gnu/libc.so.6
-cfi=./string/../sysdeps/x86_64/multiarch/memmove-vec-unaligned-erms.S
-cfn=memcpy@GLIBC_2.2.5
-calls=1 211 
-0 181 55 53 0 13 14
-0 10 6 3 0 1
-
-fn=<tessera_rl_engine::pool::EnvPool<tessera_rl_classic::cartpole::CartPole>>::step_inner
-0 30 7 14 3 0 2 3
-cfn=tessera_rl_engine::validate::check_and_copy_actions::<tessera_rl_core::header::RecordHeader<1, tessera_rl_core::header::NoAdaptive>>
-calls=1 0 
-0 146511 46105 15378 20 1897 66 20 1
-0 28 8 12 3 4 1 3
-cfn=<tessera_rl_engine::outputs::Outputs>::view_all
-calls=1 0 
-0 296 70 126 0 11 20
-0 21 8 10 3 0 1 3
-cob=/usr/lib/x86_64-linux-gnu/libc.so.6
-cfi=./string/../sysdeps/x86_64/multiarch/memmove-vec-unaligned-erms.S
-cfn=memcpy@GLIBC_2.2.5
-calls=1 211 
-0 193 59 57 0 0 13
-0 1 1 1
-cfn=<tessera_rl_num::fp::FpGuard>::enter
-calls=1 0 
-0 13 3 3
-0 5 0 2
-cfn=tessera_rl_num::fp::call_opaque::<(), <tessera_rl_engine::pool::EnvPool<tessera_rl_classic::cartpole::CartPole>>::step_inner::{closure#1}>
-calls=1 0 
-0 898619 219157 165907 44 1494 804 44 9
-0 3 1 2 1 1 0 1
-cfn=<tessera_rl_num::fp::FpGuard as core::ops::drop::Drop>::drop
-calls=1 0 
-0 12 4 3
-0 11 7 1 0 2 1
+fn=tessera_rl_engine::pool::step_chunk::<tessera_rl_classic::cartpole::CartPole, tessera_rl_engine::masks::NoMasks>
+0 73770 21515 16400 11 640 0 11
+cfn=tessera_rl_engine::pool::step_one::<tessera_rl_classic::cartpole::CartPole>
+calls=1024 0 
+0 594432 154624 81920 31 851 572 31 9
+0 7168 1024 1024 1 0 0 1
+cfn=tessera_rl_engine::pool::observe_instance::<tessera_rl_classic::cartpole::CartPole, tessera_rl_engine::masks::NoMasks>
+calls=1024 0 
+0 210944 39936 66560 0 1 257
+0 2056 1031 0 1 1 0 1
 
 fn=main
 cfn=std::rt::lang_start_internal
 calls=1 0 
-0 1046244 265583 181667 84 3426 933 84 10
-
-fn=<tessera_rl_num::fp::FpGuard as core::ops::drop::Drop>::drop
-0 24 8 6
-
-fn=classic_instructions::cartpole_pool_step::__gungraun_wrapper_id_mod_n1024::n1024
-cfn=classic_instructions::cartpole_pool_step::__gungraun_wrapper_mod::cartpole_pool_step
-calls=1 0 
-0 1046244 265583 181667 84 3426 933 84 10
-
-fn=tessera_rl_engine::pool::step_one::<tessera_rl_classic::cartpole::CartPole>
-0 33792 7168 16384 3 2 2 3
-cfn=tessera_rl_engine::pool::clear_instance
-calls=1024 0 
-0 208896 44032 24576 0 1 444
-0 53248 11264 12288 4 0 0 4
-cfn=tessera_rl_num::rng::draws
-calls=1024 0 
-0 54272 5120 6144
-0 12288 5120 4096 1 1 0 1
-cfn=<tessera_rl_classic::cartpole::CartPole as tessera_rl_core::env::Environment>::step
-calls=1024 0 
-0 167424 50176 13312 14 589 1 14 9
-0 72704 31744 5120 9 256 99 9
-
-fn=tessera_rl_num::math::vendor::sin::sin
-0 31744 7168 0 4 2 0 4
-
-fn=tessera_rl_engine::pool::clear_instance
-0 23552 4096 6144 0 1
-cob=/usr/lib/x86_64-linux-gnu/libc.so.6
-cfi=./string/../sysdeps/x86_64/multiarch/memset-vec-unaligned-erms.S
-cfn=__memset_sse2_unaligned_erms
-calls=2048 199 
-0 17408 1024 1024 0 0 17
-0 11264 3072 1024
-cob=/usr/lib/x86_64-linux-gnu/libc.so.6
-cfi=./string/../sysdeps/x86_64/multiarch/memset-vec-unaligned-erms.S
-cfn=__memset_sse2_unaligned_erms
-calls=2048 199 
-0 17408 1024 1024 0 0 17
-0 9216 3072 1024
-cob=/usr/lib/x86_64-linux-gnu/libc.so.6
-cfi=./string/../sysdeps/x86_64/multiarch/memset-vec-unaligned-erms.S
-cfn=__memset_sse2_unaligned_erms
-calls=2048 199 
-0 17408 1024 1024 0 0 17
-0 11264 3072 1024
-cob=/usr/lib/x86_64-linux-gnu/libc.so.6
-cfi=./string/../sysdeps/x86_64/multiarch/memset-vec-unaligned-erms.S
-cfn=__memset_sse2_unaligned_erms
-calls=2048 199 
-0 17408 1024 1024 0 0 17
-0 9216 3072 1024
-cob=/usr/lib/x86_64-linux-gnu/libc.so.6
-cfi=./string/../sysdeps/x86_64/multiarch/memset-vec-unaligned-erms.S
-cfn=__memset_sse2_unaligned_erms
-calls=2048 199 
-0 17408 1024 1024 0 0 17
-0 11264 3072 1024
-cob=/usr/lib/x86_64-linux-gnu/libc.so.6
-cfi=./string/../sysdeps/x86_64/multiarch/memset-vec-unaligned-erms.S
-cfn=__memset_sse2_unaligned_erms
-calls=2048 199 
-0 15360 1024 2048 0 0 65
-0 30720 18432 6144 0 0 294
-
-fn=<tessera_rl_classic::cartpole::CartPole as tessera_rl_core::env::Environment>::observe
-0 26624 9216 4096
-
-fn=<tessera_rl_engine::pool::EnvPool<tessera_rl_classic::cartpole::CartPole>>::step
-0 12 2 5 2 0 0 2
-cfn=<tessera_rl_num::fp::FpGuard>::enter
-calls=1 0 
-0 13 3 3
-0 6 0 2
-cfn=tessera_rl_num::fp::call_opaque::<core::result::Result<(), tessera_rl_engine::error::EngineError>, tessera_rl_engine::entry::canonical<core::result::Result<(), tessera_rl_engine::error::EngineError>, <tessera_rl_engine::pool::EnvPool<tessera_rl_classic::cartpole::CartPole>>::guarded<(), <tessera_rl_engine::pool::EnvPool<tessera_rl_classic::cartpole::CartPole>>::step::{closure#0}>::{closure#0}>::{closure#0}>
-calls=1 0 
-0 1045761 265436 181522 76 3410 908 76 10
-0 3 1 2
-cfn=<tessera_rl_num::fp::FpGuard as core::ops::drop::Drop>::drop
-calls=1 0 
-0 12 4 3
-0 21 9 5 2 1 1 2
-
-fn=<tessera_rl_classic::cartpole::CartPole as tessera_rl_core::env::Environment>::step
-0 18432 7680 4608 1 577 0 1
-cfn=tessera_rl_num::math::vendor::cos::cos
-calls=512 0 
-0 25088 6144
-0 1536 512 1536 1 1 1 1
-cfn=tessera_rl_num::math::vendor::cos::cos
-calls=512 0 
-0 25088 6144 0 4 6 0 4 6
-0 3072 2048 2048 1 0 0 1
-cfn=tessera_rl_num::math::vendor::sin::sin
-calls=1024 0 
-0 31744 7168 0 4 2 0 4
-0 62464 20480 5120 3 3 0 3 3
-
-fn=std::sys::backtrace::__rust_begin_short_backtrace::<fn(), ()>
-cfn=classic_instructions::main
-calls=1 0 
-0 1046244 265583 181667 84 3426 933 84 10
-
-fn=tessera_rl_num::fp::call_opaque::<core::result::Result<(), tessera_rl_engine::error::EngineError>, tessera_rl_engine::entry::canonical<core::result::Result<(), tessera_rl_engine::error::EngineError>, <tessera_rl_engine::pool::EnvPool<tessera_rl_classic::cartpole::CartPole>>::guarded<(), <tessera_rl_engine::pool::EnvPool<tessera_rl_classic::cartpole::CartPole>>::step::{closure#0}>::{closure#0}>::{closure#0}>
-0 14 4 6 2 0 0 2
-cfn=<tessera_rl_engine::pool::EnvPool<tessera_rl_classic::cartpole::CartPole>>::step_inner
-calls=1 0 
-0 1045743 265430 181516 74 3409 908 74 10
-0 4 2 0 0 1
-
-fn=tessera_rl_num::math::vendor::cos::cos
-0 50176 12288 0 4 6 0 4 6
-
-fn=std::rt::lang_start::<()>::{closure#0}
-cfn=std::sys::backtrace::__rust_begin_short_backtrace::<fn(), ()>
-calls=1 0 
-0 1046244 265583 181667 84 3426 933 84 10
-
-fn=classic_instructions::cartpole_pool_step::__run_n1024
-cfn=classic_instructions::cartpole_pool_step::__gungraun_wrapper_id_mod_n1024::n1024
-calls=1 0 
-0 1046244 265583 181667 84 3426 933 84 10
-
-fn=tessera_rl_engine::pool::step_chunk::<tessera_rl_classic::cartpole::CartPole, tessera_rl_engine::masks::NoMasks>
-0 75818 22539 16400 10 641 0 10
-cfn=tessera_rl_engine::pool::step_one::<tessera_rl_classic::cartpole::CartPole>
-calls=1024 0 
-0 602624 154624 81920 31 849 546 31 9
-0 7168 1024 1024 1 0 0 1
-cfn=tessera_rl_engine::pool::observe_instance::<tessera_rl_classic::cartpole::CartPole, tessera_rl_engine::masks::NoMasks>
-calls=1024 0 
-0 210944 39936 66560 0 1 258
-0 2056 1031 0 1 2 0 1
+0 991148 252418 170553 124 3423 967 124 10
 
 ob=/usr/lib/x86_64-linux-gnu/libc.so.6
-fl=./string/../sysdeps/x86_64/multiarch/memmove-vec-unaligned-erms.S
-fn=memcpy@GLIBC_2.2.5
-392 5
-393 5
-417 5
-418 5
-422 5
-424 5
-428 5 5 0 0 2
-429 5
-440 5
-443 5
-445 5
-447 5
-451 5
-452 5
-461 5 5 0 0 1
-462 5 5
-464 5
-466 5
-467 5 5 0 0 1
-468 5 5
-471 5
-473 5
-475 5
-477 10
-483 5 5
-484 5 5
-485 5 5
-486 5 5 0 0 1
-487 5
-488 5 0 5 0 0 2
-489 5 0 5
-490 5 0 5 0 0 1
-491 5 0 5 0 0 2
-492 5
-493 5
-494 5
-483 38 38
-484 38 38
-485 38 38
-486 38 38 0 0 8
-487 38
-488 38 0 38 0 0 11
-489 38 0 38
-490 38 0 38 0 0 12
-491 38 0 38 0 0 14
-492 38
-493 38
-494 38
-496 5 0 5 0 0 3
-497 5 0 5
-498 5 0 5
-499 5 0 5
-501 5 0 5 0 0 1
-505 5 5
-
 fl=./csu/../csu/libc-start.c
 fn=__libc_start_main@@GLIBC_2.34
 cfi=./csu/../sysdeps/nptl/libc_start_call_main.h
 cfn=(below main)
 calls=1 29 
-360 1046244 265583 181667 84 3426 933 84 10
+360 991148 252418 170553 124 3423 967 124 10
+
+fl=./string/../sysdeps/x86_64/multiarch/memmove-vec-unaligned-erms.S
+fn=memcpy@GLIBC_2.2.5
+211 2052
+217 2052
+218 2052
+220 4 4
+221 4
+222 4
+308 2048
+309 2048
+311 2048
+315 2048
+316 1024
+317 1024
+325 1024 1024
+331 1024 1024 0 0 65
+332 1024 1024
+333 1024 0 1024 0 0 65
+334 1024 0 1024
+335 1024 1024
+392 4
+393 4
+417 4
+418 4
+422 4
+424 4
+428 4 4 0 0 2
+429 4
+440 4
+443 4
+445 4
+447 4
+451 4
+452 4
+461 4 4 0 0 1
+462 4 4
+464 4
+466 4
+467 4 4 0 0 1
+468 4 4
+471 4
+473 4
+475 4
+477 8
+483 4 4
+484 4 4 0 0 1
+485 4 4
+486 4 4
+487 4
+488 4 0 4 0 0 1
+489 4 0 4 0 0 3
+490 4 0 4
+491 4 0 4
+492 4
+493 4
+494 4
+483 28 28
+484 28 28 0 0 10
+485 28 28
+486 28 28
+487 28
+488 28 0 28
+489 28 0 28 0 0 28
+490 28 0 28
+491 28 0 28
+492 28
+493 28
+494 28
+496 4 0 4 0 0 3
+497 4 0 4
+498 4 0 4
+499 4 0 4
+501 4 0 4
+505 4 4
+
+fl=./csu/../sysdeps/nptl/libc_start_call_main.h
+fn=(below main)
+cob=/__w/tessera-rl/tessera-rl/target/bench-gate/deps/classic_instructions-ca19820036c4660f
+cfi=???
+cfn=main
+calls=1 0 
+58 991148 252418 170553 124 3423 967 124 10
 
 fl=./string/../sysdeps/x86_64/multiarch/memset-vec-unaligned-erms.S
 fn=__memset_sse2_unaligned_erms
@@ -411,19 +388,10 @@ fn=__memset_sse2_unaligned_erms
 360 5120
 361 5120
 362 5120
-363 5120 0 5120 0 0 85
+363 5120 0 5120 0 0 93
 365 5120 5120
 410 1024 0 1024 0 0 65
 411 1024 0 1024
 413 1024 1024
 
-ob=/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2
-fl=???
-fn=0x000000000001d2c0
-cob=/src/target/release/deps/classic_instructions-9c2edad6485955b6
-cfi=???
-cfn=(below main)
-calls=1 0 
-0 1046244 265583 181667 84 3426 933 84 10
-
-totals: 1046244 265583 181667 84 3426 933 84 10
+totals: 991148 252418 170553 124 3423 967 124 10

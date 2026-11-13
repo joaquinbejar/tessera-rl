@@ -8,8 +8,14 @@ This directory holds the committed baseline of the ADR-0025 level 1 gate
 Everything else gungraun writes here is ignored.
 
 `make gungraun` (`scripts/gungraun.sh check`) compares a run with this
-baseline and fails when the instruction count (`Ir`) of any benchmark
-regresses by more than 2%. Cache misses and hit rates are reported, not
+baseline and fails when the instruction count (`Ir`) of any benchmark moves
+by more than 2% in either direction (ADR-0059). A fall beyond the band is
+not a silent pass: it asks for a reviewed re-bless, produced by the
+`gungraun bless` workflow on the pull request's branch and committed
+unchanged with the run id and the artifact's sha256. The benches build with
+Cargo's `bench-gate` profile (one codegen unit, no LTO), and the script
+fails closed unless the rustc command lines show it; the profile's settings
+are part of `environment.toml`. Cache misses and hit rates are reported, not
 gated. On macOS the target exits 0 with a message: Valgrind needs Linux.
 Run it in the baseline's image:
 

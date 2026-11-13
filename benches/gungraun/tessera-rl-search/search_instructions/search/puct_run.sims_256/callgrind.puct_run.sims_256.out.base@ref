@@ -1,8 +1,8 @@
 # callgrind format
 version: 1
 creator: callgrind-3.24.0
-pid: 5990
-cmd:  /work/tessera/target/release/deps/search_instructions-9b9e66c0315808f6 --gungraun-run d:d:000000 00000 00001 00000
+pid: 5924
+cmd:  /__w/tessera-rl/tessera-rl/target/bench-gate/deps/search_instructions-89c6176f5cdb8ab0 --gungraun-run d:d:000000 00000 00001 00000
 part: 1
 thread: 1
 
@@ -11,314 +11,495 @@ desc: I1 cache: 32768 B, 64 B, 8-way associative
 desc: D1 cache: 32768 B, 64 B, 8-way associative
 desc: LL cache: 8388608 B, 64 B, 16-way associative
 
-desc: Timerange: Basic block 0 - 512711
+desc: Timerange: Basic block 0 - 423907
 desc: Trigger: Program termination
 
 positions: line
 events: Ir Dr Dw I1mr D1mr D1mw ILmr DLmr DLmw
-summary: 2316077 421087 331931 1724 4620 3047 349 10 1768
+summary: 2040017 422329 332336 3729 4932 3229 425 8 1787
 
 
 ob=/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2
 fl=???
 fn=0x000000000001d2c0
-cob=/work/tessera/target/release/deps/search_instructions-9b9e66c0315808f6
+cob=/__w/tessera-rl/tessera-rl/target/bench-gate/deps/search_instructions-89c6176f5cdb8ab0
 cfi=???
 cfn=(below main)
 calls=1 0 
-0 2316077 421087 331931 1724 4620 3047 349 10 1768
+0 2040017 422329 332336 3729 4932 3229 425 8 1787
 
-ob=/work/tessera/target/release/deps/search_instructions-9b9e66c0315808f6
+ob=/__w/tessera-rl/tessera-rl/target/bench-gate/deps/search_instructions-89c6176f5cdb8ab0
 fl=???
-fn=tessera_rl_engine::pool::clear_instance
-0 12328 2144 3216 1
-cob=/usr/lib/x86_64-linux-gnu/libc.so.6
-cfi=./string/../sysdeps/x86_64/multiarch/memset-vec-unaligned-erms.S
-cfn=__memset_sse2_unaligned_erms
-calls=545 199 
-0 9112 536 1072 0 0 8
-0 5896 1608 536
-cob=/usr/lib/x86_64-linux-gnu/libc.so.6
-cfi=./string/../sysdeps/x86_64/multiarch/memset-vec-unaligned-erms.S
-cfn=__memset_sse2_unaligned_erms
-calls=545 199 
-0 9112 536 1072 0 0 17
-0 4824 1608 536
-cob=/usr/lib/x86_64-linux-gnu/libc.so.6
-cfi=./string/../sysdeps/x86_64/multiarch/memset-vec-unaligned-erms.S
-cfn=__memset_sse2_unaligned_erms
-calls=545 199 
-0 9112 536 1072
-0 5896 1608 536
-cob=/usr/lib/x86_64-linux-gnu/libc.so.6
-cfi=./string/../sysdeps/x86_64/multiarch/memset-vec-unaligned-erms.S
-cfn=__memset_sse2_unaligned_erms
-calls=545 199 
-0 9112 536 1072
-0 4824 1608 536
-cob=/usr/lib/x86_64-linux-gnu/libc.so.6
-cfi=./string/../sysdeps/x86_64/multiarch/memset-vec-unaligned-erms.S
-cfn=__memset_sse2_unaligned_erms
-calls=545 199 
-0 9112 536 1072
-0 5896 1608 536
-cob=/usr/lib/x86_64-linux-gnu/libc.so.6
-cfi=./string/../sysdeps/x86_64/multiarch/memset-vec-unaligned-erms.S
-cfn=__memset_sse2_unaligned_erms
-calls=545 199 
-0 6968 536 1072 0 0 7
-0 16080 9648 3216 0 0 23
-
-fn=<tessera_rl_search::pool::SearchPool<tessera_rl_games::connect4::Connect4, tessera_rl_engine::masks::Masked>>::touch_node
-0 23552 8960 6656 39 552 554 7 0 544
-cob=/usr/lib/x86_64-linux-gnu/libc.so.6
-cfi=./string/../sysdeps/x86_64/multiarch/memmove-vec-unaligned-erms.S
-cfn=memcpy@GLIBC_2.2.5
-calls=256 211 
-0 2560 768 512 0 42 45 0 0 32
-0 4096 2560 512 1
-
-fn=search_instructions::puct_run::__gungraun_wrapper_id_mod_sims_256::sims_256
-cfn=search_instructions::puct_run::__gungraun_wrapper_mod::puct_run
-calls=1 0 
-0 2316077 421087 331931 1724 4620 3047 349 10 1768
-
-fn=tessera_rl_num::fp::call_opaque::<(), <tessera_rl_engine::pool::EnvPool<tessera_rl_games::connect4::Connect4, tessera_rl_engine::masks::Masked>>::reobserve<core::ops::range::Range<usize>>::{closure#0}>
-0 646 204 374 63 24 25 2
-cfn=<tessera_rl_engine::outputs::Outputs>::view_all
-calls=34 0 
-0 10064 2380 4284 6 24 224
-0 2754 748 442 1 0 0 1
-cfn=tessera_rl_engine::pool::observe_instance::<tessera_rl_games::connect4::Connect4, tessera_rl_engine::masks::Masked>
-calls=272 0 
-0 477088 32912 91936 7 8 282
-0 5168 2176 272 2 13 0 2
-cfn=tessera_rl_engine::pool::clear_instance
-calls=272 0 
-0 54944 11696 7888 1 0 55
-0 816 272 272 0 16
-cfn=tessera_rl_engine::pool::clear_terminal
-calls=272 0 
-0 11968 3264 1904 3 0 0 3
-0 9520 3774 1632 3 0 9 3
-
-fn=core::ptr::drop_glue::<tessera_rl_search::error::SearchError>
-0 16990 3398 0 65 0 0 4
-
-fn=std::rt::lang_start_internal
-cfn=std::rt::lang_start::<()>::{closure#0}
-calls=1 0 
-0 2316077 421087 331931 1724 4620 3047 349 10 1768
-
 fn=search_instructions::main
 cfn=search_instructions::search::__run
 calls=1 0 
-0 2316077 421087 331931 1724 4620 3047 349 10 1768
+0 2040017 422329 332336 3729 4932 3229 425 8 1787
 
 fn=<tessera_rl_num::fp::FpGuard>::enter
 0 5096 1176 1176
 
-fn=tessera_rl_num::fp::call_opaque::<core::result::Result<(), tessera_rl_search::error::SearchError>, <tessera_rl_search::mcts::Mcts<tessera_rl_games::connect4::Connect4, tessera_rl_engine::masks::Masked>>::run<search_instructions::Uniform>::{closure#0}>
-0 9 2 4 1 0 0 1
-cfn=<tessera_rl_search::mcts::Mcts<tessera_rl_games::connect4::Connect4, tessera_rl_engine::masks::Masked>>::run_canonical::<search_instructions::Uniform>
-calls=1 0 
-0 2315392 420913 331765 1711 4587 3017 337 10 1768
-0 4 2
+fn=tessera_rl_engine::pool::clear_terminal
+0 11968 3264 1904 2 0 0 2
 
-fn=tessera_rl_engine::pool::first_illegal
+fn=<tessera_rl_search::mcts::Mcts<tessera_rl_games::connect4::Connect4, tessera_rl_engine::masks::Masked>>::remove_path_virtual_loss
+0 53 19 8 3 0 0 3
+
+fn=tessera_rl_engine::pool::first_illegal_flat
 0 9504 1848 792 2 0 0 2
 
-fn=tessera_rl_num::fp::call_opaque::<core::result::Result<u32, tessera_rl_search::error::SearchError>, <tessera_rl_search::mcts::Mcts<tessera_rl_games::connect4::Connect4, tessera_rl_engine::masks::Masked>>::select_action::{closure#0}>
-0 10 3 4
-cfn=<tessera_rl_search::mcts::Mcts<tessera_rl_games::connect4::Connect4, tessera_rl_engine::masks::Masked>>::select_canonical
+fn=<tessera_rl_games::connect4::Connect4 as tessera_rl_core::env::Environment>::step
+0 18216 2376 528 158 0 0 5
+
+fn=search_instructions::search::__run
+cfn=search_instructions::puct_run::__run_sims_256
 calls=1 0 
-0 190 18 12 8 5 0 7
-0 4 2
+0 2040017 422329 332336 3729 4932 3229 425 8 1787
 
-fn=<tessera_rl_num::fp::FpGuard as core::ops::drop::Drop>::drop
-0 4704 1568 1176
-
-fn=tessera_rl_engine::pool::observe_instance::<tessera_rl_games::connect4::Connect4, tessera_rl_engine::masks::Masked>
-0 54136 5896 29480 1 0 6
-cob=/usr/lib/x86_64-linux-gnu/libc.so.6
-cfi=./string/../sysdeps/x86_64/multiarch/memset-vec-unaligned-erms.S
-cfn=__memset_sse2_unaligned_erms
-calls=545 199 
-0 13936 1072 4288 0 8 143
-0 17152 4288 3752
-cob=/usr/lib/x86_64-linux-gnu/libc.so.6
-cfi=./string/../sysdeps/x86_64/multiarch/memset-vec-unaligned-erms.S
-cfn=__memset_sse2_unaligned_erms
-calls=545 199 
-0 8040 536 1072 0 0 2
-0 18224 6968 4824
-cfn=tessera_rl_num::rng::draws
-calls=545 0 
-0 28408 2680 3216 0 0 2
-0 6432 3216 2144
-cfn=<tessera_rl_games::connect4::Connect4 as tessera_rl_core::env::Environment>::observe
-calls=545 0 
-0 325888 4824 46096 5
-0 46632 9648 22512 1
-cob=/usr/lib/x86_64-linux-gnu/libc.so.6
-cfi=./string/../sysdeps/x86_64/multiarch/memset-vec-unaligned-erms.S
-cfn=__memset_sse2_unaligned_erms
-calls=545 199 
-0 13936 1072 4288 0 0 135
-0 13400 3752 1608
-cob=/usr/lib/x86_64-linux-gnu/libc.so.6
-cfi=./string/../sysdeps/x86_64/multiarch/memset-vec-unaligned-erms.S
-cfn=__memset_sse2_unaligned_erms
-calls=545 199 
-0 8040 536 1072 0 0 2
-0 7504 2680 1608
-cfn=tessera_rl_num::rng::draws
-calls=545 0 
-0 28408 2680 3216
-0 6432 3216 2144
-cfn=<tessera_rl_games::connect4::Connect4 as tessera_rl_core::env::Environment>::observe
-calls=545 0 
-0 325888 4824 46096
-0 17688 6968 3752
-
-fn=<tessera_rl_search::mcts::Mcts<tessera_rl_games::connect4::Connect4, tessera_rl_engine::masks::Masked>>::write_priors
-0 423 176 71 7 1 5 7 0 4
+fn=tessera_rl_num::fp::call_opaque::<(), <tessera_rl_engine::pool::EnvPool<tessera_rl_games::connect4::Connect4, tessera_rl_engine::masks::Masked>>::reobserve<core::ops::range::Range<usize>>::{closure#0}>
+0 646 204 374 34 22 39 2
+cfn=<tessera_rl_engine::outputs::Outputs>::view_all
+calls=34 0 
+0 11016 2856 4760 327 121 251
+0 2074 136 374 1 0 0 1
+cfn=tessera_rl_engine::pool::observe_instance::<tessera_rl_games::connect4::Connect4, tessera_rl_engine::masks::Masked>
+calls=272 0 
+0 326128 26928 89216 24 2 164
+0 5168 2176 272 1 0 0 1
+cfn=tessera_rl_engine::pool::clear_instance
+calls=272 0 
+0 52768 11696 7888 0 0 99
+0 816 272 272
+cfn=tessera_rl_engine::pool::clear_terminal
+calls=272 0 
+0 11968 3264 1904 2 0 0 2
+0 9520 3774 1632 4 0 14 4
 
 fn=tessera_rl_num::fp::call_opaque::<(), <tessera_rl_engine::pool::EnvPool<tessera_rl_games::connect4::Connect4, tessera_rl_engine::masks::Masked>>::step_inner::{closure#1}>
-0 231 66 99
+0 231 66 99 1
 cfn=tessera_rl_engine::pool::step_chunk::<tessera_rl_games::connect4::Connect4, tessera_rl_engine::masks::Masked>
 calls=33 0 
-0 680634 83575 118159 397 0 9 53
+0 536038 79615 118487 856 38 9 61
 0 66 33
 
-fn=tessera_rl_num::rng::draws
-0 70861 6685 8022 0 0 2
-
-fn=<tessera_rl_games::connect4::Connect4 as tessera_rl_core::env::Environment>::acting
-0 20064 1584 0 63
+fn=tessera_rl_engine::pool::step_chunk::<tessera_rl_games::connect4::Connect4, tessera_rl_engine::masks::Masked>
+0 26763 9141 7392 177 13 0 17
+cfn=tessera_rl_engine::pool::clear_instance
+calls=264 0 
+0 51216 11352 7656
+0 16104 3432 3168 5 0 0 5
+cfn=tessera_rl_num::rng::draws
+calls=264 0 
+0 13992 1320 1584
+0 3168 1320 1056 1 0 0 1
+cfn=<tessera_rl_games::connect4::Connect4 as tessera_rl_core::env::Environment>::step
+calls=264 0 
+0 18216 2376 528 158 0 0 5
+0 19522 5348 5514 7 0 4 7
+cfn=tessera_rl_engine::pool::first_illegal_flat
+calls=215 0 
+0 7740 1505 645 2 0 0 2
+0 3759 773 509 4 0 0 4
+cfn=tessera_rl_engine::pool::first_illegal_flat
+calls=49 0 
+0 1764 343 147
+0 22938 9738 1056 235 25 0 14
+cfn=<tessera_rl_games::connect4::Connect4 as tessera_rl_core::env::Environment>::acting
+calls=264 0 
+0 5052 626 0 80
+0 1848 792 528
+cfn=<tessera_rl_games::connect4::Connect4 as tessera_rl_core::env::Environment>::acting
+calls=264 0 
+0 15012 958 0 52
+0 5544 2112 792 67 0 0 3
+cfn=tessera_rl_engine::pool::observe_instance::<tessera_rl_games::connect4::Connect4, tessera_rl_engine::masks::Masked>
+calls=264 0 
+0 316536 26136 86592 0 0 5
+0 6864 2343 1320 68 0 0 3
 
 fn=main
 cfn=std::rt::lang_start_internal
 calls=1 0 
-0 2316077 421087 331931 1724 4620 3047 349 10 1768
+0 2040017 422329 332336 3729 4932 3229 425 8 1787
 
-fn=<tessera_rl_search::mcts::Mcts<tessera_rl_games::connect4::Connect4, tessera_rl_engine::masks::Masked>>::run_canonical::<search_instructions::Uniform>
-0 34 7 12 3 0 0 3
+fn=tessera_rl_num::rng::draws
+0 70861 6685 8022
+
+fn=<tessera_rl_games::connect4::Connect4 as tessera_rl_core::env::Environment>::acting
+0 20064 1584 0 132
+
+fn=tessera_rl_search::evaluator::validate_leaf
+0 143127 31293 5130 111 20 0 11 3
+
+fn=<tessera_rl_search::pool::SearchPool<tessera_rl_games::connect4::Connect4, tessera_rl_engine::masks::Masked>>::touch_node
+0 23552 8960 6656 7 535 555 7 0 544
+cob=/usr/lib/x86_64-linux-gnu/libc.so.6
+cfi=./string/../sysdeps/x86_64/multiarch/memmove-vec-unaligned-erms.S
+cfn=memcpy@GLIBC_2.2.5
+calls=256 211 
+0 2560 768 512 0 37 42 0 0 32
+0 3840 2304 512
+
+fn=tessera_rl_num::fp::call_opaque::<core::result::Result<(), tessera_rl_engine::error::EngineError>, tessera_rl_engine::entry::canonical<core::result::Result<(), tessera_rl_engine::error::EngineError>, <tessera_rl_engine::pool::EnvPool<tessera_rl_games::connect4::Connect4, tessera_rl_engine::masks::Masked>>::guarded<(), <tessera_rl_engine::pool::EnvPool<tessera_rl_games::connect4::Connect4, tessera_rl_engine::masks::Masked>>::restore_all::{closure#0}>::{closure#0}>::{closure#0}>
+0 8024 2244 2448 133 0 78 5
+cfn=<tessera_rl_num::fp::FpGuard>::enter
+calls=34 0 
+0 442 102 102
+0 136 0 68 33 0 0 1
+cfn=tessera_rl_num::fp::call_opaque::<(), <tessera_rl_engine::pool::EnvPool<tessera_rl_games::connect4::Connect4, tessera_rl_engine::masks::Masked>>::reobserve<core::ops::range::Range<usize>>::{closure#0}>
+calls=34 0 
+0 420104 51306 106692 393 145 567 10
+0 102 34 68
+cfn=<tessera_rl_num::fp::FpGuard as core::ops::drop::Drop>::drop
+calls=34 0 
+0 408 136 102
+0 476 238 136 0 0 6
+
+fn=<tessera_rl_search::pool::SearchPool<tessera_rl_games::connect4::Connect4, tessera_rl_engine::masks::Masked>>::stage
+0 16485 4787 1676 67 0 9 6
+cfn=core::ptr::drop_glue::<tessera_rl_search::error::SearchError>
+calls=256 0 
+0 2048 512 0 65
+0 7911 2081 1090 132 298 3 4 0 1
+cfn=core::ptr::drop_glue::<tessera_rl_search::error::SearchError>
+calls=33 0 
+0 264 66
+0 8468 2368 1815 105 12 181 9
+cfn=<tessera_rl_num::fp::FpGuard>::enter
+calls=33 0 
+0 429 99 99
+0 165 0 66 1 0 0 1
+cfn=tessera_rl_num::fp::call_opaque::<core::result::Result<(), tessera_rl_engine::error::EngineError>, tessera_rl_engine::entry::canonical<core::result::Result<(), tessera_rl_engine::error::EngineError>, <tessera_rl_engine::pool::EnvPool<tessera_rl_games::connect4::Connect4, tessera_rl_engine::masks::Masked>>::guarded<(), <tessera_rl_engine::pool::EnvPool<tessera_rl_games::connect4::Connect4, tessera_rl_engine::masks::Masked>>::restore_all::{closure#0}>::{closure#0}>::{closure#0}>
+calls=33 0 
+0 417054 52470 106392 509 143 609
+0 99 33 66
+cfn=<tessera_rl_num::fp::FpGuard as core::ops::drop::Drop>::drop
+calls=33 0 
+0 396 132 99
+0 4318 1230 132 5 0 0 5
+cob=/usr/lib/x86_64-linux-gnu/libc.so.6
+cfi=./string/../sysdeps/x86_64/multiarch/memset-vec-unaligned-erms.S
+cfn=__memset_sse2_unaligned_erms
+calls=33 199 
+0 627 66 132 0 0 7
+0 6213 2022 396 3 0 0 3
+cfn=<tessera_rl_engine::pool::EnvPool<tessera_rl_games::connect4::Connect4, tessera_rl_engine::masks::Masked>>::step
+calls=33 0 
+0 626889 109778 135663 1842 116 132 154 1
+0 4335 867 834 3 0 0 3
+cfn=<tessera_rl_num::fp::FpGuard>::enter
+calls=256 0 
+0 3328 768 768
+0 1280 0 256 1 0 0 1
+cfn=tessera_rl_num::fp::call_opaque::<core::result::Result<tessera_rl_engine::record::Record<tessera_rl_games::connect4::Connect4>, tessera_rl_engine::error::EngineError>, tessera_rl_engine::entry::canonical<core::result::Result<tessera_rl_engine::record::Record<tessera_rl_games::connect4::Connect4>, tessera_rl_engine::error::EngineError>, <tessera_rl_engine::pool::EnvPool<tessera_rl_games::connect4::Connect4, tessera_rl_engine::masks::Masked>>::guarded_ref<tessera_rl_engine::record::Record<tessera_rl_games::connect4::Connect4>, <tessera_rl_engine::pool::EnvPool<tessera_rl_games::connect4::Connect4, tessera_rl_engine::masks::Masked>>::snapshot::{closure#0}>::{closure#0}>::{closure#0}>
+calls=256 0 
+0 15616 6912 5376 6
+0 768 256 512
+cfn=<tessera_rl_num::fp::FpGuard as core::ops::drop::Drop>::drop
+calls=256 0 
+0 3072 1024 768
+0 27136 12544 8448 9 0 65 9
+cob=/usr/lib/x86_64-linux-gnu/libc.so.6
+cfi=./string/../sysdeps/x86_64/multiarch/memmove-vec-unaligned-erms.S
+cfn=memcpy@GLIBC_2.2.5
+calls=256 211 
+0 2560 768 512 0 0 1
+0 42851 8225 1825 5 4 3 5
+
+fn=tessera_rl_num::fp::call_opaque::<core::result::Result<u32, tessera_rl_search::error::SearchError>, <tessera_rl_search::mcts::Mcts<tessera_rl_games::connect4::Connect4, tessera_rl_engine::masks::Masked>>::select_action::{closure#0}>
+0 194 15 14 7 5 2 7
+cfn=core::ptr::drop_glue::<tessera_rl_search::error::SearchError>
+calls=1 0 
+0 8 2 0 2
+0 21 7 6 2 0 0 2
+
+fn=(below main)
+cob=/usr/lib/x86_64-linux-gnu/libc.so.6
+cfi=./csu/../csu/libc-start.c
+cfn=__libc_start_main@@GLIBC_2.34
+calls=1 242 
+0 2040017 422329 332336 3729 4932 3229 425 8 1787
+
+fn=search_instructions::puct_run::__run_sims_256
+cfn=search_instructions::puct_run::__gungraun_wrapper_id_mod_sims_256::sims_256
+calls=1 0 
+0 2040017 422329 332336 3729 4932 3229 425 8 1787
+
+fn=<tessera_rl_engine::outputs::Outputs>::view_all
+0 8978 1675 5896 170 94 199
+cob=/usr/lib/x86_64-linux-gnu/libc.so.6
+cfi=./string/../sysdeps/x86_64/multiarch/memmove-vec-unaligned-erms.S
+cfn=memcpy@GLIBC_2.2.5
+calls=69 211 
+0 4891 1273 1139 157 27 82
+0 268 0 67
+cob=/usr/lib/x86_64-linux-gnu/libc.so.6
+cfi=./string/../sysdeps/x86_64/multiarch/memmove-vec-unaligned-erms.S
+cfn=memcpy@GLIBC_2.2.5
+calls=69 211 
+0 4891 1273 1139 0 0 21
+0 2680 1407 1139 0 0 21
+
+fn=tessera_rl_num::fp::call_opaque::<core::result::Result<(), tessera_rl_search::error::SearchError>, <tessera_rl_search::mcts::Mcts<tessera_rl_games::connect4::Connect4, tessera_rl_engine::masks::Masked>>::run<search_instructions::Uniform>::{closure#0}>
+0 38 8 15 4 0 0 4
 cfn=tessera_rl_num::rng::draws
 calls=1 0 
 0 53 5 6
-0 23 8 10 3 0 0 3
+0 16 5 6 2 0 0 2
 cob=/usr/lib/x86_64-linux-gnu/libc.so.6
 cfi=./string/../sysdeps/x86_64/multiarch/memmove-vec-unaligned-erms.S
 cfn=memcpy@GLIBC_2.2.5
 calls=1 211 
 0 793 259 257 0 64 64 0 0 63
-0 402 111 111 14 0 13 14
+0 458 145 126 22 0 13 22
 cfn=<tessera_rl_num::fp::FpGuard>::enter
 calls=1 0 
 0 13 3 3
-0 9 0 5 1 0 0 1
+0 5 0 2
 cfn=tessera_rl_num::fp::call_opaque::<core::result::Result<(), tessera_rl_engine::error::EngineError>, tessera_rl_engine::entry::canonical<core::result::Result<(), tessera_rl_engine::error::EngineError>, <tessera_rl_engine::pool::EnvPool<tessera_rl_games::connect4::Connect4, tessera_rl_engine::masks::Masked>>::guarded<(), <tessera_rl_engine::pool::EnvPool<tessera_rl_games::connect4::Connect4, tessera_rl_engine::masks::Masked>>::restore_all::{closure#0}>::{closure#0}>::{closure#0}>
 calls=1 0 
-0 17161 1778 3300 33 4 43 19
-0 3 1 2
+0 12638 1590 3224 50 2 42 16
+0 3 1 2 1 0 0 1
 cfn=<tessera_rl_num::fp::FpGuard as core::ops::drop::Drop>::drop
 calls=1 0 
 0 12 4 3
-0 327848 57747 5234 172 912 2 34 2
+0 338469 60798 5916 37 1026 40 37 2 2
+cfn=<tessera_rl_search::mcts::Mcts<tessera_rl_games::connect4::Connect4, tessera_rl_engine::masks::Masked>>::remove_path_virtual_loss
+calls=1 0 
+0 53 19 8 3 0 0 3
+0 498 166 132 34 0 0 2
 cfn=<tessera_rl_search::pool::SearchPool<tessera_rl_games::connect4::Connect4, tessera_rl_engine::masks::Masked>>::stage
 calls=33 0 
-0 1479129 208919 264287 1132 432 933 147 1 1
-0 17446 6251 4969 10 9 187 10 0 4
+0 1192312 207008 266925 2753 573 1010 200 1 1
+0 29596 11429 5128 299 6 203 13 0 11
+cob=/usr/lib/x86_64-linux-gnu/libc.so.6
+cfi=./string/../sysdeps/x86_64/multiarch/memmove-vec-unaligned-erms.S
+cfn=memcpy@GLIBC_2.2.5
+calls=256 211 
+0 3072 768 512 0 0 28
+0 4052 652 964 5 0 9 5
 cob=/usr/lib/x86_64-linux-gnu/libc.so.6
 cfi=./string/../sysdeps/x86_64/multiarch/memset-vec-unaligned-erms.S
 cfn=__memset_sse2_unaligned_erms
 calls=33 199 
 0 621 65 130
-0 10661 3328 545 3 5 0 3 1
+0 10677 3179 999 68 21 0 4 1
 cfn=tessera_rl_search::evaluator::validate_leaf
 calls=256 0 
-0 71424 15616 2560 0 25
-0 4954 1478 198 70 0 0 6
+0 71424 15616 2560 100 17
+0 6044 2089 231 70 0 0 6
 cfn=<tessera_rl_search::pool::SearchPool<tessera_rl_games::connect4::Connect4, tessera_rl_engine::masks::Masked>>::commit_staged
 calls=33 0 
-0 64420 24906 13964 53 612 606 20 0 576
-0 9166 2659 2436 5 1 0 5
-cfn=core::ptr::drop_glue::<tessera_rl_search::error::SearchError>
+0 64932 24394 13708 20 604 604 20 0 576
+0 82761 23350 4777 17 257 0 17 1
+cfn=<tessera_rl_search::mcts::Mcts<tessera_rl_games::connect4::Connect4, tessera_rl_engine::masks::Masked>>::write_priors
 calls=256 0 
-0 2560 512 0 2 0 0 2
-0 14429 3705 768 4 45 0 4
-cfn=core::ptr::drop_glue::<tessera_rl_search::error::SearchError>
-calls=256 0 
-0 2560 512
-0 3584 768 768 1 0 0 1
-cfn=core::ptr::drop_glue::<tessera_rl_search::error::SearchError>
-calls=256 0 
-0 2560 512
-0 41654 13970 5833 38 136 0 6 1
-cfn=core::ptr::drop_glue::<tessera_rl_search::error::SearchError>
-calls=449 0 
-0 4490 898
-0 8980 1796 898 2 0 0 2
-cfn=core::ptr::drop_glue::<tessera_rl_search::error::SearchError>
-calls=449 0 
-0 4490 898
-0 28581 9130 1280 14 10 3 7
+0 109568 43264 17664 133 931 1127 0 0 1120
+0 17152 5376 1536 5 0 0 5
 cob=/usr/lib/x86_64-linux-gnu/libc.so.6
 cfi=./string/../sysdeps/x86_64/multiarch/memmove-vec-unaligned-erms.S
 cfn=memcpy@GLIBC_2.2.5
 calls=256 211 
-0 3072 768 512
-0 4608 2048 1792 41 0 0 2
+0 3072 768 512 0 0 8
+0 5120 2048 2048 2 0 0 2
 cfn=tessera_rl_search::evaluator::validate_leaf
 calls=256 0 
 0 71424 15616 2560
-0 117506 46387 19240 89 2325 1161 28 0 1120
+0 13546 3251 2096 63 1387 36 31 0 2
 cfn=tessera_rl_search::evaluator::validate_leaf
 calls=1 0 
-0 279 61 10 11 5 0 11 5
-0 15 8 1 2 1 0 1
+0 279 61 10 11 3 0 11 3
+0 87 15 4 3 0 0 3
 cfn=<tessera_rl_search::mcts::Mcts<tessera_rl_games::connect4::Connect4, tessera_rl_engine::masks::Masked>>::write_priors
 calls=1 0 
-0 423 176 71 7 1 5 7 0 4
-0 5 3 0 1 0 0 1
+0 428 169 69 8 1 5 7 0 4
+0 2 1
 
-fn=<tessera_rl_games::connect4::Connect4 as tessera_rl_core::env::Environment>::step
-0 18216 2376 528 52 0 0 5
+fn=<tessera_rl_search::pool::SearchPool<tessera_rl_games::connect4::Connect4, tessera_rl_engine::masks::Masked>>::commit_staged
+0 7580 2147 1932 5 32 4 5
+cfn=<tessera_rl_search::pool::SearchPool<tessera_rl_games::connect4::Connect4, tessera_rl_engine::masks::Masked>>::touch_node
+calls=256 0 
+0 29952 12032 7680 7 572 597 7 0 576
+0 11776 4096 1792 3 0 0 3
+cob=/usr/lib/x86_64-linux-gnu/libc.so.6
+cfi=./string/../sysdeps/x86_64/multiarch/memmove-vec-unaligned-erms.S
+cfn=memcpy@GLIBC_2.2.5
+calls=256 211 
+0 2560 768 512
+0 13064 5351 1792 5 0 3 5
 
-fn=tessera_rl_engine::pool::clear_terminal
-0 11968 3264 1904 3 0 0 3
+fn=tessera_rl_engine::pool::clear_instance
+0 13400 2144 3216
+cob=/usr/lib/x86_64-linux-gnu/libc.so.6
+cfi=./string/../sysdeps/x86_64/multiarch/memset-vec-unaligned-erms.S
+cfn=__memset_sse2_unaligned_erms
+calls=545 199 
+0 9112 536 1072
+0 6968 1608 536
+cob=/usr/lib/x86_64-linux-gnu/libc.so.6
+cfi=./string/../sysdeps/x86_64/multiarch/memset-vec-unaligned-erms.S
+cfn=__memset_sse2_unaligned_erms
+calls=545 199 
+0 6968 536 1072 0 0 7
+0 18760 10720 3752 0 0 45
+cob=/usr/lib/x86_64-linux-gnu/libc.so.6
+cfi=./string/../sysdeps/x86_64/multiarch/memset-vec-unaligned-erms.S
+cfn=__memset_sse2_unaligned_erms
+calls=545 199 
+0 9112 536 1072 0 0 19
+0 3752 1608 536
+cob=/usr/lib/x86_64-linux-gnu/libc.so.6
+cfi=./string/../sysdeps/x86_64/multiarch/memset-vec-unaligned-erms.S
+cfn=__memset_sse2_unaligned_erms
+calls=545 199 
+0 9112 536 1072
+0 3752 1608 536
+cob=/usr/lib/x86_64-linux-gnu/libc.so.6
+cfi=./string/../sysdeps/x86_64/multiarch/memset-vec-unaligned-erms.S
+cfn=__memset_sse2_unaligned_erms
+calls=545 199 
+0 9112 536 1072
+0 3752 1608 536
+cob=/usr/lib/x86_64-linux-gnu/libc.so.6
+cfi=./string/../sysdeps/x86_64/multiarch/memset-vec-unaligned-erms.S
+cfn=__memset_sse2_unaligned_erms
+calls=545 199 
+0 9112 536 1072 0 0 28
+0 1072 536
+
+fn=tessera_rl_games::connect4::write_planes
+0 354832 3216 90048 9
+
+fn=tessera_rl_num::fp::call_opaque::<core::result::Result<tessera_rl_engine::record::Record<tessera_rl_games::connect4::Connect4>, tessera_rl_engine::error::EngineError>, tessera_rl_engine::entry::canonical<core::result::Result<tessera_rl_engine::record::Record<tessera_rl_games::connect4::Connect4>, tessera_rl_engine::error::EngineError>, <tessera_rl_engine::pool::EnvPool<tessera_rl_games::connect4::Connect4, tessera_rl_engine::masks::Masked>>::guarded_ref<tessera_rl_engine::record::Record<tessera_rl_games::connect4::Connect4>, <tessera_rl_engine::pool::EnvPool<tessera_rl_games::connect4::Connect4, tessera_rl_engine::masks::Masked>>::snapshot::{closure#0}>::{closure#0}>::{closure#0}>
+0 15616 6912 5376 6
+
+fn=std::sys::backtrace::__rust_begin_short_backtrace::<fn(), ()>
+cfn=search_instructions::main
+calls=1 0 
+0 2040017 422329 332336 3729 4932 3229 425 8 1787
 
 fn=<tessera_rl_engine::pool::EnvPool<tessera_rl_games::connect4::Connect4, tessera_rl_engine::masks::Masked>>::step
-0 396 66 165 1 0 0 1
+0 396 66 165 2 0 0 2
 cfn=<tessera_rl_num::fp::FpGuard>::enter
 calls=33 0 
 0 429 99 99
 0 198 0 66
 cfn=tessera_rl_num::fp::call_opaque::<core::result::Result<(), tessera_rl_engine::error::EngineError>, tessera_rl_engine::entry::canonical<core::result::Result<(), tessera_rl_engine::error::EngineError>, <tessera_rl_engine::pool::EnvPool<tessera_rl_games::connect4::Connect4, tessera_rl_engine::masks::Masked>>::guarded<(), <tessera_rl_engine::pool::EnvPool<tessera_rl_games::connect4::Connect4, tessera_rl_engine::masks::Masked>>::step::{closure#0}>::{closure#0}>::{closure#0}>
 calls=33 0 
-0 766407 107220 130782 710 26 39 97 1
-0 99 33 66 1 0 0 1
+0 624711 109151 135003 1838 116 132 150 1
+0 99 33 66
 cfn=<tessera_rl_num::fp::FpGuard as core::ops::drop::Drop>::drop
 calls=33 0 
 0 396 132 99
-0 693 297 165 1 0 0 1
+0 660 297 165 2 0 0 2
+
+fn=std::rt::lang_start::<()>::{closure#0}
+cfn=std::sys::backtrace::__rust_begin_short_backtrace::<fn(), ()>
+calls=1 0 
+0 2040017 422329 332336 3729 4932 3229 425 8 1787
+
+fn=<tessera_rl_num::fp::FpGuard as core::ops::drop::Drop>::drop
+0 4704 1568 1176
+
+fn=core::ptr::drop_glue::<tessera_rl_search::error::SearchError>
+0 2320 580 0 67
+
+fn=search_instructions::puct_run::__gungraun_wrapper_mod::puct_run
+0 7 1 4 1 1 0 1
+cfn=<tessera_rl_num::fp::FpGuard>::enter
+calls=1 0 
+0 13 3 3
+0 6 0 2 1 0 0 1
+cfn=tessera_rl_num::fp::call_opaque::<core::result::Result<(), tessera_rl_search::error::SearchError>, <tessera_rl_search::mcts::Mcts<tessera_rl_games::connect4::Connect4, tessera_rl_engine::masks::Masked>>::run<search_instructions::Uniform>::{closure#0}>
+calls=1 0 
+0 2039218 422122 332133 3710 4892 3189 411 8 1779
+0 3 1 2 1 1 1
+cfn=<tessera_rl_num::fp::FpGuard as core::ops::drop::Drop>::drop
+calls=1 0 
+0 12 4 3
+0 11 5 5 1 0 0 1
+cfn=<tessera_rl_num::fp::FpGuard>::enter
+calls=1 0 
+0 13 3 3
+0 6 0 2
+cfn=tessera_rl_num::fp::call_opaque::<core::result::Result<u32, tessera_rl_search::error::SearchError>, <tessera_rl_search::mcts::Mcts<tessera_rl_games::connect4::Connect4, tessera_rl_engine::masks::Masked>>::select_action::{closure#0}>
+calls=1 0 
+0 223 24 20 11 5 2 9
+0 3 1 2
+cfn=<tessera_rl_num::fp::FpGuard as core::ops::drop::Drop>::drop
+calls=1 0 
+0 12 4 3
+0 16 6 5 2 1 0 2
+cob=/usr/lib/x86_64-linux-gnu/libc.so.6
+cfi=./string/../sysdeps/x86_64/multiarch/memmove-vec-unaligned-erms.S
+cfn=memcpy@GLIBC_2.2.5
+calls=1 211 
+0 469 151 149 2 31 37 0 0 8
+0 5 4 0 0 1
+
+fn=std::rt::lang_start_internal
+cfn=std::rt::lang_start::<()>::{closure#0}
+calls=1 0 
+0 2040017 422329 332336 3729 4932 3229 425 8 1787
+
+fn=tessera_rl_engine::pool::observe_instance::<tessera_rl_games::connect4::Connect4, tessera_rl_engine::masks::Masked>
+0 55208 5896 29480 6 0 3
+cob=/usr/lib/x86_64-linux-gnu/libc.so.6
+cfi=./string/../sysdeps/x86_64/multiarch/memset-vec-unaligned-erms.S
+cfn=__memset_sse2_unaligned_erms
+calls=545 199 
+0 13936 1072 4288 0 2 73
+0 16616 3752 3216 2 0 2
+cob=/usr/lib/x86_64-linux-gnu/libc.so.6
+cfi=./string/../sysdeps/x86_64/multiarch/memset-vec-unaligned-erms.S
+cfn=__memset_sse2_unaligned_erms
+calls=545 199 
+0 8040 536 1072 0 0 29
+0 15008 5896 3752 1
+cfn=tessera_rl_num::rng::draws
+calls=545 0 
+0 28408 2680 3216
+0 6432 2680 1608
+cfn=tessera_rl_games::connect4::write_planes
+calls=545 0 
+0 177416 1608 45024 9
+0 49312 7504 23048 6
+cob=/usr/lib/x86_64-linux-gnu/libc.so.6
+cfi=./string/../sysdeps/x86_64/multiarch/memset-vec-unaligned-erms.S
+cfn=__memset_sse2_unaligned_erms
+calls=545 199 
+0 13936 1072 4288 0 0 62
+0 13936 3752 1608
+cob=/usr/lib/x86_64-linux-gnu/libc.so.6
+cfi=./string/../sysdeps/x86_64/multiarch/memset-vec-unaligned-erms.S
+cfn=__memset_sse2_unaligned_erms
+calls=545 199 
+0 8040 536 1072
+0 4288 2144 536
+cfn=tessera_rl_num::rng::draws
+calls=545 0 
+0 28408 2680 3216
+0 6968 2680 1608
+cfn=tessera_rl_games::connect4::write_planes
+calls=545 0 
+0 177416 1608 45024
+0 19296 6968 3752
+
+fn=search_instructions::puct_run::__gungraun_wrapper_id_mod_sims_256::sims_256
+cfn=search_instructions::puct_run::__gungraun_wrapper_mod::puct_run
+calls=1 0 
+0 2040017 422329 332336 3729 4932 3229 425 8 1787
+
+fn=<tessera_rl_search::mcts::Mcts<tessera_rl_games::connect4::Connect4, tessera_rl_engine::masks::Masked>>::write_priors
+0 109996 43433 17733 141 932 1132 7 0 1124
 
 fn=tessera_rl_num::fp::call_opaque::<core::result::Result<(), tessera_rl_engine::error::EngineError>, tessera_rl_engine::entry::canonical<core::result::Result<(), tessera_rl_engine::error::EngineError>, <tessera_rl_engine::pool::EnvPool<tessera_rl_games::connect4::Connect4, tessera_rl_engine::masks::Masked>>::guarded<(), <tessera_rl_engine::pool::EnvPool<tessera_rl_games::connect4::Connect4, tessera_rl_engine::masks::Masked>>::step::{closure#0}>::{closure#0}>::{closure#0}>
-0 462 132 198 1 0 0 1
-cfn=<tessera_rl_engine::pool::EnvPool<tessera_rl_games::connect4::Connect4, tessera_rl_engine::masks::Masked>>::step_inner
-calls=33 0 
-0 765813 107022 130584 709 26 39 96 1
-0 132 66
-
-fn=tessera_rl_engine::validate::check_and_copy_actions::<tessera_rl_core::header::RecordHeader<2, tessera_rl_core::header::NoAdaptive>>
-0 33518 8813 2987 116 9 4 20 1
+0 32148 10893 2426 150 63 35 22 1
 cob=/usr/lib/x86_64-linux-gnu/libc.so.6
 cfi=./string/../sysdeps/x86_64/multiarch/memmove-vec-unaligned-erms.S
 cfn=memcpy@GLIBC_2.2.5
 calls=215 211 
-0 2580 645 430 2 0 2
-0 3870 1505 215 1 0 0 1
+0 2580 645 430 2 0 16
+0 3440 1290 215 1 0 0 1
 cob=/usr/lib/x86_64-linux-gnu/libc.so.6
 cfi=./string/../sysdeps/x86_64/multiarch/memmove-vec-unaligned-erms.S
 cfn=memcpy@GLIBC_2.2.5
@@ -330,365 +511,137 @@ cfi=./string/../sysdeps/x86_64/multiarch/memset-vec-unaligned-erms.S
 cfn=__memset_sse2_unaligned_erms
 calls=49 199 
 0 735 49 98
-0 6113 2093 49 10 0 0 3
+0 5468 1614 98 3 0 0 3
 cob=/usr/lib/x86_64-linux-gnu/libc.so.6
 cfi=./string/../sysdeps/x86_64/multiarch/memmove-vec-unaligned-erms.S
 cfn=memcpy@GLIBC_2.2.5
 calls=49 211 
 0 588 147 98
-0 882 392 49 7 0 0 1
+0 931 441 49 1 0 0 1
 cob=/usr/lib/x86_64-linux-gnu/libc.so.6
 cfi=./string/../sysdeps/x86_64/multiarch/memmove-vec-unaligned-erms.S
 cfn=memcpy@GLIBC_2.2.5
 calls=49 211 
 0 490 49
-0 1916 1007 430 63 0 0 2
+0 1437 958 215 2 0 0 2
 cob=/usr/lib/x86_64-linux-gnu/libc.so.6
 cfi=./string/../sysdeps/x86_64/multiarch/memset-vec-unaligned-erms.S
 cfn=__memset_sse2_unaligned_erms
 calls=215 199 
 0 3225 215 430
-0 4233 1554 33 35 0 3 3
-
-fn=tessera_rl_num::fp::call_opaque::<core::result::Result<tessera_rl_engine::record::Record<tessera_rl_games::connect4::Connect4>, tessera_rl_engine::error::EngineError>, tessera_rl_engine::entry::canonical<core::result::Result<tessera_rl_engine::record::Record<tessera_rl_games::connect4::Connect4>, tessera_rl_engine::error::EngineError>, <tessera_rl_engine::pool::EnvPool<tessera_rl_games::connect4::Connect4, tessera_rl_engine::masks::Masked>>::guarded_ref<tessera_rl_engine::record::Record<tessera_rl_games::connect4::Connect4>, <tessera_rl_engine::pool::EnvPool<tessera_rl_games::connect4::Connect4, tessera_rl_engine::masks::Masked>>::snapshot::{closure#0}>::{closure#0}>::{closure#0}>
-0 13568 5888 4608 37
-
-fn=tessera_rl_num::fp::call_opaque::<core::result::Result<(), tessera_rl_engine::error::EngineError>, tessera_rl_engine::entry::canonical<core::result::Result<(), tessera_rl_engine::error::EngineError>, <tessera_rl_engine::pool::EnvPool<tessera_rl_games::connect4::Connect4, tessera_rl_engine::masks::Masked>>::guarded<(), <tessera_rl_engine::pool::EnvPool<tessera_rl_games::connect4::Connect4, tessera_rl_engine::masks::Masked>>::restore_all::{closure#0}>::{closure#0}>::{closure#0}>
-0 7684 2210 2108 11 0 48 4
-cfn=<tessera_rl_engine::pool::EnvPool<tessera_rl_games::connect4::Connect4, tessera_rl_engine::masks::Masked>>::reobserve::<core::ops::range::Range<usize>>
-calls=34 0 
-0 575110 57970 109854 153 85 596 14
-0 680 272 238 40 0 11 1
-
-fn=tessera_rl_search::evaluator::validate_leaf
-0 143127 31293 5130 11 30 0 11 5
-
-fn=tessera_rl_engine::pool::step_chunk::<tessera_rl_games::connect4::Connect4, tessera_rl_engine::masks::Masked>
-0 22694 5660 5333 43 0 1 11
-cfn=tessera_rl_engine::pool::first_illegal
-calls=215 0 
-0 7740 1505 645 2 0 0 2
-0 3876 626 626 9 0 0 3
-cfn=tessera_rl_engine::pool::first_illegal
-calls=49 0 
-0 1764 343 147
-0 18020 4703 4243 106 0 0 7
-cfn=tessera_rl_engine::pool::clear_instance
-calls=215 0 
-0 43430 9245 6235
-0 392 147 245
-cfn=tessera_rl_engine::pool::clear_instance
-calls=49 0 
-0 9898 2107 1421
-0 13728 3696 3168 4 0 0 4
-cfn=tessera_rl_num::rng::draws
-calls=264 0 
-0 13992 1320 1584
-0 3168 1320 1056 2 0 0 2
-cfn=<tessera_rl_games::connect4::Connect4 as tessera_rl_core::env::Environment>::step
-calls=264 0 
-0 18216 2376 528 52 0 0 5
-0 23700 10432 1056 44 0 0 12
-cfn=<tessera_rl_games::connect4::Connect4 as tessera_rl_core::env::Environment>::acting
-calls=264 0 
-0 5052 626 0 37
-0 2112 792 528
-cfn=<tessera_rl_games::connect4::Connect4 as tessera_rl_core::env::Environment>::acting
-calls=264 0 
-0 15012 958 0 26
-0 12672 4488 2112 38 0 0 6
-cfn=tessera_rl_engine::pool::observe_instance::<tessera_rl_games::connect4::Connect4, tessera_rl_engine::masks::Masked>
-calls=264 0 
-0 463056 31944 89232 0 0 8
-0 2112 1287 0 34 0 0 1
-
-fn=<tessera_rl_search::mcts::Mcts<tessera_rl_games::connect4::Connect4, tessera_rl_engine::masks::Masked>>::select_canonical
-0 190 18 12 8 5 0 7
-
-fn=std::sys::backtrace::__rust_begin_short_backtrace::<fn(), ()>
-cfn=search_instructions::main
-calls=1 0 
-0 2316077 421087 331931 1724 4620 3047 349 10 1768
-
-fn=search_instructions::search::__run
-cfn=search_instructions::puct_run::__run_sims_256
-calls=1 0 
-0 2316077 421087 331931 1724 4620 3047 349 10 1768
-
-fn=<tessera_rl_search::pool::SearchPool<tessera_rl_games::connect4::Connect4, tessera_rl_engine::masks::Masked>>::stage
-0 22315 5621 1420 48 299 5 9 0 1
-cfn=core::ptr::drop_glue::<tessera_rl_search::error::SearchError>
-calls=33 0 
-0 330 66 0 63 0 0 2
-0 8138 2104 1683 8 8 95 8
-cfn=<tessera_rl_engine::pool::EnvPool<tessera_rl_games::connect4::Connect4, tessera_rl_engine::masks::Masked>>::guarded::<(), <tessera_rl_engine::pool::EnvPool<tessera_rl_games::connect4::Connect4, tessera_rl_engine::masks::Masked>>::restore_all::{closure#0}>
-calls=33 0 
-0 568392 59268 109626 174 95 614 3
-0 4054 1098 33 3 0 0 3
-cob=/usr/lib/x86_64-linux-gnu/libc.so.6
-cfi=./string/../sysdeps/x86_64/multiarch/memset-vec-unaligned-erms.S
-cfn=__memset_sse2_unaligned_erms
-calls=33 199 
-0 627 66 132 0 0 12
-0 6213 2022 396 3 0 3 3
-cfn=<tessera_rl_engine::pool::EnvPool<tessera_rl_games::connect4::Connect4, tessera_rl_engine::masks::Masked>>::step
-calls=33 0 
-0 768618 107847 131442 713 26 39 100 1
-0 4079 355 578 2 0 0 2
-cfn=<tessera_rl_engine::pool::EnvPool<tessera_rl_games::connect4::Connect4, tessera_rl_engine::masks::Masked>>::guarded_ref::<tessera_rl_engine::record::Record<tessera_rl_games::connect4::Connect4>, <tessera_rl_engine::pool::EnvPool<tessera_rl_games::connect4::Connect4, tessera_rl_engine::masks::Masked>>::snapshot::{closure#0}>
-calls=256 0 
-0 30464 11520 10240 41 0 1 4
-0 22016 9984 6400 71 4 161 7
-cob=/usr/lib/x86_64-linux-gnu/libc.so.6
-cfi=./string/../sysdeps/x86_64/multiarch/memmove-vec-unaligned-erms.S
-cfn=memcpy@GLIBC_2.2.5
-calls=256 211 
-0 2560 768 512 0 0 1
-0 41323 8200 1825 6 0 2 6
-
-fn=<tessera_rl_engine::pool::EnvPool<tessera_rl_games::connect4::Connect4, tessera_rl_engine::masks::Masked>>::step_inner
-0 693 165 297 2 1 1 1
-cfn=tessera_rl_engine::validate::check_and_copy_actions::<tessera_rl_core::header::RecordHeader<2, tessera_rl_core::header::NoAdaptive>>
-calls=33 0 
-0 60858 16880 4868 235 9 9 31 1
-0 1386 627 495 4 16 10 4
+0 4959 1901 495 36 15 0 4
 cfn=<tessera_rl_engine::outputs::Outputs>::view_all
 calls=33 0 
-0 9768 2310 4158 0 0 10
-0 594 264 231 3 0 0 3
-cob=/usr/lib/x86_64-linux-gnu/libc.so.6
-cfi=./string/../sysdeps/x86_64/multiarch/memmove-vec-unaligned-erms.S
-cfn=memcpy@GLIBC_2.2.5
-calls=33 211 
-0 6369 1947 1881
-0 33 33 33
+0 10692 2772 4620 0 0 72
+0 13233 6633 6600 715 0 0 49
 cfn=<tessera_rl_num::fp::FpGuard>::enter
 calls=33 0 
 0 429 99 99
 0 165 0 66 1 0 0 1
 cfn=tessera_rl_num::fp::call_opaque::<(), <tessera_rl_engine::pool::EnvPool<tessera_rl_games::connect4::Connect4, tessera_rl_engine::masks::Masked>>::step_inner::{closure#1}>
 calls=33 0 
-0 680931 83674 118258 397 0 9 53
+0 536335 79714 118586 857 38 9 61
 0 99 33 66
 cfn=<tessera_rl_num::fp::FpGuard as core::ops::drop::Drop>::drop
 calls=33 0 
 0 396 132 99
-0 4092 858 33 67 0 0 3
-
-fn=<tessera_rl_engine::pool::EnvPool<tessera_rl_games::connect4::Connect4, tessera_rl_engine::masks::Masked>>::guarded_ref::<tessera_rl_engine::record::Record<tessera_rl_games::connect4::Connect4>, <tessera_rl_engine::pool::EnvPool<tessera_rl_games::connect4::Connect4, tessera_rl_engine::masks::Masked>>::snapshot::{closure#0}>
-0 2816 512 1280 2 0 0 2
-cfn=<tessera_rl_num::fp::FpGuard>::enter
-calls=256 0 
-0 3328 768 768
-0 1536 0 512
-cfn=tessera_rl_num::fp::call_opaque::<core::result::Result<tessera_rl_engine::record::Record<tessera_rl_games::connect4::Connect4>, tessera_rl_engine::error::EngineError>, tessera_rl_engine::entry::canonical<core::result::Result<tessera_rl_engine::record::Record<tessera_rl_games::connect4::Connect4>, tessera_rl_engine::error::EngineError>, <tessera_rl_engine::pool::EnvPool<tessera_rl_games::connect4::Connect4, tessera_rl_engine::masks::Masked>>::guarded_ref<tessera_rl_engine::record::Record<tessera_rl_games::connect4::Connect4>, <tessera_rl_engine::pool::EnvPool<tessera_rl_games::connect4::Connect4, tessera_rl_engine::masks::Masked>>::snapshot::{closure#0}>::{closure#0}>::{closure#0}>
-calls=256 0 
-0 13568 5888 4608 37
-0 768 256 512
-cfn=<tessera_rl_num::fp::FpGuard as core::ops::drop::Drop>::drop
-calls=256 0 
-0 3072 1024 768
-0 5376 3072 1792 2 0 1 2
-
-fn=(below main)
-cob=/usr/lib/x86_64-linux-gnu/libc.so.6
-cfi=./csu/../csu/libc-start.c
-cfn=__libc_start_main@@GLIBC_2.34
-calls=1 242 
-0 2316077 421087 331931 1724 4620 3047 349 10 1768
-
-fn=std::rt::lang_start::<()>::{closure#0}
-cfn=std::sys::backtrace::__rust_begin_short_backtrace::<fn(), ()>
-calls=1 0 
-0 2316077 421087 331931 1724 4620 3047 349 10 1768
-
-fn=search_instructions::puct_run::__run_sims_256
-cfn=search_instructions::puct_run::__gungraun_wrapper_id_mod_sims_256::sims_256
-calls=1 0 
-0 2316077 421087 331931 1724 4620 3047 349 10 1768
-
-fn=<tessera_rl_engine::outputs::Outputs>::view_all
-0 6834 603 4824 2 10 138
-cob=/usr/lib/x86_64-linux-gnu/libc.so.6
-cfi=./string/../sysdeps/x86_64/multiarch/memmove-vec-unaligned-erms.S
-cfn=memcpy@GLIBC_2.2.5
-calls=69 211 
-0 4891 1273 1139 0 10 39
-0 268 0 67
-cob=/usr/lib/x86_64-linux-gnu/libc.so.6
-cfi=./string/../sysdeps/x86_64/multiarch/memmove-vec-unaligned-erms.S
-cfn=memcpy@GLIBC_2.2.5
-calls=69 211 
-0 4891 1273 1139 0 0 37
-0 2948 1541 1273 4 4 20
-
-fn=<tessera_rl_games::connect4::Connect4 as tessera_rl_core::env::Environment>::observe
-0 651776 9648 92192 5
-
-fn=search_instructions::puct_run::__gungraun_wrapper_mod::puct_run
-0 7 1 4 1 0 0 1
-cfn=<tessera_rl_num::fp::FpGuard>::enter
-calls=1 0 
-0 13 3 3
-0 6 0 2
-cfn=tessera_rl_num::fp::call_opaque::<core::result::Result<(), tessera_rl_search::error::SearchError>, <tessera_rl_search::mcts::Mcts<tessera_rl_games::connect4::Connect4, tessera_rl_engine::masks::Masked>>::run<search_instructions::Uniform>::{closure#0}>
-calls=1 0 
-0 2315405 420917 331769 1712 4587 3017 338 10 1768
-0 3 1 2 1 1 1 1
-cfn=<tessera_rl_num::fp::FpGuard as core::ops::drop::Drop>::drop
-calls=1 0 
-0 12 4 3
-0 11 5 5 1 0 1 1
-cfn=<tessera_rl_num::fp::FpGuard>::enter
-calls=1 0 
-0 13 3 3
-0 6 0 2
-cfn=tessera_rl_num::fp::call_opaque::<core::result::Result<u32, tessera_rl_search::error::SearchError>, <tessera_rl_search::mcts::Mcts<tessera_rl_games::connect4::Connect4, tessera_rl_engine::masks::Masked>>::select_action::{closure#0}>
-calls=1 0 
-0 204 23 16 8 5 0 7
-0 3 1 2
-cfn=<tessera_rl_num::fp::FpGuard as core::ops::drop::Drop>::drop
-calls=1 0 
-0 12 4 3
-0 15 6 4 1 1 0 1
-cob=/usr/lib/x86_64-linux-gnu/libc.so.6
-cfi=./string/../sysdeps/x86_64/multiarch/memmove-vec-unaligned-erms.S
-cfn=memcpy@GLIBC_2.2.5
-calls=1 211 
-0 361 115 113 0 26 28
-0 6 4
-
-fn=<tessera_rl_engine::pool::EnvPool<tessera_rl_games::connect4::Connect4, tessera_rl_engine::masks::Masked>>::reobserve::<core::ops::range::Range<usize>>
-0 680 34 476 34 0 1 2
-cfn=<tessera_rl_num::fp::FpGuard>::enter
-calls=34 0 
-0 442 102 102
-0 136 0 68
-cfn=tessera_rl_num::fp::call_opaque::<(), <tessera_rl_engine::pool::EnvPool<tessera_rl_games::connect4::Connect4, tessera_rl_engine::masks::Masked>>::reobserve<core::ops::range::Range<usize>>::{closure#0}>
-calls=34 0 
-0 572968 57426 109004 86 85 595 11
-0 102 34 68
-cfn=<tessera_rl_num::fp::FpGuard as core::ops::drop::Drop>::drop
-calls=34 0 
-0 408 136 102
-0 374 238 34 33 0 0 1
-
-fn=<tessera_rl_engine::pool::EnvPool<tessera_rl_games::connect4::Connect4, tessera_rl_engine::masks::Masked>>::guarded::<(), <tessera_rl_engine::pool::EnvPool<tessera_rl_games::connect4::Connect4, tessera_rl_engine::masks::Masked>>::restore_all::{closure#0}>
-0 429 33 198 1 14 2 1
-cfn=<tessera_rl_num::fp::FpGuard>::enter
-calls=33 0 
-0 429 99 99
-0 264 0 165 1 0 0 1
-cfn=tessera_rl_num::fp::call_opaque::<core::result::Result<(), tessera_rl_engine::error::EngineError>, tessera_rl_engine::entry::canonical<core::result::Result<(), tessera_rl_engine::error::EngineError>, <tessera_rl_engine::pool::EnvPool<tessera_rl_games::connect4::Connect4, tessera_rl_engine::masks::Masked>>::guarded<(), <tessera_rl_engine::pool::EnvPool<tessera_rl_games::connect4::Connect4, tessera_rl_engine::masks::Masked>>::restore_all::{closure#0}>::{closure#0}>::{closure#0}>
-calls=33 0 
-0 566313 58674 108900 171 81 612
-0 99 33 66
-cfn=<tessera_rl_num::fp::FpGuard as core::ops::drop::Drop>::drop
-calls=33 0 
-0 396 132 99
-0 462 297 99 1 0 0 1
-
-fn=<tessera_rl_search::pool::SearchPool<tessera_rl_games::connect4::Connect4, tessera_rl_engine::masks::Masked>>::commit_staged
-0 7580 2147 1932 6 18 2 6
-cfn=<tessera_rl_search::pool::SearchPool<tessera_rl_games::connect4::Connect4, tessera_rl_engine::masks::Masked>>::touch_node
-calls=256 0 
-0 30208 12288 7680 40 594 599 7 0 576
-0 11776 4096 1792 3 0 0 3
-cob=/usr/lib/x86_64-linux-gnu/libc.so.6
-cfi=./string/../sysdeps/x86_64/multiarch/memmove-vec-unaligned-erms.S
-cfn=memcpy@GLIBC_2.2.5
-calls=256 211 
-0 2560 768 512
-0 12296 5607 2048 4 0 5 4
+0 4653 1155 264 69 0 0 5
 
 ob=/usr/lib/x86_64-linux-gnu/libc.so.6
-fl=./csu/../sysdeps/nptl/libc_start_call_main.h
-fn=(below main)
-cob=/work/tessera/target/release/deps/search_instructions-9b9e66c0315808f6
-cfi=???
-cfn=main
-calls=1 0 
-58 2316077 421087 331931 1724 4620 3047 349 10 1768
+fl=./csu/../csu/libc-start.c
+fn=__libc_start_main@@GLIBC_2.34
+cfi=./csu/../sysdeps/nptl/libc_start_call_main.h
+cfn=(below main)
+calls=1 29 
+360 2040017 422329 332336 3729 4932 3229 425 8 1787
 
 fl=./string/../sysdeps/x86_64/multiarch/memmove-vec-unaligned-erms.S
 fn=memcpy@GLIBC_2.2.5
-211 1721
-217 1721
-218 1721
-220 169 169 0 0 2
-221 169
-222 169
-308 1552 0 0 1
-309 1552
-311 784
-315 784
+211 1944
+217 1944
+218 1944
+220 136 136 0 0 2
+221 136 0 0 29
+222 136
+308 1808 0 0 1
+309 1808
+311 1040
+315 1040
 316 264
 317 264
 325 264 264
-331 520 520 0 1
-332 520 520
-333 520 0 520 0 0 2
-334 520 0 520
-335 520 520
-364 768 768 0 0 42
+331 776 776 0 1
+332 776 776
+333 776 0 776 0 0 52
+334 776 0 776
+335 776 776
+364 768 768 0 0 37
 365 768 768
-366 768 0 768 0 0 46 0 0 32
+366 768 0 768 0 0 43 0 0 32
 367 768 0 768
 368 768 768
-392 169
-393 169
-417 169
-418 169
-422 169
-424 169
-428 169 169 0 0 11
-429 169
-440 169
-443 169
-445 169
-447 169
-451 169
-452 169
-461 169 169
-462 169 169
-464 169
-466 169
-467 169 169 0 0 1
-468 169 169 0 0 1
-471 169
-473 169
-475 169
-477 338
-483 169 169 0 0 1
-484 169 169
-485 169 169 0 0 1
-486 169 169
-487 169
-488 169 0 169 0 0 8 0 0 1
-489 169 0 169
-490 169 0 169
-491 169 0 169 0 0 11
-492 169
-493 169
-494 169
-483 752 752 0 0 61
-484 752 752
-485 752 752 0 0 22
-486 752 752
-487 752
-488 752 0 752 0 0 88 0 0 62
-489 752 0 752
-490 752 0 752
-491 752 0 752 0 0 34
-492 752
-493 752
-494 752
-496 169 0 169 0 0 26
-497 169 0 169
-498 169 0 169
-499 169 0 169
-501 169 0 169 0 0 1
-505 169 169
+392 136 0 0 33
+393 136
+417 136 0 0 33
+418 136
+422 136
+424 136
+428 136 136 0 0 28
+429 136
+440 136
+443 136 0 0 32
+445 136
+447 136
+451 136
+452 136
+461 136 136
+462 136 136
+464 136
+466 136
+467 136 136 0 0 1
+468 136 136
+471 136
+473 136
+475 136
+477 272
+483 136 136 0 32 1
+484 136 136
+485 136 136
+486 136 136 0 0 1
+487 136
+488 136 0 136 0 0 2 0 0 2
+489 136 0 136 0 0 28
+490 136 0 136
+491 136 0 136
+492 136
+493 136
+494 136
+483 365 365 0 0 61
+484 365 365
+485 365 365
+486 365 365 0 0 28
+487 365
+488 365 0 365 0 0 97 0 0 69
+489 365 0 365 0 0 53
+490 365 0 365
+491 365 0 365
+492 365
+493 365
+494 365
+496 136 0 136 0 0 23
+497 136 0 136
+498 136 0 136
+499 136 0 136
+501 136 0 136 0 0 1
+505 136 136
+
+fl=./csu/../sysdeps/nptl/libc_start_call_main.h
+fn=(below main)
+cob=/__w/tessera-rl/tessera-rl/target/bench-gate/deps/search_instructions-89c6176f5cdb8ab0
+cfi=???
+cfn=main
+calls=1 0 
+58 2040017 422329 332336 3729 4932 3229 425 8 1787
 
 fl=./string/../sysdeps/x86_64/multiarch/memset-vec-unaligned-erms.S
 fn=__memset_sse2_unaligned_erms
@@ -700,22 +653,22 @@ fn=__memset_sse2_unaligned_erms
 221 65 0 65
 222 65 0 65
 224 65 65
-229 1137 1137 0 0 8
+229 1137 1137 0 0 2
 230 1137
-236 1137 0 1137 0 0 75
-237 1137 0 1137 0 0 56
+236 1137 0 1137 0 0 43
+237 1137 0 1137 0 0 26
 249 1137
 252 1137
 253 1137
-265 1072 0 1072 0 0 33
-266 1072 0 1072 0 0 52
+265 1072 0 1072 0 0 20
+266 1072 0 1072 0 0 18
 279 1072
 280 1072
 282 1072
 300 1072 0 1072
 301 1072 0 1072
-302 1072 0 1072 0 0 24
-303 1072 0 1072 0 0 50
+302 1072 0 1072 0 0 17
+303 1072 0 1072 0 0 18
 308 1072 1072
 354 4553
 356 4553
@@ -727,18 +680,11 @@ fn=__memset_sse2_unaligned_erms
 396 537 0 537 0 0 7
 397 537 0 537
 399 537 537
-410 1336 0 1336 0 0 4
-411 1336 0 1336
+410 1336 0 1336 0 0 14
+411 1336 0 1336 0 0 15
 413 1336 1336
-424 2680 0 2680 0 0 25
+424 2680 0 2680 0 0 47
 425 2680 0 2680
 427 2680 2680
 
-fl=./csu/../csu/libc-start.c
-fn=__libc_start_main@@GLIBC_2.34
-cfi=./csu/../sysdeps/nptl/libc_start_call_main.h
-cfn=(below main)
-calls=1 29 
-360 2316077 421087 331931 1724 4620 3047 349 10 1768
-
-totals: 2316077 421087 331931 1724 4620 3047 349 10 1768
+totals: 2040017 422329 332336 3729 4932 3229 425 8 1787

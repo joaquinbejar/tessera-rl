@@ -117,9 +117,17 @@ unreachable = "deny"
 unwrap_used = "deny"
 
 # Release wheels (docs/reviews/pgo-wheels-design.md). `release` itself, which
-# the tests, the benches and the instruction baseline use, does not change.
+# the tests and the wall-clock benches use, does not change.
 [profile.wheel]
 inherits = "release"
 lto = "fat"
 codegen-units = 1
 panic = "unwind"
+
+# The instruction-count gate (ADR-0059): one codegen unit, so a bench's
+# instruction count does not depend on how unrelated code partitions its
+# crate. No LTO. scripts/gungraun.sh builds the gate's benches with it and
+# checks the rustc flags; Criterion's wall-clock benches keep `bench`.
+[profile.bench-gate]
+inherits = "bench"
+codegen-units = 1
