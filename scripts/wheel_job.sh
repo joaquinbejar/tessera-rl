@@ -27,6 +27,13 @@ case "$profile" in
     *) echo "wheel_job: profile must be release or wheel, got '$profile'" >&2; exit 2 ;;
 esac
 : "${WHEEL_RUN:?the per-run directory}"
+# The ONNX evaluator (ADR-0057 section 6): every wheel built here, W0 included,
+# has the extension's `onnx` feature, on the targets ADR-0057 enables (Linux
+# glibc and macOS). Windows is not enabled until its loading rows exist.
+case "$target" in
+    *-unknown-linux-gnu | *-apple-darwin) features=(--features onnx) ;;
+    *) echo "wheel_job: the onnx feature is not enabled for $target (ADR-0057)" >&2; exit 2 ;;
+esac
 
 # The build environment is the script's own: an ambient flag, target, profile setting,
 # compiler or wrapper would change what is built without leaving a trace, so it is refused,
@@ -75,8 +82,8 @@ fetch "https://github.com/astral-sh/uv/releases/download/$UV_VERSION/uv-$target.
     "$WHEEL_RUN/uv.tar.gz" "$uv_sha"
 tar -xzf "$WHEEL_RUN/uv.tar.gz" -C "$WHEEL_RUN/bin" --strip-components=1
 
-args=(--profile "$profile" --locked --target "$target" --out dist)
-w0_args=(--release --locked --target "$target" --out "$WHEEL_RUN/w0-dist")
+args=(--profile "$profile" --locked --target "$target" --out dist "${features[@]}")
+w0_args=(--release --locked --target "$target" --out "$WHEEL_RUN/w0-dist" "${features[@]}")
 [ -z "$compatibility" ] || { args+=(--compatibility "$compatibility"); w0_args+=(--compatibility "$compatibility"); }
 if [ "$profile" = wheel ]; then
     # W0 of this commit, built here, only for the determinism comparison.
@@ -97,7 +104,20 @@ uv pip install --python "$venv/bin/python" dist/*.whl numpy==2.4.6 xxhash==4.0.2
 mkdir -p "$WHEEL_RUN/run"
 cd "$WHEEL_RUN/run"
 # Every check runs, and its exit status is recorded against the wheel's sha256.
-anchor=0 suite=0 num=0
+anchor=0 suite=0 num=0 onnx=0
+# The installed wheel has the ONNX evaluator: onnx_load on a missing path is
+# the missing-library error, not "no ONNX evaluator". Nothing is loaded (the
+# path never resolves), and telemetry is off anyway.
+ORT_DISABLE_TELEMETRY=1 "$venv/bin/python" -I -c '
+import tessera_rl as t
+try:
+    t._native.onnx_load(library="/nonexistent/tessera-onnx/libonnxruntime", accept_telemetry=False)
+except t.OnnxError as e:
+    assert "no ONNX Runtime library" in str(e), e
+    print("wheel_job: onnx smoke: the wheel has the ONNX evaluator; nothing was loaded")
+else:
+    raise SystemExit("wheel_job: onnx_load succeeded on a missing path")
+' || onnx=$?
 nice -n 10 "$venv/bin/python" -I "$root/tools/wheel_golden.py" \
     --actions "$WHEEL_RUN/golden-actions" --out "$root/golden-report.json" || anchor=$?
 # test_bench.py is the only exclusion: it builds the bench runner with cargo and
@@ -127,6 +147,6 @@ num_profile=""
 [ "$profile" = release ] || num_profile="$profile"
 WHEEL_CARGO_PROFILE="$num_profile" scripts/wheel_num_tests.sh || num=$?
 "$venv/bin/python" -I tools/pgo/checks.py --wheel "$wheel" --out checks.json \
-    golden_anchor="$anchor" python_suite="$suite" num_tests="$num"
-echo "wheel_job: profile=$profile anchor=$anchor suite=$suite num=$num compare=$compare"
-[ "$anchor" -eq 0 ] && [ "$suite" -eq 0 ] && [ "$num" -eq 0 ] && [ "$compare" -eq 0 ]
+    golden_anchor="$anchor" python_suite="$suite" num_tests="$num" onnx_smoke="$onnx"
+echo "wheel_job: profile=$profile anchor=$anchor suite=$suite num=$num compare=$compare onnx=$onnx"
+[ "$anchor" -eq 0 ] && [ "$suite" -eq 0 ] && [ "$num" -eq 0 ] && [ "$compare" -eq 0 ] && [ "$onnx" -eq 0 ]

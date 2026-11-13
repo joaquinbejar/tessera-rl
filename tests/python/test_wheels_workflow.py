@@ -111,10 +111,10 @@ def test_wheels_other_targets_keep_the_default_release_profile():
 
 
 def test_wheel_job_builds_with_the_named_profile_only():
-    assert 'args=(--profile "$profile" --locked --target "$target" --out dist)' in JOB
+    assert 'args=(--profile "$profile" --locked --target "$target" --out dist "${features[@]}")' in JOB
     # The only --release build is W0, for the comparison, and only under the wheel profile.
     assert JOB.count("--release --locked --target") == 1
-    assert 'w0_args=(--release --locked --target "$target" --out "$WHEEL_RUN/w0-dist")' in JOB
+    assert 'w0_args=(--release --locked --target "$target" --out "$WHEEL_RUN/w0-dist" "${features[@]}")' in JOB
     assert re.search(r'^if \[ "\$profile" = wheel \]; then\n.*\n    nice -n 10 uvx [^\n]* build "\$\{w0_args\[@\]\}"\nfi$', JOB, re.M)
     assert re.search(r'^    release \| wheel\) ;;$', JOB, re.M)
 
@@ -144,3 +144,9 @@ def test_wheel_job_suite_names_its_skips():
     # -rs: every skipped test is listed with its reason in the job log.
     suite = re.search(r'^nice -n 10 "\$venv/bin/python" -I -m pytest (.*)$', JOB, re.M).group(1)
     assert suite.split()[:3] == ["-q", "-rs", "-p"]
+
+
+def test_wheel_job_enables_onnx_only_on_linux_glibc_and_macos():
+    assert re.search(r'^    \*-unknown-linux-gnu \| \*-apple-darwin\) features=\(--features onnx\) ;;$', JOB, re.M)
+    # No Windows wheel job exists, so no wheel is built for Windows with it.
+    assert not re.search(r"runs-on: .*windows", WORKFLOW)

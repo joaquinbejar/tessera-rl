@@ -5,6 +5,7 @@ section 7 item 2). No network, no build."""
 
 import hashlib
 import io
+import json
 import os
 import shutil
 import stat
@@ -29,6 +30,8 @@ def _tool(path: Path, body: str) -> None:
 
 PY = """#!/bin/sh
 echo "py $0 $*" >> "$FAKE_LOG"
+# tools/pgo/checks.py is the real one: checks.json is what the job records.
+case " $* " in *"/checks.py "*) shift; exec python3 -I "$@" ;; esac
 prev=""
 for a in "$@"; do [ "$prev" = --out ] && echo "{}" > "$a"; prev="$a"; done
 case " $* " in *" compare "*) exit "${FAKE_COMPARE_EXIT:-0}" ;; esac
@@ -59,6 +62,8 @@ def run(tmp_path: Path, *profile: str, compare_exit: int = 0):
         d.mkdir(parents=True)
     for name in ("wheel_job.sh", "wheel_num_tests.sh"):
         shutil.copy2(ROOT / "scripts" / name, root / "scripts" / name)
+    (root / "tools" / "pgo").mkdir(parents=True)
+    shutil.copy2(ROOT / "tools" / "pgo" / "checks.py", root / "tools" / "pgo" / "checks.py")
     (payload / "rustup-init").write_text(f"#!/bin/sh\necho rustup-init >> {log}\n")
     _tool(payload / "py", PY.split("\n", 1)[1])
     (payload / "uv.tar.gz").write_bytes(_uv_tarball(log, payload))
@@ -116,3 +121,36 @@ def test_wheel_job_release_profile_builds_one_wheel_and_no_comparison(tmp_path, 
     assert [x for x in lines if x.startswith("cargo test -p tessera-rl-num")] == [
         "cargo test -p tessera-rl-num --release --all-features --locked"]
     assert "profile=release anchor=0 suite=0 num=0 compare=0" in p.stdout
+
+
+@pytest.mark.parametrize("profile", [("release",), ("wheel",)], ids=["release", "wheel"])
+def test_wheel_job_builds_every_wheel_with_the_onnx_feature(tmp_path, profile):
+    p, lines, root, wr = run(tmp_path, *profile)
+    assert p.returncode == 0, p.stderr
+    builds = _builds(lines)
+    assert builds and all(" --features onnx" in b for b in builds), builds
+    text = "\n".join(lines)
+    # The smoke check: the installed wheel's python, -I -c, calling onnx_load once.
+    assert text.count("t._native.onnx_load(") == 1
+    assert "/venv/bin/python -I -c" in text.split("t._native.onnx_load(")[0].rsplit("\npy ", 1)[-1]
+    assert "onnx=0" in p.stdout
+    checks = json.loads((root / "checks.json").read_text())
+    assert checks["checks"]["onnx_smoke"] == 0, checks
+
+
+@pytest.mark.parametrize("target", ["x86_64-pc-windows-msvc", "x86_64-unknown-linux-musl"])
+def test_wheel_job_refuses_the_onnx_feature_on_other_targets(tmp_path, target):
+    """Run for real: exit 2 naming the target, before any download (the fake
+    curl leaves a marker if it is ever called)."""
+    root, fake, marker = tmp_path / "root", tmp_path / "fake", tmp_path / "curl-called"
+    (root / "scripts").mkdir(parents=True)
+    fake.mkdir()
+    shutil.copy2(ROOT / "scripts" / "wheel_job.sh", root / "scripts" / "wheel_job.sh")
+    _tool(fake / "curl", f"touch {marker}\nexit 0\n")
+    env = {k: v for k, v in os.environ.items() if k not in AMBIENT and not k.startswith(("CARGO_PROFILE_", "CARGO_TARGET_"))}
+    env.update(PATH=f"{fake}:{os.environ['PATH']}", WHEEL_RUN=str(tmp_path / "wr"))
+    p = subprocess.run(["bash", "scripts/wheel_job.sh", target, "", "0" * 64, "0" * 64, "release"],
+                       env=env, cwd=root, capture_output=True, text=True, check=False)
+    assert p.returncode == 2, (p.returncode, p.stderr)
+    assert f"the onnx feature is not enabled for {target}" in p.stderr
+    assert not marker.exists(), "curl was called before the refusal"
