@@ -322,16 +322,6 @@ dual licensed as above, without any additional terms or conditions.
 <!-- related-projects:start -->
 ## Related projects
 
-Repositories by the same author that this project depends on, and repositories that depend on it.
-
-### Depends on
-
-None: Tessera depends on no other repository by the same author.
-
-### Used by (planned)
-
-| Repository | Description |
-|------------|-------------|
-| [market-maker-rs](https://github.com/joaquinbejar/market-maker-rs) | Market making library. A single-agent Tessera environment adapter is planned there; it does not depend on Tessera yet. |
+No other repositories by the same author depend on this project, and it depends on none of them. See all repositories at https://github.com/joaquinbejar?tab=repositories.
 
 <!-- related-projects:end -->
