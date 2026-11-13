@@ -393,9 +393,9 @@ fn span(a0: Fx32, a1: Fx32, world: i32) -> (usize, usize) {
     (index(c0), index(c1.max(c0)))
 }
 
+/// `bytes` is zero on entry (ADR-0058): only the lit pixels are written.
 fn draw_pixels(v: &View, bytes: &mut [u8]) {
     let side = PIXELS as usize;
-    bytes.fill(0);
     let mut paint = |x0: Fx32, x1: Fx32, y0: Fx32, y1: Fx32, shade: u8| {
         let (c0, c1) = span(x0, x1, WIDTH);
         let (r0, r1) = span(y0, y1, HEIGHT);
