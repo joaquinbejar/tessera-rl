@@ -281,12 +281,16 @@ jobs:
         with:
           # Self-hosted runners: the post step would delete rustup from ~/.cargo/bin.
           cache-bin: "false"
-      # The runner service's PATH may lack pipx's bin directory: put it on
-      # the PATH of the later steps, then check that uv is found.
+      # uv 0.13.6 is installed on the runner by pipx; nothing is installed
+      # here. The runner service's PATH may lack pipx's bin directory: put
+      # that directory on the PATH of the later steps, only if the uv in it
+      # is exactly the pinned 0.13.6 (fail closed otherwise).
       - run: |
-          pipx install uv==0.13.6
-          echo "$(pipx environment --value PIPX_BIN_DIR)" >> "$GITHUB_PATH"
-      - run: command -v uv >/dev/null || { echo "uv not on PATH after pipx install" >&2; exit 1; }
+          d=$(pipx environment --value PIPX_BIN_DIR)
+          v=$("$d/uv" --version) || { echo "no runnable uv in pipx's bin directory $d" >&2; exit 1; }
+          case "$v" in "uv 0.13.6" | "uv 0.13.6 "*) ;; *) echo "uv in $d is '$v', not the pinned uv 0.13.6" >&2; exit 1 ;; esac
+          echo "$d" >> "$GITHUB_PATH"
+      - run: command -v uv >/dev/null || { echo "uv not on PATH" >&2; exit 1; }
       # Self-hosted: checkout's git clean deletes the extension module that
       # the editable build put in python/tessera_rl, and uv's persistent
       # cache installs the project again without rebuilding it. Build it
@@ -317,12 +321,16 @@ jobs:
         with:
           # Self-hosted runners: the post step would delete rustup from ~/.cargo/bin.
           cache-bin: "false"
-      # The runner service's PATH may lack pipx's bin directory: put it on
-      # the PATH of the later steps, then check that uv is found.
+      # uv 0.13.6 is installed on the runner by pipx; nothing is installed
+      # here. The runner service's PATH may lack pipx's bin directory: put
+      # that directory on the PATH of the later steps, only if the uv in it
+      # is exactly the pinned 0.13.6 (fail closed otherwise).
       - run: |
-          pipx install uv==0.13.6
-          echo "$(pipx environment --value PIPX_BIN_DIR)" >> "$GITHUB_PATH"
-      - run: command -v uv >/dev/null || { echo "uv not on PATH after pipx install" >&2; exit 1; }
+          d=$(pipx environment --value PIPX_BIN_DIR)
+          v=$("$d/uv" --version) || { echo "no runnable uv in pipx's bin directory $d" >&2; exit 1; }
+          case "$v" in "uv 0.13.6" | "uv 0.13.6 "*) ;; *) echo "uv in $d is '$v', not the pinned uv 0.13.6" >&2; exit 1 ;; esac
+          echo "$d" >> "$GITHUB_PATH"
+      - run: command -v uv >/dev/null || { echo "uv not on PATH" >&2; exit 1; }
       - run: make puffer-test
 
   # Instruction-count gate (ADR-0025 level 1): gungraun against the
