@@ -12,7 +12,9 @@
 # environment with the `onnx` feature (`MATURIN_PEP517_ARGS="--features
 # onnx" uv sync ...`), without the [onnx] extra: the library is pinned only
 # by fetch_onnxruntime.py, so the tests that need the onnxruntime package
-# skip. The container sees the workspace, the environment and its Python
+# skip; scripts/check_onnx_skips.py then fails the run unless exactly those
+# two skip, with that reason, so a real-library test that turns into a skip
+# cannot pass silently. The container sees the workspace, the environment and its Python
 # installation read-only, at their host paths, runs as the invoking uid, and
 # is capped at 2 CPUs and 4 GiB. The image must already be present: it is
 # never pulled, and a missing Docker or image is exit 1.
@@ -52,4 +54,6 @@ docker run --rm --pull never --network none --read-only \
   -v "$python_root":"$python_root":ro \
   -v "$(dirname "$lib")":/ort:ro \
   -w "$PWD" "$image" \
-  sh -ec 'mkdir -p "$HOME" && "'"$venv"'/bin/python" -m pytest -q -rA -p no:cacheprovider tests/python/test_onnx_evaluator.py'
+  sh -ec 'mkdir -p "$HOME"
+    "'"$venv"'/bin/python" -m pytest -q -rA -p no:cacheprovider --junitxml=/tmp/onnx-junit.xml tests/python/test_onnx_evaluator.py
+    "'"$venv"'/bin/python" -I scripts/check_onnx_skips.py /tmp/onnx-junit.xml'

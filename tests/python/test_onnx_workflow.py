@@ -168,3 +168,80 @@ def test_onnx_python_container_is_ephemeral_offline_read_only_and_capped():
     assert '--user "$(id -u):$(id -g)"' in run
     assert '-v "$PWD":"$PWD":ro' in run
     assert 'docker image inspect "$image"' in PY_RUNNER
+
+
+def test_onnx_python_container_checks_the_skips():
+    run = PY_RUNNER.split("docker run", 1)[1]
+    assert "--junitxml=/tmp/onnx-junit.xml" in run
+    assert "scripts/check_onnx_skips.py /tmp/onnx-junit.xml" in run
+
+
+def _junit(tmp_path, cases):
+    body = "".join(
+        f'<testcase classname="t" name="{n}">'
+        + (f'<skipped type="pytest.skip" message="{m}"/>' if m is not None else "")
+        + "</testcase>"
+        for n, m in cases
+    )
+    p = tmp_path / "junit.xml"
+    p.write_text(f'<testsuites><testsuite name="pytest">{body}</testsuite></testsuites>')
+    return p
+
+
+def _check(path):
+    import subprocess
+    import sys
+
+    return subprocess.run(
+        [sys.executable, "-I", str(ROOT / "scripts" / "check_onnx_skips.py"), str(path)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+def _reason():
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("c", ROOT / "scripts" / "check_onnx_skips.py")
+    m = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(m)
+    return m.REASON
+
+
+EXPECTED_SKIPS = [
+    "test_onnx_default_library_lookup_never_imports_onnxruntime",
+    "test_onnx_works_next_to_the_onnxruntime_package",
+]
+
+
+def test_check_onnx_skips_exactly_the_two_passes(tmp_path):
+    r = _reason()
+    cases = [("test_a", None)] + [(n, r) for n in EXPECTED_SKIPS]
+    assert _check(_junit(tmp_path, cases)).returncode == 0
+
+
+def test_check_onnx_skips_an_extra_skip_fails(tmp_path):
+    r = _reason()
+    cases = [("test_a", "opens the real ONNX Runtime")] + [(n, r) for n in EXPECTED_SKIPS]
+    out = _check(_junit(tmp_path, cases))
+    assert out.returncode == 1 and "unexpected skip: test_a" in out.stderr
+
+
+def test_check_onnx_skips_a_missing_skip_fails(tmp_path):
+    r = _reason()
+    cases = [("test_a", None), (EXPECTED_SKIPS[0], r), (EXPECTED_SKIPS[1], None)]
+    out = _check(_junit(tmp_path, cases))
+    assert out.returncode == 1 and f"expected skip missing: {EXPECTED_SKIPS[1]}" in out.stderr
+
+
+def test_check_onnx_skips_another_reason_fails(tmp_path):
+    cases = [(n, "something else") for n in EXPECTED_SKIPS]
+    assert _check(_junit(tmp_path, cases)).returncode == 1
+
+
+def test_check_onnx_skips_reason_matches_the_test_file():
+    text = (ROOT / "tests" / "python" / "test_onnx_evaluator.py").read_text()
+    flat = " ".join(text.split())
+    assert '"needs the onnxruntime package ([onnx] extra); CI pins the library only, by sha256, "' in flat
+    assert '"through scripts/fetch_onnxruntime.py"' in flat
