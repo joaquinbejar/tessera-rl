@@ -105,7 +105,7 @@ nice -n 10 "$venv/bin/python" -I "$root/tools/wheel_golden.py" \
 # wheel surface and is tested in CI's python job. test_pilot, test_loop and
 # test_gate skip here because the venv has no torch: adding torch to it needs a
 # decision about them.
-nice -n 10 "$venv/bin/python" -I -m pytest -q -p no:cacheprovider "$root/tests/python" --rootdir "$root" \
+nice -n 10 "$venv/bin/python" -I -m pytest -q -rs -p no:cacheprovider "$root/tests/python" --rootdir "$root" \
     --ignore="$root/tests/python/test_bench.py" || suite=$?
 nice -n 10 "$venv/bin/python" -I "$root/tools/pgo/determinism.py" record --wheel "$wheel" --out "$root/determinism.json"
 

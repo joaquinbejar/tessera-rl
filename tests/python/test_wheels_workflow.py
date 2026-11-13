@@ -138,3 +138,9 @@ def test_wheels_x86_64_artifact_is_named_with_profile_commit_and_sha256():
     for report in ("determinism-w0.json", "compare.json"):
         assert report in linux.split("upload-artifact@", 1)[1]
         assert report in re.search(r"run: (rm -rf .*)", linux).group(1)
+
+
+def test_wheel_job_suite_names_its_skips():
+    # -rs: every skipped test is listed with its reason in the job log.
+    suite = re.search(r'^nice -n 10 "\$venv/bin/python" -I -m pytest (.*)$', JOB, re.M).group(1)
+    assert suite.split()[:3] == ["-q", "-rs", "-p"]
