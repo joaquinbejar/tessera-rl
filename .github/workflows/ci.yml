@@ -273,6 +273,9 @@ jobs:
       # x86-64 always implements trapped FP exceptions: the unmasked FP
       # boundary test must check the trap enables here, never skip (#225).
       TESSERA_EXPECT_FP_TRAPS: "1"
+      # The gungraun-bless run blocks are checked under dash here; a missing
+      # dash fails instead of skipping (tests/python/test_gungraun_bless_workflow.py).
+      TESSERA_REQUIRE_DASH: "1"
     steps:
       # Two hosts carry linux-x64: the log names the one that ran this job.
       - run: hostname && grep -m1 'model name' /proc/cpuinfo

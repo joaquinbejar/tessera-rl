@@ -95,5 +95,15 @@ def test_ci_python_job_expects_fp_traps():
     assert re.search(r'^    env:\n(?:      .*\n)*?      TESSERA_EXPECT_FP_TRAPS: "1"$', JOBS["python"], re.M)
 
 
+def test_ci_python_job_requires_dash():
+    # The bless workflow's run blocks are checked under dash there, never skipped.
+    assert re.search(r'^    env:\n(?:      .*\n)*?      TESSERA_REQUIRE_DASH: "1"$', JOBS["python"], re.M)
+
+
+def test_ci_only_the_python_job_requires_dash():
+    assert [j for j, body in JOBS.items() if "TESSERA_REQUIRE_DASH" in body] == ["python"]
+    assert "TESSERA_REQUIRE_DASH" not in WHEELS
+
+
 def test_ci_only_the_python_job_expects_fp_traps():
     assert [j for j, body in JOBS.items() if "TESSERA_EXPECT_FP_TRAPS" in body] == ["python"]

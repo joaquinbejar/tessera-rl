@@ -6,7 +6,6 @@ import os
 import re
 import shutil
 import subprocess
-import sys
 from pathlib import Path
 
 import pytest
@@ -229,11 +228,14 @@ def test_gungraun_bless_run_blocks_have_no_bashism():
 
 
 def _dash():
+    # Required where the job says so (ci.yml's python job sets TESSERA_REQUIRE_DASH=1):
+    # there a missing dash fails. Elsewhere, for example the wheel suite in the
+    # manylinux image, which has no dash, these checks skip.
     found = shutil.which("dash")
-    if found is None and sys.platform.startswith("linux"):
+    if found is None and os.environ.get("TESSERA_REQUIRE_DASH") == "1":
         pytest.fail("dash is not installed: the run blocks cannot be checked as the runner runs them")
     if found is None:
-        pytest.skip("no dash on this host")
+        pytest.skip("no dash on this host (set TESSERA_REQUIRE_DASH=1 to require it)")
     return found
 
 
