@@ -147,6 +147,6 @@ num_profile=""
 [ "$profile" = release ] || num_profile="$profile"
 WHEEL_CARGO_PROFILE="$num_profile" scripts/wheel_num_tests.sh || num=$?
 "$venv/bin/python" -I tools/pgo/checks.py --wheel "$wheel" --out checks.json \
-    golden_anchor="$anchor" python_suite="$suite" num_tests="$num"
+    golden_anchor="$anchor" python_suite="$suite" num_tests="$num" onnx_smoke="$onnx"
 echo "wheel_job: profile=$profile anchor=$anchor suite=$suite num=$num compare=$compare onnx=$onnx"
 [ "$anchor" -eq 0 ] && [ "$suite" -eq 0 ] && [ "$num" -eq 0 ] && [ "$compare" -eq 0 ] && [ "$onnx" -eq 0 ]

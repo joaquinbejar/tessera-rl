@@ -5,6 +5,7 @@ section 7 item 2). No network, no build."""
 
 import hashlib
 import io
+import json
 import os
 import shutil
 import stat
@@ -29,6 +30,8 @@ def _tool(path: Path, body: str) -> None:
 
 PY = """#!/bin/sh
 echo "py $0 $*" >> "$FAKE_LOG"
+# tools/pgo/checks.py is the real one: checks.json is what the job records.
+case " $* " in *"/checks.py "*) shift; exec python3 -I "$@" ;; esac
 prev=""
 for a in "$@"; do [ "$prev" = --out ] && echo "{}" > "$a"; prev="$a"; done
 case " $* " in *" compare "*) exit "${FAKE_COMPARE_EXIT:-0}" ;; esac
@@ -59,6 +62,8 @@ def run(tmp_path: Path, *profile: str, compare_exit: int = 0):
         d.mkdir(parents=True)
     for name in ("wheel_job.sh", "wheel_num_tests.sh"):
         shutil.copy2(ROOT / "scripts" / name, root / "scripts" / name)
+    (root / "tools" / "pgo").mkdir(parents=True)
+    shutil.copy2(ROOT / "tools" / "pgo" / "checks.py", root / "tools" / "pgo" / "checks.py")
     (payload / "rustup-init").write_text(f"#!/bin/sh\necho rustup-init >> {log}\n")
     _tool(payload / "py", PY.split("\n", 1)[1])
     (payload / "uv.tar.gz").write_bytes(_uv_tarball(log, payload))
@@ -129,18 +134,23 @@ def test_wheel_job_builds_every_wheel_with_the_onnx_feature(tmp_path, profile):
     assert text.count("t._native.onnx_load(") == 1
     assert "/venv/bin/python -I -c" in text.split("t._native.onnx_load(")[0].rsplit("\npy ", 1)[-1]
     assert "onnx=0" in p.stdout
+    checks = json.loads((root / "checks.json").read_text())
+    assert checks["checks"]["onnx_smoke"] == 0, checks
 
 
-def test_wheel_job_refuses_the_onnx_feature_on_other_targets(tmp_path):
-    root = tmp_path / "root"
+@pytest.mark.parametrize("target", ["x86_64-pc-windows-msvc", "x86_64-unknown-linux-musl"])
+def test_wheel_job_refuses_the_onnx_feature_on_other_targets(tmp_path, target):
+    """Run for real: exit 2 naming the target, before any download (the fake
+    curl leaves a marker if it is ever called)."""
+    root, fake, marker = tmp_path / "root", tmp_path / "fake", tmp_path / "curl-called"
     (root / "scripts").mkdir(parents=True)
-    shutil.copy2(ROOT / "scripts" / "wheel_job.sh", root / "scripts" / "wheel_job.sh")
-    env = {k: v for k, v in os.environ.items() if k not in AMBIENT and not k.startswith(("CARGO_PROFILE_", "CARGO_TARGET_"))}
-    env["WHEEL_RUN"] = str(tmp_path / "wr")
-    fake = tmp_path / "fake"
     fake.mkdir()
-    _tool(fake / "curl", "exit 1\n")
-    env["PATH"] = f"{fake}:{os.environ['PATH']}"
-    script = (root / "scripts" / "wheel_job.sh").read_text()
-    # The target check comes before any download.
-    assert script.index('case "$target" in') < script.index("fetch \"https://static.rust-lang.org")
+    shutil.copy2(ROOT / "scripts" / "wheel_job.sh", root / "scripts" / "wheel_job.sh")
+    _tool(fake / "curl", f"touch {marker}\nexit 0\n")
+    env = {k: v for k, v in os.environ.items() if k not in AMBIENT and not k.startswith(("CARGO_PROFILE_", "CARGO_TARGET_"))}
+    env.update(PATH=f"{fake}:{os.environ['PATH']}", WHEEL_RUN=str(tmp_path / "wr"))
+    p = subprocess.run(["bash", "scripts/wheel_job.sh", target, "", "0" * 64, "0" * 64, "release"],
+                       env=env, cwd=root, capture_output=True, text=True, check=False)
+    assert p.returncode == 2, (p.returncode, p.stderr)
+    assert f"the onnx feature is not enabled for {target}" in p.stderr
+    assert not marker.exists(), "curl was called before the refusal"
