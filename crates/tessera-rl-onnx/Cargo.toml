@@ -18,12 +18,20 @@ categories.workspace = true
 default = []
 # ONNX Runtime through `ort` with dynamic loading (ADR-0057 section 6).
 # Off by default: without it the crate has no C dependency.
-onnx = ["dep:ort", "dep:libloading"]
+onnx = ["dep:ort", "dep:libloading", "dep:sha2", "dep:tessera-rl-core", "dep:tessera-rl-engine", "dep:tessera-rl-num", "dep:tessera-rl-search"]
 
 [dependencies]
 thiserror.workspace = true
 libloading = { workspace = true, optional = true }
 ort = { workspace = true, optional = true }
+sha2 = { workspace = true, optional = true }
+tessera-rl-core = { workspace = true, optional = true }
+tessera-rl-engine = { workspace = true, optional = true }
+tessera-rl-num = { workspace = true, optional = true }
+tessera-rl-search = { workspace = true, optional = true }
+
+[dev-dependencies]
+tessera-rl-games.workspace = true
 
 [lints]
 workspace = true
@@ -31,4 +39,8 @@ workspace = true
 # The loader is process-wide: each case runs in a child process of its own.
 [[test]]
 name = "loader"
+required-features = ["onnx"]
+
+[[test]]
+name = "evaluator"
 required-features = ["onnx"]

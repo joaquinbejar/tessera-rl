@@ -59,3 +59,14 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
+
+## sha2 0.10 (crates.io dependency, not vendored)
+
+- **Where:** a dependency of `crates/tessera-rl-onnx` behind its optional
+  `onnx` feature, with `default-features = false`; nothing is copied into
+  this repository.
+- **Upstream:** <https://github.com/RustCrypto/hashes>, crate `sha2` on
+  crates.io.
+- **License:** MIT OR Apache-2.0.
+- **Use:** the content sha256 of the ONNX Runtime library and of the model
+  bytes, the identity and provenance of ADR-0057 sections 3 and 4.

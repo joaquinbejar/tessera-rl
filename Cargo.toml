@@ -78,7 +78,11 @@ libc = "0.2"
 # `libloading` is the version `ort` itself resolves; it is used directly
 # only by the audited `onnx::sys` version read.
 libloading = "0.9"
-ort = { version = "=2.0.0-rc.15", default-features = false, features = ["load-dynamic"] }
+# api-31: the C API level of the pinned ONNX Runtime 1.31.1 (the loader's
+# exact version check guarantees it); needed for explicit device selection.
+ort = { version = "=2.0.0-rc.15", default-features = false, features = ["load-dynamic", "api-31"] }
+# Content identity of the runtime library and the model (ADR-0057 section 3).
+sha2 = { version = "0.10", default-features = false }
 loom = "0.7"
 proc-macro-crate = "3"
 proc-macro2 = "1"
