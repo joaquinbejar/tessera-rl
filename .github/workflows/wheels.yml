@@ -92,20 +92,37 @@ jobs:
       TESSERA_EXPECT_FP_TRAPS: ${{ matrix.expect_fp_traps }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        id: checkout
       - run: scripts/wheel_job.sh "${{ matrix.target }}" manylinux_2_28 "${{ matrix.rustup_sha }}" "${{ matrix.uv_sha }}" "${{ matrix.profile }}"
+      # The artifact's name carries the profile, the commit and the wheel's sha256.
+      - id: built
+        name: the built wheel
+        if: always()
+        env:
+          TARGET: ${{ matrix.target }}
+          PROFILE: ${{ matrix.profile }}
+          COMMIT: ${{ steps.checkout.outputs.commit }}
+        run: |
+          sha=none
+          set -- dist/*.whl
+          if [ "$#" -eq 1 ] && [ -f "$1" ]; then sha="$(sha256sum "$1" | cut -d' ' -f1)"; fi
+          echo "wheel: $TARGET profile $PROFILE commit $COMMIT sha256 $sha"
+          echo "name=wheel-$TARGET-$PROFILE-$COMMIT-$sha" >> "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
           if-no-files-found: warn
-          name: wheel-${{ matrix.target }}
+          name: ${{ steps.built.outputs.name }}
           path: |
             dist/*.whl
             golden-report.json
             checks.json
             determinism.json
+            determinism-w0.json
+            compare.json
       # The workspace is bind-mounted, so the container's end does not clean it.
       - if: always()
-        run: rm -rf "$WHEEL_RUN" dist golden-report.json checks.json determinism.json
+        run: rm -rf "$WHEEL_RUN" dist golden-report.json checks.json determinism.json determinism-w0.json compare.json
 
   linux-aarch64:
     # GitHub-hosted (free for public repositories): no owner machine is involved.

@@ -112,7 +112,10 @@ def test_wheels_other_targets_keep_the_default_release_profile():
 
 def test_wheel_job_builds_with_the_named_profile_only():
     assert 'args=(--profile "$profile" --locked --target "$target" --out dist)' in JOB
-    assert "--release --locked --target" not in JOB
+    # The only --release build is W0, for the comparison, and only under the wheel profile.
+    assert JOB.count("--release --locked --target") == 1
+    assert 'w0_args=(--release --locked --target "$target" --out "$WHEEL_RUN/w0-dist")' in JOB
+    assert re.search(r'^if \[ "\$profile" = wheel \]; then\n.*\n    nice -n 10 uvx [^\n]* build "\$\{w0_args\[@\]\}"\nfi$', JOB, re.M)
     assert re.search(r'^    release \| wheel\) ;;$', JOB, re.M)
 
 
@@ -122,3 +125,16 @@ def test_wheel_profile_is_fat_lto_one_unit_and_matches_the_measured_w1_build():
     assert settings == ['inherits = "release"', 'lto = "fat"', "codegen-units = 1", 'panic = "unwind"']
     # The published W1 is built as the PGO ladder measured it.
     assert "build --locked --profile wheel" in W1_BUILD and "--compatibility manylinux_2_28" in W1_BUILD
+
+
+def test_wheels_x86_64_artifact_is_named_with_profile_commit_and_sha256():
+    linux = _job("linux")
+    assert re.search(r"^      - uses: actions/checkout@[0-9a-f]{40}.*\n        id: checkout$", linux, re.M)
+    built = re.search(r"^      - id: built\n(.*?)(?=^      - )", linux, re.M | re.DOTALL).group(1)
+    assert "COMMIT: ${{ steps.checkout.outputs.commit }}" in built and "PROFILE: ${{ matrix.profile }}" in built
+    assert 'echo "name=wheel-$TARGET-$PROFILE-$COMMIT-$sha" >> "$GITHUB_OUTPUT"' in built
+    assert "if: always()" in built
+    assert "          name: ${{ steps.built.outputs.name }}\n" in linux
+    for report in ("determinism-w0.json", "compare.json"):
+        assert report in linux.split("upload-artifact@", 1)[1]
+        assert report in re.search(r"run: (rm -rf .*)", linux).group(1)
