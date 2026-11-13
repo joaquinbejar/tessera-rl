@@ -162,7 +162,17 @@ impl<E: Environment> OnnxEvaluator<E> {
         &self.provenance
     }
 
-    fn run(
+    /// Evaluates `n` leaves whose observations are `observations`, `n`
+    /// rows of the environment's observation bytes, as
+    /// [`Evaluator::evaluate_batch`] does with a batch's. It touches nothing
+    /// but this evaluator and the slices it is given, so a host can run it
+    /// with its interpreter released (the Python binding does).
+    ///
+    /// # Errors
+    ///
+    /// [`EvaluatorError::Shape`] if the bytes are not `n` rows or an output
+    /// has the wrong shape; [`EvaluatorError::Failed`] if the runtime fails.
+    pub fn evaluate_rows(
         &mut self,
         observations: &[u8],
         n: usize,
@@ -249,7 +259,7 @@ impl<E: Environment> Evaluator<E> for OnnxEvaluator<E> {
             });
         }
         let observations = batch.observations();
-        self.run(observations, n, priors, values)
+        self.evaluate_rows(observations, n, priors, values)
     }
 }
 

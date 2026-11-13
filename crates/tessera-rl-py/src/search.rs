@@ -137,10 +137,12 @@ pub(crate) trait SearchOps: Send {
     /// replacing any earlier one, and returns its provenance.
     fn attach_onnx(&mut self, args: &OnnxArgs) -> Result<OnnxInfo, BindError>;
     /// One search call with the attached ONNX evaluator; `check` polls for
-    /// interruptions before every batch.
+    /// interruptions before every batch, and every inference runs inside
+    /// `detach` (the binding releases the interpreter there).
     fn run_onnx(
         &mut self,
         check: &mut dyn FnMut() -> Result<(), EvaluatorError>,
+        detach: &mut dyn FnMut(&mut dyn FnMut()),
     ) -> Result<(), BindError>;
     /// The root's visit counts.
     fn root_visits(&self) -> Vec<u32>;
@@ -242,12 +244,17 @@ where
     fn run_onnx(
         &mut self,
         check: &mut dyn FnMut() -> Result<(), EvaluatorError>,
+        detach: &mut dyn FnMut(&mut dyn FnMut()),
     ) -> Result<(), BindError> {
         let inner = self
             .onnx
             .as_mut()
             .ok_or_else(|| BindError::Onnx("no ONNX evaluator attached".to_owned()))?;
-        self.mcts.run(&mut OnnxRun { inner, check })?;
+        self.mcts.run(&mut OnnxRun {
+            inner,
+            check,
+            detach,
+        })?;
         Ok(())
     }
 
@@ -255,6 +262,7 @@ where
     fn run_onnx(
         &mut self,
         _: &mut dyn FnMut() -> Result<(), EvaluatorError>,
+        _: &mut dyn FnMut(&mut dyn FnMut()),
     ) -> Result<(), BindError> {
         Err(not_built())
     }
@@ -386,11 +394,13 @@ pub(crate) fn connect4(args: &SearchArgs) -> Result<Box<dyn SearchOps>, BindErro
     }))
 }
 
-/// The ONNX evaluator with the Python interruption poll.
+/// The ONNX evaluator with the Python interruption poll, its inference run
+/// with the interpreter released.
 #[cfg(feature = "onnx")]
 struct OnnxRun<'a, E: Environment> {
     inner: &'a mut tessera_rl_onnx::OnnxEvaluator<E>,
     check: &'a mut dyn FnMut() -> Result<(), EvaluatorError>,
+    detach: &'a mut dyn FnMut(&mut dyn FnMut()),
 }
 
 #[cfg(feature = "onnx")]
@@ -410,7 +420,17 @@ impl<E: Environment> Evaluator<E> for OnnxRun<'_, E> {
         priors: &mut [f64],
         values: &mut [f64],
     ) -> Result<(), EvaluatorError> {
-        self.inner.evaluate_batch(batch, priors, values)
+        let n = batch.len();
+        if n == 0 {
+            return Ok(());
+        }
+        // Copied out of the scratch pool while attached; the inference
+        // itself touches only the evaluator and these slices.
+        let observations = batch.observations();
+        let inner = &mut *self.inner;
+        let mut result = Ok(());
+        (self.detach)(&mut || result = inner.evaluate_rows(observations, n, priors, values));
+        result
     }
 
     fn check(&mut self) -> Result<(), EvaluatorError> {

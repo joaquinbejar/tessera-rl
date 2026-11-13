@@ -17,6 +17,11 @@ All models take Connect4's observation, input `board`, uint8 [N, 2, 6, 7]:
 - mlp_connect4.onnx: a small float32 MLP (84 -> 32 -> 7 priors by softmax,
   and a tanh value [N, 1]) with weights from a seeded generator, for the
   same-machine repeatability test.
+- slow_connect4.onnx: constant-like priors and a value from a chain of
+  CHAIN 512x512 float32 matrix products per row, so one batch takes a
+  measurable time (the test that inference releases the Python
+  interpreter). Its matrices are built in the graph from one row each, so
+  the file stays small.
 
 Two fixtures come from spike S1's generator, not from this script:
 s1_mlp.onnx and s1_fuse.onnx (their sha256 are checked by the tests).
@@ -90,6 +95,46 @@ def mlp_connect4():
     return m
 
 
+CHAIN = 400
+
+
+def slow_connect4():
+    board = helper.make_tensor_value_info("board", TensorProto.UINT8, ["N", 2, 6, 7])
+    priors = helper.make_tensor_value_info("priors", TensorProto.DOUBLE, ["N", 7])
+    value = helper.make_tensor_value_info("value", TensorProto.FLOAT, ["N", 1])
+    starts = numpy_helper.from_array(np.array([0], dtype=np.int64), "starts")
+    ends = numpy_helper.from_array(np.array([1], dtype=np.int64), "ends")
+    one = numpy_helper.from_array(np.array([1], dtype=np.int64), "one")
+    row7 = numpy_helper.from_array(np.full((1, 7), 1.0 / 7.0, dtype=np.float64), "row7")
+    flat = numpy_helper.from_array(np.array([-1, 84], dtype=np.int64), "flat")
+    w_in_row = numpy_helper.from_array(np.full((1, 512), 1.0 / 84.0, dtype=np.float32), "w_in_row")
+    w_in_rep = numpy_helper.from_array(np.array([84, 1], dtype=np.int64), "w_in_rep")
+    w_row = numpy_helper.from_array(np.full((1, 512), 1.0 / 512.0, dtype=np.float32), "w_row")
+    w_rep = numpy_helper.from_array(np.array([512, 1], dtype=np.int64), "w_rep")
+    nodes = [
+        helper.make_node("Shape", ["board"], ["shape"]),
+        helper.make_node("Slice", ["shape", "starts", "ends"], ["n"]),
+        helper.make_node("Concat", ["n", "one"], ["tile"], axis=0),
+        helper.make_node("Tile", ["row7", "tile"], ["priors"]),
+        helper.make_node("Tile", ["w_row", "w_rep"], ["w"]),
+        helper.make_node("Tile", ["w_in_row", "w_in_rep"], ["w_in"]),
+        helper.make_node("Cast", ["board"], ["x"], to=TensorProto.FLOAT),
+        helper.make_node("Reshape", ["x", "flat"], ["x2"]),
+        helper.make_node("MatMul", ["x2", "w_in"], ["h0"]),
+    ]
+    for i in range(CHAIN):
+        nodes.append(helper.make_node("MatMul", [f"h{i}", "w"], [f"h{i + 1}"]))
+    nodes.append(helper.make_node("ReduceMean", [f"h{CHAIN}"], ["m"], axes=[1], keepdims=1))
+    nodes.append(helper.make_node("Tanh", ["m"], ["value"]))
+    graph = helper.make_graph(nodes, "tessera_onnx_slow", [board], [priors, value],
+                              initializer=[starts, ends, one, row7, flat, w_in_row, w_in_rep, w_row, w_rep])
+    m = helper.make_model(graph, producer_name="tessera-rl gen_fixtures.py",
+                          opset_imports=[helper.make_opsetid("", OPSET)])
+    m.ir_version = IR
+    onnx.checker.check_model(m)
+    return m
+
+
 def main(out):
     out = Path(out)
     out.mkdir(parents=True, exist_ok=True)
@@ -99,6 +144,7 @@ def main(out):
     onnx.save(model(input_name="obs"), "wrong_input.onnx")
     onnx.save(model(actions=6), "wrong_actions.onnx")
     onnx.save(mlp_connect4(), "mlp_connect4.onnx")
+    onnx.save(slow_connect4(), "slow_connect4.onnx")
     if Path("external.bin").exists():
         Path("external.bin").unlink()
     onnx.save(model(), "external.onnx", save_as_external_data=True,

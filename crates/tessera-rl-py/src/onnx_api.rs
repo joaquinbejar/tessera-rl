@@ -155,7 +155,10 @@ pub(crate) fn run_onnx(g: Gil, inner: &SearchInner) -> CResult<Mine> {
             }
             Ok(())
         };
-        Ok(ops.run_onnx(&mut check))
+        // Inference releases the interpreter: other Python threads run
+        // meanwhile. The search object stays held by this call.
+        let mut detach = |f: &mut dyn FnMut()| g.detach(f);
+        Ok(ops.run_onnx(&mut check, &mut detach))
     })?;
     match (result, pending.take()) {
         (Ok(()), _) => Ok(capi::none(g)),
