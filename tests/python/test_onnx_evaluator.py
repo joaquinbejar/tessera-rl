@@ -15,6 +15,8 @@ import re
 import subprocess
 import sys
 import textwrap
+import threading
+import time
 import tomllib
 from pathlib import Path
 
@@ -229,4 +231,43 @@ def test_onnx_works_next_to_the_onnxruntime_package(home):
     s = fresh_search()
     s.run(onnx)
     assert s.root_visits().sum() > 0
+    assert_no_telemetry(home)
+
+
+@real
+def test_onnx_inference_releases_the_interpreter(home):
+    """Another Python thread keeps running at close to its own speed while
+    the search runs a slow model: inference happens with the interpreter
+    released. The search releases it elsewhere too (environment steps), so
+    the check compares rates, not counts: with the interpreter held during
+    inference the other thread gets a few percent of its baseline."""
+    onnx = search.OnnxEvaluator(FIXTURES / "slow_connect4.onnx")
+    s = search.Search("tessera/Connect4-v1", capacity=4096, simulations=256, seed=7)
+    ticks = 0
+    stop = threading.Event()
+    started = threading.Event()
+
+    def spin():
+        nonlocal ticks
+        started.set()
+        while not stop.is_set():
+            ticks += 1
+
+    thread = threading.Thread(target=spin)
+    thread.start()
+    started.wait()
+    # Baseline: the main thread sleeps (interpreter released).
+    t0, before = time.perf_counter(), ticks
+    time.sleep(0.3)
+    baseline = (ticks - before) / (time.perf_counter() - t0)
+    t0, before = time.perf_counter(), ticks
+    s.run(onnx)
+    elapsed = time.perf_counter() - t0
+    rate = (ticks - before) / elapsed
+    stop.set()
+    thread.join()
+    print(f"search call {elapsed:.3f} s; other thread {rate:.0f}/s, baseline {baseline:.0f}/s ({rate / baseline:.0%})")
+    assert s.root_visits().sum() > 0
+    assert elapsed > 0.2, f"the model is not slow enough to tell: {elapsed:.3f} s"
+    assert rate > 0.25 * baseline, f"the other thread ran at {rate / baseline:.0%} of its baseline"
     assert_no_telemetry(home)
