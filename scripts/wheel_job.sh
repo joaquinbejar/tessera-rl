@@ -1,10 +1,17 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT OR Apache-2.0
 #
-# One W0 wheel job of wheels.yml: verified tools, the build, the golden anchor
+# One wheel job of wheels.yml: verified tools, the build, the golden anchor
 # and the Python suite against the installed wheel.
 #
-#   scripts/wheel_job.sh <target> <compatibility or ""> <rustup sha256> <uv sha256>
+#   scripts/wheel_job.sh <target> <compatibility or ""> <rustup sha256> <uv sha256> <profile>
+#
+# <profile> is the Cargo profile maturin builds the extension with: `release`
+# (the default release profile, also when the argument is absent) or `wheel`
+# (fat LTO, one codegen unit; Cargo.toml). Anything else is refused. With
+# `wheel`, the job also builds W0 (release) from the same commit, records its
+# determinism and compares the two (docs/reviews/pgo-wheels-design.md section 7
+# item 2): determinism-w0.json and compare.json, and a difference fails the job.
 #
 # Everything it writes goes under $WHEEL_RUN, which the workflow removes, except
 # dist/ and the report that it copies to the workspace for upload. Runs at nice 10.
@@ -14,6 +21,11 @@ target="$1"
 compatibility="$2"
 rustup_sha="$3"
 uv_sha="$4"
+profile="${5-release}"
+case "$profile" in
+    release | wheel) ;;
+    *) echo "wheel_job: profile must be release or wheel, got '$profile'" >&2; exit 2 ;;
+esac
 : "${WHEEL_RUN:?the per-run directory}"
 
 # The build environment is the script's own: an ambient flag, target, profile setting,
@@ -63,8 +75,13 @@ fetch "https://github.com/astral-sh/uv/releases/download/$UV_VERSION/uv-$target.
     "$WHEEL_RUN/uv.tar.gz" "$uv_sha"
 tar -xzf "$WHEEL_RUN/uv.tar.gz" -C "$WHEEL_RUN/bin" --strip-components=1
 
-args=(--release --locked --target "$target" --out dist)
-[ -z "$compatibility" ] || args+=(--compatibility "$compatibility")
+args=(--profile "$profile" --locked --target "$target" --out dist)
+w0_args=(--release --locked --target "$target" --out "$WHEEL_RUN/w0-dist")
+[ -z "$compatibility" ] || { args+=(--compatibility "$compatibility"); w0_args+=(--compatibility "$compatibility"); }
+if [ "$profile" = wheel ]; then
+    # W0 of this commit, built here, only for the determinism comparison.
+    nice -n 10 uvx --python 3.11 "maturin==$MATURIN_VERSION" build "${w0_args[@]}"
+fi
 nice -n 10 uvx --python 3.11 "maturin==$MATURIN_VERSION" build "${args[@]}"
 
 TESSERA_GOLDEN_ACTIONS="$WHEEL_RUN/golden-actions" nice -n 10 \
@@ -92,8 +109,24 @@ nice -n 10 "$venv/bin/python" -I -m pytest -q -p no:cacheprovider "$root/tests/p
     --ignore="$root/tests/python/test_bench.py" || suite=$?
 nice -n 10 "$venv/bin/python" -I "$root/tools/pgo/determinism.py" record --wheel "$wheel" --out "$root/determinism.json"
 
+compare=0
+if [ "$profile" = wheel ]; then
+    w0_wheel="$(ls "$WHEEL_RUN"/w0-dist/*.whl)"
+    w0_venv="$WHEEL_RUN/w0-venv"
+    uv venv --python 3.11 "$w0_venv"
+    uv pip install --python "$w0_venv/bin/python" "$w0_wheel" numpy==2.4.6 xxhash==4.0.2
+    nice -n 10 "$w0_venv/bin/python" -I "$root/tools/pgo/determinism.py" record --wheel "$w0_wheel" \
+        --out "$root/determinism-w0.json"
+    "$venv/bin/python" -I "$root/tools/pgo/determinism.py" compare "$root/determinism-w0.json" "$root/determinism.json" \
+        --out "$root/compare.json" || compare=$?
+fi
+
 cd "$root"
-scripts/wheel_num_tests.sh || num=$?
+# The num crate's tests under the wheel's own Cargo profile (section 7 item 6).
+num_profile=""
+[ "$profile" = release ] || num_profile="$profile"
+WHEEL_CARGO_PROFILE="$num_profile" scripts/wheel_num_tests.sh || num=$?
 "$venv/bin/python" -I tools/pgo/checks.py --wheel "$wheel" --out checks.json \
     golden_anchor="$anchor" python_suite="$suite" num_tests="$num"
-[ "$anchor" -eq 0 ] && [ "$suite" -eq 0 ] && [ "$num" -eq 0 ]
+echo "wheel_job: profile=$profile anchor=$anchor suite=$suite num=$num compare=$compare"
+[ "$anchor" -eq 0 ] && [ "$suite" -eq 0 ] && [ "$num" -eq 0 ] && [ "$compare" -eq 0 ]
