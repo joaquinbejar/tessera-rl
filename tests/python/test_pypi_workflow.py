@@ -183,6 +183,92 @@ def test_pypi_publish_downloads_the_flat_directory_verify_wrote():
     assert _one(r"^          packages-dir: (\S+)$", PUBLISH_JOB) == "dist/"
 
 
+# A copy of the artifact tree of wheels run 43592025059 (v0.2.0 at c156aa0), as
+# `gh run download` laid it out: the real artifact names and paths, checks.json
+# and compare.json verbatim, the wheels stubbed to their real METADATA and WHEEL
+# files, and the other reports stubbed to `{}`. The stub wheels' sha256 is not
+# the real one, so checks.json and the W1 name disagree with them on purpose.
+RUN_TREE = Path(__file__).resolve().parent / "fixtures" / "pypi" / "run-43592025059"
+RUN_COMMIT = "c156aa0b9e70b2b3f6232882dc7200169082c6ef"
+RUN_W1 = f"wheel-x86_64-unknown-linux-gnu-wheel-{RUN_COMMIT}-1d614867bb51b2a9588811603f7647fca86351979a0452a9ceb6e8aa1a84f105"
+RUN_WHEELS = {
+    RUN_W1: "tessera_rl-0.2.0-cp311-abi3-manylinux_2_28_x86_64.whl",
+    "wheel-aarch64-unknown-linux-gnu": "tessera_rl-0.2.0-cp311-abi3-manylinux_2_28_aarch64.whl",
+    "wheel-aarch64-apple-darwin": "tessera_rl-0.2.0-cp311-abi3-macosx_13_0_arm64.whl",
+}
+
+
+def _run_tree(tmp_path) -> Path:
+    arts = tmp_path / "artifacts"
+    shutil.copytree(RUN_TREE, arts)
+    return arts
+
+
+def _sha(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def test_pypi_run_tree_fixture_is_the_real_layout():
+    assert sorted(p.name for p in RUN_TREE.iterdir()) == sorted(RUN_WHEELS)
+    for name, wheel in RUN_WHEELS.items():
+        d = RUN_TREE / name
+        assert [p.relative_to(d).as_posix() for p in d.rglob("*.whl")] == [f"dist/{wheel}"]
+        assert (d / "checks.json").is_file() and (d / "golden-report.json").is_file()
+    assert (RUN_TREE / RUN_W1 / "compare.json").is_file()
+
+
+def test_pypi_verify_reads_the_real_run_tree_up_to_the_stub_bytes(tmp_path):
+    # Every check but the byte identity passes on the real names and paths: the
+    # only problems are the stubs' sha256 against checks.json and the W1 name.
+    p, out = _verify(_run_tree(tmp_path), commit=RUN_COMMIT)
+    assert p.returncode == 1
+    problems = [l for l in p.stderr.splitlines() if l.startswith("pypi_verify: ")]
+    assert len(problems) == 4, p.stderr
+    assert sum("!= checks.json" in l for l in problems) == 3, p.stderr
+    assert sum("!= the artifact name's 1d614867" in l for l in problems) == 1, p.stderr
+    assert not out.exists()
+
+
+def _reseal(arts: Path) -> Path:
+    """Points checks.json and the W1 name at the stub wheels' own sha256."""
+    for name, wheel in RUN_WHEELS.items():
+        d = arts / name
+        sha = _sha(d / "dist" / wheel)
+        checks = d / "checks.json"
+        data = json.loads(checks.read_text())
+        data["wheel_sha256"] = sha
+        checks.write_text(json.dumps(data, indent=1))
+        if name == RUN_W1:
+            d.rename(arts / (name.rsplit("-", 1)[0] + "-" + sha))
+    return arts
+
+
+def test_pypi_verify_accepts_the_real_run_tree_resealed(tmp_path):
+    arts = _reseal(_run_tree(tmp_path))
+    p, out = _verify(arts, commit=RUN_COMMIT)
+    assert p.returncode == 0, p.stderr
+    assert sorted(x.name for x in out.iterdir()) == sorted(["SHA256SUMS", *RUN_WHEELS.values()])
+    sums = dict(reversed(l.split("  ")) for l in (out / "SHA256SUMS").read_text().splitlines())
+    assert sums == {w: _sha(out / w) for w in RUN_WHEELS.values()}
+
+
+@pytest.mark.parametrize("tag, commit, message", [("v0.2.1", RUN_COMMIT, "does not match"), (TAG, "d" * 40, "built at " + RUN_COMMIT)])
+def test_pypi_verify_refuses_the_real_run_tree_for_another_release(tmp_path, tag, commit, message):
+    p, out = _verify(_reseal(_run_tree(tmp_path)), tag=tag, commit=commit)
+    assert p.returncode == 1 and message in p.stderr, p.stderr
+    assert not out.exists()
+
+
+def test_pypi_verify_refuses_the_real_run_tree_flattened(tmp_path):
+    # The layout the first version assumed: each wheel at its artifact's root.
+    arts = _reseal(_run_tree(tmp_path))
+    for whl in list(arts.glob("*/dist/*.whl")):
+        whl.rename(whl.parent.parent / whl.name)
+    p, out = _verify(arts, commit=RUN_COMMIT)
+    assert p.returncode == 1 and p.stderr.count("expected one wheel in dist/") == 3, p.stderr
+    assert not out.exists()
+
+
 REAL = os.environ.get("TESSERA_PYPI_ARTIFACTS")
 
 
@@ -510,3 +596,19 @@ def test_pypi_publish_sums_step_passes_only_the_three_checked_wheels(tmp_path, c
     else:
         assert r.returncode != 0, r.stdout + r.stderr
         assert (dist / "SHA256SUMS").is_file()
+
+
+@bash
+def test_pypi_publish_sums_step_on_the_real_run_tree(tmp_path):
+    dist = tmp_path / "w" / "dist"
+    p, _ = _verify(_reseal(_run_tree(tmp_path)), commit=RUN_COMMIT, out=dist)
+    assert p.returncode == 0, p.stderr
+    script = tmp_path / "sums.sh"
+    script.write_text(_step(PUBLISH_JOB, "The verified wheels"))
+    bin_ = tmp_path / "bin"
+    bin_.mkdir()
+    _sha256sum_on_path(bin_)
+    env = {"PATH": f"{bin_}:{os.environ['PATH']}", "RUNNER_TEMP": str(tmp_path)}
+    r = subprocess.run(["bash", "--noprofile", "--norc", "-eo", "pipefail", str(script)], cwd=tmp_path / "w", env=env, capture_output=True, text=True)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert sorted(x.name for x in dist.iterdir()) == sorted(RUN_WHEELS.values())

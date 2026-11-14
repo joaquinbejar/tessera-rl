@@ -1,0 +1,9 @@
+{
+ "wheel_sha256": "a36f8c36141129d30cfd929af895060d95cc6e553afbb7fb4801e53681d74133",
+ "checks": {
+  "golden_anchor": 0,
+  "python_suite": 0,
+  "num_tests": 0,
+  "onnx_smoke": 0
+ }
+}
