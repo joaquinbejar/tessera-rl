@@ -431,6 +431,55 @@ def test_logging_means_over_finished_episodes():
     off.close()
 
 
+def _reference_logs(env_id, num_envs, interval, steps, **kwargs):
+    """The adapter's logs computed the old way, from the per-step rewards and
+    episode flags (issue #152, G3): per-agent accumulation in float64."""
+    env = TesseraPufferEnv(env_id, num_envs=num_envs, log_interval=None, **kwargs)
+    env.reset(seed=3)
+    agents = env.num_agents // num_envs
+    ret = np.zeros(env.num_agents)
+    length = np.zeros(env.num_agents, dtype=np.int64)
+    total, total_len, n, logs = 0.0, 0, 0, []
+    rng = np.random.default_rng(5)
+    for tick in range(1, steps + 1):
+        env.step(rng.integers(0, env.single_action_space.n, size=env.num_agents, dtype=np.int32))
+        ret += env.rewards
+        length += 1
+        ended = np.repeat(env._episode_ended[0] | env._episode_ended[1], agents)
+        if ended.any():
+            total += float(ret[ended].sum())
+            total_len += int(length[ended].sum())
+            n += int(ended.sum())
+            ret[ended] = 0.0
+            length[ended] = 0
+        if tick % interval == 0 and n:
+            logs.append({"episode_return": total / n, "episode_length": total_len / n, "n": n})
+            total, total_len, n = 0.0, 0, 0
+    env.close()
+    return logs
+
+
+@pytest.mark.parametrize(
+    "env_id, num_envs, kwargs",
+    [(CARTPOLE, 16, {"max_episode_steps": 30}), ("tessera/Tag-v1", 8, {})],
+)
+def test_logging_from_engine_statistics_matches_per_step_accounting(env_id, num_envs, kwargs):
+    want = _reference_logs(env_id, num_envs, 32, 512, **kwargs)
+    env = TesseraPufferEnv(env_id, num_envs=num_envs, log_interval=32, **kwargs)
+    env.reset(seed=3)
+    rng = np.random.default_rng(5)
+    got = []
+    for _ in range(512):
+        got += env.step(rng.integers(0, env.single_action_space.n, size=env.num_agents, dtype=np.int32))[4]
+    env.close()
+    assert want, "the reference saw no finished episode"
+    assert [g["n"] for g in got] == [w["n"] for w in want]
+    assert [g["episode_length"] for g in got] == [w["episode_length"] for w in want]
+    # The engine accumulates each episode's return in float32.
+    for g, w in zip(got, want, strict=True):
+        assert g["episode_return"] == pytest.approx(w["episode_return"], rel=1e-6, abs=1e-6)
+
+
 def test_adapter_arrays_do_not_grow():
     env = TesseraPufferEnv(CARTPOLE, num_envs=4)
     env.reset(seed=1)

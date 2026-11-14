@@ -333,6 +333,8 @@ fn row_of<E: Environment, M: MaskProvider<E>>(
         OutputField::EpisodeTruncated => {
             put(0, &[row.episode_truncated().map_or(0, Bool8::to_byte)]);
         }
+        OutputField::EpisodeReturn => put(0, &row.episode_return().unwrap_or(0.0).to_le_bytes()),
+        OutputField::EpisodeLength => put(0, &row.episode_length().unwrap_or(0.0).to_le_bytes()),
         _ => {}
     }
 }

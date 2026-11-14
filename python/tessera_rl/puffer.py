@@ -272,6 +272,10 @@ class TesseraPufferEnv(pufferlib.PufferEnv):
             out.agent_truncated.reshape(n),
         )
         self._episode_ended = (out.episode_terminated, out.episode_truncated)
+        # The engine's own statistics of episodes that ended in the call
+        # (`[N]`, zero elsewhere): borrowed views over stable storage.
+        raw = self._env._last_out
+        self._episode_stats = (np.asarray(raw["episode_return"]), np.asarray(raw["episode_length"]))
         if out.masks is not None:
             self._masks = out.masks.reshape((n, -1))
         if not self._owned_buffers:
@@ -315,17 +319,16 @@ class TesseraPufferEnv(pufferlib.PufferEnv):
         return self.observations, self.rewards, self.terminals, self.truncations, self.infos
 
     def _log(self) -> list:
-        self._episode_return += self._views[1]
-        self._episode_length += 1
+        # Each ended episode counts once per agent row, as PufferLib's
+        # per-agent logs do: its return is the sum over its agents, and
+        # every agent row shares its length.
         self._tick += 1
-        ended = self._episode_ended[0] | self._episode_ended[1]
-        if ended.any():
-            done = np.repeat(ended, self._agents)
-            self._finished[0] += float(self._episode_return[done].sum())
-            self._finished[1] += int(self._episode_length[done].sum())
-            self._finished[2] += int(done.sum())
-            self._episode_return[done] = 0.0
-            self._episode_length[done] = 0
+        returns, lengths = self._episode_stats
+        ended = int(np.count_nonzero(lengths))
+        if ended:
+            self._finished[0] += float(returns.sum(dtype=np.float64))
+            self._finished[1] += int(lengths.sum(dtype=np.float64)) * self._agents
+            self._finished[2] += ended * self._agents
         if self._tick % self._log_interval != 0 or self._finished[2] == 0:
             return []
         total, length, n = self._finished
