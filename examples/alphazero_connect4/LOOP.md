@@ -100,6 +100,14 @@ at sha256 `d3a091482e70f53caee6fe23b7b905c38a65d204022408727151d1deeaa1b0ee`.
   run's host and its bot binary are registered by a reviewed pre-run commit
   (`h2h.REGISTERED_HOSTS`, `h2h.REGISTERED_IMAGES`, `look.REGISTERED_BOTS`).
 
+## Stopping a run
+
+- `loop.py stop --root R` writes `R/STOP` durably, then signals the recorded driver (`R/driver.json`: PID, PGID, argv). The driver leads its own process group, and its group is signalled only if the observed PGID and command match the record. Each open dispatch's recorded runner is checked the same way. A mismatch signals nothing and exits 1. Nothing is ever killed by pattern.
+- Once `STOP` exists, the loop allocates no attempt, `remote.py run` dispatches nothing, and `remote.py reconcile` kills a still-running container by its recorded name and settles it.
+- After `stop`, run `remote.py reconcile --root R`.
+- `--max-attempts N` (1 to 3) at `init` records a per-root attempt limit in `config.json`. A root without it keeps 3.
+- Self-play fails at once with exit 6 ("a self-play worker died") if a pool worker dies: no respawn, no manifest, no hang.
+
 ## Artifacts
 
 `assets.py pack` makes one content-addressed tarball per done phase attempt and an `assets-manifest.json` with the tag, name, size, SHA-256, generation, phase, attempt, source SHA and config hash. The coordinator uploads the tarballs, after their ledger entries are settled, to the private draft release `p2-m3-train-<date>`.

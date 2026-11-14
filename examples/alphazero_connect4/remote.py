@@ -21,10 +21,14 @@ The round trip, for an attempt directory ``D``:
    one, so only one remote phase ever runs.
 2. **Push.** The inputs and the ledger go to a mirror of the root on the
    host, then their remote hashes are checked against the dispatch.
-3. **Run.** ``docker run -d --name NAME``, detached and named, with bind
-   mounts by absolute path only. A driver or ssh death does not stop the
-   phase. A resumed driver finds the container by name: if it is running,
-   it waits; if it has exited, it collects.
+3. **Run.** ``docker run -d --rm --name NAME --user <host uid>:<host gid>``,
+   detached and named, with bind mounts by absolute path only, and HOME and
+   the uv and cargo directories under the source mount: no file it writes
+   is owned by root, on any exit path. Its output and exit code go to
+   ``root/_status/NAME.{log,json}``. A driver or ssh death does not stop
+   the phase. A resumed driver finds the container by name: if it is
+   running, it waits; once it is gone (``--rm``), it reads the status
+   record.
 4. **Import.** It pulls into ``D.staging`` and the staged ledger, and
    accepts the remote ledger only if it extends the one sent:
    - the entries sent are an exact prefix;
@@ -47,6 +51,11 @@ The round trip, for an attempt directory ``D``:
 - A broken transfer is fetched again.
 - A publication without its acknowledgement is acknowledged again.
 
+**Stop.** With ``root/STOP`` present (``loop.py stop``), ``run`` dispatches
+nothing (checked before the record and again before ``docker run``), and
+``reconcile`` kills a still-running container by its recorded name, then
+settles it as usual. Each dispatch records its runner's PID, PGID and argv.
+
 The loop's owner lock: ``run`` is a child of ``loop.py run``, which holds
 it, and ``reconcile`` takes it itself.
 """
@@ -66,6 +75,7 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import artifacts  # noqa: E402
+import stopping  # noqa: E402
 
 IMAGE = "rust:1.99.1@sha256:09027f873d45b8ecd1dc86f1fa13b7a62b875c961f017a0e331267b350430137"
 BASE = "tessera-rl-m3loop"  # under the remote home: src/, uv, root/
@@ -76,7 +86,10 @@ PHASES = {"selfplay.py": "selfplay", "train_step.py": "train", "look.py": "look"
 # the supervisor's cleanup grace, uv sync and the build, and a margin.
 SSH_TIMEOUT_S = 600
 # Build products and caches never count in the source tree hash.
-TREE_EXCLUDE = (".venv", ".uvcache", "target", "__pycache__", ".pytest_cache", "build")
+TREE_EXCLUDE = (".venv", ".uvcache", ".uvpython", ".home", ".cargo", "target", "__pycache__", ".pytest_cache", "build")
+# The phase's exit record and output, in the root mirror: the container is
+# --rm, so its state after exit is read from here, never from docker.
+STATUS = "_status"
 # Built native extensions (maturin's editable install writes
 # python/tessera_rl/_native.abi3.so): build products, not source.
 FILE_EXCLUDE_SUFFIXES = (".so", ".pyd", ".dylib", ".pyc")
@@ -170,21 +183,15 @@ class SSH:
     def docker_run(self, name: str, cpuset: str, hostname: str, argv: list[str], deadline_s: float) -> None:
         home = self._ssh("pwd").stdout.strip()
         base = f"{home}/{BASE}"
-        # The deadline lives in the container, around uv setup and the
-        # phase alike: it holds even if the driver or ssh is gone.
-        phase = "uv run --locked --python 3.11 --group test --group torch python " + " ".join(map(shlex.quote, argv))
-        inner = (
-            f"timeout --kill-after 30 {int(deadline_s)} sh -c {shlex.quote(phase)}"
-            + "; rc=$?; chown -R $HOST_UID:$HOST_GID " + CROOT + " " + SRC + "; exit $rc"
-        )  # fmt: skip
-        cmd = [
-            "docker", "run", "-d", "--name", name, "--hostname", hostname, "--cpuset-cpus", cpuset,
-            "-e", f"PILOT_IMAGE_DIGEST={IMAGE}", "-e", f"PILOT_CPUSET={cpuset}",
-            "-e", "HOST_UID=$(id -u)", "-e", "HOST_GID=$(id -g)",
-            "-v", f"{base}/src:{SRC}", "-v", f"{base}/root:{CROOT}", "-v", f"{base}/uv:/usr/local/bin/uv:ro",
-            "-w", SRC, "-e", f"UV_CACHE_DIR={SRC}/.uvcache", "-e", "UV_LINK_MODE=copy", IMAGE, "sh", "-c", inner,
-        ]  # fmt: skip
-        self._ssh(" ".join(c if c.startswith("HOST_") else shlex.quote(c) for c in cmd))
+        self._ssh("mkdir -p " + shlex.quote(f"{base}/root/{STATUS}"))
+        self._ssh(" ".join(docker_run_argv(base, name, cpuset, hostname, argv, deadline_s)))
+
+    def status(self, name: str) -> tuple[str, int] | None:
+        """The phase's recorded exit (``_status/<name>.json``), or None."""
+        r = self._ssh(f"cat {shlex.quote(f'{BASE}/root/{STATUS}/{name}.json')}", check=False)
+        if r.returncode != 0 or not r.stdout.strip():
+            return None
+        return ("exited", int(json.loads(r.stdout)["exit_code"]))
 
     def docker_state(self, name: str) -> tuple[str, int | None] | None:
         r = self._ssh(f"docker inspect --format '{{{{.State.Status}}}} {{{{.State.ExitCode}}}}' {shlex.quote(name)}",
@@ -196,7 +203,9 @@ class SSH:
             # object", so the match ignores case.
             err = r.stderr.lower()
             if "no such object" in err or "no such container" in err:
-                return None
+                # --rm: an exited phase is gone from docker; its exit is
+                # in the status record.
+                return self.status(name)
             raise TransportError(f"{self.host}: docker inspect {name} exited {r.returncode}: {r.stderr.strip()[:300]}")
         status, code = r.stdout.split()
         return ("running", None) if status in ("created", "running", "restarting") else ("exited", int(code))
@@ -205,10 +214,14 @@ class SSH:
         self._ssh(f"docker wait {shlex.quote(name)}", check=False)
 
     def docker_logs(self, name: str) -> str:
-        return self._ssh(f"docker logs {shlex.quote(name)} 2>&1", check=False).stdout
+        return self._ssh(f"cat {shlex.quote(f'{BASE}/root/{STATUS}/{name}.log')}", check=False).stdout
 
     def docker_kill(self, name: str) -> None:
+        """Kills the container by its recorded name and records exit 137
+        if the phase had not recorded its own exit (a killed shell cannot)."""
+        st = shlex.quote(f"{BASE}/root/{STATUS}/{name}.json")
         self._ssh(f"docker kill {shlex.quote(name)}", check=False)
+        self._ssh(f"test -e {st} || printf '{{\"exit_code\": 137}}\\n' > {st}", check=False)
 
     def docker_rm(self, name: str) -> None:
         self._ssh(f"docker rm -f {shlex.quote(name)}", check=False)
@@ -220,13 +233,43 @@ class SSH:
         return sorted(self._ssh("docker volume ls -q").stdout.split())
 
 
+def docker_run_argv(base: str, name: str, cpuset: str, hostname: str, argv: list[str], deadline_s: float) -> list[str]:
+    """The shell words of the phase's ``docker run``.
+
+    The container is ``--rm`` and runs as the host user, with HOME, the uv
+    cache, uv's Python and cargo under the source mount. No file it writes
+    is owned by root, on any exit path, so no chown is needed and the host
+    user can always remove the trees. Its output and exit code go to
+    ``root/_status/<name>.{log,json}``, which recovery reads after the
+    container is gone. The deadline lives in the container, around uv
+    setup and the phase alike, so it holds even if the driver or ssh is
+    gone."""
+    phase = "uv run --locked --python 3.11 --group test --group torch python " + " ".join(map(shlex.quote, argv))
+    st = f"{CROOT}/{STATUS}/{name}"
+    inner = (
+        f"timeout --kill-after 30 {int(deadline_s)} sh -c {shlex.quote(phase)} > {st}.log 2>&1; rc=$?; "
+        + f"printf '{{\"exit_code\": %d}}\\n' $rc > {st}.json.tmp && mv {st}.json.tmp {st}.json; exit $rc"
+    )
+    words = [
+        "docker", "run", "-d", "--rm", "--name", name, "--hostname", hostname, "--cpuset-cpus", cpuset,
+        "--user", "HOST_IDS",
+        "-e", f"PILOT_IMAGE_DIGEST={IMAGE}", "-e", f"PILOT_CPUSET={cpuset}",
+        "-e", f"HOME={SRC}/.home", "-e", f"UV_CACHE_DIR={SRC}/.uvcache", "-e", f"UV_PYTHON_INSTALL_DIR={SRC}/.uvpython",
+        "-e", f"CARGO_HOME={SRC}/.cargo", "-e", "UV_LINK_MODE=copy",
+        "-v", f"{base}/src:{SRC}", "-v", f"{base}/root:{CROOT}", "-v", f"{base}/uv:/usr/local/bin/uv:ro",
+        "-w", SRC, IMAGE, "sh", "-c", inner,
+    ]  # fmt: skip
+    # The host user's ids are expanded by the host shell.
+    return ["$(id -u):$(id -g)" if w == "HOST_IDS" else shlex.quote(w) for w in words]
+
+
 TREE_SHA_PY = """
 import hashlib, os, sys
 p = sys.argv[1]
 h = hashlib.sha256()
 if os.path.isdir(p):
     for base, dirs, files in os.walk(p):
-        dirs[:] = sorted(x for x in dirs if x not in (".venv", ".uvcache", "target", "__pycache__", ".pytest_cache", "build"))
+        dirs[:] = sorted(x for x in dirs if x not in (".venv", ".uvcache", ".uvpython", ".home", ".cargo", "target", "__pycache__", ".pytest_cache", "build"))
         for n in sorted(x for x in files if not x.endswith((".so", ".pyd", ".dylib", ".pyc"))):
             f = os.path.join(base, n)
             h.update(os.path.relpath(f, p).encode() + b"\\0")
@@ -335,6 +378,8 @@ def dispatch(args, argv: list[str]) -> str:
     """Steps 1 to 3; returns the dispatch path. The caller holds the owner
     lock (loop.py run)."""
     root = os.path.abspath(args.root)
+    if stopping.requested(root):
+        raise TransportError("a stop was requested (STOP): nothing is dispatched")
     opened = open_dispatches(root)
     if opened:
         raise TransportError(f"an open dispatch must be reconciled first: {opened[0]}")
@@ -374,6 +419,8 @@ def dispatch(args, argv: list[str]) -> str:
         "container_deadline_s": wall_cap + SETUP_S,
         "started": False,
         "closed": None,
+        # This runner's identity, checked by `loop.py stop` before a signal.
+        "runner": stopping.identity(sys.argv),
     }
     path = d + ".dispatch.json"
     write_dispatch(path, record)
@@ -392,6 +439,9 @@ def dispatch(args, argv: list[str]) -> str:
     for rel, sha in record["inputs"].items():
         if t.tree_sha256(rel) != sha:
             raise TransportError(f"{rel} does not match its dispatch hash on {args.host}")
+    if stopping.requested(root):
+        # Requested during the push: the container is never started.
+        raise TransportError("a stop was requested (STOP) before the container started")
     t.docker_run(record["container"], args.cpuset, args.host, cargv, record["container_deadline_s"])
     crash_point("after-docker-run")  # before the start is recorded
     record["started"] = True
@@ -523,6 +573,15 @@ def reconcile_one(root: str, path: str) -> dict:
     sent = read_ledger(ledger)[: record["ledger_entries_sent"]]
     if entries_sha256(sent) != record["sent_entries_sha256"]:
         raise TransportError("the local ledger no longer holds the entries sent with the dispatch")
+    # A requested stop: a still-running container is stopped by its
+    # recorded name, never waited for.
+    if stopping.requested(root):
+        state = t.docker_state(name)
+        if state is not None and state[0] == "running":
+            t.docker_kill(name)
+            record["stopped_by_stop_file"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+            record["published_partial"] = True
+            write_dispatch(path, record)
     # Found by name, whether or not its start was recorded; never started
     # twice.
     state = wait_or_kill(t, record, path)

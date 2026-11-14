@@ -52,6 +52,8 @@ for _var in ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS"):
 
 import argparse  # noqa: E402
 import multiprocessing as mp  # noqa: E402
+from concurrent.futures import ProcessPoolExecutor  # noqa: E402
+from concurrent.futures.process import BrokenProcessPool  # noqa: E402
 import sys  # noqa: E402
 
 import numpy as np  # noqa: E402
@@ -72,6 +74,8 @@ NOISE_ALPHA = 1.0
 NOISE_EPSILON = 0.25
 TEMPERATURE_PLIES = 8
 PREFIX_PLIES = 8
+# A pool worker died: the attempt fails at once, with no manifest.
+EXIT_WORKER_DIED = 6
 
 
 def configure_torch() -> None:
@@ -142,8 +146,11 @@ def _init(path: str, cfg: dict) -> None:
 def _play_round(gs: list[int]) -> list[tuple[int, dict]]:
     cfg, ev = _WORKER["cfg"], _WORKER["evaluator"]
     out = []
+    abort_at = os.environ.get("SELFPLAY_TEST_ABORT_GAME")
     with torch.inference_mode():
         for g in gs:
+            if abort_at is not None and g == int(abort_at):
+                os.abort()  # tests only: a worker dying in native code
             out.append((g, play(search_chooser(ev, cfg, g), seeds.env(cfg["run_seed"], g))))
     return out
 
@@ -171,8 +178,12 @@ def work(args, clock) -> int:
     plan = tasks(args.games, args.workers, args.round_games)
     files, game_digests, moves_per_game, prefixes = [], {}, {}, set()
     ctx = mp.get_context("spawn")
-    with ctx.Pool(args.workers, initializer=_init, initargs=(args.checkpoint, cfg)) as pool:
-        results = pool.imap(_play_round, [gs for _, _, gs in plan], chunksize=1)
+    # A worker that dies (a native abort, a kill) breaks the executor: the
+    # attempt fails at once with no manifest. mp.Pool would replace the
+    # worker silently and wait forever for its lost round.
+    pool = ProcessPoolExecutor(args.workers, mp_context=ctx, initializer=_init, initargs=(args.checkpoint, cfg))
+    try:
+        results = pool.map(_play_round, [gs for _, _, gs in plan], chunksize=1)
         for (w, r, _), played in zip(plan, results, strict=True):
             arrays = {k: [] for k in ("planes", "visits", "z")}
             gcol, ply = [], []
@@ -191,6 +202,23 @@ def work(args, clock) -> int:
             data = artifacts.encode_shard(shard, {"worker": w, "round": r})
             artifacts.write_atomic(os.path.join(args.out, name), data)
             files.append({"name": name, "sha256": artifacts.sha256(data), "samples": int(len(shard["z"]))})
+    except BrokenProcessPool as e:
+        # Every worker's PID and exit code (negative: the signal, -6 for
+        # SIGABRT), read before shutdown, for the investigation: on stderr
+        # and in worker-death.json beside the (incomplete) output. Core
+        # dump limits are inherited unchanged.
+        procs = dict(getattr(pool, "_processes", None) or {})
+        for proc in procs.values():
+            proc.join(timeout=5)
+        codes = {str(pid): proc.exitcode for pid, proc in sorted(procs.items())}
+        died = {pid: c for pid, c in codes.items() if c not in (None, 0)}
+        artifacts.write_atomic(os.path.join(args.out, "worker-death.json"),
+                               artifacts.canonical_json({"error": str(e), "workers": codes, "died": died}))  # fmt: skip
+        print(f"a self-play worker died: exit codes by PID {died}; all workers {codes}; {e}; no manifest written",
+              file=sys.stderr)  # fmt: skip
+        return EXIT_WORKER_DIED
+    finally:
+        pool.shutdown(wait=True, cancel_futures=True)
     ordered = [game_digests[g] for g in range(args.games)]
     lengths = [moves_per_game[g] for g in range(args.games)]
     config = {
@@ -271,6 +299,7 @@ def main(argv=None) -> int:
         wall_cap_s=args.wall_cap_s,
         out=args.out,
         name=args.attempt,
+        exit_names={EXIT_WORKER_DIED: "a self-play worker died"},
     )
 
 

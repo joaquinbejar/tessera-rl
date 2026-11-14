@@ -102,6 +102,11 @@ def dispatches(root):
     return [json.loads(p.read_text()) for p in sorted(pathlib.Path(root).rglob("*.dispatch.json"))]
 
 
+def status_of(tmp_path, host, name):
+    """The stand-in container's exit record (--rm: the container is gone)."""
+    return tmp_path / "hosts" / host / "root" / remote.STATUS / f"{name}.json"
+
+
 def host_clean(tmp_path):
     """No container record and no attempt payload left on any host."""
     left = []
@@ -210,7 +215,7 @@ def test_remote_divergent_ledger_is_rejected_and_kept(tmp_path, bot):
     r = drive(root, env_for(tmp_path, "after-start"))
     assert r.returncode != 0
     rl = tmp_path / "hosts" / "swarmer02" / "root" / "ledger.json"
-    wait_for(lambda: (tmp_path / "hosts" / "swarmer02" / "containers" / f"{cname(root, 'g000-selfplay-0')}.json.exit").exists())
+    wait_for(lambda: status_of(tmp_path, "swarmer02", cname(root, "g000-selfplay-0")).exists())
     doc = json.loads(rl.read_text())
     doc["entries"].insert(0, {**doc["entries"][0], "run": "forged 0"})
     rl.write_text(json.dumps(doc))
@@ -243,7 +248,7 @@ def test_remote_ssh_docker_command_uses_absolute_bind_mounts_only(monkeypatch):
     remote.SSH("swarmer02").docker_run("tessera-m3-x", "0-31", "swarmer02", ["/work/tessera/examples/a.py", "--x"], 1800)
     cmd = seen[-1]
     assert "timeout --kill-after 30 1800 sh -c" in cmd, "the deadline lives in the container"
-    assert cmd.startswith("docker run -d --name tessera-m3-x ")
+    assert cmd.startswith("docker run -d --rm --name tessera-m3-x ")
     mounts = [cmd.split()[i + 1] for i, t in enumerate(cmd.split()) if t == "-v"]
     assert mounts and all(m.startswith("/home/u/") for m in mounts), mounts
     assert remote.IMAGE in cmd and "--cpuset-cpus 0-31" in cmd and "--hostname swarmer02" in cmd
@@ -292,8 +297,8 @@ def test_remote_overdue_container_is_killed_and_recorded(tmp_path, monkeypatch):
     assert state == ("exited", 137) and record["killed_overdue"]["deadline_epoch"] < time.time()
     saved = json.loads(path.read_text())
     assert saved["killed_overdue"] == record["killed_overdue"] and saved["published_partial"] is True
-    assert host.docker_ps_by_name("tessera-m3-hang"), "killed, not removed: cleanup removes it later"
-    host.docker_rm("tessera-m3-hang")
+    # --rm: the killed container is gone; its exit 137 is in the status record.
+    assert host.docker_ps_by_name("tessera-m3-hang") == "" and host.status("tessera-m3-hang") == ("exited", 137)
 
 
 def test_remote_container_names_are_unique_per_experiment(tmp_path, bot):
@@ -358,8 +363,11 @@ def test_remote_ssh_docker_29_missing_name_reads_as_absent(monkeypatch):
     assert h.docker_state("tessera-m3-fixture-absent") is None
     monkeypatch.setattr(remote.subprocess, "run", Stub({"docker ps": _docker_fixture("ps_absent")}))
     assert h.docker_ps_by_name("tessera-m3-fixture-absent") == ""
-    monkeypatch.setattr(remote.subprocess, "run", Stub({"docker logs": _docker_fixture("logs_absent")}))
-    assert "No such container" in h.docker_logs("tessera-m3-fixture-absent")
+    # --rm: the output is read from the status record, never `docker logs`.
+    stub = Stub({"cat ": (1, "", "cat: no such file")})
+    monkeypatch.setattr(remote.subprocess, "run", stub)
+    assert h.docker_logs("tessera-m3-fixture-absent") == ""
+    assert stub.seen == [f"cat {remote.BASE}/root/{remote.STATUS}/tessera-m3-fixture-absent.log"]
 
 
 def test_remote_ssh_docker_state_older_and_newer_wording_both_absent(monkeypatch):
@@ -398,8 +406,7 @@ def crashed_after_start(tmp_path, bot):
     root = remote_root(tmp_path, bot)
     r = drive(root, env_for(tmp_path, "after-start"))
     assert r.returncode != 0
-    exitf = tmp_path / "hosts" / "swarmer02" / "containers" / f"{cname(root, 'g000-selfplay-0')}.json.exit"
-    wait_for(exitf.exists)
+    wait_for(status_of(tmp_path, "swarmer02", cname(root, "g000-selfplay-0")).exists)
     return root, tmp_path / "hosts" / "swarmer02" / "root"
 
 
@@ -600,11 +607,11 @@ def test_remote_prefix_ledger_with_the_container_present_is_not_read_as_not_star
     root = _crash_at_look_dispatch(tmp_path, bot)
     sent = json.loads((root / "ledger.json").read_text())["entries"]
     _host_ledger(tmp_path, root, sent[:1])
-    # The container exists (exited), so the dispatch may have run.
-    rec = tmp_path / "hosts" / "xaskar" / "containers" / f"{cname(root, 'g000-look-0')}.json"
-    rec.parent.mkdir(parents=True, exist_ok=True)
-    rec.write_text(json.dumps({"pid": 0, "argv": []}))
-    (rec.parent / (rec.name + ".exit")).write_text("0")
+    # The container ran and exited (--rm: its status record is there), so
+    # the dispatch may have run.
+    st = status_of(tmp_path, "xaskar", cname(root, "g000-look-0"))
+    st.parent.mkdir(parents=True, exist_ok=True)
+    st.write_text(json.dumps({"exit_code": 0}))
     before = remote.artifacts.sha256_file(str(root / "ledger.json"))
     p = _reconcile(tmp_path, root)
     assert p.returncode != 0 and "exact prefix" in p.stderr

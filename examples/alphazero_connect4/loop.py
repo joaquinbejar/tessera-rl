@@ -105,6 +105,7 @@ import ckpt  # noqa: E402
 import look as lookmod  # noqa: E402
 import schedule  # noqa: E402
 import seeds  # noqa: E402
+import stopping  # noqa: E402
 from ledger import Ledger  # noqa: E402
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -188,6 +189,11 @@ def profile(cfg: dict) -> str:
 def look_sims(cfg: dict) -> int:
     """The look's simulations; a root without the key (M3's) uses 100."""
     return cfg.get("look_sims", LOOK_SIMS)
+
+
+def max_attempts(cfg: dict) -> int:
+    """Attempts per phase; a root without ``max_attempts`` keeps MAX_ATTEMPTS."""
+    return cfg.get("max_attempts", MAX_ATTEMPTS)
 
 
 def is_formal(cfg: dict) -> bool:
@@ -483,6 +489,11 @@ class Loop:
     def run_phase(self, gens: list[dict], k: int, phase: str, n: int) -> None:
         if phase == "look" and not look_scheduled(self.cfg, k + 1):
             raise Stop("unscheduled look", {"generation": k + 1, "look_generations": self.cfg.get("look_generations")})
+        # The last check before the attempt is allocated (its command
+        # written): a stop requested since the step began allocates nothing.
+        # remote.py checks again before dispatching.
+        if stopping.requested(self.root):
+            raise Stop("stopped", {"stop_file": stopping.STOP, "before": f"g{k:03d}-{phase}-{n}"})
         tool = {"selfplay": "selfplay.py", "train": "train_step.py", "look": "look.py"}[phase]
         argv = self.phase_argv(gens, k, phase, n)
         d = self.attempt_dir(k, phase, n)
@@ -549,6 +560,8 @@ class Loop:
     def step(self) -> None:
         """Does the next unit of work, or raises ``Stop``."""
         self.reconcile_transport()
+        if stopping.requested(self.root):
+            raise Stop("stopped", {"stop_file": stopping.STOP})
         entries = self.ledger.entries()
         gens = self.chain(entries)
         self.audit(gens, entries)
@@ -573,7 +586,7 @@ class Loop:
             raise Stop("disk", {"generation": k, "used_bytes": used, "max_disk_mb": self.cfg.get("max_disk_mb", 600)})
         phase = pending[0]
         n = g["next"][phase]
-        if n >= MAX_ATTEMPTS:
+        if n >= max_attempts(self.cfg):
             raise Stop("failed", {"generation": k, "phase": phase, "attempts": n})
         self.run_phase(gens, k, phase, n)
         crash_point(f"after-{phase}")
@@ -623,9 +636,12 @@ class Loop:
             raise SystemExit("another loop owns this root") from None
         return lock
 
-    def run(self) -> dict:
+    def run(self, driver: dict | None = None) -> dict:
         lock = self.owner()
         try:
+            if driver is not None:
+                # Under the owner lock: the identity a stop checks.
+                artifacts.write_atomic(os.path.join(self.root, stopping.DRIVER), artifacts.canonical_json(driver))
             closed = self.closed()
             if closed is not None:
                 raise SystemExit(f"this root is closed by its {closed['reason']!r} stop: no further run")
@@ -749,6 +765,7 @@ def init(args) -> int:
         "look_openings": args.look_openings,
         "early_stop_wins": args.early_stop_wins,
         "max_disk_mb": args.max_disk_mb,
+        **({"max_attempts": args.max_attempts} if args.max_attempts is not None else {}),
         "budget_core_hours": args.budget_core_hours,
         "horizon_k": args.horizon_k,
         "bot": os.path.abspath(args.bot),
@@ -793,6 +810,35 @@ def defaults_m3(args) -> None:
             setattr(args, key, value)
 
 
+def stop(root: str) -> int:
+    """The manual stop: the STOP file first, then the recorded driver
+    group, then each open dispatch's recorded runner, each only after its
+    identity is checked. Containers are then stopped by name by
+    ``remote.py reconcile``, which the operator runs once the driver is
+    gone. Prints what was done; exit 1 if a recorded identity did not
+    match (nothing is signalled then)."""
+    import glob
+
+    out = {"stop_file": stopping.request(root, "manual stop (loop.py stop)")}
+    path = os.path.join(root, stopping.DRIVER)
+    refused = False
+    if os.path.exists(path):
+        with open(path, encoding="utf-8") as f:
+            rec = json.load(f)
+        out["driver"] = stopping.kill_recorded(rec, group=True)
+        refused |= out["driver"] == "refused"
+    runners = {}
+    for p in sorted(glob.glob(os.path.join(root, "gen-*", "*.dispatch.json"))):
+        with open(p, encoding="utf-8") as f:
+            d = json.load(f)
+        if d.get("closed") is None and d.get("runner"):
+            runners[d["attempt"]] = stopping.kill_recorded(d["runner"], group=False)
+            refused |= runners[d["attempt"]] == "refused"
+    out["runners"] = runners
+    print(json.dumps(out, sort_keys=True))
+    return 1 if refused else 0
+
+
 def parse(argv):
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     sub = p.add_subparsers(dest="command", required=True)
@@ -815,6 +861,8 @@ def parse(argv):
     i.add_argument("--look-openings", type=int, default=FORMAL["look_openings"])
     i.add_argument("--early-stop-wins", type=int)
     i.add_argument("--max-disk-mb", type=int, default=600, help="stop before a phase when the root holds more")
+    i.add_argument("--max-attempts", type=int, choices=range(1, MAX_ATTEMPTS + 1),
+                   help=f"attempts per phase before a failed stop (default {MAX_ATTEMPTS}; recorded only if given)")
     i.add_argument("--budget-core-hours", type=float)
     i.add_argument("--profile", choices=(PROFILE_M3, PROFILE_ADR0052), default=PROFILE_M3,
                    help="the registered profile: m3, or adr-0052 (400-sim self-play, looks at 6, 8 and 10)")
@@ -825,7 +873,7 @@ def parse(argv):
     i.add_argument("--any-openings", action="store_true", help="tests only: never formal, looks never eligible")
     i.add_argument("--runners", help="JSON {phase: command template}")
     i.add_argument("--reconcile", help="command run before every step, e.g. remote.py reconcile; placeholders {python} {root}")
-    for name in ("run", "select"):
+    for name in ("run", "select", "stop"):
         c = sub.add_parser(name)
         c.add_argument("--root", required=True)
     return p.parse_args(argv)
@@ -835,9 +883,15 @@ def main(argv=None) -> int:
     args = parse(list(sys.argv[1:] if argv is None else argv))
     if args.command == "init":
         return init(args)
+    if args.command == "stop":
+        return stop(args.root)
     loop = Loop(args.root)
     if args.command == "run":
-        print(json.dumps(loop.run()))
+        # The driver leads its own process group, so the group a stop
+        # signals holds exactly the driver and its phase runners.
+        if os.getpgid(0) != os.getpid():
+            os.setpgid(0, 0)
+        print(json.dumps(loop.run(driver=stopping.identity(sys.argv))))
         return 0
     try:
         manifest = loop.select()
