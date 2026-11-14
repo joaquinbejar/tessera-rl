@@ -26,35 +26,31 @@
 //!
 //! ## Status
 //!
-//! Version 0.1.0 is an early release. The API is not yet stable and may
+//! Version 0.2.0 is an early release. The API is not yet stable and may
 //! change in any 0.x release.
 //!
-//! | Area | State in 0.1.0 |
+//! | Area | State in 0.2.0 |
 //! | --- | --- |
-//! | Core, engine, macros, numerics (phase 1a) | Implemented: the `Environment` trait and spaces, the canonical encoding and state hashes, the `Sync` and `Inline` pools, auto-reset modes, poisoning, snapshot, restore, fork and branched fork |
-//! | Python and Gymnasium (phase 1b) | Implemented: `PyO3` bindings (abi3, Python 3.11+), a Gymnasium 1.x `Env` and `VectorEnv`, owned and borrowed outputs |
-//! | Masks, turns, search (phase 2, partial) | Implemented: action masks, `Sequential` and `Mixed` turns, `SearchPool` and a batched PUCT MCTS helper, Connect Four, an AlphaZero-style Connect Four example |
-//! | PettingZoo adapters (phase 2) | On `main`, after 0.1.0: `tessera_rl.pz` with AEC and Parallel for Tag and AEC for Connect Four, passing the official PettingZoo API tests; not in the 0.1.0 packages |
-//! | PufferLib adapter, `Async`/`Pipelined` modes, persisted snapshots | Planned (phase 2) |
-//! | SIMD lanes, JAX and GPU paths, more classic games | Planned (phase 3) |
-//! | RTS, market simulator, card games, league tooling, viewer | Planned (phase 4) |
+//! | Core, engine, macros, numerics (phase 1a) | Implemented: the `Environment` trait and spaces, the canonical encoding and state hashes, the `Sync` and `Inline` pools, auto-reset modes, poisoning, snapshot, restore, fork and branched fork, `debug-checks` for NaN and allocations, the `register!` environment registry |
+//! | Python and Gymnasium (phase 1b) | Implemented: `PyO3` bindings (abi3, Python 3.11+), a Gymnasium 1.x `Env` and `VectorEnv`, owned and borrowed outputs, single-agent environments, `MultiDiscrete` and continuous (`Box`) actions |
+//! | Masks, turns, modes, search (phase 2) | Implemented: action masks and conditional masks, `Sequential` and `Mixed` turns, the `Pipelined` and `Async` modes, persisted snapshots, `SearchPool` with batched PUCT and the Gumbel root, determinized and privileged search roots, an ONNX evaluator (CPU, Linux and macOS), Connect Four, Othello, Go 9x9 and Leduc hold'em |
+//! | Adapters (phase 2 and 3) | Implemented: PettingZoo AEC and Parallel, PufferLib (Sync and Pipelined), JAX handles through ordered `io_callback` (CPU) |
+//! | Classic games (phase 3) | Implemented: mountain car, Acrobot, pendulum, grid world, key and door, Snake, paddle duel and brick wall |
+//! | SIMD lanes (phase 3) | Partial: `tessera-rl-simd` has a standalone lane-wise CartPole kernel; no pool uses it |
+//! | RTS (phase 4) | Implemented: `tessera-rl-rts`, with fog of war, multi-head actions and scripted opponents |
+//! | GPU paths, market simulator, card games, league tooling, viewer | Planned |
 //!
-//! Known limits of 0.1.0:
+//! Known limits of 0.2.0:
 //!
 //! - The phase 2 exit gate (the AlphaZero-style Connect Four example against the
-//!   scripted bot) has **not been run**. The example's training run was
-//!   stopped after 8 of its planned generations and is deferred.
-//! - Issue #43, an intermittent allocation count in one Sync-mode test seen
-//!   once on CI, is open and unreproduced.
+//!   scripted bot, P2-G1) has **not been run** (#154).
 //! - No throughput figure is published with this release.
-//! - **0.1.0 is unverified on Windows.** CI covers Linux x86-64, Linux
-//!   aarch64 and macOS (aarch64); Windows is not in CI. The last Windows
-//!   runs were on 2026-11-01: a native hand check of the Python Win64
-//!   floating-point boundary at `cc5c97d` (pull request #29), and GitHub's
-//!   Windows CI of the Rust workspace, last green on main at `105be6c`.
-//!   Both the Rust code (search and engine) and the Python native boundary
-//!   have changed since. In particular the Win64 thunk in this release has
-//!   never run on Windows.
+//! - **Windows is not in CI**, and no Windows wheel is built. CI covers Linux
+//!   x86-64, Linux aarch64 and macOS (aarch64). The Python Win64
+//!   floating-point boundary has been checked natively by hand (#166, #183,
+//!   #185), not on every change. The ONNX evaluator is not available on
+//!   Windows.
+//! - Wheels exist for Linux x86-64, Linux aarch64 and macOS arm64 only.
 //!
 //! ## Environments
 //!
@@ -74,6 +70,7 @@
 //! | `tessera/Leduc-v1` | `tessera-rl-games` | 2 | `Discrete(3)`, masked, sequential, imperfect information |
 //! | `tessera/Othello-v1` | `tessera-rl-games` | 2 | `Discrete(65)`, masked, sequential, forced pass |
 //! | `tessera/Go9-v1` | `tessera-rl-games` | 2 | `Discrete(82)`, masked, sequential, positional superko |
+//! | `tessera/RTS-v1` | `tessera-rl-rts` | 2, or 1 against a scripted opponent | `MultiDiscrete`, multi-head, conditional masks, fog of war |
 //!
 //! Leduc hold'em rewards and returns are normalized to `[-1, 1]`:
 //! multiplying them by 13 gives chips.
@@ -84,14 +81,14 @@
 //!
 //! ```toml
 //! [dependencies]
-//! tessera-rl = "0.1.0"
+//! tessera-rl = "0.2.0"
 //! ```
 //!
 //! From the git tag:
 //!
 //! ```toml
 //! [dependencies]
-//! tessera-rl = { git = "https://github.com/joaquinbejar/tessera-rl", tag = "v0.1.0" }
+//! tessera-rl = { git = "https://github.com/joaquinbejar/tessera-rl", tag = "v0.2.0" }
 //! ```
 //!
 //! Depend on the facade `tessera-rl` only: the derive macros resolve their
