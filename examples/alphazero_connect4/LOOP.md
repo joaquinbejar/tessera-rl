@@ -72,6 +72,34 @@ The stop reasons are `K_max`, `budget`, `early`, `failed` (3 attempts), `disk` (
 
 **Bias.** Up to 30 looks at one held-out set make the selected checkpoint's held-out score optimistically biased, and the early stop uses the same looks. That score is never reported as an estimate of gate performance; only PR 4's blind 1,000-game run is.
 
+## ADR-0052 profile (P2-G1, 400-simulation self-play)
+
+`loop.py init --profile adr-0052` registers a second formal profile beside
+M3's, whose values above are unchanged. It follows the ADR-0052 text frozen
+at sha256 `d3a091482e70f53caee6fe23b7b905c38a65d204022408727151d1deeaa1b0ee`.
+
+- M3's recipe with self-play at 400 simulations, `K_max` 10, and the
+  learning-rate horizon scaled to 10 generations (`horizon_k` in
+  `config.json`, `--horizon-k 10` to `train_step.py`).
+- `--budget-core-hours` (at most 250), `--selfplay-cores` and
+  `--selfplay-wall-s` are required: they are the owner's figure and the
+  reviewed design's reservation, never defaults. The budget is a hard stop
+  through the usual admission against the ledger.
+- Looks run only at generations 6, 8 and 10. The other generations train
+  without a look; a look attempt at any other generation stops the loop
+  with `incomplete input`, and the loop refuses to start one.
+- Looks run at 100 simulations, batch 8, capacity 8192 (`look_sims`, 100
+  also for a root without the key); self-play alone runs at 400.
+- The first look on that frozen budget reaching 336 stops training (`early`);
+  a look at any other budget neither stops nor closes the root; only that look is
+  eligible for selection. Without one, the run stops `not eligible`: after
+  generation 10 (`cause: K_max`) or on a budget stop at any point
+  (`cause: budget`), with no extra look.
+- `early` and `not eligible` close the root: a later `run` is refused.
+- The gate is unchanged (336 of 400 at a look, 815 of 1,000 formal). A
+  run's host and its bot binary are registered by a reviewed pre-run commit
+  (`h2h.REGISTERED_HOSTS`, `h2h.REGISTERED_IMAGES`, `look.REGISTERED_BOTS`).
+
 ## Artifacts
 
 `assets.py pack` makes one content-addressed tarball per done phase attempt and an `assets-manifest.json` with the tag, name, size, SHA-256, generation, phase, attempt, source SHA and config hash. The coordinator uploads the tarballs, after their ledger entries are settled, to the private draft release `p2-m3-train-<date>`.

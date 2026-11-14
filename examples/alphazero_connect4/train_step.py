@@ -189,11 +189,12 @@ def train(model, planes, policy, z, run_seed: int, epochs: int, batch: int, cloc
 EXIT_DIVERGED = 5
 
 
-def train_window(model, planes, policy, z, generation: int, base: int, steps: int, batch: int):
+def train_window(model, planes, policy, z, generation: int, base: int, steps: int, batch: int, horizon_k: int = schedule.K_MAX):
     """PR 3: ``steps`` steps of generation ``generation`` (at most
     ``schedule.STEPS``), each a batch drawn uniformly with replacement from
     the mirror-augmented window pool. The rate follows the registered
-    schedule at ``t = generation * schedule.STEPS + s``. A fresh optimizer
+    schedule of horizon ``horizon_k`` generations at
+    ``t = generation * schedule.STEPS + s``. A fresh optimizer
     is built each generation: momentum is reset by design. Returns the
     per-step losses and counts."""
     if not 1 <= steps <= schedule.STEPS:
@@ -219,7 +220,7 @@ def train_window(model, planes, policy, z, generation: int, base: int, steps: in
 
     opt = torch.optim.SGD(
         model.parameters(),
-        lr=schedule.lr(schedule.global_step(generation, 0)),
+        lr=schedule.lr(schedule.global_step(generation, 0), horizon_k),
         momentum=HYPER["momentum"],
         nesterov=HYPER["nesterov"],
         weight_decay=HYPER["weight_decay"],
@@ -228,7 +229,7 @@ def train_window(model, planes, policy, z, generation: int, base: int, steps: in
     model.train()
     try:
         for s_ in range(steps):
-            rate = schedule.lr(schedule.global_step(generation, s_))
+            rate = schedule.lr(schedule.global_step(generation, s_), horizon_k)
             for group in opt.param_groups:
                 group["lr"] = rate
             xb, pb, vb = batch_of(indices[s_])
@@ -266,7 +267,7 @@ def work_window(args, clock) -> int:
     model, parent = ckpt.load(args.checkpoint)
     planes, policy, z, digests = load_samples(args.data)
     try:
-        losses, counts = train_window(model, planes, policy, z, args.generation, args.base, args.steps, args.batch)
+        losses, counts = train_window(model, planes, policy, z, args.generation, args.base, args.steps, args.batch, args.horizon_k)
     except Diverged as e:
         print(f"diverged, no checkpoint written: {e}", file=sys.stderr)
         return EXIT_DIVERGED
@@ -279,7 +280,7 @@ def work_window(args, clock) -> int:
         "base": args.base,
         "steps": args.steps,
         "batch": args.batch,
-        "schedule": {"k_max": schedule.K_MAX, "steps": schedule.STEPS, "lr_max": schedule.LR_MAX, "lr_min": schedule.LR_MIN},
+        "schedule": {"k_max": args.horizon_k, "steps": schedule.STEPS, "lr_max": schedule.LR_MAX, "lr_min": schedule.LR_MIN},
         "hyper": {k: v for k, v in HYPER.items() if k != "lr"},
     }
     meta = {
@@ -369,6 +370,8 @@ def parse(argv):
     w.add_argument("--base", type=int, required=True)
     w.add_argument("--steps", type=int, default=schedule.STEPS)
     w.add_argument("--batch", type=int, default=HYPER["batch"])
+    w.add_argument("--horizon-k", type=int, default=schedule.K_MAX, choices=schedule.HORIZONS_K,
+                   help="the schedule's horizon in generations (M3: 30; ADR-0052: 10)")
     w.add_argument("--formal", action="store_true", help="the registered run: steps must equal schedule.STEPS")
     w.add_argument("--source-sha", required=True)
     w.add_argument("--attempt", default="train")

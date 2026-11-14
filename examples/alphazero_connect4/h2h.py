@@ -70,6 +70,11 @@ FROZEN = (100, 8, 8192, 1)
 # one allocated core, one torch thread.
 REGISTERED_HOST = "xaskar"
 REGISTERED_IMAGE = "rust:1.99.1@sha256:09027f873d45b8ecd1dc86f1fa13b7a62b875c961f017a0e331267b350430137"
+# Every registered host and image. Another one (a new run's, ADR-0052
+# item 7) is added here by a reviewed pre-run commit, with the image's bot
+# binary in ``look.REGISTERED_BOTS``; never at run time.
+REGISTERED_HOSTS: frozenset[str] = frozenset({REGISTERED_HOST})
+REGISTERED_IMAGES: frozenset[str] = frozenset({REGISTERED_IMAGE})
 
 
 def cpuset_size(spec: str | None) -> int | None:
@@ -119,8 +124,8 @@ def runtime() -> dict:
         "mem_total": _field("/proc/meminfo", "MemTotal"),
     }
     observed["registered"] = (
-        observed["host"] == REGISTERED_HOST
-        and observed["image_digest"] == REGISTERED_IMAGE
+        observed["host"] in REGISTERED_HOSTS
+        and observed["image_digest"] in REGISTERED_IMAGES
         and cpuset_size(cpuset) == 1
         and affinity == 1
         and observed["torch_threads"] == 1
