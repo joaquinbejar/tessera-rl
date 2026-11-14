@@ -379,6 +379,14 @@ def test_gpu_split_summary_has_no_pass_when_not_eligible(rows, device, complete,
     assert s["gate_eligible"] is False and "pass" not in s
 
 
+def test_gpu_split_summary_refuses_a_tessera_row_without_native_digest():
+    rows = gate_rows({})
+    victim = next(r for r in rows if r["case"] == "tessera-w2" and r["mode"] == "env")
+    victim["result"]["tessera_rl"] = None
+    s = driver.summary(rows, "cuda", True, MANIFEST, "f" * 64)
+    assert s["gate_eligible"] is False and "pass" not in s
+
+
 def test_gpu_split_summary_cells():
     s = driver.summary(gate_rows({"tessera-w1": 2.0}), "cuda", True, MANIFEST, "f" * 64)
     assert s["cells"]["tessera-w1/e2e"] == {"n": 5, "median": 2.0, "min": 2.0, "max": 2.0}

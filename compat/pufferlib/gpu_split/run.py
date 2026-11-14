@@ -173,6 +173,11 @@ def summary(rows: list[dict], device: str, complete: bool, manifest: dict | None
         and scales == ["full"]
         and expected_native is not None
         and natives == [expected_native]
+        and all(
+            ((row.get("result") or {}).get("tessera_rl") or {}).get("native_sha256") == expected_native
+            for row in rows
+            if row["case"] in TESSERA
+        )
     )
     out = {
         "summary": True,
