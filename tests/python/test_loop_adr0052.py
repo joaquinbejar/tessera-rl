@@ -92,9 +92,15 @@ def test_look_scheduled_m3_every_generation_adr0052_only_predeclared():
     assert [g for g in range(1, 11) if loop.look_scheduled(cfg, g)] == [6, 8, 10]
 
 
-def test_registered_runtime_hooks_hold_only_the_registered_host_and_image():
-    assert h2h.REGISTERED_HOSTS == frozenset({h2h.REGISTERED_HOST})
+def test_registered_runtime_hooks_pin_the_run_host_image_and_bot():
+    import look
+
+    assert h2h.REGISTERED_HOSTS == frozenset({h2h.REGISTERED_HOST, "swarmer03"})
     assert h2h.REGISTERED_IMAGES == frozenset({h2h.REGISTERED_IMAGE})
+    # The run uses the registered bot, unchanged: one entry for the image.
+    assert look.REGISTERED_BOTS == {
+        h2h.REGISTERED_IMAGE: "ef274131e42f270222d907cd054b43aa19df1577f8a6bca2555b7f9bf311f857"
+    }
 
 
 def fake_loop(cfg):
