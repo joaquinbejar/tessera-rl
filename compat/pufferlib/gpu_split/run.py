@@ -29,8 +29,14 @@ before any run (exit 7). Every row carries the manifest sha256. Once the first
 run starts, the session is the attempt (item 8, A1): the last line of
 ``--out`` is a summary row with per-cell (median, min, max) of ``sps``, and
 ``attempt`` is ``complete`` only when every run succeeded, else
-``failed, no result``. ``gate_eligible`` also needs the device ``cuda`` and the
-CUDA advantage kernel on every trainer run (item 6).
+``failed, no result``. A manifest attempt also refuses ``--split-args``, a
+``--wheel`` path absent from ``--python`` and a ``git rev-parse HEAD`` other
+than the manifest's commit. ``gate_eligible`` also needs the device ``cuda``,
+the CUDA advantage kernel on every trainer run (item 6), 30 timed epochs at
+full scale (item 2) and the manifest's native module in every Tessera run.
+Only then the summary carries item 7: each side's score is the larger ``e2e``
+median of its two cases, the case is recorded, and ``pass`` is
+``tessera_score >= ocean_score``.
 
 ``PY`` is the interpreter (or command) that runs ``split.py``, for example
 ``uv run --locked --python 3.11 --project compat/pufferlib --with WHEEL python -I``.
@@ -124,24 +130,87 @@ def from_order(order) -> list[tuple[int, int, str, str]]:
     return [(r, i, c, m) for r, pairs in enumerate(order) for i, (c, m) in enumerate(pairs)]
 
 
-def summary(rows: list[dict], device: str, complete: bool, manifest_sha256: str | None) -> dict:
+GATE_EPOCHS_TIMED = 30  # ADR-0061 item 2: 31 epochs, the first dropped
+OCEAN = ("ocean-serial", "ocean-mp")
+TESSERA = ("tessera-w1", "tessera-w2")
+
+
+def side_score(cells: dict, cases) -> tuple[float, str] | None:
+    """A side's score (item 7): the larger e2e median of its cases, and the
+    case it came from; None when a case has no e2e median."""
+    medians = [(cells[f"{c}/e2e"]["median"], c) for c in cases if f"{c}/e2e" in cells]
+    if len(medians) != len(cases):
+        return None
+    return max(medians)
+
+
+def summary(rows: list[dict], device: str, complete: bool, manifest: dict | None, manifest_sha256: str | None) -> dict:
     """The attempt's last row: per (case, mode) cell the median, min and max of
-    ``sps`` over its successful runs, and whether the attempt can be a gate
-    result."""
+    ``sps`` over its successful runs, the attempt outcome (item 8), whether it
+    can be a gate result (items 2, 6 and 9) and, only then, the item 7
+    verdict."""
     cells: dict[str, list[float]] = {}
     for row in rows:
         res = row.get("result") or {}
         if row["rc"] == 0 and "sps" in res:
             cells.setdefault(f"{row['case']}/{row['mode']}", []).append(res["sps"])
-    backends = sorted({(row.get("result") or {}).get("advantage_backend") for row in rows if row["mode"] != "env"} - {None})
-    return {
+    trainer = [row.get("result") or {} for row in rows if row["mode"] != "env"]
+    backends = sorted({r.get("advantage_backend") for r in trainer} - {None})
+    epochs = sorted({r.get("epochs_timed") for r in trainer} - {None})
+    scales = sorted({(row.get("result") or {}).get("scale") for row in rows} - {None})
+    natives = sorted(
+        {((row.get("result") or {}).get("tessera_rl") or {}).get("native_sha256") for row in rows if row["case"] in TESSERA}
+        - {None}
+    )
+    expected_native = manifest.get("native_sha256") if manifest else None
+    stats = {k: {"n": len(v), "median": statistics.median(v), "min": min(v), "max": max(v)} for k, v in sorted(cells.items())}
+    eligible = (
+        complete
+        and manifest_sha256 is not None
+        and device == "cuda"
+        and backends == ["cuda"]
+        and epochs == [GATE_EPOCHS_TIMED]
+        and scales == ["full"]
+        and expected_native is not None
+        and natives == [expected_native]
+    )
+    out = {
         "summary": True,
         "manifest_sha256": manifest_sha256,
         "attempt": "complete" if complete else "failed, no result",
         "advantage_backends": backends,
-        "gate_eligible": complete and manifest_sha256 is not None and device == "cuda" and backends == ["cuda"],
-        "cells": {k: {"n": len(v), "median": statistics.median(v), "min": min(v), "max": max(v)} for k, v in sorted(cells.items())},
+        "epochs_timed": epochs,
+        "scales": scales,
+        "native_sha256": natives,
+        "cells": stats,
     }
+    ocean, tessera = side_score(stats, OCEAN), side_score(stats, TESSERA)
+    eligible = bool(eligible and ocean and tessera)
+    out["gate_eligible"] = eligible
+    if eligible:
+        out["ocean_score"], out["ocean_case"] = ocean
+        out["tessera_score"], out["tessera_case"] = tessera
+        out["pass"] = tessera[0] >= ocean[0]
+    return out
+
+
+def git_head() -> str | None:
+    try:
+        out = subprocess.run(["git", "-C", HERE, "rev-parse", "HEAD"], capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    return out.stdout.strip() if out.returncode == 0 else None
+
+
+def wheel_in_command(wheel: str, python: str) -> bool:
+    """The checked wheel is the one the runs install: its path appears in the
+    ``--python`` command (ADR-0061 item 9, H2)."""
+    target = os.path.realpath(wheel)
+    for token in shlex.split(python):
+        for part in token.split("="):
+            if part and os.path.realpath(part) == target:
+                return True
+    return False
 
 
 def main(argv=None) -> int:
@@ -169,13 +238,21 @@ def main(argv=None) -> int:
         if m not in MODES:
             p.error(f"unknown mode {m}")
     msha = None
+    m = None
     if args.manifest or args.manifest_sha256 or args.wheel:
         if not (args.manifest and args.manifest_sha256 and args.wheel):
             p.error("--manifest, --manifest-sha256 and --wheel go together")
         try:
+            if args.split_args.strip():
+                raise ValueError("--split-args is not allowed in a manifest attempt")
             m = manifestmod.load(args.manifest, args.manifest_sha256)
             if manifestmod.file_sha256(args.wheel) != m["wheel_sha256"]:
                 raise ValueError("the wheel file does not hash to the manifest's wheel_sha256")
+            if not wheel_in_command(args.wheel, args.python):
+                raise ValueError("the --wheel path does not appear in the --python command")
+            head = git_head()
+            if head != m["commit"]:
+                raise ValueError(f"HEAD {head} is not the manifest's commit {m['commit']}")
         except (ValueError, OSError, KeyError) as e:
             print(f"REFUSED: {e}", flush=True)
             return EXIT_REFUSED
@@ -191,7 +268,7 @@ def main(argv=None) -> int:
     finally:
         complete = status == 0 and len(rows) == len(runs)
         with open(args.out, "a") as f:
-            f.write(json.dumps(summary(rows, args.device, complete, msha)) + "\n")
+            f.write(json.dumps(summary(rows, args.device, complete, m, msha)) + "\n")
     return status
 
 

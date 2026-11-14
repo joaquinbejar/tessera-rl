@@ -309,6 +309,22 @@ def parser() -> argparse.ArgumentParser:
     return p
 
 
+def tessera_location() -> dict | None:
+    """Where the imported ``tessera_rl`` comes from, so the driver can bind it
+    to the manifest's wheel (ADR-0061 item 9): the native module's path and
+    sha256. Installers rewrite ``RECORD``, but they copy the native module
+    byte for byte. None for the Ocean cases, which never import it."""
+    if "tessera_rl" not in sys.modules:
+        return None
+    import hashlib
+
+    import tessera_rl._native as native
+
+    with open(native.__file__, "rb") as f:
+        digest = hashlib.sha256(f.read()).hexdigest()
+    return {"native_file": native.__file__, "native_sha256": digest}
+
+
 def main(argv=None) -> int:
     args = parser().parse_args(argv)
 
@@ -370,6 +386,7 @@ def main(argv=None) -> int:
         "numpy": numpy.__version__,
     }
     record["host"] = platform.machine()
+    record["tessera_rl"] = tessera_location()
     print(json.dumps(record), flush=True)
     return 0 if not record["children_left"] and not record["monitors_left"] else 5
 

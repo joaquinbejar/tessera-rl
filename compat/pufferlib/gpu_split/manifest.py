@@ -23,6 +23,7 @@ import json
 import re
 import subprocess
 import sys
+import zipfile
 
 CASES = ("ocean-serial", "ocean-mp", "tessera-w1", "tessera-w2")
 MODES = ("e2e", "sync", "env")
@@ -83,10 +84,21 @@ def build(commit, wheel, wheel_sha256, wheel_source, toolkit, nvcc, cases, modes
         "commit": commit,
         "wheel_sha256": wheel_sha256,
         "wheel_source": wheel_source,
+        "native_sha256": wheel_native_sha256(wheel),
         "cuda_toolkit": toolkit,
         "rounds": rounds,
         "order": order(cases, modes, rounds),
     }
+
+
+def wheel_native_sha256(wheel: str) -> str:
+    """The sha256 of the wheel's ``tessera_rl/_native`` extension module,
+    compared with the one ``split.py`` reports from the installed package."""
+    with zipfile.ZipFile(wheel) as z:
+        names = [n for n in z.namelist() if re.fullmatch(r"tessera_rl/_native\.[^/]*(so|pyd)", n)]
+        if len(names) != 1:
+            raise ValueError("the wheel has no single tessera_rl/_native module")
+        return hashlib.sha256(z.read(names[0])).hexdigest()
 
 
 def load(path: str, expected_sha256: str) -> dict:
@@ -114,7 +126,7 @@ def main(argv=None) -> int:
     try:
         m = build(args.commit, args.wheel, args.wheel_sha256, args.wheel_source, args.toolkit, args.nvcc,
                   CASES, MODES, args.rounds)  # fmt: skip
-    except (ValueError, OSError) as e:
+    except (ValueError, OSError, zipfile.BadZipFile) as e:
         print(f"REFUSED: {e}", flush=True)
         return EXIT_MISMATCH
     data = canonical(m)
