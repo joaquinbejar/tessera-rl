@@ -73,7 +73,10 @@ REGISTERED_IMAGE = "rust:1.99.1@sha256:09027f873d45b8ecd1dc86f1fa13b7a62b875c961
 # Every registered host and image. Another one (a new run's, ADR-0052
 # item 7) is added here by a reviewed pre-run commit, with the image's bot
 # binary in ``look.REGISTERED_BOTS``; never at run time.
-REGISTERED_HOSTS: frozenset[str] = frozenset({REGISTERED_HOST})
+# The ADR-0052 run's host (design f283a74b, amendment 1). Its bot is the
+# existing ``look.REGISTERED_BOTS`` entry for this image, which two fresh
+# builds of its source on that host reproduce.
+REGISTERED_HOSTS: frozenset[str] = frozenset({REGISTERED_HOST, "swarmer03"})
 REGISTERED_IMAGES: frozenset[str] = frozenset({REGISTERED_IMAGE})
 
 
