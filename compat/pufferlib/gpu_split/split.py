@@ -35,7 +35,7 @@ Process rules:
 
 Usage::
 
-    python split.py CASE MODE DEVICE [--epochs 11] [--threads 4] [--env-steps 2000] [--scale full]
+    python split.py CASE MODE DEVICE [--epochs 31] [--threads 4] [--env-steps 2000] [--scale full]
 
 ``--scale small`` shrinks the agent count and batch for the local tests only;
 a measurement uses ``full``.
@@ -295,16 +295,22 @@ def stop_monitors() -> list[str]:
     return [t.name for t in monitors if t.is_alive()]
 
 
-def main(argv=None) -> int:
+def parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     p.add_argument("case", choices=CASES)
     p.add_argument("mode", choices=MODES)
     p.add_argument("device", choices=("cpu", "cuda"))
-    p.add_argument("--epochs", type=int, default=11)
+    # ADR-0061 item 2 (G5): 31 epochs, first dropped, only lengthen the
+    # timed window; every cartpole.ini value stays as published.
+    p.add_argument("--epochs", type=int, default=31)
     p.add_argument("--threads", type=int, default=4)
     p.add_argument("--env-steps", type=int, default=2000)
     p.add_argument("--scale", choices=tuple(AGENTS), default="full")
-    args = p.parse_args(argv)
+    return p
+
+
+def main(argv=None) -> int:
+    args = parser().parse_args(argv)
 
     import torch
 

@@ -14,7 +14,13 @@ Covered:
   CUDA initialised before it is refused;
 - the env probe drains its warm-up and times each send with its matching
   recv, so no transition is left pending;
-- the driver's per-round shuffle is fixed, only the first CUDA trainer run
+- the driver rotates the case order by one per round, interleaved mode by
+  mode (ADR-0061 item 5); the manifest checks the wheel and toolkit and the
+  driver refuses a manifest or wheel whose sha256 differs (item 9); the
+  summary row records (median, min, max) per cell and the attempt outcome
+  (item 8), and is gate eligible only on cuda with the CUDA advantage kernel;
+- the epoch default is 31 (item 2);
+- the driver's plan is fixed, only the first CUDA trainer run
   gets the long timeout, and a timed-out run's whole process group is
   killed, with nothing left.
 """
@@ -31,6 +37,7 @@ import pytest
 HARNESS = pathlib.Path(__file__).parents[1] / "gpu_split"
 sys.path.insert(0, str(HARNESS))
 
+import manifest  # noqa: E402
 import run as driver  # noqa: E402
 import split  # noqa: E402
 import sync  # noqa: E402
@@ -199,15 +206,100 @@ def test_gpu_split_refuses_cuda_initialised_before_the_vecenv(monkeypatch, capsy
 # ----------------------------------------------------------------- driver
 
 
-def test_gpu_split_driver_plan_is_a_fixed_shuffle_per_round():
-    a = driver.plan(split.CASES, split.MODES, 3)
-    assert a == driver.plan(split.CASES, split.MODES, 3)
-    assert len(a) == 3 * len(split.CASES) * len(split.MODES)
-    for r in range(3):
+def test_gpu_split_driver_plan_rotates_the_cases_each_round():
+    a = driver.plan(split.CASES, split.MODES, 5)
+    assert len(a) == 5 * len(split.CASES) * len(split.MODES)
+    for r in range(5):
         pairs = [(c, m) for rr, _, c, m in a if rr == r]
         assert sorted(pairs) == sorted((c, m) for c in split.CASES for m in split.MODES)
-    orders = [[(c, m) for rr, _, c, m in a if rr == r] for r in range(3)]
-    assert len({tuple(o) for o in orders}) > 1
+        for m in split.MODES:
+            cases = [c for c, mm in pairs if mm == m]
+            k = r % len(split.CASES)
+            assert cases == [*split.CASES[k:], *split.CASES[:k]]
+        # interleaved: each mode's block holds all four cases in a row
+        assert [mm for _, mm in pairs] == [m for m in split.MODES for _ in split.CASES]
+
+
+def test_gpu_split_epochs_default_is_31():
+    assert split.parser().parse_args(["ocean-serial", "e2e", "cpu"]).epochs == 31
+
+
+def fake_nvcc(tmp_path, version="13.0.88"):
+    nvcc = tmp_path / "nvcc"
+    nvcc.write_text(f"#!/bin/sh\necho 'Cuda compilation tools, release 13.0, V{version}'\n")
+    nvcc.chmod(0o755)
+    return str(nvcc)
+
+
+def make_manifest(tmp_path, **over):
+    wheel = tmp_path / "tessera_rl-0-cp311-abi3-linux_x86_64.whl"
+    wheel.write_bytes(b"wheel bytes")
+    args = {"--out": str(tmp_path / "manifest.json"), "--commit": "a" * 40, "--wheel": str(wheel),
+            "--wheel-sha256": manifest.file_sha256(str(wheel)), "--wheel-source": "main-wheels-run",
+            "--toolkit": "13.0.88", "--nvcc": fake_nvcc(tmp_path), "--rounds": "2"}  # fmt: skip
+    args.update(over)
+    return wheel, [x for kv in args.items() for x in kv]
+
+
+def test_gpu_split_manifest_fixes_commit_wheel_toolkit_and_order(tmp_path, capsys):
+    wheel, argv = make_manifest(tmp_path)
+    assert manifest.main(argv) == 0
+    digest = capsys.readouterr().out.strip()
+    m = manifest.load(str(tmp_path / "manifest.json"), digest)
+    assert m["commit"] == "a" * 40 and m["cuda_toolkit"] == "13.0.88"
+    assert m["wheel_sha256"] == manifest.file_sha256(str(wheel))
+    assert m["order"] == manifest.order(manifest.CASES, manifest.MODES, 2)
+
+
+@pytest.mark.parametrize("over", [{"--wheel-sha256": "0" * 64}, {"--toolkit": "12.9.0"}, {"--commit": "abc"}])
+def test_gpu_split_manifest_refuses_a_mismatch(tmp_path, capsys, over):
+    _, argv = make_manifest(tmp_path, **over)
+    assert manifest.main(argv) == manifest.EXIT_MISMATCH
+    assert "REFUSED" in capsys.readouterr().out
+    assert not (tmp_path / "manifest.json").exists()
+
+
+def test_gpu_split_driver_refuses_a_wrong_manifest_or_wheel_sha256(tmp_path, capsys):
+    wheel, argv = make_manifest(tmp_path)
+    manifest.main(argv)
+    digest = capsys.readouterr().out.strip()
+    out = tmp_path / "r.jsonl"
+    common = ["--python", "sh -c 'exit 0' fake", "--out", str(out), "--device", "cpu", "--manifest", str(tmp_path / "manifest.json")]
+    assert driver.main([*common, "--manifest-sha256", "0" * 64, "--wheel", str(wheel)]) == driver.EXIT_REFUSED
+    other = tmp_path / "other.whl"
+    other.write_bytes(b"other")
+    assert driver.main([*common, "--manifest-sha256", digest, "--wheel", str(other)]) == driver.EXIT_REFUSED
+    assert not out.exists()
+
+
+def test_gpu_split_driver_follows_the_manifest_and_records_a_failed_attempt(tmp_path, capsys):
+    wheel, argv = make_manifest(tmp_path, **{"--rounds": "1"})
+    manifest.main(argv)
+    digest = capsys.readouterr().out.strip()
+    out = tmp_path / "r.jsonl"
+    rc = driver.main(["--python", "sh -c 'exit 1' fake", "--out", str(out), "--device", "cpu",
+                      "--manifest", str(tmp_path / "manifest.json"), "--manifest-sha256", digest, "--wheel", str(wheel)])  # fmt: skip
+    rows = [json.loads(x) for x in out.read_text().splitlines()]
+    runs, last = rows[:-1], rows[-1]
+    assert rc == 1
+    assert [[r["case"], r["mode"]] for r in runs] == manifest.order(manifest.CASES, manifest.MODES, 1)[0]
+    assert all(r["manifest_sha256"] == digest for r in runs)
+    assert last["summary"] and last["manifest_sha256"] == digest
+    assert last["attempt"] == "failed, no result" and last["gate_eligible"] is False
+
+
+def test_gpu_split_summary_cells_and_gate_eligibility():
+    def row(case, mode, sps, backend="cuda"):
+        return {"case": case, "mode": mode, "rc": 0, "result": {"sps": sps, "advantage_backend": backend}}
+
+    rows = [row("tessera-w1", "e2e", s) for s in (3.0, 1.0, 2.0)] + [row("ocean-serial", "env", 5.0, "cpu-fallback")]
+    s = driver.summary(rows, "cuda", True, "f" * 64)
+    assert s["cells"]["tessera-w1/e2e"] == {"n": 3, "median": 2.0, "min": 1.0, "max": 3.0}
+    assert s["attempt"] == "complete" and s["gate_eligible"] is True
+    assert driver.summary(rows, "cpu", True, "f" * 64)["gate_eligible"] is False
+    assert driver.summary(rows, "cuda", True, None)["gate_eligible"] is False
+    fallback = rows + [row("ocean-mp", "e2e", 1.0, "cpu-fallback")]
+    assert driver.summary(fallback, "cuda", True, "f" * 64)["gate_eligible"] is False
 
 
 def test_gpu_split_driver_kills_the_whole_group_on_timeout(tmp_path):
@@ -228,6 +320,8 @@ def test_gpu_split_driver_gives_the_long_timeout_to_the_first_cuda_trainer_run_o
                  "--cases", "ocean-serial,ocean-mp", "--modes", "env,e2e,sync",
                  "--timeout", "1", "--first-timeout", "10"])  # fmt: skip
     rows = [json.loads(x) for x in out.read_text().splitlines()]
+    assert rows[-1]["summary"] and rows[-1]["attempt"] == "failed, no result"
+    rows = rows[:-1]
     long = [r for r in rows if r["timeout_s"] == 10]
     assert len(long) == 1 and long[0]["mode"] != "env" and not long[0]["timed_out"]
     first_trainer = next(r for r in rows if r["mode"] != "env")
