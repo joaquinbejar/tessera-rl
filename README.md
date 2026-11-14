@@ -35,7 +35,7 @@ change in any 0.x release.
 | Python and Gymnasium (phase 1b) | Implemented: `PyO3` bindings (abi3, Python 3.11+), a Gymnasium 1.x `Env` and `VectorEnv`, owned and borrowed outputs, single-agent environments, `MultiDiscrete` and continuous (`Box`) actions |
 | Masks, turns, modes, search (phase 2) | Implemented: action masks and conditional masks, `Sequential` and `Mixed` turns, the `Pipelined` and `Async` modes, persisted snapshots, `SearchPool` with batched PUCT and the Gumbel root, determinized and privileged search roots, an ONNX evaluator (CPU, Linux and macOS), Connect Four, Othello, Go 9x9 and Leduc hold'em |
 | Adapters (phase 2 and 3) | Implemented: PettingZoo AEC and Parallel, PufferLib (Sync and Pipelined), JAX handles through ordered `io_callback` (CPU) |
-| Classic games (phase 3) | Implemented: MountainCar, Acrobot, Pendulum, Grid, GridKeyDoor, Snake, PaddleDuel and BrickWall |
+| Classic games (phase 3) | Implemented: mountain car, Acrobot, pendulum, grid world, key and door, Snake, paddle duel and brick wall |
 | SIMD lanes (phase 3) | Partial: `tessera-rl-simd` has a standalone lane-wise CartPole kernel; no pool uses it |
 | RTS (phase 4) | Implemented: `tessera-rl-rts`, with fog of war, multi-head actions and scripted opponents |
 | GPU paths, market simulator, card games, league tooling, viewer | Planned |
