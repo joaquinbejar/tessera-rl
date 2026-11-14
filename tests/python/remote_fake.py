@@ -5,6 +5,10 @@ The host is a directory, ``$REMOTE_TEST_HOSTS/<host>``. A "container" is a
 detached local process, in its own session, that runs the phase tool with
 the container paths mapped back to the host directory and the repository.
 Its state persists in files, so a fresh driver process sees it.
+
+Like the real ``docker run --rm``, a container is gone once it exits: its
+exit code and output are then only in ``root/_status/<name>.{json,log}``,
+written by the container itself (or 137 by a kill).
 """
 
 import json
@@ -23,6 +27,7 @@ import remote  # noqa: E402
 class FakeHost:
     def __init__(self, host: str):
         self.host = host
+        self.kills: list[str] = []
         self.base = os.path.join(os.environ["REMOTE_TEST_HOSTS"], host)
         os.makedirs(os.path.join(self.base, "containers"), exist_ok=True)
 
@@ -82,37 +87,50 @@ class FakeHost:
             elif a.startswith(remote.SRC + "/examples/alphazero_connect4/"):
                 a = os.path.join(EXAMPLE, os.path.basename(a))
             host_argv.append(a)
-        exitf = self._rec(name) + ".exit"
+        st = self._status(name)
+        os.makedirs(os.path.dirname(st), exist_ok=True)
         # The container's own deadline, as `timeout` in the real one: it
-        # holds without the driver.
+        # holds without the driver. On exit it records its status and
+        # removes itself (--rm).
         script = (
-            "import os, signal, subprocess, sys\n"
-            "p = subprocess.Popen(sys.argv[3:])\n"  # in this group: a kill takes all of it
-            "try:\n    rc = p.wait(timeout=float(sys.argv[2]))\n"
+            "import json, os, signal, subprocess, sys\n"
+            "st, rec = sys.argv[1], sys.argv[2]\n"
+            "p = subprocess.Popen(sys.argv[4:])\n"  # in this group: a kill takes all of it
+            "def done(rc):\n"
+            "    open(st + '.json.tmp', 'w').write(json.dumps({'exit_code': rc}))\n"
+            "    os.replace(st + '.json.tmp', st + '.json')\n"
+            "    os.path.exists(rec) and os.remove(rec)\n"
+            "try:\n    rc = p.wait(timeout=float(sys.argv[3]))\n"
             "except subprocess.TimeoutExpired:\n"
-            "    open(sys.argv[1], 'w').write('124')\n"
+            "    done(124)\n"
             "    os.killpg(os.getpgrp(), signal.SIGKILL)\n"
-            "open(sys.argv[1], 'w').write(str(rc))\n"
+            "done(rc)\n"
         )
         deadline = deadline_s or 3600.0
         env = {k: v for k, v in os.environ.items() if not k.startswith("REMOTE_TEST_CRASH")}
-        proc = subprocess.Popen([sys.executable, "-c", script, exitf, str(deadline), sys.executable, *host_argv],
-                                start_new_session=True, env=env, stdout=open(self._rec(name) + ".log", "w"),
+        proc = subprocess.Popen([sys.executable, "-c", script, st, self._rec(name), str(deadline), sys.executable,
+                                 *host_argv], start_new_session=True, env=env, stdout=open(st + ".log", "w"),
                                 stderr=subprocess.STDOUT)  # fmt: skip
         with open(self._rec(name), "w") as f:
             json.dump({"pid": proc.pid, "argv": host_argv}, f)
 
+    def _status(self, name: str) -> str:
+        return os.path.join(self.base, "root", remote.STATUS, name)
+
+    def status(self, name: str):
+        p = self._status(name) + ".json"
+        return ("exited", int(json.load(open(p))["exit_code"])) if os.path.exists(p) else None
+
     def docker_state(self, name: str):
-        if not os.path.exists(self._rec(name)):
-            return None
-        if os.path.exists(self._rec(name) + ".exit"):
-            return ("exited", int(open(self._rec(name) + ".exit").read() or 1))
-        pid = json.load(open(self._rec(name)))["pid"]
-        try:
-            os.kill(pid, 0)
-            return ("running", None)
-        except ProcessLookupError:
-            return ("exited", 137)
+        if os.path.exists(self._rec(name)):
+            pid = json.load(open(self._rec(name)))["pid"]
+            try:
+                os.kill(pid, 0)
+                return ("running", None)
+            except ProcessLookupError:
+                pass
+        # --rm: gone from docker; the exit is in the status record.
+        return self.status(name)
 
     def docker_wait(self, name: str) -> None:
         import time
@@ -121,12 +139,14 @@ class FakeHost:
             time.sleep(0.1)
 
     def docker_logs(self, name: str) -> str:
-        p = self._rec(name) + ".log"
+        p = self._status(name) + ".log"
         return open(p).read() if os.path.exists(p) else ""
 
     def docker_kill(self, name: str) -> None:
+        """By name; records 137 unless the phase recorded its own exit."""
         rec = self._rec(name)
-        if os.path.exists(rec) and not os.path.exists(rec + ".exit"):
+        self.kills.append(name)
+        if os.path.exists(rec):
             pid = json.load(open(rec))["pid"]
             try:
                 os.killpg(pid, signal.SIGKILL)
@@ -140,8 +160,10 @@ class FakeHost:
                     time.sleep(0.05)
                 except ProcessLookupError:
                     break
-            with open(rec + ".exit", "w") as f:
-                f.write("137")
+            os.remove(rec)
+        if not os.path.exists(self._status(name) + ".json"):
+            with open(self._status(name) + ".json", "w") as f:
+                f.write('{"exit_code": 137}')
 
     def docker_rm(self, name: str) -> None:
         rec = self._rec(name)
@@ -151,9 +173,8 @@ class FakeHost:
                 os.killpg(pid, signal.SIGKILL)
             except (ProcessLookupError, PermissionError):
                 pass
-        for suffix in ("", ".exit", ".log"):
-            if os.path.exists(rec + suffix):
-                os.remove(rec + suffix)
+        if os.path.exists(rec):
+            os.remove(rec)
 
     def kill(self, name: str) -> None:
         """Tests: the container vanishes (host reboot, OOM kill)."""
