@@ -132,22 +132,26 @@ fn only(set: &[(usize, usize)]) -> Vec<bool> {
         .collect()
 }
 
-#[test]
-fn test_chunk_clear_agent_events_do_not_survive_a_step_or_a_mid_chunk_reset() {
+fn pool() -> EnvPool<Events> {
     let options = PoolOptions {
         auto_reset: AutoReset::NextStep,
         ..PoolOptions::new(NonZeroU32::new(5).unwrap(), Seed::new(3))
     };
     let mut p = EnvPool::<Events>::new(QuietConfig {}, options).unwrap();
     p.reset_all(Reseed::Keep).unwrap();
+    p
+}
+
+#[test]
+fn test_chunk_clear_died_and_spawned_do_not_survive_a_step_or_a_mid_chunk_reset() {
+    let mut p = pool();
     assert_eq!(events(&mut p), [only(&[]), only(&[]), only(&[])]);
 
-    // 0 kills slot 1; 1 kills it and ends; 2 spawns on the occupied slot
-    // (invalid); 3 ends; 4 kills.
-    step(&mut p, [KILL, KILL | END, SPAWN, END, KILL]);
+    // 0 kills slot 1; 1 kills it and ends; 2 is quiet; 3 ends; 4 kills.
+    step(&mut p, [KILL, KILL | END, QUIET, END, KILL]);
     assert_eq!(
         events(&mut p),
-        [only(&[(0, 1), (1, 1), (4, 1)]), only(&[]), only(&[(2, 1)])],
+        [only(&[(0, 1), (1, 1), (4, 1)]), only(&[]), only(&[])],
         "events of the first step"
     );
 
@@ -157,9 +161,28 @@ fn test_chunk_clear_agent_events_do_not_survive_a_step_or_a_mid_chunk_reset() {
     assert_eq!(
         events(&mut p),
         [only(&[]), only(&[(4, 1)]), only(&[])],
-        "the first step's events are gone; only the valid spawn is set"
+        "the first step's deaths are gone; only the spawn is set"
     );
 
     step(&mut p, [QUIET; N]);
+    assert_eq!(events(&mut p), [only(&[]), only(&[]), only(&[])]);
+}
+
+/// `debug-checks` turns an invalid agent event into an error (SPEC 9.1), so
+/// the flag is only observable without it.
+#[cfg(not(feature = "debug-checks"))]
+#[test]
+fn test_chunk_clear_invalid_agent_event_does_not_survive_a_step_or_a_mid_chunk_reset() {
+    let mut p = pool();
+    // 2 spawns on an occupied slot (invalid); 1 and 3 end.
+    step(&mut p, [QUIET, END, SPAWN, END, QUIET]);
+    assert_eq!(
+        events(&mut p),
+        [only(&[]), only(&[]), only(&[(2, 1)])],
+        "the invalid spawn is flagged, and not reported as spawned"
+    );
+
+    // 1 and 3 reset in the middle of the chunk; the others are quiet.
+    step(&mut p, [QUIET, SPAWN, QUIET, SPAWN, QUIET]);
     assert_eq!(events(&mut p), [only(&[]), only(&[]), only(&[])]);
 }
