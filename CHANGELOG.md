@@ -9,6 +9,8 @@ the API is not stable, and any 0.x release may break it.
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-14
+
 ### Changed
 
 - **`RtsConfig` gains `opponent`** (RTS stage 5c): 0 keeps the two-agent game; 1 to 3 put a scripted Rush,
@@ -326,4 +328,6 @@ defects:
   no `powi`, no `std` transcendental methods; use `tessera_rl::num::math`)
   in your own crate.
 
+[Unreleased]: https://github.com/joaquinbejar/tessera-rl/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/joaquinbejar/tessera-rl/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/joaquinbejar/tessera-rl/releases/tag/v0.1.0

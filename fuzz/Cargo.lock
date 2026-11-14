@@ -223,7 +223,7 @@ dependencies = [
 
 [[package]]
 name = "tessera-rl-classic"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "tessera-rl-core",
  "tessera-rl-macros",
@@ -233,7 +233,7 @@ dependencies = [
 
 [[package]]
 name = "tessera-rl-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "inventory",
  "tessera-rl-num",
@@ -243,7 +243,7 @@ dependencies = [
 
 [[package]]
 name = "tessera-rl-engine"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "core_affinity",
  "libc",
@@ -270,7 +270,7 @@ dependencies = [
 
 [[package]]
 name = "tessera-rl-games"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "tessera-rl-core",
  "tessera-rl-macros",
@@ -279,7 +279,7 @@ dependencies = [
 
 [[package]]
 name = "tessera-rl-macros"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "proc-macro-crate",
  "proc-macro2",
@@ -289,11 +289,11 @@ dependencies = [
 
 [[package]]
 name = "tessera-rl-num"
-version = "0.1.0"
+version = "0.2.0"
 
 [[package]]
 name = "tessera-rl-rts"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "tessera-rl-core",
  "tessera-rl-macros",
@@ -302,7 +302,7 @@ dependencies = [
 
 [[package]]
 name = "tessera-rl-simd"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "tessera-rl-num",
  "thiserror",

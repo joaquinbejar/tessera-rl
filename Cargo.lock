@@ -976,7 +976,7 @@ dependencies = [
 
 [[package]]
 name = "tessera-rl"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "tessera-rl-classic",
  "tessera-rl-core",
@@ -989,7 +989,7 @@ dependencies = [
 
 [[package]]
 name = "tessera-rl-bench-runner"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "tessera-rl-classic",
  "tessera-rl-core",
@@ -1000,7 +1000,7 @@ dependencies = [
 
 [[package]]
 name = "tessera-rl-classic"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "criterion",
  "gungraun",
@@ -1014,14 +1014,14 @@ dependencies = [
 
 [[package]]
 name = "tessera-rl-connect4-ref"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "tessera-rl-games",
 ]
 
 [[package]]
 name = "tessera-rl-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "inventory",
  "proptest",
@@ -1032,14 +1032,14 @@ dependencies = [
 
 [[package]]
 name = "tessera-rl-downstream-test"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "tessera-rl",
 ]
 
 [[package]]
 name = "tessera-rl-engine"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "core_affinity",
  "criterion",
@@ -1058,7 +1058,7 @@ dependencies = [
 
 [[package]]
 name = "tessera-rl-games"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "criterion",
  "gungraun",
@@ -1071,7 +1071,7 @@ dependencies = [
 
 [[package]]
 name = "tessera-rl-macros"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "proc-macro-crate",
  "proc-macro2",
@@ -1085,7 +1085,7 @@ dependencies = [
 
 [[package]]
 name = "tessera-rl-math-oracle"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "libm",
  "tessera-rl-num",
@@ -1093,11 +1093,11 @@ dependencies = [
 
 [[package]]
 name = "tessera-rl-num"
-version = "0.1.0"
+version = "0.2.0"
 
 [[package]]
 name = "tessera-rl-onnx"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "libloading",
  "ort",
@@ -1112,7 +1112,7 @@ dependencies = [
 
 [[package]]
 name = "tessera-rl-py"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "pyo3",
  "pyo3-build-config",
@@ -1129,7 +1129,7 @@ dependencies = [
 
 [[package]]
 name = "tessera-rl-rts"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "criterion",
  "tessera-rl-core",
@@ -1141,7 +1141,7 @@ dependencies = [
 
 [[package]]
 name = "tessera-rl-search"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "criterion",
  "gungraun",
@@ -1157,7 +1157,7 @@ dependencies = [
 
 [[package]]
 name = "tessera-rl-simd"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "tessera-rl-num",
  "thiserror",
@@ -1165,7 +1165,7 @@ dependencies = [
 
 [[package]]
 name = "tessera-rl-spike-layout"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "criterion",
  "tessera-rl-classic",
