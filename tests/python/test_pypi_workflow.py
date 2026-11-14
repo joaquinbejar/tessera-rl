@@ -157,6 +157,133 @@ def test_pypi_artifact_names_are_those_wheels_yml_uploads():
     assert WHEELS.count("            checks.json\n") == 3
 
 
+def test_pypi_reads_the_layout_wheels_yml_uploads():
+    # upload-artifact keeps paths relative to the paths' common root: with
+    # `dist/*.whl` and `checks.json` side by side, the artifact holds
+    # dist/<wheel> next to checks.json (run 43594717096 failed on a flat layout).
+    uploads = re.findall(r"actions/upload-artifact@\S+.*\n(?:        .*\n)+", WHEELS)
+    assert len(uploads) == 3
+    for u in uploads:
+        paths = u.split("          path: |\n", 1)[1]
+        assert "            dist/*.whl\n" in paths and "            checks.json\n" in paths, u
+    src = VERIFY.read_text()
+    assert 'd.glob("dist/*.whl")' in src
+    assert '(d / "checks.json")' in src
+
+
+def test_pypi_publish_downloads_the_flat_directory_verify_wrote():
+    # verify writes the wheels and SHA256SUMS flat into $RUNNER_TEMP/dist and
+    # uploads that one directory, so its files are at the artifact's root;
+    # publish downloads them into dist/, where the sums step and the upload read.
+    verify_run = _step(VERIFY_JOB, "Check the wheels against the run and the tag")
+    assert verify_run.rstrip().endswith('"$RUNNER_TEMP/dist"')
+    assert _one(r"^          path: (.*)$", VERIFY_JOB) == "${{ runner.temp }}/dist"
+    assert _one(r"^          path: (.*)$", PUBLISH_JOB) == "dist"
+    assert _step(PUBLISH_JOB, "The verified wheels").startswith("cd dist\n")
+    assert _one(r"^          packages-dir: (\S+)$", PUBLISH_JOB) == "dist/"
+
+
+# A copy of the artifact tree of wheels run 43592025059 (v0.2.0 at c156aa0), as
+# `gh run download` laid it out: the real artifact names and paths, checks.json
+# and compare.json verbatim, the wheels stubbed to their real METADATA and WHEEL
+# files, and the other reports stubbed to `{}`. The stub wheels' sha256 is not
+# the real one, so checks.json and the W1 name disagree with them on purpose.
+RUN_TREE = Path(__file__).resolve().parent / "fixtures" / "pypi" / "run-43592025059"
+RUN_COMMIT = "c156aa0b9e70b2b3f6232882dc7200169082c6ef"
+RUN_W1 = f"wheel-x86_64-unknown-linux-gnu-wheel-{RUN_COMMIT}-1d614867bb51b2a9588811603f7647fca86351979a0452a9ceb6e8aa1a84f105"
+RUN_WHEELS = {
+    RUN_W1: "tessera_rl-0.2.0-cp311-abi3-manylinux_2_28_x86_64.whl",
+    "wheel-aarch64-unknown-linux-gnu": "tessera_rl-0.2.0-cp311-abi3-manylinux_2_28_aarch64.whl",
+    "wheel-aarch64-apple-darwin": "tessera_rl-0.2.0-cp311-abi3-macosx_13_0_arm64.whl",
+}
+
+
+def _run_tree(tmp_path) -> Path:
+    arts = tmp_path / "artifacts"
+    shutil.copytree(RUN_TREE, arts)
+    return arts
+
+
+def _sha(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def test_pypi_run_tree_fixture_is_the_real_layout():
+    assert sorted(p.name for p in RUN_TREE.iterdir()) == sorted(RUN_WHEELS)
+    for name, wheel in RUN_WHEELS.items():
+        d = RUN_TREE / name
+        assert [p.relative_to(d).as_posix() for p in d.rglob("*.whl")] == [f"dist/{wheel}"]
+        assert (d / "checks.json").is_file() and (d / "golden-report.json").is_file()
+    assert (RUN_TREE / RUN_W1 / "compare.json").is_file()
+
+
+def test_pypi_verify_reads_the_real_run_tree_up_to_the_stub_bytes(tmp_path):
+    # Every check but the byte identity passes on the real names and paths: the
+    # only problems are the stubs' sha256 against checks.json and the W1 name.
+    p, out = _verify(_run_tree(tmp_path), commit=RUN_COMMIT)
+    assert p.returncode == 1
+    problems = [l for l in p.stderr.splitlines() if l.startswith("pypi_verify: ")]
+    assert len(problems) == 4, p.stderr
+    assert sum("!= checks.json" in l for l in problems) == 3, p.stderr
+    assert sum("!= the artifact name's 1d614867" in l for l in problems) == 1, p.stderr
+    assert not out.exists()
+
+
+def _reseal(arts: Path) -> Path:
+    """Points checks.json and the W1 name at the stub wheels' own sha256."""
+    for name, wheel in RUN_WHEELS.items():
+        d = arts / name
+        sha = _sha(d / "dist" / wheel)
+        checks = d / "checks.json"
+        data = json.loads(checks.read_text())
+        data["wheel_sha256"] = sha
+        checks.write_text(json.dumps(data, indent=1))
+        if name == RUN_W1:
+            d.rename(arts / (name.rsplit("-", 1)[0] + "-" + sha))
+    return arts
+
+
+def test_pypi_verify_accepts_the_real_run_tree_resealed(tmp_path):
+    arts = _reseal(_run_tree(tmp_path))
+    p, out = _verify(arts, commit=RUN_COMMIT)
+    assert p.returncode == 0, p.stderr
+    assert sorted(x.name for x in out.iterdir()) == sorted(["SHA256SUMS", *RUN_WHEELS.values()])
+    sums = dict(reversed(l.split("  ")) for l in (out / "SHA256SUMS").read_text().splitlines())
+    assert sums == {w: _sha(out / w) for w in RUN_WHEELS.values()}
+
+
+@pytest.mark.parametrize("tag, commit, message", [("v0.2.1", RUN_COMMIT, "does not match"), (TAG, "d" * 40, "built at " + RUN_COMMIT)])
+def test_pypi_verify_refuses_the_real_run_tree_for_another_release(tmp_path, tag, commit, message):
+    p, out = _verify(_reseal(_run_tree(tmp_path)), tag=tag, commit=commit)
+    assert p.returncode == 1 and message in p.stderr, p.stderr
+    assert not out.exists()
+
+
+def test_pypi_verify_refuses_the_real_run_tree_flattened(tmp_path):
+    # The layout the first version assumed: each wheel at its artifact's root.
+    arts = _reseal(_run_tree(tmp_path))
+    for whl in list(arts.glob("*/dist/*.whl")):
+        whl.rename(whl.parent.parent / whl.name)
+    p, out = _verify(arts, commit=RUN_COMMIT)
+    assert p.returncode == 1 and p.stderr.count("expected one wheel in dist/") == 3, p.stderr
+    assert not out.exists()
+
+
+REAL = os.environ.get("TESSERA_PYPI_ARTIFACTS")
+
+
+@pytest.mark.skipif(not REAL, reason="set TESSERA_PYPI_ARTIFACTS to a downloaded wheels run (gh run download)")
+def test_pypi_verify_accepts_a_real_wheels_run(tmp_path):
+    arts = Path(REAL)
+    tag = os.environ.get("TESSERA_PYPI_TAG", TAG)
+    w1 = [d.name for d in arts.iterdir() if d.is_dir() and d.name.startswith("wheel-x86_64-")]
+    assert len(w1) == 1, w1
+    commit = w1[0].split("-wheel-", 1)[1].split("-")[0]
+    p, out = _verify(arts, tag=tag, commit=commit, out=tmp_path / "dist")
+    assert p.returncode == 0, p.stdout + p.stderr
+    assert len((out / "SHA256SUMS").read_text().splitlines()) == 3
+
+
 # --- the verify script ---------------------------------------------------------
 
 PLAT = {
@@ -180,8 +307,9 @@ def _wheel(path: Path, version="0.2.0", meta_version=None, name="tessera-rl"):
 def _artifact(root: Path, key, version="0.2.0", commit=COMMIT, checks=None, sha_override=None, **kw):
     plat = PLAT[key]
     tmp = root / f".tmp-{key}"
-    tmp.mkdir()
-    whl = tmp / f"tessera_rl-{version}-cp311-abi3-{plat}.whl"
+    (tmp / "dist").mkdir(parents=True)
+    # The layout wheels.yml uploads: the wheel under dist/, the reports at the root.
+    whl = tmp / "dist" / f"tessera_rl-{version}-cp311-abi3-{plat}.whl"
     sha = _wheel(whl, version=version, **kw)
     name = f"wheel-x86_64-unknown-linux-gnu-wheel-{commit}-{sha_override or sha}" if key == "x86" else f"wheel-{key}"
     d = root / name
@@ -266,7 +394,7 @@ def test_pypi_verify_refuses_a_wheel_that_does_not_match(tmp_path, key, kw, mess
 def test_pypi_verify_refuses_a_wheel_changed_after_its_checks(tmp_path):
     arts = tmp_path / "a"
     _good(arts)
-    whl = next((arts / "wheel-aarch64-apple-darwin").glob("*.whl"))
+    whl = next((arts / "wheel-aarch64-apple-darwin").glob("dist/*.whl"))
     with zipfile.ZipFile(whl, "a") as z:
         z.writestr("tessera_rl/extra.py", "x = 1\n")
     p, out = _verify(arts)
@@ -278,17 +406,34 @@ def test_pypi_verify_refuses_two_wheels_in_one_artifact(tmp_path):
     arts = tmp_path / "a"
     _good(arts)
     d = arts / "wheel-aarch64-apple-darwin"
-    _wheel(d / "tessera_rl-0.2.0-cp311-abi3-macosx_12_0_arm64.whl")
+    _wheel(d / "dist" / "tessera_rl-0.2.0-cp311-abi3-macosx_12_0_arm64.whl")
     p, _ = _verify(arts)
-    assert p.returncode == 1 and "expected one wheel" in p.stderr, p.stderr
+    assert p.returncode == 1 and "expected one wheel in dist/" in p.stderr, p.stderr
+
+
+@pytest.mark.parametrize("where", [".", "other"])
+def test_pypi_verify_refuses_a_wheel_outside_dist(tmp_path, where):
+    arts = tmp_path / "a"
+    _good(arts)
+    d = arts / "wheel-aarch64-apple-darwin"
+    whl = next(d.glob("dist/*.whl"))
+    (d / where).mkdir(exist_ok=True)
+    if where == ".":
+        # The flat layout the first version expected: only the wheel moved.
+        whl.rename(d / whl.name)
+    else:
+        shutil.copyfile(whl, d / where / whl.name)
+    p, out = _verify(arts)
+    assert p.returncode == 1 and "expected one wheel in dist/" in p.stderr, p.stderr
+    assert not out.exists()
 
 
 def test_pypi_verify_refuses_a_wheel_of_the_wrong_platform(tmp_path):
     arts = tmp_path / "a"
     _good(arts)
     d = arts / "wheel-aarch64-unknown-linux-gnu"
-    whl = next(d.glob("*.whl"))
-    wrong = d / whl.name.replace("aarch64", "x86_64")
+    whl = next(d.glob("dist/*.whl"))
+    wrong = whl.with_name(whl.name.replace("aarch64", "x86_64"))
     whl.rename(wrong)
     p, _ = _verify(arts)
     assert p.returncode == 1 and "does not match" in p.stderr, p.stderr
@@ -451,3 +596,19 @@ def test_pypi_publish_sums_step_passes_only_the_three_checked_wheels(tmp_path, c
     else:
         assert r.returncode != 0, r.stdout + r.stderr
         assert (dist / "SHA256SUMS").is_file()
+
+
+@bash
+def test_pypi_publish_sums_step_on_the_real_run_tree(tmp_path):
+    dist = tmp_path / "w" / "dist"
+    p, _ = _verify(_reseal(_run_tree(tmp_path)), commit=RUN_COMMIT, out=dist)
+    assert p.returncode == 0, p.stderr
+    script = tmp_path / "sums.sh"
+    script.write_text(_step(PUBLISH_JOB, "The verified wheels"))
+    bin_ = tmp_path / "bin"
+    bin_.mkdir()
+    _sha256sum_on_path(bin_)
+    env = {"PATH": f"{bin_}:{os.environ['PATH']}", "RUNNER_TEMP": str(tmp_path)}
+    r = subprocess.run(["bash", "--noprofile", "--norc", "-eo", "pipefail", str(script)], cwd=tmp_path / "w", env=env, capture_output=True, text=True)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert sorted(x.name for x in dist.iterdir()) == sorted(RUN_WHEELS.values())
