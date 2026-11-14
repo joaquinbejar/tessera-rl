@@ -300,6 +300,36 @@ fn test_observe_zero_next_step_auto_reset_over_sentinel_rows_is_zero() {
     observation(&p, 0, ZERO, "auto-reset");
 }
 
+/// Issue #152 (G1): the step clears a whole chunk's rows once, then resets
+/// or steps each instance. Instances that `NextStep`-reset in the middle of
+/// the chunk, between stepped neighbours, must get zero rows and cleared
+/// flags, and the neighbours must keep their own rows.
+#[test]
+fn test_observe_zero_next_step_reset_mid_chunk_keeps_neighbours_and_clears_its_rows() {
+    let mut p = pool(5, AutoReset::NextStep);
+    step(&mut p, &[LOUD, LOUD | END, LOUD, LOUD | END, LOUD]);
+    for i in 0..5 {
+        observation(&p, i, FULL, "loud step");
+    }
+    {
+        let out = p.outputs().unwrap();
+        let ended: Vec<bool> = out.episode_terminated().iter().map(|f| f.get()).collect();
+        assert_eq!(ended, [false, true, false, true, false]);
+    }
+    // Instances 1 and 3 reset instead of stepping; 0, 2 and 4 step.
+    step(&mut p, &[LOUD, LOUD, QUIET, LOUD, LOUD]);
+    observation(&p, 0, FULL, "stepped, loud");
+    observation(&p, 1, ZERO, "reset mid-chunk");
+    observation(&p, 2, ZERO, "stepped, quiet");
+    observation(&p, 3, ZERO, "reset mid-chunk");
+    observation(&p, 4, FULL, "stepped, loud");
+    let out = p.outputs().unwrap();
+    assert!(out.episode_terminated().iter().all(|f| !f.get()));
+    assert!(out.episode_truncated().iter().all(|f| !f.get()));
+    assert!(out.agent_terminated().iter().all(|f| !f.get()));
+    assert!(out.rewards().iter().all(|&r| r.to_bits() == 0));
+}
+
 #[test]
 fn test_observe_zero_same_step_auto_reset_terminal_rows_are_zero() {
     let mut p = pool(1, AutoReset::SameStep);
