@@ -12,7 +12,8 @@ This is the harness of `docs/reviews/gpu-split-plan.md` r5, sha256 `52b0ac29`. I
 | `split.py` | One run: one case, one mode, prints one JSON line. |
 | `sync.py` | Builds the synchronised scratch copy of `pufferl.py` for mode `sync`. The installed file is never modified. |
 | `pufferl-sync.patch` | The published instrumentation diff. It enables the two commented `torch.cuda.synchronize()` blocks in `Profile.__call__` and `Profile.end`, and nothing else. The tests check that the copy equals it. |
-| `run.py` | The driver: rounds with a fixed shuffle, one process group per run, and the timeouts. |
+| `run.py` | The driver: rounds with the case order rotated per round, one process group per run, the timeouts, and with a manifest the ADR-0061 attempt and its summary row. |
+| `manifest.py` | The ADR-0061 item 9 manifest: commit, wheel sha256 (checked against the file), CUDA toolkit (checked against `nvcc --version`) and the order of every round. It prints its own sha256. |
 | `../tests/test_gpu_split.py` | Local CPU tests, run by `make puffer-test`. |
 
 ## Cases
@@ -29,7 +30,7 @@ The configuration is PufferLib's `cartpole.ini` over `default.ini`:
 - bptt 64, batch auto (524,288 at 8192 agents), minibatch 32,768;
 - `models.Default` hidden 128, no RNN;
 - seed 1, `compile=False`, torch threads 4;
-- 11 epochs, the first dropped.
+- 31 epochs, the first dropped (ADR-0061 item 2: only the timed window grows).
 
 ## Modes, reported separately
 
@@ -81,3 +82,12 @@ make puffer-test            # builds the wheel; runs compat/pufferlib/tests, thi
 ```
 
 The tests run on CPU at `--scale small` (1024 agents, minibatch 8192). That scale is for the tests only.
+
+## The ADR-0061 gate attempt
+
+ADR-0061 (Accepted) fixes the phase 3 gate protocol; this harness implements it.
+
+1. Before the timed rounds: `python manifest.py --out manifest.json --commit SHA --wheel WHEEL --wheel-sha256 HEX --wheel-source pypi-release|main-wheels-run --toolkit X.Y.Z`. It refuses (exit 2) when the wheel or `nvcc` disagree, and prints the manifest sha256, which is sent to the reviewer.
+2. The attempt: `python run.py --python PY --out results.jsonl --device cuda --manifest manifest.json --manifest-sha256 HEX --wheel WHEEL`. It refuses (exit 7) a manifest or wheel whose sha256 differs, any `--split-args`, a `--wheel` path absent from `--python`, and a `git rev-parse HEAD` other than the manifest's commit; runs the manifest's order (5 rounds, cases rotated by one per round, interleaved mode by mode), stamps every row with the manifest sha256, and always ends `results.jsonl` with a summary row: per-cell (n, median, min, max) of `sps`, `attempt` (`complete` or `failed, no result`, item 8) and `gate_eligible`, true only for a complete cuda attempt with the CUDA advantage kernel on every trainer run (item 6).
+
+`gate_eligible` also requires 30 timed epochs at full scale and, in every Tessera run, the native module whose sha256 the manifest took from the wheel. Only an eligible summary carries item 7: `ocean_score` and `tessera_score`, each the larger `e2e` median of the side's two cases, with `ocean_case` and `tessera_case`, and `pass` = `tessera_score >= ocean_score`.

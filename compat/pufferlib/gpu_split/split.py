@@ -35,7 +35,7 @@ Process rules:
 
 Usage::
 
-    python split.py CASE MODE DEVICE [--epochs 11] [--threads 4] [--env-steps 2000] [--scale full]
+    python split.py CASE MODE DEVICE [--epochs 31] [--threads 4] [--env-steps 2000] [--scale full]
 
 ``--scale small`` shrinks the agent count and batch for the local tests only;
 a measurement uses ``full``.
@@ -295,16 +295,38 @@ def stop_monitors() -> list[str]:
     return [t.name for t in monitors if t.is_alive()]
 
 
-def main(argv=None) -> int:
+def parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     p.add_argument("case", choices=CASES)
     p.add_argument("mode", choices=MODES)
     p.add_argument("device", choices=("cpu", "cuda"))
-    p.add_argument("--epochs", type=int, default=11)
+    # ADR-0061 item 2 (G5): 31 epochs, first dropped, only lengthen the
+    # timed window; every cartpole.ini value stays as published.
+    p.add_argument("--epochs", type=int, default=31)
     p.add_argument("--threads", type=int, default=4)
     p.add_argument("--env-steps", type=int, default=2000)
     p.add_argument("--scale", choices=tuple(AGENTS), default="full")
-    args = p.parse_args(argv)
+    return p
+
+
+def tessera_location() -> dict | None:
+    """Where the imported ``tessera_rl`` comes from, so the driver can bind it
+    to the manifest's wheel (ADR-0061 item 9): the native module's path and
+    sha256. Installers rewrite ``RECORD``, but they copy the native module
+    byte for byte. None for the Ocean cases, which never import it."""
+    if "tessera_rl" not in sys.modules:
+        return None
+    import hashlib
+
+    import tessera_rl._native as native
+
+    with open(native.__file__, "rb") as f:
+        digest = hashlib.sha256(f.read()).hexdigest()
+    return {"native_file": native.__file__, "native_sha256": digest}
+
+
+def main(argv=None) -> int:
+    args = parser().parse_args(argv)
 
     import torch
 
@@ -364,6 +386,7 @@ def main(argv=None) -> int:
         "numpy": numpy.__version__,
     }
     record["host"] = platform.machine()
+    record["tessera_rl"] = tessera_location()
     print(json.dumps(record), flush=True)
     return 0 if not record["children_left"] and not record["monitors_left"] else 5
 
