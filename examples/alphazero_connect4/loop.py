@@ -56,6 +56,21 @@ of the generation's remaining phases. The stop reasons are ``K_max``,
 Only a formal run has eligible looks. The look itself must also be
 eligible: registered runtime and bot, frozen protocol, medium net.
 
+**The ADR-0052 profile** (``--profile adr-0052``) is a second registered
+formal profile; M3's above is unchanged. It is M3's recipe with self-play
+at 400 sims, ``K_max`` 10 and the schedule's horizon scaled to 10
+generations. Its budget is the owner's figure, a hard stop of at most 250
+core-hours, and its self-play reservation is a required ``init`` value.
+- Looks run only at generations 6, 8 and 10 (``LOOK_GENERATIONS``): the
+  other generations train without a look, and a look anywhere else is
+  refused.
+- The first look reaching 336 stops training (``early``), and only that
+  look is eligible for selection.
+- Otherwise the run ends ``not eligible``: after generation 10, or on a
+  budget stop at any point, with no extra look.
+- ``early`` and ``not eligible`` close the root: a later ``run`` is
+  refused.
+
 **Selection** (``select``, under the owner lock) picks, among eligible
 verified looks, the most held-out wins, ties going to the later
 generation. It writes ``selection-manifest.json``, naming the selected
@@ -112,6 +127,25 @@ FORMAL = {
     "c0_sha256": REGISTERED_C0,
     "any_openings": False,
 }
+PROFILE_M3 = "m3"
+PROFILE_ADR0052 = "adr-0052"
+LOOK_GENERATIONS = (6, 8, 10)
+LOOK_STOP_WINS = 336
+MAX_BUDGET_ADR0052 = 250.0
+# The second registered formal profile (ADR-0052, frozen text sha256
+# d3a091482e70f53caee6fe23b7b905c38a65d204022408727151d1deeaa1b0ee). Its
+# budget is not fixed here: it is the owner's figure, checked against
+# MAX_BUDGET_ADR0052.
+FORMAL_ADR0052 = {
+    **{k: v for k, v in FORMAL.items() if k not in ("early_stop_wins", "budget_core_hours")},
+    "profile": PROFILE_ADR0052,
+    "k_max": schedule.K_MAX_ADR0052,
+    "horizon_k": schedule.K_MAX_ADR0052,
+    "sims": 400,
+    "look_generations": list(LOOK_GENERATIONS),
+    "look_stop_wins": LOOK_STOP_WINS,
+}
+TERMINAL_ADR0052 = ("early", "not eligible")
 LOAD_ERRORS = (artifacts.Incomplete, OSError, KeyError, ValueError, ckpt.NonFinite)
 
 
@@ -139,8 +173,33 @@ def reservations(cfg: dict) -> dict[str, int]:
     }
 
 
+def profile(cfg: dict) -> str:
+    """The run's profile; a root without one is M3's."""
+    return cfg.get("profile", PROFILE_M3)
+
+
 def is_formal(cfg: dict) -> bool:
-    return all(cfg.get(k) == v for k, v in FORMAL.items())
+    if profile(cfg) == PROFILE_M3:
+        return cfg.get("horizon_k", schedule.K_MAX) == schedule.K_MAX and all(cfg.get(k) == v for k, v in FORMAL.items())
+    if profile(cfg) == PROFILE_ADR0052:
+        budget = cfg.get("budget_core_hours")
+        return (
+            all(cfg.get(k) == v for k, v in FORMAL_ADR0052.items())
+            and isinstance(budget, (int, float))
+            and 0 < budget <= MAX_BUDGET_ADR0052
+        )
+    return False
+
+
+def look_scheduled(cfg: dict, generation: int) -> bool:
+    """Whether checkpoint ``C_generation`` gets a look: every generation
+    for M3, only the predeclared ones for ADR-0052."""
+    gens = cfg.get("look_generations")
+    return gens is None or generation in gens
+
+
+def horizon_k(cfg: dict) -> int:
+    return cfg.get("horizon_k", schedule.K_MAX)
 
 
 class Loop:
@@ -276,6 +335,9 @@ class Loop:
                 raise Stop("incomplete input", {"generation": k, "reason": "training references missing self-play"})
             if lk is not None and tr is None:
                 raise Stop("incomplete input", {"generation": k, "reason": "a look references a missing checkpoint"})
+            scheduled = look_scheduled(self.cfg, k + 1)
+            if not scheduled and (lk is not None or states["look"][1] > 0):
+                raise Stop("incomplete input", {"generation": k, "reason": f"a look at C_{k + 1}, not a predeclared look generation"})
             if sp is not None and sp["identity"]["checkpoint_sha256"] != sha:
                 raise Stop("incomplete input", {"generation": k, "reason": "self-play does not name C_k"})
             c_next = None
@@ -288,7 +350,7 @@ class Loop:
             if lk is not None and lk["identity"]["checkpoint_sha256"] != c_next:
                 raise Stop("incomplete input", {"generation": k, "reason": "the look does not name C_{k+1}"})
             gens.append({"selfplay": sp, "train": tr, "look": lk, "next": {p: states[p][1] for p in PHASES}, "c_k1": c_next})
-            if lk is None:
+            if (lk if scheduled else tr) is None:
                 break
             sha = c_next
         return gens
@@ -332,10 +394,32 @@ class Loop:
                 continue
             source = lk.get("ref", lk["attempt"])
             eligible = is_formal(self.cfg) and lk["identity"]["eligible"] and self.ledger_ok(source, entries)
+            if profile(self.cfg) == PROFILE_ADR0052:
+                # Only the first predeclared look reaching the stop bar is
+                # eligible: the stop rule of ADR-0052 item 5.
+                eligible = eligible and look_scheduled(self.cfg, k + 1) and k + 1 == self.stop_look(gens)
             out.append({"generation": k + 1, "checkpoint": lk["identity"]["checkpoint_sha256"],
                         "wins": lk["identity"]["wins"], "eligible": bool(eligible), "look": source,
                         "log_sha256": lk["identity"]["log_sha256"]})  # fmt: skip
         return out
+
+    def stop_look(self, gens: list[dict]) -> int | None:
+        """ADR-0052: the generation of the first predeclared look reaching
+        ``look_stop_wins``, or None."""
+        for k, g in enumerate(gens):
+            lk = g["look"]
+            if lk is not None and look_scheduled(self.cfg, k + 1) and lk["identity"]["wins"] >= self.cfg["look_stop_wins"]:
+                return k + 1
+        return None
+
+    def closed(self) -> dict | None:
+        """ADR-0052: the recorded stop that closed this root, or None."""
+        if profile(self.cfg) != PROFILE_ADR0052:
+            return None
+        for e in self.selection():
+            if e["type"] == "stop" and e["reason"] in TERMINAL_ADR0052:
+                return e
+        return None
 
     # ------------------------------------------------------------ phases
 
@@ -365,7 +449,8 @@ class Loop:
                 "train-window", "--checkpoint", self.checkpoint_path(gens, k), "--data", *window,
                 "--out", os.path.join(d, "C.pt"), "--generation", str(k), "--base", str(cfg["base"]),
                 "--steps", str(cfg["steps"]), "--batch", str(cfg["train_batch"]), "--cores", "1",
-                "--wall-cap-s", str(cfg["train_wall_s"]), *(["--formal"] if is_formal(cfg) else []), *common,
+                "--wall-cap-s", str(cfg["train_wall_s"]), *(["--formal"] if is_formal(cfg) else []),
+                *(["--horizon-k", str(horizon_k(cfg))] if horizon_k(cfg) != schedule.K_MAX else []), *common,
             ]  # fmt: skip
         return [
             "--checkpoint", self.checkpoint_path(gens, k + 1), "--bot", cfg["bot"], "--bot-sha256", cfg["bot_sha256"],
@@ -375,6 +460,8 @@ class Loop:
         ]  # fmt: skip
 
     def run_phase(self, gens: list[dict], k: int, phase: str, n: int) -> None:
+        if phase == "look" and not look_scheduled(self.cfg, k + 1):
+            raise Stop("unscheduled look", {"generation": k + 1, "look_generations": self.cfg.get("look_generations")})
         tool = {"selfplay": "selfplay.py", "train": "train_step.py", "look": "look.py"}[phase]
         argv = self.phase_argv(gens, k, phase, n)
         d = self.attempt_dir(k, phase, n)
@@ -446,13 +533,13 @@ class Loop:
         self.audit(gens, entries)
         self.early_stop(gens, entries)
         k = len(gens) - 1
-        if gens[k]["look"] is not None:
+        if gens[k]["look" if look_scheduled(self.cfg, k + 1) else "train"] is not None:
             if k + 1 >= self.cfg["k_max"]:
                 raise Stop("K_max", {"k_max": self.cfg["k_max"]})
             k += 1
             gens.append({"selfplay": None, "train": None, "look": None, "next": dict.fromkeys(PHASES, 0), "c_k1": None})
         g = gens[k]
-        pending = [p for p in PHASES if g[p] is None]
+        pending = [p for p in PHASES if g[p] is None and (p != "look" or look_scheduled(self.cfg, k + 1))]
         if pending == ["look"] and self.reuse_look(gens, k):
             return
         res = reservations(self.cfg)
@@ -494,6 +581,11 @@ class Loop:
                 crash_point("after-selection-append")
 
     def early_stop(self, gens: list[dict], entries: list[dict]) -> None:
+        if profile(self.cfg) == PROFILE_ADR0052:
+            g = self.stop_look(gens)
+            if g is not None:
+                raise Stop("early", {"generation": g, "wins": gens[g - 1]["look"]["identity"]["wins"], "threshold": self.cfg["look_stop_wins"]})
+            return
         looks = {e["generation"]: e for e in self.looks(gens, entries) if e["eligible"]}
         threshold = self.cfg["early_stop_wins"]
         for g in sorted(looks):
@@ -513,10 +605,17 @@ class Loop:
     def run(self) -> dict:
         lock = self.owner()
         try:
+            closed = self.closed()
+            if closed is not None:
+                raise SystemExit(f"this root is closed by its {closed['reason']!r} stop: no further run")
             while True:
                 try:
                     self.step()
                 except Stop as s:
+                    if profile(self.cfg) == PROFILE_ADR0052 and s.reason in ("K_max", "budget"):
+                        # ADR-0052 item 5 and the budget stop: no qualifying
+                        # look, and no extra one.
+                        s = Stop("not eligible", {"cause": s.reason, **s.inputs})
                     stops = [e for e in self.selection() if e["type"] == "stop"]
                     if not stops or stops[-1]["reason"] != s.reason or stops[-1]["inputs"] != s.inputs:
                         self.append_selection({"type": "stop", "reason": s.reason, "inputs": s.inputs})
@@ -589,6 +688,12 @@ def _q(s: str) -> str:
 def init(args) -> int:
     if os.path.exists(args.root) and os.listdir(args.root):
         raise SystemExit(f"{args.root} is not empty")
+    if args.profile == PROFILE_ADR0052:
+        apply_adr0052(args)
+    else:
+        defaults_m3(args)
+        if args.horizon_k is None:
+            args.horizon_k = schedule.K_MAX
     _, meta = ckpt.load(args.c0)
     if args.c0_sha256 and meta["sha256"] != args.c0_sha256:
         raise SystemExit(f"C_0 is {meta['sha256']}, not the registered {args.c0_sha256}")
@@ -617,6 +722,7 @@ def init(args) -> int:
         "early_stop_wins": args.early_stop_wins,
         "max_disk_mb": args.max_disk_mb,
         "budget_core_hours": args.budget_core_hours,
+        "horizon_k": args.horizon_k,
         "bot": os.path.abspath(args.bot),
         "bot_sha256": bot_sha,
         "source_sha": args.source_sha,
@@ -624,10 +730,39 @@ def init(args) -> int:
         "runners": json.loads(args.runners) if args.runners else {},
         "reconcile": args.reconcile,
     }
+    if args.profile == PROFILE_ADR0052:
+        cfg.update(profile=PROFILE_ADR0052, look_generations=list(LOOK_GENERATIONS), look_stop_wins=LOOK_STOP_WINS)
+        cfg.pop("early_stop_wins")
     cfg["formal"] = is_formal(cfg)
     artifacts.write_atomic(os.path.join(args.root, "config.json"), artifacts.canonical_json(cfg))
     print(json.dumps({"root": args.root, "c0": meta["sha256"], "formal": cfg["formal"]}))
     return 0
+
+
+def apply_adr0052(args) -> None:
+    """The ADR-0052 profile's fixed values; refuses an override of them
+    and requires the owner's budget and the self-play reservation."""
+    fixed = {"k_max": schedule.K_MAX_ADR0052, "horizon_k": schedule.K_MAX_ADR0052, "sims": FORMAL_ADR0052["sims"]}
+    for key, value in fixed.items():
+        given = getattr(args, key)
+        if given is not None and given != value:
+            raise SystemExit(f"the adr-0052 profile fixes {key} at {value}, not {given}")
+        setattr(args, key, value)
+    if args.early_stop_wins is not None:
+        raise SystemExit("the adr-0052 profile has no early-stop pair: it stops on its first look at 336")
+    for key in ("budget_core_hours", "selfplay_cores", "selfplay_wall_s"):
+        if getattr(args, key) is None:
+            raise SystemExit(f"the adr-0052 profile needs --{key.replace('_', '-')}: an owner value, never a default")
+    if not 0 < args.budget_core_hours <= MAX_BUDGET_ADR0052:
+        raise SystemExit(f"the adr-0052 budget must be in (0, {MAX_BUDGET_ADR0052}] core-hours, not {args.budget_core_hours}")
+
+
+def defaults_m3(args) -> None:
+    """M3's defaults for the values the ADR-0052 profile must be given."""
+    for key, value in (("k_max", schedule.K_MAX), ("sims", FORMAL["sims"]), ("early_stop_wins", FORMAL["early_stop_wins"]),
+                       ("budget_core_hours", FORMAL["budget_core_hours"]), ("selfplay_cores", 32), ("selfplay_wall_s", 900)):  # fmt: skip
+        if getattr(args, key) is None:
+            setattr(args, key, value)
 
 
 def parse(argv):
@@ -638,21 +773,24 @@ def parse(argv):
     i.add_argument("--c0", required=True)
     i.add_argument("--c0-sha256", help="the registered C_0 digest, checked")
     i.add_argument("--base", type=int, default=FORMAL["base"])
-    i.add_argument("--k-max", type=int, default=schedule.K_MAX)
+    i.add_argument("--k-max", type=int)
     i.add_argument("--games", type=int, default=FORMAL["games"])
-    i.add_argument("--sims", type=int, default=FORMAL["sims"])
+    i.add_argument("--sims", type=int)
     i.add_argument("--batch-size", type=int, default=FORMAL["batch_size"])
     i.add_argument("--capacity", type=int, default=FORMAL["capacity"])
     i.add_argument("--steps", type=int, default=schedule.STEPS)
     i.add_argument("--train-batch", type=int, default=FORMAL["train_batch"])
-    i.add_argument("--selfplay-cores", type=int, default=32)
-    i.add_argument("--selfplay-wall-s", type=int, default=900)
+    i.add_argument("--selfplay-cores", type=int)
+    i.add_argument("--selfplay-wall-s", type=int)
     i.add_argument("--train-wall-s", type=int, default=1200)
     i.add_argument("--look-wall-s", type=int, default=900)
     i.add_argument("--look-openings", type=int, default=FORMAL["look_openings"])
-    i.add_argument("--early-stop-wins", type=int, default=FORMAL["early_stop_wins"])
+    i.add_argument("--early-stop-wins", type=int)
     i.add_argument("--max-disk-mb", type=int, default=600, help="stop before a phase when the root holds more")
-    i.add_argument("--budget-core-hours", type=float, default=FORMAL["budget_core_hours"])
+    i.add_argument("--budget-core-hours", type=float)
+    i.add_argument("--profile", choices=(PROFILE_M3, PROFILE_ADR0052), default=PROFILE_M3,
+                   help="the registered profile: m3, or adr-0052 (400-sim self-play, looks at 6, 8 and 10)")
+    i.add_argument("--horizon-k", type=int, choices=schedule.HORIZONS_K, help="the schedule's horizon (m3: 30; adr-0052: fixed at 10)")
     i.add_argument("--bot", required=True)
     i.add_argument("--bot-sha256", help="the expected bot binary digest, checked")
     i.add_argument("--source-sha", required=True)
