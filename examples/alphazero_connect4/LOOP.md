@@ -88,7 +88,10 @@ at sha256 `d3a091482e70f53caee6fe23b7b905c38a65d204022408727151d1deeaa1b0ee`.
 - Looks run only at generations 6, 8 and 10. The other generations train
   without a look; a look attempt at any other generation stops the loop
   with `incomplete input`, and the loop refuses to start one.
-- The first look reaching 336 stops training (`early`); only that look is
+- Looks run at 100 simulations, batch 8, capacity 8192 (`look_sims`, 100
+  also for a root without the key); self-play alone runs at 400.
+- The first look on that frozen budget reaching 336 stops training (`early`);
+  a look at any other budget neither stops nor closes the root; only that look is
   eligible for selection. Without one, the run stops `not eligible`: after
   generation 10 (`cause: K_max`) or on a budget stop at any point
   (`cause: budget`), with no extra look.

@@ -61,11 +61,13 @@ formal profile; M3's above is unchanged. It is M3's recipe with self-play
 at 400 sims, ``K_max`` 10 and the schedule's horizon scaled to 10
 generations. Its budget is the owner's figure, a hard stop of at most 250
 core-hours, and its self-play reservation is a required ``init`` value.
+- Looks run at 100 sims, batch 8, capacity 8192 (``look_sims``), as M3's.
 - Looks run only at generations 6, 8 and 10 (``LOOK_GENERATIONS``): the
   other generations train without a look, and a look anywhere else is
   refused.
-- The first look reaching 336 stops training (``early``), and only that
-  look is eligible for selection.
+- The first look on that frozen budget reaching 336 stops training
+  (``early``), and only that look is eligible for selection. A look at any
+  other budget neither stops nor closes the root.
 - Otherwise the run ends ``not eligible``: after generation 10, or on a
   budget stop at any point, with no extra look.
 - ``early`` and ``not eligible`` close the root: a later ``run`` is
@@ -131,6 +133,10 @@ PROFILE_M3 = "m3"
 PROFILE_ADR0052 = "adr-0052"
 LOOK_GENERATIONS = (6, 8, 10)
 LOOK_STOP_WINS = 336
+# The look's search budget: (sims, batch size, capacity), ADR-0048 and
+# ADR-0052 item 3. A root without ``look_sims`` resolves to 100.
+LOOK_SIMS = 100
+LOOK_FROZEN = (LOOK_SIMS, 8, 8192)
 MAX_BUDGET_ADR0052 = 250.0
 # The second registered formal profile (ADR-0052, frozen text sha256
 # d3a091482e70f53caee6fe23b7b905c38a65d204022408727151d1deeaa1b0ee). Its
@@ -142,6 +148,7 @@ FORMAL_ADR0052 = {
     "k_max": schedule.K_MAX_ADR0052,
     "horizon_k": schedule.K_MAX_ADR0052,
     "sims": 400,
+    "look_sims": LOOK_SIMS,
     "look_generations": list(LOOK_GENERATIONS),
     "look_stop_wins": LOOK_STOP_WINS,
 }
@@ -178,13 +185,20 @@ def profile(cfg: dict) -> str:
     return cfg.get("profile", PROFILE_M3)
 
 
+def look_sims(cfg: dict) -> int:
+    """The look's simulations; a root without the key (M3's) uses 100."""
+    return cfg.get("look_sims", LOOK_SIMS)
+
+
 def is_formal(cfg: dict) -> bool:
+    if look_sims(cfg) != LOOK_SIMS:
+        return False
     if profile(cfg) == PROFILE_M3:
         return cfg.get("horizon_k", schedule.K_MAX) == schedule.K_MAX and all(cfg.get(k) == v for k, v in FORMAL.items())
     if profile(cfg) == PROFILE_ADR0052:
         budget = cfg.get("budget_core_hours")
         return (
-            all(cfg.get(k) == v for k, v in FORMAL_ADR0052.items())
+            all(cfg.get(k) == v for k, v in FORMAL_ADR0052.items() if k != "look_sims")
             and isinstance(budget, (int, float))
             and 0 < budget <= MAX_BUDGET_ADR0052
         )
@@ -404,11 +418,17 @@ class Loop:
         return out
 
     def stop_look(self, gens: list[dict]) -> int | None:
-        """ADR-0052: the generation of the first predeclared look reaching
-        ``look_stop_wins``, or None."""
+        """ADR-0052: the generation of the first predeclared look on the
+        frozen search budget reaching ``look_stop_wins``, or None. A look at
+        any other budget neither stops nor closes the root."""
         for k, g in enumerate(gens):
             lk = g["look"]
-            if lk is not None and look_scheduled(self.cfg, k + 1) and lk["identity"]["wins"] >= self.cfg["look_stop_wins"]:
+            if (
+                lk is not None
+                and look_scheduled(self.cfg, k + 1)
+                and frozen_protocol(lk["identity"].get("protocol"))
+                and lk["identity"]["wins"] >= self.cfg["look_stop_wins"]
+            ):
                 return k + 1
         return None
 
@@ -454,7 +474,8 @@ class Loop:
             ]  # fmt: skip
         return [
             "--checkpoint", self.checkpoint_path(gens, k + 1), "--bot", cfg["bot"], "--bot-sha256", cfg["bot_sha256"],
-            "--out", d, "--limit", str(cfg["look_openings"]), "--sims", str(cfg["sims"]),
+            "--out", d, "--limit", str(cfg["look_openings"]),
+            "--sims", str(look_sims(cfg) if profile(cfg) == PROFILE_ADR0052 else cfg["sims"]),
             "--batch-size", str(cfg["batch_size"]), "--capacity", str(cfg["capacity"]), "--cores", "1",
             "--wall-cap-s", str(cfg["look_wall_s"]), *common, *(["--any-openings"] if cfg.get("any_openings") else []),
         ]  # fmt: skip
@@ -660,6 +681,13 @@ class Loop:
             lock.close()
 
 
+def frozen_protocol(protocol) -> bool:
+    """Whether a look's recorded protocol is the frozen search budget."""
+    if not isinstance(protocol, dict):
+        return False
+    return (protocol.get("sims"), protocol.get("batch_size"), protocol.get("capacity")) == LOOK_FROZEN
+
+
 def choose(eligible: list[dict]) -> dict | None:
     """The selection rule: the most held-out wins, ties to the later
     generation; None without an eligible look."""
@@ -731,7 +759,7 @@ def init(args) -> int:
         "reconcile": args.reconcile,
     }
     if args.profile == PROFILE_ADR0052:
-        cfg.update(profile=PROFILE_ADR0052, look_generations=list(LOOK_GENERATIONS), look_stop_wins=LOOK_STOP_WINS)
+        cfg.update(profile=PROFILE_ADR0052, look_sims=LOOK_SIMS, look_generations=list(LOOK_GENERATIONS), look_stop_wins=LOOK_STOP_WINS)
         cfg.pop("early_stop_wins")
     cfg["formal"] = is_formal(cfg)
     artifacts.write_atomic(os.path.join(args.root, "config.json"), artifacts.canonical_json(cfg))
