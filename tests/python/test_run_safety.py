@@ -77,6 +77,21 @@ def test_loop_stop_file_written_during_a_step_refuses_the_phase(tmp_path, bot):
     assert stop.value.reason == "stopped" and not (root / "gen-000" / "selfplay-0.command.json").exists()
 
 
+def test_loop_stop_file_wins_over_every_other_stop(tmp_path, bot):
+    """With STOP present the step stops "stopped" before its own budget or
+    disk checks, so a stop is never recorded as something else."""
+    root = make_root(tmp_path, bot)
+    lp = loop.Loop(str(root))
+    lp.cfg["budget_core_hours"] = 1e-9
+    with pytest.raises(loop.Stop) as stop:
+        lp.step()
+    assert stop.value.reason == "budget"
+    stopping.request(str(root), "test")
+    with pytest.raises(loop.Stop) as stop:
+        lp.step()
+    assert stop.value.reason == "stopped"
+
+
 def test_remote_stop_file_refuses_dispatch_before_any_record(tmp_path):
     root = tmp_path / "root"
     root.mkdir()
@@ -168,6 +183,7 @@ def test_stop_checks_recorded_pid_pgid_and_command():
         rec = record_of(p, ["loop.py", "run", "--root", "/r"])
         time.sleep(0.3)
         assert stopping.matches(rec, stopping.observed(p.pid))
+        assert stopping.kill_recorded({**rec, "pgid": rec["pgid"] + 1}, group=False) == "refused"
         assert stopping.kill_recorded({**rec, "pgid": rec["pgid"] + 1}, group=True) == "refused"
         assert stopping.kill_recorded({**rec, "argv": [*rec["argv"][:-1], "/other"]}, group=True) == "refused"
         assert p.poll() is None, "a mismatch signals nothing"
@@ -179,14 +195,21 @@ def test_stop_checks_recorded_pid_pgid_and_command():
 
 
 def test_stop_never_signals_a_group_the_recorded_process_does_not_lead():
-    p = sleeper(["remote.py", "run"], new_group=False)  # in pytest's group
+    """The recorded process is a member, not the leader, of its group (a
+    separate group led by a wrapper, so a faulty kill cannot reach pytest)."""
+    code = ("import subprocess, sys, time\n"
+            "c = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)', 'remote.py', 'run'])\n"
+            "print(c.pid, flush=True); time.sleep(60)")  # fmt: skip
+    leader = subprocess.Popen([sys.executable, "-c", code], start_new_session=True, stdout=subprocess.PIPE, text=True)
     try:
-        rec = record_of(p, ["remote.py", "run"])
+        child = int(leader.stdout.readline())
         time.sleep(0.3)
+        rec = {"pid": child, "pgid": leader.pid, "argv": ["-c", "import time; time.sleep(60)", "remote.py", "run"]}
+        assert os.getpgid(child) == leader.pid
         assert stopping.kill_recorded(rec, group=True) == "refused"
-        assert p.poll() is None
+        assert leader.poll() is None and stopping.observed(child) is not None, "nothing signalled"
     finally:
-        p.kill()
+        os.killpg(leader.pid, signal.SIGKILL)
 
 
 def test_loop_stop_writes_stop_then_signals_recorded_driver_only(tmp_path, bot):
