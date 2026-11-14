@@ -157,6 +157,47 @@ def test_pypi_artifact_names_are_those_wheels_yml_uploads():
     assert WHEELS.count("            checks.json\n") == 3
 
 
+def test_pypi_reads_the_layout_wheels_yml_uploads():
+    # upload-artifact keeps paths relative to the paths' common root: with
+    # `dist/*.whl` and `checks.json` side by side, the artifact holds
+    # dist/<wheel> next to checks.json (run 43594717096 failed on a flat layout).
+    uploads = re.findall(r"actions/upload-artifact@\S+.*\n(?:        .*\n)+", WHEELS)
+    assert len(uploads) == 3
+    for u in uploads:
+        paths = u.split("          path: |\n", 1)[1]
+        assert "            dist/*.whl\n" in paths and "            checks.json\n" in paths, u
+    src = VERIFY.read_text()
+    assert 'd.glob("dist/*.whl")' in src
+    assert '(d / "checks.json")' in src
+
+
+def test_pypi_publish_downloads_the_flat_directory_verify_wrote():
+    # verify writes the wheels and SHA256SUMS flat into $RUNNER_TEMP/dist and
+    # uploads that one directory, so its files are at the artifact's root;
+    # publish downloads them into dist/, where the sums step and the upload read.
+    verify_run = _step(VERIFY_JOB, "Check the wheels against the run and the tag")
+    assert verify_run.rstrip().endswith('"$RUNNER_TEMP/dist"')
+    assert _one(r"^          path: (.*)$", VERIFY_JOB) == "${{ runner.temp }}/dist"
+    assert _one(r"^          path: (.*)$", PUBLISH_JOB) == "dist"
+    assert _step(PUBLISH_JOB, "The verified wheels").startswith("cd dist\n")
+    assert _one(r"^          packages-dir: (\S+)$", PUBLISH_JOB) == "dist/"
+
+
+REAL = os.environ.get("TESSERA_PYPI_ARTIFACTS")
+
+
+@pytest.mark.skipif(not REAL, reason="set TESSERA_PYPI_ARTIFACTS to a downloaded wheels run (gh run download)")
+def test_pypi_verify_accepts_a_real_wheels_run(tmp_path):
+    arts = Path(REAL)
+    tag = os.environ.get("TESSERA_PYPI_TAG", TAG)
+    w1 = [d.name for d in arts.iterdir() if d.is_dir() and d.name.startswith("wheel-x86_64-")]
+    assert len(w1) == 1, w1
+    commit = w1[0].split("-wheel-", 1)[1].split("-")[0]
+    p, out = _verify(arts, tag=tag, commit=commit, out=tmp_path / "dist")
+    assert p.returncode == 0, p.stdout + p.stderr
+    assert len((out / "SHA256SUMS").read_text().splitlines()) == 3
+
+
 # --- the verify script ---------------------------------------------------------
 
 PLAT = {
@@ -180,8 +221,9 @@ def _wheel(path: Path, version="0.2.0", meta_version=None, name="tessera-rl"):
 def _artifact(root: Path, key, version="0.2.0", commit=COMMIT, checks=None, sha_override=None, **kw):
     plat = PLAT[key]
     tmp = root / f".tmp-{key}"
-    tmp.mkdir()
-    whl = tmp / f"tessera_rl-{version}-cp311-abi3-{plat}.whl"
+    (tmp / "dist").mkdir(parents=True)
+    # The layout wheels.yml uploads: the wheel under dist/, the reports at the root.
+    whl = tmp / "dist" / f"tessera_rl-{version}-cp311-abi3-{plat}.whl"
     sha = _wheel(whl, version=version, **kw)
     name = f"wheel-x86_64-unknown-linux-gnu-wheel-{commit}-{sha_override or sha}" if key == "x86" else f"wheel-{key}"
     d = root / name
@@ -266,7 +308,7 @@ def test_pypi_verify_refuses_a_wheel_that_does_not_match(tmp_path, key, kw, mess
 def test_pypi_verify_refuses_a_wheel_changed_after_its_checks(tmp_path):
     arts = tmp_path / "a"
     _good(arts)
-    whl = next((arts / "wheel-aarch64-apple-darwin").glob("*.whl"))
+    whl = next((arts / "wheel-aarch64-apple-darwin").glob("dist/*.whl"))
     with zipfile.ZipFile(whl, "a") as z:
         z.writestr("tessera_rl/extra.py", "x = 1\n")
     p, out = _verify(arts)
@@ -278,17 +320,34 @@ def test_pypi_verify_refuses_two_wheels_in_one_artifact(tmp_path):
     arts = tmp_path / "a"
     _good(arts)
     d = arts / "wheel-aarch64-apple-darwin"
-    _wheel(d / "tessera_rl-0.2.0-cp311-abi3-macosx_12_0_arm64.whl")
+    _wheel(d / "dist" / "tessera_rl-0.2.0-cp311-abi3-macosx_12_0_arm64.whl")
     p, _ = _verify(arts)
-    assert p.returncode == 1 and "expected one wheel" in p.stderr, p.stderr
+    assert p.returncode == 1 and "expected one wheel in dist/" in p.stderr, p.stderr
+
+
+@pytest.mark.parametrize("where", [".", "other"])
+def test_pypi_verify_refuses_a_wheel_outside_dist(tmp_path, where):
+    arts = tmp_path / "a"
+    _good(arts)
+    d = arts / "wheel-aarch64-apple-darwin"
+    whl = next(d.glob("dist/*.whl"))
+    (d / where).mkdir(exist_ok=True)
+    if where == ".":
+        # The flat layout the first version expected: only the wheel moved.
+        whl.rename(d / whl.name)
+    else:
+        shutil.copyfile(whl, d / where / whl.name)
+    p, out = _verify(arts)
+    assert p.returncode == 1 and "expected one wheel in dist/" in p.stderr, p.stderr
+    assert not out.exists()
 
 
 def test_pypi_verify_refuses_a_wheel_of_the_wrong_platform(tmp_path):
     arts = tmp_path / "a"
     _good(arts)
     d = arts / "wheel-aarch64-unknown-linux-gnu"
-    whl = next(d.glob("*.whl"))
-    wrong = d / whl.name.replace("aarch64", "x86_64")
+    whl = next(d.glob("dist/*.whl"))
+    wrong = whl.with_name(whl.name.replace("aarch64", "x86_64"))
     whl.rename(wrong)
     p, _ = _verify(arts)
     assert p.returncode == 1 and "does not match" in p.stderr, p.stderr

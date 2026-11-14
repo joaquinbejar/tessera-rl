@@ -13,7 +13,9 @@ The run must have exactly the three artifacts of wheels.yml:
 - `wheel-aarch64-unknown-linux-gnu`,
 - `wheel-aarch64-apple-darwin`.
 
-For each: exactly one wheel; its sha256 equals `wheel_sha256` in the
+For each: exactly one wheel, under the artifact's dist/ (wheels.yml uploads
+`dist/*.whl` with checks.json, so the artifact keeps that layout), and no
+wheel anywhere else; its sha256 equals `wheel_sha256` in the
 artifact's checks.json, and for W1 also the sha256 in the artifact's name;
 every check in checks.json is 0; the file name is
 `tessera_rl-<version>-cp311-abi3-<platform>.whl` with the target's platform
@@ -48,8 +50,11 @@ PLATFORMS = {
 
 
 def _sha256(path: Path) -> str:
+    h = hashlib.sha256()
     with path.open("rb") as f:
-        return hashlib.file_digest(f, "sha256").hexdigest()
+        for block in iter(lambda: f.read(1 << 20), b""):
+            h.update(block)
+    return h.hexdigest()
 
 
 def _metadata(wheel: Path, version: str) -> dict[str, str]:
@@ -87,9 +92,12 @@ def check(artifacts: Path, tag: str, commit: str) -> tuple[list[str], list[Path]
     for name in [w1[0], "wheel-aarch64-unknown-linux-gnu", "wheel-aarch64-apple-darwin"]:
         d = artifacts / name
         target = next(t for t in PLATFORMS if t in name)
-        found = sorted(d.glob("*.whl"))
-        if len(found) != 1:
-            problems.append(f"{name}: expected one wheel, found {[p.name for p in found]}")
+        # wheels.yml uploads `dist/*.whl` and checks.json together, so the
+        # artifact keeps the wheel under dist/, next to checks.json at its root.
+        found = sorted(d.glob("dist/*.whl"))
+        stray = sorted(p.relative_to(d).as_posix() for p in d.rglob("*.whl") if p.parent != d / "dist")
+        if len(found) != 1 or stray:
+            problems.append(f"{name}: expected one wheel in dist/, found {[p.name for p in found]}, elsewhere {stray}")
             continue
         wheel = found[0]
         sha = _sha256(wheel)
