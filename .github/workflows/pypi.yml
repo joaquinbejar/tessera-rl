@@ -1,0 +1,127 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+#
+# Publishes one release's wheels to PyPI by trusted publishing (OIDC): no API
+# token exists anywhere. It builds nothing. It takes the three wheels of one
+# named, green wheels.yml run, checks them against that run and the release
+# tag (scripts/pypi_verify.py), and uploads exactly those files.
+#
+# Manual only, and the upload job runs in the `pypi` environment, whose
+# required reviewer is the owner: each upload waits for the owner's approval
+# in GitHub. The first upload registers the project on PyPI, and a file name
+# can never be uploaded twice, so nothing here is retried blindly.
+#
+# The owner's one-time setup on PyPI is a pending trusted publisher with
+# project `tessera-rl`, owner `joaquinbejar`, repository `tessera-rl`, workflow
+# `pypi.yml` and environment `pypi` (docs: release plan, section 4).
+name: pypi
+
+on:
+  workflow_dispatch:
+    inputs:
+      wheels_run_id:
+        description: The id of the green wheels.yml run whose wheels are published
+        required: true
+        type: string
+      tag:
+        description: The release tag the wheels must match, such as v0.2.0
+        required: true
+        type: string
+
+permissions: {}
+
+concurrency:
+  group: pypi
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    # Hosted: no owner machine is involved. The workflow is workflow_dispatch
+    # only, and this guard keeps the job off any other event and off forks even
+    # if the triggers ever grow.
+    if: github.event_name == 'workflow_dispatch' && github.repository == 'joaquinbejar/tessera-rl'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: read
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - id: run
+        name: The wheels run and the tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ inputs.wheels_run_id }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          [[ "$RUN_ID" =~ ^[1-9][0-9]*$ ]] || { echo "bad run id: $RUN_ID"; exit 1; }
+          [[ "$TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] || { echo "bad tag: $TAG"; exit 1; }
+          # The tag must be a tag (not a branch), and name a commit.
+          read -r type sha < <(gh api "repos/$REPO/git/ref/tags/$TAG" --jq '.object.type + " " + .object.sha')
+          if [ "$type" = tag ]; then
+            read -r type sha < <(gh api "repos/$REPO/git/tags/$sha" --jq '.object.type + " " + .object.sha')
+          fi
+          [ "$type" = commit ] || { echo "tag $TAG names a $type, not a commit"; exit 1; }
+          read -r path event status conclusion head repo < <(gh api "repos/$REPO/actions/runs/$RUN_ID" \
+            --jq '[.path, .event, .status, .conclusion, .head_sha, .head_repository.full_name] | join(" ")')
+          echo "run $RUN_ID: $path $event $status $conclusion $head $repo; tag $TAG: $sha"
+          [ "$path" = .github/workflows/wheels.yml ] || { echo "run $RUN_ID is not a wheels.yml run"; exit 1; }
+          [ "$event" = workflow_dispatch ] || { echo "run $RUN_ID was not dispatched"; exit 1; }
+          [ "$status" = completed ] && [ "$conclusion" = success ] || { echo "run $RUN_ID is not green"; exit 1; }
+          [ "$repo" = "$REPO" ] || { echo "run $RUN_ID built $repo"; exit 1; }
+          [ "$head" = "$sha" ] || { echo "run $RUN_ID built $head, tag $TAG is $sha"; exit 1; }
+          echo "commit=$sha" >> "$GITHUB_OUTPUT"
+      - name: The run's artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ inputs.wheels_run_id }}
+        run: gh run download "$RUN_ID" -R "$REPO" -D "$RUNNER_TEMP/artifacts"
+      - name: Check the wheels against the run and the tag
+        env:
+          TAG: ${{ inputs.tag }}
+          COMMIT: ${{ steps.run.outputs.commit }}
+        run: python3 -I scripts/pypi_verify.py "$RUNNER_TEMP/artifacts" "$TAG" "$COMMIT" "$RUNNER_TEMP/dist"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: pypi-dist-${{ github.run_id }}
+          path: ${{ runner.temp }}/dist
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    needs: verify
+    if: github.event_name == 'workflow_dispatch' && github.repository == 'joaquinbejar/tessera-rl'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment:
+      name: pypi
+      url: https://pypi.org/project/tessera-rl/
+    # The OIDC token is the only credential, and this job has nothing else.
+    permissions:
+      id-token: write
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: pypi-dist-${{ github.run_id }}
+          path: dist
+      # The same three files the verify job checked, and nothing else.
+      - name: The verified wheels
+        run: |
+          cd dist
+          sha256sum -c SHA256SUMS
+          shopt -s nullglob dotglob
+          files=(*)
+          [ "${#files[@]}" -eq 4 ] && [ "$(wc -l < SHA256SUMS)" -eq 3 ] || { ls -la; exit 1; }
+          mv SHA256SUMS "$RUNNER_TEMP/"
+      - uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # v1.14.3
+        with:
+          packages-dir: dist/
