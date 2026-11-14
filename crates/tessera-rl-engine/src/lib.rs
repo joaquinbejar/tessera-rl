@@ -11,6 +11,8 @@
 //! views for workers) and `sys` (the worker gang).
 
 mod buffer;
+#[cfg(test)]
+mod chunk_clear_tests;
 #[cfg(feature = "debug-checks")]
 pub mod debug;
 mod entry;
