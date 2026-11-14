@@ -376,3 +376,29 @@ def test_loop_m3_root_argv_and_config_unchanged(tmp_path, bot):
     argv = lp.phase_argv(lp.chain(lp.ledger.entries()), 0, "selfplay", 0)
     assert argv[argv.index("--sims") + 1] == "2" and "--max-attempts" not in argv
     assert loop.max_attempts(dict(loop.FORMAL)) == 3 and loop.is_formal(dict(loop.FORMAL))
+
+
+# ---------------------------------------------------------------- test-only env
+
+
+def test_remote_container_never_carries_a_test_only_variable(monkeypatch):
+    monkeypatch.setenv("SELFPLAY_TEST_ABORT_GAME", "3")
+    words = run_words()
+    assert not any("SELFPLAY_TEST" in w for w in words)
+    with pytest.raises(remote.TransportError, match="test-only"):
+        remote.docker_run_argv("/b", "n", "0", "h", ["-e", "SELFPLAY_TEST_ABORT_GAME=3"], 60)
+
+
+def test_remote_dispatch_refused_when_a_test_only_variable_is_set(tmp_path, monkeypatch):
+    root = tmp_path / "root"
+    root.mkdir()
+    monkeypatch.setenv("SELFPLAY_TEST_ABORT_GAME", "3")
+
+    class Args:
+        pass
+
+    args = Args()
+    args.root, args.host, args.cpuset, args.source_tree_sha256 = str(root), "h", "0", "x"
+    with pytest.raises(remote.TransportError, match="test-only"):
+        remote.dispatch(args, ["selfplay.py", "--out", str(root / "gen-000" / "selfplay-0")])
+    assert not list(root.rglob("*.dispatch.json"))

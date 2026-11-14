@@ -95,6 +95,11 @@ STATUS = "_status"
 FILE_EXCLUDE_SUFFIXES = (".so", ".pyd", ".dylib", ".pyc")
 SETUP_S = float(os.environ.get("REMOTE_TEST_SETUP_S", "900"))
 MARGIN_S = float(os.environ.get("REMOTE_TEST_MARGIN_S", "300"))
+# Test-only hooks of the phase tools. They never reach a container: a
+# container gets only the -e words of docker_run_argv, which never name
+# them, and a dispatch from an environment that sets one is refused, so a
+# test hook can never leak into a real run.
+TEST_ONLY_ENV = ("SELFPLAY_TEST_ABORT_GAME",)
 
 
 class TransportError(RuntimeError):
@@ -259,6 +264,8 @@ def docker_run_argv(base: str, name: str, cpuset: str, hostname: str, argv: list
         "-v", f"{base}/src:{SRC}", "-v", f"{base}/root:{CROOT}", "-v", f"{base}/uv:/usr/local/bin/uv:ro",
         "-w", SRC, IMAGE, "sh", "-c", inner,
     ]  # fmt: skip
+    if any(name in w for w in words for name in TEST_ONLY_ENV):
+        raise TransportError(f"a test-only variable {TEST_ONLY_ENV} would reach the container")
     # The host user's ids are expanded by the host shell.
     return ["$(id -u):$(id -g)" if w == "HOST_IDS" else shlex.quote(w) for w in words]
 
@@ -378,6 +385,9 @@ def dispatch(args, argv: list[str]) -> str:
     """Steps 1 to 3; returns the dispatch path. The caller holds the owner
     lock (loop.py run)."""
     root = os.path.abspath(args.root)
+    set_hooks = [name for name in TEST_ONLY_ENV if name in os.environ]
+    if set_hooks:
+        raise TransportError(f"test-only variables are set ({set_hooks}): a real dispatch never carries them")
     if stopping.requested(root):
         raise TransportError("a stop was requested (STOP): nothing is dispatched")
     opened = open_dispatches(root)

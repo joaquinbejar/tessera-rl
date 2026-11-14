@@ -107,6 +107,7 @@ at sha256 `d3a091482e70f53caee6fe23b7b905c38a65d204022408727151d1deeaa1b0ee`.
 - After `stop`, run `remote.py reconcile --root R`.
 - `--max-attempts N` (1 to 3) at `init` records a per-root attempt limit in `config.json`. A root without it keeps 3.
 - Self-play fails at once with exit 6 ("a self-play worker died") if a pool worker dies: no respawn, no manifest, no hang.
+- `SELFPLAY_TEST_ABORT_GAME` is a **test-only** hook: the self-play worker that plays that game aborts. `remote.py` never forwards it into a container, and refuses to dispatch from an environment that sets it.
 
 ## Artifacts
 
