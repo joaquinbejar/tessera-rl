@@ -327,9 +327,11 @@ class Env:
     def _wrap(self, out: dict, rows: int | None = None) -> Step:
         n, a = self.num_envs if rows is None else rows, self.agents
         # The raw outputs of the last whole-pool call, for adapters that read
-        # outputs ``Step`` does not carry (the episode statistics).
-        if rows is None:
-            self._last_out = out
+        # outputs ``Step`` does not carry (the episode statistics); ``None``
+        # after any call on a subset (a half or an Async batch). Its arrays
+        # are borrowed views: valid only until the next call on this
+        # environment, so a reader takes what it needs at once and drops it.
+        self._last_out = out if rows is None else None
         if self.outputs == "borrowed":
             # Zero-copy, read-only arrays over the native views (the buffer
             # protocol carries dtype and shape).

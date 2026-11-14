@@ -480,6 +480,52 @@ def test_logging_from_engine_statistics_matches_per_step_accounting(env_id, num_
         assert g["episode_return"] == pytest.approx(w["episode_return"], rel=1e-6, abs=1e-6)
 
 
+def test_logging_reads_the_raw_outputs_once_and_drops_them():
+    """The episode statistics are borrowed views: the adapter takes them
+    right after its own whole-pool step and keeps no reference (#152, G3)."""
+    env = TesseraPufferEnv(CARTPOLE, num_envs=4, log_interval=1, max_episode_steps=3)
+    env.reset(seed=1)
+    for _ in range(6):
+        env.step(np.zeros(4, dtype=np.int32))
+        assert env._env._last_out is None
+        assert not any(isinstance(v, dict) and "episode_return" in v for v in vars(env).values())
+    env.close()
+
+
+def test_logging_refuses_outputs_that_are_not_its_own_whole_pool_step(monkeypatch):
+    env = TesseraPufferEnv(CARTPOLE, num_envs=4, log_interval=1)
+    env.reset(seed=1)
+    inner = env._env
+    step = inner.step
+
+    def subset_after(actions):
+        out = step(actions)
+        inner._last_out = None  # as after a half or an Async batch call
+        return out
+
+    monkeypatch.setattr(inner, "step", subset_after)
+    with pytest.raises(RuntimeError, match="whole-pool"):
+        env.step(np.zeros(4, dtype=np.int32))
+    env.close()
+
+
+def test_env_clears_last_out_after_a_subset_call():
+    from tessera_rl import make
+
+    env = make(CARTPOLE, num_envs=4, mode="pipelined", workers=1, chunk_size=2)
+    env.reset(0)
+    assert env._last_out is None
+    env.send(0, np.zeros((2, 1), dtype=np.int32))
+    env.recv()
+    assert env._last_out is None
+    env.close()
+    sync = make(CARTPOLE, num_envs=4)
+    sync.reset(0)
+    sync.step(np.zeros((4, 1), dtype=np.int32))
+    assert sync._last_out is not None and "episode_return" in sync._last_out
+    sync.close()
+
+
 def test_adapter_arrays_do_not_grow():
     env = TesseraPufferEnv(CARTPOLE, num_envs=4)
     env.reset(seed=1)

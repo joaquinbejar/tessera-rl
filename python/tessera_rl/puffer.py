@@ -272,10 +272,6 @@ class TesseraPufferEnv(pufferlib.PufferEnv):
             out.agent_truncated.reshape(n),
         )
         self._episode_ended = (out.episode_terminated, out.episode_truncated)
-        # The engine's own statistics of episodes that ended in the call
-        # (`[N]`, zero elsewhere): borrowed views over stable storage.
-        raw = self._env._last_out
-        self._episode_stats = (np.asarray(raw["episode_return"]), np.asarray(raw["episode_length"]))
         if out.masks is not None:
             self._masks = out.masks.reshape((n, -1))
         if not self._owned_buffers:
@@ -315,15 +311,21 @@ class TesseraPufferEnv(pufferlib.PufferEnv):
         self._require_reset("step")
         self._env.step(actions)
         self._copy_out()
-        self.infos = self._log() if self._log_interval is not None else []
+        # This call's own whole-pool outputs, read now and dropped at once:
+        # they are borrowed views, valid only until the next pool call.
+        raw, self._env._last_out = self._env._last_out, None
+        if raw is None:
+            raise RuntimeError("the environment's last call was not this whole-pool step")
+        self.infos = self._log(raw) if self._log_interval is not None else []
         return self.observations, self.rewards, self.terminals, self.truncations, self.infos
 
-    def _log(self) -> list:
-        # Each ended episode counts once per agent row, as PufferLib's
-        # per-agent logs do: its return is the sum over its agents, and
-        # every agent row shares its length.
+    def _log(self, raw: dict) -> list:
+        # The engine's statistics of episodes that ended in this step
+        # (`[N]`, zero elsewhere). Each ended episode counts once per agent
+        # row, as PufferLib's per-agent logs do: its return is the sum over
+        # its agents, and every agent row shares its length.
         self._tick += 1
-        returns, lengths = self._episode_stats
+        returns, lengths = np.asarray(raw["episode_return"]), np.asarray(raw["episode_length"])
         ended = int(np.count_nonzero(lengths))
         if ended:
             self._finished[0] += float(returns.sum(dtype=np.float64))
