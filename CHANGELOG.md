@@ -31,6 +31,14 @@ the API is not stable, and any 0.x release may break it.
 - **`EnvPool::outputs` returns `Result<&Outputs, EngineError>`** and refuses a poisoned pool with `Poisoned`
   (ADR-0028, SPEC 5.4); a source-breaking change. Python's `outputs()` refuses too, in borrowed and owned modes.
 
+- **Observation leaves are zero on entry to `observe`** (ADR-0058, #243): the engine already cleared every leaf of
+  the agent's row before `observe`, on every path (step, reset, both auto-reset modes, re-observation after
+  restore, fork, import and load); it is now a stated contract. An environment need not clear its leaves.
+- **The Linux x86-64 wheel builds with the `wheel` profile** (#253): `lto = "fat"`, `codegen-units = 1`,
+  `panic = "unwind"`, the W1 candidate of the PGO ladder (11.7% fewer instructions on its scenarios). The wheel job
+  also builds the default-profile wheel from the same commit and fails on any determinism difference between the
+  two. aarch64 Linux and macOS wheels keep the release profile. No PGO wheel ships.
+
 ### Added
 
 - **`tessera_rl::register!`** (SPEC 10, ADR-0032, ADR-0054): `register!(Env, id = "...")` requires `Persist`,
@@ -191,6 +199,45 @@ the API is not stable, and any 0.x release may break it.
   which runs author code that reads only the configuration under the
   pool's containment (the canonical floating-point scope, a panic caught
   and reported as `None`).
+
+- **ONNX evaluator** (`tessera-rl-onnx`, ADR-0057; #245, #247, #249, #251, #255, #257): a new crate whose `onnx`
+  feature (off by default) loads ONNX Runtime 1.31.1 dynamically from an explicit path, checks its exact version
+  through the audited `onnx::sys`, and refuses to load unless `ORT_DISABLE_TELEMETRY=1` is set or telemetry is
+  accepted explicitly. `OnnxEvaluator` implements the search `Evaluator` on the CPU provider only, with pinned
+  session settings, a model size limit, no external-data files, and provenance (model and library sha256, version,
+  threads). In Python, `tessera_rl.search.OnnxEvaluator` and `tessera_rl.OnnxError`, the `[onnx]` extra
+  (`onnxruntime==1.31.1`), and inference with the interpreter released. Every release wheel has the feature; the
+  library comes from the extra or an explicit `library=` path. Linux and macOS only.
+- **Gumbel root search** (`tessera-rl-search`; #226, #230, #234): an exact open-interval Gumbel sampler on the
+  search stream, and the Gumbel root (top-k, sequential halving, completed Q, sigma and the improved policy) for
+  single searches and search groups, in Rust and in `tessera_rl.search`.
+- **RTS** (`tessera-rl-rts`; #141, #143, #144, #146, #155, #156, #161, #175): a new crate with a real-time
+  strategy environment: generated maps, a unit table, move resolution over flow fields, production, fog of war with
+  explored-cell memory, 11 observation planes, multi-head actions with conditional masks, and scripted bots that
+  read only their side's view. In Python, `make_rts` with mask head views and a PettingZoo Parallel wrapper;
+  PufferLib and JAX refuse it.
+- **Conditional masks** (`tessera-rl-engine`, ADR-0051, #133): entity groups declared at construction, and a
+  per-entity illegal-action fallback with the penalty applied once per agent per step.
+- **SIMD crate** (`tessera-rl-simd`, #126): a standalone eight-lane CartPole step, scalar, NEON, SSE4.2 and AVX2,
+  checked bit for bit against the scalar physics, and frozen lane sine and cosine in `tessera-rl-num`. No pool uses
+  it yet, and no speed is claimed.
+- **Python actions**: generic `MultiDiscrete` actions (#162), and continuous actions through the binding and the
+  Gymnasium `Box` adapter (#123), one f32 head for single-agent environments in Sync, Pipelined and Async.
+  PettingZoo, PufferLib and JAX refuse continuous environments.
+- **JAX handles** (SPEC 15.2, ADR-0031, #119): reset and step through ordered `io_callback`, valid under `jit` and
+  `lax.scan`; vmap and mapped axes are refused. JAX and jaxlib 0.10.2 as an optional extra. CPU only.
+- **Linux aarch64 wheel** (#167), built on a GitHub-hosted arm64 runner in the pinned manylinux_2_28 image.
+
+### Performance
+
+- **Async mode** (`tessera-rl-engine`): workers claim and publish runs of ids with one compare-and-swap each
+  (ADR-0056 decision 1, #170), and waits are wake-based instead of polling, with timed futex waits on Linux,
+  macOS 14.4+ and Windows (ADR-0056 decisions 2 to 4, #187). `AsyncPool::snapshot(id)` needs only that row to be
+  idle, not the whole pool (#158).
+- **Connect Four `observe`** (#246): writes one fixed-size 84-byte view with a single bounds check, whatever the
+  codegen-unit split.
+- **Classic environments** (#250): Snake, BrickWall and PaddleDuel no longer clear leaves the engine already
+  zeroes (ADR-0058).
 
 ### Fixed
 
