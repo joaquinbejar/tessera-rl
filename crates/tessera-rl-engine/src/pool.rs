@@ -1019,13 +1019,17 @@ pub(crate) fn step_chunk<E: Environment, M: MaskProvider<E>>(
         outputs,
     } = chunk;
     let (dh, ch) = (layout.discrete.len(), layout.continuous.len());
+    // Every instance of the chunk is reset or stepped below, and each one's
+    // rows are cleared before anything writes them; one fill per buffer for
+    // the whole chunk replaces the per-instance fills (issue #152, G1). No
+    // write to instance `i`'s rows happens between this clear and its turn.
+    clear_chunk(outputs, headers.len());
     for (i, (header, state)) in headers.iter_mut().zip(states.iter_mut()).enumerate() {
         if header.engine().pending_reset.get() {
             // NextStep: reset instead of stepping (validated above).
             reset_one::<E>(cfg, authority, header, state, None);
-            clear_instance(outputs, i);
             write_agent_masks(outputs, i, header);
-            observe_instance::<E, M>(cfg, authority, header, state, outputs, i);
+            observe_cleared::<E, M>(cfg, authority, header, state, outputs, i);
             continue;
         }
         if M::ENABLED {
@@ -1059,12 +1063,13 @@ pub(crate) fn step_chunk<E: Environment, M: MaskProvider<E>>(
         step_one::<E>(
             cfg, authority, header, state, &view, outputs, i, limit, penalty, marked,
         );
-        observe_instance::<E, M>(cfg, authority, header, state, outputs, i);
+        observe_cleared::<E, M>(cfg, authority, header, state, outputs, i);
         if auto_reset == AutoReset::SameStep && header.engine().pending_reset.get() {
             save_terminal(outputs, i);
             // Flags and stats of the ended episode stay set.
             reset_one::<E>(cfg, authority, header, state, None);
             write_agent_masks(outputs, i, header);
+            // The rows hold the terminal observation: zero them again.
             observe_instance::<E, M>(cfg, authority, header, state, outputs, i);
         }
     }
@@ -1080,6 +1085,7 @@ pub(crate) fn reset_chunk<E: Environment, M: MaskProvider<E>>(
     first: usize,
 ) {
     let outputs = &mut chunk.outputs;
+    clear_chunk(outputs, chunk.headers.len());
     for (i, (header, state)) in chunk
         .headers
         .iter_mut()
@@ -1089,9 +1095,8 @@ pub(crate) fn reset_chunk<E: Environment, M: MaskProvider<E>>(
         let k = first + i;
         let seed = reseed.seed(k);
         reset_one::<E>(cfg, authority, header, state, seed);
-        clear_instance(outputs, i);
         write_agent_masks(outputs, i, header);
-        observe_instance::<E, M>(cfg, authority, header, state, outputs, i);
+        observe_cleared::<E, M>(cfg, authority, header, state, outputs, i);
     }
 }
 
@@ -1609,7 +1614,7 @@ fn step_one<E: Environment>(
     let t = header.engine().episode_steps.saturating_add(1);
     let episode = header.engine().identity.episode_index();
     let identity = with_step(header, episode, t);
-    clear_instance(outputs, i);
+    // The caller cleared instance `i`'s rows (`clear_chunk`).
     let end = {
         let OutputsView {
             rewards,
@@ -1806,6 +1811,58 @@ pub(crate) fn clear_instance(outputs: &mut OutputsView<'_>, i: usize) {
     }
 }
 
+/// Clears the rows of the first `n` instances of a chunk view, as
+/// `clear_instance` does for one instance, and zeroes their observation
+/// rows as `observe_instance` does on entry (ADR-0058): one fill per buffer
+/// instead of one per instance and buffer. Mask rows are left alone.
+pub(crate) fn clear_chunk(outputs: &mut OutputsView<'_>, n: usize) {
+    let rows = n.saturating_mul(outputs.agents);
+    for buf in [
+        &mut outputs.agent_terminated,
+        &mut outputs.agent_truncated,
+        &mut outputs.died,
+        &mut outputs.spawned,
+        &mut outputs.invalid_agent_event,
+    ] {
+        if let Some(r) = buf.get_mut(..rows) {
+            r.fill(Bool8::FALSE);
+        }
+    }
+    if let Some(r) = outputs.rewards.get_mut(..rows) {
+        r.fill(0.0);
+    }
+    for buf in [
+        &mut outputs.episode_terminated,
+        &mut outputs.episode_truncated,
+    ] {
+        if let Some(r) = buf.get_mut(..n) {
+            r.fill(Bool8::FALSE);
+        }
+    }
+    for buf in [
+        &mut outputs.episode_return,
+        &mut outputs.episode_length,
+        &mut outputs.episode_illegal_actions,
+        &mut outputs.episode_invalid_agent_events,
+    ] {
+        if let Some(r) = buf.get_mut(..n) {
+            r.fill(0.0);
+        }
+    }
+    for (buf, &bytes) in outputs
+        .observations
+        .iter_mut()
+        .zip(outputs.leaf_bytes.iter())
+    {
+        if let Some(r) = buf.get_mut(..rows.saturating_mul(bytes)) {
+            r.fill(0);
+        }
+    }
+    // Not the masks: the illegal-action pass reads each instance's masks
+    // from the previous step before its turn, so they are zeroed per row
+    // in `observe_rows`, as before.
+}
+
 /// Zeroes instance `i`'s terminal observation rows: they are a step
 /// output, not continuation state (ADR-0039).
 pub(crate) fn clear_terminal(outputs: &mut OutputsView<'_>, i: usize) {
@@ -1849,6 +1906,30 @@ pub(crate) fn observe_instance<E: Environment, M: MaskProvider<E>>(
     outputs: &mut OutputsView<'_>,
     i: usize,
 ) {
+    observe_rows::<E, M, true>(cfg, authority, header, state, outputs, i);
+}
+
+/// `observe_instance` for rows that `clear_chunk` already zeroed and that
+/// nothing wrote since: the same bytes, without the per-row fills.
+pub(crate) fn observe_cleared<E: Environment, M: MaskProvider<E>>(
+    cfg: &E::Config,
+    authority: &RngAuthority,
+    header: &E::Header,
+    state: &E::State,
+    outputs: &mut OutputsView<'_>,
+    i: usize,
+) {
+    observe_rows::<E, M, false>(cfg, authority, header, state, outputs, i);
+}
+
+fn observe_rows<E: Environment, M: MaskProvider<E>, const ZERO: bool>(
+    cfg: &E::Config,
+    authority: &RngAuthority,
+    header: &E::Header,
+    state: &E::State,
+    outputs: &mut OutputsView<'_>,
+    i: usize,
+) {
     let identity = header.engine().identity;
     let a = E::MAX_AGENTS;
     let OutputsView {
@@ -1868,7 +1949,9 @@ pub(crate) fn observe_instance<E: Environment, M: MaskProvider<E>>(
             .zip(views.iter_mut())
         {
             if let Some(rows) = buf.get_mut(k * bytes..(k + 1) * bytes) {
-                rows.fill(0);
+                if ZERO {
+                    rows.fill(0);
+                }
                 *view = rows;
             }
             used += 1;

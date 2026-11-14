@@ -1,8 +1,8 @@
 # callgrind format
 version: 1
 creator: callgrind-3.24.0
-pid: 5903
-cmd:  /__w/tessera-rl/tessera-rl/target/bench-gate/deps/snapshot_instructions-d92aad5ea7a843da --gungraun-run d:d:000000 00000 00001 00000
+pid: 5901
+cmd:  /__w/tessera-rl/tessera-rl/target/bench-gate/deps/snapshot_instructions-fa4c680afaa8aa33 --gungraun-run d:d:000000 00000 00001 00000
 part: 1
 thread: 1
 
@@ -11,7 +11,7 @@ desc: I1 cache: 32768 B, 64 B, 8-way associative
 desc: D1 cache: 32768 B, 64 B, 8-way associative
 desc: LL cache: 8388608 B, 64 B, 16-way associative
 
-desc: Timerange: Basic block 0 - 524503
+desc: Timerange: Basic block 0 - 476314
 desc: Trigger: Program termination
 
 positions: line
@@ -22,7 +22,7 @@ summary: 58906 22697 22689 5 1556 1044 5
 ob=/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2
 fl=???
 fn=0x000000000001d2c0
-cob=/__w/tessera-rl/tessera-rl/target/bench-gate/deps/snapshot_instructions-d92aad5ea7a843da
+cob=/__w/tessera-rl/tessera-rl/target/bench-gate/deps/snapshot_instructions-fa4c680afaa8aa33
 cfi=???
 cfn=(below main)
 calls=1 0 
@@ -94,7 +94,7 @@ fn=memcpy@GLIBC_2.2.5
 
 fl=./csu/../sysdeps/nptl/libc_start_call_main.h
 fn=(below main)
-cob=/__w/tessera-rl/tessera-rl/target/bench-gate/deps/snapshot_instructions-d92aad5ea7a843da
+cob=/__w/tessera-rl/tessera-rl/target/bench-gate/deps/snapshot_instructions-fa4c680afaa8aa33
 cfi=???
 cfn=main
 calls=1 0 
@@ -107,8 +107,36 @@ cfn=(below main)
 calls=1 29 
 360 58906 22697 22689 5 1556 1044 5
 
-ob=/__w/tessera-rl/tessera-rl/target/bench-gate/deps/snapshot_instructions-d92aad5ea7a843da
+ob=/__w/tessera-rl/tessera-rl/target/bench-gate/deps/snapshot_instructions-fa4c680afaa8aa33
 fl=???
+fn=std::rt::lang_start::<()>::{closure#0}
+cfn=std::sys::backtrace::__rust_begin_short_backtrace::<fn(), ()>
+calls=1 0 
+0 58906 22697 22689 5 1556 1044 5
+
+fn=snapshot_instructions::snapshot_all_copy::__run_n1024
+cfn=snapshot_instructions::snapshot_all_copy::__gungraun_wrapper_id_mod_n1024::n1024
+calls=1 0 
+0 58906 22697 22689 5 1556 1044 5
+
+fn=snapshot_instructions::snapshot_all_copy::__gungraun_wrapper_id_mod_n1024::n1024
+cfn=snapshot_instructions::snapshot_all_copy::__gungraun_wrapper_mod::snapshot_all_copy
+calls=1 0 
+0 58906 22697 22689 5 1556 1044 5
+
+fn=std::rt::lang_start_internal
+cfn=std::rt::lang_start::<()>::{closure#0}
+calls=1 0 
+0 58906 22697 22689 5 1556 1044 5
+
+fn=snapshot_instructions::main
+cfn=snapshot_instructions::engine::__run
+calls=1 0 
+0 58906 22697 22689 5 1556 1044 5
+
+fn=<tessera_rl_num::fp::FpGuard as core::ops::drop::Drop>::drop
+0 12 4 3
+
 fn=snapshot_instructions::engine::__run
 cfn=snapshot_instructions::snapshot_all_copy::__run_n1024
 calls=1 0 
@@ -124,16 +152,6 @@ cfn=__libc_start_main@@GLIBC_2.34
 calls=1 242 
 0 58906 22697 22689 5 1556 1044 5
 
-fn=snapshot_instructions::snapshot_all_copy::__gungraun_wrapper_id_mod_n1024::n1024
-cfn=snapshot_instructions::snapshot_all_copy::__gungraun_wrapper_mod::snapshot_all_copy
-calls=1 0 
-0 58906 22697 22689 5 1556 1044 5
-
-fn=main
-cfn=std::rt::lang_start_internal
-calls=1 0 
-0 58906 22697 22689 5 1556 1044 5
-
 fn=snapshot_instructions::snapshot_all_copy::__gungraun_wrapper_mod::snapshot_all_copy
 0 13 1 7 2 0 1 2
 cob=/usr/lib/x86_64-linux-gnu/libc.so.6
@@ -145,51 +163,33 @@ calls=1 211
 cfn=<tessera_rl_num::fp::FpGuard>::enter
 calls=1 0 
 0 13 3 3
-0 4 0 1 1 0 0 1
+0 4 0 1
 cfn=tessera_rl_num::fp::call_opaque::<core::result::Result<(), tessera_rl_engine::error::EngineError>, tessera_rl_engine::entry::canonical<core::result::Result<(), tessera_rl_engine::error::EngineError>, <tessera_rl_engine::pool::EnvPool<snapshot_instructions::common::Counter>>::guarded_ref<(), <tessera_rl_engine::pool::EnvPool<snapshot_instructions::common::Counter>>::snapshot_all::{closure#0}>::{closure#0}>::{closure#0}>
 calls=1 0 
 0 58413 22543 22538 0 1537 1026
-0 3 1 2 0 1 1
+0 3 1 2 1 1 1 1
 cfn=<tessera_rl_num::fp::FpGuard as core::ops::drop::Drop>::drop
 calls=1 0 
 0 12 4 3
-0 13 5 4 1 1 0 1
+0 13 5 4 0 1
 cob=/usr/lib/x86_64-linux-gnu/libc.so.6
 cfi=./string/../sysdeps/x86_64/multiarch/memmove-vec-unaligned-erms.S
 cfn=memcpy@GLIBC_2.2.5
 calls=1 211 
 0 205 63 61 0 16 16
-0 11 7 3 0 1
+0 11 7 3 1 1 0 1
 
-fn=std::sys::backtrace::__rust_begin_short_backtrace::<fn(), ()>
-cfn=snapshot_instructions::main
-calls=1 0 
-0 58906 22697 22689 5 1556 1044 5
-
-fn=std::rt::lang_start::<()>::{closure#0}
-cfn=std::sys::backtrace::__rust_begin_short_backtrace::<fn(), ()>
-calls=1 0 
-0 58906 22697 22689 5 1556 1044 5
-
-fn=snapshot_instructions::snapshot_all_copy::__run_n1024
-cfn=snapshot_instructions::snapshot_all_copy::__gungraun_wrapper_id_mod_n1024::n1024
+fn=main
+cfn=std::rt::lang_start_internal
 calls=1 0 
 0 58906 22697 22689 5 1556 1044 5
 
 fn=tessera_rl_num::fp::call_opaque::<core::result::Result<(), tessera_rl_engine::error::EngineError>, tessera_rl_engine::entry::canonical<core::result::Result<(), tessera_rl_engine::error::EngineError>, <tessera_rl_engine::pool::EnvPool<snapshot_instructions::common::Counter>>::guarded_ref<(), <tessera_rl_engine::pool::EnvPool<snapshot_instructions::common::Counter>>::snapshot_all::{closure#0}>::{closure#0}>::{closure#0}>
 0 58413 22543 22538 0 1537 1026
 
-fn=std::rt::lang_start_internal
-cfn=std::rt::lang_start::<()>::{closure#0}
+fn=std::sys::backtrace::__rust_begin_short_backtrace::<fn(), ()>
+cfn=snapshot_instructions::main
 calls=1 0 
 0 58906 22697 22689 5 1556 1044 5
-
-fn=snapshot_instructions::main
-cfn=snapshot_instructions::engine::__run
-calls=1 0 
-0 58906 22697 22689 5 1556 1044 5
-
-fn=<tessera_rl_num::fp::FpGuard as core::ops::drop::Drop>::drop
-0 12 4 3
 
 totals: 58906 22697 22689 5 1556 1044 5
