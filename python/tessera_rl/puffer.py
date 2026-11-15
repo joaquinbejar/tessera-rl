@@ -311,21 +311,26 @@ class TesseraPufferEnv(pufferlib.PufferEnv):
         self._require_reset("step")
         self._env.step(actions)
         self._copy_out()
-        self.infos = self._log() if self._log_interval is not None else []
+        # This call's own whole-pool outputs, read now and dropped at once:
+        # they are borrowed views, valid only until the next pool call.
+        raw, self._env._last_out = self._env._last_out, None
+        if raw is None:
+            raise RuntimeError("the environment's last call was not this whole-pool step")
+        self.infos = self._log(raw) if self._log_interval is not None else []
         return self.observations, self.rewards, self.terminals, self.truncations, self.infos
 
-    def _log(self) -> list:
-        self._episode_return += self._views[1]
-        self._episode_length += 1
+    def _log(self, raw: dict) -> list:
+        # The engine's statistics of episodes that ended in this step
+        # (`[N]`, zero elsewhere). Each ended episode counts once per agent
+        # row, as PufferLib's per-agent logs do: its return is the sum over
+        # its agents, and every agent row shares its length.
         self._tick += 1
-        ended = self._episode_ended[0] | self._episode_ended[1]
-        if ended.any():
-            done = np.repeat(ended, self._agents)
-            self._finished[0] += float(self._episode_return[done].sum())
-            self._finished[1] += int(self._episode_length[done].sum())
-            self._finished[2] += int(done.sum())
-            self._episode_return[done] = 0.0
-            self._episode_length[done] = 0
+        returns, lengths = np.asarray(raw["episode_return"]), np.asarray(raw["episode_length"])
+        ended = int(np.count_nonzero(lengths))
+        if ended:
+            self._finished[0] += float(returns.sum(dtype=np.float64))
+            self._finished[1] += int(lengths.sum(dtype=np.float64)) * self._agents
+            self._finished[2] += ended * self._agents
         if self._tick % self._log_interval != 0 or self._finished[2] == 0:
             return []
         total, length, n = self._finished

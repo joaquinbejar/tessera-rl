@@ -151,6 +151,14 @@ pub(crate) fn view_set(layout: &Layout) -> Option<ViewSet> {
             spec(OutputField::EpisodeTruncated, OutputDtype::Bool8, &[n])?,
         ),
         (
+            "episode_return",
+            spec(OutputField::EpisodeReturn, OutputDtype::F32, &[n])?,
+        ),
+        (
+            "episode_length",
+            spec(OutputField::EpisodeLength, OutputDtype::F32, &[n])?,
+        ),
+        (
             "masks",
             spec(
                 OutputField::Masks,

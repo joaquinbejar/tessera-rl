@@ -1053,6 +1053,24 @@ impl<'a, E: Environment, M: MaskProvider<E>> BatchRow<'a, E, M> {
             .copied()
     }
 
+    /// The return of the episode that ended in the last step; zero
+    /// otherwise.
+    #[must_use]
+    pub fn episode_return(&self) -> Option<f32> {
+        self.view(&self.token.mode.raw.episode_return, 1)?
+            .first()
+            .copied()
+    }
+
+    /// The length of the episode that ended in the last step; zero
+    /// otherwise.
+    #[must_use]
+    pub fn episode_length(&self) -> Option<f32> {
+        self.view(&self.token.mode.raw.episode_length, 1)?
+            .first()
+            .copied()
+    }
+
     /// The header, for the mode's turn check.
     pub(crate) fn header(&self) -> Option<&'a E::Header> {
         self.view(&self.token.mode.raw.headers, 1)?.first()
