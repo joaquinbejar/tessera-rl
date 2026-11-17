@@ -4,7 +4,10 @@
 //!
 //! [`register!`](crate::register) submits an [`EnvRegistration`] for a type
 //! that implements [`Persist`](crate::Persist); [`registered`] lists every
-//! submission linked into the binary, sorted by id. This is not the
+//! submission linked into the binary, sorted by id.
+//! [`register_host!`](crate::register_host) submits a [`HostRegistration`]
+//! for a [`HostEnvironment`](crate::HostEnvironment), listed by
+//! [`registered_host`] (ADR-0062). Both share one id space. This is not the
 //! active-engine registry of SPEC 6.1.
 //!
 //! The registry is per binary: an environment compiled into another cdylib
@@ -12,11 +15,14 @@
 //! entry-point group for that). Records are collected at the first lookup,
 //! never before `main`; a duplicate id is an error there.
 
+mod host_record;
 mod lookup;
 mod record;
 mod register;
+mod register_host;
 
-pub use lookup::{RegistryError, registered};
+pub use host_record::{HostRegistration, RESERVED_NAMESPACE, in_reserved_namespace};
+pub use lookup::{RegistryError, registered, registered_host};
 pub use record::{EnvRegistration, same_id};
 
 /// Items the [`register!`](crate::register) expansion names. Not public API.

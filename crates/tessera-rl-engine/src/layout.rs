@@ -2,22 +2,13 @@
 
 //! Buffer layouts derived from the spaces at construction (SPEC 5.2).
 
-use tessera_rl_core::space::{BoxBounds, DType, Space};
+use tessera_rl_core::space::{DType, Space};
 
 use crate::error::EngineError;
 
 /// Most observation leaves a pool supports; per-agent leaf views live on
 /// the stack, so the hot path never allocates.
 pub const MAX_LEAVES: usize = 16;
-
-/// One action head.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub(crate) enum Head {
-    /// A discrete head with `n` choices, as `i32`.
-    Discrete { n: u32 },
-    /// A continuous head, as `f32`, inclusive bounds.
-    Continuous { low: f64, high: f64 },
-}
 
 /// Action heads of one agent, in space order.
 #[derive(Debug, Clone, Default)]
@@ -179,76 +170,18 @@ impl MaskLayout {
 }
 
 impl ActionLayout {
+    /// The heads of `space`, from [`Space::heads`] (ADR-0062 item 6), with
+    /// an empty mask layout.
     pub(crate) fn from_space(space: &Space) -> Result<Self, EngineError> {
-        let mut layout = Self::default();
-        layout.add(space)?;
-        Ok(layout)
-    }
-
-    fn push(&mut self, head: Head) {
-        match head {
-            Head::Discrete { n } => self.discrete.push(n),
-            Head::Continuous { low, high } => self.continuous.push((low, high)),
-        }
-    }
-
-    fn add(&mut self, space: &Space) -> Result<(), EngineError> {
-        match space {
-            Space::Discrete { n } => self.push(Head::Discrete { n: *n }),
-            Space::MultiDiscrete { nvec } => {
-                for &n in nvec {
-                    self.push(Head::Discrete { n });
-                }
-            }
-            Space::MultiBinary { shape } => {
-                for _ in 0..elements(shape)? {
-                    self.push(Head::Discrete { n: 2 });
-                }
-            }
-            Space::Box {
-                shape,
-                dtype: DType::F32,
-                bounds: BoxBounds::Float { low, high },
-            } => {
-                let count = elements(shape)?;
-                for i in 0..count {
-                    match (pick(low, i), pick(high, i)) {
-                        (Some(&low), Some(&high)) => self.push(Head::Continuous { low, high }),
-                        _ => return Err(EngineError::UnsupportedSpace { what: "box bounds" }),
-                    }
-                }
-            }
-            Space::Box {
-                dtype: DType::F64, ..
-            } => {
-                // Continuous actions travel as f32 (SPEC 5.2); f64 action
-                // heads come later.
-                return Err(EngineError::UnsupportedSpace {
-                    what: "f64 box actions",
-                });
-            }
-            Space::Box { .. } => {
-                return Err(EngineError::UnsupportedSpace {
-                    what: "integer box actions",
-                });
-            }
-            Space::Dict(entries) => {
-                for (_, inner) in entries {
-                    self.add(inner)?;
-                }
-            }
-            Space::Tuple(items) => {
-                for inner in items {
-                    self.add(inner)?;
-                }
-            }
-            Space::Set { .. } => {
-                return Err(EngineError::UnsupportedSpace {
-                    what: "set actions",
-                });
-            }
-        }
-        Ok(())
+        let (discrete, continuous) = space
+            .heads()
+            .map_err(|e| EngineError::UnsupportedSpace { what: e.what() })?
+            .into_parts();
+        Ok(Self {
+            discrete,
+            continuous,
+            mask: MaskLayout::default(),
+        })
     }
 }
 
@@ -302,11 +235,6 @@ fn add_leaves(space: &Space, leaves: &mut Vec<Leaf>) -> Result<(), EngineError> 
         }
     }
     Ok(())
-}
-
-/// Bound `i`, broadcasting a single value.
-fn pick(v: &[f64], i: usize) -> Option<&f64> {
-    if v.len() == 1 { v.first() } else { v.get(i) }
 }
 
 fn elements(shape: &[u32]) -> Result<usize, EngineError> {

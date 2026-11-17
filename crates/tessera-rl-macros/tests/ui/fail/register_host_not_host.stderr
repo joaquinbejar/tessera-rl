@@ -1,0 +1,17 @@
+error[E0277]: the trait bound `Grid: HostEnvironment` is not satisfied
+ --> tests/ui/fail/register_host_not_host.rs:5:28
+  |
+5 | tessera_rl::register_host!(tessera_rl::classic::Grid, id = "example/Grid-v1");
+  |                            ^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `HostEnvironment` is not implemented for `Grid`
+
+error[E0277]: the trait bound `Grid: HostEnvironment` is not satisfied
+ --> tests/ui/fail/register_host_not_host.rs:5:28
+  |
+5 | tessera_rl::register_host!(tessera_rl::classic::Grid, id = "example/Grid-v1");
+  |                            ^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `HostEnvironment` is not implemented for `Grid`
+  |
+note: required by a bound in `HostRegistration::of`
+ --> $WORKSPACE/crates/tessera-rl-core/src/envs/host_record.rs
+  |
+  |     pub const fn of<E: HostEnvironment>() -> Self {
+  |                        ^^^^^^^^^^^^^^^ required by this bound in `HostRegistration::of`
