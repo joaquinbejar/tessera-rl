@@ -96,7 +96,9 @@ def kill_group(pgid: int) -> list[int]:
     wait, which should be nothing. The caller reaps the leader first."""
     try:
         os.killpg(pgid, signal.SIGKILL)
-    except ProcessLookupError:
+    except (ProcessLookupError, PermissionError):
+        # See one_run: EPERM for an exiting group on macOS; the loop below
+        # still checks for live members (#268).
         pass
     for _ in range(50):
         left = group_alive(pgid)
@@ -120,7 +122,10 @@ def one_run(command: list[str], timeout: float) -> dict:
                 rc = None
             try:
                 os.killpg(p.pid, signal.SIGKILL)
-            except ProcessLookupError:
+            except (ProcessLookupError, PermissionError):
+                # macOS answers EPERM, not ESRCH, for a group whose members
+                # are exiting (zombies); kill_group then checks that no live
+                # member is left (#268).
                 pass
             if rc is None:
                 rc = p.wait()
