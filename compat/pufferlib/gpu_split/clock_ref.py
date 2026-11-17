@@ -79,7 +79,7 @@ TCP_LOOP = (
     "if ($x -eq 'end') { $w.WriteLine('end'); break } "
     "if ($x -eq 'cpu') { $w.WriteLine(" + CPU_EXPR + ") } "
     "else { $w.WriteLine(" + READ_EXPR + ") } } } "
-    "catch { } finally { $c.Close() }"
+    "catch { [Console]::Error.WriteLine('loop error: ' + $_) } finally { $c.Close() }"
 )
 
 
@@ -105,8 +105,10 @@ class Session:
     """The ssh process (tunnel and remote listener) and one TCP connection
     through it."""
 
-    def __init__(self, argv: list[str], port: int, timeout: float):
-        self.p = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=None)
+    def __init__(self, argv: list[str], port: int, timeout: float, log: str):
+        # The box's output (the loop's errors, ssh's own messages) is kept.
+        self.log = open(log, "a")
+        self.p = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=self.log, stderr=subprocess.STDOUT)
         self.port = port
         self.timeout = timeout
         self.sock = None
@@ -186,6 +188,7 @@ class Session:
             except subprocess.TimeoutExpired:
                 self.p.kill()
                 self.p.wait()
+        self.log.close()
 
 
 def main(argv=None) -> int:
@@ -209,10 +212,11 @@ def main(argv=None) -> int:
 
         write({"kind": "header", "clock_ref_py_sha256": self_sha256(), "host": socket.gethostname(),
                "target": args.host, "transport": "tcp over ssh -L", "port": args.port, "idle_s": args.idle,
+               "ssh_log": args.out + ".ssh.log",
                "command": sys.argv if argv is None else ["clock_ref.py", *argv],
                "platform": platform.platform(), "python": sys.version,
                "clock": "time.monotonic", "clock_info": str(time.get_clock_info("monotonic"))})  # fmt: skip
-        s = Session(cmd, args.port, args.reply_timeout)
+        s = Session(cmd, args.port, args.reply_timeout, args.out + ".ssh.log")
         if not s.connect_and_sync(write):
             write({"kind": "event", "event": "lost", "at": time.monotonic(), "why": "no reply at sync"})
             s.close()

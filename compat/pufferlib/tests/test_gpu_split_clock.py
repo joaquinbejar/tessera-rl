@@ -825,6 +825,10 @@ def test_clock_ref_stamps_reads_with_monotonic_and_ends_cleanly(tmp_path):
     assert why == "end"
     listener = [r for r in rows if r["kind"] == "listener"]
     assert len(listener) == 1 and listener[0]["pid"] > 0
+    # The first line from the box names the listener's PID, recorded before any read.
+    kinds = [r["kind"] for r in rows]
+    assert kinds.index("listener") < kinds.index("read")
+    assert rows[0]["ssh_log"].endswith(".ssh.log") and pathlib.Path(rows[0]["ssh_log"]).exists()
 
 
 def test_clock_ref_discards_lines_before_the_first_reply(tmp_path):
@@ -883,6 +887,8 @@ def test_clock_ref_tcp_loop_is_one_argument_on_localhost():
     assert "[Net.IPAddress]::Loopback, 47123" in loop and "ReceiveTimeout = 60000" in loop
     assert "Wait(60000)" in loop and "'end'" in loop and "finally { $c.Close() }" in loop
     assert loop.count("AcceptTcpClientAsync") == 1 and "$l.Stop()" in loop and "'listener ' + $PID" in loop
+    assert clock_ref.TCP_LOOP.count("PORT") == 1 and clock_ref.TCP_LOOP.count("IDLE_MS") == 1
+    assert "catch { [Console]::Error.WriteLine('loop error: ' + $_) } finally" in loop
     for forbidden in ("New-NetFirewallRule", "netsh", "Out-File", "Set-Content", "Start-Process", "RunAs"):
         assert forbidden not in loop
     cmd = clock_ref.ssh_command("jb@box.example", 47123, 60)
