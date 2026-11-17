@@ -30,7 +30,7 @@ DEFAULT_SRCS = [_ROOT / "crates" / "tessera-rl-py" / "src", _ROOT / "crates" / "
 ALLOWED = {
     "Py_TYPE", "Py_None", "Py_True", "Py_False", "Py_IncRef", "Py_DecRef",
     "PyEval_SaveThread", "PyEval_RestoreThread",
-    "PyErr_Fetch", "PyErr_Restore", "PyErr_Occurred", "PyFloat_AsDouble",
+    "PyErr_Fetch", "PyErr_Occurred", "PyFloat_AsDouble",
     "PyLong_FromUnsignedLongLong", "PyFloat_FromDouble", "PyUnicode_FromStringAndSize",
     "PyBytes_FromStringAndSize", "PyByteArray_FromStringAndSize",
     "PyTuple_Size", "PyTuple_GetItem", "PyList_Size", "PyList_GetItem", "PyDict_Next",
@@ -47,7 +47,7 @@ CALLOUT_ONLY = {
     "PyList_Append", "PyList_SetItem", "PyTuple_SetItem", "PyDict_SetItem", "PyDict_SetItemString",
     "PyModule_Create2", "PyType_FromSpec",
     "PyErr_NewException", "PyErr_NewExceptionWithDoc", "PyErr_SetString", "PyErr_SetObject",
-    "PyErr_SetNone", "PyErr_Format", "PyErr_Clear", "PyErr_WarnEx", "PyModule_AddObjectRef",
+    "PyErr_SetNone", "PyErr_Format", "PyErr_Clear", "PyErr_Restore", "PyErr_WarnEx", "PyModule_AddObjectRef",
     "PyLong_AsLongLong", "PyLong_AsUnsignedLongLong", "PyLong_AsLong", "PyNumber_Index",
     "PyUnicode_AsUTF8AndSize", "PyObject_IsTrue", "PyObject_GetIter", "PyIter_Next",
     "PyObject_GetItem", "PyObject_GetAttr", "PyObject_Str", "PyObject_Repr",

@@ -26,12 +26,11 @@
 //!   `bytes`, `bytearray`, `int`, `float`, capsules, and instances of our
 //!   own types, which are not GC-tracked); reads of exact built-in types
 //!   (`PyTuple_Size`/`GetItem`, `PyList_Size`/`GetItem`, `PyDict_Next`,
-//!   `PyBytes_AsString`/`Size`); `PyErr_Fetch`,
-//!   `PyErr_Occurred`, and `PyErr_Restore` with no exception set (it then
-//!   decrefs nothing); reference increments; releasing and reacquiring the
-//!   interpreter; and a decref of a leaf [`Mine`]. `PyErr_Clear` is never
-//!   called: dropping a pending exception can run finalizers through its
-//!   traceback, so it would be a callout.
+//!   `PyBytes_AsString`/`Size`); `PyErr_Fetch` and `PyErr_Occurred`;
+//!   reference increments; releasing and reacquiring the interpreter; and a
+//!   decref of a leaf [`Mine`]. `PyErr_Clear` and `PyErr_Restore` are
+//!   callouts: dropping or replacing a pending exception can run finalizers
+//!   through its traceback.
 //!
 //! **Decref invariant.** Owned references are [`Mine`]. A leaf (not
 //! GC-tracked: an object we created that holds no other object) cannot
@@ -358,9 +357,21 @@ pub(crate) fn fetch_pending(_g: Gil<'_>) -> Pending {
 )]
 pub(crate) fn put_back_pending(_g: Gil<'_>, p: Pending) {
     // SAFETY: attached (the token); restores exactly what was fetched
-    // (references transferred); with nothing fetched it decrefs nothing.
-    unsafe {
-        ffi::PyErr_Restore(p.0, p.1, p.2);
+    // (references transferred). A callout: restoring replaces any
+    // exception set meanwhile, and dropping it can run finalizers.
+    unsafe { thunks::c_err_restore(p.0, p.1, p.2) };
+}
+
+/// Stashes the exception `raised` proves is set into `slot`, unless
+/// `slot` already holds one: then the new exception is discarded (a
+/// callout: dropping it can run finalizers) and the first is kept, so no
+/// stash is ever overwritten and leaked.
+pub fn stash_first(g: Gil<'_>, slot: &mut Option<Stashed>, raised: Raised) {
+    if slot.is_some() {
+        let _ = raised;
+        clear_pending(g);
+    } else {
+        *slot = Some(Stashed::take(g, raised));
     }
 }
 

@@ -109,8 +109,12 @@ impl GatherWriter {
         // offset stays inside its allocation.
         let target = unsafe { start.cast_mut().add(at) };
         // SAFETY: the range fits (above), and this is the only writer
-        // (`&mut self`, one per buffer). A concurrent view read is excluded
-        // by the borrow window of SPEC 5.3.
+        // (`&mut self`, one per buffer); no Rust reference to the words
+        // exists, only exports' raw pointers. A read through an export that
+        // races this write is not excluded: SPEC 5.3 leaves it to the
+        // caller, who reads bytes being overwritten (the crate docs' first
+        // exception); the generation moved before this write, so
+        // `is_stale` reports it.
         unsafe {
             core::ptr::copy_nonoverlapping(bytes.as_ptr(), target, bytes.len());
         }

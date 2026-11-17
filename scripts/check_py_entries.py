@@ -31,9 +31,26 @@ SRCS = [ROOT / "crates" / "tessera-rl-py" / "src", PYFFI]
 PUB_UNSAFE = re.compile(r"\bpub\s+(?:const\s+)?unsafe\s+(?:extern\s+\"[^\"]*\"\s+)?(?:fn|trait)\b")
 
 
+# An `unsafe fn` declared in a `pub trait` (not `pub(crate)`): implementers
+# and callers of a public trait reach it, whatever its own visibility says.
+PUB_TRAIT = re.compile(r"\bpub\s+(?:unsafe\s+)?trait\s+\w+[^{;]*\{")
+UNSAFE_FN = re.compile(r"\bunsafe\s+(?:extern\s+\"[^\"]*\"\s+)?fn\b")
+
+
+def trait_bodies(code: str):
+    for m in PUB_TRAIT.finditer(code):
+        depth, i = 1, m.end()
+        while i < len(code) and depth:
+            depth += {"{": 1, "}": -1}.get(code[i], 0)
+            i += 1
+        yield code[m.end():i]
+
+
 def pub_unsafe(text: str) -> bool:
     code = re.sub(r"//[^\n]*", "", text)
-    return PUB_UNSAFE.search(code) is not None
+    if PUB_UNSAFE.search(code):
+        return True
+    return any(UNSAFE_FN.search(body) for body in trait_bodies(code))
 
 
 def main(srcs=None, pyffi=None):

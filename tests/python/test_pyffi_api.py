@@ -37,6 +37,8 @@ def test_pyffi_entries_lint_rejects_a_public_unsafe_function(tmp_path):
         'pub unsafe extern "C" fn sneaky() {}',
         "impl Ref<'_> {\n    pub unsafe fn sneaky(&self) {}\n}",
         "pub unsafe trait Sneaky {}",
+        "pub trait Sneaky {\n    unsafe fn sneaky(&self);\n}",
+        'pub trait Sneaky {\n    fn fine(&self) {}\n    unsafe extern "C" fn sneaky();\n}',
     ):
         capi.write_text(clean + "\n" + sneaky + "\n")
         bad = lint(py, ffi)
@@ -44,7 +46,12 @@ def test_pyffi_entries_lint_rejects_a_public_unsafe_function(tmp_path):
     capi.write_text(clean + "\n#![expect(clippy::not_unsafe_ptr_arg_deref, reason = \"no\")]\n")
     bad = lint(py, ffi)
     assert bad.returncode != 0 and "not_unsafe_ptr_arg_deref" in bad.stdout
-    for fine in ("pub(crate) unsafe fn quiet() {}", "// pub unsafe fn commented() {}"):
+    for fine in (
+        "pub(crate) unsafe fn quiet() {}",
+        "// pub unsafe fn commented() {}",
+        "pub(crate) trait Quiet {\n    unsafe fn quiet(&self);\n}",
+        "pub trait Fine {\n    fn fine(&self);\n}",
+    ):
         capi.write_text(clean + "\n" + fine + "\n")
         assert lint(py, ffi).returncode == 0, fine
 

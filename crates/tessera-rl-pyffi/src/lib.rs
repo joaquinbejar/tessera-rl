@@ -8,7 +8,20 @@
 //! with [`export_module!`], its buffers [`ffi::buffer`] exports, and its
 //! arguments and results go through [`ffi::capi`]'s safe wrappers under a
 //! call-scoped [`ffi::capi::Gil`]. No public item of this crate is `unsafe`
-//! or relies on its caller for memory safety.
+//! or relies on its caller for memory safety, with two documented
+//! exceptions, both outside Rust's view:
+//!
+//! - **Borrowed exports.** A read through a buffer or DLPack export that
+//!   races the next write of its outputs (the next engine call, or the next
+//!   gather) reads bytes being overwritten. SPEC 5.3 leaves that race to the
+//!   caller, as for every borrowed output; `is_stale` reports the end of the
+//!   borrow window. No Rust reference to the exported bytes exists.
+//! - **Interpreter finalization.** A daemon thread inside
+//!   [`ffi::capi::Gil::detach`] when the interpreter finalizes is ended by
+//!   CPython 3.11 to 3.13 with `pthread_exit` when it tries to reattach,
+//!   without unwinding its Rust frames (CPython's documented behaviour for
+//!   daemon threads). Code that must run to completion should not run in a
+//!   daemon thread.
 //!
 //! - [`ffi`]: the audited module. Privately: the floating-point entry
 //!   thunks and their templates, the generic shims that turn CPython's raw

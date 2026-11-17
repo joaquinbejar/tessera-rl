@@ -1423,6 +1423,7 @@ callout!(c_dict_set_item_string => ffi::PyDict_SetItemString : fn(Obj, CStr, Obj
 callout!(c_decref => ffi::Py_DecRef : fn(Obj) -> ());
 callout!(c_object_call => ffi::PyObject_CallObject : fn(Obj, Obj) -> Obj);
 callout!(c_err_clear => ffi::PyErr_Clear : fn() -> ());
+callout!(c_err_restore => ffi::PyErr_Restore : fn(Obj, Obj, Obj) -> ());
 callout!(c_check_signals => ffi::PyErr_CheckSignals : fn() -> c_int);
 callout!(c_long_as_i64 => ffi::PyLong_AsLongLong : fn(Obj) -> i64);
 callout!(c_long_as_u64 => ffi::PyLong_AsUnsignedLongLong : fn(Obj) -> u64);

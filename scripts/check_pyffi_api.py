@@ -4,7 +4,9 @@
 
 The source scan of scripts/check_py_entries.py is the first check; this is
 the second, from what rustdoc sees: every function or method of the crate
-that is public and `unsafe`, hidden items included, under every feature.
+that is public and `unsafe`, hidden items included, under every feature,
+including a method declared in a public trait (rustdoc gives it the
+visibility "default").
 It needs a nightly toolchain (rustdoc's JSON output is unstable).
 
 Usage: check_pyffi_api.py [JSON]   (default: build it with cargo +nightly)
@@ -35,8 +37,17 @@ def build() -> pathlib.Path:
 
 def public_unsafe(doc: dict) -> list[str]:
     found = []
-    for item in doc["index"].values():
-        if item.get("crate_id") != 0 or item.get("visibility") != "public":
+    index = doc["index"]
+    # Methods declared in a public trait have visibility "default": collect
+    # the ids of every public trait's items, which are as public as it is.
+    in_pub_trait = set()
+    for item in index.values():
+        trait = item.get("inner", {}).get("trait")
+        if trait and item.get("crate_id") == 0 and item.get("visibility") == "public":
+            in_pub_trait.update(str(i) for i in trait.get("items", []))
+    for key, item in index.items():
+        public = item.get("visibility") == "public" or str(key) in in_pub_trait
+        if item.get("crate_id") != 0 or not public:
             continue
         function = item.get("inner", {}).get("function")
         if function and function.get("header", {}).get("is_unsafe"):

@@ -218,7 +218,7 @@ impl BatchEval for PyEval<'_> {
         // of terminal leaves only: a handler that raises aborts the call,
         // which is rolled back, and its exception is raised again.
         if let Err(raised) = capi::check_signals(self.g) {
-            self.pending = Some(capi::Stashed::take(self.g, raised));
+            capi::stash_first(self.g, &mut self.pending, raised);
             // This reason is never shown in Python: `run` raises the
             // pending exception again instead.
             return Err(EvaluatorError::Failed {
@@ -237,7 +237,7 @@ impl BatchEval for PyEval<'_> {
         let result = match self.call(batch) {
             Ok(result) => result,
             Err(raised) => {
-                self.pending = Some(capi::Stashed::take(self.g, raised));
+                capi::stash_first(self.g, &mut self.pending, raised);
                 return Err(EvaluatorError::Failed {
                     reason: "the Python evaluator raised".to_owned(),
                 });
