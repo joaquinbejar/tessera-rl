@@ -12,18 +12,21 @@
 //!   pointers into typed values. Each runs behind a boundary thunk
 //!   (`ThunkFn::of`) inside [`entry`], with a [`Gil`] scoped to the call.
 //!
-//! The instance layout is `Instance<T>`: the object header, then
-//! `Option<T>`. The body is written exactly twice, `Some` in
-//! [`TypeObject::instantiate`] before the object is handed out, and taken
-//! in the type's `tp_dealloc`, when no other reference exists. A method
-//! call therefore always sees `Some`; "closed" is a state inside `T`.
+//! The instance layout is `Instance<T>`: the object header, a `ready`
+//! flag and the body. The body is written once in
+//! [`TypeObject::instantiate`] before the object is handed out (then
+//! `ready` is set), and taken once in the type's `tp_dealloc`, when no
+//! other reference exists. "Closed" is a state inside `T`.
 //! The types are not subclassable (no `Py_TPFLAGS_BASETYPE`), so an object
-//! whose type is `T`'s type has exactly this layout; and they have no
-//! `tp_new`, so Python code cannot create one (calling the type raises
-//! `TypeError`), as before.
+//! whose type is `T`'s type has exactly this layout. They carry
+//! `Py_TPFLAGS_DISALLOW_INSTANTIATION` (a heap type without it inherits
+//! `object.__new__`), so Python code cannot create one: calling the type,
+//! `__new__` and `copy.copy` raise `TypeError`. An object made any other
+//! way would be zero-filled, `ready` false, and refused by every method.
 
 use core::ffi::{CStr, c_int};
 use core::marker::PhantomData;
+use core::mem::MaybeUninit;
 use core::ptr;
 use core::sync::atomic::{AtomicPtr, Ordering};
 
@@ -46,11 +49,37 @@ type Obj = *mut ffi::PyObject;
 /// once: while one runs with the interpreter released ([`Gil::detach`]) it
 /// still holds `&Self`, and a second thread can enter and form another.
 pub trait Body: Send + Sync + Sized + 'static {
-    /// Releases the body when its object is deallocated, attached, with
-    /// panics contained. The default drops it.
-    fn release(self, g: Gil<'_>) {
-        let _ = g;
+    /// Releases the body when its object is deallocated, with panics
+    /// contained. The default drops it. `release` may only drop the body,
+    /// leak it, or drop it with the interpreter released ([`Release`]): it
+    /// gets no interpreter token, so it cannot run Python code or set an
+    /// exception inside `tp_dealloc`.
+    fn release(self, r: Release<'_>) {
+        let _ = r;
         drop(self);
+    }
+}
+
+/// What a body's [`Body::release`] may do with the interpreter: release it
+/// around the drop, nothing else.
+/// Only the deallocation shim makes one:
+///
+/// ```compile_fail
+/// use tessera_rl_pyffi::ffi::{capi::Gil, object::Release};
+/// fn forge(g: Gil<'_>) -> Release<'_> {
+///     Release(g)
+/// }
+/// ```
+pub struct Release<'py>(Gil<'py>);
+
+impl Release<'_> {
+    /// Runs `f` with the interpreter released (a drop that joins threads).
+    pub fn detach<F, R>(self, f: F) -> R
+    where
+        F: FnOnce() -> R + Send,
+        R: Send,
+    {
+        self.0.detach(f)
     }
 }
 
@@ -96,11 +125,28 @@ pub trait MethodKw {
     ) -> CResult<Mine<'py>>;
 }
 
-/// The C layout of an instance.
+/// The C layout of an instance. CPython allocates it zero-filled, so
+/// `ready` is false until [`TypeObject::instantiate`] has written `body`;
+/// `body` is read only when `ready` is true (zero bytes are never read as a
+/// `T`, nor as an `Option<T>`).
 #[repr(C)]
 struct Instance<T> {
     ob_base: ffi::PyObject,
-    body: Option<T>,
+    ready: bool,
+    body: MaybeUninit<T>,
+}
+
+/// `&T` of the instance at `inst`, if its body was written.
+///
+/// # Safety
+///
+/// `inst` is a live `Instance<T>` for `'a` whose body is not taken during
+/// `'a` (it is taken only in its deallocation).
+unsafe fn ready_body<'a, T>(inst: *const Instance<T>) -> Option<&'a T> {
+    // SAFETY: per the contract.
+    let inst = unsafe { &*inst };
+    // SAFETY: `ready` is set only after `body` was written.
+    inst.ready.then(|| unsafe { inst.body.assume_init_ref() })
 }
 
 /// `&T` of `slf`, an instance of `T`'s type.
@@ -114,7 +160,7 @@ struct Instance<T> {
 unsafe fn body_of<'a, T: Body>(g: Gil<'_>, slf: Obj) -> CResult<&'a T> {
     // SAFETY: per the contract; the body is not written while a method
     // runs (module docs), so a shared borrow is sound.
-    unsafe { (*slf.cast::<Instance<T>>()).body.as_ref() }
+    unsafe { ready_body(slf.cast::<Instance<T>>()) }
         .ok_or_else(|| capi::raise(g, capi::runtime_error(), "object not initialized"))
 }
 
@@ -271,12 +317,22 @@ impl<T: Body> TypeObject<T> {
     }
 
     /// Creates the type and adds it to `module` as `attr` (callouts: a GC
-    /// allocation and a module attribute).
+    /// allocation and a module attribute). This holds a process-lifetime
+    /// reference to the type. A second `create` is refused: instances made
+    /// from an earlier type must stay recognised.
     ///
     /// # Errors
     ///
-    /// `Err` with a Python exception set.
+    /// `RuntimeError` on a second `create`; any failure to build or add the
+    /// type (a Python exception set).
     pub fn create(&self, g: Gil<'_>, module: Ref<'_>, attr: &CStr) -> CResult<()> {
+        if !self.ty.load(Ordering::Acquire).is_null() {
+            return Err(capi::raise(
+                g,
+                capi::runtime_error(),
+                &format!("{} type already created", self.short_name()),
+            ));
+        }
         const {
             assert!(
                 core::mem::align_of::<Instance<T>>() <= 8,
@@ -300,14 +356,40 @@ impl<T: Body> TypeObject<T> {
             itemsize: 0,
             // Not GC-tracked (no Py_TPFLAGS_HAVE_GC): a body holds no
             // Python object, and allocating an instance never runs
-            // `gc.collect` (capi). Not subclassable (no BASETYPE).
-            flags: core::ffi::c_uint::try_from(ffi::Py_TPFLAGS_DEFAULT).unwrap_or(0),
+            // `gc.collect` (capi). Not subclassable (no BASETYPE). Not
+            // callable from Python (DISALLOW_INSTANTIATION: a heap type
+            // would otherwise inherit `object.__new__`), and immutable.
+            flags: core::ffi::c_uint::try_from(
+                ffi::Py_TPFLAGS_DEFAULT
+                    | ffi::Py_TPFLAGS_DISALLOW_INSTANTIATION
+                    | ffi::Py_TPFLAGS_IMMUTABLETYPE,
+            )
+            .map_err(|_| capi::raise(g, capi::runtime_error(), "type flags out of range"))?,
             slots: slots.as_mut_ptr(),
         };
         let ty = capi::type_from_spec(g, &mut spec)?;
         capi::module_add(g, module, attr, &ty)?;
-        self.ty.store(ty.as_ref().as_ptr(), Ordering::Release);
+        // The reference `ty` owns is kept for the process: the type outlives
+        // every instance and this holder.
+        let raw = ty.into_ptr();
+        if self
+            .ty
+            .compare_exchange(ptr::null_mut(), raw, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+        {
+            return Err(capi::raise(
+                g,
+                capi::runtime_error(),
+                &format!("{} type already created", self.short_name()),
+            ));
+        }
         Ok(())
+    }
+
+    /// The type's name without its module, for messages.
+    fn short_name(&self) -> String {
+        let name = self.spec.name.to_string_lossy();
+        name.rsplit('.').next().unwrap_or_default().to_owned()
     }
 
     /// A new object holding `value` (direct: our types are not GC-tracked).
@@ -321,7 +403,7 @@ impl<T: Body> TypeObject<T> {
             return Err(capi::raise(
                 g,
                 capi::runtime_error(),
-                "type not initialized",
+                &format!("{} type not initialized", self.short_name()),
             ));
         }
         // SAFETY: `ty` is this type, created from `spec` with the basic
@@ -329,10 +411,12 @@ impl<T: Body> TypeObject<T> {
         let obj = unsafe { capi::alloc_instance(g, ty) }?;
         let inst = obj.as_ref().as_ptr().cast::<Instance<T>>();
         // SAFETY: a fresh, zeroed instance nobody else sees yet: the body is
-        // written once, without dropping the zeroed bytes.
+        // written once, then marked ready.
         let slot = unsafe { &raw mut (*inst).body };
         // SAFETY: as above; `slot` is the instance's body field.
-        unsafe { slot.write(Some(value)) };
+        unsafe { slot.write(MaybeUninit::new(value)) };
+        // SAFETY: as above.
+        unsafe { (*inst).ready = true };
         Ok(obj)
     }
 
@@ -345,9 +429,9 @@ impl<T: Body> TypeObject<T> {
             return None;
         }
         // SAFETY: an instance of this type is an `Instance<T>`, alive for
-        // `'a`; its body is written only before it is handed out and in its
-        // deallocation.
-        unsafe { (*obj.as_ptr().cast::<Instance<T>>()).body.as_ref() }
+        // `'a`; its body is written only before it is handed out and taken
+        // in its deallocation.
+        unsafe { ready_body(obj.as_ptr().cast::<Instance<T>>()) }
     }
 }
 
@@ -409,13 +493,19 @@ impl<T: Body> DestructorEntry for Dealloc<T> {
         let inst = obj.cast::<Instance<T>>();
         // SAFETY: CPython deallocates an instance of `T`'s type (the slot is
         // set only from `T`), once, with no other reference left.
-        let body = unsafe { (*inst).body.take() };
-        if let Some(body) = body {
+        let ready_flag = unsafe { &mut (*inst).ready };
+        let ready = core::mem::replace(ready_flag, false);
+        if ready {
+            // SAFETY: as above; `ready` was true, so the body was written,
+            // and it is read out once (`ready` is now false).
+            let slot = unsafe { &mut (*inst).body };
+            // SAFETY: as above.
+            let body = unsafe { slot.assume_init_read() };
             // SAFETY: CPython calls tp_dealloc attached; the token does not
-            // outlive this call.
-            let g = unsafe { Gil::assume() };
+            // outlive this call, and `Release` can only detach.
+            let r = Release(unsafe { Gil::assume() });
             if let Err(payload) =
-                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| body.release(g)))
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| body.release(r)))
             {
                 dispose(payload);
             }

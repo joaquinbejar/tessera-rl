@@ -289,7 +289,10 @@ pub(super) unsafe extern "C" fn delete_versioned(managed: *mut DLManagedTensorVe
 pub(super) unsafe extern "C" fn destroy_capsule(cap: *mut ffi::PyObject) {
     // CPython calls capsule destructors attached; the pending exception,
     // if any, is saved and restored around the checks.
-    let pending = capi::fetch_pending();
+    // SAFETY: CPython calls capsule destructors attached; the token does
+    // not outlive this call.
+    let g = unsafe { capi::Gil::assume() };
+    let pending = capi::fetch_pending(g);
     // SAFETY: `cap` is a live capsule.
     if let Some(raw) = unsafe { capi::capsule_pointer(cap, VERSIONED) } {
         // SAFETY: an unconsumed versioned export, deleted once.
@@ -299,7 +302,7 @@ pub(super) unsafe extern "C" fn destroy_capsule(cap: *mut ffi::PyObject) {
         // SAFETY: an unconsumed legacy export, deleted once.
         unsafe { delete_legacy(raw.cast()) };
     }
-    capi::restore_pending(pending);
+    capi::put_back_pending(g, pending);
 }
 
 /// The legacy deleter's boundary entry.

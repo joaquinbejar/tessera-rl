@@ -12,7 +12,7 @@
 use crate::api::Kwargs;
 use crate::env::BindError;
 use crate::errors::{Kind, error, to_py};
-use crate::ffi::capi::{self, CResult, Gil, Mine, Raised, Ref};
+use crate::ffi::capi::{self, CResult, Gil, Mine, Ref};
 use crate::ffi::inner::Inner;
 use crate::search::{BatchEval, RawBatch, SearchArgs, SearchOps};
 use tessera_rl_search::{EvaluatorError, Eviction};
@@ -218,7 +218,7 @@ impl BatchEval for PyEval<'_> {
         // of terminal leaves only: a handler that raises aborts the call,
         // which is rolled back, and its exception is raised again.
         if capi::check_signals(self.g).is_err() {
-            self.pending = Some(capi::fetch_pending());
+            self.pending = Some(capi::fetch_pending(self.g));
             // This reason is never shown in Python: `run` raises the
             // pending exception again instead.
             return Err(EvaluatorError::Failed {
@@ -235,7 +235,7 @@ impl BatchEval for PyEval<'_> {
         values: &mut [f64],
     ) -> Result<(), EvaluatorError> {
         let Ok(result) = self.call(batch) else {
-            self.pending = Some(capi::fetch_pending());
+            self.pending = Some(capi::fetch_pending(self.g));
             return Err(EvaluatorError::Failed {
                 reason: "the Python evaluator raised".to_owned(),
             });
@@ -286,10 +286,7 @@ pub(crate) fn run<'py>(g: Gil<'py>, inner: &SearchInner, args: Ref<'_>) -> CResu
     match (result, eval.pending.take()) {
         (Ok(()), _) => Ok(capi::none(g)),
         // The callable's own exception: raised again, the tree rolled back.
-        (Err(_), Some(pending)) => {
-            capi::restore_pending(pending);
-            Err(Raised)
-        }
+        (Err(_), Some(pending)) => Err(capi::restore_pending(g, pending)),
         (Err(e), None) => Err(to_py(g, e)),
     }
 }

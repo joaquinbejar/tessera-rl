@@ -140,8 +140,18 @@ impl Gil<'_> {
 }
 
 /// An exception is set (the C-API failure convention).
+///
+/// Only this crate makes one, where an exception was just set:
+///
+/// ```compile_fail
+/// let _ = tessera_rl_pyffi::ffi::capi::Raised(());
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Raised;
+pub struct Raised(());
+
+/// Made only where an exception was just set (here, by a failed C-API
+/// call, or by [`raise`]), so `Err(RAISED)` always means one is.
+pub(crate) const RAISED: Raised = Raised(());
 
 /// The result of a C-API operation: `Err` means an exception is set.
 pub type CResult<T> = Result<T, Raised>;
@@ -195,15 +205,16 @@ impl Mine<'_> {
     fn new(ptr: *mut ffi::PyObject) -> CResult<Self> {
         NonNull::new(ptr)
             .map(|p| Self(p, Tracked::Leaf, PhantomData))
-            .ok_or(Raised)
+            .ok_or(RAISED)
     }
 
     /// A new reference to `ptr`, a live user object read from a container
     /// (an item, a key or a value): owned so it stays alive whatever Python
     /// code runs next, and dropped through a callout, as a container is
     /// (the user object may hold anything).
-    fn owned_user(ptr: *mut ffi::PyObject) -> CResult<Self> {
-        let p = NonNull::new(ptr).ok_or(Raised)?;
+    fn owned_user(g: Gil<'_>, ptr: *mut ffi::PyObject) -> CResult<Self> {
+        let p = NonNull::new(ptr)
+            .ok_or_else(|| raise(g, runtime_error(), "a container item is missing"))?;
         // SAFETY: a live object (the caller read it from a live container
         // without running Python code); incrementing runs no Python code.
         unsafe { ffi::Py_IncRef(p.as_ptr()) };
@@ -214,7 +225,7 @@ impl Mine<'_> {
     fn container(ptr: *mut ffi::PyObject) -> CResult<Self> {
         NonNull::new(ptr)
             .map(|p| Self(p, Tracked::Container, PhantomData))
-            .ok_or(Raised)
+            .ok_or(RAISED)
     }
 
     pub fn as_ref(&self) -> Ref<'_> {
@@ -251,7 +262,7 @@ pub fn raise(_g: Gil<'_>, ty: *mut ffi::PyObject, message: &str) -> Raised {
     // SAFETY: attached; `ty` is a live exception type and `text` a C
     // string alive for the call.
     unsafe { thunks::c_err_set_string(ty, text.as_ptr()) };
-    Raised
+    RAISED
 }
 
 /// The built-in exception types the bindings raise.
@@ -298,13 +309,13 @@ pub fn new_exception<'py>(
 pub fn warn(_g: Gil<'_>, category: *mut ffi::PyObject, message: &CStr) -> CResult<()> {
     // SAFETY: attached; a live category and a static message.
     let rc = unsafe { thunks::c_err_warn(category, message.as_ptr(), 1) };
-    if rc < 0 { Err(Raised) } else { Ok(()) }
+    if rc < 0 { Err(RAISED) } else { Ok(()) }
 }
 
 /// The pending exception, taken (direct: no normalization), and put back.
 pub struct Pending(*mut ffi::PyObject, *mut ffi::PyObject, *mut ffi::PyObject);
 
-pub fn fetch_pending() -> Pending {
+pub fn fetch_pending(_g: Gil<'_>) -> Pending {
     let mut p = Pending(ptr::null_mut(), ptr::null_mut(), ptr::null_mut());
     // SAFETY: attached by contract of the callers (cleanup entries); fetch
     // only moves the references.
@@ -318,11 +329,31 @@ pub fn fetch_pending() -> Pending {
     clippy::needless_pass_by_value,
     reason = "the pending exception is consumed"
 )]
-pub fn restore_pending(p: Pending) {
-    // SAFETY: restores exactly what was fetched (references transferred).
+/// Puts back exactly what [`fetch_pending`] took, even nothing (a cleanup
+/// entry that must leave the error indicator as it found it).
+pub(crate) fn put_back_pending(_g: Gil<'_>, p: Pending) {
+    // SAFETY: attached (the token); restores exactly what was fetched
+    // (references transferred); with nothing fetched it decrefs nothing.
     unsafe {
         ffi::PyErr_Restore(p.0, p.1, p.2);
     }
+}
+
+/// Raises again the exception [`fetch_pending`] took.
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "the pending exception is consumed"
+)]
+pub fn restore_pending(g: Gil<'_>, p: Pending) -> Raised {
+    if p.0.is_null() {
+        return raise(g, runtime_error(), "no exception to raise again");
+    }
+    // SAFETY: attached (the token); restores exactly what was fetched
+    // (references transferred), an exception type.
+    unsafe {
+        ffi::PyErr_Restore(p.0, p.1, p.2);
+    }
+    RAISED
 }
 
 // -- building objects -----------------------------------------------------------------
@@ -368,13 +399,13 @@ pub fn float(_g: Gil<'_>, v: f64) -> CResult<Mine<'_>> {
     Mine::new(unsafe { ffi::PyFloat_FromDouble(v) })
 }
 
-fn ssize(len: usize) -> CResult<ffi::Py_ssize_t> {
-    ffi::Py_ssize_t::try_from(len).map_err(|_| Raised)
+fn ssize(g: Gil<'_>, len: usize) -> CResult<ffi::Py_ssize_t> {
+    ffi::Py_ssize_t::try_from(len).map_err(|_| raise(g, runtime_error(), "size out of range"))
 }
 
 /// A `str` from UTF-8 (direct: not GC-tracked).
 pub fn string<'py>(g: Gil<'py>, s: &str) -> CResult<Mine<'py>> {
-    let Ok(len) = ssize(s.len()) else {
+    let Ok(len) = ssize(g, s.len()) else {
         return Err(raise(g, runtime_error(), "string too long"));
     };
     // SAFETY: attached; `len` bytes of valid UTF-8.
@@ -383,7 +414,7 @@ pub fn string<'py>(g: Gil<'py>, s: &str) -> CResult<Mine<'py>> {
 
 /// A `bytes` copy (direct: not GC-tracked).
 pub fn bytes<'py>(g: Gil<'py>, data: &[u8]) -> CResult<Mine<'py>> {
-    let Ok(len) = ssize(data.len()) else {
+    let Ok(len) = ssize(g, data.len()) else {
         return Err(raise(g, runtime_error(), "buffer too long"));
     };
     // SAFETY: attached; `len` readable bytes.
@@ -392,7 +423,7 @@ pub fn bytes<'py>(g: Gil<'py>, data: &[u8]) -> CResult<Mine<'py>> {
 
 /// A `bytearray` copy (direct: not GC-tracked).
 pub fn bytearray<'py>(g: Gil<'py>, data: &[u8]) -> CResult<Mine<'py>> {
-    let Ok(len) = ssize(data.len()) else {
+    let Ok(len) = ssize(g, data.len()) else {
         return Err(raise(g, runtime_error(), "buffer too long"));
     };
     // SAFETY: attached; `len` readable bytes.
@@ -449,22 +480,22 @@ pub fn list_append(g: Gil<'_>, list: &Mine<'_>, item: &Mine<'_>) -> CResult<()> 
     injected(g)?;
     // SAFETY: attached; our list and a live item.
     let rc = unsafe { thunks::c_list_append(list.as_ref().as_ptr(), item.as_ref().as_ptr()) };
-    if rc < 0 { Err(Raised) } else { Ok(()) }
+    if rc < 0 { Err(RAISED) } else { Ok(()) }
 }
 
 /// A `tuple` of `items` (callout: GC-tracked; the items are ours).
 pub fn tuple<'py>(g: Gil<'py>, items: Vec<Mine<'py>>) -> CResult<Mine<'py>> {
-    let n = ssize(items.len()).map_err(|_| raise(g, runtime_error(), "tuple too long"))?;
+    let n = ssize(g, items.len())?;
     // SAFETY: attached.
     let t = Mine::container(unsafe { thunks::c_tuple_new(n) })?;
     for (i, item) in items.into_iter().enumerate() {
-        let i = ssize(i)?;
+        let i = ssize(g, i)?;
         // SAFETY: our new tuple, an index below its size; the reference is
         // stolen (ownership passes to the tuple). A callout: it mutates a
         // GC-tracked container and drops any previous item.
         let rc = unsafe { thunks::c_tuple_set_item(t.as_ref().as_ptr(), i, item.into_ptr()) };
         if rc < 0 {
-            return Err(Raised);
+            return Err(RAISED);
         }
     }
     Ok(t)
@@ -491,7 +522,7 @@ pub fn clear_pending(_g: Gil<'_>) {
 pub fn check_signals(_g: Gil<'_>) -> CResult<()> {
     // SAFETY: attached.
     let rc = unsafe { thunks::c_check_signals() };
-    if rc < 0 { Err(Raised) } else { Ok(()) }
+    if rc < 0 { Err(RAISED) } else { Ok(()) }
 }
 
 /// A new empty `dict` (callout: GC-tracked).
@@ -513,7 +544,7 @@ pub fn dict_set(g: Gil<'_>, dict: &Mine<'_>, key: &CStr, value: &Mine<'_>) -> CR
             value.as_ref().as_ptr(),
         )
     };
-    if rc < 0 { Err(Raised) } else { Ok(()) }
+    if rc < 0 { Err(RAISED) } else { Ok(()) }
 }
 
 /// `module.name = value` (callout: sets a module attribute).
@@ -522,7 +553,7 @@ pub fn module_add(_g: Gil<'_>, module: Ref<'_>, name: &CStr, value: &Mine<'_>) -
     // stolen).
     let rc =
         unsafe { thunks::c_module_add(module.as_ptr(), name.as_ptr(), value.as_ref().as_ptr()) };
-    if rc < 0 { Err(Raised) } else { Ok(()) }
+    if rc < 0 { Err(RAISED) } else { Ok(()) }
 }
 
 // -- types, modules, instances, capsules ----------------------------------------------
@@ -647,7 +678,8 @@ pub fn tuple_items<'a>(g: Gil<'_>, t: Ref<'a>, what: &str) -> CResult<Vec<Ref<'a
             // SAFETY: as above, an index below the size.
             let item = unsafe { ffi::PyTuple_GetItem(t.as_ptr(), i) };
             // SAFETY: a borrowed item, alive while the tuple is.
-            unsafe { Ref::from_ptr(item) }.ok_or(Raised)
+            unsafe { Ref::from_ptr(item) }
+                .ok_or_else(|| raise(g, runtime_error(), "a tuple item is missing"))
         })
         .collect()
 }
@@ -676,7 +708,7 @@ pub fn list_items<'py>(g: Gil<'py>, l: Ref<'_>, what: &str) -> CResult<Vec<Mine<
             // SAFETY: as above, an index below the size; nothing runs
             // Python code between the size and this read.
             let item = unsafe { ffi::PyList_GetItem(l.as_ptr(), i) };
-            Mine::owned_user(item)
+            Mine::owned_user(g, item)
         })
         .collect()
 }
@@ -702,7 +734,7 @@ pub fn dict_items<'py>(g: Gil<'py>, d: Ref<'_>, what: &str) -> CResult<Vec<(Stri
                 "a dict entry without a key or value",
             ));
         }
-        owned.push((Mine::owned_user(key)?, Mine::owned_user(value)?));
+        owned.push((Mine::owned_user(g, key)?, Mine::owned_user(g, value)?));
     }
     owned
         .into_iter()
@@ -719,9 +751,9 @@ pub fn to_string(g: Gil<'_>, s: Ref<'_>, what: &str) -> CResult<String> {
     // SAFETY: an exact str; the buffer stays valid while the object lives.
     let data = unsafe { thunks::c_unicode_as_utf8(s.as_ptr(), &raw mut len) };
     if data.is_null() {
-        return Err(Raised);
+        return Err(RAISED);
     }
-    let len = usize::try_from(len).map_err(|_| Raised)?;
+    let len = usize::try_from(len).map_err(|_| raise(g, runtime_error(), "a negative length"))?;
     // SAFETY: `len` bytes of UTF-8 owned by the live str.
     let bytes = unsafe { core::slice::from_raw_parts(data.cast::<u8>(), len) };
     Ok(String::from_utf8_lossy(bytes).into_owned())
@@ -736,7 +768,7 @@ pub fn to_u64(g: Gil<'_>, v: Ref<'_>, what: &str) -> CResult<u64> {
     let x = unsafe { thunks::c_long_as_u64(v.as_ptr()) };
     // SAFETY: attached.
     if x == u64::MAX && !unsafe { ffi::PyErr_Occurred() }.is_null() {
-        return Err(Raised);
+        return Err(RAISED);
     }
     Ok(x)
 }
@@ -750,7 +782,7 @@ pub fn to_i64(g: Gil<'_>, v: Ref<'_>, what: &str) -> CResult<i64> {
     let x = unsafe { thunks::c_long_as_i64(v.as_ptr()) };
     // SAFETY: attached.
     if x == -1 && !unsafe { ffi::PyErr_Occurred() }.is_null() {
-        return Err(Raised);
+        return Err(RAISED);
     }
     Ok(x)
 }
@@ -802,7 +834,7 @@ pub fn bytes_of<'a>(g: Gil<'_>, b: Ref<'a>, what: &str) -> CResult<&'a [u8]> {
     let data = unsafe { ffi::PyBytes_AsString(b.as_ptr()) };
     // SAFETY: as above.
     let len = unsafe { ffi::PyBytes_Size(b.as_ptr()) };
-    let len = usize::try_from(len).map_err(|_| Raised)?;
+    let len = usize::try_from(len).map_err(|_| raise(g, runtime_error(), "a negative length"))?;
     // SAFETY: `len` immutable bytes owned by the live object.
     Ok(unsafe { core::slice::from_raw_parts(data.cast::<u8>(), len) })
 }

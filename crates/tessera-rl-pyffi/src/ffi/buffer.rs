@@ -28,7 +28,7 @@ use std::sync::Arc;
 use pyo3::ffi;
 use tessera_rl_engine::{OutputDtype, OutputField, OutputStorage};
 
-use super::capi::{self, CResult, Gil, Mine, Raised, Ref};
+use super::capi::{self, CResult, Gil, Mine, Ref};
 use super::dlpack;
 use super::entry_status;
 use super::gather::GatherStorage;
@@ -171,6 +171,9 @@ impl Export {
         read_only: bool,
     ) -> Option<Self> {
         let region = storage.region(field)?;
+        if !element_fits(region.dtype, element) {
+            return None;
+        }
         let bytes = region.len.checked_mul(dtype_itemsize(region.dtype)?)?;
         Self::new(
             Owner::Output(Arc::clone(storage)),
@@ -211,6 +214,11 @@ impl Export {
         element: Element,
         read_only: bool,
     ) -> Option<Self> {
+        // A 0-d export would describe one element at `data` with a length
+        // of 0 bytes: refused.
+        if rows.shape.is_empty() {
+            return None;
+        }
         let row_bytes = rows
             .shape
             .iter()
@@ -240,6 +248,11 @@ impl Export {
         // `Py_ssize_t` and `int`: refuse what `getbuffer` could not.
         isize::try_from(bytes).ok()?;
         c_int::try_from(shape.len()).ok()?;
+        // Every element is aligned to its size (rows are whole elements, so
+        // the first one decides): consumers may read them as typed values.
+        if start.wrapping_add(offset).addr() % element.itemsize() != 0 {
+            return None;
+        }
         Some(Self(Arc::new(Inner {
             _owner: owner,
             // `row_window` checked `offset + bytes <= region_bytes`, so this
@@ -289,6 +302,19 @@ impl Export {
             shape: &self.0.shape,
         };
         dlpack::capsule(g, &src, versioned, self.0.read_only)
+    }
+}
+
+/// Whether `element` may describe a region of `dtype`: a typed region only
+/// as its own type (`Bool8` also as `U8`), raw bytes (observation leaves,
+/// typed by the pool layout) as any element.
+const fn element_fits(dtype: OutputDtype, element: Element) -> bool {
+    match dtype {
+        OutputDtype::U8 => true,
+        OutputDtype::Bool8 => matches!(element, Element::Bool | Element::U8),
+        OutputDtype::F32 => matches!(element, Element::F32),
+        OutputDtype::U32 => matches!(element, Element::U32),
+        _ => false,
     }
 }
 
@@ -397,7 +423,10 @@ fn fill(
     let nd = flags & ffi::PyBUF_ND == ffi::PyBUF_ND;
     let strided = flags & ffi::PyBUF_STRIDES == ffi::PyBUF_STRIDES;
     // SAFETY: `slf` is live for the call (CPython's argument).
-    let exporter = capi::incref(unsafe { Ref::from_ptr(slf) }.ok_or(Raised)?);
+    let exporter = capi::incref(
+        unsafe { Ref::from_ptr(slf) }
+            .ok_or_else(|| capi::raise(g, capi::buffer_error(), "no exporter"))?,
+    );
     // The clone keeps the memory, shape and strides alive until
     // `bf_releasebuffer`.
     let internal = Arc::into_raw(Arc::clone(&export.0));
@@ -526,6 +555,46 @@ mod tests {
             )
             .is_none()
         );
+    }
+
+    #[test]
+    fn test_export_refuses_an_empty_shape() {
+        // Rows are whole elements, so only a region's base could misalign an
+        // export; the gather storage's base is 8-byte aligned (u64 words).
+        let writer = super::super::gather::GatherWriter::new(&[(OutputField::Rewards, 32)]);
+        let storage = writer.storage();
+        let empty = Rows {
+            total_rows: 4,
+            first_row: 4,
+            shape: &[],
+        };
+        assert!(
+            Export::gather(&storage, OutputField::Rewards, empty, Element::F32, true).is_none()
+        );
+        let empty = Rows {
+            total_rows: 4,
+            first_row: 0,
+            shape: &[],
+        };
+        assert!(
+            Export::gather(&storage, OutputField::Rewards, empty, Element::F32, true).is_none()
+        );
+        let wide = Rows {
+            total_rows: 4,
+            first_row: 1,
+            shape: &[1, 1],
+        };
+        assert!(Export::gather(&storage, OutputField::Rewards, wide, Element::F64, true).is_some());
+    }
+
+    #[test]
+    fn test_element_fits_only_its_region_type_and_raw_bytes() {
+        assert!(element_fits(OutputDtype::F32, Element::F32));
+        assert!(!element_fits(OutputDtype::F32, Element::F64));
+        assert!(!element_fits(OutputDtype::U32, Element::I32));
+        assert!(element_fits(OutputDtype::Bool8, Element::Bool));
+        assert!(!element_fits(OutputDtype::U32, Element::Bool));
+        assert!(element_fits(OutputDtype::U8, Element::F64));
     }
 
     #[test]

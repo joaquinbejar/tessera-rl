@@ -319,7 +319,10 @@ pub(super) unsafe extern "C" fn getbuffer(
         // The buffer keeps a reference to its exporter, released by
         // PyBuffer_Release.
         // SAFETY: `slf` is live for the call.
-        let exporter = capi::incref(unsafe { Ref::from_ptr(slf) }.ok_or(capi::Raised)?);
+        let exporter = capi::incref(
+            unsafe { Ref::from_ptr(slf) }
+                .ok_or_else(|| capi::raise(g, capi::buffer_error(), "no exporter"))?,
+        );
         // SAFETY: `out` is the caller's Py_buffer to fill.
         unsafe {
             out.write(ffi::Py_buffer {

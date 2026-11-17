@@ -40,7 +40,7 @@ pub fn entry(
         f(g)
     })) {
         Ok(Ok(obj)) => obj.into_ptr(),
-        Ok(Err(capi::Raised)) => core::ptr::null_mut(),
+        Ok(Err(capi::Raised { .. })) => core::ptr::null_mut(),
         Err(payload) => {
             dispose(payload);
             capi::raise(g, capi::runtime_error(), "internal panic in Tessera");
@@ -61,7 +61,7 @@ pub fn entry_status(
         f(g)
     })) {
         Ok(Ok(())) => 0,
-        Ok(Err(capi::Raised)) => -1,
+        Ok(Err(capi::Raised { .. })) => -1,
         Err(payload) => {
             dispose(payload);
             capi::raise(g, capi::runtime_error(), "internal panic in Tessera");

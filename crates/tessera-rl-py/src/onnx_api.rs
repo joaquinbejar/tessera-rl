@@ -17,7 +17,7 @@ use std::path::PathBuf;
 use crate::api::Kwargs;
 use crate::env::BindError;
 use crate::errors::{Kind, error, to_py};
-use crate::ffi::capi::{self, CResult, Gil, Mine, Raised, Ref};
+use crate::ffi::capi::{self, CResult, Gil, Mine, Ref};
 use crate::search::{OnnxArgs, OnnxInfo};
 use crate::search_api::SearchInner;
 use tessera_rl_search::EvaluatorError;
@@ -152,7 +152,7 @@ pub(crate) fn run_onnx<'py>(g: Gil<'py>, inner: &SearchInner) -> CResult<Mine<'p
             // Pending signals (Ctrl-C) before every batch, as for the
             // Python callback: a handler that raises aborts the call.
             if capi::check_signals(g).is_err() {
-                pending = Some(capi::fetch_pending());
+                pending = Some(capi::fetch_pending(g));
                 return Err(EvaluatorError::Failed {
                     reason: "a signal handler raised".to_owned(),
                 });
@@ -166,10 +166,7 @@ pub(crate) fn run_onnx<'py>(g: Gil<'py>, inner: &SearchInner) -> CResult<Mine<'p
     })?;
     match (result, pending.take()) {
         (Ok(()), _) => Ok(capi::none(g)),
-        (Err(_), Some(p)) => {
-            capi::restore_pending(p);
-            Err(Raised)
-        }
+        (Err(_), Some(p)) => Err(capi::restore_pending(g, p)),
         (Err(e), None) => Err(to_py(g, e)),
     }
 }

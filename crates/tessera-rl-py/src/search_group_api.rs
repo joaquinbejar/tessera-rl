@@ -16,7 +16,7 @@
 use crate::api::Kwargs;
 use crate::env::BindError;
 use crate::errors::{Kind, error, to_py};
-use crate::ffi::capi::{self, CResult, Gil, Mine, Raised, Ref};
+use crate::ffi::capi::{self, CResult, Gil, Mine, Ref};
 use crate::ffi::inner::Inner;
 use crate::search::{GroupOps, SearchArgs};
 use crate::search_api::{PyEval, SEARCH_KEYS, apply_options, floats, ints, one_arg};
@@ -159,10 +159,7 @@ pub(crate) fn run<'py>(g: Gil<'py>, inner: &GroupInner, args: Ref<'_>) -> CResul
         (Ok(()), _) => Ok(capi::none(g)),
         // The user's own exception, raised again untouched, every slot
         // rolled back.
-        (Err(_), Some(pending)) => {
-            capi::restore_pending(pending);
-            Err(Raised)
-        }
+        (Err(_), Some(pending)) => Err(capi::restore_pending(g, pending)),
         (Err((_, e)), None) => Err(to_py(g, e)),
     }
 }
