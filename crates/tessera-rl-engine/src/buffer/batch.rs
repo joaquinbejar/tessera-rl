@@ -37,7 +37,7 @@ use std::sync::Arc;
 use tessera_rl_core::{Bool8, Environment, RecordLayout as _};
 
 use super::rows::{Admitted, RawRows};
-use super::{Raw, RawChunk};
+use super::{EnvRawChunk, Raw, RawChunk};
 use crate::error::EngineError;
 use crate::masks::MaskProvider;
 use crate::pool::{EnvPool, step_chunk};
@@ -51,7 +51,7 @@ use crate::validate::check_send_ids;
 /// The one shared allocation of an Async pool (ADR-0047 section 2).
 pub(crate) struct BatchMode<E: Environment, M: MaskProvider<E>> {
     pub(crate) pool: EnvPool<E, M>,
-    raw: RawChunk<E>,
+    raw: EnvRawChunk<E>,
     rows: RawRows<E::Header>,
     workers: usize,
     /// The most ids one claim takes (the claim rule of [`claim_limit`]).
@@ -199,7 +199,7 @@ where
     }
 
     /// Raw parts of every buffer of `pool`, from a fresh `&mut`.
-    fn parts(pool: &mut EnvPool<E, M>) -> (RawChunk<E>, RawRows<E::Header>) {
+    fn parts(pool: &mut EnvPool<E, M>) -> (EnvRawChunk<E>, RawRows<E::Header>) {
         let (chunk, (dh, ch)) = pool.chunk_all();
         let raw = RawChunk::new(chunk, dh, ch);
         let rows = RawRows::from_parts(

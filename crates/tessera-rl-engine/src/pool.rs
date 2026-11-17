@@ -159,7 +159,7 @@ impl<E: Environment, M: MaskProvider<E>> EnvPool<E, M> {
     /// for the split-phase modes to take raw parts of (ADR-0047).
     pub(crate) fn chunk_all(&mut self) -> (Chunk<'_, E>, (usize, usize)) {
         let heads = (self.actions.discrete.len(), self.actions.continuous.len());
-        let chunk = Chunk {
+        let chunk = Rows {
             headers: &mut self.headers,
             states: &mut self.states,
             discrete: &mut self.discrete,
@@ -980,16 +980,22 @@ pub(crate) struct StepCtx<'a, E: Environment> {
 
 /// The records, action rows and output rows of a range of instances,
 /// indexed from the first instance of the range. A chunk is the unit of
-/// scheduling (SPEC 5.1): kernels only ever see one chunk.
-pub(crate) struct Chunk<'a, E: Environment> {
-    pub(crate) headers: &'a mut [E::Header],
-    pub(crate) states: &'a mut [E::State],
+/// scheduling (SPEC 5.1): kernels only ever see one chunk. `H` is the
+/// record header and `S` the per-instance state: an `Environment`'s
+/// `Header` and `State` ([`Chunk`]), or a host pool's header and host
+/// instance (ADR-0062).
+pub(crate) struct Rows<'a, H, S> {
+    pub(crate) headers: &'a mut [H],
+    pub(crate) states: &'a mut [S],
     pub(crate) discrete: &'a mut [i32],
     pub(crate) continuous: &'a mut [f32],
     pub(crate) penalties: &'a mut [f32],
     pub(crate) penalized: &'a mut [Bool8],
     pub(crate) outputs: OutputsView<'a>,
 }
+
+/// The rows of an `Environment`'s pool.
+pub(crate) type Chunk<'a, E> = Rows<'a, <E as Environment>::Header, <E as Environment>::State>;
 
 /// Steps every instance of `chunk` (after validation).
 pub(crate) fn step_chunk<E: Environment, M: MaskProvider<E>>(
@@ -1009,7 +1015,7 @@ pub(crate) fn step_chunk<E: Environment, M: MaskProvider<E>>(
         auto_reset,
         ..
     } = *ctx;
-    let Chunk {
+    let Rows {
         headers,
         states,
         discrete,
