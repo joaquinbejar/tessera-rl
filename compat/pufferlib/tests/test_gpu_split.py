@@ -253,21 +253,24 @@ def make_manifest(tmp_path, **over):
     wheel = make_wheel(tmp_path)
     args = {"--out": str(tmp_path / "manifest.json"), "--commit": driver.git_head(), "--wheel": str(wheel),
             "--wheel-sha256": manifest.file_sha256(str(wheel)), "--wheel-source": "main-wheels-run",
-            "--toolkit": "13.0.88", "--nvcc": fake_nvcc(tmp_path), "--rounds": "2"}  # fmt: skip
+            "--toolkit": "13.0.88", "--nvcc": fake_nvcc(tmp_path), "--rounds": "2",
+            "--clock-ref-host": "ref.example", "--clock-ref-command": "python3 /r/clock_ref.py --out r.jsonl"}  # fmt: skip
     args.update(over)
     return wheel, [x for kv in args.items() for x in kv]
 
 
 def manifest_attempt(tmp_path, capsys, python=None, extra=(), **over):
-    """Writes a manifest and runs the driver on it; returns (rc, rows, wheel, digest)."""
+    """Writes a manifest and runs the driver on it (sealed rows, ADR-0063);
+    returns (rc, rows, wheel, digest)."""
     wheel, argv = make_manifest(tmp_path, **over)
     assert manifest.main(argv) == 0
     digest = capsys.readouterr().out.strip()
-    out = tmp_path / "r.jsonl"
-    rc = driver.main(["--python", python or f"sh -c 'exit 1' fake {wheel}", "--out", str(out), "--device", "cpu",
+    out = tmp_path / "rows.jsonl"
+    rc = driver.main(["--python", python or f"sh -c 'exit 1' fake {wheel}", "--rows", str(out),
+                      "--status", str(tmp_path / "status.json"), "--device", "cpu",
                       "--manifest", str(tmp_path / "manifest.json"), "--manifest-sha256", digest,
                       "--wheel", str(wheel), *extra])  # fmt: skip
-    rows = [json.loads(x) for x in out.read_text().splitlines()] if out.exists() else []
+    rows = [json.loads(x) for x in out.read_text().splitlines()] if out.exists() and out.stat().st_size else []
     return rc, rows, wheel, digest
 
 
@@ -294,7 +297,8 @@ def test_gpu_split_driver_refuses_a_wrong_manifest_or_wheel_sha256(tmp_path, cap
     manifest.main(argv)
     digest = capsys.readouterr().out.strip()
     out = tmp_path / "r.jsonl"
-    common = ["--out", str(out), "--device", "cpu", "--manifest", str(tmp_path / "manifest.json")]
+    common = ["--rows", str(out), "--status", str(tmp_path / "s.json"), "--device", "cpu",
+              "--manifest", str(tmp_path / "manifest.json")]  # fmt: skip
     rc = driver.main(["--python", f"sh -c 'exit 0' fake {wheel}", *common, "--manifest-sha256", "0" * 64, "--wheel", str(wheel)])
     assert rc == driver.EXIT_REFUSED
     other = make_wheel(tmp_path, "other.whl", b"other")
@@ -322,13 +326,12 @@ def test_gpu_split_driver_refuses_a_commit_mismatch(tmp_path, capsys):
 
 
 def test_gpu_split_driver_follows_the_manifest_and_records_a_failed_attempt(tmp_path, capsys):
-    rc, rows, _, digest = manifest_attempt(tmp_path, capsys, **{"--rounds": "1"})
-    runs, last = rows[:-1], rows[-1]
+    rc, runs, _, digest = manifest_attempt(tmp_path, capsys, **{"--rounds": "1"})
     assert rc == 1
     assert [[r["case"], r["mode"]] for r in runs] == manifest.order(manifest.CASES, manifest.MODES, 1)[0]
     assert all(r["manifest_sha256"] == digest for r in runs)
-    assert last["summary"] and last["manifest_sha256"] == digest
-    assert last["attempt"] == "failed, no result" and last["gate_eligible"] is False and "pass" not in last
+    # ADR-0063: no summary row; summarise.py computes it after the clock verdict.
+    assert not any(r.get("summary") for r in runs)
 
 
 NATIVE = "e" * 64

@@ -29,7 +29,18 @@ before any run (exit 7). Every row carries the manifest sha256. Once the first
 run starts, the session is the attempt (item 8, A1): the last line of
 ``--out`` is a summary row with per-cell (median, min, max) of ``sps``, and
 ``attempt`` is ``complete`` only when every run succeeded, else
-``failed, no result``. A manifest attempt also refuses ``--split-args``, a
+``failed, no result``.
+
+**ADR-0063 (sealed rows).** A manifest attempt takes ``--rows`` and
+``--status`` instead of ``--out``. Every per-run row, with its progress line,
+goes to ``--rows`` (created new, mode 0600) and nothing about a run reaches
+stdout: stdout carries ``started manifest=<sha256>``, an ``alive`` heartbeat
+every 60 s without counts, and ``rows sealed: <sha256>`` at the end.
+``--status`` holds only ``rows_sha256``, ``manifest_sha256``,
+``timed_start_mono`` (guest ``time.monotonic()`` just before the first run,
+written at that moment) and ``timed_end_mono`` (just after the last run or
+the stop). No summary is written: ``summarise.py`` computes it after the
+clock verdict has been sent (docs/reviews/152-adr0063-harness-plan.md §2.1). A manifest attempt also refuses ``--split-args``, a
 ``--wheel`` path absent from ``--python`` and a ``git rev-parse HEAD`` other
 than the manifest's commit. ``gate_eligible`` also needs the device ``cuda``,
 the CUDA advantage kernel on every trainer run (item 6), 30 timed epochs at
@@ -54,6 +65,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -61,6 +73,7 @@ SPLIT = os.path.join(HERE, "split.py")
 CASES = ("ocean-serial", "ocean-mp", "tessera-w1", "tessera-w2")
 MODES = ("e2e", "sync", "env")
 EXIT_REFUSED = 7
+HEARTBEAT_S = 60.0
 
 sys.path.insert(0, HERE)
 import manifest as manifestmod  # noqa: E402
@@ -221,7 +234,9 @@ def wheel_in_command(wheel: str, python: str) -> bool:
 def main(argv=None) -> int:
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     p.add_argument("--python", required=True, help="command prefix that runs split.py")
-    p.add_argument("--out", required=True)
+    p.add_argument("--out", help="results JSONL (not in a manifest attempt)")
+    p.add_argument("--rows", help="sealed per-run rows (manifest attempt only, ADR-0063)")
+    p.add_argument("--status", help="status file of a manifest attempt (ADR-0063)")
     p.add_argument("--device", choices=("cpu", "cuda"), required=True)
     p.add_argument("--rounds", type=int, default=5)
     p.add_argument("--cases", default=",".join(CASES))
@@ -247,6 +262,8 @@ def main(argv=None) -> int:
     if args.manifest or args.manifest_sha256 or args.wheel:
         if not (args.manifest and args.manifest_sha256 and args.wheel):
             p.error("--manifest, --manifest-sha256 and --wheel go together")
+        if args.out or not (args.rows and args.status):
+            p.error("a manifest attempt takes --rows and --status, not --out (ADR-0063)")
         try:
             if args.split_args.strip():
                 raise ValueError("--split-args is not allowed in a manifest attempt")
@@ -263,7 +280,13 @@ def main(argv=None) -> int:
             return EXIT_REFUSED
         msha = args.manifest_sha256
         runs = from_order(m["order"])
+        if os.path.exists(args.rows) or os.path.exists(args.status):
+            print("REFUSED: --rows or --status already exists", flush=True)
+            return EXIT_REFUSED
+        return sealed(args, runs, m, msha)
     else:
+        if not args.out or args.rows or args.status:
+            p.error("--out is required, and --rows and --status belong to a manifest attempt")
         runs = plan(cases, modes, args.rounds)
     status = 0
     rows: list[dict] = []
@@ -277,7 +300,45 @@ def main(argv=None) -> int:
     return status
 
 
-def drive(args, runs, rows: list[dict], msha, first_cuda_pending: bool) -> int:
+def write_status(path: str, status: dict) -> None:
+    tmp = path + ".tmp"
+    with open(tmp, "w") as f:
+        f.write(json.dumps(status) + "\n")
+    os.replace(tmp, path)
+
+
+def sealed(args, runs, m, msha) -> int:
+    """A manifest attempt under ADR-0063: rows to ``--rows`` only, no
+    progress on stdout, no summary."""
+    fd = os.open(args.rows, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    os.close(fd)
+    st = {"rows_sha256": None, "manifest_sha256": msha, "timed_start_mono": None, "timed_end_mono": None}
+    print(f"started manifest={msha}", flush=True)
+    stop = threading.Event()
+
+    def heartbeat():
+        while not stop.wait(HEARTBEAT_S):
+            print("alive", flush=True)
+
+    beat = threading.Thread(target=heartbeat, daemon=True)
+    beat.start()
+    rows: list[dict] = []
+    status = 0
+    try:
+        st["timed_start_mono"] = time.monotonic()
+        write_status(args.status, st)
+        status = drive(args, runs, rows, msha, args.device == "cuda", sealed_rows=args.rows)
+    finally:
+        st["timed_end_mono"] = time.monotonic()
+        stop.set()
+        beat.join()
+        st["rows_sha256"] = manifestmod.file_sha256(args.rows)
+        write_status(args.status, st)
+        print(f"rows sealed: {st['rows_sha256']}", flush=True)
+    return status
+
+
+def drive(args, runs, rows: list[dict], msha, first_cuda_pending: bool, sealed_rows: str | None = None) -> int:
     status = 0
     for r, i, case, mode in runs:
         command = [*shlex.split(args.python), SPLIT, case, mode, args.device, *shlex.split(args.split_args)]
@@ -287,10 +348,15 @@ def drive(args, runs, rows: list[dict], msha, first_cuda_pending: bool) -> int:
         out = one_run(command, args.first_timeout if first else args.timeout)
         out["timeout_s"] = args.first_timeout if first else args.timeout
         row = {"round": r, "position": i, "case": case, "mode": mode, "manifest_sha256": msha, **out}
+        line = f"{r} {i} {case} {mode} rc={out['rc']} timed_out={out['timed_out']} left={out['group_left']}"
+        if sealed_rows:
+            row["device"] = args.device
+            row["log"] = line
         rows.append(row)
-        with open(args.out, "a") as f:
+        with open(sealed_rows or args.out, "a") as f:
             f.write(json.dumps(row) + "\n")
-        print(f"{r} {i} {case} {mode} rc={out['rc']} timed_out={out['timed_out']} left={out['group_left']}", flush=True)
+        if not sealed_rows:
+            print(line, flush=True)
         if out["group_left"]:
             print("STOP: processes of the run's group remain", flush=True)
             return 6

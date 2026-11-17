@@ -9,7 +9,18 @@ driver refuses a manifest whose sha256 is not that one.
 Usage::
 
     python manifest.py --out manifest.json --commit SHA --wheel PATH --wheel-sha256 HEX \\
-        --wheel-source pypi-release|main-wheels-run --toolkit 13.0.88 [--nvcc nvcc] [--rounds 5]
+        --wheel-source pypi-release|main-wheels-run --toolkit 13.0.88 [--nvcc nvcc] [--rounds 5] \\
+        --clock-ref-host NAME --clock-ref-command CMD [--clock-cpu N] \\
+        [--rerun-of-manifest PATH --rerun-of-sha256 HEX]
+
+The clock fields (ADR-0063, docs/reviews/152-adr0063-harness-plan.md §2.1a):
+the sha256 of ``clock.py`` and ``clock_ref.py`` in this checkout, the
+reference host and the exact command that starts ``clock_ref.py`` there, the
+sampler's guest core (``null`` for none) and the cases' cores (``null``: not
+pinned). ``rerun_of`` is null for a first session; for a rerun after a void
+session it names that session's manifest sha256 and this session's position
+(2 or 3), and the earlier manifest must have the same commit, wheel, toolkit
+and order.
 
 The wheel file is hashed and must equal ``--wheel-sha256``. ``nvcc --version``
 must report ``--toolkit``. Either mismatch writes nothing and exits 2.
@@ -20,6 +31,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import re
 import subprocess
 import sys
@@ -65,7 +77,21 @@ def canonical(obj) -> bytes:
     return (json.dumps(obj, sort_keys=True, separators=(",", ":")) + "\n").encode()
 
 
-def build(commit, wheel, wheel_sha256, wheel_source, toolkit, nvcc, cases, modes, rounds) -> dict:
+HERE = os.path.dirname(os.path.abspath(__file__))
+SAME_ON_RERUN = ("commit", "wheel_sha256", "cuda_toolkit", "order")
+
+
+def rerun_of(earlier: dict, earlier_sha256: str) -> dict:
+    """The ``rerun_of`` field of a rerun after the void session ``earlier``."""
+    prev = earlier.get("rerun_of")
+    position = 2 if prev is None else prev["position"] + 1
+    if position > 3:
+        raise ValueError("a third void session closes the attempt (ADR-0063 item 5(iv))")
+    return {"manifest_sha256": earlier_sha256, "position": position}
+
+
+def build(commit, wheel, wheel_sha256, wheel_source, toolkit, nvcc, cases, modes, rounds,
+          clock_ref_host=None, clock_ref_command=None, clock_cpu=None, earlier=None) -> dict:  # fmt: skip
     """The manifest, or ValueError naming the first mismatch."""
     if not re.fullmatch(r"[0-9a-f]{40}", commit):
         raise ValueError("commit must be a full 40-character sha")
@@ -79,7 +105,9 @@ def build(commit, wheel, wheel_sha256, wheel_source, toolkit, nvcc, cases, modes
     found = toolkit_version(nvcc)
     if found != toolkit:
         raise ValueError(f"nvcc reports toolkit {found}, not the declared {toolkit}")
-    return {
+    if not clock_ref_host or not clock_ref_command:
+        raise ValueError("the clock reference host and command are required (ADR-0063 item 2)")
+    m = {
         "adr": "ADR-0061",
         "commit": commit,
         "wheel_sha256": wheel_sha256,
@@ -88,7 +116,21 @@ def build(commit, wheel, wheel_sha256, wheel_source, toolkit, nvcc, cases, modes
         "cuda_toolkit": toolkit,
         "rounds": rounds,
         "order": order(cases, modes, rounds),
+        "clock_py_sha256": file_sha256(os.path.join(HERE, "clock.py")),
+        "clock_ref_py_sha256": file_sha256(os.path.join(HERE, "clock_ref.py")),
+        "clock_ref_host": clock_ref_host,
+        "clock_ref_command": clock_ref_command,
+        "clock_cpu": clock_cpu,
+        "case_cpus": None,
+        "rerun_of": None,
     }
+    if earlier is not None:
+        data, digest = earlier
+        for k in SAME_ON_RERUN:
+            if data.get(k) != m[k]:
+                raise ValueError(f"a rerun must keep the void session's {k}")
+        m["rerun_of"] = rerun_of(data, digest)
+    return m
 
 
 def wheel_native_sha256(wheel: str) -> str:
@@ -122,10 +164,21 @@ def main(argv=None) -> int:
     p.add_argument("--toolkit", required=True)
     p.add_argument("--nvcc", default="nvcc")
     p.add_argument("--rounds", type=int, default=5)
+    p.add_argument("--clock-ref-host", required=True)
+    p.add_argument("--clock-ref-command", required=True)
+    p.add_argument("--clock-cpu", type=int)
+    p.add_argument("--rerun-of-manifest")
+    p.add_argument("--rerun-of-sha256")
     args = p.parse_args(argv)
+    if bool(args.rerun_of_manifest) != bool(args.rerun_of_sha256):
+        p.error("--rerun-of-manifest and --rerun-of-sha256 go together")
     try:
+        earlier = None
+        if args.rerun_of_manifest:
+            earlier = (load(args.rerun_of_manifest, args.rerun_of_sha256), args.rerun_of_sha256)
         m = build(args.commit, args.wheel, args.wheel_sha256, args.wheel_source, args.toolkit, args.nvcc,
-                  CASES, MODES, args.rounds)  # fmt: skip
+                  CASES, MODES, args.rounds, args.clock_ref_host, args.clock_ref_command, args.clock_cpu,
+                  earlier)  # fmt: skip
     except (ValueError, OSError, zipfile.BadZipFile) as e:
         print(f"REFUSED: {e}", flush=True)
         return EXIT_MISMATCH
