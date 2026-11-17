@@ -510,7 +510,11 @@ def decide(rows: list[dict], ref: list[dict], manifest: dict, manifest_sha256: s
 
     fault = sorted(set(fired) & {"b", "c", "e"})
     missing = sorted(set(fired) & {"a", "d1", "d2", "d3", "selfhash", "instruments", "tags", "corrupt", "clocksource"})
-    outcome = "clock-invalid" if fault else "instrumentation failed" if missing else "clock-valid"
+    # A wrong instrument (self-hash or instruments) comes first: its fault
+    # readings cannot be trusted to void the session.
+    wrong = set(fired) & {"selfhash", "instruments"}
+    outcome = ("instrumentation failed" if wrong else "clock-invalid" if fault
+               else "instrumentation failed" if missing else "clock-valid")  # fmt: skip
     out = {
         "scope": scope,
         "manifest_sha256": manifest_sha256,

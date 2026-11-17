@@ -414,6 +414,35 @@ def test_summarise_writes_a_reported_instruments_mismatch_as_a_failed_row(tmp_pa
     assert rc == 0 and s["attempt"] == "failed, no result" and "pass" not in s
 
 
+@pytest.mark.parametrize("over", [{"clock_py_sha256": "0" * 64}, {"clock_ref_host": "other"}], ids=["selfhash", "instruments"])
+def test_clock_decide_a_wrong_instrument_beats_a_fault(over):
+    d = decide(manifest={**MANIFEST, **over}, perf=scaled(500.0, 13 / 12))
+    assert "b" in d["conditions"] and d["outcome"] == "instrumentation failed"
+
+
+@pytest.mark.parametrize("cond", ["selfhash", "instruments"])
+def test_summarise_a_wrong_instrument_with_a_fault_is_never_a_void(tmp_path, cond):
+    ins = {"clock_py_sha256": "0" * 64} if cond == "selfhash" else {"clock_ref_host": "other"}
+    why = "clock.py sha256 mismatch" if cond == "selfhash" else "mismatch"
+    over = {"conditions": {cond: [why], "b": ["perf 1.08"]}, "instruments": ins}
+    rc, s, _ = run_summarise(tmp_path, outcome="clock-invalid", decide_over=over)
+    assert rc == 0 and s["attempt"] == "failed, no result" and s["clock"] == "instrumentation failed"
+
+
+@pytest.mark.parametrize("cond", ["selfhash", "instruments"])
+def test_summarise_refuses_a_wrong_instrument_reported_as_clock_valid(tmp_path, cond):
+    over = {"conditions": {cond: ["clock.py sha256 mismatch"]}}
+    rc, s, _ = run_summarise(tmp_path, outcome="clock-valid", decide_over=over)
+    assert rc == summarise.EXIT_REFUSED and s is None
+
+
+def test_summarise_refuses_an_unreported_self_hash_even_with_instruments_reported(tmp_path):
+    over = {"conditions": {"instruments": ["mismatch"]},
+            "instruments": {"clock_ref_host": "other", "clock_py_sha256": "0" * 64}}  # fmt: skip
+    rc, s, _ = run_summarise(tmp_path, outcome="instrumentation failed", decide_over=over)
+    assert rc == summarise.EXIT_REFUSED and s is None
+
+
 @pytest.mark.parametrize(
     "over",
     [{"scope": "pre-check"}, {"manifest_sha256": "0" * 64}, {"instruments": {"clock_ref_host": "other"}},
