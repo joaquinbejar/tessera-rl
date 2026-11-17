@@ -18,8 +18,9 @@ complete rows the clock outcome decides: ``clock-valid`` keeps the ADR-0061
 summary; ``clock-invalid`` gives ``void: clock-invalid`` (``failed, no
 result`` at rerun position 3) and ``instrumentation failed`` gives ``failed,
 no result``, both with no ``pass`` and no scores, the cells kept. A clock.py
-or clock_ref.py self-hash mismatch reported by decide is an instrumentation
-failure, so it is written as a row, not refused.
+or clock_ref.py self-hash mismatch, or a reference host, reference command or
+sampler core mismatch (``instruments``), reported by decide is an
+instrumentation failure, so it is written as a row, not refused.
 """
 
 from __future__ import annotations
@@ -51,15 +52,22 @@ def read_checked(path: str, sha256: str) -> bytes:
 
 def check_instruments(decide: dict, m: dict) -> None:
     ins = decide.get("instruments") or {}
-    selfhash = set((decide.get("conditions") or {}).get("selfhash", []))
-    if ins.get("clock_ref_host") != m.get("clock_ref_host"):
-        raise ValueError("the reference host is not the manifest's")
-    args = ins.get("clock_ref_args") or []
-    cmd = shlex.split(m.get("clock_ref_command") or "")
-    if not args or cmd[-len(args) :] != args or not cmd[-len(args) - 1].endswith("clock_ref.py"):
-        raise ValueError("the reference command is not the manifest's")
-    if ins.get("clock_cpu") != m.get("clock_cpu"):
-        raise ValueError("the sampler core is not the manifest's")
+    conditions = decide.get("conditions") or {}
+    selfhash = set(conditions.get("selfhash", []))
+    if (selfhash or conditions.get("instruments")) and decide.get("outcome") == "clock-valid":
+        raise ValueError("decide reports a wrong instrument with outcome clock-valid")
+    # A host, command or core mismatch that decide reported itself is an
+    # instrumentation failure, written as a row; only those three
+    # comparisons are skipped, the self-hash check below always runs.
+    if not conditions.get("instruments"):
+        if ins.get("clock_ref_host") != m.get("clock_ref_host"):
+            raise ValueError("the reference host is not the manifest's")
+        args = ins.get("clock_ref_args") or []
+        cmd = shlex.split(m.get("clock_ref_command") or "")
+        if not args or cmd[-len(args) :] != args or not cmd[-len(args) - 1].endswith("clock_ref.py"):
+            raise ValueError("the reference command is not the manifest's")
+        if ins.get("clock_cpu") != m.get("clock_cpu"):
+            raise ValueError("the sampler core is not the manifest's")
     for key, why in (("clock_py_sha256", "clock.py sha256 mismatch"), ("clock_ref_py_sha256", "clock_ref.py sha256 mismatch")):
         if ins.get(key) != m.get(key) and why not in selfhash:
             raise ValueError(f"{key} differs from the manifest but decide did not report it")
@@ -98,6 +106,10 @@ def summarise(rows, m, msha, decide, decide_sha, rows_sha, sent_at, position) ->
     whole = complete(rows, m)
     s = run.summary(rows, device, whole, m, msha)
     clock = decide["outcome"]
+    wrong = set(decide.get("conditions") or {}) & {"selfhash", "instruments"}
+    if whole and wrong:
+        # A wrong instrument is never a void, whatever the outcome.
+        clock = "instrumentation failed"
     if whole and clock != "clock-valid":
         for k in VERDICT_KEYS:
             s.pop(k, None)
