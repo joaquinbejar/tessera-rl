@@ -406,6 +406,14 @@ def test_summarise_writes_a_self_hash_mismatch_as_a_failed_row(tmp_path):
     assert rc == 0 and s["attempt"] == "failed, no result"
 
 
+@pytest.mark.parametrize("ins", [{"clock_ref_host": "other"}, {"clock_ref_args": ["--out", "x"]}, {"clock_cpu": None}],
+                         ids=["host", "command", "cpu"])  # fmt: skip
+def test_summarise_writes_a_reported_instruments_mismatch_as_a_failed_row(tmp_path, ins):
+    over = {"conditions": {"instruments": ["mismatch"]}, "instruments": ins}
+    rc, s, _ = run_summarise(tmp_path, outcome="instrumentation failed", decide_over=over)
+    assert rc == 0 and s["attempt"] == "failed, no result" and "pass" not in s
+
+
 @pytest.mark.parametrize(
     "over",
     [{"scope": "pre-check"}, {"manifest_sha256": "0" * 64}, {"instruments": {"clock_ref_host": "other"}},

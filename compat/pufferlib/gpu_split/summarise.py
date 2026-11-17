@@ -18,8 +18,9 @@ complete rows the clock outcome decides: ``clock-valid`` keeps the ADR-0061
 summary; ``clock-invalid`` gives ``void: clock-invalid`` (``failed, no
 result`` at rerun position 3) and ``instrumentation failed`` gives ``failed,
 no result``, both with no ``pass`` and no scores, the cells kept. A clock.py
-or clock_ref.py self-hash mismatch reported by decide is an instrumentation
-failure, so it is written as a row, not refused.
+or clock_ref.py self-hash mismatch, or a reference host, reference command or
+sampler core mismatch (``instruments``), reported by decide is an
+instrumentation failure, so it is written as a row, not refused.
 """
 
 from __future__ import annotations
@@ -52,6 +53,10 @@ def read_checked(path: str, sha256: str) -> bytes:
 def check_instruments(decide: dict, m: dict) -> None:
     ins = decide.get("instruments") or {}
     selfhash = set((decide.get("conditions") or {}).get("selfhash", []))
+    if (decide.get("conditions") or {}).get("instruments"):
+        # decide reported the mismatch itself: an instrumentation failure,
+        # written as a "failed, no result" row like a self-hash mismatch.
+        return
     if ins.get("clock_ref_host") != m.get("clock_ref_host"):
         raise ValueError("the reference host is not the manifest's")
     args = ins.get("clock_ref_args") or []
