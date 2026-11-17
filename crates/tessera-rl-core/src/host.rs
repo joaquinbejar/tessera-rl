@@ -106,6 +106,10 @@ pub trait HostEnvironment: Send + Sized + 'static {
     /// The turn structure (ADR-0013); `Sequential` and `Mixed` must
     /// override [`HostEnvironment::acting`].
     const TURNS: TurnStructure = TurnStructure::Simultaneous;
+    /// Whether the environment writes action masks
+    /// ([`HostEnvironment::mask`]). Without masks the pool has no mask
+    /// buffer (a mask length of 0) and never calls `mask`.
+    const MASKS: bool = false;
 
     /// The environment's configuration.
     type Config: EnvConfig;
@@ -154,7 +158,8 @@ pub trait HostEnvironment: Send + Sized + 'static {
     fn observe(&self, agent: AgentSlot, obs: &mut ObsWriter<'_, '_, ()>);
 
     /// Writes `agent`'s legal-action mask; every action is legal by default.
-    /// The mask is an output: actions are not checked against it.
+    /// Called only when [`HostEnvironment::MASKS`] is `true`. The mask is an
+    /// output: actions are not checked against it.
     fn mask(&self, _agent: AgentSlot, mask: &mut MaskWriter<'_>) {
         mask.fill(true);
     }

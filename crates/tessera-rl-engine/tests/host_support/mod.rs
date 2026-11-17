@@ -72,6 +72,7 @@ impl HostEnvironment for Book {
     const ENV_ID: &'static str = "test/Book-v1";
     const ENV_VERSION: u32 = 1;
     const MAX_AGENTS: usize = AGENTS;
+    const MASKS: bool = true;
     type Config = BookConfig;
 
     fn new(cfg: &BookConfig) -> Result<Self, HostError> {

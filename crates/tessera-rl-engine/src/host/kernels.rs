@@ -416,7 +416,11 @@ fn observe_rows<E: HostEnvironment, const A: usize, const ZERO: bool>(
             }
             used += 1;
         }
-        let mut mask = masks.get_mut(k * *mask_len..(k + 1) * *mask_len);
+        let mut mask = if E::MASKS {
+            masks.get_mut(k * *mask_len..(k + 1) * *mask_len)
+        } else {
+            None
+        };
         if let Some(m) = mask.as_deref_mut() {
             m.fill(Bool8::FALSE);
         }

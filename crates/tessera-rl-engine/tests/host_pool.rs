@@ -549,6 +549,18 @@ fn test_host_pool_outputs_one_storage_generations_and_lifetime() {
     assert!(storage.bytes() > 0, "the memory outlives the pool");
 }
 
+#[test]
+fn test_host_pool_without_masks_has_no_mask_buffer() {
+    // `Wide` keeps the default `MASKS = false`; `Book` sets it.
+    let mut p = HostPool::<Wide<3>, 1>::new(&WideConfig, options(2, 0)).unwrap();
+    assert_eq!(p.reset_all(Reseed::Keep).unwrap().masks().len(), 0);
+    let mut b = pool(2, 0, BookConfig::default());
+    assert_eq!(
+        b.reset_all(Reseed::Keep).unwrap().masks().len(),
+        2 * AGENTS * 7
+    );
+}
+
 /// A `SameStep` reset's observation is written on zeroed rows (ADR-0058):
 /// the rows held the terminal observation, and an environment that writes
 /// nothing at an episode's start must leave zeros, not the old bytes.
@@ -575,4 +587,98 @@ fn test_host_pool_same_step_reset_observes_on_zeroed_rows() {
         [0; 4],
         "the old bytes leaked into the reset's rows"
     );
+}
+
+/// A host environment with one `Discrete(n)` head per agent whose `mask`
+/// panics unless `M` (its `MASKS`), and otherwise makes only choice 0
+/// legal.
+struct Choices<const M: bool>;
+
+#[derive(Clone, Copy)]
+struct ChoicesConfig {
+    n: u32,
+}
+
+impl EnvConfig for ChoicesConfig {}
+
+impl<const M: bool> HostEnvironment for Choices<M> {
+    const ENV_ID: &'static str = "test/Choices-v1";
+    const ENV_VERSION: u32 = 1;
+    const MAX_AGENTS: usize = 1;
+    const MASKS: bool = M;
+    type Config = ChoicesConfig;
+
+    fn new(_: &ChoicesConfig) -> Result<Self, HostError> {
+        Ok(Self)
+    }
+
+    fn observation_space(_: &ChoicesConfig) -> Result<Space, SpaceError> {
+        Ok(Space::Discrete { n: 2 })
+    }
+
+    fn action_space(cfg: &ChoicesConfig) -> Result<Space, SpaceError> {
+        Ok(Space::Discrete { n: cfg.n })
+    }
+
+    fn reset(&mut self, _: HostSeed, _: &mut StepOut<'_>) {}
+
+    fn step(&mut self, _: &Actions<'_, ()>, _: &mut StepOut<'_>) {}
+
+    fn observe(&self, _: AgentSlot, _: &mut ObsWriter<'_, '_, ()>) {}
+
+    fn mask(&self, _: AgentSlot, mask: &mut tessera_rl_core::io::MaskWriter<'_>) {
+        assert!(M, "mask called without MASKS");
+        mask.fill(false);
+        mask.set(0, true);
+    }
+}
+
+#[test]
+fn test_host_pool_masks_false_no_buffer_no_mask_calls_large_discrete_accepted() {
+    // 2^31 choices: a mask row would be 2 GiB, past the default budget.
+    let cfg = ChoicesConfig { n: 1 << 31 };
+    let mut p = HostPool::<Choices<false>, 1>::new(&cfg, options(2, 0)).unwrap();
+    assert_eq!(p.action_heads(), (1, 0));
+    let out = p.reset_all(Reseed::Keep).unwrap();
+    assert_eq!(out.masks().len(), 0);
+    let out = p
+        .step(ActionInput {
+            discrete: &[5, 1 << 30],
+            continuous: &[],
+        })
+        .unwrap();
+    assert_eq!(out.masks().len(), 0);
+    assert!(!p.is_poisoned(), "mask was never called");
+}
+
+#[test]
+fn test_host_pool_masks_true_layout_and_budget_check() {
+    let small = ChoicesConfig { n: 4 };
+    // With MASKS the environment's mask is written: only choice 0 is legal.
+    let mut p = HostPool::<Choices<true>, 1>::new(&small, options(2, 0)).unwrap();
+    let masks: Vec<bool> = p
+        .reset_all(Reseed::Keep)
+        .unwrap()
+        .masks()
+        .iter()
+        .map(|b| b.get())
+        .collect();
+    assert_eq!(masks, [true, false, false, false].repeat(2));
+    // The mask buffer is sized and checked against the budget.
+    let large = ChoicesConfig { n: 1 << 31 };
+    assert!(matches!(
+        HostPool::<Choices<true>, 1>::new(&large, options(2, 0)).err(),
+        Some(EngineError::MaskBudgetExceeded { .. })
+    ));
+    let mut tight = options(2, 0);
+    tight.mask_budget_bytes = 7;
+    assert!(matches!(
+        HostPool::<Choices<true>, 1>::new(&small, tight).err(),
+        Some(EngineError::MaskBudgetExceeded {
+            bytes: 8,
+            budget: 7
+        })
+    ));
+    tight.mask_budget_bytes = 8;
+    assert!(HostPool::<Choices<true>, 1>::new(&small, tight).is_ok());
 }

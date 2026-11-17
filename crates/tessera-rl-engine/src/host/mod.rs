@@ -125,7 +125,12 @@ impl<E: HostEnvironment, const A: usize> HostPool<E, A> {
         let leaves = obs_leaves(&obs_space)?;
         let num_envs = usize::try_from(options.num_envs.get()).map_err(|_| too_large())?;
         let rows = num_envs.checked_mul(A).ok_or_else(too_large)?;
-        let mask_len = mask_len(&mut layout, rows, options.mask_budget_bytes)?;
+        // Without `HostEnvironment::MASKS` there is no mask buffer (SPEC 14.4).
+        let mask_len = if E::MASKS {
+            mask_len(&mut layout, rows, options.mask_budget_bytes)?
+        } else {
+            0
+        };
         let outputs = Outputs::new(
             num_envs,
             A,
