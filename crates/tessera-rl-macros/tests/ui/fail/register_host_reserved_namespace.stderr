@@ -1,0 +1,7 @@
+error[E0080]: evaluation panicked: register_host!: the tessera/ namespace is reserved for first-party environments
+  --> tests/ui/fail/register_host_reserved_namespace.rs:47:1
+   |
+47 | tessera_rl::register_host!(Book, id = "tessera/Book-v1");
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ evaluation of `_` failed here
+   |
+   = note: this error originates in the macro `$crate::panic::panic_2021` which comes from the expansion of the macro `tessera_rl::register_host` (in Nightly builds, run with -Z macro-backtrace for more info)
