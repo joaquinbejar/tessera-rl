@@ -92,6 +92,22 @@ def check_rerun(m: dict, earlier_path: str | None) -> int:
     return ro["position"]
 
 
+WALL_CLOCK = "CLOCK_MONOTONIC_RAW"  # ADR-0064
+
+
+def check_wall_clock(rows: list[dict], m: dict, decide: dict) -> None:
+    """ADR-0064: the manifest, the clock verdict and every result row are on
+    CLOCK_MONOTONIC_RAW; anything not read from raw is refused."""
+    if m.get("wall_clock") != WALL_CLOCK:
+        raise ValueError(f"the manifest's wall_clock is not {WALL_CLOCK}")
+    if decide.get("binding_guest_clock") != WALL_CLOCK:
+        raise ValueError(f"the clock decide output does not bind {WALL_CLOCK}")
+    for r in rows:
+        res = r.get("result")
+        if res is not None and res.get("wall_clock") != WALL_CLOCK:
+            raise ValueError(f"run {r.get('round')}/{r.get('position')} was not timed on {WALL_CLOCK}")
+
+
 def complete(rows: list[dict], m: dict) -> bool:
     """ADR-0061 A1: every run of the manifest's order, in order, rc 0, no
     process left."""
@@ -138,6 +154,7 @@ def main(argv=None) -> int:
         check_instruments(decide, m)
         position = check_rerun(m, args.rerun_of_manifest)
         rows = [json.loads(x) for x in rows_data.decode().splitlines() if x.strip()]
+        check_wall_clock(rows, m, decide)
     except (ValueError, OSError, KeyError, TypeError, IndexError) as e:
         print(f"REFUSED: {e}", flush=True)
         return EXIT_REFUSED

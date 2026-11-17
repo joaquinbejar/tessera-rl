@@ -30,8 +30,11 @@ Process rules:
   utilization monitor stopped and joined. The run's own child processes are
   listed before and after, terminated and reaped. ``PuffeRL.close()`` is not
   called, as it saves a checkpoint. No ``os._exit``.
-- Wall time uses ``time.perf_counter``. PufferLib's own ``Profile`` keeps
-  ``time.time``, as published.
+- Wall time is ``CLOCK_MONOTONIC_RAW`` through ``wall_now()``, with no
+  fallback (ADR-0064): the guest's time agents slew ``perf_counter``, not
+  the raw counter. Every result row names its clock in ``wall_clock``.
+  PufferLib's own ``Profile`` keeps ``time.time``, as published, and decides
+  nothing.
 
 Usage::
 
@@ -54,6 +57,17 @@ import signal
 import sys
 import tempfile
 import time
+
+# ADR-0064: gate walls on CLOCK_MONOTONIC_RAW, with no fallback.
+WALL_CLOCK = "CLOCK_MONOTONIC_RAW"
+_RAW = getattr(time, "CLOCK_MONOTONIC_RAW", None)
+if _RAW is None:
+    raise ImportError("split.py needs time.CLOCK_MONOTONIC_RAW (ADR-0064); this platform has none")
+
+
+def wall_now() -> float:
+    """The gate's wall clock: CLOCK_MONOTONIC_RAW, read directly."""
+    return time.clock_gettime(_RAW)
 
 CASES = ("ocean-serial", "ocean-mp", "tessera-w1", "tessera-w2")
 MODES = ("e2e", "sync", "env")
@@ -183,11 +197,11 @@ def run_env(vec, steps: int, warmup: int = 300) -> dict:
         vec.recv()
     # Nothing is pending here. Each timed step is a send and its matching recv,
     # so the last transition completes inside the window.
-    start = time.perf_counter()
+    start = wall_now()
     for i in range(steps):
         vec.send(actions[(warmup + i) % 256])
         vec.recv()
-    wall = time.perf_counter() - start
+    wall = wall_now() - start
     return {"steps": steps * n, "wall_s": wall, "sps": steps * n / wall}
 
 
@@ -212,7 +226,7 @@ def flat_profile(module):
             self.mark = None
 
         def _charge(self):
-            now = time.perf_counter()
+            now = wall_now()
             if self.current is not None:
                 self.flat[self.current] = self.flat.get(self.current, 0.0) + now - self.mark
             self.mark = now
@@ -252,12 +266,12 @@ def run_trainer(module, vec, cfg: dict, mode: str, epochs: int, device: str) -> 
             flat0 = dict(trainer.profile.flat)
         synchronize(torch, device)
         step0 = int(trainer.global_step)
-        start = time.perf_counter()
+        start = wall_now()
         for _ in range(epochs - 1):
             trainer.evaluate()
             trainer.train()
         synchronize(torch, device)
-        wall = time.perf_counter() - start
+        wall = wall_now() - start
         steps = int(trainer.global_step) - step0
         out = {
             "steps": steps,
@@ -366,6 +380,7 @@ def main(argv=None) -> int:
             record["epochs_timed"] = args.epochs - 1
         record["advantage_backend"] = advantage_backend(module)
         record.update(result)
+        record["wall_clock"] = WALL_CLOCK
     finally:
         record["monitors_left"] = stop_monitors()
         if vec is not None:

@@ -57,20 +57,24 @@ def ident(t):
     return t
 
 
-def session(pre=320.0, timed=600.0, post=320.0, step=2.0, qpc=ident, perf=None, ref_rtt=0.02, ref_every=5.0,
+def session(pre=320.0, timed=600.0, post=320.0, step=2.0, qpc=ident, raw=None, slew=None, ref_rtt=0.02, ref_every=5.0,
             drop=(), ref_drop=(), sources=("tsc", "tsc", "tsc", "tsc"), speeds=None, end=True, host_end=True,
             ref_end=True, events=(), first_long=False, cpu_rate=0.001, scope="session"):  # fmt: skip
     """Synthetic sampler and reference streams on true time t (the
-    reference's monotonic clock). ``qpc`` maps t to host QPC seconds and
-    ``perf`` maps QPC seconds to guest perf seconds (default: equal)."""
-    perf = perf or ident
+    reference's monotonic clock). ``qpc`` maps t to host QPC seconds; ``raw``
+    maps QPC seconds to the guest's CLOCK_MONOTONIC_RAW (the binding clock
+    under ADR-0064, default: equal); ``slew`` maps QPC seconds to the
+    disciplined guest clocks perf, mono and real (default: equal to raw)."""
+    raw = raw or ident
+    disc = slew or raw
     total = pre + timed + post if scope == "session" else pre
     rows = [{"kind": "header", "clock_py_sha256": MANIFEST["clock_py_sha256"], "cpu": 3}]
     speeds = speeds or ["3000"] * 4
     ctx_at = [0.0, pre, pre + timed, total]
 
     def ctx(k):
-        rows.append({"kind": "context", "at": str(k), "mono": perf(qpc(ctx_at[k])), "current_clocksource": sources[k],
+        rows.append({"kind": "context", "at": str(k), "raw": raw(qpc(ctx_at[k])), "mono": disc(qpc(ctx_at[k])),
+                     "current_clocksource": sources[k],
                      "cpu_mhz_current_max": [speeds[k], "3000"], "host_cpu_s": 0.0005 * ctx_at[k]})  # fmt: skip
 
     ctx(0)
@@ -85,13 +89,13 @@ def session(pre=320.0, timed=600.0, post=320.0, step=2.0, qpc=ident, perf=None, 
             ctx(2)
         if not any(a <= t < b for a, b in drop):
             q = qpc(t)
-            g = perf(q)
+            g, d = raw(q), disc(q)
             w = 0.25 if (first_long and i == 0) else 0.001
-            before = {k: g - w for k in ("perf", "mono", "raw", "real")}
-            after = {k: g + w for k in ("perf", "mono", "raw", "real")}
+            before = {"raw": g - w, **{k: d - w for k in ("perf", "mono", "real")}}
+            after = {"raw": g + w, **{k: d + w for k in ("perf", "mono", "real")}}
             smp = {"kind": "sample", "i": i, "tag": tag, "guest_before": before, "guest_after": after,
                    "host": {"qpc": round(q * FREQ), "qpc_freq": FREQ, "utc_ticks": round(t * 1e7)},
-                   "host_bracket_perf": [g - 0.0005, g + 0.0005], "rusage": [cpu_rate * t, 0.0]}  # fmt: skip
+                   "host_bracket_raw": [g - 0.0005, g + 0.0005], "rusage": [cpu_rate * t, 0.0]}  # fmt: skip
             rows.append(smp)
             i += 1
         t = round(t + step, 6)
@@ -115,7 +119,7 @@ def session(pre=320.0, timed=600.0, post=320.0, step=2.0, qpc=ident, perf=None, 
         t = round(t + ref_every, 6)
     if ref_end and scope == "session":
         ref.append({"kind": "event", "event": "end"})
-    status = {"timed_start_mono": perf(qpc(pre)) + 0.5, "timed_end_mono": perf(qpc(pre + timed)) - 0.5}
+    status = {"timed_start_raw": raw(qpc(pre)) + 0.5, "timed_end_raw": raw(qpc(pre + timed)) - 0.5}
     return rows, ref, status
 
 
@@ -133,9 +137,19 @@ def test_clock_decide_nominal_everywhere_is_clock_valid():
     assert d["coverage"]["external"]["longest_gap_s"] <= clock.COVER_MAX_GAP_S
 
 
-def test_clock_decide_perf_at_13_12_in_the_timed_span_is_b():
-    d = decide(perf=scaled(500.0, 13 / 12))
+def test_clock_decide_raw_at_13_12_in_the_timed_span_is_b():
+    d = decide(raw=scaled(500.0, 13 / 12))
     assert d["outcome"] == "clock-invalid" and "b" in d["conditions"] and "c" not in d["conditions"]
+    assert d["binding_guest_clock"] == "CLOCK_MONOTONIC_RAW"
+
+
+def test_clock_decide_a_perf_only_slew_is_reported_not_judged():
+    # ADR-0064: the guest's time agents slew perf_counter (0.987842 in rehearsal 2),
+    # not CLOCK_MONOTONIC_RAW; the session stays valid and the slew is reported.
+    d = decide(slew=scaled(500.0, 0.987842))
+    assert d["outcome"] == "clock-valid" and "b" not in d["conditions"]
+    assert "other" in d["reported"]["other_guest_clocks"]["perf"]
+    assert d["reported"]["perf_worst"] == pytest.approx(0.012158, abs=1e-4)
 
 
 def test_clock_decide_a_shared_fault_is_seen_only_by_the_outside_reference():
@@ -200,11 +214,11 @@ def test_clock_decide_a_lost_reference_session_is_d3():
 
 
 def test_clock_decide_a_fault_inside_a_sampler_gap_is_still_judged():
-    # perf runs at 13/12 only while the sampler is silent (700 to 740 s).
-    def perf(q):
+    # raw runs at 13/12 only while the sampler is silent (700 to 740 s).
+    def fault(q):
         return q if q < 700 else 700 + min(q - 700, 40) * 13 / 12 + max(q - 740, 0)
 
-    d = decide(perf=perf, drop=[(700.0, 740.0)])
+    d = decide(raw=fault, drop=[(700.0, 740.0)])
     assert "b" in d["conditions"] and "d2" in d["conditions"]
     assert d["outcome"] == "clock-invalid"
 
@@ -254,7 +268,7 @@ def test_clock_decide_a_short_pre_check_is_a():
 
 
 def test_clock_decide_a_fault_wins_over_missing_coverage():
-    d = decide(perf=scaled(500.0, 13 / 12), ref_drop=[(700.0, 740.0)])
+    d = decide(raw=scaled(500.0, 13 / 12), ref_drop=[(700.0, 740.0)])
     assert "b" in d["conditions"] and "d1" in d["conditions"]
     assert d["outcome"] == "clock-invalid"
 
@@ -281,23 +295,24 @@ def test_clock_reads_with_a_long_round_trip_are_unusable():
     assert decide(ref_rtt=0.3)["outcome"] == "instrumentation failed"
 
 
-def test_clock_the_first_sample_exclusion_applies_to_mono_raw_real_only():
+def test_clock_the_first_sample_exclusion_applies_to_perf_mono_real_only():
     rows, _, _ = session(first_long=True)
     g = clock.guest_intervals([r for r in rows if r.get("kind") == "sample"])
-    assert g[0]["band_mono"] == g[0]["band_raw"] == g[0]["band_real"] == "unclassified"
-    assert g[0]["band_perf"] == "nominal"
-    assert g[1]["band_mono"] == "nominal"
+    assert g[0]["band_perf"] == g[0]["band_mono"] == g[0]["band_real"] == "unclassified"
+    assert g[0]["band_raw"] == "nominal"
+    assert g[1]["band_perf"] == "nominal"
 
 
 def test_clock_pre_check_gate():
     assert decide(scope="pre-check")["decision"] == "go"
     assert decide(scope="pre-check", ref_rtt=0.3)["decision"] == "stop"
-    assert decide(scope="pre-check", perf=scaled(100.0, 13 / 12))["decision"] == "stop"
+    assert decide(scope="pre-check", raw=scaled(100.0, 13 / 12))["decision"] == "stop"
+    assert decide(scope="pre-check", slew=scaled(100.0, 0.987842))["decision"] == "go"
 
 
 def test_clock_status_values_map_onto_the_qpc_axis():
-    # guest monotonic = QPC + 1000 s: the timed span maps back to QPC [320.5, 919.5].
-    d = decide(perf=lambda q: q + 1000.0)
+    # guest raw = QPC + 1000 s: the timed span (on raw) maps back to QPC [320.5, 919.5].
+    d = decide(raw=lambda q: q + 1000.0)
     lo, hi = d["timed_qpc_s"]
     assert lo == pytest.approx(320.5) and hi == pytest.approx(919.5)
 
@@ -322,7 +337,8 @@ def write(path, data: bytes) -> str:
 def gate_rows(rc=0, drop=0):
     rows = []
     for r, i, c, m in driver.from_order(manifest.order(manifest.CASES, manifest.MODES, 1)):
-        res = {"sps": 2.0 if c.startswith("tessera") else 1.0, "advantage_backend": "cuda", "scale": "full"}
+        res = {"sps": 2.0 if c.startswith("tessera") else 1.0, "advantage_backend": "cuda", "scale": "full",
+               "wall_clock": "CLOCK_MONOTONIC_RAW"}
         if m != "env":
             res["epochs_timed"] = driver.GATE_EPOCHS_TIMED
         if c.startswith("tessera"):
@@ -335,7 +351,8 @@ def gate_rows(rc=0, drop=0):
 
 def gate_manifest(**over):
     m = {"commit": "c" * 40, "wheel_sha256": "w" * 64, "cuda_toolkit": "13.2.86", "native_sha256": "e" * 64,
-         "order": manifest.order(manifest.CASES, manifest.MODES, 1), **MANIFEST, "rerun_of": None}  # fmt: skip
+         "order": manifest.order(manifest.CASES, manifest.MODES, 1), **MANIFEST, "rerun_of": None,
+         "wall_clock": "CLOCK_MONOTONIC_RAW"}  # fmt: skip
     m.update(over)
     return m
 
@@ -348,6 +365,7 @@ def run_summarise(tmp_path, rows=None, m=None, outcome="clock-valid", decide_ove
     rsha = write(d / "rows.jsonl", "".join(json.dumps(r) + "\n" for r in rows).encode())
     msha = write(d / "m.json", manifest.canonical(m))
     dec = {"scope": "session", "manifest_sha256": msha, "outcome": outcome, "conditions": {},
+           "binding_guest_clock": "CLOCK_MONOTONIC_RAW",
            "instruments": {"clock_py_sha256": m["clock_py_sha256"], "clock_ref_py_sha256": m["clock_ref_py_sha256"],
                            "clock_ref_host": "ref.example", "clock_ref_args": ["--out", "r.jsonl"], "clock_cpu": 3}}  # fmt: skip
     for k, v in (decide_over or {}).items():
@@ -417,7 +435,7 @@ def test_summarise_writes_a_reported_instruments_mismatch_as_a_failed_row(tmp_pa
 
 @pytest.mark.parametrize("over", [{"clock_py_sha256": "0" * 64}, {"clock_ref_host": "other"}], ids=["selfhash", "instruments"])
 def test_clock_decide_a_wrong_instrument_beats_a_fault(over):
-    d = decide(manifest={**MANIFEST, **over}, perf=scaled(500.0, 13 / 12))
+    d = decide(manifest={**MANIFEST, **over}, raw=scaled(500.0, 13 / 12))
     assert "b" in d["conditions"] and d["outcome"] == "instrumentation failed"
 
 
@@ -528,8 +546,8 @@ def test_driver_sealed_rows_leak_no_progress(tmp_path, capsys, monkeypatch):
     got = [json.loads(x) for x in rows.read_text().splitlines()]
     assert len(got) == len(manifest.CASES) * len(manifest.MODES) and all(r["log"] for r in got)
     st = json.loads(status.read_text())
-    assert set(st) == {"rows_sha256", "manifest_sha256", "timed_start_mono", "timed_end_mono"}
-    assert st["rows_sha256"] == sha and st["timed_start_mono"] < st["timed_end_mono"]
+    assert set(st) == {"rows_sha256", "manifest_sha256", "timed_start_raw", "timed_end_raw"}
+    assert st["rows_sha256"] == sha and st["timed_start_raw"] < st["timed_end_raw"]
 
 
 def test_driver_writes_timed_start_before_the_first_run_ends(tmp_path, capsys, monkeypatch):
@@ -542,7 +560,7 @@ def test_driver_writes_timed_start_before_the_first_run_ends(tmp_path, capsys, m
     sealed_attempt(tmp_path, capsys, monkeypatch, script)
     early = json.loads(seen.read_text())
     final = json.loads((tmp_path / "status.json").read_text())
-    assert early["timed_start_mono"] == final["timed_start_mono"] and early["timed_end_mono"] is None
+    assert early["timed_start_raw"] == final["timed_start_raw"] and early["timed_end_raw"] is None
 
 
 def test_driver_refuses_out_or_missing_rows_in_a_manifest_attempt(tmp_path, capsys):
@@ -923,3 +941,70 @@ def test_clock_ref_header_passes_decide_and_summarise(tmp_path):
                          str(tmp_path / "m.json"), "--manifest-sha256", msha, "--clock-decide", str(tmp_path / "d.json"),
                          "--clock-decide-sha256", dsha, "--sent-at", "x", "--out", str(tmp_path / "s.jsonl")])  # fmt: skip
     assert rc == 0
+
+
+# ------------------------------------------------------------- ADR-0064
+
+
+def test_split_wall_now_reads_clock_monotonic_raw(monkeypatch):
+    import split
+
+    seen = []
+    monkeypatch.setattr(split.time, "clock_gettime", lambda c: seen.append(c) or 42.0)
+    assert split.wall_now() == 42.0 and seen == [time.CLOCK_MONOTONIC_RAW]
+    assert split.WALL_CLOCK == "CLOCK_MONOTONIC_RAW"
+
+
+def test_split_refuses_to_import_without_clock_monotonic_raw():
+    # No fallback: a platform without CLOCK_MONOTONIC_RAW cannot import split.py.
+    code = ("import sys, time; delattr(time, 'CLOCK_MONOTONIC_RAW'); sys.path.insert(0, %r)\n"
+            "try:\n    import split\nexcept ImportError as e:\n    print('refused:', e)\n") % str(HARNESS)
+    p = subprocess.run([sys.executable, "-I", "-c", code], capture_output=True, text=True, timeout=60)
+    assert "refused: split.py needs time.CLOCK_MONOTONIC_RAW" in p.stdout
+
+
+def test_split_has_no_perf_counter_wall():
+    src = (HARNESS / "split.py").read_text()
+    assert "perf_counter()" not in src and src.count("wall_now()") >= 5
+
+
+def test_manifest_records_the_wall_clock(tmp_path, capsys):
+    from test_gpu_split import make_manifest
+
+    _, argv = make_manifest(tmp_path)
+    assert manifest.main(argv) == 0
+    digest = capsys.readouterr().out.strip()
+    assert manifest.load(str(tmp_path / "manifest.json"), digest)["wall_clock"] == "CLOCK_MONOTONIC_RAW"
+
+
+@pytest.mark.parametrize("where", ["row", "missing", "manifest", "decide"])
+def test_summarise_refuses_anything_not_read_from_raw(tmp_path, capsys, where):
+    rows, m, over = gate_rows(), gate_manifest(), None
+    if where == "row":
+        rows[3]["result"]["wall_clock"] = "perf_counter"
+    elif where == "missing":
+        del rows[5]["result"]["wall_clock"]
+    elif where == "manifest":
+        m["wall_clock"] = "perf_counter"
+    else:
+        over = {"binding_guest_clock": "perf_counter"}
+    rc, s, _ = run_summarise(tmp_path, rows=rows, m=m, decide_over=over)
+    assert rc == summarise.EXIT_REFUSED and s is None
+    assert "REFUSED" in capsys.readouterr().out
+
+
+def test_driver_refuses_a_manifest_without_the_raw_wall_clock(tmp_path, capsys):
+    from test_gpu_split import make_manifest
+
+    wheel, argv = make_manifest(tmp_path)
+    manifest.main(argv)
+    capsys.readouterr()
+    data = json.loads((tmp_path / "manifest.json").read_text())
+    data["wall_clock"] = "perf_counter"
+    blob = manifest.canonical(data)
+    (tmp_path / "m2.json").write_bytes(blob)
+    rc = driver.main(["--python", f"sh -c 'exit 0' fake {wheel}", "--rows", str(tmp_path / "r.jsonl"), "--status",
+                      str(tmp_path / "s.json"), "--device", "cpu", "--manifest", str(tmp_path / "m2.json"),
+                      "--manifest-sha256", hashlib.sha256(blob).hexdigest(), "--wheel", str(wheel)])  # fmt: skip
+    assert rc == driver.EXIT_REFUSED and "CLOCK_MONOTONIC_RAW" in capsys.readouterr().out
+    assert not (tmp_path / "r.jsonl").exists()
