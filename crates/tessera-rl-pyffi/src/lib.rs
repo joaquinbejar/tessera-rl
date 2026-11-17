@@ -28,5 +28,6 @@ pub mod errors;
 /// Items the exported macros name. Not public API.
 #[doc(hidden)]
 pub mod __private {
+    pub use inventory;
     pub use tessera_rl_num::fp;
 }

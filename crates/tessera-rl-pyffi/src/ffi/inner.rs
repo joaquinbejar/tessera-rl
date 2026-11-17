@@ -28,6 +28,13 @@ pub struct Inner<T: ?Sized> {
     born: u64,
 }
 
+// SAFETY: a lock. Every path to `T` (`with`, `peek`, `take`) acquires
+// `busy` first and releases it on return, and no other method reads or
+// writes `ops`, so at most one thread reaches `T` at a time; sharing
+// `&Inner` across threads then only moves `T` between them, which
+// `T: Send` allows (as `Mutex<T>: Sync` for `T: Send`).
+unsafe impl<T: ?Sized + Send> Sync for Inner<T> {}
+
 /// Releases the reentrancy guard on drop.
 struct Busy<'a>(&'a AtomicBool);
 

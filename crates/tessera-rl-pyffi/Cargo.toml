@@ -21,6 +21,7 @@ default = []
 test-hooks = []
 
 [dependencies]
+inventory.workspace = true
 pyo3.workspace = true
 tessera-rl-engine.workspace = true
 tessera-rl-num.workspace = true

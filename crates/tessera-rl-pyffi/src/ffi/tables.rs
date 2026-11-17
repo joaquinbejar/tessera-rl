@@ -8,7 +8,7 @@ use core::ptr;
 
 use pyo3::ffi;
 
-use super::thunks::{CFunction, CFunctionKw, Destructor, GetBuffer, ThunkFn};
+use super::thunks::{CFunction, CFunctionKw, Destructor, GetBuffer, ReleaseBuffer, ThunkFn};
 
 /// A method row with positional arguments (`METH_NOARGS` or `METH_VARARGS`).
 pub const fn method(
@@ -67,6 +67,14 @@ pub const fn slot_getbuffer(thunk: ThunkFn<GetBuffer>) -> ffi::PyType_Slot {
     }
 }
 
+/// The `Py_bf_releasebuffer` slot.
+pub(crate) const fn slot_releasebuffer(thunk: ThunkFn<ReleaseBuffer>) -> ffi::PyType_Slot {
+    ffi::PyType_Slot {
+        slot: ffi::Py_bf_releasebuffer,
+        pfunc: thunk.get() as *mut c_void,
+    }
+}
+
 /// The `Py_tp_methods` slot. `methods` must end with [`method_end`]; a
 /// table that does not is rejected when the static is evaluated.
 pub const fn slot_methods(methods: &'static [ffi::PyMethodDef]) -> ffi::PyType_Slot {
@@ -78,6 +86,15 @@ pub const fn slot_methods(methods: &'static [ffi::PyMethodDef]) -> ffi::PyType_S
     ffi::PyType_Slot {
         slot: ffi::Py_tp_methods,
         pfunc: methods.as_ptr().cast_mut().cast(),
+    }
+}
+
+/// The `Py_tp_methods` slot of a typed table (`object::MethodTable`),
+/// checked to end with its terminating row when it was built.
+pub(crate) const fn slot_method_rows(first: *const ffi::PyMethodDef) -> ffi::PyType_Slot {
+    ffi::PyType_Slot {
+        slot: ffi::Py_tp_methods,
+        pfunc: first.cast_mut().cast(),
     }
 }
 

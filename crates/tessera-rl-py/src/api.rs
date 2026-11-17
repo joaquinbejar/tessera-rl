@@ -22,10 +22,10 @@ use crate::split::{HalfOutput, Polled, SplitOps};
 use crate::view::{ViewSet, ViewSpec, half_view_set};
 
 /// Keyword arguments, as exact `(str, value)` pairs.
-pub(crate) struct Kwargs<'a>(Vec<(String, Ref<'a>)>);
+pub(crate) struct Kwargs<'py>(Vec<(String, Mine<'py>)>);
 
-impl<'a> Kwargs<'a> {
-    pub(crate) fn parse(g: Gil, kwargs: Option<Ref<'a>>) -> CResult<Self> {
+impl<'py> Kwargs<'py> {
+    pub(crate) fn parse(g: Gil<'py>, kwargs: Option<Ref<'_>>) -> CResult<Self> {
         Ok(Self(match kwargs {
             Some(d) => capi::dict_items(g, d, "keyword arguments")?,
             None => Vec::new(),
@@ -33,11 +33,11 @@ impl<'a> Kwargs<'a> {
     }
 
     /// The value of `key`, absent or `None` as `None`.
-    pub(crate) fn get(&self, key: &str) -> Option<Ref<'a>> {
+    pub(crate) fn get(&self, key: &str) -> Option<Ref<'_>> {
         self.0
             .iter()
             .find(|(k, _)| k == key)
-            .map(|(_, v)| *v)
+            .map(|(_, v)| v.as_ref())
             .filter(|v| !v.is_none())
     }
 
@@ -507,11 +507,14 @@ pub(crate) fn make_go9(g: Gil, kwargs: Option<Ref<'_>>) -> CResult<Inner> {
     Ok(Inner::new(ops, borrowed))
 }
 
-pub(crate) fn int(g: Gil, v: usize) -> CResult<Mine> {
+pub(crate) fn int(g: Gil<'_>, v: usize) -> CResult<Mine<'_>> {
     capi::int_u64(g, u64::try_from(v).unwrap_or(u64::MAX))
 }
 
-pub(crate) fn list_of(g: Gil, items: impl IntoIterator<Item = CResult<Mine>>) -> CResult<Mine> {
+pub(crate) fn list_of<'py>(
+    g: Gil<'py>,
+    items: impl IntoIterator<Item = CResult<Mine<'py>>>,
+) -> CResult<Mine<'py>> {
     let list = capi::list(g)?;
     for item in items {
         capi::list_append(g, &list, &item?)?;
@@ -520,7 +523,7 @@ pub(crate) fn list_of(g: Gil, items: impl IntoIterator<Item = CResult<Mine>>) ->
 }
 
 /// `layout()`: the shapes and dtypes the Python layer needs.
-pub(crate) fn layout(g: Gil, inner: &Inner) -> CResult<Mine> {
+pub(crate) fn layout<'py>(g: Gil<'py>, inner: &Inner) -> CResult<Mine<'py>> {
     inner.with(g, |ops| {
         let l = ops.layout();
         let d = capi::dict(g)?;
@@ -631,7 +634,7 @@ fn exactly<'a, const N: usize>(g: Gil, args: Ref<'a>, name: &str) -> CResult<[Re
 pub(crate) fn u32_list(g: Gil, v: Ref<'_>, what: &str) -> CResult<Vec<u32>> {
     capi::list_items(g, v, what)?
         .into_iter()
-        .map(|item| capi::to_u32(g, item, what))
+        .map(|item| capi::to_u32(g, item.as_ref(), what))
         .collect()
 }
 
@@ -639,7 +642,7 @@ pub(crate) fn u32_list(g: Gil, v: Ref<'_>, what: &str) -> CResult<Vec<u32>> {
 /// returns the outputs, captured in the same admitted section. `seed` is
 /// `None` (keep the seeds), an int (the k-th reset instance gets
 /// `seed + k`) or a list with one seed (or `None`) per reset instance.
-pub(crate) fn reset(g: Gil, inner: &Inner, args: Ref<'_>) -> CResult<Mine> {
+pub(crate) fn reset<'py>(g: Gil<'py>, inner: &Inner, args: Ref<'_>) -> CResult<Mine<'py>> {
     let a = positional(g, args, "reset", 3)?;
     let seed = match a.first().copied().flatten() {
         None => ResetSeed::Keep,
@@ -647,8 +650,8 @@ pub(crate) fn reset(g: Gil, inner: &Inner, args: Ref<'_>) -> CResult<Mine> {
             capi::list_items(g, v, "seed")?
                 .into_iter()
                 .map(|s| {
-                    (!s.is_none())
-                        .then(|| capi::to_u64(g, s, "a seed"))
+                    (!s.as_ref().is_none())
+                        .then(|| capi::to_u64(g, s.as_ref(), "a seed"))
                         .transpose()
                 })
                 .collect::<CResult<_>>()?,
@@ -764,7 +767,12 @@ fn require_split(g: Gil, inner: &Inner, call: &'static str) -> CResult<Arc<dyn S
 }
 
 /// One half's outputs: `{half, start, end, outputs}`.
-fn half_output(g: Gil, inner: &Inner, split: &dyn SplitOps, out: &HalfOutput) -> CResult<Mine> {
+fn half_output<'py>(
+    g: Gil<'py>,
+    inner: &Inner,
+    split: &dyn SplitOps,
+    out: &HalfOutput,
+) -> CResult<Mine<'py>> {
     let rows = split
         .halves()
         .get(out.half)
@@ -800,7 +808,7 @@ fn half_output(g: Gil, inner: &Inner, split: &dyn SplitOps, out: &HalfOutput) ->
 /// `send(half, actions: bytes, delivered)`: starts the next step of `half`;
 /// `actions` are little-endian int32 (float32 for a continuous head), one per agent row of the half.
 /// `delivered` is the last `seq` the caller holds.
-pub(crate) fn send(g: Gil, inner: &Inner, args: Ref<'_>) -> CResult<Mine> {
+pub(crate) fn send<'py>(g: Gil<'py>, inner: &Inner, args: Ref<'_>) -> CResult<Mine<'py>> {
     let a: [Ref<'_>; 3] = exactly(g, args, "send")?;
     let [half, actions, delivered] = a;
     let delivered = capi::to_u64(g, delivered, "delivered")?;
@@ -833,7 +841,7 @@ pub(crate) const CONCURRENT_RECV: &str =
 
 /// `snapshot_all()`: an opaque whole-pool snapshot, for `restore_all` on
 /// this same environment. No work may be in flight.
-pub(crate) fn snapshot_all(g: Gil, inner: &Inner) -> CResult<Mine> {
+pub(crate) fn snapshot_all<'py>(g: Gil<'py>, inner: &Inner) -> CResult<Mine<'py>> {
     if let Some(ops) = batched_of(g, inner)? {
         let taken = g.detach(|| ops.snapshot_all()).map_err(|e| to_py(g, e))?;
         return snapshot_type::new_object(g, taken);
@@ -845,7 +853,7 @@ pub(crate) fn snapshot_all(g: Gil, inner: &Inner) -> CResult<Mine> {
 
 /// `restore_all(snapshot)`: restores every instance and the cycle state and
 /// returns both halves, as `reset`.
-pub(crate) fn restore_all(g: Gil, inner: &Inner, args: Ref<'_>) -> CResult<Mine> {
+pub(crate) fn restore_all<'py>(g: Gil<'py>, inner: &Inner, args: Ref<'_>) -> CResult<Mine<'py>> {
     let a: [Ref<'_>; 1] = exactly(g, args, "restore_all")?;
     let [snapshot] = a;
     let snapshot = snapshot_type::snapshot_of(g, snapshot)?;
@@ -875,7 +883,7 @@ pub(crate) const RECV_WAIT: Duration = Duration::from_millis(50);
 /// time: a second one raises `ConcurrencyError` at once. The result repeats
 /// until `delivered` reaches its `seq`, so a signal raised after this returns
 /// loses nothing.
-pub(crate) fn recv(g: Gil, inner: &Inner, args: Ref<'_>) -> CResult<Mine> {
+pub(crate) fn recv<'py>(g: Gil<'py>, inner: &Inner, args: Ref<'_>) -> CResult<Mine<'py>> {
     let a: [Ref<'_>; 1] = exactly(g, args, "recv")?;
     let [delivered] = a;
     let delivered = capi::to_u64(g, delivered, "delivered")?;
@@ -911,7 +919,7 @@ pub(crate) fn recv(g: Gil, inner: &Inner, args: Ref<'_>) -> CResult<Mine> {
 /// one per agent row. Returns the outputs of this step, captured in the same
 /// admitted section, so no other call can interleave between the mutation
 /// and the copy.
-pub(crate) fn step(g: Gil, inner: &Inner, args: Ref<'_>) -> CResult<Mine> {
+pub(crate) fn step<'py>(g: Gil<'py>, inner: &Inner, args: Ref<'_>) -> CResult<Mine<'py>> {
     let a: [Ref<'_>; 1] = exactly(g, args, "step")?;
     let [actions] = a;
     let actions = actions_of(g, inner, actions)?;
@@ -924,7 +932,7 @@ pub(crate) fn step(g: Gil, inner: &Inner, args: Ref<'_>) -> CResult<Mine> {
 
 /// `outputs()`: the last call's outputs, as borrowed views or owned
 /// copies (the environment's `outputs` mode).
-pub(crate) fn outputs(g: Gil, inner: &Inner) -> CResult<Mine> {
+pub(crate) fn outputs<'py>(g: Gil<'py>, inner: &Inner) -> CResult<Mine<'py>> {
     if let Some(ops) = batched_of(g, inner)? {
         drop(ops);
         return Err(to_py(
@@ -948,7 +956,7 @@ pub(crate) fn outputs(g: Gil, inner: &Inner) -> CResult<Mine> {
 }
 
 /// The outputs dict, built inside the admitted call that produced them.
-fn outputs_of(g: Gil, inner: &Inner, ops: &dyn PoolOps) -> CResult<Mine> {
+fn outputs_of<'py>(g: Gil<'py>, inner: &Inner, ops: &dyn PoolOps) -> CResult<Mine<'py>> {
     if inner.borrowed() {
         return borrowed_views(g, ops);
     }
@@ -956,7 +964,7 @@ fn outputs_of(g: Gil, inner: &Inner, ops: &dyn PoolOps) -> CResult<Mine> {
 }
 
 /// Owned copies as a dict of `bytearray`s.
-pub(crate) fn owned_dict(g: Gil, o: &Owned) -> CResult<Mine> {
+pub(crate) fn owned_dict<'py>(g: Gil<'py>, o: &Owned) -> CResult<Mine<'py>> {
     let d = capi::dict(g)?;
     let obs = list_of(
         g,
@@ -997,18 +1005,18 @@ pub(crate) fn no_format(g: Gil) -> impl FnOnce() -> Raised {
 
 /// Borrowed views of every output (ADR-0003): read-only, valid until the
 /// next call that writes outputs.
-fn borrowed_views(g: Gil, ops: &dyn PoolOps) -> CResult<Mine> {
+fn borrowed_views<'py>(g: Gil<'py>, ops: &dyn PoolOps) -> CResult<Mine<'py>> {
     let set = crate::view::view_set(ops.layout()).ok_or_else(no_format(g))?;
     let storage = ops.readable_storage().map_err(|e| to_py(g, e))?;
     views_dict(g, &set, |spec| new_view(g, &storage, spec, Track::Storage))
 }
 
 /// The views of `set`, as `view` builds each.
-pub(crate) fn views_dict(
-    g: Gil,
+pub(crate) fn views_dict<'py>(
+    g: Gil<'py>,
     set: &ViewSet,
-    view: impl Fn(&ViewSpec) -> CResult<Mine>,
-) -> CResult<Mine> {
+    view: impl Fn(&ViewSpec) -> CResult<Mine<'py>>,
+) -> CResult<Mine<'py>> {
     let d = capi::dict(g)?;
     let obs = list_of(g, set.observations.iter().map(&view))?;
     capi::dict_set(g, &d, c"observations", &obs)?;
@@ -1023,7 +1031,7 @@ pub(crate) fn views_dict(
 }
 
 /// `snapshot(id) -> bytes`: the canonical encoding of instance `id`.
-pub(crate) fn snapshot(g: Gil, inner: &Inner, args: Ref<'_>) -> CResult<Mine> {
+pub(crate) fn snapshot<'py>(g: Gil<'py>, inner: &Inner, args: Ref<'_>) -> CResult<Mine<'py>> {
     let a: [Ref<'_>; 1] = exactly(g, args, "snapshot")?;
     let [id] = a;
     let id = capi::to_u32(g, id, "id")?;
@@ -1040,7 +1048,11 @@ pub(crate) fn snapshot(g: Gil, inner: &Inner, args: Ref<'_>) -> CResult<Mine> {
 
 /// `illegal_actions(id) -> list[int]`: instance `id`'s illegal-but-valid
 /// actions replaced in its current episode, per agent slot (sync mode).
-pub(crate) fn illegal_actions(g: Gil, inner: &Inner, args: Ref<'_>) -> CResult<Mine> {
+pub(crate) fn illegal_actions<'py>(
+    g: Gil<'py>,
+    inner: &Inner,
+    args: Ref<'_>,
+) -> CResult<Mine<'py>> {
     let a: [Ref<'_>; 1] = exactly(g, args, "illegal_actions")?;
     let [id] = a;
     let id = capi::to_u32(g, id, "id")?;
@@ -1051,7 +1063,7 @@ pub(crate) fn illegal_actions(g: Gil, inner: &Inner, args: Ref<'_>) -> CResult<M
 }
 
 /// `state_hash(id) -> int`: instance `id`'s state hash (sync mode).
-pub(crate) fn state_hash(g: Gil, inner: &Inner, args: Ref<'_>) -> CResult<Mine> {
+pub(crate) fn state_hash<'py>(g: Gil<'py>, inner: &Inner, args: Ref<'_>) -> CResult<Mine<'py>> {
     let a: [Ref<'_>; 1] = exactly(g, args, "state_hash")?;
     let [id] = a;
     let id = capi::to_u32(g, id, "id")?;
@@ -1062,7 +1074,7 @@ pub(crate) fn state_hash(g: Gil, inner: &Inner, args: Ref<'_>) -> CResult<Mine> 
 }
 
 /// `import_record(id, record: bytes)`: imports an untrusted record.
-pub(crate) fn import_record(g: Gil, inner: &Inner, args: Ref<'_>) -> CResult<Mine> {
+pub(crate) fn import_record<'py>(g: Gil<'py>, inner: &Inner, args: Ref<'_>) -> CResult<Mine<'py>> {
     let a: [Ref<'_>; 2] = exactly(g, args, "import_record")?;
     let [id, record] = a;
     let id = capi::to_u32(g, id, "id")?;
@@ -1075,7 +1087,7 @@ pub(crate) fn import_record(g: Gil, inner: &Inner, args: Ref<'_>) -> CResult<Min
 }
 
 /// `encode(ids: list[int]) -> bytes`: the persisted file of `ids` (ADR-0011).
-pub(crate) fn encode(g: Gil, inner: &Inner, args: Ref<'_>) -> CResult<Mine> {
+pub(crate) fn encode<'py>(g: Gil<'py>, inner: &Inner, args: Ref<'_>) -> CResult<Mine<'py>> {
     let a: [Ref<'_>; 1] = exactly(g, args, "encode")?;
     let [ids] = a;
     let ids = u32_list(g, ids, "ids")?;
@@ -1085,7 +1097,7 @@ pub(crate) fn encode(g: Gil, inner: &Inner, args: Ref<'_>) -> CResult<Mine> {
         g.detach(|| split.encode(&ids)).map_err(|e| to_py(g, e))?
     } else {
         inner.with(g, |ops| {
-            g.detach(|| ops.encode(&ids)).map_err(|e| to_py(g, e))
+            g.detach(move || ops.encode(&ids)).map_err(|e| to_py(g, e))
         })?
     };
     capi::bytes(g, &file)
@@ -1094,7 +1106,7 @@ pub(crate) fn encode(g: Gil, inner: &Inner, args: Ref<'_>) -> CResult<Mine> {
 /// `load(data: bytes, ids, max_instances, max_decoded_bytes)`: loads a persisted
 /// file. `data` must be exactly `bytes`: it is immutable, and the argument tuple
 /// keeps it alive while the interpreter is released.
-pub(crate) fn load(g: Gil, inner: &Inner, args: Ref<'_>) -> CResult<Mine> {
+pub(crate) fn load<'py>(g: Gil<'py>, inner: &Inner, args: Ref<'_>) -> CResult<Mine<'py>> {
     let a: [Ref<'_>; 4] = exactly(g, args, "load")?;
     let [data, ids, max_instances, max_decoded_bytes] = a;
     let data = capi::bytes_of(g, data, "data")?;
@@ -1141,7 +1153,7 @@ pub(crate) fn load(g: Gil, inner: &Inner, args: Ref<'_>) -> CResult<Mine> {
 }
 
 /// `fork(src, dst: list[int])`: copies instance `src` into `dst`.
-pub(crate) fn fork(g: Gil, inner: &Inner, args: Ref<'_>) -> CResult<Mine> {
+pub(crate) fn fork<'py>(g: Gil<'py>, inner: &Inner, args: Ref<'_>) -> CResult<Mine<'py>> {
     let a: [Ref<'_>; 2] = exactly(g, args, "fork")?;
     let [src, dst] = a;
     let src = capi::to_u32(g, src, "src")?;
@@ -1153,7 +1165,7 @@ pub(crate) fn fork(g: Gil, inner: &Inner, args: Ref<'_>) -> CResult<Mine> {
 }
 
 /// `is_poisoned() -> bool`.
-pub(crate) fn is_poisoned(g: Gil, inner: &Inner) -> CResult<Mine> {
+pub(crate) fn is_poisoned<'py>(g: Gil<'py>, inner: &Inner) -> CResult<Mine<'py>> {
     if let Some(ops) = batched_of(g, inner)? {
         let poisoned = g.detach(|| ops.is_poisoned());
         return Ok(capi::boolean(g, poisoned));
@@ -1168,7 +1180,7 @@ pub(crate) fn is_poisoned(g: Gil, inner: &Inner) -> CResult<Mine> {
 
 /// `close()`: frees the pool; idempotent. It takes the reentrancy guard
 /// like every other call, so it cannot free a pool another thread is using.
-pub(crate) fn close(g: Gil, inner: &Inner) -> CResult<Mine> {
+pub(crate) fn close<'py>(g: Gil<'py>, inner: &Inner) -> CResult<Mine<'py>> {
     if let Some(ops) = inner.peek(g, |ops| ops.and_then(PoolOps::batched))? {
         g.detach(|| ops.close());
     }

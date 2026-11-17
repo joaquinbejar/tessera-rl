@@ -27,9 +27,9 @@ use tessera_rl_engine::{
 use tessera_rl_num::identity::Seed;
 
 use crate::env::{BindError, Layout, Owned, PoolOps, ResetSeed};
-use crate::ffi::gather::{GatherBuffer, GatherWriter};
 use crate::split::Snapshot;
 use crate::view::{ViewSet, view_set};
+use tessera_rl_pyffi::ffi::gather::{GatherStorage as GatherBuffer, GatherWriter};
 
 /// One id of a batch, with what ends its window, captured under the mutex.
 #[derive(Debug, Clone, Copy)]
@@ -860,7 +860,7 @@ where
             Ok::<_, BindError>(GatherWriter::new(&fields))
         })
         .transpose()?;
-    let buffer = writer.as_ref().map(GatherWriter::buffer);
+    let buffer = writer.as_ref().map(GatherWriter::storage);
     let waiter = pool.waiter();
     let generations = pool.id_generations();
     let ops: Arc<dyn AsyncOps> = Arc::new(BatchedPool {

@@ -31,7 +31,7 @@ struct SearchObject {
 static TYPE: AtomicPtr<ffi::PyObject> = AtomicPtr::new(ptr::null_mut());
 
 /// Wraps `inner` in a new `Search` object.
-fn new_object(g: Gil, inner: SearchInner) -> CResult<Mine> {
+fn new_object(g: Gil<'_>, inner: SearchInner) -> CResult<Mine<'_>> {
     let ty = TYPE.load(Ordering::Acquire);
     if ty.is_null() {
         return Err(capi::raise(

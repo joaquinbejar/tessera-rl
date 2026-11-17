@@ -32,7 +32,7 @@ struct EnvObject {
 static TYPE: AtomicPtr<ffi::PyObject> = AtomicPtr::new(ptr::null_mut());
 
 /// Wraps `inner` in a new `Env` object.
-fn new_object(g: Gil, inner: Inner) -> CResult<Mine> {
+fn new_object(g: Gil<'_>, inner: Inner) -> CResult<Mine<'_>> {
     let ty = TYPE.load(Ordering::Acquire);
     if ty.is_null() {
         return Err(capi::raise(

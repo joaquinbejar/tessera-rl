@@ -221,7 +221,12 @@ fn export(
 /// `read_only`) or legacy. A legacy capsule cannot carry the flag, so its
 /// consumer gets a writable alias: writing through it corrupts the outputs
 /// until the next call overwrites them.
-pub fn capsule(g: Gil, src: &Source<'_>, versioned: bool, read_only: bool) -> CResult<Mine> {
+pub fn capsule<'py>(
+    g: Gil<'py>,
+    src: &Source<'_>,
+    versioned: bool,
+    read_only: bool,
+) -> CResult<Mine<'py>> {
     let Some((raw, name)) = export(src, versioned, read_only) else {
         return Err(capi::raise(
             g,

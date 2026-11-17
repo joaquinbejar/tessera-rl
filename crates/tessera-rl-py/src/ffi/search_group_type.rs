@@ -32,7 +32,7 @@ struct GroupObject {
 static TYPE: AtomicPtr<ffi::PyObject> = AtomicPtr::new(ptr::null_mut());
 
 /// Wraps `inner` in a new `SearchGroup` object.
-fn new_object(g: Gil, inner: GroupInner) -> CResult<Mine> {
+fn new_object(g: Gil<'_>, inner: GroupInner) -> CResult<Mine<'_>> {
     let ty = TYPE.load(Ordering::Acquire);
     if ty.is_null() {
         return Err(capi::raise(

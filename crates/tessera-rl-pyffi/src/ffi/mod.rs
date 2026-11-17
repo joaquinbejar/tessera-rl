@@ -29,7 +29,9 @@ unsafe impl<T> Sync for Table<T> {}
 /// failed warning returns before `f` runs), panics contained (no unwind
 /// crosses the C boundary), and null returned with an exception set on any
 /// failure.
-pub fn entry(f: impl FnOnce(capi::Gil) -> capi::CResult<capi::Mine>) -> *mut pyo3::ffi::PyObject {
+pub fn entry(
+    f: impl for<'py> FnOnce(capi::Gil<'py>) -> capi::CResult<capi::Mine<'py>>,
+) -> *mut pyo3::ffi::PyObject {
     // SAFETY: every entry point is called by CPython with the interpreter
     // attached to this thread.
     let g = unsafe { capi::Gil::assume() };
@@ -49,7 +51,9 @@ pub fn entry(f: impl FnOnce(capi::Gil) -> capi::CResult<capi::Mine>) -> *mut pyo
 
 /// As [`entry`], for slots returning a status: 0, or -1 with an exception
 /// set (`getbuffer`).
-pub fn entry_status(f: impl FnOnce(capi::Gil) -> capi::CResult<()>) -> core::ffi::c_int {
+pub fn entry_status(
+    f: impl for<'py> FnOnce(capi::Gil<'py>) -> capi::CResult<()>,
+) -> core::ffi::c_int {
     // SAFETY: as in `entry`.
     let g = unsafe { capi::Gil::assume() };
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -73,9 +77,13 @@ pub fn dispose(payload: Box<dyn core::any::Any + Send>) {
 }
 
 pub mod boundary;
+pub mod buffer;
 pub mod capi;
 pub mod dlpack;
 pub mod fork;
+pub mod gather;
 pub mod inner;
+pub mod module_def;
+pub mod object;
 pub mod tables;
 pub mod thunks;

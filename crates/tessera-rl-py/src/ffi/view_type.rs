@@ -19,7 +19,7 @@ use pyo3::ffi;
 use tessera_rl_engine::{HalfGenerations, IdGenerations, OutputDtype, OutputStorage};
 
 use super::capi::{self, CResult, Gil, Mine, Ref};
-use super::gather::GatherBuffer;
+use tessera_rl_pyffi::ffi::gather::GatherStorage as GatherBuffer;
 
 use super::tables::{
     method, method_end, method_kw, slot_dealloc, slot_doc, slot_end, slot_getbuffer, slot_methods,
@@ -99,12 +99,12 @@ const fn region_itemsize(dtype: OutputDtype) -> usize {
 }
 
 /// A new view of `spec` in `storage`, at the storage's current generation.
-pub(crate) fn new_view(
-    g: Gil,
+pub(crate) fn new_view<'py>(
+    g: Gil<'py>,
     storage: &Arc<OutputStorage>,
     spec: &ViewSpec,
     track: Track<'_>,
-) -> CResult<Mine> {
+) -> CResult<Mine<'py>> {
     let region = storage
         .region(spec.field)
         .ok_or_else(|| error(g, Kind::Argument, format!("no output {:?}", spec.field)))?;
@@ -143,13 +143,13 @@ pub(crate) fn new_view(
 }
 
 /// A new view of `spec` in the gather buffer, written at generation `taken`.
-pub(crate) fn new_gather_view(
-    g: Gil,
+pub(crate) fn new_gather_view<'py>(
+    g: Gil<'py>,
     buffer: &Arc<GatherBuffer>,
     spec: &ViewSpec,
     taken: u64,
     unsettled: &Arc<AtomicBool>,
-) -> CResult<Mine> {
+) -> CResult<Mine<'py>> {
     let (ptr, bytes) = buffer
         .region(spec.field)
         .ok_or_else(|| error(g, Kind::Argument, format!("no output {:?}", spec.field)))?;
@@ -166,15 +166,15 @@ pub(crate) fn new_gather_view(
 }
 
 /// A view of the rows of `spec` in a region of `region_bytes` bytes at `ptr`.
-fn build_view(
-    g: Gil,
+fn build_view<'py>(
+    g: Gil<'py>,
     spec: &ViewSpec,
     ptr: *const u8,
     region_bytes: usize,
     owner: dlpack::Owner,
     stale: Stale,
     generation: u64,
-) -> CResult<Mine> {
+) -> CResult<Mine<'py>> {
     let row_bytes = spec
         .shape
         .iter()
@@ -428,7 +428,7 @@ pub(super) unsafe extern "C" fn dlpack(
         let get = |key: &str| {
             kw.iter()
                 .find(|(k, _)| k == key)
-                .map(|(_, v)| *v)
+                .map(|(_, v)| v.as_ref())
                 .filter(|v| !v.is_none())
         };
         if let Some(stream) = get("stream")

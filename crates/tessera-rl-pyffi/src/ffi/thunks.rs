@@ -665,6 +665,10 @@ generic_thunk!(
     GetBufferEntry, getbuffer : fn(obj: Obj, view: *mut ffi::Py_buffer, flags: c_int) -> c_int
 );
 generic_thunk!(
+    /// A `releasebufferproc` entry.
+    ReleaseBufferEntry, release_buffer : fn(obj: Obj, view: *mut ffi::Py_buffer) -> ()
+);
+generic_thunk!(
     /// A `DLManagedTensor::deleter` entry.
     DlDeleterEntry, dl_deleter : fn(managed: *mut DLManagedTensor) -> ()
 );
@@ -702,6 +706,16 @@ impl ThunkFn<GetBuffer> {
     /// The boundary thunk of `E`.
     pub(crate) const fn of<E: GetBufferEntry>() -> Self {
         Self(getbuffer::<E>)
+    }
+}
+
+/// `releasebufferproc`: `(exporter, view)`.
+pub(crate) type ReleaseBuffer = unsafe extern "C" fn(*mut ffi::PyObject, *mut ffi::Py_buffer);
+
+impl ThunkFn<ReleaseBuffer> {
+    /// The boundary thunk of `E`.
+    pub(crate) const fn of<E: ReleaseBufferEntry>() -> Self {
+        Self(release_buffer::<E>)
     }
 }
 

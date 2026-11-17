@@ -28,7 +28,7 @@ struct SnapshotObject {
 static TYPE: AtomicPtr<ffi::PyObject> = AtomicPtr::new(ptr::null_mut());
 
 /// Wraps `snapshot` in a new object.
-pub(crate) fn new_object(g: Gil, snapshot: Snapshot) -> CResult<Mine> {
+pub(crate) fn new_object(g: Gil<'_>, snapshot: Snapshot) -> CResult<Mine<'_>> {
     let ty = TYPE.load(Ordering::Acquire);
     if ty.is_null() {
         return Err(capi::raise(

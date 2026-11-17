@@ -22,7 +22,6 @@ pub(crate) mod inner {
 }
 
 mod env_type;
-pub(crate) mod gather;
 mod module;
 mod search_group_type;
 mod search_type;
