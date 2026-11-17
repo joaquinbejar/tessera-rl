@@ -54,7 +54,7 @@ pub use buffer::pipeline::{HalfToken, Waiter};
 pub use buffer::{OutputDtype, OutputField, OutputRegion, OutputStorage};
 pub use error::{EngineError, NanSite};
 #[cfg(feature = "host")]
-pub use host::{HostPool, MAX_HOST_HEADS};
+pub use host::{HostPool, MAX_HOST_AGENTS, MAX_HOST_HEADS};
 pub use layout::{MAX_GROUPED_HEADS, MAX_LEAVES, MaskHeadShape};
 pub use masks::{IllegalActionPolicy, MaskProvider, Masked, NoMasks, PersistMask};
 #[cfg(not(loom))]

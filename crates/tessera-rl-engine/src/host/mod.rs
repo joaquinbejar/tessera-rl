@@ -48,10 +48,74 @@ use kernels::{HostCtx, HostHeader};
 /// construction, before any buffer is sized from them.
 pub const MAX_HOST_HEADS: usize = 4096;
 
+/// Most agent slots a host environment may declare. A `SameStep`
+/// auto-reset hands `reset` scratch rows on the stack, five per agent
+/// (`f32` and four `Bool8`), so this bounds them to 2 KiB.
+///
+/// At the bound a pool builds:
+///
+/// ```
+/// const AGENTS: usize = 256;
+/// use tessera_rl_core::io::{Actions, ObsWriter};
+/// use tessera_rl_core::space::Space;
+/// use tessera_rl_core::{AgentSlot, EnvConfig, HostEnvironment, HostError, HostSeed, SpaceError, StepOut};
+/// use tessera_rl_engine::{HostPool, PoolOptions};
+/// use tessera_rl_num::identity::Seed;
+///
+/// struct Cfg;
+/// impl EnvConfig for Cfg {}
+/// struct Many;
+/// impl HostEnvironment for Many {
+///     const ENV_ID: &'static str = "doc/Many-v1";
+///     const ENV_VERSION: u32 = 1;
+///     const MAX_AGENTS: usize = AGENTS;
+///     type Config = Cfg;
+///     fn new(_: &Cfg) -> Result<Self, HostError> { Ok(Self) }
+///     fn observation_space(_: &Cfg) -> Result<Space, SpaceError> { Ok(Space::Discrete { n: 2 }) }
+///     fn action_space(_: &Cfg) -> Result<Space, SpaceError> { Ok(Space::Discrete { n: 2 }) }
+///     fn reset(&mut self, _: HostSeed, _: &mut StepOut<'_>) {}
+///     fn step(&mut self, _: &Actions<'_, ()>, _: &mut StepOut<'_>) {}
+///     fn observe(&self, _: AgentSlot, _: &mut ObsWriter<'_, '_, ()>) {}
+/// }
+/// let options = PoolOptions::new(core::num::NonZeroU32::MIN, Seed::new(0));
+/// let _ = HostPool::<Many, AGENTS>::new(&Cfg, options);
+/// ```
+///
+/// One past it does not compile:
+///
+/// ```compile_fail
+/// const AGENTS: usize = 257;
+/// use tessera_rl_core::io::{Actions, ObsWriter};
+/// use tessera_rl_core::space::Space;
+/// use tessera_rl_core::{AgentSlot, EnvConfig, HostEnvironment, HostError, HostSeed, SpaceError, StepOut};
+/// use tessera_rl_engine::{HostPool, PoolOptions};
+/// use tessera_rl_num::identity::Seed;
+///
+/// struct Cfg;
+/// impl EnvConfig for Cfg {}
+/// struct Many;
+/// impl HostEnvironment for Many {
+///     const ENV_ID: &'static str = "doc/Many-v1";
+///     const ENV_VERSION: u32 = 1;
+///     const MAX_AGENTS: usize = AGENTS;
+///     type Config = Cfg;
+///     fn new(_: &Cfg) -> Result<Self, HostError> { Ok(Self) }
+///     fn observation_space(_: &Cfg) -> Result<Space, SpaceError> { Ok(Space::Discrete { n: 2 }) }
+///     fn action_space(_: &Cfg) -> Result<Space, SpaceError> { Ok(Space::Discrete { n: 2 }) }
+///     fn reset(&mut self, _: HostSeed, _: &mut StepOut<'_>) {}
+///     fn step(&mut self, _: &Actions<'_, ()>, _: &mut StepOut<'_>) {}
+///     fn observe(&self, _: AgentSlot, _: &mut ObsWriter<'_, '_, ()>) {}
+/// }
+/// let options = PoolOptions::new(core::num::NonZeroU32::MIN, Seed::new(0));
+/// let _ = HostPool::<Many, AGENTS>::new(&Cfg, options);
+/// ```
+pub const MAX_HOST_AGENTS: usize = 256;
+
 /// A pool of `num_envs` instances of the host environment `E` (ADR-0062).
 ///
-/// `A` must equal `E::MAX_AGENTS` (checked at compile time); with a
-/// concrete type, write `HostPool<Book, { Book::MAX_AGENTS }>`.
+/// `A` must equal `E::MAX_AGENTS` and be at most [`MAX_HOST_AGENTS`]
+/// (checked at compile time, when the pool is built); with a concrete
+/// type, write `HostPool<Book, { Book::MAX_AGENTS }>`.
 #[derive(Debug)]
 pub struct HostPool<E: HostEnvironment, const A: usize> {
     options: PoolOptions,
@@ -72,10 +136,16 @@ pub struct HostPool<E: HostEnvironment, const A: usize> {
 }
 
 impl<E: HostEnvironment, const A: usize> HostPool<E, A> {
-    const AGENTS_MATCH: () = assert!(
-        A == E::MAX_AGENTS,
-        "HostPool<E, A>: A must equal HostEnvironment::MAX_AGENTS"
-    );
+    const AGENTS_MATCH: () = {
+        assert!(
+            A == E::MAX_AGENTS,
+            "HostPool<E, A>: A must equal HostEnvironment::MAX_AGENTS"
+        );
+        assert!(
+            A <= MAX_HOST_AGENTS,
+            "HostPool<E, A>: A must be at most MAX_HOST_AGENTS"
+        );
+    };
 
     /// Builds a pool: validates the config, the options and the spaces,
     /// builds `num_envs` instances with `HostEnvironment::new` and lays out
