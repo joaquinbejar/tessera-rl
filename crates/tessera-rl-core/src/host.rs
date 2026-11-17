@@ -148,7 +148,9 @@ pub trait HostEnvironment: Send + Sized + 'static {
     ///   the instance's rows hold the ended step's rewards and flags;
     /// - `Disabled`: the engine never resets an instance by itself.
     ///
-    /// An episode end reported through `out` is ignored in every case.
+    /// An episode end reported through `out` is ignored in every case, and
+    /// so are the `died` and `spawned` flags: they never change which agent
+    /// slots are alive after a reset (all of them).
     fn reset(&mut self, seed: HostSeed, out: &mut StepOut<'_>);
 
     /// Applies one step of validated actions.

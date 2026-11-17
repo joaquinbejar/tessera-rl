@@ -312,15 +312,23 @@ fn test_host_differential_sequential_matches_env_pool() {
     }
 }
 
-/// Invalid agent events (an agent reported dead twice): both pools mark
-/// them alike. Under `debug-checks` both fail the call with the same
+/// Invalid agent events: an agent reported dead twice, alone and in the
+/// same step as a valid respawn (the near-equivalent case: the death is
+/// refused and counted, the spawn applied). Both pools mark them alike.
+/// Under `debug-checks` both fail the call with the same
 /// `InvalidAgentEvent` and poison; without it both count the event in
 /// `episode_invalid_agent_events`. The step results are compared whole.
 #[test]
 fn test_host_differential_invalid_agent_events_match_env_pool() {
+    for respawn in [false, true] {
+        invalid_events_match(respawn);
+    }
+}
+
+fn invalid_events_match(respawn: bool) {
     let cfg = CountConfig {
         die_twice: true,
-        respawn: false,
+        respawn,
         ..config()
     };
     let mut env = EnvPool::<Counter>::new(cfg.clone(), options(AutoReset::NextStep)).unwrap();
@@ -332,14 +340,17 @@ fn test_host_differential_invalid_agent_events_match_env_pool() {
         let a = actions(t);
         let e = env.step(act(&a)).map(outputs);
         let h = host.step(act(&a)).map(outputs);
-        assert_eq!(h, e, "step {t}");
+        assert_eq!(h, e, "respawn {respawn}, step {t}");
         if e.is_err() {
             events += 1;
             env.reset_all(Reseed::Keep).unwrap();
             host.reset_all(Reseed::Keep).unwrap();
         } else if let Ok(o) = &e {
-            events += usize::from(o[13].iter().any(|&b| b != 0));
+            events += usize::from(o.get(13).is_some_and(|v| v.iter().any(|&b| b != 0)));
         }
     }
-    assert!(events > 0, "the run produced an invalid agent event");
+    assert!(
+        events > 0,
+        "respawn {respawn}: the run produced an invalid agent event"
+    );
 }
