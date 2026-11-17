@@ -237,6 +237,16 @@ pub mod hostile {
         arch::write(original);
         (result, after)
     }
+
+    /// Sets the controls to `mode(current)` and leaves them set, as a host
+    /// library that changes them and returns would (ADR-0062 item 4: the
+    /// host pool's re-canonicalisation after host code). The caller must
+    /// put them back, for example with
+    /// [`establish_canonical`](super::establish_canonical).
+    #[inline(never)]
+    pub fn set(mode: impl FnOnce(Control) -> Control) {
+        arch::write(mode(arch::read()));
+    }
 }
 
 /// Entries into [`with_canonical`] whose caller thread was not in the
