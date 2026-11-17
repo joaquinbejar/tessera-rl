@@ -237,9 +237,12 @@ enum Leaf {
 /// leaf name. Made only by [`export_module!`].
 ///
 /// [`export_module!`]: crate::export_module
-#[expect(
-    dead_code,
-    reason = "read by the fixed initializers, added with the switch of the bindings (#272 step 3, commit 4)"
+#[cfg_attr(
+    not(any(feature = "native-module", feature = "host")),
+    expect(
+        dead_code,
+        reason = "read by the fixed initializers, behind their features"
+    )
 )]
 pub struct ModuleRecord {
     leaf: Leaf,
@@ -276,18 +279,69 @@ inventory::collect!(ModuleRecord);
 /// `native-module`), `export_module!(host: MyInit)` for
 /// `PyInit__tessera_host` (feature `host`). Invoke it in the final cdylib's
 /// own crate, where the linker keeps the record (ADR-0054).
+///
+/// The record is left out of the crate's unit-test build (`cfg(test)`): it
+/// keeps the whole initialization alive, and a test binary cannot link the
+/// C API without libpython. That build only names the module in a constant.
 #[macro_export]
 macro_rules! export_module {
     (native: $init:ty) => {
+        #[cfg(not(test))]
         $crate::__private::inventory::submit! {
             $crate::ffi::module_def::ModuleRecord::native::<$init>()
         }
+        // The unit-test build still names the module, so its code counts
+        // as used, without a record that would link it.
+        #[cfg(test)]
+        const _: $crate::ffi::module_def::ModuleRecord =
+            $crate::ffi::module_def::ModuleRecord::native::<$init>();
     };
     (host: $init:ty) => {
+        #[cfg(not(test))]
         $crate::__private::inventory::submit! {
             $crate::ffi::module_def::ModuleRecord::host::<$init>()
         }
+        // The unit-test build still names the module, so its code counts
+        // as used, without a record that would link it.
+        #[cfg(test)]
+        const _: $crate::ffi::module_def::ModuleRecord =
+            $crate::ffi::module_def::ModuleRecord::host::<$init>();
     };
+}
+
+/// The module registered for `leaf`: exactly one record, or `ImportError`.
+#[cfg(any(feature = "native-module", feature = "host"))]
+fn init_leaf(leaf: Leaf, name: &str) -> Obj {
+    entry(|g| {
+        let mut found = inventory::iter::<ModuleRecord>
+            .into_iter()
+            .filter(|r| r.leaf == leaf);
+        match (found.next(), found.next()) {
+            (Some(record), None) => (record.create)(g),
+            (None, _) => Err(capi::raise(
+                g,
+                capi::import_error(),
+                &format!("{name}: no module registered (tessera_rl_pyffi::export_module!)"),
+            )),
+            (Some(_), Some(_)) => Err(capi::raise(
+                g,
+                capi::import_error(),
+                &format!("{name}: more than one module registered"),
+            )),
+        }
+    })
+}
+
+/// The target of the `PyInit__native` thunk.
+#[cfg(feature = "native-module")]
+pub(super) extern "C" fn init_native() -> Obj {
+    init_leaf(Leaf::Native, "_native")
+}
+
+/// The target of the `PyInit__tessera_host` thunk.
+#[cfg(feature = "host")]
+pub(super) extern "C" fn init_host() -> Obj {
+    init_leaf(Leaf::Host, "_tessera_host")
 }
 
 /// The shim of a [`FunctionNoArgs`].

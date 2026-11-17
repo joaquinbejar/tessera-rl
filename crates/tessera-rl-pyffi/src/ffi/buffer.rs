@@ -129,6 +129,21 @@ pub struct Rows<'a> {
     pub shape: &'a [usize],
 }
 
+/// Why an export was refused.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExportError {
+    /// The storage has no such field.
+    NoField,
+    /// The field's region is larger than memory can address, or its type is
+    /// unknown to this crate.
+    Region,
+    /// The rows and shape do not fit the region exactly.
+    Layout,
+    /// The export cannot be described to a consumer (`Py_ssize_t` sizes,
+    /// `int` dimensions).
+    Undescribable,
+}
+
 /// What keeps an export's memory alive.
 enum Owner {
     Output(#[expect(dead_code, reason = "held for its memory")] Arc<OutputStorage>),
@@ -159,22 +174,26 @@ unsafe impl Sync for Inner {}
 pub struct Export(Arc<Inner>);
 
 impl Export {
-    /// An export of `rows` of `field` in the engine's output storage, or
-    /// `None` if the field is absent or the rows and shape do not fit its
-    /// region exactly.
-    #[must_use]
+    /// An export of `rows` of `field` in the engine's output storage.
+    ///
+    /// # Errors
+    ///
+    /// The field is absent, or the rows and shape do not fit its region
+    /// exactly ([`ExportError`]).
     pub fn output(
         storage: &Arc<OutputStorage>,
         field: OutputField,
         rows: Rows<'_>,
         element: Element,
         read_only: bool,
-    ) -> Option<Self> {
-        let region = storage.region(field)?;
+    ) -> Result<Self, ExportError> {
+        let region = storage.region(field).ok_or(ExportError::NoField)?;
         if !element_fits(region.dtype, element) {
-            return None;
+            return Err(ExportError::Layout);
         }
-        let bytes = region.len.checked_mul(dtype_itemsize(region.dtype)?)?;
+        let bytes = dtype_itemsize(region.dtype)
+            .and_then(|size| region.len.checked_mul(size))
+            .ok_or(ExportError::Region)?;
         Self::new(
             Owner::Output(Arc::clone(storage)),
             region.ptr,
@@ -185,17 +204,19 @@ impl Export {
         )
     }
 
-    /// An export of `rows` of `field` in the gather storage, or `None` as
-    /// [`Export::output`].
-    #[must_use]
+    /// An export of `rows` of `field` in the gather storage.
+    ///
+    /// # Errors
+    ///
+    /// As [`Export::output`].
     pub fn gather(
         storage: &Arc<GatherStorage>,
         field: OutputField,
         rows: Rows<'_>,
         element: Element,
         read_only: bool,
-    ) -> Option<Self> {
-        let (start, bytes) = storage.region(field)?;
+    ) -> Result<Self, ExportError> {
+        let (start, bytes) = storage.region(field).ok_or(ExportError::NoField)?;
         Self::new(
             Owner::Gather(Arc::clone(storage)),
             start,
@@ -213,47 +234,51 @@ impl Export {
         rows: Rows<'_>,
         element: Element,
         read_only: bool,
-    ) -> Option<Self> {
+    ) -> Result<Self, ExportError> {
         // A 0-d export would describe one element at `data` with a length
         // of 0 bytes: refused.
         if rows.shape.is_empty() {
-            return None;
+            return Err(ExportError::Layout);
         }
-        let row_bytes = rows
+        let count = rows.shape.first().copied().unwrap_or(0);
+        let (offset, bytes) = rows
             .shape
             .iter()
             .skip(1)
-            .try_fold(element.itemsize(), |acc, &d| acc.checked_mul(d))?;
-        let count = rows.shape.first().copied().unwrap_or(0);
-        let (offset, bytes) = row_window(
-            region_bytes,
-            row_bytes,
-            rows.total_rows,
-            rows.first_row,
-            count,
-        )?;
+            .try_fold(element.itemsize(), |acc, &d| acc.checked_mul(d))
+            .and_then(|row_bytes| {
+                row_window(
+                    region_bytes,
+                    row_bytes,
+                    rows.total_rows,
+                    rows.first_row,
+                    count,
+                )
+            })
+            .ok_or(ExportError::Layout)?;
+        let undescribable = |_| ExportError::Undescribable;
         let shape: Box<[isize]> = rows
             .shape
             .iter()
-            .map(|&d| isize::try_from(d).ok())
-            .collect::<Option<_>>()?;
+            .map(|&d| isize::try_from(d).map_err(undescribable))
+            .collect::<Result<_, _>>()?;
         // Row-major strides, in bytes.
         let mut strides = vec![0isize; shape.len()];
-        let mut acc = isize::try_from(element.itemsize()).ok()?;
+        let mut acc = isize::try_from(element.itemsize()).map_err(undescribable)?;
         for (stride, &dim) in strides.iter_mut().zip(shape.iter()).rev() {
             *stride = acc;
-            acc = acc.checked_mul(dim)?;
+            acc = acc.checked_mul(dim).ok_or(ExportError::Undescribable)?;
         }
         // The buffer protocol describes sizes and dimensions as
         // `Py_ssize_t` and `int`: refuse what `getbuffer` could not.
-        isize::try_from(bytes).ok()?;
-        c_int::try_from(shape.len()).ok()?;
+        isize::try_from(bytes).map_err(undescribable)?;
+        c_int::try_from(shape.len()).map_err(undescribable)?;
         // Every element is aligned to its size (rows are whole elements, so
         // the first one decides): consumers may read them as typed values.
         if start.wrapping_add(offset).addr() % element.itemsize() != 0 {
-            return None;
+            return Err(ExportError::Layout);
         }
-        Some(Self(Arc::new(Inner {
+        Ok(Self(Arc::new(Inner {
             _owner: owner,
             // `row_window` checked `offset + bytes <= region_bytes`, so this
             // stays inside the region; `wrapping_add` keeps it safe code.
@@ -490,6 +515,26 @@ impl<T: Body> ReleaseBufferEntry for ReleaseShim<T> {
 mod tests {
     use super::*;
 
+    // Moved from the bindings' view module with the export code.
+    #[test]
+    fn test_row_window_stays_inside_the_region() {
+        let region = [0u8; 24];
+        for first in 0..=4 {
+            for rows in 0..=4 - first {
+                let (offset, len) = row_window(24, 6, 4, first, rows).unwrap_or((usize::MAX, 0));
+                assert_eq!(
+                    region.get(offset..offset + len).map(<[u8]>::len),
+                    Some(rows * 6)
+                );
+            }
+        }
+        assert_eq!(row_window(24, 6, 4, 3, 2), None);
+        assert_eq!(row_window(24, 6, 4, usize::MAX, 1), None);
+        assert_eq!(row_window(25, 6, 4, 0, 1), None);
+        assert_eq!(row_window(usize::MAX, usize::MAX, 2, 0, 1), None);
+        assert_eq!(row_window(0, 0, 4, 1, 2), Some((0, 0)));
+    }
+
     #[test]
     fn test_row_window_rows_inside_the_region_their_offset_and_length() {
         assert_eq!(row_window(48, 12, 4, 1, 2), Some((12, 24)));
@@ -521,39 +566,24 @@ mod tests {
             rows(1, &[2, 2]),
             Element::F32,
             true,
-        );
-        let e = e.map(|e| (e.bytes(), e.shape().to_vec(), e.element()));
-        assert_eq!(e, Some((16, vec![2, 2], Element::F32)));
+        )
+        .map(|e| (e.bytes(), e.shape().to_vec(), e.element()));
+        assert_eq!(e.ok(), Some((16, vec![2, 2], Element::F32)));
         // Past the end, a row of the wrong width, an absent field.
-        assert!(
-            Export::gather(
-                &storage,
-                OutputField::Rewards,
-                rows(3, &[2, 2]),
-                Element::F32,
-                true
-            )
-            .is_none()
+        let err = |first, shape, field| {
+            Export::gather(&storage, field, rows(first, shape), Element::F32, true).err()
+        };
+        assert_eq!(
+            err(3, &[2, 2], OutputField::Rewards),
+            Some(ExportError::Layout)
         );
-        assert!(
-            Export::gather(
-                &storage,
-                OutputField::Rewards,
-                rows(0, &[1, 3]),
-                Element::F32,
-                true
-            )
-            .is_none()
+        assert_eq!(
+            err(0, &[1, 3], OutputField::Rewards),
+            Some(ExportError::Layout)
         );
-        assert!(
-            Export::gather(
-                &storage,
-                OutputField::Alive,
-                rows(0, &[1, 2]),
-                Element::F32,
-                true
-            )
-            .is_none()
+        assert_eq!(
+            err(0, &[1, 2], OutputField::Alive),
+            Some(ExportError::NoField)
         );
     }
 
@@ -568,23 +598,19 @@ mod tests {
             first_row: 4,
             shape: &[],
         };
-        assert!(
-            Export::gather(&storage, OutputField::Rewards, empty, Element::F32, true).is_none()
-        );
+        assert!(Export::gather(&storage, OutputField::Rewards, empty, Element::F32, true).is_err());
         let empty = Rows {
             total_rows: 4,
             first_row: 0,
             shape: &[],
         };
-        assert!(
-            Export::gather(&storage, OutputField::Rewards, empty, Element::F32, true).is_none()
-        );
+        assert!(Export::gather(&storage, OutputField::Rewards, empty, Element::F32, true).is_err());
         let wide = Rows {
             total_rows: 4,
             first_row: 1,
             shape: &[1, 1],
         };
-        assert!(Export::gather(&storage, OutputField::Rewards, wide, Element::F64, true).is_some());
+        assert!(Export::gather(&storage, OutputField::Rewards, wide, Element::F64, true).is_ok());
     }
 
     #[test]

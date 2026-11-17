@@ -681,6 +681,25 @@ generic_thunk!(
     ModuleInitEntry, module_init : fn() -> Obj
 );
 
+// The fixed module initializers CPython looks up by name (P1 of the #272
+// step 3 design): non-generic, so they can carry `no_mangle`.
+#[cfg(feature = "native-module")]
+thunk!(
+    @naked
+    /// `_native`'s initializer: the module registered with
+    /// `export_module!(native: ...)`.
+    #[unsafe(no_mangle)]
+    PyInit__native => super::module_def::init_native : fn() -> *mut ffi::PyObject
+);
+#[cfg(feature = "host")]
+thunk!(
+    @naked
+    /// A host environment wheel's initializer (ADR-0062 D3): the module
+    /// registered with `export_module!(host: ...)`.
+    #[unsafe(no_mangle)]
+    PyInit__tessera_host => super::module_def::init_host : fn() -> *mut ffi::PyObject
+);
+
 impl ThunkFn<CFunction> {
     /// The boundary thunk of `E`.
     pub(crate) const fn of<E: CFunctionEntry>() -> Self {

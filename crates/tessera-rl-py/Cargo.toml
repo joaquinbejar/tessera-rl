@@ -26,8 +26,9 @@ onnx = ["dep:tessera-rl-onnx", "tessera-rl-onnx/onnx"]
 [dependencies]
 # The final cdylib: the only place `extension-module` is enabled.
 pyo3 = { workspace = true, features = ["extension-module"] }
-# The shared CPython boundary (ADR-0062 item 8).
-tessera-rl-pyffi.workspace = true
+# The shared CPython boundary (ADR-0062 item 8), which defines
+# `PyInit__native` for this cdylib.
+tessera-rl-pyffi = { workspace = true, features = ["native-module"] }
 tessera-rl-core.workspace = true
 tessera-rl-num.workspace = true
 tessera-rl-engine.workspace = true

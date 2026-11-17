@@ -4,45 +4,28 @@
 //! output storage, with which element type and shape (ADR-0003). No
 //! `unsafe` here; the view objects live in `ffi::view_type`.
 
-use core::ffi::CStr;
 use core::ops::Range;
 
 use tessera_rl_engine::{OutputDtype, OutputField};
 
 use crate::env::Layout;
 
-/// An element type as both export protocols name it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct Elem {
-    /// Buffer protocol format (struct module syntax, little-endian).
-    pub(crate) format: &'static CStr,
-    /// Bytes per element.
-    pub(crate) itemsize: usize,
-    /// DLPack type code (`kDLInt` 0, `kDLUInt` 1, `kDLFloat` 2, `kDLBool` 6).
-    pub(crate) dl_code: u8,
-}
-
-const fn elem(format: &'static CStr, itemsize: usize, dl_code: u8) -> Elem {
-    Elem {
-        format,
-        itemsize,
-        dl_code,
-    }
-}
+/// The element type of a view.
+pub(crate) type Elem = tessera_rl_pyffi::ffi::buffer::Element;
 
 /// The element type of an observation leaf, from its NumPy dtype name.
 pub(crate) fn leaf_elem(dtype: &str) -> Option<Elem> {
     Some(match dtype {
-        "bool" => elem(c"?", 1, 6),
-        "int8" => elem(c"<b", 1, 0),
-        "int16" => elem(c"<h", 2, 0),
-        "int32" => elem(c"<i", 4, 0),
-        "int64" => elem(c"<q", 8, 0),
-        "uint8" => elem(c"<B", 1, 1),
-        "uint16" => elem(c"<H", 2, 1),
-        "uint32" => elem(c"<I", 4, 1),
-        "float32" => elem(c"<f", 4, 2),
-        "float64" => elem(c"<d", 8, 2),
+        "bool" => Elem::Bool,
+        "int8" => Elem::I8,
+        "int16" => Elem::I16,
+        "int32" => Elem::I32,
+        "int64" => Elem::I64,
+        "uint8" => Elem::U8,
+        "uint16" => Elem::U16,
+        "uint32" => Elem::U32,
+        "float32" => Elem::F32,
+        "float64" => Elem::F64,
         _ => return None,
     })
 }
@@ -50,10 +33,10 @@ pub(crate) fn leaf_elem(dtype: &str) -> Option<Elem> {
 /// The element type of a non-observation region.
 const fn region_elem(dtype: OutputDtype) -> Option<Elem> {
     match dtype {
-        OutputDtype::Bool8 => Some(elem(c"?", 1, 6)),
-        OutputDtype::F32 => Some(elem(c"<f", 4, 2)),
-        OutputDtype::U32 => Some(elem(c"<I", 4, 1)),
-        OutputDtype::U8 => Some(elem(c"<B", 1, 1)),
+        OutputDtype::Bool8 => Some(Elem::Bool),
+        OutputDtype::F32 => Some(Elem::F32),
+        OutputDtype::U32 => Some(Elem::U32),
+        OutputDtype::U8 => Some(Elem::U8),
         _ => None,
     }
 }
@@ -174,28 +157,6 @@ pub(crate) fn view_set(layout: &Layout) -> Option<ViewSet> {
     })
 }
 
-/// The byte offset and length of `rows` rows from `first_row`, in a region
-/// of exactly `total_rows` rows of `row_bytes` bytes each and `region_bytes`
-/// bytes in all; `None` if they do not fit or overflow.
-#[must_use]
-pub(crate) fn row_window(
-    region_bytes: usize,
-    row_bytes: usize,
-    total_rows: usize,
-    first_row: usize,
-    rows: usize,
-) -> Option<(usize, usize)> {
-    if row_bytes.checked_mul(total_rows)? != region_bytes
-        || first_row.checked_add(rows)? > total_rows
-    {
-        return None;
-    }
-    Some((
-        row_bytes.checked_mul(first_row)?,
-        row_bytes.checked_mul(rows)?,
-    ))
-}
-
 /// The view set of the rows `rows` of `layout`; `None` as [`view_set`].
 pub(crate) fn half_view_set(layout: &Layout, rows: &Range<usize>) -> Option<ViewSet> {
     let mut set = view_set(layout)?;
@@ -215,25 +176,6 @@ pub(crate) fn half_view_set(layout: &Layout, rows: &Range<usize>) -> Option<View
 mod tests {
     use super::*;
     use crate::env::Leaf;
-
-    #[test]
-    fn test_row_window_stays_inside_the_region() {
-        let region = [0u8; 24];
-        for first in 0..=4 {
-            for rows in 0..=4 - first {
-                let (offset, len) = row_window(24, 6, 4, first, rows).unwrap();
-                assert_eq!(
-                    region.get(offset..offset + len).map(<[u8]>::len),
-                    Some(rows * 6)
-                );
-            }
-        }
-        assert_eq!(row_window(24, 6, 4, 3, 2), None);
-        assert_eq!(row_window(24, 6, 4, usize::MAX, 1), None);
-        assert_eq!(row_window(25, 6, 4, 0, 1), None);
-        assert_eq!(row_window(usize::MAX, usize::MAX, 2, 0, 1), None);
-        assert_eq!(row_window(0, 0, 4, 1, 2), Some((0, 0)));
-    }
 
     #[test]
     fn test_view_set_shapes_follow_the_layout() {
@@ -259,7 +201,7 @@ mod tests {
         };
         let set = view_set(&layout).unwrap();
         assert_eq!(set.observations[0].shape, vec![3, 2, 4]);
-        assert_eq!(set.observations[0].elem.itemsize, 4);
+        assert_eq!(set.observations[0].elem.itemsize(), 4);
         let masks = &set.others.iter().find(|(k, _)| *k == "masks").unwrap().1;
         assert_eq!(masks.shape, vec![3, 2, 5]);
         assert_eq!(set.terminal_observations[0].shape, vec![3, 2, 4]);

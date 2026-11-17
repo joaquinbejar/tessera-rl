@@ -415,7 +415,7 @@ where
                     .shape
                     .iter()
                     .skip(1)
-                    .fold(spec.elem.itemsize, |acc, &d| acc.saturating_mul(d));
+                    .fold(spec.elem.itemsize(), |acc, &d| acc.saturating_mul(d));
                 for (k, row) in token.rows().enumerate() {
                     let start = k.saturating_mul(row_bytes);
                     row_of(&row, spec.field, |at, bytes| {
@@ -853,7 +853,7 @@ where
                     let bytes = spec
                         .shape
                         .iter()
-                        .fold(spec.elem.itemsize, |acc, &d| acc.saturating_mul(d));
+                        .fold(spec.elem.itemsize(), |acc, &d| acc.saturating_mul(d));
                     (spec.field, bytes)
                 })
                 .collect();

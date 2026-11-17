@@ -19,6 +19,12 @@ default = []
 # Test-only failure injection (`capi::fail_after`), for the ADR-0041 unwind
 # tests of the extensions built on this crate. Never in a release wheel.
 test-hooks = []
+# `PyInit__native`, the initializer of Tessera's own `_native` module
+# (enabled by tessera-rl-py only).
+native-module = []
+# `PyInit__tessera_host`, the initializer of a host environment wheel
+# (ADR-0062 D3). Never enabled by the first-party wheel.
+host = []
 
 [dependencies]
 inventory.workspace = true
