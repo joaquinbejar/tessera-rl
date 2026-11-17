@@ -591,6 +591,20 @@ pub fn module_add(_g: Gil<'_>, module: Ref<'_>, name: &CStr, value: &Mine<'_>) -
     if rc < 0 { Err(RAISED) } else { Ok(()) }
 }
 
+/// `module.name = ty`, for a class this crate holds for the process
+/// (`errors::register`; callout: sets a module attribute).
+pub(crate) fn module_add_class(
+    _g: Gil<'_>,
+    module: Ref<'_>,
+    name: &CStr,
+    ty: *mut ffi::PyObject,
+) -> CResult<()> {
+    // SAFETY: attached; a live module, a C string, and a class held by a
+    // never-released strong reference (not stolen here).
+    let rc = unsafe { thunks::c_module_add(module.as_ptr(), name.as_ptr(), ty) };
+    if rc < 0 { Err(RAISED) } else { Ok(()) }
+}
+
 // -- types, modules, instances, capsules ----------------------------------------------
 
 /// A new heap type from `spec` (callout: a GC allocation).

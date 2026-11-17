@@ -55,3 +55,34 @@ def test_native_exports_its_initializer_and_not_the_host_one():
     data = pathlib.Path(native.__file__).read_bytes()
     assert b"PyInit__native" in data
     assert b"PyInit__tessera_host" not in data
+
+
+SECOND_INIT = """
+import gc, importlib.machinery, importlib.util
+import tessera_rl
+import tessera_rl._native as native
+
+loader = importlib.machinery.ExtensionFileLoader("_native", native.__file__)
+spec = importlib.util.spec_from_file_location("_native", native.__file__, loader=loader)
+try:
+    second = importlib.util.module_from_spec(spec)
+    loader.exec_module(second)
+    print("second-init-ok")
+except RuntimeError as e:
+    print("second-init-refused:", e)
+second = None
+gc.collect()
+try:
+    native.set_fp_policy("nonsense")
+except tessera_rl.ArgumentError:
+    print("caught-argument-error")
+"""
+
+
+def test_native_second_init_neither_crashes_nor_breaks_the_exception_classes():
+    # A second PyInit__native fails after the exception classes were
+    # registered and frees its module; the classes must outlive it.
+    run = subprocess.run([sys.executable, "-I", "-c", SECOND_INIT], capture_output=True, text=True)
+    assert run.returncode == 0, (run.returncode, run.stdout, run.stderr)
+    assert "second-init-refused: Env type already created" in run.stdout, run.stdout
+    assert "caught-argument-error" in run.stdout, run.stdout

@@ -152,28 +152,39 @@ fn index(kind: Kind) -> usize {
 }
 
 /// Creates the classes and adds them to `module` (callouts: class creation
-/// and module attributes allocate).
+/// and module attributes allocate). The classes are created once per
+/// process and held by a strong reference for its lifetime; a second
+/// `register` (a second initialization of the extension module) adds the
+/// same classes to the new module, so an error raised later is always of a
+/// live class, and `except tessera_rl.ArgumentError` keeps catching it.
 ///
 /// # Errors
 ///
 /// A Python exception is set if a class cannot be created or added.
-pub fn register(g: Gil, module: Ref<'_>) -> CResult<()> {
+pub fn register(g: Gil<'_>, module: Ref<'_>) -> CResult<()> {
     let mut base = capi::exception_base();
     for (i, (_, name, doc)) in KINDS.iter().enumerate() {
-        let qualified = std::ffi::CString::new(format!("tessera_rl.{name}"))
-            .map_err(|_| capi::raise(g, capi::runtime_error(), "exception name"))?;
         let short = std::ffi::CString::new(*name)
             .map_err(|_| capi::raise(g, capi::runtime_error(), "exception name"))?;
-        let ty = capi::new_exception(g, &qualified, doc, base)?;
-        capi::module_add(g, module, &short, &ty)?;
-        // The module keeps the class alive for the process; the stored
-        // pointer is a borrowed reference to it.
-        let ptr = ty.as_ref().as_ptr();
-        if let Some(slot) = TYPES.get(i) {
+        let Some(slot) = TYPES.get(i) else {
+            return Err(capi::raise(g, capi::runtime_error(), "exception table"));
+        };
+        let existing = slot.load(Ordering::Acquire);
+        let ty = if existing.is_null() {
+            let qualified = std::ffi::CString::new(format!("tessera_rl.{name}"))
+                .map_err(|_| capi::raise(g, capi::runtime_error(), "exception name"))?;
+            let created = capi::new_exception(g, &qualified, doc, base)?;
+            // The class is kept for the process: this strong reference is
+            // never released, so the stored pointer can never dangle.
+            let ptr = created.into_ptr();
             slot.store(ptr, Ordering::Release);
-        }
+            ptr
+        } else {
+            existing
+        };
+        capi::module_add_class(g, module, &short, ty)?;
         if i == 0 {
-            base = ptr;
+            base = ty;
         }
     }
     Ok(())
@@ -191,7 +202,7 @@ pub fn error(g: Gil, kind: Kind, message: String) -> Raised {
     let ty = if ty.is_null() {
         capi::runtime_error()
     } else {
-        // One of the classes `register` created; the module keeps it alive.
+        // One of the classes `register` created; held for the process.
         capi::Exc::from_type(ty)
     };
     capi::raise(g, ty, &message)
