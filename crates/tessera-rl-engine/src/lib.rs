@@ -30,6 +30,8 @@ mod nan_check;
 mod options;
 mod outputs;
 mod persist;
+#[cfg(test)]
+mod pin_tests;
 mod pool;
 mod record;
 mod registry;

@@ -176,9 +176,13 @@ impl<E: HostEnvironment, const A: usize> HostPool<E, A> {
     }
 
     /// Switches the pool to Sync mode: `step` and `reset_all` run chunks on
-    /// worker threads and return when every instance is done. Workers are
-    /// pinned only with an explicit `cpu_set` or when no other engine is
-    /// active, as for `EnvPool` (ADR-0005).
+    /// worker threads and return when every instance is done.
+    ///
+    /// Pinning (ADR-0062 item 2): the workers pin only to an explicit
+    /// `cpu_set`, and only then does the pool register as an active engine
+    /// (ADR-0005). Without a `cpu_set` they run unpinned and the pool does
+    /// not register, so an `EnvPool` started after it still pins as usual,
+    /// and may pin to cores these unpinned workers also run on.
     ///
     /// # Errors
     ///
@@ -187,6 +191,7 @@ impl<E: HostEnvironment, const A: usize> HostPool<E, A> {
     pub fn with_workers(mut self, options: SyncOptions) -> Result<Self, EngineError> {
         self.sync = Some(SyncRuntime::start(
             options,
+            crate::pool::Pinning::ExplicitOnly,
             #[cfg(test)]
             crate::sys::Faults::default(),
         )?);
@@ -197,6 +202,12 @@ impl<E: HostEnvironment, const A: usize> HostPool<E, A> {
     #[must_use]
     pub fn workers(&self) -> usize {
         self.sync.as_ref().map_or(0, |s| s.workers)
+    }
+
+    /// Whether the workers were pinned: only with an explicit `cpu_set`.
+    #[must_use]
+    pub fn pinned_workers(&self) -> bool {
+        self.sync.as_ref().is_some_and(|s| s.pinned)
     }
 
     /// The pool options.
@@ -348,23 +359,25 @@ impl<E: HostEnvironment, const A: usize> HostPool<E, A> {
             ..
         } = self;
         run_kernels(poisoned, || {
-            {
-                #[cfg(feature = "debug-checks")]
-                let _bracket = crate::sys::alloc_track::HostBracket::enter(allocs);
-                let outputs = &mut outputs.view_all();
-                for (k, i) in indices.clone().enumerate() {
-                    let (Some(header), Some(inst)) = (headers.get_mut(i), instances.get_mut(i))
-                    else {
-                        continue;
-                    };
-                    crate::pool::clear_instance(outputs, i);
-                    kernels::reset_one::<E, A>(header, inst, reseed.seed(k), outputs, i);
-                    crate::pool::write_agent_masks(outputs, i, header);
-                    kernels::observe_instance::<E, A>(header, inst, outputs, i);
-                }
-            }
-            if tessera_rl_num::fp::ensure_canonical() {
-                fp_resets.fetch_add(1, Ordering::Relaxed);
+            #[cfg(feature = "debug-checks")]
+            let _bracket = crate::sys::alloc_track::HostBracket::enter(allocs);
+            let outputs = &mut outputs.view_all();
+            for (k, i) in indices.clone().enumerate() {
+                let (Some(header), Some(inst)) = (headers.get_mut(i), instances.get_mut(i)) else {
+                    continue;
+                };
+                crate::pool::clear_instance(outputs, i);
+                kernels::reset_one::<E, A>(
+                    header,
+                    inst,
+                    reseed.seed(k),
+                    outputs,
+                    i,
+                    kernels::ResetRows::Live,
+                    fp_resets,
+                );
+                crate::pool::write_agent_masks(outputs, i, header);
+                kernels::observe_instance::<E, A>(header, inst, outputs, i);
             }
         })?;
         self.after_kernels()?;

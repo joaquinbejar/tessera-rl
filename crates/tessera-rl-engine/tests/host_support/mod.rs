@@ -28,6 +28,11 @@ pub struct BookConfig {
     pub hostile_fp: bool,
     /// Refuse to start (`HostError::Construction`).
     pub refuse: bool,
+    /// The step (1-based) whose rewards are NaN; 0 never.
+    pub nan_reward_at: u32,
+    /// Write no observation at the start of an episode (step 0): the rows
+    /// must then read zero, as the engine hands them (ADR-0058).
+    pub blank_at_start: bool,
 }
 
 impl Default for BookConfig {
@@ -37,6 +42,8 @@ impl Default for BookConfig {
             panic_at: 0,
             hostile_fp: false,
             refuse: false,
+            nan_reward_at: 0,
+            blank_at_start: false,
         }
     }
 }
@@ -53,6 +60,9 @@ pub struct Book {
     last: i64,
     step: u32,
 }
+
+/// The reward every agent gets from a reset.
+pub const RESET_REWARD: f32 = 100.0;
 
 /// Choices of the side head (hold, buy, sell) and the level head.
 pub const SIDES: u32 = 3;
@@ -96,7 +106,14 @@ impl HostEnvironment for Book {
         })
     }
 
-    fn reset(&mut self, seed: HostSeed, _: &mut StepOut<'_>) {
+    /// Writes a reward of `RESET_REWARD` for every agent: visible after an
+    /// explicit or `NextStep` reset, discarded in a `SameStep` one.
+    fn reset(&mut self, seed: HostSeed, out: &mut StepOut<'_>) {
+        for slot in 0..AGENTS {
+            if let Some(agent) = AgentSlot::new(u16::try_from(slot).unwrap_or(0), AGENTS) {
+                out.set_reward(agent, RESET_REWARD);
+            }
+        }
         self.orders.clear();
         self.position = [0; AGENTS];
         // Integer-only: the opening price comes from the seed and episode.
@@ -135,7 +152,12 @@ impl HostEnvironment for Book {
                 _ => 0,
             };
             #[expect(clippy::cast_precision_loss, reason = "small integer rewards")]
-            out.set_reward(agent, reward as f32);
+            let reward = if self.step == self.cfg.nan_reward_at {
+                f32::NAN
+            } else {
+                reward as f32
+            };
+            out.set_reward(agent, reward);
             self.last = price;
         }
         if self.cfg.hostile_fp {
@@ -147,6 +169,9 @@ impl HostEnvironment for Book {
     }
 
     fn observe(&self, agent: AgentSlot, obs: &mut ObsWriter<'_, '_, ()>) {
+        if self.cfg.blank_at_start && self.step == 0 {
+            return;
+        }
         let values = [
             self.position.get(agent.index()).copied().unwrap_or(0),
             i64::try_from(self.orders.len()).unwrap_or(i64::MAX),

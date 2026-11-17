@@ -179,62 +179,126 @@ pub(crate) struct SyncRuntime {
     pub(crate) gang: Gang,
     pub(crate) workers: usize,
     pub(crate) native: bool,
-    _registration: Registration,
+    /// Whether the workers were pinned to cores.
+    pub(crate) pinned: bool,
+    /// Present only for a runtime that counts as an active engine (ADR-0005).
+    /// Held for its `Drop`, which unregisters; tests read it.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "held for its Drop, which unregisters")
+    )]
+    pub(crate) registration: Option<Registration>,
+}
+
+/// When a pool's workers pin, and whether the pool registers as an active
+/// engine (ADR-0005).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Pinning {
+    /// `EnvPool`: always registers; pins to `cpu_set`, or to the first
+    /// reported cores when no other engine is active.
+    Auto,
+    /// The host pool (ADR-0062 item 2): pins and registers only with an
+    /// explicit `cpu_set`. Without one its workers are unpinned and it does
+    /// not count as an active engine, so a pool started after it still pins
+    /// as usual, possibly to cores the host pool's workers also run on.
+    ExplicitOnly,
+}
+
+/// Whether a pool's workers count as an active engine (ADR-0005): every
+/// `EnvPool`, and a host pool only with an explicit `cpu_set` (ADR-0062
+/// item 2).
+pub(crate) fn registers(pinning: Pinning, explicit_cpu_set: bool) -> bool {
+    pinning == Pinning::Auto || explicit_cpu_set
+}
+
+/// The cores the workers pin to, `None` for unpinned. A pure function of
+/// the explicit `cpu_set`, the cores the OS reports (`None` where it reports
+/// none, as on macOS), the worker count, the number of other active engines
+/// and the pool's kind:
+///
+/// - an explicit `cpu_set` pins to it, for either kind, if it names one
+///   reported core per worker; otherwise it is refused;
+/// - without one, an `EnvPool` pins to the first reported cores when no
+///   other engine is active and there are enough of them, else runs
+///   unpinned;
+/// - without one, a host pool runs unpinned. It does not register either
+///   ([`registers`]), so an `EnvPool` started after it may auto-pin to cores
+///   the host pool's unpinned workers also run on.
+pub(crate) fn pin_plan(
+    cpu_set: Option<Vec<usize>>,
+    available: Option<&[usize]>,
+    workers: usize,
+    others: usize,
+    pinning: Pinning,
+) -> Result<Option<Vec<usize>>, EngineError> {
+    match cpu_set {
+        Some(cores) if cores.len() < workers => Err(EngineError::Options {
+            option: "cpu_set",
+            reason: "needs one core per worker",
+        }),
+        Some(cores) => {
+            // Only ids the OS reports (and, on Windows, below 64).
+            let known = |id: &usize| available.is_some_and(|a| a.contains(id));
+            if cores.iter().all(known) {
+                Ok(Some(cores))
+            } else {
+                Err(EngineError::Options {
+                    option: "cpu_set",
+                    reason: "contains a core id the OS does not report",
+                })
+            }
+        }
+        None if pinning == Pinning::ExplicitOnly => Ok(None),
+        None if others == 0 => match available {
+            Some(cores) if cores.len() >= workers => {
+                Ok(Some(cores.iter().copied().take(workers).collect()))
+            }
+            _ => {
+                tracing::warn!(
+                    workers,
+                    "fewer reported cores than workers; workers run unpinned"
+                );
+                Ok(None)
+            }
+        },
+        None => {
+            tracing::warn!(
+                others,
+                "another engine with workers is active; workers run unpinned (set cpu_set to partition cores)"
+            );
+            Ok(None)
+        }
+    }
 }
 
 impl SyncRuntime {
-    /// Starts the workers of `options`: pinned to `cpu_set`, or to the first
-    /// reported cores when no other engine is active, else unpinned. Shared
-    /// by `EnvPool` and the host pool (ADR-0062).
+    /// Starts the workers of `options` under `pinning`. Shared by `EnvPool`
+    /// and the host pool (ADR-0062).
     pub(crate) fn start(
         options: SyncOptions,
+        pinning: Pinning,
         #[cfg(test)] faults: crate::sys::Faults,
     ) -> Result<Self, EngineError> {
         let workers = options.workers.get();
         let available = available_cores();
-        let (registration, others) = Registration::register();
-        let pin = match options.cpu_set {
-            Some(cores) if cores.len() < workers => {
-                return Err(EngineError::Options {
-                    option: "cpu_set",
-                    reason: "needs one core per worker",
-                });
-            }
-            Some(cores) => {
-                // Only ids the OS reports (and, on Windows, below 64).
-                let known = |id: &usize| available.as_ref().is_some_and(|a| a.contains(id));
-                if !cores.iter().all(known) {
-                    return Err(EngineError::Options {
-                        option: "cpu_set",
-                        reason: "contains a core id the OS does not report",
-                    });
-                }
-                Some(cores)
-            }
-            None if others == 0 => match available {
-                Some(cores) if cores.len() >= workers => {
-                    Some(cores.into_iter().take(workers).collect())
-                }
-                _ => {
-                    tracing::warn!(
-                        workers,
-                        "fewer reported cores than workers; workers run unpinned"
-                    );
-                    None
-                }
-            },
-            None => {
-                tracing::warn!(
-                    others,
-                    "another engine with workers is active; workers run unpinned (set cpu_set to partition cores)"
-                );
-                None
-            }
+        let (registration, others) = if registers(pinning, options.cpu_set.is_some()) {
+            let (registration, others) = Registration::register();
+            (Some(registration), others)
+        } else {
+            (None, 0)
         };
+        let pin = pin_plan(
+            options.cpu_set,
+            available.as_deref(),
+            workers,
+            others,
+            pinning,
+        )?;
         #[cfg(not(loom))]
         let native = select_native(options.wait);
         #[cfg(loom)]
         let native: Option<()> = None;
+        let pinned = pin.is_some();
         let gang = Gang::new(&GangOptions {
             workers: options.workers,
             spin: options.spin,
@@ -250,7 +314,8 @@ impl SyncRuntime {
             gang,
             workers,
             native: native.is_some(),
-            _registration: registration,
+            pinned,
+            registration,
         })
     }
 }
@@ -416,6 +481,7 @@ where
     ) -> Result<Self, EngineError> {
         self.sync = Some(SyncRuntime::start(
             options,
+            Pinning::Auto,
             #[cfg(test)]
             faults,
         )?);
@@ -433,6 +499,13 @@ where
     #[must_use]
     pub fn workers(&self) -> usize {
         self.sync.as_ref().map_or(0, |s| s.workers)
+    }
+
+    /// Whether the workers were pinned to cores (ADR-0005); `false` in
+    /// Inline mode.
+    #[must_use]
+    pub fn pinned_workers(&self) -> bool {
+        self.sync.as_ref().is_some_and(|s| s.pinned)
     }
 
     /// Times a worker found its FP environment changed at a batch start and

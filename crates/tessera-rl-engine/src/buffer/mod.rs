@@ -3,7 +3,7 @@
 //! Disjoint chunk views shared with worker threads (ADR-0002, ADR-0005).
 //! Audited `unsafe` module.
 //!
-//! Sync mode splits a pool-wide [`Chunk`] into its raw parts and hands each
+//! Sync mode splits a pool-wide [`Rows`] into its raw parts and hands each
 //! worker `&mut` views of *its own* chunks only. The split-phase modes
 //! (ADR-0047) also build views of a Pipelined half or of one instance
 //! ([`RawChunk::range_view`], [`RawChunk::instance_view`]): a caller views

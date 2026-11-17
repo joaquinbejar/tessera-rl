@@ -370,9 +370,9 @@ fn test_host_pool_host_fp_changes_are_undone_after_each_chunk() {
     p.reset_all(Reseed::Keep).unwrap();
     assert_eq!(p.host_fp_resets(), 0);
     step(&mut p, &buy(2, 0)).unwrap();
-    assert_eq!(p.host_fp_resets(), 1, "one Inline chunk");
+    assert_eq!(p.host_fp_resets(), 2, "after each of the two host steps");
     assert!(tessera_rl_num::fp::is_canonical());
-    // Sync: two workers, chunks of one instance: one reset per chunk.
+    // Sync: two workers, chunks of one instance: one per host step.
     let mut o = options(4, 0);
     o.chunk_size = NonZeroU32::MIN;
     let mut p = Pool::new(&cfg, o)
@@ -383,4 +383,196 @@ fn test_host_pool_host_fp_changes_are_undone_after_each_chunk() {
     step(&mut p, &buy(4, 0)).unwrap();
     assert_eq!(p.host_fp_resets(), 4);
     assert!(tessera_rl_num::fp::is_canonical());
+}
+
+/// The terminal step's rewards and flags survive every auto-reset mode: a
+/// `SameStep` reset writes scratch rows; a `NextStep` reset's rewards are
+/// the outputs of the call after; `Disabled` never resets by itself.
+#[test]
+fn test_host_pool_terminal_rewards_kept_in_every_auto_reset_mode() {
+    use host_support::RESET_REWARD;
+    for mode in [
+        AutoReset::NextStep,
+        AutoReset::SameStep,
+        AutoReset::Disabled,
+    ] {
+        let mut p = with_auto_reset(mode);
+        let out = p.reset_all(Reseed::Keep).unwrap();
+        assert_eq!(
+            out.rewards(),
+            [RESET_REWARD; AGENTS],
+            "{mode:?}: reset rewards"
+        );
+        step(&mut p, &buy(1, 1)).unwrap();
+        step(&mut p, &buy(1, 1)).unwrap();
+        let out = p.outputs().unwrap();
+        // Buying at level 1 costs 1: the ended step's rewards and flags.
+        assert_eq!(out.rewards(), [-1.0; AGENTS], "{mode:?}: terminal rewards");
+        assert!(out.episode_terminated()[0].get(), "{mode:?}");
+        assert!(out.agent_terminated().iter().all(|f| f.get()), "{mode:?}");
+        assert_eq!(
+            out.episode_return()[0],
+            -4.0,
+            "{mode:?}: two agents, two steps"
+        );
+        match mode {
+            AutoReset::NextStep => {
+                // The reset runs in the next call: its rewards are that call's.
+                step(&mut p, &buy(1, 1)).unwrap();
+                assert_eq!(p.outputs().unwrap().rewards(), [RESET_REWARD; AGENTS]);
+            }
+            AutoReset::Disabled => {
+                let out = p.reset(&[0], Reseed::Keep).unwrap();
+                assert_eq!(out.rewards(), [RESET_REWARD; AGENTS]);
+            }
+            AutoReset::SameStep => {}
+        }
+    }
+}
+
+#[cfg(feature = "debug-checks")]
+#[test]
+fn test_host_pool_nan_reward_poisons_with_instance_and_agent() {
+    let cfg = BookConfig {
+        nan_reward_at: 2,
+        ..BookConfig::default()
+    };
+    let mut p = pool(3, 0, cfg);
+    p.reset_all(Reseed::Keep).unwrap();
+    step(&mut p, &buy(3, 0)).unwrap();
+    assert_eq!(
+        step(&mut p, &buy(3, 0)),
+        Err(EngineError::NanDetected {
+            instance: 0,
+            site: tessera_rl_engine::NanSite::Reward { agent: 0 },
+        })
+    );
+    assert!(p.is_poisoned());
+    p.reset_all(Reseed::Keep).unwrap();
+}
+
+/// A `Sequential` host environment: agent 0 acts, then agent 1, unless
+/// `both` (a violation: two acting agents).
+struct Turns {
+    both: bool,
+    steps: u32,
+}
+
+#[derive(Clone, Copy)]
+struct TurnsConfig {
+    both: bool,
+}
+
+impl EnvConfig for TurnsConfig {}
+
+impl HostEnvironment for Turns {
+    const ENV_ID: &'static str = "test/Turns-v1";
+    const ENV_VERSION: u32 = 1;
+    const MAX_AGENTS: usize = 2;
+    const TURNS: tessera_rl_core::TurnStructure = tessera_rl_core::TurnStructure::Sequential;
+    type Config = TurnsConfig;
+
+    fn new(cfg: &TurnsConfig) -> Result<Self, HostError> {
+        Ok(Self {
+            both: cfg.both,
+            steps: 0,
+        })
+    }
+
+    fn observation_space(_: &TurnsConfig) -> Result<Space, SpaceError> {
+        Ok(Space::Discrete { n: 2 })
+    }
+
+    fn action_space(_: &TurnsConfig) -> Result<Space, SpaceError> {
+        Ok(Space::Discrete { n: 2 })
+    }
+
+    fn reset(&mut self, _: HostSeed, _: &mut StepOut<'_>) {
+        self.steps = 0;
+    }
+
+    fn step(&mut self, _: &Actions<'_, ()>, _: &mut StepOut<'_>) {
+        self.steps += 1;
+    }
+
+    fn observe(&self, _: AgentSlot, _: &mut ObsWriter<'_, '_, ()>) {}
+
+    fn acting(&self, agent: AgentSlot) -> bool {
+        self.both || agent.index() == usize::try_from(self.steps % 2).unwrap_or(0)
+    }
+}
+
+#[test]
+fn test_host_pool_sequential_turn_order_alternates_and_violation_poisons() {
+    let mut p = HostPool::<Turns, 2>::new(&TurnsConfig { both: false }, options(2, 0)).unwrap();
+    let acting = |out: &Outputs| out.acting().iter().map(|f| f.get()).collect::<Vec<_>>();
+    let out = p.reset_all(Reseed::Keep).unwrap();
+    assert_eq!(acting(out), [true, false, true, false]);
+    let none = [0; 4];
+    let out = p
+        .step(ActionInput {
+            discrete: &none,
+            continuous: &[],
+        })
+        .unwrap();
+    assert_eq!(acting(out), [false, true, false, true]);
+    let mut bad = HostPool::<Turns, 2>::new(&TurnsConfig { both: true }, options(2, 0)).unwrap();
+    assert!(matches!(
+        bad.reset_all(Reseed::Keep),
+        Err(EngineError::TurnOrder { instance: 0, .. })
+    ));
+    assert!(bad.is_poisoned());
+}
+
+/// Output ownership (ADR-0003, SPEC 5.3): one storage for the pool's life,
+/// a write generation that moves on every call, memory that outlives the
+/// pool, and borrowed rows that show the later call's values.
+#[test]
+fn test_host_pool_outputs_one_storage_generations_and_lifetime() {
+    let mut p = pool(2, 0, BookConfig::default());
+    let storage = p.reset_all(Reseed::Keep).unwrap().storage();
+    let g0 = storage.generation();
+    let before = obs(p.outputs().unwrap(), 0, 0);
+    step(&mut p, &buy(2, 3)).unwrap();
+    let out = p.outputs().unwrap();
+    assert!(
+        std::sync::Arc::ptr_eq(&storage, &out.storage()),
+        "same memory"
+    );
+    assert!(storage.generation() > g0, "the step started a new window");
+    let after = obs(out, 0, 0);
+    assert_ne!(before, after, "the rows show the later call's values");
+    let g1 = storage.generation();
+    assert!(step(&mut p, &[0]).is_err());
+    assert_eq!(storage.generation(), g1, "a refused call writes nothing");
+    drop(p);
+    assert!(storage.bytes() > 0, "the memory outlives the pool");
+}
+
+/// A `SameStep` reset's observation is written on zeroed rows (ADR-0058):
+/// the rows held the terminal observation, and an environment that writes
+/// nothing at an episode's start must leave zeros, not the old bytes.
+#[test]
+fn test_host_pool_same_step_reset_observes_on_zeroed_rows() {
+    let mut o = options(1, 7);
+    o.auto_reset = AutoReset::SameStep;
+    let cfg = BookConfig {
+        episode: 2,
+        blank_at_start: true,
+        ..BookConfig::default()
+    };
+    let mut p = Pool::new(&cfg, o).unwrap();
+    p.reset_all(Reseed::Keep).unwrap();
+    step(&mut p, &buy(1, 1)).unwrap();
+    step(&mut p, &buy(1, 1)).unwrap();
+    let out = p.outputs().unwrap();
+    assert_eq!(
+        out.terminal_observation(0).unwrap()[..16],
+        obs_bytes([2, 4, 11, 2])
+    );
+    assert_eq!(
+        obs(out, 0, 0),
+        [0; 4],
+        "the old bytes leaked into the reset's rows"
+    );
 }

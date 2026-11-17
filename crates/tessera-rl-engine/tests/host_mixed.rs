@@ -206,10 +206,10 @@ fn test_host_mixed_inline_probe_canonical_and_uncharged() {
         mixed, alone,
         "the EnvPool's outputs changed beside a host pool"
     );
-    // Every host `step` left flush-to-zero set and was put back, once per
-    // Inline call. The book's episodes are 5 steps (NextStep): call 6 is a
-    // reset, whose host code leaves the controls alone, so 9 of 10.
-    assert_eq!(h.host_fp_resets(), 9);
+    // Every host `step` left flush-to-zero set and was put back right after
+    // it: 6 instances per call. The book's episodes are 5 steps (NextStep):
+    // call 6 resets, whose host code leaves the controls alone: 6 * 9.
+    assert_eq!(h.host_fp_resets(), 54);
     // The host allocated (one order per buying agent) and it was counted
     // there.
     assert!(h.allocations_in_host_steps() > 0);
@@ -252,9 +252,8 @@ fn test_host_mixed_sync_shared_cores_probe_canonical_and_uncharged() {
         mixed, alone,
         "the EnvPool's outputs changed beside a host pool"
     );
-    // Three chunks of two instances per stepping call, each put back once;
-    // call 6 resets (see the Inline test): 3 * 9.
-    assert_eq!(h.host_fp_resets(), 27);
+    // As in Inline mode, on the workers: 6 * 9.
+    assert_eq!(h.host_fp_resets(), 54);
     assert!(h.allocations_in_host_steps() > 0);
     assert_eq!((p.workers(), h.workers()), (2, 2));
 }
