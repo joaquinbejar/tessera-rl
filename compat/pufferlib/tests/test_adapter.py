@@ -41,22 +41,42 @@ def start_scenario(*args):
     return p, write_end
 
 
+def kill_group(pgid: int) -> None:
+    """SIGKILL to the group. On macOS, killpg answers EPERM, not ESRCH, for a
+    group whose members are exiting (zombies) (#268); then this waits until
+    ``ps`` shows no live member, and fails the test if one remains."""
+    try:
+        os.killpg(pgid, signal.SIGKILL)
+        return
+    except ProcessLookupError:
+        return
+    except PermissionError:
+        pass
+    deadline = time.monotonic() + 10
+    while True:
+        out = subprocess.run(["ps", "-A", "-o", "pid=,pgid=,stat="], capture_output=True, text=True, check=True).stdout
+        live = [ln for ln in out.splitlines() if len(ln.split()) == 3 and int(ln.split()[1]) == pgid
+                and not ln.split()[2].startswith("Z")]  # fmt: skip
+        if not live:
+            return
+        if time.monotonic() > deadline:
+            pytest.fail(f"process group {pgid} still has live members after EPERM: {live}")
+        time.sleep(0.05)
+
+
 def scenario(*args, timeout=300):
     """Runs a scenario; on a timeout, kills the recorded process group."""
     p, lifeline = start_scenario(*args)
     try:
         out, err = p.communicate(timeout=timeout)
     except subprocess.TimeoutExpired:
-        os.killpg(p.pid, signal.SIGKILL)
+        kill_group(p.pid)
         out, err = p.communicate()
         pytest.fail(f"{args} timed out\n{out[-800:]}\n{err[-2000:]}")
     finally:
         os.close(lifeline)
     # A scenario exits at once; its Multiprocessing children must go with it.
-    try:
-        os.killpg(p.pid, signal.SIGKILL)
-    except ProcessLookupError:
-        pass
+    kill_group(p.pid)
     lines = [ln for ln in out.splitlines() if ln.startswith("RESULT ")]
     assert lines, f"{args} rc={p.returncode}\n{out[-800:]}\n{err[-3000:]}"
     return json.loads(lines[-1][7:])
@@ -577,10 +597,7 @@ def test_scenario_group_dies_with_its_runner_by_any_means():
     finally:
         if lifeline is not None:
             os.close(lifeline)
-        try:
-            os.killpg(p.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
+        kill_group(p.pid)
 
 
 def test_is_stale_is_true_for_arrays_step_just_returned():

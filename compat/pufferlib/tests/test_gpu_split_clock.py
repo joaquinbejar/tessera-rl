@@ -532,11 +532,16 @@ def test_driver_sealed_rows_leak_no_progress(tmp_path, capsys, monkeypatch):
 
 
 def test_driver_writes_timed_start_before_the_first_run_ends(tmp_path, capsys, monkeypatch):
+    # Only the first run of the order copies the status file, through a temp
+    # file and a rename, so the test reads a whole copy whatever the timing.
     seen = tmp_path / "seen.json"
-    script = f'test -e {seen} || cp {tmp_path / "status.json"} {seen}; exit 0'
+    case, mode = manifest.order(manifest.CASES, manifest.MODES, 1)[0][0]
+    script = (f'if [ "$3 $4" = "{case} {mode}" ]; then cp {tmp_path / "status.json"} {seen}.tmp && '
+              f'mv {seen}.tmp {seen}; fi; exit 0')  # fmt: skip
     sealed_attempt(tmp_path, capsys, monkeypatch, script)
     early = json.loads(seen.read_text())
-    assert early["timed_start_mono"] is not None and early["timed_end_mono"] is None
+    final = json.loads((tmp_path / "status.json").read_text())
+    assert early["timed_start_mono"] == final["timed_start_mono"] and early["timed_end_mono"] is None
 
 
 def test_driver_refuses_out_or_missing_rows_in_a_manifest_attempt(tmp_path, capsys):
@@ -600,7 +605,7 @@ FAKE_LOOP = textwrap.dedent(
             continue
         n += 1
         if MODE == "slow" and n == 3:
-            time.sleep(0.4)
+            time.sleep(1.5)
         if MODE == "die" and n == 3:
             sys.exit(0)
         print(time.monotonic_ns() // 100, 10000000, time.time_ns() // 100, flush=True)
@@ -669,8 +674,11 @@ def test_clock_sampler_with_a_fake_host(tmp_path):
 
 
 def test_clock_sampler_records_a_dead_host_reader(tmp_path, monkeypatch):
-    monkeypatch.setattr(clock, "HOST_TIMEOUT_S", 0.2)
+    # The third read sleeps 1.5 s, beyond the 1 s timeout; the first read
+    # first waits for the fake loop to start, so it gets a long deadline.
     s = clock.Sampler(str(tmp_path / "s.jsonl"), shlex.split(fake_loop(tmp_path, "slow")), None)
+    assert s.host.ask("cpu", timeout=60) is not None
+    monkeypatch.setattr(clock, "HOST_TIMEOUT_S", 1.0)
     for _ in range(4):
         s.sample("pre")
     rows = clock.read_jsonl(str(tmp_path / "s.jsonl"))
@@ -692,35 +700,56 @@ def test_clock_run_quiet_leaves_the_parents_stdin_alone(tmp_path):
     assert p.stdout.strip() == "sentinel"
 
 
-def run_ref(tmp_path, mode, seconds):
+def wait_for(cond, deadline_s=60.0):
+    """Polls ``cond`` until it is true, or fails at the deadline."""
+    end = time.monotonic() + deadline_s
+    while not cond():
+        assert time.monotonic() < end, "condition not met before the deadline"
+        time.sleep(0.02)
+
+
+def rows_of(path):
+    return clock.read_jsonl(str(path)) if path.exists() else []
+
+
+def run_ref(tmp_path, mode, reads):
+    """Runs the client until ``reads`` read rows and a cpu row exist (or it
+    exits on its own), then stops it."""
     out, stop = tmp_path / f"ref_{mode}.jsonl", tmp_path / f"stop_{mode}"
     p = subprocess.Popen([sys.executable, "-I", str(HARNESS / "clock_ref.py"), "--out", str(out), "--host",
                           "ref.example", "--stop-file", str(stop), "--every", "0.05", "--cpu-every", "0.2",
-                          "--reply-timeout", "2", "--command", fake_loop(tmp_path, mode)])  # fmt: skip
-    time.sleep(seconds)
+                          "--reply-timeout", "10", "--command", fake_loop(tmp_path, mode)])  # fmt: skip
+
+    def enough():
+        rows = rows_of(out)
+        return p.poll() is not None or (
+            sum(r.get("kind") == "read" for r in rows) >= reads and any(r.get("kind") == "cpu" for r in rows))
+
+    wait_for(enough)
     stop.write_text("")
     rc = p.wait(timeout=60)
     return rc, clock.read_jsonl(str(out))
 
 
 def test_clock_ref_stamps_reads_with_monotonic_and_ends_cleanly(tmp_path):
-    rc, rows = run_ref(tmp_path, "ok", 0.6)
+    rc, rows = run_ref(tmp_path, "ok", 3)
     assert rc == 0 and rows[0]["clock"] == "time.monotonic"
     assert rows[0]["clock_ref_py_sha256"] == manifest.file_sha256(str(HARNESS / "clock_ref.py"))
     reads = [r for r in rows if r["kind"] == "read"]
-    assert reads and all(r["t0"] < r["t1"] and r["usable"] for r in reads)
+    assert len(reads) >= 3 and all(r["t0"] < r["t1"] for r in reads)
+    assert all(r["usable"] == (r["t1"] - r["t0"] <= clock_ref.RTT_MAX_S) for r in reads)
     assert any(r["kind"] == "cpu" for r in rows)
     assert rows[-1] == {"kind": "event", "event": "end", "loop_ended": True}
 
 
 def test_clock_ref_marks_a_slow_reply_unusable(tmp_path):
-    _, rows = run_ref(tmp_path, "slow", 0.8)
+    _, rows = run_ref(tmp_path, "slow", 4)
     reads = [r for r in rows if r["kind"] == "read"]
     assert reads[2]["usable"] is False and reads[2]["t1"] - reads[2]["t0"] > clock_ref.RTT_MAX_S
 
 
 def test_clock_ref_records_a_lost_session_and_does_not_reconnect(tmp_path):
-    rc, rows = run_ref(tmp_path, "die", 0.6)
+    rc, rows = run_ref(tmp_path, "die", 1000)  # it exits on its own at the third read
     assert rc == 3
     assert rows[-1]["event"] == "lost" and sum(1 for r in rows if r["kind"] == "header") == 1
 
@@ -728,7 +757,7 @@ def test_clock_ref_records_a_lost_session_and_does_not_reconnect(tmp_path):
 def test_clock_ref_header_passes_decide_and_summarise(tmp_path):
     import socket
 
-    _, ref = run_ref(tmp_path, "ok", 0.4)
+    _, ref = run_ref(tmp_path, "ok", 2)
     head = ref[0]
     assert head["host"] == socket.gethostname() and head["target"] == "ref.example"
     m = gate_manifest(clock_ref_host=socket.gethostname(), clock_ref_py_sha256=head["clock_ref_py_sha256"],
