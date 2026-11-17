@@ -32,21 +32,34 @@ const STEPS: usize = if cfg!(miri) { 3 } else { 12 };
 /// How long a test may take before it fails by name instead of hanging the
 /// binary (issue #182; Miri runs far slower), as the newer Async tests do.
 const WATCHDOG: Duration = Duration::from_secs(if cfg!(miri) { 1_200 } else { 30 });
+/// The watchdog of `test_async_nothing_runs_once_every_id_is_received`
+/// (issue #280). Its 20,000 polling rounds are the coverage, and each round
+/// yields to the scheduler, so its time follows the host's load: about 1.5 to
+/// 3 s on an idle Apple M-series host, but 268 to 309 s (three runs) with the
+/// test and 36 busy loops all in the background band (`taskpolicy -b`, twice
+/// the host's 18 cores), the contention a shared runner shows. 600 s is about
+/// twice the worst measured time; it still fails a hang by name.
+const POLL_WATCHDOG: Duration = Duration::from_secs(if cfg!(miri) { 1_200 } else { 600 });
 
 /// Runs `f` on its own thread and fails, naming `what`, if it has not
 /// finished within [`WATCHDOG`]: a broken ring or claim then fails the test
 /// by name instead of hanging it. A panic in `f` is passed on.
-#[expect(clippy::panic, reason = "the watchdog fails the test by name")]
 fn within(what: &str, f: impl FnOnce() + Send + 'static) {
+    within_for(what, WATCHDOG, f);
+}
+
+/// [`within`] with its own limit, for a test whose work is long by design.
+#[expect(clippy::panic, reason = "the watchdog fails the test by name")]
+fn within_for(what: &str, limit: Duration, f: impl FnOnce() + Send + 'static) {
     let (done, finished) = std::sync::mpsc::channel();
     let body = std::thread::spawn(move || {
         f();
         let _ = done.send(());
     });
-    match finished.recv_timeout(WATCHDOG) {
+    match finished.recv_timeout(limit) {
         Ok(()) => body.join().unwrap(),
         Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-            panic!("{what}: did not finish within {WATCHDOG:?}")
+            panic!("{what}: did not finish within {limit:?}")
         }
         Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
             if let Err(payload) = body.join() {
@@ -1115,30 +1128,34 @@ fn test_async_panic_outranks_batch_unreachable() {
 
 #[test]
 fn test_async_nothing_runs_once_every_id_is_received() {
-    within("nothing runs once every id is received", || {
-        let rounds = if cfg!(miri) { 20 } else { 20_000 };
-        let mut p = asy(AutoReset::NextStep, 4);
-        drop(p.reset_all(Reseed::Keep).unwrap());
-        let ids: Vec<u32> = (0..N).take(BATCH).collect();
-        let rows = rows_for(&ids, &[0; 100]);
-        for round in 0..rounds {
-            send(&mut p, &ids, &rows);
-            // Polling, as a blocking `recv` waits for the job and hides the race.
-            loop {
-                if let Some(t) = p.try_recv().unwrap() {
-                    drop(t);
-                    break;
+    within_for(
+        "nothing runs once every id is received",
+        POLL_WATCHDOG,
+        || {
+            let rounds = if cfg!(miri) { 20 } else { 20_000 };
+            let mut p = asy(AutoReset::NextStep, 4);
+            drop(p.reset_all(Reseed::Keep).unwrap());
+            let ids: Vec<u32> = (0..N).take(BATCH).collect();
+            let rows = rows_for(&ids, &[0; 100]);
+            for round in 0..rounds {
+                send(&mut p, &ids, &rows);
+                // Polling, as a blocking `recv` waits for the job and hides the race.
+                loop {
+                    if let Some(t) = p.try_recv().unwrap() {
+                        drop(t);
+                        break;
+                    }
+                    std::thread::yield_now();
                 }
-                std::thread::yield_now();
+                if round % 2 == 0 {
+                    p.reset(&ids, Reseed::Keep).unwrap();
+                    drop(p.recv().unwrap());
+                } else {
+                    p.snapshot(0).unwrap();
+                }
             }
-            if round % 2 == 0 {
-                p.reset(&ids, Reseed::Keep).unwrap();
-                drop(p.recv().unwrap());
-            } else {
-                p.snapshot(0).unwrap();
-            }
-        }
-    });
+        },
+    );
 }
 
 // TR nit on the O(ids) gather: `rows` reads what the per-id accessors read.
