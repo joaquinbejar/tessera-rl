@@ -745,7 +745,8 @@ def test_clock_ref_stamps_reads_with_monotonic_and_ends_cleanly(tmp_path):
 def test_clock_ref_marks_a_slow_reply_unusable(tmp_path):
     _, rows = run_ref(tmp_path, "slow", 4)
     reads = [r for r in rows if r["kind"] == "read"]
-    assert reads[2]["usable"] is False and reads[2]["t1"] - reads[2]["t0"] > clock_ref.RTT_MAX_S
+    # The fake loop's third "x" is slow; the first one is the client's sync request.
+    assert reads[1]["usable"] is False and reads[1]["t1"] - reads[1]["t0"] > clock_ref.RTT_MAX_S
 
 
 def test_clock_ref_records_a_lost_session_and_does_not_reconnect(tmp_path):
@@ -772,3 +773,91 @@ def test_clock_ref_header_passes_decide_and_summarise(tmp_path):
                          str(tmp_path / "m.json"), "--manifest-sha256", msha, "--clock-decide", str(tmp_path / "d.json"),
                          "--clock-decide-sha256", dsha, "--sent-at", "x", "--out", str(tmp_path / "s.jsonl")])  # fmt: skip
     assert rc == 0
+
+
+# A model of the box's OpenSSH transport (152-gate2-p5-incident.md): sshd runs
+# the remote command through the DefaultShell, PowerShell, as
+# ``powershell.exe -c "<command>"``, which loads a profile (it may print). A
+# remote command that starts another ``powershell`` runs as a native child
+# that shares the session's stdin with the wrapper; on the box only the first
+# requests reached the loop. The fake ssh below reproduces that observed
+# behaviour (the wrapper passes on its first two lines and keeps the rest); a
+# remote command that is the loop itself runs in the wrapper's own process.
+FAKE_LOOP_PY = """
+import sys, time
+for line in sys.stdin:
+    line = line.strip()
+    if line == "end":
+        print("end", flush=True)
+        break
+    if line == "cpu":
+        print(time.process_time(), flush=True)
+        continue
+    print(time.monotonic_ns() // 100, 10000000, time.time_ns() // 100, flush=True)
+"""
+
+FAKE_SSH = """
+import subprocess, sys
+cmd = sys.argv[-1]
+print("profile: Windows PowerShell, loaded in 120 ms", flush=True)
+if cmd.startswith("powershell "):
+    child = subprocess.Popen([sys.executable, "-I", "-c", LOOP_PY], stdin=subprocess.PIPE, text=True)
+    for n, line in enumerate(sys.stdin):
+        if n < 2:
+            child.stdin.write(line)
+            child.stdin.flush()
+    child.stdin.close()
+    child.wait()
+else:
+    with open(EXPECTED) as f:
+        assert cmd == f.read(), "the remote command is not clock_ref.LOOP"
+    exec(LOOP_PY)
+"""
+
+
+def fake_ssh(tmp_path):
+    (tmp_path / "loop.txt").write_text(clock_ref.LOOP)
+    p = tmp_path / "fake_ssh.py"
+    p.write_text(f"EXPECTED = {str(tmp_path / 'loop.txt')!r}\nLOOP_PY = {FAKE_LOOP_PY!r}\n" + FAKE_SSH)
+    w = tmp_path / "ssh"
+    w.write_text(f'#!/bin/sh\nexec {sys.executable} -I {p} "$@"\n')
+    w.chmod(0o755)
+    return str(w)
+
+
+def run_ref_transport(tmp_path, extra, reads=3):
+    out, stop = tmp_path / "ref.jsonl", tmp_path / "stop"
+    p = subprocess.Popen([sys.executable, "-I", str(HARNESS / "clock_ref.py"), "--out", str(out), "--host",
+                          "jb@box.example", "--stop-file", str(stop), "--every", "0.05", "--cpu-every", "0.2",
+                          "--reply-timeout", "2", *extra])  # fmt: skip
+
+    def enough():
+        rows = rows_of(out)
+        return p.poll() is not None or sum(r.get("kind") == "read" for r in rows) >= reads
+
+    wait_for(enough)
+    stop.write_text("")
+    return p.wait(timeout=60), clock.read_jsonl(str(out))
+
+
+def test_clock_ref_loop_survives_the_defaultshell_wrapper_as_one_argument():
+    assert '"' not in clock_ref.LOOP
+    cmd = clock_ref.ssh_command("jb@box.example")
+    assert cmd[-1] == clock_ref.LOOP and not cmd[-1].startswith("powershell")
+
+
+def test_clock_ref_nested_powershell_under_the_defaultshell_is_lost(tmp_path):
+    # The #274 transport: the remote command started another powershell.
+    ssh = fake_ssh(tmp_path)
+    old = shlex.join([ssh, "-T", "jb@box.example", "powershell -NoProfile -NonInteractive -EncodedCommand AAAA"])
+    rc, rows = run_ref_transport(tmp_path, ["--command", old])
+    assert rc == 3 and rows[-1]["event"] == "lost"
+    assert sum(r["kind"] == "read" for r in rows) <= 1
+
+
+def test_clock_ref_runs_the_loop_as_the_sessions_only_reader(tmp_path):
+    rc, rows = run_ref_transport(tmp_path, ["--ssh", fake_ssh(tmp_path)], reads=5)
+    assert rc == 0 and rows[-1] == {"kind": "event", "event": "end", "loop_ended": True}
+    assert {"kind": "discarded", "line": "profile: Windows PowerShell, loaded in 120 ms"} in rows
+    reads = [r for r in rows if r["kind"] == "read"]
+    assert len(reads) >= 5 and all(r["qpc"] is not None for r in reads)
