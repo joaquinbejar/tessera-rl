@@ -20,12 +20,12 @@ use super::capi::{CResult, Gil};
 static GENERATION: AtomicU64 = AtomicU64::new(0);
 
 /// The current fork generation.
-pub(crate) fn generation() -> u64 {
+pub fn generation() -> u64 {
     GENERATION.load(Ordering::Acquire)
 }
 
 /// The message of the refusal.
-pub(crate) const REFUSAL: &str = "this environment was created before os.fork() and cannot be \
+pub const REFUSAL: &str = "this environment was created before os.fork() and cannot be \
      used in the child, where its worker threads do not exist: create a new environment in the \
      child, or use the spawn start method";
 
@@ -50,7 +50,7 @@ extern "C" fn after_in_child() {
         reason = "one signature on every platform: the registration can fail where fork exists"
     )
 )]
-pub(super) fn register(g: Gil) -> CResult<()> {
+pub fn register(g: Gil) -> CResult<()> {
     #[cfg(not(windows))]
     {
         unsafe extern "C" {

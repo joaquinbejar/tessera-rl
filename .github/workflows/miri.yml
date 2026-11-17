@@ -48,4 +48,6 @@ jobs:
       # ids, with 2 workers under Miri.
       - run: "cargo +nightly miri test -p tessera-rl-engine --lib --locked -- modes::async_jitter_tests:: modes::async_wake_tests::"
       # DLPack export ownership (ADR-0003 rule 1), without an interpreter.
-      - run: cargo +nightly miri test -p tessera-rl-py --lib --locked ffi::dlpack
+      # The module moved to the shared boundary crate (ADR-0062 item 8); built
+      # alone it needs `extension-module` not to link libpython.
+      - run: cargo +nightly miri test -p tessera-rl-pyffi --features pyo3/extension-module --lib --locked ffi::dlpack

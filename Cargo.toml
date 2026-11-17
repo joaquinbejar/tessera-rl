@@ -20,6 +20,7 @@ members = [
     "tools/spikes/layout",
     "tests/downstream",
     "crates/tessera-rl-py",
+    "crates/tessera-rl-pyffi",
 ]
 # The fuzz targets build with nightly and cargo-fuzz, outside the workspace.
 exclude = ["fuzz"]
@@ -61,6 +62,7 @@ tessera-rl-games = { path = "crates/tessera-rl-games", version = "0.2.0" }
 tessera-rl-search = { path = "crates/tessera-rl-search", version = "0.2.0" }
 tessera-rl-onnx = { path = "crates/tessera-rl-onnx", version = "0.2.0" }
 tessera-rl-rts = { path = "crates/tessera-rl-rts", version = "0.2.0" }
+tessera-rl-pyffi = { path = "crates/tessera-rl-pyffi", version = "0.2.0" }
 
 core_affinity = "0.8"
 criterion = { version = "0.8", default-features = false, features = ["cargo_bench_support"] }
@@ -70,9 +72,11 @@ gungraun = "=0.20.0"
 # Environment registration records (ADR-0032, ADR-0054).
 inventory = "0.3"
 proptest = { version = "1", default-features = false, features = ["std"] }
-# Only in tessera-rl-py, without the macros (ADR-0041: every entry is
-# registered through the thunk table).
-pyo3 = { version = "0.30", default-features = false, features = ["abi3-py311", "extension-module"] }
+# Only in tessera-rl-pyffi and tessera-rl-py, without the macros (ADR-0041:
+# every entry is registered through the thunk table). `extension-module` is
+# enabled only by the final cdylibs (tessera-rl-py, third-party host wheels),
+# not by the library (owner approval of the PyO3 terms, 2026-11-17).
+pyo3 = { version = "0.30", default-features = false, features = ["abi3-py311"] }
 libc = "0.2"
 # The ONNX evaluator (ADR-0057): `ort` pinned exactly (owner decision
 # 2026-11-12), dynamic loading only, no binaries downloaded at build time.

@@ -44,7 +44,7 @@ pub(super) unsafe extern "C" fn fp_boundary(
     _module: *mut ffi::PyObject,
     _args: *mut ffi::PyObject,
 ) -> *mut ffi::PyObject {
-    entry(|g| capi::string(g, thunks::BOUNDARY))
+    entry(|g| capi::string(g, tessera_rl_pyffi::ffi::thunks::BOUNDARY))
 }
 
 /// `set_fp_policy(name)`: `"canonicalize"` (the default) or `"reject"`

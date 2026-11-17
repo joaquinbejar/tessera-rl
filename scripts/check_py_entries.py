@@ -2,6 +2,9 @@
 # SPDX-License-Identifier: MIT OR Apache-2.0
 """ADR-0041: every C entry point of tessera-rl-py goes through a boundary thunk.
 
+The shared boundary crate, tessera-rl-pyffi (ADR-0062 item 8), is checked
+with the same rules.
+
 The primary guarantee is the compiler's: C tables are built only by
 `ffi::tables`, whose function rows take a `ThunkFn`, which only
 `ffi::thunks` can make. This script is the secondary check. It fails when
@@ -17,7 +20,8 @@ import re
 import subprocess
 import sys
 
-SRC = pathlib.Path(__file__).resolve().parent.parent / "crates" / "tessera-rl-py" / "src"
+ROOT = pathlib.Path(__file__).resolve().parent.parent
+SRCS = [ROOT / "crates" / "tessera-rl-py" / "src", ROOT / "crates" / "tessera-rl-pyffi" / "src"]
 
 
 def main():
@@ -28,10 +32,10 @@ def main():
     ).stdout
     if any(line.startswith("pyo3-macros ") for line in tree.splitlines()):
         problems.append("pyo3-macros is a dependency of tessera-rl-py")
-    for path in sorted(SRC.rglob("*.rs")):
+    for path in sorted(p for src in SRCS for p in src.rglob("*.rs")):
         text = path.read_text()
         flat = re.sub(r"\s+", " ", text)
-        rel = path.relative_to(SRC.parent.parent.parent)
+        rel = path.relative_to(ROOT)
         if re.search(r"#\[(pyclass|pymethods|pymodule|pyfunction)|wrap_pyfunction|wrap_pymodule", text):
             problems.append(f"{rel}: PyO3 registration macros are not allowed")
         name = path.name

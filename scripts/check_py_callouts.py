@@ -19,7 +19,10 @@ import pathlib
 import re
 import sys
 
-DEFAULT_SRC = pathlib.Path(__file__).resolve().parent.parent / "crates" / "tessera-rl-py" / "src"
+_ROOT = pathlib.Path(__file__).resolve().parent.parent
+# The bindings and the shared boundary crate (ADR-0062 item 8), which holds
+# `ffi/capi.rs`.
+DEFAULT_SRCS = [_ROOT / "crates" / "tessera-rl-py" / "src", _ROOT / "crates" / "tessera-rl-pyffi" / "src"]
 
 # Direct calls `capi` may make: none of them can run Python code (the
 # reasons are in capi's module docs). `Py_DecRef` is direct only for leaf
@@ -93,8 +96,8 @@ def check(src: pathlib.Path) -> list[str]:
 
 
 def main() -> int:
-    src = pathlib.Path(sys.argv[1]) if len(sys.argv) > 1 else DEFAULT_SRC
-    problems = check(src)
+    srcs = [pathlib.Path(sys.argv[1])] if len(sys.argv) > 1 else DEFAULT_SRCS
+    problems = [p for src in srcs for p in check(src)]
     for p in problems:
         print(p)
     if problems:
