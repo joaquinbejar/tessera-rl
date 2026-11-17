@@ -426,8 +426,11 @@ def raw_to_qpc(samples, raw: float) -> float | None:
     return None
 
 
-def nearest(samples, raw: float) -> dict:
-    return min((x for x in samples if "host_bracket_raw" in x), key=lambda x: abs(host_raw(x)[0] - raw))
+def nearest(samples, raw: float) -> dict | None:
+    """The host-read sample whose raw midpoint is closest to ``raw``, or None
+    when no sample carries a raw bracket."""
+    pts = [x for x in samples if x["host"] is not None and "host_bracket_raw" in x]
+    return min(pts, key=lambda x: abs(host_raw(x)[0] - raw)) if pts else None
 
 
 def decide(rows: list[dict], ref: list[dict], manifest: dict, manifest_sha256: str, scope: str,
@@ -548,7 +551,8 @@ def decide(rows: list[dict], ref: list[dict], manifest: dict, manifest_sha256: s
             "clocksource": sources,
             "cpu_mhz_current_max": [c.get("cpu_mhz_current_max") for c in contexts],
             "other_guest_clocks": {k: sorted({g["band_" + k] for g in guest}) for k in ("perf", "mono", "real")},
-            "perf_worst": max((abs(g["perf"] - 1) for g in guest), default=None),
+            "perf_worst": max((abs(g["perf"] - 1) for g in guest if g["band_perf"] not in ("unclassified", "imprecise")),
+                              default=None),  # fmt: skip
         },
     }
     if scope == "pre-check":
@@ -557,9 +561,10 @@ def decide(rows: list[dict], ref: list[dict], manifest: dict, manifest_sha256: s
         t0, t1 = status.get("timed_start_raw"), status.get("timed_end_raw")
         if t0 is not None and t1 is not None and t1 > t0:
             a, b = nearest(samples, t0), nearest(samples, t1)
-            span = host_raw(b)[0] - host_raw(a)[0]
-            cpu = sum(b["rusage"]) - sum(a["rusage"])
-            share = cpu / span if span > 0 else None
+            share = None
+            if a is not None and b is not None:
+                span = host_raw(b)[0] - host_raw(a)[0]
+                share = (sum(b["rusage"]) - sum(a["rusage"])) / span if span > 0 else None
             out["timed_qpc_s"] = [raw_to_qpc(samples, t0), raw_to_qpc(samples, t1)]
             out["cpu"] = {"sampler_share": share, "budget": CPU_BUDGET,
                           "over_budget": share is not None and share > CPU_BUDGET}  # fmt: skip

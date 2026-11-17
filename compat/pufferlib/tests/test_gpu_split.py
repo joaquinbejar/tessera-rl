@@ -43,6 +43,7 @@ sys.path.insert(0, str(HARNESS))
 import manifest  # noqa: E402
 import run as driver  # noqa: E402
 import split  # noqa: E402
+import summarise  # noqa: E402
 import sync  # noqa: E402
 
 SMALL = ["--epochs", "3", "--scale", "small", "--env-steps", "200"]
@@ -134,6 +135,10 @@ def test_gpu_split_e2e_keeps_the_profiler_out_of_the_window(tmp_path):
     assert rc == 0, log
     assert "exclusive_s" not in record and record["epochs_timed"] == 2
     assert record["profile_frequency"] == 10**9
+    # ADR-0064: a real row names its clock, and summarise accepts it.
+    assert record["wall_clock"] == "CLOCK_MONOTONIC_RAW"
+    summarise.check_wall_clock([{"result": record}], {"wall_clock": "CLOCK_MONOTONIC_RAW"},
+                               {"binding_guest_clock": "CLOCK_MONOTONIC_RAW"})  # fmt: skip
 
 
 @pytest.mark.skipif(__import__("torch").cuda.is_available(), reason="needs a host without CUDA")

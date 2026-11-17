@@ -48,7 +48,7 @@ The configuration is PufferLib's `cartpole.ini` over `default.ini`:
 
   This flat attribution is an explicit instrumentation amendment to the plan's wording ("exclusive categories, children only"). It keeps the plan's sync points.
 
-  This is needed because PufferLib's own `Profile` is not exclusive. Inside the minibatch loop `train_misc` is pushed with `nest=True` without popping the entry before it, so its numbers overlap. They are kept as `pufferlib_profile_s_not_additive`, for reference only. The flat attribution hooks the same synchronize points as the patch: it calls the patched `Profile` first, then reads `perf_counter`.
+  This is needed because PufferLib's own `Profile` is not exclusive. Inside the minibatch loop `train_misc` is pushed with `nest=True` without popping the entry before it, so its numbers overlap. They are kept as `pufferlib_profile_s_not_additive`, for reference only. The flat attribution hooks the same synchronize points as the patch: it calls the patched `Profile` first, then reads the wall clock (`wall_now()`, `CLOCK_MONOTONIC_RAW`). The patched `Profile`'s own timers keep `perf_counter`; they are descriptive only.
 
   Synchronising changes overlap and scheduling, so `sync` is a cost breakdown of a different run, not a share of `e2e`.
 - **`env`:** environment only. The same vector environment and agent count, random actions and no policy:

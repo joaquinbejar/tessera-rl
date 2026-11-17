@@ -69,6 +69,7 @@ def wall_now() -> float:
     """The gate's wall clock: CLOCK_MONOTONIC_RAW, read directly."""
     return time.clock_gettime(_RAW)
 
+
 CASES = ("ocean-serial", "ocean-mp", "tessera-w1", "tessera-w2")
 MODES = ("e2e", "sync", "env")
 CHILDREN = ("env", "eval_forward", "eval_copy", "eval_misc", "train_forward", "train_copy", "train_misc", "learn")

@@ -4,7 +4,7 @@ on synthetic streams and local fakes: no GPU, no Windows, no ssh.
 
 Covered:
 - the sealed driver: rows only in --rows, no progress on stdout, a status
-  file with four fields and the timed span on guest monotonic;
+  file with four fields and the timed span on CLOCK_MONOTONIC_RAW (ADR-0064);
 - summarise.py: refusals, ADR-0061 A1 first, the clock outcomes, rerun_of,
   and a self-hash mismatch written as a row;
 - decide: each condition of ADR-0063 item 4, a shared fault that only the
@@ -13,7 +13,11 @@ Covered:
   the sampler's CPU share;
 - the sampler with a fake host loop (end markers, context rows, a dead host
   reader), run_quiet leaving the parent's stdin alone, and the reference
-  client against a fake loop (monotonic stamps, a slow reply, a lost session).
+  client against a fake loop (monotonic stamps, a slow reply, a lost session);
+- ADR-0064: raw is the binding guest clock and perf_counter is reported only
+  (rehearsal 2's real samples included), the sampler brackets the host read
+  on raw, every split.py wall reads wall_now(), the driver stamps and
+  refuses on raw, and summarise refuses anything not read from raw.
 """
 
 import hashlib
@@ -312,18 +316,65 @@ def test_clock_pre_check_gate():
 
 def test_clock_status_values_map_onto_the_qpc_axis():
     # guest raw = QPC + 1000 s: the timed span (on raw) maps back to QPC [320.5, 919.5].
-    d = decide(raw=lambda q: q + 1000.0)
+    # perf slews from the start of the timed span: a mapping read from perf would move.
+    d = decide(raw=lambda q: q + 1000.0, slew=scaled(320.0, 0.9))
     lo, hi = d["timed_qpc_s"]
     assert lo == pytest.approx(320.5) and hi == pytest.approx(919.5)
 
 
 def test_clock_sampler_cpu_share_over_the_timed_span():
-    d = decide(cpu_rate=0.02)
+    # perf and mono slew by 10 %: the shares are over raw spans, so they do not move.
+    d = decide(cpu_rate=0.02, slew=scaled(100.0, 0.9))
     assert d["cpu"]["sampler_share"] == pytest.approx(0.02, rel=0.01) and d["cpu"]["over_budget"] is True
     assert d["outcome"] == "clock-valid"
     assert d["cpu"]["host_reader_share"] == pytest.approx(0.0005)
     assert d["cpu"]["reference_loop_share"] == pytest.approx(0.0002)
     assert decide()["cpu"]["over_budget"] is False
+
+
+def test_clock_host_reader_share_skips_a_context_row_without_raw():
+    rows, ref, status = session(slew=scaled(100.0, 0.9))
+    ctx = [r for r in rows if r.get("kind") == "context"]
+    del ctx[-1]["raw"]  # the last row has no raw: the share spans the first to the third
+    d = clock.decide(rows, ref, MANIFEST, "f" * 64, "session", status)
+    assert d["cpu"]["host_reader_share"] == pytest.approx(0.0005)
+    for c in ctx[1:]:
+        c.pop("raw", None)
+    d = clock.decide(rows, ref, MANIFEST, "f" * 64, "session", status)
+    assert d["cpu"]["host_reader_share"] is None
+
+
+def test_clock_nearest_without_raw_brackets_is_a_verdict_not_an_error():
+    rows, ref, status = session()
+    for r in rows:
+        r.pop("host_bracket_raw", None)
+    samples = [r for r in rows if r.get("kind") == "sample"]
+    assert clock.nearest(samples, 1.0) is None
+    d = clock.decide(rows, ref, MANIFEST, "f" * 64, "session", status)
+    assert d["outcome"] == "instrumentation failed" and "d2" in d["conditions"]
+    assert d["cpu"]["sampler_share"] is None and d["timed_qpc_s"] == [None, None]
+
+
+def test_clock_raw_imprecise_while_perf_is_classified():
+    # A slow host read widens only the raw bracket: raw is imprecise, perf is not.
+    rows, _, _ = session(scope="pre-check")
+    samples = [r for r in rows if r.get("kind") == "sample"]
+    for x in samples:
+        g = sum(x["host_bracket_raw"]) / 2
+        x["host_bracket_raw"] = [g - 0.1, g + 0.1]
+    g = clock.guest_intervals(samples)
+    assert g[1]["band_raw"] == "imprecise" and g[1]["band_perf"] == "nominal"
+
+
+def test_clock_perf_worst_counts_only_classified_intervals():
+    # The first interval of a tag is unclassified for perf: a wild value there
+    # is not perf_worst.
+    rows, ref, _ = session(scope="pre-check")
+    samples = [r for r in rows if r.get("kind") == "sample"]
+    samples[0]["guest_before"]["perf"] -= 5.0
+    samples[0]["guest_after"]["perf"] -= 5.0
+    d = clock.decide(rows, ref, MANIFEST, "f" * 64, "pre-check")
+    assert d["reported"]["perf_worst"] < 1e-3
 
 
 # ----------------------------------------------------------- summarise
@@ -688,6 +739,50 @@ def test_clock_sampler_with_a_fake_host(tmp_path):
     assert [r["event"] for r in rows if r["kind"] == "event"] == ["host_end", "end"]
 
 
+class SplitClocks:
+    """time for clock.py with distinct epochs: raw = t + 5000, perf = t,
+    monotonic = t + 7, realtime = t + 1.8e9."""
+
+    CLOCK_MONOTONIC_RAW = time.CLOCK_MONOTONIC_RAW
+    CLOCK_REALTIME = time.CLOCK_REALTIME
+
+    def __getattr__(self, name):
+        return getattr(time, name)
+
+    def perf_counter(self):
+        return time.perf_counter()
+
+    def monotonic(self):
+        return time.perf_counter() + 7.0
+
+    def clock_gettime(self, c):
+        t = time.perf_counter()
+        return t + 5000.0 if c == time.CLOCK_MONOTONIC_RAW else t + 1.8e9
+
+
+def test_clock_sampler_brackets_the_host_read_on_raw(tmp_path, monkeypatch):
+    # ADR-0064: the binding measurement is the host read on raw. With raw and
+    # perf on distinct epochs, every bracket lies inside the sample's raw
+    # readings, never its perf ones, and guest_intervals classifies on it.
+    s = clock.Sampler(str(tmp_path / "s.jsonl"), shlex.split(fake_loop(tmp_path)), None)
+    assert s.host.ask("cpu", timeout=60) is not None
+    monkeypatch.setattr(clock, "time", SplitClocks())
+    for _ in range(6):
+        s.sample("pre")
+        time.sleep(0.05)
+    samples = [r for r in clock.read_jsonl(str(tmp_path / "s.jsonl")) if r["kind"] == "sample"]
+    assert len(samples) == 6
+    for x in samples:
+        h0, h1 = x["host_bracket_raw"]
+        assert x["guest_before"]["raw"] <= h0 <= h1 <= x["guest_after"]["raw"]
+        assert x["guest_before"]["raw"] - x["guest_before"]["perf"] == pytest.approx(5000.0, abs=1e-3)
+    monkeypatch.setattr(clock, "MIN_INTERVAL_S", 0.0)
+    g = clock.guest_intervals(samples)
+    assert len(g) == 5
+    for row in g:
+        assert row["raw"] == pytest.approx(1.0, abs=0.2) and "band_raw" in row
+
+
 def test_clock_sampler_records_a_dead_host_reader(tmp_path, monkeypatch):
     # The third read sleeps 1.5 s, beyond the 1 s timeout; the first read
     # first waits for the fake loop to start, so it gets a long deadline.
@@ -965,7 +1060,101 @@ def test_split_refuses_to_import_without_clock_monotonic_raw():
 
 def test_split_has_no_perf_counter_wall():
     src = (HARNESS / "split.py").read_text()
-    assert "perf_counter()" not in src and src.count("wall_now()") >= 5
+    # The docstring, the definition and the five timed reads.
+    assert "perf_counter()" not in src and src.count("wall_now()") == 7
+
+
+class NoClock:
+    """Every clock but wall_now raises: a wall read anywhere else fails."""
+
+    def __getattr__(self, name):
+        if name in ("perf_counter", "monotonic", "time", "clock_gettime", "perf_counter_ns", "monotonic_ns"):
+            def refuse(*a):
+                raise AssertionError(f"time.{name} read in a timed region")
+            return refuse
+        return getattr(time, name)
+
+
+def fake_walls(monkeypatch, values):
+    import split
+
+    it = iter(values)
+    calls = []
+    monkeypatch.setattr(split, "wall_now", lambda: calls.append(1) or next(it))
+    monkeypatch.setattr(split, "time", NoClock())
+    return split, calls
+
+
+class FakeVec:
+    num_agents = 4
+
+    class single_action_space:
+        n = 2
+
+    def async_reset(self, seed):
+        pass
+
+    def send(self, a):
+        pass
+
+    def recv(self):
+        pass
+
+
+def test_split_run_env_walls_are_wall_now(monkeypatch):
+    split, calls = fake_walls(monkeypatch, [10.0, 12.5])
+    out = split.run_env(FakeVec(), steps=5, warmup=3)
+    assert calls == [1, 1] and out["wall_s"] == 2.5 and out["sps"] == 5 * 4 / 2.5
+
+
+def test_split_flat_profile_charges_on_wall_now(monkeypatch):
+    split, calls = fake_walls(monkeypatch, [1.0, 3.0, 4.5])
+
+    class Profile:
+        def __init__(self, frequency=1):
+            self.frequency = frequency
+
+        def __call__(self, name, epoch, nest=False):
+            pass
+
+        def end(self):
+            pass
+
+    p = split.flat_profile(type("M", (), {"Profile": Profile}))
+    p("eval", 0)
+    p("env", 0)
+    p.end()
+    assert len(calls) == 3 and p.flat["eval"] == 2.0 and p.flat["env"] == 1.5
+
+
+def test_split_run_trainer_walls_are_wall_now(monkeypatch):
+    import pufferlib.models
+
+    split, calls = fake_walls(monkeypatch, [100.0, 104.0])
+
+    class Policy:
+        def __init__(self, vec, hidden_size):
+            pass
+
+        def to(self, device):
+            return self
+
+    class Trainer:
+        def __init__(self, cfg, vec, policy):
+            self.global_step = 0
+            self.config = {"batch_size": 8}
+            self.profile = type("P", (), {"frequency": 1})()
+
+        def evaluate(self):
+            self.global_step += 8
+
+        def train(self):
+            pass
+
+    monkeypatch.setattr(pufferlib.models, "Default", Policy)
+    monkeypatch.setattr(split, "stop_monitors", lambda: [])
+    out = split.run_trainer(type("M", (), {"PuffeRL": Trainer}), FakeVec(), {}, "e2e", 3, "cpu")
+    assert calls == [1, 1] and out["wall_s"] == 4.0 and out["steps"] == 16 and out["sps"] == 4.0
 
 
 def test_manifest_records_the_wall_clock(tmp_path, capsys):
@@ -1008,6 +1197,39 @@ def test_driver_refuses_a_manifest_without_the_raw_wall_clock(tmp_path, capsys):
                       "--manifest-sha256", hashlib.sha256(blob).hexdigest(), "--wheel", str(wheel)])  # fmt: skip
     assert rc == driver.EXIT_REFUSED and "CLOCK_MONOTONIC_RAW" in capsys.readouterr().out
     assert not (tmp_path / "r.jsonl").exists()
+
+
+def test_driver_refuses_a_manifest_attempt_without_raw_on_the_platform(tmp_path, capsys, monkeypatch):
+    from test_gpu_split import make_manifest
+
+    wheel, argv = make_manifest(tmp_path)
+    manifest.main(argv)
+    msha = capsys.readouterr().out.strip()
+    monkeypatch.delattr(driver.time, "CLOCK_MONOTONIC_RAW")
+    rc = driver.main(["--python", f"sh -c 'exit 0' fake {wheel}", "--rows", str(tmp_path / "r.jsonl"), "--status",
+                      str(tmp_path / "s.json"), "--device", "cpu", "--manifest", str(tmp_path / "manifest.json"),
+                      "--manifest-sha256", msha, "--wheel", str(wheel)])  # fmt: skip
+    assert rc == driver.EXIT_REFUSED and "CLOCK_MONOTONIC_RAW" in capsys.readouterr().out
+    assert not (tmp_path / "r.jsonl").exists()
+
+
+def test_driver_stamps_the_timed_span_on_raw(tmp_path, monkeypatch, capsys):
+    stamps = iter([111.0, 222.0])
+    seen = []
+
+    def gettime(c):
+        seen.append(c)
+        if c != time.CLOCK_MONOTONIC_RAW:
+            raise AssertionError("the timed span is stamped on CLOCK_MONOTONIC_RAW only")
+        return next(stamps)
+
+    monkeypatch.setattr(driver.time, "clock_gettime", gettime)
+    monkeypatch.setattr(driver, "drive", lambda *a, **k: 0)
+    args = type("A", (), {"rows": str(tmp_path / "r.jsonl"), "status": str(tmp_path / "s.json"), "device": "cpu"})()
+    assert driver.sealed(args, [], {}, "m" * 64) == 0
+    st = json.loads((tmp_path / "s.json").read_text())
+    assert st["timed_start_raw"] == 111.0 and st["timed_end_raw"] == 222.0
+    assert "timed_start_mono" not in st and seen == [time.CLOCK_MONOTONIC_RAW] * 2
 
 
 REHEARSAL2 = pathlib.Path(__file__).parent / "fixtures" / "rehearsal2"
