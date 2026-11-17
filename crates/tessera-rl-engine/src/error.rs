@@ -18,6 +18,13 @@ pub enum EngineError {
     /// A space is invalid or not supported.
     #[error(transparent)]
     Space(#[from] SpaceError),
+    /// A host environment refused to start (`HostError::Construction`,
+    /// ADR-0062).
+    #[error("host environment construction failed: {reason}")]
+    HostConstruction {
+        /// What failed, as the environment reported it.
+        reason: String,
+    },
     /// A space kind the engine does not support yet.
     #[error("unsupported space: {what}")]
     UnsupportedSpace {

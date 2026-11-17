@@ -19,6 +19,11 @@ use std::alloc::{GlobalAlloc, Layout, System};
 struct Track {
     active: Cell<bool>,
     count: Cell<u64>,
+    /// A host pool's chunk step runs on this thread (ADR-0062 item 4): a
+    /// separate flag and count, so a host allocation never reaches the
+    /// `active`/`count` pair that `EnvPool` brackets read.
+    host_active: Cell<bool>,
+    host_count: Cell<u64>,
 }
 
 thread_local! {
@@ -26,6 +31,8 @@ thread_local! {
         Track {
             active: Cell::new(false),
             count: Cell::new(0),
+            host_active: Cell::new(false),
+            host_count: Cell::new(0),
         }
     };
 }
@@ -40,6 +47,11 @@ fn note() {
             && let Some(n) = t.count.get().checked_add(1)
         {
             t.count.set(n);
+        }
+        if t.host_active.get()
+            && let Some(n) = t.host_count.get().checked_add(1)
+        {
+            t.host_count.set(n);
         }
     });
 }
@@ -124,6 +136,48 @@ impl Drop for ChunkBracket<'_> {
             .try_with(|t| {
                 t.active.set(false);
                 t.count.get()
+            })
+            .unwrap_or(self.before);
+        // The count only grows on this thread, so `after >= before`.
+        if let Some(delta) = after.checked_sub(self.before)
+            && delta > 0
+        {
+            self.tally.0.fetch_add(delta, Ordering::Relaxed);
+        }
+    }
+}
+
+/// Brackets one host pool chunk step on the current thread (ADR-0062 item
+/// 4): counts into the host flag and count only, never into the
+/// `EnvPool` pair, and adds its delta to the host pool's tally on drop
+/// (also on unwind).
+#[cfg(feature = "host")]
+pub(crate) struct HostBracket<'a> {
+    tally: &'a AllocTally,
+    before: u64,
+}
+
+#[cfg(feature = "host")]
+impl<'a> HostBracket<'a> {
+    /// Starts counting host allocations on this thread.
+    pub(crate) fn enter(tally: &'a AllocTally) -> Self {
+        let before = TRACK
+            .try_with(|t| {
+                t.host_active.set(true);
+                t.host_count.get()
+            })
+            .unwrap_or(0);
+        Self { tally, before }
+    }
+}
+
+#[cfg(feature = "host")]
+impl Drop for HostBracket<'_> {
+    fn drop(&mut self) {
+        let after = TRACK
+            .try_with(|t| {
+                t.host_active.set(false);
+                t.host_count.get()
             })
             .unwrap_or(self.before);
         // The count only grows on this thread, so `after >= before`.
