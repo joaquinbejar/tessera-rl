@@ -168,7 +168,7 @@ def test_clock_decide_a_utc_step_alone_stays_valid():
 def test_clock_decide_a_40_s_reference_gap_is_d1():
     d = decide(ref_drop=[(700.0, 740.0)])
     assert d["outcome"] == "instrumentation failed" and "d1" in d["conditions"]
-    assert "gap" in {e["band"] for e in d["external"]}
+    assert any(e["gap"] for e in d["external"])
 
 
 def test_clock_coverage_counts_short_gaps_on_the_qpc_axis():
@@ -196,6 +196,55 @@ def test_clock_decide_a_lost_reference_session_is_d3():
     ref.insert(-1, {"kind": "event", "event": "lost"})
     d = clock.decide(rows, ref, MANIFEST, "f" * 64, "session", status)
     assert "d3" in d["conditions"]
+
+
+def test_clock_decide_a_fault_inside_a_sampler_gap_is_still_judged():
+    # perf runs at 13/12 only while the sampler is silent (700 to 740 s).
+    def perf(q):
+        return q if q < 700 else 700 + min(q - 700, 40) * 13 / 12 + max(q - 740, 0)
+
+    d = decide(perf=perf, drop=[(700.0, 740.0)])
+    assert "b" in d["conditions"] and "d2" in d["conditions"]
+    assert d["outcome"] == "clock-invalid"
+
+
+def test_clock_decide_tags_out_of_order_fail_the_instrumentation():
+    rows, ref, status = session()
+    smp = [r for r in rows if r.get("kind") == "sample"]
+    smp[400]["tag"] = "pre"
+    d = clock.decide(rows, ref, MANIFEST, "f" * 64, "session", status)
+    assert d["outcome"] == "instrumentation failed" and "tags" in d["conditions"]
+
+
+def test_clock_decide_without_clocksource_readings():
+    rows, ref, status = session()
+    for r in rows:
+        if r.get("kind") == "context":
+            r["current_clocksource"] = None
+    d = clock.decide(rows, ref, MANIFEST, "f" * 64, "session", status)
+    assert d["outcome"] == "instrumentation failed" and "clocksource" in d["conditions"]
+    assert decide(scope="pre-check", sources=(None,) * 4)["decision"] == "stop"
+
+
+@pytest.mark.parametrize("over", [{"clock_ref_host": "other"}, {"clock_cpu": None},
+                                  {"clock_ref_command": "python3 /r/clock_ref.py --out x.jsonl"}],
+                         ids=["host", "cpu", "args"])  # fmt: skip
+def test_clock_decide_checks_the_instruments_against_the_manifest(over):
+    m = {**MANIFEST, **over}
+    assert decide(manifest=m)["outcome"] == "instrumentation failed"
+    pre = decide(scope="pre-check", manifest=m)
+    assert pre["decision"] == "stop" and "instruments" in pre["conditions"]
+
+
+def test_clock_decide_counts_corrupt_lines(tmp_path):
+    rows, ref, status = session()
+    lines = [json.dumps(r) for r in rows]
+    (tmp_path / "trunc.jsonl").write_text("\n".join([*lines, '{"kind": "sam']) + "\n")
+    (tmp_path / "mid.jsonl").write_text("\n".join([*lines[:50], "garbage", *lines[50:]]) + "\n")
+    ok = clock.decide(clock.read_jsonl(str(tmp_path / "trunc.jsonl")), ref, MANIFEST, "f" * 64, "session", status)
+    bad = clock.decide(clock.read_jsonl(str(tmp_path / "mid.jsonl")), ref, MANIFEST, "f" * 64, "session", status)
+    assert "corrupt" not in ok["conditions"] and ok["outcome"] == "clock-valid"
+    assert bad["outcome"] == "instrumentation failed" and "corrupt" in bad["conditions"]
 
 
 def test_clock_decide_a_short_pre_check_is_a():
@@ -474,19 +523,24 @@ def test_manifest_records_the_clock_instruments_and_rerun_of(tmp_path, capsys):
     from test_gpu_split import make_manifest
 
     wheel, argv = make_manifest(tmp_path, **{"--clock-cpu": "3"})
+    # Later calls build their throwaway wheels elsewhere, so the first wheel's
+    # bytes (and sha256) stay as the first manifest recorded them.
+    same = {"--wheel": str(wheel), "--wheel-sha256": manifest.file_sha256(str(wheel))}
+    other = tmp_path / "other"
+    other.mkdir()
     assert manifest.main(argv) == 0
     digest = capsys.readouterr().out.strip()
     m = manifest.load(str(tmp_path / "manifest.json"), digest)
     assert m["clock_py_sha256"] == manifest.file_sha256(str(HARNESS / "clock.py"))
     assert m["clock_ref_py_sha256"] == manifest.file_sha256(str(HARNESS / "clock_ref.py"))
     assert (m["clock_ref_host"], m["clock_cpu"], m["case_cpus"], m["rerun_of"]) == ("ref.example", 3, None, None)
-    _, argv2 = make_manifest(tmp_path, **{"--out": str(tmp_path / "m2.json"), "--clock-cpu": "3",
+    _, argv2 = make_manifest(other, **same, **{"--out": str(tmp_path / "m2.json"), "--clock-cpu": "3",
                                           "--rerun-of-manifest": str(tmp_path / "manifest.json"),
                                           "--rerun-of-sha256": digest})  # fmt: skip
     assert manifest.main(argv2) == 0
     d2 = capsys.readouterr().out.strip()
     assert manifest.load(str(tmp_path / "m2.json"), d2)["rerun_of"] == {"manifest_sha256": digest, "position": 2}
-    _, argv3 = make_manifest(tmp_path, **{"--out": str(tmp_path / "m3.json"), "--rounds": "3",
+    _, argv3 = make_manifest(other, **same, **{"--out": str(tmp_path / "m3.json"), "--rounds": "3",
                                           "--rerun-of-manifest": str(tmp_path / "manifest.json"),
                                           "--rerun-of-sha256": digest})  # fmt: skip
     assert manifest.main(argv3) == manifest.EXIT_MISMATCH  # the order changed
@@ -527,6 +581,31 @@ def test_clock_and_clock_ref_share_one_loop():
     assert clock.LOOP == clock_ref.LOOP
 
 
+def set_tag(ctl, tag):
+    """The documented way to change the tag: write a temp file, then rename."""
+    (ctl / "tag.tmp").write_text(tag)
+    (ctl / "tag.tmp").replace(ctl / "tag")
+
+
+@pytest.mark.parametrize("content, current, want", [("", "session", "session"), ("pre", "session", "session"),
+                                                    ("bogus", "pre", "pre"), ("post", "pre", "post"),
+                                                    (None, "session", "session")])  # fmt: skip
+def test_clock_read_tag_keeps_the_last_tag_and_moves_only_forwards(tmp_path, content, current, want):
+    if content is not None:
+        (tmp_path / "tag").write_text(content)
+    assert clock.read_tag(str(tmp_path), current) == want
+
+
+def test_clock_sampler_without_host_qpc_stops_non_zero(tmp_path):
+    ctl = tmp_path / "ctl"
+    ctl.mkdir()
+    out = tmp_path / "s.jsonl"
+    p = subprocess.run([sys.executable, "-I", str(HARNESS / "clock.py"), "sample", "--out", str(out), "--control",
+                        str(ctl), "--interval", "0.05", "--host-cmd", "/nonexistent/loop"],
+                       stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=60)  # fmt: skip
+    assert p.returncode == 3 and "STOP" in p.stdout
+
+
 def test_clock_sampler_with_a_fake_host(tmp_path):
     ctl = tmp_path / "ctl"
     ctl.mkdir()
@@ -537,7 +616,7 @@ def test_clock_sampler_with_a_fake_host(tmp_path):
                          stdin=subprocess.DEVNULL)  # fmt: skip
     for tag in ("session", "post"):
         time.sleep(0.4)
-        (ctl / "tag").write_text(tag)
+        set_tag(ctl, tag)
     time.sleep(0.4)
     (ctl / "stop").write_text("")
     assert p.wait(timeout=60) == 0
@@ -607,3 +686,23 @@ def test_clock_ref_records_a_lost_session_and_does_not_reconnect(tmp_path):
     rc, rows = run_ref(tmp_path, "die", 0.6)
     assert rc == 3
     assert rows[-1]["event"] == "lost" and sum(1 for r in rows if r["kind"] == "header") == 1
+
+
+def test_clock_ref_header_passes_decide_and_summarise(tmp_path):
+    import socket
+
+    _, ref = run_ref(tmp_path, "ok", 0.4)
+    head = ref[0]
+    assert head["host"] == socket.gethostname() and head["target"] == "ref.example"
+    m = gate_manifest(clock_ref_host=socket.gethostname(), clock_ref_py_sha256=head["clock_ref_py_sha256"],
+                      clock_ref_command="python3 -I " + shlex.join(head["command"]))  # fmt: skip
+    msha = write(tmp_path / "m.json", manifest.canonical(m))
+    rows, _, status = session()
+    d = clock.decide(rows, ref, m, msha, "session", status)
+    assert "instruments" not in d["conditions"] and "selfhash" not in d["conditions"]
+    dsha = write(tmp_path / "d.json", json.dumps(d).encode())
+    rsha = write(tmp_path / "rows.jsonl", "".join(json.dumps(r) + "\n" for r in gate_rows()).encode())
+    rc = summarise.main(["--rows", str(tmp_path / "rows.jsonl"), "--rows-sha256", rsha, "--manifest",
+                         str(tmp_path / "m.json"), "--manifest-sha256", msha, "--clock-decide", str(tmp_path / "d.json"),
+                         "--clock-decide-sha256", dsha, "--sent-at", "x", "--out", str(tmp_path / "s.jsonl")])  # fmt: skip
+    assert rc == 0

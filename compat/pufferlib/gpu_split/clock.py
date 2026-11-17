@@ -33,6 +33,7 @@ import json
 import os
 import resource
 import select
+import shlex
 import subprocess
 import sys
 import time
@@ -225,12 +226,21 @@ class Sampler:
         return rec
 
 
-def read_tag(control: str) -> str:
+TAGS = ("pre", "session", "post")
+
+
+def read_tag(control: str, current: str) -> str:
+    """The tag in ``DIR/tag``, accepted only if it is one of TAGS and not
+    before ``current``; an empty, unreadable or backward tag keeps
+    ``current``. Writers replace the file atomically (temp file and rename)."""
     try:
         with open(os.path.join(control, "tag")) as f:
-            return f.read().strip() or "pre"
+            new = f.read().strip()
     except OSError:
-        return "pre"
+        return current
+    if new in TAGS and TAGS.index(new) >= TAGS.index(current):
+        return new
+    return current
 
 
 def sample_main(args, host_argv=None) -> int:
@@ -239,17 +249,19 @@ def sample_main(args, host_argv=None) -> int:
     s = Sampler(args.out, host_argv or host_command(), args.cpu)
     s.write({"kind": "header", "clock_py_sha256": self_sha256(), "cpu": args.cpu, "pid": os.getpid(),
              "interval_s": args.interval})  # fmt: skip
-    tag = read_tag(args.control)
+    tag = read_tag(args.control, "pre")
     s.context(f"start {tag}")
     first = s.sample(tag)
     if first["host"] is None:
         print(f"STOP: first sample has no host QPC ({s.host.why})", flush=True)
+        s.write({"kind": "event", "event": "end", "stopped": "no host QPC"})
+        return 3
     stop = os.path.join(args.control, "stop")
     nxt = time.monotonic()
     while not os.path.exists(stop):
         nxt += args.interval
         time.sleep(max(0.0, nxt - time.monotonic()))
-        new = read_tag(args.control)
+        new = read_tag(args.control, tag)
         if new != tag:
             s.context(f"{tag} -> {new}")
             tag = new
@@ -310,7 +322,8 @@ def guest_intervals(samples: list[dict]) -> list[dict]:
         pb, ub = host_perf(pts[b])
         row = {"i": pts[a]["i"], "j": pts[b]["i"], "q0": qpc_s(pts[a]), "q1": qpc_s(pts[b]), "tag": pts[b]["tag"],
                "perf": (pb - pa) / dq, "bound_perf": (ua + ub) / dq}  # fmt: skip
-        row["band_perf"] = "gap" if dq > MERGE_MAX_S + 1e-6 else band(row["perf"], row["bound_perf"])
+        row["gap"] = dq > MERGE_MAX_S + 1e-6
+        row["band_perf"] = band(row["perf"], row["bound_perf"])
         wa = (pts[a]["guest_after"]["perf"] - pts[a]["guest_before"]["perf"]) / 2
         wb = (pts[b]["guest_after"]["perf"] - pts[b]["guest_before"]["perf"]) / 2
         for k in ("mono", "raw", "real"):
@@ -338,8 +351,10 @@ def external_intervals(points) -> list[dict]:
     """QPC against the reference clock. From each start, reads are taken until
     the interval is at least MIN_INTERVAL_S long and its bound is below
     BOUND_MAX (classified), or it reaches MERGE_MAX_S (``imprecise``). An
-    interval longer than MERGE_MAX_S spans missing reads: it is a ``gap``,
-    neither classified nor covering (the same holds for guest intervals)."""
+    interval longer than MERGE_MAX_S spans missing reads: it is flagged
+    ``gap`` and never counts as coverage, but its band is still judged under
+    (b) and (c) when its bound is below BOUND_MAX (the same holds for guest
+    intervals)."""
     out, a = [], 0
     for b in range(1, len(points)):
         dt = points[b][0] - points[a][0]
@@ -351,7 +366,7 @@ def external_intervals(points) -> list[dict]:
             continue
         r = (points[b][2] - points[a][2]) / dt
         out.append({"q0": points[a][2], "q1": points[b][2], "dt_s": dt, "r": r, "bound": bound,
-                    "band": "gap" if gap else band(r, bound)})  # fmt: skip
+                    "band": band(r, bound), "gap": gap})  # fmt: skip
         a = b
     return out
 
@@ -427,6 +442,7 @@ def decide(rows: list[dict], ref: list[dict], manifest: dict, manifest_sha256: s
         "clock_py_sha256": head.get("clock_py_sha256"),
         "clock_ref_py_sha256": rhead.get("clock_ref_py_sha256"),
         "clock_ref_host": rhead.get("host"),
+        "clock_ref_target": rhead.get("target"),
         "clock_ref_args": (rhead.get("command") or [None])[1:],
         "clock_cpu": head.get("cpu"),
     }
@@ -437,6 +453,20 @@ def decide(rows: list[dict], ref: list[dict], manifest: dict, manifest_sha256: s
         selfhash.append("clock_ref.py sha256 mismatch")
     for why in selfhash:
         fire("selfhash", why)
+    for key, want in (("clock_ref_host", manifest.get("clock_ref_host")), ("clock_cpu", manifest.get("clock_cpu"))):
+        if instruments[key] != want:
+            fire("instruments", f"{key} {instruments[key]!r} is not the manifest's {want!r}")
+    cmd = shlex.split(manifest.get("clock_ref_command") or "")
+    args = instruments["clock_ref_args"] or []
+    if not args or cmd[-len(args) :] != args or len(cmd) <= len(args) or not cmd[-len(args) - 1].endswith("clock_ref.py"):
+        fire("instruments", "the reference client's arguments are not the manifest's clock_ref_command")
+    order = [TAGS.index(x["tag"]) if x["tag"] in TAGS else -1 for x in samples]
+    if any(o < 0 for o in order) or any(b < a for a, b in zip(order, order[1:])):
+        fire("tags", "sample tags out of order")
+    for name, stream in (("sampler", rows), ("reference", ref)):
+        bad = [i for i, r in enumerate(stream) if r.get("kind") == "corrupt" and not r.get("last")]
+        if bad:
+            fire("corrupt", f"{name}: {len(bad)} corrupt line(s) before the last")
 
     pre = [qpc_s(x) for x in host if x["tag"] == "pre"]
     post = [qpc_s(x) for x in host if x["tag"] == "post"]
@@ -449,18 +479,20 @@ def decide(rows: list[dict], ref: list[dict], manifest: dict, manifest_sha256: s
 
     guest = guest_intervals(samples)
     for g in guest:
-        if g["band_perf"] not in ("nominal", "imprecise", "gap"):
+        if g["band_perf"] not in ("nominal", "imprecise"):
             fire("b", f"perf {g['perf']:.6f} on QPC [{g['q0']:.1f}, {g['q1']:.1f}]")
     ext = [e for e in external_intervals(ref_points(ref)) if e["q1"] > lo and e["q0"] < hi]
     for e in ext:
-        if e["band"] not in ("nominal", "imprecise", "gap"):
+        if e["band"] not in ("nominal", "imprecise"):
             fire("c", f"QPC/reference {e['r']:.6f} on QPC [{e['q0']:.1f}, {e['q1']:.1f}]")
     sources = sorted({c.get("current_clocksource") for c in contexts} - {None})
     if len(sources) > 1:
         fire("e", f"clocksource {sources}")
+    if not sources:
+        fire("clocksource", "no clocksource reading")
 
-    cov_ext = coverage(lo, hi, [(e["q0"], e["q1"]) for e in ext if e["band"] not in ("imprecise", "gap")])
-    cov_guest = coverage(lo, hi, [(g["q0"], g["q1"]) for g in guest if g["band_perf"] not in ("imprecise", "gap")])
+    cov_ext = coverage(lo, hi, [(e["q0"], e["q1"]) for e in ext if e["band"] != "imprecise" and not e["gap"]])
+    cov_guest = coverage(lo, hi, [(g["q0"], g["q1"]) for g in guest if g["band_perf"] != "imprecise" and not g["gap"]])
     for cond, cov in (("d1", cov_ext), ("d2", cov_guest)):
         if cov["uncovered_share"] > COVER_MAX_SHARE or cov["longest_gap_s"] > COVER_MAX_GAP_S:
             fire(cond, f"uncovered {cov['uncovered_share']:.4f}, longest {cov['longest_gap_s']:.1f} s")
@@ -477,7 +509,7 @@ def decide(rows: list[dict], ref: list[dict], manifest: dict, manifest_sha256: s
             fire("d3", "reference stream has no end marker")
 
     fault = sorted(set(fired) & {"b", "c", "e"})
-    missing = sorted(set(fired) & {"a", "d1", "d2", "d3", "selfhash"})
+    missing = sorted(set(fired) & {"a", "d1", "d2", "d3", "selfhash", "instruments", "tags", "corrupt", "clocksource"})
     outcome = "clock-invalid" if fault else "instrumentation failed" if missing else "clock-valid"
     out = {
         "scope": scope,
@@ -488,9 +520,9 @@ def decide(rows: list[dict], ref: list[dict], manifest: dict, manifest_sha256: s
         "span_qpc_s": [lo, hi],
         "guest_intervals": len(guest),
         "external_intervals": len(ext),
-        "external_precise": sum(1 for e in ext if e["band"] not in ("imprecise", "gap")),
+        "external_precise": sum(1 for e in ext if e["band"] != "imprecise" and not e["gap"]),
         "coverage": {"external": cov_ext, "guest": cov_guest},
-        "worst_perf": max((abs(g["perf"] - 1) for g in guest if g["band_perf"] not in ("imprecise", "gap")), default=None),
+        "worst_perf": max((abs(g["perf"] - 1) for g in guest if g["band_perf"] != "imprecise"), default=None),
         "external": ext,
         "reported": {
             "utc": utc_windows(samples),
@@ -514,21 +546,27 @@ def decide(rows: list[dict], ref: list[dict], manifest: dict, manifest_sha256: s
     hc = [(c["mono"], c["host_cpu_s"]) for c in contexts if c.get("host_cpu_s") is not None]
     rc = [(r["t"], r["cpu_s"]) for r in ref if r.get("kind") == "cpu" and r.get("cpu_s") is not None]
     out.setdefault("cpu", {})
+    # The host reader's share spans its first to last context row (start of
+    # pre to the stop); the reference loop's spans its first to last cpu row.
+    out["cpu"]["host_reader_span"] = "context rows: start of pre to the stop"
+    out["cpu"]["reference_loop_span"] = "cpu rows: first to last"
     for name, pts in (("host_reader_share", hc), ("reference_loop_share", rc)):
         out["cpu"][name] = (pts[-1][1] - pts[0][1]) / (pts[-1][0] - pts[0][0]) if len(pts) > 1 and pts[-1][0] > pts[0][0] else None
     return out
 
 
 def read_jsonl(path: str) -> list[dict]:
-    rows = []
+    """Rows of a JSONL file; a line that does not parse becomes
+    ``{"kind": "corrupt", "last": <is it the last line>}``. Only a truncated
+    last line is tolerated by ``decide``."""
     with open(path) as f:
-        for line in f:
-            line = line.strip()
-            if line:
-                try:
-                    rows.append(json.loads(line))
-                except json.JSONDecodeError:
-                    rows.append({"kind": "corrupt"})
+        lines = [x.strip() for x in f if x.strip()]
+    rows = []
+    for k, line in enumerate(lines):
+        try:
+            rows.append(json.loads(line))
+        except json.JSONDecodeError:
+            rows.append({"kind": "corrupt", "last": k == len(lines) - 1})
     return rows
 
 
@@ -568,8 +606,6 @@ def main(argv=None) -> int:
     d.add_argument("--out", required=True)
     args = p.parse_args(argv)
     if args.cmd == "sample":
-        import shlex
-
         return sample_main(args, shlex.split(args.host_cmd) if args.host_cmd else None)
     return decide_main(args)
 

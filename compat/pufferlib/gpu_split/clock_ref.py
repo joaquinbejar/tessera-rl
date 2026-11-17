@@ -5,6 +5,10 @@ Runs on the reference host named in the manifest, outside the GPU box:
 
     python clock_ref.py --out PATH --host USER@BOX --stop-file PATH [--every 5] [--cpu-every 60]
 
+``--host`` is the ssh target (the box). The header records this host's own
+name (``socket.gethostname()``) as ``host``, which must be the manifest's
+``clock_ref_host``, and the target as ``target``.
+
 It opens one ssh session to the box running a PowerShell loop (the same loop
 as ``clock.py``'s host reader) and keeps it for the whole session; it never
 opens a second one. Every read is one request and its reply: the request is
@@ -26,6 +30,7 @@ import os
 import platform
 import select
 import shlex
+import socket
 import subprocess
 import sys
 import time
@@ -97,7 +102,8 @@ def main(argv=None) -> int:
             f.write(json.dumps(rec) + "\n")
             f.flush()
 
-        write({"kind": "header", "clock_ref_py_sha256": self_sha256(), "host": args.host,
+        write({"kind": "header", "clock_ref_py_sha256": self_sha256(), "host": socket.gethostname(),
+               "target": args.host,
                "command": sys.argv if argv is None else ["clock_ref.py", *argv],
                "platform": platform.platform(), "python": sys.version,
                "clock": "time.monotonic", "clock_info": str(time.get_clock_info("monotonic"))})  # fmt: skip
