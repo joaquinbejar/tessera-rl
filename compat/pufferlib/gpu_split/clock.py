@@ -43,13 +43,21 @@ PS_CPU_SPEED = "Get-CimInstance Win32_Processor | ForEach-Object { $_.CurrentClo
 CLOCKSOURCE = "/sys/devices/system/clocksource/clocksource0/current_clocksource"
 # One line in, one line out: "cpu" -> the loop's total processor seconds,
 # "end" -> "end" and exit, anything else -> QPC, its frequency, UTC ticks.
+# The two reads, shared verbatim with clock_ref.py (a test checks it): QPC,
+# its frequency and UTC ticks on one line; the loop's own CPU seconds.
+READ_EXPR = (
+    "([Diagnostics.Stopwatch]::GetTimestamp()).ToString() + ' ' + "
+    "([Diagnostics.Stopwatch]::Frequency).ToString() + ' ' + ([DateTime]::UtcNow.Ticks).ToString()"
+)
+CPU_EXPR = (
+    "[Diagnostics.Process]::GetCurrentProcess()"
+    ".TotalProcessorTime.TotalSeconds.ToString([Globalization.CultureInfo]::InvariantCulture)"
+)
 LOOP = (
     "while (($l = [Console]::In.ReadLine()) -ne $null) { "
     "if ($l -eq 'end') { [Console]::Out.WriteLine('end'); [Console]::Out.Flush(); break } "
-    "if ($l -eq 'cpu') { [Console]::Out.WriteLine([Diagnostics.Process]::GetCurrentProcess()"
-    ".TotalProcessorTime.TotalSeconds.ToString([Globalization.CultureInfo]::InvariantCulture)) } "
-    "else { [Console]::Out.WriteLine(([Diagnostics.Stopwatch]::GetTimestamp()).ToString() + ' ' + "
-    "([Diagnostics.Stopwatch]::Frequency).ToString() + ' ' + ([DateTime]::UtcNow.Ticks).ToString()) } "
+    "if ($l -eq 'cpu') { [Console]::Out.WriteLine(" + CPU_EXPR + ") } "
+    "else { [Console]::Out.WriteLine(" + READ_EXPR + ") } "
     "[Console]::Out.Flush() }"
 )
 

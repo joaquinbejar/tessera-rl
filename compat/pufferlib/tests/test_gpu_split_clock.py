@@ -20,6 +20,7 @@ import hashlib
 import json
 import pathlib
 import shlex
+import socket as socket_mod
 import subprocess
 import sys
 import textwrap
@@ -619,10 +620,6 @@ def fake_loop(tmp_path, mode="ok"):
     return f"{sys.executable} -I {p}"
 
 
-def test_clock_and_clock_ref_share_one_loop():
-    assert clock.LOOP == clock_ref.LOOP
-
-
 def set_tag(ctl, tag):
     """The documented way to change the tag: write a temp file, then rename."""
     (ctl / "tag.tmp").write_text(tag)
@@ -712,13 +709,97 @@ def rows_of(path):
     return clock.read_jsonl(str(path)) if path.exists() else []
 
 
-def run_ref(tmp_path, mode, reads):
-    """Runs the client until ``reads`` read rows and a cpu row exist (or it
-    exits on its own), then stops it."""
+# A local fake of the box side of clock_ref's transport (152-clockref-fix-dryrun.md):
+# a fake ``ssh`` that checks its arguments (``-L 127.0.0.1:P:127.0.0.1:P``,
+# remote command == clock_ref.tcp_loop(P, idle)), never reads its stdin (the
+# box's DefaultShell takes it), and runs the same protocol as TCP_LOOP: a
+# listener on 127.0.0.1:P that accepts one client, answers one line per
+# request line, and exits on ``end``, on the client's disconnect, after the
+# idle timeout, or if no client connects within the accept timeout. MODE
+# varies the loop: ``slow`` (the third ``x`` is slow), ``die`` (closes at the
+# third ``x``), ``noise`` (a line before the first reply).
+FAKE_SSH_TCP = """
+import socket, sys, time
+sys.path.insert(0, HARNESS)
+import clock_ref
+args = sys.argv[1:]
+fwd = args[args.index("-L") + 1]
+lo, port, ro, rport = fwd.split(":")
+assert lo == ro == "127.0.0.1" and port == rport, fwd
+port = int(port)
+assert args[-1] == clock_ref.tcp_loop(port, IDLE), "the remote command is not tcp_loop"
+srv = socket.socket()
+srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+srv.bind(("127.0.0.1", port))
+srv.listen(1)
+srv.settimeout(ACCEPT_S)
+try:
+    c, _ = srv.accept()
+except socket.timeout:
+    open(EXITED, "w").write("accept timeout")
+    sys.exit(3)
+srv.close()
+c.settimeout(IDLE)
+f = c.makefile("rwb", buffering=0)
+import os
+f.write(f"listener {os.getpid()}\\n".encode())
+if MODE == "noise":
+    f.write(b"profile: Windows PowerShell, loaded in 120 ms\\n")
+n = 0
+why = "disconnect"
+try:
+    while True:
+        line = f.readline()
+        if not line:
+            break
+        line = line.strip()
+        if line == b"end":
+            f.write(b"end\\n")
+            why = "end"
+            break
+        if line == b"cpu":
+            f.write(f"{time.process_time()}\\n".encode())
+            continue
+        n += 1
+        if MODE == "slow" and n == 3:
+            time.sleep(0.6)
+        if MODE == "die" and n == 3:
+            why = "die"
+            break
+        f.write(f"{time.monotonic_ns() // 100} 10000000 {time.time_ns() // 100}\\n".encode())
+except socket.timeout:
+    why = "idle"
+c.close()
+open(EXITED, "w").write(why)
+"""
+
+
+def free_port() -> int:
+    with socket_mod.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
+def fake_ssh_tcp(tmp_path, mode="ok", idle=60.0, accept_s=60.0):
+    exited = tmp_path / f"exited_{mode}"
+    src = tmp_path / f"fake_ssh_{mode}.py"
+    src.write_text(f"HARNESS = {str(HARNESS)!r}\nMODE = {mode!r}\nIDLE = {idle!r}\nACCEPT_S = {accept_s!r}\n"
+                   f"EXITED = {str(exited)!r}\n" + FAKE_SSH_TCP)  # fmt: skip
+    w = tmp_path / f"ssh_{mode}"
+    w.write_text(f'#!/bin/sh\nexec {sys.executable} -I {src} "$@"\n')
+    w.chmod(0o755)
+    return str(w), exited
+
+
+def run_ref(tmp_path, mode, reads, idle=60.0):
+    """Runs the client through the fake tunnel until ``reads`` read rows and a
+    cpu row exist (or it exits on its own), then stops it."""
     out, stop = tmp_path / f"ref_{mode}.jsonl", tmp_path / f"stop_{mode}"
+    ssh, exited = fake_ssh_tcp(tmp_path, mode, idle)
     p = subprocess.Popen([sys.executable, "-I", str(HARNESS / "clock_ref.py"), "--out", str(out), "--host",
-                          "ref.example", "--stop-file", str(stop), "--every", "0.05", "--cpu-every", "0.2",
-                          "--reply-timeout", "10", "--command", fake_loop(tmp_path, mode)])  # fmt: skip
+                          "ref.example", "--stop-file", str(stop), "--port", str(free_port()), "--every", "0.05",
+                          "--cpu-every", "0.2", "--idle", str(idle), "--reply-timeout", "10", "--ssh", ssh],
+                         stdin=subprocess.DEVNULL)  # fmt: skip
 
     def enough():
         rows = rows_of(out)
@@ -728,36 +809,106 @@ def run_ref(tmp_path, mode, reads):
     wait_for(enough)
     stop.write_text("")
     rc = p.wait(timeout=60)
-    return rc, clock.read_jsonl(str(out))
+    wait_for(exited.exists)
+    return rc, clock.read_jsonl(str(out)), exited.read_text()
 
 
 def test_clock_ref_stamps_reads_with_monotonic_and_ends_cleanly(tmp_path):
-    rc, rows = run_ref(tmp_path, "ok", 3)
-    assert rc == 0 and rows[0]["clock"] == "time.monotonic"
+    rc, rows, why = run_ref(tmp_path, "ok", 3)
+    assert rc == 0 and rows[0]["clock"] == "time.monotonic" and rows[0]["transport"] == "tcp over ssh -L"
     assert rows[0]["clock_ref_py_sha256"] == manifest.file_sha256(str(HARNESS / "clock_ref.py"))
     reads = [r for r in rows if r["kind"] == "read"]
-    assert len(reads) >= 3 and all(r["t0"] < r["t1"] for r in reads)
+    assert len(reads) >= 3 and all(r["t0"] < r["t1"] and r["qpc"] is not None for r in reads)
     assert all(r["usable"] == (r["t1"] - r["t0"] <= clock_ref.RTT_MAX_S) for r in reads)
     assert any(r["kind"] == "cpu" for r in rows)
     assert rows[-1] == {"kind": "event", "event": "end", "loop_ended": True}
+    assert why == "end"
+    listener = [r for r in rows if r["kind"] == "listener"]
+    assert len(listener) == 1 and listener[0]["pid"] > 0
+    # The first line from the box names the listener's PID, recorded before any read.
+    kinds = [r["kind"] for r in rows]
+    assert kinds.index("listener") < kinds.index("read")
+    assert rows[0]["ssh_log"].endswith(".ssh.log") and pathlib.Path(rows[0]["ssh_log"]).exists()
+
+
+def test_clock_ref_discards_lines_before_the_first_reply(tmp_path):
+    rc, rows, _ = run_ref(tmp_path, "noise", 3)
+    assert rc == 0 and {"kind": "discarded", "line": "profile: Windows PowerShell, loaded in 120 ms"} in rows
+    assert all(r["qpc"] is not None for r in rows if r["kind"] == "read")
 
 
 def test_clock_ref_marks_a_slow_reply_unusable(tmp_path):
-    _, rows = run_ref(tmp_path, "slow", 4)
+    _, rows, _ = run_ref(tmp_path, "slow", 4)
     reads = [r for r in rows if r["kind"] == "read"]
-    assert reads[2]["usable"] is False and reads[2]["t1"] - reads[2]["t0"] > clock_ref.RTT_MAX_S
+    # The loop's third "x" is slow; the first one is the client's sync request.
+    assert reads[1]["usable"] is False and reads[1]["t1"] - reads[1]["t0"] > clock_ref.RTT_MAX_S
 
 
 def test_clock_ref_records_a_lost_session_and_does_not_reconnect(tmp_path):
-    rc, rows = run_ref(tmp_path, "die", 1000)  # it exits on its own at the third read
-    assert rc == 3
+    rc, rows, why = run_ref(tmp_path, "die", 1000)  # it exits on its own at the third read
+    assert rc == 3 and why == "die"
     assert rows[-1]["event"] == "lost" and sum(1 for r in rows if r["kind"] == "header") == 1
+
+
+def test_clock_ref_fake_loop_exits_on_disconnect_and_idle(tmp_path):
+    # The protocol the client relies on: the box loop never outlives the client.
+    port = free_port()
+    for mode, idle, act in (("ok", 60.0, "close"), ("idle", 0.3, "wait")):
+        d = tmp_path / mode
+        d.mkdir()
+        ssh, exited = fake_ssh_tcp(d, mode, idle)
+        p = subprocess.Popen([ssh, "-T", "-L", f"127.0.0.1:{port}:127.0.0.1:{port}", "box",
+                              clock_ref.tcp_loop(port, idle)], stdin=subprocess.DEVNULL)  # fmt: skip
+        s = None
+        def connected():
+            nonlocal s
+            try:
+                s = socket_mod.create_connection(("127.0.0.1", port), timeout=1)
+                return True
+            except OSError:
+                return False
+        wait_for(connected)
+        s.sendall(b"x\n")
+        rf = s.makefile("rb")
+        assert rf.readline().split()[0] == b"listener"
+        assert len(rf.readline().split()) == 3
+        if act == "close":
+            rf.close()  # the makefile holds the socket open until closed too
+            s.close()
+        assert p.wait(timeout=30) == 0
+        assert exited.read_text() == ("disconnect" if act == "close" else "idle")
+        if s:
+            s.close()
+
+
+def test_clock_ref_tcp_loop_is_one_argument_on_localhost():
+    loop = clock_ref.tcp_loop(47123, 60)
+    assert '"' not in loop and "\n" not in loop and "\r" not in loop
+    assert "[Net.IPAddress]::Loopback, 47123" in loop and "ReceiveTimeout = 60000" in loop
+    assert "Wait(60000)" in loop and "'end'" in loop and "finally { $c.Close() }" in loop
+    assert loop.count("AcceptTcpClientAsync") == 1 and "$l.Stop()" in loop and "'listener ' + $PID" in loop
+    assert clock_ref.TCP_LOOP.count("PORT") == 1 and clock_ref.TCP_LOOP.count("IDLE_MS") == 1
+    assert "catch { [Console]::Error.WriteLine('loop error: ' + $_) } finally" in loop
+    for forbidden in ("New-NetFirewallRule", "netsh", "Out-File", "Set-Content", "Start-Process", "RunAs"):
+        assert forbidden not in loop
+    cmd = clock_ref.ssh_command("jb@box.example", 47123, 60)
+    assert cmd[cmd.index("-L") + 1] == "127.0.0.1:47123:127.0.0.1:47123" and cmd[-1] == loop
+    assert "ExitOnForwardFailure=yes" in cmd
+    with pytest.raises(ValueError):
+        clock_ref.tcp_loop(80, 60)
+
+
+def test_clock_and_clock_ref_share_the_read_expressions():
+    # One QPC/frequency/UTC read and one CPU read, verbatim in both loops.
+    assert clock.READ_EXPR == clock_ref.READ_EXPR and clock.CPU_EXPR == clock_ref.CPU_EXPR
+    for expr in (clock.READ_EXPR, clock.CPU_EXPR):
+        assert expr in clock.LOOP and expr in clock_ref.TCP_LOOP
 
 
 def test_clock_ref_header_passes_decide_and_summarise(tmp_path):
     import socket
 
-    _, ref = run_ref(tmp_path, "ok", 2)
+    _, ref, _ = run_ref(tmp_path, "ok", 2)
     head = ref[0]
     assert head["host"] == socket.gethostname() and head["target"] == "ref.example"
     m = gate_manifest(clock_ref_host=socket.gethostname(), clock_ref_py_sha256=head["clock_ref_py_sha256"],
