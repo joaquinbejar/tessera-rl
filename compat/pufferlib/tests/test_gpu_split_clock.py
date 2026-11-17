@@ -1008,3 +1008,32 @@ def test_driver_refuses_a_manifest_without_the_raw_wall_clock(tmp_path, capsys):
                       "--manifest-sha256", hashlib.sha256(blob).hexdigest(), "--wheel", str(wheel)])  # fmt: skip
     assert rc == driver.EXIT_REFUSED and "CLOCK_MONOTONIC_RAW" in capsys.readouterr().out
     assert not (tmp_path / "r.jsonl").exists()
+
+
+REHEARSAL2 = pathlib.Path(__file__).parent / "fixtures" / "rehearsal2"
+
+
+def test_clock_decide_rehearsal2_pre_check_is_valid_with_perf_reported():
+    # Rehearsal 2 (2026-11-17), the real samples its pre-check judged
+    # clock-invalid on perf_counter (condition (b), perf at 0.987842). Under
+    # ADR-0064 the binding clock is raw, which ran at 1.000001 against QPC.
+    # That sampler predates host_bracket_raw, so the bracket is mapped here
+    # from host_bracket_perf through each sample's own perf -> raw line.
+    path = REHEARSAL2 / "samples-at-pre-check.jsonl"
+    want = "0ad720082584f53a12bacbc7e9f4d7d5dd65e01f832ed94ff01fbd932b237400"
+    assert hashlib.sha256(path.read_bytes()).hexdigest() == want
+    rows = clock.read_jsonl(str(path))
+    for x in rows:
+        if x.get("kind") == "sample" and x["host"] is not None:
+            b, a = x["guest_before"], x["guest_after"]
+            k = (a["raw"] - b["raw"]) / (a["perf"] - b["perf"])
+            x["host_bracket_raw"] = [b["raw"] + (p - b["perf"]) * k for p in x["host_bracket_perf"]]
+    ref = clock.read_jsonl(str(REHEARSAL2 / "ref.jsonl"))
+    data = (REHEARSAL2 / "manifest.json").read_bytes()
+    d = clock.decide(rows, ref, json.loads(data), hashlib.sha256(data).hexdigest(), "pre-check")
+    assert d["decision"] == "go"
+    assert d["outcome"] == "clock-valid"
+    assert d["binding_guest_clock"] == "CLOCK_MONOTONIC_RAW"
+    assert d["coverage"]["guest"]["uncovered_share"] == 0.0
+    assert "other" in d["reported"]["other_guest_clocks"]["perf"]
+    assert d["reported"]["perf_worst"] > 0.01
