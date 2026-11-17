@@ -85,9 +85,13 @@ pub enum HostError {
 /// One value of the implementing type is one instance; the engine's host
 /// pool owns `num_envs` of them, built once at construction with
 /// [`HostEnvironment::new`]. The views passed to the methods are built by
-/// the engine only: actions are already validated (ADR-0028), observation
-/// leaves are zero on entry (ADR-0058), and `StepOut` rows have
-/// `MAX_AGENTS` entries.
+/// the engine only: observation leaves are zero on entry (ADR-0058), and
+/// `StepOut` rows have `MAX_AGENTS` entries.
+///
+/// **Validation is shape and range only** (ADR-0028): every action is
+/// checked against its head's range, but not against the environment's own
+/// mask. A host pool has no no-op to substitute, so `step` can receive an
+/// action that [`HostEnvironment::mask`] marked illegal, and must handle it.
 pub trait HostEnvironment: Send + Sized + 'static {
     /// The versioned id, `<namespace>/<Name>-v<N>` (ADR-0023). The
     /// namespace `tessera` is reserved for first-party environments.
@@ -102,6 +106,10 @@ pub trait HostEnvironment: Send + Sized + 'static {
     /// The turn structure (ADR-0013); `Sequential` and `Mixed` must
     /// override [`HostEnvironment::acting`].
     const TURNS: TurnStructure = TurnStructure::Simultaneous;
+    /// Whether the environment writes action masks
+    /// ([`HostEnvironment::mask`]). Without masks the pool has no mask
+    /// buffer (a mask length of 0) and never calls `mask`.
+    const MASKS: bool = false;
 
     /// The environment's configuration.
     type Config: EnvConfig;
@@ -128,8 +136,19 @@ pub trait HostEnvironment: Send + Sized + 'static {
     /// [`SpaceError`] for an invalid configuration.
     fn action_space(cfg: &Self::Config) -> Result<Space, SpaceError>;
 
-    /// Starts an episode with `seed`. Rewards and flags written to `out` are
-    /// the reset's outputs.
+    /// Starts an episode with `seed`. Every agent slot is alive afterwards.
+    ///
+    /// What `out` means depends on why the reset runs:
+    ///
+    /// - an explicit reset (`reset`, `reset_all`) and a `NextStep`
+    ///   auto-reset (the call after the episode ended): the rewards and
+    ///   flags written to `out` are that instance's outputs of the call;
+    /// - a `SameStep` auto-reset (in the call that ended the episode):
+    ///   `out` is scratch, and what the reset writes is discarded, because
+    ///   the instance's rows hold the ended step's rewards and flags;
+    /// - `Disabled`: the engine never resets an instance by itself.
+    ///
+    /// An episode end reported through `out` is ignored in every case.
     fn reset(&mut self, seed: HostSeed, out: &mut StepOut<'_>);
 
     /// Applies one step of validated actions.
@@ -139,6 +158,8 @@ pub trait HostEnvironment: Send + Sized + 'static {
     fn observe(&self, agent: AgentSlot, obs: &mut ObsWriter<'_, '_, ()>);
 
     /// Writes `agent`'s legal-action mask; every action is legal by default.
+    /// Called only when [`HostEnvironment::MASKS`] is `true`. The mask is an
+    /// output: actions are not checked against it.
     fn mask(&self, _agent: AgentSlot, mask: &mut MaskWriter<'_>) {
         mask.fill(true);
     }

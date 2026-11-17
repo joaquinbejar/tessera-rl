@@ -19,6 +19,8 @@ mod entry;
 mod error;
 #[cfg(test)]
 mod fault_tests;
+#[cfg(feature = "host")]
+mod host;
 mod layout;
 mod masks;
 #[cfg(not(loom))]
@@ -28,6 +30,8 @@ mod nan_check;
 mod options;
 mod outputs;
 mod persist;
+#[cfg(test)]
+mod pin_tests;
 mod pool;
 mod record;
 mod registry;
@@ -49,6 +53,8 @@ pub use buffer::batch::{BatchRow, BatchToken, BatchWaiter};
 pub use buffer::pipeline::{HalfToken, Waiter};
 pub use buffer::{OutputDtype, OutputField, OutputRegion, OutputStorage};
 pub use error::{EngineError, NanSite};
+#[cfg(feature = "host")]
+pub use host::{HostPool, MAX_HOST_HEADS};
 pub use layout::{MAX_GROUPED_HEADS, MAX_LEAVES, MaskHeadShape};
 pub use masks::{IllegalActionPolicy, MaskProvider, Masked, NoMasks, PersistMask};
 #[cfg(not(loom))]

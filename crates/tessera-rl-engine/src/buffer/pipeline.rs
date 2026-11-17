@@ -29,7 +29,7 @@ use std::sync::Arc;
 
 use tessera_rl_core::{Bool8, Environment, RecordLayout as _};
 
-use super::{HALVES, Raw, RawChunk, chunk_range};
+use super::{EnvRawChunk, HALVES, Raw, RawChunk, chunk_range};
 use crate::masks::MaskProvider;
 use crate::pool::{EnvPool, step_chunk};
 use crate::sys::Gang;
@@ -53,7 +53,7 @@ struct HalfWork {
 /// The one shared allocation of a Pipelined pool (ADR-0047 section 2).
 pub(crate) struct Mode<E: Environment, M: MaskProvider<E>> {
     pub(crate) pool: EnvPool<E, M>,
-    raw: RawChunk<E>,
+    raw: EnvRawChunk<E>,
     halves: [Range<usize>; HALVES],
     size: usize,
     workers: usize,
@@ -131,7 +131,7 @@ where
     }
 
     /// Raw parts of every buffer of `pool`, from a fresh `&mut`.
-    fn parts(pool: &mut EnvPool<E, M>) -> RawChunk<E> {
+    fn parts(pool: &mut EnvPool<E, M>) -> EnvRawChunk<E> {
         let (chunk, (dh, ch)) = pool.chunk_all();
         RawChunk::new(chunk, dh, ch)
     }

@@ -3,7 +3,7 @@
 //! Disjoint chunk views shared with worker threads (ADR-0002, ADR-0005).
 //! Audited `unsafe` module.
 //!
-//! Sync mode splits a pool-wide [`Chunk`] into its raw parts and hands each
+//! Sync mode splits a pool-wide [`Rows`] into its raw parts and hands each
 //! worker `&mut` views of *its own* chunks only. The split-phase modes
 //! (ADR-0047) also build views of a Pipelined half or of one instance
 //! ([`RawChunk::range_view`], [`RawChunk::instance_view`]): a caller views
@@ -57,12 +57,12 @@ mod storage;
 
 use core::ops::Range;
 
-use tessera_rl_core::{Bool8, Environment};
+use tessera_rl_core::Bool8;
 
 use crate::error::EngineError;
 use crate::layout::MAX_LEAVES;
 use crate::outputs::OutputsView;
-use crate::pool::Chunk;
+use crate::pool::Rows;
 use crate::sys::Gang;
 use crate::sys::sync::{AtomicBool, Ordering};
 
@@ -72,11 +72,20 @@ pub(crate) use generations::{GenerationError, Generations};
 pub(crate) use storage::{Buf, StorageBuilder};
 pub use storage::{OutputDtype, OutputField, OutputRegion, OutputStorage};
 
-#[derive(Clone, Copy)]
 struct Raw<T> {
     ptr: *mut T,
     len: usize,
 }
+
+// A pointer and a length: copying them copies no `T`, so no `T: Copy`
+// bound (the host pool's instances are not `Copy`, ADR-0062).
+impl<T> Clone for Raw<T> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<T> Copy for Raw<T> {}
 
 impl<T> Raw<T> {
     fn new(slice: &mut [T]) -> Self {
@@ -117,16 +126,16 @@ impl<T> Raw<T> {
     }
 }
 
-/// The raw parts of a pool-wide chunk.
-struct RawChunk<E: Environment> {
+/// The raw parts of a pool-wide chunk of headers `H` and states `S`.
+struct RawChunk<H, S> {
     instances: usize,
     agents: usize,
     dh: usize,
     ch: usize,
     mask_len: usize,
     leaf_bytes: Raw<usize>,
-    headers: Raw<E::Header>,
-    states: Raw<E::State>,
+    headers: Raw<H>,
+    states: Raw<S>,
     discrete: Raw<i32>,
     continuous: Raw<f32>,
     penalties: Raw<f32>,
@@ -151,22 +160,25 @@ struct RawChunk<E: Environment> {
     masks: Raw<Bool8>,
 }
 
+/// The raw parts of an `Environment` pool's chunk, for the split-phase
+/// modes.
+#[cfg(not(loom))]
+type EnvRawChunk<E> = RawChunk<
+    <E as tessera_rl_core::Environment>::Header,
+    <E as tessera_rl_core::Environment>::State,
+>;
+
 // SAFETY: a `RawChunk` is shared by workers only to build disjoint views
 // (invariant 2), each of which is used by one thread at a time; the
-// elements are `Send` (`E::Header` and `E::State` are required `Send` by
-// Sync mode, the others are plain numbers), so handing out `&mut` views of
-// disjoint ranges to other threads is sound.
+// elements are `Send` (`H` and `S` are required `Send` here; the others
+// are plain numbers), so handing out `&mut` views of disjoint ranges to
+// other threads is sound.
 #[expect(unsafe_code, reason = "audited module: shared raw chunk")]
-unsafe impl<E: Environment> Sync for RawChunk<E>
-where
-    E::Header: Send,
-    E::State: Send,
-{
-}
+unsafe impl<H: Send, S: Send> Sync for RawChunk<H, S> {}
 
-impl<E: Environment> RawChunk<E> {
-    fn new(chunk: Chunk<'_, E>, dh: usize, ch: usize) -> Self {
-        let Chunk {
+impl<H, S> RawChunk<H, S> {
+    fn new(chunk: Rows<'_, H, S>, dh: usize, ch: usize) -> Self {
+        let Rows {
             headers,
             states,
             discrete,
@@ -244,7 +256,7 @@ impl<E: Environment> RawChunk<E> {
     ///
     /// Module invariants; in particular no other live view covers `r`.
     #[expect(unsafe_code, reason = "audited module: disjoint chunk views")]
-    unsafe fn chunk<'a>(&self, r: &Range<usize>) -> Chunk<'a, E> {
+    unsafe fn chunk<'a>(&self, r: &Range<usize>) -> Rows<'a, H, S> {
         let a = self.agents;
         // SAFETY: `leaf_bytes` is never written during an epoch, so a shared
         // view of it alongside the workers' views is sound (invariant 1).
@@ -307,7 +319,7 @@ impl<E: Environment> RawChunk<E> {
         let episode_invalid_agent_events = unsafe { self.episode_invalid_agent_events.view(r, 1) };
         // SAFETY: invariants 1 to 4 for range `r` (a * self.mask_len elements per instance).
         let masks = unsafe { self.masks.view(r, a * self.mask_len) };
-        Chunk {
+        Rows {
             headers,
             states,
             discrete,
@@ -345,7 +357,7 @@ impl<E: Environment> RawChunk<E> {
     loom,
     allow(dead_code, reason = "the split-phase modes are not built under loom")
 )]
-impl<E: Environment> RawChunk<E> {
+impl<H, S> RawChunk<H, S> {
     /// The views of the instances in `r`, or `None` if `r` is reversed or
     /// reaches past the last instance. No slice covers a row outside `r`.
     ///
@@ -356,7 +368,7 @@ impl<E: Environment> RawChunk<E> {
     /// or claim), so no other live view or write covers it, and the buffers
     /// stay alive and in place for `'a`.
     #[expect(unsafe_code, reason = "audited module: token-guarded views")]
-    unsafe fn range_view<'a>(&self, r: Range<usize>) -> Option<Chunk<'a, E>> {
+    unsafe fn range_view<'a>(&self, r: Range<usize>) -> Option<Rows<'a, H, S>> {
         if r.start > r.end || r.end > self.instances {
             return None;
         }
@@ -376,7 +388,7 @@ impl<E: Environment> RawChunk<E> {
         not(test),
         expect(dead_code, reason = "used by the Async mode (ADR-0047)")
     )]
-    unsafe fn instance_view<'a>(&self, id: usize) -> Option<Chunk<'a, E>> {
+    unsafe fn instance_view<'a>(&self, id: usize) -> Option<Rows<'a, H, S>> {
         let end = id.checked_add(1)?;
         // SAFETY: forwarded to the caller's guarantee for row `id`.
         unsafe { self.range_view(id..end) }
@@ -431,18 +443,17 @@ pub(crate) fn chunk_range(c: usize, size: usize, instances: usize) -> Range<usiz
 /// gang's workers (chunk `c` on worker `c % workers`). `f` runs once per
 /// chunk; a panic in it is caught per chunk. Returns `true` if any chunk
 /// panicked. `dh` and `ch` are the discrete and continuous heads per agent.
-pub(crate) fn par_chunks<E, F>(
+pub(crate) fn par_chunks<H, S, F>(
     gang: &mut Gang,
-    all: Chunk<'_, E>,
+    all: Rows<'_, H, S>,
     size: usize,
     heads: (usize, usize),
     f: F,
 ) -> Result<bool, EngineError>
 where
-    E: Environment,
-    E::Header: Send,
-    E::State: Send,
-    F: Fn(&mut Chunk<'_, E>, usize) + Sync,
+    H: Send,
+    S: Send,
+    F: Fn(&mut Rows<'_, H, S>, usize) + Sync,
 {
     // The worker count comes from the gang itself, so the assignment below
     // is disjoint by construction (invariant 2).
@@ -584,7 +595,7 @@ mod tests {
             penalized: &mut penalized,
             outputs: outputs.view_all(),
         };
-        let raw = RawChunk::<Probe>::new(all, 1, 0);
+        let raw = RawChunk::<<Probe as Environment>::Header, ProbeState>::new(all, 1, 0);
         // Size 3 over 7 instances: chunks 0..3, 3..6 and the ragged 6..7.
         std::thread::scope(|scope| {
             for w in 0..2usize {
@@ -703,7 +714,10 @@ mod tests {
 
     /// Builds a probe pool of `n` instances, runs `f` on its raw parts and
     /// returns the outputs and states for checking.
-    fn with_raw(n: usize, f: impl FnOnce(&RawChunk<Probe>)) -> (Outputs, Vec<ProbeState>) {
+    fn with_raw(
+        n: usize,
+        f: impl FnOnce(&RawChunk<<Probe as Environment>::Header, ProbeState>),
+    ) -> (Outputs, Vec<ProbeState>) {
         let leaves = [Leaf { bytes: 3 }, Leaf { bytes: 1 }];
         let mut outputs = Outputs::new(n, 2, &leaves, true, 2).unwrap();
         let mut headers = vec![RecordHeader::<2, NoAdaptive>::state_default(); n];
@@ -712,8 +726,8 @@ mod tests {
         let mut continuous: Vec<f32> = Vec::new();
         let mut penalties: Vec<f32> = Vec::new();
         let mut penalized: Vec<Bool8> = Vec::new();
-        let raw = RawChunk::<Probe>::new(
-            Chunk {
+        let raw = RawChunk::<<Probe as Environment>::Header, ProbeState>::new(
+            Chunk::<Probe> {
                 headers: &mut headers,
                 states: &mut states,
                 discrete: &mut discrete,

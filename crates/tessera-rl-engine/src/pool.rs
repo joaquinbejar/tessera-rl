@@ -66,7 +66,7 @@ pub enum Reseed<'a> {
 
 impl Reseed<'_> {
     /// The seed of the k-th reset instance; `None` keeps its seed.
-    fn seed(self, k: usize) -> Option<Seed> {
+    pub(crate) fn seed(self, k: usize) -> Option<Seed> {
         match self {
             Self::Keep => None,
             // `k` counts reset instances, at most `u32::MAX`.
@@ -159,7 +159,7 @@ impl<E: Environment, M: MaskProvider<E>> EnvPool<E, M> {
     /// for the split-phase modes to take raw parts of (ADR-0047).
     pub(crate) fn chunk_all(&mut self) -> (Chunk<'_, E>, (usize, usize)) {
         let heads = (self.actions.discrete.len(), self.actions.continuous.len());
-        let chunk = Chunk {
+        let chunk = Rows {
             headers: &mut self.headers,
             states: &mut self.states,
             discrete: &mut self.discrete,
@@ -179,7 +179,145 @@ pub(crate) struct SyncRuntime {
     pub(crate) gang: Gang,
     pub(crate) workers: usize,
     pub(crate) native: bool,
-    _registration: Registration,
+    /// Whether the workers were pinned to cores.
+    pub(crate) pinned: bool,
+    /// Present only for a runtime that counts as an active engine (ADR-0005).
+    /// Held for its `Drop`, which unregisters; tests read it.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "held for its Drop, which unregisters")
+    )]
+    pub(crate) registration: Option<Registration>,
+}
+
+/// When a pool's workers pin, and whether the pool registers as an active
+/// engine (ADR-0005).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Pinning {
+    /// `EnvPool`: always registers; pins to `cpu_set`, or to the first
+    /// reported cores when no other engine is active.
+    Auto,
+    /// The host pool (ADR-0062 item 2): pins and registers only with an
+    /// explicit `cpu_set`. Without one its workers are unpinned and it does
+    /// not count as an active engine, so a pool started after it still pins
+    /// as usual, possibly to cores the host pool's workers also run on.
+    ExplicitOnly,
+}
+
+/// Whether a pool's workers count as an active engine (ADR-0005): every
+/// `EnvPool`, and a host pool only with an explicit `cpu_set` (ADR-0062
+/// item 2).
+pub(crate) fn registers(pinning: Pinning, explicit_cpu_set: bool) -> bool {
+    pinning == Pinning::Auto || explicit_cpu_set
+}
+
+/// The cores the workers pin to, `None` for unpinned. A pure function of
+/// the explicit `cpu_set`, the cores the OS reports (`None` where it reports
+/// none, as on macOS), the worker count, the number of other active engines
+/// and the pool's kind:
+///
+/// - an explicit `cpu_set` pins to it, for either kind, if it names one
+///   reported core per worker; otherwise it is refused;
+/// - without one, an `EnvPool` pins to the first reported cores when no
+///   other engine is active and there are enough of them, else runs
+///   unpinned;
+/// - without one, a host pool runs unpinned. It does not register either
+///   ([`registers`]), so an `EnvPool` started after it may auto-pin to cores
+///   the host pool's unpinned workers also run on.
+pub(crate) fn pin_plan(
+    cpu_set: Option<Vec<usize>>,
+    available: Option<&[usize]>,
+    workers: usize,
+    others: usize,
+    pinning: Pinning,
+) -> Result<Option<Vec<usize>>, EngineError> {
+    match cpu_set {
+        Some(cores) if cores.len() < workers => Err(EngineError::Options {
+            option: "cpu_set",
+            reason: "needs one core per worker",
+        }),
+        Some(cores) => {
+            // Only ids the OS reports (and, on Windows, below 64).
+            let known = |id: &usize| available.is_some_and(|a| a.contains(id));
+            if cores.iter().all(known) {
+                Ok(Some(cores))
+            } else {
+                Err(EngineError::Options {
+                    option: "cpu_set",
+                    reason: "contains a core id the OS does not report",
+                })
+            }
+        }
+        None if pinning == Pinning::ExplicitOnly => Ok(None),
+        None if others == 0 => match available {
+            Some(cores) if cores.len() >= workers => {
+                Ok(Some(cores.iter().copied().take(workers).collect()))
+            }
+            _ => {
+                tracing::warn!(
+                    workers,
+                    "fewer reported cores than workers; workers run unpinned"
+                );
+                Ok(None)
+            }
+        },
+        None => {
+            tracing::warn!(
+                others,
+                "another engine with workers is active; workers run unpinned (set cpu_set to partition cores)"
+            );
+            Ok(None)
+        }
+    }
+}
+
+impl SyncRuntime {
+    /// Starts the workers of `options` under `pinning`. Shared by `EnvPool`
+    /// and the host pool (ADR-0062).
+    pub(crate) fn start(
+        options: SyncOptions,
+        pinning: Pinning,
+        #[cfg(test)] faults: crate::sys::Faults,
+    ) -> Result<Self, EngineError> {
+        let workers = options.workers.get();
+        let available = available_cores();
+        let (registration, others) = if registers(pinning, options.cpu_set.is_some()) {
+            let (registration, others) = Registration::register();
+            (Some(registration), others)
+        } else {
+            (None, 0)
+        };
+        let pin = pin_plan(
+            options.cpu_set,
+            available.as_deref(),
+            workers,
+            others,
+            pinning,
+        )?;
+        #[cfg(not(loom))]
+        let native = select_native(options.wait);
+        #[cfg(loom)]
+        let native: Option<()> = None;
+        let pinned = pin.is_some();
+        let gang = Gang::new(&GangOptions {
+            workers: options.workers,
+            spin: options.spin,
+            pin,
+            #[cfg(not(loom))]
+            native,
+            #[cfg(loom)]
+            mock_futex: false,
+            #[cfg(test)]
+            faults,
+        })?;
+        Ok(Self {
+            gang,
+            workers,
+            native: native.is_some(),
+            pinned,
+            registration,
+        })
+    }
 }
 
 impl<E> EnvPool<E, NoMasks>
@@ -341,68 +479,12 @@ where
         options: SyncOptions,
         #[cfg(test)] faults: crate::sys::Faults,
     ) -> Result<Self, EngineError> {
-        let workers = options.workers.get();
-        let available = available_cores();
-        let (registration, others) = Registration::register();
-        let pin = match options.cpu_set {
-            Some(cores) if cores.len() < workers => {
-                return Err(EngineError::Options {
-                    option: "cpu_set",
-                    reason: "needs one core per worker",
-                });
-            }
-            Some(cores) => {
-                // Only ids the OS reports (and, on Windows, below 64).
-                let known = |id: &usize| available.as_ref().is_some_and(|a| a.contains(id));
-                if !cores.iter().all(known) {
-                    return Err(EngineError::Options {
-                        option: "cpu_set",
-                        reason: "contains a core id the OS does not report",
-                    });
-                }
-                Some(cores)
-            }
-            None if others == 0 => match available {
-                Some(cores) if cores.len() >= workers => {
-                    Some(cores.into_iter().take(workers).collect())
-                }
-                _ => {
-                    tracing::warn!(
-                        workers,
-                        "fewer reported cores than workers; workers run unpinned"
-                    );
-                    None
-                }
-            },
-            None => {
-                tracing::warn!(
-                    others,
-                    "another engine with workers is active; workers run unpinned (set cpu_set to partition cores)"
-                );
-                None
-            }
-        };
-        #[cfg(not(loom))]
-        let native = select_native(options.wait);
-        #[cfg(loom)]
-        let native: Option<()> = None;
-        let gang = Gang::new(&GangOptions {
-            workers: options.workers,
-            spin: options.spin,
-            pin,
-            #[cfg(not(loom))]
-            native,
-            #[cfg(loom)]
-            mock_futex: false,
+        self.sync = Some(SyncRuntime::start(
+            options,
+            Pinning::Auto,
             #[cfg(test)]
             faults,
-        })?;
-        self.sync = Some(SyncRuntime {
-            gang,
-            workers,
-            native: native.is_some(),
-            _registration: registration,
-        });
+        )?);
         Ok(self)
     }
 
@@ -417,6 +499,13 @@ where
     #[must_use]
     pub fn workers(&self) -> usize {
         self.sync.as_ref().map_or(0, |s| s.workers)
+    }
+
+    /// Whether the workers were pinned to cores (ADR-0005); `false` in
+    /// Inline mode.
+    #[must_use]
+    pub fn pinned_workers(&self) -> bool {
+        self.sync.as_ref().is_some_and(|s| s.pinned)
     }
 
     /// Times a worker found its FP environment changed at a batch start and
@@ -658,30 +747,7 @@ where
         count: usize,
         reseed: Reseed<'_>,
     ) -> Result<(), EngineError> {
-        if let Some(seeds) = reseed.len()
-            && seeds != count
-        {
-            return Err(EngineError::SeedCount {
-                seeds,
-                instances: count,
-            });
-        }
-        // Instances that keep their seed advance their episode index.
-        for (k, i) in indices.enumerate() {
-            if reseed.seed(k).is_none() {
-                let engine = self.headers.get(i).map(RecordLayout::engine);
-                if let Some(engine) = engine
-                    && !engine.fresh.get()
-                    && engine.identity.episode_index() == u32::MAX
-                {
-                    return Err(EngineError::CounterExhausted {
-                        id: u32::try_from(i).unwrap_or(u32::MAX),
-                        counter: "episode_index",
-                    });
-                }
-            }
-        }
-        Ok(())
+        check_reset(&self.headers, indices, count, reseed)
     }
 
     fn apply_reset(
@@ -939,6 +1005,41 @@ where
     }
 }
 
+/// Validates a reset request against `headers`: a seed list of the right
+/// length, and an episode counter left for every instance that keeps its
+/// seed. Shared by `EnvPool` and the host pool (ADR-0062).
+pub(crate) fn check_reset<H: RecordLayout>(
+    headers: &[H],
+    indices: impl Iterator<Item = usize>,
+    count: usize,
+    reseed: Reseed<'_>,
+) -> Result<(), EngineError> {
+    if let Some(seeds) = reseed.len()
+        && seeds != count
+    {
+        return Err(EngineError::SeedCount {
+            seeds,
+            instances: count,
+        });
+    }
+    // Instances that keep their seed advance their episode index.
+    for (k, i) in indices.enumerate() {
+        if reseed.seed(k).is_none() {
+            let engine = headers.get(i).map(RecordLayout::engine);
+            if let Some(engine) = engine
+                && !engine.fresh.get()
+                && engine.identity.episode_index() == u32::MAX
+            {
+                return Err(EngineError::CounterExhausted {
+                    id: u32::try_from(i).unwrap_or(u32::MAX),
+                    counter: "episode_index",
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
 /// The native wait primitive to use for `choice`, if any.
 #[cfg(not(loom))]
 fn select_native(choice: WaitBackend) -> Option<crate::sys::Native> {
@@ -980,16 +1081,22 @@ pub(crate) struct StepCtx<'a, E: Environment> {
 
 /// The records, action rows and output rows of a range of instances,
 /// indexed from the first instance of the range. A chunk is the unit of
-/// scheduling (SPEC 5.1): kernels only ever see one chunk.
-pub(crate) struct Chunk<'a, E: Environment> {
-    pub(crate) headers: &'a mut [E::Header],
-    pub(crate) states: &'a mut [E::State],
+/// scheduling (SPEC 5.1): kernels only ever see one chunk. `H` is the
+/// record header and `S` the per-instance state: an `Environment`'s
+/// `Header` and `State` ([`Chunk`]), or a host pool's header and host
+/// instance (ADR-0062).
+pub(crate) struct Rows<'a, H, S> {
+    pub(crate) headers: &'a mut [H],
+    pub(crate) states: &'a mut [S],
     pub(crate) discrete: &'a mut [i32],
     pub(crate) continuous: &'a mut [f32],
     pub(crate) penalties: &'a mut [f32],
     pub(crate) penalized: &'a mut [Bool8],
     pub(crate) outputs: OutputsView<'a>,
 }
+
+/// The rows of an `Environment`'s pool.
+pub(crate) type Chunk<'a, E> = Rows<'a, <E as Environment>::Header, <E as Environment>::State>;
 
 /// Steps every instance of `chunk` (after validation).
 pub(crate) fn step_chunk<E: Environment, M: MaskProvider<E>>(
@@ -1009,7 +1116,7 @@ pub(crate) fn step_chunk<E: Environment, M: MaskProvider<E>>(
         auto_reset,
         ..
     } = *ctx;
-    let Chunk {
+    let Rows {
         headers,
         states,
         discrete,
@@ -1498,7 +1605,7 @@ pub(crate) fn first_illegal_conditional(
 }
 
 /// Copies instance `i`'s observation rows into the terminal buffer.
-fn save_terminal(outputs: &mut OutputsView<'_>, i: usize) {
+pub(crate) fn save_terminal(outputs: &mut OutputsView<'_>, i: usize) {
     let a = outputs.agents;
     let OutputsView {
         observations,
@@ -1518,14 +1625,14 @@ fn save_terminal(outputs: &mut OutputsView<'_>, i: usize) {
     }
 }
 
-fn too_large() -> EngineError {
+pub(crate) fn too_large() -> EngineError {
     EngineError::Options {
         option: "num_envs",
         reason: "buffers too large",
     }
 }
 
-fn with_step<H: RecordLayout>(header: &mut H, episode: u32, step: u32) -> RngIdentity {
+pub(crate) fn with_step<H: RecordLayout>(header: &mut H, episode: u32, step: u32) -> RngIdentity {
     let id = header.engine().identity;
     let identity =
         RngIdentity::from_parts(id.seed(), id.branch_salt(), id.logical_id(), episode, step);
@@ -1726,13 +1833,13 @@ fn step_one<E: Environment>(
 
 /// How an episode ended; both flags may be set.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct Ending {
-    terminated: bool,
-    truncated: bool,
+pub(crate) struct Ending {
+    pub(crate) terminated: bool,
+    pub(crate) truncated: bool,
 }
 
 /// Records the end of an episode: flags, pending reset and statistics.
-fn finish_episode<H: RecordLayout>(
+pub(crate) fn finish_episode<H: RecordLayout>(
     header: &mut H,
     outputs: &mut OutputsView<'_>,
     i: usize,
@@ -1774,7 +1881,7 @@ fn finish_episode<H: RecordLayout>(
     }
 }
 
-fn set(buf: &mut [Bool8], i: usize, value: bool) {
+pub(crate) fn set(buf: &mut [Bool8], i: usize, value: bool) {
     if let Some(f) = buf.get_mut(i) {
         *f = Bool8::new(value);
     }

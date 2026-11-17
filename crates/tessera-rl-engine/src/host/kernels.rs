@@ -1,0 +1,443 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
+//! The host pool's chunk kernels (ADR-0062): reset, step and observe of
+//! host instances over the engine's output rows. The bookkeeping (episode
+//! steps, agent rows, episode end, statistics, auto-reset) is the
+//! `EnvPool` kernels', on the same header type and through the same
+//! helpers; only the calls into the environment differ.
+
+use core::sync::atomic::{AtomicU64, Ordering};
+
+use tessera_rl_core::io::{Actions, MaskWriter, ObsWriter};
+use tessera_rl_core::{
+    AgentSlot, Bool8, EpisodeEnd, HostEnvironment, HostSeed, NoAdaptive, RecordHeader,
+    RecordLayout, StepOut, TurnStructure,
+};
+use tessera_rl_num::fp;
+use tessera_rl_num::identity::{RngIdentity, Seed};
+
+use crate::layout::{ActionLayout, MAX_LEAVES};
+use crate::options::AutoReset;
+use crate::outputs::OutputsView;
+use crate::pool::{
+    Ending, Reseed, Rows, clear_chunk, finish_episode, save_terminal, set, with_step,
+    write_agent_masks,
+};
+
+/// A host pool's record header: the engine fields and one row per agent,
+/// no adaptive config.
+pub(crate) type HostHeader<const A: usize> = RecordHeader<A, NoAdaptive>;
+
+/// The rows of a host pool: headers and host instances.
+pub(crate) type HostRows<'a, E, const A: usize> = Rows<'a, HostHeader<A>, E>;
+
+/// Read-only context of a host step, shared by every chunk.
+pub(crate) struct HostCtx<'a> {
+    pub(crate) layout: &'a ActionLayout,
+    pub(crate) limit: Option<u32>,
+    pub(crate) auto_reset: AutoReset,
+    /// Times a host chunk left the thread's FP controls non-canonical.
+    pub(crate) fp_resets: &'a AtomicU64,
+    /// The pool's host allocation tally (ADR-0062 item 4).
+    #[cfg(feature = "debug-checks")]
+    pub(crate) allocs: &'a crate::sys::alloc_track::AllocTally,
+}
+
+/// Puts the thread back under canonical FP controls after host code ran
+/// (after each host `reset` and `step`, and at the end of each chunk,
+/// before any other chunk runs on the thread), and counts the times host
+/// code had changed them (ADR-0062 item 4).
+fn recanonicalize(fp_resets: &AtomicU64) {
+    if fp::ensure_canonical() {
+        fp_resets.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+/// Steps every instance of `rows` (after validation).
+pub(crate) fn step_chunk<E: HostEnvironment, const A: usize>(
+    ctx: &HostCtx<'_>,
+    rows: &mut HostRows<'_, E, A>,
+) {
+    {
+        #[cfg(feature = "debug-checks")]
+        let _bracket = crate::sys::alloc_track::HostBracket::enter(ctx.allocs);
+        step_rows::<E, A>(ctx, rows);
+    }
+    recanonicalize(ctx.fp_resets);
+}
+
+fn step_rows<E: HostEnvironment, const A: usize>(ctx: &HostCtx<'_>, rows: &mut HostRows<'_, E, A>) {
+    let (dh, ch) = (ctx.layout.discrete.len(), ctx.layout.continuous.len());
+    let Rows {
+        headers,
+        states: instances,
+        discrete,
+        continuous,
+        outputs,
+        ..
+    } = rows;
+    clear_chunk(outputs, headers.len());
+    for (i, (header, inst)) in headers.iter_mut().zip(instances.iter_mut()).enumerate() {
+        if header.engine().pending_reset.get() {
+            // NextStep: reset instead of stepping (validated above).
+            reset_one::<E, A>(
+                header,
+                inst,
+                None,
+                outputs,
+                i,
+                ResetRows::Live,
+                ctx.fp_resets,
+            );
+            write_agent_masks(outputs, i, header);
+            observe_rows::<E, A, false>(header, inst, outputs, i);
+            continue;
+        }
+        let first = i * A;
+        let view = Actions::new(
+            discrete.get(first * dh..(first + A) * dh).unwrap_or(&[]),
+            dh,
+            continuous.get(first * ch..(first + A) * ch).unwrap_or(&[]),
+            ch,
+        );
+        step_one::<E, A>(header, inst, &view, outputs, i, ctx.limit, ctx.fp_resets);
+        observe_rows::<E, A, false>(header, inst, outputs, i);
+        if ctx.auto_reset == AutoReset::SameStep && header.engine().pending_reset.get() {
+            save_terminal(outputs, i);
+            // Flags, rewards and stats of the ended episode stay set: the
+            // reset writes scratch rows.
+            reset_one::<E, A>(
+                header,
+                inst,
+                None,
+                outputs,
+                i,
+                ResetRows::Scratch,
+                ctx.fp_resets,
+            );
+            write_agent_masks(outputs, i, header);
+            // The rows hold the terminal observation: zero them again.
+            observe_rows::<E, A, true>(header, inst, outputs, i);
+        }
+    }
+}
+
+/// Resets every instance of `rows`; `first` is the position of the chunk's
+/// first instance among the reset instances (for the seeds).
+pub(crate) fn reset_chunk<E: HostEnvironment, const A: usize>(
+    ctx: &HostCtx<'_>,
+    rows: &mut HostRows<'_, E, A>,
+    reseed: Reseed<'_>,
+    first: usize,
+) {
+    {
+        #[cfg(feature = "debug-checks")]
+        let _bracket = crate::sys::alloc_track::HostBracket::enter(ctx.allocs);
+        let Rows {
+            headers,
+            states: instances,
+            outputs,
+            ..
+        } = rows;
+        clear_chunk(outputs, headers.len());
+        for (i, (header, inst)) in headers.iter_mut().zip(instances.iter_mut()).enumerate() {
+            reset_one::<E, A>(
+                header,
+                inst,
+                reseed.seed(first + i),
+                outputs,
+                i,
+                ResetRows::Live,
+                ctx.fp_resets,
+            );
+            write_agent_masks(outputs, i, header);
+            observe_rows::<E, A, false>(header, inst, outputs, i);
+        }
+    }
+    recanonicalize(ctx.fp_resets);
+}
+
+/// Resets instance `i`: reseeds it (or advances its episode index), makes
+/// every agent slot alive, and calls the environment's `reset` with the
+/// instance's seed. Rewards the reset writes are its outputs; an episode
+/// end it reports is ignored.
+pub(crate) fn reset_one<E: HostEnvironment, const A: usize>(
+    header: &mut HostHeader<A>,
+    inst: &mut E,
+    seed: Option<Seed>,
+    outputs: &mut OutputsView<'_>,
+    i: usize,
+    rows: ResetRows,
+    fp_resets: &AtomicU64,
+) {
+    let engine = header.engine();
+    let mut episode = engine.identity.episode_index();
+    if let Some(seed) = seed {
+        let id = engine.identity;
+        header.engine_mut().identity =
+            RngIdentity::from_parts(seed, id.branch_salt(), id.logical_id(), 0, 0);
+        episode = 0;
+    } else if !engine.fresh.get() {
+        // Checked at the boundary.
+        episode = episode.saturating_add(1);
+    }
+    let identity = with_step(header, episode, 0);
+    let engine = header.engine_mut();
+    engine.fresh = Bool8::FALSE;
+    engine.pending_reset = Bool8::FALSE;
+    engine.end_kind = 0;
+    engine.episode_steps = 0;
+    for row in header.agents_mut() {
+        row.alive = Bool8::TRUE;
+        row.acting = Bool8::TRUE;
+        row.episode_return = 0.0;
+        row.illegal_actions = 0;
+        row.invalid_agent_events = 0;
+    }
+    let seed = HostSeed::new(identity.seed().get(), identity.episode_index());
+    match rows {
+        ResetRows::Live => {
+            let range = i * A..(i + 1) * A;
+            let OutputsView {
+                rewards,
+                agent_terminated,
+                agent_truncated,
+                died,
+                spawned,
+                ..
+            } = outputs;
+            if let (
+                Some(reward_row),
+                Some(term_row),
+                Some(trunc_row),
+                Some(died_row),
+                Some(spawned_row),
+            ) = (
+                rewards.get_mut(range.clone()),
+                agent_terminated.get_mut(range.clone()),
+                agent_truncated.get_mut(range.clone()),
+                died.get_mut(range.clone()),
+                spawned.get_mut(range),
+            ) {
+                let mut out = StepOut::new(reward_row, term_row, trunc_row, died_row, spawned_row);
+                inst.reset(seed, &mut out);
+            }
+        }
+        ResetRows::Scratch => {
+            // On the stack: the hot path allocates nothing.
+            let mut rewards = [0.0f32; A];
+            let (mut term, mut trunc, mut died, mut spawned) = (
+                [Bool8::FALSE; A],
+                [Bool8::FALSE; A],
+                [Bool8::FALSE; A],
+                [Bool8::FALSE; A],
+            );
+            let mut out =
+                StepOut::new(&mut rewards, &mut term, &mut trunc, &mut died, &mut spawned);
+            inst.reset(seed, &mut out);
+        }
+    }
+    recanonicalize(fp_resets);
+    update_acting::<E, A>(header, inst);
+}
+
+/// Where a reset's `StepOut` writes (the `HostEnvironment::reset` doc).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ResetRows {
+    /// The instance's output rows, cleared before: an explicit reset or a
+    /// `NextStep` auto-reset, whose outputs these are.
+    Live,
+    /// Scratch rows, discarded: a `SameStep` auto-reset, whose instance rows
+    /// hold the ended step's rewards and flags.
+    Scratch,
+}
+
+/// Sets the acting flag of every alive agent from the turn structure
+/// (ADR-0013), after the step's agent events, as `EnvPool` does.
+fn update_acting<E: HostEnvironment, const A: usize>(header: &mut HostHeader<A>, inst: &E) {
+    if E::TURNS == TurnStructure::Simultaneous {
+        return;
+    }
+    for (slot, row) in header.agents_mut().iter_mut().enumerate() {
+        let on = row.alive.get()
+            && u16::try_from(slot)
+                .ok()
+                .and_then(|s| AgentSlot::new(s, A))
+                .is_some_and(|s| inst.acting(s));
+        row.acting = Bool8::from(on);
+    }
+}
+
+/// One step of instance `i`: the environment's `step`, then the engine's
+/// bookkeeping exactly as `EnvPool`'s (step limit, agent events, terminal
+/// flush, episode end and statistics).
+fn step_one<E: HostEnvironment, const A: usize>(
+    header: &mut HostHeader<A>,
+    inst: &mut E,
+    actions: &Actions<'_, ()>,
+    outputs: &mut OutputsView<'_>,
+    i: usize,
+    limit: Option<u32>,
+    fp_resets: &AtomicU64,
+) {
+    let range = i * A..(i + 1) * A;
+    let t = header.engine().episode_steps.saturating_add(1);
+    let episode = header.engine().identity.episode_index();
+    with_step(header, episode, t);
+    // The caller cleared instance `i`'s rows (`clear_chunk`).
+    let end = {
+        let OutputsView {
+            rewards,
+            agent_terminated,
+            agent_truncated,
+            died,
+            spawned,
+            ..
+        } = outputs;
+        let (Some(reward_row), Some(term_row), Some(trunc_row), Some(died_row), Some(spawned_row)) = (
+            rewards.get_mut(range.clone()),
+            agent_terminated.get_mut(range.clone()),
+            agent_truncated.get_mut(range.clone()),
+            died.get_mut(range.clone()),
+            spawned.get_mut(range),
+        ) else {
+            return;
+        };
+        let mut out = StepOut::new(reward_row, term_row, trunc_row, died_row, spawned_row);
+        inst.step(actions, &mut out);
+        let end = out.episode_end();
+        recanonicalize(fp_resets);
+        end
+    };
+    // TimeLimit semantics (SPEC 5.4), as in `EnvPool`.
+    let end = Ending {
+        terminated: end == Some(EpisodeEnd::Terminated),
+        truncated: end == Some(EpisodeEnd::Truncated) || limit == Some(t),
+    };
+    let end = (end.terminated || end.truncated).then_some(end);
+    header.engine_mut().episode_steps = t;
+    let mut total = 0.0f32;
+    for (slot, row) in header.agents_mut().iter_mut().enumerate() {
+        let k = i * A + slot;
+        let reward = outputs.rewards.get(k).copied().unwrap_or(0.0);
+        row.episode_return += reward;
+        total += row.episode_return;
+        let mut died = outputs.died.get(k).is_some_and(|f| f.get());
+        let spawned = outputs.spawned.get(k).is_some_and(|f| f.get());
+        if died && !row.alive.get() {
+            // An invalid agent event: never applied, counted and marked.
+            died = false;
+            row.invalid_agent_events = row.invalid_agent_events.saturating_add(1);
+            set(outputs.invalid_agent_event, k, true);
+            set(outputs.agent_terminated, k, false);
+        }
+        if died {
+            row.alive = Bool8::FALSE;
+            row.acting = Bool8::FALSE;
+        }
+        if spawned {
+            let valid = !died && !row.alive.get();
+            if !valid {
+                row.invalid_agent_events = row.invalid_agent_events.saturating_add(1);
+                set(outputs.invalid_agent_event, k, true);
+                set(outputs.spawned, k, false);
+            }
+            if valid {
+                row.alive = Bool8::TRUE;
+                row.acting = Bool8::TRUE;
+                // Generations count occupants modulo 2^32: an explicit,
+                // documented wrap (unreachable in practice).
+                row.generation = row.generation.wrapping_add(1);
+            }
+        }
+    }
+    // Terminal flush (SPEC 12).
+    if let Some(end) = end {
+        for (slot, row) in header.agents().iter().enumerate() {
+            if row.alive.get() {
+                let k = i * A + slot;
+                if end.terminated {
+                    set(outputs.agent_terminated, k, true);
+                }
+                if end.truncated {
+                    set(outputs.agent_truncated, k, true);
+                }
+            }
+        }
+    }
+    update_acting::<E, A>(header, inst);
+    if let Some(end) = end {
+        finish_episode(header, outputs, i, end, t, total);
+    }
+    write_agent_masks(outputs, i, header);
+}
+
+/// `observe_rows` for rows that may hold other bytes (an explicit reset).
+pub(crate) fn observe_instance<E: HostEnvironment, const A: usize>(
+    header: &HostHeader<A>,
+    inst: &E,
+    outputs: &mut OutputsView<'_>,
+    i: usize,
+) {
+    observe_rows::<E, A, true>(header, inst, outputs, i);
+}
+
+/// Writes instance `i`'s observations and masks: every leaf row zero on
+/// entry (ADR-0058; `ZERO` when the rows may hold other bytes), the mask
+/// all false for dead agents, and the environment's `observe` and `mask`
+/// for alive ones.
+fn observe_rows<E: HostEnvironment, const A: usize, const ZERO: bool>(
+    header: &HostHeader<A>,
+    inst: &E,
+    outputs: &mut OutputsView<'_>,
+    i: usize,
+) {
+    let OutputsView {
+        observations,
+        leaf_bytes,
+        masks,
+        mask_len,
+        ..
+    } = outputs;
+    for (slot, row) in header.agents().iter().enumerate() {
+        let k = i * A + slot;
+        let mut views: [&mut [u8]; MAX_LEAVES] = Default::default();
+        let mut used = 0;
+        for ((buf, &bytes), view) in observations
+            .iter_mut()
+            .zip(leaf_bytes.iter())
+            .zip(views.iter_mut())
+        {
+            if let Some(rows) = buf.get_mut(k * bytes..(k + 1) * bytes) {
+                if ZERO {
+                    rows.fill(0);
+                }
+                *view = rows;
+            }
+            used += 1;
+        }
+        let mut mask = if E::MASKS {
+            masks.get_mut(k * *mask_len..(k + 1) * *mask_len)
+        } else {
+            None
+        };
+        if let Some(m) = mask.as_deref_mut() {
+            m.fill(Bool8::FALSE);
+        }
+        if !row.alive.get() {
+            continue;
+        }
+        let (Some(agent), Some(leaves)) = (
+            AgentSlot::new(u16::try_from(slot).unwrap_or(u16::MAX), A),
+            views.get_mut(..used),
+        ) else {
+            continue;
+        };
+        inst.observe(agent, &mut ObsWriter::new(leaves));
+        if let Some(m) = mask
+            && !m.is_empty()
+        {
+            inst.mask(agent, &mut MaskWriter::new(m));
+        }
+    }
+}

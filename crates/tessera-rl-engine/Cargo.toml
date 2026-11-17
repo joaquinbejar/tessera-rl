@@ -20,6 +20,9 @@ categories.workspace = true
 debug-checks = []
 # Substitutes the build identity of persisted files: fixtures, tests and fuzz only.
 test-hooks = []
+# The host pool (ADR-0062): HostPool over HostEnvironment. Off by default;
+# the first-party Python wheel never enables it.
+host = []
 
 [dependencies]
 tessera-rl-core.workspace = true

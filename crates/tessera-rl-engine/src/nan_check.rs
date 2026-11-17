@@ -14,18 +14,28 @@ pub(crate) fn instance_nan<S: Canonical>(
     rewards: &[f32],
     state: &S,
 ) -> Option<EngineError> {
-    if let Some(agent) = rewards.iter().position(|r| r.is_nan()) {
-        return Some(EngineError::NanDetected {
-            instance,
-            site: NanSite::Reward {
-                agent: u32::try_from(agent).unwrap_or(u32::MAX),
-            },
-        });
+    if let Some(e) = reward_nan(instance, rewards) {
+        return Some(e);
     }
     state.first_nan().map(|field| EngineError::NanDetected {
         instance,
         site: NanSite::State { field },
     })
+}
+
+/// The error for the first NaN reward of instance `instance`, by agent
+/// slot; `None` if there is none. Host pools check rewards only: they have
+/// no state the engine can read (ADR-0062 item 4).
+pub(crate) fn reward_nan(instance: u32, rewards: &[f32]) -> Option<EngineError> {
+    rewards
+        .iter()
+        .position(|r| r.is_nan())
+        .map(|agent| EngineError::NanDetected {
+            instance,
+            site: NanSite::Reward {
+                agent: u32::try_from(agent).unwrap_or(u32::MAX),
+            },
+        })
 }
 
 /// The error for an allocation counted inside a chunk step, if any.
