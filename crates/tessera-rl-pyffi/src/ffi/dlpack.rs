@@ -126,16 +126,16 @@ struct Versioned {
 
 /// What keeps an export's memory alive: the output storage in practice,
 /// any owner in the interpreter-free tests.
-pub type Owner = Arc<dyn core::any::Any + Send + Sync>;
+pub(crate) type Owner = Arc<dyn core::any::Any + Send + Sync>;
 
 /// The tensor of one view.
 #[derive(Debug)]
-pub struct Source<'a> {
-    pub owner: &'a Owner,
-    pub data: *const u8,
-    pub dl_code: u8,
-    pub itemsize: usize,
-    pub shape: &'a [isize],
+pub(crate) struct Source<'a> {
+    pub(crate) owner: &'a Owner,
+    pub(crate) data: *const u8,
+    pub(crate) dl_code: u8,
+    pub(crate) itemsize: usize,
+    pub(crate) shape: &'a [isize],
 }
 
 fn tensor(src: &Source<'_>, keep: &Keep) -> Option<DLTensor> {
@@ -221,7 +221,7 @@ fn export(
 /// `read_only`) or legacy. A legacy capsule cannot carry the flag, so its
 /// consumer gets a writable alias: writing through it corrupts the outputs
 /// until the next call overwrites them.
-pub fn capsule<'py>(
+pub(crate) fn capsule<'py>(
     g: Gil<'py>,
     src: &Source<'_>,
     versioned: bool,

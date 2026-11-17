@@ -44,7 +44,7 @@ struct FpBoundary;
 
 impl FunctionNoArgs for FpBoundary {
     fn call(g: Gil<'_>) -> CResult<Mine<'_>> {
-        capi::string(g, tessera_rl_pyffi::ffi::thunks::BOUNDARY)
+        capi::string(g, tessera_rl_pyffi::ffi::BOUNDARY)
     }
 }
 

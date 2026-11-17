@@ -103,8 +103,9 @@ xxhash-rust = { version = "0.8", default-features = false, features = ["xxh3"] }
 unexpected_cfgs = { level = "warn", check-cfg = ["cfg(loom)"] }
 missing_docs = "deny"
 # `deny`, not `forbid`: the audited modules (engine::buffer, engine::sys,
-# py::ffi, simd, core::encoding, num::fp, onnx::sys) opt in with
+# pyffi::ffi, simd, core::encoding, num::fp, onnx::sys) opt in with
 # `#[expect(unsafe_code, reason = "...")]`; every other module stays denied.
+# py::ffi: no unsafe, unsafe_code = forbid (tessera-rl-py, ADR-0062 item 8).
 unsafe_code = "deny"
 unsafe_op_in_unsafe_fn = "deny"
 

@@ -176,6 +176,10 @@ pub struct Export(Arc<Inner>);
 impl Export {
     /// An export of `rows` of `field` in the engine's output storage.
     ///
+    /// For a raw byte region (an observation leaf), the caller names the
+    /// leaf's element: a wrong name gives wrong values, never memory
+    /// outside the region. Bounds and alignment are always checked.
+    ///
     /// # Errors
     ///
     /// The field is absent, or the rows and shape do not fit its region

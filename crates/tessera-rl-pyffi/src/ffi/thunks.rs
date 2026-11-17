@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! The boundary thunk templates (ADR-0041), the `thunk!` macro that
-//! instantiates them, and the only constructor of a [`ThunkFn`]: a crate
-//! makes its thunks with `tessera_rl_pyffi::thunk!` (ADR-0062 item 8).
+//! The boundary thunk templates (ADR-0041) and the only constructor of a
+//! [`ThunkFn`]: one generic naked template per C signature, instantiated
+//! for a typed shim with `ThunkFn::of::<E>()` (D2-G, ADR-0062 item 8); the
+//! callouts; and the fixed module initializers. Private to this crate: an
+//! extension writes safe trait impls (`object`, `module_def`, `buffer`).
 //!
 //! A thunk is a naked function with the exact C signature of the slot it
 //! fills, built from one audited template per ABI (System V x86-64 and
@@ -51,14 +53,6 @@
 //! `ThunkFn` values (`tables`) cannot be given a raw function pointer:
 //! registering anything but a thunk is a compile error.
 
-#![cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the generic templates of the CPython signatures serve the typed layer (#272 step 3, commit 3); the tests instantiate each"
-    )
-)]
-
 use core::ffi::{c_char, c_int};
 
 use pyo3::ffi;
@@ -67,19 +61,19 @@ use super::boundary::{tessera_fp_caller_controls, tessera_fp_callout_returned};
 use super::dlpack::{DLManagedTensor, DLManagedTensorVersioned};
 
 /// `PyCFunction`: `(self, args) -> object`.
-pub type CFunction =
+pub(crate) type CFunction =
     unsafe extern "C" fn(*mut ffi::PyObject, *mut ffi::PyObject) -> *mut ffi::PyObject;
 /// `PyCFunctionWithKeywords`: `(self, args, kwargs) -> object`.
-pub type CFunctionKw = unsafe extern "C" fn(
+pub(crate) type CFunctionKw = unsafe extern "C" fn(
     *mut ffi::PyObject,
     *mut ffi::PyObject,
     *mut ffi::PyObject,
 ) -> *mut ffi::PyObject;
 /// `destructor`: `(object)`.
-pub type Destructor = unsafe extern "C" fn(*mut ffi::PyObject);
+pub(crate) type Destructor = unsafe extern "C" fn(*mut ffi::PyObject);
 
 /// `getbufferproc`: `(exporter, view, flags) -> 0 | -1`.
-pub type GetBuffer = unsafe extern "C" fn(
+pub(crate) type GetBuffer = unsafe extern "C" fn(
     *mut ffi::PyObject,
     *mut ffi::Py_buffer,
     core::ffi::c_int,
@@ -91,7 +85,7 @@ pub(crate) type DlDeleterVersioned = unsafe extern "C" fn(*mut DLManagedTensorVe
 
 /// C types passed in integer registers: the only argument and result types
 /// a thunk accepts (module docs). Sealed.
-pub trait IntClass: sealed::Sealed {}
+pub(crate) trait IntClass: sealed::Sealed {}
 
 mod sealed {
     pub trait Sealed {}
@@ -112,25 +106,16 @@ impl IntClass for i64 {}
 impl IntClass for () {}
 
 /// Compile-time check that a type is [`IntClass`].
-pub const fn int_class<T: IntClass>() {}
+pub(crate) const fn int_class<T: IntClass>() {}
 
 /// A boundary thunk of C signature `F`. Only this module can make one.
 #[derive(Debug, Clone, Copy)]
-pub struct ThunkFn<F>(F);
+pub(crate) struct ThunkFn<F>(F);
 
 impl<F: Copy> ThunkFn<F> {
     /// The thunk's function pointer, for a C table.
-    pub const fn get(self) -> F {
+    pub(crate) const fn get(self) -> F {
         self.0
-    }
-
-    /// Only for the `thunk!` expansion, which passes the thunk it just
-    /// defined (ADR-0062 item 8). Not public API: a `ThunkFn` built from
-    /// anything else would put an entry without the FP boundary in a C
-    /// table. `scripts/check_py_entries.py` fails on any other caller.
-    #[doc(hidden)]
-    pub const fn __from_thunk_macro(thunk: F) -> Self {
-        Self(thunk)
     }
 }
 
@@ -139,8 +124,6 @@ impl<F: Copy> ThunkFn<F> {
 /// [rbp-56] scratch; [rbp-64] previous boundary frame; [rbp-66] caller x87
 /// control word (ADR-0044); [rbp-80..-67] unused (alignment).
 #[cfg(all(target_arch = "x86_64", not(windows)))]
-#[doc(hidden)]
-#[macro_export]
 macro_rules! boundary_template {
     ($target:path, $me:path) => {
         core::arch::naked_asm!(
@@ -200,12 +183,12 @@ macro_rules! boundary_template {
             ".cfi_def_cfa rsp, 8",
             "ret",
             ".cfi_endproc",
-            keep = const !$crate::__private::fp::CANONICAL_CLEAR,
-            set = const $crate::__private::fp::CANONICAL_SET,
-            status = const $crate::__private::fp::STATUS_FLAGS,
-            not_status = const !$crate::__private::fp::STATUS_FLAGS,
-            enter = sym $crate::ffi::boundary::tessera_fp_enter,
-            leave = sym $crate::ffi::boundary::tessera_fp_leave,
+            keep = const !tessera_rl_num::fp::CANONICAL_CLEAR,
+            set = const tessera_rl_num::fp::CANONICAL_SET,
+            status = const tessera_rl_num::fp::STATUS_FLAGS,
+            not_status = const !tessera_rl_num::fp::STATUS_FLAGS,
+            enter = sym crate::ffi::boundary::tessera_fp_enter,
+            leave = sym crate::ffi::boundary::tessera_fp_leave,
             target = sym $target,
         )
     };
@@ -215,8 +198,6 @@ macro_rules! boundary_template {
 /// [sp] x29, x30; [sp+16..+80] x0 to x8; [sp+88] caller FPCR; [sp+96]
 /// previous boundary frame. FPSR (the sticky flags) is never written.
 #[cfg(all(target_arch = "aarch64", not(windows)))]
-#[doc(hidden)]
-#[macro_export]
 macro_rules! boundary_template {
     ($target:path, $me:path) => {
         core::arch::naked_asm!(
@@ -265,12 +246,12 @@ macro_rules! boundary_template {
             ".cfi_restore x29",
             "ret",
             ".cfi_endproc",
-            k0 = const (!$crate::__private::fp::CANONICAL_CLEAR) & 0xffff,
-            k1 = const ((!$crate::__private::fp::CANONICAL_CLEAR) >> 16) & 0xffff,
-            k2 = const ((!$crate::__private::fp::CANONICAL_CLEAR) >> 32) & 0xffff,
-            k3 = const ((!$crate::__private::fp::CANONICAL_CLEAR) >> 48) & 0xffff,
-            enter = sym $crate::ffi::boundary::tessera_fp_enter,
-            leave = sym $crate::ffi::boundary::tessera_fp_leave,
+            k0 = const (!tessera_rl_num::fp::CANONICAL_CLEAR) & 0xffff,
+            k1 = const ((!tessera_rl_num::fp::CANONICAL_CLEAR) >> 16) & 0xffff,
+            k2 = const ((!tessera_rl_num::fp::CANONICAL_CLEAR) >> 32) & 0xffff,
+            k3 = const ((!tessera_rl_num::fp::CANONICAL_CLEAR) >> 48) & 0xffff,
+            enter = sym crate::ffi::boundary::tessera_fp_enter,
+            leave = sym crate::ffi::boundary::tessera_fp_leave,
             target = sym $target,
         )
     };
@@ -288,8 +269,6 @@ macro_rules! boundary_template {
 /// [rsp+80] caller x87 control word (ADR-0044; unverified on native
 /// Windows until the Windows session checks it); [rsp+82..104] unused.
 #[cfg(all(target_arch = "x86_64", windows))]
-#[doc(hidden)]
-#[macro_export]
 macro_rules! boundary_template {
     ($target:path, $me:path) => {
         core::arch::naked_asm!(
@@ -343,12 +322,12 @@ macro_rules! boundary_template {
             "add rsp, 104",
             "ret",
             ".seh_endproc",
-            keep = const !$crate::__private::fp::CANONICAL_CLEAR,
-            set = const $crate::__private::fp::CANONICAL_SET,
-            status = const $crate::__private::fp::STATUS_FLAGS,
-            not_status = const !$crate::__private::fp::STATUS_FLAGS,
-            enter = sym $crate::ffi::boundary::tessera_fp_enter,
-            leave = sym $crate::ffi::boundary::tessera_fp_leave,
+            keep = const !tessera_rl_num::fp::CANONICAL_CLEAR,
+            set = const tessera_rl_num::fp::CANONICAL_SET,
+            status = const tessera_rl_num::fp::STATUS_FLAGS,
+            not_status = const !tessera_rl_num::fp::STATUS_FLAGS,
+            enter = sym crate::ffi::boundary::tessera_fp_enter,
+            leave = sym crate::ffi::boundary::tessera_fp_leave,
             target = sym $target,
             me = sym $me,
         )
@@ -369,11 +348,11 @@ pub const BOUNDARY: &str = if cfg!(windows) {
 
 /// Integer argument registers the templates preserve.
 #[cfg(all(target_arch = "x86_64", not(windows)))]
-pub const MAX_ARGS: usize = 6;
+pub(crate) const MAX_ARGS: usize = 6;
 #[cfg(all(target_arch = "x86_64", windows))]
-pub const MAX_ARGS: usize = 4;
+pub(crate) const MAX_ARGS: usize = 4;
 #[cfg(target_arch = "aarch64")]
-pub const MAX_ARGS: usize = 8;
+pub(crate) const MAX_ARGS: usize = 8;
 
 /// The audited callout template, System V x86-64 (ADR-0041 callouts): a
 /// call from Rust, under canonical controls, into C-API code that can run
@@ -578,10 +557,9 @@ macro_rules! callout {
     };
 }
 
-/// Defines the boundary thunk `$thunk` for `$target` and, with a name, the
-/// `ThunkFn` constant tables use. Expands to a naked `unsafe extern "C"`
-/// function: only an audited module may invoke it.
-#[macro_export]
+/// Defines the non-generic boundary thunk `$thunk` for `$target`: the
+/// fixed module initializers, which carry `no_mangle` (a generic
+/// instantiation cannot).
 macro_rules! thunk {
     (@naked $(#[$meta:meta])* $thunk:ident => $target:path : fn($($arg:ty),*) -> $ret:ty) => {
         $(#[$meta])*
@@ -593,19 +571,14 @@ macro_rules! thunk {
             // restores the floating-point controls, and returns the
             // target's integer result; the target has the same C signature
             // (checked below) with integer-class types only.
-            $crate::boundary_template!($target, $thunk);
+            boundary_template!($target, $thunk);
         }
         // The target's signature must match the thunk's.
         const _: unsafe extern "C" fn($($arg),*) -> $ret = $target;
         // Integer-class arguments and result only (module docs), and no
         // more than the template preserves.
-        const _: () = { $( $crate::ffi::thunks::int_class::<$arg>(); )* $crate::ffi::thunks::int_class::<$ret>(); };
-        const _: () = assert!(<[&str]>::len(&[$(stringify!($arg)),*]) <= $crate::ffi::thunks::MAX_ARGS, "too many arguments for the template");
-    };
-    ($name:ident: $ty:ident = $thunk:ident => $target:path : fn($($arg:ty),*) -> $ret:ty) => {
-        $crate::thunk!(@naked $thunk => $target : fn($($arg),*) -> $ret);
-        pub(crate) const $name: $crate::ffi::thunks::ThunkFn<$ty> =
-            $crate::ffi::thunks::ThunkFn::__from_thunk_macro($thunk);
+        const _: () = { $( int_class::<$arg>(); )* int_class::<$ret>(); };
+        const _: () = assert!(<[&str]>::len(&[$(stringify!($arg)),*]) <= MAX_ARGS, "too many arguments for the template");
     };
 }
 
@@ -676,10 +649,6 @@ generic_thunk!(
     /// A `DLManagedTensorVersioned::deleter` entry.
     DlDeleterVersionedEntry, dl_deleter_versioned : fn(managed: *mut DLManagedTensorVersioned) -> ()
 );
-generic_thunk!(
-    /// A module initializer entry (`PyInit_*`).
-    ModuleInitEntry, module_init : fn() -> Obj
-);
 
 // The fixed module initializers CPython looks up by name (P1 of the #272
 // step 3 design): non-generic, so they can carry `no_mangle`.
@@ -749,16 +718,6 @@ impl ThunkFn<DlDeleterVersioned> {
     /// The boundary thunk of `E`.
     pub(crate) const fn of<E: DlDeleterVersionedEntry>() -> Self {
         Self(dl_deleter_versioned::<E>)
-    }
-}
-
-/// `PyInit_*`: `() -> module`.
-pub(crate) type ModuleInit = unsafe extern "C" fn() -> *mut ffi::PyObject;
-
-impl ThunkFn<ModuleInit> {
-    /// The boundary thunk of `E`.
-    pub(crate) const fn of<E: ModuleInitEntry>() -> Self {
-        Self(module_init::<E>)
     }
 }
 
@@ -993,14 +952,6 @@ mod tests {
         }
     }
 
-    struct Init;
-    impl ModuleInitEntry for Init {
-        unsafe extern "C" fn call() -> Obj {
-            seen(0x5eed);
-            ptr(0x5eed)
-        }
-    }
-
     /// Runs `f` under flush-to-zero caller controls: the instantiation ran
     /// canonical, folded `want` and left the caller's controls in place.
     fn check_instantiation<R: PartialEq + core::fmt::Debug>(
@@ -1069,13 +1020,6 @@ mod tests {
         check_instantiation(0x70, &(), || unsafe {
             versioned(core::ptr::without_provenance_mut(0x70));
         });
-    }
-
-    #[test]
-    fn test_thunk_generic_module_init_runs_canonical_and_returns_its_result() {
-        let f = ThunkFn::<ModuleInit>::of::<Init>().get();
-        // SAFETY: as above.
-        check_instantiation(0x5eed, &ptr(0x5eed), || unsafe { f() });
     }
 
     #[test]

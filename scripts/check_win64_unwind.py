@@ -30,9 +30,10 @@ import re
 import subprocess
 import sys
 
-# Mangled (v0) names of functions in `ffi::thunks`: the thunks, the
-# callouts and the module initializer.
-THUNK = re.compile(r"6thunks\d+\w+|^PyInit__native$")
+# Mangled (v0) names of functions in a module named `thunks`: the thunks
+# (generic instantiations included, whatever crate their entry type lives
+# in), the callouts and the fixed module initializers (ADR-0062 item 8).
+THUNK = re.compile(r"6thunks\d+\w+|^PyInit__native$|^PyInit__tessera_host$")
 TEMPLATE = {"codes": ["ALLOC_SMALL size=104"], "frame": "-"}
 
 

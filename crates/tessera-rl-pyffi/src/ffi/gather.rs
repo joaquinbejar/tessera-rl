@@ -45,11 +45,9 @@ impl GatherStorage {
         self.generation.load(Ordering::Acquire)
     }
 
-    /// The start and byte length of `field`'s region. Public only until
-    /// the bindings export through `buffer::Export` (#272 step 3).
-    #[doc(hidden)]
-    #[must_use]
-    pub fn region(&self, field: OutputField) -> Option<(*const u8, usize)> {
+    /// The start and byte length of `field`'s region, for
+    /// `buffer::Export::gather`.
+    pub(crate) fn region(&self, field: OutputField) -> Option<(*const u8, usize)> {
         let region = self.regions.iter().find(|r| r.field == field)?;
         // Only a pointer is formed here, never a reference to the words.
         let start = region.words.get().cast_const();

@@ -159,7 +159,7 @@ pub(crate) fn run<'py>(g: Gil<'py>, inner: &GroupInner, args: Ref<'_>) -> CResul
         (Ok(()), _) => Ok(capi::none(g)),
         // The user's own exception, raised again untouched, every slot
         // rolled back.
-        (Err(_), Some(pending)) => Err(capi::restore_pending(g, pending)),
+        (Err(_), Some(pending)) => Err(pending.raise_again(g)),
         (Err((_, e)), None) => Err(to_py(g, e)),
     }
 }

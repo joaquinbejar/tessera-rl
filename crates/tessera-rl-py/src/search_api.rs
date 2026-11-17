@@ -168,7 +168,7 @@ pub(crate) struct PyEval<'a> {
     pub(crate) callable: Ref<'a>,
     /// A Python exception raised by the callable, raised again after the
     /// rollback.
-    pub(crate) pending: Option<capi::Pending>,
+    pub(crate) pending: Option<capi::Stashed>,
 }
 
 fn shape(what: String) -> EvaluatorError {
@@ -217,8 +217,8 @@ impl BatchEval for PyEval<'_> {
         // Pending signals (Ctrl-C) before every batch, including batches
         // of terminal leaves only: a handler that raises aborts the call,
         // which is rolled back, and its exception is raised again.
-        if capi::check_signals(self.g).is_err() {
-            self.pending = Some(capi::fetch_pending(self.g));
+        if let Err(raised) = capi::check_signals(self.g) {
+            self.pending = Some(capi::Stashed::take(self.g, raised));
             // This reason is never shown in Python: `run` raises the
             // pending exception again instead.
             return Err(EvaluatorError::Failed {
@@ -234,11 +234,14 @@ impl BatchEval for PyEval<'_> {
         priors: &mut [f64],
         values: &mut [f64],
     ) -> Result<(), EvaluatorError> {
-        let Ok(result) = self.call(batch) else {
-            self.pending = Some(capi::fetch_pending(self.g));
-            return Err(EvaluatorError::Failed {
-                reason: "the Python evaluator raised".to_owned(),
-            });
+        let result = match self.call(batch) {
+            Ok(result) => result,
+            Err(raised) => {
+                self.pending = Some(capi::Stashed::take(self.g, raised));
+                return Err(EvaluatorError::Failed {
+                    reason: "the Python evaluator raised".to_owned(),
+                });
+            }
         };
         let g = self.g;
         let Ok(items) = capi::tuple_items(g, result.as_ref(), "evaluator result") else {
@@ -286,7 +289,7 @@ pub(crate) fn run<'py>(g: Gil<'py>, inner: &SearchInner, args: Ref<'_>) -> CResu
     match (result, eval.pending.take()) {
         (Ok(()), _) => Ok(capi::none(g)),
         // The callable's own exception: raised again, the tree rolled back.
-        (Err(_), Some(pending)) => Err(capi::restore_pending(g, pending)),
+        (Err(_), Some(pending)) => Err(pending.raise_again(g)),
         (Err(e), None) => Err(to_py(g, e)),
     }
 }

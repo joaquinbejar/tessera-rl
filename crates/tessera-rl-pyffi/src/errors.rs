@@ -191,7 +191,8 @@ pub fn error(g: Gil, kind: Kind, message: String) -> Raised {
     let ty = if ty.is_null() {
         capi::runtime_error()
     } else {
-        ty
+        // One of the classes `register` created; the module keeps it alive.
+        capi::Exc::from_type(ty)
     };
     capi::raise(g, ty, &message)
 }

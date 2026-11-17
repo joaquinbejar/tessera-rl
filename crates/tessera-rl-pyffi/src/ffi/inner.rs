@@ -9,6 +9,11 @@
 //! `busy` flag was acquired, so there is never more than one `&mut` to it
 //! (TESSERA-REVIEWER, R-PR17).
 
+#![expect(
+    clippy::missing_errors_doc,
+    reason = "every `Err(Raised)` here means a Python exception is set: ConcurrencyError, ArgumentError or ForkError"
+)]
+
 use core::cell::UnsafeCell;
 use core::sync::atomic::{AtomicBool, Ordering};
 
@@ -47,6 +52,7 @@ impl Drop for Busy<'_> {
 
 impl<T: ?Sized> Inner<T> {
     /// An open object around `ops`.
+    #[must_use]
     pub fn new(ops: Box<T>, borrowed: bool) -> Self {
         Self {
             ops: UnsafeCell::new(Some(ops)),

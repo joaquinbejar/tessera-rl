@@ -10,7 +10,7 @@
 //!   Its type object never leaves this crate.
 //! - The generic shims here are the only code that turns CPython's raw
 //!   pointers into typed values. Each runs behind a boundary thunk
-//!   (`ThunkFn::of`) inside [`entry`], with a [`Gil`] scoped to the call.
+//!   (`ThunkFn::of`) inside `entry`, with a [`Gil`] scoped to the call.
 //!
 //! The instance layout is `Instance<T>`: the object header, a `ready`
 //! flag and the body. The body is written once in

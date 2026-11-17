@@ -11,7 +11,7 @@ use pyo3::ffi;
 use super::thunks::{CFunction, CFunctionKw, Destructor, GetBuffer, ReleaseBuffer, ThunkFn};
 
 /// A method row with positional arguments (`METH_NOARGS` or `METH_VARARGS`).
-pub const fn method(
+pub(crate) const fn method(
     name: &'static CStr,
     thunk: ThunkFn<CFunction>,
     flags: c_int,
@@ -28,7 +28,7 @@ pub const fn method(
 }
 
 /// A method row with keyword arguments (`METH_VARARGS | METH_KEYWORDS`).
-pub const fn method_kw(
+pub(crate) const fn method_kw(
     name: &'static CStr,
     thunk: ThunkFn<CFunctionKw>,
     doc: &'static CStr,
@@ -44,7 +44,7 @@ pub const fn method_kw(
 }
 
 /// The terminating method row.
-pub const fn method_end() -> ffi::PyMethodDef {
+pub(crate) const fn method_end() -> ffi::PyMethodDef {
     ffi::PyMethodDef::zeroed()
 }
 
@@ -52,7 +52,7 @@ pub const fn method_end() -> ffi::PyMethodDef {
 // function slot can only hold a thunk and a data slot only its data.
 
 /// The `Py_tp_dealloc` slot.
-pub const fn slot_dealloc(thunk: ThunkFn<Destructor>) -> ffi::PyType_Slot {
+pub(crate) const fn slot_dealloc(thunk: ThunkFn<Destructor>) -> ffi::PyType_Slot {
     ffi::PyType_Slot {
         slot: ffi::Py_tp_dealloc,
         pfunc: thunk.get() as *mut c_void,
@@ -60,7 +60,7 @@ pub const fn slot_dealloc(thunk: ThunkFn<Destructor>) -> ffi::PyType_Slot {
 }
 
 /// The `Py_bf_getbuffer` slot.
-pub const fn slot_getbuffer(thunk: ThunkFn<GetBuffer>) -> ffi::PyType_Slot {
+pub(crate) const fn slot_getbuffer(thunk: ThunkFn<GetBuffer>) -> ffi::PyType_Slot {
     ffi::PyType_Slot {
         slot: ffi::Py_bf_getbuffer,
         pfunc: thunk.get() as *mut c_void,
@@ -75,20 +75,6 @@ pub(crate) const fn slot_releasebuffer(thunk: ThunkFn<ReleaseBuffer>) -> ffi::Py
     }
 }
 
-/// The `Py_tp_methods` slot. `methods` must end with [`method_end`]; a
-/// table that does not is rejected when the static is evaluated.
-pub const fn slot_methods(methods: &'static [ffi::PyMethodDef]) -> ffi::PyType_Slot {
-    let terminated = match methods.last() {
-        Some(last) => last.ml_name.is_null(),
-        None => false,
-    };
-    assert!(terminated, "a method table must end with method_end()");
-    ffi::PyType_Slot {
-        slot: ffi::Py_tp_methods,
-        pfunc: methods.as_ptr().cast_mut().cast(),
-    }
-}
-
 /// The `Py_tp_methods` slot of a typed table (`object::MethodTable`),
 /// checked to end with its terminating row when it was built.
 pub(crate) const fn slot_method_rows(first: *const ffi::PyMethodDef) -> ffi::PyType_Slot {
@@ -99,7 +85,7 @@ pub(crate) const fn slot_method_rows(first: *const ffi::PyMethodDef) -> ffi::PyT
 }
 
 /// The `Py_tp_doc` slot.
-pub const fn slot_doc(doc: &'static CStr) -> ffi::PyType_Slot {
+pub(crate) const fn slot_doc(doc: &'static CStr) -> ffi::PyType_Slot {
     ffi::PyType_Slot {
         slot: ffi::Py_tp_doc,
         pfunc: doc.as_ptr().cast_mut().cast(),
@@ -107,7 +93,7 @@ pub const fn slot_doc(doc: &'static CStr) -> ffi::PyType_Slot {
 }
 
 /// The terminating type slot.
-pub const fn slot_end() -> ffi::PyType_Slot {
+pub(crate) const fn slot_end() -> ffi::PyType_Slot {
     ffi::PyType_Slot {
         slot: 0,
         pfunc: ptr::null_mut(),

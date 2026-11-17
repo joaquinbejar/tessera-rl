@@ -3,9 +3,18 @@
 //! The CPython boundary shared by Tessera's Python extensions (ADR-0041,
 //! ADR-0044, ADR-0062 item 8).
 //!
-//! - [`ffi`]: the audited module: the floating-point entry thunks and their
-//!   templates, the C-API wrappers and callouts, C table rows, DLPack
-//!   exports, the fork generation and the reentrancy guard holder.
+//! An extension writes safe Rust only: its types are [`ffi::object`] bodies
+//! and method traits, its module a [`ffi::module_def`] definition registered
+//! with [`export_module!`], its buffers [`ffi::buffer`] exports, and its
+//! arguments and results go through [`ffi::capi`]'s safe wrappers under a
+//! call-scoped [`ffi::capi::Gil`]. No public item of this crate is `unsafe`
+//! or relies on its caller for memory safety.
+//!
+//! - [`ffi`]: the audited module. Privately: the floating-point entry
+//!   thunks and their templates, the generic shims that turn CPython's raw
+//!   pointers into typed values, the callouts, the C tables and DLPack.
+//!   Publicly: the typed layer above, the boundary policy, the fork
+//!   generation and the reentrancy guard holder.
 //! - [`errors`]: the exception classes and the mapping from engine errors.
 //!
 //! Each extension (cdylib) links its own copy: the floating-point policy,
@@ -20,7 +29,6 @@
     reason = "CPython, PyO3 and NumPy are names in prose"
 )]
 
-#[doc(hidden)]
 pub mod ffi;
 
 pub mod errors;
@@ -29,5 +37,4 @@ pub mod errors;
 #[doc(hidden)]
 pub mod __private {
     pub use inventory;
-    pub use tessera_rl_num::fp;
 }

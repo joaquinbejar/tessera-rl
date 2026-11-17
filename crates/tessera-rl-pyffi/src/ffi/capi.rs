@@ -59,8 +59,8 @@
 
 #![expect(unsafe_code, reason = "audited module: the CPython C API")]
 #![expect(
-    clippy::not_unsafe_ptr_arg_deref,
-    reason = "moved verbatim (#272 step 3, commit 1); the typed layer makes these crate-private"
+    clippy::missing_errors_doc,
+    reason = "every `Err(Raised)` here means a Python exception is set (the C-API failure convention)"
 )]
 
 use core::ffi::{CStr, c_int};
@@ -111,7 +111,7 @@ impl Gil<'_> {
     ///
     /// The interpreter must be attached to the calling thread for as long
     /// as the token is used.
-    pub const unsafe fn assume() -> Self {
+    pub(crate) const unsafe fn assume() -> Self {
         Self(PhantomData)
     }
 
@@ -164,11 +164,11 @@ impl Ref<'_> {
     /// # Safety
     ///
     /// `ptr` must be a live object for the reference's lifetime.
-    pub unsafe fn from_ptr(ptr: *mut ffi::PyObject) -> Option<Self> {
+    pub(crate) unsafe fn from_ptr(ptr: *mut ffi::PyObject) -> Option<Self> {
         NonNull::new(ptr).map(|p| Self(p, PhantomData))
     }
 
-    pub const fn as_ptr(self) -> *mut ffi::PyObject {
+    pub(crate) const fn as_ptr(self) -> *mut ffi::PyObject {
         self.0.as_ptr()
     }
 
@@ -178,6 +178,7 @@ impl Ref<'_> {
     }
 
     /// Whether this is `None`.
+    #[must_use]
     pub fn is_none(self) -> bool {
         // SAFETY: reading the address of the `None` singleton.
         self.as_ptr() == unsafe { ffi::Py_None() }
@@ -228,12 +229,14 @@ impl Mine<'_> {
             .ok_or(RAISED)
     }
 
+    /// A borrowed reference to the object, for as long as `self`.
+    #[must_use]
     pub fn as_ref(&self) -> Ref<'_> {
         Ref(self.0, PhantomData)
     }
 
     /// Releases ownership, for a return value.
-    pub fn into_ptr(self) -> *mut ffi::PyObject {
+    pub(crate) fn into_ptr(self) -> *mut ffi::PyObject {
         let ptr = self.0.as_ptr();
         core::mem::forget(self);
         ptr
@@ -256,8 +259,22 @@ impl Drop for Mine<'_> {
 
 // -- exceptions -----------------------------------------------------------------
 
+/// An exception class: a built-in one, or one of this crate's
+/// ([`crate::errors`]). Made only here, so it is always a live type object.
+#[derive(Clone, Copy)]
+pub struct Exc(*mut ffi::PyObject);
+
+impl Exc {
+    /// A class this crate created and keeps alive for the process.
+    pub(crate) const fn from_type(ty: *mut ffi::PyObject) -> Self {
+        Self(ty)
+    }
+}
+
 /// Raises `ty(message)` (callout: setting an exception allocates).
-pub fn raise(_g: Gil<'_>, ty: *mut ffi::PyObject, message: &str) -> Raised {
+#[must_use]
+pub fn raise(_g: Gil<'_>, ty: Exc, message: &str) -> Raised {
+    let ty = ty.0;
     let text = std::ffi::CString::new(message.replace('\0', " ")).unwrap_or_default();
     // SAFETY: attached; `ty` is a live exception type and `text` a C
     // string alive for the call.
@@ -265,35 +282,42 @@ pub fn raise(_g: Gil<'_>, ty: *mut ffi::PyObject, message: &str) -> Raised {
     RAISED
 }
 
-/// The built-in exception types the bindings raise.
-pub fn type_error() -> *mut ffi::PyObject {
+/// `TypeError`.
+#[must_use]
+pub fn type_error() -> Exc {
     // SAFETY: reading an interpreter global.
-    unsafe { ffi::PyExc_TypeError }
+    Exc(unsafe { ffi::PyExc_TypeError })
 }
-pub fn runtime_error() -> *mut ffi::PyObject {
+/// `RuntimeError`.
+#[must_use]
+pub fn runtime_error() -> Exc {
     // SAFETY: reading an interpreter global.
-    unsafe { ffi::PyExc_RuntimeError }
+    Exc(unsafe { ffi::PyExc_RuntimeError })
 }
-pub fn import_error() -> *mut ffi::PyObject {
+/// `ImportError`.
+#[must_use]
+pub fn import_error() -> Exc {
     // SAFETY: reading an interpreter global.
-    unsafe { ffi::PyExc_ImportError }
+    Exc(unsafe { ffi::PyExc_ImportError })
 }
-pub fn buffer_error() -> *mut ffi::PyObject {
+/// `BufferError`.
+#[must_use]
+pub fn buffer_error() -> Exc {
     // SAFETY: reading an interpreter global.
-    unsafe { ffi::PyExc_BufferError }
+    Exc(unsafe { ffi::PyExc_BufferError })
 }
-pub fn exception_base() -> *mut ffi::PyObject {
+pub(crate) fn exception_base() -> *mut ffi::PyObject {
     // SAFETY: reading an interpreter global.
     unsafe { ffi::PyExc_Exception }
 }
-pub fn runtime_warning() -> *mut ffi::PyObject {
+pub(crate) fn runtime_warning() -> *mut ffi::PyObject {
     // SAFETY: reading an interpreter global.
     unsafe { ffi::PyExc_RuntimeWarning }
 }
 
 /// A new exception class `name` (`module.Name`) deriving from `base`
 /// (callout: a GC allocation).
-pub fn new_exception<'py>(
+pub(crate) fn new_exception<'py>(
     _g: Gil<'py>,
     name: &CStr,
     doc: &CStr,
@@ -306,31 +330,32 @@ pub fn new_exception<'py>(
 }
 
 /// Warns with `category` (callout: runs filters and hooks).
-pub fn warn(_g: Gil<'_>, category: *mut ffi::PyObject, message: &CStr) -> CResult<()> {
+pub(crate) fn warn(_g: Gil<'_>, category: *mut ffi::PyObject, message: &CStr) -> CResult<()> {
     // SAFETY: attached; a live category and a static message.
     let rc = unsafe { thunks::c_err_warn(category, message.as_ptr(), 1) };
     if rc < 0 { Err(RAISED) } else { Ok(()) }
 }
 
 /// The pending exception, taken (direct: no normalization), and put back.
-pub struct Pending(*mut ffi::PyObject, *mut ffi::PyObject, *mut ffi::PyObject);
+pub(crate) struct Pending(*mut ffi::PyObject, *mut ffi::PyObject, *mut ffi::PyObject);
 
-pub fn fetch_pending(_g: Gil<'_>) -> Pending {
+/// Takes the pending exception, if any.
+#[must_use]
+pub(crate) fn fetch_pending(_g: Gil<'_>) -> Pending {
     let mut p = Pending(ptr::null_mut(), ptr::null_mut(), ptr::null_mut());
-    // SAFETY: attached by contract of the callers (cleanup entries); fetch
-    // only moves the references.
+    // SAFETY: attached (the token); fetch only moves the references.
     unsafe {
         ffi::PyErr_Fetch(&raw mut p.0, &raw mut p.1, &raw mut p.2);
     }
     p
 }
 
+/// Puts back exactly what [`fetch_pending`] took, even nothing (a cleanup
+/// entry that must leave the error indicator as it found it).
 #[expect(
     clippy::needless_pass_by_value,
     reason = "the pending exception is consumed"
 )]
-/// Puts back exactly what [`fetch_pending`] took, even nothing (a cleanup
-/// entry that must leave the error indicator as it found it).
 pub(crate) fn put_back_pending(_g: Gil<'_>, p: Pending) {
     // SAFETY: attached (the token); restores exactly what was fetched
     // (references transferred); with nothing fetched it decrefs nothing.
@@ -339,21 +364,29 @@ pub(crate) fn put_back_pending(_g: Gil<'_>, p: Pending) {
     }
 }
 
-/// Raises again the exception [`fetch_pending`] took.
-#[expect(
-    clippy::needless_pass_by_value,
-    reason = "the pending exception is consumed"
-)]
-pub fn restore_pending(g: Gil<'_>, p: Pending) -> Raised {
-    if p.0.is_null() {
-        return raise(g, runtime_error(), "no exception to raise again");
+/// An exception taken out of the interpreter while other work runs (a
+/// rollback), to be raised again afterwards. Made only from a [`Raised`],
+/// so it always holds an exception. Dropping it unraised leaks the
+/// exception's references.
+pub struct Stashed(Pending);
+
+impl Stashed {
+    /// Takes the exception `raised` proves is set.
+    #[must_use]
+    pub fn take(g: Gil<'_>, raised: Raised) -> Self {
+        let _ = raised;
+        Self(fetch_pending(g))
     }
-    // SAFETY: attached (the token); restores exactly what was fetched
-    // (references transferred), an exception type.
-    unsafe {
-        ffi::PyErr_Restore(p.0, p.1, p.2);
+
+    /// Raises it again.
+    #[must_use]
+    pub fn raise_again(self, g: Gil<'_>) -> Raised {
+        if self.0.0.is_null() {
+            return raise(g, runtime_error(), "no exception to raise again");
+        }
+        put_back_pending(g, self.0);
+        RAISED
     }
-    RAISED
 }
 
 // -- building objects -----------------------------------------------------------------
@@ -371,12 +404,14 @@ fn singleton<'py>(p: *mut ffi::PyObject) -> Mine<'py> {
 }
 
 /// `None`, a new reference.
+#[must_use]
 pub fn none(_g: Gil<'_>) -> Mine<'_> {
     // SAFETY: the address of the `None` singleton.
     singleton(unsafe { ffi::Py_None() })
 }
 
 /// `True` or `False`, a new reference.
+#[must_use]
 pub fn boolean(_g: Gil<'_>, value: bool) -> Mine<'_> {
     if value {
         // SAFETY: the address of the `True` singleton.
@@ -559,7 +594,7 @@ pub fn module_add(_g: Gil<'_>, module: Ref<'_>, name: &CStr, value: &Mine<'_>) -
 // -- types, modules, instances, capsules ----------------------------------------------
 
 /// A new heap type from `spec` (callout: a GC allocation).
-pub fn type_from_spec<'py>(_g: Gil<'py>, spec: &mut ffi::PyType_Spec) -> CResult<Mine<'py>> {
+pub(crate) fn type_from_spec<'py>(_g: Gil<'py>, spec: &mut ffi::PyType_Spec) -> CResult<Mine<'py>> {
     // SAFETY: attached; the spec lives through the call, its slot table is
     // static, and CPython copies what it keeps.
     Mine::container(unsafe { thunks::c_type_from_spec(&raw mut *spec) })
@@ -570,7 +605,7 @@ pub fn type_from_spec<'py>(_g: Gil<'py>, spec: &mut ffi::PyType_Spec) -> CResult
 /// # Safety
 ///
 /// `def` must be a valid module definition that lives for the process.
-pub unsafe fn module_create(_g: Gil<'_>, def: *mut ffi::PyModuleDef) -> CResult<Mine<'_>> {
+pub(crate) unsafe fn module_create(_g: Gil<'_>, def: *mut ffi::PyModuleDef) -> CResult<Mine<'_>> {
     // SAFETY: attached; per the contract.
     Mine::container(unsafe { thunks::c_module_create(def, ffi::PYTHON_API_VERSION as c_int) })
 }
@@ -581,7 +616,7 @@ pub unsafe fn module_create(_g: Gil<'_>, def: *mut ffi::PyModuleDef) -> CResult<
 /// # Safety
 ///
 /// `ty` must be one of our heap types (no `Py_TPFLAGS_HAVE_GC`).
-pub unsafe fn alloc_instance(_g: Gil<'_>, ty: *mut ffi::PyObject) -> CResult<Mine<'_>> {
+pub(crate) unsafe fn alloc_instance(_g: Gil<'_>, ty: *mut ffi::PyObject) -> CResult<Mine<'_>> {
     // SAFETY: attached; per the contract. It takes a reference to the type,
     // as heap-type instances require.
     Mine::new(unsafe { ffi::PyType_GenericAlloc(ty.cast(), 0) })
@@ -595,7 +630,7 @@ pub unsafe fn alloc_instance(_g: Gil<'_>, ty: *mut ffi::PyObject) -> CResult<Min
 ///
 /// `obj` must be a live instance of one of our heap types, allocated by
 /// its `tp_alloc`, in its `tp_dealloc`, attached.
-pub unsafe fn free_instance(obj: *mut ffi::PyObject) {
+pub(crate) unsafe fn free_instance(obj: *mut ffi::PyObject) {
     // SAFETY: `obj` is a live object.
     let ty = unsafe { ffi::Py_TYPE(obj) };
     // SAFETY: `ty` is a heap type, which always has a tp_free slot.
@@ -615,7 +650,7 @@ pub unsafe fn free_instance(obj: *mut ffi::PyObject) {
 
 /// A new strong reference to `r`, returned as a raw pointer (for a
 /// `Py_buffer.obj`).
-pub fn incref(r: Ref<'_>) -> *mut ffi::PyObject {
+pub(crate) fn incref(r: Ref<'_>) -> *mut ffi::PyObject {
     // SAFETY: a live object; incrementing runs no Python code.
     unsafe { ffi::Py_IncRef(r.as_ptr()) };
     r.as_ptr()
@@ -628,7 +663,7 @@ pub fn incref(r: Ref<'_>) -> *mut ffi::PyObject {
 ///
 /// `ptr` must be valid for the destructor, and `name` must outlive the
 /// capsule.
-pub unsafe fn capsule<'py>(
+pub(crate) unsafe fn capsule<'py>(
     _g: Gil<'py>,
     ptr: *mut core::ffi::c_void,
     name: &'static CStr,
@@ -644,7 +679,7 @@ pub unsafe fn capsule<'py>(
 /// # Safety
 ///
 /// `cap` must be a live capsule.
-pub unsafe fn capsule_pointer(
+pub(crate) unsafe fn capsule_pointer(
     cap: *mut ffi::PyObject,
     name: &CStr,
 ) -> Option<*mut core::ffi::c_void> {
@@ -684,12 +719,13 @@ pub fn tuple_items<'a>(g: Gil<'_>, t: Ref<'a>, what: &str) -> CResult<Vec<Ref<'a
         .collect()
 }
 
-/// Whether `r` is an exact `list` (no exception either way).
 /// Whether `r` is exactly of `ty`, one of our heap types.
-pub fn is_instance_of(r: Ref<'_>, ty: *mut ffi::PyObject) -> bool {
+pub(crate) fn is_instance_of(r: Ref<'_>, ty: *mut ffi::PyObject) -> bool {
     r.is_exact(ty.cast())
 }
 
+/// Whether `r` is an exact `list` (no exception either way).
+#[must_use]
 pub fn is_list(r: Ref<'_>) -> bool {
     r.is_exact(&raw mut ffi::PyList_Type)
 }
@@ -805,6 +841,7 @@ pub fn to_u32(g: Gil<'_>, v: Ref<'_>, what: &str) -> CResult<u32> {
 
 /// The error of an integer outside its type.
 #[cold]
+#[must_use]
 pub fn out_of_range(g: Gil<'_>, what: &str) -> Raised {
     raise(g, type_error(), &format!("{what} is out of range"))
 }

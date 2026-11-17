@@ -151,8 +151,8 @@ pub(crate) fn run_onnx<'py>(g: Gil<'py>, inner: &SearchInner) -> CResult<Mine<'p
         let mut check = || {
             // Pending signals (Ctrl-C) before every batch, as for the
             // Python callback: a handler that raises aborts the call.
-            if capi::check_signals(g).is_err() {
-                pending = Some(capi::fetch_pending(g));
+            if let Err(raised) = capi::check_signals(g) {
+                pending = Some(capi::Stashed::take(g, raised));
                 return Err(EvaluatorError::Failed {
                     reason: "a signal handler raised".to_owned(),
                 });
@@ -166,7 +166,7 @@ pub(crate) fn run_onnx<'py>(g: Gil<'py>, inner: &SearchInner) -> CResult<Mine<'p
     })?;
     match (result, pending.take()) {
         (Ok(()), _) => Ok(capi::none(g)),
-        (Err(_), Some(p)) => Err(capi::restore_pending(g, p)),
+        (Err(_), Some(p)) => Err(p.raise_again(g)),
         (Err(e), None) => Err(to_py(g, e)),
     }
 }
