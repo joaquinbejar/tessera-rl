@@ -15,6 +15,9 @@
 //!
 //! Author code may allocate, lock, block, do I/O or read the clock. It runs
 //! with the Python GIL released and must not call into Python.
+//!
+//! Experimental until 1.0 (ADR-0062 item 9): a breaking change to this
+//! trait or its types bumps the 0.x minor version.
 
 use thiserror::Error;
 

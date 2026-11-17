@@ -237,7 +237,6 @@ fn add_leaves(space: &Space, leaves: &mut Vec<Leaf>) -> Result<(), EngineError> 
     Ok(())
 }
 
-/// Bound `i`, broadcasting a single value.
 fn elements(shape: &[u32]) -> Result<usize, EngineError> {
     shape
         .iter()

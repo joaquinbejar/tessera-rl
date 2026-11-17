@@ -14,6 +14,10 @@ use super::{BoxBounds, DType, Space};
 /// element of a `MultiBinary` space is a discrete head with two choices,
 /// and each element of an `F32` box is a continuous head with inclusive
 /// bounds. `Dict` and `Tuple` contribute their entries in order.
+///
+/// There is one entry per element: a `MultiBinary` or `F32` box space
+/// gives as many heads as it has elements, unbounded here. A pool bounds
+/// what it accepts when it builds its buffers.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct ActionHeads {
     discrete: Vec<u32>,
