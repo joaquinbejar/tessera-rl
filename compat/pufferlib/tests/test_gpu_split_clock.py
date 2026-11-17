@@ -741,6 +741,8 @@ except socket.timeout:
 srv.close()
 c.settimeout(IDLE)
 f = c.makefile("rwb", buffering=0)
+import os
+f.write(f"listener {os.getpid()}\\n".encode())
 if MODE == "noise":
     f.write(b"profile: Windows PowerShell, loaded in 120 ms\\n")
 n = 0
@@ -821,6 +823,8 @@ def test_clock_ref_stamps_reads_with_monotonic_and_ends_cleanly(tmp_path):
     assert any(r["kind"] == "cpu" for r in rows)
     assert rows[-1] == {"kind": "event", "event": "end", "loop_ended": True}
     assert why == "end"
+    listener = [r for r in rows if r["kind"] == "listener"]
+    assert len(listener) == 1 and listener[0]["pid"] > 0
 
 
 def test_clock_ref_discards_lines_before_the_first_reply(tmp_path):
@@ -861,8 +865,11 @@ def test_clock_ref_fake_loop_exits_on_disconnect_and_idle(tmp_path):
                 return False
         wait_for(connected)
         s.sendall(b"x\n")
-        assert len(s.makefile("rb").readline().split()) == 3
+        rf = s.makefile("rb")
+        assert rf.readline().split()[0] == b"listener"
+        assert len(rf.readline().split()) == 3
         if act == "close":
+            rf.close()  # the makefile holds the socket open until closed too
             s.close()
         assert p.wait(timeout=30) == 0
         assert exited.read_text() == ("disconnect" if act == "close" else "idle")
@@ -875,6 +882,9 @@ def test_clock_ref_tcp_loop_is_one_argument_on_localhost():
     assert '"' not in loop and "\n" not in loop and "\r" not in loop
     assert "[Net.IPAddress]::Loopback, 47123" in loop and "ReceiveTimeout = 60000" in loop
     assert "Wait(60000)" in loop and "'end'" in loop and "finally { $c.Close() }" in loop
+    assert loop.count("AcceptTcpClientAsync") == 1 and "$l.Stop()" in loop and "'listener ' + $PID" in loop
+    for forbidden in ("New-NetFirewallRule", "netsh", "Out-File", "Set-Content", "Start-Process", "RunAs"):
+        assert forbidden not in loop
     cmd = clock_ref.ssh_command("jb@box.example", 47123, 60)
     assert cmd[cmd.index("-L") + 1] == "127.0.0.1:47123:127.0.0.1:47123" and cmd[-1] == loop
     assert "ExitOnForwardFailure=yes" in cmd
@@ -882,11 +892,10 @@ def test_clock_ref_tcp_loop_is_one_argument_on_localhost():
         clock_ref.tcp_loop(80, 60)
 
 
-def test_clock_and_clock_ref_answer_with_the_same_expressions():
-    # The replies of clock.LOOP (host reader) and TCP_LOOP (reference) are the same reads.
-    for expr in ("[Diagnostics.Stopwatch]::GetTimestamp()", "[Diagnostics.Stopwatch]::Frequency",
-                 "[DateTime]::UtcNow.Ticks", ".TotalProcessorTime.TotalSeconds.ToString("
-                 "[Globalization.CultureInfo]::InvariantCulture)"):  # fmt: skip
+def test_clock_and_clock_ref_share_the_read_expressions():
+    # One QPC/frequency/UTC read and one CPU read, verbatim in both loops.
+    assert clock.READ_EXPR == clock_ref.READ_EXPR and clock.CPU_EXPR == clock_ref.CPU_EXPR
+    for expr in (clock.READ_EXPR, clock.CPU_EXPR):
         assert expr in clock.LOOP and expr in clock_ref.TCP_LOOP
 
 

@@ -22,6 +22,11 @@ after ``--idle`` seconds without a request, or if no client connects within
 stdin from /dev/null and talks to its local end of the tunnel. Nothing on
 the box listens beyond localhost, and nothing outlives the client.
 
+The listener's first line names its PID on the box, recorded as a
+``listener`` row. This stays within ADR-0063 item 2: one persistent session
+(one ssh process, one TCP connection, never reopened), and every read is one
+request and one reply.
+
 Every read is one request and its reply: the request is stamped just before
 it is sent and the reply just after it arrives, both with this host's
 ``time.monotonic()``, so the box's QPC was read between the two stamps. A
@@ -48,20 +53,32 @@ RTT_MAX_S = 0.25
 SYNC_TIMEOUT_S = 30.0
 CONNECT_RETRY_S = 0.5
 
+# The two reads, kept verbatim equal to clock.READ_EXPR and clock.CPU_EXPR
+# (a test checks it); this file runs on its own on the reference host.
+READ_EXPR = (
+    "([Diagnostics.Stopwatch]::GetTimestamp()).ToString() + ' ' + "
+    "([Diagnostics.Stopwatch]::Frequency).ToString() + ' ' + ([DateTime]::UtcNow.Ticks).ToString()"
+)
+CPU_EXPR = (
+    "[Diagnostics.Process]::GetCurrentProcess()"
+    ".TotalProcessorTime.TotalSeconds.ToString([Globalization.CultureInfo]::InvariantCulture)"
+)
+
 # The box side: one PowerShell line, no double quote and no newline, so it
 # stays one argument inside sshd's ``-c "<command>"``. PORT and IDLE_MS are
-# filled in by tcp_loop(). The replies are those of clock.LOOP.
+# filled in by tcp_loop(). It writes nothing to disk, needs no elevation and
+# opens no firewall rule (127.0.0.1 only). After the one accept it first
+# writes ``listener <PID>``, so the client records the box process; then one
+# reply per request line.
 TCP_LOOP = (
     "$l = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, PORT); $l.Start(); "
     "$a = $l.AcceptTcpClientAsync(); if (-not $a.Wait(60000)) { $l.Stop(); exit 3 }; "
     "$c = $a.Result; $l.Stop(); $c.NoDelay = $true; $c.ReceiveTimeout = IDLE_MS; "
     "$s = $c.GetStream(); $r = [IO.StreamReader]::new($s); $w = [IO.StreamWriter]::new($s); $w.AutoFlush = $true; "
-    "try { while (($x = $r.ReadLine()) -ne $null) { "
+    "try { $w.WriteLine('listener ' + $PID); while (($x = $r.ReadLine()) -ne $null) { "
     "if ($x -eq 'end') { $w.WriteLine('end'); break } "
-    "if ($x -eq 'cpu') { $w.WriteLine([Diagnostics.Process]::GetCurrentProcess()"
-    ".TotalProcessorTime.TotalSeconds.ToString([Globalization.CultureInfo]::InvariantCulture)) } "
-    "else { $w.WriteLine(([Diagnostics.Stopwatch]::GetTimestamp()).ToString() + ' ' + "
-    "([Diagnostics.Stopwatch]::Frequency).ToString() + ' ' + ([DateTime]::UtcNow.Ticks).ToString()) } } } "
+    "if ($x -eq 'cpu') { $w.WriteLine(" + CPU_EXPR + ") } "
+    "else { $w.WriteLine(" + READ_EXPR + ") } } } "
     "catch { } finally { $c.Close() }"
 )
 
@@ -130,6 +147,9 @@ class Session:
                     if line is None:
                         break
                     parts = line.split()
+                    if len(parts) == 2 and parts[0] == "listener" and parts[1].isdigit():
+                        write({"kind": "listener", "pid": int(parts[1])})
+                        continue
                     if len(parts) == 3 and all(x.lstrip("-").isdigit() for x in parts):
                         return True
                     write({"kind": "discarded", "line": line[:200]})
