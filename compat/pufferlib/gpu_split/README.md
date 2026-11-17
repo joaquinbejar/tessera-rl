@@ -12,9 +12,12 @@ This is the harness of `docs/reviews/gpu-split-plan.md` r5, sha256 `52b0ac29`. I
 | `split.py` | One run: one case, one mode, prints one JSON line. |
 | `sync.py` | Builds the synchronised scratch copy of `pufferl.py` for mode `sync`. The installed file is never modified. |
 | `pufferl-sync.patch` | The published instrumentation diff. It enables the two commented `torch.cuda.synchronize()` blocks in `Profile.__call__` and `Profile.end`, and nothing else. The tests check that the copy equals it. |
-| `run.py` | The driver: rounds with the case order rotated per round, one process group per run, the timeouts, and with a manifest the ADR-0061 attempt and its summary row. |
-| `manifest.py` | The ADR-0061 item 9 manifest: commit, wheel sha256 (checked against the file), CUDA toolkit (checked against `nvcc --version`) and the order of every round. It prints its own sha256. |
-| `../tests/test_gpu_split.py` | Local CPU tests, run by `make puffer-test`. |
+| `run.py` | The driver: rounds with the case order rotated per round, one process group per run, the timeouts, and with a manifest the ADR-0061 attempt with sealed rows (ADR-0063). |
+| `manifest.py` | The ADR-0061 item 9 manifest: commit, wheel sha256 (checked against the file), CUDA toolkit (checked against `nvcc --version`), the order of every round, and the ADR-0063 clock fields. It prints its own sha256. |
+| `clock.py` | ADR-0063: the guest clock sampler (`sample`) and the pure clock verdict (`decide`). |
+| `clock_ref.py` | ADR-0063 item 2: the external reference client, run on the reference host over one persistent ssh session. |
+| `summarise.py` | ADR-0063 item 6: the attempt's summary, computed from the sealed rows after the clock verdict was sent. |
+| `../tests/test_gpu_split.py`, `../tests/test_gpu_split_clock.py` | Local CPU tests, run by `make puffer-test`. |
 
 ## Cases
 
@@ -87,7 +90,15 @@ The tests run on CPU at `--scale small` (1024 agents, minibatch 8192). That scal
 
 ADR-0061 (Accepted) fixes the phase 3 gate protocol; this harness implements it.
 
-1. Before the timed rounds: `python manifest.py --out manifest.json --commit SHA --wheel WHEEL --wheel-sha256 HEX --wheel-source pypi-release|main-wheels-run --toolkit X.Y.Z`. It refuses (exit 2) when the wheel or `nvcc` disagree, and prints the manifest sha256, which is sent to the reviewer.
-2. The attempt: `python run.py --python PY --out results.jsonl --device cuda --manifest manifest.json --manifest-sha256 HEX --wheel WHEEL`. It refuses (exit 7) a manifest or wheel whose sha256 differs, any `--split-args`, a `--wheel` path absent from `--python`, and a `git rev-parse HEAD` other than the manifest's commit; runs the manifest's order (5 rounds, cases rotated by one per round, interleaved mode by mode), stamps every row with the manifest sha256, and always ends `results.jsonl` with a summary row: per-cell (n, median, min, max) of `sps`, `attempt` (`complete` or `failed, no result`, item 8) and `gate_eligible`, true only for a complete cuda attempt with the CUDA advantage kernel on every trainer run (item 6).
+ADR-0063 (Accepted) amends it with the clock validation of the session; the order of a session is in `docs/reviews/152-adr0063-harness-plan.md` §2.6, and a run plan gives the exact commands.
+
+1. Before the timed rounds: `python manifest.py --out manifest.json --commit SHA --wheel WHEEL --wheel-sha256 HEX --wheel-source pypi-release|main-wheels-run --toolkit X.Y.Z --clock-ref-host NAME --clock-ref-command CMD [--clock-cpu N] [--rerun-of-manifest PATH --rerun-of-sha256 HEX]`. It refuses (exit 2) when the wheel or `nvcc` disagree, and prints the manifest sha256, which is sent to the reviewer.
+2. The pre-check: `clock.py sample` and `clock_ref.py` run for at least 300 s, then `clock.py decide --scope pre-check` must print `pre-check: go`.
+   - The sampler's tag is the content of `CONTROL/tag` (`pre`, `session`, `post`). Change it atomically: write `CONTROL/tag.tmp`, then rename it to `CONTROL/tag`. The sampler accepts only those three values and only forwards; an empty, unreadable or backward tag keeps the current one, and `decide` fails the instrumentation on samples out of order.
+   - Before starting the driver, set the tag to `session` and wait until the `pre -> session` context row is in the samples file. The post-check starts the same way, with `session -> post`.
+   - `clock_ref.py --host` is the ssh target (the box); its header records the reference host's own name, which must be the manifest's `--clock-ref-host`.
+3. The attempt: `python run.py --python PY --rows rows.jsonl --status status.json --device cuda --manifest manifest.json --manifest-sha256 HEX --wheel WHEEL`. It refuses (exit 7) a manifest or wheel whose sha256 differs, any `--split-args`, a `--wheel` path absent from `--python`, a `git rev-parse HEAD` other than the manifest's commit, and an existing `--rows` or `--status`; runs the manifest's order (5 rounds, cases rotated by one per round, interleaved mode by mode), and writes every row, stamped with the manifest sha256, to `rows.jsonl` only. Stdout carries `started manifest=…`, `alive` heartbeats and `rows sealed: <sha256>`, nothing per run. The rows file is not read until step 5.
+4. The post-check (at least 300 s), then `clock.py decide --scope session --status status.json`, whose sha256 is sent to the reviewer. Besides the sampler's CPU share over the timed span (budget 1%), it reports the host reader's share from its first to its last context row (start of pre to the stop) and the reference loop's share from its first to its last `cpu` row; those two are reported, not budgeted.
+5. Only then `python summarise.py`, with the rows, manifest and decide sha256 and the send time. Its summary row has per-cell (n, median, min, max) of `sps`, `attempt` (`complete`, `failed, no result`, or `void: clock-invalid`, ADR-0061 item 8 as amended by ADR-0063 item 5), the clock outcome, and `gate_eligible`, true only for a complete, clock-valid cuda attempt with the CUDA advantage kernel on every trainer run (item 6).
 
 `gate_eligible` also requires 30 timed epochs at full scale and, in every Tessera run, the native module whose sha256 the manifest took from the wheel. Only an eligible summary carries item 7: `ocean_score` and `tessera_score`, each the larger `e2e` median of the side's two cases, with `ocean_case` and `tessera_case`, and `pass` = `tessera_score >= ocean_score`.
