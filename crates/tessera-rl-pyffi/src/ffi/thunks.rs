@@ -51,12 +51,20 @@
 //! `ThunkFn` values (`tables`) cannot be given a raw function pointer:
 //! registering anything but a thunk is a compile error.
 
+#![cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "the generic templates of the CPython signatures serve the typed layer (#272 step 3, commit 3); the tests instantiate each"
+    )
+)]
+
 use core::ffi::{c_char, c_int};
 
 use pyo3::ffi;
 
 use super::boundary::{tessera_fp_caller_controls, tessera_fp_callout_returned};
-use super::dlpack::{self, DLManagedTensor, DLManagedTensorVersioned};
+use super::dlpack::{DLManagedTensor, DLManagedTensorVersioned};
 
 /// `PyCFunction`: `(self, args) -> object`.
 pub type CFunction =
@@ -603,10 +611,123 @@ macro_rules! thunk {
 
 type Obj = *mut ffi::PyObject;
 
-// DLPack cleanup entries: they never fail or reject.
-thunk!(CAPSULE_DESTRUCTOR: Destructor = thunk_capsule_destructor => dlpack::destroy_capsule : fn(Obj) -> ());
-thunk!(DL_DELETER: DlDeleter = thunk_dl_deleter => dlpack::delete_legacy : fn(*mut DLManagedTensor) -> ());
-thunk!(DL_DELETER_VERSIONED: DlDeleterVersioned = thunk_dl_deleter_versioned => dlpack::delete_versioned : fn(*mut DLManagedTensorVersioned) -> ());
+/// Defines the entry trait `$entry` of one C signature and its generic
+/// boundary thunk `$thunk::<E>` (D2-G, ADR-0062 item 8): the audited
+/// template, byte for byte, with `E::call` as its target. A type implements
+/// the trait to become an entry; [`ThunkFn::of`] is the only way to put an
+/// instantiation in a C table.
+macro_rules! generic_thunk {
+    ($(#[$meta:meta])* $entry:ident, $thunk:ident : fn($($arg:ident: $ty:ty),*) -> $ret:ty) => {
+        $(#[$meta])*
+        pub(crate) trait $entry {
+            /// The entry the thunk calls, under canonical controls.
+            ///
+            /// # Safety
+            ///
+            /// Called only by the thunk, with the arguments CPython (or the
+            /// DLPack consumer) passed to the slot.
+            unsafe extern "C" fn call($($arg: $ty),*) -> $ret;
+        }
+
+        #[doc = concat!("The boundary thunk of an entry `E: ", stringify!($entry), "`.")]
+        #[unsafe(naked)]
+        pub(crate) unsafe extern "C" fn $thunk<E: $entry>($(_: $ty),*) -> $ret {
+            // SAFETY: the audited template (module docs): a full frame that
+            // preserves every integer argument register, the stack
+            // alignment and the callee-saved registers, canonicalizes and
+            // restores the floating-point controls, and returns the
+            // target's integer result; the target, `E::call`, has the
+            // thunk's C signature (the trait's) with integer-class types
+            // only (checked below).
+            boundary_template!(E::call, $thunk::<E>);
+        }
+        // Integer-class arguments and result only (module docs), and no
+        // more than the template preserves.
+        const _: () = { $( int_class::<$ty>(); )* int_class::<$ret>(); };
+        const _: () = assert!(<[&str]>::len(&[$(stringify!($ty)),*]) <= MAX_ARGS, "too many arguments for the template");
+    };
+}
+
+generic_thunk!(
+    /// A `PyCFunction` entry: a method without keywords or a module function.
+    CFunctionEntry, cfunction : fn(slf: Obj, args: Obj) -> Obj
+);
+generic_thunk!(
+    /// A `PyCFunctionWithKeywords` entry.
+    CFunctionKwEntry, cfunction_kw : fn(slf: Obj, args: Obj, kwargs: Obj) -> Obj
+);
+generic_thunk!(
+    /// A `destructor` entry: `tp_dealloc` or a capsule destructor.
+    DestructorEntry, destructor : fn(obj: Obj) -> ()
+);
+generic_thunk!(
+    /// A `getbufferproc` entry.
+    GetBufferEntry, getbuffer : fn(obj: Obj, view: *mut ffi::Py_buffer, flags: c_int) -> c_int
+);
+generic_thunk!(
+    /// A `DLManagedTensor::deleter` entry.
+    DlDeleterEntry, dl_deleter : fn(managed: *mut DLManagedTensor) -> ()
+);
+generic_thunk!(
+    /// A `DLManagedTensorVersioned::deleter` entry.
+    DlDeleterVersionedEntry, dl_deleter_versioned : fn(managed: *mut DLManagedTensorVersioned) -> ()
+);
+generic_thunk!(
+    /// A module initializer entry (`PyInit_*`).
+    ModuleInitEntry, module_init : fn() -> Obj
+);
+
+impl ThunkFn<CFunction> {
+    /// The boundary thunk of `E`.
+    pub(crate) const fn of<E: CFunctionEntry>() -> Self {
+        Self(cfunction::<E>)
+    }
+}
+
+impl ThunkFn<CFunctionKw> {
+    /// The boundary thunk of `E`.
+    pub(crate) const fn of<E: CFunctionKwEntry>() -> Self {
+        Self(cfunction_kw::<E>)
+    }
+}
+
+impl ThunkFn<Destructor> {
+    /// The boundary thunk of `E`.
+    pub(crate) const fn of<E: DestructorEntry>() -> Self {
+        Self(destructor::<E>)
+    }
+}
+
+impl ThunkFn<GetBuffer> {
+    /// The boundary thunk of `E`.
+    pub(crate) const fn of<E: GetBufferEntry>() -> Self {
+        Self(getbuffer::<E>)
+    }
+}
+
+impl ThunkFn<DlDeleter> {
+    /// The boundary thunk of `E`.
+    pub(crate) const fn of<E: DlDeleterEntry>() -> Self {
+        Self(dl_deleter::<E>)
+    }
+}
+
+impl ThunkFn<DlDeleterVersioned> {
+    /// The boundary thunk of `E`.
+    pub(crate) const fn of<E: DlDeleterVersionedEntry>() -> Self {
+        Self(dl_deleter_versioned::<E>)
+    }
+}
+
+/// `PyInit_*`: `() -> module`.
+pub(crate) type ModuleInit = unsafe extern "C" fn() -> *mut ffi::PyObject;
+
+impl ThunkFn<ModuleInit> {
+    /// The boundary thunk of `E`.
+    pub(crate) const fn of<E: ModuleInitEntry>() -> Self {
+        Self(module_init::<E>)
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -621,6 +742,29 @@ mod tests {
     use tessera_rl_num::fp::{self, hostile};
 
     use super::super::boundary;
+    use super::*;
+
+    // The template tests run through generic instantiations (D2-G): one
+    // entry trait per test signature, made by the same macro as the
+    // CPython signatures'.
+
+    #[cfg(not(windows))]
+    mod six {
+        use super::super::{MAX_ARGS, int_class};
+        generic_thunk!(Args6, args6 : fn(a0: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64);
+    }
+    #[cfg(not(windows))]
+    use six::{Args6, args6};
+
+    #[cfg(windows)]
+    mod four {
+        use super::super::{MAX_ARGS, int_class};
+        generic_thunk!(Args4, args4 : fn(a0: u64, a1: u64, a2: u64, a3: u64) -> u64);
+    }
+    #[cfg(windows)]
+    use four::{Args4, args4};
+
+    generic_thunk!(Args1, args1 : fn(a0: u64) -> u64);
 
     // Per thread: the tests run in parallel threads.
     thread_local! {
@@ -647,27 +791,51 @@ mod tests {
     // System V and AAPCS64 preserve six or more integer registers: the
     // thunk takes all six arguments.
     #[cfg(not(windows))]
-    thunk!(@naked thunk6 => target6 : fn(u64, u64, u64, u64, u64, u64) -> u64);
+    struct Target6;
+    #[cfg(not(windows))]
+    impl Args6 for Target6 {
+        unsafe extern "C" fn call(a0: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 {
+            target6(a0, a1, a2, a3, a4, a5)
+        }
+    }
+    #[cfg(not(windows))]
+    const THUNK6: unsafe extern "C" fn(u64, u64, u64, u64, u64, u64) -> u64 = args6::<Target6>;
 
     // Win64 preserves four (MAX_ARGS): the thunk takes the register
     // arguments, and the test helper folds in the last two outside it, so
     // every test checks the same value on every ABI.
     #[cfg(windows)]
-    thunk!(@naked thunk4 => target4 : fn(u64, u64, u64, u64) -> u64);
+    struct Target4;
+    #[cfg(windows)]
+    impl Args4 for Target4 {
+        unsafe extern "C" fn call(a0: u64, a1: u64, a2: u64, a3: u64) -> u64 {
+            target4(a0, a1, a2, a3)
+        }
+    }
+    #[cfg(windows)]
+    const THUNK4: unsafe extern "C" fn(u64, u64, u64, u64) -> u64 = args4::<Target4>;
 
     #[cfg(windows)]
-    unsafe extern "C" fn thunk6(a0: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 {
+    unsafe extern "C" fn thunk6_win64(a0: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 {
         // SAFETY: a thunk of a test target.
-        unsafe { thunk4(a0, a1, a2, a3) ^ a4.rotate_left(32) ^ a5.rotate_left(40) }
+        unsafe { THUNK4(a0, a1, a2, a3) ^ a4.rotate_left(32) ^ a5.rotate_left(40) }
     }
+    #[cfg(windows)]
+    const THUNK6: unsafe extern "C" fn(u64, u64, u64, u64, u64, u64) -> u64 = thunk6_win64;
 
     extern "C" fn nested(a: u64) -> u64 {
         // SAFETY: a thunk of a test target.
-        let inner = unsafe { thunk6(a, 1, 2, 3, 4, 5) };
+        let inner = unsafe { THUNK6(a, 1, 2, 3, 4, 5) };
         INSIDE_DEPTH_TOKEN.with(|c| c.set(boundary::frame_token()));
         inner
     }
-    thunk!(@naked thunk_nested => nested : fn(u64) -> u64);
+    struct Nested;
+    impl Args1 for Nested {
+        unsafe extern "C" fn call(a0: u64) -> u64 {
+            nested(a0)
+        }
+    }
+    const THUNK_NESTED: unsafe extern "C" fn(u64) -> u64 = args1::<Nested>;
 
     extern "C" fn panicky(a: u64) -> u64 {
         match std::panic::catch_unwind(|| {
@@ -681,7 +849,13 @@ mod tests {
             }
         }
     }
-    thunk!(@naked thunk_panicky => panicky : fn(u64) -> u64);
+    struct Panicky;
+    impl Args1 for Panicky {
+        unsafe extern "C" fn call(a0: u64) -> u64 {
+            panicky(a0)
+        }
+    }
+    const THUNK_PANICKY: unsafe extern "C" fn(u64) -> u64 = args1::<Panicky>;
 
     const ARGS: [u64; 6] = [
         0x0123_4567_89ab_cdef,
@@ -698,7 +872,7 @@ mod tests {
 
     fn call6() -> u64 {
         // SAFETY: a thunk of a test target with integer arguments.
-        unsafe { thunk6(ARGS[0], ARGS[1], ARGS[2], ARGS[3], ARGS[4], ARGS[5]) }
+        unsafe { THUNK6(ARGS[0], ARGS[1], ARGS[2], ARGS[3], ARGS[4], ARGS[5]) }
     }
 
     fn check_mode(mode: fn(fp::Control) -> fp::Control) {
@@ -724,6 +898,151 @@ mod tests {
         );
         assert!(fp::non_canonical_entries() > before, "the entry is counted");
         assert_eq!(boundary::frame_token(), 0, "no frame outside the entry");
+    }
+
+    // The production templates, instantiated with test entries: each
+    // records whether it ran under canonical controls and folds its
+    // pointer arguments (never dereferenced) into its result.
+    thread_local! {
+        static SEEN: Cell<(bool, usize)> = const { Cell::new((false, 0)) };
+    }
+
+    fn seen(fold: usize) {
+        SEEN.with(|c| c.set((fp::is_canonical(), fold)));
+    }
+
+    fn ptr(v: usize) -> Obj {
+        core::ptr::without_provenance_mut(v)
+    }
+
+    struct PyFn;
+    impl CFunctionEntry for PyFn {
+        unsafe extern "C" fn call(slf: Obj, args: Obj) -> Obj {
+            seen(slf.addr() ^ args.addr().rotate_left(8));
+            ptr(slf.addr() ^ args.addr())
+        }
+    }
+
+    struct PyFnKw;
+    impl CFunctionKwEntry for PyFnKw {
+        unsafe extern "C" fn call(slf: Obj, args: Obj, kwargs: Obj) -> Obj {
+            seen(slf.addr() ^ args.addr().rotate_left(8) ^ kwargs.addr().rotate_left(16));
+            ptr(slf.addr() ^ kwargs.addr())
+        }
+    }
+
+    struct Dealloc;
+    impl DestructorEntry for Dealloc {
+        unsafe extern "C" fn call(obj: Obj) {
+            seen(obj.addr());
+        }
+    }
+
+    struct Buffer;
+    impl GetBufferEntry for Buffer {
+        unsafe extern "C" fn call(obj: Obj, view: *mut ffi::Py_buffer, flags: c_int) -> c_int {
+            seen(obj.addr() ^ view.addr().rotate_left(8) ^ usize::try_from(flags).unwrap_or(0));
+            flags.wrapping_neg()
+        }
+    }
+
+    struct Deleter;
+    impl DlDeleterEntry for Deleter {
+        unsafe extern "C" fn call(managed: *mut DLManagedTensor) {
+            seen(managed.addr());
+        }
+    }
+
+    struct DeleterVersioned;
+    impl DlDeleterVersionedEntry for DeleterVersioned {
+        unsafe extern "C" fn call(managed: *mut DLManagedTensorVersioned) {
+            seen(managed.addr());
+        }
+    }
+
+    struct Init;
+    impl ModuleInitEntry for Init {
+        unsafe extern "C" fn call() -> Obj {
+            seen(0x5eed);
+            ptr(0x5eed)
+        }
+    }
+
+    /// Runs `f` under flush-to-zero caller controls: the instantiation ran
+    /// canonical, folded `want` and left the caller's controls in place.
+    fn check_instantiation<R: PartialEq + core::fmt::Debug>(
+        want: usize,
+        result: &R,
+        f: impl FnOnce() -> R,
+    ) {
+        SEEN.with(|c| c.set((false, 0)));
+        let (got, after) = hostile::run(hostile::flush_to_zero, f);
+        let ((), written) = hostile::run(hostile::flush_to_zero, || ());
+        assert_eq!(&got, result, "the result passes through");
+        assert_eq!(
+            SEEN.with(Cell::get),
+            (true, want),
+            "canonical inside, arguments intact"
+        );
+        assert_eq!(
+            after & !fp::STATUS_FLAGS,
+            written & !fp::STATUS_FLAGS,
+            "the caller's controls are restored"
+        );
+    }
+
+    #[test]
+    fn test_thunk_generic_cfunction_runs_canonical_and_passes_arguments() {
+        let f = ThunkFn::<CFunction>::of::<PyFn>().get();
+        // SAFETY: a thunk of a test entry; the pointers are never dereferenced.
+        check_instantiation(0x10 ^ 0x2000, &ptr(0x10 ^ 0x20), || unsafe {
+            f(ptr(0x10), ptr(0x20))
+        });
+    }
+
+    #[test]
+    fn test_thunk_generic_cfunction_kw_runs_canonical_and_passes_arguments() {
+        let f = ThunkFn::<CFunctionKw>::of::<PyFnKw>().get();
+        // SAFETY: as above.
+        check_instantiation(0x10 ^ 0x2000 ^ 0x30_0000, &ptr(0x10 ^ 0x30), || unsafe {
+            f(ptr(0x10), ptr(0x20), ptr(0x30))
+        });
+    }
+
+    #[test]
+    fn test_thunk_generic_destructor_runs_canonical_and_passes_arguments() {
+        let f = ThunkFn::<Destructor>::of::<Dealloc>().get();
+        // SAFETY: as above.
+        check_instantiation(0x40, &(), || unsafe { f(ptr(0x40)) });
+    }
+
+    #[test]
+    fn test_thunk_generic_getbuffer_runs_canonical_and_passes_arguments() {
+        let f = ThunkFn::<GetBuffer>::of::<Buffer>().get();
+        let view: *mut ffi::Py_buffer = core::ptr::without_provenance_mut(0x50);
+        // SAFETY: as above.
+        check_instantiation(0x10 ^ 0x5000 ^ 7, &-7, || unsafe { f(ptr(0x10), view, 7) });
+    }
+
+    #[test]
+    fn test_thunk_generic_dlpack_deleters_run_canonical_and_pass_arguments() {
+        let legacy = ThunkFn::<DlDeleter>::of::<Deleter>().get();
+        let versioned = ThunkFn::<DlDeleterVersioned>::of::<DeleterVersioned>().get();
+        // SAFETY: as above.
+        check_instantiation(0x60, &(), || unsafe {
+            legacy(core::ptr::without_provenance_mut(0x60));
+        });
+        // SAFETY: as above.
+        check_instantiation(0x70, &(), || unsafe {
+            versioned(core::ptr::without_provenance_mut(0x70));
+        });
+    }
+
+    #[test]
+    fn test_thunk_generic_module_init_runs_canonical_and_returns_its_result() {
+        let f = ThunkFn::<ModuleInit>::of::<Init>().get();
+        // SAFETY: as above.
+        check_instantiation(0x5eed, &ptr(0x5eed), || unsafe { f() });
     }
 
     #[test]
@@ -886,7 +1205,7 @@ mod tests {
     fn test_thunk_nesting_restores_each_frame() {
         let (got, after) = hostile::run(hostile::flush_to_zero, || {
             // SAFETY: a thunk of a test target.
-            unsafe { thunk_nested(ARGS[0]) }
+            unsafe { THUNK_NESTED(ARGS[0]) }
         });
         assert_eq!(got, target6(ARGS[0], 1, 2, 3, 4, 5));
         // After the inner entry returned, the outer frame is current again.
@@ -951,7 +1270,15 @@ mod tests {
         a
     }
     #[cfg(target_arch = "x86_64")]
-    thunk!(@naked thunk_x87_changer => x87_changer : fn(u64) -> u64);
+    struct X87Changer;
+    #[cfg(target_arch = "x86_64")]
+    impl Args1 for X87Changer {
+        unsafe extern "C" fn call(a0: u64) -> u64 {
+            x87_changer(a0)
+        }
+    }
+    #[cfg(target_arch = "x86_64")]
+    const THUNK_X87_CHANGER: unsafe extern "C" fn(u64) -> u64 = args1::<X87Changer>;
 
     /// A host function (the target of a test callout) that changes the x87
     /// control word and leaves it.
@@ -974,19 +1301,35 @@ mod tests {
         unsafe { callout_x87_changer(r) }
     }
     #[cfg(target_arch = "x86_64")]
-    thunk!(@naked thunk_calls_host => calls_host : fn(u64) -> u64);
+    struct CallsHost;
+    #[cfg(target_arch = "x86_64")]
+    impl Args1 for CallsHost {
+        unsafe extern "C" fn call(a0: u64) -> u64 {
+            calls_host(a0)
+        }
+    }
+    #[cfg(target_arch = "x86_64")]
+    const THUNK_CALLS_HOST: unsafe extern "C" fn(u64) -> u64 = args1::<CallsHost>;
 
     /// An entry body that enters again (a nested entry whose body changes
     /// the control word), as host code inside a callback would.
     #[cfg(target_arch = "x86_64")]
     extern "C" fn enters_again(a: u64) -> u64 {
         // SAFETY: a thunk of a test target.
-        let r = unsafe { thunk_x87_changer(a) };
+        let r = unsafe { THUNK_X87_CHANGER(a) };
         AFTER_CALLOUT_X87.with(|c| c.set(x87_cw()));
         r
     }
     #[cfg(target_arch = "x86_64")]
-    thunk!(@naked thunk_enters_again => enters_again : fn(u64) -> u64);
+    struct EntersAgain;
+    #[cfg(target_arch = "x86_64")]
+    impl Args1 for EntersAgain {
+        unsafe extern "C" fn call(a0: u64) -> u64 {
+            enters_again(a0)
+        }
+    }
+    #[cfg(target_arch = "x86_64")]
+    const THUNK_ENTERS_AGAIN: unsafe extern "C" fn(u64) -> u64 = args1::<EntersAgain>;
 
     /// Runs `f` with the x87 control word set to `cw`, and returns `f`'s
     /// result with the control word read right after it; restores the
@@ -1005,7 +1348,7 @@ mod tests {
     #[test]
     fn test_thunk_x87_entry_preserves_caller_word_uncounted() {
         // SAFETY: a thunk of a test target.
-        let (got, after) = with_x87(X87_HOSTILE, || unsafe { thunk_x87_changer(7) });
+        let (got, after) = with_x87(X87_HOSTILE, || unsafe { THUNK_X87_CHANGER(7) });
         assert_eq!(got, 7);
         assert_eq!(
             INSIDE_X87.with(Cell::get),
@@ -1026,7 +1369,7 @@ mod tests {
     #[test]
     fn test_thunk_x87_callout_change_never_outlives_the_callout() {
         // SAFETY: a thunk of a test target.
-        let (got, after) = with_x87(X87_HOSTILE, || unsafe { thunk_calls_host(9) });
+        let (got, after) = with_x87(X87_HOSTILE, || unsafe { THUNK_CALLS_HOST(9) });
         assert_eq!(got, 9);
         assert_eq!(
             AFTER_CALLOUT_X87.with(Cell::get),
@@ -1040,7 +1383,7 @@ mod tests {
     #[test]
     fn test_thunk_x87_nested_entry_restores_its_immediate_caller() {
         // SAFETY: a thunk of a test target.
-        let (got, after) = with_x87(X87_HOSTILE, || unsafe { thunk_enters_again(3) });
+        let (got, after) = with_x87(X87_HOSTILE, || unsafe { THUNK_ENTERS_AGAIN(3) });
         assert_eq!(got, 3);
         assert_eq!(
             AFTER_CALLOUT_X87.with(Cell::get),
@@ -1056,7 +1399,7 @@ mod tests {
         // Both registers hostile at once: each is restored independently.
         let ((got, cw), after) = hostile::run(hostile::toward_zero, || {
             // SAFETY: a thunk of a test target.
-            with_x87(X87_HOSTILE, || unsafe { thunk_calls_host(5) })
+            with_x87(X87_HOSTILE, || unsafe { THUNK_CALLS_HOST(5) })
         });
         assert_eq!(got, 5);
         assert_eq!(cw, X87_HOSTILE);
@@ -1070,7 +1413,7 @@ mod tests {
     fn test_thunk_contained_panic_returns_and_restores() {
         let (got, after) = hostile::run(hostile::toward_zero, || {
             // SAFETY: a thunk of a test target.
-            unsafe { thunk_panicky(1) }
+            unsafe { THUNK_PANICKY(1) }
         });
         assert_eq!(got, u64::MAX);
         assert_eq!(

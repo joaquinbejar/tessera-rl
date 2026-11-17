@@ -17,7 +17,11 @@ use std::sync::Arc;
 use pyo3::ffi;
 
 use super::capi::{self, CResult, Gil, Mine};
-use super::{dispose, thunks};
+use super::dispose;
+use super::thunks::{
+    self, Destructor, DestructorEntry, DlDeleter, DlDeleterEntry, DlDeleterVersioned,
+    DlDeleterVersionedEntry, ThunkFn,
+};
 
 /// `kDLCPU`.
 const DL_CPU: i32 = 1;
@@ -187,7 +191,7 @@ fn export(
             managed: DLManagedTensorVersioned {
                 version: DLPackVersion { major: 1, minor: 0 },
                 manager_ctx: ptr::null_mut(),
-                deleter: Some(thunks::DL_DELETER_VERSIONED.get()),
+                deleter: Some(ThunkFn::<DlDeleterVersioned>::of::<DeleteVersioned>().get()),
                 flags: if read_only { FLAG_READ_ONLY } else { 0 },
                 dl_tensor,
             },
@@ -203,7 +207,7 @@ fn export(
             managed: DLManagedTensor {
                 dl_tensor,
                 manager_ctx: ptr::null_mut(),
-                deleter: Some(thunks::DL_DELETER.get()),
+                deleter: Some(ThunkFn::<DlDeleter>::of::<DeleteLegacy>().get()),
             },
             keep,
         }));
@@ -227,7 +231,14 @@ pub fn capsule(g: Gil, src: &Source<'_>, versioned: bool, read_only: bool) -> CR
     };
     // SAFETY: `raw` is a live export valid for the destructor, `name` a
     // static C string, and the destructor a cleanup thunk.
-    let cap = unsafe { capi::capsule(g, raw, name, thunks::CAPSULE_DESTRUCTOR.get()) };
+    let cap = unsafe {
+        capi::capsule(
+            g,
+            raw,
+            name,
+            ThunkFn::<Destructor>::of::<DestroyCapsule>().get(),
+        )
+    };
     if cap.is_err() {
         // The capsule does not own the export: free it here.
         if versioned {
@@ -284,6 +295,36 @@ pub(super) unsafe extern "C" fn destroy_capsule(cap: *mut ffi::PyObject) {
         unsafe { delete_legacy(raw.cast()) };
     }
     capi::restore_pending(pending);
+}
+
+/// The legacy deleter's boundary entry.
+struct DeleteLegacy;
+
+impl DlDeleterEntry for DeleteLegacy {
+    unsafe extern "C" fn call(managed: *mut DLManagedTensor) {
+        // SAFETY: the thunk passes the consumer's argument through.
+        unsafe { delete_legacy(managed) }
+    }
+}
+
+/// The versioned deleter's boundary entry.
+struct DeleteVersioned;
+
+impl DlDeleterVersionedEntry for DeleteVersioned {
+    unsafe extern "C" fn call(managed: *mut DLManagedTensorVersioned) {
+        // SAFETY: as above.
+        unsafe { delete_versioned(managed) }
+    }
+}
+
+/// The capsule destructor's boundary entry.
+struct DestroyCapsule;
+
+impl DestructorEntry for DestroyCapsule {
+    unsafe extern "C" fn call(cap: *mut ffi::PyObject) {
+        // SAFETY: CPython passes the capsule being destroyed.
+        unsafe { destroy_capsule(cap) }
+    }
 }
 
 #[cfg(test)]

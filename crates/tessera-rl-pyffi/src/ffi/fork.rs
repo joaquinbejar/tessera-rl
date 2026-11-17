@@ -43,13 +43,6 @@ extern "C" fn after_in_child() {
 ///
 /// A failed registration (ENOMEM) raises, so the import fails: a silently absent
 /// guard would bring back the hangs and traps of a forked child.
-#[cfg_attr(
-    windows,
-    expect(
-        clippy::unnecessary_wraps,
-        reason = "one signature on every platform: the registration can fail where fork exists"
-    )
-)]
 pub fn register(g: Gil) -> CResult<()> {
     #[cfg(not(windows))]
     {
