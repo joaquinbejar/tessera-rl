@@ -233,7 +233,8 @@ pub fn engine_kind(e: &EngineError) -> Kind {
         | EngineError::DiscreteOutOfRange { .. }
         | EngineError::ContinuousOutOfRange { .. }
         | EngineError::IllegalAction { .. }
-        | EngineError::MaskBudgetExceeded { .. } => Kind::Action,
+        | EngineError::MaskBudgetExceeded { .. }
+        | EngineError::ActionRejected { .. } => Kind::Action,
         EngineError::InvalidRecord { .. } | EngineError::Invariant { .. } => Kind::Record,
         EngineError::PendingReset { .. } => Kind::PendingReset,
         EngineError::Poisoned

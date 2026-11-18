@@ -10,8 +10,8 @@ use core::sync::atomic::{AtomicU64, Ordering};
 
 use tessera_rl_core::io::{Actions, MaskWriter, ObsWriter};
 use tessera_rl_core::{
-    AbortCode, AgentSlot, Bool8, EpisodeEnd, HostEnvironment, HostOut, HostSeed, NoAdaptive,
-    RecordHeader, RecordLayout, StepOut, TurnStructure,
+    AbortCode, ActionReject, AgentSlot, Bool8, EpisodeEnd, HostEnvironment, HostOut, HostSeed,
+    NoAdaptive, RecordHeader, RecordLayout, StepOut, TurnStructure,
 };
 use tessera_rl_num::fp;
 use tessera_rl_num::identity::{RngIdentity, Seed};
@@ -122,6 +122,63 @@ fn step_rows<E: HostEnvironment, const A: usize>(ctx: &HostCtx<'_>, rows: &mut H
         }
         write_pending(outputs, i, header);
     }
+}
+
+/// Whether instance `header` steps in this call: not pending a reset,
+/// with at least one required action (an alive, acting slot).
+fn steps<const A: usize>(header: &HostHeader<A>) -> bool {
+    !header.engine().pending_reset.get()
+        && header
+            .agents()
+            .iter()
+            .any(|r| r.alive.get() && r.acting.get())
+}
+
+/// Validates the joint action of every instance of `rows` that steps
+/// (ADR-0065 item 2), in instance order, stopping at the first rejection,
+/// which it returns with the instance's index in `rows`. Runs inside the
+/// host allocation bracket and puts the FP controls back after host code,
+/// as a step does.
+pub(crate) fn validate_chunk<E: HostEnvironment, const A: usize>(
+    ctx: &HostCtx<'_>,
+    rows: &HostRows<'_, E, A>,
+) -> Option<(usize, ActionReject)> {
+    let rejected = {
+        #[cfg(feature = "debug-checks")]
+        let _bracket = crate::sys::alloc_track::HostBracket::enter(ctx.allocs);
+        validate_rows::<E, A>(ctx, rows)
+    };
+    recanonicalize(ctx.fp_resets);
+    rejected
+}
+
+fn validate_rows<E: HostEnvironment, const A: usize>(
+    ctx: &HostCtx<'_>,
+    rows: &HostRows<'_, E, A>,
+) -> Option<(usize, ActionReject)> {
+    let (dh, ch) = (ctx.layout.discrete.len(), ctx.layout.continuous.len());
+    for (i, (header, inst)) in rows.headers.iter().zip(rows.states.iter()).enumerate() {
+        if !steps::<A>(header) {
+            continue;
+        }
+        let first = i * A;
+        let view = Actions::new(
+            rows.discrete
+                .get(first * dh..(first + A) * dh)
+                .unwrap_or(&[]),
+            dh,
+            rows.continuous
+                .get(first * ch..(first + A) * ch)
+                .unwrap_or(&[]),
+            ch,
+        );
+        let result = inst.validate(&view);
+        recanonicalize(ctx.fp_resets);
+        if let Err(reject) = result {
+            return Some((i, reject));
+        }
+    }
+    None
 }
 
 /// Resets every instance of `rows`; `first` is the position of the chunk's

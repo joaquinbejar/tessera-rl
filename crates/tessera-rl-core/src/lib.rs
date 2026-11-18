@@ -39,7 +39,7 @@ pub use env::{
 pub use error::{ConfigError, CoreError, DecodeError, EncodeError, InvariantViolation, SpaceError};
 pub use header::{AdaptiveValues, AgentRow, EngineHeader, NoAdaptive, RecordHeader, RecordLayout};
 pub use header_view::{AgentView, HeaderView, Phase};
-pub use host::{HostEnvironment, HostError, HostSeed};
+pub use host::{ActionReject, HostEnvironment, HostError, HostSeed};
 pub use host_out::{AbortCode, HostOut};
 pub use leaf::{LeafDType, LeafId, ObsLeaf, Observation};
 pub use pool::Pool;

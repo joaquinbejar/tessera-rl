@@ -80,6 +80,17 @@ pub enum HostError {
     },
 }
 
+/// A joint action a host environment refuses ([`HostEnvironment::validate`],
+/// ADR-0065 item 2): a code and a static reason the engine reports. Making
+/// one allocates nothing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ActionReject {
+    /// The environment's own code.
+    pub code: u32,
+    /// Why, for the error message.
+    pub reason: &'static str,
+}
+
 /// An environment that owns its state (ADR-0062).
 ///
 /// One value of the implementing type is one instance; the engine's host
@@ -115,6 +126,9 @@ pub trait HostEnvironment: Send + Sized + 'static {
     /// slot: it is not applied, and it is counted and marked as the other
     /// invalid events are, so slots `initial_agents..` stay empty.
     const SPAWNS: bool = false;
+    /// Whether the engine calls [`HostEnvironment::validate`] before each
+    /// step (ADR-0065 item 2). With `false` the check is compiled out.
+    const VALIDATES: bool = false;
 
     /// The environment's configuration.
     type Config: EnvConfig;
@@ -175,6 +189,29 @@ pub trait HostEnvironment: Send + Sized + 'static {
     /// Applies one step of validated actions. `out.abort(code)` ends the
     /// episode as aborted ([`HostOut`], ADR-0065).
     fn step(&mut self, actions: &Actions<'_, ()>, out: &mut HostOut<'_>);
+
+    /// Checks this instance's joint action before any instance of the call
+    /// steps (ADR-0065 item 2). Called only when
+    /// [`HostEnvironment::VALIDATES`] is `true`, for the instances that step
+    /// in the call (not pending a reset, with at least one acting agent),
+    /// on the validated actions `step` will see (slots that do not act are
+    /// zero). A rejection fails the whole call with
+    /// `EngineError::ActionRejected` and mutates nothing the engine owns;
+    /// the first rejection in instance order is reported.
+    ///
+    /// It must be pure: no interior mutability, no I/O, no clock or
+    /// randomness, nothing but `self` and `actions` (the same contract as
+    /// `observe`, documented and not checked). It runs with the interpreter
+    /// released, under canonical floating-point controls; a panic poisons
+    /// the pool.
+    ///
+    /// # Errors
+    ///
+    /// [`ActionReject`] for a joint action the environment refuses.
+    fn validate(&self, actions: &Actions<'_, ()>) -> Result<(), ActionReject> {
+        let _ = actions;
+        Ok(())
+    }
 
     /// Writes `agent`'s observation into leaves that are zero on entry.
     fn observe(&self, agent: AgentSlot, obs: &mut ObsWriter<'_, '_, ()>);

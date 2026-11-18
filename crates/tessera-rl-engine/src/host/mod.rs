@@ -25,10 +25,11 @@
 
 mod kernels;
 
-use core::sync::atomic::{AtomicU64, Ordering};
+use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
 use tessera_rl_core::{
-    Bool8, EnvConfig, HostEnvironment, HostError, RecordLayout, StateInit, TurnStructure,
+    ActionReject, Bool8, EnvConfig, HostEnvironment, HostError, RecordLayout, StateInit,
+    TurnStructure,
 };
 use tessera_rl_num::identity::{LogicalId, RngIdentity};
 
@@ -36,7 +37,7 @@ use crate::buffer::par_chunks;
 use crate::error::EngineError;
 use crate::layout::{ActionLayout, MaskLayout, obs_leaves};
 use crate::options::{AutoReset, PoolOptions, SyncOptions};
-use crate::outputs::Outputs;
+use crate::outputs::{Outputs, OutputsView};
 use crate::pool::{Reseed, Rows, SyncRuntime, check_reset, chunk_size, run_kernels, too_large};
 use crate::validate::{ActionInput, check_and_copy_actions, check_ids};
 
@@ -563,6 +564,18 @@ impl<E: HostEnvironment, const A: usize> HostPool<E, A> {
             #[cfg(feature = "debug-checks")]
             allocs,
         };
+        if E::VALIDATES {
+            validate::<E, A>(
+                &ctx,
+                sync.as_mut(),
+                poisoned,
+                headers,
+                instances,
+                discrete,
+                continuous,
+                size,
+            )?;
+        }
         let all = Rows {
             headers,
             states: instances,
@@ -669,6 +682,116 @@ impl<E: HostEnvironment, const A: usize> HostPool<E, A> {
             }
         }
         Ok(())
+    }
+}
+
+/// The joint-action validation pass (ADR-0065 item 2), before any instance
+/// steps; it writes no output.
+///
+/// Inline validates serially and stops at the first rejection. Sync runs a
+/// second dispatch on the existing gang, before the step's: each chunk
+/// stops at its own first rejection and records its index with
+/// `fetch_min`, so the lowest rejected index wins, as in Inline. Its code
+/// and reason are then read by validating that one instance again on this
+/// thread (`validate` is pure by contract), so nothing is allocated or
+/// locked. A panic poisons the pool.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the split borrows of the pool's fields"
+)]
+fn validate<E: HostEnvironment, const A: usize>(
+    ctx: &HostCtx<'_>,
+    sync: Option<&mut SyncRuntime>,
+    poisoned: &mut bool,
+    headers: &mut [HostHeader<A>],
+    instances: &mut [E],
+    discrete: &mut [i32],
+    continuous: &mut [f32],
+    size: usize,
+) -> Result<(), EngineError> {
+    let heads = (ctx.layout.discrete.len(), ctx.layout.continuous.len());
+    let mut found = None;
+    if let Some(rt) = sync {
+        let lowest = AtomicU32::new(u32::MAX);
+        let all = Rows {
+            headers: &mut *headers,
+            states: &mut *instances,
+            discrete: &mut *discrete,
+            continuous: &mut *continuous,
+            penalties: &mut [],
+            penalized: &mut [],
+            outputs: OutputsView::empty(A),
+        };
+        let panicked = par_chunks(&mut rt.gang, all, size, heads, |rows, first| {
+            if let Some((i, _)) = kernels::validate_chunk::<E, A>(ctx, rows) {
+                let index = u32::try_from(first.saturating_add(i)).unwrap_or(u32::MAX);
+                lowest.fetch_min(index, Ordering::Relaxed);
+            }
+        })?;
+        if panicked {
+            *poisoned = true;
+            return Err(EngineError::Panicked);
+        }
+        // The gang's join orders every worker's `fetch_min` before this
+        // read.
+        let lowest = lowest.load(Ordering::Relaxed);
+        if lowest == u32::MAX {
+            return Ok(());
+        }
+        let index = usize::try_from(lowest).unwrap_or(usize::MAX);
+        let (dh, ch) = heads;
+        let (Some(one_header), Some(one_state), Some(one_discrete), Some(one_continuous)) = (
+            headers.get_mut(index..=index),
+            instances.get_mut(index..=index),
+            discrete.get_mut(index * A * dh..(index + 1) * A * dh),
+            continuous.get_mut(index * A * ch..(index + 1) * A * ch),
+        ) else {
+            return Err(rejected(lowest, None));
+        };
+        let one = Rows {
+            headers: one_header,
+            states: one_state,
+            discrete: one_discrete,
+            continuous: one_continuous,
+            penalties: &mut [],
+            penalized: &mut [],
+            outputs: OutputsView::empty(A),
+        };
+        let mut again = None;
+        run_kernels(poisoned, || {
+            again = kernels::validate_chunk::<E, A>(ctx, &one);
+        })?;
+        return Err(rejected(lowest, again.map(|(_, r)| r)));
+    }
+    let all = Rows {
+        headers,
+        states: instances,
+        discrete,
+        continuous,
+        penalties: &mut [],
+        penalized: &mut [],
+        outputs: OutputsView::empty(A),
+    };
+    run_kernels(poisoned, || {
+        found = kernels::validate_chunk::<E, A>(ctx, &all);
+    })?;
+    match found {
+        Some((i, reject)) => Err(rejected(u32::try_from(i).unwrap_or(u32::MAX), Some(reject))),
+        None => Ok(()),
+    }
+}
+
+/// The error of a rejected joint action; `None` when the instance did not
+/// reject again on this thread (a `validate` that is not pure).
+fn rejected(instance: u32, reject: Option<ActionReject>) -> EngineError {
+    let reject = reject.unwrap_or(ActionReject {
+        code: 0,
+        reason: "rejected by validate in the worker pass only (validate must be pure)",
+    });
+    EngineError::ActionRejected {
+        instance,
+        code: reject.code,
+        reason: reject.reason,
     }
 }
 

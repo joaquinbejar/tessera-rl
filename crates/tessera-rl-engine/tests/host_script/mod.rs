@@ -13,8 +13,8 @@ use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use tessera_rl_core::io::{Actions, MaskWriter, ObsWriter};
 use tessera_rl_core::space::{BoxBounds, DType, Space};
 use tessera_rl_core::{
-    AbortCode, AgentSlot, EnvConfig, EpisodeEnd, HostEnvironment, HostError, HostOut, HostSeed,
-    SpaceError, TurnStructure,
+    AbortCode, ActionReject, AgentSlot, EnvConfig, EpisodeEnd, HostEnvironment, HostError, HostOut,
+    HostSeed, SpaceError, TurnStructure,
 };
 
 /// Agent slots.
@@ -51,6 +51,8 @@ pub const CHOICES: u32 = 11;
 pub const STEP_CODE: u32 = 10;
 /// The abort code of a reset of instance `id`.
 pub const RESET_CODE: u32 = 100;
+/// The code `validate` rejects instance `id` with: `REJECT_CODE + id`.
+pub const REJECT_CODE: u32 = 40;
 /// The reward slot 0 gets from every reset.
 pub const RESET_REWARD: f32 = 0.5;
 
@@ -72,6 +74,12 @@ pub struct Shared {
     pub mixed_acting: AtomicBool,
     /// Instances whose `validate` rejects (bit `i`).
     pub reject: AtomicU32,
+    /// Instances whose `validate` panics (bit `i`).
+    pub panic_validate: AtomicU32,
+    /// `validate` leaves flush-to-zero set.
+    pub hostile_validate: AtomicBool,
+    /// `validate` allocates.
+    pub alloc_validate: AtomicBool,
 }
 
 impl Shared {
@@ -148,6 +156,7 @@ impl<const T: u8, const V: bool> HostEnvironment for Script<T, V> {
     };
     const MASKS: bool = true;
     const SPAWNS: bool = true;
+    const VALIDATES: bool = V;
     type Config = ScriptConfig;
 
     fn new(cfg: &ScriptConfig) -> Result<Self, HostError> {
@@ -237,6 +246,29 @@ impl<const T: u8, const V: bool> HostEnvironment for Script<T, V> {
                 _ => {}
             }
         }
+    }
+
+    fn validate(&self, actions: &Actions<'_, ()>) -> Result<(), ActionReject> {
+        self.count(&self.shared.validates);
+        let _ = actions;
+        let bit = 1u32 << self.id;
+        assert!(
+            self.shared.panic_validate.load(Ordering::Relaxed) & bit == 0,
+            "validate panicked"
+        );
+        if self.shared.hostile_validate.load(Ordering::Relaxed) {
+            tessera_rl_num::fp::hostile::set(tessera_rl_num::fp::hostile::flush_to_zero);
+        }
+        if self.shared.alloc_validate.load(Ordering::Relaxed) {
+            core::hint::black_box(vec![0u8; 64]);
+        }
+        if self.shared.reject.load(Ordering::Relaxed) & bit != 0 {
+            return Err(ActionReject {
+                code: REJECT_CODE + u32::try_from(self.id).unwrap_or(0),
+                reason: "the script refused",
+            });
+        }
+        Ok(())
     }
 
     fn observe(&self, agent: AgentSlot, obs: &mut ObsWriter<'_, '_, ()>) {

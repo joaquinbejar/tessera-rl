@@ -371,6 +371,41 @@ pub(crate) struct OutputsView<'a> {
     pub(crate) pending_reset: &'a mut [Bool8],
 }
 
+impl OutputsView<'_> {
+    /// A view over no output rows, for a dispatch that writes no outputs
+    /// (the host validation pass, ADR-0065 item 2): it starts no write
+    /// generation, so borrowed outputs stay current.
+    #[cfg(feature = "host")]
+    pub(crate) fn empty(agents: usize) -> Self {
+        OutputsView {
+            agents,
+            mask_len: 0,
+            leaf_bytes: &[],
+            observations: Default::default(),
+            terminal_observations: Default::default(),
+            rewards: &mut [],
+            agent_terminated: &mut [],
+            agent_truncated: &mut [],
+            died: &mut [],
+            spawned: &mut [],
+            invalid_agent_event: &mut [],
+            alive: &mut [],
+            acting: &mut [],
+            generations: &mut [],
+            episode_terminated: &mut [],
+            episode_truncated: &mut [],
+            episode_return: &mut [],
+            episode_length: &mut [],
+            episode_illegal_actions: &mut [],
+            episode_invalid_agent_events: &mut [],
+            masks: &mut [],
+            aborted: &mut [],
+            abort_code: &mut [],
+            pending_reset: &mut [],
+        }
+    }
+}
+
 impl Outputs {
     /// A view over every instance. This is the only way to write the
     /// outputs, so it starts a new write generation first (storage
