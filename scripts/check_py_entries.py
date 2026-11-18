@@ -6,11 +6,14 @@ The shared boundary crate, tessera-rl-pyffi (ADR-0062 item 8), is checked
 with the same rules, and must expose no public unsafe function: no item of
 its public API relies on its caller for memory safety (#272 step 3), and
 clippy::not_unsafe_ptr_arg_deref is never allowed or expected there. The
-rustdoc-JSON check of the same rule is scripts/check_pyffi_api.py.
+rustdoc-JSON lint of the same rule is scripts/check_pyffi_api.py.
+In every crate scanned, a `pub safe fn` (or `static`) in an `unsafe
+extern` block fails too: a public foreign function made safe to call.
 
 The primary guarantee is the compiler's: C tables are built only by
 `ffi::tables`, whose function rows take a `ThunkFn`, which only
-`ffi::thunks` can make. This script is the secondary check. It fails when
+`ffi::thunks` can make. This script is a secondary lint over the source
+text, not a proof. It fails when
 pyo3-macros is a dependency, a PyO3 registration attribute or macro
 appears, a thunk or `ThunkFn` is made outside `ffi/thunks.rs`, or a C table
 row (`PyMethodDef`, `PyType_Slot`) is built outside `ffi/tables.rs`.
@@ -39,6 +42,12 @@ PUB_UNSAFE = re.compile(r'\bpub\s+(?:(?:const|async)\s+)*unsafe\s+(?:extern\s*(?
 PUB_TRAIT = re.compile(r"\bpub\s+(?:unsafe\s+)?(?:auto\s+)?trait\s+\w+")
 UNSAFE_FN = re.compile(r'\bunsafe\s+(?:extern\s*(?:""\s*)?)?fn\b')
 
+# A `pub safe fn` (or `static`) declared in an `unsafe extern` block: a
+# public, safe-to-call foreign function, which no lint can check.
+UNSAFE_EXTERN = re.compile(r'\bunsafe\s+extern\s*(?:""\s*)?\{')
+PUB_SAFE = re.compile(r"\bpub\s+safe\s+(?:fn|static)\b")
+
+
 def bodies(code: str, header: re.Pattern):
     """The bodies (`{...}`, brace depth matched) of the items whose header
     matches `header`, in stripped code."""
@@ -53,6 +62,11 @@ def pub_unsafe(text: str) -> bool:
     if PUB_UNSAFE.search(code):
         return True
     return any(UNSAFE_FN.search(body) for body in bodies(code, PUB_TRAIT))
+
+
+def pub_safe_foreign(text: str) -> bool:
+    code = rust_lex.strip(text)
+    return any(PUB_SAFE.search(body) for body in bodies(code, UNSAFE_EXTERN))
 
 
 def main(srcs=None, pyffi=None):
@@ -71,6 +85,8 @@ def main(srcs=None, pyffi=None):
         rel = path.relative_to(ROOT) if path.is_relative_to(ROOT) else path
         if path.is_relative_to(pyffi) and pub_unsafe(text):
             problems.append(f"{rel}: a public unsafe function or trait in tessera-rl-pyffi")
+        if pub_safe_foreign(text):
+            problems.append(f"{rel}: a public safe foreign function (`pub safe fn` in an `unsafe extern` block)")
         if path.is_relative_to(pyffi) and "not_unsafe_ptr_arg_deref" in text:
             problems.append(f"{rel}: clippy::not_unsafe_ptr_arg_deref must stay clean in tessera-rl-pyffi, with no allow or expect")
         if re.search(r"#\[(pyclass|pymethods|pymodule|pyfunction)|wrap_pyfunction|wrap_pymodule", text):

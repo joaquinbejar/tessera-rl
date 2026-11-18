@@ -89,12 +89,12 @@ simd-disasm:
 	python3 scripts/check_simd_disasm.py
 
 # ADR-0041: no raw PyO3 registrations in tessera-rl-py; no public unsafe
-# function in tessera-rl-pyffi (source scan).
+# function in tessera-rl-pyffi (a source lint, not a proof).
 py-entries:
 	python3 scripts/check_py_entries.py
 
 # No public unsafe function in tessera-rl-pyffi, from rustdoc's JSON
-# (nightly; #272 step 3).
+# (nightly; #272 step 3; a lint, not a proof).
 pyffi-api:
 	python3 scripts/check_pyffi_api.py
 
@@ -108,7 +108,7 @@ pyffi-api-if-nightly:
 	fi
 
 # ADR-0041 callouts: only ffi::capi calls the C API, and every call that
-# can run Python code is a callout.
+# can run Python code is a callout (a source lint, not a proof).
 py-callouts:
 	python3 scripts/check_py_callouts.py
 

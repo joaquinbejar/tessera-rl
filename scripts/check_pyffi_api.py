@@ -2,11 +2,13 @@
 # SPDX-License-Identifier: MIT OR Apache-2.0
 """#272 step 3: tessera-rl-pyffi exposes no public unsafe function.
 
-The source scan of scripts/check_py_entries.py is the first check; this is
-the second, from what rustdoc sees: every function or method of the crate
+The source lint of scripts/check_py_entries.py is the first; this is the
+second, from what rustdoc sees: every function or method of the crate
 that is public and `unsafe`, hidden items included, under every feature,
 including a method declared in a public trait (rustdoc gives it the
-visibility "default").
+visibility "default"), and every public foreign function declared
+`pub safe fn` in an `unsafe extern` block. Like the source scan, it is a
+lint, not a proof: it sees what rustdoc documents.
 It needs a nightly toolchain (rustdoc's JSON output is unstable).
 
 Usage: check_pyffi_api.py [JSON]   (default: build it with cargo +nightly)
@@ -57,6 +59,10 @@ def public_unsafe(doc: dict) -> list[str]:
         where = f'{span.get("filename", "?")}:{(span.get("begin") or ["?"])[0]}'
         if header.get("is_unsafe"):
             found.append(f"{where}: pub unsafe fn {item.get('name')}")
+        elif header.get("abi", "Rust") != "Rust" and not function.get("has_body", True):
+            # A foreign function declared `pub safe fn` in an `unsafe
+            # extern` block: safe to call, with no Rust body to check.
+            found.append(f"{where}: pub safe foreign fn {item.get('name')}")
     return sorted(found)
 
 

@@ -12,12 +12,20 @@ and when, inside `ffi/capi.rs`, a C-API function is called directly that is
 not on the allowlist below (functions that cannot run Python code), in
 particular any of the functions that must go through a callout.
 
+A C-API call is `ffi::f(...)`, `X::f(...)` after `use ... ffi as X`, or
+`g(...)` after `use ...::ffi::{f as g}`; a `pub safe fn` in an `unsafe
+extern` block fails anywhere. String literals and comments are ignored
+(scripts/rust_lex.py), so a `//` inside a string hides nothing. It is a
+lint over the source text, not a proof.
+
 Usage: check_py_callouts.py [SRC_DIR]
 """
 
 import pathlib
 import re
 import sys
+
+import rust_lex
 
 _ROOT = pathlib.Path(__file__).resolve().parent.parent
 # The bindings and the shared boundary crate (ADR-0062 item 8), which holds
@@ -64,11 +72,53 @@ GC_ALLOCATORS = {
 LEAF_OWNED = re.compile(r"Mine::new\(\s*unsafe\s*\{\s*thunks::(\w+)\s*\(")
 
 HIGH_LEVEL = re.compile(r"pyo3::(types|prelude|sync|exceptions)\b|\bBound<|\.extract\s*::|\.extract\(|\bPyErr::|\bPython::")
-CALL = re.compile(r"\bffi::([A-Za-z_][A-Za-z0-9_]*)\s*\(")
+
+# `use` declarations that rename the C API: `ffi as X` (a module alias) and
+# `{f as g}` / `f as g` imported from an `ffi` path (a function alias).
+USE = re.compile(r"\buse\s+([^;]*);")
+MODULE_ALIAS = re.compile(r"\bffi\s+as\s+(\w+)")
+NAME_ALIAS = re.compile(r"\b(\w+)\s+as\s+(\w+)")
+
+# A `pub safe fn` (or `static`) in an `unsafe extern` block: a C function
+# made safe to call, outside every callout.
+UNSAFE_EXTERN = re.compile(r'\bunsafe\s+extern\s*(?:""\s*)?\{')
+PUB_SAFE = re.compile(r"\bpub\s+safe\s+(?:fn|static)\b")
 
 
 def strip_comments(text: str) -> str:
-    return re.sub(r"//[^\n]*", "", text)
+    """Comments removed and literals emptied (scripts/rust_lex.py), so a
+    `//` inside a string hides nothing after it."""
+    return rust_lex.strip(text)
+
+
+def c_api_calls(code: str) -> set[str]:
+    """The C-API functions `code` calls: through `ffi::`, through a module
+    alias of `ffi`, or through a function imported from an `ffi` path under
+    another name (reported by its C name)."""
+    modules = {"ffi"}
+    renamed = {}
+    for m in USE.finditer(code):
+        decl = re.sub(r"\s+", " ", m.group(1))
+        modules.update(MODULE_ALIAS.findall(decl))
+        if re.search(r"\bffi\s*::", decl):
+            tail = decl.split("ffi", 1)[1]
+            for name, alias in NAME_ALIAS.findall(tail):
+                renamed[alias] = name
+    names = set()
+    call = re.compile(r"\b(?:" + "|".join(sorted(map(re.escape, modules))) + r")\s*::\s*([A-Za-z_][A-Za-z0-9_]*)\s*\(")
+    names.update(call.findall(code))
+    for alias, name in renamed.items():
+        if re.search(r"(?<![\w:])" + re.escape(alias) + r"\s*\(", code):
+            names.add(name)
+    return names
+
+
+def safe_foreign(code: str) -> bool:
+    for m in UNSAFE_EXTERN.finditer(code):
+        body = code[m.end() - 1:rust_lex.block_end(code, m.end() - 1)]
+        if PUB_SAFE.search(body):
+            return True
+    return False
 
 
 def check(src: pathlib.Path) -> list[str]:
@@ -76,13 +126,15 @@ def check(src: pathlib.Path) -> list[str]:
     for path in sorted(src.rglob("*.rs")):
         rel = path.relative_to(src)
         code = strip_comments(path.read_text())
+        if safe_foreign(code):
+            problems.append(f"{rel}: a public safe foreign function (`pub safe fn` in an `unsafe extern` block)")
         if rel.as_posix() == "ffi/capi.rs":
             for name in sorted(set(LEAF_OWNED.findall(code)) & GC_ALLOCATORS):
                 problems.append(f"{rel}: {name} returns a GC-tracked object: own it with Mine::container")
             # The one direct decref is the leaf branch of `Mine::drop`.
             if len(re.findall(r"\bffi::Py_DecRef\s*\(", code)) > 1:
                 problems.append(f"{rel}: Py_DecRef is called directly outside the leaf branch of Mine::drop")
-            for name in sorted(set(CALL.findall(code))):
+            for name in sorted(c_api_calls(code)):
                 if name in CALLOUT_ONLY:
                     problems.append(f"{rel}: {name} can run Python code: call it through a callout")
                 elif name not in ALLOWED:
@@ -90,7 +142,7 @@ def check(src: pathlib.Path) -> list[str]:
             continue
         if HIGH_LEVEL.search(code):
             problems.append(f"{rel}: PyO3's high-level API is used outside ffi/capi.rs")
-        for name in sorted(set(CALL.findall(code))):
+        for name in sorted(c_api_calls(code)):
             problems.append(f"{rel}: calls ffi::{name} directly (only ffi/capi.rs calls the C API)")
     return problems
 
