@@ -377,7 +377,7 @@ fn init_leaf(leaf: Leaf, name: &str) -> Obj {
                 ),
             ));
         }
-        init_hook();
+        let armed = init_hook();
         let mut found = inventory::iter::<ModuleRecord>
             .into_iter()
             .filter(|r| r.leaf == leaf);
@@ -394,6 +394,7 @@ fn init_leaf(leaf: Leaf, name: &str) -> Obj {
                 &format!("{name}: more than one module registered"),
             )),
         };
+        init_unhook(armed);
         created.map_err(|raised| {
             let (cause, raised) = capi::pending_message(g, raised);
             let _ = first.set(cause);
@@ -404,16 +405,34 @@ fn init_leaf(leaf: Leaf, name: &str) -> Obj {
 
 /// Test hooks only: `TESSERA_TEST_INIT_FAIL_AFTER=n` arms `_fail_after(n)`
 /// before the module initializes, so the real first import fails part way.
+/// Returns whether it armed the counter.
 #[cfg(all(
     feature = "test-hooks",
     any(feature = "native-module", feature = "host")
 ))]
-fn init_hook() {
-    if let Some(n) = std::env::var("TESSERA_TEST_INIT_FAIL_AFTER")
+fn init_hook() -> bool {
+    match std::env::var("TESSERA_TEST_INIT_FAIL_AFTER")
         .ok()
         .and_then(|v| v.parse().ok())
     {
-        capi::fail_after(n);
+        Some(n) => {
+            capi::fail_after(n);
+            true
+        }
+        None => false,
+    }
+}
+
+/// Test hooks only: disarms the counter `init_hook` armed once the
+/// initialization completes, so an `n` larger than the insertions it makes
+/// does not fail a later, unrelated insertion on this thread.
+#[cfg(all(
+    feature = "test-hooks",
+    any(feature = "native-module", feature = "host")
+))]
+fn init_unhook(armed: bool) {
+    if armed {
+        capi::fail_after(0);
     }
 }
 
@@ -422,7 +441,16 @@ fn init_hook() {
     any(feature = "native-module", feature = "host")
 ))]
 #[inline]
-fn init_hook() {}
+fn init_hook() -> bool {
+    false
+}
+
+#[cfg(all(
+    not(feature = "test-hooks"),
+    any(feature = "native-module", feature = "host")
+))]
+#[inline]
+fn init_unhook(_armed: bool) {}
 
 /// The target of the `PyInit__native` thunk.
 #[cfg(feature = "native-module")]
