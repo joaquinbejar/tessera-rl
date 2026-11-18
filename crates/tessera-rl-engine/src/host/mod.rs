@@ -486,7 +486,7 @@ impl<E: HostEnvironment, const A: usize> HostPool<E, A> {
                     continue;
                 };
                 crate::pool::clear_instance(outputs, i);
-                kernels::reset_one::<E, A>(
+                let aborted = kernels::reset_one::<E, A>(
                     &ctx,
                     header,
                     inst,
@@ -496,7 +496,9 @@ impl<E: HostEnvironment, const A: usize> HostPool<E, A> {
                     kernels::ResetRows::Live,
                 );
                 crate::pool::write_agent_masks(outputs, i, header);
-                kernels::observe_instance::<E, A>(header, inst, outputs, i);
+                if !aborted {
+                    kernels::observe_instance::<E, A>(header, inst, outputs, i);
+                }
                 kernels::write_pending(outputs, i, header);
             }
         })?;

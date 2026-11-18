@@ -420,3 +420,283 @@ fn test_host_abort_sync_equals_inline_bit_for_bit() {
         assert_eq!(inline.aborts(), sync.aborts());
     }
 }
+
+// -- aborts in reset ------------------------------------------------------------------
+
+use host_script::{RESET_CODE, RESET_REWARD, TRUNCATE};
+
+fn rewards(out: &Outputs, i: usize) -> Vec<f32> {
+    out.rewards()[i * SLOTS..(i + 1) * SLOTS].to_vec()
+}
+
+/// The row of an aborted reset of instance `i` with `Live` rows (ADR-0065
+/// item 8).
+fn assert_reset_abort_row(out: &Outputs, i: usize, ctx: &str) {
+    assert!(out.aborted()[i].get(), "{ctx}");
+    assert_eq!(
+        out.abort_code()[i],
+        RESET_CODE + u32::try_from(i).unwrap(),
+        "{ctx}"
+    );
+    assert_eq!(flags(out.agent_truncated(), i), [true; 3], "{ctx}");
+    assert_eq!(flags(out.agent_terminated(), i), [false; 3], "{ctx}");
+    assert!(
+        out.episode_truncated()[i].get() && !out.episode_terminated()[i].get(),
+        "{ctx}"
+    );
+    assert_eq!(rewards(out, i), [RESET_REWARD, 0.0, 0.0], "{ctx}");
+    assert_eq!(out.episode_length()[i], 0.0, "{ctx}");
+    assert_eq!(out.episode_return()[i], RESET_REWARD, "{ctx}");
+    assert_eq!(flags(out.acting(), i), [false; 3], "{ctx}");
+    assert!(obs_row(out, i).iter().all(|&b| b == 0), "{ctx}");
+    assert!(mask_row(out, i).iter().all(|m| !m.get()), "{ctx}");
+    assert!(out.pending_reset()[i].get(), "{ctx}");
+}
+
+#[test]
+fn test_host_abort_explicit_reset_row_and_retry() {
+    for sync in [false, true] {
+        for mode in MODES {
+            let ctx = format!("{mode:?} sync={sync}");
+            let shared = Shared::new();
+            let mut p = pool::<0>(&shared, mode, sync);
+            shared.abort_resets(2, 1);
+            let out = p.reset_all(Reseed::Keep).unwrap();
+            assert_reset_abort_row(out, 2, &ctx);
+            for other in [0, 1, 3] {
+                assert!(
+                    !out.aborted()[other].get() && !out.pending_reset()[other].get(),
+                    "{ctx}"
+                );
+            }
+            assert_eq!(p.aborts(), 1, "{ctx}");
+            assert_eq!(Shared::get(&shared.observes, 2), 0, "{ctx}");
+            if mode == AutoReset::Disabled {
+                let err = step(&mut p, &[]).unwrap_err();
+                assert!(
+                    matches!(err, EngineError::PendingReset { .. }),
+                    "{ctx} {err:?}"
+                );
+                continue;
+            }
+            // The next call retries the reset only, with the next episode
+            // index (a reset without a new seed advances it).
+            let steps = Shared::get(&shared.steps, 2);
+            step(&mut p, &[]).unwrap();
+            assert_eq!(Shared::get(&shared.steps, 2), steps, "{ctx}");
+            assert_eq!(shared.episode_index[2].load(Ordering::Relaxed), 1, "{ctx}");
+            let out = p.outputs().unwrap();
+            assert!(!out.aborted()[2].get() && out.abort_code()[2] == 0, "{ctx}");
+            assert!(!out.pending_reset()[2].get(), "{ctx}");
+            assert_eq!(flags(out.agent_truncated(), 2), [false; 3], "{ctx}");
+            assert_eq!(flags(out.acting(), 2), [true; 3], "{ctx}");
+            assert!(obs_row(out, 2).iter().any(|&b| b != 0), "{ctx}");
+        }
+    }
+}
+
+#[test]
+fn test_host_abort_explicit_seed_restarts_the_episode_index() {
+    let shared = Shared::new();
+    let mut p = pool::<0>(&shared, AutoReset::NextStep, false);
+    shared.abort_resets(0, 1);
+    p.reset_all(Reseed::Keep).unwrap();
+    p.reset(&[0], Reseed::Base(Seed::new(77))).unwrap();
+    assert_eq!(shared.episode_index[0].load(Ordering::Relaxed), 0);
+    assert!(!p.outputs().unwrap().pending_reset()[0].get());
+}
+
+#[test]
+fn test_host_abort_next_step_retry_that_aborts_again_keeps_pending() {
+    for sync in [false, true] {
+        let shared = Shared::new();
+        let mut p = pool::<0>(&shared, AutoReset::NextStep, sync);
+        p.reset_all(Reseed::Keep).unwrap();
+        // Instance 1's step aborts; its next two resets abort too.
+        step(&mut p, &[(1, 0, ABORT)]).unwrap();
+        shared.abort_resets(1, 2);
+        step(&mut p, &[]).unwrap();
+        assert_reset_abort_row(p.outputs().unwrap(), 1, "first retry");
+        step(&mut p, &[]).unwrap();
+        assert_reset_abort_row(p.outputs().unwrap(), 1, "second retry");
+        step(&mut p, &[]).unwrap();
+        let out = p.outputs().unwrap();
+        assert!(!out.aborted()[1].get() && !out.pending_reset()[1].get());
+        assert_eq!(p.aborts(), 3);
+    }
+}
+
+#[test]
+fn test_host_abort_same_step_reset_aborts_after_an_aborted_step() {
+    for sync in [false, true] {
+        let shared = Shared::new();
+        let mut p = pool::<0>(&shared, AutoReset::SameStep, sync);
+        p.reset_all(Reseed::Keep).unwrap();
+        shared.abort_resets(0, 1);
+        step(&mut p, &[(0, 1, ABORT)]).unwrap();
+        let out = p.outputs().unwrap();
+        // The row is the step's: its flags, rewards, aborted and code.
+        assert!(out.aborted()[0].get());
+        assert_eq!(out.abort_code()[0], STEP_CODE + 1);
+        assert_eq!(flags(out.agent_truncated(), 0), [true; 3]);
+        assert_eq!(rewards(out, 0), [1.0, 2.0, 3.0]);
+        assert!(obs_row(out, 0).iter().all(|&b| b == 0));
+        assert!(mask_row(out, 0).iter().all(|m| !m.get()));
+        assert_eq!(flags(out.acting(), 0), [false; 3]);
+        assert!(out.pending_reset()[0].get());
+        // An aborted step and its aborted same-call reset count 2.
+        assert_eq!(p.aborts(), 2);
+        // The next call is reset-only: no step, the reset's rewards only.
+        let steps = Shared::get(&shared.steps, 0);
+        step(&mut p, &[]).unwrap();
+        assert_eq!(Shared::get(&shared.steps, 0), steps);
+        let out = p.outputs().unwrap();
+        assert!(!out.aborted()[0].get() && !out.pending_reset()[0].get());
+        assert_eq!(rewards(out, 0), [RESET_REWARD, 0.0, 0.0]);
+        assert_eq!(flags(out.acting(), 0), [true; 3]);
+    }
+}
+
+#[test]
+fn test_host_abort_same_step_retry_that_aborts_gives_the_reset_row() {
+    let shared = Shared::new();
+    let mut p = pool::<0>(&shared, AutoReset::SameStep, false);
+    p.reset_all(Reseed::Keep).unwrap();
+    shared.abort_resets(0, 2);
+    step(&mut p, &[(0, 1, ABORT)]).unwrap();
+    // The retry aborts again: the explicit-reset row, still pending.
+    step(&mut p, &[]).unwrap();
+    assert_reset_abort_row(p.outputs().unwrap(), 0, "retry");
+}
+
+#[test]
+fn test_host_abort_same_step_normal_end_then_reset_aborts() {
+    // Terminated, truncated and the step limit: the row keeps the step's
+    // flags, rewards and real terminal observation, with the reset's code.
+    for (end, limit) in [(TERMINATE, None), (TRUNCATE, None), (NOTHING, Some(1))] {
+        let shared = Shared::new();
+        let mut o = PoolOptions::new(
+            NonZeroU32::new(u32::try_from(N).unwrap()).unwrap(),
+            Seed::new(9),
+        );
+        o.auto_reset = AutoReset::SameStep;
+        o.max_episode_steps = limit.map(|l| NonZeroU32::new(l).unwrap());
+        let mut p = Pool::<0>::new(&ScriptConfig::new(&shared), o).unwrap();
+        p.reset_all(Reseed::Keep).unwrap();
+        shared.abort_resets(3, 1);
+        step(&mut p, &[(3, 0, end)]).unwrap();
+        let out = p.outputs().unwrap();
+        let ctx = format!("{end} {limit:?}");
+        assert!(out.aborted()[3].get(), "{ctx}");
+        assert_eq!(out.abort_code()[3], RESET_CODE + 3, "{ctx}");
+        assert_eq!(rewards(out, 3), [1.0, 2.0, 3.0], "{ctx}");
+        let terminated = end == TERMINATE;
+        assert_eq!(out.episode_terminated()[3].get(), terminated, "{ctx}");
+        assert_eq!(out.episode_truncated()[3].get(), !terminated, "{ctx}");
+        assert_eq!(flags(out.agent_terminated(), 3), [terminated; 3], "{ctx}");
+        let bytes = 3 * 4;
+        let term = &out.terminal_observation(0).unwrap()[3 * SLOTS * bytes..4 * SLOTS * bytes];
+        assert!(
+            term.iter().any(|&b| b != 0),
+            "{ctx}: the real terminal observation"
+        );
+        assert!(obs_row(out, 3).iter().all(|&b| b == 0), "{ctx}");
+        assert!(mask_row(out, 3).iter().all(|m| !m.get()), "{ctx}");
+        assert_eq!(flags(out.acting(), 3), [false; 3], "{ctx}");
+        assert!(out.pending_reset()[3].get(), "{ctx}");
+        let steps = Shared::get(&shared.steps, 3);
+        step(&mut p, &[]).unwrap();
+        assert_eq!(Shared::get(&shared.steps, 3), steps, "{ctx}: reset-only");
+    }
+}
+
+#[test]
+fn test_host_abort_reset_reward_kept_live_discarded_in_same_step() {
+    // Explicit reset: the reward it wrote stays in its row.
+    let shared = Shared::new();
+    let mut p = pool::<0>(&shared, AutoReset::SameStep, false);
+    shared.abort_resets(1, 1);
+    let out = p.reset_all(Reseed::Keep).unwrap();
+    assert_eq!(rewards(out, 1), [RESET_REWARD, 0.0, 0.0]);
+    p.reset_all(Reseed::Keep).unwrap();
+    // A SameStep reset writes scratch rows: its reward is discarded.
+    shared.abort_resets(1, 1);
+    step(&mut p, &[(1, 0, TERMINATE)]).unwrap();
+    assert_eq!(rewards(p.outputs().unwrap(), 1), [1.0, 2.0, 3.0]);
+}
+
+#[test]
+fn test_host_abort_same_step_reset_reports_no_zero_length_episode() {
+    // The same trajectory: SameStep reports one episode end (the step's),
+    // NextStep two (the step's and the aborted retry's zero-length one).
+    let mut ends = Vec::new();
+    for mode in [AutoReset::SameStep, AutoReset::NextStep] {
+        let shared = Shared::new();
+        let mut p = pool::<0>(&shared, mode, false);
+        p.reset_all(Reseed::Keep).unwrap();
+        shared.abort_resets(0, 1);
+        let mut n = 0;
+        let mut zero = 0;
+        for special in [&[(0, 0, TERMINATE)][..], &[], &[]] {
+            step(&mut p, special).unwrap();
+            let out = p.outputs().unwrap();
+            if out.episode_terminated()[0].get() || out.episode_truncated()[0].get() {
+                n += 1;
+                if out.episode_length()[0] == 0.0 {
+                    zero += 1;
+                }
+            }
+        }
+        ends.push((n, zero, p.aborts()));
+    }
+    assert_eq!(ends, [(1, 0, 1), (2, 1, 1)]);
+}
+
+#[test]
+fn test_host_abort_in_reset_sequential_passes_the_turn_check() {
+    let shared = Shared::new();
+    let mut p = pool::<1>(&shared, AutoReset::NextStep, false);
+    shared.abort_resets(0, 1);
+    p.reset_all(Reseed::Keep).unwrap();
+    assert!(!p.is_poisoned());
+    step(&mut p, &[]).unwrap();
+    assert!(!p.is_poisoned());
+}
+
+#[test]
+fn test_host_abort_resets_sync_equals_inline_bit_for_bit() {
+    for mode in [AutoReset::NextStep, AutoReset::SameStep] {
+        let (a, b) = (Shared::new(), Shared::new());
+        let mut inline = pool::<0>(&a, mode, false);
+        let mut sync = pool::<0>(&b, mode, true);
+        for s in [&a, &b] {
+            s.abort_resets(1, 1);
+        }
+        inline.reset_all(Reseed::Keep).unwrap();
+        sync.reset_all(Reseed::Keep).unwrap();
+        assert_eq!(
+            snapshot(inline.outputs().unwrap()),
+            snapshot(sync.outputs().unwrap())
+        );
+        for s in [&a, &b] {
+            s.abort_resets(2, 2);
+            s.abort_resets(3, 1);
+        }
+        let script: [&[(usize, usize, i32)]; 4] = [
+            &[(2, 0, ABORT), (3, 1, TERMINATE)],
+            &[(0, 0, ABORT)],
+            &[],
+            &[],
+        ];
+        for special in script {
+            step(&mut inline, special).unwrap();
+            step(&mut sync, special).unwrap();
+            assert_eq!(
+                snapshot(inline.outputs().unwrap()),
+                snapshot(sync.outputs().unwrap()),
+                "{mode:?}"
+            );
+        }
+        assert_eq!(inline.aborts(), sync.aborts());
+    }
+}

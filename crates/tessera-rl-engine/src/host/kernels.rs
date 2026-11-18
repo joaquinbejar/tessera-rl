@@ -84,9 +84,11 @@ fn step_rows<E: HostEnvironment, const A: usize>(ctx: &HostCtx<'_>, rows: &mut H
     for (i, (header, inst)) in headers.iter_mut().zip(instances.iter_mut()).enumerate() {
         if header.engine().pending_reset.get() {
             // NextStep: reset instead of stepping (validated above).
-            reset_one::<E, A>(ctx, header, inst, None, outputs, i, ResetRows::Live);
+            let aborted = reset_one::<E, A>(ctx, header, inst, None, outputs, i, ResetRows::Live);
             write_agent_masks(outputs, i, header);
-            observe_rows::<E, A, false>(header, inst, outputs, i);
+            if !aborted {
+                observe_rows::<E, A, false>(header, inst, outputs, i);
+            }
             write_pending(outputs, i, header);
             continue;
         }
@@ -110,10 +112,13 @@ fn step_rows<E: HostEnvironment, const A: usize>(ctx: &HostCtx<'_>, rows: &mut H
             save_terminal(outputs, i);
             // Flags, rewards and stats of the ended episode stay set: the
             // reset writes scratch rows.
-            reset_one::<E, A>(ctx, header, inst, None, outputs, i, ResetRows::Scratch);
+            let aborted =
+                reset_one::<E, A>(ctx, header, inst, None, outputs, i, ResetRows::Scratch);
             write_agent_masks(outputs, i, header);
-            // The rows hold the terminal observation: zero them again.
-            observe_rows::<E, A, true>(header, inst, outputs, i);
+            if !aborted {
+                // The rows hold the terminal observation: zero them again.
+                observe_rows::<E, A, true>(header, inst, outputs, i);
+            }
         }
         write_pending(outputs, i, header);
     }
@@ -138,7 +143,7 @@ pub(crate) fn reset_chunk<E: HostEnvironment, const A: usize>(
         } = rows;
         clear_chunk(outputs, headers.len());
         for (i, (header, inst)) in headers.iter_mut().zip(instances.iter_mut()).enumerate() {
-            reset_one::<E, A>(
+            let aborted = reset_one::<E, A>(
                 ctx,
                 header,
                 inst,
@@ -148,7 +153,9 @@ pub(crate) fn reset_chunk<E: HostEnvironment, const A: usize>(
                 ResetRows::Live,
             );
             write_agent_masks(outputs, i, header);
-            observe_rows::<E, A, false>(header, inst, outputs, i);
+            if !aborted {
+                observe_rows::<E, A, false>(header, inst, outputs, i);
+            }
             write_pending(outputs, i, header);
         }
     }
@@ -183,7 +190,7 @@ pub(crate) fn reset_one<E: HostEnvironment, const A: usize>(
     outputs: &mut OutputsView<'_>,
     i: usize,
     rows: ResetRows,
-) {
+) -> bool {
     let initial = ctx.initial;
     let engine = header.engine();
     let mut episode = engine.identity.episode_index();
@@ -212,6 +219,7 @@ pub(crate) fn reset_one<E: HostEnvironment, const A: usize>(
         row.invalid_agent_events = 0;
     }
     let seed = HostSeed::new(identity.seed().get(), identity.episode_index());
+    let mut abort = None;
     match rows {
         ResetRows::Live => {
             let range = i * A..(i + 1) * A;
@@ -244,6 +252,7 @@ pub(crate) fn reset_one<E: HostEnvironment, const A: usize>(
                     spawned_row,
                 ));
                 inst.reset(seed, &mut out);
+                abort = out.aborted();
             }
         }
         ResetRows::Scratch => {
@@ -263,10 +272,69 @@ pub(crate) fn reset_one<E: HostEnvironment, const A: usize>(
                 &mut spawned,
             ));
             inst.reset(seed, &mut out);
+            abort = out.aborted();
         }
     }
     recanonicalize(ctx.fp_resets);
+    if let Some(code) = abort {
+        ctx.aborts.fetch_add(1, Ordering::Relaxed);
+        abort_reset::<E, A>(header, outputs, i, rows, code);
+        return true;
+    }
     update_acting::<E, A>(header, inst);
+    false
+}
+
+/// Applies the abort of instance `i`'s reset (ADR-0065 item 1). The
+/// instance stays pending a reset, no slot acts, and its rows are zeros
+/// with false masks (no `observe`, `mask` or `acting`).
+///
+/// - `Live` rows (an explicit, `NextStep` or retried reset): the row is the
+///   reset's: every live agent (slots `0..initial_agents`) truncated, the
+///   rewards the reset wrote kept, its deaths and spawns discarded, a
+///   zero-length episode and the reset's `abort_code`.
+/// - `Scratch` rows (a `SameStep` reset): the row is the ended step's and
+///   keeps its flags and rewards; it reports the reset's code unless the
+///   step itself aborted, whose code it keeps. No episode is reported for
+///   the reset.
+fn abort_reset<E: HostEnvironment, const A: usize>(
+    header: &mut HostHeader<A>,
+    outputs: &mut OutputsView<'_>,
+    i: usize,
+    rows: ResetRows,
+    code: AbortCode,
+) {
+    for row in header.agents_mut() {
+        row.acting = Bool8::FALSE;
+    }
+    match rows {
+        ResetRows::Live => {
+            let mut total = 0.0f32;
+            for (slot, row) in header.agents_mut().iter_mut().enumerate() {
+                let k = i * A + slot;
+                let reward = outputs.rewards.get(k).copied().unwrap_or(0.0);
+                row.episode_return += reward;
+                total += row.episode_return;
+                set(outputs.died, k, false);
+                set(outputs.spawned, k, false);
+                set(outputs.agent_terminated, k, false);
+                set(outputs.agent_truncated, k, row.alive.get());
+            }
+            let end = Ending {
+                terminated: false,
+                truncated: true,
+            };
+            finish_episode(header, outputs, i, end, 0, total);
+            mark_aborted(outputs, i, code);
+        }
+        ResetRows::Scratch => {
+            header.engine_mut().pending_reset = Bool8::TRUE;
+            if !outputs.aborted.get(i).is_some_and(|f| f.get()) {
+                mark_aborted(outputs, i, code);
+            }
+        }
+    }
+    zero_rows::<E, A>(outputs, i);
 }
 
 /// Where a reset's `StepOut` writes (the `HostEnvironment::reset` doc).
