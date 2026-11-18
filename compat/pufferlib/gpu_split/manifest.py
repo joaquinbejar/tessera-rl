@@ -123,6 +123,7 @@ def build(commit, wheel, wheel_sha256, wheel_source, toolkit, nvcc, cases, modes
         "clock_cpu": clock_cpu,
         "case_cpus": None,
         "rerun_of": None,
+        "wall_clock": "CLOCK_MONOTONIC_RAW",
     }
     if earlier is not None:
         data, digest = earlier

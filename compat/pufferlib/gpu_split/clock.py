@@ -205,13 +205,15 @@ class Sampler:
 
     def sample(self, tag: str) -> dict:
         g0 = guest_clocks()
-        h0 = time.perf_counter()
+        r0 = time.clock_gettime(time.CLOCK_MONOTONIC_RAW)
         hv = self.host.read()
-        h1 = time.perf_counter()
+        r1 = time.clock_gettime(time.CLOCK_MONOTONIC_RAW)
         g1 = guest_clocks()
         host = {"qpc": hv[0], "qpc_freq": hv[1], "utc_ticks": hv[2]} if hv else None
+        # ADR-0064: the host read is bracketed on CLOCK_MONOTONIC_RAW, the
+        # binding guest clock; perf_counter is reported from guest_before/after.
         rec = {"kind": "sample", "i": self.n, "tag": tag, "guest_before": g0, "guest_after": g1,
-               "host": host, "host_bracket_perf": [h0, h1], "rusage": rusage()}  # fmt: skip
+               "host": host, "host_bracket_raw": [r0, r1], "rusage": rusage()}  # fmt: skip
         self.n += 1
         self.write(rec)
         if hv is None and self.host.why:
@@ -227,7 +229,8 @@ class Sampler:
             source = None
         speed = run_ps(PS_CPU_SPEED)
         smi = run_quiet(["nvidia-smi", "--query-gpu=pstate,clocks.gr,clocks.mem", "--format=csv,noheader"]).strip()
-        rec = {"kind": "context", "at": at, "mono": time.monotonic(), "current_clocksource": source,
+        rec = {"kind": "context", "at": at, "raw": time.clock_gettime(time.CLOCK_MONOTONIC_RAW),
+               "mono": time.monotonic(), "current_clocksource": source,
                "cpu_mhz_current_max": speed[:2] or None, "nvidia_smi": smi or None,
                "host_cpu_s": self.host.cpu(), "rusage": rusage()}  # fmt: skip
         self.write(rec)
@@ -303,18 +306,21 @@ def qpc_s(smp) -> float:
     return smp["host"]["qpc"] / smp["host"]["qpc_freq"]
 
 
-def host_perf(smp):
-    h0, h1 = smp["host_bracket_perf"]
+def host_raw(smp):
+    """The host read on the guest's CLOCK_MONOTONIC_RAW: the midpoint of its
+    raw bracket, and half the bracket as a true bound."""
+    h0, h1 = smp["host_bracket_raw"]
     return (h0 + h1) / 2, (h1 - h0) / 2
 
 
 def guest_intervals(samples: list[dict]) -> list[dict]:
     """Consecutive host-read samples merged into intervals of at least
-    MIN_INTERVAL_S QPC seconds. ``perf`` is placed at the host read's
-    midpoint with a true bound; ``mono``, ``raw`` and ``real`` use the whole
-    sample's midpoint, so they are not classified on an interval that starts
-    at the first sample of a tag (ADR-0063 item 3)."""
-    pts = [x for x in samples if x["host"] is not None]
+    MIN_INTERVAL_S QPC seconds. ``raw`` (CLOCK_MONOTONIC_RAW, the binding
+    guest clock under ADR-0064) is placed at the host read's midpoint with a
+    true bound; ``perf``, ``mono`` and ``real`` are reported only, use the
+    whole sample's midpoint, and are not classified on an interval that
+    starts at the first sample of a tag."""
+    pts = [x for x in samples if x["host"] is not None and "host_bracket_raw" in x]
     first = set()
     seen = set()
     for x in pts:
@@ -326,15 +332,15 @@ def guest_intervals(samples: list[dict]) -> list[dict]:
         dq = qpc_s(pts[b]) - qpc_s(pts[a])
         if dq < MIN_INTERVAL_S:
             continue
-        pa, ua = host_perf(pts[a])
-        pb, ub = host_perf(pts[b])
+        pa, ua = host_raw(pts[a])
+        pb, ub = host_raw(pts[b])
         row = {"i": pts[a]["i"], "j": pts[b]["i"], "q0": qpc_s(pts[a]), "q1": qpc_s(pts[b]), "tag": pts[b]["tag"],
-               "perf": (pb - pa) / dq, "bound_perf": (ua + ub) / dq}  # fmt: skip
+               "raw": (pb - pa) / dq, "bound_raw": (ua + ub) / dq}  # fmt: skip
         row["gap"] = dq > MERGE_MAX_S + 1e-6
-        row["band_perf"] = band(row["perf"], row["bound_perf"])
+        row["band_raw"] = band(row["raw"], row["bound_raw"])
         wa = (pts[a]["guest_after"]["perf"] - pts[a]["guest_before"]["perf"]) / 2
         wb = (pts[b]["guest_after"]["perf"] - pts[b]["guest_before"]["perf"]) / 2
-        for k in ("mono", "raw", "real"):
+        for k in ("perf", "mono", "real"):
             row[k] = (mid(pts[b], k) - mid(pts[a], k)) / dq
             row["band_" + k] = "unclassified" if pts[a]["i"] in first else band(row[k], (wa + wb) / dq)
         out.append(row)
@@ -410,18 +416,21 @@ def coverage(lo: float, hi: float, covered: list[tuple[float, float]]) -> dict:
     return {"uncovered_share": sum(gaps) / span, "longest_gap_s": max(gaps, default=0.0), "span_s": span}
 
 
-def mono_to_qpc(samples, mono: float) -> float | None:
-    """A guest monotonic value placed on the QPC axis, by linear
-    interpolation between the two host-read samples around it."""
-    pts = [(mid(x, "mono"), qpc_s(x)) for x in samples if x["host"] is not None]
+def raw_to_qpc(samples, raw: float) -> float | None:
+    """A guest CLOCK_MONOTONIC_RAW value placed on the QPC axis, by linear
+    interpolation between the two host reads around it (ADR-0064)."""
+    pts = [(host_raw(x)[0], qpc_s(x)) for x in samples if x["host"] is not None and "host_bracket_raw" in x]
     for (m0, q0), (m1, q1) in zip(pts, pts[1:]):
-        if m0 <= mono <= m1:
-            return q0 if m1 == m0 else q0 + (mono - m0) * (q1 - q0) / (m1 - m0)
+        if m0 <= raw <= m1:
+            return q0 if m1 == m0 else q0 + (raw - m0) * (q1 - q0) / (m1 - m0)
     return None
 
 
-def nearest(samples, mono: float) -> dict:
-    return min(samples, key=lambda x: abs(mid(x, "mono") - mono))
+def nearest(samples, raw: float) -> dict | None:
+    """The host-read sample whose raw midpoint is closest to ``raw``, or None
+    when no sample carries a raw bracket."""
+    pts = [x for x in samples if x["host"] is not None and "host_bracket_raw" in x]
+    return min(pts, key=lambda x: abs(host_raw(x)[0] - raw)) if pts else None
 
 
 def decide(rows: list[dict], ref: list[dict], manifest: dict, manifest_sha256: str, scope: str,
@@ -487,8 +496,8 @@ def decide(rows: list[dict], ref: list[dict], manifest: dict, manifest_sha256: s
 
     guest = guest_intervals(samples)
     for g in guest:
-        if g["band_perf"] not in ("nominal", "imprecise"):
-            fire("b", f"perf {g['perf']:.6f} on QPC [{g['q0']:.1f}, {g['q1']:.1f}]")
+        if g["band_raw"] not in ("nominal", "imprecise"):
+            fire("b", f"raw {g['raw']:.6f} on QPC [{g['q0']:.1f}, {g['q1']:.1f}]")
     ext = [e for e in external_intervals(ref_points(ref)) if e["q1"] > lo and e["q0"] < hi]
     for e in ext:
         if e["band"] not in ("nominal", "imprecise"):
@@ -500,7 +509,7 @@ def decide(rows: list[dict], ref: list[dict], manifest: dict, manifest_sha256: s
         fire("clocksource", "no clocksource reading")
 
     cov_ext = coverage(lo, hi, [(e["q0"], e["q1"]) for e in ext if e["band"] != "imprecise" and not e["gap"]])
-    cov_guest = coverage(lo, hi, [(g["q0"], g["q1"]) for g in guest if g["band_perf"] != "imprecise" and not g["gap"]])
+    cov_guest = coverage(lo, hi, [(g["q0"], g["q1"]) for g in guest if g["band_raw"] != "imprecise" and not g["gap"]])
     for cond, cov in (("d1", cov_ext), ("d2", cov_guest)):
         if cov["uncovered_share"] > COVER_MAX_SHARE or cov["longest_gap_s"] > COVER_MAX_GAP_S:
             fire(cond, f"uncovered {cov['uncovered_share']:.4f}, longest {cov['longest_gap_s']:.1f} s")
@@ -534,28 +543,32 @@ def decide(rows: list[dict], ref: list[dict], manifest: dict, manifest_sha256: s
         "external_intervals": len(ext),
         "external_precise": sum(1 for e in ext if e["band"] != "imprecise" and not e["gap"]),
         "coverage": {"external": cov_ext, "guest": cov_guest},
-        "worst_perf": max((abs(g["perf"] - 1) for g in guest if g["band_perf"] != "imprecise"), default=None),
+        "binding_guest_clock": "CLOCK_MONOTONIC_RAW",
+        "worst_raw": max((abs(g["raw"] - 1) for g in guest if g["band_raw"] != "imprecise"), default=None),
         "external": ext,
         "reported": {
             "utc": utc_windows(samples),
             "clocksource": sources,
             "cpu_mhz_current_max": [c.get("cpu_mhz_current_max") for c in contexts],
-            "other_guest_clocks": {k: sorted({g["band_" + k] for g in guest}) for k in ("mono", "raw", "real")},
+            "other_guest_clocks": {k: sorted({g["band_" + k] for g in guest}) for k in ("perf", "mono", "real")},
+            "perf_worst": max((abs(g["perf"] - 1) for g in guest if g["band_perf"] not in ("unclassified", "imprecise")),
+                              default=None),  # fmt: skip
         },
     }
     if scope == "pre-check":
         out["decision"] = "go" if outcome == "clock-valid" and out["external_precise"] >= 1 else "stop"
     if status and host:
-        t0, t1 = status.get("timed_start_mono"), status.get("timed_end_mono")
+        t0, t1 = status.get("timed_start_raw"), status.get("timed_end_raw")
         if t0 is not None and t1 is not None and t1 > t0:
             a, b = nearest(samples, t0), nearest(samples, t1)
-            span = mid(b, "mono") - mid(a, "mono")
-            cpu = sum(b["rusage"]) - sum(a["rusage"])
-            share = cpu / span if span > 0 else None
-            out["timed_qpc_s"] = [mono_to_qpc(samples, t0), mono_to_qpc(samples, t1)]
+            share = None
+            if a is not None and b is not None:
+                span = host_raw(b)[0] - host_raw(a)[0]
+                share = (sum(b["rusage"]) - sum(a["rusage"])) / span if span > 0 else None
+            out["timed_qpc_s"] = [raw_to_qpc(samples, t0), raw_to_qpc(samples, t1)]
             out["cpu"] = {"sampler_share": share, "budget": CPU_BUDGET,
                           "over_budget": share is not None and share > CPU_BUDGET}  # fmt: skip
-    hc = [(c["mono"], c["host_cpu_s"]) for c in contexts if c.get("host_cpu_s") is not None]
+    hc = [(c["raw"], c["host_cpu_s"]) for c in contexts if c.get("host_cpu_s") is not None and "raw" in c]
     rc = [(r["t"], r["cpu_s"]) for r in ref if r.get("kind") == "cpu" and r.get("cpu_s") is not None]
     out.setdefault("cpu", {})
     # The host reader's share spans its first to last context row (start of

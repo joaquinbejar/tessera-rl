@@ -44,11 +44,11 @@ The configuration is PufferLib's `cartpole.ini` over `default.ini`:
   - the intervals charged to a parent, from `eval` or `train` starting to its first child, are reported apart as `parent_overhead_s`, not as phases;
   - so the child categories plus that overhead add up to at most the run's wall, and the rest is `unattributed_s`.
 
-  The synchronize wait at each call fires before `perf_counter` is read, so it is charged to the phase before the call, the one that queued the GPU work. `parent_overhead_s` holds only the small gaps before a parent's first child, near zero by construction; it does not measure the `eval` or `train` phase. Profiling runs every epoch (frequency 1, recorded as `profile_frequency`), so the per-epoch cost of the synchronize points and the timer reads is part of this run's wall.
+  The synchronize wait at each call fires before the wall clock (`wall_now()`, `CLOCK_MONOTONIC_RAW`) is read, so it is charged to the phase before the call, the one that queued the GPU work. `parent_overhead_s` holds only the small gaps before a parent's first child, near zero by construction; it does not measure the `eval` or `train` phase. Profiling runs every epoch (frequency 1, recorded as `profile_frequency`), so the per-epoch cost of the synchronize points and the timer reads is part of this run's wall.
 
   This flat attribution is an explicit instrumentation amendment to the plan's wording ("exclusive categories, children only"). It keeps the plan's sync points.
 
-  This is needed because PufferLib's own `Profile` is not exclusive. Inside the minibatch loop `train_misc` is pushed with `nest=True` without popping the entry before it, so its numbers overlap. They are kept as `pufferlib_profile_s_not_additive`, for reference only. The flat attribution hooks the same synchronize points as the patch: it calls the patched `Profile` first, then reads `perf_counter`.
+  This is needed because PufferLib's own `Profile` is not exclusive. Inside the minibatch loop `train_misc` is pushed with `nest=True` without popping the entry before it, so its numbers overlap. They are kept as `pufferlib_profile_s_not_additive`, for reference only. The flat attribution hooks the same synchronize points as the patch: it calls the patched `Profile` first, then reads the wall clock (`wall_now()`, `CLOCK_MONOTONIC_RAW`). The patched `Profile`'s own timers keep `perf_counter`; they are descriptive only.
 
   Synchronising changes overlap and scheduling, so `sync` is a cost breakdown of a different run, not a share of `e2e`.
 - **`env`:** environment only. The same vector environment and agent count, random actions and no policy:
@@ -87,6 +87,8 @@ make puffer-test            # builds the wheel; runs compat/pufferlib/tests, thi
 The tests run on CPU at `--scale small` (1024 agents, minibatch 8192). That scale is for the tests only.
 
 ## The ADR-0061 gate attempt
+
+**Wall clock (ADR-0064).** Every timed boundary in `split.py` reads `CLOCK_MONOTONIC_RAW` through `wall_now()`, with no fallback, and every result row says so in `wall_clock`. The guest's time agents (timesyncd, and chrony in WSL's system distro) slew `perf_counter`, not the raw counter. `run.py` stamps the timed span on raw (`timed_start_raw`, `timed_end_raw`); `clock.py` brackets each host read on raw and binds (b) and (d2) on raw against QPC, with `perf_counter`, `monotonic` and `realtime` reported only; `summarise.py` refuses a manifest, a clock verdict or any row not on raw.
 
 ADR-0061 (Accepted) fixes the phase 3 gate protocol; this harness implements it.
 

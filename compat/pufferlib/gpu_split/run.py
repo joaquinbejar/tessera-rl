@@ -37,8 +37,8 @@ goes to ``--rows`` (created new, mode 0600) and nothing about a run reaches
 stdout: stdout carries ``started manifest=<sha256>``, an ``alive`` heartbeat
 every 60 s without counts, and ``rows sealed: <sha256>`` at the end.
 ``--status`` holds only ``rows_sha256``, ``manifest_sha256``,
-``timed_start_mono`` (guest ``time.monotonic()`` just before the first run,
-written at that moment) and ``timed_end_mono`` (just after the last run or
+``timed_start_raw`` (guest ``CLOCK_MONOTONIC_RAW`` just before the first run,
+written at that moment) and ``timed_end_raw`` (just after the last run or
 the stop). No summary is written: ``summarise.py`` computes it after the
 clock verdict has been sent (docs/reviews/152-adr0063-harness-plan.md §2.1). A manifest attempt also refuses ``--split-args``, a
 ``--wheel`` path absent from ``--python`` and a ``git rev-parse HEAD`` other
@@ -73,6 +73,7 @@ SPLIT = os.path.join(HERE, "split.py")
 CASES = ("ocean-serial", "ocean-mp", "tessera-w1", "tessera-w2")
 MODES = ("e2e", "sync", "env")
 EXIT_REFUSED = 7
+WALL_CLOCK = "CLOCK_MONOTONIC_RAW"  # ADR-0064
 HEARTBEAT_S = 60.0
 
 sys.path.insert(0, HERE)
@@ -288,6 +289,10 @@ def main(argv=None) -> int:
         if os.path.exists(args.rows) or os.path.exists(args.status):
             print("REFUSED: --rows or --status already exists", flush=True)
             return EXIT_REFUSED
+        if getattr(time, "CLOCK_MONOTONIC_RAW", None) is None or m.get("wall_clock") != WALL_CLOCK:
+            # ADR-0064: a manifest attempt times on CLOCK_MONOTONIC_RAW, with no fallback.
+            print(f"REFUSED: a manifest attempt needs {WALL_CLOCK} on this platform and in the manifest", flush=True)
+            return EXIT_REFUSED
         return sealed(args, runs, m, msha)
     else:
         if not args.out or args.rows or args.status:
@@ -317,7 +322,7 @@ def sealed(args, runs, m, msha) -> int:
     progress on stdout, no summary."""
     fd = os.open(args.rows, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     os.close(fd)
-    st = {"rows_sha256": None, "manifest_sha256": msha, "timed_start_mono": None, "timed_end_mono": None}
+    st = {"rows_sha256": None, "manifest_sha256": msha, "timed_start_raw": None, "timed_end_raw": None}
     print(f"started manifest={msha}", flush=True)
     stop = threading.Event()
 
@@ -330,11 +335,11 @@ def sealed(args, runs, m, msha) -> int:
     rows: list[dict] = []
     status = 0
     try:
-        st["timed_start_mono"] = time.monotonic()
+        st["timed_start_raw"] = time.clock_gettime(time.CLOCK_MONOTONIC_RAW)
         write_status(args.status, st)
         status = drive(args, runs, rows, msha, args.device == "cuda", sealed_rows=args.rows)
     finally:
-        st["timed_end_mono"] = time.monotonic()
+        st["timed_end_raw"] = time.clock_gettime(time.CLOCK_MONOTONIC_RAW)
         stop.set()
         beat.join()
         st["rows_sha256"] = manifestmod.file_sha256(args.rows)
