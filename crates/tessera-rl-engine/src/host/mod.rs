@@ -58,7 +58,7 @@ pub const MAX_HOST_HEADS: usize = 4096;
 /// const AGENTS: usize = 256;
 /// use tessera_rl_core::io::{Actions, ObsWriter};
 /// use tessera_rl_core::space::Space;
-/// use tessera_rl_core::{AgentSlot, EnvConfig, HostEnvironment, HostError, HostSeed, SpaceError, StepOut};
+/// use tessera_rl_core::{AgentSlot, EnvConfig, HostEnvironment, HostError, HostOut, HostSeed, SpaceError};
 /// use tessera_rl_engine::{HostPool, PoolOptions};
 /// use tessera_rl_num::identity::Seed;
 ///
@@ -73,8 +73,8 @@ pub const MAX_HOST_HEADS: usize = 4096;
 ///     fn new(_: &Cfg) -> Result<Self, HostError> { Ok(Self) }
 ///     fn observation_space(_: &Cfg) -> Result<Space, SpaceError> { Ok(Space::Discrete { n: 2 }) }
 ///     fn action_space(_: &Cfg) -> Result<Space, SpaceError> { Ok(Space::Discrete { n: 2 }) }
-///     fn reset(&mut self, _: HostSeed, _: &mut StepOut<'_>) {}
-///     fn step(&mut self, _: &Actions<'_, ()>, _: &mut StepOut<'_>) {}
+///     fn reset(&mut self, _: HostSeed, _: &mut HostOut<'_>) {}
+///     fn step(&mut self, _: &Actions<'_, ()>, _: &mut HostOut<'_>) {}
 ///     fn observe(&self, _: AgentSlot, _: &mut ObsWriter<'_, '_, ()>) {}
 /// }
 /// let options = PoolOptions::new(core::num::NonZeroU32::MIN, Seed::new(0));
@@ -87,7 +87,7 @@ pub const MAX_HOST_HEADS: usize = 4096;
 /// const AGENTS: usize = 257;
 /// use tessera_rl_core::io::{Actions, ObsWriter};
 /// use tessera_rl_core::space::Space;
-/// use tessera_rl_core::{AgentSlot, EnvConfig, HostEnvironment, HostError, HostSeed, SpaceError, StepOut};
+/// use tessera_rl_core::{AgentSlot, EnvConfig, HostEnvironment, HostError, HostOut, HostSeed, SpaceError};
 /// use tessera_rl_engine::{HostPool, PoolOptions};
 /// use tessera_rl_num::identity::Seed;
 ///
@@ -102,8 +102,8 @@ pub const MAX_HOST_HEADS: usize = 4096;
 ///     fn new(_: &Cfg) -> Result<Self, HostError> { Ok(Self) }
 ///     fn observation_space(_: &Cfg) -> Result<Space, SpaceError> { Ok(Space::Discrete { n: 2 }) }
 ///     fn action_space(_: &Cfg) -> Result<Space, SpaceError> { Ok(Space::Discrete { n: 2 }) }
-///     fn reset(&mut self, _: HostSeed, _: &mut StepOut<'_>) {}
-///     fn step(&mut self, _: &Actions<'_, ()>, _: &mut StepOut<'_>) {}
+///     fn reset(&mut self, _: HostSeed, _: &mut HostOut<'_>) {}
+///     fn step(&mut self, _: &Actions<'_, ()>, _: &mut HostOut<'_>) {}
 ///     fn observe(&self, _: AgentSlot, _: &mut ObsWriter<'_, '_, ()>) {}
 /// }
 /// let options = PoolOptions::new(core::num::NonZeroU32::MIN, Seed::new(0));

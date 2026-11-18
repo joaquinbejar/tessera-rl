@@ -24,9 +24,9 @@ use thiserror::Error;
 use crate::agent::{AgentSlot, TurnStructure};
 use crate::env::EnvConfig;
 use crate::error::{ConfigError, SpaceError};
+use crate::host_out::HostOut;
 use crate::io::{Actions, MaskWriter, ObsWriter};
 use crate::space::Space;
-use crate::step_out::StepOut;
 
 /// The seed of one reset of one instance, after the engine applied the
 /// seeding rules of ADR-0007 (`pool_seed + i`, `reset(seed=s)` gives
@@ -168,11 +168,13 @@ pub trait HostEnvironment: Send + Sized + 'static {
     ///
     /// An episode end reported through `out` is ignored in every case, and
     /// so are the `died` and `spawned` flags: they never change which agent
-    /// slots are alive after a reset (`0..initial_agents`).
-    fn reset(&mut self, seed: HostSeed, out: &mut StepOut<'_>);
+    /// slots are alive after a reset (`0..initial_agents`). A reset may
+    /// abort ([`HostOut::abort`]): the instance then stays pending a reset.
+    fn reset(&mut self, seed: HostSeed, out: &mut HostOut<'_>);
 
-    /// Applies one step of validated actions.
-    fn step(&mut self, actions: &Actions<'_, ()>, out: &mut StepOut<'_>);
+    /// Applies one step of validated actions. `out.abort(code)` ends the
+    /// episode as aborted ([`HostOut`], ADR-0065).
+    fn step(&mut self, actions: &Actions<'_, ()>, out: &mut HostOut<'_>);
 
     /// Writes `agent`'s observation into leaves that are zero on entry.
     fn observe(&self, agent: AgentSlot, obs: &mut ObsWriter<'_, '_, ()>);

@@ -10,7 +10,7 @@ use core::sync::atomic::{AtomicU64, Ordering};
 
 use tessera_rl_core::io::{Actions, MaskWriter, ObsWriter};
 use tessera_rl_core::{
-    AgentSlot, Bool8, EpisodeEnd, HostEnvironment, HostSeed, NoAdaptive, RecordHeader,
+    AgentSlot, Bool8, EpisodeEnd, HostEnvironment, HostOut, HostSeed, NoAdaptive, RecordHeader,
     RecordLayout, StepOut, TurnStructure,
 };
 use tessera_rl_num::fp;
@@ -208,7 +208,13 @@ pub(crate) fn reset_one<E: HostEnvironment, const A: usize>(
                 died.get_mut(range.clone()),
                 spawned.get_mut(range),
             ) {
-                let mut out = StepOut::new(reward_row, term_row, trunc_row, died_row, spawned_row);
+                let mut out = HostOut::new(StepOut::new(
+                    reward_row,
+                    term_row,
+                    trunc_row,
+                    died_row,
+                    spawned_row,
+                ));
                 inst.reset(seed, &mut out);
             }
         }
@@ -221,8 +227,13 @@ pub(crate) fn reset_one<E: HostEnvironment, const A: usize>(
                 [Bool8::FALSE; A],
                 [Bool8::FALSE; A],
             );
-            let mut out =
-                StepOut::new(&mut rewards, &mut term, &mut trunc, &mut died, &mut spawned);
+            let mut out = HostOut::new(StepOut::new(
+                &mut rewards,
+                &mut term,
+                &mut trunc,
+                &mut died,
+                &mut spawned,
+            ));
             inst.reset(seed, &mut out);
         }
     }
@@ -292,7 +303,13 @@ fn step_one<E: HostEnvironment, const A: usize>(
         ) else {
             return;
         };
-        let mut out = StepOut::new(reward_row, term_row, trunc_row, died_row, spawned_row);
+        let mut out = HostOut::new(StepOut::new(
+            reward_row,
+            term_row,
+            trunc_row,
+            died_row,
+            spawned_row,
+        ));
         inst.step(actions, &mut out);
         let end = out.episode_end();
         recanonicalize(fp_resets);

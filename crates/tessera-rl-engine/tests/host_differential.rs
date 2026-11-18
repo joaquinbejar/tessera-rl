@@ -31,8 +31,8 @@ use common::{CountConfig, CountObs, Counter, Counts};
 use tessera_rl_core::io::{Actions, ObsWriter};
 use tessera_rl_core::space::Space;
 use tessera_rl_core::{
-    AgentSlot, Environment, HostEnvironment, HostError, HostSeed, NoAdaptive, RecordHeader,
-    SpaceError, StateInit, StepOut, Tier, TurnStructure,
+    AgentSlot, Environment, HostEnvironment, HostError, HostOut, HostSeed, NoAdaptive,
+    RecordHeader, SpaceError, StateInit, StepOut, Tier, TurnStructure,
 };
 use tessera_rl_engine::{
     ActionInput, AutoReset, EnvPool, HostPool, Outputs, PoolOptions, Reseed, SyncOptions,
@@ -135,7 +135,7 @@ where
         E::action_space(cfg)
     }
 
-    fn reset(&mut self, seed: HostSeed, _: &mut StepOut<'_>) {
+    fn reset(&mut self, seed: HostSeed, _: &mut HostOut<'_>) {
         self.identity = RngIdentity::from_parts(
             Seed::new(seed.seed()),
             BranchSalt::new(0),
@@ -148,7 +148,7 @@ where
         E::reset(&self.cfg, &mut rng, &mut self.state);
     }
 
-    fn step(&mut self, actions: &Actions<'_, ()>, out: &mut StepOut<'_>) {
+    fn step(&mut self, actions: &Actions<'_, ()>, out: &mut HostOut<'_>) {
         let id = self.identity;
         self.identity = RngIdentity::from_parts(
             id.seed(),

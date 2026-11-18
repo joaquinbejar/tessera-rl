@@ -16,7 +16,7 @@ use tessera_rl_core::io::{Actions, ObsWriter};
 use tessera_rl_core::leaf::LeafId;
 use tessera_rl_core::space::{BoxBounds, DType, Space};
 use tessera_rl_core::{
-    AgentSlot, EnvConfig, EpisodeEnd, HostEnvironment, HostError, HostSeed, SpaceError, StepOut,
+    AgentSlot, EnvConfig, EpisodeEnd, HostEnvironment, HostError, HostOut, HostSeed, SpaceError,
 };
 use tessera_rl_num::math;
 
@@ -135,7 +135,7 @@ impl HostEnvironment for HostCartPole {
         clippy::cast_precision_loss,
         reason = "53 random bits to a unit f64, exactly"
     )]
-    fn reset(&mut self, seed: HostSeed, _: &mut StepOut<'_>) {
+    fn reset(&mut self, seed: HostSeed, _: &mut HostOut<'_>) {
         let mut s = seed.seed() ^ (u64::from(seed.episode_index()) << 32);
         for v in &mut self.s {
             let unit = (splitmix(&mut s) >> 11) as f64 / (1_u64 << 53) as f64;
@@ -143,7 +143,7 @@ impl HostEnvironment for HostCartPole {
         }
     }
 
-    fn step(&mut self, actions: &Actions<'_, ()>, out: &mut StepOut<'_>) {
+    fn step(&mut self, actions: &Actions<'_, ()>, out: &mut HostOut<'_>) {
         let push_right = actions.discrete(AgentSlot::FIRST, 0) == Some(1);
         self.s = physics_step(self.s, push_right);
         out.set_reward(AgentSlot::FIRST, 1.0);

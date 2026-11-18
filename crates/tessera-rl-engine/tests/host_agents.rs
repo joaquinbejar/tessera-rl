@@ -15,7 +15,7 @@ use core::num::NonZeroU32;
 use tessera_rl_core::io::{Actions, ObsWriter};
 use tessera_rl_core::space::Space;
 use tessera_rl_core::{
-    AgentSlot, EnvConfig, HostEnvironment, HostError, HostSeed, SpaceError, StepOut,
+    AgentSlot, EnvConfig, HostEnvironment, HostError, HostOut, HostSeed, SpaceError,
 };
 use tessera_rl_engine::{ActionInput, EngineError, HostPool, PoolOptions, Reseed};
 use tessera_rl_num::identity::Seed;
@@ -61,9 +61,9 @@ impl<const S: bool> HostEnvironment for Squad<S> {
         Ok(Space::Discrete { n: 8 })
     }
 
-    fn reset(&mut self, _: HostSeed, _: &mut StepOut<'_>) {}
+    fn reset(&mut self, _: HostSeed, _: &mut HostOut<'_>) {}
 
-    fn step(&mut self, actions: &Actions<'_, ()>, out: &mut StepOut<'_>) {
+    fn step(&mut self, actions: &Actions<'_, ()>, out: &mut HostOut<'_>) {
         for slot in 0..SLOTS {
             let agent = AgentSlot::new(u16::try_from(slot).unwrap(), SLOTS).unwrap();
             let a = actions.discrete(agent, 0).unwrap_or(0);
