@@ -787,6 +787,53 @@ pub(crate) fn is_instance_of(r: Ref<'_>, ty: *mut ffi::PyObject) -> bool {
     r.is_exact(ty.cast())
 }
 
+/// The exact built-in type of a value, for decoding (no exception and no
+/// Python code either way): subclasses are [`Kind::Other`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Kind {
+    /// `True` or `False`.
+    Bool,
+    /// An exact `int` (not a `bool`).
+    Int,
+    /// An exact `float`.
+    Float,
+    /// An exact `str`.
+    Str,
+    /// An exact `dict`.
+    Dict,
+    /// `None`.
+    None,
+    /// Anything else.
+    Other,
+}
+
+/// The exact kind of `r`.
+#[must_use]
+pub fn kind(r: Ref<'_>) -> Kind {
+    let ptr = r.as_ptr();
+    // SAFETY: the address of the `True` singleton; nothing is read.
+    let yes = unsafe { ffi::Py_True() };
+    // SAFETY: the address of the `False` singleton.
+    let no = unsafe { ffi::Py_False() };
+    // SAFETY: the address of the `None` singleton.
+    let none = unsafe { ffi::Py_None() };
+    if ptr == yes || ptr == no {
+        Kind::Bool
+    } else if ptr == none {
+        Kind::None
+    } else if r.is_exact(&raw mut ffi::PyLong_Type) {
+        Kind::Int
+    } else if r.is_exact(&raw mut ffi::PyFloat_Type) {
+        Kind::Float
+    } else if r.is_exact(&raw mut ffi::PyUnicode_Type) {
+        Kind::Str
+    } else if r.is_exact(&raw mut ffi::PyDict_Type) {
+        Kind::Dict
+    } else {
+        Kind::Other
+    }
+}
+
 /// Whether `r` is an exact `list` (no exception either way).
 #[must_use]
 pub fn is_list(r: Ref<'_>) -> bool {
