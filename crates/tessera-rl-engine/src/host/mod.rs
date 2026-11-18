@@ -131,6 +131,8 @@ pub struct HostPool<E: HostEnvironment, const A: usize> {
     poisoned: bool,
     sync: Option<SyncRuntime>,
     fp_resets: AtomicU64,
+    /// Aborts applied (ADR-0065 item 1).
+    aborts: AtomicU64,
     #[cfg(feature = "debug-checks")]
     allocs: crate::sys::alloc_track::AllocTally,
     #[cfg(feature = "debug-checks")]
@@ -257,6 +259,7 @@ impl<E: HostEnvironment, const A: usize> HostPool<E, A> {
             poisoned: false,
             sync: None,
             fp_resets: AtomicU64::new(0),
+            aborts: AtomicU64::new(0),
             #[cfg(feature = "debug-checks")]
             allocs: crate::sys::alloc_track::AllocTally::default(),
             #[cfg(feature = "debug-checks")]
@@ -324,6 +327,15 @@ impl<E: HostEnvironment, const A: usize> HostPool<E, A> {
         self.fp_resets.load(Ordering::Relaxed)
     }
 
+    /// Aborts the engine applied since construction (ADR-0065 item 1): one
+    /// per aborting `step` and one per aborting `reset`, so one instance
+    /// adds at most 2 in one call (an aborted step and its aborted
+    /// same-call reset).
+    #[must_use]
+    pub fn aborts(&self) -> u64 {
+        self.aborts.load(Ordering::Relaxed)
+    }
+
     /// `debug-checks`: allocations counted in the host code of this pool's
     /// chunks since construction, with the engine's `TrackingAllocator`
     /// installed. A statistic: it never fails a call (ADR-0062 item 4).
@@ -375,6 +387,7 @@ impl<E: HostEnvironment, const A: usize> HostPool<E, A> {
             options,
             initial,
             fp_resets,
+            aborts,
             #[cfg(feature = "debug-checks")]
             allocs,
             ..
@@ -385,6 +398,7 @@ impl<E: HostEnvironment, const A: usize> HostPool<E, A> {
             auto_reset: options.auto_reset,
             initial: *initial,
             fp_resets,
+            aborts,
             #[cfg(feature = "debug-checks")]
             allocs,
         };
@@ -448,6 +462,7 @@ impl<E: HostEnvironment, const A: usize> HostPool<E, A> {
             options,
             initial,
             fp_resets,
+            aborts,
             #[cfg(feature = "debug-checks")]
             allocs,
             ..
@@ -458,6 +473,7 @@ impl<E: HostEnvironment, const A: usize> HostPool<E, A> {
             auto_reset: options.auto_reset,
             initial: *initial,
             fp_resets,
+            aborts,
             #[cfg(feature = "debug-checks")]
             allocs,
         };
@@ -530,6 +546,7 @@ impl<E: HostEnvironment, const A: usize> HostPool<E, A> {
             options,
             initial,
             fp_resets,
+            aborts,
             #[cfg(feature = "debug-checks")]
             allocs,
             ..
@@ -540,6 +557,7 @@ impl<E: HostEnvironment, const A: usize> HostPool<E, A> {
             auto_reset: options.auto_reset,
             initial: *initial,
             fp_resets,
+            aborts,
             #[cfg(feature = "debug-checks")]
             allocs,
         };

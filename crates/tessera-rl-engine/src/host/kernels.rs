@@ -10,8 +10,8 @@ use core::sync::atomic::{AtomicU64, Ordering};
 
 use tessera_rl_core::io::{Actions, MaskWriter, ObsWriter};
 use tessera_rl_core::{
-    AgentSlot, Bool8, EpisodeEnd, HostEnvironment, HostOut, HostSeed, NoAdaptive, RecordHeader,
-    RecordLayout, StepOut, TurnStructure,
+    AbortCode, AgentSlot, Bool8, EpisodeEnd, HostEnvironment, HostOut, HostSeed, NoAdaptive,
+    RecordHeader, RecordLayout, StepOut, TurnStructure,
 };
 use tessera_rl_num::fp;
 use tessera_rl_num::identity::{RngIdentity, Seed};
@@ -40,6 +40,8 @@ pub(crate) struct HostCtx<'a> {
     pub(crate) initial: usize,
     /// Times a host chunk left the thread's FP controls non-canonical.
     pub(crate) fp_resets: &'a AtomicU64,
+    /// Aborts the engine applied (ADR-0065 item 1).
+    pub(crate) aborts: &'a AtomicU64,
     /// The pool's host allocation tally (ADR-0062 item 4).
     #[cfg(feature = "debug-checks")]
     pub(crate) allocs: &'a crate::sys::alloc_track::AllocTally,
@@ -95,8 +97,15 @@ fn step_rows<E: HostEnvironment, const A: usize>(ctx: &HostCtx<'_>, rows: &mut H
             continuous.get(first * ch..(first + A) * ch).unwrap_or(&[]),
             ch,
         );
-        step_one::<E, A>(header, inst, &view, outputs, i, ctx.limit, ctx.fp_resets);
-        observe_rows::<E, A, false>(header, inst, outputs, i);
+        let aborted = step_one::<E, A>(header, inst, &view, outputs, i, ctx.limit, ctx.fp_resets);
+        if aborted {
+            ctx.aborts.fetch_add(1, Ordering::Relaxed);
+            // No `observe` or `mask` on an aborted state: zero rows (the
+            // observation rows were zeroed by `clear_chunk`), false masks.
+            zero_rows::<E, A>(outputs, i);
+        } else {
+            observe_rows::<E, A, false>(header, inst, outputs, i);
+        }
         if ctx.auto_reset == AutoReset::SameStep && header.engine().pending_reset.get() {
             save_terminal(outputs, i);
             // Flags, rewards and stats of the ended episode stay set: the
@@ -298,7 +307,7 @@ fn step_one<E: HostEnvironment, const A: usize>(
     i: usize,
     limit: Option<u32>,
     fp_resets: &AtomicU64,
-) {
+) -> bool {
     let range = i * A..(i + 1) * A;
     let t = header.engine().episode_steps.saturating_add(1);
     let episode = header.engine().identity.episode_index();
@@ -320,7 +329,7 @@ fn step_one<E: HostEnvironment, const A: usize>(
             died.get_mut(range.clone()),
             spawned.get_mut(range),
         ) else {
-            return;
+            return false;
         };
         let mut out = HostOut::new(StepOut::new(
             reward_row,
@@ -330,10 +339,15 @@ fn step_one<E: HostEnvironment, const A: usize>(
             spawned_row,
         ));
         inst.step(actions, &mut out);
-        let end = out.episode_end();
+        let end = (out.episode_end(), out.aborted());
         recanonicalize(fp_resets);
         end
     };
+    let (end, abort) = end;
+    if let Some(code) = abort {
+        abort_step::<A>(header, outputs, i, t, code);
+        return true;
+    }
     // TimeLimit semantics (SPEC 5.4), as in `EnvPool`.
     let end = Ending {
         terminated: end == Some(EpisodeEnd::Terminated),
@@ -396,6 +410,71 @@ fn step_one<E: HostEnvironment, const A: usize>(
         finish_episode(header, outputs, i, end, t, total);
     }
     write_agent_masks(outputs, i, header);
+    false
+}
+
+/// Applies the abort of instance `i`'s step `t` (ADR-0065 item 1): the
+/// episode ends with every agent alive on entry truncated and none
+/// terminated, the step's rewards are kept, its deaths and spawns are
+/// discarded (never applied, not charged), and no slot acts. The instance
+/// is pending a reset.
+fn abort_step<const A: usize>(
+    header: &mut HostHeader<A>,
+    outputs: &mut OutputsView<'_>,
+    i: usize,
+    t: u32,
+    code: AbortCode,
+) {
+    header.engine_mut().episode_steps = t;
+    let mut total = 0.0f32;
+    for (slot, row) in header.agents_mut().iter_mut().enumerate() {
+        let k = i * A + slot;
+        let reward = outputs.rewards.get(k).copied().unwrap_or(0.0);
+        row.episode_return += reward;
+        total += row.episode_return;
+        set(outputs.died, k, false);
+        set(outputs.spawned, k, false);
+        set(outputs.agent_terminated, k, false);
+        set(outputs.agent_truncated, k, row.alive.get());
+        row.acting = Bool8::FALSE;
+    }
+    let end = Ending {
+        terminated: false,
+        truncated: true,
+    };
+    finish_episode(header, outputs, i, end, t, total);
+    write_agent_masks(outputs, i, header);
+    mark_aborted(outputs, i, code);
+}
+
+/// Sets instance `i`'s `aborted` and `abort_code` outputs.
+fn mark_aborted(outputs: &mut OutputsView<'_>, i: usize, code: AbortCode) {
+    set(outputs.aborted, i, true);
+    if let Some(c) = outputs.abort_code.get_mut(i) {
+        *c = code.get();
+    }
+}
+
+/// Zeroes instance `i`'s observation rows and sets its masks false: the
+/// rows of an aborted state, never observed (ADR-0065 item 1).
+fn zero_rows<E: HostEnvironment, const A: usize>(outputs: &mut OutputsView<'_>, i: usize) {
+    let OutputsView {
+        observations,
+        leaf_bytes,
+        masks,
+        mask_len,
+        ..
+    } = outputs;
+    for (buf, &bytes) in observations.iter_mut().zip(leaf_bytes.iter()) {
+        if let Some(rows) = buf.get_mut(i * A * bytes..(i + 1) * A * bytes) {
+            rows.fill(0);
+        }
+    }
+    if E::MASKS
+        && let Some(m) = masks.get_mut(i * A * *mask_len..(i + 1) * A * *mask_len)
+    {
+        m.fill(Bool8::FALSE);
+    }
 }
 
 /// `observe_rows` for rows that may hold other bytes (an explicit reset).
