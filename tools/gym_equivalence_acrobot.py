@@ -10,7 +10,9 @@ policy are injected on both sides (``import_record``: the header then
 
 - next state: every component within 4 ulps or 1e-12 relative;
 - observation (float32): within one float32 ulp of the reference's
-  (they come from different sine and cosine implementations);
+  (they come from different sine and cosine implementations), or, for a
+  sine or cosine component, within the angle difference the state check
+  accepted plus float32 rounding (``obs_close``);
 - reward and terminated: exact, except when the reference height lies
   within 1e-9 of the threshold 1.0, counted, not gated;
 - truncated: always false.
@@ -84,6 +86,47 @@ def obs_mismatch(index: int, state, ours, ref) -> dict:
                 }
             )
     return {"index": index, "state": [float.hex(float(v)) for v in state], "components": components}
+
+
+#: Observation components that are a sine or cosine of a state angle, with
+#: that angle's index in the state: ``[cos t1, sin t1, cos t2, sin t2, ...]``.
+TRIG = {0: 0, 1: 0, 2: 1, 3: 1}
+
+
+def angle_gap(a: float, b: float) -> float:
+    """``|a - b|`` for two wrapped angles, the short way round the circle."""
+    d = abs(float(a) - float(b))
+    return min(d, abs(2 * np.pi - d))
+
+
+def obs_close(o_ours, o_ref, n_ours, n_ref) -> bool:
+    """The observation check. A component passes within one float32 ulp of
+    the reference's. A sine or cosine component that fails that passes
+    within ``|dtheta|`` plus the float32 spacing of both values, where
+    ``dtheta`` is the difference of its angle in the two next states.
+
+    Sine and cosine are 1-Lipschitz, so a next-state angle the state check
+    accepts (a few ulps) moves its sine or cosine by at most that much. Near a
+    zero of the function the ulp test is ill-conditioned: a 1-ulp angle on
+    -pi turns ``sin`` into a value whose float32 ulps and relative error are
+    huge although the absolute gap is about 1e-16 (issue #191, a reference
+    whose RK4 lands 1 ulp off on another libm). Without a next state (the
+    terminal row of an auto-reset) only the ulp test applies, and every
+    other component keeps it."""
+    o_ours = np.asarray(o_ours, dtype=np.float32)
+    o_ref = np.asarray(o_ref, dtype=np.float32)
+    ok = np.abs(o_ours - o_ref) <= np.spacing(np.abs(o_ref))
+    if ok.all() or n_ours is None:
+        return bool(ok.all())
+    for j in np.flatnonzero(~ok):
+        if int(j) not in TRIG:
+            return False
+        a, b = float(o_ours[j]), float(o_ref[j])
+        k = TRIG[int(j)]
+        bound = angle_gap(n_ours[k], n_ref[k]) + float(np.spacing(np.float32(abs(a)))) + float(np.spacing(np.float32(abs(b))))
+        if not abs(a - b) <= bound:
+            return False
+    return True
 
 
 def close(a: float, b: float) -> bool:
@@ -336,7 +379,7 @@ def compare(ours, ref):
                     if len(report["state_examples"]) < 5:
                         report["state_examples"].append([float(a), float(b), ulps(float(a), float(b))])
             report["state"] += int(bad)
-        if not np.all(np.abs(o_ours - o_ref) <= np.spacing(np.abs(o_ref).astype(np.float32))):
+        if not obs_close(o_ours, o_ref, n_ours, n_ref):
             report["obs"] += 1
             if len(report["obs_examples"]) < 5:
                 report["obs_examples"].append(obs_mismatch(index, n_ref, o_ours, o_ref))

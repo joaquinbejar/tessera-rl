@@ -99,3 +99,58 @@ def test_acrobot_equivalence_uniform_set_stays_fixed():
     # Reported, not gated; its size and seed must not drift.
     states, _ = eq.spread(N // 5, SEED + 1)
     assert len(states) == 16_341
+
+
+# Issue #191: at rollout index 100099 (seed 2026) a reference whose RK4 runs
+# on another libm lands theta2 1 ulp away, exactly on -pi, so its sin(theta2)
+# is far off in float32 ulps although the gap is about 1e-16. The values
+# below are the recorded ones; the rest of the row comes from the reference
+# step on this machine.
+_START_100099 = [float.fromhex(h) for h in ("0x1.de4a62f41b498p-4", "-0x1.7e6dc4daea8d3p+1", "-0x1.034112ddc520ep+2", "-0x1.c2bd2296565c9p-1")]
+_THETA2_OURS = float.fromhex("-0x1.921fb54442d17p+1")
+_THETA2_REF = float.fromhex("-0x1.921fb54442d18p+1")
+_SIN2_OURS = float.fromhex("-0x1.4698980000000p-51")
+_SIN2_REF = float.fromhex("-0x1.1a62640000000p-53")
+
+
+def _row_100099():
+    n, o, r, t, tr = eq._ref_step(eq._ref_env(), _START_100099, 2)
+    n_ours, n_ref = n.copy(), n.copy()
+    n_ours[1], n_ref[1] = _THETA2_OURS, _THETA2_REF
+    o_ours, o_ref = np.array(o, dtype=np.float32), np.array(o, dtype=np.float32)
+    o_ours[3], o_ref[3] = _SIN2_OURS, _SIN2_REF
+    return (n_ours, o_ours, r, t, tr), (n_ref, o_ref, r, t, tr)
+
+
+def test_obs_close_recorded_one_ulp_angle_on_minus_pi_passes():
+    ours, ref = _row_100099()
+    assert eq.ulps32(_SIN2_OURS, _SIN2_REF) > 1_000_000
+    assert eq.obs_close(ours[1], ref[1], ours[0], ref[0])
+    report = eq.compare([ours], [ref])
+    assert report["obs"] == 0 and report["state"] == 0, report
+
+
+def test_obs_close_trig_gap_beyond_the_angle_difference_fails():
+    ours, ref = _row_100099()
+    o = ours[1].copy()
+    dtheta = abs(_THETA2_OURS - _THETA2_REF)
+    o[3] = np.float32(_SIN2_REF - 1.5 * dtheta)
+    assert not eq.obs_close(o, ref[1], ours[0], ref[0])
+    report = eq.compare([(ours[0], o, *ours[2:])], [ref])
+    assert report["obs"] == 1, report
+
+
+def test_obs_close_non_trig_component_keeps_the_ulp_test():
+    ours, ref = _row_100099()
+    o = ours[1].copy()
+    o[5] = np.nextafter(np.nextafter(o[5], np.float32(np.inf)), np.float32(np.inf))
+    assert not eq.obs_close(o, ref[1], ours[0], ref[0])
+
+
+def test_obs_close_without_next_state_keeps_the_ulp_test():
+    ours, ref = _row_100099()
+    assert not eq.obs_close(ours[1], ref[1], None, ref[0])
+
+
+def test_angle_gap_wraps_round_the_circle():
+    assert eq.angle_gap(np.pi, -np.pi) < 1e-15
