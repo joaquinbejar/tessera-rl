@@ -155,6 +155,25 @@ impl<'a, T: LeafDType> LeafMut<'a, T> {
         }
     }
 
+    /// Copies `values` into the whole leaf; returns `false`, writing
+    /// nothing, when `values` does not cover the leaf's bytes exactly.
+    ///
+    /// The check is on byte length only: neither this method nor
+    /// [`LeafId`] checks the leaf's declared dtype, so a leaf must be named
+    /// with the element type its observation space declares.
+    #[must_use]
+    #[inline]
+    pub fn copy_from(&mut self, values: &[T]) -> bool {
+        let size = T::DTYPE.size();
+        if values.len().checked_mul(size) != Some(self.bytes.len()) {
+            return false;
+        }
+        for (chunk, &value) in self.bytes.chunks_exact_mut(size).zip(values) {
+            value.write_le(chunk);
+        }
+        true
+    }
+
     /// Writes every element.
     #[inline]
     pub fn fill(&mut self, value: T) {
@@ -194,5 +213,22 @@ mod tests {
         LeafMut::<f32>::new(&mut floats).fill(-0.0);
         assert_eq!(floats, [0, 0, 0, 0x80, 0, 0, 0, 0x80]);
         assert_eq!(LeafId::<u8>::new(3).index(), 3);
+    }
+
+    #[test]
+    fn test_leaf_mut_copy_from_whole_leaf_or_nothing() {
+        let mut bytes = [0u8; 8];
+        let mut leaf = LeafMut::<f32>::new(&mut bytes);
+        assert!(!leaf.copy_from(&[1.0]));
+        assert!(!leaf.copy_from(&[1.0, 2.0, 3.0]));
+        assert_eq!(bytes, [0; 8]);
+        let mut leaf = LeafMut::<f32>::new(&mut bytes);
+        assert!(leaf.copy_from(&[1.0, -2.0]));
+        let mut want = [0u8; 8];
+        want[..4].copy_from_slice(&1.0f32.to_le_bytes());
+        want[4..].copy_from_slice(&(-2.0f32).to_le_bytes());
+        assert_eq!(bytes, want);
+        let mut empty = [0u8; 0];
+        assert!(LeafMut::<u16>::new(&mut empty).copy_from(&[]));
     }
 }
