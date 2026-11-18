@@ -137,7 +137,6 @@ def test_native_exports_its_initializer_and_not_the_host_one():
 SECOND_INIT = """
 import gc, importlib.machinery, importlib.util
 import tessera_rl
-import pytest
 
 import tessera_rl._native as native
 
@@ -170,7 +169,6 @@ def test_native_second_init_neither_crashes_nor_breaks_the_exception_classes():
 INIT_FAILS_AFTER_REGISTER = """
 import gc
 import tessera_rl
-import pytest
 
 import tessera_rl._native as native
 
