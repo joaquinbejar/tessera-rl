@@ -68,13 +68,13 @@ macro_rules! fixed_point {
             /// # Errors
             ///
             /// [`DecimalError::Syntax`](crate::decimal::DecimalError::Syntax)
-            /// for another grammar,
+            /// for another grammar, then
             /// [`OutOfRange`](crate::decimal::DecimalError::OutOfRange)
-            /// beyond `[MIN, MAX]`, and
-            /// [`Inexact`](crate::decimal::DecimalError::Inexact) for a
-            /// value that is not a multiple of `2^-FRAC_BITS`.
+            /// for a value beyond `[MIN, MAX]`, exact or not, then
+            /// [`Inexact`](crate::decimal::DecimalError::Inexact) for an
+            /// in-range value that is not a multiple of `2^-FRAC_BITS`.
             pub fn from_decimal(s: &str) -> Result<Self, crate::decimal::DecimalError> {
-                let raw = crate::decimal::parse(s, $frac)?;
+                let raw = crate::decimal::parse(s, $frac, <$raw>::BITS)?;
                 <$raw>::try_from(raw)
                     .map(Self)
                     .map_err(|_| crate::decimal::DecimalError::OutOfRange)
