@@ -63,7 +63,10 @@ expected=(
 # lines must show the profile: the bench binaries and the measured packages.
 profile=bench-gate
 band=2.0
-profile_crates=(classic_instructions snapshot_instructions turns_instructions async_instructions host_instructions games_instructions search_instructions tessera_rl_classic tessera_rl_engine tessera_rl_games tessera_rl_search)
+# The host bench builds in its own cargo invocation (feature host), so the
+# engine the other benches link is built exactly as before (ADR-0059).
+host_profile_crates=(host_instructions tessera_rl_engine)
+profile_crates=(classic_instructions snapshot_instructions turns_instructions async_instructions games_instructions search_instructions tessera_rl_classic tessera_rl_engine tessera_rl_games tessera_rl_search)
 baseline_of() { local d="$1"; local b; b="$(basename "$d")"; echo "$home/$d/callgrind.$b.out.base@ref"; }
 
 command -v valgrind >/dev/null || fail "valgrind is not installed"
@@ -103,9 +106,13 @@ build_with_profile() {
     CARGO_TERM_COLOR=never cargo bench --locked --profile "$profile" --no-run -v "${benches[@]}" > "$build_log" 2>&1 \
         || { tail -30 "$build_log" >&2; fail "the benches did not build with the $profile profile"; }
     "$root/scripts/gungraun_profile_check.sh" "$build_log" "${profile_crates[@]}"
+    CARGO_TERM_COLOR=never cargo bench --locked --profile "$profile" --no-run -v "${host_benches[@]}" > "$build_log" 2>&1 \
+        || { tail -30 "$build_log" >&2; fail "the host bench did not build with the $profile profile"; }
+    "$root/scripts/gungraun_profile_check.sh" "$build_log" "${host_profile_crates[@]}"
 }
 
-benches=(-p tessera-rl-classic --bench classic_instructions -p tessera-rl-engine --bench snapshot_instructions --bench turns_instructions --bench async_instructions --bench host_instructions --features tessera-rl-engine/host -p tessera-rl-games --bench games_instructions -p tessera-rl-search --bench search_instructions)
+benches=(-p tessera-rl-classic --bench classic_instructions -p tessera-rl-engine --bench snapshot_instructions --bench turns_instructions --bench async_instructions -p tessera-rl-games --bench games_instructions -p tessera-rl-search --bench search_instructions)
+host_benches=(-p tessera-rl-engine --features host --bench host_instructions)
 case "$mode" in
     check)
         [ -f "$manifest" ] || fail "no environment manifest: bless first"
@@ -121,6 +128,9 @@ case "$mode" in
         log="$(mktemp)"
         status=0
         cargo bench --locked --profile "$profile" "${benches[@]}" -- --home="$home" --baseline=ref --callgrind-limits="ir=${band}%" 2>&1 | tee "$log" || status=$?
+        if [ "$status" -eq 0 ]; then
+            cargo bench --locked --profile "$profile" "${host_benches[@]}" -- --home="$home" --baseline=ref --callgrind-limits="ir=${band}%" 2>&1 | tee -a "$log" || status=$?
+        fi
         sums_after="$(cd "$home" && find . -name '*.base@ref' | sort | xargs sha256sum)"
         [ "$sums_before" = "$sums_after" ] || fail "check created or changed baseline files"
         # A regression (gungraun exits 3) or a failed run is reported as is.
@@ -135,6 +145,7 @@ case "$mode" in
     bless)
         build_with_profile
         cargo bench --locked --profile "$profile" "${benches[@]}" -- --home="$home" --save-baseline=ref
+        cargo bench --locked --profile "$profile" "${host_benches[@]}" -- --home="$home" --save-baseline=ref
         for d in "${expected[@]}"; do
             [ -f "$(baseline_of "$d")" ] || fail "bless did not produce $d"
         done
