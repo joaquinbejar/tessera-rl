@@ -140,6 +140,9 @@ def test_gungraun_gate_builds_and_runs_with_the_gate_profile():
     assert "band=2.0" in text
     runs = re.findall(r"cargo bench --locked (.*?) \"\$\{benches\[@\]\}\"", text)
     assert runs and all('--profile "$profile"' in r for r in runs), runs
+    host_runs = re.findall(r"cargo bench --locked (.*?) \"\$\{host_benches\[@\]\}\"", text)
+    # The host bench is built once and run by check and by bless.
+    assert len(host_runs) == 3 and all('--profile "$profile"' in r for r in host_runs), host_runs
     assert "CARGO_TERM_COLOR=never cargo bench --locked --profile" in text
     assert '--callgrind-limits="ir=${band}%"' in text
     assert text.count("build_with_profile") == 3  # defined, then called by check and by bless

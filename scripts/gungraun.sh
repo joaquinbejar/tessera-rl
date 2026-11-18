@@ -64,7 +64,10 @@ expected=(
 profile=bench-gate
 band=2.0
 # The host bench builds in its own cargo invocation (feature host), so the
-# engine the other benches link is built exactly as before (ADR-0059).
+# engine the other benches link is built exactly as before (ADR-0059). Its
+# profile check names the bench and the engine only: the host CartPole port
+# is self-contained and does not use tessera-rl-classic, so no other measured
+# crate is compiled for it.
 host_profile_crates=(host_instructions tessera_rl_engine)
 profile_crates=(classic_instructions snapshot_instructions turns_instructions async_instructions games_instructions search_instructions tessera_rl_classic tessera_rl_engine tessera_rl_games tessera_rl_search)
 baseline_of() { local d="$1"; local b; b="$(basename "$d")"; echo "$home/$d/callgrind.$b.out.base@ref"; }
