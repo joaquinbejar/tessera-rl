@@ -23,12 +23,15 @@ test-hooks = []
 # (enabled by tessera-rl-py only).
 native-module = []
 # `PyInit__tessera_host`, the initializer of a host environment wheel
-# (ADR-0062 D3). Never enabled by the first-party wheel.
-host = []
+# (ADR-0062 D3), and everything of host protocol 1 (`export_host_env!`).
+# It enables the engine's `host`. Never enabled by the first-party wheel:
+# tests/feature_tree.rs checks its feature tree.
+host = ["tessera-rl-engine/host"]
 
 [dependencies]
 inventory.workspace = true
 pyo3.workspace = true
+tessera-rl-core.workspace = true
 tessera-rl-engine.workspace = true
 tessera-rl-num.workspace = true
 

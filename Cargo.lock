@@ -1135,6 +1135,7 @@ version = "0.2.0"
 dependencies = [
  "inventory",
  "pyo3",
+ "tessera-rl-core",
  "tessera-rl-engine",
  "tessera-rl-num",
 ]
