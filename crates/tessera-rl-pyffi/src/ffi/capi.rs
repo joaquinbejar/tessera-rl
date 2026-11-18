@@ -375,6 +375,28 @@ pub fn stash_first(g: Gil<'_>, slot: &mut Option<Stashed>, raised: Raised) {
     }
 }
 
+/// The message of the exception `raised` proves is set, which stays set:
+/// `str()` of its value (a callout: it can run Python code), or a fixed
+/// text when there is no value or `str()` fails.
+#[must_use]
+pub(crate) fn pending_message(g: Gil<'_>, raised: Raised) -> (String, Raised) {
+    let _ = raised;
+    let p = fetch_pending(g);
+    let mut message = None;
+    if !p.1.is_null() {
+        // SAFETY: attached, no exception pending; a live value (the
+        // fetched reference, kept until it is put back).
+        let s = unsafe { thunks::c_object_str(p.1) };
+        if let Ok(s) = Mine::new(s) {
+            message = to_string(g, s.as_ref(), "message").ok();
+        }
+        clear_pending(g);
+    }
+    let message = message.unwrap_or_else(|| String::from("an exception without a message"));
+    put_back_pending(g, p);
+    (message, RAISED)
+}
+
 /// An exception taken out of the interpreter while other work runs (a
 /// rollback), to be raised again afterwards. Made only from a [`Raised`],
 /// so it always holds an exception. Dropping it unraised leaks the
@@ -482,8 +504,9 @@ pub fn list(_g: Gil<'_>) -> CResult<Mine<'_>> {
     Mine::container(unsafe { thunks::c_list_new(0) })
 }
 
-/// Test hook: the `n`-th next container insertion fails with
-/// `RuntimeError` (0 disables), to exercise the unwind drops.
+/// Test hook: the `n`-th next container insertion or module attribute
+/// fails with `RuntimeError` (0 disables), to exercise the unwind drops
+/// and a module initialization that fails part way.
 #[cfg(feature = "test-hooks")]
 pub fn fail_after(n: u32) {
     FAIL_AFTER.with(|c| c.set(n));
@@ -594,7 +617,8 @@ pub fn dict_set(g: Gil<'_>, dict: &Mine<'_>, key: &CStr, value: &Mine<'_>) -> CR
 }
 
 /// `module.name = value` (callout: sets a module attribute).
-pub fn module_add(_g: Gil<'_>, module: Ref<'_>, name: &CStr, value: &Mine<'_>) -> CResult<()> {
+pub fn module_add(g: Gil<'_>, module: Ref<'_>, name: &CStr, value: &Mine<'_>) -> CResult<()> {
+    injected(g)?;
     // SAFETY: attached; a live module, a C string, a live value (not
     // stolen).
     let rc =
@@ -605,11 +629,12 @@ pub fn module_add(_g: Gil<'_>, module: Ref<'_>, name: &CStr, value: &Mine<'_>) -
 /// `module.name = ty`, for a class this crate holds for the process
 /// (`errors::register`; callout: sets a module attribute).
 pub(crate) fn module_add_class(
-    _g: Gil<'_>,
+    g: Gil<'_>,
     module: Ref<'_>,
     name: &CStr,
     ty: *mut ffi::PyObject,
 ) -> CResult<()> {
+    injected(g)?;
     // SAFETY: attached; a live module, a C string, and a class held by a
     // never-released strong reference (not stolen here).
     let rc = unsafe { thunks::c_module_add(module.as_ptr(), name.as_ptr(), ty) };

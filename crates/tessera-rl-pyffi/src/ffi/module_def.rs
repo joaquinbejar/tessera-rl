@@ -345,14 +345,43 @@ macro_rules! export_module {
     };
 }
 
+/// The first failed initialization of each leaf, by message: a module
+/// whose initialization failed part way leaves process-wide state behind
+/// (the exception classes, the type objects), which is never rebuilt, so
+/// every later initialization in the process is refused with this cause.
+#[cfg(any(feature = "native-module", feature = "host"))]
+static FAILED: [std::sync::OnceLock<String>; 2] = [const { std::sync::OnceLock::new() }; 2];
+
+#[cfg(any(feature = "native-module", feature = "host"))]
+fn failed(leaf: Leaf) -> &'static std::sync::OnceLock<String> {
+    let [native, host] = &FAILED;
+    match leaf {
+        Leaf::Native => native,
+        Leaf::Host => host,
+    }
+}
+
 /// The module registered for `leaf`: exactly one record, or `ImportError`.
+/// After a failed initialization, every later one raises `ImportError`
+/// naming the first failure's cause.
 #[cfg(any(feature = "native-module", feature = "host"))]
 fn init_leaf(leaf: Leaf, name: &str) -> Obj {
     entry(|g| {
+        let first = failed(leaf);
+        if let Some(cause) = first.get() {
+            return Err(capi::raise(
+                g,
+                capi::import_error(),
+                &format!(
+                    "{name}: an earlier initialization in this process failed ({cause}); start a new interpreter"
+                ),
+            ));
+        }
+        init_hook();
         let mut found = inventory::iter::<ModuleRecord>
             .into_iter()
             .filter(|r| r.leaf == leaf);
-        match (found.next(), found.next()) {
+        let created = match (found.next(), found.next()) {
             (Some(record), None) => (record.create)(g),
             (None, _) => Err(capi::raise(
                 g,
@@ -364,14 +393,41 @@ fn init_leaf(leaf: Leaf, name: &str) -> Obj {
                 capi::import_error(),
                 &format!("{name}: more than one module registered"),
             )),
-        }
+        };
+        created.map_err(|raised| {
+            let (cause, raised) = capi::pending_message(g, raised);
+            let _ = first.set(cause);
+            raised
+        })
     })
 }
+
+/// Test hooks only: `TESSERA_TEST_INIT_FAIL_AFTER=n` arms `_fail_after(n)`
+/// before the module initializes, so the real first import fails part way.
+#[cfg(all(
+    feature = "test-hooks",
+    any(feature = "native-module", feature = "host")
+))]
+fn init_hook() {
+    if let Some(n) = std::env::var("TESSERA_TEST_INIT_FAIL_AFTER")
+        .ok()
+        .and_then(|v| v.parse().ok())
+    {
+        capi::fail_after(n);
+    }
+}
+
+#[cfg(all(
+    not(feature = "test-hooks"),
+    any(feature = "native-module", feature = "host")
+))]
+#[inline]
+fn init_hook() {}
 
 /// The target of the `PyInit__native` thunk.
 #[cfg(feature = "native-module")]
 pub(super) extern "C" fn init_native() -> Obj {
-    init_leaf(Leaf::Native, "_native")
+    init_leaf(Leaf::Native, "tessera_rl._native")
 }
 
 /// The target of the `PyInit__tessera_host` thunk.

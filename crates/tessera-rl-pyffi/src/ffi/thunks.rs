@@ -1428,3 +1428,4 @@ callout!(c_check_signals => ffi::PyErr_CheckSignals : fn() -> c_int);
 callout!(c_long_as_i64 => ffi::PyLong_AsLongLong : fn(Obj) -> i64);
 callout!(c_long_as_u64 => ffi::PyLong_AsUnsignedLongLong : fn(Obj) -> u64);
 callout!(c_unicode_as_utf8 => ffi::PyUnicode_AsUTF8AndSize : fn(Obj, *mut ffi::Py_ssize_t) -> CStr);
+callout!(c_object_str => ffi::PyObject_Str : fn(Obj) -> Obj);

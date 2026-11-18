@@ -2,6 +2,7 @@
 """The shared CPython boundary crate, tessera-rl-pyffi (ADR-0062 item 8,
 #272 step 3): no public unsafe function, and the fixed initializers."""
 
+import os
 import pathlib
 import shutil
 import subprocess
@@ -128,4 +129,50 @@ def test_native_init_failing_after_register_leaves_the_exception_classes_alive()
     run = subprocess.run([sys.executable, "-I", "-c", INIT_FAILS_AFTER_REGISTER], capture_output=True, text=True)
     assert run.returncode == 0, (run.returncode, run.stdout, run.stderr)
     assert run.stdout.count("init-failed: injected: initialization fails after register") == 2, run.stdout
+    assert "caught-argument-error" in run.stdout, run.stdout
+
+
+FIRST_INIT_FAILS = """
+import gc
+
+for attempt in range(2):
+    try:
+        import tessera_rl._native
+        print(f"import-{attempt}: ok")
+    except Exception as e:
+        print(f"import-{attempt}: {type(e).__name__}: {e}")
+gc.collect()
+# The package never imported, so `tessera_rl.ArgumentError` is not
+# reachable by name; the class the failed import registered is found
+# through the collector, and must still be alive and usable.
+classes = [
+    o for o in gc.get_objects()
+    if isinstance(o, type) and o.__module__ == "tessera_rl" and o.__name__ == "ArgumentError"
+]
+print("argument-error-classes:", len(classes))
+for cls in classes:
+    try:
+        raise cls("x")
+    except cls:
+        print("caught-argument-error")
+"""
+
+
+@pytest.mark.skipif(not hasattr(native, "_fail_after"), reason="needs a test-hooks build (make py-test-hooks)")
+def test_native_first_init_failing_after_register_refuses_later_imports_with_its_cause():
+    # The real first import fails after errors::register and after the Env
+    # type was created (15 exception classes, Env, then the View attribute
+    # fails). A later import must not rebuild the type objects ("Env type
+    # already created"): it raises ImportError naming the first cause.
+    env = dict(os.environ, TESSERA_TEST_INIT_FAIL_AFTER="17")
+    run = subprocess.run(
+        [sys.executable, "-I", "-c", FIRST_INIT_FAILS], capture_output=True, text=True, env=env
+    )
+    assert run.returncode == 0, (run.returncode, run.stdout, run.stderr)
+    assert "import-0: RuntimeError: test hook: injected failure" in run.stdout, run.stdout
+    assert (
+        "import-1: ImportError: tessera_rl._native: an earlier initialization in this process failed "
+        "(test hook: injected failure); start a new interpreter"
+    ) in run.stdout, run.stdout
+    assert "argument-error-classes: 1" in run.stdout, run.stdout
     assert "caught-argument-error" in run.stdout, run.stdout
