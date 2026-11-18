@@ -36,9 +36,11 @@
 //! Experimental until 1.0 (ADR-0062 item 9).
 
 mod dyn_pool;
+mod factory;
 mod kernels;
 
 pub use dyn_pool::DynHostPool;
+pub use factory::{FactoryError, HostFactory, MakeOptions, make_host};
 
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 

@@ -1,0 +1,25 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
+# A glue rlib that registers a host environment's factory (ADR-0065 item 3):
+# it depends on the engine and on the environment crate, which does not.
+# Its integration tests are the binaries that reference it.
+
+[package]
+name = "tessera-rl-test-host-glue"
+description = "Test-only glue crate that registers a host factory from a separate rlib"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+tessera-rl-core.workspace = true
+tessera-rl-engine = { workspace = true, features = ["host"] }
+tessera-rl-test-host-env = { path = "../host-env" }
+
+[dev-dependencies]
+tessera-rl-num.workspace = true
+
+[lints]
+workspace = true

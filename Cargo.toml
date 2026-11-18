@@ -19,6 +19,8 @@ members = [
     "tools/connect4-ref",
     "tools/spikes/layout",
     "tests/downstream",
+    "tests/host-env",
+    "tests/host-glue",
     "crates/tessera-rl-py",
     "crates/tessera-rl-pyffi",
 ]
@@ -37,6 +39,8 @@ default-members = [
     "crates/tessera-rl-rts",
     "crates/tessera-rl-onnx",
     "tests/downstream",
+    "tests/host-env",
+    "tests/host-glue",
 ]
 
 [workspace.package]
