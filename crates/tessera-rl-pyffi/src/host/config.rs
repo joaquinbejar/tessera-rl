@@ -6,8 +6,11 @@
 //! Each value maps to one [`ConfigItem`]: `bool` to `Bool` (checked before
 //! `int`, of which it is a subclass), an exact `int` to `Int`, an exact
 //! `float` to `Float` (its bits as given), an exact `str` to `Str`, and an
-//! exact `dict` to `Table`, recursively. Anything else, and an `int` beyond
-//! 64 bits, is refused before decoding ([`KwargsError`]). Tables deeper than
+//! exact `dict` to `Table`, recursively. Only exact built-in types are
+//! taken: no subclasses and no NumPy scalars. Anything else, an `int`
+//! beyond 64 bits, and more than [`MAX_ENTRIES`] pairs are refused
+//! ([`KwargsError`]), after the key names are checked: an unknown key is
+//! reported first ([`decode_kwargs`]). Tables deeper than
 //! the decoder's bound are kept empty: the decoder refuses them
 //! (`TooDeep`) at the same point as a Rust source.
 //!
@@ -35,12 +38,18 @@ pub enum OwnedItem {
     Table(Vec<(String, OwnedItem)>),
 }
 
-/// Why a keyword argument is not a config value.
+/// Most `(key, value)` pairs the keyword arguments may hold, nested tables
+/// included: a bound on what one `make` call reads and allocates.
+pub const MAX_ENTRIES: usize = 4096;
+
+/// Why keyword arguments are not a config.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum KwargsError {
-    /// A value of a Python type no config field takes.
+    /// A value of a Python type no config field takes (only exact `bool`,
+    /// `int`, `float`, `str` and `dict` are taken: no subclasses, no NumPy
+    /// scalars).
     Type {
-        /// The key, dotted for nested tables.
+        /// The key, dotted for nested tables (`physics.gravity`).
         key: String,
     },
     /// An `int` beyond 64 bits.
@@ -48,6 +57,8 @@ pub enum KwargsError {
         /// The key, dotted for nested tables.
         key: String,
     },
+    /// More than [`MAX_ENTRIES`] pairs.
+    TooMany,
 }
 
 impl core::fmt::Display for KwargsError {
@@ -58,73 +69,134 @@ impl core::fmt::Display for KwargsError {
                 "config key `{key}`: a value must be a bool, int, float, str or dict"
             ),
             Self::Int { key } => write!(f, "config key `{key}`: an int beyond 64 bits"),
+            Self::TooMany => write!(f, "more than {MAX_ENTRIES} config entries"),
         }
     }
 }
 
-/// The result of reading keyword arguments: the owned entries, or a
-/// [`KwargsError`] (a Python exception may also be pending: `CResult`).
-pub type Read = Result<Vec<(String, OwnedItem)>, KwargsError>;
+impl std::error::Error for KwargsError {}
 
-/// Reads `entries` (a dict's items) at table `depth` (1 for the keyword
-/// arguments themselves).
+/// Keyword arguments read for decoding. A value no field takes is kept as a
+/// placeholder and recorded in `refused`, so the decoder still checks every
+/// key name first: an unknown key is reported before a value's type
+/// (SPEC 14.4.1 item 4).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Kwargs {
+    /// The pairs, in order.
+    pub entries: Vec<(String, OwnedItem)>,
+    /// The first value no field takes, if any.
+    pub refused: Option<KwargsError>,
+}
+
+/// Reads keyword arguments (a dict's items).
 ///
 /// # Errors
 ///
 /// A Python exception (`Err` of the outer `CResult`) when reading a value
-/// raised; a [`KwargsError`] for a value no config field takes.
-pub fn read<'py>(g: Gil<'py>, entries: Vec<(String, Mine<'py>)>, depth: u32) -> CResult<Read> {
-    let mut out = Vec::with_capacity(entries.len());
-    for (key, value) in entries {
-        let item = match item(g, &key, value.as_ref(), depth)? {
-            Ok(item) => item,
-            Err(e) => return Ok(Err(e)),
-        };
-        out.push((key, item));
-    }
-    Ok(Ok(out))
+/// raised; [`KwargsError::TooMany`] past [`MAX_ENTRIES`].
+pub fn read<'py>(
+    g: Gil<'py>,
+    entries: Vec<(String, Mine<'py>)>,
+) -> CResult<Result<Kwargs, KwargsError>> {
+    let mut reader = Reader {
+        refused: None,
+        budget: MAX_ENTRIES,
+    };
+    let entries = match reader.table(g, entries, "", 1)? {
+        Ok(entries) => entries,
+        Err(e) => return Ok(Err(e)),
+    };
+    Ok(Ok(Kwargs {
+        entries,
+        refused: reader.refused,
+    }))
 }
 
-fn item(g: Gil<'_>, key: &str, v: Ref<'_>, depth: u32) -> CResult<Result<OwnedItem, KwargsError>> {
-    Ok(Ok(match capi::kind(v) {
-        Kind::Bool => OwnedItem::Bool(capi::to_bool(g, v, key)?),
-        Kind::Int => {
-            if let Ok(x) = capi::to_i64(g, v, key) {
-                OwnedItem::Int(i128::from(x))
+struct Reader {
+    refused: Option<KwargsError>,
+    budget: usize,
+}
+
+impl Reader {
+    fn table<'py>(
+        &mut self,
+        g: Gil<'py>,
+        entries: Vec<(String, Mine<'py>)>,
+        prefix: &str,
+        depth: u32,
+    ) -> CResult<Result<Vec<(String, OwnedItem)>, KwargsError>> {
+        let mut out = Vec::with_capacity(entries.len());
+        for (key, value) in entries {
+            let Some(left) = self.budget.checked_sub(1) else {
+                return Ok(Err(KwargsError::TooMany));
+            };
+            self.budget = left;
+            let dotted = if prefix.is_empty() {
+                key.clone()
             } else {
-                // Beyond i64: an unsigned 64-bit value, or too wide.
-                capi::clear_pending(g);
-                if let Ok(x) = capi::to_u64(g, v, key) {
+                format!("{prefix}.{key}")
+            };
+            let item = match self.item(g, &dotted, value.as_ref(), depth)? {
+                Ok(item) => item,
+                Err(e) => return Ok(Err(e)),
+            };
+            out.push((key, item));
+        }
+        Ok(Ok(out))
+    }
+
+    /// A placeholder for a refused value: any item does, as decoding fails
+    /// with the recorded error whenever every key name is known.
+    fn refuse(&mut self, e: KwargsError) -> OwnedItem {
+        self.refused.get_or_insert(e);
+        OwnedItem::Bool(false)
+    }
+
+    fn item(
+        &mut self,
+        g: Gil<'_>,
+        key: &str,
+        v: Ref<'_>,
+        depth: u32,
+    ) -> CResult<Result<OwnedItem, KwargsError>> {
+        Ok(Ok(match capi::kind(v) {
+            Kind::Bool => OwnedItem::Bool(capi::to_bool(g, v, key)?),
+            Kind::Int => {
+                if let Ok(x) = capi::to_i64(g, v, key) {
                     OwnedItem::Int(i128::from(x))
                 } else {
+                    // Beyond i64: an unsigned 64-bit value, or too wide.
                     capi::clear_pending(g);
-                    return Ok(Err(KwargsError::Int {
-                        key: key.to_owned(),
-                    }));
+                    if let Ok(x) = capi::to_u64(g, v, key) {
+                        OwnedItem::Int(i128::from(x))
+                    } else {
+                        capi::clear_pending(g);
+                        self.refuse(KwargsError::Int {
+                            key: key.to_owned(),
+                        })
+                    }
                 }
             }
-        }
-        Kind::Float => OwnedItem::Float(capi::to_f64(g, v, key)?),
-        Kind::Str => OwnedItem::Str(capi::to_string(g, v, key)?),
-        Kind::Dict => {
-            if depth >= MAX_CONFIG_DEPTH {
-                // One table past the bound is kept, empty: the decoder
-                // refuses it with `TooDeep` before reading its keys.
-                OwnedItem::Table(Vec::new())
-            } else {
-                let entries = capi::dict_items(g, v, key)?;
-                match read(g, entries, depth.saturating_add(1))? {
-                    Ok(t) => OwnedItem::Table(t),
-                    Err(e) => return Ok(Err(e)),
+            Kind::Float => OwnedItem::Float(capi::to_f64(g, v, key)?),
+            Kind::Str => OwnedItem::Str(capi::to_string(g, v, key)?),
+            Kind::Dict => {
+                if depth >= MAX_CONFIG_DEPTH {
+                    // One table past the bound is kept, empty: the decoder
+                    // refuses it with `TooDeep` before reading its keys.
+                    OwnedItem::Table(Vec::new())
+                } else {
+                    let entries = capi::dict_items(g, v, key)?;
+                    match self.table(g, entries, key, depth.saturating_add(1))? {
+                        Ok(t) => OwnedItem::Table(t),
+                        Err(e) => return Ok(Err(e)),
+                    }
                 }
             }
-        }
-        Kind::None | Kind::Other => {
-            return Ok(Err(KwargsError::Type {
+            Kind::None | Kind::Other => self.refuse(KwargsError::Type {
                 key: key.to_owned(),
-            }));
-        }
-    }))
+            }),
+        }))
+    }
 }
 
 /// Number of `(key, item)` pairs in `entries`, nested tables included.
@@ -175,6 +247,39 @@ pub fn decode<C: ConfigDecode>(entries: &[(String, OwnedItem)]) -> Result<C, Con
     let mut buf: Vec<(&str, ConfigItem<'_>)> = vec![("", ConfigItem::Bool(false)); count(entries)];
     let top = place(&mut buf, entries);
     C::decode(&ConfigSource::new(top))
+}
+
+/// Why keyword arguments do not decode into a config.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Refusal {
+    /// The decoder's error.
+    Decode(ConfigDecodeError),
+    /// A value no field takes, or too many entries.
+    Kwargs(KwargsError),
+}
+
+/// Decodes `C` from keyword arguments read by [`read`]: key names first,
+/// then values. An unknown key is reported before a refused value; a
+/// refused value before any other decoding error.
+///
+/// # Errors
+///
+/// The [`Refusal`], by that precedence.
+pub fn decode_kwargs<C: ConfigDecode>(kwargs: &Kwargs) -> Result<C, Refusal> {
+    match (decode::<C>(&kwargs.entries), &kwargs.refused) {
+        (Err(e @ ConfigDecodeError::UnknownKey { .. }), _) => Err(Refusal::Decode(e)),
+        (_, Some(refused)) => Err(Refusal::Kwargs(refused.clone())),
+        (result, None) => result.map_err(Refusal::Decode),
+    }
+}
+
+/// Raises the Python error of a [`Refusal`].
+#[must_use]
+pub fn raise_refusal(g: Gil<'_>, r: &Refusal) -> capi::Raised {
+    match r {
+        Refusal::Decode(e) => raise_decode(g, e),
+        Refusal::Kwargs(e) => raise_kwargs(g, e),
+    }
 }
 
 /// Raises the Python error of a config that does not decode: an unknown

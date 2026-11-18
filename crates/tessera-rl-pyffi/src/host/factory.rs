@@ -26,7 +26,7 @@ use crate::ffi::object::{
     Body, MethodNoArgs, MethodRow, MethodTable, Release, TypeObject, TypeSpec,
 };
 
-use super::config::{self, OwnedItem};
+use super::config;
 
 /// The body of a host object: its pool, until `close`.
 pub struct HostBody {
@@ -101,6 +101,16 @@ fn argument(g: Gil<'_>, message: String) -> capi::Raised {
     errors::error(g, ErrorKind::Argument, message)
 }
 
+/// A named keyword's conversion: a value of the wrong type or range is an
+/// `ArgumentError` naming it, as `tessera_rl.make` raises (the conversions
+/// of exact built-in types run no Python code).
+fn option<T>(g: Gil<'_>, r: CResult<T>, name: &str, expected: &str) -> CResult<T> {
+    r.map_err(|_| {
+        capi::clear_pending(g);
+        argument(g, format!("make: {name} must be {expected}"))
+    })
+}
+
 /// Splits `make`'s keywords into the pool options and the config entries.
 fn options<'py>(
     g: Gil<'py>,
@@ -117,16 +127,27 @@ fn options<'py>(
     };
     let num_envs = get("num_envs")
         .ok_or_else(|| argument(g, "make: num_envs is required".to_owned()))
-        .and_then(|v| capi::to_u32(g, v, "num_envs"))?;
+        .and_then(|v| option(g, capi::to_u32(g, v, "num_envs"), "num_envs", "an int"))?;
     let num_envs = NonZeroU32::new(num_envs)
         .ok_or_else(|| argument(g, "make: num_envs must be at least 1".to_owned()))?;
     let seed = match get("seed") {
-        Some(v) if capi::kind(v) != Kind::None => capi::to_u64(g, v, "seed")?,
+        Some(v) if capi::kind(v) != Kind::None => option(
+            g,
+            capi::to_u64(g, v, "seed"),
+            "seed",
+            "None or an int in [0, 2**64)",
+        )?,
         _ => 0,
     };
     let mut pool = PoolOptions::new(num_envs, Seed::new(seed));
     if let Some(v) = get("auto_reset").filter(|v| capi::kind(*v) != Kind::None) {
-        pool.auto_reset = match capi::to_string(g, v, "auto_reset")?.as_str() {
+        let mode = option(
+            g,
+            capi::to_string(g, v, "auto_reset"),
+            "auto_reset",
+            "a str",
+        )?;
+        pool.auto_reset = match mode.as_str() {
             "next_step" => AutoReset::NextStep,
             "same_step" => AutoReset::SameStep,
             "disabled" => AutoReset::Disabled,
@@ -139,27 +160,47 @@ fn options<'py>(
         };
     }
     if let Some(v) = get("max_episode_steps").filter(|v| capi::kind(*v) != Kind::None) {
-        let steps = capi::to_u32(g, v, "max_episode_steps")?;
+        let steps = option(
+            g,
+            capi::to_u32(g, v, "max_episode_steps"),
+            "max_episode_steps",
+            "None or an int",
+        )?;
         pool.max_episode_steps =
             Some(NonZeroU32::new(steps).ok_or_else(|| {
                 argument(g, "make: max_episode_steps must be at least 1".to_owned())
             })?);
     }
     let workers = match get("workers") {
-        Some(v) if capi::kind(v) != Kind::None => capi::to_u64(g, v, "workers")?,
+        Some(v) if capi::kind(v) != Kind::None => {
+            option(g, capi::to_u64(g, v, "workers"), "workers", "an int")?
+        }
         _ => 0,
     };
-    let workers = usize::try_from(workers).map_err(|_| capi::out_of_range(g, "workers"))?;
+    let workers = usize::try_from(workers)
+        .map_err(|_| argument(g, "make: workers is out of range".to_owned()))?;
     let cpu_set = match get("cpu_set") {
         Some(v) if capi::kind(v) != Kind::None => Some(
-            capi::list_items(g, v, "cpu_set")?
-                .iter()
-                .map(|c| {
-                    capi::to_u64(g, c.as_ref(), "cpu_set").and_then(|c| {
-                        usize::try_from(c).map_err(|_| capi::out_of_range(g, "cpu_set"))
-                    })
+            option(
+                g,
+                capi::list_items(g, v, "cpu_set"),
+                "cpu_set",
+                "None or a list of ints",
+            )?
+            .iter()
+            .map(|c| {
+                option(
+                    g,
+                    capi::to_u64(g, c.as_ref(), "cpu_set"),
+                    "cpu_set",
+                    "a list of ints",
+                )
+                .and_then(|c| {
+                    usize::try_from(c)
+                        .map_err(|_| argument(g, "make: cpu_set is out of range".to_owned()))
                 })
-                .collect::<CResult<Vec<usize>>>()?,
+            })
+            .collect::<CResult<Vec<usize>>>()?,
         ),
         _ => None,
     };
@@ -176,11 +217,11 @@ fn options<'py>(
     Ok((Options { pool, sync }, rest))
 }
 
-/// Reads the config keywords and decodes `C` (the shared decoder).
+/// Reads the config keywords and decodes `C` (the shared decoder): key
+/// names first, then values.
 fn decode_config<C: ConfigDecode>(g: Gil<'_>, entries: Vec<(String, Mine<'_>)>) -> CResult<C> {
-    let owned: Vec<(String, OwnedItem)> =
-        config::read(g, entries, 1)?.map_err(|e| config::raise_kwargs(g, &e))?;
-    config::decode::<C>(&owned).map_err(|e| config::raise_decode(g, &e))
+    let kwargs = config::read(g, entries)?.map_err(|e| config::raise_kwargs(g, &e))?;
+    config::decode_kwargs::<C>(&kwargs).map_err(|r| config::raise_refusal(g, &r))
 }
 
 fn engine(g: Gil<'_>, e: &EngineError) -> capi::Raised {
@@ -209,10 +250,13 @@ fn keywords<'py>(
 ///
 /// # Errors
 ///
-/// `ArgumentError` for positional arguments, a missing or invalid pool
-/// option or an unknown config key; `ConfigError` for a config that does
-/// not decode or validate, or action heads outside protocol 1; the engine's
-/// construction errors.
+/// `ArgumentError` for positional arguments, a missing pool option, a
+/// pool option of the wrong type or range (as `tessera_rl.make`), or an
+/// unknown config key (reported before any value's type); `ConfigError`
+/// for a config value of a type no field takes, a config that does not
+/// decode or validate, or action heads outside protocol 1; the engine's
+/// construction errors. The six named keywords are reserved: no config
+/// field can be set through them.
 #[doc(hidden)]
 pub fn make<'py, E, const A: usize>(
     g: Gil<'py>,
@@ -229,6 +273,8 @@ where
     // Protocol 1 carries discrete heads only, or one continuous head.
     let (discrete, continuous) = pool.action_heads();
     if !((discrete > 0 && continuous == 0) || (discrete == 0 && continuous == 1)) {
+        // Dropping a pool can block (host code): not under the GIL.
+        g.detach(move || drop(pool));
         return Err(errors::error(
             g,
             ErrorKind::Config,

@@ -80,7 +80,14 @@ def test_host_factory_two_front_ends_cover_success_and_every_error_kind():
 
 
 def test_host_factory_python_only_refusals():
-    for bad in ({"byte": [1]}, {"byte": None}, {"big": 2**64}, {"wide": -(2**63) - 1}):
+    # Only exact built-in types; None is never read as False (a bool field).
+    for bad in (
+        {"byte": [1]},
+        {"byte": None},
+        {"flag": None},
+        {"big": 2**64},
+        {"wide": -(2**63) - 1},
+    ):
         with pytest.raises(tessera_rl.ConfigError):
             host._config_python(**bad)
     with pytest.raises(tessera_rl.ArgumentError):
@@ -107,6 +114,15 @@ def test_host_factory_make_and_close():
         ({"num_envs": 2, "colour": 1}, tessera_rl.ArgumentError),
         ({"num_envs": 2, "episode": 0}, tessera_rl.ConfigError),
         ({"num_envs": 2, "offset": 1.5}, tessera_rl.ConfigError),
+        # Pool options of the wrong type are ArgumentError, as tessera_rl.make.
+        ({"num_envs": "2"}, tessera_rl.ArgumentError),
+        ({"num_envs": 2, "auto_reset": 3}, tessera_rl.ArgumentError),
+        ({"num_envs": 2, "workers": -1}, tessera_rl.ArgumentError),
+        ({"num_envs": 2, "workers": 1, "cpu_set": ["a"]}, tessera_rl.ArgumentError),
+        # An unknown key is reported before its value's type (SPEC 14.4.1).
+        ({"num_envs": 2, "render_mode": None}, tessera_rl.ArgumentError),
+        ({"num_envs": 2, "render_mode": [1, 2]}, tessera_rl.ArgumentError),
+        ({"num_envs": 2, "render_mode": 2**70}, tessera_rl.ArgumentError),
     ],
 )
 def test_host_factory_make_errors(kwargs, cls):
@@ -149,3 +165,64 @@ def test_host_factory_missing_tessera_rl_class_fails_the_import(tmp_path):
     run = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True)
     assert run.returncode == 0, run.stderr
     assert "import-failed: tessera_rl has no exception class ForkError" in run.stdout, run.stdout
+
+
+def test_host_factory_unknown_keys_before_value_types():
+    for value in (None, [1], 2**70):
+        with pytest.raises(tessera_rl.ArgumentError, match="unknown config key `render_mode`"):
+            host._config_python(render_mode=value)
+    # A known key with a refused value, beside an unknown one: still the
+    # unknown key first.
+    with pytest.raises(tessera_rl.ArgumentError):
+        host._config_python(byte=None, render_mode=1)
+
+
+def test_host_factory_nested_refusals_name_the_dotted_key():
+    with pytest.raises(tessera_rl.ConfigError, match="config key `inner.count`"):
+        host._config_python(inner={"count": [1]})
+
+
+def test_host_factory_entry_budget():
+    many = {f"k{i}": 1 for i in range(5000)}
+    with pytest.raises(tessera_rl.ConfigError, match="more than 4096 config entries"):
+        host._config_python(**many)
+
+
+def _stand_in(tmp_path, body):
+    pkg = tmp_path / "tessera_rl"
+    pkg.mkdir()
+    names = [
+        "TesseraError", "ConfigError", "ArgumentError", "ActionError", "PendingResetError",
+        "PoisonedError", "ConcurrencyError", "ExhaustedError", "FloatingPointEnvironmentError",
+    ]
+    (pkg / "__init__.py").write_text("".join(f"class {n}(Exception): pass\n" for n in names) + body)
+    script = textwrap.dedent(
+        f"""
+        import sys
+        sys.path.insert(0, {str(tmp_path)!r})
+        try:
+            import _tessera_host
+            print("imported")
+        except BaseException as e:
+            print("import-failed:", type(e).__name__, e)
+        """
+    )
+    return subprocess.run([sys.executable, "-c", script], capture_output=True, text=True)
+
+
+def test_host_factory_bound_name_must_be_an_exception_class(tmp_path):
+    run = _stand_in(tmp_path, "ForkError = 3\n")
+    assert run.returncode == 0, run.stderr
+    assert "import-failed: ImportError tessera_rl.ForkError is not an exception class" in run.stdout, run.stdout
+
+
+def test_host_factory_attribute_read_error_propagates_unchanged(tmp_path):
+    body = (
+        "def __getattr__(name):\n"
+        "    if name == 'ForkError':\n"
+        "        raise KeyboardInterrupt('from the attribute read')\n"
+        "    raise AttributeError(name)\n"
+    )
+    run = _stand_in(tmp_path, body)
+    assert run.returncode == 0, run.stderr
+    assert "import-failed: KeyboardInterrupt from the attribute read" in run.stdout, run.stdout

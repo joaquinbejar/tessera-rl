@@ -258,13 +258,16 @@ impl Drop for Mine<'_> {
 
 // -- exceptions -----------------------------------------------------------------
 
-/// An exception class: a built-in one, or one of this crate's
-/// ([`crate::errors`]). Made only here, so it is always a live type object.
+/// An exception class: a built-in one, or one of [`crate::errors`]'
+/// (created by `register`, or bound by `bind` after checking that it is a
+/// `BaseException` subclass). Made only here, so it is always a live
+/// exception type object.
 #[derive(Clone, Copy)]
 pub struct Exc(*mut ffi::PyObject);
 
 impl Exc {
-    /// A class this crate created and keeps alive for the process.
+    /// A class [`crate::errors`] created, or bound after checking it with
+    /// [`is_exception_class`], and keeps alive for the process.
     pub(crate) const fn from_type(ty: *mut ffi::PyObject) -> Self {
         Self(ty)
     }
@@ -326,6 +329,38 @@ pub(crate) fn new_exception<'py>(
     Mine::container(unsafe {
         thunks::c_err_new_exception(name.as_ptr(), doc.as_ptr(), base, ptr::null_mut())
     })
+}
+
+/// Whether `r` is a class deriving from `BaseException` (direct: a flag
+/// read and an MRO walk, no Python code).
+#[cfg(feature = "host")]
+#[must_use]
+pub(crate) fn is_exception_class(r: Ref<'_>) -> bool {
+    // SAFETY: a live object; `PyType_Check` reads its type's flags.
+    if unsafe { ffi::PyType_Check(r.as_ptr()) } == 0 {
+        return false;
+    }
+    // SAFETY: reading an interpreter global.
+    let base = unsafe { ffi::PyExc_BaseException };
+    // SAFETY: two live type objects (`r` checked above); the subtype check
+    // walks the MRO without running Python code.
+    unsafe {
+        ffi::PyType_IsSubtype(
+            r.as_ptr().cast::<ffi::PyTypeObject>(),
+            base.cast::<ffi::PyTypeObject>(),
+        ) != 0
+    }
+}
+
+/// Whether the pending exception is an `AttributeError` (direct: a class
+/// comparison that runs no Python code). False with none pending.
+#[cfg(feature = "host")]
+#[must_use]
+pub(crate) fn pending_is_attribute_error(_g: Gil<'_>) -> bool {
+    // SAFETY: reading an interpreter global.
+    let attribute_error = unsafe { ffi::PyExc_AttributeError };
+    // SAFETY: attached; a class comparison that runs no Python code.
+    unsafe { ffi::PyErr_ExceptionMatches(attribute_error) != 0 }
 }
 
 /// Imports the module `name` (callout: runs the import system).
