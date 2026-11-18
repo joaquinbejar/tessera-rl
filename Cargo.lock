@@ -1205,6 +1205,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "tessera-rl-test-host-wheel"
+version = "0.2.0"
+dependencies = [
+ "pyo3",
+ "tessera-rl-core",
+ "tessera-rl-macros",
+ "tessera-rl-num",
+ "tessera-rl-pyffi",
+ "tessera-rl-test-host-env",
+]
+
+[[package]]
 name = "thiserror"
 version = "2.0.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"

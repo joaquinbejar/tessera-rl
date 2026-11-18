@@ -4,7 +4,7 @@
 # maturin's default of macOS 11. Ignored on other platforms.
 export MACOSX_DEPLOYMENT_TARGET := 13.0
 
-.PHONY: onnx-test py-test-onnx fuzz-check simd-disasm dashboard dashboard-check check-build-id gungraun-threaded fmt fmt-check clippy test doc readme readme-check pre-push deny check-targets wheel-golden py-test-wheels puffer-test py-test-jax pre-push-jax compat-test py-entries pyffi-api pyffi-api-if-nightly py-callouts py-test py-test-hooks py-test-torch pre-push-torch gym-equivalence reference-training learning-test learning-calibrate bench bench-quick bench-kernels gungraun gungraun-bless connect4-calibration search-strength
+.PHONY: onnx-test py-test-onnx fuzz-check simd-disasm dashboard dashboard-check check-build-id gungraun-threaded fmt fmt-check clippy test doc readme readme-check pre-push deny check-targets wheel-golden py-test-wheels puffer-test py-test-jax pre-push-jax compat-test py-entries pyffi-api pyffi-api-if-nightly py-callouts py-test py-test-hooks py-test-host py-test-torch pre-push-torch gym-equivalence reference-training learning-test learning-calibrate bench bench-quick bench-kernels gungraun gungraun-bless connect4-calibration search-strength
 
 fmt:
 	cargo fmt --all
@@ -148,6 +148,13 @@ py-test-hooks:
 	if [ $$status -eq 0 ]; then uv run --locked --python 3.11 pytest -q tests/python/test_fp_boundary.py tests/python/test_poison_outputs.py tests/python/test_continuous_actions.py tests/python/test_multi_actions.py tests/python/test_gym_equivalence_pendulum.py tests/python/test_pyffi_api.py; status=$$?; fi; \
 	uv sync --locked --python 3.11 --reinstall-package tessera-rl || status=1; \
 	exit $$status
+
+# Host protocol 1 (#272 step 4): builds the test host wheel of
+# tests/host-wheel into the uv environment and runs its tests.
+py-test-host:
+	uv sync --locked --python 3.11
+	uv pip install --python .venv/bin/python --no-deps --reinstall ./tests/host-wheel
+	uv run --locked --python 3.11 pytest -q tests/python/test_host_factory.py
 
 # The Python tests with PyTorch (marker `torch`), then the default
 # environment again.

@@ -1,0 +1,13 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
+[build-system]
+requires = ["maturin>=1.16,<2"]
+build-backend = "maturin"
+
+[project]
+name = "tessera-rl-test-host-wheel"
+version = "0.0.0"
+requires-python = ">=3.11"
+
+[tool.maturin]
+module-name = "_tessera_host"

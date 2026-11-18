@@ -21,6 +21,7 @@ members = [
     "tests/downstream",
     "tests/host-env",
     "tests/host-glue",
+    "tests/host-wheel",
     "crates/tessera-rl-py",
     "crates/tessera-rl-pyffi",
 ]

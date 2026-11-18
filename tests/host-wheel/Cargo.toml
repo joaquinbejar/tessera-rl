@@ -1,0 +1,36 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
+# A test-only host environment wheel (#272 step 4): the counter of
+# tests/host-env exported with export_host_env!, plus test functions that
+# decode configs through the Python and the Rust front ends. Built by
+# `make py-test-host`; never published.
+
+[package]
+name = "tessera-rl-test-host-wheel"
+description = "Test-only host environment wheel for host protocol 1"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[lib]
+name = "tessera_host_test"
+crate-type = ["cdylib"]
+
+[dependencies]
+tessera-rl-core.workspace = true
+tessera-rl-macros.workspace = true
+tessera-rl-num.workspace = true
+tessera-rl-pyffi = { workspace = true, features = ["host"] }
+# The final cdylib enables extension-module (ADR-0062 step 3 terms).
+pyo3 = { workspace = true, features = ["extension-module"] }
+tessera-rl-test-host-env = { path = "../host-env" }
+
+[lints.rust]
+# The expansion of export_host_env! must contain no unsafe (#272 step 4).
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
