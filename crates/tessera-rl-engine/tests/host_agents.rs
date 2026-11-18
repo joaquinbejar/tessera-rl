@@ -150,7 +150,8 @@ fn test_host_spawn_without_spawns_is_an_invalid_event_never_applied() {
         HostPool::<Squad<false>, SLOTS>::new(&SquadConfig { initial: 2 }, options(1)).unwrap();
     p.reset_all(Reseed::Keep).unwrap();
     let result = p.step(ActionInput {
-        discrete: &[SPAWN_BASE + 3, NOTHING, NOTHING, NOTHING],
+        // Two empty slots, 2 and 3: both spawns are refused.
+        discrete: &[SPAWN_BASE + 3, SPAWN_BASE + 2, NOTHING, NOTHING],
         continuous: &[],
     });
     if cfg!(feature = "debug-checks") {
@@ -160,7 +161,7 @@ fn test_host_spawn_without_spawns_is_an_invalid_event_never_applied() {
                 result,
                 Err(EngineError::InvalidAgentEvent {
                     instance: 0,
-                    agent: 3
+                    agent: 2
                 })
             ),
             "{result:?}"

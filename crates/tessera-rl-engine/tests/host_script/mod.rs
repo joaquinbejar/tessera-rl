@@ -77,6 +77,9 @@ pub struct Shared {
     /// Instances whose next `validate` rejects, once (bit `i`, cleared by
     /// that call): an impure `validate`, for the engine's re-run check.
     pub reject_once: AtomicU32,
+    /// Resets write events before they decide whether to abort: slot 0
+    /// terminated, slot 1 died, slot 2 spawned.
+    pub reset_events: AtomicBool,
     /// Instances whose `validate` panics (bit `i`).
     pub panic_validate: AtomicU32,
     /// `validate` leaves flush-to-zero set.
@@ -199,6 +202,11 @@ impl<const T: u8, const V: bool> HostEnvironment for Script<T, V> {
         self.step = 0;
         self.episode = seed.episode_index();
         out.set_reward(slot(0), RESET_REWARD);
+        if self.shared.reset_events.load(Ordering::Relaxed) {
+            out.terminate_agent(slot(0));
+            out.agent_died(slot(1));
+            out.agent_spawned(slot(2));
+        }
         let left = self
             .shared
             .reset_aborts
