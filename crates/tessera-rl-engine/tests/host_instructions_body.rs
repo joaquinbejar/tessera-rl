@@ -1,27 +1,55 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! Runs the `host_instructions` bench's environment natively (the bench
-//! itself needs Valgrind): the host CartPole port follows the first-party
-//! physics, and a pool of it steps without poisoning.
+//! Runs the `host_instructions` bench's own setup and measured steps
+//! natively (the bench itself needs Valgrind): the host CartPole port
+//! follows its physics, and the measured steps end the episodes they are
+//! pinned to end.
 
 #![cfg(feature = "host")]
+#![expect(clippy::unwrap_used, reason = "test code unwraps")]
 
 use core::num::NonZeroU32;
 
-use tessera_rl_classic::CartPoleConfig;
-use tessera_rl_classic::cartpole::physics;
 use tessera_rl_engine::{ActionInput, HostPool, PoolOptions, Reseed};
 use tessera_rl_num::identity::Seed;
 
-#[path = "../benches/support/host_cartpole.rs"]
-mod host_cartpole;
+#[path = "../benches/support/mod.rs"]
+mod support;
 
-use host_cartpole::HostCartPole;
+use support::host_cartpole::{HostCartPole, HostCartPoleConfig, physics_step};
+use support::host_setup::steady;
+
+/// Episodes terminated in the 64 measured steps of `steady(n)`.
+fn measured_terminations(n: u32) -> usize {
+    let (mut pool, rows) = steady(n);
+    let mut ended = 0;
+    for actions in &rows {
+        let out = pool
+            .step(ActionInput {
+                discrete: actions,
+                continuous: &[],
+            })
+            .unwrap();
+        ended += out.episode_terminated().iter().filter(|f| f.get()).count();
+    }
+    assert!(!pool.is_poisoned());
+    ended
+}
 
 #[test]
-fn test_host_cartpole_steps_follow_the_first_party_physics() {
+fn test_host_instructions_measured_steps_n1_end_pinned_episodes() {
+    assert_eq!(measured_terminations(1), 2);
+}
+
+#[test]
+fn test_host_instructions_measured_steps_n1024_end_pinned_episodes() {
+    assert_eq!(measured_terminations(1024), 2848);
+}
+
+#[test]
+fn test_host_cartpole_steps_follow_its_physics() {
     let mut pool = HostPool::<HostCartPole, 1>::new(
-        &CartPoleConfig::default(),
+        &HostCartPoleConfig,
         PoolOptions::new(NonZeroU32::new(4).unwrap(), Seed::new(1)),
     )
     .unwrap();
@@ -52,7 +80,12 @@ fn test_host_cartpole_steps_follow_the_first_party_physics() {
             })
         };
         let before = row(&first);
-        let expected = physics::step(before, *push == 1);
+        // The reset draw lies in the first-party reset range.
+        assert!(
+            before.iter().all(|v| v.abs() <= 0.05),
+            "instance {i}: {before:?}"
+        );
+        let expected = physics_step(before, *push == 1);
         for (got, want) in row(after).iter().zip(expected) {
             // The state is f64; the observation rounds it to f32, and the
             // check starts from the rounded observation.

@@ -1047,7 +1047,6 @@ dependencies = [
  "libc",
  "loom",
  "proptest",
- "tessera-rl-classic",
  "tessera-rl-core",
  "tessera-rl-engine",
  "tessera-rl-macros",

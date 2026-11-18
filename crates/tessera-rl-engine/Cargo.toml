@@ -53,8 +53,6 @@ criterion.workspace = true
 gungraun.workspace = true
 tessera-rl-num = { workspace = true, features = ["test-hooks"] }
 tessera-rl-macros.workspace = true
-# The host bench's CartPole physics and spaces (host_instructions).
-tessera-rl-classic.workspace = true
 
 [lints]
 workspace = true
