@@ -35,10 +35,14 @@
 //!
 //! Experimental until 1.0 (ADR-0062 item 9).
 
+mod dyn_pool;
 mod kernels;
+
+pub use dyn_pool::DynHostPool;
 
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
+use tessera_rl_core::envs::HostRegistration;
 use tessera_rl_core::{
     ActionReject, Bool8, EnvConfig, HostEnvironment, HostError, RecordLayout, StateInit,
     TurnStructure,
@@ -305,6 +309,15 @@ impl<E: HostEnvironment, const A: usize> HostPool<E, A> {
             crate::sys::Faults::default(),
         )?);
         Ok(self)
+    }
+
+    /// The environment's registration record, `HostRegistration::of::<E>()`
+    /// (ADR-0065 item 3): its id, version, agent count, turns and
+    /// information.
+    #[must_use]
+    pub const fn registration(&self) -> &'static HostRegistration {
+        // An inline const per monomorphisation: promoted to `'static`.
+        const { &HostRegistration::of::<E>() }
     }
 
     /// Number of worker threads; 0 in Inline mode.
