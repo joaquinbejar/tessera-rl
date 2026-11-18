@@ -27,9 +27,11 @@ type Pool = HostPool<Book, { Book::MAX_AGENTS }>;
 fn pool(n: u32, mode: AutoReset, sync: bool) -> Pool {
     let mut o = PoolOptions::new(NonZeroU32::new(n).unwrap(), Seed::new(5));
     o.auto_reset = mode;
+    // Sync: chunks of 1 over 3 workers, so every worker runs chunks.
+    o.chunk_size = NonZeroU32::MIN;
     let p = Pool::new(&BookConfig::default(), o).unwrap();
     if sync {
-        p.with_workers(SyncOptions::new(core::num::NonZeroUsize::new(2).unwrap()))
+        p.with_workers(SyncOptions::new(core::num::NonZeroUsize::new(3).unwrap()))
             .unwrap()
     } else {
         p
@@ -109,24 +111,26 @@ fn test_host_outputs_pending_reset_follows_episode_ends() {
         (AutoReset::Disabled, true),
         (AutoReset::SameStep, false),
     ] {
-        let mut p = pool(3, mode, false);
-        p.reset_all(Reseed::Keep).unwrap();
-        for t in 1..=5 {
-            p.step(ActionInput {
-                discrete: &hold(3),
-                continuous: &[],
-            })
-            .unwrap();
-            let want = if t == 5 { after_end } else { false };
-            assert_eq!(pending(&p), [want; 3], "{mode:?} step {t}");
-        }
-        if mode == AutoReset::NextStep {
-            p.step(ActionInput {
-                discrete: &hold(3),
-                continuous: &[],
-            })
-            .unwrap();
-            assert_eq!(pending(&p), [false; 3]);
+        for sync in [false, true] {
+            let mut p = pool(3, mode, sync);
+            p.reset_all(Reseed::Keep).unwrap();
+            for t in 1..=5 {
+                p.step(ActionInput {
+                    discrete: &hold(3),
+                    continuous: &[],
+                })
+                .unwrap();
+                let want = if t == 5 { after_end } else { false };
+                assert_eq!(pending(&p), [want; 3], "{mode:?} step {t}");
+            }
+            if mode == AutoReset::NextStep {
+                p.step(ActionInput {
+                    discrete: &hold(3),
+                    continuous: &[],
+                })
+                .unwrap();
+                assert_eq!(pending(&p), [false; 3]);
+            }
         }
     }
 }
