@@ -119,6 +119,8 @@ pub const MAX_HOST_AGENTS: usize = 256;
 #[derive(Debug)]
 pub struct HostPool<E: HostEnvironment, const A: usize> {
     options: PoolOptions,
+    /// `E::initial_agents(cfg)`, checked at construction.
+    initial: usize,
     headers: Vec<HostHeader<A>>,
     instances: Vec<E>,
     layout: ActionLayout,
@@ -176,6 +178,14 @@ impl<E: HostEnvironment, const A: usize> HostPool<E, A> {
             });
         }
         cfg.validate()?;
+        let initial = E::initial_agents(cfg);
+        if !(1..=A).contains(&initial) {
+            return Err(tessera_rl_core::ConfigError {
+                field: "initial_agents",
+                reason: "must be in 1..=MAX_AGENTS",
+            }
+            .into());
+        }
         options.validate()?;
         let obs_space = E::observation_space(cfg)?;
         obs_space.validate()?;
@@ -225,6 +235,7 @@ impl<E: HostEnvironment, const A: usize> HostPool<E, A> {
             .collect::<Result<Vec<E>, EngineError>>()?;
         Ok(Self {
             options,
+            initial,
             headers,
             instances,
             discrete: vec![
@@ -359,6 +370,7 @@ impl<E: HostEnvironment, const A: usize> HostPool<E, A> {
             sync,
             layout,
             options,
+            initial,
             fp_resets,
             #[cfg(feature = "debug-checks")]
             allocs,
@@ -368,6 +380,7 @@ impl<E: HostEnvironment, const A: usize> HostPool<E, A> {
             layout,
             limit: options.max_episode_steps.map(core::num::NonZeroU32::get),
             auto_reset: options.auto_reset,
+            initial: *initial,
             fp_resets,
             #[cfg(feature = "debug-checks")]
             allocs,
@@ -428,14 +441,26 @@ impl<E: HostEnvironment, const A: usize> HostPool<E, A> {
             instances,
             outputs,
             poisoned,
+            layout,
+            options,
+            initial,
             fp_resets,
             #[cfg(feature = "debug-checks")]
             allocs,
             ..
         } = self;
+        let ctx = HostCtx {
+            layout,
+            limit: options.max_episode_steps.map(core::num::NonZeroU32::get),
+            auto_reset: options.auto_reset,
+            initial: *initial,
+            fp_resets,
+            #[cfg(feature = "debug-checks")]
+            allocs,
+        };
         run_kernels(poisoned, || {
             #[cfg(feature = "debug-checks")]
-            let _bracket = crate::sys::alloc_track::HostBracket::enter(allocs);
+            let _bracket = crate::sys::alloc_track::HostBracket::enter(ctx.allocs);
             let outputs = &mut outputs.view_all();
             for (k, i) in indices.clone().enumerate() {
                 let (Some(header), Some(inst)) = (headers.get_mut(i), instances.get_mut(i)) else {
@@ -443,13 +468,13 @@ impl<E: HostEnvironment, const A: usize> HostPool<E, A> {
                 };
                 crate::pool::clear_instance(outputs, i);
                 kernels::reset_one::<E, A>(
+                    &ctx,
                     header,
                     inst,
                     reseed.seed(k),
                     outputs,
                     i,
                     kernels::ResetRows::Live,
-                    fp_resets,
                 );
                 crate::pool::write_agent_masks(outputs, i, header);
                 kernels::observe_instance::<E, A>(header, inst, outputs, i);
@@ -499,6 +524,7 @@ impl<E: HostEnvironment, const A: usize> HostPool<E, A> {
             sync,
             layout,
             options,
+            initial,
             fp_resets,
             #[cfg(feature = "debug-checks")]
             allocs,
@@ -508,6 +534,7 @@ impl<E: HostEnvironment, const A: usize> HostPool<E, A> {
             layout,
             limit: options.max_episode_steps.map(core::num::NonZeroU32::get),
             auto_reset: options.auto_reset,
+            initial: *initial,
             fp_resets,
             #[cfg(feature = "debug-checks")]
             allocs,

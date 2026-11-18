@@ -113,6 +113,8 @@ where
     const ENV_VERSION: u32 = 1;
     const MAX_AGENTS: usize = 2;
     const TURNS: TurnStructure = E::TURNS;
+    // The first-party environment respawns agent 1 (ADR-0065).
+    const SPAWNS: bool = true;
     type Config = CountConfig;
 
     fn new(cfg: &CountConfig) -> Result<Self, HostError> {

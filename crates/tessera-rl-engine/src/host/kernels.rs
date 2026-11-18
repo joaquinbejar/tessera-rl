@@ -36,6 +36,8 @@ pub(crate) struct HostCtx<'a> {
     pub(crate) layout: &'a ActionLayout,
     pub(crate) limit: Option<u32>,
     pub(crate) auto_reset: AutoReset,
+    /// Agent slots alive after a reset (`HostEnvironment::initial_agents`).
+    pub(crate) initial: usize,
     /// Times a host chunk left the thread's FP controls non-canonical.
     pub(crate) fp_resets: &'a AtomicU64,
     /// The pool's host allocation tally (ADR-0062 item 4).
@@ -80,15 +82,7 @@ fn step_rows<E: HostEnvironment, const A: usize>(ctx: &HostCtx<'_>, rows: &mut H
     for (i, (header, inst)) in headers.iter_mut().zip(instances.iter_mut()).enumerate() {
         if header.engine().pending_reset.get() {
             // NextStep: reset instead of stepping (validated above).
-            reset_one::<E, A>(
-                header,
-                inst,
-                None,
-                outputs,
-                i,
-                ResetRows::Live,
-                ctx.fp_resets,
-            );
+            reset_one::<E, A>(ctx, header, inst, None, outputs, i, ResetRows::Live);
             write_agent_masks(outputs, i, header);
             observe_rows::<E, A, false>(header, inst, outputs, i);
             continue;
@@ -106,15 +100,7 @@ fn step_rows<E: HostEnvironment, const A: usize>(ctx: &HostCtx<'_>, rows: &mut H
             save_terminal(outputs, i);
             // Flags, rewards and stats of the ended episode stay set: the
             // reset writes scratch rows.
-            reset_one::<E, A>(
-                header,
-                inst,
-                None,
-                outputs,
-                i,
-                ResetRows::Scratch,
-                ctx.fp_resets,
-            );
+            reset_one::<E, A>(ctx, header, inst, None, outputs, i, ResetRows::Scratch);
             write_agent_masks(outputs, i, header);
             // The rows hold the terminal observation: zero them again.
             observe_rows::<E, A, true>(header, inst, outputs, i);
@@ -142,13 +128,13 @@ pub(crate) fn reset_chunk<E: HostEnvironment, const A: usize>(
         clear_chunk(outputs, headers.len());
         for (i, (header, inst)) in headers.iter_mut().zip(instances.iter_mut()).enumerate() {
             reset_one::<E, A>(
+                ctx,
                 header,
                 inst,
                 reseed.seed(first + i),
                 outputs,
                 i,
                 ResetRows::Live,
-                ctx.fp_resets,
             );
             write_agent_masks(outputs, i, header);
             observe_rows::<E, A, false>(header, inst, outputs, i);
@@ -158,18 +144,19 @@ pub(crate) fn reset_chunk<E: HostEnvironment, const A: usize>(
 }
 
 /// Resets instance `i`: reseeds it (or advances its episode index), makes
-/// every agent slot alive, and calls the environment's `reset` with the
+/// slots `0..initial` alive and the others empty, and calls the environment's `reset` with the
 /// instance's seed. Rewards the reset writes are its outputs; an episode
 /// end it reports is ignored.
 pub(crate) fn reset_one<E: HostEnvironment, const A: usize>(
+    ctx: &HostCtx<'_>,
     header: &mut HostHeader<A>,
     inst: &mut E,
     seed: Option<Seed>,
     outputs: &mut OutputsView<'_>,
     i: usize,
     rows: ResetRows,
-    fp_resets: &AtomicU64,
 ) {
+    let initial = ctx.initial;
     let engine = header.engine();
     let mut episode = engine.identity.episode_index();
     if let Some(seed) = seed {
@@ -187,9 +174,11 @@ pub(crate) fn reset_one<E: HostEnvironment, const A: usize>(
     engine.pending_reset = Bool8::FALSE;
     engine.end_kind = 0;
     engine.episode_steps = 0;
-    for row in header.agents_mut() {
-        row.alive = Bool8::TRUE;
-        row.acting = Bool8::TRUE;
+    // `initial` is checked at construction (ADR-0065).
+    for (slot, row) in header.agents_mut().iter_mut().enumerate() {
+        let alive = Bool8::from(slot < initial);
+        row.alive = alive;
+        row.acting = alive;
         row.episode_return = 0.0;
         row.illegal_actions = 0;
         row.invalid_agent_events = 0;
@@ -237,7 +226,7 @@ pub(crate) fn reset_one<E: HostEnvironment, const A: usize>(
             inst.reset(seed, &mut out);
         }
     }
-    recanonicalize(fp_resets);
+    recanonicalize(ctx.fp_resets);
     update_acting::<E, A>(header, inst);
 }
 
@@ -336,7 +325,8 @@ fn step_one<E: HostEnvironment, const A: usize>(
             row.acting = Bool8::FALSE;
         }
         if spawned {
-            let valid = !died && !row.alive.get();
+            // Without `SPAWNS`, every spawn is invalid (ADR-0065).
+            let valid = E::SPAWNS && !died && !row.alive.get();
             if !valid {
                 row.invalid_agent_events = row.invalid_agent_events.saturating_add(1);
                 set(outputs.invalid_agent_event, k, true);

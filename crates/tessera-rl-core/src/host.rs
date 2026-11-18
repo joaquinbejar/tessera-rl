@@ -110,6 +110,11 @@ pub trait HostEnvironment: Send + Sized + 'static {
     /// ([`HostEnvironment::mask`]). Without masks the pool has no mask
     /// buffer (a mask length of 0) and never calls `mask`.
     const MASKS: bool = false;
+    /// Whether the environment fills empty slots with `agent_spawned`
+    /// (ADR-0065). With `false`, a spawn is an invalid agent event, for any
+    /// slot: it is not applied, and it is counted and marked as the other
+    /// invalid events are, so slots `initial_agents..` stay empty.
+    const SPAWNS: bool = false;
 
     /// The environment's configuration.
     type Config: EnvConfig;
@@ -121,6 +126,18 @@ pub trait HostEnvironment: Send + Sized + 'static {
     /// [`HostError`] when the configuration or the environment's own setup
     /// fails.
     fn new(cfg: &Self::Config) -> Result<Self, HostError>;
+
+    /// Number of agent slots alive at the start of each episode: slots
+    /// `0..n` start alive and acting, the rest start empty and may be filled
+    /// by `agent_spawned` when [`HostEnvironment::SPAWNS`] is `true`
+    /// (ADR-0065). [`HostEnvironment::MAX_AGENTS`] stays the capacity. The
+    /// engine checks `1..=MAX_AGENTS` at construction. Defaults to
+    /// `MAX_AGENTS`.
+    #[must_use]
+    fn initial_agents(cfg: &Self::Config) -> usize {
+        let _ = cfg;
+        Self::MAX_AGENTS
+    }
 
     /// The observation space of one agent.
     ///
@@ -136,7 +153,8 @@ pub trait HostEnvironment: Send + Sized + 'static {
     /// [`SpaceError`] for an invalid configuration.
     fn action_space(cfg: &Self::Config) -> Result<Space, SpaceError>;
 
-    /// Starts an episode with `seed`. Every agent slot is alive afterwards.
+    /// Starts an episode with `seed`. Slots `0..initial_agents` are alive
+    /// afterwards, and the others empty.
     ///
     /// What `out` means depends on why the reset runs:
     ///
@@ -150,7 +168,7 @@ pub trait HostEnvironment: Send + Sized + 'static {
     ///
     /// An episode end reported through `out` is ignored in every case, and
     /// so are the `died` and `spawned` flags: they never change which agent
-    /// slots are alive after a reset (all of them).
+    /// slots are alive after a reset (`0..initial_agents`).
     fn reset(&mut self, seed: HostSeed, out: &mut StepOut<'_>);
 
     /// Applies one step of validated actions.
