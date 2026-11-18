@@ -44,6 +44,8 @@ docker run --rm --security-opt seccomp=unconfined \
 | `turns_instructions::masked_step` | One Inline pool step, 1,024 instances of the counter environment with masks on (mask writing) |
 | `turns_instructions::sequential_step` | One Inline pool step, 1,024 instances of the Sequential race fixture (target 100) with masks on: masks, the acting update and the turn check |
 | `async_instructions::drain` | One Async round on one worker: 256 counter instances sent at once and received in batches of 64. Only the drain job (`run_drain`) is counted: run claims, chunk steps and completion pushes. Not the caller, whose polling depends on the scheduler (issue #83) |
+| `host_instructions::host_pool_steady` | 64 Inline `HostPool` steps, 1,024 instances of a host CartPole port (`crates/tessera-rl-engine/benches/support/host_cartpole.rs`: the first-party physics, spaces, reward and termination, state held by the instance) in steady state, with `cartpole_pool_steady`'s setup. The ADR-0059 baseline for host pool changes (#272) |
+| `host_instructions::host_pool_one` | The same at `num_envs = 1`: the per-call overhead of a host pool |
 | `games_instructions::connect4_pool_step` | One Inline mid-game pool step, 1,024 Connect Four instances 10 plies in (masks, the acting update and the turn check). Auto-reset is enabled but not exercised: no game ends in the measured step |
 | `games_instructions::bot_choose` | The pinned P2-G1 bot's choice (depth 4) on 32 fixed mid-game positions |
 | `search_instructions::expand_batch` | One batched expansion of the 7 children of the empty Connect Four board (restore, one scratch step, snapshot, commit) |
