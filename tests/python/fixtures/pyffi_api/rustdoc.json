@@ -1,0 +1,20 @@
+{
+  "format_version": 61,
+  "root": 0,
+  "crate_version": "0.0.0",
+  "includes_private": false,
+  "index": {
+    "0": {"id": 0, "crate_id": 0, "name": "fixture", "visibility": "public", "span": {"filename": "src/lib.rs", "begin": [1, 0], "end": [9, 0]}, "inner": {"module": {"is_crate": true, "items": [1, 2, 3, 5, 6, 7], "is_stripped": false}}},
+    "1": {"id": 1, "crate_id": 0, "name": "sneaky", "visibility": "public", "span": {"filename": "src/lib.rs", "begin": [1, 0], "end": [1, 24]}, "inner": {"function": {"header": {"is_const": false, "is_unsafe": true, "is_async": false, "abi": "Rust"}, "has_body": true}}},
+    "2": {"id": 2, "crate_id": 0, "name": "quiet", "visibility": "crate", "span": {"filename": "src/lib.rs", "begin": [2, 0], "end": [2, 30]}, "inner": {"function": {"header": {"is_const": false, "is_unsafe": true, "is_async": false, "abi": "Rust"}, "has_body": true}}},
+    "3": {"id": 3, "crate_id": 0, "name": "Sneaky", "visibility": "public", "span": {"filename": "src/lib.rs", "begin": [3, 0], "end": [3, 40]}, "inner": {"trait": {"is_auto": false, "is_unsafe": false, "items": [4]}}},
+    "4": {"id": 4, "crate_id": 0, "name": "in_trait", "visibility": "default", "span": {"filename": "src/lib.rs", "begin": [3, 16], "end": [3, 38]}, "inner": {"function": {"header": {"is_const": false, "is_unsafe": true, "is_async": false, "abi": "Rust"}, "has_body": false}}},
+    "5": {"id": 5, "crate_id": 0, "name": "foreign_safe", "visibility": "public", "span": {"filename": "src/lib.rs", "begin": [4, 20], "end": [4, 50]}, "inner": {"function": {"header": {"is_const": false, "is_unsafe": false, "is_async": false, "abi": {"C": {"unwind": false}}}, "has_body": false}}},
+    "6": {"id": 6, "crate_id": 0, "name": "fine", "visibility": "public", "span": {"filename": "src/lib.rs", "begin": [5, 0], "end": [5, 16]}, "inner": {"function": {"header": {"is_const": false, "is_unsafe": false, "is_async": false, "abi": "Rust"}, "has_body": true}}},
+    "7": {"id": 7, "crate_id": 0, "name": "Fine", "visibility": "public", "span": {"filename": "src/lib.rs", "begin": [6, 0], "end": [6, 30]}, "inner": {"trait": {"is_auto": false, "is_unsafe": false, "items": [8]}}},
+    "8": {"id": 8, "crate_id": 0, "name": "required", "visibility": "default", "span": {"filename": "src/lib.rs", "begin": [6, 14], "end": [6, 28]}, "inner": {"function": {"header": {"is_const": false, "is_unsafe": false, "is_async": false, "abi": "Rust"}, "has_body": false}}},
+    "9": {"id": 9, "crate_id": 1, "name": "elsewhere", "visibility": "public", "span": null, "inner": {"function": {"header": {"is_const": false, "is_unsafe": true, "is_async": false, "abi": "Rust"}, "has_body": true}}}
+  },
+  "paths": {},
+  "external_crates": {}
+}

@@ -31,7 +31,7 @@ pub struct GatherStorage {
 }
 
 // SAFETY: the words are written only through the unique `GatherWriter`, and
-// `GatherBuffer` itself only hands out raw pointers to them; all other
+// `GatherStorage` itself only hands out raw pointers to them; all other
 // fields are immutable or atomic.
 unsafe impl Sync for GatherStorage {}
 

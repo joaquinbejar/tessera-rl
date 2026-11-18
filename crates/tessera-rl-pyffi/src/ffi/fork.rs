@@ -29,13 +29,13 @@ pub const REFUSAL: &str = "this environment was created before os.fork() and can
      used in the child, where its worker threads do not exist: create a new environment in the \
      child, or use the spawn start method";
 
-/// The child handler. An atomic increment only: it runs inside `fork`, where
-/// only async-signal-safe work is allowed, so it touches no Python and does not
-/// allocate.
 /// Whether the fork handler is registered (once per process).
 #[cfg(not(windows))]
 static REGISTERED: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 
+/// The child handler. An atomic increment only: it runs inside `fork`, where
+/// only async-signal-safe work is allowed, so it touches no Python and does not
+/// allocate.
 #[cfg(not(windows))]
 extern "C" fn after_in_child() {
     GENERATION.fetch_add(1, Ordering::AcqRel);

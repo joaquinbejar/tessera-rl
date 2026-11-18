@@ -4,7 +4,7 @@
 # maturin's default of macOS 11. Ignored on other platforms.
 export MACOSX_DEPLOYMENT_TARGET := 13.0
 
-.PHONY: onnx-test py-test-onnx fuzz-check simd-disasm dashboard dashboard-check check-build-id gungraun-threaded fmt fmt-check clippy test doc readme readme-check pre-push deny check-targets wheel-golden py-test-wheels puffer-test py-test-jax pre-push-jax compat-test py-entries py-callouts py-test py-test-hooks py-test-torch pre-push-torch gym-equivalence reference-training learning-test learning-calibrate bench bench-quick bench-kernels gungraun gungraun-bless connect4-calibration search-strength
+.PHONY: onnx-test py-test-onnx fuzz-check simd-disasm dashboard dashboard-check check-build-id gungraun-threaded fmt fmt-check clippy test doc readme readme-check pre-push deny check-targets wheel-golden py-test-wheels puffer-test py-test-jax pre-push-jax compat-test py-entries pyffi-api pyffi-api-if-nightly py-callouts py-test py-test-hooks py-test-torch pre-push-torch gym-equivalence reference-training learning-test learning-calibrate bench bench-quick bench-kernels gungraun gungraun-bless connect4-calibration search-strength
 
 fmt:
 	cargo fmt --all
@@ -30,7 +30,7 @@ readme:
 readme-check:
 	cargo readme -r crates/tessera-rl -t $(CURDIR)/README.tpl --no-title --no-license --no-indent-headings | diff -u README.md -
 
-pre-push: fmt-check clippy test doc readme-check compat-test py-entries py-callouts py-test py-test-hooks py-test-wheels dashboard-check simd-disasm fuzz-check
+pre-push: fmt-check clippy test doc readme-check compat-test py-entries pyffi-api-if-nightly py-callouts py-test py-test-hooks py-test-wheels dashboard-check simd-disasm fuzz-check
 
 # The audited ONNX Runtime version read against the real library (ADR-0057).
 # ONNXRUNTIME_LIB is the libonnxruntime of onnxruntime==1.31.1. Telemetry is
@@ -89,17 +89,26 @@ simd-disasm:
 	python3 scripts/check_simd_disasm.py
 
 # ADR-0041: no raw PyO3 registrations in tessera-rl-py; no public unsafe
-# function in tessera-rl-pyffi (source scan).
+# function in tessera-rl-pyffi (a source lint, not a proof).
 py-entries:
 	python3 scripts/check_py_entries.py
 
 # No public unsafe function in tessera-rl-pyffi, from rustdoc's JSON
-# (nightly; #272 step 3).
+# (nightly; #272 step 3; a lint, not a proof).
 pyffi-api:
 	python3 scripts/check_pyffi_api.py
 
+# pre-push runs pyffi-api only when a nightly toolchain is installed, and
+# says so when it skips it.
+pyffi-api-if-nightly:
+	@if cargo +nightly --version >/dev/null 2>&1; then \
+	  $(MAKE) --no-print-directory pyffi-api; \
+	else \
+	  echo "pyffi-api: skipped (no nightly toolchain)"; \
+	fi
+
 # ADR-0041 callouts: only ffi::capi calls the C API, and every call that
-# can run Python code is a callout.
+# can run Python code is a callout (a source lint, not a proof).
 py-callouts:
 	python3 scripts/check_py_callouts.py
 
