@@ -146,6 +146,9 @@ pub struct HostPool<E: HostEnvironment, const A: usize> {
     fp_resets: AtomicU64,
     /// Aborts applied (ADR-0065 item 1).
     aborts: AtomicU64,
+    /// `aborts` when the `aborted` and `abort_code` outputs were last all
+    /// clear: they need clearing before a call only if it moved since.
+    abort_rows_clear: u64,
     #[cfg(feature = "debug-checks")]
     allocs: crate::sys::alloc_track::AllocTally,
     #[cfg(feature = "debug-checks")]
@@ -273,6 +276,7 @@ impl<E: HostEnvironment, const A: usize> HostPool<E, A> {
             sync: None,
             fp_resets: AtomicU64::new(0),
             aborts: AtomicU64::new(0),
+            abort_rows_clear: 0,
             #[cfg(feature = "debug-checks")]
             allocs: crate::sys::alloc_track::AllocTally::default(),
             #[cfg(feature = "debug-checks")]
@@ -401,6 +405,7 @@ impl<E: HostEnvironment, const A: usize> HostPool<E, A> {
             initial,
             fp_resets,
             aborts,
+            abort_rows_clear,
             #[cfg(feature = "debug-checks")]
             allocs,
             ..
@@ -415,6 +420,7 @@ impl<E: HostEnvironment, const A: usize> HostPool<E, A> {
             #[cfg(feature = "debug-checks")]
             allocs,
         };
+        clear_abort_rows(outputs, ctx.aborts, abort_rows_clear);
         let all = Rows {
             headers,
             states: instances,
@@ -499,6 +505,7 @@ impl<E: HostEnvironment, const A: usize> HostPool<E, A> {
                     continue;
                 };
                 crate::pool::clear_instance(outputs, i);
+                kernels::clear_abort_row(outputs, i);
                 let aborted = kernels::reset_one::<E, A>(
                     &ctx,
                     header,
@@ -564,6 +571,7 @@ impl<E: HostEnvironment, const A: usize> HostPool<E, A> {
             initial,
             fp_resets,
             aborts,
+            abort_rows_clear,
             #[cfg(feature = "debug-checks")]
             allocs,
             #[cfg(feature = "debug-checks")]
@@ -599,6 +607,7 @@ impl<E: HostEnvironment, const A: usize> HostPool<E, A> {
             }
             validated?;
         }
+        clear_abort_rows(outputs, ctx.aborts, abort_rows_clear);
         let all = Rows {
             headers,
             states: instances,
@@ -718,6 +727,21 @@ impl<E: HostEnvironment, const A: usize> HostPool<E, A> {
 /// and reason are then read by validating that one instance again on this
 /// thread (`validate` is pure by contract), so nothing is allocated or
 /// locked. A panic poisons the pool.
+/// Clears the `aborted` and `abort_code` outputs of every instance before
+/// a call that runs them all, unless they are already clear: no abort was
+/// applied since `clear` was recorded (ADR-0065 item 1). Skipping the fill
+/// keeps a call without aborts as cheap as before the abort outputs.
+#[inline]
+fn clear_abort_rows(outputs: &mut Outputs, aborts: &AtomicU64, clear: &mut u64) {
+    let now = aborts.load(Ordering::Relaxed);
+    if now != *clear {
+        let view = outputs.view_all();
+        view.aborted.fill(Bool8::FALSE);
+        view.abort_code.fill(0);
+        *clear = now;
+    }
+}
+
 #[expect(
     clippy::too_many_arguments,
     reason = "the split borrows of the pool's fields"

@@ -441,7 +441,8 @@ fn step_one<E: HostEnvironment, const A: usize>(
     let t = header.engine().episode_steps.saturating_add(1);
     let episode = header.engine().identity.episode_index();
     with_step(header, episode, t);
-    // The caller cleared instance `i`'s rows (`clear_chunk`).
+    // The caller cleared instance `i`'s rows (`clear_chunk`) and its abort
+    // rows (`HostPool::clear_abort_rows`).
     let end = {
         let OutputsView {
             rewards,
@@ -574,6 +575,15 @@ fn abort_step<const A: usize>(
     finish_episode(header, outputs, i, end, t, total);
     write_agent_masks(outputs, i, header);
     mark_aborted(outputs, i, code);
+}
+
+/// Clears instance `i`'s `aborted` and `abort_code` outputs, for a call
+/// that runs only some instances (an explicit reset).
+pub(crate) fn clear_abort_row(outputs: &mut OutputsView<'_>, i: usize) {
+    set(outputs.aborted, i, false);
+    if let Some(c) = outputs.abort_code.get_mut(i) {
+        *c = 0;
+    }
 }
 
 /// Sets instance `i`'s `aborted` and `abort_code` outputs.

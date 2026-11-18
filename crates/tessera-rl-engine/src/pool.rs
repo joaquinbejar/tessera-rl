@@ -1906,12 +1906,6 @@ pub(crate) fn clear_instance(outputs: &mut OutputsView<'_>, i: usize) {
     }
     set(outputs.episode_terminated, i, false);
     set(outputs.episode_truncated, i, false);
-    // Host pools only (ADR-0065); empty, so a no-op, elsewhere.
-    // `pending_reset` is not cleared: the call writes it.
-    set(outputs.aborted, i, false);
-    if let Some(code) = outputs.abort_code.get_mut(i) {
-        *code = 0;
-    }
     for buf in [
         &mut outputs.episode_return,
         &mut outputs.episode_length,
@@ -1947,16 +1941,10 @@ pub(crate) fn clear_chunk(outputs: &mut OutputsView<'_>, n: usize) {
     for buf in [
         &mut outputs.episode_terminated,
         &mut outputs.episode_truncated,
-        // Host pools only (ADR-0065); empty elsewhere. `pending_reset` is
-        // not cleared: the call writes it.
-        &mut outputs.aborted,
     ] {
         if let Some(r) = buf.get_mut(..n) {
             r.fill(Bool8::FALSE);
         }
-    }
-    if let Some(r) = outputs.abort_code.get_mut(..n) {
-        r.fill(0);
     }
     for buf in [
         &mut outputs.episode_return,
