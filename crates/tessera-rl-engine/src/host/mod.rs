@@ -421,7 +421,7 @@ impl<E: HostEnvironment, const A: usize> HostPool<E, A> {
             allocs,
         };
         clear_abort_rows(outputs, ctx.aborts, abort_rows_clear);
-        let all = Rows {
+        let mut all = Rows {
             headers,
             states: instances,
             discrete,
@@ -439,9 +439,9 @@ impl<E: HostEnvironment, const A: usize> HostPool<E, A> {
                 return Err(EngineError::Panicked);
             }
         } else {
-            let mut rows = all;
+            // Borrowed, not moved: a move copies the whole view.
             run_kernels(poisoned, || {
-                kernels::reset_chunk::<E, A>(&ctx, &mut rows, reseed, 0);
+                kernels::reset_chunk::<E, A>(&ctx, &mut all, reseed, 0);
             })?;
         }
         self.poisoned = false;
@@ -608,7 +608,7 @@ impl<E: HostEnvironment, const A: usize> HostPool<E, A> {
             validated?;
         }
         clear_abort_rows(outputs, ctx.aborts, abort_rows_clear);
-        let all = Rows {
+        let mut all = Rows {
             headers,
             states: instances,
             discrete,
@@ -626,8 +626,8 @@ impl<E: HostEnvironment, const A: usize> HostPool<E, A> {
                 return Err(EngineError::Panicked);
             }
         } else {
-            let mut rows = all;
-            run_kernels(poisoned, || kernels::step_chunk::<E, A>(&ctx, &mut rows))?;
+            // Borrowed, not moved: a move copies the whole view.
+            run_kernels(poisoned, || kernels::step_chunk::<E, A>(&ctx, &mut all))?;
         }
         self.after_kernels()?;
         #[cfg(feature = "debug-checks")]
