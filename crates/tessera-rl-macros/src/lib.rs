@@ -7,6 +7,7 @@
 //! depends on it, otherwise through the `tessera-rl` facade. Override the
 //! path with `#[tessera(crate = path)]`.
 
+mod config_decode;
 mod env_config;
 mod env_state;
 mod observation;

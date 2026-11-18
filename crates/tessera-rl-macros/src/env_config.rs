@@ -67,10 +67,10 @@ fn parse_attrs(field: &syn::Field) -> syn::Result<FieldAttrs> {
     Ok(attrs)
 }
 
-struct Entry {
-    key: String,
-    ident: Ident,
-    nested: bool,
+pub(crate) struct Entry {
+    pub(crate) key: String,
+    pub(crate) ident: Ident,
+    pub(crate) nested: bool,
 }
 
 #[derive(Default)]
@@ -227,6 +227,7 @@ pub(crate) fn derive(input: &DeriveInput) -> syn::Result<TokenStream> {
     entries.sort_by(|a, b| a.key.as_bytes().cmp(b.key.as_bytes()));
     let count = u16::try_from(entries.len())
         .map_err(|_| syn::Error::new_spanned(name, "too many config fields"))?;
+    let decoder = crate::config_decode::decoder(&core, name, &entries);
     let writes = entries.iter().map(|Entry { key, ident, nested }| {
         if *nested {
             quote!(#core::config::write_nested_entry(out, #key, &self.#ident);)
@@ -251,6 +252,8 @@ pub(crate) fn derive(input: &DeriveInput) -> syn::Result<TokenStream> {
         }
 
         #adaptive_struct
+
+        #decoder
 
         const _: () = {
             #(#static_checks)*
