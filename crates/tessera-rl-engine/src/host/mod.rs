@@ -211,13 +211,16 @@ impl<E: HostEnvironment, const A: usize> HostPool<E, A> {
         } else {
             0
         };
-        let outputs = Outputs::new(
+        let mut outputs = Outputs::new_host(
             num_envs,
             A,
             &leaves,
             options.auto_reset == AutoReset::SameStep,
             mask_len,
         )?;
+        // Every instance is pending its first reset, and `outputs()` is
+        // readable before any call (ADR-0065 item 1).
+        outputs.view_all().pending_reset.fill(Bool8::TRUE);
         let headers = (0..num_envs)
             .map(|i| {
                 let mut header = HostHeader::<A>::state_default();
@@ -478,6 +481,7 @@ impl<E: HostEnvironment, const A: usize> HostPool<E, A> {
                 );
                 crate::pool::write_agent_masks(outputs, i, header);
                 kernels::observe_instance::<E, A>(header, inst, outputs, i);
+                kernels::write_pending(outputs, i, header);
             }
         })?;
         self.after_kernels()?;

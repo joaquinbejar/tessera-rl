@@ -92,6 +92,12 @@ pub enum OutputField {
     EpisodeInvalidAgentEvents,
     /// Action masks, `[N, A, mask length]`.
     Masks,
+    /// Host pools only: aborted episodes, `[N]` (ADR-0065).
+    Aborted,
+    /// Host pools only: abort codes, `[N]`, 0 when not aborted (ADR-0065).
+    AbortCode,
+    /// Host pools only: instances pending a reset, `[N]` (ADR-0065).
+    PendingReset,
 }
 
 /// A read-only description of one region: where it is, how long, of what.

@@ -85,6 +85,7 @@ fn step_rows<E: HostEnvironment, const A: usize>(ctx: &HostCtx<'_>, rows: &mut H
             reset_one::<E, A>(ctx, header, inst, None, outputs, i, ResetRows::Live);
             write_agent_masks(outputs, i, header);
             observe_rows::<E, A, false>(header, inst, outputs, i);
+            write_pending(outputs, i, header);
             continue;
         }
         let first = i * A;
@@ -105,6 +106,7 @@ fn step_rows<E: HostEnvironment, const A: usize>(ctx: &HostCtx<'_>, rows: &mut H
             // The rows hold the terminal observation: zero them again.
             observe_rows::<E, A, true>(header, inst, outputs, i);
         }
+        write_pending(outputs, i, header);
     }
 }
 
@@ -138,9 +140,26 @@ pub(crate) fn reset_chunk<E: HostEnvironment, const A: usize>(
             );
             write_agent_masks(outputs, i, header);
             observe_rows::<E, A, false>(header, inst, outputs, i);
+            write_pending(outputs, i, header);
         }
     }
     recanonicalize(ctx.fp_resets);
+}
+
+/// Copies instance `i`'s pending-reset flag from its header to the
+/// `pending_reset` output (ADR-0065 item 1), at the end of every call that
+/// runs the instance, so the output equals the header for every instance
+/// at all times.
+pub(crate) fn write_pending<const A: usize>(
+    outputs: &mut OutputsView<'_>,
+    i: usize,
+    header: &HostHeader<A>,
+) {
+    set(
+        outputs.pending_reset,
+        i,
+        header.engine().pending_reset.get(),
+    );
 }
 
 /// Resets instance `i`: reseeds it (or advances its episode index), makes

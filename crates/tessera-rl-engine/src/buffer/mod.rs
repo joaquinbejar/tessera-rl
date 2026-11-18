@@ -158,6 +158,9 @@ struct RawChunk<H, S> {
     episode_illegal_actions: Raw<f32>,
     episode_invalid_agent_events: Raw<f32>,
     masks: Raw<Bool8>,
+    aborted: Raw<Bool8>,
+    abort_code: Raw<u32>,
+    pending_reset: Raw<Bool8>,
 }
 
 /// The raw parts of an `Environment` pool's chunk, for the split-phase
@@ -209,6 +212,9 @@ impl<H, S> RawChunk<H, S> {
             episode_illegal_actions,
             episode_invalid_agent_events,
             masks,
+            aborted,
+            abort_code,
+            pending_reset,
         } = outputs;
         let leaves = |views: [&mut [u8]; MAX_LEAVES]| views.map(Raw::new);
         // `leaf_bytes` is only read; a read-only view is stored as raw too.
@@ -247,6 +253,9 @@ impl<H, S> RawChunk<H, S> {
             episode_illegal_actions: Raw::new(episode_illegal_actions),
             episode_invalid_agent_events: Raw::new(episode_invalid_agent_events),
             masks: Raw::new(masks),
+            aborted: Raw::new(aborted),
+            abort_code: Raw::new(abort_code),
+            pending_reset: Raw::new(pending_reset),
         }
     }
 
@@ -319,6 +328,13 @@ impl<H, S> RawChunk<H, S> {
         let episode_invalid_agent_events = unsafe { self.episode_invalid_agent_events.view(r, 1) };
         // SAFETY: invariants 1 to 4 for range `r` (a * self.mask_len elements per instance).
         let masks = unsafe { self.masks.view(r, a * self.mask_len) };
+        // SAFETY: invariants 1 to 4 for range `r` (1 element per instance;
+        // an empty buffer outside host pools, which yields empty views).
+        let aborted = unsafe { self.aborted.view(r, 1) };
+        // SAFETY: as for `aborted`.
+        let abort_code = unsafe { self.abort_code.view(r, 1) };
+        // SAFETY: as for `aborted`.
+        let pending_reset = unsafe { self.pending_reset.view(r, 1) };
         Rows {
             headers,
             states,
@@ -348,6 +364,9 @@ impl<H, S> RawChunk<H, S> {
                 episode_illegal_actions,
                 episode_invalid_agent_events,
                 masks,
+                aborted,
+                abort_code,
+                pending_reset,
             },
         }
     }

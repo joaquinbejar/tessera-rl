@@ -144,3 +144,24 @@ fn test_output_storage_outlives_the_pool() {
     let after = unsafe { core::slice::from_raw_parts(region.ptr, region.len * 4) };
     assert_eq!(after, before.as_slice());
 }
+
+#[test]
+fn test_output_storage_env_pool_has_no_host_rows() {
+    // ADR-0065: the aborted, abort_code and pending_reset rows are host
+    // pools' only; an EnvPool's layout and accessors are unchanged.
+    let mut p = pool(4);
+    p.reset_all(Reseed::Keep).unwrap();
+    step(&mut p);
+    let out = p.outputs().unwrap();
+    assert_eq!(out.aborted(), []);
+    assert_eq!(out.abort_code(), []);
+    assert_eq!(out.pending_reset(), []);
+    let storage = out.storage();
+    for field in [
+        OutputField::Aborted,
+        OutputField::AbortCode,
+        OutputField::PendingReset,
+    ] {
+        assert_eq!(storage.region(field), None, "{field:?}");
+    }
+}
