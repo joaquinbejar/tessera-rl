@@ -33,6 +33,14 @@
 //! pending. The pool is not poisoned, and [`HostPool::aborts`] counts the
 //! aborts applied.
 //!
+//! Make-by-id (ADR-0065 item 3): code that knows its environment's type
+//! builds `HostPool<E, A>` directly. Code that has only an id calls
+//! [`make_host`] with a `ConfigSource`, and gets a [`DynHostPool`]: the same
+//! pool behind a trait object, at one virtual call per method call. An
+//! environment's factory is registered with `register_host_factory!` in a
+//! crate that depends on the engine; the environment's own crate depends on
+//! core only (ADR-0062).
+//!
 //! Experimental until 1.0 (ADR-0062 item 9).
 
 mod dyn_pool;
