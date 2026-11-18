@@ -4,10 +4,10 @@
 //! `tests/host-env`, exported with `export_host_env!`, and two test
 //! functions for the "two front ends" check (ADR-0065 item 3):
 //!
-//! - `_config_python(**config)`: the canonical form of [`Rules`] decoded
+//! - `_config_python(**config)`: the canonical form of `Rules` decoded
 //!   from Python keyword arguments;
-//! - `_config_rust(case)`: the canonical form of [`Rules`] decoded from the
-//!   Rust source of the named case ([`rust_case`]).
+//! - `_config_rust(case)`: the canonical form of `Rules` decoded from the
+//!   Rust source of the named case (`rust_case`).
 //!
 //! Both raise the same Python error for a source that does not decode.
 //! This crate forbids `unsafe`, so it also checks that the macro's

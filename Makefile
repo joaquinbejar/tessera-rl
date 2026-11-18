@@ -25,6 +25,10 @@ test:
 	# tests/host-glue enables the engine's host feature, and workspace
 	# feature unification would otherwise build every run above with it.
 	cargo test -p tessera-rl-engine --locked
+	# pyffi alone with default features (no host): tests/host-wheel enables
+	# its host feature, and workspace feature unification would otherwise
+	# build every run with it.
+	cargo test -p tessera-rl-pyffi --features pyo3/extension-module --locked
 	# Release with every feature: strict checks without debug assertions.
 	cargo test --workspace --release --all-features --locked
 
@@ -37,7 +41,7 @@ readme:
 readme-check:
 	cargo readme -r crates/tessera-rl -t $(CURDIR)/README.tpl --no-title --no-license --no-indent-headings | diff -u README.md -
 
-pre-push: fmt-check clippy test doc readme-check compat-test py-entries pyffi-api-if-nightly py-callouts py-test py-test-hooks py-test-wheels dashboard-check simd-disasm fuzz-check
+pre-push: fmt-check clippy test doc readme-check compat-test py-entries pyffi-api-if-nightly py-callouts py-test py-test-hooks py-test-host py-test-wheels dashboard-check simd-disasm fuzz-check
 
 # The audited ONNX Runtime version read against the real library (ADR-0057).
 # ONNXRUNTIME_LIB is the libonnxruntime of onnxruntime==1.31.1. Telemetry is
