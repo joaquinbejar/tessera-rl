@@ -50,9 +50,12 @@ def public_unsafe(doc: dict) -> list[str]:
         if item.get("crate_id") != 0 or not public:
             continue
         function = item.get("inner", {}).get("function")
-        if function and function.get("header", {}).get("is_unsafe"):
-            span = item.get("span") or {}
-            where = f'{span.get("filename", "?")}:{(span.get("begin") or ["?"])[0]}'
+        if not function:
+            continue
+        header = function.get("header", {})
+        span = item.get("span") or {}
+        where = f'{span.get("filename", "?")}:{(span.get("begin") or ["?"])[0]}'
+        if header.get("is_unsafe"):
             found.append(f"{where}: pub unsafe fn {item.get('name')}")
     return sorted(found)
 

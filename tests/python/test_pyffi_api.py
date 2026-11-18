@@ -42,6 +42,13 @@ def test_pyffi_entries_lint_rejects_a_public_unsafe_function(tmp_path):
         "pub unsafe trait Sneaky {}",
         "pub trait Sneaky {\n    unsafe fn sneaky(&self);\n}",
         'pub trait Sneaky {\n    fn fine(&self) {}\n    unsafe extern "C" fn sneaky();\n}',
+        "pub unsafe extern fn sneaky() {}",
+        "pub async unsafe fn sneaky() {}",
+        "pub const async unsafe fn sneaky() {}",
+        "pub trait Sneaky<T = [u8; 4]> {\n    unsafe fn sneaky(&self);\n}",
+        'pub trait Sneaky {\n    fn fine(&self) -> &str { "}" }\n    unsafe fn sneaky(&self);\n}',
+        "pub trait Sneaky {\n    fn fine(&self) -> char { '}' }\n    unsafe fn sneaky(&self);\n}",
+        "pub trait Sneaky {\n    /* } */\n    unsafe fn sneaky(&self);\n}",
     ):
         capi.write_text(clean + "\n" + sneaky + "\n")
         bad = lint(py, ffi)
@@ -54,9 +61,30 @@ def test_pyffi_entries_lint_rejects_a_public_unsafe_function(tmp_path):
         "// pub unsafe fn commented() {}",
         "pub(crate) trait Quiet {\n    unsafe fn quiet(&self);\n}",
         "pub trait Fine {\n    fn fine(&self);\n}",
+        'const FINE: &str = "pub unsafe fn quoted() {}";',
+        "/* pub unsafe fn commented() {} */",
+        "pub trait Fine<T = [u8; 4]> {\n    fn fine(&self);\n}\nunsafe fn private_after() {}",
     ):
         capi.write_text(clean + "\n" + fine + "\n")
         assert lint(py, ffi).returncode == 0, fine
+
+
+API_LINT = ROOT / "scripts" / "check_pyffi_api.py"
+FIXTURES = pathlib.Path(__file__).resolve().parent / "fixtures" / "pyffi_api"
+
+
+def test_pyffi_api_lint_flags_public_unsafe_items_of_a_rustdoc_json():
+    # A rustdoc-shaped JSON (format 61): a pub unsafe fn and an unsafe fn in
+    # a pub trait are flagged; a pub(crate) unsafe
+    # fn, safe functions and another crate's items are not.
+    run = subprocess.run(
+        [sys.executable, str(API_LINT), str(FIXTURES / "rustdoc.json")], capture_output=True, text=True, cwd=ROOT
+    )
+    assert run.returncode == 1, (run.stdout, run.stderr)
+    assert run.stdout.splitlines() == [
+        "src/lib.rs:1: pub unsafe fn sneaky",
+        "src/lib.rs:3: pub unsafe fn in_trait",
+    ], run.stdout
 
 
 def test_native_exports_its_initializer_and_not_the_host_one():

@@ -23,34 +23,36 @@ import re
 import subprocess
 import sys
 
+import rust_lex
+
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 PYFFI = ROOT / "crates" / "tessera-rl-pyffi" / "src"
 SRCS = [ROOT / "crates" / "tessera-rl-py" / "src", PYFFI]
 # `pub` (not `pub(crate)` or `pub(super)`) `unsafe fn`, `unsafe extern fn`
-# or `unsafe trait`, comments ignored.
-PUB_UNSAFE = re.compile(r"\bpub\s+(?:const\s+)?unsafe\s+(?:extern\s+\"[^\"]*\"\s+)?(?:fn|trait)\b")
+# (with or without an ABI string) or `unsafe trait`, with any `const` or
+# `async`, in code stripped of comments and literals (scripts/rust_lex.py).
+PUB_UNSAFE = re.compile(r'\bpub\s+(?:(?:const|async)\s+)*unsafe\s+(?:extern\s*(?:""\s*)?)?(?:fn|trait)\b')
 
 
 # An `unsafe fn` declared in a `pub trait` (not `pub(crate)`): implementers
 # and callers of a public trait reach it, whatever its own visibility says.
-PUB_TRAIT = re.compile(r"\bpub\s+(?:unsafe\s+)?trait\s+\w+[^{;]*\{")
-UNSAFE_FN = re.compile(r"\bunsafe\s+(?:extern\s+\"[^\"]*\"\s+)?fn\b")
+PUB_TRAIT = re.compile(r"\bpub\s+(?:unsafe\s+)?(?:auto\s+)?trait\s+\w+")
+UNSAFE_FN = re.compile(r'\bunsafe\s+(?:extern\s*(?:""\s*)?)?fn\b')
 
-
-def trait_bodies(code: str):
-    for m in PUB_TRAIT.finditer(code):
-        depth, i = 1, m.end()
-        while i < len(code) and depth:
-            depth += {"{": 1, "}": -1}.get(code[i], 0)
-            i += 1
-        yield code[m.end():i]
+def bodies(code: str, header: re.Pattern):
+    """The bodies (`{...}`, brace depth matched) of the items whose header
+    matches `header`, in stripped code."""
+    for m in header.finditer(code):
+        brace = m.end() - 1 if code[m.end() - 1] == "{" else rust_lex.item_brace(code, m.end())
+        if brace >= 0:
+            yield code[brace:rust_lex.block_end(code, brace)]
 
 
 def pub_unsafe(text: str) -> bool:
-    code = re.sub(r"//[^\n]*", "", text)
+    code = rust_lex.strip(text)
     if PUB_UNSAFE.search(code):
         return True
-    return any(UNSAFE_FN.search(body) for body in trait_bodies(code))
+    return any(UNSAFE_FN.search(body) for body in bodies(code, PUB_TRAIT))
 
 
 def main(srcs=None, pyffi=None):
