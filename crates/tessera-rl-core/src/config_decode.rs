@@ -128,7 +128,15 @@ pub enum ConfigDecodeError {
 }
 
 /// A config decoded from a [`ConfigSource`]. `#[derive(EnvConfig)]`
-/// generates it; a hand-written config implements [`ConfigDecode::decode_at`].
+/// generates it.
+///
+/// A hand-written decoder implements [`ConfigDecode::decode_at`] (not
+/// `decode`, which calls it at depth 1). It should call [`check_keys`]
+/// first, which refuses unknown and repeated keys and enforces the depth
+/// bound ([`MAX_CONFIG_DEPTH`]); decode each field with [`ConfigField`],
+/// and a nested config with [`decode_nested`], which passes the depth on;
+/// and run `EnvConfig::validate` last. These helpers are public API: the
+/// generated decoder is written with them.
 pub trait ConfigDecode: EnvConfig {
     /// Decodes a config from `src` and validates it.
     ///
@@ -207,7 +215,9 @@ pub fn decode_nested<C: ConfigDecode>(
     depth: u32,
 ) -> Result<C, ConfigDecodeError> {
     match item {
-        ConfigItem::Table(src) => C::decode_at(src, depth.saturating_add(1)),
+        ConfigItem::Table(src) => {
+            C::decode_at(src, depth.checked_add(1).ok_or(ConfigDecodeError::TooDeep)?)
+        }
         _ => Err(wrong(field, "a table")),
     }
 }
@@ -274,8 +284,9 @@ impl ConfigField for f32 {
     ) -> Result<Self, ConfigDecodeError> {
         match item {
             // Round to nearest, ties to even (the owner's decision,
-            // ADR-0065 item 3); beyond f32's range an infinity; NaN keeps
-            // its sign and the top of its payload.
+            // ADR-0065 item 3); beyond f32's range an infinity. A NaN stays
+            // a NaN, but Rust does not guarantee its sign or payload through
+            // the cast; a derived config's `validate` refuses NaN anyway.
             #[expect(clippy::cast_possible_truncation, reason = "round to nearest f32")]
             ConfigItem::Float(v) => Ok(*v as f32),
             ConfigItem::Int(v) => {

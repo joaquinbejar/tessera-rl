@@ -88,7 +88,8 @@ pub enum FactoryError {
         /// The registered id.
         id: &'static str,
     },
-    /// Two factories, or two registrations, share an id.
+    /// Two linked factories share an id (checked on every call), or two
+    /// registrations do (checked when the id has no factory).
     #[error(transparent)]
     Registry(#[from] RegistryError),
     /// The config source does not decode, or fails `EnvConfig::validate`.
@@ -153,10 +154,13 @@ where
 ///
 /// # Errors
 ///
-/// [`FactoryError::Registry`] when two factories (or two registrations)
-/// share an id, [`FactoryError::NoFactory`] for an id `register_host!`
-/// lists without a factory, [`FactoryError::UnknownId`] for any other id,
-/// and the decoding or construction errors.
+/// [`FactoryError::Registry`] when two linked factories share any id
+/// (checked on every call, whatever `id` is), or, for an id with no
+/// factory, when two `register!`/`register_host!` registrations share an id
+/// (the registration lookup, read only then);
+/// [`FactoryError::NoFactory`] for an id `register_host!` lists without a
+/// factory; [`FactoryError::UnknownId`] for any other id; and the decoding
+/// or construction errors.
 pub fn make_host(
     id: &str,
     config: &ConfigSource<'_>,
