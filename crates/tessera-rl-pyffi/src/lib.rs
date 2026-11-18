@@ -61,4 +61,6 @@ pub mod host;
 #[doc(hidden)]
 pub mod __private {
     pub use inventory;
+    #[cfg(feature = "host")]
+    pub use tessera_rl_core::HostEnvironment;
 }

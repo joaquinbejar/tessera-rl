@@ -5,6 +5,8 @@
 //! every C-API call goes through [`crate::ffi::capi`].
 //!
 //! - [`config`]: Python keyword arguments as a `ConfigSource`, decoded by
-//!   the environment's `ConfigDecode` (one decoder for both front ends).
+//!   the environment's `ConfigDecode` (one decoder for both front ends);
+//! - [`factory`]: `make` and the module of `export_host_env!`.
 
 pub mod config;
+pub mod factory;
