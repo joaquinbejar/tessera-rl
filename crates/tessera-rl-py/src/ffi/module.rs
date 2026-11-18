@@ -1,62 +1,59 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! The `tessera_rl._native` module: its definition, method table and
-//! initialization. The `extern "C"` functions here are only reachable
-//! through the thunks of `thunks`.
+//! The `tessera_rl._native` module: its definition, function table and
+//! initialization, as safe impls of the typed layer of `tessera_rl_pyffi`
+//! (ADR-0062 item 8). `tessera_rl_pyffi` defines `PyInit__native` (its
+//! `native-module` feature) and runs [`NativeInit`], registered here.
 
-use core::cell::UnsafeCell;
-use core::ptr;
-
-use pyo3::ffi;
-
-use super::boundary::{self, Policy};
-use super::capi::{self, Ref};
-use super::tables::{method, method_end};
-use super::{
-    Table, entry, env_type, fork, search_group_type, search_type, snapshot_type, thunks, view_type,
+use tessera_rl_pyffi::ffi::boundary::{self, Policy};
+use tessera_rl_pyffi::ffi::capi::{self, CResult, Gil, Mine, Ref};
+use tessera_rl_pyffi::ffi::module_def::{
+    Function, FunctionNoArgs, FunctionRow, FunctionTable, ModuleDef, ModuleInit,
 };
+
+use super::{env_type, fork, search_group_type, search_type, snapshot_type, view_type};
 use crate::errors::{Kind, error};
 
-pub(super) unsafe extern "C" fn version(
-    _module: *mut ffi::PyObject,
-    _args: *mut ffi::PyObject,
-) -> *mut ffi::PyObject {
-    entry(|g| capi::string(g, env!("CARGO_PKG_VERSION")))
+/// `version()`: the Tessera version.
+struct Version;
+
+impl FunctionNoArgs for Version {
+    fn call(g: Gil<'_>) -> CResult<Mine<'_>> {
+        capi::string(g, env!("CARGO_PKG_VERSION"))
+    }
 }
 
 /// `build_profile()`: `"release"` or `"debug"`, as the native module was
 /// compiled (benchmark reports record it).
-pub(super) unsafe extern "C" fn build_profile(
-    _module: *mut ffi::PyObject,
-    _args: *mut ffi::PyObject,
-) -> *mut ffi::PyObject {
-    let text = if cfg!(debug_assertions) {
-        "debug"
-    } else {
-        "release"
-    };
-    entry(|g| capi::string(g, text))
+struct BuildProfile;
+
+impl FunctionNoArgs for BuildProfile {
+    fn call(g: Gil<'_>) -> CResult<Mine<'_>> {
+        let text = if cfg!(debug_assertions) {
+            "debug"
+        } else {
+            "release"
+        };
+        capi::string(g, text)
+    }
 }
 
 /// `fp_boundary()`: which native floating-point boundary this build
 /// carries (ADR-0041), or that there is none on this target.
-pub(super) unsafe extern "C" fn fp_boundary(
-    _module: *mut ffi::PyObject,
-    _args: *mut ffi::PyObject,
-) -> *mut ffi::PyObject {
-    entry(|g| capi::string(g, thunks::BOUNDARY))
+struct FpBoundary;
+
+impl FunctionNoArgs for FpBoundary {
+    fn call(g: Gil<'_>) -> CResult<Mine<'_>> {
+        capi::string(g, tessera_rl_pyffi::ffi::BOUNDARY)
+    }
 }
 
 /// `set_fp_policy(name)`: `"canonicalize"` (the default) or `"reject"`
 /// (ADR-0041).
-pub(super) unsafe extern "C" fn set_fp_policy(
-    _module: *mut ffi::PyObject,
-    args: *mut ffi::PyObject,
-) -> *mut ffi::PyObject {
-    entry(|g| {
-        // SAFETY: METH_VARARGS passes a borrowed tuple, alive for the call.
-        let args = unsafe { Ref::from_ptr(args) }
-            .ok_or_else(|| capi::raise(g, capi::type_error(), "missing arguments"))?;
+struct SetFpPolicy;
+
+impl Function for SetFpPolicy {
+    fn call<'py>(g: Gil<'py>, args: Ref<'py>) -> CResult<Mine<'py>> {
         let items = capi::tuple_items(g, args, "the arguments")?;
         let [name] = items.as_slice() else {
             return Err(error(
@@ -80,30 +77,30 @@ pub(super) unsafe extern "C" fn set_fp_policy(
         };
         boundary::set_policy(policy);
         Ok(capi::none(g))
-    })
+    }
 }
 
 /// `get_fp_policy()`: the current policy's name.
-pub(super) unsafe extern "C" fn get_fp_policy(
-    _module: *mut ffi::PyObject,
-    _args: *mut ffi::PyObject,
-) -> *mut ffi::PyObject {
-    entry(|g| {
+struct GetFpPolicy;
+
+impl FunctionNoArgs for GetFpPolicy {
+    fn call(g: Gil<'_>) -> CResult<Mine<'_>> {
         let name = match boundary::policy() {
             Policy::Canonicalize => "canonicalize",
             Policy::Reject => "reject",
         };
         capi::string(g, name)
-    })
+    }
 }
 
 /// `fp_non_canonical_entries()`: entries made with non-default caller
 /// controls, process-wide (observability, ADR-0037).
-pub(super) unsafe extern "C" fn fp_non_canonical_entries(
-    _module: *mut ffi::PyObject,
-    _args: *mut ffi::PyObject,
-) -> *mut ffi::PyObject {
-    entry(|g| capi::int_u64(g, tessera_rl_num::fp::non_canonical_entries()))
+struct FpNonCanonicalEntries;
+
+impl FunctionNoArgs for FpNonCanonicalEntries {
+    fn call(g: Gil<'_>) -> CResult<Mine<'_>> {
+        capi::int_u64(g, tessera_rl_num::fp::non_canonical_entries())
+    }
 }
 
 /// The Python name of a determinism tier (SPEC 8.4).
@@ -119,11 +116,10 @@ fn tier_name(tier: tessera_rl_core::Tier) -> &'static str {
 /// (ADR-0054 item 6). `version` is the outputs version (`ENV_VERSION`),
 /// not the `-vN` suffix of the id. A duplicate id raises the configuration
 /// error.
-pub(super) unsafe extern "C" fn registered_envs(
-    _module: *mut ffi::PyObject,
-    _args: *mut ffi::PyObject,
-) -> *mut ffi::PyObject {
-    entry(|g| {
+struct RegisteredEnvs;
+
+impl FunctionNoArgs for RegisteredEnvs {
+    fn call(g: Gil<'_>) -> CResult<Mine<'_>> {
         let records = tessera_rl_core::envs::registered()
             .map_err(|e| error(g, Kind::Config, e.to_string()))?;
         let list = capi::list(g)?;
@@ -144,86 +140,76 @@ pub(super) unsafe extern "C" fn registered_envs(
             capi::list_append(g, &list, &item)?;
         }
         Ok(list)
-    })
+    }
 }
 
 /// `_pendulum_rewards(rows)` (test hooks only): the kernel's raw f64 reward
 /// of each little-endian `(f64 theta, f64 theta_dot, f32 u)` row, for the
 /// ADR-0050 gate: the public reward is f32.
 #[cfg(feature = "test-hooks")]
-pub(super) unsafe extern "C" fn pendulum_rewards(
-    _module: *mut ffi::PyObject,
-    arg: *mut ffi::PyObject,
-) -> *mut ffi::PyObject {
-    entry(|g| {
-        // SAFETY: METH_O passes a borrowed object, alive for the call.
-        let arg = unsafe { Ref::from_ptr(arg) }
-            .ok_or_else(|| capi::raise(g, capi::type_error(), "missing argument"))?;
+struct PendulumRewards;
+
+#[cfg(feature = "test-hooks")]
+impl tessera_rl_pyffi::ffi::module_def::FunctionArg for PendulumRewards {
+    fn call<'py>(g: Gil<'py>, arg: Ref<'py>) -> CResult<Mine<'py>> {
         let rows = capi::bytes_of(g, arg, "rows")?;
         let out = crate::api::pendulum_rewards(rows);
         capi::bytes(g, &out)
-    })
+    }
 }
 
 /// `_fail_after(n)` (test hooks only): the `n`-th next container insertion
 /// fails.
 #[cfg(feature = "test-hooks")]
-pub(super) unsafe extern "C" fn fail_after(
-    _module: *mut ffi::PyObject,
-    arg: *mut ffi::PyObject,
-) -> *mut ffi::PyObject {
-    entry(|g| {
-        // SAFETY: METH_O passes a borrowed object, alive for the call.
-        let arg = unsafe { Ref::from_ptr(arg) }
-            .ok_or_else(|| capi::raise(g, capi::type_error(), "missing argument"))?;
+struct FailAfter;
+
+#[cfg(feature = "test-hooks")]
+impl tessera_rl_pyffi::ffi::module_def::FunctionArg for FailAfter {
+    fn call<'py>(g: Gil<'py>, arg: Ref<'py>) -> CResult<Mine<'py>> {
         capi::fail_after(capi::to_u32(g, arg, "n")?);
         Ok(capi::none(g))
-    })
+    }
 }
 
-const METHOD_COUNT: usize = if cfg!(feature = "test-hooks") { 31 } else { 26 };
+/// `_init_fails_after_register()` (test hooks only): a module
+/// initialization that registers the exception classes, then fails.
+#[cfg(feature = "test-hooks")]
+struct InitFailsAfterRegister;
 
-static METHODS: Table<[ffi::PyMethodDef; METHOD_COUNT]> = Table([
-    method(
-        c"version",
-        thunks::VERSION,
-        ffi::METH_NOARGS,
-        c"The Tessera version.",
-    ),
-    method(
+#[cfg(feature = "test-hooks")]
+impl FunctionNoArgs for InitFailsAfterRegister {
+    fn call(g: Gil<'_>) -> CResult<Mine<'_>> {
+        tessera_rl_pyffi::ffi::module_def::init_fails_after_register(g)?;
+        Ok(capi::none(g))
+    }
+}
+
+const FUNCTION_COUNT: usize = if cfg!(feature = "test-hooks") { 32 } else { 26 };
+
+static ROWS: [FunctionRow; FUNCTION_COUNT] = [
+    FunctionRow::noargs::<Version>(c"version", c"The Tessera version."),
+    FunctionRow::varargs::<SetFpPolicy>(
         c"set_fp_policy",
-        thunks::SET_FP_POLICY,
-        ffi::METH_VARARGS,
         c"set_fp_policy(name): \"canonicalize\" (default) or \"reject\".",
     ),
-    method(
+    FunctionRow::noargs::<GetFpPolicy>(
         c"get_fp_policy",
-        thunks::GET_FP_POLICY,
-        ffi::METH_NOARGS,
         c"The floating-point policy for non-default caller controls.",
     ),
-    method(
+    FunctionRow::noargs::<FpNonCanonicalEntries>(
         c"fp_non_canonical_entries",
-        thunks::FP_NON_CANONICAL_ENTRIES,
-        ffi::METH_NOARGS,
         c"Entries made with non-default caller floating-point controls.",
     ),
-    method(
+    FunctionRow::noargs::<FpBoundary>(
         c"fp_boundary",
-        thunks::FP_BOUNDARY,
-        ffi::METH_NOARGS,
         c"Which native floating-point boundary this build carries.",
     ),
-    method(
+    FunctionRow::noargs::<BuildProfile>(
         c"build_profile",
-        thunks::BUILD_PROFILE,
-        ffi::METH_NOARGS,
         c"The native build profile: release or debug.",
     ),
-    method(
+    FunctionRow::noargs::<RegisteredEnvs>(
         c"registered_envs",
-        thunks::REGISTERED_ENVS,
-        ffi::METH_NOARGS,
         c"registered_envs() -> [(id, version, max_agents, tier, perfect_information)]; version is ENV_VERSION, not the id's -vN",
     ),
     env_type::MAKERS[0],
@@ -245,69 +231,56 @@ static METHODS: Table<[ffi::PyMethodDef; METHOD_COUNT]> = Table([
     search_group_type::MAKER,
     search_type::ONNX_LOAD,
     #[cfg(feature = "test-hooks")]
-    super::tables::method_kw(
-        c"_make_panic_counter",
-        thunks::MAKE_PANIC_COUNTER,
-        c"Test hook: a pool whose first step panics.",
-    ),
+    env_type::TEST_MAKERS[0],
     #[cfg(feature = "test-hooks")]
-    super::tables::method_kw(
-        c"_make_continuous_probe",
-        thunks::MAKE_CONTINUOUS_PROBE,
-        c"Test hook: a pool with one continuous head.",
-    ),
+    env_type::TEST_MAKERS[1],
     #[cfg(feature = "test-hooks")]
-    super::tables::method_kw(
-        c"_make_multi_probe",
-        thunks::MAKE_MULTI_PROBE,
-        c"Test hook: a pool with two discrete heads, MultiDiscrete([3, 5]).",
-    ),
+    env_type::TEST_MAKERS[2],
     #[cfg(feature = "test-hooks")]
-    method(
+    FunctionRow::arg::<PendulumRewards>(
         c"_pendulum_rewards",
-        thunks::PENDULUM_REWARDS,
-        ffi::METH_O,
         c"Test hook: the kernel's f64 rewards of (theta, theta_dot, u) rows.",
     ),
     #[cfg(feature = "test-hooks")]
-    method(
+    FunctionRow::arg::<FailAfter>(
         c"_fail_after",
-        thunks::FAIL_AFTER,
-        ffi::METH_O,
         c"Test hook: the n-th next container insertion fails.",
     ),
-    method_end(),
-]);
+    #[cfg(feature = "test-hooks")]
+    FunctionRow::noargs::<InitFailsAfterRegister>(
+        c"_init_fails_after_register",
+        c"Test hook: a module initialization that fails after registering the exception classes.",
+    ),
+    FunctionRow::END,
+];
 
-/// The module definition, fully initialized at compile time and never
-/// written by Rust; CPython owns its `m_base` after `PyModule_Create2`.
-static MODULE: Table<UnsafeCell<ffi::PyModuleDef>> = Table(UnsafeCell::new(ffi::PyModuleDef {
-    m_base: ffi::PyModuleDef_HEAD_INIT,
-    m_name: c"tessera_rl._native".as_ptr(),
-    m_doc: c"Native Tessera bindings.".as_ptr(),
-    m_size: -1,
-    m_methods: METHODS.0.as_ptr().cast_mut(),
-    m_slots: ptr::null_mut(),
-    m_traverse: None,
-    m_clear: None,
-    m_free: None,
-}));
+static FUNCTIONS: FunctionTable = FunctionTable::new(&ROWS);
 
-pub(super) unsafe extern "C" fn init() -> *mut ffi::PyObject {
-    entry(|g| {
-        // SAFETY: MODULE is a valid static definition that only CPython
-        // writes (its `m_base`), as `PyModule_Create2` requires.
-        let module = unsafe { capi::module_create(g, MODULE.0.get()) }?;
-        crate::errors::register(g, module.as_ref())?;
-        env_type::register(g, module.as_ref())?;
-        view_type::register(g, module.as_ref())?;
-        snapshot_type::register(g, module.as_ref())?;
-        search_type::register(g, module.as_ref())?;
-        search_group_type::register(g, module.as_ref())?;
-        fork::register(g)?;
-        Ok(module)
-    })
+static MODULE: ModuleDef = ModuleDef::new(
+    c"tessera_rl._native",
+    c"Native Tessera bindings.",
+    &FUNCTIONS,
+);
+
+/// `_native`'s initialization: the exception classes, the types, and the
+/// fork handler.
+struct NativeInit;
+
+impl ModuleInit for NativeInit {
+    const DEF: &'static ModuleDef = &MODULE;
+
+    fn init<'py>(g: Gil<'py>, module: Ref<'py>) -> CResult<()> {
+        crate::errors::register(g, module)?;
+        env_type::register(g, module)?;
+        view_type::register(g, module)?;
+        snapshot_type::register(g, module)?;
+        search_type::register(g, module)?;
+        search_group_type::register(g, module)?;
+        fork::register(g)
+    }
 }
+
+tessera_rl_pyffi::export_module!(native: NativeInit);
 
 #[cfg(test)]
 mod tests {

@@ -3,11 +3,12 @@
 //! The preallocated buffer an Async batch is gathered into (ADR-0047
 //! section 9): one region per output field, reused at every `recv`.
 //!
-//! Views read it through raw pointers, under the overwrite semantics of SPEC
+//! Exports (`buffer::Export::gather`) read it through raw pointers, under the overwrite semantics of SPEC
 //! 5.3: the generation moves before a write, so a view is stale before its
 //! rows change, and reading during a `recv` is the caller's race, as with
 //! every borrowed output. The one [`GatherWriter`] is held behind the
-//! binding's mutex, so writes never overlap.
+//! binding's mutex, so writes never overlap. Moved from the bindings
+//! (#272 step 3): it is generic storage the typed export layer names.
 
 use core::cell::UnsafeCell;
 use core::sync::atomic::{AtomicU64, Ordering};
@@ -23,8 +24,8 @@ struct Region {
     bytes: usize,
 }
 
-/// The shared side: what views keep alive and read.
-pub(crate) struct GatherBuffer {
+/// The shared side: what exports keep alive and read.
+pub struct GatherStorage {
     regions: Vec<Region>,
     generation: AtomicU64,
 }
@@ -32,38 +33,38 @@ pub(crate) struct GatherBuffer {
 // SAFETY: the words are written only through the unique `GatherWriter`, and
 // `GatherBuffer` itself only hands out raw pointers to them; all other
 // fields are immutable or atomic.
-#[expect(unsafe_code, reason = "audited module: see the SAFETY comment")]
-unsafe impl Sync for GatherBuffer {}
+unsafe impl Sync for GatherStorage {}
 
 // SAFETY: as above; the words are plain data.
-#[expect(unsafe_code, reason = "audited module: see the SAFETY comment")]
-unsafe impl Send for GatherBuffer {}
+unsafe impl Send for GatherStorage {}
 
-impl GatherBuffer {
+impl GatherStorage {
     /// The write generation (a view taken at `g` is stale once it differs).
-    pub(crate) fn generation(&self) -> u64 {
+    #[must_use]
+    pub fn generation(&self) -> u64 {
         self.generation.load(Ordering::Acquire)
     }
 
-    /// The start and byte length of `field`'s region.
+    /// The start and byte length of `field`'s region, for
+    /// `buffer::Export::gather`.
     pub(crate) fn region(&self, field: OutputField) -> Option<(*const u8, usize)> {
         let region = self.regions.iter().find(|r| r.field == field)?;
         // Only a pointer is formed here, never a reference to the words.
         let start = region.words.get().cast_const();
         // SAFETY: `start` points to the live Box, which is never replaced;
         // reading the fat pointer does not touch the words.
-        #[expect(unsafe_code, reason = "audited module: see the SAFETY comment")]
         let data = unsafe { core::ptr::addr_of!(**start) }.cast::<u8>();
         Some((data, region.bytes))
     }
 }
 
-/// The unique writer of a [`GatherBuffer`].
-pub(crate) struct GatherWriter(Arc<GatherBuffer>);
+/// The unique writer of a [`GatherStorage`].
+pub struct GatherWriter(Arc<GatherStorage>);
 
 impl GatherWriter {
     /// A buffer with `fields`, each of the given byte length.
-    pub(crate) fn new(fields: &[(OutputField, usize)]) -> Self {
+    #[must_use]
+    pub fn new(fields: &[(OutputField, usize)]) -> Self {
         let regions = fields
             .iter()
             .map(|&(field, bytes)| Region {
@@ -72,18 +73,20 @@ impl GatherWriter {
                 bytes,
             })
             .collect();
-        Self(Arc::new(GatherBuffer {
+        Self(Arc::new(GatherStorage {
             regions,
             generation: AtomicU64::new(0),
         }))
     }
 
-    pub(crate) fn buffer(&self) -> Arc<GatherBuffer> {
+    /// The shared storage, for exports and staleness checks.
+    #[must_use]
+    pub fn storage(&self) -> Arc<GatherStorage> {
         Arc::clone(&self.0)
     }
 
     /// Ends the window of every view; the next generation's writes follow.
-    pub(crate) fn begin(&mut self) -> u64 {
+    pub fn begin(&mut self) -> u64 {
         let next = self.0.generation.fetch_add(1, Ordering::AcqRel) + 1;
         // The row writes that follow are not atomics, so the increment alone
         // does not order them: this fence pairs with the Acquire fence of the
@@ -95,7 +98,7 @@ impl GatherWriter {
 
     /// Writes `bytes` at byte offset `at` of `field`; false if it does not
     /// fit or the field is unknown.
-    pub(crate) fn write(&mut self, field: OutputField, at: usize, bytes: &[u8]) -> bool {
+    pub fn write(&mut self, field: OutputField, at: usize, bytes: &[u8]) -> bool {
         let Some((start, len)) = self.0.region(field) else {
             return false;
         };
@@ -104,12 +107,14 @@ impl GatherWriter {
         }
         // SAFETY: `at + bytes.len() <= len`, the region's size, so the
         // offset stays inside its allocation.
-        #[expect(unsafe_code, reason = "audited module: see the SAFETY comment")]
         let target = unsafe { start.cast_mut().add(at) };
         // SAFETY: the range fits (above), and this is the only writer
-        // (`&mut self`, one per buffer). A concurrent view read is excluded
-        // by the borrow window of SPEC 5.3.
-        #[expect(unsafe_code, reason = "audited module: see the SAFETY comment")]
+        // (`&mut self`, one per buffer); no Rust reference to the words
+        // exists, only exports' raw pointers. A read through an export that
+        // races this write is not excluded: SPEC 5.3 leaves it to the
+        // caller, who reads bytes being overwritten (the crate docs' first
+        // exception); the generation moved before this write, so
+        // `is_stale` reports it.
         unsafe {
             core::ptr::copy_nonoverlapping(bytes.as_ptr(), target, bytes.len());
         }
@@ -117,14 +122,14 @@ impl GatherWriter {
     }
 
     /// A copy of the first `len` bytes of `field`.
-    pub(crate) fn copy(&self, field: OutputField, len: usize) -> Vec<u8> {
+    #[must_use]
+    pub fn copy(&self, field: OutputField, len: usize) -> Vec<u8> {
         let Some((start, region)) = self.0.region(field) else {
             return Vec::new();
         };
         let len = len.min(region);
         // SAFETY: `len` is within the region; this is the only writer and it
         // is not writing (`&self`).
-        #[expect(unsafe_code, reason = "audited module: see the SAFETY comment")]
         unsafe { core::slice::from_raw_parts(start, len) }.to_vec()
     }
 }
@@ -136,7 +141,7 @@ mod tests {
     #[test]
     fn test_gather_write_is_bounded_and_generation_moves_first() {
         let mut w = GatherWriter::new(&[(OutputField::Rewards, 8)]);
-        let b = w.buffer();
+        let b = w.storage();
         assert_eq!(b.generation(), 0);
         assert_eq!(w.begin(), 1);
         assert_eq!(b.generation(), 1);

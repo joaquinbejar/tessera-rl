@@ -5,8 +5,8 @@
 //!
 //! Every C entry goes through a thunk (`thunks`) that saves the caller's
 //! floating-point controls, canonicalizes them, and calls
-//! [`tessera_fp_enter`] before the first Rust frame of the entry, then
-//! [`tessera_fp_leave`] after it returns and before restoring the caller's
+//! `tessera_fp_enter` before the first Rust frame of the entry, then
+//! `tessera_fp_leave` after it returns and before restoring the caller's
 //! controls. These two record the entry in a per-thread frame, so the entry
 //! body knows whether its caller's controls were canonical and what they
 //! were. Frames nest (a finalizer or a warning hook may re-enter).
@@ -40,7 +40,7 @@ thread_local! {
 /// Called by every thunk, under canonical controls, before the entry body.
 /// Records the frame and returns the previous one, which the thunk hands
 /// back to [`tessera_fp_leave`].
-pub(super) extern "C" fn tessera_fp_enter(caller: u64) -> u64 {
+pub(crate) extern "C" fn tessera_fp_enter(caller: u64) -> u64 {
     let non_canonical = !fp::is_canonical_bits(caller);
     if non_canonical {
         fp::record_non_canonical_entry();
@@ -53,21 +53,21 @@ pub(super) extern "C" fn tessera_fp_enter(caller: u64) -> u64 {
 
 /// Called by every thunk, under canonical controls, after the entry body:
 /// restores the previous frame.
-pub(super) extern "C" fn tessera_fp_leave(previous: u64) {
+pub(crate) extern "C" fn tessera_fp_leave(previous: u64) {
     FRAME.with(|f| f.set(previous));
 }
 
 /// Called by every callout thunk, under canonical controls, before the
 /// host call: the controls to run it under, those of the innermost
 /// boundary frame's caller (or the current ones outside any frame).
-pub(super) extern "C" fn tessera_fp_caller_controls() -> u64 {
+pub(crate) extern "C" fn tessera_fp_caller_controls() -> u64 {
     frame().map_or_else(fp::current_bits, |(_, caller)| caller)
 }
 
 /// Called by the callout thunk after the host code returned and the
 /// controls were made canonical again: counts a callback that changed the
 /// caller's controls.
-pub(super) extern "C" fn tessera_fp_callout_returned(before: u64, after: u64) {
+pub(crate) extern "C" fn tessera_fp_callout_returned(before: u64, after: u64) {
     if fp::controls_differ(before, after) {
         fp::record_non_canonical_entry();
     }
@@ -75,14 +75,14 @@ pub(super) extern "C" fn tessera_fp_callout_returned(before: u64, after: u64) {
 
 /// The raw frame token of this thread (tests check nesting with it).
 #[cfg(test)]
-pub(super) fn frame_token() -> u64 {
+pub(crate) fn frame_token() -> u64 {
     FRAME.with(Cell::get)
 }
 
 /// The current frame: whether the caller's controls were canonical, and
 /// their value. `None` outside a boundary frame (a test calling Rust
 /// directly).
-pub(super) fn frame() -> Option<(bool, u64)> {
+pub(crate) fn frame() -> Option<(bool, u64)> {
     let token = FRAME.with(Cell::get);
     (token & LIVE != 0).then_some((token & NON_CANONICAL != 0, token >> SHIFT))
 }
@@ -90,7 +90,7 @@ pub(super) fn frame() -> Option<(bool, u64)> {
 /// The process-wide policy for entries whose caller controls were not
 /// canonical.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Policy {
+pub enum Policy {
     /// Proceed under canonical controls, count, warn once per process.
     Canonicalize = 0,
     /// Raise `FloatingPointEnvironmentError` before any work.
@@ -100,11 +100,14 @@ pub(crate) enum Policy {
 static POLICY: AtomicU8 = AtomicU8::new(Policy::Canonicalize as u8);
 static WARNED: AtomicBool = AtomicBool::new(false);
 
-pub(crate) fn set_policy(policy: Policy) {
+/// Sets the process-wide policy for non-canonical caller controls.
+pub fn set_policy(policy: Policy) {
     POLICY.store(policy as u8, Ordering::Relaxed);
 }
 
-pub(crate) fn policy() -> Policy {
+/// The current policy.
+#[must_use]
+pub fn policy() -> Policy {
     if POLICY.load(Ordering::Relaxed) == Policy::Reject as u8 {
         Policy::Reject
     } else {
@@ -117,7 +120,7 @@ const WARNING: &core::ffi::CStr = c"tessera_rl: the caller's floating-point cont
 /// The policy check of a fallible entry, run first in `ffi::entry`, under
 /// canonical controls. `Err` means the entry must fail before any work:
 /// a rejection under the strict policy, or a warning that raised.
-pub(super) fn check(g: Gil) -> CResult<()> {
+pub(crate) fn check(g: Gil<'_>) -> CResult<()> {
     let Some((true, _caller)) = frame() else {
         return Ok(());
     };

@@ -142,7 +142,7 @@ pub(crate) trait SearchOps: Send {
     fn run_onnx(
         &mut self,
         check: &mut dyn FnMut() -> Result<(), EvaluatorError>,
-        detach: &mut dyn FnMut(&mut dyn FnMut()),
+        detach: &mut dyn FnMut(&mut (dyn FnMut() + Send)),
     ) -> Result<(), BindError>;
     /// The root's visit counts.
     fn root_visits(&self) -> Vec<u32>;
@@ -244,7 +244,7 @@ where
     fn run_onnx(
         &mut self,
         check: &mut dyn FnMut() -> Result<(), EvaluatorError>,
-        detach: &mut dyn FnMut(&mut dyn FnMut()),
+        detach: &mut dyn FnMut(&mut (dyn FnMut() + Send)),
     ) -> Result<(), BindError> {
         let inner = self
             .onnx
@@ -262,7 +262,7 @@ where
     fn run_onnx(
         &mut self,
         _: &mut dyn FnMut() -> Result<(), EvaluatorError>,
-        _: &mut dyn FnMut(&mut dyn FnMut()),
+        _: &mut dyn FnMut(&mut (dyn FnMut() + Send)),
     ) -> Result<(), BindError> {
         Err(not_built())
     }
@@ -400,7 +400,7 @@ pub(crate) fn connect4(args: &SearchArgs) -> Result<Box<dyn SearchOps>, BindErro
 struct OnnxRun<'a, E: Environment> {
     inner: &'a mut tessera_rl_onnx::OnnxEvaluator<E>,
     check: &'a mut dyn FnMut() -> Result<(), EvaluatorError>,
-    detach: &'a mut dyn FnMut(&mut dyn FnMut()),
+    detach: &'a mut dyn FnMut(&mut (dyn FnMut() + Send)),
 }
 
 #[cfg(feature = "onnx")]

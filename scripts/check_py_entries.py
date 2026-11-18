@@ -2,6 +2,12 @@
 # SPDX-License-Identifier: MIT OR Apache-2.0
 """ADR-0041: every C entry point of tessera-rl-py goes through a boundary thunk.
 
+The shared boundary crate, tessera-rl-pyffi (ADR-0062 item 8), is checked
+with the same rules, and must expose no public unsafe function: no item of
+its public API relies on its caller for memory safety (#272 step 3), and
+clippy::not_unsafe_ptr_arg_deref is never allowed or expected there. The
+rustdoc-JSON check of the same rule is scripts/check_pyffi_api.py.
+
 The primary guarantee is the compiler's: C tables are built only by
 `ffi::tables`, whose function rows take a `ThunkFn`, which only
 `ffi::thunks` can make. This script is the secondary check. It fails when
@@ -17,10 +23,39 @@ import re
 import subprocess
 import sys
 
-SRC = pathlib.Path(__file__).resolve().parent.parent / "crates" / "tessera-rl-py" / "src"
+ROOT = pathlib.Path(__file__).resolve().parent.parent
+PYFFI = ROOT / "crates" / "tessera-rl-pyffi" / "src"
+SRCS = [ROOT / "crates" / "tessera-rl-py" / "src", PYFFI]
+# `pub` (not `pub(crate)` or `pub(super)`) `unsafe fn`, `unsafe extern fn`
+# or `unsafe trait`, comments ignored.
+PUB_UNSAFE = re.compile(r"\bpub\s+(?:const\s+)?unsafe\s+(?:extern\s+\"[^\"]*\"\s+)?(?:fn|trait)\b")
 
 
-def main():
+# An `unsafe fn` declared in a `pub trait` (not `pub(crate)`): implementers
+# and callers of a public trait reach it, whatever its own visibility says.
+PUB_TRAIT = re.compile(r"\bpub\s+(?:unsafe\s+)?trait\s+\w+[^{;]*\{")
+UNSAFE_FN = re.compile(r"\bunsafe\s+(?:extern\s+\"[^\"]*\"\s+)?fn\b")
+
+
+def trait_bodies(code: str):
+    for m in PUB_TRAIT.finditer(code):
+        depth, i = 1, m.end()
+        while i < len(code) and depth:
+            depth += {"{": 1, "}": -1}.get(code[i], 0)
+            i += 1
+        yield code[m.end():i]
+
+
+def pub_unsafe(text: str) -> bool:
+    code = re.sub(r"//[^\n]*", "", text)
+    if PUB_UNSAFE.search(code):
+        return True
+    return any(UNSAFE_FN.search(body) for body in trait_bodies(code))
+
+
+def main(srcs=None, pyffi=None):
+    srcs = SRCS if srcs is None else srcs
+    pyffi = PYFFI if pyffi is None else pyffi
     problems = []
     tree = subprocess.run(
         ["cargo", "tree", "-q", "-p", "tessera-rl-py", "-e", "normal", "--prefix", "none"],
@@ -28,10 +63,14 @@ def main():
     ).stdout
     if any(line.startswith("pyo3-macros ") for line in tree.splitlines()):
         problems.append("pyo3-macros is a dependency of tessera-rl-py")
-    for path in sorted(SRC.rglob("*.rs")):
+    for path in sorted(p for src in srcs for p in src.rglob("*.rs")):
         text = path.read_text()
         flat = re.sub(r"\s+", " ", text)
-        rel = path.relative_to(SRC.parent.parent.parent)
+        rel = path.relative_to(ROOT) if path.is_relative_to(ROOT) else path
+        if path.is_relative_to(pyffi) and pub_unsafe(text):
+            problems.append(f"{rel}: a public unsafe function or trait in tessera-rl-pyffi")
+        if path.is_relative_to(pyffi) and "not_unsafe_ptr_arg_deref" in text:
+            problems.append(f"{rel}: clippy::not_unsafe_ptr_arg_deref must stay clean in tessera-rl-pyffi, with no allow or expect")
         if re.search(r"#\[(pyclass|pymethods|pymodule|pyfunction)|wrap_pyfunction|wrap_pymodule", text):
             problems.append(f"{rel}: PyO3 registration macros are not allowed")
         name = path.name
@@ -47,4 +86,10 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    args = [pathlib.Path(a) for a in sys.argv[1:]]
+    if args:
+        # check_py_entries.py PY_SRC PYFFI_SRC: check copies (the lint's own
+        # tests).
+        main(srcs=args, pyffi=args[-1])
+    else:
+        main()

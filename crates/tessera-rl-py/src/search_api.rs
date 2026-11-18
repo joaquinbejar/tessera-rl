@@ -12,7 +12,7 @@
 use crate::api::Kwargs;
 use crate::env::BindError;
 use crate::errors::{Kind, error, to_py};
-use crate::ffi::capi::{self, CResult, Gil, Mine, Raised, Ref};
+use crate::ffi::capi::{self, CResult, Gil, Mine, Ref};
 use crate::ffi::inner::Inner;
 use crate::search::{BatchEval, RawBatch, SearchArgs, SearchOps};
 use tessera_rl_search::{EvaluatorError, Eviction};
@@ -144,7 +144,7 @@ pub(crate) fn make_search(g: Gil, kwargs: Option<Ref<'_>>) -> CResult<SearchInne
 }
 
 /// `layout()`: `{"actions": int, "obs_bytes": int}`.
-pub(crate) fn layout(g: Gil, inner: &SearchInner) -> CResult<Mine> {
+pub(crate) fn layout<'py>(g: Gil<'py>, inner: &SearchInner) -> CResult<Mine<'py>> {
     inner.with(g, |ops| {
         let d = capi::dict(g)?;
         capi::dict_set(g, &d, c"actions", &capi::int_u64(g, ops.actions().into())?)?;
@@ -155,7 +155,7 @@ pub(crate) fn layout(g: Gil, inner: &SearchInner) -> CResult<Mine> {
 }
 
 /// `set_root(record: bytes)`.
-pub(crate) fn set_root(g: Gil, inner: &SearchInner, args: Ref<'_>) -> CResult<Mine> {
+pub(crate) fn set_root<'py>(g: Gil<'py>, inner: &SearchInner, args: Ref<'_>) -> CResult<Mine<'py>> {
     let [record] = one_arg(g, args, "set_root(record)")?;
     let bytes = capi::bytes_of(g, record, "record")?;
     inner.with(g, |ops| ops.set_root(bytes).map_err(|e| to_py(g, e)))?;
@@ -164,11 +164,11 @@ pub(crate) fn set_root(g: Gil, inner: &SearchInner, args: Ref<'_>) -> CResult<Mi
 
 /// The Python evaluator of one `run` call.
 pub(crate) struct PyEval<'a> {
-    pub(crate) g: Gil,
+    pub(crate) g: Gil<'a>,
     pub(crate) callable: Ref<'a>,
     /// A Python exception raised by the callable, raised again after the
     /// rollback.
-    pub(crate) pending: Option<capi::Pending>,
+    pub(crate) pending: Option<capi::Stashed>,
 }
 
 fn shape(what: String) -> EvaluatorError {
@@ -193,8 +193,8 @@ fn read_f64(bytes: &[u8], out: &mut [f64], what: &str) -> Result<(), EvaluatorEr
     Ok(())
 }
 
-impl PyEval<'_> {
-    fn call(&mut self, batch: &RawBatch<'_>) -> CResult<Mine> {
+impl<'a> PyEval<'a> {
+    fn call(&mut self, batch: &RawBatch<'_>) -> CResult<Mine<'a>> {
         let g = self.g;
         let legal: Vec<u8> = batch.legal.iter().map(|&l| u8::from(l)).collect();
         let hashes: Vec<u8> = batch.hashes.iter().flat_map(|h| h.to_le_bytes()).collect();
@@ -217,8 +217,8 @@ impl BatchEval for PyEval<'_> {
         // Pending signals (Ctrl-C) before every batch, including batches
         // of terminal leaves only: a handler that raises aborts the call,
         // which is rolled back, and its exception is raised again.
-        if capi::check_signals(self.g).is_err() {
-            self.pending = Some(capi::fetch_pending());
+        if let Err(raised) = capi::check_signals(self.g) {
+            capi::stash_first(self.g, &mut self.pending, raised);
             // This reason is never shown in Python: `run` raises the
             // pending exception again instead.
             return Err(EvaluatorError::Failed {
@@ -234,11 +234,14 @@ impl BatchEval for PyEval<'_> {
         priors: &mut [f64],
         values: &mut [f64],
     ) -> Result<(), EvaluatorError> {
-        let Ok(result) = self.call(batch) else {
-            self.pending = Some(capi::fetch_pending());
-            return Err(EvaluatorError::Failed {
-                reason: "the Python evaluator raised".to_owned(),
-            });
+        let result = match self.call(batch) {
+            Ok(result) => result,
+            Err(raised) => {
+                capi::stash_first(self.g, &mut self.pending, raised);
+                return Err(EvaluatorError::Failed {
+                    reason: "the Python evaluator raised".to_owned(),
+                });
+            }
         };
         let g = self.g;
         let Ok(items) = capi::tuple_items(g, result.as_ref(), "evaluator result") else {
@@ -275,7 +278,7 @@ impl BatchEval for PyEval<'_> {
 }
 
 /// `run(evaluator)`: one search call.
-pub(crate) fn run(g: Gil, inner: &SearchInner, args: Ref<'_>) -> CResult<Mine> {
+pub(crate) fn run<'py>(g: Gil<'py>, inner: &SearchInner, args: Ref<'_>) -> CResult<Mine<'py>> {
     let [callable] = one_arg(g, args, "run(evaluator)")?;
     let mut eval = PyEval {
         g,
@@ -286,16 +289,13 @@ pub(crate) fn run(g: Gil, inner: &SearchInner, args: Ref<'_>) -> CResult<Mine> {
     match (result, eval.pending.take()) {
         (Ok(()), _) => Ok(capi::none(g)),
         // The callable's own exception: raised again, the tree rolled back.
-        (Err(_), Some(pending)) => {
-            capi::restore_pending(pending);
-            Err(Raised)
-        }
+        (Err(_), Some(pending)) => Err(pending.raise_again(g)),
         (Err(e), None) => Err(to_py(g, e)),
     }
 }
 
 /// `root_visits() -> list[int]`.
-pub(crate) fn root_visits(g: Gil, inner: &SearchInner) -> CResult<Mine> {
+pub(crate) fn root_visits<'py>(g: Gil<'py>, inner: &SearchInner) -> CResult<Mine<'py>> {
     inner.with(g, |ops| {
         let list = capi::list(g)?;
         for v in ops.root_visits() {
@@ -306,7 +306,11 @@ pub(crate) fn root_visits(g: Gil, inner: &SearchInner) -> CResult<Mine> {
 }
 
 /// `select_action(temperature: float) -> int`.
-pub(crate) fn select_action(g: Gil, inner: &SearchInner, args: Ref<'_>) -> CResult<Mine> {
+pub(crate) fn select_action<'py>(
+    g: Gil<'py>,
+    inner: &SearchInner,
+    args: Ref<'_>,
+) -> CResult<Mine<'py>> {
     let [t] = one_arg(g, args, "select_action(temperature)")?;
     let t = capi::to_f64(g, t, "temperature")?;
     let a = inner.with(g, |ops| ops.select_action(t).map_err(|e| to_py(g, e)))?;
@@ -314,17 +318,17 @@ pub(crate) fn select_action(g: Gil, inner: &SearchInner, args: Ref<'_>) -> CResu
 }
 
 /// `improved_policy() -> list[float] | None`.
-pub(crate) fn improved_policy(g: Gil, inner: &SearchInner) -> CResult<Mine> {
+pub(crate) fn improved_policy<'py>(g: Gil<'py>, inner: &SearchInner) -> CResult<Mine<'py>> {
     inner.with(g, |ops| floats(g, ops.improved_policy()))
 }
 
 /// `considered() -> list[int] | None`.
-pub(crate) fn considered(g: Gil, inner: &SearchInner) -> CResult<Mine> {
+pub(crate) fn considered<'py>(g: Gil<'py>, inner: &SearchInner) -> CResult<Mine<'py>> {
     inner.with(g, |ops| ints(g, ops.considered()))
 }
 
 /// `None`, or a list of the floats.
-pub(crate) fn floats(g: Gil, v: Option<Vec<f64>>) -> CResult<Mine> {
+pub(crate) fn floats(g: Gil<'_>, v: Option<Vec<f64>>) -> CResult<Mine<'_>> {
     let Some(v) = v else {
         return Ok(capi::none(g));
     };
@@ -336,7 +340,7 @@ pub(crate) fn floats(g: Gil, v: Option<Vec<f64>>) -> CResult<Mine> {
 }
 
 /// `None`, or a list of the integers.
-pub(crate) fn ints(g: Gil, v: Option<Vec<u32>>) -> CResult<Mine> {
+pub(crate) fn ints(g: Gil<'_>, v: Option<Vec<u32>>) -> CResult<Mine<'_>> {
     let Some(v) = v else {
         return Ok(capi::none(g));
     };
@@ -348,19 +352,19 @@ pub(crate) fn ints(g: Gil, v: Option<Vec<u32>>) -> CResult<Mine> {
 }
 
 /// `calls() -> int`.
-pub(crate) fn calls(g: Gil, inner: &SearchInner) -> CResult<Mine> {
+pub(crate) fn calls<'py>(g: Gil<'py>, inner: &SearchInner) -> CResult<Mine<'py>> {
     let n = inner.with(g, |ops| Ok(ops.calls()))?;
     capi::int_u64(g, n)
 }
 
 /// `tree_hash() -> int`.
-pub(crate) fn tree_hash(g: Gil, inner: &SearchInner) -> CResult<Mine> {
+pub(crate) fn tree_hash<'py>(g: Gil<'py>, inner: &SearchInner) -> CResult<Mine<'py>> {
     let h = inner.with(g, |ops| Ok(ops.tree_hash()))?;
     capi::int_u64(g, h)
 }
 
 /// `is_privileged() -> bool`.
-pub(crate) fn is_privileged(g: Gil, inner: &SearchInner) -> CResult<Mine> {
+pub(crate) fn is_privileged<'py>(g: Gil<'py>, inner: &SearchInner) -> CResult<Mine<'py>> {
     let flag = inner.with(g, |ops| Ok(ops.is_privileged()))?;
     Ok(capi::boolean(g, flag))
 }

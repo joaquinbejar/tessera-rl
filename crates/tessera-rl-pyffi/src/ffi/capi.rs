@@ -26,30 +26,27 @@
 //!   `bytes`, `bytearray`, `int`, `float`, capsules, and instances of our
 //!   own types, which are not GC-tracked); reads of exact built-in types
 //!   (`PyTuple_Size`/`GetItem`, `PyList_Size`/`GetItem`, `PyDict_Next`,
-//!   `PyBytes_AsString`/`Size`); `PyErr_Fetch`,
-//!   `PyErr_Occurred`, and `PyErr_Restore` with no exception set (it then
-//!   decrefs nothing); reference increments; releasing and reacquiring the
-//!   interpreter; and a decref of a leaf [`Mine`]. `PyErr_Clear` is never
-//!   called: dropping a pending exception can run finalizers through its
-//!   traceback, so it would be a callout.
+//!   `PyBytes_AsString`/`Size`); `PyErr_Fetch` and `PyErr_Occurred`;
+//!   reference increments; releasing and reacquiring the interpreter; and a
+//!   decref of a leaf [`Mine`]. `PyErr_Clear` and `PyErr_Restore` are
+//!   callouts: dropping or replacing a pending exception can run finalizers
+//!   through its traceback.
 //!
-//! **Decref invariant.** The bindings never own a reference to a user
-//! object: everything they read from Python (arguments, keyword values,
-//! items) is borrowed ([`Ref`]) and never decref'd. The only owned
-//! references are [`Mine`]: objects we created. A leaf (not GC-tracked)
-//! cannot hold or reach a user object, so its decref is direct. A
-//! GC-tracked container can: Python code running in any callout may find
-//! it and store user objects in it. So its decref, on success and on every
-//! failure or unwind path that drops a partly built container, is a
-//! callout (`Mine::drop`). Owning any other reference that may reach a
-//! user object would also need a callout decref; add one to the table
-//! first.
+//! **Decref invariant.** Owned references are [`Mine`]. A leaf (not
+//! GC-tracked: an object we created that holds no other object) cannot
+//! reach a user object, so its decref is direct. Every other owned
+//! reference is dropped through a callout (`Mine::drop`): a GC-tracked
+//! container we created (Python code running in any callout may find it
+//! and store user objects in it), a call result, and a user object read
+//! from a list or dict ([`list_items`], [`dict_items`]), on success and on
+//! every failure or unwind path.
 //!
-//! **Borrow invariant.** A [`Ref`] is valid only while its owner keeps the
-//! object alive. A `Ref` borrowed from a container a user can reach (a
-//! keyword dict, a tuple or list the caller passed) must not be used after
-//! a callout that can run Python code: that code can mutate the container
-//! and drop the object. Read every argument first, then allocate.
+//! **Borrow invariant.** A [`Ref`] is valid for its lifetime, enforced by
+//! the types: the arguments CPython passes live for the call; an item of a
+//! tuple lives as long as the tuple (tuples are immutable); a [`Mine`]'s
+//! borrow lives as long as the borrow. Items of lists and dicts, which
+//! Python code can change during any callout, are returned owned, never
+//! borrowed. No safe function relies on its caller for this.
 //!
 //! **Exact types.** Arguments are read only from exact built-in types
 //! (`int`, `bool`, `str`, `bytes`, `tuple`, `list`, `dict`, `None`); any
@@ -60,6 +57,10 @@
 //! are accepted.
 
 #![expect(unsafe_code, reason = "audited module: the CPython C API")]
+#![expect(
+    clippy::missing_errors_doc,
+    reason = "every `Err(Raised)` here means a Python exception is set (the C-API failure convention)"
+)]
 
 use core::ffi::{CStr, c_int};
 use core::marker::PhantomData;
@@ -70,11 +71,41 @@ use pyo3::ffi;
 use super::thunks;
 
 /// Proof that the interpreter is attached to this thread. Only entries
-/// (`ffi::entry`) make one.
+/// (`ffi::entry` and the typed shims) make one, scoped to the call: `'py`
+/// is the entry call's lifetime, so the token, and every [`Ref`] and
+/// [`Mine`] made under it, cannot outlive the call.
+///
+/// The token is `!Send` and `!Sync`: it cannot reach another thread, and
+/// [`Gil::detach`] takes only `Send` closures, so it never enters the code
+/// that runs with the interpreter released.
+///
+/// ```compile_fail
+/// use tessera_rl_pyffi::ffi::capi::Gil;
+/// fn escape(g: Gil<'_>) -> Gil<'static> {
+///     g // the call's token cannot become 'static
+/// }
+/// ```
+///
+/// ```compile_fail
+/// use tessera_rl_pyffi::ffi::capi::Gil;
+/// fn inside(g: Gil<'_>) {
+///     g.detach(|| {
+///         drop(g); // not Send: cannot enter the detached closure
+///     });
+/// }
+/// ```
+///
+/// ```compile_fail
+/// use tessera_rl_pyffi::ffi::capi::{self, Gil};
+/// fn out(g: Gil<'_>) {
+///     // An object reference is not Send: it cannot leave it either.
+///     let _ = g.detach(|| capi::none(g));
+/// }
+/// ```
 #[derive(Clone, Copy)]
-pub(crate) struct Gil(PhantomData<*mut ()>);
+pub struct Gil<'py>(PhantomData<(&'py (), *mut ())>);
 
-impl Gil {
+impl Gil<'_> {
     /// # Safety
     ///
     /// The interpreter must be attached to the calling thread for as long
@@ -83,12 +114,14 @@ impl Gil {
         Self(PhantomData)
     }
 
-    /// Runs `f` with the interpreter released (the engine's work).
-    #[expect(
-        clippy::unused_self,
-        reason = "the token proves the interpreter is attached"
-    )]
-    pub(crate) fn detach<R>(self, f: impl FnOnce() -> R) -> R {
+    /// Runs `f` with the interpreter released (the engine's work). `F` and
+    /// `R` are `Send`, so no interpreter token or object reference (all
+    /// `!Send`) enters or leaves the detached closure.
+    pub fn detach<F, R>(self, f: F) -> R
+    where
+        F: FnOnce() -> R + Send,
+        R: Send,
+    {
         struct Restore(*mut ffi::PyThreadState);
         impl Drop for Restore {
             fn drop(&mut self) {
@@ -106,15 +139,25 @@ impl Gil {
 }
 
 /// An exception is set (the C-API failure convention).
+///
+/// Only this crate makes one, where an exception was just set:
+///
+/// ```compile_fail
+/// let _ = tessera_rl_pyffi::ffi::capi::Raised(());
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct Raised;
+pub struct Raised(());
+
+/// Made only where an exception was just set (here, by a failed C-API
+/// call, or by [`raise`]), so `Err(RAISED)` always means one is.
+pub(crate) const RAISED: Raised = Raised(());
 
 /// The result of a C-API operation: `Err` means an exception is set.
-pub(crate) type CResult<T> = Result<T, Raised>;
+pub type CResult<T> = Result<T, Raised>;
 
 /// A borrowed reference, valid for `'a`.
 #[derive(Clone, Copy)]
-pub(crate) struct Ref<'a>(NonNull<ffi::PyObject>, PhantomData<&'a ()>);
+pub struct Ref<'a>(NonNull<ffi::PyObject>, PhantomData<&'a ()>);
 
 impl Ref<'_> {
     /// # Safety
@@ -134,7 +177,8 @@ impl Ref<'_> {
     }
 
     /// Whether this is `None`.
-    pub(crate) fn is_none(self) -> bool {
+    #[must_use]
+    pub fn is_none(self) -> bool {
         // SAFETY: reading the address of the `None` singleton.
         self.as_ptr() == unsafe { ffi::Py_None() }
     }
@@ -145,7 +189,7 @@ impl Ref<'_> {
 /// with a direct decref; a GC-tracked container is dropped through a
 /// callout, because Python code may have found it and stored user objects
 /// in it (decref invariant).
-pub(crate) struct Mine(NonNull<ffi::PyObject>, Tracked);
+pub struct Mine<'py>(NonNull<ffi::PyObject>, Tracked, PhantomData<Gil<'py>>);
 
 /// Whether the garbage collector tracks the object, so Python code can
 /// reach it.
@@ -155,23 +199,38 @@ enum Tracked {
     Container,
 }
 
-impl Mine {
+impl Mine<'_> {
     /// Takes ownership of a new reference; `None` (an exception is set)
     /// for null.
     fn new(ptr: *mut ffi::PyObject) -> CResult<Self> {
         NonNull::new(ptr)
-            .map(|p| Self(p, Tracked::Leaf))
-            .ok_or(Raised)
+            .map(|p| Self(p, Tracked::Leaf, PhantomData))
+            .ok_or(RAISED)
+    }
+
+    /// A new reference to `ptr`, a live user object read from a container
+    /// (an item, a key or a value): owned so it stays alive whatever Python
+    /// code runs next, and dropped through a callout, as a container is
+    /// (the user object may hold anything).
+    fn owned_user(g: Gil<'_>, ptr: *mut ffi::PyObject) -> CResult<Self> {
+        let p = NonNull::new(ptr)
+            .ok_or_else(|| raise(g, runtime_error(), "a container item is missing"))?;
+        // SAFETY: a live object (the caller read it from a live container
+        // without running Python code); incrementing runs no Python code.
+        unsafe { ffi::Py_IncRef(p.as_ptr()) };
+        Ok(Self(p, Tracked::Container, PhantomData))
     }
 
     /// As [`Mine::new`], for a GC-tracked container.
     fn container(ptr: *mut ffi::PyObject) -> CResult<Self> {
         NonNull::new(ptr)
-            .map(|p| Self(p, Tracked::Container))
-            .ok_or(Raised)
+            .map(|p| Self(p, Tracked::Container, PhantomData))
+            .ok_or(RAISED)
     }
 
-    pub(crate) fn as_ref(&self) -> Ref<'_> {
+    /// A borrowed reference to the object, for as long as `self`.
+    #[must_use]
+    pub fn as_ref(&self) -> Ref<'_> {
         Ref(self.0, PhantomData)
     }
 
@@ -183,7 +242,7 @@ impl Mine {
     }
 }
 
-impl Drop for Mine {
+impl Drop for Mine<'_> {
     fn drop(&mut self) {
         if self.1 == Tracked::Container {
             // SAFETY: an owned reference; a container may hold user objects
@@ -199,27 +258,52 @@ impl Drop for Mine {
 
 // -- exceptions -----------------------------------------------------------------
 
+/// An exception class: a built-in one, or one of this crate's
+/// ([`crate::errors`]). Made only here, so it is always a live type object.
+#[derive(Clone, Copy)]
+pub struct Exc(*mut ffi::PyObject);
+
+impl Exc {
+    /// A class this crate created and keeps alive for the process.
+    pub(crate) const fn from_type(ty: *mut ffi::PyObject) -> Self {
+        Self(ty)
+    }
+}
+
 /// Raises `ty(message)` (callout: setting an exception allocates).
-pub(crate) fn raise(_g: Gil, ty: *mut ffi::PyObject, message: &str) -> Raised {
+#[must_use]
+pub fn raise(_g: Gil<'_>, ty: Exc, message: &str) -> Raised {
+    let ty = ty.0;
     let text = std::ffi::CString::new(message.replace('\0', " ")).unwrap_or_default();
     // SAFETY: attached; `ty` is a live exception type and `text` a C
     // string alive for the call.
     unsafe { thunks::c_err_set_string(ty, text.as_ptr()) };
-    Raised
+    RAISED
 }
 
-/// The built-in exception types the bindings raise.
-pub(crate) fn type_error() -> *mut ffi::PyObject {
+/// `TypeError`.
+#[must_use]
+pub fn type_error() -> Exc {
     // SAFETY: reading an interpreter global.
-    unsafe { ffi::PyExc_TypeError }
+    Exc(unsafe { ffi::PyExc_TypeError })
 }
-pub(crate) fn runtime_error() -> *mut ffi::PyObject {
+/// `RuntimeError`.
+#[must_use]
+pub fn runtime_error() -> Exc {
     // SAFETY: reading an interpreter global.
-    unsafe { ffi::PyExc_RuntimeError }
+    Exc(unsafe { ffi::PyExc_RuntimeError })
 }
-pub(crate) fn buffer_error() -> *mut ffi::PyObject {
+/// `ImportError`.
+#[must_use]
+pub fn import_error() -> Exc {
     // SAFETY: reading an interpreter global.
-    unsafe { ffi::PyExc_BufferError }
+    Exc(unsafe { ffi::PyExc_ImportError })
+}
+/// `BufferError`.
+#[must_use]
+pub fn buffer_error() -> Exc {
+    // SAFETY: reading an interpreter global.
+    Exc(unsafe { ffi::PyExc_BufferError })
 }
 pub(crate) fn exception_base() -> *mut ffi::PyObject {
     // SAFETY: reading an interpreter global.
@@ -232,12 +316,12 @@ pub(crate) fn runtime_warning() -> *mut ffi::PyObject {
 
 /// A new exception class `name` (`module.Name`) deriving from `base`
 /// (callout: a GC allocation).
-pub(crate) fn new_exception(
-    _g: Gil,
+pub(crate) fn new_exception<'py>(
+    _g: Gil<'py>,
     name: &CStr,
     doc: &CStr,
     base: *mut ffi::PyObject,
-) -> CResult<Mine> {
+) -> CResult<Mine<'py>> {
     // SAFETY: attached; static C strings and a live base type.
     Mine::container(unsafe {
         thunks::c_err_new_exception(name.as_ptr(), doc.as_ptr(), base, ptr::null_mut())
@@ -245,54 +329,101 @@ pub(crate) fn new_exception(
 }
 
 /// Warns with `category` (callout: runs filters and hooks).
-pub(crate) fn warn(_g: Gil, category: *mut ffi::PyObject, message: &CStr) -> CResult<()> {
+pub(crate) fn warn(_g: Gil<'_>, category: *mut ffi::PyObject, message: &CStr) -> CResult<()> {
     // SAFETY: attached; a live category and a static message.
     let rc = unsafe { thunks::c_err_warn(category, message.as_ptr(), 1) };
-    if rc < 0 { Err(Raised) } else { Ok(()) }
+    if rc < 0 { Err(RAISED) } else { Ok(()) }
 }
 
 /// The pending exception, taken (direct: no normalization), and put back.
 pub(crate) struct Pending(*mut ffi::PyObject, *mut ffi::PyObject, *mut ffi::PyObject);
 
-pub(crate) fn fetch_pending() -> Pending {
+/// Takes the pending exception, if any.
+#[must_use]
+pub(crate) fn fetch_pending(_g: Gil<'_>) -> Pending {
     let mut p = Pending(ptr::null_mut(), ptr::null_mut(), ptr::null_mut());
-    // SAFETY: attached by contract of the callers (cleanup entries); fetch
-    // only moves the references.
+    // SAFETY: attached (the token); fetch only moves the references.
     unsafe {
         ffi::PyErr_Fetch(&raw mut p.0, &raw mut p.1, &raw mut p.2);
     }
     p
 }
 
+/// Puts back exactly what [`fetch_pending`] took, even nothing (a cleanup
+/// entry that must leave the error indicator as it found it).
 #[expect(
     clippy::needless_pass_by_value,
     reason = "the pending exception is consumed"
 )]
-pub(crate) fn restore_pending(p: Pending) {
-    // SAFETY: restores exactly what was fetched (references transferred).
-    unsafe {
-        ffi::PyErr_Restore(p.0, p.1, p.2);
+pub(crate) fn put_back_pending(_g: Gil<'_>, p: Pending) {
+    // SAFETY: attached (the token); restores exactly what was fetched
+    // (references transferred). A callout: restoring replaces any
+    // exception set meanwhile, and dropping it can run finalizers.
+    unsafe { thunks::c_err_restore(p.0, p.1, p.2) };
+}
+
+/// Stashes the exception `raised` proves is set into `slot`, unless
+/// `slot` already holds one: then the new exception is discarded (a
+/// callout: dropping it can run finalizers) and the first is kept, so no
+/// stash is ever overwritten and leaked.
+pub fn stash_first(g: Gil<'_>, slot: &mut Option<Stashed>, raised: Raised) {
+    if slot.is_some() {
+        let _ = raised;
+        clear_pending(g);
+    } else {
+        *slot = Some(Stashed::take(g, raised));
+    }
+}
+
+/// An exception taken out of the interpreter while other work runs (a
+/// rollback), to be raised again afterwards. Made only from a [`Raised`],
+/// so it always holds an exception. Dropping it unraised leaks the
+/// exception's references.
+pub struct Stashed(Pending);
+
+impl Stashed {
+    /// Takes the exception `raised` proves is set.
+    #[must_use]
+    pub fn take(g: Gil<'_>, raised: Raised) -> Self {
+        let _ = raised;
+        Self(fetch_pending(g))
+    }
+
+    /// Raises it again.
+    #[must_use]
+    pub fn raise_again(self, g: Gil<'_>) -> Raised {
+        if self.0.0.is_null() {
+            return raise(g, runtime_error(), "no exception to raise again");
+        }
+        put_back_pending(g, self.0);
+        RAISED
     }
 }
 
 // -- building objects -----------------------------------------------------------------
 
 /// A new reference to a singleton.
-fn singleton(p: *mut ffi::PyObject) -> Mine {
+fn singleton<'py>(p: *mut ffi::PyObject) -> Mine<'py> {
     // SAFETY: a live singleton; incrementing runs no Python code.
     unsafe { ffi::Py_IncRef(p) };
     // SAFETY: singletons are never null.
-    Mine(unsafe { NonNull::new_unchecked(p) }, Tracked::Leaf)
+    Mine(
+        unsafe { NonNull::new_unchecked(p) },
+        Tracked::Leaf,
+        PhantomData,
+    )
 }
 
 /// `None`, a new reference.
-pub(crate) fn none(_g: Gil) -> Mine {
+#[must_use]
+pub fn none(_g: Gil<'_>) -> Mine<'_> {
     // SAFETY: the address of the `None` singleton.
     singleton(unsafe { ffi::Py_None() })
 }
 
 /// `True` or `False`, a new reference.
-pub(crate) fn boolean(_g: Gil, value: bool) -> Mine {
+#[must_use]
+pub fn boolean(_g: Gil<'_>, value: bool) -> Mine<'_> {
     if value {
         // SAFETY: the address of the `True` singleton.
         singleton(unsafe { ffi::Py_True() })
@@ -303,24 +434,24 @@ pub(crate) fn boolean(_g: Gil, value: bool) -> Mine {
 }
 
 /// An `int` (direct: not GC-tracked).
-pub(crate) fn int_u64(_g: Gil, v: u64) -> CResult<Mine> {
+pub fn int_u64(_g: Gil<'_>, v: u64) -> CResult<Mine<'_>> {
     // SAFETY: attached.
     Mine::new(unsafe { ffi::PyLong_FromUnsignedLongLong(v) })
 }
 
 /// A `float` (direct: not GC-tracked).
-pub(crate) fn float(_g: Gil, v: f64) -> CResult<Mine> {
+pub fn float(_g: Gil<'_>, v: f64) -> CResult<Mine<'_>> {
     // SAFETY: attached.
     Mine::new(unsafe { ffi::PyFloat_FromDouble(v) })
 }
 
-fn ssize(len: usize) -> CResult<ffi::Py_ssize_t> {
-    ffi::Py_ssize_t::try_from(len).map_err(|_| Raised)
+fn ssize(g: Gil<'_>, len: usize) -> CResult<ffi::Py_ssize_t> {
+    ffi::Py_ssize_t::try_from(len).map_err(|_| raise(g, runtime_error(), "size out of range"))
 }
 
 /// A `str` from UTF-8 (direct: not GC-tracked).
-pub(crate) fn string(g: Gil, s: &str) -> CResult<Mine> {
-    let Ok(len) = ssize(s.len()) else {
+pub fn string<'py>(g: Gil<'py>, s: &str) -> CResult<Mine<'py>> {
+    let Ok(len) = ssize(g, s.len()) else {
         return Err(raise(g, runtime_error(), "string too long"));
     };
     // SAFETY: attached; `len` bytes of valid UTF-8.
@@ -328,8 +459,8 @@ pub(crate) fn string(g: Gil, s: &str) -> CResult<Mine> {
 }
 
 /// A `bytes` copy (direct: not GC-tracked).
-pub(crate) fn bytes(g: Gil, data: &[u8]) -> CResult<Mine> {
-    let Ok(len) = ssize(data.len()) else {
+pub fn bytes<'py>(g: Gil<'py>, data: &[u8]) -> CResult<Mine<'py>> {
+    let Ok(len) = ssize(g, data.len()) else {
         return Err(raise(g, runtime_error(), "buffer too long"));
     };
     // SAFETY: attached; `len` readable bytes.
@@ -337,8 +468,8 @@ pub(crate) fn bytes(g: Gil, data: &[u8]) -> CResult<Mine> {
 }
 
 /// A `bytearray` copy (direct: not GC-tracked).
-pub(crate) fn bytearray(g: Gil, data: &[u8]) -> CResult<Mine> {
-    let Ok(len) = ssize(data.len()) else {
+pub fn bytearray<'py>(g: Gil<'py>, data: &[u8]) -> CResult<Mine<'py>> {
+    let Ok(len) = ssize(g, data.len()) else {
         return Err(raise(g, runtime_error(), "buffer too long"));
     };
     // SAFETY: attached; `len` readable bytes.
@@ -346,7 +477,7 @@ pub(crate) fn bytearray(g: Gil, data: &[u8]) -> CResult<Mine> {
 }
 
 /// A new empty `list` (callout: GC-tracked).
-pub(crate) fn list(_g: Gil) -> CResult<Mine> {
+pub fn list(_g: Gil<'_>) -> CResult<Mine<'_>> {
     // SAFETY: attached.
     Mine::container(unsafe { thunks::c_list_new(0) })
 }
@@ -354,7 +485,7 @@ pub(crate) fn list(_g: Gil) -> CResult<Mine> {
 /// Test hook: the `n`-th next container insertion fails with
 /// `RuntimeError` (0 disables), to exercise the unwind drops.
 #[cfg(feature = "test-hooks")]
-pub(crate) fn fail_after(n: u32) {
+pub fn fail_after(n: u32) {
     FAIL_AFTER.with(|c| c.set(n));
 }
 
@@ -364,7 +495,7 @@ std::thread_local! {
 }
 
 #[cfg(feature = "test-hooks")]
-fn injected(g: Gil) -> CResult<()> {
+fn injected(g: Gil<'_>) -> CResult<()> {
     let hit = FAIL_AFTER.with(|c| match c.get() {
         0 => false,
         n => {
@@ -385,32 +516,32 @@ fn injected(g: Gil) -> CResult<()> {
     clippy::unnecessary_wraps,
     reason = "the same signature as the test-hooks build"
 )]
-fn injected(_g: Gil) -> CResult<()> {
+fn injected(_g: Gil<'_>) -> CResult<()> {
     Ok(())
 }
 
 /// Appends `item` to `list` (callout: it mutates a GC-tracked container;
 /// the item's reference is not stolen).
-pub(crate) fn list_append(g: Gil, list: &Mine, item: &Mine) -> CResult<()> {
+pub fn list_append(g: Gil<'_>, list: &Mine<'_>, item: &Mine<'_>) -> CResult<()> {
     injected(g)?;
     // SAFETY: attached; our list and a live item.
     let rc = unsafe { thunks::c_list_append(list.as_ref().as_ptr(), item.as_ref().as_ptr()) };
-    if rc < 0 { Err(Raised) } else { Ok(()) }
+    if rc < 0 { Err(RAISED) } else { Ok(()) }
 }
 
 /// A `tuple` of `items` (callout: GC-tracked; the items are ours).
-pub(crate) fn tuple(g: Gil, items: Vec<Mine>) -> CResult<Mine> {
-    let n = ssize(items.len()).map_err(|_| raise(g, runtime_error(), "tuple too long"))?;
+pub fn tuple<'py>(g: Gil<'py>, items: Vec<Mine<'py>>) -> CResult<Mine<'py>> {
+    let n = ssize(g, items.len())?;
     // SAFETY: attached.
     let t = Mine::container(unsafe { thunks::c_tuple_new(n) })?;
     for (i, item) in items.into_iter().enumerate() {
-        let i = ssize(i)?;
+        let i = ssize(g, i)?;
         // SAFETY: our new tuple, an index below its size; the reference is
         // stolen (ownership passes to the tuple). A callout: it mutates a
         // GC-tracked container and drops any previous item.
         let rc = unsafe { thunks::c_tuple_set_item(t.as_ref().as_ptr(), i, item.into_ptr()) };
         if rc < 0 {
-            return Err(Raised);
+            return Err(RAISED);
         }
     }
     Ok(t)
@@ -419,7 +550,7 @@ pub(crate) fn tuple(g: Gil, items: Vec<Mine>) -> CResult<Mine> {
 /// `callable(*args)` (callout: it runs arbitrary Python code, under the
 /// caller's floating-point controls, ADR-0041). The result may be any
 /// object, so it is owned as a container (its decref is a callout too).
-pub(crate) fn call(_g: Gil, callable: Ref<'_>, args: &Mine) -> CResult<Mine> {
+pub fn call<'py>(_g: Gil<'py>, callable: Ref<'_>, args: &Mine<'_>) -> CResult<Mine<'py>> {
     // SAFETY: attached; a live callable and our argument tuple, both
     // borrowed for the call.
     Mine::container(unsafe { thunks::c_object_call(callable.as_ptr(), args.as_ref().as_ptr()) })
@@ -427,21 +558,21 @@ pub(crate) fn call(_g: Gil, callable: Ref<'_>, args: &Mine) -> CResult<Mine> {
 
 /// Discards the pending exception (callout: dropping it may run
 /// finalizers).
-pub(crate) fn clear_pending(_g: Gil) {
+pub fn clear_pending(_g: Gil<'_>) {
     // SAFETY: attached.
     unsafe { thunks::c_err_clear() };
 }
 
 /// Runs pending signal handlers (callout: they are Python code); an
 /// exception they raise (`KeyboardInterrupt`) is returned.
-pub(crate) fn check_signals(_g: Gil) -> CResult<()> {
+pub fn check_signals(_g: Gil<'_>) -> CResult<()> {
     // SAFETY: attached.
     let rc = unsafe { thunks::c_check_signals() };
-    if rc < 0 { Err(Raised) } else { Ok(()) }
+    if rc < 0 { Err(RAISED) } else { Ok(()) }
 }
 
 /// A new empty `dict` (callout: GC-tracked).
-pub(crate) fn dict(_g: Gil) -> CResult<Mine> {
+pub fn dict(_g: Gil<'_>) -> CResult<Mine<'_>> {
     // SAFETY: attached.
     Mine::container(unsafe { thunks::c_dict_new() })
 }
@@ -449,7 +580,7 @@ pub(crate) fn dict(_g: Gil) -> CResult<Mine> {
 /// `dict[key] = value` with an exact `str` key (callout: it mutates a
 /// GC-tracked container, and replacing a value Python code stored there
 /// runs its finalizer).
-pub(crate) fn dict_set(g: Gil, dict: &Mine, key: &CStr, value: &Mine) -> CResult<()> {
+pub fn dict_set(g: Gil<'_>, dict: &Mine<'_>, key: &CStr, value: &Mine<'_>) -> CResult<()> {
     injected(g)?;
     // SAFETY: attached; our dict, a static key and a live value.
     let rc = unsafe {
@@ -459,22 +590,36 @@ pub(crate) fn dict_set(g: Gil, dict: &Mine, key: &CStr, value: &Mine) -> CResult
             value.as_ref().as_ptr(),
         )
     };
-    if rc < 0 { Err(Raised) } else { Ok(()) }
+    if rc < 0 { Err(RAISED) } else { Ok(()) }
 }
 
 /// `module.name = value` (callout: sets a module attribute).
-pub(crate) fn module_add(_g: Gil, module: Ref<'_>, name: &CStr, value: &Mine) -> CResult<()> {
+pub fn module_add(_g: Gil<'_>, module: Ref<'_>, name: &CStr, value: &Mine<'_>) -> CResult<()> {
     // SAFETY: attached; a live module, a C string, a live value (not
     // stolen).
     let rc =
         unsafe { thunks::c_module_add(module.as_ptr(), name.as_ptr(), value.as_ref().as_ptr()) };
-    if rc < 0 { Err(Raised) } else { Ok(()) }
+    if rc < 0 { Err(RAISED) } else { Ok(()) }
+}
+
+/// `module.name = ty`, for a class this crate holds for the process
+/// (`errors::register`; callout: sets a module attribute).
+pub(crate) fn module_add_class(
+    _g: Gil<'_>,
+    module: Ref<'_>,
+    name: &CStr,
+    ty: *mut ffi::PyObject,
+) -> CResult<()> {
+    // SAFETY: attached; a live module, a C string, and a class held by a
+    // never-released strong reference (not stolen here).
+    let rc = unsafe { thunks::c_module_add(module.as_ptr(), name.as_ptr(), ty) };
+    if rc < 0 { Err(RAISED) } else { Ok(()) }
 }
 
 // -- types, modules, instances, capsules ----------------------------------------------
 
 /// A new heap type from `spec` (callout: a GC allocation).
-pub(crate) fn type_from_spec(_g: Gil, spec: &mut ffi::PyType_Spec) -> CResult<Mine> {
+pub(crate) fn type_from_spec<'py>(_g: Gil<'py>, spec: &mut ffi::PyType_Spec) -> CResult<Mine<'py>> {
     // SAFETY: attached; the spec lives through the call, its slot table is
     // static, and CPython copies what it keeps.
     Mine::container(unsafe { thunks::c_type_from_spec(&raw mut *spec) })
@@ -485,7 +630,7 @@ pub(crate) fn type_from_spec(_g: Gil, spec: &mut ffi::PyType_Spec) -> CResult<Mi
 /// # Safety
 ///
 /// `def` must be a valid module definition that lives for the process.
-pub(crate) unsafe fn module_create(_g: Gil, def: *mut ffi::PyModuleDef) -> CResult<Mine> {
+pub(crate) unsafe fn module_create(_g: Gil<'_>, def: *mut ffi::PyModuleDef) -> CResult<Mine<'_>> {
     // SAFETY: attached; per the contract.
     Mine::container(unsafe { thunks::c_module_create(def, ffi::PYTHON_API_VERSION as c_int) })
 }
@@ -496,7 +641,7 @@ pub(crate) unsafe fn module_create(_g: Gil, def: *mut ffi::PyModuleDef) -> CResu
 /// # Safety
 ///
 /// `ty` must be one of our heap types (no `Py_TPFLAGS_HAVE_GC`).
-pub(crate) unsafe fn alloc_instance(_g: Gil, ty: *mut ffi::PyObject) -> CResult<Mine> {
+pub(crate) unsafe fn alloc_instance(_g: Gil<'_>, ty: *mut ffi::PyObject) -> CResult<Mine<'_>> {
     // SAFETY: attached; per the contract. It takes a reference to the type,
     // as heap-type instances require.
     Mine::new(unsafe { ffi::PyType_GenericAlloc(ty.cast(), 0) })
@@ -543,12 +688,12 @@ pub(crate) fn incref(r: Ref<'_>) -> *mut ffi::PyObject {
 ///
 /// `ptr` must be valid for the destructor, and `name` must outlive the
 /// capsule.
-pub(crate) unsafe fn capsule(
-    _g: Gil,
+pub(crate) unsafe fn capsule<'py>(
+    _g: Gil<'py>,
     ptr: *mut core::ffi::c_void,
     name: &'static CStr,
     destructor: unsafe extern "C" fn(*mut ffi::PyObject),
-) -> CResult<Mine> {
+) -> CResult<Mine<'py>> {
     // SAFETY: attached; per the contract.
     Mine::new(unsafe { ffi::PyCapsule_New(ptr, name.as_ptr(), Some(destructor)) })
 }
@@ -573,7 +718,7 @@ pub(crate) unsafe fn capsule_pointer(
 
 // -- reading arguments (exact types only) -----------------------------------------------
 
-fn wrong(g: Gil, what: &str, expected: &str) -> Raised {
+fn wrong(g: Gil<'_>, what: &str, expected: &str) -> Raised {
     raise(
         g,
         type_error(),
@@ -582,7 +727,7 @@ fn wrong(g: Gil, what: &str, expected: &str) -> Raised {
 }
 
 /// The items of an exact `tuple` (borrowed).
-pub(crate) fn tuple_items<'a>(g: Gil, t: Ref<'a>, what: &str) -> CResult<Vec<Ref<'a>>> {
+pub fn tuple_items<'a>(g: Gil<'_>, t: Ref<'a>, what: &str) -> CResult<Vec<Ref<'a>>> {
     if !t.is_exact(&raw mut ffi::PyTuple_Type) {
         return Err(wrong(g, what, "a tuple"));
     }
@@ -593,23 +738,27 @@ pub(crate) fn tuple_items<'a>(g: Gil, t: Ref<'a>, what: &str) -> CResult<Vec<Ref
             // SAFETY: as above, an index below the size.
             let item = unsafe { ffi::PyTuple_GetItem(t.as_ptr(), i) };
             // SAFETY: a borrowed item, alive while the tuple is.
-            unsafe { Ref::from_ptr(item) }.ok_or(Raised)
+            unsafe { Ref::from_ptr(item) }
+                .ok_or_else(|| raise(g, runtime_error(), "a tuple item is missing"))
         })
         .collect()
 }
 
-/// Whether `r` is an exact `list` (no exception either way).
 /// Whether `r` is exactly of `ty`, one of our heap types.
 pub(crate) fn is_instance_of(r: Ref<'_>, ty: *mut ffi::PyObject) -> bool {
     r.is_exact(ty.cast())
 }
 
-pub(crate) fn is_list(r: Ref<'_>) -> bool {
+/// Whether `r` is an exact `list` (no exception either way).
+#[must_use]
+pub fn is_list(r: Ref<'_>) -> bool {
     r.is_exact(&raw mut ffi::PyList_Type)
 }
 
-/// The items of an exact `list` (borrowed).
-pub(crate) fn list_items<'a>(g: Gil, l: Ref<'a>, what: &str) -> CResult<Vec<Ref<'a>>> {
+/// The items of an exact `list`, owned: a list can change while Python
+/// code runs (any callout), so a borrowed item could be freed under us. An
+/// item is a user object, so its decref is a callout ([`Mine`]).
+pub fn list_items<'py>(g: Gil<'py>, l: Ref<'_>, what: &str) -> CResult<Vec<Mine<'py>>> {
     if !l.is_exact(&raw mut ffi::PyList_Type) {
         return Err(wrong(g, what, "a list"));
     }
@@ -617,44 +766,45 @@ pub(crate) fn list_items<'a>(g: Gil, l: Ref<'a>, what: &str) -> CResult<Vec<Ref<
     let n = unsafe { ffi::PyList_Size(l.as_ptr()) };
     (0..n)
         .map(|i| {
-            // SAFETY: as above, an index below the size.
+            // SAFETY: as above, an index below the size; nothing runs
+            // Python code between the size and this read.
             let item = unsafe { ffi::PyList_GetItem(l.as_ptr(), i) };
-            // SAFETY: a borrowed item, alive while the list is unchanged
-            // (no Python code runs while we read it).
-            unsafe { Ref::from_ptr(item) }.ok_or(Raised)
+            Mine::owned_user(g, item)
         })
         .collect()
 }
 
-/// The `(key, value)` items of an exact `dict` with exact `str` keys
-/// (borrowed).
-pub(crate) fn dict_items<'a>(g: Gil, d: Ref<'a>, what: &str) -> CResult<Vec<(String, Ref<'a>)>> {
+/// The `(key, value)` items of an exact `dict` with exact `str` keys, the
+/// values owned (as [`list_items`]: the dict can change while Python code
+/// runs).
+pub fn dict_items<'py>(g: Gil<'py>, d: Ref<'_>, what: &str) -> CResult<Vec<(String, Mine<'py>)>> {
     if !d.is_exact(&raw mut ffi::PyDict_Type) {
         return Err(wrong(g, what, "a dict"));
     }
-    let mut out = Vec::new();
+    // Owned first, without running Python code; the keys are decoded after.
+    let mut owned = Vec::new();
     let mut pos: ffi::Py_ssize_t = 0;
     let (mut key, mut value) = (ptr::null_mut(), ptr::null_mut());
     // SAFETY: an exact dict; `PyDict_Next` reads entries without running
     // Python code.
     while unsafe { ffi::PyDict_Next(d.as_ptr(), &raw mut pos, &raw mut key, &raw mut value) } != 0 {
-        // SAFETY: borrowed entries of a live dict.
-        let (Some(k), Some(v)) = (unsafe { Ref::from_ptr(key) }, unsafe {
-            Ref::from_ptr(value)
-        }) else {
+        if key.is_null() || value.is_null() {
             return Err(raise(
                 g,
                 runtime_error(),
                 "a dict entry without a key or value",
             ));
-        };
-        out.push((to_string(g, k, "a keyword name")?, v));
+        }
+        owned.push((Mine::owned_user(g, key)?, Mine::owned_user(g, value)?));
     }
-    Ok(out)
+    owned
+        .into_iter()
+        .map(|(k, v)| Ok((to_string(g, k.as_ref(), "a keyword name")?, v)))
+        .collect()
 }
 
 /// An exact `str`, copied (callout: decoding may raise).
-pub(crate) fn to_string(g: Gil, s: Ref<'_>, what: &str) -> CResult<String> {
+pub fn to_string(g: Gil<'_>, s: Ref<'_>, what: &str) -> CResult<String> {
     if !s.is_exact(&raw mut ffi::PyUnicode_Type) {
         return Err(wrong(g, what, "a str"));
     }
@@ -662,16 +812,16 @@ pub(crate) fn to_string(g: Gil, s: Ref<'_>, what: &str) -> CResult<String> {
     // SAFETY: an exact str; the buffer stays valid while the object lives.
     let data = unsafe { thunks::c_unicode_as_utf8(s.as_ptr(), &raw mut len) };
     if data.is_null() {
-        return Err(Raised);
+        return Err(RAISED);
     }
-    let len = usize::try_from(len).map_err(|_| Raised)?;
+    let len = usize::try_from(len).map_err(|_| raise(g, runtime_error(), "a negative length"))?;
     // SAFETY: `len` bytes of UTF-8 owned by the live str.
     let bytes = unsafe { core::slice::from_raw_parts(data.cast::<u8>(), len) };
     Ok(String::from_utf8_lossy(bytes).into_owned())
 }
 
 /// An exact `int` as `u64` (callout: overflow raises).
-pub(crate) fn to_u64(g: Gil, v: Ref<'_>, what: &str) -> CResult<u64> {
+pub fn to_u64(g: Gil<'_>, v: Ref<'_>, what: &str) -> CResult<u64> {
     if !v.is_exact(&raw mut ffi::PyLong_Type) {
         return Err(wrong(g, what, "an int"));
     }
@@ -679,13 +829,13 @@ pub(crate) fn to_u64(g: Gil, v: Ref<'_>, what: &str) -> CResult<u64> {
     let x = unsafe { thunks::c_long_as_u64(v.as_ptr()) };
     // SAFETY: attached.
     if x == u64::MAX && !unsafe { ffi::PyErr_Occurred() }.is_null() {
-        return Err(Raised);
+        return Err(RAISED);
     }
     Ok(x)
 }
 
 /// An exact `int` as `i64` (callout: overflow raises).
-pub(crate) fn to_i64(g: Gil, v: Ref<'_>, what: &str) -> CResult<i64> {
+pub fn to_i64(g: Gil<'_>, v: Ref<'_>, what: &str) -> CResult<i64> {
     if !v.is_exact(&raw mut ffi::PyLong_Type) {
         return Err(wrong(g, what, "an int"));
     }
@@ -693,14 +843,14 @@ pub(crate) fn to_i64(g: Gil, v: Ref<'_>, what: &str) -> CResult<i64> {
     let x = unsafe { thunks::c_long_as_i64(v.as_ptr()) };
     // SAFETY: attached.
     if x == -1 && !unsafe { ffi::PyErr_Occurred() }.is_null() {
-        return Err(Raised);
+        return Err(RAISED);
     }
     Ok(x)
 }
 
 /// An exact `float` as `f64`. Not a callout: for an exact float,
 /// `PyFloat_AsDouble` reads the value and never calls `__float__`.
-pub(crate) fn to_f64(g: Gil, v: Ref<'_>, what: &str) -> CResult<f64> {
+pub fn to_f64(g: Gil<'_>, v: Ref<'_>, what: &str) -> CResult<f64> {
     if !v.is_exact(&raw mut ffi::PyFloat_Type) {
         return Err(wrong(g, what, "a float"));
     }
@@ -709,19 +859,20 @@ pub(crate) fn to_f64(g: Gil, v: Ref<'_>, what: &str) -> CResult<f64> {
 }
 
 /// An exact `int` in `u32` range.
-pub(crate) fn to_u32(g: Gil, v: Ref<'_>, what: &str) -> CResult<u32> {
+pub fn to_u32(g: Gil<'_>, v: Ref<'_>, what: &str) -> CResult<u32> {
     let x = to_u64(g, v, what)?;
     u32::try_from(x).map_err(|_| out_of_range(g, what))
 }
 
 /// The error of an integer outside its type.
 #[cold]
-pub(crate) fn out_of_range(g: Gil, what: &str) -> Raised {
+#[must_use]
+pub fn out_of_range(g: Gil<'_>, what: &str) -> Raised {
     raise(g, type_error(), &format!("{what} is out of range"))
 }
 
 /// An exact `bool`.
-pub(crate) fn to_bool(g: Gil, v: Ref<'_>, what: &str) -> CResult<bool> {
+pub fn to_bool(g: Gil<'_>, v: Ref<'_>, what: &str) -> CResult<bool> {
     // SAFETY: the bool singletons' addresses.
     let t = unsafe { ffi::Py_True() };
     // SAFETY: the address of the `False` singleton.
@@ -736,7 +887,7 @@ pub(crate) fn to_bool(g: Gil, v: Ref<'_>, what: &str) -> CResult<bool> {
 }
 
 /// The bytes of an exact `bytes` (borrowed for the object's lifetime).
-pub(crate) fn bytes_of<'a>(g: Gil, b: Ref<'a>, what: &str) -> CResult<&'a [u8]> {
+pub fn bytes_of<'a>(g: Gil<'_>, b: Ref<'a>, what: &str) -> CResult<&'a [u8]> {
     if !b.is_exact(&raw mut ffi::PyBytes_Type) {
         return Err(wrong(g, what, "bytes"));
     }
@@ -745,7 +896,40 @@ pub(crate) fn bytes_of<'a>(g: Gil, b: Ref<'a>, what: &str) -> CResult<&'a [u8]> 
     let data = unsafe { ffi::PyBytes_AsString(b.as_ptr()) };
     // SAFETY: as above.
     let len = unsafe { ffi::PyBytes_Size(b.as_ptr()) };
-    let len = usize::try_from(len).map_err(|_| Raised)?;
+    let len = usize::try_from(len).map_err(|_| raise(g, runtime_error(), "a negative length"))?;
     // SAFETY: `len` immutable bytes owned by the live object.
     Ok(unsafe { core::slice::from_raw_parts(data.cast::<u8>(), len) })
+}
+
+#[cfg(test)]
+mod tests {
+    //! The tokens are not `Send` or `Sync` (no escape to another thread or
+    //! into a detached closure), checked at compile time.
+
+    use super::{Gil, Mine, Ref};
+
+    /// Fails to compile when `T` is `Send`: the impls for `()` and for
+    /// `u8` both apply, so the call is ambiguous (static_assertions'
+    /// `assert_not_impl_any`).
+    trait AmbiguousIfSend<A> {
+        fn some_item() {}
+    }
+    impl<T: ?Sized> AmbiguousIfSend<()> for T {}
+    impl<T: ?Sized + Send> AmbiguousIfSend<u8> for T {}
+
+    trait AmbiguousIfSync<A> {
+        fn some_item() {}
+    }
+    impl<T: ?Sized> AmbiguousIfSync<()> for T {}
+    impl<T: ?Sized + Sync> AmbiguousIfSync<u8> for T {}
+
+    #[test]
+    fn test_tokens_and_references_are_neither_send_nor_sync() {
+        <Gil<'static> as AmbiguousIfSend<_>>::some_item();
+        <Gil<'static> as AmbiguousIfSync<_>>::some_item();
+        <Ref<'static> as AmbiguousIfSend<_>>::some_item();
+        <Ref<'static> as AmbiguousIfSync<_>>::some_item();
+        <Mine<'static> as AmbiguousIfSend<_>>::some_item();
+        <Mine<'static> as AmbiguousIfSync<_>>::some_item();
+    }
 }

@@ -16,7 +16,7 @@
 use crate::api::Kwargs;
 use crate::env::BindError;
 use crate::errors::{Kind, error, to_py};
-use crate::ffi::capi::{self, CResult, Gil, Mine, Raised, Ref};
+use crate::ffi::capi::{self, CResult, Gil, Mine, Ref};
 use crate::ffi::inner::Inner;
 use crate::search::{GroupOps, SearchArgs};
 use crate::search_api::{PyEval, SEARCH_KEYS, apply_options, floats, ints, one_arg};
@@ -56,7 +56,7 @@ pub(crate) fn make_search_group(g: Gil, kwargs: Option<Ref<'_>>) -> CResult<Grou
             ));
         }
         for (args, item) in slots.iter_mut().zip(items) {
-            let one = Kwargs::parse(g, Some(item))?;
+            let one = Kwargs::parse(g, Some(item.as_ref()))?;
             one.check(g, &[&SEARCH_KEYS])?;
             if one.get("env_id").is_some() {
                 return Err(error(
@@ -88,7 +88,7 @@ fn slot(g: Gil, v: Ref<'_>) -> CResult<usize> {
 }
 
 /// `layout()`: `{"trees": int, "actions": int, "obs_bytes": int, "memory_bytes": int}`.
-pub(crate) fn layout(g: Gil, inner: &GroupInner) -> CResult<Mine> {
+pub(crate) fn layout<'py>(g: Gil<'py>, inner: &GroupInner) -> CResult<Mine<'py>> {
     inner.with(g, |ops| {
         let d = capi::dict(g)?;
         let n = |v: usize| u64::try_from(v).unwrap_or(u64::MAX);
@@ -113,7 +113,7 @@ fn two_args<'a>(g: Gil, args: Ref<'a>, signature: &str) -> CResult<[Ref<'a>; 2]>
 }
 
 /// `set_root(i, record: bytes)`.
-pub(crate) fn set_root(g: Gil, inner: &GroupInner, args: Ref<'_>) -> CResult<Mine> {
+pub(crate) fn set_root<'py>(g: Gil<'py>, inner: &GroupInner, args: Ref<'_>) -> CResult<Mine<'py>> {
     let [i, record] = two_args(g, args, "set_root(i, record)")?;
     let i = slot(g, i)?;
     let bytes = capi::bytes_of(g, record, "record")?;
@@ -122,7 +122,11 @@ pub(crate) fn set_root(g: Gil, inner: &GroupInner, args: Ref<'_>) -> CResult<Min
 }
 
 /// `set_active(i, flag: bool)`.
-pub(crate) fn set_active(g: Gil, inner: &GroupInner, args: Ref<'_>) -> CResult<Mine> {
+pub(crate) fn set_active<'py>(
+    g: Gil<'py>,
+    inner: &GroupInner,
+    args: Ref<'_>,
+) -> CResult<Mine<'py>> {
     let [i, flag] = two_args(g, args, "set_active(i, flag)")?;
     let i = slot(g, i)?;
     let flag = capi::to_bool(g, flag, "flag")?;
@@ -131,7 +135,7 @@ pub(crate) fn set_active(g: Gil, inner: &GroupInner, args: Ref<'_>) -> CResult<M
 }
 
 /// `active(i) -> bool`.
-pub(crate) fn active(g: Gil, inner: &GroupInner, args: Ref<'_>) -> CResult<Mine> {
+pub(crate) fn active<'py>(g: Gil<'py>, inner: &GroupInner, args: Ref<'_>) -> CResult<Mine<'py>> {
     let [i] = one_arg(g, args, "active(i)")?;
     let i = slot(g, i)?;
     let a = inner.with(g, |ops| ops.active(i).map_err(|e| to_py(g, e)))?;
@@ -139,7 +143,7 @@ pub(crate) fn active(g: Gil, inner: &GroupInner, args: Ref<'_>) -> CResult<Mine>
 }
 
 /// `run(evaluator)`: one group call.
-pub(crate) fn run(g: Gil, inner: &GroupInner, args: Ref<'_>) -> CResult<Mine> {
+pub(crate) fn run<'py>(g: Gil<'py>, inner: &GroupInner, args: Ref<'_>) -> CResult<Mine<'py>> {
     let [callable] = one_arg(g, args, "run(evaluator)")?;
     let mut eval = PyEval {
         g,
@@ -155,16 +159,13 @@ pub(crate) fn run(g: Gil, inner: &GroupInner, args: Ref<'_>) -> CResult<Mine> {
         (Ok(()), _) => Ok(capi::none(g)),
         // The user's own exception, raised again untouched, every slot
         // rolled back.
-        (Err(_), Some(pending)) => {
-            capi::restore_pending(pending);
-            Err(Raised)
-        }
+        (Err(_), Some(pending)) => Err(pending.raise_again(g)),
         (Err((_, e)), None) => Err(to_py(g, e)),
     }
 }
 
 /// `last_failure() -> None | (slot: int | None, message: str, user_raised: bool)`.
-pub(crate) fn last_failure(g: Gil, inner: &GroupInner) -> CResult<Mine> {
+pub(crate) fn last_failure<'py>(g: Gil<'py>, inner: &GroupInner) -> CResult<Mine<'py>> {
     let f = inner.with(g, |ops| Ok(ops.last_failure()))?;
     let Some(f) = f else {
         return Ok(capi::none(g));
@@ -184,7 +185,11 @@ pub(crate) fn last_failure(g: Gil, inner: &GroupInner) -> CResult<Mine> {
 }
 
 /// `root_visits(i) -> list[int]`.
-pub(crate) fn root_visits(g: Gil, inner: &GroupInner, args: Ref<'_>) -> CResult<Mine> {
+pub(crate) fn root_visits<'py>(
+    g: Gil<'py>,
+    inner: &GroupInner,
+    args: Ref<'_>,
+) -> CResult<Mine<'py>> {
     let [i] = one_arg(g, args, "root_visits(i)")?;
     let i = slot(g, i)?;
     inner.with(g, |ops| {
@@ -198,7 +203,11 @@ pub(crate) fn root_visits(g: Gil, inner: &GroupInner, args: Ref<'_>) -> CResult<
 }
 
 /// `select_action(i, temperature: float) -> int`.
-pub(crate) fn select_action(g: Gil, inner: &GroupInner, args: Ref<'_>) -> CResult<Mine> {
+pub(crate) fn select_action<'py>(
+    g: Gil<'py>,
+    inner: &GroupInner,
+    args: Ref<'_>,
+) -> CResult<Mine<'py>> {
     let [i, t] = two_args(g, args, "select_action(i, temperature)")?;
     let i = slot(g, i)?;
     let t = capi::to_f64(g, t, "temperature")?;
@@ -207,7 +216,11 @@ pub(crate) fn select_action(g: Gil, inner: &GroupInner, args: Ref<'_>) -> CResul
 }
 
 /// `improved_policy(i) -> list[float] | None`.
-pub(crate) fn improved_policy(g: Gil, inner: &GroupInner, args: Ref<'_>) -> CResult<Mine> {
+pub(crate) fn improved_policy<'py>(
+    g: Gil<'py>,
+    inner: &GroupInner,
+    args: Ref<'_>,
+) -> CResult<Mine<'py>> {
     let [i] = one_arg(g, args, "improved_policy(i)")?;
     let i = slot(g, i)?;
     inner.with(g, |ops| {
@@ -217,7 +230,11 @@ pub(crate) fn improved_policy(g: Gil, inner: &GroupInner, args: Ref<'_>) -> CRes
 }
 
 /// `considered(i) -> list[int] | None`.
-pub(crate) fn considered(g: Gil, inner: &GroupInner, args: Ref<'_>) -> CResult<Mine> {
+pub(crate) fn considered<'py>(
+    g: Gil<'py>,
+    inner: &GroupInner,
+    args: Ref<'_>,
+) -> CResult<Mine<'py>> {
     let [i] = one_arg(g, args, "considered(i)")?;
     let i = slot(g, i)?;
     inner.with(g, |ops| {
@@ -227,7 +244,7 @@ pub(crate) fn considered(g: Gil, inner: &GroupInner, args: Ref<'_>) -> CResult<M
 }
 
 /// `calls(i) -> int`.
-pub(crate) fn calls(g: Gil, inner: &GroupInner, args: Ref<'_>) -> CResult<Mine> {
+pub(crate) fn calls<'py>(g: Gil<'py>, inner: &GroupInner, args: Ref<'_>) -> CResult<Mine<'py>> {
     let [i] = one_arg(g, args, "calls(i)")?;
     let i = slot(g, i)?;
     let n = inner.with(g, |ops| ops.calls(i).map_err(|e| to_py(g, e)))?;
@@ -235,7 +252,7 @@ pub(crate) fn calls(g: Gil, inner: &GroupInner, args: Ref<'_>) -> CResult<Mine> 
 }
 
 /// `tree_hash(i) -> int`.
-pub(crate) fn tree_hash(g: Gil, inner: &GroupInner, args: Ref<'_>) -> CResult<Mine> {
+pub(crate) fn tree_hash<'py>(g: Gil<'py>, inner: &GroupInner, args: Ref<'_>) -> CResult<Mine<'py>> {
     let [i] = one_arg(g, args, "tree_hash(i)")?;
     let i = slot(g, i)?;
     let h = inner.with(g, |ops| ops.tree_hash(i).map_err(|e| to_py(g, e)))?;

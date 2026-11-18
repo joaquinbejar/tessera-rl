@@ -20,37 +20,36 @@ use super::capi::{CResult, Gil};
 static GENERATION: AtomicU64 = AtomicU64::new(0);
 
 /// The current fork generation.
-pub(crate) fn generation() -> u64 {
+pub fn generation() -> u64 {
     GENERATION.load(Ordering::Acquire)
 }
 
 /// The message of the refusal.
-pub(crate) const REFUSAL: &str = "this environment was created before os.fork() and cannot be \
+pub const REFUSAL: &str = "this environment was created before os.fork() and cannot be \
      used in the child, where its worker threads do not exist: create a new environment in the \
      child, or use the spawn start method";
 
 /// The child handler. An atomic increment only: it runs inside `fork`, where
 /// only async-signal-safe work is allowed, so it touches no Python and does not
 /// allocate.
+/// Whether the fork handler is registered (once per process).
+#[cfg(not(windows))]
+static REGISTERED: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+
 #[cfg(not(windows))]
 extern "C" fn after_in_child() {
     GENERATION.fetch_add(1, Ordering::AcqRel);
 }
 
-/// Registers the handler once, at module initialization. Windows has no fork.
+/// Registers the handler, at module initialization. Idempotent: a second
+/// call (a second initialization of the extension module in one process)
+/// registers nothing more. Windows has no fork.
 ///
 /// # Errors
 ///
 /// A failed registration (ENOMEM) raises, so the import fails: a silently absent
 /// guard would bring back the hangs and traps of a forked child.
-#[cfg_attr(
-    windows,
-    expect(
-        clippy::unnecessary_wraps,
-        reason = "one signature on every platform: the registration can fail where fork exists"
-    )
-)]
-pub(super) fn register(g: Gil) -> CResult<()> {
+pub fn register(g: Gil) -> CResult<()> {
     #[cfg(not(windows))]
     {
         unsafe extern "C" {
@@ -60,13 +59,20 @@ pub(super) fn register(g: Gil) -> CResult<()> {
                 child: Option<extern "C" fn()>,
             ) -> core::ffi::c_int;
         }
+        if REGISTERED
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+        {
+            return Ok(());
+        }
         // SAFETY: a libc function with this C signature; the handler is a
-        // `'static` function that stays loaded, as the module is never unloaded
-        // while the interpreter lives, and it is registered once, as the module
-        // has one initialization (`m_size` is -1).
+        // `'static` function that stays loaded, as an extension module is
+        // never unloaded while the interpreter lives. `REGISTERED` makes
+        // this the only registration in the process.
         #[expect(unsafe_code, reason = "audited module: one libc registration")]
         let status = unsafe { pthread_atfork(None, None, Some(after_in_child)) };
         if status != 0 {
+            REGISTERED.store(false, Ordering::Release);
             return Err(super::capi::raise(
                 g,
                 super::capi::runtime_error(),

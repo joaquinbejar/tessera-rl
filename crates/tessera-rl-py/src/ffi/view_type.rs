@@ -1,51 +1,44 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! The `tessera_rl._native.OutputView` heap type: one borrowed output
-//! region (ADR-0003), exported read-only through the buffer protocol and
-//! DLPack. A view holds an `Arc` clone of the output storage, so its memory
+//! The `tessera_rl._native.OutputView` type: one borrowed output region
+//! (ADR-0003), exported read-only through the buffer protocol and DLPack.
+//! A view holds an [`Export`], an `Arc` of the output storage, so its memory
 //! outlives the environment; its contents are only guaranteed until the
 //! next engine call that writes outputs, which `is_stale` reports.
 //!
-//! The `extern "C"` functions here are only reachable through the thunks
-//! of `thunks`.
+//! The exports and their memory are `tessera_rl_pyffi`'s (ADR-0062 item 8):
+//! this module decides what a view covers and when it is stale.
 
-use core::ffi::c_int;
-use core::ptr;
 use std::sync::Arc;
 
-use core::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
+use core::sync::atomic::AtomicBool;
 
-use pyo3::ffi;
-use tessera_rl_engine::{HalfGenerations, IdGenerations, OutputDtype, OutputStorage};
-
-use super::capi::{self, CResult, Gil, Mine, Ref};
-use super::gather::GatherBuffer;
-
-use super::tables::{
-    method, method_end, method_kw, slot_dealloc, slot_doc, slot_end, slot_getbuffer, slot_methods,
+use tessera_rl_engine::{HalfGenerations, IdGenerations, OutputStorage};
+use tessera_rl_pyffi::ffi::buffer::{Buffer, Export, ExportError, Rows};
+use tessera_rl_pyffi::ffi::capi::{self, CResult, Gil, Mine, Ref};
+use tessera_rl_pyffi::ffi::gather::GatherStorage;
+use tessera_rl_pyffi::ffi::object::{
+    Body, MethodKw, MethodNoArgs, MethodRow, MethodTable, TypeObject, TypeSpec,
 };
-use super::{Table, dispose, dlpack, entry, entry_status, thunks};
+
 use crate::batched::{BatchId, ReleaseEpochs, gather_stale, ids_stale};
 use crate::errors::{Kind, error};
 use crate::split::half_stale;
-use crate::view::{Elem, ViewSpec, row_window};
+use crate::view::ViewSpec;
 
-/// What a view object owns.
-struct View {
-    /// Keeps `data` alive; owns memory, never threads, so dropping it in a
-    /// forked child is safe.
-    owner: dlpack::Owner,
+/// An `OutputView` object's body.
+pub(crate) struct View {
+    /// The exported rows; keeps their memory alive. It owns memory, never
+    /// threads, so dropping it in a forked child is safe.
+    export: Export,
     /// The fork generation this view was taken in: in a child it reads stale,
     /// as the copied rows may hold a step that was running at the fork.
     born: u64,
     stale: Stale,
-    data: *const u8,
-    bytes: usize,
     generation: u64,
-    elem: Elem,
-    shape: Box<[isize]>,
-    strides: Box<[isize]>,
 }
+
+impl Body for View {}
 
 /// What ends a view's borrow window.
 enum Stale {
@@ -62,8 +55,8 @@ enum Stale {
         ReleaseEpochs,
         Arc<AtomicBool>,
     ),
-    /// The next write of the gather buffer (the next `recv`), or poison.
-    Gather(Arc<GatherBuffer>, Arc<AtomicBool>),
+    /// The next write of the gather storage (the next `recv`), or poison.
+    Gather(Arc<GatherStorage>, Arc<AtomicBool>),
 }
 
 /// How a storage view tracks staleness.
@@ -79,45 +72,57 @@ pub(crate) enum Track<'a> {
     ),
 }
 
-/// The C layout of an `OutputView` object.
-#[repr(C)]
-struct ViewObject {
-    ob_base: ffi::PyObject,
-    /// Owned; null only before construction and after deallocation.
-    view: *mut View,
+static TYPE: TypeObject<View> = TypeObject::new(&SPEC);
+
+static SPEC: TypeSpec<View> = TypeSpec::new(
+    c"tessera_rl._native.OutputView",
+    c"A borrowed, read-only view of one output buffer (valid until the next call).",
+    &METHODS,
+)
+.with_buffer::<ViewBuffer>();
+
+/// Creates the `OutputView` type and adds it to `module`.
+pub(super) fn register(g: Gil<'_>, module: Ref<'_>) -> CResult<()> {
+    TYPE.create(g, module, c"OutputView")
 }
 
-/// The `OutputView` type, set at module initialization (a borrowed
-/// reference: the module keeps it alive).
-static TYPE: AtomicPtr<ffi::PyObject> = AtomicPtr::new(ptr::null_mut());
+/// The rows of `spec`.
+fn rows(spec: &ViewSpec) -> Rows<'_> {
+    Rows {
+        total_rows: spec.total_rows,
+        first_row: spec.first_row,
+        shape: &spec.shape,
+    }
+}
 
-const fn region_itemsize(dtype: OutputDtype) -> usize {
-    match dtype {
-        OutputDtype::F32 | OutputDtype::U32 => 4,
-        _ => 1,
+/// The Python error of a refused export of `spec`.
+fn refused(g: Gil<'_>, spec: &ViewSpec, e: ExportError) -> capi::Raised {
+    let field = spec.field;
+    match e {
+        ExportError::NoField => error(g, Kind::Argument, format!("no output {field:?}")),
+        ExportError::Region => error(g, Kind::Argument, format!("output {field:?} too large")),
+        ExportError::Layout => error(
+            g,
+            Kind::Argument,
+            format!("output {field:?} does not match its layout"),
+        ),
+        ExportError::Undescribable => capi::raise(
+            g,
+            capi::buffer_error(),
+            &format!("output {field:?} is too large to export"),
+        ),
     }
 }
 
 /// A new view of `spec` in `storage`, at the storage's current generation.
-pub(crate) fn new_view(
-    g: Gil,
+pub(crate) fn new_view<'py>(
+    g: Gil<'py>,
     storage: &Arc<OutputStorage>,
     spec: &ViewSpec,
     track: Track<'_>,
-) -> CResult<Mine> {
-    let region = storage
-        .region(spec.field)
-        .ok_or_else(|| error(g, Kind::Argument, format!("no output {:?}", spec.field)))?;
-    let bytes = region
-        .len
-        .checked_mul(region_itemsize(region.dtype))
-        .ok_or_else(|| {
-            error(
-                g,
-                Kind::Argument,
-                format!("output {:?} too large", spec.field),
-            )
-        })?;
+) -> CResult<Mine<'py>> {
+    let export = Export::output(storage, spec.field, rows(spec), spec.elem, true)
+        .map_err(|e| refused(g, spec, e))?;
     let stale = match track {
         Track::Storage => Stale::Storage(Arc::clone(storage)),
         Track::Half(gens, half, taken, unsettled) => {
@@ -130,237 +135,64 @@ pub(crate) fn new_view(
             Arc::clone(unsettled),
         ),
     };
-    let owner: dlpack::Owner = storage.clone();
-    build_view(
-        g,
-        spec,
-        region.ptr,
-        bytes,
-        owner,
-        stale,
-        storage.generation(),
-    )
+    build_view(g, export, stale, storage.generation())
 }
 
-/// A new view of `spec` in the gather buffer, written at generation `taken`.
-pub(crate) fn new_gather_view(
-    g: Gil,
-    buffer: &Arc<GatherBuffer>,
+/// A new view of `spec` in the gather storage, written at generation
+/// `taken`.
+pub(crate) fn new_gather_view<'py>(
+    g: Gil<'py>,
+    storage: &Arc<GatherStorage>,
     spec: &ViewSpec,
     taken: u64,
     unsettled: &Arc<AtomicBool>,
-) -> CResult<Mine> {
-    let (ptr, bytes) = buffer
-        .region(spec.field)
-        .ok_or_else(|| error(g, Kind::Argument, format!("no output {:?}", spec.field)))?;
-    let owner: dlpack::Owner = buffer.clone();
-    build_view(
+) -> CResult<Mine<'py>> {
+    let export = Export::gather(storage, spec.field, rows(spec), spec.elem, true)
+        .map_err(|e| refused(g, spec, e))?;
+    let stale = Stale::Gather(Arc::clone(storage), Arc::clone(unsettled));
+    build_view(g, export, stale, taken)
+}
+
+fn build_view(g: Gil<'_>, export: Export, stale: Stale, generation: u64) -> CResult<Mine<'_>> {
+    TYPE.instantiate(
         g,
-        spec,
-        ptr,
-        bytes,
-        owner,
-        Stale::Gather(Arc::clone(buffer), Arc::clone(unsettled)),
-        taken,
+        View {
+            export,
+            born: super::fork::generation(),
+            stale,
+            generation,
+        },
     )
 }
 
-/// A view of the rows of `spec` in a region of `region_bytes` bytes at `ptr`.
-fn build_view(
-    g: Gil,
-    spec: &ViewSpec,
-    ptr: *const u8,
-    region_bytes: usize,
-    owner: dlpack::Owner,
-    stale: Stale,
-    generation: u64,
-) -> CResult<Mine> {
-    let row_bytes = spec
-        .shape
-        .iter()
-        .skip(1)
-        .try_fold(spec.elem.itemsize, |acc, &d| acc.checked_mul(d));
-    let rows = spec.shape.first().copied().unwrap_or(0);
-    let window =
-        row_bytes.and_then(|r| row_window(region_bytes, r, spec.total_rows, spec.first_row, rows));
-    let Some((offset, bytes)) = window else {
-        return Err(error(
-            g,
-            Kind::Argument,
-            format!("output {:?} does not match its layout", spec.field),
-        ));
-    };
-    let too_large = || {
-        capi::raise(
-            g,
-            capi::buffer_error(),
-            &format!("output {:?} is too large to export", spec.field),
-        )
-    };
-    let shape: Box<[isize]> = spec
-        .shape
-        .iter()
-        .map(|&d| isize::try_from(d).map_err(|_| too_large()))
-        .collect::<CResult<_>>()?;
-    // Row-major strides, in bytes.
-    let mut strides = vec![0isize; shape.len()];
-    let mut acc = isize::try_from(spec.elem.itemsize).map_err(|_| too_large())?;
-    for (stride, &dim) in strides.iter_mut().zip(shape.iter()).rev() {
-        *stride = acc;
-        acc = acc.checked_mul(dim).ok_or_else(too_large)?;
-    }
-    // The buffer protocol describes sizes and dimensions as `Py_ssize_t`
-    // and `int`: refuse now what `getbuffer` could not describe.
-    isize::try_from(bytes).map_err(|_| too_large())?;
-    c_int::try_from(shape.len()).map_err(|_| too_large())?;
-    let view = View {
-        born: super::fork::generation(),
-        owner,
-        stale,
-        // SAFETY: `row_window` checked that `offset + bytes` fits the
-        // region's bytes, so the offset stays inside its allocation.
-        data: unsafe { ptr.add(offset) },
-        bytes,
-        generation,
-        elem: spec.elem,
-        shape,
-        strides: strides.into_boxed_slice(),
-    };
-    let ty = TYPE.load(Ordering::Acquire);
-    if ty.is_null() {
-        return Err(capi::raise(
-            g,
-            capi::runtime_error(),
-            "OutputView type not initialized",
-        ));
-    }
-    // SAFETY: our heap type (not GC-tracked), whose basic size is
-    // `ViewObject`.
-    let obj = unsafe { capi::alloc_instance(g, ty) }?;
-    // SAFETY: `obj` is a fresh, zeroed `ViewObject` nobody else sees yet.
-    unsafe { (*obj.as_ref().as_ptr().cast::<ViewObject>()).view = Box::into_raw(Box::new(view)) };
-    Ok(obj)
-}
+/// The buffer protocol export of a view: read-only, C-contiguous
+/// (`tessera_rl_pyffi::ffi::buffer`).
+struct ViewBuffer;
 
-/// The view of `slf`.
-///
-/// # Safety
-///
-/// `slf` must be an `OutputView` passed by CPython while attached.
-unsafe fn view<'a>(g: Gil, slf: *mut ffi::PyObject) -> CResult<&'a View> {
-    // SAFETY: per the contract, `slf` is a `ViewObject`.
-    let raw = unsafe { (*slf.cast::<ViewObject>()).view };
-    // SAFETY: a non-null `view` is the live Box made in `new_view`, freed
-    // only in `dealloc`; it is never mutated after construction.
-    unsafe { raw.as_ref() }
-        .ok_or_else(|| capi::raise(g, capi::runtime_error(), "OutputView not initialized"))
-}
-
-/// `bf_getbuffer`: a read-only, C-contiguous export. A request for a
-/// writable buffer, or for Fortran order the view does not have, raises
-/// `BufferError` (with `obj` null).
-pub(super) unsafe extern "C" fn getbuffer(
-    slf: *mut ffi::PyObject,
-    out: *mut ffi::Py_buffer,
-    flags: c_int,
-) -> c_int {
-    let done = entry_status(|g| {
-        // SAFETY: CPython passes an `OutputView` as `slf`.
-        let v = unsafe { view(g, slf) }?;
-        if flags & ffi::PyBUF_WRITABLE != 0 {
-            return Err(capi::raise(
-                g,
-                capi::buffer_error(),
-                "borrowed outputs are read-only",
-            ));
-        }
-        let undescribable = || capi::raise(g, capi::buffer_error(), "view too large to export");
-        let len = isize::try_from(v.bytes).map_err(|_| undescribable())?;
-        let itemsize = isize::try_from(v.elem.itemsize).map_err(|_| undescribable())?;
-        let ndim = c_int::try_from(v.shape.len()).map_err(|_| undescribable())?;
-        // Views are C-contiguous, which satisfies C and ANY requests. They
-        // are also F-contiguous only when at most one dimension exceeds 1
-        // (or the view is empty): refuse an F request otherwise.
-        let f_contiguous = v.shape.contains(&0) || v.shape.iter().filter(|&&d| d > 1).count() <= 1;
-        if flags & ffi::PyBUF_F_CONTIGUOUS == ffi::PyBUF_F_CONTIGUOUS && !f_contiguous {
-            return Err(capi::raise(
-                g,
-                capi::buffer_error(),
-                "borrowed outputs are C-contiguous, not Fortran-contiguous",
-            ));
-        }
-        let nd = flags & ffi::PyBUF_ND == ffi::PyBUF_ND;
-        let strided = flags & ffi::PyBUF_STRIDES == ffi::PyBUF_STRIDES;
-        let buffer = ffi::Py_buffer {
-            buf: v.data.cast_mut().cast(),
-            obj: slf,
-            len,
-            itemsize,
-            readonly: 1,
-            ndim: if nd { ndim } else { 1 },
-            format: if flags & ffi::PyBUF_FORMAT != 0 {
-                v.elem.format.as_ptr().cast_mut()
-            } else {
-                ptr::null_mut()
-            },
-            shape: if nd {
-                v.shape.as_ptr().cast_mut()
-            } else {
-                ptr::null_mut()
-            },
-            strides: if strided {
-                v.strides.as_ptr().cast_mut()
-            } else {
-                ptr::null_mut()
-            },
-            suboffsets: ptr::null_mut(),
-            internal: ptr::null_mut(),
-        };
-        // The buffer keeps a reference to its exporter, released by
-        // PyBuffer_Release.
-        // SAFETY: `slf` is live for the call.
-        let exporter = capi::incref(unsafe { Ref::from_ptr(slf) }.ok_or(capi::Raised)?);
-        // SAFETY: `out` is the caller's Py_buffer to fill.
-        unsafe {
-            out.write(ffi::Py_buffer {
-                obj: exporter,
-                ..buffer
-            });
-        };
-        Ok(())
-    });
-    if done != 0 {
-        if !out.is_null() {
-            // SAFETY: on failure the protocol requires `obj` to be null.
-            unsafe { (*out).obj = ptr::null_mut() };
-        }
-        -1
-    } else {
-        0
+impl Buffer for ViewBuffer {
+    type Body = View;
+    fn export(_g: Gil<'_>, body: &View) -> CResult<Export> {
+        Ok(body.export.clone())
     }
 }
 
 /// `generation()`: the write generation the view was taken at.
-pub(super) unsafe extern "C" fn generation(
-    slf: *mut ffi::PyObject,
-    _args: *mut ffi::PyObject,
-) -> *mut ffi::PyObject {
-    entry(|g| {
-        // SAFETY: CPython passes `self` of an `OutputView` method.
-        let v = unsafe { view(g, slf) }?;
+struct GenerationM;
+
+impl MethodNoArgs for GenerationM {
+    type Body = View;
+    fn call<'py>(g: Gil<'py>, v: &View) -> CResult<Mine<'py>> {
         capi::int_u64(g, v.generation)
-    })
+    }
 }
 
 /// `is_stale()`: whether an engine call has written outputs since the view
 /// was taken (its borrow window ended).
-pub(super) unsafe extern "C" fn is_stale(
-    slf: *mut ffi::PyObject,
-    _args: *mut ffi::PyObject,
-) -> *mut ffi::PyObject {
-    entry(|g| {
-        // SAFETY: CPython passes `self` of an `OutputView` method.
-        let v = unsafe { view(g, slf) }?;
+struct IsStaleM;
+
+impl MethodNoArgs for IsStaleM {
+    type Body = View;
+    fn call<'py>(g: Gil<'py>, v: &View) -> CResult<Mine<'py>> {
         if v.born != super::fork::generation() {
             return Ok(capi::boolean(g, true));
         }
@@ -368,22 +200,24 @@ pub(super) unsafe extern "C" fn is_stale(
             Stale::Storage(storage) => storage.generation() != v.generation,
             Stale::Half(gens, half, taken, unsettled) => half_stale(gens, *half, *taken, unsettled),
             Stale::Ids(gens, ids, epochs, unsettled) => ids_stale(gens, ids, epochs, unsettled),
-            Stale::Gather(buffer, unsettled) => gather_stale(buffer, v.generation, unsettled),
+            Stale::Gather(storage, unsettled) => gather_stale(storage, v.generation, unsettled),
         };
         Ok(capi::boolean(g, stale))
-    })
+    }
 }
 
 /// `__dlpack_device__()`: always the CPU, `(kDLCPU, 0)`.
-pub(super) unsafe extern "C" fn dlpack_device(
-    _slf: *mut ffi::PyObject,
-    _args: *mut ffi::PyObject,
-) -> *mut ffi::PyObject {
-    entry(|g| capi::tuple(g, vec![capi::int_u64(g, 1)?, capi::int_u64(g, 0)?]))
+struct DlpackDeviceM;
+
+impl MethodNoArgs for DlpackDeviceM {
+    type Body = View;
+    fn call<'py>(g: Gil<'py>, _v: &View) -> CResult<Mine<'py>> {
+        capi::tuple(g, vec![capi::int_u64(g, 1)?, capi::int_u64(g, 0)?])
+    }
 }
 
 /// An exact `(int, int)` tuple.
-fn int_pair(g: Gil, v: Ref<'_>, what: &str) -> CResult<(i64, i64)> {
+fn int_pair(g: Gil<'_>, v: Ref<'_>, what: &str) -> CResult<(i64, i64)> {
     match capi::tuple_items(g, v, what)?.as_slice() {
         [a, b] => Ok((capi::to_i64(g, *a, what)?, capi::to_i64(g, *b, what)?)),
         _ => Err(capi::raise(
@@ -399,22 +233,17 @@ fn int_pair(g: Gil, v: Ref<'_>, what: &str) -> CResult<(i64, i64)> {
 /// consumer accepts DLPack 1.x, legacy otherwise. A legacy capsule has no
 /// read-only flag: its consumer gets a writable alias, and writing through
 /// it corrupts the outputs until the next call overwrites them.
-pub(super) unsafe extern "C" fn dlpack(
-    slf: *mut ffi::PyObject,
-    args: *mut ffi::PyObject,
-    kwargs: *mut ffi::PyObject,
-) -> *mut ffi::PyObject {
-    entry(|g| {
-        // SAFETY: CPython passes `self` of an `OutputView` method.
-        let v = unsafe { view(g, slf) }?;
-        // SAFETY: METH_VARARGS | METH_KEYWORDS passes a borrowed tuple and
-        // a borrowed dict or null, alive for the call.
-        let args = unsafe { Ref::from_ptr(args) };
-        // SAFETY: as above.
-        let kwargs = unsafe { Ref::from_ptr(kwargs) };
-        if let Some(a) = args
-            && !capi::tuple_items(g, a, "the arguments")?.is_empty()
-        {
+struct DlpackM;
+
+impl MethodKw for DlpackM {
+    type Body = View;
+    fn call<'py>(
+        g: Gil<'py>,
+        v: &View,
+        args: Ref<'py>,
+        kwargs: Option<Ref<'py>>,
+    ) -> CResult<Mine<'py>> {
+        if !capi::tuple_items(g, args, "the arguments")?.is_empty() {
             return Err(capi::raise(
                 g,
                 capi::type_error(),
@@ -428,7 +257,7 @@ pub(super) unsafe extern "C" fn dlpack(
         let get = |key: &str| {
             kw.iter()
                 .find(|(k, _)| k == key)
-                .map(|(_, v)| *v)
+                .map(|(_, v)| v.as_ref())
                 .filter(|v| !v.is_none())
         };
         if let Some(stream) = get("stream")
@@ -462,83 +291,23 @@ pub(super) unsafe extern "C" fn dlpack(
             Some(max) => int_pair(g, max, "max_version")?.0 >= 1,
             None => false,
         };
-        let src = dlpack::Source {
-            owner: &v.owner,
-            data: v.data,
-            dl_code: v.elem.dl_code,
-            itemsize: v.elem.itemsize,
-            shape: &v.shape,
-        };
-        dlpack::capsule(g, &src, versioned, true)
-    })
+        v.export.dlpack(g, versioned)
+    }
 }
 
-static METHODS: Table<[ffi::PyMethodDef; 5]> = Table([
-    method_kw(
+static METHODS: MethodTable<View> = MethodTable::new(&[
+    MethodRow::kw::<DlpackM>(
         c"__dlpack__",
-        thunks::VIEW_DLPACK,
         c"__dlpack__(*, stream=None, max_version=None, dl_device=None, copy=None): a read-only DLPack 1.0 capsule when max_version >= (1, 0); otherwise a legacy capsule, which cannot be marked read-only (writing through it corrupts the outputs until the next call).",
     ),
-    method(
-        c"__dlpack_device__",
-        thunks::VIEW_DLPACK_DEVICE,
-        ffi::METH_NOARGS,
-        c"(kDLCPU, 0)",
-    ),
-    method(
+    MethodRow::noargs::<DlpackDeviceM>(c"__dlpack_device__", c"(kDLCPU, 0)"),
+    MethodRow::noargs::<GenerationM>(
         c"generation",
-        thunks::VIEW_GENERATION,
-        ffi::METH_NOARGS,
         c"The write generation this view was taken at.",
     ),
-    method(
+    MethodRow::noargs::<IsStaleM>(
         c"is_stale",
-        thunks::VIEW_IS_STALE,
-        ffi::METH_NOARGS,
         c"Whether outputs were written since this view was taken.",
     ),
-    method_end(),
+    MethodRow::END,
 ]);
-
-/// `tp_dealloc`: a cleanup entry, which never fails (ADR-0041).
-pub(super) unsafe extern "C" fn dealloc(obj: *mut ffi::PyObject) {
-    // SAFETY: `obj` is a live `ViewObject`.
-    let raw = unsafe { (*obj.cast::<ViewObject>()).view };
-    // SAFETY: as above; cleared before the box is freed.
-    unsafe { (*obj.cast::<ViewObject>()).view = ptr::null_mut() };
-    if !raw.is_null() {
-        // SAFETY: the Box made in `new_view`, owned by this object.
-        let boxed = unsafe { Box::from_raw(raw) };
-        if let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(boxed)))
-        {
-            dispose(payload);
-        }
-    }
-    // SAFETY: `obj` is a live instance of a heap type of this module.
-    unsafe { capi::free_instance(obj) };
-}
-
-static SLOTS: Table<[ffi::PyType_Slot; 5]> = Table([
-    slot_dealloc(thunks::VIEW_DEALLOC),
-    slot_getbuffer(thunks::VIEW_GETBUFFER),
-    slot_methods(&METHODS.0),
-    slot_doc(c"A borrowed, read-only view of one output buffer (valid until the next call)."),
-    slot_end(),
-]);
-
-/// Creates the `OutputView` type and adds it to `module`.
-pub(super) fn register(g: Gil, module: Ref<'_>) -> CResult<()> {
-    let mut spec = ffi::PyType_Spec {
-        name: c"tessera_rl._native.OutputView".as_ptr(),
-        basicsize: c_int::try_from(core::mem::size_of::<ViewObject>()).unwrap_or(c_int::MAX),
-        itemsize: 0,
-        // Not GC-tracked (no Py_TPFLAGS_HAVE_GC): a view holds no Python
-        // object, and allocating one never runs `gc.collect` (capi).
-        flags: core::ffi::c_uint::try_from(ffi::Py_TPFLAGS_DEFAULT).unwrap_or(0),
-        slots: SLOTS.0.as_ptr().cast_mut(),
-    };
-    let ty = capi::type_from_spec(g, &mut spec)?;
-    capi::module_add(g, module, c"OutputView", &ty)?;
-    TYPE.store(ty.as_ref().as_ptr(), Ordering::Release);
-    Ok(())
-}

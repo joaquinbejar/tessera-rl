@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! Every boundary thunk of the crate (ADR-0041), and the only place that
-//! can make a [`ThunkFn`].
+//! The boundary thunk templates (ADR-0041) and the only constructor of a
+//! [`ThunkFn`]: one generic naked template per C signature, instantiated
+//! for a typed shim with `ThunkFn::of::<E>()` (D2-G, ADR-0062 item 8); the
+//! callouts; and the fixed module initializers. Private to this crate: an
+//! extension writes safe trait impls (`object`, `module_def`, `buffer`).
 //!
 //! A thunk is a naked function with the exact C signature of the slot it
 //! fills, built from one audited template per ABI (System V x86-64 and
@@ -54,11 +57,8 @@ use core::ffi::{c_char, c_int};
 
 use pyo3::ffi;
 
-use super::boundary::{
-    tessera_fp_caller_controls, tessera_fp_callout_returned, tessera_fp_enter, tessera_fp_leave,
-};
-use super::dlpack::{self, DLManagedTensor, DLManagedTensorVersioned};
-use super::{env_type, module, search_group_type, search_type, snapshot_type, view_type};
+use super::boundary::{tessera_fp_caller_controls, tessera_fp_callout_returned};
+use super::dlpack::{DLManagedTensor, DLManagedTensorVersioned};
 
 /// `PyCFunction`: `(self, args) -> object`.
 pub(crate) type CFunction =
@@ -187,8 +187,8 @@ macro_rules! boundary_template {
             set = const tessera_rl_num::fp::CANONICAL_SET,
             status = const tessera_rl_num::fp::STATUS_FLAGS,
             not_status = const !tessera_rl_num::fp::STATUS_FLAGS,
-            enter = sym tessera_fp_enter,
-            leave = sym tessera_fp_leave,
+            enter = sym crate::ffi::boundary::tessera_fp_enter,
+            leave = sym crate::ffi::boundary::tessera_fp_leave,
             target = sym $target,
         )
     };
@@ -250,8 +250,8 @@ macro_rules! boundary_template {
             k1 = const ((!tessera_rl_num::fp::CANONICAL_CLEAR) >> 16) & 0xffff,
             k2 = const ((!tessera_rl_num::fp::CANONICAL_CLEAR) >> 32) & 0xffff,
             k3 = const ((!tessera_rl_num::fp::CANONICAL_CLEAR) >> 48) & 0xffff,
-            enter = sym tessera_fp_enter,
-            leave = sym tessera_fp_leave,
+            enter = sym crate::ffi::boundary::tessera_fp_enter,
+            leave = sym crate::ffi::boundary::tessera_fp_leave,
             target = sym $target,
         )
     };
@@ -326,8 +326,8 @@ macro_rules! boundary_template {
             set = const tessera_rl_num::fp::CANONICAL_SET,
             status = const tessera_rl_num::fp::STATUS_FLAGS,
             not_status = const !tessera_rl_num::fp::STATUS_FLAGS,
-            enter = sym tessera_fp_enter,
-            leave = sym tessera_fp_leave,
+            enter = sym crate::ffi::boundary::tessera_fp_enter,
+            leave = sym crate::ffi::boundary::tessera_fp_leave,
             target = sym $target,
             me = sym $me,
         )
@@ -338,7 +338,7 @@ macro_rules! boundary_template {
 compile_error!("the floating-point boundary (ADR-0041) supports Windows on x86-64 only");
 
 /// Which boundary this build carries (`tessera_rl._native.fp_boundary()`).
-pub(crate) const BOUNDARY: &str = if cfg!(windows) {
+pub const BOUNDARY: &str = if cfg!(windows) {
     "Win64"
 } else if cfg!(target_arch = "x86_64") {
     "System V x86-64"
@@ -557,8 +557,9 @@ macro_rules! callout {
     };
 }
 
-/// Defines the boundary thunk `$thunk` for `$target` and, with a name, the
-/// `ThunkFn` constant tables use.
+/// Defines the non-generic boundary thunk `$thunk` for `$target`: the
+/// fixed module initializers, which carry `no_mangle` (a generic
+/// instantiation cannot).
 macro_rules! thunk {
     (@naked $(#[$meta:meta])* $thunk:ident => $target:path : fn($($arg:ty),*) -> $ret:ty) => {
         $(#[$meta])*
@@ -579,114 +580,146 @@ macro_rules! thunk {
         const _: () = { $( int_class::<$arg>(); )* int_class::<$ret>(); };
         const _: () = assert!(<[&str]>::len(&[$(stringify!($arg)),*]) <= MAX_ARGS, "too many arguments for the template");
     };
-    ($name:ident: $ty:ident = $thunk:ident => $target:path : fn($($arg:ty),*) -> $ret:ty) => {
-        thunk!(@naked $thunk => $target : fn($($arg),*) -> $ret);
-        pub(crate) const $name: ThunkFn<$ty> = ThunkFn($thunk);
-    };
 }
 
 type Obj = *mut ffi::PyObject;
 
-thunk!(
-    @naked
-    /// The module initializer CPython looks up by name.
-    #[unsafe(no_mangle)]
-    PyInit__native => module::init : fn() -> Obj
+/// Defines the entry trait `$entry` of one C signature and its generic
+/// boundary thunk `$thunk::<E>` (D2-G, ADR-0062 item 8): the audited
+/// template, byte for byte, with `E::call` as its target. A type implements
+/// the trait to become an entry; [`ThunkFn::of`] is the only way to put an
+/// instantiation in a C table.
+macro_rules! generic_thunk {
+    ($(#[$meta:meta])* $entry:ident, $thunk:ident : fn($($arg:ident: $ty:ty),*) -> $ret:ty) => {
+        $(#[$meta])*
+        pub(crate) trait $entry {
+            /// The entry the thunk calls, under canonical controls.
+            ///
+            /// # Safety
+            ///
+            /// Called only by the thunk, with the arguments CPython (or the
+            /// DLPack consumer) passed to the slot.
+            unsafe extern "C" fn call($($arg: $ty),*) -> $ret;
+        }
+
+        #[doc = concat!("The boundary thunk of an entry `E: ", stringify!($entry), "`.")]
+        #[unsafe(naked)]
+        pub(crate) unsafe extern "C" fn $thunk<E: $entry>($(_: $ty),*) -> $ret {
+            // SAFETY: the audited template (module docs): a full frame that
+            // preserves every integer argument register, the stack
+            // alignment and the callee-saved registers, canonicalizes and
+            // restores the floating-point controls, and returns the
+            // target's integer result; the target, `E::call`, has the
+            // thunk's C signature (the trait's) with integer-class types
+            // only (checked below).
+            boundary_template!(E::call, $thunk::<E>);
+        }
+        // Integer-class arguments and result only (module docs), and no
+        // more than the template preserves.
+        const _: () = { $( int_class::<$ty>(); )* int_class::<$ret>(); };
+        const _: () = assert!(<[&str]>::len(&[$(stringify!($ty)),*]) <= MAX_ARGS, "too many arguments for the template");
+    };
+}
+
+generic_thunk!(
+    /// A `PyCFunction` entry: a method without keywords or a module function.
+    CFunctionEntry, cfunction : fn(slf: Obj, args: Obj) -> Obj
+);
+generic_thunk!(
+    /// A `PyCFunctionWithKeywords` entry.
+    CFunctionKwEntry, cfunction_kw : fn(slf: Obj, args: Obj, kwargs: Obj) -> Obj
+);
+generic_thunk!(
+    /// A `destructor` entry: `tp_dealloc` or a capsule destructor.
+    DestructorEntry, destructor : fn(obj: Obj) -> ()
+);
+generic_thunk!(
+    /// A `getbufferproc` entry.
+    GetBufferEntry, getbuffer : fn(obj: Obj, view: *mut ffi::Py_buffer, flags: c_int) -> c_int
+);
+generic_thunk!(
+    /// A `releasebufferproc` entry.
+    ReleaseBufferEntry, release_buffer : fn(obj: Obj, view: *mut ffi::Py_buffer) -> ()
+);
+generic_thunk!(
+    /// A `DLManagedTensor::deleter` entry.
+    DlDeleterEntry, dl_deleter : fn(managed: *mut DLManagedTensor) -> ()
+);
+generic_thunk!(
+    /// A `DLManagedTensorVersioned::deleter` entry.
+    DlDeleterVersionedEntry, dl_deleter_versioned : fn(managed: *mut DLManagedTensorVersioned) -> ()
 );
 
-thunk!(VERSION: CFunction = thunk_version => module::version : fn(Obj, Obj) -> Obj);
-thunk!(SET_FP_POLICY: CFunction = thunk_set_fp_policy => module::set_fp_policy : fn(Obj, Obj) -> Obj);
-thunk!(GET_FP_POLICY: CFunction = thunk_get_fp_policy => module::get_fp_policy : fn(Obj, Obj) -> Obj);
-thunk!(FP_NON_CANONICAL_ENTRIES: CFunction = thunk_fp_non_canonical_entries => module::fp_non_canonical_entries : fn(Obj, Obj) -> Obj);
-#[cfg(feature = "test-hooks")]
-thunk!(FAIL_AFTER: CFunction = thunk_fail_after => module::fail_after : fn(Obj, Obj) -> Obj);
-thunk!(FP_BOUNDARY: CFunction = thunk_fp_boundary => module::fp_boundary : fn(Obj, Obj) -> Obj);
-thunk!(BUILD_PROFILE: CFunction = thunk_build_profile => module::build_profile : fn(Obj, Obj) -> Obj);
-thunk!(REGISTERED_ENVS: CFunction = thunk_registered_envs => module::registered_envs : fn(Obj, Obj) -> Obj);
-#[cfg(feature = "test-hooks")]
-thunk!(MAKE_PANIC_COUNTER: CFunctionKw = thunk_make_panic_counter => env_type::make_panic_counter : fn(Obj, Obj, Obj) -> Obj);
-#[cfg(feature = "test-hooks")]
-thunk!(MAKE_CONTINUOUS_PROBE: CFunctionKw = thunk_make_continuous_probe => env_type::make_continuous_probe : fn(Obj, Obj, Obj) -> Obj);
-#[cfg(feature = "test-hooks")]
-thunk!(MAKE_MULTI_PROBE: CFunctionKw = thunk_make_multi_probe => env_type::make_multi_probe : fn(Obj, Obj, Obj) -> Obj);
-thunk!(MAKE_ACROBOT: CFunctionKw = thunk_make_acrobot => env_type::make_acrobot : fn(Obj, Obj, Obj) -> Obj);
-thunk!(MAKE_MOUNTAINCAR: CFunctionKw = thunk_make_mountaincar => env_type::make_mountaincar : fn(Obj, Obj, Obj) -> Obj);
-#[cfg(feature = "test-hooks")]
-thunk!(PENDULUM_REWARDS: CFunction = thunk_pendulum_rewards => module::pendulum_rewards : fn(Obj, Obj) -> Obj);
-thunk!(MAKE_PENDULUM: CFunctionKw = thunk_make_pendulum => env_type::make_pendulum : fn(Obj, Obj, Obj) -> Obj);
-thunk!(MAKE_CARTPOLE: CFunctionKw = thunk_make_cartpole => env_type::make_cartpole : fn(Obj, Obj, Obj) -> Obj);
-thunk!(MAKE_GRID: CFunctionKw = thunk_make_grid => env_type::make_grid : fn(Obj, Obj, Obj) -> Obj);
-thunk!(MAKE_KEYDOOR: CFunctionKw = thunk_make_keydoor => env_type::make_keydoor : fn(Obj, Obj, Obj) -> Obj);
-thunk!(MAKE_SNAKE: CFunctionKw = thunk_make_snake => env_type::make_snake : fn(Obj, Obj, Obj) -> Obj);
-thunk!(MAKE_BRICKWALL: CFunctionKw = thunk_make_brickwall => env_type::make_brickwall : fn(Obj, Obj, Obj) -> Obj);
-thunk!(MAKE_PADDLEDUEL: CFunctionKw = thunk_make_paddleduel => env_type::make_paddleduel : fn(Obj, Obj, Obj) -> Obj);
-thunk!(MAKE_TAG: CFunctionKw = thunk_make_tag => env_type::make_tag : fn(Obj, Obj, Obj) -> Obj);
-thunk!(MAKE_RTS: CFunctionKw = thunk_make_rts => env_type::make_rts : fn(Obj, Obj, Obj) -> Obj);
-thunk!(MAKE_CONNECT4: CFunctionKw = thunk_make_connect4 => env_type::make_connect4 : fn(Obj, Obj, Obj) -> Obj);
-thunk!(MAKE_LEDUC: CFunctionKw = thunk_make_leduc => env_type::make_leduc : fn(Obj, Obj, Obj) -> Obj);
-thunk!(MAKE_OTHELLO: CFunctionKw = thunk_make_othello => env_type::make_othello : fn(Obj, Obj, Obj) -> Obj);
-thunk!(MAKE_GO9: CFunctionKw = thunk_make_go9 => env_type::make_go9 : fn(Obj, Obj, Obj) -> Obj);
-thunk!(LAYOUT: CFunction = thunk_layout => env_type::layout : fn(Obj, Obj) -> Obj);
-thunk!(OUTPUTS: CFunction = thunk_outputs => env_type::outputs : fn(Obj, Obj) -> Obj);
-thunk!(IS_POISONED: CFunction = thunk_is_poisoned => env_type::is_poisoned : fn(Obj, Obj) -> Obj);
-thunk!(CLOSE: CFunction = thunk_close => env_type::close : fn(Obj, Obj) -> Obj);
-thunk!(RESET: CFunction = thunk_reset => env_type::reset : fn(Obj, Obj) -> Obj);
-thunk!(STEP: CFunction = thunk_step => env_type::step : fn(Obj, Obj) -> Obj);
-thunk!(SNAPSHOT: CFunction = thunk_snapshot => env_type::snapshot : fn(Obj, Obj) -> Obj);
-thunk!(STATE_HASH: CFunction = thunk_state_hash => env_type::state_hash : fn(Obj, Obj) -> Obj);
-thunk!(ILLEGAL_ACTIONS: CFunction = thunk_illegal_actions => env_type::illegal_actions : fn(Obj, Obj) -> Obj);
-thunk!(IMPORT_RECORD: CFunction = thunk_import_record => env_type::import_record : fn(Obj, Obj) -> Obj);
-thunk!(FORK: CFunction = thunk_fork => env_type::fork : fn(Obj, Obj) -> Obj);
-thunk!(ENCODE: CFunction = thunk_encode => env_type::encode : fn(Obj, Obj) -> Obj);
-thunk!(LOAD: CFunction = thunk_load => env_type::load : fn(Obj, Obj) -> Obj);
-thunk!(SEND: CFunction = thunk_send => env_type::send : fn(Obj, Obj) -> Obj);
-thunk!(RECV: CFunction = thunk_recv => env_type::recv : fn(Obj, Obj) -> Obj);
-thunk!(RESTORE: CFunction = thunk_restore => env_type::restore : fn(Obj, Obj) -> Obj);
-thunk!(SNAPSHOT_ALL: CFunction = thunk_snapshot_all => env_type::snapshot_all : fn(Obj, Obj) -> Obj);
-thunk!(RESTORE_ALL: CFunction = thunk_restore_all => env_type::restore_all : fn(Obj, Obj) -> Obj);
-thunk!(SNAPSHOT_DEALLOC: Destructor = thunk_snapshot_dealloc => snapshot_type::dealloc : fn(Obj) -> ());
-thunk!(DEALLOC: Destructor = thunk_dealloc => env_type::dealloc : fn(Obj) -> ());
-thunk!(MAKE_SEARCH: CFunctionKw = thunk_make_search => search_type::make_search : fn(Obj, Obj, Obj) -> Obj);
-thunk!(SEARCH_LAYOUT: CFunction = thunk_search_layout => search_type::layout : fn(Obj, Obj) -> Obj);
-thunk!(SEARCH_SET_ROOT: CFunction = thunk_search_set_root => search_type::set_root : fn(Obj, Obj) -> Obj);
-thunk!(SEARCH_RUN: CFunction = thunk_search_run => search_type::run : fn(Obj, Obj) -> Obj);
-thunk!(SEARCH_ROOT_VISITS: CFunction = thunk_search_root_visits => search_type::root_visits : fn(Obj, Obj) -> Obj);
-thunk!(SEARCH_SELECT_ACTION: CFunction = thunk_search_select_action => search_type::select_action : fn(Obj, Obj) -> Obj);
-thunk!(SEARCH_IMPROVED_POLICY: CFunction = thunk_search_improved_policy => search_type::improved_policy : fn(Obj, Obj) -> Obj);
-thunk!(SEARCH_CONSIDERED: CFunction = thunk_search_considered => search_type::considered : fn(Obj, Obj) -> Obj);
-thunk!(SEARCH_CALLS: CFunction = thunk_search_calls => search_type::calls : fn(Obj, Obj) -> Obj);
-thunk!(SEARCH_TREE_HASH: CFunction = thunk_search_tree_hash => search_type::tree_hash : fn(Obj, Obj) -> Obj);
-thunk!(SEARCH_IS_PRIVILEGED: CFunction = thunk_search_is_privileged => search_type::is_privileged : fn(Obj, Obj) -> Obj);
-thunk!(SEARCH_DEALLOC: Destructor = thunk_search_dealloc => search_type::dealloc : fn(Obj) -> ());
-thunk!(SEARCH_ATTACH_ONNX: CFunctionKw = thunk_search_attach_onnx => search_type::attach_onnx : fn(Obj, Obj, Obj) -> Obj);
-thunk!(SEARCH_RUN_ONNX: CFunction = thunk_search_run_onnx => search_type::run_onnx : fn(Obj, Obj) -> Obj);
-thunk!(ONNX_LOAD: CFunctionKw = thunk_onnx_load => search_type::onnx_load : fn(Obj, Obj, Obj) -> Obj);
-thunk!(MAKE_SEARCH_GROUP: CFunctionKw = thunk_make_search_group => search_group_type::make_search_group : fn(Obj, Obj, Obj) -> Obj);
-thunk!(GROUP_LAYOUT: CFunction = thunk_group_layout => search_group_type::layout : fn(Obj, Obj) -> Obj);
-thunk!(GROUP_LAST_FAILURE: CFunction = thunk_group_last_failure => search_group_type::last_failure : fn(Obj, Obj) -> Obj);
-thunk!(GROUP_SET_ROOT: CFunction = thunk_group_set_root => search_group_type::set_root : fn(Obj, Obj) -> Obj);
-thunk!(GROUP_SET_ACTIVE: CFunction = thunk_group_set_active => search_group_type::set_active : fn(Obj, Obj) -> Obj);
-thunk!(GROUP_ACTIVE: CFunction = thunk_group_active => search_group_type::active : fn(Obj, Obj) -> Obj);
-thunk!(GROUP_RUN: CFunction = thunk_group_run => search_group_type::run : fn(Obj, Obj) -> Obj);
-thunk!(GROUP_ROOT_VISITS: CFunction = thunk_group_root_visits => search_group_type::root_visits : fn(Obj, Obj) -> Obj);
-thunk!(GROUP_SELECT_ACTION: CFunction = thunk_group_select_action => search_group_type::select_action : fn(Obj, Obj) -> Obj);
-thunk!(GROUP_IMPROVED_POLICY: CFunction = thunk_group_improved_policy => search_group_type::improved_policy : fn(Obj, Obj) -> Obj);
-thunk!(GROUP_CONSIDERED: CFunction = thunk_group_considered => search_group_type::considered : fn(Obj, Obj) -> Obj);
-thunk!(GROUP_CALLS: CFunction = thunk_group_calls => search_group_type::calls : fn(Obj, Obj) -> Obj);
-thunk!(GROUP_TREE_HASH: CFunction = thunk_group_tree_hash => search_group_type::tree_hash : fn(Obj, Obj) -> Obj);
-thunk!(GROUP_DEALLOC: Destructor = thunk_group_dealloc => search_group_type::dealloc : fn(Obj) -> ());
+// The fixed module initializers CPython looks up by name (P1 of the #272
+// step 3 design): non-generic, so they can carry `no_mangle`.
+#[cfg(feature = "native-module")]
+thunk!(
+    @naked
+    /// `_native`'s initializer: the module registered with
+    /// `export_module!(native: ...)`.
+    #[unsafe(no_mangle)]
+    PyInit__native => super::module_def::init_native : fn() -> *mut ffi::PyObject
+);
+#[cfg(feature = "host")]
+thunk!(
+    @naked
+    /// A host environment wheel's initializer (ADR-0062 D3): the module
+    /// registered with `export_module!(host: ...)`.
+    #[unsafe(no_mangle)]
+    PyInit__tessera_host => super::module_def::init_host : fn() -> *mut ffi::PyObject
+);
 
-// Borrowed output views (ADR-0003). The deleters and the capsule destructor
-// are cleanup entries: they never fail or reject.
-thunk!(VIEW_DEALLOC: Destructor = thunk_view_dealloc => view_type::dealloc : fn(Obj) -> ());
-thunk!(VIEW_GETBUFFER: GetBuffer = thunk_view_getbuffer => view_type::getbuffer : fn(Obj, *mut ffi::Py_buffer, core::ffi::c_int) -> core::ffi::c_int);
-thunk!(VIEW_DLPACK: CFunctionKw = thunk_view_dlpack => view_type::dlpack : fn(Obj, Obj, Obj) -> Obj);
-thunk!(VIEW_DLPACK_DEVICE: CFunction = thunk_view_dlpack_device => view_type::dlpack_device : fn(Obj, Obj) -> Obj);
-thunk!(VIEW_GENERATION: CFunction = thunk_view_generation => view_type::generation : fn(Obj, Obj) -> Obj);
-thunk!(VIEW_IS_STALE: CFunction = thunk_view_is_stale => view_type::is_stale : fn(Obj, Obj) -> Obj);
-thunk!(CAPSULE_DESTRUCTOR: Destructor = thunk_capsule_destructor => dlpack::destroy_capsule : fn(Obj) -> ());
-thunk!(DL_DELETER: DlDeleter = thunk_dl_deleter => dlpack::delete_legacy : fn(*mut DLManagedTensor) -> ());
-thunk!(DL_DELETER_VERSIONED: DlDeleterVersioned = thunk_dl_deleter_versioned => dlpack::delete_versioned : fn(*mut DLManagedTensorVersioned) -> ());
+impl ThunkFn<CFunction> {
+    /// The boundary thunk of `E`.
+    pub(crate) const fn of<E: CFunctionEntry>() -> Self {
+        Self(cfunction::<E>)
+    }
+}
+
+impl ThunkFn<CFunctionKw> {
+    /// The boundary thunk of `E`.
+    pub(crate) const fn of<E: CFunctionKwEntry>() -> Self {
+        Self(cfunction_kw::<E>)
+    }
+}
+
+impl ThunkFn<Destructor> {
+    /// The boundary thunk of `E`.
+    pub(crate) const fn of<E: DestructorEntry>() -> Self {
+        Self(destructor::<E>)
+    }
+}
+
+impl ThunkFn<GetBuffer> {
+    /// The boundary thunk of `E`.
+    pub(crate) const fn of<E: GetBufferEntry>() -> Self {
+        Self(getbuffer::<E>)
+    }
+}
+
+/// `releasebufferproc`: `(exporter, view)`.
+pub(crate) type ReleaseBuffer = unsafe extern "C" fn(*mut ffi::PyObject, *mut ffi::Py_buffer);
+
+impl ThunkFn<ReleaseBuffer> {
+    /// The boundary thunk of `E`.
+    pub(crate) const fn of<E: ReleaseBufferEntry>() -> Self {
+        Self(release_buffer::<E>)
+    }
+}
+
+impl ThunkFn<DlDeleter> {
+    /// The boundary thunk of `E`.
+    pub(crate) const fn of<E: DlDeleterEntry>() -> Self {
+        Self(dl_deleter::<E>)
+    }
+}
+
+impl ThunkFn<DlDeleterVersioned> {
+    /// The boundary thunk of `E`.
+    pub(crate) const fn of<E: DlDeleterVersionedEntry>() -> Self {
+        Self(dl_deleter_versioned::<E>)
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -703,6 +736,28 @@ mod tests {
     use super::super::boundary;
     use super::*;
 
+    // The template tests run through generic instantiations (D2-G): one
+    // entry trait per test signature, made by the same macro as the
+    // CPython signatures'.
+
+    #[cfg(not(windows))]
+    mod six {
+        use super::super::{MAX_ARGS, int_class};
+        generic_thunk!(Args6, args6 : fn(a0: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64);
+    }
+    #[cfg(not(windows))]
+    use six::{Args6, args6};
+
+    #[cfg(windows)]
+    mod four {
+        use super::super::{MAX_ARGS, int_class};
+        generic_thunk!(Args4, args4 : fn(a0: u64, a1: u64, a2: u64, a3: u64) -> u64);
+    }
+    #[cfg(windows)]
+    use four::{Args4, args4};
+
+    generic_thunk!(Args1, args1 : fn(a0: u64) -> u64);
+
     // Per thread: the tests run in parallel threads.
     thread_local! {
         static INSIDE_CANONICAL: Cell<bool> = const { Cell::new(false) };
@@ -714,7 +769,7 @@ mod tests {
         target4(a0, a1, a2, a3) ^ a4.rotate_left(32) ^ a5.rotate_left(40)
     }
 
-    /// The first [`MAX_ARGS`]-compatible part of `target6`: the four
+    /// The first `MAX_ARGS`-compatible part of `target6`: the four
     /// register arguments of every ABI.
     extern "C" fn target4(a0: u64, a1: u64, a2: u64, a3: u64) -> u64 {
         INSIDE_CANONICAL.with(|c| c.set(fp::is_canonical()));
@@ -728,27 +783,51 @@ mod tests {
     // System V and AAPCS64 preserve six or more integer registers: the
     // thunk takes all six arguments.
     #[cfg(not(windows))]
-    thunk!(@naked thunk6 => target6 : fn(u64, u64, u64, u64, u64, u64) -> u64);
+    struct Target6;
+    #[cfg(not(windows))]
+    impl Args6 for Target6 {
+        unsafe extern "C" fn call(a0: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 {
+            target6(a0, a1, a2, a3, a4, a5)
+        }
+    }
+    #[cfg(not(windows))]
+    const THUNK6: unsafe extern "C" fn(u64, u64, u64, u64, u64, u64) -> u64 = args6::<Target6>;
 
     // Win64 preserves four (MAX_ARGS): the thunk takes the register
     // arguments, and the test helper folds in the last two outside it, so
     // every test checks the same value on every ABI.
     #[cfg(windows)]
-    thunk!(@naked thunk4 => target4 : fn(u64, u64, u64, u64) -> u64);
+    struct Target4;
+    #[cfg(windows)]
+    impl Args4 for Target4 {
+        unsafe extern "C" fn call(a0: u64, a1: u64, a2: u64, a3: u64) -> u64 {
+            target4(a0, a1, a2, a3)
+        }
+    }
+    #[cfg(windows)]
+    const THUNK4: unsafe extern "C" fn(u64, u64, u64, u64) -> u64 = args4::<Target4>;
 
     #[cfg(windows)]
-    unsafe extern "C" fn thunk6(a0: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 {
+    unsafe extern "C" fn thunk6_win64(a0: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 {
         // SAFETY: a thunk of a test target.
-        unsafe { thunk4(a0, a1, a2, a3) ^ a4.rotate_left(32) ^ a5.rotate_left(40) }
+        unsafe { THUNK4(a0, a1, a2, a3) ^ a4.rotate_left(32) ^ a5.rotate_left(40) }
     }
+    #[cfg(windows)]
+    const THUNK6: unsafe extern "C" fn(u64, u64, u64, u64, u64, u64) -> u64 = thunk6_win64;
 
     extern "C" fn nested(a: u64) -> u64 {
         // SAFETY: a thunk of a test target.
-        let inner = unsafe { thunk6(a, 1, 2, 3, 4, 5) };
+        let inner = unsafe { THUNK6(a, 1, 2, 3, 4, 5) };
         INSIDE_DEPTH_TOKEN.with(|c| c.set(boundary::frame_token()));
         inner
     }
-    thunk!(@naked thunk_nested => nested : fn(u64) -> u64);
+    struct Nested;
+    impl Args1 for Nested {
+        unsafe extern "C" fn call(a0: u64) -> u64 {
+            nested(a0)
+        }
+    }
+    const THUNK_NESTED: unsafe extern "C" fn(u64) -> u64 = args1::<Nested>;
 
     extern "C" fn panicky(a: u64) -> u64 {
         match std::panic::catch_unwind(|| {
@@ -762,7 +841,13 @@ mod tests {
             }
         }
     }
-    thunk!(@naked thunk_panicky => panicky : fn(u64) -> u64);
+    struct Panicky;
+    impl Args1 for Panicky {
+        unsafe extern "C" fn call(a0: u64) -> u64 {
+            panicky(a0)
+        }
+    }
+    const THUNK_PANICKY: unsafe extern "C" fn(u64) -> u64 = args1::<Panicky>;
 
     const ARGS: [u64; 6] = [
         0x0123_4567_89ab_cdef,
@@ -779,7 +864,7 @@ mod tests {
 
     fn call6() -> u64 {
         // SAFETY: a thunk of a test target with integer arguments.
-        unsafe { thunk6(ARGS[0], ARGS[1], ARGS[2], ARGS[3], ARGS[4], ARGS[5]) }
+        unsafe { THUNK6(ARGS[0], ARGS[1], ARGS[2], ARGS[3], ARGS[4], ARGS[5]) }
     }
 
     fn check_mode(mode: fn(fp::Control) -> fp::Control) {
@@ -805,6 +890,136 @@ mod tests {
         );
         assert!(fp::non_canonical_entries() > before, "the entry is counted");
         assert_eq!(boundary::frame_token(), 0, "no frame outside the entry");
+    }
+
+    // The production templates, instantiated with test entries: each
+    // records whether it ran under canonical controls and folds its
+    // pointer arguments (never dereferenced) into its result.
+    thread_local! {
+        static SEEN: Cell<(bool, usize)> = const { Cell::new((false, 0)) };
+    }
+
+    fn seen(fold: usize) {
+        SEEN.with(|c| c.set((fp::is_canonical(), fold)));
+    }
+
+    fn ptr(v: usize) -> Obj {
+        core::ptr::without_provenance_mut(v)
+    }
+
+    struct PyFn;
+    impl CFunctionEntry for PyFn {
+        unsafe extern "C" fn call(slf: Obj, args: Obj) -> Obj {
+            seen(slf.addr() ^ args.addr().rotate_left(8));
+            ptr(slf.addr() ^ args.addr())
+        }
+    }
+
+    struct PyFnKw;
+    impl CFunctionKwEntry for PyFnKw {
+        unsafe extern "C" fn call(slf: Obj, args: Obj, kwargs: Obj) -> Obj {
+            seen(slf.addr() ^ args.addr().rotate_left(8) ^ kwargs.addr().rotate_left(16));
+            ptr(slf.addr() ^ kwargs.addr())
+        }
+    }
+
+    struct Dealloc;
+    impl DestructorEntry for Dealloc {
+        unsafe extern "C" fn call(obj: Obj) {
+            seen(obj.addr());
+        }
+    }
+
+    struct Buffer;
+    impl GetBufferEntry for Buffer {
+        unsafe extern "C" fn call(obj: Obj, view: *mut ffi::Py_buffer, flags: c_int) -> c_int {
+            seen(obj.addr() ^ view.addr().rotate_left(8) ^ usize::try_from(flags).unwrap_or(0));
+            flags.wrapping_neg()
+        }
+    }
+
+    struct Deleter;
+    impl DlDeleterEntry for Deleter {
+        unsafe extern "C" fn call(managed: *mut DLManagedTensor) {
+            seen(managed.addr());
+        }
+    }
+
+    struct DeleterVersioned;
+    impl DlDeleterVersionedEntry for DeleterVersioned {
+        unsafe extern "C" fn call(managed: *mut DLManagedTensorVersioned) {
+            seen(managed.addr());
+        }
+    }
+
+    /// Runs `f` under flush-to-zero caller controls: the instantiation ran
+    /// canonical, folded `want` and left the caller's controls in place.
+    fn check_instantiation<R: PartialEq + core::fmt::Debug>(
+        want: usize,
+        result: &R,
+        f: impl FnOnce() -> R,
+    ) {
+        SEEN.with(|c| c.set((false, 0)));
+        let (got, after) = hostile::run(hostile::flush_to_zero, f);
+        let ((), written) = hostile::run(hostile::flush_to_zero, || ());
+        assert_eq!(&got, result, "the result passes through");
+        assert_eq!(
+            SEEN.with(Cell::get),
+            (true, want),
+            "canonical inside, arguments intact"
+        );
+        assert_eq!(
+            after & !fp::STATUS_FLAGS,
+            written & !fp::STATUS_FLAGS,
+            "the caller's controls are restored"
+        );
+    }
+
+    #[test]
+    fn test_thunk_generic_cfunction_runs_canonical_and_passes_arguments() {
+        let f = ThunkFn::<CFunction>::of::<PyFn>().get();
+        // SAFETY: a thunk of a test entry; the pointers are never dereferenced.
+        check_instantiation(0x10 ^ 0x2000, &ptr(0x10 ^ 0x20), || unsafe {
+            f(ptr(0x10), ptr(0x20))
+        });
+    }
+
+    #[test]
+    fn test_thunk_generic_cfunction_kw_runs_canonical_and_passes_arguments() {
+        let f = ThunkFn::<CFunctionKw>::of::<PyFnKw>().get();
+        // SAFETY: as above.
+        check_instantiation(0x10 ^ 0x2000 ^ 0x30_0000, &ptr(0x10 ^ 0x30), || unsafe {
+            f(ptr(0x10), ptr(0x20), ptr(0x30))
+        });
+    }
+
+    #[test]
+    fn test_thunk_generic_destructor_runs_canonical_and_passes_arguments() {
+        let f = ThunkFn::<Destructor>::of::<Dealloc>().get();
+        // SAFETY: as above.
+        check_instantiation(0x40, &(), || unsafe { f(ptr(0x40)) });
+    }
+
+    #[test]
+    fn test_thunk_generic_getbuffer_runs_canonical_and_passes_arguments() {
+        let f = ThunkFn::<GetBuffer>::of::<Buffer>().get();
+        let view: *mut ffi::Py_buffer = core::ptr::without_provenance_mut(0x50);
+        // SAFETY: as above.
+        check_instantiation(0x10 ^ 0x5000 ^ 7, &-7, || unsafe { f(ptr(0x10), view, 7) });
+    }
+
+    #[test]
+    fn test_thunk_generic_dlpack_deleters_run_canonical_and_pass_arguments() {
+        let legacy = ThunkFn::<DlDeleter>::of::<Deleter>().get();
+        let versioned = ThunkFn::<DlDeleterVersioned>::of::<DeleterVersioned>().get();
+        // SAFETY: as above.
+        check_instantiation(0x60, &(), || unsafe {
+            legacy(core::ptr::without_provenance_mut(0x60));
+        });
+        // SAFETY: as above.
+        check_instantiation(0x70, &(), || unsafe {
+            versioned(core::ptr::without_provenance_mut(0x70));
+        });
     }
 
     #[test]
@@ -967,7 +1182,7 @@ mod tests {
     fn test_thunk_nesting_restores_each_frame() {
         let (got, after) = hostile::run(hostile::flush_to_zero, || {
             // SAFETY: a thunk of a test target.
-            unsafe { thunk_nested(ARGS[0]) }
+            unsafe { THUNK_NESTED(ARGS[0]) }
         });
         assert_eq!(got, target6(ARGS[0], 1, 2, 3, 4, 5));
         // After the inner entry returned, the outer frame is current again.
@@ -1032,7 +1247,15 @@ mod tests {
         a
     }
     #[cfg(target_arch = "x86_64")]
-    thunk!(@naked thunk_x87_changer => x87_changer : fn(u64) -> u64);
+    struct X87Changer;
+    #[cfg(target_arch = "x86_64")]
+    impl Args1 for X87Changer {
+        unsafe extern "C" fn call(a0: u64) -> u64 {
+            x87_changer(a0)
+        }
+    }
+    #[cfg(target_arch = "x86_64")]
+    const THUNK_X87_CHANGER: unsafe extern "C" fn(u64) -> u64 = args1::<X87Changer>;
 
     /// A host function (the target of a test callout) that changes the x87
     /// control word and leaves it.
@@ -1055,19 +1278,35 @@ mod tests {
         unsafe { callout_x87_changer(r) }
     }
     #[cfg(target_arch = "x86_64")]
-    thunk!(@naked thunk_calls_host => calls_host : fn(u64) -> u64);
+    struct CallsHost;
+    #[cfg(target_arch = "x86_64")]
+    impl Args1 for CallsHost {
+        unsafe extern "C" fn call(a0: u64) -> u64 {
+            calls_host(a0)
+        }
+    }
+    #[cfg(target_arch = "x86_64")]
+    const THUNK_CALLS_HOST: unsafe extern "C" fn(u64) -> u64 = args1::<CallsHost>;
 
     /// An entry body that enters again (a nested entry whose body changes
     /// the control word), as host code inside a callback would.
     #[cfg(target_arch = "x86_64")]
     extern "C" fn enters_again(a: u64) -> u64 {
         // SAFETY: a thunk of a test target.
-        let r = unsafe { thunk_x87_changer(a) };
+        let r = unsafe { THUNK_X87_CHANGER(a) };
         AFTER_CALLOUT_X87.with(|c| c.set(x87_cw()));
         r
     }
     #[cfg(target_arch = "x86_64")]
-    thunk!(@naked thunk_enters_again => enters_again : fn(u64) -> u64);
+    struct EntersAgain;
+    #[cfg(target_arch = "x86_64")]
+    impl Args1 for EntersAgain {
+        unsafe extern "C" fn call(a0: u64) -> u64 {
+            enters_again(a0)
+        }
+    }
+    #[cfg(target_arch = "x86_64")]
+    const THUNK_ENTERS_AGAIN: unsafe extern "C" fn(u64) -> u64 = args1::<EntersAgain>;
 
     /// Runs `f` with the x87 control word set to `cw`, and returns `f`'s
     /// result with the control word read right after it; restores the
@@ -1086,7 +1325,7 @@ mod tests {
     #[test]
     fn test_thunk_x87_entry_preserves_caller_word_uncounted() {
         // SAFETY: a thunk of a test target.
-        let (got, after) = with_x87(X87_HOSTILE, || unsafe { thunk_x87_changer(7) });
+        let (got, after) = with_x87(X87_HOSTILE, || unsafe { THUNK_X87_CHANGER(7) });
         assert_eq!(got, 7);
         assert_eq!(
             INSIDE_X87.with(Cell::get),
@@ -1107,7 +1346,7 @@ mod tests {
     #[test]
     fn test_thunk_x87_callout_change_never_outlives_the_callout() {
         // SAFETY: a thunk of a test target.
-        let (got, after) = with_x87(X87_HOSTILE, || unsafe { thunk_calls_host(9) });
+        let (got, after) = with_x87(X87_HOSTILE, || unsafe { THUNK_CALLS_HOST(9) });
         assert_eq!(got, 9);
         assert_eq!(
             AFTER_CALLOUT_X87.with(Cell::get),
@@ -1121,7 +1360,7 @@ mod tests {
     #[test]
     fn test_thunk_x87_nested_entry_restores_its_immediate_caller() {
         // SAFETY: a thunk of a test target.
-        let (got, after) = with_x87(X87_HOSTILE, || unsafe { thunk_enters_again(3) });
+        let (got, after) = with_x87(X87_HOSTILE, || unsafe { THUNK_ENTERS_AGAIN(3) });
         assert_eq!(got, 3);
         assert_eq!(
             AFTER_CALLOUT_X87.with(Cell::get),
@@ -1137,7 +1376,7 @@ mod tests {
         // Both registers hostile at once: each is restored independently.
         let ((got, cw), after) = hostile::run(hostile::toward_zero, || {
             // SAFETY: a thunk of a test target.
-            with_x87(X87_HOSTILE, || unsafe { thunk_calls_host(5) })
+            with_x87(X87_HOSTILE, || unsafe { THUNK_CALLS_HOST(5) })
         });
         assert_eq!(got, 5);
         assert_eq!(cw, X87_HOSTILE);
@@ -1151,7 +1390,7 @@ mod tests {
     fn test_thunk_contained_panic_returns_and_restores() {
         let (got, after) = hostile::run(hostile::toward_zero, || {
             // SAFETY: a thunk of a test target.
-            unsafe { thunk_panicky(1) }
+            unsafe { THUNK_PANICKY(1) }
         });
         assert_eq!(got, u64::MAX);
         assert_eq!(
@@ -1184,6 +1423,7 @@ callout!(c_dict_set_item_string => ffi::PyDict_SetItemString : fn(Obj, CStr, Obj
 callout!(c_decref => ffi::Py_DecRef : fn(Obj) -> ());
 callout!(c_object_call => ffi::PyObject_CallObject : fn(Obj, Obj) -> Obj);
 callout!(c_err_clear => ffi::PyErr_Clear : fn() -> ());
+callout!(c_err_restore => ffi::PyErr_Restore : fn(Obj, Obj, Obj) -> ());
 callout!(c_check_signals => ffi::PyErr_CheckSignals : fn() -> c_int);
 callout!(c_long_as_i64 => ffi::PyLong_AsLongLong : fn(Obj) -> i64);
 callout!(c_long_as_u64 => ffi::PyLong_AsUnsignedLongLong : fn(Obj) -> u64);

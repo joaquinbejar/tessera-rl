@@ -297,6 +297,8 @@ def test_fp_boundary_callout_lint_rejects_a_direct_call(tmp_path):
     root = pathlib.Path(__file__).resolve().parents[2]
     src = tmp_path / "src"
     shutil.copytree(root / "crates" / "tessera-rl-py" / "src", src)
+    # `ffi/capi.rs` lives in the shared boundary crate (ADR-0062 item 8).
+    shutil.copy(root / "crates" / "tessera-rl-pyffi" / "src" / "ffi" / "capi.rs", src / "ffi" / "capi.rs")
     lint = root / "scripts" / "check_py_callouts.py"
     ok = subprocess.run([sys.executable, str(lint), str(src)], capture_output=True, text=True)
     assert ok.returncode == 0, ok.stdout

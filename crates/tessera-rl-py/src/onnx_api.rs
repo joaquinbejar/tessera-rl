@@ -17,7 +17,7 @@ use std::path::PathBuf;
 use crate::api::Kwargs;
 use crate::env::BindError;
 use crate::errors::{Kind, error, to_py};
-use crate::ffi::capi::{self, CResult, Gil, Mine, Raised, Ref};
+use crate::ffi::capi::{self, CResult, Gil, Mine, Ref};
 use crate::search::{OnnxArgs, OnnxInfo};
 use crate::search_api::SearchInner;
 use tessera_rl_search::EvaluatorError;
@@ -31,7 +31,7 @@ fn required(g: Gil, kw: &Kwargs<'_>, key: &str) -> CResult<String> {
 }
 
 /// `onnx_load(library: str, accept_telemetry: bool = False) -> dict`.
-pub(crate) fn onnx_load(g: Gil, kwargs: Option<Ref<'_>>) -> CResult<Mine> {
+pub(crate) fn onnx_load<'py>(g: Gil<'py>, kwargs: Option<Ref<'_>>) -> CResult<Mine<'py>> {
     let kw = Kwargs::parse(g, kwargs)?;
     kw.check(g, &[&LOAD_KEYS])?;
     let library = PathBuf::from(required(g, &kw, "library")?);
@@ -40,7 +40,7 @@ pub(crate) fn onnx_load(g: Gil, kwargs: Option<Ref<'_>>) -> CResult<Mine> {
 }
 
 #[cfg(feature = "onnx")]
-fn load(g: Gil, library: &std::path::Path, accept: bool) -> CResult<Mine> {
+fn load<'py>(g: Gil<'py>, library: &std::path::Path, accept: bool) -> CResult<Mine<'py>> {
     use tessera_rl_onnx::{TelemetryPolicy, load_runtime};
     let policy = if accept {
         TelemetryPolicy::Accept
@@ -64,7 +64,7 @@ fn load(g: Gil, library: &std::path::Path, accept: bool) -> CResult<Mine> {
 }
 
 #[cfg(not(feature = "onnx"))]
-fn load(g: Gil, _: &std::path::Path, _: bool) -> CResult<Mine> {
+fn load<'py>(g: Gil<'py>, _: &std::path::Path, _: bool) -> CResult<Mine<'py>> {
     Err(to_py(
         g,
         BindError::Onnx(
@@ -74,7 +74,7 @@ fn load(g: Gil, _: &std::path::Path, _: bool) -> CResult<Mine> {
 }
 
 /// The provenance dict.
-fn info_dict(g: Gil, info: &OnnxInfo) -> CResult<Mine> {
+fn info_dict<'py>(g: Gil<'py>, info: &OnnxInfo) -> CResult<Mine<'py>> {
     let d = capi::dict(g)?;
     capi::dict_set(
         g,
@@ -127,7 +127,11 @@ fn info_dict(g: Gil, info: &OnnxInfo) -> CResult<Mine> {
 
 /// `attach_onnx(model=, library=, accept_telemetry=, max_model_bytes=)`:
 /// builds the search's ONNX session and returns its provenance.
-pub(crate) fn attach_onnx(g: Gil, inner: &SearchInner, kwargs: Option<Ref<'_>>) -> CResult<Mine> {
+pub(crate) fn attach_onnx<'py>(
+    g: Gil<'py>,
+    inner: &SearchInner,
+    kwargs: Option<Ref<'_>>,
+) -> CResult<Mine<'py>> {
     let kw = Kwargs::parse(g, kwargs)?;
     kw.check(g, &[&ATTACH_KEYS])?;
     let args = OnnxArgs {
@@ -141,14 +145,14 @@ pub(crate) fn attach_onnx(g: Gil, inner: &SearchInner, kwargs: Option<Ref<'_>>) 
 }
 
 /// `run_onnx()`: one search call with the attached ONNX evaluator.
-pub(crate) fn run_onnx(g: Gil, inner: &SearchInner) -> CResult<Mine> {
+pub(crate) fn run_onnx<'py>(g: Gil<'py>, inner: &SearchInner) -> CResult<Mine<'py>> {
     let mut pending = None;
     let result = inner.with(g, |ops| {
         let mut check = || {
             // Pending signals (Ctrl-C) before every batch, as for the
             // Python callback: a handler that raises aborts the call.
-            if capi::check_signals(g).is_err() {
-                pending = Some(capi::fetch_pending());
+            if let Err(raised) = capi::check_signals(g) {
+                capi::stash_first(g, &mut pending, raised);
                 return Err(EvaluatorError::Failed {
                     reason: "a signal handler raised".to_owned(),
                 });
@@ -157,15 +161,12 @@ pub(crate) fn run_onnx(g: Gil, inner: &SearchInner) -> CResult<Mine> {
         };
         // Inference releases the interpreter: other Python threads run
         // meanwhile. The search object stays held by this call.
-        let mut detach = |f: &mut dyn FnMut()| g.detach(f);
+        let mut detach = |f: &mut (dyn FnMut() + Send)| g.detach(f);
         Ok(ops.run_onnx(&mut check, &mut detach))
     })?;
     match (result, pending.take()) {
         (Ok(()), _) => Ok(capi::none(g)),
-        (Err(_), Some(p)) => {
-            capi::restore_pending(p);
-            Err(Raised)
-        }
+        (Err(_), Some(p)) => Err(p.raise_again(g)),
         (Err(e), None) => Err(to_py(g, e)),
     }
 }

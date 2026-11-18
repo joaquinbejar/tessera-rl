@@ -1,0 +1,45 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
+[package]
+name = "tessera-rl-pyffi"
+description = "The CPython boundary shared by Tessera's Python extensions (experimental)"
+readme = "README.md"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[features]
+default = []
+# Test-only failure injection (`capi::fail_after`), for the ADR-0041 unwind
+# tests of the extensions built on this crate. Never in a release wheel.
+test-hooks = []
+# `PyInit__native`, the initializer of Tessera's own `_native` module
+# (enabled by tessera-rl-py only).
+native-module = []
+# `PyInit__tessera_host`, the initializer of a host environment wheel
+# (ADR-0062 D3). Never enabled by the first-party wheel.
+host = []
+
+[dependencies]
+inventory.workspace = true
+pyo3.workspace = true
+tessera-rl-engine.workspace = true
+tessera-rl-num.workspace = true
+
+[dev-dependencies]
+# Hostile floating-point modes for the boundary tests (ADR-0041).
+tessera-rl-num = { workspace = true, features = ["test-hooks"] }
+
+# docs.rs builds the crate alone: `extension-module` keeps PyO3 from
+# linking libpython (owner approval of the PyO3 terms, 2026-11-17).
+[package.metadata.docs.rs]
+features = ["pyo3/extension-module"]
+
+[lints]
+workspace = true

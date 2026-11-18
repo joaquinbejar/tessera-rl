@@ -19,7 +19,12 @@ use crate::view::{half_view_set, view_set};
 
 /// A batch: `{ids, seq, outputs}`. Gathered and owned outputs have one row
 /// per id in `ids`, in that order; indexed views have all N rows.
-fn batch_output(g: Gil, inner: &Inner, ops: &dyn AsyncOps, out: &BatchOutput) -> CResult<Mine> {
+fn batch_output<'py>(
+    g: Gil<'py>,
+    inner: &Inner,
+    ops: &dyn AsyncOps,
+    out: &BatchOutput,
+) -> CResult<Mine<'py>> {
     let unsettled = ops.unsettled_flag();
     let outputs = if let Some(owned) = &out.owned {
         owned_dict(g, owned)?
@@ -59,14 +64,14 @@ fn batch_output(g: Gil, inner: &Inner, ops: &dyn AsyncOps, out: &BatchOutput) ->
 
 /// `reset(seed, ids, delivered)`: every instance, returning them as one
 /// batch; or `ids`, which the next `recv` delivers (returns `None`).
-pub(crate) fn reset(
-    g: Gil,
+pub(crate) fn reset<'py>(
+    g: Gil<'py>,
     inner: &Inner,
     ops: &dyn AsyncOps,
     ids: Option<&[u32]>,
     seed: &ResetSeed,
     delivered: Option<Ref<'_>>,
-) -> CResult<Mine> {
+) -> CResult<Mine<'py>> {
     let delivered = delivered.map_or(Ok(0), |d| capi::to_u64(g, d, "delivered"))?;
     if let Some(ids) = ids {
         g.detach(|| ops.reset(ids, seed, delivered))
@@ -79,7 +84,12 @@ pub(crate) fn reset(
 
 /// `recv`: as Pipelined, waiting on the engine's batch waiter, which polls
 /// in 100 microsecond steps.
-pub(crate) fn recv(g: Gil, inner: &Inner, ops: &dyn AsyncOps, delivered: u64) -> CResult<Mine> {
+pub(crate) fn recv<'py>(
+    g: Gil<'py>,
+    inner: &Inner,
+    ops: &dyn AsyncOps,
+    delivered: u64,
+) -> CResult<Mine<'py>> {
     if ops
         .receiving()
         .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
@@ -107,7 +117,7 @@ pub(crate) fn recv(g: Gil, inner: &Inner, ops: &dyn AsyncOps, delivered: u64) ->
 
 /// `restore(ids, snapshots, delivered)`: restores `ids` from one-instance
 /// snapshots; the next `recv` delivers them.
-pub(crate) fn restore(g: Gil, inner: &Inner, args: Ref<'_>) -> CResult<Mine> {
+pub(crate) fn restore<'py>(g: Gil<'py>, inner: &Inner, args: Ref<'_>) -> CResult<Mine<'py>> {
     let items = capi::tuple_items(g, args, "the arguments")?;
     let [ids, snapshots, delivered] = items.as_slice() else {
         return Err(error(
@@ -120,7 +130,7 @@ pub(crate) fn restore(g: Gil, inner: &Inner, args: Ref<'_>) -> CResult<Mine> {
     let delivered = capi::to_u64(g, *delivered, "delivered")?;
     let snapshots = capi::list_items(g, *snapshots, "snapshots")?
         .into_iter()
-        .map(|s| snapshot_type::snapshot_of(g, s))
+        .map(|s| snapshot_type::snapshot_of(g, s.as_ref()))
         .collect::<CResult<Vec<_>>>()?;
     let ops = inner.with(g, |p| Ok(p.batched()))?.ok_or_else(|| {
         error(

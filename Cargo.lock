@@ -1123,8 +1123,19 @@ dependencies = [
  "tessera-rl-macros",
  "tessera-rl-num",
  "tessera-rl-onnx",
+ "tessera-rl-pyffi",
  "tessera-rl-rts",
  "tessera-rl-search",
+]
+
+[[package]]
+name = "tessera-rl-pyffi"
+version = "0.2.0"
+dependencies = [
+ "inventory",
+ "pyo3",
+ "tessera-rl-engine",
+ "tessera-rl-num",
 ]
 
 [[package]]
