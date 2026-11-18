@@ -53,6 +53,8 @@ criterion.workspace = true
 gungraun.workspace = true
 tessera-rl-num = { workspace = true, features = ["test-hooks"] }
 tessera-rl-macros.workspace = true
+# The host bench's CartPole physics and spaces (host_instructions).
+tessera-rl-classic.workspace = true
 
 [lints]
 workspace = true
@@ -94,3 +96,9 @@ harness = false
 [[bench]]
 name = "turns_instructions"
 harness = false
+
+# Instruction counts of the host pool (ADR-0062, #272), in the gate.
+[[bench]]
+name = "host_instructions"
+harness = false
+required-features = ["host"]

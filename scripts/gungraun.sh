@@ -52,6 +52,8 @@ expected=(
     tessera-rl-engine/turns_instructions/turns/masked_step.n1024
     tessera-rl-engine/turns_instructions/turns/sequential_step.n1024
     tessera-rl-engine/async_instructions/async_mode/drain.round_256
+    tessera-rl-engine/host_instructions/host/host_pool_steady.n1024
+    tessera-rl-engine/host_instructions/host/host_pool_one.n1
     tessera-rl-games/games_instructions/games/connect4_pool_step.n1024
     tessera-rl-games/games_instructions/games/bot_choose.positions_32
     tessera-rl-search/search_instructions/search/expand_batch.n7
@@ -61,7 +63,7 @@ expected=(
 # lines must show the profile: the bench binaries and the measured packages.
 profile=bench-gate
 band=2.0
-profile_crates=(classic_instructions snapshot_instructions turns_instructions async_instructions games_instructions search_instructions tessera_rl_classic tessera_rl_engine tessera_rl_games tessera_rl_search)
+profile_crates=(classic_instructions snapshot_instructions turns_instructions async_instructions host_instructions games_instructions search_instructions tessera_rl_classic tessera_rl_engine tessera_rl_games tessera_rl_search)
 baseline_of() { local d="$1"; local b; b="$(basename "$d")"; echo "$home/$d/callgrind.$b.out.base@ref"; }
 
 command -v valgrind >/dev/null || fail "valgrind is not installed"
@@ -103,7 +105,7 @@ build_with_profile() {
     "$root/scripts/gungraun_profile_check.sh" "$build_log" "${profile_crates[@]}"
 }
 
-benches=(-p tessera-rl-classic --bench classic_instructions -p tessera-rl-engine --bench snapshot_instructions --bench turns_instructions --bench async_instructions -p tessera-rl-games --bench games_instructions -p tessera-rl-search --bench search_instructions)
+benches=(-p tessera-rl-classic --bench classic_instructions -p tessera-rl-engine --bench snapshot_instructions --bench turns_instructions --bench async_instructions --bench host_instructions --features tessera-rl-engine/host -p tessera-rl-games --bench games_instructions -p tessera-rl-search --bench search_instructions)
 case "$mode" in
     check)
         [ -f "$manifest" ] || fail "no environment manifest: bless first"
