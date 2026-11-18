@@ -119,8 +119,11 @@ fn step_rows<E: HostEnvironment, const A: usize>(ctx: &HostCtx<'_>, rows: &mut H
                 // The rows hold the terminal observation: zero them again.
                 observe_rows::<E, A, true>(header, inst, outputs, i);
             }
+            write_pending(outputs, i, header);
         }
-        write_pending(outputs, i, header);
+        // `step_one` wrote `pending_reset` where the step changed it (an
+        // ended or aborted episode); a step whose episode runs on leaves
+        // the instance not pending, as its output already says.
     }
 }
 
@@ -538,6 +541,7 @@ fn step_one<E: HostEnvironment, const A: usize>(
     update_acting::<E, A>(header, inst);
     if let Some(end) = end {
         finish_episode(header, outputs, i, end, t, total);
+        write_pending(outputs, i, header);
     }
     write_agent_masks(outputs, i, header);
     false
@@ -575,6 +579,7 @@ fn abort_step<const A: usize>(
     finish_episode(header, outputs, i, end, t, total);
     write_agent_masks(outputs, i, header);
     mark_aborted(outputs, i, code);
+    write_pending(outputs, i, header);
 }
 
 /// Clears instance `i`'s `aborted` and `abort_code` outputs, for a call
