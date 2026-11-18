@@ -79,6 +79,10 @@ jobs:
       - run: python3 scripts/check_simd_disasm.py
       - run: cargo test --workspace --all-features --locked
       - run: cargo test --workspace --locked
+      # tests/host-glue enables the engine's host feature, so workspace
+      # feature unification builds the engine with it in every run above.
+      - name: Engine alone, default features (the shipped configuration, no host)
+        run: cargo test -p tessera-rl-engine --locked
       # The downstream consumer alone: no workspace feature unification can
       # supply what the facade does not forward.
       - run: cargo test -p tessera-rl-downstream-test --locked
