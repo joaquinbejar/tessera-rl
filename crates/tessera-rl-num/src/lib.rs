@@ -13,10 +13,12 @@ pub mod rng;
 pub(crate) mod splitmix;
 
 // Fixed point (SPEC 8.2, ADR-0008).
+pub mod decimal;
 mod fixed;
 pub mod fx32;
 pub mod fx64;
 
+pub use decimal::DecimalError;
 pub use fx32::Fx32;
 pub use fx64::Fx64;
 
