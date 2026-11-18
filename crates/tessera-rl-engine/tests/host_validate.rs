@@ -205,3 +205,28 @@ fn test_host_validate_panic_poisons() {
         assert_eq!(total(&shared.steps), 0);
     }
 }
+
+#[test]
+fn test_host_validate_impure_rerun_is_still_a_rejection() {
+    // Sync: a worker rejects instance 5, and the serial re-run on this
+    // thread accepts it (an impure `validate`). The call is still rejected,
+    // with code 0 and ADR-0065's reason, and nothing steps.
+    for workers in [2, 3] {
+        let shared = Shared::new();
+        let mut p = pool::<0, true>(&shared, workers);
+        p.reset_all(Reseed::Keep).unwrap();
+        let before = snapshot(p.outputs().unwrap());
+        shared.reject_once.store(1 << 5, Ordering::Relaxed);
+        assert_eq!(
+            rejected(step(&mut p, &[])),
+            (
+                5,
+                0,
+                "validate was not pure: the re-run accepted an action a worker rejected"
+            )
+        );
+        assert_eq!(total(&shared.steps), 0);
+        assert_eq!(snapshot(p.outputs().unwrap()), before);
+        assert!(!p.is_poisoned());
+    }
+}

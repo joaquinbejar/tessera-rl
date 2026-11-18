@@ -74,6 +74,9 @@ pub struct Shared {
     pub mixed_acting: AtomicBool,
     /// Instances whose `validate` rejects (bit `i`).
     pub reject: AtomicU32,
+    /// Instances whose next `validate` rejects, once (bit `i`, cleared by
+    /// that call): an impure `validate`, for the engine's re-run check.
+    pub reject_once: AtomicU32,
     /// Instances whose `validate` panics (bit `i`).
     pub panic_validate: AtomicU32,
     /// `validate` leaves flush-to-zero set.
@@ -262,7 +265,8 @@ impl<const T: u8, const V: bool> HostEnvironment for Script<T, V> {
         if self.shared.alloc_validate.load(Ordering::Relaxed) {
             core::hint::black_box(vec![0u8; 64]);
         }
-        if self.shared.reject.load(Ordering::Relaxed) & bit != 0 {
+        let once = self.shared.reject_once.fetch_and(!bit, Ordering::Relaxed) & bit != 0;
+        if once || self.shared.reject.load(Ordering::Relaxed) & bit != 0 {
             return Err(ActionReject {
                 code: REJECT_CODE + u32::try_from(self.id).unwrap_or(0),
                 reason: "the script refused",

@@ -798,7 +798,7 @@ fn validate<E: HostEnvironment, const A: usize>(
 fn rejected(instance: u32, reject: Option<ActionReject>) -> EngineError {
     let reject = reject.unwrap_or(ActionReject {
         code: 0,
-        reason: "rejected by validate in the worker pass only (validate must be pure)",
+        reason: "validate was not pure: the re-run accepted an action a worker rejected",
     });
     EngineError::ActionRejected {
         instance,
