@@ -116,6 +116,15 @@ pub trait HostEnvironment: Send + Sized + 'static {
     const PERFECT_INFORMATION: bool = true;
     /// The turn structure (ADR-0013); `Sequential` and `Mixed` must
     /// override [`HostEnvironment::acting`].
+    ///
+    /// Under `Simultaneous` every alive agent acts and `acting` is never
+    /// called. An environment that needs acting subsets declares `Mixed`
+    /// and overrides `acting`. A non-acting alive slot's action is not
+    /// required: it is zeroed and never validated. The slot is still
+    /// observed (and masked) every call, its reward is whatever `step`
+    /// writes (0 by default), it stays alive, and its `terminated` and
+    /// `truncated` flags are as written. This matches `EnvPool` and
+    /// ADR-0013.
     const TURNS: TurnStructure = TurnStructure::Simultaneous;
     /// Whether the environment writes action masks
     /// ([`HostEnvironment::mask`]). Without masks the pool has no mask
@@ -214,6 +223,14 @@ pub trait HostEnvironment: Send + Sized + 'static {
     }
 
     /// Writes `agent`'s observation into leaves that are zero on entry.
+    ///
+    /// Typed writes need no derive: declare the leaf ids to match
+    /// [`HostEnvironment::observation_space`], for example
+    /// `const POS: LeafId<f32> = LeafId::new(0);`, and write through
+    /// `obs.leaf_mut(POS)` ([`crate::leaf::LeafMut::set`] or
+    /// [`crate::leaf::LeafMut::copy_from`]). Neither `LeafId` nor `LeafMut`
+    /// checks the leaf's declared dtype, only its byte length, so the ids
+    /// must name each leaf with the element type its space declares.
     fn observe(&self, agent: AgentSlot, obs: &mut ObsWriter<'_, '_, ()>);
 
     /// Writes `agent`'s legal-action mask; every action is legal by default.

@@ -19,7 +19,19 @@
 //!
 //! Action masks are outputs only: the environment's `mask` describes the
 //! next step's legal actions, but a host pool does not replace illegal
-//! actions (it has no no-op); actions are validated for range only.
+//! actions (it has no no-op); actions are validated for range only, and
+//! then by the environment's own `validate` when it declares `VALIDATES`
+//! (ADR-0065 item 2): a rejected call steps no instance and leaves the
+//! outputs as they were.
+//!
+//! A host `reset` or `step` may abort its instance's episode
+//! (`HostOut::abort`, ADR-0065 item 1) instead of panicking: the episode
+//! ends with every live agent truncated, the instance is left pending a
+//! reset, and the host-only outputs `aborted`, `abort_code` and
+//! `pending_reset` report it. `pending_reset` is the exact pending state
+//! of every instance, from construction on; `aborted` alone never means
+//! pending. The pool is not poisoned, and [`HostPool::aborts`] counts the
+//! aborts applied.
 //!
 //! Experimental until 1.0 (ADR-0062 item 9).
 
