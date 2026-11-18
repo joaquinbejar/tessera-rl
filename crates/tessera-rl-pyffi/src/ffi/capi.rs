@@ -385,6 +385,7 @@ pub fn stash_first(g: Gil<'_>, slot: &mut Option<Stashed>, raised: Raised) {
 /// The message of the exception `raised` proves is set, which stays set:
 /// `str()` of its value (a callout: it can run Python code), or a fixed
 /// text when there is no value or `str()` fails.
+#[cfg(any(feature = "native-module", feature = "host"))]
 #[must_use]
 pub(crate) fn pending_message(g: Gil<'_>, raised: Raised) -> (String, Raised) {
     let _ = raised;
