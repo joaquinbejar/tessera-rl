@@ -20,8 +20,8 @@ use crate::layout::{ActionLayout, MAX_LEAVES};
 use crate::options::AutoReset;
 use crate::outputs::OutputsView;
 use crate::pool::{
-    Ending, Reseed, Rows, clear_chunk, finish_episode, save_terminal, set, with_step,
-    write_agent_masks,
+    Ending, Reseed, Rows, clear_chunk, clear_terminal, finish_episode, save_terminal, set,
+    with_step, write_agent_masks,
 };
 
 /// A host pool's record header: the engine fields and one row per agent,
@@ -383,6 +383,10 @@ fn abort_reset<E: HostEnvironment, const A: usize>(
             };
             finish_episode(header, outputs, i, end, 0, total);
             mark_aborted(outputs, i, code);
+            // The row is this reset's: its terminal observation is the
+            // aborted state's, zeros, not an earlier episode's (ADR-0065
+            // item 1). A no-op outside `SameStep` (no terminal buffer).
+            clear_terminal(outputs, i);
         }
         ResetRows::Scratch => {
             header.engine_mut().pending_reset = Bool8::TRUE;
