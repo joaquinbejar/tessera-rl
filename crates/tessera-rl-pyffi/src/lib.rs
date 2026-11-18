@@ -22,10 +22,14 @@
 //! - **Interpreter finalization.** A daemon thread inside
 //!   [`ffi::capi::Gil::detach`] when the interpreter finalizes is ended by
 //!   CPython 3.11 to 3.13 with `pthread_exit` when it tries to reattach
-//!   (CPython's documented behaviour for daemon threads). On glibc,
-//!   `pthread_exit` is a forced unwind that runs its Rust frames' drops; on
-//!   macOS it does not unwind them. Code that must run to completion should
-//!   not run in a daemon thread.
+//!   (CPython's documented behaviour for daemon threads). No frame of
+//!   `Gil::detach` or above is unwound: pyo3-ffi 0.30.1 wraps
+//!   `PyEval_RestoreThread` in a guard that parks the thread forever when
+//!   dropped (`HangThread`, pyo3-ffi `src/ceval.rs` and `src/impl_/mod.rs`),
+//!   so on glibc the forced unwind of `pthread_exit` stops there and the
+//!   thread never ends; on macOS `pthread_exit` ends the thread without
+//!   unwinding. Either way the drops of those frames do not run. Code that
+//!   must run to completion should not run in a daemon thread.
 //!
 //! - [`ffi`]: the audited module. Privately: the floating-point entry
 //!   thunks and their templates, the generic shims that turn CPython's raw
