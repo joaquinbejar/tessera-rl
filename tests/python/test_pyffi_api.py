@@ -126,6 +126,29 @@ def test_pyffi_callout_lint_sees_aliases_strings_and_safe_foreign_functions(tmp_
         assert run().returncode == 0, fine
 
 
+def test_pyffi_callout_lint_flags_a_gc_allocator_owned_as_a_leaf(tmp_path):
+    src = tmp_path / "src"
+    shutil.copytree(ROOT / "crates" / "tessera-rl-py" / "src", src)
+    capi = src / "ffi" / "capi.rs"
+    shutil.copy(ROOT / "crates" / "tessera-rl-pyffi" / "src" / "ffi" / "capi.rs", capi)
+
+    def run():
+        return subprocess.run([sys.executable, str(CALLOUT_LINT), str(src)], capture_output=True, text=True)
+
+    assert run().returncode == 0
+    clean = capi.read_text()
+    for sneaky in (
+        # The shape `pending_message` had before: two statements.
+        "fn sneaky(o: Obj) { let s = unsafe { thunks::c_object_str(o) };\n    let _ = Mine::new(s); }",
+        "fn sneaky(o: Obj) { let _ = Mine::new(unsafe { thunks::c_object_str(o) }); }",
+    ):
+        capi.write_text(clean + "\n" + sneaky + "\n")
+        bad = run()
+        assert bad.returncode != 0 and "c_object_str returns a GC-tracked object" in bad.stdout, (sneaky, bad.stdout)
+    capi.write_text(clean + "\nfn fine(o: Obj) { let s = unsafe { thunks::c_object_str(o) };\n    let _ = Mine::container(s); }\n")
+    assert run().returncode == 0
+
+
 def test_native_exports_its_initializer_and_not_the_host_one():
     # `_native` enables pyffi's `native-module` feature only, never `host`
     # (ADR-0062 D3): the host initializer is not in the extension at all.

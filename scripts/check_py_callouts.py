@@ -68,8 +68,23 @@ CALLOUT_ONLY = {
 GC_ALLOCATORS = {
     "c_list_new", "c_tuple_new", "c_dict_new", "c_type_from_spec", "c_module_create",
     "c_err_new_exception", "c_object_call",
+    # `str()` may return a GC-tracked `str` subclass with a `__del__`.
+    "c_object_str",
 }
 LEAF_OWNED = re.compile(r"Mine::new\(\s*unsafe\s*\{\s*thunks::(\w+)\s*\(")
+# The two-statement form: `let x = unsafe { thunks::f(..) };` then `Mine::new(x)`.
+LET_THUNK = re.compile(r"\blet\s+(?:mut\s+)?(\w+)\s*=\s*unsafe\s*\{\s*thunks::(\w+)\s*\(")
+
+
+def leaf_owned(code: str) -> set[str]:
+    """The thunks whose result `code` owns with `Mine::new` (a leaf): inline,
+    or through a `let` binding passed to `Mine::new` later in the file."""
+    names = set(LEAF_OWNED.findall(code))
+    for m in LET_THUNK.finditer(code):
+        var, name = m.groups()
+        if re.search(r"Mine::new\(\s*" + re.escape(var) + r"\s*\)", code[m.end():]):
+            names.add(name)
+    return names
 
 HIGH_LEVEL = re.compile(r"pyo3::(types|prelude|sync|exceptions)\b|\bBound<|\.extract\s*::|\.extract\(|\bPyErr::|\bPython::")
 
@@ -129,7 +144,7 @@ def check(src: pathlib.Path) -> list[str]:
         if safe_foreign(code):
             problems.append(f"{rel}: a public safe foreign function (`pub safe fn` in an `unsafe extern` block)")
         if rel.as_posix() == "ffi/capi.rs":
-            for name in sorted(set(LEAF_OWNED.findall(code)) & GC_ALLOCATORS):
+            for name in sorted(leaf_owned(code) & GC_ALLOCATORS):
                 problems.append(f"{rel}: {name} returns a GC-tracked object: own it with Mine::container")
             # The one direct decref is the leaf branch of `Mine::drop`.
             if len(re.findall(r"\bffi::Py_DecRef\s*\(", code)) > 1:

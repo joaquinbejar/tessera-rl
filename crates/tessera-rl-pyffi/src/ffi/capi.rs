@@ -393,9 +393,11 @@ pub(crate) fn pending_message(g: Gil<'_>, raised: Raised) -> (String, Raised) {
     let mut message = None;
     if !p.1.is_null() {
         // SAFETY: attached, no exception pending; a live value (the
-        // fetched reference, kept until it is put back).
+        // fetched reference, kept until it is put back). `str()` may return
+        // a `str` subclass that is GC-tracked and has a `__del__`, so the
+        // result is owned as a container (its decref is a callout).
         let s = unsafe { thunks::c_object_str(p.1) };
-        if let Ok(s) = Mine::new(s) {
+        if let Ok(s) = Mine::container(s) {
             message = to_string(g, s.as_ref(), "message").ok();
         }
         clear_pending(g);
