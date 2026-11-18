@@ -12,7 +12,7 @@ policy are injected on both sides (``import_record``: the header then
 - observation (float32): within one float32 ulp of the reference's
   (they come from different sine and cosine implementations), or, for a
   sine or cosine component, within the angle difference the state check
-  accepted plus float32 rounding (``obs_close``);
+  accepted plus each side's rounding (``obs_close``);
 - reward and terminated: exact, except when the reference height lies
   within 1e-9 of the threshold 1.0, counted, not gated;
 - truncated: always false.
@@ -99,11 +99,29 @@ def angle_gap(a: float, b: float) -> float:
     return min(d, abs(2 * np.pi - d))
 
 
+#: libm slack per side, in float64 ulps of the result: the sine or cosine
+#: each side computes in float64 is taken to be within this many ulps of the
+#: exact value (the libms in use document under one ulp for both).
+LIBM_ULPS64 = 1
+
+
+def trig_bound(dtheta: float, a: float, b: float) -> float:
+    """The largest gap between two float32 sine (or cosine) values ``a`` and
+    ``b`` of angles ``dtheta`` apart. Exact values differ by at most
+    ``|dtheta|`` (1-Lipschitz); each side's float64 result is within
+    ``LIBM_ULPS64`` float64 ulps of its exact value; rounding that to the
+    nearest float32 moves it by at most half a float32 spacing."""
+    rounding = float(np.spacing(np.float32(abs(a)))) / 2 + float(np.spacing(np.float32(abs(b)))) / 2
+    libm = LIBM_ULPS64 * (float(np.spacing(abs(a))) + float(np.spacing(abs(b))))
+    return dtheta + rounding + libm
+
+
 def obs_close(o_ours, o_ref, n_ours, n_ref) -> bool:
     """The observation check. A component passes within one float32 ulp of
     the reference's. A sine or cosine component that fails that passes
-    within ``|dtheta|`` plus the float32 spacing of both values, where
-    ``dtheta`` is the difference of its angle in the two next states.
+    within ``trig_bound``: ``|dtheta|`` plus half the float32 spacing of
+    each value plus the named libm slack, where ``dtheta`` is the difference
+    of its angle in the two next states.
 
     Sine and cosine are 1-Lipschitz, so a next-state angle the state check
     accepts (a few ulps) moves its sine or cosine by at most that much. Near a
@@ -123,8 +141,7 @@ def obs_close(o_ours, o_ref, n_ours, n_ref) -> bool:
             return False
         a, b = float(o_ours[j]), float(o_ref[j])
         k = TRIG[int(j)]
-        bound = angle_gap(n_ours[k], n_ref[k]) + float(np.spacing(np.float32(abs(a)))) + float(np.spacing(np.float32(abs(b))))
-        if not abs(a - b) <= bound:
+        if not abs(a - b) <= trig_bound(angle_gap(n_ours[k], n_ref[k]), a, b):
             return False
     return True
 

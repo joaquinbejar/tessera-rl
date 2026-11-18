@@ -152,5 +152,38 @@ def test_obs_close_without_next_state_keeps_the_ulp_test():
     assert not eq.obs_close(ours[1], ref[1], None, ref[0])
 
 
+def _trig_row(theta1, theta2):
+    """A next state and its float32 observation, both computed here."""
+    n = np.array([theta1, theta2, 0.25, -0.5])
+    o = np.array([np.cos(n[0]), np.sin(n[0]), np.cos(n[1]), np.sin(n[1]), n[2], n[3]], dtype=np.float32)
+    return n, o
+
+
+@pytest.mark.parametrize("component", [0, 1, 2, 3])
+def test_obs_close_trig_two_ulps_off_with_equal_states_fails(component):
+    # Far from every zero: rounding allows half a spacing per side, so two
+    # float32 ulps with identical next states is a wrong observation.
+    n, o_ref = _trig_row(0.7, -2.1)
+    o = o_ref.copy()
+    for _ in range(2):
+        o[component] = np.nextafter(o[component], np.float32(np.inf))
+    assert not eq.obs_close(o, o_ref, n.copy(), n)
+
+
+def test_obs_close_honest_row_needs_the_rounding_term():
+    # Both sides compute sin with this libm on angles 1 ulp apart next to
+    # -pi; their float32 values are further apart than the angles are, by
+    # less than the two half spacings.
+    t_ours = float.fromhex("-0x1.921fb54442d1ap+1")
+    t_ref = float.fromhex("-0x1.921fb54442d19p+1")
+    n_ours, o_ours = _trig_row(0.7, t_ours)
+    n_ref, o_ref = _trig_row(0.7, t_ref)
+    gap = abs(float(o_ours[3]) - float(o_ref[3]))
+    assert gap > abs(t_ours - t_ref) and gap > np.spacing(np.abs(o_ref[3]))
+    assert eq.obs_close(o_ours, o_ref, n_ours, n_ref)
+
+
 def test_angle_gap_wraps_round_the_circle():
+    # Not reached by the gated rows (no recorded pair straddles +-pi); kept
+    # so that the wrap in angle_gap stays correct if one does.
     assert eq.angle_gap(np.pi, -np.pi) < 1e-15
