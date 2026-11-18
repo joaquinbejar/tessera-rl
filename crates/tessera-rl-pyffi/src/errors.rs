@@ -190,6 +190,58 @@ pub fn register(g: Gil<'_>, module: Ref<'_>) -> CResult<()> {
     Ok(())
 }
 
+/// The classes a host module binds from `tessera_rl` (SPEC 14.4.6).
+#[cfg(feature = "host")]
+const BOUND: [Kind; 10] = [
+    Kind::Base,
+    Kind::Config,
+    Kind::Argument,
+    Kind::Action,
+    Kind::PendingReset,
+    Kind::Poisoned,
+    Kind::Concurrency,
+    Kind::Exhausted,
+    Kind::Forked,
+    Kind::FloatingPoint,
+];
+
+/// Host modules (SPEC 14.4.6): imports `tessera_rl` and binds its
+/// exception classes by name, so this module raises `tessera_rl`'s own
+/// classes and `except tessera_rl.ActionError` catches them across wheels.
+/// Each class is held by a strong reference for the process, as
+/// [`register`]'s are. Classes outside the list keep raising
+/// `RuntimeError`.
+///
+/// # Errors
+///
+/// `ImportError` naming the class when `tessera_rl` lacks one (the host
+/// module's import fails), or the import's own error.
+#[cfg(feature = "host")]
+pub fn bind(g: Gil<'_>) -> CResult<()> {
+    let module = capi::import_module(g, c"tessera_rl")?;
+    for kind in BOUND {
+        let i = index(kind);
+        let (Some(slot), Some((_, name, _))) = (TYPES.get(i), KINDS.get(i)) else {
+            return Err(capi::raise(g, capi::runtime_error(), "exception table"));
+        };
+        let short = std::ffi::CString::new(*name)
+            .map_err(|_| capi::raise(g, capi::runtime_error(), "exception name"))?;
+        let class = capi::get_attr(g, module.as_ref(), &short).map_err(|_| {
+            capi::clear_pending(g);
+            capi::raise(
+                g,
+                capi::import_error(),
+                &format!("tessera_rl has no exception class {name} (host protocol 1, SPEC 14.4.6)"),
+            )
+        })?;
+        if slot.load(Ordering::Acquire).is_null() {
+            // Kept for the process: this strong reference is never released.
+            slot.store(class.into_ptr(), Ordering::Release);
+        }
+    }
+    Ok(())
+}
+
 /// Raises an error of class `kind` with `message`.
 #[expect(
     clippy::needless_pass_by_value,

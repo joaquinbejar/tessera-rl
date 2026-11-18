@@ -328,6 +328,21 @@ pub(crate) fn new_exception<'py>(
     })
 }
 
+/// Imports the module `name` (callout: runs the import system).
+#[cfg(feature = "host")]
+pub(crate) fn import_module<'py>(_g: Gil<'py>, name: &CStr) -> CResult<Mine<'py>> {
+    // SAFETY: attached; a C string.
+    Mine::container(unsafe { thunks::c_import_module(name.as_ptr()) })
+}
+
+/// `getattr(obj, name)` (callout: can run `__getattr__`). The result is
+/// owned as a container: its decref can run finalizers.
+#[cfg(feature = "host")]
+pub(crate) fn get_attr<'py>(_g: Gil<'py>, obj: Ref<'_>, name: &CStr) -> CResult<Mine<'py>> {
+    // SAFETY: attached; a live object and a C string.
+    Mine::container(unsafe { thunks::c_get_attr_string(obj.as_ptr(), name.as_ptr()) })
+}
+
 /// Warns with `category` (callout: runs filters and hooks).
 pub(crate) fn warn(_g: Gil<'_>, category: *mut ffi::PyObject, message: &CStr) -> CResult<()> {
     // SAFETY: attached; a live category and a static message.

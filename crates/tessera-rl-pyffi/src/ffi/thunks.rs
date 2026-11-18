@@ -1432,3 +1432,11 @@ callout!(
     #[cfg(any(feature = "native-module", feature = "host"))]
     c_object_str => ffi::PyObject_Str : fn(Obj) -> Obj
 );
+callout!(
+    #[cfg(feature = "host")]
+    c_import_module => ffi::PyImport_ImportModule : fn(CStr) -> Obj
+);
+callout!(
+    #[cfg(feature = "host")]
+    c_get_attr_string => ffi::PyObject_GetAttrString : fn(Obj, CStr) -> Obj
+);
