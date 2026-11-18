@@ -24,9 +24,11 @@ static ALLOCATOR: TrackingAllocator = TrackingAllocator;
 
 #[test]
 fn test_host_validate_allocations_are_charged_to_the_host_tally() {
-    for workers in [0, 2] {
+    // Inline, then Sync with chunks of 1 over 2 and 3 workers.
+    for workers in [0, 2, 3] {
         let shared = Shared::new();
-        let options = PoolOptions::new(NonZeroU32::new(4).unwrap(), Seed::new(2));
+        let mut options = PoolOptions::new(NonZeroU32::new(4).unwrap(), Seed::new(2));
+        options.chunk_size = NonZeroU32::MIN;
         let mut p =
             HostPool::<Script<0, true>, SLOTS>::new(&ScriptConfig::new(&shared), options).unwrap();
         if workers > 0 {
@@ -47,6 +49,15 @@ fn test_host_validate_allocations_are_charged_to_the_host_tally() {
         assert!(
             p.allocations_in_host_steps() >= before + 4,
             "workers={workers}"
+        );
+        // A rejected call charges what validate allocated now, not with the
+        // next successful call.
+        let before = p.allocations_in_host_steps();
+        shared.reject.store(1 << 2, Ordering::Relaxed);
+        assert!(p.step(input()).is_err());
+        assert!(
+            p.allocations_in_host_steps() > before,
+            "workers={workers}: a rejected call's validate allocations"
         );
     }
 }

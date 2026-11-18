@@ -36,8 +36,9 @@ impl AbortCode {
 ///
 /// An abort ends the episode of an instance whose state became
 /// inconsistent, without a panic (which poisons the pool, ADR-0028). The
-/// engine truncates every live agent, keeps the call's rewards, discards
-/// its deaths and spawns, and calls neither `observe`, `mask` nor `acting`
+/// engine truncates every live agent, keeps the call's rewards (except
+/// a `SameStep` reset's, which writes scratch rows and whose rewards are
+/// discarded, abort or not), discards its deaths and spawns, and calls neither `observe`, `mask` nor `acting`
 /// on the aborted state: its observation rows are zeros, which may lie
 /// outside the observation space, and its masks are false. The instance is
 /// left pending a reset (ADR-0065 item 1). An author who can still observe

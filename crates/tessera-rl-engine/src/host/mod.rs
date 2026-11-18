@@ -527,7 +527,9 @@ impl<E: HostEnvironment, const A: usize> HostPool<E, A> {
     ///
     /// Actions of the wrong shape or out of range, an instance pending
     /// reset or an exhausted step counter (nothing is mutated then);
-    /// [`EngineError::Poisoned`] on a poisoned pool; or
+    /// [`EngineError::ActionRejected`] when the environment's `validate`
+    /// refuses an instance's joint action (`VALIDATES`, ADR-0065; nothing
+    /// is stepped then); [`EngineError::Poisoned`] on a poisoned pool; or
     /// [`EngineError::Panicked`] if environment code panics, which poisons
     /// the pool.
     pub fn step(&mut self, actions: ActionInput<'_>) -> Result<&Outputs, EngineError> {
@@ -564,6 +566,8 @@ impl<E: HostEnvironment, const A: usize> HostPool<E, A> {
             aborts,
             #[cfg(feature = "debug-checks")]
             allocs,
+            #[cfg(feature = "debug-checks")]
+            host_allocations,
             ..
         } = self;
         let ctx = HostCtx {
@@ -577,7 +581,7 @@ impl<E: HostEnvironment, const A: usize> HostPool<E, A> {
             allocs,
         };
         if E::VALIDATES {
-            validate::<E, A>(
+            let validated = validate::<E, A>(
                 &ctx,
                 sync.as_mut(),
                 poisoned,
@@ -586,7 +590,14 @@ impl<E: HostEnvironment, const A: usize> HostPool<E, A> {
                 discrete,
                 continuous,
                 size,
-            )?;
+            );
+            // A rejected call still charges what `validate` allocated to
+            // the host tally, now (ADR-0065 item 2).
+            #[cfg(feature = "debug-checks")]
+            if validated.is_err() {
+                *host_allocations = host_allocations.saturating_add(ctx.allocs.take());
+            }
+            validated?;
         }
         let all = Rows {
             headers,
