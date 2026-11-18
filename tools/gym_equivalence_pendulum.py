@@ -7,7 +7,9 @@ Gate: rollout states of a seeded uniform float32 policy plus edge states are
 injected into both, the same float32 action is applied, and:
 
 - next state: every component within 4 ulps or 1e-12 relative;
-- observation (float32): within one float32 ulp of the reference's;
+- observation (float32): within one float32 ulp of the reference's, or,
+  for the cosine and sine components, within the angle difference of the
+  two next states plus each side's rounding (``obs_close``);
 - reward: ADR-0050. ``t`` is the kernel's f64 reward, read through the
   test-hooks accessor; ``g`` is Gymnasium's. Raw: ``|t - g| <= B``. Public:
   ``|f32(t) - f32(g)| <= B + ulp32(g)``. Exact-match counts of both are
@@ -60,6 +62,58 @@ def close(a: float, b: float) -> bool:
 
 def ulp32(x: float) -> float:
     return float(np.spacing(np.float32(abs(x))))
+
+
+#: Observation components that are a cosine or sine of the state angle, with
+#: the angle's index in the state: ``[cos theta, sin theta, thetadot]``.
+TRIG = {0: 0, 1: 0}
+
+#: libm slack per side, in float64 ulps of the result: the sine or cosine
+#: each side computes in float64 is taken to be within this many ulps of the
+#: exact value (the libms in use document under one ulp for both).
+LIBM_ULPS64 = 1
+
+
+def angle_gap(a: float, b: float) -> float:
+    """``|a - b|`` modulo 2 pi, the short way round: the next-state angle is
+    not wrapped, and sine and cosine only see it modulo 2 pi."""
+    d = math.fmod(abs(float(a) - float(b)), 2 * np.pi)
+    return min(d, 2 * np.pi - d)
+
+
+def trig_bound(dtheta: float, a: float, b: float) -> float:
+    """The largest gap between two float32 sine (or cosine) values ``a`` and
+    ``b`` of angles ``dtheta`` apart. Exact values differ by at most
+    ``|dtheta|`` (1-Lipschitz); each side's float64 result is within
+    ``LIBM_ULPS64`` float64 ulps of its exact value; rounding that to the
+    nearest float32 moves it by at most half a float32 spacing."""
+    rounding = float(np.spacing(np.float32(abs(a)))) / 2 + float(np.spacing(np.float32(abs(b)))) / 2
+    libm = LIBM_ULPS64 * (float(np.spacing(abs(a))) + float(np.spacing(abs(b))))
+    return dtheta + rounding + libm
+
+
+def obs_close(o_ours, o_ref, n_ours, n_ref) -> bool:
+    """The observation check. A component passes within one float32 ulp of
+    the reference's. A cosine or sine component that fails that passes
+    within ``trig_bound`` of the angle difference of the two next states;
+    the angular velocity keeps the ulp test.
+
+    Near a zero of sine or cosine the ulp test is ill-conditioned: a 1-ulp
+    difference of the angle next to a multiple of pi turns ``sin`` into
+    values whose float32 ulps and relative error are huge although the
+    absolute gap is about 1e-16 (issue #287, as #191 for Acrobot). Every
+    one-step row has a next state on both sides."""
+    o_ours = np.asarray(o_ours, dtype=np.float32)
+    o_ref = np.asarray(o_ref, dtype=np.float32)
+    ok = np.abs(o_ours - o_ref) <= np.spacing(np.abs(o_ref))
+    for j in np.flatnonzero(~ok):
+        if int(j) not in TRIG:
+            return False
+        a, b = float(o_ours[j]), float(o_ref[j])
+        k = TRIG[int(j)]
+        if not abs(a - b) <= trig_bound(angle_gap(n_ours[k], n_ref[k]), a, b):
+            return False
+    return True
 
 
 def angle_normalize(x: float) -> float:
@@ -212,7 +266,7 @@ def compare(ours, ref, states, actions, raw):
             if not close(float(x), float(y)):
                 report["state"] += 1
                 break
-        if not np.all(np.abs(o_ours - o_ref) <= np.spacing(np.abs(o_ref).astype(np.float32))):
+        if not obs_close(o_ours, o_ref, n_ours, n_ref):
             report["obs"] += 1
         report["terminated"] += int(t_ours != t_ref)
         report["truncated"] += int(tr_ours != tr_ref)
