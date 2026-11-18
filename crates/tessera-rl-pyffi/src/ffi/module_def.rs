@@ -226,6 +226,42 @@ fn create<I: ModuleInit>(g: Gil<'_>) -> CResult<Mine<'_>> {
     Ok(module)
 }
 
+/// Test hooks only: runs a module initialization that registers the
+/// exception classes and then fails, as a `ModuleInit::init` whose later
+/// step fails would. The new module is freed with the error; the classes
+/// must outlive it (they are held for the process).
+///
+/// # Errors
+///
+/// Always: the injected `RuntimeError`.
+#[cfg(feature = "test-hooks")]
+pub fn init_fails_after_register(g: Gil<'_>) -> CResult<()> {
+    struct FailsAfterRegister;
+
+    static ROWS: [FunctionRow; 1] = [FunctionRow::END];
+    static TABLE: FunctionTable = FunctionTable::new(&ROWS);
+    static DEF: ModuleDef = ModuleDef::new(
+        c"tessera_rl._init_fails_after_register",
+        c"Test hook: an initialization that fails after registering the exception classes.",
+        &TABLE,
+    );
+
+    impl ModuleInit for FailsAfterRegister {
+        const DEF: &'static ModuleDef = &DEF;
+
+        fn init<'py>(g: Gil<'py>, module: Ref<'py>) -> CResult<()> {
+            crate::errors::register(g, module)?;
+            Err(capi::raise(
+                g,
+                capi::runtime_error(),
+                "injected: initialization fails after register",
+            ))
+        }
+    }
+
+    create::<FailsAfterRegister>(g).map(drop)
+}
+
 /// Which fixed initializer a record serves.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Leaf {

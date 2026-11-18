@@ -171,7 +171,20 @@ impl tessera_rl_pyffi::ffi::module_def::FunctionArg for FailAfter {
     }
 }
 
-const FUNCTION_COUNT: usize = if cfg!(feature = "test-hooks") { 31 } else { 26 };
+/// `_init_fails_after_register()` (test hooks only): a module
+/// initialization that registers the exception classes, then fails.
+#[cfg(feature = "test-hooks")]
+struct InitFailsAfterRegister;
+
+#[cfg(feature = "test-hooks")]
+impl FunctionNoArgs for InitFailsAfterRegister {
+    fn call(g: Gil<'_>) -> CResult<Mine<'_>> {
+        tessera_rl_pyffi::ffi::module_def::init_fails_after_register(g)?;
+        Ok(capi::none(g))
+    }
+}
+
+const FUNCTION_COUNT: usize = if cfg!(feature = "test-hooks") { 32 } else { 26 };
 
 static ROWS: [FunctionRow; FUNCTION_COUNT] = [
     FunctionRow::noargs::<Version>(c"version", c"The Tessera version."),
@@ -232,6 +245,11 @@ static ROWS: [FunctionRow; FUNCTION_COUNT] = [
     FunctionRow::arg::<FailAfter>(
         c"_fail_after",
         c"Test hook: the n-th next container insertion fails.",
+    ),
+    #[cfg(feature = "test-hooks")]
+    FunctionRow::noargs::<InitFailsAfterRegister>(
+        c"_init_fails_after_register",
+        c"Test hook: a module initialization that fails after registering the exception classes.",
     ),
     FunctionRow::END,
 ];
