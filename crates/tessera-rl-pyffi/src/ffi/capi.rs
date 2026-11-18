@@ -367,7 +367,10 @@ pub(crate) fn put_back_pending(_g: Gil<'_>, p: Pending) {
 /// callout: dropping it can run finalizers) and the first is kept, so no
 /// stash is ever overwritten and leaked.
 ///
-/// A second stash is unreachable today: the search drivers end the call
+/// The callers are the Python evaluator's batch callback and its signal
+/// poll (`tessera-rl-py`, `search_api.rs`), and the ONNX evaluator's
+/// signal poll (`onnx_api.rs`). A second stash is unreachable today: the
+/// search drivers end the call
 /// on the first evaluator error (`?` after every `check` and evaluation in
 /// `Mcts::run_inner` and in `SearchGroup`'s `prologue` and `round`), so
 /// the bindings raise the stashed exception before the evaluator is used
