@@ -37,6 +37,18 @@
 //!   Publicly: the typed layer above, the boundary policy, the fork
 //!   generation and the reentrancy guard holder.
 //! - [`errors`]: the exception classes and the mapping from engine errors.
+//! - `host` (feature `host`): host protocol 1 (SPEC 14.4 draft, ADR-0062,
+//!   ADR-0065) for a third-party host environment's wheel. One
+//!   `export_host_env!(Env, module = c"pkg._tessera_host")` in the wheel's
+//!   cdylib crate exports `make(*, num_envs, seed, auto_reset,
+//!   max_episode_steps, workers, cpu_set, **config)`, which returns the host
+//!   object: `host_protocol`, `tessera_rl_min` and `tessera_rl_below`;
+//!   `layout()`, `reset(seed)` and `step(actions)` returning the outputs as
+//!   read-only views (buffer protocol and DLPack, alive after `close`),
+//!   `close()`, `is_poisoned()`, `_tessera_current_generation()` and
+//!   `_tessera_set_fp_policy(policy)`. The outputs include ADR-0065's
+//!   `aborted`, `abort_code` and `pending_reset`, and the layout its
+//!   `initial_agents` and `spawns`.
 //!
 //! Each extension (cdylib) links its own copy: the floating-point policy,
 //! the counters, the boundary frame and the exception classes are per
