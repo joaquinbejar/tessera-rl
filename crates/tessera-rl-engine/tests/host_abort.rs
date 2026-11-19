@@ -636,6 +636,34 @@ fn test_host_abort_explicit_reset_row_and_retry() {
 }
 
 #[test]
+fn test_host_abort_reset_all_clears_every_abort_row() {
+    for mode in MODES {
+        each_rt(|rt| {
+            let ctx = format!("{mode:?} {rt:?}");
+            let shared = Shared::new();
+            let mut p = pool::<0>(&shared, mode, rt);
+            p.reset_all(Reseed::Keep).unwrap();
+            // Instance 1 aborts in a step, instance 5 in an explicit reset.
+            step(&mut p, &[(1, 0, ABORT)]).unwrap();
+            shared.abort_resets(5, 1);
+            let out = p.reset(&[5], Reseed::Keep).unwrap();
+            assert!(out.aborted()[1].get() && out.aborted()[5].get(), "{ctx}");
+            assert_eq!(out.abort_code()[1], STEP_CODE, "{ctx}");
+            assert_eq!(out.abort_code()[5], RESET_CODE + 5, "{ctx}");
+            let mut trace = vec![snapshot(out)];
+            // A reset of every instance clears every abort row.
+            let out = p.reset_all(Reseed::Keep).unwrap();
+            for i in 0..N {
+                assert!(!out.aborted()[i].get(), "{ctx} instance {i}");
+                assert_eq!(out.abort_code()[i], 0, "{ctx} instance {i}");
+            }
+            trace.push(snapshot(out));
+            trace
+        });
+    }
+}
+
+#[test]
 fn test_host_abort_explicit_seed_restarts_the_episode_index() {
     each_rt(|rt| {
         let shared = Shared::new();
