@@ -88,6 +88,12 @@ def test_host_object_has_every_protocol_member():
     # Read-only attributes.
     with pytest.raises(AttributeError):
         env.host_protocol = 2
+    # The types are named after export_host_env!'s module (here the test
+    # wheel's "_tessera_host"), so a packaged wheel's are its own.
+    assert type(env).__module__ == host.__name__.rsplit(".", 1)[-1] == "_tessera_host"
+    assert type(env).__name__ == "HostEnv"
+    view = env.reset()["rewards"]
+    assert (type(view).__module__, type(view).__name__) == ("_tessera_host", "HostView")
     env.close()
 
 

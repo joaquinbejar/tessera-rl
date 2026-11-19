@@ -414,6 +414,23 @@ impl<T: Body> TypeObject<T> {
     /// `RuntimeError` on a second `create`; any failure to build or add the
     /// type (a Python exception set).
     pub fn create(&self, g: Gil<'_>, module: Ref<'_>, attr: &CStr) -> CResult<()> {
+        self.create_as(g, module, attr, self.spec.name)
+    }
+
+    /// As [`TypeObject::create`], with the qualified name `name`
+    /// (`package.module.Name`) instead of the spec's: for a type whose
+    /// module is chosen by the extension (a host wheel's module).
+    ///
+    /// # Errors
+    ///
+    /// As [`TypeObject::create`].
+    pub fn create_as(
+        &self,
+        g: Gil<'_>,
+        module: Ref<'_>,
+        attr: &CStr,
+        name: &'static CStr,
+    ) -> CResult<()> {
         if !self.ty.load(Ordering::Acquire).is_null() {
             return Err(capi::raise(
                 g,
@@ -461,7 +478,7 @@ impl<T: Body> TypeObject<T> {
             ));
         }
         let mut spec = ffi::PyType_Spec {
-            name: self.spec.name.as_ptr(),
+            name: name.as_ptr(),
             basicsize: c_int::try_from(core::mem::size_of::<Instance<T>>())
                 .map_err(|_| capi::raise(g, capi::runtime_error(), "object too large"))?,
             itemsize: 0,

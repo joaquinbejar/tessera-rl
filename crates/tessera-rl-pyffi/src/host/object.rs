@@ -3,7 +3,8 @@
 //! The host object (SPEC 14.4.2 draft): a host environment's pool behind
 //! the reentrancy guard, with its protocol attributes and methods.
 
-use std::sync::Arc;
+use std::ffi::CString;
+use std::sync::{Arc, OnceLock};
 
 use tessera_rl_engine::{ActionInput, DynHostPool, EngineError, OutputStorage, Reseed};
 use tessera_rl_num::identity::Seed;
@@ -330,8 +331,49 @@ static SPEC: TypeSpec<HostBody> = TypeSpec::new(
 
 pub(super) static HOST_TYPE: TypeObject<HostBody> = TypeObject::new(&SPEC);
 
-/// Adds the host object and view types to `module`.
-pub(super) fn register(g: Gil<'_>, module: Ref<'_>) -> CResult<()> {
-    HOST_TYPE.create(g, module, c"HostEnv")?;
-    views::register(g, module)
+/// `<module>.<ty>`, the qualified name of a type of the module `module`.
+pub(super) fn qualified(module: &core::ffi::CStr, ty: &str) -> Option<CString> {
+    CString::new(format!("{}.{ty}", module.to_str().ok()?)).ok()
+}
+
+/// The qualified type names, made once per process from the module name
+/// `export_host_env!` gives, so a packaged wheel's types are
+/// `<package>.<module>.HostEnv` and `.HostView`.
+static NAMES: OnceLock<(CString, CString)> = OnceLock::new();
+
+/// Adds the host object and view types to `module`, named after
+/// `module_name` (the `module = c"..."` of `export_host_env!`).
+pub(super) fn register(
+    g: Gil<'_>,
+    module: Ref<'_>,
+    module_name: &'static core::ffi::CStr,
+) -> CResult<()> {
+    let (Some(env), Some(view)) = (
+        qualified(module_name, "HostEnv"),
+        qualified(module_name, "HostView"),
+    ) else {
+        return Err(capi::raise(g, capi::runtime_error(), "host module name"));
+    };
+    let names = NAMES.get_or_init(|| (env, view));
+    HOST_TYPE.create_as(g, module, c"HostEnv", names.0.as_c_str())?;
+    views::register(g, module, names.1.as_c_str())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::qualified;
+
+    #[test]
+    fn test_host_type_names_follow_the_module() {
+        assert_eq!(
+            qualified(c"book_env._tessera_host", "HostEnv")
+                .unwrap()
+                .as_bytes(),
+            b"book_env._tessera_host.HostEnv"
+        );
+        assert_eq!(
+            qualified(c"_tessera_host", "HostView").unwrap().as_bytes(),
+            b"_tessera_host.HostView"
+        );
+    }
 }
