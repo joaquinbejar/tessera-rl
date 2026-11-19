@@ -298,6 +298,12 @@ fn f32_bytes(row: &[f32], mut put: impl FnMut(usize, &[u8])) {
     }
 }
 
+fn u32_row_bytes(row: &[u32], mut put: impl FnMut(usize, &[u8])) {
+    for (i, x) in row.iter().enumerate() {
+        put(i * 4, &x.to_le_bytes());
+    }
+}
+
 fn flag_bytes(row: &[Bool8], mut put: impl FnMut(usize, &[u8])) {
     for (i, f) in row.iter().enumerate() {
         put(i, &[f.to_byte()]);
@@ -326,6 +332,7 @@ fn row_of<E: Environment, M: MaskProvider<E>>(
         OutputField::AgentTruncated => flag_bytes(row.agent_truncated().unwrap_or(&[]), put),
         OutputField::Alive => flag_bytes(row.alive().unwrap_or(&[]), put),
         OutputField::Acting => flag_bytes(row.acting().unwrap_or(&[]), put),
+        OutputField::Generations => u32_row_bytes(row.generations().unwrap_or(&[]), put),
         OutputField::Masks => flag_bytes(row.masks().unwrap_or(&[]), put),
         OutputField::EpisodeTerminated => {
             put(0, &[row.episode_terminated().map_or(0, Bool8::to_byte)]);
@@ -451,6 +458,7 @@ fn copy_out(writer: &GatherWriter, sizes: &[(OutputField, usize)]) -> Owned {
             OutputField::AgentTruncated => owned.agent_truncated = bytes,
             OutputField::Alive => owned.alive = bytes,
             OutputField::Acting => owned.acting = bytes,
+            OutputField::Generations => owned.slot_generations = bytes,
             OutputField::EpisodeTerminated => owned.episode_terminated = bytes,
             OutputField::EpisodeTruncated => owned.episode_truncated = bytes,
             OutputField::Masks => owned.masks = bytes,
@@ -905,6 +913,15 @@ mod tests {
 
     const N: u32 = 8;
 
+    #[test]
+    fn test_u32_row_bytes_puts_little_endian_at_each_slot() {
+        let mut got = [0u8; 8];
+        u32_row_bytes(&[1, 0x0102_0304], |at, bytes| {
+            got[at..at + bytes.len()].copy_from_slice(bytes);
+        });
+        assert_eq!(got, [1, 0, 0, 0, 4, 3, 2, 1]);
+    }
+
     fn args(pipelined: bool, asynced: Option<(usize, BatchOutputs)>) -> PoolArgs {
         PoolArgs {
             num_envs: N,
@@ -1202,6 +1219,43 @@ mod tests {
                 BatchPolled::Busy => panic!("one thread only"),
             }
         }
+    }
+
+    /// Issue #273: a respawn into a dead slot reaches the owned copy of an
+    /// async gather as generation 1, little-endian, at that row's slot.
+    #[test]
+    fn test_async_gathered_owned_slot_generations_carry_a_respawn() {
+        let cfg = CountConfig {
+            kill_at: 1,
+            respawn: true,
+            length: 20,
+            ..CountConfig::default()
+        };
+        let ops = asynced(&cfg, BatchOutputs::Owned);
+        let first = ops.reset_all(&ResetSeed::Keep).unwrap();
+        let owned = first.owned.clone().unwrap();
+        assert!(owned.slot_generations.iter().all(|&b| b == 0));
+        let mut out = first;
+        let mut respawned = false;
+        for _ in 0..40 {
+            let ids: Vec<u32> = out.ids.iter().map(|b| b.id).collect();
+            out = deliver(&*ops, &ids, out.seq);
+            let owned = out.owned.clone().unwrap();
+            let rows = out.ids.len();
+            assert_eq!(owned.slot_generations.len(), rows * 2 * 4);
+            // Slot 0 never dies; slot 1 respawns: [rows, A] u32 little-endian.
+            for row in owned.slot_generations.as_chunks::<8>().0 {
+                assert_eq!(row.get(0..4), Some(&[0u8; 4][..]));
+                if row.get(4..8) == Some(&[1, 0, 0, 0][..]) {
+                    respawned = true;
+                }
+            }
+            if respawned {
+                break;
+            }
+        }
+        assert!(respawned, "no gathered row showed a respawn");
+        ops.close();
     }
 
     /// Stale views never revive: what ends them has moved before the flag

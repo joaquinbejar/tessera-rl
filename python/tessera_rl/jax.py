@@ -150,6 +150,7 @@ class Step(NamedTuple):
     episode_truncated: jax.Array
     masks: jax.Array | None
     acting: jax.Array
+    slot_generations: jax.Array
 
 
 def _close_pool(native) -> None:
@@ -196,6 +197,7 @@ class Env:
             episode_truncated=spec((n,), np.bool_),
             masks=spec((n, a, pool._mask_len), np.bool_) if pool._mask_len else None,
             acting=spec((n, a), np.bool_),
+            slot_generations=spec((n, a), np.uint32),
         )
         self._finalizer = weakref.finalize(self, _close_pool, pool._native)
 

@@ -125,6 +125,12 @@ pub(crate) fn view_set(layout: &Layout) -> Option<ViewSet> {
             "acting",
             spec(OutputField::Acting, OutputDtype::Bool8, &per_agent)?,
         ),
+        // ADR-0013 identity: the generation of each slot's occupant, as host
+        // protocol 1 exports it (issue #273).
+        (
+            "slot_generations",
+            spec(OutputField::Generations, OutputDtype::U32, &per_agent)?,
+        ),
         (
             "episode_terminated",
             spec(OutputField::EpisodeTerminated, OutputDtype::Bool8, &[n])?,
@@ -205,6 +211,14 @@ mod tests {
         let masks = &set.others.iter().find(|(k, _)| *k == "masks").unwrap().1;
         assert_eq!(masks.shape, vec![3, 2, 5]);
         assert_eq!(set.terminal_observations[0].shape, vec![3, 2, 4]);
+        let generations = &set
+            .others
+            .iter()
+            .find(|(k, _)| *k == "slot_generations")
+            .unwrap()
+            .1;
+        assert_eq!(generations.shape, vec![3, 2]);
+        assert_eq!(generations.elem.itemsize(), 4);
         assert_eq!(leaf_elem("complex64"), None);
         let half = half_view_set(&layout, &(1..3)).unwrap();
         assert_eq!(half.observations[0].shape, vec![2, 2, 4]);

@@ -138,6 +138,9 @@ pub(crate) struct Owned {
     pub(crate) alive: Vec<u8>,
     /// Agents whose action this step reads (ADR-0013).
     pub(crate) acting: Vec<u8>,
+    /// `[N, A]`, little-endian u32: each slot's occupant generation
+    /// (ADR-0013 identity).
+    pub(crate) slot_generations: Vec<u8>,
     /// `[N]`.
     pub(crate) episode_terminated: Vec<u8>,
     pub(crate) episode_truncated: Vec<u8>,
@@ -354,6 +357,11 @@ fn flags(v: &[tessera_rl_core::Bool8]) -> Vec<u8> {
     v.iter().map(|f| f.to_byte()).collect()
 }
 
+/// Little-endian bytes of `v`.
+pub(crate) fn u32_bytes(v: &[u32]) -> Vec<u8> {
+    v.iter().flat_map(|x| x.to_le_bytes()).collect()
+}
+
 impl<E, M> Pooled<E, M>
 where
     E: Environment + Validate,
@@ -431,6 +439,7 @@ where
             agent_truncated: flags(out.agent_truncated()),
             alive: flags(out.alive()),
             acting: flags(out.acting()),
+            slot_generations: u32_bytes(out.generations()),
             episode_terminated: flags(out.episode_terminated()),
             episode_truncated: flags(out.episode_truncated()),
             masks: flags(out.masks()),
@@ -1071,6 +1080,54 @@ mod tests {
         assert!(!copy.rewards.is_empty(), "the owned copy is unchanged");
         ops.reset(None, &ResetSeed::Keep).unwrap();
         assert!(ops.outputs().is_ok());
+    }
+
+    #[test]
+    fn test_u32_bytes_are_little_endian() {
+        assert_eq!(
+            u32_bytes(&[0, 1, 0x0102_0304, u32::MAX]),
+            [0, 0, 0, 0, 1, 0, 0, 0, 4, 3, 2, 1, 255, 255, 255, 255]
+        );
+    }
+
+    /// Issue #273: a respawn into a dead slot reaches the owned copy as
+    /// generation 1, little-endian, at that slot's offset.
+    #[test]
+    fn test_owned_slot_generations_carry_a_respawn() {
+        let cfg = CountConfig {
+            kill_at: 1,
+            respawn: true,
+            length: 20,
+            ..CountConfig::default()
+        };
+        let options = PoolOptions::new(NonZeroU32::new(2).unwrap(), Seed::new(1));
+        let pool = EnvPool::<Counter, NoMasks>::new(cfg.clone(), options).unwrap();
+        let args = PoolArgs {
+            num_envs: 2,
+            seed: 1,
+            max_episode_steps: None,
+            auto_reset: "next_step".to_owned(),
+            chunk_size: None,
+            workers: 0,
+            pipelined: false,
+            asynced: None,
+        };
+        let mut ops = finish(&cfg, pool, &args, 2, false).unwrap();
+        ops.reset(None, &ResetSeed::Keep).unwrap();
+        assert_eq!(ops.outputs().unwrap().slot_generations, [0u8; 16]);
+        let mut respawned = false;
+        for _ in 0..10 {
+            ops.step(discrete(&[0, 2, 0, 2])).unwrap();
+            let out = ops.outputs().unwrap();
+            assert_eq!(out.slot_generations.len(), 16);
+            // Instance 0's slot 1: bytes 4..8 (`[N, A]`, u32 little-endian).
+            if out.slot_generations.get(4..8) == Some(&[1, 0, 0, 0][..]) {
+                assert_eq!(out.slot_generations.get(0..4), Some(&[0u8; 4][..]));
+                respawned = true;
+                break;
+            }
+        }
+        assert!(respawned, "instance 0's agent 1 never respawned");
     }
 
     #[test]

@@ -34,6 +34,8 @@ API changes (pre-release; the package is not published yet):
   Access by name or index is unchanged, but unpacking a ``Step`` into a
   fixed number of names is a breaking change: it now needs 9 names, not 8.
   ``Env`` gained ``turns``.
+- Issue #273: ``Step`` gained a tenth field, ``slot_generations``, after
+  ``acting``; unpacking a ``Step`` now needs 10 names.
 """
 
 from tessera_rl._env import AsyncStep, Env, HalfStep, Step, is_stale, make

@@ -182,6 +182,7 @@ fn copy_token<E: Environment, M: MaskProvider<E>>(
         agent_truncated: flags(token.agent_truncated()),
         alive: flags(token.alive()),
         acting: flags(token.acting()),
+        slot_generations: crate::env::u32_bytes(token.generations()),
         episode_terminated: flags(token.episode_terminated()),
         episode_truncated: flags(token.episode_truncated()),
         masks: flags(token.masks()),
@@ -656,6 +657,70 @@ mod tests {
                 Polled::Busy => panic!("no other thread receives"),
             }
         }
+    }
+
+    /// Issue #273: a respawn into a dead slot reaches a half's owned copy as
+    /// generation 1, little-endian, at that slot's `[half, A]` offset.
+    #[test]
+    fn test_split_owned_half_slot_generations_carry_a_respawn() {
+        use tessera_rl_engine::{EnvPool, NoMasks, PoolOptions};
+        use tessera_rl_num::identity::Seed;
+
+        use super::common::{CountConfig, Counter};
+
+        let cfg = CountConfig {
+            kill_at: 1,
+            respawn: true,
+            length: 20,
+            ..CountConfig::default()
+        };
+        let mut options = PoolOptions::new(core::num::NonZeroU32::new(4).unwrap(), Seed::new(1));
+        options.chunk_size = core::num::NonZeroU32::new(2).unwrap();
+        let pool = EnvPool::<Counter, NoMasks>::new(cfg.clone(), options).unwrap();
+        let args = PoolArgs {
+            num_envs: 4,
+            seed: 1,
+            max_episode_steps: None,
+            auto_reset: "next_step".to_owned(),
+            chunk_size: Some(2),
+            workers: 1,
+            pipelined: true,
+            asynced: None,
+        };
+        let ops = crate::env::finish(&cfg, pool, &args, 4, false).unwrap();
+        let split = ops.split().unwrap();
+        let [first, _] = split.reset(&ResetSeed::Keep, true).unwrap();
+        let owned = first.owned.unwrap();
+        assert_eq!(owned.slot_generations, [0u8; 16]);
+        let mut delivered = 0;
+        let mut respawned = false;
+        for _ in 0..10 {
+            split
+                .send(0, crate::env::discrete(&[0, 2, 0, 2]), delivered)
+                .unwrap();
+            let out = loop {
+                match split.try_recv(true, delivered).unwrap() {
+                    Polled::Half(out) => break out,
+                    Polled::Running(h) => {
+                        let _ = split
+                            .waiter()
+                            .wait_half(h, core::time::Duration::from_millis(50));
+                    }
+                    Polled::Busy => panic!("no other thread receives"),
+                }
+            };
+            delivered = out.seq;
+            let owned = out.owned.unwrap();
+            assert_eq!(owned.slot_generations.len(), 16);
+            // Half 0's first instance, slot 1: bytes 4..8.
+            if owned.slot_generations.get(4..8) == Some(&[1, 0, 0, 0][..]) {
+                assert_eq!(owned.slot_generations.get(0..4), Some(&[0u8; 4][..]));
+                respawned = true;
+                break;
+            }
+        }
+        assert!(respawned, "half 0's agent 1 never respawned");
+        split.close();
     }
 
     /// The generation a delivery carries is the one under the mutex: a send

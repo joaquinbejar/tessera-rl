@@ -472,6 +472,45 @@ fn test_pool_initial_agents_starts_the_rest_empty_until_spawned() {
     assert_eq!(out.alive(), [Bool8::TRUE, Bool8::FALSE]);
 }
 
+/// ADR-0013 identity: a spawn into a slot that died gives its new occupant
+/// the next generation; the other slot keeps generation 0.
+#[test]
+fn test_pool_respawn_into_a_dead_slot_increments_its_generation() {
+    let cfg = CountConfig {
+        kill_at: 1,
+        respawn: true,
+        length: 20,
+        ..CountConfig::default()
+    };
+    let mut p = spawn_pool(cfg);
+    let out = p.reset_all(Reseed::Keep).unwrap();
+    assert_eq!(out.generations(), [0, 0]);
+    // Agent 1 dies once its counter passes `kill_at`, then respawns on
+    // the next step.
+    let mut died_at = None;
+    let mut respawned = false;
+    for step in 0..10 {
+        let out = p.step(actions(&[0, 2])).unwrap();
+        match died_at {
+            None if out.alive() == [Bool8::TRUE, Bool8::FALSE] => {
+                assert_eq!(out.generations(), [0, 0]);
+                died_at = Some(step);
+            }
+            None => assert_eq!(out.generations(), [0, 0]),
+            Some(_) => {
+                assert_eq!(out.alive(), [Bool8::TRUE, Bool8::TRUE]);
+                assert_eq!(out.generations(), [0, 1]);
+                respawned = true;
+                break;
+            }
+        }
+    }
+    assert!(
+        died_at.is_some() && respawned,
+        "agent 1 never died and respawned"
+    );
+}
+
 #[test]
 fn test_pool_terminal_step_at_the_limit_is_terminated_and_truncated() {
     // The counter terminates after 3 steps; the step limit is also 3.
