@@ -14,6 +14,9 @@ fmt-check:
 
 clippy:
 	cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+	# The engine alone with default features (no host): the workspace run
+	# above unifies the host feature into it (tests/host-glue).
+	cargo clippy -p tessera-rl-engine --all-targets --locked -- -D warnings
 
 test:
 	cargo test --workspace --all-features --locked

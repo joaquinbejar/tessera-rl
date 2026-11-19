@@ -81,6 +81,8 @@ jobs:
       - run: cargo test --workspace --locked
       # tests/host-glue enables the engine's host feature, so workspace
       # feature unification builds the engine with it in every run above.
+      - name: Engine alone, default features, clippy (no host)
+        run: cargo clippy -p tessera-rl-engine --all-targets --locked -- -D warnings
       - name: Engine alone, default features (the shipped configuration, no host)
         run: cargo test -p tessera-rl-engine --locked
       # The downstream consumer alone: no workspace feature unification can
