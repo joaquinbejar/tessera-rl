@@ -45,6 +45,7 @@ ALLOWED = {
     "PyBytes_AsString", "PyBytes_Size",
     "PyType_GenericAlloc", "PyType_GetSlot",
     "PyCapsule_New", "PyCapsule_IsValid", "PyCapsule_GetPointer",
+    "PyType_Check", "PyType_IsSubtype", "PyErr_ExceptionMatches",
 }
 
 # Functions that can run Python code: callouts only (GC-tracked
@@ -60,14 +61,14 @@ CALLOUT_ONLY = {
     "PyUnicode_AsUTF8AndSize", "PyObject_IsTrue", "PyObject_GetIter", "PyIter_Next",
     "PyObject_GetItem", "PyObject_GetAttr", "PyObject_Str", "PyObject_Repr",
     "PyObject_Call", "PyObject_CallObject", "PyObject_CallNoArgs", "PyObject_Vectorcall",
-    "PyErr_CheckSignals",
+    "PyErr_CheckSignals", "PyImport_ImportModule", "PyObject_GetAttrString",
 }
 
 # Callouts that return a new GC-tracked object: it must be owned as a
 # container (`Mine::container`), whose decref is a callout.
 GC_ALLOCATORS = {
     "c_list_new", "c_tuple_new", "c_dict_new", "c_type_from_spec", "c_module_create",
-    "c_err_new_exception", "c_object_call",
+    "c_err_new_exception", "c_object_call", "c_import_module", "c_get_attr_string",
     # `str()` may return a GC-tracked `str` subclass with a `__del__`.
     "c_object_str",
 }

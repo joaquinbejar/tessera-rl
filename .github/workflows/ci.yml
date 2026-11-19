@@ -85,6 +85,10 @@ jobs:
         run: cargo clippy -p tessera-rl-engine --all-targets --locked -- -D warnings
       - name: Engine alone, default features (the shipped configuration, no host)
         run: cargo test -p tessera-rl-engine --locked
+      # tests/host-wheel enables tessera-rl-pyffi's host feature, so workspace
+      # feature unification builds pyffi with it in every run above.
+      - name: pyffi alone, default features (no host)
+        run: cargo test -p tessera-rl-pyffi --features pyo3/extension-module --locked
       # The downstream consumer alone: no workspace feature unification can
       # supply what the facade does not forward.
       - run: cargo test -p tessera-rl-downstream-test --locked
@@ -315,6 +319,11 @@ jobs:
       - run: make py-test-wheels
       # The JAX handles (marker `jax`, SPEC 15.2) at the pinned jax and jaxlib.
       - run: make py-test-jax
+      # Host protocol 1 (#272 step 4): builds the test host wheel of
+      # tests/host-wheel and runs its tests (the factory, the two config
+      # front ends, the exception classes).
+      - name: Host protocol 1 test wheel (make py-test-host)
+        run: make py-test-host
 
   # The Python ONNX evaluator (ADR-0057) with the extension's `onnx` feature,
   # against the library fetched by its sha256 (scripts/fetch_onnxruntime.py;

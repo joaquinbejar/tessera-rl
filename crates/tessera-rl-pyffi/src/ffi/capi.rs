@@ -258,13 +258,16 @@ impl Drop for Mine<'_> {
 
 // -- exceptions -----------------------------------------------------------------
 
-/// An exception class: a built-in one, or one of this crate's
-/// ([`crate::errors`]). Made only here, so it is always a live type object.
+/// An exception class: a built-in one, or one of [`crate::errors`]'
+/// (created by `register`, or bound by `bind` after checking that it is a
+/// `BaseException` subclass). Made only here, so it is always a live
+/// exception type object.
 #[derive(Clone, Copy)]
 pub struct Exc(*mut ffi::PyObject);
 
 impl Exc {
-    /// A class this crate created and keeps alive for the process.
+    /// A class [`crate::errors`] created, or bound after checking it with
+    /// [`is_exception_class`], and keeps alive for the process.
     pub(crate) const fn from_type(ty: *mut ffi::PyObject) -> Self {
         Self(ty)
     }
@@ -326,6 +329,70 @@ pub(crate) fn new_exception<'py>(
     Mine::container(unsafe {
         thunks::c_err_new_exception(name.as_ptr(), doc.as_ptr(), base, ptr::null_mut())
     })
+}
+
+/// Whether `r` is a class deriving from `BaseException` (direct: a flag
+/// read and an MRO walk, no Python code).
+#[cfg(feature = "host")]
+#[must_use]
+pub(crate) fn is_exception_class(r: Ref<'_>) -> bool {
+    // SAFETY: a live object; `PyType_Check` reads its type's flags.
+    if unsafe { ffi::PyType_Check(r.as_ptr()) } == 0 {
+        return false;
+    }
+    // SAFETY: reading an interpreter global.
+    let base = unsafe { ffi::PyExc_BaseException };
+    // SAFETY: two live type objects (`r` checked above); the subtype check
+    // walks the MRO without running Python code.
+    unsafe {
+        ffi::PyType_IsSubtype(
+            r.as_ptr().cast::<ffi::PyTypeObject>(),
+            base.cast::<ffi::PyTypeObject>(),
+        ) != 0
+    }
+}
+
+/// Whether the pending exception is an `AttributeError` (direct: a class
+/// comparison that runs no Python code). False with none pending.
+#[cfg(feature = "host")]
+#[must_use]
+pub(crate) fn pending_is_attribute_error(_g: Gil<'_>) -> bool {
+    // SAFETY: reading an interpreter global.
+    let attribute_error = unsafe { ffi::PyExc_AttributeError };
+    // SAFETY: attached; a class comparison that runs no Python code.
+    unsafe { ffi::PyErr_ExceptionMatches(attribute_error) != 0 }
+}
+
+/// Whether the pending exception is a `TypeError` or an `OverflowError`:
+/// what a conversion of an exact built-in value raises for a wrong type or
+/// range (direct: class comparisons that run no Python code). False with
+/// none pending.
+#[cfg(feature = "host")]
+#[must_use]
+pub(crate) fn pending_is_conversion_error(_g: Gil<'_>) -> bool {
+    // SAFETY: reading an interpreter global.
+    let type_error = unsafe { ffi::PyExc_TypeError };
+    // SAFETY: reading an interpreter global.
+    let overflow = unsafe { ffi::PyExc_OverflowError };
+    // SAFETY: attached; a class comparison that runs no Python code.
+    let is_type = unsafe { ffi::PyErr_ExceptionMatches(type_error) } != 0;
+    // SAFETY: as above.
+    is_type || unsafe { ffi::PyErr_ExceptionMatches(overflow) } != 0
+}
+
+/// Imports the module `name` (callout: runs the import system).
+#[cfg(feature = "host")]
+pub(crate) fn import_module<'py>(_g: Gil<'py>, name: &CStr) -> CResult<Mine<'py>> {
+    // SAFETY: attached; a C string.
+    Mine::container(unsafe { thunks::c_import_module(name.as_ptr()) })
+}
+
+/// `getattr(obj, name)` (callout: can run `__getattr__`). The result is
+/// owned as a container: its decref can run finalizers.
+#[cfg(feature = "host")]
+pub(crate) fn get_attr<'py>(_g: Gil<'py>, obj: Ref<'_>, name: &CStr) -> CResult<Mine<'py>> {
+    // SAFETY: attached; a live object and a C string.
+    Mine::container(unsafe { thunks::c_get_attr_string(obj.as_ptr(), name.as_ptr()) })
 }
 
 /// Warns with `category` (callout: runs filters and hooks).
@@ -785,6 +852,53 @@ pub fn tuple_items<'a>(g: Gil<'_>, t: Ref<'a>, what: &str) -> CResult<Vec<Ref<'a
 /// Whether `r` is exactly of `ty`, one of our heap types.
 pub(crate) fn is_instance_of(r: Ref<'_>, ty: *mut ffi::PyObject) -> bool {
     r.is_exact(ty.cast())
+}
+
+/// The exact built-in type of a value, for decoding (no exception and no
+/// Python code either way): subclasses are [`Kind::Other`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Kind {
+    /// `True` or `False`.
+    Bool,
+    /// An exact `int` (not a `bool`).
+    Int,
+    /// An exact `float`.
+    Float,
+    /// An exact `str`.
+    Str,
+    /// An exact `dict`.
+    Dict,
+    /// `None`.
+    None,
+    /// Anything else.
+    Other,
+}
+
+/// The exact kind of `r`.
+#[must_use]
+pub fn kind(r: Ref<'_>) -> Kind {
+    let ptr = r.as_ptr();
+    // SAFETY: the address of the `True` singleton; nothing is read.
+    let yes = unsafe { ffi::Py_True() };
+    // SAFETY: the address of the `False` singleton.
+    let no = unsafe { ffi::Py_False() };
+    // SAFETY: the address of the `None` singleton.
+    let none = unsafe { ffi::Py_None() };
+    if ptr == yes || ptr == no {
+        Kind::Bool
+    } else if ptr == none {
+        Kind::None
+    } else if r.is_exact(&raw mut ffi::PyLong_Type) {
+        Kind::Int
+    } else if r.is_exact(&raw mut ffi::PyFloat_Type) {
+        Kind::Float
+    } else if r.is_exact(&raw mut ffi::PyUnicode_Type) {
+        Kind::Str
+    } else if r.is_exact(&raw mut ffi::PyDict_Type) {
+        Kind::Dict
+    } else {
+        Kind::Other
+    }
 }
 
 /// Whether `r` is an exact `list` (no exception either way).

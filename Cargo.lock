@@ -1135,6 +1135,7 @@ version = "0.2.0"
 dependencies = [
  "inventory",
  "pyo3",
+ "tessera-rl-core",
  "tessera-rl-engine",
  "tessera-rl-num",
 ]
@@ -1200,6 +1201,18 @@ dependencies = [
  "tessera-rl-core",
  "tessera-rl-engine",
  "tessera-rl-num",
+ "tessera-rl-test-host-env",
+]
+
+[[package]]
+name = "tessera-rl-test-host-wheel"
+version = "0.2.0"
+dependencies = [
+ "pyo3",
+ "tessera-rl-core",
+ "tessera-rl-macros",
+ "tessera-rl-num",
+ "tessera-rl-pyffi",
  "tessera-rl-test-host-env",
 ]
 

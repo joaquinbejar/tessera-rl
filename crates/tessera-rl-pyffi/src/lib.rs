@@ -53,9 +53,14 @@
 pub mod ffi;
 
 pub mod errors;
+/// Host protocol 1 (feature `host`).
+#[cfg(feature = "host")]
+pub mod host;
 
 /// Items the exported macros name. Not public API.
 #[doc(hidden)]
 pub mod __private {
     pub use inventory;
+    #[cfg(feature = "host")]
+    pub use tessera_rl_core::HostEnvironment;
 }
