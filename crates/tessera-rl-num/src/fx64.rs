@@ -106,4 +106,38 @@ mod tests {
         // MAX has 63 significant bits: rounds to nearest, 2^31.
         assert_eq!(Fx64::MAX.to_f64(), 2_147_483_648.0);
     }
+
+    #[test]
+    fn test_fx64_from_decimal_bounds_and_exactness() {
+        use crate::DecimalError;
+        assert_eq!(Fx64::from_decimal("-2147483648"), Ok(Fx64::MIN));
+        assert_eq!(
+            Fx64::from_decimal("2147483647.99999999976716935634613037109375"),
+            Ok(Fx64::MAX)
+        );
+        assert_eq!(
+            Fx64::from_decimal("0.00000000023283064365386962890625"),
+            Ok(Fx64::EPSILON)
+        );
+        assert_eq!(
+            Fx64::from_decimal("-0.00000000023283064365386962890625"),
+            Ok(Fx64::from_raw(-1))
+        );
+        assert_eq!(
+            Fx64::from_decimal("1.5"),
+            Fx64::checked_from_f64(1.5).ok_or(DecimalError::Syntax)
+        );
+        assert_eq!(Fx64::from_decimal("-0"), Ok(Fx64::ZERO));
+        assert_eq!(Fx64::from_decimal("0.1"), Err(DecimalError::Inexact));
+        assert_eq!(Fx64::from_decimal("abc"), Err(DecimalError::Syntax));
+        // One step past each bound.
+        assert_eq!(
+            Fx64::from_decimal("-2147483648.00000000023283064365386962890625"),
+            Err(DecimalError::OutOfRange)
+        );
+        assert_eq!(
+            Fx64::from_decimal("2147483648"),
+            Err(DecimalError::OutOfRange)
+        );
+    }
 }

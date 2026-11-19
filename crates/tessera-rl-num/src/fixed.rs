@@ -61,6 +61,25 @@ macro_rules! fixed_point {
                 self.0
             }
 
+            /// Parses a decimal string exactly (ADR-0065 item 3): an
+            /// optional sign, digits, and an optional `.` with digits. No
+            /// floating point is involved.
+            ///
+            /// # Errors
+            ///
+            /// [`DecimalError::Syntax`](crate::decimal::DecimalError::Syntax)
+            /// for another grammar, then
+            /// [`OutOfRange`](crate::decimal::DecimalError::OutOfRange)
+            /// for a value beyond `[MIN, MAX]`, exact or not, then
+            /// [`Inexact`](crate::decimal::DecimalError::Inexact) for an
+            /// in-range value that is not a multiple of `2^-FRAC_BITS`.
+            pub fn from_decimal(s: &str) -> Result<Self, crate::decimal::DecimalError> {
+                let raw = crate::decimal::parse(s, $frac, <$raw>::BITS)?;
+                <$raw>::try_from(raw)
+                    .map(Self)
+                    .map_err(|_| crate::decimal::DecimalError::OutOfRange)
+            }
+
             /// Converts an integer, or returns `None` if it is out of range.
             #[must_use]
             #[inline]

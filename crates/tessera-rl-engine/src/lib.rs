@@ -54,7 +54,18 @@ pub use buffer::pipeline::{HalfToken, Waiter};
 pub use buffer::{OutputDtype, OutputField, OutputRegion, OutputStorage};
 pub use error::{EngineError, NanSite};
 #[cfg(feature = "host")]
-pub use host::{HostPool, MAX_HOST_AGENTS, MAX_HOST_HEADS};
+pub use host::{
+    DynHostPool, FactoryError, HostFactory, HostPool, MAX_HOST_AGENTS, MAX_HOST_HEADS, MakeOptions,
+    make_host,
+};
+
+/// Not public API: what `register_host_factory!` expands to names.
+#[cfg(feature = "host")]
+#[doc(hidden)]
+pub mod __private {
+    pub use inventory;
+    pub use tessera_rl_core::HostEnvironment;
+}
 pub use layout::{MAX_GROUPED_HEADS, MAX_LEAVES, MaskHeadShape};
 pub use masks::{IllegalActionPolicy, MaskProvider, Masked, NoMasks, PersistMask};
 #[cfg(not(loom))]

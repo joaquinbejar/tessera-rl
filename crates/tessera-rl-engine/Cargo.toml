@@ -22,12 +22,14 @@ debug-checks = []
 test-hooks = []
 # The host pool (ADR-0062): HostPool over HostEnvironment. Off by default;
 # the first-party Python wheel never enables it.
-host = []
+host = ["dep:inventory"]
 
 [dependencies]
 tessera-rl-core.workspace = true
 tessera-rl-num.workspace = true
 thiserror.workspace = true
+# The host factory list (ADR-0065 item 3), with the `host` feature.
+inventory = { workspace = true, optional = true }
 tracing.workspace = true
 
 [target.'cfg(not(loom))'.dependencies]

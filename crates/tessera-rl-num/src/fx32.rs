@@ -125,4 +125,29 @@ mod tests {
         assert_eq!(Fx32::checked_from_int(-32_769), None);
         assert_eq!(Fx32::checked_from_int(-7), Some(fx(-7.0)));
     }
+
+    #[test]
+    fn test_fx32_from_decimal_bounds_and_exactness() {
+        use crate::DecimalError;
+        assert_eq!(Fx32::from_decimal("-32768"), Ok(Fx32::MIN));
+        assert_eq!(Fx32::from_decimal("32767.9999847412109375"), Ok(Fx32::MAX));
+        assert_eq!(Fx32::from_decimal("0.0000152587890625"), Ok(Fx32::EPSILON));
+        assert_eq!(
+            Fx32::from_decimal("-0.0000152587890625"),
+            Ok(Fx32::from_raw(-1))
+        );
+        assert_eq!(
+            Fx32::from_decimal("1.5"),
+            Fx32::checked_from_f64(1.5).ok_or(DecimalError::Syntax)
+        );
+        assert_eq!(Fx32::from_decimal("-0"), Ok(Fx32::ZERO));
+        assert_eq!(Fx32::from_decimal("0.1"), Err(DecimalError::Inexact));
+        assert_eq!(Fx32::from_decimal("abc"), Err(DecimalError::Syntax));
+        // One step past each bound.
+        assert_eq!(
+            Fx32::from_decimal("-32768.0000152587890625"),
+            Err(DecimalError::OutOfRange)
+        );
+        assert_eq!(Fx32::from_decimal("32768"), Err(DecimalError::OutOfRange));
+    }
 }

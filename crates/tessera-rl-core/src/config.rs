@@ -16,6 +16,9 @@
 //!
 //! Floats are hashed by their bits, so `-0.0` and `0.0` give different
 //! hashes; NaN is rejected by the generated `validate`.
+//!
+//! Decoding a config from a front end's values (the host factory, ADR-0065
+//! item 3) is [`crate::config_decode`].
 
 use tessera_rl_num::{Fx32, Fx64};
 

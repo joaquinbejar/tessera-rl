@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
+# A host environment crate as an external author writes it (ADR-0062,
+# ADR-0065 item 3): it depends on core (and its derives) only, never on the
+# engine. Its factory is registered by tests/host-glue.
+
+[package]
+name = "tessera-rl-test-host-env"
+description = "Test-only host environment crate that depends on tessera-rl-core only"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+tessera-rl-core.workspace = true
+tessera-rl-macros.workspace = true
+
+[lints]
+workspace = true

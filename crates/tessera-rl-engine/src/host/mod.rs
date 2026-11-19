@@ -33,12 +33,26 @@
 //! pending. The pool is not poisoned, and [`HostPool::aborts`] counts the
 //! aborts applied.
 //!
+//! Make-by-id (ADR-0065 item 3): code that knows its environment's type
+//! builds `HostPool<E, A>` directly. Code that has only an id calls
+//! [`make_host`] with a `ConfigSource`, and gets a [`DynHostPool`]: the same
+//! pool behind a trait object, at one virtual call per method call. An
+//! environment's factory is registered with `register_host_factory!` in a
+//! crate that depends on the engine; the environment's own crate depends on
+//! core only (ADR-0062).
+//!
 //! Experimental until 1.0 (ADR-0062 item 9).
 
+mod dyn_pool;
+mod factory;
 mod kernels;
+
+pub use dyn_pool::DynHostPool;
+pub use factory::{FactoryError, HostFactory, MakeOptions, make_host};
 
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
+use tessera_rl_core::envs::HostRegistration;
 use tessera_rl_core::{
     ActionReject, Bool8, EnvConfig, HostEnvironment, HostError, RecordLayout, StateInit,
     TurnStructure,
@@ -305,6 +319,15 @@ impl<E: HostEnvironment, const A: usize> HostPool<E, A> {
             crate::sys::Faults::default(),
         )?);
         Ok(self)
+    }
+
+    /// The environment's registration record, `HostRegistration::of::<E>()`
+    /// (ADR-0065 item 3): its id, version, agent count, turns and
+    /// information.
+    #[must_use]
+    pub const fn registration(&self) -> &'static HostRegistration {
+        // An inline const per monomorphisation: promoted to `'static`.
+        const { &HostRegistration::of::<E>() }
     }
 
     /// Number of worker threads; 0 in Inline mode.

@@ -1044,6 +1044,7 @@ dependencies = [
  "core_affinity",
  "criterion",
  "gungraun",
+ "inventory",
  "libc",
  "loom",
  "proptest",
@@ -1182,6 +1183,24 @@ dependencies = [
  "tessera-rl-classic",
  "tessera-rl-core",
  "tessera-rl-num",
+]
+
+[[package]]
+name = "tessera-rl-test-host-env"
+version = "0.2.0"
+dependencies = [
+ "tessera-rl-core",
+ "tessera-rl-macros",
+]
+
+[[package]]
+name = "tessera-rl-test-host-glue"
+version = "0.2.0"
+dependencies = [
+ "tessera-rl-core",
+ "tessera-rl-engine",
+ "tessera-rl-num",
+ "tessera-rl-test-host-env",
 ]
 
 [[package]]
