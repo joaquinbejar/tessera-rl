@@ -6,7 +6,10 @@
 //!
 //! - [`config`](crate::host::config): Python keyword arguments as a `ConfigSource`, decoded by
 //!   the environment's `ConfigDecode` (one decoder for both front ends);
-//! - [`factory`](crate::host::factory): `make` and the module of `export_host_env!`.
+//! - [`factory`](crate::host::factory): `make` and the module of `export_host_env!`;
+//! - [`object`](crate::host::object): the host object (SPEC 14.4.2).
 
 pub mod config;
+mod describe;
 pub mod factory;
+pub mod object;
