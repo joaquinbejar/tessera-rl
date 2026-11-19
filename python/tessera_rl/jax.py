@@ -52,7 +52,7 @@ from typing import NamedTuple
 
 import numpy as np
 
-from tessera_rl import _env, _native
+from tessera_rl import _env, _host, _native
 
 try:
     import jax
@@ -319,6 +319,7 @@ def make(env_id: str, num_envs: int = 1, seed: int = 0, **kwargs) -> Env:
     Takes the pool and config options of ``tessera_rl.make``, except
     ``outputs`` (JAX always receives copies) and split-phase modes.
     """
+    _host.refuse(env_id, "tessera_rl.jax")
     if "outputs" in kwargs:
         raise _native.ArgumentError("tessera_rl.jax always copies outputs; `outputs` is not an option")
     mode = kwargs.pop("mode", None)

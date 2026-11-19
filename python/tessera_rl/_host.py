@@ -198,6 +198,44 @@ def make(env_id: str, known_first_party, num_envs: int, seed: int, outputs: str,
     return HostEnv(_call_factory(factory, num_envs, seed, kwargs), outputs)
 
 
+def native_for(env_id: str, num_envs: int, seed: int, outputs: str, kwargs: dict) -> _HostNative:
+    """A host object of ``env_id`` behind ``_native.Env``'s interface, for
+    the Gymnasium and PettingZoo adapters. ``max_episode_steps=0`` (the
+    adapters' "no limit") is ``None`` for the factory."""
+    kwargs = dict(kwargs)
+    for split in ("mode", "batch_size", "gather"):
+        if kwargs.pop(split, None) not in (None, "sync"):
+            raise _native.CapabilityError(f"host environments run in sync mode only ({split})")
+    if kwargs.get("max_episode_steps") == 0:
+        kwargs["max_episode_steps"] = None
+    _check_outputs(outputs)
+    factory = _factory(env_id, ())
+    return _HostNative(_call_factory(factory, num_envs, seed, kwargs), outputs)
+
+
+def refuse(env_id: str, module: str) -> None:
+    """The guard of the adapters that take no host environment (PufferLib,
+    JAX): ``CapabilityError`` for a host id, before anything is built."""
+    if is_host_id(env_id):
+        raise _native.CapabilityError(f"{env_id} is a host environment; {module} does not support them")
+
+
+def host_infos(out: dict, owned: bool, n: int) -> dict:
+    """The Gymnasium infos of a host call (SPEC 14.2 as ADR-0065 amends
+    it): ``aborted``, ``abort_code`` and ``pending_reset``, each with its
+    ``_``-prefixed mask, all true."""
+    def field(key, dtype):
+        if owned:
+            return np.frombuffer(out[key], dtype=dtype).copy()
+        return np.array(out[key])
+
+    info = {}
+    for key, dtype in (("aborted", np.bool_), ("abort_code", "<u4"), ("pending_reset", np.bool_)):
+        info[key] = field(key, dtype)
+        info["_" + key] = np.ones(n, dtype=np.bool_)
+    return info
+
+
 def _call_factory(factory, num_envs, seed, kwargs):
     """The factory with exact built-in values: ints, strs, and the config
     as given (the host module refuses what it cannot take)."""
