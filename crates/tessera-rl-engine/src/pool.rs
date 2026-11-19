@@ -193,10 +193,18 @@ impl<E: Environment, M: MaskProvider<E>> EnvPool<E, M> {
         self.forget_fast_facts();
     }
 
+    /// Whether the next step may take the validation fast path: the facts
+    /// hold, and every counter is below `u32::MAX` (the bound is an upper
+    /// bound on all of them), so none of the slow path's `CounterExhausted`
+    /// checks, which fire at `u32::MAX` exactly, can fail.
+    fn fast_path_ready(&self) -> bool {
+        self.fast_clean && self.counter_bound.is_some_and(|b| b < u32::MAX)
+    }
+
     /// Test-only: whether the next step may take the validation fast path.
     #[cfg(test)]
     pub(crate) fn fast_path_armed(&self) -> bool {
-        self.fast_clean && self.counter_bound.is_some_and(|b| b < u32::MAX - 2)
+        self.fast_path_ready()
     }
 
     /// The pool-wide chunk and the discrete and continuous heads per agent,
@@ -893,7 +901,7 @@ where
         // slot is required, so one range pass over the flat buffers and one
         // copy replace them. A bad value reruns the slow path, whose error is
         // then reported exactly as before.
-        let armed = self.fast_clean && self.counter_bound.is_some_and(|b| b < u32::MAX - 2);
+        let armed = self.fast_path_ready();
         let fast = armed
             && check_and_copy_actions_fast(
                 &self.actions,
@@ -967,7 +975,7 @@ where
             let size = chunk_size(options);
             let panicked = par_chunks(&mut rt.gang, all, size, heads, |chunk, _| {
                 step_chunk::<E, M>(&ctx, chunk);
-                if !steps_cleanly(chunk.headers) {
+                if !may_step_cleanly::<E>() || !steps_cleanly(chunk.headers) {
                     clean.store(false, Ordering::Relaxed);
                 }
             })?;
@@ -979,7 +987,7 @@ where
             let mut chunk = all;
             run_kernels(poisoned, || {
                 step_chunk::<E, M>(&ctx, &mut chunk);
-                if !steps_cleanly(chunk.headers) {
+                if !may_step_cleanly::<E>() || !steps_cleanly(chunk.headers) {
                     clean.store(false, Ordering::Relaxed);
                 }
             })?;
@@ -1151,6 +1159,13 @@ fn select_native(choice: WaitBackend) -> Option<crate::sys::Native> {
 /// Instances per chunk.
 pub(crate) fn chunk_size(options: &PoolOptions) -> usize {
     usize::try_from(options.chunk_size.get()).unwrap_or(usize::MAX)
+}
+
+/// Whether a step of `E` can ever leave every slot acting: not when the
+/// turns are `Sequential` with more than one slot (one acts per step), so
+/// such pools skip the header walk of [`steps_cleanly`] (E1 review N4).
+const fn may_step_cleanly<E: Environment>() -> bool {
+    !(matches!(E::TURNS, TurnStructure::Sequential) && E::MAX_AGENTS > 1)
 }
 
 /// Whether every instance of `headers` will step next time: none pending
