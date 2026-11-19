@@ -13,7 +13,9 @@
 //! differ; one armed on a stale `counter_bound` skips the counter checks, so
 //! a step the slow path refuses with `CounterExhausted` goes through.
 
-use core::num::{NonZeroU32, NonZeroUsize};
+use core::num::NonZeroU32;
+#[cfg(not(loom))]
+use core::num::NonZeroUsize;
 
 use tessera_rl_core::io::{Actions, ObsWriter};
 use tessera_rl_core::space::Space;
@@ -25,8 +27,10 @@ use tessera_rl_macros::{EnvConfig, EnvState, Observation};
 use tessera_rl_num::identity::{RngIdentity, Seed};
 use tessera_rl_num::rng::{ObsRng, StepRng};
 
+#[cfg(not(loom))]
+use crate::AsyncOptions;
 use crate::record::{DecodedRecord, Record};
-use crate::{ActionInput, AsyncOptions, AutoReset, EnvPool, PoolOptions, Reseed};
+use crate::{ActionInput, AutoReset, EnvPool, PoolOptions, Reseed};
 
 const N: usize = 4;
 const N_U32: u32 = 4;
@@ -364,8 +368,9 @@ fn test_fast_facts_episode_counter_near_max_is_refused_alike() {
     );
 }
 
-/// Converts `pool` to Async mode, steps every instance once with `event` on
+/// Converts `pool` to Async mode (not built under loom), steps every instance once with `event` on
 /// instance 0, and converts it back.
+#[cfg(not(loom))]
 fn async_round_trip(pool: EnvPool<FoldEnv>, event: i32) -> EnvPool<FoldEnv> {
     let mut a = pool
         .async_mode(AsyncOptions::new(
@@ -388,6 +393,7 @@ fn async_round_trip(pool: EnvPool<FoldEnv>, event: i32) -> EnvPool<FoldEnv> {
     a.into_pool().map_err(|_| ()).unwrap()
 }
 
+#[cfg(not(loom))]
 #[test]
 fn test_fast_facts_split_phase_round_trip_forgets_facts() {
     // A clean pool goes through Async mode, where instance 0's second slot
