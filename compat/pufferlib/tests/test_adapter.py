@@ -623,3 +623,12 @@ def test_invalid_workers_raise_in_the_multiprocessing_parent(start):
 def test_other_options_are_refused_at_construction(kw):
     with pytest.raises((t.ArgumentError, t.ConfigError)):
         TesseraPufferEnv(TAG, num_envs=8, **kw)
+
+
+def test_make_puffer_refuses_a_host_id(monkeypatch):
+    """tessera_rl.puffer takes no host environment (SPEC 14.4.6)."""
+    from tessera_rl import _host
+
+    monkeypatch.setattr(_host, "is_host_id", lambda env_id: env_id == "fake/Counter-v1")
+    with pytest.raises(t.CapabilityError, match="tessera_rl.puffer does not support them"):
+        make_puffer("fake/Counter-v1")
