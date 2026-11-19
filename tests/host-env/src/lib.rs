@@ -9,6 +9,7 @@ use tessera_rl_core::io::{Actions, ObsWriter};
 use tessera_rl_core::space::{BoxBounds, DType, Space};
 use tessera_rl_core::{
     AbortCode, AgentSlot, EpisodeEnd, HostEnvironment, HostError, HostOut, HostSeed, SpaceError,
+    TurnStructure,
 };
 use tessera_rl_macros::EnvConfig;
 
@@ -44,6 +45,9 @@ pub struct CounterConfig {
     /// reentrancy tests); 0 none.
     #[config(default = 0, range = 0..=10_000)]
     pub sleep_ms: u32,
+    /// Test knob: an agent slot that stays alive but never acts; -1 none.
+    #[config(default = -1)]
+    pub idle_slot: i64,
 }
 
 /// Two agents counting steps.
@@ -69,6 +73,9 @@ impl HostEnvironment for Counter {
     const ENV_ID: &'static str = COUNTER_ID;
     const ENV_VERSION: u32 = 1;
     const MAX_AGENTS: usize = 2;
+    // Mixed, so `acting` is asked (the idle slot knob); every slot acts by
+    // default, as in Simultaneous.
+    const TURNS: TurnStructure = TurnStructure::Mixed;
     type Config = CounterConfig;
 
     fn new(cfg: &CounterConfig) -> Result<Self, HostError> {
@@ -134,6 +141,10 @@ impl HostEnvironment for Counter {
         {
             out.abort(code);
         }
+    }
+
+    fn acting(&self, agent: AgentSlot) -> bool {
+        i64::try_from(agent.index()).ok() != Some(self.cfg.idle_slot)
     }
 
     fn observe(&self, _: AgentSlot, obs: &mut ObsWriter<'_, '_, ()>) {

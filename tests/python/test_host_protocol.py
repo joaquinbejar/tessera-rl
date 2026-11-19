@@ -104,7 +104,7 @@ def test_host_layout_has_every_key(mode):
     assert l["action_nvec"] == [3]
     assert l["mask_len"] == 0 and l["mask_heads"] == []
     assert l["entity_group_heads"] == 0
-    assert l["turns"] == "simultaneous"
+    assert l["turns"] == "mixed"
     assert l["outputs"] == "borrowed"
     assert l["leaves"] == [("", "int32", [2])]
     assert l["env_id"] == "test/FactoryCounter-v1"
@@ -336,3 +336,52 @@ def test_host_fp_reject_policy_raises_under_non_default_controls():
     # The policy is the host module's: tessera_rl's own is unchanged.
     assert r["first_party_policy"] == "canonicalize"
     assert r["after_canonicalize"] == "ok"
+
+
+def test_host_views_are_read_only_through_every_export():
+    env = make()
+    out = env.reset()
+    for view in [*out["observations"], out["rewards"], out["alive"], out["abort_code"]]:
+        assert not np.asarray(view).flags.writeable
+        assert memoryview(view).readonly
+        assert not np.from_dlpack(view).flags.writeable
+        with pytest.raises(ValueError):
+            np.asarray(view)[...] = 0
+    env.close()
+
+
+def test_host_reset_int_seed_is_the_list_of_consecutive_seeds():
+    # ADR-0007: reset(s) gives instance i the seed s + i.
+    env = make()
+    by_int = arr(env.reset(500)["observations"][0]).copy()
+    by_list = arr(env.reset([500, 501, 502, 503])["observations"][0]).copy()
+    assert np.array_equal(by_int, by_list)
+    assert by_int[:, 0, 1].tolist() == [500, 501, 502, 503]
+    # None keeps the seeds of the last reset, here 900 + i.
+    env.reset(900)
+    kept = arr(env.reset(None)["observations"][0]).copy()
+    assert kept[:, 0, 1].tolist() == [900, 901, 902, 903]
+    assert not np.array_equal(kept, by_int)
+    env.close()
+
+
+def test_host_alive_and_acting_are_separate_outputs():
+    # Slot 1 is alive but never acts (the counter's idle slot).
+    env = make(idle_slot=1)
+    out = env.reset()
+    assert arr(out["alive"]).tolist() == [[True, True]] * N
+    assert arr(out["acting"]).tolist() == [[True, False]] * N
+    out = env.step(actions())
+    assert arr(out["alive"]).tolist() == [[True, True]] * N
+    assert arr(out["acting"]).tolist() == [[True, False]] * N
+    env.close()
+
+
+@pytest.mark.parametrize("extra", [1, 2, 3])
+def test_host_step_refuses_trailing_bytes_after_a_full_action_set(extra):
+    env = make()
+    env.reset()
+    with pytest.raises(tessera_rl.ActionError):
+        env.step(actions() + b"\x00" * extra)
+    env.close()
+
