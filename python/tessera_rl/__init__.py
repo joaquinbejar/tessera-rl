@@ -58,9 +58,9 @@ from tessera_rl._native import (
     TesseraError,
     fp_non_canonical_entries,
     get_fp_policy,
-    set_fp_policy,
     version,
 )
+from tessera_rl._host import HostEnv, HostStep, set_fp_policy
 
 __all__ = [
     "ActionError",
@@ -75,6 +75,8 @@ __all__ = [
     "ExhaustedError",
     "FloatingPointEnvironmentError",
     "ForkError",
+    "HostEnv",
+    "HostStep",
     "OnnxError",
     "PersistError",
     "PendingResetError",
