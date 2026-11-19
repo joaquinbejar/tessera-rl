@@ -250,9 +250,18 @@ where
             .map_err(|e| engine(g, &e))?;
     }
     let pool: Box<dyn DynHostPool> = Box::new(pool);
+    let storage = match pool.outputs() {
+        Ok(out) => out.storage(),
+        Err(e) => {
+            let raised = engine(g, &e);
+            // Dropping a pool can block (host code): not under the GIL.
+            g.detach(move || drop(pool));
+            return Err(raised);
+        }
+    };
     // An allocation failure here drops the pool under the interpreter: the
     // object is not created, so there is no other place to drop it.
-    HOST_TYPE.instantiate(g, HostBody::new(pool))
+    HOST_TYPE.instantiate(g, HostBody::new(pool, storage))
 }
 
 /// The canonical form (ADR-0030) of `C` decoded from keyword arguments
