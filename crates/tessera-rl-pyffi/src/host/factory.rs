@@ -56,7 +56,8 @@ fn argument(g: Gil<'_>, message: String) -> capi::Raised {
 }
 
 /// A named keyword's conversion: a value of the wrong type or range (a
-/// `TypeError` or `OverflowError` from the conversion) is an
+/// `TypeError` or `OverflowError` from the conversion, or a
+/// `UnicodeEncodeError` for a `str` with a lone surrogate) is an
 /// `ArgumentError` naming it, as `tessera_rl.make` raises. Any other
 /// exception (none is expected: the conversions of exact built-in types
 /// run no Python code) propagates unchanged.

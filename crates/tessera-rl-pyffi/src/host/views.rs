@@ -180,7 +180,7 @@ fn set(l: &HostLayout) -> Option<Set> {
 static TYPE: TypeObject<HostView> = TypeObject::new(&SPEC);
 
 static SPEC: TypeSpec<HostView> = TypeSpec::new(
-    c"tessera_host.HostView",
+    c"_tessera_host.HostView",
     c"A borrowed, read-only view of one output of a host object (valid until its next call).",
     &METHODS,
 )

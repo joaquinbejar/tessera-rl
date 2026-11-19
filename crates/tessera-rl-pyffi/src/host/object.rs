@@ -322,7 +322,7 @@ static ATTRIBUTES: AttributeTable<HostBody> = AttributeTable::new(&[
 ]);
 
 static SPEC: TypeSpec<HostBody> = TypeSpec::new(
-    c"tessera_host.HostEnv",
+    c"_tessera_host.HostEnv",
     c"A host environment's pool (host protocol 1, SPEC 14.4).",
     &METHODS,
 )

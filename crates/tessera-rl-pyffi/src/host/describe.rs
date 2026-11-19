@@ -26,10 +26,21 @@ pub(super) const fn dtype_name(dtype: DType) -> &'static str {
 }
 
 /// `MAJOR.MINOR.PATCH` of this crate, the `tessera_rl` release it ships
-/// with: the lowest `tessera_rl` a host object built with it accepts.
+/// with: the lowest `tessera_rl` a host object built with it accepts. A
+/// pre-release or build suffix is dropped: the protocol's versions are
+/// plain `MAJOR.MINOR.PATCH` (SPEC 14.4.2).
 #[must_use]
 pub fn version_min() -> String {
-    env!("CARGO_PKG_VERSION").to_owned()
+    plain(env!("CARGO_PKG_VERSION"))
+}
+
+/// `version` without a pre-release or build suffix.
+fn plain(version: &str) -> String {
+    version
+        .split(['-', '+'])
+        .next()
+        .unwrap_or(version)
+        .to_owned()
 }
 
 /// The next minor release, the first `tessera_rl` a host object built
@@ -167,7 +178,7 @@ pub(super) fn layout<'py>(g: Gil<'py>, pool: &dyn DynHostPool) -> CResult<Mine<'
 
 #[cfg(test)]
 mod tests {
-    use super::{next_minor, version_below, version_min};
+    use super::{next_minor, plain, version_below, version_min};
 
     #[test]
     fn test_host_version_range_is_this_release_to_the_next_minor() {
@@ -175,7 +186,9 @@ mod tests {
         assert_eq!(next_minor("1.4.9"), "1.5.0");
         assert_eq!(next_minor("0.3.0-rc.1"), "0.4.0");
         assert_eq!(next_minor("garbage"), "garbage");
-        assert_eq!(version_min(), env!("CARGO_PKG_VERSION"));
+        assert_eq!(plain("0.3.0-rc.1+build.5"), "0.3.0");
+        assert_eq!(plain("0.2.0"), "0.2.0");
+        assert_eq!(version_min(), plain(env!("CARGO_PKG_VERSION")));
         assert_eq!(version_below(), next_minor(env!("CARGO_PKG_VERSION")));
     }
 }

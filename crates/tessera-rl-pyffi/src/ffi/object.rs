@@ -382,6 +382,9 @@ impl<T: Body> TypeSpec<T> {
     }
 }
 
+/// The most type slots `TypeObject::create` fills, plus the terminator.
+const SLOTS: usize = 7;
+
 /// A type built from a [`TypeSpec<T>`], kept in a `static`: created at
 /// module initialization, then used to make and recognize instances. The
 /// type object is a process-lifetime reference held here (the module keeps
@@ -428,14 +431,17 @@ impl<T: Body> TypeObject<T> {
         let methods = super::tables::slot_method_rows(self.spec.methods.rows.as_ptr().cast());
         let doc = slot_doc(self.spec.doc);
         // The slots in order, then the terminating slot: CPython reads up
-        // to the first `slot_end`, so none comes before the last filled one.
-        let mut slots = [slot_end(); 7];
+        // to the first `slot_end`. The last entry is the terminator and is
+        // never written; a slot that does not fit before it is an error.
+        let mut slots = [slot_end(); SLOTS];
         let mut filled = 0;
-        let mut push = |slot| {
-            if let Some(s) = slots.get_mut(filled) {
+        let mut overflow = false;
+        let mut push = |slot| match slots.get_mut(..SLOTS - 1).and_then(|s| s.get_mut(filled)) {
+            Some(s) => {
                 *s = slot;
                 filled += 1;
             }
+            None => overflow = true,
         };
         push(dealloc);
         push(methods);
@@ -447,8 +453,13 @@ impl<T: Body> TypeObject<T> {
             push(super::tables::slot_getbuffer(b.get));
             push(super::tables::slot_releasebuffer(b.release));
         }
-        // At most six slots: the seventh stays the terminator.
-        debug_assert!(filled < slots.len());
+        if overflow {
+            return Err(capi::raise(
+                g,
+                capi::runtime_error(),
+                &format!("{} has more type slots than fit", self.short_name()),
+            ));
+        }
         let mut spec = ffi::PyType_Spec {
             name: self.spec.name.as_ptr(),
             basicsize: c_int::try_from(core::mem::size_of::<Instance<T>>())

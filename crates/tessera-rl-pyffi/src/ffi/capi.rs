@@ -363,10 +363,11 @@ pub(crate) fn pending_is_attribute_error(_g: Gil<'_>) -> bool {
     unsafe { ffi::PyErr_ExceptionMatches(attribute_error) != 0 }
 }
 
-/// Whether the pending exception is a `TypeError` or an `OverflowError`:
-/// what a conversion of an exact built-in value raises for a wrong type or
-/// range (direct: class comparisons that run no Python code). False with
-/// none pending.
+/// Whether the pending exception is a `TypeError`, an `OverflowError` or
+/// a `UnicodeEncodeError`: what a conversion of an exact built-in value
+/// raises for a wrong type, a range, or a `str` with a lone surrogate
+/// (direct: class comparisons that run no Python code). False with none
+/// pending.
 #[cfg(feature = "host")]
 #[must_use]
 pub(crate) fn pending_is_conversion_error(_g: Gil<'_>) -> bool {
@@ -376,8 +377,12 @@ pub(crate) fn pending_is_conversion_error(_g: Gil<'_>) -> bool {
     let overflow = unsafe { ffi::PyExc_OverflowError };
     // SAFETY: attached; a class comparison that runs no Python code.
     let is_type = unsafe { ffi::PyErr_ExceptionMatches(type_error) } != 0;
+    // SAFETY: reading an interpreter global.
+    let encode = unsafe { ffi::PyExc_UnicodeEncodeError };
     // SAFETY: as above.
-    is_type || unsafe { ffi::PyErr_ExceptionMatches(overflow) } != 0
+    let is_overflow = unsafe { ffi::PyErr_ExceptionMatches(overflow) } != 0;
+    // SAFETY: as above.
+    is_type || is_overflow || unsafe { ffi::PyErr_ExceptionMatches(encode) } != 0
 }
 
 /// Imports the module `name` (callout: runs the import system).
