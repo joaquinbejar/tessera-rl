@@ -363,6 +363,23 @@ pub(crate) fn pending_is_attribute_error(_g: Gil<'_>) -> bool {
     unsafe { ffi::PyErr_ExceptionMatches(attribute_error) != 0 }
 }
 
+/// Whether the pending exception is a `TypeError` or an `OverflowError`:
+/// what a conversion of an exact built-in value raises for a wrong type or
+/// range (direct: class comparisons that run no Python code). False with
+/// none pending.
+#[cfg(feature = "host")]
+#[must_use]
+pub(crate) fn pending_is_conversion_error(_g: Gil<'_>) -> bool {
+    // SAFETY: reading an interpreter global.
+    let type_error = unsafe { ffi::PyExc_TypeError };
+    // SAFETY: reading an interpreter global.
+    let overflow = unsafe { ffi::PyExc_OverflowError };
+    // SAFETY: attached; a class comparison that runs no Python code.
+    let is_type = unsafe { ffi::PyErr_ExceptionMatches(type_error) } != 0;
+    // SAFETY: as above.
+    is_type || unsafe { ffi::PyErr_ExceptionMatches(overflow) } != 0
+}
+
 /// Imports the module `name` (callout: runs the import system).
 #[cfg(feature = "host")]
 pub(crate) fn import_module<'py>(_g: Gil<'py>, name: &CStr) -> CResult<Mine<'py>> {

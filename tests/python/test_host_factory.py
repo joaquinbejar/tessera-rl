@@ -210,8 +210,18 @@ def _stand_in(tmp_path, body):
     return subprocess.run([sys.executable, "-c", script], capture_output=True, text=True)
 
 
-def test_host_factory_bound_name_must_be_an_exception_class(tmp_path):
-    run = _stand_in(tmp_path, "ForkError = 3\n")
+@pytest.mark.parametrize(
+    "body",
+    [
+        "ForkError = 3\n",
+        # A class, but not an exception class: the subtype check.
+        "class ForkError:\n    pass\n",
+        # An exception, but an instance, not a class: the type check.
+        "ForkError = ValueError('x')\n",
+    ],
+)
+def test_host_factory_bound_name_must_be_an_exception_class(tmp_path, body):
+    run = _stand_in(tmp_path, body)
     assert run.returncode == 0, run.stderr
     assert "import-failed: ImportError tessera_rl.ForkError is not an exception class" in run.stdout, run.stdout
 

@@ -259,8 +259,12 @@ pub enum Refusal {
 }
 
 /// Decodes `C` from keyword arguments read by [`read`]: key names first,
-/// then values. An unknown key is reported before a refused value; a
-/// refused value before any other decoding error.
+/// then values. An unknown top-level key is reported before a refused
+/// value anywhere, and a refused value before any other decoding error.
+/// An unknown key inside a nested table is found only when the decoder
+/// reaches that table, so a refused value in an earlier field is reported
+/// first; it is named without its table's path (the decoder's error
+/// carries the key only).
 ///
 /// # Errors
 ///

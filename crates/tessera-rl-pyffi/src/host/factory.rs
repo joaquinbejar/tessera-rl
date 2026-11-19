@@ -101,13 +101,19 @@ fn argument(g: Gil<'_>, message: String) -> capi::Raised {
     errors::error(g, ErrorKind::Argument, message)
 }
 
-/// A named keyword's conversion: a value of the wrong type or range is an
-/// `ArgumentError` naming it, as `tessera_rl.make` raises (the conversions
-/// of exact built-in types run no Python code).
+/// A named keyword's conversion: a value of the wrong type or range (a
+/// `TypeError` or `OverflowError` from the conversion) is an
+/// `ArgumentError` naming it, as `tessera_rl.make` raises. Any other
+/// exception (none is expected: the conversions of exact built-in types
+/// run no Python code) propagates unchanged.
 fn option<T>(g: Gil<'_>, r: CResult<T>, name: &str, expected: &str) -> CResult<T> {
-    r.map_err(|_| {
-        capi::clear_pending(g);
-        argument(g, format!("make: {name} must be {expected}"))
+    r.map_err(|raised| {
+        if capi::pending_is_conversion_error(g) {
+            capi::clear_pending(g);
+            argument(g, format!("make: {name} must be {expected}"))
+        } else {
+            raised
+        }
     })
 }
 
@@ -283,9 +289,15 @@ where
         ));
     }
     if let Some(sync) = options.sync {
-        pool = pool.with_workers(sync).map_err(|e| engine(g, &e))?;
+        // Detached: starting workers can block, and on failure the pool is
+        // dropped inside `with_workers`, which can block too (host code).
+        pool = g
+            .detach(move || pool.with_workers(sync))
+            .map_err(|e| engine(g, &e))?;
     }
     let pool: Box<dyn DynHostPool> = Box::new(pool);
+    // An allocation failure here drops the pool under the interpreter: the
+    // object is not created, so there is no other place to drop it.
     HOST_TYPE.instantiate(
         g,
         HostBody {
