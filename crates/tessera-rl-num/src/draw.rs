@@ -9,6 +9,8 @@
 
 use core::num::{NonZeroU32, NonZeroU64};
 
+use crate::identity::{BranchSalt, Seed, StreamId};
+use crate::key::{derive_key, key_words};
 use crate::philox::{Counter, Key, philox4x32_10};
 
 const WORDS: u8 = 4;
@@ -28,10 +30,16 @@ pub struct Draws {
     exhausted: bool,
     block: Counter,
     next_word: u8,
+    /// The key's inputs while the key is not derived yet: a sequence built by
+    /// `new_deferred` derives its key on the first refill, so a sequence that
+    /// is never drawn from never pays for it. `None` once the key is set.
+    deferred: Option<(Seed, StreamId, BranchSalt)>,
 }
 
 impl Draws {
-    /// Starts a draw sequence at `draw_index = 0`.
+    /// Starts a draw sequence at `draw_index = 0` with an explicit key.
+    /// Test-only: the engine's RNGs use `new_deferred`.
+    #[cfg(test)]
     #[must_use]
     #[inline]
     pub(crate) const fn new(
@@ -47,6 +55,31 @@ impl Draws {
             exhausted: false,
             block: [0; 4],
             next_word: WORDS,
+            deferred: None,
+        }
+    }
+
+    /// Starts a draw sequence at `draw_index = 0` whose key is derived from
+    /// `(seed, stream, branch_salt)` on the first refill, not here. The
+    /// words drawn are identical to `new(key_words(derive_key(..)), ..)`.
+    #[must_use]
+    #[inline]
+    pub(crate) const fn new_deferred(
+        seed: Seed,
+        stream: StreamId,
+        branch_salt: BranchSalt,
+        logical_id: u32,
+        episode_index: u32,
+        step_index: u32,
+    ) -> Self {
+        Self {
+            key: [0; 2],
+            prefix: [logical_id, episode_index, step_index],
+            draw_index: 0,
+            exhausted: false,
+            block: [0; 4],
+            next_word: WORDS,
+            deferred: Some((seed, stream, branch_salt)),
         }
     }
 
@@ -59,9 +92,19 @@ impl Draws {
         self.exhausted
     }
 
+    /// Test-only: moves the counter to `draw_index`, so a test can reach the
+    /// end of the 2^32-call range without making the calls.
+    #[cfg(test)]
+    pub(crate) fn set_draw_index(&mut self, draw_index: u32) {
+        self.draw_index = draw_index;
+    }
+
     #[inline]
     fn refill(&mut self) {
         debug_assert!(!self.exhausted, "more than 2^32 Philox calls in one phase");
+        if let Some((seed, stream, salt)) = self.deferred.take() {
+            self.key = key_words(derive_key(seed, stream, salt));
+        }
         let [a, b, c] = self.prefix;
         self.block = philox4x32_10([a, b, c, self.draw_index], self.key);
         if let Some(next) = self.draw_index.checked_add(1) {
