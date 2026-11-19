@@ -385,3 +385,20 @@ def test_host_step_refuses_trailing_bytes_after_a_full_action_set(extra):
         env.step(actions() + b"\x00" * extra)
     env.close()
 
+
+def test_host_view_dlpack_arguments():
+    # The rules shared with the first-party OutputView (Export::dlpack_call).
+    env = make()
+    view = env.reset()["rewards"]
+    assert "dltensor_versioned" in repr(view.__dlpack__(max_version=(1, 0)))
+    assert '"dltensor"' in repr(view.__dlpack__(max_version=(0, 8)))
+    assert '"dltensor"' in repr(view.__dlpack__())
+    view.__dlpack__(stream=-1, copy=False, dl_device=(1, 0))
+    for kwargs in ({"copy": True}, {"stream": 1}, {"dl_device": (2, 0)}):
+        with pytest.raises(BufferError):
+            view.__dlpack__(**kwargs)
+    with pytest.raises(TypeError):
+        view.__dlpack__(1)
+    with pytest.raises(TypeError):
+        view.__dlpack__(unknown=1)
+    env.close()

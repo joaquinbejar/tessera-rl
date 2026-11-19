@@ -341,7 +341,8 @@ impl Export {
     ///
     /// # Errors
     ///
-    /// `TypeError` for positional arguments or arguments of the wrong type;
+    /// `TypeError` for positional arguments, an unknown keyword or an
+    /// argument of the wrong type;
     /// `BufferError` as above or from [`Export::dlpack`].
     pub fn dlpack_call<'py>(
         &self,
@@ -360,6 +361,16 @@ impl Export {
             Some(d) => capi::dict_items(g, d, "keyword arguments")?,
             None => Vec::new(),
         };
+        if let Some((key, _)) = kw
+            .iter()
+            .find(|(k, _)| !["stream", "max_version", "dl_device", "copy"].contains(&k.as_str()))
+        {
+            return Err(capi::raise(
+                g,
+                capi::type_error(),
+                &format!("__dlpack__ got an unexpected keyword argument {key:?}"),
+            ));
+        }
         let get = |key: &str| {
             kw.iter()
                 .find(|(k, _)| k == key)
