@@ -269,6 +269,16 @@ fn test_fast_facts_partial_reset_clears_clean_flag() {
 }
 
 #[test]
+fn test_fast_facts_step_leaving_a_slot_not_acting_clears_clean_flag() {
+    // A step of a Mixed environment (which can arm) leaves the second slot
+    // alive but not acting: that step must not set fast_clean.
+    let mut p = Pair::new(0);
+    p.clean_step();
+    p.step("toggle the second slot off", TOGGLE_IDLE, None);
+    p.step("step with the second slot not acting", QUIET, None);
+}
+
+#[test]
 fn test_fast_facts_stale_restore_forgets_facts() {
     // A record taken while the second slot did not act, restored into a
     // pool whose facts hold.
