@@ -240,11 +240,19 @@ fn test_async_worker_death_between_the_failure_reads_reports_worker_died() {
         || {
             static GATE: core::sync::atomic::AtomicBool =
                 core::sync::atomic::AtomicBool::new(false);
+            static DIED: core::sync::atomic::AtomicBool =
+                core::sync::atomic::AtomicBool::new(false);
             fn open_and_let_it_die() {
                 GATE.store(true, core::sync::atomic::Ordering::Release);
                 // The dying worker stores `dead`, then its slot's `panicked`,
-                // right after the gate opens; give it ample time.
-                std::thread::sleep(core::time::Duration::from_millis(500));
+                // then `DIED`; the deadline only keeps a broken backstop from
+                // hanging the test (the watchdog would name it anyway).
+                let deadline = std::time::Instant::now() + core::time::Duration::from_secs(60);
+                while !DIED.load(core::sync::atomic::Ordering::Acquire)
+                    && std::time::Instant::now() < deadline
+                {
+                    std::thread::yield_now();
+                }
             }
             let options = PoolOptions {
                 chunk_size: NonZeroU32::new(4).unwrap(),
@@ -253,6 +261,7 @@ fn test_async_worker_death_between_the_failure_reads_reports_worker_died() {
             let faults = Faults {
                 die_in_epoch: Some(1),
                 death_gate: Some(&GATE),
+                death_done: Some(&DIED),
                 ..Faults::default()
             };
             let mut p = EnvPool::<Ticker>::new(TickConfig {}, options)

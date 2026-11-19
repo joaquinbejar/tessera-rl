@@ -132,6 +132,10 @@ pub(crate) struct Faults {
     /// `die_in_epoch` waits for this flag first, to force a schedule where the
     /// other workers finish everything before the death.
     pub(crate) death_gate: Option<&'static core::sync::atomic::AtomicBool>,
+    /// `die_in_epoch`'s backstop stores `true` here once the death is fully
+    /// recorded (after `dead` and the slot's `panicked`), so a test can wait
+    /// for it instead of sleeping.
+    pub(crate) death_done: Option<&'static core::sync::atomic::AtomicBool>,
     /// Async mode only: before stepping a claimed id, a worker sleeps up to
     /// this many microseconds (a pseudo-random amount per claim), so that
     /// completion order varies widely between runs (ADR-0047 injected
@@ -551,6 +555,8 @@ impl Gang {
                             before_job: faults.die_before_job == Some(w),
                             #[cfg(test)]
                             gate: faults.death_gate,
+                            #[cfg(test)]
+                            done: faults.death_done,
                         },
                     );
                     #[cfg(not(test))]
@@ -797,6 +803,8 @@ struct Death {
     before_job: bool,
     #[cfg(test)]
     gate: Option<&'static core::sync::atomic::AtomicBool>,
+    #[cfg(test)]
+    done: Option<&'static core::sync::atomic::AtomicBool>,
 }
 
 /// Startup, then the job loop. A panic outside a job marks the gang dead and
@@ -851,6 +859,12 @@ fn worker_main(shared: &Shared, worker: usize, core: Option<usize>, fail: bool, 
                         slot.panicked.store(true, Ordering::SeqCst);
                         let waker = seen.waker.take().or_else(|| job_waker(slot));
                         decrement(shared, slot, waker.as_ref());
+                    }
+                    // Test only: the death is fully recorded (`dead`, then the
+                    // slot's `panicked`).
+                    #[cfg(test)]
+                    if let Some(done) = fault.done {
+                        done.store(true, Ordering::Release);
                     }
                     draining = true;
                 }
