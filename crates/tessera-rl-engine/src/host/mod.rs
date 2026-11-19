@@ -717,16 +717,6 @@ impl<E: HostEnvironment, const A: usize> HostPool<E, A> {
     }
 }
 
-/// The joint-action validation pass (ADR-0065 item 2), before any instance
-/// steps; it writes no output.
-///
-/// Inline validates serially and stops at the first rejection. Sync runs a
-/// second dispatch on the existing gang, before the step's: each chunk
-/// stops at its own first rejection and records its index with
-/// `fetch_min`, so the lowest rejected index wins, as in Inline. Its code
-/// and reason are then read by validating that one instance again on this
-/// thread (`validate` is pure by contract), so nothing is allocated or
-/// locked. A panic poisons the pool.
 /// Clears the `aborted` and `abort_code` outputs of every instance before
 /// a call that runs them all, unless they are already clear: no abort was
 /// applied since `clear` was recorded (ADR-0065 item 1). Skipping the fill
@@ -742,6 +732,16 @@ fn clear_abort_rows(outputs: &mut Outputs, aborts: &AtomicU64, clear: &mut u64) 
     }
 }
 
+/// The joint-action validation pass (ADR-0065 item 2), before any instance
+/// steps; it writes no output.
+///
+/// Inline validates serially and stops at the first rejection. Sync runs a
+/// second dispatch on the existing gang, before the step's: each chunk
+/// stops at its own first rejection and records its index with
+/// `fetch_min`, so the lowest rejected index wins, as in Inline. Its code
+/// and reason are then read by validating that one instance again on this
+/// thread (`validate` is pure by contract), so nothing is allocated or
+/// locked. A panic poisons the pool.
 #[expect(
     clippy::too_many_arguments,
     reason = "the split borrows of the pool's fields"
