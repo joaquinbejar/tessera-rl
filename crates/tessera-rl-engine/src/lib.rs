@@ -55,8 +55,8 @@ pub use buffer::{OutputDtype, OutputField, OutputRegion, OutputStorage};
 pub use error::{EngineError, NanSite};
 #[cfg(feature = "host")]
 pub use host::{
-    DynHostPool, FactoryError, HostFactory, HostPool, MAX_HOST_AGENTS, MAX_HOST_HEADS, MakeOptions,
-    make_host,
+    DynHostPool, FactoryError, HostFactory, HostLayout, HostLeaf, HostPool, MAX_HOST_AGENTS,
+    MAX_HOST_HEADS, MakeOptions, make_host,
 };
 
 /// Not public API: what `register_host_factory!` expands to names.

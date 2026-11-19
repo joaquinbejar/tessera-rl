@@ -19,7 +19,7 @@ use crate::outputs::Outputs;
 use crate::pool::Reseed;
 use crate::validate::ActionInput;
 
-use super::HostPool;
+use super::{HostLayout, HostPool};
 
 /// A host pool of some environment, without its type (ADR-0065 item 3).
 /// Every method is [`HostPool`]'s method of the same name.
@@ -28,6 +28,8 @@ pub trait DynHostPool: Send {
     fn registration(&self) -> &'static HostRegistration;
     /// [`HostPool::options`].
     fn options(&self) -> &PoolOptions;
+    /// [`HostPool::layout`].
+    fn layout(&self) -> &HostLayout;
     /// [`HostPool::workers`].
     fn workers(&self) -> usize;
     /// [`HostPool::pinned_workers`].
@@ -75,6 +77,9 @@ impl<E: HostEnvironment, const A: usize> DynHostPool for HostPool<E, A> {
     }
     fn options(&self) -> &PoolOptions {
         Self::options(self)
+    }
+    fn layout(&self) -> &HostLayout {
+        Self::layout(self)
     }
     fn workers(&self) -> usize {
         Self::workers(self)
