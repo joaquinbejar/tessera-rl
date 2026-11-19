@@ -32,8 +32,11 @@ use crate::options::WaitBackend;
 use crate::options::{AutoReset, PoolOptions, SyncOptions};
 use crate::outputs::{Outputs, OutputsView};
 use crate::registry::Registration;
+use crate::sys::sync::{AtomicBool, Ordering};
 use crate::sys::{Gang, GangOptions, available_cores};
-use crate::validate::{ActionInput, check_and_copy_actions, check_ids};
+use crate::validate::{
+    ActionInput, check_and_copy_actions, check_and_copy_actions_fast, check_ids,
+};
 
 /// Whether an entry point is accepted on a poisoned pool (ADR-0028).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -103,6 +106,17 @@ pub struct EnvPool<E: Environment, M: MaskProvider<E> = NoMasks> {
     penalties: Vec<f32>,
     penalized: Vec<Bool8>,
     pub(crate) branch_counter: u64,
+    /// Whether every instance will step next time: none pending reset and
+    /// every agent slot alive and acting (env-step plan r3 section 3.3,
+    /// facts 1 and 4). Set by a step that ends so; cleared by every step's
+    /// start, reset, restore, fork, import and split-phase hand-over.
+    pub(crate) fast_clean: bool,
+    /// An upper bound on every instance's `episode_index` and
+    /// `episode_steps` (facts 2 and 3), kept without scanning: 0 at
+    /// construction, raised by one per step and per reset call. `None` after
+    /// a restore, fork, import or split-phase hand-over, which can write any
+    /// counter; the next slow-path step then scans the headers once.
+    pub(crate) counter_bound: Option<u32>,
     sync: Option<SyncRuntime>,
     /// Allocations counted in this pool's chunk steps (ADR-0055).
     #[cfg(feature = "debug-checks")]
@@ -118,11 +132,13 @@ impl<E: Environment, M: MaskProvider<E>> EnvPool<E, M> {
     /// Takes the workers out of the pool (the split-phase modes own them,
     /// ADR-0047); the pool is left in Inline mode.
     pub(crate) fn take_runtime(&mut self) -> Option<SyncRuntime> {
+        self.forget_fast_facts();
         self.sync.take()
     }
 
     /// Gives the workers back (`into_pool` of a split-phase mode).
     pub(crate) fn put_runtime(&mut self, runtime: SyncRuntime) {
+        self.forget_fast_facts();
         self.sync = Some(runtime);
     }
 
@@ -155,9 +171,30 @@ impl<E: Environment, M: MaskProvider<E>> EnvPool<E, M> {
         &self.actions
     }
 
+    /// Forgets the validation fast path's facts: for code that writes headers
+    /// outside a step (restore, fork, import, split-phase modes).
+    pub(crate) fn forget_fast_facts(&mut self) {
+        self.fast_clean = false;
+        self.counter_bound = None;
+    }
+
+    /// Notes a reset call: it clears `fast_clean` and raises every
+    /// `episode_index` by at most one.
+    fn note_reset(&mut self) {
+        self.fast_clean = false;
+        self.counter_bound = self.counter_bound.and_then(|b| b.checked_add(1));
+    }
+
+    /// Test-only: whether the next step may take the validation fast path.
+    #[cfg(test)]
+    pub(crate) fn fast_path_armed(&self) -> bool {
+        self.fast_clean && self.counter_bound.is_some_and(|b| b < u32::MAX - 2)
+    }
+
     /// The pool-wide chunk and the discrete and continuous heads per agent,
     /// for the split-phase modes to take raw parts of (ADR-0047).
     pub(crate) fn chunk_all(&mut self) -> (Chunk<'_, E>, (usize, usize)) {
+        self.forget_fast_facts();
         let heads = (self.actions.discrete.len(), self.actions.continuous.len());
         let chunk = Rows {
             headers: &mut self.headers,
@@ -441,6 +478,8 @@ where
             penalties: vec![0.0; if M::ENABLED { rows } else { 0 }],
             penalized: vec![Bool8::FALSE; if M::ENABLED { rows } else { 0 }],
             branch_counter: 0,
+            fast_clean: false,
+            counter_bound: Some(0),
             sync: None,
             #[cfg(feature = "debug-checks")]
             allocs: crate::sys::alloc_track::AllocTally::default(),
@@ -660,6 +699,7 @@ where
     }
 
     fn reset_all_inner(&mut self, reseed: Reseed<'_>) -> Result<(), EngineError> {
+        self.note_reset();
         let n = self.headers.len();
         self.check_reset(0..n, n, reseed)?;
         let Self {
@@ -728,6 +768,7 @@ where
     }
 
     fn reset_inner(&mut self, ids: &[u32], reseed: Reseed<'_>) -> Result<(), EngineError> {
+        self.note_reset();
         check_ids(ids, &mut self.seen)?;
         let indices = ids.iter().filter_map(|&id| usize::try_from(id).ok());
         self.check_reset(indices.clone(), ids.len(), reseed)?;
@@ -839,14 +880,37 @@ where
     }
 
     fn step_inner(&mut self, actions: ActionInput<'_>) -> Result<(), EngineError> {
-        check_and_copy_actions(
-            &self.actions,
-            self.options.auto_reset,
-            &self.headers,
-            actions,
-            &mut self.discrete,
-            &mut self.continuous,
-        )?;
+        // Validation fast path (env-step plan r3 section 3.3): while the
+        // facts hold, the per-instance header checks cannot fail and every
+        // slot is required, so one range pass over the flat buffers and one
+        // copy replace them. A bad value reruns the slow path, whose error is
+        // then reported exactly as before.
+        let armed = self.fast_clean && self.counter_bound.is_some_and(|b| b < u32::MAX - 2);
+        let fast = armed
+            && check_and_copy_actions_fast(
+                &self.actions,
+                actions,
+                &mut self.discrete,
+                &mut self.continuous,
+            )?;
+        if !fast {
+            check_and_copy_actions(
+                &self.actions,
+                self.options.auto_reset,
+                &self.headers,
+                actions,
+                &mut self.discrete,
+                &mut self.continuous,
+            )?;
+            if self.counter_bound.is_none() {
+                self.counter_bound = Some(counter_max(&self.headers));
+            }
+        }
+        // From here the headers change. A step raises `episode_steps`, and a
+        // same-step reset `episode_index`, by at most one; `fast_clean` is
+        // set again below only if the step completes cleanly.
+        self.fast_clean = false;
+        self.counter_bound = self.counter_bound.and_then(|b| b.checked_add(1));
         #[cfg(feature = "debug-checks")]
         self.check_actions_inner()?;
         let Self {
@@ -886,11 +950,18 @@ where
             penalized,
             outputs: outputs.view_all(),
         };
+        // Cleared by any chunk that ends with an instance pending reset or a
+        // slot not alive and acting; read after the barrier (the gang joins
+        // every worker before `par_chunks` returns).
+        let clean = AtomicBool::new(true);
         if let Some(rt) = sync {
             let heads = (layout.discrete.len(), layout.continuous.len());
             let size = chunk_size(options);
             let panicked = par_chunks(&mut rt.gang, all, size, heads, |chunk, _| {
                 step_chunk::<E, M>(&ctx, chunk);
+                if !steps_cleanly(chunk.headers) {
+                    clean.store(false, Ordering::Relaxed);
+                }
             })?;
             if panicked {
                 *poisoned = true;
@@ -898,7 +969,12 @@ where
             }
         } else {
             let mut chunk = all;
-            run_kernels(poisoned, || step_chunk::<E, M>(&ctx, &mut chunk))?;
+            run_kernels(poisoned, || {
+                step_chunk::<E, M>(&ctx, &mut chunk);
+                if !steps_cleanly(chunk.headers) {
+                    clean.store(false, Ordering::Relaxed);
+                }
+            })?;
         }
         self.check_turns()?;
         #[cfg(feature = "debug-checks")]
@@ -907,6 +983,9 @@ where
             self.check_allocations()?;
             self.check_nan(0..self.headers.len())?;
         }
+        // Each step raises `episode_steps`, and a same-step reset
+        // `episode_index`, by at most one.
+        self.fast_clean = clean.load(Ordering::Relaxed);
         Ok(())
     }
 
@@ -1064,6 +1143,29 @@ fn select_native(choice: WaitBackend) -> Option<crate::sys::Native> {
 /// Instances per chunk.
 pub(crate) fn chunk_size(options: &PoolOptions) -> usize {
     usize::try_from(options.chunk_size.get()).unwrap_or(usize::MAX)
+}
+
+/// Whether every instance of `headers` will step next time: none pending
+/// reset, every agent slot alive and acting (the facts of env-step plan r3
+/// section 3.3, items 1 and 4).
+fn steps_cleanly<H: RecordLayout>(headers: &[H]) -> bool {
+    headers.iter().all(|h| {
+        !h.engine().pending_reset.get()
+            && h.agents().iter().all(|r| r.alive.get() && r.acting.get())
+    })
+}
+
+/// The largest `episode_index` or `episode_steps` of `headers` (facts 2 and
+/// 3), scanned only after a write outside the step left the bound unknown.
+fn counter_max<H: RecordLayout>(headers: &[H]) -> u32 {
+    headers
+        .iter()
+        .map(|h| {
+            let e = h.engine();
+            e.identity.episode_index().max(e.episode_steps)
+        })
+        .max()
+        .unwrap_or(0)
 }
 
 /// Read-only context of a step, shared by every chunk.

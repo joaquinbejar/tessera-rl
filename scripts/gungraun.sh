@@ -43,6 +43,7 @@ expected=(
     tessera-rl-classic/classic_instructions/classic/cartpole_physics.steps_1000
     tessera-rl-classic/classic_instructions/classic/cartpole_pool_step.n1024
     tessera-rl-classic/classic_instructions/classic/cartpole_pool_steady.n1024
+    tessera-rl-classic/classic_instructions/classic/cartpole_pool_steady_same_step.n1024
     tessera-rl-classic/classic_instructions/classic/tag_pool_step.n256
     tessera-rl-engine/snapshot_instructions/engine/step_inline.n1024
     tessera-rl-engine/snapshot_instructions/engine/snapshot_all_copy.n1024
