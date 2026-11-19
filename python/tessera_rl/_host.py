@@ -113,7 +113,8 @@ _ABSENT = (
 #: other keyword is the environment's config.
 _POOL_OPTIONS = ("num_envs", "seed", "auto_reset", "max_episode_steps", "workers", "cpu_set")
 
-#: Live host objects, for ``set_fp_policy`` (SPEC 14.4.2).
+#: Every live wrapped host object (``HostEnv`` and the adapters' alike),
+#: for ``set_fp_policy`` (SPEC 14.4.2).
 _LIVE: weakref.WeakSet = weakref.WeakSet()
 
 
@@ -291,6 +292,10 @@ class _HostNative:
         layout["outputs"] = outputs
         self._layout = layout
         self._checked = False
+        _LIVE.add(self)
+        # The policy in force now; later changes reach it through
+        # set_fp_policy (SPEC 14.4.2).
+        obj._tessera_set_fp_policy(_native.get_fp_policy())
 
     def layout(self) -> dict:
         return self._layout
@@ -434,10 +439,6 @@ class HostEnv:
         self.auto_reset: str = layout["auto_reset"]
         #: ``"host"``: a third-party host environment.
         self.kind: str = "host"
-        _LIVE.add(self)
-        # The policy in force now; later changes reach it through
-        # set_fp_policy (SPEC 14.4.2).
-        obj._tessera_set_fp_policy(_native.get_fp_policy())
 
     def _host_step(self, step: Step) -> HostStep:
         out = self._env._last_out
@@ -490,5 +491,5 @@ def set_fp_policy(policy: str) -> None:
     """Sets the floating-point policy (ADR-0041) of ``tessera_rl`` and of
     every live host object, whose modules each keep their own."""
     _native.set_fp_policy(policy)
-    for env in list(_LIVE):
-        env._native._obj._tessera_set_fp_policy(policy)
+    for native in list(_LIVE):
+        native._obj._tessera_set_fp_policy(policy)

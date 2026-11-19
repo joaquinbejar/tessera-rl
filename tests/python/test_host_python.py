@@ -272,6 +272,27 @@ def test_host_set_fp_policy_reaches_every_live_host_object(fake):
     env.close()
 
 
+@pytest.mark.parametrize("adapter", ["gym", "pz"])
+def test_host_set_fp_policy_reaches_the_adapters_host_objects(monkeypatch, adapter):
+    if adapter == "gym":
+        mod = pytest.importorskip("tessera_rl.gym", reason="needs gymnasium")
+        made = _spy_hosts(monkeypatch, agents=1)
+        env = mod.TesseraVectorEnv(FAKE, num_envs=2, seed=0)
+    else:
+        mod = pytest.importorskip("tessera_rl.pz", reason="needs pettingzoo")
+        made = _spy_hosts(monkeypatch)
+        env = mod.parallel_env(FAKE, seed=0)
+    assert made and all(obj.policies[:1] == ["canonicalize"] for obj in made), "set once when wrapped"
+    used = made[-1]
+    try:
+        tessera_rl.set_fp_policy("reject")
+        assert used.policies[-1] == "reject"
+    finally:
+        tessera_rl.set_fp_policy("canonicalize")
+    assert used.policies[-1] == "canonicalize"
+    env.close()
+
+
 # -- Gymnasium (SPEC 14.2 as ADR-0065 amends it) ----------------------------------
 
 gym = pytest.importorskip("tessera_rl.gym", reason="needs gymnasium")
