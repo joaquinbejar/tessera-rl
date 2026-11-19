@@ -984,6 +984,7 @@ pub(crate) fn owned_dict<'py>(g: Gil<'py>, o: &Owned) -> CResult<Mine<'py>> {
         (c"agent_truncated", &o.agent_truncated),
         (c"alive", &o.alive),
         (c"acting", &o.acting),
+        (c"slot_generations", &o.slot_generations),
         (c"episode_terminated", &o.episode_terminated),
         (c"episode_truncated", &o.episode_truncated),
         (c"masks", &o.masks),

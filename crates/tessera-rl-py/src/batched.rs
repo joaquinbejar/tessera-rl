@@ -298,6 +298,12 @@ fn f32_bytes(row: &[f32], mut put: impl FnMut(usize, &[u8])) {
     }
 }
 
+fn u32_row_bytes(row: &[u32], mut put: impl FnMut(usize, &[u8])) {
+    for (i, x) in row.iter().enumerate() {
+        put(i * 4, &x.to_le_bytes());
+    }
+}
+
 fn flag_bytes(row: &[Bool8], mut put: impl FnMut(usize, &[u8])) {
     for (i, f) in row.iter().enumerate() {
         put(i, &[f.to_byte()]);
@@ -326,6 +332,7 @@ fn row_of<E: Environment, M: MaskProvider<E>>(
         OutputField::AgentTruncated => flag_bytes(row.agent_truncated().unwrap_or(&[]), put),
         OutputField::Alive => flag_bytes(row.alive().unwrap_or(&[]), put),
         OutputField::Acting => flag_bytes(row.acting().unwrap_or(&[]), put),
+        OutputField::Generations => u32_row_bytes(row.generations().unwrap_or(&[]), put),
         OutputField::Masks => flag_bytes(row.masks().unwrap_or(&[]), put),
         OutputField::EpisodeTerminated => {
             put(0, &[row.episode_terminated().map_or(0, Bool8::to_byte)]);
@@ -451,6 +458,7 @@ fn copy_out(writer: &GatherWriter, sizes: &[(OutputField, usize)]) -> Owned {
             OutputField::AgentTruncated => owned.agent_truncated = bytes,
             OutputField::Alive => owned.alive = bytes,
             OutputField::Acting => owned.acting = bytes,
+            OutputField::Generations => owned.slot_generations = bytes,
             OutputField::EpisodeTerminated => owned.episode_terminated = bytes,
             OutputField::EpisodeTruncated => owned.episode_truncated = bytes,
             OutputField::Masks => owned.masks = bytes,

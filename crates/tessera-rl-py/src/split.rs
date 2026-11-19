@@ -182,6 +182,7 @@ fn copy_token<E: Environment, M: MaskProvider<E>>(
         agent_truncated: flags(token.agent_truncated()),
         alive: flags(token.alive()),
         acting: flags(token.acting()),
+        slot_generations: crate::env::u32_bytes(token.generations()),
         episode_terminated: flags(token.episode_terminated()),
         episode_truncated: flags(token.episode_truncated()),
         masks: flags(token.masks()),

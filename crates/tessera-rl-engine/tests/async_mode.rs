@@ -1178,6 +1178,7 @@ fn test_async_token_rows_match_the_per_id_accessors() {
             assert_eq!(row.agent_truncated(), t.agent_truncated(id));
             assert_eq!(row.alive(), t.alive(id));
             assert_eq!(row.acting(), t.acting(id));
+            assert_eq!(row.generations(), t.generations(id));
             assert_eq!(row.masks(), t.masks(id));
             assert_eq!(row.episode_terminated(), t.episode_terminated(id));
             assert_eq!(row.episode_truncated(), t.episode_truncated(id));

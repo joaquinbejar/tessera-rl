@@ -138,6 +138,9 @@ pub(crate) struct Owned {
     pub(crate) alive: Vec<u8>,
     /// Agents whose action this step reads (ADR-0013).
     pub(crate) acting: Vec<u8>,
+    /// `[N, A]`, little-endian u32: each slot's occupant generation
+    /// (ADR-0013 identity).
+    pub(crate) slot_generations: Vec<u8>,
     /// `[N]`.
     pub(crate) episode_terminated: Vec<u8>,
     pub(crate) episode_truncated: Vec<u8>,
@@ -354,6 +357,11 @@ fn flags(v: &[tessera_rl_core::Bool8]) -> Vec<u8> {
     v.iter().map(|f| f.to_byte()).collect()
 }
 
+/// Little-endian bytes of `v`.
+pub(crate) fn u32_bytes(v: &[u32]) -> Vec<u8> {
+    v.iter().flat_map(|x| x.to_le_bytes()).collect()
+}
+
 impl<E, M> Pooled<E, M>
 where
     E: Environment + Validate,
@@ -431,6 +439,7 @@ where
             agent_truncated: flags(out.agent_truncated()),
             alive: flags(out.alive()),
             acting: flags(out.acting()),
+            slot_generations: u32_bytes(out.generations()),
             episode_terminated: flags(out.episode_terminated()),
             episode_truncated: flags(out.episode_truncated()),
             masks: flags(out.masks()),

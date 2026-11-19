@@ -1030,6 +1030,12 @@ impl<'a, E: Environment, M: MaskProvider<E>> BatchRow<'a, E, M> {
         self.agent_view(&self.token.mode.raw.acting)
     }
 
+    /// Agent slot generations, `[A]`.
+    #[must_use]
+    pub fn generations(&self) -> Option<&'a [u32]> {
+        self.agent_view(&self.token.mode.raw.generations)
+    }
+
     /// Action masks, `[A, mask length]`.
     #[must_use]
     pub fn masks(&self) -> Option<&'a [Bool8]> {
