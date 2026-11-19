@@ -19,16 +19,29 @@
 //!
 //! Action masks are outputs only: the environment's `mask` describes the
 //! next step's legal actions, but a host pool does not replace illegal
-//! actions (it has no no-op); actions are validated for range only.
+//! actions (it has no no-op); actions are validated for range only, and
+//! then by the environment's own `validate` when it declares `VALIDATES`
+//! (ADR-0065 item 2): a rejected call steps no instance and leaves the
+//! outputs as they were.
+//!
+//! A host `reset` or `step` may abort its instance's episode
+//! (`HostOut::abort`, ADR-0065 item 1) instead of panicking: the episode
+//! ends with every live agent truncated, the instance is left pending a
+//! reset, and the host-only outputs `aborted`, `abort_code` and
+//! `pending_reset` report it. `pending_reset` is the exact pending state
+//! of every instance, from construction on; `aborted` alone never means
+//! pending. The pool is not poisoned, and [`HostPool::aborts`] counts the
+//! aborts applied.
 //!
 //! Experimental until 1.0 (ADR-0062 item 9).
 
 mod kernels;
 
-use core::sync::atomic::{AtomicU64, Ordering};
+use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
 use tessera_rl_core::{
-    Bool8, EnvConfig, HostEnvironment, HostError, RecordLayout, StateInit, TurnStructure,
+    ActionReject, Bool8, EnvConfig, HostEnvironment, HostError, RecordLayout, StateInit,
+    TurnStructure,
 };
 use tessera_rl_num::identity::{LogicalId, RngIdentity};
 
@@ -36,7 +49,7 @@ use crate::buffer::par_chunks;
 use crate::error::EngineError;
 use crate::layout::{ActionLayout, MaskLayout, obs_leaves};
 use crate::options::{AutoReset, PoolOptions, SyncOptions};
-use crate::outputs::Outputs;
+use crate::outputs::{Outputs, OutputsView};
 use crate::pool::{Reseed, Rows, SyncRuntime, check_reset, chunk_size, run_kernels, too_large};
 use crate::validate::{ActionInput, check_and_copy_actions, check_ids};
 
@@ -58,7 +71,7 @@ pub const MAX_HOST_HEADS: usize = 4096;
 /// const AGENTS: usize = 256;
 /// use tessera_rl_core::io::{Actions, ObsWriter};
 /// use tessera_rl_core::space::Space;
-/// use tessera_rl_core::{AgentSlot, EnvConfig, HostEnvironment, HostError, HostSeed, SpaceError, StepOut};
+/// use tessera_rl_core::{AgentSlot, EnvConfig, HostEnvironment, HostError, HostOut, HostSeed, SpaceError};
 /// use tessera_rl_engine::{HostPool, PoolOptions};
 /// use tessera_rl_num::identity::Seed;
 ///
@@ -73,8 +86,8 @@ pub const MAX_HOST_HEADS: usize = 4096;
 ///     fn new(_: &Cfg) -> Result<Self, HostError> { Ok(Self) }
 ///     fn observation_space(_: &Cfg) -> Result<Space, SpaceError> { Ok(Space::Discrete { n: 2 }) }
 ///     fn action_space(_: &Cfg) -> Result<Space, SpaceError> { Ok(Space::Discrete { n: 2 }) }
-///     fn reset(&mut self, _: HostSeed, _: &mut StepOut<'_>) {}
-///     fn step(&mut self, _: &Actions<'_, ()>, _: &mut StepOut<'_>) {}
+///     fn reset(&mut self, _: HostSeed, _: &mut HostOut<'_>) {}
+///     fn step(&mut self, _: &Actions<'_, ()>, _: &mut HostOut<'_>) {}
 ///     fn observe(&self, _: AgentSlot, _: &mut ObsWriter<'_, '_, ()>) {}
 /// }
 /// let options = PoolOptions::new(core::num::NonZeroU32::MIN, Seed::new(0));
@@ -87,7 +100,7 @@ pub const MAX_HOST_HEADS: usize = 4096;
 /// const AGENTS: usize = 257;
 /// use tessera_rl_core::io::{Actions, ObsWriter};
 /// use tessera_rl_core::space::Space;
-/// use tessera_rl_core::{AgentSlot, EnvConfig, HostEnvironment, HostError, HostSeed, SpaceError, StepOut};
+/// use tessera_rl_core::{AgentSlot, EnvConfig, HostEnvironment, HostError, HostOut, HostSeed, SpaceError};
 /// use tessera_rl_engine::{HostPool, PoolOptions};
 /// use tessera_rl_num::identity::Seed;
 ///
@@ -102,8 +115,8 @@ pub const MAX_HOST_HEADS: usize = 4096;
 ///     fn new(_: &Cfg) -> Result<Self, HostError> { Ok(Self) }
 ///     fn observation_space(_: &Cfg) -> Result<Space, SpaceError> { Ok(Space::Discrete { n: 2 }) }
 ///     fn action_space(_: &Cfg) -> Result<Space, SpaceError> { Ok(Space::Discrete { n: 2 }) }
-///     fn reset(&mut self, _: HostSeed, _: &mut StepOut<'_>) {}
-///     fn step(&mut self, _: &Actions<'_, ()>, _: &mut StepOut<'_>) {}
+///     fn reset(&mut self, _: HostSeed, _: &mut HostOut<'_>) {}
+///     fn step(&mut self, _: &Actions<'_, ()>, _: &mut HostOut<'_>) {}
 ///     fn observe(&self, _: AgentSlot, _: &mut ObsWriter<'_, '_, ()>) {}
 /// }
 /// let options = PoolOptions::new(core::num::NonZeroU32::MIN, Seed::new(0));
@@ -119,6 +132,8 @@ pub const MAX_HOST_AGENTS: usize = 256;
 #[derive(Debug)]
 pub struct HostPool<E: HostEnvironment, const A: usize> {
     options: PoolOptions,
+    /// `E::initial_agents(cfg)`, checked at construction.
+    initial: usize,
     headers: Vec<HostHeader<A>>,
     instances: Vec<E>,
     layout: ActionLayout,
@@ -129,6 +144,11 @@ pub struct HostPool<E: HostEnvironment, const A: usize> {
     poisoned: bool,
     sync: Option<SyncRuntime>,
     fp_resets: AtomicU64,
+    /// Aborts applied (ADR-0065 item 1).
+    aborts: AtomicU64,
+    /// `aborts` when the `aborted` and `abort_code` outputs were last all
+    /// clear: they need clearing before a call only if it moved since.
+    abort_rows_clear: u64,
     #[cfg(feature = "debug-checks")]
     allocs: crate::sys::alloc_track::AllocTally,
     #[cfg(feature = "debug-checks")]
@@ -176,6 +196,14 @@ impl<E: HostEnvironment, const A: usize> HostPool<E, A> {
             });
         }
         cfg.validate()?;
+        let initial = E::initial_agents(cfg);
+        if !(1..=A).contains(&initial) {
+            return Err(tessera_rl_core::ConfigError {
+                field: "initial_agents",
+                reason: "must be in 1..=MAX_AGENTS",
+            }
+            .into());
+        }
         options.validate()?;
         let obs_space = E::observation_space(cfg)?;
         obs_space.validate()?;
@@ -201,13 +229,16 @@ impl<E: HostEnvironment, const A: usize> HostPool<E, A> {
         } else {
             0
         };
-        let outputs = Outputs::new(
+        let mut outputs = Outputs::new_host(
             num_envs,
             A,
             &leaves,
             options.auto_reset == AutoReset::SameStep,
             mask_len,
         )?;
+        // Every instance is pending its first reset, and `outputs()` is
+        // readable before any call (ADR-0065 item 1).
+        outputs.view_all().pending_reset.fill(Bool8::TRUE);
         let headers = (0..num_envs)
             .map(|i| {
                 let mut header = HostHeader::<A>::state_default();
@@ -225,6 +256,7 @@ impl<E: HostEnvironment, const A: usize> HostPool<E, A> {
             .collect::<Result<Vec<E>, EngineError>>()?;
         Ok(Self {
             options,
+            initial,
             headers,
             instances,
             discrete: vec![
@@ -243,6 +275,8 @@ impl<E: HostEnvironment, const A: usize> HostPool<E, A> {
             poisoned: false,
             sync: None,
             fp_resets: AtomicU64::new(0),
+            aborts: AtomicU64::new(0),
+            abort_rows_clear: 0,
             #[cfg(feature = "debug-checks")]
             allocs: crate::sys::alloc_track::AllocTally::default(),
             #[cfg(feature = "debug-checks")]
@@ -310,6 +344,15 @@ impl<E: HostEnvironment, const A: usize> HostPool<E, A> {
         self.fp_resets.load(Ordering::Relaxed)
     }
 
+    /// Aborts the engine applied since construction (ADR-0065 item 1): one
+    /// per aborting `step` and one per aborting `reset`, so one instance
+    /// adds at most 2 in one call (an aborted step and its aborted
+    /// same-call reset).
+    #[must_use]
+    pub fn aborts(&self) -> u64 {
+        self.aborts.load(Ordering::Relaxed)
+    }
+
     /// `debug-checks`: allocations counted in the host code of this pool's
     /// chunks since construction, with the engine's `TrackingAllocator`
     /// installed. A statistic: it never fails a call (ADR-0062 item 4).
@@ -359,7 +402,10 @@ impl<E: HostEnvironment, const A: usize> HostPool<E, A> {
             sync,
             layout,
             options,
+            initial,
             fp_resets,
+            aborts,
+            abort_rows_clear,
             #[cfg(feature = "debug-checks")]
             allocs,
             ..
@@ -368,11 +414,14 @@ impl<E: HostEnvironment, const A: usize> HostPool<E, A> {
             layout,
             limit: options.max_episode_steps.map(core::num::NonZeroU32::get),
             auto_reset: options.auto_reset,
+            initial: *initial,
             fp_resets,
+            aborts,
             #[cfg(feature = "debug-checks")]
             allocs,
         };
-        let all = Rows {
+        clear_abort_rows(outputs, ctx.aborts, abort_rows_clear);
+        let mut all = Rows {
             headers,
             states: instances,
             discrete,
@@ -390,9 +439,9 @@ impl<E: HostEnvironment, const A: usize> HostPool<E, A> {
                 return Err(EngineError::Panicked);
             }
         } else {
-            let mut rows = all;
+            // Borrowed, not moved: a move copies the whole view.
             run_kernels(poisoned, || {
-                kernels::reset_chunk::<E, A>(&ctx, &mut rows, reseed, 0);
+                kernels::reset_chunk::<E, A>(&ctx, &mut all, reseed, 0);
             })?;
         }
         self.poisoned = false;
@@ -428,31 +477,49 @@ impl<E: HostEnvironment, const A: usize> HostPool<E, A> {
             instances,
             outputs,
             poisoned,
+            layout,
+            options,
+            initial,
             fp_resets,
+            aborts,
             #[cfg(feature = "debug-checks")]
             allocs,
             ..
         } = self;
+        let ctx = HostCtx {
+            layout,
+            limit: options.max_episode_steps.map(core::num::NonZeroU32::get),
+            auto_reset: options.auto_reset,
+            initial: *initial,
+            fp_resets,
+            aborts,
+            #[cfg(feature = "debug-checks")]
+            allocs,
+        };
         run_kernels(poisoned, || {
             #[cfg(feature = "debug-checks")]
-            let _bracket = crate::sys::alloc_track::HostBracket::enter(allocs);
+            let _bracket = crate::sys::alloc_track::HostBracket::enter(ctx.allocs);
             let outputs = &mut outputs.view_all();
             for (k, i) in indices.clone().enumerate() {
                 let (Some(header), Some(inst)) = (headers.get_mut(i), instances.get_mut(i)) else {
                     continue;
                 };
                 crate::pool::clear_instance(outputs, i);
-                kernels::reset_one::<E, A>(
+                kernels::clear_abort_row(outputs, i);
+                let aborted = kernels::reset_one::<E, A>(
+                    &ctx,
                     header,
                     inst,
                     reseed.seed(k),
                     outputs,
                     i,
                     kernels::ResetRows::Live,
-                    fp_resets,
                 );
                 crate::pool::write_agent_masks(outputs, i, header);
-                kernels::observe_instance::<E, A>(header, inst, outputs, i);
+                if !aborted {
+                    kernels::observe_instance::<E, A>(header, inst, outputs, i);
+                }
+                kernels::write_pending(outputs, i, header);
             }
         })?;
         self.after_kernels()?;
@@ -467,7 +534,9 @@ impl<E: HostEnvironment, const A: usize> HostPool<E, A> {
     ///
     /// Actions of the wrong shape or out of range, an instance pending
     /// reset or an exhausted step counter (nothing is mutated then);
-    /// [`EngineError::Poisoned`] on a poisoned pool; or
+    /// [`EngineError::ActionRejected`] when the environment's `validate`
+    /// refuses an instance's joint action (`VALIDATES`, ADR-0065; nothing
+    /// is stepped then); [`EngineError::Poisoned`] on a poisoned pool; or
     /// [`EngineError::Panicked`] if environment code panics, which poisons
     /// the pool.
     pub fn step(&mut self, actions: ActionInput<'_>) -> Result<&Outputs, EngineError> {
@@ -499,20 +568,47 @@ impl<E: HostEnvironment, const A: usize> HostPool<E, A> {
             sync,
             layout,
             options,
+            initial,
             fp_resets,
+            aborts,
+            abort_rows_clear,
             #[cfg(feature = "debug-checks")]
             allocs,
+            #[cfg(feature = "debug-checks")]
+            host_allocations,
             ..
         } = self;
         let ctx = HostCtx {
             layout,
             limit: options.max_episode_steps.map(core::num::NonZeroU32::get),
             auto_reset: options.auto_reset,
+            initial: *initial,
             fp_resets,
+            aborts,
             #[cfg(feature = "debug-checks")]
             allocs,
         };
-        let all = Rows {
+        if E::VALIDATES {
+            let validated = validate::<E, A>(
+                &ctx,
+                sync.as_mut(),
+                poisoned,
+                headers,
+                instances,
+                discrete,
+                continuous,
+                size,
+            );
+            // A rejected call still charges what `validate` allocated to
+            // the host tally, now (ADR-0065 item 2).
+            #[cfg(feature = "debug-checks")]
+            if validated.is_err() {
+                *host_allocations = host_allocations.saturating_add(ctx.allocs.take());
+            }
+            validated?;
+        }
+        clear_abort_rows(outputs, ctx.aborts, abort_rows_clear);
+        let mut all = Rows {
             headers,
             states: instances,
             discrete,
@@ -530,8 +626,8 @@ impl<E: HostEnvironment, const A: usize> HostPool<E, A> {
                 return Err(EngineError::Panicked);
             }
         } else {
-            let mut rows = all;
-            run_kernels(poisoned, || kernels::step_chunk::<E, A>(&ctx, &mut rows))?;
+            // Borrowed, not moved: a move copies the whole view.
+            run_kernels(poisoned, || kernels::step_chunk::<E, A>(&ctx, &mut all))?;
         }
         self.after_kernels()?;
         #[cfg(feature = "debug-checks")]
@@ -618,6 +714,131 @@ impl<E: HostEnvironment, const A: usize> HostPool<E, A> {
             }
         }
         Ok(())
+    }
+}
+
+/// Clears the `aborted` and `abort_code` outputs of every instance before
+/// a call that runs them all, unless they are already clear: no abort was
+/// applied since `clear` was recorded (ADR-0065 item 1). Skipping the fill
+/// keeps a call without aborts as cheap as before the abort outputs.
+#[inline]
+fn clear_abort_rows(outputs: &mut Outputs, aborts: &AtomicU64, clear: &mut u64) {
+    let now = aborts.load(Ordering::Relaxed);
+    if now != *clear {
+        let view = outputs.view_all();
+        view.aborted.fill(Bool8::FALSE);
+        view.abort_code.fill(0);
+        *clear = now;
+    }
+}
+
+/// The joint-action validation pass (ADR-0065 item 2), before any instance
+/// steps; it writes no output.
+///
+/// Inline validates serially and stops at the first rejection. Sync runs a
+/// second dispatch on the existing gang, before the step's: each chunk
+/// stops at its own first rejection and records its index with
+/// `fetch_min`, so the lowest rejected index wins, as in Inline. Its code
+/// and reason are then read by validating that one instance again on this
+/// thread (`validate` is pure by contract), so nothing is allocated or
+/// locked. A panic poisons the pool.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the split borrows of the pool's fields"
+)]
+fn validate<E: HostEnvironment, const A: usize>(
+    ctx: &HostCtx<'_>,
+    sync: Option<&mut SyncRuntime>,
+    poisoned: &mut bool,
+    headers: &mut [HostHeader<A>],
+    instances: &mut [E],
+    discrete: &mut [i32],
+    continuous: &mut [f32],
+    size: usize,
+) -> Result<(), EngineError> {
+    let heads = (ctx.layout.discrete.len(), ctx.layout.continuous.len());
+    let mut found = None;
+    if let Some(rt) = sync {
+        let lowest = AtomicU32::new(u32::MAX);
+        let all = Rows {
+            headers: &mut *headers,
+            states: &mut *instances,
+            discrete: &mut *discrete,
+            continuous: &mut *continuous,
+            penalties: &mut [],
+            penalized: &mut [],
+            outputs: OutputsView::empty(A),
+        };
+        let panicked = par_chunks(&mut rt.gang, all, size, heads, |rows, first| {
+            if let Some((i, _)) = kernels::validate_chunk::<E, A>(ctx, rows) {
+                let index = u32::try_from(first.saturating_add(i)).unwrap_or(u32::MAX);
+                lowest.fetch_min(index, Ordering::Relaxed);
+            }
+        })?;
+        if panicked {
+            *poisoned = true;
+            return Err(EngineError::Panicked);
+        }
+        // The gang's join orders every worker's `fetch_min` before this
+        // read.
+        let lowest = lowest.load(Ordering::Relaxed);
+        if lowest == u32::MAX {
+            return Ok(());
+        }
+        let index = usize::try_from(lowest).unwrap_or(usize::MAX);
+        let (dh, ch) = heads;
+        let (Some(one_header), Some(one_state), Some(one_discrete), Some(one_continuous)) = (
+            headers.get_mut(index..=index),
+            instances.get_mut(index..=index),
+            discrete.get_mut(index * A * dh..(index + 1) * A * dh),
+            continuous.get_mut(index * A * ch..(index + 1) * A * ch),
+        ) else {
+            return Err(rejected(lowest, None));
+        };
+        let one = Rows {
+            headers: one_header,
+            states: one_state,
+            discrete: one_discrete,
+            continuous: one_continuous,
+            penalties: &mut [],
+            penalized: &mut [],
+            outputs: OutputsView::empty(A),
+        };
+        let mut again = None;
+        run_kernels(poisoned, || {
+            again = kernels::validate_chunk::<E, A>(ctx, &one);
+        })?;
+        return Err(rejected(lowest, again.map(|(_, r)| r)));
+    }
+    let all = Rows {
+        headers,
+        states: instances,
+        discrete,
+        continuous,
+        penalties: &mut [],
+        penalized: &mut [],
+        outputs: OutputsView::empty(A),
+    };
+    run_kernels(poisoned, || {
+        found = kernels::validate_chunk::<E, A>(ctx, &all);
+    })?;
+    match found {
+        Some((i, reject)) => Err(rejected(u32::try_from(i).unwrap_or(u32::MAX), Some(reject))),
+        None => Ok(()),
+    }
+}
+
+/// The error of a rejected joint action; `None` when the instance did not
+/// reject again on this thread (a `validate` that is not pure).
+fn rejected(instance: u32, reject: Option<ActionReject>) -> EngineError {
+    let reject = reject.unwrap_or(ActionReject {
+        code: 0,
+        reason: "validate was not pure: the re-run accepted an action a worker rejected",
+    });
+    EngineError::ActionRejected {
+        instance,
+        code: reject.code,
+        reason: reject.reason,
     }
 }
 

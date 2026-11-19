@@ -44,6 +44,17 @@ pub struct Outputs {
     episode_invalid_agent_events: Buf<f32>,
     masks: Buf<Bool8>,
     pub(crate) mask_len: usize,
+    /// Host pools only (ADR-0065): `None` for every other pool, whose
+    /// storage layout is unchanged.
+    host: Option<HostBufs>,
+}
+
+/// The host-only per-instance outputs (ADR-0065 item 1).
+#[derive(Debug)]
+struct HostBufs {
+    aborted: Buf<Bool8>,
+    abort_code: Buf<u32>,
+    pending_reset: Buf<Bool8>,
 }
 
 impl Outputs {
@@ -55,10 +66,31 @@ impl Outputs {
         mask_len: usize,
     ) -> Result<Self, EngineError> {
         let b = StorageBuilder::new()?;
-        Self::lay_out(b, num_envs, agents, leaves, terminal, mask_len).ok_or(EngineError::Options {
-            option: "num_envs",
-            reason: "buffers too large",
-        })
+        Self::lay_out(b, num_envs, agents, leaves, terminal, mask_len, false).ok_or(
+            EngineError::Options {
+                option: "num_envs",
+                reason: "buffers too large",
+            },
+        )
+    }
+
+    /// As [`Outputs::new`], plus the host-only rows `aborted`, `abort_code`
+    /// and `pending_reset` (ADR-0065), laid out after every other buffer.
+    #[cfg(feature = "host")]
+    pub(crate) fn new_host(
+        num_envs: usize,
+        agents: usize,
+        leaves: &[Leaf],
+        terminal: bool,
+        mask_len: usize,
+    ) -> Result<Self, EngineError> {
+        let b = StorageBuilder::new()?;
+        Self::lay_out(b, num_envs, agents, leaves, terminal, mask_len, true).ok_or(
+            EngineError::Options {
+                option: "num_envs",
+                reason: "buffers too large",
+            },
+        )
     }
 
     fn lay_out(
@@ -68,6 +100,7 @@ impl Outputs {
         leaves: &[Leaf],
         terminal: bool,
         mask_len: usize,
+        host: bool,
     ) -> Option<Self> {
         let rows = num_envs.checked_mul(agents)?;
         let obs = leaves
@@ -109,7 +142,26 @@ impl Outputs {
         let episode_invalid_agent_events =
             b.reserve::<f32>(OutputField::EpisodeInvalidAgentEvents, num_envs)?;
         let masks = b.reserve::<Bool8>(OutputField::Masks, rows.checked_mul(mask_len)?)?;
+        // Last, so the other buffers' offsets are those of a pool without
+        // them.
+        let host = if host {
+            Some((
+                b.reserve::<Bool8>(OutputField::Aborted, num_envs)?,
+                b.reserve::<u32>(OutputField::AbortCode, num_envs)?,
+                b.reserve::<Bool8>(OutputField::PendingReset, num_envs)?,
+            ))
+        } else {
+            None
+        };
         let mut r = b.finish()?;
+        let host = match host {
+            Some((aborted, abort_code, pending_reset)) => Some(HostBufs {
+                aborted: r.take(aborted)?,
+                abort_code: r.take(abort_code)?,
+                pending_reset: r.take(pending_reset)?,
+            }),
+            None => None,
+        };
         Some(Self {
             agents,
             observations: obs
@@ -138,6 +190,7 @@ impl Outputs {
             episode_invalid_agent_events: r.take(episode_invalid_agent_events)?,
             masks: r.take(masks)?,
             mask_len,
+            host,
         })
     }
 
@@ -255,6 +308,32 @@ impl Outputs {
     pub fn episode_length(&self) -> &[f32] {
         &self.episode_length
     }
+
+    /// Host pools only (ADR-0065): instances whose episode the last call
+    /// aborted, `[N]`. Empty for other pools. An aborted instance's
+    /// observation rows are zeros, which may lie outside the observation
+    /// space, and its masks are false. `aborted` alone never means pending;
+    /// read [`Outputs::pending_reset`].
+    #[must_use]
+    pub fn aborted(&self) -> &[Bool8] {
+        self.host.as_ref().map_or(&[], |h| &*h.aborted)
+    }
+
+    /// Host pools only (ADR-0065): the abort codes of the last call, `[N]`,
+    /// 0 where `aborted` is false. Empty for other pools.
+    #[must_use]
+    pub fn abort_code(&self) -> &[u32] {
+        self.host.as_ref().map_or(&[], |h| &*h.abort_code)
+    }
+
+    /// Host pools only (ADR-0065): whether each instance is pending a reset,
+    /// `[N]`, the engine's own state: true for every instance at
+    /// construction, then that of each instance after the last call that
+    /// ran it. Empty for other pools.
+    #[must_use]
+    pub fn pending_reset(&self) -> &[Bool8] {
+        self.host.as_ref().map_or(&[], |h| &*h.pending_reset)
+    }
 }
 
 /// Mutable views over the rows of a range of instances in every output
@@ -284,6 +363,47 @@ pub(crate) struct OutputsView<'a> {
     pub(crate) episode_illegal_actions: &'a mut [f32],
     pub(crate) episode_invalid_agent_events: &'a mut [f32],
     pub(crate) masks: &'a mut [Bool8],
+    /// Host pools only (ADR-0065); empty for other pools.
+    pub(crate) aborted: &'a mut [Bool8],
+    /// Host pools only (ADR-0065); empty for other pools.
+    pub(crate) abort_code: &'a mut [u32],
+    /// Host pools only (ADR-0065); empty for other pools.
+    pub(crate) pending_reset: &'a mut [Bool8],
+}
+
+impl OutputsView<'_> {
+    /// A view over no output rows, for a dispatch that writes no outputs
+    /// (the host validation pass, ADR-0065 item 2): it starts no write
+    /// generation, so borrowed outputs stay current.
+    #[cfg(feature = "host")]
+    pub(crate) fn empty(agents: usize) -> Self {
+        OutputsView {
+            agents,
+            mask_len: 0,
+            leaf_bytes: &[],
+            observations: Default::default(),
+            terminal_observations: Default::default(),
+            rewards: &mut [],
+            agent_terminated: &mut [],
+            agent_truncated: &mut [],
+            died: &mut [],
+            spawned: &mut [],
+            invalid_agent_event: &mut [],
+            alive: &mut [],
+            acting: &mut [],
+            generations: &mut [],
+            episode_terminated: &mut [],
+            episode_truncated: &mut [],
+            episode_return: &mut [],
+            episode_length: &mut [],
+            episode_illegal_actions: &mut [],
+            episode_invalid_agent_events: &mut [],
+            masks: &mut [],
+            aborted: &mut [],
+            abort_code: &mut [],
+            pending_reset: &mut [],
+        }
+    }
 }
 
 impl Outputs {
@@ -303,6 +423,11 @@ impl Outputs {
         {
             *slot = &mut **buf;
         }
+        let (aborted, abort_code, pending_reset): (&mut [Bool8], &mut [u32], &mut [Bool8]) =
+            match &mut self.host {
+                Some(h) => (&mut h.aborted, &mut h.abort_code, &mut h.pending_reset),
+                None => (&mut [], &mut [], &mut []),
+            };
         OutputsView {
             agents: self.agents,
             mask_len: self.mask_len,
@@ -325,6 +450,9 @@ impl Outputs {
             episode_illegal_actions: &mut self.episode_illegal_actions,
             episode_invalid_agent_events: &mut self.episode_invalid_agent_events,
             masks: &mut self.masks,
+            aborted,
+            abort_code,
+            pending_reset,
         }
     }
 }

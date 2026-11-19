@@ -24,9 +24,9 @@ use thiserror::Error;
 use crate::agent::{AgentSlot, TurnStructure};
 use crate::env::EnvConfig;
 use crate::error::{ConfigError, SpaceError};
+use crate::host_out::HostOut;
 use crate::io::{Actions, MaskWriter, ObsWriter};
 use crate::space::Space;
-use crate::step_out::StepOut;
 
 /// The seed of one reset of one instance, after the engine applied the
 /// seeding rules of ADR-0007 (`pool_seed + i`, `reset(seed=s)` gives
@@ -80,6 +80,17 @@ pub enum HostError {
     },
 }
 
+/// A joint action a host environment refuses ([`HostEnvironment::validate`],
+/// ADR-0065 item 2): a code and a static reason the engine reports. Making
+/// one allocates nothing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ActionReject {
+    /// The environment's own code.
+    pub code: u32,
+    /// Why, for the error message.
+    pub reason: &'static str,
+}
+
 /// An environment that owns its state (ADR-0062).
 ///
 /// One value of the implementing type is one instance; the engine's host
@@ -105,11 +116,28 @@ pub trait HostEnvironment: Send + Sized + 'static {
     const PERFECT_INFORMATION: bool = true;
     /// The turn structure (ADR-0013); `Sequential` and `Mixed` must
     /// override [`HostEnvironment::acting`].
+    ///
+    /// Under `Simultaneous` every alive agent acts and `acting` is never
+    /// called. An environment that needs acting subsets declares `Mixed`
+    /// and overrides `acting`. A non-acting alive slot's action is not
+    /// required: it is zeroed and never validated. The slot is still
+    /// observed (and masked) every call, its reward is whatever `step`
+    /// writes (0 by default), it stays alive, and its `terminated` and
+    /// `truncated` flags are as written. This matches `EnvPool` and
+    /// ADR-0013.
     const TURNS: TurnStructure = TurnStructure::Simultaneous;
     /// Whether the environment writes action masks
     /// ([`HostEnvironment::mask`]). Without masks the pool has no mask
     /// buffer (a mask length of 0) and never calls `mask`.
     const MASKS: bool = false;
+    /// Whether the environment fills empty slots with `agent_spawned`
+    /// (ADR-0065). With `false`, a spawn is an invalid agent event, for any
+    /// slot: it is not applied, and it is counted and marked as the other
+    /// invalid events are, so slots `initial_agents..` stay empty.
+    const SPAWNS: bool = false;
+    /// Whether the engine calls [`HostEnvironment::validate`] before each
+    /// step (ADR-0065 item 2). With `false` the check is compiled out.
+    const VALIDATES: bool = false;
 
     /// The environment's configuration.
     type Config: EnvConfig;
@@ -121,6 +149,18 @@ pub trait HostEnvironment: Send + Sized + 'static {
     /// [`HostError`] when the configuration or the environment's own setup
     /// fails.
     fn new(cfg: &Self::Config) -> Result<Self, HostError>;
+
+    /// Number of agent slots alive at the start of each episode: slots
+    /// `0..n` start alive and acting, the rest start empty and may be filled
+    /// by `agent_spawned` when [`HostEnvironment::SPAWNS`] is `true`
+    /// (ADR-0065). [`HostEnvironment::MAX_AGENTS`] stays the capacity. The
+    /// engine checks `1..=MAX_AGENTS` at construction. Defaults to
+    /// `MAX_AGENTS`.
+    #[must_use]
+    fn initial_agents(cfg: &Self::Config) -> usize {
+        let _ = cfg;
+        Self::MAX_AGENTS
+    }
 
     /// The observation space of one agent.
     ///
@@ -136,7 +176,8 @@ pub trait HostEnvironment: Send + Sized + 'static {
     /// [`SpaceError`] for an invalid configuration.
     fn action_space(cfg: &Self::Config) -> Result<Space, SpaceError>;
 
-    /// Starts an episode with `seed`. Every agent slot is alive afterwards.
+    /// Starts an episode with `seed`. Slots `0..initial_agents` are alive
+    /// afterwards, and the others empty.
     ///
     /// What `out` means depends on why the reset runs:
     ///
@@ -150,13 +191,46 @@ pub trait HostEnvironment: Send + Sized + 'static {
     ///
     /// An episode end reported through `out` is ignored in every case, and
     /// so are the `died` and `spawned` flags: they never change which agent
-    /// slots are alive after a reset (all of them).
-    fn reset(&mut self, seed: HostSeed, out: &mut StepOut<'_>);
+    /// slots are alive after a reset (`0..initial_agents`). A reset may
+    /// abort ([`HostOut::abort`]): the instance then stays pending a reset.
+    fn reset(&mut self, seed: HostSeed, out: &mut HostOut<'_>);
 
-    /// Applies one step of validated actions.
-    fn step(&mut self, actions: &Actions<'_, ()>, out: &mut StepOut<'_>);
+    /// Applies one step of validated actions. `out.abort(code)` ends the
+    /// episode as aborted ([`HostOut`], ADR-0065).
+    fn step(&mut self, actions: &Actions<'_, ()>, out: &mut HostOut<'_>);
+
+    /// Checks this instance's joint action before any instance of the call
+    /// steps (ADR-0065 item 2). Called only when
+    /// [`HostEnvironment::VALIDATES`] is `true`, for the instances that step
+    /// in the call (not pending a reset, with at least one acting agent),
+    /// on the validated actions `step` will see (slots that do not act are
+    /// zero). A rejection fails the whole call with
+    /// `EngineError::ActionRejected` and mutates nothing the engine owns;
+    /// the first rejection in instance order is reported.
+    ///
+    /// It must be pure: no interior mutability, no I/O, no clock or
+    /// randomness, nothing but `self` and `actions` (the same contract as
+    /// `observe`, documented and not checked). It runs with the interpreter
+    /// released, under canonical floating-point controls; a panic poisons
+    /// the pool.
+    ///
+    /// # Errors
+    ///
+    /// [`ActionReject`] for a joint action the environment refuses.
+    fn validate(&self, actions: &Actions<'_, ()>) -> Result<(), ActionReject> {
+        let _ = actions;
+        Ok(())
+    }
 
     /// Writes `agent`'s observation into leaves that are zero on entry.
+    ///
+    /// Typed writes need no derive: declare the leaf ids to match
+    /// [`HostEnvironment::observation_space`], for example
+    /// `const POS: LeafId<f32> = LeafId::new(0);`, and write through
+    /// `obs.leaf_mut(POS)` ([`crate::leaf::LeafMut::set`] or
+    /// [`crate::leaf::LeafMut::copy_from`]). Neither `LeafId` nor `LeafMut`
+    /// checks the leaf's declared dtype, only its byte length, so the ids
+    /// must name each leaf with the element type its space declares.
     fn observe(&self, agent: AgentSlot, obs: &mut ObsWriter<'_, '_, ()>);
 
     /// Writes `agent`'s legal-action mask; every action is legal by default.

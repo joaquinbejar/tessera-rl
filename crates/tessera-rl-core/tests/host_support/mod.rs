@@ -8,7 +8,7 @@
 use tessera_rl_core::io::{Actions, ObsWriter};
 use tessera_rl_core::space::Space;
 use tessera_rl_core::{
-    AgentSlot, EnvConfig, HostEnvironment, HostError, HostSeed, SpaceError, StepOut, TurnStructure,
+    AgentSlot, EnvConfig, HostEnvironment, HostError, HostOut, HostSeed, SpaceError, TurnStructure,
 };
 
 /// The host fixture's id.
@@ -45,9 +45,9 @@ macro_rules! host_impl {
                 Ok(Space::Discrete { n: 2 })
             }
 
-            fn reset(&mut self, _: HostSeed, _: &mut StepOut<'_>) {}
+            fn reset(&mut self, _: HostSeed, _: &mut HostOut<'_>) {}
 
-            fn step(&mut self, _: &Actions<'_, ()>, _: &mut StepOut<'_>) {}
+            fn step(&mut self, _: &Actions<'_, ()>, _: &mut HostOut<'_>) {}
 
             fn observe(&self, _: AgentSlot, _: &mut ObsWriter<'_, '_, ()>) {}
 

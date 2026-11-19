@@ -4,7 +4,7 @@
 use tessera_rl::core::io::{Actions, ObsWriter};
 use tessera_rl::core::space::Space;
 use tessera_rl::core::{
-    AgentSlot, EnvConfig, HostEnvironment, HostError, HostSeed, SpaceError, StepOut,
+    AgentSlot, EnvConfig, HostEnvironment, HostError, HostOut, HostSeed, SpaceError,
 };
 
 struct Cfg;
@@ -33,11 +33,11 @@ impl HostEnvironment for Book {
         Ok(Space::Discrete { n: 2 })
     }
 
-    fn reset(&mut self, _: HostSeed, _: &mut StepOut<'_>) {
+    fn reset(&mut self, _: HostSeed, _: &mut HostOut<'_>) {
         self.orders.clear();
     }
 
-    fn step(&mut self, _: &Actions<'_, ()>, _: &mut StepOut<'_>) {
+    fn step(&mut self, _: &Actions<'_, ()>, _: &mut HostOut<'_>) {
         self.orders.push(1);
     }
 

@@ -19,7 +19,7 @@ use host_support::{AGENTS, Book, BookConfig, LEVELS, SIDES};
 use tessera_rl_core::io::{Actions, ObsWriter};
 use tessera_rl_core::space::Space;
 use tessera_rl_core::{
-    AgentSlot, Bool8, EnvConfig, HostEnvironment, HostError, HostSeed, SpaceError, StepOut,
+    AgentSlot, Bool8, EnvConfig, HostEnvironment, HostError, HostOut, HostSeed, SpaceError,
 };
 use tessera_rl_engine::{
     ActionInput, AutoReset, EngineError, HostPool, MAX_HOST_HEADS, Outputs, PoolOptions, Reseed,
@@ -136,9 +136,9 @@ impl<const N: u32> HostEnvironment for Wide<N> {
         Ok(Space::MultiBinary { shape: vec![N] })
     }
 
-    fn reset(&mut self, _: HostSeed, _: &mut StepOut<'_>) {}
+    fn reset(&mut self, _: HostSeed, _: &mut HostOut<'_>) {}
 
-    fn step(&mut self, _: &Actions<'_, ()>, _: &mut StepOut<'_>) {}
+    fn step(&mut self, _: &Actions<'_, ()>, _: &mut HostOut<'_>) {}
 
     fn observe(&self, _: AgentSlot, _: &mut ObsWriter<'_, '_, ()>) {}
 }
@@ -487,11 +487,11 @@ impl HostEnvironment for Turns {
         Ok(Space::Discrete { n: 2 })
     }
 
-    fn reset(&mut self, _: HostSeed, _: &mut StepOut<'_>) {
+    fn reset(&mut self, _: HostSeed, _: &mut HostOut<'_>) {
         self.steps = 0;
     }
 
-    fn step(&mut self, _: &Actions<'_, ()>, _: &mut StepOut<'_>) {
+    fn step(&mut self, _: &Actions<'_, ()>, _: &mut HostOut<'_>) {
         self.steps += 1;
     }
 
@@ -620,9 +620,9 @@ impl<const M: bool> HostEnvironment for Choices<M> {
         Ok(Space::Discrete { n: cfg.n })
     }
 
-    fn reset(&mut self, _: HostSeed, _: &mut StepOut<'_>) {}
+    fn reset(&mut self, _: HostSeed, _: &mut HostOut<'_>) {}
 
-    fn step(&mut self, _: &Actions<'_, ()>, _: &mut StepOut<'_>) {}
+    fn step(&mut self, _: &Actions<'_, ()>, _: &mut HostOut<'_>) {}
 
     fn observe(&self, _: AgentSlot, _: &mut ObsWriter<'_, '_, ()>) {}
 

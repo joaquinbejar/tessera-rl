@@ -10,7 +10,7 @@
 use tessera_rl_core::io::{Actions, MaskWriter, ObsWriter};
 use tessera_rl_core::space::{BoxBounds, DType, Space};
 use tessera_rl_core::{
-    AgentSlot, EnvConfig, EpisodeEnd, HostEnvironment, HostError, HostSeed, SpaceError, StepOut,
+    AgentSlot, EnvConfig, EpisodeEnd, HostEnvironment, HostError, HostOut, HostSeed, SpaceError,
 };
 
 /// The book's agents.
@@ -109,7 +109,7 @@ impl HostEnvironment for Book {
 
     /// Writes a reward of `RESET_REWARD` for every agent: visible after an
     /// explicit or `NextStep` reset, discarded in a `SameStep` one.
-    fn reset(&mut self, seed: HostSeed, out: &mut StepOut<'_>) {
+    fn reset(&mut self, seed: HostSeed, out: &mut HostOut<'_>) {
         for slot in 0..AGENTS {
             if let Some(agent) = AgentSlot::new(u16::try_from(slot).unwrap_or(0), AGENTS) {
                 out.set_reward(agent, RESET_REWARD);
@@ -123,7 +123,7 @@ impl HostEnvironment for Book {
         self.step = 0;
     }
 
-    fn step(&mut self, actions: &Actions<'_, ()>, out: &mut StepOut<'_>) {
+    fn step(&mut self, actions: &Actions<'_, ()>, out: &mut HostOut<'_>) {
         self.step += 1;
         assert!(
             self.step != self.cfg.panic_at,

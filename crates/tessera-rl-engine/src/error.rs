@@ -332,6 +332,17 @@ pub enum EngineError {
         /// Allocations counted in the chunk steps of the call.
         count: u64,
     },
+    /// A host environment's `validate` refused the instance's joint action
+    /// (ADR-0065 item 2); nothing was stepped.
+    #[error("instance {instance}: {reason} (code {code})")]
+    ActionRejected {
+        /// The first instance, in instance order, whose action was refused.
+        instance: u32,
+        /// The environment's code.
+        code: u32,
+        /// The environment's reason.
+        reason: &'static str,
+    },
     /// The instance has not been reset yet, or its episode ended in
     /// `Disabled` auto-reset mode.
     #[error("instance {id} is pending reset")]
