@@ -292,6 +292,43 @@ def main(scenario):
         result["round_restored"] = round_after == FE_TOWARDZERO
         t.set_fp_policy("canonicalize")
         result["policy"] = t.get_fp_policy()
+    elif scenario == "host_reject":
+        # The host module's policy (SPEC 14.4.2): set through its object,
+        # global to the module, separate from tessera_rl's.
+        package = __import__("_tessera_host")
+        host = getattr(package, "_tessera_host", package)
+        env = host.make(num_envs=2, seed=1)
+        out = env.reset()
+        view = out["rewards"]
+        env._tessera_set_fp_policy("reject")
+        set_round(FE_TOWARDZERO)
+        errors = {}
+        for name, call in (
+            ("method", lambda: env.step(np.zeros(4, dtype="<i4").tobytes())),
+            ("getbuffer", lambda: memoryview(view)),
+        ):
+            try:
+                call()
+                errors[name] = None
+            except t.FloatingPointEnvironmentError:
+                errors[name] = "FloatingPointEnvironmentError"
+            except Exception as e:  # noqa: BLE001
+                errors[name] = type(e).__name__
+        round_after = LIBM.fegetround()
+        set_round(FE_TONEAREST)
+        result["errors"] = errors
+        result["round_restored"] = round_after == FE_TOWARDZERO
+        result["first_party_policy"] = t.get_fp_policy()
+        env._tessera_set_fp_policy("canonicalize")
+        set_round(FE_TOWARDZERO)
+        try:
+            env.step(np.zeros(4, dtype="<i4").tobytes())
+            result["after_canonicalize"] = "ok"
+        except Exception as e:  # noqa: BLE001
+            result["after_canonicalize"] = type(e).__name__
+        set_round(FE_TONEAREST)
+        del view
+        env.close()
     elif scenario == "werror":
         env = t.make("tessera/CartPole-v1", num_envs=2, seed=1)
         env.reset()
