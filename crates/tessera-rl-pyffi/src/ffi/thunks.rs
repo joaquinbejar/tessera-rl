@@ -71,6 +71,9 @@ pub(crate) type CFunctionKw = unsafe extern "C" fn(
 ) -> *mut ffi::PyObject;
 /// `destructor`: `(object)`.
 pub(crate) type Destructor = unsafe extern "C" fn(*mut ffi::PyObject);
+/// `getter`: `(object, closure) -> object`, a read-only attribute.
+pub(crate) type Getter =
+    unsafe extern "C" fn(*mut ffi::PyObject, *mut core::ffi::c_void) -> *mut ffi::PyObject;
 
 /// `getbufferproc`: `(exporter, view, flags) -> 0 | -1`.
 pub(crate) type GetBuffer = unsafe extern "C" fn(
@@ -632,6 +635,10 @@ generic_thunk!(
     CFunctionKwEntry, cfunction_kw : fn(slf: Obj, args: Obj, kwargs: Obj) -> Obj
 );
 generic_thunk!(
+    /// A `getter` entry: a read-only attribute (`Py_tp_getset`).
+    GetterEntry, getter : fn(slf: Obj, closure: *mut core::ffi::c_void) -> Obj
+);
+generic_thunk!(
     /// A `destructor` entry: `tp_dealloc` or a capsule destructor.
     DestructorEntry, destructor : fn(obj: Obj) -> ()
 );
@@ -682,6 +689,13 @@ impl ThunkFn<CFunctionKw> {
     /// The boundary thunk of `E`.
     pub(crate) const fn of<E: CFunctionKwEntry>() -> Self {
         Self(cfunction_kw::<E>)
+    }
+}
+
+impl ThunkFn<Getter> {
+    /// The boundary thunk of `E`.
+    pub(crate) const fn of<E: GetterEntry>() -> Self {
+        Self(getter::<E>)
     }
 }
 
@@ -925,6 +939,14 @@ mod tests {
         }
     }
 
+    struct Get;
+    impl GetterEntry for Get {
+        unsafe extern "C" fn call(slf: Obj, closure: *mut core::ffi::c_void) -> Obj {
+            seen(slf.addr() ^ closure.addr().rotate_left(8));
+            ptr(closure.addr())
+        }
+    }
+
     struct Dealloc;
     impl DestructorEntry for Dealloc {
         unsafe extern "C" fn call(obj: Obj) {
@@ -992,6 +1014,15 @@ mod tests {
         // SAFETY: as above.
         check_instantiation(0x10 ^ 0x2000 ^ 0x30_0000, &ptr(0x10 ^ 0x30), || unsafe {
             f(ptr(0x10), ptr(0x20), ptr(0x30))
+        });
+    }
+
+    #[test]
+    fn test_thunk_generic_getter_runs_canonical_and_passes_arguments() {
+        let f = ThunkFn::<Getter>::of::<Get>().get();
+        // SAFETY: as above.
+        check_instantiation(0x10 ^ 0x9000, &ptr(0x90), || unsafe {
+            f(ptr(0x10), core::ptr::without_provenance_mut(0x90))
         });
     }
 
