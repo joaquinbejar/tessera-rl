@@ -91,6 +91,12 @@ std::thread_local! {
     /// here is seen only by the wait's own predicate.
     pub(crate) static WAIT_HOOK: core::cell::Cell<Option<fn()>> =
         const { core::cell::Cell::new(None) };
+
+    /// Runs inside the next `check_failed` of this thread, after its first
+    /// read of `dead`: a death made here lands between that read and the
+    /// panic flags.
+    pub(crate) static CHECK_HOOK: core::cell::Cell<Option<fn()>> =
+        const { core::cell::Cell::new(None) };
 }
 
 #[cfg(test)]
@@ -1040,6 +1046,10 @@ where
             self.poisoned = true;
             return Err(EngineError::WorkerDied);
         }
+        #[cfg(test)]
+        if let Some(hook) = CHECK_HOOK.take() {
+            hook();
+        }
         if self
             .mode
             .panicked
@@ -1048,9 +1058,21 @@ where
             || self.job_panicked()
         {
             self.poisoned = true;
-            return Err(EngineError::Panicked);
+            return Err(self.death_or_panic());
         }
         Ok(())
+    }
+
+    /// The error for a panic flag just seen: a dying worker stores `dead`
+    /// before its slot's `panicked` (the gang's backstop), so a death that
+    /// landed after the caller's first read of `dead` is visible now, and is
+    /// reported as the death it is.
+    fn death_or_panic(&self) -> EngineError {
+        if self.dead() {
+            EngineError::WorkerDied
+        } else {
+            EngineError::Panicked
+        }
     }
 
     /// One step of a receive: gather completed ids, then either hand out a
@@ -1090,7 +1112,7 @@ where
             .load(core::sync::atomic::Ordering::Acquire)
         {
             self.poisoned = true;
-            return Err(EngineError::Panicked);
+            return Err(self.death_or_panic());
         }
         if self.dead() {
             self.poisoned = true;

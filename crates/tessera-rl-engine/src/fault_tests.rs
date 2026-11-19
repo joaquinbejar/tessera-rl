@@ -229,6 +229,70 @@ fn test_async_worker_death_reports_worker_died_permanently() {
     });
 }
 
+/// The forced schedule of the second CI failure: the worker dies between
+/// `check_failed`'s read of `dead` and its read of the panic flags. The death
+/// is still reported as `WorkerDied`, never as a step's `Panicked`.
+#[cfg(not(loom))]
+#[test]
+fn test_async_worker_death_between_the_failure_reads_reports_worker_died() {
+    crate::modes::within(
+        "async worker death between the failure reads reports worker died",
+        || {
+            static GATE: core::sync::atomic::AtomicBool =
+                core::sync::atomic::AtomicBool::new(false);
+            static DIED: core::sync::atomic::AtomicBool =
+                core::sync::atomic::AtomicBool::new(false);
+            fn open_and_let_it_die() {
+                GATE.store(true, core::sync::atomic::Ordering::Release);
+                // The dying worker stores `dead`, then its slot's `panicked`,
+                // then `DIED`; the deadline only keeps a broken backstop from
+                // hanging the test (the watchdog would name it anyway).
+                let deadline = std::time::Instant::now() + core::time::Duration::from_secs(60);
+                while !DIED.load(core::sync::atomic::Ordering::Acquire)
+                    && std::time::Instant::now() < deadline
+                {
+                    std::thread::yield_now();
+                }
+            }
+            let options = PoolOptions {
+                chunk_size: NonZeroU32::new(4).unwrap(),
+                ..PoolOptions::new(NonZeroU32::new(32).unwrap(), Seed::new(1))
+            };
+            let faults = Faults {
+                die_in_epoch: Some(1),
+                death_gate: Some(&GATE),
+                death_done: Some(&DIED),
+                ..Faults::default()
+            };
+            let mut p = EnvPool::<Ticker>::new(TickConfig {}, options)
+                .unwrap()
+                .async_faults(
+                    crate::AsyncOptions::new(
+                        NonZeroUsize::new(2).unwrap(),
+                        NonZeroUsize::new(4).unwrap(),
+                    ),
+                    faults,
+                )
+                .unwrap();
+            drop(p.reset_all(Reseed::Keep).unwrap());
+            let ids: Vec<u32> = (0..8).collect();
+            let actions = [0_i32; 8];
+            p.send(
+                &ids,
+                crate::ActionInput {
+                    discrete: &actions,
+                    continuous: &[],
+                },
+            )
+            .unwrap();
+            crate::modes::async_mode::CHECK_HOOK.set(Some(open_and_let_it_die));
+            let seen = p.recv().map(|_| ());
+            assert_eq!(seen, Err(EngineError::WorkerDied));
+            assert!(p.is_poisoned());
+        },
+    );
+}
+
 /// The forced schedule of that test's CI failure: the dying worker waits until
 /// the other one has delivered every id, so `recv` has nothing to report yet.
 #[cfg(not(loom))]
