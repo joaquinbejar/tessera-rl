@@ -9,6 +9,7 @@ use tessera_rl_engine::{ActionInput, DynHostPool, EngineError, OutputStorage, Re
 use tessera_rl_num::identity::Seed;
 
 use crate::errors::{self, Kind};
+use crate::ffi::boundary::{self, Policy};
 use crate::ffi::capi::{self, CResult, Gil, Mine, Ref};
 use crate::ffi::inner::Inner;
 use crate::ffi::object::{
@@ -235,6 +236,39 @@ impl MethodNoArgs for CurrentGenerationM {
     }
 }
 
+/// `_tessera_set_fp_policy(policy)`: `"canonicalize"` or `"reject"`
+/// (ADR-0041). The policy is this module's, global to every object, view
+/// and deleter of it, as `tessera_rl.set_fp_policy` sets it (SPEC 14.4.2).
+struct SetFpPolicyM;
+
+impl Method for SetFpPolicyM {
+    type Body = HostBody;
+    fn call<'py>(g: Gil<'py>, _body: &HostBody, args: Ref<'py>) -> CResult<Mine<'py>> {
+        let items = capi::tuple_items(g, args, "the arguments")?;
+        let [name] = items.as_slice() else {
+            return Err(argument(g, "_tessera_set_fp_policy takes one argument"));
+        };
+        let name = capi::to_string(g, *name, "the policy").map_err(|_| {
+            capi::clear_pending(g);
+            argument(g, "the floating-point policy is a str")
+        })?;
+        let policy = match name.as_str() {
+            "canonicalize" => Policy::Canonicalize,
+            "reject" => Policy::Reject,
+            other => {
+                return Err(argument(
+                    g,
+                    &format!(
+                        "the floating-point policy is \"canonicalize\" or \"reject\", not {other:?}"
+                    ),
+                ));
+            }
+        };
+        boundary::set_policy(policy);
+        Ok(capi::none(g))
+    }
+}
+
 /// `close()`: releases the pool; a second `close` does nothing. Views
 /// already exported keep their memory. On an inherited object a no-op.
 struct CloseM;
@@ -266,6 +300,10 @@ static METHODS: MethodTable<HostBody> = MethodTable::new(&[
         c"The generation of the current borrow window.",
     ),
     MethodRow::noargs::<IsPoisonedM>(c"is_poisoned", c"Whether a panic poisoned the pool."),
+    MethodRow::varargs::<SetFpPolicyM>(
+        c"_tessera_set_fp_policy",
+        c"_tessera_set_fp_policy(policy): \"canonicalize\" or \"reject\", for this module (ADR-0041).",
+    ),
     MethodRow::noargs::<CloseM>(c"close", c"Releases the pool."),
     MethodRow::END,
 ]);
