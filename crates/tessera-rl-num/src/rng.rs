@@ -7,6 +7,7 @@ use core::num::{NonZeroU32, NonZeroU64};
 
 use crate::draw::Draws;
 use crate::identity::{RngIdentity, StreamId};
+#[cfg(test)]
 use crate::key::{derive_key, key_words};
 
 /// Proof that the caller is the engine.
@@ -29,10 +30,26 @@ impl RngAuthority {
     }
 }
 
+/// The eagerly keyed sequence: the reference the deferred one must equal.
+#[cfg(test)]
 fn draws(identity: &RngIdentity, stream: StreamId) -> Draws {
     let key = derive_key(identity.seed(), stream, identity.branch_salt());
     Draws::new(
         key_words(key),
+        identity.logical_id().get(),
+        identity.episode_index(),
+        identity.step_index(),
+    )
+}
+
+/// The sequence for `identity` on `stream`, with its key derived on the
+/// first draw (see `Draws::new_deferred`).
+#[inline]
+const fn deferred(identity: &RngIdentity, stream: StreamId) -> Draws {
+    Draws::new_deferred(
+        identity.seed(),
+        stream,
+        identity.branch_salt(),
         identity.logical_id().get(),
         identity.episode_index(),
         identity.step_index(),
@@ -102,7 +119,7 @@ impl StepRng {
     #[inline]
     pub fn new(_authority: &RngAuthority, identity: &RngIdentity, stream: StreamId) -> Self {
         Self {
-            draws: draws(identity, stream),
+            draws: deferred(identity, stream),
         }
     }
 
@@ -124,7 +141,7 @@ impl ObsRng {
     #[inline]
     pub fn new(_authority: &RngAuthority, identity: &RngIdentity) -> Self {
         Self {
-            draws: draws(identity, StreamId::OBS_NOISE),
+            draws: deferred(identity, StreamId::OBS_NOISE),
         }
     }
 
@@ -135,6 +152,7 @@ impl ObsRng {
 mod tests {
     use super::{ObsRng, RngAuthority, StepRng};
     use crate::identity::{BranchSalt, LogicalId, RngIdentity, Seed, StreamId};
+    use core::num::{NonZeroU32, NonZeroU64};
 
     fn id(seed: u64, lineage: u32, episode: u32, step: u32) -> RngIdentity {
         RngIdentity::from_parts(
@@ -183,6 +201,75 @@ mod tests {
         let mut r = ObsRng::new(&auth, &i);
         let b: Vec<u32> = (0..9).map(|_| r.next_u32()).collect();
         assert_eq!(a, b);
+    }
+
+    /// The deferred sequence equals one keyed eagerly at construction, under
+    /// the root branch salt and a non-root one (a forked branch): same
+    /// words, in order, for every stream, across a Philox block boundary.
+    #[test]
+    fn test_step_rng_lazy_sequence_equals_eager_derivation() {
+        let auth = RngAuthority::engine_only();
+        let b32 = NonZeroU32::new(7).unwrap_or(NonZeroU32::MIN);
+        let b64 = NonZeroU64::new(1_000_003).unwrap_or(NonZeroU64::MIN);
+        for stream in [
+            StreamId::DYNAMICS,
+            StreamId::MAP_GEN,
+            StreamId::OPPONENT,
+            StreamId::OBS_NOISE,
+            StreamId::SEARCH,
+        ] {
+            for salt in [BranchSalt::ROOT, BranchSalt::new(0x9e37_79b9_7f4a_7c15)] {
+                let i = RngIdentity::from_parts(Seed::new(11), salt, LogicalId::new(2), 4, 6);
+                // Each draw method first, so the lazy derivation happens on it,
+                // then a mix across a Philox block boundary.
+                for first in 0..6 {
+                    let mut eager = super::draws(&i, stream);
+                    let mut lazy = StepRng::new(&auth, &i, stream);
+                    for k in 0..14 {
+                        match (first + k) % 6 {
+                            0 => assert_eq!(lazy.next_u32(), eager.next_u32()),
+                            1 => assert_eq!(lazy.next_u64(), eager.next_u64()),
+                            2 => assert_eq!(lazy.below_u32(b32), eager.below_u32(b32)),
+                            3 => assert_eq!(lazy.below_u64(b64), eager.below_u64(b64)),
+                            4 => assert_eq!(lazy.unit_f32().to_bits(), eager.unit_f32().to_bits()),
+                            _ => assert_eq!(lazy.unit_f64().to_bits(), eager.unit_f64().to_bits()),
+                        }
+                    }
+                    assert_eq!(lazy.exhausted(), eager.exhausted());
+                }
+            }
+        }
+    }
+
+    /// `exhausted()` reports the derived sequence's state once drawn from:
+    /// one Philox call past `draw_index = u32::MAX` turns it true, for both
+    /// RNG kinds.
+    #[test]
+    fn test_rng_exhausted_turns_true_after_the_last_counter() {
+        let auth = RngAuthority::engine_only();
+        let i = id(5, 1, 2, 3);
+        let mut s = StepRng::new(&auth, &i, StreamId::DYNAMICS);
+        s.draws.set_draw_index(u32::MAX);
+        assert!(!s.exhausted());
+        let _ = s.next_u32();
+        assert!(s.exhausted());
+        let mut o = ObsRng::new(&auth, &i);
+        o.draws.set_draw_index(u32::MAX);
+        assert!(!o.exhausted());
+        let _ = o.next_u32();
+        assert!(o.exhausted());
+    }
+
+    #[test]
+    fn test_step_rng_unused_is_not_exhausted() {
+        let r = StepRng::new(
+            &RngAuthority::engine_only(),
+            &id(1, 0, 0, 0),
+            StreamId::DYNAMICS,
+        );
+        assert!(!r.exhausted());
+        let o = ObsRng::new(&RngAuthority::engine_only(), &id(1, 0, 0, 0));
+        assert!(!o.exhausted());
     }
 
     #[test]
