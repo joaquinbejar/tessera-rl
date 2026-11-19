@@ -203,7 +203,8 @@ mod tests {
         assert_eq!(a, b);
     }
 
-    /// The lazy sequence equals one derived eagerly at construction: same
+    /// The deferred sequence equals one keyed eagerly at construction, under
+    /// the root branch salt and a non-root one (a forked branch): same
     /// words, in order, for every stream, across a Philox block boundary.
     #[test]
     fn test_step_rng_lazy_sequence_equals_eager_derivation() {
@@ -217,23 +218,25 @@ mod tests {
             StreamId::OBS_NOISE,
             StreamId::SEARCH,
         ] {
-            let i = id(11, 2, 4, 6);
-            // Each draw method first, so the lazy derivation happens on it,
-            // then a mix across a Philox block boundary.
-            for first in 0..6 {
-                let mut eager = super::draws(&i, stream);
-                let mut lazy = StepRng::new(&auth, &i, stream);
-                for k in 0..14 {
-                    match (first + k) % 6 {
-                        0 => assert_eq!(lazy.next_u32(), eager.next_u32()),
-                        1 => assert_eq!(lazy.next_u64(), eager.next_u64()),
-                        2 => assert_eq!(lazy.below_u32(b32), eager.below_u32(b32)),
-                        3 => assert_eq!(lazy.below_u64(b64), eager.below_u64(b64)),
-                        4 => assert_eq!(lazy.unit_f32().to_bits(), eager.unit_f32().to_bits()),
-                        _ => assert_eq!(lazy.unit_f64().to_bits(), eager.unit_f64().to_bits()),
+            for salt in [BranchSalt::ROOT, BranchSalt::new(0x9e37_79b9_7f4a_7c15)] {
+                let i = RngIdentity::from_parts(Seed::new(11), salt, LogicalId::new(2), 4, 6);
+                // Each draw method first, so the lazy derivation happens on it,
+                // then a mix across a Philox block boundary.
+                for first in 0..6 {
+                    let mut eager = super::draws(&i, stream);
+                    let mut lazy = StepRng::new(&auth, &i, stream);
+                    for k in 0..14 {
+                        match (first + k) % 6 {
+                            0 => assert_eq!(lazy.next_u32(), eager.next_u32()),
+                            1 => assert_eq!(lazy.next_u64(), eager.next_u64()),
+                            2 => assert_eq!(lazy.below_u32(b32), eager.below_u32(b32)),
+                            3 => assert_eq!(lazy.below_u64(b64), eager.below_u64(b64)),
+                            4 => assert_eq!(lazy.unit_f32().to_bits(), eager.unit_f32().to_bits()),
+                            _ => assert_eq!(lazy.unit_f64().to_bits(), eager.unit_f64().to_bits()),
+                        }
                     }
+                    assert_eq!(lazy.exhausted(), eager.exhausted());
                 }
-                assert_eq!(lazy.exhausted(), eager.exhausted());
             }
         }
     }
