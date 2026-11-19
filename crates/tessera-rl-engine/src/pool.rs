@@ -185,6 +185,14 @@ impl<E: Environment, M: MaskProvider<E>> EnvPool<E, M> {
         self.counter_bound = self.counter_bound.and_then(|b| b.checked_add(1));
     }
 
+    /// Test hook (the fuzz target `fast_path`): forgets the validation fast
+    /// path's facts, so the next step takes the slow path.
+    #[cfg(feature = "test-hooks")]
+    #[doc(hidden)]
+    pub fn forget_validation_fast_path(&mut self) {
+        self.forget_fast_facts();
+    }
+
     /// Test-only: whether the next step may take the validation fast path.
     #[cfg(test)]
     pub(crate) fn fast_path_armed(&self) -> bool {
