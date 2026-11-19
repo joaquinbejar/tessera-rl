@@ -42,6 +42,7 @@ from tessera_rl._env import AsyncStep, Env, HalfStep, Step, is_stale, make
 from tessera_rl._native import (
     ActionError,
     ArgumentError,
+    CapabilityError,
     ConcurrencyError,
     ConfigError,
     EvaluatorError,
@@ -64,6 +65,7 @@ from tessera_rl._native import (
 __all__ = [
     "ActionError",
     "ArgumentError",
+    "CapabilityError",
     "ConcurrencyError",
     "ConfigError",
     "AsyncStep",
