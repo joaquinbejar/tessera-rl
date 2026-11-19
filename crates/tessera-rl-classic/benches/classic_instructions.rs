@@ -19,7 +19,7 @@ use gungraun::{
 };
 use tessera_rl_classic::cartpole::physics;
 use tessera_rl_classic::{CartPole, CartPoleConfig, Tag, TagConfig};
-use tessera_rl_engine::{ActionInput, EnvPool, Masked, NoMasks, PoolOptions, Reseed};
+use tessera_rl_engine::{ActionInput, AutoReset, EnvPool, Masked, NoMasks, PoolOptions, Reseed};
 use tessera_rl_num::identity::Seed;
 
 fn options(n: u32) -> PoolOptions {
@@ -57,7 +57,20 @@ const MEASURED_STEPS: usize = 64;
 /// sequence, all outside the measured region. Every input is fixed, so the
 /// state reached is the same on every run.
 fn cartpole_steady(n: u32) -> (EnvPool<CartPole, NoMasks>, Vec<Vec<i32>>) {
-    let mut pool = EnvPool::new(CartPoleConfig::default(), options(n)).unwrap();
+    steady_with(n, options(n))
+}
+
+/// As `cartpole_steady`, with same-step auto-reset: the mode the PufferLib
+/// adapter uses, where an ended episode resets in its own step, so every
+/// step validates every instance on the fast path (env-step plan r3 E1).
+fn cartpole_steady_same_step(n: u32) -> (EnvPool<CartPole, NoMasks>, Vec<Vec<i32>>) {
+    let mut o = options(n);
+    o.auto_reset = AutoReset::SameStep;
+    steady_with(n, o)
+}
+
+fn steady_with(n: u32, options: PoolOptions) -> (EnvPool<CartPole, NoMasks>, Vec<Vec<i32>>) {
+    let mut pool = EnvPool::new(CartPoleConfig::default(), options).unwrap();
     pool.reset_all(Reseed::Keep).unwrap();
     let mut seed = 0x9e37_79b9_7f4a_7c15_u64;
     let mut row = || -> Vec<i32> {
@@ -135,6 +148,24 @@ fn cartpole_pool_steady(
     (pool, rows)
 }
 
+// As `cartpole_pool_steady`, under same-step auto-reset (the adapter's mode).
+#[library_benchmark]
+#[bench::n1024(setup = cartpole_steady_same_step, args = (1024))]
+fn cartpole_pool_steady_same_step(
+    (mut pool, rows): (EnvPool<CartPole, NoMasks>, Vec<Vec<i32>>),
+) -> (EnvPool<CartPole, NoMasks>, Vec<Vec<i32>>) {
+    for actions in &rows {
+        let out = pool
+            .step(ActionInput {
+                discrete: black_box(actions),
+                continuous: &[],
+            })
+            .unwrap();
+        black_box(out.rewards().first().copied());
+    }
+    (pool, rows)
+}
+
 #[library_benchmark]
 #[bench::n256(setup = tag, args = (256))]
 fn tag_pool_step(
@@ -156,6 +187,7 @@ library_benchmark_group!(
         cartpole_physics,
         cartpole_pool_step,
         cartpole_pool_steady,
+        cartpole_pool_steady_same_step,
         tag_pool_step
     ]
 );

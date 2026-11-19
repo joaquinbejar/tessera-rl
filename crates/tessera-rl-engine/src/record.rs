@@ -22,6 +22,16 @@ pub struct Record<E: Environment> {
     pub(crate) state: E::State,
 }
 
+impl<E: Environment> Record<E> {
+    /// Test hook (the fuzz target `fast_path`): the header, to forge counters
+    /// near their limits.
+    #[cfg(feature = "test-hooks")]
+    #[doc(hidden)]
+    pub fn header_mut(&mut self) -> &mut E::Header {
+        &mut self.header
+    }
+}
+
 impl<E: Environment> Clone for Record<E> {
     fn clone(&self) -> Self {
         *self

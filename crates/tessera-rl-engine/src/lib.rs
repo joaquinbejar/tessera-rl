@@ -18,6 +18,12 @@ pub mod debug;
 mod entry;
 mod error;
 #[cfg(test)]
+mod fast_path_facts_tests;
+#[cfg(test)]
+mod fast_path_mixed_tests;
+#[cfg(test)]
+mod fast_path_tests;
+#[cfg(test)]
 mod fault_tests;
 #[cfg(feature = "host")]
 mod host;

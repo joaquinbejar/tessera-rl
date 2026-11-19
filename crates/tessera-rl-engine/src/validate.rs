@@ -185,6 +185,63 @@ fn check_one<H: RecordLayout>(
     Ok(())
 }
 
+/// The fast path of `check_and_copy_actions` (env-step plan r3 section
+/// 3.3), for the plain Inline and Sync step only. The caller guarantees the
+/// facts that make the per-instance header checks pass and every slot
+/// required: no instance pending reset, every agent slot alive and acting,
+/// and no counter that can reach `u32::MAX` in this step.
+///
+/// Length errors are returned as the slow path returns them. Otherwise every
+/// value is range-checked first; only if all pass are the buffers copied
+/// (`Ok(true)`), so a refused call mutates nothing. `Ok(false)` means some
+/// value is out of range: nothing was copied, and the caller reruns the slow
+/// path, which reports the exact error (instance, agent, head, value) in its
+/// order.
+pub(crate) fn check_and_copy_actions_fast(
+    layout: &ActionLayout,
+    input: ActionInput<'_>,
+    discrete_out: &mut [i32],
+    continuous_out: &mut [f32],
+) -> Result<bool, EngineError> {
+    check_len("discrete", discrete_out.len(), input.discrete.len())?;
+    check_len("continuous", continuous_out.len(), input.continuous.len())?;
+    if !discrete_in_range(&layout.discrete, input.discrete)
+        || !continuous_in_range(&layout.continuous, input.continuous)
+    {
+        return Ok(false);
+    }
+    discrete_out.copy_from_slice(input.discrete);
+    continuous_out.copy_from_slice(input.continuous);
+    Ok(true)
+}
+
+/// Whether every value of the row-major `[rows, heads]` buffer is in
+/// `[0, n)` for its head; one head is the common case, a single pass.
+fn discrete_in_range(heads: &[u32], values: &[i32]) -> bool {
+    let ok = |v: i32, n: u32| u32::try_from(v).is_ok_and(|v| v < n);
+    match heads {
+        [] => values.is_empty(),
+        [n] => values.iter().all(|&v| ok(v, *n)),
+        _ => values
+            .chunks_exact(heads.len())
+            .all(|row| row.iter().zip(heads).all(|(&v, &n)| ok(v, n))),
+    }
+}
+
+/// Whether every value of the row-major `[rows, heads]` buffer is finite and
+/// within its head's bounds, compared in `f64` as the slow path does.
+fn continuous_in_range(bounds: &[(f64, f64)], values: &[f32]) -> bool {
+    if bounds.is_empty() {
+        return values.is_empty();
+    }
+    values.chunks_exact(bounds.len()).all(|row| {
+        row.iter().zip(bounds).all(|(&v, &(low, high))| {
+            let wide = f64::from(v);
+            v.is_finite() && wide >= low && wide <= high
+        })
+    })
+}
+
 /// Validates a step for every instance and copies the required actions
 /// into the internal buffers; values of slots that are not required are
 /// stored as zero and never validated.

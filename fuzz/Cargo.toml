@@ -35,6 +35,13 @@ doc = false
 bench = false
 
 [[bin]]
+name = "fast_path"
+path = "fuzz_targets/fast_path.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "config"
 path = "fuzz_targets/config.rs"
 test = false

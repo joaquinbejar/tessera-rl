@@ -285,6 +285,9 @@ where
     }
 
     fn write_record(&mut self, i: usize, record: &Record<E>) {
+        // Restore, fork and import write headers outside a step: the
+        // validation fast path's facts are unknown until the next slow path.
+        self.forget_fast_facts();
         if let (Some(header), Some(state)) = (self.headers.get_mut(i), self.states.get_mut(i)) {
             *header = record.header;
             *state = record.state;
