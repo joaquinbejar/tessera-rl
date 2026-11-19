@@ -121,13 +121,20 @@ fn argument(g: Gil<'_>, message: &str) -> capi::Raised {
     errors::error(g, Kind::Argument, message.to_owned())
 }
 
-/// A seed: an exact `int` in `[0, 2**64)` (never a `bool`).
+/// A seed: an exact `int` in `[0, 2**64)` (never a `bool`, an `int`
+/// subclass such as an `IntEnum`, or a NumPy integer). The error says what
+/// the value is: a bool, an int out of range, or not an exact int.
 fn seed_of(g: Gil<'_>, v: Ref<'_>, what: &str) -> CResult<Seed> {
     capi::to_u64(g, v, what).map(Seed::new).map_err(|_| {
         capi::clear_pending(g);
+        let got = match capi::kind(v) {
+            capi::Kind::Bool => "a bool",
+            capi::Kind::Int => "an int outside that range",
+            _ => "not an exact int",
+        };
         argument(
             g,
-            &format!("reset: {what} must be an int in [0, 2**64), not a bool"),
+            &format!("reset: {what} must be an exact int in [0, 2**64); got {got}"),
         )
     })
 }
