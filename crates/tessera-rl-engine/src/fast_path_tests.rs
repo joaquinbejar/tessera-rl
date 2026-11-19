@@ -28,7 +28,10 @@ const SPAWN: i32 = 2;
 const END: i32 = 4;
 const AGENTS: usize = 2;
 const N: usize = 6;
-const OPS: usize = 600;
+const OPS: usize = 1200;
+/// Steps on the fast path each seed must reach, so that a run poisoned
+/// and rebuilt often (debug-checks) still covers it.
+const MIN_FAST: usize = 40;
 const N_U64: u64 = N as u64;
 const SECOND: AgentSlot = match AgentSlot::new(1, 2) {
     Some(s) => s,
@@ -146,7 +149,7 @@ fn pool(auto_reset: AutoReset, workers: usize) -> EnvPool<Events> {
 }
 
 /// Every output the step writes, and every record, as comparable values.
-fn state(p: &mut EnvPool<Events>) -> (Vec<String>, Vec<Vec<u8>>) {
+fn state(p: &mut EnvPool<Events>) -> (Vec<String>, Vec<String>) {
     let v = p.outputs.view_all();
     let b = |s: &[Bool8]| s.iter().map(|f| f.get()).collect::<Vec<_>>();
     let outputs = vec![
@@ -165,8 +168,15 @@ fn state(p: &mut EnvPool<Events>) -> (Vec<String>, Vec<Vec<u8>>) {
         format!("{:?}", v.episode_length),
         format!("{:?}", v.observations[0]),
     ];
+    // A poisoned pool refuses snapshots (debug-checks poisons on invalid
+    // agent events): equal refusals are an equal state.
     let records = (0..N)
-        .map(|i| p.snapshot(u32::try_from(i).unwrap()).unwrap().to_bytes())
+        .map(|i| {
+            format!(
+                "{:?}",
+                p.snapshot(u32::try_from(i).unwrap()).map(|r| r.to_bytes())
+            )
+        })
         .collect();
     (outputs, records)
 }
@@ -176,7 +186,7 @@ fn state(p: &mut EnvPool<Events>) -> (Vec<String>, Vec<Vec<u8>>) {
 fn actions(rng: &mut Rng) -> Vec<i32> {
     let mut a: Vec<i32> = (0..N)
         .flat_map(|_| {
-            let bits = match rng.below(10) {
+            let bits = match rng.below(40) {
                 0 => KILL,
                 1 => SPAWN,
                 2 => END,
@@ -205,6 +215,97 @@ fn ids(rng: &mut Rng) -> Vec<u32> {
 
 /// Runs `OPS` random operations on a fast-path pool and a slow-path
 /// reference; returns how many steps took the fast path.
+/// Runs operation `kind` on both pools; returns their results as text.
+fn apply(
+    kind: usize,
+    fast: &mut EnvPool<Events>,
+    slow: &mut EnvPool<Events>,
+    rng: &mut Rng,
+    fast_steps: &mut usize,
+) -> (String, String) {
+    match kind {
+        0 => (
+            format!("{:?}", fast.reset_all(Reseed::Keep).map(|_| ())),
+            format!("{:?}", slow.reset_all(Reseed::Keep).map(|_| ())),
+        ),
+        1 => {
+            let ids = ids(rng);
+            (
+                format!("{:?}", fast.reset(&ids, Reseed::Keep).map(|_| ())),
+                format!("{:?}", slow.reset(&ids, Reseed::Keep).map(|_| ())),
+            )
+        }
+        2 => {
+            let (src, dst) = (rng.below(N_U64), rng.below(N_U64));
+            let r: Record<Events> = fast.snapshot(u32::try_from(src).unwrap()).unwrap();
+            let d = u32::try_from(dst).unwrap();
+            (
+                format!("{:?}", fast.restore(d, &r)),
+                format!("{:?}", slow.restore(d, &r)),
+            )
+        }
+        3 => {
+            let mut all: Vec<Record<Events>> = (0..N)
+                .map(|i| fast.snapshot(u32::try_from(i).unwrap()).unwrap())
+                .collect();
+            all.rotate_left(1);
+            (
+                format!("{:?}", fast.restore_all(&all)),
+                format!("{:?}", slow.restore_all(&all)),
+            )
+        }
+        4 => {
+            let src = u32::try_from(rng.below(N_U64)).unwrap();
+            let dst: Vec<u32> = ids(rng).into_iter().filter(|&d| d != src).collect();
+            (
+                format!("{:?}", fast.fork(src, &dst)),
+                format!("{:?}", slow.fork(src, &dst)),
+            )
+        }
+        5 => {
+            let src = u32::try_from(rng.below(N_U64)).unwrap();
+            let dst: Vec<u32> = ids(rng).into_iter().filter(|&d| d != src).collect();
+            (
+                format!("{:?}", fast.fork_branched(src, &dst, None)),
+                format!("{:?}", slow.fork_branched(src, &dst, None)),
+            )
+        }
+        6 => {
+            let id = u32::try_from(rng.below(N_U64)).unwrap();
+            let from = u32::try_from(rng.below(N_U64)).unwrap();
+            let rec = DecodedRecord::<Events>::from(fast.snapshot(from).unwrap());
+            (
+                format!("{:?}", fast.import(&[id], &[rec])),
+                format!("{:?}", slow.import(&[id], &[rec])),
+            )
+        }
+        7 => {
+            let recs: Vec<DecodedRecord<Events>> = (0..N)
+                .rev()
+                .map(|i| DecodedRecord::from(fast.snapshot(u32::try_from(i).unwrap()).unwrap()))
+                .collect();
+            (
+                format!("{:?}", fast.import_all(&recs)),
+                format!("{:?}", slow.import_all(&recs)),
+            )
+        }
+        _ => {
+            let a = actions(rng);
+            if fast.fast_path_armed() {
+                *fast_steps += 1;
+            }
+            let input = ActionInput {
+                discrete: &a,
+                continuous: &[],
+            };
+            (
+                format!("{:?}", fast.step(input).map(|_| ())),
+                format!("{:?}", slow.step(input).map(|_| ())),
+            )
+        }
+    }
+}
+
 fn differential(auto_reset: AutoReset, workers: usize, seed: u64) -> usize {
     let mut fast = pool(auto_reset, workers);
     let mut slow = pool(auto_reset, 0);
@@ -214,94 +315,26 @@ fn differential(auto_reset: AutoReset, workers: usize, seed: u64) -> usize {
     slow.reset_all(Reseed::Keep).unwrap();
     for op in 0..OPS {
         slow.forget_fast_facts();
-        let kind = rng.below(20);
-        let (rf, rs): (String, String) = match kind {
-            0 => (
-                format!("{:?}", fast.reset_all(Reseed::Keep).map(|_| ())),
-                format!("{:?}", slow.reset_all(Reseed::Keep).map(|_| ())),
-            ),
-            1 => {
-                let ids = ids(&mut rng);
-                (
-                    format!("{:?}", fast.reset(&ids, Reseed::Keep).map(|_| ())),
-                    format!("{:?}", slow.reset(&ids, Reseed::Keep).map(|_| ())),
-                )
-            }
-            2 => {
-                let (src, dst) = (rng.below(N_U64), rng.below(N_U64));
-                let r: Record<Events> = fast.snapshot(u32::try_from(src).unwrap()).unwrap();
-                let d = u32::try_from(dst).unwrap();
-                (
-                    format!("{:?}", fast.restore(d, &r)),
-                    format!("{:?}", slow.restore(d, &r)),
-                )
-            }
-            3 => {
-                let mut all: Vec<Record<Events>> = (0..N)
-                    .map(|i| fast.snapshot(u32::try_from(i).unwrap()).unwrap())
-                    .collect();
-                all.rotate_left(1);
-                (
-                    format!("{:?}", fast.restore_all(&all)),
-                    format!("{:?}", slow.restore_all(&all)),
-                )
-            }
-            4 => {
-                let src = u32::try_from(rng.below(N_U64)).unwrap();
-                let dst: Vec<u32> = ids(&mut rng).into_iter().filter(|&d| d != src).collect();
-                (
-                    format!("{:?}", fast.fork(src, &dst)),
-                    format!("{:?}", slow.fork(src, &dst)),
-                )
-            }
-            5 => {
-                let src = u32::try_from(rng.below(N_U64)).unwrap();
-                let dst: Vec<u32> = ids(&mut rng).into_iter().filter(|&d| d != src).collect();
-                (
-                    format!("{:?}", fast.fork_branched(src, &dst, None)),
-                    format!("{:?}", slow.fork_branched(src, &dst, None)),
-                )
-            }
-            6 => {
-                let id = u32::try_from(rng.below(N_U64)).unwrap();
-                let from = u32::try_from(rng.below(N_U64)).unwrap();
-                let rec = DecodedRecord::<Events>::from(fast.snapshot(from).unwrap());
-                (
-                    format!("{:?}", fast.import(&[id], &[rec])),
-                    format!("{:?}", slow.import(&[id], &[rec])),
-                )
-            }
-            7 => {
-                let recs: Vec<DecodedRecord<Events>> = (0..N)
-                    .rev()
-                    .map(|i| DecodedRecord::from(fast.snapshot(u32::try_from(i).unwrap()).unwrap()))
-                    .collect();
-                (
-                    format!("{:?}", fast.import_all(&recs)),
-                    format!("{:?}", slow.import_all(&recs)),
-                )
-            }
-            _ => {
-                let a = actions(&mut rng);
-                if fast.fast_path_armed() {
-                    fast_steps += 1;
-                }
-                let input = ActionInput {
-                    discrete: &a,
-                    continuous: &[],
-                };
-                (
-                    format!("{:?}", fast.step(input).map(|_| ())),
-                    format!("{:?}", slow.step(input).map(|_| ())),
-                )
-            }
-        };
+        let kind = rng.below(40);
+        let (rf, rs) = apply(kind, &mut fast, &mut slow, &mut rng, &mut fast_steps);
         assert_eq!(rf, rs, "op {op} (kind {kind}): results differ");
         assert_eq!(
             state(&mut fast),
             state(&mut slow),
             "op {op} (kind {kind}): state differs"
         );
+        // Under debug-checks an invalid agent event poisons the pool: both
+        // must poison together, and the run goes on with fresh pools.
+        assert_eq!(
+            fast.poisoned, slow.poisoned,
+            "op {op} (kind {kind}): poisoning differs"
+        );
+        if fast.poisoned {
+            fast = pool(auto_reset, workers);
+            slow = pool(auto_reset, 0);
+            fast.reset_all(Reseed::Keep).unwrap();
+            slow.reset_all(Reseed::Keep).unwrap();
+        }
     }
     fast_steps
 }
@@ -310,8 +343,8 @@ fn differential(auto_reset: AutoReset, workers: usize, seed: u64) -> usize {
 fn test_fast_path_inline_same_step_matches_slow_path() {
     for seed in 1..=4 {
         assert!(
-            differential(AutoReset::SameStep, 0, seed) > 0,
-            "seed {seed}: fast path never taken"
+            differential(AutoReset::SameStep, 0, seed) >= MIN_FAST,
+            "seed {seed}: fast path taken too rarely"
         );
     }
 }
@@ -320,8 +353,8 @@ fn test_fast_path_inline_same_step_matches_slow_path() {
 fn test_fast_path_inline_next_step_matches_slow_path() {
     for seed in 5..=8 {
         assert!(
-            differential(AutoReset::NextStep, 0, seed) > 0,
-            "seed {seed}: fast path never taken"
+            differential(AutoReset::NextStep, 0, seed) >= MIN_FAST,
+            "seed {seed}: fast path taken too rarely"
         );
     }
 }
@@ -330,8 +363,8 @@ fn test_fast_path_inline_next_step_matches_slow_path() {
 fn test_fast_path_sync_same_step_matches_slow_path() {
     for seed in 9..=11 {
         assert!(
-            differential(AutoReset::SameStep, 2, seed) > 0,
-            "seed {seed}: fast path never taken"
+            differential(AutoReset::SameStep, 2, seed) >= MIN_FAST,
+            "seed {seed}: fast path taken too rarely"
         );
     }
 }
@@ -340,8 +373,8 @@ fn test_fast_path_sync_same_step_matches_slow_path() {
 fn test_fast_path_sync_next_step_matches_slow_path() {
     for seed in 12..=14 {
         assert!(
-            differential(AutoReset::NextStep, 2, seed) > 0,
-            "seed {seed}: fast path never taken"
+            differential(AutoReset::NextStep, 2, seed) >= MIN_FAST,
+            "seed {seed}: fast path taken too rarely"
         );
     }
 }

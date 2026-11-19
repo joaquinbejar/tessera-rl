@@ -29,7 +29,10 @@ const DH: usize = 2;
 const NVEC: [u32; DH] = [3, 5];
 const N: usize = 6;
 const N_U64: u64 = 6;
-const OPS: usize = 600;
+const OPS: usize = 1200;
+/// Steps on the fast path each seed must reach, so that a run poisoned
+/// and rebuilt often (debug-checks) still covers it.
+const MIN_FAST: usize = 40;
 const THIRD: AgentSlot = match AgentSlot::new(2, 3) {
     Some(s) => s,
     None => AgentSlot::FIRST,
@@ -173,7 +176,7 @@ fn pool(auto_reset: AutoReset, workers: usize) -> EnvPool<Mixed> {
     }
 }
 
-fn state(p: &mut EnvPool<Mixed>) -> (Vec<String>, Vec<Vec<u8>>) {
+fn state(p: &mut EnvPool<Mixed>) -> (Vec<String>, Vec<String>) {
     let v = p.outputs.view_all();
     let b = |s: &[Bool8]| s.iter().map(|f| f.get()).collect::<Vec<_>>();
     let outputs = vec![
@@ -191,8 +194,15 @@ fn state(p: &mut EnvPool<Mixed>) -> (Vec<String>, Vec<Vec<u8>>) {
         format!("{:?}", v.episode_return),
         format!("{:?}", v.episode_length),
     ];
+    // A poisoned pool refuses snapshots (debug-checks poisons on invalid
+    // agent events): equal refusals are an equal state.
     let records = (0..N)
-        .map(|i| p.snapshot(u32::try_from(i).unwrap()).unwrap().to_bytes())
+        .map(|i| {
+            format!(
+                "{:?}",
+                p.snapshot(u32::try_from(i).unwrap()).map(|r| r.to_bytes())
+            )
+        })
         .collect();
     (outputs, records)
 }
@@ -205,9 +215,9 @@ fn actions(rng: &mut Rng) -> (Vec<i32>, Vec<f32>) {
     let mut d = Vec::with_capacity(N * AGENTS * DH);
     let mut c = Vec::with_capacity(N * AGENTS);
     for _ in 0..N * AGENTS {
-        let toggle = rng.below(8) == 0;
+        let toggle = rng.below(40) == 0;
         d.push(if toggle { 2 } else { rng.below_i32(2) });
-        d.push(match rng.below(10) {
+        d.push(match rng.below(40) {
             0 => 1,
             1 => 3,
             2 => 4,
@@ -247,6 +257,69 @@ fn ids(rng: &mut Rng) -> Vec<u32> {
     v
 }
 
+/// Runs operation `kind` on both pools; returns their results as text.
+fn apply(
+    kind: usize,
+    fast: &mut EnvPool<Mixed>,
+    slow: &mut EnvPool<Mixed>,
+    rng: &mut Rng,
+    fast_steps: &mut usize,
+) -> (String, String) {
+    match kind {
+        0 => (
+            format!("{:?}", fast.reset_all(Reseed::Keep).map(|_| ())),
+            format!("{:?}", slow.reset_all(Reseed::Keep).map(|_| ())),
+        ),
+        1 => {
+            let ids = ids(rng);
+            (
+                format!("{:?}", fast.reset(&ids, Reseed::Keep).map(|_| ())),
+                format!("{:?}", slow.reset(&ids, Reseed::Keep).map(|_| ())),
+            )
+        }
+        2 => {
+            let src = u32::try_from(rng.below(N_U64)).unwrap();
+            let dst = u32::try_from(rng.below(N_U64)).unwrap();
+            let r: Record<Mixed> = fast.snapshot(src).unwrap();
+            (
+                format!("{:?}", fast.restore(dst, &r)),
+                format!("{:?}", slow.restore(dst, &r)),
+            )
+        }
+        3 => {
+            let src = u32::try_from(rng.below(N_U64)).unwrap();
+            let dst: Vec<u32> = ids(rng).into_iter().filter(|&d| d != src).collect();
+            (
+                format!("{:?}", fast.fork(src, &dst)),
+                format!("{:?}", slow.fork(src, &dst)),
+            )
+        }
+        4 => {
+            let id = u32::try_from(rng.below(N_U64)).unwrap();
+            let from = u32::try_from(rng.below(N_U64)).unwrap();
+            let rec = DecodedRecord::<Mixed>::from(fast.snapshot(from).unwrap());
+            (
+                format!("{:?}", fast.import(&[id], &[rec])),
+                format!("{:?}", slow.import(&[id], &[rec])),
+            )
+        }
+        _ => {
+            let (d, c) = actions(rng);
+            if fast.fast_path_armed() {
+                *fast_steps += 1;
+            }
+            let input = ActionInput {
+                discrete: &d,
+                continuous: &c,
+            };
+            (
+                format!("{:?}", fast.step(input).map(|_| ())),
+                format!("{:?}", slow.step(input).map(|_| ())),
+            )
+        }
+    }
+}
+
 fn differential(auto_reset: AutoReset, workers: usize, seed: u64) -> usize {
     let mut fast = pool(auto_reset, workers);
     let mut slow = pool(auto_reset, 0);
@@ -256,66 +329,26 @@ fn differential(auto_reset: AutoReset, workers: usize, seed: u64) -> usize {
     slow.reset_all(Reseed::Keep).unwrap();
     for op in 0..OPS {
         slow.forget_fast_facts();
-        let kind = rng.below(24);
-        let (rf, rs): (String, String) = match kind {
-            0 => (
-                format!("{:?}", fast.reset_all(Reseed::Keep).map(|_| ())),
-                format!("{:?}", slow.reset_all(Reseed::Keep).map(|_| ())),
-            ),
-            1 => {
-                let ids = ids(&mut rng);
-                (
-                    format!("{:?}", fast.reset(&ids, Reseed::Keep).map(|_| ())),
-                    format!("{:?}", slow.reset(&ids, Reseed::Keep).map(|_| ())),
-                )
-            }
-            2 => {
-                let src = u32::try_from(rng.below(N_U64)).unwrap();
-                let dst = u32::try_from(rng.below(N_U64)).unwrap();
-                let r: Record<Mixed> = fast.snapshot(src).unwrap();
-                (
-                    format!("{:?}", fast.restore(dst, &r)),
-                    format!("{:?}", slow.restore(dst, &r)),
-                )
-            }
-            3 => {
-                let src = u32::try_from(rng.below(N_U64)).unwrap();
-                let dst: Vec<u32> = ids(&mut rng).into_iter().filter(|&d| d != src).collect();
-                (
-                    format!("{:?}", fast.fork(src, &dst)),
-                    format!("{:?}", slow.fork(src, &dst)),
-                )
-            }
-            4 => {
-                let id = u32::try_from(rng.below(N_U64)).unwrap();
-                let from = u32::try_from(rng.below(N_U64)).unwrap();
-                let rec = DecodedRecord::<Mixed>::from(fast.snapshot(from).unwrap());
-                (
-                    format!("{:?}", fast.import(&[id], &[rec])),
-                    format!("{:?}", slow.import(&[id], &[rec])),
-                )
-            }
-            _ => {
-                let (d, c) = actions(&mut rng);
-                if fast.fast_path_armed() {
-                    fast_steps += 1;
-                }
-                let input = ActionInput {
-                    discrete: &d,
-                    continuous: &c,
-                };
-                (
-                    format!("{:?}", fast.step(input).map(|_| ())),
-                    format!("{:?}", slow.step(input).map(|_| ())),
-                )
-            }
-        };
+        let kind = rng.below(48);
+        let (rf, rs) = apply(kind, &mut fast, &mut slow, &mut rng, &mut fast_steps);
         assert_eq!(rf, rs, "op {op} (kind {kind}): results differ");
         assert_eq!(
             state(&mut fast),
             state(&mut slow),
             "op {op} (kind {kind}): state differs"
         );
+        // Under debug-checks an invalid agent event poisons the pool: both
+        // must poison together, and the run goes on with fresh pools.
+        assert_eq!(
+            fast.poisoned, slow.poisoned,
+            "op {op} (kind {kind}): poisoning differs"
+        );
+        if fast.poisoned {
+            fast = pool(auto_reset, workers);
+            slow = pool(auto_reset, 0);
+            fast.reset_all(Reseed::Keep).unwrap();
+            slow.reset_all(Reseed::Keep).unwrap();
+        }
     }
     fast_steps
 }
@@ -324,8 +357,8 @@ fn differential(auto_reset: AutoReset, workers: usize, seed: u64) -> usize {
 fn test_fast_path_mixed_heads_inline_same_step_matches_slow_path() {
     for seed in 21..=24 {
         assert!(
-            differential(AutoReset::SameStep, 0, seed) > 0,
-            "seed {seed}: fast path never taken"
+            differential(AutoReset::SameStep, 0, seed) >= MIN_FAST,
+            "seed {seed}: fast path taken too rarely"
         );
     }
 }
@@ -334,8 +367,8 @@ fn test_fast_path_mixed_heads_inline_same_step_matches_slow_path() {
 fn test_fast_path_mixed_heads_inline_next_step_matches_slow_path() {
     for seed in 25..=28 {
         assert!(
-            differential(AutoReset::NextStep, 0, seed) > 0,
-            "seed {seed}: fast path never taken"
+            differential(AutoReset::NextStep, 0, seed) >= MIN_FAST,
+            "seed {seed}: fast path taken too rarely"
         );
     }
 }
@@ -344,8 +377,8 @@ fn test_fast_path_mixed_heads_inline_next_step_matches_slow_path() {
 fn test_fast_path_mixed_heads_sync_same_step_matches_slow_path() {
     for seed in 29..=31 {
         assert!(
-            differential(AutoReset::SameStep, 2, seed) > 0,
-            "seed {seed}: fast path never taken"
+            differential(AutoReset::SameStep, 2, seed) >= MIN_FAST,
+            "seed {seed}: fast path taken too rarely"
         );
     }
 }
