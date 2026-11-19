@@ -559,7 +559,9 @@ macro_rules! callout {
 
 /// Defines the non-generic boundary thunk `$thunk` for `$target`: the
 /// fixed module initializers, which carry `no_mangle` (a generic
-/// instantiation cannot).
+/// instantiation cannot). Gated like its only users, the two
+/// initializers below.
+#[cfg(any(feature = "native-module", feature = "host"))]
 macro_rules! thunk {
     (@naked $(#[$meta:meta])* $thunk:ident => $target:path : fn($($arg:ty),*) -> $ret:ty) => {
         $(#[$meta])*
