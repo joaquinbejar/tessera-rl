@@ -1221,6 +1221,43 @@ mod tests {
         }
     }
 
+    /// Issue #273: a respawn into a dead slot reaches the owned copy of an
+    /// async gather as generation 1, little-endian, at that row's slot.
+    #[test]
+    fn test_async_gathered_owned_slot_generations_carry_a_respawn() {
+        let cfg = CountConfig {
+            kill_at: 1,
+            respawn: true,
+            length: 20,
+            ..CountConfig::default()
+        };
+        let ops = asynced(&cfg, BatchOutputs::Owned);
+        let first = ops.reset_all(&ResetSeed::Keep).unwrap();
+        let owned = first.owned.clone().unwrap();
+        assert!(owned.slot_generations.iter().all(|&b| b == 0));
+        let mut out = first;
+        let mut respawned = false;
+        for _ in 0..40 {
+            let ids: Vec<u32> = out.ids.iter().map(|b| b.id).collect();
+            out = deliver(&*ops, &ids, out.seq);
+            let owned = out.owned.clone().unwrap();
+            let rows = out.ids.len();
+            assert_eq!(owned.slot_generations.len(), rows * 2 * 4);
+            // Slot 0 never dies; slot 1 respawns: [rows, A] u32 little-endian.
+            for row in owned.slot_generations.as_chunks::<8>().0 {
+                assert_eq!(row.get(0..4), Some(&[0u8; 4][..]));
+                if row.get(4..8) == Some(&[1, 0, 0, 0][..]) {
+                    respawned = true;
+                }
+            }
+            if respawned {
+                break;
+            }
+        }
+        assert!(respawned, "no gathered row showed a respawn");
+        ops.close();
+    }
+
     /// Stale views never revive: what ends them has moved before the flag
     /// clears, on every recovery and every writer that drops tokens.
     #[test]
