@@ -45,8 +45,16 @@ class Step(NamedTuple):
     environment, exactly one in a sequential one while its game runs, and
     none on a finished board.
 
+    ``slot_generations`` (``uint32``, ``(num_envs, agents)``) is the
+    generation of each slot's occupant (ADR-0013 identity: an agent is
+    (slot, generation)); it starts at 0 and grows by one each time an agent
+    spawns into a slot that died. It has the same name, dtype and shape as
+    host protocol 1's output.
+
     Breaking change in P2-M1b: ``acting`` is the ninth field, so unpacking
     a ``Step`` into 8 names fails; access by name is stable.
+    ``slot_generations`` is the tenth field (issue #273), so unpacking into
+    9 names fails as well.
     """
 
     observations: dict[str, np.ndarray]
@@ -58,6 +66,7 @@ class Step(NamedTuple):
     episode_truncated: np.ndarray
     masks: np.ndarray | None
     acting: np.ndarray
+    slot_generations: np.ndarray
 
 
 class HalfStep(NamedTuple):
@@ -360,6 +369,7 @@ class Env:
             episode_truncated=field("episode_truncated", np.bool_, (n,)),
             masks=masks,
             acting=field("acting", np.bool_, (n, a)),
+            slot_generations=field("slot_generations", "<u4", (n, a)),
         )
 
     def snapshot(self, index: int) -> bytes:

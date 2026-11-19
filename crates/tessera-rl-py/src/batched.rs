@@ -913,6 +913,15 @@ mod tests {
 
     const N: u32 = 8;
 
+    #[test]
+    fn test_u32_row_bytes_puts_little_endian_at_each_slot() {
+        let mut got = [0u8; 8];
+        u32_row_bytes(&[1, 0x0102_0304], |at, bytes| {
+            got[at..at + bytes.len()].copy_from_slice(bytes);
+        });
+        assert_eq!(got, [1, 0, 0, 0, 4, 3, 2, 1]);
+    }
+
     fn args(pipelined: bool, asynced: Option<(usize, BatchOutputs)>) -> PoolArgs {
         PoolArgs {
             num_envs: N,

@@ -1083,6 +1083,54 @@ mod tests {
     }
 
     #[test]
+    fn test_u32_bytes_are_little_endian() {
+        assert_eq!(
+            u32_bytes(&[0, 1, 0x0102_0304, u32::MAX]),
+            [0, 0, 0, 0, 1, 0, 0, 0, 4, 3, 2, 1, 255, 255, 255, 255]
+        );
+    }
+
+    /// Issue #273: a respawn into a dead slot reaches the owned copy as
+    /// generation 1, little-endian, at that slot's offset.
+    #[test]
+    fn test_owned_slot_generations_carry_a_respawn() {
+        let cfg = CountConfig {
+            kill_at: 1,
+            respawn: true,
+            length: 20,
+            ..CountConfig::default()
+        };
+        let options = PoolOptions::new(NonZeroU32::new(2).unwrap(), Seed::new(1));
+        let pool = EnvPool::<Counter, NoMasks>::new(cfg.clone(), options).unwrap();
+        let args = PoolArgs {
+            num_envs: 2,
+            seed: 1,
+            max_episode_steps: None,
+            auto_reset: "next_step".to_owned(),
+            chunk_size: None,
+            workers: 0,
+            pipelined: false,
+            asynced: None,
+        };
+        let mut ops = finish(&cfg, pool, &args, 2, false).unwrap();
+        ops.reset(None, &ResetSeed::Keep).unwrap();
+        assert_eq!(ops.outputs().unwrap().slot_generations, [0u8; 16]);
+        let mut respawned = false;
+        for _ in 0..10 {
+            ops.step(discrete(&[0, 2, 0, 2])).unwrap();
+            let out = ops.outputs().unwrap();
+            assert_eq!(out.slot_generations.len(), 16);
+            // Instance 0's slot 1: bytes 4..8 (`[N, A]`, u32 little-endian).
+            if out.slot_generations.get(4..8) == Some(&[1, 0, 0, 0][..]) {
+                assert_eq!(out.slot_generations.get(0..4), Some(&[0u8; 4][..]));
+                respawned = true;
+                break;
+            }
+        }
+        assert!(respawned, "instance 0's agent 1 never respawned");
+    }
+
+    #[test]
     fn test_pick_wait_refuses_a_forked_macos_child_without_native_wait() {
         assert_eq!(pick_wait(true, true, false), None);
         assert_eq!(pick_wait(true, true, true), Some(WaitBackend::Native));

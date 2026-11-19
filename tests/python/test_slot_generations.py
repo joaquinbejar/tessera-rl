@@ -69,3 +69,15 @@ def test_slot_generations_borrowed_equals_owned_and_stays_zero(env_id, kwargs):
     # Agents die (Tag catches evaders, snakes crash), but nothing respawns.
     assert not alive_b.all()
     assert not borrowed.any()
+
+
+@pytest.mark.parametrize("outputs", ["borrowed", "owned"])
+def test_step_carries_slot_generations(outputs):
+    env = t.make("tessera/Tag-v1", num_envs=N, seed=7, outputs=outputs, pursuers=2, evaders=2, radius=1)
+    s = env.reset()
+    agents = env._native.layout()["agents"]
+    assert s._fields[-1] == "slot_generations"
+    assert s.slot_generations.dtype == np.uint32
+    assert s.slot_generations.shape == (N, agents)
+    assert np.array_equal(s.slot_generations, generations(env))
+    env.close()
