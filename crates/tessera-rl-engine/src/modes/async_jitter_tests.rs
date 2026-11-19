@@ -738,9 +738,12 @@ fn test_async_idle_token_readable_while_a_step_is_paused_then_panics() {
 }
 
 /// How long a test of run claims may take before it fails by name instead
-/// of hanging the binary (Miri runs far slower).
+/// of hanging the binary (Miri runs far slower). It catches hangs; it does
+/// not bound speed: these tests sleep on purpose (the injected jitter) and
+/// take about a second each, but a starved process on a loaded host can
+/// run them 30 times slower, so the limit leaves a wide margin.
 pub(crate) const WATCHDOG: core::time::Duration =
-    core::time::Duration::from_secs(if cfg!(miri) { 1_200 } else { 30 });
+    core::time::Duration::from_secs(if cfg!(miri) { 1_200 } else { 300 });
 
 /// Runs `f` on its own thread and fails, naming `what`, if it has not
 /// finished within [`WATCHDOG`]: a broken claim or ring then fails the test
