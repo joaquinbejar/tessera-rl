@@ -332,6 +332,96 @@ impl Export {
         };
         dlpack::capsule(g, &src, versioned, self.0.read_only)
     }
+
+    /// `__dlpack__(*, stream=None, max_version=None, dl_device=None,
+    /// copy=None)` of a borrowed CPU view (SPEC 5.3 rule 6): a versioned,
+    /// read-only capsule when the consumer accepts DLPack 1.x, legacy
+    /// otherwise. A stream other than -1, a device other than
+    /// `(kDLCPU, 0)` or `copy=True` raises `BufferError`.
+    ///
+    /// # Errors
+    ///
+    /// `TypeError` for positional arguments, an unknown keyword or an
+    /// argument of the wrong type;
+    /// `BufferError` as above or from [`Export::dlpack`].
+    pub fn dlpack_call<'py>(
+        &self,
+        g: Gil<'py>,
+        args: Ref<'py>,
+        kwargs: Option<Ref<'py>>,
+    ) -> CResult<Mine<'py>> {
+        if !capi::tuple_items(g, args, "the arguments")?.is_empty() {
+            return Err(capi::raise(
+                g,
+                capi::type_error(),
+                "__dlpack__ takes keyword arguments only",
+            ));
+        }
+        let kw = match kwargs {
+            Some(d) => capi::dict_items(g, d, "keyword arguments")?,
+            None => Vec::new(),
+        };
+        if let Some((key, _)) = kw
+            .iter()
+            .find(|(k, _)| !["stream", "max_version", "dl_device", "copy"].contains(&k.as_str()))
+        {
+            return Err(capi::raise(
+                g,
+                capi::type_error(),
+                &format!("__dlpack__ got an unexpected keyword argument {key:?}"),
+            ));
+        }
+        let get = |key: &str| {
+            kw.iter()
+                .find(|(k, _)| k == key)
+                .map(|(_, v)| v.as_ref())
+                .filter(|v| !v.is_none())
+        };
+        if let Some(stream) = get("stream")
+            && capi::to_i64(g, stream, "stream")? != -1
+        {
+            return Err(capi::raise(
+                g,
+                capi::buffer_error(),
+                "CPU outputs take no stream",
+            ));
+        }
+        if let Some(device) = get("dl_device")
+            && int_pair(g, device, "dl_device")? != (1, 0)
+        {
+            return Err(capi::raise(
+                g,
+                capi::buffer_error(),
+                "outputs live on the CPU (kDLCPU, 0)",
+            ));
+        }
+        if let Some(copy) = get("copy")
+            && capi::to_bool(g, copy, "copy")?
+        {
+            return Err(capi::raise(
+                g,
+                capi::buffer_error(),
+                "borrowed views do not copy; use outputs=\"owned\"",
+            ));
+        }
+        let versioned = match get("max_version") {
+            Some(max) => int_pair(g, max, "max_version")?.0 >= 1,
+            None => false,
+        };
+        self.dlpack(g, versioned)
+    }
+}
+
+/// An exact `(int, int)` tuple.
+fn int_pair(g: Gil<'_>, v: Ref<'_>, what: &str) -> CResult<(i64, i64)> {
+    match capi::tuple_items(g, v, what)?.as_slice() {
+        [a, b] => Ok((capi::to_i64(g, *a, what)?, capi::to_i64(g, *b, what)?)),
+        _ => Err(capi::raise(
+            g,
+            capi::type_error(),
+            &format!("{what} must be a pair of ints"),
+        )),
+    }
 }
 
 /// Whether `element` may describe a region of `dtype`: a typed region only

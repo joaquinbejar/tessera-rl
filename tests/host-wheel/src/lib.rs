@@ -17,8 +17,9 @@ use tessera_rl_core::config::canonical_bytes;
 use tessera_rl_core::{ConfigDecode, ConfigItem, ConfigSource};
 use tessera_rl_macros::EnvConfig;
 use tessera_rl_num::{Fx32, Fx64};
+use tessera_rl_pyffi::ffi::boundary::{self, Policy};
 use tessera_rl_pyffi::ffi::capi::{self, CResult, Gil, Mine, Ref};
-use tessera_rl_pyffi::ffi::module_def::{FunctionArg, FunctionKw, FunctionRow};
+use tessera_rl_pyffi::ffi::module_def::{FunctionArg, FunctionKw, FunctionNoArgs, FunctionRow};
 use tessera_rl_pyffi::host::config::raise_decode;
 use tessera_rl_pyffi::host::factory::config_canonical;
 
@@ -141,6 +142,20 @@ impl FunctionArg for ConfigRust {
     }
 }
 
+/// `_fp_policy()`: this module's floating-point policy (ADR-0041), as the
+/// host object's `_tessera_set_fp_policy` set it.
+struct FpPolicy;
+
+impl FunctionNoArgs for FpPolicy {
+    fn call(g: Gil<'_>) -> CResult<Mine<'_>> {
+        let name = match boundary::policy() {
+            Policy::Canonicalize => "canonicalize",
+            Policy::Reject => "reject",
+        };
+        capi::string(g, name)
+    }
+}
+
 tessera_rl_pyffi::export_host_env!(
     tessera_rl_test_host_env::Counter,
     module = c"_tessera_host",
@@ -153,5 +168,6 @@ tessera_rl_pyffi::export_host_env!(
             c"_config_rust",
             c"The canonical form of the test config decoded from a named Rust case."
         ),
+        FunctionRow::noargs::<FpPolicy>(c"_fp_policy", c"This module's floating-point policy."),
     ]
 );

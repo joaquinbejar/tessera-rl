@@ -58,6 +58,7 @@ fn test_host_dyn_pool_mirrors_every_method() {
         let mut boxed: Box<dyn DynHostPool> = Box::new(pool(workers));
         assert_eq!(boxed.registration(), &HostRegistration::of::<Book>());
         assert_eq!(concrete.registration(), boxed.registration());
+        assert_eq!(concrete.layout(), boxed.layout());
         let actions = vec![1i32; 4 * AGENTS * 2];
         for call in 0..7 {
             let (a, b) = match call {

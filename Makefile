@@ -158,7 +158,7 @@ py-test-hooks:
 py-test-host:
 	uv sync --locked --python 3.11
 	uv pip install --python .venv/bin/python --no-deps --reinstall ./tests/host-wheel
-	uv run --locked --python 3.11 pytest -q tests/python/test_host_factory.py
+	uv run --locked --python 3.11 pytest -q tests/python/test_host_factory.py tests/python/test_host_protocol.py
 
 # The Python tests with PyTorch (marker `torch`), then the default
 # environment again.

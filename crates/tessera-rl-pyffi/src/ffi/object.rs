@@ -4,8 +4,10 @@
 //! hold a Rust [`Body`], with methods written as safe trait impls.
 //!
 //! - A type is described by a [`TypeSpec<T>`], built at compile time from a
-//!   [`MethodTable<T>`] of [`MethodRow<T>`]s. Each row names a method trait
-//!   impl whose `Body` is `T`, so a row can only sit in `T`'s table.
+//!   [`MethodTable<T>`] of [`MethodRow<T>`]s, and optionally an
+//!   [`AttributeTable<T>`] of read-only [`AttributeRow<T>`]s. Each row names
+//!   a trait impl whose `Body` is `T`, so a row can only sit in `T`'s
+//!   tables.
 //! - [`TypeObject<T>`] creates the type in a module and makes instances.
 //!   Its type object never leaves this crate.
 //! - The generic shims here are the only code that turns CPython's raw
@@ -34,10 +36,12 @@ use pyo3::ffi;
 
 use super::buffer::{self, Buffer};
 use super::capi::{self, CResult, Gil, Mine, Ref};
-use super::tables::{method, method_end, method_kw, slot_dealloc, slot_doc, slot_end};
+use super::tables::{
+    getset, getset_end, method, method_end, method_kw, slot_dealloc, slot_doc, slot_end,
+};
 use super::thunks::{
     CFunction, CFunctionEntry, CFunctionKw, CFunctionKwEntry, Destructor, DestructorEntry,
-    GetBuffer, ReleaseBuffer, ThunkFn,
+    GetBuffer, Getter, GetterEntry, ReleaseBuffer, ThunkFn,
 };
 use super::{dispose, entry};
 
@@ -123,6 +127,18 @@ pub trait MethodKw {
         args: Ref<'py>,
         kwargs: Option<Ref<'py>>,
     ) -> CResult<Mine<'py>>;
+}
+
+/// A read-only attribute (`Py_tp_getset`, a getter without a setter).
+pub trait Attribute {
+    /// The body of the type the attribute belongs to.
+    type Body: Body;
+    /// The attribute's value.
+    ///
+    /// # Errors
+    ///
+    /// `Err` with a Python exception set.
+    fn get<'py>(g: Gil<'py>, body: &Self::Body) -> CResult<Mine<'py>>;
 }
 
 /// The C layout of an instance. CPython allocates it zero-filled, so
@@ -252,6 +268,64 @@ impl<T: Body> MethodTable<T> {
     }
 }
 
+/// A row of `T`'s attribute table. Rows hold static strings and thunks
+/// only.
+#[repr(transparent)]
+pub struct AttributeRow<T: Body>(ffi::PyGetSetDef, PhantomData<fn() -> T>);
+
+// SAFETY: a row is immutable plain data (static C strings and a thunk
+// address, no closure), read by CPython only.
+unsafe impl<T: Body> Sync for AttributeRow<T> {}
+
+impl<T: Body> AttributeRow<T> {
+    /// The row that ends a table.
+    pub const END: Self = Self(getset_end(), PhantomData);
+
+    /// A read-only attribute.
+    #[must_use]
+    pub const fn get<A: Attribute<Body = T>>(name: &'static CStr, doc: &'static CStr) -> Self {
+        Self(
+            getset(name, ThunkFn::<Getter>::of::<Get<A>>(), doc),
+            PhantomData,
+        )
+    }
+}
+
+/// An attribute table: rows ending with [`AttributeRow::END`], checked when
+/// the table is built (at compile time for a static).
+pub struct AttributeTable<T: Body> {
+    rows: &'static [AttributeRow<T>],
+}
+
+impl<T: Body> AttributeTable<T> {
+    /// A table of `rows`.
+    ///
+    /// # Panics
+    ///
+    /// If `rows` does not end with [`AttributeRow::END`] or holds it
+    /// earlier: for a `static`, a compile error.
+    #[must_use]
+    pub const fn new(rows: &'static [AttributeRow<T>]) -> Self {
+        let mut ends = 0;
+        let mut rest = rows;
+        while let Some((row, tail)) = rest.split_first() {
+            if row.0.name.is_null() {
+                ends += 1;
+            }
+            rest = tail;
+        }
+        let last_ends = match rows.last() {
+            Some(last) => last.0.name.is_null(),
+            None => false,
+        };
+        assert!(
+            last_ends && ends == 1,
+            "an attribute table ends with exactly one AttributeRow::END"
+        );
+        Self { rows }
+    }
+}
+
 /// How a type exports its buffer, if it does.
 #[derive(Clone, Copy)]
 struct BufferSlots {
@@ -264,6 +338,7 @@ pub struct TypeSpec<T: Body> {
     name: &'static CStr,
     doc: &'static CStr,
     methods: &'static MethodTable<T>,
+    attributes: Option<&'static AttributeTable<T>>,
     buffer: Option<BufferSlots>,
 }
 
@@ -279,7 +354,17 @@ impl<T: Body> TypeSpec<T> {
             name,
             doc,
             methods,
+            attributes: None,
             buffer: None,
+        }
+    }
+
+    /// The type also has the read-only attributes of `attributes`.
+    #[must_use]
+    pub const fn with_attributes(self, attributes: &'static AttributeTable<T>) -> Self {
+        Self {
+            attributes: Some(attributes),
+            ..self
         }
     }
 
@@ -296,6 +381,9 @@ impl<T: Body> TypeSpec<T> {
         }
     }
 }
+
+/// The most type slots `TypeObject::create` fills, plus the terminator.
+const SLOTS: usize = 7;
 
 /// A type built from a [`TypeSpec<T>`], kept in a `static`: created at
 /// module initialization, then used to make and recognize instances. The
@@ -342,12 +430,35 @@ impl<T: Body> TypeObject<T> {
         let dealloc = slot_dealloc(ThunkFn::<Destructor>::of::<Dealloc<T>>());
         let methods = super::tables::slot_method_rows(self.spec.methods.rows.as_ptr().cast());
         let doc = slot_doc(self.spec.doc);
-        let mut slots = [dealloc, methods, doc, slot_end(), slot_end(), slot_end()];
-        if let Some(b) = self.spec.buffer
-            && let [.., get, release, _] = &mut slots
-        {
-            *get = super::tables::slot_getbuffer(b.get);
-            *release = super::tables::slot_releasebuffer(b.release);
+        // The slots in order, then the terminating slot: CPython reads up
+        // to the first `slot_end`. The last entry is the terminator and is
+        // never written; a slot that does not fit before it is an error.
+        let mut slots = [slot_end(); SLOTS];
+        let mut filled = 0;
+        let mut overflow = false;
+        let mut push = |slot| match slots.get_mut(..SLOTS - 1).and_then(|s| s.get_mut(filled)) {
+            Some(s) => {
+                *s = slot;
+                filled += 1;
+            }
+            None => overflow = true,
+        };
+        push(dealloc);
+        push(methods);
+        push(doc);
+        if let Some(a) = self.spec.attributes {
+            push(super::tables::slot_getset_rows(a.rows.as_ptr().cast()));
+        }
+        if let Some(b) = self.spec.buffer {
+            push(super::tables::slot_getbuffer(b.get));
+            push(super::tables::slot_releasebuffer(b.release));
+        }
+        if overflow {
+            return Err(capi::raise(
+                g,
+                capi::runtime_error(),
+                &format!("{} has more type slots than fit", self.short_name()),
+            ));
         }
         let mut spec = ffi::PyType_Spec {
             name: self.spec.name.as_ptr(),
@@ -444,6 +555,22 @@ impl<M: MethodNoArgs> CFunctionEntry for NoArgs<M> {
             // SAFETY: `self` of a method row of `M::Body`'s type (body_of).
             let body = unsafe { body_of::<M::Body>(g, slf) }?;
             M::call(g, body)
+        })
+    }
+}
+
+/// The shim of an [`Attribute`].
+struct Get<A>(PhantomData<A>);
+
+impl<A: Attribute> GetterEntry for Get<A> {
+    unsafe extern "C" fn call(slf: Obj, _closure: *mut core::ffi::c_void) -> Obj {
+        entry(|g| {
+            // SAFETY: `self` of an attribute row of `A::Body`'s type: rows
+            // are built only by [`AttributeRow<T>`], which sits only in an
+            // [`AttributeTable<T>`] of a [`TypeSpec<T>`], whose type is not
+            // subclassable (as `body_of`'s contract for methods).
+            let body = unsafe { body_of::<A::Body>(g, slf) }?;
+            A::get(g, body)
         })
     }
 }
@@ -573,5 +700,32 @@ mod tests {
     #[should_panic(expected = "exactly one MethodRow::END")]
     fn test_method_table_with_an_early_end_row_panics() {
         let _ = MethodTable::new(&EARLY_END);
+    }
+    // A row with a getter references the C API through its shim, which a
+    // test binary cannot link; the table checks need only the end row.
+    static ATTRS: [AttributeRow<Probe>; 1] = [AttributeRow::END];
+    static ATTR_TABLE: AttributeTable<Probe> = AttributeTable::new(&ATTRS);
+    static WITH_ATTRS: TypeSpec<Probe> =
+        TypeSpec::new(c"tests.Probe", c"A probe.", &TABLE).with_attributes(&ATTR_TABLE);
+    static NO_ATTRS: [AttributeRow<Probe>; 0] = [];
+    static EARLY_ATTR_END: [AttributeRow<Probe>; 2] = [AttributeRow::END, AttributeRow::END];
+
+    #[test]
+    fn test_attribute_table_is_shareable_and_kept_by_the_spec() {
+        shared::<AttributeTable<Probe>>();
+        assert_eq!(WITH_ATTRS.attributes.map(|a| a.rows.len()), Some(1));
+        assert!(SPEC.attributes.is_none());
+    }
+
+    #[test]
+    #[should_panic(expected = "exactly one AttributeRow::END")]
+    fn test_attribute_table_without_its_end_row_panics() {
+        let _ = AttributeTable::new(&NO_ATTRS);
+    }
+
+    #[test]
+    #[should_panic(expected = "exactly one AttributeRow::END")]
+    fn test_attribute_table_with_an_early_end_row_panics() {
+        let _ = AttributeTable::new(&EARLY_ATTR_END);
     }
 }

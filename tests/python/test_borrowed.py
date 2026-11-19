@@ -219,6 +219,14 @@ def test_dlpack_capsules_versioned_and_legacy_free_their_exports():
         view.__dlpack__(dl_device=(2, 0))
     with pytest.raises(TypeError):
         view.__dlpack__(1)
+    with pytest.raises(BufferError):
+        view.__dlpack__(stream=1)
+    view.__dlpack__(stream=-1, copy=False, dl_device=(1, 0))
+    # The version threshold: 1.x is versioned, 0.x legacy.
+    assert '"dltensor"' in repr(view.__dlpack__(max_version=(0, 8)))
+    assert "dltensor_versioned" in repr(view.__dlpack__(max_version=(1, 3)))
+    with pytest.raises(TypeError):
+        view.__dlpack__(unknown=1)
 
 
 def test_numpy_consumes_dlpack_zero_copy_and_read_only():

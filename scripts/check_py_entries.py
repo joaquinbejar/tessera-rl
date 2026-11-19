@@ -16,7 +16,8 @@ The primary guarantee is the compiler's: C tables are built only by
 text, not a proof. It fails when
 pyo3-macros is a dependency, a PyO3 registration attribute or macro
 appears, a thunk or `ThunkFn` is made outside `ffi/thunks.rs`, or a C table
-row (`PyMethodDef`, `PyType_Slot`) is built outside `ffi/tables.rs`.
+row (`PyMethodDef`, `PyType_Slot`, `PyGetSetDef`) is built outside
+`ffi/tables.rs`.
 Parsing is whitespace-insensitive, so rustfmt's line breaks do not hide an
 entry.
 """
@@ -94,7 +95,7 @@ def main(srcs=None, pyffi=None):
         name = path.name
         if name != "thunks.rs" and re.search(r"\bthunk!|\bThunkFn ?\(|naked_asm!|#\[unsafe\(naked\)\]", flat):
             problems.append(f"{rel}: thunks and ThunkFn values are made only in ffi/thunks.rs")
-        if name != "tables.rs" and re.search(r"\b(?:ffi::)?(?:PyMethodDef|PyType_Slot) ?\{", flat):
+        if name != "tables.rs" and re.search(r"\b(?:ffi::)?(?:PyMethodDef|PyType_Slot|PyGetSetDef) ?\{", flat):
             problems.append(f"{rel}: C table rows are built only in ffi/tables.rs")
     for p in problems:
         print(p)

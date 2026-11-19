@@ -74,6 +74,19 @@ def test_pyffi_entries_lint_rejects_a_public_unsafe_function(tmp_path):
         assert lint(py, ffi).returncode == 0, fine
 
 
+
+def test_pyffi_entries_lint_rejects_a_table_row_outside_tables(tmp_path):
+    py, ffi = tmp_path / "py", tmp_path / "pyffi"
+    shutil.copytree(ROOT / "crates" / "tessera-rl-py" / "src", py)
+    shutil.copytree(ROOT / "crates" / "tessera-rl-pyffi" / "src", ffi)
+    obj = ffi / "ffi" / "object.rs"
+    clean = obj.read_text()
+    for row in ("ffi::PyMethodDef {", "ffi::PyType_Slot {", "ffi::PyGetSetDef {", "PyGetSetDef\n    {"):
+        obj.write_text(clean + "\nconst _: () = { let _ = " + row + " }; };\n")
+        bad = lint(py, ffi)
+        assert bad.returncode != 0 and "only in ffi/tables.rs" in bad.stdout, row
+
+
 API_LINT = ROOT / "scripts" / "check_pyffi_api.py"
 FIXTURES = pathlib.Path(__file__).resolve().parent / "fixtures" / "pyffi_api"
 

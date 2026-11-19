@@ -236,3 +236,10 @@ def test_host_factory_attribute_read_error_propagates_unchanged(tmp_path):
     run = _stand_in(tmp_path, body)
     assert run.returncode == 0, run.stderr
     assert "import-failed: KeyboardInterrupt from the attribute read" in run.stdout, run.stdout
+
+
+def test_host_factory_lone_surrogate_option_is_an_argument_error():
+    # The str conversion raises UnicodeEncodeError; make remaps it, as the
+    # first-party make does.
+    with pytest.raises(tessera_rl.ArgumentError, match="auto_reset"):
+        host.make(num_envs=1, auto_reset="\ud800")

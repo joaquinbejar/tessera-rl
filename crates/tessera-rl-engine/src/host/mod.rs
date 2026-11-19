@@ -46,9 +46,11 @@
 mod dyn_pool;
 mod factory;
 mod kernels;
+mod layout;
 
 pub use dyn_pool::DynHostPool;
 pub use factory::{FactoryError, HostFactory, MakeOptions, make_host};
+pub use layout::{HostLayout, HostLeaf};
 
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
@@ -148,6 +150,8 @@ pub struct HostPool<E: HostEnvironment, const A: usize> {
     options: PoolOptions,
     /// `E::initial_agents(cfg)`, checked at construction.
     initial: usize,
+    /// The fixed layout, for bindings (SPEC 14.4.3 draft).
+    host_layout: HostLayout,
     headers: Vec<HostHeader<A>>,
     instances: Vec<E>,
     layout: ActionLayout,
@@ -243,6 +247,14 @@ impl<E: HostEnvironment, const A: usize> HostPool<E, A> {
         } else {
             0
         };
+        let host_layout = layout::host_layout::<E>(
+            (num_envs, A, initial),
+            obs_space,
+            action_space,
+            &layout,
+            mask_len,
+            options.auto_reset == AutoReset::SameStep,
+        )?;
         let mut outputs = Outputs::new_host(
             num_envs,
             A,
@@ -271,6 +283,7 @@ impl<E: HostEnvironment, const A: usize> HostPool<E, A> {
         Ok(Self {
             options,
             initial,
+            host_layout,
             headers,
             instances,
             discrete: vec![
@@ -346,6 +359,12 @@ impl<E: HostEnvironment, const A: usize> HostPool<E, A> {
     #[must_use]
     pub const fn options(&self) -> &PoolOptions {
         &self.options
+    }
+
+    /// The pool's fixed layout: spaces, agents, masks (SPEC 14.4.3 draft).
+    #[must_use]
+    pub const fn layout(&self) -> &HostLayout {
+        &self.host_layout
     }
 
     /// Number of discrete and continuous action heads per agent.

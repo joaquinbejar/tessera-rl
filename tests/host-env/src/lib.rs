@@ -8,7 +8,8 @@
 use tessera_rl_core::io::{Actions, ObsWriter};
 use tessera_rl_core::space::{BoxBounds, DType, Space};
 use tessera_rl_core::{
-    AgentSlot, EpisodeEnd, HostEnvironment, HostError, HostOut, HostSeed, SpaceError,
+    AbortCode, AgentSlot, EpisodeEnd, HostEnvironment, HostError, HostOut, HostSeed, SpaceError,
+    TurnStructure,
 };
 use tessera_rl_macros::EnvConfig;
 
@@ -24,6 +25,29 @@ pub struct CounterConfig {
     /// Every reward.
     #[config(default = 0.5)]
     pub reward: f32,
+    /// Test knob: the step (1-based) at which an episode aborts; 0 never.
+    #[config(default = 0)]
+    pub abort_step: u32,
+    /// Test knob: the code of a step's abort; a reset's is this plus 100.
+    #[config(default = 7, range = 1..=1_000_000)]
+    pub abort_code: u32,
+    /// Test knob: each instance's first this many resets abort.
+    #[config(default = 0)]
+    pub reset_aborts: u32,
+    /// Test knob: only the instance with this seed aborts; -1 every one.
+    #[config(default = -1)]
+    pub abort_seed: i64,
+    /// Test knob: the step (1-based) that panics, poisoning the pool; 0
+    /// never.
+    #[config(default = 0)]
+    pub panic_step: u32,
+    /// Test knob: milliseconds each step sleeps (a long call, for the
+    /// reentrancy tests); 0 none.
+    #[config(default = 0, range = 0..=10_000)]
+    pub sleep_ms: u32,
+    /// Test knob: an agent slot that stays alive but never acts; -1 none.
+    #[config(default = -1)]
+    pub idle_slot: i64,
 }
 
 /// Two agents counting steps.
@@ -32,15 +56,26 @@ pub struct Counter {
     cfg: CounterConfig,
     step: u32,
     seed: u64,
+    resets: u32,
 }
 
 /// The counter's id.
 pub const COUNTER_ID: &str = "test/FactoryCounter-v1";
 
+impl Counter {
+    /// Whether the abort knobs apply to this instance.
+    fn targeted(&self) -> bool {
+        self.cfg.abort_seed < 0 || u64::try_from(self.cfg.abort_seed) == Ok(self.seed)
+    }
+}
+
 impl HostEnvironment for Counter {
     const ENV_ID: &'static str = COUNTER_ID;
     const ENV_VERSION: u32 = 1;
     const MAX_AGENTS: usize = 2;
+    // Mixed, so `acting` is asked (the idle slot knob); every slot acts by
+    // default, as in Simultaneous.
+    const TURNS: TurnStructure = TurnStructure::Mixed;
     type Config = CounterConfig;
 
     fn new(cfg: &CounterConfig) -> Result<Self, HostError> {
@@ -48,6 +83,7 @@ impl HostEnvironment for Counter {
             cfg: cfg.clone(),
             step: 0,
             seed: 0,
+            resets: 0,
         })
     }
 
@@ -66,13 +102,28 @@ impl HostEnvironment for Counter {
         Ok(Space::Discrete { n: 3 })
     }
 
-    fn reset(&mut self, seed: HostSeed, _: &mut HostOut<'_>) {
+    fn reset(&mut self, seed: HostSeed, out: &mut HostOut<'_>) {
         self.step = 0;
         self.seed = seed.seed();
+        self.resets = self.resets.saturating_add(1);
+        if self.resets <= self.cfg.reset_aborts
+            && self.targeted()
+            && let Some(code) = AbortCode::new(self.cfg.abort_code.saturating_add(100))
+        {
+            out.abort(code);
+        }
     }
 
     fn step(&mut self, actions: &Actions<'_, ()>, out: &mut HostOut<'_>) {
         self.step += 1;
+        if self.cfg.sleep_ms > 0 {
+            std::thread::sleep(std::time::Duration::from_millis(self.cfg.sleep_ms.into()));
+        }
+        assert!(
+            self.step != self.cfg.panic_step,
+            "test panic at step {}",
+            self.step
+        );
         for s in 0..2u16 {
             if let Some(agent) = AgentSlot::new(s, 2) {
                 let a = actions.discrete(agent, 0).unwrap_or(0);
@@ -84,6 +135,16 @@ impl HostEnvironment for Counter {
         if self.step >= self.cfg.episode {
             out.end_episode(EpisodeEnd::Terminated);
         }
+        if self.step == self.cfg.abort_step
+            && self.targeted()
+            && let Some(code) = AbortCode::new(self.cfg.abort_code)
+        {
+            out.abort(code);
+        }
+    }
+
+    fn acting(&self, agent: AgentSlot) -> bool {
+        i64::try_from(agent.index()).ok() != Some(self.cfg.idle_slot)
     }
 
     fn observe(&self, _: AgentSlot, obs: &mut ObsWriter<'_, '_, ()>) {

@@ -7,67 +7,21 @@
 //! The pool options come from the named keywords; every other keyword is
 //! the environment's config, decoded by its `ConfigDecode` (the decoder the
 //! Rust factory uses, [`super::config`]). The factory returns a host object
-//! holding the pool. In this revision the object has only `close()`; the
-//! members of SPEC 14.4.2 come with the next part of step 4.
+//! holding the pool ([`super::object`], SPEC 14.4.2).
 //!
 //! [`export_host_env!`]: crate::export_host_env
 
 use core::num::{NonZeroU32, NonZeroUsize};
-use std::sync::Mutex;
 
 use tessera_rl_core::config::{CanonicalConfig, canonical_bytes};
 use tessera_rl_core::{ConfigDecode, HostEnvironment};
 use tessera_rl_engine::{AutoReset, DynHostPool, EngineError, HostPool, PoolOptions, SyncOptions};
 use tessera_rl_num::identity::Seed;
 
+use super::config;
+use super::object::{self, HOST_TYPE, HostBody};
 use crate::errors::{self, Kind as ErrorKind};
 use crate::ffi::capi::{self, CResult, Gil, Kind, Mine, Ref};
-use crate::ffi::object::{
-    Body, MethodNoArgs, MethodRow, MethodTable, Release, TypeObject, TypeSpec,
-};
-
-use super::config;
-
-/// The body of a host object: its pool, until `close`.
-pub struct HostBody {
-    pool: Mutex<Option<Box<dyn DynHostPool>>>,
-}
-
-impl Body for HostBody {
-    /// Dropping a pool joins its workers, so it is dropped detached.
-    fn release(self, r: Release<'_>) {
-        r.detach(move || drop(self));
-    }
-}
-
-/// `close()`: releases the pool; a second `close` does nothing.
-struct Close;
-
-impl MethodNoArgs for Close {
-    type Body = HostBody;
-
-    fn call<'py>(g: Gil<'py>, body: &HostBody) -> CResult<Mine<'py>> {
-        let pool = body
-            .pool
-            .lock()
-            .map_or_else(|poisoned| poisoned.into_inner().take(), |mut p| p.take());
-        g.detach(move || drop(pool));
-        Ok(capi::none(g))
-    }
-}
-
-static METHODS: MethodTable<HostBody> = MethodTable::new(&[
-    MethodRow::noargs::<Close>(c"close", c"Releases the pool."),
-    MethodRow::END,
-]);
-
-static SPEC: TypeSpec<HostBody> = TypeSpec::new(
-    c"tessera_host.HostEnv",
-    c"A host environment's pool (host protocol 1, SPEC 14.4).",
-    &METHODS,
-);
-
-static HOST_TYPE: TypeObject<HostBody> = TypeObject::new(&SPEC);
 
 /// Initializes a host module: binds `tessera_rl`'s exception classes
 /// (SPEC 14.4.6) and adds the host object type. Called by the module
@@ -79,7 +33,7 @@ static HOST_TYPE: TypeObject<HostBody> = TypeObject::new(&SPEC);
 /// failure to create the type.
 pub fn init(g: Gil<'_>, module: Ref<'_>) -> CResult<()> {
     errors::bind(g)?;
-    HOST_TYPE.create(g, module, c"HostEnv")
+    object::register(g, module)
 }
 
 /// The pool options of `make`, read from its named keywords.
@@ -102,7 +56,8 @@ fn argument(g: Gil<'_>, message: String) -> capi::Raised {
 }
 
 /// A named keyword's conversion: a value of the wrong type or range (a
-/// `TypeError` or `OverflowError` from the conversion) is an
+/// `TypeError` or `OverflowError` from the conversion, or a
+/// `UnicodeEncodeError` for a `str` with a lone surrogate) is an
 /// `ArgumentError` naming it, as `tessera_rl.make` raises. Any other
 /// exception (none is expected: the conversions of exact built-in types
 /// run no Python code) propagates unchanged.
@@ -296,14 +251,18 @@ where
             .map_err(|e| engine(g, &e))?;
     }
     let pool: Box<dyn DynHostPool> = Box::new(pool);
+    let storage = match pool.outputs() {
+        Ok(out) => out.storage(),
+        Err(e) => {
+            let raised = engine(g, &e);
+            // Dropping a pool can block (host code): not under the GIL.
+            g.detach(move || drop(pool));
+            return Err(raised);
+        }
+    };
     // An allocation failure here drops the pool under the interpreter: the
     // object is not created, so there is no other place to drop it.
-    HOST_TYPE.instantiate(
-        g,
-        HostBody {
-            pool: Mutex::new(Some(pool)),
-        },
-    )
+    HOST_TYPE.instantiate(g, HostBody::new(pool, storage))
 }
 
 /// The canonical form (ADR-0030) of `C` decoded from keyword arguments
