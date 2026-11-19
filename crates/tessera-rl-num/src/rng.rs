@@ -29,6 +29,8 @@ impl RngAuthority {
     }
 }
 
+#[cold]
+#[inline(never)]
 fn draws(identity: &RngIdentity, stream: StreamId) -> Draws {
     let key = derive_key(identity.seed(), stream, identity.branch_salt());
     Draws::new(
@@ -37,6 +39,47 @@ fn draws(identity: &RngIdentity, stream: StreamId) -> Draws {
         identity.episode_index(),
         identity.step_index(),
     )
+}
+
+/// A draw sequence derived on first use.
+///
+/// Deriving the key and building [`Draws`] costs a few splitmix64 rounds per
+/// construction, and the engine builds an RNG for every reset, transition and
+/// observation of every instance, whether the environment draws or not. This
+/// keeps the identity and stream (both `Copy`) and derives the sequence on the
+/// first draw, from the identity as it was at construction: the stream is
+/// identical to deriving it eagerly.
+#[derive(Debug, Clone)]
+struct LazyDraws {
+    identity: RngIdentity,
+    stream: StreamId,
+    draws: Option<Draws>,
+}
+
+impl LazyDraws {
+    #[inline]
+    const fn new(identity: RngIdentity, stream: StreamId) -> Self {
+        Self {
+            identity,
+            stream,
+            draws: None,
+        }
+    }
+
+    #[inline]
+    fn get(&mut self) -> &mut Draws {
+        let (identity, stream) = (self.identity, self.stream);
+        self.draws.get_or_insert_with(|| draws(&identity, stream))
+    }
+
+    /// A sequence never drawn from has made no Philox call.
+    #[inline]
+    const fn exhausted(&self) -> bool {
+        match &self.draws {
+            Some(d) => d.exhausted(),
+            None => false,
+        }
+    }
 }
 
 macro_rules! forward_draws {
@@ -53,37 +96,37 @@ macro_rules! forward_draws {
         /// Returns the next 32-bit word.
         #[inline]
         pub fn next_u32(&mut self) -> u32 {
-            self.draws.next_u32()
+            self.draws.get().next_u32()
         }
 
         /// Returns the next `u64`, built from two words little-endian.
         #[inline]
         pub fn next_u64(&mut self) -> u64 {
-            self.draws.next_u64()
+            self.draws.get().next_u64()
         }
 
         /// Returns a uniform integer in `[0, bound)`.
         #[inline]
         pub fn below_u32(&mut self, bound: NonZeroU32) -> u32 {
-            self.draws.below_u32(bound)
+            self.draws.get().below_u32(bound)
         }
 
         /// Returns a uniform integer in `[0, bound)`.
         #[inline]
         pub fn below_u64(&mut self, bound: NonZeroU64) -> u64 {
-            self.draws.below_u64(bound)
+            self.draws.get().below_u64(bound)
         }
 
         /// Returns a uniform `f32` in `[0, 1)` (24 bits).
         #[inline]
         pub fn unit_f32(&mut self) -> f32 {
-            self.draws.unit_f32()
+            self.draws.get().unit_f32()
         }
 
         /// Returns a uniform `f64` in `[0, 1)` (53 bits).
         #[inline]
         pub fn unit_f64(&mut self) -> f64 {
-            self.draws.unit_f64()
+            self.draws.get().unit_f64()
         }
     };
 }
@@ -91,7 +134,7 @@ macro_rules! forward_draws {
 /// Randomness for one reset or transition of one instance on one stream.
 #[derive(Debug, Clone)]
 pub struct StepRng {
-    draws: Draws,
+    draws: LazyDraws,
 }
 
 impl StepRng {
@@ -102,7 +145,7 @@ impl StepRng {
     #[inline]
     pub fn new(_authority: &RngAuthority, identity: &RngIdentity, stream: StreamId) -> Self {
         Self {
-            draws: draws(identity, stream),
+            draws: LazyDraws::new(*identity, stream),
         }
     }
 
@@ -114,7 +157,7 @@ impl StepRng {
 /// `observe` calls are identical.
 #[derive(Debug, Clone)]
 pub struct ObsRng {
-    draws: Draws,
+    draws: LazyDraws,
 }
 
 impl ObsRng {
@@ -124,7 +167,7 @@ impl ObsRng {
     #[inline]
     pub fn new(_authority: &RngAuthority, identity: &RngIdentity) -> Self {
         Self {
-            draws: draws(identity, StreamId::OBS_NOISE),
+            draws: LazyDraws::new(*identity, StreamId::OBS_NOISE),
         }
     }
 
@@ -183,6 +226,35 @@ mod tests {
         let mut r = ObsRng::new(&auth, &i);
         let b: Vec<u32> = (0..9).map(|_| r.next_u32()).collect();
         assert_eq!(a, b);
+    }
+
+    /// The lazy sequence equals one derived eagerly at construction: same
+    /// words, in order, for every stream, across a Philox block boundary.
+    #[test]
+    fn test_step_rng_lazy_sequence_equals_eager_derivation() {
+        let auth = RngAuthority::engine_only();
+        for stream in [StreamId::DYNAMICS, StreamId::MAP_GEN, StreamId::OBS_NOISE] {
+            let i = id(11, 2, 4, 6);
+            let mut eager = super::draws(&i, stream);
+            let mut lazy = StepRng::new(&auth, &i, stream);
+            for _ in 0..13 {
+                assert_eq!(lazy.next_u32(), eager.next_u32());
+            }
+            assert_eq!(lazy.next_u64(), eager.next_u64());
+            assert_eq!(lazy.exhausted(), eager.exhausted());
+        }
+    }
+
+    #[test]
+    fn test_step_rng_unused_is_not_exhausted() {
+        let r = StepRng::new(
+            &RngAuthority::engine_only(),
+            &id(1, 0, 0, 0),
+            StreamId::DYNAMICS,
+        );
+        assert!(!r.exhausted());
+        let o = ObsRng::new(&RngAuthority::engine_only(), &id(1, 0, 0, 0));
+        assert!(!o.exhausted());
     }
 
     #[test]
