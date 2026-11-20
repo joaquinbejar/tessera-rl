@@ -76,12 +76,11 @@ def primitive_calls(text: str) -> dict[str, int]:
             if "Ir" not in events:
                 raise ValueError("callgrind events lack Ir")
         elif line.startswith("ob="):
-            ob, cob = name(objects, line[3:]), None
+            ob = name(objects, line[3:])
         elif line.startswith("cob="):
             cob = name(objects, line[4:])
         elif line.startswith("fn="):
             name(functions, line[3:])
-            cob = None
         elif line.startswith("cfn="):
             cfn = name(functions, line[4:])
         elif line.startswith("calls="):
@@ -126,7 +125,11 @@ def main(argv=None) -> int:
     parser.add_argument("files", nargs="+")
     parser.add_argument("--json", action="store_true", help="one JSON object per file, keyed by path")
     args = parser.parse_args(argv)
-    report = {path: attribution(pathlib.Path(path).read_text(errors="replace")) for path in args.files}
+    try:
+        report = {path: attribution(pathlib.Path(path).read_text(errors="replace")) for path in args.files}
+    except (OSError, ValueError) as e:
+        print(f"attribution: {e}", file=sys.stderr)
+        return 2
     if args.json:
         print(json.dumps(report, indent=1, sort_keys=True))
         return 0

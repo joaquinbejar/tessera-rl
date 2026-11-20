@@ -23,7 +23,7 @@ def sample():
     """_native: 100 own Ir plus its own internal `memset` (70, as
     compiler-builtins would emit; a call with no `cob=` stays in the caller's
     object, as in real Callgrind files, so it is not a libc primitive). It
-    calls libc memset (inclusive 900), memcpy (60) and malloc (40, not a
+    calls libc memset from two sites (inclusive 700 + 200), memcpy (60) and malloc (40, not a
     primitive). libc's own exclusive cost is 1000; python calls memset for
     500 (not from _native)."""
     return f"""# callgrind format
@@ -36,8 +36,12 @@ fn=(1) tessera_rl_engine::pool::clear_chunk
 10 80 {Z}
 cob=(2) /usr/lib/x86_64-linux-gnu/libc.so.6
 cfn=(2) __memset_avx2_unaligned_erms
-calls=3 0
-11 900 {Z}
+calls=2 0
+11 700 {Z}
+cob=(2)
+cfn=(2)
+calls=1 0
+15 200 {Z}
 cob=(2)
 cfn=(3) __memcpy_avx_unaligned_erms
 calls=1 0
@@ -104,6 +108,7 @@ def test_pgo_attribution_exclusive_equals_the_gate_statistic():
         ("/usr/lib/system/libsystem_platform.dylib", "_platform_memset", True),
         ("/lib/libc.so.6", "malloc", False),
         ("/lib/libc.so.6", "memchr", False),
+        ("/lib/libc.so.6", "memsetx", False),
         ("/venv/_native.abi3.so", "memset", False),
         ("/lib/libm.so.6", "memset", False),
     ],
@@ -125,3 +130,42 @@ def test_pgo_attribution_refuses_what_it_cannot_read():
         at.primitive_calls("version: 1\n")
     with pytest.raises(ValueError, match="unknown id"):
         at.primitive_calls(f"events: {EVENTS}\nob=(9)\n")
+
+
+def test_pgo_attribution_plain_report_prints_both_shares(tmp_path, capsys):
+    p = tmp_path / "s.callgrind"
+    p.write_text(sample())
+    assert at.main([str(p)]) == 0
+    out = capsys.readouterr().out
+    assert f"{170 / 1470:7.2%}" in out and f"{1130 / 1470:7.2%}" in out
+    exclusive = next(line for line in out.splitlines() if "exclusive" in line)
+    together = next(line for line in out.splitlines() if "with those primitives" in line)
+    assert exclusive.rstrip().endswith(f"{170 / 1470:7.2%}".strip())
+    assert f"{1130 / 1470:7.2%}".strip() in together
+    assert "__memset_avx2_unaligned_erms: 900" in out
+
+
+def test_pgo_attribution_reads_ir_by_name_with_two_positions():
+    # Ir is not the first event and there are two position columns.
+    text = f"""version: 1
+positions: instr line
+events: Dr Ir {EVENTS.replace("Ir ", "").replace("Dr ", "")}
+ob=(1) /venv/_native.abi3.so
+fn=(1) f
+0x10 1 9 50 {" ".join(["0"] * 11)}
+cob=(2) /lib/libc.so.6
+cfn=(2) memset
+calls=1 0x20 2
+0x11 2 9 300 {" ".join(["0"] * 11)}
+ob=(2)
+fn=(2)
+0x20 2 9 300 {" ".join(["0"] * 11)}
+"""
+    assert at.primitive_calls(text) == {"memset": 300}
+
+
+def test_pgo_attribution_cli_refuses_a_non_callgrind_file(tmp_path, capsys):
+    p = tmp_path / "x.txt"
+    p.write_text("not callgrind\n")
+    assert at.main([str(p)]) == 2
+    assert "no events" in capsys.readouterr().err
