@@ -94,7 +94,7 @@ from functools import partial
 
 import numpy as np
 
-from tessera_rl import _native
+from tessera_rl import _host, _native
 from tessera_rl._env import _index, make
 
 try:
@@ -489,6 +489,7 @@ def make_puffer(env_id: str, num_envs: int = 1, **kwargs):
     usable with spawn. ``num_envs`` is instances per env object; the keyword
     arguments are the env's, including an environment's config fields; ``mode`` is
     ``"sync"`` (default) or ``"pipelined"``."""
+    _host.refuse(env_id, "tessera_rl.puffer")
     _check_env_id(env_id)
     mode = kwargs.pop("mode", "sync")
     if mode not in ("sync", "pipelined"):

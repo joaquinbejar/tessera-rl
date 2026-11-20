@@ -70,7 +70,7 @@ from pettingzoo import AECEnv, ParallelEnv
 from pettingzoo.utils.conversions import parallel_to_aec_wrapper
 from pettingzoo.utils.wrappers import OrderEnforcingWrapper
 
-from tessera_rl import _native
+from tessera_rl import _host, _native
 from tessera_rl._env import Env, _discrete_actions, _multi_actions, native_kwargs
 from tessera_rl.masks import head_views
 
@@ -91,22 +91,77 @@ _ENVS = {
 }
 
 
-def _native_pool(env_id: str, adapter: str, seed: int | None, kwargs: dict) -> tuple[Env, list[int]]:
-    """One instance of ``env_id`` for ``adapter``, refused if undeclared,
-    and the slots alive at reset. The slots are read from a probe pool
-    that is then closed, so the returned pool has not started an episode
-    and its first ``reset`` is the seed's first episode."""
-    try:
-        maker, declared = _ENVS[env_id]
-    except KeyError:
-        raise _native.ArgumentError(f"no PettingZoo adapter for {env_id!r}; known: {sorted(_ENVS)}") from None
-    if adapter not in declared:
-        raise _native.ArgumentError(
-            f"{env_id} declares {sorted(declared)}, not {adapter!r}: undeclared conversions are refused (ADR-0013)"
-        )
+#: The PettingZoo interfaces of a host environment, by its turns
+#: (ADR-0013; ADR-0065 item 6: Mixed through ``parallel_env`` only).
+_HOST_DECLARED = {
+    "simultaneous": frozenset({"parallel", "aec"}),
+    "sequential": frozenset({"aec"}),
+    "mixed": frozenset({"parallel"}),
+}
+
+
+def _undeclared(env_id: str, adapter: str, declared, turns=None) -> Exception:
+    """The error for ``adapter`` when ``env_id`` does not declare it
+    (ADR-0013); a Mixed host environment as AEC is a ``CapabilityError``
+    (ADR-0065 item 6)."""
+    if turns == "mixed":
+        return _native.CapabilityError(f"{env_id} is a Mixed host environment: use parallel_env (ADR-0065)")
+    return _native.ArgumentError(
+        f"{env_id} declares {sorted(declared)}, not {adapter!r}: undeclared conversions are refused (ADR-0013)"
+    )
+
+
+def _check_reserved(kwargs: dict) -> None:
     for reserved in ("num_envs", "outputs", "auto_reset", "workers"):
         if reserved in kwargs:
             raise _native.ArgumentError(f"{reserved!r} is fixed by the PettingZoo adapter")
+
+
+def _host_pool(env_id: str, adapter: str, seed: int | None, kwargs: dict):
+    """One instance of the host environment ``env_id`` for ``adapter``
+    (SPEC 14.4), built once with the caller's config, the slots alive at
+    reset and the interfaces it declares, read from its turns. No probe:
+    the slots alive after a reset are ``0..initial_agents`` (ADR-0065
+    item 4), so the returned pool has not started an episode."""
+    _check_reserved(kwargs)
+    native = _host.native_for(
+        env_id, 1, 0 if seed is None else seed, "owned", {**kwargs, "auto_reset": "disabled"}
+    )
+    try:
+        layout = native.layout()
+        declared = _HOST_DECLARED.get(layout["turns"], frozenset())
+        if adapter not in declared:
+            raise _undeclared(env_id, adapter, declared, layout["turns"])
+        if layout["action_bounds"] is not None:
+            raise _native.ArgumentError(f"{env_id} has continuous actions; the PettingZoo adapter is discrete only")
+        env = Env(native)
+    except BaseException:
+        native.close()
+        raise
+    return (env, list(range(layout["initial_agents"]))), declared
+
+
+def _lookup(env_id: str) -> tuple:
+    """The maker of the first-party ``env_id`` and the interfaces it
+    declares (ADR-0013)."""
+    if env_id in _ENVS:
+        return _ENVS[env_id]
+    known = sorted({*_ENVS, *_host.host_ids()})
+    raise _native.ArgumentError(f"no PettingZoo adapter for {env_id!r}; known: {known}")
+
+
+def _native_pool(env_id: str, adapter: str, seed: int | None, kwargs: dict) -> tuple[Env, list[int]]:
+    """One instance of ``env_id`` for ``adapter``, refused if undeclared,
+    and the slots alive at reset. For a first-party environment the slots
+    are read from a probe pool that is then closed, so the returned pool
+    has not started an episode and its first ``reset`` is the seed's
+    first episode."""
+    if env_id not in _ENVS and _host.is_host_id(env_id):
+        return _host_pool(env_id, adapter, seed, kwargs)[0]
+    maker, declared = _lookup(env_id)
+    if adapter not in declared:
+        raise _undeclared(env_id, adapter, declared)
+    _check_reserved(kwargs)
     options = native_kwargs(
         num_envs=1, seed=0 if seed is None else seed, outputs="owned", auto_reset="disabled", **kwargs
     )
@@ -146,6 +201,8 @@ class _Agents:
         self.names = [f"agent_{i}" for i in self.slots]
         self.slot_of = dict(zip(self.names, self.slots, strict=True))
         layout = env._native.layout()
+        #: ``"host"`` for a third-party host environment, else ``"tessera"``.
+        self.kind = "host" if layout.get("kind") == "host" else "tessera"
         leaves = {}
         for name, dtype, shape, low, high in layout["leaves"]:
             dt = np.dtype(dtype)
@@ -211,6 +268,14 @@ class _Agents:
                 obs["action_mask"] = np.ones(self.env.action_choices, dtype=np.int8)
         return obs
 
+    def pending(self) -> bool:
+        """Whether the instance waits for a reset: a host environment's
+        ``pending_reset`` output (ADR-0065); never for a first-party one."""
+        out = getattr(self.env, "_last_out", None)
+        if out is None or "pending_reset" not in out:
+            return False
+        return bool(np.frombuffer(out["pending_reset"], dtype=np.bool_)[0])
+
     def flags(self, slot: int) -> tuple[float, bool, bool]:
         step = self.last
         terminated = bool(step.agent_terminated[0, slot] or step.episode_terminated[0])
@@ -223,9 +288,10 @@ class TesseraParallelEnv(ParallelEnv):
 
     metadata = {"render_modes": [], "name": "tessera", "is_parallelizable": True}
 
-    def __init__(self, env_id: str, seed: int | None = None, **kwargs):
-        self._a = _Agents(_native_pool(env_id, "parallel", seed, kwargs), env_id)
-        self.metadata = {**self.metadata, "name": env_id}
+    def __init__(self, env_id: str, seed: int | None = None, *, _pool=None, **kwargs):
+        pool = _pool if _pool is not None else _native_pool(env_id, "parallel", seed, kwargs)
+        self._a = _Agents(pool, env_id)
+        self.metadata = {**self.metadata, "name": env_id, "tessera_kind": self._a.kind}
         self.render_mode = None
         self.possible_agents = list(self._a.names)
         self.agents = list(self.possible_agents)
@@ -239,6 +305,10 @@ class TesseraParallelEnv(ParallelEnv):
     def reset(self, seed=None, options=None):
         self._a.last = self._a.env.reset(seed)
         self.agents = [n for n, s in zip(self._a.names, self._a.slots, strict=True) if self._a.last.alive[0, s]]
+        if self._a.pending():
+            # An aborted reset leaves the instance pending (ADR-0065): no
+            # agent can act, so `while env.agents:` ends at once.
+            self.agents = []
         obs = {n: self._a.observe(self._a.slot_of[n]) for n in self.agents}
         return obs, {n: self._a.info(self._a.slot_of[n]) for n in self.agents}
 
@@ -278,12 +348,13 @@ class TesseraAECEnv(AECEnv):
 
     metadata = {"render_modes": [], "name": "tessera", "is_parallelizable": False}
 
-    def __init__(self, env_id: str, seed: int | None = None, **kwargs):
+    def __init__(self, env_id: str, seed: int | None = None, *, _pool=None, **kwargs):
         super().__init__()
-        self._a = _Agents(_native_pool(env_id, "aec", seed, kwargs), env_id)
+        pool = _pool if _pool is not None else _native_pool(env_id, "aec", seed, kwargs)
+        self._a = _Agents(pool, env_id)
         if self._a.env.turns != "sequential":
             raise _native.ArgumentError(f"{env_id} is {self._a.env.turns}; TesseraAECEnv is for sequential turns")
-        self.metadata = {**self.metadata, "name": env_id}
+        self.metadata = {**self.metadata, "name": env_id, "tessera_kind": self._a.kind}
         self.render_mode = None
         self.possible_agents = list(self._a.names)
         # No reset here: the first reset() is the seed's first episode.
@@ -359,10 +430,14 @@ def aec_env(env_id: str, seed: int | None = None, **kwargs) -> AECEnv:
     """``env_id`` as a PettingZoo ``AECEnv``: native for a sequential
     environment, cycle buffering over the Parallel form for a simultaneous
     one; refused unless the environment declares it."""
-    try:
-        declared = _ENVS[env_id][1]
-    except KeyError:
-        raise _native.ArgumentError(f"no PettingZoo adapter for {env_id!r}; known: {sorted(_ENVS)}") from None
+    if env_id not in _ENVS and _host.is_host_id(env_id):
+        # One host object, built with the caller's config, serves both
+        # the check and the environment.
+        pool, declared = _host_pool(env_id, "aec", seed, kwargs)
+        if "parallel" in declared:
+            return OrderEnforcingWrapper(_CheckedCycle(TesseraParallelEnv(env_id, seed=seed, _pool=pool)))
+        return TesseraAECEnv(env_id, seed=seed, _pool=pool)
+    declared = _lookup(env_id)[1]
     if "aec" not in declared:
         raise _native.ArgumentError(f"{env_id} declares {sorted(declared)}, not 'aec' (ADR-0013)")
     if "parallel" in declared:

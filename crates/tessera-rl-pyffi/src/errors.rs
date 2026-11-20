@@ -63,9 +63,11 @@ pub enum Kind {
     Persist,
     /// `OnnxError`.
     Onnx,
+    /// `CapabilityError`.
+    Capability,
 }
 
-const KINDS: [(Kind, &str, &std::ffi::CStr); 15] = [
+const KINDS: [(Kind, &str, &std::ffi::CStr); 16] = [
     (
         Kind::Base,
         "TesseraError",
@@ -141,6 +143,11 @@ const KINDS: [(Kind, &str, &std::ffi::CStr); 15] = [
         "OnnxError",
         c"The ONNX evaluator could not load ONNX Runtime or its model (ADR-0057); nothing was evaluated.",
     ),
+    (
+        Kind::Capability,
+        "CapabilityError",
+        c"A call this environment kind does not support (a host environment's snapshot, for example).",
+    ),
 ];
 
 /// The classes, created once at module initialization; null before.
@@ -192,7 +199,7 @@ pub fn register(g: Gil<'_>, module: Ref<'_>) -> CResult<()> {
 
 /// The classes a host module binds from `tessera_rl` (SPEC 14.4.6).
 #[cfg(feature = "host")]
-const BOUND: [Kind; 10] = [
+const BOUND: [Kind; 11] = [
     Kind::Base,
     Kind::Config,
     Kind::Argument,
@@ -203,6 +210,7 @@ const BOUND: [Kind; 10] = [
     Kind::Exhausted,
     Kind::Forked,
     Kind::FloatingPoint,
+    Kind::Capability,
 ];
 
 /// Host modules (SPEC 14.4.6): imports `tessera_rl` and binds its

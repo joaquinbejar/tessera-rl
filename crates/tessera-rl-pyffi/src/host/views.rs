@@ -186,9 +186,9 @@ static SPEC: TypeSpec<HostView> = TypeSpec::new(
 )
 .with_buffer::<ViewBuffer>();
 
-/// Adds the view type to `module`.
-pub(super) fn register(g: Gil<'_>, module: Ref<'_>) -> CResult<()> {
-    TYPE.create(g, module, c"HostView")
+/// Adds the view type to `module`, as `name` (`<module>.HostView`).
+pub(super) fn register(g: Gil<'_>, module: Ref<'_>, name: &'static core::ffi::CStr) -> CResult<()> {
+    TYPE.create_as(g, module, c"HostView", name)
 }
 
 fn refused(g: Gil<'_>, field: OutputField, e: ExportError) -> capi::Raised {
@@ -323,7 +323,7 @@ impl MethodKw for DlpackM {
         args: Ref<'py>,
         kwargs: Option<Ref<'py>>,
     ) -> CResult<Mine<'py>> {
-        v.export.dlpack_call(g, args, kwargs)
+        v.export.dlpack_call(g, args, kwargs, "")
     }
 }
 

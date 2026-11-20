@@ -605,3 +605,12 @@ def test_jax_refuses_a_multi_head_pool():
             tjax.Env(pool)
     finally:
         pool.close()
+
+
+def test_make_refuses_a_host_id(monkeypatch):
+    """tessera_rl.jax takes no host environment (SPEC 14.4.6)."""
+    from tessera_rl import _host
+
+    monkeypatch.setattr(_host, "is_host_id", lambda env_id: env_id == "fake/Counter-v1")
+    with pytest.raises(t.CapabilityError, match="tessera_rl.jax does not support them"):
+        tjax.make("fake/Counter-v1")
