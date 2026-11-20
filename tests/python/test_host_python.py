@@ -233,7 +233,9 @@ def test_host_env_int32_ndarray_actions_reach_the_host_as_exact_bytes(fake, outp
 def test_fake_host_step_takes_exact_bytes_only():
     host = FakeHost(num_envs=1, seed=1)
     host.reset(None)
-    for other in (memoryview(bytes(8)), bytearray(8), np.zeros(2, dtype=np.int32)):
+    # A bytes subclass is the case that tells exact bytes from isinstance.
+    subclass = type("B", (bytes,), {})(8)
+    for other in (memoryview(bytes(8)), bytearray(8), np.zeros(2, dtype=np.int32), subclass):
         with pytest.raises(tessera_rl.ArgumentError, match="must be bytes"):
             host.step(other)
     host.step(bytes(8))
