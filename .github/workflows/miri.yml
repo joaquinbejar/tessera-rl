@@ -47,6 +47,11 @@ jobs:
       # The Async injected-jitter identity test and the drain of unpublished
       # ids, with 2 workers under Miri.
       - run: "cargo +nightly miri test -p tessera-rl-engine --lib --locked -- modes::async_jitter_tests:: modes::async_wake_tests::"
+      # Host pools (ADR-0065): outputs, agent events, aborts and the joint
+      # validation, end to end (issue #290).
+      - run: "cargo +nightly miri test -p tessera-rl-engine --features host --test host_outputs --test host_agents --test host_abort --test host_validate --locked"
+      # The record header after an aborted reset (issue #290).
+      - run: "cargo +nightly miri test -p tessera-rl-engine --features host --lib --locked -- host::abort_header_tests::"
       # DLPack export ownership (ADR-0003 rule 1), without an interpreter.
       # The module moved to the shared boundary crate (ADR-0062 item 8); built
       # alone it needs `extension-module` not to link libpython.
