@@ -521,6 +521,11 @@ class _CheckedCycle(parallel_to_aec_wrapper):
         # A live agent's action is always checked, so None raises here.
         if not (self.terminations[agent] or self.truncations[agent]):
             action = _exact_action(action, self.action_space(agent).n)
+        else:
+            # An agent that spawned in the episode's last step is born
+            # flushed: it has no buffered action, which the wrapper's dead
+            # step deletes.
+            self._actions.setdefault(agent, None)
         super().step(action)
 
 

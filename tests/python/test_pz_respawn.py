@@ -172,3 +172,12 @@ def test_respawn_official_seed_tests():
 
     parallel_seed_test(lambda: pz.parallel_env(ID, seed=3), num_cycles=50)
     seed_test(lambda: pz.aec_env(ID, seed=3), num_cycles=50)
+
+
+@pytest.mark.parametrize("config", [{"respawn_delay": 4}, {"initial": 1, "die_step": 0, "respawn_delay": 6}])
+def test_respawn_in_the_last_step_passes_the_official_aec_test(config):
+    from pettingzoo.test import api_test
+
+    env = pz.aec_env(ID, seed=3, **config)
+    api_test(env, num_cycles=20)
+    env.close()
