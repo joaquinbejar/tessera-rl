@@ -158,8 +158,11 @@ pub(crate) trait PoolOps: Send {
     /// The view set of `layout`, built once at construction (the layout is
     /// fixed); `None` for a leaf dtype the protocols cannot name. It holds
     /// only regions and shapes: each call still makes new views, stamped
-    /// with that call's storage generation.
-    fn views(&self) -> Option<&std::sync::Arc<crate::view::ViewSet>>;
+    /// with that call's storage generation. `None` by default: Pipelined
+    /// mode exports only halves, through [`PoolOps::half_views`].
+    fn views(&self) -> Option<&std::sync::Arc<crate::view::ViewSet>> {
+        None
+    }
     /// The view set of half `half`'s rows, built once (Pipelined only).
     fn half_views(&self, _half: usize) -> Option<std::sync::Arc<crate::view::ViewSet>> {
         None
@@ -339,21 +342,21 @@ where
             0
         };
         let layout = Layout {
-                num_envs,
-                agents: E::MAX_AGENTS,
-                initial_agents: E::initial_agents(cfg),
-                leaves: obs,
-                action_choices,
-                action_nvec,
-                action_bounds,
-                mask_len,
-                mask_heads,
-                entity_group_heads,
-                turns: match E::TURNS {
-                    TurnStructure::Simultaneous => "simultaneous",
-                    TurnStructure::Sequential => "sequential",
-                    TurnStructure::Mixed => "mixed",
-                },
+            num_envs,
+            agents: E::MAX_AGENTS,
+            initial_agents: E::initial_agents(cfg),
+            leaves: obs,
+            action_choices,
+            action_nvec,
+            action_bounds,
+            mask_len,
+            mask_heads,
+            entity_group_heads,
+            turns: match E::TURNS {
+                TurnStructure::Simultaneous => "simultaneous",
+                TurnStructure::Sequential => "sequential",
+                TurnStructure::Mixed => "mixed",
+            },
             terminal,
         };
         Ok(Self {

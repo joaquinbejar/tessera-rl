@@ -903,11 +903,7 @@ where
         owned: outputs == BatchOutputs::Owned,
         num_envs,
     });
-    Ok(Box::new(AsyncHandle {
-        ops,
-        layout,
-        views,
-    }))
+    Ok(Box::new(AsyncHandle { ops, layout, views }))
 }
 
 #[cfg(test)]

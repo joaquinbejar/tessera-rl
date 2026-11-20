@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: MIT OR Apache-2.0
 """The view set is built once per environment (plan #152 E3), but every call
 still makes new views stamped with that call's window: a view of an earlier
-call is stale after each writer (step, reset, restore, fork, load) and the
+call is stale after each writer (step, reset, import_record, fork, load) and the
 new views are fresh, with the layout's shapes and the current values."""
 
 import numpy as np
