@@ -42,6 +42,7 @@ from tessera_rl._env import AsyncStep, Env, HalfStep, Step, is_stale, make
 from tessera_rl._native import (
     ActionError,
     ArgumentError,
+    CapabilityError,
     ConcurrencyError,
     ConfigError,
     EvaluatorError,
@@ -57,13 +58,14 @@ from tessera_rl._native import (
     TesseraError,
     fp_non_canonical_entries,
     get_fp_policy,
-    set_fp_policy,
     version,
 )
+from tessera_rl._host import HostEnv, HostStep, set_fp_policy
 
 __all__ = [
     "ActionError",
     "ArgumentError",
+    "CapabilityError",
     "ConcurrencyError",
     "ConfigError",
     "AsyncStep",
@@ -73,6 +75,8 @@ __all__ = [
     "ExhaustedError",
     "FloatingPointEnvironmentError",
     "ForkError",
+    "HostEnv",
+    "HostStep",
     "OnnxError",
     "PersistError",
     "PendingResetError",

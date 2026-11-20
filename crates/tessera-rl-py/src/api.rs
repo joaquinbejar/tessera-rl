@@ -19,7 +19,7 @@ use crate::ffi::inner::Inner;
 use crate::ffi::snapshot_type;
 use crate::ffi::view_type::{Track, new_view};
 use crate::split::{HalfOutput, Polled, SplitOps};
-use crate::view::{ViewSet, ViewSpec, half_view_set};
+use crate::view::{ViewSet, ViewSpec};
 
 /// Keyword arguments, as exact `(str, value)` pairs.
 pub(crate) struct Kwargs<'py>(Vec<(String, Mine<'py>)>);
@@ -819,9 +819,7 @@ fn half_output<'py>(
     let outputs = if let Some(owned) = &out.owned {
         owned_dict(g, owned)?
     } else {
-        let (set, storage) = inner.with(g, |ops| {
-            Ok((half_view_set(ops.layout(), &rows), ops.storage()))
-        })?;
+        let (set, storage) = inner.with(g, |ops| Ok((ops.half_views(out.half), ops.storage())))?;
         let set = set.ok_or_else(no_format(g))?;
         let generations = split.half_generations();
         let unsettled = split.unsettled_flag();
@@ -1045,9 +1043,9 @@ pub(crate) fn no_format(g: Gil) -> impl FnOnce() -> Raised {
 /// Borrowed views of every output (ADR-0003): read-only, valid until the
 /// next call that writes outputs.
 fn borrowed_views<'py>(g: Gil<'py>, ops: &dyn PoolOps) -> CResult<Mine<'py>> {
-    let set = crate::view::view_set(ops.layout()).ok_or_else(no_format(g))?;
+    let set = ops.views().ok_or_else(no_format(g))?;
     let storage = ops.readable_storage().map_err(|e| to_py(g, e))?;
-    views_dict(g, &set, |spec| new_view(g, &storage, spec, Track::Storage))
+    views_dict(g, set, |spec| new_view(g, &storage, spec, Track::Storage))
 }
 
 /// The views of `set`, as `view` builds each.

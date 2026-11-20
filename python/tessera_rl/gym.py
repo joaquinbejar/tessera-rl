@@ -61,7 +61,7 @@ except ImportError as e:  # pragma: no cover - exercised only without gymnasium
 
 import numpy as np
 
-from tessera_rl import _native
+from tessera_rl import _host, _native
 from tessera_rl.masks import head_views
 from tessera_rl._env import _discrete_actions, _multi_actions, _real_array, _to_float32, native_kwargs
 
@@ -118,10 +118,19 @@ def _autoreset_mode(mode) -> AutoresetMode:
 
 
 def _native_env(env_id: str, num_envs: int, seed: int, mode: AutoresetMode, outputs: str, kwargs: dict):
-    try:
-        maker = _MAKERS[env_id]
-    except KeyError:
-        raise _native.ArgumentError(f"unknown single-agent environment {env_id!r}; known: {sorted(_MAKERS)}") from None
+    maker = _MAKERS.get(env_id)
+    if maker is None and _host.is_host_id(env_id):
+        # A host environment of an installed wheel (SPEC 14.4): one agent.
+        native = _host.native_for(env_id, num_envs, seed, outputs, {**kwargs, "auto_reset": _NATIVE_MODE[mode]})
+        layout = native.layout()
+        if layout["agents"] != 1:
+            native.close()
+            raise _native.ArgumentError(f"{env_id} has {layout['agents']} agent slots; use the PettingZoo adapter")
+        return native, layout
+    if maker is None:
+        raise _native.ArgumentError(
+            f"unknown single-agent environment {env_id!r}; known: {sorted({*_MAKERS, *_host.host_ids()})}"
+        )
     if env_id in _SLOT0:
         kwargs = {"agents": 1, **kwargs}
     if env_id in _SCRIPTED:
@@ -204,6 +213,9 @@ class TesseraVectorEnv(VectorEnv):
         self.observation_space = batch_space(self.single_observation_space, self.num_envs)
         self.action_space = batch_space(self.single_action_space, self.num_envs)
         self._names = [name or "obs" for name, *_ in layout["leaves"]]
+        # ``"host"`` for a third-party host environment, else ``"tessera"``
+        # (ADR-0062).
+        self.metadata["tessera_kind"] = "host" if layout.get("kind") == "host" else "tessera"
         #: Row width of the native outputs (capacity); the adapter uses slot 0.
         self._agents: int = layout["agents"]
         # Slot 0 carries the action; the other slots are never alive or
@@ -286,7 +298,11 @@ class TesseraVectorEnv(VectorEnv):
             raise _native.ArgumentError(f"unsupported reset options {sorted(options)}")
         native_seed = None if all(s is None for s in seeds) else seeds
         out = self._native.reset(native_seed, ids)
-        return self._obs(out["observations"]), self._mask_info(out)
+        info = self._mask_info(out)
+        if self.metadata["tessera_kind"] == "host":
+            # An aborted reset leaves its instance pending (ADR-0065).
+            info.update(_host.host_infos(out, self.outputs == "owned", self.num_envs))
+        return self._obs(out["observations"]), info
 
     def step(self, actions):
         if len(self._nvec) > 1:
@@ -319,6 +335,10 @@ class TesseraVectorEnv(VectorEnv):
             if self._agents != 1:
                 rewards = rewards.copy()
         info = self._info(out, terminated | truncated)
+        if self.metadata["tessera_kind"] == "host":
+            # ADR-0065: an aborted episode is truncated; its final_obs (in
+            # SAME_STEP) is the zero row the engine wrote.
+            info.update(_host.host_infos(out, self.outputs == "owned", self.num_envs))
         return self._obs(out["observations"]), rewards, terminated, truncated, info
 
     def close_extras(self, **kwargs):
@@ -339,6 +359,7 @@ class TesseraEnv(gymnasium.Env):
     def __init__(self, env_id: str = "tessera/CartPole-v1", seed: int | None = None, **kwargs: Any):
         kwargs.setdefault("max_episode_steps", None)
         self._vec = TesseraVectorEnv(env_id, 1, seed, AutoresetMode.DISABLED, "owned", **kwargs)
+        self.metadata = {**type(self).metadata, "tessera_kind": self._vec.metadata["tessera_kind"]}
         self.construction_seed: int = self._vec.construction_seed
         self.observation_space = self._vec.single_observation_space
         self.action_space = self._vec.single_action_space
@@ -362,11 +383,17 @@ class TesseraEnv(gymnasium.Env):
 
 
 def _first_info(info: dict) -> dict:
-    """Instance 0's masks of a one-instance vector info, if any."""
+    """Instance 0's masks and host abort infos of a one-instance vector
+    info, if any."""
     out = {}
     if "action_mask" in info:
         out["action_mask"] = info["action_mask"][0]
         out["action_masks"] = tuple(h[0] for h in info["action_masks"])
+    for key in ("aborted", "pending_reset"):
+        if key in info:
+            out[key] = bool(info[key][0])
+    if "abort_code" in info:
+        out["abort_code"] = int(info["abort_code"][0])
     return out
 
 
@@ -416,7 +443,9 @@ def make(env_id: str, num_envs: int = 1, seed: int | None = None, **kwargs: Any)
     """A :class:`TesseraVectorEnv` of ``num_envs`` instances of ``env_id``.
 
     ``seed=None`` draws the pool seed from OS entropy (see
-    ``construction_seed``). Options: ``autoreset_mode`` (``AutoresetMode`` or its name, default
+    ``construction_seed``). ``env_id`` may be a single-agent host
+    environment of an installed wheel (SPEC 14.4); its infos carry
+    ``aborted``, ``abort_code`` and ``pending_reset`` (ADR-0065). Options: ``autoreset_mode`` (``AutoresetMode`` or its name, default
     ``NEXT_STEP``), ``outputs`` (``"owned"`` by default or ``"borrowed"``),
     and the native pool options (``max_episode_steps``, ``chunk_size``,
     ``workers``).

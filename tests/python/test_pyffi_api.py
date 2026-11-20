@@ -262,10 +262,10 @@ for cls in classes:
 @pytest.mark.skipif(not hasattr(native, "_fail_after"), reason="needs a test-hooks build (make py-test-hooks)")
 def test_native_first_init_failing_after_register_refuses_later_imports_with_its_cause():
     # The real first import fails after errors::register and after the Env
-    # type was created (15 exception classes, Env, then the View attribute
+    # type was created (16 exception classes, Env, then the View attribute
     # fails). A later import must not rebuild the type objects ("Env type
     # already created"): it raises ImportError naming the first cause.
-    env = dict(os.environ, TESSERA_TEST_INIT_FAIL_AFTER="17")
+    env = dict(os.environ, TESSERA_TEST_INIT_FAIL_AFTER="18")
     run = subprocess.run(
         [sys.executable, "-I", "-c", FIRST_INIT_FAILS], capture_output=True, text=True, env=env
     )

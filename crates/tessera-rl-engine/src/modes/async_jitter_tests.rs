@@ -893,7 +893,8 @@ fn test_async_waiter_sees_a_batch_after_one_run_ready() {
             },
         )
         .unwrap();
-        assert!(waiter.wait_ready(core::time::Duration::from_secs(10)));
+        // A hang guard, under the watchdog so a missed batch fails here.
+        assert!(waiter.wait_ready(WATCHDOG / 2));
         assert_eq!(pool.max_claim(), 4, "one run of 4");
         assert_eq!(pool.recv().unwrap().len(), 4);
     });

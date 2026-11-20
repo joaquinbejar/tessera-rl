@@ -31,9 +31,9 @@ use crate::ffi::capi::{self, CResult, Gil, Kind, Mine, Ref};
 ///
 /// `ImportError` when `tessera_rl` or one of its classes is missing, or a
 /// failure to create the type.
-pub fn init(g: Gil<'_>, module: Ref<'_>) -> CResult<()> {
+pub fn init(g: Gil<'_>, module: Ref<'_>, name: &'static core::ffi::CStr) -> CResult<()> {
     errors::bind(g)?;
-    object::register(g, module)
+    object::register(g, module, name)
 }
 
 /// The pool options of `make`, read from its named keywords.
@@ -341,7 +341,7 @@ macro_rules! export_host_env {
                     g: $crate::ffi::capi::Gil<'py>,
                     module: $crate::ffi::capi::Ref<'py>,
                 ) -> $crate::ffi::capi::CResult<()> {
-                    $crate::host::factory::init(g, module)
+                    $crate::host::factory::init(g, module, $module)
                 }
             }
             $crate::export_module!(host: __Init);

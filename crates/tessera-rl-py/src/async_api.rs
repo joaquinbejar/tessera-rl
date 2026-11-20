@@ -15,7 +15,7 @@ use crate::ffi::capi::{self, CResult, Gil, Mine, Ref};
 use crate::ffi::inner::Inner;
 use crate::ffi::snapshot_type;
 use crate::ffi::view_type::{Track, new_gather_view, new_view};
-use crate::view::{half_view_set, view_set};
+use crate::view::half_view_set;
 
 /// A batch: `{ids, seq, outputs}`. Gathered and owned outputs have one row
 /// per id in `ids`, in that order; indexed views have all N rows.
@@ -36,7 +36,7 @@ fn batch_output<'py>(
             new_gather_view(g, &buffer, spec, out.gathered, &unsettled)
         })?
     } else {
-        let set = inner.with(g, |p| Ok(view_set(p.layout())))?;
+        let set = inner.with(g, |p| Ok(p.views().cloned()))?;
         let set = set.ok_or_else(no_format(g))?;
         let (storage, generations, epochs) =
             (ops.storage(), ops.id_generations(), ops.release_epochs());

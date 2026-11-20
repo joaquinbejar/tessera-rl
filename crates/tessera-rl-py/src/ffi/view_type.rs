@@ -233,7 +233,8 @@ impl MethodKw for DlpackM {
         args: Ref<'py>,
         kwargs: Option<Ref<'py>>,
     ) -> CResult<Mine<'py>> {
-        v.export.dlpack_call(g, args, kwargs)
+        v.export
+            .dlpack_call(g, args, kwargs, "; use outputs=\"owned\"")
     }
 }
 

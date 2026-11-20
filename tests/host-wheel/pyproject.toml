@@ -11,3 +11,8 @@ requires-python = ">=3.11"
 
 [tool.maturin]
 module-name = "_tessera_host"
+
+# Host protocol 1 discovery (SPEC 14.4.1): tessera_rl.make finds the test
+# counter through this entry point (make py-test-host).
+[project.entry-points."tessera_rl.envs"]
+"test/FactoryCounter-v1" = "_tessera_host:make"

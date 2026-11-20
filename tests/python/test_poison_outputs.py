@@ -46,3 +46,15 @@ def test_an_owned_copy_from_before_the_panic_stays():
         env.outputs()
     assert bytes(before["rewards"]) == copy
     env.close()
+
+
+def test_viewset_cache_poisoned_pool_refuses_views_and_recovery_gives_fresh_ones():
+    # Plan #152 E3: the cached view set never bypasses the poison check.
+    env, before = poisoned("borrowed")
+    with pytest.raises(tessera_rl.PoisonedError):
+        env.outputs()
+    env.reset()
+    after = env.outputs()
+    assert before["rewards"].is_stale()
+    assert not after["rewards"].is_stale()
+    env.close()

@@ -584,6 +584,11 @@ def is_stale(array) -> bool:
     while obj is not None:
         if isinstance(obj, _native.OutputView):
             return obj.is_stale()
+        # A host view (SPEC 14.4.4 item 3): its window's generation against
+        # its pool's current one.
+        view_generation = getattr(type(obj), "_tessera_view_generation", None)
+        if view_generation is not None:
+            return obj._tessera_view_generation() != obj._tessera_current_generation()
         if isinstance(obj, (bytes, bytearray)):
             return False
         if isinstance(obj, memoryview):
@@ -624,6 +629,11 @@ def make(env_id: str, num_envs: int = 1, seed: int = 0, outputs: str = "borrowed
     of the longest game. Go 9x9 takes ``komi_half_points`` (default 15, that
     is 7.5); its ``max_episode_steps`` defaults to 200, above the cap of 162
     plies.
+
+    Any other id is looked up among the host environments of installed
+    third-party wheels (the ``tessera_rl.envs`` entry points, read once per
+    process: restart after installing a wheel) and returns a ``HostEnv``.
+    Host environments run in ``mode="sync"`` only.
     """
     makers = {
         "tessera/CartPole-v1": _native.make_cartpole,
@@ -642,10 +652,12 @@ def make(env_id: str, num_envs: int = 1, seed: int = 0, outputs: str = "borrowed
         "tessera/Othello-v1": _native.make_othello,
         "tessera/Go9-v1": _native.make_go9,
     }
-    try:
-        maker = makers[env_id]
-    except KeyError:
-        raise _native.ArgumentError(f"unknown environment {env_id!r}; known: {sorted(makers)}") from None
+    maker = makers.get(env_id)
+    if maker is None:
+        # A host environment of an installed third-party wheel (SPEC 14.4.1).
+        from tessera_rl import _host
+
+        return _host.make(env_id, makers, num_envs, seed, outputs, dict(kwargs))
     mode = str(kwargs.get("mode") or "sync")
     indexed = kwargs.get("gather") == "indexed"
     return Env(maker(**native_kwargs(num_envs=num_envs, seed=seed, outputs=outputs, **kwargs)), mode, indexed)

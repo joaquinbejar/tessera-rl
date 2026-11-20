@@ -343,12 +343,15 @@ impl Export {
     ///
     /// `TypeError` for positional arguments, an unknown keyword or an
     /// argument of the wrong type;
-    /// `BufferError` as above or from [`Export::dlpack`].
+    /// `BufferError` as above or from [`Export::dlpack`]. `copy_hint` ends
+    /// the `copy=True` message (the first-party views point to
+    /// `outputs="owned"`).
     pub fn dlpack_call<'py>(
         &self,
         g: Gil<'py>,
         args: Ref<'py>,
         kwargs: Option<Ref<'py>>,
+        copy_hint: &str,
     ) -> CResult<Mine<'py>> {
         if !capi::tuple_items(g, args, "the arguments")?.is_empty() {
             return Err(capi::raise(
@@ -401,7 +404,7 @@ impl Export {
             return Err(capi::raise(
                 g,
                 capi::buffer_error(),
-                "borrowed views do not copy; use outputs=\"owned\"",
+                &format!("borrowed views do not copy{copy_hint}"),
             ));
         }
         let versioned = match get("max_version") {

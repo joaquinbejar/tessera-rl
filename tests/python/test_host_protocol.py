@@ -12,6 +12,7 @@ draft, ADR-0065 item 5): the test host wheel of tests/host-wheel
 - calls: seeds and actions checked, reentrancy, poison, the FP policy.
 """
 
+import enum
 import json
 import pathlib
 import subprocess
@@ -88,6 +89,12 @@ def test_host_object_has_every_protocol_member():
     # Read-only attributes.
     with pytest.raises(AttributeError):
         env.host_protocol = 2
+    # The types are named after export_host_env!'s module (here the test
+    # wheel's "_tessera_host"), so a packaged wheel's are its own.
+    assert type(env).__module__ == host.__name__.rsplit(".", 1)[-1] == "_tessera_host"
+    assert type(env).__name__ == "HostEnv"
+    view = env.reset()["rewards"]
+    assert (type(view).__module__, type(view).__name__) == ("_tessera_host", "HostView")
     env.close()
 
 
@@ -242,11 +249,21 @@ def test_host_views_outlive_close_and_are_overwritten_by_the_next_call():
     env.close()
 
 
-@pytest.mark.parametrize("seed", [-1, True, 2**64, 1.5, "1", [0, 1], [0, 1, 2, -1], [0, 1, 2, True]])
+@pytest.mark.parametrize(
+    "seed",
+    [-1, True, 2**64, 1.5, "1", enum.IntEnum("Seed", {"A": 5}).A, np.int64(5), [0, 1], [0, 1, 2, -1], [0, 1, 2, True]],
+)
 def test_host_reset_refuses_bad_seeds(seed):
     env = make()
-    with pytest.raises(tessera_rl.ArgumentError):
+    with pytest.raises(tessera_rl.ArgumentError) as e:
         env.reset(seed)
+    message = str(e.value)
+    if seed is True or (isinstance(seed, list) and any(x is True for x in seed)):
+        assert "got a bool" in message, message
+    elif seed in (-1, 2**64) or (isinstance(seed, list) and -1 in seed):
+        assert "got an int outside that range" in message, message
+    elif not isinstance(seed, list):
+        assert "must be an exact int" in message and "got not an exact int" in message, message
     env.close()
 
 
@@ -397,6 +414,9 @@ def test_host_view_dlpack_arguments():
     for kwargs in ({"copy": True}, {"stream": 1}, {"dl_device": (2, 0)}):
         with pytest.raises(BufferError):
             view.__dlpack__(**kwargs)
+    with pytest.raises(BufferError) as e:
+        view.__dlpack__(copy=True)
+    assert "owned" not in str(e.value), "a host view has no outputs mode to point to"
     with pytest.raises(TypeError):
         view.__dlpack__(1)
     with pytest.raises(TypeError):

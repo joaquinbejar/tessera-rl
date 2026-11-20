@@ -155,6 +155,18 @@ pub(crate) struct Owned {
 /// What an environment object can do, whatever the environment.
 pub(crate) trait PoolOps: Send {
     fn layout(&self) -> &Layout;
+    /// The view set of `layout`, built once at construction (the layout is
+    /// fixed); `None` for a leaf dtype the protocols cannot name. It holds
+    /// only regions and shapes: each call still makes new views, stamped
+    /// with that call's storage generation. `None` by default: Pipelined
+    /// mode exports only halves, through [`PoolOps::half_views`].
+    fn views(&self) -> Option<&std::sync::Arc<crate::view::ViewSet>> {
+        None
+    }
+    /// The view set of half `half`'s rows, built once (Pipelined only).
+    fn half_views(&self, _half: usize) -> Option<std::sync::Arc<crate::view::ViewSet>> {
+        None
+    }
     /// Resets every instance, or only `ids`.
     fn reset(&mut self, ids: Option<&[u32]>, seed: &ResetSeed) -> Result<(), BindError>;
     fn step(&mut self, actions: ActionInput<'_>) -> Result<(), BindError>;
@@ -212,6 +224,7 @@ pub(crate) trait PoolOps: Send {
 struct Pooled<E: Environment, M: MaskProvider<E>> {
     pool: EnvPool<E, M>,
     layout: Layout,
+    views: Option<std::sync::Arc<crate::view::ViewSet>>,
     /// Captured while healthy: identity and regions for views, no row values.
     storage: std::sync::Arc<tessera_rl_engine::OutputStorage>,
 }
@@ -328,27 +341,29 @@ where
         } else {
             0
         };
+        let layout = Layout {
+            num_envs,
+            agents: E::MAX_AGENTS,
+            initial_agents: E::initial_agents(cfg),
+            leaves: obs,
+            action_choices,
+            action_nvec,
+            action_bounds,
+            mask_len,
+            mask_heads,
+            entity_group_heads,
+            turns: match E::TURNS {
+                TurnStructure::Simultaneous => "simultaneous",
+                TurnStructure::Sequential => "sequential",
+                TurnStructure::Mixed => "mixed",
+            },
+            terminal,
+        };
         Ok(Self {
             storage,
             pool,
-            layout: Layout {
-                num_envs,
-                agents: E::MAX_AGENTS,
-                initial_agents: E::initial_agents(cfg),
-                leaves: obs,
-                action_choices,
-                action_nvec,
-                action_bounds,
-                mask_len,
-                mask_heads,
-                entity_group_heads,
-                turns: match E::TURNS {
-                    TurnStructure::Simultaneous => "simultaneous",
-                    TurnStructure::Sequential => "sequential",
-                    TurnStructure::Mixed => "mixed",
-                },
-                terminal,
-            },
+            views: crate::view::view_set(&layout).map(std::sync::Arc::new),
+            layout,
         })
     }
 }
@@ -399,6 +414,10 @@ where
 {
     fn layout(&self) -> &Layout {
         &self.layout
+    }
+
+    fn views(&self) -> Option<&std::sync::Arc<crate::view::ViewSet>> {
+        self.views.as_ref()
     }
 
     fn reset(&mut self, ids: Option<&[u32]>, seed: &ResetSeed) -> Result<(), BindError> {
@@ -600,6 +619,7 @@ where
             pool,
             layout,
             storage,
+            ..
         } = pooled;
         let template = pool.snapshot(0)?;
         let mut options = PipelinedOptions::new(workers.unwrap_or(NonZeroUsize::MIN));
@@ -616,6 +636,7 @@ where
             pool,
             layout,
             storage,
+            ..
         } = pooled;
         let template = pool.snapshot(0)?;
         let mut options = AsyncOptions::new(workers.unwrap_or(NonZeroUsize::MIN), batch);
@@ -628,6 +649,7 @@ where
     let Pooled {
         pool,
         layout,
+        views,
         storage,
     } = pooled;
     let pool = match workers {
@@ -641,6 +663,7 @@ where
     Ok(Box::new(Pooled {
         pool,
         layout,
+        views,
         storage,
     }))
 }

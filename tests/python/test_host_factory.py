@@ -159,6 +159,7 @@ def test_host_factory_missing_tessera_rl_class_fails_the_import(tmp_path):
     names = [
         "TesseraError", "ConfigError", "ArgumentError", "ActionError", "PendingResetError",
         "PoisonedError", "ConcurrencyError", "ExhaustedError", "FloatingPointEnvironmentError",
+        "CapabilityError",
     ]
     (pkg / "__init__.py").write_text("".join(f"class {n}(Exception): pass\n" for n in names))
     script = textwrap.dedent(MISSING_CLASS.format(path=str(tmp_path)))
@@ -194,6 +195,7 @@ def _stand_in(tmp_path, body):
     names = [
         "TesseraError", "ConfigError", "ArgumentError", "ActionError", "PendingResetError",
         "PoisonedError", "ConcurrencyError", "ExhaustedError", "FloatingPointEnvironmentError",
+        "CapabilityError",
     ]
     (pkg / "__init__.py").write_text("".join(f"class {n}(Exception): pass\n" for n in names) + body)
     script = textwrap.dedent(
@@ -243,3 +245,20 @@ def test_host_factory_lone_surrogate_option_is_an_argument_error():
     # first-party make does.
     with pytest.raises(tessera_rl.ArgumentError, match="auto_reset"):
         host.make(num_envs=1, auto_reset="\ud800")
+
+
+def test_host_factory_missing_capability_error_fails_the_import(tmp_path):
+    # SPEC 14.4.6: CapabilityError is bound too; a tessera_rl without it
+    # fails the host import.
+    pkg = tmp_path / "tessera_rl"
+    pkg.mkdir()
+    names = [
+        "TesseraError", "ConfigError", "ArgumentError", "ActionError", "PendingResetError",
+        "PoisonedError", "ConcurrencyError", "ExhaustedError", "FloatingPointEnvironmentError",
+        "ForkError",
+    ]
+    (pkg / "__init__.py").write_text("".join(f"class {n}(Exception): pass\n" for n in names))
+    script = textwrap.dedent(MISSING_CLASS.format(path=str(tmp_path)))
+    run = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True)
+    assert run.returncode == 0, run.stderr
+    assert "import-failed: tessera_rl has no exception class CapabilityError" in run.stdout, run.stdout

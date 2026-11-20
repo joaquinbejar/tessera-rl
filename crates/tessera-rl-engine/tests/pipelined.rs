@@ -602,6 +602,11 @@ fn test_pipelined_snapshot_and_restore_carry_the_cycle_state() {
     );
 }
 
+/// How long a wait for a batch that is coming may take before the test
+/// fails instead of hanging. It catches a missed wake, not speed: a starved
+/// CI host can run the workers many times slower (as in #301).
+const HANG_GUARD: Duration = Duration::from_secs(300);
+
 #[test]
 fn test_pipelined_waiter_and_recv_timeout() {
     let mut p = piped(AutoReset::NextStep, 2, cfg());
@@ -611,11 +616,11 @@ fn test_pipelined_waiter_and_recv_timeout() {
     let h = p.halves()[0].clone();
     send(&mut p, a, &half_actions(&actions(0), &h));
     let w = waiter.clone();
-    let seen = std::thread::spawn(move || w.wait_ready(Duration::from_secs(10)))
+    let seen = std::thread::spawn(move || w.wait_ready(HANG_GUARD))
         .join()
         .unwrap();
     assert!(seen);
-    let a = p.recv_timeout(Duration::from_secs(10)).unwrap();
+    let a = p.recv_timeout(HANG_GUARD).unwrap();
     assert!(a.is_some());
 }
 
