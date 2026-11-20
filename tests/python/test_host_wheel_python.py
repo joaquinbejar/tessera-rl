@@ -71,3 +71,20 @@ def test_host_wheel_pettingzoo_parallel_api():
     env = pz.parallel_env(ID, seed=3)
     parallel_api_test(env, num_cycles=20)
     env.close()
+
+
+def test_host_wheel_int32_ndarray_actions_step_as_bytes():
+    # Env.step passes an int32 C-contiguous array on as a memoryview (#152
+    # E2); the host backend turns it into the exact bytes protocol 1 takes,
+    # so the result equals the converting path's.
+    a = tessera_rl.make(ID, num_envs=2, seed=4, offset=1, outputs="owned")
+    b = tessera_rl.make(ID, num_envs=2, seed=4, offset=1, outputs="owned")
+    a.reset()
+    b.reset()
+    for k in range(3):
+        acts = np.full((2, 2), k % 2, dtype=np.int32)
+        sa, sb = a.step(acts), b.step(acts.astype(np.int64))
+        assert np.array_equal(sa.observations["obs"], sb.observations["obs"])
+        assert np.array_equal(sa.rewards, sb.rewards)
+    a.close()
+    b.close()
