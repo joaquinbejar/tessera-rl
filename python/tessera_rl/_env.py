@@ -320,6 +320,14 @@ class Env:
         infinite or out of bounds. Anything else raises ``ActionError``
         before the pool is touched.
         """
+        if _plain_int32(actions) and self.action_bounds is None and len(self.action_nvec) <= 1:
+            # #152 E2: an int32 C-contiguous array is already the wire format,
+            # and every int32 is in the int32 range, so no Python pass over it:
+            # the native step copies it through a memoryview before the pool
+            # is touched, and checks each value against the head (E1).
+            if actions.size != self.num_envs * self.agents:
+                raise _native.ActionError(f"expected {self.num_envs * self.agents} actions, got {actions.size}")
+            return self._wrap(self._native.step(memoryview(actions)))
         acts = self._actions(actions)
         per_row = len(self.action_nvec) if len(self.action_nvec) > 1 else 1
         if acts.size != self.num_envs * self.agents * per_row:
@@ -446,6 +454,16 @@ class Env:
 
 
 _I32 = np.iinfo(np.int32)
+
+
+_I4 = np.dtype("<i4")
+
+
+def _plain_int32(actions) -> bool:
+    """Whether ``actions`` is an exact ndarray of C-contiguous little-endian
+    int32, which the native step reads as is (#152 E2). Subclasses and
+    every other dtype or layout take ``_discrete_actions``."""
+    return type(actions) is np.ndarray and actions.dtype == _I4 and actions.flags.c_contiguous
 
 
 def _discrete_actions(actions) -> np.ndarray:

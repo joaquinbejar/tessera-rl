@@ -21,7 +21,9 @@
 //!   user objects in them, so a replaced or dropped value may run a
 //!   finalizer; setting an exception (`PyErr_SetString`, which normalizes:
 //!   an allocation); a conversion that may raise (`PyLong_As*`,
-//!   `PyUnicode_AsUTF8AndSize`); and a warning.
+//!   `PyUnicode_AsUTF8AndSize`); a buffer request and its release on an
+//!   exact `memoryview` (`PyObject_GetBuffer`, `PyBuffer_Release`); and a
+//!   warning.
 //! - **Direct** (cannot run Python code): non-GC allocations (`str`,
 //!   `bytes`, `bytearray`, `int`, `float`, capsules, and instances of our
 //!   own types, which are not GC-tracked); reads of exact built-in types
@@ -49,7 +51,8 @@
 //! borrowed. No safe function relies on its caller for this.
 //!
 //! **Exact types.** Arguments are read only from exact built-in types
-//! (`int`, `bool`, `str`, `bytes`, `tuple`, `list`, `dict`, `None`); any
+//! (`int`, `bool`, `str`, `bytes`, `memoryview`, `tuple`, `list`, `dict`,
+//! `None`); any
 //! other object raises `TypeError` without calling its `__index__`,
 //! `__bool__`, `__iter__` or anything else. The Python layer converts user
 //! objects (with `int()`, NumPy) before calling the native module, under
@@ -1056,6 +1059,95 @@ pub fn bytes_of<'a>(g: Gil<'_>, b: Ref<'a>, what: &str) -> CResult<&'a [u8]> {
     let len = usize::try_from(len).map_err(|_| raise(g, runtime_error(), "a negative length"))?;
     // SAFETY: `len` immutable bytes owned by the live object.
     Ok(unsafe { core::slice::from_raw_parts(data.cast::<u8>(), len) })
+}
+
+/// Whether `b` is an exact `memoryview`.
+#[must_use]
+pub fn is_memoryview(b: Ref<'_>) -> bool {
+    b.is_exact(&raw mut ffi::PyMemoryView_Type)
+}
+
+/// One C-contiguity-checked view of an exact `memoryview`'s buffer, valid
+/// inside [`with_memoryview`]'s closure.
+#[derive(Clone, Copy, Debug)]
+pub struct BufferView<'a> {
+    /// The buffer's bytes; empty unless the buffer is C-contiguous.
+    pub bytes: &'a [u8],
+    /// The size of one item, in bytes.
+    pub itemsize: usize,
+    /// The item format (`struct` syntax, `"B"` when the exporter gives none).
+    pub format: &'a [u8],
+    /// Whether the buffer is C-contiguous (`bytes` holds all of it).
+    pub c_contiguous: bool,
+}
+
+/// Runs `f` on the buffer of the exact `memoryview` `b`, then releases it.
+///
+/// `TypeError` when `b` is not an exact `memoryview`; the `memoryview`'s
+/// own exception (a released view: `ValueError`) when the request fails.
+/// The Python layer makes the view from a user object (exact types rule:
+/// the user object's exporter runs there, under the caller's controls);
+/// here only `memoryview`'s own C getbuffer runs, through a callout. The
+/// interpreter stays attached for the whole call, so no Python thread can
+/// change the memory while `f` reads it; `f` must not call back into
+/// Python.
+pub fn with_memoryview<R>(
+    g: Gil<'_>,
+    b: Ref<'_>,
+    what: &str,
+    f: impl FnOnce(BufferView<'_>) -> R,
+) -> CResult<R> {
+    /// Releases the buffer on every exit, including an unwind out of `f`.
+    struct Release(*mut ffi::Py_buffer);
+    impl Drop for Release {
+        fn drop(&mut self) {
+            // SAFETY: a buffer filled by a successful PyObject_GetBuffer,
+            // released once.
+            unsafe { thunks::c_buffer_release(self.0) };
+        }
+    }
+    if !b.is_exact(&raw mut ffi::PyMemoryView_Type) {
+        return Err(wrong(g, what, "bytes or a memoryview"));
+    }
+    let mut view = core::mem::MaybeUninit::<ffi::Py_buffer>::uninit();
+    // SAFETY: a live exact memoryview and a writable Py_buffer; a read-only
+    // request with strides and format, which a live memoryview always
+    // satisfies (a released one raises).
+    let rc = unsafe { thunks::c_get_buffer(b.as_ptr(), view.as_mut_ptr(), ffi::PyBUF_RECORDS_RO) };
+    if rc != 0 {
+        return Err(RAISED);
+    }
+    let release = Release(view.as_mut_ptr());
+    // SAFETY: filled by the successful request above.
+    let v = unsafe { &*view.as_ptr() };
+    // SAFETY: `c"C"` is a live NUL-terminated string; its first byte is
+    // read as the platform's `c_char`.
+    let fort = unsafe { *c"C".as_ptr() };
+    // SAFETY: a filled buffer; IsContiguous reads only its fields.
+    let c_contiguous = unsafe { ffi::PyBuffer_IsContiguous(v, fort) } == 1;
+    let len = usize::try_from(v.len).unwrap_or(0);
+    let itemsize = usize::try_from(v.itemsize).unwrap_or(0);
+    let bytes: &[u8] = if c_contiguous && len > 0 && !v.buf.is_null() {
+        // SAFETY: a C-contiguous buffer of `len` bytes at `buf`, held by the
+        // export until `release` drops; nothing in Rust writes it.
+        unsafe { core::slice::from_raw_parts(v.buf.cast::<u8>(), len) }
+    } else {
+        &[]
+    };
+    let format: &[u8] = if v.format.is_null() {
+        b"B"
+    } else {
+        // SAFETY: a NUL-terminated format string owned by the export.
+        unsafe { CStr::from_ptr(v.format) }.to_bytes()
+    };
+    let out = f(BufferView {
+        bytes,
+        itemsize,
+        format,
+        c_contiguous,
+    });
+    drop(release);
+    Ok(out)
 }
 
 #[cfg(test)]

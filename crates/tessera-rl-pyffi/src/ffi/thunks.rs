@@ -1461,6 +1461,11 @@ callout!(c_check_signals => ffi::PyErr_CheckSignals : fn() -> c_int);
 callout!(c_long_as_i64 => ffi::PyLong_AsLongLong : fn(Obj) -> i64);
 callout!(c_long_as_u64 => ffi::PyLong_AsUnsignedLongLong : fn(Obj) -> u64);
 callout!(c_unicode_as_utf8 => ffi::PyUnicode_AsUTF8AndSize : fn(Obj, *mut ffi::Py_ssize_t) -> CStr);
+// The buffer of an exact `memoryview` (capi::with_memoryview): its getbuffer
+// and releasebuffer are C, but a failed request sets an exception (an
+// allocation), and the release decrefs the view's object.
+callout!(c_get_buffer => ffi::PyObject_GetBuffer : fn(Obj, *mut ffi::Py_buffer, c_int) -> c_int);
+callout!(c_buffer_release => ffi::PyBuffer_Release : fn(*mut ffi::Py_buffer) -> ());
 callout!(
     #[cfg(any(feature = "native-module", feature = "host"))]
     c_object_str => ffi::PyObject_Str : fn(Obj) -> Obj

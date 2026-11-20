@@ -700,9 +700,16 @@ pub(crate) fn reset<'py>(g: Gil<'py>, inner: &Inner, args: Ref<'_>) -> CResult<M
     })
 }
 
-/// Little-endian int32 actions, from exact `bytes`.
+/// Little-endian int32 actions, from exact `bytes`, or for a discrete head
+/// from an exact `memoryview` of C-contiguous native int32 (#152 E2: the
+/// Python layer passes an `<i4` array's view without a copy of its own).
 fn actions_of(g: Gil, inner: &Inner, actions: Ref<'_>) -> CResult<Wire> {
     let continuous = inner.with(g, |ops| Ok(ops.layout().action_bounds.is_some()))?;
+    if !continuous && capi::is_memoryview(actions) {
+        return capi::with_memoryview(g, actions, "actions", |v| int32_view(&v))?
+            .map(Wire::Discrete)
+            .map_err(|m| error(g, Kind::Action, m.to_owned()));
+    }
     let raw = capi::bytes_of(g, actions, "actions")?;
     if raw.len() % 4 != 0 {
         let what = if continuous { "float32" } else { "int32" };
@@ -718,6 +725,30 @@ fn actions_of(g: Gil, inner: &Inner, actions: Ref<'_>) -> CResult<Wire> {
     } else {
         Wire::Discrete(words.map(|c| i32::from_le_bytes(*c)).collect())
     })
+}
+
+/// The int32 values of a buffer view: C-contiguous, 4-byte items, and a
+/// native or little-endian 4-byte signed format (`i`, or `l` at 4 bytes);
+/// the message of the `ActionError` otherwise.
+fn int32_view(v: &capi::BufferView<'_>) -> Result<Vec<i32>, &'static str> {
+    const FORMATS: [&[u8]; 6] = [b"i", b"=i", b"<i", b"l", b"=l", b"<l"];
+    if !v.c_contiguous {
+        return Err("an actions memoryview must be C-contiguous");
+    }
+    if v.itemsize != 4 || !FORMATS.contains(&v.format) {
+        return Err("an actions memoryview must hold int32 values");
+    }
+    let decode = if v.format.first() == Some(&b'<') {
+        i32::from_le_bytes
+    } else {
+        i32::from_ne_bytes
+    };
+    Ok(v.bytes
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|c| decode(*c))
+        .collect())
 }
 
 /// One call's decoded actions, typed by the pool's action head.
@@ -1191,4 +1222,72 @@ pub(crate) fn close<'py>(g: Gil<'py>, inner: &Inner) -> CResult<Mine<'py>> {
     let ops = inner.take(g)?;
     g.detach(move || drop(ops));
     Ok(capi::none(g))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{capi::BufferView, int32_view};
+
+    fn view<'a>(
+        bytes: &'a [u8],
+        itemsize: usize,
+        format: &'a [u8],
+        c_contiguous: bool,
+    ) -> BufferView<'a> {
+        BufferView {
+            bytes,
+            itemsize,
+            format,
+            c_contiguous,
+        }
+    }
+
+    #[test]
+    fn test_int32_view_native_and_little_endian_formats_decode() {
+        let raw: Vec<u8> = [7_i32, -2, i32::MAX, i32::MIN]
+            .iter()
+            .flat_map(|v| v.to_le_bytes())
+            .collect();
+        for format in [&b"i"[..], b"=i", b"<i", b"l", b"=l", b"<l"] {
+            assert_eq!(
+                int32_view(&view(&raw, 4, format, true)),
+                Ok(vec![7, -2, i32::MAX, i32::MIN]),
+                "{format:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_int32_view_empty_buffer_decodes_to_nothing() {
+        assert_eq!(int32_view(&view(&[], 4, b"i", true)), Ok(vec![]));
+    }
+
+    #[test]
+    fn test_int32_view_wrong_item_or_format_is_refused() {
+        let raw = [0_u8; 8];
+        for (itemsize, format) in [
+            (8, &b"q"[..]),
+            (8, b"l"),
+            (4, b"I"),
+            (4, b"f"),
+            (4, b">i"),
+            (4, b"!i"),
+            (1, b"B"),
+            (2, b"h"),
+        ] {
+            assert_eq!(
+                int32_view(&view(&raw, itemsize, format, true)),
+                Err("an actions memoryview must hold int32 values"),
+                "{itemsize} {format:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_int32_view_not_c_contiguous_is_refused_first() {
+        assert_eq!(
+            int32_view(&view(&[], 8, b"q", false)),
+            Err("an actions memoryview must be C-contiguous")
+        );
+    }
 }
