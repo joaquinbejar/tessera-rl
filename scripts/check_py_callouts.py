@@ -246,6 +246,9 @@ def use_tree(tree: str, prefix: str, crates: set[str], modules: set[str], out: d
     if is_c_api_path(full, crates, modules):
         if alias and alias != "_":
             modules.add(alias)
+        # The C-API module itself, by any name: keyed `ffi::`, which is no
+        # identifier, with an empty name, which is no function.
+        out["ffi::"] = ""
         return
     if not is_c_api_path(parent, crates, modules):
         return
@@ -281,11 +284,16 @@ PUB_USE = re.compile(r"\bpub(?:\s*\([^)]*\))?\s+use\s+([^;]*);")
 
 def reexports(code: str) -> set[str]:
     """The C-API functions `code` re-exports (`pub use pyo3::ffi::X`), and
-    `*` for a re-exported glob of the C API. A C-API function leaves its
+    `*` for a re-exported glob or module of the C API. A C-API function leaves its
     file only through a callout, in every file, `capi.rs` and `thunks.rs`
     included."""
     _, _, imported, globs = imports(code, PUB_USE)
-    return {name for name in imported.values() if is_fn_name(name)} | ({"*"} if globs else set())
+    found = {name for name in imported.values() if is_fn_name(name)}
+    if "ffi::" in imported:
+        # The C-API module re-exported, under its own name or another
+        # (`pub use pyo3::ffi as raw;`): every function goes with it.
+        found.add("*")
+    return found | ({"*"} if globs else set())
 
 
 def c_api_calls(code: str, values: bool = True) -> set[str]:

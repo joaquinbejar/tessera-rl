@@ -197,6 +197,9 @@ def test_callouts_c_api_calls_ignores_non_calls_and_other_ffi_paths(code):
         # #310: a module alias used before its `use` line.
         ("use raw::PyList_New;\nuse pyo3::ffi as raw;\nfn f() { unsafe { PyList_New(0); } }", "PyList_New"),
         ("use q::PyList_New;\nuse p::ffi as q;\nuse pyo3 as p;\nfn f() { unsafe { PyList_New(0); } }", "PyList_New"),
+        # An alias of a crate alias, in reverse order: one pass over the
+        # `use` lines is not enough (#310 follow-up review N1).
+        ("use q::ffi::PyList_New;\nuse p as q;\nuse pyo3 as p;\nfn f() { unsafe { PyList_New(0); } }", "PyList_New"),
         # #310: a value after a glob import.
         ("use pyo3::ffi::*;\nfn f() { let g = PyList_New; }", "PyList_New"),
         ("use pyo3::ffi as raw;\nuse raw::*;\nfn f() { let g = PyErr_Clear; }", "PyErr_Clear"),
@@ -395,8 +398,14 @@ def test_callouts_lint_reports_a_re_export_outside_capi(tmp_path):
     [
         ("pub use pyo3::ffi::PyList_New;", {"PyList_New"}),
         ("pub(crate) use pyo3::ffi::{PyObject, PyErr_Clear as clear};", {"PyErr_Clear"}),
-        ("pub(in crate::ffi) use pyo3::ffi as raw;\npub(super) use raw::Py_TYPE;", {"Py_TYPE"}),
+        ("use pyo3::ffi as raw;\npub(super) use raw::Py_TYPE;", {"Py_TYPE"}),
+        ("pub(in crate::ffi) use pyo3::ffi::PyErr_Clear;", {"PyErr_Clear"}),
         ("pub use pyo3::ffi::*;", {"*"}),
+        # The module itself, renamed or not (#310 follow-up review N2).
+        ("pub use pyo3::ffi as raw;", {"*"}),
+        ("pub(crate) use pyo3::{ffi};", {"*"}),
+        ("use pyo3::ffi as raw;\npub use raw as raw2;", {"*"}),
+        ("use pyo3::ffi;\nuse pyo3::ffi as raw;", set()),
         ("use pyo3::ffi::PyList_New;", set()),
         ("pub use pyo3::ffi::PyObject;", set()),
         ("pub use crate::ffi::capi::list;", set()),
@@ -420,6 +429,17 @@ def test_callouts_lint_reports_a_re_export_in_thunks_and_capi(tmp_path, rel, lin
     run = _callouts_run(src)
     name = line.rsplit("::", 1)[1].rstrip(";")
     assert run.returncode != 0 and f"{rel}: re-exports ffi::{name}" in run.stdout, run.stdout
+
+
+def test_callouts_lint_reports_a_renamed_module_re_export(tmp_path):
+    # #310 follow-up review N2: the C-API module re-exported under another
+    # name, then called through it from another file.
+    src = _callouts_tree(tmp_path)
+    (src / "reexport.rs").write_text("pub use pyo3::ffi as raw;\n")
+    api = src / "api.rs"
+    api.write_text(api.read_text() + "\nuse crate::reexport::raw;\nfn sneaky() { unsafe { raw::PyList_New(0); } }\n")
+    run = _callouts_run(src)
+    assert run.returncode != 0 and "reexport.rs: re-exports ffi::*" in run.stdout, run.stdout
 
 
 def test_callouts_lint_reports_a_glob_import_outside_capi(tmp_path):
