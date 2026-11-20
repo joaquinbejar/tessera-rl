@@ -16,9 +16,13 @@ A C-API call is `ffi::f(...)`, `X::f(...)` after `use pyo3::ffi as X` or
 `use pyo3::ffi::{self as X}`, or `g(...)` after `use pyo3::ffi::f`, `use
 pyo3::ffi::f as g` or a group import of either; after a glob import
 (`use pyo3::ffi::*`) any `Py...(...)` call counts. A function taken as a
-value (`let f = ffi::PyList_New;`) counts as a call, except in `thunks.rs`,
-which names the callout targets that way. Only `pyo3::ffi` paths (or `ffi`
-and its aliases) are the C API: `crate::ffi::capi::{list as make}` is not.
+value (`let f = ffi::PyList_New;`), imported at all (a `use` or `pub use`
+of it, so a re-export is reported where it is made) or named bare after a
+glob import counts as a call, except in `thunks.rs`, which names the
+callout targets that way. Only `pyo3::ffi` paths (also through a crate
+alias, `use pyo3 as p;`), or `ffi` and its aliases, are the C API:
+`crate::ffi::capi::{list as make}` is not. The `use` lines are read in any
+order.
 A `pub safe fn` in an `unsafe extern` block fails anywhere. String literals and comments are ignored
 (scripts/rust_lex.py), so a `//` inside a string hides nothing. It is a
 lint over the source text, not a proof.
@@ -86,6 +90,14 @@ LEAF_OWNED = re.compile(r"\b(?:Mine|Self)::new\(\s*unsafe\s*\{\s*thunks::(\w+)\s
 LET_THUNK = re.compile(r"\blet\s+(?:mut\s+)?(\w+)\s*(?::[^=;]*)?=\s*unsafe\s*\{\s*thunks::(\w+)\s*\(")
 
 
+# A value passed on unchanged but for its pointer type: `x`, `x.cast()`,
+# `x.cast::<T>()`, `x as *mut T`.
+CAST = r"\b(?:\s*\.\s*cast\s*(?:::\s*<[^;()]*>)?\s*\(\s*\)|\s+as\s+[^;(){}]+?)?"
+# A rebinding of a name: `let y = x;` (typed or not, `mut` or not) or a
+# plain assignment `y = x;` (not `==`, `<=`, `+=` and the like).
+REBIND_HEAD = r"(?:\blet\s+(?:mut\s+)?(\w+)\s*(?::[^=;]*)?|(?<![\w.])(\w+)\s*)(?<![=!<>+\-*/%&|^])=(?!=)\s*"
+
+
 def enclosing_end(code: str, pos: int) -> int:
     """The end of the innermost `{...}` block holding `pos` (`len(code)` at
     the top level), in stripped code."""
@@ -136,11 +148,12 @@ def bindings(code: str, var: str, start: int) -> list[tuple[str, str]]:
         name, at = todo.pop()
         scope = scope_of(code, name, at)
         out.append((name, scope))
-        rebind = re.compile(r"\blet\s+(?:mut\s+)?(\w+)\s*(?::[^=;]*)?=\s*" + re.escape(name) + r"\s*;")
+        rebind = re.compile(REBIND_HEAD + re.escape(name) + CAST + r"\s*;")
         for m in rebind.finditer(scope):
-            if m.group(1) not in seen:
-                seen.add(m.group(1))
-                todo.append((m.group(1), at + m.end()))
+            new = m.group(1) or m.group(2)
+            if new not in seen:
+                seen.add(new)
+                todo.append((new, at + m.end()))
     return out
 
 
@@ -154,7 +167,7 @@ def leaf_owned(code: str) -> set[str]:
         # The binding is visible from the end of its `unsafe { .. }` on.
         after = rust_lex.block_end(code, code.rfind("{", m.start(), m.end()))
         for alias, scope in bindings(code, var, after):
-            if re.search(r"\b(?:Mine|Self)::new\(\s*" + re.escape(alias) + r"\s*\)", scope):
+            if re.search(r"\b(?:Mine|Self)::new\(\s*" + re.escape(alias) + CAST + r"\s*\)", scope):
                 names.add(name)
     return names
 
@@ -164,7 +177,11 @@ HIGH_LEVEL = re.compile(r"pyo3::(types|prelude|sync|exceptions)\b|\bBound<|\.ext
 # it is `pyo3::ffi` (or `::pyo3::ffi`), or `ffi` or a module alias of it on
 # its own; `crate::ffi::capi::...`, `core::ffi::...` and the like do not.
 USE = re.compile(r"\buse\s+([^;]*);")
-C_API_PATH = re.compile(r"^(?:::)?(?:pyo3\s*::\s*)?ffi$")
+def is_c_api_path(path: str, crates: set[str], modules: set[str]) -> bool:
+    """`[::]C::ffi` for `pyo3` or a crate alias of it (`use pyo3 as p;`), or
+    `ffi` or another module alias of the C API (`modules` holds `ffi`)."""
+    path = path.removeprefix("::")
+    return path in modules or any(path == c + "::ffi" for c in crates)
 MODULE_ALIAS = re.compile(r"\bffi\s+as\s+(\w+)")
 # A C-API function's name: `PyList_New`, `Py_DecRef`, `_PyObject_GetX`.
 # Statics, constants and types mostly have other shapes (`PyExc_TypeError`,
@@ -202,17 +219,17 @@ def _split_group(body: str) -> list[str]:
     return items
 
 
-def use_tree(tree: str, prefix: str, modules: set[str], out: dict, globs: list) -> None:
-    """Walks a `use` tree under `prefix` (the path so far). Records, for a
-    C-API path: module aliases (`ffi as X`, `ffi::{self as X}`), imported
-    functions by local name (`f`, `f as g`, inside groups) and glob imports
-    (`ffi::*`)."""
+def use_tree(tree: str, prefix: str, crates: set[str], modules: set[str], out: dict, globs: list) -> None:
+    """Walks a `use` tree under `prefix` (the path so far). Records crate
+    aliases of `pyo3` (`pyo3 as p`) and, for a C-API path: module aliases
+    (`ffi as X`, `ffi::{self as X}`), imported functions by local name (`f`,
+    `f as g`, inside groups) and glob imports (`ffi::*`)."""
     tree = tree.strip()
     if tree.endswith("}"):
         head, body = tree.split("{", 1)
         path = "::".join(p for p in (prefix, head.strip().strip(":")) if p)
         for item in _split_group(body[:-1]):
-            use_tree(item, path, modules, out, globs)
+            use_tree(item, path, crates, modules, out, globs)
         return
     alias = None
     m = re.match(r"^(.*?)\s+as\s+(\w+)$", tree)
@@ -222,12 +239,15 @@ def use_tree(tree: str, prefix: str, modules: set[str], out: dict, globs: list) 
     parent, _, last = full.rpartition("::")
     if last == "self":
         full, (parent, _, last) = parent, parent.rpartition("::")
-    is_module = C_API_PATH.match(full) or full in modules
-    if is_module:
+    if full.removeprefix("::") in crates:
+        if alias and alias != "_":
+            crates.add(alias)
+        return
+    if is_c_api_path(full, crates, modules):
         if alias and alias != "_":
             modules.add(alias)
         return
-    if not (C_API_PATH.match(parent) or parent in modules):
+    if not is_c_api_path(parent, crates, modules):
         return
     if last == "*":
         globs.append(full)
@@ -240,13 +260,22 @@ def c_api_calls(code: str, values: bool = True) -> set[str]:
     `ffi::`, through a module alias of `ffi`, or through a function imported
     from the C API (plain, renamed, in a group; reported by its C name), or
     any `Py...(...)` call after a glob import of the C API. With `values`
-    false, only calls count (`thunks.rs` names its targets as values)."""
-    modules = {"ffi"}
+    (every file but `thunks.rs`, which names its targets as values), a
+    function of the C API also counts when taken as a value, when imported
+    at all (a `use` of it, `pub use` re-exports included), and as a bare
+    name after a glob import. The `use` lines are read until nothing new
+    is learnt, so their order does not matter."""
+    crates, modules = {"pyo3"}, {"ffi"}
     imported, globs = {}, []
-    for m in USE.finditer(code):
-        decl = re.sub(r"\s+", " ", m.group(1)).strip()
-        modules.update(MODULE_ALIAS.findall(decl))
-        use_tree(decl, "", modules, imported, globs)
+    decls = [re.sub(r"\s+", " ", m.group(1)).strip() for m in USE.finditer(code)]
+    while True:
+        size = (len(crates), len(modules))
+        imported, globs = {}, []
+        for decl in decls:
+            modules.update(MODULE_ALIAS.findall(decl))
+            use_tree(decl, "", crates, modules, imported, globs)
+        if (len(crates), len(modules)) == size:
+            break
     # The `use` declarations themselves are not uses of the names.
     body = USE.sub(" ", code)
     names = set()
@@ -257,12 +286,15 @@ def c_api_calls(code: str, values: bool = True) -> set[str]:
         if called or (values and is_fn_name(name)):
             names.add(name)
     for local, name in imported.items():
-        if re.search(r"(?<![\w:.])" + re.escape(local) + r"\s*\(", body):
+        if values and is_fn_name(name):
             names.add(name)
-        elif values and is_fn_name(name) and re.search(r"(?<![\w:.])" + re.escape(local) + r"\b(?!\s*::)", body):
+        elif re.search(r"(?<![\w:.])" + re.escape(local) + r"\s*\(", body):
             names.add(name)
     if globs:
         names.update(re.findall(r"(?<![\w:.])(_?Py[A-Za-z0-9_]*)\s*\(", body))
+        if values:
+            bare = re.findall(r"(?<![\w:.])(_?Py[A-Za-z0-9_]*)\b(?!\s*::)", body)
+            names.update(n for n in bare if is_fn_name(n))
     return names
 
 
