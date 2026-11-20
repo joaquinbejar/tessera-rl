@@ -64,7 +64,9 @@ fn assert_r1(p: &Pool, ctx: &str) -> usize {
 
 #[test]
 fn test_host_abort_header_same_step_reset_abort_after_an_end_keeps_the_end() {
-    for end in [TERMINATE, TRUNCATE, ABORT] {
+    // `end_kind`: bit 0 terminated, bit 1 truncated; an aborted step
+    // truncates (ADR-0065 item 1).
+    for (end, kind) in [(TERMINATE, 1), (TRUNCATE, 2), (ABORT, 2)] {
         let shared = Shared::new();
         let mut p = pool(&shared, AutoReset::SameStep);
         p.reset_all(Reseed::Keep).unwrap();
@@ -75,6 +77,11 @@ fn test_host_abort_header_same_step_reset_abort_after_an_end_keeps_the_end() {
             assert_r1(&p, &ctx),
             1,
             "{ctx}: the aborted reset leaves it pending"
+        );
+        assert_eq!(
+            p.headers[1].engine().end_kind,
+            kind,
+            "{ctx}: the header keeps the ended step's end"
         );
         // The retry succeeds: nothing pending.
         step(&mut p, &[]);
