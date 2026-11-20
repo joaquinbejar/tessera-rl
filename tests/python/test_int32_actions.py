@@ -216,3 +216,27 @@ def test_native_send_async_refuses_a_memoryview():
     with pytest.raises(TypeError, match="must be bytes"):
         env._native.send([0, 1, 2, 3], memoryview(acts), env._delivered)
     env._native.send([0, 1, 2, 3], acts.tobytes(), env._delivered)
+
+
+def test_step_int32_2d_view_reaches_the_step_in_c_order():
+    # The memoryview copy is made in C order (PyBuffer_ToContiguous's `order`
+    # argument): a (2, 3) array whose C and Fortran bytes differ must step
+    # exactly as its C-order bytes, not its Fortran-order ones.
+    acts = np.array([1, 1, 1, 0, 0, 0], dtype=np.int32).reshape(2, 3)
+    assert acts.tobytes("C") != acts.tobytes("F")
+    view, c_order, f_order = cartpole(6, 3), cartpole(6, 3), cartpole(6, 3)
+    for _ in range(5):
+        view._native.step(memoryview(acts))
+        c_order._native.step(acts.tobytes("C"))
+        f_order._native.step(acts.tobytes("F"))
+    snaps = [[e.snapshot(i) for i in range(6)] for e in (view, c_order, f_order)]
+    assert snaps[0] == snaps[1]
+    assert snaps[0] != snaps[2]
+
+
+def test_native_step_an_empty_memoryview_is_refused_by_the_count_check():
+    env = cartpole()
+    before = env.snapshot(0)
+    with pytest.raises(t.ActionError, match="expected 2"):
+        env._native.step(memoryview(np.zeros(0, dtype=np.int32)))
+    assert env.snapshot(0) == before

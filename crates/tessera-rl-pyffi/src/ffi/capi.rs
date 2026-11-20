@@ -1140,8 +1140,12 @@ pub fn memoryview_copy(g: Gil<'_>, b: Ref<'_>, what: &str) -> CResult<BufferCopy
         unsafe { CStr::from_ptr(format_ptr) }.to_bytes().to_vec()
     };
     let mut bytes: Vec<u8> = Vec::new();
-    if c_contiguous {
-        let n = usize::try_from(len).unwrap_or(0);
+    let n = if c_contiguous {
+        usize::try_from(len).unwrap_or(0)
+    } else {
+        0
+    };
+    if n > 0 {
         bytes.reserve_exact(n);
         // SAFETY: `n` writable bytes of owned spare capacity, which no one
         // else can reach; CPython copies the export into them (a callout: on
