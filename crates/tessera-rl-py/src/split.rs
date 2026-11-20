@@ -27,6 +27,7 @@ use tessera_rl_engine::{
 use tessera_rl_num::identity::Seed;
 
 use crate::env::{BindError, Layout, Owned, PoolOps, ResetSeed};
+use crate::view::{ViewSet, half_view_set};
 
 /// Whether a half view's window has ended: its half has a new generation, a
 /// writer is running, or the pool is poisoned, whose rows a failed writer may
@@ -446,6 +447,8 @@ where
 struct SplitHandle {
     ops: Arc<dyn SplitOps>,
     layout: Layout,
+    /// The view set of each half's rows, built once (the halves are fixed).
+    half_views: [Option<Arc<ViewSet>>; 2],
 }
 
 fn wrong_mode(call: &'static str) -> BindError {
@@ -458,6 +461,10 @@ fn wrong_mode(call: &'static str) -> BindError {
 impl PoolOps for SplitHandle {
     fn layout(&self) -> &Layout {
         &self.layout
+    }
+
+    fn half_views(&self, half: usize) -> Option<Arc<ViewSet>> {
+        self.half_views.get(half)?.clone()
     }
 
     fn reset(&mut self, _ids: Option<&[u32]>, _seed: &ResetSeed) -> Result<(), BindError> {
@@ -547,7 +554,14 @@ where
         waiter,
         terminal: layout.terminal,
     });
-    Box::new(SplitHandle { ops, layout })
+    let half_views = ops
+        .halves()
+        .map(|rows| half_view_set(&layout, &rows).map(Arc::new));
+    Box::new(SplitHandle {
+        ops,
+        layout,
+        half_views,
+    })
 }
 
 #[cfg(any(test, feature = "test-hooks"))]
