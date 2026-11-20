@@ -102,11 +102,30 @@ def enclosing_end(code: str, pos: int) -> int:
 
 def scope_of(code: str, var: str, start: int) -> str:
     """The code where the binding of `var` made just before `start` is
-    visible: up to the end of its block, or to the next `let` that shadows
-    it."""
+    visible: up to the end of its block, or to the next `let` of the same
+    name in that block. A `let` inside a nested block (or a closure's body)
+    shadows it only there, so that block is left out and the scan goes on
+    after it."""
     end = enclosing_end(code, start)
-    shadow = re.compile(r"\blet\s+(?:mut\s+)?" + re.escape(var) + r"\b").search(code, start, end)
-    return code[start:shadow.start() if shadow else end]
+    shadow = re.compile(r"\blet\s+(?:mut\s+)?" + re.escape(var) + r"\b")
+    out, i, depth, hide = [], start, 0, None  # hide: the depth of the hiding block
+    while i < end:
+        ch = code[i]
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if hide is not None and depth < hide:
+                hide = None
+        elif hide is None and shadow.match(code, i):
+            if depth == 0:
+                break
+            # Shadowed in a nested block: hidden from here to its end.
+            hide = depth
+        if hide is None:
+            out.append(ch)
+        i += 1
+    return "".join(out)
 
 
 def bindings(code: str, var: str, start: int) -> list[tuple[str, str]]:
@@ -148,9 +167,13 @@ USE = re.compile(r"\buse\s+([^;]*);")
 C_API_PATH = re.compile(r"^(?:::)?(?:pyo3\s*::\s*)?ffi$")
 MODULE_ALIAS = re.compile(r"\bffi\s+as\s+(\w+)")
 # A C-API function's name: `PyList_New`, `Py_DecRef`, `_PyObject_GetX`.
-# Statics, constants and types have other shapes (`PyExc_TypeError`,
-# `PyList_Type`, `Py_TPFLAGS_DEFAULT`, `Py_tp_dealloc`, `PyObject`), and the
-# two struct types of that shape are named.
+# Statics, constants and types mostly have other shapes (`PyExc_TypeError`,
+# `PyList_Type`, `Py_TPFLAGS_DEFAULT`, `Py_tp_dealloc`, `PyObject`). Some
+# non-functions of pyo3-ffi do have this shape (`PyModuleDef_Slot`,
+# `PyCapsule_Destructor`, `Py_Version`, ...): taken as a value, such a name
+# is reported, which fails closed; the two the tree could meet are named.
+# The shape also misses some functions (`PyObject_GC_UnTrack`,
+# `PyList_GET_ITEM`) taken as values; their calls are still seen.
 FN_NAME = re.compile(r"^_?Py[A-Za-z0-9]*_[A-Z][a-z][A-Za-z0-9]*$")
 NOT_FN = {"PyType_Spec", "PyType_Slot"}
 

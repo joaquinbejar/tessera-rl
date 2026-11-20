@@ -160,6 +160,7 @@ def _calls(code):
         # shape, taken as values.
         ("use pyo3::ffi;\nfn f() { let g = ffi::Py_TYPE; }", "Py_TYPE"),
         ("use pyo3::ffi;\nfn f() { let g = ffi::PyFoo_Bar; }", "PyFoo_Bar"),
+        ("use pyo3::ffi;\nfn f() { let g = ffi::_PyFoo_Bar; }", "_PyFoo_Bar"),
     ],
 )
 def test_callouts_c_api_calls_sees_every_import_form(code, name):
@@ -179,6 +180,7 @@ def test_callouts_c_api_calls_sees_every_import_form(code, name):
         "use pyo3::ffi::{PyTuple_New as make};\nfn f() { remake(0); }",
         "use pyo3::ffi::PyErr_Clear;\nfn f() { let my_PyErr_Clear = 1; let y = PyErr_ClearAll; }",
         "use pyo3::ffi;\nfn f() { let t = &raw mut ffi::PyFoo_Type; }",
+        "use pyo3::ffi;\nfn f() { let t = ffi::PyFoo_Bar::X; }",  # a path through it, not a value
         "fn f() { let s: ffi::PyType_Spec; }",
     ],
 )
@@ -208,6 +210,11 @@ def _leaf(code):
         "fn f(o: Obj) { let s = unsafe { thunks::c_object_str(o; 1) }; Mine::new(s) }",
         # `let st` does not shadow `s`.
         "fn f(o: Obj) { let s = unsafe { thunks::c_object_str(o) }; let st = 1; Mine::new(s) }",
+        # Shadowed only inside an inner block or a closure body, used after it.
+        "fn f(o: Obj) { let s = unsafe { thunks::c_object_str(o) }; { let s = 1; use_it(s); } Mine::new(s) }",
+        "fn f(o: Obj) { let s = unsafe { thunks::c_object_str(o) }; let g = || { let s = 1; s }; Mine::new(s) }",
+        "fn f(o: Obj) { let s = unsafe { thunks::c_object_str(o) }; { { let s = 1; } } Mine::new(s) }",
+        "fn f(o: Obj) { let s = unsafe { thunks::c_object_str(o) }; let mut t = s; Mine::new(t) }",
     ],
 )
 def test_callouts_leaf_owned_follows_typed_and_rebound_bindings(code):
@@ -219,8 +226,12 @@ def test_callouts_leaf_owned_follows_typed_and_rebound_bindings(code):
     [
         # A later, unrelated variable of the same name, in another function.
         "fn f(o: Obj) { let s = unsafe { thunks::c_object_str(o) }; Mine::container(s); }\nfn g(s: P) { Mine::new(s); }",
-        # Shadowed before the `Mine::new`.
+        # Shadowed before the `Mine::new`, with or without `mut`, and inside
+        # the inner block that shadows it.
         "fn f(o: Obj) { let s = unsafe { thunks::c_object_str(o) }; Mine::container(s); let s = 1; Mine::new(s); }",
+        "fn f(o: Obj) { let s = unsafe { thunks::c_object_str(o) }; Mine::container(s); let mut s = 1; Mine::new(s); }",
+        "fn f(o: Obj) { let s = unsafe { thunks::c_object_str(o) }; Mine::container(s); { let s = 1; Mine::new(s); } }",
+        "fn f(o: Obj) { let s = unsafe { thunks::c_object_str(o) }; Mine::container(s); { let s = 1; { x(); } Mine::new(s); } }",
         # The binding's block ended.
         "fn f(o: Obj) { { let s = unsafe { thunks::c_object_str(o) }; Mine::container(s); } Mine::new(s); }",
         "fn f(o: Obj) { let s = unsafe { thunks::c_object_str(o) }; let t = s; Mine::container(t); }",
@@ -266,6 +277,33 @@ def test_callouts_lint_checks_the_files_after_capi(tmp_path):
     assert run.returncode != 0 and "split.rs: calls ffi::PyList_New directly" in run.stdout, run.stdout
 
 
+def _callouts_tree(tmp_path):
+    src = tmp_path / "src"
+    shutil.copytree(ROOT / "crates" / "tessera-rl-py" / "src", src)
+    shutil.copy(ROOT / "crates" / "tessera-rl-pyffi" / "src" / "ffi" / "capi.rs", src / "ffi" / "capi.rs")
+    return src
+
+
+def _callouts_run(src):
+    return subprocess.run([sys.executable, str(SCRIPTS / "check_py_callouts.py"), str(src)], capture_output=True, text=True)
+
+
+def test_callouts_lint_reports_a_function_value_outside_capi(tmp_path):
+    src = _callouts_tree(tmp_path)
+    api = src / "api.rs"
+    api.write_text(api.read_text() + "\nfn sneaky() { let f = pyo3::ffi::PyErr_Clear; }\n")
+    run = _callouts_run(src)
+    assert run.returncode != 0 and "api.rs: calls ffi::PyErr_Clear directly" in run.stdout, run.stdout
+
+
+def test_callouts_lint_reports_a_function_value_in_capi(tmp_path):
+    src = _callouts_tree(tmp_path)
+    capi = src / "ffi" / "capi.rs"
+    capi.write_text(capi.read_text() + "\nfn sneaky() { let f = ffi::PyList_New; }\n")
+    run = _callouts_run(src)
+    assert run.returncode != 0 and "PyList_New can run Python code" in run.stdout, run.stdout
+
+
 def test_callouts_lint_reports_a_glob_import_outside_capi(tmp_path):
     src = tmp_path / "src"
     shutil.copytree(ROOT / "crates" / "tessera-rl-py" / "src", src)
@@ -296,6 +334,7 @@ def _entries_problem(tmp_path, extra):
         'unsafe extern "C" {\n    pub fn sneaky();\n}',
         'unsafe extern "C" {\n    pub unsafe fn sneaky();\n}',
         "unsafe extern {\n    pub static SNEAKY: u8;\n}",
+        "unsafe extern {\n    pub unsafe static SNEAKY: u8;\n}",
         'unsafe extern "C" {\n    safe fn quiet();\n    pub fn sneaky();\n}',
         "pub trait T<const B: bool = { 1 < 2 }> {\n    unsafe fn sneaky(&self);\n}",
         "pub trait T where [u8; { 1 << 3 }]: Sized {\n    unsafe fn sneaky(&self);\n}",
