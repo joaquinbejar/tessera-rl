@@ -121,6 +121,9 @@ impl HostEnvironment for OrderBook {
                 self.orders.push(price);
                 0
             }
+            // `remove(0)` and the sum in `observe` are linear in the
+            // book's size: fine at the default depth of 64; a book meant
+            // for large depths would keep a ring buffer and a running sum.
             2 if !self.orders.is_empty() => price - self.orders.remove(0),
             _ => 0,
         };

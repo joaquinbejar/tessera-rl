@@ -231,7 +231,8 @@ def test_host_orderbook_a_sell_fills_the_oldest_unit():
     env = tessera_rl.make(ID, num_envs=1, seed=1, outputs="owned")
     open_ = int(env.reset().observations["obs"][0, 0, 2])
     env.step(np.full((1, 1), 4, dtype=np.int32))  # buy at level 0: open
-    env.step(np.full((1, 1), 7, dtype=np.int32))  # buy at level 3: open + 3
+    held = env.step(np.full((1, 1), 7, dtype=np.int32))  # buy at level 3: open + 3
+    assert held.observations["obs"][0, 0, :2].tolist() == [2, 2 * open_ + 3], "two units and their total cost"
     sell = env.step(np.full((1, 1), 8, dtype=np.int32))  # sell at level 0: open + 3
     assert sell.rewards[0, 0] == 3.0, "the sell fills the unit bought at the open"
     assert sell.observations["obs"][0, 0, :2].tolist() == [1, open_ + 3]

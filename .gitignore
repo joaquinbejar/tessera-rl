@@ -3,11 +3,12 @@
 # Rust
 /target/
 **/*.rs.bk
+# The out-of-tree host example is its own Cargo workspace.
+/examples/host_orderbook/target/
 
 # cargo-fuzz local outputs (also in fuzz/.gitignore; repeated here so they
 # stay ignored when a branch without fuzz/ is checked out)
 /fuzz/target/
-/examples/host_orderbook/target/
 /fuzz/corpus/
 /fuzz/artifacts/
 /fuzz/coverage/
