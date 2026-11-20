@@ -142,6 +142,19 @@ impl FunctionArg for ConfigRust {
     }
 }
 
+/// `make_respawn(**options, **config)`: the spawning test environment
+/// `test/Respawn-v1` (#71), built as `make` builds the counter.
+struct MakeRespawn;
+
+impl FunctionKw for MakeRespawn {
+    fn call<'py>(g: Gil<'py>, args: Ref<'py>, kwargs: Option<Ref<'py>>) -> CResult<Mine<'py>> {
+        tessera_rl_pyffi::host::factory::make::<
+            tessera_rl_test_host_env::Respawner,
+            { tessera_rl_test_host_env::RESPAWN_MAX_AGENTS },
+        >(g, args, kwargs)
+    }
+}
+
 /// `_fp_policy()`: this module's floating-point policy (ADR-0041), as the
 /// host object's `_tessera_set_fp_policy` set it.
 struct FpPolicy;
@@ -169,5 +182,9 @@ tessera_rl_pyffi::export_host_env!(
             c"The canonical form of the test config decoded from a named Rust case."
         ),
         FunctionRow::noargs::<FpPolicy>(c"_fp_policy", c"This module's floating-point policy."),
+        FunctionRow::kw::<MakeRespawn>(
+            c"make_respawn",
+            c"make_respawn(*, num_envs, seed, auto_reset, max_episode_steps, workers, cpu_set, **config)"
+        ),
     ]
 );
