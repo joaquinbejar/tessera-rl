@@ -332,7 +332,11 @@ class _HostNative:
                 seed = [order[i] for i in range(n)]
         return self._out(self._obj.reset(seed))
 
-    def step(self, actions: bytes) -> dict:
+    def step(self, actions) -> dict:
+        # Host protocol 1 takes exact bytes. Env.step hands the native step
+        # an int32 array's memoryview (#152 E2); a host gets its bytes.
+        if isinstance(actions, memoryview):
+            actions = actions.tobytes()
         return self._out(self._obj.step(actions))
 
     def is_poisoned(self) -> bool:

@@ -43,6 +43,7 @@ ALLOWED = {
     "PyBytes_FromStringAndSize", "PyByteArray_FromStringAndSize",
     "PyTuple_Size", "PyTuple_GetItem", "PyList_Size", "PyList_GetItem", "PyDict_Next",
     "PyBytes_AsString", "PyBytes_Size",
+    "PyBuffer_IsContiguous",  # reads a filled Py_buffer's fields only (#152 E2)
     "PyType_GenericAlloc", "PyType_GetSlot",
     "PyCapsule_New", "PyCapsule_IsValid", "PyCapsule_GetPointer",
     "PyType_Check", "PyType_IsSubtype", "PyErr_ExceptionMatches",
@@ -62,6 +63,7 @@ CALLOUT_ONLY = {
     "PyObject_GetItem", "PyObject_GetAttr", "PyObject_Str", "PyObject_Repr",
     "PyObject_Call", "PyObject_CallObject", "PyObject_CallNoArgs", "PyObject_Vectorcall",
     "PyErr_CheckSignals", "PyImport_ImportModule", "PyObject_GetAttrString",
+    "PyObject_GetBuffer", "PyBuffer_ToContiguous", "PyBuffer_Release",  # exporter code; a failed request sets an exception
 }
 
 # Callouts that return a new GC-tracked object: it must be owned as a

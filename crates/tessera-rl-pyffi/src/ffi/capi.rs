@@ -21,7 +21,9 @@
 //!   user objects in them, so a replaced or dropped value may run a
 //!   finalizer; setting an exception (`PyErr_SetString`, which normalizes:
 //!   an allocation); a conversion that may raise (`PyLong_As*`,
-//!   `PyUnicode_AsUTF8AndSize`); and a warning.
+//!   `PyUnicode_AsUTF8AndSize`); a buffer request, its copy and its
+//!   release on an exact `memoryview` (`PyObject_GetBuffer`,
+//!   `PyBuffer_ToContiguous`, `PyBuffer_Release`); and a warning.
 //! - **Direct** (cannot run Python code): non-GC allocations (`str`,
 //!   `bytes`, `bytearray`, `int`, `float`, capsules, and instances of our
 //!   own types, which are not GC-tracked); reads of exact built-in types
@@ -49,7 +51,8 @@
 //! borrowed. No safe function relies on its caller for this.
 //!
 //! **Exact types.** Arguments are read only from exact built-in types
-//! (`int`, `bool`, `str`, `bytes`, `tuple`, `list`, `dict`, `None`); any
+//! (`int`, `bool`, `str`, `bytes`, `memoryview`, `tuple`, `list`, `dict`,
+//! `None`); any
 //! other object raises `TypeError` without calling its `__index__`,
 //! `__bool__`, `__iter__` or anything else. The Python layer converts user
 //! objects (with `int()`, NumPy) before calling the native module, under
@@ -1056,6 +1059,113 @@ pub fn bytes_of<'a>(g: Gil<'_>, b: Ref<'a>, what: &str) -> CResult<&'a [u8]> {
     let len = usize::try_from(len).map_err(|_| raise(g, runtime_error(), "a negative length"))?;
     // SAFETY: `len` immutable bytes owned by the live object.
     Ok(unsafe { core::slice::from_raw_parts(data.cast::<u8>(), len) })
+}
+
+/// Whether `b` is an exact `memoryview`.
+#[must_use]
+pub fn is_memoryview(b: Ref<'_>) -> bool {
+    b.is_exact(&raw mut ffi::PyMemoryView_Type)
+}
+
+/// An owned copy of an exact `memoryview`'s buffer, made by
+/// [`memoryview_copy`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BufferCopy {
+    /// A copy of the buffer's bytes in C order; empty unless the buffer is
+    /// C-contiguous (a buffer that is not is refused, so it is not copied).
+    pub bytes: Vec<u8>,
+    /// The size of one item, in bytes.
+    pub itemsize: usize,
+    /// The item format (`struct` syntax, `"B"` when the exporter gives none).
+    pub format: Vec<u8>,
+    /// Whether the buffer is C-contiguous.
+    pub c_contiguous: bool,
+}
+
+/// A copy of the buffer of the exact `memoryview` `b`, made by CPython
+/// (`PyBuffer_ToContiguous`) into memory Rust owns; the export is released
+/// before this returns.
+///
+/// `TypeError` when `b` is not an exact `memoryview`; the `memoryview`'s
+/// own exception (a released view: `ValueError`) when the request fails.
+/// The Python layer makes the view from a user object (exact types rule:
+/// the user object's exporter runs there, under the caller's controls);
+/// here only `memoryview`'s own C getbuffer runs, through a callout.
+///
+/// The exported memory is shared: a thread that has released the
+/// interpreter (NumPy inside a large copy, another C extension) can write
+/// it at any time. So Rust never forms a reference over it; CPython copies
+/// it, and the copy may hold a mix of old and new bytes. The caller treats
+/// the copy as untrusted input: every `i32` bit pattern is a valid value,
+/// and each one is validated on the copy.
+pub fn memoryview_copy(g: Gil<'_>, b: Ref<'_>, what: &str) -> CResult<BufferCopy> {
+    /// Releases the buffer on every exit.
+    struct Release(*mut ffi::Py_buffer);
+    impl Drop for Release {
+        fn drop(&mut self) {
+            // SAFETY: a buffer filled by a successful PyObject_GetBuffer,
+            // released once.
+            unsafe { thunks::c_buffer_release(self.0) };
+        }
+    }
+    if !b.is_exact(&raw mut ffi::PyMemoryView_Type) {
+        return Err(wrong(g, what, "bytes or a memoryview"));
+    }
+    let mut view = core::mem::MaybeUninit::<ffi::Py_buffer>::uninit();
+    // SAFETY: a live exact memoryview and a writable Py_buffer; a read-only
+    // request with strides and format, which a live memoryview always
+    // satisfies (a released one raises).
+    let rc = unsafe { thunks::c_get_buffer(b.as_ptr(), view.as_mut_ptr(), ffi::PyBUF_RECORDS_RO) };
+    if rc != 0 {
+        return Err(RAISED);
+    }
+    let release = Release(view.as_mut_ptr());
+    let v = view.as_ptr();
+    // SAFETY: `c"C"` is a live NUL-terminated string; its first byte is
+    // read as the platform's `c_char`.
+    let order = unsafe { *c"C".as_ptr() };
+    // SAFETY: a filled buffer; IsContiguous reads only the struct's own
+    // fields (shape, strides, itemsize), not the exported memory.
+    let c_contiguous = unsafe { ffi::PyBuffer_IsContiguous(v, order) } == 1;
+    // SAFETY: a filled buffer; reading its own fields (plain integers and
+    // the format pointer), not the exported memory.
+    let fields = unsafe { &*v };
+    let (len, itemsize, format_ptr) = (fields.len, fields.itemsize, fields.format);
+    let itemsize = usize::try_from(itemsize).unwrap_or(0);
+    let format = if format_ptr.is_null() {
+        b"B".to_vec()
+    } else {
+        // SAFETY: the export's NUL-terminated format string, fixed for the
+        // export's lifetime (no exporter rewrites it), copied at once.
+        unsafe { CStr::from_ptr(format_ptr) }.to_bytes().to_vec()
+    };
+    let mut bytes: Vec<u8> = Vec::new();
+    let n = if c_contiguous {
+        usize::try_from(len).unwrap_or(0)
+    } else {
+        0
+    };
+    if n > 0 {
+        bytes.reserve_exact(n);
+        // SAFETY: `n` writable bytes of owned spare capacity, which no one
+        // else can reach; CPython copies the export into them (a callout: on
+        // failure it sets an exception). No Rust reference to the exported
+        // memory is formed.
+        let rc =
+            unsafe { thunks::c_buffer_to_contiguous(bytes.as_mut_ptr().cast(), v, len, order) };
+        if rc != 0 {
+            return Err(RAISED);
+        }
+        // SAFETY: the successful copy initialized all `n` bytes.
+        unsafe { bytes.set_len(n) };
+    }
+    drop(release);
+    Ok(BufferCopy {
+        bytes,
+        itemsize,
+        format,
+        c_contiguous,
+    })
 }
 
 #[cfg(test)]

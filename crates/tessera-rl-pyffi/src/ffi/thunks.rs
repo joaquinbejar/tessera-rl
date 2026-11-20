@@ -95,6 +95,7 @@ mod sealed {
     impl<T> Sealed for *mut T {}
     impl<T> Sealed for *const T {}
     impl Sealed for core::ffi::c_int {}
+    impl Sealed for core::ffi::c_char {}
     impl Sealed for isize {}
     impl Sealed for u64 {}
     impl Sealed for i64 {}
@@ -103,6 +104,11 @@ mod sealed {
 impl<T> IntClass for *mut T {}
 impl<T> IntClass for *const T {}
 impl IntClass for c_int {}
+// `c_char` (i8 or u8 by platform) is integer-class on System V x86-64, Win64
+// and AAPCS64; the templates move whole registers, so the extension the
+// caller makes (Apple arm64 requires it) reaches the callee unchanged
+// (PyBuffer_ToContiguous's `order`, #152 E2).
+impl IntClass for c_char {}
 impl IntClass for isize {}
 impl IntClass for u64 {}
 impl IntClass for i64 {}
@@ -1461,6 +1467,12 @@ callout!(c_check_signals => ffi::PyErr_CheckSignals : fn() -> c_int);
 callout!(c_long_as_i64 => ffi::PyLong_AsLongLong : fn(Obj) -> i64);
 callout!(c_long_as_u64 => ffi::PyLong_AsUnsignedLongLong : fn(Obj) -> u64);
 callout!(c_unicode_as_utf8 => ffi::PyUnicode_AsUTF8AndSize : fn(Obj, *mut ffi::Py_ssize_t) -> CStr);
+// The buffer of an exact `memoryview` (capi::memoryview_copy): its getbuffer,
+// copy and releasebuffer are C, but a failure sets an exception (an
+// allocation), and the release decrefs the view's object.
+callout!(c_get_buffer => ffi::PyObject_GetBuffer : fn(Obj, *mut ffi::Py_buffer, c_int) -> c_int);
+callout!(c_buffer_release => ffi::PyBuffer_Release : fn(*mut ffi::Py_buffer) -> ());
+callout!(c_buffer_to_contiguous => ffi::PyBuffer_ToContiguous : fn(*mut core::ffi::c_void, *const ffi::Py_buffer, ffi::Py_ssize_t, c_char) -> c_int);
 callout!(
     #[cfg(any(feature = "native-module", feature = "host"))]
     c_object_str => ffi::PyObject_Str : fn(Obj) -> Obj
