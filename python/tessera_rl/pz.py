@@ -37,7 +37,10 @@ final reward and flag are reported once, in that step, and at the end of
 an episode every agent still alive gets its final reward and flag in the
 same step (ADR-0013). A freed slot is reused no earlier than the next
 step; its new agent joins ``agents`` in the step it spawns, with its first
-observation and info, a reward of 0 and no flags.
+observation and info and the engine's reward and flags for that step (a
+spawn in the episode's last step is flushed with the others and does not
+stay in ``agents``). Native AEC refuses a spawning environment
+(``CapabilityError``).
 
 Observations are dicts of the environment's leaves plus ``action_mask``
 (``int8``, one entry per action).
@@ -334,6 +337,7 @@ class TesseraParallelEnv(ParallelEnv):
         if self._a.spawns:
             # A slot's generation survives a reset, so its name does too.
             self.possible_agents = list(self.agents)
+            self._a.slot_of = {name: self._a.slot_of[name] for name in self.agents}
         if self._a.pending():
             # An aborted reset leaves the instance pending (ADR-0065): no
             # agent can act, so `while env.agents:` ends at once.
@@ -371,8 +375,12 @@ class TesseraParallelEnv(ParallelEnv):
                     continue
                 slot = self._a.slot_of[name]
                 obs[name], infos[name] = self._a.observe(slot), self._a.info(slot)
-                rewards[name], terms[name], truncs[name] = 0.0, False, False
-                self.agents.append(name)
+                # The engine's reward and flags for the spawn step, as for
+                # every agent: a spawn in the episode's last step is flushed
+                # with the others (SPEC 12) and never joins `agents`.
+                rewards[name], terms[name], truncs[name] = self._a.flags(slot)
+                if not (terms[name] or truncs[name]):
+                    self.agents.append(name)
                 if name not in self.possible_agents:
                     self.possible_agents.append(name)
         return obs, rewards, terms, truncs, infos
@@ -392,6 +400,12 @@ class TesseraAECEnv(AECEnv):
         super().__init__()
         pool = _pool if _pool is not None else _native_pool(env_id, "aec", seed, kwargs)
         self._a = _Agents(pool, env_id)
+        if self._a.spawns:
+            # Native AEC does not name or schedule spawned agents yet
+            # (ADR-0067 follow-up); Simultaneous spawning environments use
+            # the Parallel form and cycle buffering.
+            self._a.env.close()
+            raise _native.CapabilityError(f"{env_id} spawns agents; native AEC does not support spawning yet")
         if self._a.env.turns != "sequential":
             raise _native.ArgumentError(f"{env_id} is {self._a.env.turns}; TesseraAECEnv is for sequential turns")
         self.metadata = {**self.metadata, "name": env_id, "tessera_kind": self._a.kind}

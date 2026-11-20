@@ -39,7 +39,8 @@ def test_respawn_parallel_death_once_gap_and_new_generation():
     assert "agent_1" not in rew and "agent_1" not in term
     assert env.agents == ["agent_0", "agent_1_g1"]
     assert env.possible_agents == ["agent_0", "agent_1", "agent_1_g1"]
-    assert (rew["agent_1_g1"], term["agent_1_g1"], trunc["agent_1_g1"]) == (0.0, False, False)
+    # The engine's reward and flags for the spawn step (the env pays 0.25).
+    assert (rew["agent_1_g1"], term["agent_1_g1"], trunc["agent_1_g1"]) == (0.25, False, False)
     assert obs["agent_1_g1"]["obs"].tolist() == [3, 1]
     assert set(info) >= set(env.agents)
     # Step 4: the new agent acts and is rewarded; the old one never returns.
@@ -129,3 +130,45 @@ def test_respawn_slot_stays_empty_until_the_spawn(delay):
     assert agents_per_step[1 + delay] == ["agent_0", "agent_1_g1"]
     assert np.all(np.asarray([len(a) for a in agents_per_step]) >= 1)
     env.close()
+
+
+def test_respawn_in_the_last_step_is_flushed_and_leaves_no_agent():
+    # die 2, delay 4, episode 6: the new agent spawns in the episode's last
+    # step and is flushed with the others (SPEC 12).
+    env = pz.parallel_env(ID, seed=3, respawn_delay=4)
+    env.reset(seed=3)
+    for _ in range(5):
+        env.step({a: 0 for a in env.agents})
+    assert env.agents == ["agent_0"]
+    obs, rew, term, trunc, info = env.step({"agent_0": 0})
+    assert term == {"agent_0": True, "agent_1_g1": True}
+    assert rew == {"agent_0": 1.0, "agent_1_g1": 0.25}
+    assert "agent_1_g1" in obs and "agent_1_g1" in env.possible_agents
+    assert env.agents == []
+    env.close()
+
+
+def test_respawn_into_a_slot_empty_at_reset_starts_at_generation_1():
+    env = pz.parallel_env(ID, seed=3, initial=1, die_step=0, respawn_delay=2)
+    env.reset(seed=3)
+    assert env.agents == ["agent_0"] and env.possible_agents == ["agent_0"]
+    env.step({"agent_0": 0})
+    assert env.agents == ["agent_0"]
+    obs, rew, term, trunc, info = env.step({"agent_0": 0})
+    assert env.agents == ["agent_0", "agent_1_g1"]
+    assert env.possible_agents == ["agent_0", "agent_1_g1"]
+    assert rew["agent_1_g1"] == 0.25 and obs["agent_1_g1"]["obs"].tolist() == [2, 1]
+    env.close()
+
+
+def test_respawn_native_aec_refuses_a_spawning_environment():
+    pool, _ = pz._host_pool(ID, "parallel", 3, {})
+    with pytest.raises(pz._native.CapabilityError, match="spawns agents"):
+        pz.TesseraAECEnv(ID, seed=3, _pool=pool)
+
+
+def test_respawn_official_seed_tests():
+    from pettingzoo.test import parallel_seed_test, seed_test
+
+    parallel_seed_test(lambda: pz.parallel_env(ID, seed=3), num_cycles=50)
+    seed_test(lambda: pz.aec_env(ID, seed=3), num_cycles=50)

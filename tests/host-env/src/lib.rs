@@ -206,17 +206,24 @@ pub struct RespawnConfig {
     /// next step (ADR-0013).
     #[config(default = 1, range = 1..=1000)]
     pub respawn_delay: u32,
+    /// Agents alive at reset: 2, or 1 for a slot 1 empty at reset, whose
+    /// first occupant spawns `respawn_delay` steps in (at generation 1).
+    #[config(default = 2, range = 1..=2)]
+    pub initial: u32,
 }
 
 /// Two agents; agent 1 dies once per episode and a new agent spawns into
 /// its slot later (ADR-0013 respawn, #71). Every alive agent's reward is
-/// 1 plus its action; its observation is the step and its own spawn count.
+/// 1 plus its action, and a spawning agent's is 0.25 in its spawn step;
+/// its observation is the step and its own spawn count.
 #[derive(Debug)]
 pub struct Respawner {
     cfg: RespawnConfig,
     step: u32,
     /// Whether slot 1 holds an agent.
     occupied: bool,
+    /// The step at which slot 1 was freed (0 for empty at reset).
+    freed_at: Option<u32>,
     /// Agents spawned into slot 1 this episode.
     spawns: u32,
 }
@@ -239,8 +246,13 @@ impl HostEnvironment for Respawner {
             cfg: cfg.clone(),
             step: 0,
             occupied: true,
+            freed_at: None,
             spawns: 0,
         })
+    }
+
+    fn initial_agents(cfg: &RespawnConfig) -> usize {
+        if cfg.initial == 1 { 1 } else { 2 }
     }
 
     fn observation_space(_: &RespawnConfig) -> Result<Space, SpaceError> {
@@ -260,7 +272,8 @@ impl HostEnvironment for Respawner {
 
     fn reset(&mut self, _: HostSeed, _: &mut HostOut<'_>) {
         self.step = 0;
-        self.occupied = true;
+        self.occupied = self.cfg.initial >= 2;
+        self.freed_at = if self.occupied { None } else { Some(0) };
         self.spawns = 0;
     }
 
@@ -278,15 +291,18 @@ impl HostEnvironment for Respawner {
         let Some(slot1) = AgentSlot::new(1, 2) else {
             return;
         };
-        if self.cfg.die_step > 0 && self.step == self.cfg.die_step && self.occupied {
+        if self.occupied && self.cfg.die_step > 0 && self.step == self.cfg.die_step {
             out.agent_died(slot1);
             self.occupied = false;
-        } else if self.cfg.die_step > 0
+            self.freed_at = Some(self.step);
+        } else if let Some(freed) = self.freed_at
             && !self.occupied
-            && self.step == self.cfg.die_step.saturating_add(self.cfg.respawn_delay)
+            && self.step == freed.saturating_add(self.cfg.respawn_delay)
         {
             out.agent_spawned(slot1);
+            out.set_reward(slot1, 0.25);
             self.occupied = true;
+            self.freed_at = None;
             self.spawns += 1;
         }
         if self.step >= self.cfg.episode {
