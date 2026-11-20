@@ -1127,9 +1127,10 @@ pub fn memoryview_copy(g: Gil<'_>, b: Ref<'_>, what: &str) -> CResult<BufferCopy
     // SAFETY: a filled buffer; IsContiguous reads only the struct's own
     // fields (shape, strides, itemsize), not the exported memory.
     let c_contiguous = unsafe { ffi::PyBuffer_IsContiguous(v, order) } == 1;
-    // SAFETY: the fields of a filled buffer (plain integers and the format
-    // pointer), not the exported memory.
-    let (len, itemsize, format_ptr) = unsafe { ((*v).len, (*v).itemsize, (*v).format) };
+    // SAFETY: a filled buffer; reading its own fields (plain integers and
+    // the format pointer), not the exported memory.
+    let fields = unsafe { &*v };
+    let (len, itemsize, format_ptr) = (fields.len, fields.itemsize, fields.format);
     let itemsize = usize::try_from(itemsize).unwrap_or(0);
     let format = if format_ptr.is_null() {
         b"B".to_vec()

@@ -201,7 +201,7 @@ def test_native_step_releases_a_memoryview_before_returning():
 
 def test_native_send_pipelined_refuses_a_memoryview():
     # Only step takes a view (#152 E2); the split-phase send stays bytes-only.
-    env = t.make("tessera/CartPole-v1", num_envs=4, seed=1, mode="pipelined")
+    env = t.make("tessera/CartPole-v1", num_envs=4, seed=1, mode="pipelined", chunk_size=2)
     env.reset()
     part = np.ones(len(env.halves[0]), dtype=np.int32)
     with pytest.raises(TypeError, match="must be bytes"):
