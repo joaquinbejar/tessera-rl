@@ -20,10 +20,12 @@ Z = " ".join(["0"] * 12)
 
 
 def sample():
-    """_native: 100 own Ir; it calls libc memset (inclusive 900, of which 900
-    exclusive in libc), memcpy (60) and malloc (40, not a primitive). libc's
-    own exclusive cost is 1000; python calls memset for 500 (not from
-    _native)."""
+    """_native: 100 own Ir plus its own internal `memset` (70, as
+    compiler-builtins would emit; a call with no `cob=` stays in the caller's
+    object, as in real Callgrind files, so it is not a libc primitive). It
+    calls libc memset (inclusive 900), memcpy (60) and malloc (40, not a
+    primitive). libc's own exclusive cost is 1000; python calls memset for
+    500 (not from _native)."""
     return f"""# callgrind format
 version: 1
 positions: line
@@ -44,6 +46,11 @@ cob=(2)
 cfn=(4) malloc
 calls=1 0
 13 40 {Z}
+cfn=(7) memset
+calls=1 0
+14 70 {Z}
+fn=(7)
+1 70 {Z}
 fn=(5) tessera_rl_engine::pool::step_chunk
 cfn=(1)
 calls=1 0
@@ -70,14 +77,14 @@ calls=1 0
 
 def test_pgo_attribution_reports_both_native_shares():
     r = at.attribution(sample())
-    # Exclusive per object: _native 80 + 20; libc 900 + 60 + 40; python 300.
-    assert r["total_ir"] == 100 + 1000 + 300
-    assert r["native_exclusive_ir"] == 100
+    # Exclusive per object: _native 80 + 70 + 20; libc 900 + 60 + 40; python 300.
+    assert r["total_ir"] == 170 + 1000 + 300
+    assert r["native_exclusive_ir"] == 170
     # Only _native's calls into libc memory primitives: memset 900, memcpy 60.
     assert r["primitives_from_native_ir"] == 960
     assert r["primitives_by_function"] == {"__memset_avx2_unaligned_erms": 900, "__memcpy_avx_unaligned_erms": 60}
-    assert r["native_exclusive_share"] == pytest.approx(100 / 1400)
-    assert r["native_with_primitives_share"] == pytest.approx(1060 / 1400)
+    assert r["native_exclusive_share"] == pytest.approx(170 / 1470)
+    assert r["native_with_primitives_share"] == pytest.approx(1130 / 1470)
 
 
 def test_pgo_attribution_exclusive_equals_the_gate_statistic():
