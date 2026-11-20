@@ -189,7 +189,8 @@ impl<E: HostEnvironment, const A: usize> HostPool<E, A> {
 
     /// Builds a pool: validates the config, the options and the spaces,
     /// builds `num_envs` instances with `HostEnvironment::new` (once each,
-    /// in index order, on this thread; see that method) and lays out the
+    /// in index order, on this thread, after the config and space checks;
+    /// see that method) and lays out the
     /// buffers. Instances need a reset before stepping. Runs under
     /// canonical floating-point controls; a panic in `new` is
     /// [`EngineError::Panicked`].

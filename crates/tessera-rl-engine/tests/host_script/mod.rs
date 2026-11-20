@@ -90,6 +90,8 @@ pub struct Shared {
     pub built_on: std::sync::Mutex<Vec<std::thread::ThreadId>>,
     /// `new` fails on its `k`-th call (1-based); 0: never.
     pub fail_new: AtomicU32,
+    /// Instances dropped.
+    pub drops: AtomicU32,
 }
 
 impl Shared {
@@ -157,6 +159,12 @@ impl<const T: u8, const V: bool> Script<T, V> {
         if let Some(c) = counts.get(self.id) {
             c.fetch_add(1, Ordering::Relaxed);
         }
+    }
+}
+
+impl<const T: u8, const V: bool> Drop for Script<T, V> {
+    fn drop(&mut self) {
+        self.shared.drops.fetch_add(1, Ordering::Relaxed);
     }
 }
 

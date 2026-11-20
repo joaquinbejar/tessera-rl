@@ -2,8 +2,9 @@
 
 //! How `HostPool::new` builds its instances (issue #285, the
 //! `HostEnvironment::new` doc): once each, in index order, on the thread
-//! that builds the pool, before any other call; the `k`-th call builds
-//! instance `k`; a failure stops the build.
+//! that builds the pool, before any method on an instance; the `k`-th call
+//! of a build builds instance `k`; a failure stops the build and drops the
+//! instances already built.
 
 #![cfg(feature = "host")]
 #![expect(
@@ -44,7 +45,7 @@ fn calls(shared: &Shared, i: usize) -> u64 {
 }
 
 #[test]
-fn test_host_build_order_new_once_each_on_the_caller_thread_before_any_call() {
+fn test_host_build_order_new_once_each_on_the_caller_thread_before_any_instance_method() {
     let shared = Shared::new();
     let pool = build(&shared).unwrap();
     assert_eq!(shared.built(), N, "one `new` per instance");
@@ -101,4 +102,9 @@ fn test_host_build_order_failed_new_stops_the_build() {
         "{err:?}"
     );
     assert_eq!(shared.built(), 3, "no `new` after the failed one");
+    assert_eq!(
+        shared.drops.load(core::sync::atomic::Ordering::Relaxed),
+        2,
+        "the two instances already built are dropped"
+    );
 }
