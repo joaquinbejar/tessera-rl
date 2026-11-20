@@ -177,8 +177,6 @@ def test_callouts_c_api_calls_sees_every_import_form(code, name):
         "use pyo3::ffi;\nconst F: u64 = ffi::Py_TPFLAGS_DEFAULT; const S: i32 = ffi::Py_tp_dealloc;",
         "use pyo3::ffi::PyObject;\nfn f(p: *mut PyObject) {}",
         "use pyo3::ffi::PyList_New as _;\nfn f() { let _ = 1; }",
-        "use pyo3::ffi::{PyTuple_New as make};\nfn f() { remake(0); }",
-        "use pyo3::ffi::PyErr_Clear;\nfn f() { let my_PyErr_Clear = 1; let y = PyErr_ClearAll; }",
         "use pyo3::ffi;\nfn f() { let t = &raw mut ffi::PyFoo_Type; }",
         "use pyo3::ffi;\nfn f() { let t = ffi::PyFoo_Bar::X; }",  # a path through it, not a value
         "fn f() { let s: ffi::PyType_Spec; }",
@@ -186,6 +184,62 @@ def test_callouts_c_api_calls_sees_every_import_form(code, name):
 )
 def test_callouts_c_api_calls_ignores_non_calls_and_other_ffi_paths(code):
     assert _calls(code) == set()
+
+
+@pytest.mark.parametrize(
+    "code, name",
+    [
+        # #310: a crate alias of pyo3.
+        ("use pyo3 as p;\nuse p::ffi::PyList_New;\nfn f() { unsafe { PyList_New(0); } }", "PyList_New"),
+        ("use pyo3 as p;\nuse p::ffi as raw;\nfn f() { unsafe { raw::PyDict_New(); } }", "PyDict_New"),
+        ("use pyo3::{self as p};\nuse p::ffi::{PyTuple_New as make};\nfn f() { unsafe { make(0); } }", "PyTuple_New"),
+        ("use ::pyo3 as p;\nuse p::ffi::PyList_New;\nfn f() { unsafe { PyList_New(0); } }", "PyList_New"),
+        # #310: a module alias used before its `use` line.
+        ("use raw::PyList_New;\nuse pyo3::ffi as raw;\nfn f() { unsafe { PyList_New(0); } }", "PyList_New"),
+        ("use q::PyList_New;\nuse p::ffi as q;\nuse pyo3 as p;\nfn f() { unsafe { PyList_New(0); } }", "PyList_New"),
+        # #310: a value after a glob import.
+        ("use pyo3::ffi::*;\nfn f() { let g = PyList_New; }", "PyList_New"),
+        ("use pyo3::ffi as raw;\nuse raw::*;\nfn f() { let g = PyErr_Clear; }", "PyErr_Clear"),
+        # #310: a re-export, or any import of a C-API function.
+        ("pub use pyo3::ffi::PyList_New;", "PyList_New"),
+        ("pub(crate) use pyo3::ffi::{PyObject, PyErr_Clear as clear};", "PyErr_Clear"),
+        ("use pyo3::ffi::PyErr_Clear;", "PyErr_Clear"),
+    ],
+)
+def test_callouts_c_api_calls_sees_the_310_import_forms(code, name):
+    assert name in _calls(code)
+
+
+@pytest.mark.parametrize(
+    "code",
+    [
+        "use pyo3::ffi::*;\nfn f() { let t: *mut PyObject = x; let k = Py_TPFLAGS_DEFAULT; }",
+        "use pyo3 as p;\nuse p::types::PyList;\nfn f() {}",
+        "use other as p;\nuse p::ffi::PyList_New;\nfn f() { PyList_New(0); }",
+        "pub use pyo3::ffi::PyObject;",
+        "use pyo3::ffi::PyErr_Clear as _;",
+    ],
+)
+def test_callouts_c_api_calls_310_forms_leave_other_names_alone(code):
+    assert _calls(code) == set()
+
+
+def test_callouts_c_api_calls_thunks_may_still_import_its_targets():
+    code = rust_lex.strip("use pyo3::ffi::PyList_New;\ngeneric_thunk!(c_list_new, PyList_New);")
+    assert check_py_callouts.c_api_calls(code, values=False) == set()
+
+
+@pytest.mark.parametrize(
+    "code",
+    [
+        "use pyo3::ffi::{PyTuple_New as make};\nfn f() { remake(0); }",
+        "use pyo3::ffi::PyErr_Clear;\nfn f() { let my_PyErr_Clear = 1; PyErr_ClearAll(); }",
+    ],
+)
+def test_callouts_c_api_calls_an_imported_name_is_called_only_as_itself(code):
+    # Calls only (as in thunks.rs): the import itself does not count there,
+    # and a longer name or a name ending in it is not a call of it.
+    assert check_py_callouts.c_api_calls(rust_lex.strip(code), values=False) == set()
 
 
 def test_callouts_c_api_calls_thunks_may_name_targets_as_values():
@@ -219,6 +273,13 @@ def _leaf(code):
         "fn f(o: Obj) { let s = unsafe { thunks::c_object_str(o) }; { let s = 1; use_it(s); } let t = s; Mine::new(t) }",
         "fn f(o: Obj) { let s = unsafe { thunks::c_object_str(o) }; let g = || { let s = 1; s }; let t = s; Mine::new(t) }",
         "fn f(o: Obj) { let s = unsafe { thunks::c_object_str(o) }; { let s = 1; } let t = s; let u = t; Mine::new(u) }",
+        # #310: a cast at the call or in the rebinding, and a plain assignment.
+        "fn f(o: Obj) { let s = unsafe { thunks::c_object_str(o) }; Mine::new(s.cast()) }",
+        "fn f(o: Obj) { let s = unsafe { thunks::c_object_str(o) }; Mine::new(s.cast::<ffi::PyObject>()) }",
+        "fn f(o: Obj) { let s = unsafe { thunks::c_object_str(o) }; Mine::new(s as *mut ffi::PyObject) }",
+        "fn f(o: Obj) { let s = unsafe { thunks::c_object_str(o) }; let t = s.cast(); Mine::new(t) }",
+        "fn f(o: Obj) { let s = unsafe { thunks::c_object_str(o) }; let t = s as *mut _; Mine::new(t) }",
+        "fn f(o: Obj) { let t; let s = unsafe { thunks::c_object_str(o) }; t = s; Mine::new(t) }",
         # A long hidden block: the rebinding would land inside it if offsets moved.
         "fn f(o: Obj) { let s = unsafe { thunks::c_object_str(o) }; { let s = 1; " + "a" * 80 + "(s); } let t = s; Mine::new(t) }",
     ],
@@ -244,6 +305,12 @@ def test_callouts_leaf_owned_follows_typed_and_rebound_bindings(code):
         # Not a plain rebinding, and not the same name.
         "fn f(o: Obj) { let s = unsafe { thunks::c_object_str(o) }; Mine::container(s); let t = s.len(); Mine::new(t) }",
         "fn f(o: Obj) { let s = unsafe { thunks::c_object_str(o) }; Mine::container(s); Mine::new(st) }",
+        # Not a rebinding: a comparison, a compound assignment, a field.
+        "fn f(o: Obj) { let s = unsafe { thunks::c_object_str(o) }; Mine::container(s); let b = t == s; Mine::new(t) }",
+        "fn f(o: Obj) { let s = unsafe { thunks::c_object_str(o) }; Mine::container(s); t += s; Mine::new(t) }",
+        "fn f(o: Obj) { let s = unsafe { thunks::c_object_str(o) }; Mine::container(s); x.t = s; Mine::new(t) }",
+        # A method call that is not a cast.
+        "fn f(o: Obj) { let s = unsafe { thunks::c_object_str(o) }; Mine::container(s); Mine::new(s.other()) }",
     ],
 )
 def test_callouts_leaf_owned_ignores_other_bindings_of_the_same_name(code):
@@ -308,6 +375,17 @@ def test_callouts_lint_reports_a_function_value_in_capi(tmp_path):
     capi.write_text(capi.read_text() + "\nfn sneaky() { let f = ffi::PyList_New; }\n")
     run = _callouts_run(src)
     assert run.returncode != 0 and "PyList_New can run Python code" in run.stdout, run.stdout
+
+
+def test_callouts_lint_reports_a_re_export_outside_capi(tmp_path):
+    # #310: a re-export in one file, used through `crate::` in another: the
+    # import itself is reported, in the file that makes it.
+    src = _callouts_tree(tmp_path)
+    (src / "reexport.rs").write_text("pub use pyo3::ffi::PyList_New;\n")
+    api = src / "api.rs"
+    api.write_text(api.read_text() + "\nuse crate::reexport::PyList_New;\nfn sneaky() { unsafe { PyList_New(0); } }\n")
+    run = _callouts_run(src)
+    assert run.returncode != 0 and "reexport.rs: calls ffi::PyList_New directly" in run.stdout, run.stdout
 
 
 def test_callouts_lint_reports_a_glob_import_outside_capi(tmp_path):
