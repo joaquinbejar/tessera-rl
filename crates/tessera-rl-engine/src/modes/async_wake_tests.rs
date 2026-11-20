@@ -20,10 +20,11 @@ use crate::buffer::batch::{GATE_AFTER_PUSH, GATE_HOLD_ID, GATE_OPEN, GATE_REACHE
 use crate::sys::Faults;
 use crate::{ActionInput, AsyncOptions, AutoReset, Reseed, WaitBackend};
 
-/// The bound on a wait that must end at its 50 ms deadline. It proves the
-/// deadline is not ignored, not a speed claim: it stays well above a
-/// starved CI host's overshoot (as in #301) and under [`WATCHDOG`], so an
-/// ignored deadline fails by its own assert.
+/// The bound on a wait that must end at its 50 ms deadline. It is not a
+/// speed claim: it stays well above a starved CI host's overshoot (as in
+/// #301) and under [`WATCHDOG`]. Nothing can end these waits before the
+/// call returns, so a deadline that is ignored outright never returns and
+/// fails by the watchdog, by name; this bound catches a late return.
 const IGNORED_DEADLINE: Duration = Duration::from_secs(240);
 
 type AsyncPoolOf = crate::AsyncPool<super::async_jitter_tests::Walker, crate::NoMasks>;
