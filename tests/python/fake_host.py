@@ -149,7 +149,7 @@ class FakeHost:
 
     def step(self, actions):
         self._open()
-        if not isinstance(actions, bytes):
+        if type(actions) is not bytes:  # protocol 1: exact bytes, as a compiled host refuses anything else
             raise tessera_rl.ArgumentError("step: actions must be bytes")
         acts = np.frombuffer(actions, dtype="<i4") if len(actions) % 4 == 0 else None
         if acts is None or acts.size != self.n * self.a or (acts < 0).any() or (acts > 2).any():
