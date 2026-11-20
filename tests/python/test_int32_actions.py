@@ -165,3 +165,35 @@ def test_step_continuous_head_int32_actions_keep_the_converting_path():
     b.step(np.array([[1.0], [-1.0]], dtype=np.float32))
     assert a.snapshot(0) == b.snapshot(0)
     assert a.snapshot(1) == b.snapshot(1)
+
+
+def test_step_int32_releases_the_source_buffer_before_returning():
+    # The view is copied and released before the step runs (the interpreter
+    # is released only after): once step() returns, no export of the
+    # source is left, so it can be resized or freed.
+    env = cartpole()
+    raw = bytearray(np.ones(2, dtype=np.int32).tobytes())
+    acts = np.frombuffer(raw, dtype=np.int32).reshape(2, 1)
+    env.step(acts)
+    del acts
+    raw.extend(b"\0" * 4096)  # BufferError while any export is held
+    arr = np.ones((2, 1), dtype=np.int32)
+    env.step(arr)
+    arr.resize((4096, 1), refcheck=False)
+    arr[:] = 7
+    del arr
+    s = env.step(np.ones((2, 1), dtype=np.int32))
+    assert s.rewards.shape == (2, 1)
+
+
+def test_native_step_releases_a_memoryview_before_returning():
+    env = cartpole()
+    raw = bytearray(np.ones(2, dtype=np.int32).tobytes())
+    view = memoryview(raw).cast("i")
+    env._native.step(view)
+    view.release()  # BufferError while any export of the view is held
+    raw.extend(b"\0" * 4096)
+    bad = memoryview(bytearray(12)).cast("i")
+    with pytest.raises(t.ActionError):
+        env._native.step(bad)
+    bad.release()  # also released on the refused path
