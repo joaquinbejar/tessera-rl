@@ -1138,7 +1138,7 @@ pub fn memoryview_copy(g: Gil<'_>, b: Ref<'_>, what: &str) -> CResult<BufferCopy
         // export's lifetime (no exporter rewrites it), copied at once.
         unsafe { CStr::from_ptr(format_ptr) }.to_bytes().to_vec()
     };
-    let mut bytes = Vec::new();
+    let mut bytes: Vec<u8> = Vec::new();
     if c_contiguous {
         let n = usize::try_from(len).unwrap_or(0);
         bytes.reserve_exact(n);

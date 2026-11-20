@@ -95,6 +95,7 @@ mod sealed {
     impl<T> Sealed for *mut T {}
     impl<T> Sealed for *const T {}
     impl Sealed for core::ffi::c_int {}
+    impl Sealed for core::ffi::c_char {}
     impl Sealed for isize {}
     impl Sealed for u64 {}
     impl Sealed for i64 {}
@@ -103,6 +104,11 @@ mod sealed {
 impl<T> IntClass for *mut T {}
 impl<T> IntClass for *const T {}
 impl IntClass for c_int {}
+// `c_char` (i8 or u8 by platform) is integer-class on System V x86-64, Win64
+// and AAPCS64; the templates move whole registers, so the extension the
+// caller makes (Apple arm64 requires it) reaches the callee unchanged
+// (PyBuffer_ToContiguous's `order`, #152 E2).
+impl IntClass for c_char {}
 impl IntClass for isize {}
 impl IntClass for u64 {}
 impl IntClass for i64 {}
