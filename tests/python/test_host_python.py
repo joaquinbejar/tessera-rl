@@ -212,6 +212,35 @@ def test_host_env_reset_and_step_return_host_steps(fake, outputs):
     env.close()
 
 
+@pytest.mark.parametrize("outputs", ["borrowed", "owned"])
+def test_host_env_int32_ndarray_actions_reach_the_host_as_exact_bytes(fake, outputs):
+    # Env.step passes an int32 C-contiguous array on as a memoryview (#152
+    # E2); HostEnv turns it into the exact bytes protocol 1 takes, which
+    # the fake host checks as strictly as a compiled one.
+    a = tessera_rl.make(FAKE, num_envs=3, seed=5, outputs=outputs)
+    b = tessera_rl.make(FAKE, num_envs=3, seed=5, outputs=outputs)
+    a.reset()
+    b.reset()
+    for k in range(3):
+        acts = np.full((3, 2), k % 3, dtype=np.int32)
+        sa, sb = a.step(acts), b.step(acts.astype(np.int64))
+        assert np.array_equal(sa.observations["obs"], sb.observations["obs"])
+        assert np.array_equal(sa.rewards, sb.rewards)
+    a.close()
+    b.close()
+
+
+def test_fake_host_step_takes_exact_bytes_only():
+    host = FakeHost(num_envs=1, seed=1)
+    host.reset(None)
+    # A bytes subclass is the case that tells exact bytes from isinstance.
+    subclass = type("B", (bytes,), {})(8)
+    for other in (memoryview(bytes(8)), bytearray(8), np.zeros(2, dtype=np.int32), subclass):
+        with pytest.raises(tessera_rl.ArgumentError, match="must be bytes"):
+            host.step(other)
+    host.step(bytes(8))
+
+
 def test_host_env_reset_seed_list(fake):
     env = tessera_rl.make(FAKE, num_envs=2)
     step = env.reset([40, 41])
