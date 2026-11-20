@@ -9,6 +9,8 @@ name = "tessera-example-host-orderbook"
 version = "0.0.0"
 description = "Example host environment wheel for Tessera: a deterministic integer order book"
 requires-python = ">=3.11"
+# The host object needs the first-party package (SPEC 14.4.1).
+dependencies = ["tessera-rl"]
 license = "MIT OR Apache-2.0"
 
 [tool.maturin]

@@ -8,7 +8,7 @@ The environment is a one-trader order book:
 
 - Each step, the trader holds, buys or sells at a price level.
 - Resting orders live in a `Vec`.
-- Prices are integer ticks, so the same seed and actions give the same outputs. CI runs every check here twice and compares hashes.
+- Prices are integer ticks, so the same seed and actions give the same outputs. CI runs one Gymnasium and one PettingZoo episode twice with one seed and compares their hashes with each other and with fixed goldens.
 
 ## Layout
 

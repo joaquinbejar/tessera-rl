@@ -48,8 +48,8 @@ pub struct BookConfig {
 #[derive(Debug)]
 pub struct OrderBook {
     cfg: BookConfig,
+    /// The bought units, oldest first, at their purchase prices.
     orders: Vec<i64>,
-    position: i64,
     last: i64,
     step: u32,
 }
@@ -71,13 +71,12 @@ impl HostEnvironment for OrderBook {
         Ok(Self {
             cfg: cfg.clone(),
             orders: Vec::new(),
-            position: 0,
             last: 0,
             step: 0,
         })
     }
 
-    /// Position, resting orders, last price and step.
+    /// Units held, their total cost, the last price and the step.
     fn observation_space(_: &BookConfig) -> Result<Space, SpaceError> {
         Ok(Space::Box {
             shape: vec![4],
@@ -99,7 +98,6 @@ impl HostEnvironment for OrderBook {
 
     fn reset(&mut self, seed: HostSeed, _: &mut HostOut<'_>) {
         self.orders.clear();
-        self.position = 0;
         // Integer-only: the opening price comes from the seed and episode.
         self.last = i64::try_from(seed.seed() % 97).unwrap_or(0)
             + i64::from(seed.episode_index() % 100) * 10;
@@ -116,18 +114,14 @@ impl HostEnvironment for OrderBook {
         let (side, level) = (action / levels, action % levels);
         let price = (self.last + level).min(BOUND / 2);
         let depth = usize::try_from(self.cfg.depth).unwrap_or(usize::MAX);
-        // Buying pays the level; selling a held unit earns it.
+        // A buy rests at its price; a sell fills the oldest unit, and its
+        // reward is the price against what that unit cost.
         let reward = match side {
             1 if self.orders.len() < depth => {
                 self.orders.push(price);
-                self.position += 1;
-                -level
+                0
             }
-            2 if self.position > 0 => {
-                self.position -= 1;
-                self.orders.pop();
-                level
-            }
+            2 if !self.orders.is_empty() => price - self.orders.remove(0),
             _ => 0,
         };
         #[expect(
@@ -143,8 +137,8 @@ impl HostEnvironment for OrderBook {
 
     fn observe(&self, _: AgentSlot, obs: &mut ObsWriter<'_, '_, ()>) {
         let values = [
-            self.position,
             i64::try_from(self.orders.len()).unwrap_or(BOUND),
+            self.orders.iter().sum::<i64>(),
             self.last,
             i64::from(self.step),
         ];
@@ -158,9 +152,9 @@ impl HostEnvironment for OrderBook {
 
     fn mask(&self, _: AgentSlot, mask: &mut MaskWriter<'_>) {
         mask.fill(true);
-        // Selling needs a position.
+        // Selling needs a unit to sell.
         for action in SELL..SELL + LEVELS as usize {
-            mask.set(action, self.position > 0);
+            mask.set(action, !self.orders.is_empty());
         }
     }
 }

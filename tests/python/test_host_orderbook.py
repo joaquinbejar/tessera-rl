@@ -44,6 +44,7 @@ def test_host_orderbook_make_finds_the_example_through_its_entry_point():
     assert obs.shape == (3, 1, 4) and obs.dtype == np.int32
     # Seeds 4, 5 and 6: the opening price is the seed modulo 97.
     assert obs[:, 0, 2].tolist() == [4, 5, 6]
+    assert obs[:, 0, :2].tolist() == [[0, 0]] * 3, "nothing held at reset"
     for k in range(5):
         step = env.step(acts(3, k))
     assert step.episode_terminated.tolist() == [True] * 3
@@ -158,10 +159,30 @@ def episode_hashes(seed):
     return obs_h.hexdigest(), rew_h.hexdigest()
 
 
+#: The hashes of episode_hashes(11). The book is integer-only, so they
+#: hold across processes, platforms and builds; they change only with the
+#: environment, the action script or the adapters.
+GOLDEN_11 = (
+    "cf5d7f79cdb50fcb42fea2f011f009f42dd671c929a1db96b6d9d05e32cfc7af",
+    "8c8c97af4ba2e31f07b8fc42ec8e3cfdc0b9eabb6d19b308c9bfa9622c14d7c2",
+)
+
+
 def test_host_orderbook_two_runs_with_one_seed_hash_equal():
     first, second = episode_hashes(11), episode_hashes(11)
     assert first == second
-    assert episode_hashes(12) != first, "the seed reaches the outputs"
+    assert first == GOLDEN_11
+    assert episode_hashes(12)[0] != first[0], "the seed reaches the observations"
+
+
+def test_host_orderbook_sells_are_masked_until_a_unit_is_held():
+    env = tessera_rl.make(ID, num_envs=1, seed=1)
+    masks = env.reset().masks[0, 0]
+    assert masks[:8].all() and not masks[8:].any(), "no unit to sell at reset"
+    buy = np.full((1, 1), 4, dtype=np.int32)  # side 1, level 0
+    masks = env.step(buy).masks[0, 0]
+    assert masks.all(), "one unit held: every sell is allowed"
+    env.close()
 
 
 def fp_child(scenario):
@@ -191,3 +212,27 @@ def test_host_orderbook_torch_flush_denormal_is_invisible():
     r = fp_child("torch_ftz")
     assert r["supported"], "torch can enable flush-to-zero on this CPU"
     assert r["identical"]
+
+
+def test_host_orderbook_depth_limits_the_book_and_episodes_move_the_open():
+    env = tessera_rl.make(ID, num_envs=1, seed=1, depth=1, episode=2)
+    open0 = env.reset().observations["obs"][0, 0, 2]
+    buy = np.full((1, 1), 4, dtype=np.int32)
+    env.step(buy)
+    held = env.step(buy).observations["obs"][0, 0, 0]
+    assert held == 1, "a buy beyond the depth is not placed"
+    # NextStep: the next call resets into episode 1, whose open is 10 higher.
+    open1 = env.step(buy).observations["obs"][0, 0, 2]
+    assert open1 == open0 + 10
+    env.close()
+
+
+def test_host_orderbook_a_sell_fills_the_oldest_unit():
+    env = tessera_rl.make(ID, num_envs=1, seed=1, outputs="owned")
+    open_ = int(env.reset().observations["obs"][0, 0, 2])
+    env.step(np.full((1, 1), 4, dtype=np.int32))  # buy at level 0: open
+    env.step(np.full((1, 1), 7, dtype=np.int32))  # buy at level 3: open + 3
+    sell = env.step(np.full((1, 1), 8, dtype=np.int32))  # sell at level 0: open + 3
+    assert sell.rewards[0, 0] == 3.0, "the sell fills the unit bought at the open"
+    assert sell.observations["obs"][0, 0, :2].tolist() == [1, open_ + 3]
+    env.close()
