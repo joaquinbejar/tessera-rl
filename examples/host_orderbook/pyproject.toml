@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
+[build-system]
+requires = ["maturin>=1.16,<2"]
+build-backend = "maturin"
+
+[project]
+name = "tessera-example-host-orderbook"
+version = "0.0.0"
+description = "Example host environment wheel for Tessera: a deterministic integer order book"
+requires-python = ">=3.11"
+license = "MIT OR Apache-2.0"
+
+[tool.maturin]
+python-source = "python"
+module-name = "tessera_example_orderbook._tessera_host"
+
+# Host protocol 1 discovery (SPEC 14.4.1): tessera_rl.make finds the book
+# through this entry point.
+[project.entry-points."tessera_rl.envs"]
+"example/OrderBook-v1" = "tessera_example_orderbook._tessera_host:make"

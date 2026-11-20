@@ -107,3 +107,32 @@ def test_ci_only_the_python_job_requires_dash():
 
 def test_ci_only_the_python_job_expects_fp_traps():
     assert [j for j, body in JOBS.items() if "TESSERA_EXPECT_FP_TRAPS" in body] == ["python"]
+
+
+MAKEFILE = (ROOT / "Makefile").read_text()
+EXAMPLE = ROOT / "examples" / "host_orderbook"
+
+
+def test_ci_python_job_runs_the_host_example_after_the_test_host_wheel():
+    steps = JOBS["python"]
+    assert "run: make py-test-orderbook" in steps
+    assert steps.index("run: make py-test-host") < steps.index("run: make py-test-orderbook")
+
+
+def test_ci_host_example_target_checks_installs_and_tests_the_example():
+    target = MAKEFILE.split("\npy-test-orderbook:\n", 1)[1].split("\n\n", 1)[0]
+    assert "cargo fmt --manifest-path $(ORDERBOOK) --check" in target
+    assert "cargo clippy --manifest-path $(ORDERBOOK) --all-targets --locked -- -D warnings" in target
+    assert "--reinstall ./examples/host_orderbook" in target
+    assert "--group torch pytest -q tests/python/test_host_orderbook.py" in target
+    assert target.rstrip().endswith("uv sync --locked --python 3.11 || status=1; exit $$status")
+    assert "ORDERBOOK = examples/host_orderbook/Cargo.toml" in MAKEFILE
+
+
+def test_ci_host_example_is_its_own_unpublished_workspace_with_a_lockfile():
+    manifest = (EXAMPLE / "Cargo.toml").read_text()
+    assert "\n[workspace]\n" in manifest and "publish = false" in manifest
+    assert (EXAMPLE / "Cargo.lock").is_file()
+    assert '"examples/host_orderbook"' in (ROOT / "Cargo.toml").read_text().split("default-members", 1)[0]
+    pyproject = (EXAMPLE / "pyproject.toml").read_text()
+    assert '"example/OrderBook-v1" = "tessera_example_orderbook._tessera_host:make"' in pyproject

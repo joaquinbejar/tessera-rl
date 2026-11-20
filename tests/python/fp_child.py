@@ -137,9 +137,38 @@ def set_round(mode):
     assert LIBM.fegetround() == mode
 
 
+#: The environments the episodes of this process ran, for the result.
+RAN = set()
+
+
+def run_orderbook_episode(steps=60):
+    """The example host wheel (#272 step 6): a short episode through the
+    host object, with borrowed and owned outputs; the bytes of all outputs.
+    """
+    RAN.add("example/OrderBook-v1")
+    out = []
+    for outputs in ("borrowed", "owned"):
+        env = t.make("example/OrderBook-v1", num_envs=4, seed=5, episode=7, outputs=outputs)
+        s = env.reset()
+        out += [s.observations["obs"].tobytes(), s.masks.tobytes()]
+        for k in range(steps):
+            a = ((k + np.arange(4)) % 3) * 4 + (k + np.arange(4)) % 4
+            s = env.step(a.astype(np.int32).reshape(4, 1))
+            out += [s.observations["obs"].tobytes(), s.rewards.tobytes(), s.episode_terminated.tobytes()]
+        out.append(bytes(memoryview(s.rewards)))
+        env.close()
+    out += [t.version(), t.get_fp_policy()]
+    return [o if isinstance(o, str) else o.hex() for o in out]
+
+
 def run_episode(steps=60):
     """Every public binding once, plus a short episode; the bytes of all
-    outputs and records."""
+    outputs and records. With ``TESSERA_FP_CHILD_ENV=orderbook``, the
+    example host wheel's episode instead (tests/python/test_host_orderbook.py).
+    """
+    if os.environ.get("TESSERA_FP_CHILD_ENV") == "orderbook":
+        return run_orderbook_episode(steps)
+    RAN.add("tessera/CartPole-v1")
     env = t.make("tessera/CartPole-v1", num_envs=4, seed=5, outputs="owned")
     out = [env.reset().observations["obs"].tobytes()]
     for k in range(steps):
@@ -648,6 +677,7 @@ def main(scenario):
         hostile = run_episode()
         torch.set_flush_denormal(False)
         result["identical"] = hostile == default
+    result["ran"] = sorted(RAN)
     print(json.dumps(result))
 
 
