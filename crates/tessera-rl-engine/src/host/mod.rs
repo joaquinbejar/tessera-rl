@@ -43,6 +43,8 @@
 //!
 //! Experimental until 1.0 (ADR-0062 item 9).
 
+#[cfg(test)]
+mod abort_header_tests;
 mod dyn_pool;
 mod factory;
 mod kernels;

@@ -265,6 +265,9 @@ pub(crate) fn reset_one<E: HostEnvironment, const A: usize>(
     }
     let identity = with_step(header, episode, 0);
     let engine = header.engine_mut();
+    // The ended step's end: a `SameStep` reset that aborts restores it, as
+    // its instance stays pending with that episode ended (issue #290).
+    let ended = engine.end_kind;
     engine.fresh = Bool8::FALSE;
     engine.pending_reset = Bool8::FALSE;
     engine.end_kind = 0;
@@ -338,7 +341,7 @@ pub(crate) fn reset_one<E: HostEnvironment, const A: usize>(
     recanonicalize(ctx.fp_resets);
     if let Some(code) = abort {
         ctx.aborts.fetch_add(1, Ordering::Relaxed);
-        abort_reset::<E, A>(header, outputs, i, rows, code);
+        abort_reset::<E, A>(header, outputs, i, rows, code, ended);
         return true;
     }
     update_acting::<E, A>(header, inst);
@@ -356,13 +359,15 @@ pub(crate) fn reset_one<E: HostEnvironment, const A: usize>(
 /// - `Scratch` rows (a `SameStep` reset): the row is the ended step's and
 ///   keeps its flags and rewards; it reports the reset's code unless the
 ///   step itself aborted, whose code it keeps. No episode is reported for
-///   the reset.
+///   the reset. The header keeps the ended step's `end_kind` (`ended`),
+///   so a pending instance always records an episode end (issue #290).
 fn abort_reset<E: HostEnvironment, const A: usize>(
     header: &mut HostHeader<A>,
     outputs: &mut OutputsView<'_>,
     i: usize,
     rows: ResetRows,
     code: AbortCode,
+    ended: u8,
 ) {
     for row in header.agents_mut() {
         row.acting = Bool8::FALSE;
@@ -392,7 +397,11 @@ fn abort_reset<E: HostEnvironment, const A: usize>(
             clear_terminal(outputs, i);
         }
         ResetRows::Scratch => {
-            header.engine_mut().pending_reset = Bool8::TRUE;
+            let engine = header.engine_mut();
+            engine.pending_reset = Bool8::TRUE;
+            // The step that ended the episode set it (`finish_episode`).
+            debug_assert_ne!(ended, 0, "a same_step reset runs after an ended step");
+            engine.end_kind = ended;
             if !outputs.aborted.get(i).is_some_and(|f| f.get()) {
                 mark_aborted(outputs, i, code);
             }
