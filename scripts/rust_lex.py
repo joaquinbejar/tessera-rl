@@ -85,21 +85,30 @@ def block_end(code: str, open_brace: int) -> int:
 
 def item_brace(code: str, start: int) -> int:
     """The index of the `{` that opens the item whose header starts at
-    `start`, in stripped code: the first `{` outside brackets, parentheses
-    and generics. -1 if a `;` at depth 0 ends the item first."""
-    depth = 0
+    `start`, in stripped code: the first `{` outside brackets, parentheses,
+    braces and generics. -1 if a `;` at depth 0 ends the item first.
+
+    A `<` may be an operator, in a const expression (`{ 1 < 2 }`, `[u8; 1 <<
+    3]`): a `>` closes only a `<` on top of the stack, and a `)`, `]` or `}`
+    closes everything opened after its own opener, so such a `<` is dropped
+    there and never hides the body."""
+    stack = []  # the open delimiters: "(", "[", "{" and "<"
+    closes = {")": "(", "]": "[", "}": "{"}
     i = start
     while i < len(code):
         ch = code[i]
-        if ch in "([<":
-            depth += 1
-        elif ch in ")]>" and depth:
-            # `->` is not a closing generic.
-            if not (ch == ">" and i and code[i - 1] == "-"):
-                depth -= 1
-        elif ch == "{" and depth == 0:
+        if ch == "{" and not stack:
             return i
-        elif ch == ";" and depth == 0:
+        if ch in "([{<":
+            stack.append(ch)
+        elif ch == ">":
+            # `->` is not a closing generic.
+            if stack and stack[-1] == "<" and code[i - 1] != "-":
+                stack.pop()
+        elif ch in closes:
+            while stack and stack.pop() != closes[ch]:
+                pass
+        elif ch == ";" and not stack:
             return -1
         i += 1
     return -1

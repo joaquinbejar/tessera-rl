@@ -6,9 +6,11 @@ The source lint of scripts/check_py_entries.py is the first; this is the
 second, from what rustdoc sees: every function or method of the crate
 that is public and `unsafe`, hidden items included, under every feature,
 including a method declared in a public trait (rustdoc gives it the
-visibility "default"), and every public foreign function declared
-`pub safe fn` in an `unsafe extern` block. Like the source scan, it is a
-lint, not a proof: it sees what rustdoc documents.
+visibility "default"), every public foreign function declared
+`pub safe fn` in an `unsafe extern` block, every public `unsafe trait`,
+and every public foreign static: `pub static` (unsafe to read) or
+`pub safe static` in an extern block. Like the source scan, it is a lint,
+not a proof: it sees what rustdoc documents.
 It needs a nightly toolchain (rustdoc's JSON output is unstable).
 
 Usage: check_pyffi_api.py [JSON]   (default: build it with cargo +nightly)
@@ -51,18 +53,33 @@ def public_unsafe(doc: dict) -> list[str]:
         public = item.get("visibility") == "public" or str(key) in in_pub_trait
         if item.get("crate_id") != 0 or not public:
             continue
-        function = item.get("inner", {}).get("function")
+        inner = item.get("inner", {})
+        span = item.get("span") or {}
+        where = f'{span.get("filename", "?")}:{(span.get("begin") or ["?"])[0]}'
+        name = item.get("name")
+        trait = inner.get("trait")
+        if trait is not None and trait.get("is_unsafe"):
+            found.append(f"{where}: pub unsafe trait {name}")
+        static = inner.get("static")
+        if static is not None:
+            # A foreign static has no initializer: rustdoc gives it an
+            # empty `expr`; `is_unsafe` is set unless it is declared `safe`.
+            if static.get("is_unsafe"):
+                found.append(f"{where}: pub unsafe static {name}")
+            elif static.get("expr", "") == "":
+                found.append(f"{where}: pub safe foreign static {name}")
+        function = inner.get("function")
         if not function:
             continue
         header = function.get("header", {})
-        span = item.get("span") or {}
-        where = f'{span.get("filename", "?")}:{(span.get("begin") or ["?"])[0]}'
         if header.get("is_unsafe"):
-            found.append(f"{where}: pub unsafe fn {item.get('name')}")
-        elif header.get("abi", "Rust") != "Rust" and not function.get("has_body", True):
+            found.append(f"{where}: pub unsafe fn {name}")
+        elif header.get("abi", "Rust") != "Rust" and not function.get("has_body", True) and str(key) not in in_pub_trait:
             # A foreign function declared `pub safe fn` in an `unsafe
-            # extern` block: safe to call, with no Rust body to check.
-            found.append(f"{where}: pub safe foreign fn {item.get('name')}")
+            # extern` block: safe to call, with no Rust body to check. A
+            # required trait method with a C ABI has no body either, but
+            # it is not foreign.
+            found.append(f"{where}: pub safe foreign fn {name}")
     return sorted(found)
 
 
