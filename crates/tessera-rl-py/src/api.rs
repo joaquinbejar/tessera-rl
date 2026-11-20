@@ -700,13 +700,23 @@ pub(crate) fn reset<'py>(g: Gil<'py>, inner: &Inner, args: Ref<'_>) -> CResult<M
     })
 }
 
-/// Little-endian int32 actions, from exact `bytes`, or for a discrete head
-/// from an exact `memoryview` of C-contiguous native int32 (#152 E2: the
-/// Python layer passes an `<i4` array's view without a copy of its own).
-fn actions_of(g: Gil, inner: &Inner, actions: Ref<'_>) -> CResult<Wire> {
+/// Whether a call takes an actions `memoryview` (only `step`, #152 E2) or
+/// exact `bytes` only (the split-phase `send`s).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Views {
+    Allowed,
+    BytesOnly,
+}
+
+/// Little-endian int32 actions, from exact `bytes`, or (`Views::Allowed`,
+/// discrete head) from an exact `memoryview` of C-contiguous native int32,
+/// copied by CPython and validated on the copy (#152 E2: the Python layer
+/// passes an `<i4` array's view without a copy of its own).
+fn actions_of(g: Gil, inner: &Inner, actions: Ref<'_>, views: Views) -> CResult<Wire> {
     let continuous = inner.with(g, |ops| Ok(ops.layout().action_bounds.is_some()))?;
-    if !continuous && capi::is_memoryview(actions) {
-        return capi::with_memoryview(g, actions, "actions", |v| int32_view(&v))?
+    if views == Views::Allowed && !continuous && capi::is_memoryview(actions) {
+        let copy = capi::memoryview_copy(g, actions, "actions")?;
+        return int32_view(&copy)
             .map(Wire::Discrete)
             .map_err(|m| error(g, Kind::Action, m.to_owned()));
     }
@@ -727,15 +737,15 @@ fn actions_of(g: Gil, inner: &Inner, actions: Ref<'_>) -> CResult<Wire> {
     })
 }
 
-/// The int32 values of a buffer view: C-contiguous, 4-byte items, and a
+/// The int32 values of a buffer copy: C-contiguous, 4-byte items, and a
 /// native or little-endian 4-byte signed format (`i`, or `l` at 4 bytes);
 /// the message of the `ActionError` otherwise.
-fn int32_view(v: &capi::BufferView<'_>) -> Result<Vec<i32>, &'static str> {
+fn int32_view(v: &capi::BufferCopy) -> Result<Vec<i32>, &'static str> {
     const FORMATS: [&[u8]; 6] = [b"i", b"=i", b"<i", b"l", b"=l", b"<l"];
     if !v.c_contiguous {
         return Err("an actions memoryview must be C-contiguous");
     }
-    if v.itemsize != 4 || !FORMATS.contains(&v.format) {
+    if v.itemsize != 4 || !FORMATS.contains(&v.format.as_slice()) {
         return Err("an actions memoryview must hold int32 values");
     }
     // Two monomorphic loops, not a chosen function pointer, so each one can
@@ -842,13 +852,13 @@ pub(crate) fn send<'py>(g: Gil<'py>, inner: &Inner, args: Ref<'_>) -> CResult<Mi
     let delivered = capi::to_u64(g, delivered, "delivered")?;
     if let Some(ops) = batched_of(g, inner)? {
         let ids = u32_list(g, half, "ids")?;
-        let actions = actions_of(g, inner, actions)?;
+        let actions = actions_of(g, inner, actions, Views::BytesOnly)?;
         g.detach(|| ops.send(&ids, actions.input(), delivered))
             .map_err(|e| to_py(g, e))?;
         return Ok(capi::none(g));
     }
     let half = capi::to_u32(g, half, "half")?;
-    let actions = actions_of(g, inner, actions)?;
+    let actions = actions_of(g, inner, actions, Views::BytesOnly)?;
     let split = require_split(g, inner, "send")?;
     g.detach(|| split.send(half, actions.input(), delivered))
         .map_err(|e| to_py(g, e))?;
@@ -950,7 +960,7 @@ pub(crate) fn recv<'py>(g: Gil<'py>, inner: &Inner, args: Ref<'_>) -> CResult<Mi
 pub(crate) fn step<'py>(g: Gil<'py>, inner: &Inner, args: Ref<'_>) -> CResult<Mine<'py>> {
     let a: [Ref<'_>; 1] = exactly(g, args, "step")?;
     let [actions] = a;
-    let actions = actions_of(g, inner, actions)?;
+    let actions = actions_of(g, inner, actions, Views::Allowed)?;
     inner.with(g, |ops| {
         g.detach(|| ops.step(actions.input()))
             .map_err(|e| to_py(g, e))?;
@@ -1223,18 +1233,13 @@ pub(crate) fn close<'py>(g: Gil<'py>, inner: &Inner) -> CResult<Mine<'py>> {
 
 #[cfg(test)]
 mod tests {
-    use super::{capi::BufferView, int32_view};
+    use super::{capi::BufferCopy, int32_view};
 
-    fn view<'a>(
-        bytes: &'a [u8],
-        itemsize: usize,
-        format: &'a [u8],
-        c_contiguous: bool,
-    ) -> BufferView<'a> {
-        BufferView {
-            bytes,
+    fn view(bytes: &[u8], itemsize: usize, format: &[u8], c_contiguous: bool) -> BufferCopy {
+        BufferCopy {
+            bytes: bytes.to_vec(),
             itemsize,
-            format,
+            format: format.to_vec(),
             c_contiguous,
         }
     }

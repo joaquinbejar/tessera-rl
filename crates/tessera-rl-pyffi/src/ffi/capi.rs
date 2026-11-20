@@ -21,9 +21,9 @@
 //!   user objects in them, so a replaced or dropped value may run a
 //!   finalizer; setting an exception (`PyErr_SetString`, which normalizes:
 //!   an allocation); a conversion that may raise (`PyLong_As*`,
-//!   `PyUnicode_AsUTF8AndSize`); a buffer request and its release on an
-//!   exact `memoryview` (`PyObject_GetBuffer`, `PyBuffer_Release`); and a
-//!   warning.
+//!   `PyUnicode_AsUTF8AndSize`); a buffer request, its copy and its
+//!   release on an exact `memoryview` (`PyObject_GetBuffer`,
+//!   `PyBuffer_ToContiguous`, `PyBuffer_Release`); and a warning.
 //! - **Direct** (cannot run Python code): non-GC allocations (`str`,
 //!   `bytes`, `bytearray`, `int`, `float`, capsules, and instances of our
 //!   own types, which are not GC-tracked); reads of exact built-in types
@@ -1067,37 +1067,39 @@ pub fn is_memoryview(b: Ref<'_>) -> bool {
     b.is_exact(&raw mut ffi::PyMemoryView_Type)
 }
 
-/// One C-contiguity-checked view of an exact `memoryview`'s buffer, valid
-/// inside [`with_memoryview`]'s closure.
-#[derive(Clone, Copy, Debug)]
-pub struct BufferView<'a> {
-    /// The buffer's bytes; empty unless the buffer is C-contiguous.
-    pub bytes: &'a [u8],
+/// An owned copy of an exact `memoryview`'s buffer, made by
+/// [`memoryview_copy`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BufferCopy {
+    /// A copy of the buffer's bytes in C order; empty unless the buffer is
+    /// C-contiguous (a buffer that is not is refused, so it is not copied).
+    pub bytes: Vec<u8>,
     /// The size of one item, in bytes.
     pub itemsize: usize,
     /// The item format (`struct` syntax, `"B"` when the exporter gives none).
-    pub format: &'a [u8],
-    /// Whether the buffer is C-contiguous (`bytes` holds all of it).
+    pub format: Vec<u8>,
+    /// Whether the buffer is C-contiguous.
     pub c_contiguous: bool,
 }
 
-/// Runs `f` on the buffer of the exact `memoryview` `b`, then releases it.
+/// A copy of the buffer of the exact `memoryview` `b`, made by CPython
+/// (`PyBuffer_ToContiguous`) into memory Rust owns; the export is released
+/// before this returns.
 ///
 /// `TypeError` when `b` is not an exact `memoryview`; the `memoryview`'s
 /// own exception (a released view: `ValueError`) when the request fails.
 /// The Python layer makes the view from a user object (exact types rule:
 /// the user object's exporter runs there, under the caller's controls);
-/// here only `memoryview`'s own C getbuffer runs, through a callout. The
-/// interpreter stays attached for the whole call, so no Python thread can
-/// change the memory while `f` reads it; `f` must not call back into
-/// Python.
-pub fn with_memoryview<R>(
-    g: Gil<'_>,
-    b: Ref<'_>,
-    what: &str,
-    f: impl FnOnce(BufferView<'_>) -> R,
-) -> CResult<R> {
-    /// Releases the buffer on every exit, including an unwind out of `f`.
+/// here only `memoryview`'s own C getbuffer runs, through a callout.
+///
+/// The exported memory is shared: a thread that has released the
+/// interpreter (NumPy inside a large copy, another C extension) can write
+/// it at any time. So Rust never forms a reference over it; CPython copies
+/// it, and the copy may hold a mix of old and new bytes. The caller treats
+/// the copy as untrusted input: every `i32` bit pattern is a valid value,
+/// and each one is validated on the copy.
+pub fn memoryview_copy(g: Gil<'_>, b: Ref<'_>, what: &str) -> CResult<BufferCopy> {
+    /// Releases the buffer on every exit.
     struct Release(*mut ffi::Py_buffer);
     impl Drop for Release {
         fn drop(&mut self) {
@@ -1118,36 +1120,47 @@ pub fn with_memoryview<R>(
         return Err(RAISED);
     }
     let release = Release(view.as_mut_ptr());
-    // SAFETY: filled by the successful request above.
-    let v = unsafe { &*view.as_ptr() };
+    let v = view.as_ptr();
     // SAFETY: `c"C"` is a live NUL-terminated string; its first byte is
     // read as the platform's `c_char`.
-    let fort = unsafe { *c"C".as_ptr() };
-    // SAFETY: a filled buffer; IsContiguous reads only its fields.
-    let c_contiguous = unsafe { ffi::PyBuffer_IsContiguous(v, fort) } == 1;
-    let len = usize::try_from(v.len).unwrap_or(0);
-    let itemsize = usize::try_from(v.itemsize).unwrap_or(0);
-    let bytes: &[u8] = if c_contiguous && len > 0 && !v.buf.is_null() {
-        // SAFETY: a C-contiguous buffer of `len` bytes at `buf`, held by the
-        // export until `release` drops; nothing in Rust writes it.
-        unsafe { core::slice::from_raw_parts(v.buf.cast::<u8>(), len) }
+    let order = unsafe { *c"C".as_ptr() };
+    // SAFETY: a filled buffer; IsContiguous reads only the struct's own
+    // fields (shape, strides, itemsize), not the exported memory.
+    let c_contiguous = unsafe { ffi::PyBuffer_IsContiguous(v, order) } == 1;
+    // SAFETY: the fields of a filled buffer (plain integers and the format
+    // pointer), not the exported memory.
+    let (len, itemsize, format_ptr) = unsafe { ((*v).len, (*v).itemsize, (*v).format) };
+    let itemsize = usize::try_from(itemsize).unwrap_or(0);
+    let format = if format_ptr.is_null() {
+        b"B".to_vec()
     } else {
-        &[]
+        // SAFETY: the export's NUL-terminated format string, fixed for the
+        // export's lifetime (no exporter rewrites it), copied at once.
+        unsafe { CStr::from_ptr(format_ptr) }.to_bytes().to_vec()
     };
-    let format: &[u8] = if v.format.is_null() {
-        b"B"
-    } else {
-        // SAFETY: a NUL-terminated format string owned by the export.
-        unsafe { CStr::from_ptr(v.format) }.to_bytes()
-    };
-    let out = f(BufferView {
+    let mut bytes = Vec::new();
+    if c_contiguous {
+        let n = usize::try_from(len).unwrap_or(0);
+        bytes.reserve_exact(n);
+        // SAFETY: `n` writable bytes of owned spare capacity, which no one
+        // else can reach; CPython copies the export into them (a callout: on
+        // failure it sets an exception). No Rust reference to the exported
+        // memory is formed.
+        let rc =
+            unsafe { thunks::c_buffer_to_contiguous(bytes.as_mut_ptr().cast(), v, len, order) };
+        if rc != 0 {
+            return Err(RAISED);
+        }
+        // SAFETY: the successful copy initialized all `n` bytes.
+        unsafe { bytes.set_len(n) };
+    }
+    drop(release);
+    Ok(BufferCopy {
         bytes,
         itemsize,
         format,
         c_contiguous,
-    });
-    drop(release);
-    Ok(out)
+    })
 }
 
 #[cfg(test)]

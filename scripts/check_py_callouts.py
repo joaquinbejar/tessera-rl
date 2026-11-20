@@ -63,7 +63,7 @@ CALLOUT_ONLY = {
     "PyObject_GetItem", "PyObject_GetAttr", "PyObject_Str", "PyObject_Repr",
     "PyObject_Call", "PyObject_CallObject", "PyObject_CallNoArgs", "PyObject_Vectorcall",
     "PyErr_CheckSignals", "PyImport_ImportModule", "PyObject_GetAttrString",
-    "PyObject_GetBuffer", "PyBuffer_Release",  # exporter code; a failed request sets an exception
+    "PyObject_GetBuffer", "PyBuffer_ToContiguous", "PyBuffer_Release",  # exporter code; a failed request sets an exception
 }
 
 # Callouts that return a new GC-tracked object: it must be owned as a

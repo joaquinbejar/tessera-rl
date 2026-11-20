@@ -197,3 +197,22 @@ def test_native_step_releases_a_memoryview_before_returning():
     with pytest.raises(t.ActionError):
         env._native.step(bad)
     bad.release()  # also released on the refused path
+
+
+def test_native_send_pipelined_refuses_a_memoryview():
+    # Only step takes a view (#152 E2); the split-phase send stays bytes-only.
+    env = t.make("tessera/CartPole-v1", num_envs=4, seed=1, mode="pipelined")
+    env.reset()
+    part = np.ones(len(env.halves[0]), dtype=np.int32)
+    with pytest.raises(TypeError, match="must be bytes"):
+        env._native.send(0, memoryview(part), env._delivered)
+    env._native.send(0, part.tobytes(), env._delivered)
+
+
+def test_native_send_async_refuses_a_memoryview():
+    env = t.make("tessera/CartPole-v1", num_envs=4, seed=1, mode="async", batch_size=2)
+    env.reset()
+    acts = np.ones(4, dtype=np.int32)
+    with pytest.raises(TypeError, match="must be bytes"):
+        env._native.send([0, 1, 2, 3], memoryview(acts), env._delivered)
+    env._native.send([0, 1, 2, 3], acts.tobytes(), env._delivered)
