@@ -280,6 +280,8 @@ def _leaf(code):
         "fn f(o: Obj) { let s = unsafe { thunks::c_object_str(o) }; let t = s.cast(); Mine::new(t) }",
         "fn f(o: Obj) { let s = unsafe { thunks::c_object_str(o) }; let t = s as *mut _; Mine::new(t) }",
         "fn f(o: Obj) { let t; let s = unsafe { thunks::c_object_str(o) }; t = s; Mine::new(t) }",
+        # A typed rebinding without a space before `=` (#310 review N2).
+        "fn f(o: Obj) { let s = unsafe { thunks::c_object_str(o) }; let t: Option<P>= s; Mine::new(t) }",
         # A long hidden block: the rebinding would land inside it if offsets moved.
         "fn f(o: Obj) { let s = unsafe { thunks::c_object_str(o) }; { let s = 1; " + "a" * 80 + "(s); } let t = s; Mine::new(t) }",
     ],
@@ -386,6 +388,38 @@ def test_callouts_lint_reports_a_re_export_outside_capi(tmp_path):
     api.write_text(api.read_text() + "\nuse crate::reexport::PyList_New;\nfn sneaky() { unsafe { PyList_New(0); } }\n")
     run = _callouts_run(src)
     assert run.returncode != 0 and "reexport.rs: calls ffi::PyList_New directly" in run.stdout, run.stdout
+
+
+@pytest.mark.parametrize(
+    "code, want",
+    [
+        ("pub use pyo3::ffi::PyList_New;", {"PyList_New"}),
+        ("pub(crate) use pyo3::ffi::{PyObject, PyErr_Clear as clear};", {"PyErr_Clear"}),
+        ("pub(in crate::ffi) use pyo3::ffi as raw;\npub(super) use raw::Py_TYPE;", {"Py_TYPE"}),
+        ("pub use pyo3::ffi::*;", {"*"}),
+        ("use pyo3::ffi::PyList_New;", set()),
+        ("pub use pyo3::ffi::PyObject;", set()),
+        ("pub use crate::ffi::capi::list;", set()),
+    ],
+)
+def test_callouts_reexports(code, want):
+    assert check_py_callouts.reexports(rust_lex.strip(code)) == want
+
+
+@pytest.mark.parametrize("rel, line", [("ffi/thunks.rs", "pub use pyo3::ffi::PyList_New;"), ("ffi/capi.rs", "pub(crate) use pyo3::ffi::Py_IncRef;")])
+def test_callouts_lint_reports_a_re_export_in_thunks_and_capi(tmp_path, rel, line):
+    # #310 review N1: a re-export is reported in every file, the two files
+    # that may name C-API functions included (here a callout target, and
+    # an allowlisted function).
+    src = _callouts_tree(tmp_path)
+    f = src / rel
+    if not f.exists():
+        shutil.copy(ROOT / "crates" / "tessera-rl-pyffi" / "src" / rel, f)
+    assert _callouts_run(src).returncode == 0
+    f.write_text(f.read_text() + "\n" + line + "\n")
+    run = _callouts_run(src)
+    name = line.rsplit("::", 1)[1].rstrip(";")
+    assert run.returncode != 0 and f"{rel}: re-exports ffi::{name}" in run.stdout, run.stdout
 
 
 def test_callouts_lint_reports_a_glob_import_outside_capi(tmp_path):
