@@ -104,7 +104,8 @@ def scope_of(code: str, var: str, start: int) -> str:
     """The code where the binding of `var` made just before `start` is
     visible: up to the end of its block, or to the next `let` of the same
     name in that block. A `let` inside a nested block (or a closure's body)
-    shadows it only there, so that block is left out and the scan goes on
+    shadows it only there, so the rest of that block is blanked (spaces, so
+    offsets into the scope stay offsets into `code`) and the scan goes on
     after it."""
     end = enclosing_end(code, start)
     shadow = re.compile(r"\blet\s+(?:mut\s+)?" + re.escape(var) + r"\b")
@@ -122,8 +123,7 @@ def scope_of(code: str, var: str, start: int) -> str:
                 break
             # Shadowed in a nested block: hidden from here to its end.
             hide = depth
-        if hide is None:
-            out.append(ch)
+        out.append(ch if hide is None else " ")
         i += 1
     return "".join(out)
 

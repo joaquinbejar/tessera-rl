@@ -215,6 +215,12 @@ def _leaf(code):
         "fn f(o: Obj) { let s = unsafe { thunks::c_object_str(o) }; let g = || { let s = 1; s }; Mine::new(s) }",
         "fn f(o: Obj) { let s = unsafe { thunks::c_object_str(o) }; { { let s = 1; } } Mine::new(s) }",
         "fn f(o: Obj) { let s = unsafe { thunks::c_object_str(o) }; let mut t = s; Mine::new(t) }",
+        # Shadowed in an inner block, then rebound after it.
+        "fn f(o: Obj) { let s = unsafe { thunks::c_object_str(o) }; { let s = 1; use_it(s); } let t = s; Mine::new(t) }",
+        "fn f(o: Obj) { let s = unsafe { thunks::c_object_str(o) }; let g = || { let s = 1; s }; let t = s; Mine::new(t) }",
+        "fn f(o: Obj) { let s = unsafe { thunks::c_object_str(o) }; { let s = 1; } let t = s; let u = t; Mine::new(u) }",
+        # A long hidden block: the rebinding would land inside it if offsets moved.
+        "fn f(o: Obj) { let s = unsafe { thunks::c_object_str(o) }; { let s = 1; " + "a" * 80 + "(s); } let t = s; Mine::new(t) }",
     ],
 )
 def test_callouts_leaf_owned_follows_typed_and_rebound_bindings(code):
