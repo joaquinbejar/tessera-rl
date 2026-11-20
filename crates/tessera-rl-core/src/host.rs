@@ -144,6 +144,13 @@ pub trait HostEnvironment: Send + Sized + 'static {
 
     /// Builds one instance; it may allocate.
     ///
+    /// The engine calls it once per instance, in index order (instance 0
+    /// first), one call after the other on the thread that builds the pool,
+    /// before any other call into the environment; the `k`-th call builds
+    /// pool instance `k`. An environment that keeps per-instance resources
+    /// can rely on that order. If a call fails, no later instance is built
+    /// and the instances already built are dropped.
+    ///
     /// # Errors
     ///
     /// [`HostError`] when the configuration or the environment's own setup

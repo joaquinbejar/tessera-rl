@@ -86,6 +86,10 @@ pub struct Shared {
     pub hostile_validate: AtomicBool,
     /// `validate` allocates.
     pub alloc_validate: AtomicBool,
+    /// The thread of each `new` call, in call order.
+    pub built_on: std::sync::Mutex<Vec<std::thread::ThreadId>>,
+    /// `new` fails on its `k`-th call (1-based); 0: never.
+    pub fail_new: AtomicU32,
 }
 
 impl Shared {
@@ -93,6 +97,11 @@ impl Shared {
         let s = Arc::new(Self::default());
         s.mixed_acting.store(true, Ordering::Relaxed);
         s
+    }
+
+    /// How many times `new` was called.
+    pub fn built(&self) -> u32 {
+        self.next_id.load(Ordering::Relaxed)
     }
 
     pub fn get(counts: &[AtomicU64; MAX_INSTANCES], i: usize) -> u64 {
@@ -166,7 +175,16 @@ impl<const T: u8, const V: bool> HostEnvironment for Script<T, V> {
     type Config = ScriptConfig;
 
     fn new(cfg: &ScriptConfig) -> Result<Self, HostError> {
-        let id = usize::try_from(cfg.shared.next_id.fetch_add(1, Ordering::Relaxed)).unwrap_or(0);
+        if let Ok(mut threads) = cfg.shared.built_on.lock() {
+            threads.push(std::thread::current().id());
+        }
+        let call = cfg.shared.next_id.fetch_add(1, Ordering::Relaxed);
+        if call.checked_add(1) == Some(cfg.shared.fail_new.load(Ordering::Relaxed)) {
+            return Err(HostError::Construction {
+                reason: "scripted failure".to_owned(),
+            });
+        }
+        let id = usize::try_from(call).unwrap_or(0);
         Ok(Self {
             shared: Arc::clone(&cfg.shared),
             id,
