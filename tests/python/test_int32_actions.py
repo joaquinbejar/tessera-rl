@@ -154,3 +154,14 @@ def test_native_step_other_objects_still_raise_type_error():
     for other in (bytearray(8), np.ones(2, dtype=np.int32), [1, 1]):
         with pytest.raises(TypeError, match="must be bytes"):
             env._native.step(other)
+
+
+def test_step_continuous_head_int32_actions_keep_the_converting_path():
+    a = t.make("tessera/Pendulum-v1", num_envs=2, seed=1)
+    b = t.make("tessera/Pendulum-v1", num_envs=2, seed=1)
+    a.reset()
+    b.reset()
+    a.step(np.array([[1], [-1]], dtype=np.int32))
+    b.step(np.array([[1.0], [-1.0]], dtype=np.float32))
+    assert a.snapshot(0) == b.snapshot(0)
+    assert a.snapshot(1) == b.snapshot(1)
