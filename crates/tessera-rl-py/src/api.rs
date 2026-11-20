@@ -738,17 +738,14 @@ fn int32_view(v: &capi::BufferView<'_>) -> Result<Vec<i32>, &'static str> {
     if v.itemsize != 4 || !FORMATS.contains(&v.format) {
         return Err("an actions memoryview must hold int32 values");
     }
-    let decode = if v.format.first() == Some(&b'<') {
-        i32::from_le_bytes
+    // Two monomorphic loops, not a chosen function pointer, so each one can
+    // be inlined and vectorized (#152 E2).
+    let words = v.bytes.as_chunks::<4>().0.iter();
+    Ok(if v.format.first() == Some(&b'<') {
+        words.map(|c| i32::from_le_bytes(*c)).collect()
     } else {
-        i32::from_ne_bytes
-    };
-    Ok(v.bytes
-        .as_chunks::<4>()
-        .0
-        .iter()
-        .map(|c| decode(*c))
-        .collect())
+        words.map(|c| i32::from_ne_bytes(*c)).collect()
+    })
 }
 
 /// One call's decoded actions, typed by the pool's action head.
