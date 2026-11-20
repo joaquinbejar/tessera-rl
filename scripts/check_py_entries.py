@@ -35,6 +35,8 @@ SRCS = [ROOT / "crates" / "tessera-rl-py" / "src", PYFFI]
 # `pub` (not `pub(crate)` or `pub(super)`) `unsafe fn`, `unsafe extern fn`
 # (with or without an ABI string) or `unsafe trait`, with any `const` or
 # `async`, in code stripped of comments and literals (scripts/rust_lex.py).
+# A `pub fn` or `pub static` in an extern block is unsafe too, `unsafe`
+# written or not (EXTERN_BLOCK below).
 PUB_UNSAFE = re.compile(r'\bpub\s+(?:(?:const|async)\s+)*unsafe\s+(?:extern\s*(?:""\s*)?)?(?:fn|trait)\b')
 
 
@@ -47,6 +49,11 @@ UNSAFE_FN = re.compile(r'\bunsafe\s+(?:extern\s*(?:""\s*)?)?fn\b')
 # public, safe-to-call foreign function, which no lint can check.
 UNSAFE_EXTERN = re.compile(r'\bunsafe\s+extern\s*(?:""\s*)?\{')
 PUB_SAFE = re.compile(r"\bpub\s+safe\s+(?:fn|static)\b")
+
+# A `pub fn` (or `static`) in an extern block, without `safe`: a public
+# foreign item that is unsafe to use, whether or not it says `unsafe`.
+EXTERN_BLOCK = re.compile(r'\bextern\s*(?:""\s*)?\{')
+PUB_FOREIGN_UNSAFE = re.compile(r"\bpub\s+(?:unsafe\s+)?(?:fn|static)\b")
 
 
 def bodies(code: str, header: re.Pattern):
@@ -61,6 +68,8 @@ def bodies(code: str, header: re.Pattern):
 def pub_unsafe(text: str) -> bool:
     code = rust_lex.strip(text)
     if PUB_UNSAFE.search(code):
+        return True
+    if any(PUB_FOREIGN_UNSAFE.search(body) for body in bodies(code, EXTERN_BLOCK)):
         return True
     return any(UNSAFE_FN.search(body) for body in bodies(code, PUB_TRAIT))
 

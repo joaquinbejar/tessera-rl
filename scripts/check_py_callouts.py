@@ -12,9 +12,14 @@ and when, inside `ffi/capi.rs`, a C-API function is called directly that is
 not on the allowlist below (functions that cannot run Python code), in
 particular any of the functions that must go through a callout.
 
-A C-API call is `ffi::f(...)`, `X::f(...)` after `use ... ffi as X`, or
-`g(...)` after `use ...::ffi::{f as g}`; a `pub safe fn` in an `unsafe
-extern` block fails anywhere. String literals and comments are ignored
+A C-API call is `ffi::f(...)`, `X::f(...)` after `use pyo3::ffi as X` or
+`use pyo3::ffi::{self as X}`, or `g(...)` after `use pyo3::ffi::f`, `use
+pyo3::ffi::f as g` or a group import of either; after a glob import
+(`use pyo3::ffi::*`) any `Py...(...)` call counts. A function taken as a
+value (`let f = ffi::PyList_New;`) counts as a call, except in `thunks.rs`,
+which names the callout targets that way. Only `pyo3::ffi` paths (or `ffi`
+and its aliases) are the C API: `crate::ffi::capi::{list as make}` is not.
+A `pub safe fn` in an `unsafe extern` block fails anywhere. String literals and comments are ignored
 (scripts/rust_lex.py), so a `//` inside a string hides nothing. It is a
 lint over the source text, not a proof.
 
@@ -74,28 +79,169 @@ GC_ALLOCATORS = {
     # `str()` may return a GC-tracked `str` subclass with a `__del__`.
     "c_object_str",
 }
-LEAF_OWNED = re.compile(r"Mine::new\(\s*unsafe\s*\{\s*thunks::(\w+)\s*\(")
-# The two-statement form: `let x = unsafe { thunks::f(..) };` then `Mine::new(x)`.
-LET_THUNK = re.compile(r"\blet\s+(?:mut\s+)?(\w+)\s*=\s*unsafe\s*\{\s*thunks::(\w+)\s*\(")
+LEAF_OWNED = re.compile(r"\b(?:Mine|Self)::new\(\s*unsafe\s*\{\s*thunks::(\w+)\s*\(")
+# The two-statement form: `let x [: T] = unsafe { thunks::f(..) };`, then
+# `Mine::new(x)` (or `Self::new(x)` inside `impl Mine`), directly or through
+# plain rebindings `let y = x;`, while `x` is in scope and not shadowed.
+LET_THUNK = re.compile(r"\blet\s+(?:mut\s+)?(\w+)\s*(?::[^=;]*)?=\s*unsafe\s*\{\s*thunks::(\w+)\s*\(")
+
+
+def enclosing_end(code: str, pos: int) -> int:
+    """The end of the innermost `{...}` block holding `pos` (`len(code)` at
+    the top level), in stripped code."""
+    depth = 0
+    for i in range(pos - 1, -1, -1):
+        if code[i] == "}":
+            depth += 1
+        elif code[i] == "{":
+            if depth == 0:
+                return rust_lex.block_end(code, i)
+            depth -= 1
+    return len(code)
+
+
+def scope_of(code: str, var: str, start: int) -> str:
+    """The code where the binding of `var` made just before `start` is
+    visible: up to the end of its block, or to the next `let` that shadows
+    it."""
+    end = enclosing_end(code, start)
+    shadow = re.compile(r"\blet\s+(?:mut\s+)?" + re.escape(var) + r"\b").search(code, start, end)
+    return code[start:shadow.start() if shadow else end]
+
+
+def bindings(code: str, var: str, start: int) -> list[tuple[str, str]]:
+    """`var` and every plain rebinding of it (`let y = var;`), transitively,
+    each with the code where it is visible."""
+    out, todo, seen = [], [(var, start)], {var}
+    while todo:
+        name, at = todo.pop()
+        scope = scope_of(code, name, at)
+        out.append((name, scope))
+        rebind = re.compile(r"\blet\s+(?:mut\s+)?(\w+)\s*(?::[^=;]*)?=\s*" + re.escape(name) + r"\s*;")
+        for m in rebind.finditer(scope):
+            if m.group(1) not in seen:
+                seen.add(m.group(1))
+                todo.append((m.group(1), at + m.end()))
+    return out
 
 
 def leaf_owned(code: str) -> set[str]:
     """The thunks whose result `code` owns with `Mine::new` (a leaf): inline,
-    or through a `let` binding passed to `Mine::new` later in the file."""
+    or through a `let` binding (typed or not, rebound or not) passed to
+    `Mine::new` or `Self::new` while the binding is in scope."""
     names = set(LEAF_OWNED.findall(code))
     for m in LET_THUNK.finditer(code):
         var, name = m.groups()
-        if re.search(r"Mine::new\(\s*" + re.escape(var) + r"\s*\)", code[m.end():]):
-            names.add(name)
+        # The binding is visible from the end of its `unsafe { .. }` on.
+        after = rust_lex.block_end(code, code.rfind("{", m.start(), m.end()))
+        for alias, scope in bindings(code, var, after):
+            if re.search(r"\b(?:Mine|Self)::new\(\s*" + re.escape(alias) + r"\s*\)", scope):
+                names.add(name)
     return names
 
 HIGH_LEVEL = re.compile(r"pyo3::(types|prelude|sync|exceptions)\b|\bBound<|\.extract\s*::|\.extract\(|\bPyErr::|\bPython::")
 
-# `use` declarations that rename the C API: `ffi as X` (a module alias) and
-# `{f as g}` / `f as g` imported from an `ffi` path (a function alias).
+# `use` declarations that bring in the C API. A path names the C API when
+# it is `pyo3::ffi` (or `::pyo3::ffi`), or `ffi` or a module alias of it on
+# its own; `crate::ffi::capi::...`, `core::ffi::...` and the like do not.
 USE = re.compile(r"\buse\s+([^;]*);")
+C_API_PATH = re.compile(r"^(?:::)?(?:pyo3\s*::\s*)?ffi$")
 MODULE_ALIAS = re.compile(r"\bffi\s+as\s+(\w+)")
-NAME_ALIAS = re.compile(r"\b(\w+)\s+as\s+(\w+)")
+# A C-API function's name: `PyList_New`, `Py_DecRef`, `_PyObject_GetX`.
+# Statics, constants and types have other shapes (`PyExc_TypeError`,
+# `PyList_Type`, `Py_TPFLAGS_DEFAULT`, `Py_tp_dealloc`, `PyObject`), and the
+# two struct types of that shape are named.
+FN_NAME = re.compile(r"^_?Py[A-Za-z0-9]*_[A-Z][a-z][A-Za-z0-9]*$")
+NOT_FN = {"PyType_Spec", "PyType_Slot"}
+
+
+def is_fn_name(name: str) -> bool:
+    if name in ALLOWED or name in CALLOUT_ONLY:
+        return True
+    return bool(FN_NAME.match(name)) and not name.startswith("PyExc_") and not name.endswith("_Type") and name not in NOT_FN
+
+
+def _split_group(body: str) -> list[str]:
+    """The top-level items of a `use` group's body (`a, b as c, d::{e, f}`)."""
+    items, depth, cur = [], 0, ""
+    for ch in body:
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+        if ch == "," and depth == 0:
+            items.append(cur.strip())
+            cur = ""
+        else:
+            cur += ch
+    if cur.strip():
+        items.append(cur.strip())
+    return items
+
+
+def use_tree(tree: str, prefix: str, modules: set[str], out: dict, globs: list) -> None:
+    """Walks a `use` tree under `prefix` (the path so far). Records, for a
+    C-API path: module aliases (`ffi as X`, `ffi::{self as X}`), imported
+    functions by local name (`f`, `f as g`, inside groups) and glob imports
+    (`ffi::*`)."""
+    tree = tree.strip()
+    if tree.endswith("}"):
+        head, body = tree.split("{", 1)
+        path = "::".join(p for p in (prefix, head.strip().strip(":")) if p)
+        for item in _split_group(body[:-1]):
+            use_tree(item, path, modules, out, globs)
+        return
+    alias = None
+    m = re.match(r"^(.*?)\s+as\s+(\w+)$", tree)
+    if m:
+        tree, alias = m.group(1).strip(), m.group(2)
+    full = (prefix + "::" + tree if prefix else tree).replace(" ", "")
+    parent, _, last = full.rpartition("::")
+    if last == "self":
+        full, (parent, _, last) = parent, parent.rpartition("::")
+    is_module = C_API_PATH.match(full) or full in modules
+    if is_module:
+        if alias and alias != "_":
+            modules.add(alias)
+        return
+    if not (C_API_PATH.match(parent) or parent in modules):
+        return
+    if last == "*":
+        globs.append(full)
+    elif alias != "_":
+        out[alias or last] = last
+
+
+def c_api_calls(code: str, values: bool = True) -> set[str]:
+    """The C-API functions `code` calls or takes as a value: through
+    `ffi::`, through a module alias of `ffi`, or through a function imported
+    from the C API (plain, renamed, in a group; reported by its C name), or
+    any `Py...(...)` call after a glob import of the C API. With `values`
+    false, only calls count (`thunks.rs` names its targets as values)."""
+    modules = {"ffi"}
+    imported, globs = {}, []
+    for m in USE.finditer(code):
+        decl = re.sub(r"\s+", " ", m.group(1)).strip()
+        modules.update(MODULE_ALIAS.findall(decl))
+        use_tree(decl, "", modules, imported, globs)
+    # The `use` declarations themselves are not uses of the names.
+    body = USE.sub(" ", code)
+    names = set()
+    path = re.compile(r"\b(?:" + "|".join(sorted(map(re.escape, modules))) + r")\s*::\s*([A-Za-z_][A-Za-z0-9_]*)\b(?!\s*::)(\s*\()?")
+    for m in path.finditer(body):
+        name, called = m.group(1), m.group(2)
+        # A call, or a function taken as a value (`let f = ffi::PyList_New;`).
+        if called or (values and is_fn_name(name)):
+            names.add(name)
+    for local, name in imported.items():
+        if re.search(r"(?<![\w:.])" + re.escape(local) + r"\s*\(", body):
+            names.add(name)
+        elif values and is_fn_name(name) and re.search(r"(?<![\w:.])" + re.escape(local) + r"\b(?!\s*::)", body):
+            names.add(name)
+    if globs:
+        names.update(re.findall(r"(?<![\w:.])(_?Py[A-Za-z0-9_]*)\s*\(", body))
+    return names
+
 
 # A `pub safe fn` (or `static`) in an `unsafe extern` block: a C function
 # made safe to call, outside every callout.
@@ -107,28 +253,6 @@ def strip_comments(text: str) -> str:
     """Comments removed and literals emptied (scripts/rust_lex.py), so a
     `//` inside a string hides nothing after it."""
     return rust_lex.strip(text)
-
-
-def c_api_calls(code: str) -> set[str]:
-    """The C-API functions `code` calls: through `ffi::`, through a module
-    alias of `ffi`, or through a function imported from an `ffi` path under
-    another name (reported by its C name)."""
-    modules = {"ffi"}
-    renamed = {}
-    for m in USE.finditer(code):
-        decl = re.sub(r"\s+", " ", m.group(1))
-        modules.update(MODULE_ALIAS.findall(decl))
-        if re.search(r"\bffi\s*::", decl):
-            tail = decl.split("ffi", 1)[1]
-            for name, alias in NAME_ALIAS.findall(tail):
-                renamed[alias] = name
-    names = set()
-    call = re.compile(r"\b(?:" + "|".join(sorted(map(re.escape, modules))) + r")\s*::\s*([A-Za-z_][A-Za-z0-9_]*)\s*\(")
-    names.update(call.findall(code))
-    for alias, name in renamed.items():
-        if re.search(r"(?<![\w:])" + re.escape(alias) + r"\s*\(", code):
-            names.add(name)
-    return names
 
 
 def safe_foreign(code: str) -> bool:
@@ -160,7 +284,7 @@ def check(src: pathlib.Path) -> list[str]:
             continue
         if HIGH_LEVEL.search(code):
             problems.append(f"{rel}: PyO3's high-level API is used outside ffi/capi.rs")
-        for name in sorted(c_api_calls(code)):
+        for name in sorted(c_api_calls(code, values=rel.as_posix() != "ffi/thunks.rs")):
             problems.append(f"{rel}: calls ffi::{name} directly (only ffi/capi.rs calls the C API)")
     return problems
 
