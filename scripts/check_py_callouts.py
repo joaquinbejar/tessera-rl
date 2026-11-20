@@ -95,7 +95,7 @@ LET_THUNK = re.compile(r"\blet\s+(?:mut\s+)?(\w+)\s*(?::[^=;]*)?=\s*unsafe\s*\{\
 CAST = r"\b(?:\s*\.\s*cast\s*(?:::\s*<[^;()]*>)?\s*\(\s*\)|\s+as\s+[^;(){}]+?)?"
 # A rebinding of a name: `let y = x;` (typed or not, `mut` or not) or a
 # plain assignment `y = x;` (not `==`, `<=`, `+=` and the like).
-REBIND_HEAD = r"(?:\blet\s+(?:mut\s+)?(\w+)\s*(?::[^=;]*)?|(?<![\w.])(\w+)\s*)(?<![=!<>+\-*/%&|^])=(?!=)\s*"
+REBIND_HEAD = r"(?:\blet\s+(?:mut\s+)?(\w+)\s*(?::[^=;]*)?|(?<![\w.])(\w+)\s*)=(?!=)\s*"
 
 
 def enclosing_end(code: str, pos: int) -> int:
@@ -246,6 +246,9 @@ def use_tree(tree: str, prefix: str, crates: set[str], modules: set[str], out: d
     if is_c_api_path(full, crates, modules):
         if alias and alias != "_":
             modules.add(alias)
+        # The C-API module itself, by any name: keyed `ffi::`, which is no
+        # identifier, with an empty name, which is no function.
+        out["ffi::"] = ""
         return
     if not is_c_api_path(parent, crates, modules):
         return
@@ -253,6 +256,44 @@ def use_tree(tree: str, prefix: str, crates: set[str], modules: set[str], out: d
         globs.append(full)
     elif alias != "_":
         out[alias or last] = last
+
+
+def imports(code: str, pattern: re.Pattern = USE) -> tuple[set, set, dict, list]:
+    """The crate and module aliases of the C API in `code`, and the C-API
+    names and globs imported by the declarations `pattern` matches. The
+    aliases come from every `use` line, read until nothing new is learnt,
+    so their order does not matter."""
+    crates, modules = {"pyo3"}, {"ffi"}
+    decls = [re.sub(r"\s+", " ", m.group(1)).strip() for m in USE.finditer(code)]
+    while True:
+        size = (len(crates), len(modules))
+        for decl in decls:
+            modules.update(MODULE_ALIAS.findall(decl))
+            use_tree(decl, "", crates, modules, {}, [])
+        if (len(crates), len(modules)) == size:
+            break
+    imported, globs = {}, []
+    for m in pattern.finditer(code):
+        use_tree(re.sub(r"\s+", " ", m.group(1)).strip(), "", set(crates), set(modules), imported, globs)
+    return crates, modules, imported, globs
+
+
+# A `use` with any visibility: `pub use`, `pub(crate) use`, `pub(in ..) use`.
+PUB_USE = re.compile(r"\bpub(?:\s*\([^)]*\))?\s+use\s+([^;]*);")
+
+
+def reexports(code: str) -> set[str]:
+    """The C-API functions `code` re-exports (`pub use pyo3::ffi::X`), and
+    `*` for a re-exported glob or module of the C API. A C-API function leaves its
+    file only through a callout, in every file, `capi.rs` and `thunks.rs`
+    included."""
+    _, _, imported, globs = imports(code, PUB_USE)
+    found = {name for name in imported.values() if is_fn_name(name)}
+    if "ffi::" in imported:
+        # The C-API module re-exported, under its own name or another
+        # (`pub use pyo3::ffi as raw;`): every function goes with it.
+        found.add("*")
+    return found | ({"*"} if globs else set())
 
 
 def c_api_calls(code: str, values: bool = True) -> set[str]:
@@ -265,17 +306,7 @@ def c_api_calls(code: str, values: bool = True) -> set[str]:
     at all (a `use` of it, `pub use` re-exports included), and as a bare
     name after a glob import. The `use` lines are read until nothing new
     is learnt, so their order does not matter."""
-    crates, modules = {"pyo3"}, {"ffi"}
-    imported, globs = {}, []
-    decls = [re.sub(r"\s+", " ", m.group(1)).strip() for m in USE.finditer(code)]
-    while True:
-        size = (len(crates), len(modules))
-        imported, globs = {}, []
-        for decl in decls:
-            modules.update(MODULE_ALIAS.findall(decl))
-            use_tree(decl, "", crates, modules, imported, globs)
-        if (len(crates), len(modules)) == size:
-            break
+    crates, modules, imported, globs = imports(code)
     # The `use` declarations themselves are not uses of the names.
     body = USE.sub(" ", code)
     names = set()
@@ -325,6 +356,8 @@ def check(src: pathlib.Path) -> list[str]:
         code = strip_comments(path.read_text())
         if safe_foreign(code):
             problems.append(f"{rel}: a public safe foreign function (`pub safe fn` in an `unsafe extern` block)")
+        for name in sorted(reexports(code)):
+            problems.append(f"{rel}: re-exports ffi::{name} (a C-API function is reached only through a callout)")
         if rel.as_posix() == "ffi/capi.rs":
             for name in sorted(leaf_owned(code) & GC_ALLOCATORS):
                 problems.append(f"{rel}: {name} returns a GC-tracked object: own it with Mine::container")
