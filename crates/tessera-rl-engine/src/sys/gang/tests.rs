@@ -527,8 +527,15 @@ fn test_gang_sequence_overflow_is_sequence_exhausted() {
     gang.completed = 0;
 }
 
-/// Runs `f` on a helper thread and fails if it does not finish in time,
-/// so a hang shows up as a failure instead of a stuck test run.
+/// How long a gang test may wait before it fails instead of hanging. It
+/// catches hangs and does not bound speed: a starved process on a loaded
+/// CI host can run these tests many times slower (as in #301).
+#[cfg(not(loom))]
+const HANG_GUARD: std::time::Duration = std::time::Duration::from_secs(300);
+
+/// Runs `f` on a helper thread and fails if it does not finish within
+/// [`HANG_GUARD`], so a hang shows up as a failure instead of a stuck test
+/// run.
 #[cfg(not(loom))]
 fn within_timeout(f: impl FnOnce() + Send + 'static) {
     let (tx, rx) = std::sync::mpsc::channel();
@@ -536,10 +543,7 @@ fn within_timeout(f: impl FnOnce() + Send + 'static) {
         f();
         let _ = tx.send(());
     });
-    assert!(
-        rx.recv_timeout(std::time::Duration::from_secs(20)).is_ok(),
-        "timed out"
-    );
+    assert!(rx.recv_timeout(HANG_GUARD).is_ok(), "timed out");
 }
 
 #[cfg(not(loom))]
@@ -606,7 +610,7 @@ fn test_gang_death_before_the_job_wakes_a_caller_on_another_thread() {
         let _ = tx.send((first, second));
         gang
     });
-    let outcome = rx.recv_timeout(std::time::Duration::from_secs(30));
+    let outcome = rx.recv_timeout(HANG_GUARD);
     assert_eq!(outcome, Ok((Ok(true), Err(EngineError::WorkerDied))));
     drop(runner.join());
 }

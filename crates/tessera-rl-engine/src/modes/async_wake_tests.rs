@@ -14,11 +14,17 @@ use core::time::Duration;
 use std::time::Instant;
 
 use super::async_jitter_tests::{
-    GATES, N, Pool, ReleaseHeld, WalkConfig, all_ids, options, wait_for_gate, within,
+    GATES, N, Pool, ReleaseHeld, WATCHDOG, WalkConfig, all_ids, options, wait_for_gate, within,
 };
 use crate::buffer::batch::{GATE_AFTER_PUSH, GATE_HOLD_ID, GATE_OPEN, GATE_REACHED, HELD_ID};
 use crate::sys::Faults;
 use crate::{ActionInput, AsyncOptions, AutoReset, Reseed, WaitBackend};
+
+/// The bound on a wait that must end at its 50 ms deadline. It proves the
+/// deadline is not ignored, not a speed claim: it stays well above a
+/// starved CI host's overshoot (as in #301) and under [`WATCHDOG`], so an
+/// ignored deadline fails by its own assert.
+const IGNORED_DEADLINE: Duration = Duration::from_secs(240);
 
 type AsyncPoolOf = crate::AsyncPool<super::async_jitter_tests::Walker, crate::NoMasks>;
 
@@ -158,7 +164,7 @@ fn recv_timeout_held(wait: WaitBackend) {
         wait_for_gate();
         let mut received = 0;
         while received + 1 < ids.len() {
-            let token = pool.recv_timeout(Duration::from_secs(20)).unwrap();
+            let token = pool.recv_timeout(WATCHDOG).unwrap();
             received += token.map_or(0, |t| t.len());
         }
         let timeout = Duration::from_millis(50);
@@ -172,10 +178,10 @@ fn recv_timeout_held(wait: WaitBackend) {
             "returned before its deadline: {elapsed:?}"
         );
         assert!(
-            elapsed < Duration::from_secs(10),
+            elapsed < IGNORED_DEADLINE,
             "ignored its deadline: {elapsed:?}"
         );
-        let last = pool.recv_timeout(Duration::from_secs(20)).unwrap().unwrap();
+        let last = pool.recv_timeout(WATCHDOG).unwrap().unwrap();
         assert_eq!(last.ids().collect::<Vec<_>>(), [0]);
         assert_eq!(received, usize::try_from(N).unwrap() - 1);
     });
@@ -213,7 +219,7 @@ fn waiter_wakes(wait: WaitBackend) {
             "returned before its deadline: {elapsed:?}"
         );
         assert!(
-            elapsed < Duration::from_secs(10),
+            elapsed < IGNORED_DEADLINE,
             "ignored its deadline: {elapsed:?}"
         );
         send(&mut pool, &[1]);

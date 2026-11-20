@@ -10,19 +10,29 @@ use std::time::Instant;
 
 use super::Native;
 
+/// How long a test may take before it fails by name instead of hanging.
+/// It catches hangs and does not bound speed: a starved process on a
+/// loaded CI host can run these tests many times slower (as in #301).
+const WATCHDOG: Duration = Duration::from_secs(300);
+
+/// The wait's deadline in [`woken`], under [`WATCHDOG`] so a lost wake
+/// fails by its own assert: the wait reaches the deadline only if the wake
+/// was lost.
+const WAKE_DEADLINE: Duration = Duration::from_secs(240);
+
 /// Runs `f` on its own thread and fails, naming `what`, if it has not
-/// finished within 30 s: a wait that ignores its timeout fails the test
-/// instead of hanging it.
+/// finished within [`WATCHDOG`]: a wait that ignores its timeout fails the
+/// test instead of hanging it.
 fn within(what: &str, f: impl FnOnce() + Send + 'static) {
     let (done, finished) = std::sync::mpsc::channel();
     let body = std::thread::spawn(move || {
         f();
         let _ = done.send(());
     });
-    match finished.recv_timeout(Duration::from_secs(30)) {
+    match finished.recv_timeout(WATCHDOG) {
         Ok(()) => body.join().unwrap(),
         Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-            panic!("{what}: did not finish within 30 s")
+            panic!("{what}: did not finish within {WATCHDOG:?}")
         }
         Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
             if let Err(payload) = body.join() {
@@ -115,7 +125,7 @@ fn woken(native: Native) {
         })
     };
     let start = Instant::now();
-    let deadline = start + Duration::from_secs(30);
+    let deadline = start + WAKE_DEADLINE;
     while word.load(Ordering::SeqCst) == 0 {
         let Some(left) = deadline.checked_duration_since(Instant::now()) else {
             break;
@@ -125,5 +135,5 @@ fn woken(native: Native) {
     let elapsed = start.elapsed();
     waker.join().unwrap();
     assert_eq!(word.load(Ordering::SeqCst), 1);
-    assert!(elapsed < Duration::from_secs(10), "{elapsed:?}");
+    assert!(elapsed < WAKE_DEADLINE, "the wake was lost: {elapsed:?}");
 }
