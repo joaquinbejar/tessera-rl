@@ -754,6 +754,7 @@ where
 struct AsyncHandle {
     ops: Arc<dyn AsyncOps>,
     layout: Layout,
+    views: Option<Arc<ViewSet>>,
 }
 
 fn wrong_mode(call: &'static str) -> BindError {
@@ -766,6 +767,10 @@ fn wrong_mode(call: &'static str) -> BindError {
 impl PoolOps for AsyncHandle {
     fn layout(&self) -> &Layout {
         &self.layout
+    }
+
+    fn views(&self) -> Option<&Arc<ViewSet>> {
+        self.views.as_ref()
     }
 
     fn reset(&mut self, _ids: Option<&[u32]>, _seed: &ResetSeed) -> Result<(), BindError> {
@@ -868,6 +873,7 @@ where
             Ok::<_, BindError>(GatherWriter::new(&fields))
         })
         .transpose()?;
+    let views = set.clone().map(Arc::new);
     let buffer = writer.as_ref().map(GatherWriter::storage);
     let waiter = pool.waiter();
     let generations = pool.id_generations();
@@ -897,7 +903,11 @@ where
         owned: outputs == BatchOutputs::Owned,
         num_envs,
     });
-    Ok(Box::new(AsyncHandle { ops, layout }))
+    Ok(Box::new(AsyncHandle {
+        ops,
+        layout,
+        views,
+    }))
 }
 
 #[cfg(test)]
