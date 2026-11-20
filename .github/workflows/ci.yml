@@ -324,6 +324,11 @@ jobs:
       # front ends, the exception classes).
       - name: Host protocol 1 test wheel (make py-test-host)
         run: make py-test-host
+      # The out-of-tree example wheel (#272 step 6): built next to the
+      # first-party wheel, through tessera_rl.make, Gymnasium and PettingZoo,
+      # the ownership and FP boundary checks, and determinism across runs.
+      - name: Host example wheel (make py-test-orderbook)
+        run: make py-test-orderbook
 
   # The Python ONNX evaluator (ADR-0057) with the extension's `onnx` feature,
   # against the library fetched by its sha256 (scripts/fetch_onnxruntime.py;

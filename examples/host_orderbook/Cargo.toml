@@ -1,0 +1,40 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
+# An out-of-tree host environment wheel (#272 step 6, ADR-0062 item 11):
+# a heap-state order book, exported with export_host_env! and discovered by
+# tessera_rl.make through its entry point. It is its own Cargo package and
+# workspace, depending on the Tessera crates by path as an external crate
+# would depend on their releases. Built by `make py-test-orderbook`; never
+# published.
+
+[package]
+name = "tessera-example-host-orderbook"
+description = "Example host environment wheel: a deterministic integer order book"
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.95"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[lib]
+name = "tessera_example_orderbook"
+crate-type = ["cdylib"]
+
+[dependencies]
+tessera-rl-core = { path = "../../crates/tessera-rl-core" }
+tessera-rl-macros = { path = "../../crates/tessera-rl-macros" }
+tessera-rl-pyffi = { path = "../../crates/tessera-rl-pyffi", features = ["host"] }
+# The final cdylib enables extension-module (ADR-0062 step 3 terms).
+pyo3 = { version = "0.30", default-features = false, features = ["abi3-py311", "extension-module"] }
+
+# Not part of the main workspace.
+[workspace]
+
+[lints.rust]
+# The expansion of export_host_env! contains no unsafe, and neither does
+# the environment.
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }

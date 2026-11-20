@@ -4,7 +4,7 @@
 # maturin's default of macOS 11. Ignored on other platforms.
 export MACOSX_DEPLOYMENT_TARGET := 13.0
 
-.PHONY: onnx-test py-test-onnx fuzz-check simd-disasm dashboard dashboard-check check-build-id gungraun-threaded fmt fmt-check clippy test doc readme readme-check pre-push deny check-targets wheel-golden py-test-wheels puffer-test py-test-jax pre-push-jax compat-test py-entries pyffi-api pyffi-api-if-nightly py-callouts py-test py-test-hooks py-test-host py-test-torch pre-push-torch gym-equivalence reference-training learning-test learning-calibrate bench bench-quick bench-kernels gungraun gungraun-bless connect4-calibration search-strength
+.PHONY: onnx-test py-test-onnx fuzz-check simd-disasm dashboard dashboard-check check-build-id gungraun-threaded fmt fmt-check clippy test doc readme readme-check pre-push deny check-targets wheel-golden py-test-wheels puffer-test py-test-jax pre-push-jax compat-test py-entries pyffi-api pyffi-api-if-nightly py-callouts py-test py-test-hooks py-test-host py-test-orderbook py-test-torch pre-push-torch gym-equivalence reference-training learning-test learning-calibrate bench bench-quick bench-kernels gungraun gungraun-bless connect4-calibration search-strength
 
 fmt:
 	cargo fmt --all
@@ -41,7 +41,7 @@ readme:
 readme-check:
 	cargo readme -r crates/tessera-rl -t $(CURDIR)/README.tpl --no-title --no-license --no-indent-headings | diff -u README.md -
 
-pre-push: fmt-check clippy test doc readme-check compat-test py-entries pyffi-api-if-nightly py-callouts py-test py-test-hooks py-test-host py-test-wheels dashboard-check simd-disasm fuzz-check
+pre-push: fmt-check clippy test doc readme-check compat-test py-entries pyffi-api-if-nightly py-callouts py-test py-test-hooks py-test-host py-test-orderbook py-test-wheels dashboard-check simd-disasm fuzz-check
 
 # The audited ONNX Runtime version read against the real library (ADR-0057).
 # ONNXRUNTIME_LIB is the libonnxruntime of onnxruntime==1.31.1. Telemetry is
@@ -159,6 +159,19 @@ py-test-host:
 	uv sync --locked --python 3.11
 	uv pip install --python .venv/bin/python --no-deps --reinstall ./tests/host-wheel
 	uv run --locked --python 3.11 pytest -q tests/python/test_host_factory.py tests/python/test_host_protocol.py tests/python/test_host_wheel_python.py
+
+# The out-of-tree example wheel (#272 step 6, ADR-0062 item 11): checks the
+# example crate on its own (fmt, clippy with its own lockfile), installs it
+# next to the first-party wheel, with PyTorch for the flush-to-zero check,
+# runs its tests, then the default environment again.
+ORDERBOOK = examples/host_orderbook/Cargo.toml
+py-test-orderbook:
+	cargo fmt --manifest-path $(ORDERBOOK) --check
+	cargo clippy --manifest-path $(ORDERBOOK) --all-targets --locked -- -D warnings
+	uv sync --locked --python 3.11 --group test --group torch
+	uv pip install --python .venv/bin/python --no-deps --reinstall ./examples/host_orderbook
+	uv run --locked --python 3.11 --group test --group torch pytest -q tests/python/test_host_orderbook.py; \
+	status=$$?; uv sync --locked --python 3.11 || status=1; exit $$status
 
 # The Python tests with PyTorch (marker `torch`), then the default
 # environment again.
