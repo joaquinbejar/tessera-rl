@@ -27,7 +27,10 @@ def test_gungraun_apt_pins_the_baseline_glibc_and_valgrind():
     glibc, valgrind = _const("GLIBC"), _const("VALGRIND")
     assert f'glibc = "ldd (Debian GLIBC {glibc}) 2.41"' in ENV
     assert f'valgrind_package = "{valgrind}"' in ENV
-    assert re.fullmatch(r"\d{8}T\d{6}Z", _const("SNAPSHOT"))
+    # The last snapshot with the image's glibc: libc6-dbg deb13u5 entered the
+    # archive at 20261114T144101Z (snapshot.debian.org). Moving it is a
+    # reviewed change with a re-bless.
+    assert _const("SNAPSHOT") == "20261113T000000Z"
 
 
 def test_gungraun_apt_uses_only_the_snapshot_source():
@@ -57,7 +60,7 @@ def _fakes(tmp_path, versions, ldd, update_rc=0, install_rc=0):
 
     tool("apt-get", f'echo "apt-get $*" >> {log}\ncase " $* " in *" update "*) exit {update_rc};; esac\nexit {install_rc}\n')
     cases = "".join(f"  {pkg}) printf %s '{ver}';;\n" for pkg, ver in versions.items())
-    tool("dpkg-query", f'eval last=\\${{$#}}\ncase "$last" in\n{cases}esac\n')
+    tool("dpkg-query", f'eval last=\\${{$#}}\ncase "$last" in\n{cases}  *) exit 1;;\nesac\n')
     tool("ldd", f"echo '{ldd}'\n")
     tool("rm", f'echo "rm $*" >> {log}\n')
     return fake, log
@@ -67,12 +70,16 @@ def _run(tmp_path, fake):
     dash = shutil.which("dash") or shutil.which("sh")
     # The script writes /etc/apt/sources.list: run a copy that writes into tmp_path.
     copy = tmp_path / "gungraun_apt.sh"
-    copy.write_text(TEXT.replace("/etc/apt/sources.list", str(tmp_path / "sources.list")))
+    text = TEXT.replace("/etc/apt/sources.list", str(tmp_path / "sources.list"))
+    # Never the real files, even where the tests run as root.
+    assert "/etc/" not in text
+    copy.write_text(text)
     env = {"PATH": f"{fake}:/usr/bin:/bin"}
     return subprocess.run([dash, str(copy)], env=env, capture_output=True, text=True, check=False)
 
 
-GOOD = {"libc6": _const("GLIBC"), "libc6-dbg": _const("GLIBC"), "libc-bin": _const("GLIBC"), "valgrind": _const("VALGRIND")}
+GLIBC_PKGS = ("libc6", "libc6-dbg", "libc6-dev", "libc-bin", "libc-dev-bin")
+GOOD = dict({p: _const("GLIBC") for p in GLIBC_PKGS}, valgrind=_const("VALGRIND"))
 GOOD_LDD = f"ldd (Debian GLIBC {_const('GLIBC')}) 2.41"
 
 pytestmark = pytest.mark.skipif(os.name == "nt", reason="POSIX sh with fake tools")
@@ -89,12 +96,20 @@ def test_gungraun_apt_passes_on_the_pinned_versions(tmp_path):
     assert p.stdout.startswith("gungraun_apt: " + GOOD_LDD)
 
 
-@pytest.mark.parametrize("pkg", ["libc6", "libc6-dbg", "libc-bin", "valgrind"])
+@pytest.mark.parametrize("pkg", [*GLIBC_PKGS, "valgrind"])
 def test_gungraun_apt_stops_when_an_installed_version_is_not_the_pin(tmp_path, pkg):
     versions = dict(GOOD, **{pkg: "2.41-12+deb13u5"})
     fake, log = _fakes(tmp_path, versions, GOOD_LDD)
     p = _run(tmp_path, fake)
     assert p.returncode == 1 and f"{pkg} is 2.41-12+deb13u5 after the install" in p.stderr, p.stderr
+
+
+@pytest.mark.parametrize("pkg", ["libc6-dev", "valgrind"])
+def test_gungraun_apt_stops_with_a_message_when_a_package_is_missing(tmp_path, pkg):
+    versions = {k: v for k, v in GOOD.items() if k != pkg}
+    fake, log = _fakes(tmp_path, versions, GOOD_LDD)
+    p = _run(tmp_path, fake)
+    assert p.returncode == 1 and f"gungraun_apt: {pkg} is not installed after the install" in p.stderr, p.stderr
 
 
 def test_gungraun_apt_stops_when_ldd_is_not_the_pin(tmp_path):

@@ -34,11 +34,14 @@ apt-get -o Acquire::Retries=5 install -y --no-upgrade "valgrind=$VALGRIND" "libc
 
 # --no-upgrade covers only the packages named above, not libc6 as a
 # dependency: check what is installed, and stop if it is not the pin.
-for pkg in libc6 libc6-dbg libc-bin; do
-    got="$(dpkg-query -W -f '${Version}' "$pkg")"
+version() { # an installed package's version, or a failure that names it
+    dpkg-query -W -f '${Version}' "$1" 2>/dev/null || fail "$1 is not installed after the install"
+}
+for pkg in libc6 libc6-dbg libc6-dev libc-bin libc-dev-bin; do
+    got="$(version "$pkg")"
     [ "$got" = "$GLIBC" ] || fail "$pkg is $got after the install, not $GLIBC"
 done
-got="$(dpkg-query -W -f '${Version}' valgrind)"
+got="$(version valgrind)"
 [ "$got" = "$VALGRIND" ] || fail "valgrind is $got after the install, not $VALGRIND"
 ldd_line="$(ldd --version | head -1)"
 case "$ldd_line" in
