@@ -261,6 +261,16 @@ def run_pipelined(env, steps: int = STEPS) -> dict:
 
 
 def run_async(env, steps: int = STEPS) -> dict:
+    """Every instance's first ``steps`` steps, hashed, in Async batches.
+
+    An instance that has its ``steps`` recorded keeps being sent, and its
+    later outputs are not hashed. An Async ``recv`` refuses instead of
+    waiting when fewer ids than a batch are in flight or ready (ADR-0047),
+    and batches mix instances whenever timing varies, so stopping the
+    finished ones could leave one to three ids that can never fill a batch
+    (#322: "3 in flight and 0 ready cannot fill a batch of 4"). The extra
+    steps change no hashed output: each instance's rows are its first
+    ``steps`` steps, as in the other modes."""
     trace = Trace(env.num_envs)
     counts = [0] * env.num_envs
     batch = env.reset()
@@ -269,19 +279,15 @@ def run_async(env, steps: int = STEPS) -> dict:
     remaining = env.num_envs * steps
     while remaining:
         batch = env.recv()
-        trace.add(batch.ids, batch.step)
-        remaining -= len(batch.ids)
-        for i in batch.ids.tolist():
-            counts[i] += 1
-        keep = [(row, int(i)) for row, i in enumerate(batch.ids) if counts[int(i)] < steps]
-        if keep:
-            rows = [r for r, _ in keep]
-            ids = [i for _, i in keep]
-            view = type(batch.step)(
-                observations={k: v[rows] for k, v in batch.step.observations.items()},
-                **{f: (None if a is None else a[rows]) for f, a in zip(batch.step._fields, batch.step) if f != "observations"},
-            )
-            env.send(ids, actions_for(ids, view, env.agents, env.action_choices, lambda i: counts[i] + 1, _layout(env)))
+        ids = [int(i) for i in batch.ids]
+        rows = [r for r, i in enumerate(ids) if counts[i] < steps]
+        if rows:
+            trace.add([ids[r] for r in rows], _rows(batch.step, rows))
+            for r in rows:
+                counts[ids[r]] += 1
+            remaining -= len(rows)
+        if remaining:
+            env.send(ids, actions_for(ids, batch.step, env.agents, env.action_choices, lambda i: counts[i] + 1, _layout(env)))
     return {"trace": trace.result()}
 
 
