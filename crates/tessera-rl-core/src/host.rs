@@ -144,6 +144,19 @@ pub trait HostEnvironment: Send + Sized + 'static {
 
     /// Builds one instance; it may allocate.
     ///
+    /// Each pool build calls it once per instance, in index order
+    /// (instance 0 first), one call after the other on the thread that
+    /// builds the pool; the `k`-th call of that build builds pool instance
+    /// `k`. Every call of a build comes before any method is called on any
+    /// of its instances. The functions that take only the configuration
+    /// (`EnvConfig::validate`, [`HostEnvironment::initial_agents`] and the
+    /// spaces) run before the first call and are not ordered against it. An
+    /// environment that keeps per-instance resources can rely on that order;
+    /// it cannot tell one build from the next (two pools from one
+    /// configuration, or a build retried after a failure), so a count it
+    /// keeps across builds runs on. If a call fails, no later instance of
+    /// that build is built and the instances already built are dropped.
+    ///
     /// # Errors
     ///
     /// [`HostError`] when the configuration or the environment's own setup
