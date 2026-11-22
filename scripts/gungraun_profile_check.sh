@@ -29,7 +29,8 @@ for crate in "$@"; do
     if grep -vqE -- '-C codegen-units=1( |`|$)' <<<"$mine"; then
         fail "$crate was compiled without -C codegen-units=1: not the gate's profile"
     fi
-    if grep -qE -- '-C lto=(fat|thin|true|yes|on)' <<<"$mine"; then
+    # `lto = true` reaches rustc as a bare `-C lto`, the others as `-C lto=<value>`.
+    if grep -qE -- '-C lto( |`|$|=(fat|thin|true|yes|on))' <<<"$mine"; then
         fail "$crate was compiled with LTO: not the gate's profile"
     fi
 done

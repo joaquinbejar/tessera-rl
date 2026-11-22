@@ -129,10 +129,25 @@ def test_gungraun_profile_every_lto_setting_fails(tmp_path, value):
     assert "games_instructions was compiled with LTO" in p.stderr
 
 
-@pytest.mark.parametrize("value", ["off", "no", "false"])
-def test_gungraun_profile_lto_off_passes(tmp_path, value):
-    p = _profile(tmp_path, [_rustc("games_instructions", f"-C lto={value} -C codegen-units=1"), _rustc("tessera_rl_games", "-C codegen-units=1")])
+@pytest.mark.parametrize("flags", ["-C lto=off", "-C lto=no", "-C lto=false", "-C linker-plugin-lto"])
+def test_gungraun_profile_lto_off_passes(tmp_path, flags):
+    p = _profile(tmp_path, [_rustc("games_instructions", f"{flags} -C codegen-units=1"), _rustc("tessera_rl_games", "-C codegen-units=1")])
     assert p.returncode == 0, p.stderr
+
+
+def test_gungraun_profile_bare_lto_before_another_flag_fails(tmp_path):
+    # Cargo writes `lto = true` as a bare `-C lto` (cargo 1.100), with no value.
+    p = _profile(tmp_path, [_rustc("games_instructions", "-C lto -C codegen-units=1"), _rustc("tessera_rl_games", "-C codegen-units=1")])
+    assert p.returncode == 1
+    assert "games_instructions was compiled with LTO" in p.stderr
+
+
+def test_gungraun_profile_bare_lto_at_the_end_of_the_line_fails(tmp_path):
+    line = _rustc("games_instructions", "-C codegen-units=1").replace(" -C debuginfo=0`", " -C lto`")
+    assert line.endswith(" -C lto`")
+    p = _profile(tmp_path, [line, _rustc("tessera_rl_games", "-C codegen-units=1")])
+    assert p.returncode == 1
+    assert "games_instructions was compiled with LTO" in p.stderr
 
 
 def test_gungraun_profile_missing_rustc_lines_fail_closed(tmp_path):
