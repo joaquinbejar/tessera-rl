@@ -59,7 +59,7 @@ def test_gungraun_bless_image_digest_equals_the_gate_job():
 def test_gungraun_bless_container_options_and_tools_equal_the_gate_job():
     for pattern in [
         r"^      options: (.*)$",
-        r"^      - run: (apt-get .*valgrind.*)$",
+        r"^      - run: (scripts/gungraun_apt\.sh)$",
         r"^      - run: (cargo install --locked gungraun-runner .*)$",
     ]:
         assert _one(pattern, JOB) == _one(pattern, GATE)
