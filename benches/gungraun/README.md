@@ -23,7 +23,7 @@ Run it in the baseline's image:
 docker run --rm --security-opt seccomp=unconfined \
   -e TESSERA_GUNGRAUN_IMAGE=rust:1.99.1@sha256:09027f873d45b8ecd1dc86f1fa13b7a62b875c961f017a0e331267b350430137 \
   -v "$PWD":/src -w /src rust:1.99.1@sha256:09027f873d45b8ecd1dc86f1fa13b7a62b875c961f017a0e331267b350430137 \
-  sh -c 'apt-get update && apt-get install -y valgrind=1:3.24.0-3 &&
+  sh -c 'scripts/gungraun_apt.sh &&
          cargo install --locked gungraun-runner --version 0.20.0 &&
          scripts/gungraun.sh check'
 ```

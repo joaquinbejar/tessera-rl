@@ -412,7 +412,8 @@ jobs:
       TESSERA_GUNGRAUN_IMAGE: rust:1.99.1@sha256:09027f873d45b8ecd1dc86f1fa13b7a62b875c961f017a0e331267b350430137
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - run: apt-get update && apt-get install -y valgrind=1:3.24.0-3
+      # Valgrind from a fixed Debian snapshot, glibc checked (scripts/gungraun_apt.sh).
+      - run: scripts/gungraun_apt.sh
       - run: cargo install --locked gungraun-runner --version 0.20.0
       - run: scripts/gungraun.sh check
       # The container runs as root: give the workspace back to the runner
