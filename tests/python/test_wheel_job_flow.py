@@ -35,6 +35,7 @@ case " $* " in *"/checks.py "*) shift; exec python3 -I "$@" ;; esac
 prev=""
 for a in "$@"; do [ "$prev" = --out ] && echo "{}" > "$a"; prev="$a"; done
 case " $* " in *" compare "*) exit "${FAKE_COMPARE_EXIT:-0}" ;; esac
+case " $* " in *"test_host_orderbook.py"*) exit "${FAKE_ORDERBOOK_EXIT:-0}" ;; esac
 exit 0
 """
 
@@ -55,7 +56,7 @@ def _uv_tarball(log: Path, payload: Path) -> bytes:
     return buf.getvalue()
 
 
-def run(tmp_path: Path, *profile: str, compare_exit: int = 0):
+def run(tmp_path: Path, *profile: str, compare_exit: int = 0, orderbook: str | None = None, orderbook_exit: int = 0):
     """The real wheel_job.sh and wheel_num_tests.sh in a scratch root, with fake tools first on PATH."""
     root, fake, payload, log = tmp_path / "root", tmp_path / "fake", tmp_path / "payload", tmp_path / "log"
     for d in (root / "scripts", fake, payload):
@@ -72,8 +73,14 @@ def run(tmp_path: Path, *profile: str, compare_exit: int = 0):
     _tool(fake / "rustup", f'echo "rustup $*" >> {log}\n')
     _tool(fake / "cargo", f'echo "cargo $*" >> {log}\n')
     digest = lambda p: hashlib.sha256(p.read_bytes()).hexdigest()  # noqa: E731
-    env = {k: v for k, v in os.environ.items() if k not in AMBIENT and not k.startswith(("CARGO_PROFILE_", "CARGO_TARGET_"))}
-    env.update(PATH=f"{fake}:{os.environ['PATH']}", WHEEL_RUN=str(tmp_path / "wr"), FAKE_COMPARE_EXIT=str(compare_exit), FAKE_LOG=str(log))
+    # TESSERA_WHEEL_ORDERBOOK is the job's own (wheels.yml sets it on two
+    # jobs, whose suite runs this file): it is set here only when asked (#313).
+    env = {k: v for k, v in os.environ.items()
+           if k not in AMBIENT and k != "TESSERA_WHEEL_ORDERBOOK" and not k.startswith(("CARGO_PROFILE_", "CARGO_TARGET_"))}
+    env.update(PATH=f"{fake}:{os.environ['PATH']}", WHEEL_RUN=str(tmp_path / "wr"), FAKE_COMPARE_EXIT=str(compare_exit), FAKE_LOG=str(log),
+               FAKE_ORDERBOOK_EXIT=str(orderbook_exit))
+    if orderbook is not None:
+        env["TESSERA_WHEEL_ORDERBOOK"] = orderbook
     p = subprocess.run(["bash", "scripts/wheel_job.sh", "x86_64-unknown-linux-gnu", "manylinux_2_28",
                         digest(payload / "rustup-init"), digest(payload / "uv.tar.gz"), *profile],
                        env=env, cwd=root, capture_output=True, text=True, check=False)
@@ -154,3 +161,47 @@ def test_wheel_job_refuses_the_onnx_feature_on_other_targets(tmp_path, target):
     assert p.returncode == 2, (p.returncode, p.stderr)
     assert f"the onnx feature is not enabled for {target}" in p.stderr
     assert not marker.exists(), "curl was called before the refusal"
+
+
+def test_wheel_job_orderbook_leg_builds_installs_and_tests_the_example(tmp_path):
+    # #313: the flag adds the example's build, its --no-deps install into the
+    # first-party venv, the import check and the test file on its own.
+    p, lines, root, wr = run(tmp_path, "release", orderbook="1")
+    assert p.returncode == 0, p.stderr
+    builds = _builds(lines)
+    assert len(builds) == 2, builds
+    assert "--profile release" in builds[0] and "-m examples/host_orderbook/Cargo.toml" not in builds[0]
+    ob = builds[1]
+    assert "--release --locked --target x86_64-unknown-linux-gnu" in ob and "/wr/orderbook-dist" in ob
+    assert ob.endswith("-m examples/host_orderbook/Cargo.toml --compatibility manylinux_2_28"), ob
+    install = [x for x in lines if x.startswith("uv pip install") and "orderbook-dist" in x]
+    assert len(install) == 1 and "--no-deps" in install[0] and "/venv/bin/python" in install[0]
+    text = "\n".join(lines)
+    assert "import tessera_example_orderbook._tessera_host" in text
+    alone = [x for x in lines if "-m pytest" in x and x.rstrip().endswith("--rootdir " + str(root))]
+    assert any("tests/python/test_host_orderbook.py" in x for x in alone), alone
+    assert "orderbook_leg=1 orderbook=0" in p.stdout
+    assert json.loads((root / "checks.json").read_text())["checks"]["orderbook"] == 0
+
+
+def test_wheel_job_orderbook_leg_failure_fails_the_job_after_every_check(tmp_path):
+    p, lines, root, wr = run(tmp_path, "release", orderbook="1", orderbook_exit=3)
+    assert p.returncode == 1
+    assert "orderbook_leg=1 orderbook=3" in p.stdout
+    assert json.loads((root / "checks.json").read_text())["checks"]["orderbook"] == 3
+    assert any(x.startswith("cargo test -p tessera-rl-num") for x in lines)
+
+
+@pytest.mark.parametrize("flag", [None, "0"], ids=["absent", "0"])
+def test_wheel_job_orderbook_leg_is_off_unless_asked(tmp_path, flag):
+    p, lines, root, wr = run(tmp_path, "release", orderbook=flag)
+    assert p.returncode == 0, p.stderr
+    # (tmp_path holds the test's name, so match the leg's own words.)
+    assert len(_builds(lines)) == 1
+    assert not any(w in x for x in lines for w in ("orderbook-dist", "test_host_orderbook.py", "tessera_example_orderbook"))
+    assert "orderbook" not in json.loads((root / "checks.json").read_text())["checks"]
+
+
+def test_wheel_job_orderbook_leg_refuses_other_values(tmp_path):
+    p, lines, root, wr = run(tmp_path, "release", orderbook="yes")
+    assert p.returncode == 2 and "TESSERA_WHEEL_ORDERBOOK must be 0 or 1" in p.stderr
