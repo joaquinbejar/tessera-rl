@@ -193,15 +193,19 @@ def test_wheel_job_orderbook_leg_builds_installs_and_tests_the_example():
     # It must import, and its test file runs on its own: a skip cannot pass.
     assert "import tessera_example_orderbook._tessera_host" in JOB
     assert re.search(r'-m pytest -q -rs -p no:cacheprovider \\\n\s+"\$root/tests/python/test_host_orderbook.py"', JOB)
-    # Its status is recorded and fails the job.
+    # A failing import or test sets the status (not `|| true`), which is
+    # recorded and fails the job.
+    assert re.search(r'--rootdir "\$root"; \} \|\| orderbook=\$\?$', JOB, re.M)
     assert 'statuses+=(orderbook="$orderbook")' in JOB
     assert JOB.rstrip().endswith('[ "$orderbook" -eq 0 ]')
     # The example wheel is not uploaded.
     assert "orderbook-dist" not in WORKFLOW
 
 
-def test_wheels_orderbook_golden_is_the_x86_64_value():
-    # The book is integer-only: GOLDEN_11 holds on every platform (#313).
+def test_wheels_orderbook_golden_is_one_pinned_pair_asserted_by_the_example():
+    # The book is integer-only, so one GOLDEN_11 holds on every platform
+    # (#313); this pins its shape and the assertion, and the legs' runs
+    # check the value.
     src = (ROOT / "tests" / "python" / "test_host_orderbook.py").read_text()
     assert re.search(r"^GOLDEN_11 = \(\n    \"[0-9a-f]{64}\",\n    \"[0-9a-f]{64}\",\n\)$", src, re.M)
     assert "assert first == GOLDEN_11" in src
