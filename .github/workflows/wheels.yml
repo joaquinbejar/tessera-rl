@@ -148,6 +148,9 @@ jobs:
         shell: bash
     env:
       WHEEL_RUN: ${{ github.workspace }}/.wheel-run
+      # The host example wheel's checks on aarch64 Linux (#313): CI runs them
+      # on x86-64 only (make py-test-orderbook).
+      TESSERA_WHEEL_ORDERBOOK: "1"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - run: scripts/wheel_job.sh aarch64-unknown-linux-gnu manylinux_2_28 9f608c142e0e38a78957d0661ba1dfaf0b6fb37184cfaa4b9a0aa57af6184282 229e194255c7958d86d56e8790d969a6f74736592133f0dfd0076f754c642c1d release
@@ -175,6 +178,8 @@ jobs:
     timeout-minutes: 90
     env:
       WHEEL_RUN: ${{ github.workspace }}/.wheel-run
+      # The host example wheel's checks on macOS arm64 (#313).
+      TESSERA_WHEEL_ORDERBOOK: "1"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - run: scripts/wheel_job.sh aarch64-apple-darwin "" 63752a1919a3a4793173ec70f8f212621a7ce38ba6a246095984482f4de20f9f 60fbd5c8a1ed681845eea28d9d622fcde03c51e91a43465b64a1e17db1ed3472 release

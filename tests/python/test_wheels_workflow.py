@@ -112,8 +112,11 @@ def test_wheels_other_targets_keep_the_default_release_profile():
 
 def test_wheel_job_builds_with_the_named_profile_only():
     assert 'args=(--profile "$profile" --locked --target "$target" --out dist "${features[@]}")' in JOB
-    # The only --release build is W0, for the comparison, and only under the wheel profile.
-    assert JOB.count("--release --locked --target") == 1
+    # The only --release build of the first-party wheel is W0, for the
+    # comparison, and only under the wheel profile. The other --release build
+    # is the host example's (ob_args, #313), which is not tessera-rl.
+    assert JOB.count("--release --locked --target") == 2
+    assert JOB.count('ob_args=(--release --locked --target "$target" --out "$WHEEL_RUN/orderbook-dist"') == 1
     assert 'w0_args=(--release --locked --target "$target" --out "$WHEEL_RUN/w0-dist" "${features[@]}")' in JOB
     assert re.search(r'^if \[ "\$profile" = wheel \]; then\n.*\n    nice -n 10 uvx [^\n]* build "\$\{w0_args\[@\]\}"\nfi$', JOB, re.M)
     assert re.search(r'^    release \| wheel\) ;;$', JOB, re.M)
@@ -150,3 +153,59 @@ def test_wheel_job_enables_onnx_only_on_linux_glibc_and_macos():
     assert re.search(r'^    \*-unknown-linux-gnu \| \*-apple-darwin\) features=\(--features onnx\) ;;$', JOB, re.M)
     # No Windows wheel job exists, so no wheel is built for Windows with it.
     assert not re.search(r"runs-on: .*windows", WORKFLOW)
+
+
+# #313: the host example wheel's checks on aarch64 Linux and macOS arm64.
+
+
+def _env_flag(job: str):
+    m = re.search(r'^      TESSERA_WHEEL_ORDERBOOK: "?(\w+)"?$', _job(job), re.M)
+    return m and m.group(1)
+
+
+def test_wheels_orderbook_leg_runs_on_aarch64_linux_and_macos_only():
+    assert _env_flag("linux-aarch64") == "1"
+    assert _env_flag("macos") == "1"
+    # x86-64 runs it in CI's python job (make py-test-orderbook).
+    assert _env_flag("linux") is None
+    assert WORKFLOW.count("TESSERA_WHEEL_ORDERBOOK") == 2
+
+
+def test_wheels_orderbook_leg_stays_dispatch_only_with_an_approved_window():
+    # No tag or schedule trigger: release builds stay a manual dispatch
+    # with the coordinator's window (the 0.3.0 plan).
+    triggers = re.search(r"^on:\n(.*?)\n\S", WORKFLOW, re.M | re.DOTALL).group(1)
+    assert re.findall(r"^  (\w+):", triggers, re.M) == ["workflow_dispatch"]
+    assert re.search(r"^      approved_window:\n(?:        .*\n)*?        required: true$", triggers, re.M)
+    assert re.search(r"^    needs: linux$", _job("macos"), re.M)
+
+
+def test_wheel_job_orderbook_leg_builds_installs_and_tests_the_example():
+    # Off unless asked, and only 0 or 1.
+    assert 'orderbook_leg="${TESSERA_WHEEL_ORDERBOOK:-0}"' in JOB
+    assert re.search(r"^    0 \| 1\) ;;$", JOB, re.M)
+    # Built for the same target and tag, release profile, from its own lock.
+    build = re.search(r"ob_args=\((.*?)\)\n", JOB, re.DOTALL).group(1).split()
+    assert {"--release", "--locked", "--target", '"$target"', "-m", "examples/host_orderbook/Cargo.toml"} <= set(build)
+    assert 'ob_args+=(--compatibility "$compatibility")' in JOB
+    # Installed with no dependencies of its own, next to the first-party wheel.
+    assert re.search(r'uv pip install --python "\$venv/bin/python" --no-deps "\$WHEEL_RUN"/orderbook-dist/\*\.whl', JOB)
+    # It must import, and its test file runs on its own: a skip cannot pass.
+    assert "import tessera_example_orderbook._tessera_host" in JOB
+    assert re.search(r'-m pytest -q -rs -p no:cacheprovider \\\n\s+"\$root/tests/python/test_host_orderbook.py"', JOB)
+    # A failing import or test sets the status (not `|| true`), which is
+    # recorded and fails the job.
+    assert re.search(r'--rootdir "\$root"; \} \|\| orderbook=\$\?$', JOB, re.M)
+    assert 'statuses+=(orderbook="$orderbook")' in JOB
+    assert JOB.rstrip().endswith('[ "$orderbook" -eq 0 ]')
+    # The example wheel is not uploaded.
+    assert "orderbook-dist" not in WORKFLOW
+
+
+def test_wheels_orderbook_golden_is_one_pinned_pair_asserted_by_the_example():
+    # The book is integer-only, so one GOLDEN_11 holds on every platform
+    # (#313); this pins its shape and the assertion, and the legs' runs
+    # check the value.
+    src = (ROOT / "tests" / "python" / "test_host_orderbook.py").read_text()
+    assert re.search(r"^GOLDEN_11 = \(\n    \"[0-9a-f]{64}\",\n    \"[0-9a-f]{64}\",\n\)$", src, re.M)
+    assert "assert first == GOLDEN_11" in src

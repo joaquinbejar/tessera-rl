@@ -13,6 +13,14 @@
 # determinism and compares the two (docs/reviews/pgo-wheels-design.md section 7
 # item 2): determinism-w0.json and compare.json, and a difference fails the job.
 #
+# With TESSERA_WHEEL_ORDERBOOK=1 (wheels.yml sets it on the aarch64 Linux and
+# macOS jobs, #313), the job also builds the out-of-tree host example wheel
+# (examples/host_orderbook, #272 step 6) for the same target, installs it next
+# to the first-party wheel and runs tests/python/test_host_orderbook.py against
+# the two, the checks CI's `make py-test-orderbook` runs on x86-64. Its
+# determinism test asserts GOLDEN_11. The example wheel is not uploaded: it is
+# not published.
+#
 # Everything it writes goes under $WHEEL_RUN, which the workflow removes, except
 # dist/ and the report that it copies to the workspace for upload. Runs at nice 10.
 set -euo pipefail
@@ -27,6 +35,11 @@ case "$profile" in
     *) echo "wheel_job: profile must be release or wheel, got '$profile'" >&2; exit 2 ;;
 esac
 : "${WHEEL_RUN:?the per-run directory}"
+orderbook_leg="${TESSERA_WHEEL_ORDERBOOK:-0}"
+case "$orderbook_leg" in
+    0 | 1) ;;
+    *) echo "wheel_job: TESSERA_WHEEL_ORDERBOOK must be 0 or 1, got '$orderbook_leg'" >&2; exit 2 ;;
+esac
 # The ONNX evaluator (ADR-0057 section 6): every wheel built here, W0 included,
 # has the extension's `onnx` feature, on the targets ADR-0057 enables (Linux
 # glibc and macOS). Windows is not enabled until its loading rows exist.
@@ -90,6 +103,13 @@ if [ "$profile" = wheel ]; then
     nice -n 10 uvx --python 3.11 "maturin==$MATURIN_VERSION" build "${w0_args[@]}"
 fi
 nice -n 10 uvx --python 3.11 "maturin==$MATURIN_VERSION" build "${args[@]}"
+if [ "$orderbook_leg" = 1 ]; then
+    # The example wheel, release profile, for the same target and tag.
+    ob_args=(--release --locked --target "$target" --out "$WHEEL_RUN/orderbook-dist"
+        -m examples/host_orderbook/Cargo.toml)
+    [ -z "$compatibility" ] || ob_args+=(--compatibility "$compatibility")
+    nice -n 10 uvx --python 3.11 "maturin==$MATURIN_VERSION" build "${ob_args[@]}"
+fi
 
 TESSERA_GOLDEN_ACTIONS="$WHEEL_RUN/golden-actions" nice -n 10 \
     cargo test --release --locked -p tessera-rl-classic -p tessera-rl-games --test golden
@@ -101,10 +121,14 @@ venv="$WHEEL_RUN/venv"
 uv venv --python 3.11 "$venv"
 uv pip install --python "$venv/bin/python" dist/*.whl numpy==2.4.6 xxhash==4.0.2 \
     pytest==9.2.0 gymnasium==1.4.0 pettingzoo==1.27.0
+if [ "$orderbook_leg" = 1 ]; then
+    # --no-deps: its one dependency, tessera-rl, is the wheel just installed.
+    uv pip install --python "$venv/bin/python" --no-deps "$WHEEL_RUN"/orderbook-dist/*.whl
+fi
 mkdir -p "$WHEEL_RUN/run"
 cd "$WHEEL_RUN/run"
 # Every check runs, and its exit status is recorded against the wheel's sha256.
-anchor=0 suite=0 num=0 onnx=0
+anchor=0 suite=0 num=0 onnx=0 orderbook=0
 # The installed wheel has the ONNX evaluator: onnx_load on a missing path is
 # the missing-library error, not "no ONNX evaluator". Nothing is loaded (the
 # path never resolves), and telemetry is off anyway.
@@ -127,6 +151,14 @@ nice -n 10 "$venv/bin/python" -I "$root/tools/wheel_golden.py" \
 # decision about them.
 nice -n 10 "$venv/bin/python" -I -m pytest -q -rs -p no:cacheprovider "$root/tests/python" --rootdir "$root" \
     --ignore="$root/tests/python/test_bench.py" || suite=$?
+if [ "$orderbook_leg" = 1 ]; then
+    # On its own as well, so a skip cannot pass for a run: the example must
+    # import from the venv, and the file's tests run against the two wheels
+    # (the torch case skips: the venv has no torch, as in the suite).
+    { "$venv/bin/python" -I -c 'import tessera_example_orderbook._tessera_host, tessera_rl; print("wheel_job: orderbook example wheel imports")' &&
+        nice -n 10 "$venv/bin/python" -I -m pytest -q -rs -p no:cacheprovider \
+            "$root/tests/python/test_host_orderbook.py" --rootdir "$root"; } || orderbook=$?
+fi
 nice -n 10 "$venv/bin/python" -I "$root/tools/pgo/determinism.py" record --wheel "$wheel" --out "$root/determinism.json"
 
 compare=0
@@ -146,7 +178,8 @@ cd "$root"
 num_profile=""
 [ "$profile" = release ] || num_profile="$profile"
 WHEEL_CARGO_PROFILE="$num_profile" scripts/wheel_num_tests.sh || num=$?
-"$venv/bin/python" -I tools/pgo/checks.py --wheel "$wheel" --out checks.json \
-    golden_anchor="$anchor" python_suite="$suite" num_tests="$num" onnx_smoke="$onnx"
-echo "wheel_job: profile=$profile anchor=$anchor suite=$suite num=$num compare=$compare onnx=$onnx"
-[ "$anchor" -eq 0 ] && [ "$suite" -eq 0 ] && [ "$num" -eq 0 ] && [ "$compare" -eq 0 ] && [ "$onnx" -eq 0 ]
+statuses=(golden_anchor="$anchor" python_suite="$suite" num_tests="$num" onnx_smoke="$onnx")
+[ "$orderbook_leg" = 0 ] || statuses+=(orderbook="$orderbook")
+"$venv/bin/python" -I tools/pgo/checks.py --wheel "$wheel" --out checks.json "${statuses[@]}"
+echo "wheel_job: profile=$profile anchor=$anchor suite=$suite num=$num compare=$compare onnx=$onnx orderbook_leg=$orderbook_leg orderbook=$orderbook"
+[ "$anchor" -eq 0 ] && [ "$suite" -eq 0 ] && [ "$num" -eq 0 ] && [ "$compare" -eq 0 ] && [ "$onnx" -eq 0 ] && [ "$orderbook" -eq 0 ]
