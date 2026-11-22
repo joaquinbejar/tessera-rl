@@ -51,10 +51,22 @@ space, and an action is one integer per head. Its heads are conditional,
 which a Gymnasium ``MultiDiscrete`` mask (one independent mask per
 component) cannot express, so its observations carry no ``action_mask``.
 The masks are in ``infos[agent]``, and nothing else is (SPEC 11.3):
-``"action_mask"`` is the root head only (for the RTS ``[units, types]``),
-and ``"action_masks"`` every head's mask, one array per head of an entity
-group in the shapes of ``tessera_rl.masks`` (``[units, types]``,
-``[units, types, window]``, ``[units, types, products]``). An order other than the no-op on an empty or dead unit slot
+
+- ``"action_masks"`` holds the exact masks: every head's mask, one array per
+  head of an entity group in the shapes of ``tessera_rl.masks``
+  (``[units, types]``, ``[units, types, window]``, ``[units, types, products]``);
+- ``"action_mask"`` is a tuple of ``int8`` masks, one per ``MultiDiscrete``
+  component in ``nvec`` order (#311), which ``action_space.sample(mask)``
+  accepts. A root head's entry is its exact mask, so a sampled root choice
+  is legal. A conditional head's entry is the union over all its parent
+  choices, legal or not: choice ``c`` is marked legal if the mask allows it
+  under any parent choice. A sampled child is therefore often illegal for
+  the parent actually sampled (for the RTS most sampled joint actions are);
+  the tuple makes ``sample`` run and keeps root heads legal, and legal
+  sampling of conditional heads needs ``"action_masks"``.
+
+The Gymnasium adapter (``tessera_rl.gym``) keeps its own format:
+its ``info["action_mask"]`` is the root head's array, not this tuple. An order other than the no-op on an empty or dead unit slot
 counts as an illegal action: give empty slots zeros. Outputs are always owned copies, so
 they stay valid across steps. One adapter runs one instance with
 auto-reset disabled: call ``reset`` to start a new episode.
@@ -202,6 +214,24 @@ def _exact_action(value, n: int) -> int:
     return action
 
 
+def relaxed_masks(row, mask_heads) -> tuple[np.ndarray, ...]:
+    """One ``int8`` mask per discrete head, in head order (``nvec`` order),
+    for ``MultiDiscrete.sample`` (#311). ``row`` is one agent's mask row;
+    ``mask_heads`` are ``(offset, parents, size)`` per head
+    (``Env.mask_heads``). A head with parents is relaxed to the union over
+    them all (legal or not): choice ``c`` is legal if any parent choice
+    allows it, so a combination sampled from these masks can still be
+    illegal."""
+    row = np.asarray(row)
+    out = []
+    for offset, parents, size in mask_heads:
+        width = int(np.prod(parents, dtype=np.int64)) * size
+        block = row[offset : offset + width].reshape(*parents, size)
+        legal = block.reshape(-1, size).any(axis=0)
+        out.append(legal.astype(np.int8))
+    return tuple(out)
+
+
 def agent_name(slot: int, generation: int) -> str:
     """The PettingZoo name of the agent (slot, generation) (ADR-0013)."""
     return f"agent_{slot}" if generation == 0 else f"agent_{slot}_g{generation}"
@@ -253,12 +283,14 @@ class _Agents:
         return tuple(np.array(v[0, 0], dtype=np.int8) for v in head_views(m, self.env.mask_heads, self.env.entity_group_heads))
 
     def info(self, slot: int) -> dict:
-        """``infos[agent]``: that agent's head masks for a multi-head
-        environment (R2: nothing else), else empty."""
+        """``infos[agent]``: that agent's masks for a multi-head environment
+        (R2: nothing else), else empty. ``action_mask`` is the relaxed tuple
+        (#311), ``action_masks`` the exact masks."""
         if not self.multi:
             return {}
         heads = self.head_masks(slot)
-        return {"action_mask": heads[0], "action_masks": heads}
+        relaxed = relaxed_masks(self.last.masks[0, slot], self.env.mask_heads)
+        return {"action_mask": relaxed, "action_masks": heads}
 
     def check(self, value):
         """One agent's action, checked: an index, or one per head."""
@@ -520,7 +552,9 @@ class _CheckedCycle(parallel_to_aec_wrapper):
         agent = self.agent_selection
         # A live agent's action is always checked, so None raises here.
         if not (self.terminations[agent] or self.truncations[agent]):
-            action = _exact_action(action, self.action_space(agent).n)
+            # The Parallel environment's own check: one index, or one per
+            # head for a MultiDiscrete space (#311).
+            action = self.env._a.check(action)
         else:
             # An agent that spawned in the episode's last step is born
             # flushed: it has no buffered action, which the wrapper's dead

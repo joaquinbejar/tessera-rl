@@ -18,3 +18,5 @@ module-name = "_tessera_host"
 "test/FactoryCounter-v1" = "_tessera_host:make"
 # The spawning environment of the ADR-0013 respawn test (#71).
 "test/Respawn-v1" = "_tessera_host:make_respawn"
+# The two-head masked environment of the multi-head AEC test (#311).
+"test/MultiHead-v1" = "_tessera_host:make_multihead"

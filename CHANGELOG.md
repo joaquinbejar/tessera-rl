@@ -19,7 +19,12 @@ the API is not stable, and any 0.x release may break it.
 
 ### Changed
 
+- **PettingZoo multi-head masks (#311):** for an environment with several masked discrete heads, `tessera_rl.pz`'s `infos[agent]["action_mask"]` is now a tuple of `int8` masks, one per `MultiDiscrete` component in `nvec` order, which `MultiDiscrete.sample` accepts (it was the root head's array). A conditional head's entry is the union over its parents, so a sampled action can still be illegal; the exact masks stay in `infos[agent]["action_masks"]`. The Gymnasium adapter's `info["action_mask"]` is unchanged.
 - `OutputView.__dlpack__` raises `TypeError` for an unknown keyword argument (it was ignored); its argument rules are now shared with host views (#272).
+
+### Fixed
+
+- PettingZoo AEC by cycle buffering (`tessera_rl.pz.aec_env` over a Simultaneous environment) accepts a multi-head action: its action check used `action_space(agent).n`, which a `MultiDiscrete` space does not have (#311).
 
 ## [0.2.0] - 2026-11-14
 
