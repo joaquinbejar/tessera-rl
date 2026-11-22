@@ -2,8 +2,8 @@
 
 //! A host environment crate that depends on core only (ADR-0062,
 //! ADR-0065 item 3): a counter whose observation is its step and the
-//! config's offset, and a second environment registered without a
-//! factory.
+//! config's offset, a second environment registered without a factory,
+//! and a spawning environment for the ADR-0013 respawn test (#71).
 
 use tessera_rl_core::io::{Actions, ObsWriter};
 use tessera_rl_core::space::{BoxBounds, DType, Space};
@@ -191,3 +191,137 @@ impl HostEnvironment for Unfactored {
 }
 
 tessera_rl_core::register_host!(Unfactored, id = "test/Unfactored-v1");
+
+/// The respawner's configuration.
+#[derive(EnvConfig, Debug, Clone, PartialEq)]
+pub struct RespawnConfig {
+    /// Steps per episode.
+    #[config(default = 6, range = 1..=1000)]
+    pub episode: u32,
+    /// The step (1-based) in which agent 1 dies; 0 never.
+    #[config(default = 2)]
+    pub die_step: u32,
+    /// Steps from the death to the spawn of the next agent in slot 1: at
+    /// least 1, since a slot freed by death is reused no earlier than the
+    /// next step (ADR-0013).
+    #[config(default = 1, range = 1..=1000)]
+    pub respawn_delay: u32,
+    /// Agents alive at reset: 2, or 1 for a slot 1 empty at reset, whose
+    /// first occupant spawns `respawn_delay` steps in (at generation 1).
+    #[config(default = 2, range = 1..=2)]
+    pub initial: u32,
+}
+
+/// Two agents; agent 1 dies once per episode and a new agent spawns into
+/// its slot later (ADR-0013 respawn, #71). Every alive agent's reward is
+/// 1 plus its action, and a spawning agent's is 0.25 in its spawn step;
+/// its observation is the step and its own spawn count.
+#[derive(Debug)]
+pub struct Respawner {
+    cfg: RespawnConfig,
+    step: u32,
+    /// Whether slot 1 holds an agent.
+    occupied: bool,
+    /// The step at which slot 1 was freed (0 for empty at reset).
+    freed_at: Option<u32>,
+    /// Agents spawned into slot 1 this episode.
+    spawns: u32,
+}
+
+/// The respawner's id.
+pub const RESPAWN_ID: &str = "test/Respawn-v1";
+
+/// The respawner's slot count (its `MAX_AGENTS`).
+pub const RESPAWN_MAX_AGENTS: usize = 2;
+
+impl HostEnvironment for Respawner {
+    const ENV_ID: &'static str = RESPAWN_ID;
+    const ENV_VERSION: u32 = 1;
+    const MAX_AGENTS: usize = RESPAWN_MAX_AGENTS;
+    const SPAWNS: bool = true;
+    type Config = RespawnConfig;
+
+    fn new(cfg: &RespawnConfig) -> Result<Self, HostError> {
+        Ok(Self {
+            cfg: cfg.clone(),
+            step: 0,
+            occupied: true,
+            freed_at: None,
+            spawns: 0,
+        })
+    }
+
+    fn initial_agents(cfg: &RespawnConfig) -> usize {
+        if cfg.initial == 1 { 1 } else { 2 }
+    }
+
+    fn observation_space(_: &RespawnConfig) -> Result<Space, SpaceError> {
+        Ok(Space::Box {
+            shape: vec![2],
+            dtype: DType::I32,
+            bounds: BoxBounds::Int {
+                low: vec![0],
+                high: vec![1_000_000],
+            },
+        })
+    }
+
+    fn action_space(_: &RespawnConfig) -> Result<Space, SpaceError> {
+        Ok(Space::Discrete { n: 2 })
+    }
+
+    fn reset(&mut self, _: HostSeed, _: &mut HostOut<'_>) {
+        self.step = 0;
+        self.occupied = self.cfg.initial >= 2;
+        self.freed_at = if self.occupied { None } else { Some(0) };
+        self.spawns = 0;
+    }
+
+    fn step(&mut self, actions: &Actions<'_, ()>, out: &mut HostOut<'_>) {
+        self.step += 1;
+        for s in 0..2u16 {
+            if (s == 0 || self.occupied)
+                && let Some(agent) = AgentSlot::new(s, 2)
+            {
+                let a = actions.discrete(agent, 0).unwrap_or(0);
+                #[expect(clippy::cast_precision_loss, reason = "small actions")]
+                out.set_reward(agent, 1.0 + a as f32);
+            }
+        }
+        let Some(slot1) = AgentSlot::new(1, 2) else {
+            return;
+        };
+        if self.occupied && self.cfg.die_step > 0 && self.step == self.cfg.die_step {
+            out.agent_died(slot1);
+            self.occupied = false;
+            self.freed_at = Some(self.step);
+        } else if let Some(freed) = self.freed_at
+            && !self.occupied
+            && self.step == freed.saturating_add(self.cfg.respawn_delay)
+        {
+            out.agent_spawned(slot1);
+            out.set_reward(slot1, 0.25);
+            self.occupied = true;
+            self.freed_at = None;
+            self.spawns += 1;
+        }
+        if self.step >= self.cfg.episode {
+            out.end_episode(EpisodeEnd::Terminated);
+        }
+    }
+
+    fn observe(&self, agent: AgentSlot, obs: &mut ObsWriter<'_, '_, ()>) {
+        let own = if agent.index() == 1 { self.spawns } else { 0 };
+        let values = [
+            i32::try_from(self.step).unwrap_or(0),
+            i32::try_from(own).unwrap_or(0),
+        ];
+        if let Some(leaf) = obs.leaf(0) {
+            for (bytes, v) in leaf.as_chunks_mut::<4>().0.iter_mut().zip(values) {
+                bytes.copy_from_slice(&v.to_le_bytes());
+            }
+        }
+    }
+}
+
+tessera_rl_core::register_host!(Respawner, id = "test/Respawn-v1");

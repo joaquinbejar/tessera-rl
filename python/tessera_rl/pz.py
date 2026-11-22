@@ -26,12 +26,21 @@ Environment                 Turns        Adapters
   ``agent_selection``. It is never presented as Parallel: that would
   change what each agent knows when it acts.
 
-Agents are named ``agent_<slot>``. ``possible_agents`` are the slots
-alive at reset (no shipped environment spawns agents later). An agent
-leaves ``agents`` after the step in which it is terminated or truncated:
-its final reward and flag are reported once, in that step, and at the end
-of an episode every agent still alive gets its final reward and flag in
-the same step (ADR-0013).
+An agent is one occupant of a slot: identity is (slot, generation)
+(ADR-0013). Generation 0 is named ``agent_<slot>``, and a later
+generation ``agent_<slot>_g<generation>``: PettingZoo forbids a name to
+come back once its agent is done. ``possible_agents`` are the agents
+alive at reset, and grow when an environment that spawns agents (a host
+environment with ``spawns``, ADR-0065) fills a slot. An agent leaves
+``agents`` after the step in which it is terminated or truncated: its
+final reward and flag are reported once, in that step, and at the end of
+an episode every agent still alive gets its final reward and flag in the
+same step (ADR-0013). A freed slot is reused no earlier than the next
+step; its new agent joins ``agents`` in the step it spawns, with its first
+observation and info and the engine's reward and flags for that step (a
+spawn in the episode's last step is flushed with the others and does not
+stay in ``agents``). Native AEC refuses a spawning environment
+(``CapabilityError``).
 
 Observations are dicts of the environment's leaves plus ``action_mask``
 (``int8``, one entry per action).
@@ -138,6 +147,8 @@ def _host_pool(env_id: str, adapter: str, seed: int | None, kwargs: dict):
     except BaseException:
         native.close()
         raise
+    # The agents alive at reset are slots 0..initial_agents; a spawning
+    # environment adds agents as they spawn (_Agents.live, ADR-0065).
     return (env, list(range(layout["initial_agents"]))), declared
 
 
@@ -191,6 +202,11 @@ def _exact_action(value, n: int) -> int:
     return action
 
 
+def agent_name(slot: int, generation: int) -> str:
+    """The PettingZoo name of the agent (slot, generation) (ADR-0013)."""
+    return f"agent_{slot}" if generation == 0 else f"agent_{slot}_g{generation}"
+
+
 class _Agents:
     """Spaces, names and per-agent views of a one-instance pool."""
 
@@ -198,9 +214,11 @@ class _Agents:
         env, self.slots = pool
         self.env = env
         self.env_id = env_id
-        self.names = [f"agent_{i}" for i in self.slots]
+        self.names = [agent_name(i, 0) for i in self.slots]
         self.slot_of = dict(zip(self.names, self.slots, strict=True))
         layout = env._native.layout()
+        #: Whether the environment fills empty slots (ADR-0065 ``spawns``).
+        self.spawns = bool(layout.get("spawns", False))
         #: ``"host"`` for a third-party host environment, else ``"tessera"``.
         self.kind = "host" if layout.get("kind") == "host" else "tessera"
         leaves = {}
@@ -276,6 +294,17 @@ class _Agents:
             return False
         return bool(np.frombuffer(out["pending_reset"], dtype=np.bool_)[0])
 
+    def live(self) -> list[str]:
+        """The names of the agents alive in the last outputs, in slot
+        order, registered in ``slot_of``."""
+        step = self.last
+        names = []
+        for slot in np.flatnonzero(step.alive[0]):
+            name = agent_name(int(slot), int(step.slot_generations[0, slot]))
+            self.slot_of[name] = int(slot)
+            names.append(name)
+        return names
+
     def flags(self, slot: int) -> tuple[float, bool, bool]:
         step = self.last
         terminated = bool(step.agent_terminated[0, slot] or step.episode_terminated[0])
@@ -304,7 +333,11 @@ class TesseraParallelEnv(ParallelEnv):
 
     def reset(self, seed=None, options=None):
         self._a.last = self._a.env.reset(seed)
-        self.agents = [n for n, s in zip(self._a.names, self._a.slots, strict=True) if self._a.last.alive[0, s]]
+        self.agents = self._a.live()
+        if self._a.spawns:
+            # A slot's generation survives a reset, so its name does too.
+            self.possible_agents = list(self.agents)
+            self._a.slot_of = {name: self._a.slot_of[name] for name in self.agents}
         if self._a.pending():
             # An aborted reset leaves the instance pending (ADR-0065): no
             # agent can act, so `while env.agents:` ends at once.
@@ -335,6 +368,21 @@ class TesseraParallelEnv(ParallelEnv):
             rewards[name], terms[name], truncs[name] = self._a.flags(slot)
             infos[name] = self._a.info(slot)
         self.agents = [n for n in self.agents if not (terms[n] or truncs[n])]
+        if self._a.spawns:
+            # Agents that spawned this step: alive now, not alive before.
+            for name in self._a.live():
+                if name in self.agents or name in obs:
+                    continue
+                slot = self._a.slot_of[name]
+                obs[name], infos[name] = self._a.observe(slot), self._a.info(slot)
+                # The engine's reward and flags for the spawn step, as for
+                # every agent: a spawn in the episode's last step is flushed
+                # with the others (SPEC 12) and never joins `agents`.
+                rewards[name], terms[name], truncs[name] = self._a.flags(slot)
+                if not (terms[name] or truncs[name]):
+                    self.agents.append(name)
+                if name not in self.possible_agents:
+                    self.possible_agents.append(name)
         return obs, rewards, terms, truncs, infos
 
     def close(self):
@@ -352,6 +400,12 @@ class TesseraAECEnv(AECEnv):
         super().__init__()
         pool = _pool if _pool is not None else _native_pool(env_id, "aec", seed, kwargs)
         self._a = _Agents(pool, env_id)
+        if self._a.spawns:
+            # Native AEC does not name or schedule spawned agents yet
+            # (ADR-0067 follow-up); Simultaneous spawning environments use
+            # the Parallel form and cycle buffering.
+            self._a.env.close()
+            raise _native.CapabilityError(f"{env_id} spawns agents; native AEC does not support spawning yet")
         if self._a.env.turns != "sequential":
             raise _native.ArgumentError(f"{env_id} is {self._a.env.turns}; TesseraAECEnv is for sequential turns")
         self.metadata = {**self.metadata, "name": env_id, "tessera_kind": self._a.kind}
@@ -448,13 +502,30 @@ def aec_env(env_id: str, seed: int | None = None, **kwargs) -> AECEnv:
 class _CheckedCycle(parallel_to_aec_wrapper):
     """Cycle buffering (PettingZoo's ``parallel_to_aec``) that checks each
     action when it is buffered, so an invalid one leaves the buffered
-    cycle and the environment as they were."""
+    cycle and the environment as they were. ``possible_agents`` is the
+    Parallel environment's own list, which grows as agents spawn (the
+    wrapper would otherwise keep the copy it made at construction)."""
+
+    @property
+    def possible_agents(self):
+        return self.env.possible_agents
+
+    @possible_agents.setter
+    def possible_agents(self, value):
+        # parallel_to_aec_wrapper.__init__ assigns it; the property follows
+        # the Parallel environment instead.
+        pass
 
     def step(self, action):
         agent = self.agent_selection
         # A live agent's action is always checked, so None raises here.
         if not (self.terminations[agent] or self.truncations[agent]):
             action = _exact_action(action, self.action_space(agent).n)
+        else:
+            # An agent that spawned in the episode's last step is born
+            # flushed: it has no buffered action, which the wrapper's dead
+            # step deletes.
+            self._actions.setdefault(agent, None)
         super().step(action)
 
 
