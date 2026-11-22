@@ -155,6 +155,19 @@ impl FunctionKw for MakeRespawn {
     }
 }
 
+/// `make_multihead(**options, **config)`: the two-head masked test
+/// environment `test/MultiHead-v1` (#311), built as `make` builds the counter.
+struct MakeMultiHead;
+
+impl FunctionKw for MakeMultiHead {
+    fn call<'py>(g: Gil<'py>, args: Ref<'py>, kwargs: Option<Ref<'py>>) -> CResult<Mine<'py>> {
+        tessera_rl_pyffi::host::factory::make::<
+            tessera_rl_test_host_env::MultiHead,
+            { tessera_rl_test_host_env::MULTIHEAD_MAX_AGENTS },
+        >(g, args, kwargs)
+    }
+}
+
 /// `_fp_policy()`: this module's floating-point policy (ADR-0041), as the
 /// host object's `_tessera_set_fp_policy` set it.
 struct FpPolicy;
@@ -185,6 +198,10 @@ tessera_rl_pyffi::export_host_env!(
         FunctionRow::kw::<MakeRespawn>(
             c"make_respawn",
             c"make_respawn(*, num_envs, seed, auto_reset, max_episode_steps, workers, cpu_set, **config)"
+        ),
+        FunctionRow::kw::<MakeMultiHead>(
+            c"make_multihead",
+            c"make_multihead(*, num_envs, seed, auto_reset, max_episode_steps, workers, cpu_set, **config)"
         ),
     ]
 );

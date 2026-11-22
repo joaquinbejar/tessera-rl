@@ -59,7 +59,15 @@ def test_pz_rts_infos_carry_that_agents_masks_and_nothing_else():
             assert set(infos[a]) == {"action_mask", "action_masks"}
             t, tg, p = infos[a]["action_masks"]
             assert (t.shape, tg.shape, p.shape) == ((4, 6), (4, 6, 81), (4, 6, 4))
-            assert (infos[a]["action_mask"] == t).all()
+            # The relaxed tuple (#311): per unit, the type head, then the
+            # target and product heads as unions over the type.
+            relaxed = infos[a]["action_mask"]
+            assert isinstance(relaxed, tuple) and len(relaxed) == 12
+            for u in range(4):
+                assert (relaxed[3 * u] == t[u]).all()
+                assert (relaxed[3 * u + 1] == tg[u].any(axis=0)).all()
+                assert (relaxed[3 * u + 2] == p[u].any(axis=0)).all()
+            assert all(m.dtype == np.int8 for m in relaxed)
             assert "action_mask" not in obs[a]
             assert t.dtype == np.int8
         obs, _, _, _, infos = e.step(noop(e))

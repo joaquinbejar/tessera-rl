@@ -3,9 +3,10 @@
 //! A host environment crate that depends on core only (ADR-0062,
 //! ADR-0065 item 3): a counter whose observation is its step and the
 //! config's offset, a second environment registered without a factory,
-//! and a spawning environment for the ADR-0013 respawn test (#71).
+//! a spawning environment for the ADR-0013 respawn test (#71), and a masked
+//! environment with two action heads (#311).
 
-use tessera_rl_core::io::{Actions, ObsWriter};
+use tessera_rl_core::io::{Actions, MaskWriter, ObsWriter};
 use tessera_rl_core::space::{BoxBounds, DType, Space};
 use tessera_rl_core::{
     AbortCode, AgentSlot, EpisodeEnd, HostEnvironment, HostError, HostOut, HostSeed, SpaceError,
@@ -325,3 +326,107 @@ impl HostEnvironment for Respawner {
 }
 
 tessera_rl_core::register_host!(Respawner, id = "test/Respawn-v1");
+
+/// The two-head environment's configuration.
+#[derive(EnvConfig, Debug, Clone, PartialEq)]
+pub struct MultiHeadConfig {
+    /// Steps per episode.
+    #[config(default = 5, range = 1..=1000)]
+    pub episode: u32,
+}
+
+/// Two agents with two masked discrete heads each, `MultiDiscrete([3, 4])`
+/// (#311): head 0's choice 2 and head 1's choice 1 are always illegal, and
+/// for agent 1 head 0's choice 0 too, so the two agents' masks differ. The
+/// reward is head 0 times 10 plus head 1; the observation is the step and
+/// the agent's last joint action.
+#[derive(Debug)]
+pub struct MultiHead {
+    cfg: MultiHeadConfig,
+    step: u32,
+    last: [i32; 2],
+}
+
+/// The two-head environment's id.
+pub const MULTIHEAD_ID: &str = "test/MultiHead-v1";
+
+/// The two-head environment's slot count (its `MAX_AGENTS`).
+pub const MULTIHEAD_MAX_AGENTS: usize = 2;
+
+impl HostEnvironment for MultiHead {
+    const ENV_ID: &'static str = MULTIHEAD_ID;
+    const ENV_VERSION: u32 = 1;
+    const MAX_AGENTS: usize = MULTIHEAD_MAX_AGENTS;
+    const MASKS: bool = true;
+    type Config = MultiHeadConfig;
+
+    fn new(cfg: &MultiHeadConfig) -> Result<Self, HostError> {
+        Ok(Self {
+            cfg: cfg.clone(),
+            step: 0,
+            last: [0; 2],
+        })
+    }
+
+    fn observation_space(_: &MultiHeadConfig) -> Result<Space, SpaceError> {
+        Ok(Space::Box {
+            shape: vec![2],
+            dtype: DType::I32,
+            bounds: BoxBounds::Int {
+                low: vec![0],
+                high: vec![1_000_000],
+            },
+        })
+    }
+
+    fn action_space(_: &MultiHeadConfig) -> Result<Space, SpaceError> {
+        Ok(Space::MultiDiscrete { nvec: vec![3, 4] })
+    }
+
+    fn reset(&mut self, _: HostSeed, _: &mut HostOut<'_>) {
+        self.step = 0;
+        self.last = [0; 2];
+    }
+
+    fn step(&mut self, actions: &Actions<'_, ()>, out: &mut HostOut<'_>) {
+        self.step += 1;
+        for s in 0..2u16 {
+            if let Some(agent) = AgentSlot::new(s, 2) {
+                let a0 = actions.discrete(agent, 0).unwrap_or(0);
+                let a1 = actions.discrete(agent, 1).unwrap_or(0);
+                if let Some(last) = self.last.get_mut(usize::from(s)) {
+                    *last = a0 * 10 + a1;
+                }
+                #[expect(clippy::cast_precision_loss, reason = "small actions")]
+                out.set_reward(agent, (a0 * 10 + a1) as f32);
+            }
+        }
+        if self.step >= self.cfg.episode {
+            out.end_episode(EpisodeEnd::Terminated);
+        }
+    }
+
+    fn mask(&self, agent: AgentSlot, mask: &mut MaskWriter<'_>) {
+        // Head 0 is entries 0..3, head 1 entries 3..7 of the agent's row.
+        mask.fill(true);
+        mask.set(2, false);
+        mask.set(3 + 1, false);
+        if agent.index() == 1 {
+            mask.set(0, false);
+        }
+    }
+
+    fn observe(&self, agent: AgentSlot, obs: &mut ObsWriter<'_, '_, ()>) {
+        let values = [
+            i32::try_from(self.step).unwrap_or(0),
+            self.last.get(agent.index()).copied().unwrap_or(0),
+        ];
+        if let Some(leaf) = obs.leaf(0) {
+            for (bytes, v) in leaf.as_chunks_mut::<4>().0.iter_mut().zip(values) {
+                bytes.copy_from_slice(&v.to_le_bytes());
+            }
+        }
+    }
+}
+
+tessera_rl_core::register_host!(MultiHead, id = "test/MultiHead-v1");

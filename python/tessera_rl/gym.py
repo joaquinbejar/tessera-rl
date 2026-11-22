@@ -95,7 +95,8 @@ _SLOT0 = frozenset({"tessera/Snake-v1", "tessera/PaddleDuel-v1"})
 #: (slot 1) is never alive, acting, rewarded or masked, so the adapter reads
 #: and writes slot 0. Masks are conditional per unit: they come in `info`
 #: (`action_mask`, the root head, and `action_masks`, every head, in the
-#: tessera_rl.masks shapes), not in the observation.
+#: tessera_rl.masks shapes), not in the observation. The PettingZoo adapter's
+#: `action_mask` is a tuple of relaxed per-head masks instead (#311).
 _SCRIPTED = {"tessera/RTS-vsRush-v1": 1, "tessera/RTS-vsProspector-v1": 2, "tessera/RTS-vsRandom-v1": 3}
 
 #: The registered time limit, where it is not 500.
