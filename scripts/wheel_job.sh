@@ -60,8 +60,12 @@ CARGO_BUILD_RUSTC CARGO_BUILD_RUSTC_WRAPPER CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER"
 for v in $BUILD_VARS; do
     if [ -n "${!v+x}" ]; then echo "wheel_job: $v is set in the environment; refused" >&2; exit 2; fi
 done
-if env | grep -Eq '^CARGO_(PROFILE|TARGET)_[A-Za-z0-9_]*='; then
-    echo "wheel_job: $(env | grep -Eo '^CARGO_(PROFILE|TARGET)_[A-Za-z0-9_]*' | tr '\n' ' ')set in the environment; refused" >&2; exit 2
+# Every set CARGO_PROFILE_* / CARGO_TARGET_* variable, empty ones included, with no pipe: a
+# pipe into `grep -q` under pipefail misses a set variable when the writer dies of SIGPIPE.
+ambient=
+for v in ${!CARGO_PROFILE_@} ${!CARGO_TARGET_@}; do ambient="$ambient$v "; done
+if [ -n "$ambient" ]; then
+    echo "wheel_job: ${ambient}set in the environment; refused" >&2; exit 2
 fi
 
 RUSTUP_VERSION=1.29.3

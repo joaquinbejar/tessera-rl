@@ -200,7 +200,7 @@ def test_pgo_w2_build_names_the_refused_set():
     text = SCRIPT.read_text()
     start = text.index('BUILD_VARS="') + len('BUILD_VARS="')
     assert sorted(text[start:text.index('"', start)].split()) == sorted(REFUSED)
-    assert "grep -Eq '^CARGO_(PROFILE|TARGET)_[A-Za-z0-9_]*='" in text
+    assert "for v in ${!CARGO_PROFILE_@} ${!CARGO_TARGET_@}; do ambient=\"$ambient$v \"; done" in text
 
 
 @posix
