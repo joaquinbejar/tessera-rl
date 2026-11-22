@@ -23,11 +23,13 @@ fail() { echo "gungraun: $*" >&2; exit 1; }
 lines="$(sed 's/\x1b\[[0-9;]*m//g' "$log" | grep -E '^ +Running `.*rustc .*--crate-name [a-z0-9_]+ ' || true)"
 for crate in "$@"; do
     mine="$(printf '%s\n' "$lines" | grep -E -- "--crate-name $crate " || true)"
+    # The two checks read a here-string, not a pipe: under pipefail a writer killed by
+    # SIGPIPE when `grep -q` exits early would hide a violation (issue #323).
     [ -n "$mine" ] || fail "no rustc line for $crate in the build log: cannot show it was built with the gate's profile"
-    if printf '%s\n' "$mine" | grep -vqE -- '-C codegen-units=1( |`|$)'; then
+    if grep -vqE -- '-C codegen-units=1( |`|$)' <<<"$mine"; then
         fail "$crate was compiled without -C codegen-units=1: not the gate's profile"
     fi
-    if printf '%s\n' "$mine" | grep -qE -- '-C lto=(fat|thin|true|yes|on)'; then
+    if grep -qE -- '-C lto=(fat|thin|true|yes|on)' <<<"$mine"; then
         fail "$crate was compiled with LTO: not the gate's profile"
     fi
 done
