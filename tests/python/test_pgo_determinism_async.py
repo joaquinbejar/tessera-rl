@@ -88,7 +88,15 @@ def mixed(ids, call):
     return order
 
 
-@pytest.mark.parametrize("order", [aligned, mixed])
+def late_last(ids, call):
+    # As `mixed`, with each batch delivered newest first: an id that has
+    # finished its recorded steps can come before one that has not, so the
+    # rows to hash are not a prefix of the batch.
+    order = mixed(ids, call)
+    return order[:4][::-1] + order[4:]
+
+
+@pytest.mark.parametrize("order", [aligned, mixed, late_last])
 def test_async_recorder_records_every_instance_and_never_asks_an_unreachable_batch(order):
     env = StubAsync(order)
     got = det.run_async(env, steps=5)
@@ -97,15 +105,37 @@ def test_async_recorder_records_every_instance_and_never_asks_an_unreachable_bat
     assert min(env.steps) >= 5
 
 
-def test_async_recorder_trace_does_not_depend_on_batch_order():
+@pytest.mark.parametrize("order", [mixed, late_last])
+def test_async_recorder_trace_does_not_depend_on_batch_order(order):
     a = det.run_async(StubAsync(aligned), steps=5)
-    b = det.run_async(StubAsync(mixed), steps=5)
+    b = det.run_async(StubAsync(order), steps=5)
     assert a == b
 
 
-def test_async_recorder_hashes_only_the_first_steps():
+def test_late_last_delivers_a_finished_id_before_an_unfinished_one():
+    # The order the next test relies on: some batch has a finished instance
+    # (all its steps recorded) before one that is not finished.
+    replay = StubAsync(late_last)
+    counts = [0] * 16
+    replay.reset()
+    replay.send(list(range(16)), [0] * 16)
+    found = False
+    while sum(min(c, 5) for c in counts) < 16 * 5:
+        batch = replay.recv()
+        ids = [int(i) for i in batch.ids]
+        done = [counts[i] >= 5 for i in ids]
+        if any(done[k] and not done[m] for k in range(len(ids)) for m in range(k + 1, len(ids))):
+            found = True
+        for i in ids:
+            counts[i] += 1
+        replay.send(ids, [0] * len(ids))
+    assert found
+
+
+@pytest.mark.parametrize("order", [mixed, late_last])
+def test_async_recorder_hashes_only_the_first_steps(order):
     # The trace equals hashing each instance's reset row and its first 5 steps.
-    env = StubAsync(mixed)
+    env = StubAsync(order)
     got = det.run_async(env, steps=5)
     ref = StubAsync(aligned)
     trace = det.Trace(16)
