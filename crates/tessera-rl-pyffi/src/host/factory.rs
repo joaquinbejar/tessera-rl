@@ -24,15 +24,22 @@ use crate::errors::{self, Kind as ErrorKind};
 use crate::ffi::capi::{self, CResult, Gil, Kind, Mine, Ref};
 
 /// Initializes a host module: binds `tessera_rl`'s exception classes
-/// (SPEC 14.4.6) and adds the host object type. Called by the module
-/// [`export_host_env!`](crate::export_host_env) generates.
+/// (SPEC 14.4.6), registers this copy's fork guard and adds the host object
+/// type. Called by the module [`export_host_env!`](crate::export_host_env)
+/// generates.
+///
+/// A host wheel links its own copy of this crate, with its own fork
+/// generation: the first-party module's handler moves only that module's
+/// copy, so without this registration a host object made before
+/// `os.fork()` would never refuse in the child (SPEC 14.4.2, #329).
 ///
 /// # Errors
 ///
-/// `ImportError` when `tessera_rl` or one of its classes is missing, or a
-/// failure to create the type.
+/// `ImportError` when `tessera_rl` or one of its classes is missing, a
+/// failed fork-handler registration, or a failure to create the type.
 pub fn init(g: Gil<'_>, module: Ref<'_>, name: &'static core::ffi::CStr) -> CResult<()> {
     errors::bind(g)?;
+    crate::ffi::fork::register(g)?;
     object::register(g, module, name)
 }
 

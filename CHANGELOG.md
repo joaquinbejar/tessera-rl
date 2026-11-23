@@ -24,6 +24,7 @@ the API is not stable, and any 0.x release may break it.
 
 ### Fixed
 
+- A host environment object made before `os.fork()` now raises `ForkError` in the child, as SPEC 14.4.2 specifies: the host module registers its own copy of the fork guard, since a host wheel links its own `tessera-rl-pyffi`. Before, the call returned with `workers=0` and hung with workers (#329).
 - PettingZoo AEC by cycle buffering (`tessera_rl.pz.aec_env` over a Simultaneous environment) accepts a multi-head action: its action check used `action_space(agent).n`, which a `MultiDiscrete` space does not have (#311).
 
 ## [0.2.0] - 2026-11-14
