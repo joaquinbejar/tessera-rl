@@ -156,9 +156,11 @@ impl Environment for CartPole {
         out: &mut ObsWriter<'_, '_, CartPoleObs>,
     ) {
         if let Some(mut leaf) = out.leaf_mut(CartPoleObs::STATE) {
-            for (i, v) in state.s.iter().enumerate() {
-                leaf.set(i, *v as f32);
-            }
+            // One copy of the four values, not four checked element writes
+            // (issue #152, P4); the leaf is always four f32.
+            let values = state.s.map(|v| v as f32);
+            let written = leaf.copy_from(&values);
+            debug_assert!(written, "CartPole's state leaf holds four f32");
         }
     }
 }
