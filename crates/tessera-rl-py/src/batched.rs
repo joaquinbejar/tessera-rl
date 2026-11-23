@@ -936,6 +936,7 @@ mod tests {
             auto_reset: "next_step".to_owned(),
             chunk_size: Some(2),
             workers: 2,
+            spin: None,
             pipelined,
             asynced,
         }

@@ -58,7 +58,7 @@ the parent, which it detects by looking for those backends' constructors in the
 call stack; that ``vector.Ray`` is refused the same way is from reading only, as it
 is not tested. A list of creators whose first is Sync passes the driver and raises
 in the child, which is a parent hang under Multiprocessing. ``workers`` must be at
-least 1. The constructor's probe of the halves starts real worker threads, closed
+least 1. ``spin`` (the worker spin budget of ``make``) needs ``workers``. The constructor's probe of the halves starts real worker threads, closed
 before it returns. ``log_interval`` counts half-steps. The two
 halves must be equal, or ``ArgumentError`` naming the sizes; a chunk size that
 cannot split the pool raises the engine's ``ConfigError`` (64 instances need a
@@ -192,6 +192,7 @@ class TesseraPufferEnv(pufferlib.PufferEnv):
         buf=None,
         seed: int | None = 0,
         workers: int = 0,
+        spin: int | None = None,
         log_interval: int | None = 128,
         auto_reset: str = "same_step",
         **env_kwargs,
@@ -205,6 +206,10 @@ class TesseraPufferEnv(pufferlib.PufferEnv):
             raise _native.ArgumentError("log_interval must be at least 1, or None")
         self._constructor_seed = _seed(0 if seed is None else seed, "constructor seed")
         self._make_args = {"num_envs": num_envs, "workers": _workers(workers), "auto_reset": auto_reset, **env_kwargs}
+        if spin is not None:
+            if _workers(workers) < 1:
+                raise _native.ArgumentError("spin needs workers >= 1")
+            self._make_args["spin"] = _seed(spin, "spin")
         self._env_id = env_id
         self._log_interval = log_interval
         self._env = None
@@ -212,7 +217,8 @@ class TesseraPufferEnv(pufferlib.PufferEnv):
         self.infos: list = []
 
         # Validates here, not in a worker; holds no thread and is closed at once.
-        probe = make(env_id, **{**self._make_args, "workers": 0})
+        probe_args = {k: v for k, v in self._make_args.items() if k != "spin"}
+        probe = make(env_id, **{**probe_args, "workers": 0})
         try:
             layout = probe._native.layout()
             if layout["action_bounds"] is not None:

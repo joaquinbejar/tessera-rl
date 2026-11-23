@@ -532,6 +532,9 @@ pub(crate) struct PoolArgs {
     pub(crate) auto_reset: String,
     pub(crate) chunk_size: Option<u32>,
     pub(crate) workers: usize,
+    /// Spins before a waiting worker or caller blocks (`SyncOptions::spin`);
+    /// `None` keeps the engine default. Needs workers.
+    pub(crate) spin: Option<u32>,
     /// Pipelined mode (ADR-0047) instead of Sync.
     pub(crate) pipelined: bool,
     /// Async mode (ADR-0047) with its batch size and outputs.
@@ -593,6 +596,25 @@ fn wait_backend() -> Result<WaitBackend, BindError> {
     })
 }
 
+/// Refuses `spin` where nothing would spin: Sync mode without workers. The
+/// split-phase modes always have at least one worker.
+fn check_spin(args: &PoolArgs) -> Result<(), BindError> {
+    let sync = !args.pipelined && args.asynced.is_none();
+    if args.spin.is_some() && sync && args.workers == 0 {
+        return Err(BindError::Argument(
+            "spin needs workers >= 1 in Sync mode".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+/// Sets the spin budget when the caller gave one.
+fn apply_spin(options: &mut SyncOptions, spin: Option<u32>) {
+    if let Some(spin) = spin {
+        options.spin = spin;
+    }
+}
+
 /// The environment object of `pool`, in the mode of `args`. Pipelined mode
 /// needs workers, one by default.
 pub(crate) fn finish<E, M>(
@@ -612,6 +634,7 @@ where
     M: tessera_rl_engine::PersistMask<E> + Send + Sync + 'static,
 {
     let workers = NonZeroUsize::new(args.workers);
+    check_spin(args)?;
     let storage = pool.outputs()?.storage();
     let pooled = Pooled::new(cfg, pool, n, terminal, storage)?;
     if args.pipelined {
@@ -624,6 +647,7 @@ where
         let template = pool.snapshot(0)?;
         let mut options = PipelinedOptions::new(workers.unwrap_or(NonZeroUsize::MIN));
         options.sync.wait = wait_backend()?;
+        apply_spin(&mut options.sync, args.spin);
         let pool = pool
             .pipelined(options)
             .map_err(|e| BindError::Engine(e.error))?;
@@ -641,6 +665,7 @@ where
         let template = pool.snapshot(0)?;
         let mut options = AsyncOptions::new(workers.unwrap_or(NonZeroUsize::MIN), batch);
         options.sync.wait = wait_backend()?;
+        apply_spin(&mut options.sync, args.spin);
         let pool = pool
             .async_mode(options)
             .map_err(|e| BindError::Engine(e.error))?;
@@ -656,6 +681,7 @@ where
         Some(w) => {
             let mut options = SyncOptions::new(w);
             options.wait = wait_backend()?;
+            apply_spin(&mut options, args.spin);
             pool.with_workers(options)?
         }
         None => pool,
@@ -1072,10 +1098,52 @@ mod tests {
             auto_reset: "next_step".to_owned(),
             chunk_size: None,
             workers: 0,
+            spin: None,
             pipelined: false,
             asynced: None,
         };
         finish(&cfg, pool, &args, 8, false).unwrap()
+    }
+
+    fn spin_args(workers: usize, spin: Option<u32>, pipelined: bool) -> PoolArgs {
+        PoolArgs {
+            num_envs: 2,
+            seed: 0,
+            max_episode_steps: None,
+            auto_reset: "next_step".to_owned(),
+            chunk_size: None,
+            workers,
+            spin,
+            pipelined,
+            asynced: None,
+        }
+    }
+
+    #[test]
+    fn test_check_spin_sync_without_workers_refused() {
+        assert!(matches!(
+            check_spin(&spin_args(0, Some(0), false)),
+            Err(BindError::Argument(_))
+        ));
+    }
+
+    #[test]
+    fn test_check_spin_allowed_cases_accepted() {
+        assert!(check_spin(&spin_args(0, None, false)).is_ok());
+        assert!(check_spin(&spin_args(1, Some(200_000), false)).is_ok());
+        assert!(check_spin(&spin_args(0, Some(5), true)).is_ok());
+        let mut asynced = spin_args(0, Some(5), false);
+        asynced.asynced = Some((1, crate::batched::BatchOutputs::Gathered));
+        assert!(check_spin(&asynced).is_ok());
+    }
+
+    #[test]
+    fn test_apply_spin_some_and_none_set_or_keep() {
+        let mut options = SyncOptions::new(NonZeroUsize::MIN);
+        apply_spin(&mut options, None);
+        assert_eq!(options.spin, SyncOptions::new(NonZeroUsize::MIN).spin);
+        apply_spin(&mut options, Some(7));
+        assert_eq!(options.spin, 7);
     }
 
     /// Owned copies from before the panic stay valid, a new read is refused,
@@ -1132,6 +1200,7 @@ mod tests {
             auto_reset: "next_step".to_owned(),
             chunk_size: None,
             workers: 0,
+            spin: None,
             pipelined: false,
             asynced: None,
         };

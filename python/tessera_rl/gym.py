@@ -449,7 +449,7 @@ def make(env_id: str, num_envs: int = 1, seed: int | None = None, **kwargs: Any)
     ``aborted``, ``abort_code`` and ``pending_reset`` (ADR-0065). Options: ``autoreset_mode`` (``AutoresetMode`` or its name, default
     ``NEXT_STEP``), ``outputs`` (``"owned"`` by default or ``"borrowed"``),
     and the native pool options (``max_episode_steps``, ``chunk_size``,
-    ``workers``).
+    ``workers``, ``spin``, first-party environments only).
     """
     return TesseraVectorEnv(env_id, num_envs, seed, **kwargs)
 

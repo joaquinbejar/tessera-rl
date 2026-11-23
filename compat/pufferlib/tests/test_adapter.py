@@ -632,3 +632,22 @@ def test_make_puffer_refuses_a_host_id(monkeypatch):
     monkeypatch.setattr(_host, "is_host_id", lambda env_id: env_id == "fake/Counter-v1")
     with pytest.raises(t.CapabilityError, match="tessera_rl.puffer does not support them"):
         make_puffer("fake/Counter-v1")
+
+
+def test_spin_passes_through_to_make_and_steps():
+    env = TesseraPufferEnv(CARTPOLE, num_envs=2, workers=1, spin=200_000)
+    assert env._make_args["spin"] == 200_000
+    env.reset(seed=1)
+    env.step(np.zeros(2, dtype=np.int32))
+    env.close()
+
+
+@pytest.mark.parametrize("bad", [-1, "invalid", 1.0, 2**32])
+def test_invalid_spin_is_refused_at_construction(bad):
+    with pytest.raises(t.ArgumentError, match="spin"):
+        TesseraPufferEnv(CARTPOLE, workers=1, spin=bad)
+
+
+def test_spin_without_workers_is_refused_at_construction():
+    with pytest.raises(t.ArgumentError, match="spin needs workers"):
+        TesseraPufferEnv(CARTPOLE, workers=0, spin=10)
