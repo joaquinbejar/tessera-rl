@@ -608,8 +608,8 @@ def make(env_id: str, num_envs: int = 1, seed: int = 0, outputs: str = "borrowed
     ``max_episode_steps``, ``auto_reset`` (``"next_step"``,
     ``"same_step"`` or ``"disabled"``), ``chunk_size``, ``workers``,
     ``spin`` (spins before a waiting worker or caller blocks, an int in
-    ``0..2**32``; 2000 by default, about 20 microseconds; a larger budget
-    can cut wake-up latency at the cost of CPU time burnt while idle; it needs
+    ``0..2**32``; 2000 by default, nominally about 20 microseconds; a larger
+    budget can cut wake-up latency at the cost of CPU time burnt while idle; it needs
     workers, so Sync mode with ``workers=0`` refuses it with
     ``ArgumentError``), ``mode`` (``"sync"``, the default; ``"pipelined"``, which needs at least
     two chunks; or ``"async"``, which needs ``batch_size`` and takes ``gather``,
