@@ -35,6 +35,11 @@ workspace = true
 name = "classic_step"
 harness = false
 
+# The CartPole lane gain per SIMD level (issue #152 P5).
+[[bench]]
+name = "cartpole_lanes"
+harness = false
+
 # Instruction counts (gungraun, Linux only; ADR-0025).
 [[bench]]
 name = "classic_instructions"
