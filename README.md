@@ -46,8 +46,10 @@ Known limits of 0.3.0:
 - The phase 2 exit gate (the AlphaZero-style Connect Four example against the
   scripted bot, P2-G1) is **not met**: its ADR-0052 attempt ended not
   eligible, and a new attempt needs a new ADR (#154).
-- No throughput figure is published with this release, and the phase 3
-  gate (end-to-end against PufferLib on a GPU) has not been attempted (#152).
+- No throughput figure is published with this release. The phase 3 gate
+  (ADR-0061, end-to-end against PufferLib on a GPU) is **not met**: two
+  attempts are recorded losses, at 0.791 and 0.912 of PufferLib's score;
+  the gate stays open (#152).
 - Host environments have no snapshot, fork or persistence, and no
   Pipelined or Async mode; the host surface is experimental and may break
   in a 0.x minor release (ADR-0062 item 9).
