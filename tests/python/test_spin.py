@@ -14,6 +14,7 @@ def run(env, steps=8):
     out = []
     for i in range(steps):
         obs = env.step(np.full(env.num_envs, i % 2))[0]
+        obs = obs["obs"] if isinstance(obs, dict) else obs
         out.append(np.array(obs, copy=True))
     env.close()
     return out
