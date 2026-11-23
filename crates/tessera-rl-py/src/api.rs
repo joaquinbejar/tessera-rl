@@ -86,7 +86,7 @@ impl<'py> Kwargs<'py> {
     }
 }
 
-const POOL_KEYS: [&str; 9] = [
+const POOL_KEYS: [&str; 10] = [
     "mode",
     "batch_size",
     "gather",
@@ -96,6 +96,7 @@ const POOL_KEYS: [&str; 9] = [
     "auto_reset",
     "chunk_size",
     "workers",
+    "spin",
 ];
 
 /// The `outputs` mode: `"borrowed"` (the native default, ADR-0003) or
@@ -184,6 +185,7 @@ fn pool_args(g: Gil, kw: &Kwargs<'_>, default_limit: u32) -> CResult<PoolArgs> {
         workers: kw
             .u32(g, "workers")?
             .map_or(0, |w| usize::try_from(w).unwrap_or(usize::MAX)),
+        spin: kw.u32(g, "spin")?,
     })
 }
 

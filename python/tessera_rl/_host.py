@@ -185,6 +185,14 @@ def _check_outputs(outputs: str) -> None:
         raise _native.ArgumentError(f"outputs is 'borrowed' or 'owned', not {outputs!r}")
 
 
+def _refuse_spin(kwargs: dict) -> None:
+    """``spin`` is a first-party pool option; host protocol 1 has no spin
+    budget, so it is refused here rather than passed on as config.
+    ``spin=None`` (the default) is dropped."""
+    if kwargs.pop("spin", None) is not None:
+        raise _native.CapabilityError("spin is a first-party pool option; host environments do not take it")
+
+
 def make(env_id: str, known_first_party, num_envs: int, seed: int, outputs: str, kwargs: dict) -> HostEnv:
     """``tessera_rl.make`` for a host id: checks the mode, calls the factory
     with the pool options and the config, and wraps the object."""
@@ -194,6 +202,7 @@ def make(env_id: str, known_first_party, num_envs: int, seed: int, outputs: str,
     for split in ("batch_size", "gather"):
         if split in kwargs:
             raise _native.CapabilityError(f"{split} is for async mode, which host environments do not have")
+    _refuse_spin(kwargs)
     _check_outputs(outputs)
     factory = _factory(env_id, known_first_party)
     return HostEnv(_call_factory(factory, num_envs, seed, kwargs), outputs)
@@ -207,6 +216,7 @@ def native_for(env_id: str, num_envs: int, seed: int, outputs: str, kwargs: dict
     for split in ("mode", "batch_size", "gather"):
         if kwargs.pop(split, None) not in (None, "sync"):
             raise _native.CapabilityError(f"host environments run in sync mode only ({split})")
+    _refuse_spin(kwargs)
     if kwargs.get("max_episode_steps") == 0:
         kwargs["max_episode_steps"] = None
     _check_outputs(outputs)

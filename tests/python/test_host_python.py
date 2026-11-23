@@ -84,6 +84,23 @@ def test_host_make_split_phase_modes_are_capability_errors(fake, kwargs):
         tessera_rl.make(FAKE, num_envs=2, **kwargs)
 
 
+@pytest.mark.parametrize("spin", [0, 2_000])
+def test_host_make_spin_raises_capability_error(fake, spin):
+    with pytest.raises(tessera_rl.CapabilityError, match="spin"):
+        tessera_rl.make(FAKE, num_envs=2, workers=1, spin=spin)
+
+
+def test_host_make_spin_none_is_dropped(fake):
+    tessera_rl.make(FAKE, num_envs=2, spin=None).close()
+
+
+def test_host_gym_vector_env_spin_raises_capability_error(fake):
+    from tessera_rl import gym
+
+    with pytest.raises(tessera_rl.CapabilityError, match="spin"):
+        gym.TesseraVectorEnv(FAKE, num_envs=2, workers=1, spin=5)
+
+
 def test_host_make_passes_pool_options_and_config(fake, monkeypatch):
     seen = {}
 
