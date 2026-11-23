@@ -9,8 +9,13 @@ the API is not stable, and any 0.x release may break it.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-23
+
 ### Added
 
+- Host environments (ADR-0062, experimental until 1.0): the `HostEnvironment` trait, `HostSeed`, `HostOut` and `HostError` in `tessera-rl-core`, for environments whose state lives on the heap (`&mut self`, no `Copy`, no snapshot, fork or `Persist`); `register_host!` and `registered_host()`; the public `Space::heads()`; and `HostPool` in `tessera-rl-engine` (feature `host`), in Inline and Sync modes, with ADR-0065's aborted episodes, joint-action validation and runtime agent count. `HostEnvironment::new` is called once per instance, in index order, on the thread that builds the pool, before any method on an instance (#285).
+- `tessera-rl-pyffi` (new crate, experimental): the CPython boundary shared by Tessera's Python extensions, a typed safe FFI layer and, behind its `host` feature, `export_host_env!` (host protocol 1). The first-party extension is built on it.
+- `examples/host_orderbook`: an out-of-tree host environment wheel (`example/OrderBook-v1`), its own Cargo workspace and maturin project, built and checked next to the first-party wheel: on Linux x86-64 in CI (`make py-test-orderbook`), and on Linux aarch64 and macOS arm64 in the wheels workflow (#313).
 - Host environments from Rust by id (ADR-0065): `register_host_factory!`, `make_host`, `MakeOptions`, `FactoryError` and the type-erased `DynHostPool` in `tessera-rl-engine` (feature `host`).
 - Host environments from Python (SPEC 14.4 draft, ADR-0065): `tessera_rl.make` finds the `tessera_rl.envs` entry points of installed host wheels (read once per process: restart after installing one) and returns a `HostEnv`, whose `HostStep` is `Step` followed by `aborted`, `abort_code` and `pending_reset`; `CapabilityError` for what a host environment does not support (snapshots, split-phase modes, PufferLib, JAX); `is_stale` and `set_fp_policy` reach host views and objects; the Gymnasium adapter reports `aborted`, `abort_code` and `pending_reset` infos, and PettingZoo's `agents` is empty after an aborted reset, with Mixed host environments through `parallel_env` only; both adapters report `metadata["tessera_kind"]` (ADR-0062).
 - Host protocol 1 for third-party host environment wheels (SPEC 14.4 draft, ADR-0062, ADR-0065): `export_host_env!` in `tessera-rl-pyffi` (feature `host`) exports `make(**kwargs)` and the host object, with `layout()`, `reset(seed)`, `step(actions)` returning read-only output views (including `aborted`, `abort_code` and `pending_reset`), `close()`, `is_poisoned()`, the generation and FP-policy hooks; `HostPool::layout` and `HostLayout` in `tessera-rl-engine`; read-only attributes (`AttributeTable`) in `tessera-rl-pyffi`'s typed layer.
@@ -19,11 +24,23 @@ the API is not stable, and any 0.x release may break it.
 
 ### Changed
 
+- **PettingZoo agent names for spawning environments (#71, ADR-0067):** an agent is named per (slot, generation): `agent_<slot>` for generation 0, unchanged for every existing environment, and `agent_<slot>_g<g>` after that. For a spawning environment `possible_agents` grows as agents spawn and is rebuilt at `reset`. A respawned agent is a new agent, as PettingZoo's API tests require; native AEC refuses a spawning environment with `CapabilityError`.
 - **PettingZoo multi-head masks (#311):** for an environment with several masked discrete heads, `tessera_rl.pz`'s `infos[agent]["action_mask"]` is now a tuple of `int8` masks, one per `MultiDiscrete` component in `nvec` order, which `MultiDiscrete.sample` accepts (it was the root head's array). A conditional head's entry is the union over its parents, so a sampled action can still be illegal; the exact masks stay in `infos[agent]["action_masks"]`. The Gymnasium adapter's `info["action_mask"]` is unchanged.
 - `OutputView.__dlpack__` raises `TypeError` for an unknown keyword argument (it was ignored); its argument rules are now shared with host views (#272).
 
+### Performance
+
+- The plain Sync and Inline step validates and copies actions in one pass over the action buffer while every instance steps (none pending a reset, every agent alive and acting) and no counter is near its limit (#152).
+- The step and observation RNG keys are derived on their first draw, not for every instance and step (#152).
+- Output rows are cleared once per chunk (#266).
+- The Python step passes an exact `int32` C-contiguous action array for a single discrete head to the native step as a memoryview, with no Python-side pass over it, and the native binding builds its output view set once per environment (#152 E2, E3).
+- The PufferLib adapter logs episodes from the engine's episode statistics (#271).
+
 ### Fixed
 
+- An Async worker that dies between the two reads of a failure check is reported as `WorkerDied`, not as a step's panic (#303).
+- A host instance whose `same_step` reset aborts keeps the ended episode's end in its record header (#290).
+- The release and PGO build scripts refuse an ambient `CARGO_PROFILE_*` or `CARGO_TARGET_*` variable every time: the check missed a set variable in some runs (#320). The instruction-count gate's profile check reports a crate built without `-C codegen-units=1` or with LTO, also for large `rustc` lines and for `lto = true` (#323).
 - A host environment object made before `os.fork()` now raises `ForkError` in the child, as SPEC 14.4.2 specifies: the host module registers its own copy of the fork guard, since a host wheel links its own `tessera-rl-pyffi`. Before, the call returned with `workers=0` and hung with workers (#329).
 - PettingZoo AEC by cycle buffering (`tessera_rl.pz.aec_env` over a Simultaneous environment) accepts a multi-head action: its action check used `action_space(agent).n`, which a `MultiDiscrete` space does not have (#311).
 
@@ -393,6 +410,7 @@ defects:
   no `powi`, no `std` transcendental methods; use `tessera_rl::num::math`)
   in your own crate.
 
-[Unreleased]: https://github.com/joaquinbejar/tessera-rl/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/joaquinbejar/tessera-rl/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/joaquinbejar/tessera-rl/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/joaquinbejar/tessera-rl/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/joaquinbejar/tessera-rl/releases/tag/v0.1.0

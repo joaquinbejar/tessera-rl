@@ -26,10 +26,10 @@
 //!
 //! ## Status
 //!
-//! Version 0.2.0 is an early release. The API is not yet stable and may
+//! Version 0.3.0 is an early release. The API is not yet stable and may
 //! change in any 0.x release.
 //!
-//! | Area | State in 0.2.0 |
+//! | Area | State in 0.3.0 |
 //! | --- | --- |
 //! | Core, engine, macros, numerics (phase 1a) | Implemented: the `Environment` trait and spaces, the canonical encoding and state hashes, the `Sync` and `Inline` pools, auto-reset modes, poisoning, snapshot, restore, fork and branched fork, `debug-checks` for NaN and allocations, the `register!` environment registry |
 //! | Python and Gymnasium (phase 1b) | Implemented: `PyO3` bindings (abi3, Python 3.11+), a Gymnasium 1.x `Env` and `VectorEnv`, owned and borrowed outputs, single-agent environments, `MultiDiscrete` and continuous (`Box`) actions |
@@ -38,13 +38,21 @@
 //! | Classic games (phase 3) | Implemented: mountain car, Acrobot, pendulum, grid world, key and door, Snake, paddle duel and brick wall |
 //! | SIMD lanes (phase 3) | Partial: `tessera-rl-simd` has a standalone lane-wise CartPole kernel; no pool uses it |
 //! | RTS (phase 4) | Implemented: `tessera-rl-rts`, with fog of war, multi-head actions and scripted opponents |
+//! | Host environments for external crates | Experimental: `HostEnvironment` (heap state, no snapshots), `HostPool` (Inline and Sync), host protocol 1 through `tessera-rl-pyffi`'s `export_host_env!`, and `tessera_rl.make` for installed host wheels, with the Gymnasium and PettingZoo adapters; an out-of-tree example in `examples/host_orderbook` |
 //! | GPU paths, market simulator, card games, league tooling, viewer | Planned |
 //!
-//! Known limits of 0.2.0:
+//! Known limits of 0.3.0:
 //!
 //! - The phase 2 exit gate (the AlphaZero-style Connect Four example against the
-//!   scripted bot, P2-G1) has **not been run** (#154).
-//! - No throughput figure is published with this release.
+//!   scripted bot, P2-G1) is **not met**: its ADR-0052 attempt ended not
+//!   eligible, and a new attempt needs a new ADR (#154).
+//! - No throughput figure is published with this release. The phase 3 gate
+//!   (ADR-0061, end-to-end against PufferLib on a GPU) is **not met**: three
+//!   attempts are recorded losses, at 0.791, 0.912 and 0.929 of PufferLib's
+//!   score; the gate stays open (#152).
+//! - Host environments have no snapshot, fork or persistence, and no
+//!   Pipelined or Async mode; the host surface is experimental and may break
+//!   in a 0.x minor release (ADR-0062 item 9).
 //! - **Windows is not in CI**, and no Windows wheel is built. CI covers Linux
 //!   x86-64, Linux aarch64 and macOS (aarch64). The Python Win64
 //!   floating-point boundary has been checked natively by hand (#166, #183,
@@ -81,14 +89,14 @@
 //!
 //! ```toml
 //! [dependencies]
-//! tessera-rl = "0.2.0"
+//! tessera-rl = "0.3.0"
 //! ```
 //!
 //! From the git tag:
 //!
 //! ```toml
 //! [dependencies]
-//! tessera-rl = { git = "https://github.com/joaquinbejar/tessera-rl", tag = "v0.2.0" }
+//! tessera-rl = { git = "https://github.com/joaquinbejar/tessera-rl", tag = "v0.3.0" }
 //! ```
 //!
 //! Depend on the facade `tessera-rl` only: the derive macros resolve their
