@@ -122,6 +122,34 @@ def test_gungraun_profile_fat_lto_fails(tmp_path):
     assert "games_instructions was compiled with LTO" in p.stderr
 
 
+@pytest.mark.parametrize("value", ["fat", "thin", "true", "yes", "on"])
+def test_gungraun_profile_every_lto_setting_fails(tmp_path, value):
+    p = _profile(tmp_path, [_rustc("games_instructions", f"-C lto={value} -C codegen-units=1"), _rustc("tessera_rl_games", "-C codegen-units=1")])
+    assert p.returncode == 1
+    assert "games_instructions was compiled with LTO" in p.stderr
+
+
+@pytest.mark.parametrize("flags", ["-C lto=off", "-C lto=no", "-C lto=false", "-C linker-plugin-lto"])
+def test_gungraun_profile_lto_off_passes(tmp_path, flags):
+    p = _profile(tmp_path, [_rustc("games_instructions", f"{flags} -C codegen-units=1"), _rustc("tessera_rl_games", "-C codegen-units=1")])
+    assert p.returncode == 0, p.stderr
+
+
+def test_gungraun_profile_bare_lto_before_another_flag_fails(tmp_path):
+    # Cargo writes `lto = true` as a bare `-C lto` (cargo 1.100), with no value.
+    p = _profile(tmp_path, [_rustc("games_instructions", "-C lto -C codegen-units=1"), _rustc("tessera_rl_games", "-C codegen-units=1")])
+    assert p.returncode == 1
+    assert "games_instructions was compiled with LTO" in p.stderr
+
+
+def test_gungraun_profile_bare_lto_at_the_end_of_the_line_fails(tmp_path):
+    line = _rustc("games_instructions", "-C codegen-units=1").replace(" -C debuginfo=0`", " -C lto`")
+    assert line.endswith(" -C lto`")
+    p = _profile(tmp_path, [line, _rustc("tessera_rl_games", "-C codegen-units=1")])
+    assert p.returncode == 1
+    assert "games_instructions was compiled with LTO" in p.stderr
+
+
 def test_gungraun_profile_missing_rustc_lines_fail_closed(tmp_path):
     p = _profile(tmp_path, ["       Fresh tessera-rl-games v0.1.0"])
     assert p.returncode == 1
@@ -163,3 +191,39 @@ def test_gungraun_gate_manifest_records_the_profile_settings():
     out = subprocess.run(["bash", "-c", script], capture_output=True, text=True, check=True).stdout.strip()
     assert out == "inherits=bench;codegen-units=1"
     assert 'bench_profile = "$profile: $(profile_settings)"' in text
+
+
+# Issue #323: the two `grep -q` checks once read a pipe from printf. Under pipefail, when the
+# crate's rustc lines exceed the pipe's capacity, printf died of SIGPIPE after grep's early
+# exit and the violation went unreported (500 of 500 runs at 40 lines of 3 KB). Each run
+# below has the violation in the first of 40 such lines, and it must be reported every time.
+BIG_LINES, RUNS = 40, 50
+
+
+def _big_log(tmp_path, first_flags):
+    pad = "-C link-arg=" + "x" * 3000
+    lines = [_rustc("games_instructions", f"{first_flags} {pad}")]
+    lines += [_rustc("games_instructions", f"-C codegen-units=1 {pad}") for _ in range(BIG_LINES - 1)]
+    lines.append(_rustc("tessera_rl_games", "-C codegen-units=1"))
+    log = tmp_path / "build.log"
+    log.write_text("\n".join(["   Compiling tessera-rl-games v0.1.0", *lines]) + "\n")
+    return log
+
+
+@pytest.mark.parametrize(
+    ("flags", "message"),
+    [("-C codegen-units=16", "games_instructions was compiled without -C codegen-units=1"),
+     ("-C lto=fat -C codegen-units=1", "games_instructions was compiled with LTO")],
+    ids=["codegen-units", "lto"],
+)
+def test_gungraun_profile_reports_a_violation_in_large_rustc_lines_every_time(tmp_path, flags, message):
+    log = _big_log(tmp_path, flags)
+    checks = [line for line in PROFILE.read_text().splitlines() if re.search(r"grep -v?qE", line)]
+    assert len(checks) == 2 and all('<<<"$mine"' in c and "| grep" not in c for c in checks), "the grep -q checks read no pipe"
+    loop = (f"reported=0; for _ in $(seq {RUNS}); do "
+            f"if bash {PROFILE} {log} {' '.join(CRATES)} >/dev/null 2>&1; then :; else [ $? -eq 1 ] && reported=$((reported + 1)); fi; "
+            "done; echo \"$reported\"")
+    p = subprocess.run(["bash", "-c", loop], capture_output=True, text=True, check=False)
+    assert p.stdout.strip() == str(RUNS), f"reported in {p.stdout.strip()} of {RUNS} runs"
+    one = subprocess.run(["bash", str(PROFILE), str(log), *CRATES], capture_output=True, text=True, check=False)
+    assert one.returncode == 1 and message in one.stderr, one.stderr
