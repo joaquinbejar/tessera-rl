@@ -182,6 +182,13 @@ def _check_env_id(env_id: str) -> None:
         )
 
 
+def _spin(value) -> int:
+    """The worker spin budget: an int in 0..2**32, refused like ``workers``."""
+    if type(value) is not int or not 0 <= value < _U32:
+        raise _native.ArgumentError(f"spin must be an int in 0..2**32, got {value!r}")
+    return value
+
+
 class TesseraPufferEnv(pufferlib.PufferEnv):
     """``num_envs`` instances as ``num_envs * agents`` PufferLib agents."""
 
@@ -209,7 +216,7 @@ class TesseraPufferEnv(pufferlib.PufferEnv):
         if spin is not None:
             if _workers(workers) < 1:
                 raise _native.ArgumentError("spin needs workers >= 1")
-            self._make_args["spin"] = _seed(spin, "spin")
+            self._make_args["spin"] = _spin(spin)
         self._env_id = env_id
         self._log_interval = log_interval
         self._env = None

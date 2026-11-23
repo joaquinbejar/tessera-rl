@@ -642,10 +642,11 @@ def test_spin_passes_through_to_make_and_steps():
     env.close()
 
 
-@pytest.mark.parametrize("bad", [-1, "invalid", 1.0, 2**32])
+@pytest.mark.parametrize("bad", [-1, "invalid", 1.0, True, 2**32])
 def test_invalid_spin_is_refused_at_construction(bad):
-    with pytest.raises((t.ArgumentError, TypeError), match="spin"):
+    with pytest.raises(t.ArgumentError, match=r"spin must be an int in 0\.\.2\*\*32") as info:
         TesseraPufferEnv(CARTPOLE, workers=1, spin=bad)
+    assert type(info.value) is t.ArgumentError
 
 
 def test_spin_without_workers_is_refused_at_construction():
