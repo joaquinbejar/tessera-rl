@@ -1868,8 +1868,9 @@ fn step_one<E: Environment>(
         let mut out = StepOut::new(reward_row, term_row, trunc_row, died_row, spawned_row);
         let mut rng = StepRng::new(authority, &identity, StreamId::DYNAMICS);
         E::step(cfg, state, actions, &mut rng, &mut out);
-        out.episode_end()
+        (out.episode_end(), out.agent_events())
     };
+    let (end, events) = end;
     // TimeLimit semantics (SPEC 5.4): reaching the step limit truncates the
     // episode in addition to whatever the environment reported.
     let end = Ending {
@@ -1898,8 +1899,11 @@ fn step_one<E: Environment>(
         );
         row.episode_return += reward;
         total += row.episode_return;
-        let mut died = outputs.died.get(k).is_some_and(|f| f.get());
-        let spawned = outputs.spawned.get(k).is_some_and(|f| f.get());
+        // The died and spawned rows were cleared before the kernel, and only
+        // `StepOut::agent_died` and `agent_spawned` set them: without a call
+        // they are all false, so they are not read.
+        let mut died = events && outputs.died.get(k).is_some_and(|f| f.get());
+        let spawned = events && outputs.spawned.get(k).is_some_and(|f| f.get());
         if died && !row.alive.get() {
             // An invalid agent event, like a spawn on an occupied slot: the
             // death of an agent that is already dead is never applied (its

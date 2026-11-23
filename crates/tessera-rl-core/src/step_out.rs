@@ -39,6 +39,9 @@ pub struct StepOut<'a> {
     died: &'a mut [Bool8],
     spawned: &'a mut [Bool8],
     episode_end: Option<EpisodeEnd>,
+    /// Whether `agent_died` or `agent_spawned` was called this step: the
+    /// engine reads the died and spawned rows only then (issue #152, P4).
+    agent_events: bool,
 }
 
 #[inline]
@@ -74,6 +77,7 @@ impl<'a> StepOut<'a> {
             died,
             spawned,
             episode_end: None,
+            agent_events: false,
         }
     }
 
@@ -113,6 +117,7 @@ impl<'a> StepOut<'a> {
     /// flag. The engine clears its alive flag; the episode continues.
     #[inline]
     pub fn agent_died(&mut self, agent: AgentSlot) {
+        self.agent_events = true;
         if let Some(f) = slot_mut(self.died, agent) {
             *f = Bool8::TRUE;
         }
@@ -124,6 +129,7 @@ impl<'a> StepOut<'a> {
     /// new occupant from the previous one.
     #[inline]
     pub fn agent_spawned(&mut self, agent: AgentSlot) {
+        self.agent_events = true;
         if let Some(f) = slot_mut(self.spawned, agent) {
             *f = Bool8::TRUE;
         }
@@ -141,6 +147,15 @@ impl<'a> StepOut<'a> {
     #[inline]
     pub const fn episode_end(&self) -> Option<EpisodeEnd> {
         self.episode_end
+    }
+
+    /// Engine-only: whether an agent died or spawned this step, that is,
+    /// whether the died or spawned rows may hold a `true`.
+    #[doc(hidden)]
+    #[must_use]
+    #[inline]
+    pub const fn agent_events(&self) -> bool {
+        self.agent_events
     }
 }
 
