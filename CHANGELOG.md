@@ -9,6 +9,8 @@ the API is not stable, and any 0.x release may break it.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-23
+
 ### Added
 
 - Host environments from Rust by id (ADR-0065): `register_host_factory!`, `make_host`, `MakeOptions`, `FactoryError` and the type-erased `DynHostPool` in `tessera-rl-engine` (feature `host`).
@@ -393,6 +395,7 @@ defects:
   no `powi`, no `std` transcendental methods; use `tessera_rl::num::math`)
   in your own crate.
 
-[Unreleased]: https://github.com/joaquinbejar/tessera-rl/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/joaquinbejar/tessera-rl/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/joaquinbejar/tessera-rl/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/joaquinbejar/tessera-rl/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/joaquinbejar/tessera-rl/releases/tag/v0.1.0
