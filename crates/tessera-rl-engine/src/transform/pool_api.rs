@@ -14,15 +14,7 @@ use crate::masks::MaskProvider;
 use crate::pool::EnvPool;
 use crate::record::Record;
 
-impl<E, M> EnvPool<E, M>
-where
-    E: Environment,
-    M: MaskProvider<E>,
-    E::Config: Sync,
-    E::Header: Send,
-    E::State: Send,
-    <E::Header as RecordLayout>::Adaptive: AdaptiveValues<E::Config>,
-{
+impl<E: Environment, M: MaskProvider<E>> EnvPool<E, M> {
     /// The observation the pool exports: the environment's, transformed by
     /// the pool's transforms (ADR-0078 item 2.2). Adapters read this.
     ///
@@ -64,6 +56,37 @@ where
             .map_or(0, |t| t.shared.instance_bytes)
     }
 
+    /// Freezes (or unfreezes) normalization (ADR-0078 item 5.6): while
+    /// frozen nothing accumulates.
+    pub fn freeze_normalization(&mut self, frozen: bool) {
+        if let Some(t) = self.transform.as_mut() {
+            t.frozen = frozen;
+        }
+    }
+
+    /// Whether the pool has a `Normalize` that accumulates (not frozen).
+    pub(crate) fn normalization_unfrozen(&self) -> bool {
+        self.transform
+            .as_ref()
+            .is_some_and(|t| t.shared.plan.normalized > 0 && !t.frozen)
+    }
+
+    /// Whether normalization is frozen.
+    #[must_use]
+    pub fn normalization_frozen(&self) -> bool {
+        self.transform.as_ref().is_some_and(|t| t.frozen)
+    }
+}
+
+impl<E, M> EnvPool<E, M>
+where
+    E: Environment,
+    M: MaskProvider<E>,
+    E::Config: Sync,
+    E::Header: Send,
+    E::State: Send,
+    <E::Header as RecordLayout>::Adaptive: AdaptiveValues<E::Config>,
+{
     /// Copies instance `id`'s frame stacks into `out` (exactly
     /// [`Self::transform_state_bytes`] bytes).
     ///
@@ -178,27 +201,6 @@ where
             }
             Ok(())
         })
-    }
-
-    /// Freezes (or unfreezes) normalization (ADR-0078 item 5.6): while
-    /// frozen nothing accumulates.
-    pub fn freeze_normalization(&mut self, frozen: bool) {
-        if let Some(t) = self.transform.as_mut() {
-            t.frozen = frozen;
-        }
-    }
-
-    /// Whether the pool has a `Normalize` that accumulates (not frozen).
-    pub(crate) fn normalization_unfrozen(&self) -> bool {
-        self.transform
-            .as_ref()
-            .is_some_and(|t| t.shared.plan.normalized > 0 && !t.frozen)
-    }
-
-    /// Whether normalization is frozen.
-    #[must_use]
-    pub fn normalization_frozen(&self) -> bool {
-        self.transform.as_ref().is_some_and(|t| t.frozen)
     }
 
     /// The frame-stack bytes of `instances` instances.

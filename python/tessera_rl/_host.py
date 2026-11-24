@@ -194,6 +194,9 @@ def _refuse_spin(kwargs: dict) -> None:
     ``spin=None`` (the default) is dropped."""
     if kwargs.pop("spin", None) is not None:
         raise _native.CapabilityError("spin is a first-party pool option; host environments do not take it")
+    # Observation transforms run on first-party pools only (ADR-0078 item 1.4).
+    if kwargs.pop("transforms", None):
+        raise _native.CapabilityError("observation transforms are not supported for host environments (ADR-0078)")
     # The worker wait policy (ADR-0074 item 5) is not part of host protocol 1 either.
     for key in ("wait", "wait_cap_us"):
         if kwargs.pop(key, None) is not None:

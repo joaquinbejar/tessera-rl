@@ -240,7 +240,7 @@ impl Builder {
                         elements,
                         n: n_usize,
                     },
-                    Space::MultiBinary { shape },
+                    bool_box(shape),
                 )
             }
             Transform::Normalize { clip, .. } => {
@@ -376,6 +376,19 @@ fn replace_leaves(space: &mut Space, finals: &mut [Option<Space>], seen: &mut us
             }
             *seen += 1;
         }
+    }
+}
+
+/// A `bool` box of `shape`: the one-hot output, in the form every adapter
+/// exposes.
+fn bool_box(shape: Vec<u32>) -> Space {
+    Space::Box {
+        shape,
+        dtype: DType::Bool,
+        bounds: BoxBounds::Int {
+            low: vec![0],
+            high: vec![1],
+        },
     }
 }
 
@@ -555,7 +568,9 @@ mod tests {
             panic!("{:?}", p.space);
         };
         assert!(matches!(&entries[0].1, Space::Box { shape, .. } if *shape == [4, 2]));
-        assert_eq!(entries[1].1, Space::MultiBinary { shape: vec![1, 5] });
+        assert!(
+            matches!(&entries[1].1, Space::Box { shape, dtype: DType::Bool, .. } if *shape == [1, 5])
+        );
         // The set is untouched.
         assert_eq!(entries[2].1, space_items());
         assert_eq!(p.agent_state, STACK_HEADER + 4 * 8);

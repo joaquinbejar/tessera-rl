@@ -104,7 +104,7 @@ pub(crate) fn no_positional(g: Gil, args: Ref<'_>, name: &str) -> CResult<()> {
     }
 }
 
-const POOL_KEYS: [&str; 13] = [
+const POOL_KEYS: [&str; 14] = [
     "mode",
     "batch_size",
     "gather",
@@ -118,6 +118,7 @@ const POOL_KEYS: [&str; 13] = [
     "spin",
     "wait",
     "wait_cap_us",
+    "transforms",
 ];
 
 /// The `outputs` mode: `"borrowed"` (the native default, ADR-0003) or
@@ -212,6 +213,8 @@ fn pool_args(g: Gil, kw: &Kwargs<'_>, default_limit: u32) -> CResult<PoolArgs> {
         spin: kw.u32(g, "spin")?,
         wait: kw.string(g, "wait")?,
         wait_cap_us: kw.u32(g, "wait_cap_us")?,
+        transforms: crate::env::parse_transforms(kw.string(g, "transforms")?.as_deref())
+            .map_err(|e| to_py(g, e))?,
     })
 }
 
@@ -1559,6 +1562,31 @@ pub(crate) fn render<'py>(g: Gil<'py>, inner: &Inner, args: Ref<'_>) -> CResult<
         let (frames, overflowed) = ops.render(&ids).map_err(|e| to_py(g, e))?;
         let flags = list_of(g, overflowed.iter().map(|&o| Ok(capi::boolean(g, o))))?;
         capi::tuple(g, vec![capi::bytes(g, &frames)?, flags])
+    })
+}
+
+/// `epoch_barrier()`: merges the normalization accumulators (ADR-0078
+/// item 5.3); sync mode only.
+pub(crate) fn epoch_barrier<'py>(g: Gil<'py>, inner: &Inner) -> CResult<Mine<'py>> {
+    inner.with(g, |ops| {
+        g.detach(|| ops.epoch_barrier()).map_err(|e| to_py(g, e))?;
+        Ok(capi::none(g))
+    })
+}
+
+/// `freeze_normalization(frozen)`: stops or restarts accumulation
+/// (ADR-0078 item 5.6); sync mode only.
+pub(crate) fn freeze_normalization<'py>(
+    g: Gil<'py>,
+    inner: &Inner,
+    args: Ref<'_>,
+) -> CResult<Mine<'py>> {
+    let a: [Ref<'_>; 1] = exactly(g, args, "freeze_normalization")?;
+    let [frozen] = a;
+    let frozen = capi::to_bool(g, frozen, "frozen")?;
+    inner.with(g, |ops| {
+        ops.freeze_normalization(frozen).map_err(|e| to_py(g, e))?;
+        Ok(capi::none(g))
     })
 }
 

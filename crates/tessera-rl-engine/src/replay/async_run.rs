@@ -152,8 +152,8 @@ impl Replay<'_> {
                     | Event::Recv { .. }
                     | Event::Checkpoint { .. }
                     | Event::Keyframe { .. } => {
-                        run.summary.unchecked_before_poison =
-                            run.summary.unchecked_before_poison.saturating_add(1);
+                        // At most the file's event count, a u64.
+                        run.summary.unchecked_before_poison += 1;
                     }
                     _ => {
                         return Err(run.diverged(call, DivergenceKind::UnexpectedPoison, None));

@@ -749,6 +749,7 @@ mod tests {
             spin: None,
             wait: None,
             wait_cap_us: None,
+            transforms: tessera_rl_engine::Transforms::new(),
             pipelined: true,
             asynced: None,
         })
@@ -800,6 +801,7 @@ mod tests {
             spin: None,
             wait: None,
             wait_cap_us: None,
+            transforms: tessera_rl_engine::Transforms::new(),
             pipelined: true,
             asynced: None,
         };
@@ -912,6 +914,7 @@ mod tests {
             spin: None,
             wait: None,
             wait_cap_us: None,
+            transforms: tessera_rl_engine::Transforms::new(),
             pipelined: true,
             asynced: None,
         };

@@ -301,6 +301,16 @@ pub(crate) trait PoolOps: Send {
     fn scene(&self, _id: u32) -> Result<(Vec<tessera_rl_core::render::Prim>, bool), BindError> {
         Err(crate::render_api::not_renderable())
     }
+    /// The epoch barrier of the pool's normalization (ADR-0078 item 5.3):
+    /// sync mode only.
+    fn epoch_barrier(&mut self) -> Result<(), BindError> {
+        Err(transforms_sync_only())
+    }
+    /// Freezes or unfreezes normalization (ADR-0078 item 5.6): sync mode
+    /// only.
+    fn freeze_normalization(&mut self, _frozen: bool) -> Result<(), BindError> {
+        Err(transforms_sync_only())
+    }
     /// Illegal-but-valid actions replaced in instance `id`'s current
     /// episode, per agent slot (the record header's statistic). Sync mode
     /// only; the split-phase modes refuse it.
@@ -594,12 +604,9 @@ where
     ) -> Result<Self, BindError> {
         let mut obs = Vec::new();
         let mut sets = Vec::new();
-        leaves(
-            &E::observation_space(cfg).map_err(EngineError::from)?,
-            "",
-            &mut obs,
-            &mut sets,
-        )?;
+        // The exported observation: transformed when the pool has
+        // transforms (ADR-0078 item 2.2).
+        leaves(&pool.observation_space()?, "", &mut obs, &mut sets)?;
         let (action_choices, action_bounds, action_nvec) = action_head(
             &E::action_space(cfg).map_err(EngineError::from)?,
             E::MAX_AGENTS,
@@ -827,6 +834,15 @@ where
 
     fn canvas(&self) -> Option<(u16, u16)> {
         self.render.as_ref().map(|(_, fns)| fns.canvas)
+    }
+
+    fn epoch_barrier(&mut self) -> Result<(), BindError> {
+        Ok(self.pool.epoch_barrier()?)
+    }
+
+    fn freeze_normalization(&mut self, frozen: bool) -> Result<(), BindError> {
+        self.pool.freeze_normalization(frozen);
+        Ok(())
     }
 
     fn render(&self, ids: &[u32]) -> Result<(Vec<u8>, Vec<bool>), BindError> {
@@ -1126,6 +1142,44 @@ pub(crate) struct PoolArgs {
     pub(crate) pipelined: bool,
     /// Async mode (ADR-0047) with its batch size and outputs.
     pub(crate) asynced: Option<(usize, crate::batched::BatchOutputs)>,
+    /// The observation transforms (ADR-0078); empty for none.
+    pub(crate) transforms: tessera_rl_engine::Transforms,
+}
+
+/// The refusal of the normalization calls outside sync mode.
+fn transforms_sync_only() -> BindError {
+    BindError::Capability(
+        "epoch_barrier and freeze_normalization need a sync-mode pool (ADR-0078)".to_owned(),
+    )
+}
+
+/// The native form of a transform list (built by `tessera_rl.transforms`):
+/// one transform per line, `kind<TAB>leaf<TAB>parameter`, kinds
+/// `frame_stack` (`k`), `one_hot` (`n`) and `normalize` (`clip`).
+///
+/// # Errors
+///
+/// [`BindError::Argument`] for a line of another shape.
+pub(crate) fn parse_transforms(
+    spec: Option<&str>,
+) -> Result<tessera_rl_engine::Transforms, BindError> {
+    let mut out = tessera_rl_engine::Transforms::new();
+    let bad = |line: &str| BindError::Argument(format!("invalid transform {line:?}"));
+    for line in spec.unwrap_or("").lines().filter(|l| !l.is_empty()) {
+        let mut parts = line.split('\t');
+        let (Some(kind), Some(leaf), Some(param), None) =
+            (parts.next(), parts.next(), parts.next(), parts.next())
+        else {
+            return Err(bad(line));
+        };
+        out = match kind {
+            "frame_stack" => out.frame_stack(leaf, param.parse().map_err(|_| bad(line))?),
+            "one_hot" => out.one_hot(leaf, param.parse().map_err(|_| bad(line))?),
+            "normalize" => out.normalize(leaf, param.parse().map_err(|_| bad(line))?),
+            _ => return Err(bad(line)),
+        };
+    }
+    Ok(out)
 }
 
 fn options(args: &PoolArgs) -> Result<(PoolOptions, usize), BindError> {
@@ -1333,6 +1387,8 @@ where
     let workers = resolve_workers(args)?;
     check_spin(args)?;
     let policy = wait_policy(args)?;
+    // Before the first reset and before any mode (ADR-0078 item 2.1).
+    let pool = pool.with_transforms(args.transforms.clone())?;
     let storage = pool.outputs()?.storage();
     let pooled = Pooled::new(cfg, pool, n, terminal, storage)?;
     if args.pipelined {
@@ -1891,6 +1947,7 @@ mod tests {
             spin: None,
             wait: None,
             wait_cap_us: None,
+            transforms: tessera_rl_engine::Transforms::new(),
             pipelined: false,
             asynced: None,
         };
@@ -1909,6 +1966,7 @@ mod tests {
             spin,
             wait: None,
             wait_cap_us: None,
+            transforms: tessera_rl_engine::Transforms::new(),
             pipelined,
             asynced: None,
         }
@@ -1943,6 +2001,29 @@ mod tests {
                 cap: core::time::Duration::from_secs(1)
             }
         );
+    }
+
+    #[test]
+    fn test_parse_transforms_accepts_three_fields_and_refuses_the_rest() {
+        assert!(parse_transforms(None).is_ok());
+        assert!(
+            parse_transforms(Some(
+                "frame_stack\tboard\t2\none_hot\tview\t4\nnormalize\t\t5.0"
+            ))
+            .is_ok()
+        );
+        for bad in [
+            "frame_stack\tboard\t2\textra",
+            "frame_stack\tboard",
+            "stack\tboard\t2",
+            "frame_stack\tboard\ttwo",
+            "normalize\t\tfive",
+        ] {
+            assert!(
+                matches!(parse_transforms(Some(bad)), Err(BindError::Argument(_))),
+                "{bad:?}"
+            );
+        }
     }
 
     #[test]
@@ -2098,6 +2179,7 @@ mod tests {
             spin: None,
             wait: None,
             wait_cap_us: None,
+            transforms: tessera_rl_engine::Transforms::new(),
             pipelined: false,
             asynced: None,
         };
