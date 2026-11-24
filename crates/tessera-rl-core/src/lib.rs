@@ -25,6 +25,7 @@ pub mod header;
 pub mod header_view;
 pub mod host;
 pub mod host_out;
+pub mod host_snapshot;
 pub mod io;
 pub mod leaf;
 pub mod refusals;
@@ -44,6 +45,7 @@ pub use header::{AdaptiveValues, AgentRow, EngineHeader, NoAdaptive, RecordHeade
 pub use header_view::{AgentView, HeaderView, Phase};
 pub use host::{ActionReject, HostEnvironment, HostError, HostSeed};
 pub use host_out::{AbortCode, HostOut};
+pub use host_snapshot::{HostSnapshot, SnapshotReject};
 pub use leaf::{LeafDType, LeafId, ObsLeaf, Observation};
 pub use pool::Pool;
 pub use refusals::{Refusals, RefuseCode};

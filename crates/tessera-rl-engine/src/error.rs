@@ -69,6 +69,29 @@ pub enum EngineError {
         /// What is inconsistent.
         reason: &'static str,
     },
+    /// A host environment refused a record's bytes
+    /// (`HostSnapshot::check_snapshot`, ADR-0073); nothing was restored.
+    #[error("record {index}: snapshot rejected ({code}): {reason}")]
+    SnapshotRejected {
+        /// Position of the record in the call.
+        index: usize,
+        /// The environment's code.
+        code: u32,
+        /// The environment's reason.
+        reason: &'static str,
+    },
+    /// A host environment's `save` wrote more than its
+    /// `max_snapshot_len` (ADR-0073 item 1): an author bug that poisons the
+    /// pool.
+    #[error("instance {instance}: save wrote {len} bytes, over max_snapshot_len {max}")]
+    SnapshotTooLong {
+        /// The instance.
+        instance: u32,
+        /// Bytes written.
+        len: usize,
+        /// The environment's bound.
+        max: usize,
+    },
     /// An imported record violates a game invariant (`Validate`).
     #[error("record {index}: {violation}")]
     Invariant {

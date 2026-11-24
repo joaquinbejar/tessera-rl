@@ -25,6 +25,7 @@ const N: u32 = 32;
 const LIMITS: DecodeLimits = DecodeLimits {
     max_instances: 1 << 24,
     max_decoded_bytes: 1 << 30,
+    max_host_record_bytes: 1 << 26,
 };
 
 type Pool = EnvPool<Counter, Masked>;

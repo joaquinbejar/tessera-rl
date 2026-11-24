@@ -71,7 +71,12 @@ pub trait DynHostPool: Send {
     fn step(&mut self, actions: ActionInput<'_>) -> Result<&Outputs, EngineError>;
 }
 
-impl<E: HostEnvironment, const A: usize> DynHostPool for HostPool<E, A> {
+/// The pool keeps its configuration (ADR-0073), so a type-erased pool,
+/// which is `Send`, needs a `Send` configuration.
+impl<E: HostEnvironment, const A: usize> DynHostPool for HostPool<E, A>
+where
+    E::Config: Send,
+{
     fn registration(&self) -> &'static HostRegistration {
         Self::registration(self)
     }

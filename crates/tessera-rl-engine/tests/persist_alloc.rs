@@ -101,6 +101,7 @@ fn refused_counts(good: &[u8], decode: &dyn Fn(&[u8], DecodeLimits) -> bool) {
         let limits = DecodeLimits {
             max_instances,
             max_decoded_bytes: u64::MAX,
+            max_host_record_bytes: 1 << 26,
         };
         let (refused, tally) = counting::window(|| decode(&bad, limits));
         assert!(refused);

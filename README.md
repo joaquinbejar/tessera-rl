@@ -38,7 +38,7 @@ change in any 0.x release.
 | Classic games (phase 3) | Implemented: mountain car, Acrobot, pendulum, grid world, key and door, Snake, paddle duel and brick wall |
 | SIMD lanes (phase 3) | Partial: `tessera-rl-simd` has a standalone lane-wise CartPole kernel; no pool uses it |
 | RTS (phase 4) | Implemented: `tessera-rl-rts`, with fog of war, multi-head actions and scripted opponents |
-| Host environments for external crates | Experimental: `HostEnvironment` (heap state, no snapshots), `HostPool` (Inline and Sync), host protocol 1 through `tessera-rl-pyffi`'s `export_host_env!`, and `tessera_rl.make` for installed host wheels, with the Gymnasium and PettingZoo adapters; an out-of-tree example in `examples/host_orderbook` |
+| Host environments for external crates | Experimental: `HostEnvironment` (heap state), `HostPool` (Inline and Sync), author-provided snapshots through `HostSnapshot` (ADR-0073, Rust only so far), host protocol 1 through `tessera-rl-pyffi`'s `export_host_env!`, and `tessera_rl.make` for installed host wheels, with the Gymnasium and PettingZoo adapters; an out-of-tree example in `examples/host_orderbook` |
 | GPU paths, market simulator, card games, league tooling, viewer | Planned |
 
 Known limits of 0.3.0:

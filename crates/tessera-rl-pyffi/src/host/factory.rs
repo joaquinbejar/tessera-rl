@@ -234,11 +234,11 @@ pub fn make<'py, E, const A: usize>(
 ) -> CResult<Mine<'py>>
 where
     E: HostEnvironment,
-    E::Config: ConfigDecode,
+    E::Config: ConfigDecode + Send,
 {
     let (options, entries) = options(g, keywords(g, args, kwargs, "make")?)?;
     let cfg: E::Config = decode_config(g, entries)?;
-    let mut pool = HostPool::<E, A>::new(&cfg, options.pool).map_err(|e| engine(g, &e))?;
+    let mut pool = HostPool::<E, A>::new(cfg, options.pool).map_err(|e| engine(g, &e))?;
     // Protocol 1 carries discrete heads only, or one continuous head.
     let (discrete, continuous) = pool.action_heads();
     if !((discrete > 0 && continuous == 0) || (discrete == 0 && continuous == 1)) {

@@ -59,6 +59,13 @@ impl StateHasher {
         value.encode(&mut self.out);
     }
 
+    /// Appends raw bytes, with no length prefix: the caller frames them
+    /// (host snapshots, ADR-0073, hash a length before author bytes).
+    #[inline]
+    pub fn add_bytes(&mut self, bytes: &[u8]) {
+        self.out.write_bytes(bytes);
+    }
+
     /// Returns the hash of everything added.
     #[must_use]
     #[inline]

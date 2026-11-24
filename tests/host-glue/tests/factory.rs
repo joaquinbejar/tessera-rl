@@ -57,15 +57,16 @@ fn test_factory_make_host_matches_host_pool_new_bit_for_bit() {
         ("reward", ConfigItem::Float(0.25)),
     ];
     let src = ConfigSource::new(&entries);
-    let cfg = CounterConfig {
-        offset: -3,
-        reward: 0.25,
-        ..CounterConfig::default()
-    };
     for workers in [0, 2] {
+        // The pool keeps its configuration (ADR-0073): one per pool.
+        let cfg = CounterConfig {
+            offset: -3,
+            reward: 0.25,
+            ..CounterConfig::default()
+        };
         let mut options = MakeOptions::new(pool_options());
         let mut direct =
-            HostPool::<Counter, { Counter::MAX_AGENTS }>::new(&cfg, pool_options()).unwrap();
+            HostPool::<Counter, { Counter::MAX_AGENTS }>::new(cfg, pool_options()).unwrap();
         if workers > 0 {
             let sync = SyncOptions::new(NonZeroUsize::new(workers).unwrap());
             options = options.with_sync(sync.clone());

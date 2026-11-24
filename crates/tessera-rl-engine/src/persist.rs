@@ -38,13 +38,13 @@ pub const FORMAT_VERSION: u32 = 1;
 #[doc(hidden)]
 pub const BUILD_ID: Option<&str> = option_env!("TESSERA_BUILD_ID");
 
-const RAW_CANONICAL: u8 = 0;
-const MAX_ENV_ID: usize = 256;
-const MAX_LIBRARY_VERSION: usize = 64;
-const MAX_DESCRIPTOR: usize = 256;
+pub(crate) const RAW_CANONICAL: u8 = 0;
+pub(crate) const MAX_ENV_ID: usize = 256;
+pub(crate) const MAX_LIBRARY_VERSION: usize = 64;
+pub(crate) const MAX_DESCRIPTOR: usize = 256;
 const MAX_BUILD_ID: usize = 128;
 const DESCRIPTOR_VERSION: u8 = 1;
-const CHECKSUM_LEN: usize = 8;
+pub(crate) const CHECKSUM_LEN: usize = 8;
 
 /// What a reader accepts from a file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -53,6 +53,9 @@ pub struct DecodeLimits {
     pub max_instances: u32,
     /// Most bytes held at once: the input plus the decoded records.
     pub max_decoded_bytes: u64,
+    /// Most state bytes of one host record (ADR-0073 item 5), checked with
+    /// the environment's `max_snapshot_len` before allocating them.
+    pub max_host_record_bytes: u64,
 }
 
 impl Default for DecodeLimits {
@@ -60,6 +63,7 @@ impl Default for DecodeLimits {
         Self {
             max_instances: 1 << 24,
             max_decoded_bytes: 1 << 30,
+            max_host_record_bytes: 1 << 26,
         }
     }
 }
@@ -299,7 +303,7 @@ where
     })
 }
 
-fn push_capped(
+pub(crate) fn push_capped(
     out: &mut Vec<u8>,
     field: &'static str,
     value: &[u8],
@@ -317,38 +321,42 @@ fn push_capped(
 }
 
 /// Reads fields by offset; never casts.
-struct Reader<'a>(&'a [u8]);
+pub(crate) struct Reader<'a>(pub(crate) &'a [u8]);
 
 impl<'a> Reader<'a> {
-    fn take(&mut self, n: usize) -> Result<&'a [u8], PersistError> {
+    pub(crate) fn take(&mut self, n: usize) -> Result<&'a [u8], PersistError> {
         let (head, tail) = self.0.split_at_checked(n).ok_or(PersistError::Truncated)?;
         self.0 = tail;
         Ok(head)
     }
 
-    fn array<const N: usize>(&mut self) -> Result<[u8; N], PersistError> {
+    pub(crate) fn array<const N: usize>(&mut self) -> Result<[u8; N], PersistError> {
         self.take(N)?
             .try_into()
             .map_err(|_| PersistError::Truncated)
     }
 
-    fn u8(&mut self) -> Result<u8, PersistError> {
+    pub(crate) fn u8(&mut self) -> Result<u8, PersistError> {
         Ok(u8::from_le_bytes(self.array()?))
     }
 
-    fn u16(&mut self) -> Result<u16, PersistError> {
+    pub(crate) fn u16(&mut self) -> Result<u16, PersistError> {
         Ok(u16::from_le_bytes(self.array()?))
     }
 
-    fn u32(&mut self) -> Result<u32, PersistError> {
+    pub(crate) fn u32(&mut self) -> Result<u32, PersistError> {
         Ok(u32::from_le_bytes(self.array()?))
     }
 
-    fn u64(&mut self) -> Result<u64, PersistError> {
+    pub(crate) fn u64(&mut self) -> Result<u64, PersistError> {
         Ok(u64::from_le_bytes(self.array()?))
     }
 
-    fn capped(&mut self, field: &'static str, cap: usize) -> Result<&'a [u8], PersistError> {
+    pub(crate) fn capped(
+        &mut self,
+        field: &'static str,
+        cap: usize,
+    ) -> Result<&'a [u8], PersistError> {
         let len = usize::from(self.u16()?);
         if len > cap {
             return Err(PersistError::FieldTooLong { field, len, cap });
@@ -357,7 +365,7 @@ impl<'a> Reader<'a> {
     }
 }
 
-fn same<T: PartialEq>(field: &'static str, a: &T, b: &T) -> Result<(), PersistError> {
+pub(crate) fn same<T: PartialEq>(field: &'static str, a: &T, b: &T) -> Result<(), PersistError> {
     if a == b {
         Ok(())
     } else {
@@ -366,26 +374,26 @@ fn same<T: PartialEq>(field: &'static str, a: &T, b: &T) -> Result<(), PersistEr
 }
 
 /// The header as read, before any check.
-struct FileHeader<'a> {
-    encoding: u8,
-    tier: u8,
-    mask_provider: u8,
-    auto_reset: u8,
-    illegal_kind: u8,
-    reserved: [u8; 3],
-    penalty_bits: u32,
-    max_episode_steps: u32,
-    env_version: u32,
-    hash: u64,
-    count: u32,
-    record_len: u32,
-    env_id: &'a [u8],
-    asset_count: u16,
-    descriptor: &'a [u8],
+pub(crate) struct FileHeader<'a> {
+    pub(crate) encoding: u8,
+    pub(crate) tier: u8,
+    pub(crate) mask_provider: u8,
+    pub(crate) auto_reset: u8,
+    pub(crate) illegal_kind: u8,
+    pub(crate) reserved: [u8; 3],
+    pub(crate) penalty_bits: u32,
+    pub(crate) max_episode_steps: u32,
+    pub(crate) env_version: u32,
+    pub(crate) hash: u64,
+    pub(crate) count: u32,
+    pub(crate) record_len: u32,
+    pub(crate) env_id: &'a [u8],
+    pub(crate) asset_count: u16,
+    pub(crate) descriptor: &'a [u8],
 }
 
 impl<'a> FileHeader<'a> {
-    fn read(r: &mut Reader<'a>) -> Result<Self, PersistError> {
+    pub(crate) fn read(r: &mut Reader<'a>) -> Result<Self, PersistError> {
         r.take(12)?;
         let encoding = r.u8()?;
         let tier = r.u8()?;
@@ -482,7 +490,7 @@ impl<'a> FileHeader<'a> {
     }
 }
 
-fn u64_of(n: usize) -> u64 {
+pub(crate) fn u64_of(n: usize) -> u64 {
     u64::try_from(n).unwrap_or(u64::MAX)
 }
 

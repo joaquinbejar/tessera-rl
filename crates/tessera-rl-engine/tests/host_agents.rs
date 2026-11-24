@@ -109,7 +109,7 @@ fn step<const S: bool>(p: &mut HostPool<Squad<S>, SLOTS>, actions: &[i32]) {
 fn test_host_initial_agents_out_of_range_refused_at_construction() {
     for initial in [0, SLOTS + 1] {
         let err =
-            HostPool::<Squad<false>, SLOTS>::new(&SquadConfig { initial }, options(1)).unwrap_err();
+            HostPool::<Squad<false>, SLOTS>::new(SquadConfig { initial }, options(1)).unwrap_err();
         assert!(
             matches!(err, EngineError::Config(ref e) if e.field == "initial_agents"),
             "{initial}: {err:?}"
@@ -120,7 +120,7 @@ fn test_host_initial_agents_out_of_range_refused_at_construction() {
 #[test]
 fn test_host_initial_agents_reset_makes_only_the_first_slots_alive() {
     let mut p =
-        HostPool::<Squad<false>, SLOTS>::new(&SquadConfig { initial: 2 }, options(3)).unwrap();
+        HostPool::<Squad<false>, SLOTS>::new(SquadConfig { initial: 2 }, options(3)).unwrap();
     let out = p.reset_all(Reseed::Keep).unwrap();
     for i in 0..3 {
         assert_eq!(alive(out, i), [true, true, false, false]);
@@ -133,7 +133,7 @@ fn test_host_initial_agents_reset_makes_only_the_first_slots_alive() {
 #[test]
 fn test_host_spawns_fill_empty_slots_when_declared() {
     let mut p =
-        HostPool::<Squad<true>, SLOTS>::new(&SquadConfig { initial: 2 }, options(1)).unwrap();
+        HostPool::<Squad<true>, SLOTS>::new(SquadConfig { initial: 2 }, options(1)).unwrap();
     p.reset_all(Reseed::Keep).unwrap();
     // Agent 0 spawns slot 3.
     step(&mut p, &[SPAWN_BASE + 3, NOTHING, NOTHING, NOTHING]);
@@ -147,7 +147,7 @@ fn test_host_spawns_fill_empty_slots_when_declared() {
 #[test]
 fn test_host_spawn_without_spawns_is_an_invalid_event_never_applied() {
     let mut p =
-        HostPool::<Squad<false>, SLOTS>::new(&SquadConfig { initial: 2 }, options(1)).unwrap();
+        HostPool::<Squad<false>, SLOTS>::new(SquadConfig { initial: 2 }, options(1)).unwrap();
     p.reset_all(Reseed::Keep).unwrap();
     let result = p.step(ActionInput {
         // Two empty slots, 2 and 3: both spawns are refused.

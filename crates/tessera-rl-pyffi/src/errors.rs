@@ -316,7 +316,9 @@ pub fn engine_kind(e: &EngineError) -> Kind {
         | EngineError::IllegalAction { .. }
         | EngineError::MaskBudgetExceeded { .. }
         | EngineError::ActionRejected { .. } => Kind::Action,
-        EngineError::InvalidRecord { .. } | EngineError::Invariant { .. } => Kind::Record,
+        EngineError::InvalidRecord { .. }
+        | EngineError::Invariant { .. }
+        | EngineError::SnapshotRejected { .. } => Kind::Record,
         EngineError::PendingReset { .. } => Kind::PendingReset,
         EngineError::Poisoned
         | EngineError::Panicked
@@ -326,7 +328,8 @@ pub fn engine_kind(e: &EngineError) -> Kind {
         | EngineError::NanDetected { .. }
         | EngineError::AllocationInChunkStep { .. }
         | EngineError::TurnOrder { .. }
-        | EngineError::RefusedNotActing { .. } => Kind::Poisoned,
+        | EngineError::RefusedNotActing { .. }
+        | EngineError::SnapshotTooLong { .. } => Kind::Poisoned,
         EngineError::NestedEngine
         | EngineError::GangQueue { .. }
         | EngineError::InFlight { .. }

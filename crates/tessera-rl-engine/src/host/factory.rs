@@ -121,7 +121,7 @@ impl HostFactory {
     pub const fn new<E, const A: usize>() -> Self
     where
         E: HostEnvironment,
-        E::Config: ConfigDecode,
+        E::Config: ConfigDecode + Send,
     {
         Self {
             id: E::ENV_ID,
@@ -139,10 +139,10 @@ fn build<E, const A: usize>(
 ) -> Result<Box<dyn DynHostPool>, FactoryError>
 where
     E: HostEnvironment,
-    E::Config: ConfigDecode,
+    E::Config: ConfigDecode + Send,
 {
     let cfg = E::Config::decode(config)?;
-    let mut pool = HostPool::<E, A>::new(&cfg, *options.pool())?;
+    let mut pool = HostPool::<E, A>::new(cfg, *options.pool())?;
     if let Some(sync) = options.sync() {
         pool = pool.with_workers(sync.clone())?;
     }

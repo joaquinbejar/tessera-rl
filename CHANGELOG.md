@@ -19,6 +19,12 @@ the API is not stable, and any 0.x release may break it.
 - `tessera_rl_engine::physical_cores()` and Python `tessera_rl.physical_cores()`: physical cores this process may use (sysfs topology within the affinity mask on Linux, `hw.physicalcpu` on macOS, processor core records on Windows), capped by `available_parallelism()` so CPU quotas apply. Efficiency cores of hybrid CPUs count as cores (#356, SPEC 6.1).
 - `Default` for `SyncOptions` and `PipelinedOptions`: one worker per physical core. A Rust pool still steps inline until it is given workers. `default_workers()` adds the per-chunk cap that Python's `make()` uses.
 
+- Host snapshots (ADR-0073, #344): `HostSnapshot` and `SnapshotReject` in `tessera-rl-core`, and on host pools of such environments `snapshot`, `snapshot_to`, `snapshot_all`, `restore`, `import`, `restore_all`, `fork`, `state_hash`, `encode` and `decode` over `HostRecord`s (identity digest, host header, `SNAPSHOT_VERSION` and the environment's bytes). Every record is checked before any instance changes: identity, version, length, the host header rules of ADR-0068 (r2h) and `check_snapshot`. A poisoned host pool refuses all of them, `restore_all` included; a restored pending instance is not observed; there is no `fork_branched`. Host files use their own magic, `TESHOST\x1a`, under the shared ADR-0011 header. New `EngineError::SnapshotRejected` and `SnapshotTooLong`, `DecodeLimits::max_host_record_bytes`, and `StateHasher::add_bytes`.
+
+### Changed
+
+- **Breaking (experimental host API, ADR-0062 item 9):** `HostPool::new` takes the configuration by value and keeps it, as `EnvPool::new` does (ADR-0073 needs it after construction). Replace `HostPool::new(&cfg, options)` with `HostPool::new(cfg, options)`. A type-erased pool (`DynHostPool`, `make_host`, `register_host_factory!`, `export_host_env!`) now needs a `Send` configuration. `DecodeLimits` gains the field `max_host_record_bytes`, so struct literals need it (or `..DecodeLimits::default()`).
+
 ## [0.3.0] - 2026-11-23
 
 ### Added

@@ -162,6 +162,7 @@ type Blinks = EnvPool<BlinkEnv, NoMasks>;
 const LIMITS: DecodeLimits = DecodeLimits {
     max_instances: 16,
     max_decoded_bytes: 1 << 20,
+    max_host_record_bytes: 1 << 26,
 };
 
 fn pool(num_envs: u32, auto_reset: AutoReset) -> Blinks {

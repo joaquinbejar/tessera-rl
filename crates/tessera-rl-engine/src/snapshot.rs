@@ -395,17 +395,33 @@ where
     }
 }
 
-/// Checks an untrusted record: the engine header against this pool,
-/// then the environment's invariants.
-pub(crate) fn check_record<E: Environment + Validate>(
-    cfg: &E::Config,
+/// Which same-step rule the reader applies (ADR-0068): r2 for `EnvPool`
+/// records, r2h for host records.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RecordKind {
+    /// An `EnvPool` record: no non-fresh record is pending in `same_step`
+    /// mode (r2).
+    Env,
+    #[cfg_attr(
+        not(feature = "host"),
+        expect(dead_code, reason = "host records exist only with the host feature")
+    )]
+    /// A host record: a non-fresh pending record in `same_step` mode has
+    /// no steps counted (r2h), the state an aborted reset leaves.
+    Host,
+}
+
+/// The engine-header rules of ADR-0068 for an untrusted record: r1, r1',
+/// the fresh rule, the RNG step index, the step limit, r2 or r2h by
+/// `kind`, and the agent rows.
+pub(crate) fn check_header<H: RecordLayout>(
+    header: &H,
     options: &crate::options::PoolOptions,
     group_count: u32,
     index: usize,
-    record: &DecodedRecord<E>,
+    kind: RecordKind,
 ) -> Result<(), EngineError> {
     let invalid = |reason| Err(EngineError::InvalidRecord { index, reason });
-    let header = record.header();
     let engine = header.engine();
     let pending = engine.pending_reset.get();
     if !pending && engine.end_kind != 0 {
@@ -436,7 +452,15 @@ pub(crate) fn check_record<E: Environment + Validate>(
         return invalid("an episode longer than the step limit");
     }
     if pending && !engine.fresh.get() && options.auto_reset == AutoReset::SameStep {
-        return invalid("a pending reset in same_step mode");
+        match kind {
+            RecordKind::Env => return invalid("a pending reset in same_step mode"),
+            // r2h (ADR-0068 item 3): only an aborted reset leaves a host
+            // instance pending in same_step mode, and it zeroes the steps.
+            RecordKind::Host if engine.episode_steps != 0 => {
+                return invalid("a pending reset in same_step mode with steps counted");
+            }
+            RecordKind::Host => {}
+        }
     }
     for row in header.agents() {
         if row.acting.get() && !row.alive.get() {
@@ -453,6 +477,22 @@ pub(crate) fn check_record<E: Environment + Validate>(
             return invalid("a non-finite episode return");
         }
     }
+    Ok(())
+}
+
+/// Checks an untrusted record: the engine header against this pool,
+/// then the environment's invariants.
+pub(crate) fn check_record<E: Environment + Validate>(
+    cfg: &E::Config,
+    options: &crate::options::PoolOptions,
+    group_count: u32,
+    index: usize,
+    record: &DecodedRecord<E>,
+) -> Result<(), EngineError> {
+    let invalid = |reason| Err(EngineError::InvalidRecord { index, reason });
+    let header = record.header();
+    let pending = header.engine().pending_reset.get();
+    check_header(header, options, group_count, index, RecordKind::Env)?;
     let view = tessera_rl_core::HeaderView::of(header);
     E::validate_record(cfg, &view, record.state())
         .map_err(|violation| EngineError::Invariant { index, violation })?;
