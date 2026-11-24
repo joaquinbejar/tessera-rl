@@ -1,0 +1,40 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
+# Burn integration (SPEC 14.2, #367): an adapter from pool outputs to Burn
+# tensors and a reference PPO example. Its own workspace and Cargo.lock, so
+# Burn never enters the root workspace, its lock, cargo deny of the published
+# graph or default features. Never published (for now). `make burn-check`.
+
+[workspace]
+resolver = "3"
+members = ["tessera-rl-burn", "ppo-cartpole"]
+
+[workspace.package]
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.95"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[workspace.dependencies]
+# Exact pin (#367): the latest release at least two weeks old on 2026-11-24.
+# Only the pure-Rust CPU backend and autodiff; no default features.
+burn = { version = "=0.22.1", default-features = false, features = ["std", "ndarray", "autodiff"] }
+tessera-rl-burn = { path = "tessera-rl-burn" }
+tessera-rl-engine = { path = "../../crates/tessera-rl-engine" }
+tessera-rl-classic = { path = "../../crates/tessera-rl-classic" }
+tessera-rl-core = { path = "../../crates/tessera-rl-core" }
+tessera-rl-num = { path = "../../crates/tessera-rl-num" }
+thiserror = "2"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+missing_docs = "deny"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+indexing_slicing = "deny"
