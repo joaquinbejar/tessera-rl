@@ -322,19 +322,46 @@ class Env:
         return result
 
     def snapshot_all(self) -> _native.PoolSnapshot:
-        """An opaque snapshot of every instance (split-phase modes). It
-        restores only this environment and cannot be saved. All sent work must
-        be finished (``ConcurrencyError``, retryable); arrays stay valid.
+        """An opaque snapshot of the whole pool, in every mode: every
+        instance's record and frame stacks, and the pool context (fork
+        branch counter, reset source, transform statistics). It restores
+        only this environment and cannot be saved. All sent work must be
+        finished (``ConcurrencyError``, retryable); arrays stay valid.
         """
         return self._native.snapshot_all()
 
     def restore_all(self, snapshot) -> list[HalfStep] | None:
-        """Restores a snapshot of this environment. Pipelined: one
-        ``HalfStep`` per half. Async: nothing; send next. Needs all sent work
-        finished, except to recover a poisoned pool.
+        """Restores the instances of a snapshot of this environment
+        (split-phase modes): records only (and Pipelined's cycle state); the
+        pool context stays as it is, so use :meth:`restore_pool` to bring
+        back the reset source, the fork branch counter and transform
+        statistics too. Pipelined: one ``HalfStep`` per half. Async:
+        nothing; send next. Needs all sent work finished, except to recover
+        a poisoned pool.
         """
         out = self._native.restore_all(snapshot)
         return None if out is None else [self._half(h) for h in out]
+
+    def restore_pool(self, snapshot, archive=None) -> Step | list[HalfStep] | None:
+        """Restores a :meth:`snapshot_all` snapshot of this environment
+        whole (ADR-0075 item 7): records, frame stacks and the pool context,
+        an exact continuation. If the context names an archive, ``archive``
+        must be that :class:`tessera_rl.Archive` (else ``ConfigError``); for
+        fresh resets it must be ``None`` (else ``ArgumentError``). Every check
+        comes first: an error changes nothing. Sync: the outputs, as
+        ``reset``; Pipelined: one ``HalfStep`` per half; Async: nothing.
+        Refused while recording or replaying.
+        """
+        from tessera_rl._archive import Archive
+
+        if archive is not None and not isinstance(archive, Archive):
+            raise _native.ArgumentError(f"archive must be a tessera_rl.Archive or None, not {type(archive).__name__}")
+        out = self._native.restore_pool(snapshot, None if archive is None else archive._native)
+        if self.mode == "pipelined":
+            return [self._half(h) for h in out]
+        if self.mode == "async":
+            return None
+        return self._wrap(out)
 
     def restore(self, ids, snapshots) -> None:
         """Restores ``ids`` from one-instance ``snapshot`` records (Async

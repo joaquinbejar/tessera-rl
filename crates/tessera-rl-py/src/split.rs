@@ -23,7 +23,7 @@ use std::thread::ThreadId;
 use tessera_rl_core::{AdaptiveValues, Environment, RecordLayout};
 use tessera_rl_engine::{
     ActionInput, CycleState, EngineError, HalfGenerations, HalfToken, MAX_LEAVES, MaskProvider,
-    OutputStorage, PipelinedPool, Record, Reseed, Waiter,
+    OutputStorage, PipelinedPool, Reseed, Waiter,
 };
 use tessera_rl_num::identity::Seed;
 
@@ -97,6 +97,14 @@ pub(crate) trait SplitOps: Send + Sync {
     fn snapshot_all(&self) -> Result<Snapshot, BindError>;
     /// Restores a snapshot of this same pool and returns both halves.
     fn restore_all(&self, snapshot: &Snapshot, owned: bool) -> Result<[HalfOutput; 2], BindError>;
+    /// Restores records, frame stacks, cycles and the pool context
+    /// (ADR-0075 item 7, #465); an error mutates nothing.
+    fn restore_pool(
+        &self,
+        snapshot: &Snapshot,
+        archive: Option<&AnyArchive>,
+        owned: bool,
+    ) -> Result<[HalfOutput; 2], BindError>;
     /// The persisted file of `ids`; no work may be in flight.
     fn encode(&self, ids: &[u32]) -> Result<Vec<u8>, BindError>;
     /// Builds an archive of this environment from record bytes (ADR-0075).
@@ -147,7 +155,9 @@ impl<E: Environment, M: MaskProvider<E>> State<E, M> {
 
 struct Taken<E: Environment> {
     owner: Arc<OutputStorage>,
-    records: Vec<Record<E>>,
+    /// Records, frame stacks and the pool context (#465); `restore_all`
+    /// uses the records only.
+    state: tessera_rl_engine::PoolState<E>,
     cycles: CycleState,
 }
 
@@ -157,8 +167,6 @@ struct SplitPool<E: Environment, M: MaskProvider<E>> {
     halves: [Range<usize>; 2],
     generations: HalfGenerations,
     unsettled: Arc<AtomicBool>,
-    /// A record to size snapshot buffers with.
-    template: Record<E>,
     receiving: AtomicBool,
     waiter: Waiter,
     terminal: bool,
@@ -372,12 +380,10 @@ where
     fn snapshot_all(&self) -> Result<Snapshot, BindError> {
         let guard = self.lock()?;
         let pool = guard.pool.as_ref().ok_or_else(closed)?;
-        let n = self.halves.iter().map(ExactSizeIterator::len).sum();
-        let mut records = vec![self.template; n];
-        let cycles = pool.snapshot_all(&mut records)?;
+        let (state, cycles) = pool.snapshot_pool()?;
         Ok(Arc::new(Taken::<E> {
             owner: Arc::clone(&self.storage),
-            records,
+            state,
             cycles,
         }))
     }
@@ -395,9 +401,47 @@ where
         // The FFI release, as in `reset`.
         state.tokens = [None, None];
         self.unsettle();
-        let restored = pool.restore_all(&taken.records, &taken.cycles);
+        let restored = pool.restore_all(taken.state.records(), &taken.cycles);
         self.settle(pool);
         restored?;
+        let a = pool.idle_token(0)?;
+        let b = pool.idle_token(1)?;
+        let out = [self.output(0, 0, &a, owned), self.output(1, 0, &b, owned)];
+        state.tokens = [Some(a), Some(b)];
+        state.pending = None;
+        Ok(out)
+    }
+
+    fn restore_pool(
+        &self,
+        snapshot: &Snapshot,
+        archive: Option<&AnyArchive>,
+        owned: bool,
+    ) -> Result<[HalfOutput; 2], BindError> {
+        let taken = snapshot
+            .downcast_ref::<Taken<E>>()
+            .filter(|t| Arc::ptr_eq(&t.owner, &self.storage))
+            .ok_or_else(|| {
+                BindError::Argument("a snapshot restores only the pool that took it".to_owned())
+            })?;
+        let archive = crate::env::archive_ref::<E>(archive)?;
+        let mut guard = self.lock()?;
+        let state = &mut *guard;
+        let pool = state.pool.as_mut().ok_or_else(closed)?;
+        // The FFI release, as in `reset`.
+        state.tokens = [None, None];
+        self.unsettle();
+        let restored = pool.restore_pool(&taken.state, &taken.cycles, archive);
+        self.settle(pool);
+        if let Err(e) = restored {
+            // Nothing changed: the idle tokens come back.
+            for (half, slot) in state.tokens.iter_mut().enumerate() {
+                *slot = pool
+                    .idle_token(u32::try_from(half).unwrap_or(u32::MAX))
+                    .ok();
+            }
+            return Err(e.into());
+        }
         let a = pool.idle_token(0)?;
         let b = pool.idle_token(1)?;
         let out = [self.output(0, 0, &a, owned), self.output(1, 0, &b, owned)];
@@ -574,7 +618,6 @@ impl PoolOps for SplitHandle {
 pub(crate) fn pipelined<E, M>(
     pool: PipelinedPool<E, M>,
     storage: Arc<OutputStorage>,
-    template: Record<E>,
     layout: Layout,
 ) -> Box<dyn PoolOps>
 where
@@ -601,7 +644,6 @@ where
         halves,
         generations,
         unsettled: Arc::new(AtomicBool::new(false)),
-        template,
         receiving: AtomicBool::new(false),
         waiter,
         terminal: layout.terminal,

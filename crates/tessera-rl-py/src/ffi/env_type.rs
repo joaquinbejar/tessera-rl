@@ -85,6 +85,7 @@ varargs!(RecvM, api::recv);
 varargs!(RestoreM, crate::async_api::restore);
 noargs!(SnapshotAllM, api::snapshot_all);
 varargs!(RestoreAllM, api::restore_all);
+varargs!(RestorePoolM, api::restore_pool);
 varargs!(SendM, api::send);
 varargs!(ResetM, api::reset);
 varargs!(StepM, api::step);
@@ -201,6 +202,10 @@ static METHODS: MethodTable<EnvBody> = MethodTable::new(&[
     MethodRow::varargs::<RestoreAllM>(
         c"restore_all",
         c"restore_all($self, snapshot, /)\n--\n\nrestore_all(snapshot) -> both halves' outputs",
+    ),
+    MethodRow::varargs::<RestorePoolM>(
+        c"restore_pool",
+        c"restore_pool($self, snapshot, archive, /)\n--\n\nrestore_pool(snapshot, archive): restores records, frame stacks and the pool context",
     ),
     MethodRow::varargs::<ForkM>(c"fork", c"fork($self, src, dst, /)\n--\n\nfork(src, dst)"),
     MethodRow::noargs::<WatchM>(

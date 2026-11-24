@@ -605,6 +605,10 @@ class HostEnv:
         """Archive resets are for first-party environments (ADR-0075 item 8)."""
         raise _native.CapabilityError("archive resets need a first-party environment (ADR-0075 item 8)")
 
+    def restore_pool(self, snapshot, archive=None) -> None:
+        """Whole-pool restore is for first-party environments (ADR-0075 item 8)."""
+        raise _native.CapabilityError("restore_pool needs a first-party environment (ADR-0075 item 8)")
+
     def close(self) -> None:
         self._native.close()
 

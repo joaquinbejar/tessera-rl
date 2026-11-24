@@ -304,7 +304,7 @@ where
     /// Checks `context` against this pool and `archive` without writing
     /// anything, and builds the reset source it restores. Later context
     /// fields (ADR-0078) add their checks here, before any write.
-    fn check_context(
+    pub(crate) fn check_context(
         &self,
         context: PoolContext,
         archive: Option<&Archive<E>>,

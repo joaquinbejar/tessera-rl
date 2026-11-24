@@ -40,6 +40,7 @@ mod persist;
 #[cfg(test)]
 mod pin_tests;
 mod pool;
+mod pool_state;
 mod record;
 mod registry;
 #[cfg(feature = "replay")]
@@ -108,6 +109,7 @@ pub use persist::{
     ASSET_FORMAT_VERSION, BUILD_ID, DecodeLimits, FORMAT_VERSION, MAGIC, PersistError,
 };
 pub use pool::{EnvPool, Reseed};
+pub use pool_state::PoolState;
 pub use record::{DecodedRecord, PoolContext, Record};
 pub use registry::attach_shared_registry;
 #[cfg(feature = "replay")]
