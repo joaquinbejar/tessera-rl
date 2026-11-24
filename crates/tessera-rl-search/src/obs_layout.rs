@@ -41,10 +41,14 @@ pub struct SetLayout {
     pub mask: usize,
 }
 
-/// The leaves and sets of `space`, or `None` for a space evaluators do not
+/// The leaves and sets of `space` (an exported observation space), in the
+/// order of an evaluator row, or `None` for a space evaluators do not
 /// receive as leaves (anything but boxes, dicts of them, and sets of
-/// those), or a size that overflows.
-pub(crate) fn observation_layout(space: &Space) -> Option<(Vec<LeafLayout>, Vec<SetLayout>)> {
+/// those) or a size that overflows. The one walk that search, the ONNX
+/// evaluator (#505) and evaluators of other crates share, so leaf names,
+/// order and byte widths cannot drift between them.
+#[must_use]
+pub fn observation_layout(space: &Space) -> Option<(Vec<LeafLayout>, Vec<SetLayout>)> {
     let mut leaves = Vec::new();
     let mut sets = Vec::new();
     walk(space, "", &mut leaves, &mut sets)?;

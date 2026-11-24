@@ -47,7 +47,7 @@ pub use gumbel::{GUMBEL_BYTES_PER_ACTION, GumbelConfig, RootSelection};
 pub use handle::{EdgeStats, NodeHandle};
 pub use head_activity::{HeadActivityError, HeadActivityReport, check_head_activity};
 pub use mcts::{Mcts, PUCT_FORMULA, PuctConfig, RootNoise};
-pub use obs_layout::{LeafLayout, SetLayout};
+pub use obs_layout::{LeafLayout, SetLayout, observation_layout};
 pub use options::{Eviction, SearchOptions};
 pub use pool::{MAX_JOINT_ACTIONS, SearchPool};
 

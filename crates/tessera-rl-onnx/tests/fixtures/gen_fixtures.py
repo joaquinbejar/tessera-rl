@@ -23,6 +23,15 @@ All models take Connect4's observation, input `board`, uint8 [N, 2, 6, 7]:
   interpreter). Its matrices are built in the graph from one row each, so
   the file stays small.
 
+Two take Gather's observation (a `Set`, #505): inputs `agent` int32
+[N, 2], `items` int32 [N, 8, 2] and `items_mask` bool [N, 8]:
+- sets_gather.onnx: priors float64 [N, 4] = 1/4, value float64 [N] =
+  (sum of all items' coordinates + 1000 x present slots + 100 x sum of the
+  agent's coordinates) / 16384, exact in float64 for every Gather state,
+  so the item stride and order, the mask and stale absent rows all reach
+  the value.
+- sets_wrong_mask.onnx: as sets_gather, but `items_mask` is uint8.
+
 Two fixtures come from spike S1's generator, not from this script:
 s1_mlp.onnx and s1_fuse.onnx (their sha256 are checked by the tests).
 """
@@ -135,6 +144,49 @@ def slow_connect4():
     return m
 
 
+def sets_gather(mask_type=TensorProto.BOOL):
+    agent = helper.make_tensor_value_info("agent", TensorProto.INT32, ["N", 2])
+    items = helper.make_tensor_value_info("items", TensorProto.INT32, ["N", 8, 2])
+    mask = helper.make_tensor_value_info("items_mask", mask_type, ["N", 8])
+    priors = helper.make_tensor_value_info("priors", TensorProto.DOUBLE, ["N", 4])
+    value = helper.make_tensor_value_info("value", TensorProto.DOUBLE, ["N"])
+    inits = [
+        numpy_helper.from_array(np.array([0], dtype=np.int64), "starts"),
+        numpy_helper.from_array(np.array([1], dtype=np.int64), "ends"),
+        numpy_helper.from_array(np.array([1], dtype=np.int64), "one"),
+        numpy_helper.from_array(np.full((1, 4), 0.25, dtype=np.float64), "row"),
+        numpy_helper.from_array(np.array([1], dtype=np.int64), "ax1"),
+        numpy_helper.from_array(np.array([1, 2], dtype=np.int64), "ax12"),
+        numpy_helper.from_array(np.array(1000.0, dtype=np.float64), "k_mask"),
+        numpy_helper.from_array(np.array(100.0, dtype=np.float64), "k_agent"),
+        numpy_helper.from_array(np.array(16384.0, dtype=np.float64), "scale"),
+    ]
+    nodes = [
+        helper.make_node("Shape", ["agent"], ["shape"]),
+        helper.make_node("Slice", ["shape", "starts", "ends"], ["n"]),
+        helper.make_node("Concat", ["n", "one"], ["tile"], axis=0),
+        helper.make_node("Tile", ["row", "tile"], ["priors"]),
+        helper.make_node("Cast", ["items"], ["items_f"], to=TensorProto.DOUBLE),
+        helper.make_node("ReduceSum", ["items_f", "ax12"], ["items_sum"], keepdims=0),
+        helper.make_node("Cast", ["items_mask"], ["mask_f"], to=TensorProto.DOUBLE),
+        helper.make_node("ReduceSum", ["mask_f", "ax1"], ["present"], keepdims=0),
+        helper.make_node("Cast", ["agent"], ["agent_f"], to=TensorProto.DOUBLE),
+        helper.make_node("ReduceSum", ["agent_f", "ax1"], ["agent_sum"], keepdims=0),
+        helper.make_node("Mul", ["present", "k_mask"], ["present_k"]),
+        helper.make_node("Mul", ["agent_sum", "k_agent"], ["agent_k"]),
+        helper.make_node("Add", ["items_sum", "present_k"], ["s1"]),
+        helper.make_node("Add", ["s1", "agent_k"], ["s2"]),
+        helper.make_node("Div", ["s2", "scale"], ["value"]),
+    ]
+    graph = helper.make_graph(nodes, "tessera_onnx_sets", [agent, items, mask], [priors, value],
+                              initializer=inits)
+    m = helper.make_model(graph, producer_name="tessera-rl gen_fixtures.py",
+                          opset_imports=[helper.make_opsetid("", OPSET)])
+    m.ir_version = IR
+    onnx.checker.check_model(m)
+    return m
+
+
 def main(out):
     out = Path(out)
     out.mkdir(parents=True, exist_ok=True)
@@ -145,6 +197,8 @@ def main(out):
     onnx.save(model(actions=6), "wrong_actions.onnx")
     onnx.save(mlp_connect4(), "mlp_connect4.onnx")
     onnx.save(slow_connect4(), "slow_connect4.onnx")
+    onnx.save(sets_gather(), "sets_gather.onnx")
+    onnx.save(sets_gather(TensorProto.UINT8), "sets_wrong_mask.onnx")
     if Path("external.bin").exists():
         Path("external.bin").unlink()
     onnx.save(model(), "external.onnx", save_as_external_data=True,

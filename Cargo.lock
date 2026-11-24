@@ -1159,6 +1159,7 @@ dependencies = [
  "libloading",
  "ort",
  "sha2",
+ "tessera-rl-classic",
  "tessera-rl-core",
  "tessera-rl-engine",
  "tessera-rl-games",

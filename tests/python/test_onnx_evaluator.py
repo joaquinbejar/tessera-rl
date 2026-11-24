@@ -286,3 +286,28 @@ def test_onnx_inference_releases_the_interpreter(home):
     assert elapsed > 0.2, f"the model is not slow enough to tell: {elapsed:.3f} s"
     assert rate > 0.25 * baseline, f"the other thread ran at {rate / baseline:.0%} of its baseline"
     assert_no_telemetry(home)
+
+
+def gather_formula(obs, legal, hashes):
+    """sets_gather.onnx's outputs in Python (#505)."""
+    n = len(hashes)
+    total = (
+        obs["items"].astype(np.float64).sum(axis=(1, 2))
+        + 1000.0 * obs["items_mask"].sum(axis=1)
+        + 100.0 * obs["agent"].astype(np.float64).sum(axis=1)
+    )
+    return np.full((n, 4), 0.25), total / 16384.0
+
+
+@real
+def test_onnx_set_inputs_equal_the_python_evaluator_on_gather(home):
+    # The set's items and mask reach the model as the Python evaluator gets
+    # them: the same tree, call after call.
+    onnx = search.OnnxEvaluator(FIXTURES / "sets_gather.onnx", **LIB)
+    a = search.Search(env_id="tessera/Gather-v1", simulations=48)
+    b = search.Search(env_id="tessera/Gather-v1", simulations=48)
+    for _ in range(3):
+        a.run(gather_formula)
+        b.run(onnx)
+        assert a.root_visits().tolist() == b.root_visits().tolist()
+        assert a.tree_hash() == b.tree_hash()
