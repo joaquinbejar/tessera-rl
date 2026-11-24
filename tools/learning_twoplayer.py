@@ -198,6 +198,35 @@ def _actions(env, learner: int, learner_actions, opponent: str, step, rng) -> np
     return acts
 
 
+def truncation_bootstrap(terminated, truncated, terminal_values, gamma: float) -> np.ndarray:
+    """The extra reward that bootstraps a time-limit truncation
+    (REVIEW-T3b-head-r1, Tag item (a)): ``gamma * V(s')`` for an instance
+    that was truncated and **not** terminated, where ``terminal_values`` are
+    the values of the engine's terminal-observation rows (never the
+    observation after the auto-reset); 0 for every other instance. It
+    applies to every game: the board games never truncate before their own
+    end (their step caps exceed their longest games; protocols.toml)."""
+    term = np.asarray(terminated, dtype=bool)
+    trunc = np.asarray(truncated, dtype=bool)
+    return np.where(trunc & ~term, gamma * np.asarray(terminal_values, dtype=np.float64), 0.0)
+
+
+def terminal_obs(env, learner: int) -> np.ndarray:
+    """The learner's flattened terminal-observation rows of the last step:
+    ``Env._last_out["terminal_observations"]`` (the engine's final
+    observation of an instance that ended, before its same-step reset),
+    shaped as ``Step.observations``."""
+    out = env._last_out
+    if out is None or "terminal_observations" not in out:
+        raise RuntimeError("no terminal observations in the last step's outputs (same_step auto-reset needed)")
+    n, a = env.num_envs, env.agents
+    leaves = {}
+    for (name, dtype, shape), buf in zip(env._leaves, out["terminal_observations"], strict=True):
+        arr = np.asarray(buf) if env.outputs == "borrowed" else np.frombuffer(buf, dtype=dtype)
+        leaves[name] = np.array(arr).reshape((n, a, *shape))
+    return flat_obs(leaves, learner)
+
+
 def _check_stall(steps: int, batch: int, env_id: str, learner: int) -> None:
     """The stall guard (REVIEW-T3b-head-r1: it must fail loudly): raises
     when the rollout has taken more than ``1000 x batch`` steps without
@@ -251,7 +280,15 @@ def train(env_id: str, kwargs: dict, seed: int, seats: list[int], h: TwoPlayerHy
             a = torch.where(torch.as_tensor(acting), a, torch.zeros_like(a))
             out = env.step(_actions(env, learner, a.numpy().astype(np.int32), "heuristic", step, rng))
             rew = np.asarray(out.rewards[:, learner], dtype=np.float64)
-            done = np.asarray(out.episode_terminated, dtype=bool) | np.asarray(out.episode_truncated, dtype=bool)
+            term = np.asarray(out.episode_terminated, dtype=bool)
+            trunc = np.asarray(out.episode_truncated, dtype=bool)
+            done = term | trunc
+            if (trunc & ~term).any():
+                # Bootstrap a time-limit end from the terminal observation; it
+                # lands on the episode's closing (terminal) transition.
+                with torch.no_grad():
+                    tv = agent.value(torch.as_tensor(terminal_obs(env, learner))).flatten().numpy()
+                rew = rew + truncation_bootstrap(term, trunc, tv, h.gamma)
             for i in range(h.num_envs):
                 item = None
                 if acting[i]:

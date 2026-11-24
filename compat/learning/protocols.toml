@@ -182,6 +182,13 @@ eval_episodes = 50
 # other agent (the window-limited InfoHeuristic, #437 closed by #347); the
 # roles are asymmetric, so the seat does not alternate, and the score is the
 # return.
+# Tag's score (REVIEW-T3b-head-r1 item 3): score = "return", the pursuer's
+# undiscounted episode return. Each capture adds +1 for every pursuer on the
+# evader's cell (tag/mod.rs), so the score counts the learner's captures; an
+# episode with no capture before the cap scores 0. Tag ends by the 200-step
+# cap (make()'s default), and that truncation is bootstrapped from the
+# terminal observation (learning_twoplayer.truncation_bootstrap), not treated
+# as a terminal end.
 [tag]
 env = "tessera/Tag-v1"
 tier = "T3b"
