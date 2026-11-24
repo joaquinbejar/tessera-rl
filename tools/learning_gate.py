@@ -86,6 +86,27 @@ def calibrate(records: list[dict], seeds: list[int]) -> dict:
     return out
 
 
+def learns(scores: list[float], random: list[float], resamples: int = 10_000, seed: int = 0) -> dict:
+    """The "learns at all" check of a protocol (#370): a seeded bootstrap
+    95% interval of median(scores) - mean(random) must exclude 0 from
+    above. ``scores`` are the trained seeds' evaluation scores, ``random``
+    the per-episode scores of a uniform random policy on the same evaluation
+    seeds."""
+    s = np.asarray(scores, dtype=np.float64)
+    r = np.asarray(random, dtype=np.float64)
+    if s.size < 2 or r.size < 2 or not (np.all(np.isfinite(s)) and np.all(np.isfinite(r))):
+        return {"learns": False, "error": "learns needs at least two finite scores on each side"}
+    rng = np.random.default_rng(seed)
+    gap = np.median(rng.choice(s, size=(resamples, s.size)), axis=1) - np.mean(rng.choice(r, size=(resamples, r.size)), axis=1)
+    lo, hi = np.percentile(gap, [2.5, 97.5])
+    return {
+        "learns": bool(lo > 0),
+        "gap": float(np.median(s) - np.mean(r)),
+        "ci95": [float(lo), float(hi)],
+        "random_mean": float(np.mean(r)),
+    }
+
+
 def check_calibration(calibration: dict) -> list[str]:
     """Errors of a stored calibration: its records must give its threshold."""
     if calibration.get("errors"):
