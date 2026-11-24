@@ -1,0 +1,238 @@
+{
+  "seeds": [
+    101,
+    102,
+    103,
+    104,
+    105,
+    106,
+    107,
+    108,
+    109,
+    110,
+    111,
+    112,
+    113,
+    114,
+    115,
+    116,
+    117,
+    118,
+    119,
+    120,
+    121,
+    122,
+    123,
+    124,
+    125,
+    126,
+    127,
+    128,
+    129,
+    130,
+    131,
+    132,
+    133,
+    134,
+    135,
+    136,
+    137,
+    138,
+    139,
+    140
+  ],
+  "threshold": -295.3,
+  "median": -88.95,
+  "min": -500.0,
+  "max": -78.75,
+  "setup": {
+    "env": "tessera/Acrobot-v1",
+    "total_steps": 150000,
+    "eval_episodes": 20,
+    "fingerprint": "42e4694c51dfa4347b18e43932aa3449c58026da386005cad9c5ae609448b6a7"
+  },
+  "environment": {
+    "git": "a09f3d3116d472ee323c46c309ca2d819cd81d2f",
+    "git_dirty": false,
+    "python": "3.11.18",
+    "os": "Linux-7.0.0-43-generic-x86_64-with-glibc2.43",
+    "arch": "x86_64",
+    "cpu": "12th Gen Intel(R) Core(TM) i7-12650H",
+    "image": "self-hosted Linux x86-64 runner, uv-managed CPython 3.11.18 (no container)",
+    "tessera_rl": "0.3.0",
+    "gymnasium": "1.4.0",
+    "torch": "2.15.0+cpu",
+    "numpy": "2.4.6"
+  },
+  "records": [
+    {
+      "seed": 101,
+      "score": -138.45
+    },
+    {
+      "seed": 102,
+      "score": -84.3
+    },
+    {
+      "seed": 103,
+      "score": -82.45
+    },
+    {
+      "seed": 104,
+      "score": -98.05
+    },
+    {
+      "seed": 105,
+      "score": -132.5
+    },
+    {
+      "seed": 106,
+      "score": -81.25
+    },
+    {
+      "seed": 107,
+      "score": -98.25
+    },
+    {
+      "seed": 108,
+      "score": -86.9
+    },
+    {
+      "seed": 109,
+      "score": -108.0
+    },
+    {
+      "seed": 110,
+      "score": -88.25
+    },
+    {
+      "seed": 111,
+      "score": -79.7
+    },
+    {
+      "seed": 112,
+      "score": -278.5
+    },
+    {
+      "seed": 113,
+      "score": -193.65
+    },
+    {
+      "seed": 114,
+      "score": -295.3
+    },
+    {
+      "seed": 115,
+      "score": -86.7
+    },
+    {
+      "seed": 116,
+      "score": -88.65
+    },
+    {
+      "seed": 117,
+      "score": -500.0
+    },
+    {
+      "seed": 118,
+      "score": -102.3
+    },
+    {
+      "seed": 119,
+      "score": -92.1
+    },
+    {
+      "seed": 120,
+      "score": -79.75
+    },
+    {
+      "seed": 121,
+      "score": -84.4
+    },
+    {
+      "seed": 122,
+      "score": -90.0
+    },
+    {
+      "seed": 123,
+      "score": -89.25
+    },
+    {
+      "seed": 124,
+      "score": -90.95
+    },
+    {
+      "seed": 125,
+      "score": -84.7
+    },
+    {
+      "seed": 126,
+      "score": -216.45
+    },
+    {
+      "seed": 127,
+      "score": -90.95
+    },
+    {
+      "seed": 128,
+      "score": -82.7
+    },
+    {
+      "seed": 129,
+      "score": -83.8
+    },
+    {
+      "seed": 130,
+      "score": -110.05
+    },
+    {
+      "seed": 131,
+      "score": -93.95
+    },
+    {
+      "seed": 132,
+      "score": -83.35
+    },
+    {
+      "seed": 133,
+      "score": -85.4
+    },
+    {
+      "seed": 134,
+      "score": -103.95
+    },
+    {
+      "seed": 135,
+      "score": -84.3
+    },
+    {
+      "seed": 136,
+      "score": -83.95
+    },
+    {
+      "seed": 137,
+      "score": -78.75
+    },
+    {
+      "seed": 138,
+      "score": -84.35
+    },
+    {
+      "seed": 139,
+      "score": -113.85
+    },
+    {
+      "seed": 140,
+      "score": -84.25
+    }
+  ],
+  "learns": {
+    "learns": true,
+    "gap": 411.05,
+    "ci95": [
+      404.0,
+      415.45
+    ],
+    "random_mean": -500.0
+  }
+}

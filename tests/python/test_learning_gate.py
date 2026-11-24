@@ -305,8 +305,12 @@ def test_learning_learns_requires_the_interval_above_random():
     assert not flat["learns"]
     worse = learns([-500.0] * 5, [-100.0] * 5)
     assert not worse["learns"] and worse["gap"] < 0
-    assert not learns([1.0], [0.0, 0.0])["learns"]
-    assert not learns([1.0, float("nan")], [0.0, 0.0])["learns"]
+    # A gap of exactly 0 is not learning (the interval must lie above 0).
+    tie = learns([-500.0] * 4, [-500.0] * 4)
+    assert not tie["learns"] and tie["ci95"] == [0.0, 0.0]
+    assert "error" in learns([1.0], [0.0, 0.0])
+    nan = learns([1.0, float("nan")], [0.0, 0.0])
+    assert not nan["learns"] and "error" in nan
 
 
 def test_learning_protocols_are_known_and_cartpole_is_the_original():
@@ -359,3 +363,18 @@ def test_learning_acrobot_protocol_trains_and_evaluates_on_acrobot():
     random = lp.random_scores("acrobot", 2)
     assert len(random) == 2 and all(-500.0 <= x <= 0.0 for x in random)
     assert lp.fingerprint("acrobot") != lp.fingerprint("cartpole")
+
+
+def test_learning_every_calibration_is_valid_and_learns_and_runs_nightly():
+    root = pathlib.Path(__file__).resolve().parents[2]
+    workflow = (root / ".github" / "workflows" / "learning-test.yml").read_text()
+    import learning_protocols as lp
+
+    for path in sorted((root / "compat" / "learning").glob("*.json")):
+        name = path.stem
+        cal = json.loads(path.read_text())
+        assert not check_calibration(cal), name
+        assert cal["setup"]["env"] == lp.protocol(name)["env"], name
+        if name != "cartpole":
+            assert cal["learns"]["learns"] is True, name
+        assert f"- env: {name}" in workflow, f"{name} has a calibration but no nightly job"
