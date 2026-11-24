@@ -89,8 +89,16 @@ where
     checkpointed: bool,
     /// Ids sent, reset or restored and not yet received.
     outstanding: usize,
-    keyframe_due: bool,
-    checkpoint_due: bool,
+    /// Periodic events due at the next quiescent point.
+    due: Due,
+}
+
+/// The periodic keyframe and checkpoint that fell due while ids were
+/// outstanding.
+#[derive(Debug, Clone, Copy, Default)]
+struct Due {
+    keyframe: bool,
+    checkpoint: bool,
 }
 
 impl<E, M, W> core::fmt::Debug for AsyncRecorder<'_, E, M, W>
@@ -152,8 +160,7 @@ where
             closed: false,
             checkpointed: false,
             outstanding: 0,
-            keyframe_due: false,
-            checkpoint_due: false,
+            due: Due::default(),
         };
         // The keyframe first: it refuses a pool with ids outstanding before
         // anything is written.
@@ -381,19 +388,19 @@ where
         })?;
         let calls = self.calls;
         let every = |n: u64| n != 0 && calls.is_multiple_of(n);
-        self.keyframe_due |= every(self.options.keyframe_every);
-        self.checkpoint_due |= every(self.options.checkpoint_every);
+        self.due.keyframe |= every(self.options.keyframe_every);
+        self.due.checkpoint |= every(self.options.checkpoint_every);
         if self.outstanding != 0 {
             return Ok(());
         }
-        if self.keyframe_due {
+        if self.due.keyframe {
             self.body = self.snapshot_keyframe()?;
             self.emit_body(EventTag::Keyframe)?;
-            self.keyframe_due = false;
+            self.due.keyframe = false;
         }
-        if self.checkpoint_due {
+        if self.due.checkpoint {
             self.checkpoint()?;
-            self.checkpoint_due = false;
+            self.due.checkpoint = false;
         }
         Ok(())
     }

@@ -210,7 +210,7 @@ impl Replay<'_> {
                 )
             }
             Event::Recv { ids, outputs_hash } => {
-                return self.async_recv(pool, run, index, &ids, outputs_hash);
+                return Self::async_recv(pool, run, index, &ids, outputs_hash);
             }
         };
         run.summary.calls = run.summary.calls.saturating_add(1);
@@ -228,7 +228,6 @@ impl Replay<'_> {
     /// Receives one id at a time until every id of `ids` came back; checks
     /// their outputs hash. Empty `ids`: the recorded `recv` poisoned.
     fn async_recv<E, M>(
-        &self,
         pool: &mut AsyncPool<E, M>,
         run: &mut Run,
         index: u64,

@@ -601,7 +601,7 @@ impl<'a> Events<'a> {
             EventTag::Reset => {
                 let ids = self.ids(&mut b)?;
                 let reseed = reseed(&mut b)?;
-                let outputs_hash = self.outputs_hash(&mut b)?;
+                let outputs_hash = self.call_hash(&mut b)?;
                 Event::Reset {
                     ids,
                     reseed,
@@ -611,7 +611,7 @@ impl<'a> Events<'a> {
             EventTag::Step => {
                 let ids = self.ids(&mut b)?;
                 let (discrete, continuous_bits) = joint_action(&mut b)?;
-                let outputs_hash = self.outputs_hash(&mut b)?;
+                let outputs_hash = self.call_hash(&mut b)?;
                 let refusals = if self.host.is_some_and(|h| h.refuses) {
                     self.refusals(&mut b)?
                 } else {
@@ -747,6 +747,17 @@ impl<'a> Events<'a> {
             hashes.push(StateHash::from_raw(b.u64("checkpoint hashes")?));
         }
         Ok(hashes)
+    }
+
+    /// The outputs hash of a `Reset` or `Step`: present in a host file with
+    /// the flag. An async file hashes only its `Recv` events, which receive
+    /// the outputs; a send or a reset returns none.
+    fn call_hash(&self, b: &mut Body<'_>) -> Result<Option<u64>, ReplayError> {
+        if self.host.is_some() {
+            self.outputs_hash(b)
+        } else {
+            Ok(None)
+        }
     }
 
     fn outputs_hash(&self, b: &mut Body<'_>) -> Result<Option<u64>, ReplayError> {
