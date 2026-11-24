@@ -12,7 +12,6 @@ use crate::persist::{BUILD_ID, PersistError, host_identity};
 use crate::validate::ActionInput;
 
 use super::format::EventTag as Tag;
-use super::format::StateWriteOp;
 use super::outputs_hash::{outputs_hash, refusal_rows};
 use super::reader::{Event, Ids, RefusalRow, Replay};
 use super::run::ReplaySummary;
@@ -313,7 +312,7 @@ impl Replay<'_> {
                 });
             }
             Event::StateWrite { op, ids, .. } => {
-                if op == StateWriteOp::RestoreAll && ids != Ids::All {
+                if op.writes_all() && ids != Ids::All {
                     return Err(malformed("restore_all ids"));
                 }
                 run.write = Some((index, ids));

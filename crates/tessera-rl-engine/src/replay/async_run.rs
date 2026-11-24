@@ -363,7 +363,7 @@ impl Replay<'_> {
                     field: "a keyframe that differs from its state write",
                 });
             }
-            let result = if op == StateWriteOp::RestoreAll {
+            let result = if op.writes_all() {
                 pool.import_all(&records)
             } else {
                 pool.import(&id_list, &records)

@@ -25,7 +25,7 @@ use tessera_rl_engine::replay::{
 use tessera_rl_engine::{
     ActionInput, DecodeLimits, EnvPool, Masked, PersistError, PoolOptions, Reseed, SyncOptions,
 };
-use tessera_rl_num::identity::Seed;
+use tessera_rl_num::identity::{LogicalId, Seed};
 
 type Pool = EnvPool<Counter, Masked>;
 
@@ -692,4 +692,80 @@ fn test_replay_illegal_action_replaced_by_noop_replays_without_divergence() {
     let mut q = pool_with(config(), 0);
     replay.run(&mut q).unwrap();
     assert_eq!(hashes(&q), hashes(&p));
+}
+
+/// #389: `set_lineage` and `import_all` between steps are logged as state
+/// writes with keyframes and replay without divergence, Inline and Sync.
+#[test]
+fn test_replay_set_lineage_and_import_all_round_trip_inline_and_sync() {
+    let mut files = Vec::new();
+    for workers in [0, 2] {
+        let mut p = pool_with(config(), workers);
+        let mut rec = Recorder::new(&mut p, Vec::new(), options()).unwrap();
+        rec.reset_all(Reseed::Base(Seed::new(5))).unwrap();
+        step(&mut rec, 0);
+        rec.set_lineage(2, LogicalId::new(77)).unwrap();
+        step(&mut rec, 1);
+        let saved: Vec<tessera_rl_engine::DecodedRecord<Counter>> = (0..N)
+            .map(|i| rec.pool().snapshot(i).unwrap().into())
+            .collect();
+        step(&mut rec, 2);
+        step(&mut rec, 3);
+        rec.import_all(&saved).unwrap();
+        step(&mut rec, 4);
+        let bytes = rec.finish().unwrap();
+        let replay = Replay::open(&bytes, LIMITS).unwrap();
+        let ops: Vec<_> = replay
+            .events()
+            .filter_map(|e| match e {
+                Ok((_, Event::StateWrite { op, ids, .. })) => Some((op, ids)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            ops,
+            [
+                (
+                    tessera_rl_engine::replay::StateWriteOp::SetLineage,
+                    Ids::List(vec![2])
+                ),
+                (tessera_rl_engine::replay::StateWriteOp::ImportAll, Ids::All),
+            ]
+        );
+        for replay_workers in [0, 2] {
+            let mut q = pool_with(config(), replay_workers);
+            replay.run(&mut q).unwrap();
+            assert_eq!(hashes(&q), hashes(&p));
+        }
+        files.push(bytes);
+    }
+    assert_eq!(files[0], files[1]);
+}
+
+/// #389: `import_all` (op 5) writes every instance, so a `StateWrite` of op 5
+/// naming a subset of ids is malformed, as one of `restore_all` (op 1) is.
+#[test]
+fn test_replay_import_all_state_write_with_a_subset_is_malformed() {
+    let (bytes, _) = record(0);
+    for op in [1u8, 5] {
+        let mut body = vec![op, 1];
+        body.extend_from_slice(&1u32.to_le_bytes());
+        body.extend_from_slice(&0u32.to_le_bytes());
+        body.extend_from_slice(&0u64.to_le_bytes());
+        let file = with_event(&bytes, EventTag::StateWrite as u8, &body);
+        let err = Replay::open(&file, LIMITS)
+            .unwrap()
+            .run(&mut pool_with(config(), 0))
+            .unwrap_err();
+        assert!(
+            matches!(
+                err,
+                ReplayError::Malformed {
+                    field: "restore_all ids",
+                    ..
+                }
+            ),
+            "op {op}: {err:?}"
+        );
+    }
 }

@@ -294,6 +294,22 @@ where
         })
     }
 
+    /// [`EnvPool::set_lineage`], logged as a state write of `id` with a
+    /// keyframe of its record, which holds the new RNG identity.
+    ///
+    /// # Errors
+    ///
+    /// As [`Recorder::reset_all`].
+    pub fn set_lineage(
+        &mut self,
+        id: u32,
+        lineage: tessera_rl_num::identity::LogicalId,
+    ) -> Result<(), ReplayError> {
+        self.state_write(StateWriteOp::SetLineage, Some(&[id]), |pool| {
+            pool.set_lineage(id, lineage)
+        })
+    }
+
     /// [`EnvPool::fork`], logged with a keyframe of `dst`.
     ///
     /// # Errors
@@ -486,6 +502,19 @@ where
     pub fn import(&mut self, ids: &[u32], records: &[DecodedRecord<E>]) -> Result<(), ReplayError> {
         self.state_write(StateWriteOp::Import, Some(ids), |pool| {
             pool.import(ids, records)
+        })
+    }
+
+    /// [`EnvPool::import_all`], logged with a keyframe of every instance.
+    /// The recorder refuses every call on a poisoned pool, so this is never
+    /// the recovery path here.
+    ///
+    /// # Errors
+    ///
+    /// As [`Recorder::reset_all`].
+    pub fn import_all(&mut self, records: &[DecodedRecord<E>]) -> Result<(), ReplayError> {
+        self.state_write(StateWriteOp::ImportAll, None, |pool| {
+            pool.import_all(records)
         })
     }
 }
