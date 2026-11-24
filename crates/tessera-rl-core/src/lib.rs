@@ -45,9 +45,14 @@ pub use config_canonical::{CanonicalDecode, CanonicalDecodeError, decode_canonic
 pub use config_decode::{ConfigDecode, ConfigDecodeError, ConfigItem, ConfigSource};
 pub use encoding::{Canonical, StateHash};
 pub use entity_heads::{EntityHeads, HeadSpec};
+#[expect(
+    deprecated,
+    reason = "EnvAssets stays exported until its removal (#418)"
+)]
+pub use env::EnvAssets;
 pub use env::{
-    ActionMask, Determinize, EnvAssets, EnvConfig, EnvState, Environment, Heuristic,
-    ImperfectInformation, Persist, Render, Validate,
+    ActionMask, Determinize, EnvConfig, EnvState, Environment, Heuristic, ImperfectInformation,
+    Persist, Render, Validate,
 };
 pub use error::{ConfigError, CoreError, DecodeError, EncodeError, InvariantViolation, SpaceError};
 pub use header::{AdaptiveValues, AgentRow, EngineHeader, NoAdaptive, RecordHeader, RecordLayout};

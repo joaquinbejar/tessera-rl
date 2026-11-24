@@ -243,6 +243,15 @@ pub trait Persist: Validate {
 }
 
 /// Immutable shared data, content-addressed (SPEC 17).
+///
+/// Deprecated: assets are `Asset<T>` config fields (ADR-0077). An asset type
+/// implements [`crate::AssetData`] (`bundled` names its bundled assets), and
+/// `#[derive(EnvConfig)]` lists the config's assets for persisted headers.
+/// Nothing uses this trait; it will be removed in a later minor release.
+#[deprecated(
+    since = "0.4.0",
+    note = "use `Asset<T>` config fields and `AssetData` (ADR-0077); this trait is unused"
+)]
 pub trait EnvAssets: Environment {
     /// The asset bundle, shared read-only by every instance.
     type Assets: Send + Sync + 'static;
