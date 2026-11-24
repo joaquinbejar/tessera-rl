@@ -26,6 +26,7 @@ MOVED = [
     "readme",
     "pufferlib",
     "python",
+    "facade-features",
 ]
 ON_XASKAR = ["gungraun", "deny"]
 
