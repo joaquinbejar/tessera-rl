@@ -22,7 +22,10 @@ impl Rng {
     }
 
     /// A float in `[0, 1)`.
-    #[expect(clippy::cast_precision_loss, reason = "53 random bits into an f64 mantissa")]
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "53 random bits into an f64 mantissa"
+    )]
     pub fn unit(&mut self) -> f64 {
         (self.next_u64() >> 11) as f64 / (1u64 << 53) as f64
     }

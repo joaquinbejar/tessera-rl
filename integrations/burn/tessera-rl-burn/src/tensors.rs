@@ -62,7 +62,10 @@ pub fn f32_leaf(
         .iter()
         .map(|c| f32::from_le_bytes(*c))
         .collect();
-    Ok(Tensor::from_data(TensorData::new(values, [rows, row_len]), device))
+    Ok(Tensor::from_data(
+        TensorData::new(values, [rows, row_len]),
+        device,
+    ))
 }
 
 /// Rewards, shape `[rows]`.
@@ -75,7 +78,10 @@ pub fn rewards(out: &Outputs, device: &Device) -> Result<Tensor<1>, AdapterError
     if r.is_empty() {
         return Err(AdapterError::Empty);
     }
-    Ok(Tensor::from_data(TensorData::new(r.to_vec(), [r.len()]), device))
+    Ok(Tensor::from_data(
+        TensorData::new(r.to_vec(), [r.len()]),
+        device,
+    ))
 }
 
 /// `Bool8` flags (for example `episode_terminated()`) as `0.0`/`1.0`,
@@ -88,7 +94,10 @@ pub fn flags(flags: &[Bool8], device: &Device) -> Result<Tensor<1>, AdapterError
     if flags.is_empty() {
         return Err(AdapterError::Empty);
     }
-    let v: Vec<f32> = flags.iter().map(|f| if f.get() { 1.0 } else { 0.0 }).collect();
+    let v: Vec<f32> = flags
+        .iter()
+        .map(|f| if f.get() { 1.0 } else { 0.0 })
+        .collect();
     Ok(Tensor::from_data(TensorData::new(v, [flags.len()]), device))
 }
 
@@ -113,7 +122,10 @@ pub fn masks(
         return Err(AdapterError::Empty);
     }
     let v: Vec<bool> = m.iter().map(|f| f.get()).collect();
-    Ok(Tensor::from_data(TensorData::new(v, [m.len() / choices, choices]), device))
+    Ok(Tensor::from_data(
+        TensorData::new(v, [m.len() / choices, choices]),
+        device,
+    ))
 }
 
 /// Discrete actions from an integer tensor, for `ActionInput::discrete`.

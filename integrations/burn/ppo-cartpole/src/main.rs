@@ -34,9 +34,16 @@ fn main() -> ExitCode {
     let gate = args.iter().any(|a| a == "--gate");
     let config = ppo::Config {
         seed: arg(&args, "--seed").unwrap_or(1),
-        total_steps: if smoke { 2 * ppo::ROLLOUT * ppo::NUM_ENVS } else { arg(&args, "--steps").unwrap_or(100_000) },
+        total_steps: if smoke {
+            2 * ppo::ROLLOUT * ppo::NUM_ENVS
+        } else {
+            arg(&args, "--steps").unwrap_or(100_000)
+        },
     };
-    println!("ppo-cartpole: burn {BURN_VERSION}, backend flex (pure-Rust CPU) + autodiff, seed {}", config.seed);
+    println!(
+        "ppo-cartpole: burn {BURN_VERSION}, backend flex (pure-Rust CPU) + autodiff, seed {}",
+        config.seed
+    );
     let report = match ppo::train(&config) {
         Ok(r) => r,
         Err(e) => {
@@ -48,6 +55,16 @@ fn main() -> ExitCode {
         "ppo-cartpole: steps {} episodes {} last-20 mean return {:.1} finite losses {}",
         report.steps, report.episodes, report.last_mean, report.finite
     );
-    let ok = if smoke { report.finite } else if gate { report.finite && report.last_mean >= 195.0 } else { report.finite };
-    if ok { ExitCode::SUCCESS } else { ExitCode::FAILURE }
+    let ok = if smoke {
+        report.finite
+    } else if gate {
+        report.finite && report.last_mean >= 195.0
+    } else {
+        report.finite
+    };
+    if ok {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::FAILURE
+    }
 }

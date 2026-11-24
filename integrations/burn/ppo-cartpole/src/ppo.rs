@@ -75,7 +75,10 @@ fn observations(pool: &EnvPool<CartPole>) -> Result<Vec<f32>, EngineError> {
 /// # Errors
 ///
 /// An engine error from the pool.
-#[expect(clippy::many_single_char_names, reason = "PPO notation: n envs, b batch, x obs")]
+#[expect(
+    clippy::many_single_char_names,
+    reason = "PPO notation: n envs, b batch, x obs"
+)]
 pub fn train(config: &Config) -> Result<Report, EngineError> {
     let device = Device::flex().autodiff();
     device.seed(config.seed);
@@ -84,7 +87,10 @@ pub fn train(config: &Config) -> Result<Report, EngineError> {
     let t_len = usize::try_from(ROLLOUT).unwrap_or(128);
     let options = PoolOptions {
         auto_reset: AutoReset::SameStep,
-        ..PoolOptions::new(NonZeroU32::new(16).unwrap_or(NonZeroU32::MIN), Seed::new(config.seed))
+        ..PoolOptions::new(
+            NonZeroU32::new(16).unwrap_or(NonZeroU32::MIN),
+            Seed::new(config.seed),
+        )
     };
     let mut pool = EnvPool::<CartPole>::new(CartPoleConfig::default(), options)?;
     pool.reset_all(Reseed::Keep)?;
@@ -105,8 +111,15 @@ pub fn train(config: &Config) -> Result<Report, EngineError> {
         };
         for _ in 0..t_len {
             let x = Tensor::<2>::from_data(TensorData::new(obs.clone(), [n, OBS]), &device);
-            let probs = softmax(model.logits(x.clone()), 1).into_data().try_to_vec::<f32>().unwrap_or_default();
-            let values = model.value(x).into_data().try_to_vec::<f32>().unwrap_or_default();
+            let probs = softmax(model.logits(x.clone()), 1)
+                .into_data()
+                .try_to_vec::<f32>()
+                .unwrap_or_default();
+            let values = model
+                .value(x)
+                .into_data()
+                .try_to_vec::<f32>()
+                .unwrap_or_default();
             let mut acts = Vec::with_capacity(n);
             for (i, row) in probs.as_chunks::<ACTIONS>().0.iter().enumerate() {
                 let u = rng.unit();
@@ -119,7 +132,10 @@ pub fn train(config: &Config) -> Result<Report, EngineError> {
                 acts.push(i32::try_from(a).unwrap_or(0));
             }
             b.obs.extend_from_slice(&obs);
-            pool.step(ActionInput { discrete: &acts, continuous: &[] })?;
+            pool.step(ActionInput {
+                discrete: &acts,
+                continuous: &[],
+            })?;
             let out = pool.outputs()?;
             b.rewards.extend_from_slice(out.rewards());
             for i in 0..n {
@@ -134,7 +150,11 @@ pub fn train(config: &Config) -> Result<Report, EngineError> {
             steps += NUM_ENVS;
         }
         let last_x = Tensor::<2>::from_data(TensorData::new(obs.clone(), [n, OBS]), &device);
-        let last_v = model.value(last_x).into_data().try_to_vec::<f32>().unwrap_or_default();
+        let last_v = model
+            .value(last_x)
+            .into_data()
+            .try_to_vec::<f32>()
+            .unwrap_or_default();
         let (adv, ret) = gae(&b, &last_v, n, t_len);
         let total = adv.len();
         let size = total / MINIBATCHES;
@@ -148,15 +168,35 @@ pub fn train(config: &Config) -> Result<Report, EngineError> {
                 model = optim.step(LR, model, grads);
             }
         }
-        let tail = returns.get(returns.len().saturating_sub(20)..).unwrap_or_default();
+        let tail = returns
+            .get(returns.len().saturating_sub(20)..)
+            .unwrap_or_default();
         #[expect(clippy::cast_precision_loss, reason = "at most 20 episodes")]
-        let mean = if tail.is_empty() { 0.0 } else { tail.iter().sum::<f32>() / tail.len() as f32 };
-        println!("ppo-cartpole: steps {steps} episodes {} last-20 mean {mean:.1}", returns.len());
+        let mean = if tail.is_empty() {
+            0.0
+        } else {
+            tail.iter().sum::<f32>() / tail.len() as f32
+        };
+        println!(
+            "ppo-cartpole: steps {steps} episodes {} last-20 mean {mean:.1}",
+            returns.len()
+        );
     }
-    let tail = returns.get(returns.len().saturating_sub(20)..).unwrap_or_default();
+    let tail = returns
+        .get(returns.len().saturating_sub(20)..)
+        .unwrap_or_default();
     #[expect(clippy::cast_precision_loss, reason = "at most 20 episodes")]
-    let last_mean = if tail.is_empty() { 0.0 } else { tail.iter().sum::<f32>() / tail.len() as f32 };
-    Ok(Report { steps, episodes: returns.len(), last_mean, finite })
+    let last_mean = if tail.is_empty() {
+        0.0
+    } else {
+        tail.iter().sum::<f32>() / tail.len() as f32
+    };
+    Ok(Report {
+        steps,
+        episodes: returns.len(),
+        last_mean,
+        finite,
+    })
 }
 
 /// Generalized advantage estimation; an ended step does not bootstrap
@@ -186,7 +226,12 @@ fn gae(b: &Batch, last_v: &[f32], n: usize, t_len: usize) -> (Vec<f32>, Vec<f32>
 
 fn take<T: Copy>(v: &[T], idx: &[usize], width: usize) -> Vec<T> {
     idx.iter()
-        .flat_map(|&i| v.get(i * width..(i + 1) * width).unwrap_or_default().iter().copied())
+        .flat_map(|&i| {
+            v.get(i * width..(i + 1) * width)
+                .unwrap_or_default()
+                .iter()
+                .copied()
+        })
         .collect()
 }
 
@@ -201,7 +246,8 @@ fn minibatch_loss(
 ) -> (Tensor<1>, bool) {
     let m = chunk.len();
     let x = Tensor::<2>::from_data(TensorData::new(take(&b.obs, chunk, OBS), [m, OBS]), device);
-    let a = Tensor::<2, Int>::from_data(TensorData::new(take(&b.actions, chunk, 1), [m, 1]), device);
+    let a =
+        Tensor::<2, Int>::from_data(TensorData::new(take(&b.actions, chunk, 1), [m, 1]), device);
     let old = Tensor::<1>::from_data(TensorData::new(take(&b.logp, chunk, 1), [m]), device);
     let mb_adv = take(adv, chunk, 1);
     #[expect(clippy::cast_precision_loss, reason = "minibatch sizes are small")]
