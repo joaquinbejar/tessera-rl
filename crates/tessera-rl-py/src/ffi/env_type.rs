@@ -248,11 +248,12 @@ maker!(MakeBrickwall, api::make_brickwall, "make_brickwall");
 maker!(MakePaddleduel, api::make_paddleduel, "make_paddleduel");
 maker!(MakeConnect4, api::make_connect4, "make_connect4");
 maker!(MakeLeduc, api::make_leduc, "make_leduc");
+maker!(MakeLanterns, api::make_lanterns, "make_lanterns");
 maker!(MakeOthello, api::make_othello, "make_othello");
 maker!(MakeGo9, api::make_go9, "make_go9");
 
 /// The module-level constructors, for the module's function table.
-pub(super) const MAKERS: [FunctionRow; 16] = [
+pub(super) const MAKERS: [FunctionRow; 17] = [
     FunctionRow::kw::<MakeCartpole>(c"make_cartpole", c"make_cartpole($module, *, mode=None, batch_size=None, gather=None, num_envs=None, seed=None, max_episode_steps=None, auto_reset=None, chunk_size=None, workers=None, spin=None, outputs=None)\n--\n\nmake_cartpole(**pool_options) -> Env"),
     FunctionRow::kw::<MakeAcrobot>(c"make_acrobot", c"make_acrobot($module, *, mode=None, batch_size=None, gather=None, num_envs=None, seed=None, max_episode_steps=None, auto_reset=None, chunk_size=None, workers=None, spin=None, outputs=None)\n--\n\nmake_acrobot(**pool_options) -> Env"),
     FunctionRow::kw::<MakeMountaincar>(
@@ -270,6 +271,7 @@ pub(super) const MAKERS: [FunctionRow; 16] = [
     ),
     FunctionRow::kw::<MakeConnect4>(c"make_connect4", c"make_connect4($module, *, mode=None, batch_size=None, gather=None, num_envs=None, seed=None, max_episode_steps=None, auto_reset=None, chunk_size=None, workers=None, spin=None, outputs=None)\n--\n\nmake_connect4(**pool_options) -> Env"),
     FunctionRow::kw::<MakeLeduc>(c"make_leduc", c"make_leduc($module, *, mode=None, batch_size=None, gather=None, num_envs=None, seed=None, max_episode_steps=None, auto_reset=None, chunk_size=None, workers=None, spin=None, outputs=None)\n--\n\nmake_leduc(**pool_options) -> Env"),
+    FunctionRow::kw::<MakeLanterns>(c"make_lanterns", c"make_lanterns($module, *, players=None, zero_on_fuse=None, mode=None, batch_size=None, gather=None, num_envs=None, seed=None, max_episode_steps=None, auto_reset=None, chunk_size=None, workers=None, spin=None, outputs=None)\n--\n\nmake_lanterns(*, players=2, zero_on_fuse=False, **pool_options) -> Env"),
     FunctionRow::kw::<MakeOthello>(c"make_othello", c"make_othello($module, *, mode=None, batch_size=None, gather=None, num_envs=None, seed=None, max_episode_steps=None, auto_reset=None, chunk_size=None, workers=None, spin=None, outputs=None)\n--\n\nmake_othello(**pool_options) -> Env"),
     FunctionRow::kw::<MakeGo9>(
         c"make_go9",

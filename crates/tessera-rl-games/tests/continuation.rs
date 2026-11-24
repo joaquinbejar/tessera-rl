@@ -10,7 +10,9 @@ mod support;
 
 use support::continuation::Case;
 use tessera_rl_engine::{AutoReset, EnvPool, Masked};
-use tessera_rl_games::{Connect4, Connect4Config, Go9, Go9Config, Othello, OthelloConfig};
+use tessera_rl_games::{
+    Connect4, Connect4Config, Go9, Go9Config, Lanterns, LanternsConfig, Othello, OthelloConfig,
+};
 
 #[expect(clippy::unwrap_used, reason = "test setup: a failure is the assertion")]
 fn connect4(auto_reset: AutoReset) -> Case<Connect4, Masked> {
@@ -76,4 +78,31 @@ fn test_continuation_go9_next_step_restores_identically_everywhere() {
 #[test]
 fn test_continuation_go9_same_step_restores_identically_everywhere() {
     go9(AutoReset::SameStep).check_all(50);
+}
+
+/// Lanterns draws only at reset (the deal): branches diverge once an
+/// auto-reset deals a new game with the branched salt.
+#[expect(clippy::unwrap_used, reason = "test setup: a failure is the assertion")]
+fn lanterns(auto_reset: AutoReset) -> Case<Lanterns, Masked> {
+    Case {
+        cfg: LanternsConfig {
+            players: 4,
+            zero_on_fuse: false,
+        },
+        build: |cfg, options| EnvPool::with_masks(cfg, options).unwrap(),
+        auto_reset,
+        limit: 128,
+        deaths: false,
+        branches: true,
+    }
+}
+
+#[test]
+fn test_continuation_lanterns_next_step_restores_identically_everywhere() {
+    lanterns(AutoReset::NextStep).check_all(50);
+}
+
+#[test]
+fn test_continuation_lanterns_same_step_restores_identically_everywhere() {
+    lanterns(AutoReset::SameStep).check_all(50);
 }

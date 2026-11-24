@@ -698,6 +698,7 @@ def make(env_id: str, num_envs: int = 1, seed: int = 0, outputs: str = "borrowed
         "tessera/PaddleDuel-v1": _native.make_paddleduel,
         "tessera/Connect4-v1": _native.make_connect4,
         "tessera/Leduc-v1": _native.make_leduc,
+        "tessera/Lanterns-v1": _native.make_lanterns,
         "tessera/Othello-v1": _native.make_othello,
         "tessera/Go9-v1": _native.make_go9,
     }

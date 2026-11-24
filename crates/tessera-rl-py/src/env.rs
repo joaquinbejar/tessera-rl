@@ -20,7 +20,8 @@ use tessera_rl_engine::{
     WaitBackend, WaitPolicy,
 };
 use tessera_rl_games::{
-    Connect4, Connect4Config, Go9, Go9Config, Leduc, LeducConfig, Othello, OthelloConfig,
+    Connect4, Connect4Config, Go9, Go9Config, Lanterns, LanternsConfig, Leduc, LeducConfig,
+    Othello, OthelloConfig,
 };
 use tessera_rl_num::identity::Seed;
 use tessera_rl_rts::{Rts, RtsConfig};
@@ -1573,6 +1574,30 @@ pub(crate) fn leduc(args: &PoolArgs) -> Result<Box<dyn PoolOps>, BindError> {
     let (options, n) = options(args)?;
     let same_step = options.auto_reset == AutoReset::SameStep;
     let pool = EnvPool::<Leduc, Masked>::with_masks(cfg.clone(), options)?;
+    finish(&cfg, pool, args, n, same_step)
+}
+
+/// The Lanterns config fields, by name, as Python passes them.
+#[derive(Debug, Default)]
+pub(crate) struct LanternsFields {
+    pub(crate) players: Option<u32>,
+    pub(crate) zero_on_fuse: Option<bool>,
+}
+
+/// A Lanterns pool (`tessera/Lanterns-v1`), with masks and Sequential
+/// turns.
+pub(crate) fn lanterns(
+    args: &PoolArgs,
+    fields: &LanternsFields,
+) -> Result<Box<dyn PoolOps>, BindError> {
+    let d = LanternsConfig::default();
+    let cfg = LanternsConfig {
+        players: fields.players.unwrap_or(d.players),
+        zero_on_fuse: fields.zero_on_fuse.unwrap_or(d.zero_on_fuse),
+    };
+    let (options, n) = options(args)?;
+    let same_step = options.auto_reset == AutoReset::SameStep;
+    let pool = EnvPool::<Lanterns, Masked>::with_masks(cfg.clone(), options)?;
     finish(&cfg, pool, args, n, same_step)
 }
 

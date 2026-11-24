@@ -71,6 +71,7 @@ ENVS = {
     "othello": ("tessera/Othello-v1", {}),
     "go9": ("tessera/Go9-v1", {}),
     "leduc": ("tessera/Leduc-v1", {}),
+    "lanterns": ("tessera/Lanterns-v1", {"players": 3}),
     # Few units, a small map: the per-unit Python draws stay cheap. The
     # determinism of the protocol-size environment is covered by the RTS
     # goldens, not by this tool.

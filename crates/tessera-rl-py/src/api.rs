@@ -543,6 +543,26 @@ pub(crate) fn make_leduc(g: Gil, kwargs: Option<Ref<'_>>) -> CResult<Inner> {
     Ok(Inner::new(ops, borrowed))
 }
 
+const LANTERNS_KEYS: [&str; 3] = ["players", "zero_on_fuse", "outputs"];
+
+/// `make_lanterns(**kwargs)`: the pool of a Lanterns environment object
+/// (`players`, `zero_on_fuse`). A game lasts at most about 80 turns;
+/// `max_episode_steps` defaults to 128, so it never truncates a game.
+pub(crate) fn make_lanterns(g: Gil, kwargs: Option<Ref<'_>>) -> CResult<Inner> {
+    let kw = Kwargs::parse(g, kwargs)?;
+    kw.check(g, &[&POOL_KEYS, &LANTERNS_KEYS])?;
+    let borrowed = borrowed(g, &kw)?;
+    let args = pool_args(g, &kw, 128)?;
+    let fields = crate::env::LanternsFields {
+        players: kw.u32(g, "players")?,
+        zero_on_fuse: kw.bool(g, "zero_on_fuse")?,
+    };
+    let ops = g
+        .detach(|| crate::env::lanterns(&args, &fields))
+        .map_err(|e| to_py(g, e))?;
+    Ok(Inner::new(ops, borrowed))
+}
+
 /// `make_othello(**kwargs)`: the pool of an Othello environment object. A
 /// game lasts at most 119 plies; `max_episode_steps` defaults to 128, so it
 /// never truncates a game.

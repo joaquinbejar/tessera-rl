@@ -77,6 +77,7 @@ Known limits of 0.3.0:
 | `tessera/BrickWall-v1` | `tessera-rl-classic` | 1 | `Discrete(3)`, frameskip, pixel or state observation |
 | `tessera/Connect4-v1` | `tessera-rl-games` | 2 | `Discrete(7)`, masked, sequential |
 | `tessera/Leduc-v1` | `tessera-rl-games` | 2 | `Discrete(3)`, masked, sequential, imperfect information |
+| `tessera/Lanterns-v1` | `tessera-rl-games` | 2 to 5 | `Discrete(50)`, masked, sequential, cooperative, imperfect information |
 | `tessera/Othello-v1` | `tessera-rl-games` | 2 | `Discrete(65)`, masked, sequential, forced pass |
 | `tessera/Go9-v1` | `tessera-rl-games` | 2 | `Discrete(82)`, masked, sequential, positional superko |
 | `tessera/RTS-v1` | `tessera-rl-rts` | 2, or 1 against a scripted opponent | `MultiDiscrete`, multi-head, conditional masks, fog of war |

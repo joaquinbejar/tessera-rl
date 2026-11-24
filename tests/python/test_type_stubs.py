@@ -95,7 +95,7 @@ def test_native_varargs_extra_argument_refused(call):
     "name",
     [
         "make_cartpole", "make_acrobot", "make_mountaincar", "make_pendulum", "make_tag", "make_rts",
-        "make_connect4", "make_leduc", "make_othello", "make_go9", "make_grid", "make_keydoor",
+        "make_connect4", "make_leduc", "make_lanterns", "make_othello", "make_go9", "make_grid", "make_keydoor",
         "make_snake", "make_brickwall", "make_paddleduel", "make_search", "make_search_group", "onnx_load",
     ],
 )
