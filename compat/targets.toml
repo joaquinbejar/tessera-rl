@@ -37,6 +37,15 @@ gymnasium = "0.29.1"
 pettingzoo = "1.24.1"
 numpy = "1.26.4"
 
+# RLlib (reference training, #447) pins gymnasium==1.2.2 in every Ray
+# release up to 2.60.1, so it cannot sit next to [env.main] either. Tessera
+# is validated against Gymnasium 1.2.2 there (RLlib's pin), not supported
+# on it. Its own uv project: compat/training/rllib/.
+[env.rllib]
+ray = "2.59.1"
+gymnasium = "1.2.2"
+torch = "2.15.0"
+
 # Profiles for `make check-targets PROFILE=...`: which targets must be
 # installed (required: a missing one fails the check) and which are only
 # reported (deferred: listed with their state, never failed). Every name refers to a pin
@@ -72,3 +81,10 @@ deferred = []
 env = "pufferlib"
 required = ["pufferlib", "gymnasium", "pettingzoo", "numpy"]
 deferred = []
+
+# The RLlib reference environment: every pin deferred (reported, never
+# failed), because it is validated against, not a supported target.
+[profile.rllib]
+env = "rllib"
+required = []
+deferred = ["ray", "gymnasium", "torch"]

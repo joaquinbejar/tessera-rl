@@ -4,7 +4,7 @@
 # maturin's default of macOS 11. Ignored on other platforms.
 export MACOSX_DEPLOYMENT_TARGET := 13.0
 
-.PHONY: onnx-test py-test-onnx fuzz-check simd-disasm dashboard dashboard-check check-build-id gungraun-threaded fmt fmt-check clippy test doc readme readme-check pre-push deny check-targets wheel-golden py-test-wheels puffer-test py-test-jax py-typecheck pre-push-jax compat-test py-entries pyffi-api pyffi-api-if-nightly py-callouts py-test py-test-hooks py-test-host py-test-orderbook cargo-tessera-e2e burn-check burn-gate py-test-torch pre-push-torch gym-equivalence reference-training reference-sb3 reference-tianshou learning-test learning-calibrate bench bench-quick bench-kernels gungraun gungraun-bless connect4-calibration search-strength
+.PHONY: onnx-test py-test-onnx fuzz-check simd-disasm dashboard dashboard-check check-build-id gungraun-threaded fmt fmt-check clippy test doc readme readme-check pre-push deny check-targets wheel-golden py-test-wheels puffer-test py-test-jax py-typecheck pre-push-jax compat-test py-entries pyffi-api pyffi-api-if-nightly py-callouts py-test py-test-hooks py-test-host py-test-orderbook cargo-tessera-e2e burn-check burn-gate py-test-torch pre-push-torch gym-equivalence reference-training reference-sb3 reference-tianshou reference-rllib learning-test learning-calibrate bench bench-quick bench-kernels gungraun gungraun-bless connect4-calibration search-strength
 
 fmt:
 	cargo fmt --all
@@ -268,6 +268,12 @@ reference-sb3:
 # (compat/training/tianshou); report-only. JSON report in reference-tianshou.json.
 reference-tianshou:
 	uv run --locked --project compat/training/tianshou --python 3.11 python tools/reference/tianshou_cartpole.py --out reference-tianshou.json
+
+# Reference training with RLlib (#447): its own uv project and lock
+# (compat/training/rllib, Gymnasium 1.2.2, RLlib's pin); report-only.
+# JSON report in reference-rllib.json.
+reference-rllib:
+	uv run --locked --project compat/training/rllib --python 3.11 python tools/reference/rllib_cartpole.py --out reference-rllib.json
 
 reference-training:
 	uv sync --locked --python 3.11 --group test --group torch

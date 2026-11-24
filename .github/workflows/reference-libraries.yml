@@ -21,10 +21,12 @@ jobs:
   reference:
     runs-on: [self-hosted, xaskar]
     continue-on-error: true
+    # RLlib's 300k-step budget runs about 4x longer than the others.
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
-        library: [sb3, tianshou]
+        library: [sb3, tianshou, rllib]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # The pinned uv 0.13.6 from pipx's bin directory, as in
