@@ -986,9 +986,48 @@ pub(crate) fn snapshot_all<'py>(g: Gil<'py>, inner: &Inner) -> CResult<Mine<'py>
         let taken = g.detach(|| ops.snapshot_all()).map_err(|e| to_py(g, e))?;
         return snapshot_type::new_object(g, taken);
     }
-    let split = require_split(g, inner, "snapshot_all")?;
-    let taken = g.detach(|| split.snapshot_all()).map_err(|e| to_py(g, e))?;
+    if let Some(split) = split_of(g, inner)? {
+        let taken = g.detach(|| split.snapshot_all()).map_err(|e| to_py(g, e))?;
+        return snapshot_type::new_object(g, taken);
+    }
+    // Sync and Inline (#465): for `restore_pool` only.
+    let taken = inner.with(g, |ops| {
+        let ops = &mut *ops;
+        g.detach(move || ops.snapshot_pool())
+            .map_err(|e| to_py(g, e))
+    })?;
     snapshot_type::new_object(g, taken)
+}
+
+/// `restore_pool(snapshot, archive)`: restores records, frame stacks and
+/// the whole pool context (ADR-0075 item 7, ADR-0078 item 6, #465), with
+/// the `Archive` the context names or `None`. Returns what `restore_all`
+/// returns in Pipelined and Async mode, and the outputs in Sync and Inline.
+pub(crate) fn restore_pool<'py>(g: Gil<'py>, inner: &Inner, args: Ref<'_>) -> CResult<Mine<'py>> {
+    let a: [Ref<'_>; 2] = exactly(g, args, "restore_pool")?;
+    let [snapshot, archive] = a;
+    let snapshot = snapshot_type::snapshot_of(g, snapshot)?;
+    let archive = crate::replay_api::optional_archive(g, archive)?;
+    if let Some(ops) = batched_of(g, inner)? {
+        g.detach(|| ops.restore_pool(&snapshot, archive.as_ref()))
+            .map_err(|e| to_py(g, e))?;
+        return Ok(capi::none(g));
+    }
+    if let Some(split) = split_of(g, inner)? {
+        let owned = !inner.borrowed();
+        let halves = g
+            .detach(|| split.restore_pool(&snapshot, archive.as_ref(), owned))
+            .map_err(|e| to_py(g, e))?;
+        return list_of(
+            g,
+            halves.iter().map(|out| half_output(g, inner, &*split, out)),
+        );
+    }
+    inner.with(g, |ops| {
+        g.detach(|| ops.restore_pool(&snapshot, archive.as_ref()))
+            .map_err(|e| to_py(g, e))?;
+        outputs_of(g, inner, ops)
+    })
 }
 
 /// `restore_all(snapshot)`: restores every instance and the cycle state and

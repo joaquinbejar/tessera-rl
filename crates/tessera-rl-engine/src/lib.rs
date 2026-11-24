@@ -45,6 +45,7 @@ mod registry;
 #[cfg(feature = "replay")]
 pub mod replay;
 mod set_zero;
+mod pool_state;
 mod snapshot;
 mod sys;
 pub mod transform;
@@ -107,6 +108,7 @@ pub use persist::{
     ASSET_FORMAT_VERSION, BUILD_ID, DecodeLimits, FORMAT_VERSION, MAGIC, PersistError,
 };
 pub use pool::{EnvPool, Reseed};
+pub use pool_state::PoolState;
 pub use record::{DecodedRecord, PoolContext, Record};
 pub use registry::attach_shared_registry;
 #[cfg(feature = "replay")]

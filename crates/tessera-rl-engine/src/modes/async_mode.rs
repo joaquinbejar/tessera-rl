@@ -617,6 +617,37 @@ where
         self.after_full_write()
     }
 
+    /// [`EnvPool::snapshot_pool`] with no id outstanding.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::snapshot_all`].
+    pub fn snapshot_pool(&self) -> Result<crate::PoolState<E>, EngineError> {
+        if self.outstanding != 0 {
+            return Err(EngineError::NotQuiescent);
+        }
+        if self.is_poisoned() {
+            return Err(EngineError::Poisoned);
+        }
+        self.mode.pool.snapshot_pool()
+    }
+
+    /// [`EnvPool::restore_pool`] as a full writer (as [`Self::restore_all`],
+    /// a recovery path on a poisoned pool). An error mutates nothing.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::restore_all`], or any error of [`EnvPool::restore_pool`].
+    pub fn restore_pool(
+        &mut self,
+        state: &crate::PoolState<E>,
+        archive: Option<&crate::Archive<E>>,
+    ) -> Result<(), EngineError> {
+        let recovery = self.is_poisoned();
+        self.write(recovery, |pool| pool.restore_pool(state, archive))?;
+        self.after_full_write()
+    }
+
     /// Checks ids for a partial writer: the same rules as a send.
     fn check_partial(&mut self, ids: &[u32]) -> Result<(), EngineError> {
         if self.dead() {

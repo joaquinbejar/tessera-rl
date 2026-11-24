@@ -202,7 +202,7 @@ where
     }
 
     /// `len` bytes of frame stacks for `instances` instances, or an error.
-    fn check_state_len(&self, len: usize, instances: usize) -> Result<(), EngineError> {
+    pub(crate) fn check_state_len(&self, len: usize, instances: usize) -> Result<(), EngineError> {
         let expected = self.transform_state_bytes().saturating_mul(instances);
         if len == expected {
             Ok(())

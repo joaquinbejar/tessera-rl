@@ -23,7 +23,7 @@ use std::thread::ThreadId;
 use tessera_rl_core::{AdaptiveValues, Bool8, Environment, RecordLayout};
 use tessera_rl_engine::{
     ActionInput, AsyncPool, BatchRow, BatchToken, BatchWaiter, EngineError, IdGenerations,
-    MaskProvider, OutputField, OutputStorage, Record, Reseed,
+    MaskProvider, OutputField, OutputStorage, Reseed,
 };
 use tessera_rl_num::identity::Seed;
 
@@ -118,6 +118,10 @@ pub(crate) trait AsyncOps: Send + Sync {
     -> Result<(), BindError>;
     fn snapshot_all(&self) -> Result<Snapshot, BindError>;
     fn restore_all(&self, snapshot: &Snapshot) -> Result<(), BindError>;
+    /// Restores records, frame stacks and the pool context (ADR-0075 item
+    /// 7, #465), as `restore_all` (a recovery path too).
+    fn restore_pool(&self, snapshot: &Snapshot, archive: Option<&AnyArchive>)
+    -> Result<(), BindError>;
     /// The persisted file of `ids`; no sent id may be outstanding.
     fn encode(&self, ids: &[u32]) -> Result<Vec<u8>, BindError>;
     /// Builds an archive of this environment from record bytes (ADR-0075).
@@ -282,7 +286,9 @@ impl<E: Environment, M: MaskProvider<E>> State<E, M> {
 /// Records taken from one pool.
 struct Taken<E: Environment> {
     owner: Arc<OutputStorage>,
-    records: Vec<Record<E>>,
+    /// Records, frame stacks and the pool context (#465); `restore_all`
+    /// uses the records only.
+    state: tessera_rl_engine::PoolState<E>,
 }
 
 struct BatchedPool<E: Environment, M: MaskProvider<E>> {
@@ -296,7 +302,6 @@ struct BatchedPool<E: Environment, M: MaskProvider<E>> {
     buffer: Option<Arc<GatherBuffer>>,
     receiving: AtomicBool,
     waiter: BatchWaiter,
-    template: Record<E>,
     set: Option<ViewSet>,
     /// Owned mode: fresh copies of each gathered batch.
     owned: bool,
@@ -672,11 +677,10 @@ where
     fn snapshot_all(&self) -> Result<Snapshot, BindError> {
         let guard = self.lock()?;
         let pool = guard.pool.as_ref().ok_or_else(closed)?;
-        let mut records = vec![self.template; self.num_envs];
-        pool.snapshot_all(&mut records)?;
+        let state = pool.snapshot_pool()?;
         Ok(Arc::new(Taken::<E> {
             owner: Arc::clone(&self.storage),
-            records,
+            state,
         }))
     }
 
@@ -688,7 +692,35 @@ where
         state.stored.release_all();
         let recovering = pool.is_poisoned();
         self.unsettle();
-        let result = pool.restore_all(&taken.records);
+        let result = pool.restore_all(taken.state.records());
+        if result.is_ok() {
+            state.stored.covered.fill(false);
+            // This writes no batch: old gathered views must stay stale after
+            // a recovery, and move before the flag clears.
+            if recovering && let Some(writer) = state.gather.as_mut() {
+                writer.begin();
+            }
+        }
+        self.settle(pool);
+        result?;
+        state.pending = None;
+        Ok(())
+    }
+
+    fn restore_pool(
+        &self,
+        snapshot: &Snapshot,
+        archive: Option<&AnyArchive>,
+    ) -> Result<(), BindError> {
+        let taken = self.mine(&**snapshot)?;
+        let archive = crate::env::archive_ref::<E>(archive)?;
+        let mut guard = self.lock()?;
+        let state = &mut *guard;
+        let pool = state.pool.as_mut().ok_or_else(closed)?;
+        state.stored.release_all();
+        let recovering = pool.is_poisoned();
+        self.unsettle();
+        let result = pool.restore_pool(&taken.state, archive);
         if result.is_ok() {
             state.stored.covered.fill(false);
             // This writes no batch: old gathered views must stay stale after
@@ -901,7 +933,6 @@ pub(crate) enum BatchOutputs {
 pub(crate) fn batched<E, M>(
     pool: AsyncPool<E, M>,
     storage: Arc<OutputStorage>,
-    template: Record<E>,
     layout: Layout,
     outputs: BatchOutputs,
 ) -> Result<Box<dyn PoolOps>, BindError>
@@ -961,7 +992,6 @@ where
         buffer,
         receiving: AtomicBool::new(false),
         waiter,
-        template,
         set,
         owned: outputs == BatchOutputs::Owned,
         num_envs,

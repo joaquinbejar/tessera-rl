@@ -542,6 +542,38 @@ where
         self.after_write(cycles.clone())
     }
 
+    /// [`EnvPool::snapshot_pool`] at quiescence, with the cycle state.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::snapshot_all`].
+    pub fn snapshot_pool(&self) -> Result<(crate::PoolState<E>, CycleState), EngineError> {
+        if self.queued != 0 {
+            return Err(EngineError::NotQuiescent);
+        }
+        if self.is_poisoned() {
+            return Err(EngineError::Poisoned);
+        }
+        Ok((self.mode.pool.snapshot_pool()?, self.cycles.clone()))
+    }
+
+    /// [`EnvPool::restore_pool`] at quiescence, and the cycle state `cycles`
+    /// (as captured by [`Self::snapshot_pool`]). Get tokens with
+    /// [`Self::idle_token`] afterwards. An error mutates nothing.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::restore_all`], or any error of [`EnvPool::restore_pool`].
+    pub fn restore_pool(
+        &mut self,
+        state: &crate::PoolState<E>,
+        cycles: &CycleState,
+        archive: Option<&crate::Archive<E>>,
+    ) -> Result<(), EngineError> {
+        self.write(|pool| pool.restore_pool(state, archive))?;
+        self.after_write(cycles.clone())
+    }
+
     /// Runs a caller-side writer on the pool (ADR-0047 section 3). The raw
     /// parts are taken again whatever the outcome (the `&mut` invalidated
     /// them). A failure changes no generation, cycle or poison, except that

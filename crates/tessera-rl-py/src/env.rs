@@ -374,6 +374,20 @@ pub(crate) trait PoolOps: Send {
     fn reset_from(&mut self, _ids: &[u32], _entries: &[u32]) -> Result<(), BindError> {
         Err(no_archives())
     }
+    /// A whole-pool snapshot of a Sync or Inline pool: records, frame stacks
+    /// and the pool context (#465), opaque.
+    fn snapshot_pool(&self) -> Result<crate::split::Snapshot, BindError> {
+        Err(no_archives())
+    }
+    /// Restores a [`PoolOps::snapshot_pool`] snapshot of this pool, with the
+    /// archive its context names (ADR-0075 item 7); an error mutates nothing.
+    fn restore_pool(
+        &mut self,
+        _snapshot: &crate::split::Snapshot,
+        _archive: Option<&AnyArchive>,
+    ) -> Result<(), BindError> {
+        Err(no_archives())
+    }
     /// Replays a file into this pool and checks it (ADR-0072 section 5),
     /// with the archive the file names (ADR-0075 item 7), if any.
     fn replay(
@@ -422,6 +436,13 @@ type ActiveCursor<'a, E, M> = (
     &'a [u8],
     &'a mut tessera_rl_engine::ReplayCursor,
 );
+
+/// A Sync or Inline pool snapshot (#465): the pool that took it, by its
+/// output storage, and the engine's whole-pool state.
+struct SyncTaken<E: Environment> {
+    owner: std::sync::Arc<tessera_rl_engine::OutputStorage>,
+    state: tessera_rl_engine::PoolState<E>,
+}
 
 struct Pooled<E: Environment, M: MaskProvider<E>> {
     pool: EnvPool<E, M>,
@@ -952,6 +973,32 @@ where
         Ok(())
     }
 
+    fn snapshot_pool(&self) -> Result<crate::split::Snapshot, BindError> {
+        let state = self.pool.snapshot_pool()?;
+        Ok(std::sync::Arc::new(SyncTaken::<E> {
+            owner: std::sync::Arc::clone(&self.storage),
+            state,
+        }))
+    }
+
+    fn restore_pool(
+        &mut self,
+        snapshot: &crate::split::Snapshot,
+        archive: Option<&AnyArchive>,
+    ) -> Result<(), BindError> {
+        self.not_recording("restore_pool")?;
+        self.not_replaying("restore_pool")?;
+        let taken = snapshot
+            .downcast_ref::<SyncTaken<E>>()
+            .filter(|t| std::sync::Arc::ptr_eq(&t.owner, &self.storage))
+            .ok_or_else(|| {
+                BindError::Argument("a snapshot restores only the pool that took it".to_owned())
+            })?;
+        let archive = archive_ref::<E>(archive)?;
+        self.pool.restore_pool(&taken.state, archive)?;
+        Ok(())
+    }
+
     fn reset_from(&mut self, ids: &[u32], entries: &[u32]) -> Result<(), BindError> {
         self.not_replaying("reset_from")?;
         // Logged while recording (ADR-0075 item 5, tag 11).
@@ -1294,14 +1341,13 @@ where
             storage,
             ..
         } = pooled;
-        let template = pool.snapshot(0)?;
         let mut options = PipelinedOptions::new(workers.unwrap_or(NonZeroUsize::MIN));
         options.sync.wait = wait_backend()?;
         apply_spin(&mut options.sync, args.spin, policy);
         let pool = pool
             .pipelined(options)
             .map_err(|e| BindError::Engine(e.error))?;
-        return Ok(crate::split::pipelined(pool, storage, template, layout));
+        return Ok(crate::split::pipelined(pool, storage, layout));
     }
     if let Some((batch, outputs)) = args.asynced {
         let batch = NonZeroUsize::new(batch)
@@ -1312,14 +1358,13 @@ where
             storage,
             ..
         } = pooled;
-        let template = pool.snapshot(0)?;
         let mut options = AsyncOptions::new(workers.unwrap_or(NonZeroUsize::MIN), batch);
         options.sync.wait = wait_backend()?;
         apply_spin(&mut options.sync, args.spin, policy);
         let pool = pool
             .async_mode(options)
             .map_err(|e| BindError::Engine(e.error))?;
-        return crate::batched::batched(pool, storage, template, layout, outputs);
+        return crate::batched::batched(pool, storage, layout, outputs);
     }
     let Pooled {
         pool,
