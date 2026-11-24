@@ -496,13 +496,27 @@ def test_entries_lint_passes_private_foreign_items_and_safe_traits(tmp_path, ext
     assert run.returncode == 0, (extra, run.stdout)
 
 
-def _failing_cargo(tmp_path):
+def _fake_cargo(tmp_path, body):
     bin_ = tmp_path / "bin"
     bin_.mkdir()
     cargo = bin_ / "cargo"
-    cargo.write_text("#!/bin/sh\necho 'cargo broke' >&2\nexit 101\n")
+    cargo.write_text("#!/bin/sh\n" + body)
     cargo.chmod(0o755)
     return {**os.environ, "PATH": f"{bin_}{os.pathsep}{os.environ['PATH']}"}
+
+
+def _failing_cargo(tmp_path):
+    return _fake_cargo(tmp_path, "echo 'cargo broke' >&2\nexit 101\n")
+
+
+def test_entries_lint_on_the_tree_reports_pyo3_macros(tmp_path):
+    # The copy-mode skip (#426) must not turn the dependency check off on
+    # the tree itself.
+    env = _fake_cargo(tmp_path, "printf 'tessera-rl-py v0.0.0\\npyo3-macros v0.0.0\\n'\n")
+    run = subprocess.run([sys.executable, str(SCRIPTS / "check_py_entries.py")],
+                         capture_output=True, text=True, cwd=ROOT, env=env)
+    assert run.returncode == 1, run.stdout + run.stderr
+    assert "pyo3-macros is a dependency of tessera-rl-py" in run.stdout, run.stdout + run.stderr
 
 
 def test_entries_lint_on_copies_does_not_run_cargo(tmp_path):
