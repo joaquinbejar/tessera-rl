@@ -417,3 +417,15 @@ def test_learning_flattened_protocols_train_on_dict_and_image_observations():
     for name in ("grid", "brickwall"):
         r = lp.train(name, 1, 512, 1)
         assert len(r["eval_returns"]) == 1, name
+
+
+def test_learning_acrobot_fingerprint_matches_its_calibration():
+    """Acrobot's protocol entry, the trainer sources and the pinned
+    libraries are still the ones its calibration recorded."""
+    pytest = __import__("pytest")
+    pytest.importorskip("torch")
+    import learning_protocols as lp
+
+    cal = json.loads((pathlib.Path(__file__).resolve().parents[2] / "compat" / "learning" / "acrobot.json").read_text())
+    assert lp.fingerprint("acrobot") == cal["setup"]["fingerprint"]
+    assert cal["environment"]["torch_threads"] == 1 and cal["environment"]["omp_num_threads"] == "1"

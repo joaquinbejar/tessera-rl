@@ -16,6 +16,17 @@
 # calibration from any other machine is a pilot, never committed. A
 # calibration records the CPU, and the torch and OpenMP thread settings, it
 # ran with.
+#
+# Protocols without a calibration have no nightly gate yet (the owner's
+# rule: an environment that does not learn at an affordable budget ships its
+# protocol without one). At 150k steps:
+# - MountainCar scores -200, the same as a random policy (sparse reward).
+# - Grid scores -0.9 on every seed against -1.0 for random: 1 goal in 20
+#   evaluation episodes. It passes the numeric learns check, but that is not
+#   learning to reach the goal.
+# - BrickWall scores 0.0 against 0.7 for random (an MLP on pixels).
+# A larger budget, other hyperparameters or a CNN would be a later protocol
+# change.
 
 [cartpole]
 env = "tessera/CartPole-v1"
