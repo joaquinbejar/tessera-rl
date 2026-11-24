@@ -254,7 +254,7 @@ jobs:
         shell: bash
     env:
       WHEEL_RUN: ${{ github.workspace }}/.wheel-run
-      # No TESSERA_EXPECT_FP_TRAPS: aarch64 does not implement trapped FP
+      # The FP-traps flag stays unset: aarch64 does not implement trapped FP
       # exceptions, as on the manylinux aarch64 leg.
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
