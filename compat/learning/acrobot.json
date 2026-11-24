@@ -49,10 +49,10 @@
     "env": "tessera/Acrobot-v1",
     "total_steps": 150000,
     "eval_episodes": 20,
-    "fingerprint": "2667edaa88f6a70a1e4796d646273f3edf9066e8b728d14abf29e91e5dabb7ba"
+    "fingerprint": "d4ccef5d16e15f9b40b91eb13c9a2805f42059013b01a5213abb88744e74905a"
   },
   "environment": {
-    "git": "c2dd5293e5e912200f94d8445d76f7db55d67515",
+    "git": "e7c6fcbc548a80bc2eacf60cc81f9465ba3d7f68",
     "git_dirty": false,
     "python": "3.11.18",
     "os": "Linux-7.0.0-38-generic-x86_64-with-glibc2.43",
@@ -228,13 +228,19 @@
       "score": -84.25
     }
   ],
+  "gate": {
+    "solved": -100.0,
+    "min_effect": 0.1
+  },
   "learns": {
     "learns": true,
+    "degenerate": false,
     "gap": 411.05,
     "ci95": [
       404.0,
       415.45
     ],
+    "required": 40.0,
     "random_mean": -500.0
   },
   "non_learning_seeds": 1

@@ -486,3 +486,13 @@ def test_learning_fingerprint_ignores_code_outside_training(monkeypatch):
     real = lp._training_source
     monkeypatch.setattr(lp, "_training_source", lambda: real() + "# changed")
     assert lp.fingerprint("acrobot") != before
+
+
+def test_learning_learns_constant_scores_against_a_varying_random_are_degenerate():
+    from learning_gate import learns
+
+    # The random side varies, so the interval has width, but every trained
+    # seed scores the same: still degenerate.
+    r = learns([-0.9] * 40, [-1.0, -0.98, -1.0, -0.99, -1.0])
+    assert r["ci95"][0] != r["ci95"][1]
+    assert r["degenerate"] and not r["learns"]
