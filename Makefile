@@ -4,7 +4,7 @@
 # maturin's default of macOS 11. Ignored on other platforms.
 export MACOSX_DEPLOYMENT_TARGET := 13.0
 
-.PHONY: onnx-test py-test-onnx fuzz-check simd-disasm dashboard dashboard-check check-build-id gungraun-threaded fmt fmt-check clippy test doc readme readme-check pre-push deny check-targets wheel-golden py-test-wheels puffer-test py-test-jax py-typecheck pre-push-jax compat-test py-entries pyffi-api pyffi-api-if-nightly py-callouts py-test py-test-hooks py-test-host py-test-orderbook burn-check burn-gate py-test-torch pre-push-torch gym-equivalence reference-training learning-test learning-calibrate bench bench-quick bench-kernels gungraun gungraun-bless connect4-calibration search-strength
+.PHONY: onnx-test py-test-onnx fuzz-check simd-disasm dashboard dashboard-check check-build-id gungraun-threaded fmt fmt-check clippy test doc readme readme-check pre-push deny check-targets wheel-golden py-test-wheels puffer-test py-test-jax py-typecheck pre-push-jax compat-test py-entries pyffi-api pyffi-api-if-nightly py-callouts py-test py-test-hooks py-test-host py-test-orderbook cargo-tessera-e2e burn-check burn-gate py-test-torch pre-push-torch gym-equivalence reference-training learning-test learning-calibrate bench bench-quick bench-kernels gungraun gungraun-bless connect4-calibration search-strength
 
 fmt:
 	cargo fmt --all
@@ -187,6 +187,16 @@ py-test-orderbook:
 	uv pip install --python .venv/bin/python --no-deps --reinstall ./examples/host_orderbook
 	uv run --locked --python 3.11 --group test --group torch pytest -q tests/python/test_host_orderbook.py; \
 	status=$$?; uv sync --locked --python 3.11 || status=1; exit $$status
+
+# The cargo tessera end-to-end test (#351): scaffolds a host environment
+# crate with path dependencies on this checkout, runs `check --python
+# --bless`, `check --python` and `bench --quick` in it, all cargo calls
+# `--locked --offline` against a lock derived from Cargo.lock, and prints
+# the wall time of each phase. Not in pre-push: it builds the scaffold in
+# debug and release (criterion), minutes of CPU. CI runs it in the python
+# job.
+cargo-tessera-e2e:
+	scripts/cargo_tessera_e2e.sh
 
 # The Python tests with PyTorch (marker `torch`), then the default
 # environment again.
