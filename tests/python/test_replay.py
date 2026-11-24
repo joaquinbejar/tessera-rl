@@ -82,7 +82,7 @@ def _header_len(b):
     # Action layout (12), flags and host fields (4), the version 1
     # extension, header checksum (8).
     q = at + 4 + config + 12 + 4
-    q += 2 + u16(q) + 1  # policy map, has_curriculum
+    q += 2 + u16(q) + 2  # policy map, has_curriculum, has_league
     if b[q] == 1:  # archive block
         q += 1 + 8 + 4 + 4 * int.from_bytes(b[q + 9 : q + 13], "little")
     else:

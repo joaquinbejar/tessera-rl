@@ -105,7 +105,7 @@ fn split(b: &[u8]) -> Parts {
     at += 4 + u32_at(b, at); // config
     at += 12 + 4; // action layout, flags and host fields (first-party)
     let ext_start = at;
-    at += 2 + u16_at(b, at) + 1;
+    at += 2 + u16_at(b, at) + 2; // policy map, curriculum and league flags
     at += if b[at] == 1 {
         13 + 4 * u32_at(b, at + 9)
     } else {
@@ -156,11 +156,18 @@ fn join(p: &Parts, asset_count: u16) -> Vec<u8> {
     out
 }
 
-/// An extension: policy map groups, curriculum byte, archive block, chunk.
+/// An extension: policy map groups, curriculum byte, no league, archive
+/// block, chunk.
 fn ext(groups: &[u8], curriculum: u8, archive: &[u8], chunk: u32) -> Vec<u8> {
+    ext_league(groups, curriculum, 0, archive, chunk)
+}
+
+/// An extension with a league byte (ADR-0088 item 8).
+fn ext_league(groups: &[u8], curriculum: u8, league: u8, archive: &[u8], chunk: u32) -> Vec<u8> {
     let mut out = u16::try_from(groups.len()).unwrap().to_le_bytes().to_vec();
     out.extend_from_slice(groups);
     out.push(curriculum);
+    out.push(league);
     out.extend_from_slice(archive);
     out.extend_from_slice(&chunk.to_le_bytes());
     out
@@ -223,6 +230,7 @@ fn test_replay_v1_default_file_round_trips_with_default_fields() {
     let h = replay.header();
     assert_eq!(h.policy_map, []);
     assert!(!h.has_curriculum);
+    assert!(!h.has_league);
     assert!(h.archive.is_none());
     assert_eq!(h.chunk_size, 64);
     assert!(matches!(
@@ -244,7 +252,7 @@ fn test_replay_v1_default_file_round_trips_with_default_fields() {
 fn test_replay_v1_policy_map_refusals() {
     // Counter has 2 agent slots.
     assert_eq!(
-        invalid_field(&with_ext(ext(&[0, 4], 0, &[0], 64))),
+        invalid_field(&with_ext(ext(&[0, 5], 0, &[0], 64))),
         "policy map group"
     );
     assert_eq!(
@@ -465,4 +473,59 @@ fn test_replay_seek_keyframe_archive_source_without_the_archive_refused_pool_unt
     let after: Vec<u64> = (0..N).map(|i| pool.state_hash(i).unwrap().get()).collect();
     assert_eq!(after, before);
     assert_eq!(pool.pool_context().unwrap(), context);
+}
+
+fn with_league_event(league: u8, tag: u8, body: Vec<u8>) -> Vec<u8> {
+    let mut p = split(&recording());
+    p.ext = ext_league(&[], 0, league, &[0], 64);
+    p.events.push((tag, body));
+    join(&p, 0)
+}
+
+#[test]
+fn test_replay_v1_league_fields_are_reserved() {
+    // ADR-0088 item 8: the flag is 0 or 1.
+    assert_eq!(
+        invalid_field(&with_ext(ext_league(&[], 0, 2, &[0], 64))),
+        "has_league"
+    );
+    // A league opens, and replay refuses it until the league lands.
+    let league = with_ext(ext_league(&[], 0, 1, &[0], 64));
+    let replay = Replay::open(&league, LIMITS).unwrap();
+    assert!(replay.header().has_league);
+    assert!(matches!(
+        replay.run(&mut pool()),
+        Err(ReplayError::Unsupported {
+            feature: "leagues (ADR-0088)"
+        })
+    ));
+    // Group code 4, opponent, opens, and replay refuses it as a policy map.
+    let opponent = with_ext(ext(&[0, 4], 0, &[0], 64));
+    assert!(matches!(
+        run_error(&opponent),
+        ReplayError::Unsupported { .. }
+    ));
+}
+
+#[test]
+fn test_replay_v1_league_event_needs_a_league() {
+    let body = vec![1, 2, 3];
+    // Without a league, tag 12 is refused at open.
+    assert!(matches!(
+        Replay::open(
+            &with_league_event(0, EventTag::League as u8, body.clone()),
+            LIMITS
+        ),
+        Err(ReplayError::ReservedTag { tag: 12 })
+    ));
+    // With one, it opens with its body as opaque bytes.
+    let file = with_league_event(1, EventTag::League as u8, body);
+    let replay = Replay::open(&file, LIMITS).unwrap();
+    assert!(
+        replay
+            .events()
+            .any(|e| matches!(e, Ok((_, Event::League { body: &[1, 2, 3] }))))
+    );
+    assert_eq!(EventTag::from_u8(12), Some(EventTag::League));
+    assert_eq!(EventTag::from_u8(13), None);
 }

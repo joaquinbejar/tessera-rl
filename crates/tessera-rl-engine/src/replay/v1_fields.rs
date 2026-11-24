@@ -2,7 +2,8 @@
 
 //! Fields that accepted ADRs folded into replay format version 1 before any
 //! release shipped replay files (#411): the policy map (ADR-0079 item 6), the
-//! curriculum flag and `Adaptive` body (ADR-0081 item 7), the reset source
+//! curriculum flag and `Adaptive` body (ADR-0081 item 7), the league flag,
+//! the `opponent` group and the `League` tag (ADR-0088 item 8), the reset source
 //! and `ResetSource` / `ResetFrom` bodies (ADR-0075 item 7), and the chunk
 //! size. They are parsed and validated now; until their features land, every
 //! file this library writes holds their defaults, and replay refuses a
@@ -24,8 +25,8 @@ pub const MAX_ARCHIVE_ENTRIES: u32 = {
     max
 };
 /// Policy group codes (ADR-0079 item 6): learner, external, heuristic,
-/// privileged heuristic.
-pub const MAX_POLICY_GROUP: u8 = 3;
+/// privileged heuristic, and opponent (ADR-0088 item 8).
+pub const MAX_POLICY_GROUP: u8 = 4;
 
 /// A pool's reset source (ADR-0075 item 7), as a `Keyframe`'s pool context
 /// and a `ResetSource` event hold it: the engine's
@@ -54,6 +55,7 @@ impl ArchiveHeader<'_> {
 pub(crate) struct Extension<'a> {
     pub(crate) policy_map: &'a [u8],
     pub(crate) has_curriculum: bool,
+    pub(crate) has_league: bool,
     pub(crate) archive: Option<ArchiveHeader<'a>>,
     pub(crate) chunk_size: u32,
 }
@@ -149,6 +151,16 @@ pub(crate) fn read_extension(
             .into());
         }
     };
+    let has_league = match b.u8("has_league").map_err(invalid)? {
+        0 => false,
+        1 => true,
+        _ => {
+            return Err(PersistError::InvalidField {
+                field: "has_league",
+            }
+            .into());
+        }
+    };
     let archive = match b.u8("archive digest_present").map_err(invalid)? {
         0 => None,
         1 => {
@@ -169,6 +181,7 @@ pub(crate) fn read_extension(
         Extension {
             policy_map,
             has_curriculum,
+            has_league,
             archive,
             chunk_size,
         },
@@ -176,11 +189,12 @@ pub(crate) fn read_extension(
     ))
 }
 
-/// Appends the extension: default policy map, no curriculum, the archive
+/// Appends the extension: default policy map, no curriculum, no league, the archive
 /// block of `source` (the source at recording start, ADR-0075 item 7), then
 /// `chunk_size`.
 pub(crate) fn push_extension(out: &mut Vec<u8>, chunk_size: u32, source: &ResetSourceRecord) {
     out.extend_from_slice(&0u16.to_le_bytes());
+    out.push(0);
     out.push(0);
     match source {
         ResetSourceRecord::Fresh => out.push(0),
@@ -324,6 +338,11 @@ impl super::reader::Replay<'_> {
                 feature: "curricula (ADR-0081)",
             });
         }
+        if self.header.has_league {
+            return Err(ReplayError::Unsupported {
+                feature: "leagues (ADR-0088)",
+            });
+        }
         if self.header.chunk_size != 0 && self.header.chunk_size != chunk_size {
             return Err(PersistError::Incompatible {
                 field: "chunk_size",
@@ -351,6 +370,7 @@ pub(super) const fn not_yet(tag: super::format::EventTag) -> ReplayError {
     ReplayError::Unsupported {
         feature: match tag {
             EventTag::Adaptive => "adaptive events (ADR-0081)",
+            EventTag::League => "league events (ADR-0088)",
             EventTag::ResetSource | EventTag::ResetFrom => "archive resets (ADR-0075)",
             _ => "this event",
         },

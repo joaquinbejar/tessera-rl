@@ -228,6 +228,7 @@ impl Replay<'_> {
                 return self.async_keyframe(pool, run, index, &ids, records);
             }
             Event::Adaptive { .. } => return Err(not_yet(Tag::Adaptive)),
+            Event::League { .. } => return Err(not_yet(Tag::League)),
             Event::ResetSource(_) => return Err(not_yet(Tag::ResetSource)),
             Event::ResetFrom { .. } => return Err(not_yet(Tag::ResetFrom)),
             Event::Checkpoint { ids, hashes } => {

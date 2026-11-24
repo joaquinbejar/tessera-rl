@@ -436,6 +436,7 @@ impl Replay<'_> {
                 records,
             ),
             Event::Adaptive { .. } => Err(not_yet(Tag::Adaptive)),
+            Event::League { .. } => Err(not_yet(Tag::League)),
             Event::ResetSource(record) => {
                 let source = reset_source_of(&record, archive_ref::<E>(st))?;
                 let result = pool.set_reset_source(source);

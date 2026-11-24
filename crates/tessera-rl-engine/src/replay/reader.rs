@@ -145,6 +145,12 @@ pub enum Event<'a> {
         /// The changed instances, ids strictly increasing.
         entries: Vec<(u32, &'a [u8])>,
     },
+    /// League changes at an epoch barrier (ADR-0088 item 8), reserved: the
+    /// body as opaque bytes until the league lands.
+    League {
+        /// The event body.
+        body: &'a [u8],
+    },
     /// A `set_reset_source` call (ADR-0075 item 7).
     ResetSource(ResetSourceRecord),
     /// A `reset_from` call (ADR-0075 item 5): instance ids and the archive
@@ -217,6 +223,10 @@ impl HostInfo {
 
 /// The replay extension of the header, after the ADR-0011 fields.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "each bool is an independent header flag of the file format"
+)]
 pub struct ReplayHeader<'a> {
     /// Instances in the recorded pool.
     pub num_envs: u32,
@@ -238,12 +248,16 @@ pub struct ReplayHeader<'a> {
     /// `Reset`, `Step` and `Recv` events carry an outputs hash (flag bit1).
     pub outputs_hash: bool,
     /// The policy map (ADR-0079 item 6): one group code per agent slot (0
-    /// learner, 1 external, 2 heuristic, 3 privileged heuristic); empty for
+    /// learner, 1 external, 2 heuristic, 3 privileged heuristic, 4 opponent
+    /// (ADR-0088)); empty for
     /// the default map, every slot a learner.
     pub policy_map: &'a [u8],
     /// Whether the pool has a curriculum (ADR-0081 item 7): only then may
     /// the file hold `Adaptive` events.
     pub has_curriculum: bool,
+    /// Whether the pool has a league (ADR-0088 item 8): only then may the
+    /// file hold `League` events.
+    pub has_league: bool,
     /// The archive reset source at recording start (ADR-0075), if any.
     pub archive: Option<ArchiveHeader<'a>>,
     /// The pool's chunk size; 0 when not recorded (no check).
@@ -256,6 +270,7 @@ struct TagRules {
     host: Option<HostInfo>,
     async_pool: bool,
     has_curriculum: bool,
+    has_league: bool,
 }
 
 /// A parsed and checked header, before the events are scanned.
@@ -435,6 +450,7 @@ impl<'a> Replay<'a> {
             outputs_hash: flags & FLAG_OUTPUTS_HASH != 0,
             policy_map: ext.policy_map,
             has_curriculum: ext.has_curriculum,
+            has_league: ext.has_league,
             archive: ext.archive,
             chunk_size: ext.chunk_size,
         };
@@ -442,6 +458,7 @@ impl<'a> Replay<'a> {
             host,
             async_pool: header.async_pool,
             has_curriculum: header.has_curriculum,
+            has_league: header.has_league,
         };
         Ok(Opened {
             file,
@@ -710,7 +727,8 @@ fn scan(bytes: &[u8], rules: TagRules) -> Result<(&[u8], u64), ReplayError> {
     }
 }
 
-/// Which tags a file may hold: `Adaptive` never; `Recv` only in an async
+/// Which tags a file may hold: `Adaptive` only with a curriculum; `League`
+/// only with a league; `Recv` only in an async
 /// file; `Rejected` only in a notifying host's file; keyframes, checkpoints and state writes never in a
 /// `from_reset_only` host file. The first event is a keyframe, or a reset for
 /// a `from_reset_only` file.
@@ -719,11 +737,13 @@ fn check_tag(tag: EventTag, rules: TagRules, count: u64) -> Result<(), ReplayErr
         host,
         async_pool,
         has_curriculum,
+        has_league,
     } = rules;
     let notifies = host.is_some_and(|h| h.notifies);
     let allowed = (tag == EventTag::Rejected && notifies)
         || (tag == EventTag::Recv && async_pool)
-        || (tag == EventTag::Adaptive && has_curriculum);
+        || (tag == EventTag::Adaptive && has_curriculum)
+        || (tag == EventTag::League && has_league);
     if tag.is_reserved() && !allowed {
         return Err(ReplayError::ReservedTag { tag: tag as u8 });
     }
@@ -848,6 +868,9 @@ impl<'a> Events<'a> {
                 let (value_len, entries) = read_adaptive(&mut b, self.num_envs)?;
                 Event::Adaptive { value_len, entries }
             }
+            EventTag::League => Event::League {
+                body: b.take(b.remaining(), "league body")?,
+            },
             EventTag::ResetSource => Event::ResetSource(read_reset_source(&mut b)?),
             EventTag::ResetFrom => {
                 let (ids, entries) = read_reset_from(&mut b, self.num_envs)?;

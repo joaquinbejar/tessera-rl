@@ -16,6 +16,10 @@ reviewed tree: the frozen SHA.
 - [ ] Record the frozen `main` SHA. Nothing merges after it until the tag.
 - [ ] `make pre-push` is green on a clean checkout of that SHA.
 - [ ] The full CI matrix is green on that SHA.
+- [ ] Replay format: any addition after the first release bumps the replay
+      version (`crates/tessera-rl-engine/src/replay/format.rs`). Fields
+      reserved in version 1 before that release (ADR-0075, ADR-0079,
+      ADR-0081, ADR-0088) are part of version 1.
 - [ ] Issue #40's evidence (the downstream test selection on an immutable
       commit) is recorded against that SHA.
 - [ ] External consumer check: a throwaway crate outside the repository,
