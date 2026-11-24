@@ -208,6 +208,9 @@ fn fallback(own: &mut [u8; HAND], left: &mut [u8; KINDS], slots: usize) {
         if slots & (1 << s) == 0 || *c != NO_CARD {
             continue;
         }
+        // Only an information state no game reaches gets here (review
+        // headA r1): tests must not pass by this path silently.
+        debug_assert!(*c != NO_CARD, "no consistent deal for own slot {s}");
         if let Some(kind) = left.iter().position(|&n| n > 0) {
             *c = u8::try_from(kind).unwrap_or(0);
             if let Some(n) = left.get_mut(kind) {
@@ -284,7 +287,15 @@ fn build(
     }
 }
 
+/// The most weighted assignments a table can count: the falling factorial
+/// of the deck over a full hand, `50 * 49 * 48 * 47 * 46`, below `2^32`,
+/// so every total fits one `below_u32` draw.
+const MAX_WAYS: u64 = 50 * 49 * 48 * 47 * 46;
+const _: () = assert!(MAX_WAYS < 1 << 32 && DECK == 50 && HAND == 5);
+
+/// The draw bound for a nonzero table total (at most [`MAX_WAYS`]).
 fn bound(n: u64) -> core::num::NonZeroU32 {
+    debug_assert!(n > 0 && n <= MAX_WAYS, "table total {n} out of range");
     u32::try_from(n)
         .ok()
         .and_then(core::num::NonZeroU32::new)
