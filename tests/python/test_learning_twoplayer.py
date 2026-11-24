@@ -6,6 +6,7 @@ and one tiny training smoke."""
 import pathlib
 import sys
 
+import numpy as np
 import pytest
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2] / "tools"))
@@ -154,3 +155,59 @@ def test_twoplayer_connect4_one_update_smoke():
     assert math.isfinite(r["eval_mean"])
     refs = lp.twoplayer_references("connect4", 2)
     assert len(refs["uniform"]) == 2 and len(refs["heuristic"]) == 2
+
+
+def test_twoplayer_stall_guard_fails_loudly():
+    """REVIEW-T3b-head-r1: the guard raises, naming the environment and slot."""
+    l2._check_stall(1000 * 64, 64, "tessera/Connect4-v1", 1)  # at the bound: fine
+    with pytest.raises(RuntimeError, match=r"tessera/Connect4-v1: the learner in slot 1 stopped acting"):
+        l2._check_stall(1000 * 64 + 1, 64, "tessera/Connect4-v1", 1)
+
+
+def test_twoplayer_truncation_bootstraps_only_truncated_not_terminated():
+    """REVIEW-T3b-head-r1 (a): truncated and not terminated gets gamma*V(s');
+    terminated gets nothing, even when also flagged truncated."""
+    term = np.array([False, True, False, True])
+    trunc = np.array([True, False, False, True])
+    values = np.array([2.0, 5.0, 7.0, 9.0])
+    np.testing.assert_allclose(l2.truncation_bootstrap(term, trunc, values, 0.5), [1.0, 0.0, 0.0, 0.0])
+
+
+def test_twoplayer_truncation_target_uses_the_terminal_observation():
+    """The bootstrap reads the engine's terminal-observation rows, not the
+    post-reset observation, and lands on the closing transition."""
+
+    class FakeEnv:
+        num_envs, agents, outputs = 2, 2, "owned"
+        _leaves = [("obs", np.float32, (3,))]
+
+    env = FakeEnv()
+    terminal = np.arange(2 * 2 * 3, dtype=np.float32).reshape(2, 2, 3)
+    env._last_out = {"terminal_observations": [terminal.tobytes()]}
+    post_reset = np.zeros((2, 2, 3), dtype=np.float32)
+    got = l2.terminal_obs(env, learner=1)
+    np.testing.assert_array_equal(got, terminal[:, 1, :])
+    assert not np.array_equal(got, post_reset[:, 1, :])
+    # A value function that tells the two apart: the closing transition's
+    # target gets gamma * V(terminal), and terminates there.
+    value = got.sum(axis=1)
+    boot = l2.truncation_bootstrap([False, False], [True, False], value, 0.9)
+    buf = l2.Transitions(2)
+    buf.record(0, True, 1.0 + boot[0], True, {"value": 0.0})
+    (tr,) = buf.lists[0]
+    assert tr["done"] and tr["reward"] == pytest.approx(1.0 + 0.9 * float(terminal[0, 1].sum()))
+
+
+def test_twoplayer_terminal_obs_on_a_real_tag_truncation():
+    """The native path: a Tag pool truncated by its cap exposes the terminal
+    rows, and they differ from the observation after the same-step reset."""
+    env = l2._make("tessera/Tag-v1", 2, 3, {s: "heuristic" for s in range(1, 8)}, {"max_episode_steps": 3})
+    step = env.reset()
+    for _ in range(3):
+        step = env.step(np.zeros((2, env.agents), dtype=np.int32))
+    assert np.asarray(step.episode_truncated).all()
+    final = l2.terminal_obs(env, 0)
+    after = l2.flat_obs(step.observations, 0)
+    assert final.shape == after.shape
+    assert not np.array_equal(final, after)
+    env.close()
