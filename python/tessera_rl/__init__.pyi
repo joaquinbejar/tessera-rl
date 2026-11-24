@@ -26,6 +26,7 @@ from tessera_rl._native import SearchError as SearchError
 from tessera_rl._native import TesseraError as TesseraError
 from tessera_rl._native import fp_non_canonical_entries as fp_non_canonical_entries
 from tessera_rl._native import get_fp_policy as get_fp_policy
+from tessera_rl._native import physical_cores as physical_cores
 from tessera_rl._native import version as version
 
 __all__ = [
@@ -55,6 +56,7 @@ __all__ = [
     "get_fp_policy",
     "is_stale",
     "make",
+    "physical_cores",
     "set_fp_policy",
     "version",
 ]

@@ -25,6 +25,6 @@ def test_stubs_every_module_has_stub():
     assert missing == []
 
 
-def test_stubs_every_python_module_listed():
+def test_stubs_every_python_module_listed_matches():
     modules = {p.stem for p in _PACKAGE.glob("*.py")} | {"_native"}
     assert modules == set(_MODULES)
