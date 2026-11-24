@@ -105,7 +105,7 @@ pub(crate) fn no_positional(g: Gil, args: Ref<'_>, name: &str) -> CResult<()> {
     }
 }
 
-const POOL_KEYS: [&str; 14] = [
+const POOL_KEYS: [&str; 15] = [
     "mode",
     "batch_size",
     "gather",
