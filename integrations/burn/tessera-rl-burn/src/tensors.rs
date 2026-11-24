@@ -2,8 +2,7 @@
 
 //! The conversions.
 
-use burn::tensor::backend::Backend;
-use burn::tensor::{Bool, Int, Tensor, TensorData};
+use burn::prelude::{Bool, Device, Int, Tensor, TensorData};
 use tessera_rl_core::Bool8;
 use tessera_rl_engine::Outputs;
 
@@ -37,12 +36,12 @@ pub enum AdapterError {
 ///
 /// [`AdapterError::NoLeaf`], [`AdapterError::Shape`] or
 /// [`AdapterError::Empty`].
-pub fn f32_leaf<B: Backend>(
+pub fn f32_leaf(
     out: &Outputs<'_>,
     leaf: usize,
     row_len: usize,
-    device: &B::Device,
-) -> Result<Tensor<B, 2>, AdapterError> {
+    device: &Device,
+) -> Result<Tensor<2>, AdapterError> {
     let bytes = out.observation(leaf).ok_or(AdapterError::NoLeaf { leaf })?;
     let row_bytes = row_len.checked_mul(4).filter(|&b| b > 0);
     let rows = match row_bytes {
@@ -69,7 +68,7 @@ pub fn f32_leaf<B: Backend>(
 /// # Errors
 ///
 /// [`AdapterError::Empty`].
-pub fn rewards<B: Backend>(out: &Outputs<'_>, device: &B::Device) -> Result<Tensor<B, 1>, AdapterError> {
+pub fn rewards(out: &Outputs<'_>, device: &Device) -> Result<Tensor<1>, AdapterError> {
     let r = out.rewards();
     if r.is_empty() {
         return Err(AdapterError::Empty);
@@ -83,7 +82,7 @@ pub fn rewards<B: Backend>(out: &Outputs<'_>, device: &B::Device) -> Result<Tens
 /// # Errors
 ///
 /// [`AdapterError::Empty`].
-pub fn flags<B: Backend>(flags: &[Bool8], device: &B::Device) -> Result<Tensor<B, 1>, AdapterError> {
+pub fn flags(flags: &[Bool8], device: &Device) -> Result<Tensor<1>, AdapterError> {
     if flags.is_empty() {
         return Err(AdapterError::Empty);
     }
@@ -96,11 +95,11 @@ pub fn flags<B: Backend>(flags: &[Bool8], device: &B::Device) -> Result<Tensor<B
 /// # Errors
 ///
 /// [`AdapterError::Shape`] or [`AdapterError::Empty`].
-pub fn masks<B: Backend>(
+pub fn masks(
     out: &Outputs<'_>,
     choices: usize,
-    device: &B::Device,
-) -> Result<Tensor<B, 2, Bool>, AdapterError> {
+    device: &Device,
+) -> Result<Tensor<2, Bool>, AdapterError> {
     let m = out.masks();
     if choices == 0 || m.len() % choices != 0 {
         return Err(AdapterError::Shape {
@@ -117,7 +116,7 @@ pub fn masks<B: Backend>(
 
 /// Discrete actions from an integer tensor, for `ActionInput::discrete`.
 #[must_use]
-pub fn actions<B: Backend>(actions: Tensor<B, 1, Int>) -> Vec<i32> {
+pub fn actions(actions: Tensor<1, Int>) -> Vec<i32> {
     actions
         .into_data()
         .convert::<i64>()

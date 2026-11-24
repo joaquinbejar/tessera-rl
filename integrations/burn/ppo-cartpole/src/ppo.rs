@@ -4,19 +4,15 @@
 
 use core::num::NonZeroU32;
 
-use burn::backend::{Autodiff, NdArray};
 use burn::optim::{AdamConfig, GradientsParams, Optimizer};
+use burn::prelude::{Device, Int, Tensor, TensorData};
 use burn::tensor::activation::{log_softmax, softmax};
-use burn::tensor::backend::Backend;
-use burn::tensor::{Int, Tensor, TensorData};
 use tessera_rl_classic::{CartPole, CartPoleConfig};
 use tessera_rl_engine::{ActionInput, AutoReset, EngineError, EnvPool, PoolOptions, Reseed};
 use tessera_rl_num::identity::Seed;
 
 use crate::model::ActorCritic;
 use crate::rng::Rng;
-
-type B = Autodiff<NdArray<f32>>;
 
 /// Pool size.
 pub const NUM_ENVS: u64 = 16;
@@ -77,8 +73,8 @@ fn observations(pool: &EnvPool<CartPole>) -> Result<Vec<f32>, EngineError> {
 ///
 /// An engine error from the pool.
 pub fn train(config: &Config) -> Result<Report, EngineError> {
-    let device = Default::default();
-    B::seed(&device, config.seed);
+    let device = Device::flex().autodiff();
+    device.seed(config.seed);
     let mut rng = Rng::new(config.seed ^ 0x5eed);
     let n = usize::try_from(NUM_ENVS).unwrap_or(16);
     let t_len = usize::try_from(ROLLOUT).unwrap_or(128);
@@ -88,7 +84,7 @@ pub fn train(config: &Config) -> Result<Report, EngineError> {
     };
     let mut pool = EnvPool::<CartPole>::new(CartPoleConfig::default(), options)?;
     pool.reset_all(Reseed::Keep)?;
-    let mut model = ActorCritic::<B>::new(OBS, ACTIONS, &device);
+    let mut model = ActorCritic::new(OBS, ACTIONS, &device);
     let mut optim = AdamConfig::new().with_epsilon(1e-5).init();
     let mut returns: Vec<f32> = Vec::new();
     let mut steps = 0u64;
@@ -104,7 +100,7 @@ pub fn train(config: &Config) -> Result<Report, EngineError> {
             dones: Vec::with_capacity(t_len * n),
         };
         for _ in 0..t_len {
-            let x = Tensor::<B, 2>::from_data(TensorData::new(obs.clone(), [n, OBS]), &device);
+            let x = Tensor::<2>::from_data(TensorData::new(obs.clone(), [n, OBS]), &device);
             let probs = softmax(model.logits(x.clone()), 1).into_data().to_vec::<f32>().unwrap_or_default();
             let values = model.value(x).into_data().to_vec::<f32>().unwrap_or_default();
             let mut acts = Vec::with_capacity(n);
@@ -131,12 +127,21 @@ pub fn train(config: &Config) -> Result<Report, EngineError> {
             obs = observations(&pool)?;
             steps += NUM_ENVS;
         }
-        let last_x = Tensor::<B, 2>::from_data(TensorData::new(obs.clone(), [n, OBS]), &device);
+        let last_x = Tensor::<2>::from_data(TensorData::new(obs.clone(), [n, OBS]), &device);
         let last_v = model.value(last_x).into_data().to_vec::<f32>().unwrap_or_default();
         let (adv, ret) = gae(&b, &last_v, n, t_len);
-        let (m, ok) = update(model, &mut optim, &b, &adv, &ret, &mut rng, &device);
-        model = m;
-        finite &= ok;
+        let total = adv.len();
+        let size = total / MINIBATCHES;
+        let mut idx: Vec<usize> = (0..total).collect();
+        for _ in 0..EPOCHS {
+            rng.shuffle(&mut idx);
+            for chunk in idx.chunks(size) {
+                let (loss, ok) = minibatch_loss(&model, &b, &adv, &ret, chunk, &device);
+                finite &= ok;
+                let grads = GradientsParams::from_grads(loss.backward(), &model);
+                model = optim.step(LR, model, grads);
+            }
+        }
         let tail = &returns[returns.len().saturating_sub(20)..];
         #[expect(clippy::cast_precision_loss, reason = "at most 20 episodes")]
         let mean = if tail.is_empty() { 0.0 } else { tail.iter().sum::<f32>() / tail.len() as f32 };
@@ -178,50 +183,43 @@ fn take<T: Copy>(v: &[T], idx: &[usize], width: usize) -> Vec<T> {
         .collect()
 }
 
-fn update<O: Optimizer<ActorCritic<B>, B>>(
-    mut model: ActorCritic<B>,
-    optim: &mut O,
+/// The PPO-clip loss of one minibatch, and whether it is finite.
+fn minibatch_loss(
+    model: &ActorCritic,
     b: &Batch,
     adv: &[f32],
     ret: &[f32],
-    rng: &mut Rng,
-    device: &<B as Backend>::Device,
-) -> (ActorCritic<B>, bool) {
-    let total = adv.len();
-    let size = total / MINIBATCHES;
-    let mut finite = true;
-    let mut idx: Vec<usize> = (0..total).collect();
-    for _ in 0..EPOCHS {
-        rng.shuffle(&mut idx);
-        for chunk in idx.chunks(size) {
-            let m = chunk.len();
-            let x = Tensor::<B, 2>::from_data(TensorData::new(take(&b.obs, chunk, OBS), [m, OBS]), device);
-            let a = Tensor::<B, 2, Int>::from_data(TensorData::new(take(&b.actions, chunk, 1), [m, 1]), device);
-            let old = Tensor::<B, 1>::from_data(TensorData::new(take(&b.logp, chunk, 1), [m]), device);
-            let mb_adv = take(adv, chunk, 1);
-            #[expect(clippy::cast_precision_loss, reason = "minibatch sizes are small")]
-            let mean = mb_adv.iter().sum::<f32>() / m as f32;
-            #[expect(clippy::cast_precision_loss, reason = "minibatch sizes are small")]
-            let std = (mb_adv.iter().map(|v| (v - mean).powi(2)).sum::<f32>() / m as f32).sqrt() + 1e-8;
-            let norm: Vec<f32> = mb_adv.iter().map(|v| (v - mean) / std).collect();
-            let adv_t = Tensor::<B, 1>::from_data(TensorData::new(norm, [m]), device);
-            let ret_t = Tensor::<B, 1>::from_data(TensorData::new(take(ret, chunk, 1), [m]), device);
+    chunk: &[usize],
+    device: &Device,
+) -> (Tensor<1>, bool) {
+    let m = chunk.len();
+    let x = Tensor::<2>::from_data(TensorData::new(take(&b.obs, chunk, OBS), [m, OBS]), device);
+    let a = Tensor::<2, Int>::from_data(TensorData::new(take(&b.actions, chunk, 1), [m, 1]), device);
+    let old = Tensor::<1>::from_data(TensorData::new(take(&b.logp, chunk, 1), [m]), device);
+    let mb_adv = take(adv, chunk, 1);
+    #[expect(clippy::cast_precision_loss, reason = "minibatch sizes are small")]
+    let len = m as f32;
+    let mean = mb_adv.iter().sum::<f32>() / len;
+    let std = (mb_adv.iter().map(|v| (v - mean).powi(2)).sum::<f32>() / len).sqrt() + 1e-8;
+    let norm: Vec<f32> = mb_adv.iter().map(|v| (v - mean) / std).collect();
+    let adv_t = Tensor::<1>::from_data(TensorData::new(norm, [m]), device);
+    let ret_t = Tensor::<1>::from_data(TensorData::new(take(ret, chunk, 1), [m]), device);
 
-            let logits = model.logits(x.clone());
-            let logp_all = log_softmax(logits, 1);
-            let logp = logp_all.clone().gather(1, a).squeeze(1);
-            let ratio = (logp - old).exp();
-            let s1 = ratio.clone() * adv_t.clone();
-            let s2 = ratio.clamp(1.0 - CLIP, 1.0 + CLIP) * adv_t;
-            let policy_loss = s1.min_pair(s2).mean().neg();
-            let value_loss = (model.value(x) - ret_t).powf_scalar(2.0).mean();
-            let entropy = (logp_all.clone().exp() * logp_all).sum_dim(1).mean().neg();
-            let loss = policy_loss + value_loss.mul_scalar(VALUE_COEF) - entropy.mul_scalar(ENTROPY_COEF);
-            let l = loss.clone().into_data().to_vec::<f32>().unwrap_or_default();
-            finite &= l.iter().all(|v| v.is_finite());
-            let grads = GradientsParams::from_grads(loss.backward(), &model);
-            model = optim.step(LR, model, grads);
-        }
-    }
-    (model, finite)
+    let logp_all = log_softmax(model.logits(x.clone()), 1);
+    let logp = logp_all.clone().gather(1, a).squeeze(1);
+    let ratio = (logp - old).exp();
+    let s1 = ratio.clone() * adv_t.clone();
+    let s2 = ratio.clamp(1.0 - CLIP, 1.0 + CLIP) * adv_t;
+    let policy_loss = s1.min_pair(s2).mean().neg();
+    let value_loss = (model.value(x) - ret_t).powf_scalar(2.0).mean();
+    let entropy = (logp_all.clone().exp() * logp_all).sum_dim(1).mean().neg();
+    let loss = policy_loss + value_loss.mul_scalar(VALUE_COEF) - entropy.mul_scalar(ENTROPY_COEF);
+    let finite = loss
+        .clone()
+        .into_data()
+        .to_vec::<f32>()
+        .unwrap_or_default()
+        .iter()
+        .all(|v| v.is_finite());
+    (loss, finite)
 }

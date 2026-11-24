@@ -18,8 +18,9 @@ publish = false
 
 [workspace.dependencies]
 # Exact pin (#367): the latest release at least two weeks old on 2026-11-24.
-# Only the pure-Rust CPU backend and autodiff; no default features.
-burn = { version = "=0.22.1", default-features = false, features = ["std", "ndarray", "autodiff"] }
+# The pure-Rust CPU backend `flex` (0.22 deprecates `ndarray` for it),
+# autodiff and the optimizers; no default features.
+burn = { version = "=0.22.1", default-features = false, features = ["std", "flex", "autodiff", "optim"] }
 tessera-rl-burn = { path = "tessera-rl-burn" }
 tessera-rl-engine = { path = "../../crates/tessera-rl-engine" }
 tessera-rl-classic = { path = "../../crates/tessera-rl-classic" }

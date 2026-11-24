@@ -2,25 +2,23 @@
 
 //! Actor and critic: two MLPs, 4 -> 64 -> 64 -> {2, 1}, tanh.
 
-use burn::module::Module;
 use burn::nn::{Linear, LinearConfig};
-use burn::tensor::Tensor;
-use burn::tensor::backend::Backend;
+use burn::prelude::{Device, Module, Tensor};
 
 /// The policy and value networks.
 #[derive(Module, Debug)]
-pub struct ActorCritic<B: Backend> {
-    a1: Linear<B>,
-    a2: Linear<B>,
-    a3: Linear<B>,
-    c1: Linear<B>,
-    c2: Linear<B>,
-    c3: Linear<B>,
+pub struct ActorCritic {
+    a1: Linear,
+    a2: Linear,
+    a3: Linear,
+    c1: Linear,
+    c2: Linear,
+    c3: Linear,
 }
 
-impl<B: Backend> ActorCritic<B> {
+impl ActorCritic {
     /// A new network on `device`.
-    pub fn new(obs: usize, actions: usize, device: &B::Device) -> Self {
+    pub fn new(obs: usize, actions: usize, device: &Device) -> Self {
         let h = 64;
         Self {
             a1: LinearConfig::new(obs, h).init(device),
@@ -33,14 +31,14 @@ impl<B: Backend> ActorCritic<B> {
     }
 
     /// Action logits, `[batch, actions]`.
-    pub fn logits(&self, x: Tensor<B, 2>) -> Tensor<B, 2> {
+    pub fn logits(&self, x: Tensor<2>) -> Tensor<2> {
         let h = self.a1.forward(x).tanh();
         let h = self.a2.forward(h).tanh();
         self.a3.forward(h)
     }
 
     /// State values, `[batch]`.
-    pub fn value(&self, x: Tensor<B, 2>) -> Tensor<B, 1> {
+    pub fn value(&self, x: Tensor<2>) -> Tensor<1> {
         let h = self.c1.forward(x).tanh();
         let h = self.c2.forward(h).tanh();
         self.c3.forward(h).squeeze(1)
