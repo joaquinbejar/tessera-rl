@@ -15,6 +15,13 @@ keywords.workspace = true
 categories.workspace = true
 
 [features]
+# SPEC 20.1. `search` and `simd` are on by default, which keeps the API of
+# 0.3.0; `onnx` (ADR-0057, the load-dynamic glue only) is opt-in and
+# implies `search`.
+default = ["search", "simd"]
+search = ["dep:tessera-rl-search"]
+simd = ["dep:tessera-rl-simd"]
+onnx = ["search", "dep:tessera-rl-onnx", "tessera-rl-onnx/onnx"]
 # SPEC 5.5: strict checks at the validation boundary, forwarded to the
 # engine (see `tessera_rl::engine::DEBUG_CHECKS`).
 debug-checks = ["tessera-rl-engine/debug-checks"]
@@ -26,7 +33,9 @@ tessera-rl-macros.workspace = true
 tessera-rl-engine.workspace = true
 tessera-rl-classic.workspace = true
 tessera-rl-games.workspace = true
-tessera-rl-search.workspace = true
+tessera-rl-search = { workspace = true, optional = true }
+tessera-rl-simd = { workspace = true, optional = true }
+tessera-rl-onnx = { workspace = true, optional = true }
 
 [lints]
 workspace = true

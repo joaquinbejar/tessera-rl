@@ -238,6 +238,21 @@ jobs:
       # The ONNX crate with its optional feature (ort declares 1.92).
       - run: cargo +1.95.0 check -p tessera-rl-onnx --features onnx --all-targets --locked
 
+  facade-features:
+    runs-on: [self-hosted, linux-x64]
+    # Skipped for an unmodified fork pull request (see the header).
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+    steps:
+      # Two hosts carry linux-x64: the log names the one that ran this job.
+      - run: hostname && grep -m1 'model name' /proc/cpuinfo
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # SPEC 20.1 facade features (#350): none, each alone, and all.
+      - run: cargo check -p tessera-rl --no-default-features --all-targets --locked
+      - run: cargo check -p tessera-rl --no-default-features --features search --all-targets --locked
+      - run: cargo check -p tessera-rl --no-default-features --features simd --all-targets --locked
+      - run: cargo check -p tessera-rl --no-default-features --features onnx --all-targets --locked
+      - run: cargo check -p tessera-rl --all-features --all-targets --locked
+
   docs:
     runs-on: [self-hosted, linux-x64]
     # Skipped for an unmodified fork pull request (see the header).

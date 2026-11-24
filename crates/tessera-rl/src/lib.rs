@@ -259,9 +259,16 @@
 //!
 //! ## Feature flags
 //!
-//! | Feature | Effect |
-//! | --- | --- |
-//! | `debug-checks` | Strict legality checks at the validation boundary (illegal masked actions fail the call), and an invalid agent event, a NaN in state or rewards (outside `#[state(allow_nan)]` fields) or, with `engine::debug::TrackingAllocator` installed, an allocation inside a chunk step poisons the pool (ADR-0055); `engine::DEBUG_CHECKS` reports whether it is on |
+//! | Feature | Default | Effect |
+//! | --- | --- | --- |
+//! | `search` | yes | `tessera_rl::search`: `SearchPool`, PUCT and Gumbel search |
+//! | `simd` | yes | `tessera_rl::simd`: lane types and runtime ISA dispatch |
+//! | `onnx` | no | `tessera_rl::onnx`: the ONNX search evaluator, which loads ONNX Runtime at run time (ADR-0057); implies `search` |
+//! | `debug-checks` | no | Strict legality checks at the validation boundary (illegal masked actions fail the call), and an invalid agent event, a NaN in state or rewards (outside `#[state(allow_nan)]` fields) or, with `engine::debug::TrackingAllocator` installed, an allocation inside a chunk step poisons the pool (ADR-0055); `engine::DEBUG_CHECKS` reports whether it is on |
+//!
+//! The Python extension is its own crate and wheel (`pip install
+//! tessera-rl`), not a feature. `render`, `gpu` and `league` become features
+//! when their crates exist.
 //!
 //! ## Rules for environment authors
 //!
@@ -292,7 +299,12 @@ pub use tessera_rl_engine as engine;
 pub use tessera_rl_games as games;
 pub use tessera_rl_macros as macros;
 pub use tessera_rl_num as num;
+#[cfg(feature = "onnx")]
+pub use tessera_rl_onnx as onnx;
+#[cfg(feature = "search")]
 pub use tessera_rl_search as search;
+#[cfg(feature = "simd")]
+pub use tessera_rl_simd as simd;
 
 /// Environment registration (SPEC 10, ADR-0032, ADR-0054).
 pub use tessera_rl_core::envs;
