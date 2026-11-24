@@ -30,13 +30,14 @@ use support::{Rng, agent_limits, config, input, legal_actions, pool};
 use tessera_rl_core::Reserved;
 use tessera_rl_core::encoding::encode_to_vec;
 use tessera_rl_core::io::ActionWriter;
-use tessera_rl_core::{AgentSlot, Determinize, ImperfectInformation, Validate};
+use tessera_rl_core::{AgentSlot, ImperfectInformation, Validate};
 use tessera_rl_engine::Reseed;
 use tessera_rl_markets::actions::HEADS;
 use tessera_rl_markets::book::Level;
 use tessera_rl_markets::limits::MAX_AGENTS;
 use tessera_rl_markets::{
     Baseline, Book, LimitOrderBook, LobConfig, LobState, Order, Pending, Side, act_info,
+    sample_with_report,
 };
 use tessera_rl_num::identity::{LogicalId, RngIdentity, Seed, StreamId};
 use tessera_rl_num::rng::{RngAuthority, StepRng};
@@ -114,7 +115,9 @@ fn lob_config() -> impl Strategy<Value = LobConfig> {
 }
 
 /// Every sample of every alive agent of `s`.
-fn check_samples(cfg: &LobConfig, s: &LobState, seed: u64) -> Result<(), TestCaseError> {
+/// Returns how many samples needed the last resort.
+fn check_samples(cfg: &LobConfig, s: &LobState, seed: u64) -> Result<usize, TestCaseError> {
+    let mut last_resort = 0;
     for me in 0..cfg.agent_count() {
         if !s.is_alive(me) {
             continue;
@@ -127,7 +130,8 @@ fn check_samples(cfg: &LobConfig, s: &LobState, seed: u64) -> Result<(), TestCas
         }
         for k in 0..SAMPLES {
             let mut sample = LobState::default();
-            LimitOrderBook::sample(cfg, &info, &mut rng(seed ^ k, 7), &mut sample);
+            let report = sample_with_report(cfg, &info, &mut rng(seed ^ k, 7), &mut sample);
+            last_resort += usize::from(report.last_resort);
             prop_assert_eq!(LimitOrderBook::validate(cfg, &sample), Ok(()));
             let again = LimitOrderBook::info_state(cfg, &sample, agent);
             prop_assert_eq!(encode_to_vec(&again), encode_to_vec(&info));
@@ -163,7 +167,7 @@ fn check_samples(cfg: &LobConfig, s: &LobState, seed: u64) -> Result<(), TestCas
             }
         }
     }
-    Ok(())
+    Ok(last_resort)
 }
 
 proptest! {
@@ -183,12 +187,15 @@ proptest! {
             let a = legal_actions(&mut r, &masks, INSTANCES as usize);
             masks = p.step(input(&a)).unwrap().masks().to_vec();
         }
+        let mut last_resort = 0;
         for i in 0..INSTANCES {
             let s = *p.state(i).unwrap();
             if let Err(e) = agent_limits(&cfg, &s) {
                 return Err(TestCaseError::fail(format!("the played state itself: {e}")));
             }
-            check_samples(&cfg, &s, seed ^ u64::from(i))?;
+            last_resort += check_samples(&cfg, &s, seed ^ u64::from(i))?;
         }
+        // Review of PR 3, follow-up 1: the last resort is never needed.
+        prop_assert_eq!(last_resort, 0);
     }
 }

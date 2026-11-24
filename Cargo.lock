@@ -1118,6 +1118,7 @@ dependencies = [
  "tessera-rl-num",
  "tessera-rl-search",
  "thiserror",
+ "tracing",
 ]
 
 [[package]]
