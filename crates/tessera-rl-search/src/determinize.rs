@@ -130,7 +130,7 @@ where
         E: Determinize + Validate,
     {
         refuse_adaptive::<E>()?;
-        let mut pool = Self::build_pool(cfg, options, root, build)?;
+        let mut pool = Self::build_pool(cfg, options, root, &[], build)?;
         // No slot, buffer or scratch row keeps a copy of the full root:
         // `determinize` refills the buffers and the scratch rows, and every
         // node slot takes the determinized record.
@@ -154,7 +154,7 @@ where
         root: &Record<E>,
         build: impl FnOnce(E::Config, PoolOptions) -> Result<EnvPool<E, M>, EngineError>,
     ) -> Result<Self, SearchError> {
-        let mut pool = Self::build_pool(cfg, options, root, build)?;
+        let mut pool = Self::build_pool(cfg, options, root, &[], build)?;
         if !E::PERFECT_INFORMATION {
             pool.mode = RootMode::Privileged;
         }

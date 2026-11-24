@@ -21,6 +21,7 @@ mod mcts;
 mod noise;
 mod options;
 mod pool;
+mod stacks;
 
 pub use determinize::{
     Determinization, ROLLOUT, SAMPLER, rollout_identity, rollout_salt, sampler_identity,
