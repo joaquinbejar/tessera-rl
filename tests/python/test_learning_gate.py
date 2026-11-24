@@ -769,3 +769,28 @@ def test_learning_t3a_a_minibatch_without_legal_rows_skips_its_step(monkeypatch)
     r = lp.train_masked("snake", 1, 512, 1)
     assert steps == []
     assert all(math.isfinite(x) for x in r["eval_returns"])
+
+
+def _t3a_calibration_matches(protocol: str) -> None:
+    pytest = __import__("pytest")
+    pytest.importorskip("torch")
+    import learning_protocols as lp
+
+    cal = json.loads((pathlib.Path(__file__).resolve().parents[2] / "compat" / "learning" / f"{protocol}.json").read_text())
+    assert lp.fingerprint(protocol) == cal["setup"]["fingerprint"]
+    assert cal["gate"] == lp.gate(protocol)
+    assert cal["learns"]["learns"] is True and cal["non_learning_seeds"] == 0
+
+
+def test_learning_snake_fingerprint_matches_its_calibration():
+    """Snake was calibrated on b4177568, squashed into main as #480
+    (5e2dd2ad): the fingerprint binds the calibration to the code, and it
+    still matches; its learns check used the committed gate."""
+    _t3a_calibration_matches("snake")
+
+
+def test_learning_paddleduel_fingerprint_matches_its_calibration():
+    """PaddleDuel was calibrated on b4177568, squashed into main as #480
+    (5e2dd2ad): the fingerprint binds the calibration to the code, and it
+    still matches; its learns check used the committed gate."""
+    _t3a_calibration_matches("paddleduel")

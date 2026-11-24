@@ -30,3 +30,17 @@ min_effect = 0.10
 # random policy scores about -1200 per 200-step episode.
 solved = -200.0
 min_effect = 0.10
+
+[snake]
+# Eats once and does not die: the full-board score is far beyond a 500k-step
+# budget. A random policy scores about -0.95 (it dies before eating). The
+# calibrated median is 0.15 (threshold 0.0): a weak learner, so this gate
+# catches regressions toward the random policy, not a loss of skill.
+solved = 1.0
+min_effect = 0.10
+
+[paddleduel]
+# An 11-0 win against the scripted paddle, hit rewards (0.1 each) aside; a
+# random policy loses about 0-11.
+solved = 11.0
+min_effect = 0.10
