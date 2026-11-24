@@ -158,7 +158,7 @@ py-test-hooks:
 py-test-host:
 	uv sync --locked --python 3.11
 	uv pip install --python .venv/bin/python --no-deps --reinstall ./tests/host-wheel
-	uv run --locked --python 3.11 pytest -q tests/python/test_host_factory.py tests/python/test_host_protocol.py tests/python/test_host_wheel_python.py tests/python/test_host_fork_guard.py tests/python/test_pz_respawn.py tests/python/test_pz_multihead.py tests/python/test_host_wheel_refuse.py
+	uv run --locked --python 3.11 pytest -q tests/python/test_host_factory.py tests/python/test_host_protocol.py tests/python/test_host_wheel_python.py tests/python/test_host_fork_guard.py tests/python/test_pz_respawn.py tests/python/test_pz_multihead.py tests/python/test_host_wheel_refuse.py tests/python/test_registry_shared.py
 
 # The out-of-tree example wheel (#272 step 6, ADR-0062 item 11): checks the
 # example crate on its own (fmt, clippy with its own lockfile), installs it

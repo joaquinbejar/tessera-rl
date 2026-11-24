@@ -88,6 +88,7 @@ pub use outputs::Outputs;
 pub use persist::{BUILD_ID, DecodeLimits, FORMAT_VERSION, MAGIC, PersistError};
 pub use pool::{EnvPool, Reseed};
 pub use record::{DecodedRecord, PoolContext, Record};
+pub use registry::attach_shared_registry;
 #[cfg(not(loom))]
 pub use sys::native_wait_available;
 pub use sys::{default_workers, physical_cores};
