@@ -1100,7 +1100,6 @@ where
     }
 }
 
-
 /// Archive resets (ADR-0075 item 2) in Pipelined mode. Pipelined mode has
 /// no partial reset, so it has no `reset_from` either; its archive resets
 /// are its auto-resets and `reset_all`.

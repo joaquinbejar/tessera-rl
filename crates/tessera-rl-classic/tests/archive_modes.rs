@@ -143,7 +143,11 @@ fn run_async(arc: &Archive<CartPole>) -> Vec<u64> {
             got += p.recv().unwrap().len();
         }
     }
-    hashes(&ids.iter().map(|&i| p.snapshot(i).unwrap()).collect::<Vec<_>>())
+    hashes(
+        &ids.iter()
+            .map(|&i| p.snapshot(i).unwrap())
+            .collect::<Vec<_>>(),
+    )
 }
 
 #[test]

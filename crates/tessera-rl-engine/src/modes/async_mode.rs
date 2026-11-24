@@ -1499,7 +1499,6 @@ where
     }
 }
 
-
 /// Archive resets (ADR-0075 items 2 and 5) in Async mode: the reset source
 /// changes only at quiescence, and `reset_from` is a partial writer like
 /// [`AsyncPool::reset`].
