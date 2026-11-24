@@ -33,6 +33,18 @@ use crate::record::DecodedRecord;
 pub const MAGIC: [u8; 8] = *b"TESSERA\x1a";
 /// The format this library reads and writes.
 pub const FORMAT_VERSION: u32 = 1;
+/// Format version of environment snapshot files whose config has assets
+/// (ADR-0077): version 1 plus the asset entries after `asset_count`. Files
+/// of asset-free configs stay version 1, byte for byte.
+pub const ASSET_FORMAT_VERSION: u32 = 2;
+/// The replay magic (ADR-0072), whose version 1 carries asset entries
+/// (ADR-0077); kept here so the shared header reader needs no `replay`
+/// feature.
+pub(crate) const REPLAY_MAGIC_FOR_ASSETS: [u8; 8] = *b"TESRPLY\x1a";
+/// Most asset entries a header may hold (ADR-0077).
+pub(crate) const MAX_ASSETS: u16 = 64;
+/// Longest asset name, in bytes (ADR-0077).
+pub(crate) const MAX_ASSET_NAME: usize = 64;
 
 /// `TESSERA_BUILD_ID` as compiled into this engine, for the rebuild check.
 #[doc(hidden)]
@@ -90,10 +102,23 @@ pub enum PersistError {
     #[error("not a Tessera snapshot file")]
     BadMagic,
     /// A format this library does not read.
-    #[error("format version {found}, this library reads {FORMAT_VERSION}")]
+    #[error(
+        "format version {found}, this library reads {FORMAT_VERSION} and {ASSET_FORMAT_VERSION}"
+    )]
     UnsupportedFormat {
         /// The file's version.
         found: u32,
+    },
+    /// The file's assets differ from the pool's (ADR-0077): `None` on one
+    /// side means that side has no asset of this name.
+    #[error("asset `{name}` differs: the file has {found:?}, the pool has {expected:?}")]
+    AssetMismatch {
+        /// The asset name.
+        name: String,
+        /// The pool's hash.
+        expected: Option<[u8; 16]>,
+        /// The file's hash.
+        found: Option<[u8; 16]>,
     },
     /// The checksum does not match: the file was damaged.
     #[error("checksum mismatch: the file is damaged")]
@@ -159,6 +184,8 @@ pub(crate) struct Identity {
     config_hash: u64,
     record_len: u32,
     env_id: &'static str,
+    /// The config's assets, sorted by name (ADR-0077); empty for host pools.
+    assets: Vec<tessera_rl_core::AssetEntry>,
 }
 
 /// Compile-time target features this descriptor names, sorted. A partial list,
@@ -303,6 +330,7 @@ pub(crate) fn host_identity(
         config_hash,
         record_len: 0,
         env_id,
+        assets: Vec::new(),
     }
 }
 
@@ -345,6 +373,7 @@ where
             .map_err(|e| PersistError::Engine(e.into()))?,
         record_len,
         env_id: E::ENV_ID,
+        assets: tessera_rl_core::config::asset_list(cfg),
     })
 }
 
@@ -435,13 +464,16 @@ pub(crate) struct FileHeader<'a> {
     pub(crate) record_len: u32,
     pub(crate) env_id: &'a [u8],
     pub(crate) asset_count: u16,
+    /// The asset entries `(name, hash)`, as written (ADR-0077).
+    pub(crate) assets: Vec<(&'a [u8], [u8; 16])>,
     pub(crate) descriptor: &'a [u8],
 }
 
 impl<'a> FileHeader<'a> {
     /// Reads the header after the magic and version (12 bytes skipped).
     pub(crate) fn read(r: &mut Reader<'a>) -> Result<Self, PersistError> {
-        r.take(12)?;
+        let magic = r.array::<8>()?;
+        let version = r.u32()?;
         let encoding = r.u8()?;
         let tier = r.u8()?;
         let mask_provider = r.u8()?;
@@ -457,6 +489,29 @@ impl<'a> FileHeader<'a> {
         let env_id = r.capped("env_id", MAX_ENV_ID)?;
         r.capped("library_version", MAX_LIBRARY_VERSION)?;
         let asset_count = r.u16()?;
+        // Only environment snapshot files of version 2 and replay files
+        // hold entries (ADR-0077): elsewhere a count is refused before any
+        // entry is read, as version 1 readers did.
+        let entries_allowed = (magic == MAGIC && version == ASSET_FORMAT_VERSION)
+            || magic == crate::persist::REPLAY_MAGIC_FOR_ASSETS;
+        if asset_count != 0 && !entries_allowed {
+            return Err(PersistError::Incompatible { field: "assets" });
+        }
+        if asset_count > MAX_ASSETS {
+            return Err(PersistError::InvalidField {
+                field: "asset_count",
+            });
+        }
+        let mut assets = Vec::with_capacity(usize::from(asset_count));
+        for _ in 0..asset_count {
+            let len = usize::from(r.u8()?);
+            if !(1..=MAX_ASSET_NAME).contains(&len) {
+                return Err(PersistError::InvalidField {
+                    field: "asset_name",
+                });
+            }
+            assets.push((r.take(len)?, r.array::<16>()?));
+        }
         let descriptor = r.capped("descriptor", MAX_DESCRIPTOR)?;
         Ok(Self {
             encoding,
@@ -473,6 +528,7 @@ impl<'a> FileHeader<'a> {
             record_len,
             env_id,
             asset_count,
+            assets,
             descriptor,
         })
     }
@@ -507,9 +563,45 @@ impl<'a> FileHeader<'a> {
         if self.illegal_kind == 0 && self.penalty_bits != 0 {
             return invalid("illegal_penalty_bits");
         }
-        // Format 1 knows no asset hash: zero means none, never unchecked.
-        if self.asset_count != 0 {
-            return Err(PersistError::Incompatible { field: "assets" });
+        Ok(())
+    }
+
+    /// The asset rule of environment snapshot files (ADR-0077 point 6):
+    /// version 1 holds no assets, version 2 at least one.
+    pub(crate) fn check_snapshot_assets(&self, version: u32) -> Result<(), PersistError> {
+        match (version, self.asset_count) {
+            (FORMAT_VERSION, 0) => Ok(()),
+            (FORMAT_VERSION, _) => Err(PersistError::Incompatible { field: "assets" }),
+            (_, 0) => Err(PersistError::InvalidField {
+                field: "asset_count",
+            }),
+            _ => Ok(()),
+        }
+    }
+
+    /// Compares the file's asset entries with the pool's, by name.
+    fn check_assets(&self, pool: &[tessera_rl_core::AssetEntry]) -> Result<(), PersistError> {
+        let mismatch = |name: &[u8], expected, found| PersistError::AssetMismatch {
+            name: String::from_utf8_lossy(name).into_owned(),
+            expected,
+            found,
+        };
+        for (name, hash) in &self.assets {
+            let ours = pool.iter().find(|e| e.name.as_bytes() == *name);
+            match ours {
+                Some(e) if e.hash.0 == *hash => {}
+                Some(e) => return Err(mismatch(name, Some(e.hash.0), Some(*hash))),
+                None => return Err(mismatch(name, None, Some(*hash))),
+            }
+        }
+        for e in pool {
+            if !self
+                .assets
+                .iter()
+                .any(|(name, _)| *name == e.name.as_bytes())
+            {
+                return Err(mismatch(e.name.as_bytes(), Some(e.hash.0), None));
+            }
         }
         Ok(())
     }
@@ -523,6 +615,9 @@ impl<'a> FileHeader<'a> {
     ) -> Result<(), PersistError> {
         same("env_id", &self.env_id, &id.env_id.as_bytes())?;
         same("env_version", &self.env_version, &id.env_version)?;
+        // Before the config hash, which covers the assets, so the error
+        // names the asset (ADR-0077 point 6).
+        self.check_assets(&id.assets)?;
         same("tier", &self.tier, &id.tier)?;
         same("config_hash", &self.hash, &id.config_hash)?;
         same("mask_provider", &self.mask_provider, &id.mask_provider)?;
@@ -653,9 +748,15 @@ where
             field: "instance_count",
         })?;
         let mut out = Vec::new();
+        let version = if id.assets.is_empty() {
+            FORMAT_VERSION
+        } else {
+            ASSET_FORMAT_VERSION
+        };
         write_shared_header(
             &mut out,
             MAGIC,
+            version,
             &id,
             count,
             library_version,
@@ -671,18 +772,20 @@ where
     }
 }
 
-/// Writes `magic`, the format version and the ADR-0011 header fields, in
-/// ADR-0011's order. Shared by snapshot and replay files (ADR-0072 section 6).
+/// Writes `magic`, the format `version` and the ADR-0011 header fields, in
+/// ADR-0011's order, with the identity's asset entries (ADR-0077). Shared by
+/// snapshot and replay files (ADR-0072 section 6).
 pub(crate) fn write_shared_header(
     out: &mut Vec<u8>,
     magic: [u8; 8],
+    version: u32,
     id: &Identity,
     count: u32,
     library_version: &str,
     file_descriptor: &[u8],
 ) -> Result<(), PersistError> {
     out.extend_from_slice(&magic);
-    out.extend_from_slice(&FORMAT_VERSION.to_le_bytes());
+    out.extend_from_slice(&version.to_le_bytes());
     out.extend_from_slice(&[
         RAW_CANONICAL,
         id.tier,
@@ -706,7 +809,25 @@ pub(crate) fn write_shared_header(
         library_version.as_bytes(),
         MAX_LIBRARY_VERSION,
     )?;
-    out.extend_from_slice(&0u16.to_le_bytes()); // asset_count
+    let count = u16::try_from(id.assets.len())
+        .ok()
+        .filter(|&c| c <= MAX_ASSETS)
+        .ok_or(PersistError::InvalidField {
+            field: "asset_count",
+        })?;
+    out.extend_from_slice(&count.to_le_bytes());
+    for e in &id.assets {
+        let name = e.name.as_bytes();
+        let len = u8::try_from(name.len())
+            .ok()
+            .filter(|&l| (1..=MAX_ASSET_NAME).contains(&usize::from(l)))
+            .ok_or(PersistError::InvalidField {
+                field: "asset_name",
+            })?;
+        out.push(len);
+        out.extend_from_slice(name);
+        out.extend_from_slice(&e.hash.0);
+    }
     push_capped(out, "descriptor", file_descriptor, MAX_DESCRIPTOR)?;
     Ok(())
 }
@@ -739,7 +860,7 @@ where
     }
     // Before the checksum, so a later format reports its version.
     let found = r.u32()?;
-    if found != FORMAT_VERSION {
+    if found != FORMAT_VERSION && found != ASSET_FORMAT_VERSION {
         return Err(PersistError::UnsupportedFormat { found });
     }
     let body_len = bytes
@@ -755,6 +876,7 @@ where
     let mut r = Reader(body);
     let file = FileHeader::read(&mut r)?;
     file.check_fields()?;
+    file.check_snapshot_assets(found)?;
     file.check_against(&identity::<E, M>(cfg, options)?, E::TIER, build_id)?;
     let (count, record_len) = (file.count, file.record_len);
     let limit = limits.max_instances.min(options.num_envs.get());
@@ -796,6 +918,12 @@ const fn host_tier_mismatch(tier: u8, host: bool) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{PersistError, Tier, descriptor};
+
+    #[cfg(feature = "replay")]
+    #[test]
+    fn test_replay_magic_for_assets_is_the_replay_magic() {
+        assert_eq!(super::REPLAY_MAGIC_FOR_ASSETS, crate::replay::REPLAY_MAGIC);
+    }
 
     #[test]
     fn test_descriptor_cross_platform_is_empty() {

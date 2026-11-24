@@ -521,6 +521,7 @@ where
     write_shared_header(
         &mut out,
         REPLAY_MAGIC,
+        crate::persist::FORMAT_VERSION,
         &id,
         options.num_envs.get(),
         env!("CARGO_PKG_VERSION"),

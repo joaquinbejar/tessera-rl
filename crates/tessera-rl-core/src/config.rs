@@ -22,6 +22,7 @@
 
 use tessera_rl_num::{Fx32, Fx64};
 
+use crate::asset::{ASSET_TAG, Asset, AssetData, AssetEntry};
 use crate::encoding::{Canonical, Encoder, HashSink, Sink};
 use crate::error::ConfigError;
 
@@ -67,6 +68,17 @@ impl ConfigValue for bool {
     }
 }
 
+/// An asset is its 16-byte content hash in the canonical form (ADR-0077):
+/// the config hash covers the asset, never its bytes.
+impl<T: AssetData> ConfigValue for Asset<T> {
+    const TAG: u8 = ASSET_TAG;
+
+    #[inline]
+    fn write_value<S: Sink>(&self, out: &mut Encoder<S>) {
+        out.write_bytes(&self.hash().0);
+    }
+}
+
 /// Tag of a nested config value.
 pub const NESTED_TAG: u8 = 14;
 
@@ -81,6 +93,17 @@ pub trait CanonicalConfig {
 
     /// Writes the static entries, sorted by key.
     fn write_entries<S: Sink>(&self, out: &mut Encoder<S>);
+}
+
+/// The assets of `cfg`, sorted by name, as persisted headers list them.
+/// Names are unique per config (the derive refuses duplicates within one
+/// struct; nested configs must name theirs distinctly).
+#[must_use]
+pub fn asset_list<C: crate::EnvConfig>(cfg: &C) -> Vec<AssetEntry> {
+    let mut out = Vec::new();
+    cfg.asset_entries(&mut out);
+    out.sort_by(|a, b| a.name.as_bytes().cmp(b.name.as_bytes()));
+    out
 }
 
 /// Writes one entry: key, tag and value. Used by generated code.

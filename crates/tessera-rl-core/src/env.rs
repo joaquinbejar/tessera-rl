@@ -32,6 +32,13 @@ pub trait EnvConfig: Sized + 'static {
     fn validate(&self) -> Result<(), ConfigError> {
         Ok(())
     }
+
+    /// Appends the config's assets (ADR-0077), nested configs included.
+    /// `#[derive(EnvConfig)]` generates it; configs without assets keep
+    /// this default, which appends nothing.
+    fn asset_entries(&self, out: &mut Vec<crate::asset::AssetEntry>) {
+        let _ = out;
+    }
 }
 
 /// An environment: one trait for single-agent and multi-agent games.

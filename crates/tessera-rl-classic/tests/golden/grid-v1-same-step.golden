@@ -2,8 +2,8 @@
 # golden fixture grid-v1-same-step; see tests/support/mod.rs
 format=3
 env_id=tessera/Grid-v1
-env_version=1
-config_hash=a0817c83f5599262
+env_version=2
+config_hash=0a9d6ef7a6855d9c
 math_version=1
 actions=mix-heuristic-v1
 seed=5112026

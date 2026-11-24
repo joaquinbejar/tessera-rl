@@ -114,7 +114,13 @@ fn test_grid_config_rejects_values_out_of_range() {
     let bad = [(3, 200), (65, 200), (16, 0), (16, 10_001)];
     for (size, max_steps) in bad {
         assert!(
-            GridConfig { size, max_steps }.validate().is_err(),
+            GridConfig {
+                size,
+                max_steps,
+                ..cfg()
+            }
+            .validate()
+            .is_err(),
             "{size} {max_steps}"
         );
     }
@@ -152,6 +158,7 @@ fn test_grid_random_walks_match_the_reference() {
         let c = GridConfig {
             size: 4 + (seed % 5) as u16,
             max_steps: 12,
+            ..cfg()
         };
         let size = i32::from(c.size);
         let mut p = pool_with(c.clone(), seed, AutoReset::Disabled);

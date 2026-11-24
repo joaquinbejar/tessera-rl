@@ -263,6 +263,7 @@ fn grid(name: &'static str, auto_reset: AutoReset) -> Scenario<GridConfig> {
         cfg: GridConfig {
             size: 6,
             max_steps: 40,
+            ..GridConfig::default()
         },
         seed: 5_112_026,
         num_envs: 16,

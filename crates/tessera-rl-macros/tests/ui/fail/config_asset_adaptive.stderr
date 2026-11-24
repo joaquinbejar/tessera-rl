@@ -1,0 +1,5 @@
+error: an asset field cannot be adaptive, a shape, a capacity or have a range (ADR-0077)
+  --> tests/ui/fail/config_asset_adaptive.rs:29:5
+   |
+29 |     map: Asset<Map>,
+   |     ^^^

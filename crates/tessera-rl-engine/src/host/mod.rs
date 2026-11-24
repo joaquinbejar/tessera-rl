@@ -474,9 +474,9 @@ impl<E: HostEnvironment, const A: usize> HostPool<E, A> {
         &self.options
     }
 
-    /// The configuration the pool was built with, for replay files
-    /// (ADR-0072): the canonical config bytes and hash of a snapshot host.
-    #[cfg(feature = "replay")]
+    /// The configuration the pool was built with: for replay files
+    /// (ADR-0072), the canonical config bytes and hash of a snapshot host;
+    /// for host files, the asset check (ADR-0077).
     pub(crate) fn config(&self) -> &E::Config {
         &self.cfg
     }

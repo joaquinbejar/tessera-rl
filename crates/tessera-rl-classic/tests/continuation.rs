@@ -78,6 +78,7 @@ fn grid(auto_reset: AutoReset) -> Case<Grid, NoMasks> {
         cfg: GridConfig {
             size: 6,
             max_steps: 40,
+            ..GridConfig::default()
         },
         build: |cfg, options| EnvPool::new(cfg, options).unwrap(),
         auto_reset,
