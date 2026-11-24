@@ -280,7 +280,9 @@ where
             let width: u64 = heads.iter().map(|&n| u64::from(n)).sum();
             let expected = u64::try_from(rows).ok().and_then(|r| r.checked_mul(width));
             if mask_len == 0 || expected != u64::try_from(mask_len).ok() {
-                return Err(usage("--legal-actions needs a flat mask, one entry per choice of each head"));
+                return Err(usage(
+                    "--legal-actions needs a flat mask, one entry per choice of each head",
+                ));
             }
             Some(vec![0; rows * heads.len()])
         } else {
