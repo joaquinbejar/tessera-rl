@@ -496,3 +496,37 @@ def test_learning_learns_constant_scores_against_a_varying_random_are_degenerate
     r = learns([-0.9] * 40, [-1.0, -0.98, -1.0, -0.99, -1.0])
     assert r["ci95"][0] != r["ci95"][1]
     assert r["degenerate"] and not r["learns"]
+
+
+def test_learning_fingerprint_covers_every_function_training_reaches():
+    """Every module-level function of learning_protocols that a function on
+    the training path calls is itself on the path (closed under calls)."""
+    import ast
+    import inspect
+    import textwrap
+
+    import learning_protocols as lp
+
+    module_functions = {
+        name for name, obj in vars(lp).items() if inspect.isfunction(obj) and obj.__module__ == lp.__name__
+    }
+    path = {f.__name__ for f in lp._training_path()}
+    for f in lp._training_path():
+        tree = ast.parse(textwrap.dedent(inspect.getsource(f)))
+        called = {n.id for n in ast.walk(tree) if isinstance(n, ast.Name)} & module_functions
+        missing = called - path - {f.__name__}
+        # protocol() only reads the table, whose entry is fingerprinted
+        # separately; gate() is not on the training path.
+        assert missing <= {"protocol"}, f"{f.__name__} reaches {missing}, not in the fingerprint"
+
+
+def test_learning_no_verdict_nights_are_counted():
+    from learning_gate import no_verdict_streak
+
+    assert no_verdict_streak(None) == 1
+    assert no_verdict_streak({"night": {"median": -90.0}}) == 1
+    first = {"night": {"verdict": "uncalibrated host: no verdict (x)", "no_verdict_nights": 1}}
+    assert no_verdict_streak(first) == 2
+    third = {"night": {"verdict": "uncalibrated host: no verdict (x)", "no_verdict_nights": 2}}
+    assert no_verdict_streak(third) == 3
+    assert no_verdict_streak({"night": {"verdict": "uncalibrated host: no verdict"}}) == 2

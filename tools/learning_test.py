@@ -280,9 +280,22 @@ def cmd_night(args) -> int:
 
     mismatch = host_mismatch(calibration, _cpu())
     if mismatch:
-        # Thresholds are host-specific: report, never judge (and never red).
-        verdict = {"red": False, "reason": mismatch}
-        _write(args.out, {"identity": identity, "setup": calibration.get("setup") or {}, "environment": _environment(), "night": {"verdict": mismatch}, "alert": verdict, "records": []})
+        # Thresholds are host-specific: report, never judge (and never red),
+        # but make it visible: a GitHub warning annotation, and the count of
+        # consecutive nights without a verdict.
+        from learning_gate import no_verdict_streak
+
+        previous = None
+        if args.previous and pathlib.Path(args.previous).exists():
+            try:
+                previous = json.loads(pathlib.Path(args.previous).read_text())
+            except (OSError, ValueError):
+                previous = None
+        streak = no_verdict_streak(previous)
+        verdict = {"red": False, "reason": mismatch, "no_verdict_nights": streak}
+        night_out = {"verdict": mismatch, "no_verdict_nights": streak}
+        _write(args.out, {"identity": identity, "setup": calibration.get("setup") or {}, "environment": _environment(), "night": night_out, "alert": verdict, "records": []})
+        sys.stdout.write(f"::warning title=learning test: no verdict::{mismatch}; {streak} consecutive night(s) without a verdict\n")
         sys.stderr.write(mismatch + "\n")
         return 0
     # The night uses the calibration's budget unless told otherwise (a

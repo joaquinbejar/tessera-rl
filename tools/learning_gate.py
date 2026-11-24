@@ -129,6 +129,20 @@ def learns(
     }
 
 
+def no_verdict_streak(previous: dict | None) -> int:
+    """Consecutive nights without a verdict, counting tonight, from the
+    previous night's result. A night on an uncalibrated host gives no
+    verdict; a run of them means the runner changed and the gate is silent,
+    so the count is reported and annotated, never ignored."""
+    if not isinstance(previous, dict):
+        return 1
+    night = previous.get("night") or {}
+    if not str(night.get("verdict", "")).startswith("uncalibrated host"):
+        return 1
+    before = night.get("no_verdict_nights")
+    return (before if isinstance(before, int) and before >= 1 else 1) + 1
+
+
 def host_mismatch(calibration: dict, cpu: str) -> str | None:
     """Why tonight gives no verdict on this host, or None. Learning
     thresholds are host-specific (compat/learning/protocols.toml): a night
