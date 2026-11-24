@@ -9,6 +9,10 @@ the API is not stable, and any 0.x release may break it.
 
 ## [Unreleased]
 
+### Added
+
+- `tessera-rl-ops`, logistics and scheduling environments (SPEC 16, #383), stage 1: `tessera/JobShop-v1`, job shop scheduling with one dispatching agent. Instances are generated at reset from the instance seed (`jobs` 2 to 64, `machines` 2 to 32, durations `1..=max_duration`); the action dispatches a job's next operation (`Discrete(jobs)`, masked to unfinished jobs); the reward is minus the makespan increase, so the return is minus the final makespan; integer state (4,556 bytes) and observations; SPT, MWKR and FIFO dispatching rules (SPT is the `Heuristic`); golden, continuation, persistence and allocation tests and a Criterion bench. Python registration follows with the vehicle routing stages.
+
 ### Fixed
 
 - Python: `Normalize` refuses a NaN or infinite `clip` with `ValueError` before the pool is built (#346 review).
