@@ -11,6 +11,8 @@ the API is not stable, and any 0.x release may break it.
 
 ### Added
 
+- Search against heuristic opponents (ADR-0093 with erratum 1, #491): a search pool whose scratch pool has ADR-0079 heuristic slots plans for one searcher, `SearchOptions::searcher` (or the determinization agent), against the opponents the engine computes in the scratch step; every ply is the searcher's and backup does not negate. A slot's group is checked when it is alive at the root or acting at an expanded node (`SearcherRequired`, `SearcherMismatch`, `SearcherNotLearner`, `NotSearchable`). A pool without heuristic slots searches exactly as before. LimitOrderBook-v1 is searchable from a determinized root with `with_info_heuristic_slots`; search values stay terminal-only (ADR-0043), so its per-step profit and loss does not enter the tree until #524.
+
 - The ONNX search evaluator takes `Set` observations (#505): a set `p` is the model inputs `p` (or `p/<key>`), `[N, max, ...]`, and `p_mask`, `bool` `[N, max]`, with absent slots zero; the inputs come from `tessera_rl_search::observation_layout`, now public, so they are exactly the leaves of a search row. `Search(env_id="tessera/Gather-v1")` takes an `OnnxEvaluator`.
 
 - Python `spin` pool option (#152, #332): `make(..., spin=...)` sets the Sync worker spin budget (`SyncOptions::spin`, default 2000) in every mode; Sync mode without workers refuses it with `ArgumentError`. The PufferLib adapter passes it through.

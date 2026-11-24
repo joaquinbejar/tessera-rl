@@ -31,6 +31,13 @@ pub struct SearchOptions {
     /// Upper bound on the node storage, in bytes. The error names the bytes
     /// per node: the record, the node and one edge per action.
     pub budget_bytes: u64,
+    /// The searcher slot of a pool whose scratch pool has heuristic slots
+    /// (ADR-0093 decision 2): every ply is this slot's, against the
+    /// heuristic opponents the engine computes. `None` takes the
+    /// determinization agent of `new_determinized`; without either, such
+    /// a pool is refused (`SearchError::SearcherRequired`). Ignored by a
+    /// pool without heuristic slots.
+    pub searcher: Option<usize>,
 }
 
 impl SearchOptions {
@@ -43,6 +50,7 @@ impl SearchOptions {
             batch,
             eviction: Eviction::Strict,
             budget_bytes: DEFAULT_BUDGET,
+            searcher: None,
         }
     }
 }

@@ -365,12 +365,14 @@ where
         self.v_root.filter(|&(k, _)| k == key).map(|(_, v)| v)
     }
 
-    /// The player to move at `slot` (its single acting agent).
+    /// The player whose view values take at `slot`: its single acting
+    /// agent, or the searcher at every node of a pool with heuristic slots
+    /// (ADR-0093 decision 5, so backup never negates there).
     fn mover(&self, slot: u32) -> Result<usize, SearchError> {
         let Some(record) = self.pool.records.get(idx(slot)) else {
             return Err(SearchError::TerminalNode);
         };
-        SearchPool::<E, M>::single_actor(record)
+        self.pool.mover_of(record)
     }
 
     /// Whether `slot` has priors (it was evaluated).
@@ -561,7 +563,8 @@ where
         let Some(&record) = self.pool.records.get(idx(root)) else {
             return Err(SearchError::TerminalNode);
         };
-        let agent = SearchPool::<E, M>::single_actor(&record)?;
+        let agent = self.pool.mover_of(&record)?;
+        let actor = self.pool.actor(&record)?;
         // Every scratch row gets the root, by `restore_all`, which also
         // recovers a scratch pool poisoned by an earlier failed call (C3).
         self.pool.load_records.fill(record);
@@ -570,8 +573,14 @@ where
         }
         self.pool.restore_rows()?;
         let masks = self.pool.scratch.outputs()?.masks();
-        let base = agent * self.pool.joint.mask_len();
-        crate::pool::fill_legal(&self.pool.joint, masks, Some(base), &mut self.legal);
+        let width = self.pool.joint.mask_len();
+        SearchPool::<E, M>::legal_at(
+            &self.pool.joint,
+            &Ok(actor),
+            masks,
+            |k| k * width,
+            &mut self.legal,
+        );
         self.eval_records.clear();
         self.eval_records.push(record);
         self.eval_picks.clear();
@@ -850,7 +859,7 @@ where
             let mover = self
                 .eval_records
                 .get(leaf)
-                .map_or_else(|| Ok(0), SearchPool::<E, M>::single_actor)?;
+                .map_or_else(|| Ok(0), |r| self.pool.mover_of(r))?;
             self.eval_picks.push((row, mover));
             if let (Some(dst), Some(src)) = (
                 self.leaf_legal.get_mut(leaf * width..leaf * width + width),

@@ -131,6 +131,7 @@ where
     {
         refuse_adaptive::<E>()?;
         let mut pool = Self::build_pool(cfg, options, root, &[], build)?;
+        pool.resolve_searcher(root, options.searcher, Some(how.agent.index()), false)?;
         // No slot, buffer or scratch row keeps a copy of the full root:
         // `determinize` refills the buffers and the scratch rows, and every
         // node slot takes the determinized record.
@@ -155,6 +156,7 @@ where
         build: impl FnOnce(E::Config, PoolOptions) -> Result<EnvPool<E, M>, EngineError>,
     ) -> Result<Self, SearchError> {
         let mut pool = Self::build_pool(cfg, options, root, &[], build)?;
+        pool.resolve_searcher(root, options.searcher, None, true)?;
         if !E::PERFECT_INFORMATION {
             pool.mode = RootMode::Privileged;
         }
