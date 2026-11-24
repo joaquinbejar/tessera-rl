@@ -1,5 +1,5 @@
 //! The field types of a lane-wise state, and its column store (ADR-0090
-//! decisions 1 and 2). **Audited `unsafe` module:** [`RawColumn::view`]
+//! decisions 1 and 2). **Audited `unsafe` module:** `RawColumn::view` (private)
 //! is the only unsafe code; the engine's buffer module calls it, through
 //! [`LaneTuple::view`], for the disjoint chunk ranges of its invariants.
 //!
