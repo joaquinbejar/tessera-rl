@@ -623,3 +623,16 @@ def test_learning_t2_seeding_is_deterministic():
     a = lp.train_continuous("pendulum", 3, 2048, 1)
     b = lp.train_continuous("pendulum", 3, 2048, 1)
     assert a["eval_returns"] == b["eval_returns"]
+
+
+def test_learning_pendulum_fingerprint_matches_its_calibration():
+    """Pendulum was calibrated on d9b7a297, squashed into main as #466
+    (7e516334): the fingerprint binds the calibration to the code, and it
+    still matches."""
+    pytest = __import__("pytest")
+    pytest.importorskip("torch")
+    import learning_protocols as lp
+
+    cal = json.loads((pathlib.Path(__file__).resolve().parents[2] / "compat" / "learning" / "pendulum.json").read_text())
+    assert lp.fingerprint("pendulum") == cal["setup"]["fingerprint"]
+    assert cal["learns"]["learns"] is True and cal["non_learning_seeds"] == 0
