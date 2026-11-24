@@ -134,7 +134,7 @@ fi
 mkdir -p "$WHEEL_RUN/run"
 cd "$WHEEL_RUN/run"
 # Every check runs, and its exit status is recorded against the wheel's sha256.
-anchor=0 suite=0 num=0 onnx=0 orderbook=0
+anchor=0 suite=0 num=0 onnx=0 orderbook=0 sbom=0
 # The installed wheel has the ONNX evaluator: onnx_load on a missing path is
 # the missing-library error, not "no ONNX evaluator". Nothing is loaded (the
 # path never resolves), and telemetry is off anyway.
@@ -180,12 +180,18 @@ if [ "$profile" = wheel ]; then
 fi
 
 cd "$root"
+# The wheel's SBOM (#350): one CycloneDX file listing every crate of the
+# extension's normal dependency tree for this target and these features.
+crates="$WHEEL_RUN/sbom-crates.txt"
+{ cargo tree --locked -p tessera-rl-py --target "$target" -e normal "${features[@]}" --prefix none --format '{p}' |
+    cut -d' ' -f1 | sort -u > "$crates" &&
+    "$venv/bin/python" -I tools/sbom_check.py --wheel "$wheel" --crates "$crates"; } || sbom=$?
 # The num crate's tests under the wheel's own Cargo profile (section 7 item 6).
 num_profile=""
 [ "$profile" = release ] || num_profile="$profile"
 WHEEL_CARGO_PROFILE="$num_profile" scripts/wheel_num_tests.sh || num=$?
-statuses=(golden_anchor="$anchor" python_suite="$suite" num_tests="$num" onnx_smoke="$onnx")
+statuses=(golden_anchor="$anchor" python_suite="$suite" num_tests="$num" onnx_smoke="$onnx" sbom="$sbom")
 [ "$orderbook_leg" = 0 ] || statuses+=(orderbook="$orderbook")
 "$venv/bin/python" -I tools/pgo/checks.py --wheel "$wheel" --out checks.json "${statuses[@]}"
-echo "wheel_job: profile=$profile anchor=$anchor suite=$suite num=$num compare=$compare onnx=$onnx orderbook_leg=$orderbook_leg orderbook=$orderbook"
-[ "$anchor" -eq 0 ] && [ "$suite" -eq 0 ] && [ "$num" -eq 0 ] && [ "$compare" -eq 0 ] && [ "$onnx" -eq 0 ] && [ "$orderbook" -eq 0 ]
+echo "wheel_job: profile=$profile anchor=$anchor suite=$suite num=$num compare=$compare onnx=$onnx sbom=$sbom orderbook_leg=$orderbook_leg orderbook=$orderbook"
+[ "$anchor" -eq 0 ] && [ "$suite" -eq 0 ] && [ "$num" -eq 0 ] && [ "$compare" -eq 0 ] && [ "$onnx" -eq 0 ] && [ "$sbom" -eq 0 ] && [ "$orderbook" -eq 0 ]
