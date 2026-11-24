@@ -1,0 +1,80 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+from collections.abc import Sequence
+from types import TracebackType
+from typing import Any, NamedTuple, TypeAlias
+
+import numpy as np
+import numpy.typing as npt
+
+from tessera_rl import _native
+
+_Ids: TypeAlias = int | Sequence[int] | npt.NDArray[np.integer[Any]] | range | None
+
+class Step(NamedTuple):
+    observations: dict[str, np.ndarray]
+    rewards: np.ndarray
+    agent_terminated: np.ndarray
+    agent_truncated: np.ndarray
+    alive: np.ndarray
+    episode_terminated: np.ndarray
+    episode_truncated: np.ndarray
+    masks: np.ndarray | None
+    acting: np.ndarray
+    slot_generations: np.ndarray
+
+class HalfStep(NamedTuple):
+    half: int
+    ids: range
+    step: Step
+
+class AsyncStep(NamedTuple):
+    ids: np.ndarray
+    step: Step
+
+class Env:
+    mode: str
+    num_envs: int
+    agents: int
+    action_choices: int
+    action_bounds: tuple[float, float] | None
+    action_nvec: tuple[int, ...]
+    mask_heads: tuple[tuple[int, tuple[int, ...], int], ...]
+    entity_group_heads: int
+    turns: str
+    outputs: str
+    halves: tuple[range, range] | None
+    def __init__(self, native: _native.Env, mode: str = "sync", indexed: bool = False) -> None: ...
+    def reset(self, seed: int | None = None, ids: _Ids = None) -> Step | list[HalfStep] | AsyncStep | None: ...
+    def send(self, target: int | _Ids, actions: npt.ArrayLike) -> None: ...
+    def recv(self) -> HalfStep | AsyncStep: ...
+    def snapshot_all(self) -> _native.PoolSnapshot: ...
+    def restore_all(self, snapshot: _native.PoolSnapshot) -> list[HalfStep] | None: ...
+    def restore(self, ids: _Ids, snapshots: Sequence[Any]) -> None: ...
+    def step(self, actions: npt.ArrayLike) -> Step: ...
+    def snapshot(self, index: int) -> bytes: ...
+    def illegal_actions(self, index: int) -> list[int]: ...
+    def state_hash(self, index: int) -> int: ...
+    def import_record(self, index: int, record: bytes) -> None: ...
+    def encode(self, ids: _Ids = None) -> bytes: ...
+    def load(
+        self,
+        data: bytes,
+        ids: _Ids = None,
+        max_instances: int | None = None,
+        max_decoded_bytes: int | None = None,
+    ) -> Step | list[HalfStep] | AsyncStep | None: ...
+    def fork(self, src: int, dst: list[int]) -> None: ...
+    @property
+    def is_poisoned(self) -> bool: ...
+    def close(self) -> None: ...
+    def __enter__(self) -> Env: ...
+    def __exit__(
+        self,
+        *exc: type[BaseException] | BaseException | TracebackType | None,
+    ) -> None: ...
+
+def native_kwargs(**kwargs: Any) -> dict[str, Any]: ...
+def is_stale(array: Any) -> bool: ...
+def make(
+    env_id: str, num_envs: int = 1, seed: int = 0, outputs: str = "borrowed", **kwargs: Any
+) -> Env: ...
