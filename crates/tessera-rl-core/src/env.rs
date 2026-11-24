@@ -21,7 +21,11 @@ use crate::step_out::StepOut;
 ///
 /// Implemented by `#[derive(EnvState)]`, which checks the layout rules at
 /// compile time. Implementing it by hand must uphold the same rules.
-pub trait EnvState: Canonical + StateInit + Copy + 'static {}
+///
+/// `Send + Sync`: plain data holds no pointers and no interior mutability,
+/// so it is always both; the bound lets worker threads read shared states,
+/// such as the entries of an archive (ADR-0075).
+pub trait EnvState: Canonical + StateInit + Copy + Send + Sync + 'static {}
 
 /// An environment configuration, validated at construction.
 pub trait EnvConfig: Sized + 'static {

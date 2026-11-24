@@ -278,7 +278,7 @@ fn test_fork_branched_diverges_deterministically() {
     let (a, ctx) = branch(7);
     let (b, _) = branch(7);
     assert_eq!(a, b, "deterministic");
-    assert_eq!(ctx, PoolContext { branch_counter: 1 });
+    assert_eq!(ctx, PoolContext::new(1));
     let last = a.last().unwrap();
     assert!(last[0] != last[1] && last[1] != last[2], "branches diverge");
 }
@@ -298,10 +298,8 @@ fn test_fork_branched_labels_and_counter_errors() {
             destinations: 2
         })
     );
-    p.restore_pool_context(PoolContext {
-        branch_counter: u64::MAX,
-    })
-    .unwrap();
+    p.restore_pool_context(PoolContext::new(u64::MAX), None)
+        .unwrap();
     assert_eq!(
         p.fork_branched(0, &[1], None),
         Err(EngineError::BranchCounterExhausted)
@@ -348,7 +346,7 @@ fn test_poisoned_pool_accepts_only_full_restore_and_import() {
     );
     assert_eq!(bad.pool_context(), Err(EngineError::Poisoned));
     assert_eq!(
-        bad.restore_pool_context(PoolContext { branch_counter: 0 }),
+        bad.restore_pool_context(PoolContext::new(0), None),
         Err(EngineError::Poisoned)
     );
     let decoded = records.map(DecodedRecord::from);

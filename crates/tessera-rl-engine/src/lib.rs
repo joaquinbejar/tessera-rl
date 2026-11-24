@@ -10,6 +10,7 @@
 //! `unsafe` code lives only in the audited modules `buffer` (disjoint chunk
 //! views for workers) and `sys` (the worker gang).
 
+mod archive;
 mod buffer;
 #[cfg(test)]
 mod chunk_clear_tests;
@@ -81,6 +82,7 @@ pub mod __private {
     pub use inventory;
     pub use tessera_rl_core::HostEnvironment;
 }
+pub use archive::{Archive, MAX_ARCHIVE_ENTRIES, ResetSource, ResetSourceContext};
 pub use layout::{MAX_GROUPED_HEADS, MAX_LEAVES, MaskHeadShape};
 pub use masks::{IllegalActionPolicy, MaskProvider, Masked, NoMasks, PersistMask};
 #[cfg(not(loom))]

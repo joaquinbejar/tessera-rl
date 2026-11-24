@@ -101,6 +101,9 @@ impl StreamId {
     /// Search: root noise and action sampling of a search call, keyed by
     /// the search call counter (ADR-0043). Never used by a step.
     pub const SEARCH: Self = Self(4);
+    /// Archive resets: the entry a reset starts from, at the reset counter
+    /// domain (ADR-0075 item 4). Never used by a step.
+    pub const ARCHIVE_SELECT: Self = Self(5);
     /// The first id available to environments.
     pub const FIRST_ENV: u32 = 16;
 

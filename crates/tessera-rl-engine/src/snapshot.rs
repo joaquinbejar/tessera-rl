@@ -26,6 +26,7 @@ use tessera_rl_core::{
     AdaptiveValues, AgentSlot, Environment, RecordLayout, StateHash, TurnStructure, Validate,
 };
 
+use crate::archive::{Archive, ArchiveSource, ResetSourceContext};
 use crate::error::EngineError;
 use crate::masks::MaskProvider;
 use crate::options::AutoReset;
@@ -247,18 +248,88 @@ where
         self.guarded_ref(|pool| {
             Ok(PoolContext {
                 branch_counter: pool.branch_counter,
+                reset_source: pool
+                    .reset_source
+                    .as_ref()
+                    .map_or(ResetSourceContext::Fresh, ArchiveSource::context),
             })
         })
     }
 
-    /// Restores the pool-level context.
+    /// Restores the pool-level context (ADR-0075 item 7). Every field is
+    /// checked before any is written, so an error mutates nothing. A context
+    /// that names an archive needs that archive (`archive`, matched by
+    /// digest); a fresh context takes none.
     ///
     /// # Errors
     ///
-    /// Returns [`EngineError::Poisoned`] on a poisoned pool.
-    pub fn restore_pool_context(&mut self, context: PoolContext) -> Result<(), EngineError> {
+    /// Returns [`EngineError::Poisoned`] on a poisoned pool;
+    /// [`EngineError::ArchiveMismatch`] when the context names an archive
+    /// and `archive` is missing or has another digest;
+    /// [`EngineError::Archive`] for an archive given with a fresh context,
+    /// or weights that do not fit the archive.
+    pub fn restore_pool_context(
+        &mut self,
+        context: PoolContext,
+        archive: Option<&Archive<E>>,
+    ) -> Result<(), EngineError> {
         self.guarded(Poison::Reject, |pool| {
-            pool.branch_counter = context.branch_counter;
+            let (branch_counter, source) = pool.check_context(context, archive)?;
+            pool.branch_counter = branch_counter;
+            pool.reset_source = source;
+            Ok(())
+        })
+    }
+
+    /// Checks `context` against this pool and `archive` without writing
+    /// anything, and builds the reset source it restores. Later context
+    /// fields (ADR-0078) add their checks here, before any write.
+    #[expect(
+        clippy::unused_self,
+        reason = "ADR-0078 adds context checks against this pool here"
+    )]
+    fn check_context(
+        &self,
+        context: PoolContext,
+        archive: Option<&Archive<E>>,
+    ) -> Result<(u64, Option<ArchiveSource<E>>), EngineError> {
+        let PoolContext {
+            branch_counter,
+            reset_source,
+        } = context;
+        let source = match (reset_source, archive) {
+            (ResetSourceContext::Fresh, None) => None,
+            (ResetSourceContext::Fresh, Some(_)) => {
+                return Err(EngineError::Archive {
+                    reason: "the context has fresh resets: give no archive",
+                });
+            }
+            (ResetSourceContext::Archive { digest, .. }, None) => {
+                return Err(EngineError::ArchiveMismatch {
+                    expected: digest,
+                    found: 0,
+                });
+            }
+            (ResetSourceContext::Archive { digest, weights }, Some(given)) => {
+                if given.digest() != digest {
+                    return Err(EngineError::ArchiveMismatch {
+                        expected: digest,
+                        found: given.digest(),
+                    });
+                }
+                Some(ArchiveSource::new(given.clone(), Some(weights))?)
+            }
+        };
+        Ok((branch_counter, source))
+    }
+
+    /// Replay only: sets the branch counter of a keyframe, keeping the
+    /// reset source (replay of archive sources comes with ADR-0075's
+    /// replay events).
+    #[cfg(feature = "replay")]
+    pub(crate) fn set_branch_counter(&mut self, branch_counter: u64) -> Result<(), EngineError> {
+        self.guarded(Poison::Reject, |pool| {
+            pool.branch_counter = branch_counter;
             Ok(())
         })
     }

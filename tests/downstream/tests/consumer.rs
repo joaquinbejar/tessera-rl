@@ -114,7 +114,7 @@ fn test_downstream_restore_continues_exactly() {
     let context = p.pool_context().unwrap();
     let first = run(&mut p, 10, 60);
     p.restore_all(&records).unwrap();
-    p.restore_pool_context(context).unwrap();
+    p.restore_pool_context(context, None).unwrap();
     assert_eq!(run(&mut p, 10, 60), first);
 }
 
@@ -129,7 +129,7 @@ fn test_downstream_restore_into_another_pool_continues_exactly() {
     // identity, so the seed of the pool does not matter.
     let mut q = pool(99, Some(2));
     q.restore_all(&records).unwrap();
-    q.restore_pool_context(context).unwrap();
+    q.restore_pool_context(context, None).unwrap();
     assert_eq!(run(&mut q, 10, 60), first);
 }
 

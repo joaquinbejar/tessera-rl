@@ -70,7 +70,7 @@ fn entries() -> Vec<u64> {
     once("import_all", || p.import_all(&[decoded, decoded])).unwrap();
     once("set_lineage", || p.set_lineage(1, LogicalId::new(5))).unwrap();
     let ctx = once("pool_context", || p.pool_context()).unwrap();
-    once("restore_pool_context", || p.restore_pool_context(ctx)).unwrap();
+    once("restore_pool_context", || p.restore_pool_context(ctx, None)).unwrap();
     once("state_hash", || p.state_hash(0)).unwrap();
     once("step", || p.step(ACT).map(|_| ())).unwrap();
     // A subnormal result: flushed to zero outside the canonical scope.

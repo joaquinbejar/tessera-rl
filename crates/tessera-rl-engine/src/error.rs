@@ -130,6 +130,21 @@ pub enum EngineError {
         /// The violated invariant.
         violation: tessera_rl_core::InvariantViolation,
     },
+    /// An archive or its reset source is invalid (ADR-0075).
+    #[error("archive: {reason}")]
+    Archive {
+        /// What is wrong.
+        reason: &'static str,
+    },
+    /// A pool context names an archive other than the one given, or the
+    /// pool's archive is of another environment or config (ADR-0075).
+    #[error("archive mismatch: expected digest {expected:016x}, found {found:016x}")]
+    ArchiveMismatch {
+        /// The digest the pool or context requires.
+        expected: u64,
+        /// The digest given (0 when no archive was given).
+        found: u64,
+    },
     /// A record slice does not have one record per instance.
     #[error("{records} records for {instances} instances")]
     RecordCount {
