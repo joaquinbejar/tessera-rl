@@ -35,6 +35,8 @@ fdlibm notices, is kept verbatim at
   environment backends, the greedy evaluation, the JSON report and the
   gate, and the removal of the logging and the command-line flags of the
   original. A validation tool only (ADR-0018): Tessera ships no trainer.
+  It is the CleanRL row of SPEC 14.2's reference training scripts
+  ("CleanRL ppo.py, adapted", #368).
 - **Also:** `tools/learning_continuous.py` adapts CleanRL's
   `cleanrl/ppo_continuous_action.py` (same repository, same MIT license,
   text below): the Gaussian actor, its hyperparameters and the update. The

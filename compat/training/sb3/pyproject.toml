@@ -1,0 +1,23 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+#
+# Reference training with Stable-Baselines3 (SPEC 14.2, #368): its own uv
+# project and lock, so SB3 never enters the root lock. The Tessera wheel is
+# built from this repository (path source). Run with `make reference-sb3`.
+
+[project]
+name = "tessera-rl-reference-sb3"
+version = "0.0.0"
+requires-python = ">=3.11"
+dependencies = [
+    "stable-baselines3==2.9.2",
+    "gymnasium==1.4.0",
+    "numpy==2.4.6",
+    "torch==2.15.0",
+    "tessera-rl",
+]
+
+[tool.uv]
+package = false
+
+[tool.uv.sources]
+tessera-rl = { path = "../../..", editable = false }
