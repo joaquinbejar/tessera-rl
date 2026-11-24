@@ -185,7 +185,21 @@ def train_twoplayer(name: str, seed: int, total_steps: int, eval_episodes: int) 
     agent, _, record = l2.train(p["env"], kwargs, seed, seats, twoplayer_hyper(name, total_steps))
     vs_h = l2.eval_scores(p["env"], kwargs, seats, "trained", "heuristic", eval_episodes, rt.EVAL_SEED_BASE, score, agent, opening_plies=k)
     vs_u = l2.eval_scores(p["env"], kwargs, seats, "trained", "uniform", eval_episodes, rt.EVAL_SEED_BASE, score, agent, opening_plies=k)
-    return {**record, "vs_heuristic": vs_h, "vs_uniform": vs_u, "eval_mean": float(sum(vs_h) / len(vs_h)), "opening_plies": k, "agent": agent}
+    # rev (REVIEW-T3b-opening-r1): the openings' skip count, recorded per
+    # seed. eval_scores draws the same openings (one per episode of its
+    # largest seat), so this is the number of episodes each evaluation lost.
+    per_seat = -(-eval_episodes // len(seats))
+    _, skipped = l2.openings(p["env"], kwargs, per_seat, rt.EVAL_SEED_BASE, k)
+    return {
+        **record,
+        "vs_heuristic": vs_h,
+        "vs_uniform": vs_u,
+        "eval_mean": float(sum(vs_h) / len(vs_h)),
+        "opening_plies": k,
+        "opening_skips": int(skipped),
+        "opening_draws": int(per_seat if k > 0 else 0),
+        "agent": agent,
+    }
 
 
 def twoplayer_references(name: str, episodes: int) -> dict:
