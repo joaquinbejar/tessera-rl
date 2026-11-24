@@ -29,15 +29,9 @@ def _public_modules():
 
 
 def _ours(obj) -> bool:
-    """Defined in the Python package's source. Native objects (their
-    docstrings are Rust strings) are covered by a follow-up head of #527."""
-    if not str(getattr(obj, "__module__", "") or "").startswith("tessera_rl"):
-        return False
-    try:
-        inspect.getsource(obj)
-    except (OSError, TypeError):
-        return False
-    return True
+    """Defined by the package, in Python or in its native module (whose
+    docstrings are Rust strings)."""
+    return str(getattr(obj, "__module__", "") or "").startswith("tessera_rl")
 
 
 def _docstrings():
