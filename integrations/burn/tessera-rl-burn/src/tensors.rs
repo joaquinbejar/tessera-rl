@@ -45,7 +45,7 @@ pub fn f32_leaf(
     let bytes = out.observation(leaf).ok_or(AdapterError::NoLeaf { leaf })?;
     let row_bytes = row_len.checked_mul(4).filter(|&b| b > 0);
     let rows = match row_bytes {
-        Some(rb) if bytes.len() % rb == 0 => bytes.len() / rb,
+        Some(rb) if bytes.len().is_multiple_of(rb) => bytes.len() / rb,
         _ => {
             return Err(AdapterError::Shape {
                 bytes: bytes.len(),
@@ -57,8 +57,10 @@ pub fn f32_leaf(
         return Err(AdapterError::Empty);
     }
     let values: Vec<f32> = bytes
-        .chunks_exact(4)
-        .map(|c| <[u8; 4]>::try_from(c).map_or(0.0, f32::from_le_bytes))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|c| f32::from_le_bytes(*c))
         .collect();
     Ok(Tensor::from_data(TensorData::new(values, [rows, row_len]), device))
 }
@@ -101,7 +103,7 @@ pub fn masks(
     device: &Device,
 ) -> Result<Tensor<2, Bool>, AdapterError> {
     let m = out.masks();
-    if choices == 0 || m.len() % choices != 0 {
+    if choices == 0 || !m.len().is_multiple_of(choices) {
         return Err(AdapterError::Shape {
             bytes: m.len(),
             row_len: choices,

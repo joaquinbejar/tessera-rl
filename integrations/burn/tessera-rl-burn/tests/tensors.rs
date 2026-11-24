@@ -38,8 +38,10 @@ fn test_adapter_cartpole_observations_equal_the_leaf_bytes() {
     let want: Vec<f32> = out
         .observation(0)
         .unwrap()
-        .chunks_exact(4)
-        .map(|c| f32::from_le_bytes(c.try_into().unwrap()))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|c| f32::from_le_bytes(*c))
         .collect();
     assert_eq!(got.iter().map(|x| x.to_bits()).collect::<Vec<_>>(), want.iter().map(|x| x.to_bits()).collect::<Vec<_>>());
     let r = rewards(&out, &device).unwrap().into_data().to_vec::<f32>().unwrap();

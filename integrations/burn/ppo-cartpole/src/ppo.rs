@@ -62,8 +62,10 @@ fn observations(pool: &EnvPool<CartPole>) -> Result<Vec<f32>, EngineError> {
     let out = pool.outputs()?;
     let bytes = out.observation(0).unwrap_or_default();
     Ok(bytes
-        .chunks_exact(4)
-        .map(|c| <[u8; 4]>::try_from(c).map_or(0.0, f32::from_le_bytes))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|c| f32::from_le_bytes(*c))
         .collect())
 }
 
