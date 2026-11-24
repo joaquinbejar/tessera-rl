@@ -1,0 +1,33 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
+[package]
+name = "tessera-rl-markets"
+description = "Tessera's market environments: a continuous double auction limit order book (tessera/LimitOrderBook-v1)"
+readme = "README.md"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+tessera-rl-core.workspace = true
+tessera-rl-num.workspace = true
+tessera-rl-macros.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+criterion.workspace = true
+proptest.workspace = true
+
+[lints]
+workspace = true
+
+# Matching cost on a full book; local only, no claim.
+[[bench]]
+name = "matching"
+harness = false
