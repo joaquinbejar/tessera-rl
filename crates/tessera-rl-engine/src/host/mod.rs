@@ -147,6 +147,66 @@ pub const MAX_HOST_AGENTS: usize = 256;
 /// `A` must equal `E::MAX_AGENTS` and be at most [`MAX_HOST_AGENTS`]
 /// (checked at compile time, when the pool is built); with a concrete
 /// type, write `HostPool<Book, { Book::MAX_AGENTS }>`.
+///
+/// `E::NOTIFIES_REJECTION` needs `E::VALIDATES` (ADR-0069), also checked at
+/// compile time when the pool is built. With both it builds:
+///
+/// ```
+/// use tessera_rl_core::io::{Actions, ObsWriter};
+/// use tessera_rl_core::space::Space;
+/// use tessera_rl_core::{AgentSlot, EnvConfig, HostEnvironment, HostError, HostOut, HostSeed, SpaceError};
+/// use tessera_rl_engine::{HostPool, PoolOptions};
+/// use tessera_rl_num::identity::Seed;
+///
+/// struct Cfg;
+/// impl EnvConfig for Cfg {}
+/// struct Notified;
+/// impl HostEnvironment for Notified {
+///     const ENV_ID: &'static str = "doc/Notified-v1";
+///     const ENV_VERSION: u32 = 1;
+///     const MAX_AGENTS: usize = 1;
+///     const VALIDATES: bool = true;
+///     const NOTIFIES_REJECTION: bool = true;
+///     type Config = Cfg;
+///     fn new(_: &Cfg) -> Result<Self, HostError> { Ok(Self) }
+///     fn observation_space(_: &Cfg) -> Result<Space, SpaceError> { Ok(Space::Discrete { n: 2 }) }
+///     fn action_space(_: &Cfg) -> Result<Space, SpaceError> { Ok(Space::Discrete { n: 2 }) }
+///     fn reset(&mut self, _: HostSeed, _: &mut HostOut<'_>) {}
+///     fn step(&mut self, _: &Actions<'_, ()>, _: &mut HostOut<'_>) {}
+///     fn observe(&self, _: AgentSlot, _: &mut ObsWriter<'_, '_, ()>) {}
+/// }
+/// let options = PoolOptions::new(core::num::NonZeroU32::MIN, Seed::new(0));
+/// let _ = HostPool::<Notified, 1>::new(&Cfg, options);
+/// ```
+///
+/// With the notice and without `VALIDATES` it does not compile:
+///
+/// ```compile_fail,E0080
+/// use tessera_rl_core::io::{Actions, ObsWriter};
+/// use tessera_rl_core::space::Space;
+/// use tessera_rl_core::{AgentSlot, EnvConfig, HostEnvironment, HostError, HostOut, HostSeed, SpaceError};
+/// use tessera_rl_engine::{HostPool, PoolOptions};
+/// use tessera_rl_num::identity::Seed;
+///
+/// struct Cfg;
+/// impl EnvConfig for Cfg {}
+/// struct Notified;
+/// impl HostEnvironment for Notified {
+///     const ENV_ID: &'static str = "doc/Notified-v1";
+///     const ENV_VERSION: u32 = 1;
+///     const MAX_AGENTS: usize = 1;
+///     const NOTIFIES_REJECTION: bool = true;
+///     type Config = Cfg;
+///     fn new(_: &Cfg) -> Result<Self, HostError> { Ok(Self) }
+///     fn observation_space(_: &Cfg) -> Result<Space, SpaceError> { Ok(Space::Discrete { n: 2 }) }
+///     fn action_space(_: &Cfg) -> Result<Space, SpaceError> { Ok(Space::Discrete { n: 2 }) }
+///     fn reset(&mut self, _: HostSeed, _: &mut HostOut<'_>) {}
+///     fn step(&mut self, _: &Actions<'_, ()>, _: &mut HostOut<'_>) {}
+///     fn observe(&self, _: AgentSlot, _: &mut ObsWriter<'_, '_, ()>) {}
+/// }
+/// let options = PoolOptions::new(core::num::NonZeroU32::MIN, Seed::new(0));
+/// let _ = HostPool::<Notified, 1>::new(&Cfg, options);
+/// ```
 #[derive(Debug)]
 pub struct HostPool<E: HostEnvironment, const A: usize> {
     options: PoolOptions,
@@ -184,6 +244,10 @@ impl<E: HostEnvironment, const A: usize> HostPool<E, A> {
         assert!(
             A <= MAX_HOST_AGENTS,
             "HostPool<E, A>: A must be at most MAX_HOST_AGENTS"
+        );
+        assert!(
+            !E::NOTIFIES_REJECTION || E::VALIDATES,
+            "HostEnvironment::NOTIFIES_REJECTION needs VALIDATES (ADR-0069)"
         );
     };
 
@@ -854,11 +918,15 @@ fn validate<E: HostEnvironment, const A: usize>(
         run_kernels(poisoned, || {
             again = kernels::validate_chunk::<E, A>(ctx, &one);
         })?;
-        return Err(rejected(lowest, again.map(|(_, r)| r)));
+        let again = again.map(|(_, r)| r);
+        if let (Some(reject), [inst]) = (again, one.states) {
+            notify::<E>(ctx, poisoned, inst, &reject)?;
+        }
+        return Err(rejected(lowest, again));
     }
     let all = Rows {
         headers,
-        states: instances,
+        states: &mut *instances,
         discrete,
         continuous,
         penalties: &mut [],
@@ -869,9 +937,34 @@ fn validate<E: HostEnvironment, const A: usize>(
         found = kernels::validate_chunk::<E, A>(ctx, &all);
     })?;
     match found {
-        Some((i, reject)) => Err(rejected(u32::try_from(i).unwrap_or(u32::MAX), Some(reject))),
+        Some((i, reject)) => {
+            if let Some(inst) = instances.get_mut(i) {
+                notify::<E>(ctx, poisoned, inst, &reject)?;
+            }
+            Err(rejected(u32::try_from(i).unwrap_or(u32::MAX), Some(reject)))
+        }
         None => Ok(()),
     }
+}
+
+/// The rejection notice (ADR-0069): `on_rejected` on the reported instance,
+/// once, on this thread, under the panic boundary (a panic poisons). The
+/// caller already runs under canonical FP controls; the kernel brackets
+/// host allocations and puts the controls back. Compiled out unless
+/// `E::NOTIFIES_REJECTION`.
+#[inline]
+fn notify<E: HostEnvironment>(
+    ctx: &HostCtx<'_>,
+    poisoned: &mut bool,
+    inst: &mut E,
+    reject: &ActionReject,
+) -> Result<(), EngineError> {
+    if !E::NOTIFIES_REJECTION {
+        return Ok(());
+    }
+    run_kernels(poisoned, || {
+        kernels::notify_rejected::<E>(ctx, inst, reject);
+    })
 }
 
 /// The error of a rejected joint action; `None` when the instance did not
