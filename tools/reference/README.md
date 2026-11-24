@@ -11,6 +11,7 @@ lock, `make py-test` or `make pre-push`.
 | --- | --- | --- |
 | CleanRL | `tools/reference_training.py` ("CleanRL ppo.py, adapted"; see `THIRD_PARTY.md`) | `make reference-training` |
 | Stable-Baselines3 | `sb3_cartpole.py` | `make reference-sb3` |
+| Tianshou | `tianshou_cartpole.py` | `make reference-tianshou` |
 | RLlib | deferred (#447) | |
 
 Pass rule, the defaults of `tools/reference_training.py`: the median across
