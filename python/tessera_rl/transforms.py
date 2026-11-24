@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: MIT OR Apache-2.0
-"""Observation transforms (ADR-0078): pass a list of these to
+"""Observation transforms: pass a list of these to
 ``tessera_rl.make(..., transforms=[...])``. They run in the engine, on the
 workers, right after the environment's ``observe``, in list order per leaf;
 the pool's ``layout()`` and the Gymnasium and PettingZoo spaces describe the
@@ -7,7 +7,7 @@ transformed observation.
 
 A leaf is named as ``layout()`` names it: ``Dict`` keys and ``Tuple``
 positions joined by ``.``, the empty name for an observation that is a
-single leaf. On a ``Set`` (ADR-0092): ``Normalize`` and ``OneHot`` apply to
+single leaf. On a ``Set``: ``Normalize`` and ``OneHot`` apply to
 its item leaves, keep absent slots zero, and pool the statistics over the
 present slots; ``FrameStack`` names the set itself and stacks all of its
 leaves, exported as a set of ``k * MAX`` slots (frames oldest first) with

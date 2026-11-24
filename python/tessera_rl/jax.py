@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: MIT OR Apache-2.0
-"""JAX handles over native pools: the ordered callback path (SPEC 15.2,
-ADR-0031; design ``docs/reviews/jax-ordered-callback-design.md`` r3).
+"""JAX handles over native pools: the ordered callback path (SPEC 15.2):
+outputs are copied, and calls are ordered effects.
 
 ``reset`` and ``step`` call ``jax.experimental.io_callback(..., ordered=True)``,
 so they work eagerly, under ``jax.jit`` and inside ``jax.lax.scan``, and JAX
@@ -33,7 +33,7 @@ runs them in program order. ``jax.pure_callback`` is never used.
   the jitted function is dropped or ``jax.clear_caches`` runs: call
   ``close``.
 - **Floating point.** XLA's CPU threads may run with flush-to-zero set. The
-  native boundary computes under canonical controls anyway (ADR-0041) and
+  native boundary computes under canonical controls anyway and
   warns once per process. Under JAX that ``RuntimeWarning`` is expected and
   harmless: trajectories are bit-identical to the native API.
 

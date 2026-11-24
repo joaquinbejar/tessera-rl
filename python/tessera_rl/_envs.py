@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: MIT OR Apache-2.0
-"""The registry records and the deprecation warning (ADR-0080).
+"""The registry records and the deprecation warning.
 
 ``envs()`` lists the first-party environments registered in the native
 module: the facts of ``_native.registered_envs()`` plus ``adapters``, the
@@ -27,7 +27,7 @@ _PACKAGE = os.path.dirname(os.path.abspath(__file__)) + os.sep
 
 
 class TesseraDeprecationWarning(FutureWarning):
-    """A deprecated environment id was used (SPEC 16.1, ADR-0080)."""
+    """A deprecated environment id was used (SPEC 16.1)."""
 
 
 @functools.cache
@@ -36,7 +36,7 @@ def _records() -> dict[str, dict[str, Any]]:
 
 
 def envs() -> list[dict[str, Any]]:
-    """One dict per registered first-party id, in id order (ADR-0080)."""
+    """One dict per registered first-party id, in id order."""
     return [
         {
             **r,

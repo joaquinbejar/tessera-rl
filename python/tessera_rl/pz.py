@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: MIT OR Apache-2.0
-"""PettingZoo adapters for the multi-agent environments (ADR-0013).
+"""PettingZoo adapters for the multi-agent environments.
 
 Each environment declares the PettingZoo interfaces it supports, and a
 request for any other one is refused when it is made:
@@ -29,16 +29,16 @@ Environment                    Turns         Adapters
   ``agent_selection``. It is never presented as Parallel: that would
   change what each agent knows when it acts.
 
-An agent is one occupant of a slot: identity is (slot, generation)
-(ADR-0013). Generation 0 is named ``agent_<slot>``, and a later
+An agent is one occupant of a slot: identity is (slot, generation).
+Generation 0 is named ``agent_<slot>``, and a later
 generation ``agent_<slot>_g<generation>``: PettingZoo forbids a name to
 come back once its agent is done. ``possible_agents`` are the agents
 alive at reset, and grow when an environment that spawns agents (a host
-environment with ``spawns``, ADR-0065) fills a slot. An agent leaves
+environment with ``spawns``) fills a slot. An agent leaves
 ``agents`` after the step in which it is terminated or truncated: its
 final reward and flag are reported once, in that step, and at the end of
 an episode every agent still alive gets its final reward and flag in the
-same step (ADR-0013). A freed slot is reused no earlier than the next
+same step. A freed slot is reused no earlier than the next
 step; its new agent joins ``agents`` in the step it spawns, with its first
 observation and info and the engine's reward and flags for that step (a
 spawn in the episode's last step is flushed with the others and does not
@@ -48,7 +48,7 @@ stay in ``agents``). Native AEC refuses a spawning environment
 Observations are dicts of the environment's leaves plus ``action_mask``
 (``int8``, one entry per action).
 
-Policy maps (ADR-0079): every first-party agent's ``infos`` carry its
+Policy maps: every first-party agent's ``infos`` carry its
 ``"policy_group"`` (``"learner"``, ``"external"``, ``"heuristic"`` or
 ``"privileged_heuristic"``). ``parallel_env(..., agents="learner")`` hides the
 heuristic slots from ``agents``, ``possible_agents`` and the step dicts (the
@@ -62,7 +62,7 @@ space, and an action is one integer per head. Its heads are conditional,
 which a Gymnasium ``MultiDiscrete`` mask (one independent mask per
 component) cannot express, so its observations carry no ``action_mask``.
 The masks are in ``infos[agent]``, beside only the agent's policy group
-(SPEC 11.3, ADR-0079):
+(SPEC 11.3):
 
 - ``"action_masks"`` holds the exact masks: every head's mask, one array per
   head of an entity group in the shapes of ``tessera_rl.masks``
@@ -91,7 +91,7 @@ cycle, as it was. In Parallel, a name outside ``possible_agents`` raises
 ``ActionError``, and actions for agents already known to be dead are
 ignored. A legal
 index that the mask marks illegal, such as a move into a full Connect Four
-column, is replaced by the environment's no-op (ADR-0028); it is not an
+column, is replaced by the environment's no-op; it is not an
 error.
 """
 
@@ -108,7 +108,7 @@ from tessera_rl._env import Env, _discrete_actions, _multi_actions, native_kwarg
 from tessera_rl.masks import head_views
 
 #: Native constructors and the PettingZoo interfaces each environment
-#: declares (ADR-0013). Anything else is refused at construction.
+#: declares. Anything else is refused at construction.
 _MAKERS = {
     "tessera/Tag-v1": _native.make_tag,
     "tessera/GridKeyDoor-v1": _native.make_keydoor,
@@ -129,13 +129,12 @@ _MAKERS = {
 }
 
 #: The maker of each first-party id and the PettingZoo interfaces it
-#: declares, read from the registry (``Environment::ADAPTERS``, SPEC 12,
-#: ADR-0080).
+#: declares, read from the registry (``Environment::ADAPTERS``, SPEC 12).
 _ENVS = {env_id: (maker, _envs.adapters_of(env_id)) for env_id, maker in _MAKERS.items()}
 
 
 #: The PettingZoo interfaces of a host environment, by its turns
-#: (ADR-0013; ADR-0065 item 6: Mixed through ``parallel_env`` only).
+#: (Mixed through ``parallel_env`` only).
 _HOST_DECLARED = {
     "simultaneous": frozenset({"parallel", "aec"}),
     "sequential": frozenset({"aec"}),
@@ -144,9 +143,8 @@ _HOST_DECLARED = {
 
 
 def _undeclared(env_id: str, adapter: str, declared, turns=None) -> Exception:
-    """The error for ``adapter`` when ``env_id`` does not declare it
-    (ADR-0013); a Mixed host environment as AEC is a ``CapabilityError``
-    (ADR-0065 item 6)."""
+    """The error for ``adapter`` when ``env_id`` does not declare it; a
+    Mixed host environment as AEC is a ``CapabilityError``."""
     if turns == "mixed":
         return _native.CapabilityError(f"{env_id} is a Mixed host environment: use parallel_env (ADR-0065)")
     return _native.ArgumentError(
@@ -164,8 +162,8 @@ def _host_pool(env_id: str, adapter: str, seed: int | None, kwargs: dict):
     """One instance of the host environment ``env_id`` for ``adapter``
     (SPEC 14.4), built once with the caller's config, the slots alive at
     reset and the interfaces it declares, read from its turns. No probe:
-    the slots alive after a reset are ``0..initial_agents`` (ADR-0065
-    item 4), so the returned pool has not started an episode."""
+    the slots alive after a reset are ``0..initial_agents``, so the
+    returned pool has not started an episode."""
     _check_reserved(kwargs)
     native = _host.native_for(
         env_id, 1, 0 if seed is None else seed, "owned", {**kwargs, "auto_reset": "disabled"}
@@ -188,7 +186,7 @@ def _host_pool(env_id: str, adapter: str, seed: int | None, kwargs: dict):
 
 def _lookup(env_id: str) -> tuple:
     """The maker of the first-party ``env_id`` and the interfaces it
-    declares (ADR-0013)."""
+    declares."""
     if env_id in _ENVS:
         return _ENVS[env_id]
     known = sorted({*_ENVS, *_host.host_ids()})
@@ -255,13 +253,13 @@ def relaxed_masks(row, mask_heads) -> tuple[np.ndarray, ...]:
     return tuple(out)
 
 
-#: The groups whose actions the engine computes (ADR-0079).
+#: The groups whose actions the engine computes.
 _HEURISTIC_GROUPS = frozenset({"heuristic", "privileged_heuristic"})
 
 
 def _agents_option(agents: str | int, kwargs: dict) -> bool:
     """Whether ``agents`` asks to hide heuristic slots: ``"all"`` (the
-    default, every agent) or ``"learner"`` (ADR-0079 item 5.2). An integer
+    default, every agent) or ``"learner"``. An integer
     is an environment's own ``agents`` configuration key (Snake, KeyDoor,
     PaddleDuel) and is passed through to ``kwargs`` unchanged."""
     if isinstance(agents, int):
@@ -273,7 +271,7 @@ def _agents_option(agents: str | int, kwargs: dict) -> bool:
 
 
 def agent_name(slot: int, generation: int) -> str:
-    """The PettingZoo name of the agent (slot, generation) (ADR-0013)."""
+    """The PettingZoo name of the agent (slot, generation)."""
     return f"agent_{slot}" if generation == 0 else f"agent_{slot}_g{generation}"
 
 
@@ -287,14 +285,14 @@ class _Agents:
         self.names = [agent_name(i, 0) for i in self.slots]
         self.slot_of = dict(zip(self.names, self.slots, strict=True))
         layout = env._native.layout()
-        #: Whether the environment fills empty slots (ADR-0065 ``spawns``).
+        #: Whether the environment fills empty slots (its ``spawns`` flag).
         self.spawns = bool(layout.get("spawns", False))
         #: ``"host"`` for a third-party host environment, else ``"tessera"``.
         self.kind = "host" if layout.get("kind") == "host" else "tessera"
-        #: Whether the host environment refuses agents (ADR-0070): every
+        #: Whether the host environment refuses agents: every
         #: agent's infos then carry ``refused`` and ``refuse_code``.
         self.refuses = bool(layout.get("refuses_agents", False))
-        #: The policy group of each slot (ADR-0079); empty for a host
+        #: The policy group of each slot; empty for a host
         #: environment, which has no policy map.
         self.groups: tuple[str, ...] = tuple(layout.get("policy_groups", ()))
         #: Whether heuristic slots are hidden from the agent lists
@@ -356,7 +354,7 @@ class _Agents:
 
     def hidden(self, slot: int) -> bool:
         """Whether agent ``slot`` is hidden: a heuristic slot under
-        ``agents="learner"`` (ADR-0079 item 5.2)."""
+        ``agents="learner"``."""
         return self.learner_only and slot < len(self.groups) and self.groups[slot] in _HEURISTIC_GROUPS
 
     def heuristic_rewards(self) -> dict[str, float]:
@@ -371,7 +369,7 @@ class _Agents:
 
     def refusal(self, slot: int) -> dict:
         """``refused`` and ``refuse_code`` of agent ``slot`` in the last
-        call (ADR-0070); all clear after a reset."""
+        call; all clear after a reset."""
         out = getattr(self.env, "_last_out", None)
         if out is None or "refuse_code" not in out:
             return {"refused": False, "refuse_code": 0}
@@ -409,7 +407,7 @@ class _Agents:
 
     def pending(self) -> bool:
         """Whether the instance waits for a reset: a host environment's
-        ``pending_reset`` output (ADR-0065); never for a first-party one."""
+        ``pending_reset`` output; never for a first-party one."""
         out = getattr(self.env, "_last_out", None)
         if out is None or "pending_reset" not in out:
             return False
@@ -480,12 +478,12 @@ class TesseraParallelEnv(ParallelEnv):
         return self._a.action_space
 
     def set_reset_source(self, archive=None, weights=None) -> None:
-        """Archive resets (ADR-0075): forwarded to the wrapped
+        """Archive resets: forwarded to the wrapped
         ``tessera_rl`` environment's ``set_reset_source``."""
         self._a.env.set_reset_source(archive, weights)
 
     def reset_from(self, ids, entries):
-        """Archive resets (ADR-0075): forwarded to the wrapped
+        """Archive resets: forwarded to the wrapped
         ``tessera_rl`` environment's ``reset_from``."""
         return self._a.env.reset_from(ids, entries)
 
@@ -551,7 +549,7 @@ class TesseraParallelEnv(ParallelEnv):
 
     def render(self):
         """With ``render_mode="rgb_array"``, the frame, ``(height, width, 3)``
-        ``uint8``, drawn from a snapshot (ADR-0083); ``None`` otherwise."""
+        ``uint8``, drawn from a snapshot; ``None`` otherwise."""
         if self.render_mode is None:
             return None
         return self._a.env.render([0])[0]
@@ -641,18 +639,18 @@ class TesseraAECEnv(AECEnv):
         self.agent_selection = self._acting() or self.agents[0]
 
     def _group_info(self, name: str) -> dict:
-        """An agent's infos at the start of an episode: its policy group
-        (ADR-0079 item 5.2), for a first-party environment."""
+        """An agent's infos at the start of an episode: its policy group,
+        for a first-party environment."""
         slot = self._a.slot_of[name]
         return {"policy_group": self._a.groups[slot]} if self._a.groups else {}
 
     def set_reset_source(self, archive=None, weights=None) -> None:
-        """Archive resets (ADR-0075): forwarded to the wrapped
+        """Archive resets: forwarded to the wrapped
         ``tessera_rl`` environment's ``set_reset_source``."""
         self._a.env.set_reset_source(archive, weights)
 
     def reset_from(self, ids, entries):
-        """Archive resets (ADR-0075): forwarded to the wrapped
+        """Archive resets: forwarded to the wrapped
         ``tessera_rl`` environment's ``reset_from``."""
         return self._a.env.reset_from(ids, entries)
 
@@ -687,7 +685,7 @@ class TesseraAECEnv(AECEnv):
 
     def render(self):
         """With ``render_mode="rgb_array"``, the frame, ``(height, width, 3)``
-        ``uint8``, drawn from a snapshot (ADR-0083); ``None`` otherwise."""
+        ``uint8``, drawn from a snapshot; ``None`` otherwise."""
         if self.render_mode is None:
             return None
         return self._a.env.render([0])[0]
@@ -755,6 +753,6 @@ class _CheckedCycle(parallel_to_aec_wrapper):
 
 
 def turn_masked_env(env_id: str, seed: int | None = None, **kwargs):
-    """The optional turn-masked interface of ADR-0013: no shipped
+    """The optional turn-masked PettingZoo interface: no shipped
     environment declares it, so every request is refused."""
     raise _native.ArgumentError(f"{env_id} does not declare 'turn_masked' (ADR-0013)")

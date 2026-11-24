@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: MIT OR Apache-2.0
-"""The Tessera Viewer (ADR-0083 item 6, ADR-0085): a local web page that
+"""The Tessera Viewer: a local web page that
 steps through a replay file, drawing each instance's scene and showing its
 rewards, flags, masks and observations.
 
@@ -10,7 +10,7 @@ build step and no external requests. This module is not imported by
 :func:`watch` is called.
 
 ``http.server`` is not a production server. The Viewer is a localhost,
-single-user tool, guarded as follows (ADR-0085 item 2):
+single-user tool, guarded as follows:
 
 - bound to ``127.0.0.1`` only;
 - a per-session token (``secrets.token_urlsafe(32)``) is required on every
@@ -29,7 +29,7 @@ single-user tool, guarded as follows (ADR-0085 item 2):
   chose and three fixed static files.
 
 Requests are served on several threads, but every replay and pool operation
-runs under one lock (ADR-0085 item 3), so they serialize on the pool.
+runs under one lock, so they serialize on the pool.
 
 The environment ``env`` is driven by a stepped replay (:func:`tessera_rl.
 replay.steps`) while the Viewer is open: calls that change it raise until
@@ -39,7 +39,7 @@ Endpoints (``GET`` only, all token-checked): ``/meta``; ``/frame?i=&instance=``
 (the scene after call ``i``, zero-based); ``/step?i=&instance=`` (rewards,
 alive, acting, masks and observation leaves after call ``i``).
 
-Live mode (:func:`watch`, ADR-0083 item 7): the same server and guards over a
+Live mode (:func:`watch`): the same server and guards over a
 training ``Env`` instead of a replay. ``/live?instance=`` asks the pool's watch
 for that instance's record, waits at most 2 s for the pool to serve it at a
 batch boundary, and answers ``{"generation", "instance", "prims"}``, drawn
@@ -249,7 +249,7 @@ class _Session:
 
 
 class _LiveSession:
-    """A live watch over a training ``env`` (ADR-0083 item 7); every method
+    """A live watch over a training ``env``; every method
     runs under ``lock``. Records are drawn by a private one-instance shadow
     pool, never by ``env``."""
 
@@ -556,7 +556,7 @@ def show(path, env, *, height: int = 600):
 
 
 def watch(env, *, port: int = 0) -> Viewer:
-    """Serves a live view of the training ``env`` (ADR-0083 item 7) on
+    """Serves a live view of the training ``env`` on
     ``127.0.0.1`` (``port`` 0: a free port), with the guards of
     :func:`serve`. ``env`` must come from :func:`tessera_rl.make` (the
     Viewer builds a one-instance shadow pool of the same id and options to

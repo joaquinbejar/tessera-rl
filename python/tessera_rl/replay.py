@@ -1,11 +1,11 @@
 # SPDX-License-Identifier: MIT OR Apache-2.0
-"""Replay files (ADR-0072 section 9): record the calls on an environment and
+"""Replay files: record the calls on an environment and
 replay them, checking that the replay reproduces the recording.
 
 A replay file is a call log: every ``reset``, ``step`` and ``fork`` while
-recording, with keyframes of the full state and checkpoints of the state hash
-(ADR-0072 sections 1 to 4). It holds full state, so it is privileged like a
-persisted snapshot (ADR-0035): a Leduc file holds hidden cards.
+recording, with keyframes of the full state and checkpoints of the state hash.
+It holds full state, so it is privileged like a
+persisted snapshot: a Leduc file holds hidden cards.
 
 Scope and known gaps:
 
@@ -20,15 +20,15 @@ Scope and known gaps:
   changes how ids are grouped into batches, not their results, and only
   single-id batches let replay wait for any recorded batch.
 - The recording is held in memory until it ends, and replay reads the whole
-  file (ADR-0072 section 8 asks for streaming).
+  file; streaming is planned.
 - :func:`run` replays into an environment the caller built with the same
   ``make`` arguments; rebuilding it from the file is issue #377.
 
 Errors: a divergence raises :class:`ReplayDivergence`. A damaged, truncated,
 foreign or newer file, or one whose environment, config, options or instance
 count differ from ``env``, raises :class:`tessera_rl.PersistError`, as
-``Env.load`` does for a persisted snapshot (the two kinds share the ADR-0011
-header). A pool error raises its usual class.
+``Env.load`` does for a persisted snapshot (the two kinds share the
+persisted header). A pool error raises its usual class.
 """
 
 from __future__ import annotations
@@ -74,7 +74,7 @@ class ReplaySummary:
 
 
 class ReplayDivergence(TesseraError):
-    """The replay differs from the recording (ADR-0072 section 5).
+    """The replay differs from the recording.
 
     ``event_index`` is the event whose check failed; ``kind`` names the check
     (``"checkpoint"``, ``"call_failed"``, ``"keyframe"``, ...); ``instance``
@@ -175,7 +175,7 @@ def run(path, env, *, archive=None) -> ReplaySummary:
     match ``env``. On a divergence ``env`` is left as the replay left it.
 
     ``archive`` is the :class:`tessera_rl.Archive` the file's archive resets
-    came from (ADR-0075), or ``None`` for a file of fresh resets; a file
+    came from, or ``None`` for a file of fresh resets; a file
     that names an archive is refused (``ConfigError``) without it or with
     another one, before anything is replayed.
     """

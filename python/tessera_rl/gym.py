@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: MIT OR Apache-2.0
-"""Gymnasium adapter (SPEC 14.2, ADR-0003): single-agent Tessera pools as a
+"""Gymnasium adapter (SPEC 14.2): single-agent Tessera pools as a
 ``gymnasium.vector.VectorEnv``.
 
 - Outputs are ``owned`` by default (fresh arrays), because code written for
@@ -8,8 +8,8 @@
 - ``autoreset_mode`` is declared in ``metadata`` as Gymnasium 1.x requires.
   In ``SAME_STEP`` mode the final observation of an episode that ended is in
   ``info["final_obs"]`` (an object array, ``None`` elsewhere, with the mask
-  ``info["_final_obs"]``), as ``SyncVectorEnv`` does; it is a step output
-  (ADR-0039), valid only for that step. In ``DISABLED`` mode, reset ended
+  ``info["_final_obs"]``), as ``SyncVectorEnv`` does; it is a step output,
+  valid only for that step. In ``DISABLED`` mode, reset ended
   instances with ``reset(options={"reset_mask": mask})``.
 - Rewards are ``float32`` (the engine's precision); terminations and
   truncations are ``bool``.
@@ -23,8 +23,8 @@
   Gymnasium's ``TimeLimit`` wrapper owns it.
 
 Status: the adapter passes Gymnasium's env checker and the vector API
-tests of this repository, and a nightly reference run (ADR-0018,
-``tools/reference_training.py``, workflow ``reference-training.yml``)
+tests of this repository, and a nightly reference run
+(``tools/reference_training.py``, workflow ``reference-training.yml``)
 trains PPO on ``tessera/CartPole-v1`` through it and gates it against the
 same PPO on Gymnasium's ``CartPole-v1``. That validates this adapter; it
 is not a drop-in compatibility claim for SB3, RLlib or Tianshou.
@@ -81,7 +81,7 @@ _MAKERS = {
     **{env_id: _native.make_rts for env_id in ("tessera/RTS-vsRush-v1", "tessera/RTS-vsProspector-v1", "tessera/RTS-vsRandom-v1")},
 }
 
-#: The registry id of the Gymnasium-only RTS ids (ADR-0080: their
+#: The registry id of the Gymnasium-only RTS ids (their
 #: deprecation is RTS-v1's).
 _REGISTRY_ID = {env_id: "tessera/RTS-v1" for env_id in _MAKERS if env_id.startswith("tessera/RTS-vs")}
 
@@ -174,7 +174,7 @@ def _bounds(values, shape) -> np.ndarray:
 
 
 def _set_masks(layout) -> frozenset[int]:
-    """The indices of the set mask leaves (ADR-0082): the last leaf of each
+    """The indices of the set mask leaves: the last leaf of each
     set in ``layout["sets"]``; host layouts have none."""
     return frozenset(indices[-1] for _, _, indices in layout.get("sets", ()))
 
@@ -336,7 +336,7 @@ class TesseraVectorEnv(VectorEnv):
     # -- Gymnasium API -------------------------------------------------------
 
     def set_reset_source(self, archive=None, weights=None) -> None:
-        """Archive resets (ADR-0075): as ``tessera_rl.Env.set_reset_source``.
+        """Archive resets: as ``tessera_rl.Env.set_reset_source``.
         ``tessera_rl.Archive(vector_env, snapshots)`` builds an archive of
         this environment."""
         from tessera_rl._archive import Archive
@@ -347,7 +347,7 @@ class TesseraVectorEnv(VectorEnv):
         self._native.set_reset_source(None if archive is None else archive._native, weights)
 
     def reset_from(self, ids, entries) -> None:
-        """Resets ``ids`` from archive ``entries`` (ADR-0075); the next
+        """Resets ``ids`` from archive ``entries``; the next
         ``step`` returns their new observations as reset rows."""
         self._native.reset_from([int(i) for i in ids], [int(e) for e in entries])
 
@@ -417,8 +417,8 @@ class TesseraVectorEnv(VectorEnv):
 
     def render(self) -> np.ndarray | None:
         """With ``render_mode="rgb_array"``, the frames of every instance,
-        ``(num_envs, height, width, 3)`` ``uint8``, drawn from snapshots
-        (ADR-0083); ``None`` otherwise."""
+        ``(num_envs, height, width, 3)`` ``uint8``, drawn from snapshots;
+        ``None`` otherwise."""
         if self.render_mode is None:
             return None
         return _render.frames(self._native, list(range(self.num_envs)))
@@ -478,7 +478,7 @@ class TesseraEnv(gymnasium.Env):
 
     def render(self) -> np.ndarray | None:
         """With ``render_mode="rgb_array"``, the frame, ``(height, width, 3)``
-        ``uint8`` (ADR-0083); ``None`` otherwise."""
+        ``uint8``; ``None`` otherwise."""
         frames = self._vec.render()
         return None if frames is None else frames[0]
 
@@ -553,7 +553,7 @@ def make(env_id: str, num_envs: int = 1, seed: int | None = None, **kwargs: Any)
     ``seed=None`` draws the pool seed from OS entropy (see
     ``construction_seed``). ``env_id`` may be a single-agent host
     environment of an installed wheel (SPEC 14.4); its infos carry
-    ``aborted``, ``abort_code`` and ``pending_reset`` (ADR-0065). Options: ``autoreset_mode`` (``AutoresetMode`` or its name, default
+    ``aborted``, ``abort_code`` and ``pending_reset``. Options: ``autoreset_mode`` (``AutoresetMode`` or its name, default
     ``NEXT_STEP``), ``outputs`` (``"owned"`` by default or ``"borrowed"``),
     and the native pool options (``max_episode_steps``, ``chunk_size``,
     ``workers``, ``spin``, first-party environments only).
