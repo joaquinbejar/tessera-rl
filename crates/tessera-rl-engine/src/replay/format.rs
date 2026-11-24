@@ -31,7 +31,20 @@
 //! - `Poisoned`: empty.
 //! - `End` (tag 0): the trailer of ADR-0072 section 2.
 //!
-//! # Host pool files
+//! # Async files
+//!
+//! A first-party file recorded on an `AsyncPool` has flag bit4 (`async`),
+//! and bit1 (`outputs_hash`) optionally. `Step` events hold the sent ids
+//! (a list); `Recv` (tag 8) holds the ids one `recv` returned, as a list in
+//! token order, then `outputs_hash:u64` when bit1 is set (XXH3-64, for each
+//! id in order, of its observation leaves, rewards as `f32` bits, and agent
+//! termination and truncation flags as one byte each). A `recv` that
+//! reported a panicked step is a `Recv` with no ids, then `Poisoned`.
+//! Keyframes and checkpoints sit at quiescent points (no id outstanding),
+//! except the keyframe after a state write, which holds the records written.
+//! The branch counter is always 0. `Recv` is refused in any other file, and
+//! an async file is refused by every replay but `run_async`.
+//!
 //!
 //! A host pool's file has `host_protocol` 1, or 2 exactly for a refusing
 //! host (ADR-0070 item 10). Its shared header fields: tier 2
@@ -93,6 +106,9 @@ pub(crate) const FLAG_CONFIG_CHECKED: u8 = 4;
 /// extension ends with the identity digest, and the file has keyframes and
 /// checkpoints of host records.
 pub(crate) const FLAG_HOST_SNAPSHOTS: u8 = 8;
+/// Header flag (first-party files): recorded on an `AsyncPool`; the file
+/// may hold `Recv` events (tag 8), and the outputs hash (bit1) is allowed.
+pub(crate) const FLAG_ASYNC: u8 = 16;
 
 /// Ids marker: every instance.
 pub(crate) const IDS_ALL: u8 = 0;
@@ -145,7 +161,8 @@ impl EventTag {
         })
     }
 
-    /// Whether the tag is reserved: `Adaptive` and `Recv` always, and
+    /// Whether the tag is reserved: `Adaptive` always, `Recv` outside an
+    /// async file, and
     /// `Rejected` outside a notifying host's file.
     #[must_use]
     pub const fn is_reserved(self) -> bool {

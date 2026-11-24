@@ -144,24 +144,42 @@ impl Replay<'_> {
         M: PersistMask<E>,
         <E::Header as RecordLayout>::Adaptive: AdaptiveValues<E::Config>,
     {
+        if self.header.async_pool {
+            return Err(PersistError::Incompatible {
+                field: "async: use run_async",
+            }
+            .into());
+        }
+        self.check_parts::<E, M>(&pool.cfg, &pool.options, pool.action_heads())
+    }
+
+    /// Checks a first-party pool's config, options and action heads against
+    /// the header.
+    pub(super) fn check_parts<E, M>(
+        &self,
+        cfg: &E::Config,
+        options: &crate::options::PoolOptions,
+        (discrete, continuous): (usize, usize),
+    ) -> Result<(), ReplayError>
+    where
+        E: Persist,
+        E::Config: CanonicalConfig,
+        M: PersistMask<E>,
+    {
         let incompatible = |field: &'static str| -> Result<(), ReplayError> {
             Err(PersistError::Incompatible { field }.into())
         };
         if self.header.host.is_some() {
             return incompatible("host_protocol");
         }
-        self.file.check_against(
-            &identity::<E, M>(&pool.cfg, &pool.options)?,
-            E::TIER,
-            BUILD_ID,
-        )?;
-        if self.header.num_envs != pool.options.num_envs.get() {
+        self.file
+            .check_against(&identity::<E, M>(cfg, options)?, E::TIER, BUILD_ID)?;
+        if self.header.num_envs != options.num_envs.get() {
             return incompatible("instance_count");
         }
-        if self.header.config != canonical_bytes(&pool.cfg).as_slice() {
+        if self.header.config != canonical_bytes(cfg).as_slice() {
             return incompatible("config");
         }
-        let (discrete, continuous) = pool.action_heads();
         let same = |n: u32, m: usize| usize::try_from(n).is_ok_and(|n| n == m);
         if !same(self.header.agents, E::MAX_AGENTS)
             || !same(self.header.discrete_heads, discrete)
@@ -274,6 +292,7 @@ impl Replay<'_> {
                 Ok(())
             }
             Event::Rejected { .. } => Err(malformed("a Rejected event in a first-party file")),
+            Event::Recv { .. } => Err(malformed("a Recv event outside an async file")),
             Event::Poisoned => match st.last_call {
                 Some(call) => Err(st.diverged(call, DivergenceKind::NotPoisoned, None)),
                 None => Err(malformed("Poisoned before any call")),
@@ -339,7 +358,7 @@ impl Replay<'_> {
     }
 
     /// Decodes a keyframe's untrusted records; the import validates them.
-    fn decode_records<E: Persist>(
+    pub(super) fn decode_records<E: Persist>(
         &self,
         index: u64,
         bytes: &[u8],

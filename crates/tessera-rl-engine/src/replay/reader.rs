@@ -16,9 +16,9 @@ use crate::persist::{DecodeLimits, FileHeader, PersistError, Reader, u64_of};
 
 use super::ReplayError;
 use super::format::{
-    Body, END_BODY_LEN, EventTag, FLAG_CONFIG_CHECKED, FLAG_FROM_RESET_ONLY, FLAG_HOST_SNAPSHOTS,
-    FLAG_OUTPUTS_HASH, FORMAT_VERSION, FRAME_LEN, IDS_ALL, IDS_LIST, MAX_CONFIG_BYTES,
-    REPLAY_MAGIC, StateWriteOp,
+    Body, END_BODY_LEN, EventTag, FLAG_ASYNC, FLAG_CONFIG_CHECKED, FLAG_FROM_RESET_ONLY,
+    FLAG_HOST_SNAPSHOTS, FLAG_OUTPUTS_HASH, FORMAT_VERSION, FRAME_LEN, IDS_ALL, IDS_LIST,
+    MAX_CONFIG_BYTES, REPLAY_MAGIC, StateWriteOp,
 };
 
 /// The instances an event touches.
@@ -120,6 +120,14 @@ pub enum Event<'a> {
         /// One hash per id.
         hashes: Vec<StateHash>,
     },
+    /// An Async `recv`: the ids it returned, in order, and the outputs
+    /// hash of those ids when the file carries one.
+    Recv {
+        /// The received ids, in the order the token lists them.
+        ids: Vec<u32>,
+        /// The outputs hash of the ids, in that order.
+        outputs_hash: Option<u64>,
+    },
     /// The preceding call poisoned the pool.
     Poisoned,
 }
@@ -199,6 +207,11 @@ pub struct ReplayHeader<'a> {
     pub continuous_heads: u32,
     /// `Some` for a host pool's file.
     pub host: Option<HostInfo>,
+    /// Recorded on an `AsyncPool` (flag bit4): the file may hold `Recv`
+    /// events and replays only with `Replay::run_async`.
+    pub async_pool: bool,
+    /// `Reset`, `Step` and `Recv` events carry an outputs hash (flag bit1).
+    pub outputs_hash: bool,
 }
 
 /// An opened replay file: header, framing and trailer checked.
@@ -314,8 +327,10 @@ impl<'a> Replay<'a> {
             discrete_heads,
             continuous_heads,
             host,
+            async_pool: flags & FLAG_ASYNC != 0,
+            outputs_hash: flags & FLAG_OUTPUTS_HASH != 0,
         };
-        let (events, event_count) = scan(r.0, host)?;
+        let (events, event_count) = scan(r.0, host, header.async_pool)?;
         Ok(Self {
             file,
             header,
@@ -347,6 +362,7 @@ impl<'a> Replay<'a> {
             num_envs: self.header.num_envs,
             record_len: self.header.record_len,
             host: self.header.host,
+            hashes: self.header.outputs_hash,
             input_len: self.input_len,
             limits: self.limits,
         }
@@ -363,8 +379,11 @@ fn check_replay_fields(
     let invalid = |field: &'static str| -> Result<Option<HostInfo>, ReplayError> {
         Err(PersistError::InvalidField { field }.into())
     };
-    let known =
-        FLAG_FROM_RESET_ONLY | FLAG_OUTPUTS_HASH | FLAG_CONFIG_CHECKED | FLAG_HOST_SNAPSHOTS;
+    let known = FLAG_FROM_RESET_ONLY
+        | FLAG_OUTPUTS_HASH
+        | FLAG_CONFIG_CHECKED
+        | FLAG_HOST_SNAPSHOTS
+        | FLAG_ASYNC;
     if flags & !known != 0 {
         return invalid("flags");
     }
@@ -384,12 +403,17 @@ fn check_replay_fields(
                 feature: "from_reset_only first-party replay files",
             });
         }
-        if flags & FLAG_OUTPUTS_HASH != 0 {
+        // The outputs hash is optional in an async file (its `Recv` events),
+        // and not supported in a synchronous first-party file.
+        if flags & FLAG_OUTPUTS_HASH != 0 && flags & FLAG_ASYNC == 0 {
             return Err(ReplayError::Unsupported {
                 feature: "outputs hashes in first-party replay files",
             });
         }
         return Ok(None);
+    }
+    if flags & FLAG_ASYNC != 0 {
+        return invalid("flags: async host files");
     }
     if host_protocol > 2 {
         return invalid("host_protocol");
@@ -430,7 +454,11 @@ fn check_replay_fields(
 
 /// Checks every frame, tag and the trailer; returns the event bytes before
 /// the end event and their count. Allocates nothing.
-fn scan(bytes: &[u8], host: Option<HostInfo>) -> Result<(&[u8], u64), ReplayError> {
+fn scan(
+    bytes: &[u8],
+    host: Option<HostInfo>,
+    async_pool: bool,
+) -> Result<(&[u8], u64), ReplayError> {
     let mut rest = bytes;
     let mut count: u64 = 0;
     loop {
@@ -441,7 +469,7 @@ fn scan(bytes: &[u8], host: Option<HostInfo>) -> Result<(&[u8], u64), ReplayErro
             <[u8; FRAME_LEN]>::try_from(frame).map_err(|_| ReplayError::MissingEnd)?;
         let len = u32::from_le_bytes([l0, l1, l2, l3]);
         let tag = EventTag::from_u8(tag).ok_or(ReplayError::UnknownTag { tag })?;
-        check_tag(tag, host, count)?;
+        check_tag(tag, host, async_pool, count)?;
         let body_len = usize::try_from(len).map_err(|_| PersistError::Truncated)?;
         let (body, after) = tail
             .split_at_checked(body_len)
@@ -480,13 +508,19 @@ fn scan(bytes: &[u8], host: Option<HostInfo>) -> Result<(&[u8], u64), ReplayErro
     }
 }
 
-/// Which tags a file may hold: reserved tags never; `Rejected` only in a
-/// notifying host's file; keyframes, checkpoints and state writes never in a
+/// Which tags a file may hold: `Adaptive` never; `Recv` only in an async
+/// file; `Rejected` only in a notifying host's file; keyframes, checkpoints and state writes never in a
 /// `from_reset_only` host file. The first event is a keyframe, or a reset for
 /// a `from_reset_only` file.
-fn check_tag(tag: EventTag, host: Option<HostInfo>, count: u64) -> Result<(), ReplayError> {
+fn check_tag(
+    tag: EventTag,
+    host: Option<HostInfo>,
+    async_pool: bool,
+    count: u64,
+) -> Result<(), ReplayError> {
     let notifies = host.is_some_and(|h| h.notifies);
-    if tag.is_reserved() && !(tag == EventTag::Rejected && notifies) {
+    let allowed = (tag == EventTag::Rejected && notifies) || (tag == EventTag::Recv && async_pool);
+    if tag.is_reserved() && !allowed {
         return Err(ReplayError::ReservedTag { tag: tag as u8 });
     }
     let from_reset = host.is_some_and(|h| h.identity().is_none());
@@ -522,6 +556,7 @@ pub struct Events<'a> {
     num_envs: u32,
     record_len: u32,
     host: Option<HostInfo>,
+    hashes: bool,
     input_len: u64,
     limits: DecodeLimits,
 }
@@ -566,7 +601,7 @@ impl<'a> Events<'a> {
             EventTag::Reset => {
                 let ids = self.ids(&mut b)?;
                 let reseed = reseed(&mut b)?;
-                let outputs_hash = self.outputs_hash(&mut b)?;
+                let outputs_hash = self.call_hash(&mut b)?;
                 Event::Reset {
                     ids,
                     reseed,
@@ -576,7 +611,7 @@ impl<'a> Events<'a> {
             EventTag::Step => {
                 let ids = self.ids(&mut b)?;
                 let (discrete, continuous_bits) = joint_action(&mut b)?;
-                let outputs_hash = self.outputs_hash(&mut b)?;
+                let outputs_hash = self.call_hash(&mut b)?;
                 let refusals = if self.host.is_some_and(|h| h.refuses) {
                     self.refusals(&mut b)?
                 } else {
@@ -632,7 +667,15 @@ impl<'a> Events<'a> {
                 Event::Checkpoint { ids, hashes }
             }
             EventTag::Poisoned => Event::Poisoned,
-            EventTag::End | EventTag::Adaptive | EventTag::Recv => {
+            EventTag::Recv => {
+                let ids = self.ids(&mut b)?;
+                let Ids::List(ids) = ids else {
+                    return Err(b.malformed("recv ids"));
+                };
+                let outputs_hash = self.outputs_hash(&mut b)?;
+                Event::Recv { ids, outputs_hash }
+            }
+            EventTag::End | EventTag::Adaptive => {
                 return Err(ReplayError::ReservedTag { tag: tag as u8 });
             }
         };
@@ -706,8 +749,19 @@ impl<'a> Events<'a> {
         Ok(hashes)
     }
 
+    /// The outputs hash of a `Reset` or `Step`: present in a host file with
+    /// the flag. An async file hashes only its `Recv` events, which receive
+    /// the outputs; a send or a reset returns none.
+    fn call_hash(&self, b: &mut Body<'_>) -> Result<Option<u64>, ReplayError> {
+        if self.host.is_some() {
+            self.outputs_hash(b)
+        } else {
+            Ok(None)
+        }
+    }
+
     fn outputs_hash(&self, b: &mut Body<'_>) -> Result<Option<u64>, ReplayError> {
-        if self.host.is_some_and(|h| h.outputs_hash) {
+        if self.hashes {
             Ok(Some(b.u64("outputs hash")?))
         } else {
             Ok(None)
