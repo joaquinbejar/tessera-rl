@@ -1937,7 +1937,8 @@ pub(crate) struct JobShopFields {
     pub(crate) max_duration: Option<u32>,
 }
 
-/// A job shop pool (`tessera/JobShop-v1`), with masks.
+/// A job shop pool (`tessera/JobShop-v1`), with masks; heuristic slots
+/// run the SPT `Heuristic`.
 pub(crate) fn jobshop(
     args: &PoolArgs,
     fields: &JobShopFields,
@@ -1951,6 +1952,7 @@ pub(crate) fn jobshop(
     let (options, n) = options(args)?;
     let same_step = options.auto_reset == AutoReset::SameStep;
     let pool = EnvPool::<JobShop, Masked>::with_masks(cfg.clone(), options)?;
+    let pool = crate::policy::perfect(pool, args)?;
     finish(&cfg, pool, args, n, same_step)
 }
 
@@ -1965,7 +1967,7 @@ pub(crate) struct VrpFields {
 }
 
 /// A vehicle routing pool (`tessera/Vrp-v1`), with masks and Sequential
-/// turns.
+/// turns; heuristic slots run the nearest-neighbour `Heuristic`.
 pub(crate) fn vrp(args: &PoolArgs, fields: &VrpFields) -> Result<Box<dyn PoolOps>, BindError> {
     let d = VrpConfig::default();
     let cfg = VrpConfig {
@@ -1978,6 +1980,7 @@ pub(crate) fn vrp(args: &PoolArgs, fields: &VrpFields) -> Result<Box<dyn PoolOps
     let (options, n) = options(args)?;
     let same_step = options.auto_reset == AutoReset::SameStep;
     let pool = EnvPool::<Vrp, Masked>::with_masks(cfg.clone(), options)?;
+    let pool = crate::policy::perfect(pool, args)?;
     finish(&cfg, pool, args, n, same_step)
 }
 
