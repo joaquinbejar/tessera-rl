@@ -49,17 +49,19 @@
     "env": "tessera/Acrobot-v1",
     "total_steps": 150000,
     "eval_episodes": 20,
-    "fingerprint": "42e4694c51dfa4347b18e43932aa3449c58026da386005cad9c5ae609448b6a7"
+    "fingerprint": "2667edaa88f6a70a1e4796d646273f3edf9066e8b728d14abf29e91e5dabb7ba"
   },
   "environment": {
-    "git": "a09f3d3116d472ee323c46c309ca2d819cd81d2f",
+    "git": "c2dd5293e5e912200f94d8445d76f7db55d67515",
     "git_dirty": false,
     "python": "3.11.18",
-    "os": "Linux-7.0.0-43-generic-x86_64-with-glibc2.43",
+    "os": "Linux-7.0.0-38-generic-x86_64-with-glibc2.43",
     "arch": "x86_64",
-    "cpu": "12th Gen Intel(R) Core(TM) i7-12650H",
+    "cpu": "12th Gen Intel(R) Core(TM) i7-12700H",
     "image": "self-hosted Linux x86-64 runner, uv-managed CPython 3.11.18 (no container)",
     "tessera_rl": "0.3.0",
+    "torch_threads": 1,
+    "omp_num_threads": "1",
     "gymnasium": "1.4.0",
     "torch": "2.15.0+cpu",
     "numpy": "2.4.6"
@@ -234,5 +236,6 @@
       415.45
     ],
     "random_mean": -500.0
-  }
+  },
+  "non_learning_seeds": 1
 }

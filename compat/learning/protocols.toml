@@ -1,0 +1,64 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+#
+# Learning protocols (SPEC 16.1, 18; tools/learning_protocols.py, #370). One
+# table per environment: its id, tier, the adapter path a run goes through,
+# hyperparameters overriding reference_training.Hyper (CleanRL's discrete PPO
+# defaults), and the calibration budget. A protocol's calibration fingerprint
+# covers only its own table, so editing one protocol invalidates only its own
+# calibration (a reviewed re-calibration, like a gungraun re-bless).
+#
+# Learning thresholds are host-specific. Single-threaded training is
+# deterministic on one machine, but the same protocol and seeds give
+# different scores on different CPUs (torch CPU kernels differ):
+# - Acrobot's threshold at 150k steps was -295.3 on one Intel host and
+#   -348.75 on an AMD host.
+# So a committed calibration is made on the nightly host itself; a
+# calibration from any other machine is a pilot, never committed. A
+# calibration records the CPU, and the torch and OpenMP thread settings, it
+# ran with.
+#
+# Protocols without a calibration have no nightly gate yet (the owner's
+# rule: an environment that does not learn at an affordable budget ships its
+# protocol without one). At 150k steps:
+# - MountainCar scores -200, the same as a random policy (sparse reward).
+# - Grid scores -0.9 on every seed against -1.0 for random: 1 goal in 20
+#   evaluation episodes. It passes the numeric learns check, but that is not
+#   learning to reach the goal.
+# - BrickWall scores 0.0 against 0.7 for random (an MLP on pixels).
+# A larger budget, other hyperparameters or a CNN would be a later protocol
+# change.
+
+[cartpole]
+env = "tessera/CartPole-v1"
+tier = "T1"
+adapter = "tessera_rl.gym (SAME_STEP)"
+total_steps = 150000
+hyper = {}
+
+[acrobot]
+env = "tessera/Acrobot-v1"
+tier = "T1"
+adapter = "tessera_rl.gym (SAME_STEP)"
+total_steps = 150000
+hyper = {}
+
+[mountaincar]
+env = "tessera/MountainCar-v1"
+tier = "T1"
+adapter = "tessera_rl.gym (SAME_STEP)"
+total_steps = 150000
+hyper = {}
+
+[grid]
+env = "tessera/Grid-v1"
+tier = "T1"
+adapter = "tessera_rl.gym (SAME_STEP)"
+total_steps = 150000
+hyper = {}
+
+[brickwall]
+env = "tessera/BrickWall-v1"
+tier = "T1"
+adapter = "tessera_rl.gym (SAME_STEP)"
+total_steps = 150000
+hyper = {}

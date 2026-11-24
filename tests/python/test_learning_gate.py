@@ -378,3 +378,54 @@ def test_learning_every_calibration_is_valid_and_learns_and_runs_nightly():
         if name != "cartpole":
             assert cal["learns"]["learns"] is True, name
         assert f"- env: {name}" in workflow, f"{name} has a calibration but no nightly job"
+
+
+def test_learning_protocol_factories_are_restored_after_a_failing_run():
+    """A run that raises inside the trainer still puts the factories back."""
+    pytest = __import__("pytest")
+    pytest.importorskip("torch")
+    import learning_protocols as lp
+    import reference_training as rt
+
+    before = (rt.make_vector, rt.make_single)
+    with pytest.raises(ValueError):
+        lp.train("acrobot", 1, 1, 1)  # less than one rollout: rt.train refuses
+    assert (rt.make_vector, rt.make_single) == before
+
+
+def test_learning_protocols_file_matches_the_module_table():
+    import tomllib
+
+    import learning_protocols as lp
+
+    assert lp.PROTOCOLS == tomllib.loads(lp.PROTOCOLS_FILE.read_text())
+    assert lp.protocol("cartpole")["env"] == "tessera/CartPole-v1"
+
+
+def test_learning_flattened_protocols_train_on_dict_and_image_observations():
+    """Grid (a Dict observation) and BrickWall (an image) reach the MLP
+    flattened, final observations included; 1-D boxes are left alone."""
+    pytest = __import__("pytest")
+    pytest.importorskip("torch")
+    import gymnasium
+
+    import learning_protocols as lp
+
+    assert not lp._needs_flat(gymnasium.spaces.Box(-1, 1, (4,)))
+    assert lp._needs_flat(gymnasium.spaces.Box(0, 255, (1, 84, 84)))
+    assert lp._needs_flat(gymnasium.spaces.Dict({"a": gymnasium.spaces.Discrete(3)}))
+    for name in ("grid", "brickwall"):
+        r = lp.train(name, 1, 512, 1)
+        assert len(r["eval_returns"]) == 1, name
+
+
+def test_learning_acrobot_fingerprint_matches_its_calibration():
+    """Acrobot's protocol entry, the trainer sources and the pinned
+    libraries are still the ones its calibration recorded."""
+    pytest = __import__("pytest")
+    pytest.importorskip("torch")
+    import learning_protocols as lp
+
+    cal = json.loads((pathlib.Path(__file__).resolve().parents[2] / "compat" / "learning" / "acrobot.json").read_text())
+    assert lp.fingerprint("acrobot") == cal["setup"]["fingerprint"]
+    assert cal["environment"]["torch_threads"] == 1 and cal["environment"]["omp_num_threads"] == "1"
