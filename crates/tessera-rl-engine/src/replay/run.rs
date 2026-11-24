@@ -54,16 +54,23 @@ pub struct ReplaySummary {
     /// The keyframe a seek started from ([`Replay::seek`]); `None` for a
     /// replay that started at the beginning of the file.
     pub started_at: Option<u64>,
+    /// Async replay only: events skipped because the replay observed a
+    /// panic before the file recorded it (worker timing); the file's
+    /// `Poisoned` was then reached and the panic reproduced, but these events
+    /// were not checked. 0 for every other replay.
+    pub unchecked_before_poison: u64,
 }
 
 impl ReplaySummary {
     /// Whether the whole file was replayed and passed every check. A
     /// stopped replay never reads as verified (the events after
     /// `stopped_at` were not checked), nor does one that started from a
-    /// seek (the events before `started_at` were not replayed).
+    /// seek (the events before `started_at` were not replayed), nor one
+    /// that skipped events before a panic it observed early
+    /// (`unchecked_before_poison`).
     #[must_use]
     pub const fn verified(&self) -> bool {
-        self.stopped_at.is_none() && self.started_at.is_none()
+        self.stopped_at.is_none() && self.started_at.is_none() && self.unchecked_before_poison == 0
     }
 }
 

@@ -347,3 +347,256 @@ fn test_replay_async_truncated_file_reports_unclaimed_ids() {
         .unwrap();
     assert_eq!(summary.unclaimed, Vec::<u32>::new());
 }
+
+/// An environment whose step reads its action: 0 counts, 1 panics, 2 waits
+/// until [`RELEASE`] is set and then counts. The switches are statics read
+/// only by this environment (never by [`Counter`]).
+mod gate {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    use tessera_rl_core::io::{Actions, ObsWriter};
+    use tessera_rl_core::space::Space;
+    use tessera_rl_core::{
+        AgentSlot, EnvState, Environment, InvariantViolation, NoAdaptive, ObsLeaf, Observation,
+        Persist, RecordHeader, SpaceError, StepOut, Tier, Validate,
+    };
+    use tessera_rl_macros::{EnvConfig, EnvState, Observation};
+    use tessera_rl_num::rng::{ObsRng, StepRng};
+
+    /// Whether a waiting step may finish.
+    pub static RELEASE: AtomicBool = AtomicBool::new(true);
+
+    #[derive(EnvState, Debug, Clone, Copy, PartialEq, Default)]
+    #[repr(C)]
+    pub struct GateState {
+        pub steps: u32,
+    }
+
+    #[derive(EnvConfig, Debug, Clone)]
+    pub struct GateConfig {
+        #[config(default = 1, range = 1..=2)]
+        pub unused: u32,
+    }
+
+    #[derive(Observation)]
+    pub struct GateObs {
+        #[space(box(low = 0, high = 1_000_000, shape = [1]))]
+        pub steps: ObsLeaf<i32>,
+    }
+
+    pub struct Gate;
+
+    impl Environment for Gate {
+        type State = GateState;
+        type Config = GateConfig;
+        type Obs = GateObs;
+        type Action = ();
+        type Header = RecordHeader<1, NoAdaptive>;
+
+        const MAX_AGENTS: usize = 1;
+        const TIER: Tier = Tier::CrossPlatform;
+
+        fn observation_space(cfg: &GateConfig) -> Result<Space, SpaceError> {
+            GateObs::space(cfg)
+        }
+
+        fn action_space(_: &GateConfig) -> Result<Space, SpaceError> {
+            Ok(Space::Discrete { n: 3 })
+        }
+
+        fn reset(_: &GateConfig, _: &mut StepRng, state: &mut GateState) {
+            state.steps = 0;
+        }
+
+        fn step(
+            _: &GateConfig,
+            state: &mut GateState,
+            actions: &Actions<'_, ()>,
+            _: &mut StepRng,
+            _: &mut StepOut<'_>,
+        ) {
+            match actions.discrete(AgentSlot::FIRST, 0).unwrap_or(0) {
+                1 => std::panic::resume_unwind(Box::new("injected gate panic")),
+                2 => {
+                    while !RELEASE.load(Ordering::Acquire) {
+                        std::thread::yield_now();
+                    }
+                }
+                _ => {}
+            }
+            state.steps += 1;
+        }
+
+        fn observe(
+            _: &GateConfig,
+            state: &GateState,
+            _: AgentSlot,
+            _: &mut ObsRng,
+            out: &mut ObsWriter<'_, '_, GateObs>,
+        ) {
+            if let Some(mut leaf) = out.leaf_mut(GateObs::STEPS) {
+                leaf.set(0, i32::try_from(state.steps).unwrap_or(i32::MAX));
+            }
+        }
+    }
+
+    impl Validate for Gate {
+        fn validate(_: &GateConfig, _: &GateState) -> Result<(), InvariantViolation> {
+            Ok(())
+        }
+    }
+
+    impl Persist for Gate {
+        const ENV_ID: &'static str = "tessera/Gate-v1";
+        const ENV_VERSION: u32 = 1;
+    }
+
+    const _: fn() = || {
+        fn is_state<S: EnvState>() {}
+        is_state::<GateState>();
+    };
+}
+
+type GatePool = AsyncPool<gate::Gate, tessera_rl_engine::NoMasks>;
+
+/// Serializes the tests that move [`gate::RELEASE`].
+static GATE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn gate_pool() -> GatePool {
+    let options = PoolOptions {
+        chunk_size: NonZeroU32::new(1).unwrap(),
+        ..PoolOptions::new(NonZeroU32::new(2).unwrap(), Seed::new(5))
+    };
+    EnvPool::new(gate::GateConfig::default(), options)
+        .unwrap()
+        .async_mode(AsyncOptions::new(
+            NonZeroUsize::new(2).unwrap(),
+            NonZeroUsize::new(1).unwrap(),
+        ))
+        .unwrap()
+}
+
+fn gate_send(
+    rec: &mut AsyncRecorder<'_, gate::Gate, tessera_rl_engine::NoMasks, Vec<u8>>,
+    id: u32,
+    action: i32,
+) {
+    rec.send(
+        &[id],
+        ActionInput {
+            discrete: &[action],
+            continuous: &[],
+        },
+    )
+    .unwrap();
+}
+
+/// Records `Send 0 (wait)`, `Recv [0]`, (with `write`: a restore of id 0,
+/// its `StateWrite`, `Keyframe` and `Recv [0]`), `Send 1 (panic)`, `Recv []`,
+/// `Poisoned` with the gate open, then moves `Send 1` before `Recv [0]`: the
+/// order a recording gets when id 1 panics after the recorded `recv`
+/// returned id 0. Without `poisoned`, the file ends before its `Recv []`.
+fn early_poison_file(write: bool, poisoned: bool) -> Vec<u8> {
+    gate::RELEASE.store(true, std::sync::atomic::Ordering::Release);
+    let mut p = gate_pool();
+    let mut rec = AsyncRecorder::new(&mut p, Vec::new(), options(1024, false)).unwrap();
+    drop(rec.reset_all(Reseed::Keep).unwrap());
+    gate_send(&mut rec, 0, 2);
+    assert_eq!(rec.recv().unwrap().ids().collect::<Vec<_>>(), vec![0]);
+    if write {
+        let saved = rec.snapshot(0).unwrap();
+        rec.restore(&[0], &[saved]).unwrap();
+        // A restored id comes back through a `recv`.
+        assert_eq!(rec.recv().unwrap().ids().collect::<Vec<_>>(), vec![0]);
+    }
+    gate_send(&mut rec, 1, 1);
+    assert!(rec.recv().is_err());
+    let bytes = rec.finish().unwrap();
+    let fr = frames(&bytes);
+    let tag = |t: EventTag| t as u8;
+    let recv0 = fr.iter().position(|f| f.1 == tag(EventTag::Recv)).unwrap();
+    let send1 = fr.iter().rposition(|f| f.1 == tag(EventTag::Step)).unwrap();
+    assert_eq!(fr[send1 + 1].1, tag(EventTag::Recv));
+    assert_eq!(fr[send1 + 2].1, tag(EventTag::Poisoned));
+    assert_eq!(
+        fr[recv0 + 1..send1]
+            .iter()
+            .any(|f| f.1 == tag(EventTag::StateWrite)),
+        write
+    );
+    let end = fr.last().unwrap().0;
+    let kept = if poisoned { end } else { fr[send1 + 1].0 };
+    let mut file = bytes[..fr[recv0].0].to_vec();
+    file.extend_from_slice(&bytes[fr[send1].0..fr[send1 + 1].0]);
+    file.extend_from_slice(&bytes[fr[recv0].0..fr[send1].0]);
+    file.extend_from_slice(&bytes[fr[send1 + 1].0..kept]);
+    let count = u64::try_from(fr.iter().take_while(|f| f.0 < kept).count()).unwrap();
+    file.push(0);
+    file.extend_from_slice(&16u32.to_le_bytes());
+    file.extend_from_slice(&count.to_le_bytes());
+    file.extend_from_slice(&0u64.to_le_bytes());
+    reseal(&mut file);
+    file
+}
+
+/// Replays `file` with id 0's step held until the replay returns, so its
+/// `Recv [0]` observes id 1's panic first, every time.
+fn replay_early(file: &[u8]) -> Result<tessera_rl_engine::replay::ReplaySummary, ReplayError> {
+    gate::RELEASE.store(false, std::sync::atomic::Ordering::Release);
+    let mut p = gate_pool();
+    let result = Replay::open(file, LIMITS).unwrap().run_async(&mut p);
+    gate::RELEASE.store(true, std::sync::atomic::Ordering::Release);
+    drop(p);
+    result
+}
+
+#[test]
+fn test_replay_async_panic_observed_early_skips_to_the_recorded_poison_unverified() {
+    let _lock = GATE_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let file = early_poison_file(false, true);
+    let summary = replay_early(&file).unwrap();
+    assert!(summary.poisoned);
+    // Recv [] is the one event skipped before the recorded Poisoned.
+    assert_eq!(summary.unchecked_before_poison, 1);
+    assert!(!summary.verified());
+}
+
+#[test]
+fn test_replay_async_panic_observed_early_without_a_recorded_poison_is_unexpected() {
+    let _lock = GATE_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let file = early_poison_file(false, false);
+    let err = replay_early(&file).unwrap_err();
+    assert!(
+        matches!(
+            err,
+            ReplayError::Diverged {
+                kind: DivergenceKind::UnexpectedPoison,
+                ..
+            }
+        ),
+        "{err:?}"
+    );
+}
+
+#[test]
+fn test_replay_async_panic_observed_early_does_not_skip_a_state_write() {
+    let _lock = GATE_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let file = early_poison_file(true, true);
+    let err = replay_early(&file).unwrap_err();
+    assert!(
+        matches!(
+            err,
+            ReplayError::Diverged {
+                kind: DivergenceKind::UnexpectedPoison,
+                ..
+            }
+        ),
+        "{err:?}"
+    );
+}
