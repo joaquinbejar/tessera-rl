@@ -27,6 +27,7 @@ mod support;
 
 use proptest::prelude::*;
 use support::{Rng, agent_limits, config, input, legal_actions, pool};
+use tessera_rl_core::Reserved;
 use tessera_rl_core::encoding::encode_to_vec;
 use tessera_rl_core::io::ActionWriter;
 use tessera_rl_core::{AgentSlot, Determinize, ImperfectInformation, Validate};
@@ -34,7 +35,6 @@ use tessera_rl_engine::Reseed;
 use tessera_rl_markets::actions::HEADS;
 use tessera_rl_markets::book::Level;
 use tessera_rl_markets::limits::MAX_AGENTS;
-use tessera_rl_core::Reserved;
 use tessera_rl_markets::{
     Baseline, Book, LimitOrderBook, LobConfig, LobState, Order, Pending, Side, act_info,
 };
@@ -66,7 +66,8 @@ fn perturbed(cfg: &LobConfig, s: &LobState, me: usize) -> Option<LobState> {
     let mut t = *s;
     // Other agents' orders: all owned by one other agent (owners and
     // grouping change; prices, sizes and ids stay).
-    t.book.set_owners(|o| if o.owner == me8 { me8 } else { other8 });
+    t.book
+        .set_owners(|o| if o.owner == me8 { me8 } else { other8 });
     // Another agent's queued item.
     let ready = t.step + 1;
     let _ = t

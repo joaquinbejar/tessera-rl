@@ -144,9 +144,10 @@ const _: () = assert!(size_of::<LobInfo>() == 776);
 /// The visible levels of `side`, `[price, lots]`, best first.
 fn visible(state: &LobState, side: Side, depth: usize) -> [[u32; 2]; MAX_DEPTH] {
     let mut levels = [Level::default(); MAX_DEPTH];
-    let n = state
-        .book
-        .levels(side, levels.get_mut(..depth.min(MAX_DEPTH)).unwrap_or(&mut []));
+    let n = state.book.levels(
+        side,
+        levels.get_mut(..depth.min(MAX_DEPTH)).unwrap_or(&mut []),
+    );
     let mut out = [[0; 2]; MAX_DEPTH];
     for (o, l) in out.iter_mut().zip(levels.iter().take(n)) {
         *o = [l.price, l.lots];
@@ -379,7 +380,12 @@ fn build(
             let j = others
                 .iter()
                 .copied()
-                .filter(|&j| built.loads.get(j).is_some_and(|l| l.orders < MAX_OPEN && room(l) > 0))
+                .filter(|&j| {
+                    built
+                        .loads
+                        .get(j)
+                        .is_some_and(|l| l.orders < MAX_OPEN && room(l) > 0)
+                })
                 .max_by_key(|&j| (built.loads.get(j).map_or(0, room), core::cmp::Reverse(j)))?;
             let load = built.loads.get_mut(j)?;
             let take = left.min(room(load)).min(u64::from(MAX_LOT));
@@ -421,9 +427,7 @@ fn construct(cfg: &LobConfig, info: &LobInfo, others: &[usize], rng: &mut StepRn
     }
     let order = order.get_mut(..n).unwrap_or(&mut []);
     // Largest level first.
-    order.sort_unstable_by_key(|&i| {
-        (core::cmp::Reverse(levels.get(i).map_or(0, |l| l.2)), i)
-    });
+    order.sort_unstable_by_key(|&i| (core::cmp::Reverse(levels.get(i).map_or(0, |l| l.2)), i));
     let cap = 2 * u64::from(cfg.max_position);
     let limit = BOOK_CAP - usize::from(info.own_count);
     if let Some(b) = build(levels, order, others, cap, limit) {

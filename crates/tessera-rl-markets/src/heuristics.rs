@@ -50,7 +50,6 @@ pub const NOISE_TRIES: usize = 8;
 /// The mid move that triggers the momentum trader, in ticks.
 pub const MOMENTUM_TICKS: i64 = 2;
 
-
 /// One of the scripted baselines.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Baseline {
