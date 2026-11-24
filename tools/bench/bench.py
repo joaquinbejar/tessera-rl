@@ -31,6 +31,7 @@ Usage::
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import os
 import pathlib
@@ -98,10 +99,30 @@ def lcg_plan(rows: int, choices: int, batches: int = ACTION_BATCHES) -> np.ndarr
     return plan
 
 
-def fingerprint(plan: np.ndarray) -> str:
-    """FNV-1a over the little-endian int32 bytes, as the runner computes it."""
+def lcg_continuous(rows: int, bounds: list[tuple[float, float]], batches: int = ACTION_BATCHES) -> np.ndarray:
+    """The runner's continuous plan: batch ``b`` is ``rows`` rows of one
+    value per head, uniform within the head's bounds, from the LCG seeded
+    with ``b ^ 0x9E3779B97F4A7C15``; computed in f64, rounded to f32."""
+    mask = (1 << 64) - 1
+    heads = len(bounds)
+    plan = np.empty((batches, rows * heads), dtype=np.float32)
+    for b in range(batches):
+        state = b ^ 0x9E3779B97F4A7C15
+        for i in range(rows * heads):
+            state = (state * 6364136223846793005 + 1442695040888963407) & mask
+            low, high = bounds[i % heads]
+            plan[b, i] = np.float32(low + ((state >> 33) / float(1 << 31)) * (high - low))
+    return plan
+
+
+def fingerprint(plan: np.ndarray, continuous: np.ndarray | None = None) -> str:
+    """FNV-1a over the little-endian int32 bytes, then the float32 bytes of
+    the continuous plan if any, as the runner computes it."""
     h = 0xCBF29CE484222325
-    for byte in plan.astype("<i4").tobytes():
+    data = plan.astype("<i4").tobytes()
+    if continuous is not None:
+        data += continuous.astype("<f4").tobytes()
+    for byte in data:
         h = ((h ^ byte) * 0x100000001B3) & ((1 << 64) - 1)
     return f"{h:016x}"
 
@@ -239,44 +260,82 @@ def run_rust(runner: pathlib.Path, cfg: dict, method: dict, pin: dict) -> dict:
     else:
         raise ValueError(f"unknown metric {metric!r}")
     args += ["--max-episode-steps", str(_limit(cfg, method))]
+    if cfg.get("legal_actions"):
+        args.append("--legal-actions")
     cpus = _cpus_for(cfg, pin)
     if cpus and cfg.get("workers", 0) > 0:
         args += ["--cpus", ",".join(str(c) for c in cpus)]
     proc = subprocess.run([*_prefix(pin, cpus), str(runner), *args], capture_output=True, text=True, check=True)
     raw = json.loads(proc.stdout)
     stats = {k: summarize(v, method["bootstrap_resamples"], method["bootstrap_seed"]) for k, v in raw.items() if isinstance(v, list)}
-    # The runner shares this host; its CPU model is the harness's.
-    return {**{k: v for k, v in raw.items() if not isinstance(v, list)}, **stats, "cpu": _cpu_model()}
+    # The runner shares this host; its CPU model is the harness's. The
+    # action policy is marked on every row: legal-action rows step a
+    # different plan from the shared one (R-PR371).
+    policy = "legal_actions" if cfg.get("legal_actions") else "planned"
+    return {**{k: v for k, v in raw.items() if not isinstance(v, list)}, **stats, "cpu": _cpu_model(), "action_policy": policy}
+
+
+# Environments with a Python head-to-head: the Tessera id, the EnvPool id
+# (same dynamics, SPEC 19.2) and the action head: discrete choices, or the
+# bounds of each continuous head.
+PY_ENVS = {
+    "cartpole": ("tessera/CartPole-v1", "CartPole-v1", 2, None),
+    "acrobot": ("tessera/Acrobot-v1", "Acrobot-v1", 3, None),
+    "mountaincar": ("tessera/MountainCar-v1", "MountainCar-v0", 3, None),
+    "pendulum": ("tessera/Pendulum-v1", "Pendulum-v1", None, [(-2.0, 2.0)]),
+}
 
 
 def _python_env(cfg: dict, method: dict):
-    """(step function, steps per call, close, plan) for a Python
-    configuration, stepping the runner's plan under the same options."""
+    """(step function, steps per call, close, plan, continuous plan) for a
+    Python configuration, stepping the runner's plan under the same
+    options."""
     n = cfg["num_envs"]
     api = cfg["api"]
     limit = _limit(cfg, method)
-    plan = lcg_plan(n, 2)
+    env_id, envpool_id, choices, bounds = PY_ENVS[cfg.get("env", "cartpole")]
+    if bounds is None:
+        plan, cont = lcg_plan(n, choices), None
+        acts = plan
+    else:
+        plan, cont = np.empty((ACTION_BATCHES, 0), dtype=np.int32), lcg_continuous(n, bounds)
+        acts = cont
     if api == "native":
         import tessera_rl
 
-        env = tessera_rl.make(
-            "tessera/CartPole-v1", num_envs=n, seed=1, outputs=cfg["outputs"], auto_reset="next_step", max_episode_steps=limit
-        )
+        env = tessera_rl.make(env_id, num_envs=n, seed=1, outputs=cfg["outputs"], auto_reset="next_step", max_episode_steps=limit)
         env.reset()
-        acts = [p.reshape(n, 1) for p in plan]
-        return (lambda k: env.step(acts[k % ACTION_BATCHES])), n, env.close, plan
+        shaped = [p.reshape(n, 1) for p in acts]
+        return (lambda k: env.step(shaped[k % ACTION_BATCHES])), n, env.close, plan, cont
     if api == "gym":
         import tessera_rl.gym as tg
 
-        env = tg.make("tessera/CartPole-v1", num_envs=n, seed=1, outputs=cfg["outputs"], max_episode_steps=limit)
+        env = tg.make(env_id, num_envs=n, seed=1, outputs=cfg["outputs"], max_episode_steps=limit)
         env.reset(seed=1)
-        return (lambda k: env.step(plan[k % ACTION_BATCHES])), n, env.close, plan
+        return (lambda k: env.step(acts[k % ACTION_BATCHES])), n, env.close, plan, cont
     if api == "gymnasium":
         import gymnasium
 
-        env = gymnasium.make_vec("CartPole-v1", num_envs=n, vectorization_mode="sync", max_episode_steps=limit)
+        env = gymnasium.make_vec(envpool_id, num_envs=n, vectorization_mode="sync", max_episode_steps=limit)
         env.reset(seed=1)
-        return (lambda k: env.step(plan[k % ACTION_BATCHES])), n, env.close, plan
+        return (lambda k: env.step(acts[k % ACTION_BATCHES])), n, env.close, plan, cont
+    if api == "envpool":
+        # EnvPool's synchronous API (batch_size = num_envs), its C++ thread
+        # pool sized by `workers`; its auto-reset is next-step, like ours.
+        import envpool
+
+        env = envpool.make(
+            envpool_id,
+            env_type="gymnasium",
+            num_envs=n,
+            batch_size=n,
+            num_threads=int(cfg.get("workers", 1)),
+            seed=1,
+            max_episode_steps=limit,
+        )
+        env.reset()
+        shaped = acts if bounds is None else [p.reshape(n, len(bounds)) for p in acts]
+        return (lambda k: env.step(shaped[k % ACTION_BATCHES])), n, env.close, plan, cont
     raise ValueError(f"unknown api {api!r}")
 
 
@@ -284,7 +343,7 @@ def measure_python(cfg: dict, method: dict) -> dict:
     """One Python measurement in this process."""
     from tessera_rl import _native
 
-    step, per_call, close, plan = _python_env(cfg, method)
+    step, per_call, close, plan, cont = _python_env(cfg, method)
 
     def run_for(seconds):
         start = time.perf_counter()
@@ -302,11 +361,12 @@ def measure_python(cfg: dict, method: dict) -> dict:
         "unit": "steps/s",
         "method": {"warmup_s": method["warmup_s"], "reps": method["reps"], "rep_s": method["rep_s"]},
         "options": {"seed": 1, "auto_reset": "next_step", "max_episode_steps": _limit(cfg, method), "action_batches": ACTION_BATCHES},
-        "plan_fingerprint": fingerprint(plan),
+        "plan_fingerprint": fingerprint(plan, cont),
         "profile": _native.build_profile(),
         "cpu": _cpu_model(),
         "pinning": {"process_affinity": _observed_affinity()},
         "samples": summarize(samples, method["bootstrap_resamples"], method["bootstrap_seed"]),
+        **({"envpool_version": __import__("envpool").__version__} if cfg["api"] == "envpool" else {}),
     }
 
 
@@ -366,6 +426,8 @@ def derive(results: dict, derived: list[dict], method: dict) -> dict:
             continue
         entry = {**ratio_ci(num, den, scale, **boot), "from": [a, b]}
         entry["same_work"] = _same_work(results[a], results[b])
+        if d.get("note"):
+            entry["note"] = d["note"]
         if d.get("require_same_work") and not entry["same_work"]:
             entry = {"value": None, "from": [a, b], "invalid": "the operands ran different plans or options"}
         out[d["name"]] = entry
@@ -424,6 +486,12 @@ def run(
     configs = [c for c in spec["config"] if only is None or c["name"].startswith(only)]
     if not configs:
         raise ValueError(f"no configuration matches {only!r}")
+    # A configuration that needs a package outside the project's lock (such
+    # as EnvPool) runs only where it is installed; the report lists the rest.
+    skipped = [c["name"] for c in configs if c.get("requires") and importlib.util.find_spec(c["requires"]) is None]
+    configs = [c for c in configs if c["name"] not in skipped]
+    if not configs:
+        raise ValueError(f"every configuration matching {only!r} needs a missing package")
     pin = pinning(machine)
     load_before = load_average()
     runner = runner_path(profile) if any(c["kind"] == "rust" for c in configs) else None
@@ -450,6 +518,7 @@ def run(
         "environment": environment(machine),
         "load_average": {"before": load_before, "after": load_average()},
         "results": results,
+        "skipped": {name: "required package not installed" for name in skipped},
         "derived": derive(results, spec.get("derived", []), method),
     }
     reasons = qualify(report, qualification)

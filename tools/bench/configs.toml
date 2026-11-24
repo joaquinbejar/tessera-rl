@@ -56,6 +56,121 @@ env = "tag"
 num_envs = 256
 workers = 0
 
+# Every catalog environment has a throughput entry (SPEC 16.1, #371): Inline,
+# 1024 instances. Masked games with a flat mask step legal moves
+# (`legal_actions`: the planned action moved to the next legal choice, inside
+# the timed step); RTS, whose heads are conditioned, steps under the no-op
+# policy, as does Tag (its existing entry).
+[[config]]
+name = "rust/acrobot/inline/n1024"
+kind = "rust"
+metric = "throughput"
+env = "acrobot"
+num_envs = 1024
+workers = 0
+
+[[config]]
+name = "rust/brickwall/inline/n1024"
+kind = "rust"
+metric = "throughput"
+env = "brickwall"
+num_envs = 1024
+workers = 0
+
+[[config]]
+name = "rust/grid/inline/n1024"
+kind = "rust"
+metric = "throughput"
+env = "grid"
+num_envs = 1024
+workers = 0
+
+[[config]]
+name = "rust/keydoor/inline/n1024"
+kind = "rust"
+metric = "throughput"
+env = "keydoor"
+num_envs = 1024
+workers = 0
+legal_actions = true
+
+[[config]]
+name = "rust/mountaincar/inline/n1024"
+kind = "rust"
+metric = "throughput"
+env = "mountaincar"
+num_envs = 1024
+workers = 0
+
+[[config]]
+name = "rust/paddleduel/inline/n1024"
+kind = "rust"
+metric = "throughput"
+env = "paddleduel"
+num_envs = 1024
+workers = 0
+
+[[config]]
+name = "rust/pendulum/inline/n1024"
+kind = "rust"
+metric = "throughput"
+env = "pendulum"
+num_envs = 1024
+workers = 0
+
+[[config]]
+name = "rust/snake/inline/n1024"
+kind = "rust"
+metric = "throughput"
+env = "snake"
+num_envs = 1024
+workers = 0
+legal_actions = true
+
+[[config]]
+name = "rust/connect4/inline/n1024"
+kind = "rust"
+metric = "throughput"
+env = "connect4"
+num_envs = 1024
+workers = 0
+legal_actions = true
+
+[[config]]
+name = "rust/go9/inline/n1024"
+kind = "rust"
+metric = "throughput"
+env = "go9"
+num_envs = 1024
+workers = 0
+legal_actions = true
+
+[[config]]
+name = "rust/leduc/inline/n1024"
+kind = "rust"
+metric = "throughput"
+env = "leduc"
+num_envs = 1024
+workers = 0
+legal_actions = true
+
+[[config]]
+name = "rust/othello/inline/n1024"
+kind = "rust"
+metric = "throughput"
+env = "othello"
+num_envs = 1024
+workers = 0
+legal_actions = true
+
+[[config]]
+name = "rust/rts/inline/n1024"
+kind = "rust"
+metric = "throughput"
+env = "rts"
+num_envs = 1024
+workers = 0
+
 [[config]]
 name = "rust/cartpole/sync4/n4096/latency"
 kind = "rust"
@@ -116,6 +231,74 @@ kind = "python"
 api = "gymnasium"
 num_envs = 64
 
+# Head-to-head against EnvPool (SPEC 19.1, 19.2, #371): the same dynamics,
+# action plan and options, one thread each (Tessera Inline through the native
+# borrowed API; EnvPool's synchronous API with one worker thread).
+# The outputs differ: Tessera's borrowed views against EnvPool's fresh arrays
+# and info dict, so each derived speedup carries that note. Needs the
+# `envpool` package (Linux x86-64 wheels), which is not a project dependency:
+# without it these configurations are skipped and the report lists them under
+# `skipped`.
+[[config]]
+name = "py/envpool/cartpole/n1024"
+kind = "python"
+api = "envpool"
+requires = "envpool"
+env = "cartpole"
+num_envs = 1024
+workers = 1
+
+[[config]]
+name = "py/native/acrobot/n1024/borrowed"
+kind = "python"
+api = "native"
+env = "acrobot"
+outputs = "borrowed"
+num_envs = 1024
+
+[[config]]
+name = "py/envpool/acrobot/n1024"
+kind = "python"
+api = "envpool"
+requires = "envpool"
+env = "acrobot"
+num_envs = 1024
+workers = 1
+
+[[config]]
+name = "py/native/mountaincar/n1024/borrowed"
+kind = "python"
+api = "native"
+env = "mountaincar"
+outputs = "borrowed"
+num_envs = 1024
+
+[[config]]
+name = "py/envpool/mountaincar/n1024"
+kind = "python"
+api = "envpool"
+requires = "envpool"
+env = "mountaincar"
+num_envs = 1024
+workers = 1
+
+[[config]]
+name = "py/native/pendulum/n1024/borrowed"
+kind = "python"
+api = "native"
+env = "pendulum"
+outputs = "borrowed"
+num_envs = 1024
+
+[[config]]
+name = "py/envpool/pendulum/n1024"
+kind = "python"
+api = "envpool"
+requires = "envpool"
+env = "pendulum"
+num_envs = 1024
+workers = 1
+
 # Derived metrics (SPEC 19.1), computed from the medians above.
 [[derived]]
 name = "scaling_efficiency/cartpole/sync4"
@@ -144,3 +327,35 @@ kind = "ratio"
 require_same_work = true
 numerator = "py/gym-adapter/cartpole/n64/owned"
 denominator = "py/gymnasium-sync/cartpole/n64"
+
+[[derived]]
+name = "speedup/native-vs-envpool/cartpole/n1024"
+kind = "ratio"
+require_same_work = true
+numerator = "py/native/cartpole/n1024/borrowed"
+denominator = "py/envpool/cartpole/n1024"
+note = "asymmetric outputs: Tessera borrowed returns views into engine buffers; EnvPool returns fresh arrays and an info dict every step. Not a like-for-like output cost; state this with any published number."
+
+[[derived]]
+name = "speedup/native-vs-envpool/acrobot/n1024"
+kind = "ratio"
+require_same_work = true
+numerator = "py/native/acrobot/n1024/borrowed"
+denominator = "py/envpool/acrobot/n1024"
+note = "asymmetric outputs: Tessera borrowed returns views into engine buffers; EnvPool returns fresh arrays and an info dict every step. Not a like-for-like output cost; state this with any published number."
+
+[[derived]]
+name = "speedup/native-vs-envpool/mountaincar/n1024"
+kind = "ratio"
+require_same_work = true
+numerator = "py/native/mountaincar/n1024/borrowed"
+denominator = "py/envpool/mountaincar/n1024"
+note = "asymmetric outputs: Tessera borrowed returns views into engine buffers; EnvPool returns fresh arrays and an info dict every step. Not a like-for-like output cost; state this with any published number."
+
+[[derived]]
+name = "speedup/native-vs-envpool/pendulum/n1024"
+kind = "ratio"
+require_same_work = true
+numerator = "py/native/pendulum/n1024/borrowed"
+denominator = "py/envpool/pendulum/n1024"
+note = "asymmetric outputs: Tessera borrowed returns views into engine buffers; EnvPool returns fresh arrays and an info dict every step. Not a like-for-like output cost; state this with any published number."
