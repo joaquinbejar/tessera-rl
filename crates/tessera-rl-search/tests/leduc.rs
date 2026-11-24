@@ -349,7 +349,7 @@ fn test_leduc_copied_fields_are_single_valued_per_info_state() {
                     .or_default()
                     .insert(projection(&r));
             }
-            let s = *p.state(0).unwrap();
+            let s = p.state(0).unwrap();
             let pick = match [CALL, RAISE, CALL, FOLD][((seed >> (2 * t)) & 3) as usize] {
                 RAISE if s.raises >= 2 => CALL,
                 FOLD if !s.facing_bet() => CALL,

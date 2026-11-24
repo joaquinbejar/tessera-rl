@@ -81,7 +81,7 @@ fn play(c: &RtsConfig, bots: [Bot; 2], seed: u64, n: usize) -> Vec<f32> {
     let mut r = [rng(seed), rng(seed + 1)];
     let mut ends = Vec::new();
     for _ in 0..n {
-        let s = *p.state(0).unwrap();
+        let s = p.state(0).unwrap();
         let a = [
             row(c, &s, 0, bots[0], &mut r[0]),
             row(c, &s, 1, bots[1], &mut r[1]),
@@ -116,7 +116,7 @@ fn test_scripted_bots_are_deterministic_and_draw_nothing() {
     let mut p = pool(&c, 3);
     let mut r = [rng(1), rng(2)];
     for _ in 0..80 {
-        let s = *p.state(0).unwrap();
+        let s = p.state(0).unwrap();
         for bot in [Bot::Rush, Bot::Prospector] {
             for agent in [0, 1] {
                 let x = row(&c, &s, agent, bot, &mut rng(11));
@@ -160,7 +160,7 @@ fn test_scripted_bots_act_as_mirror_images_on_either_side() {
     let mut p = pool(&c, 5);
     let mut r = [rng(1), rng(2)];
     for k in 0..150 {
-        let s = *p.state(0).unwrap();
+        let s = p.state(0).unwrap();
         let m = mirrored(&c, &s);
         for bot in [Bot::Rush, Bot::Prospector] {
             // Windows are in the side's frame: identical indices.
@@ -251,7 +251,7 @@ fn test_bots_golden_is_pinned() {
         let mut r = [rng(1), rng(2)];
         let mut damage = false;
         for _ in 0..600 {
-            let s = *p.state(0).unwrap();
+            let s = p.state(0).unwrap();
             damage |= s.units.iter().any(|u| {
                 u.alive.get()
                     && u.finished.get()
@@ -316,7 +316,7 @@ fn test_rush_economy_delivers_ore_and_finishes_a_foundry() {
         let mut r = [rng(1), rng(2)];
         let (mut delivered, mut foundry, mut prev) = (false, false, u32::MAX);
         for _ in 0..200 {
-            let s = *p.state(0).unwrap();
+            let s = p.state(0).unwrap();
             // Spending only lowers ore; a rise is a deposit.
             delivered |= s.ore[0] > prev;
             prev = s.ore[0];
@@ -442,7 +442,7 @@ fn test_scripted_bots_leave_the_rng_untouched() {
     let mut p = pool(&c, 4);
     let mut r = [rng(1), rng(2)];
     for _ in 0..60 {
-        let s = *p.state(0).unwrap();
+        let s = p.state(0).unwrap();
         for bot in [Bot::Rush, Bot::Prospector] {
             for agent in [0, 1] {
                 let mut used = rng(11);
@@ -466,7 +466,7 @@ fn test_scripted_bots_leave_the_rng_untouched() {
 #[test]
 fn test_random_legal_rows_depend_on_the_seed() {
     let c = cfg(12, 8);
-    let s = *pool(&c, 6).state(0).unwrap();
+    let s = pool(&c, 6).state(0).unwrap();
     let rows: Vec<_> = (0..8)
         .map(|k| row(&c, &s, 0, Bot::RandomLegal, &mut rng(k)))
         .collect();
@@ -479,7 +479,7 @@ fn test_heuristic_opponent_is_rush() {
     let mut p = pool(&c, 8);
     let mut r = [rng(1), rng(2)];
     for _ in 0..80 {
-        let s = *p.state(0).unwrap();
+        let s = p.state(0).unwrap();
         for agent in [0, 1] {
             let mut heads = vec![0; usize::from(c.max_units) * HEADS_PER_UNIT];
             let mut w = ActionWriter::new(&mut heads, &mut []);
@@ -504,7 +504,7 @@ fn test_heuristic_opponent_is_rush() {
 #[test]
 fn test_bots_write_a_noop_for_every_empty_slot() {
     let c = cfg(12, 8);
-    let s = *pool(&c, 3).state(0).unwrap();
+    let s = pool(&c, 3).state(0).unwrap();
     for bot in BOTS {
         let mut heads = vec![7; usize::from(c.max_units) * HEADS_PER_UNIT];
         let mut w = ActionWriter::new(&mut heads, &mut []);
@@ -617,7 +617,7 @@ fn test_every_side_finds_ore_on_generated_maps() {
             let mut r = [rng(1), rng(2)];
             let mut found = [false; 2];
             for _ in 0..BOUND {
-                let s = *p.state(0).unwrap();
+                let s = p.state(0).unwrap();
                 for (k, bit) in [1u8, 2].into_iter().enumerate() {
                     found[k] |= (0..usize::from(size) * usize::from(size)).any(|cell| {
                         s.explored[cell] & bit != 0 && s.terrain[cell] == Terrain::Ore as u8
@@ -646,7 +646,7 @@ fn test_scripted_bots_never_move_two_units_into_one_cell() {
         let mut p = pool(&c, seed);
         let mut r = [rng(1), rng(2)];
         for k in 0..200 {
-            let s = *p.state(0).unwrap();
+            let s = p.state(0).unwrap();
             for (agent, bot) in [(0u16, Bot::Rush), (1, Bot::Prospector)] {
                 let a = row(&c, &s, agent, bot, &mut rng(3));
                 let team = if agent == 0 { Team::Zero } else { Team::One };

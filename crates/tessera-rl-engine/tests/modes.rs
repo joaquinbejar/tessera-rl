@@ -96,8 +96,8 @@ fn test_same_step_resets_in_the_same_pass_with_terminal_observation() {
     let initial_next = step(&mut next).unwrap().observation(0).unwrap().to_vec();
     assert_eq!(initial_same, initial_next);
     assert_eq!(
-        StateHash::of(next.state(0).unwrap()),
-        StateHash::of(same.state(0).unwrap())
+        StateHash::of(&next.state(0).unwrap()),
+        StateHash::of(&same.state(0).unwrap())
     );
     // The following step is a normal step.
     assert_eq!(

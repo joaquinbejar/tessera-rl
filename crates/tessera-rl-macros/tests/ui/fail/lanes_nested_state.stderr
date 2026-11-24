@@ -1,0 +1,49 @@
+error[E0277]: the trait bound `Inner: LaneField` is not satisfied
+  --> tests/ui/fail/lanes_nested_state.rs:11:10
+   |
+11 | #[derive(EnvState, Clone, Copy, Default)]
+   |          ^^^^^^^^ unsatisfied trait bound
+   |
+help: the trait `LaneField` is not implemented for `Inner`
+  --> tests/ui/fail/lanes_nested_state.rs:7:1
+   |
+ 7 | struct Inner {
+   | ^^^^^^^^^^^^
+   = help: the following other types implement trait `LaneField`:
+             Bool8
+             f32
+             f64
+             i32
+             tessera_rl_num::fx32::Fx32
+             u32
+   = note: required for `(f64, Inner)` to implement `LaneTuple`
+note: required by a bound in `tessera_rl_core::EnvState::Fields`
+  --> $WORKSPACE/crates/tessera-rl-core/src/env.rs
+   |
+   |     type Fields: crate::lane_field::LaneTuple;
+   |                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `EnvState::Fields`
+   = note: this error originates in the derive macro `EnvState` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: the trait bound `Inner: LaneField` is not satisfied
+  --> tests/ui/fail/lanes_nested_state.rs:16:8
+   |
+16 |     b: Inner,
+   |        ^^^^^ unsatisfied trait bound
+   |
+help: the trait `LaneField` is not implemented for `Inner`
+  --> tests/ui/fail/lanes_nested_state.rs:7:1
+   |
+ 7 | struct Inner {
+   | ^^^^^^^^^^^^
+   = help: the following other types implement trait `LaneField`:
+             Bool8
+             f32
+             f64
+             i32
+             tessera_rl_num::fx32::Fx32
+             u32
+note: required by a bound in `_::assert_lane_field`
+  --> tests/ui/fail/lanes_nested_state.rs:16:8
+   |
+16 |     b: Inner,
+   |        ^^^^^ required by this bound in `assert_lane_field`

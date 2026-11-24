@@ -189,7 +189,7 @@ proptest! {
         }
         let mut last_resort = 0;
         for i in 0..INSTANCES {
-            let s = *p.state(i).unwrap();
+            let s = p.state(i).unwrap();
             if let Err(e) = agent_limits(&cfg, &s) {
                 return Err(TestCaseError::fail(format!("the played state itself: {e}")));
             }

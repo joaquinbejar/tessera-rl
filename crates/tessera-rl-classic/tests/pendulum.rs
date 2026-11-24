@@ -182,7 +182,7 @@ fn mean_return(n: u32, baseline: bool) -> f64 {
                     let mut w = tessera_rl_core::io::ActionWriter::new(&mut [], &mut c);
                     Pendulum::act(
                         &cfg,
-                        p.state(i).unwrap(),
+                        &p.state(i).unwrap(),
                         AgentSlot::FIRST,
                         &mut heuristic_rng(),
                         &mut w,

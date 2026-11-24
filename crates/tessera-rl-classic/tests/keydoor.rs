@@ -295,8 +295,8 @@ fn test_keydoor_generation_is_seeded_valid_and_covers_the_ranges() {
             let (mut walls, mut doors) = (BTreeSet::new(), BTreeSet::new());
             let mut worlds = BTreeSet::new();
             for seed in 0..600 {
-                let s = *pool(&c, seed).state(0).unwrap();
-                assert_eq!(*pool(&c, seed).state(0).unwrap(), s, "seed {seed}");
+                let s = pool(&c, seed).state(0).unwrap();
+                assert_eq!(pool(&c, seed).state(0).unwrap(), s, "seed {seed}");
                 assert_eq!(KeyDoor::validate(&c, &s), Ok(()), "seed {seed}");
                 walls.insert(s.wall_col);
                 doors.insert(s.door_row);
@@ -337,7 +337,7 @@ fn path(
 }
 
 fn state(p: &Pool) -> KeyDoorState {
-    *p.state(0).unwrap()
+    p.state(0).unwrap()
 }
 
 fn face(p: &mut Pool, slot: usize, dir: usize) {

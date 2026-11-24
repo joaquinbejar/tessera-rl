@@ -98,7 +98,7 @@ pub fn play(cfg: &RtsConfig, bots: [Bot; 2], seed: u64) -> Game {
     let mut rngs = [rng(seed, 0), rng(seed, 1)];
     let mut decisions = 0u32;
     loop {
-        let state = *pool.state(0).expect("instance 0");
+        let state = pool.state(0).expect("instance 0");
         for (seat, bot) in bots.iter().enumerate() {
             let rows = &mut actions[seat * per..(seat + 1) * per];
             rows.fill(0);

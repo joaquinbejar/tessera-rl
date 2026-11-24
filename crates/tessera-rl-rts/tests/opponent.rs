@@ -96,8 +96,8 @@ fn test_opponent_game_equals_a_two_agent_pool_driven_by_the_bot() {
             let (mut r1, mut r2) = (learner_rng(), learner_rng());
             let n = usize::from(c1.max_units) * HEADS_PER_UNIT;
             for k in 0..120 {
-                let s1 = *one.state(0).unwrap();
-                let s2 = *two.state(0).unwrap();
+                let s1 = one.state(0).unwrap();
+                let s2 = two.state(0).unwrap();
                 assert_eq!(s1.units, s2.units, "{bot:?} swap {swap} step {k}");
                 assert_eq!(s1.ore, s2.ore);
                 let learner = row(&c1, &s1, 0, Bot::RandomLegal, &mut r1);
@@ -158,7 +158,7 @@ fn test_opponent_game_continues_through_snapshot_and_restore() {
     let mut r = learner_rng();
     let play = |p: &mut Pool, r: &mut StepRng, k: usize| {
         for _ in 0..k {
-            let s = *p.state(0).unwrap();
+            let s = p.state(0).unwrap();
             let mut a = row(&c, &s, 0, Bot::RandomLegal, r);
             a.resize(2 * n, 0);
             p.step(input(&a)).unwrap();
@@ -238,7 +238,7 @@ fn versus(c: &RtsConfig, seed: u64, bot: Bot) -> (u64, f32) {
     let mut hash = 0xcbf2_9ce4_8422_2325_u64;
     let mut total = 0.0f32;
     for _ in 0..600 {
-        let s = *p.state(0).unwrap();
+        let s = p.state(0).unwrap();
         let mut a = row(c, &s, 0, bot, &mut r);
         a.resize(2 * n, 0);
         let out = p.step(input(&a)).unwrap();

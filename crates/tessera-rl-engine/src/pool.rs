@@ -14,8 +14,8 @@ use tessera_rl_core::AgentRow;
 use tessera_rl_core::error::ConfigError;
 use tessera_rl_core::io::{ActionWriter, Actions, MaskWriter, ObsWriter};
 use tessera_rl_core::{
-    ActionMask, AdaptiveValues, AgentSlot, Bool8, EnvConfig, Environment, EpisodeEnd, RecordLayout,
-    StateInit, StepOut, TurnStructure,
+    ActionMask, AdaptiveValues, AgentSlot, Bool8, EnvConfig, EnvState, Environment, EpisodeEnd,
+    LaneTuple, RecordLayout, StateInit, StepOut, TurnStructure,
 };
 use tessera_rl_num::fp;
 use tessera_rl_num::identity::{LogicalId, RngIdentity, Seed, StreamId};
@@ -100,7 +100,12 @@ pub struct EnvPool<E: Environment, M: MaskProvider<E> = NoMasks> {
     pub(crate) cfg: E::Config,
     pub(crate) options: PoolOptions,
     pub(crate) headers: Vec<E::Header>,
+    /// The Array-of-Structs store: one state per instance, empty for a
+    /// lane-wise state (ADR-0090).
     pub(crate) states: Vec<E::State>,
+    /// The Struct-of-Arrays store of a lane-wise state, one column per
+    /// field; `()` for every other state (ADR-0090).
+    pub(crate) columns: ColumnStore<Columns<E>>,
     pub(crate) actions: ActionLayout,
     discrete: Vec<i32>,
     continuous: Vec<f32>,
@@ -255,6 +260,7 @@ impl<E: Environment, M: MaskProvider<E>> EnvPool<E, M> {
         let chunk = Rows {
             headers: &mut self.headers,
             states: &mut self.states,
+            columns: <Fields<E> as LaneTuple>::view_all(&mut self.columns.0),
             discrete: &mut self.discrete,
             continuous: &mut self.continuous,
             penalties: &mut self.penalties,
@@ -510,6 +516,7 @@ where
             .into());
         }
         options.validate()?;
+        check_lane_options::<E>(&options)?;
         let obs_space = E::observation_space(&cfg)?;
         obs_space.validate()?;
         let action_space = E::action_space(&cfg)?;
@@ -546,7 +553,15 @@ where
             cfg,
             options,
             headers,
-            states: (0..num_envs).map(|_| E::State::state_default()).collect(),
+            states: if E::State::LANES {
+                Vec::new()
+            } else {
+                (0..num_envs).map(|_| E::State::state_default()).collect()
+            },
+            columns: ColumnStore(<Fields<E> as LaneTuple>::columns(
+                if E::State::LANES { num_envs } else { 0 },
+                E::State::state_default().to_fields(),
+            )),
             discrete: vec![
                 0;
                 rows.checked_mul(actions.discrete.len())
@@ -791,14 +806,45 @@ where
         self.headers.get(usize::try_from(id).ok()?)
     }
 
-    /// The author state of instance `id`; `None` for an unknown id or a
+    /// The author state of instance `id`, by value (ADR-0090: a lane-wise
+    /// state is gathered from its columns); `None` for an unknown id or a
     /// poisoned pool.
     #[must_use]
-    pub fn state(&self, id: u32) -> Option<&E::State> {
+    pub fn state(&self, id: u32) -> Option<E::State> {
         if self.poisoned {
             return None;
         }
-        self.states.get(usize::try_from(id).ok()?)
+        self.state_at(usize::try_from(id).ok()?)
+    }
+
+    /// Instance `i`'s state, by value, from either store (ADR-0090
+    /// decision 3); `None` past the pool.
+    #[inline]
+    pub(crate) fn state_at(&self, i: usize) -> Option<E::State> {
+        // The columns are padded to a multiple of 8: a padding row is no
+        // instance.
+        if i >= self.headers.len() {
+            return None;
+        }
+        if E::State::LANES {
+            <Fields<E> as LaneTuple>::get(&self.columns.0, i).map(E::State::from_fields)
+        } else {
+            self.states.get(i).copied()
+        }
+    }
+
+    /// Writes instance `i`'s state into either store (ADR-0090 decision 3);
+    /// nothing past the pool.
+    #[inline]
+    pub(crate) fn set_state_at(&mut self, i: usize, state: &E::State) {
+        if i >= self.headers.len() {
+            return;
+        }
+        if E::State::LANES {
+            <Fields<E> as LaneTuple>::set(&mut self.columns.0, i, state.to_fields());
+        } else if let Some(slot) = self.states.get_mut(i) {
+            *slot = *state;
+        }
     }
 
     /// Sets the lineage of `id`, so instances sharing a seed draw
@@ -856,6 +902,7 @@ where
             actions: layout,
             headers,
             states,
+            columns,
             discrete,
             continuous,
             outputs,
@@ -874,6 +921,7 @@ where
         let all = Chunk::<E> {
             headers,
             states,
+            columns: <Fields<E> as LaneTuple>::view_all(&mut columns.0),
             discrete,
             continuous,
             penalties,
@@ -1011,6 +1059,7 @@ where
             cfg,
             headers,
             states,
+            columns,
             outputs,
             authority,
             poisoned,
@@ -1024,18 +1073,21 @@ where
             if let Some(t) = transform {
                 outputs.transform = t.caller_rows(StackMode::Fresh, true);
             }
+            let columns = &mut <Fields<E> as LaneTuple>::view_all(&mut columns.0);
             for (k, i) in indices.enumerate() {
-                let (Some(header), Some(state)) = (headers.get_mut(i), states.get_mut(i)) else {
+                let Some(header) = headers.get_mut(i) else {
                     continue;
                 };
                 let seed = reseed.seed(k);
                 let entry = entries
                     .and_then(|e| e.get(k))
                     .and_then(|&e| usize::try_from(e).ok());
-                reset_one::<E>(cfg, authority, archive, header, state, seed, entry);
-                clear_instance(outputs, i);
-                write_agent_masks(outputs, i, header);
-                observe_instance::<E, M>(cfg, authority, header, state, outputs, i);
+                with_state::<E, _>(states, columns, i, |state| {
+                    reset_one::<E>(cfg, authority, archive, header, state, seed, entry);
+                    clear_instance(outputs, i);
+                    write_agent_masks(outputs, i, header);
+                    observe_instance::<E, M>(cfg, authority, header, state, outputs, i);
+                });
             }
         })
     }
@@ -1149,6 +1201,7 @@ where
             options,
             headers,
             states,
+            columns,
             actions: layout,
             discrete,
             continuous,
@@ -1187,6 +1240,7 @@ where
         let all = Chunk::<E> {
             headers,
             states,
+            columns: <Fields<E> as LaneTuple>::view_all(&mut columns.0),
             discrete,
             continuous,
             penalties,
@@ -1349,12 +1403,12 @@ where
         let a = self.outputs.agents;
         let rewards = self.outputs.rewards();
         for i in indices {
-            let Some(state) = self.states.get(i) else {
+            let Some(state) = self.state_at(i) else {
                 continue;
             };
             let row = rewards.get(i * a..(i + 1) * a).unwrap_or(&[]);
             let id = u32::try_from(i).unwrap_or(u32::MAX);
-            if let Some(e) = crate::nan_check::instance_nan(id, row, state) {
+            if let Some(e) = crate::nan_check::instance_nan(id, row, &state) {
                 self.poisoned = true;
                 return Err(e);
             }
@@ -1517,9 +1571,11 @@ pub(crate) struct StepCtx<'a, E: Environment> {
 /// record header and `S` the per-instance state: an `Environment`'s
 /// `Header` and `State` ([`Chunk`]), or a host pool's header and host
 /// instance (ADR-0062).
-pub(crate) struct Rows<'a, H, S> {
+pub(crate) struct Rows<'a, H, S, F: LaneTuple = ()> {
     pub(crate) headers: &'a mut [H],
     pub(crate) states: &'a mut [S],
+    /// The column views of a lane-wise state (ADR-0090); `()` otherwise.
+    pub(crate) columns: F::View<'a>,
     pub(crate) discrete: &'a mut [i32],
     pub(crate) continuous: &'a mut [f32],
     pub(crate) penalties: &'a mut [f32],
@@ -1528,7 +1584,55 @@ pub(crate) struct Rows<'a, H, S> {
 }
 
 /// The rows of an `Environment`'s pool.
-pub(crate) type Chunk<'a, E> = Rows<'a, <E as Environment>::Header, <E as Environment>::State>;
+pub(crate) type Chunk<'a, E> =
+    Rows<'a, <E as Environment>::Header, <E as Environment>::State, Fields<E>>;
+
+/// The lane field tuple of `E`'s state (ADR-0090); `()` for Array-of-Structs
+/// states.
+pub(crate) type Fields<E> = <<E as Environment>::State as EnvState>::Fields;
+
+/// The column store of `E`'s state.
+pub(crate) type Columns<E> = <Fields<E> as LaneTuple>::Columns;
+
+/// A column store, shown by `Debug` without its rows.
+pub(crate) struct ColumnStore<C>(pub(crate) C);
+
+impl<C> core::fmt::Debug for ColumnStore<C> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("ColumnStore")
+    }
+}
+
+/// ADR-0090 4.7: a lane-wise state's groups of 8 never straddle a chunk.
+fn check_lane_options<E: Environment>(options: &PoolOptions) -> Result<(), EngineError> {
+    if E::State::LANES && !options.chunk_size.get().is_multiple_of(8) {
+        return Err(EngineError::Options {
+            option: "chunk_size",
+            reason: "must be a multiple of 8 for a lane-wise state (ADR-0090)",
+        });
+    }
+    Ok(())
+}
+
+/// Runs `f` on instance `i`'s state: in place for an Array-of-Structs
+/// store, or on a gathered copy that is scattered back for a lane-wise one
+/// (ADR-0090 decision 3). `None` past the store. The branch is on a const.
+#[inline]
+pub(crate) fn with_state<E: Environment, R>(
+    states: &mut [E::State],
+    columns: &mut <Fields<E> as LaneTuple>::View<'_>,
+    i: usize,
+    f: impl FnOnce(&mut E::State) -> R,
+) -> Option<R> {
+    if E::State::LANES {
+        let mut state = E::State::from_fields(<Fields<E> as LaneTuple>::view_get(columns, i)?);
+        let r = f(&mut state);
+        <Fields<E> as LaneTuple>::view_set(columns, i, state.to_fields());
+        Some(r)
+    } else {
+        states.get_mut(i).map(f)
+    }
+}
 
 /// Steps every instance of `chunk` (after validation), for the split-phase
 /// modes, whose contexts carry no heuristic pass.
@@ -1569,6 +1673,7 @@ pub(crate) fn step_chunk_at<E: Environment, M: MaskProvider<E>>(
     let Rows {
         headers,
         states,
+        columns,
         discrete,
         continuous,
         penalties,
@@ -1581,59 +1686,63 @@ pub(crate) fn step_chunk_at<E: Environment, M: MaskProvider<E>>(
     // the whole chunk replaces the per-instance fills (issue #152, G1). No
     // write to instance `i`'s rows happens between this clear and its turn.
     clear_chunk(outputs, headers.len());
-    for (i, (header, state)) in headers.iter_mut().zip(states.iter_mut()).enumerate() {
-        if header.engine().pending_reset.get() {
-            // NextStep: reset instead of stepping (validated above).
-            reset_one::<E>(cfg, authority, archive, header, state, None, None);
-            write_agent_masks(outputs, i, header);
-            outputs.transform.mode = StackMode::Fresh;
-            observe_cleared::<E, M>(cfg, authority, header, state, outputs, i);
-            continue;
-        }
-        if M::ENABLED {
-            // Inside the panic catch: the author's noop may panic.
-            if layout.mask.flat && layout.mask.group_heads == 0 {
-                replace_illegal_one::<E, M>(
-                    cfg, policy, header, state, outputs, layout, discrete, continuous, penalties,
-                    penalized, i,
-                );
-            } else {
-                replace_illegal_conditional::<E, M>(
-                    cfg, policy, header, state, outputs, layout, discrete, continuous, penalties,
-                    penalized, i,
-                );
+    for (i, header) in headers.iter_mut().enumerate() {
+        // In place for the row store; a gathered copy, scattered back,
+        // for a lane-wise state (ADR-0090 decision 3).
+        with_state::<E, _>(states, columns, i, |state| {
+            if header.engine().pending_reset.get() {
+                // NextStep: reset instead of stepping (validated above).
+                reset_one::<E>(cfg, authority, archive, header, state, None, None);
+                write_agent_masks(outputs, i, header);
+                outputs.transform.mode = StackMode::Fresh;
+                observe_cleared::<E, M>(cfg, authority, header, state, outputs, i);
+                return;
             }
-        }
-        let rows = i * E::MAX_AGENTS;
-        let view = Actions::new(
-            discrete
-                .get(rows * dh..(rows + E::MAX_AGENTS) * dh)
-                .unwrap_or(&[]),
-            dh,
-            continuous
-                .get(rows * ch..(rows + E::MAX_AGENTS) * ch)
-                .unwrap_or(&[]),
-            ch,
-        );
-        let agents = i * E::MAX_AGENTS..(i + 1) * E::MAX_AGENTS;
-        let penalty = penalties.get(agents.clone()).unwrap_or(&[]);
-        let marked = penalized.get(agents).unwrap_or(&[]);
-        step_one::<E>(
-            cfg, authority, header, state, &view, outputs, i, limit, penalty, marked,
-        );
-        outputs.transform.mode = StackMode::Push;
-        observe_cleared::<E, M>(cfg, authority, header, state, outputs, i);
-        if auto_reset == AutoReset::SameStep && header.engine().pending_reset.get() {
-            save_terminal(outputs, i);
-            // Flags and stats of the ended episode stay set.
-            reset_one::<E>(cfg, authority, archive, header, state, None, None);
-            write_agent_masks(outputs, i, header);
-            // The terminal row was stacked with the ended episode's frames;
-            // the reset refills them (ADR-0078 item 4.2).
-            outputs.transform.mode = StackMode::Fresh;
-            // The rows hold the terminal observation: zero them again.
-            observe_instance::<E, M>(cfg, authority, header, state, outputs, i);
-        }
+            if M::ENABLED {
+                // Inside the panic catch: the author's noop may panic.
+                if layout.mask.flat && layout.mask.group_heads == 0 {
+                    replace_illegal_one::<E, M>(
+                        cfg, policy, header, state, outputs, layout, discrete, continuous,
+                        penalties, penalized, i,
+                    );
+                } else {
+                    replace_illegal_conditional::<E, M>(
+                        cfg, policy, header, state, outputs, layout, discrete, continuous,
+                        penalties, penalized, i,
+                    );
+                }
+            }
+            let rows = i * E::MAX_AGENTS;
+            let view = Actions::new(
+                discrete
+                    .get(rows * dh..(rows + E::MAX_AGENTS) * dh)
+                    .unwrap_or(&[]),
+                dh,
+                continuous
+                    .get(rows * ch..(rows + E::MAX_AGENTS) * ch)
+                    .unwrap_or(&[]),
+                ch,
+            );
+            let agents = i * E::MAX_AGENTS..(i + 1) * E::MAX_AGENTS;
+            let penalty = penalties.get(agents.clone()).unwrap_or(&[]);
+            let marked = penalized.get(agents).unwrap_or(&[]);
+            step_one::<E>(
+                cfg, authority, header, state, &view, outputs, i, limit, penalty, marked,
+            );
+            outputs.transform.mode = StackMode::Push;
+            observe_cleared::<E, M>(cfg, authority, header, state, outputs, i);
+            if auto_reset == AutoReset::SameStep && header.engine().pending_reset.get() {
+                save_terminal(outputs, i);
+                // Flags and stats of the ended episode stay set.
+                reset_one::<E>(cfg, authority, archive, header, state, None, None);
+                write_agent_masks(outputs, i, header);
+                // The terminal row was stacked with the ended episode's frames;
+                // the reset refills them (ADR-0078 item 4.2).
+                outputs.transform.mode = StackMode::Fresh;
+                // The rows hold the terminal observation: zero them again.
+                observe_instance::<E, M>(cfg, authority, header, state, outputs, i);
+            }
+        });
     }
 }
 
@@ -1647,20 +1756,23 @@ pub(crate) fn reset_chunk<E: Environment, M: MaskProvider<E>>(
     reseed: Reseed<'_>,
     first: usize,
 ) {
-    let outputs = &mut chunk.outputs;
-    clear_chunk(outputs, chunk.headers.len());
-    for (i, (header, state)) in chunk
-        .headers
-        .iter_mut()
-        .zip(chunk.states.iter_mut())
-        .enumerate()
-    {
+    let Rows {
+        headers,
+        states,
+        columns,
+        outputs,
+        ..
+    } = chunk;
+    clear_chunk(outputs, headers.len());
+    for (i, header) in headers.iter_mut().enumerate() {
         let k = first + i;
         let seed = reseed.seed(k);
-        reset_one::<E>(cfg, authority, archive, header, state, seed, None);
-        write_agent_masks(outputs, i, header);
-        outputs.transform.mode = StackMode::Fresh;
-        observe_cleared::<E, M>(cfg, authority, header, state, outputs, i);
+        with_state::<E, _>(states, columns, i, |state| {
+            reset_one::<E>(cfg, authority, archive, header, state, seed, None);
+            write_agent_masks(outputs, i, header);
+            outputs.transform.mode = StackMode::Fresh;
+            observe_cleared::<E, M>(cfg, authority, header, state, outputs, i);
+        });
     }
 }
 

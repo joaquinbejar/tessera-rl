@@ -98,7 +98,7 @@ fn test_leduc_act_equals_act_info_on_sampled_states() {
     let mut checked = 0;
     for t in 0..200 {
         for i in 0..N {
-            let s = p.state(i).unwrap();
+            let s = &p.state(i).unwrap();
             for me in 0..2 {
                 assert_eq!(act(s, me), act_info(s, me), "t {t}, instance {i}");
                 checked += 1;
@@ -125,7 +125,7 @@ fn test_leduc_info_heuristic_noninterference_on_determinized_states() {
     let mut p = EnvPool::<Leduc, Masked>::with_masks(CFG, options(Schedule::Static)).unwrap();
     p.reset_all(Reseed::Base(Seed::new(8))).unwrap();
     for i in 0..N {
-        let s = *p.state(i).unwrap();
+        let s = p.state(i).unwrap();
         for me in 0..2 {
             let info = Leduc::info_state(&CFG, &s, agent(me));
             let want = act_info(&s, me);
@@ -176,7 +176,7 @@ fn run(workers: Option<usize>, schedule: Schedule) -> Vec<u64> {
             let header = p.header(i).unwrap();
             let row = &header.agents()[1];
             if !header.engine().pending_reset.get() && row.alive.get() && row.acting.get() {
-                want[usize::try_from(i).unwrap() * 2 + 1] = act_info(p.state(i).unwrap(), 1);
+                want[usize::try_from(i).unwrap() * 2 + 1] = act_info(&p.state(i).unwrap(), 1);
             }
         }
         let acts = learner(&p, t);

@@ -62,7 +62,7 @@ fn pool(c: &SnakeConfig, seed: u64) -> Pool {
 }
 
 fn state(p: &Pool) -> SnakeState {
-    *p.state(0).unwrap()
+    p.state(0).unwrap()
 }
 
 /// Steps with one direction per slot. A reversal, which the mask refuses and

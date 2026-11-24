@@ -115,7 +115,7 @@ fn test_fog_visibility_matches_a_brute_force_reference_in_play() {
         let mut p = pool(&c, seed);
         let mut r = [rng(1), rng(2)];
         for _ in 0..150 {
-            let s = *p.state(0).unwrap();
+            let s = p.state(0).unwrap();
             for team in TEAMS {
                 assert_eq!(visible(&c, &s, team).to_vec(), reference(&c, &s, team));
             }
@@ -169,7 +169,7 @@ fn test_fog_sight_edge_unfinished_and_dead_units() {
 fn test_fog_reset_explores_exactly_what_each_side_sees() {
     for seed in 0..12 {
         let c = cfg(16, 8);
-        let s = *pool(&c, seed).state(0).unwrap();
+        let s = pool(&c, seed).state(0).unwrap();
         for team in TEAMS {
             let v = visible(&c, &s, team);
             for cell in 0..MAX_CELLS {
@@ -188,7 +188,7 @@ fn test_fog_explored_grows_and_covers_visibility_at_every_decision() {
     let mut prev = p.state(0).unwrap().explored;
     let mut grew = false;
     for k in 0..600 {
-        let s = *p.state(0).unwrap();
+        let s = p.state(0).unwrap();
         if s.decisions == 0 && k > 0 {
             prev = s.explored; // a new episode
         }
@@ -218,14 +218,14 @@ fn test_fog_explored_is_carried_by_snapshot_and_restore() {
     let mut p = pool(&c, 3);
     let mut r = [rng(1), rng(2)];
     for _ in 0..40 {
-        let s = *p.state(0).unwrap();
+        let s = p.state(0).unwrap();
         p.step(input(&bot_actions(&c, &s, &mut r))).unwrap();
     }
     let snap = p.snapshot(0).unwrap();
     let saved = r.clone();
     let run = |p: &mut Pool, r: &mut [StepRng; 2]| {
         for _ in 0..40 {
-            let s = *p.state(0).unwrap();
+            let s = p.state(0).unwrap();
             p.step(input(&bot_actions(&c, &s, r))).unwrap();
         }
         p.state(0).unwrap().explored

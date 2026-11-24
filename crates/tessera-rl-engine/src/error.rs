@@ -338,8 +338,8 @@ pub enum EngineError {
         /// The chunk size.
         chunk_size: u32,
     },
-    /// Async does not support `SoA` lane environments yet (ADR-0047,
-    /// ADR-0002).
+    /// Async does not support lane-wise (`SoA`) states (ADR-0047, ADR-0090
+    /// decision 4.5).
     #[error("Async mode does not support SoA lane environments")]
     LaneEnvUnsupported,
     /// An engine was created inside an engine worker (ADR-0005).

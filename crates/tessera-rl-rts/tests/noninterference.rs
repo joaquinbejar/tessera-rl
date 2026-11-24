@@ -300,7 +300,7 @@ fn test_noninterference_observation_and_mask_ignore_every_hidden_fact() {
         let mut p = pool(&c, seed);
         let mut r = [rng(1), rng(2)];
         for k in 0..240 {
-            let s = *p.state(0).unwrap();
+            let s = p.state(0).unwrap();
             if k % 6 == 0 {
                 for team in [Team::Zero, Team::One] {
                     let seen = visible(&c, &s, team);
@@ -345,7 +345,7 @@ fn test_noninterference_control_visible_edits_change_the_view() {
     let mut p = pool(&c, 14);
     let mut r = [rng(1), rng(2)];
     for _ in 0..600 {
-        let s = *p.state(0).unwrap();
+        let s = p.state(0).unwrap();
         for team in [Team::Zero, Team::One] {
             let seen = visible(&c, &s, team);
             let shown = |cell: u16| seen[usize::from(cell)];
@@ -384,7 +384,7 @@ fn test_noninterference_bots_ignore_every_hidden_fact() {
         let mut p = pool(&c, seed);
         let mut r = [rng(1), rng(2)];
         for k in 0..240 {
-            let s = *p.state(0).unwrap();
+            let s = p.state(0).unwrap();
             if k % 8 == 0 {
                 for team in [Team::Zero, Team::One] {
                     let seen = visible(&c, &s, team);
@@ -431,7 +431,7 @@ fn test_noninterference_side_view_ignores_every_hidden_fact() {
         let mut p = pool(&c, seed);
         let mut r = [rng(1), rng(2)];
         for k in 0..240 {
-            let s = *p.state(0).unwrap();
+            let s = p.state(0).unwrap();
             if k % 8 == 0 {
                 for team in [Team::Zero, Team::One] {
                     let sees = visible(&c, &s, team);

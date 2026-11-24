@@ -162,7 +162,7 @@ fn test_grid_random_walks_match_the_reference() {
         };
         let size = i32::from(c.size);
         let mut p = pool_with(c.clone(), seed, AutoReset::Disabled);
-        let start = *p.state(0).unwrap();
+        let start = p.state(0).unwrap();
         let goal = (i32::from(start.goal[0]), i32::from(start.goal[1]));
         let (mut col, mut row, mut steps) = (0, 0, 0);
         loop {
@@ -355,7 +355,7 @@ fn test_grid_baseline_reaches_every_goal_by_the_shortest_walk() {
         let shortest = i32::from(goal[0]) + i32::from(goal[1]);
         let mut steps = 0;
         while !p.outputs().unwrap().episode_terminated()[0].get() {
-            let a = baseline(p.state(0).unwrap());
+            let a = baseline(&p.state(0).unwrap());
             step(&mut p, a);
             steps += 1;
             assert!(steps <= shortest, "seed {seed}");

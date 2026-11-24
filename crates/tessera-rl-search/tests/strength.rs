@@ -105,7 +105,7 @@ fn game(opponent: Opponent, mcts_first: bool, seed: u64, sims: u32, rollout: boo
     let bot = Bot::with_depth(1, seed);
     let mut ply = 0u64;
     loop {
-        let s = *env.state(0).unwrap();
+        let s = env.state(0).unwrap();
         let me = s.to_move();
         let mcts_turn = (me == 0) == mcts_first;
         let col = if mcts_turn {

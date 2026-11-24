@@ -67,7 +67,7 @@ mod storage;
 
 use core::ops::Range;
 
-use tessera_rl_core::Bool8;
+use tessera_rl_core::{Bool8, LaneTuple};
 
 use crate::error::EngineError;
 use crate::layout::{MAX_LEAVES, SetSpans};
@@ -142,8 +142,9 @@ impl<T> Raw<T> {
     }
 }
 
-/// The raw parts of a pool-wide chunk of headers `H` and states `S`.
-struct RawChunk<H, S> {
+/// The raw parts of a pool-wide chunk of headers `H` and states `S`, and
+/// of the columns of a lane-wise state's field tuple `T` (ADR-0090).
+struct RawChunk<H, S, T: LaneTuple = ()> {
     instances: usize,
     agents: usize,
     dh: usize,
@@ -153,6 +154,7 @@ struct RawChunk<H, S> {
     sets: SetSpans,
     headers: Raw<H>,
     states: Raw<S>,
+    columns: T::Raw,
     discrete: Raw<i32>,
     continuous: Raw<f32>,
     penalties: Raw<f32>,
@@ -208,21 +210,24 @@ struct RawTransform {
 type EnvRawChunk<E> = RawChunk<
     <E as tessera_rl_core::Environment>::Header,
     <E as tessera_rl_core::Environment>::State,
+    crate::pool::Fields<E>,
 >;
 
 // SAFETY: a `RawChunk` is shared by workers only to build disjoint views
 // (invariant 2), each of which is used by one thread at a time; the
-// elements are `Send` (`H` and `S` are required `Send` here; the others
-// are plain numbers), so handing out `&mut` views of disjoint ranges to
-// other threads is sound.
+// elements are `Send` (`H` and `S` are required `Send` here; the columns'
+// elements are `LaneField`s, which are `Send`; the others are plain
+// numbers), so handing out `&mut` views of disjoint ranges to other threads
+// is sound.
 #[expect(unsafe_code, reason = "audited module: shared raw chunk")]
-unsafe impl<H: Send, S: Send> Sync for RawChunk<H, S> {}
+unsafe impl<H: Send, S: Send, T: LaneTuple> Sync for RawChunk<H, S, T> {}
 
-impl<H, S> RawChunk<H, S> {
-    fn new(chunk: Rows<'_, H, S>, dh: usize, ch: usize) -> Self {
+impl<H, S, T: LaneTuple> RawChunk<H, S, T> {
+    fn new(chunk: Rows<'_, H, S, T>, dh: usize, ch: usize) -> Self {
         let Rows {
             headers,
             states,
+            mut columns,
             discrete,
             continuous,
             penalties,
@@ -277,6 +282,7 @@ impl<H, S> RawChunk<H, S> {
             sets,
             headers: Raw::new(headers),
             states: Raw::new(states),
+            columns: T::view_raw(&mut columns),
             discrete: Raw::new(discrete),
             continuous: Raw::new(continuous),
             penalties: Raw::new(penalties),
@@ -325,7 +331,7 @@ impl<H, S> RawChunk<H, S> {
     /// Module invariants; in particular no other live view covers `r`.
     #[cfg(test)]
     #[expect(unsafe_code, reason = "audited module: disjoint chunk views")]
-    unsafe fn chunk<'a>(&self, r: &Range<usize>) -> Rows<'a, H, S> {
+    unsafe fn chunk<'a>(&self, r: &Range<usize>) -> Rows<'a, H, S, T> {
         // SAFETY: forwarded; no worker scratch is handed out.
         unsafe { self.chunk_on(r, None) }
     }
@@ -337,7 +343,7 @@ impl<H, S> RawChunk<H, S> {
     /// As [`Self::chunk`]; besides, `worker`'s scratch is used by no other
     /// live view (each worker runs one view at a time).
     #[expect(unsafe_code, reason = "audited module: disjoint chunk views")]
-    unsafe fn chunk_on<'a>(&self, r: &Range<usize>, worker: Option<usize>) -> Rows<'a, H, S> {
+    unsafe fn chunk_on<'a>(&self, r: &Range<usize>, worker: Option<usize>) -> Rows<'a, H, S, T> {
         let a = self.agents;
         // SAFETY: `leaf_bytes` is never written during an epoch, so a shared
         // view of it alongside the workers' views is sound (invariant 1).
@@ -360,6 +366,13 @@ impl<H, S> RawChunk<H, S> {
         let headers = unsafe { self.headers.view(r, 1) };
         // SAFETY: invariants 1 to 4 for range `r` (1 elements per instance).
         let states = unsafe { self.states.view(r, 1) };
+        // SAFETY: `LaneTuple::view`'s preconditions, from this module's
+        // invariants: disjoint ranges (invariants 2 to 4: no other live view
+        // covers `r`), no reallocation (invariant 1: the columns live in the
+        // pool and are never resized during the epoch), and bounds (`r` lies
+        // within the instances, which the padded columns cover; the columns
+        // are empty for an Array-of-Structs state, which yields empty views).
+        let columns = unsafe { T::view(self.columns, r) };
         // SAFETY: invariants 1 to 4 for range `r` (a * self.dh elements per instance).
         let discrete = unsafe { self.discrete.view(r, a * self.dh) };
         // SAFETY: invariants 1 to 4 for range `r` (a * self.ch elements per instance).
@@ -426,6 +439,7 @@ impl<H, S> RawChunk<H, S> {
         Rows {
             headers,
             states,
+            columns,
             discrete,
             continuous,
             penalties,
@@ -531,7 +545,7 @@ impl<H, S> RawChunk<H, S> {
     loom,
     allow(dead_code, reason = "the split-phase modes are not built under loom")
 )]
-impl<H, S> RawChunk<H, S> {
+impl<H, S, T: LaneTuple> RawChunk<H, S, T> {
     /// The views of the instances in `r`, or `None` if `r` is reversed or
     /// reaches past the last instance. No slice covers a row outside `r`.
     ///
@@ -542,7 +556,7 @@ impl<H, S> RawChunk<H, S> {
     /// or claim), so no other live view or write covers it, and the buffers
     /// stay alive and in place for `'a`.
     #[expect(unsafe_code, reason = "audited module: token-guarded views")]
-    unsafe fn range_view<'a>(&self, r: Range<usize>) -> Option<Rows<'a, H, S>> {
+    unsafe fn range_view<'a>(&self, r: Range<usize>) -> Option<Rows<'a, H, S, T>> {
         // SAFETY: forwarded; no worker scratch.
         unsafe { self.range_view_on(r, None) }
     }
@@ -557,7 +571,7 @@ impl<H, S> RawChunk<H, S> {
         &self,
         r: Range<usize>,
         worker: Option<usize>,
-    ) -> Option<Rows<'a, H, S>> {
+    ) -> Option<Rows<'a, H, S, T>> {
         if r.start > r.end || r.end > self.instances {
             return None;
         }
@@ -577,7 +591,7 @@ impl<H, S> RawChunk<H, S> {
         not(test),
         expect(dead_code, reason = "used by the Async mode (ADR-0047)")
     )]
-    unsafe fn instance_view<'a>(&self, id: usize) -> Option<Rows<'a, H, S>> {
+    unsafe fn instance_view<'a>(&self, id: usize) -> Option<Rows<'a, H, S, T>> {
         let end = id.checked_add(1)?;
         // SAFETY: forwarded to the caller's guarantee for row `id`.
         unsafe { self.range_view(id..end) }
@@ -650,9 +664,9 @@ pub(crate) fn chunk_range(c: usize, size: usize, instances: usize) -> Range<usiz
 /// chunk; a panic in it is caught per chunk and the other chunks still run.
 /// Returns `true` if any chunk panicked. `dh` and `ch` are the discrete and
 /// continuous heads per agent.
-pub(crate) fn par_chunks<H, S, F>(
+pub(crate) fn par_chunks<H, S, T, F>(
     gang: &mut Gang,
-    all: Rows<'_, H, S>,
+    all: Rows<'_, H, S, T>,
     (size, schedule): (usize, Schedule),
     heads: (usize, usize),
     f: F,
@@ -660,7 +674,8 @@ pub(crate) fn par_chunks<H, S, F>(
 where
     H: Send,
     S: Send,
-    F: Fn(&mut Rows<'_, H, S>, usize) + Sync,
+    T: LaneTuple,
+    F: Fn(&mut Rows<'_, H, S, T>, usize) + Sync,
 {
     // The worker count comes from the gang itself, so the assignment below
     // is disjoint by construction (invariant 2).
@@ -756,7 +771,13 @@ mod tests {
         }
     }
 
-    impl tessera_rl_core::EnvState for ProbeState {}
+    impl tessera_rl_core::EnvState for ProbeState {
+        type Fields = ();
+        fn to_fields(&self) -> Self::Fields {}
+        fn from_fields((): Self::Fields) -> Self {
+            <Self as tessera_rl_core::StateInit>::state_default()
+        }
+    }
 
     struct ProbeConfig;
 
@@ -820,6 +841,7 @@ mod tests {
         let all = Chunk::<Probe> {
             headers: &mut headers,
             states: &mut states,
+            columns: (),
             discrete: &mut discrete,
             continuous: &mut continuous,
             penalties: &mut penalties,
@@ -899,6 +921,7 @@ mod tests {
         let all = Chunk::<Probe> {
             headers: &mut headers,
             states: &mut states,
+            columns: (),
             discrete: &mut discrete,
             continuous: &mut continuous,
             penalties: &mut penalties,
@@ -1040,6 +1063,7 @@ mod tests {
             Chunk::<Probe> {
                 headers: &mut headers,
                 states: &mut states,
+                columns: (),
                 discrete: &mut discrete,
                 continuous: &mut continuous,
                 penalties: &mut penalties,

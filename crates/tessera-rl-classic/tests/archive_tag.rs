@@ -67,7 +67,7 @@ fn caught_record() -> Record<Tag> {
     let mut p = pool(4);
     p.reset_all(Reseed::Keep).unwrap();
     for _ in 0..400 {
-        let state = *p.state(0).unwrap();
+        let state = p.state(0).unwrap();
         let mut actions = vec![0i32; A];
         for (a, slot) in actions.iter_mut().enumerate().take(c.agents()) {
             if c.is_pursuer(a) {

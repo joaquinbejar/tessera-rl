@@ -142,7 +142,7 @@ impl Game {
     }
 
     fn state(&self) -> RtsState {
-        *self.pool.state(0).unwrap()
+        self.pool.state(0).unwrap()
     }
 
     fn illegal(&self) -> [u32; 2] {

@@ -1,0 +1,5 @@
+error: #[state(lanes)] allows at most 12 fields, one column each (ADR-0090)
+  --> tests/ui/fail/lanes_too_many_fields.rs:21:5
+   |
+21 |     f12: u32,
+   |     ^^^

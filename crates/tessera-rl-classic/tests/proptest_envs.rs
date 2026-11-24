@@ -104,7 +104,7 @@ proptest! {
         let evaders = f32::from(u16::try_from(cfg.evaders).unwrap());
         let mut ended = false;
         for row in choices {
-            let state = *p.state(0).unwrap();
+            let state = p.state(0).unwrap();
             let masks = p.outputs().unwrap().masks().to_vec();
             let alive = p.outputs().unwrap().alive().to_vec();
             // The mask is exactly legality from the agent's cell.

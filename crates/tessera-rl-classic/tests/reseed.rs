@@ -39,7 +39,7 @@ fn view<E: Pooled, M: MaskProvider<E>>(p: &EnvPool<E, M>, id: u32) -> (Vec<u8>, 
         let per = bytes.len() / n;
         obs.extend_from_slice(&bytes[i * per..(i + 1) * per]);
     }
-    (obs, StateHash::of(p.state(id).unwrap()).get())
+    (obs, StateHash::of(&p.state(id).unwrap()).get())
 }
 
 struct Suite<E: Pooled, M: MaskProvider<E>> {
@@ -105,8 +105,8 @@ where
             }
         }
         assert_ne!(
-            StateHash::of(a.state(1).unwrap()),
-            StateHash::of(b.state(1).unwrap())
+            StateHash::of(&a.state(1).unwrap()),
+            StateHash::of(&b.state(1).unwrap())
         );
     }
 

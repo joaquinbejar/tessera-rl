@@ -374,7 +374,7 @@ fn test_othello_spaces_are_two_u8_planes_and_65_actions() {
 #[test]
 fn test_othello_start_has_the_published_setup_and_opening_moves() {
     let mut p = pool();
-    let s = *p.state(0).unwrap();
+    let s = p.state(0).unwrap();
     assert_eq!(s.stones[0], square(4, 3) | square(3, 4), "black e4, d5");
     assert_eq!(s.stones[1], square(3, 3) | square(4, 4), "white d4, e5");
     assert_eq!(mask(&p, 0), [D3, C4, F5, E6]);
@@ -446,7 +446,7 @@ fn test_othello_win_by_wipeout_rewards_and_ends_with_empty_squares() {
         play(&mut p, a);
     }
     let end = wipeout_game();
-    assert_eq!(*p.state(0).unwrap(), end);
+    assert_eq!(p.state(0).unwrap(), end);
     assert_eq!(end.stones[1], 0, "white holds nothing");
     assert!(end.is_over());
     assert!(p.outputs().unwrap().episode_terminated()[0].get());
@@ -490,7 +490,7 @@ fn test_othello_forced_pass_is_the_only_legal_action() {
     let mut t = s;
     t.play(PASS);
     play(&mut p, PASS);
-    assert_eq!(*p.state(0).unwrap(), t);
+    assert_eq!(p.state(0).unwrap(), t);
     assert_eq!(t.stones, s.stones);
     assert!(
         !legal_actions(&t).contains(&PASS),
@@ -502,18 +502,18 @@ fn test_othello_forced_pass_is_the_only_legal_action() {
 /// atomically, otherwise the no-op `d3` plays and the action is counted.
 fn check_illegal_at_start(action: u32) {
     let mut p = pool();
-    let start = *p.state(0).unwrap();
+    let start = p.state(0).unwrap();
     let result = p.step(ActionInput {
         discrete: &[action.cast_signed(), PASS.cast_signed()],
         continuous: &[],
     });
     if let Err(e) = result {
         assert!(matches!(e, EngineError::IllegalAction { agent: 0, .. }));
-        assert_eq!(*p.state(0).unwrap(), start);
+        assert_eq!(p.state(0).unwrap(), start);
     } else {
         let mut expected = start;
         expected.play(D3);
-        assert_eq!(*p.state(0).unwrap(), expected);
+        assert_eq!(p.state(0).unwrap(), expected);
         assert_eq!(p.header(0).unwrap().agents[0].illegal_actions, 1);
     }
 }
@@ -555,7 +555,7 @@ fn test_othello_auto_reset_starts_a_fresh_board() {
         play(&mut p, a);
     }
     assert!(p.outputs().unwrap().episode_terminated()[0].get());
-    assert_eq!(*p.state(0).unwrap(), OthelloState::start());
+    assert_eq!(p.state(0).unwrap(), OthelloState::start());
 }
 
 #[test]
@@ -563,20 +563,20 @@ fn test_othello_snapshot_and_restore_continue_the_game() {
     let mut p = pool();
     play(&mut p, D3);
     let snap = p.snapshot(0).unwrap();
-    let fixed = *p.state(0).unwrap();
+    let fixed = p.state(0).unwrap();
     play(&mut p, legal_actions(&fixed)[0]);
-    let after = *p.state(0).unwrap();
+    let after = p.state(0).unwrap();
     p.restore(0, &snap).unwrap();
-    assert_eq!(*p.state(0).unwrap(), fixed);
+    assert_eq!(p.state(0).unwrap(), fixed);
     play(&mut p, legal_actions(&fixed)[0]);
-    assert_eq!(*p.state(0).unwrap(), after);
+    assert_eq!(p.state(0).unwrap(), after);
 }
 
 #[test]
 fn test_othello_import_rejects_overlap_missing_centre_and_gaps() {
     let mut p = pool();
     play(&mut p, D3);
-    let base = *p.state(0).unwrap();
+    let base = p.state(0).unwrap();
     let overlap = OthelloState {
         stones: [base.stones[0] | square(3, 3), base.stones[1] | square(3, 3)],
         ..base
@@ -742,7 +742,7 @@ fn test_othello_never_reset_record_round_trips_and_continues() {
     let mut q = EnvPool::<Othello, Masked>::with_masks(CFG, options).unwrap();
     q.import(&[0], &[rec]).unwrap();
     q.reset_all(Reseed::Keep).unwrap();
-    assert_eq!(*q.state(0).unwrap(), OthelloState::start());
+    assert_eq!(q.state(0).unwrap(), OthelloState::start());
     let bad = DecodedRecord::from_parts(
         *DecodedRecord::from(p.snapshot(0).unwrap()).header(),
         OthelloState::start(),

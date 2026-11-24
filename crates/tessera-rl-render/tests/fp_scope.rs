@@ -41,7 +41,13 @@ impl StateInit for Cell {
     }
 }
 
-impl EnvState for Cell {}
+impl EnvState for Cell {
+    type Fields = ();
+    fn to_fields(&self) -> Self::Fields {}
+    fn from_fields((): Self::Fields) -> Self {
+        Self::state_default()
+    }
+}
 
 struct FixtureConfig;
 

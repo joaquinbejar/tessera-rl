@@ -605,6 +605,7 @@ impl<E: HostEnvironment, const A: usize> HostPool<E, A> {
         let mut all = Rows {
             headers,
             states: instances,
+            columns: (),
             discrete,
             continuous,
             penalties: &mut [],
@@ -812,6 +813,7 @@ impl<E: HostEnvironment, const A: usize> HostPool<E, A> {
         let mut all = Rows {
             headers,
             states: instances,
+            columns: (),
             discrete,
             continuous,
             penalties: &mut [],
@@ -1028,6 +1030,7 @@ fn validate<E: HostEnvironment, const A: usize>(
         let all = Rows {
             headers: &mut *headers,
             states: &mut *instances,
+            columns: (),
             discrete: &mut *discrete,
             continuous: &mut *continuous,
             penalties: &mut [],
@@ -1063,6 +1066,7 @@ fn validate<E: HostEnvironment, const A: usize>(
         let one = Rows {
             headers: one_header,
             states: one_state,
+            columns: (),
             discrete: one_discrete,
             continuous: one_continuous,
             penalties: &mut [],
@@ -1082,6 +1086,7 @@ fn validate<E: HostEnvironment, const A: usize>(
     let all = Rows {
         headers,
         states: &mut *instances,
+        columns: (),
         discrete,
         continuous,
         penalties: &mut [],

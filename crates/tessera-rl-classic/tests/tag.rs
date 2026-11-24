@@ -70,7 +70,7 @@ fn heuristic(cfg: &TagConfig, state: &TagState, agent: usize) -> i32 {
 fn scripted(p: &EnvPool<Tag, Masked>, cfg: &TagConfig, n: u32, evaders_stay: bool) -> Vec<i32> {
     let mut out = vec![0; usize::try_from(n).unwrap() * A];
     for i in 0..n {
-        let state = p.state(i).unwrap();
+        let state = &p.state(i).unwrap();
         for a in 0..cfg.agents() {
             if !evaders_stay || cfg.is_pursuer(a) {
                 out[usize::try_from(i).unwrap() * A + a] = heuristic(cfg, state, a);
@@ -189,7 +189,7 @@ fn test_tag_reset_places_used_slots_distinctly_and_leaves_the_rest_empty() {
         assert!(alive.iter().skip(5).all(|f| !f.get()));
     }
     for i in 0..16 {
-        let s = p.state(i).unwrap();
+        let s = &p.state(i).unwrap();
         for a in 0..5 {
             assert!(s.pos[a].iter().all(|v| (0..3).contains(v)));
             assert!((a + 1..5).all(|b| s.pos[b] != s.pos[a]), "{s:?}");
@@ -211,7 +211,7 @@ fn test_tag_mask_marks_moves_off_the_grid_illegal() {
     let out = p.reset_all(Reseed::Keep).unwrap();
     let masks = out.masks().to_vec();
     for i in 0..8 {
-        let s = p.state(i).unwrap();
+        let s = &p.state(i).unwrap();
         for a in 0..8 {
             let row = &masks[(usize::try_from(i).unwrap() * A + a) * 5..][..5];
             for (action, legal) in row.iter().enumerate() {
@@ -244,7 +244,7 @@ fn test_tag_observations_match_an_independent_reference() {
         let obs = out.observation(0).unwrap().to_vec();
         let alive = out.alive().to_vec();
         for i in 0..n {
-            let s = p.state(i).unwrap();
+            let s = &p.state(i).unwrap();
             for a in 0..cfg.agents() {
                 let row = usize::try_from(i).unwrap() * A + a;
                 if !alive[row].get() {
@@ -274,7 +274,7 @@ fn test_tag_capture_rewards_pursuers_and_kills_the_evader() {
     let mut finished = vec![false; usize::try_from(n).unwrap()];
     for _ in 0..40 {
         let actions = scripted(&p, &cfg, n, true);
-        let before: Vec<TagState> = (0..n).map(|i| *p.state(i).unwrap()).collect();
+        let before: Vec<TagState> = (0..n).map(|i| p.state(i).unwrap()).collect();
         let out = p.step(act(&actions)).unwrap();
         for i in 0..usize::try_from(n).unwrap() {
             if finished[i] {
@@ -327,7 +327,7 @@ fn test_tag_truncates_at_the_engine_step_limit_while_evaders_remain() {
 
 fn hashes(p: &EnvPool<Tag, Masked>, n: u32) -> Vec<u64> {
     (0..n)
-        .map(|i| StateHash::of(p.state(i).unwrap()).get())
+        .map(|i| StateHash::of(&p.state(i).unwrap()).get())
         .collect()
 }
 
@@ -428,7 +428,7 @@ fn test_tag_info_state_is_the_observation_window() {
         let obs = out.observation(0).unwrap().to_vec();
         let alive = out.alive().to_vec();
         for i in 0..n {
-            let s = p.state(i).unwrap();
+            let s = &p.state(i).unwrap();
             for a in 0..cfg.agents() {
                 let row = usize::try_from(i).unwrap() * A + a;
                 if !alive[row].get() {

@@ -35,7 +35,7 @@ fn pool(c: VrpConfig, n: u32, seed: u64) -> EnvPool<Vrp, Masked> {
 }
 
 fn state(p: &EnvPool<Vrp, Masked>, i: u32) -> VrpState {
-    *p.state(i).unwrap()
+    p.state(i).unwrap()
 }
 
 /// One step of one instance; the reward and whether it ended.

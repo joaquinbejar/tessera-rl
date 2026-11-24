@@ -49,7 +49,7 @@ fn play(
     for t in 0..STEPS {
         let mut acts = vec![0; usize::try_from(INSTANCES).unwrap() * MAX_AGENTS * HEADS];
         for i in 0..usize::try_from(INSTANCES).unwrap() {
-            let state = p.state(u32::try_from(i).unwrap()).unwrap();
+            let state = &p.state(u32::try_from(i).unwrap()).unwrap();
             for slot in 0..cfg.agent_count() {
                 if !state.is_alive(slot) {
                     continue;
@@ -73,7 +73,7 @@ fn play(
         );
         masks = out.masks().to_vec();
         for i in 0..INSTANCES {
-            let s = p.state(i).unwrap();
+            let s = &p.state(i).unwrap();
             assert_eq!(LimitOrderBook::validate(cfg, s), Ok(()));
             agent_limits(cfg, s).unwrap();
             if !cfg.allow_short_cash && s.step < cfg.steps {

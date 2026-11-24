@@ -78,7 +78,7 @@ fn test_jobshop_rules_do_not_allocate() {
     };
     let mut pool = EnvPool::<JobShop, Masked>::with_masks(cfg, options).unwrap();
     pool.reset_all(Reseed::Keep).unwrap();
-    let state = *pool.state(0).unwrap();
+    let state = pool.state(0).unwrap();
     let n = allocations(|| {
         for rule in [Rule::Spt, Rule::Mwkr, Rule::Fifo] {
             std::hint::black_box(baseline::act(rule, &state));
@@ -133,7 +133,7 @@ fn test_vrp_reset_and_steps_with_501_wide_masks_do_not_allocate() {
     let options = PoolOptions::new(NonZeroU32::MIN, Seed::new(4));
     let mut pool = EnvPool::<Vrp, Masked>::with_masks(cfg, options).unwrap();
     pool.reset_all(Reseed::Keep).unwrap();
-    let state = *pool.state(0).unwrap();
+    let state = pool.state(0).unwrap();
     assert_eq!(
         allocations(|| {
             std::hint::black_box(vrp_baseline::act(&state, 0));

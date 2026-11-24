@@ -693,14 +693,14 @@ fn test_go9_illegal_point_is_replaced_by_the_pass_or_rejected() {
     let mut p = pool();
     play(&mut p, at(0, 0));
     play(&mut p, PASS);
-    let before = *p.state(0).unwrap();
+    let before = p.state(0).unwrap();
     let result = p.step(ActionInput {
         discrete: &[at(0, 0).cast_signed(), PASS.cast_signed()],
         continuous: &[],
     });
     if let Err(e) = result {
         assert!(matches!(e, EngineError::IllegalAction { agent: 0, .. }));
-        assert_eq!(*p.state(0).unwrap(), before);
+        assert_eq!(p.state(0).unwrap(), before);
     } else {
         assert_eq!(p.state(0).unwrap().sets(), before.sets());
         assert_eq!(p.state(0).unwrap().passes_in_row, 2, "a second pass");
@@ -738,10 +738,10 @@ fn test_go9_snapshot_and_restore_keep_the_superko_history() {
         play(&mut p, a);
     }
     let snap = p.snapshot(0).unwrap();
-    let fixed = *p.state(0).unwrap();
+    let fixed = p.state(0).unwrap();
     play(&mut p, at(8, 8));
     p.restore(0, &snap).unwrap();
-    assert_eq!(*p.state(0).unwrap(), fixed);
+    assert_eq!(p.state(0).unwrap(), fixed);
     assert!(!mask(&p, 0).contains(&at(1, 2)), "the ko is still barred");
 }
 
@@ -929,7 +929,7 @@ fn test_go9_never_reset_record_round_trips_and_refuses_anything_else() {
     let mut q = EnvPool::<Go9, Masked>::with_masks(cfg(), options).unwrap();
     q.import(&[0], &[rec]).unwrap();
     q.reset_all(Reseed::Keep).unwrap();
-    assert_eq!(*q.state(0).unwrap(), Go9State::default());
+    assert_eq!(q.state(0).unwrap(), Go9State::default());
     let mut r = EnvPool::<Go9, Masked>::with_masks(cfg(), options).unwrap();
     let header = *DecodedRecord::from(p.snapshot(0).unwrap()).header();
     let bad = DecodedRecord::from_parts(header, state_of(&[at(0, 0)])).unwrap();
