@@ -70,7 +70,8 @@ class FakeHost:
             "kind": "host", "auto_reset": self.auto_reset,
         }
         if self.refuses:
-            layout["refuses_agents"] = True
+            # The value as given, so a test can pass a non-bool.
+            layout["refuses_agents"] = self.refuses
         layout.update(self.layout_patch)
         layout.pop(self.drop_layout, None)
         return layout

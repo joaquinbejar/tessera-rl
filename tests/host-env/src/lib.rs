@@ -3,14 +3,15 @@
 //! A host environment crate that depends on core only (ADR-0062,
 //! ADR-0065 item 3): a counter whose observation is its step and the
 //! config's offset, a second environment registered without a factory,
-//! a spawning environment for the ADR-0013 respawn test (#71), and a masked
-//! environment with two action heads (#311).
+//! a spawning environment for the ADR-0013 respawn test (#71), a masked
+//! environment with two action heads (#311), and an environment that
+//! refuses agents (ADR-0070, host protocol 2).
 
 use tessera_rl_core::io::{Actions, MaskWriter, ObsWriter};
 use tessera_rl_core::space::{BoxBounds, DType, Space};
 use tessera_rl_core::{
-    AbortCode, AgentSlot, EpisodeEnd, HostEnvironment, HostError, HostOut, HostSeed, SpaceError,
-    TurnStructure,
+    AbortCode, AgentSlot, EpisodeEnd, HostEnvironment, HostError, HostOut, HostSeed, Refusals,
+    RefuseCode, SpaceError, TurnStructure,
 };
 use tessera_rl_macros::EnvConfig;
 
@@ -430,3 +431,109 @@ impl HostEnvironment for MultiHead {
 }
 
 tessera_rl_core::register_host!(MultiHead, id = "test/MultiHead-v1");
+
+/// The refusing environment's configuration.
+#[derive(EnvConfig, Debug, Clone, PartialEq)]
+pub struct RefuserConfig {
+    /// Steps per episode.
+    #[config(default = 4, range = 1..=1000)]
+    pub episode: u32,
+}
+
+/// Two agents (ADR-0070): an agent whose action is 2 is refused with code
+/// `30 + slot` and gets reward -1; any other action `a` gets `0.5 + a`.
+/// The observation is the step and the agent's refusals so far.
+#[derive(Debug)]
+pub struct Refuser {
+    cfg: RefuserConfig,
+    step: u32,
+    refusals: [i32; 2],
+}
+
+/// The refusing environment's id.
+pub const REFUSER_ID: &str = "test/Refuser-v1";
+
+/// The refusing environment's slot count (its `MAX_AGENTS`).
+pub const REFUSER_MAX_AGENTS: usize = 2;
+
+impl HostEnvironment for Refuser {
+    const ENV_ID: &'static str = REFUSER_ID;
+    const ENV_VERSION: u32 = 1;
+    const MAX_AGENTS: usize = REFUSER_MAX_AGENTS;
+    const REFUSES_AGENTS: bool = true;
+    type Config = RefuserConfig;
+
+    fn new(cfg: &RefuserConfig) -> Result<Self, HostError> {
+        Ok(Self {
+            cfg: cfg.clone(),
+            step: 0,
+            refusals: [0; 2],
+        })
+    }
+
+    fn observation_space(_: &RefuserConfig) -> Result<Space, SpaceError> {
+        Ok(Space::Box {
+            shape: vec![2],
+            dtype: DType::I32,
+            bounds: BoxBounds::Int {
+                low: vec![0],
+                high: vec![1_000_000],
+            },
+        })
+    }
+
+    fn action_space(_: &RefuserConfig) -> Result<Space, SpaceError> {
+        Ok(Space::Discrete { n: 3 })
+    }
+
+    fn reset(&mut self, _: HostSeed, _: &mut HostOut<'_>) {
+        self.step = 0;
+        self.refusals = [0; 2];
+    }
+
+    fn refuse(&self, actions: &Actions<'_, ()>, out: &mut Refusals<'_>) {
+        for s in 0..2u16 {
+            if let Some(agent) = AgentSlot::new(s, 2)
+                && actions.discrete(agent, 0) == Some(2)
+                && let Some(code) = RefuseCode::new(30 + u32::from(s))
+            {
+                out.refuse(agent, code);
+            }
+        }
+    }
+
+    fn step(&mut self, actions: &Actions<'_, ()>, out: &mut HostOut<'_>) {
+        self.step += 1;
+        for s in 0..2u16 {
+            if let Some(agent) = AgentSlot::new(s, 2) {
+                if actions.is_refused(agent) {
+                    if let Some(n) = self.refusals.get_mut(usize::from(s)) {
+                        *n += 1;
+                    }
+                    out.set_reward(agent, -1.0);
+                } else {
+                    let a = actions.discrete(agent, 0).unwrap_or(0);
+                    #[expect(clippy::cast_precision_loss, reason = "small actions")]
+                    out.set_reward(agent, 0.5 + a as f32);
+                }
+            }
+        }
+        if self.step >= self.cfg.episode {
+            out.end_episode(EpisodeEnd::Terminated);
+        }
+    }
+
+    fn observe(&self, agent: AgentSlot, obs: &mut ObsWriter<'_, '_, ()>) {
+        let values = [
+            i32::try_from(self.step).unwrap_or(0),
+            self.refusals.get(agent.index()).copied().unwrap_or(0),
+        ];
+        if let Some(leaf) = obs.leaf(0) {
+            for (bytes, v) in leaf.as_chunks_mut::<4>().0.iter_mut().zip(values) {
+                bytes.copy_from_slice(&v.to_le_bytes());
+            }
+        }
+    }
+}
+
+tessera_rl_core::register_host!(Refuser, id = "test/Refuser-v1");

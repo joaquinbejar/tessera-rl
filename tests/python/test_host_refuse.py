@@ -43,6 +43,15 @@ def test_host_refuse_hostenv_reports_refused_agents(fake, outputs):
     env.close()
 
 
+def test_host_refuse_protocol_2_requires_the_refusal_outputs(fake):
+    fake(drop_output="refuse_code")
+    env = tessera_rl.make(FAKE, num_envs=2)
+    # The keys are checked on the first call.
+    with pytest.raises(tessera_rl.ConfigError, match=r"outputs lack \['refuse_code'\]"):
+        env.reset()
+    env.close()
+
+
 def test_host_refuse_protocol_1_hostenv_has_no_refusal_fields(fake):
     fake(protocol=1, refuses=False)
     env = tessera_rl.make(FAKE, num_envs=2)
