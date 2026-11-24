@@ -42,7 +42,8 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
+import shutil
+import tempfile
 import platform
 import statistics
 import subprocess
@@ -158,15 +159,20 @@ def main(argv=None) -> int:
     p.add_argument("--threshold", type=float, default=475.0)
     p.add_argument("--margin", type=float, default=20.0)
     p.add_argument("--num-cpus", type=int, default=3)
-    p.add_argument("--ray-temp-dir", default=os.path.abspath(".ray-tmp"), help="Ray's session directory (default: ./.ray-tmp, not /tmp/ray)")
     p.add_argument("--out", default="reference-rllib.json")
     args = p.parse_args(argv)
     torch.set_num_threads(1)
-    ray.init(num_cpus=args.num_cpus, include_dashboard=False, log_to_driver=False, _temp_dir=args.ray_temp_dir)
+    # Ray's session directory: a private short directory (its socket paths
+    # must stay under 107 bytes), removed afterwards; never the shared /tmp/ray.
+    ray_tmp = tempfile.mkdtemp(prefix="tessera-ray-")
     try:
-        results = [run(b, s, args.total_steps, args.eval_episodes) for s in args.seeds for b in BACKENDS]
+        ray.init(num_cpus=args.num_cpus, include_dashboard=False, log_to_driver=False, _temp_dir=ray_tmp)
+        try:
+            results = [run(b, s, args.total_steps, args.eval_episodes) for s in args.seeds for b in BACKENDS]
+        finally:
+            ray.shutdown()
     finally:
-        ray.shutdown()
+        shutil.rmtree(ray_tmp, ignore_errors=True)
     tess = [r for r in results if r["backend"] == "tessera"]
     ctrl = [r for r in results if r["backend"] == "gymnasium"]
     median_eval = statistics.median(r["eval_mean"] for r in tess)
