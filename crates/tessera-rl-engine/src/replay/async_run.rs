@@ -15,9 +15,20 @@
 //! received at a `Recv` before that send. A recorded id that never comes back
 //! (it was not sent on replay) is a [`DivergenceKind::RecvMismatch`].
 //!
-//! A step that panics is reported where the replay observes it, which may be
-//! earlier than the recording did; that is reported as
-//! [`DivergenceKind::UnexpectedPoison`].
+//! # A panic observed early
+//!
+//! Once a step panicked, every later `recv` (and `send`) of the pool reports
+//! the panic, so where a panic is observed depends on worker timing, on
+//! record and on replay alike. When replay observes it before the file
+//! does, the events up to the recorded `Poisoned` cannot be re-issued on the
+//! poisoned pool. Replay then skips them, if each is a `Step`, `Reset`,
+//! `Recv`, `Checkpoint` or periodic `Keyframe` (calls the poisoned pool
+//! refuses, or checks that need a live pool), and counts them in
+//! [`ReplaySummary::unchecked_before_poison`]; such a replay is not
+//! [verified](ReplaySummary::verified). Any other event in between (a state
+//! write, an adaptive or reset source event), or a file with no `Poisoned`,
+//! is a [`DivergenceKind::UnexpectedPoison`]. The file does not record which
+//! instance panicked, so replay checks that a panic occurred, not its cause.
 
 use tessera_rl_core::config::CanonicalConfig;
 use tessera_rl_core::encoding::{HashSink, Sink};
@@ -129,11 +140,25 @@ impl Replay<'_> {
                     field: "an event after Poisoned",
                 });
             }
-            if let Some(call) = run.awaiting_poison.take() {
-                if event != Event::Poisoned {
-                    return Err(run.diverged(call, DivergenceKind::UnexpectedPoison, None));
+            if let Some(call) = run.awaiting_poison {
+                match event {
+                    Event::Poisoned => {
+                        run.awaiting_poison = None;
+                        run.summary.poisoned = true;
+                    }
+                    // Observed early: the recording saw the panic later.
+                    Event::Step { .. }
+                    | Event::Reset { .. }
+                    | Event::Recv { .. }
+                    | Event::Checkpoint { .. }
+                    | Event::Keyframe { .. } => {
+                        run.summary.unchecked_before_poison =
+                            run.summary.unchecked_before_poison.saturating_add(1);
+                    }
+                    _ => {
+                        return Err(run.diverged(call, DivergenceKind::UnexpectedPoison, None));
+                    }
                 }
-                run.summary.poisoned = true;
             } else {
                 self.apply_async(pool, &mut run, index, event)?;
             }
