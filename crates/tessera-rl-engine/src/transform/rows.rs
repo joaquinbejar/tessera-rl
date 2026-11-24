@@ -3,7 +3,7 @@
 //! The transform parts of a view of rows: what `observe_rows` needs to run
 //! the pipeline for the instances of the view (ADR-0078 item 1).
 
-use super::kernels::{StackMode, run_leaf};
+use super::kernels::{StackMode, frame_age, run_leaf};
 use super::plan::Plan;
 use super::stats::{Applied, Moments};
 
@@ -66,10 +66,10 @@ impl TransformRows<'_> {
         }
     }
 
-    /// Runs the plan for agent `slot` of instance `i`: `raw` holds, by
-    /// leaf index, the transformed leaves as `E::observe` wrote them, `out` is
-    /// the agent's leaf rows (the exported leaves), `work` the intermediate
-    /// scratch.
+    /// Runs the plan for agent `slot` of instance `i`: `raw` holds, by raw
+    /// leaf index, what `E::observe` wrote (absent set rows already zero),
+    /// `out` is the agent's exported leaf rows, `work` the intermediate
+    /// scratch. Stacked sets get their `frame_age` leaf last (ADR-0092).
     pub(crate) fn run(
         &mut self,
         i: usize,
@@ -89,6 +89,7 @@ impl TransformRows<'_> {
             .unwrap_or(&mut []);
         for leaf in &s.plan.leaves {
             let input: &[u8] = raw.get(leaf.leaf).map_or(&[], |r| &**r);
+            let mask: Option<&[u8]> = leaf.mask.and_then(|m| raw.get(m)).map(|r| &**r);
             let per = s.plan.normalized;
             let chunk = (self.base + i) / s.chunk_size.max(1);
             let accum = if per == 0 {
@@ -96,10 +97,17 @@ impl TransformRows<'_> {
             } else {
                 self.accum.get_mut(chunk * per..(chunk + 1) * per)
             };
-            if let Some(dst) = out.get_mut(leaf.leaf) {
+            if let Some(dst) = out.get_mut(leaf.out) {
                 run_leaf(
-                    leaf, input, dst, work, state, generation, self.mode, &s.applied, accum,
+                    leaf, input, dst, work, state, generation, self.mode, &s.applied, accum, mask,
                 );
+            }
+        }
+        for age in &s.plan.ages {
+            if let Some((head, tail)) = out.split_at_mut_checked(age.mask)
+                && let (Some(dst), Some(mask)) = (head.get_mut(age.out), tail.first())
+            {
+                frame_age(age, mask, dst);
             }
         }
     }

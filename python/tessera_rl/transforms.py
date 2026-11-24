@@ -7,7 +7,13 @@ transformed observation.
 
 A leaf is named as ``layout()`` names it: ``Dict`` keys and ``Tuple``
 positions joined by ``.``, the empty name for an observation that is a
-single leaf. Transforms on ``Set`` leaves are refused (ADR-0082).
+single leaf. On a ``Set`` (ADR-0092): ``Normalize`` and ``OneHot`` apply to
+its item leaves, keep absent slots zero, and pool the statistics over the
+present slots; ``FrameStack`` names the set itself and stacks all of its
+leaves, exported as a set of ``k * MAX`` slots (frames oldest first) with
+items at ``<set>/<key>`` (``<set>/item`` for a single-leaf set), a generated
+``<set>/frame_age`` ``uint8`` leaf (0 the newest frame, 0 when absent), then
+``<set>_mask``.
 
 - ``FrameStack(leaf, k)``: the last ``k`` observations, oldest first, shape
   ``(k, *shape)``; ``k`` in ``2..=64``. The stacks are pool state beside the

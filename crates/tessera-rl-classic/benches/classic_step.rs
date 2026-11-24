@@ -16,7 +16,9 @@ use tessera_rl_classic::{
     GatherConfig, Grid, GridConfig, KeyDoor, KeyDoorConfig, MountainCar, MountainCarConfig,
     PaddleDuel, PaddleDuelConfig, Pendulum, PendulumConfig, Snake, SnakeConfig, Tag, TagConfig,
 };
-use tessera_rl_engine::{ActionInput, EnvPool, Masked, NoMasks, PolicyMap, PoolOptions, Reseed};
+use tessera_rl_engine::{
+    ActionInput, EnvPool, Masked, NoMasks, PolicyMap, PoolOptions, Reseed, Transforms,
+};
 use tessera_rl_num::identity::Seed;
 
 const N: u32 = 1024;
@@ -83,6 +85,50 @@ fn bench_policy_map(
             });
         });
     }
+}
+
+/// Gather with transforms on its item set (ADR-0092), against the same
+/// pool without them: `full` keeps all 8 items, `sparse` 1 (7 of 8 slots
+/// absent, the re-zero worst case). Auto-reset keeps the presence pattern.
+fn bench_gather_transforms(c: &mut Criterion) {
+    let mut group = c.benchmark_group("gather_transforms_1024");
+    let actions: Vec<i32> = (0..N).map(|i| i32::try_from(i % 4).unwrap()).collect();
+    let lists = [
+        ("none", Transforms::new()),
+        ("normalize", Transforms::new().normalize("items", 5.0)),
+        ("stack4", Transforms::new().frame_stack("items", 4)),
+        (
+            "normalize_stack4",
+            Transforms::new()
+                .normalize("items", 5.0)
+                .frame_stack("items", 4),
+        ),
+    ];
+    for (density, items) in [("full", 8u8), ("sparse", 1u8)] {
+        for (name, t) in &lists {
+            let cfg = GatherConfig {
+                items,
+                ..GatherConfig::default()
+            };
+            let mut p = EnvPool::<Gather, NoMasks>::new(cfg, options())
+                .unwrap()
+                .with_transforms(t.clone())
+                .unwrap();
+            p.reset_all(Reseed::Keep).unwrap();
+            group.bench_function(format!("{density}/{name}"), |b| {
+                b.iter(|| {
+                    let out = p
+                        .step(ActionInput {
+                            discrete: &actions,
+                            continuous: &[],
+                        })
+                        .unwrap();
+                    black_box(out.rewards());
+                });
+            });
+        }
+    }
+    group.finish();
 }
 
 fn bench(c: &mut Criterion) {
@@ -190,7 +236,8 @@ fn bench(c: &mut Criterion) {
 }
 
 criterion_group!(benches, bench);
-criterion_main!(benches);
+criterion_group!(transforms, bench_gather_transforms);
+criterion_main!(benches, transforms);
 
 /// Snake: two agents on the default board under a seeded policy over each
 /// row's mask; deaths end episodes, which reset at once. Both observations,

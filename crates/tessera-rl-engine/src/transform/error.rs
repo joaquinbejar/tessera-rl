@@ -14,11 +14,28 @@ pub enum TransformError {
         /// The name.
         leaf: String,
     },
-    /// The leaf belongs to a `Set` (ADR-0082): transforms on set leaves are
-    /// refused for now.
+    /// The leaf belongs to a `Set` and the transform has no set rule
+    /// (ADR-0082 point 4, ADR-0092 point 1): every current transform has
+    /// one, so this is for transforms added later.
     #[error("leaf {leaf:?} belongs to a Set; transforms on Set leaves are not supported")]
     OnSetLeaf {
         /// The leaf.
+        leaf: String,
+    },
+    /// A `FrameStack` names one leaf of a set: a set is stacked whole, by
+    /// its path (ADR-0092 point 5).
+    #[error("FrameStack of leaf {leaf:?} stacks part of set {set:?}; name the set {set:?}")]
+    PartialSetStack {
+        /// The set's path.
+        set: String,
+        /// The leaf named.
+        leaf: String,
+    },
+    /// A transform on a leaf of a set already stacked, or a second stack of
+    /// it: the set stack is the last op of its leaves (ADR-0092 point 5).
+    #[error("leaf {leaf:?} belongs to a set that is already stacked")]
+    AfterSetStack {
+        /// The leaf or set named.
         leaf: String,
     },
     /// The transform does not apply to this leaf.

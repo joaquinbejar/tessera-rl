@@ -2583,38 +2583,45 @@ fn observe_rows<E: Environment, M: MaskProvider<E>, const ZERO: bool>(
         };
         let mut rng = ObsRng::new(authority, &identity);
         if let Some(shared) = transform.shared {
-            // ADR-0078 item 1: the environment writes the transformed leaves
-            // into the scratch; the exported rows wait in `exported`.
-            let raw_len = shared.plan.raw_bytes.min(scratch.len());
-            let (raw, work) = scratch.split_at_mut(raw_len);
-            let mut exported: [&mut [u8]; MAX_LEAVES] = Default::default();
-            let mut rest = &mut *raw;
-            for lp in &shared.plan.leaves {
+            // ADR-0078 item 1: the environment writes the raw layout; the
+            // transformed leaves go to the scratch, the others straight to
+            // their exported rows (ADR-0092: raw and exported indices differ
+            // by the generated `frame_age` leaves).
+            let plan = &shared.plan;
+            let transformed = |r: usize| plan.leaves.iter().any(|lp| lp.leaf == r);
+            let raw_len = plan.raw_bytes.min(scratch.len());
+            let (raw_buf, work) = scratch.split_at_mut(raw_len);
+            let mut raw: [&mut [u8]; MAX_LEAVES] = Default::default();
+            let mut rest = &mut *raw_buf;
+            for lp in &plan.leaves {
                 let len = lp.raw.min(rest.len());
                 let (head, tail) = core::mem::take(&mut rest).split_at_mut(len);
                 rest = tail;
                 head.fill(0);
-                if let (Some(view), Some(keep)) =
-                    (leaves.get_mut(lp.leaf), exported.get_mut(lp.leaf))
-                {
-                    *keep = core::mem::replace(view, head);
+                if let Some(view) = raw.get_mut(lp.leaf) {
+                    *view = head;
                 }
             }
-            let mut writer = ObsWriter::new(leaves);
+            for (r, view) in raw.iter_mut().enumerate().take(plan.raw_count) {
+                if !transformed(r)
+                    && let Some(dst) = plan.out_of_raw.get(r).and_then(|&o| leaves.get_mut(o))
+                {
+                    *view = core::mem::take(dst);
+                }
+            }
+            let raw_rows = raw.get_mut(..plan.raw_count).unwrap_or(&mut []);
+            let mut writer = ObsWriter::new(raw_rows);
             E::observe(cfg, state, agent, &mut rng, &mut writer);
-            // Swap back: the views get the exported rows, `exported` the raw
-            // rows the environment wrote.
-            for lp in &shared.plan.leaves {
-                if let (Some(view), Some(keep)) =
-                    (leaves.get_mut(lp.leaf), exported.get_mut(lp.leaf))
+            // ADR-0082 point 3, on the raw rows before the pipeline.
+            zero_absent_rows(raw_rows, &plan.raw_sets);
+            for (r, view) in raw_rows.iter_mut().enumerate() {
+                if !transformed(r)
+                    && let Some(dst) = plan.out_of_raw.get(r).and_then(|&o| leaves.get_mut(o))
                 {
-                    core::mem::swap(view, keep);
+                    *dst = core::mem::take(view);
                 }
             }
-            transform.run(i, slot, row.generation, leaves, &exported, work);
-            // Set leaves are never transformed (ADR-0082), so zeroing them
-            // after the pipeline is the same as before it.
-            zero_absent_rows(leaves, sets);
+            transform.run(i, slot, row.generation, leaves, raw_rows, work);
         } else {
             let mut writer = ObsWriter::new(leaves);
             E::observe(cfg, state, agent, &mut rng, &mut writer);

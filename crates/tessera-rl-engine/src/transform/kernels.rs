@@ -6,7 +6,7 @@
 
 use tessera_rl_core::space::DType;
 
-use super::plan::{LeafPlan, Op, STACK_HEADER};
+use super::plan::{FrameAge, LeafPlan, Op, STACK_HEADER};
 use super::stats::{Applied, Moments, normalize};
 
 /// What an observation does to a frame stack.
@@ -26,7 +26,9 @@ pub(crate) enum StackMode {
 /// Runs one leaf's operations for one agent: `raw` is what `E::observe`
 /// wrote, `out` the exported row. `state` is the agent's arena slice,
 /// `applied` the pool statistics, `accum` the chunk accumulator (when
-/// accumulating).
+/// accumulating). `mask` is the current frame's mask of the set the leaf
+/// is an item of (ADR-0092 point 2). A leaf without ops (a set mask
+/// copied for its items) is copied as it is.
 #[expect(
     clippy::too_many_arguments,
     reason = "one call site per pass; the parts are disjoint borrows"
@@ -41,7 +43,14 @@ pub(crate) fn run_leaf(
     mode: StackMode,
     applied: &[Applied],
     mut accum: Option<&mut [Moments]>,
+    mask: Option<&[u8]>,
 ) {
+    if plan.ops.is_empty() {
+        if let Some(dst) = out.get_mut(..raw.len()) {
+            dst.copy_from_slice(raw);
+        }
+        return;
+    }
     let half = scratch.len() / 2;
     let (a, b) = scratch.split_at_mut(half);
     // Where the current input is: 0 = raw, 1 = a, 2 = b.
@@ -52,24 +61,24 @@ pub(crate) fn run_leaf(
         let last = j + 1 == count;
         let acc = accum.as_deref_mut();
         match (src, last) {
-            (0, true) => apply(op, raw, out, state, generation, mode, applied, acc),
+            (0, true) => apply(op, raw, out, state, generation, mode, applied, acc, mask),
             (0, false) => {
                 if let Some(dst) = a.get_mut(..n) {
-                    apply(op, raw, dst, state, generation, mode, applied, acc);
+                    apply(op, raw, dst, state, generation, mode, applied, acc, mask);
                 }
                 src = 1;
             }
-            (1, true) => apply(op, a, out, state, generation, mode, applied, acc),
+            (1, true) => apply(op, a, out, state, generation, mode, applied, acc, mask),
             (1, false) => {
                 if let Some(dst) = b.get_mut(..n) {
-                    apply(op, a, dst, state, generation, mode, applied, acc);
+                    apply(op, a, dst, state, generation, mode, applied, acc, mask);
                 }
                 src = 2;
             }
-            (_, true) => apply(op, b, out, state, generation, mode, applied, acc),
+            (_, true) => apply(op, b, out, state, generation, mode, applied, acc, mask),
             (_, false) => {
                 if let Some(dst) = a.get_mut(..n) {
-                    apply(op, b, dst, state, generation, mode, applied, acc);
+                    apply(op, b, dst, state, generation, mode, applied, acc, mask);
                 }
                 src = 1;
             }
@@ -87,6 +96,7 @@ fn apply(
     mode: StackMode,
     applied: &[Applied],
     accum: Option<&mut [Moments]>,
+    mask: Option<&[u8]>,
 ) {
     match *op {
         Op::Stack { frame, k, offset } => {
@@ -97,18 +107,74 @@ fn apply(
                 stack(ring, frame_in, output, frame, k, generation, mode);
             }
         }
-        Op::OneHot { dtype, elements, n } => one_hot(input, output, dtype, elements, n),
+        Op::OneHot {
+            dtype,
+            elements,
+            n,
+            rows,
+        } => {
+            let (inb, outb) = (elements * dtype.size(), elements * n);
+            for r in 0..rows {
+                if let (Some(i), Some(o)) = (
+                    input.get(r * inb..(r + 1) * inb),
+                    output.get_mut(r * outb..(r + 1) * outb),
+                ) {
+                    if absent(mask, r) {
+                        // ADR-0092 point 2: an absent row is all false.
+                        o.fill(0);
+                    } else {
+                        one_hot(i, o, dtype, elements, n);
+                    }
+                }
+            }
+        }
         Op::Normalize {
             dtype,
             elements,
             clip,
             first,
+            rows,
         } => {
             if let Some(stats) = applied.get(first..first + elements) {
-                let acc = accum.and_then(|a| a.get_mut(first..first + elements));
-                normalize_row(input, output, dtype, stats, clip, acc);
+                let mut acc = accum.and_then(|a| a.get_mut(first..first + elements));
+                let (inb, outb) = (elements * dtype.size(), elements * 4);
+                // Rows in slot order; only present rows add samples, to
+                // statistics pooled over the slots (ADR-0092 point 3).
+                for r in 0..rows {
+                    if let (Some(i), Some(o)) = (
+                        input.get(r * inb..(r + 1) * inb),
+                        output.get_mut(r * outb..(r + 1) * outb),
+                    ) {
+                        if absent(mask, r) {
+                            o.fill(0);
+                        } else {
+                            normalize_row(i, o, dtype, stats, clip, acc.as_deref_mut());
+                        }
+                    }
+                }
             }
         }
+    }
+}
+
+/// Whether row `r` of a set item is absent from the current frame.
+#[inline]
+fn absent(mask: Option<&[u8]>, r: usize) -> bool {
+    mask.is_some_and(|m| m.get(r).is_none_or(|&b| b == 0))
+}
+
+/// Writes a stacked set's `frame_age` leaf (ADR-0092 point 5) from its
+/// stacked mask: slot `j` present is `k - 1 - j / max`, 0 the newest frame;
+/// absent slots are 0.
+pub(crate) fn frame_age(age: &FrameAge, mask: &[u8], out: &mut [u8]) {
+    let max = age.max.max(1);
+    for (j, (dst, &present)) in out.iter_mut().zip(mask).enumerate() {
+        let frame = j / max;
+        *dst = if present == 0 {
+            0
+        } else {
+            u8::try_from(age.k.saturating_sub(1).saturating_sub(frame)).unwrap_or(0)
+        };
     }
 }
 
@@ -239,7 +305,8 @@ fn normalize_row(
 
 #[cfg(test)]
 mod tests {
-    use super::{StackMode, run_leaf};
+    use super::{StackMode, frame_age, run_leaf};
+    use crate::transform::plan::FrameAge;
     use crate::transform::plan::{LeafPlan, Op, STACK_HEADER};
     use crate::transform::stats::{Applied, Moments};
     use tessera_rl_core::space::DType;
@@ -247,6 +314,8 @@ mod tests {
     fn stack_plan(frame: usize, k: usize) -> LeafPlan {
         LeafPlan {
             leaf: 0,
+            out: 0,
+            mask: None,
             raw: frame,
             ops: vec![Op::Stack {
                 frame,
@@ -275,6 +344,7 @@ mod tests {
             generation,
             mode,
             &[],
+            None,
             None,
         );
         out
@@ -333,11 +403,14 @@ mod tests {
     fn test_one_hot_out_of_range_rows_are_all_false() {
         let plan = LeafPlan {
             leaf: 0,
+            out: 0,
+            mask: None,
             raw: 12,
             ops: vec![Op::OneHot {
                 dtype: DType::I32,
                 elements: 3,
                 n: 3,
+                rows: 1,
             }],
         };
         let raw: Vec<u8> = [2i32, -1, 3].iter().flat_map(|v| v.to_ne_bytes()).collect();
@@ -349,6 +422,8 @@ mod tests {
     fn test_normalize_then_stack_chains_and_accumulates_raw_values() {
         let plan = LeafPlan {
             leaf: 0,
+            out: 0,
+            mask: None,
             raw: 2,
             ops: vec![
                 Op::Normalize {
@@ -356,6 +431,7 @@ mod tests {
                     elements: 2,
                     clip: 100.0,
                     first: 0,
+                    rows: 1,
                 },
                 Op::Stack {
                     frame: 8,
@@ -379,6 +455,7 @@ mod tests {
             StackMode::Fresh,
             &applied,
             Some(&mut acc),
+            None,
         );
         let floats: Vec<f32> = out
             .as_chunks::<4>()
@@ -388,5 +465,120 @@ mod tests {
             .collect();
         assert_eq!(floats, [3.0, 100.0, 3.0, 100.0]);
         assert_eq!((acc[0].count, acc[0].mean, acc[1].mean), (1.0, 3.0, 250.0));
+    }
+
+    /// ADR-0092 points 2 and 3: absent rows are zero after `Normalize`, and
+    /// only present rows add samples, pooled over the rows.
+    #[test]
+    fn test_normalize_set_rows_skips_absent_and_pools_statistics() {
+        let plan = LeafPlan {
+            leaf: 0,
+            out: 0,
+            mask: Some(1),
+            raw: 3,
+            ops: vec![Op::Normalize {
+                dtype: DType::U8,
+                elements: 1,
+                clip: 100.0,
+                first: 0,
+                rows: 3,
+            }],
+        };
+        let mut out = vec![0xAA; 12];
+        let mut scratch = vec![0; 64];
+        let applied = [Applied::default(); 1];
+        let mut acc = [Moments::default(); 1];
+        run_leaf(
+            &plan,
+            &[4, 9, 6],
+            &mut out,
+            &mut scratch,
+            &mut [],
+            0,
+            StackMode::Push,
+            &applied,
+            Some(&mut acc),
+            Some(&[1, 0, 1]),
+        );
+        let floats: Vec<f32> = out
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|b| f32::from_ne_bytes(*b))
+            .collect();
+        assert_eq!(floats, [4.0, 0.0, 6.0]);
+        assert_eq!((acc[0].count, acc[0].mean), (2.0, 5.0));
+    }
+
+    /// ADR-0092 point 4: an absent one-hot row is all false, unlike a
+    /// present item of class 0.
+    #[test]
+    fn test_one_hot_set_rows_absent_is_all_false() {
+        let plan = LeafPlan {
+            leaf: 0,
+            out: 0,
+            mask: Some(1),
+            raw: 2,
+            ops: vec![Op::OneHot {
+                dtype: DType::U8,
+                elements: 1,
+                n: 2,
+                rows: 2,
+            }],
+        };
+        let mut out = vec![0xAA; 4];
+        let mut scratch = vec![0; 64];
+        run_leaf(
+            &plan,
+            &[0, 0],
+            &mut out,
+            &mut scratch,
+            &mut [],
+            0,
+            StackMode::Push,
+            &[],
+            None,
+            Some(&[1, 0]),
+        );
+        assert_eq!(out, [1, 0, 0, 0]);
+    }
+
+    /// ADR-0092 point 5: newest frame is age 0, absent slots 0.
+    #[test]
+    fn test_frame_age_newest_zero_and_absent_zero() {
+        let age = FrameAge {
+            out: 0,
+            mask: 1,
+            k: 3,
+            max: 2,
+        };
+        let mut out = vec![0xAA; 6];
+        frame_age(&age, &[1, 0, 1, 1, 0, 1], &mut out);
+        assert_eq!(out, [2, 0, 1, 1, 0, 0]);
+    }
+
+    #[test]
+    fn test_run_leaf_without_ops_copies_raw() {
+        let plan = LeafPlan {
+            leaf: 0,
+            out: 0,
+            mask: None,
+            raw: 3,
+            ops: Vec::new(),
+        };
+        let mut out = vec![0; 3];
+        run_leaf(
+            &plan,
+            &[1, 0, 1],
+            &mut out,
+            &mut [],
+            &mut [],
+            0,
+            StackMode::Push,
+            &[],
+            None,
+            None,
+        );
+        assert_eq!(out, [1, 0, 1]);
     }
 }
