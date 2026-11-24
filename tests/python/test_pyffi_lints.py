@@ -5,6 +5,7 @@ lexer cases the earlier tests left to chance (the surviving mutants of
 module is needed."""
 
 import json
+import os
 import pathlib
 import shutil
 import subprocess
@@ -493,6 +494,33 @@ def test_entries_lint_flags_implicitly_unsafe_foreign_items_and_generic_traits(t
 def test_entries_lint_passes_private_foreign_items_and_safe_traits(tmp_path, extra):
     run = _entries_problem(tmp_path, extra)
     assert run.returncode == 0, (extra, run.stdout)
+
+
+def _failing_cargo(tmp_path):
+    bin_ = tmp_path / "bin"
+    bin_.mkdir()
+    cargo = bin_ / "cargo"
+    cargo.write_text("#!/bin/sh\necho 'cargo broke' >&2\nexit 101\n")
+    cargo.chmod(0o755)
+    return {**os.environ, "PATH": f"{bin_}{os.pathsep}{os.environ['PATH']}"}
+
+
+def test_entries_lint_on_copies_does_not_run_cargo(tmp_path):
+    # #426: the copies have no manifest; a transient cargo failure must not
+    # fail the lint's own tests.
+    py, ffi = tmp_path / "py", tmp_path / "pyffi"
+    shutil.copytree(ROOT / "crates" / "tessera-rl-py" / "src", py)
+    shutil.copytree(ROOT / "crates" / "tessera-rl-pyffi" / "src", ffi)
+    run = subprocess.run([sys.executable, str(SCRIPTS / "check_py_entries.py"), str(py), str(ffi)],
+                         capture_output=True, text=True, cwd=ROOT, env=_failing_cargo(tmp_path))
+    assert run.returncode == 0, run.stdout + run.stderr
+
+
+def test_entries_lint_on_the_tree_reports_a_cargo_failure(tmp_path):
+    run = subprocess.run([sys.executable, str(SCRIPTS / "check_py_entries.py")],
+                         capture_output=True, text=True, cwd=ROOT, env=_failing_cargo(tmp_path))
+    assert run.returncode == 1, run.stdout + run.stderr
+    assert "cargo tree failed (exit 101): cargo broke" in run.stdout, run.stdout + run.stderr
 
 
 # -- check_pyffi_api.py -----------------------------------------------------
