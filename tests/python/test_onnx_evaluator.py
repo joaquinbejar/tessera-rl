@@ -90,7 +90,9 @@ def test_onnx_missing_package_is_typed(monkeypatch):
     import importlib.util
 
     monkeypatch.setattr(importlib.util, "find_spec", lambda name: None)
-    with pytest.raises(t.OnnxError, match=r"tessera-rl\[onnx\]"):
+    # Off the ADR-0057 platforms the platform gate answers first.
+    want = r"tessera-rl\[onnx\]" if sys.platform in ("linux", "darwin") else f"not available on {sys.platform}"
+    with pytest.raises(t.OnnxError, match=want):
         search.OnnxEvaluator(FIXTURES / "constant.onnx")
 
 
