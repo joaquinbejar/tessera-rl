@@ -283,10 +283,29 @@ fn test_vrp_largest_instance_masks_are_501_wide() {
 fn test_vrp_illegal_action_is_replaced_by_the_lowest_legal_one() {
     let mut p = pool(cfg(5, 30), 1, 12);
     let s0 = state(&p, 0);
-    // At reset the depot is illegal: the engine's policy replaces it with
-    // the no-op, the lowest legal action, customer 1.
-    let (r, _) = step(&mut p, DEPOT);
-    let s1 = state(&p, 0);
-    assert_eq!((s1.at[0], s1.served), (1, 1));
-    assert_eq!(r, -f32::from(u16::try_from(s0.distance(DEPOT, 1)).unwrap()));
+    // At reset the depot is illegal; the no-op is the lowest legal action,
+    // customer 1.
+    assert_eq!(s0.noop(0), 1);
+    let a = [0i32; 8];
+    match p.step(ActionInput {
+        discrete: &a,
+        continuous: &[],
+    }) {
+        // `debug-checks` (on under workspace feature unification):
+        // rejected atomically, nothing moved.
+        Err(e) => {
+            assert!(matches!(
+                e,
+                tessera_rl_engine::EngineError::IllegalAction { agent: 0, .. }
+            ));
+            assert_eq!(state(&p, 0), s0);
+        }
+        // Default: replaced by the no-op.
+        Ok(out) => {
+            let r = out.rewards().first().copied().unwrap();
+            let s1 = state(&p, 0);
+            assert_eq!((s1.at[0], s1.served), (1, 1));
+            assert_eq!(r, -f32::from(u16::try_from(s0.distance(DEPOT, 1)).unwrap()));
+        }
+    }
 }
