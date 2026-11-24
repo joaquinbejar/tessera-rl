@@ -27,8 +27,8 @@ fn encode_le_blocks<T: Copy, S: Sink, const N: usize>(
 ) {
     let mut block = [0u8; BLOCK];
     for chunk in items.chunks(BLOCK / N) {
-        for (dst, &item) in block.chunks_exact_mut(N).zip(chunk) {
-            dst.copy_from_slice(&le(item));
+        for (dst, &item) in block.as_chunks_mut::<N>().0.iter_mut().zip(chunk) {
+            *dst = le(item);
         }
         // `chunk.len() <= BLOCK / N`: the product is at most `BLOCK`.
         if let Some(bytes) = chunk.len().checked_mul(N).and_then(|n| block.get(..n)) {
