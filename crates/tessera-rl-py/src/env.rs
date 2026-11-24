@@ -43,6 +43,27 @@ pub(crate) enum BindError {
     /// The ONNX evaluator (ADR-0057): loading, model, contract, or a build
     /// without the `onnx` feature.
     Onnx(String),
+    /// A replay file refused or a replay that diverged (ADR-0072).
+    Replay(tessera_rl_engine::ReplayError),
+}
+
+impl From<tessera_rl_engine::ReplayError> for BindError {
+    /// Engine errors keep their own class, so a recorded call raises what the
+    /// same call raises unrecorded; a closed recording is a poisoned pool.
+    fn from(e: tessera_rl_engine::ReplayError) -> Self {
+        use tessera_rl_engine::ReplayError;
+        match e {
+            ReplayError::Engine(e) => Self::Engine(e),
+            ReplayError::RecorderClosed => Self::Engine(EngineError::Poisoned),
+            ReplayError::Persist(e) => Self::Persist(e),
+            e => Self::Replay(e),
+        }
+    }
+}
+
+/// The refusal of an operation a pool mode does not offer.
+fn sync_only(what: &str) -> BindError {
+    BindError::Argument(format!("{what} is available in sync mode only"))
 }
 
 impl From<tessera_rl_engine::PersistError> for BindError {
@@ -219,10 +240,32 @@ pub(crate) trait PoolOps: Send {
     fn batched(&self) -> Option<std::sync::Arc<dyn crate::batched::AsyncOps>> {
         None
     }
+    /// Starts recording a replay file (ADR-0072) in memory: from now on
+    /// `reset`, `step` and `fork` are logged. Sync mode only.
+    fn record_start(
+        &mut self,
+        _keyframe_every: u64,
+        _checkpoint_every: u64,
+    ) -> Result<(), BindError> {
+        Err(sync_only("record"))
+    }
+    /// Ends the recording and returns the file.
+    fn record_finish(&mut self) -> Result<Vec<u8>, BindError> {
+        Err(sync_only("record"))
+    }
+    /// Drops the recording, if any; the pool keeps its state.
+    fn record_abort(&mut self) {}
+    /// Replays a file into this pool and checks it (ADR-0072 section 5).
+    fn replay(&mut self, _data: &[u8]) -> Result<tessera_rl_engine::ReplaySummary, BindError> {
+        Err(sync_only("replay"))
+    }
 }
 
 struct Pooled<E: Environment, M: MaskProvider<E>> {
     pool: EnvPool<E, M>,
+    /// The recording in progress, if any (ADR-0072): held without its pool
+    /// borrow between calls.
+    rec: Option<tessera_rl_engine::replay::DetachedRecorder<E, M, Vec<u8>>>,
     layout: Layout,
     views: Option<std::sync::Arc<crate::view::ViewSet>>,
     /// Captured while healthy: identity and regions for views, no row values.
@@ -362,6 +405,7 @@ where
         Ok(Self {
             storage,
             pool,
+            rec: None,
             views: crate::view::view_set(&layout).map(std::sync::Arc::new),
             layout,
         })
@@ -379,13 +423,13 @@ pub(crate) fn u32_bytes(v: &[u32]) -> Vec<u8> {
 
 impl<E, M> Pooled<E, M>
 where
-    E: Environment + Validate,
-    E::Config: Sync,
+    E: tessera_rl_core::Persist,
+    E::Config: tessera_rl_core::config::CanonicalConfig + Sync,
     E::Header: Send,
     E::State: Send,
     <E::Header as tessera_rl_core::RecordLayout>::Adaptive:
         tessera_rl_core::AdaptiveValues<E::Config>,
-    M: MaskProvider<E>,
+    M: tessera_rl_engine::PersistMask<E>,
 {
     /// A reset with one optional seed per reset instance (`None` keeps
     /// that instance's seed), as one engine call: validated as a whole
@@ -393,11 +437,45 @@ where
     /// `reset_all`, which recovers a poisoned pool.
     fn reset_list(&mut self, ids: Option<&[u32]>, seeds: &[Option<u64>]) -> Result<(), BindError> {
         let seeds: Vec<Option<Seed>> = seeds.iter().map(|s| s.map(Seed::new)).collect();
-        let reseed = Reseed::Each(&seeds);
+        self.reset_with(ids, Reseed::Each(&seeds))
+    }
+}
+
+impl<E, M> Pooled<E, M>
+where
+    E: tessera_rl_core::Persist,
+    E::Config: tessera_rl_core::config::CanonicalConfig + Sync,
+    E::Header: Send,
+    E::State: Send,
+    <E::Header as tessera_rl_core::RecordLayout>::Adaptive:
+        tessera_rl_core::AdaptiveValues<E::Config>,
+    M: tessera_rl_engine::PersistMask<E>,
+{
+    /// One reset, through the recorder while recording.
+    fn reset_with(&mut self, ids: Option<&[u32]>, reseed: Reseed<'_>) -> Result<(), BindError> {
+        if let Some(detached) = self.rec.take() {
+            let mut rec = detached.attach(&mut self.pool);
+            let result = match ids {
+                None => rec.reset_all(reseed).map(|_| ()),
+                Some(ids) => rec.reset(ids, reseed).map(|_| ()),
+            };
+            self.rec = Some(rec.detach());
+            return result.map_err(BindError::from);
+        }
         match ids {
             None => self.pool.reset_all(reseed)?,
             Some(ids) => self.pool.reset(ids, reseed)?,
         };
+        Ok(())
+    }
+
+    /// Refuses an unlogged state write while recording.
+    fn not_recording(&self, what: &str) -> Result<(), BindError> {
+        if self.rec.is_some() {
+            return Err(BindError::Argument(format!(
+                "{what} is not recorded: finish the recording first"
+            )));
+        }
         Ok(())
     }
 }
@@ -426,14 +504,16 @@ where
             ResetSeed::Base(s) => Reseed::Base(Seed::new(*s)),
             ResetSeed::List(seeds) => return self.reset_list(ids, seeds),
         };
-        match ids {
-            None => self.pool.reset_all(reseed)?,
-            Some(ids) => self.pool.reset(ids, reseed)?,
-        };
-        Ok(())
+        self.reset_with(ids, reseed)
     }
 
     fn step(&mut self, actions: ActionInput<'_>) -> Result<(), BindError> {
+        if let Some(detached) = self.rec.take() {
+            let mut rec = detached.attach(&mut self.pool);
+            let result = rec.step(actions).map(|_| ());
+            self.rec = Some(rec.detach());
+            return result.map_err(BindError::from);
+        }
         self.pool.step(actions)?;
         Ok(())
     }
@@ -489,6 +569,7 @@ where
     }
 
     fn import(&mut self, id: u32, bytes: &[u8]) -> Result<(), BindError> {
+        self.not_recording("import_record")?;
         let record = decode_from_slice::<DecodedRecord<E>>(bytes).map_err(BindError::Decode)?;
         self.pool.import(&[id], &[record])?;
         Ok(())
@@ -504,6 +585,7 @@ where
         ids: Option<&[u32]>,
         limits: tessera_rl_engine::DecodeLimits,
     ) -> Result<(), BindError> {
+        self.not_recording("load")?;
         let records = self.pool.decode(bytes, limits)?;
         match ids {
             Some(ids) => self.pool.import(ids, &records)?,
@@ -514,12 +596,56 @@ where
     }
 
     fn fork(&mut self, src: u32, dst: &[u32]) -> Result<(), BindError> {
+        if let Some(detached) = self.rec.take() {
+            let mut rec = detached.attach(&mut self.pool);
+            let result = rec.fork(src, dst);
+            self.rec = Some(rec.detach());
+            return result.map_err(BindError::from);
+        }
         self.pool.fork(src, dst)?;
         Ok(())
     }
 
     fn is_poisoned(&self) -> bool {
         self.pool.is_poisoned()
+    }
+
+    fn record_start(
+        &mut self,
+        keyframe_every: u64,
+        checkpoint_every: u64,
+    ) -> Result<(), BindError> {
+        if self.rec.is_some() {
+            return Err(BindError::Argument("already recording".to_owned()));
+        }
+        let options = tessera_rl_engine::ReplayWriterOptions {
+            keyframe_every,
+            checkpoint_every,
+            outputs_hash: false,
+        };
+        let rec = tessera_rl_engine::Recorder::new(&mut self.pool, Vec::new(), options)?;
+        self.rec = Some(rec.detach());
+        Ok(())
+    }
+
+    fn record_finish(&mut self) -> Result<Vec<u8>, BindError> {
+        let detached = self
+            .rec
+            .take()
+            .ok_or_else(|| BindError::Argument("not recording".to_owned()))?;
+        Ok(detached.attach(&mut self.pool).finish()?)
+    }
+
+    fn record_abort(&mut self) {
+        self.rec = None;
+    }
+
+    fn replay(&mut self, data: &[u8]) -> Result<tessera_rl_engine::ReplaySummary, BindError> {
+        self.not_recording("replay")?;
+        let replay =
+            tessera_rl_engine::Replay::open(data, tessera_rl_engine::DecodeLimits::default())
+                .map_err(BindError::from)?;
+        replay.run(&mut self.pool).map_err(BindError::from)
     }
 }
 
@@ -697,6 +823,7 @@ where
         layout,
         views,
         storage,
+        ..
     } = pooled;
     let pool = match workers {
         Some(w) => {
@@ -709,6 +836,7 @@ where
     };
     Ok(Box::new(Pooled {
         pool,
+        rec: None,
         layout,
         views,
         storage,

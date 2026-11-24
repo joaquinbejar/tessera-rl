@@ -622,7 +622,11 @@ fn positional<'a>(
     Ok(out)
 }
 
-fn exactly<'a, const N: usize>(g: Gil, args: Ref<'a>, name: &str) -> CResult<[Ref<'a>; N]> {
+pub(crate) fn exactly<'a, const N: usize>(
+    g: Gil,
+    args: Ref<'a>,
+    name: &str,
+) -> CResult<[Ref<'a>; N]> {
     let items = capi::tuple_items(g, args, "the arguments")?;
     items.try_into().map_err(|_| {
         error(
