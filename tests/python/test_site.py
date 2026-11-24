@@ -40,7 +40,29 @@ def test_site_inline_snippet_fences_python(tmp_path):
     assert build.inline_snippets("A\n<!-- snippet: a.py -->\nB", tmp_path) == "A\n```python\nx = 1\n```\nB"
 
 
+def _generated(out):
+    for rel in build.GENERATED:
+        (out / rel).parent.mkdir(parents=True, exist_ok=True)
+        (out / rel).write_text("<html>generated</html>")
+
+
+def test_site_check_flags_missing_or_placeholder_generated_pages(tmp_path):
+    problems = build.check(tmp_path)
+    assert all(any(rel in p and "missing" in p for p in problems) for rel in build.GENERATED)
+    _generated(tmp_path)
+    (tmp_path / build.GENERATED[0]).write_text(build.PLACEHOLDER)
+    problems = build.check(tmp_path)
+    assert any(build.GENERATED[0] in p and "placeholder" in p for p in problems)
+
+
+def test_site_stage_writes_placeholders(tmp_path):
+    build.stage_pages(ROOT / "site", tmp_path / "s")
+    for rel in build.GENERATED:
+        assert build.PLACEHOLDER in (tmp_path / "s" / "pages" / rel).read_text()
+
+
 def test_site_check_flags_spec_and_adr_links(tmp_path):
+    _generated(tmp_path)
     (tmp_path / "ok.html").write_text("<a href='getting-started/'>ok</a>")
     (tmp_path / "bad.html").write_text("<a href='../docs/SPEC.md'>spec</a> and /adr/0003-x")
     problems = build.check(tmp_path)
@@ -50,6 +72,7 @@ def test_site_check_flags_spec_and_adr_links(tmp_path):
 
 
 def test_site_check_flags_symlink_into_docs(tmp_path):
+    _generated(tmp_path)
     (tmp_path / "leak").symlink_to(ROOT / "docs")
     assert any("links into docs/" in p for p in build.check(tmp_path))
 

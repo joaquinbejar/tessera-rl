@@ -34,6 +34,13 @@ SNIPPET = re.compile(r"^<!-- snippet: (?P<name>[A-Za-z0-9_.-]+) -->$", re.M)
 FORBIDDEN = re.compile(r"(?:docs/(?:SPEC\.md|adr/|reviews/)|SPEC\.md|/adr/0\d{3})")
 
 
+# Pages the builder adds after MkDocs (pdoc, the dashboard). Placeholders
+# stand in for them while MkDocs runs, so strict link validation still covers
+# the links to them; the generated files then replace the placeholders.
+GENERATED = ("python/tessera_rl.html", "benchmarks/index.html")
+PLACEHOLDER = "<!-- tessera-site placeholder: replaced after the MkDocs build -->"
+
+
 class SiteError(RuntimeError):
     pass
 
@@ -55,6 +62,10 @@ def stage_pages(src: pathlib.Path, dst: pathlib.Path) -> None:
     shutil.copytree(src, dst)
     for page in (dst / "pages").rglob("*.md"):
         page.write_text(inline_snippets(page.read_text(encoding="utf-8"), src / "snippets"), encoding="utf-8")
+    for rel in GENERATED:
+        target = dst / "pages" / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(PLACEHOLDER + "\n", encoding="utf-8")
 
 
 def run(cmd: list[str]) -> None:
@@ -70,8 +81,11 @@ def build(out: pathlib.Path) -> None:
         staged = pathlib.Path(tmp) / "site"
         stage_pages(ROOT / "site", staged)
         run([sys.executable, "-m", "mkdocs", "build", "--strict", "-f", str(staged / "mkdocs.yml"), "-d", str(out)])
+    for rel in GENERATED:
+        (out / rel).unlink(missing_ok=True)
     run([sys.executable, "-m", "pdoc", "tessera_rl", "-o", str(out / "python")])
     run([sys.executable, str(ROOT / "tools" / "dashboard" / "build.py")])
+    shutil.rmtree(out / "benchmarks", ignore_errors=True)
     shutil.copytree(ROOT / "target" / "dashboard", out / "benchmarks")
 
 
@@ -79,6 +93,12 @@ def check(out: pathlib.Path) -> list[str]:
     """Problems in a built site: files under docs/, and links to the SPEC
     or the ADRs."""
     problems = []
+    for rel in GENERATED:
+        f = out / rel
+        if not f.is_file():
+            problems.append(f"{rel}: missing (its generator wrote nothing)")
+        elif PLACEHOLDER in f.read_text(encoding="utf-8", errors="replace"):
+            problems.append(f"{rel}: still the placeholder")
     docs = (ROOT / "docs").resolve()
     for f in sorted(out.rglob("*")):
         if f.is_symlink() and (f.resolve() == docs or docs in f.resolve().parents):
