@@ -167,6 +167,9 @@ pub struct SearchPool<E: Environment, M: MaskProvider<E>> {
     pub(crate) scratch: EnvPool<E, M>,
     /// Bytes of one agent's observation, a shape fixed at construction.
     obs_row_bytes: usize,
+    /// The exported leaves of an observation row, and its sets (#490).
+    obs_leaves: Vec<crate::obs_layout::LeafLayout>,
+    obs_sets: Vec<crate::obs_layout::SetLayout>,
     // Per-call working storage, allocated at construction.
     pub(crate) protected: Vec<bool>,
     pub(crate) doomed: Vec<bool>,
@@ -239,9 +242,10 @@ where
     ///
     /// [`SearchError::ImperfectInformation`] when the environment does
     /// not have perfect information (ADR-0035); a non-discrete action
-    /// space; [`SearchError::SetObservation`] for an observation with a
-    /// `Set` (ADR-0082); a budget overrun (the error names the bytes per node); a
-    /// scratch pool error.
+    /// space; a budget overrun (the error names the bytes per node); a
+    /// scratch pool error. `Set` observations are accepted (ADR-0082 point 7
+    /// as amended, #490): their item and mask leaves are ordinary leaves of
+    /// the evaluator's rows, see [`Self::observation_sets`].
     pub fn new(
         cfg: E::Config,
         options: SearchOptions,
@@ -288,9 +292,6 @@ where
         let joint = joint_heads::<E, M>(&cfg)?;
         let actions = joint.joint();
         let heads = joint.heads();
-        if E::observation_space(&cfg).is_ok_and(|s| s.contains_set()) {
-            return Err(SearchError::SetObservation);
-        }
         if options.capacity.get() == NONE {
             return Err(options_error("capacity", "must be below u32::MAX"));
         }
@@ -341,8 +342,15 @@ where
             .map_while(|l| outputs.observation(l).map(<[u8]>::len))
             .map(|len| len / rows)
             .sum();
+        let (obs_leaves, obs_sets) = scratch
+            .observation_space()
+            .ok()
+            .and_then(|s| crate::obs_layout::observation_layout(&s))
+            .unwrap_or_default();
         let mut pool = Self {
             obs_row_bytes,
+            obs_leaves,
+            obs_sets,
             records: vec![*root; cap],
             nodes: vec![Node::FREE; cap],
             edges: vec![Edge::EMPTY; cap.saturating_mul(idx(actions))],
@@ -376,6 +384,21 @@ where
         pool.replace_root(root)?;
         pool.stacks.set_slot(idx(pool.root), root_bytes);
         Ok(pool)
+    }
+
+    /// The exported leaves of one agent's evaluator row, in row order, with
+    /// their byte offsets (#490); empty for an observation space that is
+    /// not boxes, dicts and sets.
+    #[must_use]
+    pub fn observation_leaves(&self) -> &[crate::obs_layout::LeafLayout] {
+        &self.obs_leaves
+    }
+
+    /// The `Set`s of the observation (ADR-0082 point 6): each set's item
+    /// leaves and mask leaf, as indices into [`Self::observation_leaves`].
+    #[must_use]
+    pub fn observation_sets(&self) -> &[crate::obs_layout::SetLayout] {
+        &self.obs_sets
     }
 
     /// Node slots, the root included.

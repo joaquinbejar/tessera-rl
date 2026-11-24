@@ -70,9 +70,8 @@ fn row_bytes<E: Environment>(actions: usize, obs: usize, agents: usize) -> Optio
     .ok()
 }
 
-/// Bytes of one agent's observation in a space, or `None` for a `Set`,
-/// which `SearchPool` refuses with `SearchError::SetObservation`
-/// (ADR-0082 point 7).
+/// Bytes of one agent's observation in a space: a `Set` exports its item
+/// leaves `[max, ...]` and a `bool` mask `[max]` (ADR-0082 point 2).
 fn space_bytes(space: &Space) -> Option<usize> {
     let product = |shape: &[u32]| {
         shape
@@ -90,7 +89,10 @@ fn space_bytes(space: &Space) -> Option<usize> {
         Space::Tuple(items) => items
             .iter()
             .try_fold(0usize, |acc, s| acc.checked_add(space_bytes(s)?)),
-        Space::Set { .. } => None,
+        Space::Set { inner, max } => {
+            let max = usize::try_from(*max).ok()?;
+            space_bytes(inner)?.checked_mul(max)?.checked_add(max)
+        }
     }
 }
 
@@ -734,5 +736,17 @@ mod bound_tests {
         let row = row_bytes::<Connect4>(7, space_bytes(&exported).unwrap(), 2).unwrap()
             + 2 * u64::try_from(stack).unwrap();
         assert_eq!(bound(64, 8) - bound(64, 4), 4 * row);
+    }
+
+    /// A `Set` counts its item leaves `[max, ...]` and its `bool` mask
+    /// `[max]` (ADR-0082 point 2, #490): Gather's `agent` (2 x i32), `items`
+    /// (8 x 2 x i32) and `items_mask` (8 x bool).
+    #[test]
+    fn test_space_bytes_counts_set_items_and_mask() {
+        let space = tessera_rl_classic::Gather::observation_space(
+            &tessera_rl_classic::GatherConfig::default(),
+        )
+        .unwrap();
+        assert_eq!(space_bytes(&space), Some(2 * 4 + 8 * 2 * 4 + 8));
     }
 }

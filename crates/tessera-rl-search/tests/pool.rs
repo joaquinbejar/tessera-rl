@@ -180,23 +180,23 @@ fn test_search_pool_rejects_imperfect_information_citing_adr_0035() {
 }
 
 #[test]
-fn test_search_pool_set_observation_is_refused_with_a_typed_error() {
+fn test_search_pool_set_observation_is_accepted() {
     let mut p = EnvPool::<Gather, NoMasks>::new(
         GatherConfig::default(),
         PoolOptions::new(NonZeroU32::MIN, Seed::new(1)),
     )
     .unwrap();
     p.reset_all(Reseed::Keep).unwrap();
-    let err = SearchPool::<Gather, NoMasks>::new(
+    let s = SearchPool::<Gather, NoMasks>::new(
         GatherConfig::default(),
         options(8, 2, Eviction::Strict),
         &p.snapshot(0).unwrap(),
         EnvPool::new,
     )
-    .err()
     .unwrap();
-    assert_eq!(err, SearchError::SetObservation);
-    assert!(err.to_string().contains("ADR-0082"));
+    // ADR-0082 point 7 as amended (#490): the set's leaves are ordinary
+    // leaves of the evaluator row.
+    assert_eq!(s.observation_sets().len(), 1);
 }
 
 #[test]

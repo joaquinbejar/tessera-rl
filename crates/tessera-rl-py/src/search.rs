@@ -13,10 +13,11 @@
 
 use core::num::NonZeroU32;
 
+use tessera_rl_classic::{Gather, GatherConfig};
 use tessera_rl_core::encoding::decode_from_slice;
 use tessera_rl_core::{AdaptiveValues, Environment, RecordLayout, Validate};
 use tessera_rl_engine::{
-    AutoReset, DecodedRecord, EnvPool, MaskProvider, Masked, PoolOptions, Record, Reseed,
+    AutoReset, DecodedRecord, EnvPool, MaskProvider, Masked, NoMasks, PoolOptions, Record, Reseed,
 };
 use tessera_rl_games::{Connect4, Connect4Config};
 use tessera_rl_num::identity::Seed;
@@ -391,6 +392,34 @@ pub(crate) fn connect4(args: &SearchArgs) -> Result<Box<dyn SearchOps>, BindErro
         onnx: None,
         #[cfg(feature = "onnx")]
         cfg: Connect4Config {},
+    }))
+}
+
+/// A Gather search (`tessera/Gather-v1`, the default config), rooted at a
+/// fresh episode: the first-party environment with a `Set` observation
+/// (ADR-0082 point 9, #490). Gather has no masks.
+pub(crate) fn gather(args: &SearchArgs) -> Result<Box<dyn SearchOps>, BindError> {
+    let pool_options = PoolOptions {
+        auto_reset: AutoReset::Disabled,
+        ..PoolOptions::new(NonZeroU32::MIN, Seed::new(args.seed))
+    };
+    let mut importer = EnvPool::<Gather, NoMasks>::new(GatherConfig::default(), pool_options)?;
+    importer.reset_all(Reseed::Keep)?;
+    let root = importer.snapshot(0)?;
+    let mut options = SearchOptions::new(
+        nonzero(args.capacity, "capacity")?,
+        nonzero(args.batch, "batch")?,
+    );
+    options.eviction = args.eviction;
+    let pool = SearchPool::new(GatherConfig::default(), options, &root, EnvPool::new)?;
+    let mcts = Mcts::new(pool, args.config())?;
+    Ok(Box::new(Searcher {
+        mcts,
+        importer,
+        #[cfg(feature = "onnx")]
+        onnx: None,
+        #[cfg(feature = "onnx")]
+        cfg: GatherConfig::default(),
     }))
 }
 

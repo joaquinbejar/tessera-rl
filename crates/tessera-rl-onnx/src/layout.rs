@@ -31,6 +31,9 @@ impl LeafInput {
 /// The observation leaves in the engine's order: a box, or a dict of
 /// boxes (the spaces Python exposes; anything else is refused).
 pub(crate) fn leaf_inputs(space: &Space) -> Result<Vec<LeafInput>, OnnxError> {
+    if space.contains_set() {
+        return Err(OnnxError::SetObservation);
+    }
     let mut out = Vec::new();
     match space {
         Space::Dict(entries) => {
@@ -72,5 +75,34 @@ pub(crate) fn action_count(space: &Space) -> Result<usize, OnnxError> {
         _ => Err(OnnxError::Contract {
             what: "the ONNX evaluator needs a Discrete action space".to_owned(),
         }),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use tessera_rl_core::space::{BoxBounds, DType, Space};
+
+    use super::leaf_inputs;
+    use crate::OnnxError;
+
+    #[test]
+    fn test_layout_set_observation_is_a_typed_refusal() {
+        let item = Space::Box {
+            shape: vec![2],
+            dtype: DType::I32,
+            bounds: BoxBounds::Int {
+                low: vec![0],
+                high: vec![7],
+            },
+        };
+        let space = Space::Dict(vec![(
+            "items".to_owned(),
+            Space::Set {
+                inner: Box::new(item),
+                max: 8,
+            },
+        )]);
+        assert_eq!(leaf_inputs(&space).err(), Some(OnnxError::SetObservation));
+        assert!(OnnxError::SetObservation.to_string().contains("#505"));
     }
 }

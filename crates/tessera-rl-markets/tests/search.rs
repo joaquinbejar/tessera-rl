@@ -2,9 +2,10 @@
 
 //! Search smoke test (design section 9, row 3). Search takes this
 //! environment's `MultiDiscrete([6, 9, 4, 8])` action as a canonical joint
-//! head (ADR-0086, #454), so the action check passes; a search pool is
-//! still refused, for the observation's `Set` leaves (`SetObservation`,
-//! ADR-0082, #490), and simultaneous actors (#491) would be refused next.
+//! head (ADR-0086, #454), and its `Set` observation leaves are ordinary
+//! evaluator leaves (#490), so a determinized search pool builds; its
+//! first expansion is refused for simultaneous actors (`NotSingleActor`,
+//! #491).
 //! Plain search is refused for imperfect information first. The
 //! determinized root the search would build is checked by hand here, the
 //! way its sampler does it: a sample from the sampler's identity passes
@@ -21,7 +22,7 @@ use core::num::NonZeroU32;
 
 use support::{Rng, config, input, legal_actions, pool};
 use tessera_rl_core::encoding::encode_to_vec;
-use tessera_rl_core::{AgentSlot, Determinize, Environment, ImperfectInformation, Validate};
+use tessera_rl_core::{AgentSlot, Determinize, ImperfectInformation, Validate};
 use tessera_rl_engine::{EnvPool, Masked, Reseed};
 use tessera_rl_markets::limits::MAX_AGENTS;
 use tessera_rl_markets::{LimitOrderBook, LobState};
@@ -38,7 +39,7 @@ fn options() -> SearchOptions {
 }
 
 #[test]
-fn test_search_smoke_refuses_set_observations_after_information_and_action_checks() {
+fn test_search_smoke_builds_and_refuses_simultaneous_actors_at_expansion() {
     let cfg = config(4, 2);
     let mut p = pool(cfg.clone(), 1, 11, None);
     let mut masks = p.reset_all(Reseed::Keep).unwrap().masks().to_vec();
@@ -58,9 +59,14 @@ fn test_search_smoke_refuses_set_observations_after_information_and_action_check
     let plain = Search::new(cfg.clone(), options(), &root, EnvPool::with_masks);
     assert!(matches!(plain, Err(SearchError::ImperfectInformation)));
     let det = Search::new_determinized(cfg.clone(), options(), &root, how, EnvPool::with_masks);
-    assert!(matches!(det, Err(SearchError::SetObservation)));
-    let space = LimitOrderBook::observation_space(&cfg).unwrap();
-    assert!(space.contains_set());
+    let mut det = det.unwrap();
+    assert_eq!(det.observation_sets().len(), 2);
+    let r = det.root();
+    let mut out = [r];
+    assert!(matches!(
+        det.expand(&[(r, 0)], &mut out),
+        Err(SearchError::NotSingleActor { .. })
+    ));
 
     // The sample the determinized root would take.
     let info = LimitOrderBook::info_state(&cfg, root.state(), agent);

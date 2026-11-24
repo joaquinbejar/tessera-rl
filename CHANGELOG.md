@@ -22,11 +22,14 @@ the API is not stable, and any 0.x release may break it.
 
 ### Breaking
 
+- `SearchError::SetObservation` is removed (#490, ADR-0082 point 7 as amended): `SearchPool` accepts `Set` observations, so the variant is never returned.
 - Replay format version 1 reserves the league fields of ADR-0088 item 8 (#384), as it did for ADR-0075, ADR-0079 and ADR-0081: a `has_league:u8` header byte after `has_curriculum`, policy-map group code 4 (`opponent`), and event tag 12 (`League`). Writers write 0 and never code 4 or tag 12; replay refuses a league, code 4 and tag 12 as `Unsupported` until the league lands. `replay::Event` gains a `League { body }` variant and `EventTag` a `League` tag, so exhaustive matches need an arm. No release has shipped replay files.
 - `EnvState` requires `Send + Sync` (ADR-0075, #363): worker threads read shared archive states. Plain-data state (ADR-0029: no pointers, no interior mutability) is always both, so no environment changes; a hand-written `EnvState` impl on a non-`Sync` type no longer compiles.
 - `PoolContext` is `#[non_exhaustive]` and no longer `Copy` (ADR-0075, #363): it gains `reset_source`; build it with `PoolContext::new(branch_counter)`. `restore_pool_context` takes the archive a context names: `restore_pool_context(context, archive)`. ADR-0078 (#346) then adds `transforms: TransformContext`, the transform identity, statistics and freeze flag.
 
 ### Added
+
+- Search over `Set` observations (ADR-0082 point 7 as amended, #490): a set's item leaves and `<name>_mask` leaf are ordinary leaves of the evaluator's rows, absent slots zero; `SearchPool::observation_leaves` and `observation_sets` (`LeafLayout`, `SetLayout`) give each leaf's offset and each set's item and mask leaves; `SearchGroup::bound_bytes` counts set leaves. Python: `Search(env_id="tessera/Gather-v1")` and `Search.sets`. The ONNX evaluator refuses set observations with `OnnxError::SetObservation` until #505. LimitOrderBook-v1 now builds a determinized search pool; its first expansion is refused for simultaneous actors (#491).
 
 - Search over `MultiDiscrete` actions (ADR-0086, #454): `SearchPool` takes a `MultiDiscrete` action space as one joint head of `prod(nvec)` actions, mixed radix with the first head most significant, up to `MAX_JOINT_ACTIONS` (4096; above it `SearchError::TooManyJointActions`; `Discrete` stays uncapped). `ActionMask::head_active` (default `true`) declares the conditional heads a parent value does not use; only canonical joints (every inactive head 0) are legal, so each game action has one edge. `tessera_rl_core::space::JointHeads` holds the joint index and the SPEC 11.3 mask offsets; `tessera_rl_search::check_head_activity` tests that an environment's step ignores its inactive heads; `tessera_rl.search.joint_log_prior` builds a joint prior from per-head logits. LimitOrderBook-v1 declares its heads' activity; search on it is still refused, for `Set` observations (#490) and simultaneous actors (#491).
 
