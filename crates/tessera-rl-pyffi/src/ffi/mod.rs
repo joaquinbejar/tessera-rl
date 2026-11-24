@@ -73,6 +73,7 @@ pub mod gather;
 pub mod inner;
 pub mod module_def;
 pub mod object;
+pub mod registry;
 pub(crate) mod tables;
 pub(crate) mod thunks;
 

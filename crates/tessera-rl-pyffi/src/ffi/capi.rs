@@ -357,7 +357,6 @@ pub(crate) fn is_exception_class(r: Ref<'_>) -> bool {
 
 /// Whether the pending exception is an `AttributeError` (direct: a class
 /// comparison that runs no Python code). False with none pending.
-#[cfg(feature = "host")]
 #[must_use]
 pub(crate) fn pending_is_attribute_error(_g: Gil<'_>) -> bool {
     // SAFETY: reading an interpreter global.
@@ -395,9 +394,22 @@ pub(crate) fn import_module<'py>(_g: Gil<'py>, name: &CStr) -> CResult<Mine<'py>
     Mine::container(unsafe { thunks::c_import_module(name.as_ptr()) })
 }
 
+/// `sys.modules[name]`, created as an empty module when absent (callout:
+/// reads and may write `sys.modules`). Owned as a user object: the entry
+/// may be anything a user stored there.
+pub(crate) fn add_module<'py>(g: Gil<'py>, name: &CStr) -> CResult<Mine<'py>> {
+    // SAFETY: attached; a C string.
+    let borrowed = unsafe { thunks::c_import_add_module(name.as_ptr()) };
+    if borrowed.is_null() {
+        return Err(RAISED);
+    }
+    // A borrowed reference from `sys.modules`; nothing runs between the
+    // call and the incref inside `owned_user`.
+    Mine::owned_user(g, borrowed)
+}
+
 /// `getattr(obj, name)` (callout: can run `__getattr__`). The result is
 /// owned as a container: its decref can run finalizers.
-#[cfg(feature = "host")]
 pub(crate) fn get_attr<'py>(_g: Gil<'py>, obj: Ref<'_>, name: &CStr) -> CResult<Mine<'py>> {
     // SAFETY: attached; a live object and a C string.
     Mine::container(unsafe { thunks::c_get_attr_string(obj.as_ptr(), name.as_ptr()) })

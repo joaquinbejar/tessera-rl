@@ -1481,7 +1481,8 @@ callout!(
     #[cfg(feature = "host")]
     c_import_module => ffi::PyImport_ImportModule : fn(CStr) -> Obj
 );
-callout!(
-    #[cfg(feature = "host")]
-    c_get_attr_string => ffi::PyObject_GetAttrString : fn(Obj, CStr) -> Obj
-);
+callout!(c_get_attr_string => ffi::PyObject_GetAttrString : fn(Obj, CStr) -> Obj);
+// `sys.modules[name]`, created if absent (ffi::registry): reads and may
+// write `sys.modules`, which a user may have replaced. Returns a borrowed
+// reference.
+callout!(c_import_add_module => ffi::PyImport_AddModule : fn(CStr) -> Obj);
