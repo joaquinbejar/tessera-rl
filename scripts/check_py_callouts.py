@@ -352,13 +352,14 @@ def safe_foreign(code: str) -> bool:
 def check(src: pathlib.Path) -> list[str]:
     problems = []
     for path in sorted(src.rglob("*.rs")):
-        rel = path.relative_to(src)
+        # Forward slashes on every OS: reports and the allowlist name files the same way.
+        rel = path.relative_to(src).as_posix()
         code = strip_comments(path.read_text())
         if safe_foreign(code):
             problems.append(f"{rel}: a public safe foreign function (`pub safe fn` in an `unsafe extern` block)")
         for name in sorted(reexports(code)):
             problems.append(f"{rel}: re-exports ffi::{name} (a C-API function is reached only through a callout)")
-        if rel.as_posix() == "ffi/capi.rs":
+        if rel == "ffi/capi.rs":
             for name in sorted(leaf_owned(code) & GC_ALLOCATORS):
                 problems.append(f"{rel}: {name} returns a GC-tracked object: own it with Mine::container")
             # The one direct decref is the leaf branch of `Mine::drop`.
@@ -372,7 +373,7 @@ def check(src: pathlib.Path) -> list[str]:
             continue
         if HIGH_LEVEL.search(code):
             problems.append(f"{rel}: PyO3's high-level API is used outside ffi/capi.rs")
-        for name in sorted(c_api_calls(code, values=rel.as_posix() != "ffi/thunks.rs")):
+        for name in sorted(c_api_calls(code, values=rel != "ffi/thunks.rs")):
             problems.append(f"{rel}: calls ffi::{name} directly (only ffi/capi.rs calls the C API)")
     return problems
 
