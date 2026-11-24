@@ -36,7 +36,7 @@ fn main() -> ExitCode {
         seed: arg(&args, "--seed").unwrap_or(1),
         total_steps: if smoke { 2 * ppo::ROLLOUT * ppo::NUM_ENVS } else { arg(&args, "--steps").unwrap_or(100_000) },
     };
-    println!("ppo-cartpole: burn {BURN_VERSION}, backend ndarray (CPU) + autodiff, seed {}", config.seed);
+    println!("ppo-cartpole: burn {BURN_VERSION}, backend flex (pure-Rust CPU) + autodiff, seed {}", config.seed);
     let report = match ppo::train(&config) {
         Ok(r) => r,
         Err(e) => {
