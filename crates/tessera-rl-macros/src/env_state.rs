@@ -51,6 +51,20 @@ fn allow_nan(attrs: &[Attribute]) -> syn::Result<bool> {
     Ok(found)
 }
 
+/// `tokens` with every token's span set to `span`: the crate path is
+/// built at the call site, and a bound or call through it would otherwise
+/// point at the derive.
+fn respan(tokens: &TokenStream, span: proc_macro2::Span) -> TokenStream {
+    tokens
+        .clone()
+        .into_iter()
+        .map(|mut tree| {
+            tree.set_span(span);
+            tree
+        })
+        .collect()
+}
+
 #[derive(Default)]
 struct FieldParts {
     padding_checks: Vec<TokenStream>,
@@ -109,29 +123,37 @@ impl FieldParts {
         self.prev_end = Some(quote! {
             (::core::mem::offset_of!(#name, #ident) + ::core::mem::size_of::<#ty>())
         });
+        // Every token that names the field's type is spanned at that type,
+        // so a field type that is not plain data is reported at the field
+        // only, notes included (SPEC 10.2).
         let ty_span = syn::spanned::Spanned::span(ty);
-        self.bounds
-            .push(quote_spanned!(ty_span=> assert_field::<#ty>();));
+        let core = &respan(core, ty_span);
+        self.bounds.push(quote_spanned! {ty_span=>
+            {
+                const fn assert_field<T: #core::encoding::Canonical + #core::StateInit + ::core::marker::Copy>() {}
+                assert_field::<#ty>();
+            }
+        });
         self.lens
             .push(quote_spanned!(ty_span=> <#ty as #core::encoding::Canonical>::ENCODED_LEN));
         self.encodes
-            .push(quote!(#core::encoding::Canonical::encode(&self.#ident, out);));
+            .push(quote_spanned!(ty_span=> #core::encoding::Canonical::encode(&self.#ident, out);));
         self.inits
-            .push(quote!(#ident: <#ty as #core::StateInit>::state_default(),));
+            .push(quote_spanned!(ty_span=> #ident: <#ty as #core::StateInit>::state_default(),));
         // Generated unconditionally: a `cfg` here would be evaluated
         // against the deriving crate's features (ADR-0055).
         if !nan {
             let field = LitStr::new(&ident.to_string(), ident.span());
-            self.nans.push(quote! {
+            self.nans.push(quote_spanned! {ty_span=>
                 if #core::encoding::Canonical::first_nan(&self.#ident).is_some() {
                     return ::core::option::Option::Some(#field);
                 }
             });
         }
         self.decodes.push(if nan {
-            quote!(#ident: <#ty as #core::encoding::DecodeAllowNan>::decode_allow_nan(input)?,)
+            quote_spanned!(ty_span=> #ident: <#ty as #core::encoding::DecodeAllowNan>::decode_allow_nan(input)?,)
         } else {
-            quote!(#ident: <#ty as #core::encoding::Canonical>::decode(input)?,)
+            quote_spanned!(ty_span=> #ident: <#ty as #core::encoding::Canonical>::decode(input)?,)
         });
         Ok(())
     }
@@ -204,7 +226,6 @@ pub(crate) fn derive(input: &DeriveInput) -> syn::Result<TokenStream> {
         #trailing_check
 
         const _: () = {
-            const fn assert_field<T: #core::encoding::Canonical + #core::StateInit + ::core::marker::Copy>() {}
             const fn assert_state<T: ::core::marker::Copy>() {}
             #(#bounds)*
             assert_state::<#name>();
