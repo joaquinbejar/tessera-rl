@@ -61,6 +61,14 @@ pub enum TransformError {
         /// Bytes per agent.
         bytes: usize,
     },
+    /// The frame stacks of `instances` instances do not fit in `usize`.
+    #[error("frame stacks of {per_instance} bytes for {instances} instances overflow usize")]
+    StateTooLarge {
+        /// Frame-stack bytes per instance.
+        per_instance: usize,
+        /// Instances.
+        instances: usize,
+    },
     /// The normalization accumulators exceed 256 MiB.
     #[error("normalization accumulators of {bytes} bytes exceed 256 MiB")]
     AccumulatorTooLarge {

@@ -201,9 +201,25 @@ where
         self.transform.as_ref().is_some_and(|t| t.frozen)
     }
 
+    /// The frame-stack bytes of `instances` instances.
+    ///
+    /// # Errors
+    ///
+    /// [`TransformError::StateTooLarge`] if the product overflows `usize`.
+    pub(crate) fn state_bytes_for(&self, instances: usize) -> Result<usize, EngineError> {
+        let per_instance = self.transform_state_bytes();
+        per_instance.checked_mul(instances).ok_or_else(|| {
+            TransformError::StateTooLarge {
+                per_instance,
+                instances,
+            }
+            .into()
+        })
+    }
+
     /// `len` bytes of frame stacks for `instances` instances, or an error.
     pub(crate) fn check_state_len(&self, len: usize, instances: usize) -> Result<(), EngineError> {
-        let expected = self.transform_state_bytes().saturating_mul(instances);
+        let expected = self.state_bytes_for(instances)?;
         if len == expected {
             Ok(())
         } else {
