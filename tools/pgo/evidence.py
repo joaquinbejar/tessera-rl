@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import math
 import os
+import re
 import statistics
 import tomllib
 from dataclasses import dataclass, field
@@ -29,6 +30,9 @@ PGO_IR_GAIN = 0.97
 PGO_MISPREDICT_GAIN = 0.90
 LTO_IR_GAIN = 0.98
 NATIVE_OBJECT = "_native"
+# The pseudo-event carrying the inclusive Ir of `_native`'s calls into libc's
+# memory primitives (#171). It travels in a native Cost beside the real events.
+PRIMITIVE_EVENT = "PrimIr"
 
 
 # --------------------------------------------------------------- manifest
@@ -129,6 +133,12 @@ class Cost:
     def mispredicts(self) -> int:
         return self.events["Bcm"] + self.events["Bim"]
 
+    @property
+    def primitives(self) -> int:
+        if PRIMITIVE_EVENT not in self.events:
+            raise ValueError(f"a cost without {PRIMITIVE_EVENT}: evidence from before #171")
+        return self.events[PRIMITIVE_EVENT]
+
     def __sub__(self, other: Cost) -> Cost:
         return Cost({k: v - other.events[k] for k, v in self.events.items()})
 
@@ -198,6 +208,86 @@ def native_cost(objects: dict[str, Cost]) -> Cost:
     if len(found) != 1:
         raise ValueError(f"expected one {NATIVE_OBJECT} object, found {len(found)}")
     return found[0]
+
+
+# libc's object (glibc, or macOS's libsystem_platform) and its memory primitives.
+_LIBC = re.compile(r"^(libc[.-]|libc\.so|libsystem_platform)")
+_PRIMITIVE = re.compile(r"^(_platform_)?(__)?(mem(set|cpy|move)|bzero)(\b|_|@|$)")
+
+
+def is_memory_primitive(obj: str, function: str) -> bool:
+    """Whether `function` in object `obj` is one of libc's memory primitives."""
+    return bool(_LIBC.match(os.path.basename(obj))) and bool(_PRIMITIVE.match(function))
+
+
+def primitive_calls(text: str) -> dict[str, int]:
+    """Inclusive Ir of every call from the `_native` object into a libc memory
+    primitive, by callee function. A call's cost is the line after its
+    `calls=` line; `cob=` and `cfn=` name its callee (an absent `cob=` means
+    the caller's own object)."""
+    positions = 1
+    events: list[str] | None = None
+    objects: dict[str, str] = {}
+    functions: dict[str, str] = {}
+    ob: str | None = None
+    cob: str | None = None
+    cfn: str | None = None
+    pending: tuple[str, str, str] | None = None
+    out: dict[str, int] = {}
+
+    def name(table: dict[str, str], value: str) -> str:
+        key, _, rest = value.strip().partition(" ")
+        if key.startswith("("):
+            if rest:
+                table[key] = rest
+            if key not in table:
+                raise ValueError(f"unknown id {key}")
+            return table[key]
+        return value.strip()
+
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("positions:"):
+            positions = len(line.split(":", 1)[1].split())
+        elif line.startswith("events:"):
+            events = line.split(":", 1)[1].split()
+            if "Ir" not in events:
+                raise ValueError("callgrind events lack Ir")
+        elif line.startswith("ob="):
+            ob = name(objects, line[3:])
+        elif line.startswith("cob="):
+            cob = name(objects, line[4:])
+        elif line.startswith("fn="):
+            name(functions, line[3:])
+        elif line.startswith("cfn="):
+            cfn = name(functions, line[4:])
+        elif line.startswith("calls="):
+            if ob is None or cfn is None:
+                raise ValueError("a calls= line before an object or a callee")
+            pending = (ob, cob or ob, cfn)
+        elif line[0] in "0123456789+-*":
+            if pending is None:
+                continue
+            if events is None:
+                raise ValueError("a cost line before the events")
+            caller, callee_ob, callee_fn = pending
+            pending, cob = None, None
+            values = line.split()[positions:]
+            ir = int(values[events.index("Ir")]) if len(values) > events.index("Ir") else 0
+            if os.path.basename(caller).startswith(NATIVE_OBJECT) and is_memory_primitive(callee_ob, callee_fn):
+                out[callee_fn] = out.get(callee_fn, 0) + ir
+    if events is None:
+        raise ValueError("no events line: not a callgrind file")
+    return out
+
+
+def native_cost_with_primitives(text: str) -> Cost:
+    """`native_cost` of one file, plus `PRIMITIVE_EVENT`: the inclusive Ir of
+    `_native`'s calls into libc memory primitives (#171)."""
+    cost = native_cost(parse_callgrind(text))
+    return Cost({**cost.events, PRIMITIVE_EVENT: sum(primitive_calls(text).values())})
 
 
 # ---------------------------------------------------------- feasibility gate
@@ -285,8 +375,18 @@ def _ratios(new: dict[str, Cost], base: dict[str, Cost], names, metric) -> list[
     return [metric(new[n]) / metric(base[n]) for n in names]
 
 
-def _ir(c: Cost) -> int:
-    return c.ir
+def adjusted_ratio(new: Cost, base: Cost) -> float:
+    """The `Ir` ratio the ladder accepts on (#171). An increase in `_native`'s
+    libc memory-primitive cost is charged to the new build, so work moved out
+    of `_native` into libc is not credited as a gain. A decrease is not
+    credited either: the primitives' base cost is mostly zeroing that every
+    build does, and counting it would dilute real engine changes."""
+    extra = max(0, new.primitives - base.primitives)
+    return (new.ir + extra) / base.ir
+
+
+def adjusted_ratios(new: dict[str, Cost], base: dict[str, Cost], names) -> list[float]:
+    return [adjusted_ratio(new[n], base[n]) for n in names]
 
 
 def _mispredicts(c: Cost) -> int:
@@ -294,7 +394,7 @@ def _mispredicts(c: Cost) -> int:
 
 
 def accept_w1(w1: dict, w0: dict, gating, w1_deterministic: bool) -> bool:
-    ratios = _ratios(w1, w0, gating, _ir)
+    ratios = adjusted_ratios(w1, w0, gating)
     return w1_deterministic and all(r <= MAX_REGRESSION for r in ratios) and geomean(ratios) <= LTO_IR_GAIN
 
 
@@ -304,13 +404,13 @@ def accept_w2f(w2f: dict, w2h: dict, w1: dict, all_scenarios, sets: Sets, w1_acc
     holdout = {s.name for s in all_scenarios if s.holdout}
     trained = [n for n in sets.gating if n not in holdout]
     held = [n for n in sets.gating if n in holdout]
-    if any(r > MAX_REGRESSION for r in _ratios(w2f, w1, sets.gating, _ir)):
+    if any(r > MAX_REGRESSION for r in adjusted_ratios(w2f, w1, sets.gating)):
         return False
-    gain = geomean(_ratios(w2f, w1, trained, _ir)) <= PGO_IR_GAIN
+    gain = geomean(adjusted_ratios(w2f, w1, trained)) <= PGO_IR_GAIN
     if not gain and sets.mispredict_available:
         names = [n for n in sets.mispredict if n not in holdout]
         gain = geomean(_ratios(w2f, w1, names, _mispredicts)) <= PGO_MISPREDICT_GAIN
-    return gain and geomean(_ratios(w2h, w1, held, _ir)) <= 1.0
+    return gain and geomean(adjusted_ratios(w2h, w1, held)) <= 1.0
 
 
 def ship(w1_accepted: bool, w2f_accepted: bool) -> str:

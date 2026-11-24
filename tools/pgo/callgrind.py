@@ -83,7 +83,7 @@ def _reusable(out: pathlib.Path) -> evidence.Cost | None:
     if "\ntotals:" not in text:
         return None
     try:
-        return evidence.native_cost(evidence.parse_callgrind(text))
+        return evidence.native_cost_with_primitives(text)
     except ValueError:
         return None
 
@@ -102,7 +102,7 @@ def measure(python: str, manifest: str, scenario: str, steps: int, out_dir: path
     stamp_path(out).unlink(missing_ok=True)
     runner(command(python, manifest, scenario, steps, str(out), extra=extra), check=True)
     stamp(out)
-    return evidence.native_cost(evidence.parse_callgrind(out.read_text(encoding="utf-8")))
+    return evidence.native_cost_with_primitives(out.read_text(encoding="utf-8"))
 
 
 def cost_of(python: str, manifest: str, s: evidence.Scenario, out_dir, runner=subprocess.run, tag: str = "", extra: tuple[str, ...] = (), reused: list | None = None) -> evidence.Cost:

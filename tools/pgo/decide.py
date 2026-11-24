@@ -76,6 +76,8 @@ def _check(reports: dict, feasibility: dict, manifest_sha: str, all_scenarios) -
             raise Refused(f"{label}: costs are for another manifest")
         if set(report["costs"]) != names:
             raise Refused(f"{label}: costs do not cover exactly the manifest")
+        if any(evidence.PRIMITIVE_EVENT not in c for c in report["costs"].values()):
+            raise Refused(f"{label}: costs lack {evidence.PRIMITIVE_EVENT}: evidence from before #171, measure again")
         wheel = report["sha256"]["wheel"]
         if wheel in wheels:
             raise Refused(f"{label} and {wheels[wheel]} are the same wheel")
@@ -113,7 +115,7 @@ def decide(reports: dict, feasibility: dict, seventh: dict, manifest_path: str, 
         "failed_checks": failed,
         "wheels": {k: v["sha256"]["wheel"] for k, v in reports.items()},
         "manifest_sha256": manifest_sha,
-        "w1_ir_ratio": evidence.geomean([w1[n].ir / w0[n].ir for n in sets.gating]),
+        "w1_ir_ratio": evidence.geomean(evidence.adjusted_ratios(w1, w0, sets.gating)),
     }
     w2_ok = False
     if "W2F" in reports or "W2H" in reports:
@@ -129,7 +131,7 @@ def decide(reports: dict, feasibility: dict, seventh: dict, manifest_path: str, 
         out["w2f_accepted"] = w2_ok
         holdout = {s.name for s in all_scenarios if s.holdout}
         trained = [n for n in sets.gating if n not in holdout]
-        out["w2f_ir_ratio"] = evidence.geomean([w2f[n].ir / w1[n].ir for n in trained])
+        out["w2f_ir_ratio"] = evidence.geomean(evidence.adjusted_ratios(w2f, w1, trained))
         names = [n for n in sets.mispredict if n not in holdout]
         if sets.mispredict_available and names:
             out["w2f_mispredict_ratio"] = evidence.geomean([w2f[n].mispredicts / w1[n].mispredicts for n in names])
