@@ -23,6 +23,16 @@ impl FunctionNoArgs for Version {
     }
 }
 
+/// `physical_cores()`: the default worker count of the engine, one per
+/// physical core this process may use (SPEC 6.1).
+struct PhysicalCores;
+
+impl FunctionNoArgs for PhysicalCores {
+    fn call(g: Gil<'_>) -> CResult<Mine<'_>> {
+        crate::api::int(g, tessera_rl_engine::physical_cores().get())
+    }
+}
+
 /// `build_profile()`: `"release"` or `"debug"`, as the native module was
 /// compiled (benchmark reports record it).
 struct BuildProfile;
@@ -184,10 +194,14 @@ impl FunctionNoArgs for InitFailsAfterRegister {
     }
 }
 
-const FUNCTION_COUNT: usize = if cfg!(feature = "test-hooks") { 32 } else { 26 };
+const FUNCTION_COUNT: usize = if cfg!(feature = "test-hooks") { 33 } else { 27 };
 
 static ROWS: [FunctionRow; FUNCTION_COUNT] = [
     FunctionRow::noargs::<Version>(c"version", c"The Tessera version."),
+    FunctionRow::noargs::<PhysicalCores>(
+        c"physical_cores",
+        c"Physical cores this process may use (capped by CPU quotas): the engine's default worker count.",
+    ),
     FunctionRow::varargs::<SetFpPolicy>(
         c"set_fp_policy",
         c"set_fp_policy(name): \"canonicalize\" (default) or \"reject\".",

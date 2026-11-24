@@ -38,6 +38,22 @@ pub(crate) fn timespec_parts(timeout: Duration) -> (i32, i32) {
     )
 }
 
+/// Physical cores the OS reports (macOS `hw.physicalcpu`, Windows
+/// `RelationProcessorCore` records), counting efficiency cores; `None` when
+/// the query fails. Linux reads sysfs instead (`sys::cores`).
+#[cfg(any(target_os = "macos", windows))]
+#[must_use]
+pub(crate) fn physical_cores() -> Option<core::num::NonZeroUsize> {
+    #[cfg(target_os = "macos")]
+    {
+        macos::physical_cpus()
+    }
+    #[cfg(windows)]
+    {
+        windows::processor_cores()
+    }
+}
+
 /// A native wait primitive.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Native {

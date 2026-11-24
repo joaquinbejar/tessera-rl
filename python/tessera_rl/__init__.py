@@ -58,6 +58,7 @@ from tessera_rl._native import (
     TesseraError,
     fp_non_canonical_entries,
     get_fp_policy,
+    physical_cores,
     version,
 )
 from tessera_rl._host import HostEnv, HostStep, set_fp_policy
@@ -89,6 +90,7 @@ __all__ = [
     "get_fp_policy",
     "is_stale",
     "make",
+    "physical_cores",
     "set_fp_policy",
     "version",
 ]

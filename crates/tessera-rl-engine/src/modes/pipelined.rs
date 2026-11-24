@@ -51,6 +51,15 @@ pub struct PipelinedOptions {
     pub sync: SyncOptions,
 }
 
+/// One worker per physical core, as [`SyncOptions::default`].
+impl Default for PipelinedOptions {
+    fn default() -> Self {
+        Self {
+            sync: SyncOptions::default(),
+        }
+    }
+}
+
 impl PipelinedOptions {
     /// Options with `workers` workers and the Sync defaults.
     #[must_use]
