@@ -1,0 +1,12 @@
+case picker_start
+nvec 3 4 2
+parents - 0 0
+active 1 0,1,1 0,0,1
+canonical 0 8 10 12 14 16 17 18 19 20 21 22 23
+legal 0 8 10 12 16 17 18 19 20 21 22 23
+case picker_bonus_spent
+nvec 3 4 2
+parents - 0 0
+active 1 0,1,1 0,0,1
+canonical 0 8 10 12 14 16 17 18 19 20 21 22 23
+legal 0 8 10 12

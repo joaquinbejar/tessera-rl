@@ -184,6 +184,8 @@ pub trait ActionMask: Environment {
     /// head's value in its step: an action and its copies differing only in
     /// inactive heads are the same game action. Search keeps one of them,
     /// the canonical joint with every inactive head at 0.
+    /// Without an `ActionMask` implementation every head is active, so every
+    /// joint is canonical and non-canonical copies appear in search.
     /// `tessera_rl_search::check_head_activity` tests the obligation.
     #[must_use]
     fn head_active(_cfg: &Self::Config, _head: usize, _parents: [u32; 2]) -> bool {
