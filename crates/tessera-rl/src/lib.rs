@@ -262,7 +262,7 @@
 //! | Feature | Default | Effect |
 //! | --- | --- | --- |
 //! | `search` | yes | `tessera_rl::search`: `SearchPool`, PUCT and Gumbel search |
-//! | `simd` | yes | `tessera_rl::simd`: lane types and runtime ISA dispatch |
+//! | `simd` | yes | `tessera_rl::simd`: re-exports the lane types and runtime ISA dispatch; a re-export only: `tessera-rl-classic` depends on `tessera-rl-simd` directly, so its lane kernels stay with `--no-default-features` |
 //! | `onnx` | no | `tessera_rl::onnx`: the ONNX search evaluator, which loads ONNX Runtime at run time (ADR-0057); implies `search` |
 //! | `debug-checks` | no | Strict legality checks at the validation boundary (illegal masked actions fail the call), and an invalid agent event, a NaN in state or rewards (outside `#[state(allow_nan)]` fields) or, with `engine::debug::TrackingAllocator` installed, an allocation inside a chunk step poisons the pool (ADR-0055); `engine::DEBUG_CHECKS` reports whether it is on |
 //!
