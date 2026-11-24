@@ -42,6 +42,12 @@ adapter = "tessera_rl.gym (SAME_STEP)"
 total_steps = 150000
 hyper = {}
 
+# No calibration, so no nightly gate (#370, decided): at these CleanRL
+# defaults the pilot scored -200 on every seed, the same as a random policy.
+# RL Zoo's working PPO setup (hyperparams/ppo.yml at v2.9.2, MountainCar-v0)
+# needs observation and reward normalization, which the T1 trainer lacks;
+# adding it there would invalidate the calibrated T1 protocols. A separate
+# normalized T1 trainer is #530.
 [mountaincar]
 env = "tessera/MountainCar-v1"
 tier = "T1"
@@ -49,6 +55,8 @@ adapter = "tessera_rl.gym (SAME_STEP)"
 total_steps = 150000
 hyper = {}
 
+# No calibration, so no nightly gate (#370, decided): at these CleanRL
+# defaults the xaskar calibration was degenerate (-0.9 on every seed).
 [grid]
 env = "tessera/Grid-v1"
 tier = "T1"
@@ -56,6 +64,8 @@ adapter = "tessera_rl.gym (SAME_STEP)"
 total_steps = 150000
 hyper = {}
 
+# No calibration, so no nightly gate (#370, decided): at these CleanRL
+# defaults the pilot scored 0.0 on both seeds, against 0.7 for a random policy.
 [brickwall]
 env = "tessera/BrickWall-v1"
 tier = "T1"
