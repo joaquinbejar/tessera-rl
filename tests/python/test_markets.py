@@ -108,7 +108,7 @@ def test_markets_pz_infos_carry_the_conditional_masks():
     e = env()
     _, infos = e.reset()
     for a in e.agents:
-        assert set(infos[a]) == {"action_mask", "action_masks"}
+        assert set(infos[a]) == {"action_mask", "action_masks", "policy_group"}
         kind, offset, size, cancel = infos[a]["action_masks"]
         assert kind.reshape(-1).shape == (6,)
         assert offset.reshape(-1).shape == (6 * 9,)

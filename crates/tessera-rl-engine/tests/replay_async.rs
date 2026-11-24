@@ -600,6 +600,7 @@ fn test_replay_async_panic_observed_early_does_not_skip_a_state_write() {
         ),
         "{err:?}"
     );
+}
 
 #[test]
 fn test_replay_async_external_policy_map_is_refused_until_stage_b() {
