@@ -81,7 +81,12 @@ proptest! {
 
 #[test]
 fn test_encode_slice_signed_zero_and_nan_payload_keep_their_bits() {
-    let items = [-0.0f32, 0.0, f32::from_bits(0x7fc0_1234), f32::from_bits(0xffa0_0001)];
+    let items = [
+        -0.0f32,
+        0.0,
+        f32::from_bits(0x7fc0_1234),
+        f32::from_bits(0xffa0_0001),
+    ];
     let bytes = sliced(&items);
     let back: Vec<u32> = bytes
         .chunks_exact(4)
