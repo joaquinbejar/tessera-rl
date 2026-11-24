@@ -9,6 +9,11 @@ the API is not stable, and any 0.x release may break it.
 
 ## [Unreleased]
 
+### Added
+
+- `tessera_rl_engine::physical_cores()` and Python `tessera_rl.physical_cores()`: physical cores this process may use (sysfs topology within the affinity mask on Linux, `hw.physicalcpu` on macOS, processor core records on Windows), capped by `available_parallelism()` so CPU quotas apply. Efficiency cores of hybrid CPUs count as cores (#356, SPEC 6.1).
+- `Default` for `SyncOptions` and `PipelinedOptions`: one worker per physical core. A pool still steps inline until it is given workers; Python defaults are unchanged.
+
 ## [0.3.0] - 2026-11-23
 
 ### Added

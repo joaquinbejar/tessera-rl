@@ -114,3 +114,27 @@ fn lookup(name: &core::ffi::CStr) -> Option<*mut core::ffi::c_void> {
     let symbol = unsafe { libc::dlsym(libc::RTLD_DEFAULT, name.as_ptr()) };
     (!symbol.is_null()).then_some(symbol)
 }
+
+/// `hw.physicalcpu`: physical cores, efficiency cores included; `None` if
+/// the query fails or reports zero.
+#[expect(unsafe_code, reason = "audited module: sysctlbyname")]
+pub(super) fn physical_cpus() -> Option<core::num::NonZeroUsize> {
+    let mut value: libc::c_int = 0;
+    let mut size = core::mem::size_of::<libc::c_int>();
+    // SAFETY: the name is a NUL-terminated C string; `value` is a live,
+    // aligned `c_int` and `size` holds its exact size, so the kernel writes
+    // at most that many bytes; no new value is set (null pointer, 0).
+    let rc = unsafe {
+        libc::sysctlbyname(
+            c"hw.physicalcpu".as_ptr(),
+            core::ptr::from_mut(&mut value).cast(),
+            &raw mut size,
+            core::ptr::null_mut(),
+            0,
+        )
+    };
+    if rc != 0 || size != core::mem::size_of::<libc::c_int>() {
+        return None;
+    }
+    core::num::NonZeroUsize::new(usize::try_from(value).ok()?)
+}

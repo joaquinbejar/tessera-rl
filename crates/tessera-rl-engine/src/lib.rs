@@ -90,6 +90,7 @@ pub use pool::{EnvPool, Reseed};
 pub use record::{DecodedRecord, PoolContext, Record};
 #[cfg(not(loom))]
 pub use sys::native_wait_available;
+pub use sys::physical_cores;
 pub use validate::ActionInput;
 
 /// Whether this build has the `debug-checks` feature (SPEC 5.5): strict

@@ -22,6 +22,7 @@
 mod affinity;
 #[cfg(feature = "debug-checks")]
 pub(crate) mod alloc_track;
+mod cores;
 mod gang;
 pub(crate) mod id_buffers;
 #[cfg(not(loom))]
@@ -32,6 +33,7 @@ pub(crate) mod sync;
 pub(crate) mod waiter;
 
 pub(crate) use affinity::available_cores;
+pub use cores::physical_cores;
 #[cfg(test)]
 pub(crate) use gang::Faults;
 #[cfg(not(loom))]

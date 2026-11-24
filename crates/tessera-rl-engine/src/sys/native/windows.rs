@@ -52,3 +52,47 @@ pub(super) fn wake_all(word: &AtomicU32) {
     // as a key to wake waiters.
     unsafe { WakeByAddressAll(word.as_ptr().cast()) };
 }
+
+/// Processor core records (`RelationProcessorCore`) of
+/// `GetLogicalProcessorInformationEx`: physical cores, efficiency cores
+/// included, all processor groups; `None` if the query fails. Not limited to
+/// the process affinity mask: the caller caps it by `available_parallelism`.
+#[expect(
+    unsafe_code,
+    reason = "audited module: GetLogicalProcessorInformationEx"
+)]
+pub(super) fn processor_cores() -> Option<core::num::NonZeroUsize> {
+    use windows_sys::Win32::System::SystemInformation::{
+        GetLogicalProcessorInformationEx, RelationProcessorCore,
+    };
+    let mut len: u32 = 0;
+    // SAFETY: a null buffer with length 0 only asks for the needed length,
+    // which the call writes to `len` (it fails with
+    // ERROR_INSUFFICIENT_BUFFER, which the length check below covers).
+    unsafe {
+        GetLogicalProcessorInformationEx(
+            RelationProcessorCore,
+            core::ptr::null_mut(),
+            &raw mut len,
+        );
+    }
+    let size = usize::try_from(len).ok()?;
+    if size == 0 {
+        return None;
+    }
+    let mut buf = vec![0_u8; size];
+    // SAFETY: `buf` is a live, writable buffer of `len` bytes; the call
+    // writes at most `len` bytes and updates `len` to the bytes written.
+    let ok = unsafe {
+        GetLogicalProcessorInformationEx(
+            RelationProcessorCore,
+            buf.as_mut_ptr().cast(),
+            &raw mut len,
+        )
+    };
+    if ok == 0 {
+        return None;
+    }
+    let written = buf.get(..usize::try_from(len).ok()?)?;
+    crate::sys::cores::count_records(written, RelationProcessorCore)
+}

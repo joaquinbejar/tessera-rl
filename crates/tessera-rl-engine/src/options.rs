@@ -124,6 +124,15 @@ pub struct SyncOptions {
     pub wait: WaitBackend,
 }
 
+/// One worker per physical core this process may use (SPEC 6.1,
+/// [`crate::physical_cores`]), with the [`SyncOptions::new`] defaults. A pool
+/// still steps inline until it is given workers (`EnvPool::with_workers`).
+impl Default for SyncOptions {
+    fn default() -> Self {
+        Self::new(crate::physical_cores())
+    }
+}
+
 impl SyncOptions {
     /// `workers` workers with the default spin budget and default pinning.
     #[must_use]
