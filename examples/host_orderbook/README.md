@@ -4,6 +4,8 @@
 
 This example shows how a crate outside Tessera ships a host environment. A host environment keeps state on the heap and implements `HostEnvironment` (ADR-0062 and ADR-0065). Its wheel is found by `tessera_rl.make` through an entry point.
 
+For Tessera's own order book (plain-data state, snapshots, many agents), see `tessera/LimitOrderBook-v1` in `crates/tessera-rl-markets`; this example only demonstrates the host-environment path.
+
 The environment is a one-trader order book:
 
 - Each step, the trader holds, buys or sells at a price level.

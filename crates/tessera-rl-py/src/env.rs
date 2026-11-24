@@ -24,6 +24,7 @@ use tessera_rl_games::{
     Connect4, Connect4Config, Go9, Go9Config, Lanterns, LanternsConfig, Leduc, LeducConfig,
     Othello, OthelloConfig,
 };
+use tessera_rl_markets::{LimitOrderBook, LobConfig};
 use tessera_rl_num::identity::Seed;
 use tessera_rl_rts::{Rts, RtsConfig};
 
@@ -1678,6 +1679,49 @@ pub(crate) fn rts(args: &PoolArgs, fields: &RtsFields) -> Result<Box<dyn PoolOps
     let (options, n) = options(args)?;
     let same_step = options.auto_reset == AutoReset::SameStep;
     let pool = EnvPool::<Rts, Masked>::with_masks(cfg.clone(), options)?;
+    finish(&cfg, pool, args, n, same_step)
+}
+
+/// The limit order book config fields, as Python passes them: the `u32`
+/// fields in the order of `api::LOB_U32_KEYS` (its last entry, `outputs`,
+/// is not a config field and stays `None`), then the others.
+#[derive(Debug, Default)]
+pub(crate) struct LobFields {
+    pub(crate) u32s: [Option<u32>; 17],
+    pub(crate) initial_cash: Option<i64>,
+    pub(crate) allow_short_cash: Option<bool>,
+    pub(crate) bankrupt: Option<u64>,
+}
+
+/// A limit order book pool (`tessera/LimitOrderBook-v1`, #381), with masks:
+/// simultaneous turns, four conditional discrete heads, `Set` observations.
+pub(crate) fn lob(args: &PoolArgs, fields: &LobFields) -> Result<Box<dyn PoolOps>, BindError> {
+    let d = LobConfig::default();
+    let u = |i: usize, default: u32| fields.u32s.get(i).copied().flatten().unwrap_or(default);
+    let cfg = LobConfig {
+        agents: u(0, d.agents),
+        steps: u(1, d.steps),
+        depth: u(2, d.depth),
+        min_tick: u(3, d.min_tick),
+        max_tick: u(4, d.max_tick),
+        initial_price: u(5, d.initial_price),
+        up_permille: u(6, d.up_permille),
+        down_permille: u(7, d.down_permille),
+        latency: u(8, d.latency),
+        size_0: u(9, d.size_0),
+        size_1: u(10, d.size_1),
+        size_2: u(11, d.size_2),
+        size_3: u(12, d.size_3),
+        max_position: u(13, d.max_position),
+        noise: u(14, d.noise),
+        reward_shift: u(15, d.reward_shift),
+        initial_cash: fields.initial_cash.unwrap_or(d.initial_cash),
+        allow_short_cash: fields.allow_short_cash.unwrap_or(d.allow_short_cash),
+        bankrupt: fields.bankrupt.unwrap_or(d.bankrupt),
+    };
+    let (options, n) = options(args)?;
+    let same_step = options.auto_reset == AutoReset::SameStep;
+    let pool = EnvPool::<LimitOrderBook, Masked>::with_masks(cfg.clone(), options)?;
     finish(&cfg, pool, args, n, same_step)
 }
 

@@ -251,6 +251,7 @@ maker!(MakeAcrobot, api::make_acrobot, "make_acrobot");
 maker!(MakeMountaincar, api::make_mountaincar, "make_mountaincar");
 maker!(MakeTag, api::make_tag, "make_tag");
 maker!(MakeRts, api::make_rts, "make_rts");
+maker!(MakeLob, api::make_lob, "make_lob");
 maker!(MakeGrid, api::make_grid, "make_grid");
 maker!(MakeKeydoor, api::make_keydoor, "make_keydoor");
 maker!(MakeGather, api::make_gather, "make_gather");
@@ -264,7 +265,7 @@ maker!(MakeOthello, api::make_othello, "make_othello");
 maker!(MakeGo9, api::make_go9, "make_go9");
 
 /// The module-level constructors, for the module's function table.
-pub(super) const MAKERS: [FunctionRow; 17] = [
+pub(super) const MAKERS: [FunctionRow; 18] = [
     FunctionRow::kw::<MakeCartpole>(c"make_cartpole", c"make_cartpole($module, *, mode=None, batch_size=None, gather=None, num_envs=None, seed=None, max_episode_steps=None, auto_reset=None, chunk_size=None, workers=None, spin=None, outputs=None)\n--\n\nmake_cartpole(**pool_options) -> Env"),
     FunctionRow::kw::<MakeAcrobot>(c"make_acrobot", c"make_acrobot($module, *, mode=None, batch_size=None, gather=None, num_envs=None, seed=None, max_episode_steps=None, auto_reset=None, chunk_size=None, workers=None, spin=None, outputs=None)\n--\n\nmake_acrobot(**pool_options) -> Env"),
     FunctionRow::kw::<MakeMountaincar>(
@@ -279,6 +280,10 @@ pub(super) const MAKERS: [FunctionRow; 17] = [
     FunctionRow::kw::<MakeRts>(
         c"make_rts",
         c"make_rts($module, *, mode=None, batch_size=None, gather=None, num_envs=None, seed=None, max_episode_steps=None, auto_reset=None, chunk_size=None, workers=None, spin=None, outputs=None, size=None, decision_ticks=None, max_units=None, step_limit=None, seat_swap=None, opponent=None)\n--\n\nmake_rts(**pool_options, **rts_config) -> Env",
+    ),
+    FunctionRow::kw::<MakeLob>(
+        c"make_lob",
+        c"make_lob($module, *, mode=None, batch_size=None, gather=None, num_envs=None, seed=None, max_episode_steps=None, auto_reset=None, chunk_size=None, workers=None, spin=None, outputs=None, agents=None, steps=None, depth=None, min_tick=None, max_tick=None, initial_price=None, up_permille=None, down_permille=None, latency=None, size_0=None, size_1=None, size_2=None, size_3=None, max_position=None, initial_cash=None, allow_short_cash=None, bankrupt=None, noise=None, reward_shift=None)\n--\n\nmake_lob(**pool_options, **lob_config) -> Env",
     ),
     FunctionRow::kw::<MakeConnect4>(c"make_connect4", c"make_connect4($module, *, mode=None, batch_size=None, gather=None, num_envs=None, seed=None, max_episode_steps=None, auto_reset=None, chunk_size=None, workers=None, spin=None, outputs=None)\n--\n\nmake_connect4(**pool_options) -> Env"),
     FunctionRow::kw::<MakeLeduc>(c"make_leduc", c"make_leduc($module, *, mode=None, batch_size=None, gather=None, num_envs=None, seed=None, max_episode_steps=None, auto_reset=None, chunk_size=None, workers=None, spin=None, outputs=None)\n--\n\nmake_leduc(**pool_options) -> Env"),

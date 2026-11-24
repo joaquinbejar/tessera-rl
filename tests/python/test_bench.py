@@ -76,7 +76,7 @@ def test_bench_configs_cover_every_catalog_env():
     rust_envs = {c["env"] for c in spec["config"] if c["kind"] == "rust" and c["metric"] == "throughput"}
     assert rust_envs == {
         "acrobot", "brickwall", "cartpole", "connect4", "go9", "grid", "keydoor", "leduc",
-        "mountaincar", "othello", "paddleduel", "pendulum", "rts", "snake", "tag",
+        "mountaincar", "othello", "paddleduel", "pendulum", "rts", "snake", "tag", "lob",
     }  # fmt: skip
     envpool = {c["env"] for c in spec["config"] if c.get("api") == "envpool"}
     assert envpool == set(bench.PY_ENVS)

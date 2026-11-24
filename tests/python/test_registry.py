@@ -18,6 +18,7 @@ SHIPPED = {
     "tessera/GridKeyDoor-v1": (1, 4, "cross-platform", True),
     "tessera/Lanterns-v1": (1, 5, "cross-platform", False),
     "tessera/Leduc-v1": (1, 2, "cross-platform", False),
+    "tessera/LimitOrderBook-v1": (1, 16, "cross-platform", False),
     "tessera/MountainCar-v1": (1, 1, "cross-platform", True),
     "tessera/Othello-v1": (1, 2, "cross-platform", True),
     "tessera/PaddleDuel-v1": (1, 2, "cross-platform", True),

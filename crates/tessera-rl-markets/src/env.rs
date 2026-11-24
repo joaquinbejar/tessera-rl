@@ -249,8 +249,9 @@ fn draw_signals(cfg: &LobConfig, state: &mut LobState, rng: &mut StepRng) {
 }
 
 impl Environment for LimitOrderBook {
-    /// Parallel natively and AEC through cycle buffering (SPEC 12, ADR-0080).
-    const ADAPTERS: Adapters = Adapters::PZ_PARALLEL.union(Adapters::PZ_AEC);
+    /// Parallel only (SPEC 12, ADR-0080), as the RTS: cycle buffering of a
+    /// multi-head environment for AEC is not designed yet (#381, PR 4).
+    const ADAPTERS: Adapters = Adapters::PZ_PARALLEL;
     type State = LobState;
     type Config = LobConfig;
     type Obs = LobObs;

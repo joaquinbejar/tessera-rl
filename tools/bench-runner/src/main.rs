@@ -54,6 +54,7 @@ use tessera_rl_engine::{
 use tessera_rl_games::{
     Connect4, Connect4Config, Go9, Go9Config, Leduc, LeducConfig, Othello, OthelloConfig,
 };
+use tessera_rl_markets::{LimitOrderBook, LobConfig};
 use tessera_rl_num::identity::Seed;
 use tessera_rl_rts::{Rts, RtsConfig};
 
@@ -617,6 +618,8 @@ fn run(args: &[String]) -> Result<String, Error> {
         "leduc" => bench!(Leduc, LeducConfig, Masked, with_masks),
         "othello" => bench!(Othello, OthelloConfig, Masked, with_masks),
         "rts" => bench!(Rts, RtsConfig, Masked, with_masks),
+        // 8 agents, latency 0 (the defaults).
+        "lob" => bench!(LimitOrderBook, LobConfig, Masked, with_masks),
         other => Err(usage(&format!("unknown env {other:?}"))),
     }
 }

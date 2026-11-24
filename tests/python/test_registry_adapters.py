@@ -24,6 +24,8 @@ _BEFORE = {
     "tessera/Othello-v1": {"aec"},
     "tessera/Go9-v1": {"aec"},
     "tessera/RTS-v1": {"parallel"},
+    # #381: Parallel only, as the RTS (multi-head).
+    "tessera/LimitOrderBook-v1": {"parallel"},
 }
 
 

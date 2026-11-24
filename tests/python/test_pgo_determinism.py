@@ -248,7 +248,7 @@ class _Stub(NamedTuple):
 def test_pgo_determinism_layout_refuses_a_head_depending_on_another_than_the_first():
     """TR S5: the third head depends on the second, not on the first."""
     stub = _Stub((3, 4, 5), [(0, (), 3), (3, (3,), 4), (15, (4,), 5)], 3)
-    with pytest.raises(ValueError, match="only depend on"):
+    with pytest.raises(ValueError, match="parents must be the heads before it"):
         det._layout(stub)
 
 

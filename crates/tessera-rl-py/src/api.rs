@@ -71,6 +71,10 @@ impl<'py> Kwargs<'py> {
         self.get(key).map(|v| capi::to_bool(g, v, key)).transpose()
     }
 
+    pub(crate) fn i64(&self, g: Gil, key: &str) -> CResult<Option<i64>> {
+        self.get(key).map(|v| capi::to_i64(g, v, key)).transpose()
+    }
+
     pub(crate) fn u64(&self, g: Gil, key: &str) -> CResult<Option<u64>> {
         self.get(key).map(|v| capi::to_u64(g, v, key)).transpose()
     }
@@ -486,6 +490,60 @@ pub(crate) fn make_rts(g: Gil, kwargs: Option<Ref<'_>>) -> CResult<Inner> {
     };
     let ops = g
         .detach(|| crate::env::rts(&args, &fields))
+        .map_err(|e| to_py(g, e))?;
+    Ok(Inner::new(ops, borrowed))
+}
+
+/// The `LobConfig` fields `make_lob` takes, by name.
+const LOB_U32_KEYS: [&str; 17] = [
+    "agents",
+    "steps",
+    "depth",
+    "min_tick",
+    "max_tick",
+    "initial_price",
+    "up_permille",
+    "down_permille",
+    "latency",
+    "size_0",
+    "size_1",
+    "size_2",
+    "size_3",
+    "max_position",
+    "noise",
+    "reward_shift",
+    "outputs",
+];
+
+/// `make_lob(**kwargs)`: the pool of a limit order book environment object
+/// (`tessera/LimitOrderBook-v1`, #381). Every `LobConfig` field by name;
+/// the episode ends at the environment's own `steps`, so
+/// `max_episode_steps` defaults to 0 (no extra limit).
+pub(crate) fn make_lob(g: Gil, kwargs: Option<Ref<'_>>) -> CResult<Inner> {
+    let kw = Kwargs::parse(g, kwargs)?;
+    kw.check(
+        g,
+        &[
+            &POOL_KEYS,
+            &LOB_U32_KEYS,
+            &["initial_cash", "allow_short_cash", "bankrupt"],
+        ],
+    )?;
+    let borrowed = borrowed(g, &kw)?;
+    let args = pool_args(g, &kw, 0)?;
+    let mut fields = crate::env::LobFields {
+        initial_cash: kw.i64(g, "initial_cash")?,
+        allow_short_cash: kw.bool(g, "allow_short_cash")?,
+        bankrupt: kw.u64(g, "bankrupt")?,
+        ..crate::env::LobFields::default()
+    };
+    for (key, slot) in LOB_U32_KEYS.iter().zip(fields.u32s.iter_mut()) {
+        if *key != "outputs" {
+            *slot = kw.u32(g, key)?;
+        }
+    }
+    let ops = g
+        .detach(|| crate::env::lob(&args, &fields))
         .map_err(|e| to_py(g, e))?;
     Ok(Inner::new(ops, borrowed))
 }
