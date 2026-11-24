@@ -24,3 +24,9 @@ min_effect = 0.10
 # Every episode reaches the goal (+1).
 solved = 1.0
 min_effect = 0.10
+
+[pendulum]
+# A common "solved" level (Gymnasium names no reward threshold for it); a
+# random policy scores about -1200 per 200-step episode.
+solved = -200.0
+min_effect = 0.10

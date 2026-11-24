@@ -83,16 +83,24 @@ def fingerprint(name: str) -> str:
 
     import reference_training as rt  # noqa: PLC0415
 
-    sources = {
-        "reference_training": hashlib.sha256(pathlib.Path(rt.__file__).read_bytes()).hexdigest(),
-        # Only the code a training run goes through, so editing anything else
-        # in this module (the gate, docs) leaves calibrations valid.
-        "learning_protocols": hashlib.sha256(_training_source().encode()).hexdigest(),
-    }
+    if protocol(name)["tier"] == "T2":
+        import learning_continuous as lc  # noqa: PLC0415
+
+        # The whole T2 trainer module is training code.
+        sources = {"learning_continuous": hashlib.sha256(pathlib.Path(lc.__file__).read_bytes()).hexdigest()}
+        params = asdict(continuous_hyper(name, protocol(name)["total_steps"]))
+    else:
+        sources = {
+            "reference_training": hashlib.sha256(pathlib.Path(rt.__file__).read_bytes()).hexdigest(),
+            # Only the code a training run goes through, so editing anything
+            # else in this module (the gate, docs) leaves calibrations valid.
+            "learning_protocols": hashlib.sha256(_training_source().encode()).hexdigest(),
+        }
+        params = asdict(hyper(name, protocol(name)["total_steps"]))
     payload = json.dumps(
         {
             "protocol": protocol(name),
-            "hyper": asdict(hyper(name, protocol(name)["total_steps"])),
+            "hyper": params,
             "sources": sources,
             "torch": torch.__version__,
             "numpy": numpy.__version__,
@@ -101,6 +109,25 @@ def fingerprint(name: str) -> str:
         sort_keys=True,
     )
     return hashlib.sha256(payload.encode()).hexdigest()
+
+
+def continuous_hyper(name: str, total_steps: int):
+    import learning_continuous as lc  # noqa: PLC0415
+
+    return lc.ContinuousHyper(**{**protocol(name)["hyper"], "total_steps": total_steps})
+
+
+def train_continuous(name: str, seed: int, total_steps: int, eval_episodes: int) -> dict:
+    """One training run of a tier T2 protocol (continuous actions,
+    ``learning_continuous``). Kept apart from ``train`` so the T1 training
+    path, and with it the T1 fingerprints, do not change."""
+    import learning_continuous as lc  # noqa: PLC0415
+    import reference_training as rt  # noqa: PLC0415
+
+    p = protocol(name)
+    if p["tier"] != "T2":
+        raise ValueError(f"{name} is tier {p['tier']}, not T2")
+    return lc.train(p["env"], seed, continuous_hyper(name, total_steps), eval_episodes, rt.EVAL_SEED_BASE)
 
 
 def _needs_flat(space) -> bool:

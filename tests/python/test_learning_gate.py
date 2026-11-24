@@ -507,8 +507,12 @@ def test_learning_fingerprint_covers_every_function_training_reaches():
 
     import learning_protocols as lp
 
+    # Classes too (rev's nit): a class defined here and reached by training
+    # changes training as much as a function does.
     module_functions = {
-        name for name, obj in vars(lp).items() if inspect.isfunction(obj) and obj.__module__ == lp.__name__
+        name
+        for name, obj in vars(lp).items()
+        if (inspect.isfunction(obj) or inspect.isclass(obj)) and getattr(obj, "__module__", None) == lp.__name__
     }
     path = {f.__name__ for f in lp._training_path()}
     for f in lp._training_path():
@@ -530,3 +534,92 @@ def test_learning_no_verdict_nights_are_counted():
     third = {"night": {"verdict": "uncalibrated host: no verdict (x)", "no_verdict_nights": 2}}
     assert no_verdict_streak(third) == 3
     assert no_verdict_streak({"night": {"verdict": "uncalibrated host: no verdict"}}) == 2
+
+# -- tier T2 (continuous actions) -----------------------------------------------------
+
+
+def test_learning_t2_truncated_steps_bootstrap_from_final_obs():
+    import numpy as np
+
+    import learning_continuous as lc
+
+    info = {"final_obs": np.array([np.array([1.0, 0.0]), None, np.array([3.0, 0.0])], dtype=object)}
+    # Instance 0 truncated only: bootstrapped from its final observation.
+    # Instance 1 neither. Instance 2 terminated on the limit step: terminal.
+    out = lc.bootstrap_rewards(
+        [1.0, 1.0, 1.0], [False, False, True], [True, False, True], info, lambda final: final[:, 0] * 10.0, 0.5
+    )
+    assert out.tolist() == [1.0 + 0.5 * 10.0, 1.0, 1.0]
+
+
+def test_learning_t2_running_norm_updates_then_freezes():
+    import numpy as np
+
+    import learning_continuous as lc
+
+    n = lc.RunningNorm(2)
+    n.update(np.array([[1.0, 10.0], [3.0, 10.0]]))
+    assert np.allclose(n.mean, [2.0, 10.0], atol=1e-3)
+    n.frozen = True
+    before = (n.mean.copy(), n.var.copy())
+    n.update(np.array([[100.0, -100.0]]))
+    assert np.array_equal(n.mean, before[0]) and np.array_equal(n.var, before[1])
+    assert np.all(np.abs(n.apply(np.array([[1e9, -1e9]]))) <= n.clip)
+
+
+def test_learning_t2_pendulum_trains_with_actions_clipped_at_the_boundary(monkeypatch):
+    """Training actions reach the environment inside Pendulum's torque
+    bound: the trainer clips at the boundary (an unclipped Gaussian sample
+    exceeds 2 on some of 2048 steps)."""
+    pytest = __import__("pytest")
+    pytest.importorskip("torch")
+    import gymnasium
+    import numpy as np
+
+    import learning_protocols as lp
+    import tessera_rl.gym
+
+    sent = []
+    real_make = tessera_rl.gym.make
+
+    class Spy(gymnasium.vector.VectorWrapper):
+        def step(self, actions):
+            sent.append(float(np.max(np.abs(np.asarray(actions)))))
+            return self.env.step(actions)
+
+    monkeypatch.setattr(tessera_rl.gym, "make", lambda *a, **k: Spy(real_make(*a, **k)))
+    r = lp.train_continuous("pendulum", 1, 2048, 1)
+    assert -2000.0 <= r["eval_mean"] <= 0.0
+    assert len(sent) == 2048
+    assert max(sent) <= 2.0
+
+
+def test_learning_t2_dispatch_and_fingerprint():
+    pytest = __import__("pytest")
+    pytest.importorskip("torch")
+    import learning_protocols as lp
+
+    with pytest.raises(ValueError, match="not T2"):
+        lp.train_continuous("acrobot", 1, 2048, 1)
+    assert lp.fingerprint("pendulum") != lp.fingerprint("acrobot")
+    # Pendulum's fingerprint covers the T2 trainer's source.
+    import learning_continuous as lc
+
+    before = lp.fingerprint("pendulum")
+    real = lc.__file__
+    try:
+        lc.__file__ = lp.__file__  # any other source
+        assert lp.fingerprint("pendulum") != before
+    finally:
+        lc.__file__ = real
+    assert lp.gate("pendulum") == {"solved": -200.0, "min_effect": 0.10}
+
+
+def test_learning_t2_seeding_is_deterministic():
+    pytest = __import__("pytest")
+    pytest.importorskip("torch")
+    import learning_protocols as lp
+
+    a = lp.train_continuous("pendulum", 3, 2048, 1)
+    b = lp.train_continuous("pendulum", 3, 2048, 1)
+    assert a["eval_returns"] == b["eval_returns"]
