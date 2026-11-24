@@ -113,7 +113,7 @@ pub fn train(config: &Config) -> Result<Report, EngineError> {
             obs = act_and_step(
                 &model,
                 &mut pool,
-                obs,
+                &obs,
                 &mut rng,
                 &mut b,
                 &mut returns,
