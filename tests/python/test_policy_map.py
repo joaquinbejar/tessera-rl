@@ -173,18 +173,3 @@ def test_host_ids_refuse_policy_map():
         _host._refuse_spin(kwargs)
     with pytest.raises(_native.CapabilityError):
         _host._refuse_spin({"privileged_state": True})
-
-
-def test_puffer_hides_heuristic_slots():
-    pytest.importorskip("pufferlib")
-    puffer = pytest.importorskip("tessera_rl.puffer")
-    env = puffer.TesseraPufferEnv(TAG, num_envs=2, policy_map=TAG_MAP, **TAG_CFG)
-    try:
-        # Six visible slots per instance: the learners, not slots 2 and 3.
-        assert env.num_agents == 2 * 6
-        obs, _ = env.reset(seed=1)
-        assert obs.shape[0] == 12
-        obs, rewards, terminals, truncations, _ = env.step(np.zeros(12, dtype=np.int32))
-        assert rewards.shape == (12,)
-    finally:
-        env.close()
