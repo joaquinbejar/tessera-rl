@@ -13,6 +13,7 @@ use tessera_rl_core::Reserved;
 use tessera_rl_macros::EnvState;
 
 use crate::fill::Fill;
+use crate::limits::MAX_LOT;
 
 /// One agent's position.
 #[derive(EnvState, Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
@@ -61,7 +62,12 @@ pub fn apply_fill(accounts: &mut [Account], fill: &Fill) -> bool {
         return false;
     }
     let notional = fill.notional();
-    // `fill.qty <= MAX_LOT = 2^10`: lossless.
+    // `fill.qty <= MAX_LOT = 2^10`: lossless. A broken invariant must not
+    // move cash with zero lots unnoticed (review of PR 1, nit 1).
+    debug_assert!(
+        fill.qty <= MAX_LOT,
+        "a fill of more than MAX_LOT lots reached the accounts"
+    );
     let lots = i32::try_from(fill.qty).unwrap_or(0);
     if let Some(b) = accounts.get_mut(buyer) {
         b.cash -= notional;

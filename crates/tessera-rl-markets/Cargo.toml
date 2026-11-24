@@ -23,6 +23,7 @@ thiserror.workspace = true
 [dev-dependencies]
 criterion.workspace = true
 proptest.workspace = true
+tessera-rl-engine.workspace = true
 
 [lints]
 workspace = true
@@ -30,4 +31,9 @@ workspace = true
 # Matching cost on a full book; local only, no claim.
 [[bench]]
 name = "matching"
+harness = false
+
+# The step through the engine, masks included; local only, no claim.
+[[bench]]
+name = "step"
 harness = false

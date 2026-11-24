@@ -28,7 +28,8 @@ pub struct Pending {
     pub owner: u8,
     /// Zero.
     pub pad: Reserved<1>,
-    /// Limit price, in ticks; 0 for market orders and cancels.
+    /// Limit price, in ticks; for a market order its protection price
+    /// (0: none); 0 for cancels.
     pub price: u32,
     /// Quantity, in lots; 0 for cancels.
     pub qty: u32,
@@ -165,9 +166,10 @@ impl PendingQueue {
 
     /// The commitment of `owner`'s queued orders (cancels count for
     /// nothing): limit orders as resting orders at their price, market
-    /// orders as lots only, a market buy's cash at `market_buy_price` per
-    /// lot (review r1 of #381, correction 2: the caller picks the bound,
-    /// for example `max_tick`). `None` on overflow, which the queue's
+    /// orders as lots only, a market buy's cash at its protection price
+    /// (`price`) per lot, or at `market_buy_price` when it has none (review
+    /// r1 of #381, correction 2: the caller picks the bound, for example
+    /// `max_tick`). `None` on overflow, which the queue's
     /// capacity cannot reach.
     #[must_use]
     pub fn exposure(&self, owner: u8, market_buy_price: u32) -> Option<Exposure> {
@@ -175,7 +177,15 @@ impl PendingQueue {
             .filter(|p| p.owner == owner)
             .try_fold(Exposure::default(), |e, p| match p.kind {
                 Kind::Limit => e.with_order(p.side, true, p.qty, p.price),
-                Kind::Market => e.with_order(p.side, false, p.qty, market_buy_price),
+                // A market order carries its protection price, if any.
+                Kind::Market => {
+                    let price = if p.price > 0 {
+                        p.price
+                    } else {
+                        market_buy_price
+                    };
+                    e.with_order(p.side, false, p.qty, price)
+                }
                 Kind::Cancel => Some(e),
             })
     }
