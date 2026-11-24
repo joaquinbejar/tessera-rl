@@ -229,6 +229,13 @@ pub(crate) fn derive(input: &DeriveInput) -> syn::Result<TokenStream> {
     let count = u16::try_from(entries.len())
         .map_err(|_| syn::Error::new_spanned(name, "too many config fields"))?;
     let decoder = crate::config_decode::decoder(&core, name, &entries);
+    let reads = entries.iter().map(|Entry { key, ident, nested }| {
+        if *nested {
+            quote!(cfg.#ident = #core::config_canonical::read_nested_entry(input, #key)?;)
+        } else {
+            quote!(cfg.#ident = #core::config_canonical::read_entry(input, #key)?;)
+        }
+    });
     let writes = entries.iter().map(|Entry { key, ident, nested }| {
         if *nested {
             quote!(#core::config::write_nested_entry(out, #key, &self.#ident);)
@@ -264,6 +271,21 @@ pub(crate) fn derive(input: &DeriveInput) -> syn::Result<TokenStream> {
 
             fn write_entries<S: #core::encoding::Sink>(&self, out: &mut #core::encoding::Encoder<S>) {
                 #(#writes)*
+            }
+        }
+
+        impl #core::config_canonical::CanonicalDecode for #name {
+            fn read_entries(
+                input: &mut #core::encoding::Decoder<'_>,
+            ) -> ::core::result::Result<Self, #core::config_canonical::CanonicalDecodeError> {
+                // Adaptive fields are not in the canonical form: they keep
+                // their defaults (ADR-0030).
+                #[allow(unused_mut, reason = "a config without static fields")]
+                let mut cfg = <Self as ::core::default::Default>::default();
+                #[allow(unused_variables, reason = "a config without static fields")]
+                let input = input;
+                #(#reads)*
+                ::core::result::Result::Ok(cfg)
             }
         }
     })

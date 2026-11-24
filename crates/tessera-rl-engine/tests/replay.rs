@@ -589,3 +589,47 @@ fn test_replay_detached_recorder_writes_the_same_file() {
     }
     assert_eq!(rec.finish().unwrap(), expected);
 }
+
+/// #377: the pool rebuilt from the header (config decoded from its
+/// canonical bytes, options from its identity fields) replays without
+/// divergence, in Inline and Sync mode.
+#[test]
+fn test_replay_run_rebuilt_from_header_has_no_divergence() {
+    let (bytes, recorded) = record(0);
+    let replay = Replay::open(&bytes, LIMITS).unwrap();
+    for workers in [0, 2] {
+        let (p, summary) = replay
+            .run_rebuilt(|cfg, options| {
+                let p = EnvPool::<Counter, Masked>::with_masks(cfg, options)?;
+                if workers == 0 {
+                    Ok(p)
+                } else {
+                    p.with_workers(SyncOptions::new(NonZeroUsize::new(workers).unwrap()))
+                }
+            })
+            .unwrap();
+        assert_eq!(summary.events, replay.event_count());
+        assert_eq!(hashes(&p), hashes(&recorded));
+    }
+}
+
+/// #377: the options come from the header, and a pool built with another
+/// config than the header's is refused as a caller-built one is.
+#[test]
+fn test_replay_build_pool_options_from_header_and_config_checked() {
+    let (bytes, _) = record(0);
+    let replay = Replay::open(&bytes, LIMITS).unwrap();
+    let options = replay.pool_options().unwrap();
+    assert_eq!(options.num_envs.get(), N);
+    let mut other = config();
+    other.length += 1;
+    let Err(err) =
+        replay.build_pool(|_, options| EnvPool::<Counter, Masked>::with_masks(other, options))
+    else {
+        panic!("a pool with another config is refused");
+    };
+    assert!(
+        matches!(err, ReplayError::Persist(PersistError::Incompatible { .. })),
+        "{err:?}"
+    );
+}
