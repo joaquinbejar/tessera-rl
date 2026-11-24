@@ -26,6 +26,8 @@ host = ["dep:inventory"]
 # `host::testing::check_snapshot_contract` (ADR-0073 item 8), for host
 # environment crates' tests.
 testing = ["host"]
+# Replay files (ADR-0072): Recorder and Replay over EnvPool. Off by default.
+replay = []
 
 [dependencies]
 tessera-rl-core.workspace = true

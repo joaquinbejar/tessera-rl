@@ -41,6 +41,8 @@ mod pin_tests;
 mod pool;
 mod record;
 mod registry;
+#[cfg(feature = "replay")]
+pub mod replay;
 mod snapshot;
 mod sys;
 mod validate;
@@ -96,6 +98,8 @@ pub use persist::{BUILD_ID, DecodeLimits, FORMAT_VERSION, MAGIC, PersistError};
 pub use pool::{EnvPool, Reseed};
 pub use record::{DecodedRecord, PoolContext, Record};
 pub use registry::attach_shared_registry;
+#[cfg(feature = "replay")]
+pub use replay::{Recorder, Replay, ReplayError, ReplaySummary, ReplayWriterOptions};
 #[cfg(not(loom))]
 pub use sys::native_wait_available;
 pub use sys::{default_workers, physical_cores};
