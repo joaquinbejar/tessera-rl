@@ -45,19 +45,22 @@ def test_wheels_aarch64_linux_mirrors_the_x86_64_job_script_and_reports():
         assert report in job
 
 
-def test_wheels_hosted_job_is_the_only_one_and_runs_only_on_dispatch_here():
-    assert WORKFLOW.count("runs-on: ubuntu-") == 1
+def test_wheels_hosted_jobs_are_the_arm_ones_and_run_only_on_dispatch_here():
+    # The aarch64 manylinux and musllinux legs (#149, #350).
+    assert WORKFLOW.count("runs-on: ubuntu-") == 2
     triggers = re.search(r"^on:\n(.*?)\n\S", WORKFLOW, re.M | re.DOTALL).group(1)
     assert re.findall(r"^  (\w+):", triggers, re.M) == ["workflow_dispatch"]
-    guard = re.search(r"^    if: (.*)$", _job("linux-aarch64"), re.M).group(1)
-    assert "github.event_name == 'workflow_dispatch'" in guard
-    assert "github.repository == 'joaquinbejar/tessera-rl'" in guard
-    assert re.search(r"^    needs: preflight$", _job("linux-aarch64"), re.M)
+    for job in ("linux-aarch64", "musl-aarch64"):
+        assert "    runs-on: ubuntu-24.04-arm\n" in _job(job)
+        guard = re.search(r"^    if: (.*)$", _job(job), re.M).group(1)
+        assert "github.event_name == 'workflow_dispatch'" in guard
+        assert "github.repository == 'joaquinbejar/tessera-rl'" in guard
+        assert re.search(r"^    needs: preflight$", _job(job), re.M)
 
 
 def test_wheels_reports_are_uploaded_when_the_job_fails():
     uploads = re.findall(r"upload-artifact@\S+[^\n]*\n\s+if: always\(\)\n", WORKFLOW)
-    assert len(uploads) == WORKFLOW.count("upload-artifact@") == 3
+    assert len(uploads) == WORKFLOW.count("upload-artifact@") == 5
 
 
 def test_wheels_leaves_nothing_needing_a_chown():
@@ -78,8 +81,13 @@ def test_wheels_x86_64_expects_fp_traps_and_the_hosted_arm_job_does_not():
     assert "target: x86_64-unknown-linux-gnu" in entry
     assert re.search(r'^            expect_fp_traps: "1"$', entry, re.M)
     assert "      TESSERA_EXPECT_FP_TRAPS: ${{ matrix.expect_fp_traps }}\n" in linux
+    assert "TESSERA_EXPECT_FP_TRAPS: ${{" not in _job("linux-aarch64")
     assert "TESSERA_EXPECT_FP_TRAPS" not in _job("linux-aarch64")
-    assert WORKFLOW.count("TESSERA_EXPECT_FP_TRAPS") == 1
+    # musllinux (#350): neither leg expects the traps (musl has no
+    # feenableexcept).
+    assert "TESSERA_EXPECT_FP_TRAPS:" not in _job("musl-x86_64")
+    assert "TESSERA_EXPECT_FP_TRAPS:" not in _job("musl-aarch64")
+    assert WORKFLOW.count("TESSERA_EXPECT_FP_TRAPS:") == 1
 
 
 CARGO = (ROOT / "Cargo.toml").read_text()
@@ -149,8 +157,13 @@ def test_wheel_job_suite_names_its_skips():
     assert suite.split()[:3] == ["-q", "-rs", "-p"]
 
 
-def test_wheel_job_enables_onnx_only_on_linux_glibc_and_macos():
-    assert re.search(r'^    \*-unknown-linux-gnu \| \*-apple-darwin\) features=\(--features onnx\) ;;$', JOB, re.M)
+def test_wheel_job_enables_onnx_only_on_linux_and_macos():
+    # musl too (#350, ADR-0057 section 6: a dynamically linked musl build).
+    assert re.search(
+        r'^    \*-unknown-linux-gnu \| \*-unknown-linux-musl \| \*-apple-darwin\) features=\(--features onnx\) ;;$',
+        JOB,
+        re.M,
+    )
     # No Windows wheel job exists, so no wheel is built for Windows with it.
     assert not re.search(r"runs-on: .*windows", WORKFLOW)
 

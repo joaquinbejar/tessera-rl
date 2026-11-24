@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: MIT OR Apache-2.0
-"""Checks the three wheels of one wheels run before they go to PyPI.
+"""Checks the five wheels of one wheels run before they go to PyPI.
 
     python3 -I scripts/pypi_verify.py <artifacts-dir> <tag> <commit> <out-dir>
 
@@ -7,10 +7,11 @@
 the artifact (as `gh run download` lays them out). <tag> is the release tag
 (`v0.2.0`), <commit> the full sha the wheels run built and the tag names.
 
-The run must have exactly the three artifacts of wheels.yml:
+The run must have exactly the five artifacts of wheels.yml:
 
 - `wheel-x86_64-unknown-linux-gnu-wheel-<commit>-<sha256>` (W1),
 - `wheel-aarch64-unknown-linux-gnu`,
+- `wheel-x86_64-unknown-linux-musl`, `wheel-aarch64-unknown-linux-musl` (#350),
 - `wheel-aarch64-apple-darwin`.
 
 For each: exactly one wheel, under the artifact's dist/ (wheels.yml uploads
@@ -22,7 +23,7 @@ every check in checks.json is 0; the file name is
 and <version> the tag without its `v`; and the wheel's own METADATA says
 `Name: tessera-rl` and `Version: <version>`.
 
-On success the three wheels are copied to <out-dir> with a SHA256SUMS file,
+On success the five wheels are copied to <out-dir> with a SHA256SUMS file,
 and the exit status is 0. Any failure prints every problem found and exits 1;
 a usage error exits 2. Nothing is copied unless every check passes.
 """
@@ -45,8 +46,18 @@ W1 = re.compile(r"wheel-x86_64-unknown-linux-gnu-wheel-([0-9a-f]{40})-([0-9a-f]{
 PLATFORMS = {
     "x86_64-unknown-linux-gnu": r"manylinux_2_28_x86_64",
     "aarch64-unknown-linux-gnu": r"manylinux_2_28_aarch64",
+    "x86_64-unknown-linux-musl": r"musllinux_1_2_x86_64",
+    "aarch64-unknown-linux-musl": r"musllinux_1_2_aarch64",
     "aarch64-apple-darwin": r"macosx_[0-9]+_[0-9]+_arm64",
 }
+
+# The release-profile (W0) artifacts besides W1, by exact name (#350: musllinux).
+W0_ARTIFACTS = [
+    "wheel-aarch64-unknown-linux-gnu",
+    "wheel-x86_64-unknown-linux-musl",
+    "wheel-aarch64-unknown-linux-musl",
+    "wheel-aarch64-apple-darwin",
+]
 
 
 def _sha256(path: Path) -> str:
@@ -78,7 +89,7 @@ def check(artifacts: Path, tag: str, commit: str) -> tuple[list[str], list[Path]
     version = tag[1:]
     names = sorted(p.name for p in artifacts.iterdir() if p.is_dir())
     w1 = [n for n in names if W1.fullmatch(n)]
-    expected = {"wheel-aarch64-unknown-linux-gnu", "wheel-aarch64-apple-darwin"}
+    expected = set(W0_ARTIFACTS)
     others = sorted(set(names) - set(w1) - expected)
     if len(w1) != 1:
         problems.append(f"expected one W1 artifact, found {w1}")
@@ -89,7 +100,7 @@ def check(artifacts: Path, tag: str, commit: str) -> tuple[list[str], list[Path]
     if problems:
         return problems, wheels
 
-    for name in [w1[0], "wheel-aarch64-unknown-linux-gnu", "wheel-aarch64-apple-darwin"]:
+    for name in [w1[0], *W0_ARTIFACTS]:
         d = artifacts / name
         target = next(t for t in PLATFORMS if t in name)
         # wheels.yml uploads `dist/*.whl` and checks.json together, so the

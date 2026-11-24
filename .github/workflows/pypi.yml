@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: MIT OR Apache-2.0
 #
 # Publishes one release's wheels to PyPI by trusted publishing (OIDC): no API
-# token exists anywhere. It builds nothing. It takes the three wheels of one
+# token exists anywhere. It builds nothing. It takes the five wheels of one
 # named, green wheels.yml run, checks them against that run and the release
 # tag (scripts/pypi_verify.py), and uploads exactly those files.
 #
@@ -113,14 +113,14 @@ jobs:
         with:
           name: pypi-dist-${{ github.run_id }}
           path: dist
-      # The same three files the verify job checked, and nothing else.
+      # The same five files the verify job checked, and nothing else.
       - name: The verified wheels
         run: |
           cd dist
           sha256sum -c SHA256SUMS
           shopt -s nullglob dotglob
           files=(*)
-          [ "${#files[@]}" -eq 4 ] && [ "$(wc -l < SHA256SUMS)" -eq 3 ] || { ls -la; exit 1; }
+          [ "${#files[@]}" -eq 6 ] && [ "$(wc -l < SHA256SUMS)" -eq 5 ] || { ls -la; exit 1; }
           mv SHA256SUMS "$RUNNER_TEMP/"
       - uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # v1.14.3
         with:

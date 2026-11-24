@@ -42,9 +42,11 @@ case "$orderbook_leg" in
 esac
 # The ONNX evaluator (ADR-0057 section 6): every wheel built here, W0 included,
 # has the extension's `onnx` feature, on the targets ADR-0057 enables (Linux
-# glibc and macOS). Windows is not enabled until its loading rows exist.
+# glibc and musl, macOS; a musl wheel loads only a user-supplied musl ONNX
+# Runtime, and without one raises the typed missing-library error, which the
+# onnx smoke below checks). Windows is not enabled until its loading rows exist.
 case "$target" in
-    *-unknown-linux-gnu | *-apple-darwin) features=(--features onnx) ;;
+    *-unknown-linux-gnu | *-unknown-linux-musl | *-apple-darwin) features=(--features onnx) ;;
     *) echo "wheel_job: the onnx feature is not enabled for $target (ADR-0057)" >&2; exit 2 ;;
 esac
 
