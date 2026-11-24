@@ -219,7 +219,7 @@ fn test_pipelined_matches_sync_bit_for_bit_for_1_2_7_and_64_workers() {
 
 #[test]
 fn test_pipelined_dynamic_schedule_matches_sync_bit_for_bit() {
-    // Each half has its own claim counter (ADR-0076).
+    // Each half has its own claim cursors (ADR-0076, ADR-0087).
     matches_sync(Schedule::Dynamic);
 }
 
