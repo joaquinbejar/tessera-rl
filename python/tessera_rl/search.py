@@ -7,7 +7,8 @@ once per batch of leaves as ``evaluator(obs, legal, hashes)``:
 
 - ``obs``: the observation of the player to move at each leaf, an array of
   shape ``(n, *obs_shape)`` (a dict of arrays for environments with several
-  observation leaves);
+  observation leaves; a ``Set`` contributes its item leaves and its
+  ``<name>_mask`` bool leaf, absent slots zero, see ``Search.sets``);
 - ``legal``: ``(n, actions)`` bool, that player's legal actions;
 - ``hashes``: ``(n,)`` uint64, each leaf's record hash (for canned or
   table evaluators).
@@ -151,12 +152,19 @@ class Search:
     The search starts at a fresh game; ``set_root`` moves it."""
 
     def __init__(self, env_id: str = "tessera/Connect4-v1", **options):
+        # ``tessera/Connect4-v1`` or ``tessera/Gather-v1`` (default configs).
         self._native = _native.make_search(env_id=env_id, **options)
         layout = self._native.layout()
         self.actions: int = layout["actions"]
         self._obs_bytes: int = layout["obs_bytes"]
         probe = make(env_id)
         self._leaves = list(probe._leaves)
+        #: The ``Set`` observations (ADR-0082 point 6, #490): ``(path, max,
+        #: [item leaf indices..., mask index])``, indices into the evaluator's
+        #: ``obs`` leaves; empty without sets.
+        self.sets: list[tuple[str, int, list[int]]] = [
+            (path, int(m), list(indices)) for path, m, indices in probe._native.layout()["sets"]
+        ]
         probe.close()
 
     def set_root(self, record: bytes) -> None:

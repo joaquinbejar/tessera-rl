@@ -135,8 +135,9 @@ pub(crate) fn make_search(g: Gil, kwargs: Option<Ref<'_>>) -> CResult<SearchInne
         .unwrap_or_else(|| "tessera/Connect4-v1".to_owned());
     let ops = match env_id.as_str() {
         "tessera/Connect4-v1" => crate::search::connect4(&args),
+        "tessera/Gather-v1" => crate::search::gather(&args),
         other => Err(BindError::Argument(format!(
-            "no search for {other:?}; known: [\"tessera/Connect4-v1\"]"
+            "no search for {other:?}; known: [\"tessera/Connect4-v1\", \"tessera/Gather-v1\"]"
         ))),
     }
     .map_err(|e| to_py(g, e))?;
