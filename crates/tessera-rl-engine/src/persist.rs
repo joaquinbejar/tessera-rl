@@ -86,6 +86,10 @@ pub enum PersistError {
     /// The pool refused: poisoned or an unknown id, or its config.
     #[error(transparent)]
     Engine(#[from] EngineError),
+    /// The pool has observation transforms, which have no persisted form
+    /// yet (ADR-0078 item 8).
+    #[error("pools with observation transforms cannot be persisted yet (ADR-0078)")]
+    Transforms,
     /// A record's field is invalid.
     #[error("record {index}: {source}")]
     Record {
@@ -741,6 +745,9 @@ where
     ) -> Result<Vec<u8>, PersistError> {
         if self.poisoned {
             return Err(EngineError::Poisoned.into());
+        }
+        if self.transform.is_some() {
+            return Err(PersistError::Transforms);
         }
         let id = identity::<E, M>(&self.cfg, &self.options)?;
         let file_descriptor = descriptor(E::TIER, build_id)?;

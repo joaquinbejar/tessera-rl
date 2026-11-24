@@ -143,6 +143,11 @@ where
         if <<E::Header as RecordLayout>::Adaptive as Canonical>::ENCODED_LEN != 0 {
             return Err(ReplayError::AdaptiveUnsupported);
         }
+        if pool.has_transforms() {
+            return Err(ReplayError::Unsupported {
+                feature: "observation transforms (ADR-0078 item 8)",
+            });
+        }
         let mut flags = FLAG_ASYNC;
         if options.outputs_hash {
             flags |= FLAG_OUTPUTS_HASH;

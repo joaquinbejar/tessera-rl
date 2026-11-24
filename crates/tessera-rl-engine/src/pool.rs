@@ -36,6 +36,7 @@ use crate::registry::Registration;
 use crate::set_zero::zero_absent_rows;
 use crate::sys::sync::{AtomicBool, Ordering};
 use crate::sys::{Gang, GangOptions, available_cores};
+use crate::transform::kernels::StackMode;
 use crate::validate::{
     ActionInput, check_and_copy_actions, check_and_copy_actions_fast, check_ids,
 };
@@ -125,6 +126,8 @@ pub struct EnvPool<E: Environment, M: MaskProvider<E> = NoMasks> {
     /// The live watch, if attached (ADR-0083 item 7): served at each batch
     /// boundary; `None` costs one pointer test per call.
     pub(crate) watch: Option<crate::watch::Watch>,
+    /// The observation transforms (ADR-0078); `None` without any.
+    pub(crate) transform: Option<Box<crate::transform::runtime::Runtime>>,
     /// Allocations counted in this pool's chunk steps (ADR-0055).
     #[cfg(feature = "debug-checks")]
     pub(crate) allocs: crate::sys::alloc_track::AllocTally,
@@ -220,6 +223,13 @@ impl<E: Environment, M: MaskProvider<E>> EnvPool<E, M> {
     pub(crate) fn chunk_all(&mut self) -> (Chunk<'_, E>, (usize, usize)) {
         self.forget_fast_facts();
         let heads = (self.actions.discrete.len(), self.actions.continuous.len());
+        let mut outputs = self.outputs.view_all();
+        // The split-phase modes step with workers (ADR-0078): an Async pool
+        // never accumulates (erratum 1), so its parts hold no accumulator.
+        outputs.transform = match self.transform.as_mut() {
+            Some(t) => t.worker_rows(StackMode::Push, true),
+            None => crate::transform::rows::TransformRows::default(),
+        };
         let chunk = Rows {
             headers: &mut self.headers,
             states: &mut self.states,
@@ -227,7 +237,7 @@ impl<E: Environment, M: MaskProvider<E>> EnvPool<E, M> {
             continuous: &mut self.continuous,
             penalties: &mut self.penalties,
             penalized: &mut self.penalized,
-            outputs: self.outputs.view_all(),
+            outputs,
         };
         (chunk, heads)
     }
@@ -538,6 +548,7 @@ where
             counter_bound: Some(0),
             sync: None,
             watch: None,
+            transform: None,
             #[cfg(feature = "debug-checks")]
             allocs: crate::sys::alloc_track::AllocTally::default(),
             _masks: PhantomData,
@@ -581,6 +592,57 @@ where
             #[cfg(test)]
             faults,
         )?);
+        let workers = self.workers();
+        if let Some(t) = self.transform.as_mut() {
+            t.ensure_workers(workers);
+        }
+        Ok(self)
+    }
+
+    /// Sets the observation transforms (ADR-0078 item 2.1), before the
+    /// first reset, once: the exported observation (`observation_space`,
+    /// the output rows) becomes the transformed one. An empty list changes
+    /// nothing.
+    ///
+    /// # Errors
+    ///
+    /// [`TransformError`](crate::TransformError) (as
+    /// [`EngineError::Transform`]) for a list the observation space does
+    /// not allow, after a reset or a second call; [`EngineError`] for the
+    /// output buffers.
+    pub fn with_transforms(mut self, transforms: crate::Transforms) -> Result<Self, EngineError> {
+        use crate::transform::TransformError;
+        // Before the first reset: every record is still fresh.
+        if self.transform.is_some() || self.headers.iter().any(|h| !h.engine().fresh.get()) {
+            return Err(TransformError::AfterReset.into());
+        }
+        if transforms.is_empty() {
+            return Ok(self);
+        }
+        let space = E::observation_space(&self.cfg)?;
+        let raw = obs_leaves(&space)?;
+        let num_envs = self.headers.len();
+        let runtime = crate::transform::runtime::Runtime::new(
+            transforms,
+            &space,
+            &raw,
+            num_envs,
+            E::MAX_AGENTS,
+            chunk_size(&self.options),
+        )?;
+        let exported = obs_leaves(runtime.space())?;
+        let mut outputs = Outputs::new(
+            num_envs,
+            E::MAX_AGENTS,
+            &exported.leaves,
+            self.options.auto_reset == AutoReset::SameStep,
+            self.outputs.mask_len,
+        )?;
+        outputs.sets = exported.sets;
+        self.outputs = outputs;
+        let mut runtime = Box::new(runtime);
+        runtime.ensure_workers(self.workers());
+        self.transform = Some(runtime);
         Ok(self)
     }
 
@@ -776,9 +838,12 @@ where
             penalized,
             sync,
             reset_source,
+            transform,
             ..
         } = self;
         let archive = reset_source.as_ref();
+        let mut view = outputs.view_all();
+        view.transform = pass_rows(transform, sync.is_some(), StackMode::Fresh);
         let all = Chunk::<E> {
             headers,
             states,
@@ -786,7 +851,7 @@ where
             continuous,
             penalties,
             penalized,
-            outputs: outputs.view_all(),
+            outputs: view,
         };
         if let Some(rt) = sync {
             let heads = (layout.discrete.len(), layout.continuous.len());
@@ -923,11 +988,15 @@ where
             authority,
             poisoned,
             reset_source,
+            transform,
             ..
         } = self;
         let archive = reset_source.as_ref();
         run_kernels(poisoned, || {
             let outputs = &mut outputs.view_all();
+            if let Some(t) = transform {
+                outputs.transform = t.caller_rows(StackMode::Fresh, true);
+            }
             for (k, i) in indices.enumerate() {
                 let (Some(header), Some(state)) = (headers.get_mut(i), states.get_mut(i)) else {
                     continue;
@@ -1056,6 +1125,7 @@ where
             penalized,
             sync,
             reset_source,
+            transform,
             #[cfg(feature = "debug-checks")]
             allocs,
             ..
@@ -1071,6 +1141,8 @@ where
             #[cfg(feature = "debug-checks")]
             allocs,
         };
+        let mut view = outputs.view_all();
+        view.transform = pass_rows(transform, sync.is_some(), StackMode::Push);
         let all = Chunk::<E> {
             headers,
             states,
@@ -1078,7 +1150,7 @@ where
             continuous,
             penalties,
             penalized,
-            outputs: outputs.view_all(),
+            outputs: view,
         };
         // Cleared by any chunk that ends with an instance pending reset or a
         // slot not alive and acting; read after the barrier (the gang joins
@@ -1305,6 +1377,25 @@ fn counter_max<H: RecordLayout>(headers: &[H]) -> u32 {
         .unwrap_or(0)
 }
 
+/// The transform rows of a whole-pool pass that accumulates: the workers'
+/// scratch with workers, the caller's otherwise (ADR-0078).
+fn pass_rows(
+    transform: &mut Option<Box<crate::transform::runtime::Runtime>>,
+    workers: bool,
+    mode: StackMode,
+) -> crate::transform::rows::TransformRows<'_> {
+    match transform {
+        Some(t) => {
+            if workers {
+                t.worker_rows(mode, true)
+            } else {
+                t.caller_rows(mode, true)
+            }
+        }
+        None => crate::transform::rows::TransformRows::default(),
+    }
+}
+
 /// Read-only context of a step, shared by every chunk.
 pub(crate) struct StepCtx<'a, E: Environment> {
     pub(crate) cfg: &'a E::Config,
@@ -1378,6 +1469,7 @@ pub(crate) fn step_chunk<E: Environment, M: MaskProvider<E>>(
             // NextStep: reset instead of stepping (validated above).
             reset_one::<E>(cfg, authority, archive, header, state, None, None);
             write_agent_masks(outputs, i, header);
+            outputs.transform.mode = StackMode::Fresh;
             observe_cleared::<E, M>(cfg, authority, header, state, outputs, i);
             continue;
         }
@@ -1412,12 +1504,16 @@ pub(crate) fn step_chunk<E: Environment, M: MaskProvider<E>>(
         step_one::<E>(
             cfg, authority, header, state, &view, outputs, i, limit, penalty, marked,
         );
+        outputs.transform.mode = StackMode::Push;
         observe_cleared::<E, M>(cfg, authority, header, state, outputs, i);
         if auto_reset == AutoReset::SameStep && header.engine().pending_reset.get() {
             save_terminal(outputs, i);
             // Flags and stats of the ended episode stay set.
             reset_one::<E>(cfg, authority, archive, header, state, None, None);
             write_agent_masks(outputs, i, header);
+            // The terminal row was stacked with the ended episode's frames;
+            // the reset refills them (ADR-0078 item 4.2).
+            outputs.transform.mode = StackMode::Fresh;
             // The rows hold the terminal observation: zero them again.
             observe_instance::<E, M>(cfg, authority, header, state, outputs, i);
         }
@@ -1446,6 +1542,7 @@ pub(crate) fn reset_chunk<E: Environment, M: MaskProvider<E>>(
         let seed = reseed.seed(k);
         reset_one::<E>(cfg, authority, archive, header, state, seed, None);
         write_agent_masks(outputs, i, header);
+        outputs.transform.mode = StackMode::Fresh;
         observe_cleared::<E, M>(cfg, authority, header, state, outputs, i);
     }
 }
@@ -2317,8 +2414,11 @@ fn observe_rows<E: Environment, M: MaskProvider<E>, const ZERO: bool>(
         masks,
         mask_len,
         sets,
+        transform,
         ..
     } = outputs;
+    // The scratch is handed back after the loop (ADR-0078 item 1).
+    let scratch = core::mem::take(&mut transform.scratch);
     for (slot, row) in header.agents().iter().enumerate() {
         let k = i * a + slot;
         let mut views: [&mut [u8]; MAX_LEAVES] = Default::default();
@@ -2347,6 +2447,8 @@ fn observe_rows<E: Environment, M: MaskProvider<E>, const ZERO: bool>(
             m.fill(Bool8::FALSE);
         }
         if !row.alive.get() {
+            // A dead agent's frames go with its row (ADR-0078 item 4.3).
+            transform.clear_agent(i, slot);
             continue;
         }
         let (Some(agent), Some(leaves)) = (
@@ -2355,14 +2457,50 @@ fn observe_rows<E: Environment, M: MaskProvider<E>, const ZERO: bool>(
         ) else {
             continue;
         };
-        let mut writer = ObsWriter::new(leaves);
         let mut rng = ObsRng::new(authority, &identity);
-        E::observe(cfg, state, agent, &mut rng, &mut writer);
-        // ADR-0082 point 3: absent set slots are zero, whatever `observe`
-        // wrote; before any transform of the row.
-        zero_absent_rows(leaves, sets);
+        if let Some(shared) = transform.shared {
+            // ADR-0078 item 1: the environment writes the transformed leaves
+            // into the scratch; the exported rows wait in `exported`.
+            let raw_len = shared.plan.raw_bytes.min(scratch.len());
+            let (raw, work) = scratch.split_at_mut(raw_len);
+            let mut exported: [&mut [u8]; MAX_LEAVES] = Default::default();
+            let mut rest = &mut *raw;
+            for lp in &shared.plan.leaves {
+                let len = lp.raw.min(rest.len());
+                let (head, tail) = core::mem::take(&mut rest).split_at_mut(len);
+                rest = tail;
+                head.fill(0);
+                if let (Some(view), Some(keep)) =
+                    (leaves.get_mut(lp.leaf), exported.get_mut(lp.leaf))
+                {
+                    *keep = core::mem::replace(view, head);
+                }
+            }
+            let mut writer = ObsWriter::new(leaves);
+            E::observe(cfg, state, agent, &mut rng, &mut writer);
+            // Swap back: the views get the exported rows, `exported` the raw
+            // rows the environment wrote.
+            for lp in &shared.plan.leaves {
+                if let (Some(view), Some(keep)) =
+                    (leaves.get_mut(lp.leaf), exported.get_mut(lp.leaf))
+                {
+                    core::mem::swap(view, keep);
+                }
+            }
+            transform.run(i, slot, row.generation, leaves, &exported, work);
+            // Set leaves are never transformed (ADR-0082), so zeroing them
+            // after the pipeline is the same as before it.
+            zero_absent_rows(leaves, sets);
+        } else {
+            let mut writer = ObsWriter::new(leaves);
+            E::observe(cfg, state, agent, &mut rng, &mut writer);
+            // ADR-0082 point 3: absent set slots are zero, whatever `observe`
+            // wrote; before any transform of the row.
+            zero_absent_rows(leaves, sets);
+        }
         if let Some(m) = mask {
             M::write_mask(cfg, state, agent, &mut MaskWriter::new(m));
         }
     }
+    transform.scratch = scratch;
 }

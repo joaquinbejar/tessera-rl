@@ -171,6 +171,11 @@ where
                 feature: "outputs hashes in first-party replay files",
             });
         }
+        if pool.transform_identity() != 0 {
+            return Err(ReplayError::Unsupported {
+                feature: "observation transforms (ADR-0078 item 8)",
+            });
+        }
         if pool.is_poisoned() {
             return Err(EngineError::Poisoned.into());
         }

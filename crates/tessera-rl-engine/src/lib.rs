@@ -47,6 +47,7 @@ pub mod replay;
 mod set_zero;
 mod snapshot;
 mod sys;
+pub mod transform;
 mod validate;
 mod watch;
 
@@ -72,6 +73,7 @@ pub use host::{
     MAX_HOST_AGENTS, MAX_HOST_HEADS, MAX_HOST_SNAPSHOT_BYTES, MakeOptions, RecordDecodeError,
     make_host,
 };
+pub use transform::{Transform, TransformContext, TransformError, Transforms};
 
 /// `check_snapshot_contract` for host environment crates (ADR-0073 item 8).
 #[cfg(feature = "testing")]

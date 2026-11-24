@@ -263,6 +263,14 @@ where
         if batch > n {
             return Err(refuse(self, "batch_size", "must not exceed num_envs"));
         }
+        // ADR-0078 erratum 1: Async workers do not step whole chunks, so an
+        // unfrozen Normalize would race on its chunk accumulators.
+        if self.normalization_unfrozen() {
+            return Err(AsyncBuildError {
+                error: crate::TransformError::NormalizeInAsync.into(),
+                pool: Some(Box::new(self)),
+            });
+        }
         let lost = |error| AsyncBuildError { error, pool: None };
         let mut pool = self
             .with_workers_inner(
@@ -500,6 +508,15 @@ where
     /// Runs a caller-side writer on the pool. The raw parts are taken again
     /// whatever the outcome; a writer that poisoned the pool poisons the
     /// wrapper.
+    /// [`EnvPool::observation_space`]: the exported (transformed) space.
+    ///
+    /// # Errors
+    ///
+    /// As [`EnvPool::observation_space`].
+    pub fn observation_space(&self) -> Result<tessera_rl_core::space::Space, EngineError> {
+        self.mode.pool.observation_space()
+    }
+
     fn write(
         &mut self,
         recovery: bool,
@@ -1514,6 +1531,12 @@ where
             limits,
             crate::persist::BUILD_ID,
         )
+    }
+
+    /// Whether the inner pool has observation transforms (ADR-0078).
+    #[cfg(feature = "replay")]
+    pub(crate) fn has_transforms(&self) -> bool {
+        self.mode.pool.transform_identity() != 0
     }
 
     /// The config, options and action heads, for replay headers
