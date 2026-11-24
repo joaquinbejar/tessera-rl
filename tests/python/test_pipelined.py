@@ -470,9 +470,12 @@ def test_pipelined_restore_all_is_refused_with_work_or_a_foreign_snapshot():
         env.restore_all(taken)
     env.recv()
     assert len(env.restore_all(taken)) == 2
+    # Sync takes whole-pool snapshots for restore_pool (#465); restore_all
+    # stays split-phase only.
     sync = t.make("tessera/CartPole-v1", num_envs=2)
+    sync.reset()
     with pytest.raises(t.ArgumentError, match="not available in sync mode"):
-        sync.snapshot_all()
+        sync.restore_all(sync.snapshot_all())
 
 
 @pytest.mark.parametrize("writer", ["reset", "restore_all"])
