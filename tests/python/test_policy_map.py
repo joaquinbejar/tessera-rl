@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: MIT OR Apache-2.0
-"""Policy maps and heuristic slots from Python (ADR-0079, stage A):
+"""Policy maps and heuristic slots from Python (ADR-0079, stages A and B1):
 ``make(..., policy_map=...)``, ``layout()["policy_groups"]``,
-``Env.heuristic_actions``, refusals, and the PettingZoo, Gymnasium and
+``Env.heuristic_actions`` in every mode, refusals, and the PettingZoo, Gymnasium and
 PufferLib adapters."""
 
 import numpy as np
@@ -112,16 +112,68 @@ def test_lob_heuristic_slots_fill_1_to_7_deterministically_and_ignore_rows():
     twin.close()
 
 
-def test_lob_heuristic_slots_refuse_split_modes():
-    with pytest.raises(_native.CapabilityError):
-        tessera_rl.make(LOB, num_envs=2, workers=1, mode="pipelined", policy_map=LOB_MAP, agents=8)
+def test_lob_heuristic_slots_build_in_split_modes():
+    """Stage B1: LimitOrderBook heuristic slots run in Pipelined and Async too."""
+    for mode, extra in (("pipelined", {"chunk_size": 2}), ("async", {"batch_size": 2})):
+        env = tessera_rl.make(LOB, num_envs=4, workers=1, mode=mode, policy_map=LOB_MAP, agents=8, **extra)
+        assert env.policy_groups[:8] == ("learner",) + ("heuristic",) * 7
+        env.close()
 
 
-def test_policy_map_with_heuristic_slots_refuses_split_modes():
-    with pytest.raises(_native.CapabilityError):
-        tessera_rl.make(TAG, num_envs=8, chunk_size=2, mode="pipelined", workers=1, policy_map=TAG_MAP)
-    with pytest.raises(_native.CapabilityError):
-        tessera_rl.make(TAG, num_envs=8, mode="async", batch_size=4, workers=1, policy_map=TAG_MAP)
+def _twin_steps(sync, step, t):
+    """Sync's next legal actions and the same rows with garbage in the
+    heuristic slots (2 and 3), which the engine never reads."""
+    acts = _legal(sync, step, t)
+    garbage = acts.copy()
+    garbage[:, 2:4] = -12345
+    return acts, garbage
+
+
+def test_policy_map_heuristic_slots_in_pipelined_mode_match_sync():
+    sync = tessera_rl.make(TAG, num_envs=8, seed=5, workers=0, policy_map=TAG_MAP, **TAG_CFG)
+    env = tessera_rl.make(
+        TAG, num_envs=8, seed=5, chunk_size=2, mode="pipelined", workers=2, policy_map=TAG_MAP, **TAG_CFG
+    )
+    assert env.policy_groups == tuple(TAG_MAP)
+    step = sync.reset()
+    env.reset()
+    for t in range(30):
+        acts, garbage = _twin_steps(sync, step, t)
+        step = sync.step(acts)
+        for half in (0, 1):
+            r = env.halves[half]
+            env.send(half, garbage[r.start : r.stop])
+        for _ in (0, 1):
+            out = env.recv()
+            r = out.ids
+            np.testing.assert_array_equal(out.step.rewards, step.rewards[r.start : r.stop])
+        np.testing.assert_array_equal(env.heuristic_actions, sync.heuristic_actions)
+    assert (env.heuristic_actions[:, [0, 1, 4, 5, 6, 7]] == 0).all()
+    env.close()
+    sync.close()
+
+
+def test_policy_map_heuristic_slots_in_async_mode_match_sync_in_any_order():
+    sync = tessera_rl.make(TAG, num_envs=8, seed=5, workers=0, policy_map=TAG_MAP, **TAG_CFG)
+    env = tessera_rl.make(
+        TAG, num_envs=8, seed=5, mode="async", batch_size=4, workers=2, policy_map=TAG_MAP, **TAG_CFG
+    )
+    assert env.policy_groups == tuple(TAG_MAP)
+    step = sync.reset()
+    env.reset()
+    rng = np.random.default_rng(11)
+    for t in range(30):
+        acts, garbage = _twin_steps(sync, step, t)
+        step = sync.step(acts)
+        order = rng.permutation(8)
+        env.send([int(i) for i in order], garbage[order])
+        for _ in range(2):
+            out = env.recv()
+            for k, i in enumerate(out.ids):
+                np.testing.assert_array_equal(out.step.rewards[k], step.rewards[int(i)])
+        np.testing.assert_array_equal(env.heuristic_actions, sync.heuristic_actions)
+    env.close()
+    sync.close()
 
 
 def test_leduc_heuristic_and_privileged_groups():

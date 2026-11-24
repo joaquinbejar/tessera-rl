@@ -172,8 +172,13 @@ impl<E: Environment, M: MaskProvider<E>> EnvPool<E, M> {
         self.sync = Some(runtime);
     }
 
-    /// The read-only context of a step, for the split-phase modes.
-    pub(crate) fn step_ctx(&self) -> StepCtx<'_, E> {
+    /// The read-only context of a step, for the split-phase modes, with the
+    /// pool's heuristic route and slots (ADR-0079, #347 stage B1). `faults`
+    /// is where the chunks record an invalid heuristic action: one cell for
+    /// the whole unit of work (a Pipelined half), or one per pool instance
+    /// (Async). The mode owns the cells, since its workers outlive the call
+    /// that publishes them.
+    pub(crate) fn step_ctx<'a>(&'a self, faults: &'a [AtomicU64]) -> StepCtx<'a, E> {
         StepCtx {
             cfg: &self.cfg,
             authority: &self.authority,
@@ -187,11 +192,12 @@ impl<E: Environment, M: MaskProvider<E>> EnvPool<E, M> {
             archive: self.reset_source.as_ref(),
             #[cfg(feature = "debug-checks")]
             allocs: &self.allocs,
-            // The split-phase modes refuse heuristic slots (ADR-0079 stage
-            // A).
-            heuristic: None,
-            heuristic_slots: &[],
-            heuristic_fault: None,
+            heuristic: self.heuristic.as_ref().map(|h| h.run),
+            heuristic_slots: self
+                .heuristic
+                .as_ref()
+                .map_or(&[][..], |h| h.slots.as_slice()),
+            heuristic_fault: self.heuristic.as_ref().map(|_| faults),
         }
     }
 
@@ -1234,7 +1240,7 @@ where
             allocs,
             heuristic: heuristic.as_ref().map(|h| h.run),
             heuristic_slots: heuristic.as_ref().map_or(&[][..], |h| h.slots.as_slice()),
-            heuristic_fault: heuristic.as_ref().map(|_| &fault),
+            heuristic_fault: heuristic.as_ref().map(|_| core::slice::from_ref(&fault)),
         };
         let view = step_view(outputs, transform, sync.is_some(), episodes);
         let all = Chunk::<E> {
@@ -1555,14 +1561,15 @@ pub(crate) struct StepCtx<'a, E: Environment> {
     #[cfg(feature = "debug-checks")]
     pub(crate) allocs: &'a crate::sys::alloc_track::AllocTally,
     /// The heuristic pass, chosen at construction (ADR-0079); `None`
-    /// without a heuristic slot, and always in the split-phase modes,
-    /// which refuse heuristic slots.
+    /// without a heuristic slot.
     pub(crate) heuristic: Option<HeuristicFn<E>>,
     /// The heuristic slots, in slot order; empty without any.
     pub(crate) heuristic_slots: &'a [u16],
-    /// Where the chunks record the first invalid heuristic action of the
-    /// call; `None` with `heuristic`.
-    pub(crate) heuristic_fault: Option<&'a AtomicU64>,
+    /// Where the chunks record the first invalid heuristic action; `None`
+    /// with `heuristic`. One cell covers every instance of the unit (Sync's
+    /// call, a Pipelined half); more than one is one cell per pool
+    /// instance, indexed by its pool index (Async).
+    pub(crate) heuristic_fault: Option<&'a [AtomicU64]>,
 }
 
 /// The records, action rows and output rows of a range of instances,
@@ -1632,15 +1639,6 @@ pub(crate) fn with_state<E: Environment, R>(
     } else {
         states.get_mut(i).map(f)
     }
-}
-
-/// Steps every instance of `chunk` (after validation), for the split-phase
-/// modes, whose contexts carry no heuristic pass.
-pub(crate) fn step_chunk<E: Environment, M: MaskProvider<E>>(
-    ctx: &StepCtx<'_, E>,
-    chunk: &mut Chunk<'_, E>,
-) {
-    step_chunk_at::<E, M>(ctx, chunk, 0);
 }
 
 /// Steps every instance of `chunk` (after validation); `first` is the pool

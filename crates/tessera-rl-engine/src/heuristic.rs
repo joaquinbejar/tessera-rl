@@ -102,7 +102,7 @@ where
     E: Environment,
     F: Fn(&E::Config, &E::State, AgentSlot, &mut StepRng, &mut ActionWriter<'_>),
 {
-    let Some(fault) = ctx.heuristic_fault else {
+    let Some(faults) = ctx.heuristic_fault else {
         return;
     };
     let layout = ctx.layout;
@@ -160,7 +160,15 @@ where
                 .get(k * mask_len..(k + 1) * mask_len)
                 .unwrap_or(&[]);
             if !row_valid(layout, disc, cont, mask) {
-                fault.fetch_min(fault_code(first + i, slot), Ordering::Relaxed);
+                let instance = first + i;
+                // One cell for the whole unit, or one per pool instance.
+                let cell = match faults {
+                    [one] => Some(one),
+                    all => all.get(instance),
+                };
+                if let Some(cell) = cell {
+                    cell.fetch_min(fault_code(instance, slot), Ordering::Relaxed);
+                }
                 // The pool is poisoned after the barrier; meanwhile the
                 // kernel reads an in-range row.
                 safe_row(layout, disc, cont);
@@ -211,7 +219,8 @@ fn safe_row(layout: &ActionLayout, disc: &mut [i32], cont: &mut [f32]) {
     }
 }
 
-/// The fault cell of one step, shared by the chunks of the call.
+/// A fault cell holding no fault: one per Sync call, per Pipelined half or
+/// per Async instance.
 pub(crate) fn new_fault() -> AtomicU64 {
     AtomicU64::new(NO_FAULT)
 }

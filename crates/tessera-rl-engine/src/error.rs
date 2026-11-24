@@ -463,14 +463,6 @@ pub enum EngineError {
         /// The context's digest.
         found: u64,
     },
-    /// A mode that does not run heuristic slots yet (ADR-0079 stage A:
-    /// Pipelined and Async refuse a map with a heuristic slot); the pool
-    /// is handed back.
-    #[error("{mode} mode does not support heuristic slots yet")]
-    HeuristicSlotsUnsupported {
-        /// The mode.
-        mode: &'static str,
-    },
     /// The instance has not been reset yet, or its episode ended in
     /// `Disabled` auto-reset mode.
     #[error("instance {id} is pending reset")]

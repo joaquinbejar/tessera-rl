@@ -31,9 +31,12 @@ use std::sync::Arc;
 
 use tessera_rl_core::{AdaptiveValues, Environment, RecordLayout, TurnStructure};
 
-use crate::buffer::pipeline::{HalfToken, Mode, Waiter, half_panicked, publish, turn_rows};
+use crate::buffer::pipeline::{
+    HalfToken, Mode, Waiter, half_fault, half_panicked, publish, turn_rows,
+};
 use crate::buffer::{GenerationError, Generations, half_ranges};
 use crate::error::EngineError;
+use crate::heuristic_rows::HeuristicRows;
 use crate::masks::MaskProvider;
 use crate::options::SyncOptions;
 use crate::pool::{EnvPool, Reseed, SyncRuntime, chunk_size};
@@ -174,6 +177,9 @@ pub struct PipelinedPool<E: Environment, M: MaskProvider<E>> {
     /// The live watch (ADR-0083 item 7), served after each `recv` for the
     /// returned half's ids only.
     watch: Option<Watch>,
+    /// The pool's `heuristic_actions` rows while the mode holds it
+    /// (ADR-0079, #347 stage B1): filled for each returned half.
+    heuristic: HeuristicRows,
 }
 
 /// The mode's workers; dropping them drains every job in flight, then
@@ -272,14 +278,6 @@ where
                 },
             ));
         }
-        // ADR-0079 stage A: the half action copies do not skip and
-        // overwrite heuristic rows yet.
-        if self.policy.has_heuristic() {
-            return Err(refuse(
-                self,
-                EngineError::HeuristicSlotsUnsupported { mode: "Pipelined" },
-            ));
-        }
         let size = chunk_size(&self.options);
         let chunk = self.options.chunk_size.get();
         let n = self.num_envs_usize();
@@ -308,6 +306,9 @@ where
         let poisoned = pool.is_poisoned();
         // A watch attached in Sync mode moves with the pool.
         let watch = pool.watch.take();
+        // The `heuristic_actions` rows: the caller fills them while the
+        // workers share the pool.
+        let heuristic = HeuristicRows::take(&mut pool);
         Ok(PipelinedPool {
             runtime: Workers(Some(runtime)),
             mode: Mode::new(pool, halves, size, workers, schedule),
@@ -317,6 +318,7 @@ where
             cycles: CycleState::initial(),
             poisoned,
             watch,
+            heuristic,
         })
     }
 
@@ -951,6 +953,7 @@ where
         let token = HalfToken::new(&self.mode, half).ok_or(EngineError::HalfBorrowed {
             half: u8::try_from(half).unwrap_or(u8::MAX),
         })?;
+        self.check_heuristics(half, &token)?;
         self.check_turns(&token)?;
         #[cfg(feature = "debug-checks")]
         {
@@ -960,6 +963,103 @@ where
         }
         crate::entry::canonical(|| self.reduce(half, &token));
         Ok(token)
+    }
+
+    /// Heuristic slots of the returned half (ADR-0079 item 3, #347 stage
+    /// B1): an invalid computed action poisons the pool with its instance
+    /// and slot, the first in instance order; otherwise the half's
+    /// heuristic rows are copied to the `heuristic_actions` rows, on this
+    /// thread. Nothing without a heuristic slot.
+    fn check_heuristics(
+        &mut self,
+        half: usize,
+        token: &HalfToken<E, M>,
+    ) -> Result<(), EngineError> {
+        let Some(route) = self.mode.pool.heuristic.as_ref() else {
+            return Ok(());
+        };
+        if let Some((instance, slot)) = crate::heuristic::fault_of(half_fault(&self.mode, half)) {
+            self.poisoned = true;
+            return Err(EngineError::HeuristicAction { instance, slot });
+        }
+        let layout = self.mode.pool.action_layout();
+        let heads = (layout.discrete.len(), layout.continuous.len());
+        let slots = route.slots.as_slice();
+        let rows = &mut self.heuristic;
+        self.mode
+            .with_half_rows(token, |first, headers, discrete, continuous| {
+                let rows_in = (&*discrete, &*continuous);
+                rows.copy(first, headers.len(), E::MAX_AGENTS, slots, heads, rows_in);
+            })
+            .ok_or(EngineError::WrongPool)
+    }
+
+    /// The heuristic actions of the last step of each instance, `[N, A,
+    /// discrete heads]` (ADR-0079 item 3.5): each half's rows are written
+    /// when `recv` returns it, the other half's keep their last step's.
+    /// `None` without a heuristic slot.
+    ///
+    /// The slice borrows this pool (the wrapper holds the rows while it owns
+    /// the pool, ADR-0079 stage B1), so it cannot outlive the next `recv`,
+    /// which takes `&mut self`; copy it to keep a step's rows.
+    ///
+    /// ```
+    /// use tessera_rl_core::{AdaptiveValues, Environment, RecordLayout};
+    /// use tessera_rl_engine::{EngineError, MaskProvider, PipelinedPool};
+    ///
+    /// fn keep<E, M>(pool: &mut PipelinedPool<E, M>) -> Result<Option<Vec<i32>>, EngineError>
+    /// where
+    ///     E: Environment,
+    ///     M: MaskProvider<E>,
+    ///     E::Config: Send + Sync,
+    ///     E::Header: Send + Sync,
+    ///     E::State: Send + Sync,
+    ///     <E::Header as RecordLayout>::Adaptive: AdaptiveValues<E::Config>,
+    /// {
+    ///     // Copied before the next `recv`: compiles.
+    ///     let rows = pool.heuristic_actions().map(<[i32]>::to_vec);
+    ///     drop(pool.recv()?);
+    ///     Ok(rows)
+    /// }
+    /// ```
+    ///
+    /// Holding the borrowed slice across `recv` does not compile:
+    ///
+    /// ```compile_fail,E0502
+    /// use tessera_rl_core::{AdaptiveValues, Environment, RecordLayout};
+    /// use tessera_rl_engine::{EngineError, MaskProvider, PipelinedPool};
+    ///
+    /// fn keep<E, M>(pool: &mut PipelinedPool<E, M>) -> Result<usize, EngineError>
+    /// where
+    ///     E: Environment,
+    ///     M: MaskProvider<E>,
+    ///     E::Config: Send + Sync,
+    ///     E::Header: Send + Sync,
+    ///     E::State: Send + Sync,
+    ///     <E::Header as RecordLayout>::Adaptive: AdaptiveValues<E::Config>,
+    /// {
+    ///     let rows = pool.heuristic_actions();
+    ///     drop(pool.recv()?);
+    ///     Ok(rows.map_or(0, <[i32]>::len))
+    /// }
+    /// ```
+    #[must_use]
+    pub fn heuristic_actions(&self) -> Option<&[i32]> {
+        self.mode
+            .pool
+            .heuristic
+            .as_ref()
+            .map(|_| self.heuristic.discrete())
+    }
+
+    /// As [`Self::heuristic_actions`], for the continuous heads.
+    #[must_use]
+    pub fn heuristic_continuous(&self) -> Option<&[f32]> {
+        self.mode
+            .pool
+            .heuristic
+            .as_ref()
+            .map(|_| self.heuristic.continuous())
     }
 
     /// The turn order of a `Sequential` environment on the returned half
@@ -1115,12 +1215,14 @@ where
             mut runtime,
             mode,
             watch,
+            heuristic,
             ..
         } = self;
         let rt = runtime.0.take();
         match Arc::try_unwrap(mode) {
             Ok(mode) => {
                 let mut pool = mode.into_pool();
+                heuristic.put_back(&mut pool);
                 if let Some(rt) = rt {
                     pool.put_runtime(rt);
                 }
@@ -1143,6 +1245,7 @@ where
                     cycles: CycleState::initial(),
                     poisoned: true,
                     watch: None,
+                    heuristic,
                 }),
                 kind: IntoPoolErrorKind::LiveTokens,
             }),

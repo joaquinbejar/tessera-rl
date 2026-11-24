@@ -30,9 +30,10 @@ use std::sync::Arc;
 use tessera_rl_core::{Bool8, Environment, RecordLayout as _};
 
 use super::{EnvRawChunk, HALVES, Raw, RawChunk, chunk_range};
+use crate::heuristic::{NO_FAULT, new_fault};
 use crate::masks::MaskProvider;
 use crate::options::Schedule;
-use crate::pool::{EnvPool, step_chunk};
+use crate::pool::{EnvPool, step_chunk_at};
 use crate::sys::Gang;
 use crate::sys::Job;
 
@@ -44,13 +45,27 @@ pub(crate) struct Ready {
     pub(crate) ready: [AtomicBool; HALVES],
 }
 
-/// The work of one half: its panic flag, the workers still running it and,
-/// under `Schedule::Dynamic`, the half's own claim counter (ADR-0076).
-#[derive(Debug, Default)]
+/// The work of one half: its panic flag, the workers still running it,
+/// under `Schedule::Dynamic`, the half's own claim counter (ADR-0076), and
+/// the half's heuristic fault cell (ADR-0079, #347 stage B1): reset when
+/// the half is published, read when it is received.
+#[derive(Debug)]
 struct HalfWork {
     panicked: AtomicBool,
     remaining: AtomicUsize,
     next: AtomicUsize,
+    fault: crate::sys::sync::AtomicU64,
+}
+
+impl Default for HalfWork {
+    fn default() -> Self {
+        Self {
+            panicked: AtomicBool::new(false),
+            remaining: AtomicUsize::new(0),
+            next: AtomicUsize::new(0),
+            fault: new_fault(),
+        }
+    }
 }
 
 /// The one shared allocation of a Pipelined pool (ADR-0047 section 2).
@@ -231,12 +246,14 @@ unsafe fn run_half<E: Environment, M: MaskProvider<E>, const H: usize>(
     let workers = mode.workers;
     if worker < workers {
         let size = mode.size;
-        let ctx = mode.pool.step_ctx();
+        let ctx = mode.pool.step_ctx(core::slice::from_ref(&work.fault));
         let first = range.start / size;
         let last = range.end.div_ceil(size);
         let run = |c: usize| {
             let r = chunk_range(c, size, mode.raw.instances);
             let r = r.start.max(range.start)..r.end.min(range.end);
+            // The pool index of the chunk's first instance names a fault.
+            let start = r.start;
             // SAFETY: chunk `c` lies in half `H`, which only this job writes
             // (the half's token was consumed by `send`), and each chunk is
             // run by one worker: Static by `c % workers`, Dynamic by the
@@ -246,7 +263,7 @@ unsafe fn run_half<E: Environment, M: MaskProvider<E>, const H: usize>(
             let Some(mut chunk) = (unsafe { mode.raw.range_view_on(r, Some(worker)) }) else {
                 return;
             };
-            if !crate::sys::catch(|| step_chunk::<E, M>(&ctx, &mut chunk)) {
+            if !crate::sys::catch(|| step_chunk_at::<E, M>(&ctx, &mut chunk, start)) {
                 work.panicked.store(true, Ordering::Relaxed);
             }
         };
@@ -292,6 +309,8 @@ pub(crate) fn publish<E: Environment, M: MaskProvider<E>>(
         });
     };
     work.panicked.store(false, Ordering::Relaxed);
+    work.fault
+        .store(NO_FAULT, crate::sys::sync::Ordering::Relaxed);
     work.remaining.store(gang.workers(), Ordering::Relaxed);
     // Published with the job by `submit` (SeqCst), so every worker of this
     // job starts claiming from the half's first chunk.
@@ -304,6 +323,19 @@ pub(crate) fn publish<E: Environment, M: MaskProvider<E>>(
     #[expect(unsafe_code, reason = "audited module: half job publication")]
     let submitted = unsafe { gang.submit(job) };
     submitted
+}
+
+/// The heuristic fault code of half `half`'s last job (ADR-0079): the
+/// first invalid heuristic action of the half, in instance order, or
+/// [`NO_FAULT`]. Read after the job was waited for (the gang's
+/// completion orders the workers' writes before it).
+pub(crate) fn half_fault<E: Environment, M: MaskProvider<E>>(
+    mode: &Mode<E, M>,
+    half: usize,
+) -> u64 {
+    mode.work.get(half).map_or(NO_FAULT, |w| {
+        w.fault.load(crate::sys::sync::Ordering::Relaxed)
+    })
 }
 
 /// Whether a chunk of half `half` panicked in its last job.

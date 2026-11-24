@@ -5,7 +5,8 @@
 //! worker count and schedule, from a stream apart from the environment's;
 //! submitted rows are never read; an invalid computed action poisons; the
 //! actions are pure across restore and fork; the map digest is part of the
-//! pool context; Pipelined and Async refuse heuristic slots until stage B.
+//! pool context; Pipelined and Async accept heuristic slots (stage B1,
+//! `tests/heuristic_split.rs`).
 
 #![expect(
     clippy::unwrap_used,
@@ -367,26 +368,20 @@ fn test_policy_map_setters_refuse_bad_maps_and_late_calls() {
 }
 
 #[test]
-fn test_split_modes_refuse_heuristic_slots_and_accept_learner_maps() {
+fn test_split_modes_accept_heuristic_slots_and_learner_maps() {
+    // Stage B1 (#347): both split-phase modes run heuristic slots; their
+    // behaviour is pinned in `tests/heuristic_split.rs`.
     let w = NonZeroUsize::new(2).unwrap();
-    let e = heuristic(cfg(), None, Schedule::Static)
-        .pipelined(PipelinedOptions::new(w))
-        .err()
-        .unwrap();
-    assert_eq!(
-        e.error,
-        EngineError::HeuristicSlotsUnsupported { mode: "Pipelined" }
+    assert!(
+        heuristic(cfg(), None, Schedule::Static)
+            .pipelined(PipelinedOptions::new(w))
+            .is_ok()
     );
-    assert!(e.pool.is_some());
-    let e = heuristic(cfg(), None, Schedule::Static)
-        .async_mode(AsyncOptions::new(w, NonZeroUsize::new(4).unwrap()))
-        .err()
-        .unwrap();
-    assert_eq!(
-        e.error,
-        EngineError::HeuristicSlotsUnsupported { mode: "Async" }
+    assert!(
+        heuristic(cfg(), None, Schedule::Static)
+            .async_mode(AsyncOptions::new(w, NonZeroUsize::new(4).unwrap()))
+            .is_ok()
     );
-    assert!(e.pool.is_some());
     let external = || {
         plain(cfg())
             .with_policy_map(PolicyMap::new(A).assign(1, PolicyGroup::External).unwrap())
