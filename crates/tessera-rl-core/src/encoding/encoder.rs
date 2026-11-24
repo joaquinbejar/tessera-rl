@@ -54,22 +54,56 @@ impl Sink for SliceSink<'_> {
 }
 
 /// Feeds a streaming XXH3-64 hasher. Never allocates.
+///
+/// Small writes (a canonical encoding writes one scalar at a time) are
+/// gathered in a fixed buffer of [`HashSink::BUFFER_LEN`] bytes and passed
+/// to XXH3 in blocks: the per-call cost of a streaming update, not the hash,
+/// dominated (#387). XXH3's streaming result does not depend on how its input
+/// is split, so the digest is the same as for one call over all the bytes.
 #[derive(Clone)]
-pub struct HashSink(Xxh3);
+pub struct HashSink {
+    state: Xxh3,
+    buf: [u8; HashSink::BUFFER_LEN],
+    len: usize,
+}
 
 impl HashSink {
+    /// Bytes gathered before they are passed to XXH3.
+    pub const BUFFER_LEN: usize = 512;
+
     /// A hasher with seed 0.
     #[must_use]
     #[inline]
     pub fn new() -> Self {
-        Self(Xxh3::new())
+        Self {
+            state: Xxh3::new(),
+            buf: [0; Self::BUFFER_LEN],
+            len: 0,
+        }
     }
 
-    /// Returns the XXH3-64 digest of everything written.
+    /// Returns the XXH3-64 digest of everything written. Leaves the sink
+    /// unchanged, so it may be called again or written to further.
     #[must_use]
     #[inline]
     pub fn digest(&self) -> u64 {
-        self.0.digest()
+        match self.buf.get(..self.len) {
+            Some(tail) if !tail.is_empty() => {
+                let mut state = self.state.clone();
+                state.update(tail);
+                state.digest()
+            }
+            _ => self.state.digest(),
+        }
+    }
+
+    /// Passes the gathered bytes to XXH3 and empties the buffer.
+    #[inline]
+    fn flush(&mut self) {
+        if let Some(pending) = self.buf.get(..self.len) {
+            self.state.update(pending);
+        }
+        self.len = 0;
     }
 }
 
@@ -89,7 +123,23 @@ impl core::fmt::Debug for HashSink {
 impl Sink for HashSink {
     #[inline]
     fn write(&mut self, bytes: &[u8]) {
-        self.0.update(bytes);
+        if let Some(end) = self.len.checked_add(bytes.len())
+            && let Some(dst) = self.buf.get_mut(self.len..end)
+        {
+            dst.copy_from_slice(bytes);
+            self.len = end;
+            return;
+        }
+        self.flush();
+        match self.buf.get_mut(..bytes.len()) {
+            // Fits in the emptied buffer.
+            Some(dst) => {
+                dst.copy_from_slice(bytes);
+                self.len = bytes.len();
+            }
+            // Larger than the buffer: no point in copying it.
+            None => self.state.update(bytes),
+        }
     }
 }
 

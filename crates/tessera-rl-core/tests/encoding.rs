@@ -299,6 +299,94 @@ fn test_xxh3_64_matches_upstream_sanity_vectors() {
     assert_eq!(hash(24), 0xA3FE_70BF_9D35_10EB);
 }
 
+/// Writes `data` into a fresh sink in the given pieces.
+fn digest_in_pieces(data: &[u8], cuts: &[usize]) -> u64 {
+    let mut sink = HashSink::new();
+    let mut start = 0;
+    for &cut in cuts.iter().chain(core::iter::once(&data.len())) {
+        sink.write(data.get(start..cut).unwrap_or(&[]));
+        start = cut;
+    }
+    sink.digest()
+}
+
+#[test]
+fn test_hash_sink_two_way_split_at_every_boundary_matches_one_shot() {
+    let b = HashSink::BUFFER_LEN;
+    for len in [b - 1, b, b + 1, 2 * b, 2 * b + 3, 3 * b + 1] {
+        let data = sanity_buffer(len);
+        let want = tessera_rl_core::encoding::checksum(&data);
+        for cut in 0..=len {
+            assert_eq!(digest_in_pieces(&data, &[cut]), want, "len {len} cut {cut}");
+        }
+    }
+}
+
+#[test]
+fn test_hash_sink_fixed_chunk_sizes_across_the_buffer_match_one_shot() {
+    let b = HashSink::BUFFER_LEN;
+    let data = sanity_buffer(4 * b + 7);
+    let want = tessera_rl_core::encoding::checksum(&data);
+    for chunk in (1..=b + 2).chain([2 * b - 1, 2 * b, 2 * b + 1, 4 * b + 7]) {
+        let cuts: Vec<usize> = (chunk..data.len()).step_by(chunk).collect();
+        assert_eq!(digest_in_pieces(&data, &cuts), want, "chunk {chunk}");
+    }
+}
+
+#[test]
+fn test_hash_sink_large_write_after_partial_buffer_matches_one_shot() {
+    let b = HashSink::BUFFER_LEN;
+    let data = sanity_buffer(3 * b + 5);
+    let want = tessera_rl_core::encoding::checksum(&data);
+    for small in [1, 8, b - 1, b] {
+        assert_eq!(digest_in_pieces(&data, &[small]), want, "small {small}");
+        assert_eq!(
+            digest_in_pieces(&data, &[small, small + b, small + 2 * b]),
+            want,
+            "small {small}, b-sized"
+        );
+    }
+}
+
+#[test]
+fn test_hash_sink_digest_is_repeatable_and_writes_continue_after_it() {
+    let data = sanity_buffer(3 * HashSink::BUFFER_LEN);
+    let (a, b) = data.split_at(700);
+    let mut sink = HashSink::new();
+    sink.write(a);
+    let first = sink.digest();
+    assert_eq!(first, sink.digest());
+    assert_eq!(first, tessera_rl_core::encoding::checksum(a));
+    sink.write(b);
+    assert_eq!(sink.digest(), tessera_rl_core::encoding::checksum(&data));
+}
+
+#[test]
+fn test_hash_sink_empty_writes_change_nothing() {
+    let data = sanity_buffer(100);
+    let mut sink = HashSink::new();
+    sink.write(&[]);
+    sink.write(&data);
+    sink.write(&[]);
+    assert_eq!(sink.digest(), tessera_rl_core::encoding::checksum(&data));
+    assert_eq!(HashSink::new().digest(), 0x2D06_8005_38D3_94C2);
+}
+
+proptest::proptest! {
+    #[test]
+    fn test_hash_sink_random_splits_match_one_shot(
+        data in proptest::collection::vec(proptest::num::u8::ANY, 0..3000),
+        mut cuts in proptest::collection::vec(0usize..3000, 0..40),
+    ) {
+        cuts.retain(|&c| c <= data.len());
+        cuts.sort_unstable();
+        proptest::prop_assert_eq!(
+            digest_in_pieces(&data, &cuts),
+            tessera_rl_core::encoding::checksum(&data)
+        );
+    }
+}
+
 mod config {
     use tessera_rl_core::config::{
         CONFIG_FORMAT_VERSION, CanonicalConfig, canonical_bytes, config_hash, write_entry,
