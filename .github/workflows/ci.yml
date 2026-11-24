@@ -278,6 +278,28 @@ jobs:
           tool: cargo-readme
       - run: make readme-check
 
+  # The Burn integration (#367): its own workspace and lock, outside the
+  # root workspace and every other job. fmt, clippy, tests, cargo deny and
+  # the PPO example's smoke run (make burn-check).
+  burn-check:
+    runs-on: [self-hosted, linux-x64]
+    # Skipped for an unmodified fork pull request (see the header).
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+    steps:
+      # Two hosts carry linux-x64: the log names the one that ran this job.
+      - run: hostname && grep -m1 'model name' /proc/cpuinfo
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: cargo fmt --manifest-path integrations/burn/Cargo.toml --all -- --check
+      - run: cargo clippy --manifest-path integrations/burn/Cargo.toml --all-targets --locked -- -D warnings
+      - run: cargo test --manifest-path integrations/burn/Cargo.toml --locked
+      - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
+        with:
+          manifest-path: integrations/burn/Cargo.toml
+          command: check
+          arguments: --config deny.toml
+          command-arguments: licenses bans
+      - run: cargo run --manifest-path integrations/burn/Cargo.toml --release --locked -p ppo-cartpole -- --smoke
+
   deny:
     runs-on: [self-hosted, xaskar]
     # Skipped for an unmodified fork pull request (see the header).

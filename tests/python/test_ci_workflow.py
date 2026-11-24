@@ -27,6 +27,7 @@ MOVED = [
     "pufferlib",
     "python",
     "facade-features",
+    "burn-check",
 ]
 ON_XASKAR = ["gungraun", "deny"]
 
