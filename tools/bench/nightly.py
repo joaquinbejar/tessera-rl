@@ -13,9 +13,11 @@ interval is a seeded bootstrap of the median over the pairs. A case is
 The accepted base moves to the head only on a qualifying night with no flag.
 A flagged night holds it, so a lasting regression is compared again the next
 night instead of being absorbed. A flag clears when a later head is no longer
-flagged against the held base, or when the owner acknowledges the head in
-``compat/bench/nightly-ack.toml`` (a reviewed commit), which moves the base
-to that head.
+flagged against the held base, or when the owner acknowledges a flagged head
+in ``compat/bench/nightly-ack.toml``. The acknowledgement is a reviewed
+commit that lands after the flagged head; once it is in tonight's history it
+moves the base to the acknowledged commit, is recorded as consumed, and
+tonight is measured against it (``resolve_acks``).
 
 **Red** needs the same case flagged on two consecutive *qualifying* nights.
 A non-qualifying night (load over the limit, another job on the host during
@@ -35,6 +37,8 @@ report adds the change of the head against it (reported, never flagged).
 
 Subcommands:
 
+- ``base``: print tonight's base (the accepted base after acknowledgements),
+  so the workflow builds the right base runner.
 - ``night``: measure (``--base-runner``, ``--head-runner``), decide against
   ``--state`` (the previous state, or none), write ``--out``; exit 1 only
   when red on a binding machine.
@@ -148,35 +152,62 @@ def qualify(load: list[float | None], overlap: list[str], aa: dict | None, load_
 
 
 def initial_state(base: str) -> dict:
-    return {"accepted_base": base, "weekly_base": base, "qualifying_nights": 0, "flag_streak": {}, "history": []}
+    return {
+        "accepted_base": base,
+        "weekly_base": base,
+        "qualifying_nights": 0,
+        "flag_streak": {},
+        "flagged_heads": [],
+        "consumed_acks": [],
+        "history": [],
+    }
 
 
-def acknowledged(acks: list[dict], head: str) -> list[str] | None:
-    """The cases the owner acknowledged for ``head`` (all cases when the
-    entry lists none), or None."""
+def resolve_acks(state: dict, acks: list[dict], head: str, is_ancestor: Callable[[str, str], bool]) -> tuple[dict, list[dict]]:
+    """Applies the owner's acknowledgements before tonight is measured.
+
+    An acknowledgement lands as a commit after the flagged head, so it names
+    a head that **was** flagged (``state["flagged_heads"]``), never tonight's.
+    It applies when that commit was flagged, has not been consumed, and is an
+    ancestor of tonight's head (``is_ancestor(commit, head)``). It moves the
+    accepted base to the acknowledged commit (not to tonight's head, so a
+    regression added after it is still compared), clears the flag streaks,
+    and is recorded as consumed. The latest applicable acknowledgement wins.
+    Acknowledgements apply to every case: the base is one commit."""
+    new = json.loads(json.dumps(state))
+    new.setdefault("flagged_heads", [])
+    new.setdefault("consumed_acks", [])
+    applied = []
+    flagged_heads = new["flagged_heads"]
     for ack in acks:
-        if ack.get("commit") == head:
-            return list(ack.get("cases", [])) or ["*"]
-    return None
+        commit = ack.get("commit")
+        if commit in new["consumed_acks"] or commit not in flagged_heads or not is_ancestor(commit, head):
+            continue
+        applied.append(ack)
+    if applied:
+        latest = max(applied, key=lambda a: flagged_heads.index(a["commit"]))
+        new["accepted_base"] = latest["commit"]
+        new["flag_streak"] = {}
+        new["consumed_acks"] = [*new["consumed_acks"], *(a["commit"] for a in applied)]
+    return new, applied
 
 
-def decide(state: dict, night: dict, acks: list[dict], binding: bool) -> tuple[dict, dict]:
+def decide(state: dict, night: dict, binding: bool, applied: list[dict] | None = None) -> tuple[dict, dict]:
     """The new state and the verdict of one night.
 
     ``night``: ``head``, ``base`` (the accepted base it was measured against),
     ``reasons`` (non-qualifying reasons, empty when it qualifies) and
-    ``cases`` (case -> change dict, as ``paired_change``)."""
+    ``cases`` (case -> change dict, as ``paired_change``). ``state`` is the
+    state after ``resolve_acks``; ``applied`` lists the acknowledgements it
+    applied, which the verdict reports."""
     new = json.loads(json.dumps(state))
     head = night["head"]
     reasons = list(night["reasons"])
     flags = sorted(case for case, c in night["cases"].items() if flagged(c))
     verdict = {"head": head, "base": night["base"], "qualifying": not reasons, "reasons": reasons, "flags": flags}
-    ack = acknowledged(acks, head)
-    if ack is not None:
-        new["accepted_base"] = head
-        new["flag_streak"] = {}
-        verdict.update(status="acknowledged", red=False, acknowledged=ack)
-    elif reasons:
+    if applied:
+        verdict["acknowledged"] = [a["commit"] for a in applied]
+    if reasons:
         # Neither flags, nor advances the base, nor counts for the streaks.
         verdict.update(status="non-qualifying", red=False)
     elif head == night["base"]:
@@ -190,6 +221,7 @@ def decide(state: dict, night: dict, acks: list[dict], binding: bool) -> tuple[d
     else:
         streak = {case: new["flag_streak"].get(case, 0) + 1 for case in flags}
         new["flag_streak"] = streak
+        new["flagged_heads"] = [*new.get("flagged_heads", []), head][-60:]
         new["qualifying_nights"] += 1
         red = any(n >= 2 for n in streak.values())
         verdict.update(status="flagged", red=red)
@@ -207,7 +239,17 @@ def decide(state: dict, night: dict, acks: list[dict], binding: bool) -> tuple[d
 def load_acks(path: pathlib.Path = ACKS) -> list[dict]:
     if not path.exists():
         return []
-    return list(tomllib.loads(path.read_text()).get("ack", []))
+    acks = list(tomllib.loads(path.read_text()).get("ack", []))
+    for ack in acks:
+        if set(ack) != {"commit", "reason"}:
+            raise ValueError(f"an acknowledgement has exactly commit and reason, not {sorted(ack)}")
+    return acks
+
+
+def git_is_ancestor(commit: str, head: str) -> bool:
+    import subprocess  # noqa: PLC0415
+
+    return subprocess.run(["git", "merge-base", "--is-ancestor", commit, head], cwd=ROOT, check=False).returncode == 0
 
 
 def _runner_call(paths: dict[str, pathlib.Path], configs: dict, method: dict, pin: dict) -> Callable[[str, str], float]:
@@ -224,6 +266,9 @@ def _runner_call(paths: dict[str, pathlib.Path], configs: dict, method: dict, pi
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     sub = parser.add_subparsers(dest="cmd", required=True)
+    b = sub.add_parser("base", help="print tonight's base: the accepted base after acknowledgements")
+    b.add_argument("--state", type=pathlib.Path)
+    b.add_argument("--head", required=True)
     n = sub.add_parser("night")
     n.add_argument("--state", type=pathlib.Path, help="the previous night's state (absent on the first night)")
     n.add_argument("--out", type=pathlib.Path, required=True)
@@ -237,12 +282,16 @@ def main(argv: list[str] | None = None) -> int:
     n.add_argument("--load-limit", type=float, default=LOAD_LIMIT, help="1-minute load above which the night does not qualify")
     args = parser.parse_args(argv)
 
+    previous = json.loads(args.state.read_text()) if args.state and args.state.exists() else None
+    state, applied = resolve_acks(previous or initial_state(args.head), load_acks(), args.head, git_is_ancestor)
+    base = state["accepted_base"]
+    if args.cmd == "base":
+        print(base)
+        return 0
+
     sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
     import bench  # noqa: PLC0415
 
-    previous = json.loads(args.state.read_text()) if args.state and args.state.exists() else None
-    state = previous or initial_state(args.head)
-    base = state["accepted_base"]
     spec, method = bench.load(quick=args.quick)
     configs = {c["name"]: c for c in spec["config"]}
     pin = bench.pinning(args.machine)
@@ -258,7 +307,7 @@ def main(argv: list[str] | None = None) -> int:
         reasons.append("quick method: a smoke run")
     night = {"head": args.head, "base": base, "reasons": reasons, "cases": cases}
     binding = bench.machines().get(args.machine, {}).get("status") == "reference"
-    new, verdict = decide(state, night, load_acks(), binding)
+    new, verdict = decide(state, night, binding, applied)
     report = {
         "schema": "tessera-nightly/1",
         "machine": args.machine,

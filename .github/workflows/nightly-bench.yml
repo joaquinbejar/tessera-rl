@@ -66,11 +66,14 @@ jobs:
         id: build
         shell: bash
         run: |
-          # The accepted base comes from the previous state; on the first
-          # night it is the head itself (an A/A night).
-          base=$(jq -r '.state.accepted_base // empty' previous/nightly-bench.json 2>/dev/null || true)
+          # The accepted base comes from the previous state after the owner's
+          # acknowledgements; on the first night it is the head itself (A/A).
           head=$(git rev-parse HEAD)
-          base=${base:-$head}
+          args=()
+          if [ -f previous/nightly-bench.json ]; then
+            jq '.state' previous/nightly-bench.json > previous-state.json && args+=(--state previous-state.json)
+          fi
+          base=$(uv run --locked --python 3.11 python tools/bench/nightly.py base "${args[@]}" --head "$head")
           echo "base=$base head=$head"
           # Cached per commit in the job's work directory, so a held base is
           # not rebuilt every night.
