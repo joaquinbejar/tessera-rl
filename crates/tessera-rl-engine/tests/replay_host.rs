@@ -858,14 +858,10 @@ fn test_replay_host_poisoning_step_replays_to_the_same_poison() {
     assert!(summary.poisoned);
     assert!(q.is_poisoned());
     // A host that does not panic misses the poison: the poisoning call's
-    // event (outputs hash 0) fails first, or the Poisoned marker does.
-    let kind = diverged(replay::<false, false>(&bytes, &Cfg::default())).0;
-    assert!(
-        matches!(
-            kind,
-            DivergenceKind::OutputsMismatch | DivergenceKind::NotPoisoned
-        ),
-        "{kind:?}"
+    // outputs hash is a sentinel, so the divergence is NotPoisoned.
+    assert_eq!(
+        diverged(replay::<false, false>(&bytes, &Cfg::default())).0,
+        DivergenceKind::NotPoisoned
     );
 }
 

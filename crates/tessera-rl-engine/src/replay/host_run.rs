@@ -198,8 +198,12 @@ impl Replay<'_> {
             write: None,
             max_record,
         };
-        for item in self.events() {
+        let mut events = self.events().peekable();
+        while let Some(item) = events.next() {
             let (index, event) = item?;
+            // A call logged before `Poisoned` poisoned the pool when recorded;
+            // its outputs hash (0) is a sentinel, never compared.
+            let poisoning = matches!(events.peek(), Some(Ok((_, Event::Poisoned))));
             if run.summary.poisoned || run.summary.unverified_poison {
                 return Err(ReplayError::Malformed {
                     event_index: index,
@@ -224,7 +228,7 @@ impl Replay<'_> {
                 run.summary.unverified_poison = true;
                 run.write = None;
             } else {
-                Self::apply_host(pool, ops, &mut run, index, event)?;
+                Self::apply_host(pool, ops, &mut run, index, event, poisoning)?;
             }
             run.summary.events = index.saturating_add(1);
         }
@@ -246,6 +250,7 @@ impl Replay<'_> {
         run: &mut Run,
         index: u64,
         event: Event<'_>,
+        poisoning: bool,
     ) -> Result<(), ReplayError> {
         let malformed = |field| ReplayError::Malformed {
             event_index: index,
@@ -262,7 +267,7 @@ impl Replay<'_> {
                     Ids::All => pool.reset_all(reseed.as_reseed()).map(|_| ()),
                     Ids::List(ids) => pool.reset(ids, reseed.as_reseed()).map(|_| ()),
                 };
-                let outcome = outcome(pool, run, index, &result)?;
+                let outcome = outcome(pool, run, index, &result, poisoning)?;
                 if let (Outcome::Ok, Some(recorded)) = (outcome, recorded) {
                     check_reset(pool, run, index, &ids, recorded)?;
                 }
@@ -281,7 +286,7 @@ impl Replay<'_> {
                     });
                 }
                 let result = step(pool, &discrete, &continuous_bits);
-                let outcome = outcome(pool, run, index, &result)?;
+                let outcome = outcome(pool, run, index, &result, poisoning)?;
                 if outcome == Outcome::Ok {
                     check_step(pool, run, index, recorded, &refusals)?;
                 }
@@ -561,8 +566,11 @@ fn outcome<E: HostEnvironment, const A: usize>(
     run: &Run,
     index: u64,
     result: &Result<(), EngineError>,
+    poisoning: bool,
 ) -> Result<Outcome, ReplayError> {
     match result {
+        // Recorded as poisoning: its outputs hash is a sentinel, not compared.
+        Ok(()) if poisoning => Err(run.diverged(index, DivergenceKind::NotPoisoned, None)),
         Ok(()) => Ok(Outcome::Ok),
         Err(_) if pool.is_poisoned() => Ok(Outcome::Poisoned),
         Err(EngineError::ActionRejected { instance, .. }) => {
