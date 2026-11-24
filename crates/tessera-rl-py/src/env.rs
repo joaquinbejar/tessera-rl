@@ -16,8 +16,8 @@ use tessera_rl_core::space::{BoxBounds, DType, Space};
 use tessera_rl_core::{DecodeError, Environment, TurnStructure, Validate};
 use tessera_rl_engine::{
     ActionInput, AsyncOptions, AutoReset, DecodedRecord, EngineError, EnvPool, MAX_LEAVES,
-    MaskProvider, Masked, NoMasks, PipelinedOptions, PoolOptions, Reseed, SyncOptions, WaitBackend,
-    WaitPolicy,
+    MaskProvider, Masked, NoMasks, PipelinedOptions, PoolOptions, Reseed, Schedule, SyncOptions,
+    WaitBackend, WaitPolicy,
 };
 use tessera_rl_games::{
     Connect4, Connect4Config, Go9, Go9Config, Leduc, LeducConfig, Othello, OthelloConfig,
@@ -714,6 +714,9 @@ pub(crate) struct PoolArgs {
     pub(crate) max_episode_steps: Option<u32>,
     pub(crate) auto_reset: String,
     pub(crate) chunk_size: Option<u32>,
+    /// How chunks are given to workers: `"static"` (the default) or
+    /// `"dynamic"` (ADR-0076). Never changes what a step computes.
+    pub(crate) schedule: String,
     /// Worker threads; `None` (not given) is the engine default,
     /// [`tessera_rl_engine::default_workers`] (SPEC 6.1).
     pub(crate) workers: Option<usize>,
@@ -752,6 +755,15 @@ fn options(args: &PoolArgs) -> Result<(PoolOptions, usize), BindError> {
         options.chunk_size = NonZeroU32::new(chunk)
             .ok_or_else(|| BindError::Argument("chunk_size must be at least 1".to_owned()))?;
     }
+    options.schedule = match args.schedule.as_str() {
+        "static" => Schedule::Static,
+        "dynamic" => Schedule::Dynamic,
+        other => {
+            return Err(BindError::Argument(format!(
+                "schedule must be static or dynamic, not {other:?}"
+            )));
+        }
+    };
     let n = usize::try_from(args.num_envs)
         .map_err(|_| BindError::Argument("num_envs too large".to_owned()))?;
     Ok((options, n))
@@ -1395,6 +1407,7 @@ mod tests {
             max_episode_steps: None,
             auto_reset: "next_step".to_owned(),
             chunk_size: None,
+            schedule: "static".to_owned(),
             workers: Some(0),
             spin: None,
             wait: None,
@@ -1412,6 +1425,7 @@ mod tests {
             max_episode_steps: None,
             auto_reset: "next_step".to_owned(),
             chunk_size: None,
+            schedule: "static".to_owned(),
             workers,
             spin,
             wait: None,
@@ -1600,6 +1614,7 @@ mod tests {
             max_episode_steps: None,
             auto_reset: "next_step".to_owned(),
             chunk_size: None,
+            schedule: "static".to_owned(),
             workers: Some(0),
             spin: None,
             wait: None,

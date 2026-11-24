@@ -31,6 +31,7 @@ use tessera_rl_core::{Bool8, Environment, RecordLayout as _};
 
 use super::{EnvRawChunk, HALVES, Raw, RawChunk, chunk_range};
 use crate::masks::MaskProvider;
+use crate::options::Schedule;
 use crate::pool::{EnvPool, step_chunk};
 use crate::sys::Gang;
 use crate::sys::Job;
@@ -43,11 +44,13 @@ pub(crate) struct Ready {
     pub(crate) ready: [AtomicBool; HALVES],
 }
 
-/// The work of one half: its panic flag and the workers still running it.
+/// The work of one half: its panic flag, the workers still running it and,
+/// under `Schedule::Dynamic`, the half's own claim counter (ADR-0076).
 #[derive(Debug, Default)]
 struct HalfWork {
     panicked: AtomicBool,
     remaining: AtomicUsize,
+    next: AtomicUsize,
 }
 
 /// The one shared allocation of a Pipelined pool (ADR-0047 section 2).
@@ -57,6 +60,7 @@ pub(crate) struct Mode<E: Environment, M: MaskProvider<E>> {
     halves: [Range<usize>; HALVES],
     size: usize,
     workers: usize,
+    schedule: Schedule,
     work: [HalfWork; HALVES],
     jobs: [Job; HALVES],
     /// A live token covers the half.
@@ -107,6 +111,7 @@ where
         halves: [Range<usize>; HALVES],
         size: usize,
         workers: usize,
+        schedule: Schedule,
     ) -> Arc<Self> {
         let raw = Self::parts(&mut pool);
         let mut arc = Arc::new(Self {
@@ -115,6 +120,7 @@ where
             halves,
             size: size.max(1),
             workers,
+            schedule,
             work: Default::default(),
             jobs: placeholders(),
             live: Default::default(),
@@ -228,18 +234,34 @@ unsafe fn run_half<E: Environment, M: MaskProvider<E>, const H: usize>(
         let ctx = mode.pool.step_ctx();
         let first = range.start / size;
         let last = range.end.div_ceil(size);
-        for c in (first..last).skip(worker).step_by(workers.max(1)) {
+        let run = |c: usize| {
             let r = chunk_range(c, size, mode.raw.instances);
             let r = r.start.max(range.start)..r.end.min(range.end);
             // SAFETY: chunk `c` lies in half `H`, which only this job writes
-            // (the half's token was consumed by `send`), and each chunk
-            // belongs to one worker (invariants 2, 3 and 4).
+            // (the half's token was consumed by `send`), and each chunk is
+            // run by one worker: Static by `c % workers`, Dynamic by the
+            // half's claim counter, reset in `publish` before this job was
+            // submitted (invariants 2, 3 and 4).
             let Some(mut chunk) = (unsafe { mode.raw.range_view(r) }) else {
-                continue;
+                return;
             };
             if !crate::sys::catch(|| step_chunk::<E, M>(&ctx, &mut chunk)) {
                 work.panicked.store(true, Ordering::Relaxed);
             }
+        };
+        match mode.schedule {
+            Schedule::Static => {
+                for c in (first..last).skip(worker).step_by(workers.max(1)) {
+                    run(c);
+                }
+            }
+            Schedule::Dynamic => loop {
+                let c = first.saturating_add(work.next.fetch_add(1, Ordering::Relaxed));
+                if c >= last {
+                    break;
+                }
+                run(c);
+            },
         }
     }
     // The last worker signals the waiter (Release: after its writes).
@@ -270,6 +292,9 @@ pub(crate) fn publish<E: Environment, M: MaskProvider<E>>(
     };
     work.panicked.store(false, Ordering::Relaxed);
     work.remaining.store(gang.workers(), Ordering::Relaxed);
+    // Published with the job by `submit` (SeqCst), so every worker of this
+    // job starts claiming from the half's first chunk.
+    work.next.store(0, Ordering::Relaxed);
     ready.store(false, Ordering::Relaxed);
     // SAFETY: `job` and its data live in the `Arc` allocation, which the
     // caller keeps alive until the `wait` that returns this job (its `Drop`

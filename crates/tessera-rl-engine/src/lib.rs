@@ -93,7 +93,8 @@ pub use modes::pipelined::{
     PipelinedOptions, PipelinedPool, SendError,
 };
 pub use options::{
-    AutoReset, CHUNK_RANGE, MAX_ADAPTIVE_CAP, PoolOptions, SyncOptions, WaitBackend, WaitPolicy,
+    AutoReset, CHUNK_RANGE, MAX_ADAPTIVE_CAP, PoolOptions, Schedule, SyncOptions, WaitBackend,
+    WaitPolicy,
 };
 pub use outputs::Outputs;
 pub use persist::{

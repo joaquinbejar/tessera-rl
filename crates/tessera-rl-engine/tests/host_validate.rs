@@ -19,7 +19,7 @@ use std::sync::atomic::Ordering;
 
 use host_script::{NOTHING, REJECT_CODE, SLOTS, Script, ScriptConfig, Shared, TERMINATE};
 use tessera_rl_engine::{
-    ActionInput, EngineError, HostPool, Outputs, PoolOptions, Reseed, SyncOptions,
+    ActionInput, EngineError, HostPool, Outputs, PoolOptions, Reseed, Schedule, SyncOptions,
 };
 use tessera_rl_num::identity::Seed;
 
@@ -28,12 +28,21 @@ const N: usize = 8;
 type Pool<const T: u8, const V: bool> = HostPool<Script<T, V>, SLOTS>;
 
 fn pool<const T: u8, const V: bool>(shared: &Arc<Shared>, workers: usize) -> Pool<T, V> {
+    pool_with(shared, workers, Schedule::Static)
+}
+
+fn pool_with<const T: u8, const V: bool>(
+    shared: &Arc<Shared>,
+    workers: usize,
+    schedule: Schedule,
+) -> Pool<T, V> {
     let mut o = PoolOptions::new(
         NonZeroU32::new(u32::try_from(N).unwrap()).unwrap(),
         Seed::new(4),
     );
     // Two instances per chunk, so Sync spreads them over the workers.
     o.chunk_size = NonZeroU32::new(2).unwrap();
+    o.schedule = schedule;
     let p = Pool::<T, V>::new(ScriptConfig::new(shared), o).unwrap();
     if workers > 0 {
         p.with_workers(SyncOptions::new(NonZeroUsize::new(workers).unwrap()))
@@ -130,9 +139,14 @@ fn test_host_validate_sync_reports_the_lowest_rejection_as_inline() {
     // instance 1 in worker 0's chunk 0.
     for mask in [1u32 << 6, (1 << 6) | (1 << 1), (1 << 7) | (1 << 2)] {
         let mut results = Vec::new();
-        for workers in [0, 2] {
+        for (workers, schedule) in [
+            (0, Schedule::Static),
+            (2, Schedule::Static),
+            (2, Schedule::Dynamic),
+            (3, Schedule::Dynamic),
+        ] {
             let shared = Shared::new();
-            let mut p = pool::<0, true>(&shared, workers);
+            let mut p = pool_with::<0, true>(&shared, workers, schedule);
             p.reset_all(Reseed::Keep).unwrap();
             let before = snapshot(p.outputs().unwrap());
             shared.reject.store(mask, Ordering::Relaxed);
@@ -141,7 +155,9 @@ fn test_host_validate_sync_reports_the_lowest_rejection_as_inline() {
             assert_eq!(snapshot(p.outputs().unwrap()), before);
             results.push(r);
         }
-        assert_eq!(results[0], results[1], "{mask:#b}");
+        // The same rejection under every worker count and schedule
+        // (ADR-0076: error reporting does not depend on the worker).
+        assert!(results.iter().all(|r| *r == results[0]), "{mask:#b}");
         assert_eq!(results[0].0, mask.trailing_zeros());
     }
 }

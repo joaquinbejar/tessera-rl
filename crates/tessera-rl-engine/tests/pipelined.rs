@@ -19,7 +19,7 @@ use core::time::Duration;
 use common::{CountConfig, Counter};
 use tessera_rl_engine::{
     ActionInput, AutoReset, EngineError, EnvPool, HalfToken, IntoPoolErrorKind, Masked,
-    PipelinedOptions, PipelinedPool, PoolOptions, Record, Reseed,
+    PipelinedOptions, PipelinedPool, PoolOptions, Record, Reseed, Schedule,
 };
 use tessera_rl_num::identity::Seed;
 
@@ -51,10 +51,20 @@ fn sync_pool(mode: AutoReset) -> Pool {
 }
 
 fn piped(mode: AutoReset, workers: usize, cfg: CountConfig) -> Piped {
-    EnvPool::with_masks(cfg, options(mode))
-        .unwrap()
-        .pipelined(PipelinedOptions::new(NonZeroUsize::new(workers).unwrap()))
-        .unwrap()
+    piped_with(mode, workers, cfg, Schedule::Static)
+}
+
+fn piped_with(mode: AutoReset, workers: usize, cfg: CountConfig, schedule: Schedule) -> Piped {
+    EnvPool::with_masks(
+        cfg,
+        PoolOptions {
+            schedule,
+            ..options(mode)
+        },
+    )
+    .unwrap()
+    .pipelined(PipelinedOptions::new(NonZeroUsize::new(workers).unwrap()))
+    .unwrap()
 }
 
 /// Actions of step `t` for every instance, `[N, 2]`. Agent 0 sometimes
@@ -204,6 +214,16 @@ fn send(p: &mut Piped, t: Token, a: &[i32]) {
 
 #[test]
 fn test_pipelined_matches_sync_bit_for_bit_for_1_2_7_and_64_workers() {
+    matches_sync(Schedule::Static);
+}
+
+#[test]
+fn test_pipelined_dynamic_schedule_matches_sync_bit_for_bit() {
+    // Each half has its own claim counter (ADR-0076).
+    matches_sync(Schedule::Dynamic);
+}
+
+fn matches_sync(schedule: Schedule) {
     for mode in [AutoReset::NextStep, AutoReset::SameStep] {
         // The Sync reference.
         let mut reference = sync_pool(mode);
@@ -234,7 +254,7 @@ fn test_pipelined_matches_sync_bit_for_bit_for_1_2_7_and_64_workers() {
             .map(|i| reference.state_hash(i).unwrap().get())
             .collect();
         for workers in [1, 2, 7, 64] {
-            let mut p = piped(mode, workers, cfg());
+            let mut p = piped_with(mode, workers, cfg(), schedule);
             let [a0, b0] = p.reset_all(Reseed::Keep).unwrap();
             assert_eq!(token_frame(&a0), frames[0][0], "{workers}, {mode:?}");
             assert_eq!(token_frame(&b0), frames[0][1], "{workers}, {mode:?}");

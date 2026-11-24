@@ -775,8 +775,8 @@ where
         };
         if let Some(rt) = sync {
             let heads = (layout.discrete.len(), layout.continuous.len());
-            let size = chunk_size(options);
-            let panicked = par_chunks(&mut rt.gang, all, size, heads, |chunk, first| {
+            let grain = (chunk_size(options), options.schedule);
+            let panicked = par_chunks(&mut rt.gang, all, grain, heads, |chunk, first| {
                 reset_chunk::<E, M>(cfg, authority, chunk, reseed, first);
             })?;
             if panicked {
@@ -1002,8 +1002,8 @@ where
         let clean = AtomicBool::new(true);
         if let Some(rt) = sync {
             let heads = (layout.discrete.len(), layout.continuous.len());
-            let size = chunk_size(options);
-            let panicked = par_chunks(&mut rt.gang, all, size, heads, |chunk, _| {
+            let grain = (chunk_size(options), options.schedule);
+            let panicked = par_chunks(&mut rt.gang, all, grain, heads, |chunk, _| {
                 step_chunk::<E, M>(&ctx, chunk);
                 if !may_step_cleanly::<E>() || !steps_cleanly(chunk.headers) {
                     clean.store(false, Ordering::Relaxed);

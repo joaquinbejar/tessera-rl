@@ -75,7 +75,7 @@ use tessera_rl_num::identity::{LogicalId, RngIdentity};
 use crate::buffer::par_chunks;
 use crate::error::EngineError;
 use crate::layout::{ActionLayout, MaskLayout, obs_leaves};
-use crate::options::{AutoReset, PoolOptions, SyncOptions};
+use crate::options::{AutoReset, PoolOptions, Schedule, SyncOptions};
 use crate::outputs::{Outputs, OutputsView};
 use crate::pool::{Reseed, Rows, SyncRuntime, check_reset, chunk_size, run_kernels, too_large};
 use crate::validate::{ActionInput, check_and_copy_actions, check_ids};
@@ -557,7 +557,7 @@ impl<E: HostEnvironment, const A: usize> HostPool<E, A> {
     fn reset_all_inner(&mut self, reseed: Reseed<'_>) -> Result<(), EngineError> {
         let n = self.headers.len();
         check_reset(&self.headers, 0..n, n, reseed)?;
-        let size = chunk_size(&self.options);
+        let grain = (chunk_size(&self.options), self.options.schedule);
         let heads = self.action_heads();
         let Self {
             headers,
@@ -607,7 +607,7 @@ impl<E: HostEnvironment, const A: usize> HostPool<E, A> {
             outputs: outputs.view_all(),
         };
         if let Some(rt) = sync {
-            let panicked = par_chunks(&mut rt.gang, all, size, heads, |rows, first| {
+            let panicked = par_chunks(&mut rt.gang, all, grain, heads, |rows, first| {
                 kernels::reset_chunk::<E, A>(&ctx, rows, reseed, first);
             })?;
             if panicked {
@@ -741,7 +741,7 @@ impl<E: HostEnvironment, const A: usize> HostPool<E, A> {
             &mut self.discrete,
             &mut self.continuous,
         )?;
-        let size = chunk_size(&self.options);
+        let grain = (chunk_size(&self.options), self.options.schedule);
         let heads = self.action_heads();
         let Self {
             headers,
@@ -790,7 +790,7 @@ impl<E: HostEnvironment, const A: usize> HostPool<E, A> {
                 instances,
                 discrete,
                 continuous,
-                size,
+                grain,
             );
             // A rejected call still charges what `validate` allocated to
             // the host tally, now (ADR-0065 item 2).
@@ -813,7 +813,7 @@ impl<E: HostEnvironment, const A: usize> HostPool<E, A> {
         };
         ctx.misuse.store(u64::MAX, Ordering::Relaxed);
         if let Some(rt) = sync {
-            let panicked = par_chunks(&mut rt.gang, all, size, heads, |rows, first| {
+            let panicked = par_chunks(&mut rt.gang, all, grain, heads, |rows, first| {
                 kernels::step_chunk::<E, A>(&ctx, rows, first);
             })?;
             if panicked {
@@ -1011,7 +1011,7 @@ fn validate<E: HostEnvironment, const A: usize>(
     instances: &mut [E],
     discrete: &mut [i32],
     continuous: &mut [f32],
-    size: usize,
+    grain: (usize, Schedule),
 ) -> Result<(), EngineError> {
     let heads = (ctx.layout.discrete.len(), ctx.layout.continuous.len());
     let mut found = None;
@@ -1026,7 +1026,7 @@ fn validate<E: HostEnvironment, const A: usize>(
             penalized: &mut [],
             outputs: OutputsView::empty(A),
         };
-        let panicked = par_chunks(&mut rt.gang, all, size, heads, |rows, first| {
+        let panicked = par_chunks(&mut rt.gang, all, grain, heads, |rows, first| {
             if let Some((i, _)) = kernels::validate_chunk::<E, A>(ctx, rows) {
                 let index = u32::try_from(first.saturating_add(i)).unwrap_or(u32::MAX);
                 lowest.fetch_min(index, Ordering::Relaxed);

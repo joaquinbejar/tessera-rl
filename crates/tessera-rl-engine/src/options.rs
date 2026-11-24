@@ -51,6 +51,37 @@ pub struct PoolOptions {
     /// Largest mask buffer allowed, in bytes (SPEC 11.3); checked before
     /// allocating. Applies only to masked pools.
     pub mask_budget_bytes: u64,
+    /// How chunks are given to workers (ADR-0076). Never changes what a
+    /// step computes.
+    pub schedule: Schedule,
+}
+
+/// How a worker pool gives chunks to its workers (ADR-0076, SPEC 6.1).
+///
+/// Outputs, records and state hashes are bit-identical under both: every
+/// output row is written by the chunk that owns it, and nothing a step
+/// computes or reports depends on which worker ran a chunk.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Schedule {
+    /// Worker `w` steps the chunks `c` with `c % workers == w` (ADR-0005):
+    /// an instance always runs on the same worker, which keeps its cache
+    /// warm. The default.
+    #[default]
+    Static,
+    /// Workers claim the next chunk from a per-job counter until every
+    /// chunk is taken, balancing variable per-instance cost.
+    ///
+    /// Use it for variable step cost only, and avoid small chunks. The
+    /// `schedule_step` bench, on a quiet 8-core x86-64 host (indicative,
+    /// not a reference machine), measured:
+    /// - uniform cost at the default 64 instances per chunk: about 2%
+    ///   faster than `Static` on 4 workers and about 6% slower on 8, where
+    ///   the claimed chunks lose the per-worker cache affinity;
+    /// - one instance per chunk: 12% slower on 4 workers and 38% on 8,
+    ///   from contention on the counter;
+    /// - a heavy-tailed per-step cost on a loaded host: up to about 3 times
+    ///   faster on 8 workers.
+    Dynamic,
 }
 
 /// Default mask budget: 1 GiB.
@@ -69,6 +100,7 @@ impl PoolOptions {
             auto_reset: AutoReset::NextStep,
             illegal_action: IllegalActionPolicy::Noop,
             mask_budget_bytes: DEFAULT_MASK_BUDGET,
+            schedule: Schedule::Static,
         }
     }
 

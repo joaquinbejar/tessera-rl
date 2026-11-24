@@ -566,7 +566,7 @@ def _index(value, what: str) -> int:
 
 
 #: Keyword arguments the native constructors take as strings.
-_STRING_OPTIONS = {"auto_reset", "outputs", "mode", "gather", "obs", "wait"}
+_STRING_OPTIONS = {"auto_reset", "outputs", "mode", "gather", "obs", "wait", "schedule"}
 
 
 #: Constructor options passed as exact ``bool`` (the RTS ``seat_swap``).
@@ -637,7 +637,10 @@ def make(env_id: str, num_envs: int = 1, seed: int = 0, outputs: str = "borrowed
     ``outputs`` is ``"borrowed"`` (default: read-only zero-copy views valid
     until the next call) or ``"owned"`` (fresh arrays). Pool options:
     ``max_episode_steps``, ``auto_reset`` (``"next_step"``,
-    ``"same_step"`` or ``"disabled"``), ``chunk_size``, ``workers``
+    ``"same_step"`` or ``"disabled"``), ``chunk_size``, ``schedule``
+    (``"static"``, the default, or ``"dynamic"``: workers claim chunks from a
+    shared counter, which balances environments with variable step cost;
+    outputs are identical either way, ADR-0076), ``workers``
     (worker threads; by default one per physical core this process may use,
     at most one per chunk: ``physical_cores()``; ``workers=0`` steps
     inline on the caller in Sync mode, and one worker in the split-phase
