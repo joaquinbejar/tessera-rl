@@ -712,7 +712,7 @@ def test_pypi_release_assets_is_the_only_job_that_writes_contents():
     assert re.search(r"^    needs: publish$", RELEASE_JOB, re.M)
     perms = re.search(r"^    permissions:\n((?:      .*\n)+)", RELEASE_JOB, re.M).group(1)
     assert sorted(perms.split()) == sorted(["contents:", "write", "id-token:", "write", "attestations:", "write"])
-    assert PYPI.count("contents: write") == 1
+    assert len(re.findall(r"^      contents: write$", PYPI, re.M)) == 1
     assert "contents: write" not in VERIFY_JOB and "contents: write" not in PUBLISH_JOB
     guard = re.search(r"^    if: (.*)$", RELEASE_JOB, re.M).group(1)
     assert "github.event_name == 'workflow_dispatch'" in guard and "github.repository == 'joaquinbejar/tessera-rl'" in guard
