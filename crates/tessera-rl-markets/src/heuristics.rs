@@ -5,8 +5,10 @@
 //! legal under the mask: a candidate is kept only if
 //! [`crate::actions::decide`] accepts it, otherwise the no-op.
 //!
-//! - **Market maker:** cancels its oldest quote once it is more than
-//!   [`QUOTE_AGE`] steps old; otherwise quotes one lot at the best bid
+//! - **Market maker:** cancels its oldest quote once its last limit order
+//!   is more than [`QUOTE_AGE`] steps old (`quote_step`, its own
+//!   knowledge; the design's per-quote age would need order timestamps);
+//!   otherwise quotes one lot at the best bid
 //!   minus one tick when it has no bid, else at the best ask plus one when
 //!   it has no ask; both skewed one tick down per 10 lots of long
 //!   inventory (up per 10 short).
@@ -37,9 +39,9 @@ use tessera_rl_num::rng::StepRng;
 use crate::actions::{Context, HEADS, OFFSET_ZERO, decide, kind};
 use crate::config::LobConfig;
 use crate::env::{LimitOrderBook, ring};
-use crate::info::{LobInfo, public_view};
+use crate::info::{LobInfo, info_of, public_state};
 use crate::order::Side;
-use crate::state::{LobState, MID_RING, SEQ_RING};
+use crate::state::{LobState, MID_RING};
 
 /// A quote older than this many steps is cancelled by the market maker.
 pub const QUOTE_AGE: u32 = 20;
@@ -48,7 +50,6 @@ pub const NOISE_TRIES: usize = 8;
 /// The mid move that triggers the momentum trader, in ticks.
 pub const MOMENTUM_TICKS: i64 = 2;
 
-const _: () = assert!((QUOTE_AGE as usize) < SEQ_RING);
 
 /// One of the scripted baselines.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -94,21 +95,18 @@ fn first_legal(cfg: &LobConfig, ctx: &Context, candidates: &[[i32; HEADS]]) -> [
 }
 
 fn market_maker(cfg: &LobConfig, info: &LobInfo, ctx: &Context) -> [i32; HEADS] {
-    let view = &info.view;
     let own = ctx.own_orders();
-    // The oldest quote, if it rested before step `step - QUOTE_AGE`.
-    if let Some(old) = view.step.checked_sub(QUOTE_AGE).filter(|&s| s > 0) {
-        let mark = view
-            .seq_marks
-            .get(ring(old, SEQ_RING))
-            .copied()
-            .unwrap_or(0);
-        // Index 0 of the cancel head is the oldest open order.
-        if own.first().is_some_and(|o| o.seq < mark) {
-            return first_legal(cfg, ctx, &[heads(kind::CANCEL, 0, 0, 0)]);
-        }
+    // Quotes untouched for more than QUOTE_AGE steps: cancel the oldest
+    // (index 0 of the cancel head).
+    if !own.is_empty()
+        && info
+            .step
+            .checked_sub(info.quote_step)
+            .is_some_and(|age| age > QUOTE_AGE)
+    {
+        return first_legal(cfg, ctx, &[heads(kind::CANCEL, 0, 0, 0)]);
     }
-    let inventory = i64::from(view.account(usize::from(info.me)).inventory);
+    let inventory = i64::from(info.account.inventory);
     let skew = i32::try_from(inventory / 10).unwrap_or(0);
     let has = |side: Side| own.iter().any(|o| o.side == side);
     let clamp = |o: i32| o.clamp(0, OFFSET_ZERO * 2);
@@ -152,20 +150,19 @@ fn noise(cfg: &LobConfig, ctx: &Context, rng: &mut StepRng) -> [i32; HEADS] {
 }
 
 fn momentum(cfg: &LobConfig, info: &LobInfo, ctx: &Context) -> [i32; HEADS] {
-    let view = &info.view;
     let ring_len = u32::try_from(MID_RING).unwrap_or(1);
-    if view.step < ring_len {
+    if info.step < ring_len {
         return [kind::NOOP, 0, 0, 0];
     }
-    let now = view
+    let now = info
         .mids
-        .get(ring(view.step, MID_RING))
+        .get(ring(info.step, MID_RING))
         .copied()
         .unwrap_or(0);
     // The oldest entry of the ring: the mid `MID_RING - 1` steps ago.
-    let then = view
+    let then = info
         .mids
-        .get(ring(view.step + 1, MID_RING))
+        .get(ring(info.step + 1, MID_RING))
         .copied()
         .unwrap_or(0);
     let moved = i64::from(now) - i64::from(then);
@@ -187,7 +184,7 @@ pub fn act_info(
     rng: &mut StepRng,
     out: &mut ActionWriter<'_>,
 ) {
-    let ctx = Context::new(cfg, &info.view, usize::from(info.me));
+    let ctx = Context::new(cfg, &public_state(info), usize::from(info.me));
     let h = match baseline {
         Baseline::MarketMaker => market_maker(cfg, info, &ctx),
         Baseline::Noise => noise(cfg, &ctx, rng),
@@ -208,7 +205,7 @@ impl Heuristic for LimitOrderBook {
         rng: &mut StepRng,
         out: &mut ActionWriter<'_>,
     ) {
-        let info = public_view(state, agent.index());
+        let info = info_of(cfg, state, agent.index());
         act_info(cfg, &info, baseline_of(agent.index()), rng, out);
     }
 }

@@ -190,6 +190,22 @@ impl PendingQueue {
             })
     }
 
+    /// A queue holding `items` (stored in iteration order, `ready` and
+    /// `arrival` as given) whose next arrival rank is `next_arrival`, or
+    /// `None` if there are more than `PENDING_CAP`. Nothing is checked:
+    /// this builds sampled states (`Determinize`).
+    #[must_use]
+    pub fn from_items(items: impl IntoIterator<Item = Pending>, next_arrival: u32) -> Option<Self> {
+        let mut queue = Self {
+            items: Pool::default(),
+            next_arrival,
+        };
+        for p in items {
+            queue.items.insert(p)?;
+        }
+        Some(queue)
+    }
+
     /// Rewrites the owner of every queued item, in pool index order, to
     /// `owner(item)`. Everything else, arrival order included, is
     /// unchanged.

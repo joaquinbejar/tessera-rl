@@ -47,7 +47,7 @@ pub use exposure::Exposure;
 pub use fill::{Fill, Fills};
 pub use fundamental::RandomWalk;
 pub use heuristics::{Baseline, act_info, baseline_of};
-pub use info::{ANON, LobInfo, public_view};
+pub use info::{LobInfo, info_of, public_state};
 pub use observe::LobObs;
 pub use order::{Kind, Order, Side};
 pub use pending::{Pending, PendingQueue};

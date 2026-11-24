@@ -1,12 +1,21 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! `Determinize` (ADR-0035, ADR-0046; review r1 of #381, correction 3):
-//! on states reached by masked play, every sample for every alive agent
-//! passes `Validate`, has the agent's information state exactly, keeps
-//! the public book and the observer's own part, and gives every agent at
-//! most `MAX_OPEN` resting plus pending limit orders and positions within
-//! `max_position` counting open and pending lots. The heuristics read the
-//! information state only: on a sample they act as on the original.
+//! `Determinize` and the information boundary (ADR-0035, ADR-0046; review
+//! r1 of #381, correction 3; PR 3 review). On states reached by masked
+//! play:
+//!
+//! - changing only hidden data (another agent's queued items, the owners
+//!   and split of other agents' orders, orders beyond the visible depth,
+//!   the fundamental within the observer's band, other accounts and
+//!   signals) leaves the observer's information state unchanged;
+//! - every sample for every alive agent passes `Validate`, has the
+//!   agent's information state exactly, reproduces the visible book (the
+//!   best `depth` levels per side) exactly, keeps the observer's own part,
+//!   and gives every agent at most `MAX_OPEN` resting plus pending limit
+//!   orders and positions within `max_position` counting open and pending
+//!   lots;
+//! - the heuristics read the information state only: on a sample they act
+//!   as on the original.
 
 #![expect(
     clippy::unwrap_used,
@@ -25,7 +34,10 @@ use tessera_rl_engine::Reseed;
 use tessera_rl_markets::actions::HEADS;
 use tessera_rl_markets::book::Level;
 use tessera_rl_markets::limits::MAX_AGENTS;
-use tessera_rl_markets::{Baseline, LimitOrderBook, LobConfig, LobState, Side, act_info};
+use tessera_rl_core::Reserved;
+use tessera_rl_markets::{
+    Baseline, Book, LimitOrderBook, LobConfig, LobState, Order, Pending, Side, act_info,
+};
 use tessera_rl_num::identity::{LogicalId, RngIdentity, Seed, StreamId};
 use tessera_rl_num::rng::{RngAuthority, StepRng};
 
@@ -37,10 +49,55 @@ fn rng(seed: u64, stream: u32) -> StepRng {
     StepRng::new(&RngAuthority::engine_only(), &id, StreamId::DYNAMICS)
 }
 
-fn levels(s: &LobState, side: Side) -> Vec<Level> {
-    let mut out = [Level::default(); 128];
+/// The visible levels of `side`: the best `depth`.
+fn levels(cfg: &LobConfig, s: &LobState, side: Side) -> Vec<Level> {
+    let mut out = vec![Level::default(); usize::try_from(cfg.depth).unwrap()];
     let n = s.book.levels(side, &mut out);
-    out[..n].to_vec()
+    out.truncate(n);
+    out
+}
+
+/// `s` with every kind of hidden data changed for observer `me`; `None`
+/// when `s` has no other alive agent to change.
+fn perturbed(cfg: &LobConfig, s: &LobState, me: usize) -> Option<LobState> {
+    let other = (0..cfg.agent_count()).find(|&j| j != me && s.is_alive(j))?;
+    let other8 = u8::try_from(other).unwrap();
+    let me8 = u8::try_from(me).unwrap();
+    let mut t = *s;
+    // Other agents' orders: all owned by one other agent (owners and
+    // grouping change; prices, sizes and ids stay).
+    t.book.set_owners(|o| if o.owner == me8 { me8 } else { other8 });
+    // Another agent's queued item.
+    let ready = t.step + 1;
+    let _ = t
+        .pending
+        .push(Pending::limit(other8, Side::Buy, 1, 1), ready);
+    // An order beyond the visible depth: a bid below every visible one,
+    // only when the visible levels fill the depth.
+    let bids = levels(cfg, s, Side::Buy);
+    if bids.len() == usize::try_from(cfg.depth).unwrap()
+        && let Some(worst) = bids.last().map(|l| l.price).filter(|&p| p > 1)
+    {
+        let mut orders: Vec<Order> = t.book.orders().copied().collect();
+        orders.push(Order {
+            price: worst - 1,
+            qty: 1,
+            seq: t.book.next_seq(),
+            owner: other8,
+            side: Side::Buy,
+            pad: Reserved::ZERO,
+        });
+        t.book = Book::from_orders(orders, t.book.next_seq() + 1).unwrap();
+    }
+    // The fundamental, still within the observer's band.
+    let band = i64::from(s.signal[me]) - i64::from(cfg.noise);
+    t.fundamental = u32::try_from(band.max(i64::from(cfg.min_tick))).unwrap();
+    // Another account, signal and last equity.
+    t.accounts[other].cash += 7;
+    t.accounts[other].inventory = -t.accounts[other].inventory;
+    t.signal[other] += 1;
+    t.last_equity[other] -= 3;
+    Some(t)
 }
 
 fn lob_config() -> impl Strategy<Value = LobConfig> {
@@ -63,6 +120,10 @@ fn check_samples(cfg: &LobConfig, s: &LobState, seed: u64) -> Result<(), TestCas
         }
         let agent = AgentSlot::new(u16::try_from(me).unwrap(), MAX_AGENTS).unwrap();
         let info = LimitOrderBook::info_state(cfg, s, agent);
+        if let Some(t) = perturbed(cfg, s, me) {
+            let hidden = LimitOrderBook::info_state(cfg, &t, agent);
+            prop_assert_eq!(encode_to_vec(&hidden), encode_to_vec(&info));
+        }
         for k in 0..SAMPLES {
             let mut sample = LobState::default();
             LimitOrderBook::sample(cfg, &info, &mut rng(seed ^ k, 7), &mut sample);
@@ -72,8 +133,8 @@ fn check_samples(cfg: &LobConfig, s: &LobState, seed: u64) -> Result<(), TestCas
             if let Err(e) = agent_limits(cfg, &sample) {
                 return Err(TestCaseError::fail(e));
             }
-            prop_assert_eq!(levels(&sample, Side::Buy), levels(s, Side::Buy));
-            prop_assert_eq!(levels(&sample, Side::Sell), levels(s, Side::Sell));
+            prop_assert_eq!(levels(cfg, &sample, Side::Buy), levels(cfg, s, Side::Buy));
+            prop_assert_eq!(levels(cfg, &sample, Side::Sell), levels(cfg, s, Side::Sell));
             prop_assert_eq!(sample.accounts[me], s.accounts[me]);
             let noise = i64::from(cfg.noise);
             let band = i64::from(s.signal[me]) - i64::from(sample.fundamental);

@@ -215,9 +215,12 @@ impl Book {
     }
 
     /// What a market order of `qty` lots on `taker` by `owner` would fill
-    /// within the best `max_levels` opposite levels, skipping the owner's
-    /// own orders (self-trade prevention cancels them instead of filling
-    /// them). The book is not changed.
+    /// within the best `max_levels` opposite levels of the whole book (the
+    /// levels an observation shows), counting only other owners' lots at
+    /// each: self-trade prevention cancels the owner's own orders instead
+    /// of filling them. A level holding only the owner's orders still
+    /// counts toward `max_levels`, so the result depends only on the
+    /// visible levels and the owner's own orders. The book is not changed.
     #[must_use]
     pub fn sweep(&self, taker: Side, owner: u8, qty: u32, max_levels: usize) -> Sweep {
         let side = taker.opposite();
@@ -227,16 +230,26 @@ impl Book {
             if out.lots >= qty {
                 break;
             }
-            let Some(level) = self.next_level(side, after, Some(owner)) else {
+            let Some(level) = self.next_level(side, after, None) else {
                 break;
             };
-            // `out.lots < qty` here, and every cost is below
-            // 2^17 lots x 2^16 ticks: plain arithmetic cannot overflow.
-            let take = level.lots.min(qty - out.lots);
+            after = Some(level.price);
+            let own: u32 = self
+                .orders()
+                .filter(|o| o.owner == owner && o.side == side && o.price == level.price)
+                .map(|o| o.qty)
+                .sum();
+            // `own` is part of `level.lots`; `out.lots < qty` here, and
+            // every cost is below 2^17 lots x 2^16 ticks: plain arithmetic
+            // cannot overflow.
+            let others = level.lots - own;
+            if others == 0 {
+                continue;
+            }
+            let take = others.min(qty - out.lots);
             out.lots += take;
             out.cost += u64::from(take) * u64::from(level.price);
             out.worst = Some(level.price);
-            after = Some(level.price);
         }
         out
     }
@@ -477,6 +490,22 @@ impl Book {
             .find(|(_, o)| o.seq == seq && o.owner == owner)
             .map(|(i, _)| i)?;
         self.orders.remove(index)
+    }
+
+    /// A book holding `orders` (stored in iteration order) whose next id is
+    /// `next_seq`, or `None` if there are more than `BOOK_CAP`. Nothing is
+    /// checked: this builds sampled states (`Determinize`), which the
+    /// caller then validates.
+    #[must_use]
+    pub fn from_orders(orders: impl IntoIterator<Item = Order>, next_seq: u32) -> Option<Self> {
+        let mut book = Self {
+            orders: Pool::default(),
+            next_seq,
+        };
+        for o in orders {
+            book.orders.insert(o)?;
+        }
+        Some(book)
     }
 
     /// Rewrites the owner of every resting order, in pool index order, to
@@ -727,10 +756,11 @@ mod tests {
             }
         );
         assert_eq!(s.worst_bounded(3, 99), 12);
-        // Two visible levels hold 4 lots; the other 6 are priced at the bound.
+        // The two best levels are 10 (2 lots) and 11 (the owner's only):
+        // 2 lots; the other 8 are priced at the bound.
         let short = b.sweep(Side::Buy, 0, 10, 2);
-        assert_eq!(short.lots, 4);
-        assert_eq!(short.cost_bounded(10, 100), Some(2 * 10 + 2 * 12 + 6 * 100));
+        assert_eq!(short.lots, 2);
+        assert_eq!(short.cost_bounded(10, 100), Some(2 * 10 + 8 * 100));
         assert_eq!(short.worst_bounded(10, 100), 100);
         let before = b;
         let mut f = Fills::new();

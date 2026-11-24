@@ -1,158 +1,210 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! The information boundary (ADR-0035, ADR-0046; design section 3, with
-//! correction 3 of review r1).
+//! correction 3 of review r1 and the blocking point of the PR 3 review).
 //!
-//! An agent's information state is the state with everything private to
-//! other agents erased: their accounts and last equities, their signals,
-//! the fundamental, and the identity of the owner of every order and
-//! queued item that is not the agent's own. What stays is public (the
-//! book's prices, sizes and ids, the trades, the reference prices, the mid
-//! and id histories, `last_mid`, the step, who is alive) or the agent's own
-//! (its account, last equity, signal, orders and queued items).
+//! An agent's information state ([`LobInfo`]) holds only what it knows:
 //!
-//! Other owners are replaced by anonymous group labels, [`ANON`] plus a
-//! rank: orders that share a hidden owner share a label, and labels are
-//! ranked by first appearance (resting orders by id, then queued items by
-//! arrival), which says nothing about which slot owns a group. The
-//! information state therefore holds which hidden orders belong together,
-//! but not to whom. That is more than the observation shows (as are the
-//! other agents' queued items, kept because the scope of #381 PR 3
-//! reassigns them); it is what makes a valid sample always exist, below.
+//! - its own account, last equity, signal and `quote_step`;
+//! - its own resting orders and queued items, with their ids and arrival
+//!   numbers replaced by their rank among its own (the absolute numbers
+//!   would count the other agents' orders);
+//! - the public part of the state: the step, `last_mid`, the mid
+//!   history, the last trade price, the reset price, the alive flags, and
+//!   this step's trade prints (the observation shows them);
+//! - the book as the observation shows it: the best `depth` aggregated
+//!   levels per side, price and total lots.
+//!
+//! Nothing else: no other agent's orders, owners, groups, queued items,
+//! accounts or signals, and not the fundamental. No ring of past
+//! observations is kept: everything a sample must reproduce is above, and
+//! the mid history and `last_mid` are already part of the state.
 //!
 //! [`Determinize::sample`] keeps the information state exactly and
-//! samples the rest:
+//! constructs the rest:
 //!
 //! 1. the fundamental uniformly in `signal +- noise`, within
-//!    `[min_tick, max_tick]`; this uses only the last signal, which is all
-//!    the information state holds (a history-aware posterior would be
-//!    tighter);
-//! 2. an owner for every group: a uniformly drawn injection of the groups
-//!    into the other alive agents (a partial Fisher-Yates shuffle). Every
-//!    group is the true order set of one alive agent, so it already holds
-//!    at most `MAX_OPEN` resting plus pending limit orders and at most
-//!    `2 x max_position` open and pending lots; there are never more
-//!    groups than other alive agents. No rejection, no fallback: the
-//!    per-agent limits of correction 3 hold by construction;
-//! 3. inventories for the other alive agents that sum to minus the
-//!    agent's own (lots are conserved; dead agents hold none in a sample)
-//!    and keep `inventory + buy lots <= max_position` and
+//!    `[min_tick, max_tick]` (only the last signal is known; a
+//!    history-aware posterior would be tighter);
+//! 2. the other agents' resting orders: each visible level's lots minus
+//!    the observer's own lots at that price are split into orders of at
+//!    most `MAX_LOT` lots and assigned to the other alive agents, largest
+//!    level first, each piece to the agent with the most remaining room
+//!    (`2 x max_position` lots over both sides, at most `MAX_OPEN`
+//!    orders). Levels beyond the visible depth are empty in a sample;
+//! 3. the other agents' queued items are empty (a possible world, biased:
+//!    a sample never holds hidden orders in flight, so search
+//!    underestimates the book of the next `latency` steps);
+//! 4. inventories for the other alive agents that sum to minus the
+//!    observer's (dead agents hold none in a sample) and keep
+//!    `inventory + buy lots <= max_position` and
 //!    `inventory - sell lots >= -max_position`. Each interval
-//!    `[sell lots - max, max - buy lots]` is non-empty (point 2), and
-//!    their sum covers the target: the total buy and sell lots of the
-//!    others do not depend on who holds them, and the true inventories
-//!    satisfy the same bounds with the same sum;
-//! 4. cash for the other alive agents: each its reserved buy cash plus an
+//!    `[sell lots - max, max - buy lots]` is non-empty (step 2), and their
+//!    sum covers the target: the sampled buy and sell lots are at most the
+//!    true others' (part of their true orders), and the true inventories
+//!    meet the same bounds with the same sum;
+//! 5. cash for the other alive agents: each its reserved buy cash plus an
 //!    equal share of what remains of the conserved total
-//!    (`agents x initial_cash`);
-//! 5. their signals around the sampled fundamental, and their last
-//!    equities marked at the (public) mid.
+//!    (`agents x initial_cash`); signals around the sampled fundamental,
+//!    last equities marked at the public mid, `quote_step` 0.
 //!
-//! The sample passes [`Validate`](tessera_rl_core::Validate) and has the
-//! same information state; `tests/determinize.rs` checks both on states
-//! from play.
+//! **Order ids.** The book's time priority among hidden orders is not
+//! observed, so a sample uses one convention: hidden orders get the ids
+//! `0..h` in the order they are built (largest level first, then the
+//! pieces of a level in order), and the observer's own orders the ids
+//! `h..` by their rank. At any price, the hidden orders are ahead of the
+//! observer's in time priority (the pessimistic queue position for it).
+//!
+//! **Step 2 is not proved to always fit.** It is a bin packing with
+//! splitting and an order count per bin. A true state exists, so a fitting
+//! assignment exists; the greedy finds it in every case the tests reach,
+//! but no proof is claimed. On a failure it retries [`RETRIES`] times with
+//! a random level order, and as a last resort assigns the remaining lots
+//! with the order count only. The visible book is then still exact and
+//! the sample still passes `Validate` (which bounds `|inventory|`, not the
+//! open lots); only correction 3's open-lot bound may be exceeded for one
+//! agent. `tests/determinize.rs` checks every sample against it.
 
 #![deny(clippy::float_arithmetic)]
 
 use core::num::NonZeroU32;
 
-use tessera_rl_core::{AgentSlot, Determinize, ImperfectInformation, Reserved};
+use tessera_rl_core::{AgentSlot, Bool8, Determinize, ImperfectInformation, Reserved};
 use tessera_rl_macros::EnvState;
 use tessera_rl_num::rng::StepRng;
 
 use crate::account::Account;
+use crate::book::{Book, Level};
 use crate::config::LobConfig;
 use crate::env::LimitOrderBook;
-use crate::limits::MAX_AGENTS;
-use crate::order::{Kind, Side};
-use crate::state::LobState;
+use crate::limits::{BOOK_CAP, MAX_AGENTS, MAX_LOT, MAX_OPEN};
+use crate::order::{Order, Side};
+use crate::pending::{Pending, PendingQueue};
+use crate::state::{LobState, MAX_TRADES, MID_RING, Trade};
 
-/// The first anonymous group label: the owner of an order or item that is
-/// not the observer's becomes `ANON + rank` of its hidden owner.
-pub const ANON: u8 = 0x80;
+/// The deepest visible levels per side (the `depth` config bound).
+pub const MAX_DEPTH: usize = 16;
+/// Queued items one agent can have: one per step for at most
+/// `MAX_LATENCY = 3` steps, plus the margin of the queue's sizing.
+pub const MAX_OWN_PENDING: usize = 4;
+/// The owner of the stand-in orders of [`public_state`].
+pub const HIDDEN: u8 = u8::MAX;
+/// Random level orders tried after the largest-first greedy fails.
+pub const RETRIES: usize = 4;
 
-/// What one agent knows.
+/// What one agent knows. Fields past each count are zero.
 #[derive(EnvState, Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[repr(C)]
 pub struct LobInfo {
-    /// The state with every other agent's private part erased.
-    pub view: LobState,
+    /// The observer's account.
+    pub account: Account,
+    /// The observer's last equity.
+    pub last_equity: i64,
+    /// The observer's resting orders by id, with `seq` replaced by rank.
+    pub own_orders: [Order; MAX_OPEN],
+    /// The observer's queued items by arrival, with `arrival` replaced by
+    /// rank.
+    pub own_pending: [Pending; MAX_OWN_PENDING],
+    /// The best visible bid levels, `[price, total lots]`, best first.
+    pub bids: [[u32; 2]; MAX_DEPTH],
+    /// The best visible ask levels, as `bids`.
+    pub asks: [[u32; 2]; MAX_DEPTH],
+    /// This step's trade prints.
+    pub trades: [Trade; MAX_TRADES],
+    /// The mid history.
+    pub mids: [u32; MID_RING],
+    /// Steps played.
+    pub step: u32,
+    /// The mid at the end of the previous step.
+    pub last_mid: u32,
+    /// The last trade price.
+    pub last_trade: u32,
+    /// The fundamental at reset.
+    pub reset_price: u32,
+    /// Entries of `trades` in use.
+    pub trade_count: u32,
+    /// The observer's last limit order step.
+    pub quote_step: u32,
+    /// The observer's signal.
+    pub signal: i32,
+    /// Who is alive.
+    pub alive: [Bool8; MAX_AGENTS],
     /// The observing slot.
     pub me: u8,
+    /// Entries of `own_orders` in use.
+    pub own_count: u8,
+    /// Entries of `own_pending` in use.
+    pub pending_count: u8,
     /// Zero.
-    pub pad: Reserved<7>,
+    pub pad: Reserved<1>,
 }
 
-/// Whether `owner` is an anonymous group label.
-#[must_use]
-pub const fn is_anon(owner: u8) -> bool {
-    owner >= ANON
-}
+const _: () = assert!(size_of::<LobInfo>() == 776);
 
-/// The rank of each owner other than `me` by first appearance: resting
-/// orders by id, then queued items by arrival. Keys are unique (ids and
-/// arrivals are), so ranks are distinct; owners with nothing get none.
-fn ranks(state: &LobState, me: u8) -> [Option<u8>; MAX_AGENTS] {
-    // (class, value): 0 with the smallest resting id, 1 with the smallest
-    // arrival, for owners that hold only queued items.
-    let mut key: [Option<(u8, u32)>; MAX_AGENTS] = [None; MAX_AGENTS];
-    let mut see = |owner: u8, k: (u8, u32)| {
-        if owner != me
-            && let Some(slot) = key.get_mut(usize::from(owner))
-            && slot.is_none_or(|old| k < old)
-        {
-            *slot = Some(k);
-        }
-    };
-    for o in state.book.orders() {
-        see(o.owner, (0, o.seq));
-    }
-    for p in state.pending.items() {
-        see(p.owner, (1, p.arrival));
-    }
-    let mut out = [None; MAX_AGENTS];
-    for (slot, k) in key.iter().enumerate() {
-        if let (Some(k), Some(r)) = (k, out.get_mut(slot)) {
-            let rank = key.iter().filter(|o| o.is_some_and(|o| o < *k)).count();
-            *r = u8::try_from(rank).ok();
-        }
+/// The visible levels of `side`, `[price, lots]`, best first.
+fn visible(state: &LobState, side: Side, depth: usize) -> [[u32; 2]; MAX_DEPTH] {
+    let mut levels = [Level::default(); MAX_DEPTH];
+    let n = state
+        .book
+        .levels(side, levels.get_mut(..depth.min(MAX_DEPTH)).unwrap_or(&mut []));
+    let mut out = [[0; 2]; MAX_DEPTH];
+    for (o, l) in out.iter_mut().zip(levels.iter().take(n)) {
+        *o = [l.price, l.lots];
     }
     out
 }
 
-/// The information state of slot `me` in `state`.
+/// The information state of slot `me` in `state` under `cfg`.
 #[must_use]
-pub fn public_view(state: &LobState, me: usize) -> LobInfo {
-    let owner = u8::try_from(me).unwrap_or(u8::MAX);
-    let rank = ranks(state, owner);
-    let label = |o: u8| {
-        if o == owner {
-            o
-        } else {
-            let r = rank.get(usize::from(o)).copied().flatten().unwrap_or(0);
-            ANON + r
-        }
-    };
-    let mut view = *state;
-    view.book.set_owners(|o| label(o.owner));
-    view.pending.set_owners(|p| label(p.owner));
-    for (slot, ((a, e), sig)) in view
-        .accounts
-        .iter_mut()
-        .zip(view.last_equity.iter_mut())
-        .zip(view.signal.iter_mut())
-        .enumerate()
-    {
-        if slot != me {
-            *a = Account::default();
-            *e = 0;
-            *sig = 0;
-        }
+pub fn info_of(cfg: &LobConfig, state: &LobState, me: usize) -> LobInfo {
+    let owner = u8::try_from(me).unwrap_or(HIDDEN);
+    let depth = usize::try_from(cfg.depth).unwrap_or(0);
+    let mut own_orders = [Order::default(); MAX_OPEN];
+    let own_count = state.book.own_orders(owner, &mut own_orders);
+    for (rank, o) in own_orders.iter_mut().take(own_count).enumerate() {
+        o.seq = u32::try_from(rank).unwrap_or(0);
     }
-    view.fundamental = 0;
+    // Own queued items by arrival, as ranks.
+    let mut own_pending = [Pending::default(); MAX_OWN_PENDING];
+    let mut pending_count = 0;
+    let mut after: Option<u32> = None;
+    for slot in &mut own_pending {
+        let next = state
+            .pending
+            .items()
+            .filter(|p| p.owner == owner && after.is_none_or(|a| p.arrival > a))
+            .min_by_key(|p| p.arrival)
+            .copied();
+        let Some(p) = next else {
+            break;
+        };
+        after = Some(p.arrival);
+        *slot = Pending {
+            arrival: u32::try_from(pending_count).unwrap_or(0),
+            ..p
+        };
+        pending_count += 1;
+    }
     LobInfo {
-        view,
+        account: state.account(me),
+        last_equity: state.last_equity.get(me).copied().unwrap_or(0),
+        own_orders,
+        own_pending,
+        bids: visible(state, Side::Buy, depth),
+        asks: visible(state, Side::Sell, depth),
+        trades: state.trades,
+        mids: state.mids,
+        step: state.step,
+        last_mid: state.last_mid,
+        last_trade: state.last_trade,
+        reset_price: state.reset_price,
+        trade_count: state.trade_count,
+        quote_step: state.quote_step.get(me).copied().unwrap_or(0),
+        signal: state.signal.get(me).copied().unwrap_or(0),
+        alive: state.alive,
         me: owner,
+        own_count: u8::try_from(own_count).unwrap_or(0),
+        pending_count: u8::try_from(pending_count).unwrap_or(0),
         pad: Reserved::ZERO,
     }
 }
@@ -160,9 +212,120 @@ pub fn public_view(state: &LobState, me: usize) -> LobInfo {
 impl ImperfectInformation for LimitOrderBook {
     type InfoState = LobInfo;
 
-    fn info_state(_: &LobConfig, state: &LobState, agent: AgentSlot) -> LobInfo {
-        public_view(state, agent.index())
+    fn info_state(cfg: &LobConfig, state: &LobState, agent: AgentSlot) -> LobInfo {
+        info_of(cfg, state, agent.index())
     }
+}
+
+impl LobInfo {
+    /// The observer's open orders in use.
+    #[must_use]
+    pub fn own(&self) -> &[Order] {
+        self.own_orders
+            .get(..usize::from(self.own_count))
+            .unwrap_or(&[])
+    }
+
+    /// The observer's queued items in use.
+    #[must_use]
+    pub fn own_queued(&self) -> &[Pending] {
+        self.own_pending
+            .get(..usize::from(self.pending_count))
+            .unwrap_or(&[])
+    }
+
+    /// The visible levels of `side` with the lots of other owners
+    /// (`total - own` at that price): `(side, price, hidden lots)`.
+    fn hidden_levels(&self) -> impl Iterator<Item = (Side, u32, u32)> + '_ {
+        Side::ALL.into_iter().flat_map(move |side| {
+            let levels = match side {
+                Side::Buy => &self.bids,
+                Side::Sell => &self.asks,
+            };
+            levels
+                .iter()
+                .filter(|l| l[1] > 0)
+                .map(move |&[price, lots]| {
+                    let own: u32 = self
+                        .own()
+                        .iter()
+                        .filter(|o| o.side == side && o.price == price)
+                        .map(|o| o.qty)
+                        .sum();
+                    // `own` is part of `lots` in any information state
+                    // taken from a state; 0 for an inconsistent one.
+                    (side, price, lots.saturating_sub(own))
+                })
+                .filter(|&(_, _, hidden)| hidden > 0)
+        })
+    }
+}
+
+/// The public and own part of a state for `info`: every field the
+/// information state fixes, the book holding `hidden` (the other agents'
+/// orders, ids `0..`) then the observer's own orders, and its own queue.
+fn base_state(info: &LobInfo, hidden: &[Order]) -> LobState {
+    let me = usize::from(info.me);
+    let h = u32::try_from(hidden.len()).unwrap_or(0);
+    let own = info.own().iter().map(|o| Order {
+        seq: h + o.seq,
+        ..*o
+    });
+    let own_count = u32::from(info.own_count);
+    let book = Book::from_orders(hidden.iter().copied().chain(own), h + own_count);
+    let queued = u32::from(info.pending_count);
+    let pending = PendingQueue::from_items(info.own_queued().iter().copied(), queued);
+    let mut state = LobState {
+        book: book.unwrap_or_default(),
+        pending: pending.unwrap_or_default(),
+        trades: info.trades,
+        step: info.step,
+        last_trade: info.last_trade,
+        trade_count: info.trade_count,
+        reset_price: info.reset_price,
+        mids: info.mids,
+        alive: info.alive,
+        last_mid: info.last_mid,
+        ..LobState::default()
+    };
+    if let (Some(a), Some(e), Some(s), Some(q)) = (
+        state.accounts.get_mut(me),
+        state.last_equity.get_mut(me),
+        state.signal.get_mut(me),
+        state.quote_step.get_mut(me),
+    ) {
+        *a = info.account;
+        *e = info.last_equity;
+        *s = info.signal;
+        *q = info.quote_step;
+    }
+    state
+}
+
+/// A state the observer cannot tell from the true one for the purpose of
+/// its own decisions: its own part, the public part, and one stand-in
+/// order owned by [`HIDDEN`] per visible level for the other agents' lots.
+/// Masks and the action decoder read the same values from it as from the
+/// true state (touch, mid, visible levels, own orders and queue), so a
+/// heuristic acting on it acts legally on the true state.
+#[must_use]
+pub fn public_state(info: &LobInfo) -> LobState {
+    let mut hidden = [Order::default(); 2 * MAX_DEPTH];
+    let mut n = 0;
+    for (side, price, qty) in info.hidden_levels() {
+        if let Some(slot) = hidden.get_mut(n) {
+            *slot = Order {
+                price,
+                qty,
+                seq: u32::try_from(n).unwrap_or(0),
+                owner: HIDDEN,
+                side,
+                pad: Reserved::ZERO,
+            };
+            n += 1;
+        }
+    }
+    base_state(info, hidden.get(..n).unwrap_or(&[]))
 }
 
 /// A uniform draw in `[0, n)`; 0 for `n = 0`.
@@ -171,86 +334,118 @@ fn below(rng: &mut StepRng, n: usize) -> usize {
     bound.map_or(0, |b| usize::try_from(rng.below_u32(b)).unwrap_or(0))
 }
 
-/// Per-agent open and pending lots per side and reserved buy cash.
+/// Per-agent open lots per side, reserved buy cash and orders.
 #[derive(Debug, Clone, Copy, Default)]
 struct Load {
     lots: [u64; 2],
     cash: u64,
+    orders: usize,
 }
 
-impl Load {
-    fn add(&mut self, side: Side, qty: u32, price: u32) {
-        if let Some(l) = self.lots.get_mut(side.index()) {
-            *l += u64::from(qty);
-        }
-        self.cash += buy_cash(side, qty, price);
-    }
+/// The built hidden orders and the loads they put on each agent.
+struct Built {
+    orders: [Order; BOOK_CAP],
+    count: usize,
+    loads: [Load; MAX_AGENTS],
 }
 
-/// Step 2: a uniformly drawn injection of the group labels into `others`,
-/// written into the book and the queue; returns each agent's load.
-/// `None` when there are more groups than other alive agents, which no
-/// valid state has (every group is one alive agent's orders).
-fn assign_groups(
-    cfg: &LobConfig,
-    state: &mut LobState,
+/// Step 2: splits the hidden lots of `levels` (in the order `order`) into
+/// orders for `others`, each piece to the agent with the most remaining
+/// room (`cap` lots, `MAX_OPEN` orders, first in `others` on a tie), at
+/// most `MAX_LOT` and at most `limit` orders in all. `None` if a lot finds
+/// no room.
+fn build(
+    levels: &[(Side, u32, u32)],
+    order: &[usize],
     others: &[usize],
-    rng: &mut StepRng,
-) -> Option<[Load; MAX_AGENTS]> {
-    let groups = state
-        .book
-        .orders()
-        .map(|o| o.owner)
-        .chain(state.pending.items().map(|p| p.owner))
-        .filter(|&o| is_anon(o))
-        .map(|o| usize::from(o - ANON) + 1)
-        .max()
-        .unwrap_or(0);
-    if groups > others.len() {
-        return None;
-    }
-    // Partial Fisher-Yates: the first `groups` entries of a shuffle.
-    let mut pick = [0usize; MAX_AGENTS];
-    for (dst, &src) in pick.iter_mut().zip(others) {
-        *dst = src;
-    }
-    for i in 0..groups {
-        let j = i + below(rng, others.len() - i);
-        pick.swap(i, j);
-    }
-    let owner_of = |o: u8| -> u8 {
-        if is_anon(o) {
-            pick.get(usize::from(o - ANON))
-                .and_then(|&j| u8::try_from(j).ok())
-                .unwrap_or(o)
-        } else {
-            o
-        }
+    cap: u64,
+    limit: usize,
+) -> Option<Built> {
+    let mut built = Built {
+        orders: [Order::default(); BOOK_CAP],
+        count: 0,
+        loads: [Load::default(); MAX_AGENTS],
     };
-    state.book.set_owners(|o| owner_of(o.owner));
-    state.pending.set_owners(|p| owner_of(p.owner));
-    let mut loads = [Load::default(); MAX_AGENTS];
-    for &j in others {
-        let owner = u8::try_from(j).ok()?;
-        let load = loads.get_mut(j)?;
-        for o in state.book.orders().filter(|o| o.owner == owner) {
-            load.add(o.side, o.qty, o.price);
-        }
-        for p in state.pending.items().filter(|p| p.owner == owner) {
-            match p.kind {
-                Kind::Cancel => {}
-                Kind::Limit => load.add(p.side, p.qty, p.price),
-                Kind::Market => {
-                    let price = if p.price > 0 { p.price } else { cfg.max_tick };
-                    load.add(p.side, p.qty, price);
-                }
+    for &i in order {
+        let &(side, price, total) = levels.get(i)?;
+        let mut left = u64::from(total);
+        // Each piece fills the level, an agent's room, or MAX_LOT: bounded
+        // by the order limit below.
+        while left > 0 {
+            if built.count >= limit {
+                return None;
             }
+            let room = |l: &Load| cap.saturating_sub(l.lots[0] + l.lots[1]);
+            let j = others
+                .iter()
+                .copied()
+                .filter(|&j| built.loads.get(j).is_some_and(|l| l.orders < MAX_OPEN && room(l) > 0))
+                .max_by_key(|&j| (built.loads.get(j).map_or(0, room), core::cmp::Reverse(j)))?;
+            let load = built.loads.get_mut(j)?;
+            let take = left.min(room(load)).min(u64::from(MAX_LOT));
+            let qty = u32::try_from(take).ok()?;
+            *load.lots.get_mut(side.index())? += take;
+            load.orders += 1;
+            if side == Side::Buy {
+                load.cash += take * u64::from(price);
+            }
+            *built.orders.get_mut(built.count)? = Order {
+                price,
+                qty,
+                seq: u32::try_from(built.count).ok()?,
+                owner: u8::try_from(j).ok()?,
+                side,
+                pad: Reserved::ZERO,
+            };
+            built.count += 1;
+            left -= take;
         }
     }
-    Some(loads)
+    Some(built)
 }
 
-/// Step 3: inventories of `others` that sum to `target`, each within
+/// Step 2 with its retries and last resort.
+fn construct(cfg: &LobConfig, info: &LobInfo, others: &[usize], rng: &mut StepRng) -> Built {
+    let mut levels = [(Side::Buy, 0u32, 0u32); 2 * MAX_DEPTH];
+    let mut n = 0;
+    for level in info.hidden_levels() {
+        if let Some(slot) = levels.get_mut(n) {
+            *slot = level;
+            n += 1;
+        }
+    }
+    let levels = levels.get(..n).unwrap_or(&[]);
+    let mut order = [0usize; 2 * MAX_DEPTH];
+    for (i, o) in order.iter_mut().enumerate() {
+        *o = i;
+    }
+    let order = order.get_mut(..n).unwrap_or(&mut []);
+    // Largest level first.
+    order.sort_unstable_by_key(|&i| {
+        (core::cmp::Reverse(levels.get(i).map_or(0, |l| l.2)), i)
+    });
+    let cap = 2 * u64::from(cfg.max_position);
+    let limit = BOOK_CAP - usize::from(info.own_count);
+    if let Some(b) = build(levels, order, others, cap, limit) {
+        return b;
+    }
+    for _ in 0..RETRIES {
+        for i in (1..order.len()).rev() {
+            let j = below(rng, i + 1);
+            order.swap(i, j);
+        }
+        if let Some(b) = build(levels, order, others, cap, limit) {
+            return b;
+        }
+    }
+    build(levels, order, others, u64::MAX, limit).unwrap_or(Built {
+        orders: [Order::default(); BOOK_CAP],
+        count: 0,
+        loads: [Load::default(); MAX_AGENTS],
+    })
+}
+
+/// Step 4: inventories of `others` that sum to `target`, each within
 /// `[sell lots - max, max - buy lots]` (and `[-max, max]`).
 fn inventories(
     cfg: &LobConfig,
@@ -289,42 +484,39 @@ impl Determinize for LimitOrderBook {
     fn sample(cfg: &LobConfig, info: &LobInfo, rng: &mut StepRng, state: &mut LobState) {
         let me = usize::from(info.me);
         let n = cfg.agent_count();
-        *state = info.view;
-        let own = state.account(me);
 
         // 1. The fundamental, within the signal's noise band.
-        let signal = i64::from(info.view.signal.get(me).copied().unwrap_or(0));
+        let signal = i64::from(info.signal);
         let noise = i64::from(cfg.noise);
         let lo = (signal - noise).max(i64::from(cfg.min_tick));
         let hi = (signal + noise).min(i64::from(cfg.max_tick)).max(lo);
         let width = usize::try_from(hi - lo + 1).unwrap_or(1);
         let fundamental = lo + i64::try_from(below(rng, width)).unwrap_or(0);
-        state.fundamental = u32::try_from(fundamental).unwrap_or(cfg.min_tick);
 
-        // 2. Owners of the anonymous orders and items.
+        // 2 and 3. The other agents' resting orders; their queues empty.
         let mut others = [0usize; MAX_AGENTS];
         let mut n_others = 0;
-        for slot in (0..n).filter(|&s| s != me && state.is_alive(s)) {
+        for slot in (0..n).filter(|&s| s != me && info.alive.get(s).is_some_and(|a| a.get())) {
             if let Some(o) = others.get_mut(n_others) {
                 *o = slot;
                 n_others += 1;
             }
         }
         let others = others.get(..n_others).unwrap_or(&[]);
-        // A valid information state never has more groups than other
-        // alive agents; for an invalid one the labels stay and the sample
-        // fails `Validate` (an owner out of range), as it should.
-        let loads = assign_groups(cfg, state, others, rng).unwrap_or([Load::default(); MAX_AGENTS]);
+        let built = construct(cfg, info, others, rng);
+        *state = base_state(info, built.orders.get(..built.count).unwrap_or(&[]));
+        state.fundamental = u32::try_from(fundamental).unwrap_or(cfg.min_tick);
+        let loads = built.loads;
 
-        // 3. Inventories.
-        let inventory = inventories(cfg, &loads, others, -i64::from(own.inventory), rng);
+        // 4. Inventories.
+        let inventory = inventories(cfg, &loads, others, -i64::from(info.account.inventory), rng);
 
-        // 4. Cash: reserved buy cash plus an equal share of the rest of
+        // 5. Cash: reserved buy cash plus an equal share of the rest of
         // the conserved total; dead agents hold the initial cash.
         let agents = i64::try_from(n).unwrap_or(0);
         let dead = (0..n).filter(|&s| s != me && !state.is_alive(s)).count();
         let dead = i64::try_from(dead).unwrap_or(0);
-        let total = agents * cfg.initial_cash - own.cash - dead * cfg.initial_cash;
+        let total = agents * cfg.initial_cash - info.account.cash - dead * cfg.initial_cash;
         let reserved_of = |j: usize| {
             loads
                 .get(j)
@@ -336,8 +528,8 @@ impl Determinize for LimitOrderBook {
         let share = rest.div_euclid(count);
         let mut remainder = rest - share * count;
 
-        // 5. Accounts, signals and last equities (marked at the public
-        // mid, as rewards are) of the other used slots.
+        // Accounts, signals and last equities (marked at the public mid,
+        // as rewards are) of the other used slots.
         let mid = state.touch().mid;
         let width = cfg
             .noise
@@ -368,13 +560,5 @@ impl Determinize for LimitOrderBook {
                 *s = i32::try_from(fundamental + noise).unwrap_or(0);
             }
         }
-    }
-}
-
-/// The cash a buy of `qty` lots at `price` reserves; 0 for a sell.
-fn buy_cash(side: Side, qty: u32, price: u32) -> u64 {
-    match side {
-        Side::Buy => u64::from(qty) * u64::from(price),
-        Side::Sell => 0,
     }
 }

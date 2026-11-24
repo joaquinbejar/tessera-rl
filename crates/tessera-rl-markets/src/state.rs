@@ -18,8 +18,6 @@ use crate::pending::PendingQueue;
 pub const MAX_TRADES: usize = 16;
 /// Steps of mid history kept.
 pub const MID_RING: usize = 8;
-/// Steps of order id marks kept.
-pub const SEQ_RING: usize = 32;
 
 /// One fill of this step, as every agent sees it: anonymous.
 #[derive(EnvState, Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
@@ -66,10 +64,10 @@ pub struct LobState {
     /// The mid after each of the last [`MID_RING`] steps, at index
     /// `step % MID_RING` (the momentum baseline's history; public).
     pub mids: [u32; MID_RING],
-    /// The book's next order id at the start of each of the last
-    /// [`SEQ_RING`] steps, at index `step % SEQ_RING`: an order with a
-    /// lower id rested before that step (the market maker's quote age).
-    pub seq_marks: [u32; SEQ_RING],
+    /// Per slot, the step at which it last submitted a limit order (0:
+    /// never in this episode). Private to each agent: the market maker's
+    /// quote age.
+    pub quote_step: [u32; MAX_AGENTS],
     /// Each used slot's private signal of the fundamental, drawn from
     /// `StepRng` at reset and every step: the fundamental plus a uniform
     /// noise in `[-noise, +noise]` ticks. Part of the state so that an

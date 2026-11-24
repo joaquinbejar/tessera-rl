@@ -7,7 +7,8 @@
 //!
 //! 1. Every alive agent's action is decoded against the state at the start
 //!    of the step (the state its mask described); an illegal action is a
-//!    no-op ([`crate::actions`]).
+//!    no-op ([`crate::actions`]). A slot whose decision is a limit order
+//!    records the step in `quote_step`.
 //! 2. The fundamental takes one step of its random walk (`StepRng`), and
 //!    every used slot draws its private signal of it (`StepRng`).
 //! 3. Queued items whose delay has elapsed are applied, in arrival order.
@@ -54,7 +55,7 @@ use crate::observe::{self, LobObs};
 use crate::order::Kind;
 use crate::pending::Pending;
 use crate::reward::scaled;
-use crate::state::{LobState, MAX_TRADES, MID_RING, SEQ_RING, Trade};
+use crate::state::{LobState, MAX_TRADES, MID_RING, Trade};
 
 /// Versioned environment id (ADR-0023).
 pub const ENV_ID: &str = "tessera/LimitOrderBook-v1";
@@ -316,8 +317,10 @@ impl Environment for LimitOrderBook {
         }
         // The step being played, 1-based; `steps <= 4096` by config.
         let now = state.step + 1;
-        if let Some(mark) = state.seq_marks.get_mut(ring(now, SEQ_RING)) {
-            *mark = state.book.next_seq();
+        for (decision, quoted) in decisions.iter().zip(state.quote_step.iter_mut()) {
+            if matches!(decision, Decision::Limit { .. }) {
+                *quoted = now;
+            }
         }
         // 2. The fundamental, then every used slot's private signal of it.
         state.fundamental = RandomWalk::new(cfg).step(state.fundamental, rng);
@@ -429,6 +432,11 @@ impl Validate for LimitOrderBook {
             let off = i64::from(signal) - i64::from(s.fundamental);
             if (used && off.abs() > noise) || (!used && signal != 0) {
                 return violation("a signal outside the fundamental's noise band");
+            }
+        }
+        for (slot, &quoted) in s.quote_step.iter().enumerate() {
+            if quoted > s.step || (slot >= n && quoted != 0) {
+                return violation("a quote step after the current step, or for an unused slot");
             }
         }
         if s.last_trade > cfg.max_tick {
