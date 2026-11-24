@@ -418,6 +418,12 @@ pub(crate) struct OutputsView<'a> {
     pub(crate) refuse_code: &'a mut [u32],
     /// The transform parts (ADR-0078); empty for a pool without transforms.
     pub(crate) transform: crate::transform::rows::TransformRows<'a>,
+    /// Per-instance episode-statistics partials (ADR-0081 item 3); empty
+    /// outside a step pass or while the subsystem is frozen.
+    pub(crate) episode_partials: &'a mut [crate::adaptive::EpisodePartial],
+    /// Per-instance aborted-episode counts of a host pool (ADR-0081 item
+    /// 8); empty otherwise.
+    pub(crate) episode_aborts: &'a mut [u64],
 }
 
 impl OutputsView<'_> {
@@ -455,6 +461,8 @@ impl OutputsView<'_> {
             refused: &mut [],
             refuse_code: &mut [],
             transform: crate::transform::rows::TransformRows::default(),
+            episode_partials: &mut [],
+            episode_aborts: &mut [],
         }
     }
 }
@@ -521,6 +529,8 @@ impl Outputs {
             refused,
             refuse_code,
             transform: crate::transform::rows::TransformRows::default(),
+            episode_partials: &mut [],
+            episode_aborts: &mut [],
         }
     }
 }

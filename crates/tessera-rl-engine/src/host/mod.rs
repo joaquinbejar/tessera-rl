@@ -45,6 +45,7 @@
 
 #[cfg(test)]
 mod abort_header_tests;
+mod barrier;
 mod dyn_pool;
 mod dyn_snapshot;
 mod factory;
@@ -245,6 +246,8 @@ pub struct HostPool<E: HostEnvironment, const A: usize> {
     continuous: Vec<f32>,
     outputs: Outputs,
     seen: Vec<Bool8>,
+    /// Episode statistics with abort counts (ADR-0081 item 8).
+    episodes: crate::adaptive::EpisodeStatistics,
     poisoned: bool,
     sync: Option<SyncRuntime>,
     fp_resets: AtomicU64,
@@ -426,6 +429,7 @@ impl<E: HostEnvironment, const A: usize> HostPool<E, A> {
             allocs: crate::sys::alloc_track::AllocTally::default(),
             #[cfg(feature = "debug-checks")]
             host_allocations: 0,
+            episodes: crate::adaptive::EpisodeStatistics::new(num_envs, true),
         })
     }
 
@@ -573,6 +577,7 @@ impl<E: HostEnvironment, const A: usize> HostPool<E, A> {
             fp_resets,
             aborts,
             abort_rows_clear,
+            episodes,
             refusal:
                 Refusal {
                     count: refusals,
@@ -606,6 +611,7 @@ impl<E: HostEnvironment, const A: usize> HostPool<E, A> {
             penalized: &mut [],
             outputs: outputs.view_all(),
         };
+        (all.outputs.episode_partials, all.outputs.episode_aborts) = episodes.rows();
         if let Some(rt) = sync {
             let panicked = par_chunks(&mut rt.gang, all, grain, heads, |rows, first| {
                 kernels::reset_chunk::<E, A>(&ctx, rows, reseed, first);
@@ -757,6 +763,7 @@ impl<E: HostEnvironment, const A: usize> HostPool<E, A> {
             fp_resets,
             aborts,
             abort_rows_clear,
+            episodes,
             refusal:
                 Refusal {
                     count: refusals,
@@ -811,6 +818,7 @@ impl<E: HostEnvironment, const A: usize> HostPool<E, A> {
             penalized: &mut [],
             outputs: outputs.view_all(),
         };
+        (all.outputs.episode_partials, all.outputs.episode_aborts) = episodes.rows();
         ctx.misuse.store(u64::MAX, Ordering::Relaxed);
         if let Some(rt) = sync {
             let panicked = par_chunks(&mut rt.gang, all, grain, heads, |rows, first| {

@@ -111,7 +111,7 @@ where
     ///
     /// An engine error on a poisoned scratch pool.
     pub fn transform_context(&self) -> Result<TransformContext, SearchError> {
-        Ok(self.scratch.pool_context()?.transforms)
+        Ok(self.scratch.pool_context()?.adaptive.normalization)
     }
 
     /// The frame-stack bytes of node `h` (empty without frame stacks): with
@@ -143,7 +143,7 @@ where
             });
         }
         let mut pool_context = self.scratch.pool_context()?;
-        pool_context.transforms = context;
+        pool_context.adaptive.normalization = context;
         self.scratch.restore_pool_context(pool_context, None)?;
         self.scratch.freeze_normalization(true);
         Ok(())

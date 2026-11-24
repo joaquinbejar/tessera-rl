@@ -587,13 +587,45 @@ where
         self.mode.pool.observation_space()
     }
 
-    /// [`EnvPool::epoch_barrier`], on the quiescent pool (ADR-0078 item 5.3).
+    /// [`EnvPool::epoch_barrier`], with both halves joined (ADR-0081 item
+    /// 2.1).
+    ///
+    /// # Errors
+    ///
+    /// As [`PipelinedPool::reset_all`] for a busy or poisoned pool
+    /// (`NotQuiescent` with a half in flight), or as
+    /// [`EnvPool::epoch_barrier`].
+    pub fn epoch_barrier(&mut self) -> Result<crate::EpochReport, EngineError> {
+        let mut report = None;
+        self.write(|pool| {
+            report = Some(pool.epoch_barrier()?);
+            Ok(())
+        })?;
+        Ok(report.unwrap_or_default())
+    }
+
+    /// [`EnvPool::freeze_adaptive`], on the quiescent pool.
     ///
     /// # Errors
     ///
     /// As [`PipelinedPool::reset_all`] for a busy or poisoned pool.
-    pub fn epoch_barrier(&mut self) -> Result<(), EngineError> {
-        self.write(EnvPool::epoch_barrier)
+    pub fn freeze_adaptive(&mut self, frozen: bool) -> Result<(), EngineError> {
+        self.write(|pool| {
+            pool.freeze_adaptive(frozen);
+            Ok(())
+        })
+    }
+
+    /// [`EnvPool::freeze_episode_stats`], on the quiescent pool.
+    ///
+    /// # Errors
+    ///
+    /// As [`PipelinedPool::reset_all`] for a busy or poisoned pool.
+    pub fn freeze_episode_stats(&mut self, frozen: bool) -> Result<(), EngineError> {
+        self.write(|pool| {
+            pool.freeze_episode_stats(frozen);
+            Ok(())
+        })
     }
 
     /// [`EnvPool::freeze_normalization`], on the quiescent pool.

@@ -187,22 +187,6 @@ where
         result
     }
 
-    /// The epoch barrier (ADR-0078 item 5.3): merges the chunk accumulators
-    /// into the pool statistics in chunk order and clears them; later
-    /// observations use the new statistics. A no-op without a `Normalize`.
-    ///
-    /// # Errors
-    ///
-    /// [`EngineError::Poisoned`].
-    pub fn epoch_barrier(&mut self) -> Result<(), EngineError> {
-        self.guarded(crate::pool::Poison::Reject, |pool| {
-            if let Some(t) = pool.transform.as_mut() {
-                t.barrier();
-            }
-            Ok(())
-        })
-    }
-
     /// The frame-stack bytes of `instances` instances.
     ///
     /// # Errors

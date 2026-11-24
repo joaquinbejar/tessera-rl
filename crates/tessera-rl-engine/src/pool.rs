@@ -128,6 +128,8 @@ pub struct EnvPool<E: Environment, M: MaskProvider<E> = NoMasks> {
     pub(crate) watch: Option<crate::watch::Watch>,
     /// The observation transforms (ADR-0078); `None` without any.
     pub(crate) transform: Option<Box<crate::transform::runtime::Runtime>>,
+    /// Episode statistics since the last epoch barrier (ADR-0081 item 3).
+    pub(crate) episodes: crate::adaptive::EpisodeStatistics,
     /// Allocations counted in this pool's chunk steps (ADR-0055).
     #[cfg(feature = "debug-checks")]
     pub(crate) allocs: crate::sys::alloc_track::AllocTally,
@@ -230,6 +232,8 @@ impl<E: Environment, M: MaskProvider<E>> EnvPool<E, M> {
             Some(t) => t.worker_rows(StackMode::Push, true),
             None => crate::transform::rows::TransformRows::default(),
         };
+        // The split-phase modes only step through these parts (ADR-0081).
+        (outputs.episode_partials, outputs.episode_aborts) = self.episodes.rows();
         let chunk = Rows {
             headers: &mut self.headers,
             states: &mut self.states,
@@ -549,6 +553,7 @@ where
             sync: None,
             watch: None,
             transform: None,
+            episodes: crate::adaptive::EpisodeStatistics::new(num_envs, false),
             #[cfg(feature = "debug-checks")]
             allocs: crate::sys::alloc_track::AllocTally::default(),
             _masks: PhantomData,
@@ -1126,6 +1131,7 @@ where
             sync,
             reset_source,
             transform,
+            episodes,
             #[cfg(feature = "debug-checks")]
             allocs,
             ..
@@ -1141,8 +1147,7 @@ where
             #[cfg(feature = "debug-checks")]
             allocs,
         };
-        let mut view = outputs.view_all();
-        view.transform = pass_rows(transform, sync.is_some(), StackMode::Push);
+        let view = step_view(outputs, transform, sync.is_some(), episodes);
         let all = Chunk::<E> {
             headers,
             states,
@@ -1379,6 +1384,20 @@ fn counter_max<H: RecordLayout>(headers: &[H]) -> u32 {
 
 /// The transform rows of a whole-pool pass that accumulates: the workers'
 /// scratch with workers, the caller's otherwise (ADR-0078).
+/// The pool-wide view of a step pass: the transform rows (stacks pushed)
+/// and the episode-statistics partials (ADR-0081 item 3).
+fn step_view<'a>(
+    outputs: &'a mut Outputs,
+    transform: &'a mut Option<Box<crate::transform::runtime::Runtime>>,
+    workers: bool,
+    episodes: &'a mut crate::adaptive::EpisodeStatistics,
+) -> OutputsView<'a> {
+    let mut view = outputs.view_all();
+    view.transform = pass_rows(transform, workers, StackMode::Push);
+    (view.episode_partials, view.episode_aborts) = episodes.rows();
+    view
+}
+
 fn pass_rows(
     transform: &mut Option<Box<crate::transform::runtime::Runtime>>,
     workers: bool,
@@ -2247,6 +2266,10 @@ pub(crate) fn finish_episode<H: RecordLayout>(
         #[expect(clippy::cast_precision_loss, reason = "statistic, exact below 2^24")]
         let length = t as f32;
         *l = length;
+    }
+    // The instance's own partial (ADR-0081 item 3); absent when frozen.
+    if let Some(p) = outputs.episode_partials.get_mut(i) {
+        p.add(total, t);
     }
 }
 

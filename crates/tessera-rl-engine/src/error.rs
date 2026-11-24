@@ -305,6 +305,16 @@ pub enum EngineError {
     /// Work is admitted to workers and not yet completed (ADR-0047).
     #[error("the pool is not quiescent: work is in flight")]
     NotQuiescent,
+    /// An epoch barrier on an Async pool whose adaptive subsystems are not
+    /// all frozen (ADR-0081 item 2.1, ADR-0026).
+    #[error("the epoch barrier needs every adaptive subsystem frozen in Async mode")]
+    AdaptiveInAsync,
+    /// A reduction counter of the epoch barrier would overflow `u64`.
+    #[error("epoch barrier: {counter} overflows")]
+    StatisticsOverflow {
+        /// The counter.
+        counter: &'static str,
+    },
     /// A live watch is already attached to this pool, with its handle
     /// alive (ADR-0083 item 7).
     #[error("a watch is already attached to this pool")]
