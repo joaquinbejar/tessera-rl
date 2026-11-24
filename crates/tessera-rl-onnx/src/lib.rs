@@ -4,12 +4,13 @@
 //! through `ort`, behind the optional `onnx` feature.
 //!
 //! So far the crate holds the runtime loader of ADR-0057 section 4:
-//! [`load_runtime`] refuses to load anything unless `ORT_DISABLE_TELEMETRY=1`
-//! is already set (or [`TelemetryPolicy::Accept`] is passed), loads only the
+//! `load_runtime` refuses to load anything unless `ORT_DISABLE_TELEMETRY=1`
+//! is already set (or `TelemetryPolicy::Accept` is passed), loads only the
 //! library at the explicit path, checks its exact version, and keeps one
-//! runtime per process. [`OnnxEvaluator`] runs a model on that runtime as
+//! runtime per process. `OnnxEvaluator` runs a model on that runtime as
 //! a search evaluator, on the CPU execution provider only, and records its
-//! [`Provenance`].
+//! `Provenance`. These items exist only with the `onnx` feature, so the
+//! crate docs name them as code rather than links, and build either way.
 
 #[cfg(feature = "onnx")]
 mod error;
