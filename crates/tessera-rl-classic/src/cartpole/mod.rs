@@ -27,8 +27,9 @@ mod render;
 use tessera_rl_core::io::{ActionWriter, Actions, ObsWriter};
 use tessera_rl_core::space::{BoxBounds, DType, Space};
 use tessera_rl_core::{
-    AgentSlot, Environment, EpisodeEnd, Heuristic, InvariantViolation, LeafId, NoAdaptive,
-    Observation, RecordHeader, SpaceError, StepOut, Tier, Validate,
+    AgentSlot, Environment, EpisodeEnd, Heuristic, InvariantViolation, LANES, LaneHook, LaneOut,
+    LaneStep, LeafId, NoAdaptive, Observation, RecordHeader, SpaceError, StepOut, Tier, Validate,
+    lane_hook,
 };
 use tessera_rl_macros::{EnvConfig, EnvState};
 use tessera_rl_num::rng::StepRng;
@@ -115,6 +116,7 @@ impl Environment for CartPole {
 
     const MAX_AGENTS: usize = 1;
     const TIER: Tier = Tier::CrossPlatform;
+    const LANE_STEP: Option<LaneHook<Self>> = Some(lane_hook::<Self>());
 
     fn observation_space(cfg: &CartPoleConfig) -> Result<Space, SpaceError> {
         CartPoleObs::space(cfg)
@@ -162,6 +164,44 @@ impl Environment for CartPole {
             let values = state.s.map(|v| v as f32);
             let written = leaf.copy_from(&values);
             debug_assert!(written, "CartPole's state leaf holds four f32");
+        }
+    }
+}
+
+/// Eight instances through [`lane::step`] (ADR-0071): the columns are
+/// gathered from the states, stepped at `level` and scattered back. Each
+/// lane gets what [`CartPole::step`] reports: reward 1.0, and `Terminated`
+/// when the lane is outside the bounds. Lanes outside the kernel's fast
+/// domain run the scalar transition inside the kernel.
+impl LaneStep for CartPole {
+    const STEP_DRAWS_RNG: bool = false;
+
+    fn lane_step(
+        _: &CartPoleConfig,
+        level: tessera_rl_simd::Resolved,
+        states: &mut [CartPoleState; LANES],
+        actions: &[i32; LANES],
+        out: &mut LaneOut,
+    ) {
+        let mut columns: lane::Columns = [[0.0; 8]; 4];
+        for (l, state) in states.iter().enumerate() {
+            for (column, &v) in columns.iter_mut().zip(state.s.iter()) {
+                if let Some(c) = column.get_mut(l) {
+                    *c = v;
+                }
+            }
+        }
+        let outcome = lane::step(level, &mut columns, actions.map(|a| a == 1));
+        for (l, state) in states.iter_mut().enumerate() {
+            for (v, column) in state.s.iter_mut().zip(columns.iter()) {
+                if let Some(&c) = column.get(l) {
+                    *v = c;
+                }
+            }
+        }
+        out.reward = [1.0; LANES];
+        for (l, end) in out.end.iter_mut().enumerate() {
+            *end = (outcome.terminal >> l & 1 == 1).then_some(EpisodeEnd::Terminated);
         }
     }
 }

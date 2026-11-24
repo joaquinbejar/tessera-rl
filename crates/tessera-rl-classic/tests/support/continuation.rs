@@ -159,6 +159,7 @@ where
             auto_reset: self.auto_reset,
             max_episode_steps: NonZeroU32::new(self.limit),
             chunk_size: NonZeroU32::new(2).unwrap(),
+            simd_level: super::forced_level(),
             ..PoolOptions::new(NonZeroU32::new(n).unwrap(), Seed::new(seed))
         };
         (self.build)(self.cfg.clone(), options)

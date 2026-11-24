@@ -1209,6 +1209,7 @@ dependencies = [
  "tessera-rl-render",
  "tessera-rl-rts",
  "tessera-rl-search",
+ "tessera-rl-simd",
  "tessera-rl-world",
 ]
 
