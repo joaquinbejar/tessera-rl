@@ -77,6 +77,41 @@ def test_policy_map_bad_names_and_heuristics_without_support_are_refused():
     env.close()
 
 
+LOB = "tessera/LimitOrderBook-v1"
+LOB_MAP = {s: "heuristic" for s in range(1, 8)}
+
+
+def test_lob_heuristic_slots_fill_1_to_7_deterministically_and_ignore_rows():
+    """#470: LimitOrderBook runs heuristic slots (InfoHeuristic) like Tag."""
+    env = tessera_rl.make(LOB, num_envs=4, seed=5, workers=2, policy_map=LOB_MAP, agents=8)
+    twin = tessera_rl.make(LOB, num_envs=4, seed=5, workers=0, policy_map=LOB_MAP, agents=8)
+    assert env.policy_groups == ("learner",) + ("heuristic",) * 7
+    env.reset()
+    twin.reset()
+    heads = len(env.action_nvec)
+    zeros = np.zeros((4, 8, heads), dtype=np.int32)
+    garbage = zeros.copy()
+    garbage[:, 1:8] = -12345
+    filled = False
+    for _ in range(40):
+        step = env.step(zeros)
+        other = twin.step(garbage)
+        h = env.heuristic_actions
+        assert h.shape == (4, 8, heads) and h.dtype == np.int32
+        np.testing.assert_array_equal(h, twin.heuristic_actions)
+        np.testing.assert_array_equal(step.rewards, other.rewards)
+        assert (h[:, 0] == 0).all()
+        filled |= bool((h[:, 1:8] != 0).any())
+    assert filled, "the heuristic slots never acted"
+    env.close()
+    twin.close()
+
+
+def test_lob_heuristic_slots_refuse_split_modes():
+    with pytest.raises(_native.CapabilityError):
+        tessera_rl.make(LOB, num_envs=2, workers=1, mode="pipelined", policy_map=LOB_MAP, agents=8)
+
+
 def test_policy_map_with_heuristic_slots_refuses_split_modes():
     with pytest.raises(_native.CapabilityError):
         tessera_rl.make(TAG, num_envs=8, chunk_size=2, mode="pipelined", workers=1, policy_map=TAG_MAP)

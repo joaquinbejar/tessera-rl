@@ -855,7 +855,7 @@ def make(env_id: str, num_envs: int = 1, seed: int = 0, outputs: str = "borrowed
     the workers from the environment's scripted baseline; your rows for it
     are ignored) or ``"privileged_heuristic"`` (a full-state opponent for
     imperfect-information environments, for testing only). Heuristic slots
-    run on Tag, Leduc, Lanterns, Connect Four, Othello and Go 9x9, in
+    run on Tag, Leduc, Lanterns, LimitOrderBook, Connect Four, Othello and Go 9x9, in
     ``mode="sync"`` only until stage B (``CapabilityError`` otherwise); see
     ``Env.policy_groups`` and ``Env.heuristic_actions``. Host environments
     refuse it with ``CapabilityError``.

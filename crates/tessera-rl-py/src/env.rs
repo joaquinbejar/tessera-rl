@@ -1852,6 +1852,8 @@ pub(crate) fn lob(args: &PoolArgs, fields: &LobFields) -> Result<Box<dyn PoolOps
     let (options, n) = options(args)?;
     let same_step = options.auto_reset == AutoReset::SameStep;
     let pool = EnvPool::<LimitOrderBook, Masked>::with_masks(cfg.clone(), options)?;
+    // Heuristic slots from the information state (InfoHeuristic), as Tag (#470).
+    let pool = crate::policy::info(pool, args)?;
     finish(&cfg, pool, args, n, same_step)
 }
 
