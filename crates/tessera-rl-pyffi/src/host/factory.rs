@@ -39,6 +39,7 @@ use crate::ffi::capi::{self, CResult, Gil, Kind, Mine, Ref};
 /// failed fork-handler registration, or a failure to create the type.
 pub fn init(g: Gil<'_>, module: Ref<'_>, name: &'static core::ffi::CStr) -> CResult<()> {
     errors::bind(g)?;
+    crate::ffi::registry::attach(g)?;
     crate::ffi::fork::register(g)?;
     object::register(g, module, name)
 }

@@ -290,6 +290,7 @@ impl ModuleInit for NativeInit {
         snapshot_type::register(g, module)?;
         search_type::register(g, module)?;
         search_group_type::register(g, module)?;
+        tessera_rl_pyffi::ffi::registry::attach(g)?;
         fork::register(g)
     }
 }
