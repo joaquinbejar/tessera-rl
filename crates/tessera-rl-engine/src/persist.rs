@@ -148,7 +148,7 @@ pub enum PersistError {
 }
 
 /// The compatibility fields, the same on the writer and the reader.
-struct Identity {
+pub(crate) struct Identity {
     tier: u8,
     mask_provider: u8,
     auto_reset: u8,
@@ -206,7 +206,7 @@ fn required_id(build_id: Option<&str>) -> Result<&str, PersistError> {
 }
 
 /// The descriptor of a tier, for writing.
-fn descriptor(tier: Tier, build_id: Option<&str>) -> Result<Vec<u8>, PersistError> {
+pub(crate) fn descriptor(tier: Tier, build_id: Option<&str>) -> Result<Vec<u8>, PersistError> {
     match tier {
         Tier::CrossPlatform => Ok(Vec::new()),
         Tier::SamePlatform => {
@@ -264,7 +264,52 @@ fn descriptor_matches(
     }
 }
 
-fn identity<E, M>(cfg: &E::Config, options: &PoolOptions) -> Result<Identity, PersistError>
+/// The header tier of host files: host environments have no determinism tier
+/// (ADR-0062), and ADR-0073 marks their files with 2. Accepted only in host
+/// files; shared by host snapshot and host replay files.
+pub(crate) const HOST_TIER: u8 = 2;
+
+/// The identity of a host pool's replay file (ADR-0072): [`HOST_TIER`] with
+/// an empty descriptor, `config_hash` as given (0 for a host whose config is
+/// not canonical), `record_len` 0 (host records have variable length,
+/// ADR-0073), the mask provider from `HostEnvironment::MASKS`, and the pool
+/// options as for any pool.
+#[cfg(all(feature = "host", feature = "replay"))]
+pub(crate) fn host_identity(
+    env_id: &'static str,
+    env_version: u32,
+    masks: bool,
+    options: &PoolOptions,
+    config_hash: u64,
+) -> Identity {
+    let (illegal_kind, penalty_bits) = match (masks, options.illegal_action) {
+        (true, IllegalActionPolicy::Penalize(r)) => (1, r.to_bits()),
+        _ => (0, 0),
+    };
+    Identity {
+        tier: HOST_TIER,
+        mask_provider: u8::from(masks),
+        auto_reset: match options.auto_reset {
+            AutoReset::NextStep => 0,
+            AutoReset::SameStep => 1,
+            AutoReset::Disabled => 2,
+        },
+        illegal_kind,
+        penalty_bits,
+        max_episode_steps: options
+            .max_episode_steps
+            .map_or(0, core::num::NonZeroU32::get),
+        env_version,
+        config_hash,
+        record_len: 0,
+        env_id,
+    }
+}
+
+pub(crate) fn identity<E, M>(
+    cfg: &E::Config,
+    options: &PoolOptions,
+) -> Result<Identity, PersistError>
 where
     E: Persist,
     E::Config: CanonicalConfig,
@@ -373,7 +418,8 @@ pub(crate) fn same<T: PartialEq>(field: &'static str, a: &T, b: &T) -> Result<()
     }
 }
 
-/// The header as read, before any check.
+/// The header as read, before any check. Shared by every file kind whose
+/// magic is followed by the ADR-0011 header (ADR-0072 section 6).
 pub(crate) struct FileHeader<'a> {
     pub(crate) encoding: u8,
     pub(crate) tier: u8,
@@ -393,6 +439,7 @@ pub(crate) struct FileHeader<'a> {
 }
 
 impl<'a> FileHeader<'a> {
+    /// Reads the header after the magic and version (12 bytes skipped).
     pub(crate) fn read(r: &mut Reader<'a>) -> Result<Self, PersistError> {
         r.take(12)?;
         let encoding = r.u8()?;
@@ -430,7 +477,14 @@ impl<'a> FileHeader<'a> {
         })
     }
 
-    fn check_fields(&self) -> Result<(), PersistError> {
+    /// Checks the fields that hold a value no file may hold.
+    pub(crate) fn check_fields(&self) -> Result<(), PersistError> {
+        self.check_fields_for(false)
+    }
+
+    /// [`FileHeader::check_fields`], where `host` files must hold the host
+    /// tier and other files a determinism tier (0 or 1).
+    pub(crate) fn check_fields_for(&self, host: bool) -> Result<(), PersistError> {
         let invalid = |field| Err(PersistError::InvalidField { field });
         if self.encoding != RAW_CANONICAL {
             return invalid("payload_encoding");
@@ -438,7 +492,7 @@ impl<'a> FileHeader<'a> {
         if self.reserved != [0; 3] {
             return invalid("reserved");
         }
-        if self.tier > 1 {
+        if host_tier_mismatch(self.tier, host) {
             return invalid("tier");
         }
         if self.mask_provider > 1 {
@@ -460,7 +514,8 @@ impl<'a> FileHeader<'a> {
         Ok(())
     }
 
-    fn check_against(
+    /// Checks the header against a pool's identity.
+    pub(crate) fn check_against(
         &self,
         id: &Identity,
         tier: Tier,
@@ -598,33 +653,14 @@ where
             field: "instance_count",
         })?;
         let mut out = Vec::new();
-        out.extend_from_slice(&MAGIC);
-        out.extend_from_slice(&FORMAT_VERSION.to_le_bytes());
-        out.extend_from_slice(&[
-            RAW_CANONICAL,
-            id.tier,
-            id.mask_provider,
-            id.auto_reset,
-            id.illegal_kind,
-            0,
-            0,
-            0,
-        ]);
-        out.extend_from_slice(&id.penalty_bits.to_le_bytes());
-        out.extend_from_slice(&id.max_episode_steps.to_le_bytes());
-        out.extend_from_slice(&id.env_version.to_le_bytes());
-        out.extend_from_slice(&id.config_hash.to_le_bytes());
-        out.extend_from_slice(&count.to_le_bytes());
-        out.extend_from_slice(&id.record_len.to_le_bytes());
-        push_capped(&mut out, "env_id", id.env_id.as_bytes(), MAX_ENV_ID)?;
-        push_capped(
+        write_shared_header(
             &mut out,
-            "library_version",
-            library_version.as_bytes(),
-            MAX_LIBRARY_VERSION,
+            MAGIC,
+            &id,
+            count,
+            library_version,
+            &file_descriptor,
         )?;
-        out.extend_from_slice(&0u16.to_le_bytes()); // asset_count
-        push_capped(&mut out, "descriptor", &file_descriptor, MAX_DESCRIPTOR)?;
         for &i in ids {
             let record = DecodedRecord::<E>::from(self.snapshot(i)?);
             out.extend_from_slice(&encode_to_vec(&record));
@@ -633,6 +669,46 @@ where
         out.extend_from_slice(&sum.to_le_bytes());
         Ok(out)
     }
+}
+
+/// Writes `magic`, the format version and the ADR-0011 header fields, in
+/// ADR-0011's order. Shared by snapshot and replay files (ADR-0072 section 6).
+pub(crate) fn write_shared_header(
+    out: &mut Vec<u8>,
+    magic: [u8; 8],
+    id: &Identity,
+    count: u32,
+    library_version: &str,
+    file_descriptor: &[u8],
+) -> Result<(), PersistError> {
+    out.extend_from_slice(&magic);
+    out.extend_from_slice(&FORMAT_VERSION.to_le_bytes());
+    out.extend_from_slice(&[
+        RAW_CANONICAL,
+        id.tier,
+        id.mask_provider,
+        id.auto_reset,
+        id.illegal_kind,
+        0,
+        0,
+        0,
+    ]);
+    out.extend_from_slice(&id.penalty_bits.to_le_bytes());
+    out.extend_from_slice(&id.max_episode_steps.to_le_bytes());
+    out.extend_from_slice(&id.env_version.to_le_bytes());
+    out.extend_from_slice(&id.config_hash.to_le_bytes());
+    out.extend_from_slice(&count.to_le_bytes());
+    out.extend_from_slice(&id.record_len.to_le_bytes());
+    push_capped(out, "env_id", id.env_id.as_bytes(), MAX_ENV_ID)?;
+    push_capped(
+        out,
+        "library_version",
+        library_version.as_bytes(),
+        MAX_LIBRARY_VERSION,
+    )?;
+    out.extend_from_slice(&0u16.to_le_bytes()); // asset_count
+    push_capped(out, "descriptor", file_descriptor, MAX_DESCRIPTOR)?;
+    Ok(())
 }
 
 /// Checks a file against a pool's config and options and returns its untrusted
@@ -709,6 +785,12 @@ where
         out.push(record);
     }
     Ok(out)
+}
+
+/// Whether `tier` is wrong for a file of this kind: a host file holds only the
+/// host tier, any other file only 0 or 1.
+const fn host_tier_mismatch(tier: u8, host: bool) -> bool {
+    if host { tier != HOST_TIER } else { tier > 1 }
 }
 
 #[cfg(test)]
