@@ -205,3 +205,19 @@ stay on.
 - [ ] Open the next development section in the CHANGELOG.
 - [ ] Follow-up: a GitHub-hosted CI job for pull requests from forks, once
       hosted runners can be tested on the public repository.
+
+## Docs site (owner's step, #375)
+
+`site.yml` builds and checks the site on every push to `main` and uploads it
+as the `site` artifact; it deploys nothing. To publish:
+
+- [ ] Download the newest `site` artifact of `main`, or run `make site`
+      locally (`target/site`), and look at the index, Getting started, the
+      Python API and the benchmarks page.
+- [ ] In the repository settings, set GitHub Pages' source to GitHub Actions.
+- [ ] Add a deploy job to `site.yml` (`actions/configure-pages`,
+      `actions/upload-pages-artifact`, `actions/deploy-pages`, pinned by
+      SHA, with `pages: write` and `id-token: write` on that job only), or
+      deploy the artifact by hand.
+- [ ] Any custom domain: the DNS record and the Pages setting.
+
