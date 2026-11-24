@@ -228,6 +228,12 @@ RUN_ALL = {**RUN_WHEELS, **RUN_MUSL}
 def _run_tree(tmp_path) -> Path:
     arts = tmp_path / "artifacts"
     shutil.copytree(RUN_TREE, arts)
+    # The recorded run predates the `sbom` check (#350 PR 3): add it, passed,
+    # as a current run writes it.
+    for checks in arts.glob("*/checks.json"):
+        data = json.loads(checks.read_text())
+        data["checks"]["sbom"] = 0
+        checks.write_text(json.dumps(data, indent=1))
     # The recorded run predates the musllinux legs (#350): stub artifacts for
     # them, consistent with their own checks.json.
     for key in ("x86_64-unknown-linux-musl", "aarch64-unknown-linux-musl"):
@@ -351,7 +357,7 @@ def _artifact(root: Path, key, version="0.2.0", commit=COMMIT, checks=None, sha_
     name = f"wheel-x86_64-unknown-linux-gnu-wheel-{commit}-{sha_override or sha}" if key == "x86" else f"wheel-{key}"
     d = root / name
     tmp.rename(d)
-    statuses = checks if checks is not None else {"golden_anchor": 0, "python_suite": 0, "num_tests": 0, "onnx_smoke": 0}
+    statuses = checks if checks is not None else {"golden_anchor": 0, "python_suite": 0, "num_tests": 0, "onnx_smoke": 0, "sbom": 0}
     (d / "checks.json").write_text(json.dumps({"wheel_sha256": sha, "checks": statuses}))
     return d
 
@@ -670,3 +676,21 @@ def test_pypi_publish_sums_step_on_the_real_run_tree(tmp_path):
     r = subprocess.run(["bash", "--noprofile", "--norc", "-eo", "pipefail", str(script)], cwd=tmp_path / "w", env=env, capture_output=True, text=True)
     assert r.returncode == 0, r.stdout + r.stderr
     assert sorted(x.name for x in dist.iterdir()) == sorted(RUN_ALL.values())
+
+
+@long_paths
+@pytest.mark.parametrize(
+    "checks, message",
+    [
+        ({"golden_anchor": 0, "python_suite": 0, "num_tests": 0, "onnx_smoke": 0}, "lacks required checks ['sbom']"),
+        ({"golden_anchor": 0, "python_suite": 0, "num_tests": 0, "onnx_smoke": 0, "sbom": 1}, "failed checks {'sbom': 1}"),
+        ({"sbom": 0}, "lacks required checks ['golden_anchor', 'num_tests', 'onnx_smoke', 'python_suite']"),
+    ],
+)
+def test_pypi_verify_requires_every_check_including_sbom(tmp_path, checks, message):
+    arts = tmp_path / "a"
+    _good(arts)
+    _replace(arts, "aarch64-unknown-linux-musl", checks=checks)
+    p, out = _verify(arts)
+    assert p.returncode == 1 and message in p.stderr, p.stderr
+    assert not out.exists()

@@ -51,6 +51,11 @@ PLATFORMS = {
     "aarch64-apple-darwin": r"macosx_[0-9]+_[0-9]+_arm64",
 }
 
+# Checks every wheel's checks.json must hold, each 0 (wheel_job.sh writes
+# them; #350 PR 3 added `sbom`). Extra checks, such as `orderbook`, must be 0
+# too.
+REQUIRED_CHECKS = ("golden_anchor", "python_suite", "num_tests", "onnx_smoke", "sbom")
+
 # The release-profile (W0) artifacts besides W1, by exact name (#350: musllinux).
 W0_ARTIFACTS = [
     "wheel-aarch64-unknown-linux-gnu",
@@ -123,6 +128,9 @@ def check(artifacts: Path, tag: str, commit: str) -> tuple[list[str], list[Path]
         if not isinstance(statuses, dict) or not statuses:
             problems.append(f"{name}: checks.json has no checks")
         else:
+            missing = sorted(set(REQUIRED_CHECKS) - set(statuses))
+            if missing:
+                problems.append(f"{name}: checks.json lacks required checks {missing}")
             failed = {k: v for k, v in statuses.items() if v != 0}
             if failed:
                 problems.append(f"{name}: failed checks {failed}")
