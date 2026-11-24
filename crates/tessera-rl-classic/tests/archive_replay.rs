@@ -339,9 +339,9 @@ fn test_archive_replay_seek_restores_the_archive_source() {
     let mut q = pool(7, 0);
     q.reset_all(Reseed::Keep).unwrap();
     let before: Vec<u64> = (0..N).map(|i| q.state_hash(i).unwrap().get()).collect();
-    let mut bare = file.cursor(&q).unwrap();
+    // The cursor itself is refused: no seek can write.
     assert!(matches!(
-        file.seek(&mut q, &mut bare, periodic),
+        file.cursor(&q),
         Err(ReplayError::Engine(EngineError::ArchiveMismatch {
             found: 0,
             ..
@@ -349,4 +349,82 @@ fn test_archive_replay_seek_restores_the_archive_source() {
     ));
     let after: Vec<u64> = (0..N).map(|i| q.state_hash(i).unwrap().get()).collect();
     assert_eq!(after, before);
+}
+
+/// Records 60 steps of a pool that starts with `start` and switches to
+/// `then` at step 20.
+fn record_switch(start: Option<&Archive<CartPole>>, then: &Archive<CartPole>) -> Vec<u8> {
+    let mut p = pool(7, 0);
+    p.reset_all(Reseed::Keep).unwrap();
+    if let Some(a) = start {
+        p.set_reset_source(ResetSource::Archive {
+            archive: a.clone(),
+            weights: None,
+        })
+        .unwrap();
+    }
+    let mut rec = Recorder::new(&mut p, Vec::new(), ReplayWriterOptions::default()).unwrap();
+    for t in 0..60u32 {
+        let a: Vec<i32> = (0..N).map(|i| i32::try_from((t + i) % 2).unwrap()).collect();
+        rec.step(ActionInput {
+            discrete: &a,
+            continuous: &[],
+        })
+        .unwrap();
+        if t == 20 {
+            rec.set_reset_source(ResetSource::Archive {
+                archive: then.clone(),
+                weights: None,
+            })
+            .unwrap();
+        }
+    }
+    rec.finish().unwrap()
+}
+
+/// Replays `file` into a reset pool and returns the error, asserting the
+/// pool's records and context are unchanged.
+fn untouched(file: &Replay<'_>, archive: Option<&Archive<CartPole>>) -> ReplayError {
+    let mut p = pool(7, 0);
+    p.reset_all(Reseed::Base(Seed::new(99))).unwrap();
+    let before: Vec<u64> = (0..N).map(|i| p.state_hash(i).unwrap().get()).collect();
+    let context = p.pool_context().unwrap();
+    let err = file.run_with_archive(&mut p, archive).unwrap_err();
+    let after: Vec<u64> = (0..N).map(|i| p.state_hash(i).unwrap().get()).collect();
+    assert_eq!(after, before, "the pool was written before the refusal");
+    assert_eq!(p.pool_context().unwrap(), context);
+    err
+}
+
+#[test]
+fn test_archive_replay_fresh_then_archive_without_it_refused_before_stepping() {
+    // A file that starts with fresh resets and switches to an archive at a
+    // `ResetSource` event: without that archive, refused before any write
+    // (ADR-0075 item 7, REVIEW-implB-r1).
+    let arc = archive(3);
+    let bytes = record_switch(None, &arc);
+    let file = Replay::open(&bytes, DecodeLimits::default()).unwrap();
+    assert!(file.header().archive.is_none());
+    assert!(matches!(
+        untouched(&file, None),
+        ReplayError::Engine(EngineError::ArchiveMismatch { found: 0, .. })
+    ));
+    // With it, the file replays.
+    let mut p = pool(7, 0);
+    file.run_with_archive(&mut p, Some(&arc)).unwrap();
+}
+
+#[test]
+fn test_archive_replay_two_archives_in_one_file_refused_before_stepping() {
+    let a = archive(3);
+    let b = archive(4);
+    let bytes = record_switch(Some(&a), &b);
+    let file = Replay::open(&bytes, DecodeLimits::default()).unwrap();
+    for given in [Some(&a), Some(&b), None] {
+        let err = untouched(&file, given);
+        assert!(
+            matches!(err, ReplayError::Unsupported { feature } if feature.contains("one archive per file")),
+            "{err:?}"
+        );
+    }
 }
