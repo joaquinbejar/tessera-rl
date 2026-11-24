@@ -9,6 +9,7 @@ Environment                 Turns        Adapters
 ==========================  ===========  ============================
 ``tessera/Tag-v1``          simultaneous ``parallel_env``, ``aec_env``
 ``tessera/GridKeyDoor-v1``  simultaneous ``parallel_env``, ``aec_env``
+``tessera/Gather-v1``       simultaneous ``parallel_env``, ``aec_env``
 ``tessera/Snake-v1``        simultaneous ``parallel_env``, ``aec_env``
 ``tessera/PaddleDuel-v1``   simultaneous ``parallel_env``, ``aec_env``
 ``tessera/RTS-v1``          simultaneous ``parallel_env``
@@ -100,6 +101,7 @@ from tessera_rl.masks import head_views
 _MAKERS = {
     "tessera/Tag-v1": _native.make_tag,
     "tessera/GridKeyDoor-v1": _native.make_keydoor,
+    "tessera/Gather-v1": _native.make_gather,
     "tessera/Snake-v1": _native.make_snake,
     "tessera/PaddleDuel-v1": _native.make_paddleduel,
     "tessera/Connect4-v1": _native.make_connect4,
@@ -261,7 +263,15 @@ class _Agents:
         #: agent's infos then carry ``refused`` and ``refuse_code``.
         self.refuses = bool(layout.get("refuses_agents", False))
         leaves = {}
+        # Set masks (ADR-0082 point 6): the last leaf of each set, exposed as
+        # ``MultiBinary`` with ``int8`` 0/1 values, as ``action_mask``.
+        mask_ids = {indices[-1] for _, _, indices in layout.get("sets", ())}
+        #: Names of the set mask leaves.
+        self.set_masks = frozenset(layout["leaves"][k][0] for k in mask_ids)
         for name, dtype, shape, low, high in layout["leaves"]:
+            if name in self.set_masks:
+                leaves[name] = spaces.MultiBinary(int(shape[0]))
+                continue
             dt = np.dtype(dtype)
             # Bounds come per element, or as one value for the whole leaf.
             lo = np.broadcast_to(np.asarray(low, dtype=np.float64).ravel(), (int(np.prod(shape)),))
@@ -329,7 +339,10 @@ class _Agents:
         step = self.last
         if step is None:
             raise _native.ArgumentError("call reset() before observing")
-        obs = {name: np.array(arr[0, slot]) for name, arr in step.observations.items()}
+        obs = {
+            name: np.array(arr[0, slot], dtype=np.int8) if name in self.set_masks else np.array(arr[0, slot])
+            for name, arr in step.observations.items()
+        }
         # A multi-head environment's conditional masks are in infos (see
         # the module doc).
         if not self.multi:

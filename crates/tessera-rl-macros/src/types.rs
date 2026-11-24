@@ -107,9 +107,18 @@ pub(crate) fn last_ident(ty: &Type) -> Option<String> {
 
 /// Returns `T` if `ty` is `ObsLeaf<T>`.
 pub(crate) fn obs_leaf_inner(ty: &Type) -> Option<&Type> {
+    marker_inner(ty, "ObsLeaf")
+}
+
+/// `T` of an `ObsSet<T>` field type (ADR-0082).
+pub(crate) fn obs_set_inner(ty: &Type) -> Option<&Type> {
+    marker_inner(ty, "ObsSet")
+}
+
+fn marker_inner<'a>(ty: &'a Type, marker: &str) -> Option<&'a Type> {
     let Type::Path(path) = ty else { return None };
     let last = path.path.segments.last()?;
-    if last.ident != "ObsLeaf" {
+    if last.ident != marker {
         return None;
     }
     let PathArguments::AngleBracketed(args) = &last.arguments else {

@@ -70,7 +70,7 @@ use core::ops::Range;
 use tessera_rl_core::Bool8;
 
 use crate::error::EngineError;
-use crate::layout::MAX_LEAVES;
+use crate::layout::{MAX_LEAVES, SetSpans};
 use crate::options::Schedule;
 use crate::outputs::OutputsView;
 use crate::pool::Rows;
@@ -147,6 +147,7 @@ struct RawChunk<H, S> {
     ch: usize,
     mask_len: usize,
     leaf_bytes: Raw<usize>,
+    sets: SetSpans,
     headers: Raw<H>,
     states: Raw<S>,
     discrete: Raw<i32>,
@@ -209,6 +210,7 @@ impl<H, S> RawChunk<H, S> {
             agents,
             mask_len,
             leaf_bytes,
+            sets,
             observations,
             terminal_observations,
             rewards,
@@ -246,6 +248,7 @@ impl<H, S> RawChunk<H, S> {
             ch,
             mask_len,
             leaf_bytes,
+            sets,
             headers: Raw::new(headers),
             states: Raw::new(states),
             discrete: Raw::new(discrete),
@@ -371,6 +374,7 @@ impl<H, S> RawChunk<H, S> {
                 agents: a,
                 mask_len: self.mask_len,
                 leaf_bytes,
+                sets: self.sets,
                 observations,
                 terminal_observations: terminal,
                 rewards,

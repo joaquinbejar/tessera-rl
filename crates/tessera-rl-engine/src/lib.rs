@@ -44,6 +44,7 @@ mod record;
 mod registry;
 #[cfg(feature = "replay")]
 pub mod replay;
+mod set_zero;
 mod snapshot;
 mod sys;
 mod validate;

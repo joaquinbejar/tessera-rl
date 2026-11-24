@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! Inline step cost of the classic environments: the CartPole physics
-//! kernel alone, and full pool steps (auto-reset on) for CartPole, Tag and the
-//! reference grid world.
+//! kernel alone, and full pool steps (auto-reset on) for CartPole, Tag, the
+//! reference grid world and the other classic environments.
 
 #![expect(clippy::unwrap_used, reason = "bench setup unwraps")]
 
@@ -12,9 +12,9 @@ use std::hint::black_box;
 use criterion::{Criterion, criterion_group, criterion_main};
 use tessera_rl_classic::cartpole::physics;
 use tessera_rl_classic::{
-    Acrobot, AcrobotConfig, BrickWall, BrickWallConfig, CartPole, CartPoleConfig, Grid, GridConfig,
-    KeyDoor, KeyDoorConfig, MountainCar, MountainCarConfig, PaddleDuel, PaddleDuelConfig, Pendulum,
-    PendulumConfig, Snake, SnakeConfig, Tag, TagConfig,
+    Acrobot, AcrobotConfig, BrickWall, BrickWallConfig, CartPole, CartPoleConfig, Gather,
+    GatherConfig, Grid, GridConfig, KeyDoor, KeyDoorConfig, MountainCar, MountainCarConfig,
+    PaddleDuel, PaddleDuelConfig, Pendulum, PendulumConfig, Snake, SnakeConfig, Tag, TagConfig,
 };
 use tessera_rl_engine::{ActionInput, EnvPool, Masked, NoMasks, PoolOptions, Reseed};
 use tessera_rl_num::identity::Seed;
@@ -23,6 +23,27 @@ const N: u32 = 1024;
 
 fn options() -> PoolOptions {
     PoolOptions::new(NonZeroU32::new(N).unwrap(), Seed::new(1))
+}
+
+/// Gather (ADR-0082): the item set's absent rows are zeroed after every
+/// observation, so this includes that pass.
+fn bench_gather(
+    group: &mut criterion::BenchmarkGroup<'_, criterion::measurement::WallTime>,
+    actions: &[i32],
+) {
+    let mut gather = EnvPool::<Gather, NoMasks>::new(GatherConfig::default(), options()).unwrap();
+    gather.reset_all(Reseed::Keep).unwrap();
+    group.bench_function("gather", |b| {
+        b.iter(|| {
+            let out = gather
+                .step(ActionInput {
+                    discrete: actions,
+                    continuous: &[],
+                })
+                .unwrap();
+            black_box(out.rewards());
+        });
+    });
 }
 
 fn bench(c: &mut Criterion) {
@@ -81,6 +102,7 @@ fn bench(c: &mut Criterion) {
             black_box(out.rewards());
         });
     });
+    bench_gather(&mut group, &grid_actions);
     // Key and door: a seeded policy over each row's mask, so agents move, take
     // the key and open doors; the step limit forces a reset every 32 steps, each
     // generating a new world. The policy's own cost is part of the figure.

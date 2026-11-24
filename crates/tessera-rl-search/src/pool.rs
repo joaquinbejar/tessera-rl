@@ -179,7 +179,8 @@ where
     ///
     /// [`SearchError::ImperfectInformation`] when the environment does
     /// not have perfect information (ADR-0035); a non-discrete action
-    /// space; a budget overrun (the error names the bytes per node); a
+    /// space; [`SearchError::SetObservation`] for an observation with a
+    /// `Set` (ADR-0082); a budget overrun (the error names the bytes per node); a
     /// scratch pool error.
     pub fn new(
         cfg: E::Config,
@@ -204,6 +205,9 @@ where
         let Ok(Space::Discrete { n: actions }) = E::action_space(&cfg) else {
             return Err(SearchError::UnsupportedActions);
         };
+        if E::observation_space(&cfg).is_ok_and(|s| s.contains_set()) {
+            return Err(SearchError::SetObservation);
+        }
         if options.capacity.get() == NONE {
             return Err(options_error("capacity", "must be below u32::MAX"));
         }

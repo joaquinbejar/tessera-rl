@@ -31,6 +31,13 @@ pub enum EngineError {
         /// What is not supported.
         what: &'static str,
     },
+    /// Two exported observation leaves share a name, for example a leaf
+    /// `units_mask` beside a set `units` (ADR-0082 point 2).
+    #[error("duplicate observation leaf name {name:?}")]
+    DuplicateLeafName {
+        /// The name exported twice.
+        name: String,
+    },
     /// Invalid pool options.
     #[error("invalid pool option {option}: {reason}")]
     Options {

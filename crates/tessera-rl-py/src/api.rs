@@ -359,6 +359,25 @@ fn asset_arg<T: tessera_rl_core::AssetData>(
     built.map_err(|e| error(g, Kind::Config, format!("{what}: {e}")))
 }
 
+/// `make_gather(**kwargs)`: the pool of a Gather environment object
+/// (ADR-0082). The world truncates at `max_steps`, and the engine's own
+/// limit is set above the largest value, so it never acts first.
+pub(crate) fn make_gather(g: Gil, kwargs: Option<Ref<'_>>) -> CResult<Inner> {
+    let kw = Kwargs::parse(g, kwargs)?;
+    kw.check(g, &[&POOL_KEYS, &["outputs", "size", "items", "max_steps"]])?;
+    let borrowed = borrowed(g, &kw)?;
+    let args = pool_args(g, &kw, 10_001)?;
+    let (size, items, max_steps) = (
+        kw.u32(g, "size")?,
+        kw.u32(g, "items")?,
+        kw.u32(g, "max_steps")?,
+    );
+    let ops = g
+        .detach(|| crate::env::gather(&args, size, items, max_steps))
+        .map_err(|e| to_py(g, e))?;
+    Ok(Inner::new(ops, borrowed))
+}
+
 /// `make_keydoor(**kwargs)`: the pool of a key and door environment object;
 /// `max_episode_steps` defaults to 512.
 pub(crate) fn make_keydoor(g: Gil, kwargs: Option<Ref<'_>>) -> CResult<Inner> {
@@ -629,6 +648,21 @@ pub(crate) fn layout<'py>(g: Gil<'py>, inner: &Inner) -> CResult<Mine<'py>> {
         )?;
         capi::dict_set(g, &d, c"terminal", &capi::boolean(g, l.terminal))?;
         capi::dict_set(g, &d, c"leaves", &leaves)?;
+        // ADR-0082 point 6: `(path, max, [item leaf indices..., mask index])`.
+        let sets = list_of(
+            g,
+            l.sets.iter().map(|(path, max, indices)| {
+                capi::tuple(
+                    g,
+                    vec![
+                        capi::string(g, path)?,
+                        capi::int_u64(g, (*max).into())?,
+                        list_of(g, indices.iter().map(|&i| int(g, i)))?,
+                    ],
+                )
+            }),
+        )?;
+        capi::dict_set(g, &d, c"sets", &sets)?;
         if let Some(split) = ops.split() {
             let halves = list_of(
                 g,

@@ -370,7 +370,7 @@ impl<E: HostEnvironment, const A: usize> HostPool<E, A> {
         let mut outputs = Outputs::new_host(
             num_envs,
             A,
-            &leaves,
+            &leaves.leaves,
             options.auto_reset == AutoReset::SameStep,
             mask_len,
             E::REFUSES_AGENTS,

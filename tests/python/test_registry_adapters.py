@@ -8,11 +8,13 @@ import pytest
 import tessera_rl
 from tessera_rl import _envs, _native, pz
 
-#: The PettingZoo interfaces before ADR-0080 (tessera_rl.pz._ENVS, literal):
+#: The PettingZoo interfaces before ADR-0080 (tessera_rl.pz._ENVS, literal),
+#: plus Gather-v1 (ADR-0082, #366), which declared the same pair there:
 #: the registry's declarations must equal them, id by id.
 _BEFORE = {
     "tessera/Tag-v1": {"parallel", "aec"},
     "tessera/GridKeyDoor-v1": {"parallel", "aec"},
+    "tessera/Gather-v1": {"parallel", "aec"},
     "tessera/Snake-v1": {"parallel", "aec"},
     "tessera/PaddleDuel-v1": {"parallel", "aec"},
     "tessera/Connect4-v1": {"aec"},

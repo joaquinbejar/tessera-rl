@@ -196,6 +196,7 @@ mod tests {
                 low: vec![-1.0; 4],
                 high: vec![1.0; 4],
             }],
+            sets: Vec::new(),
             action_choices: 2,
             action_nvec: vec![2],
             action_bounds: None,

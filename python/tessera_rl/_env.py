@@ -692,6 +692,7 @@ def make(env_id: str, num_envs: int = 1, seed: int = 0, outputs: str = "borrowed
         "tessera/RTS-v1": _native.make_rts,
         "tessera/Grid-v1": _native.make_grid,
         "tessera/GridKeyDoor-v1": _native.make_keydoor,
+        "tessera/Gather-v1": _native.make_gather,
         "tessera/Snake-v1": _native.make_snake,
         "tessera/BrickWall-v1": _native.make_brickwall,
         "tessera/PaddleDuel-v1": _native.make_paddleduel,

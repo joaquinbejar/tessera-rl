@@ -45,6 +45,10 @@ pub enum SearchError {
     /// The action space is not a single discrete head.
     #[error("search needs a Discrete action space")]
     UnsupportedActions,
+    /// The observation space holds a `Set`, which no evaluator batch
+    /// takes yet (ADR-0082 point 7).
+    #[error("search does not support Set observations (ADR-0082)")]
+    SetObservation,
     /// A handle whose slot was freed or reused.
     #[error("stale handle: slot {slot}, generation {generation}")]
     StaleHandle {

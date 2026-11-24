@@ -15,7 +15,7 @@ use tessera_rl_core::Bool8;
 use crate::buffer::{Buf, OutputField, OutputStorage, StorageBuilder};
 use crate::error::EngineError;
 
-use crate::layout::{Leaf, MAX_LEAVES};
+use crate::layout::{Leaf, MAX_LEAVES, SetSpans};
 
 /// Output buffers of a pool, all in one shared [`OutputStorage`]. The
 /// buffers are private: `Outputs::view_all` is the only way to write them,
@@ -44,6 +44,9 @@ pub struct Outputs {
     episode_invalid_agent_events: Buf<f32>,
     masks: Buf<Bool8>,
     pub(crate) mask_len: usize,
+    /// The observation's sets, whose absent item rows the observation pass
+    /// zeroes (ADR-0082 point 3); none unless the pool sets them.
+    pub(crate) sets: SetSpans,
     /// Host pools only (ADR-0065): `None` for every other pool, whose
     /// storage layout is unchanged.
     host: Option<HostBufs>,
@@ -211,6 +214,7 @@ impl Outputs {
             episode_invalid_agent_events: r.take(episode_invalid_agent_events)?,
             masks: r.take(masks)?,
             mask_len,
+            sets: SetSpans::default(),
             host,
         })
     }
@@ -382,6 +386,8 @@ pub(crate) struct OutputsView<'a> {
     pub(crate) agents: usize,
     pub(crate) mask_len: usize,
     pub(crate) leaf_bytes: &'a [usize],
+    /// The observation's sets (ADR-0082 point 3).
+    pub(crate) sets: SetSpans,
     pub(crate) observations: [&'a mut [u8]; MAX_LEAVES],
     pub(crate) terminal_observations: [&'a mut [u8]; MAX_LEAVES],
     pub(crate) rewards: &'a mut [f32],
@@ -422,6 +428,7 @@ impl OutputsView<'_> {
             agents,
             mask_len: 0,
             leaf_bytes: &[],
+            sets: SetSpans::default(),
             observations: Default::default(),
             terminal_observations: Default::default(),
             rewards: &mut [],
@@ -486,6 +493,7 @@ impl Outputs {
             agents: self.agents,
             mask_len: self.mask_len,
             leaf_bytes: &self.leaf_bytes,
+            sets: self.sets,
             observations,
             terminal_observations,
             rewards: &mut self.rewards,

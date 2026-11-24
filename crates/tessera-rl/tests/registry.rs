@@ -4,7 +4,8 @@
 //! crate whose submissions the linker dropped would be missing here.
 
 use tessera_rl::classic::{
-    Acrobot, BrickWall, CartPole, Grid, KeyDoor, MountainCar, PaddleDuel, Pendulum, Snake, Tag,
+    Acrobot, BrickWall, CartPole, Gather, Grid, KeyDoor, MountainCar, PaddleDuel, Pendulum, Snake,
+    Tag,
 };
 use tessera_rl::core::{Environment, Persist};
 use tessera_rl::envs::{EnvRegistration, registered};
@@ -37,6 +38,7 @@ fn test_registered_facade_every_shipped_environment_listed() {
         expected::<Acrobot>(),
         expected::<BrickWall>(),
         expected::<CartPole>(),
+        expected::<Gather>(),
         expected::<Grid>(),
         expected::<KeyDoor>(),
         expected::<MountainCar>(),

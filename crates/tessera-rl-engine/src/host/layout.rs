@@ -76,6 +76,12 @@ pub(crate) fn host_layout<E: HostEnvironment>(
     terminal: bool,
     entity_group_heads: usize,
 ) -> Result<HostLayout, EngineError> {
+    // Host protocol 1 has no `Set` (ADR-0082 point 8): refused, not dropped.
+    if observation_space.contains_set() {
+        return Err(EngineError::UnsupportedSpace {
+            what: "set observations in host protocol 1",
+        });
+    }
     // Each discrete head's block in an agent's mask row, as laid out (SPEC
     // 11.3); none without masks.
     let mask_heads = if E::MASKS {
@@ -122,8 +128,8 @@ pub struct HostLeaf {
 }
 
 /// The leaves of `space` in declaration order, as the engine lays out the
-/// observation outputs (`layout::obs_leaves`, which refused any other
-/// space before this runs).
+/// observation outputs (`layout::obs_leaves`); `host_layout` refuses a
+/// `Set` before this runs.
 pub(crate) fn leaves_of(space: &Space) -> Vec<HostLeaf> {
     let mut out = Vec::new();
     add(space, String::new(), &mut out);
@@ -169,6 +175,7 @@ fn add(space: &Space, name: String, out: &mut Vec<HostLeaf>) {
                 add(inner, join(&i.to_string()), out);
             }
         }
+        // Refused by `host_layout` before this runs (ADR-0082 point 8).
         Space::Set { .. } => {}
     }
 }

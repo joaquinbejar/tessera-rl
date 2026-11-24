@@ -61,6 +61,7 @@ ENVS = {
     "tag": ("tessera/Tag-v1", {"pursuers": 2, "evaders": 2}),
     "grid": ("tessera/Grid-v1", {}),
     "keydoor": ("tessera/GridKeyDoor-v1", {}),
+    "gather": ("tessera/Gather-v1", {}),
     "snake-pixels": ("tessera/Snake-v1", {"obs": "pixels"}),
     "snake-state": ("tessera/Snake-v1", {"obs": "state"}),
     "brickwall-pixels": ("tessera/BrickWall-v1", {"obs": "pixels"}),

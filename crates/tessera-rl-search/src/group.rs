@@ -70,8 +70,9 @@ fn row_bytes<E: Environment>(actions: usize, obs: usize, agents: usize) -> Optio
     .ok()
 }
 
-/// Bytes of one agent's observation in a space, or `None` for a `Set`
-/// (not supported by the search).
+/// Bytes of one agent's observation in a space, or `None` for a `Set`,
+/// which `SearchPool` refuses with `SearchError::SetObservation`
+/// (ADR-0082 point 7).
 fn space_bytes(space: &Space) -> Option<usize> {
     let product = |shape: &[u32]| {
         shape
