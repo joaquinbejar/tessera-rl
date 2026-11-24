@@ -87,3 +87,45 @@ def test_gather_pz_mask_is_int8_multibinary():
     assert obs[agent]["items_mask"].dtype == np.int8
     assert env.observation_space(agent).contains(obs[agent])
     env.close()
+
+
+def test_gather_transforms_stacked_set_layout_and_gym_space():
+    """ADR-0092: a set-wide stack exports ``k * MAX`` slots, the items, the
+    ``frame_age`` leaf and the mask, which the adapters see as plain set
+    leaves."""
+    from tessera_rl.transforms import FrameStack, Normalize
+
+    k = 3
+    tf = [Normalize("items", 100.0), FrameStack("items", k)]
+    env = make(transforms=tf)
+    layout = env._native.layout()
+    names = [(name, dtype, tuple(shape)) for name, dtype, shape, *_ in layout["leaves"]]
+    assert names == [
+        ("agent", "int32", (2,)),
+        ("items/item", "float32", (k * MAX, 2)),
+        ("items/frame_age", "uint8", (k * MAX,)),
+        ("items_mask", "bool", (k * MAX,)),
+    ]
+    assert layout["sets"] == [("items", k * MAX, [1, 2, 3])]
+    s = env.reset()
+    mask = s.observations["items_mask"][:, 0]
+    age = s.observations["items/frame_age"][:, 0]
+    items = s.observations["items/item"][:, 0]
+    assert (age[~mask] == 0).all() and (items[~mask] == 0).all()
+    want = np.repeat(np.arange(k - 1, -1, -1, dtype=np.uint8), MAX)
+    assert (age[mask] == np.broadcast_to(want, mask.shape)[mask]).all()
+    env.close()
+    genv = tg.make(ID, num_envs=2, seed=5, transforms=tf)
+    space = genv.single_observation_space
+    assert isinstance(space["items_mask"], gymnasium.spaces.MultiBinary)
+    assert space["items_mask"].n == k * MAX
+    assert space["items/frame_age"].shape == (k * MAX,)
+    genv.close()
+
+
+def test_gather_transforms_partial_set_stack_is_a_config_error():
+    from tessera_rl.transforms import FrameStack
+
+    with pytest.raises(t.ConfigError):
+        make(transforms=[FrameStack("items_mask", 2)])
+

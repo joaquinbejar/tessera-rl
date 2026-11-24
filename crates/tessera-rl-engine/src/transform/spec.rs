@@ -22,6 +22,13 @@ pub const MAX_NORMALIZE_ACCUMULATOR_BYTES: usize = 256 << 20;
 pub enum Transform {
     /// The last `k` observations of the leaf, oldest first: shape
     /// `[k, *shape]`, the leaf's dtype.
+    ///
+    /// Naming a `Set` path `p` stacks every leaf of the set (ADR-0092): it
+    /// is exported as a set of `k * MAX` slots, frames oldest first, whose
+    /// leaves are the items, then `p/frame_age` (`u8`, 0 the newest frame,
+    /// 0 for absent slots), then `p_mask`. Stacking a single-leaf set
+    /// renames its item leaf from `p` to `p/item`; a `Dict` inner keeps its
+    /// keys.
     FrameStack {
         /// The leaf.
         leaf: String,
