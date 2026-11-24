@@ -80,19 +80,23 @@ pub(super) fn processor_cores() -> Option<core::num::NonZeroUsize> {
     if size == 0 {
         return None;
     }
-    let mut buf = vec![0_u8; size];
-    // SAFETY: `buf` is a live, writable buffer of `len` bytes; the call
-    // writes at most `len` bytes and updates `len` to the bytes written.
+    // `u64` words: the records hold 8-byte fields, so the buffer is 8-byte
+    // aligned, and at least `len` bytes long.
+    let mut words = vec![0_u64; size.div_ceil(8)];
+    // SAFETY: `words` is a live, writable, 8-byte-aligned buffer of at least
+    // `len` bytes; the call writes at most `len` bytes and updates `len` to
+    // the bytes written.
     let ok = unsafe {
         GetLogicalProcessorInformationEx(
             RelationProcessorCore,
-            buf.as_mut_ptr().cast(),
+            words.as_mut_ptr().cast(),
             &raw mut len,
         )
     };
     if ok == 0 {
         return None;
     }
-    let written = buf.get(..usize::try_from(len).ok()?)?;
+    let bytes: Vec<u8> = words.iter().flat_map(|w| w.to_ne_bytes()).collect();
+    let written = bytes.get(..usize::try_from(len).ok()?)?;
     crate::sys::cores::count_records(written, RelationProcessorCore)
 }

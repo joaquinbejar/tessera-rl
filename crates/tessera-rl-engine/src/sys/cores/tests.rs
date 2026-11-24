@@ -3,7 +3,8 @@
 use core::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 
-use super::{combine, count_records, physical_cores, sysfs_cores};
+use super::{clamp_workers, combine, count_records, physical_cores, sysfs_cores};
+use core::num::NonZeroU32;
 
 fn n(v: usize) -> NonZeroUsize {
     NonZeroUsize::new(v).unwrap()
@@ -182,4 +183,26 @@ fn test_count_records_size_below_header_with_valid_tail_returns_none() {
     list.extend(8_u32.to_ne_bytes());
     assert_eq!(list.len(), 12);
     assert_eq!(count_records(&list, 0), None);
+}
+
+fn u(v: u32) -> NonZeroU32 {
+    NonZeroU32::new(v).unwrap()
+}
+
+#[test]
+fn test_default_workers_clamped_to_chunks_and_num_envs() {
+    // 1000 instances in chunks of 64: 16 chunks.
+    assert_eq!(clamp_workers(n(32), u(1000), u(64)), n(16));
+    assert_eq!(clamp_workers(n(8), u(1000), u(64)), n(8));
+    // A partial last chunk counts: 65 instances are 2 chunks.
+    assert_eq!(clamp_workers(n(8), u(65), u(64)), n(2));
+    assert_eq!(clamp_workers(n(8), u(64), u(64)), n(1));
+    // Chunks of 1: at most num_envs workers.
+    assert_eq!(clamp_workers(n(8), u(3), u(1)), n(3));
+}
+
+#[test]
+fn test_default_workers_at_most_physical_cores() {
+    let w = super::default_workers(u(1 << 20), u(1));
+    assert_eq!(w, physical_cores());
 }

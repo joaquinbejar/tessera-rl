@@ -531,7 +531,9 @@ pub(crate) struct PoolArgs {
     pub(crate) max_episode_steps: Option<u32>,
     pub(crate) auto_reset: String,
     pub(crate) chunk_size: Option<u32>,
-    pub(crate) workers: usize,
+    /// Worker threads; `None` (not given) is the engine default,
+    /// [`tessera_rl_engine::default_workers`] (SPEC 6.1).
+    pub(crate) workers: Option<usize>,
     /// Spins before a waiting worker or caller blocks (`SyncOptions::spin`);
     /// `None` keeps the engine default. Needs workers.
     pub(crate) spin: Option<u32>,
@@ -600,12 +602,31 @@ fn wait_backend() -> Result<WaitBackend, BindError> {
 /// split-phase modes always have at least one worker.
 fn check_spin(args: &PoolArgs) -> Result<(), BindError> {
     let sync = !args.pipelined && args.asynced.is_none();
-    if args.spin.is_some() && sync && args.workers == 0 {
+    if args.spin.is_some() && sync && args.workers == Some(0) {
         return Err(BindError::Argument(
             "spin needs workers >= 1 in Sync mode".to_owned(),
         ));
     }
     Ok(())
+}
+
+/// The worker count of `args`: the given count (`None` for 0: inline in
+/// Sync mode, one worker in the split-phase modes), or the engine default
+/// when none was given.
+fn resolve_workers(args: &PoolArgs) -> Result<Option<NonZeroUsize>, BindError> {
+    if let Some(w) = args.workers {
+        return Ok(NonZeroUsize::new(w));
+    }
+    let num_envs = NonZeroU32::new(args.num_envs)
+        .ok_or_else(|| BindError::Argument("num_envs must be at least 1".to_owned()))?;
+    let chunk = args.chunk_size.map_or_else(
+        || Ok(PoolOptions::new(num_envs, Seed::new(0)).chunk_size),
+        |c| {
+            NonZeroU32::new(c)
+                .ok_or_else(|| BindError::Argument("chunk_size must be at least 1".to_owned()))
+        },
+    )?;
+    Ok(Some(tessera_rl_engine::default_workers(num_envs, chunk)))
 }
 
 /// Sets the spin budget when the caller gave one.
@@ -633,7 +654,7 @@ where
         tessera_rl_core::AdaptiveValues<E::Config>,
     M: tessera_rl_engine::PersistMask<E> + Send + Sync + 'static,
 {
-    let workers = NonZeroUsize::new(args.workers);
+    let workers = resolve_workers(args)?;
     check_spin(args)?;
     let storage = pool.outputs()?.storage();
     let pooled = Pooled::new(cfg, pool, n, terminal, storage)?;
@@ -1097,7 +1118,7 @@ mod tests {
             max_episode_steps: None,
             auto_reset: "next_step".to_owned(),
             chunk_size: None,
-            workers: 0,
+            workers: Some(0),
             spin: None,
             pipelined: false,
             asynced: None,
@@ -1105,7 +1126,7 @@ mod tests {
         finish(&cfg, pool, &args, 8, false).unwrap()
     }
 
-    fn spin_args(workers: usize, spin: Option<u32>, pipelined: bool) -> PoolArgs {
+    fn spin_args(workers: Option<usize>, spin: Option<u32>, pipelined: bool) -> PoolArgs {
         PoolArgs {
             num_envs: 2,
             seed: 0,
@@ -1120,19 +1141,70 @@ mod tests {
     }
 
     #[test]
+    fn test_resolve_workers_omitted_uses_engine_default() {
+        let mut args = spin_args(None, None, false);
+        args.num_envs = 1000;
+        args.chunk_size = Some(64);
+        let want = tessera_rl_engine::default_workers(
+            NonZeroU32::new(1000).unwrap(),
+            NonZeroU32::new(64).unwrap(),
+        );
+        assert_eq!(resolve_workers(&args).unwrap(), Some(want));
+        args.chunk_size = None;
+        let default_chunk =
+            PoolOptions::new(NonZeroU32::new(1000).unwrap(), Seed::new(0)).chunk_size;
+        let want =
+            tessera_rl_engine::default_workers(NonZeroU32::new(1000).unwrap(), default_chunk);
+        assert_eq!(resolve_workers(&args).unwrap(), Some(want));
+    }
+
+    #[test]
+    fn test_resolve_workers_explicit_kept_and_zero_inline() {
+        assert_eq!(
+            resolve_workers(&spin_args(Some(0), None, false)).unwrap(),
+            None
+        );
+        assert_eq!(
+            resolve_workers(&spin_args(Some(64), None, false)).unwrap(),
+            NonZeroUsize::new(64)
+        );
+    }
+
+    #[test]
+    fn test_resolve_workers_omitted_with_bad_sizes_refused() {
+        let mut args = spin_args(None, None, false);
+        args.chunk_size = Some(0);
+        assert!(matches!(
+            resolve_workers(&args),
+            Err(BindError::Argument(_))
+        ));
+        args.chunk_size = None;
+        args.num_envs = 0;
+        assert!(matches!(
+            resolve_workers(&args),
+            Err(BindError::Argument(_))
+        ));
+    }
+
+    #[test]
+    fn test_check_spin_sync_default_workers_accepted() {
+        assert!(check_spin(&spin_args(None, Some(5), false)).is_ok());
+    }
+
+    #[test]
     fn test_check_spin_sync_without_workers_refused() {
         assert!(matches!(
-            check_spin(&spin_args(0, Some(0), false)),
+            check_spin(&spin_args(Some(0), Some(0), false)),
             Err(BindError::Argument(_))
         ));
     }
 
     #[test]
     fn test_check_spin_allowed_cases_accepted() {
-        assert!(check_spin(&spin_args(0, None, false)).is_ok());
-        assert!(check_spin(&spin_args(1, Some(200_000), false)).is_ok());
-        assert!(check_spin(&spin_args(0, Some(5), true)).is_ok());
-        let mut asynced = spin_args(0, Some(5), false);
+        assert!(check_spin(&spin_args(Some(0), None, false)).is_ok());
+        assert!(check_spin(&spin_args(Some(1), Some(200_000), false)).is_ok());
+        assert!(check_spin(&spin_args(Some(0), Some(5), true)).is_ok());
+        let mut asynced = spin_args(Some(0), Some(5), false);
         asynced.asynced = Some((1, crate::batched::BatchOutputs::Gathered));
         assert!(check_spin(&asynced).is_ok());
     }
@@ -1199,7 +1271,7 @@ mod tests {
             max_episode_steps: None,
             auto_reset: "next_step".to_owned(),
             chunk_size: None,
-            workers: 0,
+            workers: Some(0),
             spin: None,
             pipelined: false,
             asynced: None,

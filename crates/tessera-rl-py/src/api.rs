@@ -184,7 +184,7 @@ fn pool_args(g: Gil, kw: &Kwargs<'_>, default_limit: u32) -> CResult<PoolArgs> {
         chunk_size: kw.u32(g, "chunk_size")?,
         workers: kw
             .u32(g, "workers")?
-            .map_or(0, |w| usize::try_from(w).unwrap_or(usize::MAX)),
+            .map(|w| usize::try_from(w).unwrap_or(usize::MAX)),
         spin: kw.u32(g, "spin")?,
     })
 }
