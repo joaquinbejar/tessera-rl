@@ -7,6 +7,7 @@
 
 use core::num::{NonZeroU32, NonZeroUsize};
 
+use tessera_rl_core::Bool8;
 use tessera_rl_engine::replay::{Recorder, Replay, ReplayWriterOptions};
 use tessera_rl_engine::{
     ActionInput, DecodeLimits, EnvPool, Masked, PoolOptions, Reseed, SyncOptions,
@@ -29,11 +30,23 @@ fn pool(workers: usize) -> EnvPool<Leduc, Masked> {
     }
 }
 
-/// Every agent of every instance, cycling through the actions; illegal ones
-/// are replaced by the no-op under the default policy.
-fn actions(t: usize) -> Vec<i32> {
+/// Every agent of every instance, cycling through the choices, each kept legal
+/// under the current masks (`[N, A, CHOICES]`): a masked-out choice becomes
+/// the first legal one. With `debug-checks` (on under workspace feature
+/// unification) an illegal action fails the call instead of taking the no-op.
+fn actions(t: usize, masks: &[Bool8]) -> Vec<i32> {
     (0..N as usize * AGENTS)
-        .map(|k| i32::try_from((t + 3 * k) % CHOICES).unwrap())
+        .map(|k| {
+            let want = (t + 3 * k) % CHOICES;
+            let row = masks.get(k * CHOICES..(k + 1) * CHOICES).unwrap_or(&[]);
+            let legal = |c: usize| row.get(c).is_none_or(|b| b.get());
+            let pick = if legal(want) {
+                want
+            } else {
+                (0..CHOICES).find(|&c| legal(c)).unwrap_or(want)
+            };
+            i32::try_from(pick).unwrap()
+        })
         .collect()
 }
 
@@ -47,8 +60,9 @@ fn record(workers: usize) -> (Vec<u8>, Vec<u64>) {
     let mut rec = Recorder::new(&mut p, Vec::new(), options).unwrap();
     rec.reset_all(Reseed::Base(Seed::new(5))).unwrap();
     for t in 0..40 {
+        let masks = rec.pool().outputs().unwrap().masks().to_vec();
         rec.step(ActionInput {
-            discrete: &actions(t),
+            discrete: &actions(t, &masks),
             continuous: &[],
         })
         .unwrap();
