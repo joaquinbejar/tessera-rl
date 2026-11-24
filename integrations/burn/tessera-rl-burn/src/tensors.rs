@@ -37,7 +37,7 @@ pub enum AdapterError {
 /// [`AdapterError::NoLeaf`], [`AdapterError::Shape`] or
 /// [`AdapterError::Empty`].
 pub fn f32_leaf(
-    out: &Outputs<'_>,
+    out: &Outputs,
     leaf: usize,
     row_len: usize,
     device: &Device,
@@ -68,7 +68,7 @@ pub fn f32_leaf(
 /// # Errors
 ///
 /// [`AdapterError::Empty`].
-pub fn rewards(out: &Outputs<'_>, device: &Device) -> Result<Tensor<1>, AdapterError> {
+pub fn rewards(out: &Outputs, device: &Device) -> Result<Tensor<1>, AdapterError> {
     let r = out.rewards();
     if r.is_empty() {
         return Err(AdapterError::Empty);
@@ -96,7 +96,7 @@ pub fn flags(flags: &[Bool8], device: &Device) -> Result<Tensor<1>, AdapterError
 ///
 /// [`AdapterError::Shape`] or [`AdapterError::Empty`].
 pub fn masks(
-    out: &Outputs<'_>,
+    out: &Outputs,
     choices: usize,
     device: &Device,
 ) -> Result<Tensor<2, Bool>, AdapterError> {
