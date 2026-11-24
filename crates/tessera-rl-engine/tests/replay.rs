@@ -488,3 +488,40 @@ fn test_replay_pool_of_another_size_is_incompatible() {
         }))
     ));
 }
+
+/// The pinned format (ADR-0072 section 6): XXH3-64 and length of a fixed
+/// recording with the two version-dependent parts cut out, the library
+/// version string and the header checksum over it. Any change to the
+/// header, an event tag or an event body changes them; update the constants
+/// only together with a format version bump.
+const FIXTURE_LEN: usize = 1569;
+const FIXTURE_XXH3: u64 = 9_591_911_110_280_994_754;
+
+#[test]
+fn test_replay_encoded_fixture_is_pinned() {
+    let mut p = pool_with(config(), 0);
+    let options = ReplayWriterOptions {
+        keyframe_every: 3,
+        checkpoint_every: 2,
+    };
+    let mut rec = Recorder::new(&mut p, Vec::new(), options).unwrap();
+    rec.reset_all(Reseed::Base(Seed::new(3))).unwrap();
+    step(&mut rec, 0);
+    rec.reset(&[1], Reseed::Each(&[Some(Seed::new(4))]))
+        .unwrap();
+    rec.fork_branched(0, &[2], Some(&[7])).unwrap();
+    step(&mut rec, 1);
+    let bytes = rec.finish().unwrap();
+    // Cut the library version (its u16 length stays) and the header checksum.
+    let lib_at = 48 + 2 + usize::from(u16::from_le_bytes([bytes[48], bytes[49]]));
+    let lib_len = usize::from(u16::from_le_bytes([bytes[lib_at], bytes[lib_at + 1]]));
+    let header_end = header_len(&bytes);
+    let mut pinned = bytes[..lib_at + 2].to_vec();
+    pinned.extend_from_slice(&bytes[lib_at + 2 + lib_len..header_end - 8]);
+    pinned.extend_from_slice(&bytes[header_end..]);
+    assert_eq!(
+        (pinned.len(), checksum(&pinned)),
+        (FIXTURE_LEN, FIXTURE_XXH3),
+        "replay format changed: pinned length and XXH3-64"
+    );
+}
