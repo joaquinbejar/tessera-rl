@@ -1,0 +1,10 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc e938b33931efa69daf3db1ce8725bf46b0666d955fe508f3830ee15971b20e26 # shrinks to cfg = LobConfig { agents: 3, steps: 40, depth: 10, min_tick: 1, max_tick: 1024, initial_price: 512, up_permille: 250, down_permille: 250, latency: 0, size_0: 1, size_1: 2, size_2: 5, size_3: 10, max_position: 1, initial_cash: 1016, allow_short_cash: false, bankrupt: 0, noise: 2, reward_shift: 0 }, seed = 0, draws = 2145636075608476928
+cc 74ad26dda45e72a5c18e414feec84b328ad929d5c27b1e390192fcffe8b6289c # shrinks to cfg = LobConfig { agents: 3, steps: 40, depth: 10, min_tick: 1, max_tick: 1024, initial_price: 512, up_permille: 250, down_permille: 250, latency: 0, size_0: 1, size_1: 2, size_2: 5, size_3: 10, max_position: 1, initial_cash: 981, allow_short_cash: false, bankrupt: 0, noise: 2, reward_shift: 0 }, seed = 8004392679293123013, draws = 14590943399584815890
+cc 0f36357f56618d47d14e578fd5881b3a729f4ba3bc1d0f115a62c78e6fc9c7a2 # shrinks to cfg = LobConfig { agents: 2, steps: 40, depth: 10, min_tick: 1, max_tick: 1024, initial_price: 512, up_permille: 250, down_permille: 250, latency: 0, size_0: 1, size_1: 2, size_2: 5, size_3: 10, max_position: 2, initial_cash: 300, allow_short_cash: false, bankrupt: 0, noise: 2, reward_shift: 0 }, seed = 0, draws = 0
+cc ffada316b7ead2e2c1c00e97f0fa345d8ab1304681663ba93df8e579e1f575db # shrinks to cfg = LobConfig { agents: 2, steps: 40, depth: 10, min_tick: 1, max_tick: 1024, initial_price: 512, up_permille: 250, down_permille: 250, latency: 0, size_0: 1, size_1: 2, size_2: 5, size_3: 10, max_position: 2, initial_cash: 300, allow_short_cash: false, bankrupt: 0, noise: 2, reward_shift: 0 }, seed = 0, draws = 0

@@ -382,6 +382,34 @@ impl Book {
         Ok(out)
     }
 
+    /// Submits an immediate-or-cancel order of `owner` for `qty` lots on
+    /// `side` with protection price `limit`: it fills like [`Book::limit`]
+    /// while the opposite orders cross `limit`, and the remainder is
+    /// dropped instead of resting. A market order with a price cap. No id
+    /// is used and `MAX_OPEN` does not apply, since nothing rests.
+    ///
+    /// # Errors
+    ///
+    /// [`BookError`] for an invalid owner, price or quantity; the book and
+    /// `fills` are then unchanged.
+    pub fn ioc(
+        &mut self,
+        owner: u8,
+        side: Side,
+        limit: u32,
+        qty: u32,
+        fills: &mut Fills,
+    ) -> Result<Outcome, BookError> {
+        Self::check(owner, qty)?;
+        if !valid_price(limit) {
+            return Err(BookError::Price(limit));
+        }
+        fills.clear();
+        let mut out = self.take(owner, side, Some(limit), qty, fills);
+        out.dropped = qty - out.filled;
+        Ok(out)
+    }
+
     /// The matching loop of an incoming order: `limit` is `None` for a
     /// market order. Bounded: every iteration removes a resting order or
     /// ends the loop, so at most `BOOK_CAP + 1` iterations.
