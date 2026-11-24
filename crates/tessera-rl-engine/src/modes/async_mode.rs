@@ -1450,7 +1450,9 @@ where
     /// (ADR-0072). The config and options are read by place, as in
     /// [`Self::check_records`].
     #[cfg(feature = "replay")]
-    pub(crate) fn replay_parts(&self) -> (&E::Config, &crate::options::PoolOptions, (usize, usize)) {
+    pub(crate) fn replay_parts(
+        &self,
+    ) -> (&E::Config, &crate::options::PoolOptions, (usize, usize)) {
         (
             &self.mode.pool.cfg,
             &self.mode.pool.options,

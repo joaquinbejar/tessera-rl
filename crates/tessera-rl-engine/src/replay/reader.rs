@@ -16,9 +16,9 @@ use crate::persist::{DecodeLimits, FileHeader, PersistError, Reader, u64_of};
 
 use super::ReplayError;
 use super::format::{
-    Body, END_BODY_LEN, EventTag, FLAG_ASYNC, FLAG_CONFIG_CHECKED, FLAG_FROM_RESET_ONLY, FLAG_HOST_SNAPSHOTS,
-    FLAG_OUTPUTS_HASH, FORMAT_VERSION, FRAME_LEN, IDS_ALL, IDS_LIST, MAX_CONFIG_BYTES,
-    REPLAY_MAGIC, StateWriteOp,
+    Body, END_BODY_LEN, EventTag, FLAG_ASYNC, FLAG_CONFIG_CHECKED, FLAG_FROM_RESET_ONLY,
+    FLAG_HOST_SNAPSHOTS, FLAG_OUTPUTS_HASH, FORMAT_VERSION, FRAME_LEN, IDS_ALL, IDS_LIST,
+    MAX_CONFIG_BYTES, REPLAY_MAGIC, StateWriteOp,
 };
 
 /// The instances an event touches.

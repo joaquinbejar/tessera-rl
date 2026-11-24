@@ -49,7 +49,12 @@ struct Run {
 }
 
 impl Run {
-    const fn diverged(&self, index: u64, kind: DivergenceKind, instance: Option<u32>) -> ReplayError {
+    const fn diverged(
+        &self,
+        index: u64,
+        kind: DivergenceKind,
+        instance: Option<u32>,
+    ) -> ReplayError {
         ReplayError::Diverged {
             event_index: index,
             kind,
@@ -259,9 +264,8 @@ impl Replay<'_> {
                         if recorded.is_some() {
                             token_rows(&token, id, &mut rows);
                         }
-                        if let Some(held) = usize::try_from(id)
-                            .ok()
-                            .and_then(|i| run.early.get_mut(i))
+                        if let Some(held) =
+                            usize::try_from(id).ok().and_then(|i| run.early.get_mut(i))
                         {
                             *held = Some(rows);
                         }
