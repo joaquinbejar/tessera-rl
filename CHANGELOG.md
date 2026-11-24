@@ -9,6 +9,11 @@ the API is not stable, and any 0.x release may break it.
 
 ## [Unreleased]
 
+### Deprecated
+
+- `EnvAssets` (#418): assets are `Asset<T>` config fields with `AssetData` (ADR-0077), and nothing uses the trait. It stays exported, in the prelude too, until its removal in a later minor release.
+
+
 ### Changed
 
 - **Breaking (pre-1.0):** `Render` is no longer an empty marker trait; an `impl Render for X {}` must now provide `canvas` and `draw` (ADR-0083).

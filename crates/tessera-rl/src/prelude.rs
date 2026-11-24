@@ -7,13 +7,18 @@
 //! (`EnvState`, `EnvConfig`, `Observation`, `StateEnum`); both are
 //! exported, in their separate namespaces.
 
+#[expect(
+    deprecated,
+    reason = "EnvAssets stays in the prelude until its removal (#418)"
+)]
+pub use crate::core::EnvAssets;
 pub use crate::core::io::{ActionWriter, Actions, MaskWriter, ObsWriter};
 pub use crate::core::space::{BoxBounds, DType, Space};
 pub use crate::core::{
-    ActionMask, AgentSlot, Bool8, Determinize, EnvAssets, EnvConfig, EnvState, Environment,
-    EpisodeEnd, Heuristic, ImperfectInformation, InvariantViolation, LeafId, NoAdaptive, ObsLeaf,
-    Observation, Persist, Pool, RecordHeader, Render, Reserved, SpaceError, StateEnum, StateHash,
-    StepOut, Tier, TurnStructure, Validate,
+    ActionMask, AgentSlot, Bool8, Determinize, EnvConfig, EnvState, Environment, EpisodeEnd,
+    Heuristic, ImperfectInformation, InvariantViolation, LeafId, NoAdaptive, ObsLeaf, Observation,
+    Persist, Pool, RecordHeader, Render, Reserved, SpaceError, StateEnum, StateHash, StepOut, Tier,
+    TurnStructure, Validate,
 };
 pub use crate::engine::{
     ActionInput, AutoReset, DecodeLimits, DecodedRecord, EngineError, EnvPool, Masked, NoMasks,
