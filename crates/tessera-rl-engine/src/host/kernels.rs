@@ -155,6 +155,22 @@ pub(crate) fn validate_chunk<E: HostEnvironment, const A: usize>(
     rejected
 }
 
+/// Runs `on_rejected` on one instance (ADR-0069) inside the host
+/// allocation bracket, and puts the FP controls back after host code, as a
+/// step does.
+pub(crate) fn notify_rejected<E: HostEnvironment>(
+    ctx: &HostCtx<'_>,
+    inst: &mut E,
+    reject: &ActionReject,
+) {
+    {
+        #[cfg(feature = "debug-checks")]
+        let _bracket = crate::sys::alloc_track::HostBracket::enter(ctx.allocs);
+        inst.on_rejected(reject);
+    }
+    recanonicalize(ctx.fp_resets);
+}
+
 fn validate_rows<E: HostEnvironment, const A: usize>(
     ctx: &HostCtx<'_>,
     rows: &HostRows<'_, E, A>,

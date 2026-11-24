@@ -138,6 +138,12 @@ pub trait HostEnvironment: Send + Sized + 'static {
     /// Whether the engine calls [`HostEnvironment::validate`] before each
     /// step (ADR-0065 item 2). With `false` the check is compiled out.
     const VALIDATES: bool = false;
+    /// Whether the engine calls [`HostEnvironment::on_rejected`] on the
+    /// instance a rejected call reports (ADR-0069). It needs
+    /// [`HostEnvironment::VALIDATES`]: `true` without it fails to compile
+    /// when a pool of the type is built. With `false` the notice is
+    /// compiled out and a rejection mutates nothing (ADR-0065).
+    const NOTIFIES_REJECTION: bool = false;
 
     /// The environment's configuration.
     type Config: EnvConfig;
@@ -233,6 +239,25 @@ pub trait HostEnvironment: Send + Sized + 'static {
     fn validate(&self, actions: &Actions<'_, ()>) -> Result<(), ActionReject> {
         let _ = actions;
         Ok(())
+    }
+
+    /// Tells the instance that its joint action was refused (ADR-0069).
+    /// Called only when [`HostEnvironment::NOTIFIES_REJECTION`] is `true`,
+    /// once per rejected call, on the one instance the call reports (the
+    /// lowest rejected index), with the [`ActionReject`] the call reports.
+    /// It runs on the calling thread after validation, before the call
+    /// returns `EngineError::ActionRejected`, under canonical floating-point
+    /// controls; a panic poisons the pool. It is not called when a
+    /// `validate` that is not pure accepts on the engine's re-run. In
+    /// Inline the instances after the reported one are not validated.
+    ///
+    /// It may write this instance's own state only, so that snapshots
+    /// carry the notice. Nothing else happens in a rejected call: no
+    /// instance steps, no episode ends or resets, no agent changes and the
+    /// RNG step index does not move, so it must not draw randomness. A
+    /// consequence (a penalty, a termination) belongs in the next `step`.
+    fn on_rejected(&mut self, reject: &ActionReject) {
+        let _ = reject;
     }
 
     /// Writes `agent`'s observation into leaves that are zero on entry.
