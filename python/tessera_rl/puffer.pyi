@@ -15,6 +15,7 @@ SUPPORTED: frozenset[str]
 MAX_WORKERS: int
 
 def mix_seed(constructor_seed: int, reset_seed: int) -> int: ...
+def flat_dtype(dtypes: Sequence[npt.DTypeLike]) -> np.dtype[Any]: ...
 
 
 class TesseraPufferEnv(pufferlib.PufferEnv):

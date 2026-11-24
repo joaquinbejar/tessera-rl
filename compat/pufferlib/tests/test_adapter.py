@@ -324,11 +324,6 @@ def test_other_settings_are_refused(kw):
         TesseraPufferEnv(CARTPOLE, **kw)
 
 
-def test_several_leaves_are_refused():
-    with pytest.raises(t.ArgumentError, match="a.*b"):
-        puffer._single_leaf([("a", "f4", [1], [0], [1]), ("b", "f4", [1], [0], [1])])
-
-
 def test_invalid_pool_options_fail_at_construction():
     with pytest.raises(t.ArgumentError):
         TesseraPufferEnv(CARTPOLE, num_envs=0)
