@@ -79,28 +79,57 @@ fn step(p: &mut Pool, k: usize) {
 }
 
 /// The reference: per-instance partials rebuilt from the outputs of every
-/// step, and the pairwise tree over instance order (split at the floor
-/// half, left first), as ADR-0081 item 3 states it.
+/// step (Welford), and the pairwise tree over instance order (split at the
+/// floor half, left first) with Chan's merge, as `EpisodeStats` documents.
 #[derive(Clone, Copy, Default)]
 struct Partial {
     count: u64,
     ret: f64,
     len: f64,
-    sq: f64,
+    mean: f64,
+    m2: f64,
 }
 
-fn tree(parts: &[Partial]) -> (f64, f64, f64) {
+#[expect(clippy::cast_precision_loss, reason = "test counts")]
+fn merge(a: Partial, b: Partial) -> Partial {
+    if b.count == 0 {
+        return Partial {
+            ret: a.ret + b.ret,
+            len: a.len + b.len,
+            ..a
+        };
+    }
+    if a.count == 0 {
+        return Partial {
+            ret: a.ret + b.ret,
+            len: a.len + b.len,
+            ..b
+        };
+    }
+    let count = a.count + b.count;
+    let (na, nb, n) = (a.count as f64, b.count as f64, count as f64);
+    let delta = b.mean - a.mean;
+    Partial {
+        count,
+        ret: a.ret + b.ret,
+        len: a.len + b.len,
+        mean: a.mean + delta * nb / n,
+        m2: a.m2 + b.m2 + delta * delta * na * nb / n,
+    }
+}
+
+fn tree(parts: &[Partial]) -> Partial {
     match parts {
-        [] => (0.0, 0.0, 0.0),
-        [one] => (one.ret, one.len, one.sq),
+        [] => Partial::default(),
+        [one] => *one,
         _ => {
             let (left, right) = parts.split_at(parts.len() / 2);
-            let (lo, hi) = (tree(left), tree(right));
-            (lo.0 + hi.0, lo.1 + hi.1, lo.2 + hi.2)
+            merge(tree(left), tree(right))
         }
     }
 }
 
+#[expect(clippy::cast_precision_loss, reason = "test counts")]
 fn observe(p: &Pool, partials: &mut [Partial]) {
     let out = p.outputs().unwrap();
     for (i, part) in partials.iter_mut().enumerate() {
@@ -109,12 +138,14 @@ fn observe(p: &Pool, partials: &mut [Partial]) {
             part.count += 1;
             part.ret += r;
             part.len += f64::from(out.episode_length()[i]);
-            part.sq += r * r;
+            let delta = r - part.mean;
+            part.mean += delta / part.count as f64;
+            part.m2 += delta * (r - part.mean);
         }
     }
 }
 
-type Bits = (u64, u64, u64, u64, u64);
+type Bits = (u64, u64, u64, u64, u64, u64);
 
 fn run(workers: usize, chunk: u32, schedule: Schedule) -> (EpisodeStats, Bits) {
     let mut p = pool(workers, chunk, schedule);
@@ -124,9 +155,16 @@ fn run(workers: usize, chunk: u32, schedule: Schedule) -> (EpisodeStats, Bits) {
         observe(&p, &mut partials);
     }
     let report = p.epoch_barrier().unwrap();
-    let (ret, len, sq) = tree(&partials);
+    let t = tree(&partials);
     let count: u64 = partials.iter().map(|x| x.count).sum();
-    let want = (count, ret.to_bits(), len.to_bits(), sq.to_bits(), 0);
+    let want = (
+        count,
+        t.ret.to_bits(),
+        t.len.to_bits(),
+        t.mean.to_bits(),
+        t.m2.to_bits(),
+        0,
+    );
     (report.episodes, want)
 }
 
@@ -135,7 +173,8 @@ fn bits(s: &EpisodeStats) -> Bits {
         s.count,
         s.sum_return.to_bits(),
         s.sum_length.to_bits(),
-        s.sum_sq_return.to_bits(),
+        s.return_mean.to_bits(),
+        s.return_m2.to_bits(),
         s.aborted,
     )
 }

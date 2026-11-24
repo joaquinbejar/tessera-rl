@@ -8,7 +8,10 @@
 use super::{EpisodeStats, EpochReport, Subsystem};
 use crate::error::EngineError;
 
-/// One instance's episodes since the last barrier: 32 bytes.
+/// One instance's episodes since the last barrier: 40 bytes. Returns are
+/// kept as a count, mean and M2 (Welford), merged at the barrier by Chan's
+/// formula, so the variance stays exact to rounding when returns are large
+/// and vary little.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 #[repr(C)]
 pub(crate) struct EpisodePartial {
@@ -18,50 +21,97 @@ pub(crate) struct EpisodePartial {
     pub(crate) sum_return: f64,
     /// Sum of their lengths.
     pub(crate) sum_length: f64,
-    /// Sum of their squared returns.
-    pub(crate) sum_sq_return: f64,
+    /// Mean of their returns.
+    pub(crate) mean: f64,
+    /// Sum of squared deviations of their returns from `mean`.
+    pub(crate) m2: f64,
 }
 
 impl EpisodePartial {
-    /// Adds one ended episode. Runs in the step kernel: infallible; the
-    /// count saturates at `u64::MAX`, which 2^64 episodes cannot reach.
+    /// Adds one ended episode (Welford). Runs in the step kernel, which is
+    /// infallible: the count saturates at `u64::MAX`, a documented kernel
+    /// bound. It cannot be reached (an episode takes at least one step, and
+    /// 2^64 steps of one instance between two barriers would take
+    /// centuries); the barrier's merge checks every sum exactly.
     #[inline]
     pub(crate) fn add(&mut self, ret: f32, length: u32) {
         let r = f64::from(ret);
         self.count = self.count.saturating_add(1);
         self.sum_return += r;
         self.sum_length += f64::from(length);
-        self.sum_sq_return += r * r;
+        #[expect(clippy::cast_precision_loss, reason = "episode counts far below 2^53")]
+        let n = self.count as f64;
+        let delta = r - self.mean;
+        self.mean += delta / n;
+        self.m2 += delta * (r - self.mean);
     }
 }
 
-/// The three `f64` sums of a partial range.
+/// The merged statistics of a partial range.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 struct Sums {
+    count: u64,
     ret: f64,
     length: f64,
-    sq: f64,
+    mean: f64,
+    m2: f64,
+}
+
+impl Sums {
+    fn of(p: &EpisodePartial) -> Self {
+        Self {
+            count: p.count,
+            ret: p.sum_return,
+            length: p.sum_length,
+            mean: p.mean,
+            m2: p.m2,
+        }
+    }
+
+    /// Chan's merge of `self` (left) and `other` (right): `n = na + nb`,
+    /// `delta = mean_b - mean_a`, `mean = mean_a + delta * nb / n`,
+    /// `m2 = m2_a + m2_b + delta^2 * na * nb / n`. An empty side leaves the
+    /// other unchanged. `None` when the count overflows `u64`.
+    fn merge(self, other: Self) -> Option<Self> {
+        if other.count == 0 {
+            return Some(Self {
+                ret: self.ret + other.ret,
+                length: self.length + other.length,
+                ..self
+            });
+        }
+        if self.count == 0 {
+            return Some(Self {
+                ret: self.ret + other.ret,
+                length: self.length + other.length,
+                ..other
+            });
+        }
+        let count = self.count.checked_add(other.count)?;
+        #[expect(clippy::cast_precision_loss, reason = "episode counts far below 2^53")]
+        let (na, nb, n) = (self.count as f64, other.count as f64, count as f64);
+        let delta = other.mean - self.mean;
+        Some(Self {
+            count,
+            ret: self.ret + other.ret,
+            length: self.length + other.length,
+            mean: self.mean + delta * nb / n,
+            m2: self.m2 + other.m2 + delta * delta * na * nb / n,
+        })
+    }
 }
 
 /// The pairwise tree over instance order: a range of one element is that
-/// element; a longer one splits at `lo + (hi - lo) / 2` and adds the two
-/// halves' sums, left then right. Depth is `ceil(log2(N))` (at most 32).
-fn pairwise(parts: &[EpisodePartial]) -> Sums {
+/// element; a longer one splits at `lo + (hi - lo) / 2` and merges the two
+/// halves, left then right. Depth is `ceil(log2(N))` (at most 32). `None`
+/// when the episode count overflows `u64`.
+fn pairwise(parts: &[EpisodePartial]) -> Option<Sums> {
     match parts {
-        [] => Sums::default(),
-        [p] => Sums {
-            ret: p.sum_return,
-            length: p.sum_length,
-            sq: p.sum_sq_return,
-        },
+        [] => Some(Sums::default()),
+        [p] => Some(Sums::of(p)),
         _ => {
             let (left, right) = parts.split_at(parts.len() / 2);
-            let (l, r) = (pairwise(left), pairwise(right));
-            Sums {
-                ret: l.ret + r.ret,
-                length: l.length + r.length,
-                sq: l.sq + r.sq,
-            }
+            pairwise(left)?.merge(pairwise(right)?)
         }
     }
 }
@@ -104,13 +154,6 @@ impl EpisodeStatistics {
 
     /// The reduced statistics, in instance order.
     fn reduce(&self) -> Result<EpisodeStats, EngineError> {
-        let count = self
-            .partials
-            .iter()
-            .try_fold(0u64, |acc, p| acc.checked_add(p.count))
-            .ok_or(EngineError::StatisticsOverflow {
-                counter: "episode count",
-            })?;
         let aborted = self
             .aborts
             .iter()
@@ -118,12 +161,15 @@ impl EpisodeStatistics {
             .ok_or(EngineError::StatisticsOverflow {
                 counter: "aborted episode count",
             })?;
-        let sums = pairwise(&self.partials);
+        let sums = pairwise(&self.partials).ok_or(EngineError::StatisticsOverflow {
+            counter: "episode count",
+        })?;
         Ok(EpisodeStats {
-            count,
+            count: sums.count,
             sum_return: sums.ret,
             sum_length: sums.length,
-            sum_sq_return: sums.sq,
+            return_mean: sums.mean,
+            return_m2: sums.m2,
             aborted,
         })
     }
@@ -152,30 +198,89 @@ impl Subsystem for EpisodeStatistics {
 mod tests {
     use super::*;
 
-    fn part(count: u64, r: f64) -> EpisodePartial {
-        EpisodePartial {
-            count,
-            sum_return: r,
-            sum_length: r * 2.0,
-            sum_sq_return: r * r,
+    fn with(returns: &[f32]) -> EpisodePartial {
+        let mut p = EpisodePartial::default();
+        for &r in returns {
+            p.add(r, 1);
         }
+        p
     }
 
     #[test]
     fn test_pairwise_splits_left_half_first_and_is_not_sequential() {
         // ((a + b) + (c + d)) differs from ((a + b) + c) + d here.
-        let parts = [part(1, 1e16), part(1, 1.0), part(1, -1e16), part(1, 1.0)];
-        let s = pairwise(&parts);
-        assert_eq!(s.ret, (1e16 + 1.0) + (-1e16 + 1.0));
-        let sequential = ((1e16 + 1.0) + -1e16) + 1.0;
+        let parts = [with(&[1e16]), with(&[1.0]), with(&[-1e16]), with(&[1.0])];
+        let s = pairwise(&parts).unwrap();
+        assert_eq!(
+            s.ret,
+            (f64::from(1e16f32) + 1.0) + (-f64::from(1e16f32) + 1.0)
+        );
+        let sequential = ((f64::from(1e16f32) + 1.0) + -f64::from(1e16f32)) + 1.0;
         assert_ne!(s.ret.to_bits(), f64::to_bits(sequential));
     }
 
     #[test]
     fn test_pairwise_odd_length_splits_at_floor_half() {
-        let parts = [part(1, 1.0), part(1, 2.0), part(1, 3.0)];
+        let parts = [with(&[1.0]), with(&[2.0]), with(&[3.0])];
         // [1] + ([2] + [3]).
-        assert_eq!(pairwise(&parts).ret, 1.0 + (2.0 + 3.0));
+        assert_eq!(pairwise(&parts).unwrap().ret, 1.0 + (2.0 + 3.0));
+        assert_eq!(pairwise(&parts).unwrap().count, 3);
+    }
+
+    #[test]
+    fn test_chan_merge_keeps_the_variance_of_large_returns_that_vary_little() {
+        // Returns near 1.3e12 that differ by multiples of 2^18 (exact in
+        // f32, whose spacing there is 2^17). The exact population variance
+        // is 280_095_621_120 (computed with rationals); the naive
+        // E[r^2] - E[r]^2 is off by about 4e-4 relative, Chan's merge by
+        // about 7e-11.
+        const BASE: f32 = 1.3e12;
+        const STEP: f32 = 262_144.0;
+        const VAR: f64 = 280_095_621_120.0;
+        let values: Vec<f32> = (0u16..64)
+            .map(|k| BASE + f32::from((k * 37) % 7) * STEP - 3.0 * STEP)
+            .collect();
+        let parts: Vec<EpisodePartial> = values.chunks(3).map(with).collect();
+        let s = pairwise(&parts).unwrap();
+        assert_eq!(s.count, 64);
+        #[expect(clippy::cast_precision_loss, reason = "test count")]
+        let var = s.m2 / s.count as f64;
+        assert!((var - VAR).abs() <= VAR * 1e-9, "variance {var}");
+        // The naive formula over the same values is far off.
+        let n = 64.0;
+        let sum: f64 = values.iter().map(|&v| f64::from(v)).sum();
+        let sq: f64 = values.iter().map(|&v| f64::from(v) * f64::from(v)).sum();
+        let naive = sq / n - (sum / n) * (sum / n);
+        assert!((naive - VAR).abs() > VAR * 1e-4, "naive {naive}");
+    }
+
+    #[test]
+    fn test_chan_merge_with_empty_sides_is_the_other_side() {
+        let a = Sums::of(&with(&[2.0, 4.0]));
+        assert_eq!(a.merge(Sums::default()), Some(a));
+        assert_eq!(Sums::default().merge(a), Some(a));
+    }
+
+    #[test]
+    fn test_chan_merge_count_overflow_is_none_and_the_barrier_refuses() {
+        let near = EpisodePartial {
+            count: u64::MAX,
+            ..EpisodePartial::default()
+        };
+        assert_eq!(Sums::of(&near).merge(Sums::of(&with(&[1.0]))), None);
+        let mut s = EpisodeStatistics::new(2, false);
+        s.partials[0] = near;
+        s.partials[1].add(1.0, 1);
+        let mut report = EpochReport::default();
+        assert!(matches!(
+            s.barrier(&mut report),
+            Err(EngineError::StatisticsOverflow { .. })
+        ));
+        assert_eq!(
+            s.partials[0].count,
+            u64::MAX,
+            "nothing cleared on the error"
+        );
     }
 
     #[test]
@@ -188,7 +293,8 @@ mod tests {
         assert_eq!(report.episodes.count, 2);
         assert_eq!(report.episodes.sum_return, 1.0);
         assert_eq!(report.episodes.sum_length, 8.0);
-        assert_eq!(report.episodes.sum_sq_return, 5.0);
+        assert_eq!(report.episodes.mean_return(), Some(0.5));
+        assert_eq!(report.episodes.var_return(), Some(2.25));
         assert!(s.partials.iter().all(|p| *p == EpisodePartial::default()));
         s.partials[1].add(1.0, 1);
         s.set_frozen(true);
