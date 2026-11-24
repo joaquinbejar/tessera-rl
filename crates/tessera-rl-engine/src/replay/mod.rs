@@ -28,6 +28,7 @@ mod host_writer;
 #[cfg(feature = "host")]
 mod outputs_hash;
 mod reader;
+mod rebuild;
 mod run;
 mod writer;
 

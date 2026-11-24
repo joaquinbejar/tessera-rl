@@ -38,6 +38,10 @@ pub enum DivergenceKind {
 /// Why a replay file could not be written, read or replayed.
 #[derive(Debug, thiserror::Error)]
 pub enum ReplayError {
+    /// The header's canonical config bytes do not decode into the
+    /// environment's config (#377).
+    #[error("replay config: {0}")]
+    Config(#[from] tessera_rl_core::CanonicalDecodeError),
     /// The pool refused a call.
     #[error(transparent)]
     Engine(#[from] EngineError),

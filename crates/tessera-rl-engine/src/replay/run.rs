@@ -83,12 +83,11 @@ impl Replay<'_> {
     /// through `import`, and checkpoints and periodic keyframes are compared
     /// with the replayed instances.
     ///
-    /// ADR-0072 says that replay rebuilds the pool from the header. There
-    /// is no decoder from canonical config bytes yet, so this takes a pool the
-    /// caller built and checks it against the header instead: identity
-    /// fields (ADR-0011), the canonical config bytes, the instance count and
-    /// the action layout. The execution mode is free. A caller-built pool is
-    /// a staged step; rebuilding from the header is issue #377.
+    /// The pool is checked against the header first: identity fields
+    /// (ADR-0011), the canonical config bytes, the instance count and the
+    /// action layout; the execution mode is free. To rebuild the pool from
+    /// the header instead, as ADR-0072 describes, use
+    /// [`Replay::run_rebuilt`] (or [`Replay::build_pool`]).
     ///
     /// Known gap: ADR-0072 section 8 says replay streams events. This reads
     /// them from the slice given to [`Replay::open`], so the whole file is
@@ -136,7 +135,7 @@ impl Replay<'_> {
         }
     }
 
-    fn check_pool<E, M>(&self, pool: &EnvPool<E, M>) -> Result<(), ReplayError>
+    pub(crate) fn check_pool<E, M>(&self, pool: &EnvPool<E, M>) -> Result<(), ReplayError>
     where
         E: Persist,
         E::Config: CanonicalConfig + Sync,
