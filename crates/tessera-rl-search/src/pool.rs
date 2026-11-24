@@ -13,7 +13,7 @@ use core::num::NonZeroU32;
 
 use tessera_rl_core::encoding::{Encoder, HashSink};
 use tessera_rl_core::space::{JointError, JointHeads, Space};
-use tessera_rl_core::{AdaptiveValues, Bool8, Environment, RecordLayout};
+use tessera_rl_core::{AdaptiveValues, Bool8, Environment, PolicyGroup, RecordLayout};
 use tessera_rl_engine::{
     ActionInput, AutoReset, EngineError, EnvPool, MaskProvider, Outputs, PoolOptions, Record,
     Reseed,
@@ -132,7 +132,9 @@ impl Edge {
 pub(crate) struct Planned {
     pub(crate) parent: u32,
     pub(crate) action: u32,
-    pub(crate) agent: usize,
+    /// The agent whose action the step takes; `None` at a node where the
+    /// searcher is not acting (ADR-0093 decision 4: one edge, joint 0).
+    pub(crate) agent: Option<usize>,
 }
 
 /// A bounded tree of environment records for search (ADR-0043).
@@ -160,6 +162,14 @@ pub struct SearchPool<E: Environment, M: MaskProvider<E>> {
     pub(crate) actions: u32,
     /// The joint index of the action heads (ADR-0086).
     pub(crate) joint: JointHeads,
+    /// The searcher slot of a pool with heuristic slots (ADR-0093); `None`
+    /// for the default policy map (ADR-0043's single mover).
+    pub(crate) searcher: Option<usize>,
+    /// The scratch pool's policy groups, read at construction (ADR-0093).
+    pub(crate) groups: Vec<PolicyGroup>,
+    /// Whether `PrivilegedHeuristic` opponents are allowed (privileged
+    /// search).
+    pub(crate) privileged_opponents: bool,
     pub(crate) agents: usize,
     pub(crate) capacity: u32,
     pub(crate) batch: u32,
@@ -255,7 +265,9 @@ where
         if !E::PERFECT_INFORMATION {
             return Err(SearchError::ImperfectInformation);
         }
-        Self::build_pool(cfg, options, root, &[], build)
+        let mut pool = Self::build_pool(cfg, options, root, &[], build)?;
+        pool.resolve_searcher(root, options.searcher, None, false)?;
+        Ok(pool)
     }
 
     /// [`Self::new`] on a scratch pool with frame stacks: `build` sets the
@@ -277,7 +289,9 @@ where
         if !E::PERFECT_INFORMATION {
             return Err(SearchError::ImperfectInformation);
         }
-        Self::build_pool(cfg, options, root, root_bytes, build)
+        let mut pool = Self::build_pool(cfg, options, root, root_bytes, build)?;
+        pool.resolve_searcher(root, options.searcher, None, false)?;
+        Ok(pool)
     }
 
     /// [`Self::new`] without the information check: the shared body of
@@ -360,6 +374,9 @@ where
             next_alloc: 0,
             actions,
             joint,
+            searcher: None,
+            groups: Vec::new(),
+            privileged_opponents: false,
             agents,
             capacity,
             batch,
@@ -886,6 +903,138 @@ where
         Ok(self.handle_of(slot))
     }
 
+    /// Sets the searcher of a pool whose scratch pool has heuristic slots
+    /// and checks the policy groups (ADR-0093 decisions 1 to 3): `option`
+    /// is `SearchOptions::searcher`, `determinized` the determinization
+    /// agent, `privileged` whether `PrivilegedHeuristic` opponents are
+    /// allowed. Without heuristic slots nothing changes.
+    ///
+    /// The groups are checked for the slots alive in `root` (a slot that is
+    /// never alive, such as the unused seats of a 16-seat environment
+    /// configured for 4, needs no group); a slot that becomes alive and
+    /// acting later is checked at expansion ([`Self::actor`]).
+    pub(crate) fn resolve_searcher(
+        &mut self,
+        root: &Record<E>,
+        option: Option<usize>,
+        determinized: Option<usize>,
+        privileged: bool,
+    ) -> Result<(), SearchError> {
+        let groups = self.scratch.policy_groups().to_vec();
+        let heuristic = groups
+            .iter()
+            .any(|g| matches!(g, PolicyGroup::Heuristic | PolicyGroup::PrivilegedHeuristic));
+        if !heuristic {
+            self.searcher = None;
+            return Ok(());
+        }
+        let searcher = match (option, determinized) {
+            (Some(s), Some(d)) if s != d => {
+                return Err(SearchError::SearcherMismatch {
+                    searcher: s,
+                    determinized: d,
+                });
+            }
+            (Some(s), _) | (None, Some(s)) => s,
+            (None, None) => return Err(SearchError::SearcherRequired),
+        };
+        if searcher >= self.agents {
+            return Err(options_error("searcher", "must be an agent slot"));
+        }
+        let group = groups.get(searcher).copied().unwrap_or_default();
+        if group != PolicyGroup::Learner {
+            return Err(SearchError::SearcherNotLearner {
+                slot: searcher,
+                group,
+            });
+        }
+        let alive = root.header().agents();
+        for (slot, &group) in groups.iter().enumerate() {
+            let live = alive.get(slot).is_some_and(|r| r.alive.get());
+            if slot == searcher || !live {
+                continue;
+            }
+            Self::check_opponent(slot, group, privileged)?;
+        }
+        self.searcher = Some(searcher);
+        self.groups = groups;
+        self.privileged_opponents = privileged;
+        Ok(())
+    }
+
+    /// Whether `group` may play slot `slot` against the searcher (ADR-0093
+    /// decision 3).
+    fn check_opponent(
+        slot: usize,
+        group: PolicyGroup,
+        privileged: bool,
+    ) -> Result<(), SearchError> {
+        match group {
+            PolicyGroup::Heuristic => Ok(()),
+            PolicyGroup::PrivilegedHeuristic if privileged => Ok(()),
+            _ => Err(SearchError::NotSearchable { slot, group }),
+        }
+    }
+
+    /// The searcher slot (ADR-0093), or `None` for a pool without
+    /// heuristic slots.
+    #[must_use]
+    pub const fn searcher(&self) -> Option<usize> {
+        self.searcher
+    }
+
+    /// The agent whose action an expansion of `record` takes: its single
+    /// acting agent for the default policy map (ADR-0043), else the
+    /// searcher when it is acting and `None` when it is not (ADR-0093
+    /// decision 4).
+    pub(crate) fn actor(&self, record: &Record<E>) -> Result<Option<usize>, SearchError> {
+        match self.searcher {
+            None => Self::single_actor(record).map(Some),
+            Some(s) => {
+                let rows = record.header().agents();
+                for (slot, r) in rows.iter().enumerate() {
+                    if slot != s && r.acting.get() {
+                        let group = self.groups.get(slot).copied().unwrap_or_default();
+                        Self::check_opponent(slot, group, self.privileged_opponents)?;
+                    }
+                }
+                Ok(rows.get(s).filter(|r| r.acting.get()).map(|_| s))
+            }
+        }
+    }
+
+    /// The player whose view values take at `record`: the searcher at
+    /// every node of a pool with heuristic slots (ADR-0093 decision 5),
+    /// else the single acting agent.
+    pub(crate) fn mover_of(&self, record: &Record<E>) -> Result<usize, SearchError> {
+        match self.searcher {
+            Some(s) => Ok(s),
+            None => Self::single_actor(record),
+        }
+    }
+
+    /// Writes the legal joints at `record` (scratch row `row`) into `out`:
+    /// from the actor's mask row, or joint 0 alone when the searcher is
+    /// not acting (ADR-0093 decision 4).
+    pub(crate) fn legal_at(
+        joint: &JointHeads,
+        actor: &Result<Option<usize>, SearchError>,
+        masks: &[Bool8],
+        base_of: impl Fn(usize) -> usize,
+        out: &mut [bool],
+    ) {
+        match actor {
+            Ok(Some(k)) => fill_legal(joint, masks, Some(base_of(*k)), out),
+            Ok(None) => {
+                out.fill(false);
+                if let Some(first) = out.first_mut() {
+                    *first = true;
+                }
+            }
+            Err(_) => fill_legal(joint, masks, None, out),
+        }
+    }
+
     /// The acting agent of a parent record: exactly one is required.
     pub(crate) fn single_actor(record: &Record<E>) -> Result<usize, SearchError> {
         let rows = record.header().agents();
@@ -919,7 +1068,10 @@ where
                 .records
                 .get(idx(parent))
                 .ok_or(SearchError::TerminalNode)?;
-            let agent = Self::single_actor(record)?;
+            let agent = self.actor(record)?;
+            if agent.is_none() && action != 0 {
+                return Err(SearchError::IllegalAction { action });
+            }
             self.planned.push(Planned {
                 parent,
                 action,
@@ -950,7 +1102,12 @@ where
         let masks = self.scratch.outputs()?.masks();
         let width = self.joint.mask_len();
         for (row, p) in self.planned.iter().enumerate() {
-            let base = (row * self.agents + p.agent) * width;
+            // A searcher that is not acting has the single edge 0, checked
+            // in the plan; its row is not read (ADR-0093 decision 4).
+            let Some(agent) = p.agent else {
+                continue;
+            };
+            let base = (row * self.agents + agent) * width;
             let legal = if masks.is_empty() {
                 self.joint.is_canonical(p.action)
             } else {
@@ -969,8 +1126,11 @@ where
         };
         for row in 0..idx(self.batch) {
             let p = self.planned.get(row).copied().unwrap_or(lead);
+            let Some(agent) = p.agent else {
+                continue;
+            };
             let heads = self.joint.heads();
-            let at = (row * self.agents + p.agent) * heads;
+            let at = (row * self.agents + agent) * heads;
             if let Some(a) = self.act_buf.get_mut(at..at + heads) {
                 self.joint.decode(p.action, a);
             }
@@ -1066,10 +1226,16 @@ where
             // The child's legal joints: from the mask of its acting agent
             // (every canonical joint without masks or without a single
             // actor), ADR-0086.
-            let agent = Self::single_actor(&record).ok();
-            let base = agent.map(|k| (row * self.agents + k) * mask_len);
+            let actor = self.actor(&record);
+            let agents = self.agents;
             if let Some(out) = self.child_masks.get_mut(row * width..(row + 1) * width) {
-                fill_legal(&self.joint, outputs.masks(), base, out);
+                Self::legal_at(
+                    &self.joint,
+                    &actor,
+                    outputs.masks(),
+                    |k| (row * agents + k) * mask_len,
+                    out,
+                );
             }
         }
         Ok(())

@@ -3,6 +3,7 @@
 //! Typed errors of the search pool (ADR-0022, ADR-0043). After any error,
 //! the tree and its counters are unchanged.
 
+use tessera_rl_core::PolicyGroup;
 use tessera_rl_engine::EngineError;
 use thiserror::Error;
 
@@ -97,6 +98,39 @@ pub enum SearchError {
     NotSingleActor {
         /// Acting agents.
         acting: usize,
+    },
+    /// A scratch pool with heuristic slots and no searcher: neither
+    /// `SearchOptions::searcher` nor a determinization agent (ADR-0093
+    /// decision 2).
+    #[error("a pool with heuristic slots needs a searcher: set SearchOptions::searcher (ADR-0093)")]
+    SearcherRequired,
+    /// `SearchOptions::searcher` and the determinization agent differ.
+    #[error("searcher slot {searcher} differs from the determinization agent {determinized}")]
+    SearcherMismatch {
+        /// `SearchOptions::searcher`.
+        searcher: usize,
+        /// The determinization agent.
+        determinized: usize,
+    },
+    /// The searcher slot is not a `Learner` slot (ADR-0093 decision 3).
+    #[error("searcher slot {slot} is {group:?}, not a Learner slot")]
+    SearcherNotLearner {
+        /// The searcher slot.
+        slot: usize,
+        /// Its group.
+        group: PolicyGroup,
+    },
+    /// A slot other than the searcher that search cannot play as an
+    /// opponent: `Learner`, `External`, or `PrivilegedHeuristic` outside
+    /// a privileged search (ADR-0093 decision 3).
+    #[error(
+        "slot {slot} is {group:?}: every slot but the searcher must be a heuristic slot (ADR-0093)"
+    )]
+    NotSearchable {
+        /// The slot.
+        slot: usize,
+        /// Its group.
+        group: PolicyGroup,
     },
     /// More requests than the batch.
     #[error("{requests} requests for a batch of {batch}")]
