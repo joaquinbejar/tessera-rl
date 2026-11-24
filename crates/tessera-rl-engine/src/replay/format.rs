@@ -87,9 +87,9 @@
 //!
 //! Until their features land, this library writes the defaults (an empty
 //! policy map, no curriculum, no league, a `Fresh` source) and never writes
-//! tags 7, 10, 11 or 12; replay refuses a non-default value or one of those tags as
-//! `ReplayError::Unsupported`. Asset entries are written and checked as
-//! ADR-0077 says.
+//! tags 7, 10, 11 or 12; replay refuses a non-default value or one of those
+//! tags as `ReplayError::Unsupported`. Asset entries are written and checked
+//! as ADR-0077 says.
 //!
 //! # Async files
 //!

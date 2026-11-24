@@ -728,8 +728,8 @@ fn scan(bytes: &[u8], rules: TagRules) -> Result<(&[u8], u64), ReplayError> {
 }
 
 /// Which tags a file may hold: `Adaptive` only with a curriculum; `League`
-/// only with a league; `Recv` only in an async
-/// file; `Rejected` only in a notifying host's file; keyframes, checkpoints and state writes never in a
+/// only with a league; `Recv` only in an async file; `Rejected` only in a
+/// notifying host's file; keyframes, checkpoints and state writes never in a
 /// `from_reset_only` host file. The first event is a keyframe, or a reset for
 /// a `from_reset_only` file.
 fn check_tag(tag: EventTag, rules: TagRules, count: u64) -> Result<(), ReplayError> {
