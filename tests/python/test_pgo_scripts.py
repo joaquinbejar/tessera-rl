@@ -243,6 +243,21 @@ def test_pgo_measure_reruns_an_unfinished_file(tmp_path):
     assert len(runner.calls) == 1 and reused == [out.name]
 
 
+def test_pgo_measure_cost_carries_native_primitives(tmp_path):
+    sample = (ROOT / "tests" / "python" / "fixtures" / "pgo" / "attribution-sample.callgrind").read_text() + "totals: 1\n"
+
+    def runner(argv, check):
+        out = next(a.split("=", 1)[1] for a in argv if a.startswith("--callgrind-out-file="))
+        pathlib.Path(out).write_text(sample)
+
+    s = ALL[0]
+    c = callgrind.measure("py", "m", s.name, s.steps, tmp_path, runner)
+    assert c.primitives == 960
+    reused = []
+    assert callgrind.measure("py", "m", s.name, s.steps, tmp_path, callgrind.refuse, reused=reused).primitives == 960
+    assert reused
+
+
 def test_pgo_feasibility_records_hashes_and_needs_the_wheel(tmp_path, monkeypatch):
     wheel = tmp_path / "w.whl"
     wheel.write_bytes(b"abc")

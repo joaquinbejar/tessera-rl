@@ -38,7 +38,7 @@ OK = {"W1": inputs("w1"), "W2F": inputs("w2f")}
 
 
 def costs(label, ir, mis=5000):
-    events = {"Ir": ir, "Bcm": mis, "Bim": 0}
+    events = {"Ir": ir, "Bcm": mis, "Bim": 0, "PrimIr": 0}
     return {"sha256": {"wheel": label, "manifest": SHA}, "costs": {s.name: events for s in ALL}}
 
 
@@ -119,6 +119,20 @@ def test_pgo_decide_refuses_w2_with_an_unfilled_kernel_list(tmp_path):
 def test_pgo_decide_refuses_a_bad_feasibility_report(f, match, kernels):
     with pytest.raises(decide.Refused, match=match):
         run(reports(), kernels, feas(**f))
+
+
+def test_pgo_decide_costs_without_primitives_refused(kernels):
+    r = reports()
+    r["W1"]["costs"] = {k: {e: v for e, v in ev.items() if e != "PrimIr"} for k, ev in r["W1"]["costs"].items()}
+    with pytest.raises(decide.Refused, match="PrimIr"):
+        run(r, kernels)
+
+
+def test_pgo_decide_w1_ratio_charges_primitive_increase(kernels):
+    r = reports(w1=950000)
+    r["W1"]["costs"] = {k: {**ev, "PrimIr": 50000} for k, ev in r["W1"]["costs"].items()}
+    out = run(r, kernels)
+    assert out["w1_ir_ratio"] == pytest.approx(1.0) and out["w1_accepted"] is False
 
 
 def test_pgo_decide_refuses_mismatched_costs(kernels):
@@ -218,7 +232,7 @@ def test_pgo_decide_records_the_failed_checks(kernels):
 def test_pgo_decide_claim_names_mispredictions_when_they_carried_it(kernels):
     r = reports(w2f=970000)
     for s in ALL:
-        r["W2F"]["costs"][s.name] = {"Ir": 970000, "Bcm": 4000, "Bim": 0}
+        r["W2F"]["costs"][s.name] = {"Ir": 970000, "Bcm": 4000, "Bim": 0, "PrimIr": 0}
     out = run(r, kernels)
     assert out["ship"] == "W2F" and "and 20.0% fewer simulated branch mispredictions" in out["claim"]
 
@@ -226,7 +240,7 @@ def test_pgo_decide_claim_names_mispredictions_when_they_carried_it(kernels):
 def test_pgo_decide_ir_claim_ignores_the_holdout(kernels):
     r = reports(w2f=931000)
     base = run(copy.deepcopy(r), kernels)["w2f_ir_ratio"]
-    r["W2F"]["costs"]["holdout/Go9-v1"] = {"Ir": 985000, "Bcm": 5000, "Bim": 0}
+    r["W2F"]["costs"]["holdout/Go9-v1"] = {"Ir": 985000, "Bcm": 5000, "Bim": 0, "PrimIr": 0}
     assert run(r, kernels)["w2f_ir_ratio"] == base
 
 

@@ -106,8 +106,8 @@ def test_pgo_feasibility_checks():
     assert ev.spread([99, 100, 101]) == pytest.approx(0.02)
 
 
-def cost(ir, mis=5000):
-    return ev.Cost({"Ir": ir, "Bcm": mis, "Bim": 0})
+def cost(ir, mis=5000, prim=0):
+    return ev.Cost({"Ir": ir, "Bcm": mis, "Bim": 0, "PrimIr": prim})
 
 
 def stable():
@@ -166,6 +166,70 @@ def test_pgo_w1_acceptance(w1, det, want):
 def test_pgo_w1_refuses_one_regression_over_two_percent():
     w1 = wheel(900000, **{"state/CartPole-v1": cost(1021000)})
     assert ev.accept_w1(w1, wheel(), SETS.gating, True) is False
+
+
+GATING = "state/Snake-v1-state"
+
+
+def test_adjusted_ratio_no_primitive_change_equals_exclusive():
+    assert ev.adjusted_ratio(cost(950000, prim=500), cost(1000000, prim=500)) == pytest.approx(0.95)
+
+
+def test_adjusted_ratio_primitive_drop_not_credited():
+    assert ev.adjusted_ratio(cost(1000000, prim=0), cost(1000000, prim=400000)) == pytest.approx(1.0)
+
+
+def test_adjusted_ratio_cost_without_primitives_refused():
+    with pytest.raises(ValueError, match="PrimIr"):
+        ev.adjusted_ratio(ev.Cost({"Ir": 1, "Bcm": 0, "Bim": 0}), cost(1))
+
+
+def test_accept_w1_fill_moved_into_libc_rejected():
+    # Exclusive Ir falls 5% everywhere, but by the same amount the primitives rise.
+    w0 = wheel(1000000)
+    w1 = wheel(950000, **{n: cost(950000, prim=50000) for n in SETS.gating})
+    assert ev.accept_w1(w1, w0, SETS.gating, True) is False
+
+
+def test_accept_w1_partial_move_counts_remainder():
+    # 5% fewer exclusive Ir, 2% moved into libc: the true 3% gain is accepted.
+    w0 = wheel(1000000)
+    w1 = {n: cost(950000, prim=20000) for n in w0}
+    assert ev.accept_w1(w1, w0, SETS.gating, True) is True
+    w1 = {n: cost(950000, prim=31000) for n in w0}
+    assert ev.accept_w1(w1, w0, SETS.gating, True) is False
+
+
+def test_accept_w1_moved_fill_regression_rejected():
+    w1 = wheel(900000, **{GATING: cost(1000000, prim=21000)})
+    assert ev.accept_w1(w1, wheel(), SETS.gating, True) is False
+
+
+def test_accept_w2f_fill_moved_into_libc_rejected():
+    w2f = {n: cost(960000, prim=40000) for n in wheel()}
+    assert ev.accept_w2f(w2f, wheel(1000000), wheel(), ALL, SETS, True, True) is False
+    w2f = {n: cost(960000, prim=0) for n in wheel()}
+    assert ev.accept_w2f(w2f, wheel(1000000), wheel(), ALL, SETS, True, True) is True
+
+
+def test_accept_w2f_moved_fill_regression_rejected():
+    # Exclusive Ir is flat on Snake-state, but 2.1% of it moved into libc.
+    w2f = wheel(960000, **{GATING: cost(1000000, prim=21000)})
+    assert ev.accept_w2f(w2f, wheel(1000000), wheel(), ALL, SETS, True, True) is False
+    w2f = wheel(960000, **{GATING: cost(1000000, prim=19000)})
+    assert ev.accept_w2f(w2f, wheel(1000000), wheel(), ALL, SETS, True, True) is True
+
+
+def test_accept_w2f_holdout_move_into_libc_rejected():
+    w2h = {n: cost(990000, prim=20000) for n in wheel()}
+    assert ev.accept_w2f(wheel(960000), w2h, wheel(), ALL, SETS, True, True) is False
+
+
+def test_primitive_cost_counts_inclusive_libc_calls_from_native():
+    text = (ROOT / "tests" / "python" / "fixtures" / "pgo" / "attribution-sample.callgrind").read_text()
+    c = ev.native_cost_with_primitives(text)
+    assert c.primitives == 960
+    assert c.ir == ev.native_cost(ev.parse_callgrind(text)).ir
 
 
 def accept(w2f, w2h=None, sets=SETS, ok=True, det=True):
