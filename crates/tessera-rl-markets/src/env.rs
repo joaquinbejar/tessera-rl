@@ -13,13 +13,20 @@
 //! 4. The alive slots are put in a Fisher-Yates permutation drawn from
 //!    `StepRng`, never slot order; in that order each agent's order or
 //!    cancel is applied now (`latency = 0`) or queued for `latency` steps.
-//! 5. With bankruptcy enabled, an agent whose equity at the fundamental is
+//! 5. With bankruptcy enabled, an agent whose equity marked at the mid is
 //!    below `-bankrupt` loses its orders and queued items and dies.
-//! 6. On the last step (`steps`), every alive agent's inventory is settled
-//!    at the fundamental and the episode is truncated.
+//! 6. On the last step (`steps`), every inventory of an agent alive at the
+//!    start of the step is settled at the fundamental and the episode is
+//!    truncated.
 //! 7. Each agent alive at the start of the step is rewarded its equity
-//!    change at the fundamental, scaled by `2^-reward_shift`.
+//!    change marked at the mid ([`LobState::mark`]), scaled by
+//!    `2^-reward_shift`. Settlement comes first, so the last step's reward
+//!    holds the difference between the mid and the fundamental.
+//! 8. The mid at the end of the step is kept as `last_mid`, the mid of a
+//!    one-sided or empty book in the next step.
 //!
+//! Neither rewards nor bankruptcy read the fundamental before settlement:
+//! a reward minus the cash change would otherwise reveal it exactly.
 //! Fewer than two alive agents terminate the episode.
 
 #![deny(clippy::float_arithmetic)]
@@ -146,16 +153,19 @@ fn arrival_order(state: &LobState, n: usize, rng: &mut StepRng) -> ([u8; MAX_AGE
     (order, count)
 }
 
-/// Step rule 5: with bankruptcy enabled, an agent whose equity at the
-/// fundamental is below `-bankrupt` loses its orders and queued items and
+/// Step rule 5: with bankruptcy enabled, an agent whose equity marked at
+/// the mid is below `-bankrupt` loses its orders and queued items and
 /// dies.
 fn bankruptcies(cfg: &LobConfig, state: &mut LobState, out: &mut StepOut<'_>) {
     if cfg.bankrupt == 0 {
         return;
     }
     let floor = i64::try_from(cfg.bankrupt).map_or(i64::MIN, |b| -b);
+    // One mid for every slot: a bankrupt agent's cancels must not move the
+    // mark of the slots after it.
+    let mid = state.touch().mid;
     for slot in 0..cfg.agent_count() {
-        if !state.is_alive(slot) || state.equity(slot) >= floor {
+        if !state.is_alive(slot) || state.account(slot).equity(mid) >= floor {
             continue;
         }
         let owner = u8::try_from(slot).unwrap_or(u8::MAX);
@@ -183,18 +193,20 @@ fn settle(state: &mut LobState, was_alive: &[bool; MAX_AGENTS]) {
 }
 
 /// Step rule 7: each agent alive at the start of the step gets its equity
-/// change at the fundamental, scaled by `2^-reward_shift`.
+/// change marked at the mid, scaled by `2^-reward_shift`.
 fn reward(
     cfg: &LobConfig,
     state: &mut LobState,
     was_alive: &[bool; MAX_AGENTS],
     out: &mut StepOut<'_>,
 ) {
+    let mid = state.touch().mid;
     for (slot, &alive) in was_alive.iter().enumerate() {
         if !alive {
             continue;
         }
-        let equity = state.equity(slot);
+        // `state.mark(slot)`, with the touch read once.
+        let equity = state.account(slot).equity(mid);
         if let (Some(prev), Some(agent)) = (state.last_equity.get_mut(slot), agent_slot(slot)) {
             out.set_reward(agent, scaled(equity - *prev, cfg.reward_shift));
             *prev = equity;
@@ -246,6 +258,7 @@ impl Environment for LimitOrderBook {
         }
         state.fundamental = cfg.initial_price;
         state.reset_price = cfg.initial_price;
+        state.last_mid = cfg.initial_price;
     }
 
     fn step(
@@ -301,6 +314,8 @@ impl Environment for LimitOrderBook {
             settle(state, &was_alive);
         }
         reward(cfg, state, &was_alive, out);
+        // 8. The mid the next step falls back to.
+        state.last_mid = state.touch().mid;
         state.step = now;
         let alive = (0..n).filter(|&s| state.is_alive(s)).count();
         if last {
@@ -358,6 +373,11 @@ impl Validate for LimitOrderBook {
         }
         if reset && (s.fundamental < cfg.min_tick || s.fundamental > cfg.max_tick) {
             return violation("a fundamental outside [min_tick, max_tick]");
+        }
+        // Limit prices span `[1, max_tick]` (not `min_tick`, which bounds the
+        // fundamental only), and so does any mid of the book.
+        if reset && (s.last_mid == 0 || s.last_mid > cfg.max_tick) {
+            return violation("a last mid outside [1, max_tick]");
         }
         if s.last_trade > cfg.max_tick {
             return violation("a last trade above max_tick");

@@ -39,7 +39,7 @@ const _: () = assert!(size_of::<Trade>() == 12);
 pub struct LobState {
     /// Cash and inventory per agent slot.
     pub accounts: [Account; MAX_AGENTS],
-    /// Equity at the fundamental after the previous step (or the reset),
+    /// Equity marked at the mid after the previous step (or the reset),
     /// per slot: the reward is the change from it.
     pub last_equity: [i64; MAX_AGENTS],
     /// The resting orders.
@@ -52,7 +52,8 @@ pub struct LobState {
     pub fundamental: u32,
     /// Steps played in this episode.
     pub step: u32,
-    /// Price of the last fill of the episode; 0 before the first.
+    /// Price of the last fill of the episode; 0 before the first. Read by
+    /// the observation only, never by the mid.
     pub last_trade: u32,
     /// Entries of `trades` in use.
     pub trade_count: u32,
@@ -60,8 +61,10 @@ pub struct LobState {
     pub reset_price: u32,
     /// Whether each slot is alive (bankruptcy ends a slot).
     pub alive: [Bool8; MAX_AGENTS],
-    /// Zero.
-    pub pad: Reserved<4>,
+    /// The mid at the end of the previous step (the initial price at
+    /// reset): the mid while one side of the book is empty. 0 before the
+    /// first reset.
+    pub last_mid: u32,
 }
 
 const _: () = assert!(size_of::<LobState>().is_multiple_of(8));
@@ -75,7 +78,9 @@ pub struct Touch {
     /// The best ask.
     pub ask: Option<u32>,
     /// The mid: `(bid + ask) / 2` rounded down when both sides quote,
-    /// otherwise the last trade price, otherwise the fundamental at reset.
+    /// otherwise the mid at the end of the previous step, otherwise (before
+    /// the first reset) the fundamental at reset. Never the fundamental of
+    /// a later step: rewards and bankruptcy are marked at it.
     pub mid: u32,
 }
 
@@ -88,7 +93,7 @@ impl LobState {
         let mid = match (bid, ask) {
             // Both at most 2^16: the sum fits u32.
             (Some(b), Some(a)) => u32::midpoint(b, a),
-            _ if self.last_trade > 0 => self.last_trade,
+            _ if self.last_mid > 0 => self.last_mid,
             _ => self.reset_price,
         };
         Touch { bid, ask, mid }
@@ -108,11 +113,13 @@ impl LobState {
         self.accounts.get(slot).copied().unwrap_or_default()
     }
 
-    /// The equity of `slot` valued at the fundamental, in tick-lots.
+    /// The equity of `slot` marked at the mid ([`Touch::mid`]), in
+    /// tick-lots. Rewards and bankruptcy use it, so neither reveals the
+    /// hidden fundamental before settlement.
     #[must_use]
     #[inline]
-    pub fn equity(&self, slot: usize) -> i64 {
-        self.account(slot).equity(self.fundamental)
+    pub fn mark(&self, slot: usize) -> i64 {
+        self.account(slot).equity(self.touch().mid)
     }
 }
 

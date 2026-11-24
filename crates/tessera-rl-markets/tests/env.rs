@@ -147,3 +147,52 @@ fn test_env_bankruptcy_kills_agent_and_terminates() {
     assert!(out.episode_terminated()[0].get());
     assert!(!p.state(0).unwrap().alive[1].get());
 }
+
+#[test]
+fn test_env_reward_fundamental_only_change_is_hidden_until_settlement() {
+    let steps = 10;
+    let flat = LobConfig {
+        steps,
+        ..still(2, 0)
+    };
+    // Every walk draw moves up: the same draws as `flat` (one per step),
+    // so the arrival permutations match too.
+    let drift = LobConfig {
+        up_permille: 1000,
+        ..flat.clone()
+    };
+    let mut a = pool(flat, 1, 7, None);
+    let mut b = pool(drift, 1, 7, None);
+    a.reset_all(Reseed::Keep).unwrap();
+    b.reset_all(Reseed::Keep).unwrap();
+    // Agent 0 asks at the mid, agent 1 lifts it: agent 1 holds 1 lot and
+    // the book is empty, so the mid stays at 512; then only no-ops.
+    let first = acts(&[(0, limit(Side::Sell, 4))]);
+    let second = acts(&[(1, limit(Side::Buy, 4))]);
+    let noop = acts(&[]);
+    for step in 1..=steps {
+        let action = match step {
+            1 => &first,
+            2 => &second,
+            _ => &noop,
+        };
+        let ra = a.step(input(action)).unwrap().rewards().to_vec();
+        let rb = b.step(input(action)).unwrap().rewards().to_vec();
+        let bits = |r: &[f32]| r.iter().map(|x| x.to_bits()).collect::<Vec<_>>();
+        if step < steps {
+            assert_eq!(bits(&ra), bits(&rb), "step {step}");
+            let (sa, sb) = (a.state(0).unwrap(), b.state(0).unwrap());
+            assert_eq!(sa.fundamental, 512);
+            assert_eq!(sb.fundamental, 512 + step);
+            assert_eq!(sa.accounts, sb.accounts);
+            assert_eq!(sb.touch().mid, 512);
+        } else {
+            // Settlement at 512 against 512 + steps.
+            assert_ne!(bits(&ra), bits(&rb));
+            assert_eq!(bits(&ra[..2]), [0.0_f32.to_bits(); 2]);
+            assert_eq!(rb[1].to_bits(), 10.0_f32.to_bits());
+            assert_eq!(rb[0].to_bits(), (-10.0_f32).to_bits());
+        }
+    }
+    assert_eq!(a.state(0).unwrap().accounts[1].inventory, 0);
+}
