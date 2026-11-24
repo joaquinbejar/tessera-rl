@@ -91,7 +91,7 @@ from pettingzoo import AECEnv, ParallelEnv
 from pettingzoo.utils.conversions import parallel_to_aec_wrapper
 from pettingzoo.utils.wrappers import OrderEnforcingWrapper
 
-from tessera_rl import _host, _native, _registry
+from tessera_rl import _envs, _host, _native
 from tessera_rl._env import Env, _discrete_actions, _multi_actions, native_kwargs
 from tessera_rl.masks import head_views
 
@@ -114,7 +114,7 @@ _MAKERS = {
 #: The maker of each first-party id and the PettingZoo interfaces it
 #: declares, read from the registry (``Environment::ADAPTERS``, SPEC 12,
 #: ADR-0080).
-_ENVS = {env_id: (maker, _registry.adapters_of(env_id)) for env_id, maker in _MAKERS.items()}
+_ENVS = {env_id: (maker, _envs.adapters_of(env_id)) for env_id, maker in _MAKERS.items()}
 
 
 #: The PettingZoo interfaces of a host environment, by its turns
@@ -187,7 +187,7 @@ def _native_pool(env_id: str, adapter: str, seed: int | None, kwargs: dict) -> t
     if env_id not in _ENVS and _host.is_host_id(env_id):
         return _host_pool(env_id, adapter, seed, kwargs)[0]
     maker, declared = _lookup(env_id)
-    _registry.warn_if_deprecated(env_id)
+    _envs.warn_if_deprecated(env_id)
     if adapter not in declared:
         raise _undeclared(env_id, adapter, declared)
     _check_reserved(kwargs)

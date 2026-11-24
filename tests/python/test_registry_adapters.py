@@ -6,7 +6,7 @@ import warnings
 import pytest
 
 import tessera_rl
-from tessera_rl import _native, _registry, pz
+from tessera_rl import _envs, _native, pz
 
 #: The PettingZoo interfaces before ADR-0080 (tessera_rl.pz._ENVS, literal):
 #: the registry's declarations must equal them, id by id.
@@ -62,12 +62,12 @@ def test_deprecation_warning_category_future_warning_subclass():
 
 @pytest.fixture
 def deprecated_cartpole(monkeypatch):
-    records = dict(_registry._records())
+    records = dict(_envs._records())
     records["tessera/CartPole-v1"] = {
         **records["tessera/CartPole-v1"],
         "deprecated": {"since": "0.4.0", "note": "use tessera/CartPole-v2"},
     }
-    monkeypatch.setattr(_registry, "_records", lambda: records)
+    monkeypatch.setattr(_envs, "_records", lambda: records)
 
 
 def test_make_deprecated_id_warns_at_caller(deprecated_cartpole):
@@ -92,8 +92,8 @@ def test_make_not_deprecated_id_no_warning():
 
 
 def test_pz_deprecated_id_warns(monkeypatch):
-    records = dict(_registry._records())
+    records = dict(_envs._records())
     records["tessera/Connect4-v1"] = {**records["tessera/Connect4-v1"], "deprecated": {"since": "0.4.0", "note": "x"}}
-    monkeypatch.setattr(_registry, "_records", lambda: records)
+    monkeypatch.setattr(_envs, "_records", lambda: records)
     with pytest.warns(tessera_rl.TesseraDeprecationWarning, match="Connect4-v1 is deprecated"):
         pz.aec_env("tessera/Connect4-v1").close()

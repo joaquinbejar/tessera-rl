@@ -1,0 +1,7 @@
+error[E0080]: evaluation panicked: register_host!: ADAPTERS must equal Adapters::for_turns(TURNS) until a host protocol carries it (ADR-0080)
+  --> tests/ui/fail/register_host_adapters_override.rs:49:1
+   |
+49 | tessera_rl::register_host!(Book, id = "example/Book-v1");
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ evaluation of `_` failed here
+   |
+   = note: this error originates in the macro `$crate::panic::panic_2021` which comes from the expansion of the macro `tessera_rl::register_host` (in Nightly builds, run with -Z macro-backtrace for more info)

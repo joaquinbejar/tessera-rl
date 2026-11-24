@@ -19,8 +19,15 @@ tessera_rl_core::register!(
 #[test]
 #[cfg_attr(miri, ignore = "Miri does not run inventory's constructors")]
 fn test_registered_deprecated_fixture_carries_deprecation() {
-    let got = registered().map(|r| r.iter().map(EnvRegistration::deprecation).collect::<Vec<_>>());
-    assert_eq!(got, Ok(vec![Some(Deprecation::new("0.4.0", "use test/Fixture-v2"))]));
+    let got = registered().map(|r| {
+        r.iter()
+            .map(EnvRegistration::deprecation)
+            .collect::<Vec<_>>()
+    });
+    assert_eq!(
+        got,
+        Ok(vec![Some(Deprecation::new("0.4.0", "use test/Fixture-v2"))])
+    );
 }
 
 #[test]

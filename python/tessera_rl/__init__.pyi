@@ -8,8 +8,8 @@ from tessera_rl._env import make as make
 from tessera_rl._host import HostEnv as HostEnv
 from tessera_rl._host import HostStep as HostStep
 from tessera_rl._host import set_fp_policy as set_fp_policy
-from tessera_rl._registry import TesseraDeprecationWarning as TesseraDeprecationWarning
-from tessera_rl._registry import envs as envs
+from tessera_rl._envs import TesseraDeprecationWarning as TesseraDeprecationWarning
+from tessera_rl._envs import envs as envs
 from tessera_rl._native import ActionError as ActionError
 from tessera_rl._native import ArgumentError as ArgumentError
 from tessera_rl._native import CapabilityError as CapabilityError

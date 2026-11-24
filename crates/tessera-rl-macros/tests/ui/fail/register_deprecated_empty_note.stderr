@@ -1,0 +1,11 @@
+error[E0080]: evaluation panicked: register!: a deprecation needs a note
+ --> tests/ui/fail/register_deprecated_empty_note.rs:4:1
+  |
+4 | / tessera_rl::register!(
+5 | |     tessera_rl::classic::Grid,
+6 | |     id = "tessera/Grid-v1",
+7 | |     deprecated(since = "0.4.0", note = ""),
+8 | | );
+  | |_^ evaluation of `_` failed here
+  |
+  = note: this error originates in the macro `$crate::panic::panic_2021` which comes from the expansion of the macro `tessera_rl::register` (in Nightly builds, run with -Z macro-backtrace for more info)

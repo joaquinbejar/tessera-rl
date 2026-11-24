@@ -61,7 +61,7 @@ except ImportError as e:  # pragma: no cover - exercised only without gymnasium
 
 import numpy as np
 
-from tessera_rl import _host, _native, _registry
+from tessera_rl import _envs, _host, _native
 from tessera_rl.masks import head_views
 from tessera_rl._env import _discrete_actions, _multi_actions, _real_array, _to_float32, native_kwargs
 
@@ -124,7 +124,7 @@ def _autoreset_mode(mode) -> AutoresetMode:
 
 def _native_env(env_id: str, num_envs: int, seed: int, mode: AutoresetMode, outputs: str, kwargs: dict):
     maker = _MAKERS.get(env_id)
-    _registry.warn_if_deprecated(_REGISTRY_ID.get(env_id, env_id))
+    _envs.warn_if_deprecated(_REGISTRY_ID.get(env_id, env_id))
     if maker is None and _host.is_host_id(env_id):
         # A host environment of an installed wheel (SPEC 14.4): one agent.
         native = _host.native_for(env_id, num_envs, seed, outputs, {**kwargs, "auto_reset": _NATIVE_MODE[mode]})

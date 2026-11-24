@@ -93,13 +93,22 @@ mod tests {
     #[test]
     fn test_for_turns_each_structure_matches_host_table() {
         assert_eq!(Adapters::for_turns(TurnStructure::Simultaneous), BOTH);
-        assert_eq!(Adapters::for_turns(TurnStructure::Sequential), Adapters::PZ_AEC);
-        assert_eq!(Adapters::for_turns(TurnStructure::Mixed), Adapters::PZ_PARALLEL);
+        assert_eq!(
+            Adapters::for_turns(TurnStructure::Sequential),
+            Adapters::PZ_AEC
+        );
+        assert_eq!(
+            Adapters::for_turns(TurnStructure::Mixed),
+            Adapters::PZ_PARALLEL
+        );
     }
 
     #[test]
     fn test_from_bits_reserved_bit_none() {
-        assert_eq!(Adapters::from_bits(0b111), Some(BOTH.union(Adapters::PZ_TURN_MASKED)));
+        assert_eq!(
+            Adapters::from_bits(0b111),
+            Some(BOTH.union(Adapters::PZ_TURN_MASKED))
+        );
         assert_eq!(Adapters::from_bits(0), Some(Adapters::NONE));
         assert_eq!(Adapters::from_bits(0b1000), None);
         assert_eq!(Adapters::from_bits(0xff), None);

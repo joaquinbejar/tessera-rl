@@ -15,7 +15,7 @@ import tessera_rl
 
 _PACKAGE = Path(tessera_rl.__file__).parent
 
-_MODULES = ("__init__", "_env", "_host", "_native", "gym", "jax", "masks", "puffer", "pz", "_registry", "replay", "search")
+_MODULES = ("__init__", "_env", "_envs", "_host", "_native", "gym", "jax", "masks", "puffer", "pz", "replay", "search")
 
 
 def test_package_marker_installed_present():
@@ -59,3 +59,56 @@ def test_native_keyword_only_positional_argument_refused():
 
     with pytest.raises(_native.ArgumentError, match="keyword arguments only"):
         _native.make_cartpole(1)
+
+
+def _env():
+    from tessera_rl import _native
+
+    return _native.make_cartpole(num_envs=1, workers=0, outputs="owned")
+
+
+@pytest.mark.parametrize(
+    "call",
+    [
+        lambda n, e: n.set_fp_policy("canonicalize", "extra"),
+        lambda n, e: e.reset(None, None, None, "extra"),
+        lambda n, e: e.state_hash(0, "extra"),
+        lambda n, e: e.fork(0, [1], "extra"),
+        lambda n, e: e.encode([0], "extra"),
+    ],
+    ids=["set_fp_policy", "reset", "state_hash", "fork", "encode"],
+)
+def test_native_varargs_extra_argument_refused(call):
+    """A positional-only row given one argument too many raises, as its
+    text signature says (#376)."""
+    from tessera_rl import _native
+
+    env = _env()
+    try:
+        with pytest.raises(_native.ArgumentError):
+            call(_native, env)
+    finally:
+        env.close()
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "make_cartpole", "make_acrobot", "make_mountaincar", "make_pendulum", "make_tag", "make_rts",
+        "make_connect4", "make_leduc", "make_othello", "make_go9", "make_grid", "make_keydoor",
+        "make_snake", "make_brickwall", "make_paddleduel", "make_search", "make_search_group", "onnx_load",
+    ],
+)
+def test_native_keyword_only_each_positional_refused(name):
+    from tessera_rl import _native
+
+    with pytest.raises(_native.ArgumentError, match="keyword arguments only"):
+        getattr(_native, name)(1)
+
+
+def test_native_keyword_only_attach_onnx_positional_refused():
+    from tessera_rl import _native
+
+    search = _native.make_search(env_id="tessera/Connect4-v1")
+    with pytest.raises(_native.ArgumentError, match="keyword arguments only"):
+        search.attach_onnx("model.onnx")

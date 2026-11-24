@@ -182,7 +182,8 @@ fn slot(index: usize) -> Option<AgentSlot> {
 
 impl Environment for Tag {
     /// Parallel natively and AEC through cycle buffering (SPEC 12, ADR-0080).
-    const ADAPTERS: tessera_rl_core::Adapters = tessera_rl_core::Adapters::PZ_PARALLEL.union(tessera_rl_core::Adapters::PZ_AEC);
+    const ADAPTERS: tessera_rl_core::Adapters =
+        tessera_rl_core::Adapters::PZ_PARALLEL.union(tessera_rl_core::Adapters::PZ_AEC);
     type State = TagState;
     type Config = TagConfig;
     type Obs = TagObs;

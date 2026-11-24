@@ -138,7 +138,12 @@ impl FunctionNoArgs for EnvRecords {
                 u64::try_from(r.max_agents()).map_err(|_| capi::out_of_range(g, "max_agents"))?;
             let item = capi::dict(g)?;
             capi::dict_set(g, &item, c"id", &capi::string(g, r.id())?)?;
-            capi::dict_set(g, &item, c"version", &capi::int_u64(g, u64::from(r.version()))?)?;
+            capi::dict_set(
+                g,
+                &item,
+                c"version",
+                &capi::int_u64(g, u64::from(r.version()))?,
+            )?;
             capi::dict_set(g, &item, c"max_agents", &capi::int_u64(g, max_agents)?)?;
             capi::dict_set(g, &item, c"tier", &capi::string(g, tier_name(r.tier()))?)?;
             capi::dict_set(

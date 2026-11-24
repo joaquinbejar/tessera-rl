@@ -23,9 +23,9 @@ mod register;
 mod register_host;
 mod type_key;
 
+pub use deprecation::{Deprecation, is_semver};
 pub use host_record::{HostRegistration, RESERVED_NAMESPACE, in_reserved_namespace};
 pub use lookup::{RegistryError, registered, registered_host};
-pub use deprecation::{Deprecation, is_semver};
 pub use record::{EnvRegistration, same_id};
 #[doc(hidden)]
 pub use type_key::TypeKey;

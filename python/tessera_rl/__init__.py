@@ -62,7 +62,7 @@ from tessera_rl._native import (
     version,
 )
 from tessera_rl._host import HostEnv, HostStep, set_fp_policy
-from tessera_rl._registry import TesseraDeprecationWarning, envs
+from tessera_rl._envs import TesseraDeprecationWarning, envs
 
 __all__ = [
     "ActionError",
