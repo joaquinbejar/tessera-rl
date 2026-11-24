@@ -72,6 +72,9 @@ from learning_gate import CALIBRATION_SEEDS, NIGHT_SEEDS, alert, calibrate, chec
 
 ENV_ID = "tessera/CartPole-v1"
 
+#: The protocol of this run (``--env``); CartPole keeps the original path.
+PROTOCOL = "cartpole"
+
 
 def _git(*args: str) -> str:
     # A source tree without .git (a Docker copy) names its commit here.
@@ -114,7 +117,12 @@ def _environment() -> dict:
 def _fingerprint() -> str:
     """What determines a score besides the seed: the PPO hyperparameters,
     the trainer's source and the numeric libraries. A change fails every
-    night until a reviewed re-calibration."""
+    night until a reviewed re-calibration. Other protocols have their own
+    (``learning_protocols.fingerprint``); CartPole's is unchanged."""
+    if PROTOCOL != "cartpole":
+        import learning_protocols
+
+        return learning_protocols.fingerprint(PROTOCOL)
     from dataclasses import asdict
 
     import gymnasium
@@ -139,11 +147,19 @@ def _fingerprint() -> str:
 
 def _setup(args) -> dict:
     return {
-        "env": ENV_ID,
+        "env": _env_id(),
         "total_steps": args.total_steps,
         "eval_episodes": args.eval_episodes,
         "fingerprint": _fingerprint(),
     }
+
+
+def _env_id() -> str:
+    if PROTOCOL == "cartpole":
+        return ENV_ID
+    import learning_protocols
+
+    return learning_protocols.protocol(PROTOCOL)["env"]
 
 
 def _cpu() -> str:
@@ -171,7 +187,12 @@ def _train(args, seeds: list[int]) -> list[dict]:
     h = rt.Hyper(total_steps=args.total_steps)
     records = []
     for seed in seeds:
-        r = rt.train("tessera", seed, h, args.eval_episodes)
+        if PROTOCOL == "cartpole":
+            r = rt.train("tessera", seed, h, args.eval_episodes)
+        else:
+            import learning_protocols
+
+            r = learning_protocols.train(PROTOCOL, seed, args.total_steps, args.eval_episodes)
         records.append({"seed": seed, "score": r["eval_mean"], "eval_returns": r["eval_returns"], "train_seconds": r["train_seconds"]})
         sys.stderr.write(f"seed {seed}: score {r['eval_mean']:.2f} in {r['train_seconds']}s\n")
     return records
@@ -200,6 +221,16 @@ def cmd_calibrate(args) -> int:
     out["setup"] = shards[0].get("setup") if shards else None
     out["environment"] = shards[0].get("environment") if shards else None
     out["records"] = sorted(({"seed": r.get("seed"), "score": r.get("score")} for r in records), key=lambda r: str(r["seed"]))
+    if PROTOCOL != "cartpole" and not errors:
+        # The "learns at all" check: against a uniform random policy on the
+        # same evaluation seeds. A protocol that does not learn ships with
+        # no nightly gate until a budget that learns is found.
+        import learning_protocols
+
+        from learning_gate import learns
+
+        episodes = (out["setup"] or {}).get("eval_episodes") or 20
+        out["learns"] = learns([r["score"] for r in out["records"]], learning_protocols.random_scores(PROTOCOL, episodes))
     sys.stderr.write(json.dumps({k: out.get(k) for k in ("threshold", "median", "min", "max", "errors")}) + "\n")
     if errors:
         # A failed calibration never replaces the committed one.
@@ -278,7 +309,15 @@ def main() -> int:
     q.add_argument("--seeds", type=int, nargs="+", default=CALIBRATION_SEEDS)
     q.add_argument("--out", required=True)
     q.add_argument("scores", nargs="+")
+    for q in sub.choices.values():
+        q.add_argument("--env", default="cartpole", help="the learning protocol (tools/learning_protocols.py)")
     args = p.parse_args()
+    global PROTOCOL
+    PROTOCOL = args.env
+    if PROTOCOL != "cartpole":
+        import learning_protocols
+
+        learning_protocols.protocol(PROTOCOL)
     return {"scores": cmd_scores, "calibrate": cmd_calibrate, "night": cmd_night}[args.cmd](args)
 
 

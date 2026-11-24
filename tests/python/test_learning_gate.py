@@ -291,3 +291,90 @@ def test_learning_trainer_rejects_a_sub_rollout_budget():
     for steps, episodes in ((-1, 20), (0, 20), (511, 20), (512, 0), (512, -1)):
         with pytest.raises(ValueError):
             rt.train("tessera", 1, rt.Hyper(total_steps=steps), episodes)
+
+
+# -- per-environment protocols (#370) -----------------------------------------------
+
+
+def test_learning_learns_requires_the_interval_above_random():
+    from learning_gate import learns
+
+    good = learns([-90.0, -85.0, -100.0, -95.0, -88.0], [-500.0, -500.0, -480.0, -500.0])
+    assert good["learns"] and good["ci95"][0] > 0
+    flat = learns([-500.0, -499.0, -500.0, -498.0], [-500.0, -500.0, -499.0, -500.0])
+    assert not flat["learns"]
+    worse = learns([-500.0] * 5, [-100.0] * 5)
+    assert not worse["learns"] and worse["gap"] < 0
+    # A gap of exactly 0 is not learning (the interval must lie above 0).
+    tie = learns([-500.0] * 4, [-500.0] * 4)
+    assert not tie["learns"] and tie["ci95"] == [0.0, 0.0]
+    assert "error" in learns([1.0], [0.0, 0.0])
+    nan = learns([1.0, float("nan")], [0.0, 0.0])
+    assert not nan["learns"] and "error" in nan
+
+
+def test_learning_protocols_are_known_and_cartpole_is_the_original():
+    import learning_protocols as lp
+
+    assert lp.protocol("cartpole")["env"] == "tessera/CartPole-v1"
+    assert lp.protocol("acrobot")["tier"] == "T1"
+    for name, p in lp.PROTOCOLS.items():
+        assert set(p) >= {"env", "tier", "adapter", "hyper", "total_steps"}, name
+    pytest = __import__("pytest")
+    with pytest.raises(ValueError, match="no learning protocol"):
+        lp.protocol("nope")
+
+
+def test_learning_cartpole_fingerprint_matches_its_calibration():
+    """The trainer of CartPole is untouched: its fingerprint, with the
+    pinned libraries, is still the one its calibration recorded."""
+    pytest = __import__("pytest")
+    pytest.importorskip("torch")
+    import learning_test
+
+    cal = json.loads((pathlib.Path(__file__).resolve().parents[2] / "compat" / "learning" / "cartpole.json").read_text())
+    learning_test.PROTOCOL = "cartpole"
+    assert learning_test._fingerprint() == cal["setup"]["fingerprint"]
+
+
+def test_learning_protocol_factories_are_restored_after_a_run():
+    pytest = __import__("pytest")
+    pytest.importorskip("torch")
+    import learning_protocols as lp
+    import reference_training as rt
+
+    before = (rt.make_vector, rt.make_single)
+    with pytest.raises(RuntimeError):
+        with lp._factories("tessera/Acrobot-v1"):
+            assert rt.make_vector is not before[0]
+            raise RuntimeError("inside")
+    assert (rt.make_vector, rt.make_single) == before
+
+
+def test_learning_acrobot_protocol_trains_and_evaluates_on_acrobot():
+    pytest = __import__("pytest")
+    pytest.importorskip("torch")
+    import learning_protocols as lp
+
+    r = lp.train("acrobot", 1, 512, 1)
+    # Acrobot rewards are -1 per step until the goal: an episode scores in
+    # [-500, 0], unlike CartPole's positive scores.
+    assert -500.0 <= r["eval_mean"] <= 0.0
+    random = lp.random_scores("acrobot", 2)
+    assert len(random) == 2 and all(-500.0 <= x <= 0.0 for x in random)
+    assert lp.fingerprint("acrobot") != lp.fingerprint("cartpole")
+
+
+def test_learning_every_calibration_is_valid_and_learns_and_runs_nightly():
+    root = pathlib.Path(__file__).resolve().parents[2]
+    workflow = (root / ".github" / "workflows" / "learning-test.yml").read_text()
+    import learning_protocols as lp
+
+    for path in sorted((root / "compat" / "learning").glob("*.json")):
+        name = path.stem
+        cal = json.loads(path.read_text())
+        assert not check_calibration(cal), name
+        assert cal["setup"]["env"] == lp.protocol(name)["env"], name
+        if name != "cartpole":
+            assert cal["learns"]["learns"] is True, name
+        assert f"- env: {name}" in workflow, f"{name} has a calibration but no nightly job"
