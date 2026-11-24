@@ -75,10 +75,6 @@ fn observations(pool: &EnvPool<CartPole>) -> Result<Vec<f32>, EngineError> {
 /// # Errors
 ///
 /// An engine error from the pool.
-#[expect(
-    clippy::many_single_char_names,
-    reason = "PPO notation: n envs, b batch, x obs"
-)]
 pub fn train(config: &Config) -> Result<Report, EngineError> {
     let device = Device::flex().autodiff();
     device.seed(config.seed);
@@ -174,6 +170,10 @@ pub fn train(config: &Config) -> Result<Report, EngineError> {
 /// One step of the rollout: samples an action per instance, steps the pool,
 /// records the transition and any ended episode's return; returns the next
 /// observations.
+#[expect(
+    clippy::many_single_char_names,
+    reason = "PPO notation: n envs, b batch"
+)]
 fn act_and_step(
     model: &ActorCritic,
     pool: &mut EnvPool<CartPole>,
