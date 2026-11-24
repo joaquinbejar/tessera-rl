@@ -7,7 +7,8 @@
 
 #![expect(
     clippy::unwrap_used,
-    reason = "test helpers: a failure is the assertion"
+    clippy::indexing_slicing,
+    reason = "test helpers: a failure is the assertion; forged-file offsets"
 )]
 
 use core::num::{NonZeroU32, NonZeroUsize};
@@ -191,4 +192,86 @@ fn test_archive_replay_async_recorder_refuses_an_archive_source() {
         AsyncRecorder::new(&mut a, Vec::new(), ReplayWriterOptions::default()),
         Err(ReplayError::Unsupported { .. })
     ));
+}
+
+/// The first index of `needle` in `hay`.
+fn find(hay: &[u8], needle: &[u8]) -> usize {
+    hay.windows(needle.len()).position(|w| w == needle).unwrap()
+}
+
+/// Rewrites the trailer's checksum over the event bytes (from the end of
+/// the header to the `End` frame), as the writer computes it.
+fn reseal_events(bytes: &mut [u8], header_end: usize) {
+    let n = bytes.len();
+    let events_end = n - 16 - 5;
+    let sum = tessera_rl_core::encoding::checksum(&bytes[header_end..events_end]);
+    bytes[n - 8..].copy_from_slice(&sum.to_le_bytes());
+}
+
+/// The header's archive block (`digest`, `count:u32`, weights) and the
+/// header checksum after it and `chunk_size`: returns (weights start,
+/// checksum position).
+fn header_archive(bytes: &[u8], digest: u64, weights: usize) -> (usize, usize) {
+    let at = find(bytes, &digest.to_le_bytes());
+    let w = at + 8 + 4;
+    (w, w + 4 * weights + 4)
+}
+
+#[test]
+fn test_archive_replay_forged_header_source_is_malformed() {
+    // A header whose archive block differs from the first keyframe's pool
+    // context (ADR-0072 r4 via #411: the header names the source at
+    // recording start).
+    let arc = archive(3);
+    let (mut bytes, _) = record(&arc, 0);
+    let (w, sum_at) = header_archive(&bytes, arc.digest(), 3);
+    // Weights (1, 0, 2) become (1, 0, 5), still a positive total.
+    bytes[w + 8..w + 12].copy_from_slice(&5u32.to_le_bytes());
+    let sum = tessera_rl_core::encoding::checksum(&bytes[..sum_at]);
+    bytes[sum_at..sum_at + 8].copy_from_slice(&sum.to_le_bytes());
+    let file = Replay::open(&bytes, DecodeLimits::default()).unwrap();
+    assert_eq!(
+        file.header().archive.unwrap().weights().collect::<Vec<_>>(),
+        [1, 0, 5]
+    );
+    let mut p = pool(7, 0);
+    assert!(matches!(
+        file.run_with_archive(&mut p, Some(&arc)),
+        Err(ReplayError::Malformed {
+            event_index: 0,
+            field: "first keyframe reset source"
+        })
+    ));
+}
+
+#[test]
+fn test_archive_replay_forged_reset_source_event_names_another_archive() {
+    // A `ResetSource` event whose digest is not the archive given: refused
+    // with `ArchiveMismatch`, even though the first keyframe's matches.
+    let arc = archive(3);
+    let other = archive(4);
+    let (mut bytes, _) = record(&arc, 0);
+    let (_, sum_at) = header_archive(&bytes, arc.digest(), 3);
+    let header_end = sum_at + 8;
+    // Tag 10, body length 1 + 8 + 4 + 3 * 4 = 25, then `1` (Archive) and
+    // the digest: the first `ResetSource` event (the refused call logged
+    // nothing).
+    let mut pattern = vec![10u8];
+    pattern.extend_from_slice(&25u32.to_le_bytes());
+    pattern.push(1);
+    pattern.extend_from_slice(&arc.digest().to_le_bytes());
+    let at = header_end + find(&bytes[header_end..], &pattern);
+    bytes[at + 6..at + 14].copy_from_slice(&other.digest().to_le_bytes());
+    reseal_events(&mut bytes, header_end);
+    let file = Replay::open(&bytes, DecodeLimits::default()).unwrap();
+    let mut p = pool(7, 0);
+    let err = file.run_with_archive(&mut p, Some(&arc)).unwrap_err();
+    assert!(
+        matches!(
+            err,
+            ReplayError::Engine(EngineError::ArchiveMismatch { expected, found })
+                if expected == other.digest() && found == arc.digest()
+        ),
+        "{err:?}"
+    );
 }
