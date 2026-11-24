@@ -436,7 +436,9 @@ where
         if let Err(e) = restored {
             // Nothing changed: the idle tokens come back.
             for (half, slot) in state.tokens.iter_mut().enumerate() {
-                *slot = pool.idle_token(u32::try_from(half).unwrap_or(u32::MAX)).ok();
+                *slot = pool
+                    .idle_token(u32::try_from(half).unwrap_or(u32::MAX))
+                    .ok();
             }
             return Err(e.into());
         }

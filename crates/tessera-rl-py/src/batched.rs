@@ -332,7 +332,6 @@ struct BatchedPool<E: Environment, M: MaskProvider<E>> {
     set: Option<ViewSet>,
     /// Owned mode: fresh copies of each gathered batch.
     owned: bool,
-    num_envs: usize,
 }
 
 fn closed() -> BindError {
@@ -1021,7 +1020,6 @@ where
         waiter,
         set,
         owned: outputs == BatchOutputs::Owned,
-        num_envs,
     });
     Ok(Box::new(AsyncHandle { ops, layout, views }))
 }

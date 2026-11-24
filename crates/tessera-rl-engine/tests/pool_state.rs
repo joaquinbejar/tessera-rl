@@ -52,7 +52,7 @@ fn options(n: u32, chunk: u32) -> PoolOptions {
     }
 }
 
-/// A Normalize and a FrameStack on the counter's leaf.
+/// A `Normalize` and a `FrameStack` on the counter's leaf.
 fn stacked() -> Transforms {
     Transforms::new()
         .normalize(leaf(), 5.0)
@@ -81,7 +81,7 @@ fn step(p: &mut Pool, a: i32) {
 /// What a pool snapshot holds, comparable.
 fn print(state: &PoolState<Counter>) -> (Vec<StateHash>, Vec<u8>, PoolContext) {
     (
-        state.records().iter().map(|r| r.hash()).collect(),
+        state.records().iter().map(tessera_rl_engine::Record::hash).collect(),
         state.transforms().to_vec(),
         state.context().clone(),
     )
@@ -99,7 +99,7 @@ fn test_pool_state_sync_round_trip_continues_exactly() {
     step(&mut p, 0);
     p.fork_branched(0, &[1], None).unwrap();
     let state = p.snapshot_pool().unwrap();
-    assert!(!state.transforms().is_empty());
+    assert_ne!(state.transforms(), []);
     step(&mut p, 1);
     let want = observation(&p);
     // Move every part of the pool on: records, stacks, statistics, freeze

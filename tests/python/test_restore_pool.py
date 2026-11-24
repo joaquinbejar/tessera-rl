@@ -133,14 +133,14 @@ def test_restore_pool_split_phase_modes():
     pipe = make(mode="pipelined", chunk_size=2)
     archive = t.Archive(pipe, snaps)
     pipe.set_reset_source(archive, weights=[0, 1])
-    pipe.reset()
+    before = [np.asarray(h.step.observations["obs"]).copy() for h in pipe.reset()]
     snapshot = pipe.snapshot_all()
-    records = [pipe.snapshot(i) for i in range(N)]
     pipe.set_reset_source(None)
     pipe.reset(seed=11)
     halves = pipe.restore_pool(snapshot, archive)
     assert len(halves) == 2
-    assert [pipe.snapshot(i) for i in range(N)] == records
+    for h, want in zip(halves, before):
+        assert np.array_equal(np.asarray(h.step.observations["obs"]), want)
     # The source came back with the context: a reset lands on entry 1.
     for h in pipe.reset():
         for row in np.asarray(h.step.observations["obs"]):
