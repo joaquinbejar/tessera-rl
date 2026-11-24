@@ -37,4 +37,5 @@ def test_uv_install_is_used_by_the_known_jobs():
     texts = _texts()
     assert texts["ci.yml"].count(INSTALL) == 3  # python, python-onnx, pufferlib
     assert texts["learning-test.yml"].count(INSTALL) == 1
+    assert texts["nightly-bench.yml"].count(INSTALL) == 1
     assert texts["reference-training.yml"].count(INSTALL) == 1
