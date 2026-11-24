@@ -19,8 +19,17 @@
     clippy::all,
     clippy::pedantic,
     clippy::indexing_slicing,
-    clippy::unreachable,
     reason = "vendored libm 0.2.16, kept verbatim so results stay frozen (ADR-0008)"
+)]
+// The only `unreachable!` (rem_pio2_large) is compiled under
+// `debug_assertions` alone, so the expectation is too: unconditional, it
+// would be unfulfilled in release builds and fail `-D warnings` (#390).
+#![cfg_attr(
+    debug_assertions,
+    expect(
+        clippy::unreachable,
+        reason = "vendored libm 0.2.16, kept verbatim so results stay frozen (ADR-0008)"
+    )
 )]
 
 macro_rules! force_eval {
