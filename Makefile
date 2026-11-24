@@ -273,7 +273,7 @@ reference-tianshou:
 # (compat/training/rllib, Gymnasium 1.2.2, RLlib's pin); report-only.
 # JSON report in reference-rllib.json.
 reference-rllib:
-	uv run --locked --project compat/training/rllib --python 3.11 python tools/reference/rllib_cartpole.py --out reference-rllib.json
+	RAY_ENABLE_UV_RUN_RUNTIME_ENV=0 uv run --locked --project compat/training/rllib --python 3.11 python tools/reference/rllib_cartpole.py --out reference-rllib.json
 
 reference-training:
 	uv sync --locked --python 3.11 --group test --group torch

@@ -37,3 +37,5 @@ learning-test.json
 learning-cal-*.json
 # The PyPI verify fixture keeps a wheels run's real artifact layout, dist/ included.
 !tests/python/fixtures/pypi/*/*/dist/
+# Ray's session directory of tools/reference/rllib_cartpole.py (#447).
+.ray-tmp/

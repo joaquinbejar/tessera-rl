@@ -30,12 +30,19 @@ of tools/reference_training.py, with a median Tessera evaluation of at
 least 475 and an absolute curve difference of at most 20. It is
 report-only (#501). Ray spreads the work over processes, so the report
 records the wall clock as well as the driver's CPU time.
+
+Run it with the project's own interpreter or through ``make
+reference-rllib``, which sets ``RAY_ENABLE_UV_RUN_RUNTIME_ENV=0``. Under
+``uv run``, Ray otherwise starts each worker through ``uv run`` with a
+packaged copy of the working directory, and those workers fail to start
+(``No module named 'ray._private'``).
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import platform
 import statistics
 import subprocess
@@ -151,10 +158,11 @@ def main(argv=None) -> int:
     p.add_argument("--threshold", type=float, default=475.0)
     p.add_argument("--margin", type=float, default=20.0)
     p.add_argument("--num-cpus", type=int, default=3)
+    p.add_argument("--ray-temp-dir", default=os.path.abspath(".ray-tmp"), help="Ray's session directory (default: ./.ray-tmp, not /tmp/ray)")
     p.add_argument("--out", default="reference-rllib.json")
     args = p.parse_args(argv)
     torch.set_num_threads(1)
-    ray.init(num_cpus=args.num_cpus, include_dashboard=False, log_to_driver=False)
+    ray.init(num_cpus=args.num_cpus, include_dashboard=False, log_to_driver=False, _temp_dir=args.ray_temp_dir)
     try:
         results = [run(b, s, args.total_steps, args.eval_episodes) for s in args.seeds for b in BACKENDS]
     finally:
