@@ -46,17 +46,21 @@
 #[cfg(test)]
 mod abort_header_tests;
 mod dyn_pool;
+mod dyn_snapshot;
 mod factory;
 mod kernels;
 mod layout;
 mod persist;
 mod record;
 mod snapshot;
+#[cfg(feature = "testing")]
+pub mod testing;
 
 pub use dyn_pool::DynHostPool;
 pub use factory::{FactoryError, HostFactory, MakeOptions, make_host};
 pub use layout::{HostLayout, HostLeaf};
 pub use persist::HOST_MAGIC;
+
 pub use record::{HostRecord, RecordDecodeError};
 
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
@@ -146,6 +150,18 @@ pub const MAX_HOST_HEADS: usize = 4096;
 /// let _ = HostPool::<Many, AGENTS>::new(Cfg, options);
 /// ```
 pub const MAX_HOST_AGENTS: usize = 256;
+
+/// The largest `HostSnapshot::max_snapshot_len` a host pool accepts, 1 GiB
+/// (ADR-0073): a larger bound is refused with
+/// [`EngineError::SnapshotBound`] before anything is reserved for it.
+pub const MAX_HOST_SNAPSHOT_BYTES: usize = 1 << 30;
+
+/// A pool's snapshot parameters, computed once (ADR-0073).
+#[derive(Debug, Clone, Copy)]
+struct SnapshotParams {
+    identity: u64,
+    max: usize,
+}
 
 /// A pool of `num_envs` instances of the host environment `E` (ADR-0062).
 ///
@@ -241,6 +257,12 @@ pub struct HostPool<E: HostEnvironment, const A: usize> {
     refusal: Refusal,
     /// The record `fork` saves its source into, reused (ADR-0073 item 4).
     snapshot_scratch: record::HostRecord<A>,
+    /// The snapshot functions for `DynHostPool`, when built with
+    /// `with_dyn_snapshots` (ADR-0073).
+    dyn_snapshots: Option<dyn_snapshot::DynSnapshotOps<E, A>>,
+    /// `max_snapshot_len` and the identity digest, computed on first use
+    /// (ADR-0073).
+    snapshot_params: Option<SnapshotParams>,
     #[cfg(feature = "debug-checks")]
     allocs: crate::sys::alloc_track::AllocTally,
     #[cfg(feature = "debug-checks")]
@@ -393,6 +415,8 @@ impl<E: HostEnvironment, const A: usize> HostPool<E, A> {
             abort_rows_clear: 0,
             refusal: Refusal::new(),
             snapshot_scratch: record::HostRecord::new(),
+            dyn_snapshots: None,
+            snapshot_params: None,
             #[cfg(feature = "debug-checks")]
             allocs: crate::sys::alloc_track::AllocTally::default(),
             #[cfg(feature = "debug-checks")]

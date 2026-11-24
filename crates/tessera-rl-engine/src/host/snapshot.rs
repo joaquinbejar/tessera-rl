@@ -29,6 +29,7 @@ use tessera_rl_core::{HostSnapshot, RecordLayout, StateHash};
 use super::HostPool;
 use super::kernels::{self, HostHeader};
 use super::record::HostRecord;
+use super::{MAX_HOST_SNAPSHOT_BYTES, SnapshotParams};
 use crate::error::EngineError;
 use crate::outputs::OutputsView;
 use crate::pool::{clear_instance, clear_terminal, run_kernels, write_agent_masks};
@@ -81,19 +82,55 @@ where
         }
     }
 
+    /// The pool's snapshot parameters, computed once and kept (review of
+    /// #344): `E::max_snapshot_len` runs under the panic boundary (a panic
+    /// poisons) and must be at most [`MAX_HOST_SNAPSHOT_BYTES`]; the
+    /// identity digest is computed with it. `HostPool::new` cannot compute
+    /// them, since it is generic over every `HostEnvironment`, so the first
+    /// snapshot operation does.
+    fn params(&mut self) -> Result<SnapshotParams, EngineError> {
+        if let Some(p) = self.snapshot_params {
+            return Ok(p);
+        }
+        let cfg: &E::Config = &self.cfg;
+        let mut max = 0;
+        run_kernels(&mut self.poisoned, || max = E::max_snapshot_len(cfg))?;
+        if max > MAX_HOST_SNAPSHOT_BYTES {
+            return Err(EngineError::SnapshotBound {
+                max,
+                cap: MAX_HOST_SNAPSHOT_BYTES,
+            });
+        }
+        let params = SnapshotParams {
+            identity: identity_digest::<E>(&*self.cfg)?,
+            max,
+        };
+        self.snapshot_params = Some(params);
+        Ok(params)
+    }
+
     /// The identity digest records of this pool carry.
     ///
     /// # Errors
     ///
-    /// [`EngineError::Config`] when the config hash cannot be computed.
-    pub fn snapshot_identity(&self) -> Result<u64, EngineError> {
-        identity_digest::<E>(&*self.cfg)
+    /// [`EngineError::Poisoned`] on a poisoned pool, and the errors of the
+    /// first computation: [`EngineError::Panicked`] if `max_snapshot_len`
+    /// panics, [`EngineError::SnapshotBound`] for a bound over
+    /// [`MAX_HOST_SNAPSHOT_BYTES`], [`EngineError::Config`] when the config
+    /// hash cannot be computed.
+    pub fn snapshot_identity(&mut self) -> Result<u64, EngineError> {
+        self.refuse_poisoned()?;
+        self.params().map(|p| p.identity)
     }
 
-    /// `E::max_snapshot_len` for this pool's config.
-    #[must_use]
-    pub fn max_snapshot_len(&self) -> usize {
-        E::max_snapshot_len(&self.cfg)
+    /// `E::max_snapshot_len` for this pool's config, checked and kept.
+    ///
+    /// # Errors
+    ///
+    /// As [`HostPool::snapshot_identity`].
+    pub fn max_snapshot_len(&mut self) -> Result<usize, EngineError> {
+        self.refuse_poisoned()?;
+        self.params().map(|p| p.max)
     }
 
     /// Writes instance `i`'s record into `out`, reusing its buffer: the
@@ -113,7 +150,9 @@ where
             });
         };
         out.bytes.clear();
-        out.bytes.reserve(max);
+        out.bytes
+            .try_reserve(max)
+            .map_err(|_| EngineError::SnapshotAllocation { bytes: max })?;
         {
             #[cfg(feature = "debug-checks")]
             let _bracket = crate::sys::alloc_track::HostBracket::enter(&self.allocs);
@@ -157,8 +196,7 @@ where
     pub fn snapshot_to(&mut self, id: u32, out: &mut HostRecord<A>) -> Result<(), EngineError> {
         self.refuse_poisoned()?;
         let i = self.snapshot_index(id)?;
-        let identity = self.snapshot_identity()?;
-        let max = self.max_snapshot_len();
+        let SnapshotParams { identity, max } = self.params()?;
         let result = self.save_into(i, identity, max, out);
         self.count_host_allocations();
         result
@@ -174,8 +212,7 @@ where
     pub fn snapshot_all(&mut self, out: &mut [HostRecord<A>]) -> Result<(), EngineError> {
         self.refuse_poisoned()?;
         self.check_record_count(out.len())?;
-        let identity = self.snapshot_identity()?;
-        let max = self.max_snapshot_len();
+        let SnapshotParams { identity, max } = self.params()?;
         let mut result = Ok(());
         for (i, slot) in out.iter_mut().enumerate() {
             result = self.save_into(i, identity, max, slot);
@@ -193,7 +230,12 @@ where
     ///
     /// As [`HostPool::snapshot`].
     pub fn state_hash(&mut self, id: u32) -> Result<StateHash, EngineError> {
-        self.snapshot(id).map(|r| r.hash())
+        // Into the pool's scratch record: no allocation once it holds its
+        // buffer.
+        let mut scratch = core::mem::take(&mut self.snapshot_scratch);
+        let result = self.snapshot_to(id, &mut scratch).map(|()| scratch.hash());
+        self.snapshot_scratch = scratch;
+        result
     }
 
     /// Restores `record` into instance `id`, after checking it.
@@ -256,8 +298,7 @@ where
         self.refuse_poisoned()?;
         let i = self.snapshot_index(src)?;
         check_ids(dst, &mut self.seen)?;
-        let identity = self.snapshot_identity()?;
-        let max = self.max_snapshot_len();
+        let SnapshotParams { identity, max } = self.params()?;
         let mut scratch = core::mem::take(&mut self.snapshot_scratch);
         let mut result = self.save_into(i, identity, max, &mut scratch);
         if result.is_ok() {
@@ -286,8 +327,7 @@ where
         indices: impl Iterator<Item = usize> + Clone,
         records: &[HostRecord<A>],
     ) -> Result<(), EngineError> {
-        let identity = self.snapshot_identity()?;
-        let max = self.max_snapshot_len();
+        let SnapshotParams { identity, max } = self.params()?;
         for (index, record) in records.iter().enumerate() {
             self.check_one(index, identity, max, record)?;
         }

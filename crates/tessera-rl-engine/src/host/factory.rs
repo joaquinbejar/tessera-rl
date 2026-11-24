@@ -128,9 +128,38 @@ impl HostFactory {
             build: build::<E, A>,
         }
     }
+
+    /// The record of `E`'s factory whose pools have snapshots through
+    /// `DynHostPool` (ADR-0073): `register_host_factory!(E, snapshots)`.
+    #[doc(hidden)]
+    #[must_use]
+    pub const fn new_snapshots<E, const A: usize>() -> Self
+    where
+        E: tessera_rl_core::HostSnapshot,
+        E::Config: ConfigDecode + tessera_rl_core::config::CanonicalConfig + Send,
+    {
+        Self {
+            id: E::ENV_ID,
+            build: build_snapshots::<E, A>,
+        }
+    }
 }
 
 inventory::collect!(HostFactory);
+
+/// [`build`], with the pool's snapshots reachable through `DynHostPool`.
+fn build_snapshots<E, const A: usize>(
+    config: &ConfigSource<'_>,
+    options: &MakeOptions,
+) -> Result<Box<dyn DynHostPool>, FactoryError>
+where
+    E: tessera_rl_core::HostSnapshot,
+    E::Config: ConfigDecode + tessera_rl_core::config::CanonicalConfig + Send,
+{
+    let cfg = E::Config::decode(config)?;
+    let pool = HostPool::<E, A>::new(cfg, *options.pool())?.with_dyn_snapshots();
+    start(pool, options)
+}
 
 /// Decodes `E`'s config, builds the pool and starts its workers.
 fn build<E, const A: usize>(
@@ -142,7 +171,18 @@ where
     E::Config: ConfigDecode + Send,
 {
     let cfg = E::Config::decode(config)?;
-    let mut pool = HostPool::<E, A>::new(cfg, *options.pool())?;
+    start(HostPool::<E, A>::new(cfg, *options.pool())?, options)
+}
+
+/// Starts the workers `options` asks for and erases the pool's type.
+fn start<E, const A: usize>(
+    mut pool: HostPool<E, A>,
+    options: &MakeOptions,
+) -> Result<Box<dyn DynHostPool>, FactoryError>
+where
+    E: HostEnvironment,
+    E::Config: Send,
+{
     if let Some(sync) = options.sync() {
         pool = pool.with_workers(sync.clone())?;
     }
@@ -185,7 +225,8 @@ pub fn make_host(
 }
 
 /// Registers `E`'s host factory for [`make_host`](crate::make_host)
-/// (ADR-0065 item 3). `E::Config` must implement `ConfigDecode` (derive
+/// (ADR-0065 item 3). With `snapshots`, `E` implements `HostSnapshot`
+/// and the pools it makes have snapshots through `DynHostPool` (ADR-0073). `E::Config` must implement `ConfigDecode` (derive
 /// `EnvConfig`); without it, the expansion does not compile.
 ///
 /// Expand it in the final binary's crate, or in a glue crate the binary
@@ -197,6 +238,14 @@ pub fn make_host(
 /// ```
 #[macro_export]
 macro_rules! register_host_factory {
+    ($env:ty, snapshots) => {
+        $crate::__private::inventory::submit! {
+            $crate::HostFactory::new_snapshots::<
+                $env,
+                { <$env as $crate::__private::HostEnvironment>::MAX_AGENTS },
+            >()
+        }
+    };
     ($env:ty) => {
         $crate::__private::inventory::submit! {
             $crate::HostFactory::new::<

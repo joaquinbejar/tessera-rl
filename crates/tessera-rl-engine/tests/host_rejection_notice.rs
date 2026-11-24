@@ -111,6 +111,43 @@ impl<const N_: bool> HostEnvironment for Notice<N_> {
     }
 }
 
+/// The notice count travels with the script's own bytes (ADR-0069 item 7:
+/// snapshot, restore and fork carry it like any other state; ADR-0073).
+impl<const N_: bool> tessera_rl_core::HostSnapshot for Notice<N_> {
+    const SNAPSHOT_VERSION: u32 = 1;
+
+    fn max_snapshot_len(cfg: &ScriptConfig) -> usize {
+        Script::<0, true>::max_snapshot_len(cfg) + 4
+    }
+
+    fn save(&self, out: &mut Vec<u8>) {
+        self.inner.save(out);
+        out.extend_from_slice(&self.refused.to_le_bytes());
+    }
+
+    fn check_snapshot(
+        cfg: &ScriptConfig,
+        bytes: &[u8],
+    ) -> Result<(), tessera_rl_core::SnapshotReject> {
+        let Some(split) = bytes.len().checked_sub(4) else {
+            return Err(tessera_rl_core::SnapshotReject {
+                code: 1,
+                reason: "no notice count",
+            });
+        };
+        Script::<0, true>::check_snapshot(cfg, bytes.get(..split).unwrap_or(&[]))
+    }
+
+    fn load(&mut self, bytes: &[u8]) {
+        let split = bytes.len().saturating_sub(4);
+        self.inner.load(bytes.get(..split).unwrap_or(&[]));
+        self.refused = bytes
+            .get(split..)
+            .and_then(|b| b.try_into().ok())
+            .map_or(0, i32::from_le_bytes);
+    }
+}
+
 type Pool<const N_: bool> = HostPool<Notice<N_>, SLOTS>;
 
 fn pool<const N_: bool>(shared: &Arc<Shared>, workers: usize) -> Pool<N_> {
@@ -261,4 +298,29 @@ fn test_host_rejection_notice_fp_controls_are_put_back_and_counted() {
         assert_eq!(p.host_fp_resets() - before, 1, "workers={workers}");
         assert!(tessera_rl_num::fp::is_canonical());
     }
+}
+
+/// ADR-0069 item 10 and ADR-0073 item 8: a snapshot taken after a notice,
+/// restored, reproduces the next step and the notice count.
+#[test]
+fn test_host_rejection_notice_snapshot_after_notice_restores_next_step() {
+    let shared = Shared::new();
+    let mut p = pool::<true>(&shared, 0);
+    p.reset_all(Reseed::Keep).unwrap();
+    shared.reject_once.store(1 << 1, Ordering::Relaxed);
+    assert_eq!(reported(step(&mut p)), (1, REJECT_CODE + 1));
+    let record = p.snapshot(1).unwrap();
+    let next = refusals(&mut p, &shared);
+    assert_eq!(next[1], 1);
+    let expected = (row(&p), p.state_hash(1).unwrap());
+    p.restore(1, &record).unwrap();
+    let again = refusals(&mut p, &shared);
+    assert_eq!(again, next);
+    assert_eq!((row(&p), p.state_hash(1).unwrap(),), expected);
+}
+
+/// Instance 1's observation rows.
+fn row(p: &Pool<true>) -> Vec<u8> {
+    let at = SLOTS * 3 * 4;
+    p.outputs().unwrap().observation(0).unwrap()[at..2 * at].to_vec()
 }

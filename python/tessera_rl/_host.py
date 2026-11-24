@@ -104,15 +104,7 @@ _OUTPUT_KEYS = (
 
 #: First-party methods a host environment does not have (SPEC 14.4.2).
 _ABSENT = (
-    "snapshot",
-    "restore",
-    "restore_all",
     "snapshot_all",
-    "fork",
-    "state_hash",
-    "encode",
-    "load",
-    "import_record",
     "send",
     "recv",
 )
@@ -318,6 +310,11 @@ class _HostNative:
                 "protocol 2 requires refuses_agents=True and protocol 1 requires it absent or False"
             )
         layout["refuses_agents"] = refuses
+        # ADR-0073: optional; absent means no snapshots.
+        snapshots = layout.get("snapshots", False)
+        if not isinstance(snapshots, bool):
+            raise _config(f"host object layout() has snapshots={snapshots!r}; it must be a bool")
+        layout["snapshots"] = snapshots
         self._keys = _OUTPUT_KEYS + (_REFUSAL_KEYS if refuses else ())
         # The first-party leaf form, (name, dtype, shape, low, high): the
         # protocol has no bounds, so a leaf spans its dtype's range.
@@ -447,11 +444,17 @@ class HostEnv:
 
     It has ``Env``'s attributes and ``reset``, ``step``, ``is_poisoned``
     and ``close``, and returns :class:`HostStep`, ``Step`` plus
-    ``aborted``, ``abort_code`` and ``pending_reset``. Host environments run in sync mode only, reset
-    every instance at once, and have no snapshots: ``snapshot``,
-    ``restore``, ``restore_all``, ``snapshot_all``, ``fork``,
-    ``state_hash``, ``encode``, ``load``, ``import_record``, ``send`` and
-    ``recv`` raise ``CapabilityError``.
+    ``aborted``, ``abort_code`` and ``pending_reset``. Host environments run in sync mode only and reset
+    every instance at once; ``snapshot_all``, ``send`` and ``recv`` raise
+    ``CapabilityError``.
+
+    Snapshots (ADR-0073) exist only when the environment provides them
+    (``snapshots`` is true): ``snapshot``, ``restore``, ``restore_all``,
+    ``fork``, ``state_hash``, ``import_record``, ``encode`` and ``load``,
+    over records and files in the host formats. Without them each raises
+    ``CapabilityError``. There is no ``fork_branched``, and a poisoned host
+    environment refuses all of them, ``restore_all`` and ``load``
+    included: build a new one.
 
     ``outputs="borrowed"`` returns read-only views with ``Env``'s borrow
     window (``is_stale`` tracks them); ``outputs="owned"`` copies them.
@@ -485,6 +488,67 @@ class HostEnv:
         #: Whether the environment refuses agents: ``HostStep.refused`` and
         #: ``refuse_code`` are set (host protocol 2, ADR-0070).
         self.refuses_agents: bool = layout["refuses_agents"]
+        #: Whether the environment provides snapshots (ADR-0073); absent from
+        #: the layout of older wheels, which have none.
+        self.snapshots: bool = layout["snapshots"]
+
+    def _snap(self, name: str):
+        """The host object, for a snapshot method; ``CapabilityError``
+        when the environment has no snapshots."""
+        if not self.snapshots:
+            raise _native.CapabilityError(f"this host environment has no snapshots, so no {name} (ADR-0073)")
+        return self._native._obj
+
+    def snapshot(self, index: int) -> bytes:
+        """The record of instance ``index``: ``bytes`` holding an identity
+        digest, the engine header and the environment's own state.
+        Privileged: it holds full state."""
+        return self._snap("snapshot").snapshot([_index(index, "index")])[0]
+
+    def restore(self, ids, snapshots) -> None:
+        """Restores the records ``snapshots`` into ``ids``, in order. Every
+        record is checked first (``RecordError``); a refused call changes
+        nothing."""
+        obj = self._snap("restore")
+        obj.restore([_index(i, "ids") for i in ids], [bytes(r) for r in snapshots])
+
+    def restore_all(self, snapshots) -> None:
+        """Restores one record per instance."""
+        self._snap("restore_all").restore_all([bytes(r) for r in snapshots])
+
+    def import_record(self, index: int, record: bytes) -> None:
+        """Restores one (untrusted) record into instance ``index``."""
+        self._snap("import_record").restore([_index(index, "index")], [bytes(record)])
+
+    def fork(self, src: int, dst: list[int]) -> None:
+        """Copies instance ``src`` into every instance of ``dst``."""
+        self._snap("fork").fork(_index(src, "src"), [_index(d, "dst") for d in dst])
+
+    def state_hash(self, index: int) -> int:
+        """Instance ``index``'s host state hash. It carries no determinism
+        tier and may differ across platforms."""
+        raw = self._snap("state_hash").state_hash(_index(index, "index"))
+        return int.from_bytes(raw, "little")
+
+    def encode(self, ids=None) -> bytes:
+        """A host snapshot file (``TESHOST``) of ``ids``, or of every
+        instance. It holds full state and is privileged."""
+        obj = self._snap("encode")
+        if ids is None:
+            ids = range(self.num_envs)
+        return obj.encode([_index(i, "ids") for i in ids])
+
+    def load(self, data: bytes, ids=None, max_instances=None, max_decoded_bytes=None) -> None:
+        """Loads a file from ``encode`` into ``ids`` (default: every
+        instance), with the default decode limits. ``PersistError`` for a
+        damaged, malformed or mismatched file. It is no recovery path: a
+        poisoned host environment refuses it."""
+        obj = self._snap("load")
+        if max_instances is not None or max_decoded_bytes is not None:
+            raise _native.CapabilityError("host files are read with the default decode limits")
+        if ids is None:
+            ids = range(self.num_envs)
+        obj.import_records([_index(i, "ids") for i in ids], data)
 
     def _host_step(self, step: Step) -> HostStep:
         out = self._env._last_out

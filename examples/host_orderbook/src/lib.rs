@@ -14,7 +14,8 @@
 use tessera_rl_core::io::{Actions, MaskWriter, ObsWriter};
 use tessera_rl_core::space::{BoxBounds, DType, Space};
 use tessera_rl_core::{
-    AgentSlot, EpisodeEnd, HostEnvironment, HostError, HostOut, HostSeed, SpaceError,
+    AgentSlot, EpisodeEnd, HostEnvironment, HostError, HostOut, HostSeed, HostSnapshot,
+    SnapshotReject, SpaceError,
 };
 use tessera_rl_macros::EnvConfig;
 
@@ -164,7 +165,76 @@ impl HostEnvironment for OrderBook {
 
 tessera_rl_core::register_host!(OrderBook, id = "example/OrderBook-v1");
 
+/// Bytes before the orders: last price (`i64`), step and order count
+/// (`u32` each).
+const FIXED: usize = 16;
+
+/// Snapshots (ADR-0073): the last price, the step and the resting orders,
+/// little-endian. The configuration is not state.
+impl HostSnapshot for OrderBook {
+    const SNAPSHOT_VERSION: u32 = 1;
+
+    fn max_snapshot_len(cfg: &BookConfig) -> usize {
+        FIXED + 8 * usize::try_from(cfg.depth).unwrap_or(0)
+    }
+
+    fn save(&self, out: &mut Vec<u8>) {
+        out.extend_from_slice(&self.last.to_le_bytes());
+        out.extend_from_slice(&self.step.to_le_bytes());
+        out.extend_from_slice(&u32::try_from(self.orders.len()).unwrap_or(0).to_le_bytes());
+        for order in &self.orders {
+            out.extend_from_slice(&order.to_le_bytes());
+        }
+    }
+
+    fn check_snapshot(cfg: &BookConfig, bytes: &[u8]) -> Result<(), SnapshotReject> {
+        let reject = |code, reason| Err(SnapshotReject { code, reason });
+        let (Some(step), Some(count)) = (word(bytes, 8), word(bytes, 12)) else {
+            return reject(1, "shorter than the fixed fields");
+        };
+        if step > cfg.episode {
+            return reject(2, "a step past the episode length");
+        }
+        if count > cfg.depth {
+            return reject(3, "more orders than the book's depth");
+        }
+        let want = usize::try_from(count).map_or(usize::MAX, |c| FIXED + 8 * c);
+        if bytes.len() != want {
+            return reject(4, "the order count does not match the bytes");
+        }
+        Ok(())
+    }
+
+    fn load(&mut self, bytes: &[u8]) {
+        self.last = long(bytes, 0).unwrap_or(0);
+        self.step = word(bytes, 8).unwrap_or(0);
+        let count = word(bytes, 12).map_or(0, |c| usize::try_from(c).unwrap_or(0));
+        self.orders.clear();
+        self.orders
+            .extend((0..count).map(|k| long(bytes, FIXED + 8 * k).unwrap_or(0)));
+    }
+}
+
+/// The `u32` at `at`.
+fn word(bytes: &[u8], at: usize) -> Option<u32> {
+    bytes
+        .get(at..at + 4)?
+        .try_into()
+        .ok()
+        .map(u32::from_le_bytes)
+}
+
+/// The `i64` at `at`.
+fn long(bytes: &[u8], at: usize) -> Option<i64> {
+    bytes
+        .get(at..at + 8)?
+        .try_into()
+        .ok()
+        .map(i64::from_le_bytes)
+}
+
 tessera_rl_pyffi::export_host_env!(
     OrderBook,
-    module = c"tessera_example_orderbook._tessera_host"
+    module = c"tessera_example_orderbook._tessera_host",
+    snapshots
 );

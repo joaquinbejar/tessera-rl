@@ -23,6 +23,9 @@ test-hooks = []
 # The host pool (ADR-0062): HostPool over HostEnvironment. Off by default;
 # the first-party Python wheel never enables it.
 host = ["dep:inventory"]
+# `host::testing::check_snapshot_contract` (ADR-0073 item 8), for host
+# environment crates' tests.
+testing = ["host"]
 
 [dependencies]
 tessera-rl-core.workspace = true

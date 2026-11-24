@@ -159,3 +159,17 @@ fn test_factory_env_crate_depends_on_core_only() {
     assert!(tree.contains("tessera-rl-core "), "{tree}");
     assert!(!tree.contains("tessera-rl-engine"), "{tree}");
 }
+
+/// `register_host_factory!(E, snapshots)` (ADR-0073): a pool made by id
+/// has snapshots through `DynHostPool`.
+#[test]
+fn test_factory_make_host_with_snapshots_round_trips() {
+    let entries: [(&str, ConfigItem<'_>); 0] = [];
+    let src = ConfigSource::new(&entries);
+    let mut made = make_host(COUNTER_ID, &src, &MakeOptions::new(pool_options())).unwrap();
+    assert!(made.snapshots() && made.layout().snapshots);
+    made.reset_all(Reseed::Keep).unwrap();
+    let records = made.snapshot_records(&[0]).unwrap();
+    made.restore_records(&[1], &[&records[0]]).unwrap();
+    assert_eq!(made.state_hash(1).unwrap(), made.state_hash(0).unwrap());
+}

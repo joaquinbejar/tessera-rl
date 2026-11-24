@@ -236,9 +236,43 @@ where
     E: HostEnvironment,
     E::Config: ConfigDecode + Send,
 {
+    make_with::<E, A>(g, args, kwargs, |pool| pool)
+}
+
+/// [`make`] for an environment that implements `HostSnapshot`: the
+/// object's snapshot methods work and its layout reports `snapshots`
+/// (ADR-0073). `export_host_env!(Env, module = .., snapshots)` calls it.
+///
+/// # Errors
+///
+/// As [`make`].
+#[doc(hidden)]
+pub fn make_snapshots<'py, E, const A: usize>(
+    g: Gil<'py>,
+    args: Ref<'py>,
+    kwargs: Option<Ref<'py>>,
+) -> CResult<Mine<'py>>
+where
+    E: tessera_rl_core::HostSnapshot,
+    E::Config: ConfigDecode + CanonicalConfig + Send,
+{
+    make_with::<E, A>(g, args, kwargs, HostPool::with_dyn_snapshots)
+}
+
+/// [`make`], with `prepare` applied to the pool before its workers start.
+fn make_with<'py, E, const A: usize>(
+    g: Gil<'py>,
+    args: Ref<'py>,
+    kwargs: Option<Ref<'py>>,
+    prepare: fn(HostPool<E, A>) -> HostPool<E, A>,
+) -> CResult<Mine<'py>>
+where
+    E: HostEnvironment,
+    E::Config: ConfigDecode + Send,
+{
     let (options, entries) = options(g, keywords(g, args, kwargs, "make")?)?;
     let cfg: E::Config = decode_config(g, entries)?;
-    let mut pool = HostPool::<E, A>::new(cfg, options.pool).map_err(|e| engine(g, &e))?;
+    let mut pool = prepare(HostPool::<E, A>::new(cfg, options.pool).map_err(|e| engine(g, &e))?);
     // Protocol 1 carries discrete heads only, or one continuous head.
     let (discrete, continuous) = pool.action_heads();
     if !((discrete > 0 && continuous == 0) || (discrete == 0 && continuous == 1)) {
@@ -299,7 +333,9 @@ where
 /// workers, cpu_set, **config)`, initialized by the fixed
 /// `PyInit__tessera_host` (feature `host`). `$env::Config` must implement
 /// `ConfigDecode` (derive `EnvConfig`). `functions` appends module
-/// functions of the crate's own.
+/// functions of the crate's own. With `snapshots`, `$env` implements `HostSnapshot`
+/// (and its config `CanonicalConfig`): the host object's snapshot methods
+/// work and `layout()["snapshots"]` is true (ADR-0073).
 ///
 /// Expand it once, in the cdylib's own crate (ADR-0054). Its expansion
 /// contains no `unsafe`.
@@ -310,9 +346,20 @@ where
 #[macro_export]
 macro_rules! export_host_env {
     ($env:ty, module = $module:literal) => {
-        $crate::export_host_env!($env, module = $module, functions = []);
+        $crate::export_host_env!(@make make, $env, module = $module, functions = []);
+    };
+    ($env:ty, module = $module:literal, snapshots) => {
+        $crate::export_host_env!(@make make_snapshots, $env, module = $module, functions = []);
     };
     ($env:ty, module = $module:literal, functions = [$($row:expr),* $(,)?]) => {
+        $crate::export_host_env!(@make make, $env, module = $module, functions = [$($row),*]);
+    };
+    ($env:ty, module = $module:literal, snapshots, functions = [$($row:expr),* $(,)?]) => {
+        $crate::export_host_env!(
+            @make make_snapshots, $env, module = $module, functions = [$($row),*]
+        );
+    };
+    (@make $make:ident, $env:ty, module = $module:literal, functions = [$($row:expr),* $(,)?]) => {
         const _: () = {
             struct __Make;
             impl $crate::ffi::module_def::FunctionKw for __Make {
@@ -321,7 +368,7 @@ macro_rules! export_host_env {
                     args: $crate::ffi::capi::Ref<'py>,
                     kwargs: ::core::option::Option<$crate::ffi::capi::Ref<'py>>,
                 ) -> $crate::ffi::capi::CResult<$crate::ffi::capi::Mine<'py>> {
-                    $crate::host::factory::make::<
+                    $crate::host::factory::$make::<
                         $env,
                         { <$env as $crate::__private::HostEnvironment>::MAX_AGENTS },
                     >(g, args, kwargs)

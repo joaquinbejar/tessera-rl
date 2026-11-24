@@ -180,15 +180,15 @@ where
     }
 
     /// Checks a host file against this pool and returns its records, still
-    /// to be checked by [`HostPool::import`]. It reads only the pool's
-    /// configuration and runs no environment code.
+    /// to be checked by [`HostPool::import`]. It runs no environment code
+    /// but `max_snapshot_len`, once per pool (refused on a poisoned pool).
     ///
     /// # Errors
     ///
     /// A [`PersistError`] for anything but a sound, compatible host file
     /// within `limits`.
     pub fn decode(
-        &self,
+        &mut self,
         bytes: &[u8],
         limits: DecodeLimits,
     ) -> Result<Vec<HostRecord<A>>, PersistError> {
@@ -239,7 +239,7 @@ where
         let n = usize::try_from(count).map_err(|_| PersistError::PayloadLength)?;
         let per_record = usize::try_from(limits.max_host_record_bytes)
             .unwrap_or(usize::MAX)
-            .min(self.max_snapshot_len());
+            .min(self.max_snapshot_len()?);
         let mut out = Vec::new();
         out.try_reserve_exact(n)
             .map_err(|_| PersistError::Allocation)?;

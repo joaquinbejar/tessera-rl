@@ -18,7 +18,7 @@ cargo-fuzz = true
 libfuzzer-sys = "0.4"
 tessera-rl-core = { path = "../crates/tessera-rl-core" }
 tessera-rl-num = { path = "../crates/tessera-rl-num" }
-tessera-rl-engine = { path = "../crates/tessera-rl-engine", features = ["test-hooks"] }
+tessera-rl-engine = { path = "../crates/tessera-rl-engine", features = ["test-hooks", "host"] }
 tessera-rl-classic = { path = "../crates/tessera-rl-classic" }
 tessera-rl-games = { path = "../crates/tessera-rl-games" }
 tessera-rl-rts = { path = "../crates/tessera-rl-rts" }
@@ -156,6 +156,13 @@ bench = false
 [[bin]]
 name = "persist_rts"
 path = "fuzz_targets/persist_rts.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "host_decode"
+path = "fuzz_targets/host_decode.rs"
 test = false
 doc = false
 bench = false

@@ -204,14 +204,17 @@ def test_host_outputs_missing_a_key_are_a_config_error(fake):
         env.reset()
 
 
-@pytest.mark.parametrize("name", [
-    "snapshot", "restore", "restore_all", "snapshot_all", "fork", "state_hash", "encode", "load",
-    "import_record", "send", "recv",
+# Without snapshots (the fake host's layout has no `snapshots` key, as an
+# older wheel's), every snapshot method raises (ADR-0073).
+@pytest.mark.parametrize(("name", "args"), [
+    ("snapshot", (0,)), ("restore", ([0], [b""])), ("restore_all", ([b""],)),
+    ("snapshot_all", ()), ("fork", (0, [1])), ("state_hash", (0,)), ("encode", ()),
+    ("load", (b"",)), ("import_record", (0, b"")), ("send", (0,)), ("recv", ()),
 ])
-def test_host_absent_methods_raise_capability_error(fake, name):
+def test_host_absent_methods_raise_capability_error(fake, name, args):
     env = tessera_rl.make(FAKE)
     with pytest.raises(tessera_rl.CapabilityError, match=name):
-        getattr(env, name)(0)
+        getattr(env, name)(*args)
     assert issubclass(tessera_rl.CapabilityError, tessera_rl.TesseraError)
 
 

@@ -69,6 +69,26 @@ pub enum EngineError {
         /// What is inconsistent.
         reason: &'static str,
     },
+    /// A host pool without snapshots (ADR-0073): its environment does not
+    /// implement `HostSnapshot`, or the type-erased pool was not built with
+    /// `HostPool::with_dyn_snapshots`.
+    #[error("this host environment has no snapshots")]
+    NoSnapshots,
+    /// A host environment's `max_snapshot_len` is over
+    /// `MAX_HOST_SNAPSHOT_BYTES` (ADR-0073); nothing was reserved.
+    #[error("max_snapshot_len is {max} bytes, over the limit of {cap}")]
+    SnapshotBound {
+        /// The environment's bound.
+        max: usize,
+        /// The engine's limit.
+        cap: usize,
+    },
+    /// The allocator refused the bytes reserved for a snapshot.
+    #[error("could not reserve {bytes} bytes for a host snapshot")]
+    SnapshotAllocation {
+        /// Bytes asked for.
+        bytes: usize,
+    },
     /// A host environment refused a record's bytes
     /// (`HostSnapshot::check_snapshot`, ADR-0073); nothing was restored.
     #[error("record {index}: snapshot rejected ({code}): {reason}")]

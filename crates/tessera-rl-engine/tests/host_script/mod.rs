@@ -107,6 +107,8 @@ pub struct Shared {
     pub panic_check: AtomicBool,
     /// `load` panics.
     pub panic_load: AtomicBool,
+    /// `max_snapshot_len` panics.
+    pub panic_max_len: AtomicBool,
 }
 
 impl Shared {
@@ -374,7 +376,11 @@ impl<const T: u8, const V: bool> HostEnvironment for Script<T, V> {
 impl<const T: u8, const V: bool> HostSnapshot for Script<T, V> {
     const SNAPSHOT_VERSION: u32 = 1;
 
-    fn max_snapshot_len(_: &ScriptConfig) -> usize {
+    fn max_snapshot_len(cfg: &ScriptConfig) -> usize {
+        assert!(
+            !cfg.shared.panic_max_len.load(Ordering::Relaxed),
+            "max_snapshot_len panicked"
+        );
         8
     }
 

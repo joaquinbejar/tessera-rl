@@ -34,6 +34,7 @@ where
     let limits = DecodeLimits {
         max_instances: 8,
         max_decoded_bytes: 1 << 20,
+        max_host_record_bytes: 1 << 16,
     };
     for bytes in [data.to_vec(), resealed(data)] {
         let Ok(records) = pool.decode_with(&bytes, limits, build_id) else {

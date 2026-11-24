@@ -522,3 +522,101 @@ fn test_host_snapshot_file_record_over_limit_refused() {
         Err(PersistError::Checksum)
     ));
 }
+
+/// ADR-0073 item 4: through `DynHostPool`, a pool built without
+/// `with_dyn_snapshots` has none (`NoSnapshots`); with it, encoded records
+/// round-trip.
+#[test]
+fn test_host_snapshot_dyn_pool_needs_with_dyn_snapshots() {
+    use tessera_rl_engine::DynHostPool;
+
+    let mut plain: Box<dyn DynHostPool> = Box::new(walk_pool(2, 1, 0));
+    assert!(!plain.snapshots() && !plain.layout().snapshots);
+    assert!(matches!(
+        plain.snapshot_records(&[0]),
+        Err(EngineError::NoSnapshots)
+    ));
+    assert!(matches!(plain.fork(0, &[1]), Err(EngineError::NoSnapshots)));
+
+    let mut pool: Box<dyn DynHostPool> = Box::new(walk_pool(2, 1, 0).with_dyn_snapshots());
+    assert!(pool.snapshots() && pool.layout().snapshots);
+    pool.reset_all(Reseed::Keep).unwrap();
+    let records = pool.snapshot_records(&[0]).unwrap();
+    let hash = pool.state_hash(0).unwrap();
+    pool.restore_records(&[1], &[&records[0]]).unwrap();
+    assert_eq!(pool.state_hash(1).unwrap(), hash);
+    let file = pool.encode(&[0, 1]).unwrap();
+    pool.import_file(&[1, 0], &file, DecodeLimits::default())
+        .unwrap();
+    assert!(matches!(
+        pool.restore_records(&[0], &[&records[0][..4]]),
+        Err(EngineError::InvalidRecord { index: 0, .. })
+    ));
+}
+
+/// Review of #344: `max_snapshot_len` over `MAX_HOST_SNAPSHOT_BYTES` is
+/// refused before anything is reserved, without poisoning.
+#[test]
+fn test_host_snapshot_max_len_over_cap_refused() {
+    let mut pool = WalkPool::new(WalkConfig { length: u32::MAX }, options(1, 0)).unwrap();
+    pool.reset_all(Reseed::Keep).unwrap();
+    assert!(matches!(
+        pool.snapshot(0),
+        Err(EngineError::SnapshotBound { cap, .. }) if cap == tessera_rl_engine::MAX_HOST_SNAPSHOT_BYTES
+    ));
+    assert!(!pool.is_poisoned());
+}
+
+/// Review of #344: `max_snapshot_len` is author code, run once under the
+/// panic boundary: a panic poisons.
+#[test]
+fn test_host_snapshot_max_len_panic_poisons() {
+    let shared = Shared::new();
+    let mut a = script_pool(&shared, 2, AutoReset::NextStep);
+    a.reset_all(Reseed::Keep).unwrap();
+    shared.panic_max_len.store(true, Ordering::Relaxed);
+    assert!(matches!(a.snapshot(0), Err(EngineError::Panicked)));
+    assert!(a.is_poisoned());
+}
+
+/// The host file layout, version 1 (ADR-0073 item 5), pinned field by
+/// field: magic, format version, the ADR-0011 header fields with tier 2,
+/// the host descriptor, then one record (identity, header, version,
+/// length, bytes) and the checksum.
+#[test]
+fn test_host_snapshot_file_layout_v1_is_pinned() {
+    let mut a = walk_pool(1, 5, 0);
+    a.reset_all(Reseed::Keep).unwrap();
+    let file = a.encode_with(&[0], "9.9.9").unwrap();
+    let identity = a.snapshot_identity().unwrap();
+    let record = a.snapshot(0).unwrap().to_bytes().unwrap();
+    let mut want = Vec::new();
+    want.extend_from_slice(b"TESHOST\x1a");
+    want.extend_from_slice(&1u32.to_le_bytes()); // format version
+    want.extend_from_slice(&[0, 2, 0, 0, 0, 0, 0, 0]); // raw, tier 2, mask, next_step, illegal, reserved
+    want.extend_from_slice(&0u32.to_le_bytes()); // penalty bits
+    want.extend_from_slice(&LENGTH.to_le_bytes()); // max_episode_steps
+    want.extend_from_slice(&1u32.to_le_bytes()); // ENV_VERSION
+    want.extend_from_slice(&file[32..40]); // config hash, checked below
+    want.extend_from_slice(&1u32.to_le_bytes()); // count
+    let header_len = u32::try_from(HostRecord::<1>::header_len()).unwrap();
+    want.extend_from_slice(&header_len.to_le_bytes()); // record_len
+    for part in [&b"test/Walk-v1"[..], b"9.9.9"] {
+        want.extend_from_slice(&u16::try_from(part.len()).unwrap().to_le_bytes());
+        want.extend_from_slice(part);
+    }
+    want.extend_from_slice(&0u16.to_le_bytes()); // assets
+    // Descriptor: version 1, SNAPSHOT_VERSION 1, agents 1, initial 1,
+    // SPAWNS and MASKS false, three reserved bytes.
+    want.extend_from_slice(&14u16.to_le_bytes());
+    want.extend_from_slice(&[1, 1, 0, 0, 0, 1, 0, 1, 0, 0, 0, 0, 0, 0]);
+    want.extend_from_slice(&record);
+    assert_eq!(&file[..file.len() - 8], &want[..]);
+    assert_eq!(record[..8], identity.to_le_bytes());
+    let hash =
+        tessera_rl_core::config::config_hash("test/Walk-v1", 1, &WalkConfig { length: LENGTH })
+            .unwrap();
+    assert_eq!(file[32..40], hash.to_le_bytes());
+    let sum = tessera_rl_core::encoding::checksum(&file[..file.len() - 8]);
+    assert_eq!(file[file.len() - 8..], sum.to_le_bytes());
+}
