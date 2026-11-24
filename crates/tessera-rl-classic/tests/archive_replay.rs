@@ -14,7 +14,9 @@
 use core::num::{NonZeroU32, NonZeroUsize};
 
 use tessera_rl_classic::{CartPole, CartPoleConfig};
-use tessera_rl_engine::replay::{Recorder, Replay, ReplayError, ReplayWriterOptions};
+use tessera_rl_engine::replay::{
+    DivergenceKind, Recorder, Replay, ReplayError, ReplayWriterOptions,
+};
 use tessera_rl_engine::{
     ActionInput, Archive, AutoReset, DecodeLimits, EngineError, EnvPool, PoolOptions, Record,
     Reseed, ResetSource, SyncOptions,
@@ -271,6 +273,39 @@ fn test_archive_replay_forged_reset_source_event_names_another_archive() {
             err,
             ReplayError::Engine(EngineError::ArchiveMismatch { expected, found })
                 if expected == other.digest() && found == arc.digest()
+        ),
+        "{err:?}"
+    );
+}
+
+#[test]
+fn test_archive_replay_forged_periodic_keyframe_source_diverges() {
+    // A periodic keyframe (call 32, before the weights change at step 40)
+    // whose reset source differs from the replayed pool's.
+    let arc = archive(3);
+    let (mut bytes, _) = record(&arc, 0);
+    let (_, sum_at) = header_archive(&bytes, arc.digest(), 3);
+    let header_end = sum_at + 8;
+    let digest = arc.digest().to_le_bytes();
+    // The digest's first occurrence after the header is the first
+    // keyframe's; the second, the periodic keyframe's.
+    let first = header_end + find(&bytes[header_end..], &digest);
+    let second = first + 8 + find(&bytes[first + 8..], &digest);
+    // Then `count:u32` and the weights (1, 0, 2): (1, 0, 3).
+    let w = second + 8 + 4;
+    assert_eq!(&bytes[w..w + 12], &[1, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0]);
+    bytes[w + 8..w + 12].copy_from_slice(&3u32.to_le_bytes());
+    reseal_events(&mut bytes, header_end);
+    let file = Replay::open(&bytes, DecodeLimits::default()).unwrap();
+    let mut p = pool(7, 0);
+    let err = file.run_with_archive(&mut p, Some(&arc)).unwrap_err();
+    assert!(
+        matches!(
+            err,
+            ReplayError::Diverged {
+                kind: DivergenceKind::ResetSource,
+                ..
+            }
         ),
         "{err:?}"
     );
