@@ -77,6 +77,12 @@ harness = false
 name = "id_rings"
 harness = false
 
+# Wall-clock snapshot, restore, fork and state_hash cost against the SPEC 9.2
+# targets (#362).
+[[bench]]
+name = "snapshot_cost"
+harness = false
+
 # Instruction counts (gungraun, Linux only; ADR-0025).
 [[bench]]
 name = "snapshot_instructions"
