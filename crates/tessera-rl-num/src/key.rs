@@ -44,6 +44,19 @@ pub const fn derive_branch_salt(parent: BranchSalt, branch_counter: u64, label: 
     ))
 }
 
+/// Domain separation constant for league assignment salts: ASCII
+/// `TSRLEAG1` (ADR-0088 item 3.1).
+pub const LEAGUE_DOMAIN: u64 = 0x5453_524C_4541_4731;
+
+/// Derives the salt of an instance's league assignment draw from its salt:
+/// `splitmix64(LEAGUE_DOMAIN ^ salt)`. With the `LEAGUE` stream id, the
+/// draw shares no key with the environment's or a heuristic's streams.
+#[must_use]
+#[inline]
+pub fn league_salt(salt: BranchSalt) -> BranchSalt {
+    BranchSalt::new(splitmix64(LEAGUE_DOMAIN ^ salt.get()))
+}
+
 /// Domain separation constant for heuristic slot salts: ASCII `TSRHEUR1`.
 pub const HEURISTIC_DOMAIN: u64 = 0x5453_5248_4555_5231;
 

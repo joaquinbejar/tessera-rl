@@ -39,6 +39,11 @@ where
             if let Some(t) = pool.transform.as_mut() {
                 t.barrier();
             }
+            // The league, the fourth subsystem (ADR-0088 section 7): on
+            // error its view and rings stay, and the pool is not poisoned.
+            if let Some(league) = pool.league.as_mut() {
+                report.league = league.barrier()?;
+            }
             Ok(report)
         })
     }
@@ -47,6 +52,16 @@ where
     pub fn freeze_adaptive(&mut self, frozen: bool) {
         self.freeze_episode_stats(frozen);
         self.freeze_normalization(frozen);
+        self.freeze_league(frozen);
+    }
+
+    /// Freezes (or unfreezes) the league (ADR-0088 item 4.6): while frozen
+    /// no result is kept and the barrier changes nothing; assignments are
+    /// still drawn from the current view.
+    pub fn freeze_league(&mut self, frozen: bool) {
+        if let Some(league) = self.league.as_mut() {
+            league.frozen = frozen;
+        }
     }
 
     /// Freezes (or unfreezes) episode statistics: while frozen no episode
@@ -59,6 +74,8 @@ where
     /// frozen without a `Normalize`): the Async barrier's condition.
     #[must_use]
     pub fn adaptive_frozen(&self) -> bool {
-        self.episodes.frozen() && !self.normalization_unfrozen()
+        self.episodes.frozen()
+            && !self.normalization_unfrozen()
+            && self.league.as_ref().is_none_or(|l| l.frozen)
     }
 }

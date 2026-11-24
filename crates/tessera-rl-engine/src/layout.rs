@@ -23,15 +23,43 @@ pub(crate) struct ActionLayout {
     /// skips those rows and stores them as zero. Empty without a heuristic
     /// slot.
     pub(crate) heuristic: Vec<Bool8>,
+    /// Per agent slot, whether it is a league `Opponent` slot (ADR-0088
+    /// item 2.4). Empty without a league.
+    pub(crate) opponent: Vec<Bool8>,
+    /// Per instance, whether its current assignment is a heuristic policy,
+    /// so the engine computes its opponent slots' actions; written by the
+    /// league draw on the calling thread. Empty without a league.
+    pub(crate) opponent_heuristic: Vec<Bool8>,
 }
 
 impl ActionLayout {
     /// Whether agent slot `slot`'s submitted row is skipped at the
-    /// boundary (a heuristic slot).
+    /// boundary for instance `instance`: a heuristic slot, or an opponent
+    /// slot of an instance whose opponent is a heuristic policy.
     #[must_use]
     #[inline]
-    pub(crate) fn skips(&self, slot: usize) -> bool {
-        self.heuristic.get(slot).is_some_and(|f| f.get())
+    pub(crate) fn skips(&self, instance: usize, slot: usize) -> bool {
+        self.heuristic.get(slot).is_some_and(|f| f.get()) || self.engine_opponent(instance, slot)
+    }
+
+    /// Whether the engine computes opponent slot `slot` of `instance`.
+    #[must_use]
+    #[inline]
+    pub(crate) fn engine_opponent(&self, instance: usize, slot: usize) -> bool {
+        self.opponent.get(slot).is_some_and(|f| f.get())
+            && self
+                .opponent_heuristic
+                .get(instance)
+                .is_some_and(|f| f.get())
+    }
+
+    /// Whether `slot` is an opponent slot whose rows the caller submits for
+    /// `instance` (an `External` assignment): the heuristic pass leaves
+    /// them alone.
+    #[must_use]
+    #[inline]
+    pub(crate) fn external_opponent(&self, instance: usize, slot: usize) -> bool {
+        self.opponent.get(slot).is_some_and(|f| f.get()) && !self.engine_opponent(instance, slot)
     }
 }
 
@@ -198,6 +226,8 @@ impl ActionLayout {
             continuous,
             mask: MaskLayout::default(),
             heuristic: Vec::new(),
+            opponent: Vec::new(),
+            opponent_heuristic: Vec::new(),
         })
     }
 }

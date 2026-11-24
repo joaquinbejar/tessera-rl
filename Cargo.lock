@@ -1108,6 +1108,9 @@ version = "0.3.0"
 dependencies = [
  "criterion",
  "proptest",
+ "tessera-rl-classic",
+ "tessera-rl-core",
+ "tessera-rl-engine",
  "tessera-rl-num",
  "thiserror",
 ]

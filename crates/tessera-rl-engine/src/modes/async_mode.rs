@@ -272,6 +272,16 @@ where
                 "the pool already runs in Sync mode",
             ));
         }
+        // ADR-0088 head B: the batch passes do not draw assignments or
+        // capture league results yet.
+        if self.league.is_some() {
+            return Err(AsyncBuildError {
+                error: EngineError::League {
+                    reason: "Async mode does not run a league yet",
+                },
+                pool: Some(Box::new(self)),
+            });
+        }
         let n = usize::try_from(self.options.num_envs.get()).unwrap_or(usize::MAX);
         let batch = options.batch_size.get();
         if batch > n {

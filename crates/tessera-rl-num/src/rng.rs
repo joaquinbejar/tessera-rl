@@ -123,6 +123,26 @@ impl StepRng {
         }
     }
 
+    /// Engine-only: the RNG of an instance's league assignment draw at the
+    /// identity's episode (ADR-0088 item 3.1): the `LEAGUE` stream under
+    /// the league salt, at step 0, so the draw is a function of the
+    /// instance (seed, salt, logical id) and its episode counter only.
+    #[doc(hidden)]
+    #[must_use]
+    #[inline]
+    pub fn league(_authority: &RngAuthority, identity: &RngIdentity) -> Self {
+        Self {
+            draws: Draws::new_deferred(
+                identity.seed(),
+                StreamId::LEAGUE,
+                crate::key::league_salt(identity.branch_salt()),
+                identity.logical_id().get(),
+                identity.episode_index(),
+                0,
+            ),
+        }
+    }
+
     /// Engine-only: the RNG of heuristic slot `slot` at the identity's
     /// current episode and step (ADR-0079 item 3.3): the `HEURISTIC`
     /// stream under a per-slot salt, so it shares no key with the

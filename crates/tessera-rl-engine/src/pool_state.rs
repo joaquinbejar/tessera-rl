@@ -105,7 +105,7 @@ where
         let result = self.guarded(Poison::Recover, |pool| {
             pool.check_count(state.records.len())?;
             pool.check_state_len(state.transforms.len(), state.records.len())?;
-            let (branch_counter, source, transforms) =
+            let (branch_counter, source, transforms, league) =
                 pool.check_context(state.context.clone(), archive)?;
             for (i, record) in state.records.iter().enumerate() {
                 pool.write_record(i, record);
@@ -118,7 +118,13 @@ where
             }
             // Partials are not context: they restart empty (ADR-0081 item 6).
             pool.episodes.clear();
+            // The exact continuation keeps every opponent (ADR-0088 item
+            // 3.2): the context's assignments, after the records.
+            if let (Some(l), Some(context)) = (pool.league.as_mut(), league.as_ref()) {
+                l.restore_context(context, &pool.headers);
+            }
             pool.reobserve(0..state.records.len(), StackMode::Keep)?;
+            pool.refresh_league();
             pool.poisoned = false;
             #[cfg(feature = "debug-checks")]
             pool.discard_allocations();

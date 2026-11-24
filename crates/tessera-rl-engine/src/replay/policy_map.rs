@@ -22,8 +22,10 @@ impl ReplayHeader<'_> {
     /// # Errors
     ///
     /// [`ReplayError::Unsupported`] for a group code this engine has no
-    /// [`PolicyGroup`] for (4, opponent, ADR-0088); codes past
-    /// [`super::MAX_POLICY_GROUP`] are refused when the file is opened.
+    /// [`PolicyGroup`] for; codes past [`super::MAX_POLICY_GROUP`] are
+    /// refused when the file is opened. Code 4 decodes to
+    /// [`PolicyGroup::Opponent`] (ADR-0088), but replaying a map with an
+    /// opponent slot is refused (league replay, #384 head D).
     pub fn policy_map(&self) -> Result<Option<PolicyMap>, ReplayError> {
         if self.policy_map.is_empty() {
             return Ok(None);
@@ -34,7 +36,7 @@ impl ReplayHeader<'_> {
             .map_err(|_| ReplayError::Allocation)?;
         for &code in self.policy_map {
             let group = PolicyGroup::from_code(code).ok_or(ReplayError::Unsupported {
-                feature: "opponent policy groups (ADR-0088)",
+                feature: "an unknown policy group",
             })?;
             groups.push(group);
         }
@@ -58,6 +60,10 @@ impl Replay<'_> {
     /// as `found` and the pool's as `expected` (as `check_context` reports a
     /// context), wrapped as [`ReplayError::Engine`].
     pub(super) fn check_policy_map(&self, pool: &PolicyMap) -> Result<(), ReplayError> {
+        if let Some(recorded) = self.header.policy_map()? {
+            refuse_league(&recorded)?;
+        }
+        refuse_league(pool)?;
         let same = match self.header.policy_map()? {
             None => pool.is_default(),
             Some(recorded) => recorded == *pool || (recorded.is_default() && pool.is_default()),
@@ -71,6 +77,18 @@ impl Replay<'_> {
         }
         .into())
     }
+}
+
+/// Refuses a map with an `Opponent` slot: a league pool's replay needs its
+/// per-episode assignments and the league's view in the file, which come
+/// with ADR-0088's head D (tag 12, `has_league`).
+pub(super) fn refuse_league(map: &PolicyMap) -> Result<(), ReplayError> {
+    if map.groups().contains(&PolicyGroup::Opponent) {
+        return Err(ReplayError::Unsupported {
+            feature: "league replay (ADR-0088, #384 head D)",
+        });
+    }
+    Ok(())
 }
 
 /// The header field's codes for `map` (ADR-0079 item 6.2): empty for the
@@ -92,4 +110,38 @@ pub(super) fn header_codes(map: &PolicyMap, agents: usize) -> Result<Vec<u8>, Re
         .map_err(|_| ReplayError::Allocation)?;
     codes.extend(map.groups().iter().map(|g| g.code()));
     Ok(codes)
+}
+
+#[cfg(test)]
+mod tests {
+    use tessera_rl_core::PolicyGroup;
+
+    use super::{header_codes, refuse_league};
+    use crate::policy::PolicyMap;
+
+    /// Code 4 round-trips (ADR-0088 section 8): `Opponent` encodes to 4 and
+    /// 4 decodes back, for every group.
+    #[test]
+    fn test_policy_map_codes_round_trip_every_group_including_opponent() {
+        let map = PolicyMap::from_groups(PolicyGroup::ALL.to_vec());
+        let codes = header_codes(&map, PolicyGroup::ALL.len()).unwrap();
+        assert_eq!(codes, [0, 1, 2, 3, 4]);
+        let back: Vec<_> = codes
+            .iter()
+            .map(|&c| PolicyGroup::from_code(c).unwrap())
+            .collect();
+        assert_eq!(back, PolicyGroup::ALL);
+    }
+
+    /// A map with an opponent slot is refused for replay until head D.
+    #[test]
+    fn test_policy_map_with_an_opponent_is_refused_for_replay() {
+        let league = PolicyMap::from_groups(vec![PolicyGroup::Learner, PolicyGroup::Opponent]);
+        assert!(matches!(
+            refuse_league(&league),
+            Err(super::super::ReplayError::Unsupported { feature }) if feature.contains("head D")
+        ));
+        let heuristic = PolicyMap::from_groups(vec![PolicyGroup::Learner, PolicyGroup::Heuristic]);
+        assert!(refuse_league(&heuristic).is_ok());
+    }
 }

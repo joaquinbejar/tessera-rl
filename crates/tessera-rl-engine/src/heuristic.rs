@@ -128,6 +128,11 @@ where
         );
         for &slot in ctx.heuristic_slots {
             let s = usize::from(slot);
+            // An opponent slot whose instance plays an `External` policy
+            // keeps the caller's validated row (ADR-0088 item 2.4).
+            if layout.external_opponent(first + i, s) {
+                continue;
+            }
             let k = i * a + s;
             let (Some(disc), Some(cont)) = (
                 chunk.discrete.get_mut(k * dh..(k + 1) * dh),

@@ -187,6 +187,8 @@ struct RawChunk<H, S, T: LaneTuple = ()> {
     episode_partials: Raw<crate::adaptive::EpisodePartial>,
     /// One abort count per instance of a host pool; empty otherwise.
     episode_aborts: Raw<u64>,
+    league_outcomes: Raw<i8>,
+    league_slots: u64,
 }
 
 /// The raw transform parts of a pool-wide view (ADR-0078).
@@ -223,6 +225,10 @@ type EnvRawChunk<E> = RawChunk<
 unsafe impl<H: Send, S: Send, T: LaneTuple> Sync for RawChunk<H, S, T> {}
 
 impl<H, S, T: LaneTuple> RawChunk<H, S, T> {
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one raw view per output buffer, in field order"
+    )]
     fn new(chunk: Rows<'_, H, S, T>, dh: usize, ch: usize) -> Self {
         let Rows {
             headers,
@@ -265,6 +271,8 @@ impl<H, S, T: LaneTuple> RawChunk<H, S, T> {
             transform,
             episode_partials,
             episode_aborts,
+            league_outcomes,
+            league_slots,
         } = outputs;
         let leaves = |views: [&mut [u8]; MAX_LEAVES]| views.map(Raw::new);
         // `leaf_bytes` is only read; a read-only view is stored as raw too.
@@ -321,6 +329,8 @@ impl<H, S, T: LaneTuple> RawChunk<H, S, T> {
             },
             episode_partials: Raw::new(episode_partials),
             episode_aborts: Raw::new(episode_aborts),
+            league_outcomes: Raw::new(league_outcomes),
+            league_slots,
         }
     }
 
@@ -436,6 +446,9 @@ impl<H, S, T: LaneTuple> RawChunk<H, S, T> {
         let episode_partials = unsafe { self.episode_partials.view(r, 1) };
         // SAFETY: as for `episode_partials` (empty outside host pools).
         let episode_aborts = unsafe { self.episode_aborts.view(r, 1) };
+        // SAFETY: as for `episode_partials` (1 element per instance; empty
+        // without a league).
+        let league_outcomes = unsafe { self.league_outcomes.view(r, 1) };
         Rows {
             headers,
             states,
@@ -475,6 +488,8 @@ impl<H, S, T: LaneTuple> RawChunk<H, S, T> {
                 transform,
                 episode_partials,
                 episode_aborts,
+                league_outcomes,
+                league_slots: self.league_slots,
             },
         }
     }

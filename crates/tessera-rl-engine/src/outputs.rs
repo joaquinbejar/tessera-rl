@@ -424,6 +424,11 @@ pub(crate) struct OutputsView<'a> {
     /// Per-instance aborted-episode counts of a host pool (ADR-0081 item
     /// 8); empty otherwise.
     pub(crate) episode_aborts: &'a mut [u64],
+    /// Per instance, the league outcome written at episode end (ADR-0088
+    /// item 4.1); empty without a league.
+    pub(crate) league_outcomes: &'a mut [i8],
+    /// The league's opponent slots as a bit mask; 0 without a league.
+    pub(crate) league_slots: u64,
 }
 
 impl OutputsView<'_> {
@@ -463,6 +468,8 @@ impl OutputsView<'_> {
             transform: crate::transform::rows::TransformRows::default(),
             episode_partials: &mut [],
             episode_aborts: &mut [],
+            league_outcomes: &mut [],
+            league_slots: 0,
         }
     }
 }
@@ -531,6 +538,8 @@ impl Outputs {
             transform: crate::transform::rows::TransformRows::default(),
             episode_partials: &mut [],
             episode_aborts: &mut [],
+            league_outcomes: &mut [],
+            league_slots: 0,
         }
     }
 }

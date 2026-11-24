@@ -74,6 +74,11 @@ impl<E: Environment, M: MaskProvider<E>> EnvPool<E, M> {
                          with_info_heuristic_slots or with_privileged_heuristic_slots",
             });
         }
+        if map.groups().contains(&PolicyGroup::Opponent) {
+            return Err(EngineError::PolicyMap {
+                reason: "opponent slots are set with with_league or with_info_league",
+            });
+        }
         if self.heuristic.is_some() {
             return Err(EngineError::PolicyMap {
                 reason: "set the policy map before the heuristic slots",
@@ -92,6 +97,70 @@ impl<E: Environment, M: MaskProvider<E>> EnvPool<E, M> {
             });
         }
         Ok(())
+    }
+
+    /// Puts `slots` in the `Opponent` group of a league (ADR-0088 section 2)
+    /// driven by `run` for heuristic assignments: the common part of the
+    /// league setters.
+    fn set_league(
+        self,
+        slots: &[usize],
+        view: crate::league::LeagueView,
+        subsystem: Box<dyn crate::league::LeagueSubsystem>,
+        run: HeuristicFn<E>,
+    ) -> Result<Self, EngineError> {
+        let bad = |reason| Err(EngineError::League { reason });
+        if self.league.is_some() {
+            return bad("a league is set once");
+        }
+        if self.heuristic.is_some() {
+            return bad("a league cannot be combined with heuristic slots yet");
+        }
+        if slots.is_empty() {
+            return bad("a league needs at least one opponent slot");
+        }
+        if E::MAX_AGENTS > 64 {
+            return bad("a league pool has at most 64 agent slots");
+        }
+        let mut pool = self.set_heuristic(slots, PolicyGroup::Opponent, run)?;
+        let mut mask = 0u64;
+        for &slot in slots {
+            mask |= 1u64 << slot;
+        }
+        if let Some(route) = pool.heuristic.as_mut() {
+            route.slots = slots
+                .iter()
+                .map(|&s| u16::try_from(s).unwrap_or(u16::MAX))
+                .collect();
+            route.slots.sort_unstable();
+        }
+        let n = pool.headers.len();
+        pool.actions.opponent = (0..E::MAX_AGENTS)
+            .map(|s| Bool8::from((mask >> s) & 1 == 1))
+            .collect();
+        pool.actions.opponent_heuristic = vec![Bool8::from(false); n];
+        pool.league = Some(Box::new(crate::league::LeagueState::new(
+            view,
+            subsystem,
+            mask,
+            n,
+            crate::league::DEFAULT_RING,
+        )));
+        pool.forget_fast_facts();
+        Ok(pool)
+    }
+
+    /// The opponent policy each instance plays this episode (ADR-0088 item
+    /// 2.3, the `assignment` output, `[N]`), or `None` without a league.
+    #[must_use]
+    pub fn assignment(&self) -> Option<&[u32]> {
+        self.league.as_ref().map(|l| l.assignment.as_slice())
+    }
+
+    /// The league's current view, or `None` without a league.
+    #[must_use]
+    pub fn league_view(&self) -> Option<&crate::league::LeagueView> {
+        self.league.as_ref().map(|l| &l.view)
     }
 
     /// Puts `slots` in `group`, run by `run`: the common part of the
@@ -178,7 +247,54 @@ impl<E: Heuristic, M: MaskProvider<E>> EnvPool<E, M> {
     }
 }
 
+impl<E: Heuristic, M: MaskProvider<E>> EnvPool<E, M> {
+    /// A league on a perfect-information environment (ADR-0088 section 2):
+    /// `slots` become `Opponent` slots; each instance's assignment, drawn
+    /// from `view` at each episode, is played by `Heuristic::act` (a
+    /// heuristic policy) or by the caller's rows (an external one);
+    /// `subsystem` updates the league at each epoch barrier. Before the
+    /// first reset, once, and not with other heuristic slots.
+    ///
+    /// # Errors
+    ///
+    /// [`EngineError::League`] for an imperfect-information environment
+    /// (use [`Self::with_info_league`]), no slot, more than 64 agent slots,
+    /// a second call or heuristic slots; [`EngineError::PolicyMap`] for a
+    /// slot out of range or repeated, or a call after the first reset.
+    pub fn with_league(
+        self,
+        slots: &[usize],
+        view: crate::league::LeagueView,
+        subsystem: Box<dyn crate::league::LeagueSubsystem>,
+    ) -> Result<Self, EngineError> {
+        if !E::PERFECT_INFORMATION {
+            return Err(EngineError::League {
+                reason: "an imperfect-information environment needs InfoHeuristic (with_info_league)",
+            });
+        }
+        let run: HeuristicFn<E> = run_act::<E>;
+        self.set_league(slots, view, subsystem, run)
+    }
+}
+
 impl<E: InfoHeuristic, M: MaskProvider<E>> EnvPool<E, M> {
+    /// As [`Self::with_league`], for an imperfect-information environment:
+    /// heuristic opponents get only their information state
+    /// (`InfoHeuristic::act_info`, ADR-0079 item 4.2).
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::with_league`], without the information check.
+    pub fn with_info_league(
+        self,
+        slots: &[usize],
+        view: crate::league::LeagueView,
+        subsystem: Box<dyn crate::league::LeagueSubsystem>,
+    ) -> Result<Self, EngineError> {
+        let run: HeuristicFn<E> = run_info::<E>;
+        self.set_league(slots, view, subsystem, run)
+    }
+
     /// Makes `slots` heuristic slots of an imperfect-information
     /// environment (ADR-0079 item 4.2): the engine passes only
     /// `info_state(cfg, state, agent)` to `InfoHeuristic::act_info`, so the

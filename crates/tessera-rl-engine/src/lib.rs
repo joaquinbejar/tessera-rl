@@ -33,6 +33,7 @@ mod heuristic_rows;
 #[cfg(feature = "host")]
 mod host;
 mod layout;
+pub mod league;
 mod masks;
 #[cfg(not(loom))]
 mod modes;
