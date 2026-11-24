@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: MIT OR Apache-2.0
 # pufferlib ships no stubs and is not in the lock: its classes are Any here.
+from collections.abc import Sequence
 from functools import partial
 from typing import Any, NoReturn
 
@@ -7,12 +8,14 @@ import numpy as np
 import numpy.typing as npt
 import pufferlib
 
+from tessera_rl._archive import Archive
 from tessera_rl._env import make as make
 
 SUPPORTED: frozenset[str]
 MAX_WORKERS: int
 
 def mix_seed(constructor_seed: int, reset_seed: int) -> int: ...
+
 
 class TesseraPufferEnv(pufferlib.PufferEnv):
     instance_seed_base: int | None
@@ -36,6 +39,8 @@ class TesseraPufferEnv(pufferlib.PufferEnv):
     def action_masks(self) -> np.ndarray | None: ...
     @property
     def terminal_observations(self) -> np.ndarray: ...
+    def set_reset_source(self, archive: Archive | None = None, weights: Sequence[int] | None = None) -> None: ...
+    def reset_from(self, ids: Sequence[int], entries: Sequence[int]) -> Any: ...
     def reset(self, seed: int | None = None) -> tuple[np.ndarray, list[dict[str, Any]]]: ...
     def step(
         self, actions: npt.ArrayLike

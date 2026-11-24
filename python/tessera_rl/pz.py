@@ -411,6 +411,16 @@ class TesseraParallelEnv(ParallelEnv):
     def action_space(self, agent):
         return self._a.action_space
 
+    def set_reset_source(self, archive=None, weights=None) -> None:
+        """Archive resets (ADR-0075): forwarded to the wrapped
+        ``tessera_rl`` environment's ``set_reset_source``."""
+        self._a.env.set_reset_source(archive, weights)
+
+    def reset_from(self, ids, entries):
+        """Archive resets (ADR-0075): forwarded to the wrapped
+        ``tessera_rl`` environment's ``reset_from``."""
+        return self._a.env.reset_from(ids, entries)
+
     def reset(self, seed=None, options=None):
         self._a.last = self._a.env.reset(seed)
         self.agents = self._a.live()
@@ -542,6 +552,16 @@ class TesseraAECEnv(AECEnv):
         self.truncations = {n: False for n in self.agents}
         self.infos = {n: {} for n in self.agents}
         self.agent_selection = self._acting() or self.agents[0]
+
+    def set_reset_source(self, archive=None, weights=None) -> None:
+        """Archive resets (ADR-0075): forwarded to the wrapped
+        ``tessera_rl`` environment's ``set_reset_source``."""
+        self._a.env.set_reset_source(archive, weights)
+
+    def reset_from(self, ids, entries):
+        """Archive resets (ADR-0075): forwarded to the wrapped
+        ``tessera_rl`` environment's ``reset_from``."""
+        return self._a.env.reset_from(ids, entries)
 
     def reset(self, seed=None, options=None):
         self._a.last = self._a.env.reset(seed)

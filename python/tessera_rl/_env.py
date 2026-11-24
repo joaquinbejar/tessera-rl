@@ -239,6 +239,43 @@ class Env:
             return self._batch(out)
         return self._wrap(out)
 
+    def set_reset_source(self, archive=None, weights=None) -> None:
+        """Sets what resets start from (ADR-0075): a :class:`tessera_rl.Archive`
+        of this environment, with optional ``weights`` (one non-negative int
+        per entry, not all zero; all ones by default), or ``None`` for
+        ``Environment::reset``. It applies to every reset after the call,
+        auto-resets included. An archive reset keeps the instance's own
+        seed and lineage and copies an entry's state.
+
+        In Pipelined and Async mode no step may be in flight
+        (``ConcurrencyError``). An archive of another environment raises
+        ``ArgumentError``; of another config, ``ConfigError``. While
+        recording (``tessera_rl.replay.record``) the call is logged.
+        """
+        from tessera_rl._archive import Archive
+
+        if archive is not None and not isinstance(archive, Archive):
+            raise _native.ArgumentError(f"archive must be a tessera_rl.Archive or None, not {type(archive).__name__}")
+        native = None if archive is None else archive._native
+        if weights is not None:
+            weights = [_index(w, "weights") for w in weights]
+        self._native.set_reset_source(native, weights)
+
+    def reset_from(self, ids, entries) -> Step | None:
+        """Resets the instances ``ids`` from the archive entries ``entries``
+        (one per id) of the attached archive (ADR-0075). Sync: the outputs,
+        as ``reset``; Async: nothing, the next ``recv`` delivers the ids.
+        Pipelined mode has no partial reset (``CapabilityError``). Logged
+        while recording.
+        """
+        ids = [_index(i, "ids") for i in ids]
+        entries = [_index(e, "entries") for e in entries]
+        if self.mode == "async":
+            self._native.reset_from(ids, entries, self._delivered)
+            return None
+        out = self._native.reset_from(ids, entries)
+        return self._wrap(out)
+
     def send(self, target, actions) -> None:
         """Starts steps. Pipelined: ``target`` is a half and ``actions`` has
         one int per agent row of it; it ends that half's arrays' window.

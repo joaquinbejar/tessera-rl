@@ -329,6 +329,22 @@ class TesseraVectorEnv(VectorEnv):
 
     # -- Gymnasium API -------------------------------------------------------
 
+    def set_reset_source(self, archive=None, weights=None) -> None:
+        """Archive resets (ADR-0075): as ``tessera_rl.Env.set_reset_source``.
+        ``tessera_rl.Archive(vector_env, snapshots)`` builds an archive of
+        this environment."""
+        from tessera_rl._archive import Archive
+
+        if archive is not None and not isinstance(archive, Archive):
+            raise TypeError(f"archive must be a tessera_rl.Archive or None, not {type(archive).__name__}")
+        weights = None if weights is None else [int(w) for w in weights]
+        self._native.set_reset_source(None if archive is None else archive._native, weights)
+
+    def reset_from(self, ids, entries) -> None:
+        """Resets ``ids`` from archive ``entries`` (ADR-0075); the next
+        ``step`` returns their new observations as reset rows."""
+        self._native.reset_from([int(i) for i in ids], [int(e) for e in entries])
+
     def reset(self, *, seed: int | list[int | None] | None = None, options: dict | None = None):
         """As ``SyncVectorEnv.reset``: the full seed vector is formed first
         (``None``, ``seed + i``, or one entry per instance, ``None`` keeping

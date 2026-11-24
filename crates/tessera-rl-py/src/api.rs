@@ -1305,6 +1305,109 @@ pub(crate) fn fork<'py>(g: Gil<'py>, inner: &Inner, args: Ref<'_>) -> CResult<Mi
     })
 }
 
+/// `_make_archive(snapshots: list[bytes]) -> (Archive, digest, len)`:
+/// an archive of this environment (ADR-0075) from instance records as
+/// `snapshot(i)` returns them.
+pub(crate) fn make_archive<'py>(g: Gil<'py>, inner: &Inner, args: Ref<'_>) -> CResult<Mine<'py>> {
+    let a: [Ref<'_>; 1] = exactly(g, args, "_make_archive")?;
+    let [records] = a;
+    let items = capi::list_items(g, records, "snapshots")?;
+    let mut bytes = Vec::with_capacity(items.len());
+    for item in &items {
+        bytes.push(capi::bytes_of(g, item.as_ref(), "a snapshot")?.to_vec());
+    }
+    let built = if let Some(ops) = batched_of(g, inner)? {
+        g.detach(|| ops.make_archive(&bytes))
+    } else if let Some(split) = split_of(g, inner)? {
+        g.detach(|| split.make_archive(&bytes))
+    } else {
+        let records = &bytes;
+        inner.with(g, |ops| {
+            // `&dyn PoolOps` is not `Send`; the exclusive reborrow is.
+            let ops = &mut *ops;
+            Ok(g.detach(move || ops.make_archive(records)))
+        })?
+    };
+    let (archive, digest, len) = built.map_err(|e| to_py(g, e))?;
+    capi::tuple(
+        g,
+        vec![
+            crate::ffi::archive_type::new_object(g, archive)?,
+            capi::int_u64(g, digest)?,
+            capi::int_u64(g, u64::try_from(len).unwrap_or(u64::MAX))?,
+        ],
+    )
+}
+
+/// `set_reset_source(archive, weights)`: an `Archive` and `None` or a list
+/// of weights, or `None` and `None` for fresh resets (ADR-0075 item 2).
+pub(crate) fn set_reset_source<'py>(
+    g: Gil<'py>,
+    inner: &Inner,
+    args: Ref<'_>,
+) -> CResult<Mine<'py>> {
+    let a: [Ref<'_>; 2] = exactly(g, args, "set_reset_source")?;
+    let [archive, weights] = a;
+    let archive = crate::replay_api::optional_archive(g, archive)?;
+    let weights = if weights.is_none() {
+        None
+    } else {
+        Some(u32_list(g, weights, "weights")?)
+    };
+    let result = if let Some(ops) = batched_of(g, inner)? {
+        g.detach(|| ops.set_reset_source(archive.as_ref(), weights))
+    } else if let Some(split) = split_of(g, inner)? {
+        g.detach(|| split.set_reset_source(archive.as_ref(), weights))
+    } else {
+        inner.with(g, |ops| {
+            Ok(g.detach(|| ops.set_reset_source(archive.as_ref(), weights)))
+        })?
+    };
+    result.map_err(|e| to_py(g, e))?;
+    Ok(capi::none(g))
+}
+
+/// `reset_from(ids, entries, delivered)`: resets `ids` from the archive
+/// entries `entries` (ADR-0075 item 5). Sync and Inline return the outputs,
+/// as `reset`; Async delivers the ids at the next `recv` (`delivered` as in
+/// `reset`); Pipelined mode has no partial reset (`CapabilityError`).
+pub(crate) fn reset_from<'py>(g: Gil<'py>, inner: &Inner, args: Ref<'_>) -> CResult<Mine<'py>> {
+    let a = positional(g, args, "reset_from", 3)?;
+    let (Some(ids), Some(entries)) = (a.first().copied().flatten(), a.get(1).copied().flatten())
+    else {
+        return Err(error(
+            g,
+            Kind::Argument,
+            "reset_from takes ids and entries".to_owned(),
+        ));
+    };
+    let ids = u32_list(g, ids, "ids")?;
+    let entries = u32_list(g, entries, "entries")?;
+    if let Some(ops) = batched_of(g, inner)? {
+        let delivered = a
+            .get(2)
+            .copied()
+            .flatten()
+            .map_or(Ok(0), |d| capi::to_u64(g, d, "delivered"))?;
+        g.detach(|| ops.reset_from(&ids, &entries, delivered))
+            .map_err(|e| to_py(g, e))?;
+        return Ok(capi::none(g));
+    }
+    if split_of(g, inner)?.is_some() {
+        return Err(to_py(
+            g,
+            BindError::Capability(
+                "reset_from is not available in pipelined mode: it has no partial reset".to_owned(),
+            ),
+        ));
+    }
+    inner.with(g, |ops| {
+        g.detach(|| ops.reset_from(&ids, &entries))
+            .map_err(|e| to_py(g, e))?;
+        outputs_of(g, inner, ops)
+    })
+}
+
 /// `is_poisoned() -> bool`.
 pub(crate) fn is_poisoned<'py>(g: Gil<'py>, inner: &Inner) -> CResult<Mine<'py>> {
     if let Some(ops) = batched_of(g, inner)? {

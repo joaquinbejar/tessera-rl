@@ -597,6 +597,14 @@ class HostEnv:
     def is_poisoned(self) -> bool:
         return self._native.is_poisoned()
 
+    def set_reset_source(self, archive=None, weights=None) -> None:
+        """Archive resets are for first-party environments (ADR-0075 item 8)."""
+        raise _native.CapabilityError("archive resets need a first-party environment (ADR-0075 item 8)")
+
+    def reset_from(self, ids, entries) -> None:
+        """Archive resets are for first-party environments (ADR-0075 item 8)."""
+        raise _native.CapabilityError("archive resets need a first-party environment (ADR-0075 item 8)")
+
     def close(self) -> None:
         self._native.close()
 

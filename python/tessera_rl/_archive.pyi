@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+from collections.abc import Iterable
+from typing import Any
+
+class Archive:
+    def __init__(self, env: Any, snapshots: Iterable[bytes]) -> None: ...
+    @property
+    def digest(self) -> int: ...
+    def __len__(self) -> int: ...

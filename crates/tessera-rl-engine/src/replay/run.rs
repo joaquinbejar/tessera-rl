@@ -591,6 +591,7 @@ fn reset_source_of<E: Environment>(
     record: &ResetSourceRecord,
     archive: Option<&Archive<E>>,
 ) -> Result<ResetSource<E>, ReplayError> {
+    // Unreachable after check_archives: kept as defence in depth (rev, #363 B r2).
     check_source(record, archive)?;
     match (record, archive) {
         (ResetSourceRecord::Archive { weights, .. }, Some(a)) => Ok(ResetSource::Archive {
