@@ -79,3 +79,21 @@ def test_export_mp4_with_ffmpeg_writes_file(tmp_path):
     path = tmp_path / "cartpole.mp4"
     render.export(_episode_frames(), path, fps=25)
     assert path.stat().st_size > 0
+
+
+def test_export_mp4_dash_name_passed_as_absolute_path(tmp_path, monkeypatch):
+    seen = {}
+
+    class Done:
+        returncode = 0
+        stderr = b""
+
+    def fake_run(args, **kwargs):
+        seen["args"], seen["shell"] = args, kwargs.get("shell")
+        return Done()
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(render.subprocess, "run", fake_run)
+    render.export(np.zeros((1, 2, 2, 3), np.uint8), "-y.mp4", ffmpeg="ffmpeg")
+    assert seen["args"][-1] == str((tmp_path / "-y.mp4").resolve())
+    assert seen["shell"] is False

@@ -94,7 +94,10 @@ impl Function for EncodeGif {
             ));
         }
         let frames: Vec<&[u8]> = data.chunks_exact(len).collect();
-        let out = tessera_rl_render::encode_gif(Vec::new(), w, h, fps, &frames)
+        // Encoding is pure Rust over an immutable `bytes` buffer: release the
+        // interpreter meanwhile (REVIEW-4b-r1).
+        let out = g
+            .detach(|| tessera_rl_render::encode_gif(Vec::new(), w, h, fps, &frames))
             .map_err(|e| error(g, Kind::Argument, e.to_string()))?;
         capi::bytes(g, &out)
     }

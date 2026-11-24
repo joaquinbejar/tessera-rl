@@ -7,7 +7,9 @@ episode) to ``path``:
 
 - ``.gif``: encoded natively (the ``gif`` crate; each frame gets its own
   256-colour palette), looping. GIF delays are in hundredths of a second,
-  so ``fps`` (1 to 100) is rounded to ``100 / round(100 / fps)``.
+  so ``fps`` (1 to 100) plays at ``100 / round(100 / fps)``: exact for
+  rates that divide 100 (1, 2, 4, 5, 10, 20, 25, 50, 100); 30 plays at
+  about 33.3, 60 at 50.
 - ``.mp4``: piped as raw RGB24 to an ``ffmpeg`` executable the user
   provides (``ffmpeg=`` or found on ``PATH``), started directly with an
   argument list, never through a shell; H.264 in ``yuv420p``, so width and
@@ -69,7 +71,8 @@ def _mp4(arr: np.ndarray, target: Path, fps: int, ffmpeg) -> None:
     args = [
         exe, "-hide_banner", "-loglevel", "error", "-y",
         "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{width}x{height}", "-r", str(fps), "-i", "-",
-        "-an", "-c:v", "libx264", "-pix_fmt", "yuv420p", str(target),
+        # An absolute path, so a name starting with "-" is never read as an option.
+        "-an", "-c:v", "libx264", "-pix_fmt", "yuv420p", str(target.resolve()),
     ]
     try:
         done = subprocess.run(args, input=arr.tobytes(), capture_output=True, check=False, shell=False)
