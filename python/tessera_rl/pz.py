@@ -251,6 +251,9 @@ class _Agents:
         self.spawns = bool(layout.get("spawns", False))
         #: ``"host"`` for a third-party host environment, else ``"tessera"``.
         self.kind = "host" if layout.get("kind") == "host" else "tessera"
+        #: Whether the host environment refuses agents (ADR-0070): every
+        #: agent's infos then carry ``refused`` and ``refuse_code``.
+        self.refuses = bool(layout.get("refuses_agents", False))
         leaves = {}
         for name, dtype, shape, low, high in layout["leaves"]:
             dt = np.dtype(dtype)
@@ -286,11 +289,23 @@ class _Agents:
         """``infos[agent]``: that agent's masks for a multi-head environment
         (R2: nothing else), else empty. ``action_mask`` is the relaxed tuple
         (#311), ``action_masks`` the exact masks."""
-        if not self.multi:
-            return {}
-        heads = self.head_masks(slot)
-        relaxed = relaxed_masks(self.last.masks[0, slot], self.env.mask_heads)
-        return {"action_mask": relaxed, "action_masks": heads}
+        info = {}
+        if self.multi:
+            heads = self.head_masks(slot)
+            relaxed = relaxed_masks(self.last.masks[0, slot], self.env.mask_heads)
+            info = {"action_mask": relaxed, "action_masks": heads}
+        if self.refuses:
+            info.update(self.refusal(slot))
+        return info
+
+    def refusal(self, slot: int) -> dict:
+        """``refused`` and ``refuse_code`` of agent ``slot`` in the last
+        call (ADR-0070); all clear after a reset."""
+        out = getattr(self.env, "_last_out", None)
+        if out is None or "refuse_code" not in out:
+            return {"refused": False, "refuse_code": 0}
+        code = int(np.frombuffer(out["refuse_code"], dtype="<u4")[slot])
+        return {"refused": code != 0, "refuse_code": code}
 
     def check(self, value):
         """One agent's action, checked: an index, or one per head."""
@@ -352,7 +367,12 @@ class TesseraParallelEnv(ParallelEnv):
     def __init__(self, env_id: str, seed: int | None = None, *, _pool=None, **kwargs):
         pool = _pool if _pool is not None else _native_pool(env_id, "parallel", seed, kwargs)
         self._a = _Agents(pool, env_id)
-        self.metadata = {**self.metadata, "name": env_id, "tessera_kind": self._a.kind}
+        self.metadata = {
+            **self.metadata,
+            "name": env_id,
+            "tessera_kind": self._a.kind,
+            "refuses_agents": self._a.refuses,
+        }
         self.render_mode = None
         self.possible_agents = list(self._a.names)
         self.agents = list(self.possible_agents)
@@ -440,7 +460,12 @@ class TesseraAECEnv(AECEnv):
             raise _native.CapabilityError(f"{env_id} spawns agents; native AEC does not support spawning yet")
         if self._a.env.turns != "sequential":
             raise _native.ArgumentError(f"{env_id} is {self._a.env.turns}; TesseraAECEnv is for sequential turns")
-        self.metadata = {**self.metadata, "name": env_id, "tessera_kind": self._a.kind}
+        self.metadata = {
+            **self.metadata,
+            "name": env_id,
+            "tessera_kind": self._a.kind,
+            "refuses_agents": self._a.refuses,
+        }
         self.render_mode = None
         self.possible_agents = list(self._a.names)
         # No reset here: the first reset() is the seed's first episode.
@@ -495,6 +520,10 @@ class TesseraAECEnv(AECEnv):
             self.rewards[name] = reward
             self.terminations[name] = self.terminations[name] or terminated
             self.truncations[name] = self.truncations[name] or truncated
+            if self._a.refuses:
+                # The refused agent sees its refusal in its own infos; the
+                # next agent_selection follows `acting` (ADR-0070 item 10).
+                self.infos[name] = {**self.infos.get(name, {}), **self._a.refusal(self._a.slot_of[name])}
         nxt = self._acting()
         if nxt is not None:
             self.agent_selection = nxt

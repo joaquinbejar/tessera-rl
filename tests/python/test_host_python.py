@@ -152,7 +152,12 @@ def test_host_each_entry_point_builds_one_host_object(monkeypatch, how, turns):
 @pytest.mark.parametrize(
     "overrides, match",
     [
-        ({"protocol": 2}, "host protocol 2"),
+        ({"protocol": 2}, "host protocol 2 with refuses_agents=False"),
+        ({"protocol": 1, "refuses": True}, "host protocol 1 with refuses_agents=True"),
+        ({"protocol": 2, "refuses": True}, None),
+        ({"protocol": 2, "refuses": True, "drop_output": "refuse_code"}, r"outputs lack \['refuse_code'\]"),
+        ({"protocol": 0}, "host protocol 0"),
+        ({"protocol": 3}, "host protocol 3"),
         ({"protocol": True}, "host protocol True"),
         ({"low": "999.0.0"}, "needs tessera_rl >= 999.0.0"),
         ({"below": "0.0.1"}, "< 0.0.1"),

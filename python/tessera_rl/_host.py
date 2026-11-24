@@ -28,8 +28,16 @@ import numpy as np
 from tessera_rl import _native
 from tessera_rl._env import Env, Step, _index
 
-#: The host protocol this ``tessera_rl`` speaks (SPEC 14.4.7).
-PROTOCOL = 1
+#: The newest host protocol this ``tessera_rl`` speaks (SPEC 14.4.7).
+PROTOCOL = 2
+
+#: Every host protocol this ``tessera_rl`` accepts: 1, and 2 for an
+#: environment that refuses agents (ADR-0070 item 10).
+PROTOCOLS = (1, 2)
+
+#: The outputs of a protocol 2 object, which a wrapper must read
+#: (ADR-0070 item 10).
+_REFUSAL_KEYS = ("refused", "refuse_code")
 
 #: The entry-point group of host environment factories (SPEC 14.4.1).
 GROUP = "tessera_rl.envs"
@@ -231,18 +239,23 @@ def refuse(env_id: str, module: str) -> None:
         raise _native.CapabilityError(f"{env_id} is a host environment; {module} does not support them")
 
 
-def host_infos(out: dict, owned: bool, n: int) -> dict:
-    """The Gymnasium infos of a host call (SPEC 14.2 as ADR-0065 amends
-    it): ``aborted``, ``abort_code`` and ``pending_reset``, each with its
-    ``_``-prefixed mask, all true."""
-    def field(key, dtype):
+def host_infos(out: dict, owned: bool, n: int, agents: int = 1, refuses: bool = False) -> dict:
+    """The Gymnasium infos of a host call (SPEC 14.2 as ADR-0065 and
+    ADR-0070 amend it): ``aborted``, ``abort_code`` and ``pending_reset``,
+    and for an environment that refuses agents ``refused`` and
+    ``refuse_code`` (shape ``(n, agents)``), each with its ``_``-prefixed
+    mask, all true."""
+    def field(key, dtype, shape):
         if owned:
-            return np.frombuffer(out[key], dtype=dtype).copy()
+            return np.frombuffer(out[key], dtype=dtype).reshape(shape).copy()
         return np.array(out[key])
 
+    keys = [("aborted", np.bool_, (n,)), ("abort_code", "<u4", (n,)), ("pending_reset", np.bool_, (n,))]
+    if refuses:
+        keys += [("refused", np.bool_, (n, agents)), ("refuse_code", "<u4", (n, agents))]
     info = {}
-    for key, dtype in (("aborted", np.bool_), ("abort_code", "<u4"), ("pending_reset", np.bool_)):
-        info[key] = field(key, dtype)
+    for key, dtype, shape in keys:
+        info[key] = field(key, dtype, shape)
         info["_" + key] = np.ones(n, dtype=np.bool_)
     return info
 
@@ -288,6 +301,7 @@ class _HostNative:
     def __init__(self, obj, outputs: str):
         _check_outputs(outputs)
         check(obj)
+        protocol = obj.host_protocol
         self._obj = obj
         self._owned = outputs == "owned"
         layout = dict(obj.layout())
@@ -296,6 +310,15 @@ class _HostNative:
             raise _config(f"host object layout() lacks {missing}")
         if layout["kind"] != "host" or layout["outputs"] != "borrowed":
             raise _config("host object layout() must have kind 'host' and outputs 'borrowed'")
+        # Protocol 2 if and only if the environment refuses agents.
+        refuses = layout.get("refuses_agents", False)
+        if not isinstance(refuses, bool) or refuses != (protocol == 2):
+            raise _config(
+                f"host object speaks host protocol {protocol} with refuses_agents={refuses!r}; "
+                "protocol 2 requires refuses_agents=True and protocol 1 requires it absent or False"
+            )
+        layout["refuses_agents"] = refuses
+        self._keys = _OUTPUT_KEYS + (_REFUSAL_KEYS if refuses else ())
         # The first-party leaf form, (name, dtype, shape, low, high): the
         # protocol has no bounds, so a leaf spans its dtype's range.
         layout["leaves"] = [(name, dtype, list(shape), *_dtype_bounds(dtype)) for name, dtype, shape in layout["leaves"]]
@@ -312,7 +335,7 @@ class _HostNative:
 
     def _out(self, out: dict) -> dict:
         if not self._checked:
-            missing = [k for k in _OUTPUT_KEYS if k not in out]
+            missing = [k for k in self._keys if k not in out]
             if missing:
                 raise _config(f"host object outputs lack {missing}")
             self._checked = True
@@ -322,7 +345,7 @@ class _HostNative:
         for key, value in out.items():
             if isinstance(value, list):
                 copy[key] = [bytearray(memoryview(v)) for v in value]
-            elif key in _OUTPUT_KEYS:
+            elif key in self._keys:
                 copy[key] = bytearray(memoryview(value))
         return copy
 
@@ -363,8 +386,8 @@ def check(obj) -> None:
     if missing:
         raise _config(f"not a host object (protocol {PROTOCOL}): it lacks {missing}")
     protocol = obj.host_protocol
-    if protocol != PROTOCOL or isinstance(protocol, bool):
-        raise _config(f"host object speaks host protocol {protocol!r}; this tessera_rl speaks {PROTOCOL}")
+    if isinstance(protocol, bool) or protocol not in PROTOCOLS:
+        raise _config(f"host object speaks host protocol {protocol!r}; this tessera_rl speaks {PROTOCOLS}")
     low = _version(obj.tessera_rl_min, "tessera_rl_min")
     below = _version(obj.tessera_rl_below, "tessera_rl_below")
     own = _own_version()
@@ -402,6 +425,12 @@ class HostStep(NamedTuple):
     aborted: np.ndarray
     abort_code: np.ndarray
     pending_reset: np.ndarray
+    #: ``(num_envs, agents)`` refused agents of the last call, or ``None``
+    #: when the environment does not refuse agents (ADR-0070).
+    refused: np.ndarray | None = None
+    #: ``(num_envs, agents)`` ``uint32`` refuse codes, 0 where not refused,
+    #: or ``None`` (ADR-0070).
+    refuse_code: np.ndarray | None = None
 
 
 def _absent(name: str):
@@ -453,6 +482,9 @@ class HostEnv:
         self.auto_reset: str = layout["auto_reset"]
         #: ``"host"``: a third-party host environment.
         self.kind: str = "host"
+        #: Whether the environment refuses agents: ``HostStep.refused`` and
+        #: ``refuse_code`` are set (host protocol 2, ADR-0070).
+        self.refuses_agents: bool = layout["refuses_agents"]
 
     def _host_step(self, step: Step) -> HostStep:
         out = self._env._last_out
@@ -463,11 +495,15 @@ class HostEnv:
                 return np.asarray(out[key])
             return np.frombuffer(out[key], dtype=dtype).reshape(shape)
 
+        a = self.agents
+        refuses = self.refuses_agents
         return HostStep(
             *step,
             aborted=field("aborted", np.bool_, (n,)),
             abort_code=field("abort_code", "<u4", (n,)),
             pending_reset=field("pending_reset", np.bool_, (n,)),
+            refused=field("refused", np.bool_, (n, a)) if refuses else None,
+            refuse_code=field("refuse_code", "<u4", (n, a)) if refuses else None,
         )
 
     def reset(self, seed=None) -> HostStep:

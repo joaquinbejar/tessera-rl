@@ -55,6 +55,10 @@ struct HostBufs {
     aborted: Buf<Bool8>,
     abort_code: Buf<u32>,
     pending_reset: Buf<Bool8>,
+    /// `[N, A]` for a refusing host pool, empty otherwise (ADR-0070).
+    refused: Buf<Bool8>,
+    /// `[N, A]` for a refusing host pool, empty otherwise (ADR-0070).
+    refuse_code: Buf<u32>,
 }
 
 impl Outputs {
@@ -66,7 +70,7 @@ impl Outputs {
         mask_len: usize,
     ) -> Result<Self, EngineError> {
         let b = StorageBuilder::new()?;
-        Self::lay_out(b, num_envs, agents, leaves, terminal, mask_len, false).ok_or(
+        Self::lay_out(b, num_envs, agents, leaves, terminal, mask_len, None).ok_or(
             EngineError::Options {
                 option: "num_envs",
                 reason: "buffers too large",
@@ -75,7 +79,9 @@ impl Outputs {
     }
 
     /// As [`Outputs::new`], plus the host-only rows `aborted`, `abort_code`
-    /// and `pending_reset` (ADR-0065), laid out after every other buffer.
+    /// and `pending_reset` (ADR-0065), and for a refusing environment
+    /// `refused` and `refuse_code` (ADR-0070), laid out after every other
+    /// buffer.
     #[cfg(feature = "host")]
     pub(crate) fn new_host(
         num_envs: usize,
@@ -83,14 +89,22 @@ impl Outputs {
         leaves: &[Leaf],
         terminal: bool,
         mask_len: usize,
+        refuses: bool,
     ) -> Result<Self, EngineError> {
         let b = StorageBuilder::new()?;
-        Self::lay_out(b, num_envs, agents, leaves, terminal, mask_len, true).ok_or(
-            EngineError::Options {
-                option: "num_envs",
-                reason: "buffers too large",
-            },
+        Self::lay_out(
+            b,
+            num_envs,
+            agents,
+            leaves,
+            terminal,
+            mask_len,
+            Some(refuses),
         )
+        .ok_or(EngineError::Options {
+            option: "num_envs",
+            reason: "buffers too large",
+        })
     }
 
     fn lay_out(
@@ -100,7 +114,7 @@ impl Outputs {
         leaves: &[Leaf],
         terminal: bool,
         mask_len: usize,
-        host: bool,
+        host: Option<bool>,
     ) -> Option<Self> {
         let rows = num_envs.checked_mul(agents)?;
         let obs = leaves
@@ -144,21 +158,28 @@ impl Outputs {
         let masks = b.reserve::<Bool8>(OutputField::Masks, rows.checked_mul(mask_len)?)?;
         // Last, so the other buffers' offsets are those of a pool without
         // them.
-        let host = if host {
-            Some((
-                b.reserve::<Bool8>(OutputField::Aborted, num_envs)?,
-                b.reserve::<u32>(OutputField::AbortCode, num_envs)?,
-                b.reserve::<Bool8>(OutputField::PendingReset, num_envs)?,
-            ))
-        } else {
-            None
+        let host = match host {
+            Some(refuses) => {
+                // Without refusals the two buffers are empty (ADR-0070).
+                let refusal_rows = if refuses { rows } else { 0 };
+                Some((
+                    b.reserve::<Bool8>(OutputField::Aborted, num_envs)?,
+                    b.reserve::<u32>(OutputField::AbortCode, num_envs)?,
+                    b.reserve::<Bool8>(OutputField::PendingReset, num_envs)?,
+                    b.reserve::<Bool8>(OutputField::Refused, refusal_rows)?,
+                    b.reserve::<u32>(OutputField::RefuseCode, refusal_rows)?,
+                ))
+            }
+            None => None,
         };
         let mut r = b.finish()?;
         let host = match host {
-            Some((aborted, abort_code, pending_reset)) => Some(HostBufs {
+            Some((aborted, abort_code, pending_reset, refused, refuse_code)) => Some(HostBufs {
                 aborted: r.take(aborted)?,
                 abort_code: r.take(abort_code)?,
                 pending_reset: r.take(pending_reset)?,
+                refused: r.take(refused)?,
+                refuse_code: r.take(refuse_code)?,
             }),
             None => None,
         };
@@ -334,6 +355,22 @@ impl Outputs {
     pub fn pending_reset(&self) -> &[Bool8] {
         self.host.as_ref().map_or(&[], |h| &*h.pending_reset)
     }
+
+    /// Refusing host pools only (ADR-0070): agents whose action the last
+    /// call refused, `[N, A]`. After every call that is not rejected, true
+    /// only for an agent refused in that call; a rejected call leaves the
+    /// previous call's rows. Empty for other pools.
+    #[must_use]
+    pub fn refused(&self) -> &[Bool8] {
+        self.host.as_ref().map_or(&[], |h| &*h.refused)
+    }
+
+    /// Refusing host pools only (ADR-0070): the refuse codes of the last
+    /// call, `[N, A]`, 0 where `refused` is false. Empty for other pools.
+    #[must_use]
+    pub fn refuse_code(&self) -> &[u32] {
+        self.host.as_ref().map_or(&[], |h| &*h.refuse_code)
+    }
 }
 
 /// Mutable views over the rows of a range of instances in every output
@@ -369,6 +406,10 @@ pub(crate) struct OutputsView<'a> {
     pub(crate) abort_code: &'a mut [u32],
     /// Host pools only (ADR-0065); empty for other pools.
     pub(crate) pending_reset: &'a mut [Bool8],
+    /// Refusing host pools only (ADR-0070), `[N, A]`; empty otherwise.
+    pub(crate) refused: &'a mut [Bool8],
+    /// Refusing host pools only (ADR-0070), `[N, A]`; empty otherwise.
+    pub(crate) refuse_code: &'a mut [u32],
 }
 
 impl OutputsView<'_> {
@@ -402,6 +443,8 @@ impl OutputsView<'_> {
             aborted: &mut [],
             abort_code: &mut [],
             pending_reset: &mut [],
+            refused: &mut [],
+            refuse_code: &mut [],
         }
     }
 }
@@ -423,11 +466,22 @@ impl Outputs {
         {
             *slot = &mut **buf;
         }
-        let (aborted, abort_code, pending_reset): (&mut [Bool8], &mut [u32], &mut [Bool8]) =
-            match &mut self.host {
-                Some(h) => (&mut h.aborted, &mut h.abort_code, &mut h.pending_reset),
-                None => (&mut [], &mut [], &mut []),
-            };
+        let (aborted, abort_code, pending_reset, refused, refuse_code) = match &mut self.host {
+            Some(h) => (
+                &mut *h.aborted,
+                &mut *h.abort_code,
+                &mut *h.pending_reset,
+                &mut *h.refused,
+                &mut *h.refuse_code,
+            ),
+            None => (
+                &mut [][..],
+                &mut [][..],
+                &mut [][..],
+                &mut [][..],
+                &mut [][..],
+            ),
+        };
         OutputsView {
             agents: self.agents,
             mask_len: self.mask_len,
@@ -453,6 +507,8 @@ impl Outputs {
             aborted,
             abort_code,
             pending_reset,
+            refused,
+            refuse_code,
         }
     }
 }

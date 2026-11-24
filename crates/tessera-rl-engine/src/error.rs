@@ -343,6 +343,16 @@ pub enum EngineError {
         /// The environment's reason.
         reason: &'static str,
     },
+    /// A host environment's `refuse` refused an agent slot that was not
+    /// alive and acting (ADR-0070 item 2). The instance was not stepped. It
+    /// poisons the pool.
+    #[error("instance {instance}: refused agent slot {agent}, which is not acting")]
+    RefusedNotActing {
+        /// The first instance, in instance order, with such a refusal.
+        instance: u32,
+        /// The first such slot of that instance.
+        agent: u32,
+    },
     /// The instance has not been reset yet, or its episode ended in
     /// `Disabled` auto-reset mode.
     #[error("instance {id} is pending reset")]

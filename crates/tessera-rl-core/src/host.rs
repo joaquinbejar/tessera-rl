@@ -26,6 +26,7 @@ use crate::env::EnvConfig;
 use crate::error::{ConfigError, SpaceError};
 use crate::host_out::HostOut;
 use crate::io::{Actions, MaskWriter, ObsWriter};
+use crate::refusals::Refusals;
 use crate::space::Space;
 
 /// The seed of one reset of one instance, after the engine applied the
@@ -145,6 +146,11 @@ pub trait HostEnvironment: Send + Sized + 'static {
     /// compiled out and a rejection mutates nothing (ADR-0065).
     const NOTIFIES_REJECTION: bool = false;
 
+    /// Whether [`HostEnvironment::refuse`] is called: per-agent refusal
+    /// (ADR-0070). When `false`, the hook, the `refused` and `refuse_code`
+    /// outputs and their storage are compiled out.
+    const REFUSES_AGENTS: bool = false;
+
     /// The environment's configuration.
     type Config: EnvConfig;
 
@@ -258,6 +264,28 @@ pub trait HostEnvironment: Send + Sized + 'static {
     /// consequence (a penalty, a termination) belongs in the next `step`.
     fn on_rejected(&mut self, reject: &ActionReject) {
         let _ = reject;
+    }
+
+    /// Refuses some agents' actions in this call while every other agent,
+    /// and every other instance, still steps (ADR-0070). Called only when
+    /// [`HostEnvironment::REFUSES_AGENTS`] is `true`, once per instance that
+    /// steps in the call, after [`HostEnvironment::validate`] accepted the
+    /// whole call and immediately before [`HostEnvironment::step`], on the
+    /// worker that steps the instance.
+    ///
+    /// `step` then runs with the full joint action and reads the verdicts
+    /// through [`Actions::is_refused`] and [`Actions::refuse_code`]. It must
+    /// not act on a refused agent's action; what a refusal costs (nothing,
+    /// a penalty, a lost turn) is the environment's documented rule. The
+    /// refusals are reported in the `refused` and `refuse_code` outputs.
+    ///
+    /// Only alive, acting agents may be refused ([`Refusals::refuse`]):
+    /// refusing another slot skips the instance's step and poisons the pool
+    /// after the call, in every build. It must be pure, as
+    /// [`HostEnvironment::validate`]: no `StepRng` or `ObsRng`, no I/O, no
+    /// clock. A panic poisons the pool.
+    fn refuse(&self, actions: &Actions<'_, ()>, out: &mut Refusals<'_>) {
+        let _ = (actions, out);
     }
 
     /// Writes `agent`'s observation into leaves that are zero on entry.

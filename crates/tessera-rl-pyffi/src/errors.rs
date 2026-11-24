@@ -325,7 +325,8 @@ pub fn engine_kind(e: &EngineError) -> Kind {
         | EngineError::InvalidAgentEvent { .. }
         | EngineError::NanDetected { .. }
         | EngineError::AllocationInChunkStep { .. }
-        | EngineError::TurnOrder { .. } => Kind::Poisoned,
+        | EngineError::TurnOrder { .. }
+        | EngineError::RefusedNotActing { .. } => Kind::Poisoned,
         EngineError::NestedEngine
         | EngineError::GangQueue { .. }
         | EngineError::InFlight { .. }

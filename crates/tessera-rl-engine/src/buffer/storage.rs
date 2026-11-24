@@ -98,6 +98,11 @@ pub enum OutputField {
     AbortCode,
     /// Host pools only: instances pending a reset, `[N]` (ADR-0065).
     PendingReset,
+    /// Refusing host pools only: refused agents, `[N, A]` (ADR-0070).
+    Refused,
+    /// Refusing host pools only: refuse codes, `[N, A]`, 0 when not refused
+    /// (ADR-0070).
+    RefuseCode,
 }
 
 /// A read-only description of one region: where it is, how long, of what.

@@ -229,6 +229,8 @@ pub struct HostPool<E: HostEnvironment, const A: usize> {
     /// `aborts` when the `aborted` and `abort_code` outputs were last all
     /// clear: they need clearing before a call only if it moved since.
     abort_rows_clear: u64,
+    /// Per-agent refusal bookkeeping (ADR-0070).
+    refusal: Refusal,
     #[cfg(feature = "debug-checks")]
     allocs: crate::sys::alloc_track::AllocTally,
     #[cfg(feature = "debug-checks")]
@@ -329,6 +331,7 @@ impl<E: HostEnvironment, const A: usize> HostPool<E, A> {
             &leaves,
             options.auto_reset == AutoReset::SameStep,
             mask_len,
+            E::REFUSES_AGENTS,
         )?;
         // Every instance is pending its first reset, and `outputs()` is
         // readable before any call (ADR-0065 item 1).
@@ -372,6 +375,7 @@ impl<E: HostEnvironment, const A: usize> HostPool<E, A> {
             fp_resets: AtomicU64::new(0),
             aborts: AtomicU64::new(0),
             abort_rows_clear: 0,
+            refusal: Refusal::new(),
             #[cfg(feature = "debug-checks")]
             allocs: crate::sys::alloc_track::AllocTally::default(),
             #[cfg(feature = "debug-checks")]
@@ -516,6 +520,12 @@ impl<E: HostEnvironment, const A: usize> HostPool<E, A> {
             fp_resets,
             aborts,
             abort_rows_clear,
+            refusal:
+                Refusal {
+                    count: refusals,
+                    clear: refusal_rows_clear,
+                    misuse,
+                },
             #[cfg(feature = "debug-checks")]
             allocs,
             ..
@@ -527,10 +537,13 @@ impl<E: HostEnvironment, const A: usize> HostPool<E, A> {
             initial: *initial,
             fp_resets,
             aborts,
+            refusals,
+            misuse,
             #[cfg(feature = "debug-checks")]
             allocs,
         };
         clear_abort_rows(outputs, ctx.aborts, abort_rows_clear);
+        clear_refusal_rows::<E>(outputs, ctx.refusals, refusal_rows_clear);
         let mut all = Rows {
             headers,
             states: instances,
@@ -592,6 +605,12 @@ impl<E: HostEnvironment, const A: usize> HostPool<E, A> {
             initial,
             fp_resets,
             aborts,
+            refusal:
+                Refusal {
+                    count: refusals,
+                    clear: refusal_rows_clear,
+                    misuse,
+                },
             #[cfg(feature = "debug-checks")]
             allocs,
             ..
@@ -603,9 +622,12 @@ impl<E: HostEnvironment, const A: usize> HostPool<E, A> {
             initial: *initial,
             fp_resets,
             aborts,
+            refusals,
+            misuse,
             #[cfg(feature = "debug-checks")]
             allocs,
         };
+        clear_refusal_rows::<E>(outputs, ctx.refusals, refusal_rows_clear);
         run_kernels(poisoned, || {
             #[cfg(feature = "debug-checks")]
             let _bracket = crate::sys::alloc_track::HostBracket::enter(ctx.allocs);
@@ -682,6 +704,12 @@ impl<E: HostEnvironment, const A: usize> HostPool<E, A> {
             fp_resets,
             aborts,
             abort_rows_clear,
+            refusal:
+                Refusal {
+                    count: refusals,
+                    clear: refusal_rows_clear,
+                    misuse,
+                },
             #[cfg(feature = "debug-checks")]
             allocs,
             #[cfg(feature = "debug-checks")]
@@ -695,6 +723,8 @@ impl<E: HostEnvironment, const A: usize> HostPool<E, A> {
             initial: *initial,
             fp_resets,
             aborts,
+            refusals,
+            misuse,
             #[cfg(feature = "debug-checks")]
             allocs,
         };
@@ -718,6 +748,7 @@ impl<E: HostEnvironment, const A: usize> HostPool<E, A> {
             validated?;
         }
         clear_abort_rows(outputs, ctx.aborts, abort_rows_clear);
+        clear_refusal_rows::<E>(outputs, ctx.refusals, refusal_rows_clear);
         let mut all = Rows {
             headers,
             states: instances,
@@ -727,9 +758,10 @@ impl<E: HostEnvironment, const A: usize> HostPool<E, A> {
             penalized: &mut [],
             outputs: outputs.view_all(),
         };
+        ctx.misuse.store(u64::MAX, Ordering::Relaxed);
         if let Some(rt) = sync {
-            let panicked = par_chunks(&mut rt.gang, all, size, heads, |rows, _| {
-                kernels::step_chunk::<E, A>(&ctx, rows);
+            let panicked = par_chunks(&mut rt.gang, all, size, heads, |rows, first| {
+                kernels::step_chunk::<E, A>(&ctx, rows, first);
             })?;
             if panicked {
                 *poisoned = true;
@@ -737,8 +769,9 @@ impl<E: HostEnvironment, const A: usize> HostPool<E, A> {
             }
         } else {
             // Borrowed, not moved: a move copies the whole view.
-            run_kernels(poisoned, || kernels::step_chunk::<E, A>(&ctx, &mut all))?;
+            run_kernels(poisoned, || kernels::step_chunk::<E, A>(&ctx, &mut all, 0))?;
         }
+        self.check_refusal_misuse()?;
         self.after_kernels()?;
         #[cfg(feature = "debug-checks")]
         self.check_reward_nan(0..self.headers.len())?;
@@ -759,6 +792,23 @@ impl<E: HostEnvironment, const A: usize> HostPool<E, A> {
         #[cfg(feature = "debug-checks")]
         self.check_agent_events()?;
         Ok(())
+    }
+
+    /// A refusal of a slot that was not acting poisons the pool, before any
+    /// other check of the call (ADR-0070 item 2).
+    fn check_refusal_misuse(&mut self) -> Result<(), EngineError> {
+        if !E::REFUSES_AGENTS {
+            return Ok(());
+        }
+        let key = self.refusal.misuse.load(Ordering::Relaxed);
+        if key == u64::MAX {
+            return Ok(());
+        }
+        self.poisoned = true;
+        Err(EngineError::RefusedNotActing {
+            instance: u32::try_from(key >> 32).unwrap_or(u32::MAX),
+            agent: u32::try_from(key & u64::from(u32::MAX)).unwrap_or(u32::MAX),
+        })
     }
 
     /// As `EnvPool`: a `Sequential` environment names exactly one acting
@@ -838,6 +888,50 @@ fn clear_abort_rows(outputs: &mut Outputs, aborts: &AtomicU64, clear: &mut u64) 
         let view = outputs.view_all();
         view.aborted.fill(Bool8::FALSE);
         view.abort_code.fill(0);
+        *clear = now;
+    }
+}
+
+/// A host pool's per-agent refusal bookkeeping (ADR-0070).
+#[derive(Debug)]
+struct Refusal {
+    /// Instances whose `refuse` refused an agent.
+    count: AtomicU64,
+    /// `count` when the `refused` and `refuse_code` outputs were last all
+    /// clear: they need clearing before a call only if it moved since.
+    clear: u64,
+    /// The lowest misuse key of the running call (item 2), or `u64::MAX`.
+    misuse: AtomicU64,
+}
+
+impl Refusal {
+    const fn new() -> Self {
+        Self {
+            count: AtomicU64::new(0),
+            clear: 0,
+            misuse: AtomicU64::new(u64::MAX),
+        }
+    }
+}
+
+/// Clears the `refused` and `refuse_code` outputs of every instance before
+/// any call that is not rejected, unless no refusal was written since
+/// `clear` was recorded (ADR-0070 item 6). A no-op for a pool that does
+/// not refuse: its buffers are empty.
+#[inline]
+fn clear_refusal_rows<E: HostEnvironment>(
+    outputs: &mut Outputs,
+    refusals: &AtomicU64,
+    clear: &mut u64,
+) {
+    if !E::REFUSES_AGENTS {
+        return;
+    }
+    let now = refusals.load(Ordering::Relaxed);
+    if now != *clear {
+        let view = outputs.view_all();
+        view.refused.fill(Bool8::FALSE);
+        view.refuse_code.fill(0);
         *clear = now;
     }
 }
