@@ -22,6 +22,7 @@ Fixtures are written only with `TESSERA_BLESS=1 cargo test -p tessera-rl-classic
 - A new fixture is written.
 - A changed fixture needs an `env_version` bump. A `MATH_VERSION` bump alone does **not** authorize it: new math is a new environment version that records it, and the old version stays reproducible.
 - A harness migration needs an explicit reason: `TESSERA_BLESS_REASON=format` with a changed format version, or `TESSERA_BLESS_REASON=generator` with a changed action generator.
+- Re-bless without an `ENV_VERSION` bump when only the generator's actions change; `ENV_VERSION` tracks dynamics, state and outputs.
 - A refused change leaves the fixture intact.
 
 A plain run is read-only. It fails on any difference, reporting the first diverging call and field and the instances that end with a different record. The negative tests of the policy use in-memory text and a temporary file, never `tests/golden/`.
