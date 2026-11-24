@@ -57,9 +57,17 @@ fn options() -> ReplayWriterOptions {
     }
 }
 
+/// Two agents per instance, cycling through the choices. Counter masks
+/// action 2 for agent 0 (even `k`), so agent 0 takes 1 there: with
+/// `debug-checks` (on under workspace feature unification) an illegal action
+/// fails the call instead of taking the no-op.
 fn actions(t: usize) -> Vec<i32> {
     (0..N as usize * 2)
-        .map(|k| i32::try_from((t + k) % 3).unwrap())
+        .map(|k| {
+            let c = (t + k) % 3;
+            let c = if k % 2 == 0 && c == 2 { 1 } else { c };
+            i32::try_from(c).unwrap()
+        })
         .collect()
 }
 
@@ -497,7 +505,7 @@ fn test_replay_pool_of_another_size_is_incompatible() {
 /// header, an event tag or an event body changes them; update the constants
 /// only together with a format version bump.
 const FIXTURE_LEN: usize = 1569;
-const FIXTURE_XXH3: u64 = 9_591_911_110_280_994_754;
+const FIXTURE_XXH3: u64 = 13_974_308_980_847_700_295;
 
 #[test]
 fn test_replay_encoded_fixture_is_pinned() {
