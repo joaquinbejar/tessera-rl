@@ -89,6 +89,19 @@ def fingerprint(name: str) -> str:
         # The whole T2 trainer module is training code.
         sources = {"learning_continuous": hashlib.sha256(pathlib.Path(lc.__file__).read_bytes()).hexdigest()}
         params = asdict(continuous_hyper(name, protocol(name)["total_steps"]))
+    elif protocol(name)["tier"] == "T3a":
+        import learning_continuous as lc  # noqa: PLC0415
+        import learning_masked as lm  # noqa: PLC0415
+
+        # The T3a module, the bootstrap it imports from T2, and the T1
+        # flattening it reuses.
+        flat = "\n".join(__import__("inspect").getsource(f) for f in (_needs_flat, _flat_vector_class, _FlatVector))
+        sources = {
+            "learning_masked": hashlib.sha256(pathlib.Path(lm.__file__).read_bytes()).hexdigest(),
+            "learning_continuous": hashlib.sha256(pathlib.Path(lc.__file__).read_bytes()).hexdigest(),
+            "flatten": hashlib.sha256(flat.encode()).hexdigest(),
+        }
+        params = asdict(masked_hyper(name, protocol(name)["total_steps"]))
     else:
         sources = {
             "reference_training": hashlib.sha256(pathlib.Path(rt.__file__).read_bytes()).hexdigest(),
@@ -115,6 +128,25 @@ def continuous_hyper(name: str, total_steps: int):
     import learning_continuous as lc  # noqa: PLC0415
 
     return lc.ContinuousHyper(**{**protocol(name)["hyper"], "total_steps": total_steps})
+
+
+def masked_hyper(name: str, total_steps: int):
+    import learning_masked as lm  # noqa: PLC0415
+
+    return lm.MaskedHyper(**{**protocol(name)["hyper"], "total_steps": total_steps})
+
+
+def train_masked(name: str, seed: int, total_steps: int, eval_episodes: int) -> dict:
+    """One training run of a tier T3a protocol (action masks, one learner,
+    ``learning_masked``). Apart from ``train`` so the T1 fingerprints do not
+    change."""
+    import learning_masked as lm  # noqa: PLC0415
+    import reference_training as rt  # noqa: PLC0415
+
+    p = protocol(name)
+    if p["tier"] != "T3a":
+        raise ValueError(f"{name} is tier {p['tier']}, not T3a")
+    return lm.train(p["env"], dict(p.get("env_kwargs", {})), seed, masked_hyper(name, total_steps), eval_episodes, rt.EVAL_SEED_BASE)
 
 
 def train_continuous(name: str, seed: int, total_steps: int, eval_episodes: int) -> dict:
@@ -233,7 +265,7 @@ def random_scores(name: str, episodes: int, seed: int = 0) -> list[float]:
     import reference_training as rt  # noqa: PLC0415
     import tessera_rl.gym  # noqa: PLC0415, F401
 
-    env = gymnasium.make(protocol(name)["env"])
+    env = gymnasium.make(protocol(name)["env"], **protocol(name).get("env_kwargs", {}))
     env.action_space.seed(seed)
     out = []
     for i in range(episodes):
