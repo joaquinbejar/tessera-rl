@@ -72,6 +72,11 @@ FLAG_CHANGE = 0.03
 AA_HALF_WIDTH_LIMIT = 0.015
 LOAD_LIMIT = 4.0
 WEEKLY_NIGHTS = 7
+#: How many entries the state keeps of its history, flagged heads and
+#: consumed acknowledgements. An acknowledgement of a head that fell out of
+#: ``flagged_heads`` no longer applies, so pruning ``consumed_acks`` at the
+#: same depth can never re-apply one.
+KEEP = 60
 RESAMPLES = 10_000
 BOOT_SEED = 20261124
 
@@ -188,7 +193,7 @@ def resolve_acks(state: dict, acks: list[dict], head: str, is_ancestor: Callable
         latest = max(applied, key=lambda a: flagged_heads.index(a["commit"]))
         new["accepted_base"] = latest["commit"]
         new["flag_streak"] = {}
-        new["consumed_acks"] = [*new["consumed_acks"], *(a["commit"] for a in applied)]
+        new["consumed_acks"] = [*new["consumed_acks"], *(a["commit"] for a in applied)][-KEEP:]
     return new, applied
 
 
@@ -221,7 +226,7 @@ def decide(state: dict, night: dict, binding: bool, applied: list[dict] | None =
     else:
         streak = {case: new["flag_streak"].get(case, 0) + 1 for case in flags}
         new["flag_streak"] = streak
-        new["flagged_heads"] = [*new.get("flagged_heads", []), head][-60:]
+        new["flagged_heads"] = [*new.get("flagged_heads", []), head][-KEEP:]
         new["qualifying_nights"] += 1
         red = any(n >= 2 for n in streak.values())
         verdict.update(status="flagged", red=red)
@@ -229,7 +234,7 @@ def decide(state: dict, night: dict, binding: bool, applied: list[dict] | None =
         new["weekly_base"] = new["accepted_base"]
     if not binding and verdict["red"]:
         verdict.update(red=False, would_be_red=True)
-    new["history"] = [*state["history"], verdict][-60:]
+    new["history"] = [*state["history"], verdict][-KEEP:]
     return new, verdict
 
 
