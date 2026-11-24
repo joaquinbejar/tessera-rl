@@ -14,17 +14,17 @@ use tessera_rl_core::config::{CanonicalConfig, canonical_bytes};
 use tessera_rl_core::encoding::{Canonical, HashSink, Sink, encode_to_vec};
 use tessera_rl_core::{AdaptiveValues, Persist, RecordLayout, Validate};
 
+use crate::archive::ResetSource;
 use crate::error::EngineError;
 use crate::masks::PersistMask;
 use crate::outputs::Outputs;
 use crate::persist::{BUILD_ID, descriptor, identity, write_shared_header};
-use crate::archive::ResetSource;
 use crate::pool::{EnvPool, Reseed};
 use crate::record::{DecodedRecord, Record};
 use crate::validate::ActionInput;
 
-use super::{ReplayError, ResetSourceRecord};
 use super::format::{EventTag, REPLAY_MAGIC, StateWriteOp, push_ids, push_len};
+use super::{ReplayError, ResetSourceRecord};
 
 /// Options of a [`Recorder`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

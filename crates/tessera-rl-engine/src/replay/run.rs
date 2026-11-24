@@ -7,11 +7,11 @@ use tessera_rl_core::config::{CanonicalConfig, canonical_bytes};
 use tessera_rl_core::encoding::{Canonical, decode_from_slice};
 use tessera_rl_core::{AdaptiveValues, Persist, RecordLayout, StateHash, Validate};
 
+use crate::archive::{Archive, ResetSource};
+use crate::error::EngineError;
 use crate::masks::PersistMask;
 use crate::persist::{BUILD_ID, PersistError, identity};
 use crate::pool::EnvPool;
-use crate::archive::{Archive, ResetSource};
-use crate::error::EngineError;
 use crate::record::{DecodedRecord, PoolContext};
 use crate::validate::ActionInput;
 

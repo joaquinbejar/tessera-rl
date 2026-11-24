@@ -73,7 +73,9 @@ fn record(arc: &Archive<CartPole>, workers: usize) -> (Vec<u8>, Vec<u64>) {
     };
     let mut rec = Recorder::new(&mut p, Vec::new(), options).unwrap();
     for t in 0..120u32 {
-        let a: Vec<i32> = (0..N).map(|i| i32::try_from((t + i) % 2).unwrap()).collect();
+        let a: Vec<i32> = (0..N)
+            .map(|i| i32::try_from((t + i) % 2).unwrap())
+            .collect();
         rec.step(ActionInput {
             discrete: &a,
             continuous: &[],
@@ -132,7 +134,10 @@ fn test_archive_replay_needs_the_recorded_archive() {
     let mut p = pool(7, 0);
     assert!(matches!(
         file.run(&mut p),
-        Err(ReplayError::Engine(EngineError::ArchiveMismatch { found: 0, .. }))
+        Err(ReplayError::Engine(EngineError::ArchiveMismatch {
+            found: 0,
+            ..
+        }))
     ));
     let other = archive(4);
     let mut q = pool(7, 0);
