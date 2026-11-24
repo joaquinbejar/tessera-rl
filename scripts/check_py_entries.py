@@ -79,16 +79,26 @@ def pub_safe_foreign(text: str) -> bool:
     return any(PUB_SAFE.search(body) for body in bodies(code, UNSAFE_EXTERN))
 
 
+def dependency_problems():
+    """The pyo3-macros check, on the workspace's own manifest. A failing
+    `cargo tree` is a problem, with cargo's stderr, not a traceback."""
+    run = subprocess.run(
+        ["cargo", "tree", "-q", "-p", "tessera-rl-py", "-e", "normal", "--prefix", "none"],
+        capture_output=True, text=True, cwd=ROOT,
+    )
+    if run.returncode != 0:
+        return [f"cargo tree failed (exit {run.returncode}): {run.stderr.strip()}"]
+    if any(line.startswith("pyo3-macros ") for line in run.stdout.splitlines()):
+        return ["pyo3-macros is a dependency of tessera-rl-py"]
+    return []
+
+
 def main(srcs=None, pyffi=None):
+    # Copies (the lint's own tests) have no manifest: the dependency check is
+    # of the workspace, so it runs only on the tree itself (#426).
+    problems = dependency_problems() if srcs is None else []
     srcs = SRCS if srcs is None else srcs
     pyffi = PYFFI if pyffi is None else pyffi
-    problems = []
-    tree = subprocess.run(
-        ["cargo", "tree", "-q", "-p", "tessera-rl-py", "-e", "normal", "--prefix", "none"],
-        capture_output=True, text=True, check=True,
-    ).stdout
-    if any(line.startswith("pyo3-macros ") for line in tree.splitlines()):
-        problems.append("pyo3-macros is a dependency of tessera-rl-py")
     for path in sorted(p for src in srcs for p in src.rglob("*.rs")):
         text = path.read_text()
         flat = re.sub(r"\s+", " ", text)
@@ -117,7 +127,7 @@ if __name__ == "__main__":
     args = [pathlib.Path(a) for a in sys.argv[1:]]
     if args:
         # check_py_entries.py PY_SRC PYFFI_SRC: check copies (the lint's own
-        # tests).
+        # tests), without the workspace's dependency check.
         main(srcs=args, pyffi=args[-1])
     else:
         main()
