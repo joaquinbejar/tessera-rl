@@ -4,7 +4,7 @@
 
 use core::num::NonZeroU32;
 
-use burn::optim::{AdamConfig, GradientsParams, Optimizer as _};
+use burn::optim::{AdamConfig, GradientsParams};
 use burn::prelude::{Device, Int, Tensor, TensorData};
 use burn::tensor::activation::{log_softmax, softmax};
 use tessera_rl_classic::{CartPole, CartPoleConfig};
