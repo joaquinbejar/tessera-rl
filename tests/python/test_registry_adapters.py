@@ -10,8 +10,8 @@ from tessera_rl import _envs, _native, pz
 
 #: The PettingZoo interfaces before ADR-0080 (tessera_rl.pz._ENVS, literal),
 #: plus Gather-v1 (ADR-0082, #366), which declared the same pair there, and
-#: Lanterns-v1 (#380, AEC only): the registry's declarations must equal
-#: them, id by id.
+#: Lanterns-v1 (#380, AEC only) and Vrp-v1 (#383, AEC only): the
+#: registry's declarations must equal them, id by id.
 _BEFORE = {
     "tessera/Tag-v1": {"parallel", "aec"},
     "tessera/GridKeyDoor-v1": {"parallel", "aec"},
@@ -23,6 +23,7 @@ _BEFORE = {
     "tessera/Lanterns-v1": {"aec"},
     "tessera/Othello-v1": {"aec"},
     "tessera/Go9-v1": {"aec"},
+    "tessera/Vrp-v1": {"aec"},
     "tessera/RTS-v1": {"parallel"},
     # #381: Parallel only, as the RTS (multi-head).
     "tessera/LimitOrderBook-v1": {"parallel"},

@@ -107,3 +107,27 @@ fn test_golden_vrp_next_step_matches_fixture_on_every_mode() {
 fn test_golden_vrp_same_step_matches_fixture_on_every_mode() {
     check_vrp(&vrp("vrp-v1-same-step", AutoReset::SameStep));
 }
+
+fn vrp_fleet(name: &'static str, auto_reset: AutoReset) -> Scenario<VrpConfig> {
+    Scenario {
+        cfg: VrpConfig {
+            customers: 12,
+            vehicles: 3,
+            grid: 40,
+            max_demand: 9,
+            capacity: 15,
+        },
+        seed: 3_830_003,
+        ..vrp(name, auto_reset)
+    }
+}
+
+#[test]
+fn test_golden_vrp_fleet_next_step_matches_fixture_on_every_mode() {
+    check_vrp(&vrp_fleet("vrp-v1-fleet-next-step", AutoReset::NextStep));
+}
+
+#[test]
+fn test_golden_vrp_fleet_same_step_matches_fixture_on_every_mode() {
+    check_vrp(&vrp_fleet("vrp-v1-fleet-same-step", AutoReset::SameStep));
+}

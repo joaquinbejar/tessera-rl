@@ -294,6 +294,7 @@ fn test_vrp_illegal_action_is_replaced_by_the_lowest_legal_one() {
         // `debug-checks` (on under workspace feature unification):
         // rejected atomically, nothing moved.
         Err(e) => {
+            assert!(tessera_rl_engine::DEBUG_CHECKS, "rejected without debug-checks: {e:?}");
             assert!(matches!(
                 e,
                 tessera_rl_engine::EngineError::IllegalAction { agent: 0, .. }
@@ -302,10 +303,119 @@ fn test_vrp_illegal_action_is_replaced_by_the_lowest_legal_one() {
         }
         // Default: replaced by the no-op.
         Ok(out) => {
+            assert!(!tessera_rl_engine::DEBUG_CHECKS, "replaced under debug-checks");
             let r = out.rewards().first().copied().unwrap();
             let s1 = state(&p, 0);
             assert_eq!((s1.at[0], s1.served), (1, 1));
             assert_eq!(r, -f32::from(u16::try_from(s0.distance(DEPOT, 1)).unwrap()));
         }
     }
+}
+
+fn fleet(customers: u32, vehicles: u32, seed: u64) -> EnvPool<Vrp, Masked> {
+    pool(
+        VrpConfig {
+            customers,
+            vehicles,
+            grid: 50,
+            max_demand: 9,
+            capacity: 20,
+        },
+        1,
+        seed,
+    )
+}
+
+/// One step of instance 0 with `action` for every slot; the rewards of the
+/// slots and whether it ended.
+fn step_all(p: &mut EnvPool<Vrp, Masked>, action: usize) -> (Vec<f32>, bool) {
+    let a = [i32::try_from(action).unwrap(); 8];
+    let out = p
+        .step(ActionInput {
+            discrete: &a,
+            continuous: &[],
+        })
+        .unwrap();
+    (
+        out.rewards().to_vec(),
+        out.episode_terminated().first().unwrap().get(),
+    )
+}
+
+#[test]
+fn test_vrp_fleet_moves_the_least_travelled_vehicle_with_ties_to_the_lowest_slot() {
+    let mut p = fleet(12, 3, 2);
+    let mut steps = 0;
+    loop {
+        let s = state(&p, 0);
+        let mover = usize::from(s.to_move);
+        assert_eq!(mover, s.next_mover());
+        // The mover is active and no active vehicle travelled less, nor as
+        // little from a lower slot.
+        assert!(s.active(mover));
+        for v in 0..3 {
+            if s.active(v) {
+                assert!(
+                    (s.travelled[mover], mover) <= (s.travelled[v], v),
+                    "{v} before {mover}"
+                );
+            }
+        }
+        let (rewards, ended) = step_all(&mut p, baseline::act(&s, mover));
+        // Only the mover is rewarded.
+        for (v, r) in rewards.iter().enumerate() {
+            if v != mover {
+                assert_eq!(*r, 0.0, "slot {v}");
+            }
+        }
+        steps += 1;
+        assert!(steps <= 24, "more than 2 * customers steps");
+        if ended {
+            let end = state(&p, 0);
+            assert!(end.at[..3].iter().all(|&a| a == 0) && end.served == 12);
+            assert!(
+                end.travelled[..3].iter().all(|&t| t > 0),
+                "every vehicle took a trip"
+            );
+            break;
+        }
+    }
+}
+
+#[test]
+fn test_vrp_fleet_masks_follow_the_vehicle_to_move() {
+    let mut p = fleet(6, 2, 5);
+    // Vehicle 0 moves first; then vehicle 1, which has travelled 0.
+    step_all(&mut p, 1);
+    let s = state(&p, 0);
+    assert_eq!(s.to_move, 1);
+    let out = p.outputs().unwrap();
+    let masks: Vec<bool> = out.masks().iter().map(|f| f.get()).collect();
+    let row = |v: usize| &masks[v * 7..v * 7 + 7];
+    // Vehicle 1 is at the depot with customers left: the depot is masked;
+    // customer 1 is served for everyone.
+    assert!(!row(1)[DEPOT] && !row(1)[1]);
+    let mut t = state(&p, 0);
+    t.to_move = 0;
+    assert!(
+        Vrp::validate(&cfg_fleet(6, 2), &t).is_err(),
+        "the wrong mover"
+    );
+}
+
+fn cfg_fleet(customers: u32, vehicles: u32) -> VrpConfig {
+    VrpConfig {
+        customers,
+        vehicles,
+        grid: 50,
+        max_demand: 9,
+        capacity: 20,
+    }
+}
+
+#[test]
+fn test_vrp_one_vehicle_turns_are_unchanged() {
+    let p = pool(cfg(8, 30), 1, 3);
+    let s = state(&p, 0);
+    assert_eq!((s.to_move, s.next_mover()), (0, 0));
 }

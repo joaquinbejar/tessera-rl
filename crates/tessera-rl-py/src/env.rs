@@ -26,6 +26,7 @@ use tessera_rl_games::{
 };
 use tessera_rl_markets::{LimitOrderBook, LobConfig};
 use tessera_rl_num::identity::Seed;
+use tessera_rl_ops::{JobShop, JobShopConfig, Vrp, VrpConfig};
 use tessera_rl_rts::{Rts, RtsConfig};
 
 /// Errors of the bindings: the engine's, plus record decoding and argument
@@ -1922,6 +1923,58 @@ pub(crate) fn lanterns(
     let same_step = options.auto_reset == AutoReset::SameStep;
     let pool = EnvPool::<Lanterns, Masked>::with_masks(cfg.clone(), options)?;
     let pool = crate::policy::info(pool, args)?;
+    finish(&cfg, pool, args, n, same_step)
+}
+
+/// The JobShop config fields, by name, as Python passes them.
+#[derive(Debug, Default)]
+pub(crate) struct JobShopFields {
+    pub(crate) jobs: Option<u32>,
+    pub(crate) machines: Option<u32>,
+    pub(crate) max_duration: Option<u32>,
+}
+
+/// A job shop pool (`tessera/JobShop-v1`), with masks.
+pub(crate) fn jobshop(
+    args: &PoolArgs,
+    fields: &JobShopFields,
+) -> Result<Box<dyn PoolOps>, BindError> {
+    let d = JobShopConfig::default();
+    let cfg = JobShopConfig {
+        jobs: fields.jobs.unwrap_or(d.jobs),
+        machines: fields.machines.unwrap_or(d.machines),
+        max_duration: fields.max_duration.unwrap_or(d.max_duration),
+    };
+    let (options, n) = options(args)?;
+    let same_step = options.auto_reset == AutoReset::SameStep;
+    let pool = EnvPool::<JobShop, Masked>::with_masks(cfg.clone(), options)?;
+    finish(&cfg, pool, args, n, same_step)
+}
+
+/// The Vrp config fields, by name, as Python passes them.
+#[derive(Debug, Default)]
+pub(crate) struct VrpFields {
+    pub(crate) customers: Option<u32>,
+    pub(crate) vehicles: Option<u32>,
+    pub(crate) grid: Option<u32>,
+    pub(crate) max_demand: Option<u32>,
+    pub(crate) capacity: Option<u32>,
+}
+
+/// A vehicle routing pool (`tessera/Vrp-v1`), with masks and Sequential
+/// turns.
+pub(crate) fn vrp(args: &PoolArgs, fields: &VrpFields) -> Result<Box<dyn PoolOps>, BindError> {
+    let d = VrpConfig::default();
+    let cfg = VrpConfig {
+        customers: fields.customers.unwrap_or(d.customers),
+        vehicles: fields.vehicles.unwrap_or(d.vehicles),
+        grid: fields.grid.unwrap_or(d.grid),
+        max_demand: fields.max_demand.unwrap_or(d.max_demand),
+        capacity: fields.capacity.unwrap_or(d.capacity),
+    };
+    let (options, n) = options(args)?;
+    let same_step = options.auto_reset == AutoReset::SameStep;
+    let pool = EnvPool::<Vrp, Masked>::with_masks(cfg.clone(), options)?;
     finish(&cfg, pool, args, n, same_step)
 }
 

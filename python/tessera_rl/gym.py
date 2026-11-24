@@ -78,6 +78,7 @@ _MAKERS = {
     "tessera/BrickWall-v1": _native.make_brickwall,
     "tessera/Snake-v1": _native.make_snake,
     "tessera/PaddleDuel-v1": _native.make_paddleduel,
+    "tessera/JobShop-v1": _native.make_jobshop,
     **{env_id: _native.make_rts for env_id in ("tessera/RTS-vsRush-v1", "tessera/RTS-vsProspector-v1", "tessera/RTS-vsRandom-v1")},
 }
 

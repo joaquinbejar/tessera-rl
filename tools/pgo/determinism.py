@@ -72,6 +72,8 @@ ENVS = {
     "go9": ("tessera/Go9-v1", {}),
     "leduc": ("tessera/Leduc-v1", {}),
     "lanterns": ("tessera/Lanterns-v1", {"players": 3}),
+    "jobshop": ("tessera/JobShop-v1", {}),
+    "vrp": ("tessera/Vrp-v1", {"vehicles": 3}),
     # Few units, a small map: the per-unit Python draws stay cheap. The
     # determinism of the protocol-size environment is covered by the RTS
     # goldens, not by this tool.

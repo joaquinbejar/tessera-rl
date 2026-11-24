@@ -631,6 +631,59 @@ pub(crate) fn make_lanterns(g: Gil, kwargs: Option<Ref<'_>>) -> CResult<Inner> {
     Ok(Inner::new(ops, borrowed))
 }
 
+const JOBSHOP_KEYS: [&str; 4] = ["jobs", "machines", "max_duration", "outputs"];
+
+/// `make_jobshop(**kwargs)`: the pool of a job shop environment object
+/// (`jobs`, `machines`, `max_duration`). An episode is exactly
+/// `jobs * machines` steps, at most 2,048; `max_episode_steps` defaults to
+/// 4,096, so it never truncates one.
+pub(crate) fn make_jobshop(g: Gil, kwargs: Option<Ref<'_>>) -> CResult<Inner> {
+    let kw = Kwargs::parse(g, kwargs)?;
+    kw.check(g, &[&POOL_KEYS, &JOBSHOP_KEYS])?;
+    let borrowed = borrowed(g, &kw)?;
+    let args = pool_args(g, &kw, 4096)?;
+    let fields = crate::env::JobShopFields {
+        jobs: kw.u32(g, "jobs")?,
+        machines: kw.u32(g, "machines")?,
+        max_duration: kw.u32(g, "max_duration")?,
+    };
+    let ops = g
+        .detach(|| crate::env::jobshop(&args, &fields))
+        .map_err(|e| to_py(g, e))?;
+    Ok(Inner::new(ops, borrowed))
+}
+
+const VRP_KEYS: [&str; 6] = [
+    "customers",
+    "vehicles",
+    "grid",
+    "max_demand",
+    "capacity",
+    "outputs",
+];
+
+/// `make_vrp(**kwargs)`: the pool of a vehicle routing environment object
+/// (`customers`, `vehicles`, `grid`, `max_demand`, `capacity`). An episode
+/// takes at most `2 * customers` steps, at most 1,000; `max_episode_steps`
+/// defaults to 2,048, so it never truncates one.
+pub(crate) fn make_vrp(g: Gil, kwargs: Option<Ref<'_>>) -> CResult<Inner> {
+    let kw = Kwargs::parse(g, kwargs)?;
+    kw.check(g, &[&POOL_KEYS, &VRP_KEYS])?;
+    let borrowed = borrowed(g, &kw)?;
+    let args = pool_args(g, &kw, 2048)?;
+    let fields = crate::env::VrpFields {
+        customers: kw.u32(g, "customers")?,
+        vehicles: kw.u32(g, "vehicles")?,
+        grid: kw.u32(g, "grid")?,
+        max_demand: kw.u32(g, "max_demand")?,
+        capacity: kw.u32(g, "capacity")?,
+    };
+    let ops = g
+        .detach(|| crate::env::vrp(&args, &fields))
+        .map_err(|e| to_py(g, e))?;
+    Ok(Inner::new(ops, borrowed))
+}
+
 /// `make_othello(**kwargs)`: the pool of an Othello environment object. A
 /// game lasts at most 119 plies; `max_episode_steps` defaults to 128, so it
 /// never truncates a game.

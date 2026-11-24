@@ -19,6 +19,7 @@ Environment                    Turns         Adapters
 ``tessera/Lanterns-v1``        sequential    ``aec_env``
 ``tessera/Othello-v1``         sequential    ``aec_env``
 ``tessera/Go9-v1``             sequential    ``aec_env``
+``tessera/Vrp-v1``             sequential    ``aec_env``
 =============================  ============  =============================
 
 - A simultaneous environment is Parallel natively. Its AEC form buffers
@@ -120,6 +121,7 @@ _MAKERS = {
     "tessera/Lanterns-v1": _native.make_lanterns,
     "tessera/Othello-v1": _native.make_othello,
     "tessera/Go9-v1": _native.make_go9,
+    "tessera/Vrp-v1": _native.make_vrp,
     # Simultaneous; it declares Parallel only (cycle buffering of a
     # multi-head environment is not designed yet).
     "tessera/RTS-v1": _native.make_rts,

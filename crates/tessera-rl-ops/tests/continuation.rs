@@ -65,3 +65,31 @@ fn test_continuation_vrp_next_step_restores_identically_everywhere() {
 fn test_continuation_vrp_same_step_restores_identically_everywhere() {
     vrp(AutoReset::SameStep).check_all(50);
 }
+
+#[expect(clippy::unwrap_used, reason = "test setup: a failure is the assertion")]
+fn vrp_fleet(auto_reset: AutoReset) -> Case<Vrp, Masked> {
+    Case {
+        cfg: VrpConfig {
+            customers: 8,
+            vehicles: 3,
+            grid: 30,
+            max_demand: 9,
+            capacity: 15,
+        },
+        build: |cfg, options| EnvPool::with_masks(cfg, options).unwrap(),
+        auto_reset,
+        limit: 32,
+        deaths: false,
+        branches: true,
+    }
+}
+
+#[test]
+fn test_continuation_vrp_fleet_next_step_restores_identically_everywhere() {
+    vrp_fleet(AutoReset::NextStep).check_all(50);
+}
+
+#[test]
+fn test_continuation_vrp_fleet_same_step_restores_identically_everywhere() {
+    vrp_fleet(AutoReset::SameStep).check_all(50);
+}
