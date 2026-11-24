@@ -37,6 +37,7 @@ fn options() -> GangOptions {
     GangOptions {
         workers: NonZeroUsize::MIN,
         spin: 0,
+        adaptive_cap_ns: None,
         pin: None,
         mock_futex: false,
         faults: Faults::default(),

@@ -90,6 +90,14 @@ def test_host_make_spin_raises_capability_error(fake, spin):
         tessera_rl.make(FAKE, num_envs=2, workers=1, spin=spin)
 
 
+@pytest.mark.parametrize("kwargs", [{"wait": "adaptive"}, {"wait": "fixed"}, {"wait_cap_us": 100}])
+def test_host_make_wait_policy_raises_capability_error(fake, kwargs):
+    # ADR-0074 item 5: the worker wait policy is not part of host protocol 1.
+    key = next(iter(kwargs))
+    with pytest.raises(tessera_rl.CapabilityError, match=key):
+        tessera_rl.make(FAKE, num_envs=2, workers=1, **kwargs)
+
+
 def test_host_make_spin_none_is_dropped(fake):
     tessera_rl.make(FAKE, num_envs=2, spin=None).close()
 

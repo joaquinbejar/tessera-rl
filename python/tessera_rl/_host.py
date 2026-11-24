@@ -191,6 +191,10 @@ def _refuse_spin(kwargs: dict) -> None:
     ``spin=None`` (the default) is dropped."""
     if kwargs.pop("spin", None) is not None:
         raise _native.CapabilityError("spin is a first-party pool option; host environments do not take it")
+    # The worker wait policy (ADR-0074 item 5) is not part of host protocol 1 either.
+    for key in ("wait", "wait_cap_us"):
+        if kwargs.pop(key, None) is not None:
+            raise _native.CapabilityError(f"{key} is a first-party pool option; host environments do not take it")
 
 
 def make(env_id: str, known_first_party, num_envs: int, seed: int, outputs: str, kwargs: dict) -> HostEnv:

@@ -84,6 +84,7 @@ use core::num::NonZeroUsize;
 use crate::error::EngineError;
 
 use super::affinity::pin_current;
+use super::clock;
 use super::panics::catch;
 use super::sync::{
     Arc, AtomicBool, AtomicPtr, AtomicU32, AtomicU64, AtomicUsize, Ordering, spin_loop, thread,
@@ -101,6 +102,9 @@ pub(crate) struct GangOptions {
     pub(crate) workers: NonZeroUsize,
     /// Spins before parking.
     pub(crate) spin: u32,
+    /// The adaptive wait's cap in nanoseconds (ADR-0074); `None` for the
+    /// fixed policy.
+    pub(crate) adaptive_cap_ns: Option<u64>,
     /// Logical cores to pin workers to, in order (already validated);
     /// `None` leaves them unpinned.
     pub(crate) pin: Option<Vec<usize>>,
@@ -298,6 +302,8 @@ struct Shared {
     fp_resets: AtomicU64,
     creator: thread::Thread,
     spin: u32,
+    /// The workers' adaptive cap (ADR-0074), `None` for the fixed policy.
+    adaptive_cap_ns: Option<u64>,
     backend: Backend,
     /// The Async mode's completion wake (ADR-0056 decision 2); the backstop
     /// notifies it when a worker dies, so a receiver blocked without a
@@ -438,6 +444,63 @@ impl Shared {
         }
     }
 
+    /// A worker's wait for job `next` or shutdown (ADR-0074). Under the
+    /// fixed policy this is [`Shared::wait_until`]. Under the adaptive
+    /// one, the same `spin` spins come first; then the worker keeps
+    /// spinning while the wait has lasted less than `min(cap, 2 x ewma)`,
+    /// reading the clock every [`clock::READ_EVERY`] spins; then it blocks
+    /// exactly as `wait_until` does (register in `parked`, recheck, block),
+    /// and never spins again in this wait. The measured wait updates
+    /// `ewma`. Blocking is unchanged, so no wake-up can be lost.
+    fn worker_wait(&self, next: u64, ewma: &mut u64) {
+        let ready = || {
+            self.published.load(Ordering::SeqCst) >= next || self.shutdown.load(Ordering::SeqCst)
+        };
+        let Some(cap) = self.adaptive_cap_ns else {
+            self.wait_until(&self.word, &self.parked, ready, false);
+            return;
+        };
+        let start = clock::now_ns();
+        let budget = cap.min(ewma.checked_mul(2).unwrap_or(u64::MAX));
+        let mut spins = 0;
+        let mut tick: u32 = 0;
+        let mut spinning = true;
+        loop {
+            if ready() {
+                break;
+            }
+            if spinning {
+                if spins < self.spin {
+                    // `spins < self.spin <= u32::MAX`: no overflow.
+                    spins += 1;
+                    spin_loop();
+                    continue;
+                }
+                // `tick < READ_EVERY`, a power of two: no overflow.
+                tick = (tick + 1) & (clock::READ_EVERY - 1);
+                if tick != 0 {
+                    spin_loop();
+                    continue;
+                }
+                let waited = clock::since(start);
+                if waited < budget {
+                    spin_loop();
+                    continue;
+                }
+                spinning = false;
+            }
+            let value = self.word.load(Ordering::SeqCst);
+            self.parked.fetch_add(1, Ordering::SeqCst);
+            if ready() {
+                self.parked.fetch_sub(1, Ordering::SeqCst);
+                break;
+            }
+            self.block(&self.word, value, false);
+            self.parked.fetch_sub(1, Ordering::SeqCst);
+        }
+        *ewma = clock::ewma(*ewma, clock::since(start));
+    }
+
     /// Blocks once while `word == value`; may return spuriously.
     fn block(&self, word: &AtomicU32, value: u32, poll: bool) {
         match self.backend {
@@ -506,6 +569,7 @@ impl Gang {
             fp_resets: AtomicU64::new(0),
             creator: thread::current(),
             spin: options.spin,
+            adaptive_cap_ns: options.adaptive_cap_ns,
             #[cfg(not(loom))]
             backend: options.native.map_or(Backend::Park, Backend::Native),
             #[cfg(not(loom))]
@@ -833,6 +897,8 @@ fn worker_main(shared: &Shared, worker: usize, core: Option<usize>, fail: bool, 
     }
     let mut next: u64 = 1;
     let mut draining = false;
+    // This worker's EWMA of its waits, for the adaptive policy (ADR-0074).
+    let mut ewma: u64 = 0;
     loop {
         // Run every published job, in order, before sleeping (step 2).
         while shared.published.load(Ordering::SeqCst) >= next {
@@ -878,15 +944,7 @@ fn worker_main(shared: &Shared, worker: usize, core: Option<usize>, fail: bool, 
         if shared.shutdown.load(Ordering::SeqCst) {
             return;
         }
-        shared.wait_until(
-            &shared.word,
-            &shared.parked,
-            || {
-                shared.published.load(Ordering::SeqCst) >= next
-                    || shared.shutdown.load(Ordering::SeqCst)
-            },
-            false,
-        );
+        shared.worker_wait(next, &mut ewma);
     }
 }
 

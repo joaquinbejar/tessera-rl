@@ -13,6 +13,7 @@ fn options(workers: usize) -> GangOptions {
     GangOptions {
         workers: NonZeroUsize::new(workers).unwrap(),
         spin: if cfg!(loom) { 0 } else { 64 },
+        adaptive_cap_ns: None,
         pin: None,
         #[cfg(not(loom))]
         native: None,
@@ -646,4 +647,83 @@ fn test_gang_rejects_nested_engines() {
     .unwrap();
     let result = nested.lock().ok().and_then(|mut s| s.take());
     assert_eq!(result, Some(Err(EngineError::NestedEngine)));
+}
+
+/// The adaptive policy (ADR-0074) with a small cap, so the mock clock of
+/// loom reaches it: every wake-up is still seen, with workers that spin,
+/// then block, across epochs.
+fn adaptive_options(workers: usize, cap_ns: u64) -> GangOptions {
+    let mut opts = options(workers);
+    opts.adaptive_cap_ns = Some(cap_ns);
+    opts
+}
+
+#[test]
+fn test_gang_adaptive_wait_one_worker_two_epochs_never_loses_a_wake() {
+    model(|| epochs(&adaptive_options(1, 3_000), 1, 2));
+}
+
+#[test]
+fn test_gang_adaptive_wait_two_workers_one_epoch_never_loses_a_wake() {
+    small_model(|| epochs(&adaptive_options(2, 2_000), 2, 1));
+}
+
+#[test]
+fn test_gang_adaptive_wait_with_address_wait_never_loses_a_wake() {
+    model(|| {
+        let mut opts = address_options(1);
+        opts.adaptive_cap_ns = Some(3_000);
+        epochs(&opts, 1, 2);
+    });
+}
+
+#[test]
+fn test_gang_adaptive_shutdown_joins_spinning_workers() {
+    model(|| {
+        let mut gang = Gang::new(&adaptive_options(2, 2_000)).unwrap();
+        assert!(!gang.run(&|_w: usize| {}).unwrap());
+        drop(gang);
+    });
+}
+
+/// Whether the one worker is parked `probe` after a job, once the gang
+/// has seen `gap`-long waits between jobs.
+#[cfg(all(not(loom), not(miri)))]
+fn parked_mid_gap(
+    adaptive_cap_ns: Option<u64>,
+    gap: std::time::Duration,
+    probe: std::time::Duration,
+) -> bool {
+    let mut opts = options(1);
+    opts.spin = 0;
+    opts.adaptive_cap_ns = adaptive_cap_ns;
+    let mut gang = Gang::new(&opts).unwrap();
+    let f = |_w: usize| {};
+    for _ in 0..24 {
+        assert!(!gang.run(&f).unwrap());
+        std::thread::sleep(gap);
+    }
+    assert!(!gang.run(&f).unwrap());
+    std::thread::sleep(probe);
+    gang.shared.parked.load(Ordering::SeqCst) > 0
+}
+
+#[cfg(all(not(loom), not(miri)))]
+#[test]
+fn test_gang_adaptive_worker_spins_through_a_learned_gap() {
+    let gap = std::time::Duration::from_millis(2);
+    let probe = std::time::Duration::from_millis(1);
+    // Fixed, no spins: parked at once.
+    assert!(parked_mid_gap(None, gap, probe));
+    // Adaptive, cap 50 ms: the learned budget (about 2 x 2 ms) covers the probe.
+    assert!(!parked_mid_gap(Some(50_000_000), gap, probe));
+    // Adaptive, cap 0.2 ms: the cap ends the spinning before the probe.
+    assert!(parked_mid_gap(Some(200_000), gap, probe));
+    // Adaptive, cap 50 ms, but back-to-back jobs taught a tiny EWMA: the
+    // budget (2 x EWMA) ends the spinning long before the probe.
+    assert!(parked_mid_gap(
+        Some(50_000_000),
+        std::time::Duration::ZERO,
+        probe
+    ));
 }

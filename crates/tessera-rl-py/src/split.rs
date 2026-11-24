@@ -652,6 +652,8 @@ mod tests {
             chunk_size: Some(2),
             workers: Some(1),
             spin: None,
+            wait: None,
+            wait_cap_us: None,
             pipelined: true,
             asynced: None,
         })
@@ -700,6 +702,8 @@ mod tests {
             chunk_size: Some(2),
             workers: Some(1),
             spin: None,
+            wait: None,
+            wait_cap_us: None,
             pipelined: true,
             asynced: None,
         };
@@ -809,6 +813,8 @@ mod tests {
             chunk_size: Some(2),
             workers: Some(2),
             spin: None,
+            wait: None,
+            wait_cap_us: None,
             pipelined: true,
             asynced: None,
         };

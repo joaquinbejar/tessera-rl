@@ -108,3 +108,32 @@ fn test_sync_runtime_host_without_cpu_set_holds_no_registration() {
     let env = SyncRuntime::start(two, Pinning::Auto, crate::sys::Faults::default()).unwrap();
     assert!(env.registration.is_some());
 }
+
+#[test]
+fn test_adaptive_cap_ns_fixed_is_none_and_caps_above_one_second_refused() {
+    use crate::pool::adaptive_cap_ns;
+    use crate::{MAX_ADAPTIVE_CAP, WaitPolicy};
+    use core::time::Duration;
+    assert_eq!(adaptive_cap_ns(WaitPolicy::Fixed), Ok(None));
+    assert_eq!(
+        adaptive_cap_ns(WaitPolicy::Adaptive {
+            cap: Duration::ZERO
+        }),
+        Ok(Some(0))
+    );
+    assert_eq!(
+        adaptive_cap_ns(WaitPolicy::Adaptive {
+            cap: MAX_ADAPTIVE_CAP
+        }),
+        Ok(Some(1_000_000_000))
+    );
+    assert!(matches!(
+        adaptive_cap_ns(WaitPolicy::Adaptive {
+            cap: MAX_ADAPTIVE_CAP + Duration::from_nanos(1)
+        }),
+        Err(crate::EngineError::Options {
+            option: "wait_policy",
+            ..
+        })
+    ));
+}

@@ -257,6 +257,26 @@ pub(crate) enum Pinning {
     ExplicitOnly,
 }
 
+/// The adaptive cap in nanoseconds, `None` for the fixed policy
+/// (ADR-0074). A cap above [`crate::MAX_ADAPTIVE_CAP`] is refused.
+pub(crate) fn adaptive_cap_ns(policy: crate::WaitPolicy) -> Result<Option<u64>, EngineError> {
+    match policy {
+        crate::WaitPolicy::Fixed => Ok(None),
+        crate::WaitPolicy::Adaptive { cap } if cap <= crate::MAX_ADAPTIVE_CAP => {
+            u64::try_from(cap.as_nanos())
+                .map(Some)
+                .map_err(|_| EngineError::Options {
+                    option: "wait_policy",
+                    reason: "the adaptive cap must be at most 1 s",
+                })
+        }
+        crate::WaitPolicy::Adaptive { .. } => Err(EngineError::Options {
+            option: "wait_policy",
+            reason: "the adaptive cap must be at most 1 s",
+        }),
+    }
+}
+
 /// Whether a pool's workers count as an active engine (ADR-0005): every
 /// `EnvPool`, and a host pool only with an explicit `cpu_set` (ADR-0062
 /// item 2).
@@ -333,6 +353,7 @@ impl SyncRuntime {
         #[cfg(test)] faults: crate::sys::Faults,
     ) -> Result<Self, EngineError> {
         let workers = options.workers.get();
+        let adaptive_cap_ns = adaptive_cap_ns(options.wait_policy)?;
         let available = available_cores();
         let (registration, others) = if registers(pinning, options.cpu_set.is_some()) {
             let (registration, others) = Registration::register();
@@ -355,6 +376,7 @@ impl SyncRuntime {
         let gang = Gang::new(&GangOptions {
             workers: options.workers,
             spin: options.spin,
+            adaptive_cap_ns,
             pin,
             #[cfg(not(loom))]
             native,

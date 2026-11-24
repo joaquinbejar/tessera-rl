@@ -92,7 +92,9 @@ pub use modes::pipelined::{
     CycleState, HalfGenerations, IntoPoolError, IntoPoolErrorKind, PipelinedBuildError,
     PipelinedOptions, PipelinedPool, SendError,
 };
-pub use options::{AutoReset, CHUNK_RANGE, PoolOptions, SyncOptions, WaitBackend};
+pub use options::{
+    AutoReset, CHUNK_RANGE, MAX_ADAPTIVE_CAP, PoolOptions, SyncOptions, WaitBackend, WaitPolicy,
+};
 pub use outputs::Outputs;
 pub use persist::{
     ASSET_FORMAT_VERSION, BUILD_ID, DecodeLimits, FORMAT_VERSION, MAGIC, PersistError,
