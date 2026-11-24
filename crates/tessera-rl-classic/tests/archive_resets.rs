@@ -241,6 +241,47 @@ fn test_archive_resets_pool_context_round_trip_needs_the_same_archive() {
     assert_eq!(q.pool_context().unwrap(), ctx);
 }
 
+/// `restore_pool` (#465) brings back the archive source the snapshot's
+/// context names, with its weights, and refuses before any write without
+/// that archive or with another.
+#[test]
+fn test_archive_resets_restore_pool_brings_back_the_archive_source() {
+    let arc = archive(3);
+    let mut p = pool(2, 5, AutoReset::Disabled, 0);
+    p.reset_all(Reseed::Keep).unwrap();
+    p.set_reset_source(ResetSource::Archive {
+        archive: arc.clone(),
+        weights: Some(vec![1, 2, 3]),
+    })
+    .unwrap();
+    let state = p.snapshot_pool().unwrap();
+    p.set_reset_source(ResetSource::Fresh).unwrap();
+    let hashes = |p: &Pool| (0..2).map(|i| p.state_hash(i).unwrap()).collect::<Vec<_>>();
+    let before = hashes(&p);
+
+    assert!(matches!(
+        p.restore_pool(&state, None),
+        Err(EngineError::ArchiveMismatch { found: 0, .. })
+    ));
+    let other = archive(4);
+    assert!(matches!(
+        p.restore_pool(&state, Some(&other)),
+        Err(EngineError::ArchiveMismatch { .. })
+    ));
+    assert_eq!(p.pool_context().unwrap().reset_source, ResetSourceContext::Fresh);
+    assert_eq!(hashes(&p), before);
+
+    p.restore_pool(&state, Some(&arc)).unwrap();
+    assert_eq!(
+        p.pool_context().unwrap().reset_source,
+        ResetSourceContext::Archive {
+            digest: arc.digest(),
+            weights: vec![1, 2, 3],
+        }
+    );
+    assert_eq!(p.pool_context().unwrap(), *state.context());
+}
+
 #[test]
 fn test_archive_resets_archive_of_another_config_is_refused() {
     // CartPole has no config fields: Grid's size gives another config hash.
