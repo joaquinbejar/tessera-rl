@@ -4,7 +4,7 @@
 # maturin's default of macOS 11. Ignored on other platforms.
 export MACOSX_DEPLOYMENT_TARGET := 13.0
 
-.PHONY: onnx-test py-test-onnx fuzz-check simd-disasm dashboard dashboard-check check-build-id gungraun-threaded fmt fmt-check clippy test doc readme readme-check pre-push deny check-targets wheel-golden py-test-wheels puffer-test py-test-jax py-typecheck pre-push-jax compat-test py-entries pyffi-api pyffi-api-if-nightly py-callouts py-test py-test-hooks py-test-host py-test-orderbook cargo-tessera-e2e burn-check burn-gate py-test-torch pre-push-torch gym-equivalence reference-training reference-sb3 reference-tianshou reference-rllib reference-rllib-tag learning-test learning-calibrate bench bench-quick bench-kernels gungraun gungraun-bless connect4-calibration search-strength
+.PHONY: onnx-test py-test-onnx fuzz-check simd-disasm dashboard dashboard-check site site-check check-build-id gungraun-threaded fmt fmt-check clippy test doc readme readme-check pre-push deny check-targets wheel-golden py-test-wheels puffer-test py-test-jax py-typecheck pre-push-jax compat-test py-entries pyffi-api pyffi-api-if-nightly py-callouts py-test py-test-hooks py-test-host py-test-orderbook cargo-tessera-e2e burn-check burn-gate py-test-torch pre-push-torch gym-equivalence reference-training reference-sb3 reference-tianshou reference-rllib reference-rllib-tag learning-test learning-calibrate bench bench-quick bench-kernels gungraun gungraun-bless connect4-calibration search-strength
 
 fmt:
 	cargo fmt --all
@@ -322,6 +322,16 @@ dashboard:
 # Every committed result file parses and is admissible (in pre-push).
 dashboard-check:
 	uv run --locked --python 3.11 python tools/dashboard/build.py --check
+
+# The docs site (SPEC 20.1, #375): MkDocs pages, the Python API (pdoc) and
+# the dashboard into target/site. It publishes nothing (RELEASE-CHECKLIST.md).
+site:
+	uv run --locked --python 3.11 --group site python tools/site/build.py
+
+# Builds the site into a temporary directory and checks it, plus the Rust
+# API docs as a -D warnings build (the site links docs.rs). Not in pre-push.
+site-check: doc
+	uv run --locked --python 3.11 --group site python tools/site/build.py --check
 
 # A short smoke run of every configuration (never valid for claims).
 bench-quick:

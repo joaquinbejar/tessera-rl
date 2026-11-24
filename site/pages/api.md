@@ -1,0 +1,6 @@
+# API reference
+
+- **Python:** [the `tessera_rl` package](python/tessera_rl.html), generated
+  from the installed package's docstrings and type stubs.
+- **Rust:** the crates on [docs.rs](https://docs.rs/tessera-rl), starting
+  from the `tessera-rl` facade and its prelude.

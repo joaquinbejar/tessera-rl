@@ -1,0 +1,40 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
+# The docs site (SPEC 20.1, #375): builds and checks target/site and uploads
+# it as a workflow artifact. It deploys nothing: enabling GitHub Pages, a
+# deploy job and any custom domain are the owner's step
+# (RELEASE-CHECKLIST.md, "Docs site").
+
+name: Site
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  site:
+    runs-on: [self-hosted, xaskar]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # The pinned uv 0.13.6 from pipx's bin directory, as in
+      # reference-training.yml (fail closed otherwise).
+      - run: |
+          d=$(pipx environment --value PIPX_BIN_DIR)
+          v=$("$d/uv" --version) || { echo "no runnable uv in pipx's bin directory $d" >&2; exit 1; }
+          case "$v" in "uv 0.13.6" | "uv 0.13.6 "*) ;; *) echo "uv in $d is '$v', not the pinned uv 0.13.6" >&2; exit 1 ;; esac
+          echo "$d" >> "$GITHUB_PATH"
+      - run: command -v uv >/dev/null || { echo "uv not on PATH" >&2; exit 1; }
+      # Rebuild the extension: checkout's git clean removes it, and uv's cache
+      # would reinstall the project without rebuilding.
+      - run: uv sync --locked --python 3.11 --group site --reinstall-package tessera-rl
+      - run: uv run --locked --python 3.11 --group site python -c "import tessera_rl._native"
+      - run: make site-check
+      - run: make site
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: site
+          path: target/site

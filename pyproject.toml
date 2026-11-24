@@ -51,6 +51,8 @@ torch = ["torch==2.15.0"]
 jax = ["jax==0.10.2", "jaxlib==0.10.2"]
 # Only for make py-typecheck (mypy and stubtest over the .pyi stubs, issue #348).
 typecheck = ["mypy==2.4.1"]
+# Only for the docs site (tools/site/build.py, make site, #375).
+site = ["mkdocs==1.6.1", "pdoc==16.0.0"]
 # Only for tools/wheel_golden.py (XXH3-64, the digest of the golden fixtures).
 wheels = ["xxhash==4.0.2"]
 # Every [env.main] pin of compat/targets.toml, so the lock proves they

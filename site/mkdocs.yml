@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+# The Tessera docs site (SPEC 20.1, #375), built by tools/site/build.py.
+site_name: Tessera
+site_description: Fast, deterministic, snapshot-able reinforcement learning environments
+docs_dir: pages
+theme:
+  name: mkdocs
+strict: true
+nav:
+  - Home: index.md
+  - Getting started: getting-started.md
+  - API reference: api.md
+  - Benchmarks: benchmarks.md
+validation:
+  links:
+    not_found: warn
+    absolute_links: warn
+    unrecognized_links: warn
