@@ -107,3 +107,33 @@ def test_site_pages_name_no_private_document():
     for f in (ROOT / "site").rglob("*"):
         if f.is_file():
             assert not build.FORBIDDEN.search(f.read_text(encoding="utf-8")), f
+
+
+def test_site_pdoc_warning_lines_are_problems():
+    out = "\n".join([
+        "pdoc: writing tessera_rl.html",
+        "Warn: Error parsing type annotation ForwardRef('np.ndarray') for tessera_rl.Step.__init__ (#525)",
+        "  /x.py:1: UserWarning: something",
+        "not a warning",
+    ])
+    assert build.pdoc_warnings(out) == [
+        "Warn: Error parsing type annotation ForwardRef('np.ndarray') for tessera_rl.Step.__init__ (#525)",
+        "/x.py:1: UserWarning: something",
+    ]
+    assert build.pdoc_warnings("pdoc: ok\n") == []
+
+
+def test_site_named_tuple_constructors_have_resolved_annotations():
+    # #525: pdoc reads the generated __new__'s annotations; they must be
+    # real types, not strings that only this module's namespace resolves.
+    import inspect
+    import typing
+
+    import tessera_rl
+    from tessera_rl._env import AsyncStep, HalfStep
+
+    for cls in (tessera_rl.Step, HalfStep, AsyncStep, tessera_rl.HostStep):
+        hints = typing.get_type_hints(cls.__new__)
+        assert set(cls._fields) <= set(hints), cls
+        for name, p in inspect.signature(cls).parameters.items():
+            assert not isinstance(p.annotation, (str, typing.ForwardRef)), (cls, name, p.annotation)

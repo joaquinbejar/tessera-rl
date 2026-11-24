@@ -12,8 +12,9 @@
   as a ``-D warnings`` check.
 
 ``--check`` builds into a temporary directory and then checks the result: no
-file of the site comes from ``docs/`` and no page links the SPEC or the ADRs
-(both stay out of the repository).
+file of the site comes from ``docs/``, no page links the SPEC or the ADRs
+(both stay out of the repository), and pdoc printed no warning (#525). Every
+build reports pdoc's warnings as problems.
 
 This tool publishes nothing: deploying ``target/site`` is the owner's step
 (RELEASE-CHECKLIST.md).
@@ -75,7 +76,34 @@ def run(cmd: list[str]) -> None:
         raise SiteError(f"{' '.join(cmd)} exited {r.returncode}")
 
 
-def build(out: pathlib.Path) -> None:
+# A pdoc warning line, as pdoc 16 prints them ("Warn: ..."), or a Python
+# warning it lets through (#525).
+PDOC_WARNING = re.compile(r"^(?:Warn:|.*Warning:)", re.M)
+
+
+def pdoc_warnings(output: str) -> list[str]:
+    """The warning lines of a pdoc run's combined output."""
+    return [line.strip() for line in output.splitlines() if PDOC_WARNING.match(line)]
+
+
+def run_pdoc(out: pathlib.Path) -> list[str]:
+    """Runs pdoc into ``out``, echoing its output, and returns its warning
+    lines: a built site has none (#525), so ``check`` reports each one."""
+    r = subprocess.run(
+        [sys.executable, "-m", "pdoc", "tessera_rl", "-o", str(out)],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+    )
+    sys.stdout.write(r.stdout)
+    sys.stderr.write(r.stderr)
+    if r.returncode != 0:
+        raise SiteError(f"pdoc exited {r.returncode}")
+    return pdoc_warnings(r.stdout + "\n" + r.stderr)
+
+
+def build(out: pathlib.Path) -> list[str]:
+    """Builds the site into ``out``; returns pdoc's warning lines."""
     if out.exists():
         shutil.rmtree(out)
     with tempfile.TemporaryDirectory(prefix="tessera-site-") as tmp:
@@ -85,10 +113,11 @@ def build(out: pathlib.Path) -> None:
     for rel in GENERATED:
         (out / rel).unlink(missing_ok=True)
     refuse_overwrite(out)
-    run([sys.executable, "-m", "pdoc", "tessera_rl", "-o", str(out / "python")])
+    warnings = run_pdoc(out / "python")
     run([sys.executable, str(ROOT / "tools" / "dashboard" / "build.py")])
     shutil.rmtree(out / "dashboard", ignore_errors=True)
     shutil.copytree(ROOT / "target" / "dashboard", out / "dashboard")
+    return warnings
 
 
 def refuse_overwrite(out: pathlib.Path) -> None:
@@ -129,12 +158,13 @@ def main(argv: list[str] | None = None) -> int:
         if a.check:
             with tempfile.TemporaryDirectory(prefix="tessera-site-out-") as tmp:
                 out = pathlib.Path(tmp) / "site"
-                build(out)
+                warnings = build(out)
                 problems = check(out)
         else:
             out = ROOT / "target" / "site"
-            build(out)
+            warnings = build(out)
             problems = check(out)
+        problems += [f"pdoc: {w}" for w in warnings]
     except SiteError as e:
         sys.stderr.write(f"site: {e}\n")
         return 1
