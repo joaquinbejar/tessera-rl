@@ -197,34 +197,34 @@ impl FunctionNoArgs for InitFailsAfterRegister {
 const FUNCTION_COUNT: usize = if cfg!(feature = "test-hooks") { 33 } else { 27 };
 
 static ROWS: [FunctionRow; FUNCTION_COUNT] = [
-    FunctionRow::noargs::<Version>(c"version", c"The Tessera version."),
+    FunctionRow::noargs::<Version>(c"version", c"version($module, /)\n--\n\nThe Tessera version."),
     FunctionRow::noargs::<PhysicalCores>(
         c"physical_cores",
-        c"Physical cores this process may use (capped by CPU quotas): the engine's default worker count.",
+        c"physical_cores($module, /)\n--\n\nPhysical cores this process may use (capped by CPU quotas): the engine's default worker count.",
     ),
     FunctionRow::varargs::<SetFpPolicy>(
         c"set_fp_policy",
-        c"set_fp_policy(name): \"canonicalize\" (default) or \"reject\".",
+        c"set_fp_policy($module, name, /)\n--\n\nset_fp_policy(name): \"canonicalize\" (default) or \"reject\".",
     ),
     FunctionRow::noargs::<GetFpPolicy>(
         c"get_fp_policy",
-        c"The floating-point policy for non-default caller controls.",
+        c"get_fp_policy($module, /)\n--\n\nThe floating-point policy for non-default caller controls.",
     ),
     FunctionRow::noargs::<FpNonCanonicalEntries>(
         c"fp_non_canonical_entries",
-        c"Entries made with non-default caller floating-point controls.",
+        c"fp_non_canonical_entries($module, /)\n--\n\nEntries made with non-default caller floating-point controls.",
     ),
     FunctionRow::noargs::<FpBoundary>(
         c"fp_boundary",
-        c"Which native floating-point boundary this build carries.",
+        c"fp_boundary($module, /)\n--\n\nWhich native floating-point boundary this build carries.",
     ),
     FunctionRow::noargs::<BuildProfile>(
         c"build_profile",
-        c"The native build profile: release or debug.",
+        c"build_profile($module, /)\n--\n\nThe native build profile: release or debug.",
     ),
     FunctionRow::noargs::<RegisteredEnvs>(
         c"registered_envs",
-        c"registered_envs() -> [(id, version, max_agents, tier, perfect_information)]; version is ENV_VERSION, not the id's -vN",
+        c"registered_envs($module, /)\n--\n\nregistered_envs() -> [(id, version, max_agents, tier, perfect_information)]; version is ENV_VERSION, not the id's -vN",
     ),
     env_type::MAKERS[0],
     env_type::MAKERS[1],
@@ -253,17 +253,17 @@ static ROWS: [FunctionRow; FUNCTION_COUNT] = [
     #[cfg(feature = "test-hooks")]
     FunctionRow::arg::<PendulumRewards>(
         c"_pendulum_rewards",
-        c"Test hook: the kernel's f64 rewards of (theta, theta_dot, u) rows.",
+        c"_pendulum_rewards($module, rows, /)\n--\n\nTest hook: the kernel's f64 rewards of (theta, theta_dot, u) rows.",
     ),
     #[cfg(feature = "test-hooks")]
     FunctionRow::arg::<FailAfter>(
         c"_fail_after",
-        c"Test hook: the n-th next container insertion fails.",
+        c"_fail_after($module, n, /)\n--\n\nTest hook: the n-th next container insertion fails.",
     ),
     #[cfg(feature = "test-hooks")]
     FunctionRow::noargs::<InitFailsAfterRegister>(
         c"_init_fails_after_register",
-        c"Test hook: a module initialization that fails after registering the exception classes.",
+        c"_init_fails_after_register($module, /)\n--\n\nTest hook: a module initialization that fails after registering the exception classes.",
     ),
     FunctionRow::END,
 ];

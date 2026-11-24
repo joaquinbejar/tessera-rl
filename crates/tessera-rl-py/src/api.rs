@@ -86,6 +86,20 @@ impl<'py> Kwargs<'py> {
     }
 }
 
+/// Refuses positional arguments to a keyword-only native function (#376):
+/// its text signature is keyword-only, so they are an error, not ignored.
+pub(crate) fn no_positional(g: Gil, args: Ref<'_>, name: &str) -> CResult<()> {
+    if capi::tuple_items(g, args, "the arguments")?.is_empty() {
+        Ok(())
+    } else {
+        Err(error(
+            g,
+            Kind::Argument,
+            format!("{name} takes keyword arguments only"),
+        ))
+    }
+}
+
 const POOL_KEYS: [&str; 10] = [
     "mode",
     "batch_size",

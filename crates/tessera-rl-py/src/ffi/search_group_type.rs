@@ -80,40 +80,40 @@ varargs!(TreeHashM, api::tree_hash);
 static METHODS: MethodTable<GroupBody> = MethodTable::new(&[
     MethodRow::noargs::<LayoutM>(
         c"layout",
-        c"Trees, actions, observation bytes per leaf and the memory bound.",
+        c"layout($self, /)\n--\n\nTrees, actions, observation bytes per leaf and the memory bound.",
     ),
     MethodRow::noargs::<LastFailureM>(
         c"last_failure",
-        c"The last failed call: None or (slot, message, user_raised).",
+        c"last_failure($self, /)\n--\n\nThe last failed call: None or (slot, message, user_raised).",
     ),
     MethodRow::varargs::<SetRootM>(
         c"set_root",
-        c"set_root(i, record: bytes): replaces slot i's tree by this root.",
+        c"set_root($self, i, record, /)\n--\n\nset_root(i, record: bytes): replaces slot i's tree by this root.",
     ),
     MethodRow::varargs::<SetActiveM>(
         c"set_active",
-        c"set_active(i, flag: bool): whether slot i takes part in the next call.",
+        c"set_active($self, i, flag, /)\n--\n\nset_active(i, flag: bool): whether slot i takes part in the next call.",
     ),
-    MethodRow::varargs::<ActiveM>(c"active", c"active(i) -> bool"),
-    MethodRow::varargs::<RunM>(c"run", c"run(evaluator): one group call (all or nothing)."),
+    MethodRow::varargs::<ActiveM>(c"active", c"active($self, i, /)\n--\n\nactive(i) -> bool"),
+    MethodRow::varargs::<RunM>(c"run", c"run($self, evaluator, /)\n--\n\nrun(evaluator): one group call (all or nothing)."),
     MethodRow::varargs::<RootVisitsM>(
         c"root_visits",
-        c"root_visits(i): slot i's root visit counts.",
+        c"root_visits($self, i, /)\n--\n\nroot_visits(i): slot i's root visit counts.",
     ),
     MethodRow::varargs::<SelectActionM>(
         c"select_action",
-        c"select_action(i, temperature: float) -> int",
+        c"select_action($self, i, temperature, /)\n--\n\nselect_action(i, temperature: float) -> int",
     ),
     MethodRow::varargs::<ImprovedPolicyM>(
         c"improved_policy",
-        c"improved_policy(i): slot i's last Gumbel improved policy, or None.",
+        c"improved_policy($self, i, /)\n--\n\nimproved_policy(i): slot i's last Gumbel improved policy, or None.",
     ),
     MethodRow::varargs::<ConsideredM>(
         c"considered",
-        c"considered(i): the actions slot i's last Gumbel call considered, or None.",
+        c"considered($self, i, /)\n--\n\nconsidered(i): the actions slot i's last Gumbel call considered, or None.",
     ),
-    MethodRow::varargs::<CallsM>(c"calls", c"calls(i): slot i's completed calls."),
-    MethodRow::varargs::<TreeHashM>(c"tree_hash", c"tree_hash(i): a digest of slot i's tree."),
+    MethodRow::varargs::<CallsM>(c"calls", c"calls($self, i, /)\n--\n\ncalls(i): slot i's completed calls."),
+    MethodRow::varargs::<TreeHashM>(c"tree_hash", c"tree_hash($self, i, /)\n--\n\ntree_hash(i): a digest of slot i's tree."),
     MethodRow::END,
 ]);
 
@@ -121,7 +121,8 @@ static METHODS: MethodTable<GroupBody> = MethodTable::new(&[
 struct MakeSearchGroup;
 
 impl FunctionKw for MakeSearchGroup {
-    fn call<'py>(g: Gil<'py>, _args: Ref<'py>, kwargs: Option<Ref<'py>>) -> CResult<Mine<'py>> {
+    fn call<'py>(g: Gil<'py>, args: Ref<'py>, kwargs: Option<Ref<'py>>) -> CResult<Mine<'py>> {
+        crate::api::no_positional(g, args, "make_search_group")?;
         let inner = api::make_search_group(g, kwargs)?;
         TYPE.instantiate(g, GroupBody(inner))
     }
@@ -130,5 +131,5 @@ impl FunctionKw for MakeSearchGroup {
 /// The module-level constructor, for the module's function table.
 pub(super) const MAKER: FunctionRow = FunctionRow::kw::<MakeSearchGroup>(
     c"make_search_group",
-    c"make_search_group(trees, slot_options=None, **search_options) -> SearchGroup",
+    c"make_search_group($module, *, trees, slot_options=None, env_id=None, capacity=None, batch=None, eviction=None, c_puct=None, fpu=None, virtual_loss=None, batch_size=None, simulations=None, noise_alpha=None, noise_epsilon=None, seed=None, root=None, gumbel_m=None, c_visit=None, c_scale=None)\n--\n\nmake_search_group(trees, slot_options=None, **search_options) -> SearchGroup",
 );

@@ -9,6 +9,8 @@ included.
 
 from pathlib import Path
 
+import pytest
+
 import tessera_rl
 
 _PACKAGE = Path(tessera_rl.__file__).parent
@@ -28,3 +30,32 @@ def test_stubs_every_module_has_stub():
 def test_stubs_every_python_module_listed_matches():
     modules = {p.stem for p in _PACKAGE.glob("*.py")} | {"_native"}
     assert modules == set(_MODULES)
+
+
+def _native_callables():
+    from tessera_rl import _native
+
+    for name in dir(_native):
+        obj = getattr(_native, name)
+        if name.startswith("_") or isinstance(obj, type) and issubclass(obj, BaseException):
+            continue
+        if isinstance(obj, type):
+            for attr in vars(obj):
+                if not attr.startswith("_") or attr in ("__dlpack__", "__dlpack_device__"):
+                    yield f"{name}.{attr}", getattr(obj, attr)
+        elif callable(obj):
+            yield name, obj
+
+
+def test_native_text_signatures_every_callable_present():
+    """Every public native function and method carries a text signature
+    (issue #376), so stubtest checks its parameters."""
+    missing = [name for name, obj in _native_callables() if getattr(obj, "__text_signature__", None) is None]
+    assert missing == []
+
+
+def test_native_keyword_only_positional_argument_refused():
+    from tessera_rl import _native
+
+    with pytest.raises(_native.ArgumentError, match="keyword arguments only"):
+        _native.make_cartpole(1)

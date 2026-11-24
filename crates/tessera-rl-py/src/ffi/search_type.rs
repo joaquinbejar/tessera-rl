@@ -83,46 +83,47 @@ impl MethodKw for AttachOnnxM {
     fn call<'py>(
         g: Gil<'py>,
         body: &SearchBody,
-        _args: Ref<'py>,
+        args: Ref<'py>,
         kwargs: Option<Ref<'py>>,
     ) -> CResult<Mine<'py>> {
+        crate::api::no_positional(g, args, "attach_onnx")?;
         crate::onnx_api::attach_onnx(g, &body.0, kwargs)
     }
 }
 
 static METHODS: MethodTable<SearchBody> = MethodTable::new(&[
-    MethodRow::noargs::<LayoutM>(c"layout", c"Actions and observation bytes per leaf."),
+    MethodRow::noargs::<LayoutM>(c"layout", c"layout($self, /)\n--\n\nActions and observation bytes per leaf."),
     MethodRow::varargs::<SetRootM>(
         c"set_root",
-        c"set_root(record: bytes): replaces the tree by this root.",
+        c"set_root($self, record, /)\n--\n\nset_root(record: bytes): replaces the tree by this root.",
     ),
-    MethodRow::varargs::<RunM>(c"run", c"run(evaluator): one search call (all or nothing)."),
-    MethodRow::noargs::<RootVisitsM>(c"root_visits", c"The root's visit counts."),
+    MethodRow::varargs::<RunM>(c"run", c"run($self, evaluator, /)\n--\n\nrun(evaluator): one search call (all or nothing)."),
+    MethodRow::noargs::<RootVisitsM>(c"root_visits", c"root_visits($self, /)\n--\n\nThe root's visit counts."),
     MethodRow::varargs::<SelectActionM>(
         c"select_action",
-        c"select_action(temperature: float) -> int",
+        c"select_action($self, temperature, /)\n--\n\nselect_action(temperature: float) -> int",
     ),
     MethodRow::noargs::<ImprovedPolicyM>(
         c"improved_policy",
-        c"The last Gumbel call's improved policy, or None.",
+        c"improved_policy($self, /)\n--\n\nThe last Gumbel call's improved policy, or None.",
     ),
     MethodRow::noargs::<ConsideredM>(
         c"considered",
-        c"The actions the last Gumbel call considered, or None.",
+        c"considered($self, /)\n--\n\nThe actions the last Gumbel call considered, or None.",
     ),
-    MethodRow::noargs::<CallsM>(c"calls", c"Completed search calls."),
-    MethodRow::noargs::<TreeHashM>(c"tree_hash", c"A digest of the whole tree."),
+    MethodRow::noargs::<CallsM>(c"calls", c"calls($self, /)\n--\n\nCompleted search calls."),
+    MethodRow::noargs::<TreeHashM>(c"tree_hash", c"tree_hash($self, /)\n--\n\nA digest of the whole tree."),
     MethodRow::noargs::<IsPrivilegedM>(
         c"is_privileged",
-        c"Whether the search reads hidden state (ADR-0046).",
+        c"is_privileged($self, /)\n--\n\nWhether the search reads hidden state (ADR-0046).",
     ),
     MethodRow::kw::<AttachOnnxM>(
         c"attach_onnx",
-        c"attach_onnx(model=, library=, accept_telemetry=, max_model_bytes=) -> dict",
+        c"attach_onnx($self, *, model, library, accept_telemetry=False, max_model_bytes=None)\n--\n\nattach_onnx(model=, library=, accept_telemetry=, max_model_bytes=) -> dict",
     ),
     MethodRow::noargs::<RunOnnxM>(
         c"run_onnx",
-        c"run_onnx(): one search call with the attached ONNX evaluator.",
+        c"run_onnx($self, /)\n--\n\nrun_onnx(): one search call with the attached ONNX evaluator.",
     ),
     MethodRow::END,
 ]);
@@ -131,7 +132,8 @@ static METHODS: MethodTable<SearchBody> = MethodTable::new(&[
 struct MakeSearch;
 
 impl FunctionKw for MakeSearch {
-    fn call<'py>(g: Gil<'py>, _args: Ref<'py>, kwargs: Option<Ref<'py>>) -> CResult<Mine<'py>> {
+    fn call<'py>(g: Gil<'py>, args: Ref<'py>, kwargs: Option<Ref<'py>>) -> CResult<Mine<'py>> {
+        crate::api::no_positional(g, args, "make_search")?;
         let inner = api::make_search(g, kwargs)?;
         TYPE.instantiate(g, SearchBody(inner))
     }
@@ -141,7 +143,8 @@ impl FunctionKw for MakeSearch {
 struct OnnxLoad;
 
 impl FunctionKw for OnnxLoad {
-    fn call<'py>(g: Gil<'py>, _args: Ref<'py>, kwargs: Option<Ref<'py>>) -> CResult<Mine<'py>> {
+    fn call<'py>(g: Gil<'py>, args: Ref<'py>, kwargs: Option<Ref<'py>>) -> CResult<Mine<'py>> {
+        crate::api::no_positional(g, args, "onnx_load")?;
         crate::onnx_api::onnx_load(g, kwargs)
     }
 }
@@ -149,9 +152,9 @@ impl FunctionKw for OnnxLoad {
 /// The module-level ONNX Runtime loader (ADR-0057).
 pub(super) const ONNX_LOAD: FunctionRow = FunctionRow::kw::<OnnxLoad>(
     c"onnx_load",
-    c"onnx_load(library=, accept_telemetry=False) -> dict",
+    c"onnx_load($module, *, library, accept_telemetry=False)\n--\n\nonnx_load(library=, accept_telemetry=False) -> dict",
 );
 
 /// The module-level constructor, for the module's function table.
 pub(super) const MAKER: FunctionRow =
-    FunctionRow::kw::<MakeSearch>(c"make_search", c"make_search(**search_options) -> Search");
+    FunctionRow::kw::<MakeSearch>(c"make_search", c"make_search($module, *, env_id=None, capacity=None, batch=None, eviction=None, c_puct=None, fpu=None, virtual_loss=None, batch_size=None, simulations=None, noise_alpha=None, noise_epsilon=None, seed=None, root=None, gumbel_m=None, c_visit=None, c_scale=None)\n--\n\nmake_search(**search_options) -> Search");

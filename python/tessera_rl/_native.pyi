@@ -1,8 +1,8 @@
 # SPDX-License-Identifier: MIT OR Apache-2.0
 """Type stubs for the native extension module (issue #348).
 
-The native functions carry no ``__text_signature__``; the signatures here
-follow their docstrings and the Python wrappers that call them. Test-hook
+Every native function and method carries a ``__text_signature__`` (issue
+#376), so stubtest checks these parameters against the runtime. Test-hook
 functions (built only with the ``test-hooks`` feature) are not stubbed.
 """
 
@@ -53,7 +53,7 @@ class OutputView:
         dl_device: tuple[int, int] | None = None,
         copy: bool | None = None,
     ) -> Any: ...
-    def __dlpack_device__(self) -> tuple[int, int]: ...
+    def __dlpack_device__(self, /) -> tuple[int, int]: ...
     def generation(self) -> int: ...
     def is_stale(self) -> bool: ...
 
@@ -69,8 +69,10 @@ class Env:
     def outputs(self) -> _Out: ...
     def is_poisoned(self) -> bool: ...
     def close(self) -> None: ...
-    def reset(self, seed: int | None = None, ids: _Ids = None) -> _Out | None: ...
-    def step(self, actions: bytes) -> _Out: ...
+    def reset(
+        self, seed: int | list[int | None] | None = None, ids: _Ids = None, delivered: int | None = None, /
+    ) -> Any: ...
+    def step(self, actions: bytes, /) -> _Out: ...
     def snapshot(self, id: int, /) -> Any: ...
     def illegal_actions(self, id: int, /) -> list[list[int]]: ...
     def state_hash(self, id: int, /) -> int: ...
@@ -108,7 +110,7 @@ class Search:
         model: str,
         library: str,
         accept_telemetry: bool = False,
-        max_model_bytes: int = ...,
+        max_model_bytes: int | None = None,
     ) -> dict[str, Any]: ...
     def run_onnx(self) -> None: ...
 
@@ -129,23 +131,282 @@ class SearchGroup:
     def calls(self, i: int, /) -> int: ...
     def tree_hash(self, i: int, /) -> int: ...
 
-def make_cartpole(**pool_options: Any) -> Env: ...
-def make_acrobot(**pool_options: Any) -> Env: ...
-def make_mountaincar(**pool_options: Any) -> Env: ...
-def make_pendulum(**pool_options: Any) -> Env: ...
-def make_tag(**options: Any) -> Env: ...
-def make_rts(**options: Any) -> Env: ...
-def make_connect4(**pool_options: Any) -> Env: ...
-def make_leduc(**pool_options: Any) -> Env: ...
-def make_othello(**pool_options: Any) -> Env: ...
-def make_go9(**options: Any) -> Env: ...
-def make_grid(**options: Any) -> Env: ...
-def make_keydoor(**options: Any) -> Env: ...
-def make_snake(**options: Any) -> Env: ...
-def make_brickwall(**options: Any) -> Env: ...
-def make_paddleduel(**options: Any) -> Env: ...
-def make_search(**search_options: Any) -> Search: ...
+def make_cartpole(
+    *,
+    mode: str | None = None,
+    batch_size: int | None = None,
+    gather: str | None = None,
+    num_envs: int | None = None,
+    seed: int | None = None,
+    max_episode_steps: int | None = None,
+    auto_reset: str | None = None,
+    chunk_size: int | None = None,
+    workers: int | None = None,
+    spin: int | None = None,
+    outputs: str | None = None,
+) -> Env: ...
+def make_acrobot(
+    *,
+    mode: str | None = None,
+    batch_size: int | None = None,
+    gather: str | None = None,
+    num_envs: int | None = None,
+    seed: int | None = None,
+    max_episode_steps: int | None = None,
+    auto_reset: str | None = None,
+    chunk_size: int | None = None,
+    workers: int | None = None,
+    spin: int | None = None,
+    outputs: str | None = None,
+) -> Env: ...
+def make_mountaincar(
+    *,
+    mode: str | None = None,
+    batch_size: int | None = None,
+    gather: str | None = None,
+    num_envs: int | None = None,
+    seed: int | None = None,
+    max_episode_steps: int | None = None,
+    auto_reset: str | None = None,
+    chunk_size: int | None = None,
+    workers: int | None = None,
+    spin: int | None = None,
+    outputs: str | None = None,
+) -> Env: ...
+def make_pendulum(
+    *,
+    mode: str | None = None,
+    batch_size: int | None = None,
+    gather: str | None = None,
+    num_envs: int | None = None,
+    seed: int | None = None,
+    max_episode_steps: int | None = None,
+    auto_reset: str | None = None,
+    chunk_size: int | None = None,
+    workers: int | None = None,
+    spin: int | None = None,
+    outputs: str | None = None,
+) -> Env: ...
+def make_tag(
+    *,
+    mode: str | None = None,
+    batch_size: int | None = None,
+    gather: str | None = None,
+    num_envs: int | None = None,
+    seed: int | None = None,
+    max_episode_steps: int | None = None,
+    auto_reset: str | None = None,
+    chunk_size: int | None = None,
+    workers: int | None = None,
+    spin: int | None = None,
+    outputs: str | None = None,
+    width: int | None = None,
+    height: int | None = None,
+    pursuers: int | None = None,
+    evaders: int | None = None,
+    slip: int | None = None,
+    radius: int | None = None,
+) -> Env: ...
+def make_rts(
+    *,
+    mode: str | None = None,
+    batch_size: int | None = None,
+    gather: str | None = None,
+    num_envs: int | None = None,
+    seed: int | None = None,
+    max_episode_steps: int | None = None,
+    auto_reset: str | None = None,
+    chunk_size: int | None = None,
+    workers: int | None = None,
+    spin: int | None = None,
+    outputs: str | None = None,
+    size: int | None = None,
+    decision_ticks: int | None = None,
+    max_units: int | None = None,
+    step_limit: int | None = None,
+    seat_swap: bool | None = None,
+    opponent: int | None = None,
+) -> Env: ...
+def make_connect4(
+    *,
+    mode: str | None = None,
+    batch_size: int | None = None,
+    gather: str | None = None,
+    num_envs: int | None = None,
+    seed: int | None = None,
+    max_episode_steps: int | None = None,
+    auto_reset: str | None = None,
+    chunk_size: int | None = None,
+    workers: int | None = None,
+    spin: int | None = None,
+    outputs: str | None = None,
+) -> Env: ...
+def make_leduc(
+    *,
+    mode: str | None = None,
+    batch_size: int | None = None,
+    gather: str | None = None,
+    num_envs: int | None = None,
+    seed: int | None = None,
+    max_episode_steps: int | None = None,
+    auto_reset: str | None = None,
+    chunk_size: int | None = None,
+    workers: int | None = None,
+    spin: int | None = None,
+    outputs: str | None = None,
+) -> Env: ...
+def make_othello(
+    *,
+    mode: str | None = None,
+    batch_size: int | None = None,
+    gather: str | None = None,
+    num_envs: int | None = None,
+    seed: int | None = None,
+    max_episode_steps: int | None = None,
+    auto_reset: str | None = None,
+    chunk_size: int | None = None,
+    workers: int | None = None,
+    spin: int | None = None,
+    outputs: str | None = None,
+) -> Env: ...
+def make_go9(
+    *,
+    mode: str | None = None,
+    batch_size: int | None = None,
+    gather: str | None = None,
+    num_envs: int | None = None,
+    seed: int | None = None,
+    max_episode_steps: int | None = None,
+    auto_reset: str | None = None,
+    chunk_size: int | None = None,
+    workers: int | None = None,
+    spin: int | None = None,
+    outputs: str | None = None,
+    komi_half_points: int | None = None,
+) -> Env: ...
+def make_grid(
+    *,
+    mode: str | None = None,
+    batch_size: int | None = None,
+    gather: str | None = None,
+    num_envs: int | None = None,
+    seed: int | None = None,
+    max_episode_steps: int | None = None,
+    auto_reset: str | None = None,
+    chunk_size: int | None = None,
+    workers: int | None = None,
+    spin: int | None = None,
+    outputs: str | None = None,
+    size: int | None = None,
+    max_steps: int | None = None,
+) -> Env: ...
+def make_keydoor(
+    *,
+    mode: str | None = None,
+    batch_size: int | None = None,
+    gather: str | None = None,
+    num_envs: int | None = None,
+    seed: int | None = None,
+    max_episode_steps: int | None = None,
+    auto_reset: str | None = None,
+    chunk_size: int | None = None,
+    workers: int | None = None,
+    spin: int | None = None,
+    outputs: str | None = None,
+    size: int | None = None,
+    agents: int | None = None,
+) -> Env: ...
+def make_snake(
+    *,
+    mode: str | None = None,
+    batch_size: int | None = None,
+    gather: str | None = None,
+    num_envs: int | None = None,
+    seed: int | None = None,
+    max_episode_steps: int | None = None,
+    auto_reset: str | None = None,
+    chunk_size: int | None = None,
+    workers: int | None = None,
+    spin: int | None = None,
+    outputs: str | None = None,
+    size: int | None = None,
+    agents: int | None = None,
+    obs: str | None = None,
+) -> Env: ...
+def make_brickwall(
+    *,
+    mode: str | None = None,
+    batch_size: int | None = None,
+    gather: str | None = None,
+    num_envs: int | None = None,
+    seed: int | None = None,
+    max_episode_steps: int | None = None,
+    auto_reset: str | None = None,
+    chunk_size: int | None = None,
+    workers: int | None = None,
+    spin: int | None = None,
+    outputs: str | None = None,
+    frameskip: int | None = None,
+    lives: int | None = None,
+    obs: str | None = None,
+) -> Env: ...
+def make_paddleduel(
+    *,
+    mode: str | None = None,
+    batch_size: int | None = None,
+    gather: str | None = None,
+    num_envs: int | None = None,
+    seed: int | None = None,
+    max_episode_steps: int | None = None,
+    auto_reset: str | None = None,
+    chunk_size: int | None = None,
+    workers: int | None = None,
+    spin: int | None = None,
+    outputs: str | None = None,
+    agents: int | None = None,
+    frameskip: int | None = None,
+    max_score: int | None = None,
+    bounce: int | None = None,
+    obs: str | None = None,
+) -> Env: ...
+def make_search(
+    *,
+    env_id: str | None = None,
+    capacity: int | None = None,
+    batch: int | None = None,
+    eviction: str | None = None,
+    c_puct: float | None = None,
+    fpu: float | None = None,
+    virtual_loss: int | None = None,
+    batch_size: int | None = None,
+    simulations: int | None = None,
+    noise_alpha: float | None = None,
+    noise_epsilon: float | None = None,
+    seed: int | None = None,
+    root: str | None = None,
+    gumbel_m: int | None = None,
+    c_visit: float | None = None,
+    c_scale: float | None = None,
+) -> Search: ...
 def make_search_group(
-    trees: int, slot_options: Sequence[dict[str, Any] | None] | None = None, **search_options: Any
+    *,
+    trees: int,
+    slot_options: Sequence[dict[str, Any] | None] | None = None,
+    env_id: str | None = None,
+    capacity: int | None = None,
+    batch: int | None = None,
+    eviction: str | None = None,
+    c_puct: float | None = None,
+    fpu: float | None = None,
+    virtual_loss: int | None = None,
+    batch_size: int | None = None,
+    simulations: int | None = None,
+    noise_alpha: float | None = None,
+    noise_epsilon: float | None = None,
+    seed: int | None = None,
+    root: str | None = None,
+    gumbel_m: int | None = None,
+    c_visit: float | None = None,
+    c_scale: float | None = None,
 ) -> SearchGroup: ...
 def onnx_load(*, library: str, accept_telemetry: bool = False) -> dict[str, Any]: ...
