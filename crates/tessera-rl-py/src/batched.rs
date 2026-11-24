@@ -935,6 +935,7 @@ mod tests {
             max_episode_steps: None,
             auto_reset: "next_step".to_owned(),
             chunk_size: Some(2),
+            schedule: "static".to_owned(),
             workers: Some(2),
             spin: None,
             wait: None,

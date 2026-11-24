@@ -14,8 +14,8 @@ use core::num::{NonZeroU32, NonZeroUsize};
 
 use common::{CountConfig, Counter};
 use tessera_rl_engine::{
-    ActionInput, AutoReset, EngineError, EnvPool, Masked, PoolOptions, Reseed, SyncOptions,
-    WaitBackend,
+    ActionInput, AutoReset, EngineError, EnvPool, Masked, PoolOptions, Reseed, Schedule,
+    SyncOptions, WaitBackend,
 };
 use tessera_rl_num::identity::Seed;
 
@@ -31,9 +31,21 @@ fn pool_on(
     cfg: CountConfig,
     wait: WaitBackend,
 ) -> EnvPool<Counter, Masked> {
+    pool_full(mode, workers, cfg, wait, Schedule::Static, 8)
+}
+
+fn pool_full(
+    mode: AutoReset,
+    workers: Option<usize>,
+    cfg: CountConfig,
+    wait: WaitBackend,
+    schedule: Schedule,
+    chunk: u32,
+) -> EnvPool<Counter, Masked> {
     let options = PoolOptions {
         auto_reset: mode,
-        chunk_size: NonZeroU32::new(8).unwrap(),
+        chunk_size: NonZeroU32::new(chunk).unwrap(),
+        schedule,
         ..PoolOptions::new(NonZeroU32::new(N).unwrap(), Seed::new(77))
     };
     let p = EnvPool::with_masks(cfg, options).unwrap();
@@ -80,12 +92,22 @@ fn trajectory(mode: AutoReset, workers: Option<usize>) -> Vec<Vec<u64>> {
 }
 
 fn trajectory_on(mode: AutoReset, workers: Option<usize>, wait: WaitBackend) -> Vec<Vec<u64>> {
+    trajectory_full(mode, workers, wait, Schedule::Static, 8)
+}
+
+fn trajectory_full(
+    mode: AutoReset,
+    workers: Option<usize>,
+    wait: WaitBackend,
+    schedule: Schedule,
+    chunk: u32,
+) -> Vec<Vec<u64>> {
     let cfg = CountConfig {
         length: 7,
         kill_at: 4,
         ..CountConfig::default()
     };
-    let mut p = pool_on(mode, workers, cfg, wait);
+    let mut p = pool_full(mode, workers, cfg, wait, schedule, chunk);
     assert_eq!(p.workers(), workers.unwrap_or(0));
     if workers.is_some() {
         // Native by default only on Linux; on request on macOS 14.4+ and
@@ -133,6 +155,62 @@ fn test_sync_matches_inline_bit_for_bit_for_1_2_7_and_64_workers() {
             );
         }
     }
+}
+
+#[test]
+fn test_sync_dynamic_schedule_matches_inline_bit_for_bit_for_any_workers_and_chunk_size() {
+    for mode in [AutoReset::NextStep, AutoReset::SameStep] {
+        for chunk in [1, 7, 64] {
+            let inline = trajectory_full(mode, None, WaitBackend::Auto, Schedule::Static, chunk);
+            for workers in [1, 2, 3, 7, 64] {
+                for schedule in [Schedule::Static, Schedule::Dynamic] {
+                    assert_eq!(
+                        trajectory_full(mode, Some(workers), WaitBackend::Auto, schedule, chunk),
+                        inline,
+                        "{schedule:?}, {workers} workers, chunk {chunk}, {mode:?}"
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn test_sync_dynamic_schedule_panic_poisons_like_static() {
+    // The error path is schedule-independent: the same error, the same
+    // poisoned state and the same recovery (ADR-0076).
+    let cfg = CountConfig {
+        panic_at: 1,
+        length: 9,
+        ..CountConfig::default()
+    };
+    let actions = vec![0; usize::try_from(N).unwrap() * 2];
+    let input = ActionInput {
+        discrete: &actions,
+        continuous: &[],
+    };
+    let mut seen = Vec::new();
+    for schedule in [Schedule::Static, Schedule::Dynamic] {
+        for chunk in [1, 8] {
+            let mut p = pool_full(
+                AutoReset::NextStep,
+                Some(4),
+                cfg.clone(),
+                WaitBackend::Auto,
+                schedule,
+                chunk,
+            );
+            p.reset_all(Reseed::Keep).unwrap();
+            let first = p.step(input).map(|_| ());
+            let poisoned = p.is_poisoned();
+            let second = p.step(input).map(|_| ());
+            p.reset_all(Reseed::Keep).unwrap();
+            seen.push((first, poisoned, second, p.is_poisoned()));
+        }
+    }
+    assert!(seen.iter().all(|s| *s == seen[0]), "{seen:?}");
+    assert_eq!(seen[0].0, Err(EngineError::Panicked));
+    assert!(seen[0].1 && !seen[0].3);
 }
 
 #[test]

@@ -289,12 +289,13 @@ where
             return Err(lost(EngineError::WorkerDied));
         };
         let workers = runtime.workers;
+        let schedule = pool.options.schedule;
         // An already poisoned pool stays poisoned: only a full reset or
         // restore of the wrapper recovers it, as everywhere else.
         let poisoned = pool.is_poisoned();
         Ok(PipelinedPool {
             runtime: Workers(Some(runtime)),
-            mode: Mode::new(pool, halves, size, workers),
+            mode: Mode::new(pool, halves, size, workers, schedule),
             generations: Arc::new(Generations::new(n)),
             order: [0; HALVES],
             queued: 0,

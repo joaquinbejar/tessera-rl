@@ -20,10 +20,20 @@
 //!    storage of [`storage`]), not to the pool, so moving the pool, or a
 //!    mode wrapper, while no reference is live is fine.
 //! 2. Chunk ranges are disjoint by construction: chunk `c` covers instances
-//!    `c * size .. min((c + 1) * size, n)`, and worker `w` takes the chunks
-//!    `c` with `c % workers == w`, so no two workers, and no two chunks of
-//!    one worker at a time, ever view the same element (checked in debug
-//!    builds and by tests).
+//!    `c * size .. min((c + 1) * size, n)`, and each chunk of a job is run
+//!    by exactly one worker, so no two workers, and no two chunks of one
+//!    worker at a time, ever view the same element (checked in debug builds
+//!    and by tests). Which worker runs a chunk depends on the schedule
+//!    (ADR-0076):
+//!    - `Static`: worker `w` takes the chunks `c` with `c % workers == w`.
+//!    - `Dynamic`: workers take chunk indices from one counter per job with
+//!      `fetch_add`; an atomic read-modify-write hands out each value once,
+//!      so `Relaxed` is enough for uniqueness. The counter lives in the
+//!      job's frame (or, for a Pipelined half, in that half's work record,
+//!      reset before each publication), and outlives every use because the
+//!      job is waited for before the frame ends or the half is published
+//!      again. Visibility of chunk writes to the caller is ordered by the
+//!      job's completion, as under `Static`.
 //! 3. The caller forms references only to rows covered by a live token,
 //!    and workers only to the rows of an admitted job or claim. In Sync
 //!    mode this is the whole-epoch rule: `par_chunks` takes the pool-wide
@@ -61,10 +71,11 @@ use tessera_rl_core::Bool8;
 
 use crate::error::EngineError;
 use crate::layout::MAX_LEAVES;
+use crate::options::Schedule;
 use crate::outputs::OutputsView;
 use crate::pool::Rows;
 use crate::sys::Gang;
-use crate::sys::sync::{AtomicBool, Ordering};
+use crate::sys::sync::{AtomicBool, AtomicUsize, Ordering};
 
 use generations::HALVES;
 #[cfg(not(loom))]
@@ -475,13 +486,15 @@ pub(crate) fn chunk_range(c: usize, size: usize, instances: usize) -> Range<usiz
 }
 
 /// Runs `f` on every chunk of `size` instances of `all`, spread over the
-/// gang's workers (chunk `c` on worker `c % workers`). `f` runs once per
-/// chunk; a panic in it is caught per chunk. Returns `true` if any chunk
-/// panicked. `dh` and `ch` are the discrete and continuous heads per agent.
+/// gang's workers, `size` instances per chunk, under `schedule`
+/// (invariant 2). `f` runs once per
+/// chunk; a panic in it is caught per chunk and the other chunks still run.
+/// Returns `true` if any chunk panicked. `dh` and `ch` are the discrete and
+/// continuous heads per agent.
 pub(crate) fn par_chunks<H, S, F>(
     gang: &mut Gang,
     all: Rows<'_, H, S>,
-    size: usize,
+    (size, schedule): (usize, Schedule),
     heads: (usize, usize),
     f: F,
 ) -> Result<bool, EngineError>
@@ -496,23 +509,41 @@ where
     let raw = RawChunk::new(all, heads.0, heads.1);
     let chunks = raw.instances.div_ceil(size.max(1));
     let panicked = AtomicBool::new(false);
+    // The Dynamic claim counter: in this frame, which outlives every worker's
+    // use of it because `gang.run` returns only after the job completes.
+    let next = AtomicUsize::new(0);
+    let run = |c: usize| {
+        let range = chunk_range(c, size, raw.instances);
+        // SAFETY: chunk `c` is run by this worker only (Static: `c % workers
+        // == w`; Dynamic: the claim counter handed `c` out once), and chunk
+        // ranges do not overlap (invariant 2); the pool is borrowed for the
+        // whole epoch (invariant 3) and this view is dropped at the end of
+        // the call (invariant 4).
+        #[expect(unsafe_code, reason = "audited module: disjoint chunk views")]
+        let mut chunk = unsafe { raw.chunk(&range) };
+        let ok = crate::sys::catch(|| f(&mut chunk, range.start));
+        if !ok {
+            panicked.store(true, Ordering::Relaxed);
+        }
+    };
     let job = |w: usize| {
         if w >= workers {
             return;
         }
-        for c in (w..chunks).step_by(workers) {
-            let range = chunk_range(c, size, raw.instances);
-            debug_assert!(c % workers == w, "chunk {c} is not worker {w}'s");
-            // SAFETY: chunk `c` belongs to worker `w` only, and chunk ranges
-            // do not overlap (invariant 2); the pool is borrowed for the
-            // whole epoch (invariant 3) and this view is dropped at the end
-            // of the iteration (invariant 4).
-            #[expect(unsafe_code, reason = "audited module: disjoint chunk views")]
-            let mut chunk = unsafe { raw.chunk(&range) };
-            let ok = crate::sys::catch(|| f(&mut chunk, range.start));
-            if !ok {
-                panicked.store(true, Ordering::Relaxed);
+        match schedule {
+            Schedule::Static => {
+                for c in (w..chunks).step_by(workers) {
+                    debug_assert!(c % workers == w, "chunk {c} is not worker {w}'s");
+                    run(c);
+                }
             }
+            Schedule::Dynamic => loop {
+                let c = next.fetch_add(1, Ordering::Relaxed);
+                if c >= chunks {
+                    break;
+                }
+                run(c);
+            },
         }
     };
     let gang_panicked = gang.run(&job)?;
@@ -609,6 +640,91 @@ mod tests {
     /// every buffer family (run under Miri in the nightly job); every
     /// element ends up written by exactly its owner, and empty optional
     /// buffers give empty views.
+    /// Steps 6 chunks of one instance on 2 workers. Chunk 0 waits until the
+    /// other 5 are done, or `timeout`. Returns whether it timed out and the
+    /// number of chunks run.
+    #[cfg(not(loom))]
+    fn chunk0_waits_for_the_rest(
+        schedule: crate::options::Schedule,
+        timeout: std::time::Duration,
+    ) -> (bool, usize) {
+        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+        const N: usize = 6;
+        let leaves = [Leaf { bytes: 1 }];
+        let mut outputs = Outputs::new(N, 2, &leaves, false, 2).unwrap();
+        let mut headers = vec![RecordHeader::<2, NoAdaptive>::state_default(); N];
+        let mut states = vec![ProbeState(0); N];
+        let mut discrete = vec![0i32; N * 2];
+        let mut continuous: Vec<f32> = Vec::new();
+        let mut penalties: Vec<f32> = Vec::new();
+        let mut penalized: Vec<Bool8> = Vec::new();
+        let all = Chunk::<Probe> {
+            headers: &mut headers,
+            states: &mut states,
+            discrete: &mut discrete,
+            continuous: &mut continuous,
+            penalties: &mut penalties,
+            penalized: &mut penalized,
+            outputs: outputs.view_all(),
+        };
+        let mut gang = crate::sys::Gang::new(&crate::sys::GangOptions {
+            workers: nz(2),
+            spin: 64,
+            pin: None,
+            native: None,
+            faults: crate::sys::Faults::default(),
+            adaptive_cap_ns: None,
+        })
+        .unwrap();
+        let done = AtomicUsize::new(0);
+        let ran = AtomicUsize::new(0);
+        let timed_out = AtomicBool::new(false);
+        let panicked = super::par_chunks(&mut gang, all, (1, schedule), (1, 0), |_, first| {
+            ran.fetch_add(1, Ordering::Relaxed);
+            if first == 0 {
+                let start = std::time::Instant::now();
+                while done.load(Ordering::Acquire) < N - 1 {
+                    if start.elapsed() > timeout {
+                        timed_out.store(true, Ordering::Relaxed);
+                        return;
+                    }
+                    std::thread::yield_now();
+                }
+            } else {
+                done.fetch_add(1, Ordering::Release);
+            }
+        })
+        .unwrap();
+        assert!(!panicked);
+        (
+            timed_out.load(Ordering::Relaxed),
+            ran.load(Ordering::Relaxed),
+        )
+    }
+
+    #[cfg(not(loom))]
+    #[test]
+    fn test_par_chunks_dynamic_lets_another_worker_take_a_blocked_workers_chunks() {
+        use crate::options::Schedule;
+        // Dynamic: whichever worker is not blocked in chunk 0 claims the rest.
+        let (timed_out, ran) =
+            chunk0_waits_for_the_rest(Schedule::Dynamic, std::time::Duration::from_secs(30));
+        assert!(
+            !timed_out,
+            "Dynamic must not leave chunks behind a blocked worker"
+        );
+        assert_eq!(ran, 6);
+        // Static: chunks 2 and 4 belong to chunk 0's worker, so the wait times
+        // out (the assignment really differs, not only the outputs' timing).
+        let (timed_out, ran) =
+            chunk0_waits_for_the_rest(Schedule::Static, std::time::Duration::from_millis(300));
+        assert!(
+            timed_out,
+            "Static runs chunk 0's worker's chunks only after it"
+        );
+        assert_eq!(ran, 6);
+    }
+
     #[test]
     #[expect(unsafe_code, reason = "exercises the audited views")]
     fn test_raw_chunk_views_cover_every_buffer_from_two_threads() {

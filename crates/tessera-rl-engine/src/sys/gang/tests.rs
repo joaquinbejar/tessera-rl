@@ -727,3 +727,130 @@ fn test_gang_adaptive_worker_spins_through_a_learned_gap() {
         probe
     ));
 }
+
+/// The Dynamic claim loop of `par_chunks` (ADR-0076) over `chunks` chunks on
+/// `workers` workers: each worker takes indices from one counter until they
+/// run out, and runs each claimed chunk under the per-chunk catch. `panic_chunk`
+/// panics inside a chunk (caught per chunk). `die_after_claim` makes that
+/// worker's first claim end its job outside the per-chunk catch, after the
+/// claim and before running the chunk. Returns the run's result and how many
+/// times each chunk ran.
+fn dynamic_claims(
+    workers: usize,
+    chunks: usize,
+    panic_chunk: Option<usize>,
+    die_after_claim: Option<usize>,
+) -> (Result<bool, EngineError>, Vec<usize>) {
+    let runs: Arc<Vec<AtomicUsize>> = Arc::new((0..chunks).map(|_| AtomicUsize::new(0)).collect());
+    let next = Arc::new(AtomicUsize::new(0));
+    let chunk_panicked = Arc::new(AtomicUsize::new(0));
+    let result = {
+        let mut gang = Gang::new(&options(workers)).unwrap();
+        let (r, n, p) = (
+            Arc::clone(&runs),
+            Arc::clone(&next),
+            Arc::clone(&chunk_panicked),
+        );
+        let job = move |w: usize| {
+            let mut first = true;
+            loop {
+                let c = n.fetch_add(1, Ordering::Relaxed);
+                if c >= chunks {
+                    break;
+                }
+                assert!(
+                    !(first && die_after_claim == Some(w)),
+                    "injected death after claiming chunk {c}"
+                );
+                first = false;
+                let ok = crate::sys::catch(|| {
+                    r[c].fetch_add(1, Ordering::Relaxed);
+                    assert!(panic_chunk != Some(c), "injected chunk panic");
+                });
+                if !ok {
+                    p.fetch_add(1, Ordering::Relaxed);
+                }
+            }
+        };
+        let result = gang.run(&job);
+        result.map(|gang_panicked| gang_panicked || chunk_panicked.load(Ordering::Relaxed) > 0)
+    };
+    let counts = runs.iter().map(|c| c.load(Ordering::Relaxed)).collect();
+    (result, counts)
+}
+
+#[test]
+fn test_gang_dynamic_claims_run_every_chunk_exactly_once() {
+    model(|| {
+        let (result, counts) = dynamic_claims(2, 3, None, None);
+        assert_eq!(result, Ok(false));
+        assert_eq!(counts, vec![1, 1, 1]);
+    });
+}
+
+#[test]
+fn test_gang_dynamic_claims_with_a_panicking_chunk_run_the_rest_and_poison() {
+    model(|| {
+        let (result, counts) = dynamic_claims(2, 3, Some(1), None);
+        assert_eq!(result, Ok(true), "a panicking chunk is reported");
+        assert_eq!(
+            counts,
+            vec![1, 1, 1],
+            "the other chunks still run, each once"
+        );
+    });
+}
+
+#[test]
+fn test_gang_dynamic_claims_worker_dying_after_a_claim_never_reports_success() {
+    model(|| {
+        let (result, counts) = dynamic_claims(2, 3, None, Some(0));
+        assert!(
+            counts.iter().all(|&c| c <= 1),
+            "no chunk runs twice: {counts:?}"
+        );
+        let lost = counts.iter().filter(|&&c| c == 0).count();
+        // Worker 0 dies only if it claims a chunk before worker 1 has taken
+        // them all; when it does, exactly its claim is lost and the run
+        // reports a panic, never success.
+        match lost {
+            0 => assert_eq!(result, Ok(false), "no claim, no death: {counts:?}"),
+            1 => assert_eq!(
+                result,
+                Ok(true),
+                "a death after claiming poisons: {counts:?}"
+            ),
+            _ => panic!("more than the dead worker's one claim lost: {counts:?}"),
+        }
+    });
+}
+
+#[test]
+fn test_gang_dynamic_claims_with_a_dead_worker_backstop_complete_then_report() {
+    model(|| {
+        let mut opts = options(2);
+        opts.faults.die_in_epoch = Some(1);
+        let mut gang = Gang::new(&opts).unwrap();
+        let chunks = 3;
+        let runs: Arc<Vec<AtomicUsize>> =
+            Arc::new((0..chunks).map(|_| AtomicUsize::new(0)).collect());
+        let next = Arc::new(AtomicUsize::new(0));
+        let (r, n) = (Arc::clone(&runs), Arc::clone(&next));
+        let job = move |_w: usize| loop {
+            let c = n.fetch_add(1, Ordering::Relaxed);
+            if c >= chunks {
+                break;
+            }
+            r[c].fetch_add(1, Ordering::Relaxed);
+        };
+        // The dead worker never claims, so the live one runs every chunk once;
+        // the run still reports the death as a panic, never success.
+        assert_eq!(gang.run(&job), Ok(true));
+        let counts: Vec<usize> = runs.iter().map(|c| c.load(Ordering::Relaxed)).collect();
+        assert_eq!(counts, vec![1, 1, 1]);
+        assert_eq!(
+            gang.run(&|_w: usize| {}).map(|_| ()),
+            Err(EngineError::WorkerDied)
+        );
+    });
+}
