@@ -60,11 +60,18 @@ def hyper(name: str, total_steps: int):
     return rt.Hyper(**{**protocol(name)["hyper"], "total_steps": total_steps})
 
 
+def _training_path() -> tuple:
+    """Every module-level function a training run goes through. A test
+    checks this list is closed under calls, so a new helper cannot change
+    training without changing the fingerprint."""
+    return (hyper, _needs_flat, _flat_vector_class, _FlatVector, _factories, train)
+
+
 def _training_source() -> str:
     """The source of the code a training run goes through."""
     import inspect  # noqa: PLC0415
 
-    return "\n".join(inspect.getsource(f) for f in (hyper, _needs_flat, _flat_vector_class, _FlatVector, _factories, train))
+    return "\n".join(inspect.getsource(f) for f in _training_path())
 
 
 def fingerprint(name: str) -> str:
