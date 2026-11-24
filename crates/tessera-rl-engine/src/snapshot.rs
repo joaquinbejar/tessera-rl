@@ -271,6 +271,7 @@ where
                         .as_ref()
                         .map_or_else(Default::default, |t| t.context()),
                 },
+                policy_map: pool.policy.digest(),
             })
         })
     }
@@ -324,10 +325,20 @@ where
             branch_counter,
             reset_source,
             adaptive,
+            policy_map,
         } = context;
         let crate::adaptive::AdaptiveContext {
             normalization: transforms,
         } = adaptive;
+        // ADR-0079 item 2.3: another policy map is refused before anything
+        // is written.
+        let expected = self.policy.digest();
+        if policy_map != expected {
+            return Err(EngineError::PolicyMapMismatch {
+                expected,
+                found: policy_map,
+            });
+        }
         // ADR-0078 item 2.3: another transform identity is refused before
         // anything is written.
         match self.transform.as_ref() {

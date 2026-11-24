@@ -27,6 +27,7 @@ mod fast_path_mixed_tests;
 mod fast_path_tests;
 #[cfg(test)]
 mod fault_tests;
+mod heuristic;
 #[cfg(feature = "host")]
 mod host;
 mod layout;
@@ -40,6 +41,8 @@ mod outputs;
 mod persist;
 #[cfg(test)]
 mod pin_tests;
+mod policy;
+mod policy_pool;
 mod pool;
 mod pool_state;
 mod record;
@@ -110,6 +113,7 @@ pub use outputs::Outputs;
 pub use persist::{
     ASSET_FORMAT_VERSION, BUILD_ID, DecodeLimits, FORMAT_VERSION, MAGIC, PersistError,
 };
+pub use policy::PolicyMap;
 pub use pool::{EnvPool, Reseed};
 pub use pool_state::PoolState;
 pub use record::{DecodedRecord, PoolContext, Record};
@@ -123,6 +127,7 @@ pub use replay::{
 pub use sys::native_wait_available;
 pub use sys::watch::{WatchError, WatchHandle};
 pub use sys::{default_workers, physical_cores};
+pub use tessera_rl_core::PolicyGroup;
 pub use validate::ActionInput;
 
 /// Whether this build has the `debug-checks` feature (SPEC 5.5): strict

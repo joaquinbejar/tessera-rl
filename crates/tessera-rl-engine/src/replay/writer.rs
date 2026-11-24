@@ -176,6 +176,13 @@ where
                 feature: "observation transforms (ADR-0078 item 8)",
             });
         }
+        // ADR-0079 item 6.3: the header's map stays the default until stage
+        // B records it.
+        if !pool.policy_map().is_default() {
+            return Err(ReplayError::Unsupported {
+                feature: "policy maps (ADR-0079)",
+            });
+        }
         if pool.is_poisoned() {
             return Err(EngineError::Poisoned.into());
         }

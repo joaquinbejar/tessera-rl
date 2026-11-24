@@ -250,6 +250,24 @@ pub trait Heuristic: Environment {
     );
 }
 
+/// A player-only scripted policy of an imperfect-information environment
+/// (ADR-0079 item 4.2): it sees the agent's information state, never the
+/// hidden state, so it may drive a `Heuristic` slot of a policy map.
+///
+/// Its rules are those of `Environment` code: no allocation, no locks, and
+/// randomness only from `rng`. Every action it writes must be in range and
+/// legal under the mask, or the engine poisons the pool.
+pub trait InfoHeuristic: ImperfectInformation {
+    /// Writes the action of `agent` from its information state `info`.
+    fn act_info(
+        cfg: &Self::Config,
+        info: &Self::InfoState,
+        agent: AgentSlot,
+        rng: &mut StepRng,
+        out: &mut ActionWriter<'_>,
+    );
+}
+
 /// Identity for persisted snapshots (ADR-0011).
 ///
 /// Format 1 covers only environments with no external immutable assets:

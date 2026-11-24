@@ -10,13 +10,14 @@
 //!    else its first card;
 //! 4. otherwise give the first legal hint, else play the first card.
 //!
-//! [`act_info`] takes the information state; `Heuristic::act` derives it
-//! from the state and calls it, so states with equal information states
-//! give equal actions. It becomes `InfoHeuristic::act_info` once that
-//! trait exists (ADR-0079).
+//! [`act_info`] takes the information state; `InfoHeuristic::act_info`
+//! calls it, and `Heuristic::act` derives the information state from the
+//! state and calls it too, so states with equal information states give
+//! equal actions, and a heuristic slot of a policy map (ADR-0079) plays the
+//! baseline.
 
 use tessera_rl_core::io::ActionWriter;
-use tessera_rl_core::{AgentSlot, Heuristic};
+use tessera_rl_core::{AgentSlot, Heuristic, InfoHeuristic};
 use tessera_rl_num::rng::StepRng;
 
 use super::{
@@ -130,7 +131,7 @@ pub fn act_info(info: &LanternsInfo) -> u32 {
         .unwrap_or_else(|| table.noop())
 }
 
-/// The baseline through `Heuristic` (ADR-0079 until `InfoHeuristic`).
+/// The baseline through `Heuristic`, from the information state.
 impl Heuristic for Lanterns {
     fn act(
         _: &LanternsConfig,
@@ -141,5 +142,18 @@ impl Heuristic for Lanterns {
     ) {
         let action = act_info(&info_of(state, agent.index()));
         out.set_discrete(0, i32::try_from(action).unwrap_or(0));
+    }
+}
+
+/// The baseline through the information state alone (ADR-0079 item 4.2).
+impl InfoHeuristic for Lanterns {
+    fn act_info(
+        _: &LanternsConfig,
+        info: &LanternsInfo,
+        _: AgentSlot,
+        _: &mut StepRng,
+        out: &mut ActionWriter<'_>,
+    ) {
+        out.set_discrete(0, i32::try_from(act_info(info)).unwrap_or(0));
     }
 }

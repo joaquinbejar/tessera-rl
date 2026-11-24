@@ -37,8 +37,8 @@ use tessera_rl_core::io::{ActionWriter, Actions, MaskWriter, ObsWriter};
 use tessera_rl_core::space::Space;
 use tessera_rl_core::{
     ActionMask, AgentSlot, Determinize, Environment, EpisodeEnd, HeaderView, Heuristic,
-    ImperfectInformation, InvariantViolation, NoAdaptive, ObsLeaf, Observation, Phase,
-    RecordHeader, SpaceError, StepOut, Tier, TurnStructure, Validate,
+    ImperfectInformation, InfoHeuristic, InvariantViolation, NoAdaptive, ObsLeaf, Observation,
+    Phase, RecordHeader, SpaceError, StepOut, Tier, TurnStructure, Validate,
 };
 use tessera_rl_macros::{EnvConfig, EnvState, Observation};
 use tessera_rl_num::rng::{ObsRng, StepRng};
@@ -551,8 +551,24 @@ impl Determinize for Leduc {
     }
 }
 
+/// The baseline rule from what the player sees: its `card`, the `public`
+/// card, the round's `raises` and whether the mover `facing` a bet.
+#[must_use]
+const fn baseline(card: u32, public: u32, raises: u32, facing: bool) -> u32 {
+    let strong = card == RANKS - 1 || card == public;
+    if strong && raises < MAX_RAISES {
+        RAISE
+    } else if card == 0 && !strong && facing {
+        FOLD
+    } else {
+        CALL
+    }
+}
+
 /// Scripted baseline: raise with a king or a pair while raises remain,
-/// fold a jack without a pair facing a bet, otherwise check or call.
+/// fold a jack without a pair facing a bet, otherwise check or call. It
+/// reads only the agent's own card and public facts, all in its
+/// information state, so it equals [`InfoHeuristic::act_info`].
 impl Heuristic for Leduc {
     fn act(
         _: &LeducConfig,
@@ -562,14 +578,28 @@ impl Heuristic for Leduc {
         out: &mut ActionWriter<'_>,
     ) {
         let card = state.cards.get(agent.index().min(1)).copied().unwrap_or(0);
-        let strong = card == RANKS - 1 || card == state.public;
-        let action = if strong && state.raises < MAX_RAISES {
-            RAISE
-        } else if card == 0 && !strong && state.facing_bet() {
-            FOLD
+        let action = baseline(card, state.public, state.raises, state.facing_bet());
+        out.set_discrete(0, i32::try_from(action).unwrap_or(1));
+    }
+}
+
+/// The baseline from the information state alone (ADR-0079 item 4.5): a
+/// Leduc heuristic slot of a policy map uses it.
+impl InfoHeuristic for Leduc {
+    fn act_info(
+        _: &LeducConfig,
+        info: &LeducInfo,
+        _: AgentSlot,
+        _: &mut StepRng,
+        out: &mut ActionWriter<'_>,
+    ) {
+        let [c0, c1] = info.contributions;
+        let facing = if info.to_move & 1 == 0 {
+            c1 > c0
         } else {
-            CALL
+            c0 > c1
         };
+        let action = baseline(info.card, info.public, info.raises, facing);
         out.set_discrete(0, i32::try_from(action).unwrap_or(1));
     }
 }

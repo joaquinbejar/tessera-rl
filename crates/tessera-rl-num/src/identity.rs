@@ -104,6 +104,11 @@ impl StreamId {
     /// Archive resets: the entry a reset starts from, at the reset counter
     /// domain (ADR-0075 item 4). Never used by a step.
     pub const ARCHIVE_SELECT: Self = Self(5);
+    /// Heuristic slots of a policy map (ADR-0079 item 3.3): the action of
+    /// an in-engine heuristic, keyed per agent slot through
+    /// `StepRng::heuristic`, never the environment's own `DYNAMICS`
+    /// stream, so adding a heuristic slot shifts no environment draw.
+    pub const HEURISTIC: Self = Self(6);
     /// The first id available to environments.
     pub const FIRST_ENV: u32 = 16;
 

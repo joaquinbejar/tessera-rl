@@ -201,6 +201,11 @@ def _refuse_spin(kwargs: dict) -> None:
     for key in ("wait", "wait_cap_us"):
         if kwargs.pop(key, None) is not None:
             raise _native.CapabilityError(f"{key} is a first-party pool option; host environments do not take it")
+    # ADR-0079 item 1.3: policy maps and the privileged state buffer are not
+    # part of host protocol 1.
+    for key in ("policy_map", "privileged_state"):
+        if kwargs.pop(key, None) is not None:
+            raise _native.CapabilityError(f"{key} is not available for host environments (ADR-0079)")
 
 
 def make(env_id: str, known_first_party, num_envs: int, seed: int, outputs: str, kwargs: dict) -> HostEnv:

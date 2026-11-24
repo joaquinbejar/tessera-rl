@@ -436,6 +436,41 @@ pub enum EngineError {
         /// The first such slot of that instance.
         agent: u32,
     },
+    /// An in-engine heuristic wrote an action out of range or illegal under
+    /// the mask (ADR-0079 item 3.2): an environment bug. It poisons the
+    /// pool, in every build.
+    #[error("instance {instance}: the heuristic of agent slot {slot} wrote an invalid action")]
+    HeuristicAction {
+        /// The first instance, in instance order, with an invalid action.
+        instance: u32,
+        /// The first such slot of that instance.
+        slot: u16,
+    },
+    /// An invalid policy map, or one set at the wrong time (ADR-0079 item
+    /// 2): a slot out of range, a heuristic group the environment cannot
+    /// drive, or a map set after the first reset.
+    #[error("invalid policy map: {reason}")]
+    PolicyMap {
+        /// The rule broken.
+        reason: &'static str,
+    },
+    /// A pool context whose policy map digest is not this pool's (ADR-0079
+    /// item 2.3); nothing was written.
+    #[error("policy map digest {found:#018x} does not match the pool's {expected:#018x}")]
+    PolicyMapMismatch {
+        /// This pool's digest.
+        expected: u64,
+        /// The context's digest.
+        found: u64,
+    },
+    /// A mode that does not run heuristic slots yet (ADR-0079 stage A:
+    /// Pipelined and Async refuse a map with a heuristic slot); the pool
+    /// is handed back.
+    #[error("{mode} mode does not support heuristic slots yet")]
+    HeuristicSlotsUnsupported {
+        /// The mode.
+        mode: &'static str,
+    },
     /// The instance has not been reset yet, or its episode ended in
     /// `Disabled` auto-reset mode.
     #[error("instance {id} is pending reset")]

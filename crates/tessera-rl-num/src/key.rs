@@ -44,9 +44,24 @@ pub const fn derive_branch_salt(parent: BranchSalt, branch_counter: u64, label: 
     ))
 }
 
+/// Domain separation constant for heuristic slot salts: ASCII `TSRHEUR1`.
+pub const HEURISTIC_DOMAIN: u64 = 0x5453_5248_4555_5231;
+
+/// Derives the salt of heuristic slot `slot` from an instance's salt
+/// (ADR-0079 item 3.3): `splitmix64(splitmix64(HEURISTIC_DOMAIN ^ salt) ^
+/// slot)`. With the `HEURISTIC` stream id, each slot of each instance gets
+/// its own key, apart from every environment stream.
+#[must_use]
+#[inline]
+pub fn heuristic_salt(salt: BranchSalt, slot: u16) -> BranchSalt {
+    BranchSalt::new(splitmix64(
+        splitmix64(HEURISTIC_DOMAIN ^ salt.get()) ^ u64::from(slot),
+    ))
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{derive_branch_salt, derive_key, key_words};
+    use super::{derive_branch_salt, derive_key, heuristic_salt, key_words};
     use crate::identity::{BranchSalt, Seed, StreamId};
 
     fn key(seed: u64, stream: u32, salt: u64) -> u64 {
@@ -89,6 +104,18 @@ mod tests {
         assert_eq!(s(0, 0, 1), 0x9f5e_9d7a_3b8a_77f9);
         assert_eq!(s(0x0123_4567_89AB_CDEF, 42, 7), 0x3aed_24af_eaae_a58c);
         assert_eq!(s(u64::MAX, u64::MAX, u64::MAX), 0x5fb1_18d4_a0b5_fcaf);
+    }
+
+    #[test]
+    fn test_heuristic_salt_slots_and_salts_differ() {
+        let root = BranchSalt::ROOT;
+        let a = heuristic_salt(root, 0);
+        assert_ne!(a, heuristic_salt(root, 1));
+        assert_ne!(a, root);
+        assert_ne!(a, heuristic_salt(BranchSalt::new(1), 0));
+        assert_eq!(a, heuristic_salt(root, 0));
+        // Not a branch salt of the same parent.
+        assert_ne!(a, derive_branch_salt(root, 0, 0));
     }
 
     #[test]

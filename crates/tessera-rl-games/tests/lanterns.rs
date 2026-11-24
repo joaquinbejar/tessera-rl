@@ -528,3 +528,29 @@ fn test_lanterns_hidden_marks_and_kinds() {
     assert_eq!(usize::from(NO_CARD), KINDS);
     assert_eq!(usize::from(HIDDEN), KINDS + 1);
 }
+
+/// `InfoHeuristic::act_info` plays the baseline (ADR-0079 item 4.2): on
+/// states sampled from one information state (different hidden cards),
+/// `Heuristic::act` always equals it (noninterference, item 4.4).
+#[test]
+fn test_lanterns_info_heuristic_equals_act_on_states_with_one_info_state() {
+    use tessera_rl_core::InfoHeuristic;
+    use tessera_rl_core::io::ActionWriter;
+    let write = |f: &mut dyn FnMut(&mut ActionWriter<'_>)| {
+        let mut out = [0];
+        f(&mut ActionWriter::new(&mut out, &mut []));
+        out[0]
+    };
+    for seed in 0..10 {
+        let info = info_with_knowledge(seed);
+        let me = agent(usize::from(info.me));
+        let want = write(&mut |w| Lanterns::act_info(&cfg(2), &info, me, &mut rng(seed), w));
+        let mut r = rng(seed + 100);
+        for _ in 0..20 {
+            let mut s = LanternsState::default();
+            Lanterns::sample(&cfg(2), &info, &mut r, &mut s);
+            let got = write(&mut |w| Lanterns::act(&cfg(2), &s, me, &mut rng(seed), w));
+            assert_eq!(got, want, "seed {seed}");
+        }
+    }
+}

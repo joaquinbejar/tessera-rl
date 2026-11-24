@@ -310,6 +310,9 @@ pub fn engine_kind(e: &EngineError) -> Kind {
         | EngineError::HalfTooSmall { .. }
         | EngineError::LaneEnvUnsupported
         | EngineError::InvalidMaskLayout { .. }
+        // A policy map the environment or the pool cannot take (ADR-0079).
+        | EngineError::PolicyMap { .. }
+        | EngineError::PolicyMapMismatch { .. }
         // An archive of another environment, version or config (ADR-0075).
         | EngineError::ArchiveMismatch { .. } => Kind::Config,
         EngineError::InstanceOutOfRange { .. }
@@ -332,7 +335,9 @@ pub fn engine_kind(e: &EngineError) -> Kind {
         EngineError::InvalidRecord { .. }
         | EngineError::Invariant { .. }
         | EngineError::SnapshotRejected { .. } => Kind::Record,
-        EngineError::NoSnapshots | EngineError::AdaptiveInAsync => Kind::Capability,
+        EngineError::NoSnapshots
+        | EngineError::AdaptiveInAsync
+        | EngineError::HeuristicSlotsUnsupported { .. } => Kind::Capability,
         EngineError::PendingReset { .. } => Kind::PendingReset,
         EngineError::Poisoned
         | EngineError::Panicked
@@ -343,6 +348,7 @@ pub fn engine_kind(e: &EngineError) -> Kind {
         | EngineError::AllocationInChunkStep { .. }
         | EngineError::TurnOrder { .. }
         | EngineError::RefusedNotActing { .. }
+        | EngineError::HeuristicAction { .. }
         | EngineError::SnapshotTooLong { .. } => Kind::Poisoned,
         EngineError::NestedEngine
         | EngineError::GangQueue { .. }

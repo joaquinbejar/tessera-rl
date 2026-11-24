@@ -399,6 +399,9 @@ impl Replay<'_> {
                 reset_source,
                 // Replays refuse pools with transforms (ADR-0078 item 8).
                 adaptive: crate::adaptive::AdaptiveContext::default(),
+                // Replays take the default policy map until ADR-0079 stage B
+                // (item 6.3): a replay into a pool with another map is refused.
+                policy_map: 0,
             },
             archive_ref::<E>(&st),
         )?;

@@ -97,6 +97,7 @@ noargs!(EpochBarrierM, api::epoch_barrier);
 varargs!(FreezeNormalizationM, api::freeze_normalization);
 varargs!(SceneM, api::scene);
 noargs!(CanvasM, api::canvas);
+noargs!(HeuristicActionsM, api::heuristic_actions);
 varargs!(ImportRecordM, api::import_record);
 varargs!(ForkM, api::fork);
 varargs!(MakeArchiveM, api::make_archive);
@@ -149,6 +150,10 @@ static METHODS: MethodTable<EnvBody> = MethodTable::new(&[
     MethodRow::noargs::<CanvasM>(
         c"canvas",
         c"canvas($self, /)\n--\n\nThe canvas (width, height) of a pool that renders, or None (ADR-0083).",
+    ),
+    MethodRow::noargs::<HeuristicActionsM>(
+        c"heuristic_actions",
+        c"heuristic_actions($self, /)\n--\n\nA copy of the last step's heuristic actions (int32 bytes), or None (ADR-0079).",
     ),
     MethodRow::varargs::<RenderM>(
         c"render",

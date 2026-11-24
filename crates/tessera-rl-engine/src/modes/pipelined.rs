@@ -272,6 +272,14 @@ where
                 },
             ));
         }
+        // ADR-0079 stage A: the half action copies do not skip and
+        // overwrite heuristic rows yet.
+        if self.policy.has_heuristic() {
+            return Err(refuse(
+                self,
+                EngineError::HeuristicSlotsUnsupported { mode: "Pipelined" },
+            ));
+        }
         let size = chunk_size(&self.options);
         let chunk = self.options.chunk_size.get();
         let n = self.num_envs_usize();
@@ -790,7 +798,7 @@ where
                         headers,
                         first,
                         actions.discrete,
-                        &layout.mask,
+                        layout,
                         token.masks(),
                         token.mask_len(),
                     )?;

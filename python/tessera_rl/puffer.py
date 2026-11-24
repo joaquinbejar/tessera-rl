@@ -236,16 +236,27 @@ class TesseraPufferEnv(pufferlib.PufferEnv):
             _, dtype, shape, low, high = _single_leaf(layout["leaves"])
             self._instances, self._agents = probe.num_envs, probe.agents
             choices = probe.action_choices
+            groups = tuple(layout.get("policy_groups", ()))
         finally:
             probe.close()
-        self.num_agents = self._instances * self._agents
+        #: The agent slots PufferLib sees: every slot, or with a policy map
+        #: the learner and external ones; the engine plays the heuristic
+        #: slots (ADR-0079 item 5.2). `None` when every slot is seen.
+        self._visible: list[int] | None = None
+        if any(g in ("heuristic", "privileged_heuristic") for g in groups):
+            self._visible = [s for s, g in enumerate(groups) if g in ("learner", "external")]
+        #: Agents per instance as PufferLib counts them.
+        self._row_agents = self._agents if self._visible is None else len(self._visible)
+        self.num_agents = self._instances * self._row_agents
         self.single_observation_space = gymnasium.spaces.Box(
             low=_bound(low, shape, dtype),
             high=_bound(high, shape, dtype),
             dtype=np.dtype(dtype),
         )
         self.single_action_space = gymnasium.spaces.Discrete(choices)
-        self._owned_buffers = buf is not None
+        # Hidden slots need a gather each step, so the env keeps its own
+        # arrays then, as with a vector backend's buffers.
+        self._owned_buffers = buf is not None or self._visible is not None
         super().__init__(buf)
         self._episode_return = np.zeros(self.num_agents, dtype=np.float64)
         self._episode_length = np.zeros(self.num_agents, dtype=np.int64)
@@ -262,13 +273,22 @@ class TesseraPufferEnv(pufferlib.PufferEnv):
     @property
     def action_masks(self) -> np.ndarray | None:
         """Action masks, ``(num_agents, choices)``; ``None`` without masks."""
+        if self._masks is not None and self._visible is not None:
+            return self._gather(self._masks).reshape((self.num_agents, -1))
         return self._masks
+
+    def _gather(self, rows: np.ndarray) -> np.ndarray:
+        """The visible slots' rows of `[N, A, ...]` outputs, a copy."""
+        return rows[:, self._visible]
 
     @property
     def terminal_observations(self) -> np.ndarray:
         """Final observations of the episodes that ended in the last call."""
         self._require_reset("terminal_observations")
         leaf = self._env._native.outputs()["terminal_observations"][0]
+        if self._visible is not None:
+            full = np.asarray(leaf).reshape((self._instances, self._agents, *self.single_observation_space.shape))
+            return self._gather(full).reshape((self.num_agents, *self.single_observation_space.shape))
         return np.asarray(leaf).reshape((self.num_agents, *self.single_observation_space.shape))
 
     def _require_reset(self, call: str) -> None:
@@ -279,6 +299,12 @@ class TesseraPufferEnv(pufferlib.PufferEnv):
         """Takes the views of one call's outputs, once: the storage is stable."""
         n = self.num_agents
         obs = out.observations[next(iter(out.observations))]
+        if self._visible is not None:
+            # `[N, A, ...]` views; `_copy_out` gathers the visible slots.
+            self._views = (obs, out.rewards, out.agent_terminated, out.agent_truncated)
+            self._episode_ended = (out.episode_terminated, out.episode_truncated)
+            self._masks = out.masks
+            return
         self._views = (
             obs.reshape((n, *self.single_observation_space.shape)),
             out.rewards.reshape(n),
@@ -292,6 +318,14 @@ class TesseraPufferEnv(pufferlib.PufferEnv):
             self.observations, self.rewards, self.terminals, self.truncations = self._views
 
     def _copy_out(self) -> None:
+        if self._visible is not None:
+            n = self.num_agents
+            obs, rewards, terminals, truncations = (self._gather(v) for v in self._views)
+            self.observations[:] = obs.reshape((n, *self.single_observation_space.shape))
+            self.rewards[:] = rewards.reshape(n)
+            self.terminals[:] = terminals.reshape(n)
+            self.truncations[:] = truncations.reshape(n)
+            return
         if self._owned_buffers:
             self.observations[:] = self._views[0]
             self.rewards[:] = self._views[1]
@@ -333,6 +367,11 @@ class TesseraPufferEnv(pufferlib.PufferEnv):
 
     def step(self, actions):
         self._require_reset("step")
+        if self._visible is not None:
+            # The hidden slots' rows are never read: the engine computes them.
+            full = np.zeros((self._instances, self._agents), dtype=np.int32)
+            full[:, self._visible] = np.asarray(actions).reshape((self._instances, self._row_agents))
+            actions = full
         self._env.step(actions)
         self._copy_out()
         # This call's own whole-pool outputs, read now and dropped at once:
@@ -356,8 +395,8 @@ class TesseraPufferEnv(pufferlib.PufferEnv):
         ended = int(np.count_nonzero(lengths.view(np.uint32)))
         if ended:
             self._finished[0] += float(returns.sum(dtype=np.float64))
-            self._finished[1] += int(lengths.sum(dtype=np.float64)) * self._agents
-            self._finished[2] += ended * self._agents
+            self._finished[1] += int(lengths.sum(dtype=np.float64)) * self._row_agents
+            self._finished[2] += ended * self._row_agents
         if self._tick % self._log_interval != 0 or self._finished[2] == 0:
             return []
         total, length, n = self._finished

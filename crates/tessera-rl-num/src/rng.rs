@@ -123,6 +123,26 @@ impl StepRng {
         }
     }
 
+    /// Engine-only: the RNG of heuristic slot `slot` at the identity's
+    /// current episode and step (ADR-0079 item 3.3): the `HEURISTIC`
+    /// stream under a per-slot salt, so it shares no key with the
+    /// environment's streams nor with another slot.
+    #[doc(hidden)]
+    #[must_use]
+    #[inline]
+    pub fn heuristic(_authority: &RngAuthority, identity: &RngIdentity, slot: u16) -> Self {
+        Self {
+            draws: Draws::new_deferred(
+                identity.seed(),
+                StreamId::HEURISTIC,
+                crate::key::heuristic_salt(identity.branch_salt(), slot),
+                identity.logical_id().get(),
+                identity.episode_index(),
+                identity.step_index(),
+            ),
+        }
+    }
+
     forward_draws!();
 }
 
@@ -188,6 +208,32 @@ mod tests {
         assert_ne!(base, first(&id(42, 0, 0, 1), StreamId::MAP_GEN));
         assert_ne!(base, first(&id(42, 1, 0, 1), StreamId::DYNAMICS));
         assert_ne!(base, first(&id(43, 0, 0, 1), StreamId::DYNAMICS));
+    }
+
+    #[test]
+    fn test_step_rng_heuristic_slots_and_dynamics_differ() {
+        let auth = RngAuthority::engine_only();
+        let i = id(42, 0, 0, 1);
+        let h = |slot| StepRng::heuristic(&auth, &i, slot).next_u64();
+        assert_ne!(h(0), first(&i, StreamId::DYNAMICS));
+        assert_ne!(h(0), first(&i, StreamId::HEURISTIC));
+        assert_ne!(h(0), h(1));
+        assert_eq!(h(3), h(3));
+        // Exactly the `HEURISTIC` stream under the slot's heuristic salt.
+        let salted = RngIdentity::from_parts(
+            Seed::new(42),
+            crate::key::heuristic_salt(BranchSalt::ROOT, 0),
+            LogicalId::new(0),
+            0,
+            1,
+        );
+        assert_eq!(h(0), first(&salted, StreamId::HEURISTIC));
+        assert_ne!(h(0), first(&salted, StreamId::DYNAMICS));
+        // Keyed by the step index too.
+        assert_ne!(
+            h(0),
+            StepRng::heuristic(&auth, &id(42, 0, 0, 2), 0).next_u64()
+        );
     }
 
     #[test]

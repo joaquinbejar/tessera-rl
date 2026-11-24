@@ -258,6 +258,14 @@ where
                 "the pool already runs in Sync mode",
             ));
         }
+        // ADR-0079 stage A: the batch action copies do not skip and
+        // overwrite heuristic rows yet.
+        if self.policy.has_heuristic() {
+            return Err(AsyncBuildError {
+                error: EngineError::HeuristicSlotsUnsupported { mode: "Async" },
+                pool: Some(Box::new(self)),
+            });
+        }
         let n = usize::try_from(self.options.num_envs.get()).unwrap_or(usize::MAX);
         let batch = options.batch_size.get();
         if batch > n {
@@ -1496,7 +1504,7 @@ fn legality<E: Environment, M: MaskProvider<E>, R: crate::validate::AdmittedRows
             core::slice::from_ref(row.header),
             i,
             input,
-            &layout.mask,
+            layout,
             masks,
             mode.mask_len(),
         )?;

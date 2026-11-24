@@ -24,6 +24,7 @@ use tessera_rl_num::rng::{ObsRng, RngAuthority, StepRng};
 use crate::archive::ArchiveSource;
 use crate::buffer::par_chunks;
 use crate::error::EngineError;
+use crate::heuristic::{HeuristicFn, HeuristicRoute};
 use crate::layout::{
     ActionLayout, MAX_GROUPED_HEADS, MAX_LEAVES, MaskHeadShape, MaskLayout, obs_leaves,
 };
@@ -32,9 +33,10 @@ use crate::masks::{IllegalActionPolicy, MaskProvider, Masked, NoMasks};
 use crate::options::WaitBackend;
 use crate::options::{AutoReset, PoolOptions, SyncOptions};
 use crate::outputs::{Outputs, OutputsView};
+use crate::policy::PolicyMap;
 use crate::registry::Registration;
 use crate::set_zero::zero_absent_rows;
-use crate::sys::sync::{AtomicBool, Ordering};
+use crate::sys::sync::{AtomicBool, AtomicU64, Ordering};
 use crate::sys::{Gang, GangOptions, available_cores};
 use crate::transform::kernels::StackMode;
 use crate::validate::{
@@ -99,7 +101,7 @@ pub struct EnvPool<E: Environment, M: MaskProvider<E> = NoMasks> {
     pub(crate) options: PoolOptions,
     pub(crate) headers: Vec<E::Header>,
     pub(crate) states: Vec<E::State>,
-    actions: ActionLayout,
+    pub(crate) actions: ActionLayout,
     discrete: Vec<i32>,
     continuous: Vec<f32>,
     pub(crate) outputs: Outputs,
@@ -133,6 +135,17 @@ pub struct EnvPool<E: Environment, M: MaskProvider<E> = NoMasks> {
     /// Allocations counted in this pool's chunk steps (ADR-0055).
     #[cfg(feature = "debug-checks")]
     pub(crate) allocs: crate::sys::alloc_track::AllocTally,
+    /// The policy map (ADR-0079): every slot a learner unless set before
+    /// the first reset.
+    pub(crate) policy: PolicyMap,
+    /// The heuristic pass and slots, chosen at construction; `None`
+    /// without a heuristic slot.
+    pub(crate) heuristic: Option<HeuristicRoute<E>>,
+    /// The heuristic actions of the last step, `[N, A, discrete heads]`,
+    /// zero for other slots; empty without a heuristic slot.
+    pub(crate) heuristic_discrete: Vec<i32>,
+    /// As `heuristic_discrete`, `[N, A, continuous heads]`.
+    pub(crate) heuristic_continuous: Vec<f32>,
     _masks: PhantomData<M>,
 }
 
@@ -169,6 +182,11 @@ impl<E: Environment, M: MaskProvider<E>> EnvPool<E, M> {
             archive: self.reset_source.as_ref(),
             #[cfg(feature = "debug-checks")]
             allocs: &self.allocs,
+            // The split-phase modes refuse heuristic slots (ADR-0079 stage
+            // A).
+            heuristic: None,
+            heuristic_slots: &[],
+            heuristic_fault: None,
         }
     }
 
@@ -556,6 +574,10 @@ where
             episodes: crate::adaptive::EpisodeStatistics::new(num_envs, false),
             #[cfg(feature = "debug-checks")]
             allocs: crate::sys::alloc_track::AllocTally::default(),
+            policy: PolicyMap::new(E::MAX_AGENTS),
+            heuristic: None,
+            heuristic_discrete: Vec::new(),
+            heuristic_continuous: Vec::new(),
             _masks: PhantomData,
         })
     }
@@ -1054,7 +1076,7 @@ where
             &self.headers,
             0,
             discrete,
-            &self.actions.mask,
+            &self.actions,
             self.outputs.masks(),
             self.outputs.mask_len,
         )
@@ -1081,7 +1103,9 @@ where
         Ok(&self.outputs)
     }
 
-    fn step_inner(&mut self, actions: ActionInput<'_>) -> Result<(), EngineError> {
+    /// Validates `actions` at the boundary and copies them into the
+    /// engine's action buffers (the fast or the slow path).
+    fn validate_and_copy(&mut self, actions: ActionInput<'_>) -> Result<(), EngineError> {
         // Validation fast path (env-step plan r3 section 3.3): while the
         // facts hold, the per-instance header checks cannot fail and every
         // slot is required, so one range pass over the flat buffers and one
@@ -1108,6 +1132,11 @@ where
                 self.counter_bound = Some(counter_max(&self.headers));
             }
         }
+        Ok(())
+    }
+
+    fn step_inner(&mut self, actions: ActionInput<'_>) -> Result<(), EngineError> {
+        self.validate_and_copy(actions)?;
         // From here the headers change. A step raises `episode_steps`, and a
         // same-step reset `episode_index`, by at most one; `fast_clean` is
         // set again below only if the step completes cleanly.
@@ -1132,10 +1161,14 @@ where
             reset_source,
             transform,
             episodes,
+            heuristic,
             #[cfg(feature = "debug-checks")]
             allocs,
             ..
         } = self;
+        // The first invalid heuristic action of the call (ADR-0079 item
+        // 3.2), in instance order; read after the barrier.
+        let fault = crate::heuristic::new_fault();
         let ctx = StepCtx::<E> {
             cfg,
             authority,
@@ -1146,6 +1179,9 @@ where
             archive: reset_source.as_ref(),
             #[cfg(feature = "debug-checks")]
             allocs,
+            heuristic: heuristic.as_ref().map(|h| h.run),
+            heuristic_slots: heuristic.as_ref().map_or(&[][..], |h| h.slots.as_slice()),
+            heuristic_fault: heuristic.as_ref().map(|_| &fault),
         };
         let view = step_view(outputs, transform, sync.is_some(), episodes);
         let all = Chunk::<E> {
@@ -1164,8 +1200,8 @@ where
         if let Some(rt) = sync {
             let heads = (layout.discrete.len(), layout.continuous.len());
             let grain = (chunk_size(options), options.schedule);
-            let panicked = par_chunks(&mut rt.gang, all, grain, heads, |chunk, _| {
-                step_chunk::<E, M>(&ctx, chunk);
+            let panicked = par_chunks(&mut rt.gang, all, grain, heads, |chunk, first| {
+                step_chunk_at::<E, M>(&ctx, chunk, first);
                 if !may_step_cleanly::<E>() || !steps_cleanly(chunk.headers) {
                     clean.store(false, Ordering::Relaxed);
                 }
@@ -1177,12 +1213,13 @@ where
         } else {
             let mut chunk = all;
             run_kernels(poisoned, || {
-                step_chunk::<E, M>(&ctx, &mut chunk);
+                step_chunk_at::<E, M>(&ctx, &mut chunk, 0);
                 if !may_step_cleanly::<E>() || !steps_cleanly(chunk.headers) {
                     clean.store(false, Ordering::Relaxed);
                 }
             })?;
         }
+        self.check_heuristics(&fault)?;
         self.check_turns()?;
         #[cfg(feature = "debug-checks")]
         {
@@ -1193,6 +1230,41 @@ where
         // Each step raises `episode_steps`, and a same-step reset
         // `episode_index`, by at most one.
         self.fast_clean = clean.load(Ordering::Relaxed);
+        Ok(())
+    }
+
+    /// Heuristic slots after the barrier (ADR-0079 item 3): an invalid
+    /// computed action poisons the pool in every build, naming the first
+    /// instance and slot in instance order; otherwise the call's heuristic
+    /// rows are copied to the `heuristic_actions` buffers. Nothing without
+    /// a heuristic slot.
+    fn check_heuristics(&mut self, fault: &AtomicU64) -> Result<(), EngineError> {
+        let Some(route) = self.heuristic.as_ref() else {
+            return Ok(());
+        };
+        if let Some((instance, slot)) = crate::heuristic::fault_of(fault.load(Ordering::Relaxed)) {
+            self.poisoned = true;
+            return Err(EngineError::HeuristicAction { instance, slot });
+        }
+        let a = E::MAX_AGENTS;
+        let (dh, ch) = (self.actions.discrete.len(), self.actions.continuous.len());
+        for i in 0..self.headers.len() {
+            for &slot in &route.slots {
+                let k = i * a + usize::from(slot);
+                if let (Some(src), Some(dst)) = (
+                    self.discrete.get(k * dh..(k + 1) * dh),
+                    self.heuristic_discrete.get_mut(k * dh..(k + 1) * dh),
+                ) {
+                    dst.copy_from_slice(src);
+                }
+                if let (Some(src), Some(dst)) = (
+                    self.continuous.get(k * ch..(k + 1) * ch),
+                    self.heuristic_continuous.get_mut(k * ch..(k + 1) * ch),
+                ) {
+                    dst.copy_from_slice(src);
+                }
+            }
+        }
         Ok(())
     }
 
@@ -1428,6 +1500,15 @@ pub(crate) struct StepCtx<'a, E: Environment> {
     /// The pool's allocation tally (ADR-0055).
     #[cfg(feature = "debug-checks")]
     pub(crate) allocs: &'a crate::sys::alloc_track::AllocTally,
+    /// The heuristic pass, chosen at construction (ADR-0079); `None`
+    /// without a heuristic slot, and always in the split-phase modes,
+    /// which refuse heuristic slots.
+    pub(crate) heuristic: Option<HeuristicFn<E>>,
+    /// The heuristic slots, in slot order; empty without any.
+    pub(crate) heuristic_slots: &'a [u16],
+    /// Where the chunks record the first invalid heuristic action of the
+    /// call; `None` with `heuristic`.
+    pub(crate) heuristic_fault: Option<&'a AtomicU64>,
 }
 
 /// The records, action rows and output rows of a range of instances,
@@ -1449,15 +1530,32 @@ pub(crate) struct Rows<'a, H, S> {
 /// The rows of an `Environment`'s pool.
 pub(crate) type Chunk<'a, E> = Rows<'a, <E as Environment>::Header, <E as Environment>::State>;
 
-/// Steps every instance of `chunk` (after validation).
+/// Steps every instance of `chunk` (after validation), for the split-phase
+/// modes, whose contexts carry no heuristic pass.
 pub(crate) fn step_chunk<E: Environment, M: MaskProvider<E>>(
     ctx: &StepCtx<'_, E>,
     chunk: &mut Chunk<'_, E>,
 ) {
-    // The bracket of ADR-0055 covers the whole chunk step: the illegal-action
-    // pass, step, observe, the mask writes and the auto-resets below.
+    step_chunk_at::<E, M>(ctx, chunk, 0);
+}
+
+/// Steps every instance of `chunk` (after validation); `first` is the pool
+/// index of the chunk's first instance, which names a heuristic fault.
+pub(crate) fn step_chunk_at<E: Environment, M: MaskProvider<E>>(
+    ctx: &StepCtx<'_, E>,
+    chunk: &mut Chunk<'_, E>,
+    first: usize,
+) {
+    // The bracket of ADR-0055 covers the whole chunk step: the heuristic
+    // pass, the illegal-action pass, step, observe, the mask writes and the
+    // auto-resets below.
     #[cfg(feature = "debug-checks")]
     let _bracket = crate::sys::alloc_track::ChunkBracket::enter(ctx.allocs);
+    // Heuristic slots (ADR-0079 item 3.2): one call per chunk through the
+    // pool's routine, before any instance of the chunk steps.
+    if let Some(run) = ctx.heuristic {
+        run(ctx, chunk, first);
+    }
     let StepCtx {
         cfg,
         authority,
@@ -1861,18 +1959,21 @@ pub(crate) fn legality_rows<H: RecordLayout>(
     headers: &[H],
     first: usize,
     discrete: &[i32],
-    layout: &MaskLayout,
+    actions: &ActionLayout,
     masks: &[Bool8],
     mask_len: usize,
 ) -> Result<(), EngineError> {
     let a = H::AGENTS;
+    let layout = &actions.mask;
     let dh = layout.heads.len();
     for (i, header) in headers.iter().enumerate() {
         if header.engine().pending_reset.get() {
             continue;
         }
         for (slot, row) in header.agents().iter().enumerate() {
-            if !(row.alive.get() && row.acting.get()) {
+            // Heuristic slots: the submitted row is never read (ADR-0079
+            // item 3.1); the worker validates the computed one.
+            if !(row.alive.get() && row.acting.get()) || actions.skips(slot) {
                 continue;
             }
             let k = i * a + slot;

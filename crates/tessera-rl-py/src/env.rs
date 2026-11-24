@@ -225,6 +225,9 @@ pub(crate) struct Layout {
     pub(crate) turns: &'static str,
     /// Terminal observations are written (`same_step` auto-reset).
     pub(crate) terminal: bool,
+    /// The policy group of each agent slot (ADR-0079 item 5.1):
+    /// `"learner"`, `"external"`, `"heuristic"` or `"privileged_heuristic"`.
+    pub(crate) policy_groups: Vec<&'static str>,
 }
 
 /// Copies of one call's outputs (`owned` mode).
@@ -324,6 +327,12 @@ pub(crate) trait PoolOps: Send {
         Err(BindError::Argument(
             "state_hash is available in sync mode only".to_owned(),
         ))
+    }
+    /// The last step's heuristic actions (ADR-0079 item 3.5), `[N, A,
+    /// discrete heads]` little-endian `i32`, copied; `None` without a
+    /// heuristic slot. The split-phase modes refuse heuristic slots.
+    fn heuristic_actions(&self) -> Result<Option<Vec<u8>>, BindError> {
+        Ok(None)
     }
     fn import(&mut self, id: u32, bytes: &[u8]) -> Result<(), BindError>;
     /// The persisted file of `ids` (ADR-0011).
@@ -656,6 +665,7 @@ where
                 TurnStructure::Mixed => "mixed",
             },
             terminal,
+            policy_groups: pool.policy_groups().iter().map(|g| g.name()).collect(),
         };
         Ok(Self {
             storage,
@@ -877,6 +887,16 @@ where
 
     fn state_hash(&self, id: u32) -> Result<u64, BindError> {
         Ok(self.pool.state_hash(id)?.get())
+    }
+
+    fn heuristic_actions(&self) -> Result<Option<Vec<u8>>, BindError> {
+        if self.pool.is_poisoned() {
+            return Err(EngineError::Poisoned.into());
+        }
+        Ok(self
+            .pool
+            .heuristic_actions()
+            .map(|rows| rows.iter().flat_map(|v| v.to_le_bytes()).collect()))
     }
 
     fn illegal_actions(&self, id: u32) -> Result<Vec<u32>, BindError> {
@@ -1146,6 +1166,9 @@ pub(crate) struct PoolArgs {
     pub(crate) asynced: Option<(usize, crate::batched::BatchOutputs)>,
     /// The observation transforms (ADR-0078); empty for none.
     pub(crate) transforms: tessera_rl_engine::Transforms,
+    /// The policy map (ADR-0079), `None` for the default: every slot a
+    /// learner.
+    pub(crate) policy_map: Option<crate::policy::PolicySpec>,
 }
 
 /// The refusal of the normalization calls outside sync mode.
@@ -1391,6 +1414,9 @@ where
     let policy = wait_policy(args)?;
     // Before the first reset and before any mode (ADR-0078 item 2.1).
     let pool = pool.with_transforms(args.transforms.clone())?;
+    // Learner and external groups for any environment; a maker whose
+    // environment runs heuristics applied its map already (ADR-0079).
+    let pool = crate::policy::plain(pool, args)?;
     let storage = pool.outputs()?.storage();
     let pooled = Pooled::new(cfg, pool, n, terminal, storage)?;
     if args.pipelined {
@@ -1744,6 +1770,7 @@ pub(crate) fn tag(args: &PoolArgs, fields: &TagFields) -> Result<Box<dyn PoolOps
     let (options, n) = options(args)?;
     let same_step = options.auto_reset == AutoReset::SameStep;
     let pool = EnvPool::<Tag, Masked>::with_masks(cfg.clone(), options)?;
+    let pool = crate::policy::info(pool, args)?;
     finish(&cfg, pool, args, n, same_step)
 }
 
@@ -1835,6 +1862,7 @@ pub(crate) fn connect4(args: &PoolArgs) -> Result<Box<dyn PoolOps>, BindError> {
     let (options, n) = options(args)?;
     let same_step = options.auto_reset == AutoReset::SameStep;
     let pool = EnvPool::<Connect4, Masked>::with_masks(cfg.clone(), options)?;
+    let pool = crate::policy::perfect(pool, args)?;
     finish_rendered(&cfg, pool, args, n, same_step)
 }
 
@@ -1844,6 +1872,7 @@ pub(crate) fn othello(args: &PoolArgs) -> Result<Box<dyn PoolOps>, BindError> {
     let (options, n) = options(args)?;
     let same_step = options.auto_reset == AutoReset::SameStep;
     let pool = EnvPool::<Othello, Masked>::with_masks(cfg.clone(), options)?;
+    let pool = crate::policy::perfect(pool, args)?;
     finish_rendered(&cfg, pool, args, n, same_step)
 }
 
@@ -1856,6 +1885,7 @@ pub(crate) fn go9(args: &PoolArgs, komi: Option<i32>) -> Result<Box<dyn PoolOps>
     let (options, n) = options(args)?;
     let same_step = options.auto_reset == AutoReset::SameStep;
     let pool = EnvPool::<Go9, Masked>::with_masks(cfg.clone(), options)?;
+    let pool = crate::policy::perfect(pool, args)?;
     finish_rendered(&cfg, pool, args, n, same_step)
 }
 
@@ -1866,6 +1896,7 @@ pub(crate) fn leduc(args: &PoolArgs) -> Result<Box<dyn PoolOps>, BindError> {
     let (options, n) = options(args)?;
     let same_step = options.auto_reset == AutoReset::SameStep;
     let pool = EnvPool::<Leduc, Masked>::with_masks(cfg.clone(), options)?;
+    let pool = crate::policy::info(pool, args)?;
     finish(&cfg, pool, args, n, same_step)
 }
 
@@ -1890,6 +1921,7 @@ pub(crate) fn lanterns(
     let (options, n) = options(args)?;
     let same_step = options.auto_reset == AutoReset::SameStep;
     let pool = EnvPool::<Lanterns, Masked>::with_masks(cfg.clone(), options)?;
+    let pool = crate::policy::info(pool, args)?;
     finish(&cfg, pool, args, n, same_step)
 }
 
@@ -1950,6 +1982,7 @@ mod tests {
             wait: None,
             wait_cap_us: None,
             transforms: tessera_rl_engine::Transforms::new(),
+            policy_map: None,
             pipelined: false,
             asynced: None,
         };
@@ -1969,6 +2002,7 @@ mod tests {
             wait: None,
             wait_cap_us: None,
             transforms: tessera_rl_engine::Transforms::new(),
+            policy_map: None,
             pipelined,
             asynced: None,
         }
@@ -2182,6 +2216,7 @@ mod tests {
             wait: None,
             wait_cap_us: None,
             transforms: tessera_rl_engine::Transforms::new(),
+            policy_map: None,
             pipelined: false,
             asynced: None,
         };

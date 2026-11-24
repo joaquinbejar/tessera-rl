@@ -154,6 +154,12 @@ def _native_env(env_id: str, num_envs: int, seed: int, mode: AutoresetMode, outp
         kwargs = {**kwargs, "opponent": _SCRIPTED[env_id]}
     native = maker(**native_kwargs(num_envs=num_envs, seed=seed, auto_reset=_NATIVE_MODE[mode], outputs=outputs, **kwargs))
     layout = native.layout()
+    groups = tuple(layout.get("policy_groups", ()))
+    if groups and groups[0] != "learner":
+        # The adapter drives slot 0: a map must keep it a learner
+        # (ADR-0079 item 5.2).
+        native.close()
+        raise _native.ArgumentError(f"{env_id}: the Gymnasium adapter needs slot 0 a learner, not {groups[0]!r}")
     if layout["agents"] != 1 and (env_id not in _SLOT0 | _SCRIPTED.keys() or layout["initial_agents"] != 1):
         native.close()
         n = layout["initial_agents"]

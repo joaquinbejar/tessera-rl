@@ -18,6 +18,7 @@ use crate::ffi::capi::{self, CResult, Gil, Mine, Raised, Ref};
 use crate::ffi::inner::Inner;
 use crate::ffi::snapshot_type;
 use crate::ffi::view_type::{Track, new_view};
+use crate::policy::policy_spec;
 use crate::split::{HalfOutput, Polled, SplitOps};
 use crate::view::{ViewSet, ViewSpec};
 
@@ -119,6 +120,7 @@ const POOL_KEYS: [&str; 14] = [
     "wait",
     "wait_cap_us",
     "transforms",
+    "policy_map",
 ];
 
 /// The `outputs` mode: `"borrowed"` (the native default, ADR-0003) or
@@ -215,6 +217,11 @@ fn pool_args(g: Gil, kw: &Kwargs<'_>, default_limit: u32) -> CResult<PoolArgs> {
         wait_cap_us: kw.u32(g, "wait_cap_us")?,
         transforms: crate::env::parse_transforms(kw.string(g, "transforms")?.as_deref())
             .map_err(|e| to_py(g, e))?,
+        policy_map: kw
+            .string(g, "policy_map")?
+            .map(|s| policy_spec(&s))
+            .transpose()
+            .map_err(|e| error(g, Kind::Argument, e))?,
     })
 }
 
@@ -706,6 +713,8 @@ pub(crate) fn layout<'py>(g: Gil<'py>, inner: &Inner) -> CResult<Mine<'py>> {
         capi::dict_set(g, &d, c"mask_heads", &heads)?;
         capi::dict_set(g, &d, c"entity_group_heads", &int(g, l.entity_group_heads)?)?;
         capi::dict_set(g, &d, c"turns", &capi::string(g, l.turns)?)?;
+        let groups = list_of(g, l.policy_groups.iter().map(|&name| capi::string(g, name)))?;
+        capi::dict_set(g, &d, c"policy_groups", &groups)?;
         let mode = if inner.borrowed() {
             "borrowed"
         } else {
@@ -1300,6 +1309,18 @@ pub(crate) fn illegal_actions<'py>(
     inner.with(g, |ops| {
         let counts = ops.illegal_actions(id).map_err(|e| to_py(g, e))?;
         list_of(g, counts.iter().map(|&c| capi::int_u64(g, c.into())))
+    })
+}
+
+/// `heuristic_actions() -> bytes | None`: a copy of the last step's heuristic
+/// actions (ADR-0079 item 3.5), little-endian `int32` `[N, A, discrete
+/// heads]`, zero outside heuristic slots; `None` without a heuristic slot.
+pub(crate) fn heuristic_actions<'py>(g: Gil<'py>, inner: &Inner) -> CResult<Mine<'py>> {
+    inner.with(g, |ops| {
+        match ops.heuristic_actions().map_err(|e| to_py(g, e))? {
+            Some(bytes) => capi::bytes(g, &bytes),
+            None => Ok(capi::none(g)),
+        }
     })
 }
 

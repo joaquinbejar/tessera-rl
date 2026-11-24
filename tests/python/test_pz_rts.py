@@ -51,12 +51,14 @@ def test_pz_rts_spaces_are_multidiscrete_and_the_masks_are_in_infos():
     e.close()
 
 
-def test_pz_rts_infos_carry_that_agents_masks_and_nothing_else():
+def test_pz_rts_infos_carry_that_agents_masks_and_policy_group_only():
     e = env()
     obs, infos = e.reset()
     for steps in range(3):
         for a in e.agents:
-            assert set(infos[a]) == {"action_mask", "action_masks"}
+            # ADR-0079 item 5.2: the slot's policy group joins the masks.
+            assert set(infos[a]) == {"action_mask", "action_masks", "policy_group"}
+            assert infos[a]["policy_group"] == "learner"
             t, tg, p = infos[a]["action_masks"]
             assert (t.shape, tg.shape, p.shape) == ((4, 6), (4, 6, 81), (4, 6, 4))
             # The relaxed tuple (#311): per unit, the type head, then the

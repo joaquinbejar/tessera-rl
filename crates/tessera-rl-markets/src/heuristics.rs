@@ -23,17 +23,17 @@
 //! market maker, three noise traders and three momentum traders
 //! ([`baseline_of`]).
 //!
-//! ADR-0079's policy map and `InfoHeuristic` are not on main yet; the
-//! [`Heuristic`] impl computes the information state itself and calls
-//! [`act_info`], so it reads nothing hidden, and `InfoHeuristic` can call
-//! [`act_info`] directly once it exists.
+//! `InfoHeuristic::act_info` (ADR-0079) calls [`act_info`] with the
+//! default mix; the [`Heuristic`] impl computes the information state
+//! itself and calls it too, so neither reads anything hidden, and a
+//! heuristic slot of a policy map plays the same baseline.
 
 #![deny(clippy::float_arithmetic)]
 
 use core::num::NonZeroU32;
 
 use tessera_rl_core::io::ActionWriter;
-use tessera_rl_core::{AgentSlot, Heuristic};
+use tessera_rl_core::{AgentSlot, Heuristic, InfoHeuristic};
 use tessera_rl_num::rng::StepRng;
 
 use crate::actions::{Context, HEADS, OFFSET_ZERO, decide, kind};
@@ -206,5 +206,19 @@ impl Heuristic for LimitOrderBook {
     ) {
         let info = info_of(cfg, state, agent.index());
         act_info(cfg, &info, baseline_of(agent.index()), rng, out);
+    }
+}
+
+/// The default mix ([`baseline_of`]) from the information state alone
+/// (ADR-0079 item 4.2).
+impl InfoHeuristic for LimitOrderBook {
+    fn act_info(
+        cfg: &LobConfig,
+        info: &LobInfo,
+        agent: AgentSlot,
+        rng: &mut StepRng,
+        out: &mut ActionWriter<'_>,
+    ) {
+        act_info(cfg, info, baseline_of(agent.index()), rng, out);
     }
 }

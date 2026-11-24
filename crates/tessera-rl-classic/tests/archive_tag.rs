@@ -14,6 +14,7 @@
 
 use core::num::NonZeroU32;
 
+use tessera_rl_classic::tag::MAX_RADIUS;
 use tessera_rl_classic::{Tag, TagConfig, TagState};
 use tessera_rl_core::io::ActionWriter;
 use tessera_rl_core::{AgentSlot, Heuristic, RecordLayout};
@@ -42,7 +43,14 @@ fn pool(seed: u64) -> EnvPool<Tag, Masked> {
     EnvPool::with_masks(cfg(), options).unwrap()
 }
 
+/// The baseline with a window that covers the whole grid (grids up to 8
+/// cells wide), so it sees every agent: the chase these tests were written
+/// for, whatever the pool's observation radius (ADR-0079, #437).
 fn heuristic(cfg: &TagConfig, state: &TagState, agent: usize) -> i32 {
+    let cfg = &TagConfig {
+        radius: MAX_RADIUS,
+        ..cfg.clone()
+    };
     let mut discrete = [0];
     let mut writer = ActionWriter::new(&mut discrete, &mut []);
     let identity = RngIdentity::new(Seed::new(0), LogicalId::new(0));
