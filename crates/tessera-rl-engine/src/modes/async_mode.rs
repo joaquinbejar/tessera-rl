@@ -617,6 +617,35 @@ where
         self.after_full_write()
     }
 
+    /// The epoch barrier in Async mode (ADR-0081 item 2.1, ADR-0026): only
+    /// with every adaptive subsystem frozen, when it changes nothing and
+    /// reports nothing.
+    ///
+    /// # Errors
+    ///
+    /// [`EngineError::AdaptiveInAsync`] while any subsystem accumulates.
+    pub fn epoch_barrier(&mut self) -> Result<crate::EpochReport, EngineError> {
+        if self.mode.pool.adaptive_frozen() {
+            Ok(crate::EpochReport::default())
+        } else {
+            Err(EngineError::AdaptiveInAsync)
+        }
+    }
+
+    /// [`EnvPool::freeze_episode_stats`] with no id outstanding. Unfreezing
+    /// makes the Async barrier refuse.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::restore_all`] for a busy or poisoned pool.
+    pub fn freeze_episode_stats(&mut self, frozen: bool) -> Result<(), EngineError> {
+        let recovery = false;
+        self.write(recovery, |pool| {
+            pool.freeze_episode_stats(frozen);
+            Ok(())
+        })
+    }
+
     /// [`EnvPool::snapshot_pool`] with no id outstanding.
     ///
     /// # Errors

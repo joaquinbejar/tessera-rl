@@ -398,7 +398,7 @@ impl Replay<'_> {
                 branch_counter,
                 reset_source,
                 // Replays refuse pools with transforms (ADR-0078 item 8).
-                transforms: crate::transform::TransformContext::default(),
+                adaptive: crate::adaptive::AdaptiveContext::default(),
             },
             archive_ref::<E>(&st),
         )?;

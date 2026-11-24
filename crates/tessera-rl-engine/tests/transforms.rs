@@ -290,9 +290,9 @@ fn test_transforms_freeze_stops_accumulation() {
     step(&mut p, 0);
     p.epoch_barrier().unwrap();
     let mut after = p.pool_context().unwrap();
-    assert!(after.transforms.frozen);
-    after.transforms.frozen = false;
-    assert_eq!(after.transforms, before.transforms);
+    assert!(after.adaptive.normalization.frozen);
+    after.adaptive.normalization.frozen = false;
+    assert_eq!(after.adaptive.normalization, before.adaptive.normalization);
 }
 
 #[test]
@@ -302,7 +302,7 @@ fn test_transforms_pool_context_restores_statistics_and_refuses_another_identity
     a.epoch_barrier().unwrap();
     a.freeze_normalization(true);
     let context = a.pool_context().unwrap();
-    assert!(context.transforms.frozen);
+    assert!(context.adaptive.normalization.frozen);
     let mut b = reset(built(2, 1, Transforms::new().normalize(leaf(), 5.0)));
     b.restore_pool_context(context.clone(), None).unwrap();
     assert_eq!(b.pool_context().unwrap(), context);

@@ -73,7 +73,7 @@ fn test_search_with_frame_stacks_does_not_allocate() {
     let root = p.snapshot(0).unwrap();
     let mut bytes = vec![0; p.transform_state_bytes()];
     p.snapshot_transforms(0, &mut bytes).unwrap();
-    let context = p.pool_context().unwrap().transforms;
+    let context = p.pool_context().unwrap().adaptive.normalization;
     let o = SearchOptions::new(NonZeroU32::new(256).unwrap(), NonZeroU32::new(8).unwrap());
     let mut pool = SearchPool::new_with_transforms(Connect4Config {}, o, &root, &bytes, |c, o| {
         EnvPool::with_masks(c, o)?.with_transforms(transforms())

@@ -181,6 +181,10 @@ struct RawChunk<H, S> {
     refused: Raw<Bool8>,
     refuse_code: Raw<u32>,
     transform: RawTransform,
+    /// One partial per instance (ADR-0081 item 3); empty when frozen.
+    episode_partials: Raw<crate::adaptive::EpisodePartial>,
+    /// One abort count per instance of a host pool; empty otherwise.
+    episode_aborts: Raw<u64>,
 }
 
 /// The raw transform parts of a pool-wide view (ADR-0078).
@@ -254,6 +258,8 @@ impl<H, S> RawChunk<H, S> {
             refused,
             refuse_code,
             transform,
+            episode_partials,
+            episode_aborts,
         } = outputs;
         let leaves = |views: [&mut [u8]; MAX_LEAVES]| views.map(Raw::new);
         // `leaf_bytes` is only read; a read-only view is stored as raw too.
@@ -307,6 +313,8 @@ impl<H, S> RawChunk<H, S> {
                 scratch: Raw::new(transform.scratch),
                 mode: transform.mode,
             },
+            episode_partials: Raw::new(episode_partials),
+            episode_aborts: Raw::new(episode_aborts),
         }
     }
 
@@ -408,6 +416,13 @@ impl<H, S> RawChunk<H, S> {
         // SAFETY: the transform parts follow invariants 1 to 4 (see
         // `transform_view`).
         let transform = unsafe { self.transform_view(r, worker) };
+        // SAFETY: invariants 1 to 4 for range `r` (1 element per instance;
+        // an empty buffer when frozen or outside a step pass, which yields
+        // empty views). Partials are per instance, so any disjoint ranges,
+        // whole chunks or Async's claimed ids, give disjoint views.
+        let episode_partials = unsafe { self.episode_partials.view(r, 1) };
+        // SAFETY: as for `episode_partials` (empty outside host pools).
+        let episode_aborts = unsafe { self.episode_aborts.view(r, 1) };
         Rows {
             headers,
             states,
@@ -444,6 +459,8 @@ impl<H, S> RawChunk<H, S> {
                 refused,
                 refuse_code,
                 transform,
+                episode_partials,
+                episode_aborts,
             },
         }
     }

@@ -332,7 +332,7 @@ pub fn engine_kind(e: &EngineError) -> Kind {
         EngineError::InvalidRecord { .. }
         | EngineError::Invariant { .. }
         | EngineError::SnapshotRejected { .. } => Kind::Record,
-        EngineError::NoSnapshots => Kind::Capability,
+        EngineError::NoSnapshots | EngineError::AdaptiveInAsync => Kind::Capability,
         EngineError::PendingReset { .. } => Kind::PendingReset,
         EngineError::Poisoned
         | EngineError::Panicked
@@ -358,7 +358,8 @@ pub fn engine_kind(e: &EngineError) -> Kind {
         EngineError::CounterExhausted { .. }
         | EngineError::BranchCounterExhausted
         | EngineError::StorageIdsExhausted
-        | EngineError::SequenceExhausted => Kind::Exhausted,
+        | EngineError::SequenceExhausted
+        | EngineError::StatisticsOverflow { .. } => Kind::Exhausted,
         // `EngineError` is non-exhaustive (ADR-0055): a variant added later
         // raises the base class until it is mapped here.
         _ => Kind::Base,

@@ -67,7 +67,7 @@ fn root_of(p: &Live) -> (Record<Connect4>, Vec<u8>, TransformContext) {
     (
         p.snapshot(0).unwrap(),
         bytes,
-        p.pool_context().unwrap().transforms,
+        p.pool_context().unwrap().adaptive.normalization,
     )
 }
 
@@ -123,7 +123,7 @@ fn test_search_transforms_children_keep_the_live_frame_stacks() {
         // The node continues exactly in a live pool with the same context.
         let mut q = live();
         let mut pc = q.pool_context().unwrap();
-        pc.transforms = context.clone();
+        pc.adaptive.normalization = context.clone();
         q.restore_pool_context(pc, None).unwrap();
         q.restore_with_transforms(0, s.record(h).unwrap(), s.transform_bytes(h).unwrap())
             .unwrap();

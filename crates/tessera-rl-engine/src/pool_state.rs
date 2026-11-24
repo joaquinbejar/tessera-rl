@@ -116,6 +116,8 @@ where
                 t.arena.copy_from_slice(&state.transforms);
                 t.restore_context(&transforms);
             }
+            // Partials are not context: they restart empty (ADR-0081 item 6).
+            pool.episodes.clear();
             pool.reobserve(0..state.records.len(), StackMode::Keep)?;
             pool.poisoned = false;
             #[cfg(feature = "debug-checks")]

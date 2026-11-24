@@ -837,7 +837,9 @@ where
     }
 
     fn epoch_barrier(&mut self) -> Result<(), BindError> {
-        Ok(self.pool.epoch_barrier()?)
+        // The report reaches Python in #359 head D (ADR-0081 item 1.3).
+        self.pool.epoch_barrier()?;
+        Ok(())
     }
 
     fn freeze_normalization(&mut self, frozen: bool) -> Result<(), BindError> {

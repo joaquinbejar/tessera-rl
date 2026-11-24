@@ -265,10 +265,12 @@ where
                     .reset_source
                     .as_ref()
                     .map_or(ResetSourceContext::Fresh, ArchiveSource::context),
-                transforms: pool
-                    .transform
-                    .as_ref()
-                    .map_or_else(Default::default, |t| t.context()),
+                adaptive: crate::adaptive::AdaptiveContext {
+                    normalization: pool
+                        .transform
+                        .as_ref()
+                        .map_or_else(Default::default, |t| t.context()),
+                },
             })
         })
     }
@@ -297,6 +299,8 @@ where
             if let Some(t) = pool.transform.as_mut() {
                 t.restore_context(&transforms);
             }
+            // Partials are not context: they restart empty (ADR-0081 item 6).
+            pool.episodes.clear();
             Ok(())
         })
     }
@@ -319,8 +323,11 @@ where
         let PoolContext {
             branch_counter,
             reset_source,
-            transforms,
+            adaptive,
         } = context;
+        let crate::adaptive::AdaptiveContext {
+            normalization: transforms,
+        } = adaptive;
         // ADR-0078 item 2.3: another transform identity is refused before
         // anything is written.
         match self.transform.as_ref() {

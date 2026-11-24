@@ -694,6 +694,11 @@ pub(crate) fn clear_abort_row(outputs: &mut OutputsView<'_>, i: usize) {
 /// Sets instance `i`'s `aborted` and `abort_code` outputs.
 fn mark_aborted(outputs: &mut OutputsView<'_>, i: usize, code: AbortCode) {
     set(outputs.aborted, i, true);
+    // ADR-0081 item 8: the episode was counted by `finish_episode`; count
+    // the abort too (absent when frozen). 2^64 aborts cannot happen.
+    if let Some(n) = outputs.episode_aborts.get_mut(i) {
+        *n = n.saturating_add(1);
+    }
     if let Some(c) = outputs.abort_code.get_mut(i) {
         *c = code.get();
     }

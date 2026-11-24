@@ -31,6 +31,8 @@ jobs:
       # Observation transforms (ADR-0078): the arena, accumulator and
       # scratch views through Inline, Sync, Pipelined and Async pools.
       - run: "cargo +nightly miri test -p tessera-rl-engine --test transforms --locked"
+      # The per-instance episode-statistics views of engine::buffer (ADR-0081).
+      - run: "cargo +nightly miri test -p tessera-rl-engine --test epoch_barrier --locked"
       # The gang's job publication and trampoline (ADR-0047); FP control
       # asm and address waits are stubbed under cfg(miri), the protocol is not.
       - run: "cargo +nightly miri test -p tessera-rl-engine --lib --locked sys::gang::"
