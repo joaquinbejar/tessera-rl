@@ -5,7 +5,7 @@ from typing import Any
 
 from tessera_rl._env import Env
 
-__all__ = ["Viewer", "serve", "show"]
+__all__ = ["Viewer", "serve", "show", "watch"]
 
 class Viewer:
     def __init__(self, path: str | os.PathLike[str], env: Env, *, port: int = 0) -> None: ...
@@ -21,3 +21,4 @@ class Viewer:
 
 def serve(path: str | os.PathLike[str], env: Env, *, port: int = 0, open_browser: bool = False) -> Viewer: ...
 def show(path: str | os.PathLike[str], env: Env, *, height: int = 600) -> Any: ...
+def watch(env: Env, *, port: int = 0) -> Viewer: ...

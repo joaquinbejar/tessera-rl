@@ -107,6 +107,7 @@ varargs!(ReplayAdvanceM, crate::replay_api::replay_advance);
 varargs!(ReplaySeekM, crate::replay_api::replay_seek);
 noargs!(ReplayKeyframesM, crate::replay_api::replay_keyframes);
 noargs!(ReplayFinishM, crate::replay_api::replay_finish);
+noargs!(WatchM, crate::watch_api::watch);
 
 /// `close()`: on an inherited object a no-op, as the deallocation: it
 /// neither joins nor refuses, so `with` blocks and cleanup paths in a child
@@ -199,6 +200,10 @@ static METHODS: MethodTable<EnvBody> = MethodTable::new(&[
         c"restore_all($self, snapshot, /)\n--\n\nrestore_all(snapshot) -> both halves' outputs",
     ),
     MethodRow::varargs::<ForkM>(c"fork", c"fork($self, src, dst, /)\n--\n\nfork(src, dst)"),
+    MethodRow::noargs::<WatchM>(
+        c"watch",
+        c"watch($self, /)\n--\n\nwatch() -> WatchHandle: attaches a live watch (ADR-0083 item 7).",
+    ),
     MethodRow::END,
 ]);
 

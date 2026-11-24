@@ -818,6 +818,14 @@ impl<E: Environment, M: MaskProvider<E>> BatchToken<E, M> {
         self.view(&self.mode.raw.headers, id, 1)?.first()
     }
 
+    /// The header and state of `id`, if the batch holds it: the record the
+    /// live watch serves (ADR-0083 item 7).
+    pub(crate) fn record_parts(&self, id: u32) -> Option<(&E::Header, &E::State)> {
+        let header = self.header(id)?;
+        let state = self.view(&self.mode.raw.states, id, 1)?.first()?;
+        Some((header, state))
+    }
+
     /// The state of `id` (the `debug-checks` NaN trap).
     #[cfg(feature = "debug-checks")]
     pub(crate) fn state(&self, id: u32) -> Option<&E::State> {

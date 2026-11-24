@@ -344,6 +344,7 @@ pub fn engine_kind(e: &EngineError) -> Kind {
         | EngineError::NothingInFlight
         | EngineError::BatchUnreachable { .. }
         | EngineError::NotQuiescent
+        | EngineError::WatchAttached
         | EngineError::CycleAhead { .. } => Kind::Concurrency,
         EngineError::CounterExhausted { .. }
         | EngineError::BranchCounterExhausted

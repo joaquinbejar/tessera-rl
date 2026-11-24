@@ -11,7 +11,7 @@ use tessera_rl_pyffi::ffi::module_def::{
     Function, FunctionNoArgs, FunctionRow, FunctionTable, ModuleDef, ModuleInit,
 };
 
-use super::{env_type, fork, search_group_type, search_type, snapshot_type, view_type};
+use super::{env_type, fork, search_group_type, search_type, snapshot_type, view_type, watch_type};
 use crate::errors::{Kind, error};
 use tessera_rl_core::Adapters;
 
@@ -398,6 +398,7 @@ impl ModuleInit for NativeInit {
         crate::errors::register(g, module)?;
         env_type::register(g, module)?;
         view_type::register(g, module)?;
+        watch_type::register(g, module)?;
         snapshot_type::register(g, module)?;
         search_type::register(g, module)?;
         search_group_type::register(g, module)?;

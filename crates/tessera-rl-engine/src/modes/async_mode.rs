@@ -64,11 +64,13 @@ use crate::error::EngineError;
 use crate::masks::MaskProvider;
 use crate::options::SyncOptions;
 use crate::pool::{EnvPool, Reseed, SyncRuntime};
-use crate::record::Record;
+use crate::record::{Record, encode_parts_into};
 use crate::sys::ring::RingError;
+use crate::sys::watch::WatchHandle;
 use crate::validate::{
     ActionInput, check_recv, check_send_ids, check_subset_actions, copy_subset_actions,
 };
+use crate::watch::Watch;
 
 /// Reads the export generations of an Async pool's ids from any thread
 /// (ADR-0047 section 5). A generation moves before the send that moves it
@@ -188,6 +190,9 @@ pub struct AsyncPool<E: Environment, M: MaskProvider<E>> {
     outstanding: usize,
     batch: usize,
     poisoned: bool,
+    /// The live watch (ADR-0083 item 7), served after each `recv` for the
+    /// returned batch's ids only.
+    watch: Option<Watch>,
 }
 
 impl<E: Environment, M: MaskProvider<E>> core::fmt::Debug for AsyncPool<E, M> {
@@ -274,6 +279,8 @@ where
         // An already poisoned pool stays poisoned: only a full reset or
         // restore of the wrapper recovers it, as everywhere else.
         let poisoned = pool.is_poisoned();
+        // A watch attached in Sync mode moves with the pool.
+        let watch = pool.watch.take();
         #[cfg_attr(not(test), expect(unused_mut, reason = "set by tests only"))]
         let mut mode = BatchMode::new(
             pool,
@@ -304,6 +311,7 @@ where
             outstanding: 0,
             batch,
             poisoned,
+            watch,
         })
     }
 }
@@ -325,6 +333,27 @@ where
     #[must_use]
     pub fn config(&self) -> &E::Config {
         self.mode.pool.config()
+    }
+
+    /// Attaches a live watch (ADR-0083 item 7): a pending request is served
+    /// after the `recv` whose batch holds its instance, on the caller's
+    /// thread. Allocates one record buffer.
+    ///
+    /// # Errors
+    ///
+    /// [`EngineError::WatchAttached`] while another handle is alive.
+    pub fn attach_watch(&mut self) -> Result<WatchHandle, EngineError> {
+        if self.watch.as_ref().is_some_and(|w| !w.abandoned()) {
+            return Err(EngineError::WatchAttached);
+        }
+        let (watch, handle) = Watch::attach(self.num_envs(), Record::<E>::encoded_len());
+        self.watch = Some(watch);
+        Ok(handle)
+    }
+
+    /// Detaches the watch, if any (see [`EnvPool::detach_watch`]).
+    pub fn detach_watch(&mut self) {
+        self.watch = None;
     }
 
     /// Number of instances.
@@ -1078,6 +1107,42 @@ where
     /// One step of a receive: gather completed ids, then either hand out a
     /// batch or make progress (blocking on the oldest job with `block`).
     fn poll(&mut self, block: bool) -> Result<Option<BatchToken<E, M>>, EngineError> {
+        let result = self.poll_batch(block);
+        if self.watch.is_some() {
+            match &result {
+                Ok(Some(token)) => self.watch_boundary(Some(token)),
+                // No batch yet: not a boundary.
+                Ok(None) => {}
+                Err(_) => self.watch_boundary(None),
+            }
+        }
+        result
+    }
+
+    /// The batch boundary of a `recv` (ADR-0083 item 7): only the returned
+    /// batch's instances are idle, so only they are served; a failed
+    /// `recv` serves nothing but publishes the poison.
+    #[inline]
+    fn watch_boundary(&mut self, token: Option<&BatchToken<E, M>>) {
+        let poisoned = self.poisoned;
+        let Some(w) = self.watch.as_mut() else {
+            return;
+        };
+        let keep = if let Some(t) = token {
+            w.boundary(poisoned, |id, buf| {
+                t.record_parts(id)
+                    .is_some_and(|(h, s)| encode_parts_into::<E>(h, s, buf))
+            })
+        } else {
+            w.refused(poisoned);
+            true
+        };
+        if !keep {
+            self.watch = None;
+        }
+    }
+
+    fn poll_batch(&mut self, block: bool) -> Result<Option<BatchToken<E, M>>, EngineError> {
         // A panic not yet reported is reported once as `Panicked` below; a
         // reported one is `Poisoned`.
         if self.poisoned {
@@ -1271,7 +1336,10 @@ where
         self.drain();
         let poisoned = self.is_poisoned();
         let Self {
-            mut runtime, mode, ..
+            mut runtime,
+            mode,
+            watch,
+            ..
         } = self;
         let rt = runtime.0.take();
         match Arc::try_unwrap(mode) {
@@ -1280,6 +1348,7 @@ where
                 if let Some(rt) = rt {
                     pool.put_runtime(rt);
                 }
+                pool.watch = watch;
                 // A failed step left rows partly written: the pool stays
                 // poisoned, so only a full reset or restore reads it again.
                 if poisoned {
@@ -1303,6 +1372,7 @@ where
                         outstanding: 0,
                         batch: 1,
                         poisoned: true,
+                        watch: None,
                     }),
                 })
             }

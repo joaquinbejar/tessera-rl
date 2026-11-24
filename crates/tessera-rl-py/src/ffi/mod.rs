@@ -20,3 +20,4 @@ mod search_group_type;
 mod search_type;
 pub(crate) mod snapshot_type;
 pub(crate) mod view_type;
+pub(crate) mod watch_type;

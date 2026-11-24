@@ -408,8 +408,8 @@ impl<E: Environment, M: MaskProvider<E>> HalfToken<E, M> {
         self.view(&self.mode.raw.headers, 1)
     }
 
-    /// The half's states, `[half]` (the `debug-checks` NaN trap).
-    #[cfg(feature = "debug-checks")]
+    /// The half's states, `[half]` (the `debug-checks` NaN trap, and the
+    /// live-watch boundary, ADR-0083 item 7).
     pub(crate) fn states(&self) -> &[E::State] {
         self.view(&self.mode.raw.states, 1)
     }

@@ -38,9 +38,11 @@ use crate::masks::MaskProvider;
 use crate::options::SyncOptions;
 use crate::pool::{EnvPool, Reseed, SyncRuntime, chunk_size};
 use crate::record::Record;
+use crate::sys::watch::WatchHandle;
 use crate::validate::{
     ActionInput, check_cycle, check_range_actions, check_recv, copy_range_actions,
 };
+use crate::watch::{Watch, encode_rows};
 
 const HALVES: usize = 2;
 
@@ -169,6 +171,9 @@ pub struct PipelinedPool<E: Environment, M: MaskProvider<E>> {
     queued: usize,
     cycles: CycleState,
     poisoned: bool,
+    /// The live watch (ADR-0083 item 7), served after each `recv` for the
+    /// returned half's ids only.
+    watch: Option<Watch>,
 }
 
 /// The mode's workers; dropping them drains every job in flight, then
@@ -293,6 +298,8 @@ where
         // An already poisoned pool stays poisoned: only a full reset or
         // restore of the wrapper recovers it, as everywhere else.
         let poisoned = pool.is_poisoned();
+        // A watch attached in Sync mode moves with the pool.
+        let watch = pool.watch.take();
         Ok(PipelinedPool {
             runtime: Workers(Some(runtime)),
             mode: Mode::new(pool, halves, size, workers, schedule),
@@ -301,6 +308,7 @@ where
             queued: 0,
             cycles: CycleState::initial(),
             poisoned,
+            watch,
         })
     }
 
@@ -331,6 +339,28 @@ where
     #[must_use]
     pub fn config(&self) -> &E::Config {
         self.mode.pool.config()
+    }
+
+    /// Attaches a live watch (ADR-0083 item 7): a pending request is served
+    /// after the `recv` that returns its instance's half, on the caller's
+    /// thread. Allocates one record buffer.
+    ///
+    /// # Errors
+    ///
+    /// [`EngineError::WatchAttached`] while another handle is alive.
+    pub fn attach_watch(&mut self) -> Result<WatchHandle, EngineError> {
+        if self.watch.as_ref().is_some_and(|w| !w.abandoned()) {
+            return Err(EngineError::WatchAttached);
+        }
+        let (watch, handle) =
+            Watch::attach(self.num_envs(), crate::record::Record::<E>::encoded_len());
+        self.watch = Some(watch);
+        Ok(handle)
+    }
+
+    /// Detaches the watch, if any (see [`EnvPool::detach_watch`]).
+    pub fn detach_watch(&mut self) {
+        self.watch = None;
     }
 
     /// Number of instances.
@@ -768,6 +798,37 @@ where
     }
 
     fn finish(&mut self, panicked: bool) -> Result<HalfToken<E, M>, EngineError> {
+        let result = self.finish_half(panicked);
+        if self.watch.is_some() {
+            self.watch_boundary(result.as_ref().ok());
+        }
+        result
+    }
+
+    /// The batch boundary of a `recv` (ADR-0083 item 7): only the returned
+    /// half's instances are idle, so only they are served; a refused or
+    /// failed `recv` is no boundary: it serves nothing but publishes the
+    /// poison.
+    #[inline]
+    fn watch_boundary(&mut self, token: Option<&HalfToken<E, M>>) {
+        let poisoned = self.poisoned;
+        let Some(w) = self.watch.as_mut() else {
+            return;
+        };
+        let keep = if let Some(t) = token {
+            w.boundary(poisoned, |id, buf| {
+                encode_rows::<E>(t.headers(), t.states(), t.ids().start, id, buf)
+            })
+        } else {
+            w.refused(poisoned);
+            true
+        };
+        if !keep {
+            self.watch = None;
+        }
+    }
+
+    fn finish_half(&mut self, panicked: bool) -> Result<HalfToken<E, M>, EngineError> {
         let half = self.order.first().copied().unwrap_or(0);
         self.order.rotate_left(1);
         self.queued = self.queued.saturating_sub(1);
@@ -949,7 +1010,10 @@ where
         self.drain();
         let poisoned = self.is_poisoned();
         let Self {
-            mut runtime, mode, ..
+            mut runtime,
+            mode,
+            watch,
+            ..
         } = self;
         let rt = runtime.0.take();
         match Arc::try_unwrap(mode) {
@@ -958,6 +1022,7 @@ where
                 if let Some(rt) = rt {
                     pool.put_runtime(rt);
                 }
+                pool.watch = watch;
                 // A failed job left rows partly written: the pool stays
                 // poisoned, so only a full reset or restore reads it again.
                 if poisoned {
@@ -975,6 +1040,7 @@ where
                     queued: 0,
                     cycles: CycleState::initial(),
                     poisoned: true,
+                    watch: None,
                 }),
                 kind: IntoPoolErrorKind::LiveTokens,
             }),

@@ -262,6 +262,13 @@ pub(crate) trait PoolOps: Send {
     ) -> Result<(), BindError>;
     fn fork(&mut self, src: u32, dst: &[u32]) -> Result<(), BindError>;
     fn is_poisoned(&self) -> bool;
+    /// Attaches a live watch (ADR-0083 item 7) and returns its single
+    /// consumer handle. Host pools refuse it (`CapabilityError`).
+    fn watch(&mut self) -> Result<tessera_rl_engine::WatchHandle, BindError> {
+        Err(BindError::Capability(
+            "watch is not available for this environment".to_owned(),
+        ))
+    }
     /// The split-phase operations, in Pipelined mode.
     fn split(&self) -> Option<std::sync::Arc<dyn crate::split::SplitOps>> {
         None
@@ -795,6 +802,10 @@ where
 
     fn is_poisoned(&self) -> bool {
         self.pool.is_poisoned()
+    }
+
+    fn watch(&mut self) -> Result<tessera_rl_engine::WatchHandle, BindError> {
+        Ok(self.pool.attach_watch()?)
     }
 
     fn record_start(

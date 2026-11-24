@@ -137,6 +137,33 @@
     load();
   }
 
+  // Live mode (viewer.watch): poll /live every 250 ms; one request at a
+  // time, as the server waits up to 2 s for a served record.
+  var liveBusy = false;
+  function poll() {
+    if (liveBusy) { return; }
+    liveBusy = true;
+    api("/live", { instance: instanceSelect.value }).then(function (r) {
+      if (r.pending) {
+        $("position").textContent = "waiting for a batch boundary" + (r.poisoned ? " (pool poisoned)" : "") +
+          (r.detached ? " (detached)" : "");
+      } else {
+        $("position").textContent = "generation " + r.generation;
+        if (r.prims) { draw(r.prims); }
+      }
+      $("error").hidden = true;
+    }).catch(showError).then(function () { liveBusy = false; });
+  }
+
+  function startLive(m) {
+    $("env").textContent = (m.env || "") + "  " + m.num_envs + " instance(s), " + m.agents + " agent(s), live";
+    timeline.hidden = true;
+    $("prev").hidden = true;
+    $("next").hidden = true;
+    poll();
+    setInterval(poll, 250);
+  }
+
   api("/meta").then(function (m) {
     meta = m;
     $("env").textContent = (m.env || "") + "  " + m.num_envs + " instance(s), " + m.agents + " agent(s), " + m.calls + " call(s)";
@@ -153,13 +180,17 @@
       opt.textContent = String(k);
       instanceSelect.appendChild(opt);
     }
+    if (m.live) {
+      startLive(m);
+      return;
+    }
     timeline.max = String(Math.max(m.calls - 1, 0));
     timeline.value = "0";
     load();
   }).catch(showError);
 
   timeline.addEventListener("input", load);
-  instanceSelect.addEventListener("change", load);
+  instanceSelect.addEventListener("change", function () { if (meta && meta.live) { poll(); } else { load(); } });
   $("prev").addEventListener("click", function () { move(-1); });
   $("next").addEventListener("click", function () { move(1); });
   document.addEventListener("keydown", function (e) {

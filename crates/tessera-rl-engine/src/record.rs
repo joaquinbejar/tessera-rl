@@ -9,8 +9,10 @@
 //! `EnvPool::import`, after the engine and the environment validated it
 //! (ADR-0029).
 
-use tessera_rl_core::encoding::{Canonical, Decoder, Encoder, Sink, StateHasher, encode_to_vec};
-use tessera_rl_core::{DecodeError, Environment, StateHash};
+use tessera_rl_core::encoding::{
+    Canonical, Decoder, Encoder, Sink, StateHasher, encode_to_slice, encode_to_vec,
+};
+use tessera_rl_core::{DecodeError, EncodeError, Environment, StateHash};
 
 /// The continuation state of one instance: its engine header (RNG
 /// identity, auto-reset progress, accumulators, generations, adaptive
@@ -77,12 +79,43 @@ impl<E: Environment> Record<E> {
         encode_to_vec(&DecodedRecord::<E>::from(*self))
     }
 
+    /// Length of the canonical encoding ([`Self::to_bytes`]) in bytes.
+    #[must_use]
+    pub const fn encoded_len() -> usize {
+        <DecodedRecord<E> as Canonical>::ENCODED_LEN
+    }
+
+    /// The canonical encoding, as [`Self::to_bytes`], into `out`, which
+    /// must be [`Self::encoded_len`] bytes long. Never allocates.
+    ///
+    /// # Errors
+    ///
+    /// [`EncodeError::BufferLength`] if `out` has another length.
+    pub fn encode_into(&self, out: &mut [u8]) -> Result<(), EncodeError> {
+        encode_to_slice(&DecodedRecord::<E>::from(*self), out)
+    }
+
     /// Size of the continuation record in bytes (header plus state), as
     /// opposed to the author state alone.
     #[must_use]
     pub const fn record_size() -> usize {
         size_of::<E::Header>() + size_of::<E::State>()
     }
+}
+
+/// The canonical encoding of the record made of `header` and `state`, into
+/// `out` (the live watch's reply buffer, ADR-0083 item 7). Never allocates;
+/// false if `out` has the wrong length.
+pub(crate) fn encode_parts_into<E: Environment>(
+    header: &E::Header,
+    state: &E::State,
+    out: &mut [u8],
+) -> bool {
+    let record = DecodedRecord::<E> {
+        header: *header,
+        state: *state,
+    };
+    encode_to_slice(&record, out).is_ok()
 }
 
 /// A record decoded from bytes. Its fields have valid bit patterns, but

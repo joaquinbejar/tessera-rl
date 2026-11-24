@@ -116,11 +116,13 @@ where
     /// [`EnvPool::restore_all`]), [`EngineError::InstanceOutOfRange`] for an
     /// unknown id, or [`EngineError::Panicked`] if re-observing panics.
     pub fn restore(&mut self, id: u32, record: &Record<E>) -> Result<(), EngineError> {
-        self.guarded(Poison::Reject, |pool| {
+        let result = self.guarded(Poison::Reject, |pool| {
             let i = pool.index(id)?;
             pool.write_record(i, record);
             pool.reobserve(core::iter::once(i))
-        })
+        });
+        self.watch_boundary(result.is_ok());
+        result
     }
 
     /// Restores every instance from trusted `records`, one per instance. On
@@ -133,7 +135,7 @@ where
     /// length (nothing is mutated), or [`EngineError::Panicked`] if
     /// re-observing panics.
     pub fn restore_all(&mut self, records: &[Record<E>]) -> Result<(), EngineError> {
-        self.guarded(Poison::Recover, |pool| {
+        let result = self.guarded(Poison::Recover, |pool| {
             pool.check_count(records.len())?;
             for (i, record) in records.iter().enumerate() {
                 pool.write_record(i, record);
@@ -143,7 +145,9 @@ where
             #[cfg(feature = "debug-checks")]
             pool.discard_allocations();
             Ok(())
-        })
+        });
+        self.watch_boundary(result.is_ok());
+        result
     }
 
     /// Copies instance `src` into every instance of `dst`, identity
@@ -156,13 +160,15 @@ where
     /// [`EngineError::Panicked`] if re-observing panics; on an id error
     /// nothing is mutated.
     pub fn fork(&mut self, src: u32, dst: &[u32]) -> Result<(), EngineError> {
-        self.guarded(Poison::Reject, |pool| {
+        let result = self.guarded(Poison::Reject, |pool| {
             let record = pool.fork_source(src, dst)?;
             for i in valid_indices(dst) {
                 pool.write_record(i, &record);
             }
             pool.reobserve(valid_indices(dst))
-        })
+        });
+        self.watch_boundary(result.is_ok());
+        result
     }
 
     /// Like [`EnvPool::fork`], but each destination gets a distinct branch
@@ -183,9 +189,11 @@ where
         dst: &[u32],
         labels: Option<&[u64]>,
     ) -> Result<(), EngineError> {
-        self.guarded(Poison::Reject, |pool| {
+        let result = self.guarded(Poison::Reject, |pool| {
             pool.fork_branched_inner(src, dst, labels)
-        })
+        });
+        self.watch_boundary(result.is_ok());
+        result
     }
 
     fn fork_branched_inner(
