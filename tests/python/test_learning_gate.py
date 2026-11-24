@@ -400,3 +400,20 @@ def test_learning_protocols_file_matches_the_module_table():
 
     assert lp.PROTOCOLS == tomllib.loads(lp.PROTOCOLS_FILE.read_text())
     assert lp.protocol("cartpole")["env"] == "tessera/CartPole-v1"
+
+
+def test_learning_flattened_protocols_train_on_dict_and_image_observations():
+    """Grid (a Dict observation) and BrickWall (an image) reach the MLP
+    flattened, final observations included; 1-D boxes are left alone."""
+    pytest = __import__("pytest")
+    pytest.importorskip("torch")
+    import gymnasium
+
+    import learning_protocols as lp
+
+    assert not lp._needs_flat(gymnasium.spaces.Box(-1, 1, (4,)))
+    assert lp._needs_flat(gymnasium.spaces.Box(0, 255, (1, 84, 84)))
+    assert lp._needs_flat(gymnasium.spaces.Dict({"a": gymnasium.spaces.Discrete(3)}))
+    for name in ("grid", "brickwall"):
+        r = lp.train(name, 1, 512, 1)
+        assert len(r["eval_returns"]) == 1, name

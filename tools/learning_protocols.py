@@ -76,6 +76,55 @@ def fingerprint(name: str) -> str:
     return hashlib.sha256(payload.encode()).hexdigest()
 
 
+def _needs_flat(space) -> bool:
+    """Whether the MLP of ``reference_training`` needs the observation
+    flattened: anything but a 1-D box (a Dict, or an image)."""
+    import gymnasium  # noqa: PLC0415
+
+    return not (isinstance(space, gymnasium.spaces.Box) and len(space.shape) == 1)
+
+
+def _flat_vector_class():
+    import gymnasium  # noqa: PLC0415
+    import numpy as np  # noqa: PLC0415
+
+    class FlatVector(gymnasium.vector.VectorWrapper):
+        """Flattens each instance's observation, and each entry of
+        ``info["final_obs"]`` (which ``reference_training`` bootstraps
+        truncated episodes from), with ``gymnasium.spaces.flatten``."""
+
+        def __init__(self, env):
+            super().__init__(env)
+            self._single = env.single_observation_space
+            self.single_observation_space = gymnasium.spaces.flatten_space(self._single)
+            self.observation_space = gymnasium.vector.utils.batch_space(self.single_observation_space, env.num_envs)
+
+        def _flat(self, obs):
+            rows = gymnasium.vector.utils.iterate(self.env.observation_space, obs)
+            return np.stack([gymnasium.spaces.flatten(self._single, row) for row in rows]).astype(np.float32)
+
+        def reset(self, **kwargs):
+            obs, info = self.env.reset(**kwargs)
+            return self._flat(obs), info
+
+        def step(self, actions):
+            obs, reward, term, trunc, info = self.env.step(actions)
+            if "final_obs" in info:
+                final = info["final_obs"]
+                info = dict(info)
+                info["final_obs"] = np.array(
+                    [None if o is None else gymnasium.spaces.flatten(self._single, o).astype(np.float32) for o in final],
+                    dtype=object,
+                )
+            return self._flat(obs), reward, term, trunc, info
+
+    return FlatVector
+
+
+def _FlatVector(env):  # noqa: N802  (a factory standing in for the class)
+    return _flat_vector_class()(env)
+
+
 @contextlib.contextmanager
 def _factories(env_id: str):
     """``reference_training``'s vector and evaluation factories pointed at
@@ -94,10 +143,15 @@ def _factories(env_id: str):
         if backend != "tessera":
             raise ValueError(f"protocols run the tessera backend, not {backend!r}")
         envs = tessera_rl.gym.make(env_id, num_envs=num_envs, seed=seed, autoreset_mode=rt.SAME_STEP)
+        if _needs_flat(envs.single_observation_space):
+            envs = _FlatVector(envs)
         return gymnasium.wrappers.vector.RecordEpisodeStatistics(envs)
 
     def make_single(backend):
-        return gymnasium.make(env_id)
+        env = gymnasium.make(env_id)
+        if _needs_flat(env.observation_space):
+            env = gymnasium.wrappers.FlattenObservation(env)
+        return env
 
     saved = (rt.make_vector, rt.make_single)
     rt.make_vector, rt.make_single = make_vector, make_single
