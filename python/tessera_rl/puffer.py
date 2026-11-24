@@ -12,11 +12,10 @@ module does not change directory around it, since that is process-global: import
 it from a directory you can write to and do not mind the link in. A failed
 import raises ``ImportError`` naming the cause.
 
-**Environments.** An allowlist: CartPole and Tag. Sequential environments are
+**Environments.** An allowlist: CartPole, Tag and Gather. Sequential environments are
 refused: PufferLib has no turns, and its trainer would train on idle seats.
-Observations with several leaves are refused too. Auto-reset is ``same_step``,
-fixed. ``terminal_observations`` holds final observations, which PufferLib's
-tuple has no place for. PufferLib passes no action masks to a policy, so in Tag
+Auto-reset is ``same_step``, fixed. ``terminal_observations`` holds final
+observations, which PufferLib's tuple has no place for. PufferLib passes no action masks to a policy, so in Tag
 an illegal action is a no-op (``env.action_masks`` has the masks); an out-of-range
 one raises ``ActionError``. ``masks`` is PufferLib's "agent counted in this
 batch", always true, so dead Tag agents count as steps.
@@ -29,6 +28,16 @@ are not writable; nothing must write through it. ``vector.Serial`` and
 ``vector.Multiprocessing`` pass buffers they own, so those backends cost one copy
 per step. ``tessera_rl.is_stale`` does not apply to these arrays: the views are
 taken once, so it reports ``True`` even for arrays ``step`` has just returned.
+
+**Observations with several leaves** (SPEC 11.1) are flattened: an agent's row
+is every leaf raveled in C order, in layout order, so a ``Set`` gives its item
+leaves then ``<leaf>_mask`` (ADR-0082). The dtype is ``numpy.result_type`` of the
+leaf dtypes (Gather: ``int32``, 26 values), and a layout whose promotion is a
+float that cannot hold every value of an integer leaf (a 64-bit integer with a
+float, or ``uint64`` with a signed integer) is refused with ``ArgumentError``.
+The engine keeps each leaf in its own buffer, so these rows are a copy into one
+array the env owns, refilled in place by every ``reset`` and ``step`` (per half in
+Pipelined). A single leaf stays a zero-copy view.
 
 **Seeds.** ``vector.make`` drops its ``seed`` argument, so it has no effect. Use
 ``reset(seed=r)``. A reset derives the base of its instance seeds with
@@ -107,7 +116,7 @@ except Exception as e:  # PermissionError in a read-only directory, among others
     ) from e
 
 #: Environments tested through this adapter.
-SUPPORTED = frozenset({"tessera/CartPole-v1", "tessera/Tag-v1"})
+SUPPORTED = frozenset({"tessera/CartPole-v1", "tessera/Gather-v1", "tessera/Tag-v1"})
 
 #: Above this a worker count is refused here, rather than failing to start threads
 #: at the first reset, which is a parent hang under Multiprocessing.
@@ -154,12 +163,43 @@ def _bound(values: list, shape: list, dtype: str) -> np.ndarray:
     return np.broadcast_to(arr, shape).astype(dtype) if arr.size == 1 else arr.reshape(shape).astype(dtype)
 
 
-def _single_leaf(leaves: list) -> tuple:
-    """The only observation leaf; ``ArgumentError`` naming several."""
-    if len(leaves) != 1:
-        names = [leaf[0] for leaf in leaves]
-        raise _native.ArgumentError(f"PufferLib needs one observation Box, this environment has leaves {names}")
-    return leaves[0]
+def flat_dtype(dtypes) -> np.dtype:
+    """The dtype of a flattened observation: ``numpy.result_type`` of the leaf
+    dtypes. ``ArgumentError`` when it is a float whose mantissa cannot hold every
+    value of an integer leaf, the promotions that are not lossless."""
+    leaf_dtypes = [np.dtype(d) for d in dtypes]
+    target = np.result_type(*leaf_dtypes)
+    if target.kind == "f":
+        digits = np.finfo(target).nmant + 1
+        wide = [str(d) for d in leaf_dtypes if d.kind in "iu" and d.itemsize * 8 - (d.kind == "i") > digits]
+        if wide:
+            raise _native.ArgumentError(
+                f"observation leaves {[str(d) for d in leaf_dtypes]} promote to {target}, "
+                f"which cannot hold every value of {wide}; the PufferLib adapter never rounds"
+            )
+    return target
+
+
+def _observation_space(leaves: list) -> tuple:
+    """``(dtype, shape, low, high)`` of the observation: the leaf itself, or the
+    flattening of several leaves in layout order."""
+    if len(leaves) == 1:
+        _, dtype, shape, low, high = leaves[0]
+        return np.dtype(dtype), tuple(shape), _bound(low, shape, dtype), _bound(high, shape, dtype)
+    dtype = flat_dtype([leaf[1] for leaf in leaves])
+    lows = [_bound(low, shape, dtype).ravel() for _, _, shape, low, _ in leaves]
+    highs = [_bound(high, shape, dtype).ravel() for _, _, shape, _, high in leaves]
+    low, high = np.concatenate(lows), np.concatenate(highs)
+    return dtype, (low.size,), low, high
+
+
+def _flatten_into(dst: np.ndarray, leaves: list) -> None:
+    """Fills ``dst`` (``[rows, total]``) with the leaves, each ``[rows, ...]``."""
+    col = 0
+    for leaf in leaves:
+        flat = leaf.reshape((dst.shape[0], -1))
+        dst[:, col : col + flat.shape[1]] = flat
+        col += flat.shape[1]
 
 
 def _in_vector_backend() -> bool:
@@ -233,8 +273,11 @@ class TesseraPufferEnv(pufferlib.PufferEnv):
                 raise _native.ArgumentError(f"{env_id} has continuous actions; the PufferLib adapter is discrete only")
             if len(layout["action_nvec"]) > 1:
                 raise _native.ArgumentError(f"{env_id} has several action heads; the PufferLib adapter takes one")
-            _, dtype, shape, low, high = _single_leaf(layout["leaves"])
+            self._leaf_names = [leaf[0] for leaf in layout["leaves"]]
+            dtype, shape, low, high = _observation_space(layout["leaves"])
             self._instances, self._agents = probe.num_envs, probe.agents
+            #: Rows of the engine outputs, hidden slots included.
+            self._engine_rows = self._instances * self._agents
             choices = probe.action_choices
             groups = tuple(layout.get("policy_groups", ()))
         finally:
@@ -248,11 +291,7 @@ class TesseraPufferEnv(pufferlib.PufferEnv):
         #: Agents per instance as PufferLib counts them.
         self._row_agents = self._agents if self._visible is None else len(self._visible)
         self.num_agents = self._instances * self._row_agents
-        self.single_observation_space = gymnasium.spaces.Box(
-            low=_bound(low, shape, dtype),
-            high=_bound(high, shape, dtype),
-            dtype=np.dtype(dtype),
-        )
+        self.single_observation_space = gymnasium.spaces.Box(low=low, high=high, shape=shape, dtype=dtype)
         self.single_action_space = gymnasium.spaces.Discrete(choices)
         # Hidden slots need a gather each step, so the env keeps its own
         # arrays then, as with a vector backend's buffers.
@@ -264,6 +303,26 @@ class TesseraPufferEnv(pufferlib.PufferEnv):
         self._finished = [0.0, 0, 0]  # Sum of returns, sum of lengths, episodes.
         self._views: tuple | None = None
         self._masks: np.ndarray | None = None
+        self._obs_leaves: list | None = None
+        self._flat_obs: np.ndarray | None = None
+        self._terminal: np.ndarray | None = None
+
+    @property
+    def _flattens(self) -> bool:
+        return len(self._leaf_names) > 1
+
+    def _obs_view(self, observations: dict, rows: int, flat: np.ndarray | None) -> np.ndarray:
+        """One leaf as a reshaped view, or several flattened into ``flat``."""
+        if flat is None:
+            # A single leaf's layout name can differ from its output key (CartPole's is ""): take the only one.
+            return next(iter(observations.values())).reshape((rows, *self.single_observation_space.shape))
+        _flatten_into(flat, [observations[name] for name in self._leaf_names])
+        return flat
+
+    def _new_flat(self, rows: int) -> np.ndarray | None:
+        if not self._flattens:
+            return None
+        return np.zeros((rows, *self.single_observation_space.shape), dtype=self.single_observation_space.dtype)
 
     @property
     def agents_per_batch(self) -> int:
@@ -285,11 +344,19 @@ class TesseraPufferEnv(pufferlib.PufferEnv):
     def terminal_observations(self) -> np.ndarray:
         """Final observations of the episodes that ended in the last call."""
         self._require_reset("terminal_observations")
-        leaf = self._env._native.outputs()["terminal_observations"][0]
+        leaves = self._env._native.outputs()["terminal_observations"]
+        shape = self.single_observation_space.shape
+        if self._flattens:
+            if self._terminal is None:
+                self._terminal = self._new_flat(self._engine_rows)
+            _flatten_into(self._terminal, [np.asarray(leaf) for leaf in leaves])
+            full = self._terminal
+        else:
+            full = np.asarray(leaves[0]).reshape((self._engine_rows, *shape))
         if self._visible is not None:
-            full = np.asarray(leaf).reshape((self._instances, self._agents, *self.single_observation_space.shape))
-            return self._gather(full).reshape((self.num_agents, *self.single_observation_space.shape))
-        return np.asarray(leaf).reshape((self.num_agents, *self.single_observation_space.shape))
+            full = full.reshape((self._instances, self._agents, *shape))
+            return self._gather(full).reshape((self.num_agents, *shape))
+        return full
 
     def _require_reset(self, call: str) -> None:
         if self._env is None:
@@ -298,15 +365,19 @@ class TesseraPufferEnv(pufferlib.PufferEnv):
     def _publish(self, out) -> None:
         """Takes the views of one call's outputs, once: the storage is stable."""
         n = self.num_agents
-        obs = out.observations[next(iter(out.observations))]
+        self._flat_obs = self._new_flat(self._engine_rows)
+        if self._flat_obs is not None:
+            self._obs_leaves = [out.observations[name] for name in self._leaf_names]
+        obs = self._obs_view(out.observations, self._engine_rows, self._flat_obs)
         if self._visible is not None:
             # `[N, A, ...]` views; `_copy_out` gathers the visible slots.
+            obs = obs.reshape((self._instances, self._agents, *self.single_observation_space.shape))
             self._views = (obs, out.rewards, out.agent_terminated, out.agent_truncated)
             self._episode_ended = (out.episode_terminated, out.episode_truncated)
             self._masks = out.masks
             return
         self._views = (
-            obs.reshape((n, *self.single_observation_space.shape)),
+            obs,  # `n` rows: every slot is seen here.
             out.rewards.reshape(n),
             out.agent_terminated.reshape(n),
             out.agent_truncated.reshape(n),
@@ -318,6 +389,8 @@ class TesseraPufferEnv(pufferlib.PufferEnv):
             self.observations, self.rewards, self.terminals, self.truncations = self._views
 
     def _copy_out(self) -> None:
+        if self._obs_leaves is not None:
+            _flatten_into(self._flat_obs, self._obs_leaves)
         if self._visible is not None:
             n = self.num_agents
             obs, rewards, terminals, truncations = (self._gather(v) for v in self._views)
@@ -437,6 +510,8 @@ class TesseraPufferPipelinedEnv(TesseraPufferEnv):
             )
         self._half_agents = len(first) * self._agents
         self._half_masks = np.ones(self._half_agents, dtype=bool)
+        # One buffer per half, so a half's rows stay valid until its own next send.
+        self._half_flat: dict = {}
         self._queue: list = []
         self._current: int | None = None
         self.observations = self.rewards = self.terminals = self.truncations = None
@@ -463,13 +538,17 @@ class TesseraPufferPipelinedEnv(TesseraPufferEnv):
     def _flat(self, half) -> tuple:
         n = self._half_agents
         out = half.step
-        obs = out.observations[next(iter(out.observations))]
         return (
-            obs.reshape((n, *self.single_observation_space.shape)),
+            self._obs_view(out.observations, n, self._half_flat_for(half.half)),
             out.rewards.reshape(n),
             out.agent_terminated.reshape(n),
             out.agent_truncated.reshape(n),
         )
+
+    def _half_flat_for(self, index):
+        if index not in self._half_flat:
+            self._half_flat[index] = self._new_flat(self._half_agents)
+        return self._half_flat[index]
 
     def reset(self, seed: int | None = None):
         """Queues both halves' first outputs for ``recv``; returns half 0's rows."""
