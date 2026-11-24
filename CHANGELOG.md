@@ -11,6 +11,7 @@ the API is not stable, and any 0.x release may break it.
 
 ### Fixed
 
+- Python: `Normalize` refuses a NaN or infinite `clip` with `ValueError` before the pool is built (#346 review).
 - Async replay: a step panic that the replay observes before the file recorded it (worker timing) no longer reports `UnexpectedPoison`. Replay skips the steps, resets, receives, checkpoints and periodic keyframes up to the recorded `Poisoned`, counts them in the new `ReplaySummary::unchecked_before_poison`, and such a replay is not `verified()`; any other event in between still diverges (#415, ADR-0072 erratum 2).
 - Python: `make("tessera/Lanterns-v1", zero_on_fuse=...)` accepts a bool; before, every value was refused (#468).
 - Python: the Gymnasium adapter gives single-head masked environments (Snake with `agents=1`) their mask in `info["action_mask"]` (`[N, n]` `int8`) and `info["action_masks"]`, as SPEC 11.3 says and multi-head environments already did; before, these keys were missing.

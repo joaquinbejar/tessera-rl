@@ -23,6 +23,7 @@ single leaf. Transforms on ``Set`` leaves are refused (ADR-0082).
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 
 __all__ = ["FrameStack", "Normalize", "OneHot"]
@@ -55,7 +56,9 @@ class Normalize:
 
 def native_spec(transforms) -> str:
     """The native form of a transform list: one ``kind<TAB>leaf<TAB>param``
-    line per transform. ``TypeError`` for anything but these objects."""
+    line per transform. ``TypeError`` for anything but these objects;
+    ``ValueError`` for a leaf name with a tab or newline, or a NaN or
+    infinite clip."""
     lines = []
     for t in transforms:
         if isinstance(t, FrameStack):
@@ -63,7 +66,10 @@ def native_spec(transforms) -> str:
         elif isinstance(t, OneHot):
             kind, param = "one_hot", _int(t.n, "n")
         elif isinstance(t, Normalize):
-            kind, param = "normalize", repr(float(t.clip))
+            clip = float(t.clip)
+            if not math.isfinite(clip):
+                raise ValueError(f"clip must be finite, not {t.clip!r}")
+            kind, param = "normalize", repr(clip)
         else:
             raise TypeError(f"transforms take FrameStack, OneHot or Normalize, not {type(t).__name__}")
         leaf = str(t.leaf)
