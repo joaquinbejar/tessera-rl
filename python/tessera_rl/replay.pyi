@@ -15,6 +15,7 @@ class ReplaySummary:
     calls: int
     poisoned: bool = False
     unverified_poison: bool = False
+    unclaimed: tuple[int, ...] = ()
 
 class ReplayDivergence(TesseraError):
     event_index: int
