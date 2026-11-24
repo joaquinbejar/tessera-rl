@@ -268,7 +268,10 @@ fn test_archive_resets_restore_pool_brings_back_the_archive_source() {
         p.restore_pool(&state, Some(&other)),
         Err(EngineError::ArchiveMismatch { .. })
     ));
-    assert_eq!(p.pool_context().unwrap().reset_source, ResetSourceContext::Fresh);
+    assert_eq!(
+        p.pool_context().unwrap().reset_source,
+        ResetSourceContext::Fresh
+    );
     assert_eq!(hashes(&p), before);
 
     p.restore_pool(&state, Some(&arc)).unwrap();
