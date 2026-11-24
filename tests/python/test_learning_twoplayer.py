@@ -211,3 +211,19 @@ def test_twoplayer_terminal_obs_on_a_real_tag_truncation():
     assert final.shape == after.shape
     assert not np.array_equal(final, after)
     env.close()
+
+
+def test_t3b_calibrate_uses_ten_seeds_and_their_minimum():
+    """rev's ruling: T3b calibrates on 101..110 with the threshold at their
+    minimum; the other tiers keep 40 seeds and the 5th percentile."""
+    from learning_gate import CALIBRATION_SEEDS, T3B_CALIBRATION_SEEDS, calibrate  # noqa: PLC0415
+
+    assert T3B_CALIBRATION_SEEDS == list(range(101, 111))
+    records = [{"seed": s, "score": float(s - 100)} for s in T3B_CALIBRATION_SEEDS]
+    out = calibrate(records, T3B_CALIBRATION_SEEDS, expected=T3B_CALIBRATION_SEEDS, threshold="min")
+    assert out["threshold"] == 1.0 and out["threshold_rule"] == "min" and "errors" not in out
+    # The default is unchanged: 40 seeds, 5th percentile, and 10 seeds are refused.
+    assert "errors" in calibrate(records, T3B_CALIBRATION_SEEDS)
+    forty = [{"seed": s, "score": float(s)} for s in CALIBRATION_SEEDS]
+    assert calibrate(forty, CALIBRATION_SEEDS)["threshold_rule"] == "p5"
+    assert "errors" in calibrate(records, T3B_CALIBRATION_SEEDS, expected=T3B_CALIBRATION_SEEDS, threshold="median")

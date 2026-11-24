@@ -59,6 +59,10 @@ min_effect = 0.10
 #   >= min_effect * (mean(H) - mean(U)).
 # - Threshold 2: lower95(mean(trained vs uniform-legal opponent)) > 0.
 # A protocol learns only when both hold and its scores are not degenerate.
+# Tier T3b (#370): calibration on T3B_CALIBRATION_SEEDS = 101..110 (10
+# seeds), the nightly threshold at their minimum (tools/learning_gate.py).
+# Per-night false-red estimate, exchangeable draws: C(5,3)/C(15,3) = 2.2%
+# (against 8.3% with 5 calibration seeds; rev's ruling).
 [connect4]
 min_effect = 0.10
 

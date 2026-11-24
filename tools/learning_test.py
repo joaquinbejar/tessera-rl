@@ -241,7 +241,13 @@ def cmd_scores(args) -> int:
 def cmd_calibrate(args) -> int:
     shards = [json.loads(pathlib.Path(f).read_text()) for f in args.scores]
     records = [r for shard in shards for r in shard.get("records", [])]
-    out = calibrate(records, args.seeds)
+    if PROTOCOL != "cartpole" and _tier() == "T3b":
+        from learning_gate import T3B_CALIBRATION_SEEDS  # noqa: PLC0415
+
+        seeds = args.seeds if args.seeds != CALIBRATION_SEEDS else T3B_CALIBRATION_SEEDS
+        out = calibrate(records, seeds, expected=T3B_CALIBRATION_SEEDS, threshold="min")
+    else:
+        out = calibrate(records, args.seeds)
     errors = out.get("errors", []) + check_shards(shards)
     if errors:
         out["errors"] = errors

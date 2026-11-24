@@ -27,6 +27,13 @@ CALIBRATION_SEEDS = list(range(101, 141))
 # smaller budget trains nothing.
 MIN_TOTAL_STEPS = 4 * 128
 NIGHT_SEEDS = [1, 2, 3, 4, 5]
+#: Tier T3b's calibration seeds (#370, rev's ruling on DESIGN-T3b-r1 section
+#: 3): 10 seeds, with the threshold at their minimum (the 5th percentile of
+#: 40 needs about 12 h of training at T3b budgets). With exchangeable draws
+#: a night (median of the 5 NIGHT_SEEDS) falls below that minimum when the 3
+#: lowest of the 15 draws are all night seeds: C(5,3)/C(15,3) = 2.2% per
+#: night, the false-red estimate recorded in compat/learning/gates.toml.
+T3B_CALIBRATION_SEEDS = list(range(101, 111))
 
 
 def _finite(v) -> bool:
@@ -69,17 +76,23 @@ def _scores(records: list[dict], seeds: list[int]) -> tuple[list[float], list[st
     return scores, errors
 
 
-def calibrate(records: list[dict], seeds: list[int]) -> dict:
+def calibrate(records: list[dict], seeds: list[int], expected: list[int] | None = None, threshold: str = "p5") -> dict:
     """The threshold from the calibration scores; ``seeds`` must be exactly
-    ``CALIBRATION_SEEDS``."""
+    ``expected`` (``CALIBRATION_SEEDS`` by default). ``threshold`` is
+    ``"p5"`` (the 5th percentile, lower method; every tier but T3b) or
+    ``"min"`` (T3b: ``T3B_CALIBRATION_SEEDS``, the minimum of 10)."""
+    expected = CALIBRATION_SEEDS if expected is None else expected
     out: dict = {"seeds": list(seeds)}
     scores, errors = _scores(records, seeds)
-    if list(seeds) != CALIBRATION_SEEDS:
-        errors.append(f"the calibration seeds must be exactly {CALIBRATION_SEEDS[0]}-{CALIBRATION_SEEDS[-1]}")
+    if list(seeds) != expected:
+        errors.append(f"the calibration seeds must be exactly {expected[0]}-{expected[-1]}")
+    if threshold not in ("p5", "min"):
+        errors.append(f"threshold is p5 or min, not {threshold!r}")
     if errors:
         out["errors"] = errors
         return out
-    out["threshold"] = float(np.percentile(scores, 5, method="lower"))
+    out["threshold_rule"] = threshold
+    out["threshold"] = float(min(scores)) if threshold == "min" else float(np.percentile(scores, 5, method="lower"))
     out["median"] = float(np.median(scores))
     out["min"] = min(scores)
     out["max"] = max(scores)
