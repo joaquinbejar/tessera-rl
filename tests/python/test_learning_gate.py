@@ -429,3 +429,70 @@ def test_learning_acrobot_fingerprint_matches_its_calibration():
     cal = json.loads((pathlib.Path(__file__).resolve().parents[2] / "compat" / "learning" / "acrobot.json").read_text())
     assert lp.fingerprint("acrobot") == cal["setup"]["fingerprint"]
     assert cal["environment"]["torch_threads"] == 1 and cal["environment"]["omp_num_threads"] == "1"
+
+
+def test_learning_learns_constant_scores_are_degenerate_not_learning():
+    from learning_gate import learns
+
+    # Grid at 150k: every seed -0.9, random always -1.0.
+    grid = learns([-0.9] * 40, [-1.0] * 20, solved=1.0)
+    assert grid["degenerate"] and not grid["learns"]
+    # Without solved, still degenerate.
+    assert not learns([-0.9] * 40, [-1.0] * 20)["learns"]
+
+
+def test_learning_learns_needs_the_minimum_effect():
+    from learning_gate import learns
+
+    pytest = __import__("pytest")
+
+    random = [-500.0, -500.0, -490.0, -500.0]
+    small = learns([-470.0, -465.0, -480.0, -472.0], random, solved=-100.0)
+    # A real but small gain: about 30 of the 400 between random and solved.
+    assert not small["degenerate"] and small["ci95"][0] > 0
+    assert small["required"] == pytest.approx(0.10 * (-100.0 + 497.5)) and not small["learns"]
+    big = learns([-90.0, -85.0, -100.0, -95.0], random, solved=-100.0)
+    assert big["learns"]
+
+
+def test_learning_acrobot_calibration_still_learns_under_the_gate():
+    import learning_protocols as lp
+    from learning_gate import learns
+
+    cal = json.loads((pathlib.Path(__file__).resolve().parents[2] / "compat" / "learning" / "acrobot.json").read_text())
+    scores = [r["score"] for r in cal["records"]]
+    assert learns(scores, [-500.0] * 20, **lp.gate("acrobot"))["learns"]
+
+
+def test_learning_night_on_another_cpu_gives_no_verdict():
+    from learning_gate import host_mismatch
+
+    cal = {"environment": {"cpu": "12th Gen Intel(R) Core(TM) i7-12700H"}}
+    assert host_mismatch(cal, "12th Gen Intel(R) Core(TM) i7-12700H") is None
+    assert "uncalibrated host: no verdict" in host_mismatch(cal, "AMD Ryzen 7 5800H")
+    assert "records no CPU" in host_mismatch({}, "x")
+
+
+def test_learning_fingerprint_ignores_code_outside_training(monkeypatch):
+    """Editing a function no training run goes through (the gate) keeps
+    the fingerprint; editing the training path changes it."""
+    pytest = __import__("pytest")
+    pytest.importorskip("torch")
+    import learning_protocols as lp
+
+    before = lp.fingerprint("acrobot")
+    monkeypatch.setattr(lp, "gate", lambda name: {"solved": 0.0})
+    assert lp.fingerprint("acrobot") == before
+    real = lp._training_source
+    monkeypatch.setattr(lp, "_training_source", lambda: real() + "# changed")
+    assert lp.fingerprint("acrobot") != before
+
+
+def test_learning_learns_constant_scores_against_a_varying_random_are_degenerate():
+    from learning_gate import learns
+
+    # The random side varies, so the interval has width, but every trained
+    # seed scores the same: still degenerate.
+    r = learns([-0.9] * 40, [-1.0, -0.98, -1.0, -0.99, -1.0])
+    assert r["ci95"][0] != r["ci95"][1]
+    assert r["degenerate"] and not r["learns"]

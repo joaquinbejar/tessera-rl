@@ -235,7 +235,9 @@ def cmd_calibrate(args) -> int:
 
         episodes = (out["setup"] or {}).get("eval_episodes") or 20
         random = learning_protocols.random_scores(PROTOCOL, episodes)
-        out["learns"] = learns([r["score"] for r in out["records"]], random)
+        gate = learning_protocols.gate(PROTOCOL)
+        out["gate"] = gate
+        out["learns"] = learns([r["score"] for r in out["records"]], random, **gate)
         # Seeds that ended no better than the random policy's mean: the
         # method working (a seed may fail to learn), recorded so a change in
         # their count is visible.
@@ -274,6 +276,15 @@ def cmd_night(args) -> int:
     if wrong_platform:
         sys.stderr.write(wrong_platform[0] + "\n")
         return 1
+    from learning_gate import host_mismatch
+
+    mismatch = host_mismatch(calibration, _cpu())
+    if mismatch:
+        # Thresholds are host-specific: report, never judge (and never red).
+        verdict = {"red": False, "reason": mismatch}
+        _write(args.out, {"identity": identity, "setup": calibration.get("setup") or {}, "environment": _environment(), "night": {"verdict": mismatch}, "alert": verdict, "records": []})
+        sys.stderr.write(mismatch + "\n")
+        return 0
     # The night uses the calibration's budget unless told otherwise (a
     # different one then fails the setup check).
     setup = calibration.get("setup") or {}

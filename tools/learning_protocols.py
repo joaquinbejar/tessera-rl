@@ -36,6 +36,17 @@ PROTOCOLS_FILE = pathlib.Path(__file__).resolve().parents[1] / "compat" / "learn
 PROTOCOLS: dict[str, dict] = tomllib.loads(PROTOCOLS_FILE.read_text())
 
 
+GATES_FILE = pathlib.Path(__file__).resolve().parents[1] / "compat" / "learning" / "gates.toml"
+
+
+def gate(name: str) -> dict:
+    """The learns-at-all parameters of a protocol (compat/learning/gates.toml):
+    ``solved`` and ``min_effect``, or none. Kept apart from the protocol
+    table, so they are not in the protocol's fingerprint."""
+    gates = tomllib.loads(GATES_FILE.read_text()) if GATES_FILE.exists() else {}
+    return dict(gates.get(name, {}))
+
+
 def protocol(name: str) -> dict:
     try:
         return PROTOCOLS[name]
@@ -49,6 +60,13 @@ def hyper(name: str, total_steps: int):
     return rt.Hyper(**{**protocol(name)["hyper"], "total_steps": total_steps})
 
 
+def _training_source() -> str:
+    """The source of the code a training run goes through."""
+    import inspect  # noqa: PLC0415
+
+    return "\n".join(inspect.getsource(f) for f in (hyper, _needs_flat, _flat_vector_class, _FlatVector, _factories, train))
+
+
 def fingerprint(name: str) -> str:
     """What determines a score of a non-CartPole protocol besides the seed:
     the protocol, both trainer sources and the numeric libraries."""
@@ -60,7 +78,9 @@ def fingerprint(name: str) -> str:
 
     sources = {
         "reference_training": hashlib.sha256(pathlib.Path(rt.__file__).read_bytes()).hexdigest(),
-        "learning_protocols": hashlib.sha256(pathlib.Path(__file__).read_bytes()).hexdigest(),
+        # Only the code a training run goes through, so editing anything else
+        # in this module (the gate, docs) leaves calibrations valid.
+        "learning_protocols": hashlib.sha256(_training_source().encode()).hexdigest(),
     }
     payload = json.dumps(
         {
