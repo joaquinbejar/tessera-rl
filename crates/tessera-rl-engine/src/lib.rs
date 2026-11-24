@@ -75,7 +75,8 @@ pub use host::{
 };
 pub use transform::{Transform, TransformContext, TransformError, Transforms};
 
-/// `check_snapshot_contract` for host environment crates (ADR-0073 item 8).
+/// `check_snapshot_contract` (ADR-0073 item 8) and the `cargo tessera check`
+/// functions (#351) for host environment crates.
 #[cfg(feature = "testing")]
 pub use host::testing as host_testing;
 

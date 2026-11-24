@@ -1,0 +1,30 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
+# cargo tessera (#351, SPEC 10.2, ADR-0021): scaffolds, checks and benches a
+# host environment crate. A member of the workspace, not of default-members.
+# No dependency beyond thiserror: arguments are parsed by hand and the
+# templates are embedded with include_str!.
+
+[package]
+name = "cargo-tessera"
+description = "cargo tessera: scaffold, check and bench Tessera host environment crates"
+readme = "README.md"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[[bin]]
+name = "cargo-tessera"
+path = "src/main.rs"
+
+[dependencies]
+thiserror.workspace = true
+
+[lints]
+workspace = true

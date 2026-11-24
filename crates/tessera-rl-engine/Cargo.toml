@@ -23,7 +23,8 @@ test-hooks = []
 # The host pool (ADR-0062): HostPool over HostEnvironment. Off by default;
 # the first-party Python wheel never enables it.
 host = ["dep:inventory"]
-# `host::testing::check_snapshot_contract` (ADR-0073 item 8), for host
+# `host::testing`: check_snapshot_contract (ADR-0073 item 8) and the
+# checks of cargo tessera (#351), for host
 # environment crates' tests.
 testing = ["host"]
 # Replay files (ADR-0072): Recorder and Replay over EnvPool. Off by default.

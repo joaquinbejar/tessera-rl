@@ -26,6 +26,8 @@ members = [
     "tests/host-wheel",
     "crates/tessera-rl-py",
     "crates/tessera-rl-pyffi",
+    # The cargo tessera tool (#351): built only when asked for (not a default member).
+    "crates/cargo-tessera",
 ]
 # The fuzz targets build with nightly and cargo-fuzz, outside the workspace;
 # the host example is a crate of its own, as an external author's is.

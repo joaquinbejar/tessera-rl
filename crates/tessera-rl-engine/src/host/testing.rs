@@ -8,6 +8,30 @@
 //! supplies. [`check_snapshot_contract`] runs them in one pool, snapshots
 //! every instance at a midpoint, restores those records into a second pool
 //! built with another seed, and replays the rest of the actions in both.
+//!
+//! The checks `cargo tessera check` runs (#351, SPEC 10.2) live in the
+//! submodules: [`check_determinism`] (Inline and with workers, every output
+//! hashed per call), [`check_continuation`] and
+//! [`check_snapshot_continuation`], [`check_spaces`] and
+//! [`check_invariants`]. Each builds its pools from a configuration factory
+//! and a [`CheckRun`], drives them with seeded legal actions, and returns a
+//! report or the first [`CheckError`].
+
+mod actions;
+mod continuation;
+mod determinism;
+mod error;
+mod hash;
+mod invariants;
+mod run;
+mod spaces;
+
+pub use continuation::{ContinuationReport, check_continuation, check_snapshot_continuation};
+pub use determinism::{DeterminismReport, check_determinism};
+pub use error::CheckError;
+pub use invariants::{InvariantsReport, check_invariants};
+pub use run::CheckRun;
+pub use spaces::{SpacesReport, check_spaces};
 
 use tessera_rl_core::HostSnapshot;
 use tessera_rl_core::config::CanonicalConfig;
