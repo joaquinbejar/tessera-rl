@@ -675,13 +675,16 @@ mod tests {
 
     #[test]
     fn test_continuous_within_bounds() {
-        let bounds = [(-2.0, 2.0), (0.0, 1.0)];
+        let bounds = [(-2.0, 2.0), (0.5, 1.0)];
         let plan = continuous(500, &bounds, 3).unwrap_or_default();
         assert_eq!(plan.len(), 1000);
         for row in plan.as_chunks::<2>().0 {
             assert!((-2.0..=2.0).contains(&row[0]));
-            assert!((0.0..=1.0).contains(&row[1]));
+            assert!((0.5..=1.0).contains(&row[1]));
         }
+        // Spread over each head's range, not stuck at one end.
+        let second: Vec<f32> = plan.as_chunks::<2>().0.iter().map(|r| r[1]).collect();
+        assert!(second.iter().any(|&v| v < 0.6) && second.iter().any(|&v| v > 0.9));
     }
 
     #[test]
@@ -690,12 +693,12 @@ mod tests {
         let f = Bool8::FALSE;
         // Two rows, heads [3, 2]: mask width 5.
         let masks = [f, f, t, t, f, /* row 2 */ t, f, f, f, f];
-        let plan = [1, 1, 2, 0];
+        let plan = [1, 1, 2, 1];
         let mut out = [9; 4];
         legalize(&mut out, &plan, &masks, &[3, 2]);
         // Row 1: head 0 from 1 to 2; head 1 from 1 wraps to 0.
         // Row 2: head 0 from 2 wraps to 0; head 1 has no legal choice: kept.
-        assert_eq!(out, [2, 0, 0, 0]);
+        assert_eq!(out, [2, 0, 0, 1]);
     }
 
     #[test]
