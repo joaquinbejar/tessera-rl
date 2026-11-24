@@ -37,6 +37,8 @@ jobs:
             artifact: learning-test
           - env: acrobot
             artifact: learning-test-acrobot
+          - env: pendulum
+            artifact: learning-test-pendulum
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Find the previous scheduled run
