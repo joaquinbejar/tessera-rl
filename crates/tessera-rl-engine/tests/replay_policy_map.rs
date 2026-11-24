@@ -286,3 +286,22 @@ fn test_replay_policy_map_external_only_map_records_and_replays() {
     assert!(replay.run_async(&mut pool).unwrap().verified());
     assert_eq!(async_hashes(&mut pool), recorded);
 }
+
+#[test]
+fn test_replay_policy_map_cursor_seek_to_a_keyframe_reproduces_hashes() {
+    // A seek applies the keyframe with the header map's digest as its pool
+    // context, so a heuristic pool accepts it and replays to the same end.
+    let (bytes, recorded) = record_sync(heuristic());
+    let replay = Replay::open(&bytes, LIMITS).unwrap();
+    let keyframes = replay.keyframes().unwrap();
+    let target = *keyframes.last().unwrap();
+    let mut pool = heuristic();
+    let mut cur = replay.cursor(&pool).unwrap();
+    replay.seek(&mut pool, &mut cur, target).unwrap();
+    assert_eq!(
+        replay.advance(&mut pool, &mut cur, |_| false).unwrap(),
+        None
+    );
+    drop(replay.finish(cur).unwrap());
+    assert_eq!(hashes(&pool), recorded);
+}
