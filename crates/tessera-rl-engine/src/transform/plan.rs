@@ -290,6 +290,38 @@ impl Builder {
     }
 }
 
+impl Transforms {
+    /// The exported observation space and `S`, the frame-stack bytes per
+    /// instance, of these transforms on observation `space` with
+    /// `max_agents` agent slots, without building a pool (for memory
+    /// bounds such as `SearchGroup::bound_bytes`). An empty list exports
+    /// `space` with `S = 0`.
+    ///
+    /// # Errors
+    ///
+    /// As `EnvPool::with_transforms` for a list the space does not allow.
+    pub fn exported(
+        &self,
+        space: &Space,
+        max_agents: usize,
+    ) -> Result<(Space, usize), TransformError> {
+        if self.is_empty() {
+            return Ok((space.clone(), 0));
+        }
+        let layout = crate::layout::obs_leaves(space).map_err(|_| TransformError::Unsupported {
+            transform: "Transforms",
+            leaf: String::new(),
+            reason: "the observation space has no valid leaf layout",
+        })?;
+        let plan = Plan::new(self, space, &layout)?;
+        let state = plan
+            .agent_state
+            .checked_mul(max_agents)
+            .ok_or(TransformError::RowTooLarge { bytes: usize::MAX })?;
+        Ok((plan.space, state))
+    }
+}
+
 fn too_large(t: &Transform) -> TransformError {
     TransformError::Unsupported {
         transform: t.name(),

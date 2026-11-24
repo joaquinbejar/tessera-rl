@@ -14,7 +14,7 @@ use core::num::NonZeroU32;
 
 use tessera_rl_core::space::Space;
 use tessera_rl_core::{AdaptiveValues, Environment, RecordLayout};
-use tessera_rl_engine::{MaskProvider, Record};
+use tessera_rl_engine::{MaskProvider, Record, Transforms};
 use tessera_rl_num::rng::StepRng;
 use thiserror::Error;
 
@@ -192,14 +192,36 @@ where
     /// space of unsupported shape, or on overflow.
     #[must_use]
     pub fn bound_bytes(cfg: &E::Config, shapes: &[(SearchOptions, PuctConfig)]) -> Option<u64> {
+        Self::bound_bytes_with(cfg, shapes, &Transforms::new())
+    }
+
+    /// [`Self::bound_bytes`] for scratch pools with `transforms`
+    /// (ADR-0078 item 7.5): the exported observation sizes the rows, and
+    /// every node, load row and child row also holds `S` frame-stack
+    /// bytes.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::bound_bytes`], and `None` for transforms the observation
+    /// space does not allow.
+    #[must_use]
+    pub fn bound_bytes_with(
+        cfg: &E::Config,
+        shapes: &[(SearchOptions, PuctConfig)],
+        transforms: &Transforms,
+    ) -> Option<u64> {
         let actions = match E::action_space(cfg).ok()? {
             Space::Discrete { n } => usize::try_from(n).ok()?,
             _ => return None,
         };
-        let obs = space_bytes(&E::observation_space(cfg).ok()?)?;
+        let (exported, stack) = transforms
+            .exported(&E::observation_space(cfg).ok()?, E::MAX_AGENTS)
+            .ok()?;
+        let obs = space_bytes(&exported)?;
         let agents = E::MAX_AGENTS.max(1);
-        let row = row_bytes::<E>(actions, obs, agents)?;
-        let per_node = SearchPool::<E, M>::bytes_per_node(u32::try_from(actions).ok()?);
+        let row = row_bytes::<E>(actions, obs, agents)?
+            .checked_add(u64::try_from(stack.checked_mul(2)?).ok()?)?;
+        let per_node = SearchPool::<E, M>::bytes_per_node_with(u32::try_from(actions).ok()?, stack);
         let mut bytes = 0u64;
         let mut rows = 0usize;
         for (options, puct) in shapes {
@@ -262,14 +284,18 @@ where
         })?;
         let actions = usize::try_from(first.pool().actions()).unwrap_or(usize::MAX);
         let obs_bytes = first.obs_bytes();
+        let identity = first.pool().transform_identity();
         if slots.iter().any(|m| {
-            usize::try_from(m.pool().actions()).ok() != Some(actions) || m.obs_bytes() != obs_bytes
+            usize::try_from(m.pool().actions()).ok() != Some(actions)
+                || m.obs_bytes() != obs_bytes
+                || m.pool().transform_identity() != identity
         }) {
             return Err(SearchError::Options {
                 option: "trees",
-                reason: "every slot needs the same actions and observation size",
+                reason: "every slot needs the same actions, observation size and transforms",
             });
         }
+        let transforms = first.pool().transforms();
         // Rows: every slot's batch, at least one (its root).
         let rows = slots.iter().try_fold(0usize, |acc, m| {
             acc.checked_add(usize::try_from(m.config().batch_size).ok()?.max(1))
@@ -285,7 +311,7 @@ where
                 (options, *m.config())
             })
             .collect();
-        let bytes = Self::bound_bytes(cfg, &shapes);
+        let bytes = Self::bound_bytes_with(cfg, &shapes, &transforms);
         let (Some(rows), Some(bytes)) = (rows, bytes) else {
             return Err(SearchError::Budget {
                 bytes: u64::MAX,
@@ -295,7 +321,10 @@ where
         };
         if bytes > budget_bytes {
             let per_node = slots.first().map_or(0, |m| {
-                SearchPool::<E, M>::bytes_per_node(m.pool().actions())
+                SearchPool::<E, M>::bytes_per_node_with(
+                    m.pool().actions(),
+                    m.pool().transform_state_bytes(),
+                )
             });
             return Err(SearchError::Budget {
                 bytes,
@@ -672,3 +701,41 @@ where
 #[cfg(test)]
 #[path = "group_gumbel_tests.rs"]
 mod gumbel_tests;
+
+#[cfg(test)]
+mod bound_tests {
+    use core::num::NonZeroU32;
+
+    use tessera_rl_core::Environment;
+    use tessera_rl_engine::{Masked, Transforms};
+    use tessera_rl_games::{Connect4, Connect4Config};
+
+    use super::{CAPACITY_EXTRA, SearchGroup, row_bytes, space_bytes};
+    use crate::{PuctConfig, SearchOptions, SearchPool};
+
+    /// Each extra node and batch row of a stacked tree adds exactly its
+    /// frame-stack bytes (ADR-0078 item 7.5).
+    #[test]
+    fn test_bound_bytes_with_counts_stacks_per_node_and_per_row() {
+        let t = Transforms::new().frame_stack("board", 4);
+        let space = Connect4::observation_space(&Connect4Config {}).unwrap();
+        let (exported, stack) = t.exported(&space, 2).unwrap();
+        let bound = |cap: u32, batch: u32| {
+            let o = SearchOptions::new(
+                NonZeroU32::new(cap).unwrap(),
+                NonZeroU32::new(batch).unwrap(),
+            );
+            let p = PuctConfig {
+                batch_size: 1,
+                ..PuctConfig::default()
+            };
+            SearchGroup::<Connect4, Masked>::bound_bytes_with(&Connect4Config {}, &[(o, p)], &t)
+                .unwrap()
+        };
+        let node = SearchPool::<Connect4, Masked>::bytes_per_node_with(7, stack) + CAPACITY_EXTRA;
+        assert_eq!(bound(64, 4) - bound(32, 4), 32 * node);
+        let row = row_bytes::<Connect4>(7, space_bytes(&exported).unwrap(), 2).unwrap()
+            + 2 * u64::try_from(stack).unwrap();
+        assert_eq!(bound(64, 8) - bound(64, 4), 4 * row);
+    }
+}

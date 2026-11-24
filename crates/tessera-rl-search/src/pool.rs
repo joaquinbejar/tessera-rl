@@ -137,6 +137,8 @@ pub struct SearchPool<E: Environment, M: MaskProvider<E>> {
     pub(crate) journal: crate::journal::Journal<E>,
     /// How the root was made (ADR-0035, ADR-0046).
     pub(crate) mode: crate::determinize::RootMode,
+    /// The frame-stack bytes of every node (ADR-0078 item 7).
+    pub(crate) stacks: crate::stacks::Stacks,
 }
 
 fn options_error(option: &'static str, reason: &'static str) -> SearchError {
@@ -162,7 +164,16 @@ where
     /// flags.
     #[must_use]
     pub fn bytes_per_node(actions: u32) -> u64 {
-        let once = size_of::<Record<E>>()
+        Self::bytes_per_node_with(actions, 0)
+    }
+
+    /// [`Self::bytes_per_node`] for a scratch pool with `stack_bytes` of
+    /// frame stacks per instance (ADR-0078 item 7.5): each node also keeps
+    /// them, twice (the tree and the journal).
+    #[must_use]
+    pub fn bytes_per_node_with(actions: u32, stack_bytes: usize) -> u64 {
+        let once = stack_bytes
+            + size_of::<Record<E>>()
             + size_of::<Node>()
             + size_of::<u32>()
             + idx(actions).saturating_mul(size_of::<Edge>() + size_of::<usize>())
@@ -191,7 +202,29 @@ where
         if !E::PERFECT_INFORMATION {
             return Err(SearchError::ImperfectInformation);
         }
-        Self::build_pool(cfg, options, root, build)
+        Self::build_pool(cfg, options, root, &[], build)
+    }
+
+    /// [`Self::new`] on a scratch pool with frame stacks: `build` sets the
+    /// live pool's transforms (`EnvPool::with_transforms`) and `root_bytes`
+    /// are the root's frame stacks (`EnvPool::snapshot_transforms`),
+    /// ADR-0078 item 7.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::new`], and [`SearchError::StackedRoot`] for root bytes
+    /// of the wrong length.
+    pub fn new_with_transforms(
+        cfg: E::Config,
+        options: SearchOptions,
+        root: &Record<E>,
+        root_bytes: &[u8],
+        build: impl FnOnce(E::Config, PoolOptions) -> Result<EnvPool<E, M>, EngineError>,
+    ) -> Result<Self, SearchError> {
+        if !E::PERFECT_INFORMATION {
+            return Err(SearchError::ImperfectInformation);
+        }
+        Self::build_pool(cfg, options, root, root_bytes, build)
     }
 
     /// [`Self::new`] without the information check: the shared body of
@@ -200,6 +233,7 @@ where
         cfg: E::Config,
         options: SearchOptions,
         root: &Record<E>,
+        root_bytes: &[u8],
         build: impl FnOnce(E::Config, PoolOptions) -> Result<EnvPool<E, M>, EngineError>,
     ) -> Result<Self, SearchError> {
         let Ok(Space::Discrete { n: actions }) = E::action_space(&cfg) else {
@@ -216,15 +250,6 @@ where
         if batch > capacity {
             return Err(options_error("batch", "must not exceed the capacity"));
         }
-        let per_node = Self::bytes_per_node(actions);
-        let bytes = per_node.saturating_mul(u64::from(capacity));
-        if bytes > options.budget_bytes {
-            return Err(SearchError::Budget {
-                bytes,
-                per_node,
-                budget: options.budget_bytes,
-            });
-        }
         let pool_options = PoolOptions {
             auto_reset: AutoReset::Disabled,
             ..PoolOptions::new(
@@ -233,6 +258,24 @@ where
             )
         };
         let mut scratch = build(cfg, pool_options)?;
+        // The scratch pool never learns statistics (ADR-0078 item 7.2).
+        scratch.freeze_normalization(true);
+        let stack = scratch.transform_state_bytes();
+        if root_bytes.len() != stack {
+            return Err(SearchError::StackedRoot {
+                expected: stack,
+                found: root_bytes.len(),
+            });
+        }
+        let per_node = Self::bytes_per_node_with(actions, stack);
+        let bytes = per_node.saturating_mul(u64::from(capacity));
+        if bytes > options.budget_bytes {
+            return Err(SearchError::Budget {
+                bytes,
+                per_node,
+                budget: options.budget_bytes,
+            });
+        }
         scratch.reset_all(Reseed::Keep)?;
         let cap = idx(capacity);
         let agents = E::MAX_AGENTS;
@@ -270,8 +313,11 @@ where
             child_masks: vec![true; idx(batch).saturating_mul(idx(actions))],
             journal: crate::journal::Journal::new(cap, cap.saturating_mul(idx(actions)), agents),
             mode: crate::determinize::RootMode::Full,
+            stacks: crate::stacks::Stacks::new(stack, cap, idx(batch)),
         };
+        pool.journal.reserve_stacks(stack.saturating_mul(cap));
         pool.replace_root(root)?;
+        pool.stacks.set_slot(idx(pool.root), root_bytes);
         Ok(pool)
     }
 
@@ -702,6 +748,9 @@ where
         if self.mode == crate::determinize::RootMode::Determinized {
             return Err(SearchError::DeterminizedPool);
         }
+        // A stacked scratch pool needs the root's frame stacks (ADR-0078
+        // item 7.4): `set_root_with_transforms`.
+        self.check_root_bytes(0)?;
         self.replace_root(record)
     }
 
@@ -812,11 +861,12 @@ where
             if let Some(&record) = self.records.get(idx(parent)) {
                 *slot = record;
             }
+            self.stacks.load_from(row, idx(parent));
         }
         // `restore_all` recovers a scratch pool poisoned by an earlier
         // failed step (a contained kernel panic): every row is rewritten,
         // so nothing of the failed step survives.
-        self.scratch.restore_all(&self.load_records)?;
+        self.restore_rows()?;
         let masks = self.scratch.outputs()?.masks();
         if !masks.is_empty() {
             let width = idx(self.actions);
@@ -898,9 +948,14 @@ where
         })?;
         let width = idx(self.actions);
         for row in 0..self.planned.len() {
-            let record = self.scratch.snapshot(u32::try_from(row).unwrap_or(0))?;
+            let id = u32::try_from(row).unwrap_or(0);
+            let record = self.scratch.snapshot(id)?;
             if let Some(r) = self.child_records.get_mut(row) {
                 *r = record;
+            }
+            if self.stacks.per > 0 {
+                self.scratch
+                    .snapshot_transforms(id, self.stacks.child_mut(row))?;
             }
             let outputs = self.scratch.outputs()?;
             let terminal = outputs
@@ -959,6 +1014,7 @@ where
             if let (Some(r), Some(record)) = (self.records.get_mut(idx(slot)), record) {
                 *r = record;
             }
+            self.stacks.commit(row, idx(slot));
             let (from, to) = (row * self.agents, slot_rewards(slot, self.agents));
             if let (Some(src), Some(dst)) = (
                 self.child_rewards.get(from..from + self.agents),
@@ -1049,6 +1105,8 @@ where
         for r in &self.records {
             out.write_bytes(&r.hash().get().to_le_bytes());
         }
+        // The frame stacks of every node (ADR-0078 item 7); empty without.
+        out.write_bytes(&self.stacks.tree);
         for n in &self.nodes {
             for v in [n.parent, n.action, n.generation, n.holds] {
                 out.write_bytes(&v.to_le_bytes());

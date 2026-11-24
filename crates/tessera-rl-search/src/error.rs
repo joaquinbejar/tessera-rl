@@ -204,4 +204,23 @@ pub enum SearchError {
     /// `set_root_determinized` on a pool not made by `new_determinized`.
     #[error("the pool was not made by new_determinized")]
     NotDeterminized,
+    /// A root on a scratch pool with frame stacks without its frame-stack
+    /// bytes, or with the wrong number of them (ADR-0078 item 7.4): its
+    /// observations would differ from the live pool's. Determinized pools
+    /// do not support frame stacks.
+    #[error("root frame-stack bytes: {found}, the scratch pool needs {expected}")]
+    StackedRoot {
+        /// `transform_state_bytes` of the scratch pool.
+        expected: usize,
+        /// Bytes given.
+        found: usize,
+    },
+    /// A transform context of another transform list (ADR-0078 item 7.1).
+    #[error("transform identity {found:#018x} differs from the scratch pool's {expected:#018x}")]
+    TransformIdentity {
+        /// The scratch pool's.
+        expected: u64,
+        /// The context's.
+        found: u64,
+    },
 }

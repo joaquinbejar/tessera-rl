@@ -472,6 +472,12 @@ impl<H, S> RawChunk<H, S> {
         let size = shared.chunk_size.max(1);
         let first = r.start / size;
         let chunks = accum_chunks(r, size, self.instances);
+        // An accumulating pass hands out whole chunks only, so it never
+        // skips accumulation silently (REVIEW-headA-r2 note).
+        debug_assert!(
+            t.accum.len == 0 || r.is_empty() || chunks.is_some(),
+            "an accumulating view of {r:?} splits a chunk of {size}"
+        );
         // SAFETY: invariants 1 to 4 for range `r` (`instance_bytes` per
         // instance).
         let arena = unsafe { t.arena.view(r, shared.instance_bytes) };

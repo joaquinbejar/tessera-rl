@@ -22,6 +22,9 @@ pub(crate) struct Journal<E: Environment> {
     pub(crate) nodes: Vec<(u32, Node, Record<E>)>,
     /// Rewards of the saved nodes, `agents` per entry, in `nodes` order.
     pub(crate) rewards: Vec<f32>,
+    /// The saved nodes' frame-stack bytes (ADR-0078 item 7), in `nodes`
+    /// order; empty without frame stacks.
+    pub(crate) stacks: Vec<u8>,
     pub(crate) edge_saved: Vec<bool>,
     pub(crate) edges: Vec<(usize, Edge)>,
     pub(crate) free: Vec<u32>,
@@ -30,12 +33,18 @@ pub(crate) struct Journal<E: Environment> {
 }
 
 impl<E: Environment> Journal<E> {
+    /// Reserves the frame-stack copies (construction only).
+    pub(crate) fn reserve_stacks(&mut self, bytes: usize) {
+        self.stacks.reserve_exact(bytes);
+    }
+
     pub(crate) fn new(capacity: usize, edges: usize, agents: usize) -> Self {
         Self {
             on: false,
             node_saved: vec![false; capacity],
             nodes: Vec::with_capacity(capacity),
             rewards: Vec::with_capacity(capacity.saturating_mul(agents)),
+            stacks: Vec::new(),
             edge_saved: vec![false; edges],
             edges: Vec::with_capacity(edges),
             free: Vec::with_capacity(capacity),
@@ -60,6 +69,7 @@ where
         j.on = true;
         j.nodes.clear();
         j.rewards.clear();
+        j.stacks.clear();
         j.edges.clear();
         j.free.clear();
         j.free.extend_from_slice(&self.free);
@@ -102,6 +112,12 @@ where
             ) {
                 dst.copy_from_slice(src);
             }
+            let per = self.stacks.per;
+            if per > 0
+                && let Some(src) = j.stacks.get(k * per..(k + 1) * per)
+            {
+                self.stacks.set_slot(s, src);
+            }
         }
         for &(i, edge) in &j.edges {
             if let Some(e) = self.edges.get_mut(i) {
@@ -130,6 +146,7 @@ where
             {
                 j.rewards.extend_from_slice(row);
             }
+            j.stacks.extend_from_slice(self.stacks.slot(s));
             if let Some(f) = j.node_saved.get_mut(s) {
                 *f = true;
             }

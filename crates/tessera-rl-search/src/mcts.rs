@@ -565,7 +565,10 @@ where
         // Every scratch row gets the root, by `restore_all`, which also
         // recovers a scratch pool poisoned by an earlier failed call (C3).
         self.pool.load_records.fill(record);
-        self.pool.scratch.restore_all(&self.pool.load_records)?;
+        for row in 0..self.pool.load_records.len() {
+            self.pool.stacks.load_from(row, idx(root));
+        }
+        self.pool.restore_rows()?;
         let width = idx(self.pool.actions);
         let masks = self.pool.scratch.outputs()?.masks();
         for (a, l) in self.legal.iter_mut().enumerate() {
