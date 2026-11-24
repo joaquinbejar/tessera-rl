@@ -61,6 +61,8 @@ use super::pipelined::Workers;
 use crate::buffer::Generations;
 use crate::buffer::batch::{BatchMode, BatchToken, BatchWaiter, publish};
 use crate::error::EngineError;
+use crate::heuristic::{NO_FAULT, fault_of};
+use crate::heuristic_rows::HeuristicRows;
 use crate::masks::MaskProvider;
 use crate::options::SyncOptions;
 use crate::pool::{EnvPool, Reseed, SyncRuntime};
@@ -193,6 +195,10 @@ pub struct AsyncPool<E: Environment, M: MaskProvider<E>> {
     /// The live watch (ADR-0083 item 7), served after each `recv` for the
     /// returned batch's ids only.
     watch: Option<Watch>,
+    /// The pool's `heuristic_actions` rows while the mode holds it
+    /// (ADR-0079, #347 stage B1): filled for the ids of each returned
+    /// batch.
+    heuristic: HeuristicRows,
 }
 
 impl<E: Environment, M: MaskProvider<E>> core::fmt::Debug for AsyncPool<E, M> {
@@ -258,14 +264,6 @@ where
                 "the pool already runs in Sync mode",
             ));
         }
-        // ADR-0079 stage A: the batch action copies do not skip and
-        // overwrite heuristic rows yet.
-        if self.policy.has_heuristic() {
-            return Err(AsyncBuildError {
-                error: EngineError::HeuristicSlotsUnsupported { mode: "Async" },
-                pool: Some(Box::new(self)),
-            });
-        }
         let n = usize::try_from(self.options.num_envs.get()).unwrap_or(usize::MAX);
         let batch = options.batch_size.get();
         if batch > n {
@@ -297,6 +295,9 @@ where
         let poisoned = pool.is_poisoned();
         // A watch attached in Sync mode moves with the pool.
         let watch = pool.watch.take();
+        // The `heuristic_actions` rows: the caller fills them while the
+        // workers share the pool.
+        let heuristic = HeuristicRows::take(&mut pool);
         #[cfg_attr(not(test), expect(unused_mut, reason = "set by tests only"))]
         let mut mode = BatchMode::new(
             pool,
@@ -328,6 +329,7 @@ where
             batch,
             poisoned,
             watch,
+            heuristic,
         })
     }
 }
@@ -558,6 +560,10 @@ where
         {}
         for flag in &*self.mode.in_flight {
             flag.store(false, core::sync::atomic::Ordering::Release);
+        }
+        // A fault never taken (a poisoned batch's other ids) is forgotten.
+        for cell in &*self.mode.faults {
+            cell.store(NO_FAULT, core::sync::atomic::Ordering::Relaxed);
         }
         self.stage.clear();
         self.submitted = 0;
@@ -866,6 +872,7 @@ where
                 .map_err(|_| EngineError::SequenceExhausted)?;
         }
         for &id in ids {
+            self.reset_fault(id);
             if let Some(flag) = self
                 .mode
                 .in_flight
@@ -894,6 +901,7 @@ where
             self.generations
                 .advance_id(usize::try_from(id).unwrap_or(usize::MAX))
                 .map_err(|_| EngineError::SequenceExhausted)?;
+            self.reset_fault(id);
             if let Some(flag) = self
                 .mode
                 .in_flight
@@ -906,6 +914,14 @@ where
         self.submitted = self.submitted.saturating_add(ids.len());
         self.outstanding = self.outstanding.saturating_add(ids.len());
         Ok(())
+    }
+
+    /// Clears `id`'s heuristic fault cell before it is published (ADR-0079,
+    /// #347 stage B1): no worker touches it until the id is claimed.
+    fn reset_fault(&self, id: u32) {
+        if let Some(cell) = self.mode.faults.get(usize::try_from(id).unwrap_or(usize::MAX)) {
+            cell.store(NO_FAULT, core::sync::atomic::Ordering::Relaxed);
+        }
     }
 
     /// Admits `id`, retrying while the ring is transiently full behind a
@@ -1306,6 +1322,7 @@ where
             .count
             .fetch_sub(self.stage.len(), core::sync::atomic::Ordering::AcqRel);
         self.stage.clear();
+        self.check_heuristics(&token)?;
         self.check_turns(&token)?;
         #[cfg(feature = "debug-checks")]
         {
@@ -1314,6 +1331,61 @@ where
             self.check_nan(&token)?;
         }
         Ok(Some(token))
+    }
+
+    /// Heuristic slots of the returned ids (ADR-0079 item 3, #347 stage
+    /// B1): every returned id's fault cell is taken; an invalid computed
+    /// action poisons the pool with its instance and slot, the lowest
+    /// instance of the batch first; otherwise the ids' heuristic rows are
+    /// copied to the `heuristic_actions` rows, on this thread. Nothing
+    /// without a heuristic slot.
+    fn check_heuristics(&mut self, token: &BatchToken<E, M>) -> Result<(), EngineError> {
+        let Some(route) = self.mode.pool.heuristic.as_ref() else {
+            return Ok(());
+        };
+        let mut code = NO_FAULT;
+        for id in token.ids() {
+            if let Some(cell) = self.mode.faults.get(usize::try_from(id).unwrap_or(usize::MAX)) {
+                code = code.min(cell.swap(NO_FAULT, core::sync::atomic::Ordering::Relaxed));
+            }
+        }
+        if let Some((instance, slot)) = fault_of(code) {
+            self.poisoned = true;
+            return Err(EngineError::HeuristicAction { instance, slot });
+        }
+        let layout = self.mode.pool.action_layout();
+        let heads = (layout.discrete.len(), layout.continuous.len());
+        let slots = route.slots.as_slice();
+        for id in token.ids() {
+            if let Some(rows) = token.covered_actions(id) {
+                let first = usize::try_from(id).unwrap_or(usize::MAX);
+                self.heuristic.copy(first, 1, E::MAX_AGENTS, slots, heads, rows);
+            }
+        }
+        Ok(())
+    }
+
+    /// The heuristic actions of the last step of each instance, `[N, A,
+    /// discrete heads]` (ADR-0079 item 3.5): an id's rows are written when
+    /// `recv` returns it; the others keep their last step's. `None` without
+    /// a heuristic slot.
+    #[must_use]
+    pub fn heuristic_actions(&self) -> Option<&[i32]> {
+        self.mode
+            .pool
+            .heuristic
+            .as_ref()
+            .map(|_| self.heuristic.discrete())
+    }
+
+    /// As [`Self::heuristic_actions`], for the continuous heads.
+    #[must_use]
+    pub fn heuristic_continuous(&self) -> Option<&[f32]> {
+        self.mode
+            .pool
+            .heuristic
+            .as_ref()
+            .map(|_| self.heuristic.continuous())
     }
 
     /// The turn order of a `Sequential` environment on the returned ids.
@@ -1424,12 +1496,14 @@ where
             mut runtime,
             mode,
             watch,
+            heuristic,
             ..
         } = self;
         let rt = runtime.0.take();
         match Arc::try_unwrap(mode) {
             Ok(mode) => {
                 let mut pool = mode.into_pool();
+                heuristic.put_back(&mut pool);
                 if let Some(rt) = rt {
                     pool.put_runtime(rt);
                 }
@@ -1458,6 +1532,7 @@ where
                         batch: 1,
                         poisoned: true,
                         watch: None,
+                        heuristic,
                     }),
                 })
             }

@@ -335,9 +335,7 @@ pub fn engine_kind(e: &EngineError) -> Kind {
         EngineError::InvalidRecord { .. }
         | EngineError::Invariant { .. }
         | EngineError::SnapshotRejected { .. } => Kind::Record,
-        EngineError::NoSnapshots
-        | EngineError::AdaptiveInAsync
-        | EngineError::HeuristicSlotsUnsupported { .. } => Kind::Capability,
+        EngineError::NoSnapshots | EngineError::AdaptiveInAsync => Kind::Capability,
         EngineError::PendingReset { .. } => Kind::PendingReset,
         EngineError::Poisoned
         | EngineError::Panicked

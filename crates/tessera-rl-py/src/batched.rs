@@ -143,6 +143,10 @@ pub(crate) trait AsyncOps: Send + Sync {
     /// tokens, views and deliveries as they were.
     fn load(&self, bytes: &[u8], limits: DecodeLimits) -> Result<(), BindError>;
     fn is_poisoned(&self) -> bool;
+    /// The last heuristic actions of every instance (ADR-0079 item 3.5,
+    /// #347 stage B1), little-endian `i32` `[N, A, discrete heads]`,
+    /// copied; `None` without a heuristic slot.
+    fn heuristic_actions(&self) -> Result<Option<Vec<u8>>, BindError>;
     /// Attaches a live watch (ADR-0083 item 7), served after each `recv`.
     fn watch(&self) -> Result<tessera_rl_engine::WatchHandle, BindError>;
     /// Drains and joins the workers; idempotent.
@@ -835,6 +839,17 @@ where
         })
     }
 
+    fn heuristic_actions(&self) -> Result<Option<Vec<u8>>, BindError> {
+        let state = self.lock()?;
+        let pool = state.pool.as_ref().ok_or_else(closed)?;
+        if pool.is_poisoned() {
+            return Err(EngineError::Poisoned.into());
+        }
+        Ok(pool
+            .heuristic_actions()
+            .map(|rows| rows.iter().flat_map(|v| v.to_le_bytes()).collect()))
+    }
+
     fn watch(&self) -> Result<tessera_rl_engine::WatchHandle, BindError> {
         let mut state = self.lock()?;
         let pool = state.pool.as_mut().ok_or_else(closed)?;
@@ -933,6 +948,10 @@ impl PoolOps for AsyncHandle {
 
     fn is_poisoned(&self) -> bool {
         self.ops.is_poisoned()
+    }
+
+    fn heuristic_actions(&self) -> Result<Option<Vec<u8>>, BindError> {
+        self.ops.heuristic_actions()
     }
 
     fn watch(&mut self) -> Result<tessera_rl_engine::WatchHandle, BindError> {

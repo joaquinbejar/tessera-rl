@@ -40,7 +40,8 @@ use super::rows::{Admitted, RawRows};
 use super::{EnvRawChunk, Raw, RawChunk};
 use crate::error::EngineError;
 use crate::masks::MaskProvider;
-use crate::pool::{EnvPool, step_chunk};
+use crate::heuristic::new_fault;
+use crate::pool::{EnvPool, step_chunk_at};
 use crate::record::Record;
 use crate::sys::id_buffers::{BufferHandle, IdBufferPool};
 use crate::sys::ring::{CompletionRing, RingError, SubmitRing};
@@ -64,6 +65,10 @@ pub(crate) struct BatchMode<E: Environment, M: MaskProvider<E>> {
     pub(crate) live: Box<[AtomicBool]>,
     /// The id is sent (or reset) and not yet returned by `recv`.
     pub(crate) in_flight: Box<[AtomicBool]>,
+    /// Per id, its heuristic fault cell (ADR-0079, #347 stage B1): reset
+    /// when the id is sent, written by the worker that steps it, and taken
+    /// when `recv` returns it.
+    pub(crate) faults: Box<[crate::sys::sync::AtomicU64]>,
     /// A step of a claimed id panicked (sticky until recovery).
     pub(crate) panicked: AtomicBool,
     /// Ids a worker finished (pushed to completion), for quiescence.
@@ -173,6 +178,7 @@ where
             job: placeholder(),
             live: (0..n).map(flags).collect(),
             in_flight: (0..n).map(flags).collect(),
+            faults: (0..n).map(|_| new_fault()).collect(),
             panicked: AtomicBool::new(false),
             stepped: AtomicUsize::new(0),
             ready: Arc::new(ReadyCount {
@@ -447,7 +453,8 @@ unsafe fn run_drain<E: Environment, M: MaskProvider<E>>(data: *const (), worker:
     if worker >= mode.workers {
         return;
     }
-    let ctx = mode.pool.step_ctx();
+    // One fault cell per instance: ids of different sends share a claim.
+    let ctx = mode.pool.step_ctx(&mode.faults);
     #[cfg(test)]
     job_panic(mode, worker);
     let mut run = [0u32; CLAIM_RUN];
@@ -484,7 +491,7 @@ unsafe fn run_drain<E: Environment, M: MaskProvider<E>>(data: *const (), worker:
             // This worker's transform scratch is used by this view alone.
             let view = unsafe { mode.raw.range_view_on(start..end, Some(worker)) };
             if let Some(mut chunk) = view
-                && !crate::sys::catch(|| step_chunk::<E, M>(&ctx, &mut chunk))
+                && !crate::sys::catch(|| step_chunk_at::<E, M>(&ctx, &mut chunk, start))
             {
                 mode.panicked.store(true, Ordering::Relaxed);
             }
@@ -809,6 +816,17 @@ impl<E: Environment, M: MaskProvider<E>> BatchToken<E, M> {
         #[expect(unsafe_code, reason = "audited module: token-guarded views")]
         let view = unsafe { shared_view(raw, &r, per) };
         Some(view)
+    }
+
+    /// The engine's action copy of `id` (discrete and continuous rows,
+    /// `[A, heads]`), for an id taken from this token's own entries: the
+    /// heuristic rows `recv` copies out (ADR-0079 item 3.5).
+    pub(crate) fn covered_actions(&self, id: u32) -> Option<(&[i32], &[f32])> {
+        let raw = &self.mode.raw;
+        let (dh, ch) = (raw.agents.saturating_mul(raw.dh), raw.agents.saturating_mul(raw.ch));
+        let discrete = self.view_covered(&raw.discrete, id, dh)?;
+        let continuous = self.view_covered(&raw.continuous, id, ch)?;
+        Some((discrete, continuous))
     }
 
     fn agents(&self) -> usize {

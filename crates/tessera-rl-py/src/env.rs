@@ -331,7 +331,8 @@ pub(crate) trait PoolOps: Send {
     }
     /// The last step's heuristic actions (ADR-0079 item 3.5), `[N, A,
     /// discrete heads]` little-endian `i32`, copied; `None` without a
-    /// heuristic slot. The split-phase modes refuse heuristic slots.
+    /// heuristic slot. The split-phase handles read their wrapper's rows
+    /// (#347 stage B1).
     fn heuristic_actions(&self) -> Result<Option<Vec<u8>>, BindError> {
         Ok(None)
     }

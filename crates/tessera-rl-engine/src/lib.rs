@@ -28,6 +28,8 @@ mod fast_path_tests;
 #[cfg(test)]
 mod fault_tests;
 mod heuristic;
+#[cfg(not(loom))]
+mod heuristic_rows;
 #[cfg(feature = "host")]
 mod host;
 mod layout;
