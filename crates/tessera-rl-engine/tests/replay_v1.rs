@@ -460,7 +460,10 @@ fn test_replay_seek_keyframe_archive_source_without_the_archive_refused_pool_unt
     let mut cur = replay.cursor(&pool).unwrap();
     assert!(matches!(
         replay.seek(&mut pool, &mut cur, 0),
-        Err(ReplayError::Engine(EngineError::ArchiveMismatch { found: 0, .. }))
+        Err(ReplayError::Engine(EngineError::ArchiveMismatch {
+            found: 0,
+            ..
+        }))
     ));
     let after: Vec<u64> = (0..N).map(|i| pool.state_hash(i).unwrap().get()).collect();
     assert_eq!(after, before);

@@ -342,7 +342,10 @@ fn test_archive_replay_seek_restores_the_archive_source() {
     let mut bare = file.cursor(&q).unwrap();
     assert!(matches!(
         file.seek(&mut q, &mut bare, periodic),
-        Err(ReplayError::Engine(EngineError::ArchiveMismatch { found: 0, .. }))
+        Err(ReplayError::Engine(EngineError::ArchiveMismatch {
+            found: 0,
+            ..
+        }))
     ));
     let after: Vec<u64> = (0..N).map(|i| q.state_hash(i).unwrap().get()).collect();
     assert_eq!(after, before);

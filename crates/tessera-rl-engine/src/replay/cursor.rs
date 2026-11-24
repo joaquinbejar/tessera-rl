@@ -13,9 +13,9 @@ use core::ops::ControlFlow;
 use tessera_rl_core::config::CanonicalConfig;
 use tessera_rl_core::{AdaptiveValues, Persist, RecordLayout, Validate};
 
+use crate::archive::Archive;
 use crate::masks::PersistMask;
 use crate::persist::u64_of;
-use crate::archive::Archive;
 use crate::pool::EnvPool;
 use crate::record::PoolContext;
 

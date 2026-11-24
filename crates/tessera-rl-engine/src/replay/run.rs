@@ -3,10 +3,10 @@
 //! Replaying a file into a pool and the divergence check (ADR-0072 section
 //! 5).
 
-use tessera_rl_core::config::{CanonicalConfig, canonical_bytes};
-use tessera_rl_core::encoding::{Canonical, decode_from_slice};
 use core::any::Any;
 use std::sync::Arc;
+use tessera_rl_core::config::{CanonicalConfig, canonical_bytes};
+use tessera_rl_core::encoding::{Canonical, decode_from_slice};
 
 use tessera_rl_core::{AdaptiveValues, Environment, Persist, RecordLayout, StateHash, Validate};
 
