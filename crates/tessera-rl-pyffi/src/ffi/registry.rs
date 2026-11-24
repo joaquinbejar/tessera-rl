@@ -33,6 +33,12 @@
 //! own count. Wheels built before #349 never attach: they count only their
 //! own engines, as before.
 //!
+//! The fallback warning goes through Python's `warnings` machinery: under
+//! `-W error` (or a filter that turns `RuntimeWarning` into an error) it
+//! raises, and the import of that wheel fails with it. That is deliberate:
+//! a user who asked for warnings to be errors gets the error rather than a
+//! wheel that silently counts alone.
+//!
 //! **Fork.** A forked child inherits the count, including engines whose
 //! workers do not exist in the child; those are refused there (#93), and
 //! the stale count only makes a new pool in the child run unpinned.

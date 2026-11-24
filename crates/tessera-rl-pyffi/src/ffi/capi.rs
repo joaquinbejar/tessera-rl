@@ -398,6 +398,9 @@ pub(crate) fn import_module<'py>(_g: Gil<'py>, name: &CStr) -> CResult<Mine<'py>
 /// reads and may write `sys.modules`). Owned as a user object: the entry
 /// may be anything a user stored there.
 pub(crate) fn add_module<'py>(g: Gil<'py>, name: &CStr) -> CResult<Mine<'py>> {
+    // `PyImport_AddModule` returns a borrowed reference; it is in the
+    // stable ABI of the abi3-py311 floor. When the floor reaches 3.13, use
+    // `PyImport_AddModuleRef` (a new reference) and drop the incref below.
     // SAFETY: attached; a C string.
     let borrowed = unsafe { thunks::c_import_add_module(name.as_ptr()) };
     if borrowed.is_null() {
