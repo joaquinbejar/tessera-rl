@@ -9,6 +9,10 @@ the API is not stable, and any 0.x release may break it.
 
 ## [Unreleased]
 
+### Added
+
+- `tessera-rl-ops`, logistics and scheduling environments (SPEC 16, #383), stage 1: `tessera/JobShop-v1`, job shop scheduling with one dispatching agent. Instances are generated at reset from the instance seed (`jobs` 2 to 64, `machines` 2 to 32, durations `1..=max_duration`); the action dispatches a job's next operation (`Discrete(jobs)`, masked to unfinished jobs); the reward is minus the makespan increase, so the return is minus the final makespan; integer state (4,556 bytes) and observations; SPT, MWKR and FIFO dispatching rules (SPT is the `Heuristic`); golden, continuation, persistence and allocation tests and a Criterion bench. Python registration follows with the vehicle routing stages.
+
 ### Fixed
 
 - Async replay: a step panic that the replay observes before the file recorded it (worker timing) no longer reports `UnexpectedPoison`. Replay skips the steps, resets, receives, checkpoints and periodic keyframes up to the recorded `Poisoned`, counts them in the new `ReplaySummary::unchecked_before_poison`, and such a replay is not `verified()`; any other event in between still diverges (#415, ADR-0072 erratum 2).

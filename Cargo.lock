@@ -1168,6 +1168,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "tessera-rl-ops"
+version = "0.3.0"
+dependencies = [
+ "criterion",
+ "tessera-rl-core",
+ "tessera-rl-engine",
+ "tessera-rl-macros",
+ "tessera-rl-num",
+]
+
+[[package]]
 name = "tessera-rl-py"
 version = "0.3.0"
 dependencies = [
