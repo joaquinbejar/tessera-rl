@@ -38,6 +38,10 @@ const STEPS: usize = 20;
 const BATCH: usize = 4;
 /// `kill_at` of a config whose heuristic writes an out-of-range action.
 const OUT_OF_RANGE: i32 = -1_000;
+/// `length` of a config whose heuristic writes an out-of-range action only
+/// from the second step of an episode on (`steps >= 1`); the test sets
+/// `kill_at` to `i32::MAX`, so agent 1 lives and acts on that step.
+const LATE_LENGTH: u32 = 9;
 
 /// The heuristic of `tests/heuristic_slots.rs`: it draws from its RNG, so
 /// the heuristic stream is observable (agent 0 never plays the illegal 2);
@@ -45,13 +49,14 @@ const OUT_OF_RANGE: i32 = -1_000;
 impl Heuristic for Counter {
     fn act(
         cfg: &CountConfig,
-        _: &Counts,
+        state: &Counts,
         agent: AgentSlot,
         rng: &mut StepRng,
         out: &mut ActionWriter<'_>,
     ) {
         let draw = rng.below_u32(NonZeroU32::new(2).unwrap_or(NonZeroU32::MIN));
-        let action = if cfg.kill_at == OUT_OF_RANGE {
+        let late = cfg.length == LATE_LENGTH && state.steps >= 1;
+        let action = if cfg.kill_at == OUT_OF_RANGE || late {
             7
         } else {
             i32::try_from(draw).unwrap_or(0) + i32::try_from(agent.index()).unwrap_or(0)
@@ -300,6 +305,53 @@ fn test_heuristic_split_async_invalid_action_poisons_with_the_lowest_instance() 
     // A full reset recovers, and forgets the fault of the batch.
     drop(pool.reset_all(Reseed::Keep).unwrap());
     assert!(!pool.is_poisoned());
+    // The lowest instance is reported whatever the submit order.
+    pool.send(&[5, 11], input(&[0; 2 * A])).unwrap();
+    assert_eq!(
+        pool.recv().err(),
+        Some(EngineError::HeuristicAction {
+            instance: 5,
+            slot: 1
+        })
+    );
+}
+
+#[test]
+fn test_heuristic_split_pipelined_recovered_half_steps_without_a_stale_fault() {
+    // The half's fault cell is cleared at each publish: after a fault and a
+    // full reset, the next step of that half must not report the old fault.
+    let late = CountConfig {
+        length: LATE_LENGTH,
+        kill_at: i32::MAX,
+        ..cfg()
+    };
+    let mut pool = heuristic(late, Schedule::Static)
+        .pipelined(PipelinedOptions::new(workers(2)))
+        .unwrap();
+    let halves = pool.halves();
+    let len = usize::try_from(halves[1].end - halves[1].start).unwrap();
+    let [a, b] = pool.reset_all(Reseed::Keep).unwrap();
+    drop(a);
+    // Step 1 is clean (steps == 0); step 2 faults.
+    pool.send(b, input(&vec![0; len * A]))
+        .map_err(|e| e.error)
+        .unwrap();
+    let b = pool.recv().unwrap();
+    pool.send(b, input(&vec![0; len * A]))
+        .map_err(|e| e.error)
+        .unwrap();
+    let faulted = pool.recv();
+    assert!(
+        matches!(faulted, Err(EngineError::HeuristicAction { .. })),
+        "{:?}",
+        faulted.as_ref().err()
+    );
+    let [a, b] = pool.reset_all(Reseed::Keep).unwrap();
+    drop(a);
+    pool.send(b, input(&vec![0; len * A]))
+        .map_err(|e| e.error)
+        .unwrap();
+    assert!(pool.recv().is_ok());
 }
 
 #[test]
