@@ -74,6 +74,7 @@ fn observations(pool: &EnvPool<CartPole>) -> Result<Vec<f32>, EngineError> {
 /// # Errors
 ///
 /// An engine error from the pool.
+#[expect(clippy::many_single_char_names, reason = "PPO notation: n envs, b batch, x obs")]
 pub fn train(config: &Config) -> Result<Report, EngineError> {
     let device = Device::flex().autodiff();
     device.seed(config.seed);
@@ -103,8 +104,8 @@ pub fn train(config: &Config) -> Result<Report, EngineError> {
         };
         for _ in 0..t_len {
             let x = Tensor::<2>::from_data(TensorData::new(obs.clone(), [n, OBS]), &device);
-            let probs = softmax(model.logits(x.clone()), 1).into_data().to_vec::<f32>().unwrap_or_default();
-            let values = model.value(x).into_data().to_vec::<f32>().unwrap_or_default();
+            let probs = softmax(model.logits(x.clone()), 1).into_data().try_to_vec::<f32>().unwrap_or_default();
+            let values = model.value(x).into_data().try_to_vec::<f32>().unwrap_or_default();
             let mut acts = Vec::with_capacity(n);
             for (i, row) in probs.chunks_exact(ACTIONS).enumerate() {
                 let u = rng.unit() as f32;
@@ -130,7 +131,7 @@ pub fn train(config: &Config) -> Result<Report, EngineError> {
             steps += NUM_ENVS;
         }
         let last_x = Tensor::<2>::from_data(TensorData::new(obs.clone(), [n, OBS]), &device);
-        let last_v = model.value(last_x).into_data().to_vec::<f32>().unwrap_or_default();
+        let last_v = model.value(last_x).into_data().try_to_vec::<f32>().unwrap_or_default();
         let (adv, ret) = gae(&b, &last_v, n, t_len);
         let total = adv.len();
         let size = total / MINIBATCHES;
@@ -157,6 +158,7 @@ pub fn train(config: &Config) -> Result<Report, EngineError> {
 
 /// Generalized advantage estimation; an ended step does not bootstrap
 /// (`SameStep` auto-reset: the next observation starts a new episode).
+#[expect(clippy::many_single_char_names, reason = "GAE notation")]
 fn gae(b: &Batch, last_v: &[f32], n: usize, t_len: usize) -> (Vec<f32>, Vec<f32>) {
     let mut adv = vec![0.0f32; t_len * n];
     for i in 0..n {
@@ -208,7 +210,7 @@ fn minibatch_loss(
     let ret_t = Tensor::<1>::from_data(TensorData::new(take(ret, chunk, 1), [m]), device);
 
     let logp_all = log_softmax(model.logits(x.clone()), 1);
-    let logp = logp_all.clone().gather(1, a).squeeze(1);
+    let logp = logp_all.clone().gather(1, a).squeeze_dim::<1>(1);
     let ratio = (logp - old).exp();
     let s1 = ratio.clone() * adv_t.clone();
     let s2 = ratio.clamp(1.0 - CLIP, 1.0 + CLIP) * adv_t;
@@ -219,7 +221,7 @@ fn minibatch_loss(
     let finite = loss
         .clone()
         .into_data()
-        .to_vec::<f32>()
+        .try_to_vec::<f32>()
         .unwrap_or_default()
         .iter()
         .all(|v| v.is_finite());

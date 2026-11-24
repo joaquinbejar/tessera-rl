@@ -41,6 +41,6 @@ impl ActorCritic {
     pub fn value(&self, x: Tensor<2>) -> Tensor<1> {
         let h = self.c1.forward(x).tanh();
         let h = self.c2.forward(h).tanh();
-        self.c3.forward(h).squeeze(1)
+        self.c3.forward(h).squeeze_dim::<1>(1)
     }
 }

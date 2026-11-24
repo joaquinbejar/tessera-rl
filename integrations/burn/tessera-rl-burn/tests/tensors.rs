@@ -2,7 +2,7 @@
 
 //! The tensors equal the pool's output slices (#367).
 
-#![expect(clippy::unwrap_used, clippy::indexing_slicing, reason = "test assertions")]
+#![expect(clippy::unwrap_used, reason = "test assertions")]
 
 use core::num::NonZeroU32;
 
@@ -32,9 +32,9 @@ fn test_adapter_cartpole_observations_equal_the_leaf_bytes() {
     let mut p = cartpole(5);
     p.step(ActionInput { discrete: &[0, 1, 0, 1, 1], continuous: &[] }).unwrap();
     let out = p.outputs().unwrap();
-    let t = f32_leaf(&out, 0, 4, &device).unwrap();
+    let t = f32_leaf(out, 0, 4, &device).unwrap();
     assert_eq!(t.dims(), [5, 4]);
-    let got = t.into_data().to_vec::<f32>().unwrap();
+    let got = t.into_data().try_to_vec::<f32>().unwrap();
     let want: Vec<f32> = out
         .observation(0)
         .unwrap()
@@ -44,7 +44,7 @@ fn test_adapter_cartpole_observations_equal_the_leaf_bytes() {
         .map(|c| f32::from_le_bytes(*c))
         .collect();
     assert_eq!(got.iter().map(|x| x.to_bits()).collect::<Vec<_>>(), want.iter().map(|x| x.to_bits()).collect::<Vec<_>>());
-    let r = rewards(&out, &device).unwrap().into_data().to_vec::<f32>().unwrap();
+    let r = rewards(out, &device).unwrap().into_data().try_to_vec::<f32>().unwrap();
     assert_eq!(r, out.rewards());
     let done = flags(out.episode_terminated(), &device).unwrap();
     assert_eq!(done.dims(), [5]);
@@ -61,9 +61,9 @@ fn test_adapter_tag_masks_have_one_row_per_slot() {
     p.reset_all(Reseed::Keep).unwrap();
     let out = p.outputs().unwrap();
     let rows = out.masks().len() / 5;
-    let m = masks(&out, 5, &device).unwrap();
+    let m = masks(out, 5, &device).unwrap();
     assert_eq!(m.dims(), [rows, 5]);
-    let got = m.into_data().to_vec::<bool>().unwrap();
+    let got = m.into_data().try_to_vec::<bool>().unwrap();
     assert_eq!(got, out.masks().iter().map(|b| b.get()).collect::<Vec<_>>());
     assert_eq!(rows, 3 * tessera_rl_classic::tag::MAX_AGENTS);
 }
@@ -73,9 +73,9 @@ fn test_adapter_refuses_bad_shapes_and_missing_leaves() {
     let device = dev();
     let p = cartpole(2);
     let out = p.outputs().unwrap();
-    assert_eq!(f32_leaf(&out, 3, 4, &device).unwrap_err(), AdapterError::NoLeaf { leaf: 3 });
-    assert!(matches!(f32_leaf(&out, 0, 3, &device), Err(AdapterError::Shape { .. })));
-    assert!(matches!(f32_leaf(&out, 0, 0, &device), Err(AdapterError::Shape { .. })));
+    assert_eq!(f32_leaf(out, 3, 4, &device).unwrap_err(), AdapterError::NoLeaf { leaf: 3 });
+    assert!(matches!(f32_leaf(out, 0, 3, &device), Err(AdapterError::Shape { .. })));
+    assert!(matches!(f32_leaf(out, 0, 0, &device), Err(AdapterError::Shape { .. })));
     assert_eq!(flags(&[], &device).unwrap_err(), AdapterError::Empty);
 }
 
