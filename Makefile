@@ -167,15 +167,16 @@ py-test-host:
 ORDERBOOK = examples/host_orderbook/Cargo.toml
 # The Burn integration (#367): its own workspace and lock, never part of the
 # root workspace. burn-check: fmt, clippy, tests, cargo deny (licences and
-# bans against the root deny.toml) and the example's smoke run (2 rollouts,
-# finite losses). burn-gate: the example sanity gate on 3 seeds (not a SPEC 18
-# learning test).
+# bans against integrations/burn/deny.toml: the root policy plus one licence
+# exception) and the example's smoke run (2 rollouts, finite losses).
+# burn-gate: the example sanity gate on 3 seeds (not a SPEC 18 learning test),
+# about 5 s of CPU per seed.
 BURN = integrations/burn/Cargo.toml
 burn-check:
 	cargo fmt --manifest-path $(BURN) --all -- --check
 	cargo clippy --manifest-path $(BURN) --all-targets --locked -- -D warnings
 	cargo test --manifest-path $(BURN) --locked
-	cargo deny --manifest-path $(BURN) --config deny.toml check licenses bans
+	cargo deny --manifest-path $(BURN) --config integrations/burn/deny.toml check licenses bans
 	cargo run --manifest-path $(BURN) --release --locked -p ppo-cartpole -- --smoke
 burn-gate:
 	for seed in 1 2 3; do cargo run --manifest-path $(BURN) --release --locked -p ppo-cartpole -- --gate --seed $$seed || exit 1; done

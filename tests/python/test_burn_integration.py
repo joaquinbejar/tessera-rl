@@ -37,12 +37,22 @@ def test_burn_crates_are_unpublished():
         assert "publish.workspace = true" in (BURN / crate / "Cargo.toml").read_text()
 
 
-def test_burn_ci_job_is_separate_and_the_nightly_gate_reports_only():
+def test_burn_ci_job_is_separate_and_runs_the_sanity_gate():
     job = CI.split("\n  burn-check:\n", 1)[1].split("\n\n  ", 1)[0]
     assert "manifest-path: integrations/burn/Cargo.toml" in job
+    assert "arguments: --config integrations/burn/deny.toml" in job
     assert job.count("--manifest-path integrations/burn/Cargo.toml") == 4
+    assert "      - run: make burn-gate\n" in job
     others = CI.replace(job, "")
     assert "integrations/burn" not in others.replace("burn-check", "")
-    nightly = NIGHTLY.split("\n  burn-sanity:\n", 1)[1]
-    assert "    continue-on-error: true\n" in nightly
-    assert "make burn-gate" in nightly
+    assert "burn" not in NIGHTLY
+
+
+def test_burn_deny_policy_is_the_root_one_plus_one_exception():
+    local = (BURN / "deny.toml").read_text()
+    root = (ROOT / "deny.toml").read_text()
+    exception = re.findall(r"^exceptions = .*$", local, re.M)
+    assert exception == ['exceptions = [{ crate = "colored", allow = ["MPL-2.0"] }]']
+    assert "MPL-2.0" not in root
+    body = lambda t: [l for l in t.splitlines() if l.strip() and not l.startswith("#")]
+    assert [l for l in body(local) if not l.startswith("exceptions")] == body(root)

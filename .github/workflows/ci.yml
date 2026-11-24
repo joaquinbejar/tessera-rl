@@ -296,9 +296,12 @@ jobs:
         with:
           manifest-path: integrations/burn/Cargo.toml
           command: check
-          arguments: --config deny.toml
+          arguments: --config integrations/burn/deny.toml
           command-arguments: licenses bans
       - run: cargo run --manifest-path integrations/burn/Cargo.toml --release --locked -p ppo-cartpole -- --smoke
+      # The example sanity gate on 3 seeds (about 5 s CPU each; not a SPEC 18
+      # learning test).
+      - run: make burn-gate
 
   deny:
     runs-on: [self-hosted, xaskar]

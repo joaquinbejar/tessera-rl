@@ -71,12 +71,3 @@ jobs:
           name: learning-test
           path: learning-test.json
 
-  # The Burn PPO example's sanity gate (#367): 3 seeds, mean return of the
-  # last 20 episodes >= 195 within 100k steps. Report-only: it never fails the
-  # night (not a SPEC 18 learning test).
-  burn-sanity:
-    runs-on: [self-hosted, xaskar]
-    continue-on-error: true
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - run: make burn-gate
