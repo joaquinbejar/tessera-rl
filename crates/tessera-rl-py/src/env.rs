@@ -614,20 +614,19 @@ fn check_spin(args: &PoolArgs) -> Result<(), BindError> {
 /// Sync mode, one worker in the split-phase modes), or the engine default
 /// when none was given.
 fn resolve_workers(args: &PoolArgs) -> Result<Option<NonZeroUsize>, BindError> {
-    match args.workers {
-        Some(w) => Ok(NonZeroUsize::new(w)),
-        None => {
-            let num_envs = NonZeroU32::new(args.num_envs)
-                .ok_or_else(|| BindError::Argument("num_envs must be at least 1".to_owned()))?;
-            let chunk = match args.chunk_size {
-                Some(c) => NonZeroU32::new(c).ok_or_else(|| {
-                    BindError::Argument("chunk_size must be at least 1".to_owned())
-                })?,
-                None => PoolOptions::new(num_envs, Seed::new(0)).chunk_size,
-            };
-            Ok(Some(tessera_rl_engine::default_workers(num_envs, chunk)))
-        }
+    if let Some(w) = args.workers {
+        return Ok(NonZeroUsize::new(w));
     }
+    let num_envs = NonZeroU32::new(args.num_envs)
+        .ok_or_else(|| BindError::Argument("num_envs must be at least 1".to_owned()))?;
+    let chunk = args.chunk_size.map_or_else(
+        || Ok(PoolOptions::new(num_envs, Seed::new(0)).chunk_size),
+        |c| {
+            NonZeroU32::new(c)
+                .ok_or_else(|| BindError::Argument("chunk_size must be at least 1".to_owned()))
+        },
+    )?;
+    Ok(Some(tessera_rl_engine::default_workers(num_envs, chunk)))
 }
 
 /// Sets the spin budget when the caller gave one.
