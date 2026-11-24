@@ -253,7 +253,7 @@ pub fn write(plan: &Plan) -> Result<(), ToolError> {
 ///
 /// # Errors
 ///
-/// The errors of [`plan`] and [`write`].
+/// The errors of [`plan`] and [`write`](fn@write).
 pub fn run(args: &NewArgs, cwd: &Path, out: &mut impl Write) -> Result<(), ToolError> {
     let plan = plan(args, cwd)?;
     write(&plan)?;

@@ -135,7 +135,7 @@ where
     E: Persist,
     E::Config: CanonicalConfig,
 {
-    /// [`Archive::new`] from untrusted records ([`DecodedRecord`], from
+    /// [`Archive::new`] from untrusted records ([`DecodedRecord`](crate::DecodedRecord), from
     /// bytes or a file: their canonical encoding is already checked). The
     /// same `Validate` checks run on every entry.
     ///
