@@ -10,6 +10,13 @@ reviewed tree: the frozen SHA.
 
 - [ ] All release PRs are merged: the facade prelude and `debug-checks`, the
       README, the CI fork guard, and this CHANGELOG and checklist.
+- [ ] `python3 scripts/changelog_draft.py --check CHANGELOG.md <last tag>`
+      exits 0: every feat, fix, perf, deprecate, breaking and
+      non-conventional commit since the last tag is mentioned (by its PR or
+      issue number) in `[Unreleased]`. Add an entry for each listed commit,
+      or justify its omission in the release PR. `python3
+      scripts/changelog_draft.py <last tag>` prints a draft to start from
+      (SPEC 20.1, #350).
 - [ ] The CHANGELOG heading carries the actual release date
       (`## [0.1.0] - 2026-11-04`). If the release slips, the last PR before
       the freeze corrects it. Nothing changes the tree after the freeze.
