@@ -134,3 +134,73 @@ fn test_host_outputs_pending_reset_follows_episode_ends() {
         }
     }
 }
+
+/// Every field a pool can lay out, with leaf indices up to `MAX_LEAVES`.
+fn all_fields() -> Vec<OutputField> {
+    let mut v = vec![
+        OutputField::Rewards,
+        OutputField::AgentTerminated,
+        OutputField::AgentTruncated,
+        OutputField::Died,
+        OutputField::Spawned,
+        OutputField::InvalidAgentEvent,
+        OutputField::Alive,
+        OutputField::Acting,
+        OutputField::Generations,
+        OutputField::EpisodeTerminated,
+        OutputField::EpisodeTruncated,
+        OutputField::EpisodeReturn,
+        OutputField::EpisodeLength,
+        OutputField::EpisodeIllegalActions,
+        OutputField::EpisodeInvalidAgentEvents,
+        OutputField::Masks,
+        OutputField::Aborted,
+        OutputField::AbortCode,
+        OutputField::PendingReset,
+    ];
+    for leaf in 0..tessera_rl_engine::MAX_LEAVES {
+        v.push(OutputField::Observation(leaf));
+        v.push(OutputField::TerminalObservation(leaf));
+    }
+    v
+}
+
+/// Asserts observation leaves start on an `OUTPUT_ALIGN` boundary and every
+/// other region on `OUTPUT_MIN_ALIGN` (SPEC 5.2); returns how many regions
+/// it checked.
+fn assert_page_aligned(storage: &tessera_rl_engine::OutputStorage) -> usize {
+    let mut seen = 0;
+    for field in all_fields() {
+        if let Some(region) = storage.region(field) {
+            let align = match field {
+                OutputField::Observation(_) | OutputField::TerminalObservation(_) => {
+                    tessera_rl_engine::OUTPUT_ALIGN
+                }
+                _ => tessera_rl_engine::OUTPUT_MIN_ALIGN,
+            };
+            assert_eq!(
+                region.ptr.align_offset(align),
+                0,
+                "{field:?} is not {align}-byte aligned"
+            );
+            seen += 1;
+        }
+    }
+    seen
+}
+
+#[test]
+fn test_host_outputs_regions_aligned_to_spec_true() {
+    for mode in [AutoReset::NextStep, AutoReset::SameStep] {
+        let p = pool(8, mode, false);
+        let storage = p.outputs().unwrap().storage();
+        assert!(assert_page_aligned(&storage) >= 10);
+        for field in [
+            OutputField::Aborted,
+            OutputField::AbortCode,
+            OutputField::PendingReset,
+        ] {
+            assert!(storage.region(field).is_some(), "{field:?}");
+        }
+    }
+}

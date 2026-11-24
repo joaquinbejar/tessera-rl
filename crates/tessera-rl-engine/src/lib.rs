@@ -57,7 +57,9 @@ pub mod rings {
 pub use buffer::batch::{BatchRow, BatchToken, BatchWaiter};
 #[cfg(not(loom))]
 pub use buffer::pipeline::{HalfToken, Waiter};
-pub use buffer::{OutputDtype, OutputField, OutputRegion, OutputStorage};
+pub use buffer::{
+    OUTPUT_ALIGN, OUTPUT_MIN_ALIGN, OutputDtype, OutputField, OutputRegion, OutputStorage,
+};
 pub use error::{EngineError, NanSite};
 #[cfg(feature = "host")]
 pub use host::{
