@@ -174,18 +174,17 @@ pub fn train(config: &Config) -> Result<Report, EngineError> {
 /// One step of the rollout: samples an action per instance, steps the pool,
 /// records the transition and any ended episode's return; returns the next
 /// observations.
-#[expect(clippy::many_single_char_names, reason = "PPO notation")]
 fn act_and_step(
     model: &ActorCritic,
     pool: &mut EnvPool<CartPole>,
-    obs: Vec<f32>,
+    obs: &[f32],
     rng: &mut Rng,
     b: &mut Batch,
     returns: &mut Vec<f32>,
     device: &Device,
 ) -> Result<Vec<f32>, EngineError> {
     let n = obs.len() / OBS;
-    let x = Tensor::<2>::from_data(TensorData::new(obs.clone(), [n, OBS]), device);
+    let x = Tensor::<2>::from_data(TensorData::new(obs.to_vec(), [n, OBS]), device);
     let probs = softmax(model.logits(x.clone()), 1)
         .into_data()
         .try_to_vec::<f32>()
@@ -206,7 +205,7 @@ fn act_and_step(
         b.actions.push(i64::try_from(a).unwrap_or(0));
         acts.push(i32::try_from(a).unwrap_or(0));
     }
-    b.obs.extend_from_slice(&obs);
+    b.obs.extend_from_slice(obs);
     pool.step(ActionInput {
         discrete: &acts,
         continuous: &[],
