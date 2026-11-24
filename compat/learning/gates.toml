@@ -40,9 +40,12 @@ solved = 1.0
 min_effect = 0.10
 
 [paddleduel]
-# An 11-0 win against the scripted paddle, hit rewards (0.1 each) aside; a
-# random policy loses about 0-11. Hit rewards let a trained policy score
-# above it (calibrated median 13.8), so this is only the min_effect
-# reference of the learns check; the nightly threshold is the real bar.
-solved = 11.0
+# An upper bound on the reachable episode return: 11 points (an 11-0 win)
+# plus 0.1 per own hit (bounce = 1 tenth). The ball's horizontal speed is
+# always 6 and a return crosses 568 px between the faces each way, so own
+# hits are at least 2 * ceil(568 / 6) = 190 frames apart; an episode is at
+# most 5000 decisions * 4 frames = 20000 frames (the Gymnasium limit), so at
+# most floor(19999 / 190) + 1 = 106 own hits: 11 + 106 * 0.1 = 21.6. A random
+# policy loses about 0-11.
+solved = 21.6
 min_effect = 0.10
