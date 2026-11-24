@@ -13,6 +13,8 @@ ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts" / "changelog_draft.py"
 spec = importlib.util.spec_from_file_location("changelog_draft", SCRIPT)
 cd = importlib.util.module_from_spec(spec)
+# Registered first: @dataclass looks its module up in sys.modules.
+sys.modules[spec.name] = cd
 spec.loader.exec_module(cd)
 
 
