@@ -22,6 +22,7 @@
 
 pub mod lane;
 pub mod physics;
+mod render;
 
 use tessera_rl_core::io::{ActionWriter, Actions, ObsWriter};
 use tessera_rl_core::space::{BoxBounds, DType, Space};

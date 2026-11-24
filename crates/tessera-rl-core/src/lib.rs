@@ -33,6 +33,7 @@ pub mod host_snapshot;
 pub mod io;
 pub mod leaf;
 pub mod refusals;
+pub mod render;
 pub mod space;
 pub mod step_out;
 

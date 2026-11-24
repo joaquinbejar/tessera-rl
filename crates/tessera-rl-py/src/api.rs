@@ -1275,6 +1275,51 @@ pub(crate) fn close<'py>(g: Gil<'py>, inner: &Inner) -> CResult<Mine<'py>> {
     Ok(capi::none(g))
 }
 
+/// `canvas() -> (width, height) | None`: the canvas of a pool that renders
+/// (ADR-0083).
+pub(crate) fn canvas<'py>(g: Gil<'py>, inner: &Inner) -> CResult<Mine<'py>> {
+    inner.with(g, |ops| match ops.canvas() {
+        None => Ok(capi::none(g)),
+        Some((w, h)) => capi::tuple(
+            g,
+            vec![
+                capi::int_u64(g, u64::from(w))?,
+                capi::int_u64(g, u64::from(h))?,
+            ],
+        ),
+    })
+}
+
+/// `render(ids) -> (bytes, overflowed)`: the RGB8 frames of `ids`, drawn
+/// from their snapshot records (ADR-0083), and whether each scene
+/// overflowed.
+pub(crate) fn render<'py>(g: Gil<'py>, inner: &Inner, args: Ref<'_>) -> CResult<Mine<'py>> {
+    let a: [Ref<'_>; 1] = exactly(g, args, "render")?;
+    let [ids] = a;
+    let ids = u32_list(g, ids, "ids")?;
+    inner.with(g, |ops| {
+        let (frames, overflowed) = ops.render(&ids).map_err(|e| to_py(g, e))?;
+        let flags = list_of(g, overflowed.iter().map(|&o| Ok(capi::boolean(g, o))))?;
+        capi::tuple(g, vec![capi::bytes(g, &frames)?, flags])
+    })
+}
+
+/// `scene(id) -> (bytes, overflowed)`: instance `id`'s scene as
+/// [`render_api::PRIM_RECORD`](crate::render_api::PRIM_RECORD)-byte records.
+pub(crate) fn scene<'py>(g: Gil<'py>, inner: &Inner, args: Ref<'_>) -> CResult<Mine<'py>> {
+    let a: [Ref<'_>; 1] = exactly(g, args, "scene")?;
+    let [id] = a;
+    let id = capi::to_u32(g, id, "id")?;
+    inner.with(g, |ops| {
+        let (prims, overflowed) = ops.scene(id).map_err(|e| to_py(g, e))?;
+        let mut out = Vec::with_capacity(prims.len() * crate::render_api::PRIM_RECORD);
+        for p in &prims {
+            crate::render_api::encode_prim(p, &mut out);
+        }
+        capi::tuple(g, vec![capi::bytes(g, &out)?, capi::boolean(g, overflowed)])
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::{capi::BufferCopy, int32_view};

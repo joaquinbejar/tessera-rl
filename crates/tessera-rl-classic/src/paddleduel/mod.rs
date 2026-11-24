@@ -20,6 +20,7 @@
 //! every value is bounded far inside `Fx32` by the rules, so none saturates.
 
 mod baseline;
+mod render;
 mod validate;
 
 use tessera_rl_core::io::{Actions, ObsWriter};

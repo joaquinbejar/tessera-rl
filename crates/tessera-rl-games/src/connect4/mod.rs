@@ -24,6 +24,7 @@
 
 pub mod board;
 pub mod bot;
+mod render;
 
 use tessera_rl_core::io::{ActionWriter, Actions, MaskWriter, ObsWriter};
 use tessera_rl_core::space::Space;

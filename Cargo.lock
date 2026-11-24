@@ -985,6 +985,7 @@ dependencies = [
  "tessera-rl-macros",
  "tessera-rl-num",
  "tessera-rl-onnx",
+ "tessera-rl-render",
  "tessera-rl-search",
  "tessera-rl-simd",
 ]
@@ -1130,6 +1131,7 @@ dependencies = [
  "tessera-rl-num",
  "tessera-rl-onnx",
  "tessera-rl-pyffi",
+ "tessera-rl-render",
  "tessera-rl-rts",
  "tessera-rl-search",
 ]
@@ -1143,6 +1145,19 @@ dependencies = [
  "tessera-rl-core",
  "tessera-rl-engine",
  "tessera-rl-num",
+]
+
+[[package]]
+name = "tessera-rl-render"
+version = "0.3.0"
+dependencies = [
+ "tessera-rl-classic",
+ "tessera-rl-core",
+ "tessera-rl-engine",
+ "tessera-rl-games",
+ "tessera-rl-num",
+ "thiserror",
+ "xxhash-rust",
 ]
 
 [[package]]

@@ -30,6 +30,7 @@ mod multi_probe;
 #[cfg(test)]
 mod observe_panic;
 mod onnx_api;
+mod render_api;
 mod replay_api;
 mod search;
 mod search_api;

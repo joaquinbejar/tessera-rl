@@ -91,6 +91,9 @@ varargs!(StepM, api::step);
 varargs!(SnapshotM, api::snapshot);
 varargs!(IllegalActionsM, api::illegal_actions);
 varargs!(StateHashM, api::state_hash);
+varargs!(RenderM, api::render);
+varargs!(SceneM, api::scene);
+noargs!(CanvasM, api::canvas);
 varargs!(ImportRecordM, api::import_record);
 varargs!(ForkM, api::fork);
 varargs!(EncodeM, api::encode);
@@ -130,6 +133,18 @@ static METHODS: MethodTable<EnvBody> = MethodTable::new(&[
     MethodRow::varargs::<StateHashM>(
         c"state_hash",
         c"state_hash($self, id, /)\n--\n\nstate_hash(id) -> the instance's state hash",
+    ),
+    MethodRow::noargs::<CanvasM>(
+        c"canvas",
+        c"canvas($self, /)\n--\n\nThe canvas (width, height) of a pool that renders, or None (ADR-0083).",
+    ),
+    MethodRow::varargs::<RenderM>(
+        c"render",
+        c"render($self, ids, /)\n--\n\nrender(ids) -> (RGB8 frames as bytes, per-id overflow flags), drawn from snapshots (ADR-0083).",
+    ),
+    MethodRow::varargs::<SceneM>(
+        c"scene",
+        c"scene($self, id, /)\n--\n\nscene(id) -> (144-byte primitive records, overflowed) (ADR-0083).",
     ),
     MethodRow::varargs::<ImportRecordM>(c"import_record", c"import_record($self, id, record, /)\n--\n\nimport_record(id, record)"),
     MethodRow::varargs::<EncodeM>(c"encode", c"encode($self, ids, /)\n--\n\nencode(ids) -> bytes"),

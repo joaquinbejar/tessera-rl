@@ -29,6 +29,7 @@
 //!     and food, each row-major. A dead agent's planes are zero.
 
 mod baseline;
+mod render;
 mod validate;
 
 use core::num::NonZeroU32;

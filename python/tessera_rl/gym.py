@@ -61,7 +61,7 @@ except ImportError as e:  # pragma: no cover - exercised only without gymnasium
 
 import numpy as np
 
-from tessera_rl import _envs, _host, _native
+from tessera_rl import _envs, _host, _native, _render
 from tessera_rl.masks import head_views
 from tessera_rl._env import _discrete_actions, _multi_actions, _real_array, _to_float32, native_kwargs
 
@@ -193,6 +193,7 @@ class TesseraVectorEnv(VectorEnv):
         autoreset_mode: AutoresetMode | str = AutoresetMode.NEXT_STEP,
         outputs: str = "owned",
         max_episode_steps: int | None = 500,
+        render_mode: str | None = None,
         **kwargs: Any,
     ):
         mode = _autoreset_mode(autoreset_mode)
@@ -208,8 +209,17 @@ class TesseraVectorEnv(VectorEnv):
         self._native, layout = _native_env(env_id, num_envs, seed, mode, outputs, kwargs)
         self.num_envs = layout["num_envs"]
         self.outputs = outputs
-        self.metadata = {"autoreset_mode": mode}
-        self.render_mode = None
+        renders = _render.canvas(self._native) is not None
+        self.metadata = {
+            "autoreset_mode": mode,
+            "render_modes": ["rgb_array"] if renders else [],
+            "render_fps": _render.RENDER_FPS,
+        }
+        try:
+            self.render_mode = _render.check_mode(render_mode, renders, env_id)
+        except Exception:
+            self._native.close()
+            raise
         self.single_observation_space = _single_space(layout)
         self._bounds = layout["action_bounds"]
         self._nvec = tuple(layout["action_nvec"])
@@ -360,6 +370,14 @@ class TesseraVectorEnv(VectorEnv):
             info.update(self._host_infos(out))
         return self._obs(out["observations"]), rewards, terminated, truncated, info
 
+    def render(self) -> np.ndarray | None:
+        """With ``render_mode="rgb_array"``, the frames of every instance,
+        ``(num_envs, height, width, 3)`` ``uint8``, drawn from snapshots
+        (ADR-0083); ``None`` otherwise."""
+        if self.render_mode is None:
+            return None
+        return _render.frames(self._native, list(range(self.num_envs)))
+
     def close_extras(self, **kwargs):
         self._native.close()
 
@@ -373,20 +391,32 @@ class TesseraEnv(gymnasium.Env):
     ``max_episode_steps=600`` or ``-1`` (no wrapper) behave as for
     Gymnasium's own environments."""
 
-    metadata = {"render_modes": []}
+    #: The modes the class can offer (``gymnasium.make`` reads this before
+    #: construction); each instance's ``metadata["render_modes"]`` is exact:
+    #: ``[]`` for an environment that does not implement ``Render``.
+    metadata = {"render_modes": ["rgb_array"], "render_fps": _render.RENDER_FPS}
 
-    def __init__(self, env_id: str = "tessera/CartPole-v1", seed: int | None = None, **kwargs: Any):
+    def __init__(
+        self,
+        env_id: str = "tessera/CartPole-v1",
+        seed: int | None = None,
+        render_mode: str | None = None,
+        **kwargs: Any,
+    ):
         kwargs.setdefault("max_episode_steps", None)
-        self._vec = TesseraVectorEnv(env_id, 1, seed, AutoresetMode.DISABLED, "owned", **kwargs)
+        self._vec = TesseraVectorEnv(
+            env_id, 1, seed, AutoresetMode.DISABLED, "owned", render_mode=render_mode, **kwargs
+        )
         self.metadata = {
             **type(self).metadata,
+            "render_modes": self._vec.metadata["render_modes"],
             "tessera_kind": self._vec.metadata["tessera_kind"],
             "refuses_agents": self._vec.metadata["refuses_agents"],
         }
         self.construction_seed: int = self._vec.construction_seed
         self.observation_space = self._vec.single_observation_space
         self.action_space = self._vec.single_action_space
-        self.render_mode = None
+        self.render_mode = self._vec.render_mode
 
     def reset(self, *, seed: int | None = None, options: dict | None = None):
         super().reset(seed=seed)
@@ -400,6 +430,12 @@ class TesseraEnv(gymnasium.Env):
             raise _native.ActionError(f"an action is a scalar or shape (1,), not {np.shape(action)}")
         obs, rewards, terminated, truncated, info = self._vec.step(np.asarray([action]))
         return _first(obs), float(rewards[0]), bool(terminated[0]), bool(truncated[0]), _first_info(info)
+
+    def render(self) -> np.ndarray | None:
+        """With ``render_mode="rgb_array"``, the frame, ``(height, width, 3)``
+        ``uint8`` (ADR-0083); ``None`` otherwise."""
+        frames = self._vec.render()
+        return None if frames is None else frames[0]
 
     def close(self):
         self._vec.close()

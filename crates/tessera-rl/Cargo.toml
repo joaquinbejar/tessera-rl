@@ -22,6 +22,8 @@ default = ["search", "simd"]
 search = ["dep:tessera-rl-search"]
 simd = ["dep:tessera-rl-simd"]
 onnx = ["search", "dep:tessera-rl-onnx", "tessera-rl-onnx/onnx"]
+# ADR-0083: `tessera_rl::render`, the scene rasterizer. Off by default.
+render = ["dep:tessera-rl-render"]
 # SPEC 5.5: strict checks at the validation boundary, forwarded to the
 # engine (see `tessera_rl::engine::DEBUG_CHECKS`).
 debug-checks = ["tessera-rl-engine/debug-checks"]
@@ -36,6 +38,7 @@ tessera-rl-games.workspace = true
 tessera-rl-search = { workspace = true, optional = true }
 tessera-rl-simd = { workspace = true, optional = true }
 tessera-rl-onnx = { workspace = true, optional = true }
+tessera-rl-render = { workspace = true, optional = true }
 
 [lints]
 workspace = true

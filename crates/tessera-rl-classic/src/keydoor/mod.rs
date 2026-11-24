@@ -29,6 +29,7 @@
 //!   walls inside its window.
 
 mod checks;
+mod render;
 
 use core::num::NonZeroU32;
 

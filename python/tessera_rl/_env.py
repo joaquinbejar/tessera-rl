@@ -32,7 +32,7 @@ from typing import NamedTuple
 
 import numpy as np
 
-from tessera_rl import _envs, _native
+from tessera_rl import _envs, _native, _render
 
 
 class Step(NamedTuple):
@@ -385,6 +385,25 @@ class Env:
         """The canonical record of instance ``index``; in Async mode an opaque
         record for ``restore`` (see the class notes)."""
         return self._native.snapshot(_index(index, "index"))
+
+    def render(self, ids=None) -> np.ndarray:
+        """RGB8 frames of ``ids`` (default: every instance), shape
+        ``(len(ids), height, width, 3)``, drawn from their snapshots
+        (ADR-0083). Sync mode, for an environment that implements
+        ``Render``; ``CapabilityError`` otherwise. Owned arrays."""
+        ids = range(self.num_envs) if ids is None else ids
+        return _render.frames(self._native, [_index(i, "ids") for i in ids])
+
+    def scene(self, index: int) -> list[tuple]:
+        """Instance ``index``'s vector scene (ADR-0083): a list of
+        primitives, coordinates in pixels; see ``tessera_rl._render.scene``."""
+        return _render.scene(self._native, _index(index, "index"))
+
+    @property
+    def canvas(self) -> tuple[int, int] | None:
+        """The frame size ``(width, height)``, or ``None`` when the pool
+        cannot render."""
+        return _render.canvas(self._native)
 
     def illegal_actions(self, index: int) -> list[int]:
         """Illegal-but-valid actions replaced in instance ``index``'s current
