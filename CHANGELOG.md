@@ -20,6 +20,7 @@ the API is not stable, and any 0.x release may break it.
 
 ### Added
 
+- The Tessera Viewer (ADR-0085, #378): `tessera_rl.viewer.serve(path, env)` serves a replay file on `127.0.0.1` as a local web page (Canvas 2D scene, timeline, per-agent rewards, flags, masks and observations), and `show(path, env)` returns a Jupyter `IFrame` of it. The backend is Python's standard library, in the wheel, with no new dependency; every request needs the session token in the URL, and the `Host` header must name the loopback port. Scrubbing back seeks to the nearest earlier keyframe and replays forward. `tessera_rl.viewer` is not imported by `import tessera_rl`.
 - Archive resets (ADR-0075, #363): `Archive<E>` (immutable, validated, shared; an XXH3-64 digest), `ResetSource` and `EnvPool::set_reset_source`, `EnvPool::reset_from`, and the reset source in `PoolContext` (`ResetSourceContext`). An archive reset keeps the instance's RNG identity and generations and copies an entry's state and alive slots; entries are drawn by integer weights on the reserved `archive_select` stream. `EngineError::Archive` and `ArchiveMismatch`. In every mode: `PipelinedPool::set_reset_source` and `AsyncPool::set_reset_source` (at quiescence, else `NotQuiescent`, `HalfBorrowed` or `Borrowed`) and `AsyncPool::reset_from` (a partial writer, like `reset`); Pipelined mode has no partial reset and no `reset_from`.
 
 ### Changed

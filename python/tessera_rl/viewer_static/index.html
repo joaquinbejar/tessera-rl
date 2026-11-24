@@ -1,0 +1,54 @@
+<!doctype html>
+<!-- SPDX-License-Identifier: MIT OR Apache-2.0 -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>Tessera Viewer</title>
+<script>
+  // Every request carries the session token (ADR-0085): load the stylesheet
+  // and the script with this page's query string.
+  (function () {
+    var link = document.createElement("link");
+    link.rel = "stylesheet";
+    link.href = "viewer.css" + location.search;
+    document.head.appendChild(link);
+    var script = document.createElement("script");
+    script.src = "viewer.js" + location.search;
+    script.defer = true;
+    document.head.appendChild(script);
+  })();
+</script>
+</head>
+<body>
+<header>
+  <h1>Tessera Viewer</h1>
+  <span id="env"></span>
+</header>
+<main>
+  <section id="view">
+    <canvas id="canvas" width="600" height="400"></canvas>
+    <p id="no-canvas" hidden>This environment does not render.</p>
+    <div id="controls">
+      <button id="prev" type="button" aria-label="Previous call">&#9664;</button>
+      <input id="timeline" type="range" min="0" max="0" value="0" aria-label="Call">
+      <button id="next" type="button" aria-label="Next call">&#9654;</button>
+      <span id="position"></span>
+      <label>Instance <select id="instance"></select></label>
+    </div>
+  </section>
+  <section id="panel">
+    <h2>Agents</h2>
+    <table id="agents">
+      <thead><tr><th>Agent</th><th>Reward</th><th>Alive</th><th>Acting</th><th>Terminated</th><th>Truncated</th><th>Mask</th></tr></thead>
+      <tbody></tbody>
+    </table>
+    <p id="episode"></p>
+    <h2>Observations</h2>
+    <div id="observations"></div>
+  </section>
+</main>
+<p id="error" role="alert" hidden></p>
+</body>
+</html>
