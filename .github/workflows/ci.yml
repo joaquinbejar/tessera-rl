@@ -280,7 +280,10 @@ jobs:
 
   # The Burn integration (#367): its own workspace and lock, outside the
   # root workspace and every other job. fmt, clippy, tests, cargo deny and
-  # the PPO example's smoke run (make burn-check).
+  # the PPO example's smoke run (make burn-check). Its steps run only when
+  # the integration, a crate it builds, its policy or this workflow changed
+  # (scripts/paths_changed.sh); the job itself always runs, so it is never
+  # missing from a check list.
   burn-check:
     runs-on: [self-hosted, linux-x64]
     # Skipped for an unmodified fork pull request (see the header).
@@ -289,19 +292,38 @@ jobs:
       # Two hosts carry linux-x64: the log names the one that ran this job.
       - run: hostname && grep -m1 'model name' /proc/cpuinfo
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - run: cargo fmt --manifest-path integrations/burn/Cargo.toml --all -- --check
-      - run: cargo clippy --manifest-path integrations/burn/Cargo.toml --all-targets --locked -- -D warnings
-      - run: cargo test --manifest-path integrations/burn/Cargo.toml --locked
-      - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
+        with:
+          fetch-depth: 0
+      - id: paths
+        # bash: pipefail, so a failing script fails the step through the tee.
+        shell: bash
+        env:
+          BASE: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+        run: >-
+          scripts/paths_changed.sh "$BASE" "$GITHUB_SHA"
+          integrations/burn/ crates/tessera-rl-core/ crates/tessera-rl-engine/
+          crates/tessera-rl-classic/ crates/tessera-rl-num/ crates/tessera-rl-simd/
+          crates/tessera-rl-macros/ .github/workflows/ci.yml Makefile
+          | tee -a "$GITHUB_OUTPUT"
+      - if: steps.paths.outputs.changed == 'true'
+        run: cargo fmt --manifest-path integrations/burn/Cargo.toml --all -- --check
+      - if: steps.paths.outputs.changed == 'true'
+        run: cargo clippy --manifest-path integrations/burn/Cargo.toml --all-targets --locked -- -D warnings
+      - if: steps.paths.outputs.changed == 'true'
+        run: cargo test --manifest-path integrations/burn/Cargo.toml --locked
+      - if: steps.paths.outputs.changed == 'true'
+        uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
         with:
           manifest-path: integrations/burn/Cargo.toml
           command: check
           arguments: --config integrations/burn/deny.toml
           command-arguments: licenses bans
-      - run: cargo run --manifest-path integrations/burn/Cargo.toml --release --locked -p ppo-cartpole -- --smoke
+      - if: steps.paths.outputs.changed == 'true'
+        run: cargo run --manifest-path integrations/burn/Cargo.toml --release --locked -p ppo-cartpole -- --smoke
       # The example sanity gate on 3 seeds (about 5 s CPU each; not a SPEC 18
       # learning test).
-      - run: make burn-gate
+      - if: steps.paths.outputs.changed == 'true'
+        run: make burn-gate
 
   deny:
     runs-on: [self-hosted, xaskar]
