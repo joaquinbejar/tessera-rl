@@ -744,3 +744,28 @@ def test_learning_t3a_rows_without_a_legal_action_leave_the_loss():
     masks = torch.tensor([[True, False], [False, False], [False, True], [False, False]])
     assert lm.live_rows(torch.tensor([0, 1, 2, 3]), masks).tolist() == [0, 2]
     assert lm.live_rows(torch.tensor([1, 3]), masks).tolist() == []
+
+
+def test_learning_t3a_a_minibatch_without_legal_rows_skips_its_step(monkeypatch):
+    """When live_rows empties a minibatch, its loss would be a mean over
+    nothing (NaN): the update skips that optimizer step. With every
+    minibatch emptied, no step runs and training stays finite."""
+    pytest = __import__("pytest")
+    torch = pytest.importorskip("torch")
+    import math
+
+    import learning_masked as lm
+    import learning_protocols as lp
+
+    steps = []
+    real_step = torch.optim.Adam.step
+
+    def counting_step(self, *args, **kwargs):
+        steps.append(1)
+        return real_step(self, *args, **kwargs)
+
+    monkeypatch.setattr(torch.optim.Adam, "step", counting_step)
+    monkeypatch.setattr(lm, "live_rows", lambda idx, masks: idx[:0])
+    r = lp.train_masked("snake", 1, 512, 1)
+    assert steps == []
+    assert all(math.isfinite(x) for x in r["eval_returns"])
