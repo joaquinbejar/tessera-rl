@@ -203,3 +203,35 @@ def test_layout_initial_agents_equals_capacity_for_fixed_populations(env_id):
     layout = env._native.layout()
     assert layout["initial_agents"] == layout["agents"]
     env.close()
+
+
+def test_gym_snake_mask_comes_in_info_like_the_native_slot_zero():
+    """A single-head masked environment's mask is in ``info["action_mask"]``
+    (SPEC 11.3), equal to the native slot-0 mask at reset and every step,
+    and ``action_masks`` holds the same single head."""
+    n, steps = 3, 60
+    env = tg.make(SNAKE, num_envs=n, seed=5, obs="state")
+    native = _native(SNAKE, "state", n, 5, AutoresetMode.NEXT_STEP)
+    _, info = env.reset()
+    want = np.asarray(native.reset().masks)[:, 0, :4].astype(np.int8)
+    assert info["action_mask"].dtype == np.int8 and info["action_mask"].shape == (n, 4)
+    assert np.array_equal(info["action_mask"], want)
+    assert len(info["action_masks"]) == 1 and np.array_equal(info["action_masks"][0], want)
+    for a in _actions(SNAKE, steps, n):
+        _, _, _, _, info = env.step(a)
+        s = native.step(np.stack([a, np.zeros_like(a)], axis=1))
+        assert np.array_equal(info["action_mask"], np.asarray(s.masks)[:, 0, :4].astype(np.int8))
+    env.close()
+    native.close()
+
+
+def test_gym_single_env_snake_mask_and_unmasked_envs_have_none():
+    env = gymnasium.make(SNAKE, obs="state")
+    _, info = env.reset(seed=1)
+    assert info["action_mask"].shape == (4,) and info["action_mask"].sum() == 3
+    env.close()
+    for env_id in (PADDLE, "tessera/CartPole-v1"):
+        env = tg.make(env_id, num_envs=2, seed=1)
+        _, info = env.reset()
+        assert "action_mask" not in info and "action_masks" not in info, env_id
+        env.close()

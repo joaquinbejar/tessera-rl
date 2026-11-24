@@ -32,9 +32,11 @@ is not a drop-in compatibility claim for SB3, RLlib or Tianshou.
 Snake-v1 and PaddleDuel-v1 are exposed with ``agents=1`` (PaddleDuel's
 agent is the left paddle against the scripted right one); ``agents=2``
 is refused, use the PettingZoo adapter. Snake's action space is plain
-``Discrete(4)`` without its mask: the reverse of the current heading is
-an illegal action the engine treats as a no-op (``IllegalActionPolicy::Noop``),
-so the snake keeps its heading, with no error and no penalty.
+``Discrete(4)``; its mask comes in ``info["action_mask"]`` (SPEC 11.3), as
+for every masked environment, single-head or multi-head. A trainer that
+ignores it still works: the reverse of the current heading is an illegal
+action the engine treats as a no-op (``IllegalActionPolicy::Noop``), so the
+snake keeps its heading, with no error and no penalty.
 
 Seeding: ``seed=None`` at construction draws one 64-bit seed from OS
 entropy and exposes it as ``construction_seed``, so the run can be
@@ -302,15 +304,19 @@ class TesseraVectorEnv(VectorEnv):
         return info
 
     def _mask_info(self, out) -> dict:
-        """A multi-head environment's masks of slot 0, owned copies: the
-        root head as ``action_mask`` and every head as ``action_masks``."""
-        if len(self._nvec) <= 1 or not self._mask_heads:
+        """A masked environment's masks of slot 0, owned copies: the root
+        head as ``action_mask`` and every head as ``action_masks`` (SPEC
+        11.3). A single-head environment's root head is its only head."""
+        if not self._mask_heads:
             return {}
         if self.outputs == "borrowed":
             m = np.asarray(out["masks"])
         else:
             m = np.frombuffer(out["masks"], dtype=np.bool_).reshape(self.num_envs, self._agents, -1)
         heads = tuple(np.array(v[:, 0], dtype=np.int8) for v in head_views(m[:, :1], self._mask_heads, self._groups))
+        if len(self._nvec) <= 1:
+            # One flat head: ``[N, n]``, the Discrete action's choices.
+            heads = tuple(h.reshape(self.num_envs, -1) for h in heads)
         return {"action_mask": heads[0], "action_masks": heads}
 
     def _clipped(self, actions) -> np.ndarray:
