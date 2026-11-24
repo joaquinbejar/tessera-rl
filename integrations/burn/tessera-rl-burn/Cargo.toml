@@ -1,0 +1,23 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
+[package]
+name = "tessera-rl-burn"
+description = "Burn tensors from Tessera pool outputs, and actions back (SPEC 14.2)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+burn.workspace = true
+tessera-rl-core.workspace = true
+tessera-rl-engine.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+tessera-rl-classic.workspace = true
+tessera-rl-num.workspace = true
+
+[lints]
+workspace = true

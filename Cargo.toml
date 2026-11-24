@@ -29,7 +29,7 @@ members = [
 ]
 # The fuzz targets build with nightly and cargo-fuzz, outside the workspace;
 # the host example is a crate of its own, as an external author's is.
-exclude = ["fuzz", "examples/host_orderbook"]
+exclude = ["fuzz", "examples/host_orderbook", "integrations/burn"]
 default-members = [
     "crates/tessera-rl",
     "crates/tessera-rl-core",

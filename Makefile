@@ -4,7 +4,7 @@
 # maturin's default of macOS 11. Ignored on other platforms.
 export MACOSX_DEPLOYMENT_TARGET := 13.0
 
-.PHONY: onnx-test py-test-onnx fuzz-check simd-disasm dashboard dashboard-check check-build-id gungraun-threaded fmt fmt-check clippy test doc readme readme-check pre-push deny check-targets wheel-golden py-test-wheels puffer-test py-test-jax py-typecheck pre-push-jax compat-test py-entries pyffi-api pyffi-api-if-nightly py-callouts py-test py-test-hooks py-test-host py-test-orderbook py-test-torch pre-push-torch gym-equivalence reference-training learning-test learning-calibrate bench bench-quick bench-kernels gungraun gungraun-bless connect4-calibration search-strength
+.PHONY: onnx-test py-test-onnx fuzz-check simd-disasm dashboard dashboard-check check-build-id gungraun-threaded fmt fmt-check clippy test doc readme readme-check pre-push deny check-targets wheel-golden py-test-wheels puffer-test py-test-jax py-typecheck pre-push-jax compat-test py-entries pyffi-api pyffi-api-if-nightly py-callouts py-test py-test-hooks py-test-host py-test-orderbook burn-check burn-gate py-test-torch pre-push-torch gym-equivalence reference-training learning-test learning-calibrate bench bench-quick bench-kernels gungraun gungraun-bless connect4-calibration search-strength
 
 fmt:
 	cargo fmt --all
@@ -165,6 +165,21 @@ py-test-host:
 # next to the first-party wheel, with PyTorch for the flush-to-zero check,
 # runs its tests, then the default environment again.
 ORDERBOOK = examples/host_orderbook/Cargo.toml
+# The Burn integration (#367): its own workspace and lock, never part of the
+# root workspace. burn-check: fmt, clippy, tests, cargo deny (licences and
+# bans against integrations/burn/deny.toml: the root policy plus one licence
+# exception) and the example's smoke run (2 rollouts, finite losses).
+# burn-gate: the example sanity gate on 3 seeds (not a SPEC 18 learning test),
+# about 5 s of CPU per seed.
+BURN = integrations/burn/Cargo.toml
+burn-check:
+	cargo fmt --manifest-path $(BURN) --all -- --check
+	cargo clippy --manifest-path $(BURN) --all-targets --locked -- -D warnings
+	cargo test --manifest-path $(BURN) --locked
+	cargo deny --manifest-path $(BURN) --config integrations/burn/deny.toml check licenses bans
+	cargo run --manifest-path $(BURN) --release --locked -p ppo-cartpole -- --smoke
+burn-gate:
+	for seed in 1 2 3; do cargo run --manifest-path $(BURN) --release --locked -p ppo-cartpole -- --gate --seed $$seed || exit 1; done
 py-test-orderbook:
 	cargo fmt --manifest-path $(ORDERBOOK) --check
 	cargo clippy --manifest-path $(ORDERBOOK) --all-targets --locked -- -D warnings
