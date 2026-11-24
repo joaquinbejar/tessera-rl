@@ -400,6 +400,10 @@ impl ActionMask for LimitOrderBook {
     fn head_parents(_: &LobConfig, head: usize) -> [Option<u16>; 2] {
         actions::head_parents(head)
     }
+
+    fn head_active(_: &LobConfig, head: usize, parents: [u32; 2]) -> bool {
+        actions::head_active(head, parents[0])
+    }
 }
 
 fn violation(code: &'static str) -> Result<(), InvariantViolation> {

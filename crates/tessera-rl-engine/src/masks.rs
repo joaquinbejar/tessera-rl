@@ -30,6 +30,12 @@ pub trait MaskProvider<E: Environment>: 'static {
     fn entity_group_heads(_cfg: &E::Config) -> Option<core::num::NonZeroU16> {
         None
     }
+
+    /// Whether discrete head `head` is used under parent values `parents`
+    /// (ADR-0086); every head without masks.
+    fn head_active(_cfg: &E::Config, _head: usize, _parents: [u32; 2]) -> bool {
+        true
+    }
 }
 
 /// No masks: every valid action is legal.
@@ -69,6 +75,10 @@ impl<E: ActionMask> MaskProvider<E> for Masked {
 
     fn entity_group_heads(cfg: &E::Config) -> Option<core::num::NonZeroU16> {
         E::entity_group_heads(cfg)
+    }
+
+    fn head_active(cfg: &E::Config, head: usize, parents: [u32; 2]) -> bool {
+        E::head_active(cfg, head, parents)
     }
 }
 

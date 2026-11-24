@@ -16,6 +16,7 @@ mod evict;
 mod group;
 mod gumbel;
 mod handle;
+mod head_activity;
 mod journal;
 mod mcts;
 mod noise;
@@ -35,9 +36,10 @@ pub use group::{
 };
 pub use gumbel::{GUMBEL_BYTES_PER_ACTION, GumbelConfig, RootSelection};
 pub use handle::{EdgeStats, NodeHandle};
+pub use head_activity::{HeadActivityError, HeadActivityReport, check_head_activity};
 pub use mcts::{Mcts, PUCT_FORMULA, PuctConfig, RootNoise};
 pub use options::{Eviction, SearchOptions};
-pub use pool::SearchPool;
+pub use pool::{MAX_JOINT_ACTIONS, SearchPool};
 
 #[cfg(test)]
 mod tests;

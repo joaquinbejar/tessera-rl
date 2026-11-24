@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: MIT OR Apache-2.0
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from os import PathLike
 from typing import Any, NamedTuple, TypeAlias
 
@@ -69,3 +69,11 @@ class OnnxEvaluator:
     ) -> None: ...
     @property
     def provenance(self) -> Mapping[str, Any] | None: ...
+
+def joint_log_prior(
+    logits: Sequence[np.ndarray],
+    nvec: Sequence[int],
+    parents: Sequence[Sequence[int]] | None = None,
+    active: Callable[[int, list[int]], bool] | None = None,
+    legal: np.ndarray | None = None,
+) -> np.ndarray: ...

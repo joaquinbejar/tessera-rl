@@ -210,10 +210,7 @@ where
         shapes: &[(SearchOptions, PuctConfig)],
         transforms: &Transforms,
     ) -> Option<u64> {
-        let actions = match E::action_space(cfg).ok()? {
-            Space::Discrete { n } => usize::try_from(n).ok()?,
-            _ => return None,
-        };
+        let actions = usize::try_from(crate::pool::joint_heads::<E, M>(cfg).ok()?.joint()).ok()?;
         let (exported, stack) = transforms
             .exported(&E::observation_space(cfg).ok()?, E::MAX_AGENTS)
             .ok()?;

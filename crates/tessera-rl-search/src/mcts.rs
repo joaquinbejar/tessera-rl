@@ -569,11 +569,9 @@ where
             self.pool.stacks.load_from(row, idx(root));
         }
         self.pool.restore_rows()?;
-        let width = idx(self.pool.actions);
         let masks = self.pool.scratch.outputs()?.masks();
-        for (a, l) in self.legal.iter_mut().enumerate() {
-            *l = masks.is_empty() || masks.get(agent * width + a).is_some_and(|m| m.get());
-        }
+        let base = agent * self.pool.joint.mask_len();
+        crate::pool::fill_legal(&self.pool.joint, masks, Some(base), &mut self.legal);
         self.eval_records.clear();
         self.eval_records.push(record);
         self.eval_picks.clear();

@@ -12,8 +12,8 @@ use core::mem::size_of;
 use core::num::NonZeroU32;
 
 use tessera_rl_core::encoding::{Encoder, HashSink};
-use tessera_rl_core::space::Space;
-use tessera_rl_core::{AdaptiveValues, Environment, RecordLayout};
+use tessera_rl_core::space::{JointError, JointHeads, Space};
+use tessera_rl_core::{AdaptiveValues, Bool8, Environment, RecordLayout};
 use tessera_rl_engine::{
     ActionInput, AutoReset, EngineError, EnvPool, MaskProvider, Outputs, PoolOptions, Record,
     Reseed,
@@ -26,6 +26,53 @@ use crate::options::{Eviction, SearchOptions};
 
 /// No node: an unexpanded edge, or the root's parent.
 pub(crate) const NONE: u32 = u32::MAX;
+
+/// Most joint actions of a `MultiDiscrete` action space (ADR-0086): the
+/// product of its head sizes. A `Discrete` space is not capped.
+pub const MAX_JOINT_ACTIONS: u32 = 4096;
+
+/// The joint index of the action space of `cfg` (ADR-0086): a `Discrete`
+/// head, or the heads of a `MultiDiscrete` space with their parents and
+/// activity from `M`.
+pub(crate) fn joint_heads<E: Environment, M: MaskProvider<E>>(
+    cfg: &E::Config,
+) -> Result<JointHeads, SearchError> {
+    let (sizes, max) = match E::action_space(cfg) {
+        Ok(Space::Discrete { n }) => (vec![n], u32::MAX),
+        Ok(Space::MultiDiscrete { nvec }) => (nvec, MAX_JOINT_ACTIONS),
+        _ => return Err(SearchError::UnsupportedActions),
+    };
+    if M::entity_group_heads(cfg).is_some() {
+        return Err(SearchError::UnsupportedActions);
+    }
+    let parents: Vec<[Option<u16>; 2]> =
+        (0..sizes.len()).map(|h| M::head_parents(cfg, h)).collect();
+    JointHeads::new(&sizes, &parents, max, |h, p| M::head_active(cfg, h, p)).map_err(|e| match e {
+        JointError::TooMany { joint, max } => SearchError::TooManyJointActions { joint, max },
+        JointError::Invalid { .. } => SearchError::UnsupportedActions,
+    })
+}
+
+/// Writes the legal joints of one agent into `out` (ADR-0086): from its
+/// mask row starting at `row` in `masks`, or every canonical joint when
+/// there is no row (no masks, or no single acting agent).
+pub(crate) fn fill_legal(
+    joint: &JointHeads,
+    masks: &[Bool8],
+    row: Option<usize>,
+    out: &mut [bool],
+) {
+    for (j, legal) in (0..joint.joint()).zip(out.iter_mut()) {
+        *legal = match row {
+            Some(base) if !masks.is_empty() => joint.is_legal(j, |at| {
+                base.checked_add(at)
+                    .and_then(|i| masks.get(i))
+                    .is_some_and(|m| m.get())
+            }),
+            _ => joint.is_canonical(j),
+        };
+    }
+}
 
 /// One node slot.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -111,6 +158,8 @@ pub struct SearchPool<E: Environment, M: MaskProvider<E>> {
     pub(crate) root: u32,
     pub(crate) next_alloc: u64,
     pub(crate) actions: u32,
+    /// The joint index of the action heads (ADR-0086).
+    pub(crate) joint: JointHeads,
     pub(crate) agents: usize,
     pub(crate) capacity: u32,
     pub(crate) batch: u32,
@@ -236,9 +285,9 @@ where
         root_bytes: &[u8],
         build: impl FnOnce(E::Config, PoolOptions) -> Result<EnvPool<E, M>, EngineError>,
     ) -> Result<Self, SearchError> {
-        let Ok(Space::Discrete { n: actions }) = E::action_space(&cfg) else {
-            return Err(SearchError::UnsupportedActions);
-        };
+        let joint = joint_heads::<E, M>(&cfg)?;
+        let actions = joint.joint();
+        let heads = joint.heads();
         if E::observation_space(&cfg).is_ok_and(|s| s.contains_set()) {
             return Err(SearchError::SetObservation);
         }
@@ -258,6 +307,13 @@ where
             )
         };
         let mut scratch = build(cfg, pool_options)?;
+        // The joint's mask offsets are the scratch pool's (SPEC 11.3).
+        if M::ENABLED
+            && (0..heads)
+                .any(|h| scratch.mask_head_shape(h).map(|m| m.offset) != joint.mask_offset(h))
+        {
+            return Err(SearchError::UnsupportedActions);
+        }
         // The scratch pool never learns statistics (ADR-0078 item 7.2).
         scratch.freeze_normalization(true);
         let stack = scratch.transform_state_bytes();
@@ -295,6 +351,7 @@ where
             root: NONE,
             next_alloc: 0,
             actions,
+            joint,
             agents,
             capacity,
             batch,
@@ -305,7 +362,7 @@ where
             stack: Vec::with_capacity(cap),
             evict_roots: Vec::with_capacity(cap),
             planned: Vec::with_capacity(idx(batch)),
-            act_buf: vec![0; idx(batch).saturating_mul(agents)],
+            act_buf: vec![0; idx(batch).saturating_mul(agents).saturating_mul(heads)],
             child_records: vec![*root; idx(batch)],
             load_records: vec![*root; idx(batch)],
             child_terminal: vec![false; idx(batch)],
@@ -868,13 +925,17 @@ where
         // so nothing of the failed step survives.
         self.restore_rows()?;
         let masks = self.scratch.outputs()?.masks();
-        if !masks.is_empty() {
-            let width = idx(self.actions);
-            for (row, p) in self.planned.iter().enumerate() {
-                let at = (row * self.agents + p.agent) * width + idx(p.action);
-                if !masks.get(at).is_some_and(|m| m.get()) {
-                    return Err(SearchError::IllegalAction { action: p.action });
-                }
+        let width = self.joint.mask_len();
+        for (row, p) in self.planned.iter().enumerate() {
+            let base = (row * self.agents + p.agent) * width;
+            let legal = if masks.is_empty() {
+                self.joint.is_canonical(p.action)
+            } else {
+                self.joint
+                    .is_legal(p.action, |at| masks.get(base + at).is_some_and(|m| m.get()))
+            };
+            if !legal {
+                return Err(SearchError::IllegalAction { action: p.action });
             }
         }
         // Unused rows repeat the first request (a legal action at the
@@ -885,8 +946,10 @@ where
         };
         for row in 0..idx(self.batch) {
             let p = self.planned.get(row).copied().unwrap_or(lead);
-            if let Some(a) = self.act_buf.get_mut(row * self.agents + p.agent) {
-                *a = i32::try_from(p.action).unwrap_or(0);
+            let heads = self.joint.heads();
+            let at = (row * self.agents + p.agent) * heads;
+            if let Some(a) = self.act_buf.get_mut(at..at + heads) {
+                self.joint.decode(p.action, a);
             }
         }
         Ok(())
@@ -947,6 +1010,7 @@ where
             continuous: &[],
         })?;
         let width = idx(self.actions);
+        let mask_len = self.joint.mask_len();
         for row in 0..self.planned.len() {
             let id = u32::try_from(row).unwrap_or(0);
             let record = self.scratch.snapshot(id)?;
@@ -976,20 +1040,13 @@ where
             ) {
                 dst.copy_from_slice(src);
             }
-            // The child's legal actions: the mask of its acting agent (all
-            // true without masks or without a single actor).
+            // The child's legal joints: from the mask of its acting agent
+            // (every canonical joint without masks or without a single
+            // actor), ADR-0086.
             let agent = Self::single_actor(&record).ok();
-            let masks = outputs.masks();
-            for a in 0..width {
-                let legal = match agent {
-                    Some(k) if !masks.is_empty() => masks
-                        .get((row * self.agents + k) * width + a)
-                        .is_some_and(|m| m.get()),
-                    _ => true,
-                };
-                if let Some(m) = self.child_masks.get_mut(row * width + a) {
-                    *m = legal;
-                }
+            let base = agent.map(|k| (row * self.agents + k) * mask_len);
+            if let Some(out) = self.child_masks.get_mut(row * width..(row + 1) * width) {
+                fill_legal(&self.joint, outputs.masks(), base, out);
             }
         }
         Ok(())

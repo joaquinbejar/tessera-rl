@@ -1,17 +1,14 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! Search smoke test (design section 9, row 3). `tessera-rl-search` takes
-//! a single `Discrete` action head, and this environment's action is
-//! `MultiDiscrete([6, 9, 4, 8])`, so a search pool is refused with
-//! `UnsupportedActions` rather than built: before that check, plain
-//! search is refused for imperfect information and determinized search
-//! is accepted as far as the action check. The observation's `Set` leaves
-//! (ADR-0082) would be refused next (`SetObservation`): the search pool
-//! checks the action space first, so `UnsupportedActions` is the refusal
-//! seen. The determinized root the
-//! search would build is checked by hand here, the way its sampler does
-//! it: a sample from the sampler's identity passes `Validate` and keeps
-//! the searching agent's information state.
+//! Search smoke test (design section 9, row 3). Search takes this
+//! environment's `MultiDiscrete([6, 9, 4, 8])` action as a canonical joint
+//! head (ADR-0086, #454), so the action check passes; a search pool is
+//! still refused, for the observation's `Set` leaves (`SetObservation`,
+//! ADR-0082, #490), and simultaneous actors (#491) would be refused next.
+//! Plain search is refused for imperfect information first. The
+//! determinized root the search would build is checked by hand here, the
+//! way its sampler does it: a sample from the sampler's identity passes
+//! `Validate` and keeps the searching agent's information state.
 
 #![expect(
     clippy::unwrap_used,
@@ -41,7 +38,7 @@ fn options() -> SearchOptions {
 }
 
 #[test]
-fn test_search_smoke_refuses_multi_discrete_after_information_checks() {
+fn test_search_smoke_refuses_set_observations_after_information_and_action_checks() {
     let cfg = config(4, 2);
     let mut p = pool(cfg.clone(), 1, 11, None);
     let mut masks = p.reset_all(Reseed::Keep).unwrap().masks().to_vec();
@@ -61,8 +58,7 @@ fn test_search_smoke_refuses_multi_discrete_after_information_checks() {
     let plain = Search::new(cfg.clone(), options(), &root, EnvPool::with_masks);
     assert!(matches!(plain, Err(SearchError::ImperfectInformation)));
     let det = Search::new_determinized(cfg.clone(), options(), &root, how, EnvPool::with_masks);
-    assert!(matches!(det, Err(SearchError::UnsupportedActions)));
-    // The refusal that would follow the action check.
+    assert!(matches!(det, Err(SearchError::SetObservation)));
     let space = LimitOrderBook::observation_space(&cfg).unwrap();
     assert!(space.contains_set());
 
