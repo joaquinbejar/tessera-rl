@@ -129,7 +129,22 @@ fn header_len(b: &[u8]) -> usize {
     at += 2; // asset_count
     at += 2 + u16_at(at); // descriptor
     let config = u32::from_le_bytes(b[at..at + 4].try_into().unwrap()) as usize;
-    at + 4 + config + 12 + 4 + 8
+    // Flags and host fields (4), the version 1 extension, the checksum (8).
+    past_extension(b, at + 4 + config + 12 + 4) + 8
+}
+
+/// Offset just past the version 1 extension that starts at `q`: the policy
+/// map, the curriculum flag, the archive block and the chunk size.
+fn past_extension(b: &[u8], mut q: usize) -> usize {
+    let slots = usize::from(u16::from_le_bytes([b[q], b[q + 1]]));
+    q += 2 + slots + 1;
+    if b[q] == 1 {
+        let n = u32::from_le_bytes(b[q + 9..q + 13].try_into().unwrap()) as usize;
+        q += 1 + 8 + 4 + 4 * n;
+    } else {
+        q += 1;
+    }
+    q + 4
 }
 
 /// The (offset, tag, body length) of every frame, the end event included.
@@ -504,8 +519,8 @@ fn test_replay_pool_of_another_size_is_incompatible() {
 /// version string and the header checksum over it. Any change to the
 /// header, an event tag or an event body changes them; update the constants
 /// only together with a format version bump.
-const FIXTURE_LEN: usize = 1569;
-const FIXTURE_XXH3: u64 = 13_974_308_980_847_700_295;
+const FIXTURE_LEN: usize = 1580;
+const FIXTURE_XXH3: u64 = 17_966_924_819_680_012_336;
 
 #[test]
 fn test_replay_encoded_fixture_is_pinned() {
@@ -640,4 +655,41 @@ fn test_replay_build_pool_options_from_header_and_config_checked() {
         matches!(err, ReplayError::Persist(PersistError::Incompatible { .. })),
         "{err:?}"
     );
+}
+
+/// A recorded step with an illegal (masked-out) action, which the default
+/// policy replaces by the no-op (ADR-0028): replay re-submits the same
+/// illegal action and reproduces the state. Under `debug-checks` the call
+/// fails instead, so the test is off there.
+#[cfg(not(feature = "debug-checks"))]
+#[test]
+fn test_replay_illegal_action_replaced_by_noop_replays_without_divergence() {
+    let mut p = pool_with(config(), 0);
+    let mut rec = Recorder::new(&mut p, Vec::new(), ReplayWriterOptions::default()).unwrap();
+    rec.reset_all(Reseed::Keep).unwrap();
+    // Counter masks action 2 for agent 0; the mask row is [N, 2 agents, 3].
+    let masks = rec.pool().outputs().unwrap().masks();
+    assert!(
+        !masks[2].get(),
+        "action 2 must be illegal for instance 0, agent 0"
+    );
+    assert!(masks[1].get());
+    let mut actions = vec![1; N as usize * 2];
+    actions[0] = 2;
+    rec.step(ActionInput {
+        discrete: &actions,
+        continuous: &[],
+    })
+    .unwrap();
+    step(&mut rec, 1);
+    let bytes = rec.finish().unwrap();
+    let replay = Replay::open(&bytes, LIMITS).unwrap();
+    let submitted = replay.events().find_map(|e| match e {
+        Ok((_, Event::Step { discrete, .. })) => Some(discrete),
+        _ => None,
+    });
+    assert_eq!(submitted.unwrap()[0], 2);
+    let mut q = pool_with(config(), 0);
+    replay.run(&mut q).unwrap();
+    assert_eq!(hashes(&q), hashes(&p));
 }

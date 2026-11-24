@@ -321,7 +321,21 @@ fn header_len(b: &[u8]) -> usize {
     let flags_at = at + 4 + config + 12;
     // Bit3: the identity digest follows the host fields.
     let identity = if b[flags_at] & 8 == 0 { 0 } else { 8 };
-    flags_at + 4 + identity + 8
+    past_extension(b, flags_at + 4 + identity) + 8
+}
+
+/// Offset just past the version 1 extension that starts at `q`: the policy
+/// map, the curriculum flag, the archive block and the chunk size.
+fn past_extension(b: &[u8], mut q: usize) -> usize {
+    let slots = usize::from(u16::from_le_bytes([b[q], b[q + 1]]));
+    q += 2 + slots + 1;
+    if b[q] == 1 {
+        let n = u32::from_le_bytes(b[q + 9..q + 13].try_into().unwrap()) as usize;
+        q += 1 + 8 + 4 + 4 * n;
+    } else {
+        q += 1;
+    }
+    q + 4
 }
 
 /// The (offset, tag) of every frame, the end event included.
@@ -704,8 +718,10 @@ fn test_replay_host_snapshot_round_trip_inline_and_sync() {
 fn test_replay_host_snapshot_identity_mismatch_is_refused_at_open() {
     let (mut bytes, _) = record_walk(0);
     let end = header_len(&bytes);
-    // The identity digest is the 8 bytes before the header checksum.
-    bytes[end - 16] ^= 1;
+    // The identity digest comes before the v1 options of a default file
+    // (policy map count u16, curriculum u8, archive flag u8, chunk size u32:
+    // 8 bytes) and the 8-byte header checksum.
+    bytes[end - 24] ^= 1;
     let sum = checksum(&bytes[..end - 8]);
     bytes[end - 8..end].copy_from_slice(&sum.to_le_bytes());
     assert!(matches!(
@@ -869,8 +885,8 @@ fn test_replay_host_poisoning_step_replays_to_the_same_poison() {
 /// notifying recording with snapshots and outputs hashes, without the
 /// library version and the header checksum. Update only with a format
 /// version bump.
-const HOST_FIXTURE_LEN: usize = 968;
-const HOST_FIXTURE_XXH3: u64 = 15_575_506_494_864_961_896;
+const HOST_FIXTURE_LEN: usize = 977;
+const HOST_FIXTURE_XXH3: u64 = 4_969_713_733_313_519_572;
 
 #[test]
 fn test_replay_host_encoded_fixture_is_pinned() {

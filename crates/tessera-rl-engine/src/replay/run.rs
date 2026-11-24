@@ -13,12 +13,14 @@ use crate::pool::EnvPool;
 use crate::record::{DecodedRecord, PoolContext};
 use crate::validate::ActionInput;
 
+use super::format::EventTag as Tag;
 use super::format::StateWriteOp;
 use super::reader::{Event, Ids, Replay};
+use super::v1_fields::{fresh_only, not_yet};
 use super::{DivergenceKind, ReplayError};
 
 /// What a replay checked.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ReplaySummary {
     /// Events replayed, the end event excluded.
     pub events: u64,
@@ -35,6 +37,11 @@ pub struct ReplaySummary {
     /// pool. Replay does not re-run the source of a state write, so this
     /// poison is not reproduced and the replay pool is left unpoisoned.
     pub unverified_poison: bool,
+    /// Async replay only: ids that came back during the replay but that no
+    /// `Recv` of the file claimed before it ended, in id order. Non-empty
+    /// shows a file cut while ids were outstanding (for example a truncated
+    /// recording); empty for every other replay.
+    pub unclaimed: Vec<u32>,
 }
 
 /// Where the replay stands between events.
@@ -172,6 +179,7 @@ impl Replay<'_> {
         if self.header.host.is_some() {
             return incompatible("host_protocol");
         }
+        self.check_v1(options.chunk_size.get())?;
         self.file
             .check_against(&identity::<E, M>(cfg, options)?, E::TIER, BUILD_ID)?;
         if self.header.num_envs != options.num_envs.get() {
@@ -278,9 +286,16 @@ impl Replay<'_> {
             }
             Event::Keyframe {
                 branch_counter,
+                reset_source,
                 ids,
                 records,
-            } => self.apply_keyframe(pool, st, index, branch_counter, &ids, records),
+            } => {
+                fresh_only(&reset_source)?;
+                self.apply_keyframe(pool, st, index, branch_counter, &ids, records)
+            }
+            Event::Adaptive { .. } => Err(not_yet(Tag::Adaptive)),
+            Event::ResetSource(_) => Err(not_yet(Tag::ResetSource)),
+            Event::ResetFrom { .. } => Err(not_yet(Tag::ResetFrom)),
             Event::Checkpoint { ids, hashes } => {
                 for (id, hash) in ids_of(&ids, self.header.num_envs).into_iter().zip(hashes) {
                     if pool.state_hash(id)? != hash {

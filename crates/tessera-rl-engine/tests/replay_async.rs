@@ -208,7 +208,22 @@ fn header_len(b: &[u8]) -> usize {
     at += 2;
     at += 2 + u16_at(at);
     let config = u32::from_le_bytes(b[at..at + 4].try_into().unwrap()) as usize;
-    at + 4 + config + 12 + 4 + 8
+    // Flags and host fields (4), the version 1 extension, the checksum (8).
+    past_extension(b, at + 4 + config + 12 + 4) + 8
+}
+
+/// Offset just past the version 1 extension that starts at `q`: the policy
+/// map, the curriculum flag, the archive block and the chunk size.
+fn past_extension(b: &[u8], mut q: usize) -> usize {
+    let slots = usize::from(u16::from_le_bytes([b[q], b[q + 1]]));
+    q += 2 + slots + 1;
+    if b[q] == 1 {
+        let n = u32::from_le_bytes(b[q + 9..q + 13].try_into().unwrap()) as usize;
+        q += 1 + 8 + 4 + 4 * n;
+    } else {
+        q += 1;
+    }
+    q + 4
 }
 
 fn frames(b: &[u8]) -> Vec<(usize, u8)> {
@@ -301,4 +316,34 @@ fn test_replay_async_recv_tag_in_a_sync_file_is_refused() {
         Replay::open(&forged, LIMITS),
         Err(ReplayError::ReservedTag { tag: 8 })
     ));
+}
+
+#[test]
+fn test_replay_async_truncated_file_reports_unclaimed_ids() {
+    let (bytes, _) = record(options(1024, false));
+    // Cut the file just before its first Recv: ids 0 and 1 were sent and no
+    // event claims them.
+    let (cut, _) = frames(&bytes)
+        .into_iter()
+        .find(|f| f.1 == EventTag::Recv as u8)
+        .unwrap();
+    let start = header_len(&bytes);
+    let events = &bytes[start..cut];
+    let mut file = bytes[..cut].to_vec();
+    let count = u64::try_from(frames(&bytes).iter().take_while(|f| f.0 < cut).count()).unwrap();
+    file.push(0);
+    file.extend_from_slice(&16u32.to_le_bytes());
+    file.extend_from_slice(&count.to_le_bytes());
+    file.extend_from_slice(&checksum(events).to_le_bytes());
+    let summary = Replay::open(&file, LIMITS)
+        .unwrap()
+        .run_async(&mut asy(1))
+        .unwrap();
+    assert_eq!(summary.unclaimed, vec![0, 1]);
+    // A whole file leaves nothing unclaimed.
+    let summary = Replay::open(&bytes, LIMITS)
+        .unwrap()
+        .run_async(&mut asy(1))
+        .unwrap();
+    assert_eq!(summary.unclaimed, Vec::<u32>::new());
 }

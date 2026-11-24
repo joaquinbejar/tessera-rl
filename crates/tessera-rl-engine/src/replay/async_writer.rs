@@ -324,6 +324,11 @@ where
     /// (and not poisoned, and the last event is not already one), then the
     /// end event. Returns the writer, flushed.
     ///
+    /// No final checkpoint is written while ids are outstanding: in an async
+    /// file the last checkpoint is the last one taken at a quiescent point.
+    /// This is an erratum to ADR-0072 section 4, which says a checkpoint is
+    /// always the last event.
+    ///
     /// # Errors
     ///
     /// [`ReplayError::Io`], or [`ReplayError::Engine`] if a snapshot fails.
@@ -372,6 +377,8 @@ where
         self.emit_body(EventTag::StateWrite)?;
         self.body.clear();
         self.body.extend_from_slice(&0u64.to_le_bytes());
+        // The reset source (ADR-0075): Fresh until archives exist.
+        self.body.push(0);
         push_ids(&mut self.body, ids)?;
         for record in records {
             self.body
@@ -409,6 +416,8 @@ where
     fn snapshot_keyframe(&mut self) -> Result<Vec<u8>, ReplayError> {
         let mut body = Vec::new();
         body.extend_from_slice(&0u64.to_le_bytes());
+        // The reset source (ADR-0075): Fresh until archives exist.
+        body.push(0);
         push_ids(&mut body, None)?;
         for id in 0..self.pool.num_envs() {
             let record = DecodedRecord::<E>::from(self.pool.snapshot(id)?);

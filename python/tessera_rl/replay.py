@@ -15,6 +15,10 @@ Scope and known gaps:
   PufferLib adapters (pass the environment ``make`` returned).
 - While recording, ``import_record`` and ``load`` are refused: they would
   write state the file does not log.
+- Async-mode environments cannot record or replay from Python yet. In Rust,
+  an async file replays only into a pool with batch size 1: batch size
+  changes how ids are grouped into batches, not their results, and only
+  single-id batches let replay wait for any recorded batch.
 - The recording is held in memory until it ends, and replay reads the whole
   file (ADR-0072 section 8 asks for streaming).
 - :func:`run` replays into an environment the caller built with the same
@@ -46,13 +50,16 @@ class ReplaySummary:
     file ends with a poisoning call that the replay reproduced;
     ``unverified_poison``: the file ends with a state write (``fork``) that
     poisoned the recorded pool, which replay cannot re-run, so the replayed
-    pool is not poisoned.
+    pool is not poisoned; ``unclaimed``: for an async file, ids that came
+    back during the replay but that no recorded ``recv`` claimed before the
+    file ended (a file cut while ids were outstanding), empty otherwise.
     """
 
     events: int
     calls: int
     poisoned: bool = False
     unverified_poison: bool = False
+    unclaimed: tuple[int, ...] = ()
 
 
 class ReplayDivergence(TesseraError):

@@ -30,9 +30,11 @@ use crate::persist::PersistError;
 use crate::validate::ActionInput;
 
 use super::async_writer::token_rows;
+use super::format::EventTag as Tag;
 use super::format::StateWriteOp;
 use super::reader::{Event, Ids, Replay};
 use super::run::ReplaySummary;
+use super::v1_fields::{fresh_only, not_yet};
 use super::{DivergenceKind, ReplayError};
 
 /// Where the replay stands between events.
@@ -67,7 +69,9 @@ impl Run {
 impl Replay<'_> {
     /// Replays an async file into `pool` and checks it. The pool is checked
     /// against the header as by [`Replay::run`], and must have `batch_size`
-    /// 1 (see the module notes); its worker count is free. The first
+    /// 1 (see the module notes): batch size changes how ids are grouped into
+    /// batches, not their results, and only single-id batches let replay
+    /// wait for any recorded batch. Its worker count is free. The first
     /// keyframe is imported through `import_all`; each `Step` is re-sent
     /// with its ids, each `Reset` re-issued (a `reset_all` token is dropped at
     /// once); each `Recv` waits for exactly its recorded ids and compares
@@ -139,6 +143,25 @@ impl Replay<'_> {
                 field: "a state write without its keyframe",
             });
         }
+        // Receive what is still in flight, so ids the file sent but never
+        // claimed show up in `unclaimed` whatever the timing (a file cut while
+        // ids were outstanding).
+        if !run.summary.poisoned {
+            while let Ok(token) = pool.recv() {
+                for id in token.ids() {
+                    if let Some(held) = usize::try_from(id).ok().and_then(|i| run.early.get_mut(i))
+                    {
+                        *held = Some(Vec::new());
+                    }
+                }
+            }
+        }
+        run.summary.unclaimed = run
+            .early
+            .iter()
+            .zip(0u32..)
+            .filter_map(|(held, id)| held.as_ref().map(|_| id))
+            .collect();
         Ok(run.summary)
     }
 
@@ -165,9 +188,18 @@ impl Replay<'_> {
             return Err(malformed("a state write without its keyframe"));
         }
         let result = match event {
-            Event::Keyframe { ids, records, .. } => {
+            Event::Keyframe {
+                ids,
+                records,
+                reset_source,
+                ..
+            } => {
+                fresh_only(&reset_source)?;
                 return self.async_keyframe(pool, run, index, &ids, records);
             }
+            Event::Adaptive { .. } => return Err(not_yet(Tag::Adaptive)),
+            Event::ResetSource(_) => return Err(not_yet(Tag::ResetSource)),
+            Event::ResetFrom { .. } => return Err(not_yet(Tag::ResetFrom)),
             Event::Checkpoint { ids, hashes } => {
                 for (id, hash) in ids_of(&ids, run.early.len()).into_iter().zip(hashes) {
                     if pool.snapshot(id)?.hash() != hash {

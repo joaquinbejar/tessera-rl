@@ -58,6 +58,10 @@ impl Replay<'_> {
             1 => IllegalActionPolicy::Penalize(f32::from_bits(self.file.penalty_bits)),
             _ => return Err(invalid("illegal_kind")),
         };
+        // #411: the recorded chunk size, when the file holds one (0: any).
+        if let Some(chunk_size) = NonZeroU32::new(self.header.chunk_size) {
+            options.chunk_size = chunk_size;
+        }
         Ok(options)
     }
 

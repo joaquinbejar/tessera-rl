@@ -421,6 +421,8 @@ impl<'p, E: HostEnvironment, const A: usize, W: Write> HostRecorder<'p, E, A, W>
         };
         self.body.clear();
         self.body.extend_from_slice(&0u64.to_le_bytes());
+        // The reset source (ADR-0075): host pools have no archives (item 8).
+        self.body.push(0);
         push_ids(&mut self.body, ids)?;
         (snap.records)(self.pool, ids, &mut self.body)?;
         self.emit_body(EventTag::Keyframe)
@@ -629,6 +631,7 @@ fn header_bytes<E: HostEnvironment, const A: usize>(
     if let Some(identity) = identity {
         out.extend_from_slice(&identity.to_le_bytes());
     }
+    super::v1_fields::push_default_extension(&mut out, pool.options().chunk_size.get());
     let sum = checksum(&out);
     out.extend_from_slice(&sum.to_le_bytes());
     Ok(out)
