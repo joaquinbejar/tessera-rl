@@ -40,6 +40,11 @@ harness = false
 name = "cartpole_lanes"
 harness = false
 
+# The 1.2x stop of ADR-0071: the lane path against the scalar step.
+[[bench]]
+name = "cartpole_lane_stop"
+harness = false
+
 # Instruction counts (gungraun, Linux only; ADR-0025).
 [[bench]]
 name = "classic_instructions"

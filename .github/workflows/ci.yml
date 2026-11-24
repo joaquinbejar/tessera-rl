@@ -79,6 +79,12 @@ jobs:
       - run: python3 scripts/check_simd_disasm.py
       - run: cargo test --workspace --all-features --locked
       - run: cargo test --workspace --locked
+      # ADR-0071: the goldens and the continuation suite again with the lane
+      # level forced to scalar; they must pass unchanged at both levels.
+      - name: Goldens forced scalar (TESSERA_RL_SIMD=scalar)
+        run: cargo test -p tessera-rl-classic --test golden --test continuation --locked
+        env:
+          TESSERA_RL_SIMD: scalar
       # tests/host-glue enables the engine's host feature, so workspace
       # feature unification builds the engine with it in every run above.
       - name: Engine alone, default features, clippy (no host)
@@ -380,6 +386,11 @@ jobs:
       - run: make py-test-torch
       # The tool that anchors wheels to the golden fixtures (wheels.yml runs it).
       - run: make py-test-wheels
+      # ADR-0071: the wheel goldens again with the lane level forced to scalar.
+      - name: Wheel goldens forced scalar (TESSERA_RL_SIMD=scalar)
+        run: make py-test-wheels
+        env:
+          TESSERA_RL_SIMD: scalar
       # The JAX handles (marker `jax`, SPEC 15.2) at the pinned jax and jaxlib.
       - run: make py-test-jax
       # The .pyi stubs (issue #348): mypy --strict, and stubtest against the
