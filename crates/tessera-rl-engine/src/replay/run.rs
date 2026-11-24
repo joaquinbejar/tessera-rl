@@ -3,20 +3,25 @@
 //! Replaying a file into a pool and the divergence check (ADR-0072 section
 //! 5).
 
+use core::any::Any;
+use std::sync::Arc;
 use tessera_rl_core::config::{CanonicalConfig, canonical_bytes};
 use tessera_rl_core::encoding::{Canonical, decode_from_slice};
-use tessera_rl_core::{AdaptiveValues, Persist, RecordLayout, StateHash, Validate};
 
+use tessera_rl_core::{AdaptiveValues, Environment, Persist, RecordLayout, StateHash, Validate};
+
+use crate::archive::{Archive, ResetSource};
+use crate::error::EngineError;
 use crate::masks::PersistMask;
 use crate::persist::{BUILD_ID, PersistError, identity};
 use crate::pool::EnvPool;
-use crate::record::DecodedRecord;
+use crate::record::{DecodedRecord, PoolContext};
 use crate::validate::ActionInput;
 
 use super::format::EventTag as Tag;
 use super::reader::{Event, Ids, Replay};
-use super::v1_fields::{fresh_only, not_yet};
-use super::{DivergenceKind, ReplayError};
+use super::v1_fields::not_yet;
+use super::{DivergenceKind, ReplayError, ResetSourceRecord};
 
 /// What a replay checked.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -84,6 +89,70 @@ pub(super) struct State {
     last_call: Option<u64>,
     /// The ids and branch counter of the pending state write.
     write: Option<(Ids, u64)>,
+    /// The archive the caller gave for the file's archive reset source
+    /// (ADR-0075 item 7), type-erased: the cursor is not generic.
+    pub(super) archive: Option<AnyArchive>,
+}
+
+/// An `Archive<E>` without its environment type, for the replay state.
+#[derive(Clone)]
+pub(super) struct AnyArchive(Arc<dyn Any + Send + Sync>);
+
+impl AnyArchive {
+    pub(super) fn new<E: Environment>(archive: &Archive<E>) -> Self {
+        Self(Arc::new(archive.clone()))
+    }
+}
+
+impl core::fmt::Debug for AnyArchive {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("AnyArchive")
+    }
+}
+
+/// The caller's archive in `st`, if it has one of environment `E`.
+pub(super) fn archive_ref<E: Environment>(st: &State) -> Option<&Archive<E>> {
+    st.archive.as_ref()?.0.downcast_ref::<Archive<E>>()
+}
+
+/// Checks before any write that a keyframe's reset source can be restored:
+/// an archive source needs the caller's archive with its digest.
+pub(super) fn check_source<E: Environment>(
+    source: &ResetSourceRecord,
+    archive: Option<&Archive<E>>,
+) -> Result<(), ReplayError> {
+    match (source, archive) {
+        (ResetSourceRecord::Fresh, _) => Ok(()),
+        (ResetSourceRecord::Archive { digest, .. }, Some(a)) if a.digest() == *digest => Ok(()),
+        (ResetSourceRecord::Archive { digest, .. }, other) => Err(EngineError::ArchiveMismatch {
+            expected: *digest,
+            found: other.map_or(0, Archive::digest),
+        }
+        .into()),
+    }
+}
+
+/// Restores a keyframe's whole pool context, its reset source included,
+/// with the caller's archive when the source names one.
+pub(super) fn restore_context<E, M>(
+    pool: &mut EnvPool<E, M>,
+    context: PoolContext,
+    archive: Option<&Archive<E>>,
+) -> Result<(), ReplayError>
+where
+    E: Persist + Validate,
+    E::Config: CanonicalConfig + Sync,
+    E::Header: Send,
+    E::State: Send,
+    M: PersistMask<E>,
+    <E::Header as RecordLayout>::Adaptive: AdaptiveValues<E::Config>,
+{
+    let given = match context.reset_source {
+        ResetSourceRecord::Fresh => None,
+        ResetSourceRecord::Archive { .. } => archive,
+    };
+    pool.restore_pool_context(context, given)?;
+    Ok(())
 }
 
 impl State {
@@ -95,6 +164,7 @@ impl State {
             last_checkpoint: None,
             last_call: None,
             write: None,
+            archive: None,
         }
     }
 
@@ -166,6 +236,34 @@ impl Replay<'_> {
         self.run_with(pool, |_, _| core::ops::ControlFlow::Continue(()))
     }
 
+    /// [`Replay::run`] for a file whose pool resets from an archive
+    /// (ADR-0075 item 7): `archive` is the archive the file names by digest,
+    /// in its header, keyframes and `ResetSource` events. `None` replays a
+    /// file of fresh resets only.
+    ///
+    /// # Errors
+    ///
+    /// As [`Replay::run`], and [`ReplayError::Engine`] with
+    /// [`EngineError::ArchiveMismatch`] when the file names an archive and
+    /// `archive` is missing or has another digest.
+    pub fn run_with_archive<E, M>(
+        &self,
+        pool: &mut EnvPool<E, M>,
+        archive: Option<&Archive<E>>,
+    ) -> Result<ReplaySummary, ReplayError>
+    where
+        E: Persist + Validate,
+        E::Config: CanonicalConfig + Sync,
+        E::Header: Send,
+        E::State: Send,
+        M: PersistMask<E>,
+        <E::Header as RecordLayout>::Adaptive: AdaptiveValues<E::Config>,
+    {
+        let mut cur = self.cursor_with_archive(pool, archive)?;
+        while self.advance(pool, &mut cur, |_| false)?.is_some() {}
+        self.finish(cur)
+    }
+
     pub(crate) fn check_pool<E, M>(&self, pool: &EnvPool<E, M>) -> Result<(), ReplayError>
     where
         E: Persist,
@@ -225,6 +323,10 @@ impl Replay<'_> {
         Ok(())
     }
 
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one match arm per event kind (ADR-0072 section 3)"
+    )]
     pub(super) fn apply<E, M>(
         &self,
         pool: &mut EnvPool<E, M>,
@@ -313,13 +415,27 @@ impl Replay<'_> {
                 reset_source,
                 ids,
                 records,
-            } => {
-                fresh_only(&reset_source)?;
-                self.apply_keyframe(pool, st, index, branch_counter, &ids, records)
-            }
+            } => self.apply_keyframe(
+                pool,
+                st,
+                index,
+                PoolContext {
+                    branch_counter,
+                    reset_source,
+                },
+                &ids,
+                records,
+            ),
             Event::Adaptive { .. } => Err(not_yet(Tag::Adaptive)),
-            Event::ResetSource(_) => Err(not_yet(Tag::ResetSource)),
-            Event::ResetFrom { .. } => Err(not_yet(Tag::ResetFrom)),
+            Event::ResetSource(record) => {
+                let source = reset_source_of(&record, archive_ref::<E>(st))?;
+                let result = pool.set_reset_source(source);
+                call_outcome(pool, st, index, result.is_ok())
+            }
+            Event::ResetFrom { ids, entries } => {
+                let result = pool.reset_from(&ids, &entries).map(|_| ());
+                call_outcome(pool, st, index, result.is_ok())
+            }
             Event::Checkpoint { ids, hashes } => {
                 for (id, hash) in ids_of(&ids, self.header.num_envs).into_iter().zip(hashes) {
                     if pool.state_hash(id)? != hash {
@@ -346,7 +462,7 @@ impl Replay<'_> {
         pool: &mut EnvPool<E, M>,
         st: &mut State,
         index: u64,
-        branch_counter: u64,
+        context: PoolContext,
         ids: &Ids,
         records: &[u8],
     ) -> Result<(), ReplayError>
@@ -364,14 +480,29 @@ impl Replay<'_> {
         };
         let records = self.decode_records::<E>(index, records)?;
         st.summary.keyframes = st.summary.keyframes.saturating_add(1);
+        let branch_counter = context.branch_counter;
         if index == 0 {
             if *ids != Ids::All {
                 return Err(malformed("first keyframe ids"));
             }
+            // The header's archive block is the source at recording start:
+            // the first keyframe's context must name the same.
+            let header_source = self
+                .header
+                .archive
+                .map_or(ResetSourceRecord::Fresh, |a| a.to_record());
+            if header_source != context.reset_source {
+                return Err(malformed("first keyframe reset source"));
+            }
+            // Refused before any write: a missing or different archive.
+            check_source(&context.reset_source, archive_ref::<E>(st))?;
             pool.import_all(&records)
                 .map_err(|_| st.diverged(index, DivergenceKind::KeyframeRejected, None))?;
-            pool.set_branch_counter(branch_counter)?;
+            restore_context(pool, context, archive_ref::<E>(st))?;
             return Ok(());
+        }
+        if pool.pool_context()?.reset_source != context.reset_source {
+            return Err(st.diverged(index, DivergenceKind::ResetSource, None));
         }
         if let Expect::Keyframe(write) = st.expect {
             st.expect = Expect::Any;
@@ -450,6 +581,22 @@ where
         return Ok(());
     }
     Err(st.diverged(index, DivergenceKind::CallFailed, None))
+}
+
+/// The pool's reset source for a `ResetSource` event: fresh, or `archive`
+/// when its digest is the one recorded.
+fn reset_source_of<E: Environment>(
+    record: &ResetSourceRecord,
+    archive: Option<&Archive<E>>,
+) -> Result<ResetSource<E>, ReplayError> {
+    check_source(record, archive)?;
+    match (record, archive) {
+        (ResetSourceRecord::Archive { weights, .. }, Some(a)) => Ok(ResetSource::Archive {
+            archive: a.clone(),
+            weights: Some(weights.clone()),
+        }),
+        _ => Ok(ResetSource::Fresh),
+    }
 }
 
 /// The ids of an event as a list.

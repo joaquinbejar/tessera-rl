@@ -14,6 +14,7 @@ use tessera_rl_core::config::{CanonicalConfig, canonical_bytes};
 use tessera_rl_core::encoding::{Canonical, HashSink, Sink, encode_to_vec};
 use tessera_rl_core::{AdaptiveValues, Persist, RecordLayout, Validate};
 
+use crate::archive::ResetSource;
 use crate::error::EngineError;
 use crate::masks::PersistMask;
 use crate::outputs::Outputs;
@@ -22,8 +23,8 @@ use crate::pool::{EnvPool, Reseed};
 use crate::record::{DecodedRecord, Record};
 use crate::validate::ActionInput;
 
-use super::ReplayError;
 use super::format::{EventTag, REPLAY_MAGIC, StateWriteOp, push_ids, push_len};
+use super::{ReplayError, ResetSourceRecord};
 
 /// Options of a [`Recorder`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -336,6 +337,42 @@ where
         })
     }
 
+    /// [`EnvPool::set_reset_source`], logged as a `ResetSource` event
+    /// (ADR-0075 item 7) after it succeeds; a refused source logs nothing.
+    ///
+    /// # Errors
+    ///
+    /// As [`Recorder::reset_all`].
+    pub fn set_reset_source(&mut self, source: ResetSource<E>) -> Result<(), ReplayError> {
+        self.open()?;
+        self.body.clear();
+        let record = match &source {
+            ResetSource::Fresh => ResetSourceRecord::Fresh,
+            ResetSource::Archive { archive, weights } => ResetSourceRecord::Archive {
+                digest: archive.digest(),
+                weights: weights.clone().unwrap_or_else(|| vec![1; archive.len()]),
+            },
+        };
+        super::v1_fields::push_reset_source(&mut self.body, &record);
+        let result = self.pool.set_reset_source(source);
+        self.logged(EventTag::ResetSource, result, KeyframeAfter::No)
+    }
+
+    /// [`EnvPool::reset_from`], logged as a `ResetFrom` event (ADR-0075
+    /// item 5).
+    ///
+    /// # Errors
+    ///
+    /// As [`Recorder::reset_all`].
+    pub fn reset_from(&mut self, ids: &[u32], entries: &[u32]) -> Result<&Outputs, ReplayError> {
+        self.open()?;
+        self.body.clear();
+        super::v1_fields::push_reset_from(&mut self.body, ids, entries);
+        let result = self.pool.reset_from(ids, entries).map(|_| ());
+        self.logged(EventTag::ResetFrom, result, KeyframeAfter::No)?;
+        Ok(self.pool.outputs()?)
+    }
+
     /// Writes the trailer: a final checkpoint (unless the pool was poisoned
     /// or the last event already is one), then the end event. Returns the
     /// writer, flushed.
@@ -436,10 +473,11 @@ where
     /// A keyframe of `ids` (`None`: every instance).
     fn keyframe(&mut self, ids: Option<&[u32]>) -> Result<(), ReplayError> {
         self.body.clear();
-        let counter = self.pool.pool_context()?.branch_counter;
-        self.body.extend_from_slice(&counter.to_le_bytes());
-        // The reset source (ADR-0075): Fresh until archives exist.
-        self.body.push(0);
+        let context = self.pool.pool_context()?;
+        self.body
+            .extend_from_slice(&context.branch_counter.to_le_bytes());
+        // The pool context's reset source (ADR-0075 item 7).
+        super::v1_fields::push_reset_source(&mut self.body, &context.reset_source);
         push_ids(&mut self.body, ids)?;
         for id in self.ids(ids) {
             let record = DecodedRecord::<E>::from(self.pool.snapshot(id)?);
@@ -530,7 +568,8 @@ where
     M: PersistMask<E>,
     <E::Header as RecordLayout>::Adaptive: AdaptiveValues<E::Config>,
 {
-    header_from::<E, M>(&pool.cfg, &pool.options, pool.action_heads(), 0)
+    let source = pool.pool_context()?.reset_source;
+    header_from::<E, M>(&pool.cfg, &pool.options, pool.action_heads(), 0, &source)
 }
 
 /// The header of a first-party file from the pool's config, options and
@@ -540,6 +579,7 @@ pub(super) fn header_from<E, M>(
     options: &crate::options::PoolOptions,
     (discrete, continuous): (usize, usize),
     flags: u8,
+    source: &super::ResetSourceRecord,
 ) -> Result<Vec<u8>, ReplayError>
 where
     E: Persist,
@@ -572,7 +612,7 @@ where
     // flags, then host_protocol, notifies, refuses: 0 for a first-party pool.
     out.extend_from_slice(&[flags, 0, 0, 0]);
     let chunk = options.chunk_size.get();
-    super::v1_fields::push_default_extension(&mut out, chunk);
+    super::v1_fields::push_extension(&mut out, chunk, source);
     let sum = tessera_rl_core::encoding::checksum(&out);
     out.extend_from_slice(&sum.to_le_bytes());
     Ok(out)

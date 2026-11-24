@@ -13,6 +13,7 @@ use core::ops::ControlFlow;
 use tessera_rl_core::config::CanonicalConfig;
 use tessera_rl_core::{AdaptiveValues, Persist, RecordLayout, Validate};
 
+use crate::archive::Archive;
 use crate::masks::PersistMask;
 use crate::persist::u64_of;
 use crate::pool::EnvPool;
@@ -20,8 +21,7 @@ use crate::record::PoolContext;
 
 use super::format::EventTag;
 use super::reader::{Event, Ids, Replay};
-use super::run::{Expect, State};
-use super::v1_fields::fresh_only;
+use super::run::{AnyArchive, Expect, State, archive_ref, check_source, restore_context};
 use super::{DivergenceKind, ReplayError, ReplaySummary};
 
 /// What kind of event a [`ReplayPoint`] is.
@@ -138,13 +138,39 @@ impl Replay<'_> {
         M: PersistMask<E>,
         <E::Header as RecordLayout>::Adaptive: AdaptiveValues<E::Config>,
     {
+        self.cursor_with_archive(pool, None)
+    }
+
+    /// [`Replay::cursor`] for a file whose pool resets from an archive
+    /// (ADR-0075 item 7): the cursor keeps `archive`, which the first
+    /// keyframe, `ResetSource` events and [`Replay::seek`] restore by digest.
+    ///
+    /// # Errors
+    ///
+    /// As [`Replay::cursor`].
+    pub fn cursor_with_archive<E, M>(
+        &self,
+        pool: &EnvPool<E, M>,
+        archive: Option<&Archive<E>>,
+    ) -> Result<ReplayCursor, ReplayError>
+    where
+        E: Persist,
+        E::Config: CanonicalConfig + Sync,
+        E::Header: Send,
+        E::State: Send,
+        M: PersistMask<E>,
+        <E::Header as RecordLayout>::Adaptive: AdaptiveValues<E::Config>,
+    {
         self.check_pool(pool)?;
+        self.check_archives(archive)?;
         let offsets = self.event_offsets()?;
         let (events_len, input_len) = self.shape();
+        let mut state = State::new();
+        state.archive = archive.map(AnyArchive::new);
         Ok(ReplayCursor {
             offsets,
             pos: 0,
-            state: State::new(),
+            state,
             done: false,
             events_len,
             input_len,
@@ -229,9 +255,58 @@ impl Replay<'_> {
         Ok(summary)
     }
 
+    /// Refuses, before anything is replayed, a file whose archive sources
+    /// cannot be restored with `archive` (ADR-0075 item 7): every digest the
+    /// file names (the header's archive block, every keyframe's reset source
+    /// and every `ResetSource` event) must be one archive, the one given.
+    ///
+    /// # Errors
+    ///
+    /// [`ReplayError::Unsupported`] for two or more archives in one file;
+    /// [`ReplayError::Engine`] with [`crate::EngineError::ArchiveMismatch`]
+    /// when the file names an archive and `archive` is missing or another;
+    /// the parse errors of [`Replay::events`].
+    fn check_archives<E: tessera_rl_core::Environment>(
+        &self,
+        archive: Option<&Archive<E>>,
+    ) -> Result<(), ReplayError> {
+        let mut named: Option<u64> = self.header.archive.map(|a| a.digest);
+        let mut note = |source: &super::ResetSourceRecord| -> Result<(), ReplayError> {
+            if let super::ResetSourceRecord::Archive { digest, .. } = source {
+                match named {
+                    Some(d) if d != *digest => {
+                        return Err(ReplayError::Unsupported {
+                            feature: "more than one archive in one replay file: one archive per file (ADR-0075)",
+                        });
+                    }
+                    _ => named = Some(*digest),
+                }
+            }
+            Ok(())
+        };
+        for item in self.events() {
+            match item? {
+                (_, Event::Keyframe { reset_source, .. }) => note(&reset_source)?,
+                (_, Event::ResetSource(source)) => note(&source)?,
+                _ => {}
+            }
+        }
+        match named {
+            Some(digest) => check_source(
+                &super::ResetSourceRecord::Archive {
+                    digest,
+                    weights: Vec::new(),
+                },
+                archive,
+            ),
+            None => Ok(()),
+        }
+    }
+
     /// The event indices of the keyframes [`Replay::seek`] accepts: the
-    /// keyframes of every instance that do not complete a state write and
-    /// whose reset source is fresh, in file order (event 0 included).
+    /// keyframes of every instance that do not complete a state write, in
+    /// file order (event 0 included). A keyframe with an archive reset source
+    /// needs a cursor made with [`Replay::cursor_with_archive`] (ADR-0075).
     ///
     /// # Errors
     ///
@@ -241,13 +316,8 @@ impl Replay<'_> {
         let mut after_write = false;
         for item in self.events() {
             let (index, event) = item?;
-            if let Event::Keyframe {
-                ids: Ids::All,
-                reset_source,
-                ..
-            } = &event
+            if let Event::Keyframe { ids: Ids::All, .. } = &event
                 && !after_write
-                && fresh_only(reset_source).is_ok()
             {
                 out.push(index);
             }
@@ -258,7 +328,8 @@ impl Replay<'_> {
 
     /// Moves the cursor to the keyframe at event `keyframe_event`: its
     /// records are imported into every instance with `import_all` and the
-    /// pool context (the branch counter) is restored, so the pool holds the
+    /// pool context (the branch counter and the reset source, with the
+    /// cursor's archive for an archive source) is restored, so the pool holds the
     /// recorded state at that event. The cursor then stands just after the
     /// keyframe, with fresh counters: a summary after a seek counts from the
     /// keyframe.
@@ -267,9 +338,11 @@ impl Replay<'_> {
     ///
     /// [`ReplayError::Unsupported`] unless the event is one that
     /// [`Replay::keyframes`] lists (a keyframe of every instance, not part
-    /// of a state write, with a fresh reset source); the parse errors of the
-    /// keyframe; [`ReplayError::Diverged`] with `KeyframeRejected` if the
-    /// pool refuses its records.
+    /// of a state write); [`ReplayError::Engine`] with
+    /// [`crate::EngineError::ArchiveMismatch`], before any write, for an
+    /// archive reset source when the cursor has no archive or another one;
+    /// the parse errors of the keyframe; [`ReplayError::Diverged`] with
+    /// `KeyframeRejected` if the pool refuses its records.
     pub fn seek<E, M>(
         &self,
         pool: &mut EnvPool<E, M>,
@@ -305,15 +378,27 @@ impl Replay<'_> {
         else {
             return Err(not_seekable());
         };
-        fresh_only(&reset_source)?;
-        let records = self.decode_records::<E>(index, records)?;
+        // An archive source needs the cursor's archive: refused before any
+        // write, so a refused seek leaves the pool untouched.
+        let archive = cur.state.archive.clone();
         let mut st = State::new();
+        st.archive = archive;
+        let given = archive_ref::<E>(&st);
+        check_source(&reset_source, given)?;
+        let records = self.decode_records::<E>(index, records)?;
         pool.import_all(&records)
             .map_err(|_| st.diverged(index, DivergenceKind::KeyframeRejected, None))?;
-        // The whole pool context: the branch counter and fresh resets (the
-        // keyframe's reset source is fresh, checked above), whatever the pool
-        // held before the seek (REVIEW-4c-design-r1 point 2).
-        pool.restore_pool_context(PoolContext::new(branch_counter), None)?;
+        // The whole pool context: the branch counter and the keyframe's reset
+        // source (ADR-0075), whatever the pool held before the seek
+        // (REVIEW-4c-design-r1 point 2).
+        restore_context(
+            pool,
+            PoolContext {
+                branch_counter,
+                reset_source,
+            },
+            archive_ref::<E>(&st),
+        )?;
         st.summary.keyframes = 1;
         st.summary.started_at = Some(index);
         let next = ReplayCursor::after(pos)?;

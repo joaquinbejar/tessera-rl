@@ -20,10 +20,11 @@ use core::num::NonZeroU32;
 use common::{CountConfig, Counter};
 use tessera_rl_core::encoding::checksum;
 use tessera_rl_engine::replay::{
-    Event, EventTag, Recorder, Replay, ReplayError, ReplayWriterOptions, ResetSourceRecord,
+    DivergenceKind, Event, EventTag, Recorder, Replay, ReplayError, ReplayWriterOptions,
+    ResetSourceRecord,
 };
 use tessera_rl_engine::{
-    ActionInput, DecodeLimits, EnvPool, Masked, PersistError, PoolOptions, Reseed,
+    ActionInput, DecodeLimits, EngineError, EnvPool, Masked, PersistError, PoolOptions, Reseed,
 };
 use tessera_rl_num::identity::Seed;
 
@@ -290,9 +291,12 @@ fn test_replay_v1_curriculum_and_archive_refusals() {
     let replay = Replay::open(&archive, LIMITS).unwrap();
     let weights: Vec<u32> = replay.header().archive.unwrap().weights().collect();
     assert_eq!(weights, [1, 0, 3]);
+    // ADR-0075 (#363): the header names an archive and none is given:
+    // refused before anything is replayed. (With the archive, a fresh first
+    // keyframe is malformed: classic's archive_replay forged-header test.)
     assert!(matches!(
         run_error(&archive),
-        ReplayError::Unsupported { .. }
+        ReplayError::Engine(EngineError::ArchiveMismatch { found: 0, .. })
     ));
 }
 
@@ -364,8 +368,12 @@ fn test_replay_v1_adaptive_event_refusals() {
 
 #[test]
 fn test_replay_v1_reset_source_and_reset_from_refusals() {
+    // ADR-0075 (#363): a fresh `ResetSource` replays as a call.
     let fresh = with_event(0, EventTag::ResetSource as u8, vec![0]);
-    assert!(matches!(run_error(&fresh), ReplayError::Unsupported { .. }));
+    Replay::open(&fresh, LIMITS)
+        .unwrap()
+        .run(&mut pool())
+        .unwrap();
     let mut from = 2u32.to_le_bytes().to_vec();
     for w in [0u32, 2, 5, 9] {
         from.extend_from_slice(&w.to_le_bytes());
@@ -376,7 +384,14 @@ fn test_replay_v1_reset_source_and_reset_from_refusals() {
         e,
         Ok((_, Event::ResetFrom { ref ids, ref entries })) if ids == &[0, 2] && entries == &[5, 9]
     )));
-    assert!(matches!(run_error(&file), ReplayError::Unsupported { .. }));
+    // A `reset_from` on a pool without an archive fails on replay.
+    assert!(matches!(
+        run_error(&file),
+        ReplayError::Diverged {
+            kind: DivergenceKind::CallFailed,
+            ..
+        }
+    ));
     let words = |w: &[u32]| -> Vec<u8> { w.iter().flat_map(|x| x.to_le_bytes()).collect() };
     for (tag, bad) in [
         (EventTag::ResetSource, vec![2]),
@@ -397,7 +412,7 @@ fn test_replay_v1_reset_source_and_reset_from_refusals() {
 }
 
 #[test]
-fn test_replay_v1_keyframe_archive_source_is_unsupported() {
+fn test_replay_v1_keyframe_archive_source_differing_from_the_header_is_malformed() {
     let mut p = split(&recording());
     // The first keyframe: branch counter (8), then the reset source byte.
     let body = &mut p.events[0].1;
@@ -408,15 +423,21 @@ fn test_replay_v1_keyframe_archive_source_is_unsupported() {
         body.insert(9 + k, b);
     }
     let file = join(&p, 0);
-    assert!(matches!(run_error(&file), ReplayError::Unsupported { .. }));
+    // ADR-0075 (#363): a keyframe names an archive and none is given:
+    // refused before anything is replayed.
+    assert!(matches!(
+        run_error(&file),
+        ReplayError::Engine(EngineError::ArchiveMismatch { found: 0, .. })
+    ));
 }
 
 #[test]
-fn test_replay_seek_keyframe_archive_source_refused_pool_untouched() {
-    // A keyframe whose reset source is an archive (ADR-0075): replay cannot
-    // restore that source yet, so seek refuses it with a typed error before
-    // importing anything, and keyframes() does not offer it
-    // (REVIEW-4c-design-r1 point 2: restore the full context or refuse).
+fn test_replay_seek_keyframe_archive_source_without_the_archive_refused_pool_untouched() {
+    // A keyframe whose reset source is an archive (ADR-0075, #363): keyframes()
+    // lists it, and seek restores that source only with the archive it names.
+    // A cursor without the archive is refused with `ArchiveMismatch` before
+    // importing anything (REVIEW-4c-design-r1 point 2: restore the full
+    // context or refuse).
     let mut p = split(&recording());
     let body = &mut p.events[0].1;
     let mut source = archive_block(1, &[1]);
@@ -427,15 +448,19 @@ fn test_replay_seek_keyframe_archive_source_refused_pool_untouched() {
     }
     let file = join(&p, 0);
     let replay = Replay::open(&file, LIMITS).unwrap();
-    assert!(!replay.keyframes().unwrap().contains(&0));
+    assert!(replay.keyframes().unwrap().contains(&0));
     let mut pool = pool();
     pool.reset_all(Reseed::Base(Seed::new(11))).unwrap();
     let before: Vec<u64> = (0..N).map(|i| pool.state_hash(i).unwrap().get()).collect();
     let context = pool.pool_context().unwrap();
-    let mut cur = replay.cursor(&pool).unwrap();
+    // The cursor itself is refused (the file names an archive, none is
+    // given), so no seek can write.
     assert!(matches!(
-        replay.seek(&mut pool, &mut cur, 0),
-        Err(ReplayError::Unsupported { .. })
+        replay.cursor(&pool),
+        Err(ReplayError::Engine(EngineError::ArchiveMismatch {
+            found: 0,
+            ..
+        }))
     ));
     let after: Vec<u64> = (0..N).map(|i| pool.state_hash(i).unwrap().get()).collect();
     assert_eq!(after, before);

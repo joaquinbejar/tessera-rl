@@ -33,6 +33,9 @@ pub enum DivergenceKind {
     RefusalMismatch,
     /// A call's outputs hash differs (ADR-0072 section 4).
     OutputsMismatch,
+    /// A keyframe's reset source differs from the replayed pool's
+    /// (ADR-0075 item 7).
+    ResetSource,
     /// An Async `recv` could not deliver the recorded ids: an id the
     /// recording received was never sent on replay, or nothing was left in
     /// flight.

@@ -408,6 +408,12 @@ impl Replay<'_> {
             return incompatible("host_protocol");
         };
         self.check_v1(pool.options().chunk_size.get())?;
+        // ADR-0075 item 8: archives are for first-party pools.
+        if self.header.archive.is_some() {
+            return Err(ReplayError::Unsupported {
+                feature: "archive resets in host replay files",
+            });
+        }
         let (config, hash) = match (host.config_checked(), ops) {
             (true, Some(ops)) => (ops.config)(pool)?,
             (true, None) => return incompatible("config: the host has no snapshots"),

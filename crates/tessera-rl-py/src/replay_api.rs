@@ -51,6 +51,7 @@ const fn kind_name(kind: DivergenceKind) -> &'static str {
         DivergenceKind::NotPoisoned => "not_poisoned",
         DivergenceKind::Checkpoint => "checkpoint",
         DivergenceKind::Keyframe => "keyframe",
+        DivergenceKind::ResetSource => "reset_source",
         DivergenceKind::BranchCounter => "branch_counter",
         DivergenceKind::KeyframeRejected => "keyframe_rejected",
         DivergenceKind::RejectionMismatch => "rejection_mismatch",
