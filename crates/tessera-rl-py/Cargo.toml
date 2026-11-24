@@ -31,7 +31,8 @@ pyo3 = { workspace = true, features = ["extension-module"] }
 tessera-rl-pyffi = { workspace = true, features = ["native-module"] }
 tessera-rl-core.workspace = true
 tessera-rl-num.workspace = true
-tessera-rl-engine.workspace = true
+# Replay files (ADR-0072): `tessera_rl.replay`, first-party environments.
+tessera-rl-engine = { workspace = true, features = ["replay"] }
 tessera-rl-classic.workspace = true
 tessera-rl-games.workspace = true
 tessera-rl-search.workspace = true

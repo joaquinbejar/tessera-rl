@@ -95,6 +95,10 @@ varargs!(ImportRecordM, api::import_record);
 varargs!(ForkM, api::fork);
 varargs!(EncodeM, api::encode);
 varargs!(LoadM, api::load);
+varargs!(RecordStartM, crate::replay_api::record_start);
+noargs!(RecordFinishM, crate::replay_api::record_finish);
+noargs!(RecordAbortM, crate::replay_api::record_abort);
+varargs!(ReplayM, crate::replay_api::replay);
 
 /// `close()`: on an inherited object a no-op, as the deallocation: it
 /// neither joins nor refuses, so `with` blocks and cleanup paths in a child
@@ -133,6 +137,13 @@ static METHODS: MethodTable<EnvBody> = MethodTable::new(&[
         c"load",
         c"load(data, ids, max_instances, max_decoded_bytes)",
     ),
+    MethodRow::varargs::<RecordStartM>(
+        c"_record_start",
+        c"_record_start(keyframe_every, checkpoint_every): see tessera_rl.replay",
+    ),
+    MethodRow::noargs::<RecordFinishM>(c"_record_finish", c"_record_finish() -> bytes"),
+    MethodRow::noargs::<RecordAbortM>(c"_record_abort", c"_record_abort()"),
+    MethodRow::varargs::<ReplayM>(c"_replay", c"_replay(data) -> tuple: see tessera_rl.replay"),
     MethodRow::varargs::<SendM>(c"send", c"send(half, actions: bytes of int32, delivered)"),
     MethodRow::varargs::<RecvM>(
         c"recv",

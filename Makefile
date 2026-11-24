@@ -199,10 +199,11 @@ py-typecheck:
 	uv sync --locked --python 3.11 || status=1; \
 	exit $$status
 
-# The unit tests of tools/wheel_golden.py, then the default environment again.
+# The unit tests of tools/wheel_golden.py and the replay tests that need
+# xxhash (the tampered-file divergence), then the default environment again.
 py-test-wheels:
 	uv sync --locked --python 3.11 --group test --group wheels
-	uv run --locked --python 3.11 --group test --group wheels pytest -q tests/python/test_wheel_golden.py
+	uv run --locked --python 3.11 --group test --group wheels pytest -q tests/python/test_wheel_golden.py tests/python/test_replay.py
 	uv sync --locked --python 3.11
 
 # The installed wheel against the committed golden fixtures: the Rust golden

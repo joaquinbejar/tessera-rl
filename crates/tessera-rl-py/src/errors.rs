@@ -26,5 +26,8 @@ pub(crate) fn to_py(g: Gil, e: BindError) -> Raised {
         }
         BindError::Search(e) => error(g, Kind::Search, e.to_string()),
         BindError::Onnx(message) => error(g, Kind::Onnx, message),
+        // Divergences are returned to Python as data by `replay`; any other
+        // replay refusal is a refused file, as for `load`.
+        BindError::Replay(e) => error(g, Kind::Persist, e.to_string()),
     }
 }
