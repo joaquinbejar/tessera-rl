@@ -195,3 +195,77 @@ jobs:
             determinism.json
       - if: always()
         run: rm -rf "$WHEEL_RUN" dist golden-report.json checks.json determinism.json
+
+  # musllinux_1_2 wheels (SPEC 20.1, #350). They carry the `onnx` feature like
+  # every release wheel (ADR-0057 section 6): the extension is dynamically
+  # linked against musl, so it can load only a user-supplied musl ONNX Runtime
+  # of the pinned version, and with none the evaluator raises the typed
+  # missing-library error, which wheel_job.sh's onnx smoke asserts.
+  musl-x86_64:
+    needs: linux
+    name: W0 (x86_64-unknown-linux-musl)
+    runs-on: [self-hosted, xaskar]
+    timeout-minutes: 90
+    container:
+      # Digest of quay.io/pypa/musllinux_1_2_x86_64:latest on 2026-11-24.
+      image: quay.io/pypa/musllinux_1_2_x86_64@sha256:43f81b5440015302cd0b0671d3d05d1961a2a0995cb7ff3d1725ce62990498a8
+      # As the manylinux x86_64 leg: CPUs 12-15, PID 1 reaps orphans, the
+      # runner's user.
+      options: --cpuset-cpus=12-15 --init --user 1000:1000
+    defaults:
+      run:
+        shell: bash
+    env:
+      WHEEL_RUN: ${{ github.workspace }}/.wheel-run
+      # x86-64 implements trapped FP exceptions on musl as on glibc (#225).
+      TESSERA_EXPECT_FP_TRAPS: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: scripts/wheel_job.sh x86_64-unknown-linux-musl musllinux_1_2 1552169aba2836777136ccff7a381e95c17233b5d8250cd5e10ae3cb971bfcfc 5d61f26b6c7213779eda90edc6971ea6b0b796bfb8d49a574c8ad69b59838548 release
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          if-no-files-found: warn
+          name: wheel-x86_64-unknown-linux-musl
+          path: |
+            dist/*.whl
+            golden-report.json
+            checks.json
+            determinism.json
+      # The workspace is bind-mounted, so the container's end does not clean it.
+      - if: always()
+        run: rm -rf "$WHEEL_RUN" dist golden-report.json checks.json determinism.json
+
+  musl-aarch64:
+    # GitHub-hosted, guarded as linux-aarch64 is.
+    needs: preflight
+    if: github.event_name == 'workflow_dispatch' && github.repository == 'joaquinbejar/tessera-rl'
+    name: W0 (aarch64-unknown-linux-musl)
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    container:
+      # Digest of quay.io/pypa/musllinux_1_2_aarch64:latest on 2026-11-24.
+      image: quay.io/pypa/musllinux_1_2_aarch64@sha256:83734eadb0172f639c75221229f42298568e63ea74e6d827ee3f91fb3a17e5b3
+      options: --init
+    defaults:
+      run:
+        shell: bash
+    env:
+      WHEEL_RUN: ${{ github.workspace }}/.wheel-run
+      # No TESSERA_EXPECT_FP_TRAPS: aarch64 does not implement trapped FP
+      # exceptions, as on the manylinux aarch64 leg.
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: scripts/wheel_job.sh aarch64-unknown-linux-musl musllinux_1_2 956deacdc27ab82ae7ac821d5d3e9e95e4795d476d17efe99743bb8531ca1031 819692e404d23e5aae6bc44c0e260f1f5492fd1910ab4693b2c650f926dbe800 release
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          if-no-files-found: warn
+          name: wheel-aarch64-unknown-linux-musl
+          path: |
+            dist/*.whl
+            golden-report.json
+            checks.json
+            determinism.json

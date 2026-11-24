@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: MIT OR Apache-2.0
-"""The PyPI workflow: trusted publishing of one wheels run's three wheels,
+"""The PyPI workflow: trusted publishing of one wheels run's five wheels,
 checked against that run and the release tag, on dispatch only, never from a
 fork, with the OIDC token as the only credential of the upload job."""
 
@@ -150,11 +150,14 @@ def test_pypi_artifact_names_are_those_wheels_yml_uploads():
     src = VERIFY.read_text()
     assert "name: wheel-aarch64-unknown-linux-gnu\n" in WHEELS
     assert "name: wheel-aarch64-apple-darwin\n" in WHEELS
+    assert "name: wheel-x86_64-unknown-linux-musl\n" in WHEELS
+    assert "name: wheel-aarch64-unknown-linux-musl\n" in WHEELS
+    assert '"wheel-x86_64-unknown-linux-musl"' in src and '"wheel-aarch64-unknown-linux-musl"' in src
     assert 'echo "name=wheel-$TARGET-$PROFILE-$COMMIT-$sha"' in WHEELS
     assert '"wheel-aarch64-unknown-linux-gnu"' in src and '"wheel-aarch64-apple-darwin"' in src
     assert "wheel-x86_64-unknown-linux-gnu-wheel-" in src
     # Each wheels artifact carries the checks.json the script reads.
-    assert WHEELS.count("            checks.json\n") == 3
+    assert WHEELS.count("            checks.json\n") == 5
 
 
 def test_pypi_reads_the_layout_wheels_yml_uploads():
@@ -219,6 +222,10 @@ RUN_WHEELS = {
 def _run_tree(tmp_path) -> Path:
     arts = tmp_path / "artifacts"
     shutil.copytree(RUN_TREE, arts)
+    # The recorded run predates the musllinux legs (#350): stub artifacts for
+    # them, consistent with their own checks.json.
+    for key in ("x86_64-unknown-linux-musl", "aarch64-unknown-linux-musl"):
+        _artifact(arts, key, version="0.2.0", commit=RUN_COMMIT)
     return arts
 
 
@@ -303,7 +310,7 @@ def test_pypi_verify_accepts_a_real_wheels_run(tmp_path):
     commit = w1[0].split("-wheel-", 1)[1].split("-")[0]
     p, out = _verify(arts, tag=tag, commit=commit, out=tmp_path / "dist")
     assert p.returncode == 0, p.stdout + p.stderr
-    assert len((out / "SHA256SUMS").read_text().splitlines()) == 3
+    assert len((out / "SHA256SUMS").read_text().splitlines()) == 5
 
 
 # --- the verify script ---------------------------------------------------------
@@ -311,6 +318,8 @@ def test_pypi_verify_accepts_a_real_wheels_run(tmp_path):
 PLAT = {
     "x86": "manylinux_2_28_x86_64",
     "aarch64-unknown-linux-gnu": "manylinux_2_28_aarch64",
+    "x86_64-unknown-linux-musl": "musllinux_1_2_x86_64",
+    "aarch64-unknown-linux-musl": "musllinux_1_2_aarch64",
     "aarch64-apple-darwin": "macosx_11_0_arm64",
 }
 
@@ -357,7 +366,7 @@ def _verify(artifacts, tag=TAG, commit=COMMIT, out=None):
 
 
 @long_paths
-def test_pypi_verify_accepts_the_three_wheels_and_writes_sums(tmp_path):
+def test_pypi_verify_accepts_the_five_wheels_and_writes_sums(tmp_path):
     arts = tmp_path / "a"
     _good(arts)
     p, out = _verify(arts)
@@ -366,7 +375,7 @@ def test_pypi_verify_accepts_the_three_wheels_and_writes_sums(tmp_path):
     assert names == sorted(["SHA256SUMS"] + [f"tessera_rl-0.2.0-cp311-abi3-{v}.whl" for v in PLAT.values()])
     check = subprocess.run(["shasum", "-a", "256", "-c", "SHA256SUMS"] if shutil.which("shasum") else ["sha256sum", "-c", "SHA256SUMS"], cwd=out, capture_output=True, text=True)
     assert check.returncode == 0, check.stdout + check.stderr
-    assert len((out / "SHA256SUMS").read_text().splitlines()) == 3
+    assert len((out / "SHA256SUMS").read_text().splitlines()) == 5
 
 
 @pytest.mark.parametrize(
@@ -377,7 +386,7 @@ def test_pypi_verify_accepts_the_three_wheels_and_writes_sums(tmp_path):
         (lambda a: _artifact(a, "x86", commit="d" * 40), "expected one W1 artifact"),
     ],
 )
-def test_pypi_verify_refuses_a_run_without_exactly_the_three_artifacts(tmp_path, mutate, message):
+def test_pypi_verify_refuses_a_run_without_exactly_the_five_artifacts(tmp_path, mutate, message):
     arts = tmp_path / "a"
     _good(arts)
     mutate(arts)
@@ -388,7 +397,7 @@ def test_pypi_verify_refuses_a_run_without_exactly_the_three_artifacts(tmp_path,
 
 def _replace(arts, key, **kw):
     for d in arts.iterdir():
-        if (key == "x86" and d.name.startswith("wheel-x86_64")) or d.name == f"wheel-{key}":
+        if (key == "x86" and d.name.startswith("wheel-x86_64-unknown-linux-gnu")) or d.name == f"wheel-{key}":
             shutil.rmtree(d)
     return _artifact(arts, key, **kw)
 
@@ -610,7 +619,7 @@ def _sha256sum_on_path(bin_: Path):
 @long_paths
 @bash
 @pytest.mark.parametrize("change", [None, "extra", "changed", "missing"])
-def test_pypi_publish_sums_step_passes_only_the_three_checked_wheels(tmp_path, change):
+def test_pypi_publish_sums_step_passes_only_the_five_checked_wheels(tmp_path, change):
     arts = tmp_path / "a"
     _good(arts)
     dist = tmp_path / "w" / "dist"
