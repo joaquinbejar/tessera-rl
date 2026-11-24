@@ -1,5 +1,5 @@
 error[E0080]: evaluation panicked: Observation: discrete leaves must be ObsLeaf<i32>
- --> tests/ui/fail/obs_discrete_f64.rs:6:10
+ --> tests/ui/fail/obs_discrete_f64.rs:9:5
   |
-6 | #[derive(Observation)]
-  |          ^^^^^^^^^^^ evaluation of `_` failed here
+9 |     x: ObsLeaf<f64>,
+  |     ^ evaluation of `_` failed here

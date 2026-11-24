@@ -19,9 +19,13 @@ note: erroneous constant encountered
   |                  ^^^^^^^^^^^^^^^
 
 note: erroneous constant encountered
- --> tests/ui/fail/pool_padded.rs:6:10
+ --> tests/ui/fail/pool_padded.rs:9:5
   |
-6 | #[derive(EnvState, Clone, Copy)]
-  |          ^^^^^^^^
+9 |     items: Pool<u32, 3>,
+  |     ^^^^^
+
+note: erroneous constant encountered
+ --> tests/ui/fail/pool_padded.rs:9:12
   |
-  = note: this note originates in the derive macro `EnvState` (in Nightly builds, run with -Z macro-backtrace for more info)
+9 |     items: Pool<u32, 3>,
+  |            ^^^^

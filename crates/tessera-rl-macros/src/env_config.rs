@@ -13,7 +13,7 @@
 //! the engine (milestone 5, ADR-0036).
 
 use proc_macro2::TokenStream;
-use quote::{ToTokens, format_ident, quote};
+use quote::{ToTokens, format_ident, quote, quote_spanned};
 use syn::{Data, DeriveInput, Expr, ExprRange, Fields, Ident, LitStr, Type};
 
 use crate::paths::core_path;
@@ -140,8 +140,9 @@ impl ConfigParts {
             self.checks
                 .push(quote!(#core::EnvConfig::validate(&self.#ident)?;));
             // ADR-0030: only top-level fields can be adaptive.
-            self.static_checks.push(quote! {
-                assert!(
+            // Spanned at the field, so the error points at it (SPEC 10.2).
+            self.static_checks.push(quote_spanned! {ident.span()=>
+                const _: () = assert!(
                     <#ty as #core::config::CanonicalConfig>::ADAPTIVE_FIELDS.is_empty(),
                     "EnvConfig: nested configs cannot have adaptive fields (ADR-0030)"
                 );
@@ -255,9 +256,7 @@ pub(crate) fn derive(input: &DeriveInput) -> syn::Result<TokenStream> {
 
         #decoder
 
-        const _: () = {
-            #(#static_checks)*
-        };
+        #(#static_checks)*
 
         impl #core::config::CanonicalConfig for #name {
             const ADAPTIVE_FIELDS: &'static [&'static str] = &[#(#adaptive),*];

@@ -1,0 +1,5 @@
+error[E0080]: evaluation panicked: EnvState: `S` has padding before field `d`; insert a Reserved<N> field before it, with N = offset_of!(S, d) minus the end of the previous field (ADR-0029)
+  --> tests/ui/fail/padding_middle.rs:11:5
+   |
+11 |     d: u64,
+   |     ^ evaluation of `_` failed here

@@ -1,5 +1,5 @@
 error[E0080]: evaluation panicked: Observation: the dtype attribute does not match the leaf type
- --> tests/ui/fail/obs_dtype_mismatch.rs:6:10
+ --> tests/ui/fail/obs_dtype_mismatch.rs:9:5
   |
-6 | #[derive(Observation)]
-  |          ^^^^^^^^^^^ evaluation of `_` failed here
+9 |     x: ObsLeaf<u8>,
+  |     ^ evaluation of `_` failed here

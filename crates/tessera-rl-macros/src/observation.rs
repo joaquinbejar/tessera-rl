@@ -10,7 +10,7 @@
 //! `LeafId<T>` constant per field, named after the field in upper case.
 
 use proc_macro2::TokenStream;
-use quote::{format_ident, quote};
+use quote::{format_ident, quote, quote_spanned};
 use syn::meta::ParseNestedMeta;
 use syn::{DeriveInput, Expr, Ident, Pat, Type};
 
@@ -153,6 +153,7 @@ const DTYPES: &[(&str, &str)] = &[
 
 fn leaf_space(
     core: &TokenStream,
+    ident: &Ident,
     elem: &Type,
     leaf: &Leaf,
     dtype_checks: &mut Vec<TokenStream>,
@@ -173,8 +174,8 @@ fn leaf_space(
                     ));
                 };
                 let variant = format_ident!("{}", variant);
-                dtype_checks.push(quote! {
-                    assert!(
+                dtype_checks.push(quote_spanned! {ident.span()=>
+                    const _: () = assert!(
                         matches!(<#elem as #core::LeafDType>::DTYPE, #core::space::DType::#variant),
                         "Observation: the dtype attribute does not match the leaf type"
                     );
@@ -190,8 +191,8 @@ fn leaf_space(
             }
         }
         Leaf::Discrete { n } => {
-            dtype_checks.push(quote! {
-                assert!(
+            dtype_checks.push(quote_spanned! {ident.span()=>
+                const _: () = assert!(
                     matches!(<#elem as #core::LeafDType>::DTYPE, #core::space::DType::I32),
                     "Observation: discrete leaves must be ObsLeaf<i32>"
                 );
@@ -204,8 +205,8 @@ fn leaf_space(
             }
         }
         Leaf::MultiBinary { shape } => {
-            dtype_checks.push(quote! {
-                assert!(
+            dtype_checks.push(quote_spanned! {ident.span()=>
+                const _: () = assert!(
                     matches!(<#elem as #core::LeafDType>::DTYPE, #core::space::DType::Bool),
                     "Observation: multi_binary leaves must be ObsLeaf<Bool8>"
                 );
@@ -264,7 +265,7 @@ pub(crate) fn derive(input: &DeriveInput) -> syn::Result<TokenStream> {
             pub const #id: #core::LeafId<#elem> = #core::LeafId::new(#index);
         });
         let key = ident.to_string();
-        let space = leaf_space(&core, elem, &leaf, &mut dtype_checks)?;
+        let space = leaf_space(&core, ident, elem, &leaf, &mut dtype_checks)?;
         spaces.push(quote!((::std::string::String::from(#key), #space)));
     }
     let leaves = spaces.len();
@@ -279,9 +280,8 @@ pub(crate) fn derive(input: &DeriveInput) -> syn::Result<TokenStream> {
             #(#ids)*
         }
 
-        const _: () = {
-            #(#dtype_checks)*
-        };
+        // One const item per leaf, spanned at the field (SPEC 10.2).
+        #(#dtype_checks)*
 
         // Marker fields hold no data; reading them here keeps dead-code
         // lints quiet in the author's crate.
