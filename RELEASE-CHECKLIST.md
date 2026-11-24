@@ -107,6 +107,38 @@ cargo publish --dry-run --locked <the same eight -p flags>
 - [ ] Create the annotated tag `v0.1.0` on the frozen SHA and push it.
 - [ ] Create the GitHub release from the CHANGELOG section.
 - [ ] docs.rs builds every crate.
+- [ ] Upload no file named `SHA256SUMS-assets` or `*.cyclonedx.json` to the
+      release by hand: `pypi.yml`'s `release-assets` job adds them, and it
+      never replaces an existing asset.
+
+### Verifying a release (signing, attestations, SBOMs; #350)
+
+Signing is keyless: Sigstore, through GitHub's OIDC identity of the workflow
+that built or published the file. There is no key to keep, rotate or lose.
+Offline signing keys would need an ADR.
+
+- **PyPI.** `pypi.yml` publishes by trusted publishing, and
+  `gh-action-pypi-publish` uploads a PEP 740 attestation with every file.
+  The `release-assets` job checks that PyPI lists one per wheel, from
+  `joaquinbejar/tessera-rl`, workflow `pypi.yml`
+  (`scripts/pypi_attestations.py`). PyPI's project page shows them per file.
+- **GitHub.** `release-assets` attests the five wheels and every SBOM with
+  `actions/attest-build-provenance`. Verify a downloaded file with
+  `gh attestation verify <file> -R joaquinbejar/tessera-rl`.
+- **SBOMs.** Every wheel carries a CycloneDX SBOM of its Rust dependencies
+  at `<dist>.dist-info/sboms/tessera-rl-py.cyclonedx.json`, checked by the
+  wheel job (`tools/sbom_check.py`). The release also carries the following
+  (`scripts/crates_sbom.py`, from Cargo.lock), and `SHA256SUMS-assets` holds
+  the sums of the wheels and SBOMs:
+  - each wheel's SBOM, as `<wheel name>.cyclonedx.json`;
+  - `tessera-rl-<version>-crates.cyclonedx.json`, for the crates published
+    to crates.io.
+- **If `release-assets` fails after the upload.** PyPI is already published,
+  and its files cannot be uploaded again. Fix the cause, then rerun only the
+  failed job of that `pypi.yml` run ("Re-run failed jobs"). It reuses the
+  run's `pypi-dist-<run>` artifact, which is kept for 7 days. The upload
+  never clobbers: if some assets were already uploaded, delete only those
+  from the release before the rerun.
 
 ## 5. Public repository
 

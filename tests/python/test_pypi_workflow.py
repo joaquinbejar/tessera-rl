@@ -694,3 +694,41 @@ def test_pypi_verify_requires_every_check_including_sbom(tmp_path, checks, messa
     p, out = _verify(arts)
     assert p.returncode == 1 and message in p.stderr, p.stderr
     assert not out.exists()
+
+
+# --- release assets (#350 PR 4) -------------------------------------------------
+
+RELEASE_JOB = _job(PYPI, "release-assets")
+
+
+def test_pypi_release_assets_is_the_only_job_that_writes_contents():
+    assert re.search(r"^    needs: publish$", RELEASE_JOB, re.M)
+    perms = re.search(r"^    permissions:\n((?:      .*\n)+)", RELEASE_JOB).group(1)
+    assert sorted(perms.split()) == sorted(["contents:", "write", "id-token:", "write", "attestations:", "write"])
+    assert PYPI.count("contents: write") == 1
+    assert "contents: write" not in VERIFY_JOB and "contents: write" not in PUBLISH_JOB
+    guard = re.search(r"^    if: (.*)$", RELEASE_JOB, re.M).group(1)
+    assert "github.event_name == 'workflow_dispatch'" in guard and "github.repository == 'joaquinbejar/tessera-rl'" in guard
+
+
+def test_pypi_release_assets_attests_with_a_pinned_action_and_never_clobbers():
+    assert "actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2" in RELEASE_JOB
+    assert "--clobber" not in PYPI
+    upload = _step(RELEASE_JOB, "Upload to the release")
+    assert 'gh release upload "$TAG" assets/*.cyclonedx.json assets/SHA256SUMS-assets' in upload
+    # Its own sums file, so it never meets the owner's SHA256SUMS.
+    assert "assets/SHA256SUMS-assets" in _step(RELEASE_JOB, "The SBOMs")
+
+
+def test_pypi_release_assets_checks_attestations_before_uploading():
+    steps = RELEASE_JOB.split("    steps:\n", 1)[1]
+    order = [steps.index(s) for s in ("pypi_attestations.py", "crates_sbom.py", "attest-build-provenance", "gh release upload")]
+    assert order == sorted(order)
+    assert "--timeout 300" in _step(RELEASE_JOB, "PyPI attestations")
+
+
+def test_pypi_release_assets_sboms_are_named_after_their_wheels():
+    sboms = _step(RELEASE_JOB, "The SBOMs")
+    assert 'assets/$base.cyclonedx.json' in sboms and 'base="$(basename "$w" .whl)"' in sboms
+    assert ".dist-info/sboms/tessera-rl-py.cyclonedx.json" in sboms
+    assert '"assets/tessera-rl-${TAG#v}-crates.cyclonedx.json"' in sboms
