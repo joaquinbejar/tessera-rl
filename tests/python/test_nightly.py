@@ -257,3 +257,17 @@ def test_nightly_ack_restarts_the_streak_so_a_new_regression_waits_a_night():
     v, _ = run_nights([("c1", 0, (), []), ("c2", 0, (), ack), ("c3", 0, (), ack)], speeds=speeds)
     assert [x["status"] for x in v] == ["flagged", "flagged", "flagged"]
     assert [x["red"] for x in v] == [False, False, True]
+
+
+def test_nightly_state_lists_are_capped():
+    # Every night flagged against the held base c0: the lists stay bounded.
+    plan = [(f"c{i}", 0.10, ()) for i in range(1, nightly.KEEP + 15)]
+    v, state = run_nights(plan, binding=False)
+    assert len(state["history"]) == nightly.KEEP
+    assert len(state["flagged_heads"]) == nightly.KEEP
+    assert state["flagged_heads"][-1] == f"c{nightly.KEEP + 14}"
+    state["consumed_acks"] = [f"x{i}" for i in range(nightly.KEEP)]
+    acks = [{"commit": state["flagged_heads"][-1], "reason": "r"}]
+    new, applied = nightly.resolve_acks(state, acks, f"c{nightly.KEEP + 20}", ancestor)
+    assert applied and len(new["consumed_acks"]) == nightly.KEEP
+    assert new["consumed_acks"][-1] == state["flagged_heads"][-1]
