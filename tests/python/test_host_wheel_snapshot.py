@@ -131,3 +131,14 @@ def test_host_wheel_snapshot_has_no_fork_branched():
     with pytest.raises(tessera_rl.CapabilityError):
         env.snapshot_all()
     env.close()
+
+
+def test_host_wheel_snapshot_load_refuses_custom_limits():
+    env = tessera_rl.make(COUNTER, num_envs=N)
+    env.reset()
+    data = env.encode()
+    for kw in ({"max_instances": 2}, {"max_decoded_bytes": 1 << 20}):
+        with pytest.raises(tessera_rl.ArgumentError, match="default decode limits"):
+            env.load(data, **kw)
+    env.load(data)
+    env.close()

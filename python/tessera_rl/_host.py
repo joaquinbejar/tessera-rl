@@ -540,12 +540,13 @@ class HostEnv:
 
     def load(self, data: bytes, ids=None, max_instances=None, max_decoded_bytes=None) -> None:
         """Loads a file from ``encode`` into ``ids`` (default: every
-        instance), with the default decode limits. ``PersistError`` for a
-        damaged, malformed or mismatched file. It is no recovery path: a
+        instance), with the default decode limits: ``max_instances`` and
+        ``max_decoded_bytes`` must be ``None`` (``ArgumentError``).
+        ``PersistError`` for a damaged, malformed or mismatched file. It is no recovery path: a
         poisoned host environment refuses it."""
         obj = self._snap("load")
         if max_instances is not None or max_decoded_bytes is not None:
-            raise _native.CapabilityError("host files are read with the default decode limits")
+            raise _native.ArgumentError("load: host files are read with the default decode limits; max_instances and max_decoded_bytes must be None")
         if ids is None:
             ids = range(self.num_envs)
         obj.import_records([_index(i, "ids") for i in ids], data)
