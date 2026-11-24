@@ -327,6 +327,63 @@ fn test_leduc_heuristic_plays_whole_hands_to_the_end() {
     }
 }
 
+/// Chips the baseline wins over `hands` hands against a player choosing
+/// uniformly among its legal actions, the baseline taking each seat in turn.
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "whole chips, at most 13 a hand"
+)]
+fn baseline_chips_against_uniform(hands: u64) -> i64 {
+    use tessera_rl_core::Heuristic;
+    use tessera_rl_core::io::ActionWriter;
+    let mut chips = 0_i64;
+    for hand in 0..hands {
+        let bot = usize::try_from(hand % 2).unwrap();
+        let mut lcg = 0x1ed0_c000_u64 + hand;
+        let mut p = pool(hand);
+        while !terminated(&p) {
+            let s = *p.state(0).unwrap();
+            let me = s.mover();
+            let action = if me == bot {
+                let mut a = [0_i32];
+                let mut w = ActionWriter::new(&mut a, &mut []);
+                Leduc::act(
+                    &CFG,
+                    &s,
+                    agent(u16::try_from(me).unwrap()),
+                    &mut rng(0, 0),
+                    &mut w,
+                );
+                u32::try_from(a[0]).unwrap()
+            } else {
+                let legal: Vec<u32> = (0..3_u32)
+                    .filter(|&a| mask(&p, me)[usize::try_from(a).unwrap()])
+                    .collect();
+                lcg = lcg
+                    .wrapping_mul(6_364_136_223_846_793_005)
+                    .wrapping_add(1_442_695_040_888_963_407);
+                legal[usize::try_from(lcg >> 33).unwrap() % legal.len()]
+            };
+            play(&mut p, action);
+        }
+        // Terminal rewards are chips over 13 (MAX_CONTRIBUTION).
+        let chips_won = (rewards(&p)[bot] * 13.0).round();
+        chips += chips_won as i64;
+    }
+    chips
+}
+
+#[test]
+fn test_leduc_baseline_beats_a_uniform_player() {
+    let hands = 2_000;
+    let chips = baseline_chips_against_uniform(hands);
+    assert!(
+        chips > 0,
+        "the baseline lost {chips} chips over {hands} hands"
+    );
+    assert_eq!(chips, 2255, "pinned chips over {hands} hands");
+}
+
 #[test]
 fn test_leduc_exact_chip_outcome_maps_to_chips_over_thirteen() {
     use tessera_rl_games::leduc::MAX_CONTRIBUTION;
