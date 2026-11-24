@@ -14,7 +14,6 @@ use crate::record::{DecodedRecord, PoolContext};
 use crate::validate::ActionInput;
 
 use super::format::EventTag as Tag;
-use super::format::StateWriteOp;
 use super::reader::{Event, Ids, Replay};
 use super::v1_fields::{fresh_only, not_yet};
 use super::{DivergenceKind, ReplayError};
@@ -275,7 +274,7 @@ impl Replay<'_> {
                 ids,
                 branch_counter,
             } => {
-                if op == StateWriteOp::RestoreAll && ids != Ids::All {
+                if op.writes_all() && ids != Ids::All {
                     return Err(malformed("restore_all ids"));
                 }
                 st.summary.calls = st.summary.calls.saturating_add(1);

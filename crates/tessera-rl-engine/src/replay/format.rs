@@ -54,7 +54,9 @@
 //!   code:u32)*count`, sparse, in (instance, slot) order, codes nonzero.
 //! - `Rejected` (3, notifying hosts only): `count:u32 discrete:i32*count
 //!   count:u32 continuous_bits:u32*count instance:u32 code:u32`.
-//! - `StateWrite` (4): `op:u8`, the written ids, `branch_counter:u64` after
+//! - `StateWrite` (4): `op:u8` (0 `restore`, 1 `restore_all`, 2 `import`,
+//!   3 `fork`, 4 `fork_branched`, 5 `import_all`, 6 `set_lineage`; 1 and 5
+//!   write every instance), the written ids, `branch_counter:u64` after
 //!   the call. A `Keyframe` of those ids follows.
 //! - `Keyframe` (5): `branch_counter:u64`, `reset_source` (the pool
 //!   context's, ADR-0075 item 7), ids, then one record per id: a canonical
@@ -215,6 +217,19 @@ pub enum StateWriteOp {
     Fork = 3,
     /// `fork_branched`.
     ForkBranched = 4,
+    /// `import_all` (#389): every instance, like `restore_all`.
+    ImportAll = 5,
+    /// `set_lineage` (#389): one instance's RNG identity; the keyframe holds
+    /// its record with the new lineage.
+    SetLineage = 6,
+}
+
+impl StateWriteOp {
+    /// Whether the operation writes every instance (its ids must be all).
+    #[must_use]
+    pub const fn writes_all(self) -> bool {
+        matches!(self, Self::RestoreAll | Self::ImportAll)
+    }
 }
 
 impl StateWriteOp {
@@ -227,6 +242,8 @@ impl StateWriteOp {
             2 => Self::Import,
             3 => Self::Fork,
             4 => Self::ForkBranched,
+            5 => Self::ImportAll,
+            6 => Self::SetLineage,
             _ => return None,
         })
     }
