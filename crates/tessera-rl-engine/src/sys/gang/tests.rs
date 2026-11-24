@@ -763,7 +763,12 @@ fn test_gang_adaptive_worker_spins_through_a_learned_gap() {
     assert!(parks_in_some_trial(None, gap, probe, PARK_TRIALS));
     // Adaptive, cap 50 ms: the learned budget (about 2 x 2 ms) covers the
     // probe.
-    assert!(spins_through_some_probe(Some(50_000_000), gap, probe, PARK_TRIALS));
+    assert!(spins_through_some_probe(
+        Some(50_000_000),
+        gap,
+        probe,
+        PARK_TRIALS
+    ));
     // Adaptive, cap 0.2 ms: the cap ends the spinning before the probe.
     assert!(parks_in_some_trial(Some(200_000), gap, probe, PARK_TRIALS));
     // Adaptive, cap 50 ms, but back-to-back jobs taught a tiny EWMA: the
