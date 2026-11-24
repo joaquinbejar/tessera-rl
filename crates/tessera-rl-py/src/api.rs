@@ -319,14 +319,36 @@ pub(crate) fn make_mountaincar(g: Gil, kwargs: Option<Ref<'_>>) -> CResult<Inner
 /// set above the largest value, so it never acts first.
 pub(crate) fn make_grid(g: Gil, kwargs: Option<Ref<'_>>) -> CResult<Inner> {
     let kw = Kwargs::parse(g, kwargs)?;
-    kw.check(g, &[&POOL_KEYS, &["outputs", "size", "max_steps"]])?;
+    kw.check(
+        g,
+        &[&POOL_KEYS, &["outputs", "size", "max_steps", "layout"]],
+    )?;
     let borrowed = borrowed(g, &kw)?;
     let args = pool_args(g, &kw, 10_001)?;
     let (size, max_steps) = (kw.u32(g, "size")?, kw.u32(g, "max_steps")?);
+    let layout = kw
+        .get("layout")
+        .map(|v| asset_arg::<tessera_rl_classic::GridLayout>(g, v, "layout"))
+        .transpose()?;
     let ops = g
-        .detach(|| crate::env::grid(&args, size, max_steps))
+        .detach(|| crate::env::grid(&args, size, max_steps, layout))
         .map_err(|e| to_py(g, e))?;
     Ok(Inner::new(ops, borrowed))
+}
+
+/// An asset argument (ADR-0077): a bundled asset's name (`str`) or its
+/// bytes (`bytes`, at most 16 MiB). A refused asset is `ConfigError`.
+fn asset_arg<T: tessera_rl_core::AssetData>(
+    g: Gil,
+    v: Ref<'_>,
+    what: &str,
+) -> CResult<tessera_rl_core::Asset<T>> {
+    let built = if capi::kind(v) == capi::Kind::Str {
+        tessera_rl_core::Asset::bundled(&capi::to_string(g, v, what)?)
+    } else {
+        tessera_rl_core::Asset::from_bytes(capi::bytes_of(g, v, what)?)
+    };
+    built.map_err(|e| error(g, Kind::Config, format!("{what}: {e}")))
 }
 
 /// `make_keydoor(**kwargs)`: the pool of a key and door environment object;

@@ -306,6 +306,10 @@ impl<'a> Replay<'a> {
             .into());
         }
         file.check_fields_for(host.is_some())?;
+        // ADR-0077: host replays hold no assets (host snapshots neither).
+        if host.is_some() && file.asset_count != 0 {
+            return Err(PersistError::Incompatible { field: "assets" }.into());
+        }
         if file.count == 0 {
             return Err(PersistError::InvalidField {
                 field: "instance_count",

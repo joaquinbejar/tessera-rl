@@ -141,6 +141,13 @@ where
         if self.is_poisoned() {
             return Err(crate::error::EngineError::Poisoned.into());
         }
+        // ADR-0077 point 6: host snapshots hold no assets until a follow-up
+        // ADR extends ADR-0073.
+        let mut assets = Vec::new();
+        tessera_rl_core::EnvConfig::asset_entries(self.config(), &mut assets);
+        if !assets.is_empty() {
+            return Err(PersistError::Incompatible { field: "assets" });
+        }
         let id = self.host_identity()?;
         let count = u32::try_from(ids.len()).map_err(|_| PersistError::InvalidField {
             field: "instance_count",

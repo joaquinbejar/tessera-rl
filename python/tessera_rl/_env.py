@@ -553,6 +553,10 @@ _STRING_OPTIONS = {"auto_reset", "outputs", "mode", "gather", "obs"}
 #: Constructor options passed as exact ``bool`` (the RTS ``seat_swap``).
 _BOOL_OPTIONS = frozenset({"seat_swap"})
 
+#: Asset options (ADR-0077): a bundled asset's name (``str``) or its bytes
+#: (``bytes``, or any buffer, copied to exact ``bytes``).
+_ASSET_OPTIONS = frozenset({"layout"})
+
 
 def native_kwargs(**kwargs) -> dict:
     """Constructor options as exact ``int``/``str``/``bool``/``None`` values for the
@@ -563,6 +567,13 @@ def native_kwargs(**kwargs) -> dict:
             out[key] = None
         elif key in _STRING_OPTIONS:
             out[key] = str(value)
+        elif key in _ASSET_OPTIONS:
+            if isinstance(value, str):
+                out[key] = str(value)
+            elif isinstance(value, (bytes, bytearray, memoryview)):
+                out[key] = bytes(value)
+            else:
+                raise TypeError(f"{key} must be a bundled asset name (str) or bytes, got {type(value).__name__}")
         elif key in _BOOL_OPTIONS:
             if not isinstance(value, (bool, np.bool_)):
                 raise TypeError(f"{key} must be a bool, got {type(value).__name__}")
@@ -621,8 +632,10 @@ def make(env_id: str, num_envs: int = 1, seed: int = 0, outputs: str = "borrowed
     takes its config fields (``width``, ``height``, ``pursuers``,
     ``evaders``, ``slip``, ``radius``). Connect Four takes no config;
     its ``max_episode_steps`` defaults to 64, above the 42 plies of a game.
-    The reference grid world takes ``size`` and ``max_steps``; it truncates
-    by itself. Key and door takes ``size`` and ``agents``; its
+    The reference grid world takes ``size``, ``max_steps`` and ``layout``
+    (its wall map, a content-addressed asset: a bundled name, ``"open"``
+    by default or ``"rooms8"``, or ``bytes`` with one ``.``/``#`` row per
+    line; ``ConfigError`` if refused); it truncates by itself. Key and door takes ``size`` and ``agents``; its
     ``max_episode_steps`` defaults to 512. Snake takes ``size``, ``agents``
     and ``obs`` (``"pixels"`` or ``"state"``); its ``max_episode_steps`` defaults
     to 1000. Brick wall takes ``frameskip``, ``lives`` and ``obs``; its

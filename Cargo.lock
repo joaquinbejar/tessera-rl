@@ -1031,6 +1031,7 @@ dependencies = [
  "proptest",
  "tessera-rl-num",
  "thiserror",
+ "tracing",
  "xxhash-rust",
 ]
 

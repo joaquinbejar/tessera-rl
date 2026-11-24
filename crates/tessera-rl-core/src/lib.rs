@@ -17,6 +17,7 @@ pub mod encoding;
 // Authoring API (SPEC 10, ADR-0012, ADR-0014, ADR-0030).
 pub mod adapters;
 pub mod agent;
+pub mod asset;
 pub mod config;
 pub mod config_canonical;
 pub mod config_decode;
@@ -36,6 +37,7 @@ pub mod step_out;
 
 pub use adapters::Adapters;
 pub use agent::{AgentSlot, Tier, TurnStructure};
+pub use asset::{Asset, AssetData, AssetEntry, AssetError, AssetHash};
 pub use bool8::Bool8;
 pub use config_canonical::{CanonicalDecode, CanonicalDecodeError, decode_canonical};
 pub use config_decode::{ConfigDecode, ConfigDecodeError, ConfigItem, ConfigSource};

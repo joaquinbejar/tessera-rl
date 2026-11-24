@@ -73,3 +73,52 @@ def test_gym_bounds_are_one_for_all_or_one_per_element():
     assert (tg._single_space(leaf([1], [9], [2, 2])).low == 1).all()
     with pytest.raises(ValueError, match="reshape"):
         tg._single_space(leaf([1, 2, 3, 4], [9] * 4, [4, 4]))
+
+
+ROOMS = b"....#...\n....#...\n........\n....#...\n###.####\n....#...\n........\n....#...\n"
+EAST = 2
+
+
+def test_grid_layout_bundled_name_and_bytes_build_the_same_walls():
+    # ADR-0077: a bundled name or the asset's bytes; walls show in channel 2.
+    by_name = make(size=8, layout="rooms8")
+    by_bytes = make(size=8, layout=ROOMS)
+    a = by_name.reset().observations["pixels"]
+    b = by_bytes.reset().observations["pixels"]
+    assert np.array_equal(a[0, 0, 2], b[0, 0, 2])
+    assert a[0, 0, 2, 4, 1] == 255, "wall at row 4, column 1"
+    assert a[0, 0, 2, 2, 4] == 0, "free inner cell"
+    by_name.close()
+    by_bytes.close()
+
+
+def test_grid_layout_wall_leaves_the_agent_in_place():
+    env = make(size=4, layout=b".#..\n....\n....\n....\n")
+    env.reset()
+    s = env.step(np.full((1, 1), EAST, dtype=np.int32))
+    assert s.observations["pixels"][0, 0, 0, 0, 0] == 255, "still at the start"
+    assert not bool(s.episode_terminated[0])
+    env.close()
+
+
+@pytest.mark.parametrize(
+    "kw",
+    [
+        {"layout": "nope"},
+        {"layout": b"..\n.x\n"},
+        {"size": 9, "layout": "rooms8"},
+        {"size": 4, "layout": b"#...\n....\n....\n....\n"},
+    ],
+)
+def test_grid_layout_refused_is_config_error(kw):
+    with pytest.raises(t.ConfigError):
+        make(**kw)
+
+
+def test_grid_layout_wrong_type_is_type_error():
+    with pytest.raises(TypeError, match="layout"):
+        make(layout=3)
+
+
+def test_grid_layout_bytearray_is_accepted():
+    make(size=8, layout=bytearray(ROOMS)).close()

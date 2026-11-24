@@ -18,6 +18,7 @@ categories.workspace = true
 inventory.workspace = true
 tessera-rl-num.workspace = true
 thiserror.workspace = true
+tracing.workspace = true
 xxhash-rust.workspace = true
 
 [dev-dependencies]

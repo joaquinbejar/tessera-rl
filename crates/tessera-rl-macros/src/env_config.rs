@@ -30,6 +30,7 @@ struct FieldAttrs {
     adaptive: bool,
     shape: bool,
     capacity: bool,
+    asset: Option<LitStr>,
 }
 
 fn parse_attrs(field: &syn::Field) -> syn::Result<FieldAttrs> {
@@ -56,9 +57,11 @@ fn parse_attrs(field: &syn::Field) -> syn::Result<FieldAttrs> {
                 attrs.shape = true;
             } else if meta.path.is_ident("capacity") {
                 attrs.capacity = true;
+            } else if meta.path.is_ident("asset") {
+                attrs.asset = Some(meta.value()?.parse()?);
             } else {
                 return Err(meta.error(
-                    "expected `default = ...`, `range = ...`, `adaptive`, `shape` or `capacity`",
+                    "expected `default = ...`, `range = ...`, `adaptive`, `shape`, `capacity` or `asset = \"name\"`",
                 ));
             }
             Ok(())
@@ -73,6 +76,20 @@ pub(crate) struct Entry {
     pub(crate) nested: bool,
 }
 
+/// Whether `ty` is `Asset<..>` (ADR-0077): written as its hash, decoded
+/// from a bundled name or bytes, never adaptive.
+fn is_asset(ty: &Type) -> bool {
+    last_ident(ty).as_deref() == Some("Asset")
+}
+
+/// An asset name: 1 to 64 bytes of `[a-z0-9_.-]` (ADR-0077 point 5).
+fn valid_asset_name(name: &str) -> bool {
+    (1..=64).contains(&name.len())
+        && name.bytes().all(|b| {
+            b.is_ascii_lowercase() || b.is_ascii_digit() || matches!(b, b'_' | b'.' | b'-')
+        })
+}
+
 #[derive(Default)]
 struct ConfigParts {
     defaults: Vec<TokenStream>,
@@ -81,9 +98,55 @@ struct ConfigParts {
     adaptive: Vec<String>,
     adaptive_fields: Vec<(Ident, Type)>,
     static_checks: Vec<TokenStream>,
+    /// `(field, asset name)` of each asset field.
+    assets: Vec<(Ident, String)>,
+    /// Nested config fields, whose assets are collected too.
+    nested_fields: Vec<Ident>,
 }
 
 impl ConfigParts {
+    /// Records an asset field's name (ADR-0077), refusing what an asset
+    /// cannot be, and refuses `asset = ...` elsewhere.
+    fn push_asset(
+        &mut self,
+        ident: &Ident,
+        key: &str,
+        attrs: &FieldAttrs,
+        asset: bool,
+    ) -> syn::Result<()> {
+        if asset {
+            if attrs.adaptive || attrs.shape || attrs.capacity || attrs.range.is_some() {
+                return Err(syn::Error::new_spanned(
+                    ident,
+                    "an asset field cannot be adaptive, a shape, a capacity or have a range (ADR-0077)",
+                ));
+            }
+            let name = attrs
+                .asset
+                .as_ref()
+                .map_or_else(|| key.to_owned(), LitStr::value);
+            if !valid_asset_name(&name) {
+                return Err(syn::Error::new_spanned(
+                    ident,
+                    "asset names are 1 to 64 bytes of [a-z0-9_.-] (ADR-0077)",
+                ));
+            }
+            if self.assets.iter().any(|(_, n)| *n == name) {
+                return Err(syn::Error::new_spanned(
+                    ident,
+                    format!("duplicate asset name `{name}`"),
+                ));
+            }
+            self.assets.push((ident.clone(), name));
+        } else if attrs.asset.is_some() {
+            return Err(syn::Error::new_spanned(
+                ident,
+                "`asset = ...` applies only to `Asset<T>` fields",
+            ));
+        }
+        Ok(())
+    }
+
     fn push(&mut self, core: &TokenStream, field: &syn::Field) -> syn::Result<()> {
         let Some(ident) = &field.ident else {
             return Ok(());
@@ -97,7 +160,12 @@ impl ConfigParts {
                 "config field name is too long",
             ));
         }
-        let nested = !is_primitive(ty)?;
+        let asset = is_asset(ty);
+        let nested = !asset && !is_primitive(ty)?;
+        self.push_asset(ident, &key, &attrs, asset)?;
+        if nested {
+            self.nested_fields.push(ident.clone());
+        }
         if attrs.adaptive && (attrs.shape || attrs.capacity) {
             return Err(syn::Error::new_spanned(
                 ident,
@@ -117,11 +185,15 @@ impl ConfigParts {
             ));
         }
 
-        self.defaults.push(if let Some(expr) = &attrs.default {
-            quote!(#ident: #expr,)
-        } else {
-            quote!(#ident: ::core::default::Default::default(),)
-        });
+        self.defaults
+            .push(if let (true, Some(expr)) = (asset, &attrs.default) {
+                // A bundled asset's name (ADR-0077 point 4).
+                quote!(#ident: #core::asset::bundled_or_default(#expr),)
+            } else if let Some(expr) = &attrs.default {
+                quote!(#ident: #expr,)
+            } else {
+                quote!(#ident: ::core::default::Default::default(),)
+            });
         if let Some(range) = &attrs.range {
             let reason = LitStr::new(
                 &format!("must be in {}", range.to_token_stream()),
@@ -223,19 +295,16 @@ pub(crate) fn derive(input: &DeriveInput) -> syn::Result<TokenStream> {
         adaptive,
         adaptive_fields,
         static_checks,
+        assets,
+        nested_fields,
     } = parts;
+    let asset_entries = asset_entries_fn(&core, &assets, &nested_fields);
     let adaptive_struct = adaptive_struct(&core, input, &adaptive_fields)?;
     entries.sort_by(|a, b| a.key.as_bytes().cmp(b.key.as_bytes()));
     let count = u16::try_from(entries.len())
         .map_err(|_| syn::Error::new_spanned(name, "too many config fields"))?;
     let decoder = crate::config_decode::decoder(&core, name, &entries);
-    let reads = entries.iter().map(|Entry { key, ident, nested }| {
-        if *nested {
-            quote!(cfg.#ident = #core::config_canonical::read_nested_entry(input, #key)?;)
-        } else {
-            quote!(cfg.#ident = #core::config_canonical::read_entry(input, #key)?;)
-        }
-    });
+    let canonical_decode = canonical_decode_impl(&core, name, &entries);
     let writes = entries.iter().map(|Entry { key, ident, nested }| {
         if *nested {
             quote!(#core::config::write_nested_entry(out, #key, &self.#ident);)
@@ -257,6 +326,8 @@ pub(crate) fn derive(input: &DeriveInput) -> syn::Result<TokenStream> {
                 #extra
                 ::core::result::Result::Ok(())
             }
+
+            #asset_entries
         }
 
         #adaptive_struct
@@ -272,22 +343,10 @@ pub(crate) fn derive(input: &DeriveInput) -> syn::Result<TokenStream> {
             fn write_entries<S: #core::encoding::Sink>(&self, out: &mut #core::encoding::Encoder<S>) {
                 #(#writes)*
             }
+
         }
 
-        impl #core::config_canonical::CanonicalDecode for #name {
-            fn read_entries(
-                input: &mut #core::encoding::Decoder<'_>,
-            ) -> ::core::result::Result<Self, #core::config_canonical::CanonicalDecodeError> {
-                // Adaptive fields are not in the canonical form: they keep
-                // their defaults (ADR-0030).
-                #[allow(unused_mut, reason = "a config without static fields")]
-                let mut cfg = <Self as ::core::default::Default>::default();
-                #[allow(unused_variables, reason = "a config without static fields")]
-                let input = input;
-                #(#reads)*
-                ::core::result::Result::Ok(cfg)
-            }
-        }
+        #canonical_decode
     })
 }
 
@@ -428,7 +487,63 @@ fn is_primitive(ty: &Type) -> syn::Result<bool> {
         }
         _ => Err(syn::Error::new_spanned(
             ty,
-            "config fields must be integers, f32, f64, bool, Fx32, Fx64 or nested #[derive(EnvConfig)] structs",
+            "config fields must be integers, f32, f64, bool, Fx32, Fx64, Asset<T> or nested #[derive(EnvConfig)] structs",
         )),
+    }
+}
+
+/// `EnvConfig::asset_entries` for a config with `assets` and nested
+/// configs `nested` (ADR-0077); nothing when it has neither.
+fn asset_entries_fn(
+    core: &TokenStream,
+    assets: &[(Ident, String)],
+    nested: &[Ident],
+) -> TokenStream {
+    if assets.is_empty() && nested.is_empty() {
+        quote!()
+    } else {
+        let pushes = assets.iter().map(|(ident, name)| {
+            quote!(out.push(#core::asset::AssetEntry {
+                name: ::std::string::String::from(#name),
+                hash: self.#ident.hash(),
+            });)
+        });
+        let nested_calls = nested
+            .iter()
+            .map(|ident| quote!(#core::EnvConfig::asset_entries(&self.#ident, out);));
+        quote! {
+            fn asset_entries(&self, out: &mut ::std::vec::Vec<#core::asset::AssetEntry>) {
+                #(#pushes)*
+                #(#nested_calls)*
+            }
+        }
+    }
+}
+
+/// `CanonicalDecode` for the config `name` with static fields `entries`
+/// (#377): reads them back in their sorted order.
+fn canonical_decode_impl(core: &TokenStream, name: &Ident, entries: &[Entry]) -> TokenStream {
+    let reads = entries.iter().map(|Entry { key, ident, nested }| {
+        if *nested {
+            quote!(cfg.#ident = #core::config_canonical::read_nested_entry(input, #key)?;)
+        } else {
+            quote!(cfg.#ident = #core::config_canonical::read_entry(input, #key)?;)
+        }
+    });
+    quote! {
+        impl #core::config_canonical::CanonicalDecode for #name {
+            fn read_entries(
+                input: &mut #core::encoding::Decoder<'_>,
+            ) -> ::core::result::Result<Self, #core::config_canonical::CanonicalDecodeError> {
+                // Adaptive fields are not in the canonical form: they keep
+                // their defaults (ADR-0030).
+                #[allow(unused_mut, reason = "a config without static fields")]
+                let mut cfg = <Self as ::core::default::Default>::default();
+                #[allow(unused_variables, reason = "a config without static fields")]
+                let input = input;
+                #(#reads)*
+                ::core::result::Result::Ok(cfg)
+            }
+        }
     }
 }

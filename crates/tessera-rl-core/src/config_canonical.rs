@@ -76,6 +76,15 @@ pub enum CanonicalDecodeError {
     /// Encoding the decoded config does not give back the input.
     #[error("the decoded config does not encode back to the same bytes")]
     NotCanonical,
+    /// An asset field's hash is not that of the asset decoded from empty
+    /// input: the canonical form holds only the hash (ADR-0077), so any
+    /// other asset cannot be rebuilt from it. Build the pool from the
+    /// config, with its assets, instead.
+    #[error("key {key:?}: the asset with this hash is not in the canonical form")]
+    Asset {
+        /// The key.
+        key: &'static str,
+    },
 }
 
 /// A config that reads its own canonical entries back
@@ -197,6 +206,23 @@ impl ConfigValueDecode for bool {
             [0] => Ok(false),
             [1] => Ok(true),
             [byte] => Err(CanonicalDecodeError::Bool { key, byte }),
+        }
+    }
+}
+
+/// An asset field reads its 16 hash bytes back (ADR-0077). Only the asset
+/// decoded from empty input (the type's empty or default asset, as the
+/// Grid's open layout) can be rebuilt; any other hash is
+/// [`CanonicalDecodeError::Asset`].
+impl<T: crate::asset::AssetData> ConfigValueDecode for crate::asset::Asset<T> {
+    fn read_value(
+        input: &mut Decoder<'_>,
+        key: &'static str,
+    ) -> Result<Self, CanonicalDecodeError> {
+        let hash = crate::asset::AssetHash(input.read_array::<16>()?);
+        match Self::from_bytes(&[]) {
+            Ok(empty) if empty.hash() == hash => Ok(empty),
+            _ => Err(CanonicalDecodeError::Asset { key }),
         }
     }
 }

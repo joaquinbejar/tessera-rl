@@ -4,14 +4,13 @@
 //! goal drawn at reset. +1 on the goal, -1 off the grid, truncated at `max_steps`.
 
 mod checks;
-
-use core::num::NonZeroU32;
+pub mod layout;
 
 use tessera_rl_core::io::{Actions, ObsWriter};
 use tessera_rl_core::space::Space;
 use tessera_rl_core::{
-    AgentSlot, Bool8, Environment, EpisodeEnd, NoAdaptive, ObsLeaf, Observation, RecordHeader,
-    SpaceError, StepOut, Tier,
+    AgentSlot, Asset, Bool8, Environment, EpisodeEnd, NoAdaptive, ObsLeaf, Observation,
+    RecordHeader, SpaceError, StepOut, Tier,
 };
 use tessera_rl_macros::{EnvConfig, EnvState, Observation};
 use tessera_rl_num::Fx32;
@@ -19,8 +18,8 @@ use tessera_rl_num::rng::{ObsRng, StepRng};
 
 /// Environment id (ADR-0023).
 pub const ENV_ID: &str = "tessera/Grid-v1";
-/// Environment version.
-pub const ENV_VERSION: u32 = 1;
+/// Environment version: 2 adds the `layout` asset (ADR-0077).
+pub const ENV_VERSION: u32 = 2;
 const ONE: Fx32 = Fx32::from_raw(1 << 16);
 
 /// Grid state, as SPEC section 10 writes it: 16 bytes, no padding.
@@ -49,6 +48,7 @@ impl GridState {
 
 /// Grid configuration.
 #[derive(EnvConfig, Debug, Clone, PartialEq, Eq)]
+#[config(validate = layout::check_layout)]
 pub struct GridConfig {
     /// Cells on a side.
     #[config(default = 16, range = 4..=64)]
@@ -56,6 +56,8 @@ pub struct GridConfig {
     /// Steps before the episode is truncated.
     #[config(default = 200, range = 1..=10_000)]
     pub max_steps: u16,
+    /// Wall map (`layout.rs`).
+    pub layout: Asset<layout::GridLayout>,
 }
 
 /// Grid observation.
@@ -90,12 +92,8 @@ impl Environment for Grid {
 
     /// The agent starts at the top left; the goal is uniform on the rest.
     fn reset(cfg: &GridConfig, rng: &mut StepRng, s: &mut GridState) {
-        let n = u32::from(cfg.size);
-        let others = NonZeroU32::new(n * n - 1).unwrap_or(NonZeroU32::MIN);
-        let k = rng.below_u32(others) + 1;
-        let coord = |v: u32| i16::try_from(v).unwrap_or(0);
         *s = GridState {
-            goal: [coord(k % n), coord(k / n)],
+            goal: layout::goal(cfg, rng),
             ..GridState::default()
         };
     }
@@ -111,12 +109,13 @@ impl Environment for Grid {
             return;
         };
         let [col, row] = s.pos;
-        s.pos = match actions.discrete(agent, 0) {
+        let next = match actions.discrete(agent, 0) {
             Some(0) => [col, row.checked_sub(ONE).unwrap_or(row)],
             Some(1) => [col, row.checked_add(ONE).unwrap_or(row)],
             Some(2) => [col.checked_add(ONE).unwrap_or(col), row],
             _ => [col.checked_sub(ONE).unwrap_or(col), row],
         };
+        s.pos = layout::enter(cfg, s.pos, next);
         s.steps += 1;
         let (col, row) = s.cell();
         let size = i32::from(cfg.size);
@@ -146,7 +145,7 @@ impl Environment for Grid {
         let cells = usize::from(cfg.size) * usize::from(cfg.size);
         let goal = (i32::from(s.goal[0]), i32::from(s.goal[1]));
         for (k, (row, col)) in (0..n).flat_map(|r| (0..n).map(move |c| (r, c))).enumerate() {
-            let edge = row == 0 || col == 0 || row == n - 1 || col == n - 1;
+            let edge = layout::border_or_wall(cfg, col, row);
             let lit = |on: bool| if on { 255 } else { 0 };
             leaf.set(k, lit((col, row) == s.cell()));
             leaf.set(cells + k, lit((col, row) == goal));

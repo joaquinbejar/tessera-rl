@@ -591,6 +591,12 @@ fn header_bytes<E: HostEnvironment, const A: usize>(
             feature: "a canonical config over the replay cap",
         });
     }
+    // ADR-0077: host files hold no assets.
+    let mut assets = Vec::new();
+    tessera_rl_core::EnvConfig::asset_entries(pool.config(), &mut assets);
+    if !assets.is_empty() {
+        return Err(crate::persist::PersistError::Incompatible { field: "assets" }.into());
+    }
     let id = host_identity(
         E::ENV_ID,
         E::ENV_VERSION,
@@ -602,6 +608,7 @@ fn header_bytes<E: HostEnvironment, const A: usize>(
     write_shared_header(
         &mut out,
         REPLAY_MAGIC,
+        crate::persist::FORMAT_VERSION,
         &id,
         pool.options().num_envs.get(),
         env!("CARGO_PKG_VERSION"),

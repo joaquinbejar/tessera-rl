@@ -963,6 +963,7 @@ pub(crate) fn grid(
     args: &PoolArgs,
     size: Option<u32>,
     max_steps: Option<u32>,
+    layout: Option<tessera_rl_core::Asset<tessera_rl_classic::GridLayout>>,
 ) -> Result<Box<dyn PoolOps>, BindError> {
     let d = GridConfig::default();
     let field =
@@ -970,6 +971,7 @@ pub(crate) fn grid(
     let cfg = GridConfig {
         size: field(size, d.size),
         max_steps: field(max_steps, d.max_steps),
+        layout: layout.unwrap_or(d.layout),
     };
     let (options, n) = options(args)?;
     let same_step = options.auto_reset == AutoReset::SameStep;

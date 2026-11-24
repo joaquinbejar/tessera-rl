@@ -1,0 +1,5 @@
+error: asset names are 1 to 64 bytes of [a-z0-9_.-] (ADR-0077)
+  --> tests/ui/fail/config_asset_name.rs:29:5
+   |
+29 |     map: Asset<Map>,
+   |     ^^^

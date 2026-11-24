@@ -47,6 +47,9 @@ pub enum ConfigItem<'a> {
     Str(&'a str),
     /// A nested config.
     Table(ConfigSource<'a>),
+    /// Raw bytes: an asset's input (ADR-0077), at most
+    /// [`crate::asset::MAX_ASSET_INPUT`].
+    Bytes(&'a [u8]),
 }
 
 /// A config as a front end gives it: an ordered list of `(key, item)`
@@ -122,6 +125,14 @@ pub enum ConfigDecodeError {
     /// Nested tables deeper than [`MAX_CONFIG_DEPTH`].
     #[error("config tables nested deeper than {MAX_CONFIG_DEPTH}")]
     TooDeep,
+    /// An asset field's bytes or bundled name were refused (ADR-0077).
+    #[error("config key `{field}`: {source}")]
+    Asset {
+        /// The field.
+        field: &'static str,
+        /// Why.
+        source: crate::asset::AssetError,
+    },
     /// The decoded config failed `EnvConfig::validate`.
     #[error(transparent)]
     Invalid(#[from] ConfigError),
@@ -352,6 +363,28 @@ impl ConfigField for Fx64 {
             ConfigItem::Str(s) => Self::from_decimal(s).map_err(|e| decimal_error(field, e)),
             _ => Err(wrong(field, "an exact decimal string")),
         }
+    }
+}
+
+/// An asset field takes a bundled asset's name ([`ConfigItem::Str`]) or raw
+/// bytes ([`ConfigItem::Bytes`]), ADR-0077 point 4.
+impl<T: crate::asset::AssetData> ConfigField for crate::asset::Asset<T> {
+    fn from_item(
+        item: &ConfigItem<'_>,
+        field: &'static str,
+        _depth: u32,
+    ) -> Result<Self, ConfigDecodeError> {
+        let built = match item {
+            ConfigItem::Str(name) => Self::bundled(name),
+            ConfigItem::Bytes(bytes) => Self::from_bytes(bytes),
+            _ => {
+                return Err(ConfigDecodeError::WrongType {
+                    field,
+                    expected: "a bundled asset name or bytes",
+                });
+            }
+        };
+        built.map_err(|source| ConfigDecodeError::Asset { field, source })
     }
 }
 

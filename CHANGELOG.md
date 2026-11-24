@@ -12,6 +12,11 @@ the API is not stable, and any 0.x release may break it.
 ### Changed
 
 - Behaviour change: the keyword-only native functions (`tessera_rl._native.make_*`, `make_search`, `make_search_group`, `onnx_load` and `Search.attach_onnx`) raise `ArgumentError` for positional arguments; before, they ignored them silently, so `make_cartpole(1)` built a default pool (#376). Every native function and method now carries a text signature (`inspect.signature` works, and stubtest checks the `.pyi` stubs' parameters).
+- Content-addressed assets (ADR-0077, #364). Config fields of type `Asset<T>` (`tessera_rl_core::asset`) hold immutable shared data, hashed with XXH3-128 over their canonical bytes. The config's canonical form holds the hash; `#[config(asset = "name")]` names the asset. Environment snapshot files of configs with assets are format version 2, which lists `(name, hash)` entries after `asset_count`; a different asset is `PersistError::AssetMismatch`. Asset-free files stay version 1, byte for byte. Replay files carry the entries in version 1. Host snapshots and host replays refuse configs with assets. `ConfigItem::Bytes` passes an asset's bytes.
+- `tessera/Grid-v1` is environment version 2: a `layout` wall-map asset (`"open"` by default, `"rooms8"` bundled, or bytes). The default reproduces version 1's trajectories (golden step digests unchanged); its config hash and persisted files change.
+
+### Changed
+
 - Behaviour change: `tessera_rl.make()` without `workers` now starts one worker per physical core this process may use, at most one per chunk (`tessera_rl_engine::default_workers`, SPEC 6.1), in Sync, Pipelined and Async modes. Before, Sync stepped inline and the split-phase modes used one worker. Pass `workers=0` for the old Sync behaviour. On an x86-64 host with 8 physical cores, the default ran CartPole and BrickWall pool steps in 0.28 to 0.44 of the inline time at 1024 and 8192 instances (#356). The PufferLib backends keep their explicit worker counts.
 
 ### Added
