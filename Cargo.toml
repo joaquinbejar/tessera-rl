@@ -14,6 +14,7 @@ members = [
     "crates/tessera-rl-search",
     "crates/tessera-rl-rts",
     "crates/tessera-rl-render",
+    "crates/tessera-rl-markets",
     "crates/tessera-rl-onnx",
     "tools/math-oracle",
     "tools/bench-runner",
@@ -41,6 +42,7 @@ default-members = [
     "crates/tessera-rl-search",
     "crates/tessera-rl-rts",
     "crates/tessera-rl-render",
+    "crates/tessera-rl-markets",
     "crates/tessera-rl-onnx",
     "tests/downstream",
     "tests/host-env",
@@ -71,6 +73,7 @@ tessera-rl-games = { path = "crates/tessera-rl-games", version = "0.3.0" }
 tessera-rl-search = { path = "crates/tessera-rl-search", version = "0.3.0" }
 tessera-rl-onnx = { path = "crates/tessera-rl-onnx", version = "0.3.0" }
 tessera-rl-rts = { path = "crates/tessera-rl-rts", version = "0.3.0" }
+tessera-rl-markets = { path = "crates/tessera-rl-markets", version = "0.3.0" }
 tessera-rl-pyffi = { path = "crates/tessera-rl-pyffi", version = "0.3.0" }
 
 core_affinity = "0.8"

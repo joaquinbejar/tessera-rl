@@ -1091,6 +1091,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "tessera-rl-markets"
+version = "0.3.0"
+dependencies = [
+ "criterion",
+ "proptest",
+ "tessera-rl-core",
+ "tessera-rl-macros",
+ "tessera-rl-num",
+ "thiserror",
+]
+
+[[package]]
 name = "tessera-rl-math-oracle"
 version = "0.3.0"
 dependencies = [
