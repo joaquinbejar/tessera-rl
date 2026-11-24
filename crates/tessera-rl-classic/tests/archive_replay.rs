@@ -248,8 +248,9 @@ fn test_archive_replay_forged_header_source_is_malformed() {
 
 #[test]
 fn test_archive_replay_forged_reset_source_event_names_another_archive() {
-    // A `ResetSource` event whose digest is not the archive given: refused
-    // with `ArchiveMismatch`, even though the first keyframe's matches.
+    // A `ResetSource` event whose digest is not the header's: the file names
+    // two archives, refused before anything is replayed (one archive per
+    // file, REVIEW-implB-r1), with the pool untouched.
     let arc = archive(3);
     let other = archive(4);
     let (mut bytes, _) = record(&arc, 0);
@@ -266,16 +267,13 @@ fn test_archive_replay_forged_reset_source_event_names_another_archive() {
     bytes[at + 6..at + 14].copy_from_slice(&other.digest().to_le_bytes());
     reseal_events(&mut bytes, header_end);
     let file = Replay::open(&bytes, DecodeLimits::default()).unwrap();
-    let mut p = pool(7, 0);
-    let err = file.run_with_archive(&mut p, Some(&arc)).unwrap_err();
-    assert!(
-        matches!(
-            err,
-            ReplayError::Engine(EngineError::ArchiveMismatch { expected, found })
-                if expected == other.digest() && found == arc.digest()
-        ),
-        "{err:?}"
-    );
+    for given in [Some(&arc), Some(&other)] {
+        let err = untouched(&file, given);
+        assert!(
+            matches!(err, ReplayError::Unsupported { feature } if feature.contains("one archive per file")),
+            "{err:?}"
+        );
+    }
 }
 
 #[test]
@@ -365,7 +363,9 @@ fn record_switch(start: Option<&Archive<CartPole>>, then: &Archive<CartPole>) ->
     }
     let mut rec = Recorder::new(&mut p, Vec::new(), ReplayWriterOptions::default()).unwrap();
     for t in 0..60u32 {
-        let a: Vec<i32> = (0..N).map(|i| i32::try_from((t + i) % 2).unwrap()).collect();
+        let a: Vec<i32> = (0..N)
+            .map(|i| i32::try_from((t + i) % 2).unwrap())
+            .collect();
         rec.step(ActionInput {
             discrete: &a,
             continuous: &[],
