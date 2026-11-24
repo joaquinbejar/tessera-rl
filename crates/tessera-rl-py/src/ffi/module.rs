@@ -61,6 +61,45 @@ impl FunctionNoArgs for FpBoundary {
 
 /// `set_fp_policy(name)`: `"canonicalize"` (the default) or `"reject"`
 /// (ADR-0041).
+/// `encode_gif(frames, width, height, fps) -> bytes`: concatenated RGB8
+/// frames as a looping GIF (ADR-0083 item 5).
+struct EncodeGif;
+
+impl Function for EncodeGif {
+    fn call<'py>(g: Gil<'py>, args: Ref<'py>) -> CResult<Mine<'py>> {
+        let items = capi::tuple_items(g, args, "the arguments")?;
+        let [frames, width, height, fps] = items.as_slice() else {
+            return Err(error(
+                g,
+                Kind::Argument,
+                "encode_gif takes frames, width, height and fps".to_owned(),
+            ));
+        };
+        let data = capi::bytes_of(g, *frames, "frames")?;
+        let side = |v, what| {
+            u16::try_from(capi::to_u32(g, v, what)?)
+                .map_err(|_| error(g, Kind::Argument, format!("{what} must fit in 16 bits")))
+        };
+        let (w, h, fps) = (
+            side(*width, "width")?,
+            side(*height, "height")?,
+            side(*fps, "fps")?,
+        );
+        let len = usize::from(w) * usize::from(h) * 3;
+        if len == 0 || data.len() % len != 0 {
+            return Err(error(
+                g,
+                Kind::Argument,
+                format!("frames must be a whole number of {w}x{h} RGB8 frames"),
+            ));
+        }
+        let frames: Vec<&[u8]> = data.chunks_exact(len).collect();
+        let out = tessera_rl_render::encode_gif(Vec::new(), w, h, fps, &frames)
+            .map_err(|e| error(g, Kind::Argument, e.to_string()))?;
+        capi::bytes(g, &out)
+    }
+}
+
 struct SetFpPolicy;
 
 impl Function for SetFpPolicy {
@@ -253,13 +292,17 @@ impl FunctionNoArgs for InitFailsAfterRegister {
     }
 }
 
-const FUNCTION_COUNT: usize = if cfg!(feature = "test-hooks") { 34 } else { 28 };
+const FUNCTION_COUNT: usize = if cfg!(feature = "test-hooks") { 35 } else { 29 };
 
 static ROWS: [FunctionRow; FUNCTION_COUNT] = [
     FunctionRow::noargs::<Version>(c"version", c"version($module, /)\n--\n\nThe Tessera version."),
     FunctionRow::noargs::<PhysicalCores>(
         c"physical_cores",
         c"physical_cores($module, /)\n--\n\nPhysical cores this process may use (capped by CPU quotas): the engine's default worker count.",
+    ),
+    FunctionRow::varargs::<EncodeGif>(
+        c"encode_gif",
+        c"encode_gif($module, frames, width, height, fps, /)\n--\n\nConcatenated RGB8 frames as a looping GIF (ADR-0083).",
     ),
     FunctionRow::varargs::<SetFpPolicy>(
         c"set_fp_policy",

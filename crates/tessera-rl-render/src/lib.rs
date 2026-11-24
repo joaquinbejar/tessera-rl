@@ -12,6 +12,8 @@
 
 mod raster;
 mod renderer;
+mod video;
 
 pub use raster::rasterize;
 pub use renderer::{RenderError, Renderer, Scene};
+pub use video::{VideoError, encode_gif};
