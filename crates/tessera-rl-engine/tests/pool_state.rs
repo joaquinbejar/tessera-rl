@@ -125,10 +125,18 @@ fn test_pool_state_refusals_mutate_nothing() {
     let obs = observation(&p);
 
     // Another transform identity (ADR-0078 item 2.3).
-    let other = built(4, 2, Transforms::new().normalize(leaf(), 4.0).frame_stack(leaf(), 2));
+    let other = built(
+        4,
+        2,
+        Transforms::new()
+            .normalize(leaf(), 4.0)
+            .frame_stack(leaf(), 2),
+    );
     assert!(matches!(
         p.restore_pool(&other.snapshot_pool().unwrap(), None),
-        Err(EngineError::Transform(TransformError::IdentityMismatch { .. }))
+        Err(EngineError::Transform(
+            TransformError::IdentityMismatch { .. }
+        ))
     ));
     // Another instance count.
     let small = built(2, 2, stacked());
@@ -137,10 +145,12 @@ fn test_pool_state_refusals_mutate_nothing() {
         Err(EngineError::RecordCount { .. })
     ));
     // No transforms at all.
-    let plain = Pool::with_masks(cfg(), options(4, 2)).unwrap();
-    let mut plain = plain;
+    let mut plain = Pool::with_masks(cfg(), options(4, 2)).unwrap();
     plain.reset_all(Reseed::Keep).unwrap();
-    assert!(p.restore_pool(&plain.snapshot_pool().unwrap(), None).is_err());
+    assert!(
+        p.restore_pool(&plain.snapshot_pool().unwrap(), None)
+            .is_err()
+    );
 
     assert_eq!(print(&p.snapshot_pool().unwrap()), before);
     assert_eq!(observation(&p), obs);

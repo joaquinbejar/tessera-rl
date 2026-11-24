@@ -40,12 +40,12 @@ mod persist;
 #[cfg(test)]
 mod pin_tests;
 mod pool;
+mod pool_state;
 mod record;
 mod registry;
 #[cfg(feature = "replay")]
 pub mod replay;
 mod set_zero;
-mod pool_state;
 mod snapshot;
 mod sys;
 pub mod transform;

@@ -753,7 +753,7 @@ impl<E, M> PoolOps for Pooled<E, M>
 where
     E: tessera_rl_core::Persist,
     E::Config: tessera_rl_core::config::CanonicalConfig + Send + Sync,
-    E::Header: Send,
+    E::Header: Send + Sync,
     E::State: Send,
     <E::Header as tessera_rl_core::RecordLayout>::Adaptive:
         tessera_rl_core::AdaptiveValues<E::Config>,

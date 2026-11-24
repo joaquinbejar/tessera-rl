@@ -23,7 +23,7 @@ use std::thread::ThreadId;
 use tessera_rl_core::{AdaptiveValues, Bool8, Environment, RecordLayout};
 use tessera_rl_engine::{
     ActionInput, AsyncPool, BatchRow, BatchToken, BatchWaiter, EngineError, IdGenerations,
-    MaskProvider, OutputField, OutputStorage, Reseed,
+    MaskProvider, OutputField, OutputStorage, Record, Reseed,
 };
 use tessera_rl_num::identity::Seed;
 
@@ -120,8 +120,11 @@ pub(crate) trait AsyncOps: Send + Sync {
     fn restore_all(&self, snapshot: &Snapshot) -> Result<(), BindError>;
     /// Restores records, frame stacks and the pool context (ADR-0075 item
     /// 7, #465), as `restore_all` (a recovery path too).
-    fn restore_pool(&self, snapshot: &Snapshot, archive: Option<&AnyArchive>)
-    -> Result<(), BindError>;
+    fn restore_pool(
+        &self,
+        snapshot: &Snapshot,
+        archive: Option<&AnyArchive>,
+    ) -> Result<(), BindError>;
     /// The persisted file of `ids`; no sent id may be outstanding.
     fn encode(&self, ids: &[u32]) -> Result<Vec<u8>, BindError>;
     /// Builds an archive of this environment from record bytes (ADR-0075).
@@ -284,11 +287,35 @@ impl<E: Environment, M: MaskProvider<E>> State<E, M> {
 }
 
 /// Records taken from one pool.
-struct Taken<E: Environment> {
-    owner: Arc<OutputStorage>,
-    /// Records, frame stacks and the pool context (#465); `restore_all`
-    /// uses the records only.
-    state: tessera_rl_engine::PoolState<E>,
+/// A snapshot: one instance's record (`snapshot`), or the whole pool with
+/// its frame stacks and context (`snapshot_all`, #465).
+enum Taken<E: Environment> {
+    One {
+        owner: Arc<OutputStorage>,
+        record: Record<E>,
+    },
+    Pool {
+        owner: Arc<OutputStorage>,
+        state: tessera_rl_engine::PoolState<E>,
+    },
+}
+
+impl<E: Environment> Taken<E> {
+    fn owner(&self) -> &Arc<OutputStorage> {
+        match self {
+            Self::One { owner, .. } | Self::Pool { owner, .. } => owner,
+        }
+    }
+
+    /// The whole-pool state, or a refusal for a one-instance snapshot.
+    fn pool(&self) -> Result<&tessera_rl_engine::PoolState<E>, BindError> {
+        match self {
+            Self::Pool { state, .. } => Ok(state),
+            Self::One { .. } => Err(BindError::Argument(
+                "a one-instance snapshot restores with restore, not as a pool".to_owned(),
+            )),
+        }
+    }
 }
 
 struct BatchedPool<E: Environment, M: MaskProvider<E>> {
@@ -635,9 +662,9 @@ where
         let mut guard = self.lock()?;
         let pool = guard.pool.as_mut().ok_or_else(closed)?;
         let record = pool.snapshot(id)?;
-        Ok(Arc::new(Taken::<E> {
+        Ok(Arc::new(Taken::<E>::One {
             owner: Arc::clone(&self.storage),
-            records: vec![record],
+            record,
         }))
     }
 
@@ -649,9 +676,9 @@ where
     ) -> Result<(), BindError> {
         let mut records = Vec::with_capacity(snapshots.len());
         for snapshot in snapshots {
-            match self.mine(&**snapshot)?.records.as_slice() {
-                [record] => records.push(*record),
-                _ => {
+            match self.mine(&**snapshot)? {
+                Taken::One { record, .. } => records.push(*record),
+                Taken::Pool { .. } => {
                     return Err(BindError::Argument(
                         "restore takes snapshots of one instance".to_owned(),
                     ));
@@ -678,7 +705,7 @@ where
         let guard = self.lock()?;
         let pool = guard.pool.as_ref().ok_or_else(closed)?;
         let state = pool.snapshot_pool()?;
-        Ok(Arc::new(Taken::<E> {
+        Ok(Arc::new(Taken::<E>::Pool {
             owner: Arc::clone(&self.storage),
             state,
         }))
@@ -692,7 +719,7 @@ where
         state.stored.release_all();
         let recovering = pool.is_poisoned();
         self.unsettle();
-        let result = pool.restore_all(taken.state.records());
+        let result = pool.restore_all(taken.pool()?.records());
         if result.is_ok() {
             state.stored.covered.fill(false);
             // This writes no batch: old gathered views must stay stale after
@@ -720,7 +747,7 @@ where
         state.stored.release_all();
         let recovering = pool.is_poisoned();
         self.unsettle();
-        let result = pool.restore_pool(&taken.state, archive);
+        let result = pool.restore_pool(taken.pool()?, archive);
         if result.is_ok() {
             state.stored.covered.fill(false);
             // This writes no batch: old gathered views must stay stale after
@@ -834,7 +861,7 @@ where
     fn mine<'a>(&self, snapshot: &'a (dyn Any + Send + Sync)) -> Result<&'a Taken<E>, BindError> {
         snapshot
             .downcast_ref::<Taken<E>>()
-            .filter(|t| Arc::ptr_eq(&t.owner, &self.storage))
+            .filter(|t| Arc::ptr_eq(t.owner(), &self.storage))
             .ok_or_else(|| {
                 BindError::Argument("a snapshot restores only the pool that took it".to_owned())
             })
