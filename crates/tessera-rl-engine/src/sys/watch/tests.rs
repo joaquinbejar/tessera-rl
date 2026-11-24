@@ -268,3 +268,24 @@ fn test_watch_slot_dropped_handle_abandons_on_hit() {
     assert_eq!(slot.serve(1, fill(1)), Served::Abandoned);
     assert!(slot.handle_dropped());
 }
+
+/// A panicking encoder leaves the slot `REQUESTED`, not stuck in
+/// `SERVING`: the request is served at the next boundary (REVIEW-4d-r1).
+#[cfg(not(loom))]
+#[test]
+fn test_watch_slot_encode_panics_request_stays_pending() {
+    let (slot, mut handle) = watch_pair(1, LEN);
+    handle.request(0).unwrap();
+    let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        slot.serve(1, |_, _| {
+            std::panic::resume_unwind(Box::new("encode failed"))
+        })
+    }));
+    assert!(unwound.is_err());
+    let mut out = [0_u8; LEN];
+    assert_eq!(handle.take(&mut out), Ok(None));
+    assert_eq!(slot.request(0), Err(WatchError::Busy));
+    assert_eq!(slot.serve(2, fill(2)), Served::Ready);
+    assert_eq!(handle.take(&mut out), Ok(Some(2)));
+    assert_whole(&out, 2);
+}

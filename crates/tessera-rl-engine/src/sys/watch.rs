@@ -86,6 +86,19 @@ pub enum WatchError {
     },
 }
 
+/// Returns a slot in `SERVING` to `REQUESTED` if the encoder unwinds
+/// (REVIEW-4d-r1); forgotten on the normal path, which stores the next
+/// state itself.
+struct ServingGuard<'a> {
+    state: &'a AtomicU32,
+}
+
+impl Drop for ServingGuard<'_> {
+    fn drop(&mut self) {
+        self.state.store(REQUESTED, Ordering::Release);
+    }
+}
+
 /// What one pool-side service of the slot did.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Served {
@@ -166,12 +179,17 @@ impl WatchSlot {
             return Served::Nothing;
         }
         let id = self.instance.load(Ordering::Relaxed);
+        // If `encode` panics, the guard puts the slot back to `REQUESTED`
+        // (REVIEW-4d-r1): never stuck in `SERVING`, and the half-written
+        // buffer is never published, since only `READY` exposes it.
+        let guard = ServingGuard { state: &self.state };
         // SAFETY: this thread holds `SERVING`, which only the pool enters
         // (from `REQUESTED`) and leaves; the consumer reads the buffer only
         // in `TAKING`, entered from `READY`, and `READY` is stored below only
         // after this write ends. So no read or other write overlaps it.
         #[expect(unsafe_code, reason = "audited module: watch buffer write")]
         let written = self.buffer.with_mut(|buf| encode(id, unsafe { &mut *buf }));
+        core::mem::forget(guard);
         if written {
             self.generation.store(generation, Ordering::Relaxed);
             self.state.store(READY, Ordering::Release);
