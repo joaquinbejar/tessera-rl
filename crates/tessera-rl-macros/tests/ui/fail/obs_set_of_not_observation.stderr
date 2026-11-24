@@ -1,0 +1,17 @@
+error[E0277]: the trait bound `Plain: ObservationLayout` is not satisfied
+  --> tests/ui/fail/obs_set_of_not_observation.rs:10:34
+   |
+10 |     #[space(set(max = 4, items = Plain))]
+   |                                  ^^^^^ unsatisfied trait bound
+   |
+help: the trait `ObservationLayout` is not implemented for `Plain`
+  --> tests/ui/fail/obs_set_of_not_observation.rs:6:1
+   |
+ 6 | struct Plain;
+   | ^^^^^^^^^^^^
+help: the trait `ObservationLayout` is implemented for `O`
+  --> tests/ui/fail/obs_set_of_not_observation.rs:8:10
+   |
+ 8 | #[derive(Observation)]
+   |          ^^^^^^^^^^^
+   = note: this error originates in the derive macro `Observation` (in Nightly builds, run with -Z macro-backtrace for more info)

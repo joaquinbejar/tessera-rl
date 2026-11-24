@@ -34,7 +34,10 @@ pub mod io;
 pub mod leaf;
 pub mod refusals;
 pub mod render;
+#[doc(hidden)]
+pub mod sealed;
 pub mod set_leaf;
+pub mod set_of;
 pub mod space;
 pub mod step_out;
 
@@ -61,11 +64,12 @@ pub use header_view::{AgentView, HeaderView, Phase};
 pub use host::{ActionReject, HostEnvironment, HostError, HostSeed};
 pub use host_out::{AbortCode, HostOut};
 pub use host_snapshot::{HostSnapshot, SnapshotReject};
-pub use leaf::{LeafDType, LeafId, ObsLeaf, Observation};
+pub use leaf::{LeafDType, LeafId, ObsLeaf, Observation, ObservationLayout};
 pub use pool::Pool;
 pub use refusals::{Refusals, RefuseCode};
 pub use reserved::Reserved;
 pub use set_leaf::{ObsSet, SetId, SetLeaf};
+pub use set_of::{ItemId, ObsSetOf, SetOf, SetOfLeaf};
 pub use state_enum::StateEnum;
 pub use state_init::StateInit;
 pub use step_out::{EpisodeEnd, StepOut};

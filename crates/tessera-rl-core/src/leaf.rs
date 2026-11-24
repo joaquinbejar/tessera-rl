@@ -189,12 +189,33 @@ pub trait Observation<C>: 'static {
     /// Number of leaves.
     const LEAVES: usize;
 
+    /// Whether the space contains a `Set` (ADR-0082). The derive sets it
+    /// for a struct with a set field and refuses such a struct as the items
+    /// of another set. A hand-written impl whose space contains a set must
+    /// set it to `true`; the engine's layout still refuses a set inside a
+    /// set at pool build.
+    const CONTAINS_SET: bool = false;
+
     /// The observation space for `cfg`.
     ///
     /// # Errors
     ///
     /// Returns a [`SpaceError`] if `cfg` yields an invalid space.
     fn space(cfg: &C) -> Result<Space, SpaceError>;
+}
+
+/// Config-free facts of an `#[derive(Observation)]` struct, which a `Set`
+/// of it as items (`#[space(set(max = .., items = I))]`, ADR-0082) needs
+/// in constant ids. Implemented by `#[derive(Observation)]` only: it is
+/// sealed through a hidden supertrait, and the derived `space` checks in
+/// debug builds that the item space has `LEAVES` leaves. The values agree
+/// with every `Observation<C>` impl of the type.
+pub trait ObservationLayout: crate::sealed::ObservationLayoutSealed + 'static {
+    /// Number of leaves, as [`Observation::LEAVES`].
+    const LEAVES: usize;
+
+    /// Whether the type has a set field, as [`Observation::CONTAINS_SET`].
+    const CONTAINS_SET: bool;
 }
 
 #[cfg(test)]

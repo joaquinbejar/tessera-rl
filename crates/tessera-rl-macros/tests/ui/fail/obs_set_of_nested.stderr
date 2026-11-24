@@ -1,0 +1,5 @@
+error[E0080]: evaluation panicked: Observation: the items of a set may not contain a set (ADR-0082)
+  --> tests/ui/fail/obs_set_of_nested.rs:15:5
+   |
+15 |     groups: ObsSetOf<Group>,
+   |     ^^^^^^ evaluation of `_` failed here
