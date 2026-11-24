@@ -6,9 +6,12 @@ on ``tessera/CartPole-v1`` through the Gymnasium adapter, with Gymnasium's
 unmodified third-party trainer; it is not the SPEC 18 learning test.
 
 Each backend runs Tianshou's ``DummyVectorEnv`` over ``gymnasium.make``
-single environments, with the CartPole PPO settings of Tianshou's discrete
-PPO test, for ``--total-steps`` steps per seed. It then evaluates the
-greedy policy (argmax of the actor's logits) on ``--eval-episodes``
+single environments, with the CartPole PPO settings of Tianshou's own test
+``test/discrete/test_ppo_discrete.py`` at tag v2.0.1 (its argparse defaults
+and model construction: one shared ``Net`` for actor and critic, a softmax
+actor with ``Categorical``, no advantage normalization). The upstream test
+stops at a reward of 195; this script trains a fixed budget instead, for ``--total-steps`` steps per seed. It then evaluates the
+greedy policy (argmax of the actor's probabilities) on ``--eval-episodes``
 episodes of a fresh environment (seeds ``EVAL_SEED_BASE + i``, as in
 tools/reference_training.py).
 
@@ -48,7 +51,7 @@ import tessera_rl.gym  # noqa: F401  (registers tessera/* with Gymnasium)
 
 EVAL_SEED_BASE = 10_000
 BACKENDS = {"tessera": "tessera/CartPole-v1", "gymnasium": "CartPole-v1"}
-# Tianshou's discrete PPO test (test/discrete/test_ppo.py), CartPole.
+# thu-ml/tianshou test/discrete/test_ppo_discrete.py at v2.0.1 (argparse defaults).
 N_ENVS = 20
 HIDDEN = (64, 64)
 HYPER = {
@@ -62,6 +65,13 @@ HYPER = {
     "collection_step_num_env_steps": 2000,
     "update_step_num_repetitions": 10,
     "batch_size": 64,
+    "buffer_size": 20_000,
+    "epoch_num_steps": 50_000,
+    "advantage_normalization": False,
+    "return_scaling": False,
+    "recompute_advantage": False,
+    "value_clip": False,
+    "dual_clip": None,
 }
 
 
@@ -139,9 +149,10 @@ def run(backend: str, seed: int, total_steps: int, eval_episodes: int) -> dict:
     probe = gymnasium.make(env_id)
     obs_shape = probe.observation_space.shape
     n_actions = int(probe.action_space.n)
-    actor = DiscreteActor(preprocess_net=Net(state_shape=obs_shape, hidden_sizes=HIDDEN), action_shape=n_actions, softmax_output=False)
-    critic = DiscreteCritic(preprocess_net=Net(state_shape=obs_shape, hidden_sizes=HIDDEN))
-    policy = DiscreteActorPolicy(actor=actor, action_space=probe.action_space, deterministic_eval=True)
+    net = Net(state_shape=obs_shape, hidden_sizes=HIDDEN)  # shared, as upstream
+    actor = DiscreteActor(preprocess_net=net, action_shape=n_actions)
+    critic = DiscreteCritic(preprocess_net=net)
+    policy = DiscreteActorPolicy(actor=actor, dist_fn=torch.distributions.Categorical, action_space=probe.action_space, deterministic_eval=True)
     probe.close()
     algo = PPO(
         policy=policy,
@@ -153,11 +164,16 @@ def run(backend: str, seed: int, total_steps: int, eval_episodes: int) -> dict:
         max_grad_norm=HYPER["max_grad_norm"],
         gae_lambda=HYPER["gae_lambda"],
         gamma=HYPER["gamma"],
+        return_scaling=HYPER["return_scaling"],
+        dual_clip=HYPER["dual_clip"],
+        value_clip=HYPER["value_clip"],
+        advantage_normalization=HYPER["advantage_normalization"],
+        recompute_advantage=HYPER["recompute_advantage"],
     )
     collect = HYPER["collection_step_num_env_steps"]
-    collector = Collector(algo, envs, VectorReplayBuffer(collect, N_ENVS))
+    collector = Collector(algo, envs, VectorReplayBuffer(HYPER["buffer_size"], N_ENVS))
     collector.reset()
-    epoch_steps = 10 * collect
+    epoch_steps = HYPER["epoch_num_steps"]
     cpu0 = time.process_time()
     algo.run_training(
         OnPolicyTrainerParams(
@@ -183,8 +199,8 @@ def run(backend: str, seed: int, total_steps: int, eval_episodes: int) -> dict:
             obs, _ = env.reset(seed=EVAL_SEED_BASE + i)
             done, total = False, 0.0
             while not done:
-                logits, _ = actor(np.asarray(obs, dtype=np.float32)[None])
-                obs, r, term, trunc, _ = env.step(int(torch.as_tensor(logits).argmax(-1)[0]))
+                probs, _ = actor(np.asarray(obs, dtype=np.float32)[None])
+                obs, r, term, trunc, _ = env.step(int(torch.as_tensor(probs).argmax(-1)[0]))
                 total += float(r)
                 done = term or trunc
             returns.append(total)
