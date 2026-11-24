@@ -175,7 +175,7 @@ burn-check:
 	cargo fmt --manifest-path $(BURN) --all -- --check
 	cargo clippy --manifest-path $(BURN) --all-targets --locked -- -D warnings
 	cargo test --manifest-path $(BURN) --locked
-	cargo deny --manifest-path $(BURN) check --config deny.toml licenses bans
+	cargo deny --manifest-path $(BURN) --config deny.toml check licenses bans
 	cargo run --manifest-path $(BURN) --release --locked -p ppo-cartpole -- --smoke
 burn-gate:
 	for seed in 1 2 3; do cargo run --manifest-path $(BURN) --release --locked -p ppo-cartpole -- --gate --seed $$seed || exit 1; done
