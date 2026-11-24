@@ -12,6 +12,7 @@ the API is not stable, and any 0.x release may break it.
 ### Fixed
 
 - Python: `make("tessera/Lanterns-v1", zero_on_fuse=...)` accepts a bool; before, every value was refused (#468).
+- Python: the Gymnasium adapter gives single-head masked environments (Snake with `agents=1`) their mask in `info["action_mask"]` (`[N, n]` `int8`) and `info["action_masks"]`, as SPEC 11.3 says and multi-head environments already did; before, these keys were missing.
 
 ### Deprecated
 

@@ -69,3 +69,20 @@ tier = "T2"
 adapter = "tessera_rl.gym (SAME_STEP)"
 total_steps = 500000
 hyper = {}
+
+# Tier T3a: action masks, one learner (agents=1), learning_masked.py.
+[snake]
+env = "tessera/Snake-v1"
+tier = "T3a"
+adapter = "tessera_rl.gym (SAME_STEP, agents=1, info action_mask)"
+total_steps = 500000
+hyper = {}
+env_kwargs = { obs = "state" }
+
+[paddleduel]
+env = "tessera/PaddleDuel-v1"
+tier = "T3a"
+adapter = "tessera_rl.gym (SAME_STEP, agents=1, scripted right paddle)"
+total_steps = 500000
+hyper = {}
+env_kwargs = { obs = "state" }

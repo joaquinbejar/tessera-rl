@@ -636,3 +636,111 @@ def test_learning_pendulum_fingerprint_matches_its_calibration():
     cal = json.loads((pathlib.Path(__file__).resolve().parents[2] / "compat" / "learning" / "pendulum.json").read_text())
     assert lp.fingerprint("pendulum") == cal["setup"]["fingerprint"]
     assert cal["learns"]["learns"] is True and cal["non_learning_seeds"] == 0
+
+
+# -- tier T3a (action masks, one learner) ---------------------------------------------
+
+
+def test_learning_t3a_masked_entropy_and_logprob_are_finite():
+    """Rule 1: illegal logits at finfo.min and a legal-only entropy, never NaN."""
+    pytest = __import__("pytest")
+    torch = pytest.importorskip("torch")
+    from torch.distributions.categorical import Categorical
+
+    import learning_masked as lm
+
+    logits = torch.tensor([[0.3, -1.0, 2.0, 0.0]])
+    mask = torch.tensor([[True, False, True, False]])
+    ent = lm.legal_entropy(logits, mask)
+    assert torch.isfinite(ent).all() and ent.item() > 0
+    dist = Categorical(logits=lm.masked_logits(logits, mask))
+    assert torch.isfinite(dist.log_prob(torch.tensor([2]))).all()
+    assert dist.probs[0, 1].item() == 0.0 and dist.probs[0, 3].item() == 0.0
+    # One legal action: entropy exactly 0.
+    one = lm.legal_entropy(logits, torch.tensor([[False, False, True, False]]))
+    assert one.item() == pytest.approx(0.0, abs=1e-6)
+
+
+def test_learning_t3a_greedy_is_legal_with_lowest_index_ties():
+    """Rule 4."""
+    pytest = __import__("pytest")
+    torch = pytest.importorskip("torch")
+    import learning_masked as lm
+
+    logits = torch.tensor([[5.0, 1.0, 1.0, 1.0], [0.0, 0.0, 0.0, 0.0]])
+    mask = torch.tensor([[False, True, True, True], [True, True, True, True]])
+    assert lm.greedy(logits, mask).tolist() == [1, 0]
+    # All false: action 0.
+    assert lm.greedy(logits[:1], torch.zeros((1, 4), dtype=torch.bool)).tolist() == [0]
+
+
+def test_learning_t3a_mask_of_reads_info_or_allows_all():
+    import numpy as np
+
+    import learning_masked as lm
+
+    m = lm.mask_of({"action_mask": np.array([[1, 0, 1], [0, 0, 0]], dtype=np.int8)}, 2, 3)
+    assert m.dtype == bool and m.tolist() == [[True, False, True], [False, False, False]]
+    assert lm.mask_of({}, 2, 3).all()
+
+
+def test_learning_t3a_snake_trains_with_stored_masks_and_legal_greedy(monkeypatch):
+    """A smoke run: the masks the update sees are the masks the actions were
+    sampled under (rule: stored per step), sampled actions are legal, and
+    evaluation picks legal actions."""
+    pytest = __import__("pytest")
+    torch = pytest.importorskip("torch")
+    import learning_masked as lm
+    import learning_protocols as lp
+
+    seen = []
+    real_act = None
+
+    def spy_class():
+        cls = real_class()
+
+        class Spy(cls):
+            def act(self, x, mask, action=None):
+                out = super().act(x, mask, action)
+                if action is None:
+                    chosen = out[0]
+                    live = mask.any(-1)
+                    seen.append(bool(mask[torch.arange(len(chosen))[live], chosen[live]].all()))
+                return out
+
+        return Spy
+
+    real_class = lm._agent_class
+    monkeypatch.setattr(lm, "_agent_class", spy_class)
+    r = lp.train_masked("snake", 1, 512, 1)
+    assert seen and all(seen), "a sampled action was illegal"
+    assert len(r["eval_returns"]) == 1
+
+
+def test_learning_t3a_dispatch_and_fingerprint():
+    pytest = __import__("pytest")
+    pytest.importorskip("torch")
+    import learning_masked as lm
+    import learning_protocols as lp
+
+    with pytest.raises(ValueError, match="not T3a"):
+        lp.train_masked("acrobot", 1, 512, 1)
+    before = lp.fingerprint("snake")
+    assert before != lp.fingerprint("paddleduel")
+    real = lm.__file__
+    try:
+        lm.__file__ = lp.__file__
+        assert lp.fingerprint("snake") != before
+    finally:
+        lm.__file__ = real
+
+
+def test_learning_t3a_rows_without_a_legal_action_leave_the_loss():
+    """Rule 2."""
+    pytest = __import__("pytest")
+    torch = pytest.importorskip("torch")
+    import learning_masked as lm
+
+    masks = torch.tensor([[True, False], [False, False], [False, True], [False, False]])
+    assert lm.live_rows(torch.tensor([0, 1, 2, 3]), masks).tolist() == [0, 2]
+    assert lm.live_rows(torch.tensor([1, 3]), masks).tolist() == []
