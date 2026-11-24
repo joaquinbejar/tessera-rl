@@ -20,7 +20,7 @@ the API is not stable, and any 0.x release may break it.
 
 ### Added
 
-- Archive resets (ADR-0075, #363), Sync and Inline pools: `Archive<E>` (immutable, validated, shared; an XXH3-64 digest), `ResetSource` and `EnvPool::set_reset_source`, `EnvPool::reset_from`, and the reset source in `PoolContext` (`ResetSourceContext`). An archive reset keeps the instance's RNG identity and generations and copies an entry's state and alive slots; entries are drawn by integer weights on the reserved `archive_select` stream. `EngineError::Archive` and `ArchiveMismatch`. The Pipelined and Async API follows (#363 head A2), before any release.
+- Archive resets (ADR-0075, #363): `Archive<E>` (immutable, validated, shared; an XXH3-64 digest), `ResetSource` and `EnvPool::set_reset_source`, `EnvPool::reset_from`, and the reset source in `PoolContext` (`ResetSourceContext`). An archive reset keeps the instance's RNG identity and generations and copies an entry's state and alive slots; entries are drawn by integer weights on the reserved `archive_select` stream. `EngineError::Archive` and `ArchiveMismatch`. In every mode: `PipelinedPool::set_reset_source` and `AsyncPool::set_reset_source` (at quiescence, else `NotQuiescent`, `HalfBorrowed` or `Borrowed`) and `AsyncPool::reset_from` (a partial writer, like `reset`); Pipelined mode has no partial reset and no `reset_from`.
 
 ### Changed
 
