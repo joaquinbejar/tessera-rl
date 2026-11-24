@@ -1,0 +1,25 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+#
+# Reference training with RLlib (SPEC 14.2, #447): its own uv project and
+# lock ([env.rllib] in compat/targets.toml). RLlib pins gymnasium==1.2.2,
+# which cannot sit next to [env.main]'s 1.4.0, so this environment is
+# separate: Tessera is validated against Gymnasium 1.2.2 here (RLlib's pin),
+# not supported on it. The Tessera wheel is built from this repository
+# (path source, without the gymnasium extra). Run with `make reference-rllib`.
+
+[project]
+name = "tessera-rl-reference-rllib"
+version = "0.0.0"
+requires-python = ">=3.11"
+dependencies = [
+    "ray[rllib]==2.59.1",
+    "gymnasium==1.2.2",
+    "torch==2.15.0",
+    "tessera-rl",
+]
+
+[tool.uv]
+package = false
+
+[tool.uv.sources]
+tessera-rl = { path = "../../..", editable = false }
