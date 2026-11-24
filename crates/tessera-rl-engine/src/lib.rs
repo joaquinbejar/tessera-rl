@@ -32,6 +32,8 @@ mod heuristic;
 mod heuristic_rows;
 #[cfg(feature = "host")]
 mod host;
+#[cfg(test)]
+mod lane_level_tests;
 mod layout;
 pub mod league;
 mod masks;
@@ -135,6 +137,8 @@ pub use sys::native_wait_available;
 pub use sys::watch::{WatchError, WatchHandle};
 pub use sys::{default_workers, physical_cores};
 pub use tessera_rl_core::PolicyGroup;
+/// The SIMD level of `PoolOptions::simd_level` and its resolution (ADR-0071).
+pub use tessera_rl_simd::{Level, LevelError, Resolved};
 pub use validate::ActionInput;
 
 /// Whether this build has the `debug-checks` feature (SPEC 5.5): strict

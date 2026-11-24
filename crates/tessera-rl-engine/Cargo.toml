@@ -33,6 +33,7 @@ replay = []
 [dependencies]
 tessera-rl-core.workspace = true
 tessera-rl-num.workspace = true
+tessera-rl-simd.workspace = true
 thiserror.workspace = true
 # The host factory list (ADR-0065 item 3), with the `host` feature.
 inventory = { workspace = true, optional = true }

@@ -11,6 +11,7 @@ use crate::encoding::Canonical;
 use crate::error::{ConfigError, InvariantViolation, SpaceError};
 use crate::header::RecordLayout;
 use crate::io::{ActionWriter, Actions, MaskWriter, ObsWriter};
+use crate::lane_step::LaneHook;
 use crate::render::SceneWriter;
 use crate::space::Space;
 use crate::state_init::StateInit;
@@ -110,6 +111,10 @@ pub trait Environment: Sized + 'static {
     /// PettingZoo interface only by declaring it. [`register!`](crate::register)
     /// refuses a set that is not [`Adapters::valid_for`] its `TURNS`.
     const ADAPTERS: Adapters = Adapters::NONE;
+    /// The lane step of a [`LaneStep`](crate::LaneStep) environment,
+    /// `Some(lane_hook::<Self>())`; `None` (the default) steps every
+    /// instance through [`Environment::step`] (ADR-0071).
+    const LANE_STEP: Option<LaneHook<Self>> = None;
 
     /// The observation space for `cfg`.
     ///
