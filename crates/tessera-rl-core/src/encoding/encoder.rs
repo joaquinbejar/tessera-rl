@@ -123,10 +123,11 @@ impl core::fmt::Debug for HashSink {
 impl Sink for HashSink {
     #[inline]
     fn write(&mut self, bytes: &[u8]) {
-        let end = self.len.checked_add(bytes.len());
-        if let Some(dst) = end.and_then(|end| self.buf.get_mut(self.len..end)) {
+        if let Some(end) = self.len.checked_add(bytes.len())
+            && let Some(dst) = self.buf.get_mut(self.len..end)
+        {
             dst.copy_from_slice(bytes);
-            self.len += bytes.len();
+            self.len = end;
             return;
         }
         self.flush();
