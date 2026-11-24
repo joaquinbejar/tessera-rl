@@ -520,3 +520,31 @@ fn test_replay_host_header_flags_and_protocol() {
         assert_eq!(replay.header().record_len, 0);
     }
 }
+
+/// `b` with the header's tier byte set to `tier` (offset 13: magic, version,
+/// payload encoding) and the header checksum rewritten.
+fn with_tier(b: &[u8], tier: u8) -> Vec<u8> {
+    let mut out = b.to_vec();
+    out[13] = tier;
+    let end = header_len(&out) - 8;
+    let sum = checksum(&out[..end]);
+    out[end..end + 8].copy_from_slice(&sum.to_le_bytes());
+    out
+}
+
+#[test]
+fn test_replay_host_header_tier_is_two_and_only_two() {
+    let bytes = record::<false, false>(0);
+    assert_eq!(bytes[13], 2, "host files carry the host tier (ADR-0073)");
+    for tier in [0u8, 1, 3] {
+        assert!(
+            matches!(
+                Replay::open(&with_tier(&bytes, tier), LIMITS),
+                Err(ReplayError::Persist(PersistError::InvalidField {
+                    field: "tier"
+                }))
+            ),
+            "tier {tier} in a host file"
+        );
+    }
+}

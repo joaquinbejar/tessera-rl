@@ -59,6 +59,11 @@ impl Replay<'_> {
     /// [`ReplayError::Persist`] if the pool does not match the header,
     /// [`ReplayError::Diverged`] at the first failing check, and other typed
     /// errors for a malformed event.
+    ///
+    /// The config is not checked: host configs are not `CanonicalConfig`, so
+    /// host files carry no config bytes or hash, and a pool built with another
+    /// config shows up as a divergence, not as an incompatibility at open.
+    /// Hosts with ADR-0073 snapshots will carry and check it (part B).
     pub fn run_host<E: HostEnvironment, const A: usize>(
         &self,
         pool: &mut HostPool<E, A>,

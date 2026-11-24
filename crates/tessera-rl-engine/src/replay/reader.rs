@@ -241,8 +241,8 @@ impl<'a> Replay<'a> {
         if checksum(header_bytes) != stored {
             return Err(ReplayError::HeaderChecksum);
         }
-        file.check_fields()?;
         let host = check_replay_fields(flags, host_protocol, notifies, refuses)?;
+        file.check_fields_for(host.is_some())?;
         if file.count == 0 {
             return Err(PersistError::InvalidField {
                 field: "instance_count",

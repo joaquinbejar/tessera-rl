@@ -269,6 +269,11 @@ fn descriptor_matches(
 /// `config_hash` 0 (a host config need not be canonical), `record_len` 0
 /// (host snapshots do not exist yet, ADR-0073), the mask provider from
 /// `HostEnvironment::MASKS`, and the pool options as for any pool.
+/// The header tier of host files: host environments have no determinism tier
+/// (ADR-0062), and ADR-0073 marks their files with 2. Accepted only in host files.
+#[cfg(feature = "host")]
+pub(crate) const HOST_TIER: u8 = 2;
+
 #[cfg(all(feature = "host", feature = "replay"))]
 pub(crate) fn host_identity(
     env_id: &'static str,
@@ -281,7 +286,7 @@ pub(crate) fn host_identity(
         _ => (0, 0),
     };
     Identity {
-        tier: 0,
+        tier: HOST_TIER,
         mask_provider: u8::from(masks),
         auto_reset: match options.auto_reset {
             AutoReset::NextStep => 0,
@@ -473,6 +478,12 @@ impl<'a> FileHeader<'a> {
 
     /// Checks the fields that hold a value no file may hold.
     pub(crate) fn check_fields(&self) -> Result<(), PersistError> {
+        self.check_fields_for(false)
+    }
+
+    /// [`FileHeader::check_fields`], where `host` files must hold the host
+    /// tier and other files a determinism tier (0 or 1).
+    pub(crate) fn check_fields_for(&self, host: bool) -> Result<(), PersistError> {
         let invalid = |field| Err(PersistError::InvalidField { field });
         if self.encoding != RAW_CANONICAL {
             return invalid("payload_encoding");
@@ -480,7 +491,7 @@ impl<'a> FileHeader<'a> {
         if self.reserved != [0; 3] {
             return invalid("reserved");
         }
-        if self.tier > 1 {
+        if host_tier_mismatch(self.tier, host) {
             return invalid("tier");
         }
         if self.mask_provider > 1 {
@@ -773,6 +784,12 @@ where
         out.push(record);
     }
     Ok(out)
+}
+
+/// Whether `tier` is wrong for a file of this kind: a host file holds only the
+/// host tier, any other file only 0 or 1.
+const fn host_tier_mismatch(tier: u8, host: bool) -> bool {
+    if host { tier != 2 } else { tier > 1 }
 }
 
 #[cfg(test)]

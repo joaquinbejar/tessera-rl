@@ -525,3 +525,26 @@ fn test_replay_encoded_fixture_is_pinned() {
         "replay format changed: pinned length and XXH3-64"
     );
 }
+
+/// `b` with the header's tier byte set to `tier` (offset 13: magic, version,
+/// payload encoding) and the header checksum rewritten.
+fn with_tier(b: &[u8], tier: u8) -> Vec<u8> {
+    let mut out = b.to_vec();
+    out[13] = tier;
+    let end = header_len(&out) - 8;
+    let sum = checksum(&out[..end]);
+    out[end..end + 8].copy_from_slice(&sum.to_le_bytes());
+    out
+}
+
+#[test]
+fn test_replay_first_party_file_refuses_the_host_tier() {
+    let (bytes, _) = record(0);
+    assert_eq!(bytes[13], 0);
+    assert!(matches!(
+        Replay::open(&with_tier(&bytes, 2), LIMITS),
+        Err(ReplayError::Persist(PersistError::InvalidField {
+            field: "tier"
+        }))
+    ));
+}
