@@ -23,5 +23,8 @@ Wheels are abi3 for CPython 3.11 and newer.
 ## Where next
 
 - [Getting started](getting-started.md): make a pool, step it, snapshot it.
+- Tutorials: [writing an environment](tutorials/writing-an-environment.md),
+  [snapshot, restore and fork](tutorials/snapshot-fork.md),
+  [multi-agent](tutorials/multi-agent.md).
 - [API reference](api.md): the Python API, and the Rust API on docs.rs.
 - [Benchmarks](benchmarks.md): the benchmark dashboard.

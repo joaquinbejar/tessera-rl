@@ -9,6 +9,10 @@ strict: true
 nav:
   - Home: index.md
   - Getting started: getting-started.md
+  - Tutorials:
+      - Writing an environment: tutorials/writing-an-environment.md
+      - Snapshot, restore and fork: tutorials/snapshot-fork.md
+      - Multi-agent: tutorials/multi-agent.md
   - API reference: api.md
   - Benchmarks: benchmarks.md
 validation:

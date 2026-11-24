@@ -14,9 +14,9 @@ Steps:
    end, and every per-agent episode return and every per-module loss
    (``LOSS_KEYS``) is finite. It fails (exit 1) otherwise.
 
-Tag is zero-sum for each capture (the evader -1, each pursuer on the cell
-+1, tag/mod.rs), so RLlib's summed ``episode_return_mean`` is 0 by
-construction. The report records the per-agent returns instead. RLlib's
+On a capture the evader gets -1 and each pursuer on its cell +1
+(tag/mod.rs), so RLlib's summed ``episode_return_mean`` mixes the two sides
+(0 when one pursuer captures). The report records the per-agent returns. RLlib's
 bookkeeping counters (``num_trainable_parameters``) come back as NaN after
 the first iteration; they are not checked.
 

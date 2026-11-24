@@ -17,11 +17,29 @@ sys.modules[spec.name] = build
 spec.loader.exec_module(build)
 
 SNIPPETS = sorted((ROOT / "site" / "snippets").glob("*.py"))
+SHELL_SNIPPETS = sorted((ROOT / "site" / "snippets").glob("*.sh"))
 
 
 @pytest.mark.parametrize("path", SNIPPETS, ids=[p.name for p in SNIPPETS])
 def test_site_snippet_runs(path, capsys):
     runpy.run_path(str(path), run_name="__main__")
+
+
+@pytest.mark.parametrize("path", SHELL_SNIPPETS, ids=[p.name for p in SHELL_SNIPPETS])
+def test_site_shell_snippet_matches_cargo_tessera_readme(path):
+    """The tutorial's commands are the ones cargo-tessera's README documents
+    (scripts/cargo_tessera_e2e.sh runs that workflow), so the two cannot drift."""
+    readme = (ROOT / "crates" / "cargo-tessera" / "README.md").read_text(encoding="utf-8")
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if line.strip():
+            assert line in readme, line
+
+
+def test_site_every_snippet_is_used():
+    used = set()
+    for page in (ROOT / "site" / "pages").rglob("*.md"):
+        used |= set(build.SNIPPET.findall(page.read_text(encoding="utf-8")))
+    assert used == {p.name for p in SNIPPETS + SHELL_SNIPPETS}
 
 
 def test_site_every_snippet_marker_resolves():
