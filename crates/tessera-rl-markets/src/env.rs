@@ -178,9 +178,18 @@ fn bankruptcies(cfg: &LobConfig, state: &mut LobState, out: &mut StepOut<'_>) {
     }
 }
 
-/// Step rule 6: every inventory of an agent alive at the start of the last
-/// step is settled at the fundamental.
-fn settle(state: &mut LobState, was_alive: &[bool; MAX_AGENTS]) {
+/// Step rule 6: the market closes on the last step: every resting order
+/// is cancelled and every queued item dropped, then every inventory of an
+/// agent alive at the start of the step is settled at the fundamental.
+/// Closing first keeps the position limits: an agent short `k` lots may hold
+/// up to `max_position + k` open buy lots, which would exceed the limit once
+/// its inventory is settled to zero.
+pub(crate) fn settle(state: &mut LobState, was_alive: &[bool; MAX_AGENTS]) {
+    for owner in 0..MAX_AGENTS {
+        let owner = u8::try_from(owner).unwrap_or(u8::MAX);
+        state.book.cancel_all(owner);
+        state.pending.drop_owner(owner);
+    }
     let price = i64::from(state.fundamental);
     for (a, &alive) in state.accounts.iter_mut().zip(was_alive) {
         if alive {
@@ -461,4 +470,42 @@ impl Validate for LimitOrderBook {
 impl tessera_rl_core::Persist for LimitOrderBook {
     const ENV_ID: &'static str = ENV_ID;
     const ENV_VERSION: u32 = ENV_VERSION;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::settle;
+    use crate::account::Account;
+    use crate::fill::Fills;
+    use crate::limits::MAX_AGENTS;
+    use crate::order::Side;
+    use crate::pending::Pending;
+    use crate::state::LobState;
+
+    #[test]
+    fn test_settle_closes_the_market_before_settling_inventories() {
+        let mut s = LobState {
+            fundamental: 500,
+            ..LobState::default()
+        };
+        s.accounts[0] = Account::with_cash(1_000);
+        s.accounts[0].inventory = -5;
+        s.accounts[1] = Account::with_cash(0);
+        s.accounts[1].inventory = 5;
+        let mut f = Fills::new();
+        // Agent 0, short 5, rests 11 buy lots (legal: -5 + 11 <= 6) and queues one.
+        assert!(s.book.limit(0, Side::Buy, 400, 11, &mut f).is_ok());
+        assert_eq!(
+            s.pending.push(Pending::limit(0, Side::Buy, 401, 1), 3),
+            Ok(())
+        );
+        let mut alive = [false; MAX_AGENTS];
+        alive[0] = true;
+        alive[1] = true;
+        settle(&mut s, &alive);
+        assert!(s.book.is_empty());
+        assert!(s.pending.is_empty());
+        assert_eq!((s.accounts[0].cash, s.accounts[0].inventory), (-1_500, 0));
+        assert_eq!((s.accounts[1].cash, s.accounts[1].inventory), (2_500, 0));
+    }
 }
