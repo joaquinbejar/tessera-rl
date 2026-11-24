@@ -35,7 +35,10 @@ fn test_registry_shared_counter_counts_engines_and_keeps_earlier_registrations_a
     assert!(attach_shared_registry(shared));
     assert!(attach_shared_registry(shared), "the same counter again");
     let other: &'static AtomicUsize = Box::leak(Box::new(AtomicUsize::new(0)));
-    assert!(!attach_shared_registry(other), "a different counter is refused");
+    assert!(
+        !attach_shared_registry(other),
+        "a different counter is refused"
+    );
     assert_eq!(shared.load(Ordering::Acquire), 0);
     // Another wheel's engine, counted in the shared counter only.
     shared.fetch_add(1, Ordering::AcqRel);
@@ -44,7 +47,11 @@ fn test_registry_shared_counter_counts_engines_and_keeps_earlier_registrations_a
     // It saw the other wheel's engine: unpinned.
     assert!(!after.pinned_workers());
     drop(before);
-    assert_eq!(shared.load(Ordering::Acquire), 2, "the earlier engine left its own counter");
+    assert_eq!(
+        shared.load(Ordering::Acquire),
+        2,
+        "the earlier engine left its own counter"
+    );
     drop(after);
     assert_eq!(shared.load(Ordering::Acquire), 1);
     assert_eq!(other.load(Ordering::Acquire), 0);

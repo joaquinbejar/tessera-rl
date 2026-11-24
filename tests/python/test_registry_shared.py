@@ -70,7 +70,7 @@ def test_registry_shared_both_wheels_use_one_capsule():
     assert type(module.counter_v1).__name__ == "PyCapsule"
     gc.collect()
     before = count()
-    env = tessera_rl.make("CartPole-v1", num_envs=4, workers=1)
+    env = tessera_rl.make("tessera/CartPole-v1", num_envs=4, workers=1)
     assert count() == before + 1
     env.close()
     del env
@@ -80,13 +80,13 @@ def test_registry_shared_both_wheels_use_one_capsule():
 
 @linux
 def test_registry_shared_pool_after_another_wheels_pool_runs_unpinned(cores):
-    first = tessera_rl.make("CartPole-v1", num_envs=4, workers=2)
+    first = tessera_rl.make("tessera/CartPole-v1", num_envs=4, workers=2)
     assert count() == 1
     assert pinned(worker_masks()) == cores[:2]
     host = tessera_rl.make(HOST_ID, num_envs=2, workers=2, cpu_set=cores[-2:])
     assert count() == 2
     assert pinned(worker_masks()) == sorted(cores[:2] + cores[-2:])
-    second = tessera_rl.make("CartPole-v1", num_envs=4, workers=2)
+    second = tessera_rl.make("tessera/CartPole-v1", num_envs=4, workers=2)
     assert count() == 3
     masks = worker_masks()
     # The second pool's two workers are unpinned: they keep the process mask.
@@ -102,7 +102,7 @@ def test_registry_shared_pool_after_another_wheels_pool_runs_unpinned(cores):
 @linux
 def test_registry_shared_host_pool_first_unpins_a_tessera_pool(cores):
     host = tessera_rl.make(HOST_ID, num_envs=2, workers=2, cpu_set=cores[-2:])
-    env = tessera_rl.make("CartPole-v1", num_envs=4, workers=2)
+    env = tessera_rl.make("tessera/CartPole-v1", num_envs=4, workers=2)
     assert count() == 2
     masks = worker_masks()
     assert pinned(masks) == cores[-2:]
@@ -124,7 +124,7 @@ def test_registry_shared_unusable_entry_warns_and_counts_alone():
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
             import tessera_rl
-            env = tessera_rl.make("CartPole-v1", num_envs=2, workers=1)
+            env = tessera_rl.make("tessera/CartPole-v1", num_envs=2, workers=1)
             env.close()
         print(sum("counts only its own engines" in str(w.message) for w in caught))
         print(sys.modules["tessera_rl._registry"].counter_v1)

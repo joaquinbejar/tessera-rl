@@ -88,7 +88,9 @@ pub fn attach(g: Gil<'_>) -> CResult<()> {
             }
             capi::clear_pending(g);
             let leaked: &'static AtomicUsize = Box::leak(Box::new(AtomicUsize::new(0)));
-            let pointer = core::ptr::from_ref(leaked).cast_mut().cast::<core::ffi::c_void>();
+            let pointer = core::ptr::from_ref(leaked)
+                .cast_mut()
+                .cast::<core::ffi::c_void>();
             // SAFETY: `pointer` is valid for the process (leaked); `CAPSULE`
             // is `'static`; `keep` frees nothing.
             #[expect(unsafe_code, reason = "audited module: capsule creation")]
@@ -103,7 +105,10 @@ pub fn attach(g: Gil<'_>) -> CResult<()> {
     if tessera_rl_engine::attach_shared_registry(counter) {
         Ok(())
     } else {
-        fallback(g, c"this wheel's engine already uses another registry counter (ADR-0005)")
+        fallback(
+            g,
+            c"this wheel's engine already uses another registry counter (ADR-0005)",
+        )
     }
 }
 

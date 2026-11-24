@@ -73,7 +73,6 @@ pub mod __private {
     pub use tessera_rl_core::HostEnvironment;
 }
 pub use layout::{MAX_GROUPED_HEADS, MAX_LEAVES, MaskHeadShape};
-pub use registry::attach_shared_registry;
 pub use masks::{IllegalActionPolicy, MaskProvider, Masked, NoMasks, PersistMask};
 #[cfg(not(loom))]
 pub use modes::async_mode::{
@@ -89,6 +88,7 @@ pub use outputs::Outputs;
 pub use persist::{BUILD_ID, DecodeLimits, FORMAT_VERSION, MAGIC, PersistError};
 pub use pool::{EnvPool, Reseed};
 pub use record::{DecodedRecord, PoolContext, Record};
+pub use registry::attach_shared_registry;
 #[cfg(not(loom))]
 pub use sys::native_wait_available;
 pub use validate::ActionInput;
