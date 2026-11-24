@@ -10,12 +10,16 @@
     reason = "test helpers: a failure is the assertion"
 )]
 
+#[path = "support/joint_fixture.rs"]
+mod joint_fixture;
 #[path = "support/picker.rs"]
 mod picker;
 
 use core::num::NonZeroU32;
 
 use picker::{NVEC, Picker, PickerConfig};
+use tessera_rl_core::ActionMask;
+use tessera_rl_core::space::JointHeads;
 use tessera_rl_engine::{
     ActionInput, AutoReset, EnvPool, Masked, NoMasks, PoolOptions, Record, Reseed,
 };
@@ -242,4 +246,36 @@ fn test_check_head_activity_passes_an_honest_env_and_catches_a_cheat() {
         ),
         "{err}"
     );
+}
+
+/// The native joints of the test environment, for the Python cross-check
+/// of `joint_log_prior` (review r1 of #454).
+#[test]
+fn test_multi_discrete_joint_fixture_matches_the_native_joints() {
+    let c = cfg();
+    let parents: Vec<_> = (0..NVEC.len())
+        .map(|h| Picker::head_parents(&c, h))
+        .collect();
+    let active = |h: usize, p: [u32; 2]| Picker::head_active(&c, h, p);
+    let joint = JointHeads::new(&NVEC, &parents, u32::MAX, active).unwrap();
+    let mut text = String::new();
+    for (name, steps) in [("start", &[][..]), ("bonus_spent", &[[2, 3, 1]][..])] {
+        let options = PoolOptions {
+            auto_reset: AutoReset::Disabled,
+            ..PoolOptions::new(NonZeroU32::MIN, Seed::new(5))
+        };
+        let mut p = EnvPool::<Picker, Masked>::with_masks(c.clone(), options).unwrap();
+        p.reset_all(Reseed::Keep).unwrap();
+        p.restore(0, &root(&c, steps)).unwrap();
+        let row = p.outputs().unwrap().masks().to_vec();
+        text += &joint_fixture::joint_case(
+            &format!("picker_{name}"),
+            &NVEC,
+            &parents,
+            &active,
+            &joint,
+            &|j| joint.is_legal(j, |at| row.get(at).is_some_and(|m| m.get())),
+        );
+    }
+    joint_fixture::check_fixture("picker.txt", &text);
 }

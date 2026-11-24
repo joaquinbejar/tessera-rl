@@ -10,6 +10,8 @@
     reason = "test fixtures: a failure is the assertion"
 )]
 
+#[path = "../../tessera-rl-search/tests/support/joint_fixture.rs"]
+mod joint_fixture;
 mod support;
 
 use core::num::NonZeroU32;
@@ -116,4 +118,34 @@ fn test_lob_canonical_legal_joints_map_one_to_one_onto_decisions() {
         }
     }
     assert!(checked >= 40, "{checked}");
+}
+
+/// The order book's native joints on sampled mask rows, for the Python
+/// cross-check of `joint_log_prior` (review r1 of #454).
+#[test]
+fn test_lob_joint_fixture_matches_the_native_joints() {
+    let joint = joint();
+    let parents: Vec<_> = (0..HEADS).map(actions::head_parents).collect();
+    let active = |h: usize, p: [u32; 2]| actions::head_active(h, p[0]);
+    let nvec = [KINDS, OFFSETS, SIZES, CANCELS];
+    let cfg = config(4, 2);
+    let mut text = String::new();
+    for (i, root) in roots(&cfg, 23, 30, 10).iter().enumerate() {
+        let mut p = pool(cfg.clone(), 1, 23, None);
+        p.reset_all(Reseed::Keep).unwrap();
+        p.restore(0, root).unwrap();
+        let masks = p.outputs().unwrap().masks().to_vec();
+        for agent in [0usize, 3] {
+            let row = &masks[agent * MASK_LEN..(agent + 1) * MASK_LEN];
+            text += &joint_fixture::joint_case(
+                &format!("lob_{i}_{agent}"),
+                &nvec,
+                &parents,
+                &active,
+                &joint,
+                &|j| joint.is_legal(j, |at| row[at].get()),
+            );
+        }
+    }
+    joint_fixture::check_fixture("lob.txt", &text);
 }

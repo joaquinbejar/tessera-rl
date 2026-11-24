@@ -8,6 +8,14 @@
 //! re-rooting allocate nothing. Every operation that can fail checks
 //! everything before it changes the tree, so an error leaves the tree and
 //! its counters exactly as they were.
+//!
+//! # Environment checks
+//!
+//! Checks for environment crates' tests (a dev-dependency):
+//!
+//! - [`check_head_activity`] (ADR-0086 decision 6): an environment that
+//!   declares `ActionMask::head_active` ignores its inactive heads in the
+//!   step, so search's canonical joints stand for every game action once.
 
 mod determinize;
 mod error;
