@@ -8,11 +8,11 @@
 //! benches.
 
 use tessera_rl_classic::cartpole::{CartPole, CartPoleConfig, CartPoleObs, CartPoleState};
-use tessera_rl_core::io::{Actions, ObsWriter};
+use tessera_rl_core::io::{ActionWriter, Actions, ObsWriter};
 use tessera_rl_core::space::Space;
 use tessera_rl_core::{
-    AgentSlot, Environment, InvariantViolation, NoAdaptive, Persist, RecordHeader, SpaceError,
-    StepOut, Tier, Validate,
+    AgentSlot, Environment, Heuristic, InvariantViolation, NoAdaptive, Persist, RecordHeader,
+    SpaceError, StepOut, Tier, Validate,
 };
 use tessera_rl_macros::EnvState;
 use tessera_rl_num::rng::{ObsRng, StepRng};
@@ -111,4 +111,16 @@ impl Validate for SoaCartPole {
 impl Persist for SoaCartPole {
     const ENV_ID: &'static str = CartPole::ENV_ID;
     const ENV_VERSION: u32 = CartPole::ENV_VERSION;
+}
+
+impl Heuristic for SoaCartPole {
+    fn act(
+        cfg: &CartPoleConfig,
+        state: &SoaCartPoleState,
+        agent: AgentSlot,
+        rng: &mut StepRng,
+        out: &mut ActionWriter<'_>,
+    ) {
+        CartPole::act(cfg, &state.rows(), agent, rng, out);
+    }
 }

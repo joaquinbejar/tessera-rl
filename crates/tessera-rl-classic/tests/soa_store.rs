@@ -420,3 +420,17 @@ fn test_soa_store_state_is_gathered_by_value() {
     assert_eq!(soa.state(8).unwrap(), SoaCartPoleState::of(s));
     assert_eq!(soa.state(9), None);
 }
+
+#[test]
+fn test_soa_store_heuristic_slots_are_refused() {
+    // The heuristic pass reads a chunk's state rows, which a lane-wise
+    // state does not have; the row store accepts the same slots.
+    let options = PoolOptions::new(NonZeroU32::new(16).unwrap(), Seed::new(3));
+    let soa = EnvPool::<SoaCartPole>::new(CartPoleConfig {}, options).unwrap();
+    assert!(matches!(
+        soa.with_heuristic_slots(&[0]),
+        Err(EngineError::PolicyMap { .. })
+    ));
+    let plain = EnvPool::<CartPole>::new(CartPoleConfig {}, options).unwrap();
+    assert!(plain.with_heuristic_slots(&[0]).is_ok());
+}
