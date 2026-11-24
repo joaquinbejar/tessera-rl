@@ -38,7 +38,7 @@ fn xorshift(s: &mut u64) -> u64 {
 /// `MEASURED_STEPS` batches of actions, all drawn here.
 #[must_use]
 pub fn steady(n: u32) -> (Pool, Vec<Vec<i32>>) {
-    let mut pool = Pool::new(&HostCartPoleConfig, options(n)).unwrap();
+    let mut pool = Pool::new(HostCartPoleConfig, options(n)).unwrap();
     pool.reset_all(Reseed::Keep).unwrap();
     let mut seed = 0x9e37_79b9_7f4a_7c15_u64;
     let mut row = || -> Vec<i32> {

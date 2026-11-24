@@ -29,7 +29,7 @@ fn pool(n: u32, mode: AutoReset, sync: bool) -> Pool {
     o.auto_reset = mode;
     // Sync: chunks of 1 over 3 workers, so every worker runs chunks.
     o.chunk_size = NonZeroU32::MIN;
-    let p = Pool::new(&BookConfig::default(), o).unwrap();
+    let p = Pool::new(BookConfig::default(), o).unwrap();
     if sync {
         p.with_workers(SyncOptions::new(core::num::NonZeroUsize::new(3).unwrap()))
             .unwrap()

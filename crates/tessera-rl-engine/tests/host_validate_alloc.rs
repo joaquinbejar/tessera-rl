@@ -30,7 +30,7 @@ fn test_host_validate_allocations_are_charged_to_the_host_tally() {
         let mut options = PoolOptions::new(NonZeroU32::new(4).unwrap(), Seed::new(2));
         options.chunk_size = NonZeroU32::MIN;
         let mut p =
-            HostPool::<Script<0, true>, SLOTS>::new(&ScriptConfig::new(&shared), options).unwrap();
+            HostPool::<Script<0, true>, SLOTS>::new(ScriptConfig::new(&shared), options).unwrap();
         if workers > 0 {
             p = p
                 .with_workers(SyncOptions::new(NonZeroUsize::new(workers).unwrap()))

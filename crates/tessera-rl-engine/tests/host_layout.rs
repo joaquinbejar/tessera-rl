@@ -23,7 +23,7 @@ type Pool = HostPool<Book, { Book::MAX_AGENTS }>;
 fn pool(auto_reset: AutoReset) -> Pool {
     let mut options = PoolOptions::new(NonZeroU32::new(3).unwrap(), Seed::new(5));
     options.auto_reset = auto_reset;
-    Pool::new(&BookConfig::default(), options).unwrap()
+    Pool::new(BookConfig::default(), options).unwrap()
 }
 
 #[test]

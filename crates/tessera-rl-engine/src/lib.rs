@@ -63,9 +63,14 @@ pub use buffer::{
 pub use error::{EngineError, NanSite};
 #[cfg(feature = "host")]
 pub use host::{
-    DynHostPool, FactoryError, HostFactory, HostLayout, HostLeaf, HostPool, MAX_HOST_AGENTS,
-    MAX_HOST_HEADS, MakeOptions, make_host,
+    DynHostPool, FactoryError, HOST_MAGIC, HostFactory, HostLayout, HostLeaf, HostPool, HostRecord,
+    MAX_HOST_AGENTS, MAX_HOST_HEADS, MAX_HOST_SNAPSHOT_BYTES, MakeOptions, RecordDecodeError,
+    make_host,
 };
+
+/// `check_snapshot_contract` for host environment crates (ADR-0073 item 8).
+#[cfg(feature = "testing")]
+pub use host::testing as host_testing;
 
 /// Not public API: what `register_host_factory!` expands to names.
 #[cfg(feature = "host")]

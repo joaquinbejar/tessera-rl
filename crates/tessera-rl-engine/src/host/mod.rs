@@ -46,13 +46,22 @@
 #[cfg(test)]
 mod abort_header_tests;
 mod dyn_pool;
+mod dyn_snapshot;
 mod factory;
 mod kernels;
 mod layout;
+mod persist;
+mod record;
+mod snapshot;
+#[cfg(feature = "testing")]
+pub mod testing;
 
 pub use dyn_pool::DynHostPool;
 pub use factory::{FactoryError, HostFactory, MakeOptions, make_host};
 pub use layout::{HostLayout, HostLeaf};
+pub use persist::HOST_MAGIC;
+
+pub use record::{HostRecord, RecordDecodeError};
 
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
@@ -109,7 +118,7 @@ pub const MAX_HOST_HEADS: usize = 4096;
 ///     fn observe(&self, _: AgentSlot, _: &mut ObsWriter<'_, '_, ()>) {}
 /// }
 /// let options = PoolOptions::new(core::num::NonZeroU32::MIN, Seed::new(0));
-/// let _ = HostPool::<Many, AGENTS>::new(&Cfg, options);
+/// let _ = HostPool::<Many, AGENTS>::new(Cfg, options);
 /// ```
 ///
 /// One past it does not compile:
@@ -138,9 +147,21 @@ pub const MAX_HOST_HEADS: usize = 4096;
 ///     fn observe(&self, _: AgentSlot, _: &mut ObsWriter<'_, '_, ()>) {}
 /// }
 /// let options = PoolOptions::new(core::num::NonZeroU32::MIN, Seed::new(0));
-/// let _ = HostPool::<Many, AGENTS>::new(&Cfg, options);
+/// let _ = HostPool::<Many, AGENTS>::new(Cfg, options);
 /// ```
 pub const MAX_HOST_AGENTS: usize = 256;
+
+/// The largest `HostSnapshot::max_snapshot_len` a host pool accepts, 1 GiB
+/// (ADR-0073): a larger bound is refused with
+/// [`EngineError::SnapshotBound`] before anything is reserved for it.
+pub const MAX_HOST_SNAPSHOT_BYTES: usize = 1 << 30;
+
+/// A pool's snapshot parameters, computed once (ADR-0073).
+#[derive(Debug, Clone, Copy)]
+struct SnapshotParams {
+    identity: u64,
+    max: usize,
+}
 
 /// A pool of `num_envs` instances of the host environment `E` (ADR-0062).
 ///
@@ -176,7 +197,7 @@ pub const MAX_HOST_AGENTS: usize = 256;
 ///     fn observe(&self, _: AgentSlot, _: &mut ObsWriter<'_, '_, ()>) {}
 /// }
 /// let options = PoolOptions::new(core::num::NonZeroU32::MIN, Seed::new(0));
-/// let _ = HostPool::<Notified, 1>::new(&Cfg, options);
+/// let _ = HostPool::<Notified, 1>::new(Cfg, options);
 /// ```
 ///
 /// With the notice and without `VALIDATES` it does not compile:
@@ -205,10 +226,13 @@ pub const MAX_HOST_AGENTS: usize = 256;
 ///     fn observe(&self, _: AgentSlot, _: &mut ObsWriter<'_, '_, ()>) {}
 /// }
 /// let options = PoolOptions::new(core::num::NonZeroU32::MIN, Seed::new(0));
-/// let _ = HostPool::<Notified, 1>::new(&Cfg, options);
+/// let _ = HostPool::<Notified, 1>::new(Cfg, options);
 /// ```
 #[derive(Debug)]
 pub struct HostPool<E: HostEnvironment, const A: usize> {
+    /// The configuration the pool was built with (ADR-0073 needs it after
+    /// construction: `check_snapshot`, `max_snapshot_len`, the identity).
+    cfg: HeldConfig<E::Config>,
     options: PoolOptions,
     /// `E::initial_agents(cfg)`, checked at construction.
     initial: usize,
@@ -231,6 +255,14 @@ pub struct HostPool<E: HostEnvironment, const A: usize> {
     abort_rows_clear: u64,
     /// Per-agent refusal bookkeeping (ADR-0070).
     refusal: Refusal,
+    /// The record `fork` saves its source into, reused (ADR-0073 item 4).
+    snapshot_scratch: record::HostRecord<A>,
+    /// The snapshot functions for `DynHostPool`, when built with
+    /// `with_dyn_snapshots` (ADR-0073).
+    dyn_snapshots: Option<dyn_snapshot::DynSnapshotOps<E, A>>,
+    /// `max_snapshot_len` and the identity digest, computed on first use
+    /// (ADR-0073).
+    snapshot_params: Option<SnapshotParams>,
     #[cfg(feature = "debug-checks")]
     allocs: crate::sys::alloc_track::AllocTally,
     #[cfg(feature = "debug-checks")]
@@ -266,7 +298,7 @@ impl<E: HostEnvironment, const A: usize> HostPool<E, A> {
     /// An [`EngineError`] for an invalid config, options or space, more
     /// than [`MAX_HOST_HEADS`] action heads per agent, or an environment
     /// that refuses to start.
-    pub fn new(cfg: &E::Config, options: PoolOptions) -> Result<Self, EngineError> {
+    pub fn new(cfg: E::Config, options: PoolOptions) -> Result<Self, EngineError> {
         let () = Self::AGENTS_MATCH;
         let mut out = None;
         if crate::sys::catch(|| out = Some(crate::entry::canonical(|| Self::build(cfg, options)))) {
@@ -276,7 +308,12 @@ impl<E: HostEnvironment, const A: usize> HostPool<E, A> {
         }
     }
 
-    fn build(cfg: &E::Config, options: PoolOptions) -> Result<Self, EngineError> {
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one linear construction; the snapshot config field took it past the limit"
+    )]
+    fn build(owned: E::Config, options: PoolOptions) -> Result<Self, EngineError> {
+        let cfg = &owned;
         if A == 0 {
             return Err(EngineError::Options {
                 option: "MAX_AGENTS",
@@ -352,6 +389,7 @@ impl<E: HostEnvironment, const A: usize> HostPool<E, A> {
             .map(|_| E::new(cfg).map_err(host_error))
             .collect::<Result<Vec<E>, EngineError>>()?;
         Ok(Self {
+            cfg: HeldConfig(owned),
             options,
             initial,
             host_layout,
@@ -376,6 +414,9 @@ impl<E: HostEnvironment, const A: usize> HostPool<E, A> {
             aborts: AtomicU64::new(0),
             abort_rows_clear: 0,
             refusal: Refusal::new(),
+            snapshot_scratch: record::HostRecord::new(),
+            dyn_snapshots: None,
+            snapshot_params: None,
             #[cfg(feature = "debug-checks")]
             allocs: crate::sys::alloc_track::AllocTally::default(),
             #[cfg(feature = "debug-checks")]
@@ -1115,5 +1156,23 @@ fn host_error(e: HostError) -> EngineError {
         other => EngineError::HostConstruction {
             reason: other.to_string(),
         },
+    }
+}
+
+/// The configuration a host pool keeps. `EnvConfig` does not require
+/// `Debug`, so the pool's `Debug` shows it as opaque.
+struct HeldConfig<C>(C);
+
+impl<C> core::fmt::Debug for HeldConfig<C> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("HeldConfig(..)")
+    }
+}
+
+impl<C> core::ops::Deref for HeldConfig<C> {
+    type Target = C;
+
+    fn deref(&self) -> &C {
+        &self.0
     }
 }

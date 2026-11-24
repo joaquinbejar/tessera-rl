@@ -69,6 +69,49 @@ pub enum EngineError {
         /// What is inconsistent.
         reason: &'static str,
     },
+    /// A host pool without snapshots (ADR-0073): its environment does not
+    /// implement `HostSnapshot`, or the type-erased pool was not built with
+    /// `HostPool::with_dyn_snapshots`.
+    #[error("this host environment has no snapshots")]
+    NoSnapshots,
+    /// A host environment's `max_snapshot_len` is over
+    /// `MAX_HOST_SNAPSHOT_BYTES` (ADR-0073); nothing was reserved.
+    #[error("max_snapshot_len is {max} bytes, over the limit of {cap}")]
+    SnapshotBound {
+        /// The environment's bound.
+        max: usize,
+        /// The engine's limit.
+        cap: usize,
+    },
+    /// The allocator refused the bytes reserved for a snapshot.
+    #[error("could not reserve {bytes} bytes for a host snapshot")]
+    SnapshotAllocation {
+        /// Bytes asked for.
+        bytes: usize,
+    },
+    /// A host environment refused a record's bytes
+    /// (`HostSnapshot::check_snapshot`, ADR-0073); nothing was restored.
+    #[error("record {index}: snapshot rejected ({code}): {reason}")]
+    SnapshotRejected {
+        /// Position of the record in the call.
+        index: usize,
+        /// The environment's code.
+        code: u32,
+        /// The environment's reason.
+        reason: &'static str,
+    },
+    /// A host environment's `save` wrote more than its
+    /// `max_snapshot_len` (ADR-0073 item 1): an author bug that poisons the
+    /// pool.
+    #[error("instance {instance}: save wrote {len} bytes, over max_snapshot_len {max}")]
+    SnapshotTooLong {
+        /// The instance.
+        instance: u32,
+        /// Bytes written.
+        len: usize,
+        /// The environment's bound.
+        max: usize,
+    },
     /// An imported record violates a game invariant (`Validate`).
     #[error("record {index}: {violation}")]
     Invariant {

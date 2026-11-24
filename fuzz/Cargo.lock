@@ -246,6 +246,7 @@ name = "tessera-rl-engine"
 version = "0.3.0"
 dependencies = [
  "core_affinity",
+ "inventory",
  "libc",
  "tessera-rl-core",
  "tessera-rl-num",

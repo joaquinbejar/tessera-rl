@@ -195,6 +195,7 @@ const LIB: &str = "fixture";
 const LIMITS: DecodeLimits = DecodeLimits {
     max_instances: 1 << 24,
     max_decoded_bytes: 1 << 30,
+    max_host_record_bytes: 1 << 26,
 };
 
 fn file(p: &EnvPool<Cross, Masked>, ids: &[u32]) -> Vec<u8> {
@@ -361,6 +362,7 @@ fn test_persist_oversized_input_is_refused_before_the_checksum() {
     let limits = DecodeLimits {
         max_instances: 8,
         max_decoded_bytes: 16,
+        max_host_record_bytes: 1 << 26,
     };
     assert!(matches!(
         p.decode_with(&bad, limits, None),
@@ -394,6 +396,7 @@ fn test_persist_limits_and_counts_are_typed_errors() {
     let tight = |max_instances, max_decoded_bytes| DecodeLimits {
         max_instances,
         max_decoded_bytes,
+        max_host_record_bytes: 1 << 26,
     };
     assert!(matches!(
         p.decode_with(&good, tight(1, 1 << 30), None),

@@ -27,7 +27,7 @@ type Pool = HostPool<Script<0, false>, SLOTS>;
 
 fn build(shared: &Arc<Shared>) -> Result<Pool, EngineError> {
     let o = PoolOptions::new(NonZeroU32::new(N).unwrap(), Seed::new(3));
-    Pool::new(&ScriptConfig::new(shared), o)
+    Pool::new(ScriptConfig::new(shared), o)
 }
 
 fn calls(shared: &Shared, i: usize) -> u64 {

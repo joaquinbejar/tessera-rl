@@ -199,7 +199,7 @@ pub fn register(g: Gil<'_>, module: Ref<'_>) -> CResult<()> {
 
 /// The classes a host module binds from `tessera_rl` (SPEC 14.4.6).
 #[cfg(feature = "host")]
-const BOUND: [Kind; 11] = [
+const BOUND: [Kind; 13] = [
     Kind::Base,
     Kind::Config,
     Kind::Argument,
@@ -211,6 +211,9 @@ const BOUND: [Kind; 11] = [
     Kind::Forked,
     Kind::FloatingPoint,
     Kind::Capability,
+    // ADR-0073: host snapshots raise these two.
+    Kind::Record,
+    Kind::Persist,
 ];
 
 /// Host modules (SPEC 14.4.6): imports `tessera_rl` and binds its
@@ -294,6 +297,7 @@ pub fn error(g: Gil, kind: Kind, message: String) -> Raised {
 pub fn engine_kind(e: &EngineError) -> Kind {
     match e {
         EngineError::Config(_)
+        | EngineError::SnapshotBound { .. }
         | EngineError::Space(_)
         | EngineError::UnsupportedSpace { .. }
         | EngineError::Options { .. }
@@ -316,7 +320,10 @@ pub fn engine_kind(e: &EngineError) -> Kind {
         | EngineError::IllegalAction { .. }
         | EngineError::MaskBudgetExceeded { .. }
         | EngineError::ActionRejected { .. } => Kind::Action,
-        EngineError::InvalidRecord { .. } | EngineError::Invariant { .. } => Kind::Record,
+        EngineError::InvalidRecord { .. }
+        | EngineError::Invariant { .. }
+        | EngineError::SnapshotRejected { .. } => Kind::Record,
+        EngineError::NoSnapshots => Kind::Capability,
         EngineError::PendingReset { .. } => Kind::PendingReset,
         EngineError::Poisoned
         | EngineError::Panicked
@@ -326,7 +333,8 @@ pub fn engine_kind(e: &EngineError) -> Kind {
         | EngineError::NanDetected { .. }
         | EngineError::AllocationInChunkStep { .. }
         | EngineError::TurnOrder { .. }
-        | EngineError::RefusedNotActing { .. } => Kind::Poisoned,
+        | EngineError::RefusedNotActing { .. }
+        | EngineError::SnapshotTooLong { .. } => Kind::Poisoned,
         EngineError::NestedEngine
         | EngineError::GangQueue { .. }
         | EngineError::InFlight { .. }
@@ -344,5 +352,16 @@ pub fn engine_kind(e: &EngineError) -> Kind {
         // `EngineError` is non-exhaustive (ADR-0055): a variant added later
         // raises the base class until it is mapped here.
         _ => Kind::Base,
+    }
+}
+
+/// The class of a persisted-file error (ADR-0073 host files): an engine
+/// error keeps its own class, every other one is `PersistError`.
+#[cfg(feature = "host")]
+#[must_use]
+pub fn persist_kind(e: &tessera_rl_engine::PersistError) -> Kind {
+    match e {
+        tessera_rl_engine::PersistError::Engine(e) => engine_kind(e),
+        _ => Kind::Persist,
     }
 }

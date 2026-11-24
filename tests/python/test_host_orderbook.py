@@ -122,8 +122,9 @@ def test_host_orderbook_errors_are_the_first_party_classes():
         pytest.fail("an out-of-range action is an ActionError")
     # Refused before the pool is touched: the last window is still open.
     assert not tessera_rl.is_stale(view) and np.array_equal(view, before)
+    # The book has snapshots (ADR-0073); snapshot_all stays first-party.
     with pytest.raises(tessera_rl.CapabilityError):
-        env.snapshot(0)
+        env.snapshot_all()
     with pytest.raises(tessera_rl.ConfigError):
         tessera_rl.make(ID, num_envs=1, episode=0)
     env.close()
@@ -237,3 +238,25 @@ def test_host_orderbook_a_sell_fills_the_oldest_unit():
     assert sell.rewards[0, 0] == 3.0, "the sell fills the unit bought at the open"
     assert sell.observations["obs"][0, 0, :2].tolist() == [1, open_ + 3]
     env.close()
+
+
+def test_host_orderbook_snapshot_restores_the_heap_book():
+    """ADR-0073: the book's resting orders (heap state) travel in its
+    snapshot; a restored instance continues as the original."""
+    env = tessera_rl.make(ID, num_envs=2, seed=3)
+    assert env.snapshots is True
+    env.reset()
+    for a in (4, 5, 6):
+        env.step(np.full((2, 1), a))
+    record = env.snapshot(0)
+    later = [np.array(env.step(np.full((2, 1), a)).observations["obs"])[0].copy() for a in (9, 5)]
+    env.restore([0], [record])
+    again = [np.array(env.step(np.full((2, 1), a)).observations["obs"])[0].copy() for a in (9, 5)]
+    assert all((x == y).all() for x, y in zip(later, again))
+    data = env.encode([0])
+    other = tessera_rl.make(ID, num_envs=2, seed=77)
+    other.reset()
+    other.load(data, ids=[1])
+    assert other.state_hash(1) == env.state_hash(0)
+    env.close()
+    other.close()

@@ -57,15 +57,16 @@ fn test_factory_make_host_matches_host_pool_new_bit_for_bit() {
         ("reward", ConfigItem::Float(0.25)),
     ];
     let src = ConfigSource::new(&entries);
-    let cfg = CounterConfig {
-        offset: -3,
-        reward: 0.25,
-        ..CounterConfig::default()
-    };
     for workers in [0, 2] {
+        // The pool keeps its configuration (ADR-0073): one per pool.
+        let cfg = CounterConfig {
+            offset: -3,
+            reward: 0.25,
+            ..CounterConfig::default()
+        };
         let mut options = MakeOptions::new(pool_options());
         let mut direct =
-            HostPool::<Counter, { Counter::MAX_AGENTS }>::new(&cfg, pool_options()).unwrap();
+            HostPool::<Counter, { Counter::MAX_AGENTS }>::new(cfg, pool_options()).unwrap();
         if workers > 0 {
             let sync = SyncOptions::new(NonZeroUsize::new(workers).unwrap());
             options = options.with_sync(sync.clone());
@@ -157,4 +158,18 @@ fn test_factory_env_crate_depends_on_core_only() {
     let tree = String::from_utf8(tree.stdout).unwrap();
     assert!(tree.contains("tessera-rl-core "), "{tree}");
     assert!(!tree.contains("tessera-rl-engine"), "{tree}");
+}
+
+/// `register_host_factory!(E, snapshots)` (ADR-0073): a pool made by id
+/// has snapshots through `DynHostPool`.
+#[test]
+fn test_factory_make_host_with_snapshots_round_trips() {
+    let entries: [(&str, ConfigItem<'_>); 0] = [];
+    let src = ConfigSource::new(&entries);
+    let mut made = make_host(COUNTER_ID, &src, &MakeOptions::new(pool_options())).unwrap();
+    assert!(made.snapshots() && made.layout().snapshots);
+    made.reset_all(Reseed::Keep).unwrap();
+    let records = made.snapshot_records(&[0]).unwrap();
+    made.restore_records(&[1], &[&records[0]]).unwrap();
+    assert_eq!(made.state_hash(1).unwrap(), made.state_hash(0).unwrap());
 }

@@ -34,7 +34,7 @@ fn options(n: u32, seed: u64) -> PoolOptions {
 }
 
 fn pool(n: u32, seed: u64, cfg: BookConfig) -> Pool {
-    Pool::new(&cfg, options(n, seed)).unwrap()
+    Pool::new(cfg, options(n, seed)).unwrap()
 }
 
 /// The observation of agent `slot` of instance `i`:
@@ -92,7 +92,7 @@ fn test_host_pool_new_refused_construction_maps_to_host_construction() {
         ..BookConfig::default()
     };
     assert_eq!(
-        Pool::new(&cfg, options(2, 0)).err(),
+        Pool::new(cfg, options(2, 0)).err(),
         Some(EngineError::HostConstruction {
             reason: "the book refused".to_owned()
         })
@@ -152,10 +152,10 @@ fn test_host_pool_new_head_count_bounded_by_max_host_heads() {
     const AT: u32 = 4096;
     const PAST: u32 = AT + 1;
     assert_eq!(usize::try_from(AT).unwrap(), MAX_HOST_HEADS);
-    let at = HostPool::<Wide<AT>, 1>::new(&WideConfig, options(1, 0)).unwrap();
+    let at = HostPool::<Wide<AT>, 1>::new(WideConfig, options(1, 0)).unwrap();
     assert_eq!(at.action_heads(), (MAX_HOST_HEADS, 0));
     assert_eq!(
-        HostPool::<Wide<PAST>, 1>::new(&WideConfig, options(1, 0)).err(),
+        HostPool::<Wide<PAST>, 1>::new(WideConfig, options(1, 0)).err(),
         Some(EngineError::UnsupportedSpace {
             what: "more than MAX_HOST_HEADS action heads per agent"
         })
@@ -212,7 +212,7 @@ fn with_auto_reset(mode: AutoReset) -> Pool {
     let mut o = options(1, 7);
     o.auto_reset = mode;
     Pool::new(
-        &BookConfig {
+        BookConfig {
             episode: 2,
             ..BookConfig::default()
         },
@@ -324,7 +324,7 @@ fn test_host_pool_sync_workers_match_inline_bit_for_bit() {
             episode: 3,
             ..BookConfig::default()
         };
-        let mut p = Pool::new(&cfg, o).unwrap();
+        let mut p = Pool::new(cfg, o).unwrap();
         if let Some(w) = workers {
             p = p
                 .with_workers(SyncOptions::new(NonZeroUsize::new(w).unwrap()))
@@ -375,7 +375,7 @@ fn test_host_pool_host_fp_changes_are_undone_after_each_chunk() {
     // Sync: two workers, chunks of one instance: one per host step.
     let mut o = options(4, 0);
     o.chunk_size = NonZeroU32::MIN;
-    let mut p = Pool::new(&cfg, o)
+    let mut p = Pool::new(cfg, o)
         .unwrap()
         .with_workers(SyncOptions::new(NonZeroUsize::new(2).unwrap()))
         .unwrap();
@@ -504,7 +504,7 @@ impl HostEnvironment for Turns {
 
 #[test]
 fn test_host_pool_sequential_turn_order_alternates_and_violation_poisons() {
-    let mut p = HostPool::<Turns, 2>::new(&TurnsConfig { both: false }, options(2, 0)).unwrap();
+    let mut p = HostPool::<Turns, 2>::new(TurnsConfig { both: false }, options(2, 0)).unwrap();
     let acting = |out: &Outputs| out.acting().iter().map(|f| f.get()).collect::<Vec<_>>();
     let out = p.reset_all(Reseed::Keep).unwrap();
     assert_eq!(acting(out), [true, false, true, false]);
@@ -516,7 +516,7 @@ fn test_host_pool_sequential_turn_order_alternates_and_violation_poisons() {
         })
         .unwrap();
     assert_eq!(acting(out), [false, true, false, true]);
-    let mut bad = HostPool::<Turns, 2>::new(&TurnsConfig { both: true }, options(2, 0)).unwrap();
+    let mut bad = HostPool::<Turns, 2>::new(TurnsConfig { both: true }, options(2, 0)).unwrap();
     assert!(matches!(
         bad.reset_all(Reseed::Keep),
         Err(EngineError::TurnOrder { instance: 0, .. })
@@ -552,7 +552,7 @@ fn test_host_pool_outputs_one_storage_generations_and_lifetime() {
 #[test]
 fn test_host_pool_without_masks_has_no_mask_buffer() {
     // `Wide` keeps the default `MASKS = false`; `Book` sets it.
-    let mut p = HostPool::<Wide<3>, 1>::new(&WideConfig, options(2, 0)).unwrap();
+    let mut p = HostPool::<Wide<3>, 1>::new(WideConfig, options(2, 0)).unwrap();
     assert_eq!(p.reset_all(Reseed::Keep).unwrap().masks().len(), 0);
     let mut b = pool(2, 0, BookConfig::default());
     assert_eq!(
@@ -573,7 +573,7 @@ fn test_host_pool_same_step_reset_observes_on_zeroed_rows() {
         blank_at_start: true,
         ..BookConfig::default()
     };
-    let mut p = Pool::new(&cfg, o).unwrap();
+    let mut p = Pool::new(cfg, o).unwrap();
     p.reset_all(Reseed::Keep).unwrap();
     step(&mut p, &buy(1, 1)).unwrap();
     step(&mut p, &buy(1, 1)).unwrap();
@@ -637,7 +637,7 @@ impl<const M: bool> HostEnvironment for Choices<M> {
 fn test_host_pool_masks_false_no_buffer_no_mask_calls_large_discrete_accepted() {
     // 2^31 choices: a mask row would be 2 GiB, past the default budget.
     let cfg = ChoicesConfig { n: 1 << 31 };
-    let mut p = HostPool::<Choices<false>, 1>::new(&cfg, options(2, 0)).unwrap();
+    let mut p = HostPool::<Choices<false>, 1>::new(cfg, options(2, 0)).unwrap();
     assert_eq!(p.action_heads(), (1, 0));
     let out = p.reset_all(Reseed::Keep).unwrap();
     assert_eq!(out.masks().len(), 0);
@@ -655,7 +655,7 @@ fn test_host_pool_masks_false_no_buffer_no_mask_calls_large_discrete_accepted() 
 fn test_host_pool_masks_true_layout_and_budget_check() {
     let small = ChoicesConfig { n: 4 };
     // With MASKS the environment's mask is written: only choice 0 is legal.
-    let mut p = HostPool::<Choices<true>, 1>::new(&small, options(2, 0)).unwrap();
+    let mut p = HostPool::<Choices<true>, 1>::new(small, options(2, 0)).unwrap();
     let masks: Vec<bool> = p
         .reset_all(Reseed::Keep)
         .unwrap()
@@ -667,18 +667,18 @@ fn test_host_pool_masks_true_layout_and_budget_check() {
     // The mask buffer is sized and checked against the budget.
     let large = ChoicesConfig { n: 1 << 31 };
     assert!(matches!(
-        HostPool::<Choices<true>, 1>::new(&large, options(2, 0)).err(),
+        HostPool::<Choices<true>, 1>::new(large, options(2, 0)).err(),
         Some(EngineError::MaskBudgetExceeded { .. })
     ));
     let mut tight = options(2, 0);
     tight.mask_budget_bytes = 7;
     assert!(matches!(
-        HostPool::<Choices<true>, 1>::new(&small, tight).err(),
+        HostPool::<Choices<true>, 1>::new(small, tight).err(),
         Some(EngineError::MaskBudgetExceeded {
             bytes: 8,
             budget: 7
         })
     ));
     tight.mask_budget_bytes = 8;
-    assert!(HostPool::<Choices<true>, 1>::new(&small, tight).is_ok());
+    assert!(HostPool::<Choices<true>, 1>::new(small, tight).is_ok());
 }

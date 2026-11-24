@@ -164,6 +164,52 @@ impl HostEnvironment for Counter {
 
 tessera_rl_core::register_host!(Counter, id = "test/FactoryCounter-v1");
 
+/// The counter's snapshot (ADR-0073): its step, seed and reset count, 16
+/// little-endian bytes. The configuration is not state.
+impl tessera_rl_core::HostSnapshot for Counter {
+    const SNAPSHOT_VERSION: u32 = 1;
+
+    fn max_snapshot_len(_: &CounterConfig) -> usize {
+        16
+    }
+
+    fn save(&self, out: &mut Vec<u8>) {
+        out.extend_from_slice(&self.step.to_le_bytes());
+        out.extend_from_slice(&self.seed.to_le_bytes());
+        out.extend_from_slice(&self.resets.to_le_bytes());
+    }
+
+    fn check_snapshot(
+        cfg: &CounterConfig,
+        bytes: &[u8],
+    ) -> Result<(), tessera_rl_core::SnapshotReject> {
+        if bytes.len() != 16 {
+            return Err(tessera_rl_core::SnapshotReject {
+                code: 1,
+                reason: "a counter snapshot is 16 bytes",
+            });
+        }
+        let step = bytes
+            .get(0..4)
+            .and_then(|b| b.try_into().ok())
+            .map_or(u32::MAX, u32::from_le_bytes);
+        if step > cfg.episode {
+            return Err(tessera_rl_core::SnapshotReject {
+                code: 2,
+                reason: "a step past the episode length",
+            });
+        }
+        Ok(())
+    }
+
+    fn load(&mut self, bytes: &[u8]) {
+        let word = |r: core::ops::Range<usize>| bytes.get(r).unwrap_or(&[]);
+        self.step = word(0..4).try_into().map_or(0, u32::from_le_bytes);
+        self.seed = word(4..12).try_into().map_or(0, u64::from_le_bytes);
+        self.resets = word(12..16).try_into().map_or(0, u32::from_le_bytes);
+    }
+}
+
 /// A host environment registered with `register_host!` and no factory.
 #[derive(Debug)]
 pub struct Unfactored;

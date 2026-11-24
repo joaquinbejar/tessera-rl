@@ -59,8 +59,10 @@ def test_host_wheel_errors_are_tessera_rl_classes():
         assert type(e) is tessera_rl.ActionError
     else:
         pytest.fail("an out-of-range action is an ActionError")
+    # The test counter has snapshots (ADR-0073); snapshot_all stays
+    # first-party only.
     with pytest.raises(tessera_rl.CapabilityError):
-        env.snapshot(0)
+        env.snapshot_all()
     env.close()
 
 

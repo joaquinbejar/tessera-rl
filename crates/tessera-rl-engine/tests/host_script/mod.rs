@@ -10,11 +10,13 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
+use tessera_rl_core::config::{CanonicalConfig, write_entry};
+use tessera_rl_core::encoding::{Encoder, Sink};
 use tessera_rl_core::io::{Actions, MaskWriter, ObsWriter};
 use tessera_rl_core::space::{BoxBounds, DType, Space};
 use tessera_rl_core::{
     AbortCode, ActionReject, AgentSlot, EnvConfig, EpisodeEnd, HostEnvironment, HostError, HostOut,
-    HostSeed, SpaceError, TurnStructure,
+    HostSeed, HostSnapshot, SnapshotReject, SpaceError, TurnStructure,
 };
 
 /// Agent slots.
@@ -92,6 +94,21 @@ pub struct Shared {
     pub fail_new: AtomicU32,
     /// Instances dropped.
     pub drops: AtomicU32,
+    /// Snapshot hooks (ADR-0073): calls of `save`, `check_snapshot` and
+    /// `load`, all instances together.
+    pub saves: AtomicU64,
+    pub checks: AtomicU64,
+    pub loads: AtomicU64,
+    /// `save` panics.
+    pub panic_save: AtomicBool,
+    /// `save` writes one byte past `max_snapshot_len`.
+    pub save_extra: AtomicBool,
+    /// `check_snapshot` panics.
+    pub panic_check: AtomicBool,
+    /// `load` panics.
+    pub panic_load: AtomicBool,
+    /// `max_snapshot_len` panics.
+    pub panic_max_len: AtomicBool,
 }
 
 impl Shared {
@@ -135,6 +152,21 @@ impl ScriptConfig {
 }
 
 impl EnvConfig for ScriptConfig {}
+
+/// The canonical form holds `initial` only: the shared counters are test
+/// plumbing, not configuration.
+impl CanonicalConfig for ScriptConfig {
+    const ADAPTIVE_FIELDS: &'static [&'static str] = &[];
+    const STATIC_ENTRIES: u16 = 1;
+
+    fn write_entries<S: Sink>(&self, out: &mut Encoder<S>) {
+        write_entry(
+            out,
+            "initial",
+            &u64::try_from(self.initial).unwrap_or(u64::MAX),
+        );
+    }
+}
 
 /// One instance; `T` picks the turn structure (0 simultaneous, 1
 /// sequential, 2 mixed) and `V` whether it validates joint actions.
@@ -336,5 +368,60 @@ impl<const T: u8, const V: bool> HostEnvironment for Script<T, V> {
             2 => self.shared.mixed_acting.load(Ordering::Relaxed),
             _ => true,
         }
+    }
+}
+
+/// The script's bytes are its step and episode counters (the instance id
+/// is per construction, not state).
+impl<const T: u8, const V: bool> HostSnapshot for Script<T, V> {
+    const SNAPSHOT_VERSION: u32 = 1;
+
+    fn max_snapshot_len(cfg: &ScriptConfig) -> usize {
+        assert!(
+            !cfg.shared.panic_max_len.load(Ordering::Relaxed),
+            "max_snapshot_len panicked"
+        );
+        8
+    }
+
+    fn save(&self, out: &mut Vec<u8>) {
+        self.shared.saves.fetch_add(1, Ordering::Relaxed);
+        assert!(
+            !self.shared.panic_save.load(Ordering::Relaxed),
+            "save panicked"
+        );
+        out.extend_from_slice(&self.step.to_le_bytes());
+        out.extend_from_slice(&self.episode.to_le_bytes());
+        if self.shared.save_extra.load(Ordering::Relaxed) {
+            out.push(0);
+        }
+    }
+
+    fn check_snapshot(cfg: &ScriptConfig, bytes: &[u8]) -> Result<(), SnapshotReject> {
+        cfg.shared.checks.fetch_add(1, Ordering::Relaxed);
+        assert!(
+            !cfg.shared.panic_check.load(Ordering::Relaxed),
+            "check_snapshot panicked"
+        );
+        let _ = bytes;
+        Ok(())
+    }
+
+    fn load(&mut self, bytes: &[u8]) {
+        self.shared.loads.fetch_add(1, Ordering::Relaxed);
+        assert!(
+            !self.shared.panic_load.load(Ordering::Relaxed),
+            "load panicked"
+        );
+        let word = |at: usize| {
+            u32::from_le_bytes(
+                bytes
+                    .get(at..at + 4)
+                    .and_then(|b| b.try_into().ok())
+                    .unwrap_or([0; 4]),
+            )
+        };
+        self.step = word(0);
+        self.episode = word(4);
     }
 }

@@ -49,7 +49,7 @@ fn test_host_instructions_measured_steps_n1024_end_pinned_episodes() {
 #[test]
 fn test_host_cartpole_steps_follow_its_physics() {
     let mut pool = HostPool::<HostCartPole, 1>::new(
-        &HostCartPoleConfig,
+        HostCartPoleConfig,
         PoolOptions::new(NonZeroU32::new(4).unwrap(), Seed::new(1)),
     )
     .unwrap();

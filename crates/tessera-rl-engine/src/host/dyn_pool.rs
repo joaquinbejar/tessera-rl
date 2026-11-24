@@ -20,6 +20,7 @@ use crate::pool::Reseed;
 use crate::validate::ActionInput;
 
 use super::{HostLayout, HostPool};
+use crate::persist::{DecodeLimits, PersistError};
 
 /// A host pool of some environment, without its type (ADR-0065 item 3).
 /// Every method is [`HostPool`]'s method of the same name.
@@ -69,9 +70,69 @@ pub trait DynHostPool: Send {
     ///
     /// As [`HostPool::step`].
     fn step(&mut self, actions: ActionInput<'_>) -> Result<&Outputs, EngineError>;
+    /// Whether the snapshot methods below work: the environment implements
+    /// `HostSnapshot` and the pool was built with
+    /// [`HostPool::with_dyn_snapshots`] (ADR-0073). Without, each returns
+    /// [`EngineError::NoSnapshots`].
+    fn snapshots(&self) -> bool;
+    /// The records of `ids`, each in [`HostRecord`](super::HostRecord)'s
+    /// encoding ([`HostPool::snapshot`]).
+    ///
+    /// # Errors
+    ///
+    /// As [`HostPool::snapshot`], or [`EngineError::NoSnapshots`].
+    fn snapshot_records(&mut self, ids: &[u32]) -> Result<Vec<Vec<u8>>, EngineError>;
+    /// Restores encoded records into `ids` ([`HostPool::import`]).
+    ///
+    /// # Errors
+    ///
+    /// As [`HostPool::import`]; [`EngineError::InvalidRecord`] for bytes
+    /// that are not a record; or [`EngineError::NoSnapshots`].
+    fn restore_records(&mut self, ids: &[u32], records: &[&[u8]]) -> Result<(), EngineError>;
+    /// Restores every instance from encoded records
+    /// ([`HostPool::restore_all`]).
+    ///
+    /// # Errors
+    ///
+    /// As [`DynHostPool::restore_records`].
+    fn restore_all_records(&mut self, records: &[&[u8]]) -> Result<(), EngineError>;
+    /// [`HostPool::fork`].
+    ///
+    /// # Errors
+    ///
+    /// As [`HostPool::fork`], or [`EngineError::NoSnapshots`].
+    fn fork(&mut self, src: u32, dst: &[u32]) -> Result<(), EngineError>;
+    /// [`HostPool::state_hash`], raw.
+    ///
+    /// # Errors
+    ///
+    /// As [`HostPool::state_hash`], or [`EngineError::NoSnapshots`].
+    fn state_hash(&mut self, id: u32) -> Result<u64, EngineError>;
+    /// [`HostPool::encode`]: a `TESHOST` file.
+    ///
+    /// # Errors
+    ///
+    /// As [`HostPool::encode`], or [`EngineError::NoSnapshots`].
+    fn encode(&mut self, ids: &[u32]) -> Result<Vec<u8>, PersistError>;
+    /// [`HostPool::decode`] then [`HostPool::import`] into `ids`.
+    ///
+    /// # Errors
+    ///
+    /// As those two, or [`EngineError::NoSnapshots`].
+    fn import_file(
+        &mut self,
+        ids: &[u32],
+        bytes: &[u8],
+        limits: DecodeLimits,
+    ) -> Result<(), PersistError>;
 }
 
-impl<E: HostEnvironment, const A: usize> DynHostPool for HostPool<E, A> {
+/// The pool keeps its configuration (ADR-0073), so a type-erased pool,
+/// which is `Send`, needs a `Send` configuration.
+impl<E: HostEnvironment, const A: usize> DynHostPool for HostPool<E, A>
+where
+    E::Config: Send,
+{
     fn registration(&self) -> &'static HostRegistration {
         Self::registration(self)
     }
@@ -114,5 +175,41 @@ impl<E: HostEnvironment, const A: usize> DynHostPool for HostPool<E, A> {
     }
     fn step(&mut self, actions: ActionInput<'_>) -> Result<&Outputs, EngineError> {
         Self::step(self, actions)
+    }
+    fn snapshots(&self) -> bool {
+        self.dyn_snapshots.is_some()
+    }
+    fn snapshot_records(&mut self, ids: &[u32]) -> Result<Vec<Vec<u8>>, EngineError> {
+        let ops = self.dyn_snapshots.ok_or(EngineError::NoSnapshots)?;
+        (ops.snapshot)(self, ids)
+    }
+    fn restore_records(&mut self, ids: &[u32], records: &[&[u8]]) -> Result<(), EngineError> {
+        let ops = self.dyn_snapshots.ok_or(EngineError::NoSnapshots)?;
+        (ops.restore)(self, ids, records)
+    }
+    fn restore_all_records(&mut self, records: &[&[u8]]) -> Result<(), EngineError> {
+        let ops = self.dyn_snapshots.ok_or(EngineError::NoSnapshots)?;
+        (ops.restore_all)(self, records)
+    }
+    fn fork(&mut self, src: u32, dst: &[u32]) -> Result<(), EngineError> {
+        let ops = self.dyn_snapshots.ok_or(EngineError::NoSnapshots)?;
+        (ops.fork)(self, src, dst)
+    }
+    fn state_hash(&mut self, id: u32) -> Result<u64, EngineError> {
+        let ops = self.dyn_snapshots.ok_or(EngineError::NoSnapshots)?;
+        (ops.state_hash)(self, id)
+    }
+    fn encode(&mut self, ids: &[u32]) -> Result<Vec<u8>, PersistError> {
+        let ops = self.dyn_snapshots.ok_or(EngineError::NoSnapshots)?;
+        (ops.encode)(self, ids)
+    }
+    fn import_file(
+        &mut self,
+        ids: &[u32],
+        bytes: &[u8],
+        limits: DecodeLimits,
+    ) -> Result<(), PersistError> {
+        let ops = self.dyn_snapshots.ok_or(EngineError::NoSnapshots)?;
+        (ops.import_file)(self, ids, bytes, limits)
     }
 }

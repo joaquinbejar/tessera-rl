@@ -248,6 +248,180 @@ impl Method for StepM {
     }
 }
 
+/// Instance ids: a list of exact ints in `[0, 2**32)`.
+fn ids_of(g: Gil<'_>, v: Ref<'_>, what: &str) -> CResult<Vec<u32>> {
+    let items = capi::list_items(g, v, what).map_err(|_| {
+        capi::clear_pending(g);
+        argument(g, &format!("{what} must be a list of ints"))
+    })?;
+    items.iter().map(|i| id_of(g, i.as_ref(), what)).collect()
+}
+
+/// One instance id: an exact int in `[0, 2**32)`.
+fn id_of(g: Gil<'_>, v: Ref<'_>, what: &str) -> CResult<u32> {
+    capi::to_u64(g, v, what)
+        .ok()
+        .and_then(|x| u32::try_from(x).ok())
+        .ok_or_else(|| {
+            capi::clear_pending(g);
+            argument(g, &format!("{what} must be exact ints in [0, 2**32)"))
+        })
+}
+
+/// The persisted-file error of a snapshot method.
+fn persist(g: Gil<'_>, e: &tessera_rl_engine::PersistError) -> capi::Raised {
+    errors::error(g, errors::persist_kind(e), e.to_string())
+}
+
+/// The arguments of a method, exactly `N` of them.
+fn exactly<'a, const N: usize>(g: Gil<'_>, args: Ref<'a>, usage: &str) -> CResult<[Ref<'a>; N]> {
+    capi::tuple_items(g, args, "the arguments")?
+        .try_into()
+        .map_err(|_| argument(g, usage))
+}
+
+/// `snapshot(ids)`: one `bytes` record per id (ADR-0073), in order.
+struct SnapshotM;
+
+impl Method for SnapshotM {
+    type Body = HostBody;
+    fn call<'py>(g: Gil<'py>, body: &HostBody, args: Ref<'py>) -> CResult<Mine<'py>> {
+        let [ids] = exactly(g, args, "snapshot takes one argument, ids")?;
+        let ids = ids_of(g, ids, "snapshot: ids")?;
+        body.guarded(g)?.with(g, |pool| {
+            let records = g
+                .detach(|| pool.snapshot_records(&ids))
+                .map_err(|e| engine(g, &e))?;
+            let list = capi::list(g)?;
+            for r in &records {
+                capi::list_append(g, &list, &capi::bytes(g, r)?)?;
+            }
+            Ok(list)
+        })
+    }
+}
+
+/// The records of a list of `bytes`, borrowed from `items`.
+fn records_of<'a>(g: Gil<'_>, items: &'a [Mine<'_>]) -> CResult<Vec<&'a [u8]>> {
+    items
+        .iter()
+        .map(|i| {
+            capi::bytes_of(g, i.as_ref(), "each record").map_err(|_| {
+                capi::clear_pending(g);
+                argument(g, "records must be a list of bytes")
+            })
+        })
+        .collect()
+}
+
+/// `restore(ids, records)`: restores the records into `ids`; every record
+/// is checked before any instance changes (ADR-0073). Returns `None`.
+struct RestoreM;
+
+impl Method for RestoreM {
+    type Body = HostBody;
+    fn call<'py>(g: Gil<'py>, body: &HostBody, args: Ref<'py>) -> CResult<Mine<'py>> {
+        let [ids, records] = exactly(g, args, "restore takes two arguments, ids and records")?;
+        let ids = ids_of(g, ids, "restore: ids")?;
+        let items = capi::list_items(g, records, "records")?;
+        let records = records_of(g, &items)?;
+        body.guarded(g)?.with(g, |pool| {
+            g.detach(|| pool.restore_records(&ids, &records))
+                .map_err(|e| engine(g, &e))?;
+            Ok(capi::none(g))
+        })
+    }
+}
+
+/// `restore_all(records)`: one record per instance. Refused on a poisoned
+/// pool (ADR-0073: no recovery by restore).
+struct RestoreAllM;
+
+impl Method for RestoreAllM {
+    type Body = HostBody;
+    fn call<'py>(g: Gil<'py>, body: &HostBody, args: Ref<'py>) -> CResult<Mine<'py>> {
+        let [records] = exactly(g, args, "restore_all takes one argument, records")?;
+        let items = capi::list_items(g, records, "records")?;
+        let records = records_of(g, &items)?;
+        body.guarded(g)?.with(g, |pool| {
+            g.detach(|| pool.restore_all_records(&records))
+                .map_err(|e| engine(g, &e))?;
+            Ok(capi::none(g))
+        })
+    }
+}
+
+/// `fork(src, dst_ids)`: copies instance `src` into every instance of
+/// `dst_ids`. There is no `fork_branched` (ADR-0073).
+struct ForkM;
+
+impl Method for ForkM {
+    type Body = HostBody;
+    fn call<'py>(g: Gil<'py>, body: &HostBody, args: Ref<'py>) -> CResult<Mine<'py>> {
+        let [src, dst] = exactly(g, args, "fork takes two arguments, src and dst_ids")?;
+        let src = id_of(g, src, "fork: src")?;
+        let dst = ids_of(g, dst, "fork: dst_ids")?;
+        body.guarded(g)?.with(g, |pool| {
+            g.detach(|| pool.fork(src, &dst))
+                .map_err(|e| engine(g, &e))?;
+            Ok(capi::none(g))
+        })
+    }
+}
+
+/// `state_hash(id)`: the host `StateHash` as 8 little-endian bytes.
+struct StateHashM;
+
+impl Method for StateHashM {
+    type Body = HostBody;
+    fn call<'py>(g: Gil<'py>, body: &HostBody, args: Ref<'py>) -> CResult<Mine<'py>> {
+        let [id] = exactly(g, args, "state_hash takes one argument, id")?;
+        let id = id_of(g, id, "state_hash: id")?;
+        body.guarded(g)?.with(g, |pool| {
+            let hash = g
+                .detach(|| pool.state_hash(id))
+                .map_err(|e| engine(g, &e))?;
+            capi::bytes(g, &hash.to_le_bytes())
+        })
+    }
+}
+
+/// `encode(ids)`: a `TESHOST` file holding the records of `ids`.
+struct EncodeM;
+
+impl Method for EncodeM {
+    type Body = HostBody;
+    fn call<'py>(g: Gil<'py>, body: &HostBody, args: Ref<'py>) -> CResult<Mine<'py>> {
+        let [ids] = exactly(g, args, "encode takes one argument, ids")?;
+        let ids = ids_of(g, ids, "encode: ids")?;
+        body.guarded(g)?.with(g, |pool| {
+            let file = g.detach(|| pool.encode(&ids)).map_err(|e| persist(g, &e))?;
+            capi::bytes(g, &file)
+        })
+    }
+}
+
+/// `import_records(ids, file)`: decodes a `TESHOST` file with the default
+/// limits and restores its records into `ids`.
+struct ImportRecordsM;
+
+impl Method for ImportRecordsM {
+    type Body = HostBody;
+    fn call<'py>(g: Gil<'py>, body: &HostBody, args: Ref<'py>) -> CResult<Mine<'py>> {
+        let [ids, file] = exactly(g, args, "import_records takes two arguments, ids and file")?;
+        let ids = ids_of(g, ids, "import_records: ids")?;
+        let file = capi::bytes_of(g, file, "file").map_err(|_| {
+            capi::clear_pending(g);
+            argument(g, "import_records: file must be bytes")
+        })?;
+        body.guarded(g)?.with(g, |pool| {
+            g.detach(|| pool.import_file(&ids, file, tessera_rl_engine::DecodeLimits::default()))
+                .map_err(|e| persist(g, &e))?;
+            Ok(capi::none(g))
+        })
+    }
+}
+
 /// `_tessera_current_generation()`: the generation of the current borrow
 /// window; it increases on every call that writes outputs.
 struct CurrentGenerationM;
@@ -326,6 +500,34 @@ static METHODS: MethodTable<HostBody> = MethodTable::new(&[
     MethodRow::varargs::<SetFpPolicyM>(
         c"_tessera_set_fp_policy",
         c"_tessera_set_fp_policy(policy): \"canonicalize\" or \"reject\", for this module (ADR-0041).",
+    ),
+    MethodRow::varargs::<SnapshotM>(
+        c"snapshot",
+        c"snapshot(ids): one bytes record per id (ADR-0073); CapabilityError without snapshots.",
+    ),
+    MethodRow::varargs::<RestoreM>(
+        c"restore",
+        c"restore(ids, records): restores bytes records into ids, all checked first.",
+    ),
+    MethodRow::varargs::<RestoreAllM>(
+        c"restore_all",
+        c"restore_all(records): one bytes record per instance.",
+    ),
+    MethodRow::varargs::<ForkM>(
+        c"fork",
+        c"fork(src, dst_ids): copies instance src into every instance of dst_ids.",
+    ),
+    MethodRow::varargs::<StateHashM>(
+        c"state_hash",
+        c"state_hash(id): the host state hash, 8 little-endian bytes.",
+    ),
+    MethodRow::varargs::<EncodeM>(
+        c"encode",
+        c"encode(ids): a TESHOST file holding the records of ids.",
+    ),
+    MethodRow::varargs::<ImportRecordsM>(
+        c"import_records",
+        c"import_records(ids, file): restores the records of a TESHOST file into ids.",
     ),
     MethodRow::noargs::<CloseM>(c"close", c"Releases the pool."),
     MethodRow::END,

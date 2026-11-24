@@ -222,7 +222,7 @@ fn pool_with<const T: u8, const R: bool>(
         shared: Arc::clone(shared),
         initial,
     };
-    let p = Pool::<T, R>::new(&cfg, o).unwrap();
+    let p = Pool::<T, R>::new(cfg, o).unwrap();
     if workers > 0 {
         p.with_workers(SyncOptions::new(NonZeroUsize::new(workers).unwrap()))
             .unwrap()

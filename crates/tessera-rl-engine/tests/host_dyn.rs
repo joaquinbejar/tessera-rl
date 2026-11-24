@@ -25,7 +25,7 @@ type Pool = HostPool<Book, { Book::MAX_AGENTS }>;
 
 fn pool(workers: usize) -> Pool {
     let options = PoolOptions::new(NonZeroU32::new(4).unwrap(), Seed::new(11));
-    let p = Pool::new(&BookConfig::default(), options).unwrap();
+    let p = Pool::new(BookConfig::default(), options).unwrap();
     if workers == 0 {
         p
     } else {

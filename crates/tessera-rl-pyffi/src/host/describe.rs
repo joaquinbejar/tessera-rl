@@ -108,6 +108,7 @@ pub(super) fn layout<'py>(g: Gil<'py>, pool: &dyn DynHostPool) -> CResult<Mine<'
         c"refuses_agents",
         &capi::boolean(g, l.refuses_agents),
     )?;
+    capi::dict_set(g, &d, c"snapshots", &capi::boolean(g, l.snapshots))?;
     let choices = match l.discrete_heads.as_slice() {
         [n] => u64::from(*n),
         _ => 0,

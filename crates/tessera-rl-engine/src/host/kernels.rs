@@ -511,7 +511,10 @@ pub(crate) enum ResetRows {
 
 /// Sets the acting flag of every alive agent from the turn structure
 /// (ADR-0013), after the step's agent events, as `EnvPool` does.
-fn update_acting<E: HostEnvironment, const A: usize>(header: &mut HostHeader<A>, inst: &E) {
+pub(crate) fn update_acting<E: HostEnvironment, const A: usize>(
+    header: &mut HostHeader<A>,
+    inst: &E,
+) {
     if E::TURNS == TurnStructure::Simultaneous {
         return;
     }
@@ -698,7 +701,10 @@ fn mark_aborted(outputs: &mut OutputsView<'_>, i: usize, code: AbortCode) {
 
 /// Zeroes instance `i`'s observation rows and sets its masks false: the
 /// rows of an aborted state, never observed (ADR-0065 item 1).
-fn zero_rows<E: HostEnvironment, const A: usize>(outputs: &mut OutputsView<'_>, i: usize) {
+pub(crate) fn zero_rows<E: HostEnvironment, const A: usize>(
+    outputs: &mut OutputsView<'_>,
+    i: usize,
+) {
     let OutputsView {
         observations,
         leaf_bytes,

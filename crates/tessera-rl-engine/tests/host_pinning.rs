@@ -38,7 +38,7 @@ fn env_pool() -> EnvPool<Counter> {
 type Host = HostPool<Book, { Book::MAX_AGENTS }>;
 
 fn host(sync: SyncOptions) -> Result<Host, EngineError> {
-    Host::new(&BookConfig::default(), options())
+    Host::new(BookConfig::default(), options())
         .unwrap()
         .with_workers(sync)
 }

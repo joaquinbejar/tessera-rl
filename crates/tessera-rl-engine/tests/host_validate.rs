@@ -34,7 +34,7 @@ fn pool<const T: u8, const V: bool>(shared: &Arc<Shared>, workers: usize) -> Poo
     );
     // Two instances per chunk, so Sync spreads them over the workers.
     o.chunk_size = NonZeroU32::new(2).unwrap();
-    let p = Pool::<T, V>::new(&ScriptConfig::new(shared), o).unwrap();
+    let p = Pool::<T, V>::new(ScriptConfig::new(shared), o).unwrap();
     if workers > 0 {
         p.with_workers(SyncOptions::new(NonZeroUsize::new(workers).unwrap()))
             .unwrap()

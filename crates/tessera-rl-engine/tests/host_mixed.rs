@@ -134,7 +134,7 @@ fn host() -> Host {
         hostile_fp: true,
         ..BookConfig::default()
     };
-    Host::new(&cfg, options(1)).unwrap()
+    Host::new(cfg, options(1)).unwrap()
 }
 
 fn probe() -> EnvPool<FpProbe> {

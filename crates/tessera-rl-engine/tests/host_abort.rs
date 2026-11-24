@@ -72,7 +72,7 @@ fn options(mode: AutoReset, rt: Rt) -> PoolOptions {
 }
 
 fn pool_with<const T: u8>(shared: &Arc<Shared>, o: PoolOptions, rt: Rt) -> Pool<T> {
-    let p = Pool::<T>::new(&ScriptConfig::new(shared), o).unwrap();
+    let p = Pool::<T>::new(ScriptConfig::new(shared), o).unwrap();
     if rt.workers > 0 {
         p.with_workers(SyncOptions::new(NonZeroUsize::new(rt.workers).unwrap()))
             .unwrap()

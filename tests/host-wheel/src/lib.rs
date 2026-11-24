@@ -198,6 +198,7 @@ impl FunctionNoArgs for FpPolicy {
 tessera_rl_pyffi::export_host_env!(
     tessera_rl_test_host_env::Counter,
     module = c"_tessera_host",
+    snapshots,
     functions = [
         FunctionRow::kw::<ConfigPython>(
             c"_config_python",

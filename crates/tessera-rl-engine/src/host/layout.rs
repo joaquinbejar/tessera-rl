@@ -19,6 +19,10 @@ use crate::layout::MaskHeadShape;
 /// auto-reset mode in [`HostPool::options`](super::HostPool::options).
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "independent layout flags that bindings read one by one"
+)]
 pub struct HostLayout {
     /// Instances in the pool.
     pub num_envs: usize,
@@ -32,6 +36,9 @@ pub struct HostLayout {
     /// `refuse_code` outputs exist (`HostEnvironment::REFUSES_AGENTS`,
     /// ADR-0070).
     pub refuses_agents: bool,
+    /// Whether the pool's snapshots are reachable through `DynHostPool`
+    /// and the host object (`HostPool::with_dyn_snapshots`, ADR-0073).
+    pub snapshots: bool,
     /// The observation space, validated.
     pub observation_space: Space,
     /// The observation leaves, in the order of the observation outputs
@@ -83,6 +90,7 @@ pub(crate) fn host_layout<E: HostEnvironment>(
         initial_agents,
         spawns: E::SPAWNS,
         refuses_agents: E::REFUSES_AGENTS,
+        snapshots: false,
         leaves: leaves_of(&observation_space),
         observation_space,
         action_space,

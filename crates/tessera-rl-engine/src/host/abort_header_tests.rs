@@ -30,7 +30,7 @@ type Pool = HostPool<Script<0, false>, SLOTS>;
 fn pool(shared: &Arc<Shared>, mode: AutoReset) -> Pool {
     let mut o = PoolOptions::new(NonZeroU32::new(4).unwrap(), Seed::new(9));
     o.auto_reset = mode;
-    Pool::new(&ScriptConfig::new(shared), o).unwrap()
+    Pool::new(ScriptConfig::new(shared), o).unwrap()
 }
 
 fn step(p: &mut Pool, special: &[(usize, i32)]) {

@@ -252,7 +252,7 @@ where
     E::State: Send,
 {
     let mut env = EnvPool::<E>::new(config(), options(mode)).unwrap();
-    let mut host = HostPool::<Hosted<E>, 2>::new(&config(), options(mode)).unwrap();
+    let mut host = HostPool::<Hosted<E>, 2>::new(config(), options(mode)).unwrap();
     if let Some(w) = workers {
         let sync = SyncOptions::new(NonZeroUsize::new(w).unwrap());
         env = env.with_workers(sync.clone()).unwrap();
@@ -334,7 +334,7 @@ fn invalid_events_match(respawn: bool) {
         ..config()
     };
     let mut env = EnvPool::<Counter>::new(cfg.clone(), options(AutoReset::NextStep)).unwrap();
-    let mut host = HostPool::<Hosted<Counter>, 2>::new(&cfg, options(AutoReset::NextStep)).unwrap();
+    let mut host = HostPool::<Hosted<Counter>, 2>::new(cfg, options(AutoReset::NextStep)).unwrap();
     env.reset_all(Reseed::Keep).unwrap();
     host.reset_all(Reseed::Keep).unwrap();
     let mut events = 0;

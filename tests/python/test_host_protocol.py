@@ -78,13 +78,12 @@ def test_host_object_has_every_protocol_member():
     for name in (
         "layout", "reset", "step", "close", "is_poisoned",
         "_tessera_current_generation", "_tessera_set_fp_policy",
+        # ADR-0073: the snapshot methods (the test counter has snapshots).
+        "snapshot", "restore", "restore_all", "fork", "state_hash", "encode", "import_records",
     ):
         assert callable(getattr(env, name)), name
     # SPEC 14.4.2: none of the first-party-only methods.
-    for name in (
-        "snapshot", "restore", "restore_all", "snapshot_all", "fork", "state_hash",
-        "encode", "load", "import_record", "send", "recv",
-    ):
+    for name in ("snapshot_all", "fork_branched", "load", "import_record", "send", "recv"):
         assert not hasattr(env, name), name
     # Read-only attributes.
     with pytest.raises(AttributeError):
