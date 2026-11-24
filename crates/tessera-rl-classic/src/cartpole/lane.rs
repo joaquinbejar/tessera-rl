@@ -62,7 +62,16 @@ impl Kernel for StepKernel<'_> {
 fn step_lanes<L: F64Lanes>(state: &mut Columns, push_right: [bool; 8]) -> LaneOutcome {
     let k = L::splat;
     let before = *state;
-    let [x, x_dot, theta, theta_dot] = before.map(L::from_array);
+    // Each column is converted by name, not with `array::map`: `map` does not
+    // inline, and outside the `target_feature` context every 256-bit value
+    // crosses the call through memory in 128-bit halves (#335).
+    let [c_x, c_x_dot, c_theta, c_theta_dot] = before;
+    let (x, x_dot, theta, theta_dot) = (
+        L::from_array(c_x),
+        L::from_array(c_x_dot),
+        L::from_array(c_theta),
+        L::from_array(c_theta_dot),
+    );
 
     let fast = L::mask_and(
         L::mask_and(
@@ -89,7 +98,7 @@ fn step_lanes<L: F64Lanes>(state: &mut Columns, push_right: [bool; 8]) -> LaneOu
         theta_dot + k(TAU) * thetaacc,
     ];
 
-    let [nx, _, ntheta, _] = next;
+    let [nx, nx_dot, ntheta, ntheta_dot] = next;
     let terminal = L::mask_or(
         L::mask_or(nx.lt(k(-X_THRESHOLD)), nx.gt(k(X_THRESHOLD))),
         L::mask_or(
@@ -98,10 +107,20 @@ fn step_lanes<L: F64Lanes>(state: &mut Columns, push_right: [bool; 8]) -> LaneOu
         ),
     );
     let mut outcome = LaneOutcome {
-        observations: next.map(L::to_f32_array),
+        observations: [
+            nx.to_f32_array(),
+            nx_dot.to_f32_array(),
+            ntheta.to_f32_array(),
+            ntheta_dot.to_f32_array(),
+        ],
         terminal: L::mask_bits(terminal),
     };
-    *state = next.map(L::to_array);
+    *state = [
+        nx.to_array(),
+        nx_dot.to_array(),
+        ntheta.to_array(),
+        ntheta_dot.to_array(),
+    ];
 
     let slow = !L::mask_bits(fast);
     if slow != 0 {
