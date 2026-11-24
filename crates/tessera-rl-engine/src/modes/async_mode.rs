@@ -1498,3 +1498,50 @@ where
         self.after_full_write()
     }
 }
+
+
+/// Archive resets (ADR-0075 items 2 and 5) in Async mode: the reset source
+/// changes only at quiescence, and `reset_from` is a partial writer like
+/// [`AsyncPool::reset`].
+impl<E, M> AsyncPool<E, M>
+where
+    E: Persist,
+    E::Config: CanonicalConfig + Send + Sync,
+    E::Header: Send + Sync,
+    E::State: Send + Sync,
+    M: MaskProvider<E>,
+    <E::Header as RecordLayout>::Adaptive: AdaptiveValues<E::Config>,
+{
+    /// [`EnvPool::set_reset_source`] at quiescence (ADR-0075 item 2): it
+    /// applies to every reset after the call. Tokens may not be alive and
+    /// no sent id may still run.
+    ///
+    /// # Errors
+    ///
+    /// [`EngineError::Poisoned`], [`EngineError::WorkerDied`],
+    /// [`EngineError::NotQuiescent`] while a sent id still runs,
+    /// [`EngineError::Borrowed`] while a token is alive, or any error of
+    /// [`EnvPool::set_reset_source`]. Nothing changes on an error.
+    pub fn set_reset_source(
+        &mut self,
+        source: crate::archive::ResetSource<E>,
+    ) -> Result<(), EngineError> {
+        if self.is_poisoned() {
+            return Err(EngineError::Poisoned);
+        }
+        self.write(false, |pool| pool.set_reset_source(source))
+    }
+
+    /// [`EnvPool::reset_from`] for `ids` (ADR-0075 item 5); they are
+    /// delivered by the next `recv`, as with [`AsyncPool::reset`].
+    ///
+    /// # Errors
+    ///
+    /// As [`AsyncPool::reset`], or any error of [`EnvPool::reset_from`].
+    /// Nothing changes on an error.
+    pub fn reset_from(&mut self, ids: &[u32], entries: &[u32]) -> Result<(), EngineError> {
+        self.check_partial(ids)?;
+        self.write(false, |pool| pool.reset_from(ids, entries).map(|_| ()))?;
+        self.deliver(ids)
+    }
+}

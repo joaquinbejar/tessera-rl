@@ -1099,3 +1099,38 @@ where
         self.after_write(CycleState::initial())
     }
 }
+
+
+/// Archive resets (ADR-0075 item 2) in Pipelined mode. Pipelined mode has
+/// no partial reset, so it has no `reset_from` either; its archive resets
+/// are its auto-resets and `reset_all`.
+impl<E, M> PipelinedPool<E, M>
+where
+    E: Persist,
+    E::Config: CanonicalConfig + Send + Sync,
+    E::Header: Send + Sync,
+    E::State: Send + Sync,
+    M: MaskProvider<E>,
+    <E::Header as RecordLayout>::Adaptive: AdaptiveValues<E::Config>,
+{
+    /// [`EnvPool::set_reset_source`] at quiescence (ADR-0075 item 2): it
+    /// applies to every reset after the call. No half may be in flight and
+    /// no token alive; get tokens with [`Self::idle_token`] afterwards.
+    ///
+    /// # Errors
+    ///
+    /// [`EngineError::NotQuiescent`] while a half is in flight,
+    /// [`EngineError::HalfBorrowed`] while a token is alive,
+    /// [`EngineError::WorkerDied`], or any error of
+    /// [`EnvPool::set_reset_source`] ([`EngineError::Poisoned`] on a
+    /// poisoned pool). Nothing changes on an error.
+    pub fn set_reset_source(
+        &mut self,
+        source: crate::archive::ResetSource<E>,
+    ) -> Result<(), EngineError> {
+        if self.is_poisoned() {
+            return Err(EngineError::Poisoned);
+        }
+        self.write(|pool| pool.set_reset_source(source))
+    }
+}
