@@ -41,6 +41,8 @@ min_effect = 0.10
 
 [paddleduel]
 # An 11-0 win against the scripted paddle, hit rewards (0.1 each) aside; a
-# random policy loses about 0-11.
+# random policy loses about 0-11. Hit rewards let a trained policy score
+# above it (calibrated median 13.8), so this is only the min_effect
+# reference of the learns check; the nightly threshold is the real bar.
 solved = 11.0
 min_effect = 0.10
