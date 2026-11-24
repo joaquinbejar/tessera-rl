@@ -56,6 +56,7 @@ const fn kind_name(kind: DivergenceKind) -> &'static str {
         DivergenceKind::RejectionMismatch => "rejection_mismatch",
         DivergenceKind::RefusalMismatch => "refusal_mismatch",
         DivergenceKind::OutputsMismatch => "outputs_mismatch",
+        DivergenceKind::RecvMismatch => "recv_mismatch",
     }
 }
 

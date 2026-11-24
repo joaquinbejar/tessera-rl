@@ -54,6 +54,9 @@ impl From<tessera_rl_engine::ReplayError> for BindError {
         use tessera_rl_engine::ReplayError;
         match e {
             ReplayError::Engine(e) => Self::Engine(e),
+            // The recorder closes only after it logged a call that poisoned
+            // the pool, so a later call meets a poisoned pool: raise what that
+            // call raises unrecorded (`PoisonedError`).
             ReplayError::RecorderClosed => Self::Engine(EngineError::Poisoned),
             ReplayError::Persist(e) => Self::Persist(e),
             e => Self::Replay(e),

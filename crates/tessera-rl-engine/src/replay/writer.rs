@@ -499,18 +499,34 @@ where
     M: PersistMask<E>,
     <E::Header as RecordLayout>::Adaptive: AdaptiveValues<E::Config>,
 {
-    let id = identity::<E, M>(&pool.cfg, &pool.options)?;
+    header_from::<E, M>(&pool.cfg, &pool.options, pool.action_heads(), 0)
+}
+
+/// The header of a first-party file from the pool's config, options and
+/// action heads, with `flags` (0, or the async flags).
+pub(super) fn header_from<E, M>(
+    cfg: &E::Config,
+    options: &crate::options::PoolOptions,
+    (discrete, continuous): (usize, usize),
+    flags: u8,
+) -> Result<Vec<u8>, ReplayError>
+where
+    E: Persist,
+    E::Config: CanonicalConfig,
+    M: PersistMask<E>,
+{
+    let id = identity::<E, M>(cfg, options)?;
     let file_descriptor = descriptor(E::TIER, BUILD_ID)?;
     let mut out = Vec::new();
     write_shared_header(
         &mut out,
         REPLAY_MAGIC,
         &id,
-        pool.options.num_envs.get(),
+        options.num_envs.get(),
         env!("CARGO_PKG_VERSION"),
         &file_descriptor,
     )?;
-    let config = canonical_bytes(&pool.cfg);
+    let config = canonical_bytes(cfg);
     if config.len() > super::format::MAX_CONFIG_BYTES {
         return Err(ReplayError::Unsupported {
             feature: "a canonical config over the replay cap",
@@ -518,12 +534,11 @@ where
     }
     push_len(&mut out, config.len())?;
     out.extend_from_slice(&config);
-    let (discrete, continuous) = pool.action_heads();
     push_len(&mut out, E::MAX_AGENTS)?;
     push_len(&mut out, discrete)?;
     push_len(&mut out, continuous)?;
-    // flags, host_protocol, notifies, refuses: all 0 for a first-party pool.
-    out.extend_from_slice(&[0, 0, 0, 0]);
+    // flags, then host_protocol, notifies, refuses: 0 for a first-party pool.
+    out.extend_from_slice(&[flags, 0, 0, 0]);
     let sum = tessera_rl_core::encoding::checksum(&out);
     out.extend_from_slice(&sum.to_le_bytes());
     Ok(out)

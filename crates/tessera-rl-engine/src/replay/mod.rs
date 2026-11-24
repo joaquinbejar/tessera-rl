@@ -19,6 +19,10 @@
 //! adaptive-config events are reserved and refused on read with a typed
 //! error.
 
+#[cfg(not(loom))]
+mod async_run;
+#[cfg(not(loom))]
+mod async_writer;
 mod error;
 mod format;
 #[cfg(feature = "host")]
@@ -31,6 +35,8 @@ mod reader;
 mod run;
 mod writer;
 
+#[cfg(not(loom))]
+pub use async_writer::AsyncRecorder;
 pub use error::{DivergenceKind, ReplayError};
 pub use format::{EventTag, FORMAT_VERSION, REPLAY_MAGIC, StateWriteOp};
 #[cfg(feature = "host")]

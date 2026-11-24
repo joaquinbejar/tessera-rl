@@ -325,6 +325,7 @@ impl Replay<'_> {
                 run.write = Some((index, ids));
                 Outcome::Ok
             }
+            Event::Recv { .. } => return Err(malformed("a Recv event in a host file")),
             Event::Keyframe { ids, records, .. } => {
                 let ops = ops.ok_or_else(|| malformed("a keyframe without snapshots"))?;
                 return Self::host_keyframe(pool, ops, run, index, &ids, records);

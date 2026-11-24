@@ -84,6 +84,9 @@ class ReplayDivergence(TesseraError):
 
 
 def _native_of(env):
+    # The native object itself (test-hooks factories return one) or an Env.
+    if hasattr(env, "_replay") and hasattr(env, "_record_start"):
+        return env
     native = getattr(env, "_native", None)
     if native is None or not hasattr(native, "_replay"):
         raise TypeError(

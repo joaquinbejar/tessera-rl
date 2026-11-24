@@ -1446,6 +1446,44 @@ where
         )
     }
 
+    /// The config, options and action heads, for replay headers
+    /// (ADR-0072). The config and options are read by place, as in
+    /// [`Self::check_records`].
+    #[cfg(feature = "replay")]
+    pub(crate) fn replay_parts(&self) -> (&E::Config, &crate::options::PoolOptions, (usize, usize)) {
+        (
+            &self.mode.pool.cfg,
+            &self.mode.pool.options,
+            self.mode.pool.action_heads(),
+        )
+    }
+
+    /// Restores untrusted records into `ids` after checking each one as
+    /// `import` does (the engine header and `Validate`); they are delivered
+    /// by the next `recv`, as with [`Self::restore`]. For replay keyframes
+    /// (ADR-0072). Nothing changes on a refused record.
+    ///
+    /// # Errors
+    ///
+    /// [`EngineError::InvalidRecord`] or [`EngineError::Invariant`], or any
+    /// error of [`Self::restore`].
+    #[cfg(feature = "replay")]
+    pub(crate) fn import(
+        &mut self,
+        ids: &[u32],
+        records: &[DecodedRecord<E>],
+    ) -> Result<(), EngineError> {
+        let groups = self.mode.pool.action_layout().mask.count();
+        let (cfg, options) = (&self.mode.pool.cfg, &self.mode.pool.options);
+        crate::entry::canonical(|| {
+            records.iter().enumerate().try_for_each(|(i, r)| {
+                crate::snapshot::check_record::<E>(cfg, options, groups, i, r)
+            })
+        })?;
+        let trusted: Vec<Record<E>> = records.iter().map(|r| r.trust()).collect();
+        self.restore(ids, &trusted)
+    }
+
     /// Imports untrusted records into every instance. As [`Self::restore_all`]:
     /// completed ids not yet received are discarded.
     ///
