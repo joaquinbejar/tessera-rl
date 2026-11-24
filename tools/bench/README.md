@@ -93,3 +93,20 @@ and the tests cover them. Two options:
 
 This is still to be decided, with a benchmark showing whether alignment
 changes copy or kernel throughput for the consumers in `compat/targets.toml`.
+
+## Nightly wall-clock gate (SPEC 19.4)
+
+`tools/bench/nightly.py` and `.github/workflows/nightly-bench.yml` (#374).
+
+- **What it compares:** each night compares today's head with the **accepted base**, a commit kept in the previous night's artifact.
+- **How it measures:** paired, interleaved process runs of the two runner binaries, on the single-core `rust/*/inline` cases in `CASES`. The change per pair is `base / head - 1` throughput (positive is slower); its 95% interval is a seeded bootstrap of the median over the pairs.
+- **When a case is flagged:** a case is flagged when the interval lies entirely above +3%.
+- **How the base moves:**
+  - It advances to the head only on a qualifying night with no flag.
+  - A flagged night holds it, so a lasting regression is compared again instead of being absorbed.
+  - A flag clears when a later head is no longer flagged, or when the owner acknowledges the head in `compat/bench/nightly-ack.toml` (a reviewed commit).
+- **When it goes red:** the same case is flagged on two consecutive *qualifying* nights.
+- **Qualifying nights:** a night does not qualify when the load exceeds the limit, other jobs ran on the host during the window, or an A/A half-width exceeds 1.5%. Such a night neither flags, nor moves the base, nor counts for the streak. With no new commit, the night runs an A/A.
+- **Binding:** the gate binds only on a machine whose `compat/machines.toml` status is `reference`; otherwise it reports what it would have done and stays green.
+- **Slow drift:** a regression below the threshold each night can accumulate, because the base advances after every clean night. The state keeps `weekly_base`, the base accepted at least seven qualifying nights earlier, for a periodic comparison against a fixed base (reported, never flagged).
+

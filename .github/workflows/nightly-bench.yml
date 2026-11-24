@@ -1,0 +1,123 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
+# Nightly wall-clock gate (SPEC 19.4, tools/bench/nightly.py): today's head
+# against the accepted base kept in the previous night's artifact, paired and
+# interleaved on the bench CPUs of compat/machines.toml. Report-only while the
+# machine is a candidate; red only on a reference machine, when a case is
+# flagged on two consecutive qualifying nights. It pins only to the machine's
+# bench_cpu_set (never the CI CPUs) and does not touch the runner's setup.
+
+name: Nightly bench
+
+on:
+  schedule:
+    - cron: "30 2 * * *"
+  workflow_dispatch:
+
+# One night at a time, so the previous night has always finished.
+concurrency:
+  group: nightly-bench
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  nightly-bench:
+    runs-on: [self-hosted, xaskar]
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: Find the previous scheduled run
+        id: previous
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          # The REST API with curl and jq: the self-hosted runner has no gh.
+          id=$(curl -fsSL -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
+            "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/actions/workflows/nightly-bench.yml/runs?event=schedule&status=completed&per_page=1" \
+            | jq -r '.workflow_runs[0].id // empty')
+          echo "id=$id" >> "$GITHUB_OUTPUT"
+      - if: steps.previous.outputs.id != ''
+        continue-on-error: true
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: nightly-bench
+          path: previous
+          run-id: ${{ steps.previous.outputs.id }}
+          github-token: ${{ github.token }}
+      # Same pinned uv as the learning test (installed by pipx on the runner).
+      - run: |
+          d=$(pipx environment --value PIPX_BIN_DIR)
+          v=$("$d/uv" --version) || { echo "no runnable uv in pipx's bin directory $d" >&2; exit 1; }
+          case "$v" in "uv 0.13.6" | "uv 0.13.6 "*) ;; *) echo "uv in $d is '$v', not the pinned uv 0.13.6" >&2; exit 1 ;; esac
+          echo "$d" >> "$GITHUB_PATH"
+      - run: command -v uv >/dev/null || { echo "uv not on PATH" >&2; exit 1; }
+      # Self-hosted: checkout's git clean deletes the extension module, which
+      # the report's environment block imports; rebuild it (as the learning
+      # test does) and check that it imports.
+      - run: uv sync --locked --python 3.11 --reinstall-package tessera-rl
+      - run: uv run --locked --python 3.11 python -c "import tessera_rl._native"
+      - name: Build the base and head runners
+        id: build
+        shell: bash
+        run: |
+          # The accepted base comes from the previous state; on the first
+          # night it is the head itself (an A/A night).
+          base=$(jq -r '.state.accepted_base // empty' previous/nightly-bench.json 2>/dev/null || true)
+          head=$(git rev-parse HEAD)
+          base=${base:-$head}
+          echo "base=$base head=$head"
+          # Cached per commit in the job's work directory, so a held base is
+          # not rebuilt every night.
+          cache="$RUNNER_TEMP/../nightly-bench-cache"
+          mkdir -p "$cache"
+          for side in base head; do
+            sha=$([ "$side" = base ] && echo "$base" || echo "$head")
+            bin="$cache/$sha/tessera-rl-bench-runner"
+            if [ ! -x "$bin" ]; then
+              tree="$cache/src-$sha"
+              rm -rf "$tree"
+              git worktree add --detach "$tree" "$sha"
+              (cd "$tree" && CARGO_TARGET_DIR="$cache/target" cargo build -q --release --locked -p tessera-rl-bench-runner)
+              mkdir -p "$cache/$sha"
+              cp "$cache/target/release/tessera-rl-bench-runner" "$bin"
+              git worktree remove --force "$tree"
+            fi
+            echo "${side}_runner=$bin" >> "$GITHUB_OUTPUT"
+          done
+          echo "head=$head" >> "$GITHUB_OUTPUT"
+      - name: Note other jobs on the host
+        id: before
+        shell: bash
+        run: echo "jobs=$(pgrep -f Runner.Worker | wc -l)/$(docker ps -q 2>/dev/null | wc -l)" >> "$GITHUB_OUTPUT"
+      - name: Night
+        id: night
+        shell: bash
+        run: |
+          set +e
+          args=()
+          if [ -f previous/nightly-bench.json ]; then
+            jq '.state' previous/nightly-bench.json > previous-state.json && args+=(--state previous-state.json)
+          fi
+          # Our own job is one Runner.Worker; overlap is any change in the
+          # count of CI workers or containers during the window.
+          count() { echo "$(pgrep -f Runner.Worker | wc -l)/$(docker ps -q 2>/dev/null | wc -l)"; }
+          before="${{ steps.before.outputs.jobs }}"
+          uv run --locked --python 3.11 python tools/bench/nightly.py night "${args[@]}" \
+            --out nightly-bench.json --head "${{ steps.build.outputs.head }}" \
+            --base-runner "${{ steps.build.outputs.base_runner }}" \
+            --head-runner "${{ steps.build.outputs.head_runner }}" \
+            --overlap "$( [ "$(count)" = "$before" ] || echo "jobs $before -> $(count)" )"
+          echo "rc=$?" >> "$GITHUB_OUTPUT"
+      - if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: nightly-bench
+          path: nightly-bench.json
+      - if: steps.night.outputs.rc != '0'
+        run: exit 1

@@ -1,0 +1,12 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+#
+# Owner acknowledgements of nightly wall-clock regressions (SPEC 19.4,
+# tools/bench/nightly.py). An entry accepts a flagged head as the new
+# accepted base: the next night compares against it. Add entries only in a
+# reviewed commit, naming the head commit (full sha), the cases (empty: all)
+# and the reason.
+#
+# [[ack]]
+# commit = "0123456789abcdef0123456789abcdef01234567"
+# cases = ["rust/rts/inline/n1024"]
+# reason = "fog of war costs 4% per step, accepted in ADR-XXXX"
