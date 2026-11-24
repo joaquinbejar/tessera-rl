@@ -31,7 +31,7 @@ fn actions(values: &[i32]) -> ActionInput<'_> {
 
 fn hashes(p: &EnvPool<Counter>, n: u32) -> Vec<u64> {
     (0..n)
-        .map(|i| StateHash::of(p.state(i).unwrap()).get())
+        .map(|i| StateHash::of(&p.state(i).unwrap()).get())
         .collect()
 }
 

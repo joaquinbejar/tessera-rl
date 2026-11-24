@@ -96,6 +96,7 @@ fn step_rows<E: HostEnvironment, const A: usize>(
     let Rows {
         headers,
         states: instances,
+        columns: (),
         discrete,
         continuous,
         outputs,
@@ -286,6 +287,7 @@ pub(crate) fn reset_chunk<E: HostEnvironment, const A: usize>(
         let Rows {
             headers,
             states: instances,
+            columns: (),
             outputs,
             ..
         } = rows;

@@ -323,6 +323,6 @@ trait HashForTest {
 #[cfg(feature = "debug-checks")]
 impl HashForTest for EnvPool<Counter, Masked> {
     fn state_hash_for_test(&self) -> u64 {
-        tessera_rl_core::StateHash::of(self.state(0).unwrap()).get()
+        tessera_rl_core::StateHash::of(&self.state(0).unwrap()).get()
     }
 }

@@ -61,7 +61,7 @@ fn test_privileged_state_holds_accounts_orders_queue_and_fundamental() {
         let a = legal_actions(&mut rng, &masks, 1);
         masks = p.step(input(&a)).unwrap().masks().to_vec();
     }
-    let s = *p.state(0).unwrap();
+    let s = p.state(0).unwrap();
     let leaves = written(&cfg, &s);
     let (agents, market, orders, orders_mask, pending, pending_mask) = (
         &leaves[0], &leaves[1], &leaves[2], &leaves[3], &leaves[4], &leaves[5],

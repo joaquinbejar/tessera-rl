@@ -81,7 +81,7 @@ fn rng(seed: u64, salt_word: u64) -> StepRng {
 fn test_leduc_reset_deals_two_private_cards_and_antes_one_each() {
     for seed in 0..64 {
         let p = pool(seed);
-        let s = *p.state(0).unwrap();
+        let s = p.state(0).unwrap();
         assert!(s.cards.iter().all(|&c| c < 3));
         assert_eq!(
             (s.public, s.round, s.contributions, s.to_move),
@@ -97,7 +97,7 @@ fn test_leduc_deal_frequencies_follow_the_deck() {
     // Two copies each: a pair of private cards has probability 1/5.
     let mut pairs = 0;
     for seed in 0..2000 {
-        let s = *pool(seed).state(0).unwrap();
+        let s = pool(seed).state(0).unwrap();
         pairs += u32::from(s.cards[0] == s.cards[1]);
     }
     assert!((300..500).contains(&pairs), "{pairs}");
@@ -125,7 +125,7 @@ fn test_leduc_check_check_deals_the_public_card_from_the_cards_left() {
         play(&mut p, CALL);
         assert_eq!(p.state(0).unwrap().round, 0);
         play(&mut p, CALL);
-        let s = *p.state(0).unwrap();
+        let s = p.state(0).unwrap();
         assert_eq!((s.round, s.to_move, s.raises), (1, 0, 0));
         assert!(s.public < 3);
         let copies = s.cards.iter().filter(|&&c| c == s.public).count();
@@ -144,7 +144,7 @@ fn test_leduc_raise_sizes_are_two_then_four_and_two_raises_per_round() {
     assert_eq!(p.state(0).unwrap().contributions, [3, 5]);
     assert_eq!(mask(&p, 0), vec![true, true, false], "two raises made");
     play(&mut p, CALL);
-    let s = *p.state(0).unwrap();
+    let s = p.state(0).unwrap();
     assert_eq!((s.round, s.contributions), (1, [5, 5]));
     assert_eq!(mask(&p, 0), vec![false, true, true], "no bet to answer");
     play(&mut p, RAISE);
@@ -178,7 +178,7 @@ fn test_leduc_noop_is_check_or_call_and_fold_needs_a_bet() {
     let mut a = [7_i32];
     Leduc::noop(
         &CFG,
-        p.state(0).unwrap(),
+        &p.state(0).unwrap(),
         agent(0),
         &mut ActionWriter::new(&mut a, &mut []),
     );
@@ -207,7 +207,7 @@ fn test_leduc_showdown_pays_the_pair_then_the_higher_rank() {
             play(&mut p, CALL);
         }
         assert!(terminated(&p));
-        let s = *p.state(0).unwrap();
+        let s = p.state(0).unwrap();
         let expected = f32::from(i8::try_from(s.showdown()).unwrap()) / 13.0;
         assert_eq!(rewards(&p), [expected, -expected]);
     }
@@ -218,7 +218,7 @@ fn test_leduc_info_state_hides_only_the_opponents_card() {
     let mut p = pool(8);
     play(&mut p, RAISE);
     play(&mut p, CALL);
-    let s = *p.state(0).unwrap();
+    let s = p.state(0).unwrap();
     for me in 0..2_u16 {
         let info = Leduc::info_state(&CFG, &s, agent(me));
         assert_eq!(info.card, s.cards[usize::from(me)]);
@@ -234,7 +234,7 @@ fn test_leduc_sample_keeps_the_info_state_and_draws_from_the_unseen_cards() {
     let mut p = pool(8);
     play(&mut p, CALL);
     play(&mut p, CALL);
-    let s = *p.state(0).unwrap();
+    let s = p.state(0).unwrap();
     let info = Leduc::info_state(&CFG, &s, agent(0));
     for word in 0..200 {
         let mut out = LeducState::default();
@@ -266,7 +266,7 @@ fn invalid(r: &Result<(), EngineError>) -> bool {
 #[test]
 fn test_leduc_import_rejects_impossible_decks_and_counters() {
     let mut p = pool(2);
-    let base = *p.state(0).unwrap();
+    let base = p.state(0).unwrap();
     assert!(import(&mut p, base).is_ok());
     let triple = LeducState {
         cards: [1, 1],
@@ -310,7 +310,7 @@ fn test_leduc_heuristic_plays_whole_hands_to_the_end() {
         let mut p = pool(seed);
         let mut steps = 0;
         while !terminated(&p) {
-            let s = *p.state(0).unwrap();
+            let s = p.state(0).unwrap();
             let mut a = [0_i32];
             let mut w = ActionWriter::new(&mut a, &mut []);
             Leduc::act(
@@ -342,7 +342,7 @@ fn baseline_chips_against_uniform(hands: u64) -> i64 {
         let mut lcg = 0x1ed0_c000_u64 + hand;
         let mut p = pool(hand);
         while !terminated(&p) {
-            let s = *p.state(0).unwrap();
+            let s = p.state(0).unwrap();
             let me = s.mover();
             let action = if me == bot {
                 let mut a = [0_i32];
@@ -398,7 +398,7 @@ fn test_leduc_exact_chip_outcome_maps_to_chips_over_thirteen() {
             play(&mut p, a);
         }
         assert!(terminated(&p));
-        let s = *p.state(0).unwrap();
+        let s = p.state(0).unwrap();
         assert_eq!(s.contributions, [9, 9]);
         if s.showdown() != 1 {
             continue;
@@ -477,7 +477,7 @@ fn test_leduc_observation_bytes_match_the_rules_and_hide_the_opponents_card() {
             let mut p = pool(seed);
             let mut positions = 0;
             for step in 0..=hand.len() {
-                let s = *p.state(0).unwrap();
+                let s = p.state(0).unwrap();
                 let bytes = p.outputs().unwrap().observation(0).unwrap().to_vec();
                 for k in 0..2 {
                     assert_eq!(
@@ -534,12 +534,12 @@ fn test_leduc_terminal_observation_matches_the_rules_and_hides_the_opponents_car
             for &a in hand {
                 play(&mut reference, a);
             }
-            let end = *reference.state(0).unwrap();
+            let end = reference.state(0).unwrap();
             let mut p = same_step(seed);
             for &a in before {
                 play(&mut p, a);
             }
-            let pre = *p.state(0).unwrap();
+            let pre = p.state(0).unwrap();
             let header = *p.snapshot(0).unwrap().header();
             play(&mut p, *last);
             let terminal = p
@@ -586,7 +586,7 @@ fn test_leduc_never_reset_record_round_trips_and_continues() {
         tessera_rl_core::encoding::decode_from_slice(&bytes).unwrap();
     let mut q = EnvPool::<Leduc, Masked>::with_masks(CFG, options).unwrap();
     q.import(&[0], &[decoded]).unwrap();
-    assert_eq!(*q.state(0).unwrap(), LeducState::default());
+    assert_eq!(q.state(0).unwrap(), LeducState::default());
     // The continuation equals a pool that never left the initial value.
     fresh.reset_all(Reseed::Keep).unwrap();
     q.reset_all(Reseed::Keep).unwrap();
@@ -617,7 +617,7 @@ fn test_leduc_import_refuses_stakes_the_history_does_not_lead_to() {
     let inflated = LeducState {
         cards: [2, 0],
         contributions: [13, 13],
-        ..*p.state(0).unwrap()
+        ..p.state(0).unwrap()
     };
     assert!(invalid(&import_state(&mut p, inflated)));
     assert_eq!(
@@ -628,7 +628,7 @@ fn test_leduc_import_refuses_stakes_the_history_does_not_lead_to() {
     // A legal history must match its betting fields exactly.
     let mut q = pool(2);
     play(&mut q, RAISE);
-    let s = *q.state(0).unwrap();
+    let s = q.state(0).unwrap();
     for wrong in [
         LeducState { raises: 0, ..s },
         LeducState { to_move: 0, ..s },
@@ -650,7 +650,7 @@ fn test_leduc_import_refuses_stakes_the_history_does_not_lead_to() {
     for a in [CALL, RAISE, RAISE, CALL] {
         play(&mut full, a);
     }
-    let s = *full.state(0).unwrap();
+    let s = full.state(0).unwrap();
     assert_eq!(s.history_len[0], 4);
     let mut high = s;
     high.history[0] |= 1 << 20;
@@ -725,7 +725,7 @@ fn explore(p: &mut EnvPool<Leduc, Masked>, depth: u32) -> u32 {
         }
         p.restore(0, &at).unwrap();
         play(p, a);
-        let after = *p.state(0).unwrap();
+        let after = p.state(0).unwrap();
         assert!(
             after.contributions.iter().all(|&c| c <= MAX_CONTRIBUTION),
             "{after:?}"
@@ -770,7 +770,7 @@ fn test_leduc_every_accepted_import_keeps_rewards_and_stakes_in_bounds() {
         for hand in HANDS {
             let mut p = pool(seed);
             for &a in hand {
-                reachable.push(*p.state(0).unwrap());
+                reachable.push(p.state(0).unwrap());
                 play(&mut p, a);
             }
         }

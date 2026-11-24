@@ -23,7 +23,8 @@
 //! fingerprint is deferred to the persistent format (ADR-0011, phase 2).
 
 use tessera_rl_core::{
-    AdaptiveValues, AgentSlot, Environment, RecordLayout, StateHash, TurnStructure, Validate,
+    AdaptiveValues, AgentSlot, Environment, LaneTuple, RecordLayout, StateHash, TurnStructure,
+    Validate,
 };
 
 use crate::archive::{Archive, ArchiveSource, ResetSourceContext};
@@ -31,8 +32,8 @@ use crate::error::EngineError;
 use crate::masks::MaskProvider;
 use crate::options::AutoReset;
 use crate::pool::{
-    EnvPool, Poison, clear_instance, clear_terminal, observe_instance, run_kernels,
-    write_agent_masks,
+    EnvPool, Fields, Poison, clear_instance, clear_terminal, observe_instance, run_kernels,
+    with_state, write_agent_masks,
 };
 use crate::record::{DecodedRecord, PoolContext, Record};
 use crate::transform::kernels::StackMode;
@@ -55,11 +56,12 @@ where
             .ok_or(EngineError::InstanceOutOfRange { id, num_envs })
     }
 
+    /// Instance `i`'s record: two copies, or a header copy and a gather of
+    /// a lane-wise state's columns (ADR-0090 decision 3).
     fn record(&self, i: usize) -> Option<Record<E>> {
-        match (self.headers.get(i), self.states.get(i)) {
-            (Some(&header), Some(&state)) => Some(Record { header, state }),
-            _ => None,
-        }
+        let header = *self.headers.get(i)?;
+        let state = self.state_at(i)?;
+        Some(Record { header, state })
     }
 
     /// The continuation record of `id`.
@@ -414,9 +416,9 @@ where
         // Restore, fork and import write headers outside a step: the
         // validation fast path's facts are unknown until the next slow path.
         self.forget_fast_facts();
-        if let (Some(header), Some(state)) = (self.headers.get_mut(i), self.states.get_mut(i)) {
+        if let Some(header) = self.headers.get_mut(i) {
             *header = record.header;
-            *state = record.state;
+            self.set_state_at(i, &record.state);
         }
     }
 
@@ -435,6 +437,7 @@ where
             cfg,
             headers,
             states,
+            columns,
             outputs,
             authority,
             poisoned,
@@ -446,14 +449,17 @@ where
             if let Some(t) = transform {
                 outputs.transform = t.caller_rows(mode, false);
             }
+            let columns = &mut <Fields<E> as LaneTuple>::view_all(&mut columns.0);
             for i in indices {
-                let (Some(header), Some(state)) = (headers.get(i), states.get(i)) else {
+                let Some(header) = headers.get(i) else {
                     continue;
                 };
-                clear_instance(outputs, i);
-                clear_terminal(outputs, i);
-                write_agent_masks(outputs, i, header);
-                observe_instance::<E, M>(cfg, authority, header, state, outputs, i);
+                with_state::<E, _>(states, columns, i, |state| {
+                    clear_instance(outputs, i);
+                    clear_terminal(outputs, i);
+                    write_agent_masks(outputs, i, header);
+                    observe_instance::<E, M>(cfg, authority, header, state, outputs, i);
+                });
             }
         })
     }

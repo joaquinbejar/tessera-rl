@@ -55,7 +55,7 @@ fn test_bots_act_never_allocates() {
     let n = usize::from(c.max_units) * HEADS_PER_UNIT;
     let (mut heads, mut a) = (vec![0; n], vec![0; 2 * n]);
     for _ in 0..200 {
-        let s = *p.state(0).unwrap();
+        let s = p.state(0).unwrap();
         for bot in [Bot::Rush, Bot::Prospector, Bot::RandomLegal] {
             for agent in [0, 1] {
                 let slot = AgentSlot::new(agent, 2).unwrap();

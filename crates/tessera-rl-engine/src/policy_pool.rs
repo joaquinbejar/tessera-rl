@@ -103,6 +103,13 @@ impl<E: Environment, M: MaskProvider<E>> EnvPool<E, M> {
         run: HeuristicFn<E>,
     ) -> Result<Self, EngineError> {
         self.check_before_reset()?;
+        if <E::State as tessera_rl_core::EnvState>::LANES {
+            // The heuristic pass reads the chunk's state rows, which a
+            // lane-wise state does not have (ADR-0090, head 1).
+            return Err(EngineError::PolicyMap {
+                reason: "heuristic slots need an Array-of-Structs state, not #[state(lanes)]",
+            });
+        }
         if self.heuristic.is_some() {
             return Err(EngineError::PolicyMap {
                 reason: "heuristic slots are set once",

@@ -1,0 +1,39 @@
+error[E0277]: the trait bound `[f64; 2]: LaneField` is not satisfied
+ --> tests/ui/fail/lanes_array_field.rs:5:10
+  |
+5 | #[derive(EnvState, Clone, Copy, Default)]
+  |          ^^^^^^^^ the trait `LaneField` is not implemented for `[f64; 2]`
+  |
+  = help: the following other types implement trait `LaneField`:
+            Bool8
+            f32
+            f64
+            i32
+            tessera_rl_num::fx32::Fx32
+            u32
+  = note: required for `(f64, [f64; 2])` to implement `LaneTuple`
+note: required by a bound in `tessera_rl_core::EnvState::Fields`
+ --> $WORKSPACE/crates/tessera-rl-core/src/env.rs
+  |
+  |     type Fields: crate::lane_field::LaneTuple;
+  |                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `EnvState::Fields`
+  = note: this error originates in the derive macro `EnvState` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: the trait bound `[f64; 2]: LaneField` is not satisfied
+  --> tests/ui/fail/lanes_array_field.rs:10:8
+   |
+10 |     b: [f64; 2],
+   |        ^^^^^^^^ the trait `LaneField` is not implemented for `[f64; 2]`
+   |
+   = help: the following other types implement trait `LaneField`:
+             Bool8
+             f32
+             f64
+             i32
+             tessera_rl_num::fx32::Fx32
+             u32
+note: required by a bound in `_::assert_lane_field`
+  --> tests/ui/fail/lanes_array_field.rs:10:8
+   |
+10 |     b: [f64; 2],
+   |        ^^^^^^^^ required by this bound in `assert_lane_field`

@@ -19,9 +19,9 @@
 //! `recv`, in a normal batch.
 //!
 //! The pool has no pool-level adaptive subsystem, so there is no unfrozen
-//! adaptive state to refuse yet; and no environment uses lane (`SoA`) layouts, so
-//! [`EngineError::LaneEnvUnsupported`] has no trigger yet (ADR-0047
-//! section 8). Both refusals belong where those features land.
+//! adaptive state to refuse yet. A pool of a lane-wise state (`SoA` columns,
+//! ADR-0090) is refused with [`EngineError::LaneEnvUnsupported`] (ADR-0047
+//! section 8).
 //!
 //! # Snapshots
 //!
@@ -251,6 +251,14 @@ where
             error: EngineError::Options { option, reason },
             pool: Some(Box::new(pool)),
         };
+        if <E::State as tessera_rl_core::EnvState>::LANES {
+            // ADR-0090 4.5 (ADR-0047 section 8): no Async for lane-wise
+            // states.
+            return Err(AsyncBuildError {
+                error: EngineError::LaneEnvUnsupported,
+                pool: Some(Box::new(self)),
+            });
+        }
         if self.workers() != 0 {
             return Err(refuse(
                 self,

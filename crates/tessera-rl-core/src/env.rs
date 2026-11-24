@@ -25,7 +25,34 @@ use crate::step_out::StepOut;
 /// `Send + Sync`: plain data holds no pointers and no interior mutability,
 /// so it is always both; the bound lets worker threads read shared states,
 /// such as the entries of an archive (ADR-0075).
-pub trait EnvState: Canonical + StateInit + Copy + Send + Sync + 'static {}
+///
+/// **Migrating a hand-written implementation (ADR-0090):** add
+/// `type Fields = ();`, `fn to_fields(&self) -> Self::Fields {}` and a
+/// `from_fields` that returns the default state; `LANES` keeps its default,
+/// `false`. The derive emits them for you.
+pub trait EnvState: Canonical + StateInit + Copy + Send + Sync + 'static {
+    /// Whether the state is stored as Struct-of-Arrays columns, one per
+    /// field (`#[state(lanes)]`, ADR-0090). `false`: the default
+    /// Array-of-Structs store, where workers get `&mut State`.
+    const LANES: bool = false;
+
+    /// The state's fields as a tuple, for the column store of a lane-wise
+    /// state; `()` for every other state. The tuple's element order is the
+    /// fields' declaration order, and it is the column order: the engine
+    /// keeps one column per element (ADR-0090 decision 2). `Copy + Send +
+    /// Sync + 'static` through [`LaneTuple`](crate::LaneTuple), which is
+    /// sealed: `()` or a tuple of up to 12 [`LaneField`](crate::LaneField)s.
+    type Fields: crate::lane_field::LaneTuple;
+
+    /// The fields of `self`, in declaration order.
+    #[must_use]
+    fn to_fields(&self) -> Self::Fields;
+
+    /// The state with these fields. For a state with `Fields = ()` the
+    /// engine never calls it; the derive returns the default state.
+    #[must_use]
+    fn from_fields(fields: Self::Fields) -> Self;
+}
 
 /// An environment configuration, validated at construction.
 pub trait EnvConfig: Sized + 'static {

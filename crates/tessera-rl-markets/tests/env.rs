@@ -184,7 +184,7 @@ fn test_env_reward_fundamental_only_change_is_hidden_until_settlement() {
         let bits = |r: &[f32]| r.iter().map(|x| x.to_bits()).collect::<Vec<_>>();
         if step < steps {
             assert_eq!(bits(&ra), bits(&rb), "step {step}");
-            let (sa, sb) = (a.state(0).unwrap(), b.state(0).unwrap());
+            let (sa, sb) = (&a.state(0).unwrap(), &b.state(0).unwrap());
             assert_eq!(sa.fundamental, 512);
             assert_eq!(sb.fundamental, 512 + step);
             assert_eq!(sa.accounts, sb.accounts);

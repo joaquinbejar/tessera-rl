@@ -106,6 +106,8 @@ pub(crate) fn derive(input: &DeriveInput) -> syn::Result<TokenStream> {
             }
         }
 
+        impl #core::LaneField for #name {}
+
         impl #core::StateInit for #name {
             #[inline]
             fn state_default() -> Self {

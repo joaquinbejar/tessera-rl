@@ -150,7 +150,7 @@ fn test_mountaincar_right_edge_clips_the_position() {
 #[test]
 fn test_mountaincar_terminates_at_the_goal_and_truncates_at_the_limit() {
     let mut p = pool(1);
-    let mut s = *p.state(0).unwrap();
+    let mut s = p.state(0).unwrap();
     s.s = [0.49, 0.03];
     let rec = DecodedRecord::from_parts(*DecodedRecord::from(p.snapshot(0).unwrap()).header(), s)
         .unwrap();

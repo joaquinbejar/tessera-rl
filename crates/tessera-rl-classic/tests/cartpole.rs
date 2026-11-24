@@ -107,7 +107,7 @@ fn test_cartpole_same_seed_is_bit_identical() {
             p.step(act(&[t % 2, 1, 0, (t / 3) % 2])).unwrap();
         }
         (0..4)
-            .map(|i| StateHash::of(p.state(i).unwrap()).get())
+            .map(|i| StateHash::of(&p.state(i).unwrap()).get())
             .collect::<Vec<_>>()
     };
     assert_eq!(run(), run());
@@ -152,7 +152,7 @@ fn test_cartpole_heuristic_balances_to_truncation() {
     let mut actions = vec![0; usize::try_from(n).unwrap()];
     for _ in 0..500 {
         for i in 0..n {
-            actions[usize::try_from(i).unwrap()] = heuristic(p.state(i).unwrap());
+            actions[usize::try_from(i).unwrap()] = heuristic(&p.state(i).unwrap());
         }
         let out = p.step(act(&actions)).unwrap();
         assert!(out.episode_terminated().iter().all(|f| !f.get()));

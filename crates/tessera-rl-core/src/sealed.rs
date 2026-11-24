@@ -10,3 +10,8 @@
 /// Derive only, not a stable API.
 #[doc(hidden)]
 pub trait ObservationLayoutSealed {}
+
+/// Seals `LaneTuple`: implemented for `()` and tuples of `LaneField`
+/// only (ADR-0090).
+#[doc(hidden)]
+pub trait LaneTupleSealed {}

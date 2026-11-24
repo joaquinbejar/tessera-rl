@@ -88,7 +88,7 @@ fn frame<E: Pooled, M: MaskProvider<E>>(p: &EnvPool<E, M>, id: u32, same_step: b
     }
     let mut hasher = StateHasher::new();
     hasher.add(p.header(id).unwrap());
-    hasher.add(p.state(id).unwrap());
+    hasher.add(&p.state(id).unwrap());
     Frame {
         obs,
         terminal_obs,
@@ -110,7 +110,7 @@ fn frame<E: Pooled, M: MaskProvider<E>>(p: &EnvPool<E, M>, id: u32, same_step: b
             out.episode_truncated()[i].to_byte(),
         ],
         record: hasher.finish().get(),
-        state: StateHash::of(p.state(id).unwrap()).get(),
+        state: StateHash::of(&p.state(id).unwrap()).get(),
     }
 }
 

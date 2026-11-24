@@ -79,7 +79,7 @@ fn branched(seed: u64, labels: [u64; 2], ignore_rng: bool) -> Trajectory {
             let per = obs.len() / 3;
             [1usize, 2].map(|i| {
                 (
-                    StateHash::of(p.state(u32::try_from(i).unwrap()).unwrap()).get(),
+                    StateHash::of(&p.state(u32::try_from(i).unwrap()).unwrap()).get(),
                     obs[i * per..(i + 1) * per].to_vec(),
                     out.rewards()[i * 2..i * 2 + 2]
                         .iter()

@@ -48,7 +48,13 @@ impl StateInit for Count {
     }
 }
 
-impl EnvState for Count {}
+impl EnvState for Count {
+    type Fields = ();
+    fn to_fields(&self) -> Self::Fields {}
+    fn from_fields((): Self::Fields) -> Self {
+        Self::state_default()
+    }
+}
 
 struct CountConfig {
     limit: u16,

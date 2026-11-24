@@ -2,9 +2,11 @@
 
 //! `#[derive(EnvState)]` (SPEC 5.1, ADR-0029).
 //!
-//! Lane-wise Struct-of-Arrays generation for `LaneEnvironment` is deferred
-//! to phase 3 (SIMD); the `NoUninit` bound for memcpy snapshots comes with
-//! the engine (milestone 5).
+//! `#[state(lanes)]` on the struct marks a lane-wise state (ADR-0090): the
+//! derive then sets `EnvState::LANES` and emits `Fields`, the tuple of the
+//! field types in declaration order, from which the engine builds one
+//! column per field. Every field type must be a `LaneField`. Other states
+//! get `Fields = ()`.
 
 use proc_macro2::TokenStream;
 use quote::{quote, quote_spanned};
@@ -65,6 +67,25 @@ fn respan(tokens: &TokenStream, span: proc_macro2::Span) -> TokenStream {
         .collect()
 }
 
+/// Most fields of a `#[state(lanes)]` state.
+const MAX_LANE_FIELDS: usize = 12;
+
+/// Whether the struct carries `#[state(lanes)]`.
+fn lanes(attrs: &[Attribute]) -> syn::Result<bool> {
+    let mut found = false;
+    for attr in attrs.iter().filter(|a| a.path().is_ident("state")) {
+        attr.parse_nested_meta(|meta| {
+            if meta.path.is_ident("lanes") {
+                found = true;
+                Ok(())
+            } else {
+                Err(meta.error("expected `lanes`"))
+            }
+        })?;
+    }
+    Ok(found)
+}
+
 #[derive(Default)]
 struct FieldParts {
     padding_checks: Vec<TokenStream>,
@@ -74,6 +95,11 @@ struct FieldParts {
     decodes: Vec<TokenStream>,
     inits: Vec<TokenStream>,
     nans: Vec<TokenStream>,
+    /// Field types and names, in declaration order (the lane tuple).
+    types: Vec<syn::Type>,
+    idents: Vec<Ident>,
+    /// `LaneField` checks, spanned at each field type.
+    lane_bounds: Vec<TokenStream>,
     /// End offset of the previous field, as a const expression.
     prev_end: Option<TokenStream>,
 }
@@ -134,6 +160,14 @@ impl FieldParts {
                 assert_field::<#ty>();
             }
         });
+        self.types.push(ty.clone());
+        self.idents.push(ident.clone());
+        self.lane_bounds.push(quote_spanned! {ty_span=>
+            {
+                const fn assert_lane_field<T: #core::LaneField>() {}
+                assert_lane_field::<#ty>();
+            }
+        });
         self.lens
             .push(quote_spanned!(ty_span=> <#ty as #core::encoding::Canonical>::ENCODED_LEN));
         self.encodes
@@ -169,6 +203,7 @@ pub(crate) fn derive(input: &DeriveInput) -> syn::Result<TokenStream> {
         ));
     }
     let fields = named_fields(input, "EnvState")?;
+    let is_lanes = lanes(&input.attrs)?;
 
     // Field types first, so a reference reports itself rather than the
     // lifetime parameter it needs.
@@ -193,6 +228,9 @@ pub(crate) fn derive(input: &DeriveInput) -> syn::Result<TokenStream> {
         decodes,
         inits,
         nans,
+        types,
+        idents,
+        lane_bounds,
         prev_end,
     } = parts;
     let Some(last_ident) = &last else {
@@ -220,8 +258,12 @@ pub(crate) fn derive(input: &DeriveInput) -> syn::Result<TokenStream> {
         };
     };
 
+    let (lane_items, lane_checks) = lane_parts(&core, is_lanes, &types, &idents, &lane_bounds)?;
+
     Ok(quote! {
         #(#padding_checks)*
+
+        #lane_checks
 
         #trailing_check
 
@@ -260,6 +302,70 @@ pub(crate) fn derive(input: &DeriveInput) -> syn::Result<TokenStream> {
             }
         }
 
-        impl #core::EnvState for #name {}
+        impl #core::EnvState for #name {
+            #lane_items
+        }
     })
+}
+
+/// The `EnvState` lane items and the `LaneField` checks (ADR-0090 decision
+/// 2): the tuple of field types for `#[state(lanes)]`, `()` otherwise.
+fn lane_parts(
+    core: &TokenStream,
+    is_lanes: bool,
+    types: &[syn::Type],
+    idents: &[Ident],
+    lane_bounds: &[TokenStream],
+) -> syn::Result<(TokenStream, TokenStream)> {
+    // ADR-0090 decision 2: at most 12 lane fields (`std` implements `Copy`
+    // for tuples up to that arity), refused at the 13th field.
+    if is_lanes && let Some(extra) = idents.get(MAX_LANE_FIELDS) {
+        return Err(syn::Error::new_spanned(
+            extra,
+            format!(
+                "#[state(lanes)] allows at most {MAX_LANE_FIELDS} fields, one column each (ADR-0090)"
+            ),
+        ));
+    }
+    // ADR-0090 decision 2: the lane tuple and its field checks.
+    let lane_items = if is_lanes {
+        quote! {
+            const LANES: bool = true;
+            type Fields = (#(#types,)*);
+
+            #[inline]
+            fn to_fields(&self) -> Self::Fields {
+                (#(self.#idents,)*)
+            }
+
+            #[inline]
+            fn from_fields(fields: Self::Fields) -> Self {
+                let (#(#idents,)*) = fields;
+                Self { #(#idents,)* }
+            }
+        }
+    } else {
+        quote! {
+            type Fields = ();
+
+            #[inline]
+            fn to_fields(&self) -> Self::Fields {}
+
+            #[inline]
+            fn from_fields((): Self::Fields) -> Self {
+                <Self as #core::StateInit>::state_default()
+            }
+        }
+    };
+    let lane_checks = if is_lanes {
+        quote! {
+            const _: () = {
+                #(#lane_bounds)*
+            };
+        }
+    } else {
+        quote! {}
+    };
+
+    Ok((lane_items, lane_checks))
 }

@@ -430,3 +430,89 @@ fn test_env_config_validate_hook_runs_after_field_checks() {
     // Field ranges are checked first.
     assert_eq!(PairConfig { a: 9, b: 4 }.validate().unwrap_err().field, "a");
 }
+
+/// A lane-wise state over every allowed field type (ADR-0090).
+#[derive(EnvState, Debug, Clone, Copy, Default)]
+#[repr(C)]
+#[state(lanes)]
+struct LaneState {
+    a: f64,
+    b: f32,
+    c: i32,
+    d: u32,
+    e: Fx32,
+    f: tessera_rl_core::Bool8,
+    g: LanePhase,
+    h: tessera_rl_core::Bool8,
+    i: tessera_rl_core::Bool8,
+    j: u32,
+}
+
+#[derive(StateEnum, Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[repr(u8)]
+enum LanePhase {
+    #[default]
+    Idle = 0,
+    Run = 1,
+}
+
+fn lane_bytes(s: &LaneState) -> Vec<u8> {
+    tessera_rl_core::encoding::encode_to_vec(s)
+}
+
+#[test]
+fn test_env_state_lanes_fields_round_trip_bitwise_with_nan_payloads() {
+    use tessera_rl_core::EnvState as _;
+    const { assert!(<LaneState as tessera_rl_core::EnvState>::LANES) };
+    let states = [
+        LaneState::default(),
+        LaneState {
+            a: f64::from_bits(0x7ff8_dead_beef_0001),
+            b: f32::from_bits(0xffc0_1234),
+            c: i32::MIN,
+            d: u32::MAX,
+            e: Fx32::from_raw(-7),
+            f: tessera_rl_core::Bool8::TRUE,
+            g: LanePhase::Run,
+            h: tessera_rl_core::Bool8::FALSE,
+            i: tessera_rl_core::Bool8::TRUE,
+            j: 0xdead_beef,
+        },
+        LaneState {
+            a: -0.0,
+            b: f32::from_bits(1),
+            c: -1,
+            d: 0,
+            e: Fx32::from_raw(i32::MAX),
+            f: tessera_rl_core::Bool8::FALSE,
+            g: LanePhase::Idle,
+            h: tessera_rl_core::Bool8::TRUE,
+            i: tessera_rl_core::Bool8::FALSE,
+            j: 1,
+        },
+    ];
+    for s in states {
+        let fields = s.to_fields();
+        // Declaration order is the tuple order.
+        assert_eq!(fields.0.to_bits(), s.a.to_bits());
+        assert_eq!(fields.1.to_bits(), s.b.to_bits());
+        assert_eq!((fields.2, fields.3), (s.c, s.d));
+        let back = LaneState::from_fields(fields);
+        assert_eq!(lane_bytes(&back), lane_bytes(&s));
+    }
+}
+
+#[test]
+fn test_env_state_without_lanes_has_unit_fields() {
+    use tessera_rl_core::EnvState as _;
+    const { assert!(!<Plain as tessera_rl_core::EnvState>::LANES) };
+    let s = Plain { x: 3 };
+    let () = s.to_fields();
+    assert_eq!(Plain::from_fields(()).x, 0);
+}
+
+#[derive(EnvState, Debug, Clone, Copy, Default)]
+#[repr(C)]
+struct Plain {
+    x: u32,
+}

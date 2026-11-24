@@ -64,7 +64,7 @@ fn pool(c: &PaddleDuelConfig, seed: u64) -> Pool {
 }
 
 fn state(p: &Pool) -> PaddleDuelState {
-    *p.state(0).unwrap()
+    p.state(0).unwrap()
 }
 
 fn step(p: &mut Pool, acts: [i32; 2]) -> [f32; 2] {

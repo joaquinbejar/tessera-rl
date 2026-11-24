@@ -124,7 +124,7 @@ fn expected(p: &EnvPool<Counter, Masked>, i: u32, slot: usize) -> i32 {
     let agent = AgentSlot::new(slot16, A).unwrap();
     Counter::act(
         p.config(),
-        p.state(i).unwrap(),
+        &p.state(i).unwrap(),
         agent,
         &mut rng,
         &mut ActionWriter::new(&mut action, &mut []),

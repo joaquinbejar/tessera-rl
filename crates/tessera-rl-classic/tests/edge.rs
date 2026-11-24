@@ -56,7 +56,7 @@ fn test_edge_tag_actions_of_empty_and_caught_slots_are_ignored() {
     // Chase until an evader is caught but the episode goes on.
     let mut caught = None;
     for _ in 0..60 {
-        let s = *p.state(0).unwrap();
+        let s = p.state(0).unwrap();
         let mut acts = [0; A];
         for (slot, a) in acts.iter_mut().enumerate().take(2) {
             let target = (2..4).find(|&e| !s.caught[e].get()).unwrap_or(2);
@@ -114,7 +114,7 @@ fn test_edge_tag_illegal_move_is_penalized_or_rejected() {
             Some((p, illegal))
         })
         .unwrap();
-    let s = *p.state(0).unwrap();
+    let s = p.state(0).unwrap();
     let mut acts = [0; A];
     acts[0] = illegal;
     assert!(matches!(

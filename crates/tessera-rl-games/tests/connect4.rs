@@ -190,7 +190,7 @@ fn test_connect4_full_column_is_masked_for_the_acting_player() {
 fn test_connect4_illegal_column_is_replaced_by_the_noop_or_rejected() {
     let mut p = pool();
     play_all(&mut p, "333333");
-    let before = *p.state(0).unwrap();
+    let before = p.state(0).unwrap();
     let result = p.step(ActionInput {
         discrete: &[3, 6],
         continuous: &[],
@@ -198,7 +198,7 @@ fn test_connect4_illegal_column_is_replaced_by_the_noop_or_rejected() {
     if let Err(e) = result {
         // `debug-checks`: rejected atomically.
         assert!(matches!(e, EngineError::IllegalAction { agent: 0, .. }));
-        assert_eq!(*p.state(0).unwrap(), before);
+        assert_eq!(p.state(0).unwrap(), before);
     } else {
         // Default: column 3 is full, so the no-op plays column 2, the
         // next in centre-first order, and the illegal action is counted.
@@ -225,7 +225,7 @@ fn test_connect4_auto_reset_starts_a_fresh_board() {
     let mut p = pool_with(AutoReset::SameStep);
     play_all(&mut p, "0101010");
     assert!(terminated(&p));
-    assert_eq!(*p.state(0).unwrap(), Connect4State::default());
+    assert_eq!(p.state(0).unwrap(), Connect4State::default());
     assert_eq!(acting(&p), [true, false]);
 }
 
@@ -246,7 +246,7 @@ fn invalid(r: &Result<(), EngineError>) -> bool {
 fn test_connect4_import_rejects_floating_and_overlapping_stones() {
     let mut p = pool();
     play(&mut p, 3);
-    let base = *p.state(0).unwrap();
+    let base = p.state(0).unwrap();
     let floating = Connect4State {
         stones: [cell(3, 1), 0],
         ..base
@@ -265,7 +265,7 @@ fn test_connect4_import_rejects_floating_and_overlapping_stones() {
 fn test_connect4_import_rejects_counts_that_do_not_match_the_turn() {
     let mut p = pool();
     play(&mut p, 3);
-    let base = *p.state(0).unwrap();
+    let base = p.state(0).unwrap();
     let wrong_plies = Connect4State { moves: 2, ..base };
     assert!(invalid(&import(&mut p, wrong_plies)));
     let second_ahead = Connect4State {
@@ -287,7 +287,7 @@ fn test_connect4_import_rejects_a_running_episode_on_a_won_board() {
             cell(1, 0) | cell(1, 1) | cell(1, 2),
         ],
         moves: 7,
-        ..*p.state(0).unwrap()
+        ..p.state(0).unwrap()
     };
     let before = p.state_hash(0).unwrap();
     assert!(invalid(&import(&mut p, won)));
@@ -392,15 +392,15 @@ fn baseline(state: &Connect4State, agent: u16) -> i32 {
 #[test]
 fn test_connect4_baseline_wins_then_blocks_then_takes_the_centre() {
     let mut p = pool();
-    assert_eq!(baseline(p.state(0).unwrap(), 0), 3);
+    assert_eq!(baseline(&p.state(0).unwrap(), 0), 3);
     play_all(&mut p, "010101");
     // Slot 0 to move wins in column 0.
-    assert_eq!(baseline(p.state(0).unwrap(), 0), 0);
+    assert_eq!(baseline(&p.state(0).unwrap(), 0), 0);
     let mut q = pool();
     play_all(&mut q, "01010");
     // Slot 1 to move cannot win and blocks column 0.
-    assert_eq!(baseline(q.state(0).unwrap(), 1), 0);
+    assert_eq!(baseline(&q.state(0).unwrap(), 1), 0);
     let mut r = pool();
     play_all(&mut r, "3");
-    assert_eq!(baseline(r.state(0).unwrap(), 1), 3);
+    assert_eq!(baseline(&r.state(0).unwrap(), 1), 3);
 }

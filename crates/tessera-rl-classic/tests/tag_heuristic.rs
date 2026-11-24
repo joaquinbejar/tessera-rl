@@ -126,7 +126,7 @@ fn test_tag_window_baseline_equals_the_omniscient_rule_when_the_window_covers_th
     let mut checked = 0;
     for t in 0..40 {
         for i in 0..n {
-            let state = p.state(i).unwrap();
+            let state = &p.state(i).unwrap();
             for a in 0..cfg.agents() {
                 if cfg.is_pursuer(a) || !state.caught[a].get() {
                     assert_eq!(act(&cfg, state, a), omniscient(&cfg, state, a), "t {t}");
@@ -250,7 +250,7 @@ fn run(workers: Option<usize>, schedule: Schedule) -> Vec<u64> {
             for &e in &evaders {
                 if rows[e].alive.get() && rows[e].acting.get() {
                     want[usize::try_from(i).unwrap() * A + e] =
-                        act_info(&cfg, p.state(i).unwrap(), e);
+                        act_info(&cfg, &p.state(i).unwrap(), e);
                 }
             }
         }

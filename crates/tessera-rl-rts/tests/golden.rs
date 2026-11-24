@@ -188,7 +188,7 @@ fn dynamics_run() -> u64 {
 }
 
 fn fnv_state(hash: u64, p: &Pool, i: u32) -> u64 {
-    fold_dynamics(hash, p.state(i).unwrap())
+    fold_dynamics(hash, &p.state(i).unwrap())
 }
 
 /// Pinned on the stage 2 code (`rts-design.md` section 14, ruling 6): fog

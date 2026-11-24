@@ -35,7 +35,7 @@ fn bench(c: &mut Criterion) {
         let mut actions = vec![0; 2 * n];
         // 100 decisions of Rush against Prospector, so the state is grown.
         for _ in 0..100 {
-            let s = *pool.state(0).unwrap();
+            let s = pool.state(0).unwrap();
             for (agent, bot) in [(0u16, Bot::Rush), (1, Bot::Prospector)] {
                 let lo = usize::from(agent) * n;
                 let mut w = ActionWriter::new(&mut actions[lo..lo + n], &mut []);
@@ -53,7 +53,7 @@ fn bench(c: &mut Criterion) {
             })
             .unwrap();
         }
-        let s = *pool.state(0).unwrap();
+        let s = pool.state(0).unwrap();
         let mut heads = vec![0; n];
         for bot in [Bot::Rush, Bot::Prospector] {
             c.bench_function(&format!("rts/bots/{bot:?}/size{size}"), |b| {

@@ -64,7 +64,7 @@ fn pool(c: &BrickWallConfig, seed: u64) -> Pool {
 }
 
 fn state(p: &Pool) -> BrickWallState {
-    *p.state(0).unwrap()
+    p.state(0).unwrap()
 }
 
 fn step(p: &mut Pool, action: i32) -> f32 {

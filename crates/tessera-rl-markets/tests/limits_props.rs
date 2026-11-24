@@ -73,7 +73,7 @@ proptest! {
             prop_assert_eq!(out.episode_illegal_actions().iter().sum::<f32>().to_bits(), 0.0_f32.to_bits());
             masks = out.masks().to_vec();
             for i in 0..INSTANCES {
-                check(&cfg, p.state(i).unwrap())?;
+                check(&cfg, &p.state(i).unwrap())?;
             }
         }
     }
@@ -98,7 +98,7 @@ proptest! {
             }
             p.step(input(&a)).unwrap();
             for i in 0..INSTANCES {
-                check(&cfg, p.state(i).unwrap())?;
+                check(&cfg, &p.state(i).unwrap())?;
             }
         }
     }

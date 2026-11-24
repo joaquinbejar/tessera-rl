@@ -104,7 +104,7 @@ fn test_gather_observation_matches_state_with_absent_slots_zero() {
     let mut p = pool_with(cfg.clone(), 8, 41, AutoReset::SameStep);
     for t in 0..40 {
         let actions: Vec<i32> = (0..8u32)
-            .map(|i| baseline(&cfg, p.state(i).unwrap()))
+            .map(|i| baseline(&cfg, &p.state(i).unwrap()))
             .map(|a| if t % 5 == 0 { (a + 1) % 4 } else { a })
             .collect();
         let states: Vec<GatherState> = {
@@ -113,7 +113,7 @@ fn test_gather_observation_matches_state_with_absent_slots_zero() {
                 continuous: &[],
             })
             .unwrap();
-            (0..8u32).map(|i| *p.state(i).unwrap()).collect()
+            (0..8u32).map(|i| p.state(i).unwrap()).collect()
         };
         let out = p.outputs().unwrap();
         for (i, s) in states.iter().enumerate() {
@@ -131,11 +131,11 @@ fn test_gather_baseline_collects_one_item_by_the_shortest_walk() {
     };
     for seed in 0..200 {
         let mut p = pool(cfg.clone(), 1, seed);
-        let s = *p.state(0).unwrap();
+        let s = p.state(0).unwrap();
         let shortest = (s.items[0][0] - s.agent[0]).abs() + (s.items[0][1] - s.agent[1]).abs();
         let mut steps = 0;
         loop {
-            let a = baseline(&cfg, p.state(0).unwrap());
+            let a = baseline(&cfg, &p.state(0).unwrap());
             let out = p
                 .step(ActionInput {
                     discrete: &[a],
@@ -156,7 +156,7 @@ fn test_gather_baseline_collects_one_item_by_the_shortest_walk() {
 #[test]
 fn test_gather_validate_refuses_inconsistent_states() {
     let cfg = GatherConfig::default();
-    let mut s = *pool(cfg.clone(), 1, 3).state(0).unwrap();
+    let mut s = pool(cfg.clone(), 1, 3).state(0).unwrap();
     assert!(Gather::validate(&cfg, &s).is_ok());
     s.left += 1;
     assert_eq!(
@@ -173,7 +173,7 @@ fn test_gather_validate_refuses_inconsistent_states() {
         items: 2,
         ..GatherConfig::default()
     };
-    let mut s = *pool(few.clone(), 1, 3).state(0).unwrap();
+    let mut s = pool(few.clone(), 1, 3).state(0).unwrap();
     s.present[5] = Bool8::TRUE;
     s.left += 1;
     assert_eq!(

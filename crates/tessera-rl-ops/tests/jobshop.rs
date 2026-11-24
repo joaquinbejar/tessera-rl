@@ -34,7 +34,7 @@ fn pool(c: JobShopConfig, n: u32, seed: u64) -> EnvPool<JobShop, Masked> {
 }
 
 fn state(p: &EnvPool<JobShop, Masked>, i: u32) -> JobShopState {
-    *p.state(i).unwrap()
+    p.state(i).unwrap()
 }
 
 fn step(p: &mut EnvPool<JobShop, Masked>, actions: &[i32]) -> (Vec<f32>, Vec<bool>) {

@@ -143,7 +143,7 @@ fn test_rts_starts_are_mirror_images_with_their_ore_and_drones() {
         for seed in 0..20 {
             let mut p = pool(c.clone(), 1, seed, None);
             ready(&mut p);
-            let s = *p.state(0).unwrap();
+            let s = p.state(0).unwrap();
             assert_eq!(s, mirrored(&c, &s), "size {size} seed {seed}");
             assert_eq!(s.ore, [START_ORE; 2]);
             let alive: Vec<&Unit> = s.units[..SIDE_SLOTS]
@@ -173,7 +173,7 @@ fn test_rts_legal_play_is_accepted_and_every_state_validates() {
             assert_eq!(p.check_actions(input(&a)), Ok(()));
             masks = p.step(input(&a)).unwrap().masks().to_vec();
             for i in 0..2 {
-                let s = *p.state(i).unwrap();
+                let s = p.state(i).unwrap();
                 p.import(&[i], &[record(&p, s)]).unwrap();
             }
         }
@@ -263,7 +263,7 @@ fn step_from(c: &RtsConfig, s: RtsState, a0: &[i32], a1: &[i32]) -> (RtsState, V
     p.import(&[0], &[record(&p, s)]).unwrap();
     let a = [a0, a1].concat();
     let rewards = p.step(input(&a)).unwrap().rewards().to_vec();
-    (*p.state(0).unwrap(), rewards)
+    (p.state(0).unwrap(), rewards)
 }
 
 #[test]
@@ -277,7 +277,7 @@ fn test_rts_team_symmetry_under_identical_indices() {
     let mut rng = Rng(4242);
     let mut masks = ready(&mut p);
     for k in 0..150 {
-        let s = *p.state(0).unwrap();
+        let s = p.state(0).unwrap();
         let a = legal_actions(&mut rng, &masks, 1, 6);
         let (a0, a1) = (&a[..per], &a[per..]);
         let (next, r) = step_from(&c, s, a0, a1);
@@ -320,7 +320,7 @@ fn test_rts_record_with_two_units_on_one_cell_is_refused() {
     let c = cfg(12, 6);
     let mut p = pool(c, 1, 2, None);
     ready(&mut p);
-    let mut s = *p.state(0).unwrap();
+    let mut s = p.state(0).unwrap();
     s.units[1].cell = s.units[0].cell;
     let mut q = pool(cfg(12, 6), 1, 2, None);
     ready(&mut q);

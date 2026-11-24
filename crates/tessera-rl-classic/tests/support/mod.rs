@@ -243,7 +243,7 @@ where
             let i = u32::try_from(row / a).unwrap_or(0);
             if let (Some(state), Some(agent)) = (p.state(i), AgentSlot::new(0, a)) {
                 let mut writer = ActionWriter::new(&mut [], &mut cont);
-                E::act(cfg, state, agent, &mut heuristic_rng(), &mut writer);
+                E::act(cfg, &state, agent, &mut heuristic_rng(), &mut writer);
             }
             cont[0]
         } else {
@@ -286,7 +286,7 @@ where
                 let mut discrete = [0];
                 let mut writer = ActionWriter::new(&mut discrete, &mut []);
                 if let Some(agent) = u16::try_from(slot).ok().and_then(|s| AgentSlot::new(s, a)) {
-                    E::act(cfg, state, agent, &mut heuristic_rng(), &mut writer);
+                    E::act(cfg, &state, agent, &mut heuristic_rng(), &mut writer);
                 }
                 discrete[0]
             };
@@ -343,7 +343,7 @@ where
         if let (Some(h), Some(s)) = (p.header(id), p.state(id)) {
             let mut hasher = tessera_rl_core::encoding::StateHasher::new();
             hasher.add(h);
-            hasher.add(s);
+            hasher.add(&s);
             records.extend(hasher.finish().get().to_le_bytes());
         }
     }
@@ -404,7 +404,7 @@ where
             let (h, s) = (p.header(id)?, p.state(id)?);
             let mut hasher = tessera_rl_core::encoding::StateHasher::new();
             hasher.add(h);
-            hasher.add(s);
+            hasher.add(&s);
             Some(hasher.finish().get())
         })
         .collect()
@@ -711,6 +711,6 @@ where
     M: MaskProvider<E>,
 {
     (0..n)
-        .filter_map(|i| p.state(i).map(|s| StateHash::of(s).get()))
+        .filter_map(|i| p.state(i).map(|s| StateHash::of(&s).get()))
         .collect()
 }
