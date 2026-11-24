@@ -13,6 +13,30 @@ use crate::reserved::Reserved;
 use crate::state_enum::StateEnum;
 use crate::state_init::StateInit;
 
+/// Bytes converted per block by the primitive `encode_slice` overrides.
+const BLOCK: usize = 256;
+
+/// Writes `items` as consecutive `N`-byte little-endian encodings, a block
+/// of [`BLOCK`] bytes at a time: the same bytes as one `encode` per item,
+/// in fewer sink calls (#387).
+#[inline]
+fn encode_le_blocks<T: Copy, S: Sink, const N: usize>(
+    items: &[T],
+    out: &mut Encoder<S>,
+    le: impl Fn(T) -> [u8; N],
+) {
+    let mut block = [0u8; BLOCK];
+    for chunk in items.chunks(BLOCK / N) {
+        for (dst, &item) in block.as_chunks_mut::<N>().0.iter_mut().zip(chunk) {
+            *dst = le(item);
+        }
+        // `chunk.len() <= BLOCK / N`: the product is at most `BLOCK`.
+        if let Some(bytes) = chunk.len().checked_mul(N).and_then(|n| block.get(..n)) {
+            out.write_bytes(bytes);
+        }
+    }
+}
+
 macro_rules! canonical_int {
     ($($ty:ty),*) => {$(
         impl Canonical for $ty {
@@ -21,6 +45,11 @@ macro_rules! canonical_int {
             #[inline]
             fn encode<S: Sink>(&self, out: &mut Encoder<S>) {
                 out.write_bytes(&self.to_le_bytes());
+            }
+
+            #[inline]
+            fn encode_slice<S: Sink>(items: &[Self], out: &mut Encoder<S>) {
+                encode_le_blocks(items, out, <$ty>::to_le_bytes);
             }
 
             #[inline]
@@ -44,6 +73,12 @@ impl Canonical for f32 {
     #[inline]
     fn encode<S: Sink>(&self, out: &mut Encoder<S>) {
         out.write_bytes(&self.to_bits().to_le_bytes());
+    }
+
+    /// Float bits as they are (lossless, ADR-0029), a block at a time.
+    #[inline]
+    fn encode_slice<S: Sink>(items: &[Self], out: &mut Encoder<S>) {
+        encode_le_blocks(items, out, |v: f32| v.to_bits().to_le_bytes());
     }
 
     /// Rejects NaN; see [`decode_f32_allow_nan`].
@@ -70,6 +105,12 @@ impl Canonical for f64 {
     #[inline]
     fn encode<S: Sink>(&self, out: &mut Encoder<S>) {
         out.write_bytes(&self.to_bits().to_le_bytes());
+    }
+
+    /// Float bits as they are (lossless, ADR-0029), a block at a time.
+    #[inline]
+    fn encode_slice<S: Sink>(items: &[Self], out: &mut Encoder<S>) {
+        encode_le_blocks(items, out, |v: f64| v.to_bits().to_le_bytes());
     }
 
     /// Rejects NaN; see [`decode_f64_allow_nan`].
@@ -181,9 +222,13 @@ impl<T: Canonical + StateInit, const N: usize> Canonical for [T; N] {
 
     #[inline]
     fn encode<S: Sink>(&self, out: &mut Encoder<S>) {
-        for item in self {
-            item.encode(out);
-        }
+        T::encode_slice(self, out);
+    }
+
+    /// A slice of arrays is the flat slice of their elements, in order.
+    #[inline]
+    fn encode_slice<S: Sink>(items: &[Self], out: &mut Encoder<S>) {
+        T::encode_slice(items.as_flattened(), out);
     }
 
     #[inline]
