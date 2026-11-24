@@ -264,6 +264,42 @@ fn descriptor_matches(
     }
 }
 
+/// The identity of a host pool's replay file (ADR-0072): tier 0
+/// (cross-platform, no descriptor; host pools have no tier, ADR-0062),
+/// `config_hash` 0 (a host config need not be canonical), `record_len` 0
+/// (host snapshots do not exist yet, ADR-0073), the mask provider from
+/// `HostEnvironment::MASKS`, and the pool options as for any pool.
+#[cfg(all(feature = "host", feature = "replay"))]
+pub(crate) fn host_identity(
+    env_id: &'static str,
+    env_version: u32,
+    masks: bool,
+    options: &PoolOptions,
+) -> Identity {
+    let (illegal_kind, penalty_bits) = match (masks, options.illegal_action) {
+        (true, IllegalActionPolicy::Penalize(r)) => (1, r.to_bits()),
+        _ => (0, 0),
+    };
+    Identity {
+        tier: 0,
+        mask_provider: u8::from(masks),
+        auto_reset: match options.auto_reset {
+            AutoReset::NextStep => 0,
+            AutoReset::SameStep => 1,
+            AutoReset::Disabled => 2,
+        },
+        illegal_kind,
+        penalty_bits,
+        max_episode_steps: options
+            .max_episode_steps
+            .map_or(0, core::num::NonZeroU32::get),
+        env_version,
+        config_hash: 0,
+        record_len: 0,
+        env_id,
+    }
+}
+
 pub(crate) fn identity<E, M>(
     cfg: &E::Config,
     options: &PoolOptions,

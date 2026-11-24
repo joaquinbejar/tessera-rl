@@ -30,6 +30,29 @@
 //! - `Checkpoint`: ids, one `StateHash:u64` per id.
 //! - `Poisoned`: empty.
 //! - `End` (tag 0): the trailer of ADR-0072 section 2.
+//!
+//! # Host pool files
+//!
+//! A host pool's file (`host_protocol` 1, or 2 exactly for a refusing host,
+//! ADR-0070 item 10) has `flags = from_reset_only | outputs_hash`, since
+//! host snapshots (ADR-0073) do not exist yet. Its shared header fields:
+//! tier 0 with an empty descriptor (host pools have no tier, ADR-0062),
+//! `config_hash` 0 and an empty config (a host config need not be
+//! canonical), `record_len` 0 (no host records), the mask provider from
+//! `HostEnvironment::MASKS`, and the pool options as for any pool. Its
+//! first event is a `Reset` of every instance, made by the recorder; it has
+//! no `Keyframe`, `Checkpoint` or `StateWrite` events. Bodies:
+//!
+//! - `Reset`: as above, then `outputs_hash:u64` over the reset ids.
+//! - `Step`: as above, then `outputs_hash:u64`; for a refusing host then
+//!   `count:u32 (instance:u32 slot:u32 code:u32)*count`, sparse, in
+//!   (instance, slot) order, every code nonzero.
+//! - `Rejected` (notifying hosts only): `count:u32 discrete:i32*count
+//!   count:u32 continuous_bits:u32*count instance:u32 code:u32`.
+//!
+//! A poisoning call is logged with outputs hash 0 and no refusal rows, as
+//! a poisoned pool has no outputs. The outputs hash is defined in
+//! `outputs_hash.rs`.
 
 /// The first bytes of every replay file.
 pub const REPLAY_MAGIC: [u8; 8] = *b"TESRPLY\x1a";
@@ -64,7 +87,8 @@ pub enum EventTag {
     Reset = 1,
     /// A `step` call.
     Step = 2,
-    /// Reserved: a rejected call of a notifying host (ADR-0069).
+    /// A rejected call of a notifying host (ADR-0069 item 8); host files
+    /// only.
     Rejected = 3,
     /// A `restore`, `restore_all`, `import`, `fork` or `fork_branched` call.
     StateWrite = 4,
@@ -99,7 +123,8 @@ impl EventTag {
         })
     }
 
-    /// Whether this version reserves the tag without implementing it.
+    /// Whether the tag is reserved: `Adaptive` and `Recv` always, and
+    /// `Rejected` outside a notifying host's file.
     #[must_use]
     pub const fn is_reserved(self) -> bool {
         matches!(self, Self::Rejected | Self::Adaptive | Self::Recv)

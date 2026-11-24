@@ -25,6 +25,14 @@ pub enum DivergenceKind {
     BranchCounter,
     /// The validated import path refused a state-write keyframe.
     KeyframeRejected,
+    /// A recorded rejection replayed as an accepted call, or as a rejection
+    /// with another instance or code (ADR-0069 item 8); or a recorded
+    /// accepted call was rejected.
+    RejectionMismatch,
+    /// A stepped call's refusal rows differ (ADR-0070 item 9).
+    RefusalMismatch,
+    /// A call's outputs hash differs (ADR-0072 section 4).
+    OutputsMismatch,
 }
 
 /// Why a replay file could not be written, read or replayed.

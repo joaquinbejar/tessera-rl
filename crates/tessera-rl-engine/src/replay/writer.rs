@@ -451,13 +451,13 @@ where
 }
 
 /// An event's tag and length.
-const fn frame(tag: EventTag, len: u32) -> [u8; 5] {
+pub(super) const fn frame(tag: EventTag, len: u32) -> [u8; 5] {
     let [a, b, c, d] = len.to_le_bytes();
     [tag as u8, a, b, c, d]
 }
 
 /// Appends the `Reseed` variant and its seeds.
-fn push_reseed(out: &mut Vec<u8>, reseed: Reseed<'_>) -> Result<(), ReplayError> {
+pub(super) fn push_reseed(out: &mut Vec<u8>, reseed: Reseed<'_>) -> Result<(), ReplayError> {
     match reseed {
         Reseed::Keep => out.push(0),
         Reseed::Base(seed) => {

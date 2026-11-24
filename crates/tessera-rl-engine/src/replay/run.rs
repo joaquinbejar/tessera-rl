@@ -87,7 +87,12 @@ impl Replay<'_> {
     /// is no decoder from canonical config bytes yet, so this takes a pool the
     /// caller built and checks it against the header instead: identity
     /// fields (ADR-0011), the canonical config bytes, the instance count and
-    /// the action layout. The execution mode is free.
+    /// the action layout. The execution mode is free. A caller-built pool is
+    /// a staged step; rebuilding from the header is issue #377.
+    ///
+    /// Known gap: ADR-0072 section 8 says replay streams events. This reads
+    /// them from the slice given to [`Replay::open`], so the whole file is
+    /// held in memory.
     ///
     /// On a divergence the pool is left as the replay left it, for
     /// inspection.
@@ -143,6 +148,9 @@ impl Replay<'_> {
         let incompatible = |field: &'static str| -> Result<(), ReplayError> {
             Err(PersistError::Incompatible { field }.into())
         };
+        if self.header.host.is_some() {
+            return incompatible("host_protocol");
+        }
         self.file.check_against(
             &identity::<E, M>(&pool.cfg, &pool.options)?,
             E::TIER,
@@ -209,7 +217,7 @@ impl Replay<'_> {
             }
         }
         match event {
-            Event::Reset { ids, reseed } => {
+            Event::Reset { ids, reseed, .. } => {
                 let result = match &ids {
                     Ids::All => pool.reset_all(reseed.as_reseed()).map(|_| ()),
                     Ids::List(ids) => pool.reset(ids, reseed.as_reseed()).map(|_| ()),
@@ -220,6 +228,7 @@ impl Replay<'_> {
                 ids,
                 discrete,
                 continuous_bits,
+                ..
             } => {
                 if ids != Ids::All {
                     return Err(ReplayError::Unsupported {
@@ -265,6 +274,7 @@ impl Replay<'_> {
                 st.summary.checkpoints = st.summary.checkpoints.saturating_add(1);
                 Ok(())
             }
+            Event::Rejected { .. } => Err(malformed("a Rejected event in a first-party file")),
             Event::Poisoned => match st.last_call {
                 Some(call) => Err(st.diverged(call, DivergenceKind::NotPoisoned, None)),
                 None => Err(malformed("Poisoned before any call")),

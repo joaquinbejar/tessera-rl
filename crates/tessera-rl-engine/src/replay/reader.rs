@@ -65,6 +65,8 @@ pub enum Event<'a> {
         ids: Ids,
         /// The reseed argument.
         reseed: RecordedReseed,
+        /// The outputs hash of the call, in files that carry one.
+        outputs_hash: Option<u64>,
     },
     /// A `step` call.
     Step {
@@ -74,6 +76,22 @@ pub enum Event<'a> {
         discrete: Vec<i32>,
         /// The continuous actions as submitted, as bits.
         continuous_bits: Vec<u32>,
+        /// The outputs hash of the call, in files that carry one.
+        outputs_hash: Option<u64>,
+        /// The refused agents of the call, for a refusing host (ADR-0070
+        /// item 9); empty otherwise.
+        refusals: Vec<RefusalRow>,
+    },
+    /// A whole-call rejection of a notifying host (ADR-0069 item 8).
+    Rejected {
+        /// The full joint action of the call.
+        discrete: Vec<i32>,
+        /// The continuous actions, as bits.
+        continuous_bits: Vec<u32>,
+        /// The reported instance.
+        instance: u32,
+        /// The environment's code.
+        code: u32,
     },
     /// A state write; a keyframe of `ids` follows.
     StateWrite {
@@ -105,6 +123,28 @@ pub enum Event<'a> {
     Poisoned,
 }
 
+/// One refused agent of a stepped call (ADR-0070 item 9).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RefusalRow {
+    /// The instance.
+    pub instance: u32,
+    /// The agent slot.
+    pub slot: u32,
+    /// The refuse code.
+    pub code: u32,
+}
+
+/// The host fields of a host pool's replay header.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HostInfo {
+    /// The host protocol: 1, or 2 for a refusing host.
+    pub host_protocol: u8,
+    /// `HostEnvironment::NOTIFIES_REJECTION`.
+    pub notifies: bool,
+    /// `HostEnvironment::REFUSES_AGENTS`.
+    pub refuses: bool,
+}
+
 /// The replay extension of the header, after the ADR-0011 fields.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ReplayHeader<'a> {
@@ -120,6 +160,9 @@ pub struct ReplayHeader<'a> {
     pub discrete_heads: u32,
     /// Continuous action heads per agent.
     pub continuous_heads: u32,
+    /// `Some` for a host pool's file: `from_reset_only`, with outputs
+    /// hashes.
+    pub host: Option<HostInfo>,
 }
 
 /// An opened replay file: header, framing and trailer checked.
@@ -146,6 +189,9 @@ impl<'a> Replay<'a> {
     /// checksum and fields, the limits, every event frame and tag, and the
     /// trailer's count and checksum. Event bodies are parsed later, by
     /// [`Replay::events`].
+    ///
+    /// Known gap: the whole file is held in memory as `bytes`; it is not
+    /// streamed from a reader as ADR-0072 section 8 says.
     ///
     /// # Errors
     ///
@@ -196,7 +242,7 @@ impl<'a> Replay<'a> {
             return Err(ReplayError::HeaderChecksum);
         }
         file.check_fields()?;
-        check_replay_fields(flags, host_protocol, notifies, refuses)?;
+        let host = check_replay_fields(flags, host_protocol, notifies, refuses)?;
         if file.count == 0 {
             return Err(PersistError::InvalidField {
                 field: "instance_count",
@@ -217,8 +263,9 @@ impl<'a> Replay<'a> {
             agents,
             discrete_heads,
             continuous_heads,
+            host,
         };
-        let (events, event_count) = scan(r.0)?;
+        let (events, event_count) = scan(r.0, host)?;
         Ok(Self {
             file,
             header,
@@ -249,6 +296,7 @@ impl<'a> Replay<'a> {
             index: 0,
             num_envs: self.header.num_envs,
             record_len: self.header.record_len,
+            host: self.header.host,
             input_len: self.input_len,
             limits: self.limits,
         }
@@ -260,8 +308,8 @@ fn check_replay_fields(
     host_protocol: u8,
     notifies: u8,
     refuses: u8,
-) -> Result<(), ReplayError> {
-    let invalid = |field: &'static str| -> Result<(), ReplayError> {
+) -> Result<Option<HostInfo>, ReplayError> {
+    let invalid = |field: &'static str| -> Result<Option<HostInfo>, ReplayError> {
         Err(PersistError::InvalidField { field }.into())
     };
     if flags & !(FLAG_FROM_RESET_ONLY | FLAG_OUTPUTS_HASH) != 0 {
@@ -273,27 +321,46 @@ fn check_replay_fields(
     if refuses > 1 {
         return invalid("refuses_agents");
     }
-    if flags & FLAG_FROM_RESET_ONLY != 0 {
+    if host_protocol == 0 {
+        if notifies != 0 || refuses != 0 {
+            return invalid("host fields of a first-party file");
+        }
+        if flags & FLAG_FROM_RESET_ONLY != 0 {
+            return Err(ReplayError::Unsupported {
+                feature: "from_reset_only first-party replay files",
+            });
+        }
+        if flags & FLAG_OUTPUTS_HASH != 0 {
+            return Err(ReplayError::Unsupported {
+                feature: "outputs hashes in first-party replay files",
+            });
+        }
+        return Ok(None);
+    }
+    if host_protocol > 2 {
+        return invalid("host_protocol");
+    }
+    // ADR-0070 item 10: protocol 2 exactly for a refusing host.
+    if (refuses == 1) != (host_protocol == 2) {
+        return invalid("refuses_agents");
+    }
+    // Host snapshots (ADR-0073) do not exist yet: every host file starts
+    // from a reset and carries outputs hashes (ADR-0072 section 4).
+    if flags != FLAG_FROM_RESET_ONLY | FLAG_OUTPUTS_HASH {
         return Err(ReplayError::Unsupported {
-            feature: "from_reset_only replay files",
+            feature: "host replay files with keyframes or without outputs hashes",
         });
     }
-    if flags & FLAG_OUTPUTS_HASH != 0 {
-        return Err(ReplayError::Unsupported {
-            feature: "outputs hashes",
-        });
-    }
-    if host_protocol != 0 || notifies != 0 || refuses != 0 {
-        return Err(ReplayError::Unsupported {
-            feature: "host pool replays",
-        });
-    }
-    Ok(())
+    Ok(Some(HostInfo {
+        host_protocol,
+        notifies: notifies == 1,
+        refuses: refuses == 1,
+    }))
 }
 
 /// Checks every frame, tag and the trailer; returns the event bytes before
 /// the end event and their count. Allocates nothing.
-fn scan(bytes: &[u8]) -> Result<(&[u8], u64), ReplayError> {
+fn scan(bytes: &[u8], host: Option<HostInfo>) -> Result<(&[u8], u64), ReplayError> {
     let mut rest = bytes;
     let mut count: u64 = 0;
     loop {
@@ -304,15 +371,7 @@ fn scan(bytes: &[u8]) -> Result<(&[u8], u64), ReplayError> {
             <[u8; FRAME_LEN]>::try_from(frame).map_err(|_| ReplayError::MissingEnd)?;
         let len = u32::from_le_bytes([l0, l1, l2, l3]);
         let tag = EventTag::from_u8(tag).ok_or(ReplayError::UnknownTag { tag })?;
-        if tag.is_reserved() {
-            return Err(ReplayError::ReservedTag { tag: tag as u8 });
-        }
-        if count == 0 && tag != EventTag::Keyframe {
-            return Err(ReplayError::Malformed {
-                event_index: 0,
-                field: "first event (a keyframe of every instance)",
-            });
-        }
+        check_tag(tag, host, count)?;
         let body_len = usize::try_from(len).map_err(|_| PersistError::Truncated)?;
         let (body, after) = tail
             .split_at_checked(body_len)
@@ -351,6 +410,38 @@ fn scan(bytes: &[u8]) -> Result<(&[u8], u64), ReplayError> {
     }
 }
 
+/// Which tags a file may hold: reserved tags never; `Rejected` only in a
+/// notifying host's file; keyframes, checkpoints and state writes never in a
+/// host file. The first event is a keyframe, or a reset for a host file.
+fn check_tag(tag: EventTag, host: Option<HostInfo>, count: u64) -> Result<(), ReplayError> {
+    let notifies = host.is_some_and(|h| h.notifies);
+    if tag.is_reserved() && !(tag == EventTag::Rejected && notifies) {
+        return Err(ReplayError::ReservedTag { tag: tag as u8 });
+    }
+    if host.is_some()
+        && matches!(
+            tag,
+            EventTag::Keyframe | EventTag::Checkpoint | EventTag::StateWrite
+        )
+    {
+        return Err(ReplayError::Unsupported {
+            feature: "keyframes, checkpoints and state writes in host replay files",
+        });
+    }
+    let first = if host.is_some() {
+        EventTag::Reset
+    } else {
+        EventTag::Keyframe
+    };
+    if count == 0 && tag != first {
+        return Err(ReplayError::Malformed {
+            event_index: 0,
+            field: "first event (a keyframe, or a host file's reset, of every instance)",
+        });
+    }
+    Ok(())
+}
+
 /// The events of a [`Replay`], parsed one at a time.
 #[derive(Debug, Clone)]
 pub struct Events<'a> {
@@ -358,6 +449,7 @@ pub struct Events<'a> {
     index: u64,
     num_envs: u32,
     record_len: u32,
+    host: Option<HostInfo>,
     input_len: u64,
     limits: DecodeLimits,
 }
@@ -402,24 +494,42 @@ impl<'a> Events<'a> {
             EventTag::Reset => {
                 let ids = self.ids(&mut b)?;
                 let reseed = reseed(&mut b)?;
-                Event::Reset { ids, reseed }
+                let outputs_hash = self.outputs_hash(&mut b)?;
+                Event::Reset {
+                    ids,
+                    reseed,
+                    outputs_hash,
+                }
             }
             EventTag::Step => {
                 let ids = self.ids(&mut b)?;
-                let n = b.count(4, "discrete actions")?;
-                let mut discrete = alloc(n)?;
-                for _ in 0..n {
-                    discrete.push(b.u32("discrete actions")?.cast_signed());
-                }
-                let n = b.count(4, "continuous actions")?;
-                let mut continuous_bits = alloc(n)?;
-                for _ in 0..n {
-                    continuous_bits.push(b.u32("continuous actions")?);
-                }
+                let (discrete, continuous_bits) = joint_action(&mut b)?;
+                let outputs_hash = self.outputs_hash(&mut b)?;
+                let refusals = if self.host.is_some_and(|h| h.refuses) {
+                    self.refusals(&mut b)?
+                } else {
+                    Vec::new()
+                };
                 Event::Step {
                     ids,
                     discrete,
                     continuous_bits,
+                    outputs_hash,
+                    refusals,
+                }
+            }
+            EventTag::Rejected => {
+                let (discrete, continuous_bits) = joint_action(&mut b)?;
+                let instance = b.u32("rejected instance")?;
+                if instance >= self.num_envs {
+                    return Err(b.malformed("rejected instance"));
+                }
+                let code = b.u32("rejected code")?;
+                Event::Rejected {
+                    discrete,
+                    continuous_bits,
+                    instance,
+                    code,
                 }
             }
             EventTag::StateWrite => {
@@ -459,7 +569,7 @@ impl<'a> Events<'a> {
                 Event::Checkpoint { ids, hashes }
             }
             EventTag::Poisoned => Event::Poisoned,
-            EventTag::End | EventTag::Rejected | EventTag::Adaptive | EventTag::Recv => {
+            EventTag::End | EventTag::Adaptive | EventTag::Recv => {
                 return Err(ReplayError::ReservedTag { tag: tag as u8 });
             }
         };
@@ -487,6 +597,35 @@ impl<'a> Events<'a> {
             }
             _ => Err(b.malformed("ids")),
         }
+    }
+
+    fn outputs_hash(&self, b: &mut Body<'_>) -> Result<Option<u64>, ReplayError> {
+        if self.host.is_some() {
+            Ok(Some(b.u64("outputs hash")?))
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Sparse rows, in (instance, slot) order, each code nonzero.
+    fn refusals(&self, b: &mut Body<'_>) -> Result<Vec<RefusalRow>, ReplayError> {
+        let n = b.count(12, "refusal rows")?;
+        let mut rows: Vec<RefusalRow> = alloc(n)?;
+        for _ in 0..n {
+            let row = RefusalRow {
+                instance: b.u32("refusal rows")?,
+                slot: b.u32("refusal rows")?,
+                code: b.u32("refusal rows")?,
+            };
+            let ordered = rows
+                .last()
+                .is_none_or(|p| (p.instance, p.slot) < (row.instance, row.slot));
+            if row.instance >= self.num_envs || row.code == 0 || !ordered {
+                return Err(b.malformed("refusal rows"));
+            }
+            rows.push(row);
+        }
+        Ok(rows)
     }
 
     fn len_of(&self, ids: &Ids) -> Result<usize, ReplayError> {
@@ -525,6 +664,21 @@ fn reseed(b: &mut Body<'_>) -> Result<RecordedReseed, ReplayError> {
         }
         _ => return Err(b.malformed("reseed")),
     })
+}
+
+/// A joint action: discrete `i32`s, then continuous bits.
+fn joint_action(b: &mut Body<'_>) -> Result<(Vec<i32>, Vec<u32>), ReplayError> {
+    let n = b.count(4, "discrete actions")?;
+    let mut discrete = alloc(n)?;
+    for _ in 0..n {
+        discrete.push(b.u32("discrete actions")?.cast_signed());
+    }
+    let n = b.count(4, "continuous actions")?;
+    let mut continuous_bits = alloc(n)?;
+    for _ in 0..n {
+        continuous_bits.push(b.u32("continuous actions")?);
+    }
+    Ok((discrete, continuous_bits))
 }
 
 fn alloc<T>(n: usize) -> Result<Vec<T>, ReplayError> {

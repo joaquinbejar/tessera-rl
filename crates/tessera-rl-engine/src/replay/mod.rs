@@ -12,19 +12,29 @@
 //! persisted snapshot (SPEC 9.3, ADR-0035). The checksums detect accidents;
 //! they are not authentication.
 //!
-//! This implementation covers first-party [`EnvPool`](crate::EnvPool)s.
-//! Host pools, `Rejected` events, refusal rows, outputs hashes, Async `Recv`
-//! events and adaptive-config events are reserved in the format and refused
-//! on read with a typed error.
+//! First-party [`EnvPool`](crate::EnvPool)s get keyframes and checkpoints.
+//! Host pools (with the `host` feature) get `from_reset_only` files with
+//! outputs hashes, `Rejected` events (ADR-0069) and refusal rows (ADR-0070),
+//! since host snapshots (ADR-0073) do not exist yet. Async `Recv` events and
+//! adaptive-config events are reserved and refused on read with a typed
+//! error.
 
 mod error;
 mod format;
+#[cfg(feature = "host")]
+mod host_run;
+#[cfg(feature = "host")]
+mod host_writer;
+#[cfg(feature = "host")]
+mod outputs_hash;
 mod reader;
 mod run;
 mod writer;
 
 pub use error::{DivergenceKind, ReplayError};
 pub use format::{EventTag, FORMAT_VERSION, REPLAY_MAGIC, StateWriteOp};
-pub use reader::{Event, Events, Ids, RecordedReseed, Replay, ReplayHeader};
+#[cfg(feature = "host")]
+pub use host_writer::HostRecorder;
+pub use reader::{Event, Events, HostInfo, Ids, RecordedReseed, RefusalRow, Replay, ReplayHeader};
 pub use run::ReplaySummary;
 pub use writer::{Recorder, ReplayWriterOptions};
