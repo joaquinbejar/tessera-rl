@@ -16,6 +16,10 @@ use crate::pending::PendingQueue;
 
 /// Fills of one step kept for the `trades` observation leaf.
 pub const MAX_TRADES: usize = 16;
+/// Steps of mid history kept.
+pub const MID_RING: usize = 8;
+/// Steps of order id marks kept.
+pub const SEQ_RING: usize = 32;
 
 /// One fill of this step, as every agent sees it: anonymous.
 #[derive(EnvState, Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
@@ -59,6 +63,18 @@ pub struct LobState {
     pub trade_count: u32,
     /// The fundamental at reset: the reference price before any trade.
     pub reset_price: u32,
+    /// The mid after each of the last [`MID_RING`] steps, at index
+    /// `step % MID_RING` (the momentum baseline's history; public).
+    pub mids: [u32; MID_RING],
+    /// The book's next order id at the start of each of the last
+    /// [`SEQ_RING`] steps, at index `step % SEQ_RING`: an order with a
+    /// lower id rested before that step (the market maker's quote age).
+    pub seq_marks: [u32; SEQ_RING],
+    /// Each used slot's private signal of the fundamental, drawn from
+    /// `StepRng` at reset and every step: the fundamental plus a uniform
+    /// noise in `[-noise, +noise]` ticks. Part of the state so that an
+    /// agent's information state holds it (design section 3).
+    pub signal: [i32; MAX_AGENTS],
     /// Whether each slot is alive (bankruptcy ends a slot).
     pub alive: [Bool8; MAX_AGENTS],
     /// The mid at the end of the previous step (the initial price at

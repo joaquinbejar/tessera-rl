@@ -190,6 +190,16 @@ impl PendingQueue {
             })
     }
 
+    /// Rewrites the owner of every queued item, in pool index order, to
+    /// `owner(item)`. Everything else, arrival order included, is
+    /// unchanged.
+    #[inline]
+    pub fn set_owners(&mut self, mut owner: impl FnMut(&Pending) -> u8) {
+        for (_, p) in self.items.iter_mut() {
+            p.owner = owner(p);
+        }
+    }
+
     /// Drops every item of `owner` (bankruptcy); returns how many.
     #[inline]
     pub fn drop_owner(&mut self, owner: u8) -> usize {

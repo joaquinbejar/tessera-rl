@@ -8,16 +8,18 @@
 //! 1. Every alive agent's action is decoded against the state at the start
 //!    of the step (the state its mask described); an illegal action is a
 //!    no-op ([`crate::actions`]).
-//! 2. The fundamental takes one step of its random walk (`StepRng`).
+//! 2. The fundamental takes one step of its random walk (`StepRng`), and
+//!    every used slot draws its private signal of it (`StepRng`).
 //! 3. Queued items whose delay has elapsed are applied, in arrival order.
 //! 4. The alive slots are put in a Fisher-Yates permutation drawn from
 //!    `StepRng`, never slot order; in that order each agent's order or
 //!    cancel is applied now (`latency = 0`) or queued for `latency` steps.
 //! 5. With bankruptcy enabled, an agent whose equity marked at the mid is
 //!    below `-bankrupt` loses its orders and queued items and dies.
-//! 6. On the last step (`steps`), every inventory of an agent alive at the
-//!    start of the step is settled at the fundamental and the episode is
-//!    truncated.
+//! 6. On the last step (`steps`), the market closes: every resting order
+//!    is cancelled and every queued item dropped, then every inventory of
+//!    an agent alive at the start of the step is settled at the
+//!    fundamental and the episode is truncated.
 //! 7. Each agent alive at the start of the step is rewarded its equity
 //!    change marked at the mid ([`LobState::mark`]), scaled by
 //!    `2^-reward_shift`. Settlement comes first, so the last step's reward
@@ -52,7 +54,7 @@ use crate::observe::{self, LobObs};
 use crate::order::Kind;
 use crate::pending::Pending;
 use crate::reward::scaled;
-use crate::state::{LobState, MAX_TRADES, Trade};
+use crate::state::{LobState, MAX_TRADES, MID_RING, SEQ_RING, Trade};
 
 /// Versioned environment id (ADR-0023).
 pub const ENV_ID: &str = "tessera/LimitOrderBook-v1";
@@ -223,6 +225,28 @@ fn reward(
     }
 }
 
+/// The index of `step` in a ring of `len` entries.
+pub(crate) fn ring(step: u32, len: usize) -> usize {
+    usize::try_from(step).map_or(0, |s| s % len.max(1))
+}
+
+/// Draws the private signal of every used slot: the fundamental plus a
+/// uniform noise in `[-noise, +noise]`, one `StepRng` draw per slot in slot
+/// order (dead slots too, so the draw count depends on the config only).
+fn draw_signals(cfg: &LobConfig, state: &mut LobState, rng: &mut StepRng) {
+    let width = cfg
+        .noise
+        .checked_mul(2)
+        .and_then(|w| w.checked_add(1))
+        .and_then(NonZeroU32::new);
+    let fundamental = i64::from(state.fundamental);
+    for signal in state.signal.iter_mut().take(cfg.agent_count()) {
+        let noise = width.map_or(0, |w| i64::from(rng.below_u32(w)) - i64::from(cfg.noise));
+        // At most 2^16 + 64: fits i32.
+        *signal = i32::try_from(fundamental + noise).unwrap_or(0);
+    }
+}
+
 impl Environment for LimitOrderBook {
     /// Parallel natively and AEC through cycle buffering (SPEC 12, ADR-0080).
     const ADAPTERS: Adapters = Adapters::PZ_PARALLEL.union(Adapters::PZ_AEC);
@@ -251,7 +275,7 @@ impl Environment for LimitOrderBook {
         cfg.agent_count()
     }
 
-    fn reset(cfg: &LobConfig, _: &mut StepRng, state: &mut LobState) {
+    fn reset(cfg: &LobConfig, rng: &mut StepRng, state: &mut LobState) {
         let n = cfg.agent_count();
         *state = LobState::default();
         for slot in 0..n {
@@ -268,6 +292,8 @@ impl Environment for LimitOrderBook {
         state.fundamental = cfg.initial_price;
         state.reset_price = cfg.initial_price;
         state.last_mid = cfg.initial_price;
+        state.mids = [cfg.initial_price; MID_RING];
+        draw_signals(cfg, state, rng);
     }
 
     fn step(
@@ -290,8 +316,12 @@ impl Environment for LimitOrderBook {
         }
         // The step being played, 1-based; `steps <= 4096` by config.
         let now = state.step + 1;
-        // 2. The fundamental.
+        if let Some(mark) = state.seq_marks.get_mut(ring(now, SEQ_RING)) {
+            *mark = state.book.next_seq();
+        }
+        // 2. The fundamental, then every used slot's private signal of it.
         state.fundamental = RandomWalk::new(cfg).step(state.fundamental, rng);
+        draw_signals(cfg, state, rng);
         state.trades = [Trade::default(); MAX_TRADES];
         state.trade_count = 0;
         let mut fills = Fills::new();
@@ -323,9 +353,14 @@ impl Environment for LimitOrderBook {
             settle(state, &was_alive);
         }
         reward(cfg, state, &was_alive, out);
-        // 8. The mid the next step falls back to.
-        state.last_mid = state.touch().mid;
+        // 8. The mid the next step falls back to, also kept in the
+        // momentum history.
+        let mid = state.touch().mid;
+        state.last_mid = mid;
         state.step = now;
+        if let Some(m) = state.mids.get_mut(ring(now, MID_RING)) {
+            *m = mid;
+        }
         let alive = (0..n).filter(|&s| state.is_alive(s)).count();
         if last {
             out.end_episode(EpisodeEnd::Truncated);
@@ -387,6 +422,14 @@ impl Validate for LimitOrderBook {
         // fundamental only), and so does any mid of the book.
         if reset && (s.last_mid == 0 || s.last_mid > cfg.max_tick) {
             return violation("a last mid outside [1, max_tick]");
+        }
+        let noise = i64::from(cfg.noise);
+        for (slot, &signal) in s.signal.iter().enumerate() {
+            let used = reset && slot < n;
+            let off = i64::from(signal) - i64::from(s.fundamental);
+            if (used && off.abs() > noise) || (!used && signal != 0) {
+                return violation("a signal outside the fundamental's noise band");
+            }
         }
         if s.last_trade > cfg.max_tick {
             return violation("a last trade above max_tick");

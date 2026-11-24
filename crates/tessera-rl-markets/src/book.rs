@@ -479,6 +479,17 @@ impl Book {
         self.orders.remove(index)
     }
 
+    /// Rewrites the owner of every resting order, in pool index order, to
+    /// `owner(order)`. Prices, sizes, ids and priority are unchanged. Used
+    /// to anonymize an information state and to determinize one; the
+    /// caller keeps the per-owner limits.
+    #[inline]
+    pub fn set_owners(&mut self, mut owner: impl FnMut(&Order) -> u8) {
+        for (_, o) in self.orders.iter_mut() {
+            o.owner = owner(o);
+        }
+    }
+
     /// Cancels every resting order of `owner` (bankruptcy); returns how
     /// many.
     #[inline]
