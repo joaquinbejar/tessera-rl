@@ -16,7 +16,7 @@ use tessera_rl_classic::{
     GatherConfig, Grid, GridConfig, KeyDoor, KeyDoorConfig, MountainCar, MountainCarConfig,
     PaddleDuel, PaddleDuelConfig, Pendulum, PendulumConfig, Snake, SnakeConfig, Tag, TagConfig,
 };
-use tessera_rl_engine::{ActionInput, EnvPool, Masked, NoMasks, PoolOptions, Reseed};
+use tessera_rl_engine::{ActionInput, EnvPool, Masked, NoMasks, PolicyMap, PoolOptions, Reseed};
 use tessera_rl_num::identity::Seed;
 
 const N: u32 = 1024;
@@ -44,6 +44,45 @@ fn bench_gather(
             black_box(out.rewards());
         });
     });
+}
+
+/// The cost of the policy map (ADR-0079): `heuristic_none` (no map) and
+/// `heuristic_map_learner_only` (an explicit map, every slot a learner)
+/// take the same step path, one branch per chunk; `tag_heuristic_slot` makes
+/// Tag's last evader a heuristic slot, whose pass runs once per chunk.
+fn bench_policy_map(
+    group: &mut criterion::BenchmarkGroup<'_, criterion::measurement::WallTime>,
+    actions: &[i32],
+) {
+    let cfg = TagConfig::default;
+    let last = cfg().agents() - 1;
+    let none = EnvPool::<Tag, Masked>::with_masks(cfg(), options()).unwrap();
+    let learner_only = EnvPool::<Tag, Masked>::with_masks(cfg(), options())
+        .unwrap()
+        .with_policy_map(PolicyMap::new(tessera_rl_classic::tag::MAX_AGENTS))
+        .unwrap();
+    let heuristic = EnvPool::<Tag, Masked>::with_masks(cfg(), options())
+        .unwrap()
+        .with_info_heuristic_slots(&[last])
+        .unwrap();
+    for (name, mut pool) in [
+        ("heuristic_none", none),
+        ("heuristic_map_learner_only", learner_only),
+        ("tag_heuristic_slot", heuristic),
+    ] {
+        pool.reset_all(Reseed::Keep).unwrap();
+        group.bench_function(name, |b| {
+            b.iter(|| {
+                let out = pool
+                    .step(ActionInput {
+                        discrete: actions,
+                        continuous: &[],
+                    })
+                    .unwrap();
+                black_box(out.rewards());
+            });
+        });
+    }
 }
 
 fn bench(c: &mut Criterion) {
@@ -103,6 +142,7 @@ fn bench(c: &mut Criterion) {
         });
     });
     bench_gather(&mut group, &grid_actions);
+    bench_policy_map(&mut group, &tag_actions);
     // Key and door: a seeded policy over each row's mask, so agents move, take
     // the key and open doors; the step limit forces a reset every 32 steps, each
     // generating a new world. The policy's own cost is part of the figure.

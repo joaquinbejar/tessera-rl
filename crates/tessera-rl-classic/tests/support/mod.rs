@@ -150,6 +150,10 @@ where
     const ENV_ID: &'static str;
     /// Version.
     const ENV_VERSION: u32;
+    /// The action generator's identifier: [`ACTIONS_GEN`], unless the
+    /// environment's scripted baseline changed since its fixtures were
+    /// blessed (a generator migration, `TESSERA_BLESS_REASON=generator`).
+    const ACTIONS: &'static str = ACTIONS_GEN;
 }
 
 /// splitmix64 (the generator's mixer; independent of the engine RNG).
@@ -497,7 +501,7 @@ where
         format!("env_version={}", E::ENV_VERSION),
         format!("config_hash={hash:016x}"),
         format!("math_version={MATH_VERSION}"),
-        format!("actions={ACTIONS_GEN}"),
+        format!("actions={}", E::ACTIONS),
         format!("seed={}", s.seed),
         format!("num_envs={}", s.num_envs),
         format!("chunk={}", s.chunk),

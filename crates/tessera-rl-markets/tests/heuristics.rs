@@ -128,3 +128,34 @@ fn test_heuristics_default_mix_through_heuristic_act_is_legal() {
     });
     assert!(active > 0);
 }
+
+/// `InfoHeuristic::act_info` (ADR-0079 item 4.2) plays the default mix:
+/// with the same RNG it writes what `Heuristic::act` writes, on every state
+/// of a game.
+#[test]
+fn test_heuristics_info_heuristic_equals_heuristic_act() {
+    use tessera_rl_core::InfoHeuristic;
+    let active = play(&cfg(), 4, |cfg, state, agent, rng| {
+        let mut twin = rng.clone();
+        let mut h = [0i32; HEADS];
+        LimitOrderBook::act(
+            cfg,
+            state,
+            agent,
+            rng,
+            &mut ActionWriter::new(&mut h, &mut []),
+        );
+        let info = LimitOrderBook::info_state(cfg, state, agent);
+        let mut g = [0i32; HEADS];
+        <LimitOrderBook as InfoHeuristic>::act_info(
+            cfg,
+            &info,
+            agent,
+            &mut twin,
+            &mut ActionWriter::new(&mut g, &mut []),
+        );
+        assert_eq!(h, g);
+        h
+    });
+    assert!(active > 0);
+}

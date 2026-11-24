@@ -48,12 +48,21 @@ stay in ``agents``). Native AEC refuses a spawning environment
 Observations are dicts of the environment's leaves plus ``action_mask``
 (``int8``, one entry per action).
 
+Policy maps (ADR-0079): every first-party agent's ``infos`` carry its
+``"policy_group"`` (``"learner"``, ``"external"``, ``"heuristic"`` or
+``"privileged_heuristic"``). ``parallel_env(..., agents="learner")`` hides the
+heuristic slots from ``agents``, ``possible_agents`` and the step dicts (the
+engine plays them); their rewards stay in each visible agent's
+``infos["heuristic_rewards"]``, by agent name. Native AEC refuses
+``agents="learner"`` (``CapabilityError``).
+
 An environment with several discrete heads (``MultiDiscrete``, the RTS:
 three heads per unit slot) has ``MultiDiscrete(nvec)`` as its action
 space, and an action is one integer per head. Its heads are conditional,
 which a Gymnasium ``MultiDiscrete`` mask (one independent mask per
 component) cannot express, so its observations carry no ``action_mask``.
-The masks are in ``infos[agent]``, and nothing else is (SPEC 11.3):
+The masks are in ``infos[agent]``, beside only the agent's policy group
+(SPEC 11.3, ADR-0079):
 
 - ``"action_masks"`` holds the exact masks: every head's mask, one array per
   head of an entity group in the shapes of ``tessera_rl.masks``
@@ -246,6 +255,23 @@ def relaxed_masks(row, mask_heads) -> tuple[np.ndarray, ...]:
     return tuple(out)
 
 
+#: The groups whose actions the engine computes (ADR-0079).
+_HEURISTIC_GROUPS = frozenset({"heuristic", "privileged_heuristic"})
+
+
+def _agents_option(agents: str | int, kwargs: dict) -> bool:
+    """Whether ``agents`` asks to hide heuristic slots: ``"all"`` (the
+    default, every agent) or ``"learner"`` (ADR-0079 item 5.2). An integer
+    is an environment's own ``agents`` configuration key (Snake, KeyDoor,
+    PaddleDuel) and is passed through to ``kwargs`` unchanged."""
+    if isinstance(agents, int):
+        kwargs["agents"] = agents
+        return False
+    if agents not in ("all", "learner"):
+        raise _native.ArgumentError(f'agents must be "all" or "learner", not {agents!r}')
+    return agents == "learner"
+
+
 def agent_name(slot: int, generation: int) -> str:
     """The PettingZoo name of the agent (slot, generation) (ADR-0013)."""
     return f"agent_{slot}" if generation == 0 else f"agent_{slot}_g{generation}"
@@ -268,6 +294,12 @@ class _Agents:
         #: Whether the host environment refuses agents (ADR-0070): every
         #: agent's infos then carry ``refused`` and ``refuse_code``.
         self.refuses = bool(layout.get("refuses_agents", False))
+        #: The policy group of each slot (ADR-0079); empty for a host
+        #: environment, which has no policy map.
+        self.groups: tuple[str, ...] = tuple(layout.get("policy_groups", ()))
+        #: Whether heuristic slots are hidden from the agent lists
+        #: (``agents="learner"``).
+        self.learner_only = False
         leaves = {}
         # Set masks (ADR-0082 point 6): the last leaf of each set, exposed as
         # ``MultiBinary`` with ``int8`` 0/1 values, as ``action_mask``.
@@ -318,7 +350,24 @@ class _Agents:
             info = {"action_mask": relaxed, "action_masks": heads}
         if self.refuses:
             info.update(self.refusal(slot))
+        if self.groups:
+            info["policy_group"] = self.groups[slot]
         return info
+
+    def hidden(self, slot: int) -> bool:
+        """Whether agent ``slot`` is hidden: a heuristic slot under
+        ``agents="learner"`` (ADR-0079 item 5.2)."""
+        return self.learner_only and slot < len(self.groups) and self.groups[slot] in _HEURISTIC_GROUPS
+
+    def heuristic_rewards(self) -> dict[str, float]:
+        """The last step's rewards of the hidden slots, by agent name, for
+        the visible agents' infos."""
+        step = self.last
+        return {
+            agent_name(slot, int(step.slot_generations[0, slot])): float(step.rewards[0, slot])
+            for slot in range(len(self.groups))
+            if self.hidden(slot)
+        }
 
     def refusal(self, slot: int) -> dict:
         """``refused`` and ``refuse_code`` of agent ``slot`` in the last
@@ -389,9 +438,20 @@ class TesseraParallelEnv(ParallelEnv):
 
     metadata = {"render_modes": [], "name": "tessera", "is_parallelizable": True}
 
-    def __init__(self, env_id: str, seed: int | None = None, *, _pool=None, render_mode: str | None = None, **kwargs):
+    def __init__(
+        self,
+        env_id: str,
+        seed: int | None = None,
+        *,
+        _pool=None,
+        render_mode: str | None = None,
+        agents: str | int = "all",
+        **kwargs,
+    ):
+        learner_only = _agents_option(agents, kwargs)
         pool = _pool if _pool is not None else _native_pool(env_id, "parallel", seed, kwargs)
         self._a = _Agents(pool, env_id)
+        self._a.learner_only = learner_only
         self.metadata = {
             **self.metadata,
             "name": env_id,
@@ -406,8 +466,12 @@ class TesseraParallelEnv(ParallelEnv):
         except Exception:
             self._a.env.close()
             raise
-        self.possible_agents = list(self._a.names)
+        self.possible_agents = [n for n in self._a.names if not self._a.hidden(self._a.slot_of[n])]
         self.agents = list(self.possible_agents)
+
+    def _visible(self, names: list[str]) -> list[str]:
+        """``names`` without the hidden heuristic slots."""
+        return [n for n in names if not self._a.hidden(self._a.slot_of[n])]
 
     def observation_space(self, agent):
         return self._a.observation_space
@@ -427,7 +491,7 @@ class TesseraParallelEnv(ParallelEnv):
 
     def reset(self, seed=None, options=None):
         self._a.last = self._a.env.reset(seed)
-        self.agents = self._a.live()
+        self.agents = self._visible(self._a.live())
         if self._a.spawns:
             # A slot's generation survives a reset, so its name does too.
             self.possible_agents = list(self.agents)
@@ -461,10 +525,16 @@ class TesseraParallelEnv(ParallelEnv):
             obs[name] = self._a.observe(slot)
             rewards[name], terms[name], truncs[name] = self._a.flags(slot)
             infos[name] = self._a.info(slot)
+        if self._a.learner_only:
+            # Hidden heuristic slots: their rewards stay in the infos, for
+            # logging (ADR-0079 item 5.2).
+            logged = self._a.heuristic_rewards()
+            for name in infos:
+                infos[name]["heuristic_rewards"] = logged
         self.agents = [n for n in self.agents if not (terms[n] or truncs[n])]
         if self._a.spawns:
             # Agents that spawned this step: alive now, not alive before.
-            for name in self._a.live():
+            for name in self._visible(self._a.live()):
                 if name in self.agents or name in obs:
                     continue
                 slot = self._a.slot_of[name]
@@ -497,8 +567,21 @@ class TesseraAECEnv(AECEnv):
 
     metadata = {"render_modes": [], "name": "tessera", "is_parallelizable": False}
 
-    def __init__(self, env_id: str, seed: int | None = None, *, _pool=None, render_mode: str | None = None, **kwargs):
+    def __init__(
+        self,
+        env_id: str,
+        seed: int | None = None,
+        *,
+        _pool=None,
+        render_mode: str | None = None,
+        agents: str | int = "all",
+        **kwargs,
+    ):
         super().__init__()
+        if _agents_option(agents, kwargs):
+            # The turn order would have to skip hidden seats (ADR-0079 stage A
+            # hides heuristic slots in the Parallel form only).
+            raise _native.CapabilityError('agents="learner" is for the Parallel form; native AEC shows every agent')
         pool = _pool if _pool is not None else _native_pool(env_id, "aec", seed, kwargs)
         self._a = _Agents(pool, env_id)
         if self._a.spawns:
@@ -554,8 +637,14 @@ class TesseraAECEnv(AECEnv):
         self._cumulative_rewards = {n: 0.0 for n in self.agents}
         self.terminations = {n: False for n in self.agents}
         self.truncations = {n: False for n in self.agents}
-        self.infos = {n: {} for n in self.agents}
+        self.infos = {n: self._group_info(n) for n in self.agents}
         self.agent_selection = self._acting() or self.agents[0]
+
+    def _group_info(self, name: str) -> dict:
+        """An agent's infos at the start of an episode: its policy group
+        (ADR-0079 item 5.2), for a first-party environment."""
+        slot = self._a.slot_of[name]
+        return {"policy_group": self._a.groups[slot]} if self._a.groups else {}
 
     def set_reset_source(self, archive=None, weights=None) -> None:
         """Archive resets (ADR-0075): forwarded to the wrapped

@@ -32,6 +32,7 @@ pub mod host_out;
 pub mod host_snapshot;
 pub mod io;
 pub mod leaf;
+pub mod policy;
 pub mod refusals;
 pub mod render;
 #[doc(hidden)]
@@ -56,7 +57,7 @@ pub use entity_heads::{EntityHeads, HeadSpec};
 pub use env::EnvAssets;
 pub use env::{
     ActionMask, Determinize, EnvConfig, EnvState, Environment, Heuristic, ImperfectInformation,
-    Persist, Render, Validate,
+    InfoHeuristic, Persist, Render, Validate,
 };
 pub use error::{ConfigError, CoreError, DecodeError, EncodeError, InvariantViolation, SpaceError};
 pub use header::{AdaptiveValues, AgentRow, EngineHeader, NoAdaptive, RecordHeader, RecordLayout};
@@ -65,6 +66,7 @@ pub use host::{ActionReject, HostEnvironment, HostError, HostSeed};
 pub use host_out::{AbortCode, HostOut};
 pub use host_snapshot::{HostSnapshot, SnapshotReject};
 pub use leaf::{LeafDType, LeafId, ObsLeaf, Observation, ObservationLayout};
+pub use policy::PolicyGroup;
 pub use pool::Pool;
 pub use refusals::{Refusals, RefuseCode};
 pub use reserved::Reserved;

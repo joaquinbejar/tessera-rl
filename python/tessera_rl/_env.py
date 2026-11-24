@@ -205,6 +205,9 @@ class Env:
         self.entity_group_heads: int = layout["entity_group_heads"]
         #: ``"simultaneous"``, ``"sequential"`` or ``"mixed"`` (ADR-0013).
         self.turns: str = layout["turns"]
+        #: The policy group of each agent slot (ADR-0079): ``"learner"``,
+        #: ``"external"``, ``"heuristic"`` or ``"privileged_heuristic"``.
+        self.policy_groups: tuple[str, ...] = tuple(layout.get("policy_groups", ()))
         self.outputs: str = layout["outputs"]
         #: The instance ids of the two halves, in Pipelined mode; else ``None``.
         self.halves: tuple[range, range] | None = None
@@ -541,6 +544,25 @@ class Env:
     def is_poisoned(self) -> bool:
         return self._native.is_poisoned()
 
+    @property
+    def heuristic_actions(self) -> np.ndarray | None:
+        """The last step's heuristic actions (ADR-0079 item 3.5), int32
+        ``(num_envs, agents, heads)``: the action the engine computed for each
+        heuristic slot that acted, zero elsewhere; ``None`` without a heuristic
+        slot. ``Step`` does not carry it.
+
+        Each read is a fresh owned copy of the engine's buffer: it never goes
+        stale, and it does not change with later calls. The engine's buffer
+        is written only by ``step`` (resets, restores and forks leave the last
+        step's rows), so read it after the ``step`` whose opponents you log;
+        a later ``step`` replaces what the next read returns.
+        """
+        raw = self._native.heuristic_actions()
+        if raw is None:
+            return None
+        heads = max(len(self.action_nvec), 1)
+        return np.frombuffer(raw, dtype="<i4").reshape(self.num_envs, self.agents, heads)
+
     def watch(self) -> _native.WatchHandle:
         """Attaches a live watch (ADR-0083 item 7) and returns its handle.
 
@@ -678,6 +700,29 @@ _BOOL_OPTIONS = frozenset({"seat_swap", "zero_on_fuse", "allow_short_cash"})
 _ASSET_OPTIONS = frozenset({"layout"})
 
 
+#: Policy group names (ADR-0079 item 5.1).
+_POLICY_GROUPS = ("learner", "external", "heuristic", "privileged_heuristic")
+
+
+def _policy_map(value) -> str | None:
+    """A ``policy_map`` (a list of group names, one per agent slot, or a dict
+    from slot to group name, other slots learners) as the string the native
+    module parses: names separated by commas, or ``slot=name`` items. An
+    empty dict is the default map."""
+
+    def name(group) -> str:
+        if not isinstance(group, str) or group not in _POLICY_GROUPS:
+            raise _native.ArgumentError(f"policy_map groups are one of {_POLICY_GROUPS}, not {group!r}")
+        return group
+
+    if isinstance(value, dict):
+        if not value:
+            return None
+        return ",".join(f"{_index(slot, 'policy_map slot')}={name(group)}" for slot, group in value.items())
+    if isinstance(value, (list, tuple)):
+        return ",".join(name(group) for group in value)
+    raise TypeError(f"policy_map must be a list or a dict of group names, got {type(value).__name__}")
+
 def native_kwargs(**kwargs) -> dict:
     """Constructor options as exact ``int``/``str``/``bool``/``None`` values for the
     native module (see ``_index``)."""
@@ -685,6 +730,8 @@ def native_kwargs(**kwargs) -> dict:
     for key, value in kwargs.items():
         if value is None:
             out[key] = None
+        elif key == "policy_map":
+            out[key] = _policy_map(value)
         elif key in _STRING_OPTIONS:
             out[key] = str(value)
         elif key in _ASSET_OPTIONS:
@@ -800,6 +847,18 @@ def make(env_id: str, num_envs: int = 1, seed: int = 0, outputs: str = "borrowed
     ``observe`` (ADR-0078); ``layout()`` and the adapter spaces describe the
     transformed observation. Host environments refuse it with
     ``CapabilityError``.
+
+    ``policy_map`` (ADR-0079) routes agent slots to policy groups: a list
+    of group names, one per slot, or a dict from slot to name (other slots
+    learners), each ``"learner"``, ``"external"`` (marked only: you still
+    submit its actions), ``"heuristic"`` (the engine computes its action on
+    the workers from the environment's scripted baseline; your rows for it
+    are ignored) or ``"privileged_heuristic"`` (a full-state opponent for
+    imperfect-information environments, for testing only). Heuristic slots
+    run on Tag, Leduc, Lanterns, Connect Four, Othello and Go 9x9, in
+    ``mode="sync"`` only until stage B (``CapabilityError`` otherwise); see
+    ``Env.policy_groups`` and ``Env.heuristic_actions``. Host environments
+    refuse it with ``CapabilityError``.
 
     Any other id is looked up among the host environments of installed
     third-party wheels (the ``tessera_rl.envs`` entry points, read once per

@@ -216,6 +216,9 @@ pub struct PoolContext {
     /// (ADR-0078 item 6: the transform identity, statistics and freeze
     /// flag), and later the curriculum.
     pub adaptive: crate::adaptive::AdaptiveContext,
+    /// The policy map digest (ADR-0079 item 2.3): 0 for the default map,
+    /// every slot a learner.
+    pub policy_map: u64,
 }
 
 impl PoolContext {
@@ -226,6 +229,7 @@ impl PoolContext {
             branch_counter,
             reset_source: crate::archive::ResetSourceContext::Fresh,
             adaptive: crate::adaptive::AdaptiveContext::default(),
+            policy_map: 0,
         }
     }
 }

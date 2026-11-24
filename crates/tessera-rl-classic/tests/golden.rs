@@ -27,6 +27,9 @@ impl support::GoldenEnv for CartPole {
 impl support::GoldenEnv for Tag {
     const ENV_ID: &'static str = tessera_rl_classic::tag::ENV_ID;
     const ENV_VERSION: u32 = tessera_rl_classic::tag::ENV_VERSION;
+    /// Tag's baseline reads only its window since ADR-0079 (#437 option
+    /// (a)): the generator changed, not the environment.
+    const ACTIONS: &'static str = "mix-heuristic-v1-tag-window";
 }
 
 const WORKERS: [Option<usize>; 5] = [None, Some(1), Some(2), Some(7), Some(64)];

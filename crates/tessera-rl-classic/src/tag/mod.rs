@@ -26,13 +26,13 @@ use tessera_rl_core::io::{ActionWriter, Actions, MaskWriter, ObsWriter};
 use tessera_rl_core::space::Space;
 use tessera_rl_core::{
     ActionMask, AgentSlot, Bool8, Environment, EpisodeEnd, Heuristic, ImperfectInformation,
-    InvariantViolation, NoAdaptive, ObsLeaf, Observation, RecordHeader, Reserved, SpaceError,
-    StepOut, Tier, Validate,
+    InfoHeuristic, InvariantViolation, NoAdaptive, ObsLeaf, Observation, RecordHeader, Reserved,
+    SpaceError, StepOut, Tier, Validate,
 };
 use tessera_rl_macros::{EnvConfig, EnvState, Observation};
 use tessera_rl_num::rng::{ObsRng, StepRng};
 
-use grid::{ACTIONS, Cell, STAY, distance, moved, place};
+use grid::{ACTIONS, STAY, delta, distance, moved, place};
 
 /// Versioned environment id (ADR-0023).
 pub const ENV_ID: &str = "tessera/Tag-v1";
@@ -363,44 +363,108 @@ impl Validate for Tag {
     }
 }
 
-/// Scripted baseline: pursuers step towards the nearest live evader,
-/// evaders step to the legal cell farthest from the nearest pursuer. Ties
-/// go to the lowest slot and the lowest action.
+/// The window baseline (ADR-0079, #437 option (a)), from the agent's
+/// window alone: a pursuer steps towards the nearest live evader it sees,
+/// an evader to the visible cell farthest from the nearest pursuer it
+/// sees, by Manhattan distance inside the window. A move is a candidate
+/// only when its target cell is inside the window and on the grid. Ties go
+/// to the lowest action. With no opponent in the window, the lowest legal
+/// action under the mask: stay (action 0), which is always legal.
+fn window_act(cfg: &TagConfig, window: &[u8; WINDOW_BYTES], me: usize) -> i32 {
+    let side = cfg.side();
+    let plane = side * side;
+    let r = i32::try_from(cfg.radius).unwrap_or(0);
+    let pursuer = cfg.is_pursuer(me);
+    // Opponents: evaders (channel 2) for a pursuer, pursuers (channel 1)
+    // for an evader.
+    let channel = if pursuer { 2 } else { 1 };
+    // The window cell of offset `(dx, dy)` from the observer, if inside it.
+    let cell = |dx: i32, dy: i32| {
+        let col = usize::try_from(dx + r).ok()?;
+        let row = usize::try_from(dy + r).ok()?;
+        (col < side && row < side).then_some(row * side + col)
+    };
+    let on_grid = |dx: i32, dy: i32| {
+        cell(dx, dy)
+            .and_then(|k| window.get(k))
+            .is_some_and(|&outside| outside == 0)
+    };
+    let nearest = |dx: i32, dy: i32| {
+        let mut best: Option<u32> = None;
+        for row in 0..side {
+            for col in 0..side {
+                let seen = window
+                    .get(channel * plane + row * side + col)
+                    .is_some_and(|&n| n > 0);
+                if !seen {
+                    continue;
+                }
+                let ox = i32::try_from(col).unwrap_or(0) - r;
+                let oy = i32::try_from(row).unwrap_or(0) - r;
+                let d = distance([coord(dx), coord(dy)], [coord(ox), coord(oy)]);
+                best = Some(best.map_or(d, |b| b.min(d)));
+            }
+        }
+        best
+    };
+    let Some(here) = nearest(0, 0) else {
+        // No visible opponent: the lowest legal action, stay.
+        return (0..ACTIONS)
+            .filter_map(|a| i32::try_from(a).ok())
+            .find(|&a| {
+                let [dx, dy] = delta(a);
+                on_grid(dx, dy)
+            })
+            .unwrap_or(STAY);
+    };
+    let mut best = (STAY, here);
+    for action in 1..=4 {
+        let [dx, dy] = delta(action);
+        if !on_grid(dx, dy) {
+            continue;
+        }
+        let Some(d) = nearest(dx, dy) else {
+            continue;
+        };
+        if (pursuer && d < best.1) || (!pursuer && d > best.1) {
+            best = (action, d);
+        }
+    }
+    best.0
+}
+
+/// A window offset as a cell coordinate (offsets are at most 8 in size).
+fn coord(v: i32) -> i16 {
+    i16::try_from(v).unwrap_or(0)
+}
+
+/// The scripted baseline is the window baseline: `act` computes the
+/// agent's information state and calls [`InfoHeuristic::act_info`], so the
+/// baseline and a heuristic slot of a policy map agree, and states with
+/// equal windows give equal actions.
 impl Heuristic for Tag {
     fn act(
         cfg: &TagConfig,
         state: &TagState,
         agent: AgentSlot,
+        rng: &mut StepRng,
+        out: &mut ActionWriter<'_>,
+    ) {
+        let info = Self::info_state(cfg, state, agent);
+        Self::act_info(cfg, &info, agent, rng, out);
+    }
+}
+
+/// The window baseline through the information state (ADR-0079 item 4.2).
+impl InfoHeuristic for Tag {
+    fn act_info(
+        cfg: &TagConfig,
+        info: &TagInfo,
+        agent: AgentSlot,
         _: &mut StepRng,
         out: &mut ActionWriter<'_>,
     ) {
-        let me = agent.index();
-        let Some(&from) = state.pos.get(me) else {
-            out.set_discrete(0, STAY);
-            return;
-        };
-        let pursuer = cfg.is_pursuer(me);
-        let nearest = |cell: Cell| {
-            state
-                .pos
-                .iter()
-                .enumerate()
-                .filter(|&(j, _)| state.active(cfg, j) && cfg.is_pursuer(j) != pursuer)
-                .map(|(_, &other)| distance(cell, other))
-                .min()
-                .unwrap_or(0)
-        };
-        let mut best = (STAY, nearest(from));
-        for action in 1..=4 {
-            let Some(to) = moved(from, action, cfg.width, cfg.height) else {
-                continue;
-            };
-            let d = nearest(to);
-            if (pursuer && d < best.1) || (!pursuer && d > best.1) {
-                best = (action, d);
-            }
-        }
-        out.set_discrete(0, best.0);
+        out.set_discrete(0, window_act(cfg, &info.window, agent.index()));
     }
 }
 

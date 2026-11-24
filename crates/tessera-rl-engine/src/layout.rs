@@ -2,6 +2,7 @@
 
 //! Buffer layouts derived from the spaces at construction (SPEC 5.2).
 
+use tessera_rl_core::Bool8;
 use tessera_rl_core::space::{DType, Space};
 
 use crate::error::EngineError;
@@ -17,6 +18,21 @@ pub(crate) struct ActionLayout {
     pub(crate) continuous: Vec<(f64, f64)>,
     /// The mask row's layout; set at construction for masked pools.
     pub(crate) mask: MaskLayout,
+    /// Per agent slot, whether the engine computes its action (a heuristic
+    /// group of the policy map, ADR-0079 item 3.1): the validation boundary
+    /// skips those rows and stores them as zero. Empty without a heuristic
+    /// slot.
+    pub(crate) heuristic: Vec<Bool8>,
+}
+
+impl ActionLayout {
+    /// Whether agent slot `slot`'s submitted row is skipped at the
+    /// boundary (a heuristic slot).
+    #[must_use]
+    #[inline]
+    pub(crate) fn skips(&self, slot: usize) -> bool {
+        self.heuristic.get(slot).is_some_and(|f| f.get())
+    }
 }
 
 /// Most discrete heads of an agent that declares entity groups: the size of
@@ -181,6 +197,7 @@ impl ActionLayout {
             discrete,
             continuous,
             mask: MaskLayout::default(),
+            heuristic: Vec::new(),
         })
     }
 }

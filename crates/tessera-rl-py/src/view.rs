@@ -205,6 +205,7 @@ mod tests {
             entity_group_heads: 0,
             turns: "simultaneous",
             terminal: true,
+            policy_groups: Vec::new(),
         };
         let set = view_set(&layout).unwrap();
         assert_eq!(set.observations[0].shape, vec![3, 2, 4]);
