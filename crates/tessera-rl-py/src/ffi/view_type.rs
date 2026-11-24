@@ -241,16 +241,16 @@ impl MethodKw for DlpackM {
 static METHODS: MethodTable<View> = MethodTable::new(&[
     MethodRow::kw::<DlpackM>(
         c"__dlpack__",
-        c"__dlpack__(*, stream=None, max_version=None, dl_device=None, copy=None): a read-only DLPack 1.0 capsule when max_version >= (1, 0); otherwise a legacy capsule, which cannot be marked read-only (writing through it corrupts the outputs until the next call).",
+        c"__dlpack__($self, *, stream=None, max_version=None, dl_device=None, copy=None)\n--\n\n__dlpack__(*, stream=None, max_version=None, dl_device=None, copy=None): a read-only DLPack 1.0 capsule when max_version >= (1, 0); otherwise a legacy capsule, which cannot be marked read-only (writing through it corrupts the outputs until the next call).",
     ),
-    MethodRow::noargs::<DlpackDeviceM>(c"__dlpack_device__", c"(kDLCPU, 0)"),
+    MethodRow::noargs::<DlpackDeviceM>(c"__dlpack_device__", c"__dlpack_device__($self, /)\n--\n\n(kDLCPU, 0)"),
     MethodRow::noargs::<GenerationM>(
         c"generation",
-        c"The write generation this view was taken at.",
+        c"generation($self, /)\n--\n\nThe write generation this view was taken at.",
     ),
     MethodRow::noargs::<IsStaleM>(
         c"is_stale",
-        c"Whether outputs were written since this view was taken.",
+        c"is_stale($self, /)\n--\n\nWhether outputs were written since this view was taken.",
     ),
     MethodRow::END,
 ]);

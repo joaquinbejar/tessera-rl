@@ -116,26 +116,26 @@ impl MethodNoArgs for CloseM {
 }
 
 static METHODS: MethodTable<EnvBody> = MethodTable::new(&[
-    MethodRow::noargs::<LayoutM>(c"layout", c"Shapes and dtypes of the outputs."),
-    MethodRow::noargs::<OutputsM>(c"outputs", c"Copies of the last call's outputs."),
-    MethodRow::noargs::<IsPoisonedM>(c"is_poisoned", c"Whether the pool is poisoned."),
-    MethodRow::noargs::<CloseM>(c"close", c"Frees the pool."),
-    MethodRow::varargs::<ResetM>(c"reset", c"reset(seed=None, ids=None)"),
-    MethodRow::varargs::<StepM>(c"step", c"step(actions: bytes of int32)"),
-    MethodRow::varargs::<SnapshotM>(c"snapshot", c"snapshot(id) -> bytes"),
+    MethodRow::noargs::<LayoutM>(c"layout", c"layout($self, /)\n--\n\nShapes and dtypes of the outputs."),
+    MethodRow::noargs::<OutputsM>(c"outputs", c"outputs($self, /)\n--\n\nCopies of the last call's outputs."),
+    MethodRow::noargs::<IsPoisonedM>(c"is_poisoned", c"is_poisoned($self, /)\n--\n\nWhether the pool is poisoned."),
+    MethodRow::noargs::<CloseM>(c"close", c"close($self, /)\n--\n\nFrees the pool."),
+    MethodRow::varargs::<ResetM>(c"reset", c"reset($self, seed=None, ids=None, delivered=None, /)\n--\n\nreset(seed=None, ids=None)"),
+    MethodRow::varargs::<StepM>(c"step", c"step($self, actions, /)\n--\n\nstep(actions: bytes of int32)"),
+    MethodRow::varargs::<SnapshotM>(c"snapshot", c"snapshot($self, id, /)\n--\n\nsnapshot(id) -> bytes"),
     MethodRow::varargs::<IllegalActionsM>(
         c"illegal_actions",
-        c"illegal_actions(id) -> per-agent illegal actions this episode",
+        c"illegal_actions($self, id, /)\n--\n\nillegal_actions(id) -> per-agent illegal actions this episode",
     ),
     MethodRow::varargs::<StateHashM>(
         c"state_hash",
-        c"state_hash(id) -> the instance's state hash",
+        c"state_hash($self, id, /)\n--\n\nstate_hash(id) -> the instance's state hash",
     ),
-    MethodRow::varargs::<ImportRecordM>(c"import_record", c"import_record(id, record)"),
-    MethodRow::varargs::<EncodeM>(c"encode", c"encode(ids) -> bytes"),
+    MethodRow::varargs::<ImportRecordM>(c"import_record", c"import_record($self, id, record, /)\n--\n\nimport_record(id, record)"),
+    MethodRow::varargs::<EncodeM>(c"encode", c"encode($self, ids, /)\n--\n\nencode(ids) -> bytes"),
     MethodRow::varargs::<LoadM>(
         c"load",
-        c"load(data, ids, max_instances, max_decoded_bytes)",
+        c"load($self, data, ids, max_instances, max_decoded_bytes, /)\n--\n\nload(data, ids, max_instances, max_decoded_bytes)",
     ),
     MethodRow::varargs::<RecordStartM>(
         c"_record_start",
@@ -144,34 +144,35 @@ static METHODS: MethodTable<EnvBody> = MethodTable::new(&[
     MethodRow::noargs::<RecordFinishM>(c"_record_finish", c"_record_finish() -> bytes"),
     MethodRow::noargs::<RecordAbortM>(c"_record_abort", c"_record_abort()"),
     MethodRow::varargs::<ReplayM>(c"_replay", c"_replay(data) -> tuple: see tessera_rl.replay"),
-    MethodRow::varargs::<SendM>(c"send", c"send(half, actions: bytes of int32, delivered)"),
+    MethodRow::varargs::<SendM>(c"send", c"send($self, half, actions, delivered, /)\n--\n\nsend(half, actions: bytes of int32, delivered)"),
     MethodRow::varargs::<RecvM>(
         c"recv",
-        c"recv(delivered) -> the oldest sent half's outputs",
+        c"recv($self, delivered, /)\n--\n\nrecv(delivered) -> the oldest sent half's outputs",
     ),
-    MethodRow::varargs::<RestoreM>(c"restore", c"restore(ids, snapshots, delivered)"),
+    MethodRow::varargs::<RestoreM>(c"restore", c"restore($self, ids, snapshots, delivered, /)\n--\n\nrestore(ids, snapshots, delivered)"),
     MethodRow::noargs::<SnapshotAllM>(
         c"snapshot_all",
-        c"snapshot_all() -> an opaque whole-pool snapshot",
+        c"snapshot_all($self, /)\n--\n\nsnapshot_all() -> an opaque whole-pool snapshot",
     ),
     MethodRow::varargs::<RestoreAllM>(
         c"restore_all",
-        c"restore_all(snapshot) -> both halves' outputs",
+        c"restore_all($self, snapshot, /)\n--\n\nrestore_all(snapshot) -> both halves' outputs",
     ),
-    MethodRow::varargs::<ForkM>(c"fork", c"fork(src, dst)"),
+    MethodRow::varargs::<ForkM>(c"fork", c"fork($self, src, dst, /)\n--\n\nfork(src, dst)"),
     MethodRow::END,
 ]);
 
 /// A module function that builds an `Env` from keyword arguments.
 macro_rules! maker {
-    ($name:ident, $api:path) => {
+    ($name:ident, $api:path, $label:literal) => {
         pub(super) struct $name;
         impl FunctionKw for $name {
             fn call<'py>(
                 g: Gil<'py>,
-                _args: Ref<'py>,
+                args: Ref<'py>,
                 kwargs: Option<Ref<'py>>,
             ) -> CResult<Mine<'py>> {
+                api::no_positional(g, args, $label)?;
                 let inner = $api(g, kwargs)?;
                 TYPE.instantiate(g, EnvBody(inner))
             }
@@ -180,70 +181,78 @@ macro_rules! maker {
 }
 
 #[cfg(feature = "test-hooks")]
-maker!(MakePanicCounter, api::make_panic_counter);
+maker!(
+    MakePanicCounter,
+    api::make_panic_counter,
+    "_make_panic_counter"
+);
 #[cfg(feature = "test-hooks")]
-maker!(MakeContinuousProbe, api::make_continuous_probe);
+maker!(
+    MakeContinuousProbe,
+    api::make_continuous_probe,
+    "_make_continuous_probe"
+);
 #[cfg(feature = "test-hooks")]
-maker!(MakeMultiProbe, api::make_multi_probe);
-maker!(MakeCartpole, api::make_cartpole);
-maker!(MakePendulum, api::make_pendulum);
-maker!(MakeAcrobot, api::make_acrobot);
-maker!(MakeMountaincar, api::make_mountaincar);
-maker!(MakeTag, api::make_tag);
-maker!(MakeRts, api::make_rts);
-maker!(MakeGrid, api::make_grid);
-maker!(MakeKeydoor, api::make_keydoor);
-maker!(MakeSnake, api::make_snake);
-maker!(MakeBrickwall, api::make_brickwall);
-maker!(MakePaddleduel, api::make_paddleduel);
-maker!(MakeConnect4, api::make_connect4);
-maker!(MakeLeduc, api::make_leduc);
-maker!(MakeOthello, api::make_othello);
-maker!(MakeGo9, api::make_go9);
+maker!(MakeMultiProbe, api::make_multi_probe, "_make_multi_probe");
+maker!(MakeCartpole, api::make_cartpole, "make_cartpole");
+maker!(MakePendulum, api::make_pendulum, "make_pendulum");
+maker!(MakeAcrobot, api::make_acrobot, "make_acrobot");
+maker!(MakeMountaincar, api::make_mountaincar, "make_mountaincar");
+maker!(MakeTag, api::make_tag, "make_tag");
+maker!(MakeRts, api::make_rts, "make_rts");
+maker!(MakeGrid, api::make_grid, "make_grid");
+maker!(MakeKeydoor, api::make_keydoor, "make_keydoor");
+maker!(MakeSnake, api::make_snake, "make_snake");
+maker!(MakeBrickwall, api::make_brickwall, "make_brickwall");
+maker!(MakePaddleduel, api::make_paddleduel, "make_paddleduel");
+maker!(MakeConnect4, api::make_connect4, "make_connect4");
+maker!(MakeLeduc, api::make_leduc, "make_leduc");
+maker!(MakeOthello, api::make_othello, "make_othello");
+maker!(MakeGo9, api::make_go9, "make_go9");
 
 /// The module-level constructors, for the module's function table.
 pub(super) const MAKERS: [FunctionRow; 15] = [
-    FunctionRow::kw::<MakeCartpole>(c"make_cartpole", c"make_cartpole(**pool_options) -> Env"),
-    FunctionRow::kw::<MakeAcrobot>(c"make_acrobot", c"make_acrobot(**pool_options) -> Env"),
+    FunctionRow::kw::<MakeCartpole>(c"make_cartpole", c"make_cartpole($module, *, mode=None, batch_size=None, gather=None, num_envs=None, seed=None, max_episode_steps=None, auto_reset=None, chunk_size=None, workers=None, spin=None, outputs=None)\n--\n\nmake_cartpole(**pool_options) -> Env"),
+    FunctionRow::kw::<MakeAcrobot>(c"make_acrobot", c"make_acrobot($module, *, mode=None, batch_size=None, gather=None, num_envs=None, seed=None, max_episode_steps=None, auto_reset=None, chunk_size=None, workers=None, spin=None, outputs=None)\n--\n\nmake_acrobot(**pool_options) -> Env"),
     FunctionRow::kw::<MakeMountaincar>(
         c"make_mountaincar",
-        c"make_mountaincar(**pool_options) -> Env",
+        c"make_mountaincar($module, *, mode=None, batch_size=None, gather=None, num_envs=None, seed=None, max_episode_steps=None, auto_reset=None, chunk_size=None, workers=None, spin=None, outputs=None)\n--\n\nmake_mountaincar(**pool_options) -> Env",
     ),
-    FunctionRow::kw::<MakePendulum>(c"make_pendulum", c"make_pendulum(**pool_options) -> Env"),
+    FunctionRow::kw::<MakePendulum>(c"make_pendulum", c"make_pendulum($module, *, mode=None, batch_size=None, gather=None, num_envs=None, seed=None, max_episode_steps=None, auto_reset=None, chunk_size=None, workers=None, spin=None, outputs=None)\n--\n\nmake_pendulum(**pool_options) -> Env"),
     FunctionRow::kw::<MakeTag>(
         c"make_tag",
-        c"make_tag(**pool_options, **tag_config) -> Env",
+        c"make_tag($module, *, mode=None, batch_size=None, gather=None, num_envs=None, seed=None, max_episode_steps=None, auto_reset=None, chunk_size=None, workers=None, spin=None, outputs=None, width=None, height=None, pursuers=None, evaders=None, slip=None, radius=None)\n--\n\nmake_tag(**pool_options, **tag_config) -> Env",
     ),
     FunctionRow::kw::<MakeRts>(
         c"make_rts",
-        c"make_rts(**pool_options, **rts_config) -> Env",
+        c"make_rts($module, *, mode=None, batch_size=None, gather=None, num_envs=None, seed=None, max_episode_steps=None, auto_reset=None, chunk_size=None, workers=None, spin=None, outputs=None, size=None, decision_ticks=None, max_units=None, step_limit=None, seat_swap=None, opponent=None)\n--\n\nmake_rts(**pool_options, **rts_config) -> Env",
     ),
-    FunctionRow::kw::<MakeConnect4>(c"make_connect4", c"make_connect4(**pool_options) -> Env"),
-    FunctionRow::kw::<MakeLeduc>(c"make_leduc", c"make_leduc(**pool_options) -> Env"),
-    FunctionRow::kw::<MakeOthello>(c"make_othello", c"make_othello(**pool_options) -> Env"),
+    FunctionRow::kw::<MakeConnect4>(c"make_connect4", c"make_connect4($module, *, mode=None, batch_size=None, gather=None, num_envs=None, seed=None, max_episode_steps=None, auto_reset=None, chunk_size=None, workers=None, spin=None, outputs=None)\n--\n\nmake_connect4(**pool_options) -> Env"),
+    FunctionRow::kw::<MakeLeduc>(c"make_leduc", c"make_leduc($module, *, mode=None, batch_size=None, gather=None, num_envs=None, seed=None, max_episode_steps=None, auto_reset=None, chunk_size=None, workers=None, spin=None, outputs=None)\n--\n\nmake_leduc(**pool_options) -> Env"),
+    FunctionRow::kw::<MakeOthello>(c"make_othello", c"make_othello($module, *, mode=None, batch_size=None, gather=None, num_envs=None, seed=None, max_episode_steps=None, auto_reset=None, chunk_size=None, workers=None, spin=None, outputs=None)\n--\n\nmake_othello(**pool_options) -> Env"),
     FunctionRow::kw::<MakeGo9>(
         c"make_go9",
-        c"make_go9(**pool_options, komi_half_points=15) -> Env",
+        c"make_go9($module, *, mode=None, batch_size=None, gather=None, num_envs=None, seed=None, max_episode_steps=None, auto_reset=None, chunk_size=None, workers=None, spin=None, outputs=None, komi_half_points=None)\n--\n\nmake_go9(**pool_options, komi_half_points=15) -> Env",
     ),
     FunctionRow::kw::<MakeGrid>(
         c"make_grid",
-        c"make_grid(**pool_options, size=16, max_steps=200) -> Env",
+        c"make_grid($module, *, mode=None, batch_size=None, gather=None, num_envs=None, seed=None, max_episode_steps=None, auto_reset=None, chunk_size=None, workers=None, spin=None, outputs=None, size=None, max_steps=None)\n--\n\nmake_grid(**pool_options, size=16, max_steps=200) -> Env",
     ),
     FunctionRow::kw::<MakeKeydoor>(
         c"make_keydoor",
-        c"make_keydoor(**pool_options, size=8, agents=1) -> Env",
+        c"make_keydoor($module, *, mode=None, batch_size=None, gather=None, num_envs=None, seed=None, max_episode_steps=None, auto_reset=None, chunk_size=None, workers=None, spin=None, outputs=None, size=None, agents=None)\n--\n\nmake_keydoor(**pool_options, size=8, agents=1) -> Env",
     ),
     FunctionRow::kw::<MakeSnake>(
         c"make_snake",
-        c"make_snake(**pool_options, size=16, agents=1, obs=\"pixels\") -> Env",
+        c"make_snake($module, *, mode=None, batch_size=None, gather=None, num_envs=None, seed=None, max_episode_steps=None, auto_reset=None, chunk_size=None, workers=None, spin=None, outputs=None, size=None, agents=None, obs=None)\n--\n\nmake_snake(**pool_options, size=16, agents=1, obs=\"pixels\") -> Env",
     ),
     FunctionRow::kw::<MakeBrickwall>(
         c"make_brickwall",
-        c"make_brickwall(**pool_options, frameskip=4, lives=5, obs=\"pixels\") -> Env",
+        c"make_brickwall($module, *, mode=None, batch_size=None, gather=None, num_envs=None, seed=None, max_episode_steps=None, auto_reset=None, chunk_size=None, workers=None, spin=None, outputs=None, frameskip=None, lives=None, obs=None)\n--\n\nmake_brickwall(**pool_options, frameskip=4, lives=5, obs=\"pixels\") -> Env",
     ),
     FunctionRow::kw::<MakePaddleduel>(
         c"make_paddleduel",
-        c"make_paddleduel(**pool_options, agents=1, frameskip=4, max_score=11, bounce=1, obs=\"pixels\") -> Env",
+        c"make_paddleduel($module, *, mode=None, batch_size=None, gather=None, num_envs=None, seed=None, max_episode_steps=None, auto_reset=None, chunk_size=None, workers=None, spin=None, outputs=None, agents=None, frameskip=None, max_score=None, bounce=None, obs=None)\n--\n\nmake_paddleduel(**pool_options, agents=1, frameskip=4, max_score=11, bounce=1, obs=\"pixels\") -> Env",
     ),
 ];
 
