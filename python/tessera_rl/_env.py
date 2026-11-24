@@ -32,7 +32,7 @@ from typing import NamedTuple
 
 import numpy as np
 
-from tessera_rl import _native
+from tessera_rl import _envs, _native
 
 
 class Step(NamedTuple):
@@ -642,6 +642,7 @@ def make(env_id: str, num_envs: int = 1, seed: int = 0, outputs: str = "borrowed
     process: restart after installing a wheel) and returns a ``HostEnv``.
     Host environments run in ``mode="sync"`` only.
     """
+    _envs.warn_if_deprecated(env_id)
     makers = {
         "tessera/CartPole-v1": _native.make_cartpole,
         "tessera/MountainCar-v1": _native.make_mountaincar,

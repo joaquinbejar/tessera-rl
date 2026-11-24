@@ -134,6 +134,8 @@ fn first_legal(occupied: u64) -> u32 {
 }
 
 impl Environment for Connect4 {
+    /// AEC only: a sequential game (SPEC 12, ADR-0080).
+    const ADAPTERS: tessera_rl_core::Adapters = tessera_rl_core::Adapters::PZ_AEC;
     type State = Connect4State;
     type Config = Connect4Config;
     type Obs = Connect4Obs;

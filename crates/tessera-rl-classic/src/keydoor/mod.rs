@@ -280,6 +280,9 @@ fn nth_free(wall: u8, n: u8, taken: &[[u8; 2]], nth: u32) -> [u8; 2] {
 }
 
 impl Environment for KeyDoor {
+    /// Parallel natively and AEC through cycle buffering (SPEC 12, ADR-0080).
+    const ADAPTERS: tessera_rl_core::Adapters =
+        tessera_rl_core::Adapters::PZ_PARALLEL.union(tessera_rl_core::Adapters::PZ_AEC);
     type State = KeyDoorState;
     type Config = KeyDoorConfig;
     type Obs = KeyDoorObs;

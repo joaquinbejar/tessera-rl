@@ -15,15 +15,21 @@
 //! entry-point group for that). Records are collected at the first lookup,
 //! never before `main`; a duplicate id is an error there.
 
+mod deprecation;
 mod host_record;
 mod lookup;
 mod record;
 mod register;
 mod register_host;
+mod type_key;
 
+pub use deprecation::{Deprecation, is_semver};
 pub use host_record::{HostRegistration, RESERVED_NAMESPACE, in_reserved_namespace};
 pub use lookup::{RegistryError, registered, registered_host};
 pub use record::{EnvRegistration, same_id};
+#[doc(hidden)]
+pub use type_key::TypeKey;
+pub use type_key::deprecation_of;
 
 /// Items the [`register!`](crate::register) expansion names. Not public API.
 #[doc(hidden)]

@@ -432,6 +432,14 @@ where
             );
         }
         cfg.validate()?;
+        if let Some((id, d)) = tessera_rl_core::envs::deprecation_of::<E>() {
+            tracing::warn!(
+                id,
+                since = d.since(),
+                note = d.note(),
+                "building a pool of a deprecated environment (SPEC 16.1, ADR-0080)"
+            );
+        }
         if !(1..=E::MAX_AGENTS).contains(&E::initial_agents(&cfg)) {
             return Err(ConfigError {
                 field: "initial_agents",

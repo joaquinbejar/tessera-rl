@@ -440,6 +440,9 @@ fn draw_flags(cfg: &SnakeConfig, s: &SnakeState, me: usize, bytes: &mut [u8]) {
 }
 
 impl Environment for Snake {
+    /// Parallel natively and AEC through cycle buffering (SPEC 12, ADR-0080).
+    const ADAPTERS: tessera_rl_core::Adapters =
+        tessera_rl_core::Adapters::PZ_PARALLEL.union(tessera_rl_core::Adapters::PZ_AEC);
     type State = SnakeState;
     type Config = SnakeConfig;
     type Obs = SnakeObs;

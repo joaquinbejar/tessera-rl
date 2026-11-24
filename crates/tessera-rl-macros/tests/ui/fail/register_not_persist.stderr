@@ -20,6 +20,28 @@ help: the trait `Persist` is not implemented for `NotAnEnv`
             Leduc
           and $N others
 
+error[E0277]: the trait bound `NotAnEnv: Environment` is not satisfied
+ --> tests/ui/fail/register_not_persist.rs:6:23
+  |
+6 | tessera_rl::register!(NotAnEnv, id = "tessera/NotAnEnv-v1");
+  |                       ^^^^^^^^ unsatisfied trait bound
+  |
+help: the trait `Environment` is not implemented for `NotAnEnv`
+ --> tests/ui/fail/register_not_persist.rs:4:1
+  |
+4 | struct NotAnEnv;
+  | ^^^^^^^^^^^^^^^
+  = help: the following other types implement trait `Environment`:
+            Acrobot
+            BrickWall
+            CartPole
+            Connect4
+            Go9
+            Grid
+            KeyDoor
+            Leduc
+          and $N others
+
 error[E0277]: the trait bound `NotAnEnv: Persist` is not satisfied
  --> tests/ui/fail/register_not_persist.rs:6:23
   |

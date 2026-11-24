@@ -187,6 +187,8 @@ fn slot(index: usize) -> Option<AgentSlot> {
 }
 
 impl Environment for Othello {
+    /// AEC only: a sequential game (SPEC 12, ADR-0080).
+    const ADAPTERS: tessera_rl_core::Adapters = tessera_rl_core::Adapters::PZ_AEC;
     type State = OthelloState;
     type Config = OthelloConfig;
     type Obs = OthelloObs;

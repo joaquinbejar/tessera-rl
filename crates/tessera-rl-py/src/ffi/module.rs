@@ -13,6 +13,7 @@ use tessera_rl_pyffi::ffi::module_def::{
 
 use super::{env_type, fork, search_group_type, search_type, snapshot_type, view_type};
 use crate::errors::{Kind, error};
+use tessera_rl_core::Adapters;
 
 /// `version()`: the Tessera version.
 struct Version;
@@ -121,6 +122,64 @@ fn tier_name(tier: tessera_rl_core::Tier) -> &'static str {
     }
 }
 
+/// `env_records()`: one dict per `register!` id, in id order (ADR-0080
+/// item 5): the facts of `registered_envs()` plus `adapters` (a tuple of
+/// `"parallel"`, `"aec"`, `"turn_masked"`) and `deprecated` (`None` or a
+/// dict with `since` and `note`).
+struct EnvRecords;
+
+impl FunctionNoArgs for EnvRecords {
+    fn call(g: Gil<'_>) -> CResult<Mine<'_>> {
+        let records = tessera_rl_core::envs::registered()
+            .map_err(|e| error(g, Kind::Config, e.to_string()))?;
+        let list = capi::list(g)?;
+        for r in records {
+            let max_agents =
+                u64::try_from(r.max_agents()).map_err(|_| capi::out_of_range(g, "max_agents"))?;
+            let item = capi::dict(g)?;
+            capi::dict_set(g, &item, c"id", &capi::string(g, r.id())?)?;
+            capi::dict_set(
+                g,
+                &item,
+                c"version",
+                &capi::int_u64(g, u64::from(r.version()))?,
+            )?;
+            capi::dict_set(g, &item, c"max_agents", &capi::int_u64(g, max_agents)?)?;
+            capi::dict_set(g, &item, c"tier", &capi::string(g, tier_name(r.tier()))?)?;
+            capi::dict_set(
+                g,
+                &item,
+                c"perfect_information",
+                &capi::boolean(g, r.perfect_information()),
+            )?;
+            let a = r.adapters();
+            let mut names = Vec::new();
+            for (flag, name) in [
+                (Adapters::PZ_PARALLEL, "parallel"),
+                (Adapters::PZ_AEC, "aec"),
+                (Adapters::PZ_TURN_MASKED, "turn_masked"),
+            ] {
+                if a.contains(flag) {
+                    names.push(capi::string(g, name)?);
+                }
+            }
+            capi::dict_set(g, &item, c"adapters", &capi::tuple(g, names)?)?;
+            let deprecated = match r.deprecation() {
+                None => capi::none(g),
+                Some(d) => {
+                    let dd = capi::dict(g)?;
+                    capi::dict_set(g, &dd, c"since", &capi::string(g, d.since())?)?;
+                    capi::dict_set(g, &dd, c"note", &capi::string(g, d.note())?)?;
+                    dd
+                }
+            };
+            capi::dict_set(g, &item, c"deprecated", &deprecated)?;
+            capi::list_append(g, &list, &item)?;
+        }
+        Ok(list)
+    }
+}
+
 /// `registered_envs()`: every environment registered in this build, in id
 /// order, as `(id, version, max_agents, tier, perfect_information)` tuples
 /// (ADR-0054 item 6). `version` is the outputs version (`ENV_VERSION`),
@@ -194,7 +253,7 @@ impl FunctionNoArgs for InitFailsAfterRegister {
     }
 }
 
-const FUNCTION_COUNT: usize = if cfg!(feature = "test-hooks") { 33 } else { 27 };
+const FUNCTION_COUNT: usize = if cfg!(feature = "test-hooks") { 34 } else { 28 };
 
 static ROWS: [FunctionRow; FUNCTION_COUNT] = [
     FunctionRow::noargs::<Version>(c"version", c"version($module, /)\n--\n\nThe Tessera version."),
@@ -221,6 +280,10 @@ static ROWS: [FunctionRow; FUNCTION_COUNT] = [
     FunctionRow::noargs::<BuildProfile>(
         c"build_profile",
         c"build_profile($module, /)\n--\n\nThe native build profile: release or debug.",
+    ),
+    FunctionRow::noargs::<EnvRecords>(
+        c"env_records",
+        c"env_records($module, /)\n--\n\nOne dict per registered id: the facts of registered_envs() plus adapters and deprecated (ADR-0080).",
     ),
     FunctionRow::noargs::<RegisteredEnvs>(
         c"registered_envs",
