@@ -2,7 +2,7 @@
 
 [package]
 name = "tessera-rl-ops"
-description = "Tessera logistics and scheduling environments: job shop scheduling"
+description = "Tessera logistics and scheduling environments: job shop scheduling and vehicle routing"
 readme = "README.md"
 version.workspace = true
 edition.workspace = true

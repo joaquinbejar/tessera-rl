@@ -15,9 +15,10 @@
 //!   time (a semi-active schedule) and ends `duration` later.
 //! - **Mask** (ADR-0014): a job is legal while it has operations left. The
 //!   no-op is the first such job.
-//! - **Reward:** minus the increase of the makespan (the latest end time
-//!   scheduled so far), so an episode's return is exactly minus the final
-//!   makespan. Values are integers below 2^24, exact in `f32`.
+//! - **Reward:** minus each step's increase of the current makespan (the
+//!   latest end time scheduled so far), so an episode's return is exactly
+//!   minus the final makespan. Values are integers below 2^24, exact in
+//!   `f32`.
 //! - **End:** terminated once every operation is scheduled, after exactly
 //!   `jobs * machines` steps. Never truncated by the environment.
 //! - **Observation** (times relative to the current makespan, so every

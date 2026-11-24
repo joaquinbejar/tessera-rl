@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! The JobShop-v1 hot path never allocates after construction (SPEC 5.5,
+//! The JobShop-v1 and Vrp-v1 hot paths never allocate after construction (SPEC 5.5,
 //! ADR-0004): reset, step, masks, observations and auto-reset through
-//! whole episodes at the largest shape, and the dispatching rules. The
+//! whole episodes at the largest shapes (Vrp's masks 501 wide), and the
+//! scripted baselines. The
 //! counting allocator of the games crate attributes calls by thread.
 
 #![expect(
@@ -15,7 +16,8 @@ use core::num::NonZeroU32;
 use tessera_rl_engine::{ActionInput, AutoReset, EnvPool, Masked, PoolOptions, Reseed};
 use tessera_rl_num::identity::Seed;
 use tessera_rl_ops::jobshop::baseline::{self, Rule};
-use tessera_rl_ops::{JobShop, JobShopConfig};
+use tessera_rl_ops::vrp::baseline as vrp_baseline;
+use tessera_rl_ops::{JobShop, JobShopConfig, Vrp, VrpConfig};
 
 #[path = "../../tessera-rl-games/tests/support/counting.rs"]
 mod counting;
@@ -85,8 +87,62 @@ fn test_jobshop_rules_do_not_allocate() {
     assert_eq!(n, 0);
 }
 
+fn test_vrp_reset_and_steps_with_501_wide_masks_do_not_allocate() {
+    let cfg = VrpConfig {
+        customers: 500,
+        vehicles: 1,
+        grid: 1000,
+        max_demand: 255,
+        capacity: 1_000,
+    };
+    let width = 501;
+    for auto_reset in [AutoReset::NextStep, AutoReset::SameStep] {
+        let options = PoolOptions {
+            auto_reset,
+            ..PoolOptions::new(NonZeroU32::new(2).unwrap(), Seed::new(3))
+        };
+        let mut pool = EnvPool::<Vrp, Masked>::with_masks(cfg.clone(), options).unwrap();
+        let mut actions = vec![0i32; 2 * 8];
+        let mut ended = false;
+        let n = allocations(|| {
+            let _ = std::hint::black_box(pool.reset_all(Reseed::Keep));
+            // At most 1,000 steps per episode: run past it.
+            for _ in 0..1_100 {
+                let masks = pool.outputs().unwrap().masks();
+                for (row, action) in masks.chunks(width).zip(actions.iter_mut()) {
+                    // The first legal customer, else the depot.
+                    let next = row
+                        .iter()
+                        .skip(1)
+                        .position(|f| f.get())
+                        .map_or(0, |i| i + 1);
+                    *action = i32::try_from(next).unwrap();
+                }
+                let input = ActionInput {
+                    discrete: &actions,
+                    continuous: &[],
+                };
+                let out = pool.step(input).unwrap();
+                ended |= out.episode_terminated().iter().any(|f| f.get());
+            }
+        });
+        assert_eq!(n, 0, "{auto_reset:?}");
+        assert!(ended, "no episode ended, so auto-reset was not exercised");
+    }
+    let options = PoolOptions::new(NonZeroU32::MIN, Seed::new(4));
+    let mut pool = EnvPool::<Vrp, Masked>::with_masks(cfg, options).unwrap();
+    pool.reset_all(Reseed::Keep).unwrap();
+    let state = *pool.state(0).unwrap();
+    assert_eq!(
+        allocations(|| {
+            std::hint::black_box(vrp_baseline::act(&state, 0));
+        }),
+        0
+    );
+}
+
 /// The scenarios this binary runs.
-const SCENARIOS: usize = 3;
+const SCENARIOS: usize = 4;
 
 #[test]
 fn test_jobshop_alloc_scenarios_do_not_allocate() {
@@ -104,6 +160,10 @@ fn test_jobshop_alloc_scenarios_do_not_allocate() {
             (
                 "test_jobshop_rules_do_not_allocate",
                 test_jobshop_rules_do_not_allocate,
+            ),
+            (
+                "test_vrp_reset_and_steps_with_501_wide_masks_do_not_allocate",
+                test_vrp_reset_and_steps_with_501_wide_masks_do_not_allocate,
             ),
         ],
     );

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! Golden suites (ADR-0009, ADR-0024 layer 2) and cross-thread runs (SPEC
-//! 8.5) for JobShop-v1: every scenario matches its committed fixture in
+//! 8.5) for JobShop-v1 and Vrp-v1: every scenario matches its committed fixture in
 //! Inline mode and with 1, 2, 7 and 64 workers. The harness is the one of
 //! the classic crate.
 
@@ -12,7 +12,7 @@ mod support;
 
 use support::{Scenario, check, run};
 use tessera_rl_engine::{AutoReset, EnvPool, Masked};
-use tessera_rl_ops::{JobShop, JobShopConfig};
+use tessera_rl_ops::{JobShop, JobShopConfig, Vrp, VrpConfig};
 
 impl support::GoldenEnv for JobShop {
     const ENV_ID: &'static str = tessera_rl_ops::jobshop::ENV_ID;
@@ -59,4 +59,51 @@ fn test_golden_jobshop_next_step_matches_fixture_on_every_mode() {
 #[test]
 fn test_golden_jobshop_same_step_matches_fixture_on_every_mode() {
     check_jobshop(&jobshop("jobshop-v1-same-step", AutoReset::SameStep));
+}
+
+impl support::GoldenEnv for Vrp {
+    const ENV_ID: &'static str = tessera_rl_ops::vrp::ENV_ID;
+    const ENV_VERSION: u32 = tessera_rl_ops::vrp::ENV_VERSION;
+}
+
+fn vrp(name: &'static str, auto_reset: AutoReset) -> Scenario<VrpConfig> {
+    Scenario {
+        name,
+        cfg: VrpConfig {
+            customers: 12,
+            vehicles: 1,
+            grid: 40,
+            max_demand: 9,
+            capacity: 20,
+        },
+        seed: 3_830_002,
+        num_envs: 16,
+        chunk: 4,
+        auto_reset,
+        // Above the 24 steps an episode can take: never truncates.
+        max_episode_steps: 32,
+        steps: 300,
+        reseed_at: 150,
+        reseed_ids: &[1, 12],
+        reseed_seed: 4_444,
+    }
+}
+
+fn check_vrp(s: &Scenario<VrpConfig>) {
+    let build = |cfg, options| {
+        EnvPool::<Vrp, Masked>::with_masks(cfg, options).unwrap_or_else(|e| panic!("{e}"))
+    };
+    for workers in WORKERS {
+        check(s.name, &run::<Vrp, _>(s, build, workers));
+    }
+}
+
+#[test]
+fn test_golden_vrp_next_step_matches_fixture_on_every_mode() {
+    check_vrp(&vrp("vrp-v1-next-step", AutoReset::NextStep));
+}
+
+#[test]
+fn test_golden_vrp_same_step_matches_fixture_on_every_mode() {
+    check_vrp(&vrp("vrp-v1-same-step", AutoReset::SameStep));
 }
