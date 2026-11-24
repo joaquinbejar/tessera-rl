@@ -217,8 +217,9 @@ jobs:
         shell: bash
     env:
       WHEEL_RUN: ${{ github.workspace }}/.wheel-run
-      # x86-64 implements trapped FP exceptions on musl as on glibc (#225).
-      TESSERA_EXPECT_FP_TRAPS: "1"
+      # The FP-traps flag stays unset: musl has no feenableexcept, so the
+      # unmasked FP boundary scenario cannot run there (measured on the
+      # musllinux_1_2 image, #350).
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - run: scripts/wheel_job.sh x86_64-unknown-linux-musl musllinux_1_2 1552169aba2836777136ccff7a381e95c17233b5d8250cd5e10ae3cb971bfcfc 5d61f26b6c7213779eda90edc6971ea6b0b796bfb8d49a574c8ad69b59838548 release

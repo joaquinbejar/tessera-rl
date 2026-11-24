@@ -83,10 +83,11 @@ def test_wheels_x86_64_expects_fp_traps_and_the_hosted_arm_job_does_not():
     assert "      TESSERA_EXPECT_FP_TRAPS: ${{ matrix.expect_fp_traps }}\n" in linux
     assert "TESSERA_EXPECT_FP_TRAPS: ${{" not in _job("linux-aarch64")
     assert "TESSERA_EXPECT_FP_TRAPS" not in _job("linux-aarch64")
-    # musllinux (#350): x86_64 expects the traps, the hosted arm64 leg not.
-    assert '      TESSERA_EXPECT_FP_TRAPS: "1"\n' in _job("musl-x86_64")
+    # musllinux (#350): neither leg expects the traps (musl has no
+    # feenableexcept).
+    assert "TESSERA_EXPECT_FP_TRAPS:" not in _job("musl-x86_64")
     assert "TESSERA_EXPECT_FP_TRAPS:" not in _job("musl-aarch64")
-    assert WORKFLOW.count("TESSERA_EXPECT_FP_TRAPS:") == 2
+    assert WORKFLOW.count("TESSERA_EXPECT_FP_TRAPS:") == 1
 
 
 CARGO = (ROOT / "Cargo.toml").read_text()
