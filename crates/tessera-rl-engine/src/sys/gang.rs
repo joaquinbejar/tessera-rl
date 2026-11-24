@@ -28,7 +28,9 @@
 //!    wake-up cannot be lost (a changed word only means "go and look").
 //! 3. A worker decrements the slot's `pending` once per job, and that
 //!    decrement is its last access to the job. The worker that brings it to
-//!    zero wakes the waiter if one is parked.
+//!    zero wakes the waiter if one is parked. The `Schedule::Dynamic` claim
+//!    cursors rely on this (ADR-0087): `par_chunks` resets them before the
+//!    next `run`, so a change here must revisit that reset.
 //! 4. `wait` waits for the oldest job's `pending == 0` with `SeqCst`, which
 //!    makes every worker's writes visible, and frees its slot.
 //!

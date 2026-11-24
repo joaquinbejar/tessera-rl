@@ -614,7 +614,7 @@ impl<E: HostEnvironment, const A: usize> HostPool<E, A> {
         };
         (all.outputs.episode_partials, all.outputs.episode_aborts) = episodes.rows();
         if let Some(rt) = sync {
-            let panicked = par_chunks(&mut rt.gang, all, grain, heads, |rows, first| {
+            let panicked = par_chunks(rt.parts(), all, grain, heads, |rows, first| {
                 kernels::reset_chunk::<E, A>(&ctx, rows, reseed, first);
             })?;
             if panicked {
@@ -823,7 +823,7 @@ impl<E: HostEnvironment, const A: usize> HostPool<E, A> {
         (all.outputs.episode_partials, all.outputs.episode_aborts) = episodes.rows();
         ctx.misuse.store(u64::MAX, Ordering::Relaxed);
         if let Some(rt) = sync {
-            let panicked = par_chunks(&mut rt.gang, all, grain, heads, |rows, first| {
+            let panicked = par_chunks(rt.parts(), all, grain, heads, |rows, first| {
                 kernels::step_chunk::<E, A>(&ctx, rows, first);
             })?;
             if panicked {
@@ -1037,7 +1037,7 @@ fn validate<E: HostEnvironment, const A: usize>(
             penalized: &mut [],
             outputs: OutputsView::empty(A),
         };
-        let panicked = par_chunks(&mut rt.gang, all, grain, heads, |rows, first| {
+        let panicked = par_chunks(rt.parts(), all, grain, heads, |rows, first| {
             if let Some((i, _)) = kernels::validate_chunk::<E, A>(ctx, rows) {
                 let index = u32::try_from(first.saturating_add(i)).unwrap_or(u32::MAX);
                 lowest.fetch_min(index, Ordering::Relaxed);
