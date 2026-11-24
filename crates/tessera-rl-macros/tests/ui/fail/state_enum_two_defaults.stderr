@@ -1,8 +1,8 @@
-error: StateEnum requires exactly one #[default] variant (with #[derive(Default)])
- --> tests/ui/fail/state_enum_two_defaults.rs:7:6
-  |
-7 | enum E {
-  |      ^
+error: StateEnum requires exactly one #[default] variant; this is a second one
+  --> tests/ui/fail/state_enum_two_defaults.rs:11:5
+   |
+11 |     B,
+   |     ^
 
 error: multiple declared defaults
   --> tests/ui/fail/state_enum_two_defaults.rs:5:34

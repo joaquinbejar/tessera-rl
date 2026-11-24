@@ -180,13 +180,6 @@ pub(crate) fn derive(input: &DeriveInput) -> syn::Result<TokenStream> {
         ));
     };
     let prev_end = prev_end.unwrap_or_else(|| quote!(0usize));
-    let lens_check = lens.clone();
-    let whole = LitStr::new(
-        &format!(
-            "EnvState: `{name}` has hidden padding: its size differs from its encoded length (ADR-0029)"
-        ),
-        name.span(),
-    );
     let trailing = LitStr::new(
         &format!(
             "EnvState: `{name}` has trailing padding after field `{last_ident}`; add a Reserved<N> field at the end, with N = size_of::<{name}>() minus the end of `{last_ident}` (ADR-0029)"
@@ -194,6 +187,9 @@ pub(crate) fn derive(input: &DeriveInput) -> syn::Result<TokenStream> {
         name.span(),
     );
 
+    // No whole-struct size check: no gap before any field, no hidden
+    // padding in any field and no trailing padding together imply that
+    // the size equals the sum of the encoded lengths.
     let trailing_check = quote_spanned! {last_ident.span()=>
         const _: () = {
             if ::core::mem::size_of::<#name>() != #prev_end {
@@ -206,12 +202,6 @@ pub(crate) fn derive(input: &DeriveInput) -> syn::Result<TokenStream> {
         #(#padding_checks)*
 
         #trailing_check
-
-        const _: () = {
-            if ::core::mem::size_of::<#name>() != 0 #(+ #lens_check)* {
-                ::core::panic!(#whole);
-            }
-        };
 
         const _: () = {
             const fn assert_field<T: #core::encoding::Canonical + #core::StateInit + ::core::marker::Copy>() {}

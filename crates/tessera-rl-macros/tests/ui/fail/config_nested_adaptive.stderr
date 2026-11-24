@@ -1,0 +1,5 @@
+error[E0080]: evaluation panicked: EnvConfig: nested configs cannot have adaptive fields (ADR-0030)
+  --> tests/ui/fail/config_nested_adaptive.rs:13:5
+   |
+13 |     inner: Inner,
+   |     ^^^^^ evaluation of `_` failed here
