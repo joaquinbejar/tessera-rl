@@ -10,7 +10,7 @@ use tessera_rl_core::{AdaptiveValues, Persist, RecordLayout, StateHash, Validate
 use crate::masks::PersistMask;
 use crate::persist::{BUILD_ID, PersistError, identity};
 use crate::pool::EnvPool;
-use crate::record::{DecodedRecord, PoolContext};
+use crate::record::DecodedRecord;
 use crate::validate::ActionInput;
 
 use super::format::EventTag as Tag;
@@ -345,7 +345,7 @@ impl Replay<'_> {
             }
             pool.import_all(&records)
                 .map_err(|_| st.diverged(index, DivergenceKind::KeyframeRejected, None))?;
-            pool.restore_pool_context(PoolContext { branch_counter })?;
+            pool.set_branch_counter(branch_counter)?;
             return Ok(());
         }
         if let Expect::Keyframe(write) = st.expect {
@@ -356,7 +356,7 @@ impl Replay<'_> {
             let id_list = ids_of(ids, self.header.num_envs);
             pool.import(&id_list, &records)
                 .map_err(|_| st.diverged(write, DivergenceKind::KeyframeRejected, None))?;
-            pool.restore_pool_context(PoolContext { branch_counter })?;
+            pool.set_branch_counter(branch_counter)?;
             return Ok(());
         }
         // A periodic keyframe: check it against the replayed pool.

@@ -13,6 +13,14 @@ the API is not stable, and any 0.x release may break it.
 
 - `EnvAssets` (#418): assets are `Asset<T>` config fields with `AssetData` (ADR-0077), and nothing uses the trait. It stays exported, in the prelude too, until its removal in a later minor release.
 
+### Breaking
+
+- `EnvState` requires `Send + Sync` (ADR-0075, #363): worker threads read shared archive states. Plain-data state (ADR-0029: no pointers, no interior mutability) is always both, so no environment changes; a hand-written `EnvState` impl on a non-`Sync` type no longer compiles.
+- `PoolContext` is `#[non_exhaustive]` and no longer `Copy` (ADR-0075, #363): it gains `reset_source`; build it with `PoolContext::new(branch_counter)`. `restore_pool_context` takes the archive a context names: `restore_pool_context(context, archive)`.
+
+### Added
+
+- Archive resets (ADR-0075, #363), Sync and Inline pools: `Archive<E>` (immutable, validated, shared; an XXH3-64 digest), `ResetSource` and `EnvPool::set_reset_source`, `EnvPool::reset_from`, and the reset source in `PoolContext` (`ResetSourceContext`). An archive reset keeps the instance's RNG identity and generations and copies an entry's state and alive slots; entries are drawn by integer weights on the reserved `archive_select` stream. `EngineError::Archive` and `ArchiveMismatch`. The Pipelined and Async API follows (#363 head A2), before any release.
 
 ### Changed
 

@@ -168,9 +168,26 @@ impl<E: Environment> Canonical for DecodedRecord<E> {
     }
 }
 
-/// Pool-level context captured by pool snapshots (ADR-0010).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Pool-level context captured by pool snapshots (ADR-0010, SPEC 9.4).
+///
+/// Non-exhaustive: later ADRs add fields (ADR-0075 the reset source); build
+/// it with [`PoolContext::new`] and set the public fields.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct PoolContext {
     /// Calls to `fork_branched` so far; part of every derived salt.
     pub branch_counter: u64,
+    /// What resets start from (ADR-0075 item 7).
+    pub reset_source: crate::archive::ResetSourceContext,
+}
+
+impl PoolContext {
+    /// A context with `branch_counter` and fresh resets.
+    #[must_use]
+    pub fn new(branch_counter: u64) -> Self {
+        Self {
+            branch_counter,
+            reset_source: crate::archive::ResetSourceContext::Fresh,
+        }
+    }
 }

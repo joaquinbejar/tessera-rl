@@ -21,6 +21,7 @@ use tessera_rl_num::fp;
 use tessera_rl_num::identity::{LogicalId, RngIdentity, Seed, StreamId};
 use tessera_rl_num::rng::{ObsRng, RngAuthority, StepRng};
 
+use crate::archive::ArchiveSource;
 use crate::buffer::par_chunks;
 use crate::error::EngineError;
 use crate::layout::{
@@ -106,6 +107,8 @@ pub struct EnvPool<E: Environment, M: MaskProvider<E> = NoMasks> {
     penalties: Vec<f32>,
     penalized: Vec<Bool8>,
     pub(crate) branch_counter: u64,
+    /// The attached archive source (ADR-0075); `None` for fresh resets.
+    pub(crate) reset_source: Option<ArchiveSource<E>>,
     /// Whether every instance will step next time: none pending reset and
     /// every agent slot alive and acting (env-step plan r3 section 3.3,
     /// facts 1 and 4). Set by a step that ends so; cleared by every step's
@@ -154,6 +157,7 @@ impl<E: Environment, M: MaskProvider<E>> EnvPool<E, M> {
                 .max_episode_steps
                 .map(core::num::NonZeroU32::get),
             auto_reset: self.options.auto_reset,
+            archive: self.reset_source.as_ref(),
             #[cfg(feature = "debug-checks")]
             allocs: &self.allocs,
         }
@@ -524,6 +528,7 @@ where
             penalties: vec![0.0; if M::ENABLED { rows } else { 0 }],
             penalized: vec![Bool8::FALSE; if M::ENABLED { rows } else { 0 }],
             branch_counter: 0,
+            reset_source: None,
             fast_clean: false,
             counter_bound: Some(0),
             sync: None,
@@ -762,8 +767,10 @@ where
             penalties,
             penalized,
             sync,
+            reset_source,
             ..
         } = self;
+        let archive = reset_source.as_ref();
         let all = Chunk::<E> {
             headers,
             states,
@@ -777,7 +784,7 @@ where
             let heads = (layout.discrete.len(), layout.continuous.len());
             let grain = (chunk_size(options), options.schedule);
             let panicked = par_chunks(&mut rt.gang, all, grain, heads, |chunk, first| {
-                reset_chunk::<E, M>(cfg, authority, chunk, reseed, first);
+                reset_chunk::<E, M>(cfg, authority, archive, chunk, reseed, first);
             })?;
             if panicked {
                 *poisoned = true;
@@ -786,7 +793,7 @@ where
         } else {
             let mut chunk = all;
             run_kernels(poisoned, || {
-                reset_chunk::<E, M>(cfg, authority, &mut chunk, reseed, 0);
+                reset_chunk::<E, M>(cfg, authority, archive, &mut chunk, reseed, 0);
             })?;
         }
         self.poisoned = false;
@@ -819,9 +826,62 @@ where
         let indices = ids.iter().filter_map(|&id| usize::try_from(id).ok());
         self.check_reset(indices.clone(), ids.len(), reseed)?;
         #[cfg(not(feature = "debug-checks"))]
-        self.apply_reset(indices, reseed)?;
+        self.apply_reset(indices, reseed, None)?;
         #[cfg(feature = "debug-checks")]
-        self.apply_reset(indices.clone(), reseed)?;
+        self.apply_reset(indices.clone(), reseed, None)?;
+        self.check_turns()?;
+        #[cfg(feature = "debug-checks")]
+        self.check_nan(indices)?;
+        Ok(())
+    }
+
+    /// Resets the instances `ids` from the archive entries `entries`, one
+    /// per id, in the order given (ADR-0075 item 5): each an archive reset
+    /// (item 3) from the named entry, with no reseed. Other instances keep
+    /// their state and outputs.
+    ///
+    /// # Errors
+    ///
+    /// [`EngineError::Archive`] without an attached archive or with an
+    /// entry out of range, [`EngineError::RecordCount`] when `entries` and
+    /// `ids` differ in length, and the errors of [`EnvPool::reset`] for the
+    /// ids; nothing is mutated then. Rejected with
+    /// [`EngineError::Poisoned`] on a poisoned pool.
+    pub fn reset_from(&mut self, ids: &[u32], entries: &[u32]) -> Result<&Outputs, EngineError> {
+        self.guarded(Poison::Reject, |pool| pool.reset_from_inner(ids, entries))?;
+        Ok(&self.outputs)
+    }
+
+    fn reset_from_inner(&mut self, ids: &[u32], entries: &[u32]) -> Result<(), EngineError> {
+        let len = self
+            .reset_source
+            .as_ref()
+            .map(|s| s.archive().len())
+            .ok_or(EngineError::Archive {
+                reason: "reset_from needs an attached archive",
+            })?;
+        if entries.len() != ids.len() {
+            return Err(EngineError::RecordCount {
+                records: entries.len(),
+                instances: ids.len(),
+            });
+        }
+        if entries
+            .iter()
+            .any(|&e| !usize::try_from(e).is_ok_and(|e| e < len))
+        {
+            return Err(EngineError::Archive {
+                reason: "an archive entry out of range",
+            });
+        }
+        self.note_reset();
+        check_ids(ids, &mut self.seen)?;
+        let indices = ids.iter().filter_map(|&id| usize::try_from(id).ok());
+        self.check_reset(indices.clone(), ids.len(), Reseed::Keep)?;
+        #[cfg(not(feature = "debug-checks"))]
+        self.apply_reset(indices, Reseed::Keep, Some(entries))?;
+        #[cfg(feature = "debug-checks")]
+        self.apply_reset(indices.clone(), Reseed::Keep, Some(entries))?;
         self.check_turns()?;
         #[cfg(feature = "debug-checks")]
         self.check_nan(indices)?;
@@ -841,6 +901,7 @@ where
         &mut self,
         indices: impl Iterator<Item = usize>,
         reseed: Reseed<'_>,
+        entries: Option<&[u32]>,
     ) -> Result<(), EngineError> {
         let Self {
             cfg,
@@ -849,8 +910,10 @@ where
             outputs,
             authority,
             poisoned,
+            reset_source,
             ..
         } = self;
+        let archive = reset_source.as_ref();
         run_kernels(poisoned, || {
             let outputs = &mut outputs.view_all();
             for (k, i) in indices.enumerate() {
@@ -858,7 +921,10 @@ where
                     continue;
                 };
                 let seed = reseed.seed(k);
-                reset_one::<E>(cfg, authority, header, state, seed);
+                let entry = entries
+                    .and_then(|e| e.get(k))
+                    .and_then(|&e| usize::try_from(e).ok());
+                reset_one::<E>(cfg, authority, archive, header, state, seed, entry);
                 clear_instance(outputs, i);
                 write_agent_masks(outputs, i, header);
                 observe_instance::<E, M>(cfg, authority, header, state, outputs, i);
@@ -973,6 +1039,7 @@ where
             penalties,
             penalized,
             sync,
+            reset_source,
             #[cfg(feature = "debug-checks")]
             allocs,
             ..
@@ -984,6 +1051,7 @@ where
             policy: options.illegal_action,
             limit: options.max_episode_steps.map(core::num::NonZeroU32::get),
             auto_reset: options.auto_reset,
+            archive: reset_source.as_ref(),
             #[cfg(feature = "debug-checks")]
             allocs,
         };
@@ -1229,6 +1297,8 @@ pub(crate) struct StepCtx<'a, E: Environment> {
     pub(crate) policy: IllegalActionPolicy,
     pub(crate) limit: Option<u32>,
     pub(crate) auto_reset: AutoReset,
+    /// The attached archive source of resets (ADR-0075).
+    pub(crate) archive: Option<&'a ArchiveSource<E>>,
     /// The pool's allocation tally (ADR-0055).
     #[cfg(feature = "debug-checks")]
     pub(crate) allocs: &'a crate::sys::alloc_track::AllocTally,
@@ -1269,6 +1339,7 @@ pub(crate) fn step_chunk<E: Environment, M: MaskProvider<E>>(
         policy,
         limit,
         auto_reset,
+        archive,
         ..
     } = *ctx;
     let Rows {
@@ -1289,7 +1360,7 @@ pub(crate) fn step_chunk<E: Environment, M: MaskProvider<E>>(
     for (i, (header, state)) in headers.iter_mut().zip(states.iter_mut()).enumerate() {
         if header.engine().pending_reset.get() {
             // NextStep: reset instead of stepping (validated above).
-            reset_one::<E>(cfg, authority, header, state, None);
+            reset_one::<E>(cfg, authority, archive, header, state, None, None);
             write_agent_masks(outputs, i, header);
             observe_cleared::<E, M>(cfg, authority, header, state, outputs, i);
             continue;
@@ -1329,7 +1400,7 @@ pub(crate) fn step_chunk<E: Environment, M: MaskProvider<E>>(
         if auto_reset == AutoReset::SameStep && header.engine().pending_reset.get() {
             save_terminal(outputs, i);
             // Flags and stats of the ended episode stay set.
-            reset_one::<E>(cfg, authority, header, state, None);
+            reset_one::<E>(cfg, authority, archive, header, state, None, None);
             write_agent_masks(outputs, i, header);
             // The rows hold the terminal observation: zero them again.
             observe_instance::<E, M>(cfg, authority, header, state, outputs, i);
@@ -1342,6 +1413,7 @@ pub(crate) fn step_chunk<E: Environment, M: MaskProvider<E>>(
 pub(crate) fn reset_chunk<E: Environment, M: MaskProvider<E>>(
     cfg: &E::Config,
     authority: &RngAuthority,
+    archive: Option<&ArchiveSource<E>>,
     chunk: &mut Chunk<'_, E>,
     reseed: Reseed<'_>,
     first: usize,
@@ -1356,7 +1428,7 @@ pub(crate) fn reset_chunk<E: Environment, M: MaskProvider<E>>(
     {
         let k = first + i;
         let seed = reseed.seed(k);
-        reset_one::<E>(cfg, authority, header, state, seed);
+        reset_one::<E>(cfg, authority, archive, header, state, seed, None);
         write_agent_masks(outputs, i, header);
         observe_cleared::<E, M>(cfg, authority, header, state, outputs, i);
     }
@@ -1795,12 +1867,20 @@ pub(crate) fn with_step<H: RecordLayout>(header: &mut H, episode: u32, step: u32
     identity
 }
 
-fn reset_one<E: Environment>(
+/// Resets one instance: a fresh `Environment::reset`, or with an archive
+/// source an archive reset (ADR-0075 item 3): the same header rewrite (the
+/// episode index moves on, the step index is 0, the instance's own seed,
+/// salt, lineage and generations), then the entry's state and alive slots
+/// in place of `Environment::reset`. `entry` names the entry (`reset_from`,
+/// validated at the boundary); `None` draws it (item 4).
+pub(crate) fn reset_one<E: Environment>(
     cfg: &E::Config,
     authority: &RngAuthority,
+    archive: Option<&ArchiveSource<E>>,
     header: &mut E::Header,
     state: &mut E::State,
     seed: Option<Seed>,
+    entry: Option<usize>,
 ) {
     let engine = header.engine();
     let mut episode = engine.identity.episode_index();
@@ -1828,6 +1908,23 @@ fn reset_one<E: Environment>(
         row.episode_return = 0.0;
         row.illegal_actions = 0;
         row.invalid_agent_events = 0;
+    }
+    if let Some(source) = archive {
+        let pick = entry.unwrap_or_else(|| source.select(authority, &identity));
+        // `select` and `reset_from`'s boundary check keep `pick` in range.
+        debug_assert!(
+            pick < source.archive().len(),
+            "archive entry {pick} out of range"
+        );
+        if let Some((saved, alive)) = source.archive().entry(pick) {
+            *state = *saved;
+            for (row, &on) in header.agents_mut().iter_mut().zip(alive) {
+                row.alive = on;
+                row.acting = on;
+            }
+            update_acting::<E>(cfg, header, state);
+            return;
+        }
     }
     *state = E::State::state_default();
     let mut rng = StepRng::new(authority, &identity, StreamId::DYNAMICS);
