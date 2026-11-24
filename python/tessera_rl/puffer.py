@@ -58,7 +58,7 @@ the parent, which it detects by looking for those backends' constructors in the
 call stack; that ``vector.Ray`` is refused the same way is from reading only, as it
 is not tested. A list of creators whose first is Sync passes the driver and raises
 in the child, which is a parent hang under Multiprocessing. ``workers`` must be at
-least 1. ``spin`` (the worker spin budget of ``make``) needs ``workers``. The constructor's probe of the halves starts real worker threads, closed
+least 1. ``spin`` (the worker spin budget of ``make``) needs ``workers``, as do ``wait`` and ``wait_cap_us`` (the worker wait policy of ``make``, ADR-0074), which pass through to ``make``. The constructor's probe of the halves starts real worker threads, closed
 before it returns. ``log_interval`` counts half-steps. The two
 halves must be equal, or ``ArgumentError`` naming the sizes; a chunk size that
 cannot split the pool raises the engine's ``ConfigError`` (64 instances need a
@@ -224,7 +224,8 @@ class TesseraPufferEnv(pufferlib.PufferEnv):
         self.infos: list = []
 
         # Validates here, not in a worker; holds no thread and is closed at once.
-        probe_args = {k: v for k, v in self._make_args.items() if k != "spin"}
+        # Worker-only options (spin, the ADR-0074 wait policy) are refused without workers.
+        probe_args = {k: v for k, v in self._make_args.items() if k not in ("spin", "wait", "wait_cap_us")}
         probe = make(env_id, **{**probe_args, "workers": 0})
         try:
             layout = probe._native.layout()

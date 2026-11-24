@@ -547,7 +547,7 @@ def _index(value, what: str) -> int:
 
 
 #: Keyword arguments the native constructors take as strings.
-_STRING_OPTIONS = {"auto_reset", "outputs", "mode", "gather", "obs"}
+_STRING_OPTIONS = {"auto_reset", "outputs", "mode", "gather", "obs", "wait"}
 
 
 #: Constructor options passed as exact ``bool`` (the RTS ``seat_swap``).
@@ -626,7 +626,12 @@ def make(env_id: str, num_envs: int = 1, seed: int = 0, outputs: str = "borrowed
     ``0..2**32``; 2000 by default, nominally about 20 microseconds; a larger
     budget can cut wake-up latency at the cost of CPU time burnt while idle; it needs
     workers, so Sync mode with ``workers=0`` refuses it with
-    ``ArgumentError``), ``mode`` (``"sync"``, the default; ``"pipelined"``, which needs at least
+    ``ArgumentError``), ``wait`` (the worker wait policy, ADR-0074:
+    ``"fixed"``, the default, or ``"adaptive"``, where a worker keeps
+    spinning through the caller's typical gap between steps, up to
+    ``wait_cap_us`` microseconds, an int in ``1..=1000000``, 10000 by
+    default; it keeps caches warm at the cost of about one core per worker
+    for that gap; it needs workers, as ``spin`` does), ``mode`` (``"sync"``, the default; ``"pipelined"``, which needs at least
     two chunks; or ``"async"``, which needs ``batch_size`` and takes ``gather``,
     ``"gathered"`` by default or ``"indexed"``); see ``Env``. Tag also
     takes its config fields (``width``, ``height``, ``pursuers``,

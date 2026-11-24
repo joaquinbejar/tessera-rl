@@ -17,6 +17,7 @@ use tessera_rl_core::{DecodeError, Environment, TurnStructure, Validate};
 use tessera_rl_engine::{
     ActionInput, AsyncOptions, AutoReset, DecodedRecord, EngineError, EnvPool, MAX_LEAVES,
     MaskProvider, Masked, NoMasks, PipelinedOptions, PoolOptions, Reseed, SyncOptions, WaitBackend,
+    WaitPolicy,
 };
 use tessera_rl_games::{
     Connect4, Connect4Config, Go9, Go9Config, Leduc, LeducConfig, Othello, OthelloConfig,
@@ -666,6 +667,12 @@ pub(crate) struct PoolArgs {
     /// Spins before a waiting worker or caller blocks (`SyncOptions::spin`);
     /// `None` keeps the engine default. Needs workers.
     pub(crate) spin: Option<u32>,
+    /// The worker wait policy (ADR-0074): `"fixed"` (the default) or
+    /// `"adaptive"`; `None` keeps the default. Needs workers.
+    pub(crate) wait: Option<String>,
+    /// The adaptive cap in microseconds, 1 to 1,000,000 (default 10,000);
+    /// only with `wait="adaptive"`.
+    pub(crate) wait_cap_us: Option<u32>,
     /// Pipelined mode (ADR-0047) instead of Sync.
     pub(crate) pipelined: bool,
     /// Async mode (ADR-0047) with its batch size and outputs.
@@ -758,11 +765,50 @@ fn resolve_workers(args: &PoolArgs) -> Result<Option<NonZeroUsize>, BindError> {
     Ok(Some(tessera_rl_engine::default_workers(num_envs, chunk)))
 }
 
-/// Sets the spin budget when the caller gave one.
-fn apply_spin(options: &mut SyncOptions, spin: Option<u32>) {
+/// The default adaptive cap of the Python surface, in microseconds.
+pub(crate) const DEFAULT_WAIT_CAP_US: u32 = 10_000;
+
+/// The largest `wait_cap_us`: one second, `MAX_ADAPTIVE_CAP`.
+pub(crate) const MAX_WAIT_CAP_US: u32 = 1_000_000;
+
+/// The wait policy of `wait` and `wait_cap_us` (ADR-0074), checked like
+/// `spin`: it needs workers in Sync mode; `wait_cap_us` needs
+/// `wait="adaptive"` and lies in 1..=1,000,000.
+fn wait_policy(args: &PoolArgs) -> Result<WaitPolicy, BindError> {
+    let sync = !args.pipelined && args.asynced.is_none();
+    if args.wait.is_some() && sync && args.workers == Some(0) {
+        return Err(BindError::Argument(
+            "wait needs workers >= 1 in Sync mode".to_owned(),
+        ));
+    }
+    match (args.wait.as_deref(), args.wait_cap_us) {
+        (None | Some("fixed"), None) => Ok(WaitPolicy::Fixed),
+        (None | Some("fixed"), Some(_)) => Err(BindError::Argument(
+            "wait_cap_us needs wait=\"adaptive\"".to_owned(),
+        )),
+        (Some("adaptive"), cap) => {
+            let cap = cap.unwrap_or(DEFAULT_WAIT_CAP_US);
+            if !(1..=MAX_WAIT_CAP_US).contains(&cap) {
+                return Err(BindError::Argument(format!(
+                    "wait_cap_us must be in 1..=1000000 (microseconds), got {cap}"
+                )));
+            }
+            Ok(WaitPolicy::Adaptive {
+                cap: core::time::Duration::from_micros(u64::from(cap)),
+            })
+        }
+        (Some(other), _) => Err(BindError::Argument(format!(
+            "wait must be \"fixed\" or \"adaptive\", not {other:?}"
+        ))),
+    }
+}
+
+/// Sets the spin budget when the caller gave one, and the wait policy.
+fn apply_spin(options: &mut SyncOptions, spin: Option<u32>, policy: WaitPolicy) {
     if let Some(spin) = spin {
         options.spin = spin;
     }
+    options.wait_policy = policy;
 }
 
 /// The environment object of `pool`, in the mode of `args`. Pipelined mode
@@ -785,6 +831,7 @@ where
 {
     let workers = resolve_workers(args)?;
     check_spin(args)?;
+    let policy = wait_policy(args)?;
     let storage = pool.outputs()?.storage();
     let pooled = Pooled::new(cfg, pool, n, terminal, storage)?;
     if args.pipelined {
@@ -797,7 +844,7 @@ where
         let template = pool.snapshot(0)?;
         let mut options = PipelinedOptions::new(workers.unwrap_or(NonZeroUsize::MIN));
         options.sync.wait = wait_backend()?;
-        apply_spin(&mut options.sync, args.spin);
+        apply_spin(&mut options.sync, args.spin, policy);
         let pool = pool
             .pipelined(options)
             .map_err(|e| BindError::Engine(e.error))?;
@@ -815,7 +862,7 @@ where
         let template = pool.snapshot(0)?;
         let mut options = AsyncOptions::new(workers.unwrap_or(NonZeroUsize::MIN), batch);
         options.sync.wait = wait_backend()?;
-        apply_spin(&mut options.sync, args.spin);
+        apply_spin(&mut options.sync, args.spin, policy);
         let pool = pool
             .async_mode(options)
             .map_err(|e| BindError::Engine(e.error))?;
@@ -832,7 +879,7 @@ where
         Some(w) => {
             let mut options = SyncOptions::new(w);
             options.wait = wait_backend()?;
-            apply_spin(&mut options, args.spin);
+            apply_spin(&mut options, args.spin, policy);
             pool.with_workers(options)?
         }
         None => pool,
@@ -1253,6 +1300,8 @@ mod tests {
             chunk_size: None,
             workers: Some(0),
             spin: None,
+            wait: None,
+            wait_cap_us: None,
             pipelined: false,
             asynced: None,
         };
@@ -1268,8 +1317,58 @@ mod tests {
             chunk_size: None,
             workers,
             spin,
+            wait: None,
+            wait_cap_us: None,
             pipelined,
             asynced: None,
+        }
+    }
+
+    fn wait_args(workers: usize, wait: Option<&str>, cap: Option<u32>) -> PoolArgs {
+        let mut a = spin_args(Some(workers), None, false);
+        a.wait = wait.map(str::to_owned);
+        a.wait_cap_us = cap;
+        a
+    }
+
+    #[test]
+    fn test_wait_policy_defaults_and_adaptive_cap_resolved() {
+        assert_eq!(
+            wait_policy(&wait_args(0, None, None)).unwrap(),
+            WaitPolicy::Fixed
+        );
+        assert_eq!(
+            wait_policy(&wait_args(1, Some("fixed"), None)).unwrap(),
+            WaitPolicy::Fixed
+        );
+        assert_eq!(
+            wait_policy(&wait_args(1, Some("adaptive"), None)).unwrap(),
+            WaitPolicy::Adaptive {
+                cap: core::time::Duration::from_micros(10_000)
+            }
+        );
+        assert_eq!(
+            wait_policy(&wait_args(1, Some("adaptive"), Some(MAX_WAIT_CAP_US))).unwrap(),
+            WaitPolicy::Adaptive {
+                cap: core::time::Duration::from_secs(1)
+            }
+        );
+    }
+
+    #[test]
+    fn test_wait_policy_bad_arguments_refused() {
+        for args in [
+            wait_args(0, Some("adaptive"), None),
+            wait_args(1, Some("eager"), None),
+            wait_args(1, Some("adaptive"), Some(0)),
+            wait_args(1, Some("adaptive"), Some(MAX_WAIT_CAP_US + 1)),
+            wait_args(1, None, Some(5)),
+            wait_args(1, Some("fixed"), Some(5)),
+        ] {
+            assert!(
+                matches!(wait_policy(&args), Err(BindError::Argument(_))),
+                "{args:?}"
+            );
         }
     }
 
@@ -1345,9 +1444,9 @@ mod tests {
     #[test]
     fn test_apply_spin_some_and_none_set_or_keep() {
         let mut options = SyncOptions::new(NonZeroUsize::MIN);
-        apply_spin(&mut options, None);
+        apply_spin(&mut options, None, WaitPolicy::Fixed);
         assert_eq!(options.spin, SyncOptions::new(NonZeroUsize::MIN).spin);
-        apply_spin(&mut options, Some(7));
+        apply_spin(&mut options, Some(7), WaitPolicy::Fixed);
         assert_eq!(options.spin, 7);
     }
 
@@ -1406,6 +1505,8 @@ mod tests {
             chunk_size: None,
             workers: Some(0),
             spin: None,
+            wait: None,
+            wait_cap_us: None,
             pipelined: false,
             asynced: None,
         };

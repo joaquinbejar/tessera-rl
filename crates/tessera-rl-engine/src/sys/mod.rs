@@ -22,6 +22,7 @@
 mod affinity;
 #[cfg(feature = "debug-checks")]
 pub(crate) mod alloc_track;
+mod clock;
 mod cores;
 mod gang;
 pub(crate) mod id_buffers;

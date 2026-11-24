@@ -108,6 +108,28 @@ pub enum WaitBackend {
     Native,
 }
 
+/// What a worker does while it waits for its next batch (ADR-0074).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum WaitPolicy {
+    /// Spin [`SyncOptions::spin`] times, then block (ADR-0005). The
+    /// default.
+    #[default]
+    Fixed,
+    /// After the fixed spins, keep spinning while the current wait is
+    /// shorter than `min(cap, 2 x the EWMA of this worker's past waits)`,
+    /// then block. A worker that spins through the caller's gap keeps its
+    /// caches warm, at the cost of about one core per worker for the gap
+    /// (ADR-0074). `cap` is at most [`MAX_ADAPTIVE_CAP`]; zero behaves as
+    /// [`WaitPolicy::Fixed`].
+    Adaptive {
+        /// Upper bound on the adaptive spinning of one wait.
+        cap: core::time::Duration,
+    },
+}
+
+/// The largest cap of [`WaitPolicy::Adaptive`]: one second.
+pub const MAX_ADAPTIVE_CAP: core::time::Duration = core::time::Duration::from_secs(1);
+
 /// Options of Sync mode (ADR-0005, ADR-0006).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SyncOptions {
@@ -122,6 +144,9 @@ pub struct SyncOptions {
     pub cpu_set: Option<Vec<usize>>,
     /// How workers block between batches.
     pub wait: WaitBackend,
+    /// How long workers spin before they block (ADR-0074). Named
+    /// `wait_policy` because `wait` is the blocking primitive.
+    pub wait_policy: WaitPolicy,
 }
 
 /// One worker per physical core this process may use (SPEC 6.1,
@@ -142,6 +167,7 @@ impl SyncOptions {
             spin: 2_000,
             cpu_set: None,
             wait: WaitBackend::Auto,
+            wait_policy: WaitPolicy::Fixed,
         }
     }
 }
