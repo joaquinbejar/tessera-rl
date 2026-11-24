@@ -100,6 +100,13 @@ impl Replay<'_> {
     /// [`Replay::build_pool`] with `build`, then [`Replay::run`] into the
     /// pool built; returns the pool and the summary.
     ///
+    /// The header holds an asset field's hash only (ADR-0077), so only the
+    /// asset decoded from empty input (for example the Grid's open layout)
+    /// is rebuilt; any other asset is
+    /// [`CanonicalDecodeError::Asset`](tessera_rl_core::config_canonical::CanonicalDecodeError::Asset).
+    /// Replay such a file with [`Replay::run`] into a pool the caller builds
+    /// from the config, assets included.
+    ///
     /// # Errors
     ///
     /// As [`Replay::build_pool`] and [`Replay::run`].
