@@ -131,8 +131,4 @@ pub enum OnnxError {
         /// What does not match.
         what: String,
     },
-    /// The observation holds a `Set` (ADR-0082): the ONNX evaluator does
-    /// not take set inputs yet (#505). Search itself accepts them (#490).
-    #[error("the ONNX evaluator does not take Set observations yet (#505)")]
-    SetObservation,
 }

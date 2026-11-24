@@ -11,6 +11,8 @@ the API is not stable, and any 0.x release may break it.
 
 ### Added
 
+- The ONNX search evaluator takes `Set` observations (#505): a set `p` is the model inputs `p` (or `p/<key>`), `[N, max, ...]`, and `p_mask`, `bool` `[N, max]`, with absent slots zero; the inputs come from `tessera_rl_search::observation_layout`, now public, so they are exactly the leaves of a search row. `Search(env_id="tessera/Gather-v1")` takes an `OnnxEvaluator`.
+
 - Python `spin` pool option (#152, #332): `make(..., spin=...)` sets the Sync worker spin budget (`SyncOptions::spin`, default 2000) in every mode; Sync mode without workers refuses it with `ArgumentError`. The PufferLib adapter passes it through.
 - Rejection notice for host environments (ADR-0069, #285, #391): `HostEnvironment::NOTIFIES_REJECTION` (default `false`, needs `VALIDATES`) and `on_rejected`, called once per rejected call on the reported instance before `EngineError::ActionRejected` is returned; it may write only that instance's state, so snapshots carry the notice.
 - An engine registry shared across wheels (ADR-0005, #349, #402): engines from different extension wheels consult one Python-level registry at `sys.modules["tessera_rl._registry"]` (`attach_shared_registry`), so the unpinned-workers fallback sees every active engine.
@@ -39,6 +41,7 @@ the API is not stable, and any 0.x release may break it.
 
 ### Breaking
 
+- `OnnxError::SetObservation` is removed (#505): the ONNX evaluator takes `Set` observations, so the refusal is never returned.
 - `SearchError::SetObservation` is removed (#490, ADR-0082 point 7 as amended): `SearchPool` accepts `Set` observations, so the variant is never returned.
 - `EnvPool::epoch_barrier` and `PipelinedPool::epoch_barrier` return an `EpochReport` instead of `()` (ADR-0081, #359): episode statistics, and later the curriculum's changes.
 - `PoolContext.transforms` moved to `PoolContext.adaptive.normalization` (ADR-0081 item 6): `PoolContext.adaptive` is an `AdaptiveContext`, one entry per adaptive subsystem.

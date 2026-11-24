@@ -5,6 +5,7 @@
 //! the leaves, and the discrete action count.
 
 use tessera_rl_core::space::{DType, Space};
+use tessera_rl_search::observation_layout;
 
 use crate::error::OnnxError;
 
@@ -28,42 +29,32 @@ impl LeafInput {
     }
 }
 
-/// The observation leaves in the engine's order: a box, or a dict of
-/// boxes (the spaces Python exposes; anything else is refused).
+/// The observation leaves in the engine's order, one model input each:
+/// boxes, dicts of them, and `Set`s of those (#505), from search's
+/// [`observation_layout`], so the inputs are exactly the leaves of a search
+/// row. A set `p` gives `p` (or `p/<key>`), shape `[max, ...]`, then
+/// `p_mask`, `bool` `[max]`; absent slots arrive zeroed (ADR-0082 point 3).
+/// A single unnamed box is the input `obs`.
 pub(crate) fn leaf_inputs(space: &Space) -> Result<Vec<LeafInput>, OnnxError> {
-    if space.contains_set() {
-        return Err(OnnxError::SetObservation);
-    }
-    let mut out = Vec::new();
-    match space {
-        Space::Dict(entries) => {
-            for (key, inner) in entries {
-                out.push(leaf(key, inner)?);
-            }
-        }
-        other => out.push(leaf("obs", other)?),
-    }
-    Ok(out)
-}
-
-fn leaf(name: &str, space: &Space) -> Result<LeafInput, OnnxError> {
-    let Space::Box { shape, dtype, .. } = space else {
-        return Err(OnnxError::Contract {
-            what: format!("observation leaf {name:?} is not a box"),
-        });
-    };
-    let elements = shape
-        .iter()
-        .try_fold(1usize, |acc, &d| acc.checked_mul(usize::try_from(d).ok()?))
-        .ok_or_else(|| OnnxError::Contract {
-            what: format!("observation leaf {name:?} is too large"),
-        })?;
-    Ok(LeafInput {
-        name: name.to_owned(),
-        dtype: *dtype,
-        shape: shape.clone(),
-        elements,
-    })
+    let (leaves, _) = observation_layout(space).ok_or_else(|| OnnxError::Contract {
+        what: "the observation is not boxes, dicts of boxes and sets of those".to_owned(),
+    })?;
+    leaves
+        .into_iter()
+        .map(|l| {
+            let elements = l.bytes.checked_div(l.dtype.size()).unwrap_or(0);
+            Ok(LeafInput {
+                name: if l.name.is_empty() {
+                    "obs".to_owned()
+                } else {
+                    l.name
+                },
+                dtype: l.dtype,
+                shape: l.shape,
+                elements,
+            })
+        })
+        .collect()
 }
 
 /// The number of actions of a `Discrete` action space.
@@ -83,10 +74,9 @@ mod tests {
     use tessera_rl_core::space::{BoxBounds, DType, Space};
 
     use super::leaf_inputs;
-    use crate::OnnxError;
 
     #[test]
-    fn test_layout_set_observation_is_a_typed_refusal() {
+    fn test_layout_set_leaves_are_inputs_in_row_order() {
         let item = Space::Box {
             shape: vec![2],
             dtype: DType::I32,
@@ -95,14 +85,70 @@ mod tests {
                 high: vec![7],
             },
         };
+        let agent = item.clone();
+        let space = Space::Dict(vec![
+            ("agent".to_owned(), agent),
+            (
+                "items".to_owned(),
+                Space::Set {
+                    inner: Box::new(item),
+                    max: 8,
+                },
+            ),
+        ]);
+        let got: Vec<_> = leaf_inputs(&space)
+            .unwrap()
+            .into_iter()
+            .map(|l| (l.name, l.dtype, l.shape, l.elements))
+            .collect();
+        assert_eq!(
+            got,
+            [
+                ("agent".to_owned(), DType::I32, vec![2], 2),
+                ("items".to_owned(), DType::I32, vec![8, 2], 16),
+                ("items_mask".to_owned(), DType::Bool, vec![8], 8),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_layout_set_with_a_dict_inner_names_its_keys() {
+        let b = |n: u32| Space::Box {
+            shape: vec![n],
+            dtype: DType::F32,
+            bounds: BoxBounds::Float {
+                low: vec![0.0],
+                high: vec![1.0],
+            },
+        };
         let space = Space::Dict(vec![(
-            "items".to_owned(),
+            "units".to_owned(),
             Space::Set {
-                inner: Box::new(item),
-                max: 8,
+                inner: Box::new(Space::Dict(vec![
+                    ("pos".to_owned(), b(2)),
+                    ("hp".to_owned(), b(1)),
+                ])),
+                max: 4,
             },
         )]);
-        assert_eq!(leaf_inputs(&space).err(), Some(OnnxError::SetObservation));
-        assert!(OnnxError::SetObservation.to_string().contains("#505"));
+        let names: Vec<_> = leaf_inputs(&space)
+            .unwrap()
+            .into_iter()
+            .map(|l| l.name)
+            .collect();
+        assert_eq!(names, ["units/pos", "units/hp", "units_mask"]);
+    }
+
+    #[test]
+    fn test_layout_unnamed_box_is_obs() {
+        let space = Space::Box {
+            shape: vec![3],
+            dtype: DType::U8,
+            bounds: BoxBounds::UInt {
+                low: vec![0],
+                high: vec![1],
+            },
+        };
+        assert_eq!(leaf_inputs(&space).unwrap()[0].name, "obs");
     }
 }
