@@ -4,7 +4,7 @@
 # maturin's default of macOS 11. Ignored on other platforms.
 export MACOSX_DEPLOYMENT_TARGET := 13.0
 
-.PHONY: onnx-test py-test-onnx fuzz-check simd-disasm dashboard dashboard-check check-build-id gungraun-threaded fmt fmt-check clippy test doc readme readme-check pre-push deny check-targets wheel-golden py-test-wheels puffer-test py-test-jax pre-push-jax compat-test py-entries pyffi-api pyffi-api-if-nightly py-callouts py-test py-test-hooks py-test-host py-test-orderbook py-test-torch pre-push-torch gym-equivalence reference-training learning-test learning-calibrate bench bench-quick bench-kernels gungraun gungraun-bless connect4-calibration search-strength
+.PHONY: onnx-test py-test-onnx fuzz-check simd-disasm dashboard dashboard-check check-build-id gungraun-threaded fmt fmt-check clippy test doc readme readme-check pre-push deny check-targets wheel-golden py-test-wheels puffer-test py-test-jax py-typecheck pre-push-jax compat-test py-entries pyffi-api pyffi-api-if-nightly py-callouts py-test py-test-hooks py-test-host py-test-orderbook py-test-torch pre-push-torch gym-equivalence reference-training learning-test learning-calibrate bench bench-quick bench-kernels gungraun gungraun-bless connect4-calibration search-strength
 
 fmt:
 	cargo fmt --all
@@ -41,7 +41,7 @@ readme:
 readme-check:
 	cargo readme -r crates/tessera-rl -t $(CURDIR)/README.tpl --no-title --no-license --no-indent-headings | diff -u README.md -
 
-pre-push: fmt-check clippy test doc readme-check compat-test py-entries pyffi-api-if-nightly py-callouts py-test py-test-hooks py-test-host py-test-orderbook py-test-wheels dashboard-check simd-disasm fuzz-check
+pre-push: fmt-check clippy test doc readme-check compat-test py-entries pyffi-api-if-nightly py-callouts py-test py-test-hooks py-test-host py-test-orderbook py-test-wheels py-typecheck dashboard-check simd-disasm fuzz-check
 
 # The audited ONNX Runtime version read against the real library (ADR-0057).
 # ONNXRUNTIME_LIB is the libonnxruntime of onnxruntime==1.31.1. Telemetry is
@@ -186,6 +186,18 @@ py-test-jax:
 	uv sync --locked --python 3.11 --group test --group jax
 	uv run --locked --python 3.11 --group test --group jax pytest -q tests/python/test_jax.py
 	uv sync --locked --python 3.11
+
+# The .pyi stubs (issue #348): mypy --strict over the stubs, then stubtest
+# against the installed package (the stubs match the runtime). The jax group
+# resolves tessera_rl.jax; pufferlib is not in the lock, so
+# tessera_rl.puffer is in the allowlist. Then the default environment again.
+py-typecheck:
+	uv sync --locked --python 3.11 --group test --group jax --group typecheck
+	uv run --locked --python 3.11 --group test --group jax --group typecheck mypy python/tessera_rl/*.pyi; \
+	status=$$?; \
+	if [ $$status -eq 0 ]; then uv run --locked --python 3.11 --group test --group jax --group typecheck python -m mypy.stubtest tessera_rl --mypy-config-file pyproject.toml --allowlist tests/python/stubtest-allowlist.txt; status=$$?; fi; \
+	uv sync --locked --python 3.11 || status=1; \
+	exit $$status
 
 # The unit tests of tools/wheel_golden.py, then the default environment again.
 py-test-wheels:

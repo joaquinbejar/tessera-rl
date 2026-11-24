@@ -1,0 +1,5 @@
+# stubtest allowlist for make py-typecheck (issue #348). Each entry says why.
+
+# PufferLib is not in uv.lock: importing tessera_rl.puffer raises ImportError
+# here. mypy still checks puffer.pyi itself.
+tessera_rl.puffer

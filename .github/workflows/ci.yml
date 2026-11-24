@@ -334,6 +334,9 @@ jobs:
       - run: make py-test-wheels
       # The JAX handles (marker `jax`, SPEC 15.2) at the pinned jax and jaxlib.
       - run: make py-test-jax
+      # The .pyi stubs (issue #348): mypy --strict, and stubtest against the
+      # installed package.
+      - run: make py-typecheck
       # Host protocol 1 (#272 step 4): builds the test host wheel of
       # tests/host-wheel and runs its tests (the factory, the two config
       # front ends, the exception classes).
