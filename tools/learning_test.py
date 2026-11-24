@@ -196,7 +196,10 @@ def _train(args, seeds: list[int]) -> list[dict]:
         else:
             import learning_protocols
 
-            r = learning_protocols.train(PROTOCOL, seed, args.total_steps, args.eval_episodes)
+            if learning_protocols.protocol(PROTOCOL)["tier"] == "T2":
+                r = learning_protocols.train_continuous(PROTOCOL, seed, args.total_steps, args.eval_episodes)
+            else:
+                r = learning_protocols.train(PROTOCOL, seed, args.total_steps, args.eval_episodes)
         records.append({"seed": seed, "score": r["eval_mean"], "eval_returns": r["eval_returns"], "train_seconds": r["train_seconds"]})
         sys.stderr.write(f"seed {seed}: score {r['eval_mean']:.2f} in {r['train_seconds']}s\n")
     return records

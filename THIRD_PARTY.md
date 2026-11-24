@@ -35,6 +35,13 @@ fdlibm notices, is kept verbatim at
   environment backends, the greedy evaluation, the JSON report and the
   gate, and the removal of the logging and the command-line flags of the
   original. A validation tool only (ADR-0018): Tessera ships no trainer.
+- **Also:** `tools/learning_continuous.py` adapts CleanRL's
+  `cleanrl/ppo_continuous_action.py` (same repository, same MIT license,
+  text below): the Gaussian actor, its hyperparameters and the update. The
+  changes are the Tessera backend, deterministic seeding, the optional
+  in-trainer observation normalization, the evaluation of the mean action,
+  and the removal of logging and flags. A validation tool for the learning
+  protocols (#370).
 
 ```text
 MIT License

@@ -62,3 +62,10 @@ tier = "T1"
 adapter = "tessera_rl.gym (SAME_STEP)"
 total_steps = 150000
 hyper = {}
+
+[pendulum]
+env = "tessera/Pendulum-v1"
+tier = "T2"
+adapter = "tessera_rl.gym (SAME_STEP)"
+total_steps = 500000
+hyper = {}
