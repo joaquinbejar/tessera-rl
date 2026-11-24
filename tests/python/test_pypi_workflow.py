@@ -189,6 +189,24 @@ def test_pypi_publish_downloads_the_flat_directory_verify_wrote():
 # files, and the other reports stubbed to `{}`. The stub wheels' sha256 is not
 # the real one, so checks.json and the W1 name disagree with them on purpose.
 RUN_TREE = Path(__file__).resolve().parent / "fixtures" / "pypi" / "run-43592025059"
+
+
+def _long_paths_enabled():
+    """Whether paths past MAX_PATH (260) work: always off Windows; on Windows
+    only with the LongPathsEnabled policy. The artifact trees these tests
+    build under tmp_path go past 260 characters there."""
+    if sys.platform != "win32":
+        return True
+    import winreg
+
+    try:
+        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"SYSTEM\CurrentControlSet\Control\FileSystem") as key:
+            return winreg.QueryValueEx(key, "LongPathsEnabled")[0] == 1
+    except OSError:
+        return False
+
+
+long_paths = pytest.mark.skipif(not _long_paths_enabled(), reason="needs paths past MAX_PATH (Windows LongPathsEnabled)")
 RUN_COMMIT = "c156aa0b9e70b2b3f6232882dc7200169082c6ef"
 RUN_W1 = f"wheel-x86_64-unknown-linux-gnu-wheel-{RUN_COMMIT}-1d614867bb51b2a9588811603f7647fca86351979a0452a9ceb6e8aa1a84f105"
 RUN_WHEELS = {
@@ -217,6 +235,7 @@ def test_pypi_run_tree_fixture_is_the_real_layout():
     assert (RUN_TREE / RUN_W1 / "compare.json").is_file()
 
 
+@long_paths
 def test_pypi_verify_reads_the_real_run_tree_up_to_the_stub_bytes(tmp_path):
     # Every check but the byte identity passes on the real names and paths: the
     # only problems are the stubs' sha256 against checks.json and the W1 name.
@@ -243,6 +262,7 @@ def _reseal(arts: Path) -> Path:
     return arts
 
 
+@long_paths
 def test_pypi_verify_accepts_the_real_run_tree_resealed(tmp_path):
     arts = _reseal(_run_tree(tmp_path))
     p, out = _verify(arts, commit=RUN_COMMIT)
@@ -252,6 +272,7 @@ def test_pypi_verify_accepts_the_real_run_tree_resealed(tmp_path):
     assert sums == {w: _sha(out / w) for w in RUN_WHEELS.values()}
 
 
+@long_paths
 @pytest.mark.parametrize("tag, commit, message", [("v0.2.1", RUN_COMMIT, "does not match"), (TAG, "d" * 40, "built at " + RUN_COMMIT)])
 def test_pypi_verify_refuses_the_real_run_tree_for_another_release(tmp_path, tag, commit, message):
     p, out = _verify(_reseal(_run_tree(tmp_path)), tag=tag, commit=commit)
@@ -259,6 +280,7 @@ def test_pypi_verify_refuses_the_real_run_tree_for_another_release(tmp_path, tag
     assert not out.exists()
 
 
+@long_paths
 def test_pypi_verify_refuses_the_real_run_tree_flattened(tmp_path):
     # The layout the first version assumed: each wheel at its artifact's root.
     arts = _reseal(_run_tree(tmp_path))
@@ -334,6 +356,7 @@ def _verify(artifacts, tag=TAG, commit=COMMIT, out=None):
     return p, out
 
 
+@long_paths
 def test_pypi_verify_accepts_the_three_wheels_and_writes_sums(tmp_path):
     arts = tmp_path / "a"
     _good(arts)
@@ -370,6 +393,7 @@ def _replace(arts, key, **kw):
     return _artifact(arts, key, **kw)
 
 
+@long_paths
 @pytest.mark.parametrize(
     "key, kw, message",
     [
@@ -391,6 +415,7 @@ def test_pypi_verify_refuses_a_wheel_that_does_not_match(tmp_path, key, kw, mess
     assert not out.exists()
 
 
+@long_paths
 def test_pypi_verify_refuses_a_wheel_changed_after_its_checks(tmp_path):
     arts = tmp_path / "a"
     _good(arts)
@@ -402,6 +427,7 @@ def test_pypi_verify_refuses_a_wheel_changed_after_its_checks(tmp_path):
     assert not out.exists()
 
 
+@long_paths
 def test_pypi_verify_refuses_two_wheels_in_one_artifact(tmp_path):
     arts = tmp_path / "a"
     _good(arts)
@@ -411,6 +437,7 @@ def test_pypi_verify_refuses_two_wheels_in_one_artifact(tmp_path):
     assert p.returncode == 1 and "expected one wheel in dist/" in p.stderr, p.stderr
 
 
+@long_paths
 @pytest.mark.parametrize("where", [".", "other"])
 def test_pypi_verify_refuses_a_wheel_outside_dist(tmp_path, where):
     arts = tmp_path / "a"
@@ -428,6 +455,7 @@ def test_pypi_verify_refuses_a_wheel_outside_dist(tmp_path, where):
     assert not out.exists()
 
 
+@long_paths
 def test_pypi_verify_refuses_a_wheel_of_the_wrong_platform(tmp_path):
     arts = tmp_path / "a"
     _good(arts)
@@ -459,6 +487,7 @@ def test_pypi_verify_refuses_an_existing_output_directory(tmp_path):
     assert p.returncode == 2
 
 
+@long_paths
 def test_pypi_verify_refuses_a_version_other_than_the_tag(tmp_path):
     arts = tmp_path / "a"
     _good(arts)
@@ -505,7 +534,19 @@ def _run_head_step(tmp_path, ref="tag " + "1" * 40, tagobj="commit " + COMMIT, r
     return p, out.read_text()
 
 
-bash = pytest.mark.skipif(shutil.which("bash") is None, reason="needs bash")
+def _usable_bash():
+    """A POSIX bash on PATH. On Windows, System32's bash.exe is the WSL
+    launcher, which does not run these scripts on Windows paths."""
+    found = shutil.which("bash")
+    if found is None:
+        return False
+    if sys.platform == "win32":
+        system = Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32"
+        return Path(found).parent.resolve() != system.resolve()
+    return True
+
+
+bash = pytest.mark.skipif(not _usable_bash(), reason="needs a POSIX bash (not the WSL launcher)")
 
 
 @bash
@@ -566,6 +607,7 @@ def _sha256sum_on_path(bin_: Path):
     shim.chmod(shim.stat().st_mode | stat.S_IEXEC)
 
 
+@long_paths
 @bash
 @pytest.mark.parametrize("change", [None, "extra", "changed", "missing"])
 def test_pypi_publish_sums_step_passes_only_the_three_checked_wheels(tmp_path, change):
@@ -598,6 +640,7 @@ def test_pypi_publish_sums_step_passes_only_the_three_checked_wheels(tmp_path, c
         assert (dist / "SHA256SUMS").is_file()
 
 
+@long_paths
 @bash
 def test_pypi_publish_sums_step_on_the_real_run_tree(tmp_path):
     dist = tmp_path / "w" / "dist"

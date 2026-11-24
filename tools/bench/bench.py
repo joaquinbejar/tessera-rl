@@ -214,7 +214,10 @@ def runner_path(profile: str = "release") -> pathlib.Path:
     if profile == "release":
         args.append("--release")
     subprocess.run(args, check=True, cwd=ROOT)
-    return ROOT / "target" / profile / "tessera-rl-bench-runner"
+    # Where cargo put it: CARGO_TARGET_DIR (relative to ROOT, cargo's cwd here) or ROOT/target.
+    target = ROOT / os.environ.get("CARGO_TARGET_DIR", "target")
+    exe = ".exe" if sys.platform == "win32" else ""
+    return target / profile / f"tessera-rl-bench-runner{exe}"
 
 
 def _limit(cfg: dict, method: dict) -> int:
