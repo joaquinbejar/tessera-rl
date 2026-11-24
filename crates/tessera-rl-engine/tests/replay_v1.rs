@@ -291,14 +291,12 @@ fn test_replay_v1_curriculum_and_archive_refusals() {
     let replay = Replay::open(&archive, LIMITS).unwrap();
     let weights: Vec<u32> = replay.header().archive.unwrap().weights().collect();
     assert_eq!(weights, [1, 0, 3]);
-    // ADR-0075 (#363): the header names an archive, the first keyframe a
-    // fresh source.
+    // ADR-0075 (#363): the header names an archive and none is given:
+    // refused before anything is replayed. (With the archive, a fresh first
+    // keyframe is malformed: classic's archive_replay forged-header test.)
     assert!(matches!(
         run_error(&archive),
-        ReplayError::Malformed {
-            event_index: 0,
-            field: "first keyframe reset source"
-        }
+        ReplayError::Engine(EngineError::ArchiveMismatch { found: 0, .. })
     ));
 }
 
@@ -425,13 +423,11 @@ fn test_replay_v1_keyframe_archive_source_differing_from_the_header_is_malformed
         body.insert(9 + k, b);
     }
     let file = join(&p, 0);
-    // ADR-0075 (#363): the header holds no archive, the first keyframe one.
+    // ADR-0075 (#363): a keyframe names an archive and none is given:
+    // refused before anything is replayed.
     assert!(matches!(
         run_error(&file),
-        ReplayError::Malformed {
-            event_index: 0,
-            field: "first keyframe reset source"
-        }
+        ReplayError::Engine(EngineError::ArchiveMismatch { found: 0, .. })
     ));
 }
 
@@ -457,9 +453,10 @@ fn test_replay_seek_keyframe_archive_source_without_the_archive_refused_pool_unt
     pool.reset_all(Reseed::Base(Seed::new(11))).unwrap();
     let before: Vec<u64> = (0..N).map(|i| pool.state_hash(i).unwrap().get()).collect();
     let context = pool.pool_context().unwrap();
-    let mut cur = replay.cursor(&pool).unwrap();
+    // The cursor itself is refused (the file names an archive, none is
+    // given), so no seek can write.
     assert!(matches!(
-        replay.seek(&mut pool, &mut cur, 0),
+        replay.cursor(&pool),
         Err(ReplayError::Engine(EngineError::ArchiveMismatch {
             found: 0,
             ..

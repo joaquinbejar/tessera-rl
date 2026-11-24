@@ -162,6 +162,7 @@ impl Replay<'_> {
         <E::Header as RecordLayout>::Adaptive: AdaptiveValues<E::Config>,
     {
         self.check_pool(pool)?;
+        self.check_archives(archive)?;
         let offsets = self.event_offsets()?;
         let (events_len, input_len) = self.shape();
         let mut state = State::new();
@@ -252,6 +253,54 @@ impl Replay<'_> {
         let mut summary = cur.state.summary;
         summary.stopped_at = Some(next);
         Ok(summary)
+    }
+
+    /// Refuses, before anything is replayed, a file whose archive sources
+    /// cannot be restored with `archive` (ADR-0075 item 7): every digest the
+    /// file names (the header's archive block, every keyframe's reset source
+    /// and every `ResetSource` event) must be one archive, the one given.
+    ///
+    /// # Errors
+    ///
+    /// [`ReplayError::Unsupported`] for two or more archives in one file;
+    /// [`ReplayError::Engine`] with [`crate::EngineError::ArchiveMismatch`]
+    /// when the file names an archive and `archive` is missing or another;
+    /// the parse errors of [`Replay::events`].
+    fn check_archives<E: tessera_rl_core::Environment>(
+        &self,
+        archive: Option<&Archive<E>>,
+    ) -> Result<(), ReplayError> {
+        let mut named: Option<u64> = self.header.archive.map(|a| a.digest);
+        let mut note = |source: &super::ResetSourceRecord| -> Result<(), ReplayError> {
+            if let super::ResetSourceRecord::Archive { digest, .. } = source {
+                match named {
+                    Some(d) if d != *digest => {
+                        return Err(ReplayError::Unsupported {
+                            feature: "more than one archive in one replay file: one archive per file (ADR-0075)",
+                        });
+                    }
+                    _ => named = Some(*digest),
+                }
+            }
+            Ok(())
+        };
+        for item in self.events() {
+            match item? {
+                (_, Event::Keyframe { reset_source, .. }) => note(&reset_source)?,
+                (_, Event::ResetSource(source)) => note(&source)?,
+                _ => {}
+            }
+        }
+        match named {
+            Some(digest) => check_source(
+                &super::ResetSourceRecord::Archive {
+                    digest,
+                    weights: Vec::new(),
+                },
+                archive,
+            ),
+            None => Ok(()),
+        }
     }
 
     /// The event indices of the keyframes [`Replay::seek`] accepts: the
