@@ -15,6 +15,7 @@ use tessera_rl_num::identity::Seed;
 use crate::persist::{DecodeLimits, FileHeader, PersistError, Reader, u64_of};
 
 use super::ReplayError;
+use super::cursor::ReplayCursor;
 use super::format::{
     Body, END_BODY_LEN, EventTag, FLAG_ASYNC, FLAG_CONFIG_CHECKED, FLAG_FROM_RESET_ONLY,
     FLAG_HOST_SNAPSHOTS, FLAG_OUTPUTS_HASH, FORMAT_VERSION, FRAME_LEN, IDS_ALL, IDS_LIST,
@@ -257,6 +258,16 @@ struct TagRules {
     has_curriculum: bool,
 }
 
+/// A parsed and checked header, before the events are scanned.
+struct Opened<'a> {
+    file: FileHeader<'a>,
+    header: ReplayHeader<'a>,
+    rules: TagRules,
+    /// The bytes after the header: the events and the end event.
+    rest: &'a [u8],
+    input_len: u64,
+}
+
 /// An opened replay file: header, framing and trailer checked.
 pub struct Replay<'a> {
     pub(crate) file: FileHeader<'a>,
@@ -293,6 +304,76 @@ impl<'a> Replay<'a> {
     /// for a tag this library does not replay, and another typed error for
     /// anything but a sound file within `limits`.
     pub fn open(bytes: &'a [u8], limits: DecodeLimits) -> Result<Self, ReplayError> {
+        let Opened {
+            file,
+            header,
+            rules,
+            rest,
+            input_len,
+        } = Self::open_header(bytes, limits)?;
+        let (events, event_count) = scan(rest, rules)?;
+        Ok(Self {
+            file,
+            header,
+            events,
+            event_count,
+            input_len,
+            limits,
+        })
+    }
+
+    /// Opens `bytes` again for a [`ReplayCursor`] built from the same bytes:
+    /// the header is parsed and checked as [`Replay::open`] does, but the
+    /// event frames are not scanned again; the cursor's event length and
+    /// count stand in for the scan. This keeps each step of a cursor held
+    /// across calls (the Python bindings own the bytes between calls) at the
+    /// cost of the header plus the events it advances over, never a rescan
+    /// of the whole file.
+    ///
+    /// The bytes must be the ones the cursor was built from. Other bytes of
+    /// the same length are not unsafe (every event is still parsed with
+    /// checked lengths, and a header that does not parse is refused), but
+    /// they replay as whatever they hold.
+    ///
+    /// # Errors
+    ///
+    /// The header errors of [`Replay::open`], and
+    /// [`ReplayError::Malformed`] if `bytes` is not as long as the file the
+    /// cursor was built from.
+    pub fn reopen(
+        bytes: &'a [u8],
+        limits: DecodeLimits,
+        cursor: &ReplayCursor,
+    ) -> Result<Self, ReplayError> {
+        let Opened {
+            file,
+            header,
+            rest,
+            input_len,
+            ..
+        } = Self::open_header(bytes, limits)?;
+        let (events_len, event_count, built_from) = cursor.file_shape();
+        let mismatch = ReplayError::Malformed {
+            event_index: 0,
+            field: "a cursor reopened with other bytes",
+        };
+        if input_len != built_from {
+            return Err(mismatch);
+        }
+        let events = rest.get(..events_len).ok_or(mismatch)?;
+        Ok(Self {
+            file,
+            header,
+            events,
+            event_count,
+            input_len,
+            limits,
+        })
+    }
+
+    /// The header part of [`Replay::open`]: the parsed headers, the tag
+    /// rules and the bytes after the header.
+    fn open_header(bytes: &'a [u8], limits: DecodeLimits) -> Result<Opened<'a>, ReplayError> {
         let input_len = u64_of(bytes.len());
         if input_len > limits.max_decoded_bytes {
             return Err(ReplayError::TooLarge {
@@ -362,14 +443,12 @@ impl<'a> Replay<'a> {
             async_pool: header.async_pool,
             has_curriculum: header.has_curriculum,
         };
-        let (events, event_count) = scan(r.0, rules)?;
-        Ok(Self {
+        Ok(Opened {
             file,
             header,
-            events,
-            event_count,
+            rules,
+            rest: r.0,
             input_len,
-            limits,
         })
     }
 
@@ -388,9 +467,65 @@ impl<'a> Replay<'a> {
     /// The events in file order, each parsed when reached.
     #[must_use]
     pub const fn events(&self) -> Events<'a> {
+        self.events_from(self.events, 0)
+    }
+
+    /// The events from byte `offset` of the event bytes, the first of them
+    /// numbered `index`: `offset` must be a frame start that
+    /// [`Replay::event_offsets`] returned, with its position as `index`.
+    /// An offset past the end gives no events.
+    #[must_use]
+    pub fn events_at(&self, offset: usize, index: u64) -> Events<'a> {
+        self.events_from(self.events.get(offset..).unwrap_or(&[]), index)
+    }
+
+    /// The byte offset of every event's frame in the event bytes, in file
+    /// order (event `i` at position `i`): one walk over the frames, which
+    /// [`Replay::open`] already checked.
+    ///
+    /// # Errors
+    ///
+    /// [`ReplayError::Allocation`] if the list cannot be allocated, and
+    /// [`ReplayError::Malformed`] if a frame does not fit (not possible after
+    /// a successful open).
+    pub fn event_offsets(&self) -> Result<Vec<usize>, ReplayError> {
+        let n = usize::try_from(self.event_count).map_err(|_| ReplayError::Allocation)?;
+        let mut out = alloc(n)?;
+        let mut at: usize = 0;
+        while at < self.events.len() {
+            let len = self
+                .events
+                .get(at..)
+                .and_then(|rest| rest.get(1..FRAME_LEN))
+                .and_then(|l| <[u8; 4]>::try_from(l).ok())
+                .and_then(|l| usize::try_from(u32::from_le_bytes(l)).ok())
+                .ok_or(ReplayError::Malformed {
+                    event_index: u64_of(out.len()),
+                    field: "event frame",
+                })?;
+            out.push(at);
+            at = at
+                .checked_add(FRAME_LEN)
+                .and_then(|a| a.checked_add(len))
+                .ok_or(PersistError::Truncated)?;
+        }
+        Ok(out)
+    }
+
+    /// The tag byte of the frame at `offset`, if any.
+    pub(super) fn tag_at(&self, offset: usize) -> Option<u8> {
+        self.events.get(offset).copied()
+    }
+
+    /// The length of the event bytes and the length of the whole input.
+    pub(super) const fn shape(&self) -> (usize, u64) {
+        (self.events.len(), self.input_len)
+    }
+
+    const fn events_from(&self, rest: &'a [u8], index: u64) -> Events<'a> {
         Events {
-            rest: self.events,
-            index: 0,
+            rest,
+            index,
             num_envs: self.header.num_envs,
             record_len: self.header.record_len,
             host: self.header.host,

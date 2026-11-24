@@ -288,7 +288,41 @@ pub(crate) trait PoolOps: Send {
     fn replay(&mut self, _data: &[u8]) -> Result<tessera_rl_engine::ReplaySummary, BindError> {
         Err(sync_only("replay"))
     }
+    /// Starts stepping through a replay file (issue #378): the pool is
+    /// checked against the header and a cursor is kept, with a copy of the
+    /// file, until [`PoolOps::replay_finish`]. Calls that change the pool
+    /// are refused meanwhile.
+    fn replay_begin(&mut self, _data: &[u8]) -> Result<(), BindError> {
+        Err(sync_only("replay"))
+    }
+    /// Applies events until `calls` more calls (resets, steps, state writes)
+    /// were replayed: the index of the last event applied, or `None` at the
+    /// end of the file.
+    fn replay_advance(&mut self, _calls: u64) -> Result<Option<u64>, BindError> {
+        Err(sync_only("replay"))
+    }
+    /// Imports the keyframe at event `keyframe` and moves the cursor after it.
+    fn replay_seek(&mut self, _keyframe: u64) -> Result<(), BindError> {
+        Err(sync_only("replay"))
+    }
+    /// The event indices of the keyframes `replay_seek` accepts.
+    fn replay_keyframes(&self) -> Result<Vec<u64>, BindError> {
+        Err(sync_only("replay"))
+    }
+    /// Ends the stepped replay and drops the cursor: a verified summary if
+    /// every event was applied, else one with `stopped_at` set.
+    fn replay_finish(&mut self) -> Result<tessera_rl_engine::ReplaySummary, BindError> {
+        Err(sync_only("replay"))
+    }
 }
+
+/// A pool with its active stepped replay: the pool, the file's bytes and
+/// the cursor.
+type ActiveCursor<'a, E, M> = (
+    &'a mut EnvPool<E, M>,
+    &'a [u8],
+    &'a mut tessera_rl_engine::ReplayCursor,
+);
 
 struct Pooled<E: Environment, M: MaskProvider<E>> {
     pool: EnvPool<E, M>,
@@ -302,6 +336,12 @@ struct Pooled<E: Environment, M: MaskProvider<E>> {
     /// The configuration and render functions, for an environment that
     /// implements `Render` (ADR-0083).
     render: Option<(E::Config, crate::render_api::RenderFns<E>)>,
+    /// The stepped replay in progress, if any (issue #378): the file bytes,
+    /// owned, and the cursor. Each call reopens the bytes with
+    /// `Replay::reopen`, which parses the header but does not rescan the
+    /// event frames (the cursor holds their offsets), so an advance costs
+    /// the header plus the events it applies, never the whole file.
+    cursor: Option<(Vec<u8>, tessera_rl_engine::ReplayCursor)>,
 }
 
 fn dtype_name(dtype: DType) -> &'static str {
@@ -493,6 +533,7 @@ where
             storage,
             pool,
             rec: None,
+            cursor: None,
             views: crate::view::view_set(&layout).map(std::sync::Arc::new),
             layout,
             render: None,
@@ -566,6 +607,26 @@ where
         }
         Ok(())
     }
+
+    /// Refuses a call that changes the pool while a stepped replay holds it:
+    /// the replay would no longer check what the file recorded.
+    fn not_replaying(&self, what: &str) -> Result<(), BindError> {
+        if self.cursor.is_some() {
+            return Err(BindError::Argument(format!(
+                "{what} is refused while a replay is in progress: finish the replay first"
+            )));
+        }
+        Ok(())
+    }
+
+    /// The active cursor, or the refusal of `what` without one.
+    fn active(&mut self, what: &str) -> Result<ActiveCursor<'_, E, M>, BindError> {
+        let Self { pool, cursor, .. } = self;
+        let (bytes, cur) = cursor
+            .as_mut()
+            .ok_or_else(|| BindError::Argument(format!("{what}: no replay in progress")))?;
+        Ok((pool, bytes.as_slice(), cur))
+    }
 }
 
 impl<E, M> PoolOps for Pooled<E, M>
@@ -587,6 +648,7 @@ where
     }
 
     fn reset(&mut self, ids: Option<&[u32]>, seed: &ResetSeed) -> Result<(), BindError> {
+        self.not_replaying("reset")?;
         let reseed = match seed {
             ResetSeed::Keep => Reseed::Keep,
             ResetSeed::Base(s) => Reseed::Base(Seed::new(*s)),
@@ -596,6 +658,7 @@ where
     }
 
     fn step(&mut self, actions: ActionInput<'_>) -> Result<(), BindError> {
+        self.not_replaying("step")?;
         if let Some(detached) = self.rec.take() {
             let mut rec = detached.attach(&mut self.pool);
             let result = rec.step(actions).map(|_| ());
@@ -690,6 +753,7 @@ where
 
     fn import(&mut self, id: u32, bytes: &[u8]) -> Result<(), BindError> {
         self.not_recording("import_record")?;
+        self.not_replaying("import_record")?;
         let record = decode_from_slice::<DecodedRecord<E>>(bytes).map_err(BindError::Decode)?;
         self.pool.import(&[id], &[record])?;
         Ok(())
@@ -706,6 +770,7 @@ where
         limits: tessera_rl_engine::DecodeLimits,
     ) -> Result<(), BindError> {
         self.not_recording("load")?;
+        self.not_replaying("load")?;
         let records = self.pool.decode(bytes, limits)?;
         match ids {
             Some(ids) => self.pool.import(ids, &records)?,
@@ -716,6 +781,7 @@ where
     }
 
     fn fork(&mut self, src: u32, dst: &[u32]) -> Result<(), BindError> {
+        self.not_replaying("fork")?;
         if let Some(detached) = self.rec.take() {
             let mut rec = detached.attach(&mut self.pool);
             let result = rec.fork(src, dst);
@@ -735,6 +801,7 @@ where
         keyframe_every: u64,
         checkpoint_every: u64,
     ) -> Result<(), BindError> {
+        self.not_replaying("record")?;
         if self.rec.is_some() {
             return Err(BindError::Argument("already recording".to_owned()));
         }
@@ -762,10 +829,79 @@ where
 
     fn replay(&mut self, data: &[u8]) -> Result<tessera_rl_engine::ReplaySummary, BindError> {
         self.not_recording("replay")?;
+        self.not_replaying("replay")?;
         let replay =
             tessera_rl_engine::Replay::open(data, tessera_rl_engine::DecodeLimits::default())
                 .map_err(BindError::from)?;
         replay.run(&mut self.pool).map_err(BindError::from)
+    }
+
+    fn replay_begin(&mut self, data: &[u8]) -> Result<(), BindError> {
+        self.not_recording("replay")?;
+        self.not_replaying("replay")?;
+        let replay =
+            tessera_rl_engine::Replay::open(data, tessera_rl_engine::DecodeLimits::default())?;
+        let cur = replay.cursor(&self.pool)?;
+        self.cursor = Some((data.to_vec(), cur));
+        Ok(())
+    }
+
+    fn replay_advance(&mut self, calls: u64) -> Result<Option<u64>, BindError> {
+        use tessera_rl_engine::{PointKind, Replay};
+        if calls == 0 {
+            return Err(BindError::Argument("calls must be at least 1".to_owned()));
+        }
+        let (pool, bytes, cur) = self.active("replay_advance")?;
+        let replay = Replay::reopen(bytes, tessera_rl_engine::DecodeLimits::default(), cur)?;
+        let mut seen: u64 = 0;
+        let point = replay.advance(pool, cur, |p| {
+            if p.kind == PointKind::Call {
+                // `seen < calls <= u64::MAX` before this add (the previous
+                // call would have stopped otherwise), so it cannot overflow;
+                // checked anyway, stopping if it ever did.
+                match seen.checked_add(1) {
+                    Some(next) => seen = next,
+                    None => return true,
+                }
+            }
+            seen >= calls
+        })?;
+        Ok(point.map(|p| p.event_index))
+    }
+
+    fn replay_seek(&mut self, keyframe: u64) -> Result<(), BindError> {
+        let (pool, bytes, cur) = self.active("replay_seek")?;
+        let replay = tessera_rl_engine::Replay::reopen(
+            bytes,
+            tessera_rl_engine::DecodeLimits::default(),
+            cur,
+        )?;
+        replay.seek(pool, cur, keyframe)?;
+        Ok(())
+    }
+
+    fn replay_keyframes(&self) -> Result<Vec<u64>, BindError> {
+        let (bytes, cur) = self.cursor.as_ref().ok_or_else(|| {
+            BindError::Argument("replay_keyframes: no replay in progress".to_owned())
+        })?;
+        let replay = tessera_rl_engine::Replay::reopen(
+            bytes,
+            tessera_rl_engine::DecodeLimits::default(),
+            cur,
+        )?;
+        Ok(replay.keyframes()?)
+    }
+
+    fn replay_finish(&mut self) -> Result<tessera_rl_engine::ReplaySummary, BindError> {
+        let (bytes, cur) = self.cursor.take().ok_or_else(|| {
+            BindError::Argument("replay_finish: no replay in progress".to_owned())
+        })?;
+        let replay = tessera_rl_engine::Replay::reopen(
+            &bytes,
+            tessera_rl_engine::DecodeLimits::default(),
+            &cur,
+        )?;
+        Ok(replay.finish(cur)?)
     }
 }
 
@@ -1062,6 +1198,7 @@ where
         views,
         storage,
         render,
+        cursor: None,
     }))
 }
 

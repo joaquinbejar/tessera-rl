@@ -202,7 +202,9 @@ def test_replay_adapter_or_foreign_object_raises_type_error(tmp_path):
 
 def test_replay_summary_exposes_unverified_poison_with_default_false():
     fields = {f.name: f for f in dataclasses.fields(replay.ReplaySummary)}
-    assert list(fields) == ["events", "calls", "poisoned", "unverified_poison", "unclaimed"]
+    assert list(fields) == [
+        "events", "calls", "poisoned", "unverified_poison", "unclaimed", "stopped_at", "started_at",
+    ]
     assert replay.ReplaySummary(events=3, calls=2).unclaimed == ()
     summary = replay.ReplaySummary(events=3, calls=2)
     assert summary.unverified_poison is False
