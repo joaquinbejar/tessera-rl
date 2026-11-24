@@ -32,6 +32,7 @@ def test_watch_second_thread_while_main_steps_records_match_snapshots():
     env = make()
     handle = env.watch()
     stop = threading.Event()
+    requested = threading.Event()
     got = []
 
     def view():
@@ -42,6 +43,7 @@ def test_watch_second_thread_while_main_steps_records_match_snapshots():
                 got.append(taken)
             try:
                 handle.request(1)
+                requested.set()
             except t.ConcurrencyError:
                 pass
             time.sleep(0)
@@ -50,11 +52,18 @@ def test_watch_second_thread_while_main_steps_records_match_snapshots():
     try:
         viewer_thread = threading.Thread(target=view)
         viewer_thread.start()
+        # The viewer thread may not run for a while (the interpreter lock):
+        # wait for its first request, and keep stepping until it has taken
+        # records, so the test does not depend on scheduling.
+        assert requested.wait(10), "the viewer thread never requested"
         env.reset(seed=3)
         snapshots[1] = env.snapshot(1)  # the first boundary since attach
-        for k in range(300):
+        deadline = time.monotonic() + 10
+        k = 0
+        while k < 300 or (len(got) < 3 and time.monotonic() < deadline):
             env.step(actions(k))
             snapshots[k + 2] = env.snapshot(1)
+            k += 1
         stop.set()
         viewer_thread.join()
         assert got, "no record was served"
