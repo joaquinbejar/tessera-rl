@@ -298,7 +298,7 @@ impl FunctionNoArgs for InitFailsAfterRegister {
     }
 }
 
-const FUNCTION_COUNT: usize = if cfg!(feature = "test-hooks") { 38 } else { 32 };
+const FUNCTION_COUNT: usize = if cfg!(feature = "test-hooks") { 40 } else { 34 };
 
 static ROWS: [FunctionRow; FUNCTION_COUNT] = [
     FunctionRow::noargs::<Version>(c"version", c"version($module, /)\n--\n\nThe Tessera version."),
@@ -356,6 +356,8 @@ static ROWS: [FunctionRow; FUNCTION_COUNT] = [
     env_type::MAKERS[15],
     env_type::MAKERS[16],
     env_type::MAKERS[17],
+    env_type::MAKERS[18],
+    env_type::MAKERS[19],
     search_type::MAKER,
     search_group_type::MAKER,
     search_type::ONNX_LOAD,

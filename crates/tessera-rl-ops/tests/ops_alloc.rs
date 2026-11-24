@@ -87,10 +87,11 @@ fn test_jobshop_rules_do_not_allocate() {
     assert_eq!(n, 0);
 }
 
+/// Eight vehicles, so the turn selection runs too.
 fn test_vrp_reset_and_steps_with_501_wide_masks_do_not_allocate() {
     let cfg = VrpConfig {
         customers: 500,
-        vehicles: 1,
+        vehicles: 8,
         grid: 1000,
         max_demand: 255,
         capacity: 1_000,

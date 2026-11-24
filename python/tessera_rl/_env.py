@@ -905,6 +905,8 @@ def make(env_id: str, num_envs: int = 1, seed: int = 0, outputs: str = "borrowed
         "tessera/Lanterns-v1": _native.make_lanterns,
         "tessera/Othello-v1": _native.make_othello,
         "tessera/Go9-v1": _native.make_go9,
+        "tessera/JobShop-v1": _native.make_jobshop,
+        "tessera/Vrp-v1": _native.make_vrp,
     }
     maker = makers.get(env_id)
     if maker is None:

@@ -9,9 +9,11 @@
 //!   (nodes `1..=customers`) get integer coordinates in `0..grid`, and each
 //!   customer a demand in `1..=max_demand`, drawn uniformly from the
 //!   instance's `StepRng`. Steps draw no randomness.
-//! - **Vehicles:** `vehicles` agents with the same `capacity`, all at the
-//!   depot and full at reset. This version takes one vehicle; turns are
-//!   `Sequential` (ADR-0013), so several vehicles keep one acting agent.
+//! - **Vehicles:** `vehicles` agents (1 to 8) with the same `capacity`, all
+//!   at the depot and full at reset. Turns are `Sequential` (ADR-0013): the
+//!   vehicle with work left (away from the depot, or customers left) that
+//!   has travelled the least moves next, ties broken by the lowest slot. One
+//!   agent acts per step, so the mask stays `customers + 1` wide.
 //! - **Distance:** the Euclidean distance rounded to the nearest integer,
 //!   computed when needed from the coordinates with an exact integer square
 //!   root on `u64` (`round(sqrt(v))` is `r + 1` when `v - r * r > r`, else
@@ -84,8 +86,8 @@ pub struct VrpConfig {
     /// Customers, 2 to 500.
     #[config(default = 20, range = 2..=500)]
     pub customers: u32,
-    /// Vehicles; this version takes one.
-    #[config(default = 1, range = 1..=1)]
+    /// Vehicles, 1 to 8.
+    #[config(default = 1, range = 1..=8)]
     pub vehicles: u32,
     /// Coordinates are in `0..grid`.
     #[config(default = 100, range = 2..=1000)]
@@ -276,6 +278,25 @@ impl VrpState {
                 .all(|&a| usize::from(a) == DEPOT)
     }
 
+    /// Whether vehicle `v` has work left: it is away from the depot, or
+    /// customers are left.
+    #[must_use]
+    pub fn active(&self, v: usize) -> bool {
+        self.node_of(v) != DEPOT || usize::from(self.served) < self.customer_count()
+    }
+
+    /// The vehicle to move next: among those with work left, the one that
+    /// has travelled the least, ties broken by the lowest slot; 0 when none
+    /// has work left.
+    #[must_use]
+    pub fn next_mover(&self) -> usize {
+        // `min_by_key` keeps the first minimum: the lowest slot.
+        (0..usize::from(self.vehicles).min(MAX_VEHICLES))
+            .filter(|&v| self.active(v))
+            .min_by_key(|&v| self.travelled.get(v).copied().unwrap_or(u32::MAX))
+            .unwrap_or(0)
+    }
+
     /// Moves vehicle `v` to node `n`; returns the distance.
     fn travel(&mut self, v: usize, n: usize) -> u32 {
         let from = self.node_of(v);
@@ -312,6 +333,8 @@ impl Environment for Vrp {
     const MAX_AGENTS: usize = MAX_VEHICLES;
     const TIER: Tier = Tier::CrossPlatform;
     const TURNS: TurnStructure = TurnStructure::Sequential;
+    /// AEC only: a sequential game (SPEC 12, ADR-0080).
+    const ADAPTERS: tessera_rl_core::Adapters = tessera_rl_core::Adapters::PZ_AEC;
 
     fn observation_space(cfg: &VrpConfig) -> Result<Space, SpaceError> {
         VrpObs::space(cfg)
@@ -384,8 +407,7 @@ impl Environment for Vrp {
         #[expect(clippy::cast_precision_loss, reason = "below MAX_VALUE, exact in f32")]
         let reward = -(d as f32);
         out.set_reward(mover, reward);
-        let vehicles = usize::from(state.vehicles).max(1);
-        state.to_move = u8::try_from((v + 1) % vehicles).unwrap_or(0);
+        state.to_move = u8::try_from(state.next_mover()).unwrap_or(0);
         if state.finished() {
             state.done = 1;
             out.end_episode(EpisodeEnd::Terminated);
@@ -507,7 +529,7 @@ impl Validate for Vrp {
                 return invalid("a vehicle at the depot that is not full");
             }
         }
-        if usize::from(s.to_move) >= vehicles || (s.done == 1) != s.finished() || s.done > 1 {
+        if usize::from(s.to_move) != s.next_mover() || (s.done == 1) != s.finished() || s.done > 1 {
             return invalid("a turn or done flag that does not match the state");
         }
         Ok(())

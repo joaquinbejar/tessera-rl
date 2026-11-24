@@ -281,11 +281,13 @@ maker!(MakePaddleduel, api::make_paddleduel, "make_paddleduel");
 maker!(MakeConnect4, api::make_connect4, "make_connect4");
 maker!(MakeLeduc, api::make_leduc, "make_leduc");
 maker!(MakeLanterns, api::make_lanterns, "make_lanterns");
+maker!(MakeJobshop, api::make_jobshop, "make_jobshop");
+maker!(MakeVrp, api::make_vrp, "make_vrp");
 maker!(MakeOthello, api::make_othello, "make_othello");
 maker!(MakeGo9, api::make_go9, "make_go9");
 
 /// The module-level constructors, for the module's function table.
-pub(super) const MAKERS: [FunctionRow; 18] = [
+pub(super) const MAKERS: [FunctionRow; 20] = [
     FunctionRow::kw::<MakeCartpole>(c"make_cartpole", c"make_cartpole($module, *, mode=None, batch_size=None, gather=None, num_envs=None, seed=None, max_episode_steps=None, auto_reset=None, chunk_size=None, workers=None, spin=None, outputs=None)\n--\n\nmake_cartpole(**pool_options) -> Env"),
     FunctionRow::kw::<MakeAcrobot>(c"make_acrobot", c"make_acrobot($module, *, mode=None, batch_size=None, gather=None, num_envs=None, seed=None, max_episode_steps=None, auto_reset=None, chunk_size=None, workers=None, spin=None, outputs=None)\n--\n\nmake_acrobot(**pool_options) -> Env"),
     FunctionRow::kw::<MakeMountaincar>(
@@ -337,6 +339,8 @@ pub(super) const MAKERS: [FunctionRow; 18] = [
         c"make_paddleduel",
         c"make_paddleduel($module, *, mode=None, batch_size=None, gather=None, num_envs=None, seed=None, max_episode_steps=None, auto_reset=None, chunk_size=None, workers=None, spin=None, outputs=None, agents=None, frameskip=None, max_score=None, bounce=None, obs=None)\n--\n\nmake_paddleduel(**pool_options, agents=1, frameskip=4, max_score=11, bounce=1, obs=\"pixels\") -> Env",
     ),
+    FunctionRow::kw::<MakeJobshop>(c"make_jobshop", c"make_jobshop($module, *, jobs=None, machines=None, max_duration=None, mode=None, batch_size=None, gather=None, num_envs=None, seed=None, max_episode_steps=None, auto_reset=None, chunk_size=None, workers=None, spin=None, outputs=None))\n--\n\nmake_jobshop(*, jobs=6, machines=6, max_duration=99, **pool_options) -> Env"),
+    FunctionRow::kw::<MakeVrp>(c"make_vrp", c"make_vrp($module, *, customers=None, vehicles=None, grid=None, max_demand=None, capacity=None, mode=None, batch_size=None, gather=None, num_envs=None, seed=None, max_episode_steps=None, auto_reset=None, chunk_size=None, workers=None, spin=None, outputs=None))\n--\n\nmake_vrp(*, customers=20, vehicles=1, grid=100, max_demand=9, capacity=30, **pool_options) -> Env"),
 ];
 
 /// The test-hook constructors.
