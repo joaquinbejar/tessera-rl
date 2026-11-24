@@ -1,0 +1,30 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
+[package]
+name = "tessera-rl-league"
+description = "Tessera league machinery: populations, Elo and TrueSkill ratings, PFSP and Elo matchmaking (ADR-0026, ADR-0088)"
+readme = "README.md"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+tessera-rl-num.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+criterion.workspace = true
+proptest.workspace = true
+
+[lints]
+workspace = true
+
+[[bench]]
+name = "league_barrier"
+harness = false

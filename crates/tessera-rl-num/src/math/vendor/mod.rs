@@ -72,6 +72,7 @@ macro_rules! select_implementation {
 mod atan;
 mod atan2;
 mod cos;
+mod erf;
 mod exp;
 mod expm1;
 mod hypot;
@@ -89,6 +90,7 @@ mod tanh;
 pub(crate) use atan::atan;
 pub(crate) use atan2::atan2;
 pub(crate) use cos::cos;
+pub(crate) use erf::{erf, erfc};
 pub(crate) use exp::exp;
 pub(crate) use hypot::hypot;
 pub(crate) use log::log;
@@ -103,6 +105,21 @@ use k_tan::k_tan;
 use rem_pio2::rem_pio2;
 use rem_pio2_large::rem_pio2_large;
 use scalbn::scalbn;
+
+// `get_high_word` and `with_set_low_word` are upstream's `libm` 0.2.16
+// helpers (`src/math/mod.rs`), copied verbatim; `erf.rs` uses them.
+#[inline]
+fn get_high_word(x: f64) -> u32 {
+    (x.to_bits() >> 32) as u32
+}
+
+#[inline]
+fn with_set_low_word(f: f64, lo: u32) -> f64 {
+    let mut tmp = f.to_bits();
+    tmp &= 0xffffffff_00000000;
+    tmp |= lo as u64;
+    f64::from_bits(tmp)
+}
 
 #[inline]
 fn fabs(x: f64) -> f64 {

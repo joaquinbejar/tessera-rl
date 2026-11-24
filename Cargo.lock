@@ -1102,6 +1102,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "tessera-rl-league"
+version = "0.3.0"
+dependencies = [
+ "criterion",
+ "proptest",
+ "tessera-rl-num",
+ "thiserror",
+]
+
+[[package]]
 name = "tessera-rl-macros"
 version = "0.3.0"
 dependencies = [
