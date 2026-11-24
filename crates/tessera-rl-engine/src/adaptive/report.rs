@@ -14,8 +14,12 @@ pub struct EpisodeStats {
     pub sum_return: f64,
     /// Sum of their lengths.
     pub sum_length: f64,
-    /// Sum of their squared returns.
-    pub sum_sq_return: f64,
+    /// Mean of their returns (Chan's pairwise merge of per-instance
+    /// Welford means, in instance order).
+    pub return_mean: f64,
+    /// Sum of squared deviations of their returns from `return_mean`
+    /// (Chan's merge): the population variance is `return_m2 / count`.
+    pub return_m2: f64,
     /// Aborted episodes of a host pool (ADR-0065), counted in `count` too;
     /// `0` for other pools.
     pub aborted: u64,
@@ -25,7 +29,7 @@ impl EpisodeStats {
     /// The mean return, `None` without episodes.
     #[must_use]
     pub fn mean_return(&self) -> Option<f64> {
-        self.mean(self.sum_return)
+        (self.count > 0).then_some(self.return_mean)
     }
 
     /// The mean length, `None` without episodes.
@@ -34,17 +38,13 @@ impl EpisodeStats {
         self.mean(self.sum_length)
     }
 
-    /// The population variance of the returns, `None` without episodes:
-    /// `E[r^2] - E[r]^2` from the sums, clamped at zero. This naive form
-    /// loses precision when the mean is large against the spread (ADR-0081
-    /// item 3 fixes the partials as sums); compute in `f64` from
-    /// `sum_sq_return` and `count` yourself for another estimator. It runs
-    /// in the caller's FP environment, like any arithmetic on the report.
+    /// The population variance of the returns, `return_m2 / count`, `None`
+    /// without episodes. Chan's merge keeps it exact to rounding when
+    /// returns are large and vary little. It runs in the caller's FP
+    /// environment, like any arithmetic on the report.
     #[must_use]
     pub fn var_return(&self) -> Option<f64> {
-        let mean = self.mean_return()?;
-        let sq = self.mean(self.sum_sq_return)?;
-        Some((sq - mean * mean).max(0.0))
+        self.mean(self.return_m2)
     }
 
     fn mean(&self, sum: f64) -> Option<f64> {
