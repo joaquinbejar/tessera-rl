@@ -206,11 +206,18 @@ def _train(args, seeds: list[int]) -> list[dict]:
                 # mean against a uniform-legal opponent is kept for the gate.
                 r = learning_protocols.train_twoplayer(PROTOCOL, seed, args.total_steps, args.eval_episodes)
                 r["eval_returns"] = r["vs_heuristic"]
+                # rev: save the trained parameters beside the score file, so a
+                # re-evaluation never needs retraining.
+                params = pathlib.Path(f"{args.out}.seed{seed}.pt")
+                torch.save(r.pop("agent").state_dict(), params)
+                r["parameters"] = params.name
             else:
                 r = learning_protocols.train(PROTOCOL, seed, args.total_steps, args.eval_episodes)
         record = {"seed": seed, "score": r["eval_mean"], "eval_returns": r["eval_returns"], "train_seconds": r.get("train_seconds")}
         if "vs_uniform" in r:
             record["vs_uniform"] = float(sum(r["vs_uniform"]) / len(r["vs_uniform"]))
+            record["parameters"] = r["parameters"]
+            record["opening_plies"] = r["opening_plies"]
         records.append(record)
         sys.stderr.write(f"seed {seed}: score {r['eval_mean']:.2f} in {r['train_seconds']}s\n")
     return records

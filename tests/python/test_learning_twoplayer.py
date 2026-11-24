@@ -227,3 +227,36 @@ def test_t3b_calibrate_uses_ten_seeds_and_their_minimum():
     forty = [{"seed": s, "score": float(s)} for s in CALIBRATION_SEEDS]
     assert calibrate(forty, CALIBRATION_SEEDS)["threshold_rule"] == "p5"
     assert "errors" in calibrate(records, T3B_CALIBRATION_SEEDS, expected=T3B_CALIBRATION_SEEDS, threshold="median")
+
+
+BOARD = {"tessera/Connect4-v1": 2, "tessera/Othello-v1": 4, "tessera/Go9-v1": 4}
+
+
+@pytest.mark.parametrize("env_id", sorted(BOARD))
+def test_twoplayer_openings_are_deterministic_and_distinct(env_id):
+    """Paired comparisons need the same opening for every player kind; a
+    diverse evaluation needs different openings across episodes."""
+    a, skipped_a = l2.openings(env_id, {}, 10, 10_000, BOARD[env_id])
+    b, skipped_b = l2.openings(env_id, {}, 10, 10_000, BOARD[env_id])
+    assert a == b and skipped_a == skipped_b
+    present = [r for r in a if r is not None]
+    assert len(set(present)) >= 8, f"{env_id}: {len(set(present))} distinct openings of 10"
+    assert l2.openings(env_id, {}, 3, 10_000, 0) == ([None, None, None], 0)
+
+
+@pytest.mark.torch
+@pytest.mark.parametrize("env_id", sorted(BOARD))
+def test_twoplayer_trained_vs_heuristic_games_differ(env_id):
+    """rev's diversity check, against the heuristic (the uniform-player check
+    could not see a deterministic evaluation): a greedy agent against the
+    heuristic plays different games across a seed's evaluation episodes."""
+    pytest.importorskip("torch")
+    probe = l2._make(env_id, 1, 0, None, {})
+    obs = l2.flat_obs(probe.reset().observations, 0)
+    agent = l2._agent_class()(obs.shape[1], probe.action_choices)
+    probe.close()
+    trace = []
+    l2.eval_scores(env_id, {}, [0, 1], "trained", "heuristic", 10, 10_000, "sign", agent, opening_plies=BOARD[env_id], trace=trace)
+    for seat in (0, 1):
+        games = {d for s, _, d in trace if s == seat}
+        assert len(games) >= 4, f"{env_id} seat {seat}: {len(games)} distinct games of 5"
