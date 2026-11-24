@@ -339,7 +339,10 @@ class TesseraPufferEnv(pufferlib.PufferEnv):
         # its agents, and every agent row shares its length.
         self._tick += 1
         returns, lengths = np.asarray(raw["episode_return"]), np.asarray(raw["episode_length"])
-        ended = int(np.count_nonzero(lengths))
+        # Lengths are non-negative whole numbers in float32, so a row is
+        # nonzero exactly when its bits are: counting on the uint32 view gives
+        # the same count, several times faster than on float32 (#294).
+        ended = int(np.count_nonzero(lengths.view(np.uint32)))
         if ended:
             self._finished[0] += float(returns.sum(dtype=np.float64))
             self._finished[1] += int(lengths.sum(dtype=np.float64)) * self._agents

@@ -500,6 +500,54 @@ def test_logging_from_engine_statistics_matches_per_step_accounting(env_id, num_
         assert g["episode_return"] == pytest.approx(w["episode_return"], rel=1e-6, abs=1e-6)
 
 
+def _float_count_log(self, raw: dict) -> list:
+    """The adapter's `_log` before #294: count_nonzero on the float32 lengths."""
+    self._tick += 1
+    returns, lengths = np.asarray(raw["episode_return"]), np.asarray(raw["episode_length"])
+    ended = int(np.count_nonzero(lengths))
+    if ended:
+        self._finished[0] += float(returns.sum(dtype=np.float64))
+        self._finished[1] += int(lengths.sum(dtype=np.float64)) * self._agents
+        self._finished[2] += ended * self._agents
+    if self._tick % self._log_interval != 0 or self._finished[2] == 0:
+        return []
+    total, length, n = self._finished
+    self._finished = [0.0, 0, 0]
+    return [{"episode_return": total / n, "episode_length": length / n, "n": n}]
+
+
+@pytest.mark.parametrize(
+    "env_id, num_envs, kwargs",
+    [(CARTPOLE, 16, {"max_episode_steps": 30}), (CARTPOLE, 64, {}), ("tessera/Tag-v1", 8, {})],
+)
+def test_log_uint32_count_matches_float_count_bit_for_bit(monkeypatch, env_id, num_envs, kwargs):
+    """#294: counting ended rows on the uint32 view logs the same values,
+    compared exactly (`==` on floats), as the float32 count did."""
+
+    def run(log):
+        env = TesseraPufferEnv(env_id, num_envs=num_envs, log_interval=8, **kwargs)
+        if log is not None:
+            monkeypatch.setattr(env, "_log", log.__get__(env))
+        env.reset(seed=3)
+        rng = np.random.default_rng(5)
+        out = []
+        for _ in range(512):
+            out += env.step(rng.integers(0, env.single_action_space.n, size=env.num_agents, dtype=np.int32))[4]
+        env.close()
+        return out
+
+    want, got = run(_float_count_log), run(None)
+    assert len(want) > 8, "too few logs to compare"
+    assert got == want
+
+
+def test_log_uint32_count_matches_float_count_on_edge_lengths():
+    """Zero, whole-number lengths up to 2**24 and the smallest subnormal:
+    the uint32 view counts exactly the nonzero floats."""
+    lengths = np.array([0.0, 1.0, 2.0, 0.0, 30.0, 2.0**24, 0.0, 1e-45], dtype=np.float32)
+    assert int(np.count_nonzero(lengths.view(np.uint32))) == int(np.count_nonzero(lengths)) == 5
+
+
 def test_logging_reads_the_raw_outputs_once_and_drops_them():
     """The episode statistics are borrowed views: the adapter takes them
     right after its own whole-pool step and keeps no reference (#152, G3)."""
