@@ -61,7 +61,7 @@ fn source(arc: &Archive<CartPole>) -> ResetSource<CartPole> {
 /// Instance `i`'s action at step `t`: pushes one way most of the time, so
 /// episodes end and archive auto-resets run.
 fn action(t: u32, i: u32) -> i32 {
-    i32::from((t / 7 + i) % 3 != 0)
+    i32::from(!(t / 7 + i).is_multiple_of(3))
 }
 
 fn hashes(records: &[Record<CartPole>]) -> Vec<u64> {
@@ -241,5 +241,18 @@ fn test_archive_modes_async_reset_from_equals_sync() {
     assert!(matches!(
         a.reset_from(&[0], &[3]),
         Err(EngineError::Archive { .. })
+    ));
+    // An id still in flight: refused like `reset` (ADR-0047 section 3).
+    a.send(
+        &[0, 2],
+        ActionInput {
+            discrete: &[0, 0],
+            continuous: &[],
+        },
+    )
+    .unwrap();
+    assert!(matches!(
+        a.reset_from(&[2], &[0]),
+        Err(EngineError::InFlight { .. })
     ));
 }
