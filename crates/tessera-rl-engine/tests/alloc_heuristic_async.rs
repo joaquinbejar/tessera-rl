@@ -73,7 +73,9 @@ fn test_async_step_with_a_heuristic_slot_does_not_allocate_on_any_thread() {
         ))
         .unwrap();
     // Slot 1's rows are garbage: never read.
-    let actions: Vec<i32> = (0..N * 2).map(|k| if k % 2 == 0 { 1 } else { -9 }).collect();
+    let actions: Vec<i32> = (0..N * 2)
+        .map(|k| if k % 2 == 0 { 1 } else { -9 })
+        .collect();
     let mut ids: Vec<u32> = (0..u32::try_from(N).unwrap()).collect();
     let mut rng = 0x9e37_79b9_u64;
     let mut next = move || {

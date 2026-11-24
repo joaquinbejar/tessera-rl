@@ -39,8 +39,8 @@ use tessera_rl_core::{Bool8, Environment, RecordLayout as _};
 use super::rows::{Admitted, RawRows};
 use super::{EnvRawChunk, Raw, RawChunk};
 use crate::error::EngineError;
-use crate::masks::MaskProvider;
 use crate::heuristic::new_fault;
+use crate::masks::MaskProvider;
 use crate::pool::{EnvPool, step_chunk_at};
 use crate::record::Record;
 use crate::sys::id_buffers::{BufferHandle, IdBufferPool};
@@ -823,7 +823,10 @@ impl<E: Environment, M: MaskProvider<E>> BatchToken<E, M> {
     /// heuristic rows `recv` copies out (ADR-0079 item 3.5).
     pub(crate) fn covered_actions(&self, id: u32) -> Option<(&[i32], &[f32])> {
         let raw = &self.mode.raw;
-        let (dh, ch) = (raw.agents.saturating_mul(raw.dh), raw.agents.saturating_mul(raw.ch));
+        let (dh, ch) = (
+            raw.agents.saturating_mul(raw.dh),
+            raw.agents.saturating_mul(raw.ch),
+        );
         let discrete = self.view_covered(&raw.discrete, id, dh)?;
         let continuous = self.view_covered(&raw.continuous, id, ch)?;
         Some((discrete, continuous))

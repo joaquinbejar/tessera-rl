@@ -919,7 +919,11 @@ where
     /// Clears `id`'s heuristic fault cell before it is published (ADR-0079,
     /// #347 stage B1): no worker touches it until the id is claimed.
     fn reset_fault(&self, id: u32) {
-        if let Some(cell) = self.mode.faults.get(usize::try_from(id).unwrap_or(usize::MAX)) {
+        if let Some(cell) = self
+            .mode
+            .faults
+            .get(usize::try_from(id).unwrap_or(usize::MAX))
+        {
             cell.store(NO_FAULT, core::sync::atomic::Ordering::Relaxed);
         }
     }
@@ -1345,7 +1349,11 @@ where
         };
         let mut code = NO_FAULT;
         for id in token.ids() {
-            if let Some(cell) = self.mode.faults.get(usize::try_from(id).unwrap_or(usize::MAX)) {
+            if let Some(cell) = self
+                .mode
+                .faults
+                .get(usize::try_from(id).unwrap_or(usize::MAX))
+            {
                 code = code.min(cell.swap(NO_FAULT, core::sync::atomic::Ordering::Relaxed));
             }
         }
@@ -1359,7 +1367,8 @@ where
         for id in token.ids() {
             if let Some(rows) = token.covered_actions(id) {
                 let first = usize::try_from(id).unwrap_or(usize::MAX);
-                self.heuristic.copy(first, 1, E::MAX_AGENTS, slots, heads, rows);
+                self.heuristic
+                    .copy(first, 1, E::MAX_AGENTS, slots, heads, rows);
             }
         }
         Ok(())

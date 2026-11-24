@@ -24,8 +24,8 @@ use common::{CountConfig, Counter, Counts};
 use tessera_rl_core::io::ActionWriter;
 use tessera_rl_core::{AgentSlot, Heuristic};
 use tessera_rl_engine::{
-    ActionInput, AsyncOptions, EngineError, EnvPool, Masked, PipelinedOptions, PoolOptions,
-    Reseed, Schedule,
+    ActionInput, AsyncOptions, EngineError, EnvPool, Masked, PipelinedOptions, PoolOptions, Reseed,
+    Schedule,
 };
 use tessera_rl_num::identity::Seed;
 use tessera_rl_num::rng::StepRng;
@@ -171,7 +171,10 @@ fn pipelined_run(w: usize, schedule: Schedule, fill: i32) -> Trajectory {
 /// `recv`.
 fn async_run(w: usize, fill: i32) -> Trajectory {
     let mut pool = heuristic(cfg(), Schedule::Static)
-        .async_mode(AsyncOptions::new(workers(w), NonZeroUsize::new(BATCH).unwrap()))
+        .async_mode(AsyncOptions::new(
+            workers(w),
+            NonZeroUsize::new(BATCH).unwrap(),
+        ))
         .unwrap();
     drop(pool.reset_all(Reseed::Keep).unwrap());
     let mut ids: Vec<u32> = (0..N).collect();
@@ -301,14 +304,18 @@ fn test_heuristic_split_async_invalid_action_poisons_with_the_lowest_instance() 
 
 #[test]
 fn test_heuristic_split_heuristic_actions_none_without_a_heuristic_slot() {
-    let plain = || {
-        EnvPool::<Counter, Masked>::with_masks(cfg(), options(Schedule::Static)).unwrap()
-    };
-    let pipelined = plain().pipelined(PipelinedOptions::new(workers(1))).unwrap();
+    let plain =
+        || EnvPool::<Counter, Masked>::with_masks(cfg(), options(Schedule::Static)).unwrap();
+    let pipelined = plain()
+        .pipelined(PipelinedOptions::new(workers(1)))
+        .unwrap();
     assert!(pipelined.heuristic_actions().is_none());
     assert!(pipelined.heuristic_continuous().is_none());
     let asynced = plain()
-        .async_mode(AsyncOptions::new(workers(1), NonZeroUsize::new(BATCH).unwrap()))
+        .async_mode(AsyncOptions::new(
+            workers(1),
+            NonZeroUsize::new(BATCH).unwrap(),
+        ))
         .unwrap();
     assert!(asynced.heuristic_actions().is_none());
     assert!(asynced.heuristic_continuous().is_none());
@@ -317,7 +324,10 @@ fn test_heuristic_split_heuristic_actions_none_without_a_heuristic_slot() {
 #[test]
 fn test_heuristic_split_into_pool_keeps_the_last_heuristic_actions() {
     let mut pool = heuristic(cfg(), Schedule::Static)
-        .async_mode(AsyncOptions::new(workers(2), NonZeroUsize::new(NU).unwrap()))
+        .async_mode(AsyncOptions::new(
+            workers(2),
+            NonZeroUsize::new(NU).unwrap(),
+        ))
         .unwrap();
     drop(pool.reset_all(Reseed::Keep).unwrap());
     let ids: Vec<u32> = (0..N).collect();

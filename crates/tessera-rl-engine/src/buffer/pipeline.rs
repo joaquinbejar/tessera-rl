@@ -30,9 +30,9 @@ use std::sync::Arc;
 use tessera_rl_core::{Bool8, Environment, RecordLayout as _};
 
 use super::{EnvRawChunk, HALVES, Raw, RawChunk, chunk_range};
+use crate::heuristic::{NO_FAULT, new_fault};
 use crate::masks::MaskProvider;
 use crate::options::Schedule;
-use crate::heuristic::{NO_FAULT, new_fault};
 use crate::pool::{EnvPool, step_chunk_at};
 use crate::sys::Gang;
 use crate::sys::Job;
@@ -309,7 +309,8 @@ pub(crate) fn publish<E: Environment, M: MaskProvider<E>>(
         });
     };
     work.panicked.store(false, Ordering::Relaxed);
-    work.fault.store(NO_FAULT, crate::sys::sync::Ordering::Relaxed);
+    work.fault
+        .store(NO_FAULT, crate::sys::sync::Ordering::Relaxed);
     work.remaining.store(gang.workers(), Ordering::Relaxed);
     // Published with the job by `submit` (SeqCst), so every worker of this
     // job starts claiming from the half's first chunk.
@@ -332,9 +333,9 @@ pub(crate) fn half_fault<E: Environment, M: MaskProvider<E>>(
     mode: &Mode<E, M>,
     half: usize,
 ) -> u64 {
-    mode.work
-        .get(half)
-        .map_or(NO_FAULT, |w| w.fault.load(crate::sys::sync::Ordering::Relaxed))
+    mode.work.get(half).map_or(NO_FAULT, |w| {
+        w.fault.load(crate::sys::sync::Ordering::Relaxed)
+    })
 }
 
 /// Whether a chunk of half `half` panicked in its last job.
