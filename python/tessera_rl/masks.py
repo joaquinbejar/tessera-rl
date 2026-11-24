@@ -1,7 +1,7 @@
 """Per-head views of an action mask, in the shapes of SPEC 11.3.
 
 An agent's mask row is one flat run of bools: each discrete head's block,
-in head order. An environment with entity groups (ADR-0051) repeats the
+in head order. An environment with entity groups repeats the
 same heads once per entity, so for the RTS the row is, per unit slot,
 ``[type (6) | target (6 x 81) | product (6 x 4)]``, 516 values. The views
 here regroup it without a copy:

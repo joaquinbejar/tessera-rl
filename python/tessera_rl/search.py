@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: MIT OR Apache-2.0
-"""PUCT search over a Tessera environment (ADR-0043), with a Python
+"""PUCT search over a Tessera environment, with a Python
 evaluator, and an optional Gumbel root.
 
 ``Search.run(evaluator)`` performs one search call. The evaluator is called
@@ -26,7 +26,7 @@ may keep them, and they never change afterwards.
 The record hashes identify perfect-information states only. They are
 exposed for Connect Four; an imperfect-information environment would leak
 hidden state through them, and is not searchable from here without
-``Determinize`` (ADR-0035).
+``Determinize``.
 
 A call is all or nothing: if the evaluator raises an ``Exception`` or
 returns an invalid response, the call raises ``EvaluatorError`` (with the
@@ -35,8 +35,8 @@ counter are as before the call. A ``BaseException`` that is not an
 ``Exception`` (``KeyboardInterrupt``, ``SystemExit``) rolls the call back
 the same way and is raised again unchanged.
 
-The evaluator runs under the caller's floating-point controls (ADR-0041:
-it is called through a callout); the search arithmetic, including the
+The evaluator runs under the caller's floating-point controls (it
+is called through a callout); the search arithmetic, including the
 validation of each response, runs under the canonical ones, and the
 caller's controls are restored when ``run`` returns or raises. The
 interpreter stays attached for the whole call, which holds the search
@@ -159,7 +159,7 @@ class Search:
         self._obs_bytes: int = layout["obs_bytes"]
         probe = make(env_id)
         self._leaves = list(probe._leaves)
-        #: The ``Set`` observations (ADR-0082 point 6, #490): ``(path, max,
+        #: The ``Set`` observations: ``(path, max,
         #: [item leaf indices..., mask index])``, indices into the evaluator's
         #: ``obs`` leaves; empty without sets.
         self.sets: list[tuple[str, int, list[int]]] = [
@@ -248,7 +248,7 @@ class GroupFailure(NamedTuple):
 
 class SearchGroup:
     """Independent PUCT (or Gumbel-root) searches whose leaves share one evaluator call per
-    round (ADR-0045), for self-play throughput.
+    round, for self-play throughput.
 
     ``trees`` slots, each a full ``Search`` with its own tree, counter and
     search stream. ``options`` are shared, and ``slot_options``, a list of
@@ -267,7 +267,7 @@ class SearchGroup:
     the same state. A learned network is in general not batch-invariant,
     so its results can depend on the other slots in the batch. They are
     repeatable only for the identical group on the same machine. Gate and
-    held-out evaluation use ``Search`` (ADR-0042).
+    held-out evaluation use ``Search``.
 
     A call is all or nothing: any failure rolls every participating slot
     back. The evaluator's own exception is raised as ``EvaluatorError``
@@ -381,7 +381,7 @@ def _default_library() -> str:
 
 
 class OnnxEvaluator:
-    """An ONNX model as a search evaluator (ADR-0057), for ``Search.run``.
+    """An ONNX model as a search evaluator, for ``Search.run``.
 
     ``model`` is the ``.onnx`` file, read once per search under
     ``max_model_bytes`` (default 256 MiB); external-data files are refused.
@@ -395,7 +395,7 @@ class OnnxEvaluator:
     without that variable, and ONNX Runtime may then record telemetry.
 
     Results are repeatable only on the same machine, with the same model
-    and library bytes, at one thread (ADR-0057 section 1); ``provenance``
+    and library bytes, at one thread; ``provenance``
     records what they depend on.
     """
 
@@ -438,7 +438,7 @@ class OnnxEvaluator:
 
 
 def joint_log_prior(logits, nvec, parents=None, active=None, legal=None) -> np.ndarray:
-    """The joint log-prior of a ``MultiDiscrete`` action (ADR-0086).
+    """The joint log-prior of a ``MultiDiscrete`` action.
 
     Search sees ``MultiDiscrete(nvec)`` as one head of ``J = prod(nvec)``
     joint actions, mixed radix with the first head most significant (the

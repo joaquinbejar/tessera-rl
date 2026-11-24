@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: MIT OR Apache-2.0
 """Host environments from third-party wheels (host protocol 1, SPEC 14.4
-draft, ADR-0062, ADR-0065).
+draft).
 
 A wheel declares its environments as entry points of the group
 ``tessera_rl.envs``: ``"<namespace>/<Name>-v<N>" = "<module>:<factory>"``.
@@ -32,17 +32,17 @@ from tessera_rl._env import Env, Step, _index, _resolve_constructor_annotations
 PROTOCOL = 2
 
 #: Every host protocol this ``tessera_rl`` accepts: 1, and 2 for an
-#: environment that refuses agents (ADR-0070 item 10).
+#: environment that refuses agents.
 PROTOCOLS = (1, 2)
 
 #: The outputs of a protocol 2 object, which a wrapper must read
-#: (ADR-0070 item 10).
+#:.
 _REFUSAL_KEYS = ("refused", "refuse_code")
 
 #: The entry-point group of host environment factories (SPEC 14.4.1).
 GROUP = "tessera_rl.envs"
 
-#: The namespace reserved for first-party ids (ADR-0023).
+#: The namespace reserved for first-party ids.
 _RESERVED = "tessera/"
 
 #: The members a host object must have (SPEC 14.4.2).
@@ -59,7 +59,7 @@ _MEMBERS = (
     "_tessera_set_fp_policy",
 )
 
-#: The layout keys a host object must return (SPEC 14.4.3, ADR-0065 item 5).
+#: The layout keys a host object must return (SPEC 14.4.3).
 _LAYOUT_KEYS = (
     "num_envs",
     "agents",
@@ -81,8 +81,7 @@ _LAYOUT_KEYS = (
     "auto_reset",
 )
 
-#: The output keys every reset and step must return (SPEC 14.4.4,
-#: ADR-0065 item 5).
+#: The output keys every reset and step must return (SPEC 14.4.4).
 _OUTPUT_KEYS = (
     "observations",
     "terminal_observations",
@@ -247,8 +246,8 @@ def refuse(env_id: str, module: str) -> None:
 
 
 def host_infos(out: dict, owned: bool, n: int, agents: int = 1, refuses: bool = False) -> dict:
-    """The Gymnasium infos of a host call (SPEC 14.2 as ADR-0065 and
-    ADR-0070 amend it): ``aborted``, ``abort_code`` and ``pending_reset``,
+    """The Gymnasium infos of a host call (SPEC 14.2): ``aborted``,
+    ``abort_code`` and ``pending_reset``,
     and for an environment that refuses agents ``refused`` and
     ``refuse_code`` (shape ``(n, agents)``), each with its ``_``-prefixed
     mask, all true."""
@@ -415,7 +414,7 @@ def check(obj) -> None:
 
 class HostStep(NamedTuple):
     """The outputs of one host call: ``Step``'s fields, in the same order,
-    then the host-only outputs (ADR-0065 item 5).
+    then the host-only outputs.
 
     ``aborted`` and ``abort_code`` (``uint32``, 0 where not aborted) are
     per instance, of the last call; ``pending_reset`` is whether each
@@ -438,10 +437,10 @@ class HostStep(NamedTuple):
     abort_code: np.ndarray
     pending_reset: np.ndarray
     #: ``(num_envs, agents)`` refused agents of the last call, or ``None``
-    #: when the environment does not refuse agents (ADR-0070).
+    #: when the environment does not refuse agents.
     refused: np.ndarray | None = None
     #: ``(num_envs, agents)`` ``uint32`` refuse codes, 0 where not refused,
-    #: or ``None`` (ADR-0070).
+    #: or ``None``.
     refuse_code: np.ndarray | None = None
 
 
@@ -466,7 +465,7 @@ class HostEnv:
     every instance at once; ``snapshot_all``, ``send`` and ``recv`` raise
     ``CapabilityError``.
 
-    Snapshots (ADR-0073) exist only when the environment provides them
+    Snapshots exist only when the environment provides them
     (``snapshots`` is true): ``snapshot``, ``restore``, ``restore_all``,
     ``fork``, ``state_hash``, ``import_record``, ``encode`` and ``load``,
     over records and files in the host formats. Without them each raises
@@ -478,7 +477,7 @@ class HostEnv:
     window (``is_stale`` tracks them); ``outputs="owned"`` copies them.
     """
 
-    #: Host environments do not render (ADR-0083).
+    #: Host environments do not render.
     canvas = None
 
     def __init__(self, obj, outputs: str = "borrowed"):
@@ -507,9 +506,9 @@ class HostEnv:
         #: ``"host"``: a third-party host environment.
         self.kind: str = "host"
         #: Whether the environment refuses agents: ``HostStep.refused`` and
-        #: ``refuse_code`` are set (host protocol 2, ADR-0070).
+        #: ``refuse_code`` are set (host protocol 2).
         self.refuses_agents: bool = layout["refuses_agents"]
-        #: Whether the environment provides snapshots (ADR-0073); absent from
+        #: Whether the environment provides snapshots; absent from
         #: the layout of older wheels, which have none.
         self.snapshots: bool = layout["snapshots"]
 
@@ -595,7 +594,7 @@ class HostEnv:
     def reset(self, seed=None) -> HostStep:
         """Resets every instance: ``seed`` is ``None`` (keep the seeds), an
         int (instance ``i`` gets ``seed + i``) or a list of ``num_envs``
-        ints (ADR-0007). A full reset clears poison."""
+        ints. A full reset clears poison."""
         if isinstance(seed, (list, tuple, np.ndarray)):
             seeds = [_index(s, "seed") for s in seed]
             return self._host_step(self._env._wrap(self._native.reset(seeds)))
@@ -609,15 +608,15 @@ class HostEnv:
         return self._native.is_poisoned()
 
     def set_reset_source(self, archive=None, weights=None) -> None:
-        """Archive resets are for first-party environments (ADR-0075 item 8)."""
+        """Archive resets are for first-party environments."""
         raise _native.CapabilityError("archive resets need a first-party environment (ADR-0075 item 8)")
 
     def reset_from(self, ids, entries) -> None:
-        """Archive resets are for first-party environments (ADR-0075 item 8)."""
+        """Archive resets are for first-party environments."""
         raise _native.CapabilityError("archive resets need a first-party environment (ADR-0075 item 8)")
 
     def restore_pool(self, snapshot, archive=None) -> None:
-        """Whole-pool restore is for first-party environments (ADR-0075 item 8)."""
+        """Whole-pool restore is for first-party environments."""
         raise _native.CapabilityError("restore_pool needs a first-party environment (ADR-0075 item 8)")
 
     def close(self) -> None:
@@ -636,7 +635,7 @@ del _name
 
 
 def set_fp_policy(policy: str) -> None:
-    """Sets the floating-point policy (ADR-0041) of ``tessera_rl`` and of
+    """Sets the floating-point policy of ``tessera_rl`` and of
     every live host object, whose modules each keep their own."""
     _native.set_fp_policy(policy)
     for native in list(_LIVE):

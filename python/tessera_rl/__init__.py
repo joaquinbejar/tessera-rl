@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: MIT OR Apache-2.0
 """Tessera: fast, deterministic, snapshot-able reinforcement learning environments.
 
-Floating-point controls (ADR-0041): every native entry saves the caller's
+Floating-point controls: every native entry saves the caller's
 floating-point controls (for example after ``torch.set_flush_denormal(True)``
 or a changed rounding mode), computes under the default controls, and
 restores the caller's afterwards, keeping the sticky exception flags.
@@ -13,7 +13,7 @@ work. Deallocation and export deleters always run. The boundary covers
 x86-64 (System V) and aarch64 (AAPCS64) on Linux and macOS, and Win64
 (x86-64) on Windows.
 
-On x86-64 the caller's x87 control word is preserved as well (ADR-0044):
+On x86-64 the caller's x87 control word is preserved as well:
 it is restored after every call and after every callback into Python
 (for example a warning hook), so a change Python or C code makes to it
 inside a callback never reaches the caller. It is never counted, warned

@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: MIT OR Apache-2.0
-"""Archives of saved states for archive resets (ADR-0075)."""
+"""Archives of saved states for archive resets."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from tessera_rl import _native
 
 class Archive:
     """An immutable, validated archive of saved states of one environment
-    and config (ADR-0075, item 9 as amended by #363 head C).
+    and config.
 
     ``Archive(env, snapshots)`` builds it from ``env``'s environment and
     exact config, and ``snapshots``: instance records as ``env.snapshot(i)``

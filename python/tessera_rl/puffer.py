@@ -58,7 +58,7 @@ the parent, which it detects by looking for those backends' constructors in the
 call stack; that ``vector.Ray`` is refused the same way is from reading only, as it
 is not tested. A list of creators whose first is Sync passes the driver and raises
 in the child, which is a parent hang under Multiprocessing. ``workers`` must be at
-least 1. ``spin`` (the worker spin budget of ``make``) needs ``workers``, as do ``wait`` and ``wait_cap_us`` (the worker wait policy of ``make``, ADR-0074), which pass through to ``make``. The constructor's probe of the halves starts real worker threads, closed
+least 1. ``spin`` (the worker spin budget of ``make``) needs ``workers``, as do ``wait`` and ``wait_cap_us`` (the worker wait policy of ``make``), which pass through to ``make``. The constructor's probe of the halves starts real worker threads, closed
 before it returns. ``log_interval`` counts half-steps. The two
 halves must be equal, or ``ArgumentError`` naming the sizes; a chunk size that
 cannot split the pool raises the engine's ``ConfigError`` (64 instances need a
@@ -69,9 +69,9 @@ trainer spans a running half. Rows
 returned by ``recv`` stay valid until that half's next ``send``. Interrupted while
 waiting, a ``recv`` can be called again and returns the same half. There is no
 ``step`` and no ``terminal_observations``, as the wrapper's half does not carry
-them. With adaptive state a half reads a context two cycles old (ADR-0047 section
-6); CartPole and Tag have none. No speed gain has been measured; ADR-0006 is the
-reason for this mode.
+them. With adaptive state a half reads a context two cycles old; CartPole
+and Tag have none. No speed gain has been measured; the mode exists so that
+workers step one half while the learner infers on the other.
 
 **Multiprocessing hangs on a raise.** PufferLib 3.0.0's worker has no exception
 reply: a raise prints in the child and the parent's ``recv`` blocks forever. What
@@ -241,7 +241,7 @@ class TesseraPufferEnv(pufferlib.PufferEnv):
             probe.close()
         #: The agent slots PufferLib sees: every slot, or with a policy map
         #: the learner and external ones; the engine plays the heuristic
-        #: slots (ADR-0079 item 5.2). `None` when every slot is seen.
+        #: slots. `None` when every slot is seen.
         self._visible: list[int] | None = None
         if any(g in ("heuristic", "privileged_heuristic") for g in groups):
             self._visible = [s for s, g in enumerate(groups) if g in ("learner", "external")]
@@ -333,12 +333,12 @@ class TesseraPufferEnv(pufferlib.PufferEnv):
             self.truncations[:] = self._views[3]
 
     def set_reset_source(self, archive=None, weights=None) -> None:
-        """Archive resets (ADR-0075): forwarded to the wrapped
+        """Archive resets: forwarded to the wrapped
         ``tessera_rl`` environment's ``set_reset_source``."""
         self._env.set_reset_source(archive, weights)
 
     def reset_from(self, ids, entries):
-        """Archive resets (ADR-0075): forwarded to the wrapped
+        """Archive resets: forwarded to the wrapped
         ``tessera_rl`` environment's ``reset_from``."""
         return self._env.reset_from(ids, entries)
 

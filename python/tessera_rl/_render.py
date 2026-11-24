@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: MIT OR Apache-2.0
-"""Frames and scenes from snapshots (ADR-0083 item 4).
+"""Frames and scenes from snapshots.
 
 An environment that implements ``Render`` draws a vector scene from a
 snapshot's state; frames are rasterized from it, bit-exact across
@@ -29,7 +29,7 @@ RENDER_FPS = 50
 
 
 class TesseraRenderWarning(RuntimeWarning):
-    """A scene overflowed its environment's capacity and was truncated (ADR-0083)."""
+    """A scene overflowed its environment's capacity and was truncated."""
 
 
 def canvas(native: Any) -> tuple[int, int] | None:
@@ -81,8 +81,8 @@ def scene(native: Any, index: int) -> list[tuple]:
 
 
 def check_mode(render_mode, renders: bool, env_id: str) -> str | None:
-    """``None``, or ``"rgb_array"`` for an environment that renders
-    (ADR-0083); anything else is refused."""
+    """``None``, or ``"rgb_array"`` for an environment that renders;
+    anything else is refused."""
     if render_mode is None:
         return None
     if render_mode != "rgb_array":

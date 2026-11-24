@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: MIT OR Apache-2.0
-"""Video export of rendered frames (ADR-0083 item 5).
+"""Video export of rendered frames.
 
 ``export(frames, path, fps=50)`` writes ``uint8`` frames of shape
 ``(n, height, width, 3)`` (for example from ``Env.render`` over an
@@ -73,7 +73,7 @@ def replay_video(
     instance ``instance`` to ``out`` (``.gif`` or ``.mp4``, as
     :func:`export`): one frame after every ``every``-th replayed call
     (:func:`tessera_rl.replay.steps`). ``env`` must be built as for
-    :func:`tessera_rl.replay.run` and render (ADR-0083). Returns the number
+    :func:`tessera_rl.replay.run` and render. Returns the number
     of frames. Raises ``ReplayDivergence`` if the replay diverges, and
     ``ArgumentError`` for a file with no call to show.
     """

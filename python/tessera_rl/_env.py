@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: MIT OR Apache-2.0
 """The native environment API: a pool of instances with NumPy outputs.
 
-Output modes (ADR-0003): ``outputs="borrowed"`` (the default here) returns
+Output modes: ``outputs="borrowed"`` (the default here) returns
 read-only arrays that view the engine's buffers without copying. They stay
 readable for as long as they are referenced, even after ``close``, but
 their contents are only guaranteed until the next ``reset`` or ``step`` on
@@ -17,7 +17,7 @@ capsule cannot be marked read-only, so legacy consumers get a writable
 alias. NumPy honours the read-only flag; PyTorch 2.15 asks for DLPack 1.0
 and accepts the flag without warnings but returns a writable tensor.
 
-The read-only flag is a signal, not an enforcement (ADR-0003 rule 7): no
+The read-only flag is a signal, not an enforcement: no
 tensor is promised to be immutable, and writing is the caller's
 responsibility. A write through any writable alias reaches the engine
 buffer and corrupts the outputs until the next call overwrites them. To
@@ -42,13 +42,13 @@ class Step(NamedTuple):
     Per-agent arrays have shape ``(num_envs, agents, ...)``; episode flags
     have shape ``(num_envs,)``. ``masks`` is ``None`` for environments
     without action masks. ``acting`` marks the agents whose action the
-    next step reads (ADR-0013): every alive agent in a simultaneous
+    next step reads: every alive agent in a simultaneous
     environment, exactly one in a sequential one while its game runs, and
     none on a finished board.
 
     ``slot_generations`` (``uint32``, ``(num_envs, agents)``) is the
-    generation of each slot's occupant (ADR-0013 identity: an agent is
-    (slot, generation)); it starts at 0 and grows by one each time an agent
+    generation of each slot's occupant (an agent is identified by its
+    (slot, generation) pair); it starts at 0 and grows by one each time an agent
     spawns into a slot that died. It has the same name, dtype and shape as
     host protocol 1's output.
 
@@ -71,7 +71,7 @@ class Step(NamedTuple):
 
 
 class HalfStep(NamedTuple):
-    """One half's outputs in Pipelined mode (ADR-0047).
+    """One half's outputs in Pipelined mode.
 
     ``ids`` are the instances of the half; ``step`` holds their rows only,
     so its first dimension is ``len(ids)``. In ``borrowed`` mode the arrays
@@ -85,7 +85,7 @@ class HalfStep(NamedTuple):
 
 
 class AsyncStep(NamedTuple):
-    """One batch in Async mode (ADR-0047).
+    """One batch in Async mode.
 
     ``ids`` lists the batch's instances in the order they completed. With the
     default ``gather="gathered"`` (and in ``owned`` mode) ``step`` has one row
@@ -128,7 +128,7 @@ class Env:
     actions, wrapping outputs) can interleave with other threads, so
     serialize calls on one ``Env`` yourself.
 
-    Split-phase modes (ADR-0047): a step stays in flight after ``send``
+    Split-phase modes: a step stays in flight after ``send``
     returns, and ``step`` raises ``ArgumentError``. One thread may ``send``
     while another waits in ``recv``; a second concurrent ``recv`` raises
     ``ConcurrencyError`` naming ``ConcurrentRecv``. Writers (``reset``,
@@ -146,7 +146,8 @@ class Env:
     membership depends on timing; each instance's trajectory does not.
     By default a batch is gathered into one buffer reused at every ``recv``,
     so its arrays go stale at the next ``recv``, not the next ``send``: a
-    deliberate deviation from ADR-0006 that ADR-0047 records. Pass
+    deliberate exception to the rule that outputs stay valid until the
+    next ``send`` for their instances. Pass
     ``gather="indexed"`` for arrays over all rows, which go stale when a
     ``send`` or mutation of the batch's ids succeeds, or when ``reset(ids=...)``
     or ``restore`` succeeds on any ids: those writers release every batch's
@@ -220,11 +221,11 @@ class Env:
         self.mask_heads: tuple[tuple[int, tuple[int, ...], int], ...] = tuple(
             (offset, tuple(parents), size) for offset, parents, size in layout["mask_heads"]
         )
-        #: Discrete heads per entity group (ADR-0051), 0 when none.
+        #: Discrete heads per entity group, 0 when none.
         self.entity_group_heads: int = layout["entity_group_heads"]
-        #: ``"simultaneous"``, ``"sequential"`` or ``"mixed"`` (ADR-0013).
+        #: ``"simultaneous"``, ``"sequential"`` or ``"mixed"``.
         self.turns: str = layout["turns"]
-        #: The policy group of each agent slot (ADR-0079): ``"learner"``,
+        #: The policy group of each agent slot: ``"learner"``,
         #: ``"external"``, ``"heuristic"`` or ``"privileged_heuristic"``.
         self.policy_groups: tuple[str, ...] = tuple(layout.get("policy_groups", ()))
         self.outputs: str = layout["outputs"]
@@ -262,7 +263,7 @@ class Env:
         return self._wrap(out)
 
     def set_reset_source(self, archive=None, weights=None) -> None:
-        """Sets what resets start from (ADR-0075): a :class:`tessera_rl.Archive`
+        """Sets what resets start from: a :class:`tessera_rl.Archive`
         of this environment, with optional ``weights`` (one non-negative int
         per entry, not all zero; all ones by default), or ``None`` for
         ``Environment::reset``. It applies to every reset after the call,
@@ -285,7 +286,7 @@ class Env:
 
     def reset_from(self, ids, entries) -> Step | None:
         """Resets the instances ``ids`` from the archive entries ``entries``
-        (one per id) of the attached archive (ADR-0075). Sync: the outputs,
+        (one per id) of the attached archive. Sync: the outputs,
         as ``reset``; Async: nothing, the next ``recv`` delivers the ids.
         Pipelined mode has no partial reset (``CapabilityError``). Logged
         while recording.
@@ -366,7 +367,7 @@ class Env:
 
     def restore_pool(self, snapshot, archive=None) -> Step | list[HalfStep] | None:
         """Restores a :meth:`snapshot_all` snapshot of this environment
-        whole (ADR-0075 item 7): records, frame stacks and the pool context,
+        whole: records, frame stacks and the pool context,
         an exact continuation. If the context names an archive, ``archive``
         must be that :class:`tessera_rl.Archive` (else ``ConfigError``); for
         fresh resets it must be ``None`` (else ``ArgumentError``). Every check
@@ -478,8 +479,8 @@ class Env:
 
     def render(self, ids=None) -> np.ndarray:
         """RGB8 frames of ``ids`` (default: every instance), shape
-        ``(len(ids), height, width, 3)``, drawn from their snapshots
-        (ADR-0083). Sync mode, for an environment that implements
+        ``(len(ids), height, width, 3)``, drawn from their snapshots. Sync mode, for an
+        environment that implements
         ``Render``; ``CapabilityError`` otherwise. Owned arrays."""
         ids = range(self.num_envs) if ids is None else ids
         return _render.frames(self._native, [_index(i, "ids") for i in ids])
@@ -487,17 +488,17 @@ class Env:
     def epoch_barrier(self) -> None:
         """Merges the normalization accumulators of a ``Normalize``
         transform into the pool statistics, in chunk order; later
-        observations use them (ADR-0078). Sync mode; a no-op without a
+        observations use them. Sync mode; a no-op without a
         ``Normalize``."""
         self._native.epoch_barrier()
 
     def freeze_normalization(self, frozen: bool = True) -> None:
         """Stops (``True``) or restarts (``False``) the accumulation of
-        normalization statistics (ADR-0078), as for evaluation. Sync mode."""
+        normalization statistics, as for evaluation. Sync mode."""
         self._native.freeze_normalization(bool(frozen))
 
     def scene(self, index: int) -> list[tuple]:
-        """Instance ``index``'s vector scene (ADR-0083): a list of
+        """Instance ``index``'s vector scene: a list of
         primitives, coordinates in pixels; see ``tessera_rl._render.scene``."""
         return _render.scene(self._native, _index(index, "index"))
 
@@ -511,7 +512,7 @@ class Env:
         """Illegal-but-valid actions replaced in instance ``index``'s current
         episode, per agent slot (the record's statistic). Sync mode only.
 
-        With entity groups (ADR-0051, the RTS), each group counts on its
+        With entity groups (the RTS), each group counts on its
         own: an order other than the no-op on an empty or dead unit slot
         counts one."""
         return self._native.illegal_actions(_index(index, "index"))
@@ -565,7 +566,7 @@ class Env:
 
     @property
     def heuristic_actions(self) -> np.ndarray | None:
-        """The last step's heuristic actions (ADR-0079 item 3.5), int32
+        """The last step's heuristic actions, int32
         ``(num_envs, agents, heads)``: the action the engine computed for each
         heuristic slot that acted, zero elsewhere; ``None`` without a heuristic
         slot. ``Step`` does not carry it.
@@ -583,7 +584,7 @@ class Env:
         return np.frombuffer(raw, dtype="<i4").reshape(self.num_envs, self.agents, heads)
 
     def watch(self) -> _native.WatchHandle:
-        """Attaches a live watch (ADR-0083 item 7) and returns its handle.
+        """Attaches a live watch and returns its handle.
 
         The handle is the watch's single consumer: ``request(instance)`` asks
         for that instance's record, and the pool answers at its next batch
@@ -696,7 +697,7 @@ def _continuous_actions(actions) -> np.ndarray:
 
 def _index(value, what: str) -> int:
     """An integer argument as an exact ``int``: the native module accepts
-    only exact built-in types (ADR-0041 callouts), so user objects are
+    only exact built-in types, so user objects are
     converted here, under the caller's own floating-point controls."""
     if isinstance(value, bool):
         raise TypeError(f"{what} must be an integer, not a bool")
@@ -714,12 +715,12 @@ _STRING_OPTIONS = {"auto_reset", "outputs", "mode", "gather", "obs", "wait", "sc
 #: Lanterns ``zero_on_fuse``, the limit order book's ``allow_short_cash``).
 _BOOL_OPTIONS = frozenset({"seat_swap", "zero_on_fuse", "allow_short_cash"})
 
-#: Asset options (ADR-0077): a bundled asset's name (``str``) or its bytes
+#: Asset options: a bundled asset's name (``str``) or its bytes
 #: (``bytes``, or any buffer, copied to exact ``bytes``).
 _ASSET_OPTIONS = frozenset({"layout"})
 
 
-#: Policy group names (ADR-0079 item 5.1).
+#: Policy group names.
 _POLICY_GROUPS = ("learner", "external", "heuristic", "privileged_heuristic")
 
 
@@ -818,7 +819,7 @@ def make(env_id: str, num_envs: int = 1, seed: int = 0, outputs: str = "borrowed
     ``"same_step"`` or ``"disabled"``), ``chunk_size``, ``schedule``
     (``"static"``, the default, or ``"dynamic"``: workers claim chunks from a
     shared counter, which balances environments with variable step cost;
-    outputs are identical either way, ADR-0076), ``workers``
+    outputs are identical either way), ``workers``
     (worker threads; by default one per physical core this process may use,
     at most one per chunk: ``physical_cores()``; ``workers=0`` steps
     inline on the caller in Sync mode, and one worker in the split-phase
@@ -826,7 +827,7 @@ def make(env_id: str, num_envs: int = 1, seed: int = 0, outputs: str = "borrowed
     ``0..2**32``; 2000 by default, nominally about 20 microseconds; a larger
     budget can cut wake-up latency at the cost of CPU time burnt while idle; it needs
     workers, so Sync mode with ``workers=0`` refuses it with
-    ``ArgumentError``), ``wait`` (the worker wait policy, ADR-0074:
+    ``ArgumentError``), ``wait`` (the worker wait policy:
     ``"fixed"``, the default, or ``"adaptive"``, where a worker keeps
     spinning through the caller's typical gap between steps, up to
     ``wait_cap_us`` microseconds, an int in ``1..=1000000``, 10000 by
@@ -863,11 +864,11 @@ def make(env_id: str, num_envs: int = 1, seed: int = 0, outputs: str = "borrowed
 
     ``transforms`` takes a list of ``tessera_rl.transforms`` objects
     (``FrameStack``, ``OneHot``, ``Normalize``), applied in the engine after
-    ``observe`` (ADR-0078); ``layout()`` and the adapter spaces describe the
+    ``observe``; ``layout()`` and the adapter spaces describe the
     transformed observation. Host environments refuse it with
     ``CapabilityError``.
 
-    ``policy_map`` (ADR-0079) routes agent slots to policy groups: a list
+    ``policy_map`` routes agent slots to policy groups: a list
     of group names, one per slot, or a dict from slot to name (other slots
     learners), each ``"learner"``, ``"external"`` (marked only: you still
     submit its actions), ``"heuristic"`` (the engine computes its action on
