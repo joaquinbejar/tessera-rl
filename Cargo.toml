@@ -110,6 +110,8 @@ tracing = { version = "0.1", default-features = false, features = ["std"] }
 trybuild = "1"
 windows-sys = { version = "0.61", features = ["Win32_System_SystemInformation", "Win32_System_Threading"] }
 xxhash-rust = { version = "0.8", default-features = false, features = ["xxh3"] }
+# GIF export of rendered frames (ADR-0083 item 5); pinned exactly.
+gif = "=0.14.2"
 
 [workspace.lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ["cfg(loom)"] }
