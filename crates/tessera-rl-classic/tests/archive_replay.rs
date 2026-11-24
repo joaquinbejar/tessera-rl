@@ -310,3 +310,40 @@ fn test_archive_replay_forged_periodic_keyframe_source_diverges() {
         "{err:?}"
     );
 }
+
+#[test]
+fn test_archive_replay_seek_restores_the_archive_source() {
+    // Seek to a periodic keyframe of a file with an archive source (#378
+    // cursor, ADR-0075): with the archive, the pool's reset source becomes
+    // the keyframe's; the rest of the file then replays with no divergence.
+    let arc = archive(3);
+    let (bytes, hashes) = record(&arc, 0);
+    let file = Replay::open(&bytes, DecodeLimits::default()).unwrap();
+    let keyframes = file.keyframes().unwrap();
+    let periodic = *keyframes.get(1).unwrap();
+    let mut p = pool(7, 0);
+    let mut cur = file.cursor_with_archive(&p, Some(&arc)).unwrap();
+    file.seek(&mut p, &mut cur, periodic).unwrap();
+    assert_eq!(
+        p.pool_context().unwrap().reset_source,
+        tessera_rl_engine::ResetSourceContext::Archive {
+            digest: arc.digest(),
+            weights: vec![1, 0, 2],
+        }
+    );
+    while file.advance(&mut p, &mut cur, |_| false).unwrap().is_some() {}
+    file.finish(cur).unwrap();
+    let replayed: Vec<u64> = (0..N).map(|i| p.state_hash(i).unwrap().get()).collect();
+    assert_eq!(replayed, hashes);
+    // Without the archive: refused before any write.
+    let mut q = pool(7, 0);
+    q.reset_all(Reseed::Keep).unwrap();
+    let before: Vec<u64> = (0..N).map(|i| q.state_hash(i).unwrap().get()).collect();
+    let mut bare = file.cursor(&q).unwrap();
+    assert!(matches!(
+        file.seek(&mut q, &mut bare, periodic),
+        Err(ReplayError::Engine(EngineError::ArchiveMismatch { found: 0, .. }))
+    ));
+    let after: Vec<u64> = (0..N).map(|i| q.state_hash(i).unwrap().get()).collect();
+    assert_eq!(after, before);
+}
