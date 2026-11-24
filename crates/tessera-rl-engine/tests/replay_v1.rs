@@ -410,3 +410,34 @@ fn test_replay_v1_keyframe_archive_source_is_unsupported() {
     let file = join(&p, 0);
     assert!(matches!(run_error(&file), ReplayError::Unsupported { .. }));
 }
+
+#[test]
+fn test_replay_seek_keyframe_archive_source_refused_pool_untouched() {
+    // A keyframe whose reset source is an archive (ADR-0075): replay cannot
+    // restore that source yet, so seek refuses it with a typed error before
+    // importing anything, and keyframes() does not offer it
+    // (REVIEW-4c-design-r1 point 2: restore the full context or refuse).
+    let mut p = split(&recording());
+    let body = &mut p.events[0].1;
+    let mut source = archive_block(1, &[1]);
+    source.remove(0);
+    body[8] = 1;
+    for (k, b) in source.into_iter().enumerate() {
+        body.insert(9 + k, b);
+    }
+    let file = join(&p, 0);
+    let replay = Replay::open(&file, LIMITS).unwrap();
+    assert!(!replay.keyframes().unwrap().contains(&0));
+    let mut pool = pool();
+    pool.reset_all(Reseed::Base(Seed::new(11))).unwrap();
+    let before: Vec<u64> = (0..N).map(|i| pool.state_hash(i).unwrap().get()).collect();
+    let context = pool.pool_context().unwrap();
+    let mut cur = replay.cursor(&pool).unwrap();
+    assert!(matches!(
+        replay.seek(&mut pool, &mut cur, 0),
+        Err(ReplayError::Unsupported { .. })
+    ));
+    let after: Vec<u64> = (0..N).map(|i| pool.state_hash(i).unwrap().get()).collect();
+    assert_eq!(after, before);
+    assert_eq!(pool.pool_context().unwrap(), context);
+}

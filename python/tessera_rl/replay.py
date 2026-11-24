@@ -37,9 +37,9 @@ import contextlib
 import os
 from dataclasses import dataclass
 
-from tessera_rl._native import TesseraError
+from tessera_rl._native import ArgumentError, TesseraError
 
-__all__ = ["ReplayDivergence", "ReplaySummary", "record", "run"]
+__all__ = ["ReplayDivergence", "ReplaySteps", "ReplaySummary", "record", "run", "steps"]
 
 
 @dataclass(frozen=True)
@@ -52,7 +52,10 @@ class ReplaySummary:
     poisoned the recorded pool, which replay cannot re-run, so the replayed
     pool is not poisoned; ``unclaimed``: for an async file, ids that came
     back during the replay but that no recorded ``recv`` claimed before the
-    file ended (a file cut while ids were outstanding), empty otherwise.
+    file ended (a file cut while ids were outstanding), empty otherwise;
+    ``stopped_at``: for a stepped replay (:func:`steps`) closed before the
+    end, the index of the next event, else ``None``; ``started_at``: the
+    keyframe a stepped replay seeked to, else ``None``.
     """
 
     events: int
@@ -60,6 +63,14 @@ class ReplaySummary:
     poisoned: bool = False
     unverified_poison: bool = False
     unclaimed: tuple[int, ...] = ()
+    stopped_at: int | None = None
+    started_at: int | None = None
+
+    @property
+    def verified(self) -> bool:
+        """Whether the whole file was replayed and passed every check. A
+        replay stopped early, or started from a seek, is never verified."""
+        return self.stopped_at is None and self.started_at is None
 
 
 class ReplayDivergence(TesseraError):
@@ -159,3 +170,108 @@ def run(path, env) -> ReplaySummary:
     if result[0] == "diverged":
         raise ReplayDivergence(*result[1:])
     return ReplaySummary(*result[1:])
+
+
+class ReplaySteps:
+    """A stepped replay (issue #378), as :func:`steps` returns it.
+
+    Iterating yields an event index after every ``every``-th replayed call
+    (``reset``, ``step``, ``fork``); between two yields the environment is
+    free for calls that do not change it (``snapshot``, ``state_hash``,
+    ``render``, ``scene``, ``outputs``). Calls that change it (``reset``,
+    ``step``, ``fork``, ``import_record``, ``load``, recording or another
+    replay) raise ``ArgumentError`` until the replay ends.
+
+    The replay ends when the file does (the end-of-file checks run and
+    :attr:`summary` is verified), or on :meth:`close` (also on leaving a
+    ``with`` block or on a divergence): then :attr:`summary` has
+    ``stopped_at`` set and is not verified. A divergence raises
+    :class:`ReplayDivergence` from the iteration.
+    """
+
+    def __init__(self, native, every: int) -> None:
+        self._native = native
+        self._every = every
+        self._active = True
+        #: The summary once the replay ended, else ``None``.
+        self.summary: ReplaySummary | None = None
+
+    def __iter__(self) -> ReplaySteps:
+        return self
+
+    def __next__(self) -> int:
+        if not self._active:
+            raise StopIteration
+        try:
+            result = self._native._replay_advance(self._every)
+        except BaseException:
+            self.close()
+            raise
+        if result[0] == "diverged":
+            self.close()
+            raise ReplayDivergence(*result[1:])
+        if result[1] is None:
+            self._finish()
+            raise StopIteration
+        return result[1]
+
+    def keyframes(self) -> tuple[int, ...]:
+        """Event indices of the keyframes :meth:`seek` accepts."""
+        return tuple(self._native._replay_keyframes())
+
+    def seek(self, keyframe: int) -> None:
+        """Imports the keyframe at event ``keyframe`` into every instance and
+        continues the replay after it. Counters of the final summary then
+        start at that keyframe."""
+        self._native._replay_seek(int(keyframe))
+
+    def _finish(self) -> ReplaySummary:
+        self._active = False
+        result = self._native._replay_finish()
+        if result[0] == "diverged":
+            raise ReplayDivergence(*result[1:])
+        self.summary = ReplaySummary(*result[1:])
+        return self.summary
+
+    def close(self) -> ReplaySummary | None:
+        """Ends the replay where it stands; never claims verification for
+        unreplayed events. Returns the summary (``None`` if it already
+        ended with a divergence)."""
+        if self._active:
+            return self._finish()
+        return self.summary
+
+    def __del__(self) -> None:
+        # Dropped without close(): release the pool, which stays locked
+        # against mutation while a cursor is active.
+        if getattr(self, "_active", False):
+            try:
+                self._finish()
+            except Exception:
+                pass
+
+    def __enter__(self) -> ReplaySteps:
+        return self
+
+    def __exit__(self, *exc) -> None:
+        self.close()
+
+
+def steps(path, env, *, every: int = 1) -> ReplaySteps:
+    """Replays the file at ``path`` into ``env`` a few calls at a time.
+
+    Returns a :class:`ReplaySteps` iterator that yields an event index after
+    every ``every``-th call, leaving ``env`` free for inspection or rendering
+    between yields (see :func:`tessera_rl.render.replay_video`). Use it in a
+    ``with`` block, or call ``close()``, if you may stop early. ``env`` must
+    be built as for :func:`run`; the file is refused here as :func:`run`
+    refuses it.
+    """
+    every = int(every)
+    if every < 1:
+        raise ArgumentError("every must be at least 1")
+    native = _native_of(env)
+    with open(os.fspath(path), "rb") as f:
+        data = f.read()
+    native._replay_begin(data)
+    return ReplaySteps(native, every)

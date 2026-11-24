@@ -30,7 +30,7 @@ import numpy as np
 
 from tessera_rl import _native
 
-__all__ = ["export"]
+__all__ = ["export", "replay_video"]
 
 
 def _frames(frames) -> np.ndarray:
@@ -57,6 +57,36 @@ def export(frames, path: str | os.PathLike[str], fps: int = 50, *, ffmpeg: str |
         _mp4(arr, target, fps, ffmpeg)
         return
     raise _native.ArgumentError(f"unsupported video format {suffix!r}: use .gif or .mp4")
+
+
+def replay_video(
+    path: str | os.PathLike[str],
+    env,
+    out: str | os.PathLike[str],
+    *,
+    instance: int = 0,
+    fps: int = 50,
+    every: int = 1,
+    ffmpeg: str | os.PathLike[str] | None = None,
+) -> int:
+    """Replays the file at ``path`` into ``env`` and writes a video of
+    instance ``instance`` to ``out`` (``.gif`` or ``.mp4``, as
+    :func:`export`): one frame after every ``every``-th replayed call
+    (:func:`tessera_rl.replay.steps`). ``env`` must be built as for
+    :func:`tessera_rl.replay.run` and render (ADR-0083). Returns the number
+    of frames. Raises ``ReplayDivergence`` if the replay diverges, and
+    ``ArgumentError`` for a file with no call to show.
+    """
+    from tessera_rl import replay
+
+    frames = []
+    with replay.steps(path, env, every=every) as it:
+        for _ in it:
+            frames.append(env.render([instance])[0])
+    if not frames:
+        raise _native.ArgumentError("the replay file holds no call to render")
+    export(np.stack(frames), out, fps, ffmpeg=ffmpeg)
+    return len(frames)
 
 
 def _mp4(arr: np.ndarray, target: Path, fps: int, ffmpeg) -> None:

@@ -6,7 +6,10 @@
 //! A [`Recorder`] wraps an [`EnvPool`](crate::EnvPool) and logs every call
 //! that changes state; [`Replay::open`] checks a file and [`Replay::run`]
 //! re-issues its calls into a pool, reporting the first failing check as
-//! [`ReplayError::Diverged`].
+//! [`ReplayError::Diverged`]. [`Replay::run_with`] and a [`ReplayCursor`]
+//! ([`Replay::cursor`], [`Replay::advance`], [`Replay::seek`],
+//! [`Replay::finish`]) step through a file with the pool free between
+//! events, for inspection or rendering.
 //!
 //! A file with keyframes holds full state, so it is privileged exactly like a
 //! persisted snapshot (SPEC 9.3, ADR-0035). The checksums detect accidents;
@@ -23,6 +26,7 @@
 mod async_run;
 #[cfg(not(loom))]
 mod async_writer;
+mod cursor;
 mod error;
 mod format;
 #[cfg(feature = "host")]
@@ -39,6 +43,7 @@ mod writer;
 
 #[cfg(not(loom))]
 pub use async_writer::AsyncRecorder;
+pub use cursor::{PointKind, ReplayCursor, ReplayPoint};
 pub use error::{DivergenceKind, ReplayError};
 pub use format::{EventTag, FORMAT_VERSION, REPLAY_MAGIC, StateWriteOp};
 #[cfg(feature = "host")]

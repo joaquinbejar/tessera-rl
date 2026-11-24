@@ -106,7 +106,10 @@ pub use pool::{EnvPool, Reseed};
 pub use record::{DecodedRecord, PoolContext, Record};
 pub use registry::attach_shared_registry;
 #[cfg(feature = "replay")]
-pub use replay::{Recorder, Replay, ReplayError, ReplaySummary, ReplayWriterOptions};
+pub use replay::{
+    PointKind, Recorder, Replay, ReplayCursor, ReplayError, ReplayPoint, ReplaySummary,
+    ReplayWriterOptions,
+};
 #[cfg(not(loom))]
 pub use sys::native_wait_available;
 pub use sys::{default_workers, physical_cores};

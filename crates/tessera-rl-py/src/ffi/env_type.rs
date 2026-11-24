@@ -102,6 +102,11 @@ varargs!(RecordStartM, crate::replay_api::record_start);
 noargs!(RecordFinishM, crate::replay_api::record_finish);
 noargs!(RecordAbortM, crate::replay_api::record_abort);
 varargs!(ReplayM, crate::replay_api::replay);
+varargs!(ReplayBeginM, crate::replay_api::replay_begin);
+varargs!(ReplayAdvanceM, crate::replay_api::replay_advance);
+varargs!(ReplaySeekM, crate::replay_api::replay_seek);
+noargs!(ReplayKeyframesM, crate::replay_api::replay_keyframes);
+noargs!(ReplayFinishM, crate::replay_api::replay_finish);
 
 /// `close()`: on an inherited object a no-op, as the deallocation: it
 /// neither joins nor refuses, so `with` blocks and cleanup paths in a child
@@ -159,6 +164,26 @@ static METHODS: MethodTable<EnvBody> = MethodTable::new(&[
     MethodRow::noargs::<RecordFinishM>(c"_record_finish", c"_record_finish() -> bytes"),
     MethodRow::noargs::<RecordAbortM>(c"_record_abort", c"_record_abort()"),
     MethodRow::varargs::<ReplayM>(c"_replay", c"_replay(data) -> tuple: see tessera_rl.replay"),
+    MethodRow::varargs::<ReplayBeginM>(
+        c"_replay_begin",
+        c"_replay_begin($self, data, /)\n--\n\n_replay_begin(data): starts a stepped replay; see tessera_rl.replay.steps",
+    ),
+    MethodRow::varargs::<ReplayAdvanceM>(
+        c"_replay_advance",
+        c"_replay_advance($self, calls, /)\n--\n\n_replay_advance(calls) -> tuple: see tessera_rl.replay.steps",
+    ),
+    MethodRow::varargs::<ReplaySeekM>(
+        c"_replay_seek",
+        c"_replay_seek($self, keyframe, /)\n--\n\n_replay_seek(keyframe): imports that keyframe and moves the replay after it",
+    ),
+    MethodRow::noargs::<ReplayKeyframesM>(
+        c"_replay_keyframes",
+        c"_replay_keyframes($self, /)\n--\n\n_replay_keyframes() -> tuple[int, ...]: the keyframes _replay_seek accepts",
+    ),
+    MethodRow::noargs::<ReplayFinishM>(
+        c"_replay_finish",
+        c"_replay_finish($self, /)\n--\n\n_replay_finish() -> tuple: ends the stepped replay; see tessera_rl.replay.steps",
+    ),
     MethodRow::varargs::<SendM>(c"send", c"send($self, half, actions, delivered, /)\n--\n\nsend(half, actions: bytes of int32, delivered)"),
     MethodRow::varargs::<RecvM>(
         c"recv",

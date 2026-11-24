@@ -3,7 +3,9 @@ import os
 
 import numpy.typing as npt
 
-__all__ = ["export"]
+from tessera_rl._env import Env
+
+__all__ = ["export", "replay_video"]
 
 def export(
     frames: npt.ArrayLike,
@@ -12,3 +14,13 @@ def export(
     *,
     ffmpeg: str | os.PathLike[str] | None = None,
 ) -> None: ...
+def replay_video(
+    path: str | os.PathLike[str],
+    env: Env,
+    out: str | os.PathLike[str],
+    *,
+    instance: int = 0,
+    fps: int = 50,
+    every: int = 1,
+    ffmpeg: str | os.PathLike[str] | None = None,
+) -> int: ...

@@ -41,11 +41,30 @@ pub struct ReplaySummary {
     /// shows a file cut while ids were outstanding (for example a truncated
     /// recording); empty for every other replay.
     pub unclaimed: Vec<u32>,
+    /// The index of the next event, for a replay stopped before the end of
+    /// the file ([`Replay::run_with`] broke, or a cursor was finished
+    /// early); `None` for a replay that reached the end and passed its
+    /// end-of-file checks.
+    pub stopped_at: Option<u64>,
+    /// The keyframe a seek started from ([`Replay::seek`]); `None` for a
+    /// replay that started at the beginning of the file.
+    pub started_at: Option<u64>,
+}
+
+impl ReplaySummary {
+    /// Whether the whole file was replayed and passed every check. A
+    /// stopped replay never reads as verified (the events after
+    /// `stopped_at` were not checked), nor does one that started from a
+    /// seek (the events before `started_at` were not replayed).
+    #[must_use]
+    pub const fn verified(&self) -> bool {
+        self.stopped_at.is_none() && self.started_at.is_none()
+    }
 }
 
 /// Where the replay stands between events.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Expect {
+pub(super) enum Expect {
     /// Any call, keyframe or checkpoint.
     Any,
     /// The keyframe of the state write at this event.
@@ -56,9 +75,11 @@ enum Expect {
     Nothing,
 }
 
-struct State {
-    summary: ReplaySummary,
-    expect: Expect,
+/// The replay's progress between events.
+#[derive(Debug, Clone)]
+pub(super) struct State {
+    pub(super) summary: ReplaySummary,
+    pub(super) expect: Expect,
     last_checkpoint: Option<u64>,
     last_call: Option<u64>,
     /// The ids and branch counter of the pending state write.
@@ -66,7 +87,33 @@ struct State {
 }
 
 impl State {
-    const fn diverged(
+    /// The state at the start of a file, or just after a seek.
+    pub(super) fn new() -> Self {
+        Self {
+            summary: ReplaySummary::default(),
+            expect: Expect::Any,
+            last_checkpoint: None,
+            last_call: None,
+            write: None,
+        }
+    }
+
+    /// The end-of-file checks: no state write left without its keyframe and
+    /// no poisoning call without its `Poisoned` event.
+    pub(super) fn end(self) -> Result<ReplaySummary, ReplayError> {
+        match self.expect {
+            Expect::Any | Expect::Nothing => Ok(self.summary),
+            Expect::Keyframe(index) => Err(ReplayError::Malformed {
+                event_index: index,
+                field: "a state write without its keyframe",
+            }),
+            Expect::Poison(index) => {
+                Err(self.diverged(index, DivergenceKind::UnexpectedPoison, None))
+            }
+        }
+    }
+
+    pub(super) const fn diverged(
         &self,
         event_index: u64,
         kind: DivergenceKind,
@@ -116,29 +163,7 @@ impl Replay<'_> {
         M: PersistMask<E>,
         <E::Header as RecordLayout>::Adaptive: AdaptiveValues<E::Config>,
     {
-        self.check_pool(pool)?;
-        let mut st = State {
-            summary: ReplaySummary::default(),
-            expect: Expect::Any,
-            last_checkpoint: None,
-            last_call: None,
-            write: None,
-        };
-        for item in self.events() {
-            let (index, event) = item?;
-            self.apply(pool, &mut st, index, event)?;
-            st.summary.events = index.saturating_add(1);
-        }
-        match st.expect {
-            Expect::Any | Expect::Nothing => Ok(st.summary),
-            Expect::Keyframe(index) => Err(ReplayError::Malformed {
-                event_index: index,
-                field: "a state write without its keyframe",
-            }),
-            Expect::Poison(index) => {
-                Err(st.diverged(index, DivergenceKind::UnexpectedPoison, None))
-            }
-        }
+        self.run_with(pool, |_, _| core::ops::ControlFlow::Continue(()))
     }
 
     pub(crate) fn check_pool<E, M>(&self, pool: &EnvPool<E, M>) -> Result<(), ReplayError>
@@ -200,7 +225,7 @@ impl Replay<'_> {
         Ok(())
     }
 
-    fn apply<E, M>(
+    pub(super) fn apply<E, M>(
         &self,
         pool: &mut EnvPool<E, M>,
         st: &mut State,
