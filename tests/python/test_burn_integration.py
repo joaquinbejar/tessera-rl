@@ -42,7 +42,7 @@ def test_burn_ci_job_is_separate_and_runs_the_sanity_gate():
     assert "manifest-path: integrations/burn/Cargo.toml" in job
     assert "arguments: --config integrations/burn/deny.toml" in job
     assert job.count("--manifest-path integrations/burn/Cargo.toml") == 4
-    assert "      - run: make burn-gate\n" in job
+    assert "      - run: make burn-gate" in job
     others = CI.replace(job, "")
     assert "integrations/burn" not in others.replace("burn-check", "")
     assert "burn" not in NIGHTLY

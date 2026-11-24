@@ -110,43 +110,15 @@ pub fn train(config: &Config) -> Result<Report, EngineError> {
             dones: Vec::with_capacity(t_len * n),
         };
         for _ in 0..t_len {
-            let x = Tensor::<2>::from_data(TensorData::new(obs.clone(), [n, OBS]), &device);
-            let probs = softmax(model.logits(x.clone()), 1)
-                .into_data()
-                .try_to_vec::<f32>()
-                .unwrap_or_default();
-            let values = model
-                .value(x)
-                .into_data()
-                .try_to_vec::<f32>()
-                .unwrap_or_default();
-            let mut acts = Vec::with_capacity(n);
-            for (i, row) in probs.as_chunks::<ACTIONS>().0.iter().enumerate() {
-                let u = rng.unit();
-                let a = usize::from(u >= f64::from(row[0]));
-                #[expect(clippy::cast_possible_truncation, reason = "a log-probability in f32")]
-                let logp = math::ln(f64::from(row.get(a).copied().unwrap_or(1.0).max(1e-8))) as f32;
-                b.logp.push(logp);
-                b.values.push(values.get(i).copied().unwrap_or(0.0));
-                b.actions.push(i64::try_from(a).unwrap_or(0));
-                acts.push(i32::try_from(a).unwrap_or(0));
-            }
-            b.obs.extend_from_slice(&obs);
-            pool.step(ActionInput {
-                discrete: &acts,
-                continuous: &[],
-            })?;
-            let out = pool.outputs()?;
-            b.rewards.extend_from_slice(out.rewards());
-            for i in 0..n {
-                let ended = out.episode_terminated().get(i).is_some_and(|f| f.get())
-                    || out.episode_truncated().get(i).is_some_and(|f| f.get());
-                b.dones.push(if ended { 1.0 } else { 0.0 });
-                if ended {
-                    returns.push(out.episode_return().get(i).copied().unwrap_or(0.0));
-                }
-            }
-            obs = observations(&pool)?;
+            obs = act_and_step(
+                &model,
+                &mut pool,
+                obs,
+                &mut rng,
+                &mut b,
+                &mut returns,
+                &device,
+            )?;
             steps += NUM_ENVS;
         }
         let last_x = Tensor::<2>::from_data(TensorData::new(obs.clone(), [n, OBS]), &device);
@@ -197,6 +169,59 @@ pub fn train(config: &Config) -> Result<Report, EngineError> {
         last_mean,
         finite,
     })
+}
+
+/// One step of the rollout: samples an action per instance, steps the pool,
+/// records the transition and any ended episode's return; returns the next
+/// observations.
+#[expect(clippy::many_single_char_names, reason = "PPO notation")]
+fn act_and_step(
+    model: &ActorCritic,
+    pool: &mut EnvPool<CartPole>,
+    obs: Vec<f32>,
+    rng: &mut Rng,
+    b: &mut Batch,
+    returns: &mut Vec<f32>,
+    device: &Device,
+) -> Result<Vec<f32>, EngineError> {
+    let n = obs.len() / OBS;
+    let x = Tensor::<2>::from_data(TensorData::new(obs.clone(), [n, OBS]), device);
+    let probs = softmax(model.logits(x.clone()), 1)
+        .into_data()
+        .try_to_vec::<f32>()
+        .unwrap_or_default();
+    let values = model
+        .value(x)
+        .into_data()
+        .try_to_vec::<f32>()
+        .unwrap_or_default();
+    let mut acts = Vec::with_capacity(n);
+    for (i, row) in probs.as_chunks::<ACTIONS>().0.iter().enumerate() {
+        let u = rng.unit();
+        let a = usize::from(u >= f64::from(row[0]));
+        #[expect(clippy::cast_possible_truncation, reason = "a log-probability in f32")]
+        let logp = math::ln(f64::from(row.get(a).copied().unwrap_or(1.0).max(1e-8))) as f32;
+        b.logp.push(logp);
+        b.values.push(values.get(i).copied().unwrap_or(0.0));
+        b.actions.push(i64::try_from(a).unwrap_or(0));
+        acts.push(i32::try_from(a).unwrap_or(0));
+    }
+    b.obs.extend_from_slice(&obs);
+    pool.step(ActionInput {
+        discrete: &acts,
+        continuous: &[],
+    })?;
+    let out = pool.outputs()?;
+    b.rewards.extend_from_slice(out.rewards());
+    for i in 0..n {
+        let ended = out.episode_terminated().get(i).is_some_and(|f| f.get())
+            || out.episode_truncated().get(i).is_some_and(|f| f.get());
+        b.dones.push(if ended { 1.0 } else { 0.0 });
+        if ended {
+            returns.push(out.episode_return().get(i).copied().unwrap_or(0.0));
+        }
+    }
+    observations(pool)
 }
 
 /// Generalized advantage estimation; an ended step does not bootstrap
