@@ -12,7 +12,11 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import grouping
 import status as st
 
-EMPTY = "No valid measurement exists yet. No host currently meets the wall-time method (ADR-0025)."
+EMPTY = (
+    "No valid measurement exists yet. Published numbers need a reference machine with a recorded"
+    " hardware model, pinned workers and a documented frequency policy, measured with at least 2 s of"
+    " warm-up and 10 repetitions (median and 95% bootstrap interval); no host meets that yet."
+)
 NO_REFERENCE = "No machine has reference status, so every configuration below is unmeasured."
 WINDOW = "exclusive window declared by operator"
 KNOWN_METRICS = frozenset({"throughput", "latency", "snapshot", "memory"})

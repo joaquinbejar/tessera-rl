@@ -51,7 +51,7 @@ def inline_snippets(text: str, snippets: pathlib.Path) -> str:
         path = snippets / m["name"]
         if not path.is_file():
             raise SiteError(f"snippet {m['name']} not found in {snippets}")
-        lang = "python" if path.suffix == ".py" else ""
+        lang = {".py": "python", ".sh": "sh"}.get(path.suffix, "")
         body = path.read_text(encoding="utf-8").rstrip("\n")
         return f"```{lang}\n{body}\n```"
 
