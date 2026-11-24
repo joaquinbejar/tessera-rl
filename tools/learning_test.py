@@ -201,11 +201,28 @@ def _train(args, seeds: list[int]) -> list[dict]:
                 r = learning_protocols.train_continuous(PROTOCOL, seed, args.total_steps, args.eval_episodes)
             elif tier == "T3a":
                 r = learning_protocols.train_masked(PROTOCOL, seed, args.total_steps, args.eval_episodes)
+            elif tier == "T3b":
+                # #370 T3b: the score is the mean against the heuristic; the
+                # mean against a uniform-legal opponent is kept for the gate.
+                r = learning_protocols.train_twoplayer(PROTOCOL, seed, args.total_steps, args.eval_episodes)
+                r["eval_returns"] = r["vs_heuristic"]
             else:
                 r = learning_protocols.train(PROTOCOL, seed, args.total_steps, args.eval_episodes)
-        records.append({"seed": seed, "score": r["eval_mean"], "eval_returns": r["eval_returns"], "train_seconds": r["train_seconds"]})
+        record = {"seed": seed, "score": r["eval_mean"], "eval_returns": r["eval_returns"], "train_seconds": r.get("train_seconds")}
+        if "vs_uniform" in r:
+            record["vs_uniform"] = float(sum(r["vs_uniform"]) / len(r["vs_uniform"]))
+        records.append(record)
         sys.stderr.write(f"seed {seed}: score {r['eval_mean']:.2f} in {r['train_seconds']}s\n")
     return records
+
+
+def _tier() -> str:
+    """The current protocol's tier ("T1" for CartPole)."""
+    if PROTOCOL == "cartpole":
+        return "T1"
+    import learning_protocols  # noqa: PLC0415
+
+    return learning_protocols.protocol(PROTOCOL)["tier"]
 
 
 def _write(path: str, data: dict) -> None:
@@ -230,8 +247,30 @@ def cmd_calibrate(args) -> int:
         out["errors"] = errors
     out["setup"] = shards[0].get("setup") if shards else None
     out["environment"] = shards[0].get("environment") if shards else None
-    out["records"] = sorted(({"seed": r.get("seed"), "score": r.get("score")} for r in records), key=lambda r: str(r["seed"]))
-    if PROTOCOL != "cartpole" and not errors:
+    out["records"] = sorted(
+        ({"seed": r.get("seed"), "score": r.get("score"), **({"vs_uniform": r["vs_uniform"]} if "vs_uniform" in r else {})} for r in records),
+        key=lambda r: str(r["seed"]),
+    )
+    if PROTOCOL != "cartpole" and not errors and _tier() == "T3b":
+        # #370 T3b (DESIGN-T3b-r1 section 2): U and H on the evaluation
+        # seeds, then both thresholds, or no gate when H does not beat U.
+        import learning_protocols
+
+        from learning_gate import learns_twoplayer
+
+        episodes = (out["setup"] or {}).get("eval_episodes") or 50
+        refs = learning_protocols.twoplayer_references(PROTOCOL, episodes)
+        gate = learning_protocols.gate(PROTOCOL)
+        out["gate"] = gate
+        out["references"] = refs
+        out["learns"] = learns_twoplayer(
+            [r["score"] for r in out["records"]],
+            [r["vs_uniform"] for r in out["records"]],
+            refs["uniform"],
+            refs["heuristic"],
+            min_effect=gate.get("min_effect", 0.10),
+        )
+    elif PROTOCOL != "cartpole" and not errors:
         # The "learns at all" check: against a uniform random policy on the
         # same evaluation seeds. A protocol that does not learn ships with
         # no nightly gate until a budget that learns is found.
