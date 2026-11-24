@@ -13,7 +13,8 @@ mod support;
 use support::{Scenario, check, run};
 use tessera_rl_engine::{AutoReset, EnvPool, Masked};
 use tessera_rl_games::{
-    Connect4, Connect4Config, Go9, Go9Config, Leduc, LeducConfig, Othello, OthelloConfig,
+    Connect4, Connect4Config, Go9, Go9Config, Lanterns, LanternsConfig, Leduc, LeducConfig,
+    Othello, OthelloConfig,
 };
 
 impl support::GoldenEnv for Connect4 {
@@ -180,4 +181,50 @@ fn test_golden_go9_next_step_matches_fixture_on_every_mode() {
 #[test]
 fn test_golden_go9_same_step_matches_fixture_on_every_mode() {
     check_go9(&go9("go9-v1-same-step", AutoReset::SameStep));
+}
+
+impl support::GoldenEnv for Lanterns {
+    const ENV_ID: &'static str = tessera_rl_games::lanterns::ENV_ID;
+    const ENV_VERSION: u32 = tessera_rl_games::lanterns::ENV_VERSION;
+}
+
+/// Three players: hands of five, a game of about 50 to 70 turns.
+fn lanterns(name: &'static str, auto_reset: AutoReset) -> Scenario<LanternsConfig> {
+    Scenario {
+        name,
+        cfg: LanternsConfig {
+            players: 3,
+            zero_on_fuse: false,
+        },
+        seed: 3_802_026,
+        num_envs: 16,
+        chunk: 4,
+        auto_reset,
+        // Above the longest game (50 cards and a final round): the limit
+        // never truncates.
+        max_episode_steps: 128,
+        steps: 300,
+        reseed_at: 150,
+        reseed_ids: &[1, 12],
+        reseed_seed: 5_555,
+    }
+}
+
+fn check_lanterns(s: &Scenario<LanternsConfig>) {
+    let build = |cfg, options| {
+        EnvPool::<Lanterns, Masked>::with_masks(cfg, options).unwrap_or_else(|e| panic!("{e}"))
+    };
+    for workers in WORKERS {
+        check(s.name, &run::<Lanterns, _>(s, build, workers));
+    }
+}
+
+#[test]
+fn test_golden_lanterns_next_step_matches_fixture_on_every_mode() {
+    check_lanterns(&lanterns("lanterns-v1-next-step", AutoReset::NextStep));
+}
+
+#[test]
+fn test_golden_lanterns_same_step_matches_fixture_on_every_mode() {
+    check_lanterns(&lanterns("lanterns-v1-same-step", AutoReset::SameStep));
 }

@@ -8,7 +8,8 @@ mod support;
 use tessera_rl_core::Persist;
 use tessera_rl_engine::{EnvPool, Masked};
 use tessera_rl_games::{
-    Connect4, Connect4Config, Go9, Go9Config, Leduc, LeducConfig, Othello, OthelloConfig,
+    Connect4, Connect4Config, Go9, Go9Config, Lanterns, LanternsConfig, Leduc, LeducConfig,
+    Othello, OthelloConfig,
 };
 
 #[test]
@@ -62,5 +63,20 @@ fn test_persist_leduc_continues_and_matches_its_fixture() {
     assert_eq!(
         <Leduc as Persist>::ENV_VERSION,
         tessera_rl_games::leduc::ENV_VERSION
+    );
+}
+
+#[test]
+fn test_persist_lanterns_continues_and_matches_its_fixture() {
+    let cfg = || LanternsConfig {
+        players: 3,
+        zero_on_fuse: false,
+    };
+    let build = |o| EnvPool::<Lanterns, Masked>::with_masks(cfg(), o).unwrap();
+    support::check_continuation(&build, 3);
+    support::check_fixture("persist-lanterns", env!("CARGO_MANIFEST_DIR"), &build, 3);
+    assert_eq!(
+        <Lanterns as Persist>::ENV_ID,
+        tessera_rl_games::lanterns::ENV_ID
     );
 }

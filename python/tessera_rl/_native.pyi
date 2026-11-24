@@ -251,6 +251,22 @@ def make_connect4(
     spin: int | None = None,
     outputs: str | None = None,
 ) -> Env: ...
+def make_lanterns(
+    *,
+    players: int | None = None,
+    zero_on_fuse: bool | None = None,
+    mode: str | None = None,
+    batch_size: int | None = None,
+    gather: str | None = None,
+    num_envs: int | None = None,
+    seed: int | None = None,
+    max_episode_steps: int | None = None,
+    auto_reset: str | None = None,
+    chunk_size: int | None = None,
+    workers: int | None = None,
+    spin: int | None = None,
+    outputs: str | None = None,
+) -> Env: ...
 def make_leduc(
     *,
     mode: str | None = None,

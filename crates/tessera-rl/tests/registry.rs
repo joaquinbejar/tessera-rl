@@ -9,7 +9,7 @@ use tessera_rl::classic::{
 };
 use tessera_rl::core::{Environment, Persist};
 use tessera_rl::envs::{EnvRegistration, registered};
-use tessera_rl::games::{Connect4, Go9, Leduc, Othello};
+use tessera_rl::games::{Connect4, Go9, Lanterns, Leduc, Othello};
 
 /// The record `E` must have, read straight from its consts.
 fn expected<E: Persist>() -> (&'static str, u32, usize, tessera_rl::core::Tier, bool) {
@@ -48,6 +48,7 @@ fn test_registered_facade_every_shipped_environment_listed() {
         expected::<Tag>(),
         expected::<Connect4>(),
         expected::<Go9>(),
+        expected::<Lanterns>(),
         expected::<Leduc>(),
         expected::<Othello>(),
     ];

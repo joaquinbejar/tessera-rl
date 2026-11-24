@@ -15,6 +15,7 @@ Environment                 Turns        Adapters
 ``tessera/RTS-v1``          simultaneous ``parallel_env``
 ``tessera/Connect4-v1``     sequential   ``aec_env``
 ``tessera/Leduc-v1``        sequential   ``aec_env``
+``tessera/Lanterns-v1``     sequential   ``aec_env``
 ``tessera/Othello-v1``      sequential   ``aec_env``
 ``tessera/Go9-v1``          sequential   ``aec_env``
 ==========================  ===========  ============================
@@ -106,6 +107,7 @@ _MAKERS = {
     "tessera/PaddleDuel-v1": _native.make_paddleduel,
     "tessera/Connect4-v1": _native.make_connect4,
     "tessera/Leduc-v1": _native.make_leduc,
+    "tessera/Lanterns-v1": _native.make_lanterns,
     "tessera/Othello-v1": _native.make_othello,
     "tessera/Go9-v1": _native.make_go9,
     # Simultaneous; it declares Parallel only (cycle buffering of a
