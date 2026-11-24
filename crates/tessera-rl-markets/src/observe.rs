@@ -2,20 +2,22 @@
 
 //! The observation of one agent (`docs/reviews/381/DESIGN.md`, section 3).
 //!
-//! Every leaf is `i32`, so the PufferLib flat view is zero-copy. Prices are
-//! offsets in ticks from the mid ([`crate::state::Touch::mid`]). No agent sees another's
-//! identity, orders, inventory or the true fundamental.
+//! Every item and box leaf is `i32`; the two `Set` masks are `bool`
+//! (ADR-0082). Prices are offsets in ticks from the mid
+//! ([`crate::state::Touch::mid`]). No agent sees another's identity,
+//! orders, inventory or the true fundamental.
 //!
-//! `own_orders` and `trades` are fixed-size item leaves with a 0/1 `_mask`
-//! leaf after each, the layout ADR-0082 gives a `Set`; absent rows are
-//! zero. They are plain `Box` leaves here because `Set` leaves are not on
-//! this crate's base yet; moving to `Set` changes the mask leaves' dtype
-//! to `bool` and is a new environment version.
+//! `own_orders` (at most 8) and `trades` (at most 16) are `Set` leaves
+//! (ADR-0082, #450): each exports its item leaf `[MAX, 3]` and then a
+//! `bool` mask leaf named `<set>_mask`. Present rows are packed from 0;
+//! absent rows are zero (the engine zeroes them). The switch from the
+//! earlier `Box` plus `i32` mask leaves kept the environment version
+//! (coordinator decision).
 
 #![deny(clippy::float_arithmetic)]
 
 use tessera_rl_core::io::ObsWriter;
-use tessera_rl_core::{AgentSlot, ObsLeaf};
+use tessera_rl_core::{AgentSlot, ObsLeaf, ObsSet};
 use tessera_rl_macros::Observation;
 use tessera_rl_num::rng::ObsRng;
 
@@ -51,17 +53,11 @@ pub struct LobObs {
     pub own: ObsLeaf<i32>,
     /// The agent's open orders by id: `[side (0 buy, 1 sell), price
     /// offset, remaining lots]`.
-    #[space(box(low = -OFFSET_BOUND, high = OFFSET_BOUND, dtype = i32, shape = |_: &LobConfig| [8, 3]))]
-    pub own_orders: ObsLeaf<i32>,
-    /// 1 for each row of `own_orders` in use, else 0.
-    #[space(box(low = 0, high = 1, dtype = i32, shape = |_: &LobConfig| [8]))]
-    pub own_orders_mask: ObsLeaf<i32>,
+    #[space(set(max = MAX_OPEN, inner(box(low = -OFFSET_BOUND, high = OFFSET_BOUND, shape = [3]))))]
+    pub own_orders: ObsSet<i32>,
     /// This step's first 16 fills: `[price offset, lots, aggressor side]`.
-    #[space(box(low = -OFFSET_BOUND, high = OFFSET_BOUND, dtype = i32, shape = |_: &LobConfig| [16, 3]))]
-    pub trades: ObsLeaf<i32>,
-    /// 1 for each row of `trades` in use, else 0.
-    #[space(box(low = 0, high = 1, dtype = i32, shape = |_: &LobConfig| [16]))]
-    pub trades_mask: ObsLeaf<i32>,
+    #[space(set(max = MAX_TRADES, inner(box(low = -OFFSET_BOUND, high = OFFSET_BOUND, shape = [3]))))]
+    pub trades: ObsSet<i32>,
     /// The private signal's offset from the mid: the fundamental plus a
     /// uniform noise in `[-noise, +noise]` ticks, drawn per agent each step
     /// from `StepRng` and kept in the state.
@@ -140,31 +136,27 @@ pub fn observe(
             leaf.set(i, clip(v));
         }
     }
-    if let Some(mut leaf) = out.leaf_mut(LobObs::OWN_ORDERS) {
+    if let Some(mut set) = out.set_mut(LobObs::OWN_ORDERS) {
         for (i, o) in own.iter().take(n_own).enumerate() {
-            leaf.set(3 * i, side_code(o.side));
-            leaf.set(3 * i + 1, touch.offset(o.price));
-            leaf.set(3 * i + 2, i32::try_from(o.qty).unwrap_or(0));
-        }
-    }
-    if let Some(mut leaf) = out.leaf_mut(LobObs::OWN_ORDERS_MASK) {
-        for i in 0..n_own {
-            leaf.set(i, 1);
+            set.set(i, true);
+            if let Some(mut row) = set.item(i) {
+                row.set(0, side_code(o.side));
+                row.set(1, touch.offset(o.price));
+                row.set(2, i32::try_from(o.qty).unwrap_or(0));
+            }
         }
     }
     let trades = usize::try_from(state.trade_count)
         .unwrap_or(0)
         .min(MAX_TRADES);
-    if let Some(mut leaf) = out.leaf_mut(LobObs::TRADES) {
+    if let Some(mut set) = out.set_mut(LobObs::TRADES) {
         for (i, t) in state.trades.iter().take(trades).enumerate() {
-            leaf.set(3 * i, touch.offset(t.price));
-            leaf.set(3 * i + 1, i32::try_from(t.qty).unwrap_or(0));
-            leaf.set(3 * i + 2, side_code(t.side));
-        }
-    }
-    if let Some(mut leaf) = out.leaf_mut(LobObs::TRADES_MASK) {
-        for i in 0..trades {
-            leaf.set(i, 1);
+            set.set(i, true);
+            if let Some(mut row) = set.item(i) {
+                row.set(0, touch.offset(t.price));
+                row.set(1, i32::try_from(t.qty).unwrap_or(0));
+                row.set(2, side_code(t.side));
+            }
         }
     }
     // The slot's own signal, drawn in the step (`LobState::signal`).

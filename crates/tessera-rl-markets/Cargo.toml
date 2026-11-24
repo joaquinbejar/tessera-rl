@@ -19,6 +19,7 @@ tessera-rl-core.workspace = true
 tessera-rl-num.workspace = true
 tessera-rl-macros.workspace = true
 thiserror.workspace = true
+tracing.workspace = true
 
 [dev-dependencies]
 criterion.workspace = true

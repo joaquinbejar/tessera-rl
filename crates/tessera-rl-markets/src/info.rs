@@ -63,7 +63,10 @@
 //! with the order count only. The visible book is then still exact and
 //! the sample still passes `Validate` (which bounds `|inventory|`, not the
 //! open lots); only correction 3's open-lot bound may be exceeded for one
-//! agent. `tests/determinize.rs` checks every sample against it.
+//! agent. Each use of the last resort is logged with `tracing::warn!` and
+//! reported by [`sample_with_report`]; `tests/determinize.rs` counts the
+//! uses over every sample and requires none, and checks every sample
+//! against the bound.
 
 #![deny(clippy::float_arithmetic)]
 
@@ -361,11 +364,12 @@ fn build(
     others: &[usize],
     cap: u64,
     limit: usize,
+    start: &[Load; MAX_AGENTS],
 ) -> Option<Built> {
     let mut built = Built {
         orders: [Order::default(); BOOK_CAP],
         count: 0,
-        loads: [Load::default(); MAX_AGENTS],
+        loads: *start,
     };
     for &i in order {
         let &(side, price, total) = levels.get(i)?;
@@ -411,7 +415,13 @@ fn build(
 }
 
 /// Step 2 with its retries and last resort.
-fn construct(cfg: &LobConfig, info: &LobInfo, others: &[usize], rng: &mut StepRng) -> Built {
+fn construct(
+    cfg: &LobConfig,
+    info: &LobInfo,
+    others: &[usize],
+    rng: &mut StepRng,
+    report: &mut SampleReport,
+) -> Built {
     let mut levels = [(Side::Buy, 0u32, 0u32); 2 * MAX_DEPTH];
     let mut n = 0;
     for level in info.hidden_levels() {
@@ -430,19 +440,48 @@ fn construct(cfg: &LobConfig, info: &LobInfo, others: &[usize], rng: &mut StepRn
     order.sort_unstable_by_key(|&i| (core::cmp::Reverse(levels.get(i).map_or(0, |l| l.2)), i));
     let cap = 2 * u64::from(cfg.max_position);
     let limit = BOOK_CAP - usize::from(info.own_count);
-    if let Some(b) = build(levels, order, others, cap, limit) {
+    if let Some(b) = build(
+        levels,
+        order,
+        others,
+        cap,
+        limit,
+        &[Load::default(); MAX_AGENTS],
+    ) {
         return b;
     }
     for _ in 0..RETRIES {
+        report.retries += 1;
         for i in (1..order.len()).rev() {
             let j = below(rng, i + 1);
             order.swap(i, j);
         }
-        if let Some(b) = build(levels, order, others, cap, limit) {
+        if let Some(b) = build(
+            levels,
+            order,
+            others,
+            cap,
+            limit,
+            &[Load::default(); MAX_AGENTS],
+        ) {
             return b;
         }
     }
-    build(levels, order, others, u64::MAX, limit).unwrap_or(Built {
+    report.last_resort = true;
+    tracing::warn!(
+        levels = levels.len(),
+        others = others.len(),
+        "LimitOrderBook determinization: hidden orders placed by the last resort, the open-lot bound may be exceeded"
+    );
+    build(
+        levels,
+        order,
+        others,
+        u64::MAX,
+        limit,
+        &[Load::default(); MAX_AGENTS],
+    )
+    .unwrap_or(Built {
         orders: [Order::default(); BOOK_CAP],
         count: 0,
         loads: [Load::default(); MAX_AGENTS],
@@ -484,8 +523,33 @@ fn inventories(
     inventory
 }
 
+/// What one determinization needed (review of PR 3, follow-up 1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub struct SampleReport {
+    /// Random level orders tried after the largest-first greedy failed.
+    pub retries: u32,
+    /// Whether the last resort placed the hidden orders (the open-lot
+    /// bound of correction 3 may then be exceeded). Also logged with
+    /// `tracing::warn!`.
+    pub last_resort: bool,
+}
+
 impl Determinize for LimitOrderBook {
     fn sample(cfg: &LobConfig, info: &LobInfo, rng: &mut StepRng, state: &mut LobState) {
+        let _ = sample_with_report(cfg, info, rng, state);
+    }
+}
+
+/// [`Determinize::sample`], reporting the retries and any use of the last
+/// resort; the sample is the same.
+pub fn sample_with_report(
+    cfg: &LobConfig,
+    info: &LobInfo,
+    rng: &mut StepRng,
+    state: &mut LobState,
+) -> SampleReport {
+    let mut report = SampleReport::default();
+    {
         let me = usize::from(info.me);
         let n = cfg.agent_count();
 
@@ -507,7 +571,7 @@ impl Determinize for LimitOrderBook {
             }
         }
         let others = others.get(..n_others).unwrap_or(&[]);
-        let built = construct(cfg, info, others, rng);
+        let built = construct(cfg, info, others, rng, &mut report);
         *state = base_state(info, built.orders.get(..built.count).unwrap_or(&[]));
         state.fundamental = u32::try_from(fundamental).unwrap_or(cfg.min_tick);
         let loads = built.loads;
@@ -564,5 +628,51 @@ impl Determinize for LimitOrderBook {
                 *s = i32::try_from(fundamental + noise).unwrap_or(0);
             }
         }
+    }
+    report
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Load, MAX_AGENTS, build};
+    use crate::limits::MAX_OPEN;
+    use crate::order::Side;
+
+    /// Loads where slot 1 has one order slot left and little lot room, and
+    /// slot 2 is at `MAX_OPEN` with the most lot room.
+    fn crafted() -> [Load; MAX_AGENTS] {
+        let mut loads = [Load::default(); MAX_AGENTS];
+        loads[1] = Load {
+            lots: [8, 0],
+            cash: 0,
+            orders: MAX_OPEN - 1,
+        };
+        loads[2] = Load {
+            lots: [0, 0],
+            cash: 0,
+            orders: MAX_OPEN,
+        };
+        loads
+    }
+
+    #[test]
+    fn test_build_agent_one_below_max_open_takes_the_last_piece() {
+        let levels = [(Side::Sell, 100, 2)];
+        let built = build(&levels, &[0], &[1, 2], 10, 128, &crafted());
+        let built = built.expect("slot 1 has room for one order of 2 lots");
+        assert_eq!(built.count, 1);
+        assert_eq!(built.orders[0].owner, 1);
+        assert_eq!(built.loads[1].orders, MAX_OPEN);
+        assert_eq!(built.loads[2].orders, MAX_OPEN);
+    }
+
+    #[test]
+    fn test_build_agent_at_max_open_never_gets_a_piece_despite_most_room() {
+        // 3 lots: slot 1 has 2 lots of room and one order, slot 2 has 10
+        // lots of room and no order slot left: no fit.
+        let levels = [(Side::Sell, 100, 3)];
+        assert!(build(&levels, &[0], &[1, 2], 10, 128, &crafted()).is_none());
+        // With slot 2 alone, nothing is placed either.
+        assert!(build(&levels[..1], &[0], &[2], 10, 128, &crafted()).is_none());
     }
 }
