@@ -7,7 +7,7 @@
 //! the engine (milestone 5).
 
 use proc_macro2::TokenStream;
-use quote::quote;
+use quote::{quote, quote_spanned};
 use syn::{Attribute, DeriveInput, Ident, LitStr};
 
 use crate::paths::core_path;
@@ -60,6 +60,8 @@ struct FieldParts {
     decodes: Vec<TokenStream>,
     inits: Vec<TokenStream>,
     nans: Vec<TokenStream>,
+    /// End offset of the previous field, as a const expression.
+    prev_end: Option<TokenStream>,
 }
 
 impl FieldParts {
@@ -85,26 +87,33 @@ impl FieldParts {
             ),
             ident.span(),
         );
-        self.padding_checks.push(quote! {
-            if ::core::mem::offset_of!(#name, #ident) != end {
-                ::core::panic!(#message);
-            }
-            end = ::core::mem::offset_of!(#name, #ident) + ::core::mem::size_of::<#ty>();
-        });
-        self.bounds.push(quote!(assert_field::<#ty>();));
         let hidden = LitStr::new(
             &format!(
                 "EnvState: field `{ident}` of `{name}` has hidden padding (size differs from its encoded length), for example a Pool whose CAP is not a multiple of align_of::<T>() (ADR-0029)"
             ),
             ident.span(),
         );
-        self.padding_checks.push(quote! {
-            if ::core::mem::size_of::<#ty>() != <#ty as #core::encoding::Canonical>::ENCODED_LEN {
-                ::core::panic!(#hidden);
-            }
+        let prev_end = self.prev_end.take().unwrap_or_else(|| quote!(0usize));
+        // One const item per field, spanned at the field, so a failed
+        // layout check points at the offending field (SPEC 10.2).
+        self.padding_checks.push(quote_spanned! {ident.span()=>
+            const _: () = {
+                if ::core::mem::offset_of!(#name, #ident) != #prev_end {
+                    ::core::panic!(#message);
+                }
+                if ::core::mem::size_of::<#ty>() != <#ty as #core::encoding::Canonical>::ENCODED_LEN {
+                    ::core::panic!(#hidden);
+                }
+            };
         });
+        self.prev_end = Some(quote! {
+            (::core::mem::offset_of!(#name, #ident) + ::core::mem::size_of::<#ty>())
+        });
+        let ty_span = syn::spanned::Spanned::span(ty);
+        self.bounds
+            .push(quote_spanned!(ty_span=> assert_field::<#ty>();));
         self.lens
-            .push(quote!(<#ty as #core::encoding::Canonical>::ENCODED_LEN));
+            .push(quote_spanned!(ty_span=> <#ty as #core::encoding::Canonical>::ENCODED_LEN));
         self.encodes
             .push(quote!(#core::encoding::Canonical::encode(&self.#ident, out);));
         self.inits
@@ -162,13 +171,15 @@ pub(crate) fn derive(input: &DeriveInput) -> syn::Result<TokenStream> {
         decodes,
         inits,
         nans,
+        prev_end,
     } = parts;
-    if last.is_none() {
+    let Some(last_ident) = &last else {
         return Err(syn::Error::new_spanned(
             name,
             "EnvState requires at least one field",
         ));
-    }
+    };
+    let prev_end = prev_end.unwrap_or_else(|| quote!(0usize));
     let lens_check = lens.clone();
     let whole = LitStr::new(
         &format!(
@@ -177,22 +188,26 @@ pub(crate) fn derive(input: &DeriveInput) -> syn::Result<TokenStream> {
         name.span(),
     );
     let trailing = LitStr::new(
-        &match &last {
-            Some(ident) => format!(
-                "EnvState: `{name}` has trailing padding after field `{ident}`; add a Reserved<N> field at the end, with N = size_of::<{name}>() minus the end of `{ident}` (ADR-0029)"
-            ),
-            None => format!("EnvState: `{name}` has no fields"),
-        },
+        &format!(
+            "EnvState: `{name}` has trailing padding after field `{last_ident}`; add a Reserved<N> field at the end, with N = size_of::<{name}>() minus the end of `{last_ident}` (ADR-0029)"
+        ),
         name.span(),
     );
 
-    Ok(quote! {
+    let trailing_check = quote_spanned! {last_ident.span()=>
         const _: () = {
-            let mut end: usize = 0;
-            #(#padding_checks)*
-            if ::core::mem::size_of::<#name>() != end {
+            if ::core::mem::size_of::<#name>() != #prev_end {
                 ::core::panic!(#trailing);
             }
+        };
+    };
+
+    Ok(quote! {
+        #(#padding_checks)*
+
+        #trailing_check
+
+        const _: () = {
             if ::core::mem::size_of::<#name>() != 0 #(+ #lens_check)* {
                 ::core::panic!(#whole);
             }

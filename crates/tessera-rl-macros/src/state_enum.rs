@@ -55,7 +55,6 @@ pub(crate) fn derive(input: &DeriveInput) -> syn::Result<TokenStream> {
             "StateEnum requires at least one variant",
         ));
     }
-    let mut defaults = 0usize;
     let mut default_variant = None;
     let mut arms = Vec::new();
     for variant in &data.variants {
@@ -66,7 +65,13 @@ pub(crate) fn derive(input: &DeriveInput) -> syn::Result<TokenStream> {
             ));
         }
         if variant.attrs.iter().any(|a| a.path().is_ident("default")) {
-            defaults += 1;
+            if default_variant.is_some() {
+                // Point at the second default variant (SPEC 10.2).
+                return Err(syn::Error::new_spanned(
+                    &variant.ident,
+                    "StateEnum requires exactly one #[default] variant; this is a second one",
+                ));
+            }
             default_variant = Some(variant.ident.clone());
         }
         let v = &variant.ident;
@@ -76,7 +81,7 @@ pub(crate) fn derive(input: &DeriveInput) -> syn::Result<TokenStream> {
             }
         });
     }
-    let Some(default_variant) = default_variant.filter(|_| defaults == 1) else {
+    let Some(default_variant) = default_variant else {
         return Err(syn::Error::new_spanned(
             name,
             "StateEnum requires exactly one #[default] variant (with #[derive(Default)])",
