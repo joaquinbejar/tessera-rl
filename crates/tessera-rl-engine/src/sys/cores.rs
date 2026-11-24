@@ -7,7 +7,8 @@
 //! CPU quota (which `available_parallelism` honours on Linux) caps it.
 //! Physical cores come from sysfs topology within the affinity mask on
 //! Linux, `hw.physicalcpu` on macOS and `RelationProcessorCore` records on
-//! Windows. All three count efficiency cores of hybrid CPUs as cores. When
+//! Windows (all processor groups, ignoring the affinity mask; only the
+//! `available_parallelism` cap applies there). All three count efficiency cores of hybrid CPUs as cores. When
 //! detection fails, the count is `available_parallelism()` alone.
 
 use core::num::NonZeroUsize;
