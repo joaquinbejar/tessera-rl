@@ -1002,6 +1002,47 @@ where
     /// The slice borrows this pool (the wrapper holds the rows while it owns
     /// the pool, ADR-0079 stage B1), so it cannot outlive the next `recv`,
     /// which takes `&mut self`; copy it to keep a step's rows.
+    ///
+    /// ```
+    /// use tessera_rl_core::{AdaptiveValues, Environment, RecordLayout};
+    /// use tessera_rl_engine::{EngineError, MaskProvider, PipelinedPool};
+    ///
+    /// fn keep<E, M>(pool: &mut PipelinedPool<E, M>) -> Result<Option<Vec<i32>>, EngineError>
+    /// where
+    ///     E: Environment,
+    ///     M: MaskProvider<E>,
+    ///     E::Config: Send + Sync,
+    ///     E::Header: Send + Sync,
+    ///     E::State: Send + Sync,
+    ///     <E::Header as RecordLayout>::Adaptive: AdaptiveValues<E::Config>,
+    /// {
+    ///     // Copied before the next `recv`: compiles.
+    ///     let rows = pool.heuristic_actions().map(<[i32]>::to_vec);
+    ///     drop(pool.recv()?);
+    ///     Ok(rows)
+    /// }
+    /// ```
+    ///
+    /// Holding the borrowed slice across `recv` does not compile:
+    ///
+    /// ```compile_fail,E0502
+    /// use tessera_rl_core::{AdaptiveValues, Environment, RecordLayout};
+    /// use tessera_rl_engine::{EngineError, MaskProvider, PipelinedPool};
+    ///
+    /// fn keep<E, M>(pool: &mut PipelinedPool<E, M>) -> Result<usize, EngineError>
+    /// where
+    ///     E: Environment,
+    ///     M: MaskProvider<E>,
+    ///     E::Config: Send + Sync,
+    ///     E::Header: Send + Sync,
+    ///     E::State: Send + Sync,
+    ///     <E::Header as RecordLayout>::Adaptive: AdaptiveValues<E::Config>,
+    /// {
+    ///     let rows = pool.heuristic_actions();
+    ///     drop(pool.recv()?);
+    ///     Ok(rows.map_or(0, <[i32]>::len))
+    /// }
+    /// ```
     #[must_use]
     pub fn heuristic_actions(&self) -> Option<&[i32]> {
         self.mode
