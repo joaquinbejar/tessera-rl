@@ -381,7 +381,10 @@ fn test_leduc_baseline_beats_a_uniform_player() {
         chips > 0,
         "the baseline lost {chips} chips over {hands} hands"
     );
-    assert_eq!(chips, 2255, "pinned chips over {hands} hands");
+    assert_eq!(
+        chips, 2255,
+        "golden: chips over {hands} hands; re-pin only on a deliberate baseline or rules change"
+    );
 }
 
 #[test]
