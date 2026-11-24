@@ -134,10 +134,11 @@ fn header_len(b: &[u8]) -> usize {
 }
 
 /// Offset just past the version 1 extension that starts at `q`: the policy
-/// map, the curriculum flag, the archive block and the chunk size.
+/// map, the curriculum and league flags, the archive block and the chunk
+/// size.
 fn past_extension(b: &[u8], mut q: usize) -> usize {
     let slots = usize::from(u16::from_le_bytes([b[q], b[q + 1]]));
-    q += 2 + slots + 1;
+    q += 2 + slots + 2;
     if b[q] == 1 {
         let n = u32::from_le_bytes(b[q + 9..q + 13].try_into().unwrap()) as usize;
         q += 1 + 8 + 4 + 4 * n;
@@ -519,8 +520,8 @@ fn test_replay_pool_of_another_size_is_incompatible() {
 /// version string and the header checksum over it. Any change to the
 /// header, an event tag or an event body changes them; update the constants
 /// only together with a format version bump.
-const FIXTURE_LEN: usize = 1580;
-const FIXTURE_XXH3: u64 = 17_966_924_819_680_012_336;
+const FIXTURE_LEN: usize = 1581;
+const FIXTURE_XXH3: u64 = 2_882_790_550_210_419_485;
 
 #[test]
 fn test_replay_encoded_fixture_is_pinned() {

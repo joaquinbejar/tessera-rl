@@ -21,6 +21,7 @@ the API is not stable, and any 0.x release may break it.
 
 ### Breaking
 
+- Replay format version 1 reserves the league fields of ADR-0088 item 8 (#384), as it did for ADR-0075, ADR-0079 and ADR-0081: a `has_league:u8` header byte after `has_curriculum`, policy-map group code 4 (`opponent`), and event tag 12 (`League`). Writers write 0 and never code 4 or tag 12; replay refuses a league, code 4 and tag 12 as `Unsupported` until the league lands. `replay::Event` gains a `League { body }` variant and `EventTag` a `League` tag, so exhaustive matches need an arm. No release has shipped replay files.
 - `EnvState` requires `Send + Sync` (ADR-0075, #363): worker threads read shared archive states. Plain-data state (ADR-0029: no pointers, no interior mutability) is always both, so no environment changes; a hand-written `EnvState` impl on a non-`Sync` type no longer compiles.
 - `PoolContext` is `#[non_exhaustive]` and no longer `Copy` (ADR-0075, #363): it gains `reset_source`; build it with `PoolContext::new(branch_counter)`. `restore_pool_context` takes the archive a context names: `restore_pool_context(context, archive)`. ADR-0078 (#346) then adds `transforms: TransformContext`, the transform identity, statistics and freeze flag.
 

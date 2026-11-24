@@ -19,11 +19,13 @@
 //!              [identity:u64]                ; flags bit3 (host snapshots)
 //!              policy_map                    ; ADR-0079 item 6
 //!              has_curriculum:u8             ; ADR-0081 item 7, 0 or 1
+//!              has_league:u8                 ; ADR-0088 item 8, 0 or 1
 //!              archive:reset_source          ; ADR-0075, at recording start
 //!              chunk_size:u32                ; 0: not recorded, no check
 //! policy_map:= slot_count:u16 group:u8*slot_count
 //!              ; slot_count 0 (default map) or the agent count; groups 0
-//!              ; learner, 1 external, 2 heuristic, 3 privileged heuristic
+//!              ; learner, 1 external, 2 heuristic, 3 privileged heuristic,
+//!              ; 4 opponent (ADR-0088)
 //! reset_source := 0:u8                         ; Fresh
 //!              | 1:u8 digest:u64 count:u32 weight:u32*count
 //!              ; digest: XXH3-64 archive digest (ADR-0075 item 1);
@@ -36,6 +38,9 @@
 //! ```
 //!
 //! All integers are little-endian; floats are stored as their bits.
+//!
+//! Any addition after the first release bumps the replay version; the fields
+//! above were folded into version 1 before any release shipped replay files.
 //!
 //! Flags: bit0 `from_reset_only`, bit1 `outputs_hash`, bit2
 //! `config_checked`, bit3 `host_snapshots`, bit4 `async`. A first-party
@@ -76,11 +81,13 @@
 //! - `ResetFrom` (11, ADR-0075 items 5 and 7, first-party files only):
 //!   `count:u32` (1 to the instance count), `count` distinct ids in range,
 //!   then `count` entry indices below 2^24.
+//! - `League` (12, ADR-0088 item 8, only with `has_league` 1): reserved;
+//!   its body is read as opaque bytes until the league lands.
 //! - `End` (0): the trailer of ADR-0072 section 2.
 //!
 //! Until their features land, this library writes the defaults (an empty
-//! policy map, no curriculum, a `Fresh` source) and never writes tags 7, 10
-//! or 11; replay refuses a non-default value or one of those tags as
+//! policy map, no curriculum, no league, a `Fresh` source) and never writes
+//! tags 7, 10, 11 or 12; replay refuses a non-default value or one of those tags as
 //! `ReplayError::Unsupported`. Asset entries are written and checked as
 //! ADR-0077 says.
 //!
@@ -171,6 +178,9 @@ pub enum EventTag {
     ResetSource = 10,
     /// A `reset_from` call (ADR-0075 items 5 and 7).
     ResetFrom = 11,
+    /// League changes at an epoch barrier (ADR-0088 item 8); only in a file
+    /// whose header has a league.
+    League = 12,
 }
 
 impl EventTag {
@@ -190,16 +200,21 @@ impl EventTag {
             9 => Self::Poisoned,
             10 => Self::ResetSource,
             11 => Self::ResetFrom,
+            12 => Self::League,
             _ => return None,
         })
     }
 
     /// Whether the tag is allowed only in some files: `Adaptive` with a
-    /// curriculum, `Recv` in an async file, `Rejected` in a notifying host's
-    /// file. Elsewhere each is refused as reserved.
+    /// curriculum, `League` with a league, `Recv` in an async file,
+    /// `Rejected` in a notifying host's file. Elsewhere each is refused as
+    /// reserved.
     #[must_use]
     pub const fn is_reserved(self) -> bool {
-        matches!(self, Self::Rejected | Self::Adaptive | Self::Recv)
+        matches!(
+            self,
+            Self::Rejected | Self::Adaptive | Self::League | Self::Recv
+        )
     }
 }
 

@@ -320,6 +320,7 @@ impl Replay<'_> {
             }
             Event::Recv { .. } => return Err(malformed("a Recv event in a host file")),
             Event::Adaptive { .. } => return Err(not_yet(Tag::Adaptive)),
+            Event::League { .. } => return Err(not_yet(Tag::League)),
             Event::ResetSource(_) => return Err(not_yet(Tag::ResetSource)),
             Event::ResetFrom { .. } => return Err(not_yet(Tag::ResetFrom)),
             Event::Keyframe {

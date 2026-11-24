@@ -213,10 +213,11 @@ fn header_len(b: &[u8]) -> usize {
 }
 
 /// Offset just past the version 1 extension that starts at `q`: the policy
-/// map, the curriculum flag, the archive block and the chunk size.
+/// map, the curriculum and league flags, the archive block and the chunk
+/// size.
 fn past_extension(b: &[u8], mut q: usize) -> usize {
     let slots = usize::from(u16::from_le_bytes([b[q], b[q + 1]]));
-    q += 2 + slots + 1;
+    q += 2 + slots + 2;
     if b[q] == 1 {
         let n = u32::from_le_bytes(b[q + 9..q + 13].try_into().unwrap()) as usize;
         q += 1 + 8 + 4 + 4 * n;
