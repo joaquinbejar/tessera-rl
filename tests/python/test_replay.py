@@ -79,8 +79,15 @@ def _header_len(b):
     at += 2  # asset_count
     at += 2 + u16(at)  # descriptor
     config = int.from_bytes(b[at : at + 4], "little")
-    # Action layout (12), flags and host fields (4), header checksum (8).
-    return at + 4 + config + 12 + 4 + 8
+    # Action layout (12), flags and host fields (4), the version 1
+    # extension, header checksum (8).
+    q = at + 4 + config + 12 + 4
+    q += 2 + u16(q) + 1  # policy map, has_curriculum
+    if b[q] == 1:  # archive block
+        q += 1 + 8 + 4 + 4 * int.from_bytes(b[q + 9 : q + 13], "little")
+    else:
+        q += 1
+    return q + 4 + 8  # chunk_size, checksum
 
 
 def _frames(b):
@@ -195,7 +202,8 @@ def test_replay_adapter_or_foreign_object_raises_type_error(tmp_path):
 
 def test_replay_summary_exposes_unverified_poison_with_default_false():
     fields = {f.name: f for f in dataclasses.fields(replay.ReplaySummary)}
-    assert list(fields) == ["events", "calls", "poisoned", "unverified_poison"]
+    assert list(fields) == ["events", "calls", "poisoned", "unverified_poison", "unclaimed"]
+    assert replay.ReplaySummary(events=3, calls=2).unclaimed == ()
     summary = replay.ReplaySummary(events=3, calls=2)
     assert summary.unverified_poison is False
     assert summary.poisoned is False

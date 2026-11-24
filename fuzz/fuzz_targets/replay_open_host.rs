@@ -131,6 +131,19 @@ fn u32_at(b: &[u8], at: usize) -> Option<usize> {
     usize::try_from(u32::from_le_bytes(bytes)).ok()
 }
 
+/// Past the version 1 extension starting at `q`.
+fn past_extension(b: &[u8], q: usize) -> Option<usize> {
+    let slots = u16_at(b, q)?;
+    let mut q = q.checked_add(2)?.checked_add(slots)?.checked_add(1)?;
+    if *b.get(q)? == 1 {
+        let n = u32_at(b, q.checked_add(9)?)?;
+        q = q.checked_add(13)?.checked_add(n.checked_mul(4)?)?;
+    } else {
+        q = q.checked_add(1)?;
+    }
+    q.checked_add(4)
+}
+
 /// Rewrites the header checksum and the end event's checksum, where the
 /// mutated layout still lets them be found.
 fn reseal(b: &mut [u8]) -> Option<()> {
@@ -143,6 +156,7 @@ fn reseal(b: &mut [u8]) -> Option<()> {
     at = at.checked_add(4)?.checked_add(u32_at(b, at)?)?.checked_add(12)?;
     let identity = if *b.get(at)? & 8 == 0 { 0 } else { 8 };
     at = at.checked_add(4 + identity)?;
+    at = past_extension(b, at)?;
     let sum = checksum(b.get(..at)?);
     b.get_mut(at..at.checked_add(8)?)?.copy_from_slice(&sum.to_le_bytes());
     let start = at + 8;

@@ -20,6 +20,10 @@ use super::format::{
     FLAG_HOST_SNAPSHOTS, FLAG_OUTPUTS_HASH, FORMAT_VERSION, FRAME_LEN, IDS_ALL, IDS_LIST,
     MAX_CONFIG_BYTES, REPLAY_MAGIC, StateWriteOp,
 };
+use super::v1_fields::{
+    ArchiveHeader, ResetSourceRecord, read_adaptive, read_extension, read_reset_from,
+    read_reset_source,
+};
 
 /// The instances an event touches.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -107,6 +111,8 @@ pub enum Event<'a> {
     Keyframe {
         /// The pool's branch counter.
         branch_counter: u64,
+        /// The pool's reset source (ADR-0075 item 7).
+        reset_source: ResetSourceRecord,
         /// The instances.
         ids: Ids,
         /// One canonical record (ADR-0029) per id, `record_len` bytes each;
@@ -130,6 +136,24 @@ pub enum Event<'a> {
     },
     /// The preceding call poisoned the pool.
     Poisoned,
+    /// New adaptive targets (ADR-0081 item 7): per changed instance, its id
+    /// and its canonical adaptive values (`value_len` bytes each).
+    Adaptive {
+        /// Bytes of one instance's adaptive values.
+        value_len: usize,
+        /// The changed instances, ids strictly increasing.
+        entries: Vec<(u32, &'a [u8])>,
+    },
+    /// A `set_reset_source` call (ADR-0075 item 7).
+    ResetSource(ResetSourceRecord),
+    /// A `reset_from` call (ADR-0075 item 5): instance ids and the archive
+    /// entry for each.
+    ResetFrom {
+        /// The reset instances, distinct.
+        ids: Vec<u32>,
+        /// One archive entry index per id.
+        entries: Vec<u32>,
+    },
 }
 
 /// One refused agent of a stepped call (ADR-0070 item 9).
@@ -212,6 +236,25 @@ pub struct ReplayHeader<'a> {
     pub async_pool: bool,
     /// `Reset`, `Step` and `Recv` events carry an outputs hash (flag bit1).
     pub outputs_hash: bool,
+    /// The policy map (ADR-0079 item 6): one group code per agent slot (0
+    /// learner, 1 external, 2 heuristic, 3 privileged heuristic); empty for
+    /// the default map, every slot a learner.
+    pub policy_map: &'a [u8],
+    /// Whether the pool has a curriculum (ADR-0081 item 7): only then may
+    /// the file hold `Adaptive` events.
+    pub has_curriculum: bool,
+    /// The archive reset source at recording start (ADR-0075), if any.
+    pub archive: Option<ArchiveHeader<'a>>,
+    /// The pool's chunk size; 0 when not recorded (no check).
+    pub chunk_size: u32,
+}
+
+/// What `scan` needs to know which tags a file may hold.
+#[derive(Debug, Clone, Copy)]
+struct TagRules {
+    host: Option<HostInfo>,
+    async_pool: bool,
+    has_curriculum: bool,
 }
 
 /// An opened replay file: header, framing and trailer checked.
@@ -286,6 +329,8 @@ impl<'a> Replay<'a> {
         } else {
             None
         };
+        let (ext, used) = read_extension(r.0, agents)?;
+        r.take(used)?;
         let header_len = bytes
             .len()
             .checked_sub(r.0.len())
@@ -296,33 +341,7 @@ impl<'a> Replay<'a> {
             return Err(ReplayError::HeaderChecksum);
         }
         let host = check_replay_fields(flags, host_protocol, notifies, refuses, identity)?;
-        if let Some(h) = host
-            && !h.config_checked()
-            && (!config.is_empty() || file.hash != 0)
-        {
-            return Err(PersistError::InvalidField {
-                field: "config of an unchecked host file",
-            }
-            .into());
-        }
-        file.check_fields_for(host.is_some())?;
-        // ADR-0077: host replays hold no assets (host snapshots neither).
-        if host.is_some() && file.asset_count != 0 {
-            return Err(PersistError::Incompatible { field: "assets" }.into());
-        }
-        if file.count == 0 {
-            return Err(PersistError::InvalidField {
-                field: "instance_count",
-            }
-            .into());
-        }
-        if file.count > limits.max_instances {
-            return Err(PersistError::TooManyInstances {
-                count: file.count,
-                limit: limits.max_instances,
-            }
-            .into());
-        }
+        check_file(&file, host, config, limits)?;
         let header = ReplayHeader {
             num_envs: file.count,
             record_len: file.record_len,
@@ -333,8 +352,17 @@ impl<'a> Replay<'a> {
             host,
             async_pool: flags & FLAG_ASYNC != 0,
             outputs_hash: flags & FLAG_OUTPUTS_HASH != 0,
+            policy_map: ext.policy_map,
+            has_curriculum: ext.has_curriculum,
+            archive: ext.archive,
+            chunk_size: ext.chunk_size,
         };
-        let (events, event_count) = scan(r.0, host, header.async_pool)?;
+        let rules = TagRules {
+            host,
+            async_pool: header.async_pool,
+            has_curriculum: header.has_curriculum,
+        };
+        let (events, event_count) = scan(r.0, rules)?;
         Ok(Self {
             file,
             header,
@@ -371,6 +399,45 @@ impl<'a> Replay<'a> {
             limits: self.limits,
         }
     }
+}
+
+/// The checks of the shared header that depend on the replay fields: an
+/// unchecked host config is empty, the tier fits the file kind, a host file
+/// holds no assets, and the instance count is within `limits`.
+fn check_file(
+    file: &FileHeader<'_>,
+    host: Option<HostInfo>,
+    config: &[u8],
+    limits: DecodeLimits,
+) -> Result<(), ReplayError> {
+    if let Some(h) = host
+        && !h.config_checked()
+        && (!config.is_empty() || file.hash != 0)
+    {
+        return Err(PersistError::InvalidField {
+            field: "config of an unchecked host file",
+        }
+        .into());
+    }
+    file.check_fields_for(host.is_some())?;
+    // ADR-0077: host replays hold no assets (host snapshots neither).
+    if host.is_some() && file.asset_count != 0 {
+        return Err(PersistError::Incompatible { field: "assets" }.into());
+    }
+    if file.count == 0 {
+        return Err(PersistError::InvalidField {
+            field: "instance_count",
+        }
+        .into());
+    }
+    if file.count > limits.max_instances {
+        return Err(PersistError::TooManyInstances {
+            count: file.count,
+            limit: limits.max_instances,
+        }
+        .into());
+    }
+    Ok(())
 }
 
 fn check_replay_fields(
@@ -458,11 +525,7 @@ fn check_replay_fields(
 
 /// Checks every frame, tag and the trailer; returns the event bytes before
 /// the end event and their count. Allocates nothing.
-fn scan(
-    bytes: &[u8],
-    host: Option<HostInfo>,
-    async_pool: bool,
-) -> Result<(&[u8], u64), ReplayError> {
+fn scan(bytes: &[u8], rules: TagRules) -> Result<(&[u8], u64), ReplayError> {
     let mut rest = bytes;
     let mut count: u64 = 0;
     loop {
@@ -473,7 +536,7 @@ fn scan(
             <[u8; FRAME_LEN]>::try_from(frame).map_err(|_| ReplayError::MissingEnd)?;
         let len = u32::from_le_bytes([l0, l1, l2, l3]);
         let tag = EventTag::from_u8(tag).ok_or(ReplayError::UnknownTag { tag })?;
-        check_tag(tag, host, async_pool, count)?;
+        check_tag(tag, rules, count)?;
         let body_len = usize::try_from(len).map_err(|_| PersistError::Truncated)?;
         let (body, after) = tail
             .split_at_checked(body_len)
@@ -516,16 +579,24 @@ fn scan(
 /// file; `Rejected` only in a notifying host's file; keyframes, checkpoints and state writes never in a
 /// `from_reset_only` host file. The first event is a keyframe, or a reset for
 /// a `from_reset_only` file.
-fn check_tag(
-    tag: EventTag,
-    host: Option<HostInfo>,
-    async_pool: bool,
-    count: u64,
-) -> Result<(), ReplayError> {
+fn check_tag(tag: EventTag, rules: TagRules, count: u64) -> Result<(), ReplayError> {
+    let TagRules {
+        host,
+        async_pool,
+        has_curriculum,
+    } = rules;
     let notifies = host.is_some_and(|h| h.notifies);
-    let allowed = (tag == EventTag::Rejected && notifies) || (tag == EventTag::Recv && async_pool);
+    let allowed = (tag == EventTag::Rejected && notifies)
+        || (tag == EventTag::Recv && async_pool)
+        || (tag == EventTag::Adaptive && has_curriculum);
     if tag.is_reserved() && !allowed {
         return Err(ReplayError::ReservedTag { tag: tag as u8 });
+    }
+    // ADR-0075 item 8: archives are for first-party pools.
+    if host.is_some() && matches!(tag, EventTag::ResetSource | EventTag::ResetFrom) {
+        return Err(ReplayError::Unsupported {
+            feature: "archive resets in host replay files",
+        });
     }
     let from_reset = host.is_some_and(|h| h.identity().is_none());
     if from_reset
@@ -612,37 +683,8 @@ impl<'a> Events<'a> {
                     outputs_hash,
                 }
             }
-            EventTag::Step => {
-                let ids = self.ids(&mut b)?;
-                let (discrete, continuous_bits) = joint_action(&mut b)?;
-                let outputs_hash = self.call_hash(&mut b)?;
-                let refusals = if self.host.is_some_and(|h| h.refuses) {
-                    self.refusals(&mut b)?
-                } else {
-                    Vec::new()
-                };
-                Event::Step {
-                    ids,
-                    discrete,
-                    continuous_bits,
-                    outputs_hash,
-                    refusals,
-                }
-            }
-            EventTag::Rejected => {
-                let (discrete, continuous_bits) = joint_action(&mut b)?;
-                let instance = b.u32("rejected instance")?;
-                if instance >= self.num_envs {
-                    return Err(b.malformed("rejected instance"));
-                }
-                let code = b.u32("rejected code")?;
-                Event::Rejected {
-                    discrete,
-                    continuous_bits,
-                    instance,
-                    code,
-                }
-            }
+            EventTag::Step => self.step(&mut b)?,
+            EventTag::Rejected => self.rejected(&mut b)?,
             EventTag::StateWrite => {
                 let op = StateWriteOp::from_u8(b.u8("state write op")?)
                     .ok_or_else(|| b.malformed("state write op"))?;
@@ -656,14 +698,25 @@ impl<'a> Events<'a> {
             }
             EventTag::Keyframe => {
                 let branch_counter = b.u64("branch counter")?;
+                let reset_source = read_reset_source(&mut b)?;
                 let ids = self.ids(&mut b)?;
                 let n = self.len_of(&ids)?;
                 let records = self.keyframe_records(&mut b, body, n)?;
                 Event::Keyframe {
                     branch_counter,
+                    reset_source,
                     ids,
                     records,
                 }
+            }
+            EventTag::Adaptive => {
+                let (value_len, entries) = read_adaptive(&mut b, self.num_envs)?;
+                Event::Adaptive { value_len, entries }
+            }
+            EventTag::ResetSource => Event::ResetSource(read_reset_source(&mut b)?),
+            EventTag::ResetFrom => {
+                let (ids, entries) = read_reset_from(&mut b, self.num_envs)?;
+                Event::ResetFrom { ids, entries }
             }
             EventTag::Checkpoint => {
                 let ids = self.ids(&mut b)?;
@@ -679,7 +732,7 @@ impl<'a> Events<'a> {
                 let outputs_hash = self.outputs_hash(&mut b)?;
                 Event::Recv { ids, outputs_hash }
             }
-            EventTag::End | EventTag::Adaptive => {
+            EventTag::End => {
                 return Err(ReplayError::ReservedTag { tag: tag as u8 });
             }
         };
@@ -751,6 +804,41 @@ impl<'a> Events<'a> {
             hashes.push(StateHash::from_raw(b.u64("checkpoint hashes")?));
         }
         Ok(hashes)
+    }
+
+    /// A `Step` body.
+    fn step(&self, b: &mut Body<'_>) -> Result<Event<'a>, ReplayError> {
+        let ids = self.ids(b)?;
+        let (discrete, continuous_bits) = joint_action(b)?;
+        let outputs_hash = self.call_hash(b)?;
+        let refusals = if self.host.is_some_and(|h| h.refuses) {
+            self.refusals(b)?
+        } else {
+            Vec::new()
+        };
+        Ok(Event::Step {
+            ids,
+            discrete,
+            continuous_bits,
+            outputs_hash,
+            refusals,
+        })
+    }
+
+    /// A `Rejected` body.
+    fn rejected(&self, b: &mut Body<'_>) -> Result<Event<'a>, ReplayError> {
+        let (discrete, continuous_bits) = joint_action(b)?;
+        let instance = b.u32("rejected instance")?;
+        if instance >= self.num_envs {
+            return Err(b.malformed("rejected instance"));
+        }
+        let code = b.u32("rejected code")?;
+        Ok(Event::Rejected {
+            discrete,
+            continuous_bits,
+            instance,
+            code,
+        })
     }
 
     /// The outputs hash of a `Reset` or `Step`: present in a host file with

@@ -34,6 +34,7 @@ mod outputs_hash;
 mod reader;
 mod rebuild;
 mod run;
+mod v1_fields;
 mod writer;
 
 #[cfg(not(loom))]
@@ -46,4 +47,5 @@ pub use reader::{
     Event, Events, HostFileKind, HostInfo, Ids, RecordedReseed, RefusalRow, Replay, ReplayHeader,
 };
 pub use run::ReplaySummary;
+pub use v1_fields::{ArchiveHeader, MAX_ARCHIVE_ENTRIES, MAX_POLICY_GROUP, ResetSourceRecord};
 pub use writer::{DetachedRecorder, Recorder, ReplayWriterOptions};

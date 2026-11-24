@@ -1,85 +1,109 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! The byte format of replay files, version 1 (ADR-0072 sections 2 and 3).
+//! The byte format of replay files, version 1 (ADR-0072 sections 2 and 3,
+//! with the fields ADR-0075, ADR-0077, ADR-0079 and ADR-0081 folded into
+//! version 1 before any release shipped replay files, #411).
 //!
 //! ```text
-//! file    := header event* end
-//! header  := "TESRPLY\x1a" version:u32 <ADR-0011 header fields>
-//!            config_len:u32 config:[u8]
-//!            agents:u32 discrete_heads:u32 continuous_heads:u32
-//!            flags:u8 host_protocol:u8 notifies:u8 refuses:u8
-//!            header_checksum:u64           ; XXH3-64 of every byte before it
-//! event   := tag:u8 len:u32 body:[u8; len]
-//! end     := 0:u8 16:u32 event_count:u64 events_checksum:u64
-//! ids     := 0:u8                           ; every instance
-//!          | 1:u8 count:u32 id:u32*count
+//! file      := header event* end
+//! header    := "TESRPLY\x1a" version:u32 shared extension header_checksum:u64
+//! shared    := <the ADR-0011 header fields, in ADR-0011's order>, except
+//!              that asset_count:u16 is followed by asset_count entries
+//!              (ADR-0077 item 6): name_len:u8 name:[u8] hash:[u8; 16],
+//!              names 1 to 64 bytes, at most 64 entries, compared with the
+//!              pool's assets by name (`FileHeader::check_against`); a host
+//!              file holds none
+//! extension := config_len:u32 config:[u8]
+//!              agents:u32 discrete_heads:u32 continuous_heads:u32
+//!              flags:u8 host_protocol:u8 notifies:u8 refuses:u8
+//!              [identity:u64]                ; flags bit3 (host snapshots)
+//!              policy_map                    ; ADR-0079 item 6
+//!              has_curriculum:u8             ; ADR-0081 item 7, 0 or 1
+//!              archive:reset_source          ; ADR-0075, at recording start
+//!              chunk_size:u32                ; 0: not recorded, no check
+//! policy_map:= slot_count:u16 group:u8*slot_count
+//!              ; slot_count 0 (default map) or the agent count; groups 0
+//!              ; learner, 1 external, 2 heuristic, 3 privileged heuristic
+//! reset_source := 0:u8                         ; Fresh
+//!              | 1:u8 digest:u64 count:u32 weight:u32*count
+//!              ; digest: XXH3-64 archive digest (ADR-0075 item 1);
+//!              ; count 1 to 2^24; the weights sum to more than 0
+//! header_checksum := XXH3-64 of every header byte before it
+//! event     := tag:u8 len:u32 body:[u8; len]
+//! end       := 0:u8 16:u32 event_count:u64 events_checksum:u64
+//! ids       := 0:u8                           ; every instance
+//!            | 1:u8 count:u32 id:u32*count
 //! ```
 //!
-//! All integers are little-endian; floats are stored as their bits. Event
-//! bodies:
+//! All integers are little-endian; floats are stored as their bits.
 //!
-//! - `Reset`: ids, then `0` Keep, `1` Base `seed:u64`, `2` List `count:u32
-//!   seed:u64*count`, or `3` Each `count:u32 (some:u8 seed:u64)*count`, with
-//!   a `None` written as `0` and seed `0`.
-//! - `Step`: ids, `count:u32 discrete:i32*count`, `count:u32
-//!   continuous_bits:u32*count`.
-//! - `StateWrite`: `op:u8`, the written ids, `branch_counter:u64` after the
-//!   call. A `Keyframe` of those ids follows.
-//! - `Keyframe`: `branch_counter:u64`, ids, one canonical record (ADR-0029,
-//!   `record_len` bytes) per id.
-//! - `Checkpoint`: ids, one `StateHash:u64` per id.
-//! - `Poisoned`: empty.
-//! - `End` (tag 0): the trailer of ADR-0072 section 2.
+//! Flags: bit0 `from_reset_only`, bit1 `outputs_hash`, bit2
+//! `config_checked`, bit3 `host_snapshots`, bit4 `async`. A first-party
+//! file has none, or bit4 with bit1 optional; a host file has exactly one
+//! of bit0 and bit3, bit1 with bit0, bit2 exactly with bit3, never bit4.
+//!
+//! Event bodies:
+//!
+//! - `Reset` (1): ids, then `0` Keep, `1` Base `seed:u64`, `2` List
+//!   `count:u32 seed:u64*count`, or `3` Each `count:u32 (some:u8
+//!   seed:u64)*count`, with a `None` written as `0` and seed `0`; then
+//!   `outputs_hash:u64` in a host file with bit1.
+//! - `Step` (2): ids, `count:u32 discrete:i32*count`, `count:u32
+//!   continuous_bits:u32*count`; then `outputs_hash:u64` in a host file with
+//!   bit1; then, for a refusing host, `count:u32 (instance:u32 slot:u32
+//!   code:u32)*count`, sparse, in (instance, slot) order, codes nonzero.
+//! - `Rejected` (3, notifying hosts only): `count:u32 discrete:i32*count
+//!   count:u32 continuous_bits:u32*count instance:u32 code:u32`.
+//! - `StateWrite` (4): `op:u8`, the written ids, `branch_counter:u64` after
+//!   the call. A `Keyframe` of those ids follows.
+//! - `Keyframe` (5): `branch_counter:u64`, `reset_source` (the pool
+//!   context's, ADR-0075 item 7), ids, then one record per id: a canonical
+//!   record of `record_len` bytes (ADR-0029), or in a host file
+//!   `len:u32 HostRecord` (ADR-0073, identity digest first).
+//! - `Checkpoint` (6): ids, one `StateHash:u64` per id.
+//! - `Adaptive` (7, ADR-0081 item 7, only with `has_curriculum` 1):
+//!   `count:u32` (at least 1), then per changed instance `id:u32` and the
+//!   canonical adaptive values (`ENCODED_LEN` of the header's `Adaptive`),
+//!   ids strictly increasing and in range.
+//! - `Recv` (8, async files only): a list of ids in token order, then
+//!   `outputs_hash:u64` with bit1. A `recv` that reported a panicked step is
+//!   a `Recv` with no ids, then `Poisoned`.
+//! - `Poisoned` (9): empty.
+//! - `ResetSource` (10, ADR-0075 item 7, first-party files only):
+//!   `reset_source`.
+//! - `ResetFrom` (11, ADR-0075 items 5 and 7, first-party files only):
+//!   `count:u32` (1 to the instance count), `count` distinct ids in range,
+//!   then `count` entry indices below 2^24.
+//! - `End` (0): the trailer of ADR-0072 section 2.
+//!
+//! Until their features land, this library writes the defaults (an empty
+//! policy map, no curriculum, a `Fresh` source) and never writes tags 7, 10
+//! or 11; replay refuses a non-default value or one of those tags as
+//! `ReplayError::Unsupported`. Asset entries are written and checked as
+//! ADR-0077 says.
 //!
 //! # Async files
 //!
-//! A first-party file recorded on an `AsyncPool` has flag bit4 (`async`),
-//! and bit1 (`outputs_hash`) optionally. `Step` events hold the sent ids
-//! (a list); `Recv` (tag 8) holds the ids one `recv` returned, as a list in
-//! token order, then `outputs_hash:u64` when bit1 is set (XXH3-64, for each
-//! id in order, of its observation leaves, rewards as `f32` bits, and agent
-//! termination and truncation flags as one byte each). A `recv` that
-//! reported a panicked step is a `Recv` with no ids, then `Poisoned`.
 //! Keyframes and checkpoints sit at quiescent points (no id outstanding),
 //! except the keyframe after a state write, which holds the records written.
-//! The branch counter is always 0. `Recv` is refused in any other file, and
-//! an async file is refused by every replay but `run_async`.
+//! The final checkpoint is "last when quiescent": none is written if the
+//! recording ends with ids outstanding (an erratum to ADR-0072 section 4).
+//! The `Recv` outputs hash covers, for each id in order, its observation
+//! leaves, rewards as `f32` bits, and agent termination and truncation flags
+//! as one byte each. The branch counter is always 0.
 //!
+//! # Host pool files
 //!
-//! A host pool's file has `host_protocol` 1, or 2 exactly for a refusing
-//! host (ADR-0070 item 10). Its shared header fields: tier 2
-//! (`HOST_TIER`, ADR-0073) with an empty descriptor, `record_len` 0 (host
-//! records have variable length), the mask provider from
-//! `HostEnvironment::MASKS`, and the pool options as for any pool. Flags:
-//! bit0 `from_reset_only`, bit1 `outputs_hash`, bit2 `config_checked`,
-//! bit3 `host_snapshots`; exactly one of bit0 and bit3 is set.
-//!
-//! - **With snapshots** (bit3, ADR-0073): bit2 is set, the config bytes and
-//!   `config_hash` are those of the canonical config, and the host
-//!   extension ends with `identity:u64` (the ADR-0073 identity digest),
-//!   before the header checksum. Events as for a first-party file, except
-//!   that a `Keyframe`'s records are `(len:u32 HostRecord)*`, each the
-//!   ADR-0073 encoding (identity digest first), and the branch counter is
-//!   always 0 (host pools have no `fork_branched`). The outputs hash is
-//!   optional (bit1).
-//! - **From reset only** (bit0): bit1 is set, bit2 is clear, the config is
-//!   empty and `config_hash` 0 (a host config need not be canonical). The
-//!   first event is a `Reset` of every instance, made by the recorder; there
-//!   are no `Keyframe`, `Checkpoint` or `StateWrite` events.
-//!
-//! Bodies, when bit1 is set:
-//!
-//! - `Reset`: as above, then `outputs_hash:u64` over the reset ids.
-//! - `Step`: as above, then `outputs_hash:u64`.
-//!
-//! For a refusing host, `Step` then ends with `count:u32 (instance:u32
-//! slot:u32 code:u32)*count`, sparse, in (instance, slot) order, every code
-//! nonzero. `Rejected` (notifying hosts only): `count:u32
-//! discrete:i32*count count:u32 continuous_bits:u32*count instance:u32
-//! code:u32`.
-//!
-//! A poisoning call is logged with outputs hash 0 and no refusal rows, as
-//! a poisoned pool has no outputs. The outputs hash is defined in
+//! Host protocol 1, or 2 exactly for a refusing host (ADR-0070 item 10).
+//! Shared header fields: tier 2 (`HOST_TIER`, ADR-0073) with an empty
+//! descriptor, `record_len` 0, the mask provider from
+//! `HostEnvironment::MASKS`, and the pool options as for any pool. With
+//! snapshots (bit3): the canonical config and its hash are filled and the
+//! identity digest follows the host fields; the branch counter is always 0.
+//! From reset only (bit0): the config is empty and `config_hash` 0; the first
+//! event is a `Reset` of every instance; there are no `Keyframe`,
+//! `Checkpoint` or `StateWrite` events. A poisoning call is logged with
+//! outputs hash 0 and no refusal rows. The outputs hash is defined in
 //! `outputs_hash.rs`.
 
 /// The first bytes of every replay file.
@@ -134,12 +158,17 @@ pub enum EventTag {
     Keyframe = 5,
     /// `StateHash`es of some or all instances.
     Checkpoint = 6,
-    /// Reserved: an adaptive-config event (SPEC 8.4).
+    /// New adaptive targets at an epoch barrier (ADR-0081 item 7); only in
+    /// a file whose header has a curriculum.
     Adaptive = 7,
-    /// Reserved: an Async `recv`.
+    /// An Async `recv`; only in an async file.
     Recv = 8,
     /// The preceding call poisoned the pool.
     Poisoned = 9,
+    /// A `set_reset_source` call (ADR-0075 item 7).
+    ResetSource = 10,
+    /// A `reset_from` call (ADR-0075 items 5 and 7).
+    ResetFrom = 11,
 }
 
 impl EventTag {
@@ -157,13 +186,15 @@ impl EventTag {
             7 => Self::Adaptive,
             8 => Self::Recv,
             9 => Self::Poisoned,
+            10 => Self::ResetSource,
+            11 => Self::ResetFrom,
             _ => return None,
         })
     }
 
-    /// Whether the tag is reserved: `Adaptive` always, `Recv` outside an
-    /// async file, and
-    /// `Rejected` outside a notifying host's file.
+    /// Whether the tag is allowed only in some files: `Adaptive` with a
+    /// curriculum, `Recv` in an async file, `Rejected` in a notifying host's
+    /// file. Elsewhere each is refused as reserved.
     #[must_use]
     pub const fn is_reserved(self) -> bool {
         matches!(self, Self::Rejected | Self::Adaptive | Self::Recv)
@@ -266,6 +297,10 @@ impl<'a> Body<'a> {
 
     pub(crate) fn u8(&mut self, field: &'static str) -> Result<u8, super::ReplayError> {
         Ok(u8::from_le_bytes(self.array(field)?))
+    }
+
+    pub(crate) fn u16(&mut self, field: &'static str) -> Result<u16, super::ReplayError> {
+        Ok(u16::from_le_bytes(self.array(field)?))
     }
 
     pub(crate) fn u32(&mut self, field: &'static str) -> Result<u32, super::ReplayError> {

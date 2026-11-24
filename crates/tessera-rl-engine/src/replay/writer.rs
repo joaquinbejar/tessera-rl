@@ -422,6 +422,8 @@ where
         self.body.clear();
         let counter = self.pool.pool_context()?.branch_counter;
         self.body.extend_from_slice(&counter.to_le_bytes());
+        // The reset source (ADR-0075): Fresh until archives exist.
+        self.body.push(0);
         push_ids(&mut self.body, ids)?;
         for id in self.ids(ids) {
             let record = DecodedRecord::<E>::from(self.pool.snapshot(id)?);
@@ -540,6 +542,8 @@ where
     push_len(&mut out, continuous)?;
     // flags, then host_protocol, notifies, refuses: 0 for a first-party pool.
     out.extend_from_slice(&[flags, 0, 0, 0]);
+    let chunk = options.chunk_size.get();
+    super::v1_fields::push_default_extension(&mut out, chunk);
     let sum = tessera_rl_core::encoding::checksum(&out);
     out.extend_from_slice(&sum.to_le_bytes());
     Ok(out)

@@ -11,10 +11,12 @@ use crate::host::{HostPool, HostRecord};
 use crate::persist::{BUILD_ID, PersistError, host_identity};
 use crate::validate::ActionInput;
 
+use super::format::EventTag as Tag;
 use super::format::StateWriteOp;
 use super::outputs_hash::{outputs_hash, refusal_rows};
 use super::reader::{Event, Ids, RefusalRow, Replay};
 use super::run::ReplaySummary;
+use super::v1_fields::{fresh_only, not_yet};
 use super::{DivergenceKind, ReplayError};
 
 /// A pool's canonical config bytes and hash.
@@ -297,21 +299,13 @@ impl Replay<'_> {
                 continuous_bits,
                 instance,
                 code,
-            } => match step(pool, &discrete, &continuous_bits) {
-                Err(EngineError::ActionRejected {
-                    instance: i,
-                    code: c,
-                    ..
-                }) if i == instance && c == code && !pool.is_poisoned() => Outcome::Ok,
-                Err(_) if pool.is_poisoned() => Outcome::Poisoned,
-                _ => {
-                    return Err(run.diverged(
-                        index,
-                        DivergenceKind::RejectionMismatch,
-                        Some(instance),
-                    ));
-                }
-            },
+            } => rejected(
+                pool,
+                run,
+                index,
+                (&discrete, &continuous_bits),
+                (instance, code),
+            )?,
             Event::Poisoned => {
                 return Err(match run.last_call {
                     Some(call) => run.diverged(call, DivergenceKind::NotPoisoned, None),
@@ -326,20 +320,22 @@ impl Replay<'_> {
                 Outcome::Ok
             }
             Event::Recv { .. } => return Err(malformed("a Recv event in a host file")),
-            Event::Keyframe { ids, records, .. } => {
+            Event::Adaptive { .. } => return Err(not_yet(Tag::Adaptive)),
+            Event::ResetSource(_) => return Err(not_yet(Tag::ResetSource)),
+            Event::ResetFrom { .. } => return Err(not_yet(Tag::ResetFrom)),
+            Event::Keyframe {
+                ids,
+                records,
+                reset_source,
+                ..
+            } => {
+                fresh_only(&reset_source)?;
                 let ops = ops.ok_or_else(|| malformed("a keyframe without snapshots"))?;
                 return Self::host_keyframe(pool, ops, run, index, &ids, records);
             }
             Event::Checkpoint { ids, hashes } => {
                 let ops = ops.ok_or_else(|| malformed("a checkpoint without snapshots"))?;
-                for (id, hash) in ids_of(&ids, n).into_iter().zip(hashes) {
-                    if (ops.hash)(pool, id)? != hash {
-                        return Err(run.diverged(index, DivergenceKind::Checkpoint, Some(id)));
-                    }
-                }
-                run.last_checkpoint = Some(index);
-                run.summary.checkpoints = run.summary.checkpoints.saturating_add(1);
-                return Ok(());
+                return checkpoint(pool, ops, run, index, &ids_of(&ids, n), &hashes);
             }
         };
         run.summary.calls = run.summary.calls.saturating_add(1);
@@ -412,6 +408,7 @@ impl Replay<'_> {
         let Some(host) = self.header.host else {
             return incompatible("host_protocol");
         };
+        self.check_v1(pool.options().chunk_size.get())?;
         let (config, hash) = match (host.config_checked(), ops) {
             (true, Some(ops)) => (ops.config)(pool)?,
             (true, None) => return incompatible("config: the host has no snapshots"),
@@ -481,6 +478,45 @@ fn decode_records<const A: usize>(
         bytes = rest;
     }
     Ok(out)
+}
+
+/// Re-submits a recorded rejected call (ADR-0069 item 8): it must be
+/// rejected again with the same instance and code, through `step`.
+fn rejected<E: HostEnvironment, const A: usize>(
+    pool: &mut HostPool<E, A>,
+    run: &Run,
+    index: u64,
+    (discrete, continuous_bits): (&[i32], &[u32]),
+    (instance, code): (u32, u32),
+) -> Result<Outcome, ReplayError> {
+    match step(pool, discrete, continuous_bits) {
+        Err(EngineError::ActionRejected {
+            instance: i,
+            code: c,
+            ..
+        }) if i == instance && c == code && !pool.is_poisoned() => Ok(Outcome::Ok),
+        Err(_) if pool.is_poisoned() => Ok(Outcome::Poisoned),
+        _ => Err(run.diverged(index, DivergenceKind::RejectionMismatch, Some(instance))),
+    }
+}
+
+/// Compares a checkpoint's hashes with the pool's host `StateHash`es.
+fn checkpoint<E: HostEnvironment, const A: usize>(
+    pool: &mut HostPool<E, A>,
+    ops: RunOps<E, A>,
+    run: &mut Run,
+    index: u64,
+    ids: &[u32],
+    hashes: &[StateHash],
+) -> Result<(), ReplayError> {
+    for (&id, &hash) in ids.iter().zip(hashes) {
+        if (ops.hash)(pool, id)? != hash {
+            return Err(run.diverged(index, DivergenceKind::Checkpoint, Some(id)));
+        }
+    }
+    run.last_checkpoint = Some(index);
+    run.summary.checkpoints = run.summary.checkpoints.saturating_add(1);
+    Ok(())
 }
 
 /// Re-submits a recorded joint action through `step`.

@@ -65,7 +65,7 @@ fn optional(g: Gil<'_>, v: Option<u64>) -> CResult<Mine<'_>> {
 }
 
 /// `_replay(data: bytes) -> tuple`: replays a file into this pool.
-/// `("ok", events, calls, poisoned, unverified_poison)`, or
+/// `("ok", events, calls, poisoned, unverified_poison, unclaimed)`, or
 /// `("diverged", event_index, kind, instance, last_matching_checkpoint)`,
 /// which `tessera_rl.replay` raises as `ReplayDivergence`. Any other
 /// refusal raises here (`PersistError` for the file, the engine's class
@@ -84,6 +84,13 @@ pub(crate) fn replay<'py>(g: Gil<'py>, inner: &Inner, args: Ref<'_>) -> CResult<
                 capi::int_u64(g, s.calls)?,
                 capi::boolean(g, s.poisoned),
                 capi::boolean(g, s.unverified_poison),
+                capi::tuple(
+                    g,
+                    s.unclaimed
+                        .iter()
+                        .map(|&id| capi::int_u64(g, u64::from(id)))
+                        .collect::<CResult<Vec<_>>>()?,
+                )?,
             ],
         ),
         Err(BindError::Replay(ReplayError::Diverged {
