@@ -631,7 +631,12 @@ fn header_bytes<E: HostEnvironment, const A: usize>(
     if let Some(identity) = identity {
         out.extend_from_slice(&identity.to_le_bytes());
     }
-    super::v1_fields::push_default_extension(&mut out, pool.options().chunk_size.get());
+    // ADR-0075 item 8: host pools have no archives.
+    super::v1_fields::push_extension(
+        &mut out,
+        pool.options().chunk_size.get(),
+        &super::ResetSourceRecord::Fresh,
+    );
     let sum = checksum(&out);
     out.extend_from_slice(&sum.to_le_bytes());
     Ok(out)

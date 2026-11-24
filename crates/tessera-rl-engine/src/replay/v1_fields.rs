@@ -176,12 +176,6 @@ pub(crate) fn read_extension(
     ))
 }
 
-/// Appends the default extension: default policy map, no curriculum, no
-/// archive, then `chunk_size`.
-pub(crate) fn push_default_extension(out: &mut Vec<u8>, chunk_size: u32) {
-    push_extension(out, chunk_size, &ResetSourceRecord::Fresh);
-}
-
 /// Appends the extension: default policy map, no curriculum, the archive
 /// block of `source` (the source at recording start, ADR-0075 item 7), then
 /// `chunk_size`.
