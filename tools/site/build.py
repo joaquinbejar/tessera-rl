@@ -6,7 +6,8 @@
   ``<!-- snippet: NAME -->`` is replaced by ``site/snippets/NAME`` as a fenced
   code block, so the published code is the code the tests run.
 - Python API: pdoc over the installed ``tessera_rl`` into ``python/``.
-- Benchmarks: ``tools/dashboard/build.py``'s output into ``benchmarks/``.
+- Benchmarks: ``tools/dashboard/build.py``'s output into ``dashboard/`` (the
+  Benchmarks page, ``benchmarks/``, links to it).
 - The Rust API is on docs.rs; ``make site-check`` builds ``cargo doc`` only
   as a ``-D warnings`` check.
 
@@ -37,7 +38,7 @@ FORBIDDEN = re.compile(r"(?:docs/(?:SPEC\.md|adr/|reviews/)|SPEC\.md|/adr/0\d{3}
 # Pages the builder adds after MkDocs (pdoc, the dashboard). Placeholders
 # stand in for them while MkDocs runs, so strict link validation still covers
 # the links to them; the generated files then replace the placeholders.
-GENERATED = ("python/tessera_rl.html", "benchmarks/index.html")
+GENERATED = ("python/tessera_rl.html", "dashboard/index.html")
 PLACEHOLDER = "<!-- tessera-site placeholder: replaced after the MkDocs build -->"
 
 
@@ -85,8 +86,8 @@ def build(out: pathlib.Path) -> None:
         (out / rel).unlink(missing_ok=True)
     run([sys.executable, "-m", "pdoc", "tessera_rl", "-o", str(out / "python")])
     run([sys.executable, str(ROOT / "tools" / "dashboard" / "build.py")])
-    shutil.rmtree(out / "benchmarks", ignore_errors=True)
-    shutil.copytree(ROOT / "target" / "dashboard", out / "benchmarks")
+    shutil.rmtree(out / "dashboard", ignore_errors=True)
+    shutil.copytree(ROOT / "target" / "dashboard", out / "dashboard")
 
 
 def check(out: pathlib.Path) -> list[str]:
