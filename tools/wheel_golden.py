@@ -94,6 +94,10 @@ CONFIGS = {
     "othello-v1-same-step": {},
     "go9-v1-next-step": {},
     "go9-v1-same-step": {},
+    "gather-v1-next-step": {"size": 6, "items": 5, "max_steps": 30},
+    "gather-v1-same-step": {"size": 6, "items": 5, "max_steps": 30},
+    "lanterns-v1-next-step": {"players": 3},
+    "lanterns-v1-same-step": {"players": 3},
 }
 
 
