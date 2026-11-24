@@ -229,6 +229,10 @@ impl Replay<'_> {
     /// # Errors
     ///
     /// [`ReplayError::Persist`] if the pool does not match the header,
+    /// [`ReplayError::Engine`] with [`EngineError::PolicyMapMismatch`],
+    /// before any event, if the pool's policy map is not the recorded one
+    /// ([`super::ReplayHeader::policy_map`]; ADR-0079 item 6, erratum B2:
+    /// the caller builds the pool with that map),
     /// [`ReplayError::Diverged`] at the first failing check, and other typed
     /// errors for a malformed event.
     pub fn run<E, M>(&self, pool: &mut EnvPool<E, M>) -> Result<ReplaySummary, ReplayError>
@@ -286,7 +290,10 @@ impl Replay<'_> {
             }
             .into());
         }
-        self.check_parts::<E, M>(&pool.cfg, &pool.options, pool.action_heads())
+        self.check_parts::<E, M>(&pool.cfg, &pool.options, pool.action_heads())?;
+        // ADR-0079 item 6 (erratum B2): the caller builds the pool with the
+        // recorded map; replay verifies it before any event.
+        self.check_policy_map(pool.policy_map())
     }
 
     /// Checks a first-party pool's config, options and action heads against
@@ -431,9 +438,9 @@ impl Replay<'_> {
                     reset_source,
                     // Replays refuse pools with transforms (ADR-0078 item 8).
                     adaptive: crate::adaptive::AdaptiveContext::default(),
-                    // Replays take the default policy map until ADR-0079 stage B
-                    // (item 6.3): a replay into a pool with another map is refused.
-                    policy_map: 0,
+                    // The recorded map's digest (ADR-0079 item 6): the pool's
+                    // map was checked against it before the first event.
+                    policy_map: self.header.policy_map_digest()?,
                 },
                 &ids,
                 records,

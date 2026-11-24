@@ -409,6 +409,12 @@ impl Replay<'_> {
             return incompatible("host_protocol");
         };
         self.check_v1(pool.options().chunk_size.get())?;
+        // Host pools have no policy map (ADR-0079 covers first-party pools).
+        if !self.header.policy_map.is_empty() {
+            return Err(ReplayError::Unsupported {
+                feature: "policy maps in host replay files",
+            });
+        }
         // ADR-0075 item 8: archives are for first-party pools.
         if self.header.archive.is_some() {
             return Err(ReplayError::Unsupported {

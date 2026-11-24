@@ -35,6 +35,7 @@ mod host_run;
 mod host_writer;
 #[cfg(feature = "host")]
 mod outputs_hash;
+mod policy_map;
 mod reader;
 mod rebuild;
 mod run;

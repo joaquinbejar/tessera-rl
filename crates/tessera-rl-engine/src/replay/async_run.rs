@@ -115,6 +115,8 @@ impl Replay<'_> {
         }
         let (cfg, options, heads) = pool.replay_parts();
         self.check_parts::<E, M>(cfg, options, heads)?;
+        // ADR-0079 item 6 (erratum B2): verified before any event.
+        self.check_policy_map(pool.replay_policy_map())?;
         if self.header.archive.is_some() {
             return Err(ReplayError::Unsupported {
                 feature: "archive reset sources in async replay files (ADR-0075)",

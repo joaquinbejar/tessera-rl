@@ -152,14 +152,8 @@ where
         if options.outputs_hash {
             flags |= FLAG_OUTPUTS_HASH;
         }
-        // ADR-0079 item 6.3: the header's map stays the default until stage
-        // B records it; as the sync recorder, any non-default map (an
-        // external-only one included) is refused.
-        if pool.has_policy_map() {
-            return Err(ReplayError::Unsupported {
-                feature: "policy maps (ADR-0079)",
-            });
-        }
+        // ADR-0079 item 6 (#347 stage B2): the header records the pool's
+        // policy map, as the sync recorder's does.
         if pool.has_archive_source() {
             return Err(ReplayError::Unsupported {
                 feature: "archive reset sources in async replay files (ADR-0075)",
@@ -170,6 +164,7 @@ where
             cfg,
             pool_options,
             heads,
+            pool.replay_policy_map(),
             flags,
             &super::ResetSourceRecord::Fresh,
         )?;

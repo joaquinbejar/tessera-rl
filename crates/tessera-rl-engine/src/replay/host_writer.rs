@@ -632,8 +632,10 @@ fn header_bytes<E: HostEnvironment, const A: usize>(
         out.extend_from_slice(&identity.to_le_bytes());
     }
     // ADR-0075 item 8: host pools have no archives.
+    // Host pools have no policy map: the default map, count 0.
     super::v1_fields::push_extension(
         &mut out,
+        &[],
         pool.options().chunk_size.get(),
         &super::ResetSourceRecord::Fresh,
     );

@@ -22,7 +22,10 @@ Scope and known gaps:
 - The recording is held in memory until it ends, and replay reads the whole
   file; streaming is planned.
 - :func:`run` replays into an environment the caller built with the same
-  ``make`` arguments; rebuilding it from the file is issue #377.
+  ``make`` arguments; rebuilding it from the file is issue #377. That
+  includes ``policy_map``: the file records the map, and
+  an environment built with another one (or without one) is refused with
+  ``ConfigError`` before anything is replayed.
 
 Errors: a divergence raises :class:`ReplayDivergence`. A damaged, truncated,
 foreign or newer file, or one whose environment, config, options or instance
