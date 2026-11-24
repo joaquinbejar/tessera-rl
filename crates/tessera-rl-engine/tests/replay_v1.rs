@@ -23,7 +23,7 @@ use tessera_rl_engine::replay::{
     Event, EventTag, Recorder, Replay, ReplayError, ReplayWriterOptions, ResetSourceRecord,
 };
 use tessera_rl_engine::{
-    ActionInput, DecodeLimits, EnvPool, Masked, PersistError, PoolOptions, Reseed,
+    ActionInput, DecodeLimits, EngineError, EnvPool, Masked, PersistError, PoolOptions, Reseed,
 };
 use tessera_rl_num::identity::Seed;
 
@@ -412,11 +412,12 @@ fn test_replay_v1_keyframe_archive_source_is_unsupported() {
 }
 
 #[test]
-fn test_replay_seek_keyframe_archive_source_refused_pool_untouched() {
-    // A keyframe whose reset source is an archive (ADR-0075): replay cannot
-    // restore that source yet, so seek refuses it with a typed error before
-    // importing anything, and keyframes() does not offer it
-    // (REVIEW-4c-design-r1 point 2: restore the full context or refuse).
+fn test_replay_seek_keyframe_archive_source_without_the_archive_refused_pool_untouched() {
+    // A keyframe whose reset source is an archive (ADR-0075, #363): keyframes()
+    // lists it, and seek restores that source only with the archive it names.
+    // A cursor without the archive is refused with `ArchiveMismatch` before
+    // importing anything (REVIEW-4c-design-r1 point 2: restore the full
+    // context or refuse).
     let mut p = split(&recording());
     let body = &mut p.events[0].1;
     let mut source = archive_block(1, &[1]);
@@ -427,7 +428,7 @@ fn test_replay_seek_keyframe_archive_source_refused_pool_untouched() {
     }
     let file = join(&p, 0);
     let replay = Replay::open(&file, LIMITS).unwrap();
-    assert!(!replay.keyframes().unwrap().contains(&0));
+    assert!(replay.keyframes().unwrap().contains(&0));
     let mut pool = pool();
     pool.reset_all(Reseed::Base(Seed::new(11))).unwrap();
     let before: Vec<u64> = (0..N).map(|i| pool.state_hash(i).unwrap().get()).collect();
@@ -435,7 +436,7 @@ fn test_replay_seek_keyframe_archive_source_refused_pool_untouched() {
     let mut cur = replay.cursor(&pool).unwrap();
     assert!(matches!(
         replay.seek(&mut pool, &mut cur, 0),
-        Err(ReplayError::Unsupported { .. })
+        Err(ReplayError::Engine(EngineError::ArchiveMismatch { found: 0, .. }))
     ));
     let after: Vec<u64> = (0..N).map(|i| pool.state_hash(i).unwrap().get()).collect();
     assert_eq!(after, before);

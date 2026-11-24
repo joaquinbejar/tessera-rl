@@ -12,28 +12,26 @@ use super::ReplayError;
 use super::format::Body;
 use crate::persist::PersistError;
 
-/// Most archive entries (ADR-0075 item 1).
-pub const MAX_ARCHIVE_ENTRIES: u32 = 1 << 24;
+/// Most archive entries (ADR-0075 item 1): the engine's
+/// [`crate::MAX_ARCHIVE_ENTRIES`] as the `u32` the format stores.
+pub const MAX_ARCHIVE_ENTRIES: u32 = {
+    assert!(crate::MAX_ARCHIVE_ENTRIES <= u32::MAX as usize);
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "checked to fit by the assertion above"
+    )]
+    let max = crate::MAX_ARCHIVE_ENTRIES as u32;
+    max
+};
 /// Policy group codes (ADR-0079 item 6): learner, external, heuristic,
 /// privileged heuristic.
 pub const MAX_POLICY_GROUP: u8 = 3;
 
 /// A pool's reset source (ADR-0075 item 7), as a `Keyframe`'s pool context
-/// and a `ResetSource` event hold it.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub enum ResetSourceRecord {
-    /// `ResetSource::Fresh`: `Environment::reset`.
-    #[default]
-    Fresh,
-    /// An archive, named by its digest (XXH3-64, ADR-0075 item 1), with one
-    /// `u32` weight per entry.
-    Archive {
-        /// The archive digest.
-        digest: u64,
-        /// The weights, one per entry; their sum is positive.
-        weights: Vec<u32>,
-    },
-}
+/// and a `ResetSource` event hold it: the engine's
+/// [`crate::ResetSourceContext`], one type for the pool context and the
+/// file (#363, agreed with #411).
+pub use crate::archive::ResetSourceContext as ResetSourceRecord;
 
 /// The archive block of the header: the source at recording start.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -181,10 +179,69 @@ pub(crate) fn read_extension(
 /// Appends the default extension: default policy map, no curriculum, no
 /// archive, then `chunk_size`.
 pub(crate) fn push_default_extension(out: &mut Vec<u8>, chunk_size: u32) {
+    push_extension(out, chunk_size, &ResetSourceRecord::Fresh);
+}
+
+/// Appends the extension: default policy map, no curriculum, the archive
+/// block of `source` (the source at recording start, ADR-0075 item 7), then
+/// `chunk_size`.
+pub(crate) fn push_extension(out: &mut Vec<u8>, chunk_size: u32, source: &ResetSourceRecord) {
     out.extend_from_slice(&0u16.to_le_bytes());
     out.push(0);
-    out.push(0);
+    match source {
+        ResetSourceRecord::Fresh => out.push(0),
+        ResetSourceRecord::Archive { digest, weights } => {
+            out.push(1);
+            out.extend_from_slice(&digest.to_le_bytes());
+            push_weights(out, weights);
+        }
+    }
     out.extend_from_slice(&chunk_size.to_le_bytes());
+}
+
+/// Appends a reset source as `read_reset_source` reads it.
+pub(crate) fn push_reset_source(out: &mut Vec<u8>, source: &ResetSourceRecord) {
+    match source {
+        ResetSourceRecord::Fresh => out.push(0),
+        ResetSourceRecord::Archive { digest, weights } => {
+            out.push(1);
+            out.extend_from_slice(&digest.to_le_bytes());
+            push_weights(out, weights);
+        }
+    }
+}
+
+/// Appends `count:u32` then the weights; the engine bounds the count to
+/// 2^24 (`Archive::new`), so it fits.
+fn push_weights(out: &mut Vec<u8>, weights: &[u32]) {
+    let n = u32::try_from(weights.len()).unwrap_or(u32::MAX);
+    out.extend_from_slice(&n.to_le_bytes());
+    for w in weights {
+        out.extend_from_slice(&w.to_le_bytes());
+    }
+}
+
+/// Appends a `ResetFrom` body as `read_reset_from` reads it.
+pub(crate) fn push_reset_from(out: &mut Vec<u8>, ids: &[u32], entries: &[u32]) {
+    let n = u32::try_from(ids.len()).unwrap_or(u32::MAX);
+    out.extend_from_slice(&n.to_le_bytes());
+    for id in ids {
+        out.extend_from_slice(&id.to_le_bytes());
+    }
+    for e in entries {
+        out.extend_from_slice(&e.to_le_bytes());
+    }
+}
+
+impl ArchiveHeader<'_> {
+    /// The owned reset source this header block names.
+    #[must_use]
+    pub fn to_record(&self) -> ResetSourceRecord {
+        ResetSourceRecord::Archive {
+            digest: self.digest,
+            weights: self.weights().collect(),
+        }
+    }
 }
 
 /// The `Adaptive` body (ADR-0081 item 7): `count:u32` (at least 1), then per
@@ -271,11 +328,6 @@ impl super::reader::Replay<'_> {
         if self.header.has_curriculum {
             return Err(ReplayError::Unsupported {
                 feature: "curricula (ADR-0081)",
-            });
-        }
-        if self.header.archive.is_some() {
-            return Err(ReplayError::Unsupported {
-                feature: "archive reset sources (ADR-0075)",
             });
         }
         if self.header.chunk_size != 0 && self.header.chunk_size != chunk_size {

@@ -147,8 +147,19 @@ where
         if options.outputs_hash {
             flags |= FLAG_OUTPUTS_HASH;
         }
+        if pool.has_archive_source() {
+            return Err(ReplayError::Unsupported {
+                feature: "archive reset sources in async replay files (ADR-0075)",
+            });
+        }
         let (cfg, pool_options, heads) = pool.replay_parts();
-        let header = header_from::<E, M>(cfg, pool_options, heads, flags)?;
+        let header = header_from::<E, M>(
+            cfg,
+            pool_options,
+            heads,
+            flags,
+            &super::ResetSourceRecord::Fresh,
+        )?;
         let mut recorder = Self {
             pool,
             out,

@@ -1449,6 +1449,13 @@ where
     /// The config, options and action heads, for replay headers
     /// (ADR-0072). The config and options are read by place, as in
     /// [`Self::check_records`].
+    /// Whether the pool resets from an archive (ADR-0075): async replay
+    /// files do not record archive sources yet.
+    #[cfg(feature = "replay")]
+    pub(crate) fn has_archive_source(&self) -> bool {
+        self.mode.pool.reset_source.is_some()
+    }
+
     #[cfg(feature = "replay")]
     pub(crate) fn replay_parts(
         &self,
