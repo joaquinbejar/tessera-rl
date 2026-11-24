@@ -81,6 +81,28 @@ fn usize_shape(shape: &[u32]) -> Vec<usize> {
         .collect()
 }
 
+/// The per-agent refusal views of a refusing environment (host protocol 2,
+/// ADR-0070), empty otherwise.
+fn refusal_specs(l: &HostLayout, per_agent: &[usize]) -> Option<Vec<(&'static str, Spec)>> {
+    if !l.refuses_agents {
+        return Some(Vec::new());
+    }
+    let spec = |field, dtype| {
+        Some(Spec {
+            field,
+            element: region_element(dtype)?,
+            shape: per_agent.to_vec(),
+        })
+    };
+    Some(vec![
+        ("refused", spec(OutputField::Refused, OutputDtype::Bool8)?),
+        (
+            "refuse_code",
+            spec(OutputField::RefuseCode, OutputDtype::U32)?,
+        ),
+    ])
+}
+
 /// The view set of `l`; `None` for a region of a dtype no protocol names.
 fn set(l: &HostLayout) -> Option<Set> {
     let (n, a) = (l.num_envs, l.agents);
@@ -108,6 +130,7 @@ fn set(l: &HostLayout) -> Option<Set> {
     };
     let per_agent = [n, a];
     let per_env = [n];
+    let refusals = refusal_specs(l, &per_agent)?;
     Some(Set {
         observations: leaves(OutputField::Observation),
         terminal_observations: if l.terminal {
@@ -173,7 +196,10 @@ fn set(l: &HostLayout) -> Option<Set> {
                 "pending_reset",
                 spec(OutputField::PendingReset, OutputDtype::Bool8, &per_env)?,
             ),
-        ],
+        ]
+        .into_iter()
+        .chain(refusals)
+        .collect(),
     })
 }
 

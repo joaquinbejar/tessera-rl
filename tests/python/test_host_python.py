@@ -152,7 +152,12 @@ def test_host_each_entry_point_builds_one_host_object(monkeypatch, how, turns):
 @pytest.mark.parametrize(
     "overrides, match",
     [
-        ({"protocol": 2}, "host protocol 2"),
+        ({"protocol": 2}, "host protocol 2 with refuses_agents=False"),
+        ({"protocol": 1, "refuses": True}, "host protocol 1 with refuses_agents=True"),
+        ({"protocol": 2, "refuses": True}, None),
+        ({"protocol": 2, "refuses": 1}, "host protocol 2 with refuses_agents=1"),
+        ({"protocol": 0}, "host protocol 0"),
+        ({"protocol": 3}, "host protocol 3"),
         ({"protocol": True}, "host protocol True"),
         ({"low": "999.0.0"}, "needs tessera_rl >= 999.0.0"),
         ({"below": "0.0.1"}, "< 0.0.1"),
@@ -219,7 +224,9 @@ def test_host_env_reset_and_step_return_host_steps(fake, outputs):
     step = env.reset()
     assert isinstance(step, tessera_rl.HostStep)
     assert step._fields[:10] == tessera_rl.Step._fields
-    assert step._fields[10:] == ("aborted", "abort_code", "pending_reset")
+    assert step._fields[10:] == ("aborted", "abort_code", "pending_reset", "refused", "refuse_code")
+    # Protocol 1: no refusals (ADR-0070).
+    assert step.refused is None and step.refuse_code is None
     assert step.observations["obs"][:, 0].tolist() == [[10, 5], [10, 6], [10, 7]]
     assert not step.pending_reset.any() and not step.aborted.any()
     assert step.abort_code.dtype == np.uint32 and step.slot_generations.shape == (3, 2)

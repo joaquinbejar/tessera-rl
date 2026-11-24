@@ -11,7 +11,9 @@ episode ends (terminated) at step ``episode``. Knobs: ``abort_step`` (the
 step at which ``abort_seed``'s instance, or every one with -1, aborts with
 ``abort_code``), ``reset_aborts`` (the first resets of that instance abort
 with ``abort_code + 100``), ``turns``, ``agents`` and ``initial_agents`` (the slots alive after a reset,
-``0..initial_agents``; ``agents`` by default).
+``0..initial_agents``; ``agents`` by default). With ``refuses`` (host
+protocol 2, ADR-0070), an agent whose action is 2 is refused with code
+``30 + slot``: it gets reward -1 and the others step as usual.
 """
 
 from __future__ import annotations
@@ -31,7 +33,8 @@ class FakeHost:
     def __init__(self, *, num_envs, seed=0, auto_reset=None, max_episode_steps=None, workers=None,
                  cpu_set=None, agents=2, initial_agents=None, turns="simultaneous", episode=4, offset=10,
                  abort_step=0, abort_code=7, abort_seed=-1, reset_aborts=0, protocol=1,
-                 low=None, below=None, drop_layout=None, drop_output=None, layout_patch=None):
+                 low=None, below=None, drop_layout=None, drop_output=None, layout_patch=None,
+                 refuses=False):
         version = tessera_rl.__version__.split("+")[0].split("-")[0]
         major, minor, _ = (int(p) for p in version.split("."))
         self.host_protocol = protocol
@@ -46,6 +49,7 @@ class FakeHost:
         self.reset_aborts = reset_aborts
         self.drop_layout, self.drop_output = drop_layout, drop_output
         self.layout_patch = layout_patch or {}
+        self.refuses = refuses
         self.seeds = [seed + i for i in range(num_envs)]
         self.steps = [0] * num_envs
         self.resets = [0] * num_envs
@@ -65,6 +69,9 @@ class FakeHost:
             "env_id": "fake/Counter-v1", "env_version": 1, "perfect_information": True,
             "kind": "host", "auto_reset": self.auto_reset,
         }
+        if self.refuses:
+            # The value as given, so a test can pass a non-bool.
+            layout["refuses_agents"] = self.refuses
         layout.update(self.layout_patch)
         layout.pop(self.drop_layout, None)
         return layout
@@ -102,6 +109,7 @@ class FakeHost:
             "slot_generations": np.zeros((n, a), np.uint32), "episode_return": np.zeros(n, np.float32),
             "episode_length": np.zeros(n, np.float32), "aborted": np.zeros(n, bool),
             "abort_code": np.zeros(n, np.uint32), "pending_reset": np.zeros(n, bool),
+            "refused": np.zeros((n, a), bool), "refuse_code": np.zeros((n, a), np.uint32),
         }
 
     def _reset_one(self, r, i, seed):
@@ -123,7 +131,8 @@ class FakeHost:
     def _out(self, r):
         self.generation += 1
         r["pending_reset"][:] = self.pending
-        out = {k: v for k, v in r.items() if k in OUTPUT_KEYS}
+        keys = OUTPUT_KEYS + (("refused", "refuse_code") if self.refuses else ())
+        out = {k: v for k, v in r.items() if k in keys}
         out["observations"] = [r["obs"]]
         out["terminal_observations"] = [r["term_obs"]] if self.auto_reset == "same_step" else []
         out.pop(self.drop_output, None)
@@ -164,6 +173,11 @@ class FakeHost:
                 continue
             self.steps[i] += 1
             r["rewards"][i] = 0.5 + acts[i]
+            if self.refuses:
+                for s in range(self.a):
+                    if acts[i, s] == 2 and r["acting"][i, s]:
+                        r["refused"][i, s], r["refuse_code"][i, s] = True, 30 + s
+                        r["rewards"][i, s] = -1.0
             if self.steps[i] == self.abort_step and self._targeted(i):
                 r["aborted"][i], r["abort_code"][i] = True, self.abort_code
                 r["agent_truncated"][i] = True

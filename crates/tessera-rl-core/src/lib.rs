@@ -27,6 +27,7 @@ pub mod host;
 pub mod host_out;
 pub mod io;
 pub mod leaf;
+pub mod refusals;
 pub mod space;
 pub mod step_out;
 
@@ -45,6 +46,7 @@ pub use host::{ActionReject, HostEnvironment, HostError, HostSeed};
 pub use host_out::{AbortCode, HostOut};
 pub use leaf::{LeafDType, LeafId, ObsLeaf, Observation};
 pub use pool::Pool;
+pub use refusals::{Refusals, RefuseCode};
 pub use reserved::Reserved;
 pub use state_enum::StateEnum;
 pub use state_init::StateInit;

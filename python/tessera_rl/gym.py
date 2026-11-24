@@ -217,6 +217,8 @@ class TesseraVectorEnv(VectorEnv):
         # ``"host"`` for a third-party host environment, else ``"tessera"``
         # (ADR-0062).
         self.metadata["tessera_kind"] = "host" if layout.get("kind") == "host" else "tessera"
+        # Whether the host environment refuses agents (ADR-0070).
+        self.metadata["refuses_agents"] = bool(layout.get("refuses_agents", False))
         #: Row width of the native outputs (capacity); the adapter uses slot 0.
         self._agents: int = layout["agents"]
         # Slot 0 carries the action; the other slots are never alive or
@@ -302,8 +304,13 @@ class TesseraVectorEnv(VectorEnv):
         info = self._mask_info(out)
         if self.metadata["tessera_kind"] == "host":
             # An aborted reset leaves its instance pending (ADR-0065).
-            info.update(_host.host_infos(out, self.outputs == "owned", self.num_envs))
+            info.update(self._host_infos(out))
         return self._obs(out["observations"]), info
+
+    def _host_infos(self, out) -> dict:
+        return _host.host_infos(
+            out, self.outputs == "owned", self.num_envs, self._agents, self.metadata["refuses_agents"]
+        )
 
     def step(self, actions):
         if len(self._nvec) > 1:
@@ -339,7 +346,7 @@ class TesseraVectorEnv(VectorEnv):
         if self.metadata["tessera_kind"] == "host":
             # ADR-0065: an aborted episode is truncated; its final_obs (in
             # SAME_STEP) is the zero row the engine wrote.
-            info.update(_host.host_infos(out, self.outputs == "owned", self.num_envs))
+            info.update(self._host_infos(out))
         return self._obs(out["observations"]), rewards, terminated, truncated, info
 
     def close_extras(self, **kwargs):
@@ -360,7 +367,11 @@ class TesseraEnv(gymnasium.Env):
     def __init__(self, env_id: str = "tessera/CartPole-v1", seed: int | None = None, **kwargs: Any):
         kwargs.setdefault("max_episode_steps", None)
         self._vec = TesseraVectorEnv(env_id, 1, seed, AutoresetMode.DISABLED, "owned", **kwargs)
-        self.metadata = {**type(self).metadata, "tessera_kind": self._vec.metadata["tessera_kind"]}
+        self.metadata = {
+            **type(self).metadata,
+            "tessera_kind": self._vec.metadata["tessera_kind"],
+            "refuses_agents": self._vec.metadata["refuses_agents"],
+        }
         self.construction_seed: int = self._vec.construction_seed
         self.observation_space = self._vec.single_observation_space
         self.action_space = self._vec.single_action_space
@@ -395,6 +406,10 @@ def _first_info(info: dict) -> dict:
             out[key] = bool(info[key][0])
     if "abort_code" in info:
         out["abort_code"] = int(info["abort_code"][0])
+    for key in ("refused", "refuse_code"):
+        if key in info:
+            # Per agent slot of instance 0 (ADR-0070).
+            out[key] = np.array(info[key][0])
     return out
 
 

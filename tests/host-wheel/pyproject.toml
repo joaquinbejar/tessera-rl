@@ -20,3 +20,5 @@ module-name = "_tessera_host"
 "test/Respawn-v1" = "_tessera_host:make_respawn"
 # The two-head masked environment of the multi-head AEC test (#311).
 "test/MultiHead-v1" = "_tessera_host:make_multihead"
+# The refusing environment of the ADR-0070 tests (host protocol 2).
+"test/Refuser-v1" = "_tessera_host:make_refuser"

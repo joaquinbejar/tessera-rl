@@ -11,7 +11,7 @@ use core::sync::atomic::{AtomicU64, Ordering};
 use tessera_rl_core::io::{Actions, MaskWriter, ObsWriter};
 use tessera_rl_core::{
     AbortCode, ActionReject, AgentSlot, Bool8, EpisodeEnd, HostEnvironment, HostOut, HostSeed,
-    NoAdaptive, RecordHeader, RecordLayout, StepOut, TurnStructure,
+    NoAdaptive, RecordHeader, RecordLayout, Refusals, StepOut, TurnStructure,
 };
 use tessera_rl_num::fp;
 use tessera_rl_num::identity::{RngIdentity, Seed};
@@ -42,6 +42,12 @@ pub(crate) struct HostCtx<'a> {
     pub(crate) fp_resets: &'a AtomicU64,
     /// Aborts the engine applied (ADR-0065 item 1).
     pub(crate) aborts: &'a AtomicU64,
+    /// Instances whose `refuse` refused an agent (ADR-0070): the
+    /// `refused` and `refuse_code` rows need clearing only if it moved.
+    pub(crate) refusals: &'a AtomicU64,
+    /// The lowest [`misuse_key`] of a refusal of a slot that was not acting
+    /// in this call, or `u64::MAX` (ADR-0070 item 2).
+    pub(crate) misuse: &'a AtomicU64,
     /// The pool's host allocation tally (ADR-0062 item 4).
     #[cfg(feature = "debug-checks")]
     pub(crate) allocs: &'a crate::sys::alloc_track::AllocTally,
@@ -57,20 +63,35 @@ fn recanonicalize(fp_resets: &AtomicU64) {
     }
 }
 
-/// Steps every instance of `rows` (after validation).
+/// The key of a refusal of slot `agent` of pool instance `instance` that
+/// was not acting: ordered by instance, then slot (ADR-0070 item 2).
+#[must_use]
+pub(crate) fn misuse_key(instance: usize, agent: usize) -> u64 {
+    let instance = u64::try_from(instance).unwrap_or(u64::from(u32::MAX));
+    let agent = u64::try_from(agent).unwrap_or(u64::from(u32::MAX));
+    (instance.min(u64::from(u32::MAX)) << 32) | agent.min(u64::from(u32::MAX))
+}
+
+/// Steps every instance of `rows` (after validation); `first` is the pool
+/// index of the chunk's first instance.
 pub(crate) fn step_chunk<E: HostEnvironment, const A: usize>(
     ctx: &HostCtx<'_>,
     rows: &mut HostRows<'_, E, A>,
+    first: usize,
 ) {
     {
         #[cfg(feature = "debug-checks")]
         let _bracket = crate::sys::alloc_track::HostBracket::enter(ctx.allocs);
-        step_rows::<E, A>(ctx, rows);
+        step_rows::<E, A>(ctx, rows, first);
     }
     recanonicalize(ctx.fp_resets);
 }
 
-fn step_rows<E: HostEnvironment, const A: usize>(ctx: &HostCtx<'_>, rows: &mut HostRows<'_, E, A>) {
+fn step_rows<E: HostEnvironment, const A: usize>(
+    ctx: &HostCtx<'_>,
+    rows: &mut HostRows<'_, E, A>,
+    first_instance: usize,
+) {
     let (dh, ch) = (ctx.layout.discrete.len(), ctx.layout.continuous.len());
     let Rows {
         headers,
@@ -99,6 +120,21 @@ fn step_rows<E: HostEnvironment, const A: usize>(ctx: &HostCtx<'_>, rows: &mut H
             continuous.get(first * ch..(first + A) * ch).unwrap_or(&[]),
             ch,
         );
+        let mut codes = [0u32; A];
+        let view = if E::REFUSES_AGENTS {
+            if let Err(slot) = refuse_one::<E, A>(ctx, header, inst, &view, &mut codes, outputs, i)
+            {
+                // Not stepped; the pool is poisoned after the call.
+                ctx.misuse.fetch_min(
+                    misuse_key(first_instance.saturating_add(i), slot),
+                    Ordering::Relaxed,
+                );
+                continue;
+            }
+            view.with_refusals(&codes)
+        } else {
+            view
+        };
         let aborted = step_one::<E, A>(header, inst, &view, outputs, i, ctx.limit, ctx.fp_resets);
         if aborted {
             ctx.aborts.fetch_add(1, Ordering::Relaxed);
@@ -125,6 +161,42 @@ fn step_rows<E: HostEnvironment, const A: usize>(ctx: &HostCtx<'_>, rows: &mut H
         // ended or aborted episode); a step whose episode runs on leaves
         // the instance not pending, as its output already says.
     }
+}
+
+/// Runs instance `i`'s `refuse` (ADR-0070) into `codes` and, if it
+/// refused an agent, copies the verdicts to the instance's `refused` and
+/// `refuse_code` rows (zero on entry). Returns the first slot it refused
+/// while that slot was not acting, without writing any row.
+fn refuse_one<E: HostEnvironment, const A: usize>(
+    ctx: &HostCtx<'_>,
+    header: &HostHeader<A>,
+    inst: &E,
+    actions: &Actions<'_, ()>,
+    codes: &mut [u32; A],
+    outputs: &mut OutputsView<'_>,
+    i: usize,
+) -> Result<(), usize> {
+    let mut refused = [Bool8::FALSE; A];
+    let misuse = {
+        let mut out = Refusals::new(codes, &mut refused, header.agents());
+        inst.refuse(actions, &mut out);
+        out.misuse()
+    };
+    recanonicalize(ctx.fp_resets);
+    if let Some(slot) = misuse {
+        codes.fill(0);
+        return Err(slot.index());
+    }
+    if codes.iter().any(|&c| c != 0) {
+        ctx.refusals.fetch_add(1, Ordering::Relaxed);
+        if let Some(row) = outputs.refuse_code.get_mut(i * A..(i + 1) * A) {
+            row.copy_from_slice(codes);
+        }
+        if let Some(row) = outputs.refused.get_mut(i * A..(i + 1) * A) {
+            row.copy_from_slice(&refused);
+        }
+    }
+    Ok(())
 }
 
 /// Whether instance `header` steps in this call: not pending a reset,

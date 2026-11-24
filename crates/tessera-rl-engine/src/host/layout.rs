@@ -28,6 +28,10 @@ pub struct HostLayout {
     pub initial_agents: usize,
     /// Whether a spawn can be valid (`HostEnvironment::SPAWNS`).
     pub spawns: bool,
+    /// Whether the environment refuses agents and the `refused` and
+    /// `refuse_code` outputs exist (`HostEnvironment::REFUSES_AGENTS`,
+    /// ADR-0070).
+    pub refuses_agents: bool,
     /// The observation space, validated.
     pub observation_space: Space,
     /// The observation leaves, in the order of the observation outputs
@@ -78,6 +82,7 @@ pub(crate) fn host_layout<E: HostEnvironment>(
         agents,
         initial_agents,
         spawns: E::SPAWNS,
+        refuses_agents: E::REFUSES_AGENTS,
         leaves: leaves_of(&observation_space),
         observation_space,
         action_space,

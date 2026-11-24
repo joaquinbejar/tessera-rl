@@ -161,6 +161,8 @@ struct RawChunk<H, S> {
     aborted: Raw<Bool8>,
     abort_code: Raw<u32>,
     pending_reset: Raw<Bool8>,
+    refused: Raw<Bool8>,
+    refuse_code: Raw<u32>,
 }
 
 /// The raw parts of an `Environment` pool's chunk, for the split-phase
@@ -215,6 +217,8 @@ impl<H, S> RawChunk<H, S> {
             aborted,
             abort_code,
             pending_reset,
+            refused,
+            refuse_code,
         } = outputs;
         let leaves = |views: [&mut [u8]; MAX_LEAVES]| views.map(Raw::new);
         // `leaf_bytes` is only read; a read-only view is stored as raw too.
@@ -256,6 +260,8 @@ impl<H, S> RawChunk<H, S> {
             aborted: Raw::new(aborted),
             abort_code: Raw::new(abort_code),
             pending_reset: Raw::new(pending_reset),
+            refused: Raw::new(refused),
+            refuse_code: Raw::new(refuse_code),
         }
     }
 
@@ -335,6 +341,12 @@ impl<H, S> RawChunk<H, S> {
         let abort_code = unsafe { self.abort_code.view(r, 1) };
         // SAFETY: as for `aborted`.
         let pending_reset = unsafe { self.pending_reset.view(r, 1) };
+        // SAFETY: invariants 1 to 4 for range `r` (a elements per instance;
+        // an empty buffer outside refusing host pools, which yields empty
+        // views).
+        let refused = unsafe { self.refused.view(r, a) };
+        // SAFETY: as for `refused`.
+        let refuse_code = unsafe { self.refuse_code.view(r, a) };
         Rows {
             headers,
             states,
@@ -367,6 +379,8 @@ impl<H, S> RawChunk<H, S> {
                 aborted,
                 abort_code,
                 pending_reset,
+                refused,
+                refuse_code,
             },
         }
     }

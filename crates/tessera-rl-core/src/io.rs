@@ -19,6 +19,9 @@ pub struct Actions<'a, A> {
     continuous: &'a [f32],
     discrete_heads: usize,
     continuous_heads: usize,
+    /// Per-agent refuse codes of a refusing host instance (ADR-0070), 0
+    /// where not refused; empty otherwise.
+    refusals: &'a [u32],
     _action: PhantomData<fn() -> A>,
 }
 
@@ -38,8 +41,34 @@ impl<'a, A> Actions<'a, A> {
             continuous,
             discrete_heads,
             continuous_heads,
+            refusals: &[],
             _action: PhantomData,
         }
+    }
+
+    /// Engine-only: the same view, with the instance's refuse codes, one
+    /// per agent slot (ADR-0070).
+    #[doc(hidden)]
+    #[must_use]
+    #[inline]
+    pub const fn with_refusals(self, refusals: &'a [u32]) -> Self {
+        Self { refusals, ..self }
+    }
+
+    /// Whether the host environment refused `agent`'s action in this call
+    /// (ADR-0070). Always false outside refusing host environments.
+    #[must_use]
+    #[inline]
+    pub fn is_refused(&self, agent: AgentSlot) -> bool {
+        self.refuse_code(agent) != 0
+    }
+
+    /// The code `agent`'s action was refused with in this call, or 0
+    /// (ADR-0070).
+    #[must_use]
+    #[inline]
+    pub fn refuse_code(&self, agent: AgentSlot) -> u32 {
+        self.refusals.get(agent.index()).copied().unwrap_or(0)
     }
 
     /// The discrete action of `agent` on `head`.

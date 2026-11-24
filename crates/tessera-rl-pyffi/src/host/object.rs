@@ -20,23 +20,38 @@ use crate::ffi::object::{
 
 use super::{describe, views};
 
-/// The host protocol version this module implements (SPEC 14.4.7).
+/// The host protocol version of an object whose environment does not
+/// refuse agents (SPEC 14.4.7).
 pub const HOST_PROTOCOL: u64 = 1;
+
+/// The host protocol version of an object whose environment refuses agents
+/// (`HostEnvironment::REFUSES_AGENTS`): protocol 1 plus the `refused` and
+/// `refuse_code` outputs, which a wrapper must read (ADR-0070 item 10).
+pub const HOST_PROTOCOL_REFUSING: u64 = 2;
 
 /// The body of a host object: its pool, until `close`, and the output
 /// storage its views share, which outlives the pool (ADR-0003 rule 1).
 pub struct HostBody {
     pub(super) inner: Inner<dyn DynHostPool>,
     storage: Arc<OutputStorage>,
+    /// [`HOST_PROTOCOL`] or [`HOST_PROTOCOL_REFUSING`], fixed by the
+    /// environment type.
+    protocol: u64,
 }
 
 impl HostBody {
     /// A host object's body around `pool`, whose views share `storage`
     /// (the pool's `Outputs::storage`).
     pub(super) fn new(pool: Box<dyn DynHostPool>, storage: Arc<OutputStorage>) -> Self {
+        let protocol = if pool.layout().refuses_agents {
+            HOST_PROTOCOL_REFUSING
+        } else {
+            HOST_PROTOCOL
+        };
         Self {
             inner: Inner::new(pool, true),
             storage,
+            protocol,
         }
     }
 
@@ -62,13 +77,13 @@ impl Body for HostBody {
     }
 }
 
-/// `host_protocol`: 1.
+/// `host_protocol`: 1, or 2 for an environment that refuses agents.
 struct HostProtocol;
 
 impl Attribute for HostProtocol {
     type Body = HostBody;
-    fn get<'py>(g: Gil<'py>, _: &HostBody) -> CResult<Mine<'py>> {
-        capi::int_u64(g, HOST_PROTOCOL)
+    fn get<'py>(g: Gil<'py>, body: &HostBody) -> CResult<Mine<'py>> {
+        capi::int_u64(g, body.protocol)
     }
 }
 
@@ -317,7 +332,10 @@ static METHODS: MethodTable<HostBody> = MethodTable::new(&[
 ]);
 
 static ATTRIBUTES: AttributeTable<HostBody> = AttributeTable::new(&[
-    AttributeRow::get::<HostProtocol>(c"host_protocol", c"The host protocol version: 1."),
+    AttributeRow::get::<HostProtocol>(
+        c"host_protocol",
+        c"The host protocol version: 1, or 2 when the environment refuses agents.",
+    ),
     AttributeRow::get::<TesseraMin>(
         c"tessera_rl_min",
         c"The lowest tessera_rl version this object works with (MAJOR.MINOR.PATCH).",

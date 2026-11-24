@@ -92,7 +92,8 @@ pub(super) const fn auto_reset_name(mode: AutoReset) -> &'static str {
 }
 
 /// `layout()`: every key of SPEC 14.4.3 (draft), with ADR-0065's
-/// `initial_agents` and `spawns`; `agents` is the capacity.
+/// `initial_agents` and `spawns` and ADR-0070's `refuses_agents`; `agents`
+/// is the capacity.
 pub(super) fn layout<'py>(g: Gil<'py>, pool: &dyn DynHostPool) -> CResult<Mine<'py>> {
     let l = pool.layout();
     let reg = pool.registration();
@@ -101,6 +102,12 @@ pub(super) fn layout<'py>(g: Gil<'py>, pool: &dyn DynHostPool) -> CResult<Mine<'
     capi::dict_set(g, &d, c"agents", &int(g, l.agents)?)?;
     capi::dict_set(g, &d, c"initial_agents", &int(g, l.initial_agents)?)?;
     capi::dict_set(g, &d, c"spawns", &capi::boolean(g, l.spawns))?;
+    capi::dict_set(
+        g,
+        &d,
+        c"refuses_agents",
+        &capi::boolean(g, l.refuses_agents),
+    )?;
     let choices = match l.discrete_heads.as_slice() {
         [n] => u64::from(*n),
         _ => 0,
