@@ -129,7 +129,7 @@ jobs:
   # After a successful upload (#350): PyPI's PEP 740 attestations are checked,
   # each wheel's SBOM and the crates SBOM are attested (keyless, Sigstore via
   # GitHub OIDC) and uploaded to the owner's existing release. The only job
-  # with `contents: write`. If it fails after the upload, PyPI is already
+  # that may write the repository's contents. If it fails after the upload, PyPI is already
   # published: rerun only this job (RELEASE-CHECKLIST, "Verifying a release").
   release-assets:
     needs: publish
