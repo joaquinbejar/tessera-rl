@@ -28,6 +28,7 @@ modify outputs, use ``outputs="owned"`` or copy first (``tensor.clone()``,
 from __future__ import annotations
 
 import operator
+import typing
 from typing import NamedTuple
 
 import numpy as np
@@ -95,6 +96,24 @@ class AsyncStep(NamedTuple):
 
     ids: np.ndarray
     step: Step
+
+
+def _resolve_constructor_annotations(*classes: type) -> None:
+    """Gives each NamedTuple's generated constructor the resolved field
+    types (#525).
+
+    With ``from __future__ import annotations`` the fields are strings, and
+    the ``__new__`` that ``NamedTuple`` generates keeps them as strings to be
+    evaluated in the ``collections`` namespace, where ``np`` and ``Step`` do
+    not exist: ``inspect.signature`` users such as pdoc then cannot resolve
+    them. ``typing.get_type_hints`` resolves them in this module's namespace
+    once, at import.
+    """
+    for cls in classes:
+        cls.__new__.__annotations__ = dict(typing.get_type_hints(cls))
+
+
+_resolve_constructor_annotations(Step, HalfStep, AsyncStep)
 
 
 class Env:

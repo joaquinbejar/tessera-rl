@@ -26,7 +26,7 @@ from typing import NamedTuple
 import numpy as np
 
 from tessera_rl import _native
-from tessera_rl._env import Env, Step, _index
+from tessera_rl._env import Env, Step, _index, _resolve_constructor_annotations
 
 #: The newest host protocol this ``tessera_rl`` speaks (SPEC 14.4.7).
 PROTOCOL = 2
@@ -443,6 +443,9 @@ class HostStep(NamedTuple):
     #: ``(num_envs, agents)`` ``uint32`` refuse codes, 0 where not refused,
     #: or ``None`` (ADR-0070).
     refuse_code: np.ndarray | None = None
+
+
+_resolve_constructor_annotations(HostStep)
 
 
 def _absent(name: str):
