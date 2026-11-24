@@ -54,6 +54,12 @@ pub struct PoolOptions {
     /// How chunks are given to workers (ADR-0076). Never changes what a
     /// step computes.
     pub schedule: Schedule,
+    /// The SIMD level of the lane path of a `LaneStep` environment
+    /// (ADR-0071); `None` selects the widest level this CPU has. It changes
+    /// speed only, never results. A level this CPU lacks is an error at
+    /// construction, never a silent fallback. Ignored by environments
+    /// without a lane step.
+    pub simd_level: Option<tessera_rl_simd::Level>,
 }
 
 /// How a worker pool gives chunks to its workers (ADR-0076, SPEC 6.1).
@@ -105,6 +111,7 @@ impl PoolOptions {
             illegal_action: IllegalActionPolicy::Noop,
             mask_budget_bytes: DEFAULT_MASK_BUDGET,
             schedule: Schedule::Static,
+            simd_level: None,
         }
     }
 

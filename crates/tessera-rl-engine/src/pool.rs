@@ -15,11 +15,12 @@ use tessera_rl_core::error::ConfigError;
 use tessera_rl_core::io::{ActionWriter, Actions, MaskWriter, ObsWriter};
 use tessera_rl_core::{
     ActionMask, AdaptiveValues, AgentSlot, Bool8, EnvConfig, EnvState, Environment, EpisodeEnd,
-    LaneTuple, RecordLayout, StateInit, StepOut, TurnStructure,
+    LANES, LaneOut, LaneTuple, RecordLayout, StateInit, StepOut, TurnStructure,
 };
 use tessera_rl_num::fp;
 use tessera_rl_num::identity::{LogicalId, RngIdentity, Seed, StreamId};
 use tessera_rl_num::rng::{ObsRng, RngAuthority, StepRng};
+use tessera_rl_simd::Resolved;
 
 use crate::archive::ArchiveSource;
 use crate::buffer::claim::Cursors;
@@ -130,6 +131,10 @@ pub struct EnvPool<E: Environment, M: MaskProvider<E> = NoMasks> {
     /// a restore, fork, import or split-phase hand-over, which can write any
     /// counter; the next slow-path step then scans the headers once.
     pub(crate) counter_bound: Option<u32>,
+    /// The level of the lane path, or `None` when the environment has no
+    /// lane step or its shape is not eligible (ADR-0071); fixed at
+    /// construction.
+    pub(crate) lanes: Option<Resolved>,
     sync: Option<SyncRuntime>,
     /// The live watch, if attached (ADR-0083 item 7): served at each batch
     /// boundary; `None` costs one pointer test per call.
@@ -204,6 +209,7 @@ impl<E: Environment, M: MaskProvider<E>> EnvPool<E, M> {
                 .map(core::num::NonZeroU32::get),
             auto_reset: self.options.auto_reset,
             archive: self.reset_source.as_ref(),
+            lanes: self.lanes,
             targets: self.targets.as_deref(),
             #[cfg(feature = "debug-checks")]
             allocs: &self.allocs,
@@ -557,6 +563,7 @@ where
         let action_space = E::action_space(&cfg)?;
         action_space.validate()?;
         let mut actions = ActionLayout::from_space(&action_space)?;
+        let lanes = lane_level::<E, M>(&options, &actions)?;
         let leaves = obs_leaves(&obs_space)?;
 
         let num_envs = usize::try_from(options.num_envs.get()).map_err(|_| too_large())?;
@@ -618,6 +625,7 @@ where
             reset_source: None,
             fast_clean: false,
             counter_bound: Some(0),
+            lanes,
             sync: None,
             watch: None,
             transform: None,
@@ -1263,6 +1271,10 @@ where
         Ok(())
     }
 
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one validated step; ADR-0071 adds the lane level to the step context"
+    )]
     fn step_inner(&mut self, actions: ActionInput<'_>) -> Result<(), EngineError> {
         self.validate_and_copy(actions)?;
         if self.league.is_some() {
@@ -1296,6 +1308,7 @@ where
             heuristic,
             league,
             targets,
+            lanes,
             #[cfg(feature = "debug-checks")]
             allocs,
             ..
@@ -1311,6 +1324,7 @@ where
             limit: options.max_episode_steps.map(core::num::NonZeroU32::get),
             auto_reset: options.auto_reset,
             archive: reset_source.as_ref(),
+            lanes: *lanes,
             targets: targets.as_deref(),
             #[cfg(feature = "debug-checks")]
             allocs,
@@ -1647,6 +1661,9 @@ pub(crate) struct StepCtx<'a, E: Environment> {
     pub(crate) auto_reset: AutoReset,
     /// The attached archive source of resets (ADR-0075).
     pub(crate) archive: Option<&'a ArchiveSource<E>>,
+    /// The lane path's level; `None` steps every instance through
+    /// `Environment::step_with` (ADR-0071).
+    pub(crate) lanes: Option<Resolved>,
     /// The curriculum targets, one per instance slot, copied into a header
     /// at its reset (ADR-0081 item 5.3); `None` without targets. Read-only
     /// during a pass.
@@ -1753,15 +1770,7 @@ pub(crate) fn step_chunk_at<E: Environment, M: MaskProvider<E>>(
         run(ctx, chunk, first);
     }
     let StepCtx {
-        cfg,
-        authority,
-        layout,
-        policy,
-        limit,
-        auto_reset,
-        archive,
-        targets,
-        ..
+        cfg, limit, lanes, ..
     } = *ctx;
     let Rows {
         headers,
@@ -1773,72 +1782,228 @@ pub(crate) fn step_chunk_at<E: Environment, M: MaskProvider<E>>(
         penalized,
         outputs,
     } = chunk;
-    let (dh, ch) = (layout.discrete.len(), layout.continuous.len());
     // Every instance of the chunk is reset or stepped below, and each one's
     // rows are cleared before anything writes them; one fill per buffer for
     // the whole chunk replaces the per-instance fills (issue #152, G1). No
     // write to instance `i`'s rows happens between this clear and its turn.
     clear_chunk(outputs, headers.len());
+    if let (Some(level), Some(hook)) = (lanes, E::LANE_STEP) {
+        // Aligned groups of `LANES` of the row store (a lane step implies
+        // Array-of-Structs states, checked by `lane_level`); tails and
+        // ineligible groups take the scalar step (ADR-0071 decision 3).
+        let mut base = 0;
+        for (hs, ss) in headers.chunks_mut(LANES).zip(states.chunks_mut(LANES)) {
+            let group = <&mut [E::State; LANES]>::try_from(&mut *ss);
+            match group {
+                Ok(group) if lane_ready::<E>(hs) => {
+                    let mut actions = [0i32; LANES];
+                    if let Some(rows) = discrete.get(base..base + LANES) {
+                        actions.copy_from_slice(rows);
+                    }
+                    let mut out = LaneOut::default();
+                    hook(cfg, level, group, &actions, &mut out);
+                    for (l, (header, state)) in hs.iter_mut().zip(ss.iter_mut()).enumerate() {
+                        let i = base + l;
+                        let (reward, end) = (
+                            out.reward.get(l).copied().unwrap_or(0.0),
+                            out.end.get(l).copied().flatten(),
+                        );
+                        step_one::<E>(
+                            cfg,
+                            header,
+                            state,
+                            outputs,
+                            i,
+                            limit,
+                            &[],
+                            &[],
+                            |_, _, _, step_out| {
+                                step_out.set_reward(AgentSlot::FIRST, reward);
+                                if let Some(end) = end {
+                                    step_out.end_episode(end);
+                                }
+                            },
+                        );
+                        after_step::<E, M>(ctx, header, state, outputs, i);
+                    }
+                }
+                _ => {
+                    for (l, (header, state)) in hs.iter_mut().zip(ss.iter_mut()).enumerate() {
+                        scalar_one::<E, M>(
+                            ctx,
+                            header,
+                            state,
+                            discrete,
+                            continuous,
+                            penalties,
+                            penalized,
+                            outputs,
+                            base + l,
+                        );
+                    }
+                }
+            }
+            base += hs.len();
+        }
+        return;
+    }
     for (i, header) in headers.iter_mut().enumerate() {
         // In place for the row store; a gathered copy, scattered back,
         // for a lane-wise state (ADR-0090 decision 3).
         with_state::<E, _>(states, columns, i, |state| {
-            if header.engine().pending_reset.get() {
-                // NextStep: reset instead of stepping (validated above).
-                let target = targets.and_then(|t| t.get(outputs.base + i));
-                reset_one::<E>(cfg, authority, archive, target, header, state, None, None);
-                write_agent_masks(outputs, i, header);
-                outputs.transform.mode = StackMode::Fresh;
-                observe_cleared::<E, M>(cfg, authority, header, state, outputs, i);
-                return;
-            }
-            if M::ENABLED {
-                // Inside the panic catch: the author's noop may panic.
-                if layout.mask.flat && layout.mask.group_heads == 0 {
-                    replace_illegal_one::<E, M>(
-                        cfg, policy, header, state, outputs, layout, discrete, continuous,
-                        penalties, penalized, i,
-                    );
-                } else {
-                    replace_illegal_conditional::<E, M>(
-                        cfg, policy, header, state, outputs, layout, discrete, continuous,
-                        penalties, penalized, i,
-                    );
-                }
-            }
-            let rows = i * E::MAX_AGENTS;
-            let view = Actions::new(
-                discrete
-                    .get(rows * dh..(rows + E::MAX_AGENTS) * dh)
-                    .unwrap_or(&[]),
-                dh,
-                continuous
-                    .get(rows * ch..(rows + E::MAX_AGENTS) * ch)
-                    .unwrap_or(&[]),
-                ch,
+            scalar_one::<E, M>(
+                ctx, header, state, discrete, continuous, penalties, penalized, outputs, i,
             );
-            let agents = i * E::MAX_AGENTS..(i + 1) * E::MAX_AGENTS;
-            let penalty = penalties.get(agents.clone()).unwrap_or(&[]);
-            let marked = penalized.get(agents).unwrap_or(&[]);
-            step_one::<E>(
-                cfg, authority, header, state, &view, outputs, i, limit, penalty, marked,
-            );
-            outputs.transform.mode = StackMode::Push;
-            observe_cleared::<E, M>(cfg, authority, header, state, outputs, i);
-            if auto_reset == AutoReset::SameStep && header.engine().pending_reset.get() {
-                save_terminal(outputs, i);
-                // Flags and stats of the ended episode stay set.
-                let target = targets.and_then(|t| t.get(outputs.base + i));
-                reset_one::<E>(cfg, authority, archive, target, header, state, None, None);
-                write_agent_masks(outputs, i, header);
-                // The terminal row was stacked with the ended episode's frames;
-                // the reset refills them (ADR-0078 item 4.2).
-                outputs.transform.mode = StackMode::Fresh;
-                // The rows hold the terminal observation: zero them again.
-                observe_instance::<E, M>(cfg, authority, header, state, outputs, i);
-            }
         });
     }
+}
+
+/// Whether a full group may take the lane path: no instance pending reset
+/// and every agent alive (ADR-0071 decision 3; the shape conditions were
+/// checked at construction).
+fn lane_ready<E: Environment>(headers: &[E::Header]) -> bool {
+    headers
+        .iter()
+        .all(|h| !h.engine().pending_reset.get() && h.agents().iter().all(|row| row.alive.get()))
+}
+
+/// The lane path's level for a pool, or `None` when the environment has no
+/// lane step or a shape the lane path does not take (ADR-0071 decisions 3
+/// and 4). It also needs the Array-of-Structs store, since a lane-wise
+/// state (ADR-0090) keeps no rows to gather, and an environment that does
+/// not read its adaptive values, since a lane step receives none (ADR-0091
+/// decision 4). An unavailable forced level is an error even then.
+fn lane_level<E: Environment, M: MaskProvider<E>>(
+    options: &PoolOptions,
+    layout: &ActionLayout,
+) -> Result<Option<Resolved>, EngineError> {
+    let level = match options.simd_level {
+        Some(level) => Resolved::force(level)?,
+        None => Resolved::best(),
+    };
+    let eligible = E::LANE_STEP.is_some()
+        && !E::State::LANES
+        && !E::READS_ADAPTIVE
+        && E::MAX_AGENTS == 1
+        && E::TURNS == TurnStructure::Simultaneous
+        && !M::ENABLED
+        && layout.discrete.len() == 1
+        && layout.continuous.is_empty();
+    Ok(eligible.then_some(level))
+}
+
+/// Observes instance `i` after its step and runs the same-step auto-reset,
+/// shared by the scalar and the lane path.
+fn after_step<E: Environment, M: MaskProvider<E>>(
+    ctx: &StepCtx<'_, E>,
+    header: &mut E::Header,
+    state: &mut E::State,
+    outputs: &mut OutputsView<'_>,
+    i: usize,
+) {
+    let StepCtx {
+        cfg,
+        authority,
+        auto_reset,
+        archive,
+        targets,
+        ..
+    } = *ctx;
+    outputs.transform.mode = StackMode::Push;
+    observe_cleared::<E, M>(cfg, authority, header, state, outputs, i);
+    if auto_reset == AutoReset::SameStep && header.engine().pending_reset.get() {
+        save_terminal(outputs, i);
+        // Flags and stats of the ended episode stay set.
+        let target = targets.and_then(|t| t.get(outputs.base + i));
+        reset_one::<E>(cfg, authority, archive, target, header, state, None, None);
+        write_agent_masks(outputs, i, header);
+        // The terminal row was stacked with the ended episode's frames;
+        // the reset refills them (ADR-0078 item 4.2).
+        outputs.transform.mode = StackMode::Fresh;
+        // The rows hold the terminal observation: zero them again.
+        observe_instance::<E, M>(cfg, authority, header, state, outputs, i);
+    }
+}
+
+/// Resets or steps instance `i` through `Environment::step_with`.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "one instance's scalar step, split out of the loop"
+)]
+fn scalar_one<E: Environment, M: MaskProvider<E>>(
+    ctx: &StepCtx<'_, E>,
+    header: &mut E::Header,
+    state: &mut E::State,
+    discrete: &mut [i32],
+    continuous: &mut [f32],
+    penalties: &mut [f32],
+    penalized: &mut [Bool8],
+    outputs: &mut OutputsView<'_>,
+    i: usize,
+) {
+    let StepCtx {
+        cfg,
+        authority,
+        layout,
+        policy,
+        limit,
+        archive,
+        targets,
+        ..
+    } = *ctx;
+    let (dh, ch) = (layout.discrete.len(), layout.continuous.len());
+    if header.engine().pending_reset.get() {
+        // NextStep: reset instead of stepping (validated above).
+        let target = targets.and_then(|t| t.get(outputs.base + i));
+        reset_one::<E>(cfg, authority, archive, target, header, state, None, None);
+        write_agent_masks(outputs, i, header);
+        outputs.transform.mode = StackMode::Fresh;
+        observe_cleared::<E, M>(cfg, authority, header, state, outputs, i);
+        return;
+    }
+    if M::ENABLED {
+        // Inside the panic catch: the author's noop may panic.
+        if layout.mask.flat && layout.mask.group_heads == 0 {
+            replace_illegal_one::<E, M>(
+                cfg, policy, header, state, outputs, layout, discrete, continuous, penalties,
+                penalized, i,
+            );
+        } else {
+            replace_illegal_conditional::<E, M>(
+                cfg, policy, header, state, outputs, layout, discrete, continuous, penalties,
+                penalized, i,
+            );
+        }
+    }
+    let rows = i * E::MAX_AGENTS;
+    let view = Actions::new(
+        discrete
+            .get(rows * dh..(rows + E::MAX_AGENTS) * dh)
+            .unwrap_or(&[]),
+        dh,
+        continuous
+            .get(rows * ch..(rows + E::MAX_AGENTS) * ch)
+            .unwrap_or(&[]),
+        ch,
+    );
+    let agents = i * E::MAX_AGENTS..(i + 1) * E::MAX_AGENTS;
+    let penalty = penalties.get(agents.clone()).unwrap_or(&[]);
+    let marked = penalized.get(agents).unwrap_or(&[]);
+    step_one::<E>(
+        cfg,
+        header,
+        state,
+        outputs,
+        i,
+        limit,
+        penalty,
+        marked,
+        |state, adaptive, identity, out| {
+            let mut rng = StepRng::new(authority, identity, StreamId::DYNAMICS);
+            E::step_with(cfg, adaptive, state, &view, &mut rng, out);
+        },
+    );
+    after_step::<E, M>(ctx, header, state, outputs, i);
 }
 
 /// Resets every instance of `chunk`; `first` is the position of the
@@ -2414,15 +2579,14 @@ fn update_acting<E: Environment>(cfg: &E::Config, header: &mut E::Header, state:
 )]
 fn step_one<E: Environment>(
     cfg: &E::Config,
-    authority: &RngAuthority,
     header: &mut E::Header,
     state: &mut E::State,
-    actions: &Actions<'_, E::Action>,
     outputs: &mut OutputsView<'_>,
     i: usize,
     limit: Option<u32>,
     penalties: &[f32],
     penalized: &[Bool8],
+    kernel: impl FnOnce(&mut E::State, &tessera_rl_core::Adaptive<E>, &RngIdentity, &mut StepOut<'_>),
 ) {
     let a = E::MAX_AGENTS;
     let range = i * a..(i + 1) * a;
@@ -2449,9 +2613,10 @@ fn step_one<E: Environment>(
             return;
         };
         let mut out = StepOut::new(reward_row, term_row, trunc_row, died_row, spawned_row);
-        let mut rng = StepRng::new(authority, &identity, StreamId::DYNAMICS);
         let adaptive = *header.adaptive_mut();
-        E::step_with(cfg, &adaptive, state, actions, &mut rng, &mut out);
+        // The scalar step, or the copy of a lane group's result for this
+        // instance (ADR-0071); `identity` is the step's RNG identity.
+        kernel(state, &adaptive, &identity, &mut out);
         (out.episode_end(), out.agent_events())
     };
     let (end, events) = end;

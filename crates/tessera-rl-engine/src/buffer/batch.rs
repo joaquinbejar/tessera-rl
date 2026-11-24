@@ -454,7 +454,9 @@ unsafe fn run_drain<E: Environment, M: MaskProvider<E>>(data: *const (), worker:
         return;
     }
     // One fault cell per instance: ids of different sends share a claim.
-    let ctx = mode.pool.step_ctx(&mode.faults);
+    let mut ctx = mode.pool.step_ctx(&mode.faults);
+    // Async steps arbitrary runs of ids: always the scalar step (ADR-0071).
+    ctx.lanes = None;
     #[cfg(test)]
     job_panic(mode, worker);
     let mut run = [0u32; CLAIM_RUN];
