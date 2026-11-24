@@ -93,6 +93,8 @@ varargs!(SnapshotM, api::snapshot);
 varargs!(IllegalActionsM, api::illegal_actions);
 varargs!(StateHashM, api::state_hash);
 varargs!(RenderM, api::render);
+noargs!(EpochBarrierM, api::epoch_barrier);
+varargs!(FreezeNormalizationM, api::freeze_normalization);
 varargs!(SceneM, api::scene);
 noargs!(CanvasM, api::canvas);
 varargs!(ImportRecordM, api::import_record);
@@ -151,6 +153,14 @@ static METHODS: MethodTable<EnvBody> = MethodTable::new(&[
     MethodRow::varargs::<RenderM>(
         c"render",
         c"render($self, ids, /)\n--\n\nrender(ids) -> (RGB8 frames as bytes, per-id overflow flags), drawn from snapshots (ADR-0083).",
+    ),
+    MethodRow::noargs::<EpochBarrierM>(
+        c"epoch_barrier",
+        c"epoch_barrier($self, /)\n--\n\nMerges the normalization accumulators into the statistics, in chunk order (ADR-0078); sync mode.",
+    ),
+    MethodRow::varargs::<FreezeNormalizationM>(
+        c"freeze_normalization",
+        c"freeze_normalization($self, frozen, /)\n--\n\nStops (True) or restarts (False) normalization accumulation (ADR-0078); sync mode.",
     ),
     MethodRow::varargs::<SceneM>(
         c"scene",

@@ -296,7 +296,13 @@ pub fn error(g: Gil, kind: Kind, message: String) -> Raised {
 #[must_use]
 pub fn engine_kind(e: &EngineError) -> Kind {
     match e {
+        // ADR-0078: a frame-stack slice of the wrong length is an argument;
+        // any other refused transform list is a configuration error.
+        EngineError::Transform(tessera_rl_engine::TransformError::StateLength { .. }) => {
+            Kind::Argument
+        }
         EngineError::Config(_)
+        | EngineError::Transform(_)
         | EngineError::SnapshotBound { .. }
         | EngineError::Space(_)
         | EngineError::UnsupportedSpace { .. }

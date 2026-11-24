@@ -462,6 +462,18 @@ class Env:
         ids = range(self.num_envs) if ids is None else ids
         return _render.frames(self._native, [_index(i, "ids") for i in ids])
 
+    def epoch_barrier(self) -> None:
+        """Merges the normalization accumulators of a ``Normalize``
+        transform into the pool statistics, in chunk order; later
+        observations use them (ADR-0078). Sync mode; a no-op without a
+        ``Normalize``."""
+        self._native.epoch_barrier()
+
+    def freeze_normalization(self, frozen: bool = True) -> None:
+        """Stops (``True``) or restarts (``False``) the accumulation of
+        normalization statistics (ADR-0078), as for evaluation. Sync mode."""
+        self._native.freeze_normalization(bool(frozen))
+
     def scene(self, index: int) -> list[tuple]:
         """Instance ``index``'s vector scene (ADR-0083): a list of
         primitives, coordinates in pixels; see ``tessera_rl._render.scene``."""
@@ -682,6 +694,10 @@ def native_kwargs(**kwargs) -> dict:
                 out[key] = bytes(value)
             else:
                 raise TypeError(f"{key} must be a bundled asset name (str) or bytes, got {type(value).__name__}")
+        elif key == "transforms":
+            from tessera_rl import transforms as _transforms
+
+            out[key] = _transforms.native_spec(value)
         elif key in _BOOL_OPTIONS:
             if not isinstance(value, (bool, np.bool_)):
                 raise TypeError(f"{key} must be a bool, got {type(value).__name__}")
@@ -778,6 +794,12 @@ def make(env_id: str, num_envs: int = 1, seed: int = 0, outputs: str = "borrowed
     of the longest game. Go 9x9 takes ``komi_half_points`` (default 15, that
     is 7.5); its ``max_episode_steps`` defaults to 200, above the cap of 162
     plies.
+
+    ``transforms`` takes a list of ``tessera_rl.transforms`` objects
+    (``FrameStack``, ``OneHot``, ``Normalize``), applied in the engine after
+    ``observe`` (ADR-0078); ``layout()`` and the adapter spaces describe the
+    transformed observation. Host environments refuse it with
+    ``CapabilityError``.
 
     Any other id is looked up among the host environments of installed
     third-party wheels (the ``tessera_rl.envs`` entry points, read once per

@@ -125,7 +125,9 @@ fn test_transforms_frame_stack_exports_k_frames_oldest_first() {
 fn test_transforms_one_hot_rows_and_out_of_range_values() {
     let p = reset(built(1, 1, Transforms::new().one_hot(leaf(), 4)));
     let space = p.observation_space().unwrap();
-    assert!(matches!(leaf_space(&space), Space::MultiBinary { shape } if *shape == [2, 4]));
+    assert!(
+        matches!(leaf_space(&space), Space::Box { shape, dtype: DType::Bool, .. } if *shape == [2, 4])
+    );
     let out = p.outputs().unwrap();
     let row = &out.observation(0).unwrap()[..8];
     let v = Pool::with_masks(cfg(), options(1, 1)).map(reset).unwrap();
