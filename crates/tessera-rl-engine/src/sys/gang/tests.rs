@@ -687,13 +687,13 @@ fn test_gang_adaptive_shutdown_joins_spinning_workers() {
 }
 
 /// Whether the one worker is parked `probe` after a job, once the gang
-/// has seen `gap`-long waits between jobs.
+/// has seen `gap`-long waits between jobs, and how long the probe took.
 #[cfg(all(not(loom), not(miri)))]
-fn parked_mid_gap(
+fn trial(
     adaptive_cap_ns: Option<u64>,
     gap: std::time::Duration,
     probe: std::time::Duration,
-) -> bool {
+) -> (bool, std::time::Duration) {
     let mut opts = options(1);
     opts.spin = 0;
     opts.adaptive_cap_ns = adaptive_cap_ns;
@@ -704,9 +704,55 @@ fn parked_mid_gap(
         std::thread::sleep(gap);
     }
     assert!(!gang.run(&f).unwrap());
+    // The probe's real length: longer than `probe` when the main thread
+    // is descheduled.
+    let start = std::time::Instant::now();
     std::thread::sleep(probe);
-    gang.shared.parked.load(Ordering::SeqCst) > 0
+    let parked = gang.shared.parked.load(Ordering::SeqCst) > 0;
+    (parked, start.elapsed())
 }
+
+/// Fresh trials until one parks within the probe, at most `trials`. A
+/// trial can miss only through preemption: the main thread descheduled
+/// while it teaches the gap, which inflates the learned EWMA, or the worker
+/// descheduled through the probe, so it never reaches its park. Neither
+/// makes a worker park early, so retrying keeps the check's strength: an
+/// implementation that keeps spinning past the probe fails every trial
+/// (#471).
+#[cfg(all(not(loom), not(miri)))]
+fn parks_in_some_trial(
+    adaptive_cap_ns: Option<u64>,
+    gap: std::time::Duration,
+    probe: std::time::Duration,
+    trials: usize,
+) -> bool {
+    (0..trials).any(|_| trial(adaptive_cap_ns, gap, probe).0)
+}
+
+/// Whether the worker is still spinning after the probe, in the first of
+/// `trials` fresh trials whose probe lasted less than `gap`; `false` if no
+/// probe was that short, so a loaded host cannot pass the check vacuously
+/// (#471). A longer probe can outlast the learned budget, and the worker
+/// then parks by design.
+#[cfg(all(not(loom), not(miri)))]
+fn spins_through_some_probe(
+    adaptive_cap_ns: Option<u64>,
+    gap: std::time::Duration,
+    probe: std::time::Duration,
+    trials: usize,
+) -> bool {
+    for _ in 0..trials {
+        let (parked, took) = trial(adaptive_cap_ns, gap, probe);
+        if took < gap {
+            return !parked;
+        }
+    }
+    false
+}
+
+/// Trials for each expectation of the adaptive-wait test (#471).
+#[cfg(all(not(loom), not(miri)))]
+const PARK_TRIALS: usize = 8;
 
 #[cfg(all(not(loom), not(miri)))]
 #[test]
@@ -714,17 +760,19 @@ fn test_gang_adaptive_worker_spins_through_a_learned_gap() {
     let gap = std::time::Duration::from_millis(2);
     let probe = std::time::Duration::from_millis(1);
     // Fixed, no spins: parked at once.
-    assert!(parked_mid_gap(None, gap, probe));
-    // Adaptive, cap 50 ms: the learned budget (about 2 x 2 ms) covers the probe.
-    assert!(!parked_mid_gap(Some(50_000_000), gap, probe));
+    assert!(parks_in_some_trial(None, gap, probe, PARK_TRIALS));
+    // Adaptive, cap 50 ms: the learned budget (about 2 x 2 ms) covers the
+    // probe.
+    assert!(spins_through_some_probe(Some(50_000_000), gap, probe, PARK_TRIALS));
     // Adaptive, cap 0.2 ms: the cap ends the spinning before the probe.
-    assert!(parked_mid_gap(Some(200_000), gap, probe));
+    assert!(parks_in_some_trial(Some(200_000), gap, probe, PARK_TRIALS));
     // Adaptive, cap 50 ms, but back-to-back jobs taught a tiny EWMA: the
     // budget (2 x EWMA) ends the spinning long before the probe.
-    assert!(parked_mid_gap(
+    assert!(parks_in_some_trial(
         Some(50_000_000),
         std::time::Duration::ZERO,
-        probe
+        probe,
+        PARK_TRIALS
     ));
 }
 
