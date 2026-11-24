@@ -7,9 +7,9 @@
 use core::num::{NonZeroU32, NonZeroUsize};
 
 use tessera_rl_classic::{
-    Acrobot, AcrobotConfig, BrickWall, BrickWallConfig, CartPole, CartPoleConfig, Grid, GridConfig,
-    KeyDoor, KeyDoorConfig, MountainCar, MountainCarConfig, PaddleDuel, PaddleDuelConfig, Pendulum,
-    PendulumConfig, Snake, SnakeConfig, Tag, TagConfig,
+    Acrobot, AcrobotConfig, BrickWall, BrickWallConfig, CartPole, CartPoleConfig, Gather,
+    GatherConfig, Grid, GridConfig, KeyDoor, KeyDoorConfig, MountainCar, MountainCarConfig,
+    PaddleDuel, PaddleDuelConfig, Pendulum, PendulumConfig, Snake, SnakeConfig, Tag, TagConfig,
 };
 use tessera_rl_core::encoding::decode_from_slice;
 use tessera_rl_core::space::{BoxBounds, DType, Space};
@@ -100,6 +100,10 @@ pub(crate) struct Leaf {
     pub(crate) high: Vec<f64>,
 }
 
+/// One observation `Set` (ADR-0082): its path, capacity and leaves (item
+/// leaves, then the mask leaf).
+pub(crate) type SetLayout = (String, u32, Vec<usize>);
+
 /// How a reset chooses seeds.
 #[derive(Debug, Clone)]
 pub(crate) enum ResetSeed {
@@ -130,6 +134,10 @@ pub(crate) struct Layout {
     /// bound on which slots can ever act (`agents` is the capacity).
     pub(crate) initial_agents: usize,
     pub(crate) leaves: Vec<Leaf>,
+    /// The observation's sets (ADR-0082): `(path, max, leaf indices)`, the
+    /// indices of the set's item leaves then of its mask leaf, in leaf
+    /// order.
+    pub(crate) sets: Vec<SetLayout>,
     /// Choices of the one discrete head; 0 for a continuous or a
     /// multi-head environment.
     pub(crate) action_choices: u32,
@@ -329,7 +337,12 @@ fn float_bounds(bounds: &BoxBounds) -> (Vec<f64>, Vec<f64>) {
     }
 }
 
-fn leaves(space: &Space, name: &str, out: &mut Vec<Leaf>) -> Result<(), BindError> {
+fn leaves(
+    space: &Space,
+    name: &str,
+    out: &mut Vec<Leaf>,
+    sets: &mut Vec<SetLayout>,
+) -> Result<(), BindError> {
     match space {
         Space::Box {
             shape,
@@ -347,15 +360,62 @@ fn leaves(space: &Space, name: &str, out: &mut Vec<Leaf>) -> Result<(), BindErro
         }
         Space::Dict(entries) => {
             for (key, inner) in entries {
-                leaves(inner, key, out)?;
+                leaves(inner, key, out, sets)?;
             }
         }
+        Space::Set { inner, max } => set_leaves(inner, *max, name, out, sets)?,
         _ => {
             return Err(BindError::Argument(
-                "observation spaces other than boxes are not exposed yet".to_owned(),
+                "observation spaces other than boxes, dicts and sets are not exposed yet"
+                    .to_owned(),
             ));
         }
     }
+    Ok(())
+}
+
+/// A set `name` (ADR-0082 point 2): its item leaves at `name` or
+/// `name/<key>`, shape `[max, ...]` with the bounds broadcast, then
+/// `name_mask`, `bool` `[max]`, bounds 0..1.
+fn set_leaves(
+    inner: &Space,
+    max: u32,
+    name: &str,
+    out: &mut Vec<Leaf>,
+    sets: &mut Vec<SetLayout>,
+) -> Result<(), BindError> {
+    let mut items = Vec::new();
+    let mut nested = Vec::new();
+    leaves(inner, "", &mut items, &mut nested)?;
+    if !nested.is_empty() {
+        return Err(BindError::Argument("a set inside a set".to_owned()));
+    }
+    let copies = usize::try_from(max).unwrap_or(usize::MAX);
+    let broadcast = |v: Vec<f64>| if v.len() == 1 { v } else { v.repeat(copies) };
+    let first = out.len();
+    for item in items {
+        let mut shape = vec![max];
+        shape.extend(item.shape);
+        out.push(Leaf {
+            name: if item.name.is_empty() {
+                name.to_owned()
+            } else {
+                format!("{name}/{}", item.name)
+            },
+            dtype: item.dtype,
+            shape,
+            low: broadcast(item.low),
+            high: broadcast(item.high),
+        });
+    }
+    out.push(Leaf {
+        name: format!("{name}_mask"),
+        dtype: "bool",
+        shape: vec![max],
+        low: vec![0.0],
+        high: vec![1.0],
+    });
+    sets.push((name.to_owned(), max, (first..out.len()).collect()));
     Ok(())
 }
 
@@ -372,10 +432,12 @@ where
         storage: std::sync::Arc<tessera_rl_engine::OutputStorage>,
     ) -> Result<Self, BindError> {
         let mut obs = Vec::new();
+        let mut sets = Vec::new();
         leaves(
             &E::observation_space(cfg).map_err(EngineError::from)?,
             "",
             &mut obs,
+            &mut sets,
         )?;
         let (action_choices, action_bounds, action_nvec) = action_head(
             &E::action_space(cfg).map_err(EngineError::from)?,
@@ -413,6 +475,7 @@ where
             agents: E::MAX_AGENTS,
             initial_agents: E::initial_agents(cfg),
             leaves: obs,
+            sets,
             action_choices,
             action_nvec,
             action_bounds,
@@ -1150,6 +1213,26 @@ pub(crate) fn keydoor(
     let same_step = options.auto_reset == AutoReset::SameStep;
     let pool = EnvPool::<KeyDoor, Masked>::with_masks(cfg.clone(), options)?;
     finish_rendered(&cfg, pool, args, n, same_step)
+}
+
+/// A Gather pool (`tessera/Gather-v1`, ADR-0082). A value too large for the
+/// config's type becomes the largest one, which its range rejects.
+pub(crate) fn gather(
+    args: &PoolArgs,
+    size: Option<u32>,
+    items: Option<u32>,
+    max_steps: Option<u32>,
+) -> Result<Box<dyn PoolOps>, BindError> {
+    let d = GatherConfig::default();
+    let cfg = GatherConfig {
+        size: size.map_or(d.size, |x| u16::try_from(x).unwrap_or(u16::MAX)),
+        items: items.map_or(d.items, |x| u8::try_from(x).unwrap_or(u8::MAX)),
+        max_steps: max_steps.map_or(d.max_steps, |x| u16::try_from(x).unwrap_or(u16::MAX)),
+    };
+    let (options, n) = options(args)?;
+    let same_step = options.auto_reset == AutoReset::SameStep;
+    let pool = EnvPool::<Gather, NoMasks>::new(cfg.clone(), options)?;
+    finish(&cfg, pool, args, n, same_step)
 }
 
 /// The paddle duel config fields, by name, as Python passes them.

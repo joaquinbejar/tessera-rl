@@ -34,6 +34,7 @@ pub mod io;
 pub mod leaf;
 pub mod refusals;
 pub mod render;
+pub mod set_leaf;
 pub mod space;
 pub mod step_out;
 
@@ -64,6 +65,7 @@ pub use leaf::{LeafDType, LeafId, ObsLeaf, Observation};
 pub use pool::Pool;
 pub use refusals::{Refusals, RefuseCode};
 pub use reserved::Reserved;
+pub use set_leaf::{ObsSet, SetId, SetLeaf};
 pub use state_enum::StateEnum;
 pub use state_init::StateInit;
 pub use step_out::{EpisodeEnd, StepOut};

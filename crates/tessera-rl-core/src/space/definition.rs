@@ -142,6 +142,20 @@ impl Space {
         Ok(())
     }
 
+    /// Whether a `Set` appears anywhere in the space (ADR-0082).
+    #[must_use]
+    pub fn contains_set(&self) -> bool {
+        match self {
+            Self::Set { .. } => true,
+            Self::Dict(entries) => entries.iter().any(|(_, s)| s.contains_set()),
+            Self::Tuple(items) => items.iter().any(Self::contains_set),
+            Self::Discrete { .. }
+            | Self::MultiDiscrete { .. }
+            | Self::MultiBinary { .. }
+            | Self::Box { .. } => false,
+        }
+    }
+
     fn enter(depth: usize) -> Result<usize, SpaceError> {
         let child = depth.saturating_add(1);
         if child > MAX_DEPTH {
@@ -189,6 +203,20 @@ mod tests {
 
     fn bad_bounds(s: &Space) -> bool {
         matches!(s.validate(), Err(SpaceError::InvalidBounds { .. }))
+    }
+
+    #[test]
+    fn test_space_contains_set_finds_nested_sets_only() {
+        let set = Space::Set {
+            inner: Box::new(leaf()),
+            max: 2,
+        };
+        assert!(set.contains_set());
+        assert!(
+            Space::Dict(vec![("a".to_owned(), Space::Tuple(vec![leaf(), set]))]).contains_set()
+        );
+        assert!(!Space::Dict(vec![("a".to_owned(), Space::Tuple(vec![leaf()]))]).contains_set());
+        assert!(!leaf().contains_set());
     }
 
     #[test]

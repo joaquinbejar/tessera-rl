@@ -4,7 +4,12 @@
 //!
 //! Each field is an `ObsLeaf<T>` with one `#[space(...)]` attribute:
 //! `box(low = .., high = .., shape = .., dtype = ..)`, `discrete(n = ..)` or
-//! `multi_binary(shape = ..)`. Values are expressions or closures over the
+//! `multi_binary(shape = ..)`; or an `ObsSet<T>` with
+//! `set(max = .., inner(<one of those>))`, which exports the item leaf and
+//! the field's `_mask` leaf and generates a `SetId<T>` (ADR-0082). The
+//! derive takes a single inner leaf; a `Dict` inner is supported by the
+//! engine and the adapters but has no derive syntax yet (#429). Values are
+//! expressions or closures over the
 //! config (`|c: &Config| ...`), resolved at construction. The derive
 //! generates `Observation<Config>` (a `Dict` in declaration order) and one
 //! `LeafId<T>` constant per field, named after the field in upper case.
@@ -15,7 +20,7 @@ use syn::meta::ParseNestedMeta;
 use syn::{DeriveInput, Expr, Ident, Pat, Type};
 
 use crate::paths::core_path;
-use crate::types::{named_fields, obs_leaf_inner};
+use crate::types::{named_fields, obs_leaf_inner, obs_set_inner};
 
 struct BoxLeaf {
     low: Expr,
@@ -55,58 +60,102 @@ fn take(params: &mut Vec<(String, Expr)>, key: &str, span: &Ident) -> syn::Resul
     }
 }
 
-fn parse_leaf(field: &syn::Field, ident: &Ident) -> syn::Result<Leaf> {
-    let mut leaf = None;
+/// One leaf kind: `box(..)`, `discrete(..)` or `multi_binary(..)`.
+fn parse_kind(meta: &ParseNestedMeta<'_>, ident: &Ident) -> syn::Result<Leaf> {
+    let kind = meta.path.get_ident().map(ToString::to_string);
+    Ok(match kind.as_deref() {
+        Some("box") => {
+            let mut p = parse_params(meta, &["low", "high", "shape", "dtype"])?;
+            let dtype = match p.iter().position(|(k, _)| k == "dtype") {
+                Some(i) => match p.swap_remove(i).1 {
+                    Expr::Path(path) => path.path.get_ident().cloned(),
+                    other => {
+                        return Err(syn::Error::new_spanned(other, "expected a dtype name"));
+                    }
+                },
+                None => None,
+            };
+            Leaf::Box(Box::new(BoxLeaf {
+                low: take(&mut p, "low", ident)?,
+                high: take(&mut p, "high", ident)?,
+                shape: take(&mut p, "shape", ident)?,
+                dtype,
+            }))
+        }
+        Some("discrete") => {
+            let mut p = parse_params(meta, &["n"])?;
+            Leaf::Discrete {
+                n: take(&mut p, "n", ident)?,
+            }
+        }
+        Some("multi_binary") => {
+            let mut p = parse_params(meta, &["shape"])?;
+            Leaf::MultiBinary {
+                shape: take(&mut p, "shape", ident)?,
+            }
+        }
+        _ => {
+            return Err(meta.error("expected `box(..)`, `discrete(..)` or `multi_binary(..)`"));
+        }
+    })
+}
+
+/// `set(max = EXPR, inner(<leaf kind>))` (ADR-0082): the capacity and the
+/// one inner leaf.
+fn parse_set(meta: &ParseNestedMeta<'_>, ident: &Ident) -> syn::Result<(Expr, Leaf)> {
+    let mut max = None;
+    let mut inner = None;
+    meta.parse_nested_meta(|param| {
+        if param.path.is_ident("max") {
+            if max.replace(param.value()?.parse::<Expr>()?).is_some() {
+                return Err(param.error("duplicate `max`"));
+            }
+        } else if param.path.is_ident("inner") {
+            param.parse_nested_meta(|kind| {
+                if inner.replace(parse_kind(&kind, ident)?).is_some() {
+                    return Err(kind.error("one inner leaf per set"));
+                }
+                Ok(())
+            })?;
+        } else {
+            return Err(param.error("expected `max` or `inner(..)`"));
+        }
+        Ok(())
+    })?;
+    let max = max.ok_or_else(|| syn::Error::new_spanned(ident, "missing `max`"))?;
+    let inner = inner.ok_or_else(|| syn::Error::new_spanned(ident, "missing `inner(..)`"))?;
+    Ok((max, inner))
+}
+
+/// A field's space: one leaf, or a set of one inner leaf with its `max`.
+struct FieldSpace {
+    leaf: Leaf,
+    set_max: Option<Expr>,
+}
+
+fn parse_leaf(field: &syn::Field, ident: &Ident) -> syn::Result<FieldSpace> {
+    let mut parsed_space = None;
     for attr in field.attrs.iter().filter(|a| a.path().is_ident("space")) {
         attr.parse_nested_meta(|meta| {
-            let kind = meta.path.get_ident().map(ToString::to_string);
-            let parsed = match kind.as_deref() {
-                Some("box") => {
-                    let mut p = parse_params(&meta, &["low", "high", "shape", "dtype"])?;
-                    let dtype = match p.iter().position(|(k, _)| k == "dtype") {
-                        Some(i) => match p.swap_remove(i).1 {
-                            Expr::Path(path) => path.path.get_ident().cloned(),
-                            other => {
-                                return Err(syn::Error::new_spanned(
-                                    other,
-                                    "expected a dtype name",
-                                ));
-                            }
-                        },
-                        None => None,
-                    };
-                    Leaf::Box(Box::new(BoxLeaf {
-                        low: take(&mut p, "low", ident)?,
-                        high: take(&mut p, "high", ident)?,
-                        shape: take(&mut p, "shape", ident)?,
-                        dtype,
-                    }))
+            let parsed = if meta.path.is_ident("set") {
+                let (max, leaf) = parse_set(&meta, ident)?;
+                FieldSpace {
+                    leaf,
+                    set_max: Some(max),
                 }
-                Some("discrete") => {
-                    let mut p = parse_params(&meta, &["n"])?;
-                    Leaf::Discrete {
-                        n: take(&mut p, "n", ident)?,
-                    }
-                }
-                Some("multi_binary") => {
-                    let mut p = parse_params(&meta, &["shape"])?;
-                    Leaf::MultiBinary {
-                        shape: take(&mut p, "shape", ident)?,
-                    }
-                }
-                _ => {
-                    return Err(
-                        meta.error("expected `box(..)`, `discrete(..)` or `multi_binary(..)`")
-                    );
+            } else {
+                FieldSpace {
+                    leaf: parse_kind(&meta, ident)?,
+                    set_max: None,
                 }
             };
-            if leaf.replace(parsed).is_some() {
+            if parsed_space.replace(parsed).is_some() {
                 return Err(meta.error("one space per leaf"));
             }
             Ok(())
         })?;
     }
-    leaf.ok_or_else(|| syn::Error::new_spanned(ident, "missing #[space(...)] attribute"))
+    parsed_space.ok_or_else(|| syn::Error::new_spanned(ident, "missing #[space(...)] attribute"))
 }
 
 /// The config type named by a closure's typed parameter `|c: &Config|`.
@@ -217,6 +266,65 @@ fn leaf_space(
     })
 }
 
+/// Records the config type of a closure `expr`; an error if an earlier
+/// closure took another one.
+fn same_config(expr: &Expr, config: &mut Option<Type>) -> syn::Result<()> {
+    if let Some(ty) = closure_config(expr)? {
+        match config {
+            Some(seen) if quote!(#seen).to_string() != quote!(#ty).to_string() => {
+                return Err(syn::Error::new_spanned(
+                    ty,
+                    "all closures must take the same config type",
+                ));
+            }
+            _ => *config = Some(ty),
+        }
+    }
+    Ok(())
+}
+
+/// A field's id constant, its `Dict` entry and its leaf count: one leaf, or
+/// for a set the item leaf and its mask (ADR-0082).
+fn field_tokens(
+    core: &TokenStream,
+    ident: &Ident,
+    elem: &Type,
+    space: &TokenStream,
+    set_max: Option<&Expr>,
+    index: usize,
+) -> (TokenStream, TokenStream, usize) {
+    let id = format_ident!("{}", ident.to_string().to_uppercase());
+    let key = ident.to_string();
+    let Some(max) = set_max else {
+        return (
+            quote! {
+                /// Leaf id generated by `#[derive(Observation)]`.
+                pub const #id: #core::LeafId<#elem> = #core::LeafId::new(#index);
+            },
+            quote!((::std::string::String::from(#key), #space)),
+            1,
+        );
+    };
+    let mask = index + 1;
+    let max = eval(max);
+    (
+        quote! {
+            /// Set id generated by `#[derive(Observation)]`.
+            pub const #id: #core::SetId<#elem> = #core::SetId::new(#index, #mask);
+        },
+        quote!((
+            ::std::string::String::from(#key),
+            #core::space::Space::Set {
+                inner: ::std::boxed::Box::new(#space),
+                max: u32::try_from(#max).map_err(|_| #core::SpaceError::InvalidShape {
+                    shape: ::std::vec::Vec::new(),
+                })?,
+            },
+        )),
+        2,
+    )
+}
+
 pub(crate) fn derive(input: &DeriveInput) -> syn::Result<TokenStream> {
     let core = core_path(&input.attrs)?;
     let name = &input.ident;
@@ -231,44 +339,54 @@ pub(crate) fn derive(input: &DeriveInput) -> syn::Result<TokenStream> {
     let mut ids = Vec::new();
     let mut spaces = Vec::new();
     let mut dtype_checks = Vec::new();
-    for (index, field) in fields.iter().enumerate() {
+    // Exported names (ADR-0082 point 2): a set `p` also exports `p_mask`,
+    // which no other field may be named.
+    let set_masks: Vec<String> = fields
+        .iter()
+        .filter(|f| obs_set_inner(&f.ty).is_some())
+        .filter_map(|f| f.ident.as_ref().map(|i| format!("{i}_mask")))
+        .collect();
+    let mut index = 0usize;
+    for field in fields {
         let Some(ident) = &field.ident else { continue };
-        let Some(elem) = obs_leaf_inner(&field.ty) else {
+        if set_masks.iter().any(|m| ident == m) {
+            return Err(syn::Error::new_spanned(
+                ident,
+                format!(
+                    "duplicate observation leaf name `{ident}`: a set exports its mask under this name (ADR-0082)"
+                ),
+            ));
+        }
+        let set_elem = obs_set_inner(&field.ty);
+        let Some(elem) = obs_leaf_inner(&field.ty).or(set_elem) else {
             return Err(syn::Error::new_spanned(
                 &field.ty,
-                "Observation fields must have type ObsLeaf<T>",
+                "Observation fields must have type ObsLeaf<T> or ObsSet<T>",
             ));
         };
-        let leaf = parse_leaf(field, ident)?;
-        let exprs: Vec<&Expr> = match &leaf {
+        let FieldSpace { leaf, set_max } = parse_leaf(field, ident)?;
+        if set_elem.is_some() != set_max.is_some() {
+            return Err(syn::Error::new_spanned(
+                &field.ty,
+                "ObsSet<T> fields take `#[space(set(..))]`, and only they do",
+            ));
+        }
+        let mut exprs: Vec<&Expr> = match &leaf {
             Leaf::Box(b) => vec![&b.low, &b.high, &b.shape],
             Leaf::Discrete { n } => vec![n],
             Leaf::MultiBinary { shape } => vec![shape],
         };
+        exprs.extend(set_max.as_ref());
         for expr in exprs {
-            if let Some(ty) = closure_config(expr)? {
-                match &config {
-                    Some(seen) if quote!(#seen).to_string() != quote!(#ty).to_string() => {
-                        return Err(syn::Error::new_spanned(
-                            ty,
-                            "all closures must take the same config type",
-                        ));
-                    }
-                    _ => config = Some(ty),
-                }
-            }
+            same_config(expr, &mut config)?;
         }
-
-        let id = format_ident!("{}", ident.to_string().to_uppercase());
-        ids.push(quote! {
-            /// Leaf id generated by `#[derive(Observation)]`.
-            pub const #id: #core::LeafId<#elem> = #core::LeafId::new(#index);
-        });
-        let key = ident.to_string();
         let space = leaf_space(&core, ident, elem, &leaf, &mut dtype_checks)?;
-        spaces.push(quote!((::std::string::String::from(#key), #space)));
+        let (id, entry, count) = field_tokens(&core, ident, elem, &space, set_max.as_ref(), index);
+        ids.push(id);
+        spaces.push(entry);
+        index += count;
     }
-    let leaves = spaces.len();
+    let leaves = index;
     let field_idents = fields.iter().filter_map(|f| f.ident.as_ref());
     let (impl_generics, config_ty) = match &config {
         Some(ty) => (quote!(), quote!(#ty)),

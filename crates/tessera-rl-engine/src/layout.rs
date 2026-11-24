@@ -192,19 +192,129 @@ pub(crate) struct Leaf {
     pub(crate) bytes: usize,
 }
 
-/// Observation leaves in declaration order.
-pub(crate) fn obs_leaves(space: &Space) -> Result<Vec<Leaf>, EngineError> {
-    let mut leaves = Vec::new();
-    add_leaves(space, &mut leaves)?;
-    if leaves.len() > MAX_LEAVES {
+/// Most `Set`s an observation can hold: each exports at least two leaves.
+pub(crate) const MAX_SETS: usize = MAX_LEAVES / 2;
+
+/// One `Set`'s leaves (ADR-0082): item leaves `first..mask`, then the mask.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct SetSpan {
+    /// First item leaf.
+    pub(crate) first: usize,
+    /// The mask leaf, right after the last item leaf.
+    pub(crate) mask: usize,
+    /// Capacity `MAX`.
+    pub(crate) max: usize,
+}
+
+/// The `Set`s of an observation, in leaf order: a fixed array, so the
+/// observation pass reads it without allocating.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct SetSpans {
+    spans: [SetSpan; MAX_SETS],
+    len: usize,
+    /// Bytes of one slot's row, per leaf index: nonzero only for item
+    /// leaves, computed at pool build so the observation pass needs no
+    /// division.
+    rows: [usize; MAX_LEAVES],
+}
+
+impl SetSpans {
+    /// The sets, in leaf order.
+    #[inline]
+    pub(crate) fn as_slice(&self) -> &[SetSpan] {
+        self.spans.get(..self.len).unwrap_or(&[])
+    }
+
+    /// Test helper: sets and `(leaf, row bytes)` pairs.
+    #[cfg(test)]
+    pub(crate) fn from_parts(spans: &[SetSpan], rows: &[(usize, usize)]) -> Self {
+        let mut out = Self::default();
+        for &span in spans {
+            let _ = out.push(span);
+        }
+        for &(leaf, row) in rows {
+            if let Some(slot) = out.rows.get_mut(leaf) {
+                *slot = row;
+            }
+        }
+        out
+    }
+
+    /// Row bytes per leaf index (zero for leaves outside any set).
+    #[inline]
+    pub(crate) fn rows(&self) -> &[usize; MAX_LEAVES] {
+        &self.rows
+    }
+
+    fn push(&mut self, span: SetSpan) -> Result<(), EngineError> {
+        let slot = self
+            .spans
+            .get_mut(self.len)
+            .ok_or(EngineError::UnsupportedSpace {
+                what: "more than 16 observation leaves",
+            })?;
+        *slot = span;
+        self.len += 1;
+        Ok(())
+    }
+}
+
+/// The observation leaves of a space, their exported names and its sets.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ObsLayout {
+    pub(crate) leaves: Vec<Leaf>,
+    /// Exported names, unique (ADR-0082 point 2): `Dict` keys and `Tuple`
+    /// positions joined by `.`, empty for a space that is a single leaf; a
+    /// set `p` exports `p` (single-leaf items) or `p/<inner path>`, then
+    /// `p_mask`.
+    pub(crate) names: Vec<String>,
+    pub(crate) sets: SetSpans,
+}
+
+/// Observation leaves in declaration order, with their names and sets.
+pub(crate) fn obs_leaves(space: &Space) -> Result<ObsLayout, EngineError> {
+    let mut out = ObsLayout {
+        leaves: Vec::new(),
+        names: Vec::new(),
+        sets: SetSpans::default(),
+    };
+    add_leaves(space, String::new(), false, &mut out)?;
+    if out.leaves.len() > MAX_LEAVES {
         return Err(EngineError::UnsupportedSpace {
             what: "more than 16 observation leaves",
         });
     }
-    Ok(leaves)
+    if let Some(name) = duplicate(&out.names) {
+        return Err(EngineError::DuplicateLeafName {
+            name: name.to_owned(),
+        });
+    }
+    Ok(out)
 }
 
-fn add_leaves(space: &Space, leaves: &mut Vec<Leaf>) -> Result<(), EngineError> {
+/// The first name that appears twice, if any.
+fn duplicate(names: &[String]) -> Option<&str> {
+    names
+        .iter()
+        .enumerate()
+        .find(|(i, name)| names.iter().take(*i).any(|seen| seen == *name))
+        .map(|(_, name)| name.as_str())
+}
+
+fn join(name: &str, part: &str) -> String {
+    if name.is_empty() {
+        part.to_owned()
+    } else {
+        format!("{name}.{part}")
+    }
+}
+
+fn add_leaves(
+    space: &Space,
+    name: String,
+    in_set: bool,
+    out: &mut ObsLayout,
+) -> Result<(), EngineError> {
     let leaf = |count: usize, size: usize| {
         count
             .checked_mul(size)
@@ -213,28 +323,68 @@ fn add_leaves(space: &Space, leaves: &mut Vec<Leaf>) -> Result<(), EngineError> 
                 what: "leaf too large",
             })
     };
-    match space {
-        Space::Discrete { .. } => leaves.push(leaf(1, DType::I32.size())?),
-        Space::MultiDiscrete { nvec } => leaves.push(leaf(nvec.len(), DType::I32.size())?),
-        Space::MultiBinary { shape } => leaves.push(leaf(elements(shape)?, DType::Bool.size())?),
-        Space::Box { shape, dtype, .. } => leaves.push(leaf(elements(shape)?, dtype.size())?),
+    let one = match space {
+        Space::Discrete { .. } => leaf(1, DType::I32.size())?,
+        Space::MultiDiscrete { nvec } => leaf(nvec.len(), DType::I32.size())?,
+        Space::MultiBinary { shape } => leaf(elements(shape)?, DType::Bool.size())?,
+        Space::Box { shape, dtype, .. } => leaf(elements(shape)?, dtype.size())?,
         Space::Dict(entries) => {
-            for (_, inner) in entries {
-                add_leaves(inner, leaves)?;
+            for (key, inner) in entries {
+                add_leaves(inner, join(&name, key), in_set, out)?;
             }
+            return Ok(());
         }
         Space::Tuple(items) => {
-            for inner in items {
-                add_leaves(inner, leaves)?;
+            for (i, inner) in items.iter().enumerate() {
+                add_leaves(inner, join(&name, &i.to_string()), in_set, out)?;
             }
+            return Ok(());
         }
-        Space::Set { .. } => {
-            return Err(EngineError::UnsupportedSpace {
-                what: "set observations",
-            });
+        Space::Set { inner, max } => {
+            if in_set {
+                return Err(EngineError::UnsupportedSpace {
+                    what: "a set inside a set",
+                });
+            }
+            return add_set(inner, *max, &name, out);
         }
-    }
+    };
+    out.leaves.push(one);
+    out.names.push(name);
     Ok(())
+}
+
+/// A set `p`: its item leaves, each `MAX` times its inner bytes, at `p` or
+/// `p/<inner path>`, then `p_mask` (ADR-0082 point 2).
+fn add_set(inner: &Space, max: u32, name: &str, out: &mut ObsLayout) -> Result<(), EngineError> {
+    let too_large = || EngineError::UnsupportedSpace {
+        what: "leaf too large",
+    };
+    let max = usize::try_from(max).map_err(|_| too_large())?;
+    let first = out.leaves.len();
+    add_leaves(inner, String::new(), true, out)?;
+    let (leaves, names) = (
+        out.leaves.get_mut(first..).unwrap_or(&mut []),
+        out.names.get_mut(first..).unwrap_or(&mut []),
+    );
+    for (index, (leaf, path)) in leaves.iter_mut().zip(names.iter_mut()).enumerate() {
+        // The inner bytes are one slot's row (ADR-0082 point 3).
+        if let Some(row) = out.sets.rows.get_mut(first + index) {
+            *row = leaf.bytes;
+        }
+        leaf.bytes = leaf.bytes.checked_mul(max).ok_or_else(too_large)?;
+        *path = if path.is_empty() {
+            name.to_owned()
+        } else {
+            format!("{name}/{path}")
+        };
+    }
+    let mask = out.leaves.len();
+    out.leaves.push(Leaf {
+        bytes: max.checked_mul(DType::Bool.size()).ok_or_else(too_large)?,
+    });
+    out.names.push(format!("{name}_mask"));
+    out.sets.push(SetSpan { first, mask, max })
 }
 
 fn elements(shape: &[u32]) -> Result<usize, EngineError> {
@@ -407,6 +557,153 @@ mod mask_tests {
         assert_eq!(
             MaskLayout::build(&[u32::MAX, u32::MAX, u32::MAX], &parents, None, false).unwrap(),
             None
+        );
+    }
+}
+
+#[cfg(test)]
+mod obs_tests {
+    use super::{SetSpan, obs_leaves};
+    use crate::EngineError;
+    use tessera_rl_core::space::{BoxBounds, DType, Space};
+
+    fn boxed(shape: Vec<u32>, dtype: DType) -> Space {
+        let bounds = match dtype {
+            DType::F32 | DType::F64 => BoxBounds::Float {
+                low: vec![0.0],
+                high: vec![1.0],
+            },
+            _ => BoxBounds::Int {
+                low: vec![0],
+                high: vec![1],
+            },
+        };
+        Space::Box {
+            shape,
+            dtype,
+            bounds,
+        }
+    }
+
+    fn set(inner: Space, max: u32) -> Space {
+        Space::Set {
+            inner: Box::new(inner),
+            max,
+        }
+    }
+
+    fn dict(entries: Vec<(&str, Space)>) -> Space {
+        Space::Dict(
+            entries
+                .into_iter()
+                .map(|(k, v)| (k.to_owned(), v))
+                .collect(),
+        )
+    }
+
+    #[test]
+    fn test_obs_leaves_single_leaf_set_exports_items_then_mask() {
+        let space = dict(vec![
+            ("agent", boxed(vec![2], DType::I32)),
+            ("items", set(boxed(vec![2], DType::I32), 8)),
+        ]);
+        let l = obs_leaves(&space).unwrap();
+        assert_eq!(l.names, ["agent", "items", "items_mask"]);
+        let bytes: Vec<usize> = l.leaves.iter().map(|leaf| leaf.bytes).collect();
+        assert_eq!(bytes, [8, 8 * 8, 8]);
+        assert_eq!(
+            l.sets.as_slice(),
+            [SetSpan {
+                first: 1,
+                mask: 2,
+                max: 8
+            }]
+        );
+    }
+
+    #[test]
+    fn test_obs_leaves_dict_inner_set_exports_paths_then_mask() {
+        let inner = dict(vec![
+            ("pos", boxed(vec![2], DType::I32)),
+            ("hp", boxed(vec![1], DType::F32)),
+        ]);
+        let l = obs_leaves(&dict(vec![("units", set(inner, 16))])).unwrap();
+        assert_eq!(l.names, ["units/pos", "units/hp", "units_mask"]);
+        let bytes: Vec<usize> = l.leaves.iter().map(|leaf| leaf.bytes).collect();
+        assert_eq!(bytes, [16 * 8, 16 * 4, 16]);
+        assert_eq!(
+            l.sets.as_slice(),
+            [SetSpan {
+                first: 0,
+                mask: 2,
+                max: 16
+            }]
+        );
+    }
+
+    #[test]
+    fn test_obs_leaves_without_sets_keep_their_paths() {
+        let space = dict(vec![
+            ("a", boxed(vec![1], DType::U8)),
+            ("b", Space::Tuple(vec![Space::Discrete { n: 2 }])),
+        ]);
+        let l = obs_leaves(&space).unwrap();
+        assert_eq!(l.names, ["a", "b.0"]);
+        assert_eq!(l.sets.as_slice(), []);
+        assert_eq!(obs_leaves(&Space::Discrete { n: 2 }).unwrap().names, [""]);
+    }
+
+    #[test]
+    fn test_obs_leaves_mask_name_beside_a_set_is_refused_as_duplicate() {
+        let space = dict(vec![
+            ("units", set(boxed(vec![1], DType::I32), 4)),
+            ("units_mask", boxed(vec![4], DType::U8)),
+        ]);
+        assert_eq!(
+            obs_leaves(&space).err(),
+            Some(EngineError::DuplicateLeafName {
+                name: "units_mask".to_owned()
+            })
+        );
+        let inner = dict(vec![("x", boxed(vec![1], DType::I32))]);
+        let space = dict(vec![
+            ("a", set(inner, 2)),
+            ("a/x", boxed(vec![1], DType::I32)),
+        ]);
+        assert_eq!(
+            obs_leaves(&space).err(),
+            Some(EngineError::DuplicateLeafName {
+                name: "a/x".to_owned()
+            })
+        );
+    }
+
+    #[test]
+    fn test_obs_leaves_set_inside_a_set_is_refused() {
+        let nested = set(dict(vec![("s", set(Space::Discrete { n: 2 }, 2))]), 2);
+        assert_eq!(
+            obs_leaves(&nested).err(),
+            Some(EngineError::UnsupportedSpace {
+                what: "a set inside a set"
+            })
+        );
+    }
+
+    #[test]
+    fn test_obs_leaves_set_leaves_count_toward_the_limit() {
+        let names = ["a", "b", "c", "d", "e", "f", "g", "h"];
+        let sets: Vec<(&str, Space)> = names
+            .iter()
+            .map(|n| (*n, set(Space::Discrete { n: 2 }, 2)))
+            .collect();
+        assert_eq!(obs_leaves(&dict(sets.clone())).unwrap().leaves.len(), 16);
+        let mut over = sets;
+        over.push(("z", Space::Discrete { n: 2 }));
+        assert_eq!(
+            obs_leaves(&dict(over)).err(),
+            Some(EngineError::UnsupportedSpace {
+                what: "more than 16 observation leaves"
+            })
         );
     }
 }

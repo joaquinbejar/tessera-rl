@@ -217,6 +217,7 @@ maker!(MakeTag, api::make_tag, "make_tag");
 maker!(MakeRts, api::make_rts, "make_rts");
 maker!(MakeGrid, api::make_grid, "make_grid");
 maker!(MakeKeydoor, api::make_keydoor, "make_keydoor");
+maker!(MakeGather, api::make_gather, "make_gather");
 maker!(MakeSnake, api::make_snake, "make_snake");
 maker!(MakeBrickwall, api::make_brickwall, "make_brickwall");
 maker!(MakePaddleduel, api::make_paddleduel, "make_paddleduel");
@@ -226,7 +227,7 @@ maker!(MakeOthello, api::make_othello, "make_othello");
 maker!(MakeGo9, api::make_go9, "make_go9");
 
 /// The module-level constructors, for the module's function table.
-pub(super) const MAKERS: [FunctionRow; 15] = [
+pub(super) const MAKERS: [FunctionRow; 16] = [
     FunctionRow::kw::<MakeCartpole>(c"make_cartpole", c"make_cartpole($module, *, mode=None, batch_size=None, gather=None, num_envs=None, seed=None, max_episode_steps=None, auto_reset=None, chunk_size=None, workers=None, spin=None, outputs=None)\n--\n\nmake_cartpole(**pool_options) -> Env"),
     FunctionRow::kw::<MakeAcrobot>(c"make_acrobot", c"make_acrobot($module, *, mode=None, batch_size=None, gather=None, num_envs=None, seed=None, max_episode_steps=None, auto_reset=None, chunk_size=None, workers=None, spin=None, outputs=None)\n--\n\nmake_acrobot(**pool_options) -> Env"),
     FunctionRow::kw::<MakeMountaincar>(
@@ -256,6 +257,10 @@ pub(super) const MAKERS: [FunctionRow; 15] = [
     FunctionRow::kw::<MakeKeydoor>(
         c"make_keydoor",
         c"make_keydoor($module, *, mode=None, batch_size=None, gather=None, num_envs=None, seed=None, max_episode_steps=None, auto_reset=None, chunk_size=None, workers=None, spin=None, outputs=None, size=None, agents=None)\n--\n\nmake_keydoor(**pool_options, size=8, agents=1) -> Env",
+    ),
+    FunctionRow::kw::<MakeGather>(
+        c"make_gather",
+        c"make_gather($module, *, mode=None, batch_size=None, gather=None, num_envs=None, seed=None, max_episode_steps=None, auto_reset=None, chunk_size=None, workers=None, spin=None, outputs=None, size=None, items=None, max_steps=None)\n--\n\nmake_gather(**pool_options, size=8, items=8, max_steps=100) -> Env",
     ),
     FunctionRow::kw::<MakeSnake>(
         c"make_snake",

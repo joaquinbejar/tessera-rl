@@ -15,9 +15,9 @@
 
 use core::num::NonZeroU32;
 
-use tessera_rl_classic::{Tag, TagConfig};
+use tessera_rl_classic::{Gather, GatherConfig, Tag, TagConfig};
 use tessera_rl_connect4_ref::board::Position;
-use tessera_rl_engine::{AutoReset, EnvPool, Masked, PoolOptions, Record, Reseed};
+use tessera_rl_engine::{AutoReset, EnvPool, Masked, NoMasks, PoolOptions, Record, Reseed};
 use tessera_rl_games::{Connect4, Connect4Config, Connect4State};
 use tessera_rl_num::identity::Seed;
 use tessera_rl_search::{Eviction, NodeHandle, SearchError, SearchOptions, SearchPool};
@@ -177,6 +177,26 @@ fn test_search_pool_rejects_imperfect_information_citing_adr_0035() {
     .unwrap();
     assert_eq!(err, SearchError::ImperfectInformation);
     assert!(err.to_string().contains("ADR-0035"));
+}
+
+#[test]
+fn test_search_pool_set_observation_is_refused_with_a_typed_error() {
+    let mut p = EnvPool::<Gather, NoMasks>::new(
+        GatherConfig::default(),
+        PoolOptions::new(NonZeroU32::MIN, Seed::new(1)),
+    )
+    .unwrap();
+    p.reset_all(Reseed::Keep).unwrap();
+    let err = SearchPool::<Gather, NoMasks>::new(
+        GatherConfig::default(),
+        options(8, 2, Eviction::Strict),
+        &p.snapshot(0).unwrap(),
+        EnvPool::new,
+    )
+    .err()
+    .unwrap();
+    assert_eq!(err, SearchError::SetObservation);
+    assert!(err.to_string().contains("ADR-0082"));
 }
 
 #[test]

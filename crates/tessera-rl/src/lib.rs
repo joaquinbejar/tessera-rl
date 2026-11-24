@@ -71,6 +71,7 @@
 //! | `tessera/Tag-v1` | `tessera-rl-classic` | 2 to 8 | `Discrete(5)`, masked, simultaneous |
 //! | `tessera/Grid-v1` | `tessera-rl-classic` | 1 | `Discrete(4)` |
 //! | `tessera/GridKeyDoor-v1` | `tessera-rl-classic` | 1 to 4 | `Discrete(5)`, masked, simultaneous, generated worlds |
+//! | `tessera/Gather-v1` | `tessera-rl-classic` | 1 | `Discrete(4)`, `Set` observation of up to 8 items (ADR-0082) |
 //! | `tessera/Snake-v1` | `tessera-rl-classic` | 1 to 2 | `Discrete(4)`, masked, simultaneous, pixel or state observation |
 //! | `tessera/PaddleDuel-v1` | `tessera-rl-classic` | 1 to 2 | `Discrete(3)`, simultaneous, frameskip, pixel or state observation |
 //! | `tessera/BrickWall-v1` | `tessera-rl-classic` | 1 | `Discrete(3)`, frameskip, pixel or state observation |

@@ -162,6 +162,53 @@ fn test_host_pool_new_head_count_bounded_by_max_host_heads() {
     );
 }
 
+/// A host environment that declares a `Set` observation (ADR-0082).
+struct Setty;
+
+impl HostEnvironment for Setty {
+    const ENV_ID: &'static str = "test/Setty-v1";
+    const ENV_VERSION: u32 = 1;
+    const MAX_AGENTS: usize = 1;
+    type Config = WideConfig;
+
+    fn new(_: &WideConfig) -> Result<Self, HostError> {
+        Ok(Self)
+    }
+
+    fn observation_space(_: &WideConfig) -> Result<Space, SpaceError> {
+        Ok(Space::Dict(vec![
+            ("x".to_owned(), Space::Discrete { n: 2 }),
+            (
+                "s".to_owned(),
+                Space::Set {
+                    inner: Box::new(Space::Discrete { n: 3 }),
+                    max: 4,
+                },
+            ),
+        ]))
+    }
+
+    fn action_space(_: &WideConfig) -> Result<Space, SpaceError> {
+        Ok(Space::Discrete { n: 2 })
+    }
+
+    fn reset(&mut self, _: HostSeed, _: &mut HostOut<'_>) {}
+
+    fn step(&mut self, _: &Actions<'_, ()>, _: &mut HostOut<'_>) {}
+
+    fn observe(&self, _: AgentSlot, _: &mut ObsWriter<'_, '_, ()>) {}
+}
+
+#[test]
+fn test_host_pool_new_set_observation_is_refused_at_construction() {
+    assert_eq!(
+        HostPool::<Setty, 1>::new(WideConfig, options(1, 0)).err(),
+        Some(EngineError::UnsupportedSpace {
+            what: "set observations in host protocol 1"
+        })
+    );
+}
+
 #[test]
 fn test_host_pool_seeds_follow_adr_0007() {
     let mut p = pool(3, 40, BookConfig::default());

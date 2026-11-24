@@ -13,9 +13,9 @@ use support::{
 };
 use tessera_rl_classic::cartpole::MAX_EPISODE_STEPS;
 use tessera_rl_classic::{
-    Acrobot, AcrobotConfig, BrickWall, BrickWallConfig, CartPole, CartPoleConfig, Grid, GridConfig,
-    KeyDoor, KeyDoorConfig, MountainCar, MountainCarConfig, PaddleDuel, PaddleDuelConfig, Pendulum,
-    PendulumConfig, Snake, SnakeConfig, Tag, TagConfig,
+    Acrobot, AcrobotConfig, BrickWall, BrickWallConfig, CartPole, CartPoleConfig, Gather,
+    GatherConfig, Grid, GridConfig, KeyDoor, KeyDoorConfig, MountainCar, MountainCarConfig,
+    PaddleDuel, PaddleDuelConfig, Pendulum, PendulumConfig, Snake, SnakeConfig, Tag, TagConfig,
 };
 use tessera_rl_engine::{AutoReset, EnvPool, Masked, NoMasks};
 
@@ -295,6 +295,53 @@ fn test_golden_grid_next_step_matches_fixture_on_every_mode() {
 #[test]
 fn test_golden_grid_same_step_matches_fixture_on_every_mode() {
     check_grid(&grid("grid-v1-same-step", AutoReset::SameStep));
+}
+
+impl support::GoldenEnv for Gather {
+    const ENV_ID: &'static str = tessera_rl_classic::gather::ENV_ID;
+    const ENV_VERSION: u32 = tessera_rl_classic::gather::ENV_VERSION;
+}
+
+/// Gather (ADR-0082): five items on a 6x6 grid, so episodes end by
+/// collection and by truncation, and slots 5 to 7 are always absent.
+fn gather(name: &'static str, auto_reset: AutoReset) -> Scenario<GatherConfig> {
+    Scenario {
+        name,
+        cfg: GatherConfig {
+            size: 6,
+            items: 5,
+            max_steps: 30,
+        },
+        seed: 24_112_026,
+        num_envs: 16,
+        chunk: 4,
+        auto_reset,
+        // Above `max_steps`: the world truncates by itself.
+        max_episode_steps: 64,
+        steps: 300,
+        reseed_at: 150,
+        reseed_ids: &[2, 11],
+        reseed_seed: 7_777,
+    }
+}
+
+fn check_gather(s: &Scenario<GatherConfig>) {
+    let build = |cfg, options| {
+        EnvPool::<Gather, NoMasks>::new(cfg, options).unwrap_or_else(|e| panic!("{e}"))
+    };
+    for workers in WORKERS {
+        check(s.name, &run::<Gather, _>(s, build, workers));
+    }
+}
+
+#[test]
+fn test_golden_gather_next_step_matches_fixture_on_every_mode() {
+    check_gather(&gather("gather-v1-next-step", AutoReset::NextStep));
+}
+
+#[test]
+fn test_golden_gather_same_step_matches_fixture_on_every_mode() {
+    check_gather(&gather("gather-v1-same-step", AutoReset::SameStep));
 }
 
 impl support::GoldenEnv for KeyDoor {

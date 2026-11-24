@@ -72,6 +72,7 @@ _MAKERS = {
     "tessera/Acrobot-v1": _native.make_acrobot,
     "tessera/Pendulum-v1": _native.make_pendulum,
     "tessera/Grid-v1": _native.make_grid,
+    "tessera/Gather-v1": _native.make_gather,
     "tessera/BrickWall-v1": _native.make_brickwall,
     "tessera/Snake-v1": _native.make_snake,
     "tessera/PaddleDuel-v1": _native.make_paddleduel,
@@ -164,9 +165,20 @@ def _bounds(values, shape) -> np.ndarray:
     return np.full(shape, arr.item()) if arr.size == 1 else arr.reshape(shape)
 
 
+def _set_masks(layout) -> frozenset[int]:
+    """The indices of the set mask leaves (ADR-0082): the last leaf of each
+    set in ``layout["sets"]``; host layouts have none."""
+    return frozenset(indices[-1] for _, _, indices in layout.get("sets", ()))
+
+
 def _single_space(layout) -> spaces.Space:
     boxes = {}
-    for name, dtype, shape, low, high in layout["leaves"]:
+    masks = _set_masks(layout)
+    for k, (name, dtype, shape, low, high) in enumerate(layout["leaves"]):
+        if k in masks:
+            # A set's mask, ``int8`` 0/1 as ``action_mask`` (ADR-0082 point 6).
+            boxes[name] = spaces.MultiBinary(int(shape[0]))
+            continue
         dt = np.dtype(dtype)
         lo = _bounds(low, shape)
         hi = _bounds(high, shape)
@@ -247,13 +259,18 @@ class TesseraVectorEnv(VectorEnv):
         heads = (len(self._nvec),) if len(self._nvec) > 1 else ()
         self._actions = np.zeros((self.num_envs, self._agents, *heads), dtype="<i4")
         self._shapes = [(np.dtype(dtype), tuple(shape)) for _, dtype, shape, *_ in layout["leaves"]]
+        # Set masks are read as int8 0/1, a zero-copy view of the bool rows.
+        self._set_masks = _set_masks(layout)
 
     # -- outputs -------------------------------------------------------------
 
     def _leaf(self, buf, k):
         if self.outputs == "borrowed":
-            return np.asarray(buf)[:, 0]
+            arr = np.asarray(buf)[:, 0]
+            return arr.view(np.int8) if k in self._set_masks else arr
         dtype, shape = self._shapes[k]
+        if k in self._set_masks:
+            dtype = np.dtype(np.int8)
         rows = np.frombuffer(buf, dtype=dtype).reshape((self.num_envs, self._agents, *shape))
         return rows[:, 0] if self._agents == 1 else rows[:, 0].copy()
 

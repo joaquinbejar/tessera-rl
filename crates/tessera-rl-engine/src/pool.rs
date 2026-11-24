@@ -33,6 +33,7 @@ use crate::options::WaitBackend;
 use crate::options::{AutoReset, PoolOptions, SyncOptions};
 use crate::outputs::{Outputs, OutputsView};
 use crate::registry::Registration;
+use crate::set_zero::zero_absent_rows;
 use crate::sys::sync::{AtomicBool, Ordering};
 use crate::sys::{Gang, GangOptions, available_cores};
 use crate::validate::{
@@ -484,13 +485,14 @@ where
         let num_envs = usize::try_from(options.num_envs.get()).map_err(|_| too_large())?;
         let rows = num_envs.checked_mul(E::MAX_AGENTS).ok_or_else(too_large)?;
         let mask_len = mask_len_of::<E, M>(&cfg, &mut actions, rows, options.mask_budget_bytes)?;
-        let outputs = Outputs::new(
+        let mut outputs = Outputs::new(
             num_envs,
             E::MAX_AGENTS,
-            &leaves,
+            &leaves.leaves,
             options.auto_reset == AutoReset::SameStep,
             mask_len,
         )?;
+        outputs.sets = leaves.sets;
         let adaptive = <E::Header as RecordLayout>::Adaptive::from_config(&cfg);
         let headers = (0..num_envs)
             .map(|i| {
@@ -2300,6 +2302,7 @@ fn observe_rows<E: Environment, M: MaskProvider<E>, const ZERO: bool>(
         leaf_bytes,
         masks,
         mask_len,
+        sets,
         ..
     } = outputs;
     for (slot, row) in header.agents().iter().enumerate() {
@@ -2341,6 +2344,9 @@ fn observe_rows<E: Environment, M: MaskProvider<E>, const ZERO: bool>(
         let mut writer = ObsWriter::new(leaves);
         let mut rng = ObsRng::new(authority, &identity);
         E::observe(cfg, state, agent, &mut rng, &mut writer);
+        // ADR-0082 point 3: absent set slots are zero, whatever `observe`
+        // wrote; before any transform of the row.
+        zero_absent_rows(leaves, sets);
         if let Some(m) = mask {
             M::write_mask(cfg, state, agent, &mut MaskWriter::new(m));
         }

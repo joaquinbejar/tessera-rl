@@ -1,0 +1,5 @@
+error: duplicate observation leaf name `units_mask`: a set exports its mask under this name (ADR-0082)
+  --> tests/ui/fail/obs_set_mask_duplicate.rs:11:5
+   |
+11 |     units_mask: ObsLeaf<u8>,
+   |     ^^^^^^^^^^
