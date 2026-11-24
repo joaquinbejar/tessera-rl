@@ -218,6 +218,8 @@ def _train(args, seeds: list[int]) -> list[dict]:
             record["vs_uniform"] = float(sum(r["vs_uniform"]) / len(r["vs_uniform"]))
             record["parameters"] = r["parameters"]
             record["opening_plies"] = r["opening_plies"]
+            record["opening_skips"] = r["opening_skips"]
+            record["opening_draws"] = r["opening_draws"]
         records.append(record)
         sys.stderr.write(f"seed {seed}: score {r['eval_mean']:.2f} in {r['train_seconds']}s\n")
     return records
@@ -252,7 +254,12 @@ def cmd_calibrate(args) -> int:
         from learning_gate import T3B_CALIBRATION_SEEDS  # noqa: PLC0415
 
         seeds = args.seeds if args.seeds != CALIBRATION_SEEDS else T3B_CALIBRATION_SEEDS
+        from learning_gate import opening_skip_errors  # noqa: PLC0415
+
         out = calibrate(records, seeds, expected=T3B_CALIBRATION_SEEDS, threshold="min")
+        skip_errors = opening_skip_errors(records)
+        if skip_errors:
+            out["errors"] = out.get("errors", []) + skip_errors
     else:
         out = calibrate(records, args.seeds)
     errors = out.get("errors", []) + check_shards(shards)

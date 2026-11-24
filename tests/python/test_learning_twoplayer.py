@@ -260,3 +260,15 @@ def test_twoplayer_trained_vs_heuristic_games_differ(env_id):
     for seat in (0, 1):
         games = {d for s, _, d in trace if s == seat}
         assert len(games) >= 4, f"{env_id} seat {seat}: {len(games)} distinct games of 5"
+
+
+def test_t3b_calibrate_refuses_too_many_skipped_openings():
+    """REVIEW-T3b-opening-r1: at most 5% of a seed's openings may be skipped."""
+    from learning_gate import MAX_OPENING_SKIP_SHARE, opening_skip_errors  # noqa: PLC0415
+
+    assert MAX_OPENING_SKIP_SHARE == 0.05
+    assert opening_skip_errors([{"seed": 101, "opening_draws": 25, "opening_skips": 1}]) == []
+    errs = opening_skip_errors([{"seed": 102, "opening_draws": 25, "opening_skips": 2}])
+    assert errs and "seed 102: 2 of 25" in errs[0]
+    # No openings (Leduc, Tag): nothing to check.
+    assert opening_skip_errors([{"seed": 103, "opening_draws": 0, "opening_skips": 0}]) == []

@@ -27,6 +27,22 @@ CALIBRATION_SEEDS = list(range(101, 141))
 # smaller budget trains nothing.
 MIN_TOTAL_STEPS = 4 * 128
 NIGHT_SEEDS = [1, 2, 3, 4, 5]
+#: The largest share of evaluation openings a T3b calibration may skip
+#: (REVIEW-T3b-opening-r1); above it, calibrate refuses the game.
+MAX_OPENING_SKIP_SHARE = 0.05
+
+
+def opening_skip_errors(records: list[dict]) -> list[str]:
+    """Errors for T3b score records whose skipped openings exceed
+    ``MAX_OPENING_SKIP_SHARE`` of the openings drawn (per seed)."""
+    errors = []
+    for r in records:
+        draws, skips = r.get("opening_draws", 0), r.get("opening_skips", 0)
+        if draws and skips / draws > MAX_OPENING_SKIP_SHARE:
+            errors.append(f"seed {r.get('seed')}: {skips} of {draws} openings skipped, above {MAX_OPENING_SKIP_SHARE:.0%}")
+    return errors
+
+
 #: Tier T3b's calibration seeds (#370, rev's ruling on DESIGN-T3b-r1 section
 #: 3): 10 seeds, with the threshold at their minimum (the 5th percentile of
 #: 40 needs about 12 h of training at T3b budgets). With exchangeable draws
