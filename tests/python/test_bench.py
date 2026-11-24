@@ -61,6 +61,45 @@ def test_bench_python_plan_matches_the_runner_plan(quick_report):
     assert d["same_work"] and d["ci95"][0] <= d["value"] <= d["ci95"][1]
 
 
+def test_bench_continuous_plan_matches_the_runner_plan(quick_report):
+    rust = quick_report["results"]["rust/pendulum/inline/n1024"]
+    py = quick_report["results"]["py/native/pendulum/n1024/borrowed"]
+    plan = bench.lcg_continuous(1024, [(-2.0, 2.0)])
+    assert plan.min() >= -2.0 and plan.max() < 2.0
+    empty = np.empty((bench.ACTION_BATCHES, 0), dtype=np.int32)
+    assert rust["plan_fingerprint"] == py["plan_fingerprint"] == bench.fingerprint(empty, plan)
+    assert rust["options"] == py["options"]
+
+
+def test_bench_configs_cover_every_catalog_env():
+    spec, _ = bench.load(quick=True)
+    rust_envs = {c["env"] for c in spec["config"] if c["kind"] == "rust" and c["metric"] == "throughput"}
+    assert rust_envs == {
+        "acrobot", "brickwall", "cartpole", "connect4", "go9", "grid", "keydoor", "leduc",
+        "mountaincar", "othello", "paddleduel", "pendulum", "rts", "snake", "tag",
+    }  # fmt: skip
+    envpool = {c["env"] for c in spec["config"] if c.get("api") == "envpool"}
+    assert envpool == set(bench.PY_ENVS)
+    for env in envpool:
+        assert f"speedup/native-vs-envpool/{env}/n1024" in {d["name"] for d in spec["derived"]}
+
+
+def test_bench_legal_actions_option_reaches_the_runner(quick_report):
+    assert quick_report["results"]["rust/connect4/inline/n1024"]["options"]["legal_actions"] is True
+    assert "legal_actions" not in quick_report["results"]["rust/cartpole/inline/n1024"]["options"]
+
+
+def test_bench_configs_needing_a_missing_package_are_skipped(monkeypatch):
+    real = bench.importlib.util.find_spec
+    monkeypatch.setattr(bench.importlib.util, "find_spec", lambda name: None if name == "envpool" else real(name))
+    with pytest.raises(ValueError, match="missing package"):
+        bench.run(only="py/envpool/", quick=True, profile="debug")
+    report = bench.run(only="py/", quick=True, profile="debug")
+    assert set(report["skipped"]) == {f"py/envpool/{env}/n1024" for env in bench.PY_ENVS}
+    assert not any(name.startswith("py/envpool/") for name in report["results"])
+    assert not any(name.startswith("speedup/native-vs-envpool/") for name in report["derived"])
+
+
 def test_bench_ratios_of_different_work_are_refused(quick_report):
     results = copy.deepcopy(quick_report["results"])
     results["py/native/cartpole/n1024/borrowed"]["options"]["max_episode_steps"] = 0
@@ -81,7 +120,10 @@ def test_bench_snapshot_costs_are_warmed_up_and_labelled(quick_report):
 
 def test_bench_quick_run_covers_every_kind(quick_report):
     names = {c["name"] for c in bench.tomllib.loads(bench.CONFIGS.read_text())["config"]}
-    assert set(quick_report["results"]) == names
+    # Configurations needing a package not installed here (EnvPool) are
+    # skipped and listed, never silently dropped.
+    assert set(quick_report["results"]) | set(quick_report["skipped"]) == names
+    assert not set(quick_report["results"]) & set(quick_report["skipped"])
     for name, r in quick_report["results"].items():
         if r["config"].get("metric") == "memory":
             assert r["record_bytes_per_instance"] > 0

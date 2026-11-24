@@ -67,13 +67,14 @@ make bench-kernels                # Criterion benches of the kernels
 
 | Metric | Configurations |
 | --- | --- |
-| Raw env throughput | `rust/*` with `metric = "throughput"`: auto-reset and observation writing included |
+| Raw env throughput | `rust/*` with `metric = "throughput"`: auto-reset and observation writing included. Every catalog environment has an entry (`rust/<env>/inline/n1024`, SPEC 16.1). Masked games with a flat mask set `legal_actions`: each planned action moves to the next legal choice inside the timed step, so they step real moves; RTS and Tag step under the no-op illegal-action policy |
 | Scaling efficiency | `scaling_efficiency/*`: k-worker throughput over k times one worker |
 | Step latency | `rust/*/latency`: p50 and p99 per batch, Sync mode |
 | Python overhead | `python_overhead/*`: binding throughput over raw Rust, borrowed and owned separately |
 | Snapshot cost | `rust/*/snapshot`, per instance. Copy only: `snapshot_copy` and `snapshot_all_copy`; the latter is also reported in ns/KiB against ADR-0010's budget of at most 1 µs/KB. Including re-observation (ADR-0039): `restore_with_reobserve`, `import_with_validation_and_reobserve`, `fork_with_reobserve`, `fork_branched_with_reobserve` |
 | Memory | `rust/*/memory`: continuation bytes per instance, mask bytes per step, output storage bytes |
 | Head to head | `py/gymnasium-sync/*` against `py/gym-adapter/*`: same environment count, NEXT_STEP auto-reset, same action stream |
+| Against EnvPool | `speedup/native-vs-envpool/*`: `py/native/<env>/n1024/borrowed` over `py/envpool/<env>/n1024` (CartPole, Acrobot, MountainCar, Pendulum), one thread each, same plan (continuous plans for Pendulum) and options. The `py/envpool/*` configurations declare `requires = "envpool"`; without that package they are skipped and listed under `skipped` in the report |
 
 End-to-end SPS (reference PPO) and the authoring study come later.
 
