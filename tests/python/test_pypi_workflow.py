@@ -165,7 +165,7 @@ def test_pypi_reads_the_layout_wheels_yml_uploads():
     # `dist/*.whl` and `checks.json` side by side, the artifact holds
     # dist/<wheel> next to checks.json (run 43594717096 failed on a flat layout).
     uploads = re.findall(r"actions/upload-artifact@\S+.*\n(?:        .*\n)+", WHEELS)
-    assert len(uploads) == 3
+    assert len(uploads) == 5
     for u in uploads:
         paths = u.split("          path: |\n", 1)[1]
         assert "            dist/*.whl\n" in paths and "            checks.json\n" in paths, u
@@ -217,6 +217,12 @@ RUN_WHEELS = {
     "wheel-aarch64-unknown-linux-gnu": "tessera_rl-0.2.0-cp311-abi3-manylinux_2_28_aarch64.whl",
     "wheel-aarch64-apple-darwin": "tessera_rl-0.2.0-cp311-abi3-macosx_13_0_arm64.whl",
 }
+# The musllinux stubs _run_tree adds (#350), and every wheel of the tree.
+RUN_MUSL = {
+    "wheel-x86_64-unknown-linux-musl": "tessera_rl-0.2.0-cp311-abi3-musllinux_1_2_x86_64.whl",
+    "wheel-aarch64-unknown-linux-musl": "tessera_rl-0.2.0-cp311-abi3-musllinux_1_2_aarch64.whl",
+}
+RUN_ALL = {**RUN_WHEELS, **RUN_MUSL}
 
 
 def _run_tree(tmp_path) -> Path:
@@ -274,9 +280,9 @@ def test_pypi_verify_accepts_the_real_run_tree_resealed(tmp_path):
     arts = _reseal(_run_tree(tmp_path))
     p, out = _verify(arts, commit=RUN_COMMIT)
     assert p.returncode == 0, p.stderr
-    assert sorted(x.name for x in out.iterdir()) == sorted(["SHA256SUMS", *RUN_WHEELS.values()])
+    assert sorted(x.name for x in out.iterdir()) == sorted(["SHA256SUMS", *RUN_ALL.values()])
     sums = dict(reversed(l.split("  ")) for l in (out / "SHA256SUMS").read_text().splitlines())
-    assert sums == {w: _sha(out / w) for w in RUN_WHEELS.values()}
+    assert sums == {w: _sha(out / w) for w in RUN_ALL.values()}
 
 
 @long_paths
@@ -294,7 +300,7 @@ def test_pypi_verify_refuses_the_real_run_tree_flattened(tmp_path):
     for whl in list(arts.glob("*/dist/*.whl")):
         whl.rename(whl.parent.parent / whl.name)
     p, out = _verify(arts, commit=RUN_COMMIT)
-    assert p.returncode == 1 and p.stderr.count("expected one wheel in dist/") == 3, p.stderr
+    assert p.returncode == 1 and p.stderr.count("expected one wheel in dist/") == 5, p.stderr
     assert not out.exists()
 
 
@@ -501,7 +507,7 @@ def test_pypi_verify_refuses_a_version_other_than_the_tag(tmp_path):
     arts = tmp_path / "a"
     _good(arts)
     p, _ = _verify(arts, tag="v0.2.1")
-    assert p.returncode == 1 and p.stderr.count("does not match") == 3, p.stderr
+    assert p.returncode == 1 and p.stderr.count("does not match") == 5, p.stderr
 
 
 # --- the run blocks, executed under bash -eo pipefail with a fake gh -------------
@@ -663,4 +669,4 @@ def test_pypi_publish_sums_step_on_the_real_run_tree(tmp_path):
     env = {"PATH": f"{bin_}:{os.environ['PATH']}", "RUNNER_TEMP": str(tmp_path)}
     r = subprocess.run(["bash", "--noprofile", "--norc", "-eo", "pipefail", str(script)], cwd=tmp_path / "w", env=env, capture_output=True, text=True)
     assert r.returncode == 0, r.stdout + r.stderr
-    assert sorted(x.name for x in dist.iterdir()) == sorted(RUN_WHEELS.values())
+    assert sorted(x.name for x in dist.iterdir()) == sorted(RUN_ALL.values())
