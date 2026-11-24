@@ -163,7 +163,8 @@ class Env:
     child, or use the spawn start method.
 
     On macOS before 14.4, creating an ``Env`` with worker threads in a forked
-    child raises ``ForkError``: use ``workers=0`` in Sync mode, or spawn.
+    child raises ``ForkError``, and ``make`` starts worker threads by default:
+    pass ``workers=0`` in Sync mode, or use spawn.
 
     On macOS, a child that first imports ``tessera_rl`` after the fork is not
     known to be one, so its new pools use the default blocking wait, which can
@@ -606,15 +607,17 @@ def make(env_id: str, num_envs: int = 1, seed: int = 0, outputs: str = "borrowed
     ``outputs`` is ``"borrowed"`` (default: read-only zero-copy views valid
     until the next call) or ``"owned"`` (fresh arrays). Pool options:
     ``max_episode_steps``, ``auto_reset`` (``"next_step"``,
-    ``"same_step"`` or ``"disabled"``), ``chunk_size``, ``workers``,
-    ``spin`` (spins before a waiting worker or caller blocks, an int in
+    ``"same_step"`` or ``"disabled"``), ``chunk_size``, ``workers``
+    (worker threads; by default one per physical core this process may use,
+    at most one per chunk: ``physical_cores()``; ``workers=0`` steps
+    inline on the caller in Sync mode, and one worker in the split-phase
+    modes), ``spin`` (spins before a waiting worker or caller blocks, an int in
     ``0..2**32``; 2000 by default, nominally about 20 microseconds; a larger
     budget can cut wake-up latency at the cost of CPU time burnt while idle; it needs
     workers, so Sync mode with ``workers=0`` refuses it with
     ``ArgumentError``), ``mode`` (``"sync"``, the default; ``"pipelined"``, which needs at least
     two chunks; or ``"async"``, which needs ``batch_size`` and takes ``gather``,
-    ``"gathered"`` by default or ``"indexed"``). Split-phase modes default to
-    one worker; see ``Env``. Tag also
+    ``"gathered"`` by default or ``"indexed"``); see ``Env``. Tag also
     takes its config fields (``width``, ``height``, ``pursuers``,
     ``evaders``, ``slip``, ``radius``). Connect Four takes no config;
     its ``max_episode_steps`` defaults to 64, above the 42 plies of a game.

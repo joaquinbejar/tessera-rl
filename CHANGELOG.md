@@ -9,11 +9,15 @@ the API is not stable, and any 0.x release may break it.
 
 ## [Unreleased]
 
+### Changed
+
+- Behaviour change: `tessera_rl.make()` without `workers` now starts one worker per physical core this process may use, at most one per chunk (`tessera_rl_engine::default_workers`, SPEC 6.1), in Sync, Pipelined and Async modes. Before, Sync stepped inline and the split-phase modes used one worker. Pass `workers=0` for the old Sync behaviour. On an x86-64 host with 8 physical cores, the default ran CartPole and BrickWall pool steps in 0.28 to 0.44 of the inline time at 1024 and 8192 instances (#356). The PufferLib backends keep their explicit worker counts.
+
 ### Added
 
 - Per-agent refusal for host environments (ADR-0070, #337): `HostEnvironment::REFUSES_AGENTS` and `refuse(&self, &Actions, &mut Refusals)` in `tessera-rl-core`, with `RefuseCode`, `Refusals` and `Actions::is_refused`/`refuse_code`. `refuse` runs per instance after `validate` accepted the call and before `step`; refused agents are reported in the new `refused` and `refuse_code` outputs (`[N, A]`, refusing host pools only) while every other agent and instance steps. Refusing a slot that is not acting poisons the pool (`EngineError::RefusedNotActing`). Host protocol 2 (protocol 1 plus those outputs and the `refuses_agents` layout key) is spoken by a wheel whose environment refuses agents; `tessera_rl` accepts protocols 1 and 2. `HostStep.refused`/`refuse_code`, Gymnasium `info["refused"]`/`info["refuse_code"]` and PettingZoo `infos[agent]["refused"]`/`["refuse_code"]` report refusals, and both adapters' metadata carry `refuses_agents`. Refusal rows in replay files (ADR-0070 item 9) follow in #339.
 - `tessera_rl_engine::physical_cores()` and Python `tessera_rl.physical_cores()`: physical cores this process may use (sysfs topology within the affinity mask on Linux, `hw.physicalcpu` on macOS, processor core records on Windows), capped by `available_parallelism()` so CPU quotas apply. Efficiency cores of hybrid CPUs count as cores (#356, SPEC 6.1).
-- `Default` for `SyncOptions` and `PipelinedOptions`: one worker per physical core. A pool still steps inline until it is given workers; Python defaults are unchanged.
+- `Default` for `SyncOptions` and `PipelinedOptions`: one worker per physical core. A Rust pool still steps inline until it is given workers. `default_workers()` adds the per-chunk cap that Python's `make()` uses.
 
 ## [0.3.0] - 2026-11-23
 

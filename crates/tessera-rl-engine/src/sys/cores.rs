@@ -11,7 +11,7 @@
 //! `available_parallelism` cap applies there). All three count efficiency cores of hybrid CPUs as cores. When
 //! detection fails, the count is `available_parallelism()` alone.
 
-use core::num::NonZeroUsize;
+use core::num::{NonZeroU32, NonZeroUsize};
 use std::collections::BTreeSet;
 use std::path::Path;
 use std::sync::OnceLock;
@@ -32,6 +32,28 @@ pub fn physical_cores() -> NonZeroUsize {
         }
         combine(physical, parallelism)
     })
+}
+
+/// The default worker count of a pool of `num_envs` instances in chunks of
+/// `chunk_size`: one per physical core ([`physical_cores`]), at most one per
+/// chunk (so never more than `num_envs`, since chunks are non-empty).
+#[must_use]
+pub fn default_workers(num_envs: NonZeroU32, chunk_size: NonZeroU32) -> NonZeroUsize {
+    clamp_workers(physical_cores(), num_envs, chunk_size)
+}
+
+/// `cores`, capped by the chunk count of `num_envs` in `chunk_size` chunks.
+#[must_use]
+pub(crate) fn clamp_workers(
+    cores: NonZeroUsize,
+    num_envs: NonZeroU32,
+    chunk_size: NonZeroU32,
+) -> NonZeroUsize {
+    let chunks = num_envs.div_ceil(chunk_size);
+    match usize::try_from(chunks.get()) {
+        Ok(chunks) => cores.min(NonZeroUsize::new(chunks).unwrap_or(NonZeroUsize::MIN)),
+        Err(_) => cores,
+    }
 }
 
 /// `min(physical, parallelism)`; either alone when the other is missing;

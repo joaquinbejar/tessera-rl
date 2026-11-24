@@ -130,9 +130,14 @@ def test_make_spin_split_modes_without_workers_accepted(mode_kw):
     t.make(CARTPOLE, num_envs=4, chunk_size=2, spin=0, **mode_kw).close()
 
 
-def test_make_spin_sync_without_workers_raises_argument_error():
+def test_make_spin_sync_workers_zero_raises_argument_error():
     with pytest.raises(t.ArgumentError, match="spin needs workers"):
-        t.make(CARTPOLE, num_envs=2, spin=10)
+        t.make(CARTPOLE, num_envs=2, workers=0, spin=10)
+
+
+def test_make_spin_sync_default_workers_accepted():
+    # Without ``workers`` the pool gets the default count (at least one).
+    t.make(CARTPOLE, num_envs=2, spin=10).close()
 
 
 @pytest.mark.parametrize("bad", [2**32, 1.5, "fast", True])
