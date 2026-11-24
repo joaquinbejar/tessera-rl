@@ -1,0 +1,156 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+"""Tier T3b of the learning protocols (#370, DESIGN-T3b-r1, REVIEW-T3b-r1):
+transition bookkeeping, seats, the two thresholds, the fingerprint scope,
+and one tiny training smoke."""
+
+import pathlib
+import sys
+
+import pytest
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2] / "tools"))
+
+import learning_twoplayer as l2  # noqa: E402
+from learning_gate import learns_twoplayer  # noqa: E402
+
+T3B = ("connect4", "othello", "go9", "leduc", "tag")
+
+
+def test_twoplayer_opponent_turn_rewards_fold_undiscounted_into_the_last_transition():
+    """Rewards on steps where the learner does not act join its last stored
+    transition of the episode, undiscounted; an end on such a step marks it
+    terminal, and nothing folds across episodes."""
+    t = l2.Transitions(1)
+    t.record(0, True, 0.0, False, {"value": 0.0})  # learner moves
+    t.record(0, False, 0.5, False, None)  # opponent's turn: +0.5
+    t.record(0, False, -1.0, True, None)  # opponent wins: -1, episode ends
+    t.record(0, False, 2.0, False, None)  # next episode, learner not acted yet: dropped
+    t.record(0, True, 1.0, True, {"value": 0.0})  # learner wins at once
+    lst = t.lists[0]
+    assert len(lst) == 2
+    assert lst[0]["reward"] == pytest.approx(-0.5) and lst[0]["done"]
+    assert lst[1]["reward"] == 1.0 and lst[1]["done"]
+
+
+def test_twoplayer_reward_on_the_learner_step_stays_on_it():
+    t = l2.Transitions(2)
+    t.record(0, True, 1.0, False, {"value": 0.0})
+    t.record(1, False, 3.0, False, None)  # instance 1 has no transition yet
+    assert t.lists[0][0]["reward"] == 1.0 and t.lists[1] == [] and len(t) == 1
+
+
+def test_twoplayer_advantages_stop_at_terminal_transitions():
+    trs = [{"reward": 1.0, "done": True, "value": 0.5}, {"reward": 0.0, "done": False, "value": 0.2}]
+    adv, ret = l2.advantages(trs, last_value=1.0, gamma=0.9, lam=1.0)
+    # Last transition bootstraps from last_value; the first does not look past its end.
+    assert adv[1] == pytest.approx(0.0 + 0.9 * 1.0 - 0.2)
+    assert adv[0] == pytest.approx(1.0 - 0.5)
+    assert ret == pytest.approx([a + t["value"] for a, t in zip(adv, trs, strict=True)])
+
+
+def test_twoplayer_seats_alternate_by_seed():
+    assert [l2.learner_slot(s, [0, 1]) for s in range(4)] == [0, 1, 0, 1]
+    assert [l2.learner_slot(s, [0]) for s in range(3)] == [0, 0, 0]
+
+
+def test_twoplayer_opponent_maps():
+    assert l2.opponent_map(1, 2, "heuristic") == {0: "heuristic"}
+    assert l2.opponent_map(0, 3, "self") == {0: "heuristic", 1: "heuristic", 2: "heuristic"}
+    assert l2.opponent_map(0, 2, "python") is None
+    with pytest.raises(ValueError):
+        l2.opponent_map(0, 2, "onnx")
+
+
+def test_twoplayer_episode_score_is_the_sign_or_the_return():
+    assert [l2.episode_score(x, "sign") for x in (3.0, 0.0, -0.5)] == [1.0, 0.0, -1.0]
+    assert l2.episode_score(-0.5, "return") == -0.5
+    with pytest.raises(ValueError):
+        l2.episode_score(1.0, "win")
+
+
+def test_twoplayer_thresholds_with_fixed_numbers():
+    u = [-1.0, -1.0, -0.8, -1.0, -0.6, -1.0] * 4  # uniform against the heuristic: about -0.9
+    h = [0.0, 0.2, -0.2, 0.0, 0.1, -0.1] * 4  # heuristic against itself: about 0
+    # Learns: closes far more than a tenth of the gap, and beats uniform play.
+    ok = learns_twoplayer([-0.2, -0.3, -0.1, -0.25, -0.2], [0.8, 0.9, 0.7, 0.85, 0.9], u, h)
+    assert ok["gate"] and ok["learns"] and ok["threshold_1"] and ok["threshold_2"]
+    assert ok["required"] == pytest.approx(0.10 * (sum(h) / len(h) - sum(u) / len(u)))
+    # Fails threshold 2: no better than random against a random opponent.
+    t2 = learns_twoplayer([-0.2, -0.3, -0.1, -0.25, -0.2], [0.1, -0.2, 0.0, -0.1, 0.05], u, h)
+    assert t2["threshold_1"] and not t2["threshold_2"] and not t2["learns"]
+    # Fails threshold 1: no better than U against the heuristic.
+    t1 = learns_twoplayer([-0.9, -0.95, -0.85, -0.9, -0.92], [0.8, 0.9, 0.7, 0.85, 0.9], u, h)
+    assert not t1["threshold_1"] and not t1["learns"]
+
+
+def test_twoplayer_no_gate_when_the_heuristic_does_not_beat_random():
+    same = [-0.5, 0.5, 0.0, -0.5, 0.5, 0.0] * 4
+    r = learns_twoplayer([0.9, 0.8, 0.9, 1.0, 0.9], [0.9, 0.8, 0.9, 1.0, 0.9], same, same)
+    assert not r["gate"] and not r["learns"] and r["hu_lower95"] <= 0
+
+
+def test_twoplayer_constant_scores_are_degenerate():
+    u = [-1.0, -0.8] * 10
+    h = [0.0, 0.2] * 10
+    r = learns_twoplayer([0.5] * 5, [0.9, 0.8, 0.9, 1.0, 0.9], u, h)
+    assert r["degenerate"] and not r["learns"]
+
+
+def test_twoplayer_thresholds_need_two_finite_scores_each():
+    r = learns_twoplayer([0.5], [0.5, 0.6], [0.0, 0.1], [0.2, 0.3])
+    assert not r["learns"] and "error" in r
+
+
+def test_twoplayer_protocol_entries_and_gates():
+    import learning_protocols as lp
+
+    for name in T3B:
+        p = lp.protocol(name)
+        assert p["tier"] == "T3b", name
+        assert p["score"] in ("sign", "return") and p["seats"] in ([0, 1], [0]), name
+        assert p["eval_episodes"] % len(p["seats"]) == 0, name
+        assert lp.gate(name) == {"min_effect": 0.10}, name
+    assert lp.protocol("tag")["seats"] == [0] and lp.protocol("tag")["score"] == "return"
+
+
+def test_twoplayer_fingerprint_scope():
+    """T3b's fingerprint hashes learning_twoplayer and only the
+    learning_masked functions it imports: other learning_masked code moves
+    no T3b fingerprint, and learning_twoplayer moves no T1 or T3a one."""
+    pytest.importorskip("torch")
+    import learning_masked as lm
+    import learning_protocols as lp
+
+    with pytest.raises(ValueError, match="not T3b"):
+        lp.train_twoplayer("acrobot", 1, 512, 2)
+    t3b, t3a, t1 = lp.fingerprint("connect4"), lp.fingerprint("snake"), lp.fingerprint("acrobot")
+    assert t3b != lp.fingerprint("othello")
+    real_lm, real_l2 = lm.__file__, l2.__file__
+    try:
+        lm.__file__ = lp.__file__  # "edits" the whole learning_masked file
+        assert lp.fingerprint("connect4") == t3b
+        assert lp.fingerprint("snake") != t3a
+    finally:
+        lm.__file__ = real_lm
+    try:
+        l2.__file__ = lp.__file__  # "edits" learning_twoplayer
+        assert lp.fingerprint("connect4") != t3b
+        assert lp.fingerprint("snake") == t3a and lp.fingerprint("acrobot") == t1
+    finally:
+        l2.__file__ = real_l2
+
+
+@pytest.mark.torch
+def test_twoplayer_connect4_one_update_smoke():
+    pytest.importorskip("torch")
+    import math
+
+    import learning_protocols as lp
+
+    r = lp.train_twoplayer("connect4", 1, 64, 2)
+    assert r["learner_slot"] == 1
+    assert len(r["vs_heuristic"]) == 2 and len(r["vs_uniform"]) == 2
+    assert all(x in (-1.0, 0.0, 1.0) for x in r["vs_heuristic"] + r["vs_uniform"])
+    assert math.isfinite(r["eval_mean"])
+    refs = lp.twoplayer_references("connect4", 2)
+    assert len(refs["uniform"]) == 2 and len(refs["heuristic"]) == 2

@@ -129,6 +129,69 @@ def learns(
     }
 
 
+def _lower95_mean(values, rng, resamples: int) -> tuple[float, float]:
+    """The seeded bootstrap 95% interval of ``mean(values)``."""
+    v = np.asarray(values, dtype=np.float64)
+    means = np.mean(rng.choice(v, size=(resamples, v.size)), axis=1)
+    lo, hi = np.percentile(means, [2.5, 97.5])
+    return float(lo), float(hi)
+
+
+def learns_twoplayer(
+    vs_heuristic: list[float],
+    vs_uniform: list[float],
+    uniform: list[float],
+    heuristic: list[float],
+    resamples: int = 10_000,
+    seed: int = 0,
+    min_effect: float = MIN_EFFECT,
+) -> dict:
+    """The tier T3b check (#370, DESIGN-T3b-r1 section 2, REVIEW-T3b-r1).
+
+    ``vs_heuristic`` and ``vs_uniform`` are the trained seeds' scores (one
+    mean per seed) against the heuristic and against a uniform-legal
+    opponent; ``uniform`` (U) and ``heuristic`` (H) are the per-episode
+    scores of a uniform-legal player and of the heuristic itself in the
+    learner's seat, against the heuristic, on the same evaluation seeds.
+
+    - **No gate** when the lower bound of the bootstrap 95% interval of
+      ``mean(H) - mean(U)`` is at most 0: the heuristic does not beat
+      random play, so there is no gap to close.
+    - **Threshold 1:** the lower bound of ``mean(vs_heuristic) - mean(U)``
+      is at least ``min_effect * (mean(H) - mean(U))``.
+    - **Threshold 2:** the lower bound of ``mean(vs_uniform)`` is above 0.
+    - Learns only when both hold and the scores are not degenerate
+      (constant ``vs_heuristic`` scores, or a zero-width interval)."""
+    parts = (vs_heuristic, vs_uniform, uniform, heuristic)
+    arrays = [np.asarray(x, dtype=np.float64) for x in parts]
+    if any(a.size < 2 or not np.all(np.isfinite(a)) for a in arrays):
+        return {"learns": False, "gate": True, "error": "learns_twoplayer needs at least two finite scores in each list"}
+    vh, vu, u, hh = arrays
+    rng = np.random.default_rng(seed)
+    hu = np.mean(rng.choice(hh, size=(resamples, hh.size)), axis=1) - np.mean(rng.choice(u, size=(resamples, u.size)), axis=1)
+    hu_lo = float(np.percentile(hu, 2.5))
+    if hu_lo <= 0:
+        return {"learns": False, "gate": False, "reason": "lower95(H - U) <= 0: no gate", "hu_lower95": hu_lo}
+    gap = np.mean(rng.choice(vh, size=(resamples, vh.size)), axis=1) - np.mean(rng.choice(u, size=(resamples, u.size)), axis=1)
+    lo, hi = np.percentile(gap, [2.5, 97.5])
+    required = float(min_effect * (np.mean(hh) - np.mean(u)))
+    u_lo, _ = _lower95_mean(vu, rng, resamples)
+    degenerate = bool(np.ptp(vh) == 0 or hi == lo)
+    first = bool(lo >= required)
+    second = bool(u_lo > 0)
+    return {
+        "learns": bool(first and second and not degenerate),
+        "gate": True,
+        "degenerate": degenerate,
+        "threshold_1": first,
+        "threshold_2": second,
+        "ci95_vs_heuristic_minus_u": [float(lo), float(hi)],
+        "required": required,
+        "lower95_vs_uniform": u_lo,
+        "hu_lower95": hu_lo,
+    }
+
+
 def no_verdict_streak(previous: dict | None) -> int:
     """Consecutive nights without a verdict, counting tonight, from the
     previous night's result. A night on an uncalibrated host gives no

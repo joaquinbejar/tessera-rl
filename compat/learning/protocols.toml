@@ -117,3 +117,70 @@ hyper = {}
 config = { agents = 8, steps = 200, latency = 0 }
 seeds = 5
 eval_episodes = 10
+
+# Tier T3b (#370, design docs/reviews/370/DESIGN-T3b-r1.md, REVIEW-T3b-r1):
+# one masked-PPO learner against ADR-0079 heuristic slots, over the native
+# Env (tools/learning_twoplayer.py; the board games are PettingZoo AEC only).
+# ``seats``: the learner's slots, alternating by seed (even seeds the first);
+# evaluation splits ``eval_episodes`` evenly over them. ``score``: "sign"
+# scores an episode +1, 0 or -1 from the learner's seat; "return" uses the
+# return. ``total_steps`` counts the learner's own turns. The thresholds are
+# in gates.toml. No calibration yet, so no nightly gate.
+[connect4]
+env = "tessera/Connect4-v1"
+tier = "T3b"
+adapter = "tessera_rl.make (native Env, sync, policy_map: the other seat a heuristic slot)"
+total_steps = 1000000
+hyper = {}
+seats = [0, 1]
+score = "sign"
+seeds = 5
+eval_episodes = 50
+
+[othello]
+env = "tessera/Othello-v1"
+tier = "T3b"
+adapter = "tessera_rl.make (native Env, sync, policy_map: the other seat a heuristic slot)"
+total_steps = 1000000
+hyper = {}
+seats = [0, 1]
+score = "sign"
+seeds = 5
+eval_episodes = 50
+
+[go9]
+env = "tessera/Go9-v1"
+tier = "T3b"
+adapter = "tessera_rl.make (native Env, sync, policy_map: the other seat a heuristic slot)"
+total_steps = 2000000
+hyper = {}
+seats = [0, 1]
+score = "sign"
+seeds = 5
+eval_episodes = 50
+
+[leduc]
+env = "tessera/Leduc-v1"
+tier = "T3b"
+adapter = "tessera_rl.make (native Env, sync, policy_map: the other seat a heuristic slot, InfoHeuristic)"
+total_steps = 500000
+hyper = {}
+seats = [0, 1]
+score = "sign"
+seeds = 5
+eval_episodes = 50
+
+# Tag: the learner is slot 0, a pursuer, against heuristic slots for every
+# other agent (the window-limited InfoHeuristic, #437 closed by #347); the
+# roles are asymmetric, so the seat does not alternate, and the score is the
+# return.
+[tag]
+env = "tessera/Tag-v1"
+tier = "T3b"
+adapter = "tessera_rl.make (native Env, sync, policy_map: every other slot a heuristic slot, InfoHeuristic)"
+total_steps = 1000000
+hyper = {}
+seats = [0]
+score = "return"
+seeds = 5
+eval_episodes = 50

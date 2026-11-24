@@ -102,6 +102,20 @@ def fingerprint(name: str) -> str:
             "flatten": hashlib.sha256(flat.encode()).hexdigest(),
         }
         params = asdict(masked_hyper(name, protocol(name)["total_steps"]))
+    elif protocol(name)["tier"] == "T3b":
+        import inspect  # noqa: PLC0415
+
+        import learning_twoplayer as l2  # noqa: PLC0415
+
+        # Its own scope (REVIEW-T3b-r1): the T3b module, and only the
+        # learning_masked functions it imports, so editing the rest of
+        # learning_masked moves no T3b fingerprint, and the reverse.
+        imported = "\n".join(inspect.getsource(f) for f in l2.IMPORTED)
+        sources = {
+            "learning_twoplayer": hashlib.sha256(pathlib.Path(l2.__file__).read_bytes()).hexdigest(),
+            "learning_masked_imported": hashlib.sha256(imported.encode()).hexdigest(),
+        }
+        params = asdict(twoplayer_hyper(name, protocol(name)["total_steps"]))
     else:
         sources = {
             "reference_training": hashlib.sha256(pathlib.Path(rt.__file__).read_bytes()).hexdigest(),
@@ -147,6 +161,45 @@ def train_masked(name: str, seed: int, total_steps: int, eval_episodes: int) -> 
     if p["tier"] != "T3a":
         raise ValueError(f"{name} is tier {p['tier']}, not T3a")
     return lm.train(p["env"], dict(p.get("env_kwargs", {})), seed, masked_hyper(name, total_steps), eval_episodes, rt.EVAL_SEED_BASE)
+
+
+def twoplayer_hyper(name: str, total_steps: int):
+    import learning_twoplayer as l2  # noqa: PLC0415
+
+    return l2.TwoPlayerHyper(**{**protocol(name)["hyper"], "total_steps": total_steps})
+
+
+def train_twoplayer(name: str, seed: int, total_steps: int, eval_episodes: int) -> dict:
+    """One training run of a tier T3b protocol (one learner against
+    heuristic slots, ``learning_twoplayer``), then its two evaluations:
+    against the heuristic and against a uniform-legal opponent. Apart from
+    ``train`` so the T1 fingerprints do not change."""
+    import learning_twoplayer as l2  # noqa: PLC0415
+    import reference_training as rt  # noqa: PLC0415
+
+    p = protocol(name)
+    if p["tier"] != "T3b":
+        raise ValueError(f"{name} is tier {p['tier']}, not T3b")
+    kwargs, seats, score = dict(p.get("env_kwargs", {})), list(p["seats"]), p["score"]
+    agent, _, record = l2.train(p["env"], kwargs, seed, seats, twoplayer_hyper(name, total_steps))
+    vs_h = l2.eval_scores(p["env"], kwargs, seats, "trained", "heuristic", eval_episodes, rt.EVAL_SEED_BASE, score, agent)
+    vs_u = l2.eval_scores(p["env"], kwargs, seats, "trained", "uniform", eval_episodes, rt.EVAL_SEED_BASE, score, agent)
+    return {**record, "vs_heuristic": vs_h, "vs_uniform": vs_u, "eval_mean": float(sum(vs_h) / len(vs_h))}
+
+
+def twoplayer_references(name: str, episodes: int) -> dict:
+    """The T3b reference levels on the evaluation seeds: U (uniform legal
+    against the heuristic) and H (the heuristic against itself), per
+    episode, over the protocol's seats."""
+    import learning_twoplayer as l2  # noqa: PLC0415
+    import reference_training as rt  # noqa: PLC0415
+
+    p = protocol(name)
+    kwargs, seats, score = dict(p.get("env_kwargs", {})), list(p["seats"]), p["score"]
+    return {
+        "uniform": l2.eval_scores(p["env"], kwargs, seats, "uniform", "heuristic", episodes, rt.EVAL_SEED_BASE, score),
+        "heuristic": l2.eval_scores(p["env"], kwargs, seats, "heuristic", "heuristic", episodes, rt.EVAL_SEED_BASE, score),
+    }
 
 
 def train_continuous(name: str, seed: int, total_steps: int, eval_episodes: int) -> dict:
