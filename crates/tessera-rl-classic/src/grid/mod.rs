@@ -5,6 +5,7 @@
 
 mod checks;
 pub mod layout;
+mod render;
 
 use tessera_rl_core::io::{Actions, ObsWriter};
 use tessera_rl_core::space::Space;

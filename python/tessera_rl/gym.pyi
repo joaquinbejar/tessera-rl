@@ -20,6 +20,7 @@ class TesseraVectorEnv(VectorEnv[Any, np.ndarray, np.ndarray]):
         autoreset_mode: AutoresetMode | str = ...,
         outputs: str = "owned",
         max_episode_steps: int | None = 500,
+        render_mode: str | None = None,
         **kwargs: Any,
     ) -> None: ...
     def reset(
@@ -31,6 +32,7 @@ class TesseraVectorEnv(VectorEnv[Any, np.ndarray, np.ndarray]):
     def step(
         self, actions: npt.ArrayLike
     ) -> tuple[Any, np.ndarray, np.ndarray, np.ndarray, dict[str, Any]]: ...
+    def render(self) -> np.ndarray | None: ...  # type: ignore[override]
     def close_extras(self, **kwargs: Any) -> None: ...
 
 class TesseraEnv(gymnasium.Env[Any, Any]):
@@ -38,12 +40,17 @@ class TesseraEnv(gymnasium.Env[Any, Any]):
     observation_space: spaces.Space[Any]
     action_space: spaces.Space[Any]
     def __init__(
-        self, env_id: str = "tessera/CartPole-v1", seed: int | None = None, **kwargs: Any
+        self,
+        env_id: str = "tessera/CartPole-v1",
+        seed: int | None = None,
+        render_mode: str | None = None,
+        **kwargs: Any,
     ) -> None: ...
     def reset(
         self, *, seed: int | None = None, options: dict[str, Any] | None = None
     ) -> tuple[Any, dict[str, Any]]: ...
     def step(self, action: Any) -> tuple[Any, float, bool, bool, dict[str, Any]]: ...
+    def render(self) -> np.ndarray | None: ...
     def close(self) -> None: ...
 
 def make(

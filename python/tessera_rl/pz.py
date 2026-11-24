@@ -91,7 +91,7 @@ from pettingzoo import AECEnv, ParallelEnv
 from pettingzoo.utils.conversions import parallel_to_aec_wrapper
 from pettingzoo.utils.wrappers import OrderEnforcingWrapper
 
-from tessera_rl import _envs, _host, _native
+from tessera_rl import _envs, _host, _native, _render
 from tessera_rl._env import Env, _discrete_actions, _multi_actions, native_kwargs
 from tessera_rl.masks import head_views
 
@@ -370,7 +370,7 @@ class TesseraParallelEnv(ParallelEnv):
 
     metadata = {"render_modes": [], "name": "tessera", "is_parallelizable": True}
 
-    def __init__(self, env_id: str, seed: int | None = None, *, _pool=None, **kwargs):
+    def __init__(self, env_id: str, seed: int | None = None, *, _pool=None, render_mode: str | None = None, **kwargs):
         pool = _pool if _pool is not None else _native_pool(env_id, "parallel", seed, kwargs)
         self._a = _Agents(pool, env_id)
         self.metadata = {
@@ -379,7 +379,14 @@ class TesseraParallelEnv(ParallelEnv):
             "tessera_kind": self._a.kind,
             "refuses_agents": self._a.refuses,
         }
-        self.render_mode = None
+        renders = self._a.env.canvas is not None
+        self.metadata["render_modes"] = ["rgb_array"] if renders else []
+        self.metadata["render_fps"] = _render.RENDER_FPS
+        try:
+            self.render_mode = _render.check_mode(render_mode, renders, env_id)
+        except Exception:
+            self._a.env.close()
+            raise
         self.possible_agents = list(self._a.names)
         self.agents = list(self.possible_agents)
 
@@ -443,6 +450,13 @@ class TesseraParallelEnv(ParallelEnv):
                     self.possible_agents.append(name)
         return obs, rewards, terms, truncs, infos
 
+    def render(self):
+        """With ``render_mode="rgb_array"``, the frame, ``(height, width, 3)``
+        ``uint8``, drawn from a snapshot (ADR-0083); ``None`` otherwise."""
+        if self.render_mode is None:
+            return None
+        return self._a.env.render([0])[0]
+
     def close(self):
         self._a.env.close()
 
@@ -454,7 +468,7 @@ class TesseraAECEnv(AECEnv):
 
     metadata = {"render_modes": [], "name": "tessera", "is_parallelizable": False}
 
-    def __init__(self, env_id: str, seed: int | None = None, *, _pool=None, **kwargs):
+    def __init__(self, env_id: str, seed: int | None = None, *, _pool=None, render_mode: str | None = None, **kwargs):
         super().__init__()
         pool = _pool if _pool is not None else _native_pool(env_id, "aec", seed, kwargs)
         self._a = _Agents(pool, env_id)
@@ -472,7 +486,14 @@ class TesseraAECEnv(AECEnv):
             "tessera_kind": self._a.kind,
             "refuses_agents": self._a.refuses,
         }
-        self.render_mode = None
+        renders = self._a.env.canvas is not None
+        self.metadata["render_modes"] = ["rgb_array"] if renders else []
+        self.metadata["render_fps"] = _render.RENDER_FPS
+        try:
+            self.render_mode = _render.check_mode(render_mode, renders, env_id)
+        except Exception:
+            self._a.env.close()
+            raise
         self.possible_agents = list(self._a.names)
         # No reset here: the first reset() is the seed's first episode.
         self.agents = list(self.possible_agents)
@@ -535,6 +556,13 @@ class TesseraAECEnv(AECEnv):
             self.agent_selection = nxt
         self._accumulate_rewards()
         self._deads_step_first()
+
+    def render(self):
+        """With ``render_mode="rgb_array"``, the frame, ``(height, width, 3)``
+        ``uint8``, drawn from a snapshot (ADR-0083); ``None`` otherwise."""
+        if self.render_mode is None:
+            return None
+        return self._a.env.render([0])[0]
 
     def close(self):
         self._a.env.close()

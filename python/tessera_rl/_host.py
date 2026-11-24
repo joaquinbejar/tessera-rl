@@ -107,6 +107,9 @@ _ABSENT = (
     "snapshot_all",
     "send",
     "recv",
+    # Host protocols carry no Render (ADR-0083).
+    "render",
+    "scene",
 )
 
 #: The pool options a factory takes by name (SPEC 14.4.1 item 4); every
@@ -463,6 +466,9 @@ class HostEnv:
     ``outputs="borrowed"`` returns read-only views with ``Env``'s borrow
     window (``is_stale`` tracks them); ``outputs="owned"`` copies them.
     """
+
+    #: Host environments do not render (ADR-0083).
+    canvas = None
 
     def __init__(self, obj, outputs: str = "borrowed"):
         self._native = _HostNative(obj, outputs)

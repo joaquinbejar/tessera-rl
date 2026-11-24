@@ -10,6 +10,7 @@ from tessera_rl._host import HostStep as HostStep
 from tessera_rl._host import set_fp_policy as set_fp_policy
 from tessera_rl._envs import TesseraDeprecationWarning as TesseraDeprecationWarning
 from tessera_rl._envs import envs as envs
+from tessera_rl._render import TesseraRenderWarning as TesseraRenderWarning
 from tessera_rl._native import ActionError as ActionError
 from tessera_rl._native import ArgumentError as ArgumentError
 from tessera_rl._native import CapabilityError as CapabilityError
@@ -55,6 +56,7 @@ __all__ = [
     "Step",
     "TesseraDeprecationWarning",
     "TesseraError",
+    "TesseraRenderWarning",
     "fp_non_canonical_entries",
     "envs",
     "get_fp_policy",

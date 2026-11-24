@@ -11,6 +11,7 @@ use crate::encoding::Canonical;
 use crate::error::{ConfigError, InvariantViolation, SpaceError};
 use crate::header::RecordLayout;
 use crate::io::{ActionWriter, Actions, MaskWriter, ObsWriter};
+use crate::render::SceneWriter;
 use crate::space::Space;
 use crate::state_init::StateInit;
 use crate::step_out::StepOut;
@@ -196,9 +197,26 @@ pub trait Determinize: ImperfectInformation {
     );
 }
 
-/// Rendering (SPEC 17). A placeholder: the frame and scene types are
-/// defined in phase 2.
-pub trait Render: Environment {}
+/// Rendering (SPEC 10.1, 13, ADR-0017, ADR-0083): draws a snapshot's state
+/// into a vector scene, from which frames are rasterized.
+///
+/// `draw` is a pure, infallible function of `(cfg, state)`: no RNG, no
+/// time. Nothing in `reset`, `step` or `observe` calls it; renderers call it
+/// on states taken from snapshot records. A scene built without floats
+/// rasterizes to bit-exact frames on every platform.
+pub trait Render: Environment {
+    /// The scene buffer's capacity in primitives (at most
+    /// [`render::MAX_PRIMITIVES_LIMIT`](crate::render::MAX_PRIMITIVES_LIMIT)).
+    /// A scene that needs more is truncated and reported as overflowed.
+    const MAX_PRIMITIVES: usize = 1024;
+
+    /// The canvas size in pixels, `(width, height)`, each in
+    /// `1..=`[`render::MAX_CANVAS`](crate::render::MAX_CANVAS).
+    fn canvas(cfg: &Self::Config) -> (u16, u16);
+
+    /// Draws `state` into `scene`.
+    fn draw(cfg: &Self::Config, state: &Self::State, scene: &mut SceneWriter<'_>);
+}
 
 /// A scripted policy for opponents and baselines.
 pub trait Heuristic: Environment {

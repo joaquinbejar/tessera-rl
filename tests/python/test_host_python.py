@@ -475,7 +475,9 @@ def test_host_adapters_report_tessera_kind_in_metadata(fake):
     for env in envs:
         assert env.metadata["tessera_kind"] == "tessera"
         env.close()
-    assert gym.TesseraEnv.metadata == {"render_modes": []}
+    # The class lists what gymnasium.make may ask for; each instance lists
+    # its own render modes exactly (ADR-0083).
+    assert gym.TesseraEnv.metadata == {"render_modes": ["rgb_array"], "render_fps": 50}
 
 
 @pytest.mark.parametrize("adapter", ["parallel_env", "aec_env"])

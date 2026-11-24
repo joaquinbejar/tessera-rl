@@ -46,6 +46,9 @@ pub(crate) enum BindError {
     Onnx(String),
     /// A replay file refused or a replay that diverged (ADR-0072).
     Replay(tessera_rl_engine::ReplayError),
+    /// A call this pool does not support (`CapabilityError`), such as
+    /// `render` without `Render` (ADR-0083).
+    Capability(String),
 }
 
 impl From<tessera_rl_engine::ReplayError> for BindError {
@@ -210,6 +213,20 @@ pub(crate) trait PoolOps: Send {
         Ok(self.storage())
     }
     fn snapshot(&self, id: u32) -> Result<Vec<u8>, BindError>;
+    /// The canvas `(width, height)` of a pool that renders (ADR-0083).
+    fn canvas(&self) -> Option<(u16, u16)> {
+        None
+    }
+    /// The frames of `ids`, `len(ids) * height * width * 3` RGB8 bytes, and
+    /// whether each scene overflowed. Each frame is drawn from the
+    /// instance's snapshot record, on the caller's thread.
+    fn render(&self, _ids: &[u32]) -> Result<(Vec<u8>, Vec<bool>), BindError> {
+        Err(crate::render_api::not_renderable())
+    }
+    /// The scene of instance `id` and whether it overflowed.
+    fn scene(&self, _id: u32) -> Result<(Vec<tessera_rl_core::render::Prim>, bool), BindError> {
+        Err(crate::render_api::not_renderable())
+    }
     /// Illegal-but-valid actions replaced in instance `id`'s current
     /// episode, per agent slot (the record header's statistic). Sync mode
     /// only; the split-phase modes refuse it.
@@ -274,6 +291,9 @@ struct Pooled<E: Environment, M: MaskProvider<E>> {
     views: Option<std::sync::Arc<crate::view::ViewSet>>,
     /// Captured while healthy: identity and regions for views, no row values.
     storage: std::sync::Arc<tessera_rl_engine::OutputStorage>,
+    /// The configuration and render functions, for an environment that
+    /// implements `Render` (ADR-0083).
+    render: Option<(E::Config, crate::render_api::RenderFns<E>)>,
 }
 
 fn dtype_name(dtype: DType) -> &'static str {
@@ -412,6 +432,7 @@ where
             rec: None,
             views: crate::view::view_set(&layout).map(std::sync::Arc::new),
             layout,
+            render: None,
         })
     }
 }
@@ -555,6 +576,38 @@ where
 
     fn snapshot(&self, id: u32) -> Result<Vec<u8>, BindError> {
         Ok(self.pool.snapshot(id)?.to_bytes())
+    }
+
+    fn canvas(&self) -> Option<(u16, u16)> {
+        self.render.as_ref().map(|(_, fns)| fns.canvas)
+    }
+
+    fn render(&self, ids: &[u32]) -> Result<(Vec<u8>, Vec<bool>), BindError> {
+        let (cfg, fns) = self
+            .render
+            .as_ref()
+            .ok_or_else(crate::render_api::not_renderable)?;
+        let (w, h) = fns.canvas;
+        let len = usize::from(w) * usize::from(h) * 3;
+        let total = len
+            .checked_mul(ids.len())
+            .ok_or_else(|| BindError::Argument("too many frames".to_owned()))?;
+        let mut out = vec![0; total];
+        let mut overflowed = Vec::with_capacity(ids.len());
+        for (&id, frame) in ids.iter().zip(out.chunks_exact_mut(len)) {
+            let record = self.pool.snapshot(id)?;
+            overflowed.push((fns.frame)(cfg, record.state(), frame)?);
+        }
+        Ok((out, overflowed))
+    }
+
+    fn scene(&self, id: u32) -> Result<(Vec<tessera_rl_core::render::Prim>, bool), BindError> {
+        let (cfg, fns) = self
+            .render
+            .as_ref()
+            .ok_or_else(crate::render_api::not_renderable)?;
+        let record = self.pool.snapshot(id)?;
+        (fns.scene)(cfg, record.state())
     }
 
     fn state_hash(&self, id: u32) -> Result<u64, BindError> {
@@ -829,6 +882,49 @@ where
         tessera_rl_core::AdaptiveValues<E::Config>,
     M: tessera_rl_engine::PersistMask<E> + Send + Sync + 'static,
 {
+    finish_with_render(cfg, pool, args, n, terminal, None)
+}
+
+/// [`finish`] for an environment that implements `Render`: the sync-mode
+/// pool renders (ADR-0083).
+pub(crate) fn finish_rendered<E, M>(
+    cfg: &E::Config,
+    pool: EnvPool<E, M>,
+    args: &PoolArgs,
+    n: usize,
+    terminal: bool,
+) -> Result<Box<dyn PoolOps>, BindError>
+where
+    E: tessera_rl_core::Persist + tessera_rl_core::Render + 'static,
+    E::Config: tessera_rl_core::config::CanonicalConfig + Send + Sync,
+    E::Header: Send + Sync,
+    E::State: Send + Sync,
+    <E::Header as tessera_rl_core::RecordLayout>::Adaptive:
+        tessera_rl_core::AdaptiveValues<E::Config>,
+    E::Config: Clone,
+    M: tessera_rl_engine::PersistMask<E> + Send + Sync + 'static,
+{
+    let fns = crate::render_api::render_fns::<E>(cfg)?;
+    finish_with_render(cfg, pool, args, n, terminal, Some((cfg.clone(), fns)))
+}
+
+fn finish_with_render<E, M>(
+    cfg: &E::Config,
+    pool: EnvPool<E, M>,
+    args: &PoolArgs,
+    n: usize,
+    terminal: bool,
+    render: Option<(E::Config, crate::render_api::RenderFns<E>)>,
+) -> Result<Box<dyn PoolOps>, BindError>
+where
+    E: tessera_rl_core::Persist + 'static,
+    E::Config: tessera_rl_core::config::CanonicalConfig + Send + Sync,
+    E::Header: Send + Sync,
+    E::State: Send + Sync,
+    <E::Header as tessera_rl_core::RecordLayout>::Adaptive:
+        tessera_rl_core::AdaptiveValues<E::Config>,
+    M: tessera_rl_engine::PersistMask<E> + Send + Sync + 'static,
+{
     let workers = resolve_workers(args)?;
     check_spin(args)?;
     let policy = wait_policy(args)?;
@@ -890,6 +986,7 @@ where
         layout,
         views,
         storage,
+        render,
     }))
 }
 
@@ -983,7 +1080,7 @@ pub(crate) fn cartpole(args: &PoolArgs) -> Result<Box<dyn PoolOps>, BindError> {
     let (options, n) = options(args)?;
     let same_step = options.auto_reset == AutoReset::SameStep;
     let pool = EnvPool::<CartPole, NoMasks>::new(cfg.clone(), options)?;
-    finish(&cfg, pool, args, n, same_step)
+    finish_rendered(&cfg, pool, args, n, same_step)
 }
 
 /// An acrobot pool (`tessera/Acrobot-v1`).
@@ -1023,7 +1120,7 @@ pub(crate) fn grid(
     let (options, n) = options(args)?;
     let same_step = options.auto_reset == AutoReset::SameStep;
     let pool = EnvPool::<Grid, NoMasks>::new(cfg.clone(), options)?;
-    finish(&cfg, pool, args, n, same_step)
+    finish_rendered(&cfg, pool, args, n, same_step)
 }
 
 /// A key and door pool (`tessera/GridKeyDoor-v1`), with masks.
@@ -1040,7 +1137,7 @@ pub(crate) fn keydoor(
     let (options, n) = options(args)?;
     let same_step = options.auto_reset == AutoReset::SameStep;
     let pool = EnvPool::<KeyDoor, Masked>::with_masks(cfg.clone(), options)?;
-    finish(&cfg, pool, args, n, same_step)
+    finish_rendered(&cfg, pool, args, n, same_step)
 }
 
 /// The paddle duel config fields, by name, as Python passes them.
@@ -1079,7 +1176,7 @@ pub(crate) fn paddleduel(
     let (options, n) = options(args)?;
     let same_step = options.auto_reset == AutoReset::SameStep;
     let pool = EnvPool::<PaddleDuel, NoMasks>::new(cfg.clone(), options)?;
-    finish(&cfg, pool, args, n, same_step)
+    finish_rendered(&cfg, pool, args, n, same_step)
 }
 
 /// A brick wall pool (`tessera/BrickWall-v1`). `obs` names the observation.
@@ -1108,7 +1205,7 @@ pub(crate) fn brickwall(
     let (options, n) = options(args)?;
     let same_step = options.auto_reset == AutoReset::SameStep;
     let pool = EnvPool::<BrickWall, NoMasks>::new(cfg.clone(), options)?;
-    finish(&cfg, pool, args, n, same_step)
+    finish_rendered(&cfg, pool, args, n, same_step)
 }
 
 /// A snake pool (`tessera/Snake-v1`), with masks. `obs` names the observation.
@@ -1137,7 +1234,7 @@ pub(crate) fn snake(
     let (options, n) = options(args)?;
     let same_step = options.auto_reset == AutoReset::SameStep;
     let pool = EnvPool::<Snake, Masked>::with_masks(cfg.clone(), options)?;
-    finish(&cfg, pool, args, n, same_step)
+    finish_rendered(&cfg, pool, args, n, same_step)
 }
 
 /// The Tag config fields, by name, as Python passes them.
@@ -1213,7 +1310,7 @@ pub(crate) fn connect4(args: &PoolArgs) -> Result<Box<dyn PoolOps>, BindError> {
     let (options, n) = options(args)?;
     let same_step = options.auto_reset == AutoReset::SameStep;
     let pool = EnvPool::<Connect4, Masked>::with_masks(cfg.clone(), options)?;
-    finish(&cfg, pool, args, n, same_step)
+    finish_rendered(&cfg, pool, args, n, same_step)
 }
 
 /// An Othello pool (`tessera/Othello-v1`), with masks and Sequential turns.
@@ -1222,7 +1319,7 @@ pub(crate) fn othello(args: &PoolArgs) -> Result<Box<dyn PoolOps>, BindError> {
     let (options, n) = options(args)?;
     let same_step = options.auto_reset == AutoReset::SameStep;
     let pool = EnvPool::<Othello, Masked>::with_masks(cfg.clone(), options)?;
-    finish(&cfg, pool, args, n, same_step)
+    finish_rendered(&cfg, pool, args, n, same_step)
 }
 
 /// A Go 9x9 pool (`tessera/Go9-v1`), with masks and Sequential turns.
@@ -1234,7 +1331,7 @@ pub(crate) fn go9(args: &PoolArgs, komi: Option<i32>) -> Result<Box<dyn PoolOps>
     let (options, n) = options(args)?;
     let same_step = options.auto_reset == AutoReset::SameStep;
     let pool = EnvPool::<Go9, Masked>::with_masks(cfg.clone(), options)?;
-    finish(&cfg, pool, args, n, same_step)
+    finish_rendered(&cfg, pool, args, n, same_step)
 }
 
 /// A Leduc hold'em pool (`tessera/Leduc-v1`), with masks and Sequential

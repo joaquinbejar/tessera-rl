@@ -13,6 +13,7 @@ members = [
     "crates/tessera-rl-games",
     "crates/tessera-rl-search",
     "crates/tessera-rl-rts",
+    "crates/tessera-rl-render",
     "crates/tessera-rl-onnx",
     "tools/math-oracle",
     "tools/bench-runner",
@@ -39,6 +40,7 @@ default-members = [
     "crates/tessera-rl-games",
     "crates/tessera-rl-search",
     "crates/tessera-rl-rts",
+    "crates/tessera-rl-render",
     "crates/tessera-rl-onnx",
     "tests/downstream",
     "tests/host-env",
@@ -59,6 +61,7 @@ categories = ["science", "simulation"]
 [workspace.dependencies]
 tessera-rl = { path = "crates/tessera-rl", version = "0.3.0" }
 tessera-rl-core = { path = "crates/tessera-rl-core", version = "0.3.0" }
+tessera-rl-render = { path = "crates/tessera-rl-render", version = "0.3.0" }
 tessera-rl-num = { path = "crates/tessera-rl-num", version = "0.3.0" }
 tessera-rl-simd = { path = "crates/tessera-rl-simd", version = "0.3.0" }
 tessera-rl-macros = { path = "crates/tessera-rl-macros", version = "0.3.0" }
