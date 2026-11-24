@@ -984,7 +984,9 @@ dependencies = [
  "tessera-rl-games",
  "tessera-rl-macros",
  "tessera-rl-num",
+ "tessera-rl-onnx",
  "tessera-rl-search",
+ "tessera-rl-simd",
 ]
 
 [[package]]
