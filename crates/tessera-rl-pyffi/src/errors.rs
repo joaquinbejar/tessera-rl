@@ -121,7 +121,7 @@ const KINDS: [(Kind, &str, &std::ffi::CStr); 16] = [
     (
         Kind::Search,
         "SearchError",
-        c"A search call rejected or failed (ADR-0043); the tree is unchanged.",
+        c"A search call rejected or failed; the tree is unchanged.",
     ),
     (
         Kind::Evaluator,
@@ -141,7 +141,7 @@ const KINDS: [(Kind, &str, &std::ffi::CStr); 16] = [
     (
         Kind::Onnx,
         "OnnxError",
-        c"The ONNX evaluator could not load ONNX Runtime or its model (ADR-0057); nothing was evaluated.",
+        c"The ONNX evaluator could not load ONNX Runtime or its model; nothing was evaluated.",
     ),
     (
         Kind::Capability,
