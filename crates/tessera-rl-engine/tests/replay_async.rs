@@ -27,8 +27,8 @@ use tessera_rl_engine::replay::{
     ReplayWriterOptions,
 };
 use tessera_rl_engine::{
-    ActionInput, AsyncOptions, AsyncPool, DecodeLimits, EnvPool, Masked, PersistError,
-    PoolOptions, Reseed,
+    ActionInput, AsyncOptions, AsyncPool, DecodeLimits, EnvPool, Masked, PersistError, PoolOptions,
+    Reseed,
 };
 use tessera_rl_num::identity::Seed;
 
@@ -89,7 +89,9 @@ fn recv(rec: &mut Rec<'_>) -> Vec<u32> {
 }
 
 fn hashes(p: &mut Asy) -> Vec<u64> {
-    (0..N).map(|i| p.snapshot(i).unwrap().hash().get()).collect()
+    (0..N)
+        .map(|i| p.snapshot(i).unwrap().hash().get())
+        .collect()
 }
 
 /// Records interleaved subset sends and receives (batches of 2), a partial
@@ -169,12 +171,15 @@ fn test_replay_async_checkpoints_and_keyframes_only_when_quiescent() {
     for item in replay.events() {
         let (index, event) = item.unwrap();
         match event {
-            Event::Step { ids: Ids::List(ids), .. }
+            Event::Step {
+                ids: Ids::List(ids),
+                ..
+            }
             | Event::Reset {
                 ids: Ids::List(ids),
                 ..
-            } => outstanding += ids.len(),
-            Event::StateWrite {
+            }
+            | Event::StateWrite {
                 ids: Ids::List(ids),
                 ..
             } => outstanding += ids.len(),
