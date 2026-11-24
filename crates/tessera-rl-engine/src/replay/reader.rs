@@ -16,8 +16,9 @@ use crate::persist::{DecodeLimits, FileHeader, PersistError, Reader, u64_of};
 
 use super::ReplayError;
 use super::format::{
-    Body, END_BODY_LEN, EventTag, FLAG_FROM_RESET_ONLY, FLAG_OUTPUTS_HASH, FORMAT_VERSION,
-    FRAME_LEN, IDS_ALL, IDS_LIST, MAX_CONFIG_BYTES, REPLAY_MAGIC, StateWriteOp,
+    Body, END_BODY_LEN, EventTag, FLAG_CONFIG_CHECKED, FLAG_FROM_RESET_ONLY, FLAG_HOST_SNAPSHOTS,
+    FLAG_OUTPUTS_HASH, FORMAT_VERSION, FRAME_LEN, IDS_ALL, IDS_LIST, MAX_CONFIG_BYTES,
+    REPLAY_MAGIC, StateWriteOp,
 };
 
 /// The instances an event touches.
@@ -143,6 +144,42 @@ pub struct HostInfo {
     pub notifies: bool,
     /// `HostEnvironment::REFUSES_AGENTS`.
     pub refuses: bool,
+    /// `Reset`, `Step` and `Recv` events carry an outputs hash.
+    pub outputs_hash: bool,
+    /// Which kind of host file.
+    pub kind: HostFileKind,
+}
+
+/// The two kinds of host file (ADR-0072 section 4).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HostFileKind {
+    /// `from_reset_only`: the first event is a reset of every instance; no
+    /// keyframes, checkpoints or state writes; no config in the header.
+    FromReset,
+    /// A host with snapshots (ADR-0073): keyframes of host records and
+    /// checkpoints, a checked canonical config.
+    Snapshots {
+        /// The ADR-0073 identity digest.
+        identity: u64,
+    },
+}
+
+impl HostInfo {
+    /// Whether the config bytes and `config_hash` are filled and checked:
+    /// exactly for a file with snapshots.
+    #[must_use]
+    pub const fn config_checked(&self) -> bool {
+        matches!(self.kind, HostFileKind::Snapshots { .. })
+    }
+
+    /// The identity digest of a file with snapshots.
+    #[must_use]
+    pub const fn identity(&self) -> Option<u64> {
+        match self.kind {
+            HostFileKind::Snapshots { identity } => Some(identity),
+            HostFileKind::FromReset => None,
+        }
+    }
 }
 
 /// The replay extension of the header, after the ADR-0011 fields.
@@ -160,8 +197,7 @@ pub struct ReplayHeader<'a> {
     pub discrete_heads: u32,
     /// Continuous action heads per agent.
     pub continuous_heads: u32,
-    /// `Some` for a host pool's file: `from_reset_only`, with outputs
-    /// hashes.
+    /// `Some` for a host pool's file.
     pub host: Option<HostInfo>,
 }
 
@@ -172,7 +208,7 @@ pub struct Replay<'a> {
     events: &'a [u8],
     event_count: u64,
     input_len: u64,
-    limits: DecodeLimits,
+    pub(crate) limits: DecodeLimits,
 }
 
 impl core::fmt::Debug for Replay<'_> {
@@ -232,6 +268,11 @@ impl<'a> Replay<'a> {
         let discrete_heads = r.u32()?;
         let continuous_heads = r.u32()?;
         let [flags, host_protocol, notifies, refuses] = r.array::<4>()?;
+        let identity = if host_protocol != 0 && flags & FLAG_HOST_SNAPSHOTS != 0 {
+            Some(r.u64()?)
+        } else {
+            None
+        };
         let header_len = bytes
             .len()
             .checked_sub(r.0.len())
@@ -241,7 +282,16 @@ impl<'a> Replay<'a> {
         if checksum(header_bytes) != stored {
             return Err(ReplayError::HeaderChecksum);
         }
-        let host = check_replay_fields(flags, host_protocol, notifies, refuses)?;
+        let host = check_replay_fields(flags, host_protocol, notifies, refuses, identity)?;
+        if let Some(h) = host
+            && !h.config_checked()
+            && (!config.is_empty() || file.hash != 0)
+        {
+            return Err(PersistError::InvalidField {
+                field: "config of an unchecked host file",
+            }
+            .into());
+        }
         file.check_fields_for(host.is_some())?;
         if file.count == 0 {
             return Err(PersistError::InvalidField {
@@ -308,11 +358,14 @@ fn check_replay_fields(
     host_protocol: u8,
     notifies: u8,
     refuses: u8,
+    identity: Option<u64>,
 ) -> Result<Option<HostInfo>, ReplayError> {
     let invalid = |field: &'static str| -> Result<Option<HostInfo>, ReplayError> {
         Err(PersistError::InvalidField { field }.into())
     };
-    if flags & !(FLAG_FROM_RESET_ONLY | FLAG_OUTPUTS_HASH) != 0 {
+    let known =
+        FLAG_FROM_RESET_ONLY | FLAG_OUTPUTS_HASH | FLAG_CONFIG_CHECKED | FLAG_HOST_SNAPSHOTS;
+    if flags & !known != 0 {
         return invalid("flags");
     }
     if notifies > 1 {
@@ -322,7 +375,8 @@ fn check_replay_fields(
         return invalid("refuses_agents");
     }
     if host_protocol == 0 {
-        if notifies != 0 || refuses != 0 {
+        if notifies != 0 || refuses != 0 || flags & (FLAG_CONFIG_CHECKED | FLAG_HOST_SNAPSHOTS) != 0
+        {
             return invalid("host fields of a first-party file");
         }
         if flags & FLAG_FROM_RESET_ONLY != 0 {
@@ -344,17 +398,33 @@ fn check_replay_fields(
     if (refuses == 1) != (host_protocol == 2) {
         return invalid("refuses_agents");
     }
-    // Host snapshots (ADR-0073) do not exist yet: every host file starts
-    // from a reset and carries outputs hashes (ADR-0072 section 4).
-    if flags != FLAG_FROM_RESET_ONLY | FLAG_OUTPUTS_HASH {
-        return Err(ReplayError::Unsupported {
-            feature: "host replay files with keyframes or without outputs hashes",
-        });
+    // ADR-0072 section 4: a host with snapshots (ADR-0073) has keyframes,
+    // checkpoints and a checked config, and the outputs hash is optional; a
+    // host without them starts from a reset and needs the outputs hash.
+    let snapshots = flags & FLAG_HOST_SNAPSHOTS != 0;
+    let from_reset = flags & FLAG_FROM_RESET_ONLY != 0;
+    let outputs_hash = flags & FLAG_OUTPUTS_HASH != 0;
+    let config_checked = flags & FLAG_CONFIG_CHECKED != 0;
+    if snapshots == from_reset {
+        return invalid("flags: exactly one of host_snapshots and from_reset_only");
     }
+    if from_reset && !outputs_hash {
+        return invalid("flags: a from_reset_only file needs outputs hashes");
+    }
+    if snapshots != config_checked {
+        return invalid("flags: config_checked exactly for a snapshot host");
+    }
+    let kind = match identity {
+        Some(identity) if snapshots => HostFileKind::Snapshots { identity },
+        None if !snapshots => HostFileKind::FromReset,
+        _ => return invalid("identity"),
+    };
     Ok(Some(HostInfo {
         host_protocol,
         notifies: notifies == 1,
         refuses: refuses == 1,
+        outputs_hash,
+        kind,
     }))
 }
 
@@ -412,23 +482,25 @@ fn scan(bytes: &[u8], host: Option<HostInfo>) -> Result<(&[u8], u64), ReplayErro
 
 /// Which tags a file may hold: reserved tags never; `Rejected` only in a
 /// notifying host's file; keyframes, checkpoints and state writes never in a
-/// host file. The first event is a keyframe, or a reset for a host file.
+/// `from_reset_only` host file. The first event is a keyframe, or a reset for
+/// a `from_reset_only` file.
 fn check_tag(tag: EventTag, host: Option<HostInfo>, count: u64) -> Result<(), ReplayError> {
     let notifies = host.is_some_and(|h| h.notifies);
     if tag.is_reserved() && !(tag == EventTag::Rejected && notifies) {
         return Err(ReplayError::ReservedTag { tag: tag as u8 });
     }
-    if host.is_some()
+    let from_reset = host.is_some_and(|h| h.identity().is_none());
+    if from_reset
         && matches!(
             tag,
             EventTag::Keyframe | EventTag::Checkpoint | EventTag::StateWrite
         )
     {
         return Err(ReplayError::Unsupported {
-            feature: "keyframes, checkpoints and state writes in host replay files",
+            feature: "keyframes, checkpoints and state writes in from_reset_only files",
         });
     }
-    let first = if host.is_some() {
+    let first = if from_reset {
         EventTag::Reset
     } else {
         EventTag::Keyframe
@@ -436,7 +508,7 @@ fn check_tag(tag: EventTag, host: Option<HostInfo>, count: u64) -> Result<(), Re
     if count == 0 && tag != first {
         return Err(ReplayError::Malformed {
             event_index: 0,
-            field: "first event (a keyframe, or a host file's reset, of every instance)",
+            field: "first event (a keyframe, or a from_reset_only file's reset, of every instance)",
         });
     }
     Ok(())
@@ -547,9 +619,7 @@ impl<'a> Events<'a> {
                 let branch_counter = b.u64("branch counter")?;
                 let ids = self.ids(&mut b)?;
                 let n = self.len_of(&ids)?;
-                let len = usize::try_from(self.record_len).map_err(|_| b.malformed("records"))?;
-                let bytes = n.checked_mul(len).ok_or_else(|| b.malformed("records"))?;
-                let records = b.take(bytes, "records")?;
+                let records = self.keyframe_records(&mut b, body, n)?;
                 Event::Keyframe {
                     branch_counter,
                     ids,
@@ -558,14 +628,7 @@ impl<'a> Events<'a> {
             }
             EventTag::Checkpoint => {
                 let ids = self.ids(&mut b)?;
-                let n = self.len_of(&ids)?;
-                if n.checked_mul(8) != Some(b.remaining()) {
-                    return Err(b.malformed("checkpoint hashes"));
-                }
-                let mut hashes = alloc(n)?;
-                for _ in 0..n {
-                    hashes.push(StateHash::from_raw(b.u64("checkpoint hashes")?));
-                }
+                let hashes = self.checkpoint_hashes(&mut b, &ids)?;
                 Event::Checkpoint { ids, hashes }
             }
             EventTag::Poisoned => Event::Poisoned,
@@ -599,8 +662,52 @@ impl<'a> Events<'a> {
         }
     }
 
+    /// The records of a keyframe of `n` ids: fixed-length canonical records,
+    /// or for a host file `(len:u32 HostRecord)*`. `body` is the whole event
+    /// body that `b` reads.
+    fn keyframe_records(
+        &self,
+        b: &mut Body<'a>,
+        body: &'a [u8],
+        n: usize,
+    ) -> Result<&'a [u8], ReplayError> {
+        if self.host.is_none() {
+            let len = usize::try_from(self.record_len).map_err(|_| b.malformed("records"))?;
+            let bytes = n.checked_mul(len).ok_or_else(|| b.malformed("records"))?;
+            return b.take(bytes, "records");
+        }
+        // Host records have variable length: `len:u32` before each.
+        let start = b.remaining();
+        for _ in 0..n {
+            let len = usize::try_from(b.u32("host record length")?)
+                .map_err(|_| b.malformed("host record length"))?;
+            b.take(len, "host record")?;
+        }
+        let used = start.saturating_sub(b.remaining());
+        body.get(body.len().saturating_sub(start)..)
+            .and_then(|rest| rest.get(..used))
+            .ok_or_else(|| b.malformed("host records"))
+    }
+
+    /// One `StateHash` per id, filling the rest of the body.
+    fn checkpoint_hashes(
+        &self,
+        b: &mut Body<'_>,
+        ids: &Ids,
+    ) -> Result<Vec<StateHash>, ReplayError> {
+        let n = self.len_of(ids)?;
+        if n.checked_mul(8) != Some(b.remaining()) {
+            return Err(b.malformed("checkpoint hashes"));
+        }
+        let mut hashes = alloc(n)?;
+        for _ in 0..n {
+            hashes.push(StateHash::from_raw(b.u64("checkpoint hashes")?));
+        }
+        Ok(hashes)
+    }
+
     fn outputs_hash(&self, b: &mut Body<'_>) -> Result<Option<u64>, ReplayError> {
-        if self.host.is_some() {
+        if self.host.is_some_and(|h| h.outputs_hash) {
             Ok(Some(b.u64("outputs hash")?))
         } else {
             Ok(None)

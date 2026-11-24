@@ -35,7 +35,7 @@ use super::HostPool;
 use super::record::{HostRecord, RecordDecodeError};
 use crate::options::AutoReset;
 use crate::persist::{
-    CHECKSUM_LEN, DecodeLimits, FORMAT_VERSION, FileHeader, MAX_DESCRIPTOR, MAX_ENV_ID,
+    CHECKSUM_LEN, DecodeLimits, FORMAT_VERSION, FileHeader, HOST_TIER, MAX_DESCRIPTOR, MAX_ENV_ID,
     MAX_LIBRARY_VERSION, PersistError, RAW_CANONICAL, Reader, push_capped, same, u64_of,
 };
 
@@ -43,8 +43,6 @@ use crate::persist::{
 /// ADR-0011's `MAGIC`.
 pub const HOST_MAGIC: [u8; 8] = *b"TESHOST\x1a";
 
-/// The `tier` field of a host file: host, no tier.
-const HOST_TIER: u8 = 2;
 /// The version of the host descriptor below.
 const HOST_DESCRIPTOR_VERSION: u8 = 1;
 

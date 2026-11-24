@@ -264,22 +264,23 @@ fn descriptor_matches(
     }
 }
 
-/// The identity of a host pool's replay file (ADR-0072): tier 0
-/// (cross-platform, no descriptor; host pools have no tier, ADR-0062),
-/// `config_hash` 0 (a host config need not be canonical), `record_len` 0
-/// (host snapshots do not exist yet, ADR-0073), the mask provider from
-/// `HostEnvironment::MASKS`, and the pool options as for any pool.
 /// The header tier of host files: host environments have no determinism tier
-/// (ADR-0062), and ADR-0073 marks their files with 2. Accepted only in host files.
-#[cfg(feature = "host")]
+/// (ADR-0062), and ADR-0073 marks their files with 2. Accepted only in host
+/// files; shared by host snapshot and host replay files.
 pub(crate) const HOST_TIER: u8 = 2;
 
+/// The identity of a host pool's replay file (ADR-0072): [`HOST_TIER`] with
+/// an empty descriptor, `config_hash` as given (0 for a host whose config is
+/// not canonical), `record_len` 0 (host records have variable length,
+/// ADR-0073), the mask provider from `HostEnvironment::MASKS`, and the pool
+/// options as for any pool.
 #[cfg(all(feature = "host", feature = "replay"))]
 pub(crate) fn host_identity(
     env_id: &'static str,
     env_version: u32,
     masks: bool,
     options: &PoolOptions,
+    config_hash: u64,
 ) -> Identity {
     let (illegal_kind, penalty_bits) = match (masks, options.illegal_action) {
         (true, IllegalActionPolicy::Penalize(r)) => (1, r.to_bits()),
@@ -299,7 +300,7 @@ pub(crate) fn host_identity(
             .max_episode_steps
             .map_or(0, core::num::NonZeroU32::get),
         env_version,
-        config_hash: 0,
+        config_hash,
         record_len: 0,
         env_id,
     }
@@ -789,7 +790,7 @@ where
 /// Whether `tier` is wrong for a file of this kind: a host file holds only the
 /// host tier, any other file only 0 or 1.
 const fn host_tier_mismatch(tier: u8, host: bool) -> bool {
-    if host { tier != 2 } else { tier > 1 }
+    if host { tier != HOST_TIER } else { tier > 1 }
 }
 
 #[cfg(test)]

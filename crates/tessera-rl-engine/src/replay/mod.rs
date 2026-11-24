@@ -35,6 +35,8 @@ pub use error::{DivergenceKind, ReplayError};
 pub use format::{EventTag, FORMAT_VERSION, REPLAY_MAGIC, StateWriteOp};
 #[cfg(feature = "host")]
 pub use host_writer::HostRecorder;
-pub use reader::{Event, Events, HostInfo, Ids, RecordedReseed, RefusalRow, Replay, ReplayHeader};
+pub use reader::{
+    Event, Events, HostFileKind, HostInfo, Ids, RecordedReseed, RefusalRow, Replay, ReplayHeader,
+};
 pub use run::ReplaySummary;
 pub use writer::{Recorder, ReplayWriterOptions};

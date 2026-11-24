@@ -19,6 +19,7 @@ use tessera_rl_num::identity::Seed;
 const LIMITS: DecodeLimits = DecodeLimits {
     max_instances: 8,
     max_decoded_bytes: 1 << 20,
+    max_host_record_bytes: 1 << 16,
 };
 
 fn pool() -> EnvPool<CartPole, NoMasks> {
@@ -31,6 +32,7 @@ fn recording() -> Vec<u8> {
     let options = ReplayWriterOptions {
         keyframe_every: 2,
         checkpoint_every: 2,
+        outputs_hash: false,
     };
     let mut rec = Recorder::new(&mut p, Vec::new(), options).unwrap();
     rec.reset_all(Reseed::Base(Seed::new(5))).unwrap();

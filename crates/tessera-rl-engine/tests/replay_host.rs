@@ -13,21 +13,27 @@
     reason = "tests: a failure is the assertion"
 )]
 
+mod host_walk;
+
 use core::num::{NonZeroU32, NonZeroUsize};
 
-use tessera_rl_core::encoding::checksum;
+use host_walk::{Walk, WalkConfig};
+
+use tessera_rl_core::config::{CanonicalConfig, write_entry};
+use tessera_rl_core::encoding::{Encoder, Sink, checksum};
 use tessera_rl_core::io::{Actions, ObsWriter};
 use tessera_rl_core::space::{BoxBounds, DType, Space};
 use tessera_rl_core::{
-    ActionReject, AgentSlot, EnvConfig, HostEnvironment, HostError, HostOut, HostSeed, Refusals,
-    RefuseCode, SpaceError,
+    ActionReject, AgentSlot, EnvConfig, HostEnvironment, HostError, HostOut, HostSeed,
+    HostSnapshot, Refusals, RefuseCode, SnapshotReject, SpaceError,
 };
 use tessera_rl_engine::replay::{
     DivergenceKind, Event, EventTag, HostRecorder, RefusalRow, Replay, ReplayError,
+    ReplayWriterOptions,
 };
 use tessera_rl_engine::{
-    ActionInput, DecodeLimits, EngineError, HostPool, PersistError, PoolOptions, Reseed,
-    SyncOptions,
+    ActionInput, DecodeLimits, EngineError, HostPool, HostRecord, PersistError, PoolOptions,
+    Reseed, SyncOptions,
 };
 use tessera_rl_num::identity::Seed;
 
@@ -40,16 +46,31 @@ const REJECT: i32 = 3;
 const REJECT_CODE: u32 = 5;
 const REFUSE_CODE: u32 = 10;
 
-/// Switches that change a rule while the header stays the same: a host
-/// config is not canonical and not in the file.
+/// Switches that change a rule. A `from_reset_only` file does not hold the
+/// config, so a changed switch replays as a divergence; a file with
+/// snapshots holds it, so a changed switch is refused at open.
 #[derive(Debug, Clone, Default)]
 struct Cfg {
     reject_shift: u32,
     refuse_shift: u32,
     step_bonus: i32,
+    /// `step` panics when the instance's step count reaches it (0: never).
+    panic_at: u32,
 }
 
 impl EnvConfig for Cfg {}
+
+impl CanonicalConfig for Cfg {
+    const ADAPTIVE_FIELDS: &'static [&'static str] = &[];
+    const STATIC_ENTRIES: u16 = 4;
+
+    fn write_entries<S: Sink>(&self, out: &mut Encoder<S>) {
+        write_entry(out, "panic_at", &self.panic_at);
+        write_entry(out, "refuse_shift", &self.refuse_shift);
+        write_entry(out, "reject_shift", &self.reject_shift);
+        write_entry(out, "step_bonus", &self.step_bonus);
+    }
+}
 
 #[derive(Debug)]
 struct Desk<const NOTIFY: bool, const REFUSES: bool> {
@@ -127,6 +148,10 @@ impl<const NOTIFY: bool, const REFUSES: bool> HostEnvironment for Desk<NOTIFY, R
 
     fn step(&mut self, actions: &Actions<'_, ()>, out: &mut HostOut<'_>) {
         self.steps += 1;
+        assert!(
+            self.cfg.panic_at == 0 || self.steps != self.cfg.panic_at,
+            "injected step panic"
+        );
         for s in 0..SLOTS {
             let reward = if REFUSES && actions.is_refused(slot(s)) {
                 -1
@@ -152,6 +177,46 @@ impl<const NOTIFY: bool, const REFUSES: bool> HostEnvironment for Desk<NOTIFY, R
     }
 }
 
+/// The snapshot: the two scores, the notices and the step count.
+impl<const NOTIFY: bool, const REFUSES: bool> HostSnapshot for Desk<NOTIFY, REFUSES> {
+    const SNAPSHOT_VERSION: u32 = 1;
+
+    fn max_snapshot_len(_: &Cfg) -> usize {
+        16
+    }
+
+    fn save(&self, out: &mut Vec<u8>) {
+        for v in self.score {
+            out.extend_from_slice(&v.to_le_bytes());
+        }
+        out.extend_from_slice(&self.notices.to_le_bytes());
+        out.extend_from_slice(&self.steps.to_le_bytes());
+    }
+
+    fn check_snapshot(_: &Cfg, bytes: &[u8]) -> Result<(), SnapshotReject> {
+        if bytes.len() == 16 {
+            Ok(())
+        } else {
+            Err(SnapshotReject {
+                code: 1,
+                reason: "a desk snapshot is 16 bytes",
+            })
+        }
+    }
+
+    fn load(&mut self, bytes: &[u8]) {
+        let word = |k: usize| -> [u8; 4] {
+            bytes
+                .get(4 * k..4 * k + 4)
+                .and_then(|b| b.try_into().ok())
+                .unwrap_or([0; 4])
+        };
+        self.score = [i32::from_le_bytes(word(0)), i32::from_le_bytes(word(1))];
+        self.notices = u32::from_le_bytes(word(2));
+        self.steps = u32::from_le_bytes(word(3));
+    }
+}
+
 type Pool<const NOTIFY: bool, const REFUSES: bool> = HostPool<Desk<NOTIFY, REFUSES>, SLOTS>;
 
 fn pool<const NOTIFY: bool, const REFUSES: bool>(
@@ -160,7 +225,7 @@ fn pool<const NOTIFY: bool, const REFUSES: bool>(
 ) -> Pool<NOTIFY, REFUSES> {
     let n = NonZeroU32::new(u32::try_from(N).unwrap()).unwrap();
     let options = PoolOptions::new(n, Seed::new(3));
-    let p = Pool::<NOTIFY, REFUSES>::new(cfg, options).unwrap();
+    let p = Pool::<NOTIFY, REFUSES>::new(cfg.clone(), options).unwrap();
     if workers == 0 {
         p
     } else {
@@ -223,6 +288,7 @@ fn record<const NOTIFY: bool, const REFUSES: bool>(workers: usize) -> Vec<u8> {
 const LIMITS: DecodeLimits = DecodeLimits {
     max_instances: 1 << 24,
     max_decoded_bytes: 1 << 30,
+    max_host_record_bytes: 1 << 26,
 };
 
 fn events(bytes: &[u8]) -> Vec<Event<'_>> {
@@ -252,7 +318,10 @@ fn header_len(b: &[u8]) -> usize {
     at += 2;
     at += 2 + u16_at(at);
     let config = u32::from_le_bytes(b[at..at + 4].try_into().unwrap()) as usize;
-    at + 4 + config + 12 + 4 + 8
+    let flags_at = at + 4 + config + 12;
+    // Bit3: the identity digest follows the host fields.
+    let identity = if b[flags_at] & 8 == 0 { 0 } else { 8 };
+    flags_at + 4 + identity + 8
 }
 
 /// The (offset, tag) of every frame, the end event included.
@@ -547,4 +616,285 @@ fn test_replay_host_header_tier_is_two_and_only_two() {
             "tier {tier} in a host file"
         );
     }
+}
+
+// Hosts with snapshots (ADR-0073): keyframes, checkpoints, state writes.
+
+type WalkPool = HostPool<Walk, 1>;
+const WALKS: u32 = 3;
+
+fn walk_pool(length: u32, workers: usize) -> WalkPool {
+    let options = PoolOptions::new(NonZeroU32::new(WALKS).unwrap(), Seed::new(6));
+    let p = WalkPool::new(WalkConfig { length }, options).unwrap();
+    if workers == 0 {
+        p
+    } else {
+        p.with_workers(SyncOptions::new(NonZeroUsize::new(workers).unwrap()))
+            .unwrap()
+    }
+}
+
+fn snapshot_options() -> ReplayWriterOptions {
+    ReplayWriterOptions {
+        keyframe_every: 4,
+        checkpoint_every: 3,
+        outputs_hash: false,
+    }
+}
+
+fn walk_hashes(p: &mut WalkPool) -> Vec<u64> {
+    (0..WALKS).map(|i| p.state_hash(i).unwrap().get()).collect()
+}
+
+fn record_walk(workers: usize) -> (Vec<u8>, Vec<u64>) {
+    let mut p = walk_pool(32, workers);
+    let mut rec = HostRecorder::with_snapshots(&mut p, Vec::new(), snapshot_options()).unwrap();
+    rec.reset_all(Reseed::Base(Seed::new(2))).unwrap();
+    for t in 0..14 {
+        let a: Vec<i32> = (0..WALKS)
+            .map(|i| i32::try_from((t + i) % 3).unwrap())
+            .collect();
+        rec.step(ActionInput {
+            discrete: &a,
+            continuous: &[],
+        })
+        .unwrap();
+        if t == 6 {
+            rec.fork(0, &[2]).unwrap();
+        }
+    }
+    let bytes = rec.finish().unwrap();
+    (bytes, walk_hashes(&mut p))
+}
+
+fn run_walk(
+    bytes: &[u8],
+    p: &mut WalkPool,
+) -> Result<tessera_rl_engine::ReplaySummary, ReplayError> {
+    Replay::open(bytes, LIMITS).unwrap().run_host_snapshots(p)
+}
+
+#[test]
+fn test_replay_host_snapshot_round_trip_inline_and_sync() {
+    let (inline, hashes) = record_walk(0);
+    let (sync, sync_hashes) = record_walk(2);
+    assert_eq!(inline, sync);
+    assert_eq!(hashes, sync_hashes);
+    let ev = events(&inline);
+    assert!(matches!(ev[0], Event::Keyframe { .. }));
+    assert!(matches!(ev.last(), Some(Event::Checkpoint { .. })));
+    for workers in [0, 2] {
+        let mut p = walk_pool(32, workers);
+        let summary = run_walk(&inline, &mut p).unwrap();
+        // reset, 14 steps, fork.
+        assert_eq!(summary.calls, 16);
+        assert!(summary.checkpoints >= 5);
+        assert_eq!(walk_hashes(&mut p), hashes);
+    }
+    // A file with snapshots needs the snapshot replay.
+    assert!(matches!(
+        Replay::open(&inline, LIMITS)
+            .unwrap()
+            .run_host(&mut walk_pool(32, 0)),
+        Err(ReplayError::Persist(PersistError::Incompatible { .. }))
+    ));
+}
+
+#[test]
+fn test_replay_host_snapshot_identity_mismatch_is_refused_at_open() {
+    let (mut bytes, _) = record_walk(0);
+    let end = header_len(&bytes);
+    // The identity digest is the 8 bytes before the header checksum.
+    bytes[end - 16] ^= 1;
+    let sum = checksum(&bytes[..end - 8]);
+    bytes[end - 8..end].copy_from_slice(&sum.to_le_bytes());
+    assert!(matches!(
+        run_walk(&bytes, &mut walk_pool(32, 0)),
+        Err(ReplayError::Persist(PersistError::Incompatible {
+            field: "identity"
+        }))
+    ));
+}
+
+#[test]
+fn test_replay_host_snapshot_config_mismatch_is_refused_at_open() {
+    let (bytes, _) = record_walk(0);
+    assert!(matches!(
+        run_walk(&bytes, &mut walk_pool(33, 0)),
+        Err(ReplayError::Persist(PersistError::Incompatible {
+            field: "config_hash"
+        }))
+    ));
+}
+
+#[test]
+fn test_replay_host_snapshot_tampered_checkpoint_names_the_last_match() {
+    let (bytes, _) = record_walk(0);
+    let checkpoints: Vec<usize> = frames(&bytes)
+        .iter()
+        .enumerate()
+        .filter(|(_, f)| f.1 == EventTag::Checkpoint as u8)
+        .map(|(k, _)| k)
+        .collect();
+    // Instance 1's hash in the second checkpoint: ids marker, then 8 bytes.
+    let bad = tampered(&bytes, EventTag::Checkpoint, 1, 1 + 8);
+    let err = run_walk(&bad, &mut walk_pool(32, 0)).unwrap_err();
+    let (second, first) = (
+        u64::try_from(checkpoints[1]).unwrap(),
+        u64::try_from(checkpoints[0]).unwrap(),
+    );
+    assert!(
+        matches!(
+            err,
+            ReplayError::Diverged {
+                event_index,
+                kind: DivergenceKind::Checkpoint,
+                instance: Some(1),
+                last_matching_checkpoint: Some(last),
+            } if event_index == second && last == first
+        ),
+        "{err:?}"
+    );
+}
+
+fn every_call() -> ReplayWriterOptions {
+    ReplayWriterOptions {
+        keyframe_every: 0,
+        checkpoint_every: 1,
+        outputs_hash: true,
+    }
+}
+
+#[test]
+fn test_replay_host_snapshot_rejected_call_is_followed_by_a_checkpoint() {
+    let mut p = pool::<true, false>(&Cfg::default(), 0);
+    let mut rec = HostRecorder::with_snapshots(&mut p, Vec::new(), every_call()).unwrap();
+    rec.reset_all(Reseed::Base(Seed::new(4))).unwrap();
+    step(&mut rec, &joint(1, &[])).unwrap();
+    assert!(step(&mut rec, &joint(1, &[(1, 0, REJECT)])).is_err());
+    step(&mut rec, &joint(0, &[])).unwrap();
+    let bytes = rec.finish().unwrap();
+    let ev = events(&bytes);
+    let at = ev
+        .iter()
+        .position(|e| matches!(e, Event::Rejected { instance: 1, .. }))
+        .unwrap();
+    // The state hash after the notice is checked.
+    assert!(matches!(ev[at + 1], Event::Checkpoint { .. }));
+    let summary = Replay::open(&bytes, LIMITS)
+        .unwrap()
+        .run_host_snapshots(&mut pool::<true, false>(&Cfg::default(), 0))
+        .unwrap();
+    assert_eq!(summary.calls, 4);
+    // The rejection's checkpoint holds the notice: a tampered code diverges.
+    let bad = tampered(&bytes, EventTag::Rejected, 0, REJECTED_CODE);
+    assert_eq!(
+        diverged(
+            Replay::open(&bad, LIMITS)
+                .unwrap()
+                .run_host_snapshots(&mut pool::<true, false>(&Cfg::default(), 0))
+        ),
+        (DivergenceKind::RejectionMismatch, Some(1))
+    );
+}
+
+#[test]
+fn test_replay_host_snapshot_after_a_notice_restores_and_replays_the_next_step() {
+    let mut p = pool::<true, false>(&Cfg::default(), 0);
+    let mut rec = HostRecorder::with_snapshots(&mut p, Vec::new(), every_call()).unwrap();
+    rec.reset_all(Reseed::Base(Seed::new(4))).unwrap();
+    assert!(step(&mut rec, &joint(1, &[(2, 1, REJECT)])).is_err());
+    let mut saved: Vec<HostRecord<SLOTS>> = (0..N).map(|_| HostRecord::new()).collect();
+    rec.snapshot_all(&mut saved).unwrap();
+    step(&mut rec, &joint(1, &[])).unwrap();
+    step(&mut rec, &joint(0, &[])).unwrap();
+    rec.restore_all(&saved).unwrap();
+    step(&mut rec, &joint(1, &[(0, 0, 0)])).unwrap();
+    let bytes = rec.finish().unwrap();
+    let mut recorded: Vec<u64> = Vec::new();
+    for i in 0..u32::try_from(N).unwrap() {
+        recorded.push(p.state_hash(i).unwrap().get());
+    }
+    let mut q = pool::<true, false>(&Cfg::default(), 0);
+    Replay::open(&bytes, LIMITS)
+        .unwrap()
+        .run_host_snapshots(&mut q)
+        .unwrap();
+    let replayed: Vec<u64> = (0..u32::try_from(N).unwrap())
+        .map(|i| q.state_hash(i).unwrap().get())
+        .collect();
+    assert_eq!(replayed, recorded);
+    assert!(
+        events(&bytes)
+            .iter()
+            .any(|e| matches!(e, Event::StateWrite { .. }))
+    );
+}
+
+#[test]
+fn test_replay_host_poisoning_step_replays_to_the_same_poison() {
+    let cfg = Cfg {
+        panic_at: 2,
+        ..Cfg::default()
+    };
+    let mut p = pool::<false, false>(&cfg, 0);
+    let mut rec = HostRecorder::new(&mut p, Reseed::Keep, Vec::new()).unwrap();
+    step(&mut rec, &joint(1, &[])).unwrap();
+    assert!(matches!(
+        step(&mut rec, &joint(1, &[])),
+        Err(ReplayError::Engine(_))
+    ));
+    assert!(matches!(
+        step(&mut rec, &joint(1, &[])),
+        Err(ReplayError::RecorderClosed)
+    ));
+    let bytes = rec.finish().unwrap();
+    assert!(matches!(events(&bytes).last(), Some(Event::Poisoned)));
+    let mut q = pool::<false, false>(&cfg, 0);
+    let summary = Replay::open(&bytes, LIMITS)
+        .unwrap()
+        .run_host(&mut q)
+        .unwrap();
+    assert!(summary.poisoned);
+    assert!(q.is_poisoned());
+    // A host that does not panic misses the poison: the poisoning call's
+    // event (outputs hash 0) fails first, or the Poisoned marker does.
+    let kind = diverged(replay::<false, false>(&bytes, &Cfg::default())).0;
+    assert!(
+        matches!(
+            kind,
+            DivergenceKind::OutputsMismatch | DivergenceKind::NotPoisoned
+        ),
+        "{kind:?}"
+    );
+}
+
+/// The pinned host format: length and XXH3-64 of a fixed refusing,
+/// notifying recording with snapshots and outputs hashes, without the
+/// library version and the header checksum. Update only with a format
+/// version bump.
+const HOST_FIXTURE_LEN: usize = 968;
+const HOST_FIXTURE_XXH3: u64 = 15_575_506_494_864_961_896;
+
+#[test]
+fn test_replay_host_encoded_fixture_is_pinned() {
+    let mut p = pool::<true, true>(&Cfg::default(), 0);
+    let mut rec = HostRecorder::with_snapshots(&mut p, Vec::new(), every_call()).unwrap();
+    rec.reset_all(Reseed::Base(Seed::new(3))).unwrap();
+    step(&mut rec, &joint(1, &[(0, 1, REFUSE)])).unwrap();
+    assert!(step(&mut rec, &joint(0, &[(3, 0, REJECT)])).is_err());
+    rec.reset(&[1], Reseed::Each(&[Some(Seed::new(5))]))
+        .unwrap();
+    let bytes = rec.finish().unwrap();
+    let lib_at = 48 + 2 + usize::from(u16::from_le_bytes([bytes[48], bytes[49]]));
+    let lib_len = usize::from(u16::from_le_bytes([bytes[lib_at], bytes[lib_at + 1]]));
+    let header_end = header_len(&bytes);
+    let mut pinned = bytes[..lib_at + 2].to_vec();
+    pinned.extend_from_slice(&bytes[lib_at + 2 + lib_len..header_end - 8]);
+    pinned.extend_from_slice(&bytes[header_end..]);
+    assert_eq!(
+        (pinned.len(), checksum(&pinned)),
+        (HOST_FIXTURE_LEN, HOST_FIXTURE_XXH3),
+        "host replay format changed: pinned length and XXH3-64"
+    );
 }

@@ -123,6 +123,7 @@ fn test_replay_changed_rule_diverges_at_the_first_failing_checkpoint() {
     let options = ReplayWriterOptions {
         keyframe_every: 0,
         checkpoint_every: 2,
+        outputs_hash: false,
     };
     let mut rec = Recorder::new(&mut p, Vec::new(), options).unwrap();
     rec.reset_all(Reseed::Keep).unwrap();

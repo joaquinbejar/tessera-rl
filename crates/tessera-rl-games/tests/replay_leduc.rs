@@ -42,6 +42,7 @@ fn record(workers: usize) -> (Vec<u8>, Vec<u64>) {
     let options = ReplayWriterOptions {
         keyframe_every: 16,
         checkpoint_every: 4,
+        outputs_hash: false,
     };
     let mut rec = Recorder::new(&mut p, Vec::new(), options).unwrap();
     rec.reset_all(Reseed::Base(Seed::new(5))).unwrap();

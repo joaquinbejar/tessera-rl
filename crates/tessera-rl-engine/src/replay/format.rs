@@ -33,22 +33,37 @@
 //!
 //! # Host pool files
 //!
-//! A host pool's file (`host_protocol` 1, or 2 exactly for a refusing host,
-//! ADR-0070 item 10) has `flags = from_reset_only | outputs_hash`, since
-//! host snapshots (ADR-0073) do not exist yet. Its shared header fields:
-//! tier 0 with an empty descriptor (host pools have no tier, ADR-0062),
-//! `config_hash` 0 and an empty config (a host config need not be
-//! canonical), `record_len` 0 (no host records), the mask provider from
-//! `HostEnvironment::MASKS`, and the pool options as for any pool. Its
-//! first event is a `Reset` of every instance, made by the recorder; it has
-//! no `Keyframe`, `Checkpoint` or `StateWrite` events. Bodies:
+//! A host pool's file has `host_protocol` 1, or 2 exactly for a refusing
+//! host (ADR-0070 item 10). Its shared header fields: tier 2
+//! (`HOST_TIER`, ADR-0073) with an empty descriptor, `record_len` 0 (host
+//! records have variable length), the mask provider from
+//! `HostEnvironment::MASKS`, and the pool options as for any pool. Flags:
+//! bit0 `from_reset_only`, bit1 `outputs_hash`, bit2 `config_checked`,
+//! bit3 `host_snapshots`; exactly one of bit0 and bit3 is set.
+//!
+//! - **With snapshots** (bit3, ADR-0073): bit2 is set, the config bytes and
+//!   `config_hash` are those of the canonical config, and the host
+//!   extension ends with `identity:u64` (the ADR-0073 identity digest),
+//!   before the header checksum. Events as for a first-party file, except
+//!   that a `Keyframe`'s records are `(len:u32 HostRecord)*`, each the
+//!   ADR-0073 encoding (identity digest first), and the branch counter is
+//!   always 0 (host pools have no `fork_branched`). The outputs hash is
+//!   optional (bit1).
+//! - **From reset only** (bit0): bit1 is set, bit2 is clear, the config is
+//!   empty and `config_hash` 0 (a host config need not be canonical). The
+//!   first event is a `Reset` of every instance, made by the recorder; there
+//!   are no `Keyframe`, `Checkpoint` or `StateWrite` events.
+//!
+//! Bodies, when bit1 is set:
 //!
 //! - `Reset`: as above, then `outputs_hash:u64` over the reset ids.
-//! - `Step`: as above, then `outputs_hash:u64`; for a refusing host then
-//!   `count:u32 (instance:u32 slot:u32 code:u32)*count`, sparse, in
-//!   (instance, slot) order, every code nonzero.
-//! - `Rejected` (notifying hosts only): `count:u32 discrete:i32*count
-//!   count:u32 continuous_bits:u32*count instance:u32 code:u32`.
+//! - `Step`: as above, then `outputs_hash:u64`.
+//!
+//! For a refusing host, `Step` then ends with `count:u32 (instance:u32
+//! slot:u32 code:u32)*count`, sparse, in (instance, slot) order, every code
+//! nonzero. `Rejected` (notifying hosts only): `count:u32
+//! discrete:i32*count count:u32 continuous_bits:u32*count instance:u32
+//! code:u32`.
 //!
 //! A poisoning call is logged with outputs hash 0 and no refusal rows, as
 //! a poisoned pool has no outputs. The outputs hash is defined in
@@ -71,6 +86,13 @@ pub(crate) const END_BODY_LEN: u32 = 16;
 pub(crate) const FLAG_FROM_RESET_ONLY: u8 = 1;
 /// Header flag: `Reset`, `Step` and `Recv` events carry an outputs hash.
 pub(crate) const FLAG_OUTPUTS_HASH: u8 = 2;
+/// Header flag (host files): the config bytes and `config_hash` are filled
+/// and checked; without it both are empty and zero.
+pub(crate) const FLAG_CONFIG_CHECKED: u8 = 4;
+/// Header flag (host files): the host has snapshots (ADR-0073); the host
+/// extension ends with the identity digest, and the file has keyframes and
+/// checkpoints of host records.
+pub(crate) const FLAG_HOST_SNAPSHOTS: u8 = 8;
 
 /// Ids marker: every instance.
 pub(crate) const IDS_ALL: u8 = 0;

@@ -173,3 +173,10 @@ path = "fuzz_targets/replay_open.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "replay_open_host"
+path = "fuzz_targets/replay_open_host.rs"
+test = false
+doc = false
+bench = false

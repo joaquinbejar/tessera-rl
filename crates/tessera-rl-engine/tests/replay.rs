@@ -53,6 +53,7 @@ fn options() -> ReplayWriterOptions {
     ReplayWriterOptions {
         keyframe_every: 5,
         checkpoint_every: 3,
+        outputs_hash: false,
     }
 }
 
@@ -161,6 +162,7 @@ fn with_event(b: &[u8], tag: u8, body: &[u8]) -> Vec<u8> {
 const LIMITS: DecodeLimits = DecodeLimits {
     max_instances: 1 << 24,
     max_decoded_bytes: 1 << 30,
+    max_host_record_bytes: 1 << 26,
 };
 
 #[test]
@@ -503,6 +505,7 @@ fn test_replay_encoded_fixture_is_pinned() {
     let options = ReplayWriterOptions {
         keyframe_every: 3,
         checkpoint_every: 2,
+        outputs_hash: false,
     };
     let mut rec = Recorder::new(&mut p, Vec::new(), options).unwrap();
     rec.reset_all(Reseed::Base(Seed::new(3))).unwrap();

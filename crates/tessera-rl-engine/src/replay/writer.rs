@@ -33,6 +33,10 @@ pub struct ReplayWriterOptions {
     /// A checkpoint of every instance every this many logged calls; 0 writes
     /// only the last.
     pub checkpoint_every: u64,
+    /// Whether `Reset` and `Step` events carry an outputs hash (ADR-0072
+    /// section 4): off by default, since checkpoints cover state. Host
+    /// recorders with snapshots only; [`Recorder`] refuses it.
+    pub outputs_hash: bool,
 }
 
 impl Default for ReplayWriterOptions {
@@ -40,6 +44,7 @@ impl Default for ReplayWriterOptions {
         Self {
             keyframe_every: 0,
             checkpoint_every: 1024,
+            outputs_hash: false,
         }
     }
 }
@@ -108,6 +113,11 @@ where
     ) -> Result<Self, ReplayError> {
         if <<E::Header as RecordLayout>::Adaptive as Canonical>::ENCODED_LEN != 0 {
             return Err(ReplayError::AdaptiveUnsupported);
+        }
+        if options.outputs_hash {
+            return Err(ReplayError::Unsupported {
+                feature: "outputs hashes in first-party replay files",
+            });
         }
         if pool.is_poisoned() {
             return Err(EngineError::Poisoned.into());
