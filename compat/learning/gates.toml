@@ -49,3 +49,27 @@ min_effect = 0.10
 # policy loses about 0-11.
 solved = 21.6
 min_effect = 0.10
+
+# Tier T3b (#370, DESIGN-T3b-r1 section 2, REVIEW-T3b-r1;
+# tools/learning_gate.learns_twoplayer). U: a uniform-legal player in the
+# learner's seat against the heuristic; H: the heuristic against itself;
+# both per episode on the evaluation seeds, over the protocol's seats.
+# - No gate when the bootstrap 95% lower bound of mean(H) - mean(U) <= 0.
+# - Threshold 1: lower95(mean(trained vs heuristic) - mean(U))
+#   >= min_effect * (mean(H) - mean(U)).
+# - Threshold 2: lower95(mean(trained vs uniform-legal opponent)) > 0.
+# A protocol learns only when both hold and its scores are not degenerate.
+[connect4]
+min_effect = 0.10
+
+[othello]
+min_effect = 0.10
+
+[go9]
+min_effect = 0.10
+
+[leduc]
+min_effect = 0.10
+
+[tag]
+min_effect = 0.10
