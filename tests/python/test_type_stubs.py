@@ -15,7 +15,7 @@ import tessera_rl
 
 _PACKAGE = Path(tessera_rl.__file__).parent
 
-_MODULES = ("__init__", "_env", "_host", "_native", "gym", "jax", "masks", "puffer", "pz", "search")
+_MODULES = ("__init__", "_env", "_host", "_native", "gym", "jax", "masks", "puffer", "pz", "replay", "search")
 
 
 def test_package_marker_installed_present():
