@@ -6,6 +6,16 @@
 # defaults), and the calibration budget. A protocol's calibration fingerprint
 # covers only its own table, so editing one protocol invalidates only its own
 # calibration (a reviewed re-calibration, like a gungraun re-bless).
+#
+# Learning thresholds are host-specific. Single-threaded training is
+# deterministic on one machine, but the same protocol and seeds give
+# different scores on different CPUs (torch CPU kernels differ):
+# - Acrobot's threshold at 150k steps was -295.3 on one Intel host and
+#   -348.75 on an AMD host.
+# So a committed calibration is made on the nightly host itself; a
+# calibration from any other machine is a pilot, never committed. A
+# calibration records the CPU, and the torch and OpenMP thread settings, it
+# ran with.
 
 [cartpole]
 env = "tessera/CartPole-v1"
