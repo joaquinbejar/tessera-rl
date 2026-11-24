@@ -1,4 +1,5 @@
 # SPDX-License-Identifier: MIT OR Apache-2.0
+from collections.abc import Sequence
 from typing import Any
 
 import gymnasium
@@ -7,6 +8,7 @@ import numpy.typing as npt
 from gymnasium import spaces
 from gymnasium.vector import AutoresetMode, VectorEnv
 
+from tessera_rl._archive import Archive
 from tessera_rl._env import native_kwargs as native_kwargs
 from tessera_rl.masks import head_views as head_views
 
@@ -33,6 +35,8 @@ class TesseraVectorEnv(VectorEnv[Any, np.ndarray, np.ndarray]):
         self, actions: npt.ArrayLike
     ) -> tuple[Any, np.ndarray, np.ndarray, np.ndarray, dict[str, Any]]: ...
     def render(self) -> np.ndarray | None: ...  # type: ignore[override]
+    def set_reset_source(self, archive: Archive | None = None, weights: Sequence[int] | None = None) -> None: ...
+    def reset_from(self, ids: Sequence[int], entries: Sequence[int]) -> None: ...
     def close_extras(self, **kwargs: Any) -> None: ...
 
 class TesseraEnv(gymnasium.Env[Any, Any]):

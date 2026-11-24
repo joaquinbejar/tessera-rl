@@ -384,6 +384,7 @@ impl Replay<'_> {
         let mut st = State::new();
         st.archive = archive;
         let given = archive_ref::<E>(&st);
+        // Unreachable after check_archives: kept as defence in depth (rev, #363 B r2).
         check_source(&reset_source, given)?;
         let records = self.decode_records::<E>(index, records)?;
         pool.import_all(&records)

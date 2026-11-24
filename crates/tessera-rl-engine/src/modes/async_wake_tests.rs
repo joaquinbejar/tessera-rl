@@ -429,3 +429,30 @@ fn test_async_recv_job_level_panic_before_registration_native_ends_the_wait() {
 fn test_async_recv_job_level_panic_before_registration_park_ends_the_wait() {
     recv_sees_a_job_panic(WaitBackend::Park, PanicAt::BeforeRegistration);
 }
+
+/// Archive-reset writers (ADR-0075 item 2) are refused while an id is
+/// still running: id 1 is held before its step, so the refusal is
+/// deterministic (the classic `archive_modes` test races the workers).
+#[test]
+fn test_async_reset_source_writers_with_an_id_running_are_not_quiescent() {
+    let _lock = gates();
+    let _open = ReleaseHeld;
+    within("archive writers refused while an id runs", move || {
+        let _open = ReleaseHeld;
+        HELD_ID.store(1, Ordering::Release);
+        let mut pool = wake_pool(WaitBackend::Park, 1, 1, GATE_HOLD_ID);
+        send(&mut pool, &[1]);
+        wait_for_gate();
+        assert!(matches!(
+            pool.set_reset_source(crate::ResetSource::Fresh),
+            Err(crate::EngineError::NotQuiescent)
+        ));
+        assert!(matches!(
+            pool.reset_from(&[0], &[0]),
+            Err(crate::EngineError::NotQuiescent)
+        ));
+        GATE_OPEN.store(true, Ordering::Release);
+        drop(pool.recv().unwrap());
+        pool.set_reset_source(crate::ResetSource::Fresh).unwrap();
+    });
+}

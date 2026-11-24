@@ -303,7 +303,9 @@ pub fn engine_kind(e: &EngineError) -> Kind {
         | EngineError::Options { .. }
         | EngineError::HalfTooSmall { .. }
         | EngineError::LaneEnvUnsupported
-        | EngineError::InvalidMaskLayout { .. } => Kind::Config,
+        | EngineError::InvalidMaskLayout { .. }
+        // An archive of another environment, version or config (ADR-0075).
+        | EngineError::ArchiveMismatch { .. } => Kind::Config,
         EngineError::InstanceOutOfRange { .. }
         | EngineError::DuplicateInstance { .. }
         | EngineError::SeedCount { .. }
@@ -313,7 +315,8 @@ pub fn engine_kind(e: &EngineError) -> Kind {
         | EngineError::WrongPool
         | EngineError::InvalidHalf { .. }
         | EngineError::WrongMode { .. }
-        | EngineError::EmptySend => Kind::Argument,
+        | EngineError::EmptySend
+        | EngineError::Archive { .. } => Kind::Argument,
         EngineError::ActionLength { .. }
         | EngineError::DiscreteOutOfRange { .. }
         | EngineError::ContinuousOutOfRange { .. }

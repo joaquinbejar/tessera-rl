@@ -130,6 +130,27 @@ where
     }
 }
 
+impl<E> Archive<E>
+where
+    E: Persist,
+    E::Config: CanonicalConfig,
+{
+    /// [`Archive::new`] from untrusted records ([`DecodedRecord`], from
+    /// bytes or a file: their canonical encoding is already checked). The
+    /// same `Validate` checks run on every entry.
+    ///
+    /// # Errors
+    ///
+    /// As [`Archive::new`].
+    pub fn from_decoded(
+        cfg: &E::Config,
+        records: &[crate::record::DecodedRecord<E>],
+    ) -> Result<Self, EngineError> {
+        let trusted: Vec<Record<E>> = records.iter().map(|r| r.trust()).collect();
+        Self::new(cfg, &trusted)
+    }
+}
+
 impl<E: Environment> Archive<E> {
     /// The archive's identity (ADR-0075 item 1): not authentication, a
     /// check against a wrong or changed archive.

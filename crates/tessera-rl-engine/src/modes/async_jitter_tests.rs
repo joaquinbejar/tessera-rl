@@ -105,6 +105,18 @@ impl Environment for Walker {
     }
 }
 
+/// Identity for the archive writers' bounds (ADR-0075); no invariants.
+impl tessera_rl_core::Validate for Walker {
+    fn validate(_: &WalkConfig, _: &Walk) -> Result<(), tessera_rl_core::InvariantViolation> {
+        Ok(())
+    }
+}
+
+impl tessera_rl_core::Persist for Walker {
+    const ENV_ID: &'static str = "tessera/TestWalker-v1";
+    const ENV_VERSION: u32 = 1;
+}
+
 pub(super) type Pool = EnvPool<Walker, NoMasks>;
 type AsyncPoolOf = crate::AsyncPool<Walker, NoMasks>;
 

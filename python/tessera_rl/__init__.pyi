@@ -1,4 +1,5 @@
 # SPDX-License-Identifier: MIT OR Apache-2.0
+from tessera_rl._archive import Archive as Archive
 from tessera_rl._env import AsyncStep as AsyncStep
 from tessera_rl._env import Env as Env
 from tessera_rl._env import HalfStep as HalfStep
@@ -33,6 +34,7 @@ from tessera_rl._native import physical_cores as physical_cores
 from tessera_rl._native import version as version
 
 __all__ = [
+    "Archive",
     "ActionError",
     "ArgumentError",
     "CapabilityError",

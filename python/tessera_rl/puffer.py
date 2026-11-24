@@ -298,6 +298,16 @@ class TesseraPufferEnv(pufferlib.PufferEnv):
             self.terminals[:] = self._views[2]
             self.truncations[:] = self._views[3]
 
+    def set_reset_source(self, archive=None, weights=None) -> None:
+        """Archive resets (ADR-0075): forwarded to the wrapped
+        ``tessera_rl`` environment's ``set_reset_source``."""
+        self._env.set_reset_source(archive, weights)
+
+    def reset_from(self, ids, entries):
+        """Archive resets (ADR-0075): forwarded to the wrapped
+        ``tessera_rl`` environment's ``reset_from``."""
+        return self._env.reset_from(ids, entries)
+
     def reset(self, seed: int | None = None):
         """Resets every instance; see the module notes on seeds."""
         first = self._env is None

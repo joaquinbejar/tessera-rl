@@ -9,6 +9,7 @@
 //! blocked on it never holds the interpreter. `recv` waits outside it, so
 //! another thread may `send` meanwhile.
 
+use crate::ffi::archive_type::AnyArchive;
 use core::any::Any;
 use core::ops::Range;
 use core::sync::atomic::{AtomicBool, Ordering};
@@ -98,6 +99,16 @@ pub(crate) trait SplitOps: Send + Sync {
     fn restore_all(&self, snapshot: &Snapshot, owned: bool) -> Result<[HalfOutput; 2], BindError>;
     /// The persisted file of `ids`; no work may be in flight.
     fn encode(&self, ids: &[u32]) -> Result<Vec<u8>, BindError>;
+    /// Builds an archive of this environment from record bytes (ADR-0075).
+    fn make_archive(&self, records: &[Vec<u8>]) -> Result<(AnyArchive, u64, usize), BindError>;
+    /// Sets the reset source at quiescence (ADR-0075 item 2). The halves'
+    /// tokens are released (their NumPy views keep the overwrite semantics)
+    /// and idle ones taken again after the call.
+    fn set_reset_source(
+        &self,
+        archive: Option<&AnyArchive>,
+        weights: Option<Vec<u32>>,
+    ) -> Result<(), BindError>;
     /// Loads a persisted file into every instance and returns both halves. A
     /// refused file leaves tokens, views and deliveries as they were.
     fn load(
@@ -399,6 +410,35 @@ where
         let guard = self.lock()?;
         let pool = guard.pool.as_ref().ok_or_else(closed)?;
         Ok(pool.encode(ids)?)
+    }
+
+    fn make_archive(&self, records: &[Vec<u8>]) -> Result<(AnyArchive, u64, usize), BindError> {
+        let guard = self.lock()?;
+        let pool = guard.pool.as_ref().ok_or_else(closed)?;
+        crate::env::build_archive::<E>(pool.config(), records)
+    }
+
+    fn set_reset_source(
+        &self,
+        archive: Option<&AnyArchive>,
+        weights: Option<Vec<u32>>,
+    ) -> Result<(), BindError> {
+        let source = crate::env::archive_source::<E>(archive, weights)?;
+        let mut guard = self.lock()?;
+        let state = &mut *guard;
+        if state.pending.is_some() {
+            return Err(BindError::Engine(EngineError::NotQuiescent));
+        }
+        let pool = state.pool.as_mut().ok_or_else(closed)?;
+        // The FFI release, as `reset`: the tokens go, then idle ones return.
+        state.tokens = [None, None];
+        let result = pool.set_reset_source(source);
+        for (half, slot) in state.tokens.iter_mut().enumerate() {
+            let half = u32::try_from(half).unwrap_or(u32::MAX);
+            *slot = pool.idle_token(half).ok();
+        }
+        result?;
+        Ok(())
     }
 
     fn load(

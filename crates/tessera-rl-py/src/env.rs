@@ -6,6 +6,7 @@
 
 use core::num::{NonZeroU32, NonZeroUsize};
 
+use crate::ffi::archive_type::AnyArchive;
 use tessera_rl_classic::{
     Acrobot, AcrobotConfig, BrickWall, BrickWallConfig, CartPole, CartPoleConfig, Gather,
     GatherConfig, Grid, GridConfig, KeyDoor, KeyDoorConfig, MountainCar, MountainCarConfig,
@@ -67,6 +68,69 @@ impl From<tessera_rl_engine::ReplayError> for BindError {
             e => Self::Replay(e),
         }
     }
+}
+
+/// The refusal of archive resets where they do not exist: host
+/// environments (ADR-0075 item 8).
+pub(crate) fn no_archives() -> BindError {
+    BindError::Capability(
+        "archive resets need a first-party environment (ADR-0075 item 8)".to_owned(),
+    )
+}
+
+/// The engine reset source of `archive` (an `Archive<E>`, type-erased) and
+/// `weights`, or fresh resets without an archive.
+pub(crate) fn archive_source<E: Environment>(
+    archive: Option<&AnyArchive>,
+    weights: Option<Vec<u32>>,
+) -> Result<tessera_rl_engine::ResetSource<E>, BindError> {
+    match archive {
+        None if weights.is_some() => Err(BindError::Argument("weights need an archive".to_owned())),
+        None => Ok(tessera_rl_engine::ResetSource::Fresh),
+        Some(any) => {
+            let archive = any
+                .downcast_ref::<tessera_rl_engine::Archive<E>>()
+                .ok_or_else(|| {
+                    BindError::Argument("this archive belongs to another environment".to_owned())
+                })?;
+            Ok(tessera_rl_engine::ResetSource::Archive {
+                archive: archive.clone(),
+                weights,
+            })
+        }
+    }
+}
+
+/// The engine archive of `archive`, for replay, if it is one of `E`.
+pub(crate) fn archive_ref<E: Environment>(
+    archive: Option<&AnyArchive>,
+) -> Result<Option<&tessera_rl_engine::Archive<E>>, BindError> {
+    archive
+        .map(|any| {
+            any.downcast_ref::<tessera_rl_engine::Archive<E>>()
+                .ok_or_else(|| {
+                    BindError::Argument("this archive belongs to another environment".to_owned())
+                })
+        })
+        .transpose()
+}
+
+/// Builds an `Archive<E>` from record bytes under `cfg`.
+pub(crate) fn build_archive<E>(
+    cfg: &E::Config,
+    records: &[Vec<u8>],
+) -> Result<(AnyArchive, u64, usize), BindError>
+where
+    E: tessera_rl_core::Persist,
+    E::Config: tessera_rl_core::config::CanonicalConfig,
+{
+    let mut decoded = Vec::with_capacity(records.len());
+    for bytes in records {
+        decoded.push(decode_from_slice::<DecodedRecord<E>>(bytes).map_err(BindError::Decode)?);
+    }
+    let archive = tessera_rl_engine::Archive::<E>::from_decoded(cfg, &decoded)?;
+    let (digest, len) = (archive.digest(), archive.len());
+    Ok((std::sync::Arc::new(archive), digest, len))
 }
 
 /// The refusal of an operation a pool mode does not offer.
@@ -292,15 +356,42 @@ pub(crate) trait PoolOps: Send {
     }
     /// Drops the recording, if any; the pool keeps its state.
     fn record_abort(&mut self) {}
-    /// Replays a file into this pool and checks it (ADR-0072 section 5).
-    fn replay(&mut self, _data: &[u8]) -> Result<tessera_rl_engine::ReplaySummary, BindError> {
+    /// Builds an archive of this environment from record bytes (ADR-0075),
+    /// with its digest and entry count.
+    fn make_archive(&self, _records: &[Vec<u8>]) -> Result<(AnyArchive, u64, usize), BindError> {
+        Err(no_archives())
+    }
+    /// Sets what resets start from (ADR-0075 item 2): an archive of this
+    /// environment with optional weights, or fresh resets (`None`).
+    fn set_reset_source(
+        &mut self,
+        _archive: Option<&AnyArchive>,
+        _weights: Option<Vec<u32>>,
+    ) -> Result<(), BindError> {
+        Err(no_archives())
+    }
+    /// Resets `ids` from the archive entries `entries` (ADR-0075 item 5).
+    fn reset_from(&mut self, _ids: &[u32], _entries: &[u32]) -> Result<(), BindError> {
+        Err(no_archives())
+    }
+    /// Replays a file into this pool and checks it (ADR-0072 section 5),
+    /// with the archive the file names (ADR-0075 item 7), if any.
+    fn replay(
+        &mut self,
+        _data: &[u8],
+        _archive: Option<&AnyArchive>,
+    ) -> Result<tessera_rl_engine::ReplaySummary, BindError> {
         Err(sync_only("replay"))
     }
     /// Starts stepping through a replay file (issue #378): the pool is
     /// checked against the header and a cursor is kept, with a copy of the
     /// file, until [`PoolOps::replay_finish`]. Calls that change the pool
     /// are refused meanwhile.
-    fn replay_begin(&mut self, _data: &[u8]) -> Result<(), BindError> {
+    fn replay_begin(
+        &mut self,
+        _data: &[u8],
+        _archive: Option<&AnyArchive>,
+    ) -> Result<(), BindError> {
         Err(sync_only("replay"))
     }
     /// Applies events until `calls` more calls (resets, steps, state writes)
@@ -839,21 +930,64 @@ where
         self.rec = None;
     }
 
-    fn replay(&mut self, data: &[u8]) -> Result<tessera_rl_engine::ReplaySummary, BindError> {
+    fn make_archive(&self, records: &[Vec<u8>]) -> Result<(AnyArchive, u64, usize), BindError> {
+        build_archive::<E>(self.pool.config(), records)
+    }
+
+    fn set_reset_source(
+        &mut self,
+        archive: Option<&AnyArchive>,
+        weights: Option<Vec<u32>>,
+    ) -> Result<(), BindError> {
+        self.not_replaying("set_reset_source")?;
+        let source = archive_source::<E>(archive, weights)?;
+        // Logged while recording (ADR-0075 item 7, tag 10).
+        if let Some(detached) = self.rec.take() {
+            let mut rec = detached.attach(&mut self.pool);
+            let result = rec.set_reset_source(source);
+            self.rec = Some(rec.detach());
+            return result.map_err(BindError::from);
+        }
+        self.pool.set_reset_source(source)?;
+        Ok(())
+    }
+
+    fn reset_from(&mut self, ids: &[u32], entries: &[u32]) -> Result<(), BindError> {
+        self.not_replaying("reset_from")?;
+        // Logged while recording (ADR-0075 item 5, tag 11).
+        if let Some(detached) = self.rec.take() {
+            let mut rec = detached.attach(&mut self.pool);
+            let result = rec.reset_from(ids, entries).map(|_| ());
+            self.rec = Some(rec.detach());
+            return result.map_err(BindError::from);
+        }
+        self.pool.reset_from(ids, entries)?;
+        Ok(())
+    }
+
+    fn replay(
+        &mut self,
+        data: &[u8],
+        archive: Option<&AnyArchive>,
+    ) -> Result<tessera_rl_engine::ReplaySummary, BindError> {
         self.not_recording("replay")?;
         self.not_replaying("replay")?;
+        let archive = archive_ref::<E>(archive)?;
         let replay =
             tessera_rl_engine::Replay::open(data, tessera_rl_engine::DecodeLimits::default())
                 .map_err(BindError::from)?;
-        replay.run(&mut self.pool).map_err(BindError::from)
+        replay
+            .run_with_archive(&mut self.pool, archive)
+            .map_err(BindError::from)
     }
 
-    fn replay_begin(&mut self, data: &[u8]) -> Result<(), BindError> {
+    fn replay_begin(&mut self, data: &[u8], archive: Option<&AnyArchive>) -> Result<(), BindError> {
         self.not_recording("replay")?;
         self.not_replaying("replay")?;
+        let archive = archive_ref::<E>(archive)?;
         let replay =
             tessera_rl_engine::Replay::open(data, tessera_rl_engine::DecodeLimits::default())?;
-        let cur = replay.cursor(&self.pool)?;
+        let cur = replay.cursor_with_archive(&self.pool, archive)?;
         self.cursor = Some((data.to_vec(), cur));
         Ok(())
     }

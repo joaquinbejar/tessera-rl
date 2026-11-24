@@ -10,6 +10,7 @@
 //! drops the tokens covering its ids; a writer drops them all, because the
 //! engine's writers need no token alive at all (ADR-0047 section 3).
 
+use crate::ffi::archive_type::AnyArchive;
 use core::any::Any;
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use tessera_rl_core::Persist;
@@ -119,6 +120,18 @@ pub(crate) trait AsyncOps: Send + Sync {
     fn restore_all(&self, snapshot: &Snapshot) -> Result<(), BindError>;
     /// The persisted file of `ids`; no sent id may be outstanding.
     fn encode(&self, ids: &[u32]) -> Result<Vec<u8>, BindError>;
+    /// Builds an archive of this environment from record bytes (ADR-0075).
+    fn make_archive(&self, records: &[Vec<u8>]) -> Result<(AnyArchive, u64, usize), BindError>;
+    /// Sets the reset source at quiescence (ADR-0075 item 2); stored tokens
+    /// are released, as by a writer.
+    fn set_reset_source(
+        &self,
+        archive: Option<&AnyArchive>,
+        weights: Option<Vec<u32>>,
+    ) -> Result<(), BindError>;
+    /// Resets `ids` from the archive entries `entries` (ADR-0075 item 5),
+    /// delivered by the next receive, as `reset`.
+    fn reset_from(&self, ids: &[u32], entries: &[u32], delivered: u64) -> Result<(), BindError>;
     /// Loads a persisted file into every instance. A refused file leaves
     /// tokens, views and deliveries as they were.
     fn load(&self, bytes: &[u8], limits: DecodeLimits) -> Result<(), BindError>;
@@ -694,6 +707,44 @@ where
         let guard = self.lock()?;
         let pool = guard.pool.as_ref().ok_or_else(closed)?;
         Ok(pool.encode(ids)?)
+    }
+
+    fn make_archive(&self, records: &[Vec<u8>]) -> Result<(AnyArchive, u64, usize), BindError> {
+        let guard = self.lock()?;
+        let pool = guard.pool.as_ref().ok_or_else(closed)?;
+        crate::env::build_archive::<E>(pool.config(), records)
+    }
+
+    fn set_reset_source(
+        &self,
+        archive: Option<&AnyArchive>,
+        weights: Option<Vec<u32>>,
+    ) -> Result<(), BindError> {
+        let source = crate::env::archive_source::<E>(archive, weights)?;
+        let mut guard = self.lock()?;
+        let state = &mut *guard;
+        state.refuse_while_pending()?;
+        let pool = state.pool.as_mut().ok_or_else(closed)?;
+        state.stored.release_all();
+        pool.set_reset_source(source)?;
+        Ok(())
+    }
+
+    fn reset_from(&self, ids: &[u32], entries: &[u32], delivered: u64) -> Result<(), BindError> {
+        let mut guard = self.lock()?;
+        let state = &mut *guard;
+        state.acknowledge(delivered);
+        state.refuse_while_pending()?;
+        let pool = state.pool.as_mut().ok_or_else(closed)?;
+        state.stored.release_all();
+        self.unsettle();
+        let result = pool.reset_from(ids, entries);
+        if result.is_ok() {
+            state.stored.bump_covered(&self.epochs);
+        }
+        self.settle(pool);
+        result?;
+        Ok(())
     }
 
     fn load(&self, bytes: &[u8], limits: DecodeLimits) -> Result<(), BindError> {

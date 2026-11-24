@@ -61,32 +61,48 @@ const fn kind_name(kind: DivergenceKind) -> &'static str {
     }
 }
 
+/// `None`, or the native archive of a `tessera_rl._native.Archive`.
+pub(crate) fn optional_archive(
+    g: Gil<'_>,
+    obj: Ref<'_>,
+) -> CResult<Option<crate::ffi::archive_type::AnyArchive>> {
+    if obj.is_none() {
+        Ok(None)
+    } else {
+        crate::ffi::archive_type::archive_of(g, obj).map(Some)
+    }
+}
+
 fn optional(g: Gil<'_>, v: Option<u64>) -> CResult<Mine<'_>> {
     v.map_or_else(|| Ok(capi::none(g)), |v| capi::int_u64(g, v))
 }
 
-/// `_replay(data: bytes) -> tuple`: replays a file into this pool.
+/// `_replay(data: bytes, archive) -> tuple`: replays a file into this pool,
+/// with the `Archive` the file names (ADR-0075) or `None`.
 /// `("ok", events, calls, poisoned, unverified_poison, unclaimed)`, or
 /// `("diverged", event_index, kind, instance, last_matching_checkpoint)`,
 /// which `tessera_rl.replay` raises as `ReplayDivergence`. Any other
 /// refusal raises here (`PersistError` for the file, the engine's class
 /// for a pool error).
 pub(crate) fn replay<'py>(g: Gil<'py>, inner: &Inner, args: Ref<'_>) -> CResult<Mine<'py>> {
-    let a: [Ref<'_>; 1] = exactly(g, args, "_replay")?;
-    let [data] = a;
+    let a: [Ref<'_>; 2] = exactly(g, args, "_replay")?;
+    let [data, archive] = a;
     let data = capi::bytes_of(g, data, "data")?;
-    let result = inner.with(g, |ops| Ok(g.detach(|| ops.replay(data))))?;
+    let archive = optional_archive(g, archive)?;
+    let result = inner.with(g, |ops| Ok(g.detach(|| ops.replay(data, archive.as_ref()))))?;
     outcome(g, result, false)
 }
 
-/// `_replay_begin(data: bytes)`: starts a stepped replay (issue #378); the
+/// `_replay_begin(data: bytes, archive)`: starts a stepped replay (issue #378),
+/// with the file's `Archive` or `None`; the
 /// pool refuses calls that change it until `_replay_finish`.
 pub(crate) fn replay_begin<'py>(g: Gil<'py>, inner: &Inner, args: Ref<'_>) -> CResult<Mine<'py>> {
-    let a: [Ref<'_>; 1] = exactly(g, args, "_replay_begin")?;
-    let [data] = a;
+    let a: [Ref<'_>; 2] = exactly(g, args, "_replay_begin")?;
+    let [data, archive] = a;
     let data = capi::bytes_of(g, data, "data")?;
+    let archive = optional_archive(g, archive)?;
     inner.with(g, |ops| {
-        g.detach(|| ops.replay_begin(data))
+        g.detach(|| ops.replay_begin(data, archive.as_ref()))
             .map_err(|e| to_py(g, e))?;
         Ok(capi::none(g))
     })

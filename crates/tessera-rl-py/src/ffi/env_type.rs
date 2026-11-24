@@ -96,6 +96,9 @@ varargs!(SceneM, api::scene);
 noargs!(CanvasM, api::canvas);
 varargs!(ImportRecordM, api::import_record);
 varargs!(ForkM, api::fork);
+varargs!(MakeArchiveM, api::make_archive);
+varargs!(SetResetSourceM, api::set_reset_source);
+varargs!(ResetFromM, api::reset_from);
 varargs!(EncodeM, api::encode);
 varargs!(LoadM, api::load);
 varargs!(RecordStartM, crate::replay_api::record_start);
@@ -164,10 +167,10 @@ static METHODS: MethodTable<EnvBody> = MethodTable::new(&[
     ),
     MethodRow::noargs::<RecordFinishM>(c"_record_finish", c"_record_finish() -> bytes"),
     MethodRow::noargs::<RecordAbortM>(c"_record_abort", c"_record_abort()"),
-    MethodRow::varargs::<ReplayM>(c"_replay", c"_replay(data) -> tuple: see tessera_rl.replay"),
+    MethodRow::varargs::<ReplayM>(c"_replay", c"_replay(data, archive) -> tuple: see tessera_rl.replay"),
     MethodRow::varargs::<ReplayBeginM>(
         c"_replay_begin",
-        c"_replay_begin($self, data, /)\n--\n\n_replay_begin(data): starts a stepped replay; see tessera_rl.replay.steps",
+        c"_replay_begin($self, data, archive, /)\n--\n\n_replay_begin(data, archive): starts a stepped replay; see tessera_rl.replay.steps",
     ),
     MethodRow::varargs::<ReplayAdvanceM>(
         c"_replay_advance",
@@ -204,6 +207,9 @@ static METHODS: MethodTable<EnvBody> = MethodTable::new(&[
         c"watch",
         c"watch($self, /)\n--\n\nwatch() -> WatchHandle: attaches a live watch (ADR-0083 item 7).",
     ),
+    MethodRow::varargs::<MakeArchiveM>(c"_make_archive", c"_make_archive($self, snapshots, /)\n--\n\n_make_archive(snapshots)"),
+    MethodRow::varargs::<SetResetSourceM>(c"set_reset_source", c"set_reset_source($self, archive, weights, /)\n--\n\nset_reset_source(archive, weights)"),
+    MethodRow::varargs::<ResetFromM>(c"reset_from", c"reset_from($self, ids, entries, delivered=None, /)\n--\n\nreset_from(ids, entries, delivered=None)"),
     MethodRow::END,
 ]);
 

@@ -14,6 +14,7 @@ pub(crate) mod inner {
     pub(crate) type Inner<T = dyn crate::env::PoolOps> = tessera_rl_pyffi::ffi::inner::Inner<T>;
 }
 
+pub(crate) mod archive_type;
 mod env_type;
 mod module;
 mod search_group_type;

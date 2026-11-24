@@ -6,6 +6,7 @@ from os import PathLike
 from types import TracebackType
 from typing import Any
 
+from tessera_rl._archive import Archive
 from tessera_rl._env import Env
 from tessera_rl._native import TesseraError
 
@@ -43,7 +44,7 @@ def record(
     keyframe_every: int = 0,
     checkpoint_every: int = 1024,
 ) -> AbstractContextManager[Env]: ...
-def run(path: str | PathLike[str], env: Env) -> ReplaySummary: ...
+def run(path: str | PathLike[str], env: Env, *, archive: Archive | None = None) -> ReplaySummary: ...
 
 class ReplaySteps:
     summary: ReplaySummary | None
@@ -62,4 +63,6 @@ class ReplaySteps:
         tb: TracebackType | None,
     ) -> None: ...
 
-def steps(path: str | PathLike[str], env: Env, *, every: int = 1) -> ReplaySteps: ...
+def steps(
+    path: str | PathLike[str], env: Env, *, every: int = 1, archive: Archive | None = None
+) -> ReplaySteps: ...

@@ -101,6 +101,17 @@ class ReplayDivergence(TesseraError):
         self.last_matching_checkpoint = last_matching_checkpoint
 
 
+def _archive_native(archive):
+    """The native object of a :class:`tessera_rl.Archive`, or ``None``."""
+    if archive is None:
+        return None
+    from tessera_rl._archive import Archive
+
+    if not isinstance(archive, Archive):
+        raise ArgumentError(f"archive must be a tessera_rl.Archive or None, not {type(archive).__name__}")
+    return archive._native
+
+
 def _native_of(env):
     # The native object itself (test-hooks factories return one) or an Env.
     if hasattr(env, "_replay") and hasattr(env, "_record_start"):
@@ -153,7 +164,7 @@ def record(env, path, *, keyframe_every: int = 0, checkpoint_every: int = 1024):
         raise
 
 
-def run(path, env) -> ReplaySummary:
+def run(path, env, *, archive=None) -> ReplaySummary:
     """Replays the file at ``path`` into ``env`` and checks it.
 
     ``env`` must be built like the recorded one (same environment, config,
@@ -162,11 +173,16 @@ def run(path, env) -> ReplaySummary:
     Raises :class:`ReplayDivergence` at the first failing check, and
     :class:`tessera_rl.PersistError` for a file that is damaged or does not
     match ``env``. On a divergence ``env`` is left as the replay left it.
+
+    ``archive`` is the :class:`tessera_rl.Archive` the file's archive resets
+    came from (ADR-0075), or ``None`` for a file of fresh resets; a file
+    that names an archive is refused (``ConfigError``) without it or with
+    another one, before anything is replayed.
     """
     native = _native_of(env)
     with open(os.fspath(path), "rb") as f:
         data = f.read()
-    result = native._replay(data)
+    result = native._replay(data, _archive_native(archive))
     if result[0] == "diverged":
         raise ReplayDivergence(*result[1:])
     return ReplaySummary(*result[1:])
@@ -257,7 +273,7 @@ class ReplaySteps:
         self.close()
 
 
-def steps(path, env, *, every: int = 1) -> ReplaySteps:
+def steps(path, env, *, every: int = 1, archive=None) -> ReplaySteps:
     """Replays the file at ``path`` into ``env`` a few calls at a time.
 
     Returns a :class:`ReplaySteps` iterator that yields an event index after
@@ -265,7 +281,7 @@ def steps(path, env, *, every: int = 1) -> ReplaySteps:
     between yields (see :func:`tessera_rl.render.replay_video`). Use it in a
     ``with`` block, or call ``close()``, if you may stop early. ``env`` must
     be built as for :func:`run`; the file is refused here as :func:`run`
-    refuses it.
+    refuses it, ``archive`` included.
     """
     every = int(every)
     if every < 1:
@@ -273,5 +289,5 @@ def steps(path, env, *, every: int = 1) -> ReplaySteps:
     native = _native_of(env)
     with open(os.fspath(path), "rb") as f:
         data = f.read()
-    native._replay_begin(data)
+    native._replay_begin(data, _archive_native(archive))
     return ReplaySteps(native, every)
