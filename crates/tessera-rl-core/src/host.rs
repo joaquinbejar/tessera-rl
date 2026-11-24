@@ -21,6 +21,7 @@
 
 use thiserror::Error;
 
+use crate::adapters::Adapters;
 use crate::agent::{AgentSlot, TurnStructure};
 use crate::env::EnvConfig;
 use crate::error::{ConfigError, SpaceError};
@@ -127,6 +128,11 @@ pub trait HostEnvironment: Send + Sized + 'static {
     /// `truncated` flags are as written. This matches `EnvPool` and
     /// ADR-0013.
     const TURNS: TurnStructure = TurnStructure::Simultaneous;
+    /// The PettingZoo interfaces the environment declares (ADR-0080 item 3):
+    /// derived from `TURNS`. Host protocols 1 and 2 carry only the turn
+    /// structure, so [`register_host!`](crate::register_host) refuses any
+    /// other value until a protocol version carries this one.
+    const ADAPTERS: Adapters = Adapters::for_turns(Self::TURNS);
     /// Whether the environment writes action masks
     /// ([`HostEnvironment::mask`]). Without masks the pool has no mask
     /// buffer (a mask length of 0) and never calls `mask`.

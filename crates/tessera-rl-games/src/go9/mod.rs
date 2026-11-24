@@ -280,6 +280,8 @@ fn slot(index: usize) -> Option<AgentSlot> {
 }
 
 impl Environment for Go9 {
+    /// AEC only: a sequential game (SPEC 12, ADR-0080).
+    const ADAPTERS: tessera_rl_core::Adapters = tessera_rl_core::Adapters::PZ_AEC;
     type State = Go9State;
     type Config = Go9Config;
     type Obs = Go9Obs;

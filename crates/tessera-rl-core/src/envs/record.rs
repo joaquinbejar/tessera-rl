@@ -3,13 +3,14 @@
 //! The registration record (ADR-0054 item 3): only facts that are consts
 //! of the environment's traits.
 
-use crate::{Environment, Persist, Tier};
+use super::deprecation::Deprecation;
+use crate::{Adapters, Environment, Persist, Tier};
 
 /// What [`register!`](crate::register) records about an environment.
 ///
 /// `#[non_exhaustive]` and built only by [`EnvRegistration::of`], so the
-/// fields ADR-0054 defers (capabilities, constructor) can be added later
-/// without a breaking change.
+/// field ADR-0054 still defers (the constructor) can be added later without
+/// a breaking change. ADR-0080 added `adapters` and `deprecation`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct EnvRegistration {
@@ -18,6 +19,8 @@ pub struct EnvRegistration {
     max_agents: usize,
     tier: Tier,
     perfect_information: bool,
+    adapters: Adapters,
+    deprecation: Option<Deprecation>,
 }
 
 impl EnvRegistration {
@@ -30,6 +33,18 @@ impl EnvRegistration {
             max_agents: <E as Environment>::MAX_AGENTS,
             tier: <E as Environment>::TIER,
             perfect_information: <E as Environment>::PERFECT_INFORMATION,
+            adapters: <E as Environment>::ADAPTERS,
+            deprecation: None,
+        }
+    }
+
+    /// This record, deprecated (ADR-0080 item 4). Used by
+    /// [`register!`](crate::register)'s `deprecated(...)` form.
+    #[must_use]
+    pub const fn deprecated(self, deprecation: Deprecation) -> Self {
+        Self {
+            deprecation: Some(deprecation),
+            ..self
         }
     }
 
@@ -42,6 +57,8 @@ impl EnvRegistration {
             max_agents: 1,
             tier: Tier::CrossPlatform,
             perfect_information: true,
+            adapters: Adapters::NONE,
+            deprecation: None,
         }
     }
 
@@ -76,6 +93,19 @@ impl EnvRegistration {
     #[must_use]
     pub const fn perfect_information(&self) -> bool {
         self.perfect_information
+    }
+
+    /// The declared PettingZoo interfaces (`Environment::ADAPTERS`, SPEC 12,
+    /// ADR-0080).
+    #[must_use]
+    pub const fn adapters(&self) -> Adapters {
+        self.adapters
+    }
+
+    /// The deprecation, if the id is deprecated (SPEC 16.1, ADR-0080).
+    #[must_use]
+    pub const fn deprecation(&self) -> Option<Deprecation> {
+        self.deprecation
     }
 }
 

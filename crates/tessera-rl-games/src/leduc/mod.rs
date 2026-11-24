@@ -314,6 +314,8 @@ fn chips(n: u32) -> f32 {
 }
 
 impl Environment for Leduc {
+    /// AEC only: a sequential game (SPEC 12, ADR-0080).
+    const ADAPTERS: tessera_rl_core::Adapters = tessera_rl_core::Adapters::PZ_AEC;
     type State = LeducState;
     type Config = LeducConfig;
     type Obs = LeducObs;

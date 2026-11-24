@@ -468,6 +468,8 @@ fn reward(tenths: i32) -> f32 {
 }
 
 impl Environment for PaddleDuel {
+    /// Parallel natively and AEC through cycle buffering (SPEC 12, ADR-0080).
+    const ADAPTERS: tessera_rl_core::Adapters = tessera_rl_core::Adapters::PZ_PARALLEL.union(tessera_rl_core::Adapters::PZ_AEC);
     type State = PaddleDuelState;
     type Config = PaddleDuelConfig;
     type Obs = PaddleDuelObs;

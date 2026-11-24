@@ -5,6 +5,7 @@
 
 use tessera_rl_num::rng::{ObsRng, StepRng};
 
+use crate::adapters::Adapters;
 use crate::agent::{AgentSlot, Tier, TurnStructure};
 use crate::encoding::Canonical;
 use crate::error::{ConfigError, InvariantViolation, SpaceError};
@@ -61,6 +62,11 @@ pub trait Environment: Sized + 'static {
     /// The turn structure (ADR-0013). `Sequential` and `Mixed` take the
     /// acting agents from [`Environment::acting`]; `Simultaneous` ignores it.
     const TURNS: TurnStructure = TurnStructure::Simultaneous;
+    /// The PettingZoo interfaces the environment declares (SPEC 12,
+    /// ADR-0080 item 2). Empty by default: an environment offers a
+    /// PettingZoo interface only by declaring it. [`register!`](crate::register)
+    /// refuses a set that is not [`Adapters::valid_for`] its `TURNS`.
+    const ADAPTERS: Adapters = Adapters::NONE;
 
     /// The observation space for `cfg`.
     ///

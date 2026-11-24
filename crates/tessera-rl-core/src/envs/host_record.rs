@@ -4,7 +4,7 @@
 //! consts of [`HostEnvironment`]. It has no tier, because a host
 //! environment makes no determinism claim.
 
-use crate::{HostEnvironment, TurnStructure};
+use crate::{Adapters, HostEnvironment, TurnStructure};
 
 /// What [`register_host!`](crate::register_host) records about a host
 /// environment.
@@ -19,6 +19,7 @@ pub struct HostRegistration {
     max_agents: usize,
     turns: TurnStructure,
     perfect_information: bool,
+    adapters: Adapters,
 }
 
 impl HostRegistration {
@@ -31,6 +32,7 @@ impl HostRegistration {
             max_agents: E::MAX_AGENTS,
             turns: E::TURNS,
             perfect_information: E::PERFECT_INFORMATION,
+            adapters: E::ADAPTERS,
         }
     }
 
@@ -43,6 +45,7 @@ impl HostRegistration {
             max_agents: 1,
             turns: TurnStructure::Simultaneous,
             perfect_information: true,
+            adapters: Adapters::for_turns(TurnStructure::Simultaneous),
         }
     }
 
@@ -75,6 +78,13 @@ impl HostRegistration {
     #[must_use]
     pub const fn perfect_information(&self) -> bool {
         self.perfect_information
+    }
+
+    /// The PettingZoo interfaces (`HostEnvironment::ADAPTERS`, ADR-0080
+    /// item 3), equal to [`Adapters::for_turns`] of the turns.
+    #[must_use]
+    pub const fn adapters(&self) -> Adapters {
+        self.adapters
     }
 }
 

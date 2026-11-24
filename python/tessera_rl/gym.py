@@ -61,7 +61,7 @@ except ImportError as e:  # pragma: no cover - exercised only without gymnasium
 
 import numpy as np
 
-from tessera_rl import _host, _native
+from tessera_rl import _host, _native, _registry
 from tessera_rl.masks import head_views
 from tessera_rl._env import _discrete_actions, _multi_actions, _real_array, _to_float32, native_kwargs
 
@@ -77,6 +77,10 @@ _MAKERS = {
     "tessera/PaddleDuel-v1": _native.make_paddleduel,
     **{env_id: _native.make_rts for env_id in ("tessera/RTS-vsRush-v1", "tessera/RTS-vsProspector-v1", "tessera/RTS-vsRandom-v1")},
 }
+
+#: The registry id of the Gymnasium-only RTS ids (ADR-0080: their
+#: deprecation is RTS-v1's).
+_REGISTRY_ID = {env_id: "tessera/RTS-v1" for env_id in _MAKERS if env_id.startswith("tessera/RTS-vs")}
 
 #: Two-slot environments admitted with one agent (registered with
 #: ``agents=1``). Admission rests on a lifetime invariant of each kernel:
@@ -120,6 +124,7 @@ def _autoreset_mode(mode) -> AutoresetMode:
 
 def _native_env(env_id: str, num_envs: int, seed: int, mode: AutoresetMode, outputs: str, kwargs: dict):
     maker = _MAKERS.get(env_id)
+    _registry.warn_if_deprecated(_REGISTRY_ID.get(env_id, env_id))
     if maker is None and _host.is_host_id(env_id):
         # A host environment of an installed wheel (SPEC 14.4): one agent.
         native = _host.native_for(env_id, num_envs, seed, outputs, {**kwargs, "auto_reset": _NATIVE_MODE[mode]})

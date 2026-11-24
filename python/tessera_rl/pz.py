@@ -91,25 +91,30 @@ from pettingzoo import AECEnv, ParallelEnv
 from pettingzoo.utils.conversions import parallel_to_aec_wrapper
 from pettingzoo.utils.wrappers import OrderEnforcingWrapper
 
-from tessera_rl import _host, _native
+from tessera_rl import _host, _native, _registry
 from tessera_rl._env import Env, _discrete_actions, _multi_actions, native_kwargs
 from tessera_rl.masks import head_views
 
 #: Native constructors and the PettingZoo interfaces each environment
 #: declares (ADR-0013). Anything else is refused at construction.
-_ENVS = {
-    "tessera/Tag-v1": (_native.make_tag, frozenset({"parallel", "aec"})),
-    "tessera/GridKeyDoor-v1": (_native.make_keydoor, frozenset({"parallel", "aec"})),
-    "tessera/Snake-v1": (_native.make_snake, frozenset({"parallel", "aec"})),
-    "tessera/PaddleDuel-v1": (_native.make_paddleduel, frozenset({"parallel", "aec"})),
-    "tessera/Connect4-v1": (_native.make_connect4, frozenset({"aec"})),
-    "tessera/Leduc-v1": (_native.make_leduc, frozenset({"aec"})),
-    "tessera/Othello-v1": (_native.make_othello, frozenset({"aec"})),
-    "tessera/Go9-v1": (_native.make_go9, frozenset({"aec"})),
-    # Simultaneous; Parallel only for now (cycle buffering of a multi-head
-    # environment is not designed yet).
-    "tessera/RTS-v1": (_native.make_rts, frozenset({"parallel"})),
+_MAKERS = {
+    "tessera/Tag-v1": _native.make_tag,
+    "tessera/GridKeyDoor-v1": _native.make_keydoor,
+    "tessera/Snake-v1": _native.make_snake,
+    "tessera/PaddleDuel-v1": _native.make_paddleduel,
+    "tessera/Connect4-v1": _native.make_connect4,
+    "tessera/Leduc-v1": _native.make_leduc,
+    "tessera/Othello-v1": _native.make_othello,
+    "tessera/Go9-v1": _native.make_go9,
+    # Simultaneous; it declares Parallel only (cycle buffering of a
+    # multi-head environment is not designed yet).
+    "tessera/RTS-v1": _native.make_rts,
 }
+
+#: The maker of each first-party id and the PettingZoo interfaces it
+#: declares, read from the registry (``Environment::ADAPTERS``, SPEC 12,
+#: ADR-0080).
+_ENVS = {env_id: (maker, _registry.adapters_of(env_id)) for env_id, maker in _MAKERS.items()}
 
 
 #: The PettingZoo interfaces of a host environment, by its turns
@@ -182,6 +187,7 @@ def _native_pool(env_id: str, adapter: str, seed: int | None, kwargs: dict) -> t
     if env_id not in _ENVS and _host.is_host_id(env_id):
         return _host_pool(env_id, adapter, seed, kwargs)[0]
     maker, declared = _lookup(env_id)
+    _registry.warn_if_deprecated(env_id)
     if adapter not in declared:
         raise _undeclared(env_id, adapter, declared)
     _check_reserved(kwargs)

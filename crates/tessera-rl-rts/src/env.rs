@@ -913,6 +913,8 @@ fn frame_cell(g: Grid, team: Team, x: u16, y: u16) -> Option<u16> {
 }
 
 impl Environment for Rts {
+    /// Parallel only: cycle buffering of a multi-head environment is not designed (ADR-0080).
+    const ADAPTERS: tessera_rl_core::Adapters = tessera_rl_core::Adapters::PZ_PARALLEL;
     type State = RtsState;
     type Config = RtsConfig;
     type Obs = RtsObs;

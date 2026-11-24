@@ -27,6 +27,11 @@ macro_rules! register_host {
             !$crate::envs::in_reserved_namespace($id),
             "register_host!: the tessera/ namespace is reserved for first-party environments",
         );
+        const _: () = ::core::assert!(
+            <$env as $crate::HostEnvironment>::ADAPTERS.bits()
+                == $crate::Adapters::for_turns(<$env as $crate::HostEnvironment>::TURNS).bits(),
+            "register_host!: ADAPTERS must equal Adapters::for_turns(TURNS) until a host protocol carries it (ADR-0080)",
+        );
         $crate::envs::__private::inventory::submit! {
             $crate::envs::HostRegistration::of::<$env>()
         }
