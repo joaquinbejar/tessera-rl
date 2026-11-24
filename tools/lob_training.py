@@ -7,12 +7,11 @@ SPEC 16.1; design ``docs/reviews/381/DESIGN.md`` section 5; protocol table
 (c) 2019 CleanRL developers; entry in ``THIRD_PARTY.md``).
 
 Setup: one PettingZoo Parallel environment (``tessera_rl.pz``). Slot 0 is
-the learner; every other slot is a noise trader played here, in Python,
-from its own masks: with probability 1/4 a legal action drawn head by head
-through the conditional masks, otherwise the no-op. (The design's mix of
-market maker, noise and momentum traders needs ADR-0079's heuristic slots,
-which are not implemented; the noise-only mix is this protocol's documented
-substitute.)
+the learner. Slots 1 to 7 are ADR-0079 heuristic slots (#470): the engine
+plays the environment's own baseline mix there (``baseline_of(slot)``:
+market makers, noise and momentum traders, the design's section 5 mix),
+from each slot's information state. ``agents="learner"`` hides them, so the
+learner's dicts hold only ``agent_0``.
 
 Policy: an MLP over the learner's observation (every leaf flattened, each
 value ``sign(x) * log1p(|x|)``) with four masked heads sampled in order:
@@ -21,8 +20,16 @@ offset; ``cancel`` under kind. The log-probability and entropy are the sums
 over the four heads at the sampled parents.
 
 Score: the mean episode return of slot 0 over ``eval_episodes`` episodes on
-fixed evaluation seeds. Baseline: the same score for a noise trader in
-slot 0 on the same seeds. **Pass:** over the protocol's seeds, the lower
+fixed evaluation seeds, against the same in-engine opponents. Two baselines
+on the same seeds, both reported:
+
+- (a) the **pass reference**: a noise trader in slot 0, played here in
+  Python (with probability 1/4 a legal action drawn head by head through
+  the conditional masks, otherwise the no-op), as in #381;
+- (b) for information only: the engine's own baseline in slot 0 (a market
+  maker), from a pool where every slot is a heuristic.
+
+**Pass:** over the protocol's seeds, the lower
 bound of a bootstrap 95% interval of ``mean(trained) - baseline`` is above
 0. A truncation (the last step) is treated as the episode's end.
 
@@ -79,10 +86,36 @@ def protocol() -> dict:
     return tomllib.loads(PROTOCOLS_FILE.read_text())["lob"]
 
 
+#: The trading agents. It must equal ``LobConfig``'s default (8): with
+#: ``agents="learner"``, ``pz.parallel_env``'s ``agents`` argument is the
+#: learner filter, so the environment's own ``agents`` key cannot be passed
+#: alongside it, and the pool runs the default count.
+AGENTS = 8
+#: Slots 1 to 7 are in-engine heuristic opponents (ADR-0079, #470); a dict
+#: map leaves the other slots learners.
+OPPONENTS = {s: "heuristic" for s in range(1, AGENTS)}
+
+
+def _config() -> dict:
+    cfg = dict(protocol()["config"])
+    if cfg.pop("agents", AGENTS) != AGENTS:
+        raise ValueError(f"the lob protocol runs LobConfig's default {AGENTS} agents (see AGENTS)")
+    return cfg
+
+
 def make_env(seed: int):
+    """The learner's environment: slot 0 visible, slots 1 to 7 played by the
+    engine."""
     from tessera_rl import pz  # noqa: PLC0415
 
-    return pz.parallel_env(ENV_ID, seed=seed, **protocol()["config"])
+    return pz.parallel_env(ENV_ID, seed=seed, policy_map=OPPONENTS, agents="learner", **_config())
+
+
+def make_all_heuristic_env(seed: int):
+    """Every slot played by the engine, slot 0 included (baseline (b))."""
+    from tessera_rl import pz  # noqa: PLC0415
+
+    return pz.parallel_env(ENV_ID, seed=seed, policy_map={s: "heuristic" for s in range(AGENTS)}, agents=AGENTS, **_config())
 
 
 def masks_of(info) -> tuple[np.ndarray, ...]:
@@ -113,10 +146,6 @@ def features(obs: dict) -> np.ndarray:
     squashed with ``sign(x) * log1p(|x|)``."""
     flat = np.concatenate([np.asarray(obs[k], dtype=np.float64).reshape(-1) for k in sorted(obs)])
     return (np.sign(flat) * np.log1p(np.abs(flat))).astype(np.float32)
-
-
-def opponents(env, infos, rng) -> dict:
-    return {a: noise_action(rng, masks_of(infos[a])) for a in env.agents if a != LEARNER}
 
 
 def build_agent(obs_dim: int, hidden: int):
@@ -177,8 +206,7 @@ def episode_scores(policy, episodes: int, seed: int) -> list[float]:
         obs, infos = env.reset()
         total = 0.0
         while LEARNER in env.agents:
-            acts = opponents(env, infos, rng)
-            acts[LEARNER] = policy(obs[LEARNER], masks_of(infos[LEARNER]), rng)
+            acts = {LEARNER: policy(obs[LEARNER], masks_of(infos[LEARNER]), rng)}
             obs, rewards, _, _, infos = env.step(acts)
             total += float(rewards.get(LEARNER, 0.0))
         env.close()
@@ -187,12 +215,30 @@ def episode_scores(policy, episodes: int, seed: int) -> list[float]:
 
 
 def baseline_scores(episodes: int) -> list[float]:
-    """The noise trader's scores in slot 0 on the evaluation seeds."""
+    """Baseline (a), the pass reference: the noise trader's scores in slot 0
+    on the evaluation seeds, against the in-engine opponents."""
     return episode_scores(lambda _obs, masks, rng: noise_action(rng, masks), episodes, EVAL_SEED)
 
 
+def engine_baseline_scores(episodes: int) -> list[float]:
+    """Baseline (b), for information: slot 0 played by the engine's own
+    baseline (a market maker) on the evaluation seeds."""
+    scores = []
+    for ep in range(episodes):
+        env = make_all_heuristic_env(EVAL_SEED + ep)
+        env.reset()
+        total = 0.0
+        while LEARNER in env.agents:
+            # Every slot is a heuristic: the engine ignores these rows.
+            _, rewards, _, _, _ = env.step({a: np.zeros(4, dtype=np.int64) for a in env.agents})
+            total += float(rewards.get(LEARNER, 0.0))
+        env.close()
+        scores.append(total)
+    return scores
+
+
 def train(seed: int, hyper: Hyper, eval_episodes: int) -> dict:
-    """One protocol run: PPO for slot 0 against noise traders, then the
+    """One protocol run: PPO for slot 0 against the in-engine opponents, then the
     evaluation scores of the trained policy."""
     import torch  # noqa: PLC0415
 
@@ -213,8 +259,7 @@ def train(seed: int, hyper: Hyper, eval_episodes: int) -> dict:
             m = masks_of(infos[LEARNER])
             with torch.no_grad():
                 a, lp, _, v = agent.heads(x, _masks_tensor([m]))
-            step_acts = opponents(env, infos, rng)
-            step_acts[LEARNER] = a[0].numpy().astype(np.int64)
+            step_acts = {LEARNER: a[0].numpy().astype(np.int64)}
             obs, rewards, terms, truncs, infos = env.step(step_acts)
             done = LEARNER not in env.agents or terms.get(LEARNER, False) or truncs.get(LEARNER, False)
             xs.append(x[0])
@@ -291,8 +336,17 @@ def main(argv: list[str] | None = None) -> int:
     hyper = Hyper(**{**protocol()["hyper"], "total_steps": args.total_steps})
     runs = [train(seed, hyper, args.eval_episodes) for seed in range(args.seeds)]
     baseline = float(np.mean(baseline_scores(args.eval_episodes)))
+    engine_baseline = float(np.mean(engine_baseline_scores(args.eval_episodes)))
     trained = [float(np.mean(r["scores"])) for r in runs]
-    report = {"env": ENV_ID, "hyper": asdict(hyper), "runs": runs, "baseline": baseline, **passes(trained, baseline)}
+    report = {
+        "env": ENV_ID,
+        "opponents": "ADR-0079 heuristic slots 1 to 7 (#470)",
+        "hyper": asdict(hyper),
+        "runs": runs,
+        "baseline": baseline,
+        "engine_baseline": engine_baseline,
+        **passes(trained, baseline),
+    }
     print(json.dumps(report, indent=2))  # noqa: T201
     return 0 if report["pass"] else 1
 

@@ -43,6 +43,22 @@ def test_lob_noise_trader_acts_legally_under_the_masks():
     env.close()
 
 
+def test_lob_learner_env_shows_slot_0_and_engine_plays_1_to_7():
+    """#470: the opponents are heuristic slots, hidden from the learner."""
+    env = lt.make_env(3)
+    _, infos = env.reset()
+    assert env.agents == [lt.LEARNER]
+    assert infos[lt.LEARNER]["policy_group"] == "learner"
+    _, _, _, _, infos = env.step({lt.LEARNER: np.zeros(4, dtype=np.int64)})
+    assert set(infos[lt.LEARNER]["heuristic_rewards"]) == {f"agent_{s}" for s in range(1, 8)}
+    env.close()
+
+
+def test_lob_engine_baseline_scores_are_finite():
+    scores = lt.engine_baseline_scores(1)
+    assert len(scores) == 1 and np.isfinite(scores[0])
+
+
 def test_lob_features_are_finite_and_squashed():
     env = lt.make_env(2)
     obs, _ = env.reset()

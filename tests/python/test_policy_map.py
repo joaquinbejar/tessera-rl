@@ -85,22 +85,27 @@ def test_lob_heuristic_slots_fill_1_to_7_deterministically_and_ignore_rows():
     """#470: LimitOrderBook runs heuristic slots (InfoHeuristic) like Tag."""
     env = tessera_rl.make(LOB, num_envs=4, seed=5, workers=2, policy_map=LOB_MAP, agents=8)
     twin = tessera_rl.make(LOB, num_envs=4, seed=5, workers=0, policy_map=LOB_MAP, agents=8)
-    assert env.policy_groups == ("learner",) + ("heuristic",) * 7
+    # MAX_AGENTS is 16: slots 8 to 15 are learners the config leaves unused.
+    assert env.policy_groups[:8] == ("learner",) + ("heuristic",) * 7
     env.reset()
     twin.reset()
     heads = len(env.action_nvec)
-    zeros = np.zeros((4, 8, heads), dtype=np.int32)
+    rows = env.agents  # MAX_AGENTS (16) rows; the config runs slots 0 to 7
+    zeros = np.zeros((4, rows, heads), dtype=np.int32)
+    # Multi-head actions are range-checked per head in Python before the
+    # engine sees them, so the ignored rows get in-range values that differ
+    # from the zeros (the top value of each head), not -12345 as for Tag.
     garbage = zeros.copy()
-    garbage[:, 1:8] = -12345
+    garbage[:, 1:8] = np.asarray(env.action_nvec, dtype=np.int32) - 1
     filled = False
     for _ in range(40):
         step = env.step(zeros)
         other = twin.step(garbage)
         h = env.heuristic_actions
-        assert h.shape == (4, 8, heads) and h.dtype == np.int32
+        assert h.shape == (4, rows, heads) and h.dtype == np.int32
         np.testing.assert_array_equal(h, twin.heuristic_actions)
         np.testing.assert_array_equal(step.rewards, other.rewards)
-        assert (h[:, 0] == 0).all()
+        assert (h[:, 0] == 0).all() and (h[:, 8:] == 0).all()
         filled |= bool((h[:, 1:8] != 0).any())
     assert filled, "the heuristic slots never acted"
     env.close()
