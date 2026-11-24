@@ -32,6 +32,11 @@ manifest-path = "crates/tessera-rl-py/Cargo.toml"
 python-source = "python"
 module-name = "tessera_rl._native"
 
+# A CycloneDX SBOM of the extension's Rust dependencies in every wheel's
+# .dist-info/sboms/ (PEP 770; SPEC 20.1, #350). tools/sbom_check.py checks it.
+[tool.maturin.sbom]
+rust = true
+
 # Development and test tools (ADR-0027 versions from compat/targets.toml).
 [dependency-groups]
 test = [
