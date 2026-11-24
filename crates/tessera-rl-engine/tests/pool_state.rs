@@ -81,7 +81,11 @@ fn step(p: &mut Pool, a: i32) {
 /// What a pool snapshot holds, comparable.
 fn print(state: &PoolState<Counter>) -> (Vec<StateHash>, Vec<u8>, PoolContext) {
     (
-        state.records().iter().map(tessera_rl_engine::Record::hash).collect(),
+        state
+            .records()
+            .iter()
+            .map(tessera_rl_engine::Record::hash)
+            .collect(),
         state.transforms().to_vec(),
         state.context().clone(),
     )
