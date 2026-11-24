@@ -169,6 +169,8 @@ fn test_sync_options_default_uses_physical_cores() {
     assert_eq!(options, crate::SyncOptions::new(physical_cores()));
 }
 
+// The split-phase modes are not built under loom (see `gang.rs`).
+#[cfg(not(loom))]
 #[test]
 fn test_pipelined_options_default_uses_physical_cores() {
     let options = crate::PipelinedOptions::default();
