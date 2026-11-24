@@ -342,28 +342,103 @@ def train(env_id: str, kwargs: dict, seed: int, seats: list[int], h: TwoPlayerHy
     return agent, learner, {"seed": seed, "learner_slot": learner, "episodes": episodes, "train_seconds": round(time.perf_counter() - started, 2), "curve": curve}
 
 
-def eval_scores(env_id: str, kwargs: dict, seats: list[int], player: str, opponent: str, episodes: int, seed_base: int, score: str, agent=None) -> list[float]:
+#: Redraws of a randomized opening before its episode is skipped (REVIEW of
+#: the deterministic-evaluation finding, condition 2).
+OPENING_TRIES = 16
+
+
+def openings(env_id: str, kwargs: dict, episodes: int, seed_base: int, plies: int) -> tuple[list[bytes | None], int]:
+    """The randomized evaluation openings (#370 T3b; rev's ruling on the
+    deterministic-evaluation finding): for episode ``i``, ``plies`` uniform
+    legal plies by both sides, drawn from the episode seed, from a reset with
+    seed ``seed_base + i``, returned as the instance record
+    (``Env.snapshot(0)``). An opening that ends the game, or leaves the side
+    to move no legal move, is redrawn from sub-seed ``(seed_base + i, try)``,
+    up to ``OPENING_TRIES``; after that the episode's entry is ``None`` and
+    the episode is skipped by every player kind alike. ``plies == 0`` gives
+    ``None`` entries with no skips: a normal reset. Returns (records, skipped)."""
+    if plies <= 0:
+        return [None] * episodes, 0
+    env = _make(env_id, 1, seed_base, None, kwargs)
+    n_actions = env.action_choices
+    records: list[bytes | None] = []
+    skipped = 0
+    for i in range(episodes):
+        record = None
+        for attempt in range(OPENING_TRIES):
+            rng = np.random.default_rng([seed_base + i, attempt])
+            step = env.reset(seed=seed_base + i)
+            ok = True
+            for _ in range(plies):
+                actor = np.flatnonzero(np.asarray(step.acting[0], dtype=bool))
+                if actor.size != 1:
+                    ok = False
+                    break
+                mask = slot_mask(step.masks, int(actor[0]), 1, n_actions)[0]
+                if not mask.any():
+                    ok = False
+                    break
+                acts = np.zeros((1, env.agents), dtype=np.int32)
+                acts[0, int(actor[0])] = uniform_legal(rng, mask)
+                step = env.step(acts)
+                if step.episode_terminated[0] or step.episode_truncated[0]:
+                    ok = False
+                    break
+            if ok:
+                actor = np.flatnonzero(np.asarray(step.acting[0], dtype=bool))
+                if actor.size == 1 and slot_mask(step.masks, int(actor[0]), 1, n_actions)[0].any():
+                    record = bytes(env.snapshot(0))
+                    break
+        if record is None:
+            skipped += 1
+        records.append(record)
+    env.close()
+    return records, skipped
+
+
+def eval_scores(env_id: str, kwargs: dict, seats: list[int], player: str, opponent: str, episodes: int, seed_base: int, score: str, agent=None, opening_plies: int = 0, trace: list | None = None) -> list[float]:
     """Per-episode scores of ``player`` in the learner's seat against
     ``opponent``, ``episodes`` split evenly over ``seats``, on evaluation
     seeds ``seed_base + i``. ``player`` is ``"trained"`` (greedy ``agent``),
     ``"uniform"`` (uniform legal) or ``"heuristic"`` (the seat is itself a
     heuristic slot); ``opponent`` is ``"heuristic"`` or ``"uniform"``
-    (played here). Deterministic given the seeds."""
+    (played here). Deterministic given the seeds.
+
+    ``opening_plies > 0`` starts episode ``i`` from the randomized opening of
+    :func:`openings` for that episode, the same for every player kind and
+    both seats (paired comparisons); a skipped opening skips that episode.
+    ``trace``, if given, receives one tuple per episode: (seat, episode, the
+    move sequence: learner actions and the heuristic slots' actions)."""
+    import hashlib  # noqa: PLC0415
+
     import torch  # noqa: PLC0415
+
+    from tessera_rl import Archive  # noqa: PLC0415
 
     if player == "heuristic" and opponent != "heuristic":
         raise ValueError("a heuristic seat plays against heuristic slots only")
     out = []
     per_seat = [episodes // len(seats) + (1 if k < episodes % len(seats) else 0) for k in range(len(seats))]
+    starts, _ = openings(env_id, kwargs, max(per_seat), seed_base, opening_plies)
     for seat, count in zip(seats, per_seat, strict=True):
         probe = _make(env_id, 1, seed_base, None, kwargs)
         agents, n_actions = probe.agents, probe.action_choices
         probe.close()
         mode = "self" if player == "heuristic" else ("heuristic" if opponent == "heuristic" else "python")
         env = _make(env_id, 1, seed_base, opponent_map(seat, agents, mode), kwargs)
+        present = [k for k in range(count) if starts[k] is not None]
+        if opening_plies > 0 and present:
+            env.set_reset_source(Archive(env, [starts[k] for k in present]))
         for i in range(count):
+            if opening_plies > 0 and starts[i] is None:
+                continue
             rng = np.random.default_rng(seed_base + i)
-            step = env.reset(seed=seed_base + i)
+            if opening_plies > 0:
+                env.reset(seed=seed_base + i)
+                step = env.reset_from([0], [present.index(i)])
+            else:
+                step = env.reset(seed=seed_base + i)
+            moves = hashlib.sha256()
             total, done = 0.0, False
             while not done:
                 mask = slot_mask(step.masks, seat, 1, n_actions)
@@ -374,9 +449,16 @@ def eval_scores(env_id: str, kwargs: dict, seats: list[int], player: str, oppone
                     acts = int(greedy(logits, torch.as_tensor(mask))[0])
                 elif step.acting[0, seat] and player == "uniform":
                     acts = uniform_legal(rng, mask[0])
+                moves.update(np.asarray([acts], dtype=np.int64).tobytes())
                 step = env.step(_actions(env, seat, np.asarray([acts], dtype=np.int32), "python" if mode == "python" else "heuristic", step, rng))
+                if env.heuristic_actions is not None:
+                    moves.update(np.ascontiguousarray(env.heuristic_actions).tobytes())
                 total += float(step.rewards[0, seat])
                 done = bool(step.episode_terminated[0] or step.episode_truncated[0])
             out.append(episode_score(total, score))
+            if trace is not None:
+                trace.append((seat, i, moves.hexdigest()))
+        if opening_plies > 0 and present:
+            env.set_reset_source(None)
         env.close()
     return out

@@ -181,10 +181,11 @@ def train_twoplayer(name: str, seed: int, total_steps: int, eval_episodes: int) 
     if p["tier"] != "T3b":
         raise ValueError(f"{name} is tier {p['tier']}, not T3b")
     kwargs, seats, score = dict(p.get("env_kwargs", {})), list(p["seats"]), p["score"]
+    k = int(p.get("opening_plies", 0))
     agent, _, record = l2.train(p["env"], kwargs, seed, seats, twoplayer_hyper(name, total_steps))
-    vs_h = l2.eval_scores(p["env"], kwargs, seats, "trained", "heuristic", eval_episodes, rt.EVAL_SEED_BASE, score, agent)
-    vs_u = l2.eval_scores(p["env"], kwargs, seats, "trained", "uniform", eval_episodes, rt.EVAL_SEED_BASE, score, agent)
-    return {**record, "vs_heuristic": vs_h, "vs_uniform": vs_u, "eval_mean": float(sum(vs_h) / len(vs_h))}
+    vs_h = l2.eval_scores(p["env"], kwargs, seats, "trained", "heuristic", eval_episodes, rt.EVAL_SEED_BASE, score, agent, opening_plies=k)
+    vs_u = l2.eval_scores(p["env"], kwargs, seats, "trained", "uniform", eval_episodes, rt.EVAL_SEED_BASE, score, agent, opening_plies=k)
+    return {**record, "vs_heuristic": vs_h, "vs_uniform": vs_u, "eval_mean": float(sum(vs_h) / len(vs_h)), "opening_plies": k, "agent": agent}
 
 
 def twoplayer_references(name: str, episodes: int) -> dict:
@@ -196,9 +197,10 @@ def twoplayer_references(name: str, episodes: int) -> dict:
 
     p = protocol(name)
     kwargs, seats, score = dict(p.get("env_kwargs", {})), list(p["seats"]), p["score"]
+    k = int(p.get("opening_plies", 0))
     return {
-        "uniform": l2.eval_scores(p["env"], kwargs, seats, "uniform", "heuristic", episodes, rt.EVAL_SEED_BASE, score),
-        "heuristic": l2.eval_scores(p["env"], kwargs, seats, "heuristic", "heuristic", episodes, rt.EVAL_SEED_BASE, score),
+        "uniform": l2.eval_scores(p["env"], kwargs, seats, "uniform", "heuristic", episodes, rt.EVAL_SEED_BASE, score, opening_plies=k),
+        "heuristic": l2.eval_scores(p["env"], kwargs, seats, "heuristic", "heuristic", episodes, rt.EVAL_SEED_BASE, score, opening_plies=k),
     }
 
 
