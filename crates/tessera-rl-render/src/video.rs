@@ -31,8 +31,9 @@ pub enum VideoError {
 }
 
 /// Writes `frames` (each `[height, width, 3]` RGB8) to `out` as a looping
-/// GIF at `fps` frames per second (1 to 100; GIF delays are in hundredths
-/// of a second, so the rate is rounded to `100 / round(100 / fps)`).
+/// GIF at `fps` frames per second (1 to 100). GIF delays are in hundredths
+/// of a second, so the rate played is `100 / round(100 / fps)`: exact for
+/// rates that divide 100 (25 or 50, for example); 30 plays at about 33.3.
 ///
 /// # Errors
 ///
