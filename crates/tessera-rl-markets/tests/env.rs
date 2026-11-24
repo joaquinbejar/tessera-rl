@@ -155,8 +155,11 @@ fn test_env_reward_fundamental_only_change_is_hidden_until_settlement() {
         steps,
         ..still(2, 0)
     };
-    // Every walk draw moves up: the same draws as `flat` (one per step),
-    // so the arrival permutations match too.
+    // Every walk draw moves up: the same draws as `flat` (one per step).
+    // The signal draws that follow are one bounded draw per used slot,
+    // whose count and bound do not depend on the fundamental (only their
+    // stored values do), so both pools consume the same stream and the
+    // arrival permutations match too.
     let drift = LobConfig {
         up_permille: 1000,
         ..flat.clone()

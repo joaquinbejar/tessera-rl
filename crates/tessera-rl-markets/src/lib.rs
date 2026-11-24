@@ -11,6 +11,9 @@
 //! queue ([`pending`]) and the fundamental's random walk ([`fundamental`]).
 //! Stage 2: the state ([`state`]), actions and masks ([`actions`]), the
 //! observation ([`observe`]) and the environment ([`env`](mod@env)).
+//! Stage 3: the information boundary and `Determinize` ([`info`]), the
+//! scripted baselines ([`heuristics`]) and the privileged state
+//! ([`privileged`]).
 //!
 //! Everything here is integer arithmetic: no float enters a transition
 //! (ADR-0008), which `clippy::float_arithmetic` enforces per module; the
@@ -25,10 +28,13 @@ pub mod error;
 pub mod exposure;
 pub mod fill;
 pub mod fundamental;
+pub mod heuristics;
+pub mod info;
 pub mod limits;
 pub mod observe;
 pub mod order;
 pub mod pending;
+pub mod privileged;
 pub mod reward;
 pub mod state;
 
@@ -40,7 +46,10 @@ pub use error::{BookError, PendingError};
 pub use exposure::Exposure;
 pub use fill::{Fill, Fills};
 pub use fundamental::RandomWalk;
+pub use heuristics::{Baseline, act_info, baseline_of};
+pub use info::{LobInfo, info_of, public_state};
 pub use observe::LobObs;
 pub use order::{Kind, Order, Side};
 pub use pending::{Pending, PendingQueue};
+pub use privileged::LobPrivileged;
 pub use state::{LobState, Touch, Trade};

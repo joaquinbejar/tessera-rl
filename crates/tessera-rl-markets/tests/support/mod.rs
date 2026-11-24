@@ -123,3 +123,46 @@ pub fn fnv(hash: u64, word: u64) -> u64 {
 
 /// The FNV offset basis.
 pub const FNV_START: u64 = 0xcbf2_9ce4_8422_2325;
+
+/// Whether `heads` is legal under one agent's mask `row`, read through
+/// the conditional layout as the engine reads it.
+pub fn legal_under(row: &[Bool8], heads: [i32; HEADS]) -> bool {
+    let [k, o, s, c] = heads.map(|h| usize::try_from(h).unwrap());
+    let (offsets, sizes, cancels) = (OFFSETS as usize, SIZES as usize, CANCELS as usize);
+    row[k].get()
+        && row[OFFSET_ROWS + k * offsets + o].get()
+        && row[SIZE_ROWS + k * offsets * sizes + o * sizes + s].get()
+        && row[CANCEL_ROWS + k * cancels + c].get()
+}
+
+/// Correction 1 and 3 of review r1 for every alive used slot of `s`:
+/// at most `MAX_OPEN` resting plus pending limit orders, and the position
+/// limit counting open and pending lots on each side. `Err` names the
+/// first slot that breaks one.
+pub fn agent_limits(cfg: &LobConfig, s: &tessera_rl_markets::LobState) -> Result<(), String> {
+    for slot in 0..cfg.agent_count() {
+        if !s.is_alive(slot) {
+            continue;
+        }
+        let owner = u8::try_from(slot).unwrap();
+        let e = s
+            .book
+            .exposure(owner)
+            .unwrap()
+            .checked_add(&s.pending.exposure(owner, cfg.max_tick).unwrap())
+            .unwrap();
+        let inv = i64::from(s.accounts[slot].inventory);
+        let max = i64::from(cfg.max_position);
+        let orders = usize::try_from(e.total_orders()).unwrap();
+        if orders > tessera_rl_markets::limits::MAX_OPEN
+            || inv + i64::from(e.lots[0]) > max
+            || inv - i64::from(e.lots[1]) < -max
+        {
+            return Err(format!(
+                "slot {slot}: inventory {inv}, orders {orders}, lots {:?}",
+                e.lots
+            ));
+        }
+    }
+    Ok(())
+}

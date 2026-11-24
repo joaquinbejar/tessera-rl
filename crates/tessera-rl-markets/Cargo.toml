@@ -24,6 +24,8 @@ thiserror.workspace = true
 criterion.workspace = true
 proptest.workspace = true
 tessera-rl-engine.workspace = true
+# The search smoke test (ADR-0046).
+tessera-rl-search.workspace = true
 
 [lints]
 workspace = true

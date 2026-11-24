@@ -14,8 +14,6 @@
 
 #![deny(clippy::float_arithmetic)]
 
-use core::num::NonZeroU32;
-
 use tessera_rl_core::io::ObsWriter;
 use tessera_rl_core::{AgentSlot, ObsLeaf};
 use tessera_rl_macros::Observation;
@@ -23,7 +21,7 @@ use tessera_rl_num::rng::ObsRng;
 
 use crate::book::Level;
 use crate::config::LobConfig;
-use crate::limits::{MAX_AGENTS, MAX_OPEN};
+use crate::limits::MAX_OPEN;
 use crate::order::{Order, Side};
 use crate::state::{LobState, MAX_TRADES};
 
@@ -64,8 +62,9 @@ pub struct LobObs {
     /// 1 for each row of `trades` in use, else 0.
     #[space(box(low = 0, high = 1, dtype = i32, shape = |_: &LobConfig| [16]))]
     pub trades_mask: ObsLeaf<i32>,
-    /// The private signal: the fundamental's offset from the mid plus a
-    /// uniform noise in `[-noise, +noise]` ticks, drawn per agent.
+    /// The private signal's offset from the mid: the fundamental plus a
+    /// uniform noise in `[-noise, +noise]` ticks, drawn per agent each step
+    /// from `StepRng` and kept in the state.
     #[space(box(low = -OFFSET_BOUND, high = OFFSET_BOUND, dtype = i32, shape = |_: &LobConfig| [1]))]
     pub signal: ObsLeaf<i32>,
 }
@@ -83,24 +82,6 @@ fn side_code(side: Side) -> i32 {
         Side::Buy => 0,
         Side::Sell => 1,
     }
-}
-
-/// The noise of `agent`: the `agent`-th uniform draw in `[-noise, noise]`
-/// of the observation stream, so every agent's signal differs.
-fn noise(cfg: &LobConfig, agent: usize, rng: &mut ObsRng) -> i64 {
-    let Some(width) = cfg
-        .noise
-        .checked_mul(2)
-        .and_then(|w| w.checked_add(1))
-        .and_then(NonZeroU32::new)
-    else {
-        return 0;
-    };
-    let mut draw = 0;
-    for _ in 0..=agent.min(MAX_AGENTS) {
-        draw = rng.below_u32(width);
-    }
-    i64::from(draw) - i64::from(cfg.noise)
 }
 
 fn write_levels(
@@ -132,7 +113,7 @@ pub fn observe(
     cfg: &LobConfig,
     state: &LobState,
     agent: AgentSlot,
-    rng: &mut ObsRng,
+    _: &mut ObsRng,
     out: &mut ObsWriter<'_, '_, LobObs>,
 ) {
     let slot = agent.index();
@@ -186,7 +167,9 @@ pub fn observe(
             leaf.set(i, 1);
         }
     }
-    let signal = i64::from(touch.offset(state.fundamental)) + noise(cfg, slot, rng);
+    // The slot's own signal, drawn in the step (`LobState::signal`).
+    let own_signal = state.signal.get(slot).copied().unwrap_or(0);
+    let signal = i64::from(own_signal) - i64::from(touch.mid);
     if let Some(mut leaf) = out.leaf_mut(LobObs::SIGNAL) {
         leaf.set(0, clip(signal));
     }
