@@ -68,14 +68,15 @@ def test_pypi_is_dispatch_only_with_the_run_and_the_tag():
     assert on.count("required: true") == 2
 
 
-def test_pypi_has_two_jobs_both_fork_guarded():
-    assert _jobs(PYPI) == ["verify", "publish"]
-    for job in (VERIFY_JOB, PUBLISH_JOB):
+def test_pypi_has_three_jobs_all_fork_guarded():
+    # release-assets (#350 PR 4) runs after publish.
+    assert _jobs(PYPI) == ["verify", "publish", "release-assets"]
+    for job in (VERIFY_JOB, PUBLISH_JOB, _job(PYPI, "release-assets")):
         assert _one(r"^    (if: .*)$", job) == GUARD
 
 
 def test_pypi_jobs_run_on_hosted_runners_only():
-    for job in (VERIFY_JOB, PUBLISH_JOB):
+    for job in (VERIFY_JOB, PUBLISH_JOB, _job(PYPI, "release-assets")):
         assert _one(r"^    runs-on: (.*)$", job) == "ubuntu-24.04"
         assert "self-hosted" not in job
         assert re.search(r"^    timeout-minutes: \d+$", job, re.M)
@@ -98,7 +99,9 @@ def test_pypi_publish_has_only_the_oidc_token_in_the_pypi_environment():
     env = PUBLISH_JOB.split("    environment:\n", 1)[1]
     assert _one(r"^      name: (\S+)$", env.split("\n    permissions:", 1)[0]) == "pypi"
     assert _one(r"^    needs: (\S+)$", PUBLISH_JOB) == "verify"
-    assert PYPI.count("id-token") == 1
+    # The OIDC token: publish (PyPI) and release-assets (attestations) only.
+    assert PYPI.count("id-token") == 2
+    assert "id-token: write" in _job(PYPI, "release-assets")
 
 
 def test_pypi_publish_uses_no_token_and_checks_out_nothing():
@@ -121,6 +124,10 @@ def test_pypi_action_is_pinned_by_full_commit():
 def test_pypi_actions_are_the_pins_the_other_workflows_use():
     others = "".join(p.read_text() for p in WORKFLOWS.glob("*.yml") if p.name != "pypi.yml")
     for u in re.findall(r"uses: (actions/\S+ # \S+)", PYPI):
+        # attest-build-provenance is used here only (#350 PR 4); its pin is
+        # checked on its own.
+        if u.startswith("actions/attest-build-provenance@"):
+            continue
         assert u in others, u
 
 
@@ -228,6 +235,12 @@ RUN_ALL = {**RUN_WHEELS, **RUN_MUSL}
 def _run_tree(tmp_path) -> Path:
     arts = tmp_path / "artifacts"
     shutil.copytree(RUN_TREE, arts)
+    # The recorded run predates the `sbom` check (#350 PR 3): add it, passed,
+    # as a current run writes it.
+    for checks in arts.glob("*/checks.json"):
+        data = json.loads(checks.read_text())
+        data["checks"]["sbom"] = 0
+        checks.write_text(json.dumps(data, indent=1))
     # The recorded run predates the musllinux legs (#350): stub artifacts for
     # them, consistent with their own checks.json.
     for key in ("x86_64-unknown-linux-musl", "aarch64-unknown-linux-musl"):
@@ -351,7 +364,7 @@ def _artifact(root: Path, key, version="0.2.0", commit=COMMIT, checks=None, sha_
     name = f"wheel-x86_64-unknown-linux-gnu-wheel-{commit}-{sha_override or sha}" if key == "x86" else f"wheel-{key}"
     d = root / name
     tmp.rename(d)
-    statuses = checks if checks is not None else {"golden_anchor": 0, "python_suite": 0, "num_tests": 0, "onnx_smoke": 0}
+    statuses = checks if checks is not None else {"golden_anchor": 0, "python_suite": 0, "num_tests": 0, "onnx_smoke": 0, "sbom": 0}
     (d / "checks.json").write_text(json.dumps({"wheel_sha256": sha, "checks": statuses}))
     return d
 
@@ -670,3 +683,59 @@ def test_pypi_publish_sums_step_on_the_real_run_tree(tmp_path):
     r = subprocess.run(["bash", "--noprofile", "--norc", "-eo", "pipefail", str(script)], cwd=tmp_path / "w", env=env, capture_output=True, text=True)
     assert r.returncode == 0, r.stdout + r.stderr
     assert sorted(x.name for x in dist.iterdir()) == sorted(RUN_ALL.values())
+
+
+@long_paths
+@pytest.mark.parametrize(
+    "checks, message",
+    [
+        ({"golden_anchor": 0, "python_suite": 0, "num_tests": 0, "onnx_smoke": 0}, "lacks required checks ['sbom']"),
+        ({"golden_anchor": 0, "python_suite": 0, "num_tests": 0, "onnx_smoke": 0, "sbom": 1}, "failed checks {'sbom': 1}"),
+        ({"sbom": 0}, "lacks required checks ['golden_anchor', 'num_tests', 'onnx_smoke', 'python_suite']"),
+    ],
+)
+def test_pypi_verify_requires_every_check_including_sbom(tmp_path, checks, message):
+    arts = tmp_path / "a"
+    _good(arts)
+    _replace(arts, "aarch64-unknown-linux-musl", checks=checks)
+    p, out = _verify(arts)
+    assert p.returncode == 1 and message in p.stderr, p.stderr
+    assert not out.exists()
+
+
+# --- release assets (#350 PR 4) -------------------------------------------------
+
+RELEASE_JOB = _job(PYPI, "release-assets")
+
+
+def test_pypi_release_assets_is_the_only_job_that_writes_contents():
+    assert re.search(r"^    needs: publish$", RELEASE_JOB, re.M)
+    perms = re.search(r"^    permissions:\n((?:      .*\n)+)", RELEASE_JOB, re.M).group(1)
+    assert sorted(perms.split()) == sorted(["contents:", "write", "id-token:", "write", "attestations:", "write"])
+    assert len(re.findall(r"^      contents: write$", PYPI, re.M)) == 1
+    assert "contents: write" not in VERIFY_JOB and "contents: write" not in PUBLISH_JOB
+    guard = re.search(r"^    if: (.*)$", RELEASE_JOB, re.M).group(1)
+    assert "github.event_name == 'workflow_dispatch'" in guard and "github.repository == 'joaquinbejar/tessera-rl'" in guard
+
+
+def test_pypi_release_assets_attests_with_a_pinned_action_and_never_clobbers():
+    assert "actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2" in RELEASE_JOB
+    assert "--clobber" not in PYPI
+    upload = _step(RELEASE_JOB, "Upload to the release")
+    assert 'gh release upload "$TAG" assets/*.cyclonedx.json assets/SHA256SUMS-assets' in upload
+    # Its own sums file, so it never meets the owner's SHA256SUMS.
+    assert "assets/SHA256SUMS-assets" in _step(RELEASE_JOB, "The SBOMs")
+
+
+def test_pypi_release_assets_checks_attestations_before_uploading():
+    steps = RELEASE_JOB.split("    steps:\n", 1)[1]
+    order = [steps.index(s) for s in ("pypi_attestations.py", "crates_sbom.py", "attest-build-provenance", "gh release upload")]
+    assert order == sorted(order)
+    assert "--timeout 300" in _step(RELEASE_JOB, "PyPI attestations")
+
+
+def test_pypi_release_assets_sboms_are_named_after_their_wheels():
+    sboms = _step(RELEASE_JOB, "The SBOMs")
+    assert 'assets/$base.cyclonedx.json' in sboms and 'base="$(basename "$w" .whl)"' in sboms
+    assert ".dist-info/sboms/tessera-rl-py.cyclonedx.json" in sboms
+    assert '"assets/tessera-rl-${TAG#v}-crates.cyclonedx.json"' in sboms
