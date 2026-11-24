@@ -279,6 +279,12 @@ fn test_vrp_largest_instance_masks_are_501_wide() {
     }
 }
 
+/// Whether the engine was built with `debug-checks`, read at run time so the
+/// assertions on it are not constant.
+fn debug_checks() -> bool {
+    std::hint::black_box(tessera_rl_engine::DEBUG_CHECKS)
+}
+
 #[test]
 fn test_vrp_illegal_action_is_replaced_by_the_lowest_legal_one() {
     let mut p = pool(cfg(5, 30), 1, 12);
@@ -294,7 +300,7 @@ fn test_vrp_illegal_action_is_replaced_by_the_lowest_legal_one() {
         // `debug-checks` (on under workspace feature unification):
         // rejected atomically, nothing moved.
         Err(e) => {
-            assert!(tessera_rl_engine::DEBUG_CHECKS, "rejected without debug-checks: {e:?}");
+            assert!(debug_checks(), "rejected without debug-checks: {e:?}");
             assert!(matches!(
                 e,
                 tessera_rl_engine::EngineError::IllegalAction { agent: 0, .. }
@@ -303,7 +309,7 @@ fn test_vrp_illegal_action_is_replaced_by_the_lowest_legal_one() {
         }
         // Default: replaced by the no-op.
         Ok(out) => {
-            assert!(!tessera_rl_engine::DEBUG_CHECKS, "replaced under debug-checks");
+            assert!(!debug_checks(), "replaced under debug-checks");
             let r = out.rewards().first().copied().unwrap();
             let s1 = state(&p, 0);
             assert_eq!((s1.at[0], s1.served), (1, 1));
