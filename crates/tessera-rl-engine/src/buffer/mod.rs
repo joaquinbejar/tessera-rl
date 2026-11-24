@@ -70,7 +70,9 @@ use generations::HALVES;
 #[cfg(not(loom))]
 pub(crate) use generations::{GenerationError, Generations};
 pub(crate) use storage::{Buf, StorageBuilder};
-pub use storage::{OutputDtype, OutputField, OutputRegion, OutputStorage};
+pub use storage::{
+    OUTPUT_ALIGN, OUTPUT_MIN_ALIGN, OutputDtype, OutputField, OutputRegion, OutputStorage,
+};
 
 struct Raw<T> {
     ptr: *mut T,

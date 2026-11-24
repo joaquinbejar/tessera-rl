@@ -12,8 +12,12 @@
 //! 1. The allocation is made once, zeroed, and never resized or freed
 //!    before the last `Arc` is dropped. Every element type is valid for the
 //!    all-zero bit pattern ([`Element`]).
-//! 2. Regions are disjoint: offsets come from one running sum, each region
-//!    starts aligned to 8 bytes, which covers every [`Element`] alignment.
+//! 2. Regions are disjoint: offsets come from one running sum. The
+//!    allocation starts at an [`OUTPUT_ALIGN`] (16 KiB) boundary;
+//!    observation leaves start at [`OUTPUT_ALIGN`] and every other region at
+//!    [`OUTPUT_MIN_ALIGN`] (64 bytes) (SPEC 5.2), which covers every
+//!    [`Element`] alignment. Padding between regions stays zero and is never
+//!    part of a region.
 //! 3. Exactly one [`Buf`] exists per region: `Buf` is not `Clone` and is
 //!    only created by [`Regions::take`], which checks the slot's builder,
 //!    dtype and bounds and hands each region out once, so `&mut Buf` is the only
@@ -27,7 +31,7 @@
 //!    diagnostic, not a synchronization protocol: it does not make reads
 //!    that overlap an engine call sound.
 
-use core::cell::UnsafeCell;
+use core::alloc::Layout;
 use core::ops::{Deref, DerefMut};
 use core::ptr::NonNull;
 use std::sync::Arc;
@@ -36,6 +40,27 @@ use tessera_rl_core::Bool8;
 
 use crate::error::EngineError;
 use crate::sys::sync::{AtomicU64, Ordering};
+
+/// Alignment of the output allocation and of the observation leaves: 16
+/// KiB, a multiple of the page size on every supported platform (4 KiB on
+/// x86-64, 16 KiB on Apple silicon). A constant, so layouts are identical
+/// everywhere (SPEC 5.2).
+pub const OUTPUT_ALIGN: usize = 16 * 1024;
+
+/// Alignment of every other output region: a cache line (SPEC 5.2). Padding
+/// those small regions to a page would multiply the memory of small pools,
+/// such as the scratch pools of search trees (ADR-0045 bound, #355).
+pub const OUTPUT_MIN_ALIGN: usize = 64;
+
+/// Start alignment of `field`'s region: [`OUTPUT_ALIGN`] for observation
+/// and terminal observation leaves, [`OUTPUT_MIN_ALIGN`] for the rest.
+#[must_use]
+const fn region_align(field: OutputField) -> usize {
+    match field {
+        OutputField::Observation(_) | OutputField::TerminalObservation(_) => OUTPUT_ALIGN,
+        _ => OUTPUT_MIN_ALIGN,
+    }
+}
 
 /// The element type of an output region.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -148,13 +173,16 @@ impl Element for u32 {
 struct Entry {
     field: OutputField,
     offset: usize,
+    align: usize,
     len: usize,
     dtype: OutputDtype,
 }
 
 /// The single allocation holding every output buffer of a pool.
 pub struct OutputStorage {
-    words: Box<[UnsafeCell<u64>]>,
+    /// Start of the zeroed allocation of `layout`, owned by this storage.
+    base: NonNull<u8>,
+    layout: Layout,
     bytes: usize,
     entries: Vec<Entry>,
     generation: AtomicU64,
@@ -170,7 +198,19 @@ impl core::fmt::Debug for OutputStorage {
     }
 }
 
-// SAFETY: the words are only written through the unique `Buf` of each
+impl Drop for OutputStorage {
+    fn drop(&mut self) {
+        // SAFETY: `base` was returned by `alloc_zeroed(self.layout)` in
+        // `StorageBuilder::finish` and is freed only here, once; no `Buf`
+        // outlives the storage (each holds an `Arc` to it).
+        #[expect(unsafe_code, reason = "audited module: shared output storage")]
+        unsafe {
+            std::alloc::dealloc(self.base.as_ptr(), self.layout);
+        }
+    }
+}
+
+// SAFETY: the bytes are only written through the unique `Buf` of each
 // region (invariant 3) under `&mut`, and read by borrowers only between
 // engine calls (invariant 4); the generation is atomic.
 #[expect(unsafe_code, reason = "audited module: shared output storage")]
@@ -194,7 +234,9 @@ impl OutputStorage {
         self.generation.load(Ordering::Acquire)
     }
 
-    /// Total size of the allocation in bytes.
+    /// Bytes from the start of the allocation to the end of the last
+    /// region (the allocation itself is this rounded up to
+    /// [`OUTPUT_ALIGN`], at least one page).
     #[must_use]
     pub fn bytes(&self) -> usize {
         self.bytes
@@ -205,7 +247,7 @@ impl OutputStorage {
     #[must_use]
     pub fn region(&self, field: OutputField) -> Option<OutputRegion> {
         let e = self.entries.iter().find(|e| e.field == field)?;
-        let base = UnsafeCell::raw_get(self.words.as_ptr()).cast::<u8>();
+        let base = self.base.as_ptr();
         Some(OutputRegion {
             // `wrapping_add` keeps this safe; `offset` is within the
             // allocation by construction (invariant 2).
@@ -272,12 +314,14 @@ impl StorageBuilder {
         field: OutputField,
         len: usize,
     ) -> Option<Slot<T>> {
-        let offset = self.bytes.checked_next_multiple_of(8)?;
+        let align = region_align(field);
+        let offset = self.bytes.checked_next_multiple_of(align)?;
         let size = len.checked_mul(core::mem::size_of::<T>())?;
         self.bytes = offset.checked_add(size)?;
         self.entries.push(Entry {
             field,
             offset,
+            align,
             len,
             dtype: T::DTYPE,
         });
@@ -288,16 +332,25 @@ impl StorageBuilder {
         })
     }
 
-    /// Allocates the zeroed storage. Its regions are handed out only by the
-    /// returned [`Regions`], once each.
+    /// Allocates the zeroed storage, [`OUTPUT_ALIGN`]-aligned and at least
+    /// one page long. Its regions are handed out only by the returned
+    /// [`Regions`], once each. `None` on overflow or when the allocator
+    /// returns null (never `handle_alloc_error`).
     pub(crate) fn finish(self) -> Option<Regions> {
-        let words = self.bytes.checked_next_multiple_of(8)? / 8;
-        let words = (0..words).map(|_| UnsafeCell::new(0)).collect();
+        let size = self
+            .bytes
+            .checked_next_multiple_of(OUTPUT_ALIGN)?
+            .max(OUTPUT_ALIGN);
+        let layout = Layout::from_size_align(size, OUTPUT_ALIGN).ok()?;
+        // SAFETY: `layout` has a non-zero size (at least one page).
+        #[expect(unsafe_code, reason = "audited module: shared output storage")]
+        let base = NonNull::new(unsafe { std::alloc::alloc_zeroed(layout) })?;
         let taken = vec![false; self.entries.len()];
         Some(Regions {
             builder: self.id,
             storage: Arc::new(OutputStorage {
-                words,
+                base,
+                layout,
                 bytes: self.bytes,
                 entries: self.entries,
                 generation: AtomicU64::new(0),
@@ -340,12 +393,17 @@ impl Regions {
             .len
             .checked_mul(core::mem::size_of::<T>())?
             .checked_add(e.offset)?;
-        if *taken || e.dtype != T::DTYPE || end > self.storage.bytes || e.offset % 8 != 0 {
+        if *taken || e.dtype != T::DTYPE || end > self.storage.bytes || e.offset % e.align != 0 {
             return None;
         }
         *taken = true;
-        let base = UnsafeCell::raw_get(self.storage.words.as_ptr()).cast::<u8>();
-        let ptr = NonNull::new(base.wrapping_add(e.offset).cast::<T>())?;
+        let ptr = NonNull::new(
+            self.storage
+                .base
+                .as_ptr()
+                .wrapping_add(e.offset)
+                .cast::<T>(),
+        )?;
         Some(Buf {
             storage: Arc::clone(&self.storage),
             ptr,
@@ -403,8 +461,9 @@ impl<T> Deref for Buf<T> {
 impl<T> DerefMut for Buf<T> {
     fn deref_mut(&mut self) -> &mut [T] {
         // SAFETY: as for `deref`; `&mut self` is exclusive to the region
-        // (invariant 3), and the storage words are `UnsafeCell`, so writing
-        // through a pointer derived from a shared `Arc` is allowed.
+        // (invariant 3), and `ptr` derives from the allocation's raw
+        // pointer, never from a shared reference to its bytes, so writing
+        // through it while the `Arc` is shared is allowed.
         #[expect(unsafe_code, reason = "audited module: shared output storage")]
         unsafe {
             core::slice::from_raw_parts_mut(self.ptr.as_ptr(), self.len)
@@ -441,9 +500,13 @@ mod tests {
         let fr = s.region(OutputField::Alive).unwrap();
         let or = s.region(OutputField::Observation(0)).unwrap();
         assert_eq!((rr.len, rr.dtype), (5, OutputDtype::F32));
-        for reg in [rr, fr, or] {
-            assert_eq!(reg.ptr.align_offset(8), 0);
-        }
+        assert_eq!(
+            rr.ptr.align_offset(OUTPUT_ALIGN),
+            0,
+            "first region at the base"
+        );
+        assert_eq!(fr.ptr.align_offset(OUTPUT_MIN_ALIGN), 0);
+        assert_eq!(or.ptr.align_offset(OUTPUT_ALIGN), 0);
         assert!(rr.ptr.wrapping_add(20) <= fr.ptr);
         assert!(fr.ptr.wrapping_add(3) <= or.ptr);
         assert_eq!(s.region(OutputField::Masks), None);
@@ -462,7 +525,7 @@ mod tests {
         // SAFETY: the region is 5 aligned, initialized `f32`s of a live
         // storage, and no `Buf` (the only writer) exists any more.
         #[expect(unsafe_code, reason = "test of the audited module")]
-        #[expect(clippy::cast_ptr_alignment, reason = "regions are 8-byte aligned")]
+        #[expect(clippy::cast_ptr_alignment, reason = "regions are page-aligned")]
         let rewards = unsafe { core::slice::from_raw_parts(reg.ptr.cast::<f32>(), reg.len) };
         assert_eq!(rewards, &[1.0, 2.0, 3.0, 4.0, 5.0]);
         let reg = s.region(OutputField::Observation(0)).unwrap();
@@ -507,6 +570,74 @@ mod tests {
             counter.load(core::sync::atomic::Ordering::Relaxed),
             u64::MAX
         );
+    }
+
+    #[test]
+    fn test_output_storage_empty_layout_allocates_one_page_ok() {
+        let regions = StorageBuilder::new().unwrap().finish().unwrap();
+        let s = regions.storage();
+        assert_eq!(s.bytes(), 0);
+        assert_eq!(s.layout.size(), OUTPUT_ALIGN);
+        assert_eq!(s.base.as_ptr().align_offset(OUTPUT_ALIGN), 0);
+    }
+
+    #[test]
+    fn test_output_storage_region_align_observations_page_rest_cache_line() {
+        for f in [
+            OutputField::Observation(0),
+            OutputField::Observation(2),
+            OutputField::TerminalObservation(0),
+        ] {
+            assert_eq!(region_align(f), OUTPUT_ALIGN, "{f:?}");
+        }
+        for f in [
+            OutputField::Rewards,
+            OutputField::Masks,
+            OutputField::AbortCode,
+            OutputField::PendingReset,
+        ] {
+            assert_eq!(region_align(f), OUTPUT_MIN_ALIGN, "{f:?}");
+        }
+    }
+
+    #[test]
+    fn test_output_storage_padding_zero_and_unexposed_true() {
+        let (s, mut rewards, mut alive, mut obs) = storage();
+        s.begin_write();
+        rewards.fill(f32::from_bits(u32::MAX));
+        alive.fill(Bool8::TRUE);
+        obs.fill(0xFF);
+        drop((rewards, alive, obs));
+        let mut inside = vec![false; s.layout.size()];
+        for field in [
+            OutputField::Rewards,
+            OutputField::Alive,
+            OutputField::Observation(0),
+        ] {
+            let entry = s.entries.iter().find(|e| e.field == field).unwrap();
+            let size = match entry.dtype {
+                OutputDtype::F32 | OutputDtype::U32 => 4,
+                OutputDtype::U8 | OutputDtype::Bool8 => 1,
+            };
+            let end = entry.offset + entry.len * size;
+            for byte in &mut inside[entry.offset..end] {
+                assert!(!*byte, "regions overlap");
+                *byte = true;
+            }
+            // A region never reaches the start of the next one.
+            if let Some(next) = s.entries.iter().find(|n| n.offset > entry.offset) {
+                assert!(end <= next.offset);
+            }
+        }
+        // SAFETY: the whole allocation is live and initialized (zeroed,
+        // then written only through the regions), and no `Buf` exists.
+        #[expect(unsafe_code, reason = "test of the audited module")]
+        let all = unsafe { core::slice::from_raw_parts(s.base.as_ptr(), s.layout.size()) };
+        for (i, byte) in all.iter().enumerate() {
+            if !inside[i] {
+                assert_eq!(*byte, 0, "padding byte {i} was written");
+            }
+        }
     }
 
     #[test]

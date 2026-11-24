@@ -16,7 +16,8 @@ use core::num::NonZeroU32;
 use common::{CountConfig, Counter};
 use tessera_rl_core::encoding::decode_from_slice;
 use tessera_rl_engine::{
-    ActionInput, DecodedRecord, EnvPool, Masked, OutputDtype, OutputField, PoolOptions, Reseed,
+    ActionInput, AutoReset, DecodedRecord, EnvPool, Masked, OutputDtype, OutputField, PoolOptions,
+    Reseed,
 };
 use tessera_rl_num::identity::Seed;
 
@@ -163,5 +164,78 @@ fn test_output_storage_env_pool_has_no_host_rows() {
         OutputField::PendingReset,
     ] {
         assert_eq!(storage.region(field), None, "{field:?}");
+    }
+}
+
+/// Every field a pool can lay out, with leaf indices up to `MAX_LEAVES`.
+fn all_fields() -> Vec<OutputField> {
+    let mut v = vec![
+        OutputField::Rewards,
+        OutputField::AgentTerminated,
+        OutputField::AgentTruncated,
+        OutputField::Died,
+        OutputField::Spawned,
+        OutputField::InvalidAgentEvent,
+        OutputField::Alive,
+        OutputField::Acting,
+        OutputField::Generations,
+        OutputField::EpisodeTerminated,
+        OutputField::EpisodeTruncated,
+        OutputField::EpisodeReturn,
+        OutputField::EpisodeLength,
+        OutputField::EpisodeIllegalActions,
+        OutputField::EpisodeInvalidAgentEvents,
+        OutputField::Masks,
+        OutputField::Aborted,
+        OutputField::AbortCode,
+        OutputField::PendingReset,
+    ];
+    for leaf in 0..tessera_rl_engine::MAX_LEAVES {
+        v.push(OutputField::Observation(leaf));
+        v.push(OutputField::TerminalObservation(leaf));
+    }
+    v
+}
+
+/// Asserts observation leaves start on an `OUTPUT_ALIGN` boundary and every
+/// other region on `OUTPUT_MIN_ALIGN` (SPEC 5.2); returns how many regions
+/// it checked.
+fn assert_page_aligned(storage: &tessera_rl_engine::OutputStorage) -> usize {
+    let mut seen = 0;
+    for field in all_fields() {
+        if let Some(region) = storage.region(field) {
+            let align = match field {
+                OutputField::Observation(_) | OutputField::TerminalObservation(_) => {
+                    tessera_rl_engine::OUTPUT_ALIGN
+                }
+                _ => tessera_rl_engine::OUTPUT_MIN_ALIGN,
+            };
+            assert_eq!(
+                region.ptr.align_offset(align),
+                0,
+                "{field:?} is not {align}-byte aligned"
+            );
+            seen += 1;
+        }
+    }
+    seen
+}
+
+#[test]
+fn test_output_storage_regions_aligned_to_spec_true() {
+    for mode in [AutoReset::NextStep, AutoReset::SameStep] {
+        let mut options = PoolOptions::new(NonZeroU32::new(5).unwrap(), Seed::new(3));
+        options.auto_reset = mode;
+        let p: Pool = EnvPool::with_masks(CountConfig::default(), options).unwrap();
+        let storage = p.outputs().unwrap().storage();
+        let seen = assert_page_aligned(&storage);
+        assert!(seen >= 10, "{mode:?}: only {seen} regions");
+        if mode == AutoReset::SameStep {
+            assert!(
+                storage
+                    .region(OutputField::TerminalObservation(0))
+                    .is_some()
+            );
+        }
     }
 }
