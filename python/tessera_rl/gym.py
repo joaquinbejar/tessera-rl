@@ -79,6 +79,7 @@ _MAKERS = {
     "tessera/Snake-v1": _native.make_snake,
     "tessera/PaddleDuel-v1": _native.make_paddleduel,
     "tessera/JobShop-v1": _native.make_jobshop,
+    "tessera/Vrp-v1": _native.make_vrp,
     **{env_id: _native.make_rts for env_id in ("tessera/RTS-vsRush-v1", "tessera/RTS-vsProspector-v1", "tessera/RTS-vsRandom-v1")},
 }
 
@@ -86,8 +87,8 @@ _MAKERS = {
 #: deprecation is RTS-v1's).
 _REGISTRY_ID = {env_id: "tessera/RTS-v1" for env_id in _MAKERS if env_id.startswith("tessera/RTS-vs")}
 
-#: Two-slot environments admitted with one agent (registered with
-#: ``agents=1``). Admission rests on a lifetime invariant of each kernel:
+#: Multi-slot environments admitted with one agent (registered with
+#: ``agents=1``, or ``vehicles=1`` for Vrp-v1). Admission rests on a lifetime invariant of each kernel:
 #: with ``agents=1`` only slot 0 is ever alive or acting (their headers are
 #: ``NoAdaptive`` and the kernels never bring slot 1 to life), so the
 #: adapter reads and writes slot 0 of each row. ``initial_agents == 1``
@@ -99,7 +100,9 @@ _REGISTRY_ID = {env_id: "tessera/RTS-v1" for env_id in _MAKERS if env_id.startsw
 #: A multi-slot environment run with one live slot is admitted only by id,
 #: below: no layout key declares that the other slots stay empty, so it
 #: cannot be read as a capability.
-_SLOT0 = frozenset({"tessera/Snake-v1", "tessera/PaddleDuel-v1"})
+#: The option that sets the agent count, by id: Vrp-v1 runs one vehicle
+#: (``vehicles=1``; it never spawns, so only slot 0 is alive or acting).
+_SLOT0 = {"tessera/Snake-v1": "agents", "tessera/PaddleDuel-v1": "agents", "tessera/Vrp-v1": "vehicles"}
 
 #: RTS against a frozen scripted opponent (stage 5c), by Gymnasium id; the
 #: id names the opponent and fixes `opponent`, which a caller cannot pass.
@@ -148,7 +151,7 @@ def _native_env(env_id: str, num_envs: int, seed: int, mode: AutoresetMode, outp
             f"unknown single-agent environment {env_id!r}; known: {sorted({*_MAKERS, *_host.host_ids()})}"
         )
     if env_id in _SLOT0:
-        kwargs = {"agents": 1, **kwargs}
+        kwargs = {_SLOT0[env_id]: 1, **kwargs}
     if env_id in _SCRIPTED:
         if "opponent" in kwargs:
             raise _native.ArgumentError(f"{env_id} fixes its opponent; use another id to change it")
@@ -161,7 +164,7 @@ def _native_env(env_id: str, num_envs: int, seed: int, mode: AutoresetMode, outp
         # (ADR-0079 item 5.2).
         native.close()
         raise _native.ArgumentError(f"{env_id}: the Gymnasium adapter needs slot 0 a learner, not {groups[0]!r}")
-    if layout["agents"] != 1 and (env_id not in _SLOT0 | _SCRIPTED.keys() or layout["initial_agents"] != 1):
+    if layout["agents"] != 1 and (env_id not in _SLOT0.keys() | _SCRIPTED.keys() or layout["initial_agents"] != 1):
         native.close()
         n = layout["initial_agents"]
         raise _native.ArgumentError(f"{env_id} with agents={n} is multi-agent; use the PettingZoo adapter")
@@ -572,7 +575,7 @@ def _register() -> None:
             vector_entry_point="tessera_rl.gym:TesseraVectorEnv",
             # A scripted RTS game ends at its own step_limit: no wrapper.
             max_episode_steps=None if env_id in _SCRIPTED else _LIMITS.get(env_id, 500),
-            kwargs={"env_id": env_id, "agents": 1} if env_id in _SLOT0 else {"env_id": env_id},
+            kwargs={"env_id": env_id, _SLOT0[env_id]: 1} if env_id in _SLOT0 else {"env_id": env_id},
         )
 
 

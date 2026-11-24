@@ -199,3 +199,26 @@ seats = [0]
 score = "return"
 seeds = 5
 eval_episodes = 50
+
+# tessera/JobShop-v1 (#383 stage 4): tier T3a, one dispatching agent with a
+# mask over unfinished jobs; the Dict observation is flattened as in T1. The
+# return is minus the final makespan, so a better schedule scores higher.
+[jobshop]
+env = "tessera/JobShop-v1"
+tier = "T3a"
+adapter = "tessera_rl.gym (SAME_STEP, info action_mask)"
+total_steps = 500000
+hyper = {}
+env_kwargs = { jobs = 6, machines = 6 }
+
+# tessera/Vrp-v1 (#383 stage 4): tier T3a with one vehicle (slot 0 through
+# tessera_rl.gym, as Snake and PaddleDuel), masked over customers and the
+# depot. The return is minus the distance travelled. Fleets (several
+# vehicles, PettingZoo AEC) are not in this tier.
+[vrp]
+env = "tessera/Vrp-v1"
+tier = "T3a"
+adapter = "tessera_rl.gym (SAME_STEP, vehicles=1, info action_mask)"
+total_steps = 500000
+hyper = {}
+env_kwargs = { customers = 20, vehicles = 1 }
