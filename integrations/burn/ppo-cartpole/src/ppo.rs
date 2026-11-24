@@ -4,12 +4,13 @@
 
 use core::num::NonZeroU32;
 
-use burn::optim::{AdamConfig, GradientsParams, Optimizer};
+use burn::optim::{AdamConfig, GradientsParams, Optimizer as _};
 use burn::prelude::{Device, Int, Tensor, TensorData};
 use burn::tensor::activation::{log_softmax, softmax};
 use tessera_rl_classic::{CartPole, CartPoleConfig};
 use tessera_rl_engine::{ActionInput, AutoReset, EngineError, EnvPool, PoolOptions, Reseed};
 use tessera_rl_num::identity::Seed;
+use tessera_rl_num::math;
 
 use crate::model::ActorCritic;
 use crate::rng::Rng;
@@ -107,10 +108,12 @@ pub fn train(config: &Config) -> Result<Report, EngineError> {
             let probs = softmax(model.logits(x.clone()), 1).into_data().try_to_vec::<f32>().unwrap_or_default();
             let values = model.value(x).into_data().try_to_vec::<f32>().unwrap_or_default();
             let mut acts = Vec::with_capacity(n);
-            for (i, row) in probs.chunks_exact(ACTIONS).enumerate() {
-                let u = rng.unit() as f32;
-                let a = usize::from(u >= row.first().copied().unwrap_or(0.5));
-                b.logp.push(row.get(a).copied().unwrap_or(1.0).max(1e-8).ln());
+            for (i, row) in probs.as_chunks::<ACTIONS>().0.iter().enumerate() {
+                let u = rng.unit();
+                let a = usize::from(u >= f64::from(row[0]));
+                #[expect(clippy::cast_possible_truncation, reason = "a log-probability in f32")]
+                let logp = math::ln(f64::from(row.get(a).copied().unwrap_or(1.0).max(1e-8))) as f32;
+                b.logp.push(logp);
                 b.values.push(values.get(i).copied().unwrap_or(0.0));
                 b.actions.push(i64::try_from(a).unwrap_or(0));
                 acts.push(i32::try_from(a).unwrap_or(0));
@@ -145,12 +148,12 @@ pub fn train(config: &Config) -> Result<Report, EngineError> {
                 model = optim.step(LR, model, grads);
             }
         }
-        let tail = &returns[returns.len().saturating_sub(20)..];
+        let tail = returns.get(returns.len().saturating_sub(20)..).unwrap_or_default();
         #[expect(clippy::cast_precision_loss, reason = "at most 20 episodes")]
         let mean = if tail.is_empty() { 0.0 } else { tail.iter().sum::<f32>() / tail.len() as f32 };
         println!("ppo-cartpole: steps {steps} episodes {} last-20 mean {mean:.1}", returns.len());
     }
-    let tail = &returns[returns.len().saturating_sub(20)..];
+    let tail = returns.get(returns.len().saturating_sub(20)..).unwrap_or_default();
     #[expect(clippy::cast_precision_loss, reason = "at most 20 episodes")]
     let last_mean = if tail.is_empty() { 0.0 } else { tail.iter().sum::<f32>() / tail.len() as f32 };
     Ok(Report { steps, episodes: returns.len(), last_mean, finite })
@@ -204,7 +207,7 @@ fn minibatch_loss(
     #[expect(clippy::cast_precision_loss, reason = "minibatch sizes are small")]
     let len = m as f32;
     let mean = mb_adv.iter().sum::<f32>() / len;
-    let std = (mb_adv.iter().map(|v| (v - mean).powi(2)).sum::<f32>() / len).sqrt() + 1e-8;
+    let std = (mb_adv.iter().map(|v| (v - mean) * (v - mean)).sum::<f32>() / len).sqrt() + 1e-8;
     let norm: Vec<f32> = mb_adv.iter().map(|v| (v - mean) / std).collect();
     let adv_t = Tensor::<1>::from_data(TensorData::new(norm, [m]), device);
     let ret_t = Tensor::<1>::from_data(TensorData::new(take(ret, chunk, 1), [m]), device);

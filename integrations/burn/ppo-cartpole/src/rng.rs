@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! SplitMix64: the example's own sampler and shuffler, seeded, so a run is
+//! `SplitMix64`: the example's own sampler and shuffler, seeded, so a run is
 //! repeatable on one machine without a `rand` dependency.
 
-/// A SplitMix64 generator.
+/// A `SplitMix64` generator.
 pub struct Rng(u64);
 
 impl Rng {
