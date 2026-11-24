@@ -8,7 +8,7 @@
 //! restore and fork.
 //!
 //! `unsafe` code lives only in the audited modules `buffer` (disjoint chunk
-//! views for workers) and `sys` (the worker gang).
+//! views for workers) and `sys` (the worker gang, and the live-watch slot).
 
 mod archive;
 mod buffer;
@@ -48,6 +48,7 @@ mod set_zero;
 mod snapshot;
 mod sys;
 mod validate;
+mod watch;
 
 /// The Async id rings and token id buffers (ADR-0047), exposed only for
 /// the engine's own benchmarks and allocation tests. Not a stable API.
@@ -113,6 +114,7 @@ pub use replay::{
 };
 #[cfg(not(loom))]
 pub use sys::native_wait_available;
+pub use sys::watch::{WatchError, WatchHandle};
 pub use sys::{default_workers, physical_cores};
 pub use validate::ActionInput;
 

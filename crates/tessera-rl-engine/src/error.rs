@@ -301,6 +301,10 @@ pub enum EngineError {
     /// Work is admitted to workers and not yet completed (ADR-0047).
     #[error("the pool is not quiescent: work is in flight")]
     NotQuiescent,
+    /// A live watch is already attached to this pool, with its handle
+    /// alive (ADR-0083 item 7).
+    #[error("a watch is already attached to this pool")]
+    WatchAttached,
     /// A Pipelined half was sent for cycle `cycle` before the context
     /// version of cycle `cycle - 2` was committed (ADR-0047).
     #[error("cycle {cycle} cannot start before cycle {needed} is committed")]

@@ -37,3 +37,4 @@ mod search_api;
 mod search_group_api;
 mod split;
 mod view;
+mod watch_api;

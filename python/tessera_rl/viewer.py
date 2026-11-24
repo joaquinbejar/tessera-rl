@@ -6,8 +6,8 @@ rewards, flags, masks and observations.
 The backend is Python's standard library (``http.server``); the front end is
 vendored HTML, CSS and JavaScript drawing on a Canvas 2D context, with no
 build step and no external requests. This module is not imported by
-``import tessera_rl`` and opens no socket until :func:`serve` or :func:`show`
-is called.
+``import tessera_rl`` and opens no socket until :func:`serve`, :func:`show` or
+:func:`watch` is called.
 
 ``http.server`` is not a production server. The Viewer is a localhost,
 single-user tool, guarded as follows (ADR-0085 item 2):
@@ -22,7 +22,9 @@ single-user tool, guarded as follows (ADR-0085 item 2):
 - responses carry ``Referrer-Policy: no-referrer``, ``Cache-Control:
   no-store`` and ``X-Content-Type-Options: nosniff``, and never
   ``Access-Control-Allow-Origin``;
-- nothing is logged, so the token never reaches a log;
+- no request line, path or query is logged, so the token never reaches a
+  log; an unexpected server error logs only its exception type and message
+  (logger ``tessera_rl.viewer``, level ``ERROR``), with the token masked;
 - the client never names a file: the server serves the one replay its caller
   chose and three fixed static files.
 
@@ -36,26 +38,44 @@ replay.steps`) while the Viewer is open: calls that change it raise until
 Endpoints (``GET`` only, all token-checked): ``/meta``; ``/frame?i=&instance=``
 (the scene after call ``i``, zero-based); ``/step?i=&instance=`` (rewards,
 alive, acting, masks and observation leaves after call ``i``).
+
+Live mode (:func:`watch`, ADR-0083 item 7): the same server and guards over a
+training ``Env`` instead of a replay. ``/live?instance=`` asks the pool's watch
+for that instance's record, waits at most 2 s for the pool to serve it at a
+batch boundary, and answers ``{"generation", "instance", "prims"}``, drawn
+from a private one-instance shadow pool of the same configuration
+(``import_record`` then ``scene``), or ``{"pending": true}`` when no boundary
+served it in time (training stopped, or the instance stayed in flight); the
+request then stays pending. The training pool is never touched beyond the
+watch slot. ``/frame`` and ``/step`` answer 404 in live mode.
 """
 
 from __future__ import annotations
 
+import bisect
 import hmac
 import importlib.resources
 import json
+import logging
 import math
 import os
 import secrets
 import threading
+import time
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlsplit
 
 from tessera_rl import replay as _replay
 
-__all__ = ["Viewer", "serve", "show"]
+__all__ = ["Viewer", "serve", "show", "watch"]
 
 _HOST = "127.0.0.1"
+_LOG = logging.getLogger("tessera_rl.viewer")
+#: How long ``/live`` waits for the pool to serve a request (seconds).
+_LIVE_TIMEOUT = 2.0
+#: How often ``/live`` polls the watch while it waits (seconds).
+_LIVE_POLL = 0.01
 #: Observation leaves larger than this many numbers are reported by shape only.
 _LEAF_LIMIT = 4096
 _STATIC = {
@@ -87,6 +107,8 @@ def _prim(p) -> list:
 class _Session:
     """The replay cursor over ``env``; every method runs under ``lock``."""
 
+    is_live = False
+
     def __init__(self, path, env) -> None:
         self.path = os.fspath(path)
         self.env = env
@@ -106,6 +128,27 @@ class _Session:
         while self._advance():
             pass
         self.calls = len(self.events)
+        #: Per target position (calls applied, 1..calls): the keyframe a
+        #: backward seek imports and the position it leaves the cursor at, or
+        #: ``None`` to restart. Computed once, so a seek finds it in O(1).
+        self._seek_plan = self._plan_seeks()
+
+    def _plan_seeks(self) -> list[tuple[int, int] | None]:
+        # A usable keyframe is its own event (never a call's) and lies before
+        # the target call's event; the nearest one wins. Events and
+        # keyframes are both increasing.
+        known = set(self.events)
+        usable = sorted(k for k in self.keyframes if k not in known)
+        plan: list[tuple[int, int] | None] = [None]
+        for target in range(1, self.calls + 1):
+            bound = self.events[target - 1]
+            j = bisect.bisect_left(usable, bound)
+            if j == 0:
+                plan.append(None)
+            else:
+                k = usable[j - 1]
+                plan.append((k, bisect.bisect_left(self.events, k)))
+        return plan
 
     def _restart(self) -> None:
         if self.cursor is not None:
@@ -141,17 +184,15 @@ class _Session:
     def _seek_back(self, target: int) -> None:
         # The nearest keyframe at or before the target call's event (a
         # keyframe is its own event, never a call's), then forward from it.
-        bound = self.events[target - 1]
-        known = set(self.events)
-        usable = [k for k in self.keyframes if k < bound and k not in known]
-        if self.cursor is not None and usable:
-            k = max(usable)
+        step = self._seek_plan[target] if target < len(self._seek_plan) else None
+        if self.cursor is not None and step is not None:
+            k, position = step
             try:
                 self.cursor.seek(k)
             except Exception:
                 pass
             else:
-                self.position = sum(1 for e in self.events if e < k)
+                self.position = position
                 return
         self._restart()
 
@@ -166,6 +207,7 @@ class _Session:
             "keyframes": list(self.keyframes),
             "calls": self.calls,
             "calls_seen": len(self.events),
+            "live": False,
         }
 
     def frame(self, i: int, instance: int) -> dict:
@@ -204,6 +246,87 @@ class _Session:
         if self.cursor is not None:
             cursor, self.cursor = self.cursor, None
             cursor.close()
+
+
+class _LiveSession:
+    """A live watch over a training ``env`` (ADR-0083 item 7); every method
+    runs under ``lock``. Records are drawn by a private one-instance shadow
+    pool, never by ``env``."""
+
+    is_live = True
+
+    def __init__(self, env) -> None:
+        env_id = getattr(env, "env_id", None)
+        config = getattr(env, "_config", None)
+        if env_id is None or config is None:
+            raise ValueError("viewer.watch needs an Env made by tessera_rl.make")
+        from tessera_rl import _env
+
+        self.env = env
+        self.lock = threading.Lock()
+        self.num_envs = int(env.num_envs)
+        self.agents = int(env.agents)
+        canvas = env.canvas
+        self.canvas = None if canvas is None else [int(canvas[0]), int(canvas[1])]
+        self.env_id = env_id
+        # The shadow first: a refused configuration attaches no watch.
+        self.shadow = _env.make(env_id, num_envs=1, seed=0, outputs="owned", workers=0, **config)
+        try:
+            self.handle = env.watch()
+        except BaseException:
+            self.shadow.close()
+            raise
+        #: The instance of the request in the slot, if one is pending.
+        self.pending: int | None = None
+
+    def meta(self) -> dict:
+        return {
+            "env": self.env_id,
+            "canvas": self.canvas,
+            "num_envs": self.num_envs,
+            "agents": self.agents,
+            "live": True,
+        }
+
+    def live(self, instance: int) -> dict:
+        """The record of ``instance`` served within ``_LIVE_TIMEOUT``, drawn
+        by the shadow pool, or ``{"pending": true}``."""
+        from tessera_rl import ArgumentError, ConcurrencyError, PoisonedError
+
+        deadline = time.monotonic() + _LIVE_TIMEOUT
+        try:
+            if self.pending is None:
+                self.handle.request(instance)
+                self.pending = instance
+            while True:
+                taken = self.handle.take()
+                if taken is not None:
+                    served, self.pending = self.pending, None
+                    if served == instance:
+                        return self._draw(instance, *taken)
+                    # The answer to an older request for another instance.
+                    self.handle.request(instance)
+                    self.pending = instance
+                    continue
+                if time.monotonic() >= deadline:
+                    return {"pending": True}
+                time.sleep(_LIVE_POLL)
+        except ConcurrencyError:
+            return {"pending": True}
+        except PoisonedError:
+            return {"pending": True, "poisoned": True}
+        except ArgumentError:
+            # Detached: the training Env was closed.
+            return {"pending": True, "detached": True}
+
+    def _draw(self, instance: int, generation: int, record: bytes) -> dict:
+        self.shadow.import_record(0, record)
+        prims = None if self.canvas is None else [_prim(p) for p in self.shadow.scene(0)]
+        return {"generation": int(generation), "instance": instance, "prims": prims}
+
+    def close(self) -> None:
+        self.handle.close()
+        self.shadow.close()
 
 
 class _Handler(BaseHTTPRequestHandler):
@@ -271,7 +394,15 @@ class _Handler(BaseHTTPRequestHandler):
                 with self.server.session.lock:
                     data = self.server.session.meta()
                 self._json(data)
-            elif route in ("/frame", "/step"):
+            elif route == "/live" and self.server.session.is_live:
+                session = self.server.session
+                instance = self._int(query, "instance", 0)
+                if not 0 <= instance < session.num_envs:
+                    raise _BadRequest
+                with session.lock:
+                    data = session.live(instance)
+                self._json(data)
+            elif route in ("/frame", "/step") and not self.server.session.is_live:
                 i = self._int(query, "i", None)
                 instance = self._int(query, "instance", 0)
                 session = self.server.session
@@ -284,8 +415,12 @@ class _Handler(BaseHTTPRequestHandler):
                 self._empty(404)
         except _BadRequest:
             self._empty(400)
-        except Exception:
-            # Not logged: the request line carries the token.
+        except Exception as exc:
+            # The exception's type and message only, never the path, query or
+            # request line (they carry the token), and the token masked in
+            # case a message quotes it.
+            message = str(exc).replace(self.server.token, "<token>")
+            _LOG.error("viewer request failed: %s: %s", type(exc).__name__, message)
             self._empty(500)
 
     @staticmethod
@@ -315,7 +450,7 @@ class _Server(ThreadingHTTPServer):
     daemon_threads = True
     allow_reuse_address = False
 
-    def __init__(self, port: int, token: str, session: _Session) -> None:
+    def __init__(self, port: int, token: str, session: _Session | _LiveSession) -> None:
         self.token = token
         self.session = session
         super().__init__((_HOST, port), _Handler)
@@ -325,14 +460,29 @@ class _Server(ThreadingHTTPServer):
         pass
 
 
+def _port(port) -> int:
+    port = int(port)
+    if not 0 <= port <= 65535:
+        raise ValueError("port must be in 0..65535")
+    return port
+
+
 class Viewer:
     """A running Viewer server (see :func:`serve`)."""
 
     def __init__(self, path, env, *, port: int = 0) -> None:
-        port = int(port)
-        if not 0 <= port <= 65535:
-            raise ValueError("port must be in 0..65535")
-        self._session = _Session(path, env)
+        port = _port(port)
+        self._start(_Session(path, env), port)
+
+    @classmethod
+    def _live(cls, env, port: int) -> Viewer:
+        port = _port(port)
+        viewer = cls.__new__(cls)
+        viewer._start(_LiveSession(env), port)
+        return viewer
+
+    def _start(self, session: _Session | _LiveSession, port: int) -> None:
+        self._session = session
         try:
             self._server = _Server(port, secrets.token_urlsafe(32), self._session)
         except BaseException:
@@ -354,7 +504,9 @@ class Viewer:
         return f"http://{_HOST}:{self.address[1]}/?token={self._server.token}"
 
     def close(self) -> None:
-        """Stops the server and ends the replay; ``env`` is free again."""
+        """Stops the server and ends the replay; ``env`` is free again. In live
+        mode, closes the watch handle and the shadow pool; the training
+        ``env`` is not closed."""
         if self._closed:
             return
         self._closed = True
@@ -401,3 +553,16 @@ def show(path, env, *, height: int = 600):
     frame = IFrame(viewer.url, width="100%", height=int(height))
     frame.viewer = viewer
     return frame
+
+
+def watch(env, *, port: int = 0) -> Viewer:
+    """Serves a live view of the training ``env`` (ADR-0083 item 7) on
+    ``127.0.0.1`` (``port`` 0: a free port), with the guards of
+    :func:`serve`. ``env`` must come from :func:`tessera_rl.make` (the
+    Viewer builds a one-instance shadow pool of the same id and options to
+    draw served records) and have no other watch open; keep stepping it as
+    usual, from any thread. The page polls ``/live`` every 250 ms; each poll
+    waits at most 2 s for the pool to serve the shown instance at a batch
+    boundary, then answers ``{"pending": true}``. Returns the running
+    :class:`Viewer`; :meth:`Viewer.close` closes the watch, not ``env``."""
+    return Viewer._live(env, port)

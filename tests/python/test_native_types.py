@@ -9,7 +9,7 @@ import tessera_rl as t
 import tessera_rl._native as native
 from tessera_rl.search import Search, SearchGroup
 
-TYPES = ["Env", "OutputView", "PoolSnapshot", "Search", "SearchGroup"]
+TYPES = ["Env", "OutputView", "PoolSnapshot", "Search", "SearchGroup", "WatchHandle"]
 
 
 @pytest.mark.parametrize("name", TYPES)
@@ -53,6 +53,7 @@ def test_native_objects_cannot_be_copied():
             "PoolSnapshot": split.snapshot_all(),
             "Search": Search(simulations=8)._native,
             "SearchGroup": SearchGroup(2, simulations=8)._native,
+            "WatchHandle": env.watch(),
         }
         assert sorted(objs) == sorted(TYPES)
         for name, obj in objs.items():

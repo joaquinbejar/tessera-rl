@@ -44,3 +44,8 @@ harness = false
 [[bench]]
 name = "classic_instructions"
 harness = false
+
+# The live watch acceptance benchmark (ADR-0083 item 7, #378 4d).
+[[bench]]
+name = "watch_step"
+harness = false

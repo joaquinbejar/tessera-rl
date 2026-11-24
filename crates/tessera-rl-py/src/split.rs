@@ -107,6 +107,8 @@ pub(crate) trait SplitOps: Send + Sync {
         owned: bool,
     ) -> Result<[HalfOutput; 2], BindError>;
     fn is_poisoned(&self) -> bool;
+    /// Attaches a live watch (ADR-0083 item 7), served after each `recv`.
+    fn watch(&self) -> Result<tessera_rl_engine::WatchHandle, BindError>;
     /// Drains and joins the workers; idempotent.
     fn close(&self);
 }
@@ -431,6 +433,12 @@ where
         })
     }
 
+    fn watch(&self) -> Result<tessera_rl_engine::WatchHandle, BindError> {
+        let mut state = self.lock()?;
+        let pool = state.pool.as_mut().ok_or_else(closed)?;
+        Ok(pool.attach_watch()?)
+    }
+
     fn close(&self) {
         let taken = self.lock().ok().map(|mut state| {
             state.pending = None;
@@ -510,6 +518,10 @@ impl PoolOps for SplitHandle {
 
     fn is_poisoned(&self) -> bool {
         self.ops.is_poisoned()
+    }
+
+    fn watch(&mut self) -> Result<tessera_rl_engine::WatchHandle, BindError> {
+        self.ops.watch()
     }
 
     fn split(&self) -> Option<Arc<dyn SplitOps>> {

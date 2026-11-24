@@ -212,6 +212,10 @@ class Env:
             (a, b), (c, d) = layout["halves"]
             self.halves = (range(a, b), range(c, d))
         self._indexed: bool = indexed
+        #: The id given to `make`, for the Viewer; `None` otherwise.
+        self.env_id: str | None = None
+        #: The `make` options that shape the records (for a shadow pool).
+        self._config: dict | None = None
         self._leaves = [(name or "obs", np.dtype(dtype), tuple(shape)) for name, dtype, shape, *_ in layout["leaves"]]
 
     def reset(self, seed: int | None = None, ids=None) -> Step | list[HalfStep] | AsyncStep | None:
@@ -461,6 +465,26 @@ class Env:
     def is_poisoned(self) -> bool:
         return self._native.is_poisoned()
 
+    def watch(self) -> _native.WatchHandle:
+        """Attaches a live watch (ADR-0083 item 7) and returns its handle.
+
+        The handle is the watch's single consumer: ``request(instance)`` asks
+        for that instance's record, and the pool answers at its next batch
+        boundary where the instance is idle (after ``reset``, ``step``,
+        ``restore`` or ``fork`` in sync mode; after the ``recv`` that returns
+        it in the split-phase modes), on the training thread, by copying one
+        record. ``take()`` returns ``(generation, record)`` once served, else
+        ``None``; it never blocks and never takes this ``Env``'s guard, so
+        another thread may call it while this one steps. ``generation`` counts
+        the pool's batch boundaries since the watch was attached. ``close()``
+        drops the handle. A poisoned pool serves nothing (``take`` raises
+        ``PoisonedError``); after ``Env.close`` the handle raises
+        ``ArgumentError`` (detached). A second watch while a handle is open
+        raises ``ConcurrencyError``; host environments raise
+        ``CapabilityError``. See :func:`tessera_rl.viewer.watch`.
+        """
+        return self._native.watch()
+
     def close(self) -> None:
         """Frees the pool; idempotent. Arrays already returned stay readable
         (borrowed views keep the engine's buffers alive) and never change."""
@@ -632,6 +656,13 @@ def is_stale(array) -> bool:
     raise TypeError("not a Tessera output: its staleness cannot be tracked")
 
 
+#: Pool options that change how a pool runs, not what its records are: a
+#: shadow pool (`tessera_rl.viewer.watch`) drops them.
+_EXECUTION_OPTIONS = frozenset(
+    {"mode", "batch_size", "gather", "workers", "spin", "wait", "wait_cap_us", "chunk_size", "schedule"}
+)
+
+
 def make(env_id: str, num_envs: int = 1, seed: int = 0, outputs: str = "borrowed", **kwargs) -> Env:
     """Creates a pool of ``num_envs`` instances of ``env_id``.
 
@@ -711,4 +742,10 @@ def make(env_id: str, num_envs: int = 1, seed: int = 0, outputs: str = "borrowed
         return _host.make(env_id, makers, num_envs, seed, outputs, dict(kwargs))
     mode = str(kwargs.get("mode") or "sync")
     indexed = kwargs.get("gather") == "indexed"
-    return Env(maker(**native_kwargs(num_envs=num_envs, seed=seed, outputs=outputs, **kwargs)), mode, indexed)
+    env = Env(maker(**native_kwargs(num_envs=num_envs, seed=seed, outputs=outputs, **kwargs)), mode, indexed)
+    #: What `tessera_rl.viewer.watch` needs to build a one-instance shadow
+    #: pool of the same configuration: the id and the options that are not
+    #: about execution.
+    env.env_id = env_id
+    env._config = {k: v for k, v in kwargs.items() if k not in _EXECUTION_OPTIONS}
+    return env

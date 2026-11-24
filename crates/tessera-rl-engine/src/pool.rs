@@ -122,6 +122,9 @@ pub struct EnvPool<E: Environment, M: MaskProvider<E> = NoMasks> {
     /// counter; the next slow-path step then scans the headers once.
     pub(crate) counter_bound: Option<u32>,
     sync: Option<SyncRuntime>,
+    /// The live watch, if attached (ADR-0083 item 7): served at each batch
+    /// boundary; `None` costs one pointer test per call.
+    pub(crate) watch: Option<crate::watch::Watch>,
     /// Allocations counted in this pool's chunk steps (ADR-0055).
     #[cfg(feature = "debug-checks")]
     pub(crate) allocs: crate::sys::alloc_track::AllocTally,
@@ -534,6 +537,7 @@ where
             fast_clean: false,
             counter_bound: Some(0),
             sync: None,
+            watch: None,
             #[cfg(feature = "debug-checks")]
             allocs: crate::sys::alloc_track::AllocTally::default(),
             _masks: PhantomData,
@@ -747,7 +751,9 @@ where
     /// On a poisoned pool this is the recovery path: the poison is cleared
     /// only if every instance resets without panicking.
     pub fn reset_all(&mut self, reseed: Reseed<'_>) -> Result<&Outputs, EngineError> {
-        self.guarded(Poison::Recover, |pool| pool.reset_all_inner(reseed))?;
+        let result = self.guarded(Poison::Recover, |pool| pool.reset_all_inner(reseed));
+        self.watch_boundary(result.is_ok());
+        result?;
         Ok(&self.outputs)
     }
 
@@ -818,7 +824,9 @@ where
     ///
     /// Rejected with [`EngineError::Poisoned`] on a poisoned pool.
     pub fn reset(&mut self, ids: &[u32], reseed: Reseed<'_>) -> Result<&Outputs, EngineError> {
-        self.guarded(Poison::Reject, |pool| pool.reset_inner(ids, reseed))?;
+        let result = self.guarded(Poison::Reject, |pool| pool.reset_inner(ids, reseed));
+        self.watch_boundary(result.is_ok());
+        result?;
         Ok(&self.outputs)
     }
 
@@ -850,7 +858,9 @@ where
     /// ids; nothing is mutated then. Rejected with
     /// [`EngineError::Poisoned`] on a poisoned pool.
     pub fn reset_from(&mut self, ids: &[u32], entries: &[u32]) -> Result<&Outputs, EngineError> {
-        self.guarded(Poison::Reject, |pool| pool.reset_from_inner(ids, entries))?;
+        let result = self.guarded(Poison::Reject, |pool| pool.reset_from_inner(ids, entries));
+        self.watch_boundary(result.is_ok());
+        result?;
         Ok(&self.outputs)
     }
 
@@ -989,7 +999,11 @@ where
     pub fn step(&mut self, actions: ActionInput<'_>) -> Result<&Outputs, EngineError> {
         // The validation boundary compares floats too: it runs in the
         // canonical environment with the kernels (ADR-0037).
-        self.guarded(Poison::Reject, |pool| pool.step_inner(actions))?;
+        let result = self.guarded(Poison::Reject, |pool| pool.step_inner(actions));
+        // The batch boundary (ADR-0083 item 7): one pointer test without a
+        // watch, one `Relaxed` load with an idle one.
+        self.watch_boundary(result.is_ok());
+        result?;
         Ok(&self.outputs)
     }
 

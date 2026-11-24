@@ -10,6 +10,9 @@
 //! Waits use the native address-wait primitive where it is enabled
 //! (`native`), otherwise park and unpark.
 //!
+//! `watch` holds the live-watch request slot (ADR-0083 item 7): its reply
+//! buffer is an `unsafe` cell with its own loom model.
+//!
 //! `waiter` holds the park backend's registered waiter of the Async mode
 //! (ADR-0056 decision 3), with its own `unsafe` cell and loom model.
 //!
@@ -32,6 +35,7 @@ mod panics;
 pub(crate) mod ring;
 pub(crate) mod sync;
 pub(crate) mod waiter;
+pub(crate) mod watch;
 
 pub(crate) use affinity::available_cores;
 pub use cores::{default_workers, physical_cores};
