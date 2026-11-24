@@ -304,6 +304,7 @@ jobs:
           integrations/burn/ crates/tessera-rl-core/ crates/tessera-rl-engine/
           crates/tessera-rl-classic/ crates/tessera-rl-num/ crates/tessera-rl-simd/
           crates/tessera-rl-macros/ .github/workflows/ci.yml Makefile
+          Cargo.toml rust-toolchain.toml clippy.toml scripts/paths_changed.sh
           | tee -a "$GITHUB_OUTPUT"
       - if: steps.paths.outputs.changed == 'true'
         run: cargo fmt --manifest-path integrations/burn/Cargo.toml --all -- --check

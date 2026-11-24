@@ -71,8 +71,24 @@ def test_burn_check_heavy_steps_all_wait_for_the_paths_filter():
         if "integrations/burn" in s or "burn-gate" in s:
             assert s in guarded or s.startswith("id: paths"), s
     paths = next(s for s in steps if s.startswith("id: paths"))
-    for prefix in ("integrations/burn/", "crates/tessera-rl-core/", "crates/tessera-rl-engine/", "crates/tessera-rl-classic/", ".github/workflows/ci.yml"):
-        assert prefix in paths
+    prefixes = paths.split('"$GITHUB_SHA"', 1)[1].split("|", 1)[0].split()
+    assert prefixes == [
+        "integrations/burn/",
+        "crates/tessera-rl-core/",
+        "crates/tessera-rl-engine/",
+        "crates/tessera-rl-classic/",
+        "crates/tessera-rl-num/",
+        "crates/tessera-rl-simd/",
+        "crates/tessera-rl-macros/",
+        ".github/workflows/ci.yml",
+        "Makefile",
+        # The path crates inherit workspace fields; clippy reads clippy.toml
+        # upward from integrations/burn; the toolchain; the filter itself.
+        "Cargo.toml",
+        "rust-toolchain.toml",
+        "clippy.toml",
+        "scripts/paths_changed.sh",
+    ]
     assert "fetch-depth: 0" in job and "shell: bash" in paths
 
 
