@@ -25,8 +25,15 @@ jobs:
     timeout-minutes: 90
     strategy:
       fail-fast: false
+      # job: the make target and report name (reference-<job>); project:
+      # its uv project under compat/training/. rllib-tag is the RLlib
+      # multi-agent smoke on Tag (wiring only), in the rllib project.
       matrix:
-        library: [sb3, tianshou, rllib]
+        include:
+          - { job: sb3, project: sb3 }
+          - { job: tianshou, project: tianshou }
+          - { job: rllib, project: rllib }
+          - { job: rllib-tag, project: rllib }
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # The pinned uv 0.13.6 from pipx's bin directory, as in
@@ -39,10 +46,10 @@ jobs:
       - run: command -v uv >/dev/null || { echo "uv not on PATH" >&2; exit 1; }
       # The Tessera wheel is a path source of each project: rebuild it from
       # this checkout rather than reuse uv's cached build.
-      - run: uv sync --locked --project compat/training/${{ matrix.library }} --python 3.11 --reinstall-package tessera-rl
-      - run: make reference-${{ matrix.library }}
+      - run: uv sync --locked --project compat/training/${{ matrix.project }} --python 3.11 --reinstall-package tessera-rl
+      - run: make reference-${{ matrix.job }}
       - if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: reference-${{ matrix.library }}
-          path: reference-${{ matrix.library }}.json
+          name: reference-${{ matrix.job }}
+          path: reference-${{ matrix.job }}.json

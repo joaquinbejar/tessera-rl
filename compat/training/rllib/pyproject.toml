@@ -14,6 +14,7 @@ requires-python = ">=3.11"
 dependencies = [
     "ray[rllib]==2.59.1",
     "gymnasium==1.2.2",
+    "pettingzoo==1.27.0",
     "torch==2.15.0",
     "tessera-rl",
 ]

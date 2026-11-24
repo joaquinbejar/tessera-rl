@@ -12,7 +12,7 @@ lock, `make py-test` or `make pre-push`.
 | CleanRL | `tools/reference_training.py` ("CleanRL ppo.py, adapted"; see `THIRD_PARTY.md`) | `make reference-training` |
 | Stable-Baselines3 | `sb3_cartpole.py` | `make reference-sb3` |
 | Tianshou | `tianshou_cartpole.py` | `make reference-tianshou` |
-| RLlib | `rllib_cartpole.py` (validated against Gymnasium 1.2.2, RLlib's pin; its own `[env.rllib]`) | `make reference-rllib` |
+| RLlib | `rllib_cartpole.py` (validated against Gymnasium 1.2.2, RLlib's pin; its own `[env.rllib]`) | `make reference-rllib`; multi-agent wiring smoke on Tag (PettingZoo adapter, no learning claim): `rllib_tag_smoke.py`, `make reference-rllib-tag` |
 
 Pass rule, the defaults of `tools/reference_training.py`: the median across
 seeds of the Tessera greedy evaluation mean is at least 475 (CartPole-v1's

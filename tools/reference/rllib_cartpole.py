@@ -31,17 +31,19 @@ least 475 and an absolute curve difference of at most 20. It is
 report-only (#501). Ray spreads the work over processes, so the report
 records the wall clock as well as the driver's CPU time.
 
-Run it with the project's own interpreter or through ``make
-reference-rllib``, which sets ``RAY_ENABLE_UV_RUN_RUNTIME_ENV=0``. Under
-``uv run``, Ray otherwise starts each worker through ``uv run`` with a
-packaged copy of the working directory, and those workers fail to start
-(``No module named 'ray._private'``).
+The script sets ``RAY_ENABLE_UV_RUN_RUNTIME_ENV=0`` itself, before Ray is
+imported, so every invocation (make, the nightly, ``uv run`` by hand) gets
+it. Under ``uv run``, Ray otherwise starts each worker through ``uv run``
+with a packaged copy of the working directory, and those workers fail to
+start (``No module named 'ray._private'``). Ray's session directory is a
+private short temporary directory made and removed by the script.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import shutil
 import tempfile
 import platform
@@ -50,7 +52,10 @@ import subprocess
 import sys
 import time
 
-import gymnasium
+# Before Ray is imported (see the module docstring).
+os.environ["RAY_ENABLE_UV_RUN_RUNTIME_ENV"] = "0"
+
+import gymnasium  # noqa: E402
 import numpy as np
 import ray
 import torch
