@@ -17,7 +17,7 @@ use tessera_rl_num::math;
 type Unary = (&'static str, fn(f64) -> f64, fn(f64) -> f64);
 type Binary = (&'static str, fn(f64, f64) -> f64, fn(f64, f64) -> f64);
 
-const UNARY: [Unary; 7] = [
+const UNARY: [Unary; 9] = [
     ("sin", math::sin, libm::sin),
     ("cos", math::cos, libm::cos),
     ("tan", math::tan, libm::tan),
@@ -25,6 +25,28 @@ const UNARY: [Unary; 7] = [
     ("exp", math::exp, libm::exp),
     ("ln", math::ln, libm::log),
     ("tanh", math::tanh, libm::tanh),
+    ("erf", math::erf, libm::erf),
+    ("erfc", math::erfc, libm::erfc),
+];
+
+/// Inputs on both sides of every branch boundary of `erf` and `erfc`
+/// (`|x|` below 2^-56, 2^-28, 0.84375, 1.25, 1/0.35, 6 and 28), both signs.
+const ERF_EDGES: [f64; 15] = [
+    1.0e-17,
+    3.0e-9,
+    4.0e-9,
+    0.84375,
+    0.843_749_999_999_999_9,
+    1.25,
+    1.249_999_999_999_999_8,
+    2.857_142_857_142_857,
+    2.857_142_857_142_857_5,
+    5.999_999_999_999_999,
+    6.0,
+    27.999_999_999_999_996,
+    28.0,
+    -0.84375,
+    -5.999_999_999_999_999,
 ];
 
 const BINARY: [Binary; 2] = [
@@ -132,6 +154,23 @@ fn generate(out: &mut impl Write) -> io::Result<()> {
             list(&mut inputs.iter().map(|&x| oracle(x)))
         )?;
     }
+    let mut erf_inputs: Vec<f64> = ERF_EDGES.to_vec();
+    erf_inputs.extend(ERF_EDGES.iter().map(|x| -x));
+    writeln!(
+        out,
+        "pub(super) const ERF_INPUTS: &[u64] = &[{}];",
+        list(&mut erf_inputs.iter().copied())
+    )?;
+    writeln!(
+        out,
+        "pub(super) const ERF_EDGE: &[u64] = &[{}];",
+        list(&mut erf_inputs.iter().map(|&x| libm::erf(x)))
+    )?;
+    writeln!(
+        out,
+        "pub(super) const ERFC_EDGE: &[u64] = &[{}];",
+        list(&mut erf_inputs.iter().map(|&x| libm::erfc(x)))
+    )?;
     for (name, _, oracle) in BINARY {
         let rows: Vec<String> = pairs
             .iter()

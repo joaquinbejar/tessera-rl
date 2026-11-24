@@ -92,6 +92,23 @@ pub fn tanh(x: f64) -> f64 {
     vendor::tanh(x)
 }
 
+/// The error function, `2/sqrt(pi) * integral from 0 to x of exp(-t^2) dt`.
+/// Added after version 1 shipped, without changing any existing result
+/// (ADR-0088: the standard normal cdf of `TrueSkill` ratings).
+#[must_use]
+#[inline]
+pub fn erf(x: f64) -> f64 {
+    vendor::erf(x)
+}
+
+/// The complementary error function, `1 - erf(x)`, accurate where `erf(x)`
+/// is close to 1.
+#[must_use]
+#[inline]
+pub fn erfc(x: f64) -> f64 {
+    vendor::erfc(x)
+}
+
 /// `sqrt(x^2 + y^2)` without undue overflow or underflow.
 #[must_use]
 #[inline]
@@ -104,8 +121,11 @@ mod vectors;
 
 #[cfg(test)]
 mod tests {
-    use super::vectors::{ATAN, ATAN2, COS, EXP, HYPOT, INPUTS, LN, SIN, TAN, TANH};
-    use super::{atan, atan2, cos, exp, hypot, ln, sin, tan, tanh};
+    use super::vectors::{
+        ATAN, ATAN2, COS, ERF, ERF_EDGE, ERF_INPUTS, ERFC, ERFC_EDGE, EXP, HYPOT, INPUTS, LN, SIN,
+        TAN, TANH,
+    };
+    use super::{atan, atan2, cos, erf, erfc, exp, hypot, ln, sin, tan, tanh};
 
     // NaN payloads are not part of the contract (ADR-0008); every other
     // result must match the libm 0.2.16 oracle bit for bit.
@@ -137,6 +157,31 @@ mod tests {
                 f64::from_bits(want)
             );
         }
+    }
+
+    fn check_on(name: &str, f: fn(f64) -> f64, inputs: &[u64], expected: &[u64]) {
+        assert_eq!(inputs.len(), expected.len());
+        for (&x, &want) in inputs.iter().zip(expected) {
+            let x = f64::from_bits(x);
+            let got = f(x);
+            assert!(
+                same(got, want),
+                "{name}({x:e}) = {got:e}, want {:e}",
+                f64::from_bits(want)
+            );
+        }
+    }
+
+    #[test]
+    fn test_math_erf_matches_libm_0_2_16() {
+        check_unary("erf", erf, ERF);
+        check_on("erf", erf, ERF_INPUTS, ERF_EDGE);
+    }
+
+    #[test]
+    fn test_math_erfc_matches_libm_0_2_16() {
+        check_unary("erfc", erfc, ERFC);
+        check_on("erfc", erfc, ERF_INPUTS, ERFC_EDGE);
     }
 
     #[test]
