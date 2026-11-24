@@ -9,6 +9,8 @@ class FrameStack:
     leaf: str
     k: int
 
+# Exported as a `bool` Box `[*shape, n]` with bounds [0, 1] (ADR-0078), not
+# MultiBinary: every adapter exposes Box leaves.
 @dataclass(frozen=True)
 class OneHot:
     leaf: str

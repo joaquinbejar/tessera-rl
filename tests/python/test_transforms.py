@@ -97,6 +97,9 @@ def test_transforms_refusals():
         t.make("tessera/CartPole-v1", transforms=[FrameStack("", 1)])
     with pytest.raises(TypeError):
         t.make("tessera/CartPole-v1", transforms=["frame_stack"])
+    for clip in (float("nan"), float("inf"), float("-inf")):
+        with pytest.raises(ValueError, match="finite"):
+            t.make("tessera/CartPole-v1", transforms=[Normalize("", clip)])
     env = t.make("tessera/Connect4-v1", num_envs=4, mode="pipelined", workers=1, chunk_size=2, transforms=[FrameStack("board", 2)])
     with pytest.raises(t.CapabilityError):
         env.epoch_barrier()
