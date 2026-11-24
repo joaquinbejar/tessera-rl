@@ -86,12 +86,30 @@ def calibrate(records: list[dict], seeds: list[int]) -> dict:
     return out
 
 
-def learns(scores: list[float], random: list[float], resamples: int = 10_000, seed: int = 0) -> dict:
+#: The default minimum effect: a protocol learns only if the gap over the
+#: random policy is at least this fraction of the gap between random and
+#: solved (the protocol's ``solved`` score, compat/learning/gates.toml).
+MIN_EFFECT = 0.10
+
+
+def learns(
+    scores: list[float],
+    random: list[float],
+    resamples: int = 10_000,
+    seed: int = 0,
+    solved: float | None = None,
+    min_effect: float = MIN_EFFECT,
+) -> dict:
     """The "learns at all" check of a protocol (#370): a seeded bootstrap
-    95% interval of median(scores) - mean(random) must exclude 0 from
-    above. ``scores`` are the trained seeds' evaluation scores, ``random``
-    the per-episode scores of a uniform random policy on the same evaluation
-    seeds."""
+    95% interval of median(scores) - mean(random) must lie above 0, and,
+    when the protocol names a ``solved`` score, above ``min_effect`` times
+    (solved - mean(random)). ``scores`` are the trained seeds' evaluation
+    scores, ``random`` the per-episode scores of a uniform random policy on
+    the same evaluation seeds.
+
+    Constant scores (zero variance) or a zero-width interval are
+    **degenerate**, never "learns": a fixed policy that beats a fixed random
+    score by a sliver says nothing about learning (Grid at 150k steps)."""
     s = np.asarray(scores, dtype=np.float64)
     r = np.asarray(random, dtype=np.float64)
     if s.size < 2 or r.size < 2 or not (np.all(np.isfinite(s)) and np.all(np.isfinite(r))):
@@ -99,12 +117,28 @@ def learns(scores: list[float], random: list[float], resamples: int = 10_000, se
     rng = np.random.default_rng(seed)
     gap = np.median(rng.choice(s, size=(resamples, s.size)), axis=1) - np.mean(rng.choice(r, size=(resamples, r.size)), axis=1)
     lo, hi = np.percentile(gap, [2.5, 97.5])
+    required = 0.0 if solved is None else float(min_effect * (solved - np.mean(r)))
+    degenerate = bool(np.ptp(s) == 0 or hi == lo)
     return {
-        "learns": bool(lo > 0),
+        "learns": bool(lo > 0 and lo > required and not degenerate),
+        "degenerate": degenerate,
         "gap": float(np.median(s) - np.mean(r)),
         "ci95": [float(lo), float(hi)],
+        "required": required,
         "random_mean": float(np.mean(r)),
     }
+
+
+def host_mismatch(calibration: dict, cpu: str) -> str | None:
+    """Why tonight gives no verdict on this host, or None. Learning
+    thresholds are host-specific (compat/learning/protocols.toml): a night
+    on another CPU than the calibration's is reported, never judged."""
+    calibrated = (calibration.get("environment") or {}).get("cpu")
+    if not calibrated:
+        return "uncalibrated host: the calibration records no CPU"
+    if calibrated != cpu:
+        return f"uncalibrated host: no verdict (calibrated on {calibrated!r}, this is {cpu!r})"
+    return None
 
 
 def check_calibration(calibration: dict) -> list[str]:

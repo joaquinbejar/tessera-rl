@@ -1,0 +1,26 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+#
+# Learns-at-all parameters per learning protocol (tools/learning_gate.learns,
+# #370). A calibration learns only if the bootstrap 95% interval of
+# median(score) - mean(random policy score) lies above min_effect times
+# (solved - mean(random)), and the scores are not degenerate (constant). The
+# solved scores are the Gymnasium reward thresholds where one exists, or the
+# environment's best episode score. They are kept apart from protocols.toml,
+# so changing them does not change a protocol's fingerprint.
+
+[cartpole]
+solved = 475.0
+min_effect = 0.10
+
+[acrobot]
+solved = -100.0
+min_effect = 0.10
+
+[mountaincar]
+solved = -110.0
+min_effect = 0.10
+
+[grid]
+# Every episode reaches the goal (+1).
+solved = 1.0
+min_effect = 0.10
