@@ -2,8 +2,11 @@
 
 //! Scripted dispatching rules (SPEC 16.1's scripted baseline). Each picks a
 //! legal job, breaking ties by the lowest job index; with no legal job
-//! each returns the no-op. SPT is the published baseline and the
-//! `Heuristic` of the environment.
+//! each returns the no-op. SPT is the `Heuristic` of the environment (the
+//! golden fixtures' scripted actions), which keeps it fixed for this
+//! version. On makespan it scores below a uniform random policy on the
+//! learning protocol's evaluation seeds, so the learning gate's bar is
+//! MWKR's score instead (`compat/learning/gates.toml`, #383 stage 4).
 
 use tessera_rl_core::io::ActionWriter;
 use tessera_rl_core::{AgentSlot, Heuristic};
