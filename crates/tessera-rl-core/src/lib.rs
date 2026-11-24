@@ -21,6 +21,7 @@ pub mod asset;
 pub mod config;
 pub mod config_canonical;
 pub mod config_decode;
+pub mod entity_heads;
 pub mod env;
 pub mod envs;
 pub mod error;
@@ -42,6 +43,7 @@ pub use bool8::Bool8;
 pub use config_canonical::{CanonicalDecode, CanonicalDecodeError, decode_canonical};
 pub use config_decode::{ConfigDecode, ConfigDecodeError, ConfigItem, ConfigSource};
 pub use encoding::{Canonical, StateHash};
+pub use entity_heads::{EntityHeads, HeadSpec};
 pub use env::{
     ActionMask, Determinize, EnvAssets, EnvConfig, EnvState, Environment, Heuristic,
     ImperfectInformation, Persist, Render, Validate,

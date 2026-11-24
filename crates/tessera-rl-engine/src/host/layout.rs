@@ -59,6 +59,9 @@ pub struct HostLayout {
     pub mask_heads: Vec<MaskHeadShape>,
     /// Whether terminal observations are written (`same_step` auto-reset).
     pub terminal: bool,
+    /// Discrete heads per entity group (ADR-0051, #385); 0 without groups
+    /// or without masks.
+    pub entity_group_heads: usize,
 }
 
 /// The layout of a host pool of `E`: `(num_envs, agents, initial_agents)`,
@@ -71,6 +74,7 @@ pub(crate) fn host_layout<E: HostEnvironment>(
     actions: &ActionLayout,
     mask_len: usize,
     terminal: bool,
+    entity_group_heads: usize,
 ) -> Result<HostLayout, EngineError> {
     // Each discrete head's block in an agent's mask row, as laid out (SPEC
     // 11.3); none without masks.
@@ -98,6 +102,7 @@ pub(crate) fn host_layout<E: HostEnvironment>(
         continuous_heads: actions.continuous.clone(),
         mask_len,
         mask_heads,
+        entity_group_heads,
         terminal,
     })
 }

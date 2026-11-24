@@ -89,6 +89,12 @@ _REGISTRY_ID = {env_id: "tessera/RTS-v1" for env_id in _MAKERS if env_id.startsw
 #: adapter reads and writes slot 0 of each row. ``initial_agents == 1``
 #: alone is not admission: a dynamic population could start with one agent
 #: and grow, which needs an explicit capability contract.
+#: Admission (#385): any environment whose layout has one agent slot is
+#: admitted, whatever its heads (conditional heads and entity groups come in
+#: `info`, from the layout, for first-party and host environments alike).
+#: A multi-slot environment run with one live slot is admitted only by id,
+#: below: no layout key declares that the other slots stay empty, so it
+#: cannot be read as a capability.
 _SLOT0 = frozenset({"tessera/Snake-v1", "tessera/PaddleDuel-v1"})
 
 #: RTS against a frozen scripted opponent (stage 5c), by Gymnasium id; the
