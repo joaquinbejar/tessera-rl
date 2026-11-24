@@ -569,8 +569,9 @@ def _index(value, what: str) -> int:
 _STRING_OPTIONS = {"auto_reset", "outputs", "mode", "gather", "obs", "wait", "schedule"}
 
 
-#: Constructor options passed as exact ``bool`` (the RTS ``seat_swap``).
-_BOOL_OPTIONS = frozenset({"seat_swap"})
+#: Constructor options passed as exact ``bool`` (the RTS ``seat_swap``, the
+#: Lanterns ``zero_on_fuse``).
+_BOOL_OPTIONS = frozenset({"seat_swap", "zero_on_fuse"})
 
 #: Asset options (ADR-0077): a bundled asset's name (``str``) or its bytes
 #: (``bytes``, or any buffer, copied to exact ``bytes``).
