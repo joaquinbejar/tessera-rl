@@ -114,7 +114,7 @@ def test_lob_heuristic_slots_fill_1_to_7_deterministically_and_ignore_rows():
 
 def test_lob_heuristic_slots_build_in_split_modes():
     """Stage B1: LimitOrderBook heuristic slots run in Pipelined and Async too."""
-    for mode, extra in (("pipelined", {}), ("async", {"batch_size": 2})):
+    for mode, extra in (("pipelined", {"chunk_size": 2}), ("async", {"batch_size": 2})):
         env = tessera_rl.make(LOB, num_envs=4, workers=1, mode=mode, policy_map=LOB_MAP, agents=8, **extra)
         assert env.policy_groups[:8] == ("learner",) + ("heuristic",) * 7
         env.close()
