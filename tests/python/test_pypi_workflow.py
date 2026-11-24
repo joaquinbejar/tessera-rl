@@ -68,14 +68,15 @@ def test_pypi_is_dispatch_only_with_the_run_and_the_tag():
     assert on.count("required: true") == 2
 
 
-def test_pypi_has_two_jobs_both_fork_guarded():
-    assert _jobs(PYPI) == ["verify", "publish"]
-    for job in (VERIFY_JOB, PUBLISH_JOB):
+def test_pypi_has_three_jobs_all_fork_guarded():
+    # release-assets (#350 PR 4) runs after publish.
+    assert _jobs(PYPI) == ["verify", "publish", "release-assets"]
+    for job in (VERIFY_JOB, PUBLISH_JOB, _job(PYPI, "release-assets")):
         assert _one(r"^    (if: .*)$", job) == GUARD
 
 
 def test_pypi_jobs_run_on_hosted_runners_only():
-    for job in (VERIFY_JOB, PUBLISH_JOB):
+    for job in (VERIFY_JOB, PUBLISH_JOB, _job(PYPI, "release-assets")):
         assert _one(r"^    runs-on: (.*)$", job) == "ubuntu-24.04"
         assert "self-hosted" not in job
         assert re.search(r"^    timeout-minutes: \d+$", job, re.M)
@@ -98,7 +99,9 @@ def test_pypi_publish_has_only_the_oidc_token_in_the_pypi_environment():
     env = PUBLISH_JOB.split("    environment:\n", 1)[1]
     assert _one(r"^      name: (\S+)$", env.split("\n    permissions:", 1)[0]) == "pypi"
     assert _one(r"^    needs: (\S+)$", PUBLISH_JOB) == "verify"
-    assert PYPI.count("id-token") == 1
+    # The OIDC token: publish (PyPI) and release-assets (attestations) only.
+    assert PYPI.count("id-token") == 2
+    assert "id-token: write" in _job(PYPI, "release-assets")
 
 
 def test_pypi_publish_uses_no_token_and_checks_out_nothing():
@@ -121,6 +124,10 @@ def test_pypi_action_is_pinned_by_full_commit():
 def test_pypi_actions_are_the_pins_the_other_workflows_use():
     others = "".join(p.read_text() for p in WORKFLOWS.glob("*.yml") if p.name != "pypi.yml")
     for u in re.findall(r"uses: (actions/\S+ # \S+)", PYPI):
+        # attest-build-provenance is used here only (#350 PR 4); its pin is
+        # checked on its own.
+        if u.startswith("actions/attest-build-provenance@"):
+            continue
         assert u in others, u
 
 
@@ -703,7 +710,7 @@ RELEASE_JOB = _job(PYPI, "release-assets")
 
 def test_pypi_release_assets_is_the_only_job_that_writes_contents():
     assert re.search(r"^    needs: publish$", RELEASE_JOB, re.M)
-    perms = re.search(r"^    permissions:\n((?:      .*\n)+)", RELEASE_JOB).group(1)
+    perms = re.search(r"^    permissions:\n((?:      .*\n)+)", RELEASE_JOB, re.M).group(1)
     assert sorted(perms.split()) == sorted(["contents:", "write", "id-token:", "write", "attestations:", "write"])
     assert PYPI.count("contents: write") == 1
     assert "contents: write" not in VERIFY_JOB and "contents: write" not in PUBLISH_JOB

@@ -181,8 +181,8 @@ jobs:
           subject-path: |
             dist/*.whl
             assets/*.cyclonedx.json
-      # No --clobber: an asset name is never replaced. SHA256SUMS-assets is
-      # a name of its own, so it never meets the owner's SHA256SUMS.
+      # Never replaces an asset (no clobber flag). SHA256SUMS-assets is a
+      # name of its own, so it never meets the owner's SHA256SUMS.
       - name: Upload to the release
         env:
           GH_TOKEN: ${{ github.token }}
