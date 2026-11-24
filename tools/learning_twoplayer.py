@@ -198,6 +198,14 @@ def _actions(env, learner: int, learner_actions, opponent: str, step, rng) -> np
     return acts
 
 
+def _check_stall(steps: int, batch: int, env_id: str, learner: int) -> None:
+    """The stall guard (REVIEW-T3b-head-r1: it must fail loudly): raises
+    when the rollout has taken more than ``1000 x batch`` steps without
+    filling one batch of learner transitions."""
+    if steps > 1000 * batch:
+        raise RuntimeError(f"{env_id}: the learner in slot {learner} stopped acting (no full batch in {steps} steps)")
+
+
 def train(env_id: str, kwargs: dict, seed: int, seats: list[int], h: TwoPlayerHyper) -> tuple:
     """Trains one masked PPO learner against heuristic slots; returns
     (agent, learner slot, record)."""
@@ -234,8 +242,7 @@ def train(env_id: str, kwargs: dict, seed: int, seats: list[int], h: TwoPlayerHy
         guard = 0
         while len(buf) < batch:
             guard += 1
-            if guard > 1000 * batch:
-                raise RuntimeError(f"{env_id}: the learner in slot {learner} stopped acting (no transition in {guard} steps)")
+            _check_stall(guard, batch, env_id, learner)
             mask = slot_mask(step.masks, learner, h.num_envs, n_actions)
             acting = np.asarray(step.acting[:, learner], dtype=bool) & mask.any(-1)
             x = torch.as_tensor(obs)

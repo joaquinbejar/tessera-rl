@@ -154,3 +154,10 @@ def test_twoplayer_connect4_one_update_smoke():
     assert math.isfinite(r["eval_mean"])
     refs = lp.twoplayer_references("connect4", 2)
     assert len(refs["uniform"]) == 2 and len(refs["heuristic"]) == 2
+
+
+def test_twoplayer_stall_guard_fails_loudly():
+    """REVIEW-T3b-head-r1: the guard raises, naming the environment and slot."""
+    l2._check_stall(1000 * 64, 64, "tessera/Connect4-v1", 1)  # at the bound: fine
+    with pytest.raises(RuntimeError, match=r"tessera/Connect4-v1: the learner in slot 1 stopped acting"):
+        l2._check_stall(1000 * 64 + 1, 64, "tessera/Connect4-v1", 1)

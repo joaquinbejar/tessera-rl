@@ -126,6 +126,11 @@ eval_episodes = 10
 # scores an episode +1, 0 or -1 from the learner's seat; "return" uses the
 # return. ``total_steps`` counts the learner's own turns. The thresholds are
 # in gates.toml. No calibration yet, so no nightly gate.
+# T3b (#370, DESIGN-T3b-r1): total_steps counts the learner's own stored
+# transitions (its acting steps), not engine steps; the opponent's turns are
+# not counted.
+# Step cap 64 (make()'s default) > the longest legal game, 42 plies, so a
+# truncation never cuts a game short and ends it without a bootstrap.
 [connect4]
 env = "tessera/Connect4-v1"
 tier = "T3b"
@@ -137,6 +142,7 @@ score = "sign"
 seeds = 5
 eval_episodes = 50
 
+# Step cap 128 (make()'s default) > the longest legal game, 119 plies.
 [othello]
 env = "tessera/Othello-v1"
 tier = "T3b"
@@ -148,6 +154,7 @@ score = "sign"
 seeds = 5
 eval_episodes = 50
 
+# Step cap 200 (make()'s default) > the game's own cap of 162 plies.
 [go9]
 env = "tessera/Go9-v1"
 tier = "T3b"
@@ -159,6 +166,7 @@ score = "sign"
 seeds = 5
 eval_episodes = 50
 
+# Step cap 16 (make()'s default) > the longest hand, 8 actions.
 [leduc]
 env = "tessera/Leduc-v1"
 tier = "T3b"
