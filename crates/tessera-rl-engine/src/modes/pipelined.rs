@@ -998,6 +998,10 @@ where
     /// discrete heads]` (ADR-0079 item 3.5): each half's rows are written
     /// when `recv` returns it, the other half's keep their last step's.
     /// `None` without a heuristic slot.
+    ///
+    /// The slice borrows this pool (the wrapper holds the rows while it owns
+    /// the pool, ADR-0079 stage B1), so it cannot outlive the next `recv`,
+    /// which takes `&mut self`; copy it to keep a step's rows.
     #[must_use]
     pub fn heuristic_actions(&self) -> Option<&[i32]> {
         self.mode
