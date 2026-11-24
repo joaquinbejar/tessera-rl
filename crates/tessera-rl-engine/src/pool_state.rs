@@ -75,7 +75,7 @@ where
         let template = self.snapshot(0)?;
         let mut records = vec![template; self.headers.len()];
         self.snapshot_all(&mut records)?;
-        let mut transforms = vec![0; self.transform_state_bytes().saturating_mul(records.len())];
+        let mut transforms = vec![0; self.state_bytes_for(records.len())?];
         self.snapshot_transforms_all(&mut transforms)?;
         Ok(PoolState {
             records,
