@@ -61,6 +61,14 @@ def test_site_stage_writes_placeholders(tmp_path):
         assert build.PLACEHOLDER in (tmp_path / "s" / "pages" / rel).read_text()
 
 
+def test_site_refuses_to_overwrite_a_page(tmp_path):
+    (tmp_path / "dashboard").mkdir()
+    (tmp_path / "dashboard" / "page.html").write_text("a MkDocs page")
+    with pytest.raises(build.SiteError):
+        build.refuse_overwrite(tmp_path)
+    build.refuse_overwrite(tmp_path / "empty")  # nothing there: fine
+
+
 def test_site_check_flags_spec_and_adr_links(tmp_path):
     _generated(tmp_path)
     (tmp_path / "ok.html").write_text("<a href='getting-started/'>ok</a>")

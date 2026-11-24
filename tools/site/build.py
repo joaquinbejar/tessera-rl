@@ -84,10 +84,20 @@ def build(out: pathlib.Path) -> None:
         run([sys.executable, "-m", "mkdocs", "build", "--strict", "-f", str(staged / "mkdocs.yml"), "-d", str(out)])
     for rel in GENERATED:
         (out / rel).unlink(missing_ok=True)
+    refuse_overwrite(out)
     run([sys.executable, "-m", "pdoc", "tessera_rl", "-o", str(out / "python")])
     run([sys.executable, str(ROOT / "tools" / "dashboard" / "build.py")])
     shutil.rmtree(out / "dashboard", ignore_errors=True)
     shutil.copytree(ROOT / "target" / "dashboard", out / "dashboard")
+
+
+def refuse_overwrite(out: pathlib.Path) -> None:
+    """The generated parts must not replace a MkDocs page: after the
+    placeholders are removed, their directories hold nothing else."""
+    for top in sorted({pathlib.PurePosixPath(rel).parts[0] for rel in GENERATED}):
+        left = [p for p in (out / top).rglob("*") if p.is_file()] if (out / top).exists() else []
+        if left:
+            raise SiteError(f"{top}/ holds MkDocs output ({left[0].relative_to(out)}); a generated part would replace it")
 
 
 def check(out: pathlib.Path) -> list[str]:
