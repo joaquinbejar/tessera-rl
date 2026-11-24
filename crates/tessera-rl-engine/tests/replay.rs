@@ -551,3 +551,41 @@ fn test_replay_first_party_file_refuses_the_host_tier() {
         }))
     ));
 }
+
+#[test]
+fn test_replay_detached_recorder_writes_the_same_file() {
+    let (expected, _) = record(0);
+    let mut p = pool_with(config(), 0);
+    let mut detached = Recorder::new(&mut p, Vec::new(), options())
+        .unwrap()
+        .detach();
+    {
+        let mut rec = detached.attach(&mut p);
+        rec.reset_all(Reseed::Base(Seed::new(7))).unwrap();
+        detached = rec.detach();
+    }
+    // The rest of the script, reattached for each call.
+    let mut rec = detached.attach(&mut p);
+    for t in 0..4 {
+        step(&mut rec, t);
+    }
+    let detached = rec.detach();
+    let mut rec = detached.attach(&mut p);
+    rec.reset(&[1, 3], Reseed::List(&[Seed::new(21), Seed::new(22)]))
+        .unwrap();
+    rec.reset(&[2, 0], Reseed::Each(&[None, Some(Seed::new(9))]))
+        .unwrap();
+    rec.reset(&[3], Reseed::Keep).unwrap();
+    step(&mut rec, 4);
+    rec.fork_branched(0, &[1, 2], None).unwrap();
+    step(&mut rec, 5);
+    let record = rec.pool().snapshot(1).unwrap();
+    rec.restore(3, &record).unwrap();
+    rec.fork(2, &[0]).unwrap();
+    let detached = rec.detach();
+    let mut rec = detached.attach(&mut p);
+    for t in 6..14 {
+        step(&mut rec, t);
+    }
+    assert_eq!(rec.finish().unwrap(), expected);
+}

@@ -49,6 +49,57 @@ impl Default for ReplayWriterOptions {
     }
 }
 
+/// A [`Recorder`] without its pool borrow, from [`Recorder::detach`].
+///
+/// [`DetachedRecorder::attach`] must be given the same pool, unchanged since
+/// the detach: a call made on the pool while detached is not logged, and a
+/// file recorded across another pool does not replay. Neither is undefined
+/// behaviour; replay reports the divergence.
+pub struct DetachedRecorder<E, M, W> {
+    out: W,
+    options: ReplayWriterOptions,
+    body: Vec<u8>,
+    sum: HashSink,
+    events: u64,
+    calls: u64,
+    closed: bool,
+    checkpointed: bool,
+    _pool: core::marker::PhantomData<fn() -> (E, M)>,
+}
+
+impl<E, M, W> core::fmt::Debug for DetachedRecorder<E, M, W> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("DetachedRecorder")
+            .field("events", &self.events)
+            .field("calls", &self.calls)
+            .field("closed", &self.closed)
+            .finish_non_exhaustive()
+    }
+}
+
+impl<E, M, W> DetachedRecorder<E, M, W>
+where
+    E: Persist,
+    M: PersistMask<E>,
+{
+    /// Resumes the recording on `pool`, which must be the pool it was
+    /// detached from.
+    #[must_use]
+    pub fn attach(self, pool: &mut EnvPool<E, M>) -> Recorder<'_, E, M, W> {
+        Recorder {
+            pool,
+            out: self.out,
+            options: self.options,
+            body: self.body,
+            sum: self.sum,
+            events: self.events,
+            calls: self.calls,
+            closed: self.closed,
+            checkpointed: self.checkpointed,
+        }
+    }
+}
+
 /// Records the calls on an [`EnvPool`] into a replay file written to `W`.
 ///
 /// Every method mirrors the pool method of the same name. A call the pool
@@ -143,6 +194,24 @@ where
     #[must_use]
     pub fn pool(&self) -> &EnvPool<E, M> {
         self.pool
+    }
+
+    /// Releases the pool and keeps the recording, for a caller that cannot
+    /// hold the borrow between calls (the Python bindings).
+    /// [`DetachedRecorder::attach`] resumes it.
+    #[must_use]
+    pub fn detach(self) -> DetachedRecorder<E, M, W> {
+        DetachedRecorder {
+            out: self.out,
+            options: self.options,
+            body: self.body,
+            sum: self.sum,
+            events: self.events,
+            calls: self.calls,
+            closed: self.closed,
+            checkpointed: self.checkpointed,
+            _pool: core::marker::PhantomData,
+        }
     }
 
     /// [`EnvPool::reset_all`], logged.

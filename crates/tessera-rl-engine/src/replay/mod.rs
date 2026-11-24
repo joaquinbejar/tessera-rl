@@ -39,4 +39,4 @@ pub use reader::{
     Event, Events, HostFileKind, HostInfo, Ids, RecordedReseed, RefusalRow, Replay, ReplayHeader,
 };
 pub use run::ReplaySummary;
-pub use writer::{Recorder, ReplayWriterOptions};
+pub use writer::{DetachedRecorder, Recorder, ReplayWriterOptions};
