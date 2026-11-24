@@ -5,11 +5,6 @@
 //! across the 256-byte block boundary, and for float bit patterns that are
 //! not ordinary values (NaN payloads, signed zeros).
 
-#![expect(
-    clippy::unwrap_used,
-    reason = "test helpers: a failure is the assertion"
-)]
-
 use proptest::prelude::*;
 use tessera_rl_core::encoding::{Canonical, Encoder, SliceSink, encode_to_vec};
 
@@ -89,8 +84,10 @@ fn test_encode_slice_signed_zero_and_nan_payload_keep_their_bits() {
     ];
     let bytes = sliced(&items);
     let back: Vec<u32> = bytes
-        .chunks_exact(4)
-        .map(|c| u32::from_le_bytes(c.try_into().unwrap()))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|c| u32::from_le_bytes(*c))
         .collect();
     assert_eq!(back, [0x8000_0000, 0, 0x7fc0_1234, 0xffa0_0001]);
 }
