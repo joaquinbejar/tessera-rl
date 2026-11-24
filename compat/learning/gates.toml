@@ -76,13 +76,13 @@ min_effect = 0.10
 min_effect = 0.10
 
 [tag]
+min_effect = 0.10
 
 [jobshop]
 # The MWKR dispatching rule's mean return on the 20 evaluation seeds (minus
 # the mean makespan; `Rule::Mwkr`). SPT, the environment's Heuristic,
 # scores below a random policy on makespan (-1134.0 against -856.4), so it is
-# not the bar. The
-# makespan lower bound is -413.1 on the same seeds.
+# not the bar. The makespan lower bound is -413.1 on the same seeds.
 solved = -648.15
 min_effect = 0.10
 
