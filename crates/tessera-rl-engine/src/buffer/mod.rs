@@ -76,6 +76,9 @@ use crate::outputs::OutputsView;
 use crate::pool::Rows;
 use crate::sys::Gang;
 use crate::sys::sync::{AtomicBool, AtomicUsize, Ordering};
+use crate::transform::kernels::StackMode;
+use crate::transform::rows::{Shared, TransformRows};
+use crate::transform::stats::Moments;
 
 use generations::HALVES;
 #[cfg(not(loom))]
@@ -177,6 +180,22 @@ struct RawChunk<H, S> {
     pending_reset: Raw<Bool8>,
     refused: Raw<Bool8>,
     refuse_code: Raw<u32>,
+    transform: RawTransform,
+}
+
+/// The raw transform parts of a pool-wide view (ADR-0078).
+#[derive(Clone, Copy)]
+struct RawTransform {
+    /// The pool's shared transform parts, or null without transforms.
+    shared: *const Shared,
+    /// `instance_bytes` per instance.
+    arena: Raw<u8>,
+    /// `normalized` moments per chunk; empty when the pass does not
+    /// accumulate.
+    accum: Raw<Moments>,
+    /// `scratch_bytes` per worker.
+    scratch: Raw<u8>,
+    mode: StackMode,
 }
 
 /// The raw parts of an `Environment` pool's chunk, for the split-phase
@@ -234,6 +253,7 @@ impl<H, S> RawChunk<H, S> {
             pending_reset,
             refused,
             refuse_code,
+            transform,
         } = outputs;
         let leaves = |views: [&mut [u8]; MAX_LEAVES]| views.map(Raw::new);
         // `leaf_bytes` is only read; a read-only view is stored as raw too.
@@ -278,6 +298,15 @@ impl<H, S> RawChunk<H, S> {
             pending_reset: Raw::new(pending_reset),
             refused: Raw::new(refused),
             refuse_code: Raw::new(refuse_code),
+            transform: RawTransform {
+                shared: transform
+                    .shared
+                    .map_or(core::ptr::null(), core::ptr::from_ref),
+                arena: Raw::new(transform.arena),
+                accum: Raw::new(transform.accum),
+                scratch: Raw::new(transform.scratch),
+                mode: transform.mode,
+            },
         }
     }
 
@@ -286,8 +315,21 @@ impl<H, S> RawChunk<H, S> {
     /// # Safety
     ///
     /// Module invariants; in particular no other live view covers `r`.
+    #[cfg(test)]
     #[expect(unsafe_code, reason = "audited module: disjoint chunk views")]
     unsafe fn chunk<'a>(&self, r: &Range<usize>) -> Rows<'a, H, S> {
+        // SAFETY: forwarded; no worker scratch is handed out.
+        unsafe { self.chunk_on(r, None) }
+    }
+
+    /// [`Self::chunk`] run by `worker`, which gets its transform scratch.
+    ///
+    /// # Safety
+    ///
+    /// As [`Self::chunk`]; besides, `worker`'s scratch is used by no other
+    /// live view (each worker runs one view at a time).
+    #[expect(unsafe_code, reason = "audited module: disjoint chunk views")]
+    unsafe fn chunk_on<'a>(&self, r: &Range<usize>, worker: Option<usize>) -> Rows<'a, H, S> {
         let a = self.agents;
         // SAFETY: `leaf_bytes` is never written during an epoch, so a shared
         // view of it alongside the workers' views is sound (invariant 1).
@@ -363,6 +405,9 @@ impl<H, S> RawChunk<H, S> {
         let refused = unsafe { self.refused.view(r, a) };
         // SAFETY: as for `refused`.
         let refuse_code = unsafe { self.refuse_code.view(r, a) };
+        // SAFETY: the transform parts follow invariants 1 to 4 (see
+        // `transform_view`).
+        let transform = unsafe { self.transform_view(r, worker) };
         Rows {
             headers,
             states,
@@ -398,7 +443,63 @@ impl<H, S> RawChunk<H, S> {
                 pending_reset,
                 refused,
                 refuse_code,
+                transform,
             },
+        }
+    }
+
+    /// The transform parts of the view of `r` run by `worker`.
+    ///
+    /// # Safety
+    ///
+    /// As [`Self::chunk_on`]. Accumulators are per chunk: a pass that
+    /// accumulates hands out views of whole chunks only (Sync, Inline and
+    /// Pipelined; an Async pool never accumulates, ADR-0078 erratum 1), so
+    /// no two live views share a chunk's accumulator.
+    #[expect(unsafe_code, reason = "audited module: disjoint chunk views")]
+    unsafe fn transform_view<'a>(
+        &self,
+        r: &Range<usize>,
+        worker: Option<usize>,
+    ) -> TransformRows<'a> {
+        let t = self.transform;
+        if t.shared.is_null() {
+            return TransformRows::default();
+        }
+        // SAFETY: the shared parts live in the pool and are not written
+        // during an epoch (invariant 1), so a shared view is sound.
+        let shared: &'a Shared = unsafe { &*t.shared };
+        let size = shared.chunk_size.max(1);
+        let first = r.start / size;
+        let chunks = accum_chunks(r, size, self.instances);
+        // SAFETY: invariants 1 to 4 for range `r` (`instance_bytes` per
+        // instance).
+        let arena = unsafe { t.arena.view(r, shared.instance_bytes) };
+        // SAFETY: invariants 1 and 3. A view gets accumulators only when the
+        // pass accumulates (`t.accum` is empty otherwise: frozen, Async,
+        // re-observations) and `r` covers whole chunks (`accum_chunks`); in
+        // that case no other live view covers any of those chunks, because
+        // the accumulating passes (Sync, Inline, Pipelined) hand out disjoint
+        // views of whole chunks. Any other range gets an empty view, so no two
+        // live `&mut` slices of accumulators can overlap.
+        let accum = match chunks {
+            // SAFETY: as above.
+            Some(c) => unsafe { t.accum.view(&c, shared.plan.normalized) },
+            None => &mut [],
+        };
+        let scratch = match worker {
+            // SAFETY: invariant 1; worker `w`'s scratch is used by its one
+            // live view only.
+            Some(w) => unsafe { t.scratch.view(&(w..w + 1), shared.scratch_bytes) },
+            None => &mut [],
+        };
+        TransformRows {
+            shared: Some(shared),
+            arena,
+            accum,
+            base: r.start - first * size,
+            scratch,
+            mode: t.mode,
         }
     }
 }
@@ -419,13 +520,28 @@ impl<H, S> RawChunk<H, S> {
     /// stay alive and in place for `'a`.
     #[expect(unsafe_code, reason = "audited module: token-guarded views")]
     unsafe fn range_view<'a>(&self, r: Range<usize>) -> Option<Rows<'a, H, S>> {
+        // SAFETY: forwarded; no worker scratch.
+        unsafe { self.range_view_on(r, None) }
+    }
+
+    /// [`Self::range_view`] run by `worker` (its transform scratch).
+    ///
+    /// # Safety
+    ///
+    /// As [`Self::range_view`] and [`Self::chunk_on`].
+    #[expect(unsafe_code, reason = "audited module: token-guarded views")]
+    unsafe fn range_view_on<'a>(
+        &self,
+        r: Range<usize>,
+        worker: Option<usize>,
+    ) -> Option<Rows<'a, H, S>> {
         if r.start > r.end || r.end > self.instances {
             return None;
         }
         // SAFETY: `r` lies inside the instances, so every per-instance view
         // stays inside its buffer; the caller guarantees the rows are
         // exclusively its own for `'a` (invariants 1, 3 and 4).
-        Some(unsafe { self.chunk(&r) })
+        Some(unsafe { self.chunk_on(&r, worker) })
     }
 
     /// The views of instance `id` alone, or `None` if `id` is out of range.
@@ -479,6 +595,22 @@ pub(crate) fn half_ranges(
     Some([0..split, split..instances])
 }
 
+/// The chunks whose accumulators a view of `r` may hold: `Some` only when
+/// `r` is non-empty and covers whole chunks of `size` (its end a chunk
+/// boundary or the last instance), so that two disjoint such views never
+/// share a chunk (ADR-0078, REVIEW-headA-r1).
+pub(crate) fn accum_chunks(
+    r: &Range<usize>,
+    size: usize,
+    instances: usize,
+) -> Option<Range<usize>> {
+    let size = size.max(1);
+    let aligned = r.start < r.end
+        && r.start.is_multiple_of(size)
+        && (r.end.is_multiple_of(size) || r.end == instances);
+    aligned.then(|| r.start / size..r.end.div_ceil(size))
+}
+
 /// The instances of chunk `c`.
 pub(crate) fn chunk_range(c: usize, size: usize, instances: usize) -> Range<usize> {
     // Overflow means `c` is past the last chunk: an empty range at the end.
@@ -516,7 +648,7 @@ where
     // The Dynamic claim counter: in this frame, which outlives every worker's
     // use of it because `gang.run` returns only after the job completes.
     let next = AtomicUsize::new(0);
-    let run = |c: usize| {
+    let run = |c: usize, w: usize| {
         let range = chunk_range(c, size, raw.instances);
         // SAFETY: chunk `c` is run by this worker only (Static: `c % workers
         // == w`; Dynamic: the claim counter handed `c` out once), and chunk
@@ -524,7 +656,7 @@ where
         // whole epoch (invariant 3) and this view is dropped at the end of
         // the call (invariant 4).
         #[expect(unsafe_code, reason = "audited module: disjoint chunk views")]
-        let mut chunk = unsafe { raw.chunk(&range) };
+        let mut chunk = unsafe { raw.chunk_on(&range, Some(w)) };
         let ok = crate::sys::catch(|| f(&mut chunk, range.start));
         if !ok {
             panicked.store(true, Ordering::Relaxed);
@@ -538,7 +670,7 @@ where
             Schedule::Static => {
                 for c in (w..chunks).step_by(workers) {
                     debug_assert!(c % workers == w, "chunk {c} is not worker {w}'s");
-                    run(c);
+                    run(c, w);
                 }
             }
             Schedule::Dynamic => loop {
@@ -546,7 +678,7 @@ where
                 if c >= chunks {
                     break;
                 }
-                run(c);
+                run(c, w);
             },
         }
     };
@@ -1007,5 +1139,23 @@ mod tests {
             let row = &outputs.observation(0).unwrap()[i * 6..(i + 1) * 6];
             assert!(row.iter().all(|&v| v == byte), "instance {i}");
         }
+    }
+}
+
+#[cfg(test)]
+mod accum_tests {
+    use super::accum_chunks;
+
+    #[test]
+    fn test_accum_chunks_whole_chunks_only() {
+        // 10 instances in chunks of 4: 0..4, 4..8, 8..10.
+        assert_eq!(accum_chunks(&(0..4), 4, 10), Some(0..1));
+        assert_eq!(accum_chunks(&(4..10), 4, 10), Some(1..3));
+        assert_eq!(accum_chunks(&(0..10), 4, 10), Some(0..3));
+        // A split chunk (Async runs of claimed ids) gets no accumulators.
+        assert_eq!(accum_chunks(&(2..4), 4, 10), None);
+        assert_eq!(accum_chunks(&(4..6), 4, 10), None);
+        assert_eq!(accum_chunks(&(3..5), 4, 10), None);
+        assert_eq!(accum_chunks(&(4..4), 4, 10), None);
     }
 }

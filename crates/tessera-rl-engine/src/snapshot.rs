@@ -35,6 +35,7 @@ use crate::pool::{
     write_agent_masks,
 };
 use crate::record::{DecodedRecord, PoolContext, Record};
+use crate::transform::kernels::StackMode;
 use crate::validate::check_ids;
 
 impl<E, M> EnvPool<E, M>
@@ -46,7 +47,7 @@ where
     E::State: Send,
     <E::Header as RecordLayout>::Adaptive: AdaptiveValues<E::Config>,
 {
-    fn index(&self, id: u32) -> Result<usize, EngineError> {
+    pub(crate) fn index(&self, id: u32) -> Result<usize, EngineError> {
         let num_envs = self.options.num_envs.get();
         usize::try_from(id)
             .ok()
@@ -119,7 +120,8 @@ where
         let result = self.guarded(Poison::Reject, |pool| {
             let i = pool.index(id)?;
             pool.write_record(i, record);
-            pool.reobserve(core::iter::once(i))
+            pool.note_plain_restore();
+            pool.reobserve(core::iter::once(i), StackMode::Fresh)
         });
         self.watch_boundary(result.is_ok());
         result
@@ -140,7 +142,8 @@ where
             for (i, record) in records.iter().enumerate() {
                 pool.write_record(i, record);
             }
-            pool.reobserve(0..records.len())?;
+            pool.note_plain_restore();
+            pool.reobserve(0..records.len(), StackMode::Fresh)?;
             pool.poisoned = false;
             #[cfg(feature = "debug-checks")]
             pool.discard_allocations();
@@ -165,7 +168,8 @@ where
             for i in valid_indices(dst) {
                 pool.write_record(i, &record);
             }
-            pool.reobserve(valid_indices(dst))
+            pool.copy_transform_state(src, dst);
+            pool.reobserve(valid_indices(dst), StackMode::Keep)
         });
         self.watch_boundary(result.is_ok());
         result
@@ -244,7 +248,8 @@ where
             );
             self.write_record(i, &branched);
         }
-        self.reobserve(valid_indices(dst))
+        self.copy_transform_state(src, dst);
+        self.reobserve(valid_indices(dst), StackMode::Keep)
     }
 
     /// The pool-level context, for pool snapshots.
@@ -260,6 +265,10 @@ where
                     .reset_source
                     .as_ref()
                     .map_or(ResetSourceContext::Fresh, ArchiveSource::context),
+                transforms: pool
+                    .transform
+                    .as_ref()
+                    .map_or_else(Default::default, |t| t.context()),
             })
         })
     }
@@ -282,9 +291,12 @@ where
         archive: Option<&Archive<E>>,
     ) -> Result<(), EngineError> {
         self.guarded(Poison::Reject, |pool| {
-            let (branch_counter, source) = pool.check_context(context, archive)?;
+            let (branch_counter, source, transforms) = pool.check_context(context, archive)?;
             pool.branch_counter = branch_counter;
             pool.reset_source = source;
+            if let Some(t) = pool.transform.as_mut() {
+                t.restore_context(&transforms);
+            }
             Ok(())
         })
     }
@@ -292,19 +304,36 @@ where
     /// Checks `context` against this pool and `archive` without writing
     /// anything, and builds the reset source it restores. Later context
     /// fields (ADR-0078) add their checks here, before any write.
-    #[expect(
-        clippy::unused_self,
-        reason = "ADR-0078 adds context checks against this pool here"
-    )]
     fn check_context(
         &self,
         context: PoolContext,
         archive: Option<&Archive<E>>,
-    ) -> Result<(u64, Option<ArchiveSource<E>>), EngineError> {
+    ) -> Result<
+        (
+            u64,
+            Option<ArchiveSource<E>>,
+            crate::transform::TransformContext,
+        ),
+        EngineError,
+    > {
         let PoolContext {
             branch_counter,
             reset_source,
+            transforms,
         } = context;
+        // ADR-0078 item 2.3: another transform identity is refused before
+        // anything is written.
+        match self.transform.as_ref() {
+            Some(t) => t.check_context(&transforms)?,
+            None if transforms.identity != 0 => {
+                return Err(crate::transform::TransformError::IdentityMismatch {
+                    expected: 0,
+                    found: transforms.identity,
+                }
+                .into());
+            }
+            None => {}
+        }
         let source = match (reset_source, archive) {
             (ResetSourceContext::Fresh, None) => None,
             (ResetSourceContext::Fresh, Some(_)) => {
@@ -328,7 +357,7 @@ where
                 Some(ArchiveSource::new(given.clone(), Some(weights))?)
             }
         };
-        Ok((branch_counter, source))
+        Ok((branch_counter, source, transforms))
     }
 
     /// Replay only: sets the branch counter of a keyframe, keeping the
@@ -342,7 +371,7 @@ where
         })
     }
 
-    fn check_count(&self, records: usize) -> Result<(), EngineError> {
+    pub(crate) fn check_count(&self, records: usize) -> Result<(), EngineError> {
         if records == self.headers.len() {
             Ok(())
         } else {
@@ -363,7 +392,7 @@ where
         Ok(record)
     }
 
-    fn write_record(&mut self, i: usize, record: &Record<E>) {
+    pub(crate) fn write_record(&mut self, i: usize, record: &Record<E>) {
         // Restore, fork and import write headers outside a step: the
         // validation fast path's facts are unknown until the next slow path.
         self.forget_fast_facts();
@@ -376,7 +405,14 @@ where
     /// Recomputes the outputs of the given instances from their records:
     /// per-step outputs and terminal rows cleared (ADR-0039), alive and
     /// acting masks, observations and action masks for the current state.
-    fn reobserve(&mut self, indices: impl Iterator<Item = usize>) -> Result<(), EngineError> {
+    /// Re-observes `indices` after their records were written; `mode` is
+    /// what the observations do to frame stacks (ADR-0078 item 4): never an
+    /// accumulating pass.
+    pub(crate) fn reobserve(
+        &mut self,
+        indices: impl Iterator<Item = usize>,
+        mode: StackMode,
+    ) -> Result<(), EngineError> {
         let Self {
             cfg,
             headers,
@@ -384,10 +420,14 @@ where
             outputs,
             authority,
             poisoned,
+            transform,
             ..
         } = self;
         run_kernels(poisoned, || {
             let outputs = &mut outputs.view_all();
+            if let Some(t) = transform {
+                outputs.transform = t.caller_rows(mode, false);
+            }
             for i in indices {
                 let (Some(header), Some(state)) = (headers.get(i), states.get(i)) else {
                     continue;
@@ -441,7 +481,7 @@ where
             for (i, record) in valid_indices(ids).zip(records) {
                 pool.write_record(i, &record.trust());
             }
-            pool.reobserve(valid_indices(ids))
+            pool.reobserve(valid_indices(ids), StackMode::Fresh)
         })
     }
 
@@ -465,7 +505,7 @@ where
             for (i, record) in records.iter().enumerate() {
                 pool.write_record(i, &record.trust());
             }
-            pool.reobserve(0..records.len())?;
+            pool.reobserve(0..records.len(), StackMode::Fresh)?;
             pool.poisoned = false;
             #[cfg(feature = "debug-checks")]
             pool.discard_allocations();

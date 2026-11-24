@@ -546,6 +546,36 @@ where
     /// parts are taken again whatever the outcome (the `&mut` invalidated
     /// them). A failure changes no generation, cycle or poison, except that
     /// a writer which poisoned the pool (a panic) poisons the wrapper.
+    /// [`EnvPool::observation_space`]: the exported (transformed) space.
+    ///
+    /// # Errors
+    ///
+    /// As [`EnvPool::observation_space`].
+    pub fn observation_space(&self) -> Result<tessera_rl_core::space::Space, EngineError> {
+        self.mode.pool.observation_space()
+    }
+
+    /// [`EnvPool::epoch_barrier`], on the quiescent pool (ADR-0078 item 5.3).
+    ///
+    /// # Errors
+    ///
+    /// As [`PipelinedPool::reset_all`] for a busy or poisoned pool.
+    pub fn epoch_barrier(&mut self) -> Result<(), EngineError> {
+        self.write(EnvPool::epoch_barrier)
+    }
+
+    /// [`EnvPool::freeze_normalization`], on the quiescent pool.
+    ///
+    /// # Errors
+    ///
+    /// As [`PipelinedPool::reset_all`] for a busy or poisoned pool.
+    pub fn freeze_normalization(&mut self, frozen: bool) -> Result<(), EngineError> {
+        self.write(|pool| {
+            pool.freeze_normalization(frozen);
+            Ok(())
+        })
+    }
+
     fn write(
         &mut self,
         f: impl FnOnce(&mut EnvPool<E, M>) -> Result<(), EngineError>,

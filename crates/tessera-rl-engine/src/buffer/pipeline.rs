@@ -242,7 +242,8 @@ unsafe fn run_half<E: Environment, M: MaskProvider<E>, const H: usize>(
             // run by one worker: Static by `c % workers`, Dynamic by the
             // half's claim counter, reset in `publish` before this job was
             // submitted (invariants 2, 3 and 4).
-            let Some(mut chunk) = (unsafe { mode.raw.range_view(r) }) else {
+            // This worker's transform scratch is used by this view alone.
+            let Some(mut chunk) = (unsafe { mode.raw.range_view_on(r, Some(worker)) }) else {
                 return;
             };
             if !crate::sys::catch(|| step_chunk::<E, M>(&ctx, &mut chunk)) {

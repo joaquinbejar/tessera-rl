@@ -481,7 +481,8 @@ unsafe fn run_drain<E: Environment, M: MaskProvider<E>>(data: *const (), worker:
             // ring hands each admitted id out once, and `rest` repeats none)
             // and no token covers them (the send checked each live flag with
             // Acquire before admitting it): invariants 3, 4.
-            let view = unsafe { mode.raw.range_view(start..end) };
+            // This worker's transform scratch is used by this view alone.
+            let view = unsafe { mode.raw.range_view_on(start..end, Some(worker)) };
             if let Some(mut chunk) = view
                 && !crate::sys::catch(|| step_chunk::<E, M>(&ctx, &mut chunk))
             {

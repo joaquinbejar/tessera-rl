@@ -152,6 +152,10 @@ pub enum EngineError {
         /// The digest given (0 when no archive was given).
         found: u64,
     },
+    /// A transform list the pool cannot run, or a transform operation it
+    /// refuses (ADR-0078).
+    #[error(transparent)]
+    Transform(#[from] crate::transform::TransformError),
     /// A record slice does not have one record per instance.
     #[error("{records} records for {instances} instances")]
     RecordCount {

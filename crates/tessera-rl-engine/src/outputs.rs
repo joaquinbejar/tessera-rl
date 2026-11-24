@@ -416,6 +416,8 @@ pub(crate) struct OutputsView<'a> {
     pub(crate) refused: &'a mut [Bool8],
     /// Refusing host pools only (ADR-0070), `[N, A]`; empty otherwise.
     pub(crate) refuse_code: &'a mut [u32],
+    /// The transform parts (ADR-0078); empty for a pool without transforms.
+    pub(crate) transform: crate::transform::rows::TransformRows<'a>,
 }
 
 impl OutputsView<'_> {
@@ -452,6 +454,7 @@ impl OutputsView<'_> {
             pending_reset: &mut [],
             refused: &mut [],
             refuse_code: &mut [],
+            transform: crate::transform::rows::TransformRows::default(),
         }
     }
 }
@@ -517,6 +520,7 @@ impl Outputs {
             pending_reset,
             refused,
             refuse_code,
+            transform: crate::transform::rows::TransformRows::default(),
         }
     }
 }

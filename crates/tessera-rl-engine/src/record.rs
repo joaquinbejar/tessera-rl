@@ -212,6 +212,9 @@ pub struct PoolContext {
     pub branch_counter: u64,
     /// What resets start from (ADR-0075 item 7).
     pub reset_source: crate::archive::ResetSourceContext,
+    /// The transform identity, normalization statistics and freeze flag
+    /// (ADR-0078 item 6).
+    pub transforms: crate::transform::TransformContext,
 }
 
 impl PoolContext {
@@ -221,6 +224,7 @@ impl PoolContext {
         Self {
             branch_counter,
             reset_source: crate::archive::ResetSourceContext::Fresh,
+            transforms: crate::transform::TransformContext::default(),
         }
     }
 }
