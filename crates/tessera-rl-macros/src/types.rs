@@ -115,6 +115,11 @@ pub(crate) fn obs_set_inner(ty: &Type) -> Option<&Type> {
     marker_inner(ty, "ObsSet")
 }
 
+/// `I` of an `ObsSetOf<I>` field type (#429).
+pub(crate) fn obs_set_of_inner(ty: &Type) -> Option<&Type> {
+    marker_inner(ty, "ObsSetOf")
+}
+
 fn marker_inner<'a>(ty: &'a Type, marker: &str) -> Option<&'a Type> {
     let Type::Path(path) = ty else { return None };
     let last = path.path.segments.last()?;

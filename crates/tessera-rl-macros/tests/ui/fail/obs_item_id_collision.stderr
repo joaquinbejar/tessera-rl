@@ -1,0 +1,5 @@
+error: `pos_item` collides with the generated `POS_ITEM` of field `pos`
+  --> tests/ui/fail/obs_item_id_collision.rs:11:5
+   |
+11 |     pos_item: ObsLeaf<i32>,
+   |     ^^^^^^^^

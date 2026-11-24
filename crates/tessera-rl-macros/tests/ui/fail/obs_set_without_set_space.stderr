@@ -1,4 +1,4 @@
-error: ObsSet<T> fields take `#[space(set(..))]`, and only they do
+error: ObsSet<T> fields take `#[space(set(.., inner(..)))]`, ObsSetOf<I> fields `#[space(set(.., items = I))]`, and only they do
  --> tests/ui/fail/obs_set_without_set_space.rs:9:12
   |
 9 |     units: ObsSet<i32>,

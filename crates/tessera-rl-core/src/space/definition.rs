@@ -156,6 +156,26 @@ impl Space {
         }
     }
 
+    /// Exported observation leaves of the space (ADR-0082 point 2): one
+    /// per leaf, and a `Set` adds its mask leaf to its inner's leaves;
+    /// `None` on overflow.
+    #[must_use]
+    pub fn leaf_count(&self) -> Option<usize> {
+        match self {
+            Self::Set { inner, .. } => inner.leaf_count()?.checked_add(1),
+            Self::Dict(entries) => entries
+                .iter()
+                .try_fold(0usize, |n, (_, s)| n.checked_add(s.leaf_count()?)),
+            Self::Tuple(items) => items
+                .iter()
+                .try_fold(0usize, |n, s| n.checked_add(s.leaf_count()?)),
+            Self::Discrete { .. }
+            | Self::MultiDiscrete { .. }
+            | Self::MultiBinary { .. }
+            | Self::Box { .. } => Some(1),
+        }
+    }
+
     fn enter(depth: usize) -> Result<usize, SpaceError> {
         let child = depth.saturating_add(1);
         if child > MAX_DEPTH {
@@ -217,6 +237,21 @@ mod tests {
         );
         assert!(!Space::Dict(vec![("a".to_owned(), Space::Tuple(vec![leaf()]))]).contains_set());
         assert!(!leaf().contains_set());
+    }
+
+    #[test]
+    fn test_space_leaf_count_adds_a_mask_per_set() {
+        let set = Space::Set {
+            inner: Box::new(Space::Dict(vec![
+                ("a".to_owned(), leaf()),
+                ("b".to_owned(), leaf()),
+            ])),
+            max: 2,
+        };
+        assert_eq!(leaf().leaf_count(), Some(1));
+        assert_eq!(set.leaf_count(), Some(3));
+        let all = Space::Tuple(vec![leaf(), set]);
+        assert_eq!(all.leaf_count(), Some(4));
     }
 
     #[test]

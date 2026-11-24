@@ -4,15 +4,28 @@
 //!
 //! Each field is an `ObsLeaf<T>` with one `#[space(...)]` attribute:
 //! `box(low = .., high = .., shape = .., dtype = ..)`, `discrete(n = ..)` or
-//! `multi_binary(shape = ..)`; or an `ObsSet<T>` with
-//! `set(max = .., inner(<one of those>))`, which exports the item leaf and
-//! the field's `_mask` leaf and generates a `SetId<T>` (ADR-0082). The
-//! derive takes a single inner leaf; a `Dict` inner is supported by the
-//! engine and the adapters but has no derive syntax yet (#429). Values are
-//! expressions or closures over the
-//! config (`|c: &Config| ...`), resolved at construction. The derive
-//! generates `Observation<Config>` (a `Dict` in declaration order) and one
-//! `LeafId<T>` constant per field, named after the field in upper case.
+//! `multi_binary(shape = ..)`; or a `Set` (ADR-0082) in one of two forms:
+//!
+//! - `ObsSet<T>` with `set(max = .., inner(<one of those>))`: a single-leaf
+//!   item, exported as the item leaf `p` and the mask `p_mask`, with a
+//!   `SetId<T>` constant;
+//! - `ObsSetOf<I>` with `set(max = .., items = I)` (#429), where `I` is itself
+//!   `#[derive(Observation)]` with the same config type: the inner space is
+//!   `I`'s `Dict`, exported as one item leaf `p/<field>` per field of `I` in
+//!   `I`'s declaration order, then `p_mask`, with a `SetOf<I>` constant. The
+//!   items of a set may not contain a set: refused at compile time through
+//!   `ObservationLayout::CONTAINS_SET`, at the field.
+//!
+//! Values are expressions or closures over the config (`|c: &Config| ...`),
+//! resolved at construction. The derive generates `Observation<Config>` (a
+//! `Dict` in declaration order, with `CONTAINS_SET` true when a field is a
+//! set), `ObservationLayout`, one id constant per field named after the
+//! field in upper case (`LeafId<T>`, `SetId<T>` or `SetOf<I>`), and, for
+//! every `ObsLeaf<T>` field, an `ItemId<Self, T>` constant `<FIELD>_ITEM`
+//! that names the field's leaf inside a `Set` of this struct
+//! (`SetOfLeaf::item`); the item ids are bound to the struct, so another
+//! struct's id does not type-check. Exported names must be unique: a field
+//! named like a set's `<set>_mask` is refused.
 
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote, quote_spanned};
@@ -20,7 +33,7 @@ use syn::meta::ParseNestedMeta;
 use syn::{DeriveInput, Expr, Ident, Pat, Type};
 
 use crate::paths::core_path;
-use crate::types::{named_fields, obs_leaf_inner, obs_set_inner};
+use crate::types::{named_fields, obs_leaf_inner, obs_set_inner, obs_set_of_inner};
 
 struct BoxLeaf {
     low: Expr,
@@ -100,9 +113,15 @@ fn parse_kind(meta: &ParseNestedMeta<'_>, ident: &Ident) -> syn::Result<Leaf> {
     })
 }
 
-/// `set(max = EXPR, inner(<leaf kind>))` (ADR-0082): the capacity and the
-/// one inner leaf.
-fn parse_set(meta: &ParseNestedMeta<'_>, ident: &Ident) -> syn::Result<(Expr, Leaf)> {
+/// The inner of a set: one leaf, or an item struct (#429).
+enum SetInner {
+    Leaf(Leaf),
+    Items(Type),
+}
+
+/// `set(max = EXPR, inner(<leaf kind>))` or `set(max = EXPR, items = I)`
+/// (ADR-0082): the capacity and the inner.
+fn parse_set(meta: &ParseNestedMeta<'_>, ident: &Ident) -> syn::Result<(Expr, SetInner)> {
     let mut max = None;
     let mut inner = None;
     meta.parse_nested_meta(|param| {
@@ -112,25 +131,37 @@ fn parse_set(meta: &ParseNestedMeta<'_>, ident: &Ident) -> syn::Result<(Expr, Le
             }
         } else if param.path.is_ident("inner") {
             param.parse_nested_meta(|kind| {
-                if inner.replace(parse_kind(&kind, ident)?).is_some() {
-                    return Err(kind.error("one inner leaf per set"));
+                if inner
+                    .replace(SetInner::Leaf(parse_kind(&kind, ident)?))
+                    .is_some()
+                {
+                    return Err(kind.error("one inner per set: `inner(..)` or `items = ..`"));
                 }
                 Ok(())
             })?;
+        } else if param.path.is_ident("items") {
+            let items = param.value()?.parse::<Type>()?;
+            if inner.replace(SetInner::Items(items)).is_some() {
+                return Err(param.error("one inner per set: `inner(..)` or `items = ..`"));
+            }
         } else {
-            return Err(param.error("expected `max` or `inner(..)`"));
+            return Err(param.error("expected `max`, `inner(..)` or `items = ..`"));
         }
         Ok(())
     })?;
     let max = max.ok_or_else(|| syn::Error::new_spanned(ident, "missing `max`"))?;
-    let inner = inner.ok_or_else(|| syn::Error::new_spanned(ident, "missing `inner(..)`"))?;
+    let inner = inner
+        .ok_or_else(|| syn::Error::new_spanned(ident, "missing `inner(..)` or `items = ..`"))?;
     Ok((max, inner))
 }
 
-/// A field's space: one leaf, or a set of one inner leaf with its `max`.
-struct FieldSpace {
-    leaf: Leaf,
-    set_max: Option<Expr>,
+/// A field's space: one leaf, or a set with its `max`.
+enum FieldSpace {
+    Leaf(Leaf),
+    Set {
+        max: Box<Expr>,
+        inner: Box<SetInner>,
+    },
 }
 
 fn parse_leaf(field: &syn::Field, ident: &Ident) -> syn::Result<FieldSpace> {
@@ -138,16 +169,13 @@ fn parse_leaf(field: &syn::Field, ident: &Ident) -> syn::Result<FieldSpace> {
     for attr in field.attrs.iter().filter(|a| a.path().is_ident("space")) {
         attr.parse_nested_meta(|meta| {
             let parsed = if meta.path.is_ident("set") {
-                let (max, leaf) = parse_set(&meta, ident)?;
-                FieldSpace {
-                    leaf,
-                    set_max: Some(max),
+                let (max, inner) = parse_set(&meta, ident)?;
+                FieldSpace::Set {
+                    max: Box::new(max),
+                    inner: Box::new(inner),
                 }
             } else {
-                FieldSpace {
-                    leaf: parse_kind(&meta, ident)?,
-                    set_max: None,
-                }
+                FieldSpace::Leaf(parse_kind(&meta, ident)?)
             };
             if parsed_space.replace(parsed).is_some() {
                 return Err(meta.error("one space per leaf"));
@@ -283,46 +311,236 @@ fn same_config(expr: &Expr, config: &mut Option<Type>) -> syn::Result<()> {
     Ok(())
 }
 
-/// A field's id constant, its `Dict` entry and its leaf count: one leaf, or
-/// for a set the item leaf and its mask (ADR-0082).
+/// A leaf index as a constant expression: a fixed count plus the leaf
+/// counts of the item structs of earlier `items =` sets.
+#[derive(Default)]
+struct Offset {
+    fixed: usize,
+    items: Vec<TokenStream>,
+}
+
+impl Offset {
+    fn tokens(&self) -> TokenStream {
+        let fixed = self.fixed;
+        let items = &self.items;
+        quote!(#fixed #(+ #items)*)
+    }
+
+    /// Adds `n` fixed leaves; an error at `ident` on overflow.
+    fn advance(&mut self, n: usize, ident: &Ident) -> syn::Result<()> {
+        self.fixed = self
+            .fixed
+            .checked_add(n)
+            .ok_or_else(|| syn::Error::new_spanned(ident, "too many observation leaves"))?;
+        Ok(())
+    }
+}
+
+/// One parsed field: its ident, marker element or item type, and space.
+struct Parsed<'a> {
+    ident: &'a Ident,
+    elem: &'a Type,
+    space: FieldSpace,
+}
+
+/// Checks a field's marker type against its space and returns the parsed
+/// field.
+fn parse_field<'a>(field: &'a syn::Field, ident: &'a Ident) -> syn::Result<Parsed<'a>> {
+    let leaf_elem = obs_leaf_inner(&field.ty);
+    let set_elem = obs_set_inner(&field.ty);
+    let set_of_elem = obs_set_of_inner(&field.ty);
+    let Some(elem) = leaf_elem.or(set_elem).or(set_of_elem) else {
+        return Err(syn::Error::new_spanned(
+            &field.ty,
+            "Observation fields must have type ObsLeaf<T>, ObsSet<T> or ObsSetOf<I>",
+        ));
+    };
+    let space = parse_leaf(field, ident)?;
+    let set_inner = match &space {
+        FieldSpace::Leaf(_) => None,
+        FieldSpace::Set { inner, .. } => Some(&**inner),
+    };
+    match set_inner {
+        None if leaf_elem.is_some() => {}
+        Some(SetInner::Leaf(_)) if set_elem.is_some() => {}
+        Some(SetInner::Items(items)) if set_of_elem.is_some() => {
+            if quote!(#items).to_string() != quote!(#elem).to_string() {
+                return Err(syn::Error::new_spanned(
+                    items,
+                    "`items = I` must name the `I` of the field's `ObsSetOf<I>`",
+                ));
+            }
+        }
+        _ => {
+            return Err(syn::Error::new_spanned(
+                &field.ty,
+                "ObsSet<T> fields take `#[space(set(.., inner(..)))]`, ObsSetOf<I> fields \
+                 `#[space(set(.., items = I))]`, and only they do",
+            ));
+        }
+    }
+    Ok(Parsed { ident, elem, space })
+}
+
+/// The config closures of one leaf kind.
+fn leaf_exprs(leaf: &Leaf) -> Vec<&Expr> {
+    match leaf {
+        Leaf::Box(b) => vec![&b.low, &b.high, &b.shape],
+        Leaf::Discrete { n } => vec![n],
+        Leaf::MultiBinary { shape } => vec![shape],
+    }
+}
+
+/// The config closures of a field's space.
+fn field_exprs(space: &FieldSpace) -> Vec<&Expr> {
+    match space {
+        FieldSpace::Leaf(leaf) => leaf_exprs(leaf),
+        FieldSpace::Set { max, inner } => {
+            let mut exprs = match &**inner {
+                SetInner::Leaf(leaf) => leaf_exprs(leaf),
+                SetInner::Items(_) => Vec::new(),
+            };
+            exprs.push(max);
+            exprs
+        }
+    }
+}
+
+/// The `Space::Set` entry of a set field `key`.
+fn set_entry(core: &TokenStream, key: &str, inner: &TokenStream, max: &Expr) -> TokenStream {
+    let max = eval(max);
+    quote!((
+        ::std::string::String::from(#key),
+        #core::space::Space::Set {
+            inner: ::std::boxed::Box::new(#inner),
+            max: u32::try_from(#max).map_err(|_| #core::SpaceError::InvalidShape {
+                shape: ::std::vec::Vec::new(),
+            })?,
+        },
+    ))
+}
+
+/// Generated tokens of one struct.
+#[derive(Default)]
+struct Generated {
+    ids: Vec<TokenStream>,
+    spaces: Vec<TokenStream>,
+    checks: Vec<TokenStream>,
+    bounds: Vec<TokenStream>,
+}
+
+/// One field's id constants, `Dict` entry and checks; advances `offset`
+/// by its leaf count (ADR-0082: a set's item leaves, then its mask).
 fn field_tokens(
     core: &TokenStream,
-    ident: &Ident,
-    elem: &Type,
-    space: &TokenStream,
-    set_max: Option<&Expr>,
-    index: usize,
-) -> (TokenStream, TokenStream, usize) {
+    name: &Ident,
+    config_ty: &TokenStream,
+    field: &Parsed<'_>,
+    offset: &mut Offset,
+    out: &mut Generated,
+) -> syn::Result<()> {
+    let Parsed { ident, elem, space } = field;
     let id = format_ident!("{}", ident.to_string().to_uppercase());
     let key = ident.to_string();
-    let Some(max) = set_max else {
-        return (
-            quote! {
+    let index = offset.tokens();
+    match space {
+        FieldSpace::Leaf(leaf) => {
+            let item = format_ident!("{}_ITEM", ident.to_string().to_uppercase());
+            let space = leaf_space(core, ident, elem, leaf, &mut out.checks)?;
+            out.ids.push(quote! {
                 /// Leaf id generated by `#[derive(Observation)]`.
                 pub const #id: #core::LeafId<#elem> = #core::LeafId::new(#index);
-            },
-            quote!((::std::string::String::from(#key), #space)),
-            1,
-        );
-    };
-    let mask = index + 1;
-    let max = eval(max);
-    (
-        quote! {
-            /// Set id generated by `#[derive(Observation)]`.
-            pub const #id: #core::SetId<#elem> = #core::SetId::new(#index, #mask);
+                /// Item id generated by `#[derive(Observation)]`: this leaf
+                /// inside a `Set` of this struct (`SetOfLeaf::item`).
+                pub const #item: #core::ItemId<#name, #elem> = #core::ItemId::new(#index);
+            });
+            out.spaces
+                .push(quote!((::std::string::String::from(#key), #space)));
+            offset.advance(1, ident)?;
+        }
+        FieldSpace::Set { max, inner } => match &**inner {
+            SetInner::Leaf(leaf) => {
+                let space = leaf_space(core, ident, elem, leaf, &mut out.checks)?;
+                out.ids.push(quote! {
+                    /// Set id generated by `#[derive(Observation)]`.
+                    pub const #id: #core::SetId<#elem> = #core::SetId::new(#index, #index + 1);
+                });
+                out.spaces.push(set_entry(core, &key, &space, max));
+                offset.advance(2, ident)?;
+            }
+            SetInner::Items(items) => {
+                let leaves = quote!(<#items as #core::ObservationLayout>::LEAVES);
+                out.ids.push(quote! {
+                    /// Set id generated by `#[derive(Observation)]`.
+                    pub const #id: #core::SetOf<#items> =
+                        #core::SetOf::new(#index, #index + #leaves);
+                });
+                out.checks.push(quote_spanned! {ident.span()=>
+                    const _: () = assert!(
+                        !<#items as #core::ObservationLayout>::CONTAINS_SET,
+                        "Observation: the items of a set may not contain a set (ADR-0082)"
+                    );
+                });
+                out.bounds
+                    .push(quote!(#items: #core::Observation<#config_ty>));
+                // The item space's leaves must match the config-free count the
+                // ids use; checked when the pool builds the space.
+                let inner = quote!({
+                    let inner = <#items as #core::Observation<#config_ty>>::space(cfg)?;
+                    ::core::debug_assert_eq!(
+                        inner.leaf_count(),
+                        ::core::option::Option::Some(<#items as #core::ObservationLayout>::LEAVES),
+                        "Observation: the items' space and ObservationLayout::LEAVES disagree"
+                    );
+                    inner
+                });
+                out.spaces.push(set_entry(core, &key, &inner, max));
+                offset.advance(1, ident)?;
+                offset.items.push(leaves);
+            }
         },
-        quote!((
-            ::std::string::String::from(#key),
-            #core::space::Space::Set {
-                inner: ::std::boxed::Box::new(#space),
-                max: u32::try_from(#max).map_err(|_| #core::SpaceError::InvalidShape {
-                    shape: ::std::vec::Vec::new(),
-                })?,
-            },
-        )),
-        2,
-    )
+    }
+    Ok(())
+}
+
+/// Refuses a field whose exported name is a set's mask, and a field `x_item`
+/// beside a leaf field `x`, whose generated `X_ITEM` it would take.
+fn check_names(fields: &[(&syn::Field, &Ident)]) -> syn::Result<()> {
+    // Exported names (ADR-0082 point 2): a set `p` also exports `p_mask`,
+    // which no other field may be named.
+    let is_set =
+        |f: &syn::Field| obs_set_inner(&f.ty).is_some() || obs_set_of_inner(&f.ty).is_some();
+    let set_masks: Vec<String> = fields
+        .iter()
+        .filter(|(f, _)| is_set(f))
+        .map(|(_, i)| format!("{i}_mask"))
+        .collect();
+    let leaves: Vec<&Ident> = fields
+        .iter()
+        .filter(|(f, _)| obs_leaf_inner(&f.ty).is_some())
+        .map(|(_, i)| *i)
+        .collect();
+    for (_, ident) in fields {
+        if set_masks.iter().any(|m| *ident == m) {
+            return Err(syn::Error::new_spanned(
+                ident,
+                format!(
+                    "duplicate observation leaf name `{ident}`: a set exports its mask under this name (ADR-0082)"
+                ),
+            ));
+        }
+        if let Some(leaf) = leaves
+            .iter()
+            .find(|l| format!("{l}_item") == ident.to_string())
+        {
+            let item = format!("{leaf}_ITEM").to_uppercase();
+            return Err(syn::Error::new_spanned(
+                ident,
+                format!("`{ident}` collides with the generated `{item}` of field `{leaf}`"),
+            ));
+        }
+    }
+    Ok(())
 }
 
 pub(crate) fn derive(input: &DeriveInput) -> syn::Result<TokenStream> {
@@ -335,62 +553,44 @@ pub(crate) fn derive(input: &DeriveInput) -> syn::Result<TokenStream> {
         ));
     }
     let fields = named_fields(input, "Observation")?;
-    let mut config: Option<Type> = None;
-    let mut ids = Vec::new();
-    let mut spaces = Vec::new();
-    let mut dtype_checks = Vec::new();
-    // Exported names (ADR-0082 point 2): a set `p` also exports `p_mask`,
-    // which no other field may be named.
-    let set_masks: Vec<String> = fields
+    let named: Vec<(&syn::Field, &Ident)> = fields
         .iter()
-        .filter(|f| obs_set_inner(&f.ty).is_some())
-        .filter_map(|f| f.ident.as_ref().map(|i| format!("{i}_mask")))
+        .filter_map(|f| f.ident.as_ref().map(|i| (f, i)))
         .collect();
-    let mut index = 0usize;
-    for field in fields {
-        let Some(ident) = &field.ident else { continue };
-        if set_masks.iter().any(|m| ident == m) {
-            return Err(syn::Error::new_spanned(
-                ident,
-                format!(
-                    "duplicate observation leaf name `{ident}`: a set exports its mask under this name (ADR-0082)"
-                ),
-            ));
-        }
-        let set_elem = obs_set_inner(&field.ty);
-        let Some(elem) = obs_leaf_inner(&field.ty).or(set_elem) else {
-            return Err(syn::Error::new_spanned(
-                &field.ty,
-                "Observation fields must have type ObsLeaf<T> or ObsSet<T>",
-            ));
-        };
-        let FieldSpace { leaf, set_max } = parse_leaf(field, ident)?;
-        if set_elem.is_some() != set_max.is_some() {
-            return Err(syn::Error::new_spanned(
-                &field.ty,
-                "ObsSet<T> fields take `#[space(set(..))]`, and only they do",
-            ));
-        }
-        let mut exprs: Vec<&Expr> = match &leaf {
-            Leaf::Box(b) => vec![&b.low, &b.high, &b.shape],
-            Leaf::Discrete { n } => vec![n],
-            Leaf::MultiBinary { shape } => vec![shape],
-        };
-        exprs.extend(set_max.as_ref());
-        for expr in exprs {
+    check_names(&named)?;
+    let mut config: Option<Type> = None;
+    let mut parsed = Vec::with_capacity(named.len());
+    for &(field, ident) in &named {
+        let field = parse_field(field, ident)?;
+        for expr in field_exprs(&field.space) {
             same_config(expr, &mut config)?;
         }
-        let space = leaf_space(&core, ident, elem, &leaf, &mut dtype_checks)?;
-        let (id, entry, count) = field_tokens(&core, ident, elem, &space, set_max.as_ref(), index);
-        ids.push(id);
-        spaces.push(entry);
-        index += count;
+        parsed.push(field);
     }
-    let leaves = index;
-    let field_idents = fields.iter().filter_map(|f| f.ident.as_ref());
     let (impl_generics, config_ty) = match &config {
         Some(ty) => (quote!(), quote!(#ty)),
         None => (quote!(<C>), quote!(C)),
+    };
+    let mut offset = Offset::default();
+    let mut out = Generated::default();
+    for field in &parsed {
+        field_tokens(&core, name, &config_ty, field, &mut offset, &mut out)?;
+    }
+    let contains_set = parsed
+        .iter()
+        .any(|f| matches!(f.space, FieldSpace::Set { .. }));
+    let leaves = offset.tokens();
+    let Generated {
+        ids,
+        spaces,
+        checks,
+        bounds,
+    } = out;
+    let field_idents = named.iter().map(|(_, i)| i);
+    let where_clause = if bounds.is_empty() {
+        quote!()
+    } else {
+        quote!(where #(#bounds),*)
     };
 
     Ok(quote! {
@@ -399,7 +599,7 @@ pub(crate) fn derive(input: &DeriveInput) -> syn::Result<TokenStream> {
         }
 
         // One const item per leaf, spanned at the field (SPEC 10.2).
-        #(#dtype_checks)*
+        #(#checks)*
 
         // Marker fields hold no data; reading them here keeps dead-code
         // lints quiet in the author's crate.
@@ -407,8 +607,16 @@ pub(crate) fn derive(input: &DeriveInput) -> syn::Result<TokenStream> {
             let _ = (#(&obs.#field_idents,)*);
         };
 
-        impl #impl_generics #core::Observation<#config_ty> for #name {
+        impl #core::sealed::ObservationLayoutSealed for #name {}
+
+        impl #core::ObservationLayout for #name {
             const LEAVES: usize = #leaves;
+            const CONTAINS_SET: bool = #contains_set;
+        }
+
+        impl #impl_generics #core::Observation<#config_ty> for #name #where_clause {
+            const LEAVES: usize = #leaves;
+            const CONTAINS_SET: bool = #contains_set;
 
             fn space(
                 cfg: &#config_ty,
