@@ -1617,6 +1617,13 @@ where
         self.mode.pool.reset_source.is_some()
     }
 
+    /// Whether the pool's policy map is not the default (every slot a
+    /// learner): replay files do not record a map before ADR-0079 stage B.
+    #[cfg(feature = "replay")]
+    pub(crate) fn has_policy_map(&self) -> bool {
+        !self.mode.pool.policy_map().is_default()
+    }
+
     #[cfg(feature = "replay")]
     pub(crate) fn replay_parts(
         &self,

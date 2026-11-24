@@ -600,4 +600,30 @@ fn test_replay_async_panic_observed_early_does_not_skip_a_state_write() {
         ),
         "{err:?}"
     );
+
+#[test]
+fn test_replay_async_external_policy_map_is_refused_until_stage_b() {
+    // ADR-0079 item 6.3: files carry no map before stage B, so an async
+    // recorder refuses any non-default map, as the sync recorder does.
+    let mut p = sync_pool()
+        .with_policy_map(
+            tessera_rl_engine::PolicyMap::new(2)
+                .assign(1, tessera_rl_core::PolicyGroup::External)
+                .unwrap(),
+        )
+        .unwrap()
+        .async_mode(AsyncOptions::new(
+            NonZeroUsize::new(2).unwrap(),
+            NonZeroUsize::new(4).unwrap(),
+        ))
+        .unwrap();
+    let r = Rec::new(&mut p, Vec::new(), options(0, false));
+    assert!(
+        matches!(r, Err(ReplayError::Unsupported { .. })),
+        "{:?}",
+        r.err()
+    );
+    // The default map still records.
+    let mut q = asy(4);
+    assert!(Rec::new(&mut q, Vec::new(), options(0, false)).is_ok());
 }

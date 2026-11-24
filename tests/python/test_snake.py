@@ -48,3 +48,33 @@ def test_pz_snake_passes_the_api_and_seed_tests(agents, obs):
     pz_test.parallel_api_test(pz.parallel_env(ID, seed=1, **kw), num_cycles=200)
     pz_test.api_test(pz.aec_env(ID, seed=1, **kw), num_cycles=200, verbose_progress=False)
     pz_test.seed_test(lambda: pz.aec_env(ID, **kw), num_cycles=100)
+
+
+@pytest.mark.parametrize("n", [1, 2])
+def test_pz_snake_agents_int_is_the_config_key(n):
+    # ADR-0079 deviation 9: an integer `agents` is Snake's own key, passed
+    # through to the environment config, in both forms.
+    par = pz.parallel_env(ID, seed=1, agents=n, size=8, obs="state")
+    aec = pz.aec_env(ID, seed=1, agents=n, size=8, obs="state")
+    try:
+        assert len(par.possible_agents) == n
+        assert len(aec.possible_agents) == n
+    finally:
+        par.close()
+        aec.close()
+
+
+def test_pz_snake_agents_str_is_the_adapter_option():
+    # A string is the adapter option: with no map every slot is a learner,
+    # so "learner" and "all" show the same agents (the default count).
+    default = pz.parallel_env(ID, seed=1, size=8, obs="state")
+    learner = pz.parallel_env(ID, seed=1, agents="learner", size=8, obs="state")
+    try:
+        assert learner.possible_agents == default.possible_agents
+        _, infos = learner.reset(seed=1)
+        assert {infos[a]["policy_group"] for a in learner.agents} == {"learner"}
+    finally:
+        default.close()
+        learner.close()
+    with pytest.raises(t.ArgumentError):
+        pz.parallel_env(ID, seed=1, agents="some", size=8, obs="state")
