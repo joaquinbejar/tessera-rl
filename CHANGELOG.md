@@ -9,6 +9,10 @@ the API is not stable, and any 0.x release may break it.
 
 ## [Unreleased]
 
+### Fixed
+
+- Python: `make("tessera/Lanterns-v1", zero_on_fuse=...)` accepts a bool; before, every value was refused (#468).
+
 ### Deprecated
 
 - `EnvAssets` (#418): assets are `Asset<T>` config fields with `AssetData` (ADR-0077), and nothing uses the trait. It stays exported, in the prelude too, until its removal in a later minor release.
