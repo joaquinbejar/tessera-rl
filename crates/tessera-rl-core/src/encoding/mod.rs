@@ -53,6 +53,17 @@ pub trait Canonical: Sized {
     /// an invalid value.
     fn decode(input: &mut Decoder<'_>) -> Result<Self, DecodeError>;
 
+    /// Writes the canonical encodings of `items` in order: exactly what
+    /// calling [`Canonical::encode`] on each item writes. Primitive types
+    /// override it to convert a block of items at a time and write the
+    /// block in one call, which arrays use for their elements (#387).
+    #[inline]
+    fn encode_slice<S: Sink>(items: &[Self], out: &mut Encoder<S>) {
+        for item in items {
+            item.encode(out);
+        }
+    }
+
     /// The first field that holds a NaN that is not allowed (ADR-0055), for
     /// the `debug-checks` NaN trap: `None` if there is none.
     ///
