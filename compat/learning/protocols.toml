@@ -86,3 +86,21 @@ adapter = "tessera_rl.gym (SAME_STEP, agents=1, scripted right paddle)"
 total_steps = 500000
 hyper = {}
 env_kwargs = { obs = "state" }
+
+# tessera/LimitOrderBook-v1 (#381, design section 5): tier T3, multi-agent
+# and masked. Not run by tools/learning_protocols.py (single-agent
+# Gymnasium only): tools/lob_training.py runs it, slot 0 learning against
+# noise traders through tessera_rl.pz, and passes when the bootstrap 95%
+# interval of the trained score minus the noise trader's in slot 0 lies
+# above 0. No calibration, so no nightly gate. The design's 20M steps
+# assume vectorized pools; this reference loop steps one Parallel
+# environment, so its budget is 2M learner steps until it is measured.
+[lob]
+env = "tessera/LimitOrderBook-v1"
+tier = "T3"
+adapter = "tessera_rl.pz parallel_env (slot 0 learner, noise-trader opponents; tools/lob_training.py)"
+total_steps = 2000000
+hyper = {}
+config = { agents = 8, steps = 200, latency = 0 }
+seeds = 5
+eval_episodes = 10

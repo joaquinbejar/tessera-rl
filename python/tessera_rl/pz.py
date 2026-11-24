@@ -4,21 +4,22 @@
 Each environment declares the PettingZoo interfaces it supports, and a
 request for any other one is refused when it is made:
 
-==========================  ===========  ============================
-Environment                 Turns        Adapters
-==========================  ===========  ============================
-``tessera/Tag-v1``          simultaneous ``parallel_env``, ``aec_env``
-``tessera/GridKeyDoor-v1``  simultaneous ``parallel_env``, ``aec_env``
-``tessera/Gather-v1``       simultaneous ``parallel_env``, ``aec_env``
-``tessera/Snake-v1``        simultaneous ``parallel_env``, ``aec_env``
-``tessera/PaddleDuel-v1``   simultaneous ``parallel_env``, ``aec_env``
-``tessera/RTS-v1``          simultaneous ``parallel_env``
-``tessera/Connect4-v1``     sequential   ``aec_env``
-``tessera/Leduc-v1``        sequential   ``aec_env``
-``tessera/Lanterns-v1``     sequential   ``aec_env``
-``tessera/Othello-v1``      sequential   ``aec_env``
-``tessera/Go9-v1``          sequential   ``aec_env``
-==========================  ===========  ============================
+=============================  ============  =============================
+Environment                    Turns         Adapters
+=============================  ============  =============================
+``tessera/Tag-v1``             simultaneous  ``parallel_env``, ``aec_env``
+``tessera/GridKeyDoor-v1``     simultaneous  ``parallel_env``, ``aec_env``
+``tessera/Gather-v1``          simultaneous  ``parallel_env``, ``aec_env``
+``tessera/Snake-v1``           simultaneous  ``parallel_env``, ``aec_env``
+``tessera/PaddleDuel-v1``      simultaneous  ``parallel_env``, ``aec_env``
+``tessera/RTS-v1``             simultaneous  ``parallel_env``
+``tessera/LimitOrderBook-v1``  simultaneous  ``parallel_env``
+``tessera/Connect4-v1``        sequential    ``aec_env``
+``tessera/Leduc-v1``           sequential    ``aec_env``
+``tessera/Lanterns-v1``        sequential    ``aec_env``
+``tessera/Othello-v1``         sequential    ``aec_env``
+``tessera/Go9-v1``             sequential    ``aec_env``
+=============================  ============  =============================
 
 - A simultaneous environment is Parallel natively. Its AEC form buffers
   each agent's action and steps the environment once per cycle, when every
@@ -113,6 +114,9 @@ _MAKERS = {
     # Simultaneous; it declares Parallel only (cycle buffering of a
     # multi-head environment is not designed yet).
     "tessera/RTS-v1": _native.make_rts,
+    # Simultaneous, multi-head like the RTS: Parallel only, for the same
+    # reason.
+    "tessera/LimitOrderBook-v1": _native.make_lob,
 }
 
 #: The maker of each first-party id and the PettingZoo interfaces it
@@ -623,7 +627,7 @@ def aec_env(env_id: str, seed: int | None = None, **kwargs) -> AECEnv:
         return TesseraAECEnv(env_id, seed=seed, _pool=pool)
     declared = _lookup(env_id)[1]
     if "aec" not in declared:
-        raise _native.ArgumentError(f"{env_id} declares {sorted(declared)}, not 'aec' (ADR-0013)")
+        raise _native.CapabilityError(f"{env_id} declares {sorted(declared)}, not 'aec' (ADR-0013)")
     if "parallel" in declared:
         return OrderEnforcingWrapper(_CheckedCycle(TesseraParallelEnv(env_id, seed=seed, **kwargs)))
     return TesseraAECEnv(env_id, seed=seed, **kwargs)

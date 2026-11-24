@@ -77,6 +77,8 @@ ENVS = {
     # goldens, not by this tool.
     "rts": ("tessera/RTS-v1", {"size": 12, "max_units": 8}),
     "pendulum": ("tessera/Pendulum-v1", {}),
+    # Four agents and short episodes keep the per-agent Python draws cheap.
+    "lob": ("tessera/LimitOrderBook-v1", {"agents": 4, "steps": 100}),
 }
 
 
@@ -141,31 +143,41 @@ def _layout(env):
     entities = len(nvec) // per
     # One entity: the period is multiplied by e = 0 and never used.
     period = heads[per][0] if entities > 1 else 0
-    if group[0][1] != () or any(parents not in ((), (group[0][2],)) for _, parents, _ in group[1:]):
-        raise ValueError("multi-head actions: heads other than the first may only depend on it")
+    # A head's parents must be a prefix of the group's heads (their sizes in
+    # head order): the first head only (the RTS), or the first k heads (the
+    # limit order book's size head, under kind and offset).
+    sizes = tuple(size for _, _, size in group)
+    if group[0][1] != () or any(tuple(parents) != sizes[: len(parents)] for _, parents, _ in group[1:]):
+        raise ValueError("multi-head actions: a head's parents must be the heads before it, from the first")
     return group, period, entities
 
 
 def multi_action(instance: int, slot: int, t: int, layout, row) -> list[int]:
     """Legal multi-head actions from (instance, slot, t) alone, one per head
     of each entity group: the first head under its mask, then each later
-    head under its mask conditioned on the first head's choice. ``row`` is
-    the agent's flat mask row, or ``None`` (every choice legal)."""
+    head under its mask conditioned on its parents' choices (the heads
+    before it, from the first; their row-major cell in the parents' grid,
+    the last parent varying fastest, as the engine lays it out). With only
+    the first head as parent, this is the first head's choice times the
+    head's size, as before. ``row`` is the agent's flat mask row, or
+    ``None`` (every choice legal)."""
     group, period, entities = layout
     key = mix((instance << 40) ^ (slot << 32) ^ t ^ SEED)
     out = []
     for e in range(entities):
-        first = 0
+        chosen = []
         for h, (offset, parents, size) in enumerate(group):
             x = mix(key ^ ((e << 8) | h))
             if row is None:
                 choice = x % size
             else:
-                start = e * period + offset + (first * size if parents else 0)
+                cell = 0
+                for c, n in zip(chosen, parents, strict=False):
+                    cell = cell * n + c
+                start = e * period + offset + cell * size
                 allowed = [i for i, ok in enumerate(row[start : start + size]) if ok]
                 choice = allowed[x % len(allowed)] if allowed else 0
-            if h == 0:
-                first = choice
+            chosen.append(choice)
             out.append(choice)
     return out
 

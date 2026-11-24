@@ -39,7 +39,8 @@ change in any 0.x release.
 | SIMD lanes (phase 3) | Partial: `tessera-rl-simd` has a standalone lane-wise CartPole kernel; no pool uses it |
 | RTS (phase 4) | Implemented: `tessera-rl-rts`, with fog of war, multi-head actions and scripted opponents |
 | Host environments for external crates | Experimental: `HostEnvironment` (heap state), `HostPool` (Inline and Sync), author-provided snapshots through `HostSnapshot` (ADR-0073, Rust only so far), host protocol 1 through `tessera-rl-pyffi`'s `export_host_env!`, and `tessera_rl.make` for installed host wheels, with the Gymnasium and PettingZoo adapters; an out-of-tree example in `examples/host_orderbook` |
-| GPU paths, market simulator, card games, league tooling, viewer | Planned |
+| Markets (phase 4) | Implemented: `tessera-rl-markets`, a limit order book with latency, conditional masks, `Set` observations, `Determinize` and scripted baselines |
+| GPU paths, card games, league tooling, viewer | Planned |
 
 Known limits of 0.3.0:
 
@@ -81,6 +82,7 @@ Known limits of 0.3.0:
 | `tessera/Othello-v1` | `tessera-rl-games` | 2 | `Discrete(65)`, masked, sequential, forced pass |
 | `tessera/Go9-v1` | `tessera-rl-games` | 2 | `Discrete(82)`, masked, sequential, positional superko |
 | `tessera/RTS-v1` | `tessera-rl-rts` | 2, or 1 against a scripted opponent | `MultiDiscrete`, multi-head, conditional masks, fog of war |
+| `tessera/LimitOrderBook-v1` | `tessera-rl-markets` | 2 to 16 | `MultiDiscrete([6, 9, 4, 8])`, conditional masks, simultaneous, latency, `Set` observations, imperfect information |
 
 Leduc hold'em rewards and returns are normalized to `[-1, 1]`:
 multiplying them by 13 gives chips.
@@ -252,6 +254,7 @@ through the PettingZoo interfaces it declares.
 | `tessera-rl-search` | `SearchPool` and the batched PUCT MCTS helper |
 | `tessera-rl-classic` | CartPole and Tag |
 | `tessera-rl-games` | Connect Four |
+| `tessera-rl-markets` | The limit order book, `tessera/LimitOrderBook-v1` |
 
 The Python bindings (`tessera-rl-py`) are built with maturin and are not
 a crates.io crate.

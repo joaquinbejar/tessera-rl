@@ -631,8 +631,8 @@ _STRING_OPTIONS = {"auto_reset", "outputs", "mode", "gather", "obs", "wait", "sc
 
 
 #: Constructor options passed as exact ``bool`` (the RTS ``seat_swap``, the
-#: Lanterns ``zero_on_fuse``).
-_BOOL_OPTIONS = frozenset({"seat_swap", "zero_on_fuse"})
+#: Lanterns ``zero_on_fuse``, the limit order book's ``allow_short_cash``).
+_BOOL_OPTIONS = frozenset({"seat_swap", "zero_on_fuse", "allow_short_cash"})
 
 #: Asset options (ADR-0077): a bundled asset's name (``str``) or its bytes
 #: (``bytes``, or any buffer, copied to exact ``bytes``).
@@ -726,7 +726,13 @@ def make(env_id: str, num_envs: int = 1, seed: int = 0, outputs: str = "borrowed
     two chunks; or ``"async"``, which needs ``batch_size`` and takes ``gather``,
     ``"gathered"`` by default or ``"indexed"``); see ``Env``. Tag also
     takes its config fields (``width``, ``height``, ``pursuers``,
-    ``evaders``, ``slip``, ``radius``). Connect Four takes no config;
+    ``evaders``, ``slip``, ``radius``). The limit order book
+    (``tessera/LimitOrderBook-v1``) takes every ``LobConfig`` field
+    (``agents``, ``steps``, ``depth``, ``min_tick``, ``max_tick``,
+    ``initial_price``, ``up_permille``, ``down_permille``, ``latency``,
+    ``size_0`` to ``size_3``, ``max_position``, ``initial_cash``,
+    ``allow_short_cash``, ``bankrupt``, ``noise``, ``reward_shift``); it
+    truncates by itself after ``steps``. Connect Four takes no config;
     its ``max_episode_steps`` defaults to 64, above the 42 plies of a game.
     The reference grid world takes ``size``, ``max_steps`` and ``layout``
     (its wall map, a content-addressed asset: a bundled name, ``"open"``
@@ -759,6 +765,7 @@ def make(env_id: str, num_envs: int = 1, seed: int = 0, outputs: str = "borrowed
         "tessera/Pendulum-v1": _native.make_pendulum,
         "tessera/Tag-v1": _native.make_tag,
         "tessera/RTS-v1": _native.make_rts,
+        "tessera/LimitOrderBook-v1": _native.make_lob,
         "tessera/Grid-v1": _native.make_grid,
         "tessera/GridKeyDoor-v1": _native.make_keydoor,
         "tessera/Gather-v1": _native.make_gather,

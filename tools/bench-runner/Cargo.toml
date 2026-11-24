@@ -18,6 +18,7 @@ tessera-rl-engine.workspace = true
 tessera-rl-classic.workspace = true
 tessera-rl-games.workspace = true
 tessera-rl-rts.workspace = true
+tessera-rl-markets.workspace = true
 thiserror.workspace = true
 
 [lints]

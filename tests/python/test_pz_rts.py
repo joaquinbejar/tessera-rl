@@ -133,7 +133,7 @@ def test_pz_rts_invalid_action_raises_and_changes_nothing(bad):
 
 
 def test_pz_rts_aec_is_refused_with_a_typed_error():
-    with pytest.raises(_native.ArgumentError, match="not 'aec'"):
+    with pytest.raises(_native.CapabilityError, match="not 'aec'"):
         pz.aec_env(RTS, seed=3, **SMALL)
 
 

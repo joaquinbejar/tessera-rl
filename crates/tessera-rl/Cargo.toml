@@ -35,6 +35,7 @@ tessera-rl-macros.workspace = true
 tessera-rl-engine.workspace = true
 tessera-rl-classic.workspace = true
 tessera-rl-games.workspace = true
+tessera-rl-markets.workspace = true
 tessera-rl-search = { workspace = true, optional = true }
 tessera-rl-simd = { workspace = true, optional = true }
 tessera-rl-onnx = { workspace = true, optional = true }
