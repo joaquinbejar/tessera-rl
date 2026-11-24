@@ -141,8 +141,9 @@ pub(super) fn layout<'py>(g: Gil<'py>, pool: &dyn DynHostPool) -> CResult<Mine<'
         }),
     )?;
     capi::dict_set(g, &d, c"mask_heads", &heads)?;
-    // Entity groups (ADR-0051) are not in protocol 1.
-    capi::dict_set(g, &d, c"entity_group_heads", &int(g, 0)?)?;
+    // Entity groups (ADR-0051, #385): read generically by every protocol 1
+    // wrapper, so a nonzero value is an addition, not a protocol change.
+    capi::dict_set(g, &d, c"entity_group_heads", &int(g, l.entity_group_heads)?)?;
     let turns = match reg.turns() {
         TurnStructure::Simultaneous => "simultaneous",
         TurnStructure::Sequential => "sequential",

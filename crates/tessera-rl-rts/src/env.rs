@@ -27,8 +27,9 @@ use core::num::{NonZeroU16, NonZeroU32};
 use tessera_rl_core::io::{ActionWriter, Actions, MaskWriter, ObsWriter};
 use tessera_rl_core::space::Space;
 use tessera_rl_core::{
-    ActionMask, AgentSlot, Bool8, Environment, EpisodeEnd, HeaderView, InvariantViolation,
-    NoAdaptive, ObsLeaf, Observation, Phase, RecordHeader, SpaceError, StepOut, Tier, Validate,
+    ActionMask, AgentSlot, Bool8, EntityHeads, Environment, EpisodeEnd, HeadSpec, HeaderView,
+    InvariantViolation, NoAdaptive, ObsLeaf, Observation, Phase, RecordHeader, SpaceError, StepOut,
+    Tier, Validate,
 };
 use tessera_rl_macros::{EnvConfig, EnvState, Observation};
 use tessera_rl_num::rng::{ObsRng, StepRng};
@@ -63,6 +64,19 @@ pub const N_PRODUCTS: u16 = 4;
 pub const HEADS_PER_UNIT: usize = 3;
 /// Mask bytes per unit slot: the `type` row and the conditional blocks.
 pub const MASK_PER_UNIT: usize = (N_TYPES + N_TYPES * WINDOW_CELLS + N_TYPES * N_PRODUCTS) as usize;
+/// One unit's heads (#385): `type`, then `target` and `product`, both
+/// children of `type`.
+pub const UNIT_HEADS: [HeadSpec; HEADS_PER_UNIT] = [
+    HeadSpec::root(N_TYPES as u32),
+    HeadSpec::child(WINDOW_CELLS as u32, 0),
+    HeadSpec::child(N_PRODUCTS as u32, 0),
+];
+
+/// The entity-centric heads of `cfg`: [`UNIT_HEADS`] for each unit slot.
+#[must_use]
+pub const fn unit_heads(cfg: &RtsConfig) -> EntityHeads<HEADS_PER_UNIT> {
+    EntityHeads::new(cfg.max_units, UNIT_HEADS)
+}
 /// Ore each side starts with (a calibration placeholder).
 pub const START_ORE: u32 = 5;
 /// Drones each side starts with, placed as a production would be.
@@ -941,14 +955,7 @@ impl Environment for Rts {
     }
 
     fn action_space(cfg: &RtsConfig) -> Result<Space, SpaceError> {
-        Ok(Space::MultiDiscrete {
-            nvec: [
-                u32::from(N_TYPES),
-                u32::from(WINDOW_CELLS),
-                u32::from(N_PRODUCTS),
-            ]
-            .repeat(usize::from(cfg.max_units)),
-        })
+        Ok(unit_heads(cfg).space())
     }
 
     /// The map from the reset stream; then each side's Core, ore and
@@ -1008,12 +1015,13 @@ impl Environment for Rts {
                 continue;
             };
             let team = side_of_agent(cfg, a);
+            let heads = unit_heads(cfg);
             for (u, slot) in slots(cfg, team).enumerate() {
                 let head = |k: usize| {
                     if bot.is_some() && a == 1 {
-                        scripted.get(u * HEADS_PER_UNIT + k).copied().unwrap_or(0)
+                        scripted.get(heads.head(u, k)).copied().unwrap_or(0)
                     } else {
-                        actions.discrete(agent, u * HEADS_PER_UNIT + k).unwrap_or(0)
+                        actions.discrete(agent, heads.head(u, k)).unwrap_or(0)
                     }
                 };
                 let o = decode(cfg, s, team, slot, [head(0), head(1), head(2)]);
@@ -1148,17 +1156,12 @@ impl ActionMask for Rts {
     /// Every head 0: the no-op of every unit (item 9).
     fn noop(_: &RtsConfig, _: &RtsState, _: AgentSlot, _: &mut ActionWriter<'_>) {}
 
-    fn head_parents(_: &RtsConfig, head: usize) -> [Option<u16>; 2] {
-        let root = head - head % HEADS_PER_UNIT;
-        if head == root {
-            [None, None]
-        } else {
-            [u16::try_from(root).ok(), None]
-        }
+    fn head_parents(cfg: &RtsConfig, head: usize) -> [Option<u16>; 2] {
+        unit_heads(cfg).head_parents(head)
     }
 
-    fn entity_group_heads(_: &RtsConfig) -> Option<NonZeroU16> {
-        NonZeroU16::new(3)
+    fn entity_group_heads(cfg: &RtsConfig) -> Option<NonZeroU16> {
+        unit_heads(cfg).entity_group_heads()
     }
 }
 

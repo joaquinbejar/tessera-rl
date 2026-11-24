@@ -305,6 +305,27 @@ pub trait HostEnvironment: Send + Sized + 'static {
     /// must name each leaf with the element type its space declares.
     fn observe(&self, agent: AgentSlot, obs: &mut ObsWriter<'_, '_, ()>);
 
+    /// Parents of discrete head `head`, earlier heads whose values select
+    /// its mask row (SPEC 11.3, at most two), as
+    /// [`ActionMask::head_parents`](crate::ActionMask::head_parents).
+    /// Called at construction only, and only when
+    /// [`HostEnvironment::MASKS`] is `true`. A child head is validated for
+    /// its range like any head; masks stay outputs (#385).
+    #[must_use]
+    fn head_parents(_cfg: &Self::Config, _head: usize) -> [Option<u16>; 2] {
+        [None, None]
+    }
+
+    /// Discrete heads per entity group (ADR-0051), as
+    /// [`ActionMask::entity_group_heads`](crate::ActionMask::entity_group_heads).
+    /// A host pool replaces no illegal action, so groups only shape the
+    /// mask views bindings build. Called at construction only, and only
+    /// when [`HostEnvironment::MASKS`] is `true` (#385).
+    #[must_use]
+    fn entity_group_heads(_cfg: &Self::Config) -> Option<core::num::NonZeroU16> {
+        None
+    }
+
     /// Writes `agent`'s legal-action mask; every action is legal by default.
     /// Called only when [`HostEnvironment::MASKS`] is `true`. The mask is an
     /// output: actions are not checked against it.

@@ -350,7 +350,7 @@ impl<E: HostEnvironment, const A: usize> HostPool<E, A> {
         let rows = num_envs.checked_mul(A).ok_or_else(too_large)?;
         // Without `HostEnvironment::MASKS` there is no mask buffer (SPEC 14.4).
         let mask_len = if E::MASKS {
-            mask_len(&mut layout, rows, options.mask_budget_bytes)?
+            mask_len::<E>(cfg, &mut layout, rows, options.mask_budget_bytes)?
         } else {
             0
         };
@@ -361,6 +361,11 @@ impl<E: HostEnvironment, const A: usize> HostPool<E, A> {
             &layout,
             mask_len,
             options.auto_reset == AutoReset::SameStep,
+            if E::MASKS {
+                E::entity_group_heads(cfg).map_or(0, |g| usize::from(g.get()))
+            } else {
+                0
+            },
         )?;
         let mut outputs = Outputs::new_host(
             num_envs,
@@ -1123,18 +1128,29 @@ fn rejected(instance: u32, reject: Option<ActionReject>) -> EngineError {
     }
 }
 
-/// The flat mask layout of a host pool: one block per discrete head, no
-/// parents or groups; 0 without discrete heads. Refused past the pool's
-/// mask budget before any allocation (SPEC 11.3).
-fn mask_len(layout: &mut ActionLayout, rows: usize, budget: u64) -> Result<usize, EngineError> {
+/// The mask layout of a host pool: one block per discrete head, with the
+/// environment's conditional heads and entity groups (#385); 0 without
+/// discrete heads. Refused past the pool's mask budget before any
+/// allocation (SPEC 11.3).
+fn mask_len<E: HostEnvironment>(
+    cfg: &E::Config,
+    layout: &mut ActionLayout,
+    rows: usize,
+    budget: u64,
+) -> Result<usize, EngineError> {
     if layout.discrete.is_empty() {
         return Ok(0);
     }
-    let parents = vec![[None; 2]; layout.discrete.len()];
+    // Conditional heads and entity groups (#385): the same layout an
+    // `EnvPool` builds from `ActionMask`.
+    let parents: Vec<_> = (0..layout.discrete.len())
+        .map(|head| E::head_parents(cfg, head))
+        .collect();
+    let groups = E::entity_group_heads(cfg).map(|g| usize::from(g.get()));
     let built = MaskLayout::build(
         &layout.discrete,
         &parents,
-        None,
+        groups,
         !layout.continuous.is_empty(),
     )?;
     let bytes = built
