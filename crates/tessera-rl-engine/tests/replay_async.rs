@@ -603,9 +603,9 @@ fn test_replay_async_panic_observed_early_does_not_skip_a_state_write() {
 }
 
 #[test]
-fn test_replay_async_external_policy_map_is_refused_until_stage_b() {
-    // ADR-0079 item 6.3: files carry no map before stage B, so an async
-    // recorder refuses any non-default map, as the sync recorder does.
+fn test_replay_async_external_policy_map_records_its_codes() {
+    // ADR-0079 item 6 (#347 stage B2): an async recorder writes any
+    // non-default map (an external-only one included) into the header.
     let mut p = sync_pool()
         .with_policy_map(
             tessera_rl_engine::PolicyMap::new(2)
@@ -618,13 +618,18 @@ fn test_replay_async_external_policy_map_is_refused_until_stage_b() {
             NonZeroUsize::new(4).unwrap(),
         ))
         .unwrap();
-    let r = Rec::new(&mut p, Vec::new(), options(0, false));
-    assert!(
-        matches!(r, Err(ReplayError::Unsupported { .. })),
-        "{:?}",
-        r.err()
-    );
-    // The default map still records.
+    let bytes = Rec::new(&mut p, Vec::new(), options(0, false))
+        .unwrap()
+        .finish()
+        .unwrap();
+    let replay = Replay::open(&bytes, LIMITS).unwrap();
+    assert_eq!(replay.header().policy_map, [0, 1]);
+    // The default map still records, as a count of 0.
     let mut q = asy(4);
-    assert!(Rec::new(&mut q, Vec::new(), options(0, false)).is_ok());
+    let bytes = Rec::new(&mut q, Vec::new(), options(0, false))
+        .unwrap()
+        .finish()
+        .unwrap();
+    let replay = Replay::open(&bytes, LIMITS).unwrap();
+    assert_eq!(replay.header().policy_map, &[] as &[u8]);
 }

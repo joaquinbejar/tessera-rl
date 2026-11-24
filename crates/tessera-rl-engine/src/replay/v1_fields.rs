@@ -7,7 +7,9 @@
 //! and `ResetSource` / `ResetFrom` bodies (ADR-0075 item 7), and the chunk
 //! size. They are parsed and validated now; until their features land, every
 //! file this library writes holds their defaults, and replay refuses a
-//! non-default value as `ReplayError::Unsupported`.
+//! non-default value as `ReplayError::Unsupported`. The policy map has
+//! landed (#347 stage B2): recorders write it and replay checks it against
+//! the pool (`policy_map.rs`).
 
 use super::ReplayError;
 use super::format::Body;
@@ -189,11 +191,19 @@ pub(crate) fn read_extension(
     ))
 }
 
-/// Appends the extension: default policy map, no curriculum, no league, the archive
-/// block of `source` (the source at recording start, ADR-0075 item 7), then
-/// `chunk_size`.
-pub(crate) fn push_extension(out: &mut Vec<u8>, chunk_size: u32, source: &ResetSourceRecord) {
-    out.extend_from_slice(&0u16.to_le_bytes());
+/// Appends the extension: the policy map `codes` (empty for the default
+/// map; at most `u16::MAX` codes, checked by `policy_map::header_codes`),
+/// no curriculum, no league, the archive block of `source` (the source at
+/// recording start, ADR-0075 item 7), then `chunk_size`.
+pub(crate) fn push_extension(
+    out: &mut Vec<u8>,
+    codes: &[u8],
+    chunk_size: u32,
+    source: &ResetSourceRecord,
+) {
+    let count = u16::try_from(codes.len()).unwrap_or(0);
+    out.extend_from_slice(&count.to_le_bytes());
+    out.extend_from_slice(codes.get(..usize::from(count)).unwrap_or(&[]));
     out.push(0);
     out.push(0);
     match source {
@@ -324,15 +334,13 @@ pub(crate) fn read_reset_from(
 impl super::reader::Replay<'_> {
     /// Checks the version 1 fields whose features are not implemented yet
     /// against a pool (asset entries are compared by `check_against`,
-    /// ADR-0077): a non-default policy map, a curriculum or an archive source (`Unsupported` until
-    /// ADR-0079, ADR-0081 and ADR-0075 land), and the chunk size, which must
+    /// ADR-0077): a curriculum or an archive source (`Unsupported` until
+    /// ADR-0081 and ADR-0075 land; the policy map is checked by
+    /// `check_policy_map`), and the chunk size, which must
     /// equal the pool's when the header records one (non-zero).
     pub(super) fn check_v1(&self, chunk_size: u32) -> Result<(), ReplayError> {
-        if self.header.policy_map.iter().any(|&g| g != 0) {
-            return Err(ReplayError::Unsupported {
-                feature: "policy maps (ADR-0079)",
-            });
-        }
+        // ADR-0079 item 6 (#347 stage B2): a recorded map is checked against
+        // the pool by `check_policy_map`, not refused here.
         if self.header.has_curriculum {
             return Err(ReplayError::Unsupported {
                 feature: "curricula (ADR-0081)",

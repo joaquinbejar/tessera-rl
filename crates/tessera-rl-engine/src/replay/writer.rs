@@ -176,13 +176,8 @@ where
                 feature: "observation transforms (ADR-0078 item 8)",
             });
         }
-        // ADR-0079 item 6.3: the header's map stays the default until stage
-        // B records it.
-        if !pool.policy_map().is_default() {
-            return Err(ReplayError::Unsupported {
-                feature: "policy maps (ADR-0079)",
-            });
-        }
+        // ADR-0079 item 6 (#347 stage B2): the header records the pool's
+        // policy map (`header_bytes`).
         if pool.is_poisoned() {
             return Err(EngineError::Poisoned.into());
         }
@@ -581,15 +576,24 @@ where
     <E::Header as RecordLayout>::Adaptive: AdaptiveValues<E::Config>,
 {
     let source = pool.pool_context()?.reset_source;
-    header_from::<E, M>(&pool.cfg, &pool.options, pool.action_heads(), 0, &source)
+    header_from::<E, M>(
+        &pool.cfg,
+        &pool.options,
+        pool.action_heads(),
+        pool.policy_map(),
+        0,
+        &source,
+    )
 }
 
-/// The header of a first-party file from the pool's config, options and
-/// action heads, with `flags` (0, or the async flags).
+/// The header of a first-party file from the pool's config, options,
+/// action heads and policy map (ADR-0079 item 6: count 0 for the default
+/// map, else one code per agent slot), with `flags` (0, or the async flags).
 pub(super) fn header_from<E, M>(
     cfg: &E::Config,
     options: &crate::options::PoolOptions,
     (discrete, continuous): (usize, usize),
+    policy_map: &crate::policy::PolicyMap,
     flags: u8,
     source: &super::ResetSourceRecord,
 ) -> Result<Vec<u8>, ReplayError>
@@ -598,6 +602,7 @@ where
     E::Config: CanonicalConfig,
     M: PersistMask<E>,
 {
+    let codes = super::policy_map::header_codes(policy_map, E::MAX_AGENTS)?;
     let id = identity::<E, M>(cfg, options)?;
     let file_descriptor = descriptor(E::TIER, BUILD_ID)?;
     let mut out = Vec::new();
@@ -624,7 +629,7 @@ where
     // flags, then host_protocol, notifies, refuses: 0 for a first-party pool.
     out.extend_from_slice(&[flags, 0, 0, 0]);
     let chunk = options.chunk_size.get();
-    super::v1_fields::push_extension(&mut out, chunk, source);
+    super::v1_fields::push_extension(&mut out, &codes, chunk, source);
     let sum = tessera_rl_core::encoding::checksum(&out);
     out.extend_from_slice(&sum.to_le_bytes());
     Ok(out)

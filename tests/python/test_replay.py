@@ -211,3 +211,32 @@ def test_replay_summary_exposes_unverified_poison_with_default_false():
     assert summary.poisoned is False
     with pytest.raises(dataclasses.FrozenInstanceError):
         summary.calls = 5
+
+
+# ADR-0079 item 6 (#347 stage B2): Tag slots 2 and 3 (evaders) are heuristic.
+TAG_CFG = {"width": 6, "height": 6, "pursuers": 2, "evaders": 2, "max_episode_steps": 100}
+TAG_MAP = {2: "heuristic", 3: "heuristic"}
+
+
+def test_replay_tag_heuristic_slots_round_trip_reproduces_the_state(tmp_path):
+    path = tmp_path / "heuristic.trpl"
+    hashes = record_file(path, "tessera/Tag-v1", policy_map=TAG_MAP, **TAG_CFG)
+    env = make("tessera/Tag-v1", policy_map=TAG_MAP, **TAG_CFG)
+    summary = replay.run(path, env)
+    assert summary.verified
+    assert [env.state_hash(i) for i in range(N)] == hashes
+    env.close()
+
+
+def test_replay_tag_heuristic_file_into_another_map_raises_config_error(tmp_path):
+    path = tmp_path / "heuristic.trpl"
+    record_file(path, "tessera/Tag-v1", policy_map=TAG_MAP, **TAG_CFG)
+    for other in ({}, {2: "heuristic"}):
+        env = make("tessera/Tag-v1", policy_map=other, **TAG_CFG)
+        env.reset(seed=11)
+        before = [env.state_hash(i) for i in range(N)]
+        with pytest.raises(t.ConfigError):
+            replay.run(path, env)
+        # Refused before any event: the environment is unchanged.
+        assert [env.state_hash(i) for i in range(N)] == before
+        env.close()

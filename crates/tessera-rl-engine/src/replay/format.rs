@@ -85,11 +85,13 @@
 //!   its body is read as opaque bytes until the league lands.
 //! - `End` (0): the trailer of ADR-0072 section 2.
 //!
-//! Until their features land, this library writes the defaults (an empty
-//! policy map, no curriculum, no league, a `Fresh` source) and never writes
+//! Until their features land, this library writes the defaults (no
+//! curriculum, no league, a `Fresh` source) and never writes
 //! tags 7, 10, 11 or 12; replay refuses a non-default value or one of those
 //! tags as `ReplayError::Unsupported`. Asset entries are written and checked
-//! as ADR-0077 says.
+//! as ADR-0077 says. The policy map is written (count 0 for the default map,
+//! else one code per agent slot) and checked against the pool before any
+//! event (ADR-0079 item 6, #347 stage B2).
 //!
 //! # Async files
 //!

@@ -249,7 +249,7 @@ fn test_replay_v1_default_file_round_trips_with_default_fields() {
 }
 
 #[test]
-fn test_replay_v1_policy_map_refusals() {
+fn test_replay_v1_policy_map_invalid_or_mismatched_refused() {
     // Counter has 2 agent slots.
     assert_eq!(
         invalid_field(&with_ext(ext(&[0, 5], 0, &[0], 64))),
@@ -259,11 +259,12 @@ fn test_replay_v1_policy_map_refusals() {
         invalid_field(&with_ext(ext(&[0], 0, &[0], 64))),
         "policy map"
     );
-    // A valid non-default map opens, and replay refuses it for now.
+    // A valid non-default map opens; replay into a default-map pool is
+    // refused as a map mismatch (ADR-0079 item 6, #347 stage B2).
     let mapped = with_ext(ext(&[0, 2], 0, &[0], 64));
     assert!(matches!(
         run_error(&mapped),
-        ReplayError::Unsupported { .. }
+        ReplayError::Engine(EngineError::PolicyMapMismatch { expected: 0, .. })
     ));
     // An explicit all-learner map is the default.
     Replay::open(&with_ext(ext(&[0, 0], 0, &[0], 64)), LIMITS)
