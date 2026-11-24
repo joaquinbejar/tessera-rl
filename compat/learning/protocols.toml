@@ -1,0 +1,43 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+#
+# Learning protocols (SPEC 16.1, 18; tools/learning_protocols.py, #370). One
+# table per environment: its id, tier, the adapter path a run goes through,
+# hyperparameters overriding reference_training.Hyper (CleanRL's discrete PPO
+# defaults), and the calibration budget. A protocol's calibration fingerprint
+# covers only its own table, so editing one protocol invalidates only its own
+# calibration (a reviewed re-calibration, like a gungraun re-bless).
+
+[cartpole]
+env = "tessera/CartPole-v1"
+tier = "T1"
+adapter = "tessera_rl.gym (SAME_STEP)"
+total_steps = 150000
+hyper = {}
+
+[acrobot]
+env = "tessera/Acrobot-v1"
+tier = "T1"
+adapter = "tessera_rl.gym (SAME_STEP)"
+total_steps = 150000
+hyper = {}
+
+[mountaincar]
+env = "tessera/MountainCar-v1"
+tier = "T1"
+adapter = "tessera_rl.gym (SAME_STEP)"
+total_steps = 150000
+hyper = {}
+
+[grid]
+env = "tessera/Grid-v1"
+tier = "T1"
+adapter = "tessera_rl.gym (SAME_STEP)"
+total_steps = 150000
+hyper = {}
+
+[brickwall]
+env = "tessera/BrickWall-v1"
+tier = "T1"
+adapter = "tessera_rl.gym (SAME_STEP)"
+total_steps = 150000
+hyper = {}

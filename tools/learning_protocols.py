@@ -25,28 +25,15 @@ import contextlib
 import hashlib
 import json
 import pathlib
+import tomllib
 from dataclasses import asdict
 
-#: Protocols by name. ``hyper`` overrides ``reference_training.Hyper``'s
+#: The protocol table (compat/learning/protocols.toml). Each environment's
+#: fingerprint covers only its own entry, so adding a protocol leaves every
+#: other calibration valid. ``hyper`` overrides ``reference_training.Hyper``'s
 #: CleanRL CartPole defaults; ``total_steps`` is the calibration budget.
-PROTOCOLS: dict[str, dict] = {
-    "cartpole": {
-        "env": "tessera/CartPole-v1",
-        "tier": "T1",
-        "adapter": "tessera_rl.gym (SAME_STEP)",
-        "hyper": {},
-        "total_steps": 150_000,
-    },
-    "acrobot": {
-        "env": "tessera/Acrobot-v1",
-        "tier": "T1",
-        "adapter": "tessera_rl.gym (SAME_STEP)",
-        # CleanRL's discrete PPO settings, as for CartPole; the budget is set
-        # by the pilot calibration (docs/reviews/learning-370).
-        "hyper": {},
-        "total_steps": 150_000,
-    },
-}
+PROTOCOLS_FILE = pathlib.Path(__file__).resolve().parents[1] / "compat" / "learning" / "protocols.toml"
+PROTOCOLS: dict[str, dict] = tomllib.loads(PROTOCOLS_FILE.read_text())
 
 
 def protocol(name: str) -> dict:
@@ -92,7 +79,12 @@ def fingerprint(name: str) -> str:
 @contextlib.contextmanager
 def _factories(env_id: str):
     """``reference_training``'s vector and evaluation factories pointed at
-    ``env_id`` (Tessera backend only), restored on exit."""
+    ``env_id`` (Tessera backend only), restored on exit, also when the run
+    raises.
+
+    Not concurrent-safe: the factories are module globals, so two protocols
+    must never train at the same time in one process (threads). The
+    calibration and the nightly run one protocol per process."""
     import gymnasium  # noqa: PLC0415
 
     import reference_training as rt  # noqa: PLC0415

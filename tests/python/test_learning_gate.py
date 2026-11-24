@@ -378,3 +378,25 @@ def test_learning_every_calibration_is_valid_and_learns_and_runs_nightly():
         if name != "cartpole":
             assert cal["learns"]["learns"] is True, name
         assert f"- env: {name}" in workflow, f"{name} has a calibration but no nightly job"
+
+
+def test_learning_protocol_factories_are_restored_after_a_failing_run():
+    """A run that raises inside the trainer still puts the factories back."""
+    pytest = __import__("pytest")
+    pytest.importorskip("torch")
+    import learning_protocols as lp
+    import reference_training as rt
+
+    before = (rt.make_vector, rt.make_single)
+    with pytest.raises(ValueError):
+        lp.train("acrobot", 1, 1, 1)  # less than one rollout: rt.train refuses
+    assert (rt.make_vector, rt.make_single) == before
+
+
+def test_learning_protocols_file_matches_the_module_table():
+    import tomllib
+
+    import learning_protocols as lp
+
+    assert lp.PROTOCOLS == tomllib.loads(lp.PROTOCOLS_FILE.read_text())
+    assert lp.protocol("cartpole")["env"] == "tessera/CartPole-v1"

@@ -108,6 +108,10 @@ def _environment() -> dict:
         or " ".join(filter(None, (os.environ.get("ImageOS"), os.environ.get("ImageVersion"))))
         or "unknown",
         "tessera_rl": tessera_rl.__version__,
+        # Scores depend on the thread settings (single-threaded runs are the
+        # calibrated ones) and may depend on the CPU: both are recorded.
+        "torch_threads": torch.get_num_threads(),
+        "omp_num_threads": os.environ.get("OMP_NUM_THREADS"),
         "gymnasium": gymnasium.__version__,
         "torch": torch.__version__,
         "numpy": numpy.__version__,
@@ -230,7 +234,12 @@ def cmd_calibrate(args) -> int:
         from learning_gate import learns
 
         episodes = (out["setup"] or {}).get("eval_episodes") or 20
-        out["learns"] = learns([r["score"] for r in out["records"]], learning_protocols.random_scores(PROTOCOL, episodes))
+        random = learning_protocols.random_scores(PROTOCOL, episodes)
+        out["learns"] = learns([r["score"] for r in out["records"]], random)
+        # Seeds that ended no better than the random policy's mean: the
+        # method working (a seed may fail to learn), recorded so a change in
+        # their count is visible.
+        out["non_learning_seeds"] = sum(1 for r in out["records"] if r["score"] <= sum(random) / len(random))
     sys.stderr.write(json.dumps({k: out.get(k) for k in ("threshold", "median", "min", "max", "errors")}) + "\n")
     if errors:
         # A failed calibration never replaces the committed one.
