@@ -8,6 +8,9 @@
 //! so Criterion reports bytes per second: 1 us per KB is about 0.95 GiB/s.
 //! Two environments: the test counter (a small record, where the fixed cost
 //! per call dominates) and `Bulk` (a 4 KiB state, where the copy does).
+//! `snapshot_all` and `snapshot_one` copy only; `restore`, `fork` and
+//! `fork_branched` include re-observing each written instance (ADR-0039),
+//! so they measure more than the copy the 9.2 target names.
 //! `snapshot_instructions` counts instructions of the same calls; this bench
 //! measures time and is a report, not a gate.
 
