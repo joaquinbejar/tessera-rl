@@ -265,8 +265,11 @@ def run_rust(runner: pathlib.Path, cfg: dict, method: dict, pin: dict) -> dict:
     proc = subprocess.run([*_prefix(pin, cpus), str(runner), *args], capture_output=True, text=True, check=True)
     raw = json.loads(proc.stdout)
     stats = {k: summarize(v, method["bootstrap_resamples"], method["bootstrap_seed"]) for k, v in raw.items() if isinstance(v, list)}
-    # The runner shares this host; its CPU model is the harness's.
-    return {**{k: v for k, v in raw.items() if not isinstance(v, list)}, **stats, "cpu": _cpu_model()}
+    # The runner shares this host; its CPU model is the harness's. The
+    # action policy is marked on every row: legal-action rows step a
+    # different plan from the shared one (R-PR371).
+    policy = "legal_actions" if cfg.get("legal_actions") else "planned"
+    return {**{k: v for k, v in raw.items() if not isinstance(v, list)}, **stats, "cpu": _cpu_model(), "action_policy": policy}
 
 
 # Environments with a Python head-to-head: the Tessera id, the EnvPool id
@@ -420,6 +423,8 @@ def derive(results: dict, derived: list[dict], method: dict) -> dict:
             continue
         entry = {**ratio_ci(num, den, scale, **boot), "from": [a, b]}
         entry["same_work"] = _same_work(results[a], results[b])
+        if d.get("note"):
+            entry["note"] = d["note"]
         if d.get("require_same_work") and not entry["same_work"]:
             entry = {"value": None, "from": [a, b], "invalid": "the operands ran different plans or options"}
         out[d["name"]] = entry

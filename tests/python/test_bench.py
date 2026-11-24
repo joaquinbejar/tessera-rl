@@ -87,6 +87,22 @@ def test_bench_configs_cover_every_catalog_env():
 def test_bench_legal_actions_option_reaches_the_runner(quick_report):
     assert quick_report["results"]["rust/connect4/inline/n1024"]["options"]["legal_actions"] is True
     assert "legal_actions" not in quick_report["results"]["rust/cartpole/inline/n1024"]["options"]
+    assert quick_report["results"]["rust/connect4/inline/n1024"]["action_policy"] == "legal_actions"
+    assert quick_report["results"]["rust/cartpole/inline/n1024"]["action_policy"] == "planned"
+
+
+def test_bench_envpool_speedups_carry_the_output_asymmetry_note():
+    spec, method = bench.load(quick=True)
+    fake = {"samples": {"samples": [1.0, 1.0, 1.0]}, "options": {}, "plan_fingerprint": "f"}
+    results = {}
+    for d in spec["derived"]:
+        if d["name"].startswith("speedup/native-vs-envpool/"):
+            results[d["numerator"]] = fake
+            results[d["denominator"]] = fake
+    derived = bench.derive(results, spec["derived"], method)
+    speedups = [v for k, v in derived.items() if k.startswith("speedup/native-vs-envpool/")]
+    assert len(speedups) == len(bench.PY_ENVS)
+    assert all("info dict" in v["note"] for v in speedups)
 
 
 def test_bench_configs_needing_a_missing_package_are_skipped(monkeypatch):

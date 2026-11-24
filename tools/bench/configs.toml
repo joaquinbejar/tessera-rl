@@ -233,7 +233,9 @@ num_envs = 64
 
 # Head-to-head against EnvPool (SPEC 19.1, 19.2, #371): the same dynamics,
 # action plan and options, one thread each (Tessera Inline through the native
-# borrowed API; EnvPool's synchronous API with one worker thread). Needs the
+# borrowed API; EnvPool's synchronous API with one worker thread).
+# The outputs differ: Tessera's borrowed views against EnvPool's fresh arrays
+# and info dict, so each derived speedup carries that note. Needs the
 # `envpool` package (Linux x86-64 wheels), which is not a project dependency:
 # without it these configurations are skipped and the report lists them under
 # `skipped`.
@@ -332,6 +334,7 @@ kind = "ratio"
 require_same_work = true
 numerator = "py/native/cartpole/n1024/borrowed"
 denominator = "py/envpool/cartpole/n1024"
+note = "asymmetric outputs: Tessera borrowed returns views into engine buffers; EnvPool returns fresh arrays and an info dict every step. Not a like-for-like output cost; state this with any published number."
 
 [[derived]]
 name = "speedup/native-vs-envpool/acrobot/n1024"
@@ -339,6 +342,7 @@ kind = "ratio"
 require_same_work = true
 numerator = "py/native/acrobot/n1024/borrowed"
 denominator = "py/envpool/acrobot/n1024"
+note = "asymmetric outputs: Tessera borrowed returns views into engine buffers; EnvPool returns fresh arrays and an info dict every step. Not a like-for-like output cost; state this with any published number."
 
 [[derived]]
 name = "speedup/native-vs-envpool/mountaincar/n1024"
@@ -346,6 +350,7 @@ kind = "ratio"
 require_same_work = true
 numerator = "py/native/mountaincar/n1024/borrowed"
 denominator = "py/envpool/mountaincar/n1024"
+note = "asymmetric outputs: Tessera borrowed returns views into engine buffers; EnvPool returns fresh arrays and an info dict every step. Not a like-for-like output cost; state this with any published number."
 
 [[derived]]
 name = "speedup/native-vs-envpool/pendulum/n1024"
@@ -353,3 +358,4 @@ kind = "ratio"
 require_same_work = true
 numerator = "py/native/pendulum/n1024/borrowed"
 denominator = "py/envpool/pendulum/n1024"
+note = "asymmetric outputs: Tessera borrowed returns views into engine buffers; EnvPool returns fresh arrays and an info dict every step. Not a like-for-like output cost; state this with any published number."
