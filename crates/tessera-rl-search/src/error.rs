@@ -42,9 +42,19 @@ pub enum SearchError {
     /// needs `Determinize` (ADR-0035).
     #[error("the environment has imperfect information: search needs Determinize (ADR-0035)")]
     ImperfectInformation,
-    /// The action space is not a single discrete head.
-    #[error("search needs a Discrete action space")]
+    /// The action space is neither `Discrete` nor `MultiDiscrete`, or
+    /// declares entity groups (ADR-0086).
+    #[error("search needs a Discrete or MultiDiscrete action space without entity groups")]
     UnsupportedActions,
+    /// A `MultiDiscrete` action space with more joint actions than
+    /// [`crate::MAX_JOINT_ACTIONS`] (ADR-0086).
+    #[error("{joint} joint actions, above the search maximum of {max}")]
+    TooManyJointActions {
+        /// The product of the head sizes (saturating).
+        joint: u64,
+        /// The cap.
+        max: u32,
+    },
     /// The observation space holds a `Set`, which no evaluator batch
     /// takes yet (ADR-0082 point 7).
     #[error("search does not support Set observations (ADR-0082)")]

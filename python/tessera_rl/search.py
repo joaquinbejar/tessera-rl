@@ -427,3 +427,73 @@ class OnnxEvaluator:
         if self._max is not None:
             kwargs["max_model_bytes"] = int(self._max)
         self._provenance = types.MappingProxyType(native.attach_onnx(**kwargs))
+
+
+def joint_log_prior(logits, nvec, parents=None, active=None, legal=None) -> np.ndarray:
+    """The joint log-prior of a ``MultiDiscrete`` action (ADR-0086).
+
+    Search sees ``MultiDiscrete(nvec)`` as one head of ``J = prod(nvec)``
+    joint actions, mixed radix with the first head most significant (the
+    C order of ``np.unravel_index``). A conditional head unused under its
+    parents' values is *inactive*; only the canonical joint, with every
+    inactive head at 0, stands for the game action.
+
+    - ``logits``: one array per head; a head with parents ``(p1, p2)`` has
+      shape ``(nvec[p1], nvec[p2], nvec[h])`` (``(nvec[p1], nvec[h])`` with
+      one parent, ``(nvec[h],)`` with none), as SPEC 11.3 lays out masks.
+    - ``parents``: one tuple of earlier head indices per head (default: no
+      parents).
+    - ``active``: ``active(head, parent_values) -> bool`` as
+      ``ActionMask::head_active`` (default: every head active).
+    - ``legal``: ``(J,)`` bool, the legal joints the evaluator receives
+      (default: every canonical joint).
+
+    Returns ``(J,)`` float64: the sum of each active head's log-softmax
+    under its parents' values, ``-inf`` off the legal canonical joints,
+    renormalized over them. ``np.exp`` of it is a valid prior row.
+    """
+    nvec = tuple(int(n) for n in nvec)
+    heads = len(nvec)
+    if heads == 0 or len(logits) != heads:
+        raise ValueError("one logits array per head is required")
+    parents = [tuple(p) for p in parents] if parents is not None else [()] * heads
+    if len(parents) != heads:
+        raise ValueError("one parents tuple per head is required")
+    joint = int(np.prod(nvec))
+    values = np.unravel_index(np.arange(joint), nvec)
+    total = np.zeros(joint)
+    canonical = np.ones(joint, dtype=bool)
+    for h, (n, ps) in enumerate(zip(nvec, parents)):
+        if len(ps) > 2 or any(not 0 <= p < h for p in ps):
+            raise ValueError(f"head {h}: parents must be at most two earlier heads")
+        shape = tuple(nvec[p] for p in ps) + (n,)
+        x = np.asarray(logits[h], dtype=np.float64)
+        if x.shape != shape:
+            raise ValueError(f"head {h}: logits of shape {x.shape}, expected {shape}")
+        m = x.max(axis=-1, keepdims=True)
+        log_softmax = x - m - np.log(np.exp(x - m).sum(axis=-1, keepdims=True))
+        index = tuple(values[p] for p in ps) + (values[h],)
+        on = np.ones(joint, dtype=bool)
+        if active is not None:
+            pv = np.stack([values[p] for p in ps], axis=1) if ps else np.zeros((joint, 0), dtype=np.intp)
+            cache: dict[tuple[int, ...], bool] = {}
+            for i, key in enumerate(map(tuple, pv.tolist())):
+                if key not in cache:
+                    padded = (list(key) + [0, 0])[:2]
+                    cache[key] = bool(active(h, padded))
+                on[i] = cache[key]
+        canonical &= on | (values[h] == 0)
+        total += np.where(on, log_softmax[index], 0.0)
+    ok = canonical
+    if legal is not None:
+        legal = np.asarray(legal, dtype=bool)
+        if legal.shape != (joint,):
+            raise ValueError(f"legal of shape {legal.shape}, expected {(joint,)}")
+        ok = ok & legal
+    if not ok.any():
+        raise ValueError("no legal canonical joint")
+    out = np.full(joint, -np.inf)
+    kept = total[ok]
+    m = kept.max()
+    out[ok] = kept - m - np.log(np.exp(kept - m).sum())
+    return out

@@ -175,6 +175,20 @@ pub trait ActionMask: Environment {
     fn entity_group_heads(_cfg: &Self::Config) -> Option<core::num::NonZeroU16> {
         None
     }
+
+    /// Whether discrete head `head` is used when its parents
+    /// ([`Self::head_parents`]) take the values `parents` (unused entries
+    /// 0), ADR-0086. Config-only, never state; called at construction only.
+    ///
+    /// An environment that returns `false` for some head must ignore that
+    /// head's value in its step: an action and its copies differing only in
+    /// inactive heads are the same game action. Search keeps one of them,
+    /// the canonical joint with every inactive head at 0.
+    /// `tessera_rl_search::check_head_activity` tests the obligation.
+    #[must_use]
+    fn head_active(_cfg: &Self::Config, _head: usize, _parents: [u32; 2]) -> bool {
+        true
+    }
 }
 
 /// Imperfect information: the per-agent information state (ADR-0035).

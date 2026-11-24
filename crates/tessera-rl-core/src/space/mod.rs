@@ -9,8 +9,10 @@ mod bounds;
 mod definition;
 mod dtype;
 mod heads;
+mod joint;
 
 pub use bounds::BoxBounds;
 pub use definition::{MAX_CHOICES, MAX_DEPTH, Space};
 pub use dtype::DType;
 pub use heads::{ActionHeads, HeadsError};
+pub use joint::{JointError, JointHeads, MAX_JOINT_HEADS};

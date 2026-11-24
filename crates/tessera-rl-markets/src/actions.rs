@@ -315,6 +315,22 @@ pub const fn head_parents(head: usize) -> [Option<u16>; 2] {
     }
 }
 
+/// Whether discrete head `head` is used under `kind` value `kind_value`
+/// (ADR-0086): `offset` by limit orders, `size` by market and limit
+/// orders, `cancel` by cancels; `kind` always. [`decide`] ignores the
+/// heads a kind does not use.
+#[must_use]
+pub const fn head_active(head: usize, kind_value: u32) -> bool {
+    let limit = kind_value == kind::LIMIT_BUY as u32 || kind_value == kind::LIMIT_SELL as u32;
+    let market = kind_value == kind::MARKET_BUY as u32 || kind_value == kind::MARKET_SELL as u32;
+    match head {
+        1 => limit,
+        2 => limit || market,
+        3 => kind_value == kind::CANCEL as u32,
+        _ => true,
+    }
+}
+
 /// The decision of `agent` in `state` for the raw heads of the step,
 /// [`Decision::Noop`] when illegal.
 #[must_use]
