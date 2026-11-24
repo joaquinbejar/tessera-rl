@@ -173,3 +173,13 @@ fn test_pipelined_options_default_uses_physical_cores() {
     let options = crate::PipelinedOptions::default();
     assert_eq!(options.sync, crate::SyncOptions::new(physical_cores()));
 }
+
+#[test]
+fn test_count_records_size_below_header_with_valid_tail_returns_none() {
+    // A 4-byte record would land on a well-formed 8-byte one: still refused.
+    let mut list = 0_i32.to_ne_bytes().to_vec();
+    list.extend(4_u32.to_ne_bytes());
+    list.extend(8_u32.to_ne_bytes());
+    assert_eq!(list.len(), 12);
+    assert_eq!(count_records(&list, 0), None);
+}
