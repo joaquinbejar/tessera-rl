@@ -1,0 +1,46 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
+# Nightly reference training with third-party trainers (SPEC 14.2, #368):
+# each library's own PPO on tessera/CartPole-v1 through the Gymnasium
+# adapter against Gymnasium's CartPole-v1 (tools/reference/). Each library
+# has its own uv project and lock under compat/training/<library>. Report-
+# only (continue-on-error) until each library has 7 green nights; then the
+# gate is turned on in a follow-up PR. About 5 minutes per library on CPU.
+
+name: Reference libraries
+
+on:
+  schedule:
+    - cron: "30 5 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  reference:
+    runs-on: [self-hosted, xaskar]
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        library: [sb3, tianshou]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # The pinned uv 0.13.6 from pipx's bin directory, as in
+      # reference-training.yml (fail closed otherwise).
+      - run: |
+          d=$(pipx environment --value PIPX_BIN_DIR)
+          v=$("$d/uv" --version) || { echo "no runnable uv in pipx's bin directory $d" >&2; exit 1; }
+          case "$v" in "uv 0.13.6" | "uv 0.13.6 "*) ;; *) echo "uv in $d is '$v', not the pinned uv 0.13.6" >&2; exit 1 ;; esac
+          echo "$d" >> "$GITHUB_PATH"
+      - run: command -v uv >/dev/null || { echo "uv not on PATH" >&2; exit 1; }
+      # The Tessera wheel is a path source of each project: rebuild it from
+      # this checkout rather than reuse uv's cached build.
+      - run: uv sync --locked --project compat/training/${{ matrix.library }} --python 3.11 --reinstall-package tessera-rl
+      - run: make reference-${{ matrix.library }}
+      - if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: reference-${{ matrix.library }}
+          path: reference-${{ matrix.library }}.json
