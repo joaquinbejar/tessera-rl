@@ -562,7 +562,11 @@ pub(crate) fn pending_name_and_message(g: Gil<'_>, raised: Raised) -> (String, S
     }
     put_back_pending(g, p);
     let (message, raised) = pending_message(g, raised);
-    (name.unwrap_or_else(|| String::from("an exception")), message, raised)
+    (
+        name.unwrap_or_else(|| String::from("an exception")),
+        message,
+        raised,
+    )
 }
 
 /// Whether the pending exception is an `Exception` (not a bare

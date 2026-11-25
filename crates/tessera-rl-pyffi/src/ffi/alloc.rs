@@ -212,11 +212,15 @@ pub fn clear_allocation_error(g: Gil<'_>) {
 /// `align`. `None` when both hold.
 fn range_refusal(address: usize, len: usize, align: usize) -> Option<String> {
     if address.checked_add(len).is_none() {
-        return Some(format!("allocate returned address {address:#x}, whose {len} bytes overflow the address space"));
+        return Some(format!(
+            "allocate returned address {address:#x}, whose {len} bytes overflow the address space"
+        ));
     }
     match address.checked_rem(align) {
         Some(0) => None,
-        _ => Some(format!("allocate returned address {address:#x}, not aligned to {align}")),
+        _ => Some(format!(
+            "allocate returned address {address:#x}, not aligned to {align}"
+        )),
     }
 }
 
@@ -299,7 +303,9 @@ mod tests {
     #[test]
     fn test_take_allocation_error_takes_once() {
         remember(AllocationFailure::Message("boom".to_owned()));
-        assert!(matches!(take_allocation_error(), Some(AllocationFailure::Message(m)) if m == "boom"));
+        assert!(
+            matches!(take_allocation_error(), Some(AllocationFailure::Message(m)) if m == "boom")
+        );
         assert!(take_allocation_error().is_none());
     }
 
