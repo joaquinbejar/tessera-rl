@@ -56,14 +56,26 @@ fn slot(agent: usize) -> AgentSlot {
 fn act_info(c: &RtsConfig, s: &RtsState, agent: usize) -> Vec<i32> {
     let info = Rts::info_state(c, s, slot(agent));
     let mut heads = vec![0; width(c)];
-    Rts::act_info(c, &info, slot(agent), &mut rng(), &mut ActionWriter::new(&mut heads, &mut []));
+    Rts::act_info(
+        c,
+        &info,
+        slot(agent),
+        &mut rng(),
+        &mut ActionWriter::new(&mut heads, &mut []),
+    );
     heads
 }
 
 /// The learner's legal orders: Prospector on its side.
 fn learner(c: &RtsConfig, s: &RtsState) -> Vec<i32> {
     let mut heads = vec![0; width(c)];
-    Bot::Prospector.act(c, s, slot(0), &mut rng(), &mut ActionWriter::new(&mut heads, &mut []));
+    Bot::Prospector.act(
+        c,
+        s,
+        slot(0),
+        &mut rng(),
+        &mut ActionWriter::new(&mut heads, &mut []),
+    );
     heads
 }
 
@@ -120,7 +132,10 @@ fn run(workers: Option<usize>, schedule: Schedule) -> Vec<u64> {
             for a in &mut acts[base + w..base + 2 * w] {
                 *a = -7;
             }
-            if tessera_rl_core::RecordLayout::engine(header).pending_reset.get() {
+            if tessera_rl_core::RecordLayout::engine(header)
+                .pending_reset
+                .get()
+            {
                 continue;
             }
             let rows = tessera_rl_core::RecordLayout::agents(header);

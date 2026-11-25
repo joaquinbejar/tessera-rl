@@ -154,7 +154,11 @@ fn test_rts_step_with_info_heuristic_slots_does_not_allocate() {
                 let _ = std::hint::black_box(q.step(input(a)).unwrap());
             }
         });
-        assert_eq!(t.calls, 0, "a step allocated {} times ({workers:?})", t.calls);
+        assert_eq!(
+            t.calls, 0,
+            "a step allocated {} times ({workers:?})",
+            t.calls
+        );
         assert_eq!(q.state_hash(0).unwrap(), p.state_hash(0).unwrap());
     }
 }

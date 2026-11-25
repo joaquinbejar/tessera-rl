@@ -557,7 +557,8 @@ fn test_noninterference_control_visible_edits_change_the_info_state() {
                 .enumerate()
             {
                 if let Some(m) = edit(&c, &s, team, &shown) {
-                    changed[k] |= <Rts as ImperfectInformation>::info_state(&c, &m, agent(team)) != base;
+                    changed[k] |=
+                        <Rts as ImperfectInformation>::info_state(&c, &m, agent(team)) != base;
                 }
             }
         }
@@ -588,10 +589,19 @@ fn test_info_heuristic_act_equals_act_info_on_info_state() {
             for team in [Team::Zero, Team::One] {
                 let info = <Rts as ImperfectInformation>::info_state(&c, &s, agent(team));
                 let mut heads = vec![0; usize::from(c.max_units) * HEADS_PER_UNIT];
-                <Rts as Heuristic>::act(&c, &s, agent(team), &mut rng(7), &mut ActionWriter::new(&mut heads, &mut []));
+                <Rts as Heuristic>::act(
+                    &c,
+                    &s,
+                    agent(team),
+                    &mut rng(7),
+                    &mut ActionWriter::new(&mut heads, &mut []),
+                );
                 assert_eq!(heads, info_row(&c, &info, team, &mut rng(7)));
                 for bot in [Bot::Rush, Bot::Prospector, Bot::RandomLegal] {
-                    assert_eq!(bot_row(&c, &s, team, bot, &mut rng(7)), view_row(&c, &info, team, bot, &mut rng(7)));
+                    assert_eq!(
+                        bot_row(&c, &s, team, bot, &mut rng(7)),
+                        view_row(&c, &info, team, bot, &mut rng(7))
+                    );
                 }
             }
             let a = [
