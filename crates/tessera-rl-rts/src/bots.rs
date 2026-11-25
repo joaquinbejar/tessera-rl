@@ -340,7 +340,23 @@ impl Bot {
         let team = side_of_agent(cfg, agent.index());
         // Everything below reads the side's view only (ruling 5).
         let view = crate::fog::seen(cfg, s, team);
-        let s = &view;
+        self.act_view(cfg, &view, agent, rng, out);
+    }
+
+    /// Writes the orders of `agent`'s side from its side view `view`, the
+    /// output of [`crate::fog::seen`] for that side (the agent's
+    /// information state, [`crate::info`]). [`Bot::act`] is `act_view` on
+    /// `seen` of the full state.
+    pub fn act_view(
+        self,
+        cfg: &RtsConfig,
+        view: &RtsState,
+        agent: AgentSlot,
+        rng: &mut StepRng,
+        out: &mut ActionWriter<'_>,
+    ) {
+        let team = side_of_agent(cfg, agent.index());
+        let s = view;
         let g = grid(cfg);
         let occ = occupancy(s);
         let fields = (self != Self::RandomLegal).then(|| Fields::build(cfg, s, team));
