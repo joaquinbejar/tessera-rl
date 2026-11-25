@@ -604,3 +604,29 @@ def test_bench_spent_budget_writes_no_report(monkeypatch, tmp_path):
     monkeypatch.setattr(bench.sys, "argv", argv)
     monkeypatch.setattr(bench, "runner_path", lambda profile="release": bench.ROOT)
     assert bench.main() == 1 and not out.exists()
+
+
+def test_bench_failing_runner_writes_its_stderr_before_raising(monkeypatch, capsys):
+    # #640/#728: a failing runner's own message must reach the log, not
+    # only CalledProcessError's argv.
+    def fake(argv, **_):
+        return subprocess.CompletedProcess(argv, 1, stdout="partial\n", stderr="engine: record 1: boom\n")
+
+    monkeypatch.setattr(bench.subprocess, "run", fake)
+    with pytest.raises(subprocess.CalledProcessError) as err:
+        bench._run_runner(["runner", "snapshot", "lanterns"])
+    assert err.value.returncode == 1
+    assert err.value.stderr == "engine: record 1: boom\n"
+    out = capsys.readouterr().err
+    assert "rc=1: runner snapshot lanterns" in out
+    assert "runner stderr:\nengine: record 1: boom\n" in out
+    assert "runner stdout:\npartial\n" in out
+
+
+def test_bench_successful_runner_output_is_returned_unchanged(monkeypatch, capsys):
+    def fake(argv, **_):
+        return subprocess.CompletedProcess(argv, 0, stdout="{}", stderr="")
+
+    monkeypatch.setattr(bench.subprocess, "run", fake)
+    assert bench._run_runner(["runner"]).stdout == "{}"
+    assert capsys.readouterr().err == ""
