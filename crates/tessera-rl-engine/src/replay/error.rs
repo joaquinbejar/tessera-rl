@@ -44,6 +44,14 @@ pub enum DivergenceKind {
     RecvMismatch,
 }
 
+/// "replayed policy P", or "replayed no policy" past the pool's instances.
+fn replayed_text(replayed: Option<u32>) -> String {
+    replayed.map_or_else(
+        || "replayed no policy".to_owned(),
+        |p| format!("replayed policy {p}"),
+    )
+}
+
 /// Why a replay file could not be written, read or replayed.
 #[derive(Debug, thiserror::Error)]
 pub enum ReplayError {
@@ -151,7 +159,8 @@ pub enum ReplayError {
     /// instance's (ADR-0088 erratum 3): a [`DivergenceKind::Keyframe`]
     /// divergence that names the policies.
     #[error(
-        "replay diverged at event {event_index} (Keyframe): league assignment of instance {instance}: recorded policy {recorded}, replayed {replayed:?}"
+        "replay diverged at event {event_index} (Keyframe): league assignment of instance {instance}: recorded policy {recorded}, {}",
+        replayed_text(*.replayed)
     )]
     AssignmentDiverged {
         /// The keyframe's event, or its state write's.

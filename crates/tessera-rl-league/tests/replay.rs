@@ -483,7 +483,7 @@ fn test_league_replay_tampered_keyframe_assignment_diverges() {
         .to_string();
     assert!(
         err.contains(&format!(
-            "league assignment of instance 7: recorded policy {}, replayed Some({old})",
+            "league assignment of instance 7: recorded policy {}, replayed policy {old}",
             (old + 1) % 3
         )),
         "{err}"
