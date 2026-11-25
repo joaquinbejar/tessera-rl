@@ -205,7 +205,9 @@ fn test_privileged_state_without_opt_in_has_no_region() {
     let with = pool(3, AutoReset::SameStep, None).unwrap();
     assert!(with.has_privileged_state());
     // The derived space is a `Dict` of its leaves, as an observation's.
-    assert!(matches!(with.privileged_state_space(), Some(Space::Dict(leaves)) if leaves.len() == 1));
+    assert!(
+        matches!(with.privileged_state_space(), Some(Space::Dict(leaves)) if leaves.len() == 1)
+    );
     // The other regions keep their sizes.
     let other = with.outputs().unwrap();
     let len = |o: &tessera_rl_engine::Outputs| o.observation(0).map(<[u8]>::len);

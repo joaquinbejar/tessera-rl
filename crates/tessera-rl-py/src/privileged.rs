@@ -27,7 +27,9 @@ pub(crate) fn check<E: Environment, M: MaskProvider<E>>(
     args: &PoolArgs,
 ) -> Result<(), BindError> {
     if args.privileged_state && !pool.has_privileged_state() {
-        return Err(BindError::Capability("this environment has no privileged state".to_owned()));
+        return Err(BindError::Capability(
+            "this environment has no privileged state".to_owned(),
+        ));
     }
     Ok(())
 }

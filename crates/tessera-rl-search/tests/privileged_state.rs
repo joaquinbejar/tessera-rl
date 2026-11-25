@@ -92,7 +92,8 @@ impl Evaluator<Leduc> for Recorder {
         values: &mut [f64],
     ) -> Result<(), EvaluatorError> {
         self.observations.extend_from_slice(batch.observations());
-        self.records.extend(batch.records().iter().map(Record::to_bytes));
+        self.records
+            .extend(batch.records().iter().map(Record::to_bytes));
         self.evaluate(batch.records(), priors, values)
     }
 }
@@ -117,7 +118,11 @@ fn searched(root: &Record<Leduc>) -> (u64, Vec<u32>, Recorder) {
 #[test]
 fn test_search_privileged_state_on_or_off_gives_identical_search_and_evaluator_inputs() {
     let (off, on) = (root(false), root(true));
-    assert_eq!(off.to_bytes(), on.to_bytes(), "the record never holds the buffer");
+    assert_eq!(
+        off.to_bytes(),
+        on.to_bytes(),
+        "the record never holds the buffer"
+    );
     let (hash_off, visits_off, inputs_off) = searched(&off);
     let (hash_on, visits_on, inputs_on) = searched(&on);
     assert!(visits_off.iter().sum::<u32>() > 0);

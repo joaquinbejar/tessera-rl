@@ -319,7 +319,10 @@ impl Outputs {
     /// The observation leaves, as laid out.
     #[must_use]
     pub(crate) fn leaf_layout(&self) -> Vec<Leaf> {
-        self.leaf_bytes.iter().map(|&bytes| Leaf { bytes }).collect()
+        self.leaf_bytes
+            .iter()
+            .map(|&bytes| Leaf { bytes })
+            .collect()
     }
 
     /// The privileged leaves, as laid out (empty without the opt-in).

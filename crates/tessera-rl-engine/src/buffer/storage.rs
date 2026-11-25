@@ -665,7 +665,10 @@ mod tests {
         let mut first = regions.take(first).unwrap();
         let mut second = regions.take(second).unwrap();
         assert!(first.iter().chain(second.iter()).all(|b| *b == 0));
-        assert_eq!(region_align(OutputField::PrivilegedState(0)), OUTPUT_MIN_ALIGN);
+        assert_eq!(
+            region_align(OutputField::PrivilegedState(0)),
+            OUTPUT_MIN_ALIGN
+        );
         s.begin_write();
         obs.fill(1);
         first.fill(2);
