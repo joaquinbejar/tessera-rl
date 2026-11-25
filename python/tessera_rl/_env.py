@@ -634,6 +634,17 @@ class Env:
         return self._native.is_poisoned()
 
     @property
+    def assignment(self) -> np.ndarray | None:
+        """Each instance's league opponent (ADR-0088 item 2.3), uint32
+        ``(num_envs,)``: the population id its ``"opponent"`` slots play this
+        episode, drawn at the instance's reset; ``None`` without a league.
+        Each read is a fresh owned copy."""
+        raw = self._native.assignment()
+        if raw is None:
+            return None
+        return np.frombuffer(raw, dtype="<u4").copy()
+
+    @property
     def heuristic_actions(self) -> np.ndarray | None:
         """The last step's heuristic actions, int32
         ``(num_envs, agents, heads)``: the action the engine computed for each
@@ -794,7 +805,7 @@ _ASSET_OPTIONS = frozenset({"layout"})
 
 
 #: Policy group names.
-_POLICY_GROUPS = ("learner", "external", "heuristic", "privileged_heuristic")
+_POLICY_GROUPS = ("learner", "external", "heuristic", "privileged_heuristic", "opponent")
 
 
 def _policy_map(value) -> str | None:
@@ -825,6 +836,12 @@ def native_kwargs(**kwargs) -> dict:
             out[key] = None
         elif key == "policy_map":
             out[key] = _policy_map(value)
+        elif key == "league":
+            from tessera_rl._league import League
+
+            if not isinstance(value, League):
+                raise TypeError(f"league must be a tessera_rl.League, got {type(value).__name__}")
+            out[key] = value._handle
         elif key in _STRING_OPTIONS:
             out[key] = str(value)
         elif key in _ASSET_OPTIONS:

@@ -1456,6 +1456,16 @@ pub(crate) fn heuristic_actions<'py>(g: Gil<'py>, inner: &Inner) -> CResult<Mine
     })
 }
 
+/// `assignment() -> bytes | None`: a copy of each instance's league
+/// opponent (ADR-0088 item 2.3), little-endian `uint32` `[N]`; `None`
+/// without a league.
+pub(crate) fn assignment<'py>(g: Gil<'py>, inner: &Inner) -> CResult<Mine<'py>> {
+    inner.with(g, |ops| match ops.assignment().map_err(|e| to_py(g, e))? {
+        Some(bytes) => capi::bytes(g, &bytes),
+        None => Ok(capi::none(g)),
+    })
+}
+
 /// `state_hash(id) -> int`: instance `id`'s state hash (sync mode).
 pub(crate) fn state_hash<'py>(g: Gil<'py>, inner: &Inner, args: Ref<'_>) -> CResult<Mine<'py>> {
     let a: [Ref<'_>; 1] = exactly(g, args, "state_hash")?;

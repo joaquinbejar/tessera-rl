@@ -390,10 +390,18 @@ class TesseraVectorEnv(VectorEnv):
         out = self._native.reset(native_seed, ids)
         info = self._mask_info(out)
         info.update(self._state_info(out))
+        info.update(self._assignment_info())
         if self.metadata["tessera_kind"] == "host":
             # An aborted reset leaves its instance pending (ADR-0065).
             info.update(self._host_infos(out))
         return self._obs(out["observations"]), info
+
+    def _assignment_info(self) -> dict:
+        """``infos["assignment"]`` (ADR-0088 section 10): each instance's
+        league opponent, uint32 ``(num_envs,)``, when the pool has a league."""
+        assignment = getattr(self._native, "assignment", None)
+        raw = assignment() if assignment is not None else None
+        return {} if raw is None else {"assignment": np.frombuffer(raw, dtype="<u4").copy()}
 
     def _host_infos(self, out) -> dict:
         return _host.host_infos(
@@ -432,6 +440,7 @@ class TesseraVectorEnv(VectorEnv):
                 rewards = rewards.copy()
         info = self._info(out, terminated | truncated)
         info.update(self._state_info(out))
+        info.update(self._assignment_info())
         if self.metadata["tessera_kind"] == "host":
             # ADR-0065: an aborted episode is truncated; its final_obs (in
             # SAME_STEP) is the zero row the engine wrote.

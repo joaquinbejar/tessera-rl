@@ -9,7 +9,7 @@
 //! item per line:
 //!
 //! ```text
-//! ratings elo_k beta tau draw_margin rate_population(0|1)
+//! ratings elo_k rate_population(0|1) [beta tau draw_margin]
 //! policy heuristic | policy external <tag> | policy onnx <32 hex digits>
 //! role <matchmaking> [self_play <share> <tag>] [snapshot every <n> |
 //!      snapshot win_rate <threshold> <min_games>] [tags <base>]
@@ -108,12 +108,14 @@ pub(crate) fn parse(spec: &str) -> Result<SharedLeague, String> {
         match w.next() {
             Some("ratings") => {
                 config.elo_k = num(w.next(), "elo_k")?;
-                config.trueskill = Params {
-                    beta: num(w.next(), "trueskill beta")?,
-                    tau: num(w.next(), "trueskill tau")?,
-                    draw_margin: num(w.next(), "trueskill draw_margin")?,
-                };
                 config.rate_population = num::<u8>(w.next(), "rate_population")? == 1;
+                if let Some(beta) = w.next() {
+                    config.trueskill = Params {
+                        beta: num(Some(beta), "trueskill beta")?,
+                        tau: num(w.next(), "trueskill tau")?,
+                        draw_margin: num(w.next(), "trueskill draw_margin")?,
+                    };
+                }
             }
             Some("policy") => {
                 let kind = match w.next() {
@@ -240,7 +242,7 @@ mod tests {
 
     #[test]
     fn test_league_spec_parses_and_refuses() {
-        let ok = "ratings 16.0 4.166666666666667 0.08333333333333333 0.0 1\n\
+        let ok = "ratings 16.0 1 4.166666666666667 0.08333333333333333 0.0\n\
                   policy heuristic\npolicy external 7\n\
                   policy onnx 07070707070707070707070707070707\n\
                   role pfsp:hard self_play 0.25 99 snapshot every 2 tags 500\n\

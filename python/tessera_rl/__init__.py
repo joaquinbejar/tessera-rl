@@ -40,6 +40,7 @@ API changes (pre-release; the package is not published yet):
 
 from tessera_rl._env import AsyncStep, Env, HalfStep, Step, is_stale, make
 from tessera_rl._archive import Archive
+from tessera_rl._league import League
 from tessera_rl._native import (
     ActionError,
     ArgumentError,
@@ -82,6 +83,7 @@ __all__ = [
     "ForkError",
     "HostEnv",
     "HostStep",
+    "League",
     "OnnxError",
     "PersistError",
     "PendingResetError",

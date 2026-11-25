@@ -380,6 +380,11 @@ pub(crate) trait PoolOps: Send {
     fn heuristic_actions(&self) -> Result<Option<Vec<u8>>, BindError> {
         Ok(None)
     }
+    /// Each instance's league opponent (ADR-0088 item 2.3, `[N]`
+    /// little-endian `u32`), copied; `None` without a league.
+    fn assignment(&self) -> Result<Option<Vec<u8>>, BindError> {
+        Ok(None)
+    }
     fn import(&mut self, id: u32, bytes: &[u8]) -> Result<(), BindError>;
     /// The persisted file of `ids` (ADR-0011).
     fn encode(&self, ids: &[u32]) -> Result<Vec<u8>, BindError>;
@@ -1030,6 +1035,13 @@ where
             .pool
             .heuristic_actions()
             .map(|rows| rows.iter().flat_map(|v| v.to_le_bytes()).collect()))
+    }
+
+    fn assignment(&self) -> Result<Option<Vec<u8>>, BindError> {
+        Ok(self
+            .pool
+            .assignment()
+            .map(|a| a.iter().flat_map(|v| v.to_le_bytes()).collect()))
     }
 
     fn illegal_actions(&self, id: u32) -> Result<Vec<u32>, BindError> {
