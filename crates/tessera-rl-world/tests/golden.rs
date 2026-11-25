@@ -87,6 +87,7 @@ fn run(s: &Scenario, workers: Option<usize>) -> Vec<String> {
         format!("env_version={ENV_VERSION}"),
         "format=1".to_owned(),
         "actions=lcg-v1".to_owned(),
+        "outputs=rewards+observations+flags".to_owned(),
         format!("config={:?}", s.cfg),
         format!("auto_reset={:?}", s.auto_reset),
     ];
@@ -105,6 +106,12 @@ fn run(s: &Scenario, workers: Option<usize>) -> Vec<String> {
             .iter()
             .flat_map(|r| r.to_bits().to_le_bytes())
             .collect();
+        // Every observation leaf (window, own, the set's items and its mask).
+        let mut leaf = 0;
+        while let Some(obs) = out.observation(leaf) {
+            bytes.extend_from_slice(obs);
+            leaf += 1;
+        }
         bytes.extend(out.episode_terminated().iter().map(|f| u8::from(f.get())));
         bytes.extend(out.episode_truncated().iter().map(|f| u8::from(f.get())));
         let outputs = checksum(&bytes);

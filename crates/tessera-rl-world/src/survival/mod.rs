@@ -39,19 +39,24 @@
 //!   give no reward (review Q2); they are counted in the state.
 //! - **End:** truncated at `steps` steps; terminated when no agent is alive
 //!   and `respawn` is 0.
-//! - **Observation (stage 1):** `own`, `Box(i32, [6])`: health, food,
-//!   water, x, y, step. The tile window and the visible-agents set follow in
-//!   stage 2.
+//! - **Observation:** `window`, `Box(u8, [4, 2r + 1, 2r + 1])` around the
+//!   agent (terrain, ready forest, agent present, its health); `own`,
+//!   `Box(i32, [6])` (health, food, water, x, y, step); `others`, a `Set`
+//!   of up to 16 visible agents, nearest first, each `[dx, dy, health]`.
+//! - **Masks:** blocked moves and impossible acts (`ActionMask`).
+//!
+//! Version 2 adds the window, the set and the masks (#382 stage 2); version
+//! 1 had the `own` leaf only and was never released.
 
 pub mod map;
 
 use core::num::NonZeroU32;
 
-use tessera_rl_core::io::{Actions, ObsWriter};
+use tessera_rl_core::io::{ActionWriter, Actions, MaskWriter, ObsWriter};
 use tessera_rl_core::space::Space;
 use tessera_rl_core::{
-    AgentSlot, Bool8, ConfigError, Environment, EpisodeEnd, HeaderView, InvariantViolation,
-    NoAdaptive, ObsLeaf, Observation, Phase, RecordHeader, SpaceError, StepOut, Tier,
+    ActionMask, AgentSlot, Bool8, ConfigError, Environment, EpisodeEnd, HeaderView, InvariantViolation,
+    NoAdaptive, ObsLeaf, ObsSet, Observation, Phase, RecordHeader, SpaceError, StepOut, Tier,
     TurnStructure, Validate,
 };
 use tessera_rl_macros::{EnvConfig, EnvState, Observation};
@@ -60,7 +65,7 @@ use tessera_rl_num::rng::{ObsRng, StepRng};
 /// Versioned environment id (ADR-0023).
 pub const ENV_ID: &str = "tessera/Survival-v1";
 /// Environment version, bumped with any change to its outputs.
-pub const ENV_VERSION: u32 = 1;
+pub const ENV_VERSION: u32 = 2;
 
 // Registration under the versioned id (SPEC 10, ADR-0054).
 tessera_rl_core::register!(Survival, id = "tessera/Survival-v1");
@@ -224,10 +229,27 @@ impl Default for SurvivalState {
 /// Survival observation (stage 1).
 #[derive(Observation)]
 pub struct SurvivalObs {
+    /// The tile window around the agent, `[4, 2r + 1, 2r + 1]` with `r =
+    /// view`, rows north to south: terrain (`OUTSIDE` off the map), ready
+    /// forest (1), a live agent present (1), that agent's health.
+    #[space(box(low = 0, high = 255, dtype = u8, shape = |c: &SurvivalConfig| [4, 2 * c.view + 1, 2 * c.view + 1]))]
+    pub window: ObsLeaf<u8>,
     /// The agent's health, food, water, x, y and the episode step.
     #[space(box(low = 0, high = 4096, shape = [6]))]
     pub own: ObsLeaf<i32>,
+    /// Up to `MAX_VISIBLE` other live agents in the window, nearest first
+    /// (squared distance, then `dx`, then `dy`: no slot order, T6), each
+    /// `[dx, dy, health]` (ADR-0082).
+    #[space(set(max = MAX_VISIBLE, inner(box(low = -7, high = 100, shape = [3]))))]
+    pub others: ObsSet<i32>,
 }
+
+/// Terrain value of a window cell off the map.
+pub const OUTSIDE: u8 = 255;
+/// The most other agents in the `others` set.
+pub const MAX_VISIBLE: usize = 16;
+/// The largest view radius.
+pub const MAX_VIEW: usize = 7;
 
 /// The survival world environment.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -306,12 +328,14 @@ impl SurvivalState {
     }
 
     /// Whether `(x, y)` is passable grass or forest with no live agent.
-    fn free(&self, x: i16, y: i16) -> bool {
+    #[must_use]
+    pub fn free(&self, x: i16, y: i16) -> bool {
         self.tile(x, y).is_some_and(map::passable) && self.agent_at(x, y).is_none()
     }
 
     /// Whether a forest tile at `(x, y)` is ready to forage.
-    fn ready_forest(&self, x: i16, y: i16) -> bool {
+    #[must_use]
+    pub fn ready_forest(&self, x: i16, y: i16) -> bool {
         self.tile(x, y) == Some(FOREST)
             && usize::try_from(x)
                 .ok()
@@ -320,7 +344,8 @@ impl SurvivalState {
     }
 
     /// Whether `(x, y)` has a water tile among its 4 neighbours.
-    fn by_water(&self, x: i16, y: i16) -> bool {
+    #[must_use]
+    pub fn by_water(&self, x: i16, y: i16) -> bool {
         (1..=4).any(|d| {
             let (nx, ny) = toward(x, y, d);
             self.tile(nx, ny) == Some(WATER)
@@ -637,7 +662,7 @@ impl Environment for Survival {
     }
 
     fn observe(
-        _: &SurvivalConfig,
+        cfg: &SurvivalConfig,
         state: &SurvivalState,
         agent: AgentSlot,
         _: &mut ObsRng,
@@ -646,6 +671,27 @@ impl Environment for Survival {
         let a = agent.index();
         let (x, y) = state.pos(a);
         let get = |v: &[i16; MAX_AGENTS]| i32::from(v.get(a).copied().unwrap_or(0));
+        let r = i16::try_from(cfg.view).unwrap_or(2).clamp(2, 7);
+        let w = usize::try_from(2 * r + 1).unwrap_or(5);
+        if let Some(mut leaf) = out.leaf_mut(SurvivalObs::WINDOW) {
+            for (row, dy) in (-r..=r).enumerate() {
+                for (col, dx) in (-r..=r).enumerate() {
+                    let (cx, cy) = (x + dx, y + dy);
+                    let at = |channel: usize| channel * w * w + row * w + col;
+                    let Some(tile) = state.tile(cx, cy) else {
+                        leaf.set(at(0), OUTSIDE);
+                        continue;
+                    };
+                    leaf.set(at(0), tile);
+                    leaf.set(at(1), u8::from(state.ready_forest(cx, cy)));
+                    if let Some(b) = state.agent_at(cx, cy) {
+                        let health = state.health.get(b).copied().unwrap_or(0);
+                        leaf.set(at(2), 1);
+                        leaf.set(at(3), u8::try_from(health).unwrap_or(0));
+                    }
+                }
+            }
+        }
         if let Some(mut leaf) = out.leaf_mut(SurvivalObs::OWN) {
             let row = [
                 get(&state.health),
@@ -659,6 +705,77 @@ impl Environment for Survival {
                 leaf.set(f, v);
             }
         }
+        // Visible agents, nearest first; the key never involves the slot.
+        let mut seen = [(i32::MAX, 0i16, 0i16, 0i16); MAX_AGENTS];
+        let mut count = 0;
+        if state.is_alive(a) {
+            for b in 0..state.agent_count() {
+                if b == a || !state.is_alive(b) {
+                    continue;
+                }
+                let (bx, by) = state.pos(b);
+                let (dx, dy) = (bx - x, by - y);
+                if dx.abs() > r || dy.abs() > r {
+                    continue;
+                }
+                if let Some(e) = seen.get_mut(count) {
+                    let d2 = i32::from(dx) * i32::from(dx) + i32::from(dy) * i32::from(dy);
+                    *e = (d2, dx, dy, state.health.get(b).copied().unwrap_or(0));
+                    count += 1;
+                }
+            }
+        }
+        let visible = seen.get_mut(..count).unwrap_or_default();
+        visible.sort_unstable();
+        if let Some(mut set) = out.set_mut(SurvivalObs::OTHERS) {
+            for (i, &(_, dx, dy, health)) in visible.iter().take(MAX_VISIBLE).enumerate() {
+                set.set(i, true);
+                if let Some(mut item) = set.item(i) {
+                    item.set(0, i32::from(dx));
+                    item.set(1, i32::from(dy));
+                    item.set(2, i32::from(health));
+                }
+            }
+        }
+    }
+}
+
+/// Masks (ADR-0014): the two heads' rows side by side, move (`0..5`) then
+/// act (`5..12`). Stay and none are always legal, and they are the no-op.
+/// A move is legal into a passable tile with no live agent at the start of
+/// the step (T3); forage on a ready forest; drink next to water; attack a
+/// live neighbour. A dead agent does not act, and its row is stay and none
+/// only.
+const _: () = assert!(MOVES == 5 && ACTS == 7, "the mask rows of ActionMask");
+
+impl ActionMask for Survival {
+    fn action_mask(
+        _: &SurvivalConfig,
+        state: &SurvivalState,
+        agent: AgentSlot,
+        out: &mut MaskWriter<'_>,
+    ) {
+        // The act head's first row.
+        const ACT: usize = 5;
+        let a = agent.index();
+        out.set(0, true);
+        out.set(ACT, true);
+        if !state.is_alive(a) {
+            return;
+        }
+        let (x, y) = state.pos(a);
+        for (dir, i) in (1..=4u32).zip(1..=4usize) {
+            let (tx, ty) = toward(x, y, dir);
+            out.set(i, state.free(tx, ty));
+            out.set(ACT + 2 + i, state.agent_at(tx, ty).is_some());
+        }
+        out.set(ACT + 1, state.ready_forest(x, y));
+        out.set(ACT + 2, state.by_water(x, y));
+    }
+
+    fn noop(_: &SurvivalConfig, _: &SurvivalState, _: AgentSlot, out: &mut ActionWriter<'_>) {
+        out.set_discrete(0, 0);
+        out.set_discrete(1, 0);
     }
 }
 
