@@ -208,7 +208,7 @@ fn test_search_order_book_opponent_checks_are_typed() {
 }
 
 /// ADR-0096 (#524): the same search in `Returns` mode backs up the
-/// searcher's per-step PnL, so its root edge values differ from
+/// searcher's per-step profit and loss, so its root edge values differ from
 /// `Terminal` mode's (where a zero evaluator and no terminal leaf leave
 /// every value 0), and it is reproducible.
 #[test]
