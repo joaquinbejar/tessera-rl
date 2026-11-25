@@ -283,8 +283,24 @@ pub(crate) struct Owned {
 }
 
 /// What an environment object can do, whatever the environment.
+/// The provenance of each ONNX opponent model a pool loaded, by content
+/// hash (32 hex digits), in load order; empty without ONNX opponents
+/// (#619).
+pub(crate) type OnnxLoaded = Vec<(String, crate::search::OnnxInfo)>;
+
+/// Gives `ops` the record of the ONNX opponent models its pool loaded.
+pub(crate) fn with_onnx(mut ops: Box<dyn PoolOps>, loaded: OnnxLoaded) -> Box<dyn PoolOps> {
+    ops.set_onnx_loaded(loaded);
+    ops
+}
+
 pub(crate) trait PoolOps: Send {
     fn layout(&self) -> &Layout;
+    /// Keeps the record of the ONNX opponent models the pool loaded, set
+    /// once at construction from the loaded models themselves (#619).
+    fn set_onnx_loaded(&mut self, loaded: OnnxLoaded);
+    /// That record; empty without ONNX opponents.
+    fn onnx_loaded(&self) -> &[(String, crate::search::OnnxInfo)];
     /// The view set of `layout`, built once at construction (the layout is
     /// fixed); `None` for a leaf dtype the protocols cannot name. It holds
     /// only regions and shapes: each call still makes new views, stamped
@@ -563,6 +579,8 @@ struct Pooled<E: Environment, M: MaskProvider<E>> {
     /// event frames (the cursor holds their offsets), so an advance costs
     /// the header plus the events it applies, never the whole file.
     cursor: Option<(Vec<u8>, tessera_rl_engine::ReplayCursor)>,
+    /// The provenance of the ONNX opponent models the pool loaded (#619).
+    onnx_loaded: OnnxLoaded,
 }
 
 fn dtype_name(dtype: DType) -> &'static str {
@@ -764,6 +782,7 @@ where
             pool,
             rec: None,
             cursor: None,
+            onnx_loaded: Vec::new(),
             views: crate::view::view_set(&layout).map(std::sync::Arc::new),
             layout,
             render: None,
@@ -872,6 +891,14 @@ where
 {
     fn layout(&self) -> &Layout {
         &self.layout
+    }
+
+    fn set_onnx_loaded(&mut self, loaded: OnnxLoaded) {
+        self.onnx_loaded = loaded;
+    }
+
+    fn onnx_loaded(&self) -> &[(String, crate::search::OnnxInfo)] {
+        &self.onnx_loaded
     }
 
     fn views(&self) -> Option<&std::sync::Arc<crate::view::ViewSet>> {
@@ -1414,6 +1441,9 @@ pub(crate) struct PoolArgs {
     /// The league of `"opponent"` slots and the pool's role (ADR-0088
     /// section 10, #384 head E3).
     pub(crate) league: Option<(tessera_rl_league::SharedLeague, usize)>,
+    /// The ONNX models of the league's ONNX policies (#619), `None` for
+    /// none.
+    pub(crate) onnx_opponents: Option<crate::policy::OnnxOpponentArgs>,
     /// The privileged state buffer (ADR-0079 item 7): only for an
     /// environment that implements `PrivilegedState`, in Sync mode.
     pub(crate) privileged_state: bool,
@@ -1799,6 +1829,7 @@ where
         render,
         adaptive,
         cursor: None,
+        onnx_loaded: Vec::new(),
     }))
 }
 
@@ -1951,8 +1982,8 @@ pub(crate) fn keydoor(
     let (options, n) = options(args)?;
     let same_step = options.auto_reset == AutoReset::SameStep;
     let pool = EnvPool::<KeyDoor, Masked>::with_masks(cfg.clone(), options)?;
-    let pool = crate::policy::perfect(pool, args)?;
-    finish_rendered(&cfg, pool, args, n, same_step)
+    let (pool, onnx) = crate::policy::perfect(pool, args)?;
+    finish_rendered(&cfg, pool, args, n, same_step).map(|ops| with_onnx(ops, onnx))
 }
 
 /// A Gather pool (`tessera/Gather-v1`, ADR-0082). A value too large for the
@@ -2011,8 +2042,8 @@ pub(crate) fn paddleduel(
     let (options, n) = options(args)?;
     let same_step = options.auto_reset == AutoReset::SameStep;
     let pool = EnvPool::<PaddleDuel, NoMasks>::new(cfg.clone(), options)?;
-    let pool = crate::policy::perfect(pool, args)?;
-    finish_rendered(&cfg, pool, args, n, same_step)
+    let (pool, onnx) = crate::policy::perfect(pool, args)?;
+    finish_rendered(&cfg, pool, args, n, same_step).map(|ops| with_onnx(ops, onnx))
 }
 
 /// A brick wall pool (`tessera/BrickWall-v1`). `obs` names the observation.
@@ -2070,8 +2101,8 @@ pub(crate) fn snake(
     let (options, n) = options(args)?;
     let same_step = options.auto_reset == AutoReset::SameStep;
     let pool = EnvPool::<Snake, Masked>::with_masks(cfg.clone(), options)?;
-    let pool = crate::policy::perfect(pool, args)?;
-    finish_rendered(&cfg, pool, args, n, same_step)
+    let (pool, onnx) = crate::policy::perfect(pool, args)?;
+    finish_rendered(&cfg, pool, args, n, same_step).map(|ops| with_onnx(ops, onnx))
 }
 
 /// The Tag config fields, by name, as Python passes them.
@@ -2099,8 +2130,8 @@ pub(crate) fn tag(args: &PoolArgs, fields: &TagFields) -> Result<Box<dyn PoolOps
     let (options, n) = options(args)?;
     let same_step = options.auto_reset == AutoReset::SameStep;
     let pool = EnvPool::<Tag, Masked>::with_masks(cfg.clone(), options)?;
-    let pool = crate::policy::info(pool, args)?;
-    finish(&cfg, pool, args, n, same_step)
+    let (pool, onnx) = crate::policy::info(pool, args)?;
+    finish(&cfg, pool, args, n, same_step).map(|ops| with_onnx(ops, onnx))
 }
 
 /// The RTS config fields, by name, as Python passes them.
@@ -2139,8 +2170,8 @@ pub(crate) fn rts(args: &PoolArgs, fields: &RtsFields) -> Result<Box<dyn PoolOps
     let same_step = options.auto_reset == AutoReset::SameStep;
     let pool = EnvPool::<Rts, Masked>::with_masks(cfg.clone(), options)?;
     // Heuristic slots play the fog-respecting Rush bot (#586).
-    let pool = crate::policy::info(pool, args)?;
-    finish(&cfg, pool, args, n, same_step)
+    let (pool, onnx) = crate::policy::info(pool, args)?;
+    finish(&cfg, pool, args, n, same_step).map(|ops| with_onnx(ops, onnx))
 }
 
 /// The limit order book config fields, as Python passes them: the `u32`
@@ -2184,9 +2215,9 @@ pub(crate) fn lob(args: &PoolArgs, fields: &LobFields) -> Result<Box<dyn PoolOps
     let same_step = options.auto_reset == AutoReset::SameStep;
     let pool = EnvPool::<LimitOrderBook, Masked>::with_masks(cfg.clone(), options)?;
     // Heuristic slots from the information state (InfoHeuristic), as Tag (#470).
-    let pool = crate::policy::info(pool, args)?;
+    let (pool, onnx) = crate::policy::info(pool, args)?;
     let pool = crate::privileged::apply(pool, args)?;
-    finish(&cfg, pool, args, n, same_step)
+    finish(&cfg, pool, args, n, same_step).map(|ops| with_onnx(ops, onnx))
 }
 
 /// A Connect Four pool (`tessera/Connect4-v1`), with masks and
@@ -2196,8 +2227,8 @@ pub(crate) fn connect4(args: &PoolArgs) -> Result<Box<dyn PoolOps>, BindError> {
     let (options, n) = options(args)?;
     let same_step = options.auto_reset == AutoReset::SameStep;
     let pool = EnvPool::<Connect4, Masked>::with_masks(cfg.clone(), options)?;
-    let pool = crate::policy::perfect(pool, args)?;
-    finish_rendered(&cfg, pool, args, n, same_step)
+    let (pool, onnx) = crate::policy::perfect(pool, args)?;
+    finish_rendered(&cfg, pool, args, n, same_step).map(|ops| with_onnx(ops, onnx))
 }
 
 /// An Othello pool (`tessera/Othello-v1`), with masks and Sequential turns.
@@ -2206,8 +2237,8 @@ pub(crate) fn othello(args: &PoolArgs) -> Result<Box<dyn PoolOps>, BindError> {
     let (options, n) = options(args)?;
     let same_step = options.auto_reset == AutoReset::SameStep;
     let pool = EnvPool::<Othello, Masked>::with_masks(cfg.clone(), options)?;
-    let pool = crate::policy::perfect(pool, args)?;
-    finish_rendered(&cfg, pool, args, n, same_step)
+    let (pool, onnx) = crate::policy::perfect(pool, args)?;
+    finish_rendered(&cfg, pool, args, n, same_step).map(|ops| with_onnx(ops, onnx))
 }
 
 /// A Go 9x9 pool (`tessera/Go9-v1`), with masks and Sequential turns.
@@ -2219,8 +2250,8 @@ pub(crate) fn go9(args: &PoolArgs, komi: Option<i32>) -> Result<Box<dyn PoolOps>
     let (options, n) = options(args)?;
     let same_step = options.auto_reset == AutoReset::SameStep;
     let pool = EnvPool::<Go9, Masked>::with_masks(cfg.clone(), options)?;
-    let pool = crate::policy::perfect(pool, args)?;
-    finish_rendered(&cfg, pool, args, n, same_step)
+    let (pool, onnx) = crate::policy::perfect(pool, args)?;
+    finish_rendered(&cfg, pool, args, n, same_step).map(|ops| with_onnx(ops, onnx))
 }
 
 /// A Leduc hold'em pool (`tessera/Leduc-v1`), with masks and Sequential
@@ -2230,9 +2261,9 @@ pub(crate) fn leduc(args: &PoolArgs) -> Result<Box<dyn PoolOps>, BindError> {
     let (options, n) = options(args)?;
     let same_step = options.auto_reset == AutoReset::SameStep;
     let pool = EnvPool::<Leduc, Masked>::with_masks(cfg.clone(), options)?;
-    let pool = crate::policy::info(pool, args)?;
+    let (pool, onnx) = crate::policy::info(pool, args)?;
     let pool = crate::privileged::apply(pool, args)?;
-    finish(&cfg, pool, args, n, same_step)
+    finish(&cfg, pool, args, n, same_step).map(|ops| with_onnx(ops, onnx))
 }
 
 /// The Lanterns config fields, by name, as Python passes them.
@@ -2256,8 +2287,8 @@ pub(crate) fn lanterns(
     let (options, n) = options(args)?;
     let same_step = options.auto_reset == AutoReset::SameStep;
     let pool = EnvPool::<Lanterns, Masked>::with_masks(cfg.clone(), options)?;
-    let pool = crate::policy::info(pool, args)?;
-    finish(&cfg, pool, args, n, same_step)
+    let (pool, onnx) = crate::policy::info(pool, args)?;
+    finish(&cfg, pool, args, n, same_step).map(|ops| with_onnx(ops, onnx))
 }
 
 /// The JobShop config fields, by name, as Python passes them.
@@ -2283,8 +2314,8 @@ pub(crate) fn jobshop(
     let (options, n) = options(args)?;
     let same_step = options.auto_reset == AutoReset::SameStep;
     let pool = EnvPool::<JobShop, Masked>::with_masks(cfg.clone(), options)?;
-    let pool = crate::policy::perfect(pool, args)?;
-    finish(&cfg, pool, args, n, same_step)
+    let (pool, onnx) = crate::policy::perfect(pool, args)?;
+    finish(&cfg, pool, args, n, same_step).map(|ops| with_onnx(ops, onnx))
 }
 
 /// The Vrp config fields, by name, as Python passes them.
@@ -2311,8 +2342,8 @@ pub(crate) fn vrp(args: &PoolArgs, fields: &VrpFields) -> Result<Box<dyn PoolOps
     let (options, n) = options(args)?;
     let same_step = options.auto_reset == AutoReset::SameStep;
     let pool = EnvPool::<Vrp, Masked>::with_masks(cfg.clone(), options)?;
-    let pool = crate::policy::perfect(pool, args)?;
-    finish(&cfg, pool, args, n, same_step)
+    let (pool, onnx) = crate::policy::perfect(pool, args)?;
+    finish(&cfg, pool, args, n, same_step).map(|ops| with_onnx(ops, onnx))
 }
 
 /// The `SurvivalConfig` fields, in the order of `api::SURVIVAL_KEYS` (its
@@ -2345,8 +2376,8 @@ pub(crate) fn survival(
     let (options, n) = options(args)?;
     let same_step = options.auto_reset == AutoReset::SameStep;
     let pool = EnvPool::<Survival, Masked>::with_masks(cfg.clone(), options)?;
-    let pool = crate::policy::info(pool, args)?;
-    finish(&cfg, pool, args, n, same_step)
+    let (pool, onnx) = crate::policy::info(pool, args)?;
+    finish(&cfg, pool, args, n, same_step).map(|ops| with_onnx(ops, onnx))
 }
 
 #[cfg(test)]
@@ -2407,6 +2438,7 @@ mod tests {
             transforms: tessera_rl_engine::Transforms::new(),
             policy_map: None,
             league: None,
+            onnx_opponents: None,
             pipelined: false,
             asynced: None,
             privileged_state: false,
@@ -2509,6 +2541,7 @@ mod tests {
             transforms: tessera_rl_engine::Transforms::new(),
             policy_map: None,
             league: None,
+            onnx_opponents: None,
             privileged_state: false,
             targets: false,
             pipelined: false,
@@ -2532,6 +2565,7 @@ mod tests {
             transforms: tessera_rl_engine::Transforms::new(),
             policy_map: None,
             league: None,
+            onnx_opponents: None,
             privileged_state: false,
             targets: false,
             pipelined,
@@ -2762,6 +2796,7 @@ mod tests {
             transforms: tessera_rl_engine::Transforms::new(),
             policy_map: None,
             league: None,
+            onnx_opponents: None,
             privileged_state: false,
             targets: false,
             pipelined: false,

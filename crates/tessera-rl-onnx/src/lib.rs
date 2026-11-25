@@ -41,7 +41,7 @@ pub use evaluator::{
 #[cfg(feature = "onnx")]
 pub use loader::{PINNED_VERSION, Runtime, load_runtime};
 #[cfg(feature = "onnx")]
-pub use opponents::{OnnxOpponents, content_hash};
+pub use opponents::{OnnxOpponents, content_hash, model_provenance};
 #[cfg(feature = "onnx")]
 pub use provenance::Provenance;
 #[cfg(feature = "onnx")]

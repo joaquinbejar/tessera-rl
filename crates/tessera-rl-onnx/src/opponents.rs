@@ -59,6 +59,26 @@ pub fn content_hash(model: &[u8]) -> [u8; 16] {
     out
 }
 
+/// A model's league content hash and provenance, as
+/// [`OnnxOpponents::new`] records them, without building a session: what
+/// Python reports for `make(..., onnx_opponents=)` (#619).
+///
+/// # Errors
+///
+/// Any loader error; [`OnnxError::Model`] if the model is too large or
+/// cannot be read.
+pub fn model_provenance(
+    model: &Path,
+    options: &OnnxOptions,
+) -> Result<([u8; 16], Provenance), OnnxError> {
+    let runtime = load_runtime(&options.library, options.telemetry)?;
+    let bytes = read_model(model, options.max_model_bytes)?;
+    Ok((
+        content_hash(&bytes),
+        Provenance::new(runtime, crate::hash::sha256(&bytes), options),
+    ))
+}
+
 impl OnnxOpponents {
     /// Loads the opponent models at `models` for `cfg`'s environment.
     ///

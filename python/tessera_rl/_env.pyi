@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: MIT OR Apache-2.0
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from types import TracebackType
 from typing import Any, NamedTuple, TypeAlias, TypedDict
 
@@ -8,6 +8,7 @@ import numpy.typing as npt
 
 from tessera_rl import _native
 from tessera_rl._archive import Archive
+from tessera_rl.search import OnnxOpponents
 
 _Ids: TypeAlias = int | Sequence[int] | npt.NDArray[np.integer[Any]] | range | None
 
@@ -101,6 +102,8 @@ class Env:
     @property
     def state(self) -> dict[str, np.ndarray] | None: ...
     @property
+    def onnx_provenance(self) -> Mapping[str, Mapping[str, Any]] | None: ...
+    @property
     def assignment(self) -> np.ndarray | None: ...
     @property
     def heuristic_actions(self) -> np.ndarray | None: ...
@@ -131,5 +134,11 @@ class Env:
 def native_kwargs(**kwargs: Any) -> dict[str, Any]: ...
 def is_stale(array: Any) -> bool: ...
 def make(
-    env_id: str, num_envs: int = 1, seed: int = 0, outputs: str = "borrowed", **kwargs: Any
+    env_id: str,
+    num_envs: int = 1,
+    seed: int = 0,
+    outputs: str = "borrowed",
+    *,
+    onnx_opponents: OnnxOpponents | None = None,
+    **kwargs: Any,
 ) -> Env: ...

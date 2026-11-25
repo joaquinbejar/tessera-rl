@@ -105,7 +105,7 @@ pub(crate) fn no_positional(g: Gil, args: Ref<'_>, name: &str) -> CResult<()> {
     }
 }
 
-const POOL_KEYS: [&str; 19] = [
+const POOL_KEYS: [&str; 23] = [
     "mode",
     "batch_size",
     "gather",
@@ -125,6 +125,10 @@ const POOL_KEYS: [&str; 19] = [
     "league",
     "role",
     "targets",
+    "onnx_models",
+    "onnx_library",
+    "onnx_accept_telemetry",
+    "onnx_max_model_bytes",
 ];
 
 /// The `outputs` mode: `"borrowed"` (the native default, ADR-0003) or
@@ -198,9 +202,61 @@ fn mode_args(g: Gil, kw: &Kwargs<'_>) -> CResult<(bool, Option<(usize, BatchOutp
     }
 }
 
+/// A filesystem path as Python's `os.fsencode` gives it, exact `bytes`:
+/// taken byte for byte on Unix (any bytes but NUL, newlines and non-UTF-8
+/// included), as UTF-8 elsewhere.
+pub(crate) fn path_of(g: Gil, v: Ref<'_>, what: &str) -> CResult<std::path::PathBuf> {
+    let b = capi::bytes_of(g, v, what)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt as _;
+        Ok(std::path::PathBuf::from(std::ffi::OsStr::from_bytes(b)))
+    }
+    #[cfg(not(unix))]
+    {
+        String::from_utf8(b.to_vec())
+            .map(std::path::PathBuf::from)
+            .map_err(|_| error(g, Kind::Argument, format!("{what} is not UTF-8")))
+    }
+}
+
+/// `onnx_models` (a list of paths, each `bytes` from `os.fsencode`),
+/// `onnx_library`, `onnx_accept_telemetry` and
+/// `onnx_max_model_bytes`: the ONNX opponents
+/// `tessera_rl.make(..., onnx_opponents=)` passes (#619); all or none.
+fn onnx_args(g: Gil, kw: &Kwargs<'_>) -> CResult<Option<crate::policy::OnnxOpponentArgs>> {
+    let models = match kw.get("onnx_models") {
+        None => None,
+        Some(list) => Some(
+            capi::list_items(g, list, "onnx_models")?
+                .iter()
+                .map(|item| path_of(g, item.as_ref(), "an onnx_models item"))
+                .collect::<CResult<Vec<_>>>()?,
+        ),
+    };
+    let library = kw.string(g, "onnx_library")?;
+    let accept = kw.bool(g, "onnx_accept_telemetry")?;
+    let max = kw.u64(g, "onnx_max_model_bytes")?;
+    match (models, library) {
+        (None, None) if accept.is_none() && max.is_none() => Ok(None),
+        (Some(models), Some(library)) => Ok(Some(crate::policy::OnnxOpponentArgs {
+            models,
+            library: std::path::PathBuf::from(library),
+            accept_telemetry: accept.unwrap_or(false),
+            max_model_bytes: max,
+        })),
+        _ => Err(error(
+            g,
+            Kind::Argument,
+            "onnx_models and onnx_library go together".to_owned(),
+        )),
+    }
+}
+
 fn pool_args(g: Gil, kw: &Kwargs<'_>, default_limit: u32) -> CResult<PoolArgs> {
     let (pipelined, asynced) = mode_args(g, kw)?;
     Ok(PoolArgs {
+        onnx_opponents: onnx_args(g, kw)?,
         pipelined,
         asynced,
         num_envs: kw.u32(g, "num_envs")?.unwrap_or(1),
@@ -1471,6 +1527,25 @@ pub(crate) fn assignment<'py>(g: Gil<'py>, inner: &Inner) -> CResult<Mine<'py>> 
             Some(bytes) => capi::bytes(g, &bytes),
             None => Ok(capi::none(g)),
         }
+    })
+}
+
+/// `onnx_loaded() -> dict | None`: the provenance of each ONNX opponent
+/// model this pool loaded, by content hash, read from the loaded models at
+/// construction (#619); `None` without ONNX opponents.
+pub(crate) fn onnx_loaded<'py>(g: Gil<'py>, inner: &Inner) -> CResult<Mine<'py>> {
+    inner.with(g, |ops| {
+        let loaded = ops.onnx_loaded();
+        if loaded.is_empty() {
+            return Ok(capi::none(g));
+        }
+        let d = capi::dict(g)?;
+        for (hash, info) in loaded {
+            let key = std::ffi::CString::new(hash.as_str())
+                .map_err(|_| error(g, Kind::Argument, "a content hash with NUL".to_owned()))?;
+            capi::dict_set(g, &d, &key, &crate::onnx_api::info_dict(g, info)?)?;
+        }
+        Ok(d)
     })
 }
 

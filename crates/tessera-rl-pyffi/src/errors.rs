@@ -333,7 +333,12 @@ pub fn engine_kind(e: &EngineError) -> Kind {
         // An archive of another environment, version or config (ADR-0075).
         | EngineError::ArchiveMismatch { .. }
         | EngineError::AdaptiveNotRead { .. }
-        | EngineError::AdaptiveContext { .. } => Kind::Config,
+        | EngineError::AdaptiveContext { .. }
+        // An invalid league setup (ADR-0088 section 2; #619).
+        | EngineError::League { .. } => Kind::Config,
+        // An ONNX opponent policy failed to run (ADR-0088 erratum 2;
+        // #619): nothing written, not poisoned.
+        EngineError::OpponentPolicy(_) => Kind::Onnx,
         EngineError::InstanceOutOfRange { .. }
         | EngineError::DuplicateInstance { .. }
         | EngineError::SeedCount { .. }
@@ -399,5 +404,27 @@ pub fn persist_kind(e: &tessera_rl_engine::PersistError) -> Kind {
     match e {
         tessera_rl_engine::PersistError::Engine(e) => engine_kind(e),
         _ => Kind::Persist,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use tessera_rl_engine::EngineError;
+    use tessera_rl_engine::league::OpponentPolicyError;
+
+    use super::{Kind, engine_kind};
+
+    #[test]
+    fn test_engine_kind_league_and_opponent_policy_are_config_and_onnx() {
+        assert_eq!(
+            engine_kind(&EngineError::League { reason: "x" }),
+            Kind::Config
+        );
+        assert_eq!(
+            engine_kind(&EngineError::OpponentPolicy(OpponentPolicyError {
+                reason: "x".to_owned()
+            })),
+            Kind::Onnx
+        );
     }
 }

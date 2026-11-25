@@ -14,8 +14,12 @@ never blocks.
 
 ``population`` is a list of ``"heuristic"``, ``("external", tag)`` or
 ``("onnx", content_hash)`` (32 hex digits) entries. ONNX entries are kept,
-saved and exported, but ``make`` refuses a league with one
-(``CapabilityError``): ONNX opponents from Python come later.
+saved and exported; ``make`` plays them with the models of
+``onnx_opponents=tessera_rl.search.OnnxOpponents(...)``, which must serve
+every such hash (``ArgumentError`` otherwise). Results with ONNX opponents
+are repeatable only in ADR-0057's class: the same machine, the same
+library and model bytes, the same batch composition; never across
+platforms.
 
 ``roles`` is a list of dicts, one per learner role:
 

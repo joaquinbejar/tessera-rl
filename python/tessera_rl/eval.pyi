@@ -22,5 +22,6 @@ def evaluate(
     external: dict[int, Callable[..., Any]] | None = None,
     names: dict[str, Any] | None = None,
     max_steps: int = ...,
+    onnx_opponents: Any = None,
 ) -> dict[str, Any]: ...
 def main(argv: list[str] | None = None) -> int: ...

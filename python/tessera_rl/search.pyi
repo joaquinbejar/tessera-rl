@@ -71,6 +71,19 @@ class OnnxEvaluator:
     @property
     def provenance(self) -> Mapping[str, Any] | None: ...
 
+class OnnxOpponents:
+    def __init__(
+        self,
+        models: Sequence[str | bytes | PathLike[str] | PathLike[bytes]],
+        *,
+        library: str | PathLike[str] | None = None,
+        accept_telemetry: bool = False,
+        max_model_bytes: int | None = None,
+    ) -> None: ...
+    @property
+    def provenance(self) -> Mapping[str, Mapping[str, Any]]: ...
+    def _native_kwargs(self) -> dict[str, Any]: ...
+
 def joint_log_prior(
     logits: Sequence[np.ndarray],
     nvec: Sequence[int],

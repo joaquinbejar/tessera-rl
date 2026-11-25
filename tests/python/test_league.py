@@ -137,10 +137,17 @@ def test_league_save_load_and_export_round_trip():
         tessera_rl.League.load(data[:-1])
 
 
-def test_league_onnx_entry_is_refused_by_make_naming_the_entry():
+def test_league_onnx_entry_without_onnx_opponents_is_refused_naming_the_entry():
     league = tessera_rl.League(POP + [("onnx", "07" * 16)], [{"matchmaking": "uniform"}])
-    with pytest.raises(tessera_rl.CapabilityError, match="league policy 2 is an ONNX opponent"):
+    with pytest.raises(tessera_rl.ArgumentError, match="league policy 2 is ONNX " + "07" * 16 + " and make has no onnx_opponents="):
         _pool(league)
+
+
+def test_league_errors_remapped_for_619_subclass_tessera_error():
+    # #619: league and opponent-policy errors now raise ConfigError and
+    # OnnxError; both stay TesseraError for existing handlers.
+    assert issubclass(tessera_rl.ConfigError, tessera_rl.TesseraError)
+    assert issubclass(tessera_rl.OnnxError, tessera_rl.TesseraError)
 
 
 @pytest.mark.parametrize(
@@ -228,3 +235,69 @@ def test_league_gym_refuses_a_league_pool_pointing_to_pettingzoo():
     the Gymnasium adapter refuses it with a typed error naming the way out."""
     with pytest.raises(tessera_rl.CapabilityError, match="PettingZoo adapter"):
         gym.make(DUEL, num_envs=2, workers=0, agents=2, policy_map={1: "opponent"}, league=_league(), role=0)
+
+
+# A league handle is resolved once, at ``make``: the pool keeps its own share
+# of the league (``SharedLeague``), so dropping the ``League`` object, or
+# passing it as a temporary, never breaks a pool afterwards (#619).
+
+
+def _step(env, steps=40):
+    env.reset()
+    acts = np.zeros((env.num_envs, env.agents), dtype=np.int32)
+    for s in range(steps):
+        acts[:] = s % 3
+        env.step(acts)
+
+
+def test_league_temporary_in_make_keeps_the_pool_working_after_gc():
+    import gc
+
+    env = _pool(tessera_rl.League(POP, [{"matchmaking": "uniform"}]))
+    gc.collect()
+    _step(env)
+    env.epoch_barrier()
+    env.reset()
+    _step(env)
+    assert env.assignment is not None
+    env.close()
+
+
+def test_league_dropped_while_its_pool_lives_keeps_the_pool_working():
+    import gc
+
+    league = tessera_rl.League(POP, [{"matchmaking": "uniform"}])
+    env = _pool(league)
+    _step(env, 10)
+    del league
+    gc.collect()
+    _step(env)
+    env.epoch_barrier()
+    _step(env)
+    env.close()
+
+
+def test_league_eval_survives_gc_during_its_episodes():
+    import gc
+    import os
+    import sys
+
+    from tessera_rl import eval as tev
+
+    sys.path.insert(0, os.path.dirname(__file__))
+    import eval_policies as pol  # noqa: E402
+
+    def collecting(observations, info):
+        gc.collect()
+        return pol.chase(observations, info)
+
+    report = tev.evaluate(
+        DUEL,
+        collecting,
+        [(0, "heuristic")],
+        seeds=[11, 12, 13],
+        episodes=4,
+        pools=2,
+        env_kwargs={"agents": 2, "max_episode_steps": 40},
+    )
+    assert report["opponents"][0]["episodes"] == 4
