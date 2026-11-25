@@ -119,6 +119,16 @@ const fn split(bits: u128) -> [u64; 2] {
     [bits as u64, (bits >> 64) as u64]
 }
 
+/// Whether two history entries are equal, as one XOR and OR of the three
+/// words: no slice or array compare, so no `memcmp`/`bcmp` call at any LTO
+/// level (#611; on musl `memcmp` is a byte loop, #583).
+#[inline]
+#[must_use]
+const fn same(a: &[u64; 3], b: &[u64; 3]) -> bool {
+    let ([a0, a1, a2], [b0, b1, b2]) = (*a, *b);
+    ((a0 ^ b0) | (a1 ^ b1) | (a2 ^ b2)) == 0
+}
+
 /// Packs a position into 192 bits: black in the low 81, white above.
 #[expect(
     clippy::cast_possible_truncation,
@@ -185,7 +195,7 @@ impl Go9State {
         let packed = pack(black, white);
         self.history
             .get(..n as usize)
-            .is_some_and(|h| h.contains(&packed))
+            .is_some_and(|h| h.iter().any(|entry| same(entry, &packed)))
     }
 
     /// The legal placement on the point `sq` for the side to move: its
@@ -551,4 +561,35 @@ impl Heuristic for Go9 {
 impl tessera_rl_core::Persist for Go9 {
     const ENV_ID: &'static str = ENV_ID;
     const ENV_VERSION: u32 = ENV_VERSION;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::same;
+
+    const A: [u64; 3] = [
+        0x0123_4567_89ab_cdef,
+        0xfedc_ba98_7654_3210,
+        0x0f0f_0f0f_0f0f_0f0f,
+    ];
+
+    #[test]
+    fn test_same_equal_entries_are_equal() {
+        assert!(same(&A, &A));
+        assert!(same(&[0; 3], &[0; 3]));
+    }
+
+    #[test]
+    fn test_same_entries_differing_in_one_word_are_not_equal() {
+        for word in 0..3 {
+            for bit in [0, 17, 63] {
+                let mut b = A;
+                if let Some(w) = b.get_mut(word) {
+                    *w ^= 1 << bit;
+                }
+                assert!(!same(&A, &b), "word {word} bit {bit}");
+                assert!(!same(&b, &A), "word {word} bit {bit}");
+            }
+        }
+    }
 }
