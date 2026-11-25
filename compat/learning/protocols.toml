@@ -73,6 +73,23 @@ adapter = "tessera_rl.gym (SAME_STEP)"
 total_steps = 150000
 hyper = {}
 
+# tessera/Gather-v1 (#370, single-agent, so T1 rather than T3b): +1 per item
+# collected, terminated when all are, truncated at the step cap. Its Dict
+# observation (agent, the items Set and its mask) goes through the T1
+# flattening. CleanRL defaults and the T1 budget, pre-declared (no tuning
+# loop). No calibration, so no nightly gate: the pilot crashed in the T1
+# trainer, not in Gather or the adapter. When every instance ends on the same
+# step (Gather's synchronized truncations at the cap), _FlatVector's
+# np.array(..., dtype=object) builds a 2-D object array, so final_obs rows are
+# object dtype and the truncation bootstrap fails. The fix moves the T1 and
+# T3a fingerprints; it, the recalibrations and Gather's calibration are #564.
+[gather]
+env = "tessera/Gather-v1"
+tier = "T1"
+adapter = "tessera_rl.gym (SAME_STEP)"
+total_steps = 150000
+hyper = {}
+
 [pendulum]
 env = "tessera/Pendulum-v1"
 tier = "T2"
@@ -126,7 +143,10 @@ eval_episodes = 10
 # scores an episode +1, 0 or -1 from the learner's seat; "return" uses the
 # return. ``total_steps`` counts the learner's own turns. The thresholds are
 # in gates.toml. Calibrated on xaskar (#370, 10 seeds, threshold = their
-# minimum): connect4, othello, go9 and tag learn and run nightly; leduc has no
+# minimum): connect4, othello, go9 and tag learn and run nightly. The nightly
+# gates "learns" (both thresholds: closing part of the gap from uniform play
+# towards the heuristic, and beating uniform play), not "beats the heuristic":
+# Connect4's median against the heuristic is -0.24 (REVIEW-T3b-calibration-r1); leduc has no
 # gate, because lower95(H - U) = -0.34 <= 0 (its heuristic does not beat
 # uniform play, so there is no gap to close; docs/reviews/370/cal-final;
 # follow-up #559).

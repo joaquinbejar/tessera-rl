@@ -25,6 +25,11 @@ min_effect = 0.10
 solved = 1.0
 min_effect = 0.10
 
+[gather]
+# Every item collected (the default config has 8 items, +1 each).
+solved = 8.0
+min_effect = 0.10
+
 [pendulum]
 # A common "solved" level (Gymnasium names no reward threshold for it); a
 # random policy scores about -1200 per 200-step episode.
