@@ -22,10 +22,16 @@ jobs:
       # rejects; turn it off and forward the switch into the interpreter.
       PROPTEST_DISABLE_FAILURE_PERSISTENCE: "1"
       MIRIFLAGS: -Zmiri-env-forward=PROPTEST_DISABLE_FAILURE_PERSISTENCE
+      # Warnings are errors here as in ci.yml, whose workflow env does not
+      # reach this file: cfg(miri)-only dead code went unseen (#703).
+      RUSTFLAGS: -D warnings
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - run: rustup toolchain install nightly --profile minimal --component miri
+      # The sysroot build is Miri's own, not this repository's code.
       - run: cargo +nightly miri setup
+        env:
+          RUSTFLAGS: ""
       - run: cargo +nightly miri test -p tessera-rl-core --locked
       - run: "cargo +nightly miri test -p tessera-rl-engine --lib --locked -- buffer:: validate:: transform::"
       # Observation transforms (ADR-0078): the arena, accumulator and
