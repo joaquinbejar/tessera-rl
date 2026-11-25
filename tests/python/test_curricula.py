@@ -16,7 +16,8 @@ N = 4
 
 def make(**kwargs):
     kwargs.setdefault("targets", True)
-    return t.make(GATHER, num_envs=N, seed=7, outputs="owned", auto_reset="disabled", **kwargs)
+    kwargs.setdefault("auto_reset", "disabled")
+    return t.make(GATHER, num_envs=N, seed=7, outputs="owned", **kwargs)
 
 
 def reset_counts(env):
@@ -110,7 +111,7 @@ def run_curriculum(env, steps=60):
 
 
 def test_epoch_barrier_curriculum_changes_targets_only_at_barriers():
-    env = make(items=1, max_steps=8)
+    env = make(items=1, max_steps=8, auto_reset="next_step")
     seen = []
 
     def spy(report, targets):
@@ -124,7 +125,7 @@ def test_epoch_barrier_curriculum_changes_targets_only_at_barriers():
     assert env.epoch_barrier(curriculum=spy)["episodes"]["count"] >= 0
     assert seen == [[1, 1, 1, 1]]
     hashes, targets = run_curriculum(env)
-    again = make(items=1, max_steps=8)
+    again = make(items=1, max_steps=8, auto_reset="next_step")
     again.reset()
     again.step(np.zeros((N, 1), dtype=np.int32))
     again.epoch_barrier(curriculum=raise_on_return)
@@ -154,17 +155,17 @@ def test_epoch_barrier_curriculum_exception_propagates_and_writes_nothing():
 
 def test_python_curriculum_run_replays_without_the_callable(tmp_path):
     path = tmp_path / "curriculum.trpl"
-    env = make(items=1, max_steps=8)
+    env = make(items=1, max_steps=8, auto_reset="next_step")
     with replay.record(env, path, checkpoint_every=4):
         hashes, targets = run_curriculum(env)
     env.close()
-    target_env = make(items=1, max_steps=8)
+    target_env = make(items=1, max_steps=8, auto_reset="next_step")
     summary = replay.run(path, target_env)
     assert not summary.poisoned
     assert [target_env.state_hash(i) for i in range(N)] == hashes
     assert target_env.targets() == targets
     target_env.close()
-    plain = t.make(GATHER, num_envs=N, seed=7, outputs="owned", auto_reset="disabled", items=1, max_steps=8)
+    plain = t.make(GATHER, num_envs=N, seed=7, outputs="owned", auto_reset="next_step", items=1, max_steps=8)
     with pytest.raises(t.PersistError):
         replay.run(path, plain)
     plain.close()
