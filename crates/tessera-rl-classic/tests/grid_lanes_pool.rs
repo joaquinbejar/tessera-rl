@@ -263,7 +263,11 @@ fn differential(cfg: &GridConfig, case: Case) {
             grid.reset(&partial, Reseed::Keep).unwrap();
             rows.reset(&partial, Reseed::Keep).unwrap();
         }
-        if t % 37 == 36 {
+        // Grid's validator assumes the walk's parity, which a wall breaks
+        // (a blocked move spends a step), so Grid refuses reachable states of a
+        // walled layout on import; the imports run on the open layout here and
+        // on every layout in `test_grid_lanes_pool_records_cross_stores_on_walls`.
+        if t % 37 == 36 && cfg.layout.get().wall_count() == 0 {
             // Records cross the stores through their bytes, both ways, and
             // Grid's records import into GridLanes through the mapping.
             let from_rows = rows.encode(&ids).unwrap();
@@ -328,6 +332,48 @@ fn test_grid_lanes_pool_small_matches_grid() {
 #[test]
 fn test_grid_lanes_pool_large_matches_grid() {
     matrix(&[1000], &[8, 1024], &[0, 2], 60);
+}
+
+#[test]
+fn test_grid_lanes_pool_records_cross_stores_on_walls() {
+    // GridLanes and its row twin on every layout, walls included: records
+    // cross the stores both ways, mid-episode, and the pools stay equal.
+    for cfg in configs() {
+        let case = Case {
+            n: 20,
+            chunk: 8,
+            workers: 0,
+            auto_reset: AutoReset::NextStep,
+            limit: None,
+            steps: 0,
+            level: None,
+        };
+        let mut lanes = pool!(GridLanes, &cfg, case);
+        let mut rows = pool!(GridLanesRows, &cfg, case);
+        let _ = lanes.reset_all(Reseed::Keep).unwrap();
+        let _ = rows.reset_all(Reseed::Keep).unwrap();
+        let ids: Vec<u32> = (0..20).collect();
+        for t in 0..90 {
+            let acts: Vec<i32> = (0..20).map(|i| action(t, i)).collect();
+            let input = ActionInput {
+                discrete: &acts,
+                continuous: &[],
+            };
+            assert_eq!(
+                outputs(lanes.step(input).unwrap(), false),
+                outputs(rows.step(input).unwrap(), false)
+            );
+            if t % 11 == 10 {
+                let from_rows = rows.encode(&ids).unwrap();
+                let from_lanes = lanes.encode(&ids).unwrap();
+                let into_lanes = lanes.decode(&from_rows, DecodeLimits::default()).unwrap();
+                let into_rows = rows.decode(&from_lanes, DecodeLimits::default()).unwrap();
+                lanes.import_all(&into_lanes).unwrap();
+                rows.import_all(&into_rows).unwrap();
+                store_match(&lanes, &rows, 20, "walls");
+            }
+        }
+    }
 }
 
 #[test]

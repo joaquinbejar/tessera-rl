@@ -20,7 +20,8 @@ tessera_rl_core::register!(GridLanes, id = "tessera/GridLanes-v1");
 
 /// Imported states, as Grid's: a goal on the grid other than the start, a
 /// whole-cell position on the grid or one cell off it, an outcome that says
-/// where the agent stands, and a step count the walk from the start allows.
+/// where the agent stands, and a step count the walk from the start allows
+/// (its parity only on a layout without walls).
 impl Validate for GridLanes {
     fn validate(cfg: &GridConfig, s: &GridLanesState) -> Result<(), InvariantViolation> {
         let invalid = |code| Err(InvariantViolation { code });
@@ -43,9 +44,13 @@ impl Validate for GridLanes {
         if s.outcome != outcome((col, row) == goal, !inside) {
             return invalid("an outcome that disagrees with the position");
         }
+        // A move into a wall spends a step without moving, so the parity of
+        // the walk holds only on a layout with no walls (Grid's validator
+        // assumes it always does).
         let distance = i64::from(col.abs()) + i64::from(row.abs());
         let steps = i64::from(s.steps);
-        if steps > i64::from(cfg.max_steps) || steps < distance || (steps - distance) % 2 != 0 {
+        let parity = cfg.layout.get().wall_count() > 0 || (steps - distance) % 2 == 0;
+        if steps > i64::from(cfg.max_steps) || steps < distance || !parity {
             return invalid("a step count that the walk does not allow");
         }
         Ok(())
