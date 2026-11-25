@@ -12,6 +12,7 @@ the API is not stable, and any 0.x release may break it.
 ### Breaking
 
 - `PoolOptions` gains the public field `schedule: Schedule` (ADR-0076, #357, #439): struct literals without `..` must set it; `Schedule::Static` keeps the previous behaviour.
+- `PoolOptions` gains the public field `simd_level: Option<Level>` (ADR-0071, #679): struct literals without `..` must set it; `None` keeps the previous behaviour (the widest level this CPU has, for environments with a lane step).
 - `SyncOptions` gains the public field `wait_policy: WaitPolicy` (ADR-0074, #434): struct literals without `..` must set it; `WaitPolicy::Fixed` keeps the previous behaviour.
 - `PersistError` gains the variants `Transforms` (ADR-0078, #346, #478) and `AssetMismatch` (ADR-0077, #364, #419): an exhaustive `match` on it needs arms for both.
 - `tessera/Grid-v1` is environment version 2 (ADR-0077, #364, #419): a `layout` wall-map asset (`"open"` by default, `"rooms8"` bundled, or bytes). The default reproduces version 1's trajectories (golden step digests unchanged); its config hash and persisted files change.
@@ -32,6 +33,7 @@ the API is not stable, and any 0.x release may break it.
 
 ### Added
 
+- Lane steps over Array-of-Structs chunks (ADR-0071, #679, #680). An environment implements `LaneStep` and sets `Environment::LANE_STEP` to `Some(lane_hook::<Self>())` (the default `None` keeps every instance on `Environment::step`). The engine then steps each eligible group of `LANES` (8) consecutive instances of a chunk through `LaneStep::lane_step`, reporting per lane what `step` would (`LaneOut`), and every other instance through `step`; bookkeeping, observe and resets stay per instance. `PoolOptions::simd_level` picks the SIMD level (`Level`, re-exported by `tessera-rl-engine`): `None` takes the widest this CPU has, and a level it lacks is `EngineError::SimdLevel` at construction, never a silent fallback. The level changes speed only, never results. `tessera/CartPole-v1` implements it, with its environment version and goldens unchanged; CI also runs the goldens with the level forced to scalar. Python reads `TESSERA_RL_SIMD` (`scalar`, `sse42`, `avx2`, `neon`) when a pool is made, for tests and A/B runs only.
 - Curricula from Python (ADR-0081 items 3 and 5.5, #613).
   - `make(..., targets=True)` builds a Sync pool with curriculum targets, for an environment with adaptive config fields (Gather's `items` today). Other environments, and Pipelined or Async mode, raise `ArgumentError`.
   - `Env.adaptive_fields` names the fields.
@@ -182,7 +184,7 @@ the API is not stable, and any 0.x release may break it.
 - Derive macros point their errors at the offending field (#365, #395), and `EnvState` reports a non-plain-data field type at that field only (#388, #461).
 - Python: the Gymnasium adapter gives single-head masked environments (Snake with `agents=1`) their mask in `info["action_mask"]` (`[N, n]` `int8`) and `info["action_masks"]`, (#477) as SPEC 11.3 says and multi-head environments already did; before, these keys were missing.
 
-Internal changes with no user-visible effect are not listed: learning protocols, calibrations and nightly gates (#432, #452, #458, #466, #480, #542, #544, #546, #550, #553, #562, #569, #571, #585, #591, #600, #607, #614, #627, #660), the nightly wall-clock gate (#433, #440), PGO evidence and bench harness (#338, #632, #638), test and tool portability and fixtures (#393, #467, #656), lints (#399), scripts (#516, #518, #637), the docs site (#526, #535), lockfile refreshes (#577, #653), bench-runner entries (#589) and the XLA FFI groundwork without a Python entry point yet (#369 head A, #588, #636).
+Internal changes with no user-visible effect are not listed: learning protocols, calibrations and nightly gates (#432, #452, #458, #466, #480, #542, #544, #546, #550, #553, #562, #569, #571, #585, #591, #600, #607, #614, #627, #660), the nightly wall-clock gate (#433, #440), PGO evidence and bench harness (#338, #632, #638), test and tool portability and fixtures (#393, #467, #656), lints (#399), scripts (#516, #518, #637), the docs site (#526, #535), lockfile refreshes (#577, #653, #677), bench-runner entries (#589) and the XLA FFI groundwork without a Python entry point yet (#369 head A, #588, #636).
 
 ## [0.3.0] - 2026-11-23
 
