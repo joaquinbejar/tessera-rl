@@ -637,13 +637,14 @@ where
     pub(crate) fn store_root(&mut self) -> Result<(), SearchError> {
         let width = idx(self.pool.actions);
         let value = self.values.first().copied().unwrap_or(f64::NAN);
+        let bounded = self.bounded();
         validate_leaf(
             0,
             self.raw_priors.get(..width).unwrap_or(&[]),
             value,
             &self.legal,
             &mut self.priors,
-            self.bounded(),
+            bounded,
         )?;
         if let Some(key) = self.root_key() {
             self.v_root = Some((key, value));
@@ -1221,7 +1222,7 @@ where
     /// applies (`N += 1`, `W += g`, the min-max of `W / N`).
     fn returns_walk(
         &mut self,
-        (mut c, mut s, mut a): (u32, u32, u32),
+        (mut child, mut parent, mut action): (u32, u32, u32),
         mut below: Option<f64>,
         discount: f64,
         apply: bool,
@@ -1231,43 +1232,43 @@ where
             origin: ReturnSource::Reward,
         };
         loop {
-            let r = self.reward(c, self.mover(s)?);
-            let g = match below {
-                None => r,
-                Some(v) => r + discount * v,
+            let reward = self.reward(child, self.mover(parent)?);
+            let ret = match below {
+                None => reward,
+                Some(value) => reward + discount * value,
             };
-            if !g.is_finite() {
-                return Err(non_finite(c));
+            if !ret.is_finite() {
+                return Err(non_finite(child));
             }
             let vl = self.cfg.virtual_loss;
-            let Some(e) = self.pool.edge_mut(s, a) else {
+            let Some(edge) = self.pool.edge_mut(parent, action) else {
                 return Err(SearchError::VisitsExhausted);
             };
-            let total = e.value + g;
+            let total = edge.value + ret;
             if !total.is_finite() {
-                return Err(non_finite(c));
+                return Err(non_finite(child));
             }
             if apply {
-                let Some(next) = e.virtual_loss.checked_sub(vl) else {
+                let Some(next) = edge.virtual_loss.checked_sub(vl) else {
                     return Err(SearchError::VisitsExhausted);
                 };
-                e.virtual_loss = next;
-                let Some(next) = e.visits.checked_add(1) else {
+                edge.virtual_loss = next;
+                let Some(next) = edge.visits.checked_add(1) else {
                     return Err(SearchError::VisitsExhausted);
                 };
-                e.visits = next;
-                e.value = total;
-                let mean = e.value / count(e.visits);
+                edge.visits = next;
+                edge.value = total;
+                let mean = edge.value / count(edge.visits);
                 self.bounds.update(mean);
             }
-            let Some(&up) = self.pool.node(s) else {
+            let Some(&up) = self.pool.node(parent) else {
                 break;
             };
             if up.parent == NONE {
                 break;
             }
-            below = Some(g);
-            (c, s, a) = (s, up.parent, up.action);
+            below = Some(ret);
+            (child, parent, action) = (parent, up.parent, up.action);
         }
         Ok(())
     }
