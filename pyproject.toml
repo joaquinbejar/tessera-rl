@@ -70,7 +70,6 @@ conformance = [
 markers = [
     "torch: needs PyTorch (the `torch` dependency group)",
     "jax: needs JAX (the `jax` dependency group)",
-    "repo: a property of the repository checkout, not of a built wheel: run by make py-test, deselected by scripts/wheel_job.sh",
 ]
 # Gymnasium's env checker warns about the infinite velocity bounds of
 # CartPole's observation space; it warns identically for Gymnasium's own

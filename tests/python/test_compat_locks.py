@@ -16,11 +16,6 @@ import subprocess
 
 import pytest
 
-# A repository property, not a wheel property: make py-test runs these;
-# scripts/wheel_job.sh deselects the marker (an empty uv cache in a release
-# leg is no evidence about the locks).
-pytestmark = pytest.mark.repo
-
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 PATH_SOURCE = re.compile(r'^tessera-rl\s*=\s*\{[^}]*\bpath\s*=', re.MULTILINE)
 
@@ -59,9 +54,10 @@ def test_compat_lock_is_up_to_date_with_the_root_pyproject(project, tmp_path):
 
 
 @pytest.mark.parametrize("script", ["wheel_job.sh", "pgo_candidate_checks.sh"])
-def test_compat_locks_wheel_runs_deselect_repo_tests(script):
-    """The scripts that run tests/python against a built wheel deselect the
-    `repo` tests."""
+def test_compat_locks_wheel_runs_ignore_this_file(script):
+    """A repository property, not a wheel property: the scripts that run
+    tests/python against a built wheel (no uv, an empty cache) ignore this
+    file, as they ignore test_bench.py; make py-test runs it."""
     text = (ROOT / "scripts" / script).read_text()
     suite = next(line for line in text.splitlines() if '--ignore="$root/tests/python/test_bench.py"' in line)
-    assert '-m "not repo"' in suite, suite
+    assert '--ignore="$root/tests/python/test_compat_locks.py"' in suite, suite
