@@ -32,6 +32,7 @@ mod obs_layout;
 mod options;
 mod pool;
 mod stacks;
+mod value;
 
 pub use determinize::{
     Determinization, ROLLOUT, SAMPLER, rollout_identity, rollout_salt, sampler_identity,
@@ -50,6 +51,7 @@ pub use mcts::{Mcts, PUCT_FORMULA, PuctConfig, RootNoise};
 pub use obs_layout::{LeafLayout, SetLayout, observation_layout};
 pub use options::{Eviction, SearchOptions};
 pub use pool::{MAX_JOINT_ACTIONS, SearchPool};
+pub use value::{ReturnSource, ValueMode};
 
 #[cfg(test)]
 mod tests;

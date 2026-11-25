@@ -240,18 +240,20 @@ pub enum EvaluatorError {
 
 /// Validates one leaf's response (before masking), then writes the
 /// priors renormalized over the legal actions into `out` (illegal
-/// actions get 0).
+/// actions get 0). `bounded` is the `[-1, 1]` value check of
+/// `ValueMode::Terminal`; `Returns` takes any finite value (ADR-0096).
 pub(crate) fn validate_leaf(
     leaf: usize,
     priors: &[f64],
     value: f64,
     legal: &[bool],
     out: &mut [f64],
+    bounded: bool,
 ) -> Result<(), EvaluatorError> {
     if !value.is_finite() || priors.iter().any(|p| !p.is_finite()) {
         return Err(EvaluatorError::NonFinite { leaf });
     }
-    if !(-1.0..=1.0).contains(&value) {
+    if bounded && !(-1.0..=1.0).contains(&value) {
         return Err(EvaluatorError::ValueOutOfRange { leaf });
     }
     if priors.iter().any(|&p| p < 0.0) {

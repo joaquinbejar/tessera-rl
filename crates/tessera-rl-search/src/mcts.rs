@@ -29,6 +29,7 @@ use crate::gumbel::{Gumbel, RootEdge, RootSelection};
 use crate::handle::NodeHandle;
 use crate::noise::dirichlet;
 use crate::pool::{NONE, SearchPool};
+use crate::value::{MinMax, ReturnSource, ValueMode};
 
 /// The PUCT score of an edge (ADR-0043 section 2), with `N` and `VL` the
 /// edge's integer visit and virtual-loss counts and `W` its total value
@@ -76,6 +77,9 @@ pub struct PuctConfig {
     /// Root action selection: PUCT (the default) or the Gumbel root,
     /// which excludes `noise`.
     pub root: RootSelection,
+    /// What a backed-up value is: `Terminal` (the default, ADR-0043) or
+    /// discounted `Returns` (ADR-0096).
+    pub value: ValueMode,
 }
 
 impl Default for PuctConfig {
@@ -88,6 +92,7 @@ impl Default for PuctConfig {
             simulations: 64,
             noise: None,
             root: RootSelection::Puct,
+            value: ValueMode::Terminal,
         }
     }
 }
@@ -155,6 +160,10 @@ pub struct Mcts<E: Environment, M: MaskProvider<E>> {
     saved_v_root: Option<(u64, f64)>,
     /// The Gumbel root's state, under [`RootSelection::Gumbel`] only.
     gumbel: Option<Gumbel>,
+    /// Under `ValueMode::Returns`, the call's min-max of backed-up edge
+    /// means (ADR-0096 decision 4). Reset at each call's start, so a
+    /// rolled-back call needs no restore: nothing reads it between calls.
+    bounds: MinMax,
 }
 
 fn idx(v: u32) -> usize {
@@ -227,6 +236,18 @@ where
         if cfg.simulations == 0 {
             return Err(config_error("simulations", "must be at least 1"));
         }
+        if let ValueMode::Returns { discount } = cfg.value {
+            if !(discount.is_finite() && (0.0..=1.0).contains(&discount)) {
+                return Err(config_error(
+                    "value.discount",
+                    "must be finite and in [0, 1]",
+                ));
+            }
+            // One mover on every path (ADR-0096 decision 3).
+            if pool.searcher.is_none() && pool.agents != 1 {
+                return Err(SearchError::ReturnsNeedOneMover);
+            }
+        }
         if let Some(n) = cfg.noise
             && !(n.alpha.is_finite() && n.alpha > 0.0 && (0.0..=1.0).contains(&n.epsilon))
         {
@@ -284,6 +305,7 @@ where
             v_root: None,
             saved_v_root: None,
             gumbel,
+            bounds: MinMax::default(),
             pool,
         })
     }
@@ -357,6 +379,17 @@ where
     #[cfg(test)]
     pub(crate) fn gumbel_snapshot(&self) -> Option<(u32, u32, u32, u32, bool, Vec<u32>)> {
         self.gumbel.as_ref().map(crate::gumbel::Gumbel::snapshot)
+    }
+
+    /// The Gumbel root's normalization: the call's min-max under
+    /// `ValueMode::Returns`, `None` under `Terminal`.
+    fn norm(&self) -> Option<MinMax> {
+        (!self.bounded()).then_some(self.bounds)
+    }
+
+    /// Whether values are bounded by `[-1, 1]` (`ValueMode::Terminal`).
+    fn bounded(&self) -> bool {
+        self.cfg.value == ValueMode::Terminal
     }
 
     /// The current root's evaluator value, if known.
@@ -440,6 +473,8 @@ where
         let rng = self.search_rng()?;
         self.pool.begin();
         self.saved_v_root = self.v_root;
+        // Each call starts its own min-max (ADR-0096 decision 4).
+        self.bounds = MinMax::default();
         Ok(CallStart { calls, rng })
     }
 
@@ -535,10 +570,12 @@ where
     /// virtual loss or no root visit (unreachable; the call rolls back).
     pub(crate) fn advance_phase(&mut self) -> Result<(), SearchError> {
         let v_root = self.root_value();
+        let norm = self.norm();
         let pool = &self.pool;
-        self.gumbel
-            .as_mut()
-            .map_or(Ok(()), |g| g.advance(|a| root_edge(pool, a), v_root))
+        self.gumbel.as_mut().map_or(Ok(()), |g| {
+            g.norm = norm;
+            g.advance(|a| root_edge(pool, a), v_root)
+        })
     }
 
     /// The Gumbel call's end, after its last backup: the final action and
@@ -549,10 +586,12 @@ where
     /// As [`Self::advance_phase`].
     pub(crate) fn finish_root(&mut self) -> Result<(), SearchError> {
         let v_root = self.root_value();
+        let norm = self.norm();
         let pool = &self.pool;
-        self.gumbel
-            .as_mut()
-            .map_or(Ok(()), |g| g.finish(|a| root_edge(pool, a), v_root))
+        self.gumbel.as_mut().map_or(Ok(()), |g| {
+            g.norm = norm;
+            g.finish(|a| root_edge(pool, a), v_root)
+        })
     }
 
     /// Loads the root into the scratch pool and the evaluation lists, as a
@@ -595,12 +634,14 @@ where
     pub(crate) fn store_root(&mut self) -> Result<(), SearchError> {
         let width = idx(self.pool.actions);
         let value = self.values.first().copied().unwrap_or(f64::NAN);
+        let bounded = self.bounded();
         validate_leaf(
             0,
             self.raw_priors.get(..width).unwrap_or(&[]),
             value,
             &self.legal,
             &mut self.priors,
+            bounded,
         )?;
         if let Some(key) = self.root_key() {
             self.v_root = Some((key, value));
@@ -708,8 +749,17 @@ where
             let n = count(e.visits) + count(e.virtual_loss);
             let q = if n == 0.0 {
                 self.cfg.fpu
-            } else {
+            } else if self.bounded() {
                 (e.value - count(e.virtual_loss)) / n
+            } else {
+                // ADR-0096 decision 4: the normalized mean, with each
+                // virtual visit a normalized 0.
+                let q_norm = if e.visits == 0 {
+                    0.0
+                } else {
+                    self.bounds.normalize(e.value / count(e.visits))
+                };
+                (q_norm * count(e.visits)) / n
             };
             let p = if root {
                 self.root_priors.get(idx(a)).copied().unwrap_or(0.0)
@@ -907,6 +957,7 @@ where
     /// scratch row serves every leaf.
     pub(crate) fn validate_staged(&mut self, k: usize) -> Result<(), SearchError> {
         let width = idx(self.pool.actions);
+        let bounded = self.bounded();
         for leaf in 0..k {
             let row = self.eval_rows.get(leaf).copied().unwrap_or(0);
             let legal = self
@@ -919,7 +970,7 @@ where
                 .get(leaf * width..leaf * width + width)
                 .unwrap_or(&[]);
             let value = self.values.get(leaf).copied().unwrap_or(f64::NAN);
-            validate_leaf(leaf, raw, value, legal, &mut self.priors)?;
+            validate_leaf(leaf, raw, value, legal, &mut self.priors, bounded)?;
         }
         Ok(())
     }
@@ -958,7 +1009,7 @@ where
             // Second pass, after the commit: the same (already valid)
             // response is renormalized again into the scratch row, then
             // written to the child. It cannot fail here.
-            validate_leaf(leaf, raw, value, &self.legal, &mut priors)?;
+            validate_leaf(leaf, raw, value, &self.legal, &mut priors, self.bounded())?;
             self.priors = priors;
             self.write_priors(child);
         }
@@ -1006,6 +1057,50 @@ where
     /// phase.
     pub(crate) fn prepare_noise(&mut self, rng: &mut StepRng) {
         self.prepare_root_priors(rng);
+    }
+
+    /// A leaf's node, and the parent edge into it.
+    fn leaf_edge(&self, leaf: Leaf) -> Result<(u32, u32, u32), SearchError> {
+        Ok(match leaf {
+            Leaf::Edge {
+                parent,
+                action,
+                row,
+            } => (
+                self.children.get(row).map_or(NONE, |h| h.slot),
+                parent,
+                action,
+            ),
+            Leaf::Terminal { slot } => {
+                let Some(n) = self.pool.node(slot) else {
+                    return Err(SearchError::TerminalNode);
+                };
+                (slot, n.parent, n.action)
+            }
+        })
+    }
+
+    /// The step reward of `agent` on the edge into `node`.
+    fn reward(&self, node: u32, agent: usize) -> f64 {
+        let r = self
+            .pool
+            .rewards
+            .get(idx(node) * self.pool.agents + agent)
+            .copied()
+            .unwrap_or(f32::NAN);
+        f64::from(r)
+    }
+
+    /// The evaluator's value of an evaluated (non-terminal) leaf.
+    fn evaluated_value(&self, leaf: Leaf) -> Result<f64, SearchError> {
+        let row = match leaf {
+            Leaf::Edge { row, .. } => row,
+            Leaf::Terminal { .. } => 0,
+        };
+        let Some(k) = self.eval_rows.iter().position(|&r| r == row) else {
+            return Err(SearchError::TerminalNode);
+        };
+        Ok(self.values.get(k).copied().unwrap_or(0.0))
     }
 
     /// The value of a leaf from the view of the player to move at its
@@ -1059,6 +1154,10 @@ where
             let Some(leaf) = self.leaves.get(i).copied() else {
                 continue;
             };
+            if let Some(discount) = self.cfg.value.discount() {
+                self.backup_returns(leaf, discount)?;
+                continue;
+            }
             let (mut s, mut a, mut v) = self.leaf_value(leaf)?;
             loop {
                 let vl = self.cfg.virtual_loss;
@@ -1086,6 +1185,87 @@ where
                 }
                 (s, a) = (node.parent, node.action);
             }
+        }
+        Ok(())
+    }
+
+    /// ADR-0096 decision 2: backs `leaf` up as discounted returns. A
+    /// first walk checks every value it would add (decision 2a) and a
+    /// second, identical one applies them, so a non-finite value leaves
+    /// every edge of the path as it was.
+    fn backup_returns(&mut self, leaf: Leaf, discount: f64) -> Result<(), SearchError> {
+        let (node, parent, action) = self.leaf_edge(leaf)?;
+        // The value below the leaf edge: none at a terminal node (`V = 0`,
+        // so the edge's value is its reward), else the evaluator's.
+        let below = if self.pool.node(node).is_some_and(|n| n.terminal) {
+            None
+        } else {
+            let v = self.evaluated_value(leaf)?;
+            if !v.is_finite() {
+                return Err(SearchError::NonFiniteReturn {
+                    node,
+                    origin: ReturnSource::Evaluator,
+                });
+            }
+            Some(v)
+        };
+        self.returns_walk((node, parent, action), below, discount, false)?;
+        self.returns_walk((node, parent, action), below, discount, true)
+    }
+
+    /// One walk of [`Self::backup_returns`] from edge `(s, a)` into `c`
+    /// up to the root: `g = r(c)` below a terminal node, else
+    /// `g = r(c) + discount * V`, `V` the value below. Checks only, or
+    /// applies (`N += 1`, `W += g`, the min-max of `W / N`).
+    fn returns_walk(
+        &mut self,
+        (mut child, mut parent, mut action): (u32, u32, u32),
+        mut below: Option<f64>,
+        discount: f64,
+        apply: bool,
+    ) -> Result<(), SearchError> {
+        let non_finite = |node, origin| SearchError::NonFiniteReturn { node, origin };
+        loop {
+            let reward = self.reward(child, self.mover(parent)?);
+            if !reward.is_finite() {
+                return Err(non_finite(child, ReturnSource::Reward));
+            }
+            let ret = match below {
+                None => reward,
+                Some(value) => reward + discount * value,
+            };
+            if !ret.is_finite() {
+                return Err(non_finite(child, ReturnSource::Overflow));
+            }
+            let vl = self.cfg.virtual_loss;
+            let Some(edge) = self.pool.edge_mut(parent, action) else {
+                return Err(SearchError::VisitsExhausted);
+            };
+            let total = edge.value + ret;
+            if !total.is_finite() {
+                return Err(non_finite(child, ReturnSource::Overflow));
+            }
+            if apply {
+                let Some(next) = edge.virtual_loss.checked_sub(vl) else {
+                    return Err(SearchError::VisitsExhausted);
+                };
+                edge.virtual_loss = next;
+                let Some(next) = edge.visits.checked_add(1) else {
+                    return Err(SearchError::VisitsExhausted);
+                };
+                edge.visits = next;
+                edge.value = total;
+                let mean = edge.value / count(edge.visits);
+                self.bounds.update(mean);
+            }
+            let Some(&up) = self.pool.node(parent) else {
+                break;
+            };
+            if up.parent == NONE {
+                break;
+            }
+            below = Some(ret);
+            (child, parent, action) = (parent, up.parent, up.action);
         }
         Ok(())
     }

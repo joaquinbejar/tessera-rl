@@ -250,7 +250,11 @@ where
             + size_of::<Option<CallStart>>()
             + size_of::<Option<StepRng>>()
             + 3 * size_of::<u32>()
-            + size_of::<usize>();
+            + size_of::<usize>()
+            // ADR-0096: the value mode, the call's min-max and the Gumbel
+            // root's copy.
+            + size_of::<crate::value::ValueMode>()
+            + 2 * size_of::<crate::value::MinMax>();
         bytes
             .checked_add(u64::try_from(rows.checked_mul(per_row)?).ok()?)?
             .checked_add(u64::try_from(shapes.len().checked_mul(per_slot)?).ok()?)
