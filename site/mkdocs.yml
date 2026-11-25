@@ -15,6 +15,7 @@ nav:
       - Snapshot, restore and fork: tutorials/snapshot-fork.md
       - Multi-agent: tutorials/multi-agent.md
   - API reference: api.md
+  - API stability: stability.md
   - Benchmarks: benchmarks.md
 validation:
   links:
