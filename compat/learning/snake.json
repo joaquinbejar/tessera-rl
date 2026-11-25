@@ -41,6 +41,7 @@
     139,
     140
   ],
+  "threshold_rule": "p5",
   "threshold": 0.0,
   "median": 0.15,
   "min": 0.0,
@@ -49,10 +50,10 @@
     "env": "tessera/Snake-v1",
     "total_steps": 500000,
     "eval_episodes": 20,
-    "fingerprint": "ab2b49a2d60060574146b6a15a19595a836b62f3a35d096726fd772f7902851d"
+    "fingerprint": "8f73095f23d4dca7b60969b4771410a914be2ea5cd89c8b2afe4d29593935510"
   },
   "environment": {
-    "git": "b417756872166faa8056b76ed7392c09d91f1a3c",
+    "git": "6d758db0173a0a2b19e2d6095feec25ac5a3d14c",
     "git_dirty": false,
     "python": "3.11.18",
     "os": "Linux-7.0.0-38-generic-x86_64-with-glibc2.43",

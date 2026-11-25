@@ -300,10 +300,14 @@ def _flat_vector_class():
             if "final_obs" in info:
                 final = info["final_obs"]
                 info = dict(info)
-                info["final_obs"] = np.array(
-                    [None if o is None else gymnasium.spaces.flatten(self._single, o).astype(np.float32) for o in final],
-                    dtype=object,
-                )
+                # One flat float32 array (or None) per instance. np.array(...,
+                # dtype=object) on a list with no None would build a 2-D
+                # object array instead, when every instance ends on one step
+                # (#564).
+                flat_final = np.empty(len(final), dtype=object)
+                for k, o in enumerate(final):
+                    flat_final[k] = None if o is None else gymnasium.spaces.flatten(self._single, o).astype(np.float32)
+                info["final_obs"] = flat_final
             return self._flat(obs), reward, term, trunc, info
 
     return FlatVector
