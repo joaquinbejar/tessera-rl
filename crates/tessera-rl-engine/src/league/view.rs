@@ -6,8 +6,7 @@
 
 use thiserror::Error;
 
-/// How the engine plays an instance's opponent (ADR-0088 item 2.3). ONNX
-/// opponents are head C.
+/// How the engine plays an instance's opponent (ADR-0088 item 2.3).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum OpponentKind {
     /// The environment's heuristic (ADR-0079 section 4): computed and
@@ -18,6 +17,13 @@ pub enum OpponentKind {
     External {
         /// The trainer's tag for the checkpoint.
         tag: u64,
+    },
+    /// An ONNX policy identified by its model's content hash, run on the
+    /// calling thread through the pool's `OpponentPolicies` (head C,
+    /// erratum 2).
+    Onnx {
+        /// The model's content hash.
+        content_hash: [u8; 16],
     },
 }
 

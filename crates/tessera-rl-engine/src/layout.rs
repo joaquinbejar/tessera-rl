@@ -26,11 +26,19 @@ pub(crate) struct ActionLayout {
     /// Per agent slot, whether it is a league `Opponent` slot (ADR-0088
     /// item 2.4). Empty without a league.
     pub(crate) opponent: Vec<Bool8>,
-    /// Per instance, whether its current assignment is a heuristic policy,
-    /// so the engine computes its opponent slots' actions; written by the
-    /// league draw on the calling thread. Empty without a league.
-    pub(crate) opponent_heuristic: Vec<Bool8>,
+    /// Per instance, how its current assignment is played
+    /// ([`OPPONENT_EXTERNAL`], [`OPPONENT_HEURISTIC`] or [`OPPONENT_ONNX`]);
+    /// written by the league draw on the calling thread. Empty without a
+    /// league.
+    pub(crate) opponent_mode: Vec<u8>,
 }
+
+/// An opponent the caller submits (`External`).
+pub(crate) const OPPONENT_EXTERNAL: u8 = 0;
+/// An opponent the environment's heuristic plays on the worker.
+pub(crate) const OPPONENT_HEURISTIC: u8 = 1;
+/// An opponent an ONNX policy plays on the calling thread (head C).
+pub(crate) const OPPONENT_ONNX: u8 = 2;
 
 impl ActionLayout {
     /// Whether agent slot `slot`'s submitted row is skipped at the
@@ -42,24 +50,29 @@ impl ActionLayout {
         self.heuristic.get(slot).is_some_and(|f| f.get()) || self.engine_opponent(instance, slot)
     }
 
-    /// Whether the engine computes opponent slot `slot` of `instance`.
+    /// How opponent slot `slot` of `instance` is played, or `None` for a
+    /// slot that is not an opponent slot.
+    #[must_use]
+    #[inline]
+    pub(crate) fn opponent_mode(&self, instance: usize, slot: usize) -> Option<u8> {
+        if !self.opponent.get(slot).is_some_and(|f| f.get()) {
+            return None;
+        }
+        Some(
+            self.opponent_mode
+                .get(instance)
+                .copied()
+                .unwrap_or(OPPONENT_EXTERNAL),
+        )
+    }
+
+    /// Whether the engine computes opponent slot `slot` of `instance` (a
+    /// heuristic or an ONNX policy): the boundary skips its row.
     #[must_use]
     #[inline]
     pub(crate) fn engine_opponent(&self, instance: usize, slot: usize) -> bool {
-        self.opponent.get(slot).is_some_and(|f| f.get())
-            && self
-                .opponent_heuristic
-                .get(instance)
-                .is_some_and(|f| f.get())
-    }
-
-    /// Whether `slot` is an opponent slot whose rows the caller submits for
-    /// `instance` (an `External` assignment): the heuristic pass leaves
-    /// them alone.
-    #[must_use]
-    #[inline]
-    pub(crate) fn external_opponent(&self, instance: usize, slot: usize) -> bool {
-        self.opponent.get(slot).is_some_and(|f| f.get()) && !self.engine_opponent(instance, slot)
+        self.opponent_mode(instance, slot)
+            .is_some_and(|m| m != OPPONENT_EXTERNAL)
     }
 }
 
@@ -227,7 +240,7 @@ impl ActionLayout {
             mask: MaskLayout::default(),
             heuristic: Vec::new(),
             opponent: Vec::new(),
-            opponent_heuristic: Vec::new(),
+            opponent_mode: Vec::new(),
         })
     }
 }

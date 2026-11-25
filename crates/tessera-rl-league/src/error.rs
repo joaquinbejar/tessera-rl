@@ -29,10 +29,6 @@ pub enum LeagueError {
     /// The result rings could not be allocated.
     #[error("the result rings could not be allocated")]
     Allocation,
-    /// A population with an ONNX policy given to a pool: ONNX opponents
-    /// come with ADR-0088's head C.
-    #[error("policy {0} is an ONNX policy: pools do not run ONNX opponents yet (ADR-0088 head C)")]
-    OnnxUnsupported(u32),
     /// The engine refused the view built from this league.
     #[error("invalid league view: {0}")]
     View(#[from] tessera_rl_engine::league::LeagueViewError),

@@ -23,8 +23,7 @@ impl PoolLeague {
     ///
     /// # Errors
     ///
-    /// [`LeagueError::OnnxUnsupported`] for a population with an ONNX
-    /// policy (head C).
+    /// [`LeagueError::View`] if the league does not make a valid view.
     pub fn new(league: League) -> Result<Self, LeagueError> {
         view_of(&league)?;
         Ok(Self { league })
@@ -34,7 +33,6 @@ impl PoolLeague {
     ///
     /// # Errors
     ///
-    /// [`LeagueError::OnnxUnsupported`] for an ONNX policy;
     /// [`LeagueError::View`] if the table does not make a valid view.
     pub fn view(&self) -> Result<LeagueView, LeagueError> {
         view_of(&self.league)
@@ -47,21 +45,19 @@ impl PoolLeague {
     }
 }
 
-/// The engine view of `league`'s population and table (ADR-0088 erratum 1).
+/// The engine view of `league`'s population and table (ADR-0088 erratum 1;
+/// ONNX policies run through `EnvPool::with_onnx_opponents`, erratum 2).
 fn view_of(league: &League) -> Result<LeagueView, LeagueError> {
     let kinds = league
         .population()
         .entries()
         .iter()
-        .enumerate()
-        .map(|(i, p)| match p.kind {
-            PolicyKind::Heuristic => Ok(OpponentKind::Heuristic),
-            PolicyKind::External { tag } => Ok(OpponentKind::External { tag }),
-            PolicyKind::Onnx { .. } => Err(LeagueError::OnnxUnsupported(
-                u32::try_from(i).unwrap_or(u32::MAX),
-            )),
+        .map(|p| match p.kind {
+            PolicyKind::Heuristic => OpponentKind::Heuristic,
+            PolicyKind::External { tag } => OpponentKind::External { tag },
+            PolicyKind::Onnx { content_hash } => OpponentKind::Onnx { content_hash },
         })
-        .collect::<Result<Vec<_>, _>>()?;
+        .collect::<Vec<_>>();
     let table = league.table();
     Ok(LeagueView::new(
         kinds,

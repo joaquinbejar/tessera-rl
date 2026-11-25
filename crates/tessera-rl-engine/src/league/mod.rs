@@ -19,13 +19,16 @@
 //! `(identity, episode)` key changed, so the result does not depend on
 //! where or when the reset ran, or on the worker count.
 
+mod onnx;
 mod pool_api;
 mod view;
 
+pub(crate) use onnx::OnnxPass;
+pub use onnx::{OpponentPolicies, OpponentPolicyError};
 pub use pool_api::LeagueSnapshot;
 pub use view::{LeagueView, LeagueViewError, OpponentKind};
 
-use tessera_rl_core::{Bool8, RecordLayout};
+use tessera_rl_core::RecordLayout;
 use tessera_rl_num::identity::RngIdentity;
 use tessera_rl_num::rng::{RngAuthority, StepRng};
 
@@ -248,13 +251,13 @@ impl LeagueState {
     }
 
     /// Draws the assignment of every instance whose `(identity, episode)`
-    /// changed since its last draw, and writes the per-instance heuristic
-    /// flags of `flags` (ADR-0088 items 2.4 and 3.1). No allocation.
+    /// changed since its last draw, and writes each instance's opponent
+    /// mode into `modes` (ADR-0088 items 2.4 and 3.1). No allocation.
     pub(crate) fn refresh<H: RecordLayout>(
         &mut self,
         authority: &RngAuthority,
         headers: &[H],
-        flags: &mut [Bool8],
+        modes: &mut [u8],
     ) {
         for (i, header) in headers.iter().enumerate() {
             let engine = header.engine();
@@ -270,13 +273,13 @@ impl LeagueState {
                     *a = draw(authority, &engine.identity, &self.view);
                 }
             }
-            let heuristic = self
-                .assignment
-                .get(i)
-                .and_then(|&p| self.view.kind(p))
-                .is_some_and(|k| k == OpponentKind::Heuristic);
-            if let Some(f) = flags.get_mut(i) {
-                *f = Bool8::from(heuristic);
+            let mode = match self.assignment.get(i).and_then(|&p| self.view.kind(p)) {
+                Some(OpponentKind::Heuristic) => crate::layout::OPPONENT_HEURISTIC,
+                Some(OpponentKind::Onnx { .. }) => crate::layout::OPPONENT_ONNX,
+                Some(OpponentKind::External { .. }) | None => crate::layout::OPPONENT_EXTERNAL,
+            };
+            if let Some(m) = modes.get_mut(i) {
+                *m = mode;
             }
         }
     }
@@ -513,17 +516,35 @@ mod tests {
 
     #[test]
     fn test_outcome_sign_of_learner_mean_minus_opponent_mean() {
-        assert_eq!(outcome_of(&header(&[(true, 2.0), (true, 0.0), (true, 0.5)]), OPP), Some(MatchOutcome::Win));
-        assert_eq!(outcome_of(&header(&[(true, -1.0), (false, 0.0), (true, 0.5)]), OPP), Some(MatchOutcome::Loss));
-        assert_eq!(outcome_of(&header(&[(true, 0.5), (false, 0.0), (true, 0.5)]), OPP), Some(MatchOutcome::Draw));
-        assert_eq!(outcome_of(&header(&[(true, f32::NAN), (false, 0.0), (true, 0.5)]), OPP), Some(MatchOutcome::Draw));
+        assert_eq!(
+            outcome_of(&header(&[(true, 2.0), (true, 0.0), (true, 0.5)]), OPP),
+            Some(MatchOutcome::Win)
+        );
+        assert_eq!(
+            outcome_of(&header(&[(true, -1.0), (false, 0.0), (true, 0.5)]), OPP),
+            Some(MatchOutcome::Loss)
+        );
+        assert_eq!(
+            outcome_of(&header(&[(true, 0.5), (false, 0.0), (true, 0.5)]), OPP),
+            Some(MatchOutcome::Draw)
+        );
+        assert_eq!(
+            outcome_of(&header(&[(true, f32::NAN), (false, 0.0), (true, 0.5)]), OPP),
+            Some(MatchOutcome::Draw)
+        );
     }
 
     /// Rev's ruling 2: no learner slot (none alive at the end, none with a
     /// return) is a draw; without an opponent slot there is no result.
     #[test]
     fn test_outcome_empty_learner_set_is_a_draw() {
-        assert_eq!(outcome_of(&header(&[(false, 0.0), (false, 0.0), (true, 3.0)]), OPP), Some(MatchOutcome::Draw));
-        assert_eq!(outcome_of(&header(&[(true, 1.0), (true, 0.0), (true, 0.0)]), 0), None);
+        assert_eq!(
+            outcome_of(&header(&[(false, 0.0), (false, 0.0), (true, 3.0)]), OPP),
+            Some(MatchOutcome::Draw)
+        );
+        assert_eq!(
+            outcome_of(&header(&[(true, 1.0), (true, 0.0), (true, 0.0)]), 0),
+            None
+        );
     }
 }
