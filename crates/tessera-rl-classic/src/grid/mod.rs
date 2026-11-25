@@ -4,6 +4,7 @@
 //! goal drawn at reset. +1 on the goal, -1 off the grid, truncated at `max_steps`.
 
 mod checks;
+pub mod lanes;
 pub mod layout;
 mod render;
 

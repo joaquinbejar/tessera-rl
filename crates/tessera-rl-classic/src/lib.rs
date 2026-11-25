@@ -20,6 +20,7 @@ pub use acrobot::{Acrobot, AcrobotConfig, AcrobotObs, AcrobotState};
 pub use brickwall::{BrickWall, BrickWallConfig, BrickWallObs, BrickWallState};
 pub use cartpole::{CartPole, CartPoleConfig, CartPoleObs, CartPoleState};
 pub use gather::{Gather, GatherConfig, GatherObs, GatherState};
+pub use grid::lanes::{GridLanes, GridLanesState, GridOutcome};
 pub use grid::layout::GridLayout;
 pub use grid::{Grid, GridConfig, GridObs, GridState};
 pub use keydoor::{KeyDoor, KeyDoorConfig, KeyDoorObs, KeyDoorState};

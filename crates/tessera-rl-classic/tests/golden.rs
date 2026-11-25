@@ -14,8 +14,9 @@ use support::{
 use tessera_rl_classic::cartpole::MAX_EPISODE_STEPS;
 use tessera_rl_classic::{
     Acrobot, AcrobotConfig, BrickWall, BrickWallConfig, CartPole, CartPoleConfig, Gather,
-    GatherConfig, Grid, GridConfig, KeyDoor, KeyDoorConfig, MountainCar, MountainCarConfig,
-    PaddleDuel, PaddleDuelConfig, Pendulum, PendulumConfig, Snake, SnakeConfig, Tag, TagConfig,
+    GatherConfig, Grid, GridConfig, GridLanes, KeyDoor, KeyDoorConfig, MountainCar,
+    MountainCarConfig, PaddleDuel, PaddleDuelConfig, Pendulum, PendulumConfig, Snake, SnakeConfig,
+    Tag, TagConfig,
 };
 use tessera_rl_engine::{AutoReset, EnvPool, Masked, NoMasks};
 
@@ -298,6 +299,70 @@ fn test_golden_grid_next_step_matches_fixture_on_every_mode() {
 #[test]
 fn test_golden_grid_same_step_matches_fixture_on_every_mode() {
     check_grid(&grid("grid-v1-same-step", AutoReset::SameStep));
+}
+
+impl support::GoldenEnv for GridLanes {
+    const ENV_ID: &'static str = tessera_rl_classic::grid::lanes::ENV_ID;
+    const ENV_VERSION: u32 = tessera_rl_classic::grid::lanes::ENV_VERSION;
+}
+
+/// Grid's golden scenario at 20 instances in chunks of 8: two full lane
+/// groups and a tail of 4 that takes the one-instance path (ADR-0090 4.7).
+fn grid_lanes(name: &'static str, auto_reset: AutoReset) -> Scenario<GridConfig> {
+    Scenario {
+        name,
+        num_envs: 20,
+        chunk: 8,
+        ..grid(name, auto_reset)
+    }
+}
+
+fn check_grid_lanes(s: &Scenario<GridConfig>) {
+    let build = |cfg, options| {
+        EnvPool::<GridLanes, NoMasks>::new(cfg, options).unwrap_or_else(|e| panic!("{e}"))
+    };
+    for workers in WORKERS {
+        check(s.name, &run::<GridLanes, _>(s, build, workers));
+    }
+}
+
+#[test]
+fn test_golden_grid_lanes_next_step_matches_fixture_on_every_mode() {
+    check_grid_lanes(&grid_lanes("grid-lanes-v1-next-step", AutoReset::NextStep));
+}
+
+#[test]
+fn test_golden_grid_lanes_same_step_matches_fixture_on_every_mode() {
+    check_grid_lanes(&grid_lanes("grid-lanes-v1-same-step", AutoReset::SameStep));
+}
+
+#[test]
+fn test_golden_grid_lanes_streams_equal_grid() {
+    // The same scenario on Grid: every per-step digest line (observations,
+    // rewards, ends, headers) is equal; only the header lines (id, version,
+    // config hash) and the final record hashes, whose state layout
+    // differs, are not compared.
+    for auto_reset in [AutoReset::NextStep, AutoReset::SameStep] {
+        let s = grid_lanes("grid-lanes-v1-streams", auto_reset);
+        let lanes = run::<GridLanes, _>(
+            &s,
+            |cfg, o| EnvPool::<GridLanes, NoMasks>::new(cfg, o).unwrap_or_else(|e| panic!("{e}")),
+            None,
+        );
+        let grid = run::<Grid, _>(
+            &s,
+            |cfg, o| EnvPool::<Grid, NoMasks>::new(cfg, o).unwrap_or_else(|e| panic!("{e}")),
+            None,
+        );
+        let steps = |l: &[String]| -> Vec<String> {
+            l.iter()
+                .filter(|x| x.starts_with(|c: char| c.is_ascii_digit()))
+                .cloned()
+                .collect()
+        };
+        assert!(steps(&lanes).len() > 100, "the scenario has 300 steps");
+        assert_eq!(steps(&lanes), steps(&grid), "{auto_reset:?}");
+    }
 }
 
 impl support::GoldenEnv for Gather {
