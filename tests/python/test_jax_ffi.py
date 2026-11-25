@@ -295,3 +295,22 @@ def test_jax_ffi_deferred_fp_warning_is_emitted_exactly_once():
     # XLA's CPU threads may or may not run under non-default controls: when
     # they did, the warning appears exactly once; when not, never.
     assert warned == (1 if entries > 0 else 0), (entries, warned)
+
+
+@needs_x86
+def test_jax_ffi_results_never_alias_each_other_or_the_inputs():
+    """The handler assumes distinct result buffers (REVIEW-B-r1): check the
+    addresses XLA assigned to one call's results and inputs."""
+    env = native("tessera/Tag-v1", 2, 12, pursuers=2, evaders=2, radius=1)
+    with tjax.ffi_handle(env) as h:
+        tok, _ = h.reset(h.token())
+        actions = jnp.zeros((2, env.agents), jnp.int32)
+        tok2, s = h.step(tok, actions)
+        leaves = [tok2, *jax.tree.leaves(s)]
+        jax.block_until_ready(leaves)
+        addrs = [x.unsafe_buffer_pointer() for x in leaves if x.size]
+        assert len(set(addrs)) == len(addrs), "results alias each other"
+        inputs = {tok.unsafe_buffer_pointer(), actions.unsafe_buffer_pointer()}
+        assert not inputs & set(addrs), "a result aliases an input"
+    env.close()
+

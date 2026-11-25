@@ -105,6 +105,12 @@ pub trait XlaHost: 'static {
     /// Steps `pool` with `actions` and copies its outputs into `outs`,
     /// whose XLA dtypes are `dtypes` (one per buffer).
     ///
+    /// Contract: the host checks the actions' length and every result
+    /// buffer's dtype and byte length **before** touching the pool, so a
+    /// refusal leaves the pool exactly as it was (REVIEW-B-r1 point 1):
+    /// the token does not advance on an error, and a retry must not step
+    /// twice.
+    ///
     /// # Errors
     ///
     /// The error kind and message to record as the handle's last error.
@@ -127,6 +133,10 @@ pub trait XlaHost: 'static {
         outs: &mut [&mut [u8]],
         dtypes: &[DataType],
     ) -> Result<(), (Kind, String)>;
+
+    /// Poisons `pool` (ADR-0028) after a panic escaped [`XlaHost::step`]
+    /// or [`XlaHost::reset`]: the pool may be half-stepped.
+    fn poison(pool: &mut Self::Pool);
 }
 
 #[derive(Clone, Copy)]
@@ -158,9 +168,12 @@ type Fail = (ErrorCode, String);
 /// The handler body: panics contained, every failure an `XLA_FFI_Error`.
 fn run<H: XlaHost>(frame: *mut CallFrame, op: Op) -> *mut Error {
     // SAFETY: XLA passes a valid, exclusive call frame for the duration of
-    // the call (`XLA_FFI_Handler`); a null frame is refused below.
+    // the call (`XLA_FFI_Handler`); a null frame is handled below.
     let Some(frame) = (unsafe { frame.as_mut() }) else {
-        return core::ptr::null_mut();
+        // No frame means no API table, so no way to create an error, and
+        // returning null would report success (REVIEW-B-r1): stop the
+        // process, as `make_error` does without an `error_create`.
+        std::process::abort();
     };
     let api = frame.api;
     let outcome =
@@ -214,6 +227,29 @@ fn execute<H: XlaHost>(frame: &mut CallFrame, op: Op) -> Result<(), Fail> {
         _ => false,
     };
     let handle = handle_of(&frame.attrs)?;
+    match execute_for::<H>(frame, op, handle, reject) {
+        Ok(()) => Ok(()),
+        Err((code, message)) => {
+            // Every refusal is recorded as the handle's last error
+            // (REVIEW-B-r1), except when the handle itself is busy or
+            // closed: then the entry cannot be reached.
+            if code == ERROR_INVALID_ARGUMENT {
+                let recorded = message.clone();
+                let _ = H::registry().call(handle, |e| {
+                    e.last_error = Some((Kind::Argument, recorded));
+                });
+            }
+            Err((code, message))
+        }
+    }
+}
+
+fn execute_for<H: XlaHost>(
+    frame: &mut CallFrame,
+    op: Op,
+    handle: Handle,
+    reject: bool,
+) -> Result<(), Fail> {
     let args = buffers(&frame.args)?;
     let rets = buffers(&frame.rets)?;
     let (Some(token_in), Some(token_out)) = (args.get(0), rets.get(0)) else {
@@ -242,10 +278,9 @@ fn execute<H: XlaHost>(frame: &mut CallFrame, op: Op) -> Result<(), Fail> {
                 return Err((ERROR_FAILED_PRECONDITION, message));
             }
             if entry.poisoned {
-                return Err((
-                    ERROR_FAILED_PRECONDITION,
-                    "the handle is poisoned by an earlier panic in its step (ADR-0028); close it".to_owned(),
-                ));
+                let message = "the handle is poisoned by an earlier panic in its step (ADR-0028); close it".to_owned();
+                entry.last_error = Some((Kind::Poisoned, message.clone()));
+                return Err((ERROR_FAILED_PRECONDITION, message));
             }
             if token != entry.counter {
                 let message = format!(
@@ -256,10 +291,12 @@ fn execute<H: XlaHost>(frame: &mut CallFrame, op: Op) -> Result<(), Fail> {
                 return Err((ERROR_FAILED_PRECONDITION, message));
             }
             // A panic in the host's step or reset (one the engine did not
-            // contain as `Poisoned`) poisons the handle, per ADR-0028: the
-            // pool may be half-stepped and the results half-written. The
-            // `Env` guard and the registry slot are released by their own
-            // guards on the unwind, so the `Env` stays usable from Python.
+            // contain as `Poisoned`) poisons the handle and the `Env`'s pool,
+            // per ADR-0028 (REVIEW-B-r1 point 2): the pool may be
+            // half-stepped and the results half-written. The `Env` guard was
+            // released by its own guard on the unwind, so it is taken again
+            // to poison the pool; Python then sees `PoisonedError` as after
+            // any worker panic, and a full reset clears it.
             let shared = &entry.shared;
             let done = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 shared.try_with(|pool| match input {
@@ -271,26 +308,32 @@ fn execute<H: XlaHost>(frame: &mut CallFrame, op: Op) -> Result<(), Fail> {
                 Ok(done) => done,
                 Err(payload) => {
                     dispose(payload);
-                    let message = "a panic in the XLA FFI step poisoned this handle (ADR-0028); close it".to_owned();
+                    let _ = shared.try_with(|pool| H::poison(pool));
+                    let message = "a panic in the XLA FFI step poisoned this handle and its environment (ADR-0028); close the handle".to_owned();
                     entry.poisoned = true;
                     entry.last_error = Some((Kind::Poisoned, message.clone()));
                     return Err((ERROR_INTERNAL, message));
                 }
             };
             match done {
-                Err(Refused::Busy) => Err((
-                    ERROR_FAILED_PRECONDITION,
-                    "another call on this environment is running".to_owned(),
-                )),
-                Err(Refused::Closed) => Err((
-                    ERROR_FAILED_PRECONDITION,
-                    "the environment is closed".to_owned(),
-                )),
+                Err(Refused::Busy) => {
+                    let message = "another call on this environment is running".to_owned();
+                    entry.last_error = Some((Kind::Concurrency, message.clone()));
+                    Err((ERROR_FAILED_PRECONDITION, message))
+                }
+                Err(Refused::Closed) => {
+                    let message = "the environment is closed".to_owned();
+                    entry.last_error = Some((Kind::Argument, message.clone()));
+                    Err((ERROR_FAILED_PRECONDITION, message))
+                }
                 Ok(Err((kind, message))) => {
                     entry.last_error = Some((kind, message.clone()));
                     Err((ERROR_INTERNAL, message))
                 }
                 Ok(Ok(())) => {
+                    // Wraps after 2^32 calls: the token is compared for
+                    // equality only, so the order check holds across the
+                    // wrap (a token 2^32 calls stale is not detectable).
                     entry.counter = entry.counter.wrapping_add(1);
                     Ok(entry.counter)
                 }
@@ -329,7 +372,7 @@ impl<'a> Input<'a> {
                 let (Some(seed), Some(use_seed), 3) = (args.get(1), args.get(2), args.len) else {
                     return Err(invalid("reset takes the token, the seed and its flag"));
                 };
-                if seed.dtype != DTYPE_U32 || dims(seed) != [2] {
+                if seed.dtype != DTYPE_U32 || dims(seed)? != [2] {
                     return Err(invalid("the seed must be uint32[2]"));
                 }
                 let flag = scalar_flag(use_seed)?;
@@ -445,15 +488,16 @@ impl BufferList for super::sys::Rets {
     }
 }
 
-fn dims(buf: &Buffer) -> &[i64] {
-    let Ok(rank) = usize::try_from(buf.rank) else {
-        return &[];
-    };
-    if rank == 0 || buf.dims.is_null() {
-        return &[];
+fn dims(buf: &Buffer) -> Result<&[i64], Fail> {
+    let rank = usize::try_from(buf.rank).map_err(|_| invalid("a negative rank"))?;
+    if rank == 0 {
+        return Ok(&[]);
     }
-    // SAFETY: `dims` holds `rank` entries for the call (c_api.h).
-    unsafe { core::slice::from_raw_parts(buf.dims, rank) }
+    if buf.dims.is_null() {
+        return Err(invalid("null dims with a nonzero rank"));
+    }
+    // SAFETY: `dims` holds `rank` entries for the call (c_api.h), non-null.
+    Ok(unsafe { core::slice::from_raw_parts(buf.dims, rank) })
 }
 
 fn dtype_size(dtype: DataType) -> Option<usize> {
@@ -469,7 +513,7 @@ fn dtype_size(dtype: DataType) -> Option<usize> {
 fn byte_len(buf: &Buffer) -> Result<usize, Fail> {
     let size = dtype_size(buf.dtype).ok_or_else(|| invalid("an unsupported dtype"))?;
     let mut n = size;
-    for &d in dims(buf) {
+    for &d in dims(buf)? {
         let d = usize::try_from(d).map_err(|_| invalid("a negative dimension"))?;
         n = n
             .checked_mul(d)
@@ -514,7 +558,7 @@ fn u32s<'a>(buf: &Buffer) -> Result<&'a [u32], Fail> {
 }
 
 fn expect_scalar(buf: &Buffer, dtype: DataType, what: &str) -> Result<(), Fail> {
-    if buf.dtype != dtype || !dims(buf).is_empty() {
+    if buf.dtype != dtype || !dims(buf)?.is_empty() {
         return Err((ERROR_INVALID_ARGUMENT, format!("{what} must be a scalar")));
     }
     Ok(())
@@ -529,7 +573,7 @@ fn scalar_u32(buf: &Buffer, what: &str) -> Result<u32, Fail> {
 }
 
 fn scalar_flag(buf: &Buffer) -> Result<bool, Fail> {
-    if !dims(buf).is_empty() || (buf.dtype != DTYPE_PRED && buf.dtype != DTYPE_U8) {
+    if !dims(buf)?.is_empty() || (buf.dtype != DTYPE_PRED && buf.dtype != DTYPE_U8) {
         return Err(invalid("the seed flag must be a bool scalar"));
     }
     let byte: &[u8] = typed(buf, "the seed flag")?;
@@ -581,15 +625,21 @@ fn handle_of(attrs: &Attrs) -> Result<Handle, Fail> {
         // SAFETY: an `int64` scalar's value points at a live `i64`; read
         // unaligned since nothing documents its alignment.
         let value = unsafe { scalar.value.cast::<i64>().read_unaligned() };
-        match name {
-            b"slot" => slot = u32::try_from(value).ok(),
-            b"generation" => generation = u64::try_from(value).ok(),
-            _ => {}
+        let target = match name {
+            b"slot" => &mut slot,
+            b"generation" => &mut generation,
+            _ => continue,
+        };
+        if target.is_some() {
+            return Err(invalid("a duplicate slot or generation attribute"));
         }
+        *target = Some(value);
     }
-    match (slot, generation) {
-        (Some(slot), Some(generation)) => Ok(Handle { slot, generation }),
-        _ => Err(invalid("the slot and generation attributes are missing")),
+    match (slot.map(u32::try_from), generation.map(u64::try_from)) {
+        (Some(Ok(slot)), Some(Ok(generation))) => Ok(Handle { slot, generation }),
+        _ => Err(invalid(
+            "the slot and generation attributes are missing or out of range",
+        )),
     }
 }
 
@@ -696,6 +746,7 @@ mod tests {
     struct Toy {
         steps: u32,
         panic_next: bool,
+        poisoned: bool,
     }
 
     thread_local! {
@@ -737,6 +788,10 @@ mod tests {
             steps.copy_from_slice(&pool.steps.to_ne_bytes());
             sum.copy_from_slice(&actions.iter().sum::<i32>().to_ne_bytes());
             Ok(())
+        }
+
+        fn poison(pool: &mut Toy) {
+            pool.poisoned = true;
         }
 
         fn reset(
@@ -820,20 +875,50 @@ mod tests {
         handle: Option<Handle>,
         via_thunk: Option<Handler>,
     ) -> (ErrorCode, Vec<Vec<u8>>) {
+        call_tweak(op, stage, args, rets, handle, via_thunk, |_, _| {})
+    }
+
+    fn call_with_rank(args: Vec<Owned>, rank: i64, h: Option<Handle>) -> (ErrorCode, Vec<Vec<u8>>) {
+        call_tweak(
+            Op::Step,
+            STAGE_EXECUTE,
+            args,
+            step_rets(),
+            h,
+            None,
+            |a, _| a[1].rank = rank,
+        )
+    }
+
+    fn call_with_null_dims(args: Vec<Owned>, h: Option<Handle>) -> (ErrorCode, Vec<Vec<u8>>) {
+        call_tweak(
+            Op::Step,
+            STAGE_EXECUTE,
+            args,
+            step_rets(),
+            h,
+            None,
+            |a, _| {
+                a[1].dims = core::ptr::null_mut();
+            },
+        )
+    }
+
+    fn call_tweak(
+        op: Op,
+        stage: i32,
+        args: Vec<Owned>,
+        rets: Vec<Owned>,
+        handle: Option<Handle>,
+        via_thunk: Option<Handler>,
+        tweak: impl FnOnce(&mut [Buffer], &mut [ByteSpan; 2]),
+    ) -> (ErrorCode, Vec<Vec<u8>>) {
         let mut args = args;
         let mut rets = rets;
         let mut arg_views: Vec<Buffer> = args.iter_mut().map(Owned::view).collect();
         let mut ret_views: Vec<Buffer> = rets.iter_mut().map(Owned::view).collect();
         let mut arg_types = vec![ARG_BUFFER; arg_views.len()];
         let mut ret_types = vec![RET_BUFFER; ret_views.len()];
-        let mut arg_ptrs: Vec<*mut c_void> = arg_views
-            .iter_mut()
-            .map(|b| core::ptr::from_mut(b).cast())
-            .collect();
-        let mut ret_ptrs: Vec<*mut c_void> = ret_views
-            .iter_mut()
-            .map(|b| core::ptr::from_mut(b).cast())
-            .collect();
         let (slot, generation) = handle.map_or((0i64, 0i64), |h| {
             (i64::from(h.slot), i64::try_from(h.generation).unwrap())
         });
@@ -858,6 +943,17 @@ mod tests {
                 len: 4,
             },
         ];
+        tweak(&mut arg_views, &mut names);
+        // Raw pointers only after the tweak: a later `&mut` to the views
+        // would invalidate them (Stacked Borrows, Miri).
+        let mut arg_ptrs: Vec<*mut c_void> = arg_views
+            .iter_mut()
+            .map(|b| core::ptr::from_mut(b).cast())
+            .collect();
+        let mut ret_ptrs: Vec<*mut c_void> = ret_views
+            .iter_mut()
+            .map(|b| core::ptr::from_mut(b).cast())
+            .collect();
         let mut name_ptrs = [&raw mut names[0], &raw mut names[1]];
         let mut attr_ptrs: [*mut c_void; 2] =
             [(&raw mut scalars[0]).cast(), (&raw mut scalars[1]).cast()];
@@ -962,6 +1058,7 @@ mod tests {
             Box::new(Toy {
                 steps: 0,
                 panic_next: false,
+                poisoned: false,
             }),
             false,
         );
@@ -1102,6 +1199,7 @@ mod tests {
             Box::new(Toy {
                 steps: 0,
                 panic_next: false,
+                poisoned: false,
             }),
             false,
         );
@@ -1137,6 +1235,7 @@ mod tests {
             Box::new(Toy {
                 steps: 0,
                 panic_next: true,
+                poisoned: false,
             }),
             false,
         );
@@ -1166,8 +1265,9 @@ mod tests {
             None,
         );
         assert_eq!(code, crate::xla::sys::ERROR_FAILED_PRECONDITION);
-        // The Env's guard was released by the unwind.
-        assert_eq!(shared.try_with(|t| t.steps), Ok(0));
+        // The Env's guard was released by the unwind, and its pool is
+        // poisoned (ADR-0028, REVIEW-B-r1 point 2).
+        assert_eq!(shared.try_with(|t| (t.steps, t.poisoned)), Ok((0, true)));
         TOYS.close(h);
     }
 
@@ -1242,6 +1342,10 @@ mod tests {
     /// ADR-0041 through the handler's own thunk: canonical controls inside,
     /// the caller's restored, the result unchanged, no unwind.
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "the boundary thunk is naked assembly and writes the FP control registers, outside Miri"
+    )]
     fn test_handler_thunk_canonicalizes_hostile_controls() {
         let thunk = ThunkFn::<Handler>::of::<XlaStep<ToyHost>>().get();
         let _reset = ThunkFn::<Handler>::of::<XlaReset<ToyHost>>().get();
@@ -1272,6 +1376,55 @@ mod tests {
             );
             TOYS.close(h);
         }
+    }
+
+    /// REVIEW-B-r1 non-blocking points: a negative rank, null dims with a
+    /// nonzero rank and a duplicate attribute are refused, and an argument
+    /// refusal is recorded as the handle's last error.
+    #[test]
+    fn test_handler_refuses_bad_rank_null_dims_and_records_the_error() {
+        let h = open_toy();
+        let inv = crate::xla::sys::ERROR_INVALID_ARGUMENT;
+        let mut neg = step_args(0, &[1]);
+        neg[1].dims = vec![];
+        let (code, _) = call_with_rank(neg, -1, Some(h));
+        assert_eq!(code, inv);
+        let err = TOYS.call(h, |e| e.last_error.take()).unwrap();
+        assert!(matches!(err, Some((Kind::Argument, _))), "{err:?}");
+        let (code, _) = call_with_null_dims(step_args(0, &[1]), Some(h));
+        assert_eq!(code, inv);
+        // Nothing was stepped by either refusal.
+        let (code, out) = call(
+            Op::Step,
+            STAGE_EXECUTE,
+            step_args(0, &[1]),
+            step_rets(),
+            Some(h),
+            None,
+        );
+        assert_eq!((code, u32_of(&out[1])), (0, 1));
+        TOYS.close(h);
+    }
+
+    #[test]
+    fn test_handler_duplicate_attribute_is_refused() {
+        let h = open_toy();
+        let (code, _) = call_tweak(
+            Op::Step,
+            STAGE_EXECUTE,
+            step_args(0, &[1]),
+            step_rets(),
+            Some(h),
+            None,
+            |_, n| {
+                n[0] = ByteSpan {
+                    ptr: b"slot".as_ptr().cast(),
+                    len: 4,
+                };
+            },
+        );
+        assert_eq!(code, crate::xla::sys::ERROR_INVALID_ARGUMENT);
+        TOYS.close(h);
     }
 
     #[test]

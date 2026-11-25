@@ -373,6 +373,15 @@ class FfiHandle:
       are exported);
     - continuous actions, and the split-phase modes.
 
+    The handler writes each output straight into its own XLA result
+    buffer: it assumes XLA never aliases a result with another result or
+    with an input (results are freshly assigned and nothing is donated;
+    ``ffi_call`` is made without ``input_output_aliases``). A test checks
+    the buffer addresses of one call.
+
+    A panic escaping the native step poisons the handle and the ``Env``
+    (``PoisonedError``), as after any worker panic.
+
     Under the ``canonicalize`` floating-point policy, a call made under
     non-default controls defers the once-per-process warning to the next
     Python call into ``tessera_rl`` (the handler cannot touch Python); it

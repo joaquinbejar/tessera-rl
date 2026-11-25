@@ -40,7 +40,9 @@ impl XlaHost for NativeXla {
         outs: &mut [&mut [u8]],
         dtypes: &[DataType],
     ) -> Result<(), (Kind, String)> {
+        // Every check before the pool is touched (REVIEW-B-r1 point 1).
         check_dtypes(pool, dtypes)?;
+        check_sizes(pool, Some(actions.len()), outs)?;
         pool.step(ActionInput {
             discrete: actions,
             continuous: &[],
@@ -56,10 +58,72 @@ impl XlaHost for NativeXla {
         dtypes: &[DataType],
     ) -> Result<(), (Kind, String)> {
         check_dtypes(pool, dtypes)?;
+        check_sizes(pool, None, outs)?;
         let seed = seed.map_or(ResetSeed::Keep, ResetSeed::Base);
         pool.reset(None, &seed).map_err(kind_of)?;
         pool.outputs_into(outs).map_err(kind_of)
     }
+
+    fn poison(pool: &mut Self::Pool) {
+        pool.poison();
+    }
+}
+
+/// Bytes of one element of a layout dtype.
+fn dtype_bytes(numpy: &str) -> Option<usize> {
+    Some(match numpy {
+        "float64" | "int64" | "uint64" => 8,
+        "float32" | "int32" | "uint32" => 4,
+        "int16" | "uint16" => 2,
+        "int8" | "uint8" | "bool" => 1,
+        _ => return None,
+    })
+}
+
+/// The actions' length and every result buffer's byte length must match
+/// the layout, in `outputs_into`'s order; checked before the pool is
+/// touched, so a refused call leaves it as it was (REVIEW-B-r1 point 1).
+fn check_sizes(
+    pool: &dyn PoolOps,
+    actions: Option<usize>,
+    outs: &[&mut [u8]],
+) -> Result<(), (Kind, String)> {
+    let layout = pool.layout();
+    let (n, a) = (layout.num_envs, layout.agents);
+    let rows = n
+        .checked_mul(a)
+        .ok_or((Kind::Argument, "layout too large".to_owned()))?;
+    if let Some(len) = actions
+        && len != rows
+    {
+        return Err((
+            Kind::Action,
+            format!("actions must be int32 [{n}, {a}] ({rows} values), got {len}"),
+        ));
+    }
+    let leaf = |l: &crate::env::Leaf| -> Option<usize> {
+        let elems = l
+            .shape
+            .iter()
+            .try_fold(1usize, |acc, &d| acc.checked_mul(usize::try_from(d).ok()?))?;
+        elems.checked_mul(dtype_bytes(l.dtype)?)?.checked_mul(rows)
+    };
+    let mut want = Vec::with_capacity(layout.leaves.len() + 9);
+    for l in &layout.leaves {
+        want.push(leaf(l).ok_or((Kind::Argument, "an unsupported leaf".to_owned()))?);
+    }
+    want.extend([rows * 4, rows, rows, rows, rows, rows * 4, n, n]);
+    if layout.mask_len > 0 {
+        want.push(rows * layout.mask_len);
+    }
+    let got = outs.iter().map(|o| o.len());
+    if outs.len() != want.len() || !got.zip(&want).all(|(g, &w)| g == w) {
+        return Err((
+            Kind::Argument,
+            "a result buffer's size does not match the layout".to_owned(),
+        ));
+    }
+    Ok(())
 }
 
 /// The class and message of `e`, without the interpreter.
@@ -220,4 +284,79 @@ pub(crate) fn close<'py>(g: Gil<'py>, args: Ref<'py>) -> CResult<Mine<'py>> {
     let h = handle_arg(g, args)?;
     handler::close::<NativeXla>(g, h);
     Ok(capi::none(g))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{NativeXla, XlaHost};
+    use crate::env::{PoolArgs, ResetSeed, cartpole};
+    use tessera_rl_pyffi::xla::sys::{DTYPE_F32, DTYPE_PRED, DTYPE_U32};
+
+    fn args() -> PoolArgs {
+        PoolArgs {
+            num_envs: 2,
+            seed: 3,
+            max_episode_steps: None,
+            auto_reset: "next_step".to_owned(),
+            chunk_size: None,
+            schedule: "static".to_owned(),
+            workers: Some(0),
+            spin: None,
+            wait: None,
+            wait_cap_us: None,
+            transforms: tessera_rl_engine::Transforms::new(),
+            policy_map: None,
+            pipelined: false,
+            asynced: None,
+            privileged_state: false,
+            league: None,
+        }
+    }
+
+    /// REVIEW-B-r1 point 1: a wrong result size or actions length is
+    /// refused before the pool is stepped (the state hash is unchanged),
+    /// and a correct call then steps once.
+    #[test]
+    fn test_xla_host_wrong_sizes_refused_before_stepping() {
+        let mut pool = cartpole(&args()).unwrap();
+        pool.reset(None, &ResetSeed::Keep).unwrap();
+        let before: Vec<u64> = (0..2).map(|i| pool.state_hash(i).unwrap()).collect();
+        let dtypes = [
+            DTYPE_F32, DTYPE_F32, DTYPE_PRED, DTYPE_PRED, DTYPE_PRED, DTYPE_PRED, DTYPE_U32,
+            DTYPE_PRED, DTYPE_PRED,
+        ];
+        let sizes = [2 * 4 * 4, 2 * 4, 2, 2, 2, 2, 2 * 4, 2, 2];
+        let make = |extra: usize| -> Vec<Vec<u8>> {
+            sizes
+                .iter()
+                .enumerate()
+                .map(|(i, &n)| vec![0; n + usize::from(i == 0) * extra])
+                .collect()
+        };
+        let mut wrong = make(4);
+        let mut views: Vec<&mut [u8]> = wrong.iter_mut().map(Vec::as_mut_slice).collect();
+        assert!(NativeXla::step(pool.as_mut(), &[1, 1], &mut views, &dtypes).is_err());
+        let mut right = make(0);
+        let mut views: Vec<&mut [u8]> = right.iter_mut().map(Vec::as_mut_slice).collect();
+        assert!(
+            NativeXla::step(pool.as_mut(), &[1, 1, 1], &mut views, &dtypes).is_err(),
+            "actions length"
+        );
+        let after: Vec<u64> = (0..2).map(|i| pool.state_hash(i).unwrap()).collect();
+        assert_eq!(before, after, "nothing stepped");
+        let mut views: Vec<&mut [u8]> = right.iter_mut().map(Vec::as_mut_slice).collect();
+        NativeXla::step(pool.as_mut(), &[1, 1], &mut views, &dtypes).unwrap();
+        let stepped: Vec<u64> = (0..2).map(|i| pool.state_hash(i).unwrap()).collect();
+        assert_ne!(before, stepped, "one step");
+    }
+
+    /// REVIEW-B-r1 point 2: the host's poison poisons the Env's pool.
+    #[test]
+    fn test_xla_host_poison_poisons_the_pool() {
+        let mut pool = cartpole(&args()).unwrap();
+        pool.reset(None, &ResetSeed::Keep).unwrap();
+        NativeXla::poison(pool.as_mut());
+        assert!(pool.is_poisoned());
+        assert!(pool.step(crate::env::discrete(&[1, 1])).is_err());
+    }
 }
