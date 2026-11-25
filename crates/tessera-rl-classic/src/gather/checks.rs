@@ -16,9 +16,10 @@ impl tessera_rl_core::Persist for Gather {
 // Registration under the versioned id (SPEC 10, ADR-0054).
 tessera_rl_core::register!(Gather, id = "tessera/Gather-v1");
 
-/// Imported states: the agent and every item on the grid, items only in
-/// the configured slots, `left` equal to the items present, `collected` at
-/// most the configured items, and a step count within `max_steps`.
+/// Imported states: the agent and every item on the grid, `left` equal to
+/// the items present, `collected` at most [`MAX_ITEMS`], and a step count
+/// within `max_steps`. Any slot may hold an item: `items` is adaptive, so
+/// an episode may run with its slot's target (version 2).
 impl Validate for Gather {
     fn validate(cfg: &GatherConfig, s: &GatherState) -> Result<(), InvariantViolation> {
         let invalid = |code| Err(InvariantViolation { code });
@@ -27,14 +28,13 @@ impl Validate for Gather {
         if !on(s.agent) {
             return invalid("an agent off the grid");
         }
-        let count = usize::from(cfg.items).min(MAX_ITEMS);
+        // `items` is adaptive (version 2): an episode may run with its
+        // slot's target, which `Validate` cannot see, so any of the
+        // `MAX_ITEMS` slots may hold an item.
         let mut left = 0u8;
-        for (slot, (item, present)) in s.items.iter().zip(s.present.iter()).enumerate() {
+        for (item, present) in s.items.iter().zip(s.present.iter()) {
             if !present.get() {
                 continue;
-            }
-            if slot >= count {
-                return invalid("an item in a slot past the configured items");
             }
             if !on(*item) {
                 return invalid("an item off the grid");
@@ -47,8 +47,8 @@ impl Validate for Gather {
         if s.left != left {
             return invalid("a left count that disagrees with the items present");
         }
-        if s.collected > cfg.items {
-            return invalid("more items collected than configured");
+        if usize::from(s.collected) > MAX_ITEMS {
+            return invalid("more items collected than the set holds");
         }
         if s.steps > cfg.max_steps {
             return invalid("a step count past max_steps");

@@ -173,11 +173,14 @@ fn test_gather_validate_refuses_inconsistent_states() {
         items: 2,
         ..GatherConfig::default()
     };
+    // Version 2: `items` is adaptive, so a state from a slot whose target
+    // is 6 holds items past the config's 2, and is valid.
     let mut s = pool(few.clone(), 1, 3).state(0).unwrap();
     s.present[5] = Bool8::TRUE;
+    s.items[5] = [5, 5];
     s.left += 1;
-    assert_eq!(
-        Gather::validate(&few, &s).unwrap_err().code,
-        "an item in a slot past the configured items"
-    );
+    if s.items[5] == s.agent {
+        s.items[5] = [4, 4];
+    }
+    assert_eq!(Gather::validate(&few, &s), Ok(()));
 }

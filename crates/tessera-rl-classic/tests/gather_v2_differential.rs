@@ -93,5 +93,8 @@ fn test_gather_v2_default_trajectory_equals_v1() {
     );
     // Pinned on ENV_VERSION 1 (`e6f72bfe`, Linux x86-64), before `items`
     // became adaptive.
-    assert_eq!(got, (12_935_342_411_642_232_344, 14_503_861_675_341_482_048));
+    assert_eq!(
+        got,
+        (12_935_342_411_642_232_344, 14_503_861_675_341_482_048)
+    );
 }
