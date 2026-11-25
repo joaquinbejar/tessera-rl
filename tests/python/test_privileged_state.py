@@ -107,7 +107,7 @@ def test_pettingzoo_state_of_several_leaves_is_one_flat_box():
     state leaves flatten in layout order to their lossless result_type."""
     env = pz.parallel_env(LOB, seed=3, privileged_state=True, **LOB_SMALL)
     native = tessera_rl.make(LOB, num_envs=1, seed=3, privileged_state=True, workers=0, outputs="owned", **LOB_SMALL)
-    leaves = native.layout()["state_leaves"]
+    leaves = native._native.layout()["state_leaves"]
     assert len(leaves) > 1
     space = env.state_space
     assert len(space.shape) == 1
