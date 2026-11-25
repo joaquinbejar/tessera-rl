@@ -4,13 +4,11 @@ scratch array, and no allocation above the mmap threshold per call once warm."""
 
 import importlib.util
 import pathlib
-import sys
 import tracemalloc
 
 import numpy as np
 
 TOOLS = pathlib.Path(__file__).parents[2] / "tools" / "pgo"
-sys.path.insert(0, str(TOOLS))
 _spec = importlib.util.spec_from_file_location("workload", TOOLS / "workload.py")
 workload = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(workload)

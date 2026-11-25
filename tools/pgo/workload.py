@@ -42,7 +42,9 @@ def control(steps: int = 1) -> int:
 # One scratch array of scores per masks shape (#609): a fresh
 # masks-sized float64 array per step is above the allocator's mmap
 # threshold for large masks (Go9: 256 x 82 x 8 bytes), so the harness
-# itself made an mmap and munmap pair per array per step.
+# itself made an mmap and munmap pair per array per step. A process holds
+# one entry per masks shape it sees: one for the Sync and Pipelined loops,
+# and one per distinct batch size in the Async loop (at most num_envs).
 _SCORES: dict[tuple[int, ...], np.ndarray] = {}
 
 
