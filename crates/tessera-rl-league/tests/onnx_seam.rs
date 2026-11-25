@@ -53,7 +53,7 @@ impl OpponentPolicies for ByteRule {
         for (j, a) in actions.iter_mut().enumerate() {
             *a = self
                 .bad
-                .unwrap_or_else(|| rule(&rows[j * row..(j + 1) * row]));
+                .unwrap_or_else(|| rule(rows.get(j * row..(j + 1) * row).unwrap()));
         }
         Ok(())
     }
@@ -111,7 +111,7 @@ fn row_of(p: &EnvPool<PaddleDuel, NoMasks>, k: usize) -> Vec<u8> {
             break;
         };
         let b = leaf.len() / (N as usize * A);
-        row.extend_from_slice(&leaf[k * b..(k + 1) * b]);
+        row.extend_from_slice(leaf.get(k * b..(k + 1) * b).unwrap());
     }
     row
 }

@@ -35,3 +35,7 @@ workspace = true
 [[bench]]
 name = "league_barrier"
 harness = false
+
+[[bench]]
+name = "onnx_pass"
+harness = false
