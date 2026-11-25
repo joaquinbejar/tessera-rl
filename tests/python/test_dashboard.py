@@ -408,14 +408,16 @@ def test_flagships_rows_cover_every_metric_with_machine_status(root):
         ("rust/lanterns/n1024/snapshot", "snapshot: fork_with_reobserve"),
         ("rust/lanterns/n1024/memory", "memory: record_bytes_per_instance"),
         ("rust/lanterns/n1024/memory", "memory: mask_bytes_per_step"),
-        ("scaling_efficiency/lanterns/sync4/n1024", "scaling_efficiency"),
+        ("scaling_efficiency/lanterns/sync4/n1024", flagships.SCALING),
     }
     assert all(r["flagship"] == LANTERNS for r in got)
     # The status is the current compat/machines.toml one, never a claim.
     assert {r["machine_status"] for r in got} == {machines["ref-x86"]["status"]}
     assert not any(r["valid_for_claims"] for r in got)
     assert by[("rust/lanterns/sync4/n1024", "throughput: samples")]["schedule"] == "static"
-    assert by[("scaling_efficiency/lanterns/sync4/n1024", "scaling_efficiency")]["workers"] == 4
+    assert by[("scaling_efficiency/lanterns/sync4/n1024", flagships.SCALING)]["workers"] == 4
+    # The fixture predates illegal_action_noops.
+    assert {r["noops"] for r in got} == {flagships.UNRECORDED}
     assert by[("rust/lanterns/n1024/memory", "memory: mask_bytes_per_step")]["ci95"] is None
 
 
@@ -427,6 +429,23 @@ def test_flagships_page_has_columns_numbers_and_no_other_config(root):
     assert "<td>false</td>" in text and "<td>true</td>" not in text
     assert "424242.0" not in text  # not a flagship configuration
     assert "424242.0" not in index(root)  # indicative: never on the index
+
+
+def test_flagships_page_shows_noops_column_and_scaling_label(root):
+    doc = json.loads(FLAGSHIP_FIXTURE.read_text())
+    for result in doc["report"]["results"].values():
+        if result["config"].get("flagship"):
+            result["config"]["illegal_action_noops"] = result["config"]["name"].endswith("/sync4/n1024")
+    doc["report_sha256"] = schema.report_hash(doc["report"])
+    put(root, "n.json", doc)
+    got = {(r["configuration"], r["metric"]): r["noops"] for r in flagships.rows(st.load(root), build.inputs(root)[2])}
+    assert got[("rust/lanterns/inline/n1024", "throughput: samples")] == "no"
+    assert got[("rust/lanterns/sync4/n1024", "throughput: samples")] == "yes"
+    # A scaling row takes its multi-worker configuration's value.
+    assert got[("scaling_efficiency/lanterns/sync4/n1024", flagships.SCALING)] == "yes"
+    text = flagship_page(root)
+    assert "<th>Illegal-action no-ops</th>" in text
+    assert f"<td>{flagships.SCALING}</td>" in text and "<td>scaling_efficiency</td>" not in text
 
 
 def test_flagships_page_unlisted_machine_is_marked(root):
@@ -464,3 +483,22 @@ def test_flagships_configs_record_schedule_and_one_n():
             assert c.get("schedule") in ("static", "dynamic"), c["name"]
     derived = {d["multi"] for d in spec["derived"] if d["kind"] == "scaling"}
     assert {c["name"] for c in flag if c.get("workers", 0) != 0} <= derived
+
+
+def test_flagships_configs_state_noops_chunks_and_scaling_label():
+    spec = tomllib.loads((_ROOT / "tools/bench/configs.toml").read_text(encoding="utf-8"))
+    machines = tomllib.loads((_ROOT / "compat/machines.toml").read_text(encoding="utf-8"))
+    largest = max(len(m.get("bench_cpu_set", [])) for m in machines.values() if isinstance(m, dict))
+    flag = [c for c in spec["config"] if c.get("flagship")]
+    for c in flag:
+        # No-ops exactly where the flagship does not step legal actions.
+        assert c["illegal_action_noops"] is (not c.get("legal_actions", False)), c["name"]
+        if c.get("workers", 0) != 0:
+            chunks = -(-c["num_envs"] // c.get("chunk_size", 64))
+            assert chunks >= largest, c["name"]
+    survival = [c for c in flag if c["flagship"] == "tessera/Survival-v1" and c.get("workers", 0) != 0]
+    assert {c["chunk_size"] for c in survival} == {16}
+    flag_multi = {c["name"] for c in flag if c.get("workers", 0) != 0}
+    for d in spec["derived"]:
+        if d["kind"] == "scaling" and d["multi"] in flag_multi:
+            assert d["note"].startswith(flagships.SCALING), d["name"]
