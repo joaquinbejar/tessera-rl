@@ -22,7 +22,8 @@ tessera_rl_core::register!(Grid, id = "tessera/Grid-v1");
 /// Imported states: a goal on the grid other than the start, a whole-cell
 /// position on the grid or one cell off it, flags that say where the agent
 /// stands, and a step count the walk from the start allows (at least the
-/// distance, same parity, at most `max_steps`).
+/// distance, at most `max_steps`, and the same parity on a layout without
+/// walls).
 impl Validate for Grid {
     fn validate(cfg: &GridConfig, s: &GridState) -> Result<(), InvariantViolation> {
         let invalid = |code| Err(InvariantViolation { code });
@@ -48,9 +49,12 @@ impl Validate for Grid {
         if s.reached_goal.get() != ((col, row) == goal) {
             return invalid("a reached flag that disagrees with the position");
         }
+        // A move into a wall spends a step without moving, so the parity of
+        // the walk holds only on a layout with no walls (#721).
         let distance = col.abs() + row.abs();
         let steps = i32::from(s.steps);
-        if steps > i32::from(cfg.max_steps) || steps < distance || (steps - distance) % 2 != 0 {
+        let parity = cfg.layout.get().wall_count() > 0 || (steps - distance) % 2 == 0;
+        if steps > i32::from(cfg.max_steps) || steps < distance || !parity {
             return invalid("a step count that the walk does not allow");
         }
         Ok(())

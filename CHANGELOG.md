@@ -195,6 +195,7 @@ the API is not stable, and any 0.x release may break it.
 
 - Derive macros point their errors at the offending field (#365, #395), and `EnvState` reports a non-plain-data field type at that field only (#388, #461).
 - Python: the Gymnasium adapter gives single-head masked environments (Snake with `agents=1`) their mask in `info["action_mask"]` (`[N, n]` `int8`) and `info["action_masks"]`, (#477) as SPEC 11.3 says and multi-head environments already did; before, these keys were missing.
+- `Grid-v1` imports and restores the reachable states of a walled layout: its validator required the walk's step parity, which a move into a wall breaks, and now requires it only on a layout without walls (#721).
 
 Internal changes with no user-visible effect are not listed: learning protocols, calibrations and nightly gates (#432, #452, #458, #466, #480, #542, #544, #546, #550, #553, #562, #569, #571, #585, #591, #600, #607, #614, #627, #660), the nightly wall-clock gate (#433, #440), PGO evidence and bench harness (#338, #632, #638, #712, #718), test and tool portability and fixtures, including the format compatibility fixtures of ADR-0094 item 4 (#393, #467, #641, #656, #714), lints (#399, #703), the public-API snapshots of the facade and of the Python package, and their checks (ADR-0094 items 2 and 7, #686, #698), scripts (#516, #518, #637), the docs site (#526, #535), lockfile refreshes (#577, #653, #677, #691) and bench-runner entries (#589).
 
