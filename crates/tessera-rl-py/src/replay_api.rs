@@ -210,6 +210,22 @@ fn diverged_or_raise(g: Gil<'_>, e: BindError) -> CResult<Mine<'_>> {
                 optional(g, last_matching_checkpoint)?,
             ],
         ),
+        // A league assignment divergence (ADR-0088 erratum 3) is a
+        // keyframe divergence; leagues are not replayed from Python yet.
+        BindError::Replay(ReplayError::AssignmentDiverged {
+            event_index,
+            instance,
+            ..
+        }) => capi::tuple(
+            g,
+            vec![
+                capi::string(g, "diverged")?,
+                capi::int_u64(g, event_index)?,
+                capi::string(g, kind_name(DivergenceKind::Keyframe))?,
+                optional(g, Some(u64::from(instance)))?,
+                optional(g, None)?,
+            ],
+        ),
         e => Err(to_py(g, e)),
     }
 }

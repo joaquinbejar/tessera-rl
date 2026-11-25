@@ -19,9 +19,9 @@ pub enum DivergenceKind {
     NotPoisoned,
     /// A checkpoint's `StateHash` differs from the replayed instance's.
     Checkpoint,
-    /// A periodic keyframe's record differs from the replayed instance's;
-    /// or, in a league file, a keyframe's assignment differs from the
-    /// replayed instance's (ADR-0088 erratum 3).
+    /// A periodic keyframe's record differs from the replayed instance's.
+    /// A league assignment that differs is
+    /// [`ReplayError::AssignmentDiverged`], of this kind.
     Keyframe,
     /// The pool's branch counter differs from the keyframe's.
     BranchCounter,
@@ -147,6 +147,22 @@ pub enum ReplayError {
     /// `finish`.
     #[error("the recorded pool was poisoned; the recording is closed")]
     RecorderClosed,
+    /// A league file's keyframe holds another assignment than the replayed
+    /// instance's (ADR-0088 erratum 3): a [`DivergenceKind::Keyframe`]
+    /// divergence that names the policies.
+    #[error(
+        "replay diverged at event {event_index} (Keyframe): league assignment of instance {instance}: recorded policy {recorded}, replayed {replayed:?}"
+    )]
+    AssignmentDiverged {
+        /// The keyframe's event, or its state write's.
+        event_index: u64,
+        /// The instance.
+        instance: u32,
+        /// The keyframe's policy.
+        recorded: u32,
+        /// The replayed pool's policy (`None` past its instances).
+        replayed: Option<u32>,
+    },
     /// The replay differs from the recording (ADR-0072 section 5).
     #[error(
         "replay diverged at event {event_index} ({kind:?}, instance {instance:?}); last matching checkpoint {last_matching_checkpoint:?}"

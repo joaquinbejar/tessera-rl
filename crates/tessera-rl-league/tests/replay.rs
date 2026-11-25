@@ -19,9 +19,7 @@ use tessera_rl_engine::league::{
     LeagueBarrierError, LeagueReport, LeagueResults, LeagueSubsystem, LeagueView, OpponentKind,
     sealed,
 };
-use tessera_rl_engine::replay::{
-    DivergenceKind, Event, Recorder, Replay, ReplayError, ReplayWriterOptions,
-};
+use tessera_rl_engine::replay::{Event, Recorder, Replay, ReplayError, ReplayWriterOptions};
 use tessera_rl_engine::{
     ActionInput, AutoReset, DecodeLimits, EngineError, EnvPool, NoMasks, PoolOptions, Reseed,
 };
@@ -471,10 +469,23 @@ fn test_league_replay_tampered_keyframe_assignment_diverges() {
     let mut replayed = pool();
     assert!(matches!(
         Replay::open(&bytes, LIMITS).unwrap().run(&mut replayed),
-        Err(ReplayError::Diverged {
-            kind: DivergenceKind::Keyframe,
-            instance: Some(7),
+        Err(ReplayError::AssignmentDiverged {
+            instance: 7,
+            recorded,
+            replayed: Some(replayed),
             ..
-        })
+        }) if recorded == (old + 1) % 3 && replayed == old
     ));
+    let err = Replay::open(&bytes, LIMITS)
+        .unwrap()
+        .run(&mut pool())
+        .unwrap_err()
+        .to_string();
+    assert!(
+        err.contains(&format!(
+            "league assignment of instance 7: recorded policy {}, replayed Some({old})",
+            (old + 1) % 3
+        )),
+        "{err}"
+    );
 }

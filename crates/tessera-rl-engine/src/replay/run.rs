@@ -618,7 +618,7 @@ impl Replay<'_> {
             pool.set_branch_counter(branch_counter)?;
             // The written instances' opponents were redrawn or copied on
             // replay as live: the keyframe's assignments check them.
-            return check_assignments(pool, st, write, &id_list, &assignments);
+            return check_assignments(pool, write, &id_list, &assignments);
         }
         // A periodic keyframe: check it against the replayed pool.
         if pool.pool_context()?.branch_counter != branch_counter {
@@ -630,7 +630,7 @@ impl Replay<'_> {
                 return Err(st.diverged(index, DivergenceKind::Keyframe, Some(id)));
             }
         }
-        check_assignments(pool, st, index, &id_list, &assignments)
+        check_assignments(pool, index, &id_list, &assignments)
     }
 
     /// Decodes a keyframe's untrusted records; the import validates them.
@@ -696,10 +696,9 @@ where
 }
 
 /// Checks the replayed assignments of `ids` against a keyframe's: a
-/// difference is a `Keyframe` divergence at `index` naming the instance.
+/// difference is [`ReplayError::AssignmentDiverged`] at `index`.
 fn check_assignments<E, M>(
     pool: &EnvPool<E, M>,
-    st: &State,
     index: u64,
     ids: &[u32],
     recorded: &[u32],
@@ -718,7 +717,12 @@ where
     for (&id, &policy) in ids.iter().zip(recorded) {
         let replayed = usize::try_from(id).ok().and_then(|i| live.get(i)).copied();
         if replayed != Some(policy) {
-            return Err(st.diverged(index, DivergenceKind::Keyframe, Some(id)));
+            return Err(ReplayError::AssignmentDiverged {
+                event_index: index,
+                instance: id,
+                recorded: policy,
+                replayed,
+            });
         }
     }
     Ok(())
