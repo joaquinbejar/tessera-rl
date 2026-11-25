@@ -471,6 +471,9 @@ class TesseraPufferEnv(pufferlib.PufferEnv):
             full = np.zeros((self._instances, self._agents, *self._head_axis), dtype=np.int32)
             full[:, self._visible] = np.asarray(actions).reshape((self._instances, self._row_agents, *self._head_axis))
             actions = full
+        elif self._head_axis:
+            # The engine takes multi-head actions as (rows, agents, heads).
+            actions = np.asarray(actions).reshape((self._instances, self._agents, *self._head_axis))
         self._env.step(actions)
         self._copy_out()
         # This call's own whole-pool outputs, read now and dropped at once:
@@ -650,6 +653,9 @@ class TesseraPufferPipelinedEnv(TesseraPufferEnv):
                 (self._half_instances, self._row_agents, *self._head_axis)
             )
             actions = full
+        elif self._head_axis:
+            # The engine takes multi-head actions as (rows, agents, heads).
+            actions = np.asarray(actions).reshape((self._half_instances, self._agents, *self._head_axis))
         self._env.send(self._current, actions)
         self._current = None
         self._masks = None
