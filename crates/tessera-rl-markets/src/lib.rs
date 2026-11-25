@@ -39,6 +39,7 @@
 //!
 //! use tessera_rl_core::AgentSlot;
 //! use tessera_rl_engine::{EnvPool, Masked, PoolOptions, Record, Reseed};
+//! use tessera_rl_markets::actions::{CANCELS, KINDS, OFFSETS, SIZES};
 //! use tessera_rl_markets::limits::MAX_AGENTS;
 //! use tessera_rl_markets::{LimitOrderBook, LobConfig};
 //! use tessera_rl_num::identity::Seed;
@@ -47,7 +48,11 @@
 //!     ValueMode,
 //! };
 //!
-//! /// Uniform priors over the 1,728 joint actions and a value of 0.
+//! /// The joint actions search sees: the product of the four head sizes
+//! /// (ADR-0086), 1,728.
+//! const JOINT: u32 = KINDS * OFFSETS * SIZES * CANCELS;
+//!
+//! /// Uniform priors over the joint actions and a value of 0.
 //! struct Uniform;
 //!
 //! impl Evaluator<LimitOrderBook> for Uniform {
@@ -57,7 +62,7 @@
 //!         priors: &mut [f64],
 //!         values: &mut [f64],
 //!     ) -> Result<(), EvaluatorError> {
-//!         priors.fill(1.0 / 1728.0);
+//!         priors.fill(1.0 / f64::from(JOINT));
 //!         values.fill(0.0);
 //!         Ok(())
 //!     }
@@ -95,7 +100,8 @@
 //! puct.value = ValueMode::Returns { discount: 0.99 };
 //! let mut search = Mcts::new(pool, puct)?;
 //! search.run(&mut Uniform)?;
-//! let mut visits = vec![0u32; 1728];
+//! assert_eq!(search.pool().actions(), JOINT);
+//! let mut visits = vec![0u32; usize::try_from(JOINT)?];
 //! search.root_visits(&mut visits);
 //! assert_eq!(visits.iter().sum::<u32>(), 32);
 //! let _action = search.select_action(0.0)?;
