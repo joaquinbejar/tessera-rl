@@ -1,0 +1,92 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+#
+# Every versioned format, its committed fixture files and the tests that
+# read them back, pin the writer and refuse a newer or another-major
+# version (#641). tests/python/test_format_fixture_index.py checks that each
+# fixture exists and is not empty, that each test is defined in its file,
+# and that each version constant still has the version listed here.
+
+[[format]]
+name = "persisted record"
+version = 1
+constant = { file = "crates/tessera-rl-engine/src/persist.rs", text = "pub const FORMAT_VERSION: u32 = 1;" }
+fixtures = ["crates/tessera-rl-classic/tests/golden/persist-cartpole.bin"]
+tests = { file = "crates/tessera-rl-classic/tests/format_persist_versions.rs", names = [
+    "test_format_persist_fixtures_have_versions_1_and_2",
+    "test_format_persist_newer_and_other_major_versions_are_refused",
+] }
+
+[[format]]
+name = "persisted record with assets"
+version = 2
+constant = { file = "crates/tessera-rl-engine/src/persist.rs", text = "pub const ASSET_FORMAT_VERSION: u32 = 2;" }
+fixtures = ["crates/tessera-rl-classic/tests/golden/persist-grid.bin"]
+tests = { file = "crates/tessera-rl-classic/tests/format_persist_versions.rs", names = [
+    "test_format_persist_fixtures_have_versions_1_and_2",
+    "test_format_persist_newer_and_other_major_versions_are_refused",
+] }
+
+[[format]]
+name = "replay"
+version = 1
+constant = { file = "crates/tessera-rl-engine/src/persist.rs", text = "pub const FORMAT_VERSION: u32 = 1;" }
+fixtures = ["crates/tessera-rl-engine/tests/fixtures/formats/replay-v1.bin"]
+tests = { file = "crates/tessera-rl-engine/tests/format_replay_v1.rs", names = [
+    "test_format_replay_v1_fixture_reads_back",
+    "test_format_replay_v1_writer_writes_the_fixture",
+    "test_format_replay_newer_and_other_major_versions_are_refused",
+] }
+
+[[format]]
+name = "canonical config"
+version = 1
+constant = { file = "crates/tessera-rl-core/src/config.rs", text = "pub const CONFIG_FORMAT_VERSION: u8 = 1;" }
+fixtures = [
+    "crates/tessera-rl-macros/tests/fixtures/formats/config-v1.bin",
+    "crates/tessera-rl-macros/tests/fixtures/formats/config-v1.hash",
+]
+tests = { file = "crates/tessera-rl-macros/tests/format_config_v1.rs", names = [
+    "test_format_config_v1_fixture_reads_back",
+    "test_format_config_v1_encoder_writes_the_fixture_and_hash",
+    "test_format_config_newer_and_other_major_versions_are_refused",
+] }
+
+[[format]]
+name = "league state"
+version = 1
+constant = { file = "crates/tessera-rl-league/src/persist.rs", text = "pub const LEAGUE_FORMAT_VERSION: u32 = 1;" }
+fixtures = ["crates/tessera-rl-league/tests/fixtures/formats/league-v1.bin"]
+tests = { file = "crates/tessera-rl-league/tests/format_league_v1.rs", names = [
+    "test_format_league_v1_fixture_reads_back",
+    "test_format_league_v1_writer_writes_the_fixture",
+    "test_format_league_newer_and_other_major_versions_are_refused",
+] }
+
+[[format]]
+name = "frozen math"
+version = 1
+constant = { file = "crates/tessera-rl-num/src/math/mod.rs", text = "pub const MATH_VERSION: u32 = 1;" }
+fixtures = ["crates/tessera-rl-num/src/math/vectors.rs"]
+tests = { file = "crates/tessera-rl-num/src/math/mod.rs", names = [
+    "test_math_version_1_is_the_libm_0_2_16_table",
+] }
+
+[[format]]
+name = "frozen math, lanes"
+version = 1
+constant = { file = "crates/tessera-rl-num/src/math/mod.rs", text = "pub const MATH_VERSION: u32 = 1;" }
+fixtures = ["crates/tessera-rl-num/src/math/vectors.rs"]
+tests = { file = "crates/tessera-rl-simd/tests/lane_math_v1.rs", names = [
+    "test_lane_math_v1_table_matches_every_level",
+] }
+
+[[format]]
+name = "host protocol"
+version = 2
+constant = { file = "python/tessera_rl/_host.py", text = "PROTOCOLS = (1, 2)" }
+fixtures = ["tests/python/fixtures/formats/host_protocol.json"]
+tests = { file = "tests/python/test_format_host_protocol.py", names = [
+    "test_format_host_protocol_fixture_is_the_library_surface",
+    "test_format_host_protocol_fixture_protocols_are_accepted",
+    "test_format_host_protocol_unknown_protocol_is_refused",
+] }

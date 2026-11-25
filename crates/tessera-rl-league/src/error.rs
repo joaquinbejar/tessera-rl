@@ -32,6 +32,16 @@ pub enum LeagueError {
     /// A league file could not be read or written (#384 head E2).
     #[error("league persistence: {0}")]
     Persist(&'static str),
+    /// A league file of another format version: newer than this library,
+    /// or of another major version.
+    #[error(
+        "league file format version {found}, this library reads {}",
+        crate::LEAGUE_FORMAT_VERSION
+    )]
+    UnsupportedVersion {
+        /// The version the file names.
+        found: u32,
+    },
     /// A restored pool's view is not the restored league's (#384 head E2).
     #[error("the pool's view of role {role} is not the league's")]
     ViewMismatch {

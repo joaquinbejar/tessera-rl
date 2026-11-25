@@ -9,3 +9,9 @@
 compat/connect4/*.txt text eol=lf
 tools/connect4-ref/src/*.rs text eol=lf
 benches/gungraun/**/*.base@* text eol=lf
+
+# Format compatibility fixtures (#641): read back and compared byte for
+# byte, never converted.
+crates/*/tests/fixtures/formats/*.bin binary
+crates/*/tests/fixtures/formats/*.hash text eol=lf
+tests/python/fixtures/formats/*.json text eol=lf

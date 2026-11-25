@@ -233,8 +233,9 @@ impl Saved {
         if r.array::<8>()? != LEAGUE_MAGIC {
             return Err(bad("not a league file (magic)"));
         }
-        if r.u32()? != LEAGUE_FORMAT_VERSION {
-            return Err(bad("unsupported version"));
+        let found = r.u32()?;
+        if found != LEAGUE_FORMAT_VERSION {
+            return Err(LeagueError::UnsupportedVersion { found });
         }
         if r.u8()? != kind {
             return Err(bad("another league kind"));

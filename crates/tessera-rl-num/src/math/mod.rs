@@ -116,8 +116,11 @@ pub fn hypot(x: f64, y: f64) -> f64 {
     vendor::hypot(x, y)
 }
 
-#[cfg(test)]
-mod vectors;
+/// The math version 1 reference table (`tools/math-oracle`, libm 0.2.16),
+/// for this crate's tests and, with `test-hooks`, other crates' tests.
+#[cfg(any(test, feature = "test-hooks"))]
+#[doc(hidden)]
+pub mod vectors;
 
 #[cfg(test)]
 mod tests {
@@ -182,6 +185,23 @@ mod tests {
     fn test_math_erfc_matches_libm_0_2_16() {
         check_unary("erfc", erfc, ERFC);
         check_on("erfc", erfc, ERF_INPUTS, ERFC_EDGE);
+    }
+
+    /// `MATH_VERSION` 1 names the committed reference table in `vectors`
+    /// (tools/math-oracle, libm 0.2.16) that every `test_math_*` test here
+    /// checks bit for bit. The functions use only IEEE-754 `+ - * /` and bit
+    /// operations, so the results do not depend on the ISA (ADR-0008); the
+    /// cross-ISA check is CI running these tests on x86-64 and aarch64. A
+    /// new version keeps this table and adds its own.
+    #[test]
+    fn test_math_version_1_is_the_libm_0_2_16_table() {
+        assert_eq!(super::MATH_VERSION, 1);
+        // The table's shape: one output per input for every unary function.
+        for table in [SIN, COS, TAN, ATAN, EXP, LN, TANH, ERF, ERFC] {
+            assert_eq!(table.len(), INPUTS.len());
+        }
+        assert_eq!(ERF_EDGE.len(), ERF_INPUTS.len());
+        assert_eq!(ERFC_EDGE.len(), ERF_INPUTS.len());
     }
 
     #[test]
