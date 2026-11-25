@@ -50,10 +50,10 @@
     "env": "tessera/JobShop-v1",
     "total_steps": 500000,
     "eval_episodes": 20,
-    "fingerprint": "70f22d4894146d4b9949ccba24fe72a61dbf6ec3c5158e0fb4f4b39ef11aa110"
+    "fingerprint": "3f1e77256b5a5b31fbd1c2f7af13ff672cf158874a7cf6860392eb2746c17024"
   },
   "environment": {
-    "git": "0cedf91ac8983a303bb42aeeb454344c3ee398ad",
+    "git": "36d1922b3dda959fd59b552cc918ba6e0f77b5b2",
     "git_dirty": false,
     "python": "3.11.18",
     "os": "Linux-7.0.0-38-generic-x86_64-with-glibc2.43",
