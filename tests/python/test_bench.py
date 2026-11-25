@@ -5,6 +5,7 @@ numbers themselves are not checked."""
 
 import copy
 import importlib.util
+import json
 import pathlib
 import subprocess
 
@@ -77,6 +78,7 @@ def test_bench_configs_cover_every_catalog_env():
     assert rust_envs == {
         "acrobot", "brickwall", "cartpole", "connect4", "go9", "grid", "keydoor", "leduc",
         "mountaincar", "othello", "paddleduel", "pendulum", "rts", "snake", "tag", "lob",
+        "jobshop", "jobshop-64x32", "vrp", "vrp-500",
     }  # fmt: skip
     envpool = {c["env"] for c in spec["config"] if c.get("api") == "envpool"}
     assert envpool == set(bench.PY_ENVS)
@@ -160,6 +162,23 @@ def test_bench_runs_mode_aggregates_process_medians():
 def test_bench_empty_selection_is_refused():
     with pytest.raises(ValueError):
         bench.run(only="no-such-configuration", quick=True, profile="debug")
+
+
+@pytest.mark.parametrize(
+    ("env", "mask_bytes"),
+    [
+        # Mask bytes per instance and step: JobShop one per job, Vrp one per
+        # node (customers + depot) in each of its 8 slots (#566).
+        ("jobshop", 6),
+        ("jobshop-64x32", 64),
+        ("vrp", 8 * 21),
+        ("vrp-500", 8 * 501),
+    ],
+)
+def test_bench_ops_entries_run_at_their_sizes(env, mask_bytes):
+    runner = bench.runner_path("debug")
+    out = subprocess.run([str(runner), "memory", env, "2"], capture_output=True, text=True, check=True)
+    assert json.loads(out.stdout)["mask_bytes_per_step"] == 2 * mask_bytes
 
 
 def test_bench_runner_fails_loudly_on_bad_input():
