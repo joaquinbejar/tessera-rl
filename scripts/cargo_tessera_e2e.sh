@@ -131,6 +131,8 @@ if cargo tessera check --locked --offline > seeded.out 2>&1; then
 fi
 grep -q 'Inline vs Inline (same process)' seeded.out
 grep -Eq 'first divergence at call [0-9]+, (instance [0-9]+|the outputs only)' seeded.out
+# The report, for the log.
+grep -E 'vs (Inline|4 workers|the uninterrupted run)|first divergence at call' seeded.out
 phase env-seeded-report
 
 echo "cargo-tessera-e2e: total: $(($(date +%s) - start)) s"
