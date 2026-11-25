@@ -149,10 +149,19 @@ def _wheels_job(name):
     return _jobs(WHEELS)[name]
 
 
+WINDOWS_IF = (
+    "if: github.repository == 'joaquinbejar/tessera-rl' && "
+    "(github.event_name == 'workflow_dispatch' || "
+    "(github.event_name == 'push' && github.ref == 'refs/heads/main'))"
+)
+
+
 @pytest.mark.parametrize("job", WINDOWS_JOBS)
 def test_ci_windows_job_is_hosted_guarded_and_timed(job):
     assert re.fullmatch(r"windows-\d{4}", _runs_on(job)), _runs_on(job)
-    assert FORK_GUARD in JOBS[job]
+    # Main pushes and dispatch only, never per pull request (#358).
+    assert WINDOWS_IF in JOBS[job]
+    assert FORK_GUARD not in JOBS[job]
     assert "if: false" not in JOBS[job]
     assert re.search(r"^    timeout-minutes: \d+$", JOBS[job], re.M)
     assert re.search(r"^    defaults:\n      run:\n(?:        #.*\n)*        shell: bash$", JOBS[job], re.M)
@@ -198,3 +207,13 @@ def test_every_wheel_leg_installs_rustup_through_the_verified_script():
     assert 'bash "$(dirname "$0")/install_rustup.sh" "$target" "$rustup_sha" "$WHEEL_RUN"' in WHEEL_JOB
     assert "rustup-init" not in WHEEL_JOB.replace("install_rustup.sh", "")
     assert "RUSTUP_VERSION" not in WHEEL_JOB
+
+
+def test_ci_workflow_can_be_dispatched_for_the_windows_jobs():
+    head = CI.split("\njobs:\n", 1)[0]
+    assert re.search(r"^on:\n(?:.*\n)*?  workflow_dispatch:$", head, re.M)
+
+
+def test_ci_only_the_windows_jobs_are_hosted():
+    hosted = sorted(j for j in JOBS if "self-hosted" not in _runs_on(j))
+    assert hosted == sorted(WINDOWS_JOBS), hosted

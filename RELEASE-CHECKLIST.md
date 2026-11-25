@@ -203,7 +203,10 @@ Approver rule: by default a workflow run from a fork is never approved. A
 maintainer reads the contribution and pushes it to a branch of this
 repository, where CI runs.
 
-CI note: every job of `ci.yml` runs on self-hosted runners. The guard only
+CI note: every job of `ci.yml` runs on self-hosted runners, except the two
+GitHub-hosted Windows jobs (`windows-python`, `windows-native-wait`, #358),
+which run only on pushes to `main` and on `workflow_dispatch` in this
+repository, never for a pull request. The self-hosted jobs' guard only
 skips them for a fork pull request that leaves the workflow unchanged: a
 fork's pull request runs the workflow files of its own head, so it can edit
 the guard or add a workflow. The approval setting is the control that must
