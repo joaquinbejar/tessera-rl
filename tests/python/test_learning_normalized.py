@@ -9,6 +9,9 @@ import sys
 
 import pytest
 
+# learning_normalized imports reference_training, which imports torch.
+pytest.importorskip("torch")
+
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "tools"))
 
@@ -96,7 +99,8 @@ def test_learning_t1n_fingerprint_covers_its_module_and_imports_only():
     assert lp.fingerprint("mountaincar") == before
     # T1's flattening is not in T1n's scope (#564 edits it).
     assert lp._FlatVector not in ln.IMPORTED and lp._needs_flat not in ln.IMPORTED
-    assert "_FlatVector" not in inspect.getsource(ln)
+    code = inspect.getsource(ln.train) + inspect.getsource(ln.evaluate)
+    assert "_FlatVector" not in code and "learning_protocols" not in code
 
 
 def test_learning_t1n_leaves_the_t1_training_path_unchanged():
