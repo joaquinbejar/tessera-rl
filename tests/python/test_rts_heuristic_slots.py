@@ -38,8 +38,11 @@ def test_rts_heuristic_slot_ignores_submitted_rows_and_matches_across_workers():
     moved = False
     for t in range(40):
         acts = _orders(env)
+        # The Python multi-head path range-checks every slot's actions
+        # before the pool, so the ignored rows hold in-range orders that
+        # differ from the submitted no-op.
         garbage = acts.copy()
-        garbage[:, 1] = -9
+        garbage[:, 1] = np.tile(np.array([1, 40, 2], dtype=np.int32), SMALL["max_units"])
         step = env.step(acts)
         other = twin.step(garbage)
         h = env.heuristic_actions
