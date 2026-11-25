@@ -213,6 +213,18 @@ seeds = 5
 eval_episodes = 50
 
 # Step cap 16 (make()'s default) > the longest hand, 8 actions.
+# What the T3b bar measures (#559, REVIEW-finding-r1): H plays the heuristic
+# against itself on the same evaluation seeds in both seats, so a symmetric
+# reference scores H = 0 and lower95(H - U) is really -U's lower bound. The
+# "no gate" test therefore asks whether the reference beats uniform-legal
+# play, not how strong it is in absolute terms.
+# Leduc stays listed without a gate (#559, option 4): under a protocol
+# declared before measuring (score = "return", 8000 reference episodes, bar
+# lower95(H - U) >= 0.10), no candidate reference cleared the bar: the
+# baseline +0.081, sharper rules +0.085, a CFR+ policy +0.038. Each beats
+# uniform play, but by less than a tenth of the [-1, 1] return range at the
+# 95% bound. A different reference or bar would be a new, pre-declared
+# protocol.
 [leduc]
 opening_plies = 0
 env = "tessera/Leduc-v1"
