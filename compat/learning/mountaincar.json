@@ -1,0 +1,248 @@
+{
+  "seeds": [
+    101,
+    102,
+    103,
+    104,
+    105,
+    106,
+    107,
+    108,
+    109,
+    110,
+    111,
+    112,
+    113,
+    114,
+    115,
+    116,
+    117,
+    118,
+    119,
+    120,
+    121,
+    122,
+    123,
+    124,
+    125,
+    126,
+    127,
+    128,
+    129,
+    130,
+    131,
+    132,
+    133,
+    134,
+    135,
+    136,
+    137,
+    138,
+    139,
+    140
+  ],
+  "threshold_rule": "p5",
+  "threshold": -125.05,
+  "median": -114.85,
+  "min": -125.65,
+  "max": -105.0,
+  "setup": {
+    "env": "tessera/MountainCar-v1",
+    "total_steps": 1000000,
+    "eval_episodes": 20,
+    "fingerprint": "3468d2c0f7d11400b15bb064e2b6ccf78994a6882f76edc8e75b64d2ef2cf871"
+  },
+  "environment": {
+    "git": "8ad09be8274d069e26317135db77821d5c8c2152",
+    "git_dirty": false,
+    "python": "3.11.18",
+    "os": "Linux-7.0.0-38-generic-x86_64-with-glibc2.43",
+    "arch": "x86_64",
+    "cpu": "12th Gen Intel(R) Core(TM) i7-12700H",
+    "image": "self-hosted Linux x86-64 runner, uv-managed CPython 3.11.18 (no container)",
+    "tessera_rl": "0.3.0",
+    "torch_threads": 12,
+    "omp_num_threads": null,
+    "gymnasium": "1.4.0",
+    "torch": "2.15.0+cpu",
+    "numpy": "2.4.6"
+  },
+  "records": [
+    {
+      "seed": 101,
+      "score": -112.95
+    },
+    {
+      "seed": 102,
+      "score": -122.25
+    },
+    {
+      "seed": 103,
+      "score": -120.8
+    },
+    {
+      "seed": 104,
+      "score": -116.35
+    },
+    {
+      "seed": 105,
+      "score": -108.45
+    },
+    {
+      "seed": 106,
+      "score": -110.1
+    },
+    {
+      "seed": 107,
+      "score": -109.0
+    },
+    {
+      "seed": 108,
+      "score": -108.4
+    },
+    {
+      "seed": 109,
+      "score": -112.75
+    },
+    {
+      "seed": 110,
+      "score": -105.0
+    },
+    {
+      "seed": 111,
+      "score": -116.6
+    },
+    {
+      "seed": 112,
+      "score": -108.95
+    },
+    {
+      "seed": 113,
+      "score": -121.2
+    },
+    {
+      "seed": 114,
+      "score": -113.0
+    },
+    {
+      "seed": 115,
+      "score": -114.5
+    },
+    {
+      "seed": 116,
+      "score": -111.55
+    },
+    {
+      "seed": 117,
+      "score": -112.45
+    },
+    {
+      "seed": 118,
+      "score": -111.1
+    },
+    {
+      "seed": 119,
+      "score": -118.45
+    },
+    {
+      "seed": 120,
+      "score": -120.1
+    },
+    {
+      "seed": 121,
+      "score": -107.25
+    },
+    {
+      "seed": 122,
+      "score": -125.05
+    },
+    {
+      "seed": 123,
+      "score": -112.45
+    },
+    {
+      "seed": 124,
+      "score": -114.0
+    },
+    {
+      "seed": 125,
+      "score": -121.25
+    },
+    {
+      "seed": 126,
+      "score": -112.1
+    },
+    {
+      "seed": 127,
+      "score": -115.2
+    },
+    {
+      "seed": 128,
+      "score": -118.15
+    },
+    {
+      "seed": 129,
+      "score": -118.3
+    },
+    {
+      "seed": 130,
+      "score": -121.65
+    },
+    {
+      "seed": 131,
+      "score": -122.75
+    },
+    {
+      "seed": 132,
+      "score": -120.55
+    },
+    {
+      "seed": 133,
+      "score": -121.8
+    },
+    {
+      "seed": 134,
+      "score": -122.4
+    },
+    {
+      "seed": 135,
+      "score": -122.05
+    },
+    {
+      "seed": 136,
+      "score": -110.0
+    },
+    {
+      "seed": 137,
+      "score": -125.65
+    },
+    {
+      "seed": 138,
+      "score": -109.7
+    },
+    {
+      "seed": 139,
+      "score": -114.05
+    },
+    {
+      "seed": 140,
+      "score": -122.75
+    }
+  ],
+  "gate": {
+    "solved": -110.0,
+    "min_effect": 0.1
+  },
+  "learns": {
+    "learns": true,
+    "degenerate": false,
+    "gap": 85.15,
+    "ci95": [
+      80.725,
+      87.4
+    ],
+    "required": 9.0,
+    "random_mean": -200.0
+  },
+  "non_learning_seeds": 0
+}

@@ -165,3 +165,15 @@ def test_learning_t1n_mountaincar_trains_and_is_deterministic():
     assert a["eval_returns"] == b["eval_returns"]
     assert -200.0 <= a["eval_mean"] <= 0.0
     assert [c["steps"] for c in a["curve"]] == [256, 512]
+
+
+def test_learning_mountaincar_fingerprint_matches_its_calibration():
+    """MountainCar (T1n) was calibrated on 8ad09be8, squashed into main as
+    #585 (6a87e3c9): the fingerprint binds the calibration to the code, and
+    it still matches."""
+    import learning_protocols as lp
+
+    cal = json.loads((ROOT / "compat" / "learning" / "mountaincar.json").read_text())
+    assert lp.fingerprint("mountaincar") == cal["setup"]["fingerprint"]
+    assert cal["learns"]["learns"] is True and cal["non_learning_seeds"] == 0
+    assert cal["setup"]["total_steps"] == lp.protocol("mountaincar")["total_steps"]
