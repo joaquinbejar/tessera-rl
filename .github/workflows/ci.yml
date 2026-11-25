@@ -318,6 +318,10 @@ jobs:
       - run: cargo check -p tessera-rl --no-default-features --features simd --all-targets --locked
       - run: cargo check -p tessera-rl --no-default-features --features onnx --all-targets --locked
       - run: cargo check -p tessera-rl --all-features --all-targets --locked
+      # ADR-0094 item 7 (#642): the facade's public-API snapshot. Report-only
+      # until ADR-0094 is accepted; the PR that files it makes this step hard.
+      - run: make facade-api
+        continue-on-error: true
 
   docs:
     runs-on: [self-hosted, linux-x64]
