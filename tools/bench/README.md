@@ -68,7 +68,7 @@ make bench-kernels                # Criterion benches of the kernels
 | Metric | Configurations |
 | --- | --- |
 | Raw env throughput | `rust/*` with `metric = "throughput"`: auto-reset and observation writing included. Every catalog environment has an entry (`rust/<env>/inline/n1024`, SPEC 16.1). Masked games with a flat mask (Lanterns among them) set `legal_actions`: each planned action moves to the next legal choice inside the timed step, so they step real moves; RTS and Tag step under the no-op illegal-action policy. Every Rust row records `action_policy` (`planned` or `legal_actions`) |
-| Scaling efficiency | `scaling_efficiency/*`: k-worker throughput over k times one worker |
+| Scaling efficiency | `scaling_efficiency/*`: k-worker throughput over k times one worker (`cartpole`: a one-worker Sync run); the flagships use "efficiency vs k×Inline" (below) |
 | Step latency | `rust/*/latency`: p50 and p99 per batch, Sync mode |
 | Python overhead | `python_overhead/*`: binding throughput over raw Rust, borrowed and owned separately |
 | Snapshot cost | `rust/*/snapshot`, per instance. Copy only: `snapshot_copy` and `snapshot_all_copy`; the latter is also reported in ns/KiB against ADR-0010's budget of at most 1 µs/KB. Including re-observation (ADR-0039): `restore_with_reobserve`, `import_with_validation_and_reobserve`, `fork_with_reobserve`, `fork_branched_with_reobserve` |
@@ -90,7 +90,7 @@ are comparable:
 | Metric | Configurations |
 | --- | --- |
 | Raw throughput | `rust/<env>/inline/n<N>`: Inline, one pinned core |
-| Scaling | `rust/<env>/sync4/n<N>` (4 workers) and `rust/<env>/syncfull/n<N>` (`workers = "full"`: one worker per CPU of the machine's `bench_cpu_set`, the effective count recorded as `workers`); `scaling_efficiency/<env>/sync4/n<N>` and `.../syncfull/n<N>` divide by k times the Inline entry |
+| Scaling | `rust/<env>/sync4/n<N>` (4 workers) and `rust/<env>/syncfull/n<N>` (`workers = "full"`: one worker per CPU of the machine's `bench_cpu_set`, the effective count recorded as `workers`); `scaling_efficiency/<env>/sync4/n<N>` and `.../syncfull/n<N>`: "efficiency vs k×Inline", k-worker throughput over k times the Inline entry |
 | Snapshot cost | `rust/<env>/n<N>/snapshot`: snapshot, restore, import, fork, fork_branched |
 | Memory | `rust/<env>/n<N>/memory`: continuation bytes per instance, mask bytes per step |
 
@@ -98,9 +98,42 @@ N is 1024, except Survival (16 agents on 32 x 32) at 256. Every
 multi-worker configuration names its `schedule` (ADR-0076, ADR-0087):
 `dynamic` for RTS and Survival, whose step cost varies per instance, and
 `static` for the others; the runner takes it as `--schedule`, and the
-report records it in the options and as `schedule`. The masked flagships
-step as their Inline entries do: Lanterns with `legal_actions`, the others
-under the no-op illegal-action policy.
+report records it in the options and as `schedule`.
+
+Scaling efficiency is labelled "efficiency vs k×Inline" in the report
+(the derived entry's `note`) and in the flagship table: its baseline is k
+times the Inline throughput, not a one-worker Sync run. Inline has no
+worker threads, so the number includes the Sync scheduling overhead; it
+is the honest figure for choosing a mode, not parallel efficiency against
+one worker.
+
+Survival keeps N = 256, which at the engine's default chunk of 64 is only
+4 chunks, so a CPU set larger than 4 would leave workers idle by
+construction. Its multi-worker configurations therefore set
+`chunk_size = 16` (16 chunks), at least as many chunks as the largest
+`bench_cpu_set` in `compat/machines.toml`; the runner takes it as
+`--chunk-size`, and every row records the effective `chunk_size`. Its
+Inline entry keeps the default chunk (it has no workers to feed), and a
+test checks that every flagship multi-worker configuration has at least
+as many chunks as the largest `bench_cpu_set`. An unpinned `syncfull` run
+uses every CPU the process may use, which can exceed that.
+
+Every flagship configuration states `illegal_action_noops`, shown as a
+column of the flagship table: whether its throughput includes
+illegal-action no-ops. The masked flagships step as their Inline entries
+do:
+
+| Flagship | Action policy | Includes illegal-action no-ops |
+| --- | --- | --- |
+| `tessera/RTS-v1` | planned, no-op policy (conditioned heads) | yes |
+| `tessera/LimitOrderBook-v1` | planned, no-op policy | yes |
+| `tessera/Lanterns-v1` | `legal_actions` | no |
+| `tessera/Survival-v1` | planned, no-op policy | yes |
+| `tessera/JobShop-v1` | planned, no-op policy | yes |
+| `tessera/Vrp-v1` | planned, no-op policy | yes |
+
+A comparison with an alternative must step the same policy or state the
+difference.
 
 The gate is Tessera's own numbers. Each flagship's closest alternative is
 either named with a same-machine comparison (same harness discipline,
