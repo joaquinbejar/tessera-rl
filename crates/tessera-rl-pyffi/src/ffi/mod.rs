@@ -64,6 +64,7 @@ pub(crate) fn dispose(payload: Box<dyn core::any::Any + Send>) {
     core::mem::forget(payload);
 }
 
+pub mod alloc;
 pub mod boundary;
 pub mod buffer;
 pub mod capi;

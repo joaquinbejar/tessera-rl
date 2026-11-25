@@ -1450,6 +1450,19 @@ pub(crate) struct PoolArgs {
     /// Curriculum targets (`with_targets`, ADR-0081, #613): only for an
     /// environment with adaptive fields, in Sync mode.
     pub(crate) targets: bool,
+    /// Where the output storage comes from (ADR-0084): `None` for the
+    /// engine's own allocation.
+    pub(crate) output_allocator: Option<Allocator>,
+}
+
+/// A pool's output allocator (ADR-0084), shared with its `PoolOptions`.
+#[derive(Clone)]
+pub(crate) struct Allocator(pub(crate) std::sync::Arc<dyn tessera_rl_engine::OutputAllocator>);
+
+impl core::fmt::Debug for Allocator {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("Allocator(..)")
+    }
 }
 
 /// What `epoch_barrier()` returns to Python (ADR-0081 item 1.3, #384
@@ -1511,7 +1524,18 @@ fn options(args: &PoolArgs) -> Result<(PoolOptions, usize), BindError> {
             )));
         }
     };
+    if args.output_allocator.is_some() && args.asynced.is_some() {
+        // Async batches are gathered or claimed out of order; the device
+        // path covers Sync and Pipelined only.
+        return Err(BindError::Capability(
+            "an output allocator needs mode=\"sync\" or mode=\"pipelined\"".to_owned(),
+        ));
+    }
     let mut options = PoolOptions::new(num_envs, Seed::new(args.seed));
+    options.output_allocator = args
+        .output_allocator
+        .as_ref()
+        .map(|a| std::sync::Arc::clone(&a.0));
     options.auto_reset = auto_reset;
     options.max_episode_steps = args.max_episode_steps.and_then(NonZeroU32::new);
     if let Some(chunk) = args.chunk_size {
@@ -2443,6 +2467,7 @@ mod tests {
             asynced: None,
             privileged_state: false,
             targets: false,
+            output_allocator: None,
         }
     }
 
@@ -2495,6 +2520,7 @@ mod tests {
         let args = PoolArgs {
             privileged_state: true,
             targets: false,
+            output_allocator: None,
             ..sync_args(2)
         };
         let mut pool = leduc(&args).unwrap();
@@ -2544,6 +2570,7 @@ mod tests {
             onnx_opponents: None,
             privileged_state: false,
             targets: false,
+            output_allocator: None,
             pipelined: false,
             asynced: None,
         };
@@ -2568,6 +2595,7 @@ mod tests {
             onnx_opponents: None,
             privileged_state: false,
             targets: false,
+            output_allocator: None,
             pipelined,
             asynced: None,
         }
@@ -2799,6 +2827,7 @@ mod tests {
             onnx_opponents: None,
             privileged_state: false,
             targets: false,
+            output_allocator: None,
             pipelined: false,
             asynced: None,
         };

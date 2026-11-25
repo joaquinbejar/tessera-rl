@@ -141,6 +141,51 @@ impl Gil<'_> {
     }
 }
 
+/// `Py_IsInitialized()` (direct: reads a process flag, callable without
+/// the interpreter; runs no Python code).
+#[must_use]
+pub(crate) fn interpreter_initialized() -> core::ffi::c_int {
+    // SAFETY: callable at any time, attached or not.
+    unsafe { ffi::Py_IsInitialized() }
+}
+
+/// The state of a re-entrant [`ensure`], for its [`release`].
+pub(crate) struct Ensured(ffi::PyGILState_STATE);
+
+/// `PyGILState_Ensure()` (direct: takes the interpreter on this thread, or
+/// keeps it if this thread holds it already; runs no Python code).
+///
+/// # Safety
+///
+/// The interpreter is initialized and not finalizing; the result goes to
+/// [`release`] on the same thread.
+pub(crate) unsafe fn ensure() -> Ensured {
+    // SAFETY: the caller's contract.
+    Ensured(unsafe { ffi::PyGILState_Ensure() })
+}
+
+/// `PyGILState_Release()` (direct: restores the thread state [`ensure`]
+/// found; runs no Python code).
+///
+/// # Safety
+///
+/// `state` is the result of an [`ensure`] on this thread, released once,
+/// innermost first.
+#[expect(clippy::needless_pass_by_value, reason = "the state is consumed")]
+pub(crate) unsafe fn release(state: Ensured) {
+    // SAFETY: the caller's contract.
+    unsafe { ffi::PyGILState_Release(state.0) };
+}
+
+/// A new strong reference to `r` (direct: an incref runs no Python code),
+/// released by the caller exactly once.
+#[must_use]
+pub(crate) fn new_strong(_g: Gil<'_>, r: Ref<'_>) -> NonNull<ffi::PyObject> {
+    // SAFETY: attached (the token) and a live object.
+    unsafe { ffi::Py_IncRef(r.as_ptr()) };
+    r.0
+}
+
 /// An exception is set (the C-API failure convention).
 ///
 /// Only this crate makes one, where an exception was just set:
@@ -498,6 +543,41 @@ pub(crate) fn pending_message(g: Gil<'_>, raised: Raised) -> (String, Raised) {
     let message = message.unwrap_or_else(|| String::from("an exception without a message"));
     put_back_pending(g, p);
     (message, RAISED)
+}
+
+/// The class name and the message of the exception `raised` proves is
+/// set, which stays set: `type.__name__` and `str()` of its value (callouts:
+/// they can run Python code), or fixed texts when either fails.
+#[cfg(any(feature = "native-module", feature = "host"))]
+#[must_use]
+pub(crate) fn pending_name_and_message(g: Gil<'_>, raised: Raised) -> (String, String, Raised) {
+    let p = fetch_pending(g);
+    let mut name = None;
+    // SAFETY: the fetched type, a live object kept until it is put back.
+    if let Some(ty) = unsafe { Ref::from_ptr(p.0) } {
+        if let Ok(n) = get_attr(g, ty, c"__name__") {
+            name = to_string(g, n.as_ref(), "name").ok();
+        }
+        clear_pending(g);
+    }
+    put_back_pending(g, p);
+    let (message, raised) = pending_message(g, raised);
+    (
+        name.unwrap_or_else(|| String::from("an exception")),
+        message,
+        raised,
+    )
+}
+
+/// Whether the pending exception is an `Exception` (not a bare
+/// `BaseException` such as `KeyboardInterrupt` or `SystemExit`; direct: a
+/// class comparison that runs no Python code). False with none pending.
+#[must_use]
+pub(crate) fn pending_is_exception(_g: Gil<'_>) -> bool {
+    // SAFETY: reading an interpreter global.
+    let exception = unsafe { ffi::PyExc_Exception };
+    // SAFETY: attached; a class comparison that runs no Python code.
+    unsafe { ffi::PyErr_ExceptionMatches(exception) != 0 }
 }
 
 /// An exception taken out of the interpreter while other work runs (a

@@ -13,6 +13,19 @@ pub(crate) use tessera_rl_pyffi::errors::{Kind, error, register};
 /// Raises the Python exception for `e`.
 pub(crate) fn to_py(g: Gil, e: BindError) -> Raised {
     match e {
+        BindError::Engine(e @ tessera_rl_engine::EngineError::OutputAllocation { .. }) => {
+            // The Python allocator's own exception, if it raised one.
+            use tessera_rl_pyffi::ffi::alloc::{AllocationFailure, take_allocation_error};
+            match take_allocation_error() {
+                // KeyboardInterrupt and other non-`Exception`s propagate
+                // unchanged (R-PR46).
+                Some(AllocationFailure::Interrupt(stashed)) => stashed.raise_again(g),
+                Some(AllocationFailure::Message(cause)) => {
+                    error(g, engine_kind(&e), format!("{e}: {cause}"))
+                }
+                None => error(g, engine_kind(&e), e.to_string()),
+            }
+        }
         BindError::Engine(e) => error(g, engine_kind(&e), e.to_string()),
         BindError::Decode(e) => error(g, Kind::Record, e.to_string()),
         BindError::Argument(message) => error(g, Kind::Argument, message),

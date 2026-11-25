@@ -120,10 +120,10 @@ function tessera_rl.gym.head_views: head_views(masks: np.ndarray, mask_heads: Se
 function tessera_rl.gym.make: make(env_id: str, num_envs: int=1, seed: int | None=None, **kwargs: Any) -> TesseraVectorEnv
 function tessera_rl.gym.native_kwargs: native_kwargs(**kwargs: Any) -> dict[str, Any]
 function tessera_rl.is_stale: is_stale(array: Any) -> bool
-function tessera_rl.make: make(env_id: str, num_envs: int=1, seed: int=0, outputs: str='borrowed', *, onnx_opponents: OnnxOpponents | None=None, **kwargs: Any) -> Env
+function tessera_rl.make: make(env_id: str, num_envs: int=1, seed: int=0, outputs: str='borrowed', *, device: str | None=None, onnx_opponents: OnnxOpponents | None=None, **kwargs: Any) -> Env
 function tessera_rl.physical_cores: physical_cores() -> int
 function tessera_rl.puffer.flat_dtype: flat_dtype(dtypes: Sequence[npt.DTypeLike]) -> np.dtype[Any]
-function tessera_rl.puffer.make: make(env_id: str, num_envs: int=1, seed: int=0, outputs: str='borrowed', *, onnx_opponents: OnnxOpponents | None=None, **kwargs: Any) -> Env
+function tessera_rl.puffer.make: make(env_id: str, num_envs: int=1, seed: int=0, outputs: str='borrowed', *, device: str | None=None, onnx_opponents: OnnxOpponents | None=None, **kwargs: Any) -> Env
 function tessera_rl.puffer.make_puffer: make_puffer(env_id: str, num_envs: int=1, **kwargs: Any) -> partial[TesseraPufferEnv]
 function tessera_rl.puffer.mix_seed: mix_seed(constructor_seed: int, reset_seed: int) -> int
 function tessera_rl.pz.aec_env: aec_env(env_id: str, seed: int | None=None, **kwargs: Any) -> AECEnv[str, Any, Any]
