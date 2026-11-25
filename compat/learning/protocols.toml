@@ -125,7 +125,11 @@ eval_episodes = 10
 # evaluation splits ``eval_episodes`` evenly over them. ``score``: "sign"
 # scores an episode +1, 0 or -1 from the learner's seat; "return" uses the
 # return. ``total_steps`` counts the learner's own turns. The thresholds are
-# in gates.toml. No calibration yet, so no nightly gate.
+# in gates.toml. Calibrated on xaskar (#370, 10 seeds, threshold = their
+# minimum): connect4, othello, go9 and tag learn and run nightly; leduc has no
+# gate, because lower95(H - U) = -0.34 <= 0 (its heuristic does not beat
+# uniform play, so there is no gap to close; docs/reviews/370/cal-final;
+# follow-up #559).
 # T3b evaluation openings (#370; rev's ruling on the deterministic-evaluation
 # finding): opening_plies uniform legal plies by both sides, drawn from each
 # evaluation episode's seed, identical for every player kind and both seats;

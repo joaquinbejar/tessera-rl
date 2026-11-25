@@ -37,6 +37,11 @@ def opening_skip_errors(records: list[dict]) -> list[str]:
     ``MAX_OPENING_SKIP_SHARE`` of the openings drawn (per seed)."""
     errors = []
     for r in records:
+        # REVIEW-T3b-skips-r1: with openings on, the counts must be present;
+        # a missing count is an error, never a silent pass.
+        if r.get("opening_plies", 0) > 0 and ("opening_draws" not in r or "opening_skips" not in r):
+            errors.append(f"seed {r.get('seed')}: opening_plies {r['opening_plies']} but no opening_draws or opening_skips")
+            continue
         draws, skips = r.get("opening_draws", 0), r.get("opening_skips", 0)
         if draws and skips / draws > MAX_OPENING_SKIP_SHARE:
             errors.append(f"seed {r.get('seed')}: {skips} of {draws} openings skipped, above {MAX_OPENING_SKIP_SHARE:.0%}")
@@ -254,7 +259,12 @@ def check_calibration(calibration: dict) -> list[str]:
     budget = check_budget(calibration.get("setup"))
     if budget:
         return [f"calibration: {e}" for e in budget]
-    again = calibrate(calibration.get("records") or [], calibration.get("seeds") or [])
+    if calibration.get("threshold_rule") == "min":
+        # T3b (#370): 10 seeds, the threshold at their minimum; recomputing
+        # with T3B_CALIBRATION_SEEDS still enforces the exact seed list.
+        again = calibrate(calibration.get("records") or [], calibration.get("seeds") or [], expected=T3B_CALIBRATION_SEEDS, threshold="min")
+    else:
+        again = calibrate(calibration.get("records") or [], calibration.get("seeds") or [])
     if again.get("errors"):
         return [f"calibration: {e}" for e in again["errors"]]
     if not _finite(calibration.get("threshold")) or calibration["threshold"] != again["threshold"]:
