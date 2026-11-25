@@ -20,7 +20,9 @@ use core::num::NonZeroU32;
 use std::path::{Path, PathBuf};
 
 use tessera_rl_classic::paddleduel::OBS_STATE;
-use tessera_rl_classic::{Gather, GatherConfig, PaddleDuel, PaddleDuelConfig};
+use tessera_rl_classic::{
+    Gather, GatherConfig, PaddleDuel, PaddleDuelConfig, Pendulum, PendulumConfig,
+};
 use tessera_rl_engine::{
     ActionInput, AutoReset, EnvPool, Masked, NoMasks, PoolOptions, Record, Reseed,
 };
@@ -580,5 +582,25 @@ fn test_onnx_opponents_refuse_a_model_off_the_contract() {
     let twice =
         OnnxOpponents::new::<PaddleDuel>(&paddle_cfg(), &[&path, &path], &OnnxOptions::new(&lib));
     assert!(matches!(twice, Err(OnnxError::Contract { .. })));
+    assert_no_telemetry(&home);
+}
+
+/// ADR-0088 erratum 2: an environment whose action space is not a single
+/// `Discrete` head (Pendulum's `Box`) is refused at construction with
+/// `OnnxError::Contract`, before any model is read (none is given).
+#[test]
+#[ignore = "opens the real ONNX Runtime: run through `make onnx-test`"]
+fn test_onnx_opponents_refuse_a_non_discrete_action_space() {
+    let (lib, home) = rule_t();
+    let refused = OnnxOpponents::new::<Pendulum>(
+        &PendulumConfig::default(),
+        // No model: only the action space can refuse.
+        &[],
+        &OnnxOptions::new(&lib),
+    );
+    assert!(
+        matches!(refused, Err(OnnxError::Contract { .. })),
+        "{refused:?}"
+    );
     assert_no_telemetry(&home);
 }
