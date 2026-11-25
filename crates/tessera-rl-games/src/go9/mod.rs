@@ -562,3 +562,30 @@ impl tessera_rl_core::Persist for Go9 {
     const ENV_ID: &'static str = ENV_ID;
     const ENV_VERSION: u32 = ENV_VERSION;
 }
+
+#[cfg(test)]
+mod tests {
+    use super::same;
+
+    const A: [u64; 3] = [0x0123_4567_89ab_cdef, 0xfedc_ba98_7654_3210, 0x0f0f_0f0f_0f0f_0f0f];
+
+    #[test]
+    fn test_same_equal_entries_are_equal() {
+        assert!(same(&A, &A));
+        assert!(same(&[0; 3], &[0; 3]));
+    }
+
+    #[test]
+    fn test_same_entries_differing_in_one_word_are_not_equal() {
+        for word in 0..3 {
+            for bit in [0, 17, 63] {
+                let mut b = A;
+                if let Some(w) = b.get_mut(word) {
+                    *w ^= 1 << bit;
+                }
+                assert!(!same(&A, &b), "word {word} bit {bit}");
+                assert!(!same(&b, &A), "word {word} bit {bit}");
+            }
+        }
+    }
+}
