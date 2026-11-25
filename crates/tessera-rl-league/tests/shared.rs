@@ -386,3 +386,35 @@ fn test_shared_league_pools_record_and_replay_separately() {
     assert_eq!(hashes(&yb), live_b);
     assert_eq!(ya.league_view(), a.league_view());
 }
+
+/// A pool frozen with `freeze_league` submits empty rounds and keeps its
+/// view, so the other pools' rounds still commit (TR, E1 r1).
+#[test]
+fn test_shared_league_frozen_pool_does_not_stall_the_others() {
+    let role = RoleConfig {
+        snapshot: Some(SnapshotRule::EveryRounds(1)),
+        ..pfsp()
+    };
+    let league = SharedLeague::new(config(vec![role]), population()).unwrap();
+    let mut a = pool_for(&league, 0, 1);
+    let mut b = pool_for(&league, 0, 2);
+    b.freeze_league(true);
+    let frozen_view = b.league_view().unwrap().clone();
+    for t in 0..4 {
+        steps(&mut a, t);
+        steps(&mut b, t + 10);
+        a.epoch_barrier().unwrap();
+        b.epoch_barrier().unwrap();
+        assert_eq!(league.round().unwrap(), u64::try_from(t + 1).unwrap());
+    }
+    // The other pool moved on: its view changed with the snapshots.
+    assert_ne!(a.league_view(), Some(&frozen_view));
+    assert_eq!(b.league_view(), Some(&frozen_view));
+    // Unfrozen, the pool installs the latest view at its next barrier.
+    b.freeze_league(false);
+    steps(&mut a, 5);
+    steps(&mut b, 15);
+    a.epoch_barrier().unwrap();
+    b.epoch_barrier().unwrap();
+    assert_ne!(b.league_view(), Some(&frozen_view));
+}

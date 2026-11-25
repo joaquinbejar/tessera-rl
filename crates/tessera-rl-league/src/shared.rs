@@ -19,7 +19,10 @@
 //!
 //! A barrier of a pool that already submitted the current round is
 //! refused with a typed error naming the pools still to submit; the pool
-//! keeps its view and rings, unpoisoned, and nothing ever blocks. The lock
+//! keeps its view and rings, unpoisoned, and nothing ever blocks. A pool
+//! frozen with `freeze_league` submits an empty contribution at each
+//! barrier (`LeagueSubsystem::frozen_barrier`) and keeps its view, so it
+//! never stalls the other pools' rounds. The lock
 //! is taken only at barriers, never on the step path.
 
 use std::sync::{Arc, Mutex};
@@ -298,8 +301,8 @@ impl SharedLeague {
     }
 
     /// Freezes or unfreezes the league: frozen, a commit applies nothing
-    /// and changes no view. (A pool frozen with `freeze_league` never
-    /// submits, so its round never commits.)
+    /// and changes no view. (A pool frozen alone with `freeze_league`
+    /// submits empty rounds and keeps its view; the others go on.)
     ///
     /// # Errors
     ///
@@ -526,7 +529,44 @@ impl Inner {
 
 impl sealed::Sealed for RoleHandle {}
 
+impl RoleHandle {
+    /// Puts `slot` into this pool's slot of the current round and commits
+    /// the round if it was the last: the refusal of an early barrier first.
+    fn submit(
+        inner: &mut Inner,
+        index: usize,
+        slot: Vec<(PolicyId, Outcome)>,
+        dropped: u64,
+    ) -> Result<(), LeagueBarrierError> {
+        let fail = |reason: String| LeagueBarrierError { reason };
+        if inner.slots.get(index).is_some_and(Option::is_some) {
+            return Err(fail(format!(
+                "pool {index} already submitted round {}: waiting for pools {:?}",
+                inner.round,
+                inner.pending()
+            )));
+        }
+        if let Some(s) = inner.slots.get_mut(index) {
+            *s = Some(slot);
+        }
+        inner.dropped = inner.dropped.saturating_add(dropped);
+        if inner.pending().is_empty() {
+            inner.commit().map_err(|e| fail(e.to_string()))?;
+        }
+        Ok(())
+    }
+}
+
 impl LeagueSubsystem for RoleHandle {
+    /// A frozen pool's round is an empty contribution: the other pools'
+    /// round still commits, and the frozen pool keeps its view.
+    fn frozen_barrier(&mut self) -> Result<(), LeagueBarrierError> {
+        let mut inner = self.inner.lock().map_err(|_| LeagueBarrierError {
+            reason: "a thread panicked holding the league".to_owned(),
+        })?;
+        Self::submit(&mut inner, self.index, Vec::new(), 0)
+    }
+
     fn barrier(
         &mut self,
         results: LeagueResults<'_>,
@@ -536,14 +576,6 @@ impl LeagueSubsystem for RoleHandle {
             .inner
             .lock()
             .map_err(|_| fail("a thread panicked holding the league".to_owned()))?;
-        if inner.slots.get(self.index).is_some_and(Option::is_some) {
-            return Err(fail(format!(
-                "pool {} already submitted round {}: waiting for pools {:?}",
-                self.index,
-                inner.round,
-                inner.pending()
-            )));
-        }
         // Checked before anything is kept, so a bad id mutates nothing.
         let population = inner.population.len();
         let mut slot = Vec::with_capacity(results.results.len());
@@ -565,13 +597,7 @@ impl LeagueSubsystem for RoleHandle {
             .get(self.role)
             .ok_or_else(|| fail("unknown role".to_owned()))?;
         let (view, fallback) = (role.view.clone(), role.fallback);
-        if let Some(s) = inner.slots.get_mut(self.index) {
-            *s = Some(slot);
-        }
-        inner.dropped = inner.dropped.saturating_add(results.dropped);
-        if inner.pending().is_empty() {
-            inner.commit().map_err(|e| fail(e.to_string()))?;
-        }
+        Self::submit(&mut inner, self.index, slot, results.dropped)?;
         Ok((
             view,
             EngineReport::new(submitted, results.dropped, fallback),
