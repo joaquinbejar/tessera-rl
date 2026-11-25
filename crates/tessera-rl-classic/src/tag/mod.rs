@@ -180,6 +180,25 @@ fn slot(index: usize) -> Option<AgentSlot> {
     AgentSlot::new(u16::try_from(index).ok()?, MAX_AGENTS)
 }
 
+/// The role of a pursuer slot.
+pub const PURSUER: &str = "pursuer";
+/// The role of an evader slot.
+pub const EVADER: &str = "evader";
+
+/// The role of `slot` by the config's split: [`PURSUER`] for the first
+/// `pursuers` slots, [`EVADER`] for the next `evaders`, `""` for unused
+/// slots.
+#[must_use]
+fn role_of(cfg: &TagConfig, slot: AgentSlot) -> &'static str {
+    if cfg.is_pursuer(slot.index()) {
+        PURSUER
+    } else if slot.index() < cfg.agents() {
+        EVADER
+    } else {
+        ""
+    }
+}
+
 impl Environment for Tag {
     /// Parallel natively and AEC through cycle buffering (SPEC 12, ADR-0080).
     const ADAPTERS: tessera_rl_core::Adapters =
@@ -206,6 +225,21 @@ impl Environment for Tag {
 
     fn initial_agents(cfg: &TagConfig) -> usize {
         cfg.agents()
+    }
+
+    /// Team 0 the pursuers, team 1 the evaders; unused slots keep the
+    /// default, 0.
+    fn team(cfg: &TagConfig, slot: AgentSlot) -> u16 {
+        match role_of(cfg, slot) {
+            EVADER => 1,
+            _ => 0,
+        }
+    }
+
+    /// `"pursuer"` or `"evader"` by the config's split; unused slots keep
+    /// the default, `""`.
+    fn role(cfg: &TagConfig, slot: AgentSlot) -> &'static str {
+        role_of(cfg, slot)
     }
 
     fn reset(cfg: &TagConfig, rng: &mut StepRng, state: &mut TagState) {

@@ -941,6 +941,15 @@ impl Environment for Rts {
     const PERFECT_INFORMATION: bool = false;
     const TIER: Tier = Tier::CrossPlatform;
 
+    /// The side agent `slot` plays: 0 for side Zero, 1 for side One, after
+    /// `seat_swap`.
+    fn team(cfg: &RtsConfig, slot: AgentSlot) -> u16 {
+        match side_of_agent(cfg, slot.index()) {
+            Team::Zero => 0,
+            Team::One => 1,
+        }
+    }
+
     /// Two agents, or one, the learner in slot 0, with a scripted opponent.
     fn initial_agents(cfg: &RtsConfig) -> usize {
         if opponent_of(cfg).is_some() {

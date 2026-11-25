@@ -493,6 +493,12 @@ impl Environment for PaddleDuel {
         cfg.agents as usize
     }
 
+    /// One team per player: the team is the slot index.
+    fn team(_: &PaddleDuelConfig, slot: AgentSlot) -> u16 {
+        // A slot index is a u16 by construction, so this never falls back.
+        u16::try_from(slot.index()).unwrap_or(0)
+    }
+
     /// No draw: the serve draws when its wait ends.
     fn reset(_: &PaddleDuelConfig, _: &mut StepRng, s: &mut PaddleDuelState) {
         *s = PaddleDuelState {

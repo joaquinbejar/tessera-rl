@@ -60,6 +60,14 @@ own agent count (Snake, GridKeyDoor, PaddleDuel, LimitOrderBook), so both can
 be set; ``agents="all"`` and ``agents="learner"`` are the filter's deprecated
 spelling, which warns ``TesseraDeprecationWarning`` until 0.5.0 (#538).
 
+Teams and roles: ``metadata["teams"]`` and ``metadata["roles"]`` map each
+possible agent's name to its slot's team (an int) and role (a string,
+``""`` for none), on the Parallel and AEC forms alike. They are
+configuration facts, fixed for the environment's life, so they are not in
+``infos``. Tag's pursuers are team 0 with role ``"pursuer"`` and its
+evaders team 1 with role ``"evader"``; a host environment has team 0 and
+role ``""`` for every agent.
+
 An environment with several discrete heads (``MultiDiscrete``, the RTS:
 three heads per unit slot) has ``MultiDiscrete(nvec)`` as its action
 space, and an action is one integer per head. Its heads are conditional,
@@ -354,6 +362,10 @@ class _Agents:
         #: The policy group of each slot; empty for a host
         #: environment, which has no policy map.
         self.groups: tuple[str, ...] = tuple(layout.get("policy_groups", ()))
+        #: The team and the role of each slot, fixed for the pool's life;
+        #: team 0 and role ``""`` when the layout has none.
+        self.teams: tuple[int, ...] = tuple(layout.get("teams", ()))
+        self.roles: tuple[str, ...] = tuple(layout.get("roles", ()))
         #: Whether heuristic slots are hidden from the agent lists
         #: (``visible="learner"``).
         self.learner_only = False
@@ -424,6 +436,20 @@ class _Agents:
         if self.groups:
             info["policy_group"] = self.groups[slot]
         return info
+
+    def team_metadata(self, names: list[str]) -> dict:
+        """``metadata["teams"]`` and ``metadata["roles"]``: the team and the
+        role of each of ``names``, by agent name."""
+        teams, roles = {}, {}
+        for name in names:
+            self.add_team(name, teams, roles)
+        return {"teams": teams, "roles": roles}
+
+    def add_team(self, name: str, teams: dict, roles: dict) -> None:
+        """Adds agent ``name``'s team and role to ``teams`` and ``roles``."""
+        slot = self.slot_of[name]
+        teams[name] = self.teams[slot] if slot < len(self.teams) else 0
+        roles[name] = self.roles[slot] if slot < len(self.roles) else ""
 
     def hidden(self, slot: int) -> bool:
         """Whether agent ``slot`` is hidden: a heuristic slot under
@@ -540,6 +566,7 @@ class TesseraParallelEnv(ParallelEnv):
             raise
         self.possible_agents = [n for n in self._a.names if not self._a.hidden(self._a.slot_of[n])]
         self.agents = list(self.possible_agents)
+        self.metadata.update(self._a.team_metadata(self.possible_agents))
         if self._a.state_space is not None:
             self.state_space = self._a.state_space
 
@@ -577,6 +604,8 @@ class TesseraParallelEnv(ParallelEnv):
             # A slot's generation survives a reset, so its name does too.
             self.possible_agents = list(self.agents)
             self._a.slot_of = {name: self._a.slot_of[name] for name in self.agents}
+            # The names may carry a generation: keep the maps on them.
+            self.metadata.update(self._a.team_metadata(self.possible_agents))
         if self._a.pending():
             # An aborted reset leaves the instance pending (ADR-0065): no
             # agent can act, so `while env.agents:` ends at once.
@@ -628,6 +657,8 @@ class TesseraParallelEnv(ParallelEnv):
                     self.agents.append(name)
                 if name not in self.possible_agents:
                     self.possible_agents.append(name)
+                    # A new occupant of the slot: the slot's team and role.
+                    self._a.add_team(name, self.metadata["teams"], self.metadata["roles"])
         return obs, rewards, terms, truncs, infos
 
     def render(self):
@@ -644,7 +675,8 @@ class TesseraParallelEnv(ParallelEnv):
 class TesseraAECEnv(AECEnv):
     """A sequential Tessera environment as a PettingZoo ``AECEnv``: the
     acting agent is ``agent_selection``, and each ``step`` is one engine
-    step with that agent's action."""
+    step with that agent's action. It shows every agent: to hide heuristic
+    seats, use the Parallel form with ``visible="learner"``."""
 
     metadata = {"render_modes": [], "name": "tessera", "is_parallelizable": False}
 
@@ -689,6 +721,7 @@ class TesseraAECEnv(AECEnv):
             self._a.env.close()
             raise
         self.possible_agents = list(self._a.names)
+        self.metadata.update(self._a.team_metadata(self.possible_agents))
         if self._a.state_space is not None:
             self.state_space = self._a.state_space
         # No reset here: the first reset() is the seed's first episode.

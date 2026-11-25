@@ -299,6 +299,15 @@ def _dtype_bounds(dtype: str) -> tuple[list[float], list[float]]:
     return [float("-inf")], [float("inf")]
 
 
+def _team_defaults(layout: dict) -> None:
+    """Gives ``layout`` the ``teams`` and ``roles`` keys of a first-party
+    layout: the host protocol has no team or role, so every slot has team 0
+    and role ``""``."""
+    agents = layout["agents"]
+    layout["teams"] = [0] * agents
+    layout["roles"] = [""] * agents
+
+
 class _HostNative:
     """A host object behind the interface of ``_native.Env`` that
     ``tessera_rl.Env`` and the adapters read: ``layout()``, ``reset(seed,
@@ -330,6 +339,7 @@ class _HostNative:
         if not isinstance(snapshots, bool):
             raise _config(f"host object layout() has snapshots={snapshots!r}; it must be a bool")
         layout["snapshots"] = snapshots
+        _team_defaults(layout)
         self._keys = _OUTPUT_KEYS + (_REFUSAL_KEYS if refuses else ())
         # The first-party leaf form, (name, dtype, shape, low, high): the
         # protocol has no bounds, so a leaf spans its dtype's range.

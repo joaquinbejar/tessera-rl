@@ -240,6 +240,12 @@ pub(crate) struct Layout {
     /// The policy group of each agent slot (ADR-0079 item 5.1):
     /// `"learner"`, `"external"`, `"heuristic"` or `"privileged_heuristic"`.
     pub(crate) policy_groups: Vec<&'static str>,
+    /// The team of each agent slot (ADR-0079 item 8), read once from
+    /// `Environment::team` at construction.
+    pub(crate) teams: Vec<u16>,
+    /// The role of each agent slot (ADR-0079 item 8), read once from
+    /// `Environment::role` at construction; `""` for no role.
+    pub(crate) roles: Vec<&'static str>,
     /// The privileged state leaves (ADR-0079 item 7), one row per
     /// instance; empty without `privileged_state=True`.
     pub(crate) state_leaves: Vec<Leaf>,
@@ -691,6 +697,9 @@ where
         if let Some(space) = pool.privileged_state_space() {
             leaves(space, "", &mut state_leaves, &mut Vec::new())?;
         }
+        // Teams and roles: configuration facts, read once here and never
+        // on the step path (ADR-0079 item 8).
+        let (teams, roles) = crate::teams::teams_and_roles::<E>(cfg)?;
         let layout = Layout {
             num_envs,
             agents: E::MAX_AGENTS,
@@ -710,6 +719,8 @@ where
             },
             terminal,
             policy_groups: pool.policy_groups().iter().map(|g| g.name()).collect(),
+            teams,
+            roles,
             state_leaves,
         };
         Ok(Self {
@@ -1813,6 +1824,7 @@ pub(crate) fn paddleduel(
     let (options, n) = options(args)?;
     let same_step = options.auto_reset == AutoReset::SameStep;
     let pool = EnvPool::<PaddleDuel, NoMasks>::new(cfg.clone(), options)?;
+    let pool = crate::policy::perfect(pool, args)?;
     finish_rendered(&cfg, pool, args, n, same_step)
 }
 
@@ -1871,6 +1883,7 @@ pub(crate) fn snake(
     let (options, n) = options(args)?;
     let same_step = options.auto_reset == AutoReset::SameStep;
     let pool = EnvPool::<Snake, Masked>::with_masks(cfg.clone(), options)?;
+    let pool = crate::policy::perfect(pool, args)?;
     finish_rendered(&cfg, pool, args, n, same_step)
 }
 

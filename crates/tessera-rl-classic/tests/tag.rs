@@ -466,3 +466,22 @@ fn test_tag_info_state_hides_the_observer_absolute_cell() {
     let me = AgentSlot::FIRST;
     assert_eq!(Tag::info_state(&cfg, &a, me), Tag::info_state(&cfg, &b, me));
 }
+
+#[test]
+fn test_tag_team_and_role_follow_the_pursuer_evader_split() {
+    let cfg = TagConfig {
+        pursuers: 3,
+        evaders: 2,
+        ..TagConfig::default()
+    };
+    let slot = |i: u16| AgentSlot::new(i, A).unwrap();
+    let teams: Vec<u16> = (0..8).map(|i| Tag::team(&cfg, slot(i))).collect();
+    let roles: Vec<&str> = (0..8).map(|i| Tag::role(&cfg, slot(i))).collect();
+    assert_eq!(teams, vec![0, 0, 0, 1, 1, 0, 0, 0]);
+    assert_eq!(
+        roles,
+        vec![
+            "pursuer", "pursuer", "pursuer", "evader", "evader", "", "", ""
+        ]
+    );
+}
