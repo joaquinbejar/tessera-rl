@@ -19,7 +19,12 @@ tessera-rl-num.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
+criterion.workspace = true
 tessera-rl-num = { workspace = true, features = ["test-hooks"] }
+
+[[bench]]
+name = "int_lanes"
+harness = false
 
 [lints]
 workspace = true

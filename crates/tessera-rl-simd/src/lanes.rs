@@ -30,7 +30,7 @@ const fn bit_mask(v: bool) -> u64 {
 
 /// Scalar lanes.
 #[derive(Clone, Copy)]
-struct Scalar([f64; 8]);
+pub(crate) struct Scalar([f64; 8]);
 
 #[inline(always)]
 fn zip(a: [f64; 8], b: [f64; 8], f: impl Fn(f64, f64) -> f64) -> [f64; 8] {
@@ -156,7 +156,7 @@ pub(crate) fn run_scalar<K: Kernel>(kernel: K) -> K::Output {
 macro_rules! register_lanes {
     ($name:ident, $m:ident, $(($a:ident $b:ident $c:ident $i:literal))+) => {
         #[derive(Clone, Copy)]
-        struct $name([$m::F; { [$($i),+].len() }]);
+        pub(crate) struct $name([$m::F; { [$($i),+].len() }]);
 
         register_lanes!(@op $name, $m, Add, add, [$(($a $b))+]);
         register_lanes!(@op $name, $m, Sub, sub, [$(($a $b))+]);

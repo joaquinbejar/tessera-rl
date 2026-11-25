@@ -283,6 +283,7 @@ assoc_const tessera_rl::prelude::Pool::CAPACITY: usize
 assoc_const tessera_rl::prelude::Render::MAX_PRIMITIVES: usize
 assoc_const tessera_rl::prelude::Reserved::ZERO: Self
 assoc_const tessera_rl::prelude::StateEnum::NAME: &'static str
+assoc_const tessera_rl::simd::Lanes::LEVEL: tessera_rl_simd::dispatch::Level
 assoc_const tessera_rl::world::SurvivalObs::OTHERS: tessera_rl_core::set_leaf::SetId<i32>
 assoc_const tessera_rl::world::SurvivalObs::OWN: tessera_rl_core::leaf::LeafId<i32>
 assoc_const tessera_rl::world::SurvivalObs::OWN_ITEM: tessera_rl_core::set_of::ItemId<tessera_rl_world::survival::SurvivalObs, i32>
@@ -323,6 +324,8 @@ assoc_type tessera_rl::core::lane_field::LaneTuple::View
 assoc_type tessera_rl::core::state_enum::StateEnum::Repr: core::marker::Copy + core::convert::Into<i64>
 assoc_type tessera_rl::engine::Curriculum::State: tessera_rl_core::encoding::Canonical + tessera_rl_core::state_init::StateInit + core::marker::Copy + core::marker::Send + core::marker::Sync + 'static
 assoc_type tessera_rl::num::math::lane::F64Lanes::Mask: core::marker::Copy
+assoc_type tessera_rl::num::math::lane_int::Fx32Lanes::Raw: tessera_rl_num::math::lane_int::I32Lanes
+assoc_type tessera_rl::num::math::lane_int::I32Lanes::Mask: core::marker::Copy
 assoc_type tessera_rl::prelude::EnvAssets::Assets: core::marker::Send + core::marker::Sync + 'static
 assoc_type tessera_rl::prelude::EnvState::Fields: tessera_rl_core::lane_field::LaneTuple
 assoc_type tessera_rl::prelude::Environment::Action: 'static
@@ -333,6 +336,10 @@ assoc_type tessera_rl::prelude::Environment::State: tessera_rl_core::env::EnvSta
 assoc_type tessera_rl::prelude::ImperfectInformation::InfoState: tessera_rl_core::env::EnvState
 assoc_type tessera_rl::prelude::StateEnum::Repr: core::marker::Copy + core::convert::Into<i64>
 assoc_type tessera_rl::simd::Kernel::Output
+assoc_type tessera_rl::simd::LaneKernel::Output
+assoc_type tessera_rl::simd::Lanes::F64: tessera_rl_num::math::lane::F64Lanes
+assoc_type tessera_rl::simd::Lanes::Fx32: tessera_rl_num::math::lane_int::Fx32Lanes<Raw = <Self as tessera_rl_simd::int_lanes::Lanes>::I32>
+assoc_type tessera_rl::simd::Lanes::I32: tessera_rl_num::math::lane_int::I32Lanes
 const tessera_rl::classic::acrobot::ENV_ID: &str
 const tessera_rl::classic::acrobot::ENV_VERSION: u32
 const tessera_rl::classic::acrobot::MAX_EPISODE_STEPS: u32
@@ -8839,6 +8846,7 @@ method tessera_rl::engine::Record::to_bytes: fn to_bytes(&self) -> alloc::vec::V
 method tessera_rl::engine::Resolved::available: fn available() -> impl core::iter::traits::iterator::Iterator<Item = Self>
 method tessera_rl::engine::Resolved::best: fn best() -> Self
 method tessera_rl::engine::Resolved::dispatch: fn dispatch<K: tessera_rl_simd::dispatch::Kernel>(self, kernel: K) -> <K as tessera_rl_simd::dispatch::Kernel>::Output
+method tessera_rl::engine::Resolved::dispatch_lanes: fn dispatch_lanes<K: tessera_rl_simd::int_lanes::LaneKernel>(self, kernel: K) -> <K as tessera_rl_simd::int_lanes::LaneKernel>::Output
 method tessera_rl::engine::Resolved::force: fn force(level: tessera_rl_simd::dispatch::Level) -> core::result::Result<Self, tessera_rl_simd::dispatch::LevelError>
 method tessera_rl::engine::Resolved::from_name: fn from_name(name: core::option::Option<&str>) -> core::result::Result<Self, tessera_rl_simd::dispatch::LevelError>
 method tessera_rl::engine::Resolved::level: const fn level(self) -> tessera_rl_simd::dispatch::Level
@@ -9205,6 +9213,67 @@ method tessera_rl::num::math::lane::F64Lanes::select: fn select(mask: <Self as t
 method tessera_rl::num::math::lane::F64Lanes::splat: fn splat(v: f64) -> Self (required)
 method tessera_rl::num::math::lane::F64Lanes::to_array: fn to_array(self) -> [f64; 8] (required)
 method tessera_rl::num::math::lane::F64Lanes::to_f32_array: fn to_f32_array(self) -> [f32; 8] (required)
+method tessera_rl::num::math::lane_int::Fx32Lanes::eq: fn eq(self, rhs: Self) -> tessera_rl_num::math::lane_int::Fx32Mask<Self> (provided)
+method tessera_rl::num::math::lane_int::Fx32Lanes::extract: fn extract<const I: usize>(self) -> tessera_rl_num::fx32::Fx32 (provided)
+method tessera_rl::num::math::lane_int::Fx32Lanes::from_array: fn from_array(v: [tessera_rl_num::fx32::Fx32; 8]) -> Self (provided)
+method tessera_rl::num::math::lane_int::Fx32Lanes::from_raw: fn from_raw(raw: <Self as tessera_rl_num::math::lane_int::Fx32Lanes>::Raw) -> Self (required)
+method tessera_rl::num::math::lane_int::Fx32Lanes::ge: fn ge(self, rhs: Self) -> tessera_rl_num::math::lane_int::Fx32Mask<Self> (provided)
+method tessera_rl::num::math::lane_int::Fx32Lanes::gt: fn gt(self, rhs: Self) -> tessera_rl_num::math::lane_int::Fx32Mask<Self> (provided)
+method tessera_rl::num::math::lane_int::Fx32Lanes::le: fn le(self, rhs: Self) -> tessera_rl_num::math::lane_int::Fx32Mask<Self> (provided)
+method tessera_rl::num::math::lane_int::Fx32Lanes::lt: fn lt(self, rhs: Self) -> tessera_rl_num::math::lane_int::Fx32Mask<Self> (provided)
+method tessera_rl::num::math::lane_int::Fx32Lanes::max: fn max(self, rhs: Self) -> Self (provided)
+method tessera_rl::num::math::lane_int::Fx32Lanes::min: fn min(self, rhs: Self) -> Self (provided)
+method tessera_rl::num::math::lane_int::Fx32Lanes::ne: fn ne(self, rhs: Self) -> tessera_rl_num::math::lane_int::Fx32Mask<Self> (provided)
+method tessera_rl::num::math::lane_int::Fx32Lanes::overflowing_add: fn overflowing_add(self, rhs: Self) -> (Self, tessera_rl_num::math::lane_int::Fx32Mask<Self>) (provided)
+method tessera_rl::num::math::lane_int::Fx32Lanes::overflowing_sub: fn overflowing_sub(self, rhs: Self) -> (Self, tessera_rl_num::math::lane_int::Fx32Mask<Self>) (provided)
+method tessera_rl::num::math::lane_int::Fx32Lanes::replace: fn replace<const I: usize>(self, v: tessera_rl_num::fx32::Fx32) -> Self (provided)
+method tessera_rl::num::math::lane_int::Fx32Lanes::saturating_add: fn saturating_add(self, rhs: Self) -> Self (required)
+method tessera_rl::num::math::lane_int::Fx32Lanes::saturating_mul: fn saturating_mul(self, rhs: Self) -> Self (required)
+method tessera_rl::num::math::lane_int::Fx32Lanes::saturating_sub: fn saturating_sub(self, rhs: Self) -> Self (required)
+method tessera_rl::num::math::lane_int::Fx32Lanes::select: fn select(mask: tessera_rl_num::math::lane_int::Fx32Mask<Self>, yes: Self, no: Self) -> Self (provided)
+method tessera_rl::num::math::lane_int::Fx32Lanes::splat: fn splat(v: tessera_rl_num::fx32::Fx32) -> Self (provided)
+method tessera_rl::num::math::lane_int::Fx32Lanes::to_array: fn to_array(self) -> [tessera_rl_num::fx32::Fx32; 8] (provided)
+method tessera_rl::num::math::lane_int::Fx32Lanes::to_raw: fn to_raw(self) -> <Self as tessera_rl_num::math::lane_int::Fx32Lanes>::Raw (required)
+method tessera_rl::num::math::lane_int::Fx32Lanes::wrapping_add: fn wrapping_add(self, rhs: Self) -> Self (provided)
+method tessera_rl::num::math::lane_int::Fx32Lanes::wrapping_sub: fn wrapping_sub(self, rhs: Self) -> Self (provided)
+method tessera_rl::num::math::lane_int::I32Lanes::and: fn and(self, rhs: Self) -> Self (required)
+method tessera_rl::num::math::lane_int::I32Lanes::eq: fn eq(self, rhs: Self) -> <Self as tessera_rl_num::math::lane_int::I32Lanes>::Mask (required)
+method tessera_rl::num::math::lane_int::I32Lanes::extract: fn extract<const I: usize>(self) -> i32 (provided)
+method tessera_rl::num::math::lane_int::I32Lanes::from_array: fn from_array(v: [i32; 8]) -> Self (required)
+method tessera_rl::num::math::lane_int::I32Lanes::ge: fn ge(self, rhs: Self) -> <Self as tessera_rl_num::math::lane_int::I32Lanes>::Mask (provided)
+method tessera_rl::num::math::lane_int::I32Lanes::ge_u: fn ge_u(self, rhs: Self) -> <Self as tessera_rl_num::math::lane_int::I32Lanes>::Mask (provided)
+method tessera_rl::num::math::lane_int::I32Lanes::gt: fn gt(self, rhs: Self) -> <Self as tessera_rl_num::math::lane_int::I32Lanes>::Mask (required)
+method tessera_rl::num::math::lane_int::I32Lanes::gt_u: fn gt_u(self, rhs: Self) -> <Self as tessera_rl_num::math::lane_int::I32Lanes>::Mask (required)
+method tessera_rl::num::math::lane_int::I32Lanes::le: fn le(self, rhs: Self) -> <Self as tessera_rl_num::math::lane_int::I32Lanes>::Mask (provided)
+method tessera_rl::num::math::lane_int::I32Lanes::le_u: fn le_u(self, rhs: Self) -> <Self as tessera_rl_num::math::lane_int::I32Lanes>::Mask (provided)
+method tessera_rl::num::math::lane_int::I32Lanes::lt: fn lt(self, rhs: Self) -> <Self as tessera_rl_num::math::lane_int::I32Lanes>::Mask (provided)
+method tessera_rl::num::math::lane_int::I32Lanes::lt_u: fn lt_u(self, rhs: Self) -> <Self as tessera_rl_num::math::lane_int::I32Lanes>::Mask (provided)
+method tessera_rl::num::math::lane_int::I32Lanes::mask_and: fn mask_and(a: <Self as tessera_rl_num::math::lane_int::I32Lanes>::Mask, b: <Self as tessera_rl_num::math::lane_int::I32Lanes>::Mask) -> <Self as tessera_rl_num::math::lane_int::I32Lanes>::Mask (required)
+method tessera_rl::num::math::lane_int::I32Lanes::mask_bits: fn mask_bits(mask: <Self as tessera_rl_num::math::lane_int::I32Lanes>::Mask) -> u8 (required)
+method tessera_rl::num::math::lane_int::I32Lanes::mask_from_array: fn mask_from_array(v: [bool; 8]) -> <Self as tessera_rl_num::math::lane_int::I32Lanes>::Mask (required)
+method tessera_rl::num::math::lane_int::I32Lanes::mask_from_bits: fn mask_from_bits(bits: u8) -> <Self as tessera_rl_num::math::lane_int::I32Lanes>::Mask (required)
+method tessera_rl::num::math::lane_int::I32Lanes::mask_not: fn mask_not(a: <Self as tessera_rl_num::math::lane_int::I32Lanes>::Mask) -> <Self as tessera_rl_num::math::lane_int::I32Lanes>::Mask (required)
+method tessera_rl::num::math::lane_int::I32Lanes::mask_or: fn mask_or(a: <Self as tessera_rl_num::math::lane_int::I32Lanes>::Mask, b: <Self as tessera_rl_num::math::lane_int::I32Lanes>::Mask) -> <Self as tessera_rl_num::math::lane_int::I32Lanes>::Mask (required)
+method tessera_rl::num::math::lane_int::I32Lanes::max: fn max(self, rhs: Self) -> Self (required)
+method tessera_rl::num::math::lane_int::I32Lanes::max_u: fn max_u(self, rhs: Self) -> Self (required)
+method tessera_rl::num::math::lane_int::I32Lanes::min: fn min(self, rhs: Self) -> Self (required)
+method tessera_rl::num::math::lane_int::I32Lanes::min_u: fn min_u(self, rhs: Self) -> Self (required)
+method tessera_rl::num::math::lane_int::I32Lanes::ne: fn ne(self, rhs: Self) -> <Self as tessera_rl_num::math::lane_int::I32Lanes>::Mask (provided)
+method tessera_rl::num::math::lane_int::I32Lanes::not: fn not(self) -> Self (required)
+method tessera_rl::num::math::lane_int::I32Lanes::or: fn or(self, rhs: Self) -> Self (required)
+method tessera_rl::num::math::lane_int::I32Lanes::overflowing_add: fn overflowing_add(self, rhs: Self) -> (Self, <Self as tessera_rl_num::math::lane_int::I32Lanes>::Mask) (required)
+method tessera_rl::num::math::lane_int::I32Lanes::overflowing_sub: fn overflowing_sub(self, rhs: Self) -> (Self, <Self as tessera_rl_num::math::lane_int::I32Lanes>::Mask) (required)
+method tessera_rl::num::math::lane_int::I32Lanes::replace: fn replace<const I: usize>(self, v: i32) -> Self (provided)
+method tessera_rl::num::math::lane_int::I32Lanes::select: fn select(mask: <Self as tessera_rl_num::math::lane_int::I32Lanes>::Mask, yes: Self, no: Self) -> Self (required)
+method tessera_rl::num::math::lane_int::I32Lanes::shl: fn shl<const N: i32>(self) -> Self (required)
+method tessera_rl::num::math::lane_int::I32Lanes::shr_arith: fn shr_arith<const N: i32>(self) -> Self (required)
+method tessera_rl::num::math::lane_int::I32Lanes::shr_logical: fn shr_logical<const N: i32>(self) -> Self (required)
+method tessera_rl::num::math::lane_int::I32Lanes::splat: fn splat(v: i32) -> Self (required)
+method tessera_rl::num::math::lane_int::I32Lanes::to_array: fn to_array(self) -> [i32; 8] (required)
+method tessera_rl::num::math::lane_int::I32Lanes::wrapping_add: fn wrapping_add(self, rhs: Self) -> Self (required)
+method tessera_rl::num::math::lane_int::I32Lanes::wrapping_mul: fn wrapping_mul(self, rhs: Self) -> Self (required)
+method tessera_rl::num::math::lane_int::I32Lanes::wrapping_sub: fn wrapping_sub(self, rhs: Self) -> Self (required)
+method tessera_rl::num::math::lane_int::I32Lanes::xor: fn xor(self, rhs: Self) -> Self (required)
 method tessera_rl::num::rng::ObsRng::below_u32: fn below_u32(&mut self, bound: core::num::nonzero::NonZeroU32) -> u32
 method tessera_rl::num::rng::ObsRng::below_u64: fn below_u64(&mut self, bound: core::num::nonzero::NonZeroU64) -> u64
 method tessera_rl::num::rng::ObsRng::exhausted: const fn exhausted(&self) -> bool
@@ -9574,10 +9643,12 @@ method tessera_rl::search::SearchPool::transform_state_bytes: fn transform_state
 method tessera_rl::search::SearchPool::transforms: fn transforms(&self) -> tessera_rl_engine::transform::spec::Transforms
 method tessera_rl::search::SearchPool::tree_hash: fn tree_hash(&self) -> u64
 method tessera_rl::simd::Kernel::run: fn run<L: tessera_rl_num::math::lane::F64Lanes>(self) -> <Self as tessera_rl_simd::dispatch::Kernel>::Output (required)
+method tessera_rl::simd::LaneKernel::run: fn run<S: tessera_rl_simd::int_lanes::Lanes>(self) -> <Self as tessera_rl_simd::int_lanes::LaneKernel>::Output (required)
 method tessera_rl::simd::Level::name: const fn name(self) -> &'static str
 method tessera_rl::simd::Resolved::available: fn available() -> impl core::iter::traits::iterator::Iterator<Item = Self>
 method tessera_rl::simd::Resolved::best: fn best() -> Self
 method tessera_rl::simd::Resolved::dispatch: fn dispatch<K: tessera_rl_simd::dispatch::Kernel>(self, kernel: K) -> <K as tessera_rl_simd::dispatch::Kernel>::Output
+method tessera_rl::simd::Resolved::dispatch_lanes: fn dispatch_lanes<K: tessera_rl_simd::int_lanes::LaneKernel>(self, kernel: K) -> <K as tessera_rl_simd::int_lanes::LaneKernel>::Output
 method tessera_rl::simd::Resolved::force: fn force(level: tessera_rl_simd::dispatch::Level) -> core::result::Result<Self, tessera_rl_simd::dispatch::LevelError>
 method tessera_rl::simd::Resolved::from_name: fn from_name(name: core::option::Option<&str>) -> core::result::Result<Self, tessera_rl_simd::dispatch::LevelError>
 method tessera_rl::simd::Resolved::level: const fn level(self) -> tessera_rl_simd::dispatch::Level
@@ -9699,6 +9770,7 @@ mod tessera_rl::num::identity
 mod tessera_rl::num::key
 mod tessera_rl::num::math
 mod tessera_rl::num::math::lane
+mod tessera_rl::num::math::lane_int
 mod tessera_rl::num::rng
 mod tessera_rl::onnx
 mod tessera_rl::ops
@@ -10203,6 +10275,8 @@ trait tessera_rl::engine::PersistMask: trait PersistMask<E: tessera_rl_core::env
 trait tessera_rl::engine::league::LeagueSubsystem: trait LeagueSubsystem: sealed::Sealed + core::marker::Send
 trait tessera_rl::engine::league::OpponentPolicies: trait OpponentPolicies: sealed::Sealed + core::marker::Send
 trait tessera_rl::num::math::lane::F64Lanes: trait F64Lanes: core::marker::Copy + core::ops::arith::Add<Output = Self> + core::ops::arith::Sub<Output = Self> + core::ops::arith::Mul<Output = Self> + core::ops::arith::Div<Output = Self> (not dyn)
+trait tessera_rl::num::math::lane_int::Fx32Lanes: trait Fx32Lanes: core::marker::Copy (not dyn)
+trait tessera_rl::num::math::lane_int::I32Lanes: trait I32Lanes: core::marker::Copy (not dyn)
 trait tessera_rl::prelude::ActionMask: trait ActionMask: tessera_rl_core::env::Environment (not dyn)
 trait tessera_rl::prelude::Determinize: trait Determinize: tessera_rl_core::env::ImperfectInformation (not dyn)
 trait tessera_rl::prelude::EnvAssets: trait EnvAssets: tessera_rl_core::env::Environment (not dyn)
@@ -10219,6 +10293,8 @@ trait tessera_rl::prelude::StateEnum: trait StateEnum: core::marker::Copy + core
 trait tessera_rl::prelude::Validate: trait Validate: tessera_rl_core::env::Environment (not dyn)
 trait tessera_rl::search::Evaluator: trait Evaluator<E: tessera_rl_core::env::Environment>
 trait tessera_rl::simd::Kernel: trait Kernel (not dyn)
+trait tessera_rl::simd::LaneKernel: trait LaneKernel (not dyn)
+trait tessera_rl::simd::Lanes: trait Lanes: tessera_rl_simd::int_lanes::sealed::Sealed (not dyn)
 type tessera_rl::classic::cartpole::lane::Columns = [[f64; 8]; 4]
 type tessera_rl::classic::tag::grid::Cell = [i16; 2]
 type tessera_rl::core::Adaptive<E> = <<E as tessera_rl_core::env::Environment>::Header as tessera_rl_core::header::RecordLayout>::Adaptive
@@ -10228,6 +10304,7 @@ type tessera_rl::core::env::Adaptive<E> = <<E as tessera_rl_core::env::Environme
 type tessera_rl::core::lane_env::LaneGroup<'a, E> = <<<E as tessera_rl_core::env::Environment>::State as tessera_rl_core::env::EnvState>::Fields as tessera_rl_core::lane_field::LaneTuple>::Group<'a>
 type tessera_rl::core::lane_step::LaneHook<E> = fn(&<E as tessera_rl_core::env::Environment>::Config, tessera_rl_simd::dispatch::Resolved, &mut [<E as tessera_rl_core::env::Environment>::State; 8], &[i32; 8], &mut tessera_rl_core::lane_step::LaneOut)
 type tessera_rl::num::fp::Control = u32
+type tessera_rl::num::math::lane_int::Fx32Mask<L> = <<L as tessera_rl_num::math::lane_int::Fx32Lanes>::Raw as tessera_rl_num::math::lane_int::I32Lanes>::Mask
 variant tessera_rl::core::AssetError::DecodedTooLarge { limit: usize }
 variant tessera_rl::core::AssetError::InputTooLarge { len: usize }
 variant tessera_rl::core::AssetError::Invalid { reason: &'static str }

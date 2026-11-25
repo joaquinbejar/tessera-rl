@@ -29,6 +29,7 @@
 
 mod fmod;
 pub mod lane;
+pub mod lane_int;
 mod vendor;
 
 pub use fmod::fmod;
