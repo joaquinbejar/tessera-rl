@@ -567,7 +567,11 @@ impl tessera_rl_core::Persist for Go9 {
 mod tests {
     use super::same;
 
-    const A: [u64; 3] = [0x0123_4567_89ab_cdef, 0xfedc_ba98_7654_3210, 0x0f0f_0f0f_0f0f_0f0f];
+    const A: [u64; 3] = [
+        0x0123_4567_89ab_cdef,
+        0xfedc_ba98_7654_3210,
+        0x0f0f_0f0f_0f0f_0f0f,
+    ];
 
     #[test]
     fn test_same_equal_entries_are_equal() {
