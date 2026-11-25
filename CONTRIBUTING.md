@@ -26,6 +26,7 @@ Before you start:
   helps).
 - Keep a pull request to one concern.
 - A change to the `tessera-rl` facade's public API re-blesses `api/tessera-rl.api` (`make facade-api-bless`) in the same pull request, so its diff shows the API change; `make facade-api` fails otherwise.
+- Likewise, a change to the Python package's public names or stub signatures re-blesses `api/tessera-rl-py.api` (`make py-api-bless`) in the same pull request; `make py-api` fails otherwise.
 - Every source file starts with the SPDX header
   `SPDX-License-Identifier: MIT OR Apache-2.0` in its comment syntax.
 - After adding or changing a dependency, run `make deny` (cargo-deny:

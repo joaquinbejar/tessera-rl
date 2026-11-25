@@ -457,6 +457,10 @@ jobs:
           TESSERA_RL_SIMD: scalar
       # The JAX handles (marker `jax`, SPEC 15.2) at the pinned jax and jaxlib.
       - run: make py-test-jax
+      # #690: the Python package's public-API snapshot. Report-only until
+      # ADR-0094 is accepted; the PR that files it makes this step hard.
+      - run: make py-api
+        continue-on-error: true
       # The .pyi stubs (issue #348): mypy --strict, and stubtest against the
       # installed package.
       - run: make py-typecheck

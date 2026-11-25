@@ -21,7 +21,9 @@ reviewed tree: the frozen SHA.
       the stable surface, or this is a major release. `make facade-api` is
       green, and `git diff <last tag> -- api/tessera-rl.api` lists what the
       facade's public API changed since then: every removed or changed line
-      is a candidate break, to name in the CHANGELOG.
+      is a candidate break, to name in the CHANGELOG. The same for Python:
+      `make py-api` is green, and `git diff <last tag> --
+      api/tessera-rl-py.api` lists the stable Python surface's changes.
 - [ ] The CHANGELOG heading carries the actual release date
       (`## [<version>] - <YYYY-MM-DD>`). If the release slips, the last PR before
       the freeze corrects it. Nothing changes the tree after the freeze.
