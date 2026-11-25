@@ -24,6 +24,13 @@ Releasing the host memory waits on the last copy's event first, so the
 memory is never freed while a copy reads it. That wait holds the
 interpreter, and is bounded by one copy of the outputs.
 
+Memory is bounded per pool: the pool allocates its pinned output storage
+once, at construction, and the session allocates one device buffer of the
+same size per pinned range, the first time an output in it is copied.
+Every result, whatever rows it spans (a half, ``reset(ids=...)``), copies
+into its own bytes of that buffer; nothing is allocated per call. The
+pinned memory lives until the pool, every export and the session are gone.
+
 Everything device-specific sits behind a small backend interface
 (``Backend``, ``Stream``, ``Event``) so the window logic runs without CUDA;
 ``TorchBackend`` is the real one. ``torch`` is imported only when a
@@ -68,10 +75,13 @@ class Backend(Protocol):
         """The bytes ``offset..offset + nbytes`` of a ``pinned`` handle, as a
         copy source."""
 
-    def device_buffer(self, nbytes: int, dtype: np.dtype, shape: tuple[int, ...]) -> tuple[Any, Any]:
-        """A device buffer of ``nbytes``: ``(bytes, typed)``, the copy
-        destination and the tensor of ``dtype`` and ``shape`` over it that
-        the caller receives."""
+    def device_buffer(self, nbytes: int) -> Any:
+        """A device buffer of ``nbytes`` bytes."""
+
+    def device_view(self, raw: Any, offset: int, nbytes: int, dtype: np.dtype, shape: tuple[int, ...]) -> tuple[Any, Any]:
+        """The bytes ``offset..offset + nbytes`` of a ``device_buffer``:
+        ``(bytes, typed)``, the copy destination and the tensor of ``dtype``
+        and ``shape`` over it that the caller receives."""
 
     def stream(self) -> Any:
         """A new dedicated stream."""
@@ -120,11 +130,12 @@ class TorchBackend:
     def source(self, handle: Any, offset: int, nbytes: int) -> Any:
         return handle[offset : offset + nbytes]
 
-    def device_buffer(self, nbytes: int, dtype: np.dtype, shape: tuple[int, ...]) -> tuple[Any, Any]:
-        torch = self._torch
-        raw = torch.empty(nbytes, dtype=torch.uint8, device=self.device)
-        typed = raw.view(getattr(torch, _TORCH_DTYPES[np.dtype(dtype).name])).view(shape)
-        return raw, typed
+    def device_buffer(self, nbytes: int) -> Any:
+        return self._torch.empty(nbytes, dtype=self._torch.uint8, device=self.device)
+
+    def device_view(self, raw: Any, offset: int, nbytes: int, dtype: np.dtype, shape: tuple[int, ...]) -> tuple[Any, Any]:
+        part = raw[offset : offset + nbytes]
+        return part, part.view(getattr(self._torch, _TORCH_DTYPES[np.dtype(dtype).name])).view(shape)
 
     def stream(self) -> Any:
         return self._torch.cuda.Stream(device=self.device)
@@ -219,12 +230,21 @@ class PinnedAllocator:
         self._ranges.append((start, length, handle, start - base))
         return start, _Owner(handle, self.pending)
 
-    def source(self, address: int, nbytes: int) -> Any:
-        """The copy source of the host bytes at ``address``."""
-        for start, length, handle, offset in self._ranges:
+    def locate(self, address: int, nbytes: int) -> tuple[int, int]:
+        """``(range index, offset in that range)`` of the host bytes at
+        ``address``."""
+        for index, (start, length, _handle, _offset) in enumerate(self._ranges):
             if start <= address and address + nbytes <= start + length:
-                return self._backend.source(handle, offset + address - start, nbytes)
+                return index, address - start
         raise _native.TesseraError("an output is outside the pinned output storage")
+
+    def range_length(self, index: int) -> int:
+        return self._ranges[index][1]
+
+    def source(self, index: int, offset: int, nbytes: int) -> Any:
+        """The copy source of ``nbytes`` at ``offset`` in range ``index``."""
+        _start, _length, handle, base = self._ranges[index]
+        return self._backend.source(handle, base + offset, nbytes)
 
 
 def _address(array: np.ndarray) -> int:
@@ -240,9 +260,10 @@ class _Session:
         self._pending = allocator.pending
         self._stream = backend.stream()
         self._events: dict[int | None, Any] = {}
-        #: ``(address, nbytes, dtype, shape)`` -> ``(source, raw, typed)``;
-        #: the storage never moves, so each output keeps its buffers.
-        self._buffers: dict[tuple, tuple[Any, Any, Any]] = {}
+        #: One full-size device buffer per pinned range: an output copies
+        #: into its own bytes of it, whatever rows it spans, so device memory
+        #: is bounded by the pool's output storage (allocated once).
+        self._buffers: dict[int, Any] = {}
 
     def before(self, name: str, args: tuple) -> None:
         """Ends the window before a pool call: waits on the copies that read
@@ -258,15 +279,14 @@ class _Session:
     def _device(self, array: np.ndarray) -> Any:
         if not array.flags.c_contiguous:
             raise _native.TesseraError("a device output must be a contiguous host array")
-        key = (_address(array), array.nbytes, array.dtype.str, array.shape)
-        entry = self._buffers.get(key)
-        if entry is None:
-            source = self._allocator.source(key[0], array.nbytes)
-            raw, typed = self._backend.device_buffer(array.nbytes, array.dtype, array.shape)
-            entry = (source, raw, typed)
-            self._buffers[key] = entry
-        source, raw, typed = entry
-        self._backend.copy_async(raw, source, self._stream)
+        index, offset = self._allocator.locate(_address(array), array.nbytes)
+        raw = self._buffers.get(index)
+        if raw is None:
+            raw = self._backend.device_buffer(self._allocator.range_length(index))
+            self._buffers[index] = raw
+        source = self._allocator.source(index, offset, array.nbytes)
+        dst, typed = self._backend.device_view(raw, offset, array.nbytes, array.dtype, array.shape)
+        self._backend.copy_async(dst, source, self._stream)
         return typed
 
     def to_device(self, step: Step, half: int | None = None) -> Step:

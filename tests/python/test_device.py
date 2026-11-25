@@ -73,9 +73,13 @@ class FakeBackend:
     def source(self, handle, offset, nbytes):
         return handle[offset : offset + nbytes]
 
-    def device_buffer(self, nbytes, dtype, shape):
-        raw = np.zeros(nbytes, dtype=np.uint8)
-        return raw, raw.view(dtype).reshape(shape)
+    def device_buffer(self, nbytes):
+        self.log.append("device_buffer")
+        return np.zeros(nbytes, dtype=np.uint8)
+
+    def device_view(self, raw, offset, nbytes, dtype, shape):
+        part = raw[offset : offset + nbytes]
+        return part, part.view(dtype).reshape(shape)
 
     def stream(self):
         return FakeStream()
@@ -192,6 +196,7 @@ def test_device_next_call_blocks_until_event_completes():
 def test_device_tensors_returned_after_wait_queued():
     backend = FakeBackend()
     env = tessera_rl.make(CARTPOLE, num_envs=4, workers=0, device="cuda:0", _device_backend=backend)
+    env.reset()
     backend.log.clear()
     env.reset()
     n = len(_fields(env.host_outputs()))
@@ -354,11 +359,11 @@ def test_device_allocator_source_picks_the_containing_allocation():
     a, _owner_a = alloc.allocate(32768, 16384)
     b, _owner_b = alloc.allocate(32768, 16384)
     backend.handles[1][:] = 7
-    src = alloc.source(b + 100, 16)
-    assert src.tobytes() == bytes([7] * 16)
-    assert alloc.source(a, 16).tobytes() == bytes(16)
+    assert alloc.locate(b + 100, 16) == (1, 100)
+    assert alloc.source(*alloc.locate(b + 100, 16), 16).tobytes() == bytes([7] * 16)
+    assert alloc.source(*alloc.locate(a, 16), 16).tobytes() == bytes(16)
     with pytest.raises(tessera_rl.TesseraError, match="outside"):
-        alloc.source(b + 32768 - 8, 16)
+        alloc.locate(b + 32768 - 8, 16)
 
 
 def test_device_allocator_exception_kept_in_config_error():
@@ -403,3 +408,50 @@ def test_device_puffer_adapter_refused(tmp_path):
     p = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, cwd=tmp_path, timeout=120, check=False)
     assert p.returncode == 0, p.stderr
     assert "refused: device= is not supported by the PufferLib adapter" in p.stdout
+
+
+def test_device_buffers_bounded_across_partial_results():
+    src = tessera_rl.make(CARTPOLE, num_envs=1, seed=5, workers=0)
+    src.reset()
+    snaps = []
+    for _ in range(2):
+        src.step(np.ones((1, 1), dtype=np.int32))
+        snaps.append(src.snapshot(0))
+    src.close()
+    backend = FakeBackend()
+    env = tessera_rl.make(CARTPOLE, num_envs=4, seed=5, workers=0, device="cuda:0", _device_backend=backend)
+    plain = tessera_rl.make(CARTPOLE, num_envs=4, seed=5, workers=0)
+    env.reset()
+    plain.reset()
+    count = len(env._session._buffers)
+    assert count >= 1
+    env.set_reset_source(tessera_rl.Archive(env, snaps))
+    plain.set_reset_source(tessera_rl.Archive(plain, snaps))
+    for _ in range(3):
+        _assert_same(plain.step(_actions(plain)), env.step(_actions(env)))
+        for call in (lambda e: e.reset(ids=[1, 2]), lambda e: e.reset_from([3], [1]), lambda e: e.reset(ids=[0])):
+            p, d = call(plain), call(env)
+            if d is not None:
+                _assert_same(p, d)
+        assert len(env._session._buffers) == count
+    assert backend.log.count("device_buffer") == count
+    env.close()
+    plain.close()
+
+
+def test_device_halfstep_arrays_cover_only_their_half():
+    alloc_backend = FakeBackend()
+    env = tessera_rl.make(
+        CARTPOLE, num_envs=4, chunk_size=1, workers=1, mode="pipelined", device="cuda:0", _device_backend=alloc_backend
+    )
+    env.reset()
+    hosts = env.host_outputs()
+    spans = {}
+    for h in hosts:
+        for name, arr in _fields(h.step).items():
+            start = arr.__array_interface__["data"][0]
+            assert arr.shape[0] == len(env.halves[h.half]), name
+            spans.setdefault(name, []).append((start, start + arr.nbytes))
+    for name, ((a0, a1), (b0, b1)) in spans.items():
+        assert a1 <= b0 or b1 <= a0, f"{name}: the halves' rows overlap"
+    env.close()
