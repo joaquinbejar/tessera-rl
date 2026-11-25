@@ -187,16 +187,16 @@ def _calibrated() -> list[str]:
 
 # Excluded: their fingerprints were already stale on main before #529
 # (#591 changed _FlatVector, in the T3a "flatten" scope, after their #567
-# calibration). Their recalibration is #599.
-EXCLUDED_STALE_599 = {"jobshop", "vrp"}
+# calibration). Their recalibration is #599: whichever of #599 and #529 lands second removes this set.
+STALE_UNTIL_599 = {"jobshop", "vrp"}
 
 
-@pytest.mark.parametrize("name", [n for n in _calibrated() if n not in EXCLUDED_STALE_599])
+@pytest.mark.parametrize("name", [n for n in _calibrated() if n not in STALE_UNTIL_599])
 def test_selfplay_every_committed_calibration_fingerprint_is_unchanged(name):
     """rev (REVIEW-design-r1): the committed calibrations still match; the
     9 not excluded for #599."""
     pytest.importorskip("torch")
-    assert len(_calibrated()) == 11 and EXCLUDED_STALE_599 <= set(_calibrated())
+    assert len(_calibrated()) == 11 and STALE_UNTIL_599 <= set(_calibrated())
     sys.path.insert(0, str(ROOT / "tools"))
     import learning_test as lt
 
