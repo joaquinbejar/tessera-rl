@@ -338,10 +338,10 @@ fn test_golden_grid_lanes_same_step_matches_fixture_on_every_mode() {
 
 #[test]
 fn test_golden_grid_lanes_streams_equal_grid() {
-    // The same scenario on Grid: every per-step digest line (observations,
-    // rewards, ends, headers) is equal; only the header lines (id, version,
-    // config hash) and the final record hashes, whose state layout
-    // differs, are not compared.
+    // The same scenario on Grid: every per-step output digest
+    // (observations, rewards, ends, headers) is equal; the header lines (id,
+    // version, config hash), the per-step records digest and the final
+    // record hashes, which hash the state layout, are not compared.
     for auto_reset in [AutoReset::NextStep, AutoReset::SameStep] {
         let s = grid_lanes("grid-lanes-v1-streams", auto_reset);
         let lanes = run::<GridLanes, _>(
@@ -354,10 +354,18 @@ fn test_golden_grid_lanes_streams_equal_grid() {
             |cfg, o| EnvPool::<Grid, NoMasks>::new(cfg, o).unwrap_or_else(|e| panic!("{e}")),
             None,
         );
+        // Each step line is `<t> <records> <obs> ...`: drop the records
+        // digest (field 1), the only field that hashes the state layout.
         let steps = |l: &[String]| -> Vec<String> {
             l.iter()
                 .filter(|x| x.starts_with(|c: char| c.is_ascii_digit()))
-                .cloned()
+                .map(|x| {
+                    let mut f: Vec<&str> = x.split(' ').collect();
+                    if f.len() > 1 {
+                        f.remove(1);
+                    }
+                    f.join(" ")
+                })
                 .collect()
         };
         assert!(steps(&lanes).len() > 100, "the scenario has 300 steps");
