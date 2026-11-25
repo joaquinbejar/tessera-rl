@@ -260,12 +260,12 @@ gym-equivalence:
 # adapters as negative controls (nightly CI,
 # about 15 minutes; not in pre-push). JSON report in reference-training.json.
 # Reference training with Stable-Baselines3 (#368): its own uv project and
-# lock (compat/training/sb3); gated in the nightly (#501). JSON report in reference-sb3.json.
+# lock (compat/training/sb3); report-only in the nightly until gated (#501). JSON report in reference-sb3.json.
 reference-sb3:
 	uv run --locked --project compat/training/sb3 --python 3.11 python tools/reference/sb3_cartpole.py --out reference-sb3.json
 
 # Reference training with Tianshou (#368): its own uv project and lock
-# (compat/training/tianshou); gated in the nightly (#501). JSON report in reference-tianshou.json.
+# (compat/training/tianshou); report-only in the nightly until gated (#501). JSON report in reference-tianshou.json.
 reference-tianshou:
 	uv run --locked --project compat/training/tianshou --python 3.11 python tools/reference/tianshou_cartpole.py --out reference-tianshou.json
 

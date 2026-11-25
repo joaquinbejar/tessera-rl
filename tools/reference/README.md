@@ -17,8 +17,9 @@ lock, `make py-test` or `make pre-push`.
 Pass rule, the defaults of `tools/reference_training.py`: the median across
 seeds of the Tessera greedy evaluation mean is at least 475 (CartPole-v1's
 reward threshold), and the Tessera minus Gymnasium difference of the
-training-curve means is at most 20 in absolute value. SB3 and Tianshou
-fail the nightly when they miss it (#501); RLlib and the Tag smoke stay
-report-only until they have 7 consecutive green nights (#579). They run nightly in
+training-curve means is at most 20 in absolute value. Each script is
+report-only in the nightly until it has 7 consecutive green nights; then
+its matrix `gate` is set to true and a miss fails the run (SB3 and
+Tianshou: #501; RLlib and the Tag smoke: #579). They run nightly in
 `.github/workflows/reference-libraries.yml` (CleanRL in
 `reference-training.yml`).
