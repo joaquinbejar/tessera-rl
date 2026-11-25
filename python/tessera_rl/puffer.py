@@ -12,7 +12,7 @@ module does not change directory around it, since that is process-global: import
 it from a directory you can write to and do not mind the link in. A failed
 import raises ``ImportError`` naming the cause.
 
-**Environments.** An allowlist: CartPole, Tag and Gather. Sequential environments are
+**Environments.** An allowlist: CartPole, Tag, Gather and GridKeyDoor. Sequential environments are
 refused: PufferLib has no turns, and its trainer would train on idle seats.
 Auto-reset is ``same_step``, fixed. ``terminal_observations`` holds final
 observations, which PufferLib's tuple has no place for. PufferLib passes no action masks to a policy, so in Tag
@@ -116,7 +116,7 @@ except Exception as e:  # PermissionError in a read-only directory, among others
     ) from e
 
 #: Environments tested through this adapter.
-SUPPORTED = frozenset({"tessera/CartPole-v1", "tessera/Gather-v1", "tessera/Tag-v1"})
+SUPPORTED = frozenset({"tessera/CartPole-v1", "tessera/Gather-v1", "tessera/GridKeyDoor-v1", "tessera/Tag-v1"})
 
 #: Above this a worker count is refused here, rather than failing to start threads
 #: at the first reset, which is a parent hang under Multiprocessing.
