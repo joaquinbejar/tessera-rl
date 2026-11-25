@@ -26,10 +26,12 @@ def _agree(env_id, rule, steps, agents, **kwargs):
         masks = np.asarray(s.masks).copy()
         acting = np.asarray(s.acting).copy()
         s = env.step(np.zeros((4, agents), dtype=np.int32))
-        chosen = np.asarray(env.heuristic_actions())
+        chosen = np.asarray(env.heuristic_actions)
         for i in range(4):
             for a in range(agents):
-                if not acting[i, a]:
+                # A finished episode's row (NextStep: the next step resets
+                # it) has no legal action and no heuristic decision.
+                if not acting[i, a] or not masks[i, a].any():
                     continue
                 obs = {k: v[i, a] for k, v in before.items()}
                 assert int(chosen[i, a].reshape(-1)[0]) == rule(obs, masks[i, a]), (i, a)
