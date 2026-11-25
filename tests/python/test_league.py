@@ -12,7 +12,7 @@ import numpy as np
 import pytest
 
 import tessera_rl
-from tessera_rl import pz
+from tessera_rl import gym, pz
 
 DUEL = "tessera/PaddleDuel-v1"
 POP = ["heuristic", ("external", 7)]
@@ -221,3 +221,10 @@ def test_epoch_barrier_returns_the_fixed_report():
     assert report["league"]["submitted"] > 0
     assert report["episodes"]["count"] > 0
     p.close()
+
+
+def test_league_gym_refuses_a_league_pool_pointing_to_pettingzoo():
+    """A league pool is multi-agent (its opponent rows may be External):
+    the Gymnasium adapter refuses it with a typed error naming the way out."""
+    with pytest.raises(tessera_rl.CapabilityError, match="PettingZoo adapter"):
+        gym.make(DUEL, num_envs=2, workers=0, agents=2, policy_map={1: "opponent"}, league=_league(), role=0)

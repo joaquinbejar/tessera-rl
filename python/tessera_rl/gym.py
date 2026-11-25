@@ -160,6 +160,13 @@ def _native_env(env_id: str, num_envs: int, seed: int, mode: AutoresetMode, outp
     native = maker(**native_kwargs(num_envs=num_envs, seed=seed, auto_reset=_NATIVE_MODE[mode], outputs=outputs, **kwargs))
     layout = native.layout()
     groups = tuple(layout.get("policy_groups", ()))
+    if "opponent" in groups:
+        # A league pool's opponent rows may be External (the caller's), so
+        # it is multi-agent whatever its slot count.
+        native.close()
+        raise _native.CapabilityError(
+            f"{env_id} with a league is multi-agent; use the PettingZoo adapter (tessera_rl.pz) or tessera_rl.Env"
+        )
     if groups and groups[0] != "learner":
         # The adapter drives slot 0: a map must keep it a learner
         # (ADR-0079 item 5.2).
@@ -390,18 +397,10 @@ class TesseraVectorEnv(VectorEnv):
         out = self._native.reset(native_seed, ids)
         info = self._mask_info(out)
         info.update(self._state_info(out))
-        info.update(self._assignment_info())
         if self.metadata["tessera_kind"] == "host":
             # An aborted reset leaves its instance pending (ADR-0065).
             info.update(self._host_infos(out))
         return self._obs(out["observations"]), info
-
-    def _assignment_info(self) -> dict:
-        """``infos["assignment"]`` (ADR-0088 section 10): each instance's
-        league opponent, uint32 ``(num_envs,)``, when the pool has a league."""
-        assignment = getattr(self._native, "assignment", None)
-        raw = assignment() if assignment is not None else None
-        return {} if raw is None else {"assignment": np.frombuffer(raw, dtype="<u4").copy()}
 
     def _host_infos(self, out) -> dict:
         return _host.host_infos(
@@ -440,7 +439,6 @@ class TesseraVectorEnv(VectorEnv):
                 rewards = rewards.copy()
         info = self._info(out, terminated | truncated)
         info.update(self._state_info(out))
-        info.update(self._assignment_info())
         if self.metadata["tessera_kind"] == "host":
             # ADR-0065: an aborted episode is truncated; its final_obs (in
             # SAME_STEP) is the zero row the engine wrote.
