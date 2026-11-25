@@ -346,7 +346,7 @@ class TesseraPufferEnv(pufferlib.PufferEnv):
     def terminal_observations(self) -> np.ndarray:
         """Final observations of the episodes that ended in the last call."""
         self._require_reset("terminal_observations")
-        leaves = self._env._native.outputs()["terminal_observations"]
+        leaves = list(self._env.terminal_observations.values())
         shape = self.single_observation_space.shape
         if self._flattens:
             if self._terminal is None:
