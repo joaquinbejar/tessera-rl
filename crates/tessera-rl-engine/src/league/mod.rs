@@ -458,8 +458,11 @@ impl LeagueState {
 }
 
 /// The learner's outcome of an episode that just ended, from the agents'
-/// episode returns (ADR-0088 item 4.1): the sign of the mean return of the
-/// non-opponent alive slots minus the opponent slots' mean.
+/// episode returns (ADR-0088 item 4.1, erratum 1): the sign of the mean
+/// return of the learner slots (non-opponent slots alive at the end or
+/// with a nonzero return) minus the opponent slots' mean. An empty learner
+/// set, equal means or a NaN are a draw; `None` only without an opponent
+/// slot.
 #[must_use]
 pub(crate) fn outcome_of<H: RecordLayout>(header: &H, opponents: u64) -> Option<MatchOutcome> {
     let (mut learner, mut ln, mut opp, mut on) = (0.0f64, 0u32, 0.0f64, 0u32);
@@ -474,8 +477,11 @@ pub(crate) fn outcome_of<H: RecordLayout>(header: &H, opponents: u64) -> Option<
             ln += 1;
         }
     }
-    if ln == 0 || on == 0 {
+    if on == 0 {
         return None;
+    }
+    if ln == 0 {
+        return Some(MatchOutcome::Draw);
     }
     let diff = learner / f64::from(ln) - opp / f64::from(on);
     Some(if diff > 0.0 {
@@ -485,4 +491,39 @@ pub(crate) fn outcome_of<H: RecordLayout>(header: &H, opponents: u64) -> Option<
     } else {
         MatchOutcome::Draw
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use tessera_rl_core::{Bool8, NoAdaptive, RecordHeader, StateInit};
+
+    use super::{MatchOutcome, outcome_of};
+
+    fn header(rows: &[(bool, f32)]) -> RecordHeader<3, NoAdaptive> {
+        let mut h = RecordHeader::<3, NoAdaptive>::state_default();
+        for (row, &(alive, ret)) in h.agents.iter_mut().zip(rows) {
+            row.alive = Bool8::from(alive);
+            row.episode_return = ret;
+        }
+        h
+    }
+
+    /// Slot 2 is the opponent (bit 2).
+    const OPP: u64 = 1 << 2;
+
+    #[test]
+    fn test_outcome_sign_of_learner_mean_minus_opponent_mean() {
+        assert_eq!(outcome_of(&header(&[(true, 2.0), (true, 0.0), (true, 0.5)]), OPP), Some(MatchOutcome::Win));
+        assert_eq!(outcome_of(&header(&[(true, -1.0), (false, 0.0), (true, 0.5)]), OPP), Some(MatchOutcome::Loss));
+        assert_eq!(outcome_of(&header(&[(true, 0.5), (false, 0.0), (true, 0.5)]), OPP), Some(MatchOutcome::Draw));
+        assert_eq!(outcome_of(&header(&[(true, f32::NAN), (false, 0.0), (true, 0.5)]), OPP), Some(MatchOutcome::Draw));
+    }
+
+    /// Rev's ruling 2: no learner slot (none alive at the end, none with a
+    /// return) is a draw; without an opponent slot there is no result.
+    #[test]
+    fn test_outcome_empty_learner_set_is_a_draw() {
+        assert_eq!(outcome_of(&header(&[(false, 0.0), (false, 0.0), (true, 3.0)]), OPP), Some(MatchOutcome::Draw));
+        assert_eq!(outcome_of(&header(&[(true, 1.0), (true, 0.0), (true, 0.0)]), 0), None);
+    }
 }
