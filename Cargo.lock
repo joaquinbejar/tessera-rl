@@ -1271,6 +1271,7 @@ dependencies = [
 name = "tessera-rl-simd"
 version = "0.3.0"
 dependencies = [
+ "criterion",
  "tessera-rl-num",
  "thiserror",
 ]

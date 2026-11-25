@@ -12,6 +12,8 @@
 //! and is not selectable. No level enables `fma`.
 
 mod dispatch;
+mod int_lanes;
 mod lanes;
 
 pub use dispatch::{Kernel, Level, LevelError, Resolved};
+pub use int_lanes::{LaneKernel, Lanes};

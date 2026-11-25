@@ -12,6 +12,7 @@ use core::fmt;
 use tessera_rl_num::math::lane::F64Lanes;
 use thiserror::Error;
 
+use crate::int_lanes::{self, LaneKernel};
 use crate::lanes;
 
 /// An instruction-set level.
@@ -158,6 +159,23 @@ impl Resolved {
             // SAFETY: `Resolved` holds this level only after `present`.
             Level::Neon => unsafe { lanes::run_neon(kernel) },
             _ => lanes::run_scalar(kernel),
+        }
+    }
+
+    /// Runs `kernel` with this level's lane family (`f64`, `i32`, `Fx32`).
+    #[inline]
+    pub fn dispatch_lanes<K: LaneKernel>(self, kernel: K) -> K::Output {
+        match self.0 {
+            #[cfg(target_arch = "x86_64")]
+            // SAFETY: `Resolved` holds this level only after `present`.
+            Level::Avx2 => unsafe { int_lanes::run_avx2_lanes(kernel) },
+            #[cfg(target_arch = "x86_64")]
+            // SAFETY: `Resolved` holds this level only after `present`.
+            Level::Sse42 => unsafe { int_lanes::run_sse42_lanes(kernel) },
+            #[cfg(target_arch = "aarch64")]
+            // SAFETY: `Resolved` holds this level only after `present`.
+            Level::Neon => unsafe { int_lanes::run_neon_lanes(kernel) },
+            _ => int_lanes::run_scalar_lanes(kernel),
         }
     }
 }
