@@ -25,17 +25,22 @@ Usage::
 
     python tools/bench/bench.py --machine ref-x86 --runs 10 \\
         --qualification window.toml [--only PREFIX] [--out FILE]
+    python tools/bench/bench.py --machine ref-x86 --runs 10 --only rust/rts/ \\
+        --max-load5 2 --load-wait 7200 --out FILE   # the load rule (#640)
     python tools/bench/bench.py --quick     # smoke run, not for claims
 """
 
 from __future__ import annotations
 
 import argparse
+import hashlib
+import hmac
 import importlib.util
 import json
 import os
 import pathlib
 import platform
+import secrets
 import shutil
 import subprocess
 import sys
@@ -481,6 +486,127 @@ def qualify(report: dict, qualification: dict | None) -> list[str]:
     return _qualify(report, qualification, machines().get(machine) if machine else None)
 
 
+# -- the measurement load rule (#640) -----------------------------------------
+
+LOAD_POLL_S = 30
+
+
+class LoadBudgetExceeded(RuntimeError):
+    """The host did not reach the load bound within the wait budget."""
+
+
+def _sleep(seconds: float) -> None:
+    time.sleep(seconds)
+
+
+def _loads() -> list[float]:
+    loads = load_average()
+    if loads is None:
+        raise ValueError("--max-load5 needs load averages, which this OS does not expose")
+    return loads
+
+
+def k_run(cfg: dict, pin: dict) -> int:
+    """The CPUs a process run keeps busy: its worker count for a k-worker
+    configuration, 1 for Inline, snapshot, memory and Python runs."""
+    if cfg.get("kind") == "rust" and cfg.get("metric") in ("throughput", "latency"):
+        return max(1, workers_for(cfg, pin))
+    return 1
+
+
+class LoadGate:
+    """Before each process run, waits (polling every ``LOAD_POLL_S``) until
+    load5 < ``bound``; the waits of one invocation share ``budget_s``.
+    After each run, the run is void when load5 >= ``bound + k_run``, so the
+    run's own load does not void it (REVIEW-protocol-r2)."""
+
+    def __init__(self, bound: float, budget_s: float):
+        self.bound, self.budget_s, self.waited_s = bound, budget_s, 0.0
+        self.runs: list[dict] = []
+
+    def before(self) -> list[float]:
+        while True:
+            loads = _loads()
+            if loads[1] < self.bound:
+                return loads
+            if self.waited_s + LOAD_POLL_S > self.budget_s:
+                raise LoadBudgetExceeded(
+                    f"load5 {loads[1]} stayed at or above {self.bound} for the {self.budget_s} s budget; no report written"
+                )
+            _sleep(LOAD_POLL_S)
+            self.waited_s += LOAD_POLL_S
+
+    def after(self, name: str, run: int, k: int, before: list[float]) -> None:
+        loads = _loads()
+        void_bound = self.bound + k
+        self.runs.append({
+            "config": name, "run": run, "k_run": k,
+            "gate_bound": self.bound, "void_bound": void_bound,
+            "before": {"load1": before[0], "load5": before[1]},
+            "after": {"load1": loads[0], "load5": loads[1]},
+            "void": loads[1] >= void_bound,
+        })  # fmt: skip
+
+    def record(self) -> dict:
+        void = [{"config": r["config"], "run": r["run"]} for r in self.runs if r["void"]]
+        return {
+            "max_load5": self.bound, "load_wait_s": self.budget_s, "poll_s": LOAD_POLL_S,
+            "waited_s": self.waited_s, "runs": self.runs, "load_void": bool(void), "void_runs": void,
+        }  # fmt: skip
+
+
+# Our own containers: the bench and gate jobs name theirs with this prefix.
+OUR_CONTAINER_PREFIX = "tessera"
+
+
+def _docker_containers() -> list[tuple[str, str]] | None:
+    """(name, image ID) of each running container; ``None`` where docker
+    cannot be read."""
+    try:
+        ids = subprocess.run(["docker", "ps", "-q"], capture_output=True, text=True, check=True, timeout=30).stdout.split()
+        if not ids:
+            return []
+        out = subprocess.run(
+            ["docker", "inspect", "--format", "{{.Name}}\t{{.Image}}", *ids],
+            capture_output=True, text=True, check=True, timeout=30,
+        ).stdout  # fmt: skip
+    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
+        return None
+    rows = [line.split("\t", 1) for line in out.splitlines() if line.strip()]
+    return [(name.lstrip("/"), image) for name, image in (r if len(r) == 2 else (r[0], "") for r in rows)]
+
+
+def container_salt() -> bytes:
+    """A random per-invocation key for the container digests. It is written
+    only to stderr (the unpublished run log), so a digest cannot be reversed
+    by hashing guessed names, while start and end of one invocation stay
+    comparable."""
+    salt = secrets.token_bytes(16)
+    sys.stderr.write(f"bench.py: container digest salt {salt.hex()}\n")
+    return salt
+
+
+def containers(salt: bytes) -> dict | None:
+    """The running containers, with nothing that names another service
+    (#640): their count, the names of ours (by ``OUR_CONTAINER_PREFIX``),
+    and for every other one an opaque digest (HMAC-SHA256 under ``salt`` of
+    name and image ID, first 12 hex digits), sorted, so a change between
+    start and end is visible. The raw list goes to stderr, the unpublished
+    run log, never into the report. ``None`` where docker cannot be read."""
+    rows = _docker_containers()
+    if rows is None:
+        return None
+    for name, image in rows:
+        sys.stderr.write(f"bench.py: container {name} {image}\n")
+    ours = sorted(name for name, _ in rows if name.startswith(OUR_CONTAINER_PREFIX))
+    others = sorted(
+        hmac.new(salt, f"{name}\0{image}".encode(), hashlib.sha256).hexdigest()[:12]
+        for name, image in rows
+        if not name.startswith(OUR_CONTAINER_PREFIX)
+    )  # fmt: skip
+    return {"count": len(rows), "ours": ours, "others": others}
+
+
 # -- main ---------------------------------------------------------------------
 
 
@@ -499,6 +625,8 @@ def run(
     profile: str = "release",
     runs: int = 1,
     qualification: dict | None = None,
+    max_load5: float | None = None,
+    load_wait_s: float | None = None,
 ) -> dict:
     spec, method = load(quick)
     configs = [c for c in spec["config"] if only is None or c["name"].startswith(only)]
@@ -511,19 +639,25 @@ def run(
     if not configs:
         raise ValueError(f"every configuration matching {only!r} needs a missing package")
     pin = pinning(machine)
+    gate = None if max_load5 is None else LoadGate(max_load5, load_wait_s or 0.0)
     load_before = load_average()
+    salt = container_salt() if gate else b""
+    containers_before = containers(salt) if gate else None
     runner = runner_path(profile) if any(c["kind"] == "rust" for c in configs) else None
     order_rng = np.random.default_rng(method["bootstrap_seed"])
     per_run: dict[str, list] = {c["name"]: [] for c in configs}
     orders = []
-    for _ in range(runs):
+    for index in range(runs):
         order = [configs[i] for i in order_rng.permutation(len(configs))]
         orders.append([c["name"] for c in order])
         for cfg in order:
+            before = gate.before() if gate else None
             if cfg["kind"] == "rust":
                 per_run[cfg["name"]].append(run_rust(runner, cfg, method, pin))
             else:
                 per_run[cfg["name"]].append(run_python(cfg, method, pin, quick))
+            if gate:
+                gate.after(cfg["name"], index, k_run(cfg, pin), before)
     results = {c["name"]: {"config": c, **combine(per_run[c["name"]], method)} for c in configs}
     report = {
         "schema": "tessera-bench/3",
@@ -539,6 +673,10 @@ def run(
         "skipped": {name: "required package not installed" for name in skipped},
         "derived": derive(results, spec.get("derived", []), method, partial=only is not None),
     }
+    if gate:
+        report["load_rule"] = gate.record()
+        report["load_void"] = report["load_rule"]["load_void"]
+        report["containers"] = {"start": containers_before, "end": containers(salt)}
     reasons = qualify(report, qualification)
     report["valid_for_claims"] = not reasons
     report["claim_check"] = {"valid": not reasons, "reasons": reasons}
@@ -553,6 +691,8 @@ def main() -> int:
     parser.add_argument("--qualification", type=pathlib.Path, help="TOML record of the run's conditions (machine, exclusive_window, operator, notes)")
     parser.add_argument("--quick", action="store_true", help="short smoke run; never valid for claims")
     parser.add_argument("--out", type=pathlib.Path, help="write the JSON report here (default: stdout)")
+    parser.add_argument("--max-load5", type=float, help="before each process run, wait until load5 is below this bound; a run is void when load5 after it is at least the bound plus its worker count")
+    parser.add_argument("--load-wait", type=float, help="seconds the --max-load5 waits of one invocation may take in all; past it the invocation fails with no report")
     parser.add_argument("--single", help=argparse.SUPPRESS)  # one Python measurement, internal
     args = parser.parse_args()
     if args.single:
@@ -564,9 +704,19 @@ def main() -> int:
         parser.error(f"unknown machine {args.machine!r}; known: {sorted(machines())}")
     if args.runs < 1:
         parser.error("--runs must be at least 1")
+    if (args.max_load5 is None) != (args.load_wait is None):
+        parser.error("--max-load5 and --load-wait go together")
+    if args.max_load5 is not None and (args.max_load5 <= 0 or args.load_wait < 0):
+        parser.error("--max-load5 must be positive and --load-wait not negative")
     qualification = tomllib.loads(args.qualification.read_text()) if args.qualification else None
     try:
-        report = run(args.only, args.quick, args.machine, runs=args.runs, qualification=qualification)
+        report = run(
+            args.only, args.quick, args.machine, runs=args.runs, qualification=qualification,
+            max_load5=args.max_load5, load_wait_s=args.load_wait,
+        )  # fmt: skip
+    except LoadBudgetExceeded as e:
+        sys.stderr.write(f"bench.py: {e}\n")
+        return 1
     except ValueError as e:
         parser.error(str(e))
     text = json.dumps(report, indent=2)

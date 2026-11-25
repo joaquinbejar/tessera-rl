@@ -8,7 +8,7 @@ format = 1
 
 [ref-x86]
 # A candidate: SPEC 19.3 requires a dedicated machine for wall-clock gates,
-# and xaskar is shared. A recorded turbo state, an idle SMT sibling and a
+# and this host is shared. A recorded turbo state, an idle SMT sibling and a
 # low coefficient of variation do NOT by themselves promote a shared host:
 # it needs a measured exclusive window. Until then its wall-clock results
 # are indicative and the binding G1 gate is pending. It is valid for
@@ -17,7 +17,7 @@ format = 1
 status = "candidate"
 wall_clock_gates = "pending: needs an exclusive window"
 valid_for = ["golden", "math-diff", "instruction-counts"]
-host = "xaskar (shared host, about 20 containers; record the load with every run)"
+host = "lab-x86-1 (shared host, about 20 containers; record the load with every run)"
 cpu = "Intel Core i7-12700H (Alder Lake, hybrid)"
 # Matched against the observed CPU model by tools/bench before a claim.
 cpu_id = "i7-12700H"
@@ -38,6 +38,36 @@ bench_cpu_set = [2, 4, 6, 8]
 turbo = ""
 noise_floor_cv = ""
 toolchain = "rustc and cargo 1.99.1 (system), valgrind 3.26.0, gcc 15.2"
+
+# The fallback host for the indicative flagship runs (#640), used only if
+# ref-x86 cannot meet the measurement load bound. A candidate: lab-x86-2 is
+# a shared host, so its wall-clock results are indicative and it holds no
+# wall-clock gate. It is valid for bit-exactness only; nothing claim-grade
+# is recorded on it.
+[ref-x86-alt]
+status = "candidate"
+wall_clock_gates = "pending: needs an exclusive window"
+valid_for = ["golden", "math-diff"]
+host = "lab-x86-2 (shared host; record the load with every run)"
+cpu = "AMD Ryzen 7 5800H"
+# Matched against the observed CPU model by tools/bench before a claim.
+cpu_id = "AMD Ryzen 7 5800H"
+cores = "8 cores with SMT (CPUs 2k and 2k + 1 share core k)"
+isa = ""
+memory = ""
+os = ""
+kernel = ""
+frequency_policy = ""
+# Single-core benches run pinned to one core with `taskset -c 2` (CPU 0
+# avoided), with its SMT sibling (CPU 3) left idle.
+bench_pinning = "taskset -c 2"
+# CPUs the harness pins to (tools/bench): distinct physical cores 1 to 4,
+# CPU 0 avoided, SMT siblings (3, 5, 7, 9) left idle. Single-core runs use
+# the first; a k-worker run uses the first k.
+bench_cpu_set = [2, 4, 6, 8]
+turbo = ""
+noise_floor_cv = ""
+toolchain = ""
 
 [ref-mac]
 status = "pending characterization"

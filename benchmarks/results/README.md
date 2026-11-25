@@ -26,4 +26,17 @@ throughput over k times the Inline throughput, not over one Sync worker. Until a
 reference machine exists (#151), flagship files are indicative: they keep
 `valid_for_claims: false` and their `claim_check` reasons, and use the full
 method. The phase 4 gate is met only by a reference-machine run with
-`--runs 10`. No flagship file has been admitted yet.
+`--runs 10`. Flagship files are one per flagship invocation, named
+`<UTC date>-<machine>-<short commit>-<flagship>.json`, because the six
+runs share date, machine and commit.
+
+Flagship runs follow the measurement load rule of `tools/bench/README.md`:
+before each process run, load5 must be below the bound B (2 for the
+indicative runs, waited for within a 2 h budget per invocation); a run is
+void when load5 after it is at least B + k_run (k_run is the run's worker
+count). Each file carries the invocation's start and end loads and every
+run's loads with both bounds in its top-level `loads`
+(`tools/dashboard/envelope.py` writes it). A report marked `load_void` is
+refused. If the reference candidate cannot meet the bound, the fallback
+host is the `ref-x86-alt` record (status `candidate`) of
+`compat/machines.toml`. No flagship file has been admitted yet.

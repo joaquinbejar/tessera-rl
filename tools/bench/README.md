@@ -153,7 +153,7 @@ above.
 | `tessera/RTS-v1` | Gym-μRTS, [MicroRTS-Py](https://github.com/Farama-Foundation/MicroRTS-Py) | Java engine behind Gym and PettingZoo; actions masked per grid cell, not per unit; MicroRTS rules; deprecated upstream |
 | `tessera/LimitOrderBook-v1` | ABIDES-Gym, [abides-jpmc-public](https://github.com/jpmorganchase/abides-jpmc-public) | Event-driven simulator with one learning agent against background agents; archived upstream. [mbt-gym](https://github.com/JJJerome/mbt_gym) is a weaker match: a stylized market-making model, not an order book |
 | `tessera/Lanterns-v1` | [Hanabi Learning Environment](https://github.com/google-deepmind/hanabi-learning-environment) | Hanabi rules, not Lanterns'; C++ core with a Gym-like API; not batch-stepped; archived upstream |
-| `tessera/Survival-v1` | [Neural MMO](https://github.com/NeuralMMO/environment) | The game Survival-v1 is a lite version of; its step API, agent counts and CPU needs not verified from its pages |
+| `tessera/Survival-v1` | PufferLib's Neural MMO 3 ([`pufferlib/ocean/nmmo3`](https://github.com/PufferAI/PufferLib)); [Neural MMO 2](https://github.com/NeuralMMO/environment) (`nmmo` 2.1.2) second | The game Survival-v1 is a lite version of. nmmo3 is a batched C environment with a richer world, 1,024 agents per map by default, one `Discrete(26)` action and no action masks in its wrapper; nmmo 2 uses the PettingZoo parallel API with masks and 128 agents by default, in Python. A comparison would cut either to 16 to 128 agents and state the differences |
 | `tessera/JobShop-v1` | [JSSEnv](https://github.com/prosysscience/JSSEnv) | Pure Python, Gymnasium-style, action masks. [Jumanji](https://github.com/instadeepai/jumanji) JobShop is batched but runs on JAX |
 | `tessera/Vrp-v1` | Jumanji MultiCVRP, [jumanji](https://github.com/instadeepai/jumanji) | Several vehicles with capacity limits, but on JAX. For CPU and Gym, [OR-Gym](https://github.com/hubbs5/or-gym) VehicleRouting is a pickup-and-delivery problem with time windows instead |
 
@@ -164,6 +164,48 @@ a 95% CI). The gate is met only by a reference-machine run with
 `--runs 10`, admitted through a reviewed PR. The dashboard's flagship
 table (`flagships.html`) shows every valid or indicative flagship row with
 its machine's current `compat/machines.toml` status.
+
+### Measurement load rule
+
+The flagship runs use a shared candidate host, so `bench.py` gates each
+process run on the host's load:
+
+- `--max-load5 B --load-wait S` (the indicative flagship runs use B = 2 and
+  S = 7200 s, a 2 h budget per invocation). Before every process run (each
+  of the `--runs` shuffled runs of each configuration) the harness waits,
+  polling every 30 s, until load5 < B. The waits of one invocation share
+  the budget; once it is spent, the invocation fails and writes no report
+  (no partial file).
+- After each process run it reads load5 again. The run is void when that
+  load5 is at least B + k_run, where k_run is the run's worker count (1 for
+  Inline, snapshot, memory and Python runs; k for a k-worker run), so a
+  run's own load does not void it.
+- The report's `load_rule` records, per process run, load1 and load5 before
+  and after it, k_run and both bounds (`gate_bound` B, `void_bound`
+  B + k_run). A void run stays recorded, and the report is marked
+  `load_void: true` with `void_runs`; such a report is never admitted
+  (the dashboard refuses it, and the flagship is run again).
+- The report's `containers` records, at the invocation's start and end, the
+  running containers without naming any other service: their `count`, the
+  names of ours (prefix `tessera`) and, for each other one, an opaque digest
+  (HMAC-SHA256 of name and image ID under a random per-invocation salt, 12
+  hex digits), so a change between start and end is visible but a digest
+  cannot be reversed by hashing guessed names;
+  `null` where docker cannot be read. The raw list and the salt go to stderr
+  (the run log), never into the report.
+- Without the options, the behaviour is unchanged.
+
+`tools/dashboard/envelope.py` wraps an unchanged report into a result file
+and copies the loads to the envelope's top-level `loads`: the invocation's
+start and end load1, load5 and load15 and every process run's loads with
+its bounds, and the start and end containers, so a reader can judge an indicative file without the run logs.
+
+If the reference candidate cannot meet the bound within the budget (two
+failed invocations for a flagship), the runs fall back to a second shared
+host, recorded as `ref-x86-alt` (status `candidate`) in
+`compat/machines.toml`, with the same bound and options. One invocation
+per flagship (`--only rust/<env>/`), one file per flagship, named
+`<UTC date>-<machine>-<short commit>-<flagship>.json`.
 
 ## Note: DLPack data alignment
 

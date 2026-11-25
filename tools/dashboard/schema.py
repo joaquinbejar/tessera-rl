@@ -35,6 +35,34 @@ def _exact_positive(value) -> bool:
     return type(value) is int and value > 0
 
 
+def _three_loads(value) -> bool:
+    return isinstance(value, list) and len(value) == 3 and all(type(v) in (int, float) for v in value)
+
+
+def loads_reasons(doc: dict, report: dict) -> list[str]:
+    """The envelope's ``loads`` (#640): the invocation's start and end load1,
+    load5 and load15 at top level, and every process run's loads with its
+    bounds, copied from the report. Required when the report was made
+    under the load rule (``load_rule``); files from before it have neither."""
+    rule = report.get("load_rule")
+    if "loads" not in doc:
+        return ["the report was made under the load rule, but the envelope has no loads"] if rule is not None else []
+    loads = doc["loads"]
+    if not isinstance(loads, dict):
+        return ["loads is not an object"]
+    reasons = []
+    measured = report.get("load_average") if isinstance(report.get("load_average"), dict) else {}
+    for key, source in (("start", "before"), ("end", "after")):
+        if not _three_loads(loads.get(key)):
+            reasons.append(f"loads.{key} is not load1, load5 and load15")
+        elif loads[key] != measured.get(source):
+            reasons.append(f"loads.{key} differs from the report's load_average.{source}")
+    runs = rule.get("runs") if isinstance(rule, dict) else []
+    if loads.get("runs") != runs:
+        reasons.append("loads.runs differs from the report's per-run loads")
+    return reasons
+
+
 def envelope_reasons(doc) -> list[str]:
     """Why the file's envelope and hash cannot be admitted; empty if they can."""
     if not isinstance(doc, dict):
@@ -63,6 +91,12 @@ def envelope_reasons(doc) -> list[str]:
         return reasons
     if report.get("schema") != REPORT:
         reasons.append(f"unknown report schema {report.get('schema')!r}")
+    if report.get("load_void") is not None and report.get("load_void") is not False:
+        reasons.append("the report is load_void: a process run ended at or above its load bound")
+    rule = report.get("load_rule")
+    if isinstance(rule, dict) and rule.get("load_void") is not False:
+        reasons.append("the report's load rule is void or unrecorded")
+    reasons += loads_reasons(doc, report)
     try:
         digest = report_hash(report)
     except ValueError:
