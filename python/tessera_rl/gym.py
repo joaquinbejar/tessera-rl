@@ -64,6 +64,7 @@ except ImportError as e:  # pragma: no cover - exercised only without gymnasium
 import numpy as np
 
 from tessera_rl import _envs, _host, _native, _render
+from tessera_rl._bounds import leaf_bound
 from tessera_rl.masks import head_views
 from tessera_rl._env import _discrete_actions, _multi_actions, _real_array, _to_float32, native_kwargs
 
@@ -171,12 +172,6 @@ def _native_env(env_id: str, num_envs: int, seed: int, mode: AutoresetMode, outp
     return native, layout
 
 
-def _bounds(values, shape) -> np.ndarray:
-    """A leaf's flat bounds in its shape: one per element, or one for all."""
-    arr = np.asarray(values, dtype=np.float64)
-    return np.full(shape, arr.item()) if arr.size == 1 else arr.reshape(shape)
-
-
 def _set_masks(layout) -> frozenset[int]:
     """The indices of the set mask leaves: the last leaf of each
     set in ``layout["sets"]``; host layouts have none."""
@@ -192,9 +187,9 @@ def _single_space(layout) -> spaces.Space:
             boxes[name] = spaces.MultiBinary(int(shape[0]))
             continue
         dt = np.dtype(dtype)
-        lo = _bounds(low, shape)
-        hi = _bounds(high, shape)
-        boxes[name or "obs"] = spaces.Box(low=lo.astype(dt), high=hi.astype(dt), shape=tuple(shape), dtype=dt)
+        lo = leaf_bound(low, shape, dt)
+        hi = leaf_bound(high, shape, dt)
+        boxes[name or "obs"] = spaces.Box(low=lo, high=hi, shape=tuple(shape), dtype=dt)
     if list(boxes) == ["obs"]:
         return boxes["obs"]
     return spaces.Dict(boxes)

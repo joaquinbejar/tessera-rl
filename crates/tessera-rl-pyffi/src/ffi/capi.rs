@@ -564,6 +564,14 @@ pub fn int_u64(_g: Gil<'_>, v: u64) -> CResult<Mine<'_>> {
     Mine::new(unsafe { ffi::PyLong_FromUnsignedLongLong(v) })
 }
 
+/// An `int` from a signed value (direct: not GC-tracked).
+pub fn int_i64(_g: Gil<'_>, v: i64) -> CResult<Mine<'_>> {
+    // SAFETY: attached (the `Gil` token); `PyLong_FromLongLong` takes any
+    // `long long` and returns a new reference or null with an exception
+    // set, which `Mine::new` turns into an error.
+    Mine::new(unsafe { ffi::PyLong_FromLongLong(v) })
+}
+
 /// A `float` (direct: not GC-tracked).
 pub fn float(_g: Gil<'_>, v: f64) -> CResult<Mine<'_>> {
     // SAFETY: attached.

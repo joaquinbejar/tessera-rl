@@ -106,6 +106,7 @@ from functools import partial
 import numpy as np
 
 from tessera_rl import _flat, _host, _native
+from tessera_rl._bounds import leaf_bound
 from tessera_rl._env import _index, make
 
 try:
@@ -159,12 +160,6 @@ def _workers(value) -> int:
     return value
 
 
-def _bound(values: list, shape: list, dtype: str) -> np.ndarray:
-    """A bound per element, from a list that may hold one value for all."""
-    arr = np.asarray(values, dtype=np.float64)
-    return np.broadcast_to(arr, shape).astype(dtype) if arr.size == 1 else arr.reshape(shape).astype(dtype)
-
-
 def flat_dtype(dtypes) -> np.dtype:
     """The dtype of a flattened observation: ``numpy.result_type`` of the leaf
     dtypes. ``ArgumentError`` when it is a float whose mantissa cannot hold every
@@ -177,10 +172,10 @@ def _observation_space(leaves: list) -> tuple:
     flattening of several leaves in layout order."""
     if len(leaves) == 1:
         _, dtype, shape, low, high = leaves[0]
-        return np.dtype(dtype), tuple(shape), _bound(low, shape, dtype), _bound(high, shape, dtype)
+        return np.dtype(dtype), tuple(shape), leaf_bound(low, shape, dtype), leaf_bound(high, shape, dtype)
     dtype = flat_dtype([leaf[1] for leaf in leaves])
-    lows = [_bound(low, shape, dtype).ravel() for _, _, shape, low, _ in leaves]
-    highs = [_bound(high, shape, dtype).ravel() for _, _, shape, _, high in leaves]
+    lows = [leaf_bound(low, shape, dtype).ravel() for _, _, shape, low, _ in leaves]
+    highs = [leaf_bound(high, shape, dtype).ravel() for _, _, shape, _, high in leaves]
     low, high = np.concatenate(lows), np.concatenate(highs)
     return dtype, (low.size,), low, high
 
