@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! `cargo tessera` (#351, SPEC 10.2, ADR-0021): scaffolds a host
-//! environment crate (`new`), runs its checks (`check`) and its bench
-//! (`bench`). Cargo runs it as `cargo-tessera tessera <args>`.
+//! `cargo tessera` (#351, #628, SPEC 10.2, ADR-0021): scaffolds a host
+//! environment crate, or with `--kind env` a Rust-only `Environment`
+//! crate (`new`), runs its checks (`check`) and its bench (`bench`). Cargo
+//! runs it as `cargo-tessera tessera <args>`.
 
 mod args;
 mod bench;

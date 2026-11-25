@@ -38,6 +38,17 @@ pub enum Topic {
     Bench,
 }
 
+/// What `new` scaffolds (#628).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Kind {
+    /// A `HostEnvironment` crate with its own wheel (ADR-0062): the
+    /// default, and the only third-party path to Python.
+    #[default]
+    Host,
+    /// A Rust-only `Environment` crate: no Python package (ADR-0032).
+    Env,
+}
+
 /// The turn structure of a scaffolded environment (ADR-0013).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Turns {
@@ -66,6 +77,8 @@ impl Turns {
 pub struct NewArgs {
     /// The crate name.
     pub name: String,
+    /// What to scaffold.
+    pub kind: Kind,
     /// The directory to create; `./<name>` by default.
     pub path: Option<PathBuf>,
     /// The environment id; derived from the name by default.
@@ -257,7 +270,7 @@ fn set_once<T>(slot: &mut Option<T>, name: &'static str, v: T) -> Result<(), Arg
 fn parse_new(rest: Vec<String>) -> Result<Command, ArgsError> {
     let mut it = rest.into_iter();
     let (mut name, mut path, mut id, mut agents, mut turns) = (None, None, None, None, None);
-    let (mut snapshots, mut tessera_path) = (false, None);
+    let (mut snapshots, mut tessera_path, mut kind) = (false, None, None);
     while let Some(arg) = it.next() {
         match split(arg) {
             Arg::Flag(flag, inline) => match flag.as_str() {
@@ -299,6 +312,21 @@ fn parse_new(rest: Vec<String>) -> Result<Command, ArgsError> {
                     };
                     set_once(&mut turns, "--turns", t)?;
                 }
+                "--kind" => {
+                    let v = value("--kind", inline, &mut it)?;
+                    let k = match v.as_str() {
+                        "host" => Kind::Host,
+                        "env" => Kind::Env,
+                        _ => {
+                            return Err(ArgsError::InvalidValue {
+                                option: "--kind",
+                                value: v,
+                                reason: "host or env",
+                            });
+                        }
+                    };
+                    set_once(&mut kind, "--kind", k)?;
+                }
                 "--snapshots" => set_flag(&mut snapshots, "--snapshots", inline)?,
                 "--tessera-path" => {
                     let v = value("--tessera-path", inline, &mut it)?;
@@ -319,8 +347,17 @@ fn parse_new(rest: Vec<String>) -> Result<Command, ArgsError> {
             }
         }
     }
+    let kind = kind.unwrap_or_default();
+    if kind == Kind::Env && snapshots {
+        return Err(ArgsError::InvalidValue {
+            option: "--snapshots",
+            value: "--snapshots".to_owned(),
+            reason: "only with --kind host: every Environment has snapshot, restore and fork",
+        });
+    }
     Ok(Command::New(NewArgs {
         name: name.ok_or(ArgsError::MissingName)?,
+        kind,
         path,
         id,
         agents: agents.unwrap_or(1),
@@ -401,12 +438,13 @@ fn parse_bench(rest: Vec<String>) -> Result<Command, ArgsError> {
 pub const fn help(topic: Topic) -> &'static str {
     match topic {
         Topic::Main => {
-            "cargo tessera: scaffold, check and bench Tessera host environment crates
+            "cargo tessera: scaffold, check and bench Tessera environment crates
 
 Usage: cargo tessera <command> [options]
 
 Commands:
-  new <name>   Create a host environment crate (its own workspace and wheel)
+  new <name>   Create a host environment crate (its own workspace and wheel),
+               or with --kind env a Rust-only Environment crate
   check        Run the determinism, continuation, space, invariant and
                golden checks; with --python, the adapter tests too
   bench        Run the crate's criterion bench and print a summary
@@ -423,17 +461,21 @@ Options:
 
 Creates the directory <name> (or --path) with a host environment crate:
 Cargo.toml, src/lib.rs, tests/check.rs, tests/test_adapters.py,
-benches/step.rs, pyproject.toml and its Python package. Refuses an
+benches/step.rs, pyproject.toml and its Python package. With --kind env, a
+Rust-only Environment crate instead: Cargo.toml, clippy.toml, src/lib.rs,
+tests/check.rs and benches/step.rs, with no Python package. Refuses an
 existing directory.
 
 Options:
+  --kind <kind>           host (a HostEnvironment crate and its wheel) or env
+                          (a Rust-only Environment crate) [default: host]
   --path <dir>            Directory to create [default: ./<name>]
   --id <ns/Name-vN>       Environment id; `tessera/` is reserved
                           [default: <name>/<Name>-v1]
   --agents <n>            Agent slots, 1..=256 [default: 1]
   --turns <turns>         simultaneous, sequential or mixed
                           [default: simultaneous]
-  --snapshots             Implement HostSnapshot and check it
+  --snapshots             Implement HostSnapshot and check it (host only)
   --tessera-path <dir>    Depend on a Tessera checkout by path instead of
                           the exact version of this tool
 "
@@ -443,7 +485,8 @@ Options:
 
 Run in a scaffolded crate. Runs `cargo test --test check`: determinism
 (Inline and with workers), continuation, spaces, invariants, snapshots
-(if implemented) and the golden hashes in tests/golden.json.
+(if implemented) and the golden hashes in tests/golden.json. A --kind env
+crate has no Python package, so --python is refused there.
 
 Options:
   --bless      Record tests/golden.json instead of comparing it
@@ -477,7 +520,7 @@ mod tests {
     use std::path::PathBuf;
 
     use super::{
-        ArgsError, BenchArgs, CargoFlags, CheckArgs, Command, NewArgs, Topic, Turns, parse,
+        ArgsError, BenchArgs, CargoFlags, CheckArgs, Command, Kind, NewArgs, Topic, Turns, parse,
     };
 
     fn argv(args: &[&str]) -> Vec<String> {
@@ -494,6 +537,7 @@ mod tests {
             got,
             Command::New(NewArgs {
                 name: "my-env".to_owned(),
+                kind: Kind::Host,
                 path: None,
                 id: None,
                 agents: 1,
@@ -524,6 +568,7 @@ mod tests {
             got,
             Command::New(NewArgs {
                 name: "my-env".to_owned(),
+                kind: Kind::Host,
                 path: Some(PathBuf::from("out/dir")),
                 id: Some("acme/Grid-v2".to_owned()),
                 agents: 3,
@@ -551,6 +596,18 @@ mod tests {
                 "--help".to_owned()
             ])
         );
+    }
+
+    #[test]
+    fn test_parse_new_kind_env_parsed() {
+        let got = parse(argv(&["new", "my-env", "--kind=env", "--agents", "2"])).unwrap();
+        let Command::New(a) = got else {
+            panic!("not new: {got:?}");
+        };
+        assert_eq!(a.kind, Kind::Env);
+        assert_eq!(a.agents, 2);
+        let got = parse(argv(&["new", "my-env", "--kind", "host", "--snapshots"])).unwrap();
+        assert!(matches!(got, Command::New(NewArgs { kind: Kind::Host, snapshots: true, .. })));
     }
 
     #[test]
@@ -657,6 +714,26 @@ mod tests {
                     option: "--turns",
                     value: "async".to_owned(),
                     reason: "simultaneous, sequential or mixed",
+                },
+            ),
+            (
+                &["new", "a", "--kind", "lane"],
+                ArgsError::InvalidValue {
+                    option: "--kind",
+                    value: "lane".to_owned(),
+                    reason: "host or env",
+                },
+            ),
+            (
+                &["new", "a", "--kind", "env", "--kind", "env"],
+                ArgsError::Repeated("--kind"),
+            ),
+            (
+                &["new", "a", "--kind", "env", "--snapshots"],
+                ArgsError::InvalidValue {
+                    option: "--snapshots",
+                    value: "--snapshots".to_owned(),
+                    reason: "only with --kind host: every Environment has snapshot, restore and fork",
                 },
             ),
             (

@@ -1,13 +1,15 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! `cargo tessera new` (#351, SPEC 10.2, ADR-0032): renders the embedded
-//! templates into a new directory, never overwriting anything.
+//! `cargo tessera new` (#351, #628, SPEC 10.2, ADR-0032): renders the
+//! embedded templates of one kind into a new directory, never overwriting
+//! anything. `--kind host` (the default) writes a `HostEnvironment` crate
+//! and its wheel; `--kind env` a Rust-only `Environment` crate.
 
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-use crate::args::{NewArgs, Turns};
+use crate::args::{Kind, NewArgs, Turns};
 use crate::error::ToolError;
 use crate::names;
 use crate::render::{Vars, render};
@@ -15,8 +17,8 @@ use crate::render::{Vars, render};
 /// This tool's version: the exact version scaffolds depend on.
 pub const TOOL_VERSION: &str = env!("CARGO_PKG_VERSION");
 
-/// The templates: the path each renders to (itself a template) and the
-/// template's name and text.
+/// The `--kind host` templates: the path each renders to (itself a
+/// template) and the template's name and text.
 const TEMPLATES: &[(&str, &str, &str)] = &[
     (
         "Cargo.toml",
@@ -64,6 +66,54 @@ const TEMPLATES: &[(&str, &str, &str)] = &[
         include_str!("templates/gitignore.tpl"),
     ),
 ];
+
+/// The `--kind env` templates (#628), as [`TEMPLATES`]. The `.gitignore`
+/// is shared; everything else is the env kind's own.
+const ENV_TEMPLATES: &[(&str, &str, &str)] = &[
+    (
+        "Cargo.toml",
+        "env/Cargo.toml.tpl",
+        include_str!("templates/env/Cargo.toml.tpl"),
+    ),
+    (
+        "clippy.toml",
+        "env/clippy.toml.tpl",
+        include_str!("templates/env/clippy.toml.tpl"),
+    ),
+    (
+        "src/lib.rs",
+        "env/lib.rs.tpl",
+        include_str!("templates/env/lib.rs.tpl"),
+    ),
+    (
+        "tests/check.rs",
+        "env/check.rs.tpl",
+        include_str!("templates/env/check.rs.tpl"),
+    ),
+    (
+        "benches/step.rs",
+        "env/step.rs.tpl",
+        include_str!("templates/env/step.rs.tpl"),
+    ),
+    (
+        "README.md",
+        "env/README.md.tpl",
+        include_str!("templates/env/README.md.tpl"),
+    ),
+    (
+        ".gitignore",
+        "gitignore.tpl",
+        include_str!("templates/gitignore.tpl"),
+    ),
+];
+
+/// The templates of `kind`.
+const fn templates(kind: Kind) -> &'static [(&'static str, &'static str, &'static str)] {
+    match kind {
+        Kind::Host => TEMPLATES,
+        Kind::Env => ENV_TEMPLATES,
+    }
+}
 
 /// What `new` will write: the crate's directory and each file, rendered.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -115,6 +165,7 @@ pub fn plan(args: &NewArgs, cwd: &Path) -> Result<Plan, ToolError> {
             source.dep("tessera-rl-engine", ", features = [\"testing\"]"),
         )
         .value("dep_num", source.dep("tessera-rl-num", ""))
+        .value("dep_engine_env", source.dep("tessera-rl-engine", ""))
         .value("py_tessera_req", source.python_requirement())
         .flag("snapshots", args.snapshots)
         .flag("path_deps", matches!(source, Source::Path(_)))
@@ -126,8 +177,9 @@ pub fn plan(args: &NewArgs, cwd: &Path) -> Result<Plan, ToolError> {
         // PettingZoo interfaces by turns (ADR-0013, ADR-0065 item 6).
         .flag("parallel", turns != Turns::Sequential)
         .flag("aec", turns != Turns::Mixed);
-    let mut files = Vec::with_capacity(TEMPLATES.len());
-    for &(dest, name, text) in TEMPLATES {
+    let templates = templates(args.kind);
+    let mut files = Vec::with_capacity(templates.len());
+    for &(dest, name, text) in templates {
         let dest = render(name, dest, &vars)?;
         files.push((PathBuf::from(dest), render(name, text, &vars)?));
     }
@@ -258,10 +310,14 @@ pub fn run(args: &NewArgs, cwd: &Path, out: &mut impl Write) -> Result<(), ToolE
     let plan = plan(args, cwd)?;
     write(&plan)?;
     let shown = plan.root.display();
+    let next = match args.kind {
+        Kind::Host => "  with Python: cargo tessera check --python (maturin on the PATH)",
+        Kind::Env => "  Rust only: for Python access, scaffold with --kind host (ADR-0062)",
+    };
     let lines = [
         format!("created {shown}"),
         format!("  then: cd {shown} && cargo tessera check --bless && cargo tessera check"),
-        "  with Python: cargo tessera check --python (maturin on the PATH)".to_owned(),
+        next.to_owned(),
     ];
     for line in lines {
         // Output to a closed stdout is not an error of `new`.
@@ -276,7 +332,7 @@ mod tests {
     use std::sync::atomic::{AtomicU32, Ordering};
 
     use super::{TOOL_VERSION, plan, run, write};
-    use crate::args::{NewArgs, Turns};
+    use crate::args::{Kind, NewArgs, Turns};
     use crate::error::ToolError;
 
     static NEXT: AtomicU32 = AtomicU32::new(0);
@@ -290,6 +346,7 @@ mod tests {
     fn args(name: &str) -> NewArgs {
         NewArgs {
             name: name.to_owned(),
+            kind: Kind::Host,
             path: None,
             id: None,
             agents: 1,
@@ -418,6 +475,145 @@ mod tests {
             assert!(root.join(rel).is_file(), "{rel}");
         }
         assert!(String::from_utf8(out).unwrap().starts_with("created "));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    fn env_args(name: &str) -> NewArgs {
+        NewArgs {
+            kind: Kind::Env,
+            ..args(name)
+        }
+    }
+
+    #[test]
+    fn test_plan_env_every_variant_renders_without_placeholders() {
+        let checkout = fake_checkout();
+        for turns in [Turns::Simultaneous, Turns::Sequential, Turns::Mixed] {
+            for agents in [1, 3] {
+                for path in [None, Some(checkout.clone())] {
+                    let mut a = env_args("my-env");
+                    a.turns = turns;
+                    a.agents = agents;
+                    a.tessera_path = path;
+                    let plan = plan(&a, Path::new("/work")).unwrap();
+                    assert_eq!(plan.files.len(), 7);
+                    for (rel, text) in &plan.files {
+                        assert!(!text.contains("{{"), "{rel:?} {turns:?}");
+                        assert!(!rel.to_string_lossy().contains("{{"));
+                    }
+                    let lib = file(&plan, "src/lib.rs");
+                    assert!(lib.contains("impl Environment for Counter"));
+                    assert!(!lib.contains("HostEnvironment"));
+                    assert_eq!(lib.contains("fn acting"), turns != Turns::Simultaneous);
+                    assert!(lib.contains("\"my-env/MyEnv-v1\""));
+                    assert!(lib.contains(&format!("pub const AGENTS: usize = {agents};")));
+                    let toml = file(&plan, "Cargo.toml");
+                    assert!(toml.contains("[package.metadata.tessera]\nkind = \"env\""));
+                    assert!(!toml.contains("pyo3") && !toml.contains("pyffi"));
+                    for missing in ["pyproject.toml", "tests/test_adapters.py"] {
+                        assert!(plan.files.iter().all(|(p, _)| p != Path::new(missing)));
+                    }
+                }
+            }
+        }
+        std::fs::remove_dir_all(checkout).unwrap();
+    }
+
+    #[test]
+    fn test_plan_env_default_pins_exact_tool_version() {
+        let plan = plan(&env_args("grid"), Path::new("/work")).unwrap();
+        let toml = file(&plan, "Cargo.toml");
+        let pin = format!("version = \"={TOOL_VERSION}\"");
+        // core, macros, num and engine.
+        assert_eq!(toml.matches(&pin).count(), 4, "{toml}");
+        assert!(!toml.contains("path = "));
+        let checkout = fake_checkout();
+        let mut a = env_args("grid");
+        a.tessera_path = Some(checkout.clone());
+        let plan = super::plan(&a, Path::new("/work")).unwrap();
+        let toml = file(&plan, "Cargo.toml");
+        assert_eq!(toml.matches("path = '").count(), 4, "{toml}");
+        std::fs::remove_dir_all(checkout).unwrap();
+    }
+
+    /// The env kind's lints are the workspace's (REVIEW-design-r1): every
+    /// clippy lint the workspace denies is denied in the scaffold, and its
+    /// clippy.toml bans exactly the workspace's ADR-0008 methods.
+    #[test]
+    fn test_plan_env_lints_match_the_workspace() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let plan = plan(&env_args("grid"), Path::new("/work")).unwrap();
+        let toml = file(&plan, "Cargo.toml");
+        let workspace = std::fs::read_to_string(root.join("Cargo.toml")).unwrap();
+        let section = |text: &str, head: &str| -> Vec<String> {
+            text.split(head)
+                .nth(1)
+                .unwrap_or("")
+                .lines()
+                .skip(1)
+                .take_while(|l| !l.starts_with('['))
+                .filter(|l| l.contains("\"deny\""))
+                .map(|l| l.trim().to_owned())
+                .collect()
+        };
+        let want = section(&workspace, "[workspace.lints.clippy]");
+        assert!(!want.is_empty());
+        let got = section(toml, "[lints.clippy]");
+        for lint in &want {
+            // The scaffold forbids unsafe code outright.
+            let unsafe_only = lint.starts_with("multiple_unsafe_ops_per_block")
+                || lint.starts_with("undocumented_unsafe_blocks");
+            assert!(unsafe_only || got.contains(lint), "{lint} missing from the scaffold");
+        }
+        assert!(toml.contains("unsafe_code = \"forbid\""));
+        assert!(toml.contains("missing_docs = \"deny\""));
+        let methods = |text: &str| -> Vec<String> {
+            text.lines()
+                .filter(|l| l.trim_start().starts_with("{ path = "))
+                .map(|l| l.trim().to_owned())
+                .collect()
+        };
+        let clippy = std::fs::read_to_string(root.join("clippy.toml")).unwrap();
+        let want = methods(&clippy);
+        assert!(want.len() > 50, "{}", want.len());
+        assert_eq!(methods(file(&plan, "clippy.toml")), want);
+    }
+
+    /// `--kind host` is the default, and the host files carry no kind
+    /// marker: their output is what it was before #628.
+    #[test]
+    fn test_plan_host_kind_is_the_default_and_unmarked() {
+        let a = args("grid");
+        assert_eq!(a.kind, Kind::default());
+        let plan = plan(&a, Path::new("/work")).unwrap();
+        assert_eq!(plan.files.len(), 9);
+        for (rel, text) in &plan.files {
+            assert!(!text.contains("metadata.tessera"), "{rel:?}");
+        }
+        assert!(plan.files.iter().all(|(p, _)| p != Path::new("clippy.toml")));
+    }
+
+    #[test]
+    fn test_write_env_creates_every_file() {
+        let root = scratch("write-env");
+        let mut a = env_args("grid");
+        a.path = Some(root.clone());
+        let mut out = Vec::new();
+        run(&a, Path::new("/unused"), &mut out).unwrap();
+        for rel in [
+            "Cargo.toml",
+            "clippy.toml",
+            "src/lib.rs",
+            "tests/check.rs",
+            "benches/step.rs",
+            "README.md",
+            ".gitignore",
+        ] {
+            assert!(root.join(rel).is_file(), "{rel}");
+        }
+        assert!(!root.join("pyproject.toml").exists());
+        let out = String::from_utf8(out).unwrap();
+        assert!(out.contains("--kind host"), "{out}");
         std::fs::remove_dir_all(root).unwrap();
     }
 

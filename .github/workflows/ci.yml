@@ -395,10 +395,12 @@ jobs:
       # the ownership and FP boundary checks, and determinism across runs.
       - name: Host example wheel (make py-test-orderbook)
         run: make py-test-orderbook
-      # cargo tessera end to end (#351): scaffold a host environment crate,
-      # then check --python (bless, then compare) and bench --quick in it,
-      # every cargo call --locked --offline against a lock derived from
-      # Cargo.lock. The log prints each phase's wall time.
+      # cargo tessera end to end (#351, #628): scaffold a host environment
+      # crate, then check --python (bless, then compare) and bench --quick in
+      # it; then a --kind env crate, with check (bless, then compare),
+      # clippy -D warnings and bench --quick. Every cargo call is --locked
+      # --offline against a lock derived from Cargo.lock. The log prints
+      # each phase's wall time.
       - name: cargo tessera end to end (make cargo-tessera-e2e)
         run: make cargo-tessera-e2e
 

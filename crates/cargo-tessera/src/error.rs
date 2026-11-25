@@ -76,6 +76,16 @@ pub enum ToolError {
         /// The missing file.
         missing: &'static str,
     },
+    /// `check --python` in a `--kind env` crate (#628).
+    #[error(
+        "{} is a Rust-only Environment crate (--kind env): it has no Python package. \
+         Python access needs a host environment: cargo tessera new --kind host (ADR-0062)",
+        dir.display()
+    )]
+    NoPython {
+        /// The crate's directory.
+        dir: PathBuf,
+    },
     /// The bench left no estimates to summarize.
     #[error("no criterion estimates under {}: did the bench run?", dir.display())]
     NoEstimates {
