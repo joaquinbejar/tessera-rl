@@ -86,6 +86,17 @@ def test_onnx_import_does_not_import_onnxruntime():
     assert out.stdout.strip() == "False"
 
 
+@pytest.mark.skipif(sys.platform != "win32", reason="the Windows wheel is built without the onnx feature (#350, ADR-0057)")
+def test_onnx_on_windows_raises_the_typed_errors_of_a_build_without_onnx():
+    """#358: on Windows the wheel has no onnx feature. Both entry points must
+    say so with the typed error, never succeed or fail untyped."""
+    with pytest.raises(t.OnnxError, match=r"no ONNX evaluator \(the onnx feature\)"):
+        t._native.onnx_load(library=MISSING, accept_telemetry=True)
+    with pytest.raises(t.OnnxError, match="not available on win32"):
+        search.OnnxEvaluator(FIXTURES / "constant.onnx")
+    assert not has_feature()
+
+
 def test_onnx_missing_package_is_typed(monkeypatch):
     import importlib.util
 

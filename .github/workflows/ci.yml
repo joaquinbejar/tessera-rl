@@ -51,9 +51,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # windows-latest is off: the Windows box is the owner's personal
-        # machine, with no runner; the Windows checks run there natively,
-        # in short announced sessions.
+        # No Windows leg here: Windows runs GitHub-hosted (#358), in the
+        # windows-python and windows-native-wait jobs below, never on the
+        # owner's Windows box.
         os: [xaskar, m4-linux-arm64, m4]
         # Where the real ONNX Runtime may be loaded (owner's decision,
         # 2026-11-12; scripts/onnx_test.sh): only in a no-network container
@@ -115,18 +115,63 @@ jobs:
           ONNX_TEST_IMAGE: rust:1.99.1@sha256:09027f873d45b8ecd1dc86f1fa13b7a62b875c961f017a0e331267b350430137
           ONNX_TEST_NATIVE: ${{ matrix.onnx_native }}
 
-  # The native wait on Windows (WaitOnAddress) runs only on request until
-  # this job passes; it is the precondition for `Auto` to use it there.
-  windows-native-wait:
-    # Off: there is no Windows runner (see clippy-test).
-    if: false
-    runs-on: windows-latest
+  # The Python suite on Windows (#358): GitHub-hosted windows-2025, the exact
+  # wheel_job.sh call of wheels.yml's Windows leg (#350, same pinned rustup-init
+  # and uv sha256), which builds the release wheel without the onnx feature
+  # and runs tests/python against it. Hard from its first run (REVIEW #358
+  # design r1); POSIX-only tests skip themselves on Windows.
+  windows-python:
+    name: Python suite (x86_64-pc-windows-msvc)
+    runs-on: windows-2025
+    # Skipped for an unmodified fork pull request (see the header).
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+    timeout-minutes: 120
+    defaults:
+      run:
+        # Git Bash, so that wheel_job.sh runs as on the other legs.
+        shell: bash
+    env:
+      WHEEL_RUN: ${{ github.workspace }}/.wheel-run
+      # x86-64 implements trapped FP exceptions (fp_child.py uses
+      # _controlfp_s on Windows): the unmasked FP boundary test must check
+      # the enables, never skip (#225).
+      TESSERA_EXPECT_FP_TRAPS: "1"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      # rustup-init.exe 1.29.3 and uv 0.13.6 (uv-x86_64-pc-windows-msvc.zip),
+      # by their published sha256; the toolchain is rust-toolchain's.
+      - run: scripts/wheel_job.sh x86_64-pc-windows-msvc "" 38027d51d69a5d05493627a0634dbea52d6cd793c8f072d2373d3f4163eec7db a2a8820d5eea32f08ef467ef3b7f66883a9b076d5737a2fc2fbb5f458d1bb50f release
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
         with:
-          # Self-hosted runners: the post step would delete rustup from ~/.cargo/bin.
-          cache-bin: "false"
+          if-no-files-found: warn
+          name: windows-python-reports
+          path: |
+            golden-report.json
+            checks.json
+            determinism.json
+
+  # The native wait on Windows (WaitOnAddress, #358): GitHub-hosted
+  # windows-2025. Until this job has passed, `Auto` does not use it there;
+  # switching `Auto` is a follow-up issue.
+  windows-native-wait:
+    name: native wait (x86_64-pc-windows-msvc)
+    runs-on: windows-2025
+    # Skipped for an unmodified fork pull request (see the header).
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: bash
+    env:
+      RUSTUP_HOME: ${{ github.workspace }}/.rustup-run/rustup
+      CARGO_HOME: ${{ github.workspace }}/.rustup-run/cargo
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # The same verified rustup-init as the wheel legs (scripts/install_rustup.sh),
+      # not the hosted image's rustup.
+      - run: echo "$CARGO_HOME/bin" >> "$GITHUB_PATH"
+      - run: scripts/install_rustup.sh x86_64-pc-windows-msvc 38027d51d69a5d05493627a0634dbea52d6cd793c8f072d2373d3f4163eec7db "$RUNNER_TEMP/rustup-init"
       - run: cargo test -p tessera-rl-engine --test sync --locked test_every_wait_backend_matches_inline -- --exact
 
   # The fuzz crate lives outside the workspace: check that it still builds

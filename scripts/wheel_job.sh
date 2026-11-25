@@ -79,7 +79,6 @@ if [ -n "$ambient" ]; then
     echo "wheel_job: ${ambient}set in the environment; refused" >&2; exit 2
 fi
 
-RUSTUP_VERSION=1.29.3
 UV_VERSION=0.13.6
 MATURIN_VERSION=1.16.0
 
@@ -100,11 +99,9 @@ fetch() { # url, destination, expected sha256
     [ "$got" = "$3" ] || { echo "wheel_job: sha256 mismatch for $1: $got" >&2; exit 1; }
 }
 
-fetch "https://static.rust-lang.org/rustup/archive/$RUSTUP_VERSION/$target/rustup-init$exe" \
-    "$WHEEL_RUN/rustup-init$exe" "$rustup_sha"
-chmod +x "$WHEEL_RUN/rustup-init$exe"
-"$WHEEL_RUN/rustup-init$exe" -y --no-modify-path --profile minimal --default-toolchain none
-rustup toolchain install # the version of rust-toolchain
+# The rustup installer, verified by its sha256, then rust-toolchain's
+# toolchain (shared with the Windows native-wait CI job, #358).
+bash "$(dirname "$0")/install_rustup.sh" "$target" "$rustup_sha" "$WHEEL_RUN"
 
 if [ -z "$exe" ]; then
     fetch "https://github.com/astral-sh/uv/releases/download/$UV_VERSION/uv-$target.tar.gz" \
