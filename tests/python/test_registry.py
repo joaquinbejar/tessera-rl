@@ -27,7 +27,7 @@ SHIPPED = {
     "tessera/RTS-v1": (2, 2, "cross-platform", False),
     "tessera/Snake-v1": (1, 2, "cross-platform", True),
     "tessera/Tag-v1": (1, 8, "cross-platform", False),
-    "tessera/Vrp-v1": (1, 8, "cross-platform", True),
+    "tessera/Vrp-v1": (2, 8, "cross-platform", True),
 }
 
 

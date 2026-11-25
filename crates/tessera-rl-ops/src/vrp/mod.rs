@@ -35,7 +35,13 @@
 //!   - `nodes`, `[customers + 1, 4]` `i32`: x, y, the demand still to
 //!     serve (0 once served, and for the depot), and 1 once served;
 //!   - `vehicle`, `[3]` `i32`: the observer's node, load and distance
-//!     travelled.
+//!     travelled;
+//!   - `fleet`, `[vehicles, 3]` `i32`: the same three values for every
+//!     vehicle, the observer first, then the others in slot order from it
+//!     (slot `(me + k) % vehicles`).
+//!
+//! Version 2 adds the `fleet` leaf (#565); version 1 had no view of the
+//! other vehicles. Version 1 was never released.
 
 pub mod baseline;
 
@@ -54,7 +60,7 @@ use tessera_rl_num::rng::{ObsRng, StepRng};
 /// Versioned environment id (ADR-0023).
 pub const ENV_ID: &str = "tessera/Vrp-v1";
 /// Environment version, bumped with any change to its outputs.
-pub const ENV_VERSION: u32 = 1;
+pub const ENV_VERSION: u32 = 2;
 
 // Registration under the versioned id (SPEC 10, ADR-0054).
 tessera_rl_core::register!(Vrp, id = "tessera/Vrp-v1");
@@ -78,6 +84,14 @@ pub const MAX_GRID: u32 = 1_000;
 pub const MAX_VALUE: i32 = 2_000_000;
 const _: () = assert!(2 * MAX_CUSTOMERS * 1_415 < MAX_VALUE as usize);
 const _: () = assert!(MAX_VALUE < 1 << 24, "rewards stay exact in f32");
+// Every observation value fits in `i32` with no saturation: a vehicle's
+// distance travelled is at most `2 * MAX_CUSTOMERS` moves of at most
+// `round_sqrt(2 * (MAX_GRID - 1)^2)` (1,413) each, below `MAX_VALUE`.
+const _: () = assert!(
+    2 * (MAX_CUSTOMERS as u64) * round_sqrt(2 * (MAX_GRID as u64 - 1) * (MAX_GRID as u64 - 1))
+        < MAX_VALUE as u64
+);
+const _: () = assert!(MAX_VALUE as i64 <= i32::MAX as i64);
 
 /// Vehicle routing configuration. `customers` sets the spaces' shapes.
 #[derive(EnvConfig, Debug, Clone, PartialEq, Eq)]
@@ -197,6 +211,9 @@ pub struct VrpObs {
     /// The observer: node, load, distance travelled.
     #[space(box(low = 0, high = 2_000_000, shape = [3]))]
     pub vehicle: ObsLeaf<i32>,
+    /// Every vehicle, the observer first: node, load, distance travelled.
+    #[space(box(low = 0, high = 2_000_000, shape = |c: &VrpConfig| [c.vehicles, 3]))]
+    pub fleet: ObsLeaf<i32>,
 }
 
 /// The vehicle routing environment.
@@ -441,11 +458,26 @@ impl Environment for Vrp {
                 }
             }
         }
+        let row = |v: usize| {
+            [
+                int(u32::try_from(state.node_of(v)).unwrap_or(0)),
+                i32::from(state.load.get(v).copied().unwrap_or(0)),
+                int(state.travelled.get(v).copied().unwrap_or(0)),
+            ]
+        };
+        let me = agent.index();
         if let Some(mut leaf) = out.leaf_mut(VrpObs::VEHICLE) {
-            let v = agent.index();
-            leaf.set(0, int(u32::try_from(state.node_of(v)).unwrap_or(0)));
-            leaf.set(1, i32::from(state.load.get(v).copied().unwrap_or(0)));
-            leaf.set(2, int(state.travelled.get(v).copied().unwrap_or(0)));
+            for (f, value) in row(me).into_iter().enumerate() {
+                leaf.set(f, value);
+            }
+        }
+        if let Some(mut leaf) = out.leaf_mut(VrpObs::FLEET) {
+            let vehicles = usize::from(state.vehicles).clamp(1, MAX_VEHICLES);
+            for k in 0..vehicles {
+                for (f, value) in row((me + k) % vehicles).into_iter().enumerate() {
+                    leaf.set(k * VEHICLE_FEATURES + f, value);
+                }
+            }
         }
     }
 }

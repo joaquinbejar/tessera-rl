@@ -50,6 +50,8 @@ def test_vrp_aec_runs_every_vehicle_until_all_are_home(vehicles):
     env = pz.aec_env("tessera/Vrp-v1", customers=10, vehicles=vehicles, grid=30, capacity=20)
     env.reset(seed=4)
     assert len(env.agents) == vehicles
+    first = env.agents[0]
+    assert env.observe(first)["fleet"].shape == (vehicles, 3)
     steps = 0
     for agent in env.agent_iter(max_iter=100):
         obs, reward, terminated, truncated, info = env.last()

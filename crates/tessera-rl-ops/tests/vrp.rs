@@ -425,3 +425,68 @@ fn test_vrp_one_vehicle_turns_are_unchanged() {
     let s = state(&p, 0);
     assert_eq!((s.to_move, s.next_mover()), (0, 0));
 }
+
+/// The `fleet` leaf (version 2, #565) of instance 0, per agent slot.
+fn fleet_rows(p: &EnvPool<Vrp, Masked>, vehicles: usize) -> Vec<Vec<[i32; 3]>> {
+    let out = p.outputs().unwrap();
+    let ints: Vec<i32> = out
+        .observation(2)
+        .unwrap()
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|c| i32::from_ne_bytes(*c))
+        .collect();
+    // One row of `vehicles * 3` values per agent slot (8 slots).
+    assert_eq!(ints.len(), 8 * vehicles * 3);
+    ints.chunks(vehicles * 3)
+        .map(|agent| {
+            agent
+                .chunks(3)
+                .map(|r| <[i32; 3]>::try_from(r).unwrap())
+                .collect()
+        })
+        .collect()
+}
+
+#[test]
+fn test_vrp_fleet_leaf_lists_every_vehicle_from_the_observer() {
+    let mut p = fleet(10, 3, 4);
+    for _ in 0..7 {
+        let s = state(&p, 0);
+        let mover = usize::from(s.to_move);
+        step_all(&mut p, baseline::act(&s, mover));
+    }
+    let s = state(&p, 0);
+    let rows = fleet_rows(&p, 3);
+    for (me, observer) in rows.iter().enumerate().take(3) {
+        for (k, row) in observer.iter().enumerate() {
+            let v = (me + k) % 3;
+            let want = [
+                i32::from(s.at[v]),
+                i32::from(s.load[v]),
+                i32::try_from(s.travelled[v]).unwrap(),
+            ];
+            assert_eq!(*row, want, "observer {me}, row {k}");
+        }
+    }
+    assert!(s.travelled[..3].iter().any(|&t| t > 0), "the fleet moved");
+}
+
+#[test]
+fn test_vrp_one_vehicle_fleet_row_is_the_vehicle_leaf() {
+    let mut p = pool(cfg(6, 30), 1, 2);
+    step(&mut p, 3);
+    let s = state(&p, 0);
+    let rows = fleet_rows(&p, 1);
+    assert_eq!(
+        rows[0][0],
+        [
+            3,
+            i32::from(s.load[0]),
+            i32::try_from(s.travelled[0]).unwrap()
+        ]
+    );
+    let space = format!("{:?}", Vrp::observation_space(&cfg_fleet(6, 8)).unwrap());
+    assert!(space.contains("[8, 3]"), "{space}");
+}
