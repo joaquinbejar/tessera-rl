@@ -56,6 +56,7 @@ use tessera_rl_games::{
 };
 use tessera_rl_markets::{LimitOrderBook, LobConfig};
 use tessera_rl_num::identity::Seed;
+use tessera_rl_ops::{JobShop, JobShopConfig, Vrp, VrpConfig};
 use tessera_rl_rts::{Rts, RtsConfig};
 
 /// Batches of pregenerated actions cycled through a measurement.
@@ -585,22 +586,26 @@ fn run(args: &[String]) -> Result<String, Error> {
     let legal = args.iter().any(|a| a == "--legal-actions");
     macro_rules! bench {
         ($env:ty, $cfg:ty, $mask:ty, $make:ident) => {
+            bench!(@cfg $env, <$cfg>::default(), $mask, $make)
+        };
+        (@cfg $env:ty, $cfg:expr, $mask:ty, $make:ident) => {{
+            let cfg = $cfg;
             run_env(
                 args,
                 Bench::new(
                     pool::<$env, $mask>(
-                        |o| EnvPool::$make(<$cfg>::default(), o),
+                        |o| EnvPool::$make(cfg.clone(), o),
                         num_envs,
                         workers,
                         cpu_set,
                         limit,
                     )?,
-                    &<$cfg>::default(),
+                    &cfg,
                     num_envs,
                     legal,
                 )?,
             )
-        };
+        }};
     }
     match env {
         "acrobot" => bench!(Acrobot, AcrobotConfig, NoMasks, new),
@@ -620,6 +625,32 @@ fn run(args: &[String]) -> Result<String, Error> {
         "rts" => bench!(Rts, RtsConfig, Masked, with_masks),
         // 8 agents, latency 0 (the defaults).
         "lob" => bench!(LimitOrderBook, LobConfig, Masked, with_masks),
+        // 6 jobs x 6 machines (the defaults), and 64 x 32, the largest.
+        "jobshop" => bench!(JobShop, JobShopConfig, Masked, with_masks),
+        "jobshop-64x32" => bench!(
+            @cfg JobShop,
+            JobShopConfig {
+                jobs: 64,
+                machines: 32,
+                ..JobShopConfig::default()
+            },
+            Masked,
+            with_masks
+        ),
+        // 20 customers (the defaults), and 500, the largest: a 501-wide
+        // mask, on the Criterion bench's grid and capacity (ops_step.rs).
+        "vrp" => bench!(Vrp, VrpConfig, Masked, with_masks),
+        "vrp-500" => bench!(
+            @cfg Vrp,
+            VrpConfig {
+                customers: 500,
+                grid: 1000,
+                capacity: 100,
+                ..VrpConfig::default()
+            },
+            Masked,
+            with_masks
+        ),
         other => Err(usage(&format!("unknown env {other:?}"))),
     }
 }
