@@ -141,6 +141,22 @@ pinned version, the step semantics stated) or recorded as "none found"
 with the search done; a comparison is not required to close the gate, and
 no alternative is downloaded without announcing it first.
 
+### Closest alternatives
+
+Found by reading public project pages only (searched 2026-11-25; nothing
+cloned, installed or run). No comparison has been run, and no other
+project's figures are quoted here. A future comparison follows the rule
+above.
+
+| Flagship | Closest alternative | How it differs |
+| --- | --- | --- |
+| `tessera/RTS-v1` | Gym-μRTS, [MicroRTS-Py](https://github.com/Farama-Foundation/MicroRTS-Py) | Java engine behind Gym and PettingZoo; actions masked per grid cell, not per unit; MicroRTS rules; deprecated upstream |
+| `tessera/LimitOrderBook-v1` | ABIDES-Gym, [abides-jpmc-public](https://github.com/jpmorganchase/abides-jpmc-public) | Event-driven simulator with one learning agent against background agents; archived upstream. [mbt-gym](https://github.com/JJJerome/mbt_gym) is a weaker match: a stylized market-making model, not an order book |
+| `tessera/Lanterns-v1` | [Hanabi Learning Environment](https://github.com/google-deepmind/hanabi-learning-environment) | Hanabi rules, not Lanterns'; C++ core with a Gym-like API; not batch-stepped; archived upstream |
+| `tessera/Survival-v1` | [Neural MMO](https://github.com/NeuralMMO/environment) | The game Survival-v1 is a lite version of; its step API, agent counts and CPU needs not verified from its pages |
+| `tessera/JobShop-v1` | [JSSEnv](https://github.com/prosysscience/JSSEnv) | Pure Python, Gymnasium-style, action masks. [Jumanji](https://github.com/instadeepai/jumanji) JobShop is batched but runs on JAX |
+| `tessera/Vrp-v1` | Jumanji MultiCVRP, [jumanji](https://github.com/instadeepai/jumanji) | Several vehicles with capacity limits, but on JAX. For CPU and Gym, [OR-Gym](https://github.com/hubbs5/or-gym) VehicleRouting is a pickup-and-delivery problem with time windows instead |
+
 Until a reference machine exists (#151), flagship numbers are indicative:
 `valid_for_claims` is false and the `claim_check` reasons are kept. The
 method does not change for them (at least 2 s of warm-up, 10 repetitions,
