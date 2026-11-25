@@ -505,10 +505,10 @@ fn digest(edges: &[(u32, u64)]) -> u64 {
     h
 }
 
-/// Pinned `Returns` goldens (pinned on Linux x86-64; ADR-0043 section 4
-/// makes them identical on every platform): PUCT with batches of 8 (virtual loss in play) over two
-/// calls, whose second starts its own min-max, and the Gumbel root's
-/// visits and `pi'`.
+/// Pinned `Returns` goldens, pinned on Linux x86-64 (ADR-0043 section 4
+/// makes them identical on every platform): PUCT with batches of 8
+/// (virtual loss in play) over two calls, the second starting its own
+/// min-max, and the Gumbel root's visits and `pi'`.
 #[test]
 fn test_returns_puct_and_gumbel_goldens_are_pinned() {
     let cfg = WalkConfig {
