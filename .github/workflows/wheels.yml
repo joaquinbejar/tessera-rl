@@ -270,3 +270,43 @@ jobs:
             golden-report.json
             checks.json
             determinism.json
+
+  # Windows x86-64 wheels (#350, option A, decided for the owner on
+  # 2026-11-25): GitHub-hosted, guarded as linux-aarch64 is, so no owner
+  # machine is involved. Without the `onnx` feature (ADR-0057: the Windows
+  # loading rows do not exist; wheel_job.sh's onnx smoke checks the typed
+  # no-evaluator error). Not run yet: its first run is the next release's
+  # wheels dispatch.
+  windows:
+    needs: preflight
+    if: github.event_name == 'workflow_dispatch' && github.repository == 'joaquinbejar/tessera-rl'
+    name: W0 (x86_64-pc-windows-msvc)
+    runs-on: windows-2025
+    timeout-minutes: 120
+    permissions:
+      contents: read
+    defaults:
+      run:
+        # Git Bash, so that wheel_job.sh runs as on the other legs.
+        shell: bash
+    env:
+      WHEEL_RUN: ${{ github.workspace }}/.wheel-run
+      # x86-64 implements trapped FP exceptions (fp_child.py uses
+      # _controlfp_s on Windows): the unmasked FP boundary test must check
+      # the enables, never skip (#225).
+      TESSERA_EXPECT_FP_TRAPS: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # rustup-init.exe 1.29.3 and uv 0.13.6 (uv-x86_64-pc-windows-msvc.zip),
+      # by their published sha256; the toolchain is rust-toolchain's.
+      - run: scripts/wheel_job.sh x86_64-pc-windows-msvc "" 38027d51d69a5d05493627a0634dbea52d6cd793c8f072d2373d3f4163eec7db a2a8820d5eea32f08ef467ef3b7f66883a9b076d5737a2fc2fbb5f458d1bb50f release
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          if-no-files-found: warn
+          name: wheel-x86_64-pc-windows-msvc
+          path: |
+            dist/*.whl
+            golden-report.json
+            checks.json
+            determinism.json

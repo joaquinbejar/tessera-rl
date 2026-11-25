@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: MIT OR Apache-2.0
-"""The PyPI workflow: trusted publishing of one wheels run's five wheels,
+"""The PyPI workflow: trusted publishing of one wheels run's six wheels,
 checked against that run and the release tag, on dispatch only, never from a
 fork, with the OIDC token as the only credential of the upload job."""
 
@@ -159,12 +159,14 @@ def test_pypi_artifact_names_are_those_wheels_yml_uploads():
     assert "name: wheel-aarch64-apple-darwin\n" in WHEELS
     assert "name: wheel-x86_64-unknown-linux-musl\n" in WHEELS
     assert "name: wheel-aarch64-unknown-linux-musl\n" in WHEELS
+    assert "name: wheel-x86_64-pc-windows-msvc\n" in WHEELS
+    assert '"wheel-x86_64-pc-windows-msvc"' in src
     assert '"wheel-x86_64-unknown-linux-musl"' in src and '"wheel-aarch64-unknown-linux-musl"' in src
     assert 'echo "name=wheel-$TARGET-$PROFILE-$COMMIT-$sha"' in WHEELS
     assert '"wheel-aarch64-unknown-linux-gnu"' in src and '"wheel-aarch64-apple-darwin"' in src
     assert "wheel-x86_64-unknown-linux-gnu-wheel-" in src
     # Each wheels artifact carries the checks.json the script reads.
-    assert WHEELS.count("            checks.json\n") == 5
+    assert WHEELS.count("            checks.json\n") == 6
 
 
 def test_pypi_reads_the_layout_wheels_yml_uploads():
@@ -172,7 +174,7 @@ def test_pypi_reads_the_layout_wheels_yml_uploads():
     # `dist/*.whl` and `checks.json` side by side, the artifact holds
     # dist/<wheel> next to checks.json (run 43594717096 failed on a flat layout).
     uploads = re.findall(r"actions/upload-artifact@\S+.*\n(?:        .*\n)+", WHEELS)
-    assert len(uploads) == 5
+    assert len(uploads) == 6
     for u in uploads:
         paths = u.split("          path: |\n", 1)[1]
         assert "            dist/*.whl\n" in paths and "            checks.json\n" in paths, u
@@ -228,6 +230,7 @@ RUN_WHEELS = {
 RUN_MUSL = {
     "wheel-x86_64-unknown-linux-musl": "tessera_rl-0.2.0-cp311-abi3-musllinux_1_2_x86_64.whl",
     "wheel-aarch64-unknown-linux-musl": "tessera_rl-0.2.0-cp311-abi3-musllinux_1_2_aarch64.whl",
+    "wheel-x86_64-pc-windows-msvc": "tessera_rl-0.2.0-cp311-abi3-win_amd64.whl",
 }
 RUN_ALL = {**RUN_WHEELS, **RUN_MUSL}
 
@@ -243,7 +246,8 @@ def _run_tree(tmp_path) -> Path:
         checks.write_text(json.dumps(data, indent=1))
     # The recorded run predates the musllinux legs (#350): stub artifacts for
     # them, consistent with their own checks.json.
-    for key in ("x86_64-unknown-linux-musl", "aarch64-unknown-linux-musl"):
+    # And for the Windows leg (#350, option A).
+    for key in ("x86_64-unknown-linux-musl", "aarch64-unknown-linux-musl", "x86_64-pc-windows-msvc"):
         _artifact(arts, key, version="0.2.0", commit=RUN_COMMIT)
     return arts
 
@@ -313,7 +317,7 @@ def test_pypi_verify_refuses_the_real_run_tree_flattened(tmp_path):
     for whl in list(arts.glob("*/dist/*.whl")):
         whl.rename(whl.parent.parent / whl.name)
     p, out = _verify(arts, commit=RUN_COMMIT)
-    assert p.returncode == 1 and p.stderr.count("expected one wheel in dist/") == 5, p.stderr
+    assert p.returncode == 1 and p.stderr.count("expected one wheel in dist/") == 6, p.stderr
     assert not out.exists()
 
 
@@ -329,7 +333,7 @@ def test_pypi_verify_accepts_a_real_wheels_run(tmp_path):
     commit = w1[0].split("-wheel-", 1)[1].split("-")[0]
     p, out = _verify(arts, tag=tag, commit=commit, out=tmp_path / "dist")
     assert p.returncode == 0, p.stdout + p.stderr
-    assert len((out / "SHA256SUMS").read_text().splitlines()) == 5
+    assert len((out / "SHA256SUMS").read_text().splitlines()) == 6
 
 
 # --- the verify script ---------------------------------------------------------
@@ -340,6 +344,7 @@ PLAT = {
     "x86_64-unknown-linux-musl": "musllinux_1_2_x86_64",
     "aarch64-unknown-linux-musl": "musllinux_1_2_aarch64",
     "aarch64-apple-darwin": "macosx_11_0_arm64",
+    "x86_64-pc-windows-msvc": "win_amd64",
 }
 
 
@@ -385,7 +390,7 @@ def _verify(artifacts, tag=TAG, commit=COMMIT, out=None):
 
 
 @long_paths
-def test_pypi_verify_accepts_the_five_wheels_and_writes_sums(tmp_path):
+def test_pypi_verify_accepts_the_six_wheels_and_writes_sums(tmp_path):
     arts = tmp_path / "a"
     _good(arts)
     p, out = _verify(arts)
@@ -394,7 +399,7 @@ def test_pypi_verify_accepts_the_five_wheels_and_writes_sums(tmp_path):
     assert names == sorted(["SHA256SUMS"] + [f"tessera_rl-0.2.0-cp311-abi3-{v}.whl" for v in PLAT.values()])
     check = subprocess.run(["shasum", "-a", "256", "-c", "SHA256SUMS"] if shutil.which("shasum") else ["sha256sum", "-c", "SHA256SUMS"], cwd=out, capture_output=True, text=True)
     assert check.returncode == 0, check.stdout + check.stderr
-    assert len((out / "SHA256SUMS").read_text().splitlines()) == 5
+    assert len((out / "SHA256SUMS").read_text().splitlines()) == 6
 
 
 @pytest.mark.parametrize(
@@ -405,7 +410,7 @@ def test_pypi_verify_accepts_the_five_wheels_and_writes_sums(tmp_path):
         (lambda a: _artifact(a, "x86", commit="d" * 40), "expected one W1 artifact"),
     ],
 )
-def test_pypi_verify_refuses_a_run_without_exactly_the_five_artifacts(tmp_path, mutate, message):
+def test_pypi_verify_refuses_a_run_without_exactly_the_six_artifacts(tmp_path, mutate, message):
     arts = tmp_path / "a"
     _good(arts)
     mutate(arts)
@@ -520,7 +525,7 @@ def test_pypi_verify_refuses_a_version_other_than_the_tag(tmp_path):
     arts = tmp_path / "a"
     _good(arts)
     p, _ = _verify(arts, tag="v0.2.1")
-    assert p.returncode == 1 and p.stderr.count("does not match") == 5, p.stderr
+    assert p.returncode == 1 and p.stderr.count("does not match") == 6, p.stderr
 
 
 # --- the run blocks, executed under bash -eo pipefail with a fake gh -------------
@@ -638,7 +643,7 @@ def _sha256sum_on_path(bin_: Path):
 @long_paths
 @bash
 @pytest.mark.parametrize("change", [None, "extra", "changed", "missing"])
-def test_pypi_publish_sums_step_passes_only_the_five_checked_wheels(tmp_path, change):
+def test_pypi_publish_sums_step_passes_only_the_six_checked_wheels(tmp_path, change):
     arts = tmp_path / "a"
     _good(arts)
     dist = tmp_path / "w" / "dist"
