@@ -3,9 +3,8 @@
 steps through a replay file, drawing each instance's scene and showing its
 rewards, flags, masks and observations.
 
-**Experimental**: this module, its HTTP endpoints and the policy-logits side
-file (``<replay>.logits.npz``) are outside the 1.x stability promise
-(ADR-0094) and may change in any release.
+**Experimental**: the module, its endpoints and the logits side file
+(``<replay>.logits.npz``) may change in any release.
 
 The backend is Python's standard library (``http.server``); the front end is
 vendored HTML, CSS and JavaScript drawing on a Canvas 2D context, with no

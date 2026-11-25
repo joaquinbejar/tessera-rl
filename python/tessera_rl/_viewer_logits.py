@@ -3,9 +3,9 @@
 a replay, and the per-agent, per-head payload the Viewer serves.
 
 The side file is ``<replay>.logits.npz`` (NumPy's zip format, read with
-``allow_pickle=False``). It is an optional, Python-side sidecar outside the
-1.x stability promise (ADR-0094): its integer ``format_version`` entry is
-``1``, and a newer (or any other) value is refused. It never changes the
+``allow_pickle=False``). It is an optional, Python-side sidecar and
+experimental: it may change in any release. Its integer ``format_version``
+entry is ``1``, and a newer (or any other) value is refused. It never changes the
 replay file. It is bound to one replay by that file's sha256: a side file
 whose hash does not match is ignored, and the Viewer says why in ``/meta``.
 
