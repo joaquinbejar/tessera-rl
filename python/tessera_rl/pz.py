@@ -329,9 +329,12 @@ def _state_space(state_leaves) -> spaces.Box | None:
 
 
 def _state_bound(values, shape, dtype: np.dtype) -> np.ndarray:
-    """A bound per element of a state leaf, from a list that may hold one value."""
+    """A bound per element of a state leaf, from a list that may hold one value.
+    Integer bounds stay integers: a float64 detour would round ``i64::MAX``
+    up to 2**63, which wraps."""
     size = int(np.prod(shape))
-    arr = np.asarray(values, dtype=np.float64).ravel()
+    exact = np.int64 if dtype.kind == "i" else np.uint64 if dtype.kind == "u" else np.float64
+    arr = np.asarray(values, dtype=exact).ravel()
     return np.broadcast_to(arr, (size,)).reshape(shape).astype(dtype)
 
 
