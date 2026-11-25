@@ -8,8 +8,8 @@
 //! with [`export_module!`], its buffers [`ffi::buffer`] exports, and its
 //! arguments and results go through [`ffi::capi`]'s safe wrappers under a
 //! call-scoped [`ffi::capi::Gil`]. No public item of this crate is `unsafe`
-//! or relies on its caller for memory safety, with two documented
-//! exceptions, both outside Rust's view:
+//! or relies on its caller for memory safety, with three documented
+//! exceptions, all outside Rust's view:
 //!
 //! - **Borrowed exports.** A read through a buffer or DLPack export that
 //!   races the next write of its outputs (the next engine call, or the next
@@ -19,6 +19,11 @@
 //!   which has no read-only flag, is the consumer's as well: it changes
 //!   the outputs it borrows. No Rust reference to the exported bytes
 //!   exists.
+//! - **Python output allocators.** [`ffi::alloc::output_allocator`] adopts
+//!   the memory a Python allocator object returns as a pool's output
+//!   storage (ADR-0084). The object is trusted to keep that memory valid,
+//!   unwritten by anyone but the engine, and private until its owner is
+//!   released; only Tessera's own allocators and tests pass one.
 //! - **Interpreter finalization.** A daemon thread inside
 //!   [`ffi::capi::Gil::detach`] when the interpreter finalizes is ended by
 //!   CPython 3.11 to 3.13 with `pthread_exit` when it tries to reattach

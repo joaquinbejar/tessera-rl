@@ -334,6 +334,9 @@ pub fn engine_kind(e: &EngineError) -> Kind {
         | EngineError::ArchiveMismatch { .. }
         | EngineError::AdaptiveNotRead { .. }
         | EngineError::AdaptiveContext { .. }
+        // An output allocator that returned no memory, or memory that is
+        // too short or misaligned (ADR-0084 item 2): a construction error.
+        | EngineError::OutputAllocation { .. }
         // An invalid league setup (ADR-0088 section 2; #619).
         | EngineError::League { .. } => Kind::Config,
         // An ONNX opponent policy failed to run (ADR-0088 erratum 2;
@@ -426,5 +429,13 @@ mod tests {
             })),
             Kind::Onnx
         );
+    }
+
+    #[test]
+    fn test_engine_kind_output_allocation_is_config() {
+        let e = EngineError::OutputAllocation {
+            reason: "the allocator returned no memory",
+        };
+        assert_eq!(engine_kind(&e), Kind::Config);
     }
 }
