@@ -376,12 +376,14 @@ def test_is_memory_primitive_compares_count_on_glibc_musl_and_macos():
 
 def test_is_memory_primitive_glibc_gi_aliases_count():
     # #498: aarch64 glibc 2.28's `_native` calls these internal aliases directly,
-    # with Callgrind's recursion suffix on deeper frames.
+    # with Callgrind's recursion suffix on deeper frames. The alias list mirrors
+    # the plain one: every charged primitive is charged with or without `__GI_`.
     glibc = "/usr/lib64/libc-2.28.so"
-    for name in ("__GI_memset", "__GI_memcpy", "__GI_memcpy'2", "__GI_memmove", "__GI_memcmp"):
+    for name in ("__GI_memset", "__GI_memcpy", "__GI_memcpy'2", "__GI_memmove", "__GI_memcmp", "__GI_memcmpeq",
+                 "__GI_bzero", "__GI_bcmp"):
         assert ev.is_memory_primitive(glibc, name, lambda path: {}), name
-    # Only those four aliases: no blanket `__GI_`, and not outside libc.
-    for name in ("__GI_memchr", "__GI_strcmp", "__GI_memsetx", "__GI___libc_malloc", "__GI_bzero", "__GI_bcmp", "__GI_memcmpeq"):
+    # No blanket `__GI_`, and never outside libc.
+    for name in ("__GI_memchr", "__GI_strcmp", "__GI_memsetx", "__GI___libc_malloc", "__GI_wmemcmp", "__GI_bcopy"):
         assert not ev.is_memory_primitive(glibc, name, lambda path: {}), name
     assert not ev.is_memory_primitive("/venv/_native.abi3.so", "__GI_memset", lambda path: {})
 
@@ -415,4 +417,4 @@ def test_primitive_pattern_grows_only_by_gi_aliases():
     for name in names:
         was, now = bool(old.match(name)), bool(ev._PRIMITIVE.match(name))
         assert now or not was, f"{name} lost"
-        assert was == now or name.startswith("__GI_mem"), f"{name} changed"
+        assert was == now or name.startswith("__GI_"), f"{name} changed"
