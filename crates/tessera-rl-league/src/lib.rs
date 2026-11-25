@@ -19,9 +19,11 @@
 //! count and on every platform of the tier.
 
 mod error;
+mod export;
 mod league;
 mod matchmaking;
 mod outcome;
+mod persist;
 mod pool;
 mod population;
 mod results;
@@ -35,6 +37,7 @@ pub use error::LeagueError;
 pub use league::{League, LeagueConfig, LeagueReport, PairCounts};
 pub use matchmaking::{Matchmaking, PfspWeighting, Table};
 pub use outcome::Outcome;
+pub use persist::{LEAGUE_FORMAT_VERSION, LEAGUE_MAGIC};
 pub use pool::PoolLeague;
 pub use population::{Policy, PolicyId, PolicyKind, Population};
 pub use results::Results;

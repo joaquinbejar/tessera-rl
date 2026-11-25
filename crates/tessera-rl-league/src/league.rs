@@ -309,3 +309,111 @@ impl League {
         })
     }
 }
+
+impl League {
+    fn saved(&self) -> Result<crate::persist::Saved, LeagueError> {
+        let view = crate::pool::view_of(self)?;
+        Ok(crate::persist::Saved {
+            kind: crate::persist::KIND_LEAGUE,
+            elo_k: self.config.elo_k,
+            trueskill: self.config.trueskill,
+            rate_population: self.config.rate_population,
+            population: self.population.clone(),
+            roles: vec![crate::persist::SavedRole {
+                cfg: crate::RoleConfig::new(self.config.matchmaking),
+                elo: self.learner_elo,
+                trueskill: self.learner_trueskill,
+                counts: self.counts.clone(),
+                self_play: None,
+                rounds: 0,
+                snapshots: 0,
+                since: PairCounts::default(),
+                view_digest: crate::persist::view_digest(&view),
+                installed_digest: crate::persist::view_digest(&view),
+            }],
+            frozen: self.frozen,
+            round: 0,
+            members: Vec::new(),
+        })
+    }
+
+    /// The league's canonical bytes (#384 head E2, `persist` module): the
+    /// ratings, the counts and the population; the table is recomputed at
+    /// load.
+    ///
+    /// # Errors
+    ///
+    /// [`LeagueError::Persist`] for counts past `u32::MAX`, or
+    /// [`LeagueError::View`].
+    pub fn save(&self) -> Result<Vec<u8>, LeagueError> {
+        self.saved()?.encode()
+    }
+
+    /// A league from [`League::save`]'s bytes: checksum first, then every
+    /// field, then the recomputed table must reproduce the saved view.
+    ///
+    /// # Errors
+    ///
+    /// [`LeagueError::Persist`] for a malformed, corrupt or mismatched
+    /// file, and the constructors' errors for values they refuse.
+    pub fn load(bytes: &[u8]) -> Result<Self, LeagueError> {
+        let saved = crate::persist::Saved::decode(bytes, crate::persist::KIND_LEAGUE)?;
+        let [role] = saved.roles.as_slice() else {
+            return Err(LeagueError::Persist("a League file holds one role"));
+        };
+        if role.cfg.self_play.is_some() || role.cfg.snapshot.is_some() || role.self_play.is_some() {
+            return Err(LeagueError::Persist(
+                "a League file has no self-play or snapshots",
+            ));
+        }
+        let config = LeagueConfig {
+            matchmaking: role.cfg.matchmaking,
+            elo_k: saved.elo_k,
+            trueskill: saved.trueskill,
+            rate_population: saved.rate_population,
+        };
+        config.check()?;
+        let mut league = Self {
+            config,
+            population: saved.population,
+            learner_elo: role.elo,
+            learner_trueskill: role.trueskill,
+            counts: role.counts.clone(),
+            table: Table::default(),
+            frozen: saved.frozen,
+        };
+        league.table = league.compute_table()?;
+        if crate::persist::view_digest(&crate::pool::view_of(&league)?) != role.view_digest {
+            return Err(LeagueError::Persist(
+                "the recomputed table is not the saved one",
+            ));
+        }
+        Ok(league)
+    }
+
+    /// The JSON export (ADR-0088 item 7.5): ratings, per-pair counts and
+    /// the population, for metrics.
+    ///
+    /// # Errors
+    ///
+    /// [`LeagueError::Persist`] for a non-finite value.
+    pub fn export(&self) -> Result<String, LeagueError> {
+        crate::export::export(&self.saved()?)
+    }
+
+    /// Checks a restored pool's view against this league's.
+    ///
+    /// # Errors
+    ///
+    /// [`LeagueError::ViewMismatch`] (role 0) if they differ.
+    pub fn check_view(
+        &self,
+        view: &tessera_rl_engine::league::LeagueView,
+    ) -> Result<(), LeagueError> {
+        if crate::pool::view_of(self)? == *view {
+            Ok(())
+        } else {
+            Err(LeagueError::ViewMismatch { role: 0 })
+        }
+    }
+}
