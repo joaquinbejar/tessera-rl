@@ -1,0 +1,248 @@
+{
+  "seeds": [
+    101,
+    102,
+    103,
+    104,
+    105,
+    106,
+    107,
+    108,
+    109,
+    110,
+    111,
+    112,
+    113,
+    114,
+    115,
+    116,
+    117,
+    118,
+    119,
+    120,
+    121,
+    122,
+    123,
+    124,
+    125,
+    126,
+    127,
+    128,
+    129,
+    130,
+    131,
+    132,
+    133,
+    134,
+    135,
+    136,
+    137,
+    138,
+    139,
+    140
+  ],
+  "threshold_rule": "p5",
+  "threshold": -816.4,
+  "median": -760.875,
+  "min": -826.5,
+  "max": -697.8,
+  "setup": {
+    "env": "tessera/JobShop-v1",
+    "total_steps": 500000,
+    "eval_episodes": 20,
+    "fingerprint": "70f22d4894146d4b9949ccba24fe72a61dbf6ec3c5158e0fb4f4b39ef11aa110"
+  },
+  "environment": {
+    "git": "0cedf91ac8983a303bb42aeeb454344c3ee398ad",
+    "git_dirty": false,
+    "python": "3.11.18",
+    "os": "Linux-7.0.0-38-generic-x86_64-with-glibc2.43",
+    "arch": "x86_64",
+    "cpu": "12th Gen Intel(R) Core(TM) i7-12700H",
+    "image": "self-hosted Linux x86-64 runner, uv-managed CPython 3.11.18 (no container)",
+    "tessera_rl": "0.3.0",
+    "torch_threads": 1,
+    "omp_num_threads": "1",
+    "gymnasium": "1.4.0",
+    "torch": "2.15.0+cpu",
+    "numpy": "2.4.6"
+  },
+  "records": [
+    {
+      "seed": 101,
+      "score": -739.5
+    },
+    {
+      "seed": 102,
+      "score": -773.6
+    },
+    {
+      "seed": 103,
+      "score": -813.0
+    },
+    {
+      "seed": 104,
+      "score": -800.35
+    },
+    {
+      "seed": 105,
+      "score": -787.3
+    },
+    {
+      "seed": 106,
+      "score": -791.55
+    },
+    {
+      "seed": 107,
+      "score": -806.9
+    },
+    {
+      "seed": 108,
+      "score": -697.8
+    },
+    {
+      "seed": 109,
+      "score": -748.1
+    },
+    {
+      "seed": 110,
+      "score": -718.1
+    },
+    {
+      "seed": 111,
+      "score": -812.3
+    },
+    {
+      "seed": 112,
+      "score": -786.0
+    },
+    {
+      "seed": 113,
+      "score": -730.9
+    },
+    {
+      "seed": 114,
+      "score": -740.4
+    },
+    {
+      "seed": 115,
+      "score": -768.9
+    },
+    {
+      "seed": 116,
+      "score": -759.45
+    },
+    {
+      "seed": 117,
+      "score": -709.7
+    },
+    {
+      "seed": 118,
+      "score": -785.25
+    },
+    {
+      "seed": 119,
+      "score": -816.4
+    },
+    {
+      "seed": 120,
+      "score": -741.55
+    },
+    {
+      "seed": 121,
+      "score": -735.7
+    },
+    {
+      "seed": 122,
+      "score": -742.95
+    },
+    {
+      "seed": 123,
+      "score": -793.95
+    },
+    {
+      "seed": 124,
+      "score": -789.9
+    },
+    {
+      "seed": 125,
+      "score": -716.55
+    },
+    {
+      "seed": 126,
+      "score": -742.7
+    },
+    {
+      "seed": 127,
+      "score": -713.4
+    },
+    {
+      "seed": 128,
+      "score": -799.15
+    },
+    {
+      "seed": 129,
+      "score": -766.5
+    },
+    {
+      "seed": 130,
+      "score": -709.5
+    },
+    {
+      "seed": 131,
+      "score": -775.3
+    },
+    {
+      "seed": 132,
+      "score": -746.15
+    },
+    {
+      "seed": 133,
+      "score": -762.3
+    },
+    {
+      "seed": 134,
+      "score": -751.45
+    },
+    {
+      "seed": 135,
+      "score": -826.5
+    },
+    {
+      "seed": 136,
+      "score": -746.5
+    },
+    {
+      "seed": 137,
+      "score": -779.35
+    },
+    {
+      "seed": 138,
+      "score": -754.15
+    },
+    {
+      "seed": 139,
+      "score": -758.1
+    },
+    {
+      "seed": 140,
+      "score": -795.55
+    }
+  ],
+  "gate": {
+    "solved": -648.15,
+    "min_effect": 0.1
+  },
+  "learns": {
+    "learns": true,
+    "degenerate": false,
+    "gap": 95.52499999999998,
+    "ci95": [
+      41.34812499999992,
+      151.7506250000001
+    ],
+    "required": 20.825000000000003,
+    "random_mean": -856.4
+  },
+  "non_learning_seeds": 0
+}
