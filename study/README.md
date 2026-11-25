@@ -90,7 +90,11 @@ trajectories, the grader and the kit's acceptance run:
 
 - `grading/grade.sh <crate> <a|b|c|none>`: the offline grader. It prints one
   PASS or FAIL line per check (`check`, `clippy`, `conformance`, `safety`) and
-  nothing else, so its output replays byte for byte.
+  nothing else, so its output replays byte for byte. It grades a temporary
+  copy of the crate (made with `rsync`; `python3` rewrites its path
+  dependencies), so the participant's tree is never written to, even if
+  grading is interrupted. Each check's full output is in this checkout's
+  `target/study-grade/<crate-name>/`.
 - `grading/acceptance.sh`: the kit's own acceptance (design r2 section 8), on
   Linux.
 

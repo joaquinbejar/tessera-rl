@@ -12,8 +12,10 @@
 #    version passes.
 # 3. Each reference passes grade.sh against its own sheet, and the
 #    untouched scaffold (the fixed T2 crate) against no sheet; grade.sh
-#    prints the same bytes on a second run.
-# 4. Each seeded wrong solution fails exactly the check it names.
+#    prints the same bytes on a second run, and leaves the graded crate
+#    byte-identical, also when a third run is killed mid-grade (SIGKILL).
+# 4. Each seeded wrong solution fails exactly the check it names, and
+#    leaves its crate byte-identical.
 #
 # Work happens on copies under a temporary directory; the kit is not
 # modified. It prints one line per assertion and exits non-zero on the
@@ -89,16 +91,31 @@ cp "$here/solutions/t3-divergence-lib.rs" "$d/src/lib.rs"
 (cd "$d" && cargo tessera check --locked --offline > check.out 2>&1) || { cat "$d/check.out"; die "T3 fixed fails the check"; }
 ok "T3 fixed passes the check"
 
+# The digest of every file and directory under a crate, target/ included:
+# grade.sh must not write to it (#639 follow-up, REVIEW-kit-r1).
+tree() {
+    (cd "$1" && find . -print0 | LC_ALL=C sort -z | while IFS= read -r -d '' f; do
+        if [ -f "$f" ]; then printf 'f %s %s\n' "$f" "$(sha256sum < "$f" | cut -d' ' -f1)"; else printf 'd %s\n' "$f"; fi
+    done) | sha256sum | cut -d' ' -f1
+}
+outs="$work/out"
+mkdir -p "$outs"
+
 # 3. References and the untouched scaffold, graded twice.
 grade_twice() {
-    local src="$1" sheet="$2" name="$3" d
+    local src="$1" sheet="$2" name="$3" d before
     d="$(copy "$src" "$name")"
+    before="$(tree "$d")"
     # grade.sh resolves the kit from its own location: run the kit's copy.
-    "$here/grade.sh" "$d" "$sheet" > "$d/grade1.out" || { cat "$d/grade1.out"; die "$name fails grade.sh"; }
-    "$here/grade.sh" "$d" "$sheet" > "$d/grade2.out" || die "$name fails grade.sh on the second run"
-    cmp -s "$d/grade1.out" "$d/grade2.out" || die "$name: grade.sh output differs between runs"
-    sed 's/^/  /' "$d/grade1.out"
-    ok "$name passes grade.sh ($sheet), byte-identical over two runs"
+    "$here/grade.sh" "$d" "$sheet" > "$outs/$name.1" || { cat "$outs/$name.1"; die "$name fails grade.sh"; }
+    "$here/grade.sh" "$d" "$sheet" > "$outs/$name.2" || die "$name fails grade.sh on the second run"
+    cmp -s "$outs/$name.1" "$outs/$name.2" || die "$name: grade.sh output differs between runs"
+    [ "$(tree "$d")" = "$before" ] || die "$name: grade.sh changed the graded crate"
+    # A grade killed mid-run (the cargo build in progress) leaves it intact too.
+    timeout -s KILL 5 "$here/grade.sh" "$d" "$sheet" > /dev/null 2>&1 || true
+    [ "$(tree "$d")" = "$before" ] || die "$name: a killed grade.sh changed the graded crate"
+    sed 's/^/  /' "$outs/$name.1"
+    ok "$name passes grade.sh ($sheet), byte-identical over two runs, crate unchanged (also when killed)"
 }
 grade_twice "$here/reference/a-gridwalk" a ref-a
 grade_twice "$here/reference/b-nim" b ref-b
@@ -108,13 +125,15 @@ grade_twice "$t2" none scaffold
 # 4. Seeded wrong solutions: each must fail the check it names. The last
 #    one drops the crate's unwrap lint, so only the safety check catches it.
 wrong() {
-    local src="$1" sheet="$2" name="$3" check="$4" patch="$5" d out
+    local src="$1" sheet="$2" name="$3" check="$4" patch="$5" d out before
     d="$(copy "$src" "$name")"
     python3 - "$d/src/lib.rs" "$d/Cargo.toml" <<<"$patch"
+    before="$(tree "$d")"
     out="$("$here/grade.sh" "$d" "$sheet" || true)"
     echo "$out" | sed 's/^/  /'
     echo "$out" | grep -qx "FAIL $check" || die "$name: expected FAIL $check"
-    ok "$name fails $check"
+    [ "$(tree "$d")" = "$before" ] || die "$name: grade.sh changed the graded crate"
+    ok "$name fails $check, crate unchanged"
 }
 wrong "$here/reference/a-gridwalk" a wrong-a-goal conformance "
 import sys; p=sys.argv[1]; s=open(p).read()
