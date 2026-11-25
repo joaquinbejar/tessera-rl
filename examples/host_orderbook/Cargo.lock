@@ -209,6 +209,7 @@ dependencies = [
  "inventory",
  "tessera-rl-num",
  "thiserror",
+ "tracing",
  "xxhash-rust",
 ]
 
