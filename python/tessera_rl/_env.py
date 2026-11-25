@@ -996,6 +996,13 @@ def native_kwargs(**kwargs) -> dict:
     return out
 
 
+def refuse_device(kwargs: dict, adapter: str) -> None:
+    """Adapters hand NumPy arrays to their trainers: ``device=`` is refused,
+    never passed through."""
+    if kwargs.get("device") is not None:
+        raise _native.CapabilityError(f"device= is not supported by the {adapter} adapter; use tessera_rl.make")
+
+
 def is_stale(array) -> bool:
     """Whether a borrowed output's borrow window has ended.
 

@@ -122,7 +122,7 @@ from pettingzoo.utils.wrappers import OrderEnforcingWrapper
 
 from tessera_rl import _envs, _flat, _host, _native, _render
 from tessera_rl._bounds import leaf_bound
-from tessera_rl._env import Env, _discrete_actions, _multi_actions, native_kwargs
+from tessera_rl._env import Env, _discrete_actions, _multi_actions, native_kwargs, refuse_device
 from tessera_rl.masks import head_views
 
 #: Native constructors and the PettingZoo interfaces each environment
@@ -221,6 +221,7 @@ def _native_pool(env_id: str, adapter: str, seed: int | None, kwargs: dict) -> t
     are read from a probe pool that is then closed, so the returned pool
     has not started an episode and its first ``reset`` is the seed's
     first episode."""
+    refuse_device(kwargs, "PettingZoo")
     if env_id not in _ENVS and _host.is_host_id(env_id):
         return _host_pool(env_id, adapter, seed, kwargs)[0]
     maker, declared = _lookup(env_id)

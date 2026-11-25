@@ -116,7 +116,7 @@ import numpy as np
 
 from tessera_rl import _flat, _host, _native
 from tessera_rl._bounds import leaf_bound
-from tessera_rl._env import _index, make
+from tessera_rl._env import _index, make, refuse_device
 
 try:
     import gymnasium
@@ -257,6 +257,7 @@ class TesseraPufferEnv(pufferlib.PufferEnv):
         auto_reset: str = "same_step",
         **env_kwargs,
     ):
+        refuse_device(env_kwargs, "PufferLib")
         _check_env_id(env_id)
         if auto_reset != "same_step":
             raise _native.ArgumentError(f"auto_reset is same_step here, not {auto_reset!r}")
