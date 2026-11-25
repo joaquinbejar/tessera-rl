@@ -794,3 +794,27 @@ def test_learning_paddleduel_fingerprint_matches_its_calibration():
     (5e2dd2ad): the fingerprint binds the calibration to the code, and it
     still matches; its learns check used the committed gate."""
     _t3a_calibration_matches("paddleduel")
+
+
+def test_flat_vector_final_obs_rows_are_float32_when_all_instances_end_together():
+    """#564: when every instance ends on the same step, final_obs holds one
+    float32 array per instance, not a 2-D object array."""
+    pytest = __import__("pytest")
+    pytest.importorskip("torch")
+    import numpy as np
+
+    import learning_protocols as lp
+    import reference_training as rt
+    import tessera_rl.gym
+
+    env = tessera_rl.gym.make("tessera/Gather-v1", num_envs=2, seed=1, autoreset_mode=rt.SAME_STEP, max_episode_steps=3)
+    flat = lp._FlatVector(env)
+    flat.reset(seed=1)
+    info = {}
+    for _ in range(3):
+        _, _, term, trunc, info = flat.step(np.zeros(2, dtype=np.int64))
+    assert (term | trunc).all()
+    final = info["final_obs"]
+    assert final.shape == (2,)
+    assert all(np.asarray(final[i]).dtype == np.float32 for i in range(2))
+    flat.close()
