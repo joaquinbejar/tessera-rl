@@ -27,7 +27,9 @@
 //!   in action order over every root edge; `v_mix = v_root` when
 //!   `sum N = 0`, and the weighted term is 0 when the visited edges carry
 //!   no prior mass (as `mctx` does).
-//! - `q' = (q + 1) / 2`; `sigma(q') = ((c_visit + max N) * c_scale) * q'`
+//! - `q' = (q + 1) / 2` (under `ValueMode::Returns`, `q' = q_norm` of
+//!   the call's min-max, and `v_mix` mixes normalized values, ADR-0096);
+//!   `sigma(q') = ((c_visit + max N) * c_scale) * q'`
 //!   with `max N` over every root edge at the decision (earlier calls
 //!   included).
 //! - `pi'(a) = exp(z(a) - max z) / sum`, `z = l + sigma(q')` over the
@@ -43,6 +45,7 @@ use tessera_rl_num::rng::StepRng;
 
 use crate::error::SearchError;
 use crate::noise;
+use crate::value::MinMax;
 
 /// Bytes per action counted for one tree's Gumbel buffers in the group
 /// memory bound (Gumbel slots only). The buffers take 72 bytes per action
@@ -120,6 +123,9 @@ pub(crate) struct Decision {
     v_mix: f64,
     /// `(c_visit + max N) * c_scale`.
     scale: f64,
+    /// Under `ValueMode::Returns`, the call's min-max: `q' = q_norm`
+    /// instead of `(q + 1) / 2` (ADR-0096 decision 5).
+    norm: Option<MinMax>,
 }
 
 impl Decision {
@@ -134,7 +140,12 @@ impl Decision {
             clippy::manual_midpoint,
             reason = "the pinned rescale (q + 1) / 2 of the design note"
         )]
-        let rescaled = (q + 1.0) / 2.0;
+        let rescaled = match self.norm {
+            // `v_mix` is already in normalized units (ADR-0096 decision 5).
+            Some(_) if e.visits == 0 => q,
+            Some(m) => m.normalize(q),
+            None => (q + 1.0) / 2.0,
+        };
         self.scale * rescaled
     }
 }
@@ -146,18 +157,23 @@ pub(crate) fn decision(
     edges: &[RootEdge],
     priors: &[f64],
     v_root: f64,
+    norm: Option<MinMax>,
 ) -> Decision {
     let mut sum_n = 0u64;
     let mut max_n = 0u32;
     let mut pi_vis = 0.0;
     let mut pq = 0.0;
+    // Under `ValueMode::Returns`, `v_mix` mixes normalized values
+    // (ADR-0096 decision 5); under `Terminal`, raw ones.
+    let units = |q: f64| norm.map_or(q, |m| m.normalize(q));
+    let v_root = units(v_root);
     for (a, e) in edges.iter().enumerate() {
         sum_n += u64::from(e.visits);
         max_n = max_n.max(e.visits);
         if e.visits > 0 {
             let p = at(priors, a);
             pi_vis += p;
-            pq += p * (e.value / f64::from(e.visits));
+            pq += p * units(e.value / f64::from(e.visits));
         }
     }
     #[expect(
@@ -175,6 +191,7 @@ pub(crate) fn decision(
     Decision {
         v_mix,
         scale: (cfg.c_visit + f64::from(max_n)) * cfg.c_scale,
+        norm,
     }
 }
 
@@ -182,6 +199,9 @@ pub(crate) fn decision(
 /// results of the last committed call.
 pub(crate) struct Gumbel {
     pub(crate) cfg: GumbelConfig,
+    /// The search's min-max under `ValueMode::Returns`, set before each
+    /// decision; `None` under `Terminal`.
+    pub(crate) norm: Option<MinMax>,
     g: Vec<f64>,
     logits: Vec<f64>,
     priors: Vec<f64>,
@@ -213,6 +233,7 @@ impl Gumbel {
     pub(crate) fn new(cfg: GumbelConfig, actions: usize, budget: u32) -> Self {
         Self {
             cfg,
+            norm: None,
             g: vec![0.0; actions],
             logits: vec![0.0; actions],
             priors: vec![0.0; actions],
@@ -399,7 +420,7 @@ impl Gumbel {
         }
         if self.phase < self.phases {
             let v_root = v_root.ok_or(gumbel_error("no root value"))?;
-            let d = decision(&self.cfg, &self.edges, &self.priors, v_root);
+            let d = decision(&self.cfg, &self.edges, &self.priors, v_root, self.norm);
             let keep = self.survivors.len().div_ceil(2);
             self.keep.clear();
             for &s in &self.survivors {
@@ -432,7 +453,7 @@ impl Gumbel {
     ) -> Result<(), SearchError> {
         self.load(edge)?;
         let v_root = v_root.ok_or(gumbel_error("no root value"))?;
-        let d = decision(&self.cfg, &self.edges, &self.priors, v_root);
+        let d = decision(&self.cfg, &self.edges, &self.priors, v_root, self.norm);
         let mut best: Option<(f64, u32)> = None;
         for &s in &self.survivors {
             let sc = self.score(d, s);
@@ -566,12 +587,24 @@ mod tests {
             value: 0.0,
             virtual_loss: 0,
         }; 3];
-        let d = decision(&GumbelConfig::default(), &none, &[0.5, 0.25, 0.25], 0.375);
+        let d = decision(
+            &GumbelConfig::default(),
+            &none,
+            &[0.5, 0.25, 0.25],
+            0.375,
+            None,
+        );
         assert_eq!(d.v_mix.to_bits(), 0.375_f64.to_bits());
         assert_eq!(d.scale.to_bits(), 50.0_f64.to_bits());
         // Visited edges with no prior mass: the weighted term is 0.
         let some = [FLAT, none[0], none[0]];
-        let d = decision(&GumbelConfig::default(), &some, &[0.0, 0.5, 0.5], 0.375);
+        let d = decision(
+            &GumbelConfig::default(),
+            &some,
+            &[0.0, 0.5, 0.5],
+            0.375,
+            None,
+        );
         assert_eq!(d.v_mix.to_bits(), (0.375_f64 / 3.0).to_bits());
     }
 
@@ -622,7 +655,13 @@ mod tests {
             value,
             virtual_loss: 0,
         });
-        let d = decision(&GumbelConfig::default(), &edges, &[0.3, 0.25, 0.2], 0.0625);
+        let d = decision(
+            &GumbelConfig::default(),
+            &edges,
+            &[0.3, 0.25, 0.2],
+            0.0625,
+            None,
+        );
         // The other order gives 0x3fbf_851e_b851_eb86.
         assert_eq!(d.v_mix.to_bits(), 0x3fbf_851e_b851_eb85);
     }

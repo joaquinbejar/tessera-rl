@@ -21,6 +21,21 @@ pub enum SearchError {
     /// scalar contract covers two-player zero-sum games).
     #[error("a terminal reward is outside [-1, 1]")]
     TerminalValue,
+    /// `ValueMode::Returns` on a pool whose paths can change mover: it
+    /// needs a single agent or a searcher pool (ADR-0096 decision 3).
+    #[error(
+        "the Returns value mode needs one mover on every path (a single agent or a searcher pool)"
+    )]
+    ReturnsNeedOneMover,
+    /// Under `ValueMode::Returns`, a NaN or infinite value at node `node`
+    /// (ADR-0096 decision 2a), refused before any edge of its path changed.
+    #[error("a non-finite return at node {node} (from the {origin:?})")]
+    NonFiniteReturn {
+        /// The node slot whose value or reward is not finite.
+        node: u32,
+        /// The evaluator's value, or a step reward.
+        origin: crate::value::ReturnSource,
+    },
     /// Invalid options.
     #[error("invalid search option {option}: {reason}")]
     Options {

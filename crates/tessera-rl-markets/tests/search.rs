@@ -7,8 +7,10 @@
 //! default policy map its first expansion is refused for simultaneous
 //! actors (`NotSingleActor`, ADR-0043 unchanged); with every other slot an
 //! `InfoHeuristic` slot of the scratch pool, slot 1 searches against them
-//! (ADR-0093, #491). Search values are terminal-only (ADR-0093 decision 6,
-//! #524): the per-step profit and loss does not enter the tree.
+//! (ADR-0093, #491). Under the default `ValueMode::Terminal` search values
+//! are terminal-only (ADR-0093 decision 6): the per-step profit and loss
+//! does not enter the tree; under `ValueMode::Returns` (ADR-0096, #524)
+//! it does.
 //! Plain search is refused for imperfect information first. The
 //! determinized root the search would build is checked by hand here, the
 //! way its sampler does it: a sample from the sampler's identity passes
@@ -34,7 +36,7 @@ use tessera_rl_num::identity::{Seed, StreamId};
 use tessera_rl_num::rng::{RngAuthority, StepRng};
 use tessera_rl_search::{
     Determinization, Evaluator, EvaluatorError, Mcts, PuctConfig, SearchError, SearchOptions,
-    SearchPool, sampler_identity,
+    SearchPool, ValueMode, sampler_identity,
 };
 
 type Search = SearchPool<LimitOrderBook, Masked>;
@@ -203,4 +205,33 @@ fn test_search_order_book_opponent_checks_are_typed() {
             determinized: 1
         })
     );
+}
+
+/// ADR-0096 (#524): the same search in `Returns` mode backs up the
+/// searcher's per-step PnL, so its root edge values differ from
+/// `Terminal` mode's (where a zero evaluator and no terminal leaf leave
+/// every value 0), and it is reproducible.
+#[test]
+fn test_search_order_book_returns_mode_backs_up_the_step_rewards() {
+    let (cfg, root, how) = recorded();
+    let run = |value: ValueMode| {
+        let s = Search::new_determinized(cfg.clone(), options(), &root, how, opponents).unwrap();
+        let mut c = PuctConfig::default();
+        c.simulations = 32;
+        c.batch_size = 4;
+        c.value = value;
+        let mut m = Mcts::new(s, c).unwrap();
+        m.run(&mut Uniform).unwrap();
+        let r = m.pool().root();
+        let values: Vec<u64> = (0..1728)
+            .map(|a| m.pool().edge_stats(r, a).unwrap().value.to_bits())
+            .collect();
+        (m.pool().tree_hash(), values)
+    };
+    let returns = ValueMode::Returns { discount: 0.5 };
+    let (hash, values) = run(returns);
+    let (_, terminal) = run(ValueMode::Terminal);
+    assert!(terminal.iter().all(|&v| v == 0.0_f64.to_bits()));
+    assert!(values.iter().any(|&v| v != 0.0_f64.to_bits()));
+    assert_eq!(run(returns), (hash, values));
 }
