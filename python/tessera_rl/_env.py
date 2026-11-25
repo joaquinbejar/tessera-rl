@@ -29,7 +29,7 @@ from __future__ import annotations
 
 import operator
 import typing
-from typing import NamedTuple
+from typing import NamedTuple, TypedDict
 
 import numpy as np
 
@@ -115,6 +115,47 @@ def _resolve_constructor_annotations(*classes: type) -> None:
 
 _resolve_constructor_annotations(Step, HalfStep, AsyncStep)
 
+
+
+class EpisodesReport(TypedDict):
+    """``epoch_barrier()["episodes"]``."""
+
+    count: int
+    sum_return: float
+    sum_length: float
+    return_mean: float
+    return_m2: float
+    aborted: int
+
+
+class NormalizationReport(TypedDict):
+    """``epoch_barrier()["normalization"]``."""
+
+    frozen: bool
+
+
+class CurriculumReport(TypedDict):
+    """``epoch_barrier()["curriculum"]``."""
+
+    changed: list[int]
+
+
+class LeagueBarrierReport(TypedDict):
+    """``epoch_barrier()["league"]``."""
+
+    submitted: int
+    dropped: int
+    uniform_fallback: bool
+
+
+class EpochReport(TypedDict):
+    """What ``Env.epoch_barrier()`` returns: fixed keys,
+    ``None`` for a subsystem the pool does not have."""
+
+    episodes: EpisodesReport
+    normalization: NormalizationReport | None
+    curriculum: CurriculumReport | None
+    league: LeagueBarrierReport | None
 
 class Env:
     """A pool of ``num_envs`` instances of one environment.
@@ -554,12 +595,25 @@ class Env:
         ids = range(self.num_envs) if ids is None else ids
         return _render.frames(self._native, [_index(i, "ids") for i in ids])
 
-    def epoch_barrier(self) -> None:
-        """Merges the normalization accumulators of a ``Normalize``
-        transform into the pool statistics, in chunk order; later
-        observations use them. Sync mode; a no-op without a
-        ``Normalize``."""
-        self._native.epoch_barrier()
+    def epoch_barrier(self) -> EpochReport:
+        """Runs every adaptive subsystem's barrier, in
+        order, and returns their report, a dict with fixed keys
+        (``tessera_rl.EpochReport`` in the stubs):
+
+        - ``episodes``: the episodes ended since the last barrier
+          (``count``, ``sum_return``, ``sum_length``, ``return_mean``,
+          ``return_m2``, ``aborted``);
+        - ``normalization``: ``{"frozen": bool}`` after a ``Normalize``
+          transform merged its accumulators into the statistics (later
+          observations use them), or ``None`` without one;
+        - ``curriculum``: ``{"changed": [ids]}``, or ``None`` without a
+          curriculum or while it is frozen;
+        - ``league``: ``{"submitted", "dropped", "uniform_fallback"}`` for
+          a pool of a ``tessera_rl.League``, or ``None`` without one or
+          while it is frozen.
+
+        Sync mode."""
+        return self._native.epoch_barrier()
 
     def freeze_normalization(self, frozen: bool = True) -> None:
         """Stops (``True``) or restarts (``False``) the accumulation of
@@ -635,7 +689,7 @@ class Env:
 
     @property
     def assignment(self) -> np.ndarray | None:
-        """Each instance's league opponent (ADR-0088 item 2.3), uint32
+        """Each instance's league opponent, uint32
         ``(num_envs,)``: the population id its ``"opponent"`` slots play this
         episode, drawn at the instance's reset; ``None`` without a league.
         Each read is a fresh owned copy."""

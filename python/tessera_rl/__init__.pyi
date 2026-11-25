@@ -3,6 +3,7 @@ from tessera_rl._archive import Archive as Archive
 from tessera_rl._league import League as League
 from tessera_rl._env import AsyncStep as AsyncStep
 from tessera_rl._env import Env as Env
+from tessera_rl._env import EpochReport as EpochReport
 from tessera_rl._env import HalfStep as HalfStep
 from tessera_rl._env import Step as Step
 from tessera_rl._env import is_stale as is_stale
@@ -44,6 +45,7 @@ __all__ = [
     "ConfigError",
     "AsyncStep",
     "Env",
+    "EpochReport",
     "HalfStep",
     "EvaluatorError",
     "ExhaustedError",

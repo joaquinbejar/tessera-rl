@@ -35,6 +35,12 @@ the API is not stable, and any 0.x release may break it.
   - `check_view(role, view)` checks a restored pool's view against the one its role's pools hold, which is one round behind under the shared league's lag.
   - `export()` gives the JSON (RFC 8259 strings, shortest round-trip floats, non-finite refused, fixed key order).
   - New errors: `LeagueError::Persist`, `LeagueError::ViewMismatch`.
+- Leagues from Python (ADR-0088 section 10, #384 head E3):
+  - `tessera_rl.League(population, roles, elo_k=, trueskill=, rate_population=)` creates a shared league, with `save()`, `League.load(data)`, `export()`, `round`, `population()` and `ratings(role)`.
+  - `make(..., policy_map={slot: "opponent"}, league=league, role=r)` attaches a pool. A league from Python is always shared, so it lags one round, with one pool or many.
+  - `Env.assignment` gives each instance's opponent, and PettingZoo's infos carry it as `assignment`. `visible="learner"` hides `"opponent"` slots.
+  - A league with an ONNX entry is refused by `make` with `CapabilityError` naming the entry (ONNX opponents from Python come later). So is a league on an environment without in-engine heuristics, and async and pipelined modes refuse it.
+  - The Gymnasium adapter stays single-agent: league pools go through PettingZoo or `Env`.
 - Learning calibrations for `tessera/JobShop-v1` and `tessera/Vrp-v1` (#383 stage 4): seeds 101 to 140 at 500k steps on the nightly host, from a clean tree of main `0cedf91a`. JobShop: threshold -816.4, median -760.9, against -856.4 for a random policy and the MWKR bar -648.15. Vrp: threshold -1237.35, median -1203.7, against -1568.8 for random and the nearest-neighbour bar -792.05. Both learn (`learning_gate.learns`), with no non-learning seed.
 - The privileged state buffer (ADR-0079 item 7, #347 stage B3): a `PrivilegedState` capability trait (`state_space`, `write_state`) and `EnvPool::with_privileged_state()`, before the first reset. The engine writes one row per instance, zero while pending, in every call that writes the observations (reset, step, restore, fork, import); the rows are regions of the shared output storage (`OutputField::PrivilegedState`, `Outputs::privileged_state`), with the same borrow windows and write generation. Sync and Inline modes; Pipelined and Async refuse it (`EngineError::PrivilegedState`), as does a search scratch pool. Leduc hold'em (both cards and the public state) and LimitOrderBook-v1 implement it. Python: `make(..., privileged_state=True)`, `Env.state`, `layout()["privileged_state"]`, PettingZoo `state()` and `state_space`, Gymnasium `info["state"]`; other environments and host ids raise `CapabilityError`.
 
@@ -61,6 +67,8 @@ the API is not stable, and any 0.x release may break it.
 - Observation transforms on `Set` leaves (ADR-0092, #413). `Normalize` and `OneHot` apply to set item leaves: absent slots stay zero, and the statistics are pooled over the present slots. A `FrameStack` that names a set stacks all of its leaves. It is exported as a set of `k * MAX` slots, frames oldest first, with a generated `<set>/frame_age` `u8` leaf (0 the newest frame, 0 for absent slots) before `<set>_mask`; a single-leaf set's items move to `<set>/item`. New errors: `TransformError::PartialSetStack` and `TransformError::AfterSetStack`.
 
 ### Changed
+
+- `Env.epoch_barrier()` returns a dict instead of `None` (#384 head E3, ADR-0081 item 1.3): fixed keys `episodes`, `normalization`, `curriculum` and `league`, each `None` for a subsystem the pool does not have (typed `tessera_rl.EpochReport`). Callers that ignored the result are unaffected.
 
 - Exact integer Box bounds in Python (#570): `layout()` leaf bounds are Python ints for integer leaves (exact, so `i64::MAX` is `2**63 - 1`, not `2**63`) and floats for float leaves (bits unchanged). The Gymnasium, PettingZoo and PufferLib adapters build integer observation bounds from those ints without a `float64` round trip, and host leaves span their integer dtype exactly. Shapes, dtypes and space types are unchanged.
 

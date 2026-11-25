@@ -200,3 +200,24 @@ def test_league_replay_round_trips(tmp_path):
     fresh = _pool(_league(), 0, 5)
     assert replay.run(path, fresh).verified
     fresh.close()
+
+
+def test_epoch_barrier_returns_the_fixed_report():
+    """``epoch_barrier()`` returns a dict with fixed keys, ``None`` for a
+    subsystem the pool does not have (rev, E3 ruling 3)."""
+    plain = tessera_rl.make(DUEL, num_envs=2, workers=0, agents=2)
+    plain.reset()
+    report = plain.epoch_barrier()
+    assert list(report) == ["episodes", "normalization", "curriculum", "league"]
+    assert set(report["episodes"]) == {"count", "sum_return", "sum_length", "return_mean", "return_m2", "aborted"}
+    assert report["normalization"] is None and report["curriculum"] is None and report["league"] is None
+    plain.close()
+    league = tessera_rl.League(POP, [{"matchmaking": "pfsp"}])
+    p = _pool(league)
+    p.reset()
+    _run(p, 0)
+    report = p.epoch_barrier()
+    assert set(report["league"]) == {"submitted", "dropped", "uniform_fallback"}
+    assert report["league"]["submitted"] > 0
+    assert report["episodes"]["count"] > 0
+    p.close()

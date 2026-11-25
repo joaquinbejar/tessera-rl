@@ -277,7 +277,7 @@ def relaxed_masks(row, mask_heads) -> tuple[np.ndarray, ...]:
 
 #: The groups whose actions the engine computes.
 #: The groups the engine plays, hidden under ``visible="learner"``: the
-#: heuristic slots and the league's ``"opponent"`` slots (ADR-0088 section 10).
+#: heuristic slots and the league's ``"opponent"`` slots.
 _HEURISTIC_GROUPS = frozenset({"heuristic", "privileged_heuristic", "opponent"})
 
 

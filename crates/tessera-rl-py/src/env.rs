@@ -349,9 +349,10 @@ pub(crate) trait PoolOps: Send {
     fn scene(&self, _id: u32) -> Result<(Vec<tessera_rl_core::render::Prim>, bool), BindError> {
         Err(crate::render_api::not_renderable())
     }
-    /// The epoch barrier of the pool's normalization (ADR-0078 item 5.3):
-    /// sync mode only.
-    fn epoch_barrier(&mut self) -> Result<(), BindError> {
+    /// The pool's epoch barrier (ADR-0081 item 1.3): its report, and
+    /// whether normalization is frozen (`None` without a `Normalize`). Sync
+    /// mode only.
+    fn epoch_barrier(&mut self) -> Result<Barrier, BindError> {
         Err(transforms_sync_only())
     }
     /// Freezes or unfreezes normalization (ADR-0078 item 5.6): sync mode
@@ -984,10 +985,17 @@ where
         self.render.as_ref().map(|(_, fns)| fns.canvas)
     }
 
-    fn epoch_barrier(&mut self) -> Result<(), BindError> {
-        // The report reaches Python in #359 head D (ADR-0081 item 1.3).
-        self.pool.epoch_barrier()?;
-        Ok(())
+    fn epoch_barrier(&mut self) -> Result<Barrier, BindError> {
+        let report = self.pool.epoch_barrier()?;
+        let normalization = self
+            .pool
+            .transforms()
+            .has_normalize()
+            .then(|| self.pool.normalization_frozen());
+        Ok(Barrier {
+            report,
+            normalization,
+        })
     }
 
     fn freeze_normalization(&mut self, frozen: bool) -> Result<(), BindError> {
@@ -1320,6 +1328,16 @@ pub(crate) struct PoolArgs {
     /// The privileged state buffer (ADR-0079 item 7): only for an
     /// environment that implements `PrivilegedState`, in Sync mode.
     pub(crate) privileged_state: bool,
+}
+
+/// What `epoch_barrier()` returns to Python (ADR-0081 item 1.3, #384
+/// head E3).
+#[derive(Debug, Clone)]
+pub(crate) struct Barrier {
+    /// The engine's report.
+    pub(crate) report: tessera_rl_engine::EpochReport,
+    /// Whether normalization is frozen; `None` without a `Normalize`.
+    pub(crate) normalization: Option<bool>,
 }
 
 /// The refusal of the normalization calls outside sync mode.

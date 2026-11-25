@@ -38,7 +38,7 @@ API changes (pre-release; the package is not published yet):
   ``acting``; unpacking a ``Step`` now needs 10 names.
 """
 
-from tessera_rl._env import AsyncStep, Env, HalfStep, Step, is_stale, make
+from tessera_rl._env import AsyncStep, Env, EpochReport, HalfStep, Step, is_stale, make
 from tessera_rl._archive import Archive
 from tessera_rl._league import League
 from tessera_rl._native import (
@@ -76,6 +76,7 @@ __all__ = [
     "ConfigError",
     "AsyncStep",
     "Env",
+    "EpochReport",
     "HalfStep",
     "EvaluatorError",
     "ExhaustedError",

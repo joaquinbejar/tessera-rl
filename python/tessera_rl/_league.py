@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: MIT OR Apache-2.0
-"""``tessera_rl.League`` (ADR-0088 section 10, #384 head E3): a league shared
+"""``tessera_rl.League``: a league shared
 by every pool made with ``make(..., policy_map={slot: "opponent"},
 league=league, role=r)``.
 
@@ -84,7 +84,8 @@ def _role(role: dict) -> str:
 
 
 class League:
-    """A league shared by several pools (ADR-0088 sections 6 and 10)."""
+    """A league shared by several pools: one population, one learner per
+    role, and a barrier that does not depend on thread timing."""
 
     def __init__(
         self,
@@ -117,7 +118,7 @@ class League:
         return _native.league_save(league=self._handle)
 
     def export(self) -> str:
-        """The JSON export (ADR-0088 item 7.5): ratings, counts, population."""
+        """The JSON export: ratings, counts, population."""
         return _native.league_export(league=self._handle)
 
     @property

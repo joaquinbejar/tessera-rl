@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: MIT OR Apache-2.0
 from collections.abc import Sequence
 from types import TracebackType
-from typing import Any, NamedTuple, TypeAlias
+from typing import Any, NamedTuple, TypeAlias, TypedDict
 
 import numpy as np
 import numpy.typing as npt
@@ -31,6 +31,31 @@ class HalfStep(NamedTuple):
 class AsyncStep(NamedTuple):
     ids: np.ndarray
     step: Step
+
+class EpisodesReport(TypedDict):
+    count: int
+    sum_return: float
+    sum_length: float
+    return_mean: float
+    return_m2: float
+    aborted: int
+
+class NormalizationReport(TypedDict):
+    frozen: bool
+
+class CurriculumReport(TypedDict):
+    changed: list[int]
+
+class LeagueBarrierReport(TypedDict):
+    submitted: int
+    dropped: int
+    uniform_fallback: bool
+
+class EpochReport(TypedDict):
+    episodes: EpisodesReport
+    normalization: NormalizationReport | None
+    curriculum: CurriculumReport | None
+    league: LeagueBarrierReport | None
 
 class Env:
     mode: str
@@ -63,7 +88,7 @@ class Env:
     def snapshot(self, index: int) -> bytes: ...
     def render(self, ids: _Ids = None) -> np.ndarray: ...
     def scene(self, index: int) -> list[tuple[Any, ...]]: ...
-    def epoch_barrier(self) -> None: ...
+    def epoch_barrier(self) -> EpochReport: ...
     def freeze_normalization(self, frozen: bool = True) -> None: ...
     @property
     def canvas(self) -> tuple[int, int] | None: ...

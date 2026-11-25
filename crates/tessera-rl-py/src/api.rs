@@ -1730,13 +1730,89 @@ pub(crate) fn render<'py>(g: Gil<'py>, inner: &Inner, args: Ref<'_>) -> CResult<
     })
 }
 
-/// `epoch_barrier()`: merges the normalization accumulators (ADR-0078
-/// item 5.3); sync mode only.
+/// `epoch_barrier() -> dict`: the barrier of every adaptive subsystem
+/// (ADR-0081 item 1.3), in subsystem order; sync mode only. Its keys are
+/// fixed (`tessera_rl.EpochReport`): `episodes` (always), then
+/// `normalization`, `curriculum` and `league`, each `None` when the pool
+/// has no such subsystem (or, for `curriculum` and `league`, when it is
+/// frozen).
 pub(crate) fn epoch_barrier<'py>(g: Gil<'py>, inner: &Inner) -> CResult<Mine<'py>> {
     inner.with(g, |ops| {
-        g.detach(|| ops.epoch_barrier()).map_err(|e| to_py(g, e))?;
-        Ok(capi::none(g))
+        let b = g.detach(|| ops.epoch_barrier()).map_err(|e| to_py(g, e))?;
+        barrier_dict(g, &b)
     })
+}
+
+fn barrier_dict<'py>(g: Gil<'py>, barrier: &crate::env::Barrier) -> CResult<Mine<'py>> {
+    let out = capi::dict(g)?;
+    let stats = &barrier.report.episodes;
+    let episodes = capi::dict(g)?;
+    capi::dict_set(g, &episodes, c"count", &capi::int_u64(g, stats.count)?)?;
+    capi::dict_set(
+        g,
+        &episodes,
+        c"sum_return",
+        &capi::float(g, stats.sum_return)?,
+    )?;
+    capi::dict_set(
+        g,
+        &episodes,
+        c"sum_length",
+        &capi::float(g, stats.sum_length)?,
+    )?;
+    capi::dict_set(
+        g,
+        &episodes,
+        c"return_mean",
+        &capi::float(g, stats.return_mean)?,
+    )?;
+    capi::dict_set(
+        g,
+        &episodes,
+        c"return_m2",
+        &capi::float(g, stats.return_m2)?,
+    )?;
+    capi::dict_set(g, &episodes, c"aborted", &capi::int_u64(g, stats.aborted)?)?;
+    capi::dict_set(g, &out, c"episodes", &episodes)?;
+    let normalization = match barrier.normalization {
+        None => capi::none(g),
+        Some(frozen) => {
+            let sub = capi::dict(g)?;
+            capi::dict_set(g, &sub, c"frozen", &capi::boolean(g, frozen))?;
+            sub
+        }
+    };
+    capi::dict_set(g, &out, c"normalization", &normalization)?;
+    let curriculum = match &barrier.report.curriculum {
+        None => capi::none(g),
+        Some(changes) => {
+            let sub = capi::dict(g)?;
+            let ids = list_of(
+                g,
+                changes.ids.iter().map(|&i| capi::int_u64(g, u64::from(i))),
+            )?;
+            capi::dict_set(g, &sub, c"changed", &ids)?;
+            sub
+        }
+    };
+    capi::dict_set(g, &out, c"curriculum", &curriculum)?;
+    let league = match &barrier.report.league {
+        None => capi::none(g),
+        Some(report) => {
+            let sub = capi::dict(g)?;
+            capi::dict_set(g, &sub, c"submitted", &capi::int_u64(g, report.applied)?)?;
+            capi::dict_set(g, &sub, c"dropped", &capi::int_u64(g, report.dropped)?)?;
+            capi::dict_set(
+                g,
+                &sub,
+                c"uniform_fallback",
+                &capi::boolean(g, report.uniform_fallback),
+            )?;
+            sub
+        }
+    };
+    capi::dict_set(g, &out, c"league", &league)?;
+    Ok(out)
 }
 
 /// `freeze_normalization(frozen)`: stops or restarts accumulation
