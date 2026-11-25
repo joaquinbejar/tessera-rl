@@ -1681,7 +1681,7 @@ where
                 "targets=True needs mode=\"sync\"".to_owned(),
             ));
         }
-        Some((cfg.clone(), fields))
+        Some(((fields.clone_config)(cfg), fields))
     } else {
         None
     };

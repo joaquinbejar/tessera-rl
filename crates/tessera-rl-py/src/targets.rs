@@ -19,6 +19,9 @@ pub(crate) struct AdaptiveFields<E: Environment> {
     /// Writes `value` into field `i` of both; `false` when the value does
     /// not fit the field's type or `i` is not a field.
     pub(crate) set: fn(&mut E::Config, &mut Adaptive<E>, usize, i64) -> bool,
+    /// A copy of a config (`Environment::Config` is not `Clone` in
+    /// general).
+    pub(crate) clone_config: fn(&E::Config) -> E::Config,
 }
 
 impl<E: Environment> Clone for AdaptiveFields<E> {
@@ -49,6 +52,7 @@ pub(crate) fn gather() -> AdaptiveFields<tessera_rl_classic::Gather> {
             }
             _ => false,
         },
+        clone_config: Clone::clone,
     }
 }
 
@@ -79,10 +83,7 @@ pub(crate) fn merged<E: Environment>(
     cfg: &E::Config,
     targets: &[Adaptive<E>],
     (ids, which, values): (&[u32], &[u32], &[i64]),
-) -> Result<Vec<(u32, Adaptive<E>)>, BindError>
-where
-    E::Config: Clone,
-{
+) -> Result<Vec<(u32, Adaptive<E>)>, BindError> {
     if ids.len() != which.len() || ids.len() != values.len() {
         return Err(BindError::Argument(
             "set_targets: ids, fields and values differ in length".to_owned(),
@@ -109,7 +110,7 @@ where
                 // The config copy holds the slot's whole current target
                 // first, so the config's cross-field checks see the merged
                 // values, whatever the number of adaptive fields.
-                let mut copy = cfg.clone();
+                let mut copy = (fields.clone_config)(cfg);
                 let mut target = *current;
                 for i in 0..fields.names.len() {
                     if let Some(v) = (fields.get)(current, i) {
