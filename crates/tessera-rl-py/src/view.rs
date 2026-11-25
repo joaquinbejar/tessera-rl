@@ -266,8 +266,8 @@ mod tests {
             name: String::new(),
             dtype,
             shape,
-            low: vec![0.0],
-            high: vec![1.0],
+            low: vec![Bound::Float(0.0)],
+            high: vec![Bound::Float(1.0)],
         };
         let layout = Layout {
             num_envs: 3,
