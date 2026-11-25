@@ -1227,18 +1227,18 @@ where
         discount: f64,
         apply: bool,
     ) -> Result<(), SearchError> {
-        let non_finite = |node| SearchError::NonFiniteReturn {
-            node,
-            origin: ReturnSource::Reward,
-        };
+        let non_finite = |node, origin| SearchError::NonFiniteReturn { node, origin };
         loop {
             let reward = self.reward(child, self.mover(parent)?);
+            if !reward.is_finite() {
+                return Err(non_finite(child, ReturnSource::Reward));
+            }
             let ret = match below {
                 None => reward,
                 Some(value) => reward + discount * value,
             };
             if !ret.is_finite() {
-                return Err(non_finite(child));
+                return Err(non_finite(child, ReturnSource::Overflow));
             }
             let vl = self.cfg.virtual_loss;
             let Some(edge) = self.pool.edge_mut(parent, action) else {
@@ -1246,7 +1246,7 @@ where
             };
             let total = edge.value + ret;
             if !total.is_finite() {
-                return Err(non_finite(child));
+                return Err(non_finite(child, ReturnSource::Overflow));
             }
             if apply {
                 let Some(next) = edge.virtual_loss.checked_sub(vl) else {

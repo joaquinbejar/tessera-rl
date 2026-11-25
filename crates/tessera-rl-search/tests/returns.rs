@@ -10,6 +10,7 @@
 #![expect(
     clippy::unwrap_used,
     clippy::indexing_slicing,
+    clippy::many_single_char_names,
     reason = "test helpers: a failure is the assertion"
 )]
 
@@ -51,9 +52,6 @@ struct WalkConfig {
     /// Every reward times `scale`.
     #[config(default = 1)]
     scale: u32,
-    /// The step (1-based) whose reward is NaN, 0 for none.
-    #[config(default = 0)]
-    poison: u32,
 }
 
 #[derive(Observation)]
@@ -68,9 +66,6 @@ struct PathObs {
 struct Walk;
 
 fn reward(cfg: &WalkConfig, k: u32, a: u32) -> f32 {
-    if k == cfg.poison {
-        return f32::NAN;
-    }
     let small = |x: u32| f32::from(u16::try_from(x).unwrap());
     let (kf, a1, s) = (small(k), small(a + 1), small(cfg.scale));
     let base = 0.25 * a1 * kf - 0.5;
@@ -164,7 +159,13 @@ impl Evaluator<Walk> for Canned {
     ) -> Result<(), EvaluatorError> {
         let n = self.actions;
         for (i, r) in leaves.iter().enumerate() {
-            let h = r.hash().get();
+            // From the state alone: the record header carries the episode
+            // return, which `scale` changes.
+            let s = r.state();
+            let h = u64::from(s.code)
+                .wrapping_mul(0x9e37_79b9_7f4a_7c15)
+                .wrapping_add(u64::from(s.steps))
+                .rotate_left(17);
             let w: Vec<f64> = (0..n)
                 .map(|a| f64::from(1 + u32::try_from((h >> (8 * a)) & 0xff).unwrap()))
                 .collect();
@@ -333,24 +334,28 @@ fn test_returns_refuses_bad_discounts_and_alternating_movers() {
     ));
 }
 
+/// Decision 2a: finite evaluator values whose returns overflow are
+/// refused before any edge of the path changes, and the failed call
+/// leaves the tree, its statistics and the counter as before it.
 #[test]
-fn test_returns_failed_call_leaves_the_tree_as_before() {
+fn test_returns_overflow_is_refused_with_the_tree_unchanged() {
     let cfg = WalkConfig {
-        poison: 2,
+        actions: 1,
         ..WalkConfig::default()
     };
     let mut eval = Canned::new(&cfg);
-    // Calls until one backs a poisoned reward up: that call fails and
-    // leaves the tree, the edge statistics and the counter as before it.
-    let mut m = search(&cfg, returns(0.5, 2));
-    for _ in 0..64 {
+    eval.fixed = Some(f64::MAX / 2.0);
+    let mut puct = returns(1.0, 1);
+    puct.batch_size = 1;
+    let mut m = search(&cfg, puct);
+    for _ in 0..8 {
         let (before, calls) = (fingerprint(&m, cfg.actions), m.calls());
         if let Err(err) = m.run(&mut eval) {
             assert!(
                 matches!(
                     err,
                     SearchError::NonFiniteReturn {
-                        origin: ReturnSource::Reward,
+                        origin: ReturnSource::Overflow,
                         ..
                     }
                 ),
@@ -361,7 +366,7 @@ fn test_returns_failed_call_leaves_the_tree_as_before() {
             return;
         }
     }
-    panic!("no call reached the poisoned reward");
+    panic!("no call overflowed");
 }
 
 #[test]

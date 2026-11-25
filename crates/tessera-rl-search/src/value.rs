@@ -40,8 +40,11 @@ impl ValueMode {
 pub enum ReturnSource {
     /// The evaluator's value at the leaf.
     Evaluator,
-    /// A step reward on the path, or the return it made overflow.
+    /// A step reward on the path (the engine refuses non-finite rewards
+    /// in debug builds only).
     Reward,
+    /// A return or an edge's total that overflowed from finite values.
+    Overflow,
 }
 
 /// The min and max of every backed-up edge mean in the call so far
