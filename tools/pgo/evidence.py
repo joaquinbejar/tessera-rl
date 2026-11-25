@@ -218,10 +218,11 @@ def native_cost(objects: dict[str, Cost]) -> Cost:
 _LIBC = re.compile(r"^(libc[.-]|libc\.so|libsystem_platform|ld-musl-)")
 # memcmp and bcmp count too (#583): fat LTO on musl turned Go9's superko
 # compare into memcmp calls. glibc's `__memcmpeq` is its bcmp-style compare.
-# glibc's internal `__GI_` aliases count too (#498): on aarch64 glibc 2.28,
-# `_native` calls `__GI_memset` and `__GI_memcpy` directly. No x86 archive
-# (glibc or musl) names one, so x86 charges are unchanged.
-_PRIMITIVE = re.compile(r"^(_platform_)?(__GI_|__)?(mem(set|cpy|move|cmp(eq)?)|bzero|bcmp)(\b|_|@|$)")
+# glibc's internal `__GI_` aliases of memset, memcpy, memmove and memcmp count
+# too (#498): on aarch64 glibc 2.28, `_native` calls `__GI_memset` and
+# `__GI_memcpy` directly. Only those four, never a blanket `__GI_`. No archived
+# x86 Callgrind file names one, so x86 charges are unchanged.
+_PRIMITIVE = re.compile(r"^((_platform_)?(__)?(mem(set|cpy|move|cmp(eq)?)|bzero|bcmp)|__GI_mem(set|cpy|move|cmp))(\b|_|@|$)")
 # Callgrind's name for a function without a symbol (a stripped libc, such as
 # musl 1.2.5 in the musllinux_1_2 image), with an optional recursion suffix.
 _ADDRESS = re.compile(r"^(0x[0-9a-fA-F]+)('\d+)?$")
