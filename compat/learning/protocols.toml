@@ -81,11 +81,11 @@ hyper = {}
 # collected, terminated when all are, truncated at the step cap. Its Dict
 # observation (agent, the items Set and its mask) goes through the T1
 # flattening. CleanRL defaults and the T1 budget, pre-declared (no tuning
-# loop). No calibration, so no nightly gate: it does not learn at these
-# defaults. With #564's _FlatVector fix it trains cleanly, but on the 40
-# calibration seeds its median is 1.05 items against 4.55 for a random policy
-# (all 40 seeds at or below random; lower95 of the gap -4.25, required
-# +0.345). Before the fix the pilot crashed instead.
+# loop). No calibration, so no nightly gate: it scores below random, a
+# suspected trainer or adapter fault (#593). With #564's _FlatVector fix it
+# trains without crashing, but on the 40 calibration seeds its median is 1.05
+# items against 4.55 for a random policy (all 40 seeds at or below random),
+# which points at the pipeline rather than the task.
 [gather]
 env = "tessera/Gather-v1"
 tier = "T1"
