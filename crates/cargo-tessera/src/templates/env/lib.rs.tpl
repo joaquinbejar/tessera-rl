@@ -111,6 +111,8 @@ fn slot(i: usize) -> Option<AgentSlot> {
 
 /// The phase of `counter`.
 const fn phase_of(cfg: &CounterConfig, counter: u32) -> Phase {
+    // The counter is at most the target (100_000), so doubling it cannot
+    // overflow.
     if counter.saturating_mul(2) < cfg.target {
         Phase::Opening
     } else {
@@ -198,10 +200,12 @@ impl Environment for Counter {
                 .and_then(|a| u32::try_from(a).ok())
                 .filter(|&a| legal(cfg, s, a))
                 .unwrap_or(0);
+            // Bounded by the target: `legal` kept the sum at or below it.
             s.counter = s.counter.saturating_add(add);
             out.set_reward(agent, f32::from(u8::try_from(add).unwrap_or(0)));
         }
 {{#sequential}}
+        // The turn is below AGENTS, so adding one cannot overflow.
         let next = usize::from(s.turn).saturating_add(1) % AGENTS;
         s.turn = u16::try_from(next).unwrap_or(0);
 {{/sequential}}

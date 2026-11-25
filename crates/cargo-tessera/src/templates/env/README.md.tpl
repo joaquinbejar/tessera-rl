@@ -23,6 +23,13 @@ default `--kind host`, ADR-0062).
 | `tests/check.rs` | The checks and the golden hashes (`tests/golden.json`). |
 | `benches/step.rs` | The criterion bench. |
 
+The transition kernel in `src/lib.rs` uses `saturating_*` arithmetic only
+where the game's rules bound the value, and a comment at each call states
+the bound (the counter never exceeds the target, the step count never
+exceeds the episode length). Keep that rule when you replace the game: a
+saturating call needs a documented bound, never a silent clamp, and
+checked arithmetic belongs outside the kernel.
+
 ## Dependencies
 
 {{#path_deps}}
