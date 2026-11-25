@@ -49,7 +49,7 @@ reviewed tree: the frozen SHA.
 - [ ] Scan of the tracked files and the history for internal hostnames, IP
       addresses, local paths and private service names, each finding
       classified. Decided for 0.1.0: the short runner and machine names
-      (`xaskar`, `swarmer02`, `m4-linux-arm64`, `m4`, `Studio`) stay; they
+      (the self-hosted runner labels and short host names) stay; they
       carry no domain or address. Anything else found stops the release.
 
 ## 3. Packages
@@ -175,7 +175,7 @@ Before the repository is made public:
       request from a fork that leaves the workflow unchanged (see the CI
       note below).
 - [ ] The persistence and host credentials of the three self-hosted
-      runners (xaskar, m4-linux-arm64, m4) have been reviewed: what a job
+      runners (the x86-64 one and the two M4 ones) have been reviewed: what a job
       can reach on each host, and what it can leave behind.
 - [ ] Decided for 0.1.0: the specification, the ADRs and the agent notes
       stay out of the repository. The CHANGELOG states that code, comments

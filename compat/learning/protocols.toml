@@ -61,7 +61,7 @@ total_steps = 1000000
 hyper = { num_envs = 16, num_steps = 16, gae_lambda = 0.98, update_epochs = 4, ent_coef = 0.0, num_minibatches = 4 }
 
 # No calibration, so no nightly gate (#370, decided): at these CleanRL
-# defaults the xaskar calibration was degenerate (-0.9 on every seed).
+# defaults the x86-64 host calibration was degenerate (-0.9 on every seed).
 [grid]
 env = "tessera/Grid-v1"
 tier = "T1"
@@ -155,7 +155,7 @@ eval_episodes = 10
 # evaluation splits ``eval_episodes`` evenly over them. ``score``: "sign"
 # scores an episode +1, 0 or -1 from the learner's seat; "return" uses the
 # return. ``total_steps`` counts the learner's own turns. The thresholds are
-# in gates.toml. Calibrated on xaskar (#370, 10 seeds, threshold = their
+# in gates.toml. Calibrated on the x86-64 host (#370, 10 seeds, threshold = their
 # minimum): connect4, othello, go9 and tag learn and run nightly. The nightly
 # gates "learns" (both thresholds: closing part of the gap from uniform play
 # towards the heuristic, and beating uniform play), not "beats the heuristic":

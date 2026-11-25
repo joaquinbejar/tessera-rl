@@ -342,7 +342,7 @@ bench-quick:
 
 # The full ADR-0042 calibration of the ported P2-G1 bot, including the
 # games against the perfect solver (about a minute with 14 threads,
-# a few minutes on xaskar). Not in pre-push; run it on any change to
+# a few minutes on the x86-64 CI host). Not in pre-push; run it on any change to
 # tessera-rl-games/src/connect4/bot.rs or board.rs.
 connect4-calibration:
 	cargo test --release --locked -p tessera-rl-games --test bot -- --include-ignored

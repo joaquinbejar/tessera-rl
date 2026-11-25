@@ -40,7 +40,7 @@ Results are win/draw/loss for the bot.
 It passed on these platforms:
 - macOS arm64;
 - Linux arm64;
-- Linux x86-64 (xaskar, in the pinned `rust:1.99.1` image).
+- Linux x86-64 (the x86-64 CI host, in the pinned `rust:1.99.1` image).
 
 Windows is pending, as M1b debt.
 

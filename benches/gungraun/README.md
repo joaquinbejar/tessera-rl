@@ -79,7 +79,7 @@ reported as a regression. The recorded environment is:
   every optional x86 feature and preferred-string flag glibc dispatches on
   and fixes the cache sizes and copy thresholds. glibc then runs its x86-64
   base (`sse2_unaligned`) variants on any x86-64 CPU. The validation on
-  xaskar, in the PR, shows:
+  the x86-64 CI host, in the PR, shows:
   - without the pin the counts differ;
   - masking even more features changes no count;
   - with the pin the counts are stable.
