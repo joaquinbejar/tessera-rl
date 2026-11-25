@@ -78,7 +78,9 @@ trainer spans a running half. Rows
 returned by ``recv`` stay valid until that half's next ``send``. Interrupted while
 waiting, a ``recv`` can be called again and returns the same half. There is no
 ``step`` and no ``terminal_observations``, as the wrapper's half does not carry
-them. With adaptive state a half reads a context two cycles old; CartPole
+them. A policy map's heuristic slots are hidden as in Sync mode (#558): a half's
+rows are its visible slots only, copied into arrays the env owns, and ``send``
+takes one action per visible slot. With adaptive state a half reads a context two cycles old; CartPole
 and Tag have none. No speed gain has been measured; the mode exists so that
 workers step one half while the learner infers on the other.
 
@@ -508,10 +510,27 @@ class TesseraPufferPipelinedEnv(TesseraPufferEnv):
             raise _native.ArgumentError(
                 f"Pipelined needs equal halves, these have {len(first)} and {len(second)} instances"
             )
-        self._half_agents = len(first) * self._agents
+        #: Instances per half; rows PufferLib sees per half (visible slots), and
+        #: the engine's rows per half (every slot).
+        self._half_instances = len(first)
+        self._half_agents = self._half_instances * self._row_agents
+        self._half_engine_rows = self._half_instances * self._agents
         self._half_masks = np.ones(self._half_agents, dtype=bool)
         # One buffer per half, so a half's rows stay valid until its own next send.
         self._half_flat: dict = {}
+        #: With hidden slots, each half's gathered rows, allocated once here:
+        #: `(obs, rewards, terminals, truncations, masks)` per half index.
+        self._half_rows: dict = {}
+        if self._visible is not None:
+            shape = self.single_observation_space.shape
+            for index in (0, 1):
+                self._half_rows[index] = (
+                    np.zeros((self._half_agents, *shape), dtype=self.single_observation_space.dtype),
+                    np.zeros(self._half_agents, dtype=np.float32),
+                    np.zeros(self._half_agents, dtype=bool),
+                    np.zeros(self._half_agents, dtype=bool),
+                    np.zeros((self._half_agents, self.single_action_space.n), dtype=bool),
+                )
         self._queue: list = []
         self._current: int | None = None
         self.observations = self.rewards = self.terminals = self.truncations = None
@@ -536,18 +555,40 @@ class TesseraPufferPipelinedEnv(TesseraPufferEnv):
         raise _native.ArgumentError("terminal_observations is not available in Pipelined mode")
 
     def _flat(self, half) -> tuple:
-        n = self._half_agents
         out = half.step
-        return (
-            self._obs_view(out.observations, n, self._half_flat_for(half.half)),
-            out.rewards.reshape(n),
-            out.agent_terminated.reshape(n),
-            out.agent_truncated.reshape(n),
-        )
+        if self._visible is None:
+            n = self._half_agents
+            return (
+                self._obs_view(out.observations, n, self._half_flat_for(half.half)),
+                out.rewards.reshape(n),
+                out.agent_terminated.reshape(n),
+                out.agent_truncated.reshape(n),
+            )
+        # Hidden slots: every engine row, then the visible slots, copied into
+        # this half's own arrays (#558), as the Sync env does.
+        h, shape = self._half_instances, self.single_observation_space.shape
+        obs = self._obs_view(out.observations, self._half_engine_rows, self._half_flat_for(half.half))
+        rows = self._half_rows[half.half]
+        rows[0][:] = self._gather(obs.reshape((h, self._agents, *shape))).reshape(rows[0].shape)
+        rows[1][:] = self._gather(out.rewards.reshape((h, self._agents))).reshape(-1)
+        rows[2][:] = self._gather(out.agent_terminated.reshape((h, self._agents))).reshape(-1)
+        rows[3][:] = self._gather(out.agent_truncated.reshape((h, self._agents))).reshape(-1)
+        return rows[:4]
+
+    def _half_masks_of(self, half) -> np.ndarray | None:
+        """The half's action masks, `(half agents, choices)`, visible slots only."""
+        masks = half.step.masks
+        if masks is None:
+            return None
+        if self._visible is None:
+            return masks.reshape((self._half_agents, -1))
+        dst = self._half_rows[half.half][4]
+        dst[:] = self._gather(masks.reshape((self._half_instances, self._agents, -1))).reshape(dst.shape)
+        return dst
 
     def _half_flat_for(self, index):
         if index not in self._half_flat:
-            self._half_flat[index] = self._new_flat(self._half_agents)
+            self._half_flat[index] = self._new_flat(self._half_engine_rows)
         return self._half_flat[index]
 
     def reset(self, seed: int | None = None):
@@ -578,6 +619,11 @@ class TesseraPufferPipelinedEnv(TesseraPufferEnv):
         self._require_reset("send")
         if self._current is None:
             raise _native.ArgumentError("send without a half: call recv first")
+        if self._visible is not None:
+            # The hidden slots' rows are never read: the engine computes them.
+            full = np.zeros((self._half_instances, self._agents), dtype=np.int32)
+            full[:, self._visible] = np.asarray(actions).reshape((self._half_instances, self._row_agents))
+            actions = full
         self._env.send(self._current, actions)
         self._current = None
         self._masks = None
@@ -599,24 +645,25 @@ class TesseraPufferPipelinedEnv(TesseraPufferEnv):
         self.observations, self.rewards, self.terminals, self.truncations = self._flat(half)
         self._current = half.half
         ids = half.ids
-        self.agent_ids = np.arange(ids.start * self._agents, ids.stop * self._agents)
+        self.agent_ids = np.arange(ids.start * self._row_agents, ids.stop * self._row_agents)
         self.masks = self._half_masks
         out = half.step
-        if out.masks is not None:
-            self._masks = out.masks.reshape((self._half_agents, -1))
+        masks = self._half_masks_of(half)
+        if masks is not None:
+            self._masks = masks
         self.infos = self._log_half(ids, out) if sent and self._log_interval is not None else []
         return (self.observations, self.rewards, self.terminals, self.truncations,
                 self.infos, self.agent_ids, self.masks)  # fmt: skip
 
     def _log_half(self, ids, out) -> list:
-        rows = slice(ids.start * self._agents, ids.stop * self._agents)
+        rows = slice(ids.start * self._row_agents, ids.stop * self._row_agents)
         self._episode_return[rows] += self.rewards
         self._episode_length[rows] += 1
         self._tick += 1
         ended = out.episode_terminated | out.episode_truncated
         if ended.any():
             done = np.zeros(self.num_agents, dtype=bool)
-            done[rows] = np.repeat(ended, self._agents)
+            done[rows] = np.repeat(ended, self._row_agents)
             self._finished[0] += float(self._episode_return[done].sum())
             self._finished[1] += int(self._episode_length[done].sum())
             self._finished[2] += int(done.sum())
