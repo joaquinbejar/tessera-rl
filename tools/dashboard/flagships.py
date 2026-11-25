@@ -14,6 +14,11 @@ import status as st
 
 PAGE = "flagships.html"
 TITLE = "Tessera flagship benchmarks"
+# Scaling is k-worker Sync throughput over k times Inline, not over one
+# Sync worker (#640 review r1), so it carries the Sync overhead.
+SCALING = "efficiency vs k×Inline"
+# A configuration without ``illegal_action_noops`` (a file from before it).
+UNRECORDED = "not recorded"
 INTRO = (
     "Every flagship number of the admitted result files, valid or indicative. A row is a claim only when"
     " valid_for_claims is true, which needs a machine of reference status; every other row is indicative."
@@ -24,11 +29,6 @@ INTRO = (
 NONE = "No flagship result has been admitted yet."
 UNLISTED = "not in compat/machines.toml"
 EXACT = "exact (no CI)"
-# Scaling is k-worker Sync throughput over k times Inline, not over one
-# Sync worker (#640 review r1), so it carries the Sync overhead.
-SCALING = "efficiency vs k×Inline"
-# A configuration without ``illegal_action_noops`` (a file from before it).
-UNRECORDED = "not recorded"
 # Memory figures are exact counts, published without a CI.
 MEMORY_FIELDS = ("record_bytes_per_instance", "mask_bytes_per_step")
 COLUMNS = (
