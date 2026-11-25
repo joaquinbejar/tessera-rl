@@ -141,6 +141,51 @@ impl Gil<'_> {
     }
 }
 
+/// `Py_IsInitialized()` (direct: reads a process flag, callable without
+/// the interpreter; runs no Python code).
+#[must_use]
+pub(crate) fn interpreter_initialized() -> core::ffi::c_int {
+    // SAFETY: callable at any time, attached or not.
+    unsafe { ffi::Py_IsInitialized() }
+}
+
+/// The state of a re-entrant [`ensure`], for its [`release`].
+pub(crate) struct Ensured(ffi::PyGILState_STATE);
+
+/// `PyGILState_Ensure()` (direct: takes the interpreter on this thread, or
+/// keeps it if this thread holds it already; runs no Python code).
+///
+/// # Safety
+///
+/// The interpreter is initialized and not finalizing; the result goes to
+/// [`release`] on the same thread.
+pub(crate) unsafe fn ensure() -> Ensured {
+    // SAFETY: the caller's contract.
+    Ensured(unsafe { ffi::PyGILState_Ensure() })
+}
+
+/// `PyGILState_Release()` (direct: restores the thread state [`ensure`]
+/// found; runs no Python code).
+///
+/// # Safety
+///
+/// `state` is the result of an [`ensure`] on this thread, released once,
+/// innermost first.
+#[expect(clippy::needless_pass_by_value, reason = "the state is consumed")]
+pub(crate) unsafe fn release(state: Ensured) {
+    // SAFETY: the caller's contract.
+    unsafe { ffi::PyGILState_Release(state.0) };
+}
+
+/// A new strong reference to `r` (direct: an incref runs no Python code),
+/// released by the caller exactly once.
+#[must_use]
+pub(crate) fn new_strong(_g: Gil<'_>, r: Ref<'_>) -> NonNull<ffi::PyObject> {
+    // SAFETY: attached (the token) and a live object.
+    unsafe { ffi::Py_IncRef(r.as_ptr()) };
+    r.0
+}
+
 /// An exception is set (the C-API failure convention).
 ///
 /// Only this crate makes one, where an exception was just set:

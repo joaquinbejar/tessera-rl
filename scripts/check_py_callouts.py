@@ -56,6 +56,9 @@ ALLOWED = {
     "PyType_GenericAlloc", "PyType_GetSlot",
     "PyCapsule_New", "PyCapsule_IsValid", "PyCapsule_GetPointer",
     "PyType_Check", "PyType_IsSubtype", "PyErr_ExceptionMatches",
+    # Thread-state handling of the output allocators' releases (#354):
+    # they read a flag or swap thread states, and run no Python code.
+    "Py_IsInitialized", "PyGILState_Ensure", "PyGILState_Release",
 }
 
 # Functions that can run Python code: callouts only (GC-tracked

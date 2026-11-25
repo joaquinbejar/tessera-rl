@@ -53,14 +53,11 @@ unsafe impl Sync for Held {}
 
 impl Held {
     /// A new strong reference to `obj`.
-    fn new(_g: Gil<'_>, obj: Ref<'_>, wait_on_drop: bool) -> Self {
-        let ptr = obj.as_ptr();
-        // SAFETY: attached (the token) and a live object; an incref runs
-        // no Python code.
-        unsafe { ffi::Py_IncRef(ptr) };
-        // A live object is never null; `Ref` holds a non-null pointer.
-        let obj = NonNull::new(ptr).unwrap_or(NonNull::dangling());
-        Self { obj, wait_on_drop }
+    fn new(g: Gil<'_>, obj: Ref<'_>, wait_on_drop: bool) -> Self {
+        Self {
+            obj: capi::new_strong(g, obj),
+            wait_on_drop,
+        }
     }
 
     /// A borrowed reference, for as long as `self`.
@@ -110,19 +107,19 @@ fn wait_for(g: Gil<'_>, held: &Held) {
 /// finalization): `f` does not run.
 fn with_interpreter<R>(f: impl FnOnce(Gil<'_>) -> R) -> Option<R> {
     // SAFETY: reads a process flag; callable without the interpreter.
-    if unsafe { ffi::Py_IsInitialized() } == 0 {
+    if !may_enter(capi::interpreter_initialized()) {
         return None;
     }
-    // SAFETY: the interpreter is initialized; the re-entrant ensure takes
-    // it on this thread, or keeps it if this thread holds it already.
-    let state = unsafe { ffi::PyGILState_Ensure() };
+    // SAFETY: the interpreter is initialized (a release during
+    // finalization is the documented exception); released below.
+    let state = unsafe { capi::ensure() };
     // SAFETY: attached until the release below; the token stays inside.
     let g = unsafe { Gil::assume() };
     let pending = capi::fetch_pending(g);
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(g)));
     capi::put_back_pending(g, pending);
     // SAFETY: the matching release of the ensure above, on the same thread.
-    unsafe { ffi::PyGILState_Release(state) };
+    unsafe { capi::release(state) };
     match result {
         Ok(r) => Some(r),
         Err(payload) => {
@@ -132,11 +129,46 @@ fn with_interpreter<R>(f: impl FnOnce(Gil<'_>) -> R) -> Option<R> {
     }
 }
 
+std::thread_local! {
+    /// The message of the exception the last `allocate` on this thread
+    /// raised; the engine's `OutputAllocation` cannot carry it, so the
+    /// bindings append it to the error they raise (construction runs on the
+    /// caller's thread).
+    static LAST_ERROR: core::cell::RefCell<Option<String>> = const { core::cell::RefCell::new(None) };
+}
+
+/// Records the message of the exception `raised` proves is set; it stays
+/// set (the caller restores the indicator it found).
+fn remember_error(g: Gil<'_>, raised: capi::Raised) {
+    #[cfg(any(feature = "native-module", feature = "host"))]
+    let message = capi::pending_message(g, raised).0;
+    #[cfg(not(any(feature = "native-module", feature = "host")))]
+    let message = {
+        let _ = (g, raised);
+        String::from("an exception")
+    };
+    LAST_ERROR.with(|e| *e.borrow_mut() = Some(message));
+}
+
+/// Takes the message of the exception the last `allocate` on this thread
+/// raised, if any.
+#[must_use]
+pub fn take_allocation_error() -> Option<String> {
+    LAST_ERROR.with(|e| e.borrow_mut().take())
+}
+
+/// Whether a release may enter the interpreter: only while it is
+/// initialized (`Py_IsInitialized`); otherwise the owner leaks.
+const fn may_enter(initialized: core::ffi::c_int) -> bool {
+    initialized != 0
+}
+
 /// A Python allocator as an engine [`OutputAllocator`].
 struct PyAllocator(Held);
 
 impl OutputAllocator for PyAllocator {
     fn allocate(&self, len: usize, align: usize) -> Option<ExternalAlloc> {
+        let _ = take_allocation_error();
         with_interpreter(|g| allocate_in(g, &self.0, len, align)).flatten()
     }
 }
@@ -150,7 +182,13 @@ fn allocate_in(g: Gil<'_>, allocator: &Held, len: usize, align: usize) -> Option
     let len_obj = capi::int_u64(g, u64::try_from(len).ok()?).ok()?;
     let align_obj = capi::int_u64(g, u64::try_from(align).ok()?).ok()?;
     let args = capi::tuple(g, vec![len_obj, align_obj]).ok()?;
-    let out = capi::call(g, method.as_ref(), &args).ok()?;
+    let out = match capi::call(g, method.as_ref(), &args) {
+        Ok(out) => out,
+        Err(raised) => {
+            remember_error(g, raised);
+            return None;
+        }
+    };
     let items = capi::tuple_items(g, out.as_ref(), "allocate's result").ok()?;
     let [address, owner] = items.as_slice() else {
         return None;
@@ -175,7 +213,24 @@ pub fn output_allocator(g: Gil<'_>, allocator: Ref<'_>) -> Arc<dyn OutputAllocat
     Arc::new(PyAllocator(Held::new(g, allocator, false)))
 }
 
-// No Rust unit tests here: every path calls into libpython, which a
-// workspace build with `pyo3/extension-module` (the wheel's feature) does
-// not link into test binaries. tests/python/test_device.py covers the
-// adoption, the refusals, the owner's wait and its release.
+// Only the libpython-free decision is unit tested here: a workspace build
+// with `pyo3/extension-module` links no libpython into test binaries.
+// tests/python/test_device.py covers adoption, refusals, the owner's wait
+// and its release; the leak after finalization is not exercised.
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_may_enter_uninitialized_interpreter_false() {
+        assert!(!may_enter(0));
+        assert!(may_enter(1));
+    }
+
+    #[test]
+    fn test_take_allocation_error_takes_once() {
+        LAST_ERROR.with(|e| *e.borrow_mut() = Some("boom".to_owned()));
+        assert_eq!(take_allocation_error().as_deref(), Some("boom"));
+        assert_eq!(take_allocation_error(), None);
+    }
+}

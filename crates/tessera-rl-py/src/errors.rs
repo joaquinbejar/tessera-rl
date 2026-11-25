@@ -13,6 +13,14 @@ pub(crate) use tessera_rl_pyffi::errors::{Kind, error, register};
 /// Raises the Python exception for `e`.
 pub(crate) fn to_py(g: Gil, e: BindError) -> Raised {
     match e {
+        BindError::Engine(e @ tessera_rl_engine::EngineError::OutputAllocation { .. }) => {
+            // The Python allocator's own exception, if it raised one.
+            let message = match tessera_rl_pyffi::ffi::alloc::take_allocation_error() {
+                Some(cause) => format!("{e}: allocate raised {cause}"),
+                None => e.to_string(),
+            };
+            error(g, engine_kind(&e), message)
+        }
         BindError::Engine(e) => error(g, engine_kind(&e), e.to_string()),
         BindError::Decode(e) => error(g, Kind::Record, e.to_string()),
         BindError::Argument(message) => error(g, Kind::Argument, message),
