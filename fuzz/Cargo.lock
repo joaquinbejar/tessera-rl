@@ -251,6 +251,7 @@ dependencies = [
  "libc",
  "tessera-rl-core",
  "tessera-rl-num",
+ "tessera-rl-simd",
  "thiserror",
  "tracing",
  "windows-sys",
