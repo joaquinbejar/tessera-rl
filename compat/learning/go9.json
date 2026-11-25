@@ -20,10 +20,10 @@
     "env": "tessera/Go9-v1",
     "total_steps": 2000000,
     "eval_episodes": 50,
-    "fingerprint": "093184d207ce689ecb0a7e16a1ae32b4870a141227d93337ac90b8171fa230c2"
+    "fingerprint": "3d380e2daec00d48f7bee0495f3c4eedd6e13fe649ef39148775ec864d74d712"
   },
   "environment": {
-    "git": "5b878316465aca0769c86e41e03c05b7b394c943",
+    "git": "ced469f5e61f3e312bcd70e1a8a03762328af979",
     "git_dirty": false,
     "python": "3.11.18",
     "os": "Linux-7.0.0-38-generic-x86_64-with-glibc2.43",

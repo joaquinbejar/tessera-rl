@@ -20,10 +20,10 @@
     "env": "tessera/Othello-v1",
     "total_steps": 1000000,
     "eval_episodes": 50,
-    "fingerprint": "899e148ccd11b2cb08edd7371463f460c60dc752570a6ca35d3cf8ee0de5c5e6"
+    "fingerprint": "d2657762eda7f35a9c6a3a7e054c4eef1936ee46cdd6533c0a20d464a4b7ab07"
   },
   "environment": {
-    "git": "5b878316465aca0769c86e41e03c05b7b394c943",
+    "git": "ced469f5e61f3e312bcd70e1a8a03762328af979",
     "git_dirty": false,
     "python": "3.11.18",
     "os": "Linux-7.0.0-38-generic-x86_64-with-glibc2.43",

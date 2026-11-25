@@ -3,8 +3,8 @@
 docs/reviews/370/DESIGN-T3b-r1.md, approved in REVIEW-T3b-r1): masked PPO
 for one learner against ADR-0079 heuristic slots, over the native ``Env``.
 
-The board games declare only PettingZoo AEC, which refuses
-``agents="learner"``, so this tier drives ``tessera_rl.make`` directly
+The board games declare only PettingZoo AEC, which refuses the learner
+filter (``visible="learner"``, #538), so this tier drives ``tessera_rl.make`` directly
 (``mode="sync"``, ``outputs="owned"``, ``auto_reset="same_step"``) with a
 ``policy_map`` that makes every slot but the learner's a heuristic. The PPO
 is learning_masked's (CleanRL ``ppo.py``, masked Categorical; its helpers
@@ -28,6 +28,12 @@ Rollout rules:
   end by their own rules, and a truncated one is scored as it stands.
 - The learner's observation is every leaf of its row, flattened in key
   order as float32.
+- Several discrete heads (``MultiDiscrete``, #571 for Survival-v1): a
+  factorized policy, one masked Categorical per head over that head's block
+  of the mask row (``Env.mask_heads``); an action's log-probability and
+  entropy are the sums over heads. A row is live when every head has a
+  legal choice. Conditional heads (a head with parents) are refused. One
+  head keeps learning_masked's agent and the single-head path unchanged.
 
 Seats: two-player protocols (``seats = [0, 1]``) put the learner in slot 0
 on even seeds and slot 1 on odd seeds, and evaluate half the episodes in
@@ -118,6 +124,105 @@ def uniform_legal(rng: np.random.Generator, mask: np.ndarray) -> int:
     return int(rng.choice(legal)) if legal.size else 0
 
 
+def action_heads(env) -> list[tuple[int, int]]:
+    """Each discrete head's ``(offset, choices)`` in an agent's mask row, in
+    head order, checked once (#571): no head has parents, and every block
+    lies inside the mask row. Without masks the blocks follow ``action_nvec``."""
+    nvec = tuple(env.action_nvec)
+    if not nvec:
+        raise ValueError(f"{env!r}: T3b needs discrete actions")
+    if not env.mask_heads:
+        offsets = np.concatenate(([0], np.cumsum(nvec)[:-1])).tolist()
+        return [(int(o), int(c)) for o, c in zip(offsets, nvec, strict=True)]
+    heads = []
+    for offset, parents, choices in env.mask_heads:
+        if parents:
+            raise ValueError(f"T3b refuses conditional action heads (head at {offset} has parents {parents})")
+        if offset < 0 or offset + choices > env._mask_len:
+            raise ValueError(f"the head at {offset} with {choices} choices lies outside the mask row of {env._mask_len}")
+        heads.append((int(offset), int(choices)))
+    if [c for _, c in heads] != list(nvec):
+        raise ValueError(f"mask heads {heads} do not match action_nvec {nvec}")
+    return heads
+
+
+def head_masks(mask: np.ndarray, heads: list[tuple[int, int]]) -> list[np.ndarray]:
+    """``mask``'s per-head blocks, ``[..., choices]`` each."""
+    return [mask[..., o : o + c] for o, c in heads]
+
+
+def live_heads(mask: np.ndarray, heads: list[tuple[int, int]]) -> np.ndarray:
+    """Rows where every head has at least one legal choice."""
+    return np.logical_and.reduce([m.any(-1) for m in head_masks(mask, heads)])
+
+
+def uniform_legal_heads(rng: np.random.Generator, mask: np.ndarray, heads: list[tuple[int, int]]) -> list[int]:
+    """One uniform legal choice per head, drawn in head order from ``rng``."""
+    return [uniform_legal(rng, m) for m in head_masks(mask, heads)]
+
+
+def _multihead_agent_class():
+    """The factorized masked agent for several heads (#571): learning_masked's
+    network shape, with an actor output of ``sum(choices)`` logits."""
+    import torch  # noqa: PLC0415
+    from torch import nn  # noqa: PLC0415
+    from torch.distributions.categorical import Categorical  # noqa: PLC0415
+
+    def layer(linear, std=float(np.sqrt(2)), bias=0.0):
+        nn.init.orthogonal_(linear.weight, std)
+        nn.init.constant_(linear.bias, bias)
+        return linear
+
+    class MultiHeadAgent(nn.Module):
+        def __init__(self, obs_dim: int, heads: list[tuple[int, int]]):
+            super().__init__()
+            self.heads = list(heads)
+            width = sum(c for _, c in heads)
+            self.critic = nn.Sequential(
+                layer(nn.Linear(obs_dim, 64)), nn.Tanh(),
+                layer(nn.Linear(64, 64)), nn.Tanh(),
+                layer(nn.Linear(64, 1), std=1.0),
+            )  # fmt: skip
+            self.actor = nn.Sequential(
+                layer(nn.Linear(obs_dim, 64)), nn.Tanh(),
+                layer(nn.Linear(64, 64)), nn.Tanh(),
+                layer(nn.Linear(64, width), std=0.01),
+            )  # fmt: skip
+
+        def value(self, x):
+            return self.critic(x)
+
+        def _blocks(self, t):
+            out, start = [], 0
+            for _, c in self.heads:
+                out.append(t[..., start : start + c])
+                start += c
+            return out
+
+        def act(self, x, mask, action=None):
+            """``mask`` is the concatenation of the heads' blocks. With
+            ``action`` given (the update), every row must be live: a head
+            with no legal choice would add a -inf log-probability."""
+            logits = self.actor(x)
+            parts = list(zip(self._blocks(logits), self._blocks(mask), strict=True))
+            if action is not None:
+                assert all(bool(m.any(-1).all()) for _, m in parts), "a row with a head that has no legal choice reached the update"
+            chosen, logp, ent = [], 0.0, 0.0
+            for h, (lg, m) in enumerate(parts):
+                dist = Categorical(logits=masked_logits(lg, m))
+                a = dist.sample() if action is None else action[..., h]
+                chosen.append(a)
+                logp = logp + dist.log_prob(a)
+                ent = ent + legal_entropy(lg, m)
+            return torch.stack(chosen, dim=-1), logp, ent, self.critic(x)
+
+        def greedy(self, x, mask):
+            logits = self.actor(x)
+            return torch.stack([greedy(lg, m) for lg, m in zip(self._blocks(logits), self._blocks(mask), strict=True)], dim=-1)
+
+    return MultiHeadAgent
+
+
 class Transitions:
     """Per-instance transition lists with the reward folding of the module
     docstring. Pure Python, so the bookkeeping is tested without torch."""
@@ -185,6 +290,20 @@ def _make(env_id: str, num_envs: int, seed: int, policy_map, kwargs: dict):
 def _actions(env, learner: int, learner_actions, opponent: str, step, rng) -> np.ndarray:
     """The full action array: the learner's row, zeros for heuristic rows,
     and uniform-legal rows for opponents played in Python."""
+    if len(env.action_nvec) > 1:
+        heads = action_heads(env)
+        width = sum(c for _, c in heads)
+        acts = np.zeros((env.num_envs, env.agents, len(heads)), dtype=np.int32)
+        acts[:, learner] = learner_actions
+        if opponent == "python":
+            for s in range(env.agents):
+                if s == learner:
+                    continue
+                m = slot_mask(step.masks, s, env.num_envs, width)
+                for i in range(env.num_envs):
+                    if step.acting[i, s]:
+                        acts[i, s] = uniform_legal_heads(rng, m[i], heads)
+        return acts
     acts = np.zeros((env.num_envs, env.agents), dtype=np.int32)
     acts[:, learner] = learner_actions
     if opponent == "python":
@@ -212,19 +331,13 @@ def truncation_bootstrap(terminated, truncated, terminal_values, gamma: float) -
 
 
 def terminal_obs(env, learner: int) -> np.ndarray:
-    """The learner's flattened terminal-observation rows of the last step:
-    ``Env._last_out["terminal_observations"]`` (the engine's final
-    observation of an instance that ended, before its same-step reset),
-    shaped as ``Step.observations``."""
-    out = env._last_out
-    if out is None or "terminal_observations" not in out:
-        raise RuntimeError("no terminal observations in the last step's outputs (same_step auto-reset needed)")
-    n, a = env.num_envs, env.agents
-    leaves = {}
-    for (name, dtype, shape), buf in zip(env._leaves, out["terminal_observations"], strict=True):
-        arr = np.asarray(buf) if env.outputs == "borrowed" else np.frombuffer(buf, dtype=dtype)
-        leaves[name] = np.array(arr).reshape((n, a, *shape))
-    return flat_obs(leaves, learner)
+    """The learner's flattened terminal-observation rows of the last step,
+    through the public ``Env.terminal_observations`` (#545): the engine's
+    final observation of an instance that ended, before its same-step
+    reset, shaped as ``Step.observations``. Its ``ArgumentError`` (no
+    same_step auto-reset, or no whole-pool step yet) propagates and stops
+    the run; there is no fallback."""
+    return flat_obs(env.terminal_observations, learner)
 
 
 def _check_stall(steps: int, batch: int, env_id: str, learner: int) -> None:
@@ -247,14 +360,16 @@ def train(env_id: str, kwargs: dict, seed: int, seats: list[int], h: TwoPlayerHy
     rng = np.random.default_rng(seed)
     probe = _make(env_id, 1, seed, None, kwargs)
     agents, n_actions = probe.agents, probe.action_choices
-    if len(probe.action_nvec) > 1:
-        raise ValueError(f"{env_id}: T3b runs one discrete head, not {probe.action_nvec}")
+    multi = len(probe.action_nvec) > 1
+    heads = action_heads(probe) if multi else None
+    if multi:
+        n_actions = sum(c for _, c in heads)
     probe.close()
     learner = learner_slot(seed, seats)
     env = _make(env_id, h.num_envs, seed, opponent_map(learner, agents, "heuristic"), kwargs)
     step = env.reset()
     obs = flat_obs(step.observations, learner)
-    agent = _agent_class()(obs.shape[1], n_actions)
+    agent = _multihead_agent_class()(obs.shape[1], heads) if multi else _agent_class()(obs.shape[1], n_actions)
     optimizer = torch.optim.Adam(agent.parameters(), lr=h.learning_rate, eps=1e-5)
     batch = h.num_envs * h.num_steps
     minibatch = max(1, batch // h.num_minibatches)
@@ -273,11 +388,11 @@ def train(env_id: str, kwargs: dict, seed: int, seats: list[int], h: TwoPlayerHy
             guard += 1
             _check_stall(guard, batch, env_id, learner)
             mask = slot_mask(step.masks, learner, h.num_envs, n_actions)
-            acting = np.asarray(step.acting[:, learner], dtype=bool) & mask.any(-1)
+            acting = np.asarray(step.acting[:, learner], dtype=bool) & (live_heads(mask, heads) if multi else mask.any(-1))
             x = torch.as_tensor(obs)
             with torch.no_grad():
                 a, logp, _, v = agent.act(x, torch.as_tensor(mask))
-            a = torch.where(torch.as_tensor(acting), a, torch.zeros_like(a))
+            a = torch.where(torch.as_tensor(acting).view(-1, *([1] * (a.dim() - 1))), a, torch.zeros_like(a))
             out = env.step(_actions(env, learner, a.numpy().astype(np.int32), "heuristic", step, rng))
             rew = np.asarray(out.rewards[:, learner], dtype=np.float64)
             term = np.asarray(out.episode_terminated, dtype=bool)
@@ -292,7 +407,8 @@ def train(env_id: str, kwargs: dict, seed: int, seats: list[int], h: TwoPlayerHy
             for i in range(h.num_envs):
                 item = None
                 if acting[i]:
-                    item = {"obs": obs[i].copy(), "mask": mask[i].copy(), "action": int(a[i]), "logprob": float(logp[i]), "value": float(v[i, 0])}
+                    action = [int(x) for x in a[i]] if multi else int(a[i])
+                    item = {"obs": obs[i].copy(), "mask": mask[i].copy(), "action": action, "logprob": float(logp[i]), "value": float(v[i, 0])}
                 buf.record(i, bool(acting[i]), rew[i], bool(done[i]), item)
                 totals[i] += rew[i]
                 if done[i]:
@@ -321,7 +437,11 @@ def train(env_id: str, kwargs: dict, seed: int, seats: list[int], h: TwoPlayerHy
         for _ in range(h.update_epochs):
             order = rng.permutation(size)
             for start in range(0, size, minibatch):
-                idx = live_rows(torch.as_tensor(order[start : start + minibatch]), b_masks)
+                rows_ = torch.as_tensor(order[start : start + minibatch])
+                if multi:
+                    idx = rows_[torch.as_tensor(live_heads(b_masks[rows_].numpy(), heads))]
+                else:
+                    idx = live_rows(rows_, b_masks)
                 if idx.numel() == 0:
                     continue
                 _, newlogprob, entropy, newvalue = agent.act(b_obs[idx], b_masks[idx], b_actions[idx])
@@ -360,6 +480,9 @@ def openings(env_id: str, kwargs: dict, episodes: int, seed_base: int, plies: in
     if plies <= 0:
         return [None] * episodes, 0
     env = _make(env_id, 1, seed_base, None, kwargs)
+    if len(env.action_nvec) > 1:
+        env.close()
+        raise ValueError(f"{env_id}: randomized openings support one discrete head")
     n_actions = env.action_choices
     records: list[bytes | None] = []
     skipped = 0
@@ -423,6 +546,10 @@ def eval_scores(env_id: str, kwargs: dict, seats: list[int], player: str, oppone
     for seat, count in zip(seats, per_seat, strict=True):
         probe = _make(env_id, 1, seed_base, None, kwargs)
         agents, n_actions = probe.agents, probe.action_choices
+        multi = len(probe.action_nvec) > 1
+        heads = action_heads(probe) if multi else None
+        if multi:
+            n_actions = sum(c for _, c in heads)
         probe.close()
         mode = "self" if player == "heuristic" else ("heuristic" if opponent == "heuristic" else "python")
         env = _make(env_id, 1, seed_base, opponent_map(seat, agents, mode), kwargs)
@@ -442,14 +569,17 @@ def eval_scores(env_id: str, kwargs: dict, seats: list[int], player: str, oppone
             total, done = 0.0, False
             while not done:
                 mask = slot_mask(step.masks, seat, 1, n_actions)
-                acts = 0
+                acts = [0] * len(heads) if multi else 0
                 if step.acting[0, seat] and player == "trained":
                     with torch.no_grad():
-                        logits = agent.actor(torch.as_tensor(flat_obs(step.observations, seat)))
-                    acts = int(greedy(logits, torch.as_tensor(mask))[0])
+                        x = torch.as_tensor(flat_obs(step.observations, seat))
+                        if multi:
+                            acts = [int(v) for v in agent.greedy(x, torch.as_tensor(mask))[0]]
+                        else:
+                            acts = int(greedy(agent.actor(x), torch.as_tensor(mask))[0])
                 elif step.acting[0, seat] and player == "uniform":
-                    acts = uniform_legal(rng, mask[0])
-                moves.update(np.asarray([acts], dtype=np.int64).tobytes())
+                    acts = uniform_legal_heads(rng, mask[0], heads) if multi else uniform_legal(rng, mask[0])
+                moves.update(np.asarray(acts if multi else [acts], dtype=np.int64).tobytes())
                 step = env.step(_actions(env, seat, np.asarray([acts], dtype=np.int32), "python" if mode == "python" else "heuristic", step, rng))
                 if env.heuristic_actions is not None:
                     moves.update(np.ascontiguousarray(env.heuristic_actions).tobytes())
