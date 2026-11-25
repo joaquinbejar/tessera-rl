@@ -359,3 +359,47 @@ def test_device_allocator_source_picks_the_containing_allocation():
     assert alloc.source(a, 16).tobytes() == bytes(16)
     with pytest.raises(tessera_rl.TesseraError, match="outside"):
         alloc.source(b + 32768 - 8, 16)
+
+
+def test_device_allocator_exception_kept_in_config_error():
+    class Raising:
+        def allocate(self, length, align):
+            raise RuntimeError("pinned pool exhausted")
+
+    with pytest.raises(tessera_rl.ConfigError, match=r"allocate raised pinned pool exhausted"):
+        tessera_rl.make(CARTPOLE, num_envs=2, workers=0, output_allocator=Raising())
+    # The message is taken once: a later refusal does not repeat it.
+    with pytest.raises(tessera_rl.ConfigError) as info:
+        tessera_rl.make(CARTPOLE, num_envs=2, workers=0, output_allocator=NumpyAllocator(misalign=64))
+    assert "allocate raised" not in str(info.value)
+
+
+def test_device_gym_adapter_refused():
+    from tessera_rl import gym as tgym
+
+    with pytest.raises(tessera_rl.CapabilityError, match="Gymnasium adapter"):
+        tgym.make(CARTPOLE, num_envs=2, device="cuda:0")
+
+
+def test_device_pz_adapter_refused():
+    from tessera_rl import pz
+
+    with pytest.raises(tessera_rl.CapabilityError, match="PettingZoo adapter"):
+        pz.parallel_env("tessera/Tag-v1", device="cuda:0")
+
+
+def test_device_puffer_adapter_refused(tmp_path):
+    # PufferLib is not in this environment's lock: a stand-in module with a
+    # PufferEnv base is enough to reach the adapter's constructor.
+    code = (
+        "import sys, types\n"
+        "m = types.ModuleType('pufferlib'); m.PufferEnv = type('PufferEnv', (), {}); sys.modules['pufferlib'] = m\n"
+        "import tessera_rl\nfrom tessera_rl import puffer\n"
+        "try:\n"
+        "    puffer.TesseraPufferEnv('tessera/CartPole-v1', num_envs=2, device='cuda:0')\n"
+        "except tessera_rl.CapabilityError as e:\n"
+        "    print('refused:', e)\n"
+    )
+    p = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, cwd=tmp_path, timeout=120, check=False)
+    assert p.returncode == 0, p.stderr
+    assert "refused: device= is not supported by the PufferLib adapter" in p.stdout
