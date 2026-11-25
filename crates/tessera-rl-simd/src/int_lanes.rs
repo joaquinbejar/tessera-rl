@@ -2,7 +2,7 @@
 
 //! The `i32` and `Fx32` lane types (ADR-0090 decision 5, stage 2). As in
 //! [`crate::lanes`], each type is private, and a value exists only inside
-//! [`LaneKernel::run`](crate::LaneKernel::run), entered through a `run_*`
+//! [`LaneKernel::run`], entered through a `run_*`
 //! function after the level's features were detected: that is what makes
 //! the intrinsic calls below sound.
 //!

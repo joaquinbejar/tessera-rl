@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! The lane types. Each is private: a value exists only inside
-//! [`Kernel::run`](crate::Kernel::run), entered through a `run_*` function
+//! [`Kernel::run`], entered through a `run_*` function
 //! after the level's features were detected, which is what makes the
 //! intrinsic calls below sound.
 //!
