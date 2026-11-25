@@ -271,8 +271,16 @@ total_steps = 500000
 hyper = {}
 env_kwargs = { customers = 20, vehicles = 1 }
 
-# tessera/Survival-v1 (#382 stage 4): listed only, with no calibration and no
-# gate (#618 calibrates it, a timing pilot first). The calibration must keep:
+# tessera/Survival-v1 (#382 stage 4): T3b-calibrated on the nightly host
+# (#618, main 4c30d5bd, seeds 101..110): learns false, so no calibration file,
+# no gate and no nightly job. vs_heuristic median 459.7 (453.3 to 463.85)
+# against 465.3 for a uniform-legal learner, every seed below it; the 95%
+# interval of trained minus uniform is [-9.03, -3.23] against +1.02 required.
+# The other 30 seeds trained in the same run (111..140) score 451.15 to 464.3,
+# also below uniform, so all 40 seeds are.
+# A narrow ceiling: uniform play already survives about 464 of 512 steps.
+# Changing the score, evaluation or budget after this result would be a new,
+# pre-declared protocol, not a tuning loop. The protocol keeps:
 # - learner seat: slot 0 (`seats`); every other slot is a heuristic slot
 #   (the scripted baseline, an InfoHeuristic from its own window);
 # - agent count and config: `env_kwargs` (32 agents on a 48x48 map, respawn
