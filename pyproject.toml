@@ -70,6 +70,7 @@ conformance = [
 markers = [
     "torch: needs PyTorch (the `torch` dependency group)",
     "jax: needs JAX (the `jax` dependency group)",
+    "gpu: needs a CUDA device and torch with CUDA (skipped without)",
 ]
 # Gymnasium's env checker warns about the infinite velocity bounds of
 # CartPole's observation space; it warns identically for Gymnasium's own

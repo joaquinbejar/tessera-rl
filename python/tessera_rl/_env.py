@@ -963,6 +963,9 @@ def native_kwargs(**kwargs) -> dict:
     for key, value in kwargs.items():
         if value is None:
             out[key] = None
+        elif key == "output_allocator":
+            # An output allocator object (`tessera_rl._cuda`), passed as is.
+            out[key] = value
         elif key == "policy_map":
             out[key] = _policy_map(value)
         elif key == "league":
@@ -1034,6 +1037,7 @@ def make(
     num_envs: int = 1,
     seed: int = 0,
     outputs: str = "borrowed",
+    device: str | None = None,
     *,
     onnx_opponents=None,
     **kwargs,
@@ -1121,6 +1125,17 @@ def make(
     third-party wheels (the ``tessera_rl.envs`` entry points, read once per
     process: restart after installing a wheel) and returns a ``HostEnv``.
     Host environments run in ``mode="sync"`` only.
+
+    ``device="cuda:N"`` returns the outputs as tensors on that CUDA device:
+    the pool writes them into pinned host memory and each call copies them
+    asynchronously to the device (see ``tessera_rl._cuda``). It needs
+    ``torch`` with CUDA, else ``CapabilityError``; there is no silent
+    fallback. It works in ``mode="sync"`` (the copy overlaps your work
+    between calls) and ``mode="pipelined"`` (one half's copy overlaps the
+    other half's step), with ``outputs="borrowed"``; ``mode="async"`` and
+    host environments raise ``CapabilityError``. ``env.host_outputs()``
+    returns the host arrays of the last result. Without ``device``,
+    nothing changes and ``torch`` is not imported.
     """
     _envs.warn_if_deprecated(env_id)
     makers = {
@@ -1148,9 +1163,13 @@ def make(
     }
     maker = makers.get(env_id)
     opponents = onnx_opponents
+    # A test backend for the device path (no CUDA needed); not public.
+    backend = kwargs.pop("_device_backend", None)
     if maker is None:
         if opponents is not None:
             raise _native.CapabilityError("host environments have no in-engine league opponents (onnx_opponents=)")
+        if device is not None:
+            raise _native.CapabilityError("device= is not supported for host environments")
         # A host environment of an installed third-party wheel (SPEC 14.4.1).
         from tessera_rl import _host
 
@@ -1165,7 +1184,19 @@ def make(
         if not isinstance(opponents, OnnxOpponents):
             raise TypeError(f"onnx_opponents must be a tessera_rl.search.OnnxOpponents, got {type(opponents).__name__}")
         extra = opponents._native_kwargs()
-    env = Env(maker(**native_kwargs(num_envs=num_envs, seed=seed, outputs=outputs, **native), **extra), mode, indexed)
+    if device is not None:
+        from tessera_rl import _cuda
+
+        env: Env = _cuda.make(
+            maker,
+            {**native_kwargs(num_envs=num_envs, seed=seed, outputs=outputs, **native), **extra},
+            mode,
+            indexed,
+            device,
+            backend,
+        )
+    else:
+        env = Env(maker(**native_kwargs(num_envs=num_envs, seed=seed, outputs=outputs, **native), **extra), mode, indexed)
     #: What `tessera_rl.viewer.watch` needs to build a one-instance shadow
     #: pool of the same configuration: the id and the options that are not
     #: about execution.
