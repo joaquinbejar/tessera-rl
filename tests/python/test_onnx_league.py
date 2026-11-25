@@ -20,6 +20,8 @@ import pytest
 import tessera_rl as t
 from tessera_rl import search
 
+sys.path.insert(0, os.path.dirname(__file__))
+
 ROOT = Path(__file__).resolve().parents[2]
 FIXTURES = ROOT / "crates" / "tessera-rl-onnx" / "tests" / "fixtures"
 MODEL = FIXTURES / "opponent_paddleduel.onnx"
@@ -228,3 +230,28 @@ def test_onnx_league_barrier_keeps_the_onnx_entry():
 def test_onnx_league_no_telemetry_directory_in_the_scratch_home():
     home = Path(os.environ["HOME"])
     assert not any(p.name.lower().startswith("onnxruntime") for p in home.rglob("*"))
+
+
+def _rule(observations, info):
+    """The fixture's rule on each slot's own state row: 2 if obs[0] >= obs[1]
+    else 0 (an External opponent playing what the model plays)."""
+    leaf = np.asarray(next(iter(observations.values())))
+    rows = leaf.reshape(leaf.shape[0], -1)
+    return np.where(rows[:, 0] >= rows[:, 1], 2, 0).astype(np.int64)
+
+
+@real
+def test_onnx_league_eval_counts_equal_an_external_opponent_playing_the_rule():
+    import eval_policies as pol  # noqa: PLC0415, E402
+    from tessera_rl import eval as tev  # noqa: PLC0415
+
+    h = content_hash(MODEL)
+    kw = {"agents": 2, "obs": "state", "max_episode_steps": 40}
+    seeds = [11, 12, 13, 14, 15]
+    o = opponents(MODEL)
+    onnx = tev.evaluate(DUEL, pol.chase, [(0, ("onnx", h))], seeds=seeds, episodes=6, pools=3, env_kwargs=kw, onnx_opponents=o)
+    ext = tev.evaluate(DUEL, pol.chase, [(0, ("external", 3))], seeds=seeds, episodes=6, pools=3, env_kwargs=kw, external={3: _rule})
+    a, b = onnx["opponents"][0], ext["opponents"][0]
+    for key in ("wins", "draws", "losses", "learner_return", "opponent_return"):
+        assert a[key] == b[key], key
+    assert a["onnx_provenance"] == dict(o.provenance[h])

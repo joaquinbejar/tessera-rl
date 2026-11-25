@@ -99,8 +99,10 @@ def test_eval_wilson_bounds():
 
 
 def test_eval_refusals():
-    with pytest.raises(tessera_rl.CapabilityError, match="ONNX"):
+    with pytest.raises(tessera_rl.ArgumentError, match=r"needs onnx_opponents= \(--onnx-model PATH\)"):
         _evaluate(opponents=[(0, ("onnx", "07" * 16))])
+    with pytest.raises(tessera_rl.ArgumentError, match="--onnx-library needs --onnx-model"):
+        tev._onnx([], "lib.so")
     with pytest.raises(tessera_rl.ArgumentError, match="needs --external 9"):
         _evaluate(opponents=[(0, ("external", 9))])
     with pytest.raises(tessera_rl.ArgumentError):

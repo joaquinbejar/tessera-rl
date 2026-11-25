@@ -35,7 +35,13 @@ with shape ``(agents, *leaf_shape)`` (a dict of leaves); ``info`` holds
 ``(agents,)``, or ``(agents, heads)`` for several heads; only its slots are
 used, and the actions are checked before the step. An ``External`` opponent
 is played by the callable given with ``--external TAG=MODULE:NAME``, with the
-same interface over the opponent slots.
+same interface over the opponent slots. An ONNX opponent is played by its
+model, given with ``--onnx-model PATH`` (repeatable; ``--onnx-library`` names
+the ONNX Runtime library, the ``[onnx]`` extra's by default), or as
+``evaluate(..., onnx_opponents=tessera_rl.search.OnnxOpponents(...))``; its
+report entry carries the model's ``onnx_provenance``, and its results are
+repeatable only in ADR-0057's class (same machine, library and model bytes;
+never across platforms).
 """
 
 from __future__ import annotations
@@ -207,6 +213,7 @@ def evaluate(
     external: dict[int, Callable] | None = None,
     names: dict | None = None,
     max_steps: int = MAX_STEPS,
+    onnx_opponents: Any = None,
 ) -> dict:
     """The evaluation report (the module doc's scheme)."""
     if episodes <= 0 or pools <= 0 or not seeds or max_steps <= 0:
@@ -214,13 +221,14 @@ def evaluate(
     env_kwargs = dict(env_kwargs or {})
     external = dict(external or {})
     for _, kind in opponents:
-        if isinstance(kind, tuple) and kind[0] == "onnx":
-            raise _native.CapabilityError(f"an ONNX opponent ({kind[1]}) cannot be evaluated from Python yet (#619)")
+        if isinstance(kind, tuple) and kind[0] == "onnx" and onnx_opponents is None:
+            raise _native.ArgumentError(f"an ONNX opponent ({kind[1]}) needs onnx_opponents= (--onnx-model PATH)")
         if isinstance(kind, tuple) and kind[0] == "external" and kind[1] not in external:
             raise _native.ArgumentError(f"External opponent tag {kind[1]} needs --external {kind[1]}=MODULE:NAME")
     results = []
     for pid, kind in opponents:
         league = tessera_rl.League([kind], [{"matchmaking": "uniform"}])
+        onnx = isinstance(kind, tuple) and kind[0] == "onnx"
         envs = []
         probe = tessera_rl.make(env_id, num_envs=1, seed=0, workers=0, auto_reset="disabled", outputs="owned", **env_kwargs)
         slots = list(range(1, probe.agents)) if opponent_slots is None else list(opponent_slots)
@@ -237,6 +245,7 @@ def evaluate(
                     policy_map={s: "opponent" for s in slots},
                     league=league,
                     role=0,
+                    **({"onnx_opponents": onnx_opponents} if onnx else {}),
                     **env_kwargs,
                 )
                 env.freeze_normalization(True)
@@ -286,6 +295,9 @@ def evaluate(
                 "opponent_return": opponent_sum / episodes,
             }
         )
+        if onnx:
+            prov = onnx_opponents.provenance.get(str(kind[1]).lower())
+            results[-1]["onnx_provenance"] = None if prov is None else dict(prov)
     setup = {
         "env": env_id,
         "env_kwargs": env_kwargs,
@@ -306,6 +318,18 @@ def _seeds(text: str) -> list[int]:
     return [int(x) for x in text.split(",") if x.strip()]
 
 
+def _onnx(models: list[str], library: str | None) -> Any:
+    """``--onnx-model`` and ``--onnx-library`` as an ``OnnxOpponents``, or
+    ``None`` without models."""
+    if not models:
+        if library is not None:
+            raise _native.ArgumentError("--onnx-library needs --onnx-model")
+        return None
+    from tessera_rl.search import OnnxOpponents
+
+    return OnnxOpponents(models, library=library)
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="python -m tessera_rl.eval", description=__doc__.splitlines()[0])
     p.add_argument("--env", required=True)
@@ -322,6 +346,8 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--opponent-slots")
     p.add_argument("--max-steps", type=int, default=MAX_STEPS)
     p.add_argument("--output")
+    p.add_argument("--onnx-model", action="append", default=[])
+    p.add_argument("--onnx-library")
     a = p.parse_args(argv)
     if a.population is not None:
         opponents = parse_population(a.population)
@@ -348,6 +374,7 @@ def main(argv: list[str] | None = None) -> int:
         external=external,
         names={"policy": a.policy, "external": sorted(a.external)},
         max_steps=a.max_steps,
+        onnx_opponents=_onnx(a.onnx_model, a.onnx_library),
     )
     text = json.dumps(report, indent=1) + "\n"
     if a.output:
