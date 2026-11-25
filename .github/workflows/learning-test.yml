@@ -53,6 +53,10 @@ jobs:
             artifact: learning-test-go9
           - env: tag
             artifact: learning-test-tag
+          - env: jobshop
+            artifact: learning-test-jobshop
+          - env: vrp
+            artifact: learning-test-vrp
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Find the previous scheduled run

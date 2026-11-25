@@ -241,3 +241,43 @@ fn test_jobshop_largest_shape_runs_to_the_end() {
     }
     assert!(last.1.iter().all(|&e| e));
 }
+
+/// A hand-built 3x2 instance: `durations[j]` are job `j`'s two operations,
+/// all on machines 0 then 1, with `next_op` operations already scheduled.
+fn hand_built(durations: [[u8; 2]; 3], next_op: [u8; 3]) -> JobShopState {
+    let mut s = JobShopState {
+        jobs: 3,
+        machines: 2,
+        ..JobShopState::default()
+    };
+    let rows = s
+        .route
+        .iter_mut()
+        .zip(s.duration.iter_mut())
+        .zip(s.next_op.iter_mut());
+    for (((route, duration), next), (d, k)) in rows.zip(durations.iter().zip(next_op)) {
+        route.iter_mut().zip([0, 1]).for_each(|(r, m)| *r = m);
+        duration.iter_mut().zip(d).for_each(|(slot, v)| *slot = *v);
+        *next = k;
+    }
+    s
+}
+
+#[test]
+fn test_jobshop_mwkr_takes_the_job_with_the_most_work_left_on_hand_built_states() {
+    // Work left 6, 7 and 4: job 1.
+    let s = hand_built([[5, 1], [3, 4], [2, 2]], [0, 0, 0]);
+    assert_eq!(baseline::act(Rule::Mwkr, &s), 1);
+    // Job 1 ran its first operation (4 left), so job 0 (6 left) has the most.
+    let s = hand_built([[5, 1], [3, 4], [2, 2]], [0, 1, 0]);
+    assert_eq!(baseline::act(Rule::Mwkr, &s), 0);
+    // Jobs 0 and 2 tie at 5 left and job 1 is done: the lowest index, job 0.
+    let s = hand_built([[4, 1], [3, 4], [1, 4]], [0, 2, 0]);
+    assert!(!s.legal(1));
+    assert_eq!(baseline::act(Rule::Mwkr, &s), 0);
+    // SPT on the same states: the shortest next operation.
+    assert_eq!(
+        baseline::act(Rule::Spt, &hand_built([[5, 1], [3, 4], [2, 2]], [0, 0, 0])),
+        2
+    );
+}
