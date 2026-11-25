@@ -51,11 +51,14 @@ Observations are dicts of the environment's leaves plus ``action_mask``
 
 Policy maps: every first-party agent's ``infos`` carry its
 ``"policy_group"`` (``"learner"``, ``"external"``, ``"heuristic"`` or
-``"privileged_heuristic"``). ``parallel_env(..., agents="learner")`` hides the
+``"privileged_heuristic"``). ``parallel_env(..., visible="learner")`` hides the
 heuristic slots from ``agents``, ``possible_agents`` and the step dicts (the
 engine plays them); their rewards stay in each visible agent's
 ``infos["heuristic_rewards"]``, by agent name. Native AEC refuses
-``agents="learner"`` (``CapabilityError``).
+``visible="learner"`` (``CapabilityError``). ``agents=`` is an environment's
+own agent count (Snake, GridKeyDoor, PaddleDuel, LimitOrderBook), so both can
+be set; ``agents="all"`` and ``agents="learner"`` are the filter's deprecated
+spelling, which warns ``TesseraDeprecationWarning`` until 0.5.0 (#538).
 
 An environment with several discrete heads (``MultiDiscrete``, the RTS:
 three heads per unit slot) has ``MultiDiscrete(nvec)`` as its action
@@ -97,6 +100,10 @@ error.
 """
 
 from __future__ import annotations
+
+import sys
+import warnings
+from typing import Any
 
 import numpy as np
 from gymnasium import spaces
@@ -259,17 +266,48 @@ def relaxed_masks(row, mask_heads) -> tuple[np.ndarray, ...]:
 _HEURISTIC_GROUPS = frozenset({"heuristic", "privileged_heuristic"})
 
 
-def _agents_option(agents: str | int, kwargs: dict) -> bool:
-    """Whether ``agents`` asks to hide heuristic slots: ``"all"`` (the
-    default, every agent) or ``"learner"``. An integer
-    is an environment's own ``agents`` configuration key (Snake, KeyDoor,
-    PaddleDuel) and is passed through to ``kwargs`` unchanged."""
-    if isinstance(agents, int):
+#: `agents=` left unset (the filter's old spelling defaults to every agent).
+_UNSET: Any = object()
+
+
+def _warn_agents_filter(agents: str) -> None:
+    """`TesseraDeprecationWarning` for `agents=` as the learner filter (#538),
+    attributed to the first caller outside this package."""
+    level = 2
+    frame = sys._getframe(1)
+    while frame.f_back is not None and frame.f_code.co_filename.startswith(_envs._PACKAGE):
+        frame = frame.f_back
+        level += 1
+    warnings.warn(
+        f"agents={agents!r} as the learner filter is deprecated since 0.4.0: use visible={agents!r} "
+        "(removed in 0.5.0, when agents= is only the environment's agent count)",
+        _envs.TesseraDeprecationWarning,
+        stacklevel=level,
+    )
+
+
+def _visible_option(visible: str | None, agents: Any, kwargs: dict) -> bool:
+    """Whether to hide heuristic slots (ADR-0079 item 5.2): ``visible`` is
+    ``"all"`` (the default) or ``"learner"``. ``agents`` is an environment's own
+    agent-count configuration key (Snake, GridKeyDoor, PaddleDuel,
+    LimitOrderBook), passed through to ``kwargs``; the strings ``"all"`` and
+    ``"learner"`` there are the filter's deprecated spelling (#538)."""
+    if isinstance(agents, str):
+        if agents not in ("all", "learner"):
+            raise _native.ArgumentError(f'agents must be an agent count, or the deprecated "all" or "learner", not {agents!r}')
+        if visible is not None:
+            raise _native.ArgumentError(
+                f"visible={visible!r} and agents={agents!r} both set the learner filter; pass visible= only"
+            )
+        _warn_agents_filter(agents)
+        visible = agents
+    elif agents is not _UNSET:
         kwargs["agents"] = agents
-        return False
-    if agents not in ("all", "learner"):
-        raise _native.ArgumentError(f'agents must be "all" or "learner", not {agents!r}')
-    return agents == "learner"
+    if visible is None:
+        visible = "all"
+    if visible not in ("all", "learner"):
+        raise _native.ArgumentError(f'visible must be "all" or "learner", not {visible!r}')
+    return visible == "learner"
 
 
 def agent_name(slot: int, generation: int) -> str:
@@ -298,7 +336,7 @@ class _Agents:
         #: environment, which has no policy map.
         self.groups: tuple[str, ...] = tuple(layout.get("policy_groups", ()))
         #: Whether heuristic slots are hidden from the agent lists
-        #: (``agents="learner"``).
+        #: (``visible="learner"``).
         self.learner_only = False
         leaves = {}
         # Set masks (ADR-0082 point 6): the last leaf of each set, exposed as
@@ -356,7 +394,7 @@ class _Agents:
 
     def hidden(self, slot: int) -> bool:
         """Whether agent ``slot`` is hidden: a heuristic slot under
-        ``agents="learner"``."""
+        ``visible="learner"``."""
         return self.learner_only and slot < len(self.groups) and self.groups[slot] in _HEURISTIC_GROUPS
 
     def heuristic_rewards(self) -> dict[str, float]:
@@ -445,10 +483,11 @@ class TesseraParallelEnv(ParallelEnv):
         *,
         _pool=None,
         render_mode: str | None = None,
-        agents: str | int = "all",
+        visible: str | None = None,
+        agents: Any = _UNSET,
         **kwargs,
     ):
-        learner_only = _agents_option(agents, kwargs)
+        learner_only = _visible_option(visible, agents, kwargs)
         pool = _pool if _pool is not None else _native_pool(env_id, "parallel", seed, kwargs)
         self._a = _Agents(pool, env_id)
         self._a.learner_only = learner_only
@@ -574,14 +613,15 @@ class TesseraAECEnv(AECEnv):
         *,
         _pool=None,
         render_mode: str | None = None,
-        agents: str | int = "all",
+        visible: str | None = None,
+        agents: Any = _UNSET,
         **kwargs,
     ):
         super().__init__()
-        if _agents_option(agents, kwargs):
+        if _visible_option(visible, agents, kwargs):
             # The turn order would have to skip hidden seats (ADR-0079 stage A
             # hides heuristic slots in the Parallel form only).
-            raise _native.CapabilityError('agents="learner" is for the Parallel form; native AEC shows every agent')
+            raise _native.CapabilityError('visible="learner" is for the Parallel form; native AEC shows every agent')
         pool = _pool if _pool is not None else _native_pool(env_id, "aec", seed, kwargs)
         self._a = _Agents(pool, env_id)
         if self._a.spawns:
