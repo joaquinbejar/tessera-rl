@@ -627,10 +627,56 @@ def test_pgo_cpu_reads_the_model_and_hashes_the_flags_order_free(tmp_path):
 
 
 def test_pgo_cpu_refuses_a_cpuinfo_without_model_or_flags(tmp_path):
-    arm = tmp_path / "arm"
-    arm.write_text("processor\t: 0\nFeatures\t: fp asimd\nCPU implementer\t: 0x41\n")
-    with pytest.raises(ValueError, match="cannot be stamped"):
-        callgrind.cpu(str(arm))
+    cases = {
+        "arm64 without part, variant or revision": "processor\t: 0\nFeatures\t: fp asimd\nCPU implementer\t: 0x41\n",
+        "arm64 without Features": ARM64_CPUINFO.replace("Features", "Feats"),
+        "x86 without flags": "model name\t: Some CPU 12\n",
+        "x86 without model name": "flags\t\t: sse2 avx2\n",
+        "x86 key with arm64 fields": "model name\t: Some CPU 12\n" + ARM64_CPUINFO,
+        "neither": "processor\t: 0\nBogoMIPS\t: 48.00\n",
+    }
+    for name, text in cases.items():
+        f = tmp_path / name.replace(" ", "_")
+        f.write_text(text)
+        with pytest.raises(ValueError, match="cannot be stamped"):
+            callgrind.cpu(str(f))
+
+
+# A Linux arm64 /proc/cpuinfo (the kernel's format: no model name, no flags).
+ARM64_CPUINFO = ("processor\t: 0\nBogoMIPS\t: 48.00\n"
+                 "Features\t: fp asimd evtstrm aes pmull sha1 sha2 crc32 atomics fphp asimdhp cpuid asimdrdm\n"
+                 "CPU implementer\t: 0x61\nCPU architecture: 8\nCPU variant\t: 0x0\nCPU part\t: 0x000\nCPU revision\t: 0\n\n"
+                 "processor\t: 1\nBogoMIPS\t: 48.00\nFeatures\t: fp asimd\n"
+                 "CPU implementer\t: 0x41\nCPU architecture: 8\nCPU variant\t: 0x1\nCPU part\t: 0xd0c\nCPU revision\t: 3\n")
+
+
+def test_pgo_cpu_stamps_an_arm64_cpuinfo_from_the_first_processor(tmp_path):
+    a = tmp_path / "a"
+    a.write_text(ARM64_CPUINFO)
+    reordered = tmp_path / "reordered"
+    reordered.write_text(ARM64_CPUINFO.replace("fp asimd evtstrm", "evtstrm asimd fp", 1))
+    fewer = tmp_path / "fewer"
+    fewer.write_text(ARM64_CPUINFO.replace(" asimdrdm", "", 1))
+    other_part = tmp_path / "other_part"
+    other_part.write_text(ARM64_CPUINFO.replace("CPU part\t: 0x000", "CPU part\t: 0x001", 1))
+    stamp = callgrind.cpu(str(a))
+    assert stamp["cpu_model"] == "arm64 implementer=0x61 variant=0x0 part=0x000 revision=0"
+    assert stamp["cpu_flags"] == hashlib.sha256(
+        b"aes asimd asimdhp asimdrdm atomics cpuid crc32 evtstrm fp fphp pmull sha1 sha2").hexdigest()
+    assert callgrind.cpu(str(reordered)) == stamp, "the Features order does not matter"
+    assert callgrind.cpu(str(fewer))["cpu_flags"] != stamp["cpu_flags"], "a missing feature is another host"
+    assert callgrind.cpu(str(other_part))["cpu_model"] != stamp["cpu_model"], "another core is another host"
+
+
+def test_pgo_cpu_x86_stamp_is_unchanged_by_the_arm64_form(tmp_path):
+    """The x86-64 stamp is byte-identical to the one #612's and #498's evidence carries."""
+    info = tmp_path / "x86"
+    info.write_text("processor\t: 0\nmodel name\t: AMD Ryzen 7 5800H with Radeon Graphics\nflags\t\t: sse2 fpu avx2\n\n"
+                    "processor\t: 1\nmodel name\t: Other\nflags\t\t: sse2\n")
+    assert callgrind.cpu(str(info)) == {
+        "cpu_model": "AMD Ryzen 7 5800H with Radeon Graphics",
+        "cpu_flags": hashlib.sha256(b"avx2 fpu sse2").hexdigest(),
+    }
 
 
 def test_pgo_environment_stamps_the_cpu(tmp_path, monkeypatch):

@@ -325,20 +325,36 @@ def cpu(cpuinfo: str = "/proc/cpuinfo") -> dict:
     of its own, derived from the host's, so the host flags are the proxy: Ir
     can depend on the CPU features (ifunc-selected libc routines, runtime SIMD
     dispatch), and files measured on two hosts are not interchangeable unless
-    shown equal. The model name and a hash of the first processor's feature
-    flags; raises ValueError when either is missing, so two hosts can never
-    stamp equal by both lacking them."""
-    model, flags = None, None
+    shown equal. The model and a hash of the first processor's feature flags.
+
+    Two forms, by architecture (#498):
+    - x86-64: `model name`, and the `flags` line hashed;
+    - arm64 (no model name or flags lines): the model is `CPU implementer`,
+      `CPU variant`, `CPU part` and `CPU revision`, and the `Features` line is
+      hashed.
+
+    A file with any x86 key is read as x86. Raises ValueError when a form is
+    incomplete or neither is present, so two hosts can never stamp equal by
+    both lacking fields."""
+    first: dict[str, str] = {}
     for line in pathlib.Path(cpuinfo).read_text(encoding="utf-8").splitlines():
         key, _, value = line.partition(":")
-        key, value = key.strip(), value.strip()
-        if key == "model name" and model is None:
-            model = value
-        elif key == "flags" and flags is None:
-            flags = hashlib.sha256(" ".join(sorted(value.split())).encode()).hexdigest()
-    if not model or not flags:
-        raise ValueError(f"{cpuinfo} has no 'model name' or 'flags' line; the host cannot be stamped")
-    return {"cpu_model": model, "cpu_flags": flags}
+        first.setdefault(key.strip(), value.strip())
+    if "model name" in first or "flags" in first:
+        model, features = first.get("model name"), first.get("flags")
+    else:
+        ids = [first.get(k) for k in _ARM64_ID]
+        model = None if not all(ids) else "arm64 " + " ".join(f"{k.split()[1].lower()}={v}" for k, v in zip(_ARM64_ID, ids))
+        features = first.get("Features")
+    if not model or not features:
+        raise ValueError(f"{cpuinfo} has neither 'model name' and 'flags' (x86-64) nor 'Features' and "
+                         f"{', '.join(repr(k) for k in _ARM64_ID)} (arm64); the host cannot be stamped")
+    return {"cpu_model": model, "cpu_flags": hashlib.sha256(" ".join(sorted(features.split())).encode()).hexdigest()}
+
+
+# The arm64 kernel's identity of a core (arch/arm64/kernel/cpuinfo.c), in the
+# order it prints them.
+_ARM64_ID = ("CPU implementer", "CPU variant", "CPU part", "CPU revision")
 
 
 def environment(args, cpuinfo: str = "/proc/cpuinfo") -> dict:
