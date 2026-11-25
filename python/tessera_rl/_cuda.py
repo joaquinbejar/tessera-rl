@@ -373,6 +373,9 @@ class DeviceEnv(Env):
         return self._out(super().restore_pool(snapshot, archive))
 
     def close(self) -> None:
+        # Redundant today: the native close below waits through `_Gated`.
+        # Kept as defence in depth, so close never frees under a pending
+        # copy if a later change stops gating close.
         self._session.close()
         super().close()
 
