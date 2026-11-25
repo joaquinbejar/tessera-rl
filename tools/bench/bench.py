@@ -45,7 +45,7 @@ import tomllib
 import numpy as np
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
-from qualification import _cpus_for, _work, parse_affinity  # noqa: E402
+from qualification import _cpus_for, _work, parse_affinity, workers_for  # noqa: E402
 from qualification import qualify as _qualify  # noqa: E402
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
@@ -249,10 +249,11 @@ def run_rust(runner: pathlib.Path, cfg: dict, method: dict, pin: dict) -> dict:
     env, n = cfg["env"], str(cfg["num_envs"])
     metric = cfg["metric"]
     w, r = str(method["warmup_s"]), str(method["reps"])
+    workers = workers_for(cfg, pin)
     if metric == "throughput":
-        args = [metric, env, n, str(cfg["workers"]), w, r, str(method["rep_s"])]
+        args = [metric, env, n, str(workers), w, r, str(method["rep_s"])]
     elif metric == "latency":
-        args = [metric, env, n, str(cfg["workers"]), w, r, str(method["batches"])]
+        args = [metric, env, n, str(workers), w, r, str(method["batches"])]
     elif metric == "snapshot":
         args = [metric, env, n, w, r]
     elif metric == "memory":
@@ -262,8 +263,10 @@ def run_rust(runner: pathlib.Path, cfg: dict, method: dict, pin: dict) -> dict:
     args += ["--max-episode-steps", str(_limit(cfg, method))]
     if cfg.get("legal_actions"):
         args.append("--legal-actions")
+    if cfg.get("schedule"):
+        args += ["--schedule", cfg["schedule"]]
     cpus = _cpus_for(cfg, pin)
-    if cpus and cfg.get("workers", 0) > 0:
+    if cpus and workers > 0:
         args += ["--cpus", ",".join(str(c) for c in cpus)]
     proc = subprocess.run([*_prefix(pin, cpus), str(runner), *args], capture_output=True, text=True, check=True)
     raw = json.loads(proc.stdout)
@@ -272,7 +275,12 @@ def run_rust(runner: pathlib.Path, cfg: dict, method: dict, pin: dict) -> dict:
     # action policy is marked on every row: legal-action rows step a
     # different plan from the shared one (R-PR371).
     policy = "legal_actions" if cfg.get("legal_actions") else "planned"
-    return {**{k: v for k, v in raw.items() if not isinstance(v, list)}, **stats, "cpu": _cpu_model(), "action_policy": policy}
+    extra = {"action_policy": policy}
+    if metric in ("throughput", "latency"):
+        # The effective worker count (``workers = "full"`` resolves on the
+        # machine) and the schedule, Static unless the configuration says.
+        extra.update(workers=workers, schedule=cfg.get("schedule", "static") if workers > 0 else None)
+    return {**{k: v for k, v in raw.items() if not isinstance(v, list)}, **stats, "cpu": _cpu_model(), **extra}
 
 
 # Environments with a Python head-to-head: the Tessera id, the EnvPool id
@@ -415,7 +423,10 @@ def derive(results: dict, derived: list[dict], method: dict) -> dict:
     for d in derived:
         if d["kind"] == "scaling":
             a, b = d["multi"], d["single"]
-            scale = float(d["workers"])
+            if a not in results:
+                continue
+            # "full" scales by the count the multi-worker run resolved to.
+            scale = float(results[a]["workers"] if d["workers"] == "full" else d["workers"])
         elif d["kind"] == "ratio":
             a, b = d["numerator"], d["denominator"]
             scale = 1.0

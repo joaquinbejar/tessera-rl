@@ -5,6 +5,7 @@ only: ``tools/dashboard`` applies the same rules to stored reports)."""
 from __future__ import annotations
 
 import json
+import os
 
 
 def parse_affinity(text) -> set[int] | None:
@@ -19,12 +20,29 @@ def parse_affinity(text) -> set[int] | None:
     return cpus
 
 
+FULL = "full"
+
+
+def workers_for(cfg: dict, pin: dict) -> int:
+    """A configuration's worker count. ``workers = "full"`` is one worker per
+    CPU of the machine's ``bench_cpu_set`` when pinning is applied, and one
+    per CPU this process may use otherwise (an unpinned run is indicative)."""
+    workers = cfg.get("workers", 0)
+    if workers == FULL:
+        if pin.get("applied"):
+            return len(pin["cpu_set"])
+        return len(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else (os.cpu_count() or 1)
+    if type(workers) is not int or workers < 0:
+        raise ValueError(f"{cfg.get('name')}: workers is {workers!r}, not a count or {FULL!r}")
+    return workers
+
+
 def _cpus_for(cfg: dict, pin: dict):
     """Process CPUs for a configuration: one core for Inline and Python
     runs, one per worker for Sync runs."""
     if not pin["applied"]:
         return None
-    k = max(1, int(cfg.get("workers", 0)))
+    k = max(1, workers_for(cfg, pin))
     if len(pin["cpu_set"]) < k:
         raise ValueError(f"{cfg['name']}: bench_cpu_set has {len(pin['cpu_set'])} CPUs, needs {k}")
     return pin["cpu_set"][:k]

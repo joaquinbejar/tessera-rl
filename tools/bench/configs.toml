@@ -22,7 +22,8 @@ runs_for_claims = 10
 max_episode_steps = 500
 
 # Rust: raw env throughput, pregenerated seeded random actions, auto-reset
-# and observation writing included (SPEC 19.1).
+# and observation writing included (SPEC 19.1). Every multi-worker entry
+# names its `schedule` (ADR-0076, ADR-0087), recorded in the report.
 [[config]]
 name = "rust/cartpole/inline/n1024"
 kind = "rust"
@@ -38,6 +39,7 @@ metric = "throughput"
 env = "cartpole"
 num_envs = 4096
 workers = 1
+schedule = "static"
 
 [[config]]
 name = "rust/cartpole/sync4/n4096"
@@ -46,6 +48,7 @@ metric = "throughput"
 env = "cartpole"
 num_envs = 4096
 workers = 4
+schedule = "static"
 
 [[config]]
 name = "rust/tag/inline/n256"
@@ -163,9 +166,22 @@ num_envs = 1024
 workers = 0
 legal_actions = true
 
+# tessera/Lanterns-v1 at its defaults (2 players): Discrete(50) with a flat
+# mask per slot, so it steps legal moves.
+[[config]]
+name = "rust/lanterns/inline/n1024"
+kind = "rust"
+flagship = "tessera/Lanterns-v1"
+metric = "throughput"
+env = "lanterns"
+num_envs = 1024
+workers = 0
+legal_actions = true
+
 [[config]]
 name = "rust/rts/inline/n1024"
 kind = "rust"
+flagship = "tessera/RTS-v1"
 metric = "throughput"
 env = "rts"
 num_envs = 1024
@@ -175,6 +191,7 @@ workers = 0
 [[config]]
 name = "rust/lob/inline/n1024"
 kind = "rust"
+flagship = "tessera/LimitOrderBook-v1"
 metric = "throughput"
 env = "lob"
 num_envs = 1024
@@ -185,6 +202,7 @@ workers = 0
 [[config]]
 name = "rust/jobshop/inline/n1024"
 kind = "rust"
+flagship = "tessera/JobShop-v1"
 metric = "throughput"
 env = "jobshop"
 num_envs = 1024
@@ -204,6 +222,7 @@ workers = 0
 [[config]]
 name = "rust/vrp/inline/n1024"
 kind = "rust"
+flagship = "tessera/Vrp-v1"
 metric = "throughput"
 env = "vrp"
 num_envs = 1024
@@ -222,6 +241,7 @@ workers = 0
 [[config]]
 name = "rust/survival-16/inline/n256"
 kind = "rust"
+flagship = "tessera/Survival-v1"
 metric = "throughput"
 env = "survival-16"
 num_envs = 256
@@ -235,6 +255,236 @@ env = "survival-128"
 num_envs = 64
 workers = 0
 
+# Flagship benchmarks (SPEC 22 phase 4, #640). Each flagship is measured on
+# all four SPEC 19.1 metrics at one N: its Inline entry above (one pinned
+# core), Sync mode at 4 workers and at the machine's full bench_cpu_set
+# (`workers = "full"`, resolved on the machine and recorded in the report),
+# with scaling efficiency against the Inline entry, snapshot costs and
+# memory. Every multi-worker entry names its schedule (ADR-0076, ADR-0087):
+# Dynamic for RTS and Survival, whose step cost varies per instance, Static
+# for the others. Numbers stay indicative (valid_for_claims false) until a
+# reference machine exists (#151).
+
+[[config]]
+name = "rust/rts/sync4/n1024"
+kind = "rust"
+flagship = "tessera/RTS-v1"
+metric = "throughput"
+env = "rts"
+num_envs = 1024
+workers = 4
+schedule = "dynamic"
+
+[[config]]
+name = "rust/rts/syncfull/n1024"
+kind = "rust"
+flagship = "tessera/RTS-v1"
+metric = "throughput"
+env = "rts"
+num_envs = 1024
+workers = "full"
+schedule = "dynamic"
+
+[[config]]
+name = "rust/rts/n1024/snapshot"
+kind = "rust"
+flagship = "tessera/RTS-v1"
+metric = "snapshot"
+env = "rts"
+num_envs = 1024
+
+[[config]]
+name = "rust/rts/n1024/memory"
+kind = "rust"
+flagship = "tessera/RTS-v1"
+metric = "memory"
+env = "rts"
+num_envs = 1024
+
+[[config]]
+name = "rust/lob/sync4/n1024"
+kind = "rust"
+flagship = "tessera/LimitOrderBook-v1"
+metric = "throughput"
+env = "lob"
+num_envs = 1024
+workers = 4
+schedule = "static"
+
+[[config]]
+name = "rust/lob/syncfull/n1024"
+kind = "rust"
+flagship = "tessera/LimitOrderBook-v1"
+metric = "throughput"
+env = "lob"
+num_envs = 1024
+workers = "full"
+schedule = "static"
+
+[[config]]
+name = "rust/lob/n1024/snapshot"
+kind = "rust"
+flagship = "tessera/LimitOrderBook-v1"
+metric = "snapshot"
+env = "lob"
+num_envs = 1024
+
+[[config]]
+name = "rust/lob/n1024/memory"
+kind = "rust"
+flagship = "tessera/LimitOrderBook-v1"
+metric = "memory"
+env = "lob"
+num_envs = 1024
+
+[[config]]
+name = "rust/lanterns/sync4/n1024"
+kind = "rust"
+flagship = "tessera/Lanterns-v1"
+metric = "throughput"
+env = "lanterns"
+num_envs = 1024
+workers = 4
+schedule = "static"
+legal_actions = true
+
+[[config]]
+name = "rust/lanterns/syncfull/n1024"
+kind = "rust"
+flagship = "tessera/Lanterns-v1"
+metric = "throughput"
+env = "lanterns"
+num_envs = 1024
+workers = "full"
+schedule = "static"
+legal_actions = true
+
+[[config]]
+name = "rust/lanterns/n1024/snapshot"
+kind = "rust"
+flagship = "tessera/Lanterns-v1"
+metric = "snapshot"
+env = "lanterns"
+num_envs = 1024
+legal_actions = true
+
+[[config]]
+name = "rust/lanterns/n1024/memory"
+kind = "rust"
+flagship = "tessera/Lanterns-v1"
+metric = "memory"
+env = "lanterns"
+num_envs = 1024
+legal_actions = true
+
+[[config]]
+name = "rust/survival-16/sync4/n256"
+kind = "rust"
+flagship = "tessera/Survival-v1"
+metric = "throughput"
+env = "survival-16"
+num_envs = 256
+workers = 4
+schedule = "dynamic"
+
+[[config]]
+name = "rust/survival-16/syncfull/n256"
+kind = "rust"
+flagship = "tessera/Survival-v1"
+metric = "throughput"
+env = "survival-16"
+num_envs = 256
+workers = "full"
+schedule = "dynamic"
+
+[[config]]
+name = "rust/survival-16/n256/snapshot"
+kind = "rust"
+flagship = "tessera/Survival-v1"
+metric = "snapshot"
+env = "survival-16"
+num_envs = 256
+
+[[config]]
+name = "rust/survival-16/n256/memory"
+kind = "rust"
+flagship = "tessera/Survival-v1"
+metric = "memory"
+env = "survival-16"
+num_envs = 256
+
+[[config]]
+name = "rust/jobshop/sync4/n1024"
+kind = "rust"
+flagship = "tessera/JobShop-v1"
+metric = "throughput"
+env = "jobshop"
+num_envs = 1024
+workers = 4
+schedule = "static"
+
+[[config]]
+name = "rust/jobshop/syncfull/n1024"
+kind = "rust"
+flagship = "tessera/JobShop-v1"
+metric = "throughput"
+env = "jobshop"
+num_envs = 1024
+workers = "full"
+schedule = "static"
+
+[[config]]
+name = "rust/jobshop/n1024/snapshot"
+kind = "rust"
+flagship = "tessera/JobShop-v1"
+metric = "snapshot"
+env = "jobshop"
+num_envs = 1024
+
+[[config]]
+name = "rust/jobshop/n1024/memory"
+kind = "rust"
+flagship = "tessera/JobShop-v1"
+metric = "memory"
+env = "jobshop"
+num_envs = 1024
+
+[[config]]
+name = "rust/vrp/sync4/n1024"
+kind = "rust"
+flagship = "tessera/Vrp-v1"
+metric = "throughput"
+env = "vrp"
+num_envs = 1024
+workers = 4
+schedule = "static"
+
+[[config]]
+name = "rust/vrp/syncfull/n1024"
+kind = "rust"
+flagship = "tessera/Vrp-v1"
+metric = "throughput"
+env = "vrp"
+num_envs = 1024
+workers = "full"
+schedule = "static"
+
+[[config]]
+name = "rust/vrp/n1024/snapshot"
+kind = "rust"
+flagship = "tessera/Vrp-v1"
+metric = "snapshot"
+env = "vrp"
+num_envs = 1024
+
+[[config]]
+name = "rust/vrp/n1024/memory"
+kind = "rust"
+flagship = "tessera/Vrp-v1"
+metric = "memory"
+env = "vrp"
+num_envs = 1024
+
 [[config]]
 name = "rust/cartpole/sync4/n4096/latency"
 kind = "rust"
@@ -242,6 +492,7 @@ metric = "latency"
 env = "cartpole"
 num_envs = 4096
 workers = 4
+schedule = "static"
 
 [[config]]
 name = "rust/cartpole/n1024/snapshot"
@@ -370,6 +621,91 @@ kind = "scaling"
 multi = "rust/cartpole/sync4/n4096"
 single = "rust/cartpole/sync1/n4096"
 workers = 4
+
+# Flagship scaling (#640): k workers over k times the Inline entry.
+[[derived]]
+name = "scaling_efficiency/rts/sync4/n1024"
+kind = "scaling"
+multi = "rust/rts/sync4/n1024"
+single = "rust/rts/inline/n1024"
+workers = 4
+
+[[derived]]
+name = "scaling_efficiency/rts/syncfull/n1024"
+kind = "scaling"
+multi = "rust/rts/syncfull/n1024"
+single = "rust/rts/inline/n1024"
+workers = "full"
+
+[[derived]]
+name = "scaling_efficiency/lob/sync4/n1024"
+kind = "scaling"
+multi = "rust/lob/sync4/n1024"
+single = "rust/lob/inline/n1024"
+workers = 4
+
+[[derived]]
+name = "scaling_efficiency/lob/syncfull/n1024"
+kind = "scaling"
+multi = "rust/lob/syncfull/n1024"
+single = "rust/lob/inline/n1024"
+workers = "full"
+
+[[derived]]
+name = "scaling_efficiency/lanterns/sync4/n1024"
+kind = "scaling"
+multi = "rust/lanterns/sync4/n1024"
+single = "rust/lanterns/inline/n1024"
+workers = 4
+
+[[derived]]
+name = "scaling_efficiency/lanterns/syncfull/n1024"
+kind = "scaling"
+multi = "rust/lanterns/syncfull/n1024"
+single = "rust/lanterns/inline/n1024"
+workers = "full"
+
+[[derived]]
+name = "scaling_efficiency/survival-16/sync4/n256"
+kind = "scaling"
+multi = "rust/survival-16/sync4/n256"
+single = "rust/survival-16/inline/n256"
+workers = 4
+
+[[derived]]
+name = "scaling_efficiency/survival-16/syncfull/n256"
+kind = "scaling"
+multi = "rust/survival-16/syncfull/n256"
+single = "rust/survival-16/inline/n256"
+workers = "full"
+
+[[derived]]
+name = "scaling_efficiency/jobshop/sync4/n1024"
+kind = "scaling"
+multi = "rust/jobshop/sync4/n1024"
+single = "rust/jobshop/inline/n1024"
+workers = 4
+
+[[derived]]
+name = "scaling_efficiency/jobshop/syncfull/n1024"
+kind = "scaling"
+multi = "rust/jobshop/syncfull/n1024"
+single = "rust/jobshop/inline/n1024"
+workers = "full"
+
+[[derived]]
+name = "scaling_efficiency/vrp/sync4/n1024"
+kind = "scaling"
+multi = "rust/vrp/sync4/n1024"
+single = "rust/vrp/inline/n1024"
+workers = 4
+
+[[derived]]
+name = "scaling_efficiency/vrp/syncfull/n1024"
+kind = "scaling"
+multi = "rust/vrp/syncfull/n1024"
+single = "rust/vrp/inline/n1024"
+workers = "full"
 
 [[derived]]
 name = "python_overhead/cartpole/n1024/borrowed"
