@@ -99,6 +99,20 @@ pub enum Policy {
 
 static POLICY: AtomicU8 = AtomicU8::new(Policy::Canonicalize as u8);
 static WARNED: AtomicBool = AtomicBool::new(false);
+/// An XLA FFI handler ran under non-canonical caller controls with the
+/// `canonicalize` policy: it cannot touch Python, so the once-per-process
+/// warning is deferred to the next Python entry (ADR-0095). Lost if no
+/// Python entry follows.
+static DEFERRED: AtomicBool = AtomicBool::new(false);
+
+/// Called by an XLA FFI handler that ran under non-canonical caller
+/// controls: schedules the once-per-process warning for the next Python
+/// entry, unless it was already shown.
+pub(crate) fn defer_warning() {
+    if !WARNED.load(Ordering::Relaxed) {
+        DEFERRED.store(true, Ordering::Relaxed);
+    }
+}
 
 /// Sets the process-wide policy for non-canonical caller controls.
 pub fn set_policy(policy: Policy) {
@@ -121,6 +135,10 @@ const WARNING: &core::ffi::CStr = c"tessera_rl: the caller's floating-point cont
 /// canonical controls. `Err` means the entry must fail before any work:
 /// a rejection under the strict policy, or a warning that raised.
 pub(crate) fn check(g: Gil<'_>) -> CResult<()> {
+    if DEFERRED.swap(false, Ordering::Relaxed) && !WARNED.swap(true, Ordering::Relaxed) {
+        // A deferred XLA FFI warning (`defer_warning`), shown once.
+        capi::warn(g, capi::runtime_warning(), WARNING)?;
+    }
     let Some((true, _caller)) = frame() else {
         return Ok(());
     };

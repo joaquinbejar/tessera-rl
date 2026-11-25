@@ -209,7 +209,7 @@ py-test-torch:
 # default environment again.
 py-test-jax:
 	uv sync --locked --python 3.11 --group test --group jax
-	uv run --locked --python 3.11 --group test --group jax pytest -q tests/python/test_jax.py
+	uv run --locked --python 3.11 --group test --group jax pytest -q tests/python/test_jax.py tests/python/test_jax_ffi.py
 	uv sync --locked --python 3.11
 
 # The .pyi stubs (issue #348): mypy --strict over the stubs, then stubtest

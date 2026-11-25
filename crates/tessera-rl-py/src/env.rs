@@ -313,10 +313,6 @@ pub(crate) trait PoolOps: Send {
     /// only: the split-phase modes refuse it. A pool with privileged state
     /// (ADR-0079) is refused too: the XLA FFI path exports no privileged
     /// leaves.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "the XLA FFI handler of #369 head B calls it")
-    )]
     fn outputs_into(&self, _dst: &mut [&mut [u8]]) -> Result<(), BindError> {
         Err(BindError::Argument(
             "outputs_into is available in sync mode only".to_owned(),

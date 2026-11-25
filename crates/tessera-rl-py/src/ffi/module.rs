@@ -64,6 +64,42 @@ impl FunctionNoArgs for FpBoundary {
 
 /// `set_fp_policy(name)`: `"canonicalize"` (the default) or `"reject"`
 /// (ADR-0041).
+/// `_xla_targets()`: the XLA FFI handler capsules (ADR-0095).
+struct XlaTargets;
+
+impl FunctionNoArgs for XlaTargets {
+    fn call(g: Gil<'_>) -> CResult<Mine<'_>> {
+        crate::xla_api::targets(g)
+    }
+}
+
+/// `_xla_token(slot, generation)`.
+struct XlaToken;
+
+impl Function for XlaToken {
+    fn call<'py>(g: Gil<'py>, args: Ref<'py>) -> CResult<Mine<'py>> {
+        crate::xla_api::token(g, args)
+    }
+}
+
+/// `_xla_take_error(slot, generation)`.
+struct XlaTakeError;
+
+impl Function for XlaTakeError {
+    fn call<'py>(g: Gil<'py>, args: Ref<'py>) -> CResult<Mine<'py>> {
+        crate::xla_api::take_error(g, args)
+    }
+}
+
+/// `_xla_close(slot, generation)`.
+struct XlaClose;
+
+impl Function for XlaClose {
+    fn call<'py>(g: Gil<'py>, args: Ref<'py>) -> CResult<Mine<'py>> {
+        crate::xla_api::close(g, args)
+    }
+}
+
 /// `encode_gif(frames, width, height, fps) -> bytes`: concatenated RGB8
 /// frames as a looping GIF (ADR-0083 item 5).
 struct EncodeGif;
@@ -313,10 +349,26 @@ impl FunctionNoArgs for InitFailsAfterRegister {
     }
 }
 
-const FUNCTION_COUNT: usize = if cfg!(feature = "test-hooks") { 47 } else { 40 };
+const FUNCTION_COUNT: usize = if cfg!(feature = "test-hooks") { 51 } else { 44 };
 
 static ROWS: [FunctionRow; FUNCTION_COUNT] = [
     FunctionRow::noargs::<Version>(c"version", c"version($module, /)\n--\n\nThe Tessera version."),
+    FunctionRow::noargs::<XlaTargets>(
+        c"_xla_targets",
+        c"_xla_targets($module, /)\n--\n\nThe XLA FFI handler capsules, {\"step\": ..., \"reset\": ...}. Experimental.",
+    ),
+    FunctionRow::varargs::<XlaToken>(
+        c"_xla_token",
+        c"_xla_token($module, slot, generation, /)\n--\n\nThe XLA FFI handle's next ordering token.",
+    ),
+    FunctionRow::varargs::<XlaTakeError>(
+        c"_xla_take_error",
+        c"_xla_take_error($module, slot, generation, /)\n--\n\nThe handle's last error as (class name, message), cleared; None without one.",
+    ),
+    FunctionRow::varargs::<XlaClose>(
+        c"_xla_close",
+        c"_xla_close($module, slot, generation, /)\n--\n\nCloses the XLA FFI handle; a call in flight finishes first.",
+    ),
     FunctionRow::noargs::<PhysicalCores>(
         c"physical_cores",
         c"physical_cores($module, /)\n--\n\nPhysical cores this process may use (capped by CPU quotas): the engine's default worker count.",

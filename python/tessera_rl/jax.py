@@ -331,4 +331,167 @@ def make(env_id: str, num_envs: int = 1, seed: int = 0, **kwargs) -> Env:
     return Env(_env.make(env_id, num_envs, seed, outputs="owned", **kwargs))
 
 
-__all__ = ["JAX_VERSION", "Env", "Step", "make"]
+__all__ = ["JAX_VERSION", "Env", "FfiHandle", "Step", "ffi_handle", "make"]
+
+
+# ------------------------------------------------- XLA FFI token path (ADR-0095)
+
+_FFI_STEP = "tessera_xla_step"
+_FFI_RESET = "tessera_xla_reset"
+_ffi_registered = False
+
+
+def _register_ffi_targets() -> None:
+    """Registers the native handlers with XLA once per process (CPU)."""
+    global _ffi_registered
+    if _ffi_registered:
+        return
+    targets = _native._xla_targets()
+    jax.ffi.register_ffi_target(_FFI_STEP, targets["step"], platform="cpu", api_version=1)
+    jax.ffi.register_ffi_target(_FFI_RESET, targets["reset"], platform="cpu", api_version=1)
+    _ffi_registered = True
+
+
+class FfiHandle:
+    """An XLA FFI handle over an existing Sync ``Env`` (ADR-0095),
+    **experimental**: the native step runs inside XLA, without the
+    interpreter and with one copy of the outputs.
+
+    Calls are ordered by an explicit token, threaded by the caller:
+    ``token, step = h.step(token, actions)``. ``h.token()`` gives the next
+    expected value. A stale, replayed or reordered token is refused before
+    anything is stepped: JAX raises its runtime error and ``last_error`` is
+    a ``tessera_rl.OrderError``.
+
+    The handle shares the ``Env``'s reentrancy guard: a call on the ``Env``
+    while an FFI call runs raises ``ConcurrencyError``, and the reverse
+    fails the FFI call. Refused with ``CapabilityError``:
+
+    - architectures other than x86-64, until the native boundary has
+      evidence there;
+    - an ``Env`` made with ``privileged_state=True`` (no privileged leaves
+      are exported);
+    - continuous actions, and the split-phase modes.
+
+    Under the ``canonicalize`` floating-point policy, a call made under
+    non-default controls defers the once-per-process warning to the next
+    Python call into ``tessera_rl`` (the handler cannot touch Python); it
+    is lost if no such call follows.
+    """
+
+    def __init__(self, pool: _env.Env):
+        if pool.mode != "sync":
+            raise _native.CapabilityError("the XLA FFI path supports Sync mode only")
+        if len(pool.action_nvec) > 1:
+            raise _native.ArgumentError("the XLA FFI path takes one action head; the pool has several")
+        self._slot, self._generation = pool._native._xla_open()
+        _register_ffi_targets()
+        self._pool = pool
+        self.num_envs: int = pool.num_envs
+        self.agents: int = pool.agents
+        self._last_error: BaseException | None = None
+        self._closed = False
+        n, a = self.num_envs, self.agents
+
+        def spec(shape, dtype):
+            return jax.ShapeDtypeStruct(shape, np.dtype(dtype))
+
+        self._names = [name for name, _, _ in pool._leaves]
+        flat = [spec((n, a, *shape), dtype) for _, dtype, shape in pool._leaves]
+        flat += [spec((n, a), np.float32)]
+        flat += [spec((n, a), np.bool_) for _ in range(4)]  # terminated, truncated, alive, acting
+        flat += [spec((n, a), np.uint32)]
+        flat += [spec((n,), np.bool_), spec((n,), np.bool_)]
+        self._masked = bool(pool._mask_len)
+        if self._masked:
+            flat.append(spec((n, a, pool._mask_len), np.bool_))
+        self._token_spec = spec((), np.uint32)
+        self._results = [self._token_spec, *flat]
+
+    def _attrs(self) -> dict:
+        return {"slot": np.int64(self._slot), "generation": np.int64(self._generation)}
+
+    def _to_step(self, outs) -> tuple[jax.Array, Step]:
+        token, rest = outs[0], list(outs[1:])
+        leaves = len(self._names)
+        obs = dict(zip(self._names, rest[:leaves], strict=True))
+        r, at, au, alive, acting, gens, et, eu = rest[leaves : leaves + 8]
+        masks = rest[leaves + 8] if self._masked else None
+        return token, Step(
+            observations=obs,
+            rewards=r,
+            agent_terminated=at,
+            agent_truncated=au,
+            alive=alive,
+            episode_terminated=et,
+            episode_truncated=eu,
+            masks=masks,
+            acting=acting,
+            slot_generations=gens,
+        )
+
+    def token(self) -> jax.Array:
+        """The next expected token, as a ``uint32`` scalar."""
+        return jax.numpy.uint32(_native._xla_token(self._slot, self._generation))
+
+    def step(self, token, actions) -> tuple[jax.Array, Step]:
+        """One step of every instance: ``(next_token, Step)``. ``actions``
+        must be exactly ``int32`` ``(num_envs, agents)``."""
+        _refuse_mapped("step")
+        expected = (self.num_envs, self.agents)
+        dtype = getattr(actions, "dtype", None)
+        if dtype is None or np.dtype(dtype) != _I32 or tuple(getattr(actions, "shape", ())) != expected:
+            raise _native.ActionError(f"actions must be int32 {list(expected)}")
+        call = jax.ffi.ffi_call(_FFI_STEP, self._results, has_side_effect=True, vmap_method=None)
+        return self._to_step(call(token, actions, **self._attrs()))
+
+    def reset(self, token, seed=None) -> tuple[jax.Array, Step]:
+        """Resets every instance: ``(next_token, Step)``. ``seed``: ``None``
+        keeps the seed base, or a Python ``int`` in the 64-bit range."""
+        _refuse_mapped("reset")
+        if seed is None:
+            words, flag = np.zeros(2, dtype=_U32), np.bool_(False)
+        else:
+            value = _env._index(seed, "seed")
+            if not 0 <= value < 2**64:
+                raise _native.ArgumentError(f"seed {value} is outside the 64-bit seed range")
+            words, flag = np.array([value & 0xFFFFFFFF, value >> 32], dtype=_U32), np.bool_(True)
+        call = jax.ffi.ffi_call(_FFI_RESET, self._results, has_side_effect=True, vmap_method=None)
+        return self._to_step(call(token, words, flag, **self._attrs()))
+
+    @property
+    def last_error(self) -> BaseException | None:
+        """The error recorded by the most recent failed FFI call (kept until
+        ``clear_error``)."""
+        if not self._closed:
+            taken = _native._xla_take_error(self._slot, self._generation)
+            if taken is not None:
+                name, message = taken
+                self._last_error = getattr(_native, name, _native.TesseraError)(message)
+        return self._last_error
+
+    def clear_error(self) -> None:
+        """Resets ``last_error`` to ``None``."""
+        _ = self.last_error
+        self._last_error = None
+
+    def close(self) -> None:
+        """Waits for dispatched work, then closes the handle (a call in
+        flight finishes first); the ``Env`` stays open. Idempotent."""
+        if self._closed:
+            return
+        jax.effects_barrier()
+        _native._xla_close(self._slot, self._generation)
+        self._closed = True
+
+    def __enter__(self) -> FfiHandle:
+        return self
+
+    def __exit__(self, *exc) -> None:
+        self.close()
+
+
+def ffi_handle(env: _env.Env) -> FfiHandle:
+    """An XLA FFI handle over ``env``, a Sync ``tessera_rl.Env``
+    (experimental, ADR-0095; see ``FfiHandle``)."""
+    return FfiHandle(env)

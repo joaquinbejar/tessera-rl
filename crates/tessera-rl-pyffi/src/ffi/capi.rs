@@ -834,6 +834,15 @@ pub(crate) unsafe fn capsule<'py>(
     Mine::new(unsafe { ffi::PyCapsule_New(ptr, name.as_ptr(), Some(destructor)) })
 }
 
+/// A capsule over the function pointer `f`, with no name and no
+/// destructor: the form `jax.ffi.register_ffi_target` takes (an XLA FFI
+/// handler, ADR-0095). Safe: the pointer is never dereferenced by Python,
+/// and a function pointer lives for the process.
+pub(crate) fn fn_capsule(_g: Gil<'_>, f: *const core::ffi::c_void) -> CResult<Mine<'_>> {
+    // SAFETY: attached (`_g`); a null name and no destructor are allowed.
+    Mine::new(unsafe { ffi::PyCapsule_New(f.cast_mut(), core::ptr::null(), None) })
+}
+
 /// The pointer of a capsule still named `name`, if it is (direct: no
 /// exception is set when it is not).
 ///

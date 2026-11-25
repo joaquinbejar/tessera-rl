@@ -664,6 +664,12 @@ generic_thunk!(
     /// A `DLManagedTensorVersioned::deleter` entry.
     DlDeleterVersionedEntry, dl_deleter_versioned : fn(managed: *mut DLManagedTensorVersioned) -> ()
 );
+generic_thunk!(
+    /// An XLA FFI handler entry (ADR-0095): XLA calls the thunk directly, on
+    /// one of its threads, without the interpreter; the same template
+    /// canonicalizes the floating-point controls first.
+    XlaHandlerEntry, xla_handler : fn(frame: *mut crate::xla::sys::CallFrame) -> *mut crate::xla::sys::Error
+);
 
 // The fixed module initializers CPython looks up by name (P1 of the #272
 // step 3 design): non-generic, so they can carry `no_mangle`.
@@ -740,6 +746,13 @@ impl ThunkFn<DlDeleterVersioned> {
     /// The boundary thunk of `E`.
     pub(crate) const fn of<E: DlDeleterVersionedEntry>() -> Self {
         Self(dl_deleter_versioned::<E>)
+    }
+}
+
+impl ThunkFn<crate::xla::sys::Handler> {
+    /// The boundary thunk of the XLA FFI handler `E`.
+    pub(crate) const fn of<E: XlaHandlerEntry>() -> Self {
+        Self(xla_handler::<E>)
     }
 }
 

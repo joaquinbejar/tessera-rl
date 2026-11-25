@@ -58,3 +58,9 @@ pub fn count(f: impl FnOnce()) -> u64 {
     ARMED.with(|a| a.set(false));
     COUNT.with(Cell::get)
 }
+
+/// pyffi's own unit tests count with it too (the handler's zero-allocation
+/// test).
+#[cfg(test)]
+#[global_allocator]
+static COUNTING: CountingAlloc = CountingAlloc;
