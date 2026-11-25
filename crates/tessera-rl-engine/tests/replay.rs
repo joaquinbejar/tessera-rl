@@ -17,6 +17,7 @@ mod common;
 use core::num::{NonZeroU32, NonZeroUsize};
 
 use common::{CountConfig, Counter};
+use tessera_rl_core::Persist;
 use tessera_rl_core::encoding::checksum;
 use tessera_rl_engine::replay::{
     DivergenceKind, Event, EventTag, Ids, RecordedReseed, Recorder, Replay, ReplayError,
@@ -769,4 +770,67 @@ fn test_replay_import_all_state_write_with_a_subset_is_malformed() {
             "op {op}: {err:?}"
         );
     }
+}
+
+/// `b` with the header's `env_version` (u32 at offset 28: magic 8, version 4,
+/// encoding and policy bytes 8, `penalty_bits` 4, `max_episode_steps` 4) set to
+/// `version`, `config_hash` (u64 at offset 32) to `hash` when given, and the
+/// header checksum rewritten, so only the identity check can refuse it.
+fn with_identity(b: &[u8], version: u32, hash: Option<u64>) -> Vec<u8> {
+    let mut out = b.to_vec();
+    assert_eq!(
+        u32::from_le_bytes(out[28..32].try_into().unwrap()),
+        Counter::ENV_VERSION
+    );
+    out[28..32].copy_from_slice(&version.to_le_bytes());
+    if let Some(hash) = hash {
+        out[32..40].copy_from_slice(&hash.to_le_bytes());
+    }
+    let end = header_len(&out) - 8;
+    let sum = checksum(&out[..end]);
+    out[end..end + 8].copy_from_slice(&sum.to_le_bytes());
+    out
+}
+
+/// #386: a file recorded under another `ENV_VERSION` is refused, naming the
+/// field.
+#[test]
+fn test_replay_run_other_env_version_is_incompatible_env_version() {
+    let (bytes, _) = record(0);
+    let forged = with_identity(&bytes, Counter::ENV_VERSION + 1, None);
+    let err = Replay::open(&forged, LIMITS)
+        .unwrap()
+        .run(&mut pool_with(config(), 0))
+        .unwrap_err();
+    assert!(
+        matches!(
+            err,
+            ReplayError::Persist(PersistError::Incompatible {
+                field: "env_version"
+            })
+        ),
+        "{err:?}"
+    );
+}
+
+/// #386: with both the `env_version` and the config hash changed, the
+/// `env_version` is named: it is compared before the config hash.
+#[test]
+fn test_replay_run_other_env_version_and_config_hash_names_env_version() {
+    let (bytes, _) = record(0);
+    let hash = u64::from_le_bytes(bytes[32..40].try_into().unwrap());
+    let forged = with_identity(&bytes, Counter::ENV_VERSION + 1, Some(hash ^ 1));
+    let err = Replay::open(&forged, LIMITS)
+        .unwrap()
+        .run(&mut pool_with(config(), 0))
+        .unwrap_err();
+    assert!(
+        matches!(
+            err,
+            ReplayError::Persist(PersistError::Incompatible {
+                field: "env_version"
+            })
+        ),
+        "{err:?}"
+    );
 }

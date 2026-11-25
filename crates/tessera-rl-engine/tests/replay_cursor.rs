@@ -18,10 +18,14 @@ use core::num::NonZeroU32;
 use core::ops::ControlFlow;
 
 use common::{CountConfig, Counter};
+use tessera_rl_core::Persist;
+use tessera_rl_core::encoding::checksum;
 use tessera_rl_engine::replay::{
     Event, Ids, PointKind, Recorder, Replay, ReplayError, ReplayPoint, ReplayWriterOptions,
 };
-use tessera_rl_engine::{ActionInput, DecodeLimits, EnvPool, Masked, PoolOptions, Reseed};
+use tessera_rl_engine::{
+    ActionInput, DecodeLimits, EnvPool, Masked, PersistError, PoolOptions, Reseed,
+};
 use tessera_rl_num::identity::Seed;
 
 type Pool = EnvPool<Counter, Masked>;
@@ -276,4 +280,60 @@ fn test_replay_seek_state_write_keyframe_and_other_events_refused() {
     refused(replay.seek(&mut p, &mut cur, u64::MAX));
     // The cursor did not move.
     assert_eq!(cur.next_event(), 0);
+}
+
+/// Byte offset of the first event (first-party file): past the shared
+/// header, the extension and the header checksum.
+fn header_len(b: &[u8]) -> usize {
+    let u16_at = |at: usize| usize::from(u16::from_le_bytes([b[at], b[at + 1]]));
+    let u32_at = |at: usize| u32::from_le_bytes(b[at..at + 4].try_into().unwrap()) as usize;
+    let mut at = 48;
+    for _ in 0..2 {
+        at += 2 + u16_at(at);
+    }
+    at += 2; // asset_count
+    at += 2 + u16_at(at); // descriptor
+    // Config, agents and heads (12), flags and host fields (4).
+    let mut q = at + 4 + u32_at(at) + 12 + 4;
+    q += 2 + u16_at(q) + 2; // policy map, curriculum and league flags
+    q += if b[q] == 1 {
+        1 + 8 + 4 + 4 * u32_at(q + 9)
+    } else {
+        1
+    };
+    q + 4 + 8 // chunk size, header checksum
+}
+
+/// `b` with the header's `env_version` (u32 at offset 28) set to `version` and
+/// the header checksum rewritten.
+fn with_env_version(b: &[u8], version: u32) -> Vec<u8> {
+    let mut out = b.to_vec();
+    assert_eq!(
+        u32::from_le_bytes(out[28..32].try_into().unwrap()),
+        Counter::ENV_VERSION
+    );
+    out[28..32].copy_from_slice(&version.to_le_bytes());
+    let end = header_len(&out) - 8;
+    let sum = checksum(&out[..end]);
+    out[end..end + 8].copy_from_slice(&sum.to_le_bytes());
+    out
+}
+
+/// #386: a cursor (the seek path's pool check) over a file recorded under
+/// another `ENV_VERSION` is refused, naming the field.
+#[test]
+fn test_replay_cursor_other_env_version_is_incompatible_env_version() {
+    let (bytes, _) = record();
+    let forged = with_env_version(&bytes, Counter::ENV_VERSION + 1);
+    let replay = Replay::open(&forged, LIMITS).unwrap();
+    let err = replay.cursor(&pool()).unwrap_err();
+    assert!(
+        matches!(
+            err,
+            ReplayError::Persist(PersistError::Incompatible {
+                field: "env_version"
+            })
+        ),
+        "{err:?}"
+    );
 }

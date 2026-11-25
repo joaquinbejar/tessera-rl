@@ -21,6 +21,7 @@ mod common;
 use core::num::{NonZeroU32, NonZeroUsize};
 
 use common::{CountConfig, Counter};
+use tessera_rl_core::Persist;
 use tessera_rl_core::encoding::checksum;
 use tessera_rl_engine::replay::{
     AsyncRecorder, DivergenceKind, Event, EventTag, Ids, Recorder, Replay, ReplayError,
@@ -632,4 +633,40 @@ fn test_replay_async_external_policy_map_records_its_codes() {
         .unwrap();
     let replay = Replay::open(&bytes, LIMITS).unwrap();
     assert_eq!(replay.header().policy_map, &[] as &[u8]);
+}
+
+/// `b` with the header's `env_version` (u32 at offset 28) set to `version` and
+/// the header checksum rewritten.
+fn with_env_version(b: &[u8], version: u32) -> Vec<u8> {
+    let mut out = b.to_vec();
+    assert_eq!(
+        u32::from_le_bytes(out[28..32].try_into().unwrap()),
+        Counter::ENV_VERSION
+    );
+    out[28..32].copy_from_slice(&version.to_le_bytes());
+    let end = header_len(&out) - 8;
+    let sum = checksum(&out[..end]);
+    out[end..end + 8].copy_from_slice(&sum.to_le_bytes());
+    out
+}
+
+/// #386: an async file recorded under another `ENV_VERSION` is refused,
+/// naming the field.
+#[test]
+fn test_replay_async_other_env_version_is_incompatible_env_version() {
+    let (bytes, _) = record(options(4, false));
+    let forged = with_env_version(&bytes, Counter::ENV_VERSION + 1);
+    let err = Replay::open(&forged, LIMITS)
+        .unwrap()
+        .run_async(&mut asy(1))
+        .unwrap_err();
+    assert!(
+        matches!(
+            err,
+            ReplayError::Persist(PersistError::Incompatible {
+                field: "env_version"
+            })
+        ),
+        "{err:?}"
+    );
 }
