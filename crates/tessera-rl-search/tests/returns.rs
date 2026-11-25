@@ -489,3 +489,62 @@ fn test_explicit_terminal_mode_equals_the_default_on_connect4() {
     explicit.value = ValueMode::Terminal;
     assert_eq!(run(default), run(explicit));
 }
+
+/// FNV-1a over a fingerprint's `(N, W bits)` pairs.
+fn digest(edges: &[(u32, u64)]) -> u64 {
+    let mut h = 0xcbf2_9ce4_8422_2325_u64;
+    for &(n, w) in edges {
+        for b in u64::from(n)
+            .to_le_bytes()
+            .into_iter()
+            .chain(w.to_le_bytes())
+        {
+            h = (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3);
+        }
+    }
+    h
+}
+
+/// Pinned `Returns` goldens (pinned on Linux x86-64; ADR-0043 section 4
+/// makes them identical on every platform): PUCT with batches of 8 (virtual loss in play) over two
+/// calls, whose second starts its own min-max, and the Gumbel root's
+/// visits and `pi'`.
+#[test]
+fn test_returns_puct_and_gumbel_goldens_are_pinned() {
+    let cfg = WalkConfig {
+        length: 4,
+        ..WalkConfig::default()
+    };
+    let mut m = search(&cfg, returns(0.5, 48));
+    let mut eval = Canned::new(&cfg);
+    m.run(&mut eval).unwrap();
+    let first = digest(&fingerprint(&m, cfg.actions).1);
+    m.run(&mut eval).unwrap();
+    let second = digest(&fingerprint(&m, cfg.actions).1);
+    let mut g = GumbelConfig::default();
+    g.m = 3;
+    let mut puct = returns(0.5, 48);
+    puct.root = RootSelection::Gumbel(g);
+    let mut gm = search(&cfg, puct);
+    gm.run(&mut eval).unwrap();
+    let mut visits = vec![0; 3];
+    gm.root_visits(&mut visits);
+    let policy: Vec<u64> = gm
+        .improved_policy()
+        .unwrap()
+        .iter()
+        .map(|p| p.to_bits())
+        .collect();
+    let got = (first, second, visits, policy);
+    let pinned = (
+        9_811_372_669_519_447_865,
+        14_723_742_536_957_817_435,
+        vec![8, 20, 20],
+        vec![
+            4_581_516_401_972_690_821,
+            4_603_483_973_270_052_782,
+            4_600_702_312_192_568_491,
+        ],
+    );
+    assert_eq!(got, pinned);
+}

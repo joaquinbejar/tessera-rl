@@ -161,9 +161,9 @@ pub struct Mcts<E: Environment, M: MaskProvider<E>> {
     /// The Gumbel root's state, under [`RootSelection::Gumbel`] only.
     gumbel: Option<Gumbel>,
     /// Under `ValueMode::Returns`, the call's min-max of backed-up edge
-    /// means (ADR-0096 decision 4), and its copy at the start of the call.
+    /// means (ADR-0096 decision 4). Reset at each call's start, so a
+    /// rolled-back call needs no restore: nothing reads it between calls.
     bounds: MinMax,
-    saved_bounds: MinMax,
 }
 
 fn idx(v: u32) -> usize {
@@ -306,7 +306,6 @@ where
             saved_v_root: None,
             gumbel,
             bounds: MinMax::default(),
-            saved_bounds: MinMax::default(),
             pool,
         })
     }
@@ -475,7 +474,6 @@ where
         self.pool.begin();
         self.saved_v_root = self.v_root;
         // Each call starts its own min-max (ADR-0096 decision 4).
-        self.saved_bounds = self.bounds;
         self.bounds = MinMax::default();
         Ok(CallStart { calls, rng })
     }
@@ -494,7 +492,6 @@ where
     pub(crate) fn call_rollback(&mut self) {
         self.pool.rollback();
         self.v_root = self.saved_v_root;
-        self.bounds = self.saved_bounds;
     }
 
     /// Whether the root is terminal (a call on it is an error).
