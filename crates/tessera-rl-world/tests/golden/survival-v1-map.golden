@@ -1,0 +1,15 @@
+env_id=tessera/Survival-v1
+env_version=1
+format=1
+size=32 seed=1 tiles=6c7b0ffee9abb450
+size=32 seed=2 tiles=c95382651579e904
+size=32 seed=3 tiles=0a61f153ee3c3265
+size=32 seed=382 tiles=4fbea306085edfa5
+size=64 seed=1 tiles=42de47910aeacea2
+size=64 seed=2 tiles=af429c0f93a86429
+size=64 seed=3 tiles=00222cd3a4bb1ab2
+size=64 seed=382 tiles=6cac31d7e390827a
+size=96 seed=1 tiles=c6807915d9fbcbb9
+size=96 seed=2 tiles=bbe138e0632db062
+size=96 seed=3 tiles=839035412e4847ac
+size=96 seed=382 tiles=b01de8105f901df1
