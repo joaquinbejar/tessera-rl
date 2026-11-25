@@ -955,7 +955,7 @@ fn test_pipelined_continuous_head_matches_sync_bit_for_bit() {
             .map(|k| f32::from(u8::try_from((k * 3 + t) % 5).unwrap()) * 0.25 - 0.5)
             .collect()
     };
-    let mut reference = EnvPool::<Drift>::new(DriftConfig {}, options).unwrap();
+    let mut reference = EnvPool::<Drift>::new(DriftConfig {}, options.clone()).unwrap();
     reference.reset_all(Reseed::Keep).unwrap();
     let mut piped_pool = EnvPool::<Drift>::new(DriftConfig {}, options)
         .unwrap()

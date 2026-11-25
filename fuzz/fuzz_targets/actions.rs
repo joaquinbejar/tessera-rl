@@ -34,7 +34,7 @@ fuzz_target!(|data: &[u8]| {
         discrete: &acts,
         continuous: &[],
     };
-    if let Ok(mut tag) = EnvPool::<Tag, Masked>::with_masks(TagConfig::default(), options) {
+    if let Ok(mut tag) = EnvPool::<Tag, Masked>::with_masks(TagConfig::default(), options.clone()) {
         tag.reset_all(Reseed::Keep).unwrap();
         let checked = tag.check_actions(input);
         let stepped = tag.step(input).map(|_| ());

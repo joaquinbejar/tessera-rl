@@ -97,9 +97,9 @@ where
     E: HostSnapshot,
     E::Config: CanonicalConfig,
 {
-    let mut a = HostPool::<E, A>::new(cfg(), options)?;
-    let mut other = options;
+    let mut other = options.clone();
     other.seed = tessera_rl_num::identity::Seed::new(options.seed.get() ^ 0x5EED_5EED);
+    let mut a = HostPool::<E, A>::new(cfg(), options)?;
     let mut b = HostPool::<E, A>::new(cfg(), other)?;
     a.reset_all(Reseed::Keep)?;
     b.reset_all(Reseed::Keep)?;

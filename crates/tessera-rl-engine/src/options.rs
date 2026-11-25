@@ -3,9 +3,11 @@
 //! Pool construction options.
 
 use core::num::NonZeroU32;
+use std::sync::Arc;
 
 use tessera_rl_num::identity::Seed;
 
+use crate::buffer::OutputAllocator;
 use crate::error::EngineError;
 use crate::masks::IllegalActionPolicy;
 
@@ -33,7 +35,11 @@ pub enum AutoReset {
 }
 
 /// Options of an [`EnvPool`](crate::EnvPool).
-#[derive(Debug, Clone, Copy, PartialEq)]
+///
+/// `Clone`, not `Copy`, since it holds an optional output allocator
+/// (ADR-0084). Equality compares the allocator by identity: the data
+/// pointer of its `Arc`, without the vtable.
+#[derive(Clone)]
 pub struct PoolOptions {
     /// Number of instances.
     pub num_envs: NonZeroU32,
@@ -60,6 +66,80 @@ pub struct PoolOptions {
     /// construction, never a silent fallback. Ignored by environments
     /// without a lane step.
     pub simd_level: Option<tessera_rl_simd::Level>,
+    /// Where the output storage comes from (ADR-0084): `None`, the default,
+    /// is the engine's own allocation; `Some` asks this allocator once, at
+    /// construction, for the whole storage. Never changes what a step
+    /// computes or what a snapshot holds.
+    ///
+    /// Invariant (the `UnwindSafe` and `RefUnwindSafe` impls below rely on
+    /// it): the engine calls the allocator only once, at construction, and
+    /// keeps nothing of it but the storage it returned. Calling it again
+    /// after construction, or keeping per-call allocator state, breaks
+    /// those impls.
+    pub output_allocator: Option<Arc<dyn OutputAllocator>>,
+}
+
+impl core::fmt::Debug for PoolOptions {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("PoolOptions")
+            .field("num_envs", &self.num_envs)
+            .field("seed", &self.seed)
+            .field("chunk_size", &self.chunk_size)
+            .field("max_episode_steps", &self.max_episode_steps)
+            .field("auto_reset", &self.auto_reset)
+            .field("illegal_action", &self.illegal_action)
+            .field("mask_budget_bytes", &self.mask_budget_bytes)
+            .field("schedule", &self.schedule)
+            .field("simd_level", &self.simd_level)
+            .field("output_allocator", &self.output_allocator.is_some())
+            .finish()
+    }
+}
+
+// The allocator trait object would make `PoolOptions` neither `UnwindSafe`
+// nor `RefUnwindSafe`, a public API regression from the `Copy` options of
+// before ADR-0084. The engine calls the allocator only once, at
+// construction, and holds no state of it that a caught panic could leave
+// half-updated, so both hold as before (the facade API snapshot checks it).
+impl core::panic::UnwindSafe for PoolOptions {}
+impl core::panic::RefUnwindSafe for PoolOptions {}
+
+impl PartialEq for PoolOptions {
+    fn eq(&self, other: &Self) -> bool {
+        // Destructured, so a new field cannot be left out of the comparison.
+        let Self {
+            num_envs,
+            seed,
+            chunk_size,
+            max_episode_steps,
+            auto_reset,
+            illegal_action,
+            mask_budget_bytes,
+            schedule,
+            simd_level,
+            output_allocator,
+        } = self;
+        let allocators = match (output_allocator, &other.output_allocator) {
+            (None, None) => true,
+            // Data pointers only: two `Arc<dyn _>` of one allocation may
+            // carry different vtable pointers (one per codegen unit), so
+            // the metadata is not part of the identity.
+            (Some(a), Some(b)) => {
+                core::ptr::eq(Arc::as_ptr(a).cast::<()>(), Arc::as_ptr(b).cast::<()>())
+            }
+            _ => false,
+        };
+        *num_envs == other.num_envs
+            && *seed == other.seed
+            && *chunk_size == other.chunk_size
+            && *max_episode_steps == other.max_episode_steps
+            && *auto_reset == other.auto_reset
+            && *illegal_action == other.illegal_action
+            && *mask_budget_bytes == other.mask_budget_bytes
+            && *schedule == other.schedule
+            && *simd_level == other.simd_level
+            && allocators
+    }
 }
 
 /// How a worker pool gives chunks to its workers (ADR-0076, SPEC 6.1).
@@ -112,6 +192,7 @@ impl PoolOptions {
             mask_budget_bytes: DEFAULT_MASK_BUDGET,
             schedule: Schedule::Static,
             simd_level: None,
+            output_allocator: None,
         }
     }
 

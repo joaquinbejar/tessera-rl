@@ -27,7 +27,7 @@ fn bench(c: &mut Criterion) {
         };
         // Scattered jobs; a finished one is replaced by the no-op.
         let actions: Vec<i32> = (0..N).map(|i| ((i * 7) % jobs).cast_signed()).collect();
-        let mut pool = EnvPool::<JobShop, Masked>::with_masks(cfg, options).unwrap();
+        let mut pool = EnvPool::<JobShop, Masked>::with_masks(cfg, options.clone()).unwrap();
         pool.reset_all(Reseed::Keep).unwrap();
         group.bench_function(format!("{name}_step"), |b| {
             b.iter(|| {
@@ -55,7 +55,7 @@ fn bench(c: &mut Criterion) {
         let actions: Vec<i32> = (0..N * 8)
             .map(|i| ((i * 37) % (customers + 1)).cast_signed())
             .collect();
-        let mut pool = EnvPool::<Vrp, Masked>::with_masks(cfg, options).unwrap();
+        let mut pool = EnvPool::<Vrp, Masked>::with_masks(cfg, options.clone()).unwrap();
         pool.reset_all(Reseed::Keep).unwrap();
         group.bench_function(format!("{name}_step"), |b| {
             b.iter(|| {

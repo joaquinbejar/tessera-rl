@@ -327,7 +327,7 @@ fn test_grid_terminal_record_imports_as_pending_reset() {
 #[test]
 fn test_grid_never_reset_record_round_trips_and_refuses_anything_else() {
     let options = PoolOptions::new(NonZeroU32::MIN, Seed::new(11));
-    let p = EnvPool::<Grid, NoMasks>::new(cfg(), options).unwrap();
+    let p = EnvPool::<Grid, NoMasks>::new(cfg(), options.clone()).unwrap();
     let rec = DecodedRecord::from(p.snapshot(0).unwrap());
     assert_eq!(*rec.state(), GridState::default());
     let header = *rec.header();

@@ -923,10 +923,10 @@ fn test_go9_terminal_record_imports_as_pending_reset() {
 #[test]
 fn test_go9_never_reset_record_round_trips_and_refuses_anything_else() {
     let options = PoolOptions::new(NonZeroU32::MIN, Seed::new(11));
-    let p = EnvPool::<Go9, Masked>::with_masks(cfg(), options).unwrap();
+    let p = EnvPool::<Go9, Masked>::with_masks(cfg(), options.clone()).unwrap();
     let rec = DecodedRecord::from(p.snapshot(0).unwrap());
     assert_eq!(*rec.state(), Go9State::default());
-    let mut q = EnvPool::<Go9, Masked>::with_masks(cfg(), options).unwrap();
+    let mut q = EnvPool::<Go9, Masked>::with_masks(cfg(), options.clone()).unwrap();
     q.import(&[0], &[rec]).unwrap();
     q.reset_all(Reseed::Keep).unwrap();
     assert_eq!(q.state(0).unwrap(), Go9State::default());

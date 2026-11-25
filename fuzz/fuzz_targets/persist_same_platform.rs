@@ -74,7 +74,7 @@ impl Persist for Same {
 
 fuzz_target!(|data: &[u8]| {
     let options = PoolOptions::new(NonZeroU32::new(2).unwrap(), Seed::new(3));
-    let mut p = EnvPool::<Same, NoMasks>::new(Config::default(), options).unwrap();
+    let mut p = EnvPool::<Same, NoMasks>::new(Config::default(), options.clone()).unwrap();
     p.reset_all(Reseed::Keep).unwrap();
     // No checked-in fixture can hold this synthetic file, so overlay the input on a
     // valid one, as well as running it alone.

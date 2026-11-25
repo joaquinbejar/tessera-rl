@@ -39,7 +39,8 @@ fn archived_pool(auto_reset: AutoReset, workers: usize) -> EnvPool<CartPole, NoM
         ..PoolOptions::new(NonZeroU32::new(8).unwrap(), Seed::new(3))
     };
     // Entries: snapshots of a pool after a few steps.
-    let mut src = EnvPool::<CartPole, NoMasks>::new(CartPoleConfig::default(), options).unwrap();
+    let mut src =
+        EnvPool::<CartPole, NoMasks>::new(CartPoleConfig::default(), options.clone()).unwrap();
     src.reset_all(Reseed::Keep).unwrap();
     let a = [1i32; 8];
     for _ in 0..3 {

@@ -112,7 +112,8 @@ fn refused_counts(good: &[u8], decode: &dyn Fn(&[u8], DecodeLimits) -> bool) {
 #[test]
 fn test_persist_refused_counts_never_reach_the_allocator_on_either_tier() {
     let options = PoolOptions::new(NonZeroU32::new(4).unwrap(), Seed::new(1));
-    let mut p = EnvPool::<Counter, Masked>::with_masks(CountConfig::default(), options).unwrap();
+    let mut p =
+        EnvPool::<Counter, Masked>::with_masks(CountConfig::default(), options.clone()).unwrap();
     p.reset_all(Reseed::Keep).unwrap();
     let good = p.encode_with(&[0], "fixture", None).unwrap();
     refused_counts(&good, &|b, l| p.decode_with(b, l, None).is_err());

@@ -720,7 +720,7 @@ fn test_host_pool_masks_true_layout_and_budget_check() {
     let mut tight = options(2, 0);
     tight.mask_budget_bytes = 7;
     assert!(matches!(
-        HostPool::<Choices<true>, 1>::new(small, tight).err(),
+        HostPool::<Choices<true>, 1>::new(small, tight.clone()).err(),
         Some(EngineError::MaskBudgetExceeded {
             bytes: 8,
             budget: 7

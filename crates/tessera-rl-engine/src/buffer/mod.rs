@@ -58,6 +58,7 @@
 #[cfg(not(loom))]
 pub(crate) mod batch;
 pub(crate) mod claim;
+mod external;
 #[cfg_attr(
     loom,
     allow(dead_code, reason = "the split-phase modes are not built under loom")
@@ -88,6 +89,9 @@ use crate::transform::rows::{Shared, TransformRows};
 use crate::transform::stats::Moments;
 use claim::Cursors;
 
+pub use external::{ExternalAlloc, OutputAllocator};
+#[cfg(feature = "test-hooks")]
+pub use external::{VecAllocStats, VecOutputAllocator};
 use generations::HALVES;
 #[cfg(not(loom))]
 pub(crate) use generations::{GenerationError, Generations};
@@ -851,7 +855,7 @@ mod tests {
         use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
         const N: usize = 6;
         let leaves = [Leaf { bytes: 1 }];
-        let mut outputs = Outputs::new(N, 2, &leaves, false, 2).unwrap();
+        let mut outputs = Outputs::new(N, 2, &leaves, false, 2, None).unwrap();
         let mut headers = vec![RecordHeader::<2, NoAdaptive>::state_default(); N];
         let mut states = vec![ProbeState(0); N];
         let mut discrete = vec![0i32; N * 2];
@@ -937,7 +941,7 @@ mod tests {
     fn test_raw_chunk_views_cover_every_buffer_from_two_threads() {
         const N: usize = 7;
         let leaves = [Leaf { bytes: 3 }, Leaf { bytes: 1 }];
-        let mut outputs = Outputs::new(N, 2, &leaves, true, 2).unwrap();
+        let mut outputs = Outputs::new(N, 2, &leaves, true, 2, None).unwrap();
         let mut headers = vec![RecordHeader::<2, NoAdaptive>::state_default(); N];
         let mut states = vec![ProbeState(0); N];
         let mut discrete = vec![0i32; N * 2];
@@ -1078,7 +1082,7 @@ mod tests {
         f: impl FnOnce(&RawChunk<<Probe as Environment>::Header, ProbeState>),
     ) -> (Outputs, Vec<ProbeState>) {
         let leaves = [Leaf { bytes: 3 }, Leaf { bytes: 1 }];
-        let mut outputs = Outputs::new(n, 2, &leaves, true, 2).unwrap();
+        let mut outputs = Outputs::new(n, 2, &leaves, true, 2, None).unwrap();
         let mut headers = vec![RecordHeader::<2, NoAdaptive>::state_default(); n];
         let mut states = vec![ProbeState(0); n];
         let mut discrete = vec![0i32; n * 2];

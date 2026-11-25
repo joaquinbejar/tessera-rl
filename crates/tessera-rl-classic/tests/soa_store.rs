@@ -392,7 +392,7 @@ fn test_soa_store_chunk_size_must_be_a_multiple_of_8() {
         };
         assert!(
             matches!(
-                EnvPool::<SoaCartPole>::new(CartPoleConfig {}, options),
+                EnvPool::<SoaCartPole>::new(CartPoleConfig {}, options.clone()),
                 Err(EngineError::Options {
                     option: "chunk_size",
                     ..
@@ -440,7 +440,7 @@ fn test_soa_store_heuristic_slots_are_refused() {
     // The heuristic pass reads a chunk's state rows, which a lane-wise
     // state does not have; the row store accepts the same slots.
     let options = PoolOptions::new(NonZeroU32::new(16).unwrap(), Seed::new(3));
-    let soa = EnvPool::<SoaCartPole>::new(CartPoleConfig {}, options).unwrap();
+    let soa = EnvPool::<SoaCartPole>::new(CartPoleConfig {}, options.clone()).unwrap();
     assert!(matches!(
         soa.with_heuristic_slots(&[0]),
         Err(EngineError::PolicyMap { .. })

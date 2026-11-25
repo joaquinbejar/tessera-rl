@@ -185,6 +185,14 @@ pub enum EngineError {
     /// are never reused, so no further pool can be constructed.
     #[error("the output storage id counter is exhausted")]
     StorageIdsExhausted,
+    /// The pool's [`OutputAllocator`](crate::OutputAllocator) returned no
+    /// memory, a range shorter than requested or a pointer not aligned to
+    /// [`OUTPUT_ALIGN`](crate::OUTPUT_ALIGN) (ADR-0084 item 2).
+    #[error("output allocation refused: {reason}")]
+    OutputAllocation {
+        /// What was wrong with the allocation.
+        reason: &'static str,
+    },
     /// The pool's branch counter cannot be incremented.
     #[error("the branch counter is exhausted")]
     BranchCounterExhausted,

@@ -787,7 +787,7 @@ fn test_keydoor_import_rejects_an_unused_slot_alive_or_acting() {
 fn test_keydoor_never_reset_record_round_trips_and_refuses_anything_else() {
     let c = config(8, 2);
     let options = PoolOptions::new(NonZeroU32::MIN, Seed::new(1));
-    let p = Pool::with_masks(c.clone(), options).unwrap();
+    let p = Pool::with_masks(c.clone(), options.clone()).unwrap();
     let rec = DecodedRecord::from(p.snapshot(0).unwrap());
     let header = *rec.header();
     let mut q = Pool::with_masks(c, options).unwrap();

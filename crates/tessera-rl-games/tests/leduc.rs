@@ -579,12 +579,12 @@ fn test_leduc_never_reset_record_round_trips_and_continues() {
         auto_reset: AutoReset::Disabled,
         ..PoolOptions::new(NonZeroU32::MIN, Seed::new(21))
     };
-    let mut fresh = EnvPool::<Leduc, Masked>::with_masks(CFG, options).unwrap();
+    let mut fresh = EnvPool::<Leduc, Masked>::with_masks(CFG, options.clone()).unwrap();
     let rec = fresh.snapshot(0).unwrap();
     let bytes = rec.to_bytes();
     let decoded: DecodedRecord<Leduc> =
         tessera_rl_core::encoding::decode_from_slice(&bytes).unwrap();
-    let mut q = EnvPool::<Leduc, Masked>::with_masks(CFG, options).unwrap();
+    let mut q = EnvPool::<Leduc, Masked>::with_masks(CFG, options.clone()).unwrap();
     q.import(&[0], &[decoded]).unwrap();
     assert_eq!(q.state(0).unwrap(), LeducState::default());
     // The continuation equals a pool that never left the initial value.

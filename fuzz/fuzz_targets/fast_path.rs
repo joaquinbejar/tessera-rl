@@ -72,7 +72,7 @@ macro_rules! env_runner {
                     ..PoolOptions::new(NonZeroU32::new(N).unwrap(), Seed::new(u64::from(mode)))
                 };
                 let (Ok(mut fast), Ok(mut slow)) = (
-                    EnvPool::<E>::new(cfg.clone(), options),
+                    EnvPool::<E>::new(cfg.clone(), options.clone()),
                     EnvPool::<E>::new(cfg.clone(), options),
                 ) else {
                     return;

@@ -875,7 +875,7 @@ fn test_brickwall_import_by_phase_direct_and_persisted() {
     let c = config(1, 1, OBS_STATE);
     // Never reset: the default state only.
     let options = PoolOptions::new(NonZeroU32::MIN, Seed::new(1));
-    let fresh = Pool::new(c.clone(), options).unwrap();
+    let fresh = Pool::new(c.clone(), options.clone()).unwrap();
     let rec = DecodedRecord::from(fresh.snapshot(0).unwrap());
     let mut q = Pool::new(c.clone(), options).unwrap();
     q.import(&[0], &[rec]).unwrap();
