@@ -541,6 +541,8 @@ mod tests {
             assert!(check.contains(comparison), "{comparison}");
         }
         assert!(!check.contains("assert_eq!(replay("), "no vector dumps");
+        assert!(check.contains("fn first_call(self)"), "absolute call numbers");
+        assert!(check.contains("fn test_report_numbers_calls_as_in_golden_for_every_kind"));
         assert!(!check.contains("two Inline pools disagree"));
     }
 
