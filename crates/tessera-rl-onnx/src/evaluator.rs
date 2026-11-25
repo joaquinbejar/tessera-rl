@@ -84,7 +84,7 @@ enum Float {
 
 /// One leaf's typed input buffer, reused across batches.
 #[derive(Debug)]
-enum Buffer {
+pub(crate) enum Buffer {
     F32(Vec<f32>),
     F64(Vec<f64>),
     U8(Vec<u8>),
@@ -264,7 +264,7 @@ impl<E: Environment> Evaluator<E> for OnnxEvaluator<E> {
 }
 
 /// Reads the model once, refusing more than `cap` bytes while reading.
-fn read_model(path: &Path, cap: u64) -> Result<Vec<u8>, OnnxError> {
+pub(crate) fn read_model(path: &Path, cap: u64) -> Result<Vec<u8>, OnnxError> {
     let model = |reason: String| OnnxError::Model {
         path: path.to_path_buf(),
         reason,
@@ -347,7 +347,7 @@ fn element_type(dtype: DType) -> Option<TensorElementType> {
     })
 }
 
-fn empty_buffer(dtype: DType) -> Result<Buffer, OnnxError> {
+pub(crate) fn empty_buffer(dtype: DType) -> Result<Buffer, OnnxError> {
     Ok(match dtype {
         DType::F32 => Buffer::F32(Vec::new()),
         DType::F64 => Buffer::F64(Vec::new()),
@@ -366,7 +366,7 @@ fn empty_buffer(dtype: DType) -> Result<Buffer, OnnxError> {
 
 /// A non-batch dimension matches when equal; the batch dimension must be
 /// dynamic (`-1`) or a positive number (checked per batch by the runtime).
-fn dims_match(model: &[i64], expected: &[u32]) -> bool {
+pub(crate) fn dims_match(model: &[i64], expected: &[u32]) -> bool {
     model.len() == expected.len() + 1
         && model
             .iter()
@@ -375,7 +375,7 @@ fn dims_match(model: &[i64], expected: &[u32]) -> bool {
             .all(|(&m, &e)| m == i64::from(e))
 }
 
-fn check_inputs(session: &Session, leaves: &[LeafInput]) -> Result<(), OnnxError> {
+pub(crate) fn check_inputs(session: &Session, leaves: &[LeafInput]) -> Result<(), OnnxError> {
     let contract = |what: String| OnnxError::Contract { what };
     let inputs = session.inputs();
     if inputs.len() != leaves.len() {
@@ -463,7 +463,7 @@ fn check_value(session: &Session) -> Result<Float, OnnxError> {
 
 /// Splits each observation row into its leaves and decodes them into the
 /// typed buffers (native byte order, as the engine writes them).
-fn fill(
+pub(crate) fn fill(
     leaves: &[LeafInput],
     buffers: &mut [Buffer],
     observations: &[u8],
@@ -507,7 +507,10 @@ fn decode<'a, T, const N: usize>(
     }
 }
 
-fn tensor(buffer: &Buffer, dims: Vec<usize>) -> ort::Result<ort::session::SessionInputValue<'_>> {
+pub(crate) fn tensor(
+    buffer: &Buffer,
+    dims: Vec<usize>,
+) -> ort::Result<ort::session::SessionInputValue<'_>> {
     Ok(match buffer {
         Buffer::F32(v) => TensorRef::from_array_view((dims, v.as_slice()))?.into(),
         Buffer::F64(v) => TensorRef::from_array_view((dims, v.as_slice()))?.into(),
@@ -519,7 +522,7 @@ fn tensor(buffer: &Buffer, dims: Vec<usize>) -> ort::Result<ort::session::Sessio
     })
 }
 
-fn shape_is(shape: &[i64], expected: &[usize]) -> bool {
+pub(crate) fn shape_is(shape: &[i64], expected: &[usize]) -> bool {
     shape.len() == expected.len()
         && shape
             .iter()
