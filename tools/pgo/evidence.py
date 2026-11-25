@@ -216,7 +216,9 @@ def native_cost(objects: dict[str, Cost]) -> Cost:
 # libc's object (glibc, macOS's libsystem_platform, or musl's ld-musl-*,
 # #582) and its memory primitives.
 _LIBC = re.compile(r"^(libc[.-]|libc\.so|libsystem_platform|ld-musl-)")
-_PRIMITIVE = re.compile(r"^(_platform_)?(__)?(mem(set|cpy|move)|bzero)(\b|_|@|$)")
+# memcmp and bcmp count too (#583): fat LTO on musl turned Go9's superko
+# compare into memcmp calls. glibc's `__memcmpeq` is its bcmp-style compare.
+_PRIMITIVE = re.compile(r"^(_platform_)?(__)?(mem(set|cpy|move|cmp(eq)?)|bzero|bcmp)(\b|_|@|$)")
 # Callgrind's name for a function without a symbol (a stripped libc, such as
 # musl 1.2.5 in the musllinux_1_2 image), with an optional recursion suffix.
 _ADDRESS = re.compile(r"^(0x[0-9a-fA-F]+)('\d+)?$")

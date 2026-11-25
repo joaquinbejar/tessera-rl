@@ -303,7 +303,7 @@ def test_pgo_non_caller_threads_are_measured():
 
 # musl (#582): a stripped ld-musl names its functions only by address; the
 # primitives are found through the dynamic symbol table of the measured libc.
-MUSL_SYMBOLS = {0x64C90: "memset", 0x64C39: "memcpy", 0x64C6B: "memmove", 0x64451: "bzero", 0x12340: "malloc"}
+MUSL_SYMBOLS = {0x64C90: "memset", 0x64C39: "memcpy", 0x64C6B: "memmove", 0x64451: "bzero", 0x12340: "malloc", 0x64A10: "memcmp", 0x64B20: "bcmp"}
 
 
 def musl_text():
@@ -318,7 +318,7 @@ def test_primitive_calls_musl_by_address_resolves_through_symbols():
         return MUSL_SYMBOLS
 
     calls = ev.primitive_calls(musl_text(), symbols)
-    assert calls == {"memset": 730, "memcpy": 60}
+    assert calls == {"memset": 730, "memcpy": 60, "memcmp": 25, "bcmp": 15}
     assert set(seen) == {"/lib/ld-musl-x86_64.so.1"}
 
 
@@ -327,7 +327,7 @@ def test_primitive_calls_musl_unknown_address_is_not_charged():
 
 
 def test_native_cost_with_primitives_musl_charges_the_resolved_primitives():
-    assert ev.native_cost_with_primitives(musl_text(), lambda path: MUSL_SYMBOLS).primitives == 790
+    assert ev.native_cost_with_primitives(musl_text(), lambda path: MUSL_SYMBOLS).primitives == 830
 
 
 def test_is_memory_primitive_musl_object_by_name_and_address():
@@ -358,3 +358,16 @@ def test_dynamic_symbols_primitive_name_wins_an_alias(monkeypatch):
     finally:
         ev.dynamic_symbols.cache_clear()
     assert table == {0x64C90: "memset", 0x64C39: "memcpy"}
+
+
+def test_is_memory_primitive_compares_count_on_glibc_musl_and_macos():
+    # #583: build-caused memcmp and bcmp calls are charged like the fills.
+    glibc, musl, mac = "/usr/lib/x86_64-linux-gnu/libc.so.6", "/lib/ld-musl-x86_64.so.1", "/usr/lib/system/libsystem_platform.dylib"
+    for name in ("memcmp", "__memcmp_avx2_movbe", "__memcmp_evex_movbe", "__memcmpeq_avx2", "bcmp"):
+        assert ev.is_memory_primitive(glibc, name, lambda path: {}), name
+    assert ev.is_memory_primitive(musl, "memcmp", lambda path: {})
+    assert ev.is_memory_primitive(musl, "bcmp", lambda path: {})
+    assert ev.is_memory_primitive(mac, "_platform_memcmp", lambda path: {})
+    # Not memory primitives: string compares and searches.
+    for name in ("strcmp", "memchr", "memrchr", "wmemcmp"):
+        assert not ev.is_memory_primitive(glibc, name, lambda path: {}), name
