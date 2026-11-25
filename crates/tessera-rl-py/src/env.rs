@@ -28,6 +28,7 @@ use tessera_rl_markets::{LimitOrderBook, LobConfig};
 use tessera_rl_num::identity::Seed;
 use tessera_rl_ops::{JobShop, JobShopConfig, Vrp, VrpConfig};
 use tessera_rl_rts::{Rts, RtsConfig};
+use tessera_rl_world::{Survival, SurvivalConfig};
 
 /// Errors of the bindings: the engine's, plus record decoding and argument
 /// errors detected here.
@@ -2125,6 +2126,40 @@ pub(crate) fn vrp(args: &PoolArgs, fields: &VrpFields) -> Result<Box<dyn PoolOps
     let same_step = options.auto_reset == AutoReset::SameStep;
     let pool = EnvPool::<Vrp, Masked>::with_masks(cfg.clone(), options)?;
     let pool = crate::policy::perfect(pool, args)?;
+    finish(&cfg, pool, args, n, same_step)
+}
+
+/// The `SurvivalConfig` fields, in the order of `api::SURVIVAL_KEYS` (its
+/// last entry, `outputs`, is not a config field and stays `None`).
+#[derive(Debug, Default)]
+pub(crate) struct SurvivalFields {
+    pub(crate) u32s: [Option<u32>; 10],
+}
+
+/// A survival world pool (`tessera/Survival-v1`, #382), with masks:
+/// simultaneous moves, two independent heads, a `Set` observation, and
+/// heuristic slots from the agent's own view (`InfoHeuristic`).
+pub(crate) fn survival(
+    args: &PoolArgs,
+    fields: &SurvivalFields,
+) -> Result<Box<dyn PoolOps>, BindError> {
+    let d = SurvivalConfig::default();
+    let u = |i: usize, default: u32| fields.u32s.get(i).copied().flatten().unwrap_or(default);
+    let cfg = SurvivalConfig {
+        agents: u(0, d.agents),
+        size: u(1, d.size),
+        steps: u(2, d.steps),
+        view: u(3, d.view),
+        respawn: u(4, d.respawn),
+        forest_regrow: u(5, d.forest_regrow),
+        water_permille: u(6, d.water_permille),
+        forest_permille: u(7, d.forest_permille),
+        stone_permille: u(8, d.stone_permille),
+    };
+    let (options, n) = options(args)?;
+    let same_step = options.auto_reset == AutoReset::SameStep;
+    let pool = EnvPool::<Survival, Masked>::with_masks(cfg.clone(), options)?;
+    let pool = crate::policy::info(pool, args)?;
     finish(&cfg, pool, args, n, same_step)
 }
 

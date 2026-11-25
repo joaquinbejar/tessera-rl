@@ -12,6 +12,7 @@ use tessera_rl::envs::{EnvRegistration, registered};
 use tessera_rl::games::{Connect4, Go9, Lanterns, Leduc, Othello};
 use tessera_rl::markets::LimitOrderBook;
 use tessera_rl::ops::{JobShop, Vrp};
+use tessera_rl::world::Survival;
 
 /// The record `E` must have, read straight from its consts.
 fn expected<E: Persist>() -> (&'static str, u32, usize, tessera_rl::core::Tier, bool) {
@@ -56,6 +57,7 @@ fn test_registered_facade_every_shipped_environment_listed() {
         expected::<LimitOrderBook>(),
         expected::<JobShop>(),
         expected::<Vrp>(),
+        expected::<Survival>(),
     ];
     want.sort_by_key(|w| w.0);
     let got: Vec<_> = registered()

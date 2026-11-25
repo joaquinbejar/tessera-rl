@@ -14,6 +14,7 @@ Environment                    Turns         Adapters
 ``tessera/PaddleDuel-v1``      simultaneous  ``parallel_env``, ``aec_env``
 ``tessera/RTS-v1``             simultaneous  ``parallel_env``
 ``tessera/LimitOrderBook-v1``  simultaneous  ``parallel_env``
+``tessera/Survival-v1``        simultaneous  ``parallel_env``
 ``tessera/Connect4-v1``        sequential    ``aec_env``
 ``tessera/Leduc-v1``           sequential    ``aec_env``
 ``tessera/Lanterns-v1``        sequential    ``aec_env``
@@ -144,6 +145,9 @@ _MAKERS = {
     # Simultaneous, multi-head like the RTS: Parallel only, for the same
     # reason.
     "tessera/LimitOrderBook-v1": _native.make_lob,
+    # Simultaneous, two independent heads, 16 to 128 agents: Parallel only
+    # (AEC cycle buffering is not designed for this many agents).
+    "tessera/Survival-v1": _native.make_survival,
 }
 
 #: The maker of each first-party id and the PettingZoo interfaces it

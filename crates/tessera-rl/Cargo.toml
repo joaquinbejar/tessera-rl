@@ -37,6 +37,7 @@ tessera-rl-classic.workspace = true
 tessera-rl-games.workspace = true
 tessera-rl-markets.workspace = true
 tessera-rl-ops.workspace = true
+tessera-rl-world.workspace = true
 tessera-rl-search = { workspace = true, optional = true }
 tessera-rl-simd = { workspace = true, optional = true }
 tessera-rl-onnx = { workspace = true, optional = true }

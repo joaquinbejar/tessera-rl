@@ -74,6 +74,7 @@ ENVS = {
     "lanterns": ("tessera/Lanterns-v1", {"players": 3}),
     "jobshop": ("tessera/JobShop-v1", {}),
     "vrp": ("tessera/Vrp-v1", {"vehicles": 3}),
+    "survival": ("tessera/Survival-v1", {"agents": 16, "size": 32}),
     # Few units, a small map: the per-unit Python draws stay cheap. The
     # determinism of the protocol-size environment is covered by the RTS
     # goldens, not by this tool.
