@@ -16,8 +16,10 @@
 //!   a `[2]` global leaf of `u16`, under fog: the enemy is read only on
 //!   cells the side sees now, terrain only where it has explored
 //!   ([`crate::fog`], `rts-design.md` section 14). The search pool refuses
-//!   the environment (`PERFECT_INFORMATION` is `false`); no
-//!   `ImperfectInformation` is implemented, since nothing requires it yet.
+//!   the environment (`PERFECT_INFORMATION` is `false`). An agent's
+//!   information state is its side's view, and the player-only heuristic
+//!   acts on it ([`crate::info`], #586), so heuristic slots of a policy map
+//!   play the fog-respecting Rush bot.
 //! - Reward: +1 win, -1 loss, 0 draw, at the end only.
 
 #![deny(clippy::float_arithmetic)]

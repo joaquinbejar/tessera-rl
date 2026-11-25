@@ -131,16 +131,50 @@ fn test_rts_step_does_not_allocate() {
     assert_eq!(q.state_hash(0).unwrap(), p.state_hash(0).unwrap());
 }
 
+/// A step with slot 1 a heuristic slot (#586) allocates nothing either:
+/// the information state is a stack copy and Rush writes into the engine's
+/// rows. Inline and with workers.
+fn test_rts_step_with_info_heuristic_slots_does_not_allocate() {
+    for workers in [None, Some(2)] {
+        let c = cfg(16, 12);
+        let slots = |p: Pool| p.with_info_heuristic_slots(&[1]).unwrap();
+        let mut p = slots(pool(c.clone(), 2, 17, workers));
+        let mut rng = Rng(3);
+        let mut masks = ready(&mut p);
+        let mut rows = Vec::new();
+        for _ in 0..60 {
+            let a = legal_actions(&mut rng, &masks, 2, 12);
+            masks = p.step(input(&a)).unwrap().masks().to_vec();
+            rows.push(a);
+        }
+        let mut q = slots(pool(c, 2, 17, workers));
+        ready(&mut q);
+        let ((), t) = window(|| {
+            for a in &rows {
+                let _ = std::hint::black_box(q.step(input(a)).unwrap());
+            }
+        });
+        assert_eq!(t.calls, 0, "a step allocated {} times ({workers:?})", t.calls);
+        assert_eq!(q.state_hash(0).unwrap(), p.state_hash(0).unwrap());
+    }
+}
+
 /// The scenarios this binary runs.
-const SCENARIOS: usize = 1;
+const SCENARIOS: usize = 2;
 
 #[test]
 fn test_alloc_scenarios_do_not_allocate() {
     counting::scenarios(
         SCENARIOS,
-        &[(
-            "test_rts_step_does_not_allocate",
-            test_rts_step_does_not_allocate,
-        )],
+        &[
+            (
+                "test_rts_step_does_not_allocate",
+                test_rts_step_does_not_allocate,
+            ),
+            (
+                "test_rts_step_with_info_heuristic_slots_does_not_allocate",
+                test_rts_step_with_info_heuristic_slots_does_not_allocate,
+            ),
+        ],
     );
 }

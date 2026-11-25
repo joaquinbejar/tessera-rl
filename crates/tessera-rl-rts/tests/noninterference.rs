@@ -18,7 +18,9 @@
 use core::num::NonZeroU32;
 
 use tessera_rl_core::io::{ActionWriter, MaskWriter, ObsWriter};
-use tessera_rl_core::{ActionMask, AgentSlot, Bool8, Environment};
+use tessera_rl_core::{
+    ActionMask, AgentSlot, Bool8, Environment, Heuristic, ImperfectInformation, InfoHeuristic,
+};
 use tessera_rl_engine::{
     ActionInput, AutoReset, EnvPool, IllegalActionPolicy, Masked, PoolOptions, Reseed,
 };
@@ -462,5 +464,146 @@ fn test_noninterference_side_view_ignores_every_hidden_fact() {
     }
     for (e, (name, _)) in EDITS.iter().enumerate() {
         assert!(applied[e] > 0, "never applied: {name}");
+    }
+}
+
+fn info_row(c: &RtsConfig, info: &RtsState, team: Team, r: &mut StepRng) -> Vec<i32> {
+    let mut heads = vec![0; usize::from(c.max_units) * HEADS_PER_UNIT];
+    let mut w = ActionWriter::new(&mut heads, &mut []);
+    <Rts as InfoHeuristic>::act_info(c, info, agent(team), r, &mut w);
+    heads
+}
+
+fn view_row(c: &RtsConfig, info: &RtsState, team: Team, bot: Bot, r: &mut StepRng) -> Vec<i32> {
+    let mut heads = vec![0; usize::from(c.max_units) * HEADS_PER_UNIT];
+    let mut w = ActionWriter::new(&mut heads, &mut []);
+    bot.act_view(c, info, agent(team), r, &mut w);
+    heads
+}
+
+/// ADR-0079 item 4.4 for RTS (#586): two states with equal information
+/// states for an agent and different hidden state give equal information
+/// states and identical `act_info` actions for the same stream; the same
+/// for every bot through `act_view`.
+#[test]
+fn test_noninterference_info_heuristic_ignores_every_hidden_fact() {
+    let mut applied = [0usize; EDITS.len()];
+    for (size, seed) in [(12, 1), (16, 9), (24, 3)] {
+        let c = cfg(size);
+        let mut p = pool(&c, seed);
+        let mut r = [rng(1), rng(2)];
+        for k in 0..240 {
+            let s = p.state(0).unwrap();
+            if k % 8 == 0 {
+                for team in [Team::Zero, Team::One] {
+                    let sees = visible(&c, &s, team);
+                    let hidden = |cell: u16| !sees[usize::from(cell)];
+                    let base = <Rts as ImperfectInformation>::info_state(&c, &s, agent(team));
+                    for (e, (name, edit)) in EDITS.iter().enumerate() {
+                        let Some(m) = edit(&c, &s, team, &hidden) else {
+                            continue;
+                        };
+                        applied[e] += 1;
+                        let info = <Rts as ImperfectInformation>::info_state(&c, &m, agent(team));
+                        assert!(info == base, "{name}, {team:?}, size {size} step {k}");
+                        assert_eq!(
+                            info_row(&c, &info, team, &mut rng(5)),
+                            info_row(&c, &base, team, &mut rng(5)),
+                            "act_info: {name}, {team:?}, size {size} step {k}"
+                        );
+                        for bot in [Bot::Rush, Bot::Prospector, Bot::RandomLegal] {
+                            assert_eq!(
+                                view_row(&c, &info, team, bot, &mut rng(5)),
+                                view_row(&c, &base, team, bot, &mut rng(5)),
+                                "{bot:?}: {name}, {team:?}, size {size} step {k}"
+                            );
+                        }
+                    }
+                }
+            }
+            let a = [
+                bot_row(&c, &s, Team::Zero, Bot::Rush, &mut r[0]),
+                bot_row(&c, &s, Team::One, Bot::Prospector, &mut r[1]),
+            ]
+            .concat();
+            p.step(ActionInput {
+                discrete: &a,
+                continuous: &[],
+            })
+            .unwrap();
+        }
+    }
+    for (e, (name, _)) in EDITS.iter().enumerate() {
+        assert!(applied[e] > 0, "never applied: {name}");
+    }
+}
+
+/// The negative control of the test above: the same edits on cells the
+/// side sees change its information state.
+#[test]
+fn test_noninterference_control_visible_edits_change_the_info_state() {
+    let c = cfg(16);
+    let mut changed = [false; 4];
+    let mut p = pool(&c, 14);
+    let mut r = [rng(1), rng(2)];
+    for _ in 0..600 {
+        let s = p.state(0).unwrap();
+        for team in [Team::Zero, Team::One] {
+            let seen = visible(&c, &s, team);
+            let shown = |cell: u16| seen[usize::from(cell)];
+            let base = <Rts as ImperfectInformation>::info_state(&c, &s, agent(team));
+            for (k, edit) in [move_hidden as Edit, add_hidden, remove_hidden, hp_hidden]
+                .iter()
+                .enumerate()
+            {
+                if let Some(m) = edit(&c, &s, team, &shown) {
+                    changed[k] |= <Rts as ImperfectInformation>::info_state(&c, &m, agent(team)) != base;
+                }
+            }
+        }
+        let a = [
+            bot_row(&c, &s, Team::Zero, Bot::Rush, &mut r[0]),
+            bot_row(&c, &s, Team::One, Bot::Prospector, &mut r[1]),
+        ]
+        .concat();
+        p.step(ActionInput {
+            discrete: &a,
+            continuous: &[],
+        })
+        .unwrap();
+    }
+    assert_eq!(changed, [true; 4]);
+}
+
+/// `Heuristic::act` is `act_info` on `info_state`, and every bot's `act` is
+/// its `act_view` on the side view, on the states of a played game.
+#[test]
+fn test_info_heuristic_act_equals_act_info_on_info_state() {
+    for (size, seed) in [(12, 1), (16, 14), (24, 3)] {
+        let c = cfg(size);
+        let mut p = pool(&c, seed);
+        let mut r = [rng(1), rng(2)];
+        for _ in 0..200 {
+            let s = p.state(0).unwrap();
+            for team in [Team::Zero, Team::One] {
+                let info = <Rts as ImperfectInformation>::info_state(&c, &s, agent(team));
+                let mut heads = vec![0; usize::from(c.max_units) * HEADS_PER_UNIT];
+                <Rts as Heuristic>::act(&c, &s, agent(team), &mut rng(7), &mut ActionWriter::new(&mut heads, &mut []));
+                assert_eq!(heads, info_row(&c, &info, team, &mut rng(7)));
+                for bot in [Bot::Rush, Bot::Prospector, Bot::RandomLegal] {
+                    assert_eq!(bot_row(&c, &s, team, bot, &mut rng(7)), view_row(&c, &info, team, bot, &mut rng(7)));
+                }
+            }
+            let a = [
+                bot_row(&c, &s, Team::Zero, Bot::Rush, &mut r[0]),
+                bot_row(&c, &s, Team::One, Bot::Prospector, &mut r[1]),
+            ]
+            .concat();
+            p.step(ActionInput {
+                discrete: &a,
+                continuous: &[],
+            })
+            .unwrap();
+        }
     }
 }
