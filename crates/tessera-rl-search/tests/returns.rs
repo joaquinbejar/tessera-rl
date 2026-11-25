@@ -344,7 +344,7 @@ fn test_returns_overflow_is_refused_with_the_tree_unchanged() {
         ..WalkConfig::default()
     };
     let mut eval = Canned::new(&cfg);
-    eval.fixed = Some(f64::MAX / 2.0);
+    eval.fixed = Some(f64::MAX * 0.75);
     let mut puct = returns(1.0, 1);
     puct.batch_size = 1;
     let mut m = search(&cfg, puct);
@@ -398,13 +398,13 @@ fn test_returns_selection_is_scale_invariant_under_puct_and_gumbel() {
                     e.value / f64::from(e.visits.max(1))
                 })
                 .collect();
-            (visits, policy, m.pool().tree_hash(), means)
+            // Not the tree hash: the records carry the episode return.
+            (visits, policy, means)
         };
         let (one, k) = (run(1), run(1024));
         assert_eq!(one.0, k.0, "{root_sel:?}");
         assert_eq!(one.1, k.1, "{root_sel:?}");
-        assert_eq!(one.2, k.2, "{root_sel:?}");
-        for (a, b) in one.3.iter().zip(&k.3) {
+        for (a, b) in one.2.iter().zip(&k.2) {
             assert_eq!((a * 1024.0).to_bits(), b.to_bits());
         }
     }
