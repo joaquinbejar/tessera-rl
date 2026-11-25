@@ -174,3 +174,18 @@ def test_capi_int_i64_extremes_are_exact_python_ints():
     assert type(low) is int and type(high) is int
     assert low == -(2**63)
     assert high == 2**63 - 1
+
+
+def test_pettingzoo_state_space_int64_top_is_exact():
+    """LimitOrderBook's privileged state leaves declare ``i64::MAX`` tops: the
+    flat PettingZoo ``state_space`` carries them exactly, with no clamp."""
+    from tessera_rl import pz
+
+    env = pz.parallel_env("tessera/LimitOrderBook-v1", seed=3, privileged_state=True, agents=4, steps=60, latency=1)
+    space = env.state_space
+    assert space.dtype == np.int64
+    assert int(space.high.max()) == np.iinfo(np.int64).max
+    assert (space.high >= space.low).all()
+    env.reset(seed=3)
+    assert space.contains(env.state())
+    env.close()
