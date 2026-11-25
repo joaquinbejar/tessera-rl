@@ -235,3 +235,69 @@ def test_league_gym_refuses_a_league_pool_pointing_to_pettingzoo():
     the Gymnasium adapter refuses it with a typed error naming the way out."""
     with pytest.raises(tessera_rl.CapabilityError, match="PettingZoo adapter"):
         gym.make(DUEL, num_envs=2, workers=0, agents=2, policy_map={1: "opponent"}, league=_league(), role=0)
+
+
+# A league handle is resolved once, at ``make``: the pool keeps its own share
+# of the league (``SharedLeague``), so dropping the ``League`` object, or
+# passing it as a temporary, never breaks a pool afterwards (#619).
+
+
+def _step(env, steps=40):
+    env.reset()
+    acts = np.zeros((env.num_envs, env.agents), dtype=np.int32)
+    for s in range(steps):
+        acts[:] = s % 3
+        env.step(acts)
+
+
+def test_league_temporary_in_make_keeps_the_pool_working_after_gc():
+    import gc
+
+    env = _pool(tessera_rl.League(POP, [{"matchmaking": "uniform"}]))
+    gc.collect()
+    _step(env)
+    env.epoch_barrier()
+    env.reset()
+    _step(env)
+    assert env.assignment is not None
+    env.close()
+
+
+def test_league_dropped_while_its_pool_lives_keeps_the_pool_working():
+    import gc
+
+    league = tessera_rl.League(POP, [{"matchmaking": "uniform"}])
+    env = _pool(league)
+    _step(env, 10)
+    del league
+    gc.collect()
+    _step(env)
+    env.epoch_barrier()
+    _step(env)
+    env.close()
+
+
+def test_league_eval_survives_gc_during_its_episodes():
+    import gc
+    import os
+    import sys
+
+    from tessera_rl import eval as tev
+
+    sys.path.insert(0, os.path.dirname(__file__))
+    import eval_policies as pol  # noqa: E402
+
+    def collecting(observations, info):
+        gc.collect()
+        return pol.chase(observations, info)
+
+    report = tev.evaluate(
+        DUEL,
+        collecting,
+        [(0, "heuristic")],
+        seeds=[11, 12, 13],
+        episodes=4,
+        pools=2,
+        env_kwargs={"agents": 2, "max_episode_steps": 40},
+    )
+    assert report["opponents"][0]["episodes"] == 4
