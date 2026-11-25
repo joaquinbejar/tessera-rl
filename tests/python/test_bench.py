@@ -106,6 +106,31 @@ def test_bench_schedule_and_full_workers_reach_the_runner(quick_report):
     assert d["from"] == ["rust/rts/syncfull/n1024", "rust/rts/inline/n1024"] and d["value"] > 0
 
 
+def test_bench_chunk_size_reaches_the_runner_and_is_recorded(quick_report):
+    sync4 = quick_report["results"]["rust/survival-16/sync4/n256"]
+    assert sync4["options"]["chunk_size"] == 16 and sync4["chunk_size"] == 16
+    inline = quick_report["results"]["rust/survival-16/inline/n256"]
+    # Not given: the engine default, kept out of the options.
+    assert "chunk_size" not in inline["options"] and inline["chunk_size"] == 64
+
+
+def test_bench_derive_missing_multi_is_an_error_on_a_full_run(quick_report):
+    spec, method = bench.load(quick=True)
+    results = copy.deepcopy(quick_report["results"])
+    del results["rust/survival-16/syncfull/n256"]
+    with pytest.raises(ValueError, match="full run"):
+        bench.derive(results, spec["derived"], method)
+    derived = bench.derive(results, spec["derived"], method, partial=True)
+    assert "scaling_efficiency/survival-16/syncfull/n256" not in derived
+    assert "scaling_efficiency/survival-16/sync4/n256" in derived
+
+
+def test_bench_only_run_skips_scaling_rows_it_excluded():
+    report = bench.run(only="rust/survival-16/sync4/", quick=True, profile="debug")
+    assert set(report["results"]) == {"rust/survival-16/sync4/n256"}
+    assert not any(k.startswith("scaling_efficiency/") for k in report["derived"])
+
+
 def test_bench_full_workers_resolve_to_the_cpu_set():
     pin = {"applied": True, "cpu_set": [2, 4, 6, 8, 10]}
     assert bench.workers_for({"name": "f", "workers": "full"}, pin) == 5
@@ -128,7 +153,7 @@ def test_bench_envpool_speedups_carry_the_output_asymmetry_note():
         if d["name"].startswith("speedup/native-vs-envpool/"):
             results[d["numerator"]] = fake
             results[d["denominator"]] = fake
-    derived = bench.derive(results, spec["derived"], method)
+    derived = bench.derive(results, spec["derived"], method, partial=True)
     speedups = [v for k, v in derived.items() if k.startswith("speedup/native-vs-envpool/")]
     assert len(speedups) == len(bench.PY_ENVS)
     assert all("info dict" in v["note"] for v in speedups)

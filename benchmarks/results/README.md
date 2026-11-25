@@ -18,8 +18,11 @@ Only measured results belong here; test fixtures do not.
 The builder's flagship table (`flagships.html`) lists every flagship
 number (configurations with `flagship = "<id>"` in
 `tools/bench/configs.toml`) from the valid and indicative files here, with
-its configuration, metric, median, 95% CI, machine, the machine's current
-`compat/machines.toml` status, commit and `valid_for_claims`. Until a
+its configuration, metric, median, 95% CI, workers, schedule, whether the
+throughput includes illegal-action no-ops (`illegal_action_noops`),
+machine, the machine's current `compat/machines.toml` status, commit and
+`valid_for_claims`. Scaling rows are "efficiency vs k×Inline": k-worker
+throughput over k times the Inline throughput, not over one Sync worker. Until a
 reference machine exists (#151), flagship files are indicative: they keep
 `valid_for_claims: false` and their `claim_check` reasons, and use the full
 method. The phase 4 gate is met only by a reference-machine run with

@@ -172,6 +172,7 @@ legal_actions = true
 name = "rust/lanterns/inline/n1024"
 kind = "rust"
 flagship = "tessera/Lanterns-v1"
+illegal_action_noops = false
 metric = "throughput"
 env = "lanterns"
 num_envs = 1024
@@ -182,6 +183,7 @@ legal_actions = true
 name = "rust/rts/inline/n1024"
 kind = "rust"
 flagship = "tessera/RTS-v1"
+illegal_action_noops = true
 metric = "throughput"
 env = "rts"
 num_envs = 1024
@@ -192,6 +194,7 @@ workers = 0
 name = "rust/lob/inline/n1024"
 kind = "rust"
 flagship = "tessera/LimitOrderBook-v1"
+illegal_action_noops = true
 metric = "throughput"
 env = "lob"
 num_envs = 1024
@@ -203,6 +206,7 @@ workers = 0
 name = "rust/jobshop/inline/n1024"
 kind = "rust"
 flagship = "tessera/JobShop-v1"
+illegal_action_noops = true
 metric = "throughput"
 env = "jobshop"
 num_envs = 1024
@@ -223,6 +227,7 @@ workers = 0
 name = "rust/vrp/inline/n1024"
 kind = "rust"
 flagship = "tessera/Vrp-v1"
+illegal_action_noops = true
 metric = "throughput"
 env = "vrp"
 num_envs = 1024
@@ -242,6 +247,7 @@ workers = 0
 name = "rust/survival-16/inline/n256"
 kind = "rust"
 flagship = "tessera/Survival-v1"
+illegal_action_noops = true
 metric = "throughput"
 env = "survival-16"
 num_envs = 256
@@ -263,12 +269,20 @@ workers = 0
 # memory. Every multi-worker entry names its schedule (ADR-0076, ADR-0087):
 # Dynamic for RTS and Survival, whose step cost varies per instance, Static
 # for the others. Numbers stay indicative (valid_for_claims false) until a
-# reference machine exists (#151).
+# reference machine exists (#151). Scaling efficiency is k-worker Sync
+# throughput over k times the Inline throughput ("efficiency vs k×Inline"):
+# Inline has no worker threads, so it includes the Sync scheduling
+# overhead, and it is not parallel efficiency against one Sync worker.
+# `illegal_action_noops` says whether the flagship's throughput includes
+# illegal-action no-ops: Lanterns steps legal actions (`legal_actions`),
+# the other masked flagships step the shared plan under the no-op
+# illegal-action policy, so some of their steps are no-ops.
 
 [[config]]
 name = "rust/rts/sync4/n1024"
 kind = "rust"
 flagship = "tessera/RTS-v1"
+illegal_action_noops = true
 metric = "throughput"
 env = "rts"
 num_envs = 1024
@@ -279,6 +293,7 @@ schedule = "dynamic"
 name = "rust/rts/syncfull/n1024"
 kind = "rust"
 flagship = "tessera/RTS-v1"
+illegal_action_noops = true
 metric = "throughput"
 env = "rts"
 num_envs = 1024
@@ -289,6 +304,7 @@ schedule = "dynamic"
 name = "rust/rts/n1024/snapshot"
 kind = "rust"
 flagship = "tessera/RTS-v1"
+illegal_action_noops = true
 metric = "snapshot"
 env = "rts"
 num_envs = 1024
@@ -297,6 +313,7 @@ num_envs = 1024
 name = "rust/rts/n1024/memory"
 kind = "rust"
 flagship = "tessera/RTS-v1"
+illegal_action_noops = true
 metric = "memory"
 env = "rts"
 num_envs = 1024
@@ -305,6 +322,7 @@ num_envs = 1024
 name = "rust/lob/sync4/n1024"
 kind = "rust"
 flagship = "tessera/LimitOrderBook-v1"
+illegal_action_noops = true
 metric = "throughput"
 env = "lob"
 num_envs = 1024
@@ -315,6 +333,7 @@ schedule = "static"
 name = "rust/lob/syncfull/n1024"
 kind = "rust"
 flagship = "tessera/LimitOrderBook-v1"
+illegal_action_noops = true
 metric = "throughput"
 env = "lob"
 num_envs = 1024
@@ -325,6 +344,7 @@ schedule = "static"
 name = "rust/lob/n1024/snapshot"
 kind = "rust"
 flagship = "tessera/LimitOrderBook-v1"
+illegal_action_noops = true
 metric = "snapshot"
 env = "lob"
 num_envs = 1024
@@ -333,6 +353,7 @@ num_envs = 1024
 name = "rust/lob/n1024/memory"
 kind = "rust"
 flagship = "tessera/LimitOrderBook-v1"
+illegal_action_noops = true
 metric = "memory"
 env = "lob"
 num_envs = 1024
@@ -341,6 +362,7 @@ num_envs = 1024
 name = "rust/lanterns/sync4/n1024"
 kind = "rust"
 flagship = "tessera/Lanterns-v1"
+illegal_action_noops = false
 metric = "throughput"
 env = "lanterns"
 num_envs = 1024
@@ -352,6 +374,7 @@ legal_actions = true
 name = "rust/lanterns/syncfull/n1024"
 kind = "rust"
 flagship = "tessera/Lanterns-v1"
+illegal_action_noops = false
 metric = "throughput"
 env = "lanterns"
 num_envs = 1024
@@ -363,6 +386,7 @@ legal_actions = true
 name = "rust/lanterns/n1024/snapshot"
 kind = "rust"
 flagship = "tessera/Lanterns-v1"
+illegal_action_noops = false
 metric = "snapshot"
 env = "lanterns"
 num_envs = 1024
@@ -372,35 +396,48 @@ legal_actions = true
 name = "rust/lanterns/n1024/memory"
 kind = "rust"
 flagship = "tessera/Lanterns-v1"
+illegal_action_noops = false
 metric = "memory"
 env = "lanterns"
 num_envs = 1024
 legal_actions = true
 
+# Survival keeps N = 256 (its Inline entry, #382), which at the engine's
+# default chunk of 64 is only 4 chunks: a larger CPU set would leave
+# workers idle by construction and understate the engine's scaling. Its
+# multi-worker entries use chunk_size 16 (16 chunks), at least as many
+# chunks as the largest bench_cpu_set in compat/machines.toml. The Inline
+# entry keeps the default chunk, being a shared catalog entry with no
+# workers to feed; the report records `chunk_size` on every row.
 [[config]]
 name = "rust/survival-16/sync4/n256"
 kind = "rust"
 flagship = "tessera/Survival-v1"
+illegal_action_noops = true
 metric = "throughput"
 env = "survival-16"
 num_envs = 256
 workers = 4
 schedule = "dynamic"
+chunk_size = 16
 
 [[config]]
 name = "rust/survival-16/syncfull/n256"
 kind = "rust"
 flagship = "tessera/Survival-v1"
+illegal_action_noops = true
 metric = "throughput"
 env = "survival-16"
 num_envs = 256
 workers = "full"
 schedule = "dynamic"
+chunk_size = 16
 
 [[config]]
 name = "rust/survival-16/n256/snapshot"
 kind = "rust"
 flagship = "tessera/Survival-v1"
+illegal_action_noops = true
 metric = "snapshot"
 env = "survival-16"
 num_envs = 256
@@ -409,6 +446,7 @@ num_envs = 256
 name = "rust/survival-16/n256/memory"
 kind = "rust"
 flagship = "tessera/Survival-v1"
+illegal_action_noops = true
 metric = "memory"
 env = "survival-16"
 num_envs = 256
@@ -417,6 +455,7 @@ num_envs = 256
 name = "rust/jobshop/sync4/n1024"
 kind = "rust"
 flagship = "tessera/JobShop-v1"
+illegal_action_noops = true
 metric = "throughput"
 env = "jobshop"
 num_envs = 1024
@@ -427,6 +466,7 @@ schedule = "static"
 name = "rust/jobshop/syncfull/n1024"
 kind = "rust"
 flagship = "tessera/JobShop-v1"
+illegal_action_noops = true
 metric = "throughput"
 env = "jobshop"
 num_envs = 1024
@@ -437,6 +477,7 @@ schedule = "static"
 name = "rust/jobshop/n1024/snapshot"
 kind = "rust"
 flagship = "tessera/JobShop-v1"
+illegal_action_noops = true
 metric = "snapshot"
 env = "jobshop"
 num_envs = 1024
@@ -445,6 +486,7 @@ num_envs = 1024
 name = "rust/jobshop/n1024/memory"
 kind = "rust"
 flagship = "tessera/JobShop-v1"
+illegal_action_noops = true
 metric = "memory"
 env = "jobshop"
 num_envs = 1024
@@ -453,6 +495,7 @@ num_envs = 1024
 name = "rust/vrp/sync4/n1024"
 kind = "rust"
 flagship = "tessera/Vrp-v1"
+illegal_action_noops = true
 metric = "throughput"
 env = "vrp"
 num_envs = 1024
@@ -463,6 +506,7 @@ schedule = "static"
 name = "rust/vrp/syncfull/n1024"
 kind = "rust"
 flagship = "tessera/Vrp-v1"
+illegal_action_noops = true
 metric = "throughput"
 env = "vrp"
 num_envs = 1024
@@ -473,6 +517,7 @@ schedule = "static"
 name = "rust/vrp/n1024/snapshot"
 kind = "rust"
 flagship = "tessera/Vrp-v1"
+illegal_action_noops = true
 metric = "snapshot"
 env = "vrp"
 num_envs = 1024
@@ -481,6 +526,7 @@ num_envs = 1024
 name = "rust/vrp/n1024/memory"
 kind = "rust"
 flagship = "tessera/Vrp-v1"
+illegal_action_noops = true
 metric = "memory"
 env = "vrp"
 num_envs = 1024
@@ -622,13 +668,15 @@ multi = "rust/cartpole/sync4/n4096"
 single = "rust/cartpole/sync1/n4096"
 workers = 4
 
-# Flagship scaling (#640): k workers over k times the Inline entry.
+# Flagship scaling (#640): efficiency vs k×Inline, k-worker Sync throughput
+# over k times the Inline entry (not over a one-worker Sync run).
 [[derived]]
 name = "scaling_efficiency/rts/sync4/n1024"
 kind = "scaling"
 multi = "rust/rts/sync4/n1024"
 single = "rust/rts/inline/n1024"
 workers = 4
+note = "efficiency vs k×Inline: k-worker Sync throughput over k times the Inline throughput, Sync scheduling overhead included"
 
 [[derived]]
 name = "scaling_efficiency/rts/syncfull/n1024"
@@ -636,6 +684,7 @@ kind = "scaling"
 multi = "rust/rts/syncfull/n1024"
 single = "rust/rts/inline/n1024"
 workers = "full"
+note = "efficiency vs k×Inline: k-worker Sync throughput over k times the Inline throughput, Sync scheduling overhead included"
 
 [[derived]]
 name = "scaling_efficiency/lob/sync4/n1024"
@@ -643,6 +692,7 @@ kind = "scaling"
 multi = "rust/lob/sync4/n1024"
 single = "rust/lob/inline/n1024"
 workers = 4
+note = "efficiency vs k×Inline: k-worker Sync throughput over k times the Inline throughput, Sync scheduling overhead included"
 
 [[derived]]
 name = "scaling_efficiency/lob/syncfull/n1024"
@@ -650,6 +700,7 @@ kind = "scaling"
 multi = "rust/lob/syncfull/n1024"
 single = "rust/lob/inline/n1024"
 workers = "full"
+note = "efficiency vs k×Inline: k-worker Sync throughput over k times the Inline throughput, Sync scheduling overhead included"
 
 [[derived]]
 name = "scaling_efficiency/lanterns/sync4/n1024"
@@ -657,6 +708,7 @@ kind = "scaling"
 multi = "rust/lanterns/sync4/n1024"
 single = "rust/lanterns/inline/n1024"
 workers = 4
+note = "efficiency vs k×Inline: k-worker Sync throughput over k times the Inline throughput, Sync scheduling overhead included"
 
 [[derived]]
 name = "scaling_efficiency/lanterns/syncfull/n1024"
@@ -664,6 +716,7 @@ kind = "scaling"
 multi = "rust/lanterns/syncfull/n1024"
 single = "rust/lanterns/inline/n1024"
 workers = "full"
+note = "efficiency vs k×Inline: k-worker Sync throughput over k times the Inline throughput, Sync scheduling overhead included"
 
 [[derived]]
 name = "scaling_efficiency/survival-16/sync4/n256"
@@ -671,6 +724,7 @@ kind = "scaling"
 multi = "rust/survival-16/sync4/n256"
 single = "rust/survival-16/inline/n256"
 workers = 4
+note = "efficiency vs k×Inline: k-worker Sync throughput over k times the Inline throughput, Sync scheduling overhead included"
 
 [[derived]]
 name = "scaling_efficiency/survival-16/syncfull/n256"
@@ -678,6 +732,7 @@ kind = "scaling"
 multi = "rust/survival-16/syncfull/n256"
 single = "rust/survival-16/inline/n256"
 workers = "full"
+note = "efficiency vs k×Inline: k-worker Sync throughput over k times the Inline throughput, Sync scheduling overhead included"
 
 [[derived]]
 name = "scaling_efficiency/jobshop/sync4/n1024"
@@ -685,6 +740,7 @@ kind = "scaling"
 multi = "rust/jobshop/sync4/n1024"
 single = "rust/jobshop/inline/n1024"
 workers = 4
+note = "efficiency vs k×Inline: k-worker Sync throughput over k times the Inline throughput, Sync scheduling overhead included"
 
 [[derived]]
 name = "scaling_efficiency/jobshop/syncfull/n1024"
@@ -692,6 +748,7 @@ kind = "scaling"
 multi = "rust/jobshop/syncfull/n1024"
 single = "rust/jobshop/inline/n1024"
 workers = "full"
+note = "efficiency vs k×Inline: k-worker Sync throughput over k times the Inline throughput, Sync scheduling overhead included"
 
 [[derived]]
 name = "scaling_efficiency/vrp/sync4/n1024"
@@ -699,6 +756,7 @@ kind = "scaling"
 multi = "rust/vrp/sync4/n1024"
 single = "rust/vrp/inline/n1024"
 workers = 4
+note = "efficiency vs k×Inline: k-worker Sync throughput over k times the Inline throughput, Sync scheduling overhead included"
 
 [[derived]]
 name = "scaling_efficiency/vrp/syncfull/n1024"
@@ -706,6 +764,7 @@ kind = "scaling"
 multi = "rust/vrp/syncfull/n1024"
 single = "rust/vrp/inline/n1024"
 workers = "full"
+note = "efficiency vs k×Inline: k-worker Sync throughput over k times the Inline throughput, Sync scheduling overhead included"
 
 [[derived]]
 name = "python_overhead/cartpole/n1024/borrowed"

@@ -33,7 +33,10 @@
 //! sets the truncation limit (0, the default, is none); `--schedule
 //! static|dynamic` sets how Sync-mode workers take chunks (ADR-0076,
 //! ADR-0087; Static, the engine default, when omitted) and is recorded in
-//! the options when given. The output records
+//! the options when given; `--chunk-size N` sets the instances per chunk
+//! (1 to 1024; the engine default of 64 when omitted) and is recorded in
+//! the options when given, and the effective chunk size is always written
+//! as `chunk_size`. The output records
 //! the effective method and pool options, the FNV-1a fingerprint of the
 //! action plan (the same plan the Python harness generates), and the
 //! process CPU affinity where the OS exposes it.
@@ -103,6 +106,16 @@ fn schedule(args: &[String]) -> Result<Option<Schedule>, Error> {
         Some("static") => Ok(Some(Schedule::Static)),
         Some("dynamic") => Ok(Some(Schedule::Dynamic)),
         Some(_) => Err(usage("--schedule takes static or dynamic")),
+    }
+}
+
+/// The `--chunk-size N` value, if given; the engine checks its range.
+fn chunk_size(args: &[String]) -> Result<Option<NonZeroU32>, Error> {
+    match option::<u32>(args, "--chunk-size")? {
+        None => Ok(None),
+        Some(n) => NonZeroU32::new(n)
+            .map(Some)
+            .ok_or_else(|| usage("--chunk-size must be at least 1")),
     }
 }
 
@@ -220,6 +233,7 @@ fn pool<E, M>(
     cpu_set: Option<Vec<usize>>,
     max_episode_steps: u32,
     schedule: Option<Schedule>,
+    chunk: Option<NonZeroU32>,
 ) -> Result<EnvPool<E, M>, Error>
 where
     E: Environment + tessera_rl_core::Validate,
@@ -233,6 +247,9 @@ where
     let n = NonZeroU32::new(num_envs).ok_or_else(|| usage("num_envs must be at least 1"))?;
     let mut options = PoolOptions::new(n, Seed::new(1));
     options.max_episode_steps = NonZeroU32::new(max_episode_steps);
+    if let Some(c) = chunk {
+        options.chunk_size = c;
+    }
     if let Some(s) = schedule {
         if workers == 0 {
             return Err(usage("--schedule applies to Sync mode"));
@@ -582,8 +599,12 @@ where
         Some(Schedule::Dynamic) => r#", "schedule": "dynamic""#,
         None => "",
     };
+    let given = chunk_size(args)?;
+    let chunk_opt = given.map_or_else(String::new, |c| format!(r#", "chunk_size": {c}"#));
+    // The engine default when not given.
+    let chunk = given.unwrap_or_else(|| PoolOptions::new(NonZeroU32::MIN, Seed::new(1)).chunk_size);
     Ok(format!(
-        r#"{{{body}, "options": {{"seed": 1, "auto_reset": "next_step", "max_episode_steps": {limit}, "action_batches": {ACTION_BATCHES}{}{sched}}}, "plan_fingerprint": "{:016x}", "profile": "{}", "pinning": {{"worker_cpu_set": "{requested}", "process_affinity": "{}"}}}}"#,
+        r#"{{{body}, "chunk_size": {chunk}, "options": {{"seed": 1, "auto_reset": "next_step", "max_episode_steps": {limit}, "action_batches": {ACTION_BATCHES}{}{sched}{chunk_opt}}}, "plan_fingerprint": "{:016x}", "profile": "{}", "pinning": {{"worker_cpu_set": "{requested}", "process_affinity": "{}"}}}}"#,
         // Only when set, so plain runs keep the Python harness's options.
         if bench.legal.is_some() {
             r#", "legal_actions": true"#
@@ -629,6 +650,7 @@ fn run(args: &[String]) -> Result<String, Error> {
                         cpu_set,
                         limit,
                         sched,
+                        chunk_size(args)?,
                     )?,
                     &cfg,
                     num_envs,
@@ -801,6 +823,18 @@ mod tests {
             Some(Some(Schedule::Static))
         );
         assert!(schedule(&args(&["x", "--schedule", "guided"])).is_err());
+    }
+
+    #[test]
+    fn test_chunk_size_option_parses_and_rejects() {
+        let args = |v: &[&str]| v.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>();
+        assert_eq!(chunk_size(&args(&["x"])).ok(), Some(None));
+        assert_eq!(
+            chunk_size(&args(&["x", "--chunk-size", "16"])).ok(),
+            Some(NonZeroU32::new(16))
+        );
+        assert!(chunk_size(&args(&["x", "--chunk-size", "0"])).is_err());
+        assert!(chunk_size(&args(&["x", "--chunk-size", "many"])).is_err());
     }
 
     #[test]
