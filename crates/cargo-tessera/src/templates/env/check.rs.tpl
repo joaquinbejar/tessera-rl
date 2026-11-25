@@ -96,6 +96,10 @@ fn actions(p: &Pool, t: u32) -> Result<Vec<i32>, EngineError> {
         .collect())
 }
 
+/// The call the snapshot test takes its records after; it replays from the
+/// next call.
+const SNAPSHOT_AT: u32 = 23;
+
 /// What one call leaves: its hash and every instance's record hash.
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Call {
@@ -119,6 +123,17 @@ enum Kind {
 }
 
 impl Kind {
+    /// The absolute call (as numbered in tests/golden.json) of the first
+    /// entry of the runs this kind compares.
+    fn first_call(self) -> usize {
+        let from = match self {
+            Self::InlineInline | Self::Workers(_) => 0,
+            Self::Resume(at) => at.saturating_add(1),
+            Self::Snapshot => SNAPSHOT_AT.saturating_add(1),
+        };
+        usize::try_from(from).unwrap_or(usize::MAX)
+    }
+
     /// The kind's name and its hint.
     fn describe(self) -> String {
         match self {
@@ -142,7 +157,7 @@ impl Kind {
 
 /// The first call where `got` and `want` differ, with the first instance
 /// whose record differs there (`None`: only the outputs differ) and the two
-/// call hashes. Calls are numbered as in tests/golden.json.
+/// call hashes. The call is an index into `got` and `want`.
 fn first_divergence(got: &[Call], want: &[Call]) -> Option<(usize, Option<usize>, u64, u64)> {
     let call = got.iter().zip(want).position(|(a, b)| a != b).or_else(|| {
         (got.len() != want.len()).then(|| got.len().min(want.len()))
@@ -152,9 +167,11 @@ fn first_divergence(got: &[Call], want: &[Call]) -> Option<(usize, Option<usize>
     Some((call, instance, a.map_or(0, |c| c.hash), b.map_or(0, |c| c.hash)))
 }
 
-/// `kind`'s report when `got` and `want` differ.
+/// `kind`'s report when `got` and `want` differ, with the call numbered as
+/// in tests/golden.json.
 fn report(kind: Kind, got: &[Call], want: &[Call]) -> Option<String> {
-    let (call, instance, a, b) = first_divergence(got, want)?;
+    let (index, instance, a, b) = first_divergence(got, want)?;
+    let call = kind.first_call().saturating_add(index);
     let at = instance.map_or_else(|| "the outputs only".to_owned(), |i| format!("instance {i}"));
     Some(format!(
         "{}\nfirst divergence at call {call}, {at} (call hash {a:016x} != {b:016x})",
@@ -324,12 +341,12 @@ fn test_continuation_import_into_a_fresh_pool_matches_the_uninterrupted_run() {
 #[test]
 fn test_snapshot_restore_in_place_replays_equal() {
     let mut p = pool(SEED, default_chunk(), 0).unwrap();
-    for t in 1..=23 {
+    for t in 1..=SNAPSHOT_AT {
         let acts = actions(&p, t).unwrap();
         step(&mut p, &acts).unwrap();
     }
     let records = snapshot(&p).unwrap();
-    let (rows, want) = record(&mut p, 24, 80).unwrap();
+    let (rows, want) = record(&mut p, SNAPSHOT_AT + 1, 80).unwrap();
     p.restore_all(&records).unwrap();
     compare!(Kind::Snapshot, &replay(&mut p, &rows).unwrap(), &want);
 }
@@ -368,4 +385,32 @@ fn test_import_of_an_invalid_state_refused() {
     let decoded = DecodedRecord::from_parts(*record.header(), bad).unwrap();
     assert!(p.import(&[0], &[decoded]).is_err());
     assert_eq!(p.snapshot(0).unwrap().hash(), record.hash(), "nothing written");
+}
+
+#[test]
+fn test_report_numbers_calls_as_in_golden_for_every_kind() {
+    let call = |hash: u64| Call {
+        hash,
+        states: vec![hash, 7],
+    };
+    let want: Vec<Call> = (0..5).map(call).collect();
+    let mut got = want.clone();
+    got[2] = Call {
+        hash: 99,
+        states: vec![2, 8],
+    };
+    for (kind, absolute) in [
+        (Kind::InlineInline, 2),
+        (Kind::Workers(1), 2),
+        (Kind::Resume(0), 3),
+        (Kind::Resume(37), 40),
+        (Kind::Snapshot, 26),
+    ] {
+        let text = report(kind, &got, &want).unwrap();
+        assert!(
+            text.contains(&format!("first divergence at call {absolute}, instance 1 ")),
+            "{kind:?}: {text}"
+        );
+    }
+    assert!(report(Kind::Snapshot, &want, &want).is_none());
 }
