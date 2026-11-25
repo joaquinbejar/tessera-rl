@@ -1024,7 +1024,15 @@ _EXECUTION_OPTIONS = frozenset(
 )
 
 
-def make(env_id: str, num_envs: int = 1, seed: int = 0, outputs: str = "borrowed", **kwargs) -> Env:
+def make(
+    env_id: str,
+    num_envs: int = 1,
+    seed: int = 0,
+    outputs: str = "borrowed",
+    *,
+    onnx_opponents=None,
+    **kwargs,
+) -> Env:
     """Creates a pool of ``num_envs`` instances of ``env_id``.
 
     ``outputs`` is ``"borrowed"`` (default: read-only zero-copy views valid
@@ -1134,7 +1142,7 @@ def make(env_id: str, num_envs: int = 1, seed: int = 0, outputs: str = "borrowed
         "tessera/Survival-v1": _native.make_survival,
     }
     maker = makers.get(env_id)
-    opponents = kwargs.get("onnx_opponents")
+    opponents = onnx_opponents
     if maker is None:
         if opponents is not None:
             raise _native.CapabilityError("host environments have no in-engine league opponents (onnx_opponents=)")
@@ -1144,7 +1152,7 @@ def make(env_id: str, num_envs: int = 1, seed: int = 0, outputs: str = "borrowed
         return _host.make(env_id, makers, num_envs, seed, outputs, dict(kwargs))
     mode = str(kwargs.get("mode") or "sync")
     indexed = kwargs.get("gather") == "indexed"
-    native = {k: v for k, v in kwargs.items() if k != "onnx_opponents"}
+    native = kwargs
     extra = {}
     if opponents is not None:
         from tessera_rl.search import OnnxOpponents
