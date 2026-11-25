@@ -86,7 +86,29 @@ def run(tmp_path, monkeypatch, *, refusals, body="pass", wall_cap_s=30.0):
     ledger = tmp_path / "ledger.json"
     rc = supervisor.run(str(script), [], None, ledger=str(ledger), budget_core_hours=1.0, cores=1,
                         wall_cap_s=wall_cap_s, out=str(tmp_path / "out"), name="t")  # fmt: skip
-    return rc, json.loads(ledger.read_text())["entries"], int(pidfile.read_text())
+    pid = int(pidfile.read_text()) if pidfile.exists() else None
+    return rc, json.loads(ledger.read_text())["entries"], pid
+
+
+# Deadlines for the deadline tests, one per trial (#576): on a loaded host
+# the child can reach the deadline before it has started Python, imported
+# the supervisor and spawned its descendant, so it never writes the pid
+# file. Such a trial says nothing about the group kill, so it is retried in
+# a fresh directory with a longer deadline; a trial that spawned the
+# descendant is the one checked, so every assertion keeps its strength.
+DEADLINE_CAPS_S = (3.0, 6.0, 12.0)
+
+
+def run_at_deadline(tmp_path, monkeypatch, *, refusals):
+    """``run`` with the neutralised child until a trial spawns the
+    descendant before the deadline; fails if none does."""
+    for i, cap in enumerate(DEADLINE_CAPS_S):
+        trial = tmp_path / f"trial{i}"
+        trial.mkdir()
+        rc, entries, pid = run(trial, monkeypatch, refusals=refusals, body=NEUTRALISED, wall_cap_s=cap)
+        if pid is not None:
+            return rc, entries, pid
+    pytest.fail(f"no trial spawned the descendant before its deadline (caps {DEADLINE_CAPS_S} s)")
 
 
 def cleanup(pid):
@@ -98,6 +120,7 @@ def cleanup(pid):
 
 def test_supervisor_transient_eperm_after_return_kills_the_descendant_and_settles_ok(tmp_path, monkeypatch):
     rc, entries, pid = run(tmp_path, monkeypatch, refusals=3)
+    assert pid is not None, "the child spawned its descendant (30 s deadline)"
     assert rc == 0 and [e["status"] for e in entries] == ["ok"]
     # Polled, not read at a fixed instant: a loaded machine delays a
     # SIGKILLed process's exit; one the kill missed sleeps 120 s.
@@ -106,6 +129,7 @@ def test_supervisor_transient_eperm_after_return_kills_the_descendant_and_settle
 
 def test_supervisor_persistent_eperm_after_return_fails_closed(tmp_path, monkeypatch):
     rc, entries, pid = run(tmp_path, monkeypatch, refusals=-1)
+    assert pid is not None, "the child spawned its descendant (30 s deadline)"
     try:
         assert rc == 1
         assert entries[0]["status"].startswith("failed: the process group was not confirmed gone")
@@ -114,14 +138,14 @@ def test_supervisor_persistent_eperm_after_return_fails_closed(tmp_path, monkeyp
 
 
 def test_supervisor_transient_eperm_at_the_deadline_kills_child_and_descendant(tmp_path, monkeypatch):
-    rc, entries, pid = run(tmp_path, monkeypatch, refusals=3, body=NEUTRALISED, wall_cap_s=3.0)
+    rc, entries, pid = run_at_deadline(tmp_path, monkeypatch, refusals=3)
     assert rc == supervisor.EXIT_DEADLINE
     assert entries[0]["status"].startswith("killed at the deadline") and entries[0]["wall_s"] < 30
     assert wait_for(lambda: gone(pid), GONE_BOUND_S)
 
 
 def test_supervisor_persistent_eperm_at_the_deadline_fails_closed(tmp_path, monkeypatch):
-    rc, entries, pid = run(tmp_path, monkeypatch, refusals=-1, body=NEUTRALISED, wall_cap_s=3.0)
+    rc, entries, pid = run_at_deadline(tmp_path, monkeypatch, refusals=-1)
     try:
         assert rc == 1
         assert entries[0]["status"].startswith("failed: the process group was not confirmed gone")
