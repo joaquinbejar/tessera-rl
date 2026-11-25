@@ -102,6 +102,17 @@ def fingerprint(name: str) -> str:
             "flatten": hashlib.sha256(flat.encode()).hexdigest(),
         }
         params = asdict(masked_hyper(name, protocol(name)["total_steps"]))
+    elif protocol(name)["tier"] == "T1s":
+        import learning_sampled as ls  # noqa: PLC0415
+
+        # T1's training (reference_training and T1's training path) plus the
+        # sampled evaluation module (#595): a T1 training edit moves T1s too.
+        sources = {
+            "reference_training": hashlib.sha256(pathlib.Path(rt.__file__).read_bytes()).hexdigest(),
+            "learning_protocols": hashlib.sha256(_training_source().encode()).hexdigest(),
+            "learning_sampled": hashlib.sha256(pathlib.Path(ls.__file__).read_bytes()).hexdigest(),
+        }
+        params = asdict(hyper(name, protocol(name)["total_steps"]))
     elif protocol(name)["tier"] == "T1n":
         import inspect  # noqa: PLC0415
 
@@ -155,6 +166,18 @@ def continuous_hyper(name: str, total_steps: int):
     import learning_continuous as lc  # noqa: PLC0415
 
     return lc.ContinuousHyper(**{**protocol(name)["hyper"], "total_steps": total_steps})
+
+
+def train_sampled(name: str, seed: int, total_steps: int, eval_episodes: int) -> dict:
+    """One training run of a tier T1s protocol: T1's training with a sampled
+    evaluation (``learning_sampled``, #595). Kept apart from ``train`` so the
+    T1 training path, and with it the T1 fingerprints, do not change."""
+    import learning_sampled as ls  # noqa: PLC0415
+
+    p = protocol(name)
+    if p["tier"] != "T1s":
+        raise ValueError(f"{name} is tier {p['tier']}, not T1s")
+    return ls.train(p["env"], seed, hyper(name, total_steps), eval_episodes)
 
 
 def normalized_hyper(name: str, total_steps: int):
