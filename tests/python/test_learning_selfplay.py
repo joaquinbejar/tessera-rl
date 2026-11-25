@@ -137,8 +137,6 @@ def test_selfplay_protocol_entry_and_gate():
     assert p["total_steps"] == 1_000_000 and p["hyper"] == {} and p["eval_episodes"] == 50 and p["score"] == "final"
     assert lp.gate("lanterns") == {"min_effect": 0.10}
     assert lp.selfplay_hyper("lanterns", 512).total_steps == 512
-    with pytest.raises(ValueError, match="not T3c"):
-        lp.train_selfplay("acrobot", 1, 512, 2)
     assert not (ROOT / "compat" / "learning" / "lanterns.json").exists()
 
 
@@ -214,6 +212,9 @@ def test_selfplay_evaluation_deals_and_games_differ(kind):
         probe = ls._make(ENV, 1, 0, None, KW)
         step = probe.reset()
         obs = ls.seat_obs(step.observations, ls.acting_seats(step.acting))
+        import torch
+
+        torch.manual_seed(0)
         agent = ls._agent_class()(obs.shape[1], probe.action_choices)
         probe.close()
     trace = []
@@ -228,10 +229,14 @@ def test_selfplay_evaluation_deals_and_games_differ(kind):
     assert again == scores
 
 
-def test_selfplay_heuristic_beats_uniform_on_a_few_episodes():
-    h = ls.eval_scores(ENV, KW, "heuristic", 5, 10_000)
-    u = ls.eval_scores(ENV, KW, "uniform", 5, 10_000)
-    assert sum(h) > sum(u), (h, u)
+def test_selfplay_heuristic_beats_uniform_on_fixed_seeds():
+    """Deterministic: fixed eval seeds 10_000..10_019, no torch, so the
+    result is the same on every run."""
+    h = ls.eval_scores(ENV, KW, "heuristic", 20, 10_000)
+    u = ls.eval_scores(ENV, KW, "uniform", 20, 10_000)
+    assert h == ls.eval_scores(ENV, KW, "heuristic", 20, 10_000)
+    assert u == ls.eval_scores(ENV, KW, "uniform", 20, 10_000)
+    assert sum(h) / 20 - sum(u) / 20 >= 1.0, (h, u)
 
 
 def test_selfplay_stall_guard_fails_loudly():
@@ -247,6 +252,8 @@ def test_selfplay_lanterns_one_update_smoke():
 
     import learning_protocols as lp
 
+    with pytest.raises(ValueError, match="not T3c"):
+        lp.train_selfplay("acrobot", 1, 512, 2)
     r = lp.train_selfplay("lanterns", 1, 512, 2)
     assert len(r["eval_returns"]) == 2 and math.isfinite(r["eval_mean"])
     assert r["truncations"] == 0 and r["eval_truncations"] == 0
