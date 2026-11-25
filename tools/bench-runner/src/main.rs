@@ -634,7 +634,6 @@ fn run(args: &[String]) -> Result<String, Error> {
     let limit: u32 = option(args, "--max-episode-steps")?.unwrap_or(0);
     let legal = args.iter().any(|a| a == "--legal-actions");
     let sched = schedule(args)?;
-    let chunk = chunk_size(args)?;
     macro_rules! bench {
         ($env:ty, $cfg:ty, $mask:ty, $make:ident) => {
             bench!(@cfg $env, <$cfg>::default(), $mask, $make)
@@ -651,7 +650,7 @@ fn run(args: &[String]) -> Result<String, Error> {
                         cpu_set,
                         limit,
                         sched,
-                        chunk,
+                        chunk_size(args)?,
                     )?,
                     &cfg,
                     num_envs,
