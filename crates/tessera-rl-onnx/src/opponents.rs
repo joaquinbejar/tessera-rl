@@ -9,7 +9,7 @@
 //! (one per observation leaf, ADR-0057 section 5); its one output
 //! `actions` is `int64` `[batch, 1]` or `[batch]`: the action of each row,
 //! not logits, so the engine samples nothing (no RNG domain for
-//! opponents). The engine range-checks the actions; a run's own
+//! opponents). The engine's workers validate the actions; a run's own
 //! allocations are outside the engine's zero-allocation guarantee, as for
 //! the evaluator. Results are in ADR-0057's determinism class (one
 //! runtime, never cross-platform).

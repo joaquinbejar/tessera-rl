@@ -268,3 +268,122 @@ fn test_with_onnx_opponents_refusals() {
         Err(EngineError::League { .. })
     ));
 }
+
+const HASH_B: [u8; 16] = [8; 16];
+
+/// Each call's policy and row count.
+type Calls = std::sync::Arc<std::sync::Mutex<Vec<([u8; 16], usize)>>>;
+
+/// Two ONNX policies with different rules, counting the rows of each call.
+struct TwoRules {
+    calls: Calls,
+}
+
+impl sealed::Sealed for TwoRules {}
+
+impl OpponentPolicies for TwoRules {
+    fn serves(&self, content_hash: &[u8; 16]) -> bool {
+        *content_hash == HASH || *content_hash == HASH_B
+    }
+
+    fn act(
+        &mut self,
+        content_hash: &[u8; 16],
+        rows: &[u8],
+        n: usize,
+        actions: &mut [i64],
+    ) -> Result<(), OpponentPolicyError> {
+        self.calls.lock().unwrap().push((*content_hash, n));
+        let row = rows.len() / n;
+        for (j, a) in actions.iter_mut().enumerate() {
+            let r = rule(rows.get(j * row..(j + 1) * row).unwrap());
+            *a = if *content_hash == HASH {
+                r
+            } else {
+                (r + 1) % 3
+            };
+        }
+        Ok(())
+    }
+}
+
+/// Each ONNX policy plays only the instances assigned to it: two ONNX
+/// policies equal the caller submitting each rule by `assignment()`.
+#[test]
+fn test_onnx_two_policies_each_play_their_assigned_instances() {
+    let calls = std::sync::Arc::default();
+    let mut onnx = pool(
+        &[
+            PolicyKind::Onnx { content_hash: HASH },
+            PolicyKind::Onnx {
+                content_hash: HASH_B,
+            },
+        ],
+        None,
+    )
+    .with_onnx_opponents(Box::new(TwoRules {
+        calls: std::sync::Arc::clone(&calls),
+    }))
+    .unwrap();
+    let mut external = pool(
+        &[
+            PolicyKind::External { tag: 1 },
+            PolicyKind::External { tag: 2 },
+        ],
+        None,
+    );
+    onnx.reset_all(Reseed::Keep).unwrap();
+    external.reset_all(Reseed::Keep).unwrap();
+    let mut both = [false; 2];
+    for t in 0..20 {
+        assert_eq!(trace(&onnx), trace(&external), "step {t}");
+        assert_eq!(onnx.assignment(), external.assignment(), "step {t}");
+        let assignment = external.assignment().unwrap().to_vec();
+        let mut a = vec![0i32; N as usize * A];
+        let mut b = vec![0i32; N as usize * A];
+        for i in 0..N as usize {
+            a[i * A] = learner(t, i);
+            b[i * A] = learner(t, i);
+            let r = rule(&row_of(&external, i * A + 1));
+            let policy = assignment[i] as usize;
+            both[policy] = true;
+            b[i * A + 1] = i32::try_from(if policy == 0 { r } else { (r + 1) % 3 }).unwrap();
+        }
+        for (p, x) in [(&mut onnx, &a), (&mut external, &b)] {
+            p.step(ActionInput {
+                discrete: x,
+                continuous: &[],
+            })
+            .unwrap();
+        }
+    }
+    assert_eq!(both, [true, true]);
+    assert!(!calls.lock().unwrap().is_empty());
+}
+
+/// Instances waiting for their reset are not in the batch: with every
+/// episode ending together, a reset step makes no call, and every other
+/// step one call per policy with every instance's row.
+#[test]
+fn test_onnx_pending_reset_instances_are_not_batched() {
+    let calls = std::sync::Arc::default();
+    let mut p = pool(&[PolicyKind::Onnx { content_hash: HASH }], None)
+        .with_onnx_opponents(Box::new(TwoRules {
+            calls: std::sync::Arc::clone(&calls),
+        }))
+        .unwrap();
+    p.reset_all(Reseed::Keep).unwrap();
+    // `pool` truncates at 5 steps with `AutoReset::NextStep`: steps 6 and
+    // 12 are reset steps.
+    let a = vec![1i32; N as usize * A];
+    for _ in 0..12 {
+        p.step(ActionInput {
+            discrete: &a,
+            continuous: &[],
+        })
+        .unwrap();
+    }
+    let calls = calls.lock().unwrap();
+    assert_eq!(calls.len(), 10, "{calls:?}");
+    assert!(calls.iter().all(|&(h, n)| h == HASH && n == N as usize));
+}

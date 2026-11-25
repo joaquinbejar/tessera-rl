@@ -5,9 +5,10 @@
 //! [`OpponentPolicies`] trait object (the engine cannot depend on
 //! `tessera-rl-onnx`). The batch reads the observation rows the engine
 //! wrote at the previous reset or step, in ascending policy id, then
-//! instance, then slot order; the engine range-checks the actions, writes
-//! them into its own action copy after the boundary, and the workers
-//! validate them under the masks (ADR-0079 item 3.2). A pool without an
+//! instance, then slot order; the engine writes the actions into its own
+//! action copy after the boundary (a value that is not an `i32` poisons at
+//! once), and the workers validate them against the heads and the masks
+//! (ADR-0079 item 3.2). A pool without an
 //! ONNX policy never reaches this module.
 
 use tessera_rl_core::{AdaptiveValues, Environment, RecordLayout};
@@ -141,9 +142,9 @@ where
     /// The step's ONNX opponent pass, on the calling thread, after the
     /// boundary copied the caller's actions: per ONNX policy in id order,
     /// the acting opponent slots of the instances assigned to it, in
-    /// instance then slot order, run in one batch; the actions are
-    /// range-checked and written into the engine's action copy (the
-    /// workers then validate them under the masks). No allocation.
+    /// instance then slot order, run in one batch; the actions are written
+    /// into the engine's action copy (the workers then validate them
+    /// against the heads and the masks). No allocation.
     pub(crate) fn run_onnx_opponents(&mut self) -> Result<(), EngineError> {
         let Self {
             league,
@@ -230,31 +231,31 @@ where
                 continue;
             };
             pass.policies.act(content_hash, rows, batch, out)?;
-            write_actions(&pass.pairs, out, &actions.discrete, agents, discrete)
+            write_actions(&pass.pairs, out, heads, agents, discrete)
                 .inspect_err(|_| *poisoned = true)?;
         }
         Ok(())
     }
 }
 
-/// Range-checks a batch's actions and writes them into the engine's action
-/// copy at their `(instance, slot)` rows. An out-of-range action is an
-/// invalid opponent action (ADR-0088 item 2.3): the caller poisons the pool.
+/// Writes a batch's actions into the engine's action copy at their
+/// `(instance, slot)` rows. An action that is not a valid `i32` row value
+/// is an invalid opponent action (ADR-0088 item 2.3) here, and the caller
+/// poisons the pool; the workers check every other value against the
+/// head's choices and the masks, as for heuristic opponents.
 fn write_actions(
     pairs: &[(u32, u16)],
     out: &[i64],
-    choices: &[u32],
+    heads: usize,
     agents: usize,
     discrete: &mut [i32],
 ) -> Result<(), EngineError> {
-    let heads = choices.len();
     for (pair, &(instance, slot)) in pairs.iter().enumerate() {
         let row_index = usize::try_from(instance).unwrap_or(0) * agents + usize::from(slot);
-        for (head, &limit) in choices.iter().enumerate() {
+        for head in 0..heads {
             let raw = out.get(pair * heads + head).copied().unwrap_or(-1);
             let value = u32::try_from(raw)
                 .ok()
-                .filter(|&raw| raw < limit)
                 .and_then(|raw| i32::try_from(raw).ok())
                 .ok_or(EngineError::OpponentAction { instance, slot })?;
             if let Some(d) = discrete.get_mut(row_index * heads + head) {
