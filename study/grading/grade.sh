@@ -8,7 +8,14 @@
 # <sheet> is a, b or c (the T1 rule sheet), or `none` for a crate graded
 # without a sheet (the untouched scaffold). It prints one PASS or FAIL line
 # per check and nothing else, so two runs on the same inputs print the same
-# bytes; each check's full output goes to <crate>/target/study-grade/.
+# bytes; each check's full output goes to the kit checkout's
+# target/study-grade/<crate-name>/.
+#
+# The participant's crate is never written to: grade.sh rsyncs it (without
+# target/) into a temporary directory, rewrites its relative `path =`
+# dependencies to absolute ones, and grades that copy, which an EXIT trap
+# removes. If grading crashes, even by SIGKILL, the crate is byte-identical
+# to how it was; only the temporary copy is left behind.
 #
 # Checks:
 #   check        `cargo tessera check`
@@ -20,7 +27,7 @@
 #                unwrap, expect, panic and unchecked indexing denied in src/
 #
 # Everything runs --locked --offline on the repository's pinned toolchain.
-# A crate without a Cargo.lock gets one derived from the repository's lock
+# A crate without a Cargo.lock gets one, in the copy, derived from the repository's lock
 # (copied, then pruned by `cargo metadata --offline`), as the cargo-tessera
 # end-to-end test does. STUDY_BLESS=1 records the sheet's reference
 # trajectory instead of comparing it (references only).
@@ -31,7 +38,7 @@ if [ "$#" -ne 2 ]; then
     echo "usage: grade.sh <crate-dir> <a|b|c|none>" >&2
     exit 2
 fi
-crate="$(cd "$1" && pwd)"
+src="$(cd "$1" && pwd)"
 sheet="$2"
 case "$sheet" in a | b | c | none) ;; *)
     echo "grade.sh: sheet must be a, b, c or none" >&2
@@ -43,8 +50,25 @@ here="$(cd "$(dirname "$0")" && pwd)"
 root="$(cd "$here/../.." && pwd)"
 RUSTUP_TOOLCHAIN="$(sed -n 's/^channel = "\(.*\)"$/\1/p' "$root/rust-toolchain.toml")"
 export RUSTUP_TOOLCHAIN
-logs="$crate/target/study-grade"
+name="$(sed -n 's/^name = "\(.*\)"$/\1/p' "$src/Cargo.toml" | head -n 1)"
+logs="${CARGO_TARGET_DIR:-$root/target}/study-grade/${name:-crate}"
+rm -rf "${logs:?}"
 mkdir -p "$logs"
+
+# The copy that is graded (the participant's crate stays untouched).
+work="$(mktemp -d)"
+trap 'rm -rf "${work:?}"' EXIT
+crate="$work/$(basename "$src")"
+rsync -a --exclude /target "$src/" "$crate/"
+python3 -I - "$crate/Cargo.toml" "$src" <<'PY'
+import os, re, sys
+toml, base = sys.argv[1], sys.argv[2]
+text = open(toml).read()
+def absolute(m):
+    q, value = m.group(1), m.group(2)
+    return m.group(0) if os.path.isabs(value) else f"path = {q}{os.path.normpath(os.path.join(base, value))}{q}"
+open(toml, "w").write(re.sub(r"""path = (['"])([^'"]*)\1""", absolute, text))
+PY
 
 # The tool, built from this checkout.
 cargo build --locked --offline --quiet --manifest-path "$root/Cargo.toml" -p cargo-tessera \
@@ -87,12 +111,11 @@ if [ "$sheet" != none ]; then
         lib="$(sed -n 's/^name = "\(.*\)"$/\1/p' Cargo.toml | head -n 1 | tr '-' '_')"
     fi
     conform="tests/study_conform.rs"
-    trap 'rm -f "$crate/$conform"' EXIT
+    mkdir -p tests
     sed "s/__LIB__/$lib/g" "$here/conform/conform.rs" > "$conform"
     rc=0
     STUDY_SHEET="$sheet" STUDY_GOLDEN="$here/golden/$sheet.txt" \
         cargo test --locked --offline --test study_conform > "$logs/conformance.log" 2>&1 || rc=$?
-    rm -f "$conform"
     result conformance "$rc"
 fi
 
