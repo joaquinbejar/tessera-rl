@@ -41,6 +41,7 @@
     139,
     140
   ],
+  "threshold_rule": "p5",
   "threshold": 12.43500008173287,
   "median": 13.800000083073973,
   "min": 12.280000107735395,
@@ -49,10 +50,10 @@
     "env": "tessera/PaddleDuel-v1",
     "total_steps": 500000,
     "eval_episodes": 20,
-    "fingerprint": "04f7de2b62a547c93dc47832f88609b7cc940b5c242f40c29728da90a2245973"
+    "fingerprint": "2c38a6973277b053d7a79f74590f98119efbd10230251a5fc97bfce34682e96d"
   },
   "environment": {
-    "git": "b417756872166faa8056b76ed7392c09d91f1a3c",
+    "git": "6d758db0173a0a2b19e2d6095feec25ac5a3d14c",
     "git_dirty": false,
     "python": "3.11.18",
     "os": "Linux-7.0.0-38-generic-x86_64-with-glibc2.43",

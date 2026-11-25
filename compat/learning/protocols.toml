@@ -77,12 +77,11 @@ hyper = {}
 # collected, terminated when all are, truncated at the step cap. Its Dict
 # observation (agent, the items Set and its mask) goes through the T1
 # flattening. CleanRL defaults and the T1 budget, pre-declared (no tuning
-# loop). No calibration, so no nightly gate: the pilot crashed in the T1
-# trainer, not in Gather or the adapter. When every instance ends on the same
-# step (Gather's synchronized truncations at the cap), _FlatVector's
-# np.array(..., dtype=object) builds a 2-D object array, so final_obs rows are
-# object dtype and the truncation bootstrap fails. The fix moves the T1 and
-# T3a fingerprints; it, the recalibrations and Gather's calibration are #564.
+# loop). No calibration, so no nightly gate: it does not learn at these
+# defaults. With #564's _FlatVector fix it trains cleanly, but on the 40
+# calibration seeds its median is 1.05 items against 4.55 for a random policy
+# (all 40 seeds at or below random; lower95 of the gap -4.25, required
+# +0.345). Before the fix the pilot crashed instead.
 [gather]
 env = "tessera/Gather-v1"
 tier = "T1"

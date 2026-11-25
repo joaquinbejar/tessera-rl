@@ -41,6 +41,7 @@
     139,
     140
   ],
+  "threshold_rule": "p5",
   "threshold": -295.3,
   "median": -88.95,
   "min": -500.0,
@@ -49,10 +50,10 @@
     "env": "tessera/Acrobot-v1",
     "total_steps": 150000,
     "eval_episodes": 20,
-    "fingerprint": "d4ccef5d16e15f9b40b91eb13c9a2805f42059013b01a5213abb88744e74905a"
+    "fingerprint": "691826ed3e5ecbadf8280ff67f2e8b4efae63a8be203f208ca6560d87a65389d"
   },
   "environment": {
-    "git": "e7c6fcbc548a80bc2eacf60cc81f9465ba3d7f68",
+    "git": "6d758db0173a0a2b19e2d6095feec25ac5a3d14c",
     "git_dirty": false,
     "python": "3.11.18",
     "os": "Linux-7.0.0-38-generic-x86_64-with-glibc2.43",
