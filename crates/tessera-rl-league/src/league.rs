@@ -32,7 +32,7 @@ impl Default for LeagueConfig {
 }
 
 impl LeagueConfig {
-    fn check(&self) -> Result<(), LeagueError> {
+    pub(crate) fn check(&self) -> Result<(), LeagueError> {
         let positive = |v: f64| v.is_finite() && v > 0.0;
         if !positive(self.elo_k) {
             return Err(LeagueError::InvalidConfig("elo_k must be positive"));
@@ -87,7 +87,7 @@ impl PairCounts {
         (self.wins as f64 + 0.5 * self.draws as f64 + 1.0) / (games as f64 + 2.0)
     }
 
-    fn add(&mut self, outcome: Outcome) {
+    pub(crate) fn add(&mut self, outcome: Outcome) {
         let c = match outcome {
             Outcome::Win => &mut self.wins,
             Outcome::Draw => &mut self.draws,
