@@ -270,3 +270,26 @@ adapter = "tessera_rl.gym (SAME_STEP, vehicles=1, info action_mask)"
 total_steps = 500000
 hyper = {}
 env_kwargs = { customers = 20, vehicles = 1 }
+
+# tessera/Survival-v1 (#382 stage 4): listed only, with no calibration and no
+# gate (#618 calibrates it, a timing pilot first). The calibration must keep:
+# - learner seat: slot 0 (`seats`); every other slot is a heuristic slot
+#   (the scripted baseline, an InfoHeuristic from its own window);
+# - agent count and config: `env_kwargs` (32 agents on a 48x48 map, respawn
+#   16, 512-step episodes);
+# - score: "return", the learner's undiscounted episode return, +1 per step
+#   alive, so the score counts the steps it survived.
+# Survival's actions are two independent heads (MultiDiscrete [5, 7]); the T3b
+# trainer is one-head today, so two-head training is part of #618.
+[survival]
+opening_plies = 0
+env = "tessera/Survival-v1"
+tier = "T3b"
+adapter = "tessera_rl.make (native Env, sync, policy_map: every slot but 0 a heuristic slot, InfoHeuristic)"
+total_steps = 1000000
+hyper = {}
+env_kwargs = { agents = 32, size = 48, respawn = 16, steps = 512 }
+seats = [0]
+score = "return"
+seeds = 5
+eval_episodes = 20

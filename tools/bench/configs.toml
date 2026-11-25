@@ -217,6 +217,24 @@ env = "vrp-500"
 num_envs = 1024
 workers = 0
 
+# tessera/Survival-v1 at both ends: 16 agents on a 32 x 32 map and 128 on
+# 96 x 96 (#382).
+[[config]]
+name = "rust/survival-16/inline/n256"
+kind = "rust"
+metric = "throughput"
+env = "survival-16"
+num_envs = 256
+workers = 0
+
+[[config]]
+name = "rust/survival-128/inline/n64"
+kind = "rust"
+metric = "throughput"
+env = "survival-128"
+num_envs = 64
+workers = 0
+
 [[config]]
 name = "rust/cartpole/sync4/n4096/latency"
 kind = "rust"

@@ -78,7 +78,7 @@ def test_bench_configs_cover_every_catalog_env():
     assert rust_envs == {
         "acrobot", "brickwall", "cartpole", "connect4", "go9", "grid", "keydoor", "leduc",
         "mountaincar", "othello", "paddleduel", "pendulum", "rts", "snake", "tag", "lob",
-        "jobshop", "jobshop-64x32", "vrp", "vrp-500",
+        "jobshop", "jobshop-64x32", "vrp", "vrp-500", "survival-16", "survival-128",
     }  # fmt: skip
     envpool = {c["env"] for c in spec["config"] if c.get("api") == "envpool"}
     assert envpool == set(bench.PY_ENVS)
@@ -173,6 +173,9 @@ def test_bench_empty_selection_is_refused():
         ("jobshop-64x32", 64),
         ("vrp", 8 * 21),
         ("vrp-500", 8 * 501),
+        # Survival: 12 mask rows (move 5, act 7) in each of its 128 slots.
+        ("survival-16", 128 * 12),
+        ("survival-128", 128 * 12),
     ],
 )
 def test_bench_ops_entries_run_at_their_sizes(env, mask_bytes):

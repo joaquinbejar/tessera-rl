@@ -506,6 +506,41 @@ pub(crate) fn make_rts(g: Gil, kwargs: Option<Ref<'_>>) -> CResult<Inner> {
     Ok(Inner::new(ops, borrowed))
 }
 
+/// The `SurvivalConfig` fields `make_survival` takes, by name.
+const SURVIVAL_KEYS: [&str; 10] = [
+    "agents",
+    "size",
+    "steps",
+    "view",
+    "respawn",
+    "forest_regrow",
+    "water_permille",
+    "forest_permille",
+    "stone_permille",
+    "outputs",
+];
+
+/// `make_survival(**kwargs)`: the pool of a survival world environment
+/// object (`tessera/Survival-v1`, #382). Every `SurvivalConfig` field by
+/// name; the episode ends at the environment's own `steps`, so
+/// `max_episode_steps` defaults to 0 (no extra limit).
+pub(crate) fn make_survival(g: Gil, kwargs: Option<Ref<'_>>) -> CResult<Inner> {
+    let kw = Kwargs::parse(g, kwargs)?;
+    kw.check(g, &[&POOL_KEYS, &SURVIVAL_KEYS])?;
+    let borrowed = borrowed(g, &kw)?;
+    let args = pool_args(g, &kw, 0)?;
+    let mut fields = crate::env::SurvivalFields::default();
+    for (key, slot) in SURVIVAL_KEYS.iter().zip(fields.u32s.iter_mut()) {
+        if *key != "outputs" {
+            *slot = kw.u32(g, key)?;
+        }
+    }
+    let ops = g
+        .detach(|| crate::env::survival(&args, &fields))
+        .map_err(|e| to_py(g, e))?;
+    Ok(Inner::new(ops, borrowed))
+}
+
 /// The `LobConfig` fields `make_lob` takes, by name.
 const LOB_U32_KEYS: [&str; 17] = [
     "agents",

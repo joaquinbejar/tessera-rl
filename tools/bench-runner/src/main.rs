@@ -58,6 +58,7 @@ use tessera_rl_markets::{LimitOrderBook, LobConfig};
 use tessera_rl_num::identity::Seed;
 use tessera_rl_ops::{JobShop, JobShopConfig, Vrp, VrpConfig};
 use tessera_rl_rts::{Rts, RtsConfig};
+use tessera_rl_world::{Survival, SurvivalConfig};
 
 /// Batches of pregenerated actions cycled through a measurement.
 const ACTION_BATCHES: usize = 64;
@@ -647,6 +648,27 @@ fn run(args: &[String]) -> Result<String, Error> {
                 grid: 1000,
                 capacity: 100,
                 ..VrpConfig::default()
+            },
+            Masked,
+            with_masks
+        ),
+        // 16 agents on 32 x 32 and 128 on 96 x 96, the two ends (#382).
+        "survival-16" => bench!(
+            @cfg Survival,
+            SurvivalConfig {
+                agents: 16,
+                size: 32,
+                ..SurvivalConfig::default()
+            },
+            Masked,
+            with_masks
+        ),
+        "survival-128" => bench!(
+            @cfg Survival,
+            SurvivalConfig {
+                agents: 128,
+                size: 96,
+                ..SurvivalConfig::default()
             },
             Masked,
             with_masks

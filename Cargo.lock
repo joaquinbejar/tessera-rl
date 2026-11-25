@@ -1013,6 +1013,7 @@ dependencies = [
  "tessera-rl-render",
  "tessera-rl-search",
  "tessera-rl-simd",
+ "tessera-rl-world",
 ]
 
 [[package]]
@@ -1027,6 +1028,7 @@ dependencies = [
  "tessera-rl-num",
  "tessera-rl-ops",
  "tessera-rl-rts",
+ "tessera-rl-world",
  "thiserror",
 ]
 
@@ -1204,6 +1206,7 @@ dependencies = [
  "tessera-rl-render",
  "tessera-rl-rts",
  "tessera-rl-search",
+ "tessera-rl-world",
 ]
 
 [[package]]

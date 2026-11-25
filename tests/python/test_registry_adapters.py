@@ -27,6 +27,8 @@ _BEFORE = {
     "tessera/RTS-v1": {"parallel"},
     # #381: Parallel only, as the RTS (multi-head).
     "tessera/LimitOrderBook-v1": {"parallel"},
+    # #382: Parallel only, simultaneous at 16 to 128 agents.
+    "tessera/Survival-v1": {"parallel"},
 }
 
 

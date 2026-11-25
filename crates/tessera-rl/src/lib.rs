@@ -84,6 +84,7 @@
 //! | `tessera/RTS-v1` | `tessera-rl-rts` | 2, or 1 against a scripted opponent | `MultiDiscrete`, multi-head, conditional masks, fog of war |
 //! | `tessera/JobShop-v1` | `tessera-rl-ops` | 1 | `Discrete(jobs)`, masked, job shop scheduling |
 //! | `tessera/Vrp-v1` | `tessera-rl-ops` | 1 to 8 | `Discrete(customers + 1)`, masked (up to 501 wide), sequential, capacitated vehicle routing |
+//! | `tessera/Survival-v1` | `tessera-rl-world` | 16 to 128 | `MultiDiscrete([5, 7])` (move, act), masked, simultaneous, tile window, `Set` of visible agents, respawn, imperfect information |
 //! | `tessera/LimitOrderBook-v1` | `tessera-rl-markets` | 2 to 16 | `MultiDiscrete([6, 9, 4, 8])`, conditional masks, simultaneous, latency, `Set` observations, imperfect information |
 //!
 //! Leduc hold'em rewards and returns are normalized to `[-1, 1]`:
@@ -267,6 +268,7 @@
 //! | `tessera-rl-games` | Connect Four |
 //! | `tessera-rl-markets` | The limit order book, `tessera/LimitOrderBook-v1` |
 //! | `tessera-rl-ops` | Job shop scheduling and vehicle routing, `tessera/JobShop-v1` and `tessera/Vrp-v1` |
+//! | `tessera-rl-world` | The survival world, `tessera/Survival-v1` |
 //!
 //! The Python bindings (`tessera-rl-py`) are built with maturin and are not
 //! a crates.io crate.
@@ -324,6 +326,7 @@ pub use tessera_rl_render as render;
 pub use tessera_rl_search as search;
 #[cfg(feature = "simd")]
 pub use tessera_rl_simd as simd;
+pub use tessera_rl_world as world;
 
 /// Environment registration (SPEC 10, ADR-0032, ADR-0054).
 pub use tessera_rl_core::envs;
