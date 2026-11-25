@@ -418,7 +418,7 @@ fn adaptive_struct(
         (quote!(), quote!(), quote!(), quote!(), quote!())
     } else {
         (
-            quote!(#[doc = "Padding to a multiple of 8 bytes."] pub _reserved: #core::Reserved<#pad>,),
+            quote!(#[doc = "Padding to a multiple of 8 bytes; only the generated code builds it."] _reserved: #core::Reserved<#pad>,),
             quote!(#core::encoding::Canonical::encode(&self._reserved, out);),
             quote!(_reserved: #core::encoding::Canonical::decode(input)?,),
             quote!(_reserved: #core::Reserved::ZERO,),

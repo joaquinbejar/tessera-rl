@@ -12,7 +12,7 @@ SHIPPED = {
     "tessera/BrickWall-v1": (1, 1, "cross-platform", True),
     "tessera/CartPole-v1": (1, 1, "cross-platform", True),
     "tessera/Connect4-v1": (1, 2, "cross-platform", True),
-    "tessera/Gather-v1": (1, 1, "cross-platform", True),
+    "tessera/Gather-v1": (2, 1, "cross-platform", True),
     "tessera/Go9-v1": (1, 2, "cross-platform", True),
     "tessera/Grid-v1": (2, 1, "cross-platform", True),
     "tessera/GridKeyDoor-v1": (1, 4, "cross-platform", True),
