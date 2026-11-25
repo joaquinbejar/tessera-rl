@@ -24,10 +24,12 @@
 
 use std::sync::{Arc, Mutex};
 
+use tessera_rl_core::{AdaptiveValues, Environment, RecordLayout};
 use tessera_rl_engine::league::{
     LeagueBarrierError, LeagueReport as EngineReport, LeagueResults, LeagueSubsystem, LeagueView,
     MatchOutcome, OpponentKind, sealed,
 };
+use tessera_rl_engine::{EngineError, EnvPool, EpochReport, MaskProvider};
 use tessera_rl_num::fp::with_canonical;
 
 use crate::roles::{RoleConfig, SnapshotRule, serves};
@@ -311,6 +313,42 @@ impl SharedLeague {
         self.inner
             .lock()
             .map_err(|_| LeagueError::InvalidConfig("a thread panicked holding the league"))
+    }
+}
+
+/// A pool that takes part in a [`SharedLeague`]'s barrier: an `EnvPool`
+/// whose league subsystem is a [`RoleHandle`].
+pub trait LeagueMember {
+    /// The pool's epoch barrier.
+    ///
+    /// # Errors
+    ///
+    /// The pool's barrier error.
+    fn epoch_barrier(&mut self) -> Result<EpochReport, EngineError>;
+}
+
+impl<E, M> LeagueMember for EnvPool<E, M>
+where
+    E: Environment,
+    M: MaskProvider<E>,
+    E::Config: Sync,
+    E::Header: Send,
+    E::State: Send,
+    <E::Header as RecordLayout>::Adaptive: AdaptiveValues<E::Config>,
+{
+    fn epoch_barrier(&mut self) -> Result<EpochReport, EngineError> {
+        Self::epoch_barrier(self)
+    }
+}
+
+impl SharedLeague {
+    /// Runs every member's epoch barrier, in the order given (ADR-0088
+    /// item 6.2): any order gives the same result, since the commit merges
+    /// in registration order. The members must be every registered pool
+    /// for the round to commit.
+    #[must_use]
+    pub fn barrier(members: &mut [&mut dyn LeagueMember]) -> Vec<Result<EpochReport, EngineError>> {
+        members.iter_mut().map(|m| m.epoch_barrier()).collect()
     }
 }
 

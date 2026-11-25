@@ -335,3 +335,54 @@ fn test_shared_league_refuses_bad_configs_and_late_members() {
         "registration after the first barrier"
     );
 }
+
+/// Each pool of a shared league records and replays on its own: the
+/// one-round-late installs are `League` events at that pool's barriers
+/// (head D's tag 12), so no new replay machinery is needed.
+#[test]
+fn test_shared_league_pools_record_and_replay_separately() {
+    use tessera_rl_engine::DecodeLimits;
+    use tessera_rl_engine::replay::{Recorder, Replay, ReplayWriterOptions};
+    let limits = DecodeLimits {
+        max_instances: 1 << 16,
+        max_decoded_bytes: 1 << 30,
+        max_host_record_bytes: 1 << 20,
+    };
+    let make = || {
+        let league = SharedLeague::new(config(vec![pfsp(), pfsp()]), population()).unwrap();
+        let a = pool_for(&league, 0, 1);
+        let b = pool_for(&league, 1, 2);
+        (league, a, b)
+    };
+    let (_league, mut a, mut b) = make();
+    let options = ReplayWriterOptions::default();
+    let mut ra = Recorder::new(&mut a, Vec::new(), options).unwrap();
+    let mut rb = Recorder::new(&mut b, Vec::new(), options).unwrap();
+    for t in 0..5 {
+        for (rec, k) in [(&mut ra, 0), (&mut rb, 1)] {
+            for s in 0..60 {
+                let x: Vec<i32> = (0..N as usize * A)
+                    .map(|j| i32::try_from((t * 5 + s + j + k) % 3).unwrap())
+                    .collect();
+                rec.step(ActionInput {
+                    discrete: &x,
+                    continuous: &[],
+                })
+                .unwrap();
+            }
+        }
+        ra.epoch_barrier().unwrap();
+        rb.epoch_barrier().unwrap();
+    }
+    let (fa, fb) = (ra.finish().unwrap(), rb.finish().unwrap());
+    let hashes =
+        |p: &Pool| -> Vec<u64> { (0..N).map(|i| p.state_hash(i).unwrap().get()).collect() };
+    let (live_a, live_b) = (hashes(&a), hashes(&b));
+    let (_fresh, mut ya, mut yb) = make();
+    let sa = Replay::open(&fa, limits).unwrap().run(&mut ya).unwrap();
+    let sb = Replay::open(&fb, limits).unwrap().run(&mut yb).unwrap();
+    assert!(sa.verified() && sb.verified());
+    assert_eq!(hashes(&ya), live_a);
+    assert_eq!(hashes(&yb), live_b);
+    assert_eq!(ya.league_view(), a.league_view());
+}
