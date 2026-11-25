@@ -76,7 +76,7 @@ def test_bench_configs_cover_every_catalog_env():
     spec, _ = bench.load(quick=True)
     rust_envs = {c["env"] for c in spec["config"] if c["kind"] == "rust" and c["metric"] == "throughput"}
     assert rust_envs == {
-        "acrobot", "brickwall", "cartpole", "connect4", "go9", "grid", "keydoor", "leduc",
+        "acrobot", "brickwall", "cartpole", "connect4", "go9", "grid", "keydoor", "lanterns", "leduc",
         "mountaincar", "othello", "paddleduel", "pendulum", "rts", "snake", "tag", "lob",
         "jobshop", "jobshop-64x32", "vrp", "vrp-500", "survival-16", "survival-128",
     }  # fmt: skip
@@ -91,6 +91,33 @@ def test_bench_legal_actions_option_reaches_the_runner(quick_report):
     assert "legal_actions" not in quick_report["results"]["rust/cartpole/inline/n1024"]["options"]
     assert quick_report["results"]["rust/connect4/inline/n1024"]["action_policy"] == "legal_actions"
     assert quick_report["results"]["rust/cartpole/inline/n1024"]["action_policy"] == "planned"
+
+
+def test_bench_schedule_and_full_workers_reach_the_runner(quick_report):
+    full = quick_report["results"]["rust/rts/syncfull/n1024"]
+    assert full["options"]["schedule"] == "dynamic" and full["schedule"] == "dynamic"
+    assert full["workers"] == bench.workers_for(full["config"], quick_report["pinning"]) >= 1
+    sync4 = quick_report["results"]["rust/lanterns/sync4/n1024"]
+    assert (sync4["workers"], sync4["schedule"], sync4["options"]["schedule"]) == (4, "static", "static")
+    inline = quick_report["results"]["rust/lanterns/inline/n1024"]
+    assert "schedule" not in inline["options"] and inline["schedule"] is None
+    assert inline["action_policy"] == "legal_actions"
+    d = quick_report["derived"]["scaling_efficiency/rts/syncfull/n1024"]
+    assert d["from"] == ["rust/rts/syncfull/n1024", "rust/rts/inline/n1024"] and d["value"] > 0
+
+
+def test_bench_full_workers_resolve_to_the_cpu_set():
+    pin = {"applied": True, "cpu_set": [2, 4, 6, 8, 10]}
+    assert bench.workers_for({"name": "f", "workers": "full"}, pin) == 5
+    assert bench._cpus_for({"name": "f", "workers": "full"}, pin) == [2, 4, 6, 8, 10]
+    with pytest.raises(ValueError, match="not a count"):
+        bench.workers_for({"name": "bad", "workers": "many"}, pin)
+
+
+def test_bench_runner_refuses_a_schedule_without_workers():
+    runner = bench.runner_path("debug")
+    bad = subprocess.run([str(runner), "throughput", "cartpole", "4", "0", "0", "1", "0.01", "--schedule", "dynamic"], capture_output=True, text=True)
+    assert bad.returncode != 0 and "Sync mode" in bad.stderr
 
 
 def test_bench_envpool_speedups_carry_the_output_asymmetry_note():

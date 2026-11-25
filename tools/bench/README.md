@@ -67,7 +67,7 @@ make bench-kernels                # Criterion benches of the kernels
 
 | Metric | Configurations |
 | --- | --- |
-| Raw env throughput | `rust/*` with `metric = "throughput"`: auto-reset and observation writing included. Every catalog environment has an entry (`rust/<env>/inline/n1024`, SPEC 16.1). Masked games with a flat mask set `legal_actions`: each planned action moves to the next legal choice inside the timed step, so they step real moves; RTS and Tag step under the no-op illegal-action policy. Every Rust row records `action_policy` (`planned` or `legal_actions`) |
+| Raw env throughput | `rust/*` with `metric = "throughput"`: auto-reset and observation writing included. Every catalog environment has an entry (`rust/<env>/inline/n1024`, SPEC 16.1). Masked games with a flat mask (Lanterns among them) set `legal_actions`: each planned action moves to the next legal choice inside the timed step, so they step real moves; RTS and Tag step under the no-op illegal-action policy. Every Rust row records `action_policy` (`planned` or `legal_actions`) |
 | Scaling efficiency | `scaling_efficiency/*`: k-worker throughput over k times one worker |
 | Step latency | `rust/*/latency`: p50 and p99 per batch, Sync mode |
 | Python overhead | `python_overhead/*`: binding throughput over raw Rust, borrowed and owned separately |
@@ -77,6 +77,44 @@ make bench-kernels                # Criterion benches of the kernels
 | Against EnvPool | `speedup/native-vs-envpool/*`: `py/native/<env>/n1024/borrowed` over `py/envpool/<env>/n1024` (CartPole, Acrobot, MountainCar, Pendulum), one thread each, same plan (continuous plans for Pendulum) and options. The output paths differ (Tessera's borrowed views; EnvPool's fresh arrays plus an info dict each step), so every speedup carries a `note` saying so, and a published number must state it. The `py/envpool/*` configurations declare `requires = "envpool"`; without that package they are skipped and listed under `skipped` in the report |
 
 End-to-end SPS (reference PPO) and the authoring study come later.
+
+## Flagship benchmarks (#640)
+
+The SPEC 22 phase 4 gate, "flagship benchmarks published", covers six
+flagships: `tessera/RTS-v1`, `tessera/LimitOrderBook-v1`,
+`tessera/Lanterns-v1`, `tessera/Survival-v1`, `tessera/JobShop-v1` and
+`tessera/Vrp-v1`. Their configurations carry `flagship = "<id>"`, and each
+flagship is measured on all four SPEC 19.1 metrics at one N, so its rows
+are comparable:
+
+| Metric | Configurations |
+| --- | --- |
+| Raw throughput | `rust/<env>/inline/n<N>`: Inline, one pinned core |
+| Scaling | `rust/<env>/sync4/n<N>` (4 workers) and `rust/<env>/syncfull/n<N>` (`workers = "full"`: one worker per CPU of the machine's `bench_cpu_set`, the effective count recorded as `workers`); `scaling_efficiency/<env>/sync4/n<N>` and `.../syncfull/n<N>` divide by k times the Inline entry |
+| Snapshot cost | `rust/<env>/n<N>/snapshot`: snapshot, restore, import, fork, fork_branched |
+| Memory | `rust/<env>/n<N>/memory`: continuation bytes per instance, mask bytes per step |
+
+N is 1024, except Survival (16 agents on 32 x 32) at 256. Every
+multi-worker configuration names its `schedule` (ADR-0076, ADR-0087):
+`dynamic` for RTS and Survival, whose step cost varies per instance, and
+`static` for the others; the runner takes it as `--schedule`, and the
+report records it in the options and as `schedule`. The masked flagships
+step as their Inline entries do: Lanterns with `legal_actions`, the others
+under the no-op illegal-action policy.
+
+The gate is Tessera's own numbers. Each flagship's closest alternative is
+either named with a same-machine comparison (same harness discipline,
+pinned version, the step semantics stated) or recorded as "none found"
+with the search done; a comparison is not required to close the gate, and
+no alternative is downloaded without announcing it first.
+
+Until a reference machine exists (#151), flagship numbers are indicative:
+`valid_for_claims` is false and the `claim_check` reasons are kept. The
+method does not change for them (at least 2 s of warm-up, 10 repetitions,
+a 95% CI). The gate is met only by a reference-machine run with
+`--runs 10`, admitted through a reviewed PR. The dashboard's flagship
+table (`flagships.html`) shows every valid or indicative flagship row with
+its machine's current `compat/machines.toml` status.
 
 ## Note: DLPack data alignment
 

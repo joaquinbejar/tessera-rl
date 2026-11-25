@@ -9,6 +9,7 @@ import pathlib
 import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+import flagships
 import grouping
 import status as st
 
@@ -152,6 +153,7 @@ def index(entries: list[st.Entry], configs: list[str], machines: dict) -> str:
     for entry in valid:
         body += derived(entry)
     body += undisplayed(valid)
+    body.append(f'<p><a href="{flagships.PAGE}">Flagship table</a> (valid and indicative rows, each with its machine status).</p>')
     body += missing(entries, configs, machines)
     body += listing(entries, st.INDICATIVE, "Indicative reports")
     body += listing(entries, st.SUPERSEDED, "Superseded reports")
@@ -160,7 +162,8 @@ def index(entries: list[st.Entry], configs: list[str], machines: dict) -> str:
 
 
 def report_page(entry: st.Entry) -> str:
-    """One report on its own page. Indicative numbers appear only here."""
+    """One report on its own page. Indicative numbers appear only here and in
+    the flagship table, where each row carries its machine status."""
     report = entry.doc["report"]
     body = [f'<p class="banner">{esc(entry.status)}: {esc("; ".join(entry.reasons))}. Not comparable with any other report.</p>']
     body.append(f"<p>Commit {esc(report['environment']['software']['git'])}; machine {esc(report['environment']['machine'])}.</p>")
@@ -176,10 +179,10 @@ def report_page(entry: st.Entry) -> str:
     return page(entry.name, body)
 
 
-
 def write(out: pathlib.Path, root: pathlib.Path, entries: list[st.Entry], configs: list[str], machines: dict) -> None:
     out.mkdir(parents=True)
     (out / "index.html").write_text(index(entries, configs, machines), encoding="utf-8")
+    (out / flagships.PAGE).write_text(page(flagships.TITLE, flagships.body(entries, machines, esc)), encoding="utf-8")
     results = out / "results"
     for entry in entries:
         if entry.status not in (st.VALID, st.INDICATIVE):
