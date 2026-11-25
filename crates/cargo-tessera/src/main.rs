@@ -8,6 +8,7 @@ mod args;
 mod bench;
 mod check;
 mod error;
+mod eval;
 mod exec;
 mod names;
 mod new;
@@ -55,5 +56,6 @@ fn run(argv: impl Iterator<Item = String>, out: &mut impl Write) -> Result<(), T
         Command::New(a) => new::run(&a, &cwd()?, out),
         Command::Check(a) => check::run(a, &cwd()?, out),
         Command::Bench(a) => bench::run(a, &cwd()?, out),
+        Command::Eval(a) => eval::run(&a),
     }
 }
