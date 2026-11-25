@@ -300,7 +300,9 @@ enum Taken<E: Environment> {
     },
     Pool {
         owner: Arc<OutputStorage>,
-        state: tessera_rl_engine::PoolState<E>,
+        /// Boxed: the whole-pool state (with its context) is far larger
+        /// than one record.
+        state: Box<tessera_rl_engine::PoolState<E>>,
     },
 }
 
@@ -710,7 +712,7 @@ where
         let state = pool.snapshot_pool()?;
         Ok(Arc::new(Taken::<E>::Pool {
             owner: Arc::clone(&self.storage),
-            state,
+            state: Box::new(state),
         }))
     }
 
