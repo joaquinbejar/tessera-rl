@@ -8,7 +8,9 @@
 #![expect(
     clippy::unwrap_used,
     clippy::indexing_slicing,
-    reason = "test scenarios: a failure is the assertion"
+    clippy::many_single_char_names,
+    clippy::cast_sign_loss,
+    reason = "test scenarios: a failure is the assertion; small action indices"
 )]
 
 use core::num::NonZeroU32;
