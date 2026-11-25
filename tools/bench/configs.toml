@@ -724,7 +724,7 @@ kind = "scaling"
 multi = "rust/survival-16/sync4/n256"
 single = "rust/survival-16/inline/n256"
 workers = 4
-note = "efficiency vs k×Inline: k-worker Sync throughput over k times the Inline throughput, Sync scheduling overhead included"
+note = "efficiency vs k×Inline: k-worker Sync throughput over k times the Inline throughput, Sync scheduling overhead included, Sync at chunk 16 against Inline at chunk 64"
 
 [[derived]]
 name = "scaling_efficiency/survival-16/syncfull/n256"
@@ -732,7 +732,7 @@ kind = "scaling"
 multi = "rust/survival-16/syncfull/n256"
 single = "rust/survival-16/inline/n256"
 workers = "full"
-note = "efficiency vs k×Inline: k-worker Sync throughput over k times the Inline throughput, Sync scheduling overhead included"
+note = "efficiency vs k×Inline: k-worker Sync throughput over k times the Inline throughput, Sync scheduling overhead included, Sync at chunk 16 against Inline at chunk 64"
 
 [[derived]]
 name = "scaling_efficiency/jobshop/sync4/n1024"

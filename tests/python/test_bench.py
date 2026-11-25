@@ -4,6 +4,7 @@ warm-up, report shape, pinning and the claim qualification policy. The
 numbers themselves are not checked."""
 
 import copy
+import hashlib
 import importlib.util
 import json
 import pathlib
@@ -259,8 +260,9 @@ def test_bench_pinning_uses_the_machine_cpu_set(monkeypatch):
     assert not bench.pinning("m")["applied"]
 
 
-def test_bench_ref_x86_pins_distinct_physical_cores():
-    cpu_set = bench.machines()["ref-x86"]["bench_cpu_set"]
+@pytest.mark.parametrize("machine", ["ref-x86", "ref-x86-alt"])
+def test_bench_ref_x86_pins_distinct_physical_cores(machine):
+    cpu_set = bench.machines()[machine]["bench_cpu_set"]
     assert 0 not in cpu_set
     # Hyper-threaded P-cores are numbered in sibling pairs (2k, 2k + 1).
     assert len({c // 2 for c in cpu_set}) == len(cpu_set)
@@ -437,3 +439,168 @@ def test_bench_a_later_run_with_another_method_or_fewer_samples_is_not_valid(ref
 def test_bench_copy_cost_per_kib_carries_a_ci(quick_report):
     d = quick_report["derived"]["rust/cartpole/n1024/snapshot/copy_ns_per_kib"]
     assert d["ci95"][0] <= d["value"] <= d["ci95"][1]
+
+
+# -- the measurement load rule (#640) -------------------------------------------
+
+
+class FakeLoads:
+    """Load readings served in order (the last one repeats), and the sleeps
+    taken, so no test waits."""
+
+    def __init__(self, monkeypatch, load5s):
+        self.load5s, self.sleeps = list(load5s), []
+        monkeypatch.setattr(bench, "load_average", self.read)
+        monkeypatch.setattr(bench, "_sleep", self.sleeps.append)
+
+    def read(self):
+        value = self.load5s.pop(0) if len(self.load5s) > 1 else self.load5s[0]
+        return [value + 0.5, value, 0.25]
+
+
+def test_bench_load_gate_passes_below_the_bound_without_waiting(monkeypatch):
+    fake = FakeLoads(monkeypatch, [1.9])
+    gate = bench.LoadGate(2.0, 0.0)
+    assert gate.before() == [2.4, 1.9, 0.25] and fake.sleeps == []
+
+
+def test_bench_load_gate_waits_at_the_bound_until_below(monkeypatch):
+    fake = FakeLoads(monkeypatch, [2.0, 3.0, 1.5])
+    gate = bench.LoadGate(2.0, 7200.0)
+    assert gate.before()[1] == 1.5
+    assert fake.sleeps == [bench.LOAD_POLL_S] * 2 and gate.waited_s == 60
+
+
+def test_bench_load_gate_fails_when_the_budget_is_spent(monkeypatch):
+    fake = FakeLoads(monkeypatch, [5.0])
+    gate = bench.LoadGate(2.0, 60.0)
+    with pytest.raises(bench.LoadBudgetExceeded):
+        gate.before()
+    # Two polls fit the 60 s budget; the third would exceed it.
+    assert fake.sleeps == [bench.LOAD_POLL_S] * 2
+
+
+def test_bench_load_gate_budget_is_cumulative(monkeypatch):
+    FakeLoads(monkeypatch, [3.0, 1.0, 3.0, 3.0])
+    gate = bench.LoadGate(2.0, 45.0)
+    gate.before()
+    with pytest.raises(bench.LoadBudgetExceeded):
+        gate.before()
+
+
+@pytest.mark.parametrize(("k", "after", "void"), [(1, 2.9, False), (1, 3.0, True), (4, 5.9, False), (4, 6.0, True), (4, 2.0, False)])
+def test_bench_load_void_bound_is_gate_plus_k_run(monkeypatch, k, after, void):
+    FakeLoads(monkeypatch, [after])
+    gate = bench.LoadGate(2.0, 0.0)
+    gate.after("c", 0, k, [1.0, 1.0, 1.0])
+    (r,) = gate.runs
+    assert (r["void"], r["gate_bound"], r["void_bound"], r["k_run"]) == (void, 2.0, 2.0 + k, k)
+    assert r["before"] == {"load1": 1.0, "load5": 1.0} and r["after"] == {"load1": after + 0.5, "load5": after}
+    assert gate.record()["load_void"] is void
+    assert gate.record()["void_runs"] == ([{"config": "c", "run": 0}] if void else [])
+
+
+def test_bench_k_run_counts_workers():
+    pin = {"applied": True, "cpu_set": [2, 4, 6, 8]}
+    assert bench.k_run({"kind": "rust", "metric": "throughput", "workers": 0}, pin) == 1
+    assert bench.k_run({"kind": "rust", "metric": "throughput", "workers": 4}, pin) == 4
+    assert bench.k_run({"kind": "rust", "metric": "throughput", "workers": "full"}, pin) == 4
+    assert bench.k_run({"kind": "rust", "metric": "snapshot"}, pin) == 1
+    assert bench.k_run({"kind": "rust", "metric": "memory"}, pin) == 1
+    assert bench.k_run({"kind": "python", "workers": 4}, pin) == 1
+
+
+def test_bench_report_records_loads_of_every_process_run(monkeypatch):
+    FakeLoads(monkeypatch, [1.0])
+    name = "rust/cartpole/n1024/snapshot"
+    report = bench.run(only=name, quick=True, profile="debug", runs=2, max_load5=2.0, load_wait_s=0.0)
+    rule = report["load_rule"]
+    assert (rule["max_load5"], rule["load_wait_s"], rule["load_void"], report["load_void"]) == (2.0, 0.0, False, False)
+    assert [(r["config"], r["run"], r["void_bound"]) for r in rule["runs"]] == [(name, 0, 3.0), (name, 1, 3.0)]
+
+
+def test_bench_report_marks_a_void_run(monkeypatch):
+    # Readings: the invocation's start, the run's gate, the run's end.
+    FakeLoads(monkeypatch, [1.0, 1.0, 3.0])
+    name = "rust/cartpole/n1024/snapshot"
+    report = bench.run(only=name, quick=True, profile="debug", max_load5=2.0, load_wait_s=0.0)
+    assert report["load_void"] is True and report["load_rule"]["void_runs"] == [{"config": name, "run": 0}]
+
+
+def test_bench_without_load_options_is_unchanged(monkeypatch):
+    report = bench.run(only="rust/cartpole/n1024/snapshot", quick=True, profile="debug")
+    assert "load_rule" not in report and "load_void" not in report and "containers" not in report
+
+
+FOREIGN = [("tessera-bench-1", "sha256:aaa"), ("payroll-db", "sha256:bbb"), ("acme/web", "sha256:ccc")]
+
+
+def test_bench_report_records_containers_at_start_and_end(monkeypatch):
+    FakeLoads(monkeypatch, [1.0])
+    seen = iter([FOREIGN[:2], FOREIGN])
+    monkeypatch.setattr(bench, "_docker_containers", lambda: next(seen))
+    report = bench.run(only="rust/cartpole/n1024/snapshot", quick=True, profile="debug", max_load5=2.0, load_wait_s=0.0)
+    start, end = report["containers"]["start"], report["containers"]["end"]
+    assert (start["count"], start["ours"], len(start["others"])) == (2, ["tessera-bench-1"], 1)
+    assert (end["count"], len(end["others"])) == (3, 2) and set(start["others"]) < set(end["others"])
+
+
+def test_bench_containers_never_name_another_service(monkeypatch, capsys):
+    monkeypatch.setattr(bench, "_docker_containers", lambda: FOREIGN)
+    record = bench.containers(b"k" * 16)
+    text = json.dumps(record)
+    for name, image in FOREIGN[1:]:
+        assert name not in text and image not in text
+    assert all(len(d) == 12 for d in record["others"])
+    # The raw list goes to the run log (stderr), not the report.
+    assert "payroll-db" in capsys.readouterr().err
+
+
+def test_bench_containers_without_docker_is_none(monkeypatch):
+    def missing(*args, **kwargs):
+        raise FileNotFoundError("docker")
+
+    monkeypatch.setattr(bench.subprocess, "run", missing)
+    assert bench.containers(b"k") is None
+
+
+def test_bench_containers_with_none_running_is_empty(monkeypatch):
+    class Done:
+        stdout = "\n"
+
+    monkeypatch.setattr(bench.subprocess, "run", lambda *a, **k: Done())
+    assert bench.containers(b"k") == {"count": 0, "ours": [], "others": []}
+
+
+def test_bench_container_digests_depend_on_the_salt(monkeypatch):
+    monkeypatch.setattr(bench, "_docker_containers", lambda: FOREIGN)
+    a, b = bench.containers(b"a" * 16), bench.containers(b"b" * 16)
+    assert a["others"] == bench.containers(b"a" * 16)["others"] and set(a["others"]).isdisjoint(b["others"])
+    unsalted = hashlib.sha256(b"payroll-db\0sha256:bbb").hexdigest()[:12]
+    assert unsalted not in a["others"]
+
+
+def test_bench_two_runs_give_different_digests_for_the_same_container(monkeypatch):
+    FakeLoads(monkeypatch, [1.0])
+    monkeypatch.setattr(bench, "_docker_containers", lambda: FOREIGN)
+    kw = dict(only="rust/cartpole/n1024/snapshot", quick=True, profile="debug", max_load5=2.0, load_wait_s=0.0)
+    a, b = bench.run(**kw)["containers"], bench.run(**kw)["containers"]
+    assert a["start"]["others"] == a["end"]["others"]
+    assert set(a["start"]["others"]).isdisjoint(b["start"]["others"])
+
+
+def test_bench_container_salt_goes_only_to_the_run_log(monkeypatch, capsys):
+    FakeLoads(monkeypatch, [1.0])
+    monkeypatch.setattr(bench, "_docker_containers", lambda: FOREIGN)
+    report = bench.run(only="rust/cartpole/n1024/snapshot", quick=True, profile="debug", max_load5=2.0, load_wait_s=0.0)
+    salt = next(l.split()[-1] for l in capsys.readouterr().err.splitlines() if "digest salt" in l)
+    assert salt not in json.dumps(report)
+
+
+def test_bench_spent_budget_writes_no_report(monkeypatch, tmp_path):
+    FakeLoads(monkeypatch, [9.0])
+    out = tmp_path / "r.json"
+    argv = ["bench.py", "--quick", "--only", "rust/cartpole/n1024/snapshot", "--max-load5", "2", "--load-wait", "30", "--out", str(out)]
+    monkeypatch.setattr(bench.sys, "argv", argv)
+    monkeypatch.setattr(bench, "runner_path", lambda profile="release": bench.ROOT)
+    assert bench.main() == 1 and not out.exists()

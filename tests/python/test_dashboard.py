@@ -502,3 +502,98 @@ def test_flagships_configs_state_noops_chunks_and_scaling_label():
     for d in spec["derived"]:
         if d["kind"] == "scaling" and d["multi"] in flag_multi:
             assert d["note"].startswith(flagships.SCALING), d["name"]
+
+
+# -- the load rule and the envelope's loads (#640) -------------------------------
+
+import envelope
+
+RUN = {
+    "config": NAME, "run": 0, "k_run": 1, "gate_bound": 2.0, "void_bound": 3.0,
+    "before": {"load1": 1.0, "load5": 1.0}, "after": {"load1": 1.5, "load5": 1.2}, "void": False,
+}  # fmt: skip
+
+
+def ruled_report(void=False):
+    rep = report()
+    rep["load_average"] = {"before": [1.0, 1.0, 0.5], "after": [1.5, 1.2, 0.6]}
+    run = dict(RUN, void=void, after={"load1": 3.5, "load5": 3.0} if void else RUN["after"])
+    rep["load_rule"] = {
+        "max_load5": 2.0, "load_wait_s": 7200.0, "poll_s": 30, "waited_s": 0.0, "runs": [run],
+        "load_void": void, "void_runs": [{"config": NAME, "run": 0}] if void else [],
+    }  # fmt: skip
+    rep["load_void"] = void
+    return rep
+
+
+def wrapped(rep):
+    return envelope.wrap(rep, 7, ["reviewer"], "2026-01-01T00:00:00Z")
+
+
+def test_envelope_carries_start_end_and_per_run_loads():
+    doc = wrapped(ruled_report())
+    assert doc["loads"] == {"start": [1.0, 1.0, 0.5], "end": [1.5, 1.2, 0.6], "runs": [RUN]}
+    assert verdict(doc).status == st.VALID
+
+
+def test_envelope_carries_no_foreign_container_name(monkeypatch):
+    spec = importlib.util.spec_from_file_location("bench_for_envelope", _ROOT / "tools/bench/bench.py")
+    bench = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(bench)
+    monkeypatch.setattr(bench, "_docker_containers", lambda: [("tessera-x", "sha256:1"), ("payroll-db", "sha256:2")])
+    rep = ruled_report()
+    rep["containers"] = {"start": bench.containers(b"k" * 16), "end": None}
+    doc = wrapped(rep)
+    assert doc["containers"]["start"]["count"] == 2 and "payroll-db" not in json.dumps(doc)
+    assert verdict(doc).status == st.VALID
+
+
+def test_machines_host_fields_are_neutral_labels():
+    machines = tomllib.loads((_ROOT / "compat/machines.toml").read_text(encoding="utf-8"))
+    assert machines["ref-x86"]["host"].startswith("lab-x86-1 ")
+    assert machines["ref-x86-alt"]["host"].startswith("lab-x86-2 ")
+
+
+def test_envelope_refuses_a_load_void_report():
+    with pytest.raises(ValueError, match="load_void"):
+        wrapped(ruled_report(void=True))
+
+
+def test_status_load_void_report_is_refused():
+    rep = ruled_report(void=True)
+    doc = seal(rep, loads={"start": [1.0, 1.0, 0.5], "end": [1.5, 1.2, 0.6], "runs": rep["load_rule"]["runs"]})
+    e = verdict(doc)
+    assert e.status == st.INVALID and any("load_void" in r for r in e.reasons)
+
+
+def test_status_void_rule_without_top_level_flag_is_refused():
+    rep = ruled_report(void=True)
+    del rep["load_void"]
+    doc = seal(rep, loads={"start": [1.0, 1.0, 0.5], "end": [1.5, 1.2, 0.6], "runs": rep["load_rule"]["runs"]})
+    assert verdict(doc).status == st.INVALID
+
+
+@pytest.mark.parametrize(
+    ("edit", "reason"),
+    [
+        (lambda d: d.pop("loads"), "no loads"),
+        (lambda d: d["loads"].update(start=[1.0, 1.0]), "loads.start"),
+        (lambda d: d["loads"].update(end=[9.0, 9.0, 9.0]), "loads.end"),
+        (lambda d: d["loads"].update(runs=[]), "loads.runs"),
+    ],
+)
+def test_status_envelope_loads_checked(edit, reason):
+    doc = wrapped(ruled_report())
+    edit(doc)
+    e = verdict(doc)
+    assert e.status == st.INVALID and any(reason in r for r in e.reasons)
+
+
+def test_status_file_from_before_the_load_rule_needs_no_loads():
+    assert verdict(seal(report())).status == st.VALID
+
+
+def test_survival_scaling_notes_state_the_chunk_difference():
+    configs = tomllib.loads((_ROOT / "tools/bench/configs.toml").read_text(encoding="utf-8"))
+    rows = [d for d in configs["derived"] if d["name"].startswith("scaling_efficiency/survival-16/")]
+    assert len(rows) == 2 and all("Sync at chunk 16 against Inline at chunk 64" in d["note"] for d in rows)
