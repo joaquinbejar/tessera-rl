@@ -507,7 +507,9 @@ class OnnxOpponents:
     @property
     def provenance(self):
         """Each model's provenance (as ``OnnxEvaluator.provenance``) by its
-        content hash: a read-only mapping."""
+        content hash, read at construction: a preview, a read-only mapping.
+        ``make`` loads the files again, and the pool's
+        ``Env.onnx_provenance`` records what it actually loaded."""
         return types.MappingProxyType(dict(self._provenance))
 
     def _native_kwargs(self) -> dict:

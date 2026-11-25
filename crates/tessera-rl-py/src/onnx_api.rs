@@ -107,7 +107,19 @@ fn model_provenance<'py>(g: Gil<'py>, args: &OnnxArgs) -> CResult<Mine<'py>> {
     }
     let (hash, p) = tessera_rl_onnx::model_provenance(&args.model, &options)
         .map_err(|e| to_py(g, BindError::Onnx(e.to_string())))?;
-    let info = OnnxInfo {
+    let d = info_dict(g, &info_of(&p))?;
+    let hex = hash.iter().fold(String::with_capacity(32), |mut s, b| {
+        let _ = write!(s, "{b:02x}");
+        s
+    });
+    capi::dict_set(g, &d, c"content_hash", &capi::string(g, &hex)?)?;
+    Ok(d)
+}
+
+/// The binding's view of an ONNX session's provenance.
+#[cfg(feature = "onnx")]
+pub(crate) fn info_of(p: &tessera_rl_onnx::Provenance) -> OnnxInfo {
+    OnnxInfo {
         model_sha256: p.model_sha256.clone(),
         library_path: p.library_path.display().to_string(),
         library_sha256: p.library_sha256.clone(),
@@ -118,14 +130,22 @@ fn model_provenance<'py>(g: Gil<'py>, args: &OnnxArgs) -> CResult<Mine<'py>> {
         optimization_level: p.optimization_level,
         telemetry_enabled: p.telemetry_enabled,
         arch: p.arch,
-        cpu_model: p.cpu_model,
-    };
-    let d = info_dict(g, &info)?;
-    let hex = hash.iter().fold(String::with_capacity(32), |mut s, b| {
-        let _ = write!(s, "{b:02x}");
-        s
-    });
-    capi::dict_set(g, &d, c"content_hash", &capi::string(g, &hex)?)?;
+        cpu_model: p.cpu_model.clone(),
+    }
+}
+
+/// `onnx_take_loaded() -> dict`: the provenance of the ONNX opponent
+/// models the last pool made on this thread actually loaded, by content
+/// hash, and forgets it (#619). `tessera_rl.make` calls it before and right
+/// after the native maker, on the same thread, so the record describes the
+/// bytes the pool runs, never an earlier read.
+pub(crate) fn onnx_take_loaded<'py>(g: Gil<'py>) -> CResult<Mine<'py>> {
+    let d = capi::dict(g)?;
+    for (hash, info) in crate::policy::take_loaded() {
+        let key = std::ffi::CString::new(hash)
+            .map_err(|_| error(g, Kind::Argument, "a content hash with NUL".to_owned()))?;
+        capi::dict_set(g, &d, &key, &info_dict(g, &info)?)?;
+    }
     Ok(d)
 }
 

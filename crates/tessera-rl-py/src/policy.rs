@@ -30,6 +30,20 @@ pub(crate) struct OnnxOpponentArgs {
     pub(crate) max_model_bytes: Option<u64>,
 }
 
+std::thread_local! {
+    /// The provenance of the ONNX opponent models the last pool made on
+    /// this thread loaded, by content hash: set by [`onnx_opponents`] from
+    /// the loaded `OnnxOpponents` itself, taken by
+    /// `_native.onnx_take_loaded` (#619).
+    static LOADED: std::cell::RefCell<Vec<(String, crate::search::OnnxInfo)>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Takes what [`LOADED`] holds, leaving it empty.
+pub(crate) fn take_loaded() -> Vec<(String, crate::search::OnnxInfo)> {
+    LOADED.with(|l| std::mem::take(&mut *l.borrow_mut()))
+}
+
 /// A league view, its role handle, and its ONNX policies (index and
 /// content hash).
 type LeagueParts = (LeagueView, RoleHandle, Vec<(usize, [u8; 16])>);
@@ -355,7 +369,15 @@ where
             hex(hash)
         )));
     }
-    Ok(pool.with_onnx_opponents(Box::new(policies))?)
+    // The record of exactly the models loaded (not an earlier read of the
+    // files), kept for `make` once the pool is set.
+    let loaded: Vec<(String, crate::search::OnnxInfo)> = policies
+        .models()
+        .map(|(h, p)| (hex(h), crate::onnx_api::info_of(p)))
+        .collect();
+    let pool = pool.with_onnx_opponents(Box::new(policies))?;
+    LOADED.with(|l| *l.borrow_mut() = loaded);
+    Ok(pool)
 }
 
 /// Without the `onnx` feature `league_for` already refused

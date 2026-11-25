@@ -291,3 +291,37 @@ def test_onnx_league_non_utf8_model_path_loads_where_the_filesystem_allows(tmp_p
     env = pool(uniform(("onnx", h)), onnx_opponents=o)
     env.reset()
     env.close()
+
+
+def _variant(model: bytes) -> bytes:
+    """The same model with one unknown protobuf field appended (field 100,
+    varint 1): ONNX Runtime ignores it, but the bytes and so the content
+    hash differ."""
+    return model + b"\xa0\x06\x01"
+
+
+@real
+def test_onnx_league_provenance_reports_the_loaded_model_not_the_constructed_one(tmp_path):
+    a = MODEL.read_bytes()
+    b = _variant(a)
+    ha = hashlib.sha256(a).hexdigest()[:32]
+    hb = hashlib.sha256(b).hexdigest()[:32]
+    assert ha != hb
+    path = tmp_path / "model.onnx"
+    path.write_bytes(a)
+    o = opponents(path)
+    assert list(o.provenance) == [ha]
+    path.write_bytes(b)
+    # A league of B's hash: make loads B, so it is served, and the record
+    # is B's, not the construction-time A.
+    env = pool(uniform(("onnx", hb)), onnx_opponents=o)
+    p = env.onnx_provenance
+    assert list(p) == [hb]
+    assert p[hb]["model_sha256"] == hashlib.sha256(b).hexdigest()
+    env.reset()
+    env.close()
+    # A league of A's hash is refused: the loaded bytes are B's.
+    with pytest.raises(t.ArgumentError, match=f"league policy 0 is ONNX {ha} and no onnx_opponents model"):
+        pool(uniform(("onnx", ha)), onnx_opponents=o)
+    # The preview still names what construction read.
+    assert list(o.provenance) == [ha]

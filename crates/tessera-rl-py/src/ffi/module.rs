@@ -18,6 +18,15 @@ use super::{
 use crate::errors::{Kind, error};
 use tessera_rl_core::Adapters;
 
+/// `onnx_take_loaded() -> dict` (#619).
+struct OnnxTakeLoaded;
+
+impl FunctionNoArgs for OnnxTakeLoaded {
+    fn call(g: Gil<'_>) -> CResult<Mine<'_>> {
+        crate::onnx_api::onnx_take_loaded(g)
+    }
+}
+
 /// `version()`: the Tessera version.
 struct Version;
 
@@ -349,7 +358,7 @@ impl FunctionNoArgs for InitFailsAfterRegister {
     }
 }
 
-const FUNCTION_COUNT: usize = if cfg!(feature = "test-hooks") { 52 } else { 45 };
+const FUNCTION_COUNT: usize = if cfg!(feature = "test-hooks") { 53 } else { 46 };
 
 static ROWS: [FunctionRow; FUNCTION_COUNT] = [
     FunctionRow::noargs::<Version>(c"version", c"version($module, /)\n--\n\nThe Tessera version."),
@@ -430,6 +439,10 @@ static ROWS: [FunctionRow; FUNCTION_COUNT] = [
     search_group_type::MAKER,
     search_type::ONNX_LOAD,
     search_type::ONNX_MODEL_PROVENANCE,
+    FunctionRow::noargs::<OnnxTakeLoaded>(
+        c"onnx_take_loaded",
+        c"onnx_take_loaded($module, /)\n--\n\nThe provenance of the ONNX opponent models the last pool made on this thread loaded, by content hash; then forgets it.",
+    ),
     league_fns::ROWS[0],
     league_fns::ROWS[1],
     league_fns::ROWS[2],

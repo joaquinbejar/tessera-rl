@@ -749,9 +749,12 @@ class Env:
 
     @property
     def onnx_provenance(self):
-        """The provenance of each ONNX opponent model (``make(...,
-        onnx_opponents=)``) by its content hash, a read-only mapping of
-        read-only mappings; ``None`` without ONNX opponents."""
+        """The provenance of each ONNX opponent model this pool loaded
+        (``make(..., onnx_opponents=)``) by its content hash: what its
+        results depend on, read from the loaded models themselves, so a file
+        changed since ``OnnxOpponents`` was built is reported as loaded. A
+        read-only mapping of read-only mappings; ``None`` without ONNX
+        opponents."""
         p = getattr(self, "_onnx_provenance", None)
         return None if p is None else types.MappingProxyType(dict(p))
 
@@ -1160,8 +1163,16 @@ def make(
         if not isinstance(opponents, OnnxOpponents):
             raise TypeError(f"onnx_opponents must be a tessera_rl.search.OnnxOpponents, got {type(opponents).__name__}")
         extra = opponents._native_kwargs()
+        # Forget any record a failed earlier make left on this thread.
+        _native.onnx_take_loaded()
     env = Env(maker(**native_kwargs(num_envs=num_envs, seed=seed, outputs=outputs, **native), **extra), mode, indexed)
-    env._onnx_provenance = None if opponents is None else dict(opponents._provenance)
+    # The provenance of exactly the models the pool loaded (the native
+    # maker records it on this thread), never an earlier read of the files.
+    env._onnx_provenance = (
+        None
+        if opponents is None
+        else {h: types.MappingProxyType(dict(p)) for h, p in _native.onnx_take_loaded().items()}
+    )
     #: What `tessera_rl.viewer.watch` needs to build a one-instance shadow
     #: pool of the same configuration: the id and the options that are not
     #: about execution.
