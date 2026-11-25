@@ -158,6 +158,7 @@ method tessera_rl.Env.illegal_actions(self, index: int) -> list[int]
 method tessera_rl.Env.import_record(self, index: int, record: bytes) -> None
 method tessera_rl.Env.is_poisoned(self) -> bool @property
 method tessera_rl.Env.load(self, data: bytes, ids: _Ids=None, max_instances: int | None=None, max_decoded_bytes: int | None=None) -> Step | list[HalfStep] | AsyncStep | None
+method tessera_rl.Env.onnx_provenance(self) -> Mapping[str, Mapping[str, Any]] | None @property
 method tessera_rl.Env.recv(self) -> HalfStep | AsyncStep
 method tessera_rl.Env.render(self, ids: _Ids=None) -> np.ndarray
 method tessera_rl.Env.reset(self, seed: int | None=None, ids: _Ids=None) -> Step | list[HalfStep] | AsyncStep | None
@@ -226,6 +227,7 @@ method tessera_rl.pz.Env.illegal_actions(self, index: int) -> list[int]
 method tessera_rl.pz.Env.import_record(self, index: int, record: bytes) -> None
 method tessera_rl.pz.Env.is_poisoned(self) -> bool @property
 method tessera_rl.pz.Env.load(self, data: bytes, ids: _Ids=None, max_instances: int | None=None, max_decoded_bytes: int | None=None) -> Step | list[HalfStep] | AsyncStep | None
+method tessera_rl.pz.Env.onnx_provenance(self) -> Mapping[str, Mapping[str, Any]] | None @property
 method tessera_rl.pz.Env.recv(self) -> HalfStep | AsyncStep
 method tessera_rl.pz.Env.render(self, ids: _Ids=None) -> np.ndarray
 method tessera_rl.pz.Env.reset(self, seed: int | None=None, ids: _Ids=None) -> Step | list[HalfStep] | AsyncStep | None
