@@ -540,10 +540,10 @@ where
                 "Environment::Header must have MAX_AGENTS agent rows"
             );
             // A lane-wise state keeps no rows, so a lane step would step
-            // nothing (ADR-0098 decision 3).
+            // nothing (ADR-0090 (erratum, #345 head 3)).
             assert!(
                 !(E::State::LANES && E::LANE_ENV.is_some() && E::LANE_STEP.is_some()),
-                "a lane-wise state sets LANE_ENV, never also LANE_STEP (ADR-0098)"
+                "a lane-wise state sets LANE_ENV, never also LANE_STEP (ADR-0090 (erratum, #345 head 3))"
             );
         }
         cfg.validate()?;
@@ -2027,7 +2027,7 @@ fn lane_ready<E: Environment>(headers: &[E::Header]) -> bool {
 
 /// The row store's lane step (ADR-0071): `None` for a lane-wise state, whose
 /// row store is empty, so the `LANE_STEP` arm can never walk it and step
-/// nothing (ADR-0098 decision 3).
+/// nothing (ADR-0090 (erratum, #345 head 3)).
 #[must_use]
 pub(crate) const fn row_lane_hook<E: Environment>() -> Option<LaneHook<E>> {
     if E::State::LANES { None } else { E::LANE_STEP }
