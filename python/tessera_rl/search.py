@@ -462,8 +462,8 @@ class OnnxOpponents:
     refuses with ``OnnxError`` unless ``ORT_DISABLE_TELEMETRY=1`` is already
     set, or ``accept_telemetry=True``.
 
-    Determinism: results with ONNX opponents are repeatable only in
-    ADR-0057's class: the same machine, the same library and model bytes,
+    Determinism: results with ONNX opponents are repeatable only in the
+    ONNX evaluator's class: the same machine, the same library and model bytes,
     one thread, and the same batch composition (``num_envs``, seeds and
     league); never across platforms. ``provenance`` records what they
     depend on, per content hash.

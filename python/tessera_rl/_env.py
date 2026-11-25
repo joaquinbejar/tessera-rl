@@ -919,7 +919,9 @@ _STRING_OPTIONS = {"auto_reset", "outputs", "mode", "gather", "obs", "wait", "sc
 
 #: Constructor options passed as exact ``bool`` (the RTS ``seat_swap``, the
 #: Lanterns ``zero_on_fuse``, the limit order book's ``allow_short_cash``).
-_BOOL_OPTIONS = frozenset({"seat_swap", "zero_on_fuse", "allow_short_cash", "privileged_state", "targets"})
+_BOOL_OPTIONS = frozenset(
+    {"seat_swap", "zero_on_fuse", "allow_short_cash", "privileged_state", "targets", "onnx_accept_telemetry"}
+)
 
 #: Asset options: a bundled asset's name (``str``) or its bytes
 #: (``bytes``, or any buffer, copied to exact ``bytes``).
@@ -1086,7 +1088,7 @@ def make(env_id: str, num_envs: int = 1, seed: int = 0, outputs: str = "borrowed
     such hash (``ArgumentError`` naming the first that none serves; models
     no policy names are unused), and a build without the ``onnx`` feature
     refuses ``onnx_opponents`` (``CapabilityError``). Results with ONNX
-    opponents are repeatable only in ADR-0057's class: the same machine,
+    opponents are repeatable only in the ONNX evaluator's class: the same machine,
     the same library and model bytes, the same batch composition; never
     across platforms. ``Env.onnx_provenance`` records them.
 

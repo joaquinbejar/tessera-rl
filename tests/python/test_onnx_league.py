@@ -87,11 +87,12 @@ def test_onnx_league_build_without_the_feature_refuses_onnx_opponents():
     # Never skipped: a build without the onnx feature refuses with
     # CapabilityError before any library is opened; a build with it reaches
     # the loader, which refuses the missing library with OnnxError.
+    league = uniform("heuristic")  # kept alive: the native call takes its handle
     kwargs = {
         "num_envs": 1,
         "agents": 2,
         "policy_map": "1=opponent",
-        "league": uniform("heuristic")._handle,
+        "league": league._handle,
         "onnx_models": str(MODEL),
         "onnx_library": MISSING,
         "onnx_accept_telemetry": True,

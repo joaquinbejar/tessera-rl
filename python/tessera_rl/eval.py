@@ -40,8 +40,8 @@ model, given with ``--onnx-model PATH`` (repeatable; ``--onnx-library`` names
 the ONNX Runtime library, the ``[onnx]`` extra's by default), or as
 ``evaluate(..., onnx_opponents=tessera_rl.search.OnnxOpponents(...))``; its
 report entry carries the model's ``onnx_provenance``, and its results are
-repeatable only in ADR-0057's class (same machine, library and model bytes;
-never across platforms).
+repeatable only in the ONNX evaluator's class (same machine, library and
+model bytes; never across platforms).
 """
 
 from __future__ import annotations
