@@ -327,6 +327,7 @@ mod tests {
             asynced: None,
             privileged_state: false,
             league: None,
+            onnx_opponents: None,
             targets: false,
         }
     }
