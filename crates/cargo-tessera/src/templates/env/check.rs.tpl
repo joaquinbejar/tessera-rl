@@ -13,6 +13,9 @@
 //!
 //! A call's hash covers every instance's record (header and state), the
 //! observations, rewards, masks and episode flags.
+//!
+//! A failed comparison names its kind, the first diverging call and
+//! instance, and a hint at the usual cause (`first_divergence`).
 
 use core::num::{NonZeroU32, NonZeroUsize};
 use std::fmt::Write as _;
@@ -93,12 +96,82 @@ fn actions(p: &Pool, t: u32) -> Result<Vec<i32>, EngineError> {
         .collect())
 }
 
+/// What one call leaves: its hash and every instance's record hash.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Call {
+    /// The call's hash: records and outputs (the golden value).
+    hash: u64,
+    /// Each instance's record hash, by instance id.
+    states: Vec<u64>,
+}
+
+/// The kind of a comparison, with the usual cause of its failure.
+#[derive(Clone, Copy, Debug)]
+enum Kind {
+    /// Two Inline pools in the same process.
+    InlineInline,
+    /// 4 workers at a chunk size against Inline.
+    Workers(u32),
+    /// An import into a fresh pool against the uninterrupted run.
+    Resume(u32),
+    /// A restore in place against the run it was taken from.
+    Snapshot,
+}
+
+impl Kind {
+    /// The kind's name and its hint.
+    fn describe(self) -> String {
+        match self {
+            Self::InlineInline => "Inline vs Inline (same process): state that outlives a pool, \
+                such as a `static`, a `thread_local!` or `HashMap` iteration order"
+                .to_owned(),
+            Self::Workers(chunk) => format!(
+                "Inline vs 4 workers at chunk size {chunk}: state shared across instances, or \
+                 keyed by storage slot or thread"
+            ),
+            Self::Resume(at) => format!(
+                "import at call {at} vs the uninterrupted run: state the step reads that the \
+                 record does not hold"
+            ),
+            Self::Snapshot => "restore in place vs the uninterrupted run: state the step reads \
+                that the record does not hold"
+                .to_owned(),
+        }
+    }
+}
+
+/// The first call where `got` and `want` differ, with the first instance
+/// whose record differs there (`None`: only the outputs differ) and the two
+/// call hashes. Calls are numbered as in tests/golden.json.
+fn first_divergence(got: &[Call], want: &[Call]) -> Option<(usize, Option<usize>, u64, u64)> {
+    let call = got.iter().zip(want).position(|(a, b)| a != b).or_else(|| {
+        (got.len() != want.len()).then(|| got.len().min(want.len()))
+    })?;
+    let (a, b) = (got.get(call), want.get(call));
+    let instance = a.zip(b).and_then(|(a, b)| a.states.iter().zip(&b.states).position(|(x, y)| x != y));
+    Some((call, instance, a.map_or(0, |c| c.hash), b.map_or(0, |c| c.hash)))
+}
+
+/// Fails the test with `kind`'s report when `got` and `want` differ.
+fn compare(kind: Kind, got: &[Call], want: &[Call]) {
+    if let Some((call, instance, a, b)) = first_divergence(got, want) {
+        let at = instance.map_or_else(|| "the outputs only".to_owned(), |i| format!("instance {i}"));
+        panic!(
+            "{}\nfirst divergence at call {call}, {at} (call hash {a:016x} != {b:016x})",
+            kind.describe()
+        );
+    }
+}
+
 /// The hash of the pool's records and outputs after a call.
-fn digest(p: &Pool) -> Result<u64, EngineError> {
+fn digest(p: &Pool) -> Result<Call, EngineError> {
     let out = p.outputs()?;
     let mut h = StateHasher::new();
+    let mut states = Vec::new();
     for id in 0..INSTANCES {
-        h.add_bytes(&p.state_hash(id)?.get().to_le_bytes());
+        let state = p.state_hash(id)?.get();
+        states.push(state);
+        h.add_bytes(&state.to_le_bytes());
     }
     if let Some(obs) = out.observation(0) {
         h.add_bytes(obs);
@@ -110,7 +183,10 @@ fn digest(p: &Pool) -> Result<u64, EngineError> {
     for f in flags {
         h.add_bytes(&[f.to_byte()]);
     }
-    Ok(h.finish().get())
+    Ok(Call {
+        hash: h.finish().get(),
+        states,
+    })
 }
 
 /// Steps `p` with `acts`.
@@ -123,7 +199,7 @@ fn step(p: &mut Pool, acts: &[i32]) -> Result<(), EngineError> {
 }
 
 /// The hashes of the first reset and of `calls` generated steps.
-fn run(p: &mut Pool, calls: u32) -> Result<Vec<u64>, EngineError> {
+fn run(p: &mut Pool, calls: u32) -> Result<Vec<Call>, EngineError> {
     let mut hashes = vec![digest(p)?];
     for t in 1..=calls {
         let acts = actions(p, t)?;
@@ -139,7 +215,7 @@ fn snapshot(p: &Pool) -> Result<Vec<Record<Counter>>, EngineError> {
 }
 
 /// `calls` more generated steps: the actions of each, and the hash after.
-fn record(p: &mut Pool, from: u32, calls: u32) -> Result<(Vec<Vec<i32>>, Vec<u64>), EngineError> {
+fn record(p: &mut Pool, from: u32, calls: u32) -> Result<(Vec<Vec<i32>>, Vec<Call>), EngineError> {
     let (mut rows, mut hashes) = (Vec::new(), Vec::new());
     for t in from..from.saturating_add(calls) {
         let acts = actions(p, t)?;
@@ -151,7 +227,7 @@ fn record(p: &mut Pool, from: u32, calls: u32) -> Result<(Vec<Vec<i32>>, Vec<u64
 }
 
 /// The hashes after replaying `rows`.
-fn replay(p: &mut Pool, rows: &[Vec<i32>]) -> Result<Vec<u64>, EngineError> {
+fn replay(p: &mut Pool, rows: &[Vec<i32>]) -> Result<Vec<Call>, EngineError> {
     rows.iter()
         .map(|acts| {
             step(p, acts)?;
@@ -181,16 +257,14 @@ fn read_golden(text: &str) -> Vec<u64> {
 
 #[test]
 fn test_determinism_inline_and_workers_agree_and_match_golden() {
-    let want = run(&mut pool(SEED, default_chunk(), 0).unwrap(), CALLS).unwrap();
-    assert_eq!(
-        run(&mut pool(SEED, default_chunk(), 0).unwrap(), CALLS).unwrap(),
-        want,
-        "two Inline pools disagree"
-    );
+    let calls = run(&mut pool(SEED, default_chunk(), 0).unwrap(), CALLS).unwrap();
+    let again = run(&mut pool(SEED, default_chunk(), 0).unwrap(), CALLS).unwrap();
+    compare(Kind::InlineInline, &again, &calls);
     for chunk in [1, default_chunk()] {
         let got = run(&mut pool(SEED, chunk, 4).unwrap(), CALLS).unwrap();
-        assert_eq!(got, want, "4 workers at chunk size {chunk} disagree with Inline");
+        compare(Kind::Workers(chunk), &got, &calls);
     }
+    let want: Vec<u64> = calls.iter().map(|c| c.hash).collect();
     let path = Path::new(GOLDEN);
     if std::env::var_os("TESSERA_BLESS").is_some_and(|v| v == "1") {
         std::fs::write(path, golden_json(&want)).unwrap();
@@ -235,7 +309,7 @@ fn test_continuation_import_into_a_fresh_pool_matches_the_uninterrupted_run() {
             .collect();
         let ids: Vec<u32> = (0..INSTANCES).collect();
         b.import(&ids, &decoded).unwrap();
-        assert_eq!(replay(&mut b, &rows).unwrap(), want, "import at call {at}");
+        compare(Kind::Resume(at), &replay(&mut b, &rows).unwrap(), &want);
     }
 }
 
@@ -249,7 +323,7 @@ fn test_snapshot_restore_in_place_replays_equal() {
     let records = snapshot(&p).unwrap();
     let (rows, want) = record(&mut p, 24, 80).unwrap();
     p.restore_all(&records).unwrap();
-    assert_eq!(replay(&mut p, &rows).unwrap(), want);
+    compare(Kind::Snapshot, &replay(&mut p, &rows).unwrap(), &want);
 }
 
 #[test]
