@@ -4,8 +4,8 @@ a replay, and the per-agent, per-head payload the Viewer serves.
 
 The side file is ``<replay>.logits.npz`` (NumPy's zip format, read with
 ``allow_pickle=False``). It is an optional, Python-side sidecar outside the
-1.x stability promise (ADR-0094): its ``format`` entry is
-``"tessera-logits/1"``, and any other value is refused. It never changes the
+1.x stability promise (ADR-0094): its integer ``format_version`` entry is
+``1``, and a newer (or any other) value is refused. It never changes the
 replay file. It is bound to one replay by that file's sha256: a side file
 whose hash does not match is ignored, and the Viewer says why in ``/meta``.
 
@@ -23,12 +23,12 @@ import numpy as np
 
 from tessera_rl._native import ArgumentError
 
-__all__ = ["FORMAT", "LogitsLog", "load", "logits_log", "payload", "side_path", "width_of"]
+__all__ = ["FORMAT_VERSION", "LogitsLog", "load", "logits_log", "payload", "side_path", "width_of"]
 
-#: The side file's format; any other value is refused.
-FORMAT = "tessera-logits/1"
+#: The side file's format version; any other value is refused.
+FORMAT_VERSION = 1
 #: Entries a side file holds, and nothing else.
-_KEYS = frozenset({"format", "replay_sha256", "shape", "ordinals", "logits"})
+_KEYS = frozenset({"format_version", "replay_sha256", "shape", "ordinals", "logits"})
 
 
 def side_path(replay_path) -> str:
@@ -101,7 +101,7 @@ class LogitsLog:
             with open(tmp, "wb") as f:
                 np.savez(
                     f,
-                    format=np.array(FORMAT),
+                    format_version=np.array(FORMAT_VERSION, dtype=np.int64),
                     replay_sha256=np.array(_sha256(self.replay_path)),
                     shape=np.array(self.shape, dtype=np.int64),
                     ordinals=np.array(self._ordinals, dtype=np.int64),
@@ -156,9 +156,13 @@ def _load(side, replay_path, env, step_count: int) -> dict[int, np.ndarray]:
         keys = set(data.files)
         if keys != _KEYS:
             raise Refused(f"entries {sorted(keys)} are not {sorted(_KEYS)}")
-        fmt = data["format"]
-        if fmt.dtype.kind != "U" or fmt.shape != () or str(fmt) != FORMAT:
-            raise Refused(f"format is not {FORMAT!r}")
+        fmt = data["format_version"]
+        if fmt.dtype.kind not in "iu" or fmt.shape != ():
+            raise Refused("format_version is not an integer")
+        if int(fmt) > FORMAT_VERSION:
+            raise Refused(f"format_version {int(fmt)} is newer than this reader ({FORMAT_VERSION}); upgrade tessera-rl")
+        if int(fmt) != FORMAT_VERSION:
+            raise Refused(f"format_version {int(fmt)} is not {FORMAT_VERSION}")
         sha = data["replay_sha256"]
         if sha.dtype.kind != "U" or sha.shape != ():
             raise Refused("replay_sha256 is not a string")

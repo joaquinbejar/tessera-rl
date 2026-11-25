@@ -7,9 +7,9 @@ import numpy as np
 
 from tessera_rl._env import Env
 
-__all__ = ["FORMAT", "LogitsLog", "load", "logits_log", "payload", "side_path", "width_of"]
+__all__ = ["FORMAT_VERSION", "LogitsLog", "load", "logits_log", "payload", "side_path", "width_of"]
 
-FORMAT: str
+FORMAT_VERSION: int
 
 def side_path(replay_path: str | os.PathLike[str]) -> str: ...
 def width_of(env: Env) -> int: ...

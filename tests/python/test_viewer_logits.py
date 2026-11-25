@@ -160,7 +160,9 @@ def rewrite(side, **changes):
 @pytest.mark.parametrize(
     ("changes", "reason"),
     [
-        ({"format": np.array("tessera-logits/2")}, "format is not"),
+        ({"format_version": np.array(2)}, "newer than this reader"),
+        ({"format_version": np.array(0)}, "is not 1"),
+        ({"format_version": np.array("1")}, "not an integer"),
         ({"shape": np.array([N, 1, 3])}, "shape is not"),
         ({"logits": np.zeros((STEPS, N, 1, 2), dtype=np.float64)}, "float32"),
         ({"logits": np.zeros((STEPS - 1, N, 1, 2), dtype=np.float32)}, "float32 of shape"),
