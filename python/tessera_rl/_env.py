@@ -910,7 +910,7 @@ _STRING_OPTIONS = {"auto_reset", "outputs", "mode", "gather", "obs", "wait", "sc
 
 #: Constructor options passed as exact ``bool`` (the RTS ``seat_swap``, the
 #: Lanterns ``zero_on_fuse``, the limit order book's ``allow_short_cash``).
-_BOOL_OPTIONS = frozenset({"seat_swap", "zero_on_fuse", "allow_short_cash", "privileged_state"})
+_BOOL_OPTIONS = frozenset({"seat_swap", "zero_on_fuse", "allow_short_cash", "privileged_state", "targets"})
 
 #: Asset options: a bundled asset's name (``str``) or its bytes
 #: (``bytes``, or any buffer, copied to exact ``bytes``).

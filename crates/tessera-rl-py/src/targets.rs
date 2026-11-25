@@ -104,22 +104,21 @@ pub(crate) fn merged<E: Environment>(
                 fields.names
             )));
         };
-        let at = match out.iter().position(|(i, _, _)| *i == id) {
-            Some(at) => at,
-            None => {
-                // The config copy holds the slot's whole current target
-                // first, so the config's cross-field checks see the merged
-                // values, whatever the number of adaptive fields.
-                let mut copy = (fields.clone_config)(cfg);
-                let mut target = *current;
-                for i in 0..fields.names.len() {
-                    if let Some(v) = (fields.get)(current, i) {
-                        (fields.set)(&mut copy, &mut target, i, v);
-                    }
+        let at = if let Some(at) = out.iter().position(|(i, _, _)| *i == id) {
+            at
+        } else {
+            // The config copy holds the slot's whole current target
+            // first, so the config's cross-field checks see the merged
+            // values, whatever the number of adaptive fields.
+            let mut copy = (fields.clone_config)(cfg);
+            let mut target = *current;
+            for i in 0..fields.names.len() {
+                if let Some(v) = (fields.get)(current, i) {
+                    (fields.set)(&mut copy, &mut target, i, v);
                 }
-                out.push((id, target, copy));
-                out.len() - 1
             }
+            out.push((id, target, copy));
+            out.len() - 1
         };
         let Some((_, target, copy)) = out.get_mut(at) else {
             continue;
