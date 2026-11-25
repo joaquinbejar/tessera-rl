@@ -116,6 +116,45 @@
     });
   }
 
+  // Policy logits (#683): one block per agent, a row of bars per head; an
+  // illegal choice is greyed. Absent logits hide the section.
+  function showLogits(l) {
+    var box = $("logits");
+    box.textContent = "";
+    if (l === undefined || l === null) { $("logits-section").hidden = !(meta && meta.logits && meta.logits.note); return; }
+    $("logits-section").hidden = false;
+    if (l.error !== undefined) {
+      var err = document.createElement("p");
+      err.className = "logits-error";
+      err.textContent = "logits unavailable: " + l.error;
+      box.appendChild(err);
+      return;
+    }
+    l.forEach(function (heads, a) {
+      var div = document.createElement("div");
+      div.className = "leaf";
+      var title = document.createElement("div");
+      title.textContent = "agent " + a;
+      div.appendChild(title);
+      heads.forEach(function (h, k) {
+        var row = document.createElement("div");
+        row.className = "logit-head";
+        row.textContent = heads.length > 1 ? "head " + k + ": " : "";
+        h.logits.forEach(function (v, c) {
+          var bar = document.createElement("span");
+          bar.className = "logit" + (h.legal[c] ? "" : " illegal");
+          var p = h.probs ? h.probs[c] : null;
+          bar.title = "choice " + c + ": logit " + fmt(v) + (p === null ? "" : ", p " + fmt(p));
+          bar.style.width = (p === null ? 0 : Math.round(p * 100)) + "px";
+          bar.textContent = "\u00a0";
+          row.appendChild(bar);
+        });
+        div.appendChild(row);
+      });
+      box.appendChild(div);
+    });
+  }
+
   function load() {
     if (!meta || meta.calls === 0) { return; }
     var i = Number(timeline.value);
@@ -127,6 +166,7 @@
       if (ticket !== pending) { return; }
       if (res[0] && res[0].prims) { draw(res[0].prims); }
       showStep(res[1]);
+      showLogits(res[1].logits);
       $("error").hidden = true;
     }).catch(showError);
   }
@@ -150,6 +190,7 @@
       } else {
         $("position").textContent = "generation " + r.generation;
         if (r.prims) { draw(r.prims); }
+        showLogits(r.logits);
       }
       $("error").hidden = true;
     }).catch(showError).then(function () { liveBusy = false; });
@@ -166,6 +207,11 @@
 
   api("/meta").then(function (m) {
     meta = m;
+    if (m.logits && m.logits.note) {
+      $("logits-note").textContent = m.logits.note;
+      $("logits-note").hidden = false;
+      $("logits-section").hidden = false;
+    }
     $("env").textContent = (m.env || "") + "  " + m.num_envs + " instance(s), " + m.agents + " agent(s), " + m.calls + " call(s)";
     if (m.canvas) {
       canvas.width = m.canvas[0];

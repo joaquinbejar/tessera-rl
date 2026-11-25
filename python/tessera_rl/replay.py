@@ -238,6 +238,12 @@ class ReplaySteps:
         """Event indices of the keyframes :meth:`seek` accepts."""
         return tuple(self._native._replay_keyframes())
 
+    def step_events(self) -> tuple[int, ...]:
+        """Event indices of the file's ``step`` calls, in order: the k-th is
+        the k-th policy step (the Viewer maps a call to its logged logits
+        with it, #683)."""
+        return tuple(self._native._replay_step_events())
+
     def seek(self, keyframe: int) -> None:
         """Imports the keyframe at event ``keyframe`` into every instance and
         continues the replay after it. Counters of the final summary then
