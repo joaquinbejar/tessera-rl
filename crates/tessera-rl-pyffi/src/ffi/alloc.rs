@@ -175,26 +175,7 @@ pub fn output_allocator(g: Gil<'_>, allocator: Ref<'_>) -> Arc<dyn OutputAllocat
     Arc::new(PyAllocator(Held::new(g, allocator, false)))
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_with_interpreter_without_interpreter_does_not_run() {
-        // The test binary never initializes the interpreter: the release
-        // path leaks instead of calling into it.
-        let ran = with_interpreter(|_| true);
-        assert_eq!(ran, None);
-    }
-
-    #[test]
-    fn test_held_drop_without_interpreter_leaks_quietly() {
-        // A dangling but never dereferenced pointer: without an interpreter
-        // the drop must not touch it.
-        let held = Held {
-            obj: NonNull::dangling(),
-            wait_on_drop: true,
-        };
-        drop(held);
-    }
-}
+// No Rust unit tests here: every path calls into libpython, which a
+// workspace build with `pyo3/extension-module` (the wheel's feature) does
+// not link into test binaries. tests/python/test_device.py covers the
+// adoption, the refusals, the owner's wait and its release.
