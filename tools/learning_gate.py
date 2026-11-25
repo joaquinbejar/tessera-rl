@@ -259,7 +259,12 @@ def check_calibration(calibration: dict) -> list[str]:
     budget = check_budget(calibration.get("setup"))
     if budget:
         return [f"calibration: {e}" for e in budget]
-    again = calibrate(calibration.get("records") or [], calibration.get("seeds") or [])
+    if calibration.get("threshold_rule") == "min":
+        # T3b (#370): 10 seeds, the threshold at their minimum; recomputing
+        # with T3B_CALIBRATION_SEEDS still enforces the exact seed list.
+        again = calibrate(calibration.get("records") or [], calibration.get("seeds") or [], expected=T3B_CALIBRATION_SEEDS, threshold="min")
+    else:
+        again = calibrate(calibration.get("records") or [], calibration.get("seeds") or [])
     if again.get("errors"):
         return [f"calibration: {e}" for e in again["errors"]]
     if not _finite(calibration.get("threshold")) or calibration["threshold"] != again["threshold"]:

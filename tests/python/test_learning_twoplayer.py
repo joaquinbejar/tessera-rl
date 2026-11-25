@@ -281,3 +281,16 @@ def test_t3b_missing_opening_counts_is_an_error():
     errs = opening_skip_errors([{"seed": 104, "opening_plies": 2}])
     assert errs and "seed 104: opening_plies 2 but no opening_draws" in errs[0]
     assert opening_skip_errors([{"seed": 105, "opening_plies": 0}]) == []
+
+
+def test_t3b_check_calibration_accepts_ten_seeds_with_the_min_rule():
+    """The nightly's validity check (check_calibration) recomputes a T3b
+    calibration with its own seed list and rule; a wrong list is refused."""
+    from learning_gate import T3B_CALIBRATION_SEEDS, calibrate, check_calibration  # noqa: PLC0415
+
+    records = [{"seed": s, "score": float(s - 100)} for s in T3B_CALIBRATION_SEEDS]
+    cal = calibrate(records, T3B_CALIBRATION_SEEDS, expected=T3B_CALIBRATION_SEEDS, threshold="min")
+    cal.update({"records": records, "setup": {"env": "tessera/Connect4-v1", "total_steps": 1_000_000, "eval_episodes": 50, "fingerprint": "f"}})
+    assert check_calibration(cal) == []
+    short = dict(cal, seeds=T3B_CALIBRATION_SEEDS[:9], records=records[:9])
+    assert check_calibration(short)
