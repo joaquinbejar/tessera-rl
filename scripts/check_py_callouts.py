@@ -48,7 +48,7 @@ ALLOWED = {
     "Py_TYPE", "Py_None", "Py_True", "Py_False", "Py_IncRef", "Py_DecRef",
     "PyEval_SaveThread", "PyEval_RestoreThread",
     "PyErr_Fetch", "PyErr_Occurred", "PyFloat_AsDouble",
-    "PyLong_FromUnsignedLongLong", "PyFloat_FromDouble", "PyUnicode_FromStringAndSize",
+    "PyLong_FromUnsignedLongLong", "PyLong_FromLongLong", "PyFloat_FromDouble", "PyUnicode_FromStringAndSize",
     "PyBytes_FromStringAndSize", "PyByteArray_FromStringAndSize",
     "PyTuple_Size", "PyTuple_GetItem", "PyList_Size", "PyList_GetItem", "PyDict_Next",
     "PyBytes_AsString", "PyBytes_Size",

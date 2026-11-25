@@ -288,13 +288,14 @@ def _call_factory(factory, num_envs, seed, kwargs):
 
 
 def _dtype_bounds(dtype: str) -> tuple[list[float], list[float]]:
-    """A leaf's bounds when the protocol gives none: its dtype's range."""
+    """A leaf's bounds when the protocol gives none: its dtype's range, as
+    exact ints for integer and bool dtypes, floats for float dtypes."""
     dt = np.dtype(dtype)
     if dt.kind == "b":
-        return [0.0], [1.0]
+        return [0], [1]
     if dt.kind in "iu":
         info = np.iinfo(dt)
-        return [float(info.min)], [float(info.max)]
+        return [int(info.min)], [int(info.max)]
     return [float("-inf")], [float("inf")]
 
 

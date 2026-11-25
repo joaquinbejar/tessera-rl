@@ -41,6 +41,10 @@ the API is not stable, and any 0.x release may break it.
 - `tessera-rl-ops`, logistics and scheduling environments (SPEC 16, #383, #513), stage 1: `tessera/JobShop-v1`, job shop scheduling with one dispatching agent. Instances are generated at reset from the instance seed (`jobs` 2 to 64, `machines` 2 to 32, durations `1..=max_duration`); the action dispatches a job's next operation (`Discrete(jobs)`, masked to unfinished jobs); the reward is minus each step's increase of the current makespan (the latest end time scheduled so far), so an episode's return is exactly minus the final makespan; integer state (4,556 bytes) and observations; SPT, MWKR and FIFO dispatching rules (SPT is the `Heuristic`); golden, continuation, persistence and allocation tests and a Criterion bench. Python registration follows with the vehicle routing stages.
 - Observation transforms on `Set` leaves (ADR-0092, #413). `Normalize` and `OneHot` apply to set item leaves: absent slots stay zero, and the statistics are pooled over the present slots. A `FrameStack` that names a set stacks all of its leaves. It is exported as a set of `k * MAX` slots, frames oldest first, with a generated `<set>/frame_age` `u8` leaf (0 the newest frame, 0 for absent slots) before `<set>_mask`; a single-leaf set's items move to `<set>/item`. New errors: `TransformError::PartialSetStack` and `TransformError::AfterSetStack`.
 
+### Changed
+
+- Exact integer Box bounds in Python (#570): `layout()` leaf bounds are Python ints for integer leaves (exact, so `i64::MAX` is `2**63 - 1`, not `2**63`) and floats for float leaves (bits unchanged). The Gymnasium, PettingZoo and PufferLib adapters build integer observation bounds from those ints without a `float64` round trip, and host leaves span their integer dtype exactly. Shapes, dtypes and space types are unchanged.
+
 ### Fixed
 
 - Derive macros point their errors at the offending field (#365, #395), and `EnvState` reports a non-plain-data field type at that field only (#388, #461).

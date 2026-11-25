@@ -12,7 +12,7 @@ use std::sync::Arc;
 use tessera_rl_engine::{ActionInput, EngineError};
 
 use crate::batched::{AsyncOps, BatchOutputs};
-use crate::env::{BindError, Owned, PoolArgs, PoolOps, ResetSeed, TagFields};
+use crate::env::{BindError, Bound, Owned, PoolArgs, PoolOps, ResetSeed, TagFields};
 use crate::errors::{Kind, error, to_py};
 use crate::ffi::capi::{self, CResult, Gil, Mine, Raised, Ref};
 use crate::ffi::inner::Inner;
@@ -719,6 +719,16 @@ pub(crate) fn int(g: Gil<'_>, v: usize) -> CResult<Mine<'_>> {
     capi::int_u64(g, u64::try_from(v).unwrap_or(u64::MAX))
 }
 
+/// A leaf bound as Python sees it: an exact `int` for an integer bound, a
+/// `float` (bits unchanged) for a float bound.
+fn bound(g: Gil<'_>, v: Bound) -> CResult<Mine<'_>> {
+    match v {
+        Bound::Int(v) => capi::int_i64(g, v),
+        Bound::UInt(v) => capi::int_u64(g, v),
+        Bound::Float(v) => capi::float(g, v),
+    }
+}
+
 pub(crate) fn list_of<'py>(
     g: Gil<'py>,
     items: impl IntoIterator<Item = CResult<Mine<'py>>>,
@@ -741,8 +751,8 @@ fn leaf_list<'py>(g: Gil<'py>, leaves: &[crate::env::Leaf]) -> CResult<Mine<'py>
                     capi::string(g, &leaf.name)?,
                     capi::string(g, leaf.dtype)?,
                     list_of(g, leaf.shape.iter().map(|&s| capi::int_u64(g, s.into())))?,
-                    list_of(g, leaf.low.iter().map(|&v| capi::float(g, v)))?,
-                    list_of(g, leaf.high.iter().map(|&v| capi::float(g, v)))?,
+                    list_of(g, leaf.low.iter().map(|&v| bound(g, v)))?,
+                    list_of(g, leaf.high.iter().map(|&v| bound(g, v)))?,
                 ],
             )
         }),

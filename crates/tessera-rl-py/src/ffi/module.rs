@@ -272,6 +272,21 @@ impl tessera_rl_pyffi::ffi::module_def::FunctionArg for PendulumRewards {
     }
 }
 
+/// `_int_i64_extremes()` (test hooks only): `capi::int_i64` of `i64::MIN`
+/// and `i64::MAX`, the native check of the exact integer bounds (#570).
+#[cfg(feature = "test-hooks")]
+struct IntI64Extremes;
+
+#[cfg(feature = "test-hooks")]
+impl tessera_rl_pyffi::ffi::module_def::FunctionNoArgs for IntI64Extremes {
+    fn call(g: Gil<'_>) -> CResult<Mine<'_>> {
+        capi::tuple(
+            g,
+            vec![capi::int_i64(g, i64::MIN)?, capi::int_i64(g, i64::MAX)?],
+        )
+    }
+}
+
 /// `_fail_after(n)` (test hooks only): the `n`-th next container insertion
 /// fails.
 #[cfg(feature = "test-hooks")]
@@ -298,7 +313,7 @@ impl FunctionNoArgs for InitFailsAfterRegister {
     }
 }
 
-const FUNCTION_COUNT: usize = if cfg!(feature = "test-hooks") { 40 } else { 34 };
+const FUNCTION_COUNT: usize = if cfg!(feature = "test-hooks") { 41 } else { 34 };
 
 static ROWS: [FunctionRow; FUNCTION_COUNT] = [
     FunctionRow::noargs::<Version>(c"version", c"version($module, /)\n--\n\nThe Tessera version."),
@@ -371,6 +386,11 @@ static ROWS: [FunctionRow; FUNCTION_COUNT] = [
     FunctionRow::arg::<PendulumRewards>(
         c"_pendulum_rewards",
         c"_pendulum_rewards($module, rows, /)\n--\n\nTest hook: the kernel's f64 rewards of (theta, theta_dot, u) rows.",
+    ),
+    #[cfg(feature = "test-hooks")]
+    FunctionRow::noargs::<IntI64Extremes>(
+        c"_int_i64_extremes",
+        c"_int_i64_extremes($module, /)\n--\n\nTest hook: capi::int_i64 of i64::MIN and i64::MAX.",
     ),
     #[cfg(feature = "test-hooks")]
     FunctionRow::arg::<FailAfter>(

@@ -212,7 +212,7 @@ pub(crate) fn half_view_set(layout: &Layout, rows: &Range<usize>) -> Option<View
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::env::Leaf;
+    use crate::env::{Bound, Leaf};
 
     #[test]
     fn test_view_set_shapes_follow_the_layout() {
@@ -224,8 +224,8 @@ mod tests {
                 name: String::new(),
                 dtype: "float32",
                 shape: vec![4],
-                low: vec![-1.0; 4],
-                high: vec![1.0; 4],
+                low: vec![Bound::Float(-1.0); 4],
+                high: vec![Bound::Float(1.0); 4],
             }],
             sets: Vec::new(),
             action_choices: 2,
@@ -266,8 +266,8 @@ mod tests {
             name: String::new(),
             dtype,
             shape,
-            low: vec![0.0],
-            high: vec![1.0],
+            low: vec![Bound::Float(0.0)],
+            high: vec![Bound::Float(1.0)],
         };
         let layout = Layout {
             num_envs: 3,

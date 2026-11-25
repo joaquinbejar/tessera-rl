@@ -112,6 +112,7 @@ from pettingzoo.utils.conversions import parallel_to_aec_wrapper
 from pettingzoo.utils.wrappers import OrderEnforcingWrapper
 
 from tessera_rl import _envs, _flat, _host, _native, _render
+from tessera_rl._bounds import leaf_bound
 from tessera_rl._env import Env, _discrete_actions, _multi_actions, native_kwargs
 from tessera_rl.masks import head_views
 
@@ -321,26 +322,11 @@ def _state_space(state_leaves) -> spaces.Box | None:
     if len(leaves) == 1:
         _, dtype, shape, low, high = leaves[0]
         dt = np.dtype(dtype)
-        return spaces.Box(low=_state_bound(low, shape, dt), high=_state_bound(high, shape, dt), shape=tuple(shape), dtype=dt)
+        return spaces.Box(low=leaf_bound(low, shape, dt), high=leaf_bound(high, shape, dt), shape=tuple(shape), dtype=dt)
     dt = _flat.flat_dtype([leaf[1] for leaf in leaves], "state leaves", "the PettingZoo state()")
-    low = np.concatenate([_state_bound(lo, shape, dt).ravel() for _, _, shape, lo, _ in leaves])
-    high = np.concatenate([_state_bound(hi, shape, dt).ravel() for _, _, shape, _, hi in leaves])
+    low = np.concatenate([leaf_bound(lo, shape, dt).ravel() for _, _, shape, lo, _ in leaves])
+    high = np.concatenate([leaf_bound(hi, shape, dt).ravel() for _, _, shape, _, hi in leaves])
     return spaces.Box(low=low, high=high, shape=(low.size,), dtype=dt)
-
-
-def _state_bound(values, shape, dtype: np.dtype) -> np.ndarray:
-    """A bound per element of a state leaf, from a list that may hold one value.
-    Integer bounds are clamped to ``dtype``'s range in Python integers: the
-    layout may carry ``2**63`` for an ``i64`` leaf's top (a float64 round
-    trip), and a float64 cast would wrap it."""
-    size = int(np.prod(shape))
-    flat = list(np.asarray(values, dtype=object).ravel())
-    if dtype.kind in "iu":
-        info = np.iinfo(dtype)
-        arr = np.asarray([min(max(int(v), int(info.min)), int(info.max)) for v in flat], dtype=dtype)
-    else:
-        arr = np.asarray(flat, dtype=np.float64).astype(dtype)
-    return np.broadcast_to(arr, (size,)).reshape(shape)
 
 
 def agent_name(slot: int, generation: int) -> str:
@@ -383,9 +369,7 @@ class _Agents:
                 continue
             dt = np.dtype(dtype)
             # Bounds come per element, or as one value for the whole leaf.
-            lo = np.broadcast_to(np.asarray(low, dtype=np.float64).ravel(), (int(np.prod(shape)),))
-            hi = np.broadcast_to(np.asarray(high, dtype=np.float64).ravel(), (int(np.prod(shape)),))
-            lo, hi = lo.reshape(shape).astype(dt), hi.reshape(shape).astype(dt)
+            lo, hi = leaf_bound(low, shape, dt), leaf_bound(high, shape, dt)
             leaves[name or "obs"] = spaces.Box(low=lo, high=hi, shape=tuple(shape), dtype=dt)
         self.nvec = tuple(env.action_nvec)
         if len(self.nvec) > 1:

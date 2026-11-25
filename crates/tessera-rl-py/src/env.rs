@@ -161,10 +161,21 @@ pub(crate) struct Leaf {
     pub(crate) dtype: &'static str,
     /// Shape of one agent's observation.
     pub(crate) shape: Vec<u32>,
-    /// Inclusive bounds per element, as floats (integer bounds are exact
-    /// up to 2^53; infinities for unbounded float elements).
-    pub(crate) low: Vec<f64>,
-    pub(crate) high: Vec<f64>,
+    /// Inclusive bounds per element, exact: integers for integer leaves,
+    /// floats (infinities for unbounded elements) for float leaves.
+    pub(crate) low: Vec<Bound>,
+    pub(crate) high: Vec<Bound>,
+}
+
+/// One inclusive leaf bound, kept in the type the space declares it in.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) enum Bound {
+    /// A signed integer bound.
+    Int(i64),
+    /// An unsigned integer bound.
+    UInt(u64),
+    /// A float bound (bits unchanged).
+    Float(f64),
 }
 
 /// One observation `Set` (ADR-0082): its path, capacity and leaves (item
@@ -507,21 +518,21 @@ fn dtype_name(dtype: DType) -> &'static str {
     }
 }
 
-#[expect(
-    clippy::cast_precision_loss,
-    reason = "bounds are exposed to Python as floats; documented on Leaf"
-)]
-fn float_bounds(bounds: &BoxBounds) -> (Vec<f64>, Vec<f64>) {
+/// The bounds of a box, each in its declared type (no casts).
+fn exact_bounds(bounds: &BoxBounds) -> (Vec<Bound>, Vec<Bound>) {
     match bounds {
         BoxBounds::Int { low, high } => (
-            low.iter().map(|&v| v as f64).collect(),
-            high.iter().map(|&v| v as f64).collect(),
+            low.iter().copied().map(Bound::Int).collect(),
+            high.iter().copied().map(Bound::Int).collect(),
         ),
         BoxBounds::UInt { low, high } => (
-            low.iter().map(|&v| v as f64).collect(),
-            high.iter().map(|&v| v as f64).collect(),
+            low.iter().copied().map(Bound::UInt).collect(),
+            high.iter().copied().map(Bound::UInt).collect(),
         ),
-        BoxBounds::Float { low, high } => (low.clone(), high.clone()),
+        BoxBounds::Float { low, high } => (
+            low.iter().copied().map(Bound::Float).collect(),
+            high.iter().copied().map(Bound::Float).collect(),
+        ),
     }
 }
 
@@ -537,7 +548,7 @@ fn leaves(
             dtype,
             bounds,
         } => {
-            let (low, high) = float_bounds(bounds);
+            let (low, high) = exact_bounds(bounds);
             out.push(Leaf {
                 name: name.to_owned(),
                 dtype: dtype_name(*dtype),
@@ -579,7 +590,7 @@ fn set_leaves(
         return Err(BindError::Argument("a set inside a set".to_owned()));
     }
     let copies = usize::try_from(max).unwrap_or(usize::MAX);
-    let broadcast = |v: Vec<f64>| if v.len() == 1 { v } else { v.repeat(copies) };
+    let broadcast = |v: Vec<Bound>| if v.len() == 1 { v } else { v.repeat(copies) };
     let first = out.len();
     for item in items {
         let mut shape = vec![max];
@@ -600,8 +611,8 @@ fn set_leaves(
         name: format!("{name}_mask"),
         dtype: "bool",
         shape: vec![max],
-        low: vec![0.0],
-        high: vec![1.0],
+        low: vec![Bound::UInt(0)],
+        high: vec![Bound::UInt(1)],
     });
     sets.push((name.to_owned(), max, (first..out.len()).collect()));
     Ok(())
@@ -2331,5 +2342,124 @@ mod tests {
         assert_eq!(pick_wait(true, true, true), Some(WaitBackend::Native));
         assert_eq!(pick_wait(true, false, false), Some(WaitBackend::Auto));
         assert_eq!(pick_wait(false, true, false), Some(WaitBackend::Auto));
+    }
+
+    fn box_leaf(bounds: BoxBounds, dtype: DType) -> super::Leaf {
+        let mut out = Vec::new();
+        let mut sets = Vec::new();
+        super::leaves(
+            &Space::Box {
+                shape: vec![2],
+                dtype,
+                bounds,
+            },
+            "x",
+            &mut out,
+            &mut sets,
+        )
+        .unwrap();
+        assert_eq!(sets.len(), 0);
+        out.pop().unwrap()
+    }
+
+    #[test]
+    fn test_leaves_signed_bounds_extremes_exact() {
+        use super::Bound;
+        let leaf = box_leaf(
+            BoxBounds::Int {
+                low: vec![i64::MIN, -(1 << 53) - 1],
+                high: vec![i64::MAX, (1 << 53) + 1],
+            },
+            DType::I64,
+        );
+        assert_eq!(
+            leaf.low,
+            vec![Bound::Int(i64::MIN), Bound::Int(-(1 << 53) - 1)]
+        );
+        assert_eq!(
+            leaf.high,
+            vec![Bound::Int(i64::MAX), Bound::Int((1 << 53) + 1)]
+        );
+    }
+
+    #[test]
+    fn test_leaves_unsigned_bounds_extremes_exact() {
+        use super::Bound;
+        let leaf = box_leaf(
+            BoxBounds::UInt {
+                low: vec![0, (1 << 53) + 1],
+                high: vec![u64::MAX, (1 << 53) + 1],
+            },
+            DType::U32,
+        );
+        assert_eq!(leaf.low, vec![Bound::UInt(0), Bound::UInt((1 << 53) + 1)]);
+        assert_eq!(
+            leaf.high,
+            vec![Bound::UInt(u64::MAX), Bound::UInt((1 << 53) + 1)]
+        );
+    }
+
+    #[test]
+    fn test_leaves_float_bounds_bits_unchanged() {
+        use super::Bound;
+        let low = vec![f64::NEG_INFINITY, -0.0, f64::from_bits(1), -1.5];
+        let high = vec![f64::INFINITY, 0.0, f64::MIN_POSITIVE / 4.0, 2.5];
+        let leaf = box_leaf(
+            BoxBounds::Float {
+                low: low.clone(),
+                high: high.clone(),
+            },
+            DType::F64,
+        );
+        let bits = |v: &[Bound]| -> Vec<u64> {
+            v.iter()
+                .map(|b| match b {
+                    Bound::Float(f) => f.to_bits(),
+                    other => panic!("not a float bound: {other:?}"),
+                })
+                .collect()
+        };
+        let want = |v: &[f64]| -> Vec<u64> { v.iter().map(|f| f.to_bits()).collect() };
+        assert_eq!(bits(&leaf.low), want(&low));
+        assert_eq!(bits(&leaf.high), want(&high));
+    }
+
+    #[test]
+    fn test_set_leaves_bounds_broadcast_exact_and_mask_zero_one() {
+        use super::Bound;
+        let mut out = Vec::new();
+        let mut sets = Vec::new();
+        super::leaves(
+            &Space::Set {
+                inner: Box::new(Space::Box {
+                    shape: vec![2],
+                    dtype: DType::I64,
+                    bounds: BoxBounds::Int {
+                        low: vec![i64::MIN, 0],
+                        high: vec![i64::MAX, (1 << 53) + 1],
+                    },
+                }),
+                max: 2,
+            },
+            "s",
+            &mut out,
+            &mut sets,
+        )
+        .unwrap();
+        let [item, mask] = out.as_slice() else {
+            panic!("two leaves expected, got {out:?}");
+        };
+        assert_eq!(
+            item.high,
+            vec![
+                Bound::Int(i64::MAX),
+                Bound::Int((1 << 53) + 1),
+                Bound::Int(i64::MAX),
+                Bound::Int((1 << 53) + 1)
+            ]
+        );
+        assert_eq!(item.low.first(), Some(&Bound::Int(i64::MIN)));
+        assert_eq!(mask.low, vec![Bound::UInt(0)]);
+        assert_eq!(mask.high, vec![Bound::UInt(1)]);
     }
 }
