@@ -18,6 +18,18 @@
 //! after the interpreter has finalized leaks the owner instead of calling
 //! into a dead interpreter.
 //!
+//! The finalization window: the leak covers releases only after
+//! `Py_IsInitialized` reads 0, which happens late in `Py_FinalizeEx`. A
+//! release on a thread CPython does not know (a non-Python thread dropping
+//! the last export) earlier during finalization still enters
+//! `PyGILState_Ensure`, which can hang on 3.12 and later. Release every
+//! device pool and its exports before the interpreter exits.
+//!
+//! Exceptions from `allocate`: an `Exception` refuses the pool with
+//! `ConfigError`, its class name and message appended; any other
+//! `BaseException` (`KeyboardInterrupt`, `SystemExit`) is raised again
+//! unchanged by the bindings.
+//!
 //! Trust: the memory is used without any further check than the engine's
 //! own (length and alignment, ADR-0084 item 2). The Python allocator must
 //! keep `address..address + len` valid and writable until its owner is
@@ -129,32 +141,83 @@ fn with_interpreter<R>(f: impl FnOnce(Gil<'_>) -> R) -> Option<R> {
     }
 }
 
-std::thread_local! {
-    /// The message of the exception the last `allocate` on this thread
-    /// raised; the engine's `OutputAllocation` cannot carry it, so the
-    /// bindings append it to the error they raise (construction runs on the
-    /// caller's thread).
-    static LAST_ERROR: core::cell::RefCell<Option<String>> = const { core::cell::RefCell::new(None) };
+/// Why the last `allocate` on this thread was refused, beyond the
+/// engine's own reason: the engine's `OutputAllocation` cannot carry it, so
+/// the bindings add it to the error they raise (construction runs on the
+/// caller's thread).
+pub enum AllocationFailure {
+    /// A message for the `ConfigError`.
+    Message(String),
+    /// A `BaseException` that is not an `Exception`, to raise again
+    /// unchanged.
+    Interrupt(capi::Stashed),
 }
 
-/// Records the message of the exception `raised` proves is set; it stays
-/// set (the caller restores the indicator it found).
-fn remember_error(g: Gil<'_>, raised: capi::Raised) {
+std::thread_local! {
+    static LAST_ERROR: core::cell::RefCell<Option<AllocationFailure>> = const { core::cell::RefCell::new(None) };
+}
+
+impl core::fmt::Debug for AllocationFailure {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Message(m) => f.debug_tuple("Message").field(m).finish(),
+            Self::Interrupt(_) => f.write_str("Interrupt(..)"),
+        }
+    }
+}
+
+/// Records `failure`. An older one is replaced: `allocate` runs once per
+/// construction, and `output_allocator` clears any left over first.
+fn remember(failure: AllocationFailure) {
+    LAST_ERROR.with(|e| *e.borrow_mut() = Some(failure));
+}
+
+/// Records the exception `raised` proves is set; it is taken out (the
+/// caller restores the indicator it found).
+fn remember_exception(g: Gil<'_>, raised: capi::Raised) {
+    if !capi::pending_is_exception(g) {
+        remember(AllocationFailure::Interrupt(capi::Stashed::take(g, raised)));
+        return;
+    }
     #[cfg(any(feature = "native-module", feature = "host"))]
-    let message = capi::pending_message(g, raised).0;
+    let message = {
+        let (name, message, _) = capi::pending_name_and_message(g, raised);
+        format!("allocate raised {name}: {message}")
+    };
     #[cfg(not(any(feature = "native-module", feature = "host")))]
     let message = {
-        let _ = (g, raised);
-        String::from("an exception")
+        let _ = raised;
+        String::from("allocate raised an exception")
     };
-    LAST_ERROR.with(|e| *e.borrow_mut() = Some(message));
+    remember(AllocationFailure::Message(message));
 }
 
-/// Takes the message of the exception the last `allocate` on this thread
-/// raised, if any.
+/// Takes why the last `allocate` on this thread was refused, if it said.
 #[must_use]
-pub fn take_allocation_error() -> Option<String> {
+pub fn take_allocation_error() -> Option<AllocationFailure> {
     LAST_ERROR.with(|e| e.borrow_mut().take())
+}
+
+/// Forgets any refusal left by an earlier construction on this thread (a
+/// stashed interrupt is raised and discarded, under the interpreter).
+pub fn clear_allocation_error(g: Gil<'_>) {
+    if let Some(AllocationFailure::Interrupt(stashed)) = take_allocation_error() {
+        let _ = stashed.raise_again(g);
+        capi::clear_pending(g);
+    }
+}
+
+/// Why `address..address + len` cannot be adopted before the engine's own
+/// checks: a range that wraps the address space, or a start not aligned to
+/// `align`. `None` when both hold.
+fn range_refusal(address: usize, len: usize, align: usize) -> Option<String> {
+    if address.checked_add(len).is_none() {
+        return Some(format!("allocate returned address {address:#x}, whose {len} bytes overflow the address space"));
+    }
+    match address.checked_rem(align) {
+        Some(0) => None,
+        _ => Some(format!("allocate returned address {address:#x}, not aligned to {align}")),
+    }
 }
 
 /// Whether a release may enter the interpreter: only while it is
@@ -185,7 +248,7 @@ fn allocate_in(g: Gil<'_>, allocator: &Held, len: usize, align: usize) -> Option
     let out = match capi::call(g, method.as_ref(), &args) {
         Ok(out) => out,
         Err(raised) => {
-            remember_error(g, raised);
+            remember_exception(g, raised);
             return None;
         }
     };
@@ -194,6 +257,10 @@ fn allocate_in(g: Gil<'_>, allocator: &Held, len: usize, align: usize) -> Option
         return None;
     };
     let address = usize::try_from(capi::to_u64(g, *address, "the address").ok()?).ok()?;
+    if let Some(why) = range_refusal(address, len, align) {
+        remember(AllocationFailure::Message(why));
+        return None;
+    }
     let ptr = NonNull::new(core::ptr::with_exposed_provenance_mut::<u8>(address))?;
     let owner = Held::new(g, *owner, true);
     // SAFETY: the Python allocator's contract (module notes): the range is
@@ -210,6 +277,8 @@ fn allocate_in(g: Gil<'_>, allocator: &Held, len: usize, align: usize) -> Option
 /// is held for the allocator's life.
 #[must_use]
 pub fn output_allocator(g: Gil<'_>, allocator: Ref<'_>) -> Arc<dyn OutputAllocator> {
+    // A construction starts here: no refusal of an earlier one survives.
+    clear_allocation_error(g);
     Arc::new(PyAllocator(Held::new(g, allocator, false)))
 }
 
@@ -229,8 +298,26 @@ mod tests {
 
     #[test]
     fn test_take_allocation_error_takes_once() {
-        LAST_ERROR.with(|e| *e.borrow_mut() = Some("boom".to_owned()));
-        assert_eq!(take_allocation_error().as_deref(), Some("boom"));
-        assert_eq!(take_allocation_error(), None);
+        remember(AllocationFailure::Message("boom".to_owned()));
+        assert!(matches!(take_allocation_error(), Some(AllocationFailure::Message(m)) if m == "boom"));
+        assert!(take_allocation_error().is_none());
+    }
+
+    #[test]
+    fn test_range_refusal_wrapping_range_refused() {
+        let why = range_refusal(usize::MAX - 8, 16, 16384);
+        assert!(why.is_some_and(|w| w.contains("overflow")));
+    }
+
+    #[test]
+    fn test_range_refusal_misaligned_refused() {
+        let why = range_refusal(16384 + 64, 16, 16384);
+        assert!(why.is_some_and(|w| w.contains("not aligned to 16384")));
+    }
+
+    #[test]
+    fn test_range_refusal_aligned_in_range_accepted() {
+        assert_eq!(range_refusal(16384 * 3, 16384, 16384), None);
+        assert!(range_refusal(16384, 16, 0).is_some());
     }
 }

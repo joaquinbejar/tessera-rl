@@ -545,6 +545,37 @@ pub(crate) fn pending_message(g: Gil<'_>, raised: Raised) -> (String, Raised) {
     (message, RAISED)
 }
 
+/// The class name and the message of the exception `raised` proves is
+/// set, which stays set: `type.__name__` and `str()` of its value (callouts:
+/// they can run Python code), or fixed texts when either fails.
+#[cfg(any(feature = "native-module", feature = "host"))]
+#[must_use]
+pub(crate) fn pending_name_and_message(g: Gil<'_>, raised: Raised) -> (String, String, Raised) {
+    let p = fetch_pending(g);
+    let mut name = None;
+    // SAFETY: the fetched type, a live object kept until it is put back.
+    if let Some(ty) = unsafe { Ref::from_ptr(p.0) } {
+        if let Ok(n) = get_attr(g, ty, c"__name__") {
+            name = to_string(g, n.as_ref(), "name").ok();
+        }
+        clear_pending(g);
+    }
+    put_back_pending(g, p);
+    let (message, raised) = pending_message(g, raised);
+    (name.unwrap_or_else(|| String::from("an exception")), message, raised)
+}
+
+/// Whether the pending exception is an `Exception` (not a bare
+/// `BaseException` such as `KeyboardInterrupt` or `SystemExit`; direct: a
+/// class comparison that runs no Python code). False with none pending.
+#[must_use]
+pub(crate) fn pending_is_exception(_g: Gil<'_>) -> bool {
+    // SAFETY: reading an interpreter global.
+    let exception = unsafe { ffi::PyExc_Exception };
+    // SAFETY: attached; a class comparison that runs no Python code.
+    unsafe { ffi::PyErr_ExceptionMatches(exception) != 0 }
+}
+
 /// An exception taken out of the interpreter while other work runs (a
 /// rollback), to be raised again afterwards. Made only from a [`Raised`],
 /// so it always holds an exception. Dropping it unraised leaks the

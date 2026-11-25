@@ -371,7 +371,7 @@ def test_device_allocator_exception_kept_in_config_error():
         def allocate(self, length, align):
             raise RuntimeError("pinned pool exhausted")
 
-    with pytest.raises(tessera_rl.ConfigError, match=r"allocate raised pinned pool exhausted"):
+    with pytest.raises(tessera_rl.ConfigError, match=r"allocate raised RuntimeError: pinned pool exhausted"):
         tessera_rl.make(CARTPOLE, num_envs=2, workers=0, output_allocator=Raising())
     # The message is taken once: a later refusal does not repeat it.
     with pytest.raises(tessera_rl.ConfigError) as info:
@@ -455,3 +455,29 @@ def test_device_halfstep_arrays_cover_only_their_half():
     for name, ((a0, a1), (b0, b1)) in spans.items():
         assert a1 <= b0 or b1 <= a0, f"{name}: the halves' rows overlap"
     env.close()
+
+
+def test_device_allocator_keyboard_interrupt_propagates_unchanged():
+    class Interrupted:
+        def allocate(self, length, align):
+            raise KeyboardInterrupt("stop")
+
+    with pytest.raises(KeyboardInterrupt, match="stop"):
+        tessera_rl.make(CARTPOLE, num_envs=2, workers=0, output_allocator=Interrupted())
+    # Nothing is left behind for the next construction.
+    env = tessera_rl.make(CARTPOLE, num_envs=2, workers=0, output_allocator=NumpyAllocator())
+    env.close()
+
+
+def test_device_allocator_wrapping_range_refused():
+    class Wrapping:
+        def allocate(self, length, align):
+            return (2**64 - 16384, None)
+
+    with pytest.raises(tessera_rl.ConfigError, match="overflow the address space"):
+        tessera_rl.make(CARTPOLE, num_envs=2, workers=0, output_allocator=Wrapping())
+
+
+def test_device_allocator_misaligned_address_refused_by_the_adapter():
+    with pytest.raises(tessera_rl.ConfigError, match="not aligned to 16384"):
+        tessera_rl.make(CARTPOLE, num_envs=2, workers=0, output_allocator=NumpyAllocator(misalign=64))
