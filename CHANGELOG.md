@@ -32,6 +32,13 @@ the API is not stable, and any 0.x release may break it.
 
 ### Added
 
+- Curricula from Python (ADR-0081 items 3 and 5.5, #613).
+  - `make(..., targets=True)` builds a Sync pool with curriculum targets, for an environment with adaptive config fields (Gather's `items` today). Other environments, and Pipelined or Async mode, raise `ArgumentError`.
+  - `Env.adaptive_fields` names the fields.
+  - `Env.targets()` returns a copy of each instance's targets.
+  - `Env.set_targets({instance: {field: value}})` changes some fields of some instances. Every change is checked before any write (`ArgumentError`, or `ConfigError` for a value the config refuses), and each applies at that instance's next reset.
+  - `Env.epoch_barrier(curriculum=f)` calls `f(report, targets)` after the barrier, with a copy of the targets, and applies the changes it returns.
+  - A recording keeps the changes (tag 7), not the callable, so a Python-curriculum run replays into a `targets=True` pool without it.
 - `tessera/Gather-v1` is environment version 2 (ADR-0081, #613, #669): `items` is adaptive (`#[config(adaptive)]`), so a pool with targets places each episode's items from its slot's target, read at reset, and a curriculum can change the difficulty between episodes. At the default, with no targets, version 2 gives version 1's trajectories; only the record and header encoding differ, so its config hash and persisted files change. Gather is new in this release, so no released file is affected.
 - Independent multi-head actions in the PufferLib adapter (#617, #657): an environment whose action heads have no conditional masks gets a `MultiDiscrete(nvec)` action space, with flat masks holding each head's columns at offset `sum(nvec[:h])`; hidden heuristic slots and Pipelined halves keep the head axis. Heads with parents (LimitOrderBook-v1) are refused with an `ArgumentError` naming the head. `tessera/Survival-v1` joins `SUPPORTED`.
 - Multi-leaf observations in the PufferLib adapter (SPEC 11.1, #423, #551): an agent's row is the flattening of its leaves in layout order (a `Set` leaf's items, then `<leaf>_mask`), with dtype `numpy.result_type` of the leaf dtypes. A layout whose promotion is not lossless (a float whose mantissa cannot hold every value of an integer leaf, or `uint64` with a signed integer) is refused with `ArgumentError`.
