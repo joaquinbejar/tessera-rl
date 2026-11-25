@@ -19,7 +19,10 @@ tessera_rl_core::register!(Gather, id = "tessera/Gather-v1");
 /// Imported states: the agent and every item on the grid, `left` equal to
 /// the items present, `collected` at most [`MAX_ITEMS`], and a step count
 /// within `max_steps`. Any slot may hold an item: `items` is adaptive, so
-/// an episode may run with its slot's target (version 2).
+/// an episode may run with its slot's target (version 2). `Validate` sees
+/// the config, not the record's header, so an imported state may hold more
+/// items than the header's adaptive `items` (or the slot's target): the
+/// bound checked is [`MAX_ITEMS`] (#613, REVIEW-A-r1).
 impl Validate for Gather {
     fn validate(cfg: &GatherConfig, s: &GatherState) -> Result<(), InvariantViolation> {
         let invalid = |code| Err(InvariantViolation { code });
