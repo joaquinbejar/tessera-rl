@@ -272,3 +272,12 @@ def test_t3b_calibrate_refuses_too_many_skipped_openings():
     assert errs and "seed 102: 2 of 25" in errs[0]
     # No openings (Leduc, Tag): nothing to check.
     assert opening_skip_errors([{"seed": 103, "opening_draws": 0, "opening_skips": 0}]) == []
+
+
+def test_t3b_missing_opening_counts_is_an_error():
+    """REVIEW-T3b-skips-r1: with openings on, missing counts are an error."""
+    from learning_gate import opening_skip_errors  # noqa: PLC0415
+
+    errs = opening_skip_errors([{"seed": 104, "opening_plies": 2}])
+    assert errs and "seed 104: opening_plies 2 but no opening_draws" in errs[0]
+    assert opening_skip_errors([{"seed": 105, "opening_plies": 0}]) == []
