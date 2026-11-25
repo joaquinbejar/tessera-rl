@@ -115,6 +115,13 @@ impl Replay<'_> {
         }
         let (cfg, options, heads) = pool.replay_parts();
         self.check_parts::<E, M>(cfg, options, heads)?;
+        // Async pools have no league (ADR-0088, #384 head B).
+        if self.header.has_league {
+            return Err(ReplayError::Unsupported {
+                feature: "leagues in async replay files (ADR-0088)",
+            });
+        }
+        super::policy_map::refuse_league(pool.replay_policy_map())?;
         // ADR-0079 item 6 (erratum B2): verified before any event.
         self.check_policy_map(pool.replay_policy_map())?;
         if self.header.archive.is_some() {

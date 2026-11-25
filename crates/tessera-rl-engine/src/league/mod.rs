@@ -436,6 +436,24 @@ impl LeagueState {
         self.dropped = 0;
     }
 
+    #[cfg(feature = "replay")]
+    /// Replaces the view as a barrier would, from a replay's `League` event
+    /// (ADR-0088 section 8, erratum 3): the subsystem is not called.
+    ///
+    /// # Errors
+    ///
+    /// A population that shrank, as [`Self::barrier`] refuses.
+    pub(crate) fn replace_view(&mut self, view: LeagueView) -> Result<(), LeagueBarrierError> {
+        if view.kinds().len() < self.view.kinds().len() {
+            return Err(LeagueBarrierError {
+                reason: "a population shrank: entries are never removed".to_owned(),
+            });
+        }
+        self.view = view;
+        self.clear();
+        Ok(())
+    }
+
     /// The league's barrier (ADR-0088 section 7, erratum 1 condition 3):
     /// hands the rings to the subsystem and takes the next view. On error
     /// the view and the rings stay as they were; nothing is poisoned.

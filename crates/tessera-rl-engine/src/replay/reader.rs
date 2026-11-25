@@ -119,6 +119,9 @@ pub enum Event<'a> {
         /// One canonical record (ADR-0029) per id, `record_len` bytes each;
         /// untrusted.
         records: &'a [u8],
+        /// In a `has_league` file (ADR-0088 erratum 3): one `u32` policy id
+        /// per id, little-endian, after the records; empty otherwise.
+        assignments: &'a [u8],
     },
     /// `StateHash`es of `ids`.
     Checkpoint {
@@ -145,8 +148,10 @@ pub enum Event<'a> {
         /// The changed instances, ids strictly increasing.
         entries: Vec<(u32, &'a [u8])>,
     },
-    /// League changes at an epoch barrier (ADR-0088 item 8), reserved: the
-    /// body as opaque bytes until the league lands.
+    /// The league's view (ADR-0088 section 8, erratum 3): first in a
+    /// `has_league` file, then after each barrier that changed it. The
+    /// body is decoded by the sync replay, which reports its errors with
+    /// this event's index.
     League {
         /// The event body.
         body: &'a [u8],
@@ -547,6 +552,7 @@ impl<'a> Replay<'a> {
             record_len: self.header.record_len,
             host: self.header.host,
             hashes: self.header.outputs_hash,
+            has_league: self.header.has_league,
             input_len: self.input_len,
             limits: self.limits,
         }
@@ -730,8 +736,9 @@ fn scan(bytes: &[u8], rules: TagRules) -> Result<(&[u8], u64), ReplayError> {
 /// Which tags a file may hold: `Adaptive` only with a curriculum; `League`
 /// only with a league; `Recv` only in an async file; `Rejected` only in a
 /// notifying host's file; keyframes, checkpoints and state writes never in a
-/// `from_reset_only` host file. The first event is a keyframe, or a reset for
-/// a `from_reset_only` file.
+/// `from_reset_only` host file. The first event is a keyframe, a reset for
+/// a `from_reset_only` file, or the `League` event of a `has_league` file,
+/// whose second event is then the keyframe (ADR-0088 erratum 3).
 fn check_tag(tag: EventTag, rules: TagRules, count: u64) -> Result<(), ReplayError> {
     let TagRules {
         host,
@@ -766,13 +773,21 @@ fn check_tag(tag: EventTag, rules: TagRules, count: u64) -> Result<(), ReplayErr
     }
     let first = if from_reset {
         EventTag::Reset
+    } else if has_league {
+        EventTag::League
     } else {
         EventTag::Keyframe
     };
+    if has_league && count == 1 && tag != EventTag::Keyframe {
+        return Err(ReplayError::Malformed {
+            event_index: 1,
+            field: "second event (the keyframe after a has_league file's League event)",
+        });
+    }
     if count == 0 && tag != first {
         return Err(ReplayError::Malformed {
             event_index: 0,
-            field: "first event (a keyframe, or a from_reset_only file's reset, of every instance)",
+            field: "first event (a keyframe of every instance, a from_reset_only file's reset, or a has_league file's League event)",
         });
     }
     Ok(())
@@ -787,6 +802,7 @@ pub struct Events<'a> {
     record_len: u32,
     host: Option<HostInfo>,
     hashes: bool,
+    has_league: bool,
     input_len: u64,
     limits: DecodeLimits,
 }
@@ -857,11 +873,18 @@ impl<'a> Events<'a> {
                 let ids = self.ids(&mut b)?;
                 let n = self.len_of(&ids)?;
                 let records = self.keyframe_records(&mut b, body, n)?;
+                let assignments = if self.has_league {
+                    let bytes = n.checked_mul(4).ok_or_else(|| b.malformed("assignments"))?;
+                    b.take(bytes, "assignments")?
+                } else {
+                    &[]
+                };
                 Event::Keyframe {
                     branch_counter,
                     reset_source,
                     ids,
                     records,
+                    assignments,
                 }
             }
             EventTag::Adaptive => {

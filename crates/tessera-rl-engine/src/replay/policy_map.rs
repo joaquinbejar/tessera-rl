@@ -60,10 +60,15 @@ impl Replay<'_> {
     /// as `found` and the pool's as `expected` (as `check_context` reports a
     /// context), wrapped as [`ReplayError::Engine`].
     pub(super) fn check_policy_map(&self, pool: &PolicyMap) -> Result<(), ReplayError> {
-        if let Some(recorded) = self.header.policy_map()? {
-            refuse_league(&recorded)?;
+        // An `Opponent` slot (code 4) needs a league file (ADR-0088 section
+        // 8): the sync replay checks the league (`check_league`).
+        let league_map = |m: &PolicyMap| m.groups().contains(&PolicyGroup::Opponent);
+        if self.header.policy_map()?.as_ref().is_some_and(league_map) != self.header.has_league {
+            return Err(ReplayError::Malformed {
+                event_index: 0,
+                field: "has_league without an opponent slot, or one without has_league",
+            });
         }
-        refuse_league(pool)?;
         let same = match self.header.policy_map()? {
             None => pool.is_default(),
             Some(recorded) => recorded == *pool || (recorded.is_default() && pool.is_default()),
@@ -79,13 +84,12 @@ impl Replay<'_> {
     }
 }
 
-/// Refuses a map with an `Opponent` slot: a league pool's replay needs its
-/// per-episode assignments and the league's view in the file, which come
-/// with ADR-0088's head D (tag 12, `has_league`).
+/// Refuses a map with an `Opponent` slot where no league can be recorded or
+/// replayed: async pools (ADR-0088, #384 head B refuses a league there).
 pub(super) fn refuse_league(map: &PolicyMap) -> Result<(), ReplayError> {
     if map.groups().contains(&PolicyGroup::Opponent) {
         return Err(ReplayError::Unsupported {
-            feature: "league replay (ADR-0088, #384 head D)",
+            feature: "leagues in async pools (ADR-0088)",
         });
     }
     Ok(())
@@ -133,13 +137,14 @@ mod tests {
         assert_eq!(back, PolicyGroup::ALL);
     }
 
-    /// A map with an opponent slot is refused for replay until head D.
+    /// A map with an opponent slot is refused where no league is recorded
+    /// (async pools); sync league files carry it (#384 head D).
     #[test]
-    fn test_policy_map_with_an_opponent_is_refused_for_replay() {
+    fn test_policy_map_with_an_opponent_is_refused_without_a_league() {
         let league = PolicyMap::from_groups(vec![PolicyGroup::Learner, PolicyGroup::Opponent]);
         assert!(matches!(
             refuse_league(&league),
-            Err(super::super::ReplayError::Unsupported { feature }) if feature.contains("head D")
+            Err(super::super::ReplayError::Unsupported { feature }) if feature.contains("async")
         ));
         let heuristic = PolicyMap::from_groups(vec![PolicyGroup::Learner, PolicyGroup::Heuristic]);
         assert!(refuse_league(&heuristic).is_ok());

@@ -139,6 +139,15 @@ where
         Ok(self)
     }
 
+    #[cfg(feature = "replay")]
+    /// Whether the pool's ONNX opponents serve `content_hash` (a replay's
+    /// check before any event, ADR-0088 section 8).
+    pub(crate) fn serves_onnx(&self, content_hash: &[u8; 16]) -> bool {
+        self.onnx
+            .as_ref()
+            .is_some_and(|p| p.policies.serves(content_hash))
+    }
+
     /// The step's ONNX opponent pass, on the calling thread, after the
     /// boundary copied the caller's actions: per ONNX policy in id order,
     /// the acting opponent slots of the instances assigned to it, in
