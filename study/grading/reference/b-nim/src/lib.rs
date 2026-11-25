@@ -92,7 +92,7 @@ fn decode(a: u32) -> (usize, u8) {
 }
 
 /// Whether action `a` is legal in `s`.
-fn legal(s: &NimState, a: u32) -> bool {
+fn legal(s: NimState, a: u32) -> bool {
     let (heap, count) = decode(a);
     s.heaps.get(heap).is_some_and(|&h| h >= count)
 }
@@ -151,7 +151,7 @@ impl Environment for Nim {
         let a = actions
             .discrete(me, 0)
             .and_then(|a| u32::try_from(a).ok())
-            .filter(|&a| legal(s, a));
+            .filter(|&a| legal(*s, a));
         if let Some(a) = a {
             let (heap, count) = decode(a);
             if let Some(h) = s.heaps.get_mut(heap) {
@@ -192,12 +192,12 @@ impl Environment for Nim {
 impl ActionMask for Nim {
     fn action_mask(_: &NimConfig, s: &NimState, _: AgentSlot, out: &mut MaskWriter<'_>) {
         for a in 0..CHOICES {
-            out.set(usize::try_from(a).unwrap_or(0), legal(s, a));
+            out.set(usize::try_from(a).unwrap_or(0), legal(*s, a));
         }
     }
 
     fn noop(_: &NimConfig, s: &NimState, _: AgentSlot, out: &mut ActionWriter<'_>) {
-        let first = (0..CHOICES).find(|&a| legal(s, a)).unwrap_or(0);
+        let first = (0..CHOICES).find(|&a| legal(*s, a)).unwrap_or(0);
         out.set_discrete(0, i32::try_from(first).unwrap_or(0));
     }
 }
@@ -205,7 +205,7 @@ impl ActionMask for Nim {
 /// The scripted baseline: the first legal move.
 impl Heuristic for Nim {
     fn act(_: &NimConfig, s: &NimState, _: AgentSlot, _: &mut StepRng, out: &mut ActionWriter<'_>) {
-        let first = (0..CHOICES).find(|&a| legal(s, a)).unwrap_or(0);
+        let first = (0..CHOICES).find(|&a| legal(*s, a)).unwrap_or(0);
         out.set_discrete(0, i32::try_from(first).unwrap_or(0));
     }
 }

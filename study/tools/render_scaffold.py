@@ -55,7 +55,8 @@ def main():
     tpl = root / "crates/cargo-tessera/src/templates/env"
     files = {"Cargo.toml": "Cargo.toml.tpl", "clippy.toml": "clippy.toml.tpl",
              "src/lib.rs": "lib.rs.tpl", "tests/check.rs": "check.rs.tpl",
-             "benches/step.rs": "step.rs.tpl", "README.md": "README.md.tpl"}
+             "benches/step.rs": "step.rs.tpl", "README.md": "README.md.tpl",
+             ".gitignore": "../gitignore.tpl"}
     for d, t in files.items():
         p = pathlib.Path(dest) / d
         p.parent.mkdir(parents=True, exist_ok=True)
