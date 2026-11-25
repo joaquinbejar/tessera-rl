@@ -337,7 +337,7 @@ where
 {
     use tessera_rl_engine::league::OpponentPolicies as _;
     let Some(o) = &args.onnx_opponents else {
-        return Ok(pool);
+        return Ok((pool, Vec::new()));
     };
     let mut options = tessera_rl_onnx::OnnxOptions::new(&o.library);
     if o.accept_telemetry {
