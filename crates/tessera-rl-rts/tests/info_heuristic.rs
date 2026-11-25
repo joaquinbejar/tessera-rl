@@ -8,6 +8,7 @@
 #![expect(
     clippy::unwrap_used,
     clippy::indexing_slicing,
+    clippy::many_single_char_names,
     reason = "test fixtures"
 )]
 
