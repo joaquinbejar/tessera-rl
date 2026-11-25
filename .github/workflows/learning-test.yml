@@ -43,6 +43,16 @@ jobs:
             artifact: learning-test-snake
           - env: paddleduel
             artifact: learning-test-paddleduel
+          # T3b (#370): the four that calibrated as learning; Leduc has no
+          # gate (its heuristic does not beat uniform play).
+          - env: connect4
+            artifact: learning-test-connect4
+          - env: othello
+            artifact: learning-test-othello
+          - env: go9
+            artifact: learning-test-go9
+          - env: tag
+            artifact: learning-test-tag
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Find the previous scheduled run

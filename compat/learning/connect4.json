@@ -1,0 +1,215 @@
+{
+  "seeds": [
+    101,
+    102,
+    103,
+    104,
+    105,
+    106,
+    107,
+    108,
+    109,
+    110
+  ],
+  "threshold_rule": "min",
+  "threshold": -0.68,
+  "median": -0.24,
+  "min": -0.68,
+  "max": 0.52,
+  "setup": {
+    "env": "tessera/Connect4-v1",
+    "total_steps": 1000000,
+    "eval_episodes": 50,
+    "fingerprint": "0a9d4db562b588c5b847c590306434b9c0f8a347b46e3459116c9999aac633a7"
+  },
+  "environment": {
+    "git": "5b878316465aca0769c86e41e03c05b7b394c943",
+    "git_dirty": false,
+    "python": "3.11.18",
+    "os": "Linux-7.0.0-38-generic-x86_64-with-glibc2.43",
+    "arch": "x86_64",
+    "cpu": "12th Gen Intel(R) Core(TM) i7-12700H",
+    "image": "self-hosted Linux x86-64 runner, uv-managed CPython 3.11.18 (no container)",
+    "tessera_rl": "0.3.0",
+    "torch_threads": 1,
+    "omp_num_threads": "1",
+    "gymnasium": "1.4.0",
+    "torch": "2.15.0+cpu",
+    "numpy": "2.4.6"
+  },
+  "records": [
+    {
+      "seed": 101,
+      "score": 0.24,
+      "vs_uniform": 0.64
+    },
+    {
+      "seed": 102,
+      "score": -0.36,
+      "vs_uniform": 0.44
+    },
+    {
+      "seed": 103,
+      "score": -0.24,
+      "vs_uniform": 0.52
+    },
+    {
+      "seed": 104,
+      "score": -0.12,
+      "vs_uniform": 0.64
+    },
+    {
+      "seed": 105,
+      "score": -0.24,
+      "vs_uniform": 0.6
+    },
+    {
+      "seed": 106,
+      "score": -0.4,
+      "vs_uniform": 0.52
+    },
+    {
+      "seed": 107,
+      "score": 0.52,
+      "vs_uniform": 0.44
+    },
+    {
+      "seed": 108,
+      "score": -0.68,
+      "vs_uniform": 0.32
+    },
+    {
+      "seed": 109,
+      "score": -0.3,
+      "vs_uniform": 0.44
+    },
+    {
+      "seed": 110,
+      "score": -0.04,
+      "vs_uniform": 0.4
+    }
+  ],
+  "gate": {
+    "min_effect": 0.1
+  },
+  "references": {
+    "uniform": [
+      -1.0,
+      -1.0,
+      -1.0,
+      -1.0,
+      -1.0,
+      -1.0,
+      -1.0,
+      -1.0,
+      -1.0,
+      -1.0,
+      -1.0,
+      -1.0,
+      -1.0,
+      -1.0,
+      -1.0,
+      -1.0,
+      -1.0,
+      -1.0,
+      -1.0,
+      -1.0,
+      -1.0,
+      -1.0,
+      -1.0,
+      -1.0,
+      -1.0,
+      -1.0,
+      -1.0,
+      -1.0,
+      -1.0,
+      -1.0,
+      -1.0,
+      -1.0,
+      -1.0,
+      -1.0,
+      -1.0,
+      -1.0,
+      1.0,
+      -1.0,
+      -1.0,
+      -1.0,
+      -1.0,
+      -1.0,
+      -1.0,
+      -1.0,
+      -1.0,
+      -1.0,
+      -1.0,
+      -1.0,
+      -1.0,
+      -1.0
+    ],
+    "heuristic": [
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      1.0,
+      -1.0,
+      1.0,
+      0.0,
+      0.0,
+      1.0,
+      0.0,
+      1.0,
+      1.0,
+      1.0,
+      -1.0,
+      1.0,
+      0.0,
+      0.0,
+      1.0,
+      1.0,
+      1.0,
+      -1.0,
+      0.0,
+      1.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      -1.0,
+      1.0,
+      -1.0,
+      0.0,
+      0.0,
+      -1.0,
+      0.0,
+      -1.0,
+      -1.0,
+      -1.0,
+      1.0,
+      -1.0,
+      0.0,
+      0.0,
+      -1.0,
+      -1.0,
+      -1.0,
+      1.0,
+      0.0,
+      -1.0
+    ]
+  },
+  "learns": {
+    "learns": true,
+    "gate": true,
+    "degenerate": false,
+    "threshold_1": true,
+    "threshold_2": true,
+    "ci95_vs_heuristic_minus_u": [
+      0.59,
+      1.018
+    ],
+    "required": 0.096,
+    "lower95_vs_uniform": 0.43200000000000005,
+    "hu_lower95": 0.74
+  }
+}
