@@ -320,3 +320,88 @@ fn test_replay_curriculum_needs_a_pool_with_targets_and_writes_the_header_flag()
     let mut again = Pool::new(LevelConfig::default(), options()).unwrap();
     assert!(replay.run(&mut again).unwrap().verified());
 }
+
+#[test]
+fn test_replay_curriculum_initial_tag_7_carries_the_targets_at_recording_start() {
+    // Targets changed before the recorder: only the initial tag 7 tells the
+    // replay, whose pool starts from the config's.
+    let mut pool = targets_only();
+    let mut v = *pool.targets().unwrap().get(0).unwrap();
+    v.level = 9;
+    pool.set_targets(&(0..N).map(|i| (i, v)).collect::<Vec<_>>())
+        .unwrap();
+    let mut rec = Recorder::new(&mut pool, Vec::new(), ReplayWriterOptions::default()).unwrap();
+    rec.reset_all(Reseed::Keep).unwrap();
+    let actions = [0; N as usize];
+    for _ in 0..4 {
+        rec.step(ActionInput {
+            discrete: &actions,
+            continuous: &[],
+        })
+        .unwrap();
+    }
+    let bytes = rec.finish().unwrap();
+    let want = hashes(&pool);
+    let replay = Replay::open(&bytes, LIMITS).unwrap();
+    let mut again = targets_only();
+    assert!(replay.run(&mut again).unwrap().verified());
+    assert_eq!(hashes(&again), want);
+    assert!(again.targets().unwrap().iter().all(|a| a.level == 9));
+}
+
+#[test]
+fn test_replay_curriculum_tag_7_of_another_value_length_is_malformed() {
+    let (bytes, _, _) = record();
+    let replay = Replay::open(&bytes, LIMITS).unwrap();
+    let offsets = replay.event_offsets().unwrap();
+    // The event bytes end where the 21-byte trailer starts.
+    let trailer = bytes.len() - 21;
+    let frame_len = |b: &[u8], at: usize| {
+        usize::try_from(u32::from_le_bytes(b[at + 1..at + 5].try_into().unwrap())).unwrap()
+    };
+    let last = *offsets.last().unwrap();
+    // The event bytes' start: where the last frame ends at the trailer.
+    let start = (0..trailer)
+        .find(|&s| s + last + 5 <= trailer && s + last + 5 + frame_len(&bytes, s + last) == trailer)
+        .unwrap();
+    let mut events = Vec::new();
+    let mut forged = false;
+    for (i, &off) in offsets.iter().enumerate() {
+        let at = start + off;
+        let tag = bytes[at];
+        let mut body = bytes[at + 5..at + 5 + frame_len(&bytes, at)].to_vec();
+        if tag == 7 && !forged && i > 0 {
+            // One extra byte after every value: value_len becomes ENCODED_LEN + 1.
+            let count = usize::try_from(u32::from_le_bytes(body[..4].try_into().unwrap())).unwrap();
+            let len = (body.len() - 4) / count - 4;
+            let mut out = body[..4].to_vec();
+            for e in body[4..].chunks(4 + len) {
+                out.extend_from_slice(e);
+                out.push(0);
+            }
+            body = out;
+            forged = true;
+        }
+        events.push((tag, body));
+    }
+    assert!(forged);
+    let mut out = bytes[..start].to_vec();
+    for (tag, body) in &events {
+        out.push(*tag);
+        out.extend_from_slice(&u32::try_from(body.len()).unwrap().to_le_bytes());
+        out.extend_from_slice(body);
+    }
+    let sum = tessera_rl_core::encoding::checksum(&out[start..]);
+    out.push(0);
+    out.extend_from_slice(&16u32.to_le_bytes());
+    out.extend_from_slice(&u64::try_from(events.len()).unwrap().to_le_bytes());
+    out.extend_from_slice(&sum.to_le_bytes());
+    let replay = Replay::open(&out, LIMITS).unwrap();
+    assert!(matches!(
+        replay.run(&mut targets_only()),
+        Err(ReplayError::Malformed {
+            field: "adaptive value length",
+            ..
+        })
+    ));
+}
