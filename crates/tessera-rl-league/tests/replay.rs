@@ -8,6 +8,7 @@
 
 #![expect(
     clippy::unwrap_used,
+    clippy::indexing_slicing,
     reason = "test scenarios: a failure is the assertion"
 )]
 
@@ -18,7 +19,9 @@ use tessera_rl_engine::league::{
     LeagueBarrierError, LeagueReport, LeagueResults, LeagueSubsystem, LeagueView, OpponentKind,
     sealed,
 };
-use tessera_rl_engine::replay::{Event, Recorder, Replay, ReplayError, ReplayWriterOptions};
+use tessera_rl_engine::replay::{
+    DivergenceKind, Event, Recorder, Replay, ReplayError, ReplayWriterOptions,
+};
 use tessera_rl_engine::{
     ActionInput, AutoReset, DecodeLimits, EngineError, EnvPool, NoMasks, PoolOptions, Reseed,
 };
@@ -334,6 +337,13 @@ fn test_league_replay_seek_restores_the_view_and_assignments() {
     let mut replayed = pool();
     let mut cur = replay.cursor(&replayed).unwrap();
     replay.seek(&mut replayed, &mut cur, target).unwrap();
+    // The view at the keyframe: one `Rotating` barrier per `League` event
+    // before it, after the first.
+    let before = leagues.iter().filter(|&&l| l < target).count();
+    let mut expected = league(&MIXED);
+    expected.barriers = u64::try_from(before - 1).unwrap();
+    assert!(before > 1);
+    assert_eq!(replayed.league_view(), Some(&expected.view()));
     while replay
         .advance(&mut replayed, &mut cur, |_| false)
         .unwrap()
@@ -366,7 +376,7 @@ impl tessera_rl_engine::league::OpponentPolicies for FirstByte {
     ) -> Result<(), tessera_rl_engine::league::OpponentPolicyError> {
         let row = rows.len() / n;
         for (j, a) in actions.iter_mut().enumerate() {
-            *a = i64::from(rows.get(j * row + 3).copied().unwrap() % 3);
+            *a = i64::from(rows[j * row + 3] % 3);
         }
         Ok(())
     }
@@ -405,4 +415,64 @@ fn test_league_replay_with_onnx_opponents() {
         Err(ReplayError::Engine(EngineError::OpponentPolicy(_)))
     ));
     assert_eq!(hashes(&bare), before);
+}
+
+/// The header's length: the shared fields, the extension (policy map, the
+/// two flags, a `Fresh` source, the chunk size) and the checksum.
+fn header_len(b: &[u8]) -> usize {
+    let u16_at = |at: usize| usize::from(u16::from_le_bytes([b[at], b[at + 1]]));
+    let mut at = 48;
+    for _ in 0..2 {
+        at += 2 + u16_at(at);
+    }
+    at += 2; // asset_count
+    at += 2 + u16_at(at); // descriptor
+    let config = usize::try_from(u32::from_le_bytes(b[at..at + 4].try_into().unwrap())).unwrap();
+    let mut q = at + 4 + config + 12 + 4;
+    q += 2 + u16_at(q) + 2;
+    assert_eq!(b[q], 0, "a Fresh reset source");
+    q + 1 + 4 + 8
+}
+
+/// The (offset, tag, body length) of every frame, the end event included.
+fn frames(b: &[u8]) -> Vec<(usize, u8, usize)> {
+    let mut at = header_len(b);
+    let mut out = Vec::new();
+    while at < b.len() {
+        let len =
+            usize::try_from(u32::from_le_bytes(b[at + 1..at + 5].try_into().unwrap())).unwrap();
+        out.push((at, b[at], len));
+        at += 5 + len;
+    }
+    out
+}
+
+/// A keyframe's recorded assignment that differs from the replayed one is
+/// a `Keyframe` divergence naming the instance (ADR-0088 erratum 3):
+/// assignments are not in the state hash, so only this check sees them.
+#[test]
+fn test_league_replay_tampered_keyframe_assignment_diverges() {
+    let mut live = pool();
+    live.reset_all(Reseed::Keep).unwrap();
+    let (mut bytes, _, _) = record(&mut live, 0, 20);
+    let fr = frames(&bytes);
+    // A periodic keyframe (tag 5) after the first; its body ends with the
+    // last instance's assignment.
+    let &(at, _, len) = fr.iter().skip(2).find(|&&(_, tag, _)| tag == 5).unwrap();
+    let end = at + 5 + len;
+    let old = u32::from_le_bytes(bytes[end - 4..end].try_into().unwrap());
+    bytes[end - 4..end].copy_from_slice(&((old + 1) % 3).to_le_bytes());
+    // Reseal the trailer's events checksum.
+    let (trailer, _, _) = *fr.last().unwrap();
+    let sum = tessera_rl_core::encoding::checksum(&bytes[header_len(&bytes)..trailer]);
+    bytes[trailer + 13..trailer + 21].copy_from_slice(&sum.to_le_bytes());
+    let mut replayed = pool();
+    assert!(matches!(
+        Replay::open(&bytes, LIMITS).unwrap().run(&mut replayed),
+        Err(ReplayError::Diverged {
+            kind: DivergenceKind::Keyframe,
+            instance: Some(7),
+            ..
+        })
+    ));
 }

@@ -599,22 +599,25 @@ fn test_league_draw_golden() {
 
 const GOLDEN: [u32; 8] = [1, 0, 1, 1, 1, 0, 1, 0];
 
-/// ADR-0088 section 8 (with #347 B2's policy map in replay headers): code 4
-/// is the `Opponent` group, and recording a league pool is refused until
-/// head D carries the league's data in the file.
+/// ADR-0088 section 8 (#384 head D): a league pool records, with
+/// `has_league` set; `tests/replay.rs` replays such files.
 #[test]
-fn test_league_pool_recording_is_refused_until_head_d() {
+fn test_league_pool_recording_writes_a_league_file() {
     let mut p = pool();
-    let got = tessera_rl_engine::replay::Recorder::new(
+    let rec = tessera_rl_engine::replay::Recorder::new(
         &mut p,
         Vec::new(),
         tessera_rl_engine::replay::ReplayWriterOptions::default(),
-    );
-    assert!(
-        matches!(&got, Err(tessera_rl_engine::replay::ReplayError::Unsupported { feature }) if feature.contains("head D")),
-        "{:?}",
-        got.err()
-    );
+    )
+    .unwrap();
+    let bytes = rec.finish().unwrap();
+    let limits = tessera_rl_engine::DecodeLimits {
+        max_instances: 1 << 16,
+        max_decoded_bytes: 1 << 30,
+        max_host_record_bytes: 1 << 20,
+    };
+    let replay = tessera_rl_engine::replay::Replay::open(&bytes, limits).unwrap();
+    assert!(replay.header().has_league);
 }
 
 /// A subsystem that fails its first barrier, then records what it gets.

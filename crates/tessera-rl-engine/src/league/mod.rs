@@ -436,6 +436,7 @@ impl LeagueState {
         self.dropped = 0;
     }
 
+    #[cfg(feature = "replay")]
     /// Replaces the view as a barrier would, from a replay's `League` event
     /// (ADR-0088 section 8, erratum 3): the subsystem is not called.
     ///

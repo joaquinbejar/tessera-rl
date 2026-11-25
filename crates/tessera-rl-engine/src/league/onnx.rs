@@ -139,6 +139,7 @@ where
         Ok(self)
     }
 
+    #[cfg(feature = "replay")]
     /// Whether the pool's ONNX opponents serve `content_hash` (a replay's
     /// check before any event, ADR-0088 section 8).
     pub(crate) fn serves_onnx(&self, content_hash: &[u8; 16]) -> bool {
