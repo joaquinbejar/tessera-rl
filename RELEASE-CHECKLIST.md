@@ -122,6 +122,12 @@ cargo publish --dry-run --locked <the same eight -p flags>
       release by hand: `pypi.yml`'s `release-assets` job adds them, and it
       never replaces an existing asset.
 
+- [ ] After `pypi.yml` finishes: download one wheel, the sdist and one SBOM
+      from the GitHub release and run
+      `gh attestation verify <file> -R joaquinbejar/tessera-rl` on each; all
+      three pass. PyPI's page lists an attestation for every file (see
+      "Verifying a release" below).
+
 ### Verifying a release (signing, attestations, SBOMs; #350)
 
 Signing is keyless: Sigstore, through GitHub's OIDC identity of the workflow

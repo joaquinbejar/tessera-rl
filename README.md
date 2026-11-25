@@ -120,6 +120,12 @@ pip install maturin
 maturin develop --release
 ```
 
+Release files (wheels, the sdist and the SBOMs on the GitHub release)
+carry keyless Sigstore attestations: verify a downloaded file with
+`gh attestation verify <file> -R joaquinbejar/tessera-rl`. Each wheel also
+holds a `CycloneDX` SBOM of its Rust dependencies under
+`<dist>.dist-info/sboms/`.
+
 ## Quick start
 
 An environment is one trait implementation on a plain-data state. This
