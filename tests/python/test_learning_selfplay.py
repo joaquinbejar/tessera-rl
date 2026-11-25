@@ -259,3 +259,15 @@ def test_selfplay_lanterns_one_update_smoke():
     assert r["distinct_deals"] == 2
     refs = lp.selfplay_references("lanterns", 2)
     assert len(refs["uniform"]) == 2 and len(refs["heuristic"]) == 2
+
+
+def test_selfplay_lanterns_calibration_learns_on_its_budget():
+    """#529: the committed calibration is T3c's (10 seeds, the minimum),
+    learns, and is for the protocol's budget."""
+    import learning_protocols as lp
+
+    cal = json.loads((ROOT / "compat" / "learning" / "lanterns.json").read_text())
+    assert cal["threshold_rule"] == "min" and cal["seeds"] == list(range(101, 111))
+    assert cal["learns"]["learns"] is True and cal["learns"]["gate"] is True
+    assert cal["setup"]["total_steps"] == lp.protocol("lanterns")["total_steps"]
+    assert cal["setup"]["eval_episodes"] == lp.protocol("lanterns")["eval_episodes"]
