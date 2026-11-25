@@ -130,6 +130,11 @@ impl Heuristic for SoaCartPole {
     }
 }
 
+/// Groups stepped through `step_lanes`, counted in test builds only, so a
+/// test can tell the lane path ran (the differential alone cannot).
+#[cfg(test)]
+pub static LANE_STEPS: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
+
 /// CartPole's lane kernel on the columns: the four column groups are the
 /// kernel's `Columns` (four `[f64; 8]`), copied in and out as whole arrays.
 impl LaneEnvironment for SoaCartPole {
@@ -143,6 +148,8 @@ impl LaneEnvironment for SoaCartPole {
         actions: &[i32; LANES],
         out: &mut LaneOut,
     ) {
+        #[cfg(test)]
+        LANE_STEPS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
         let (x, x_dot, theta, theta_dot) = lanes;
         let mut columns: lane::Columns = [**x, **x_dot, **theta, **theta_dot];
         let outcome = lane::step(level, &mut columns, actions.map(|a| a == 1));

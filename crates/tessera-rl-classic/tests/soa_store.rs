@@ -448,3 +448,24 @@ fn test_soa_store_heuristic_slots_are_refused() {
     let plain = EnvPool::<CartPole>::new(CartPoleConfig {}, options).unwrap();
     assert!(plain.with_heuristic_slots(&[0]).is_ok());
 }
+
+#[test]
+fn test_soa_store_steps_full_groups_through_the_lane_kernels() {
+    // 16 instances, chunk 8: two full groups per step take step_lanes.
+    let before = soa_cartpole::LANE_STEPS.load(core::sync::atomic::Ordering::Relaxed);
+    let options = PoolOptions {
+        chunk_size: NonZeroU32::new(8).unwrap(),
+        ..PoolOptions::new(NonZeroU32::new(16).unwrap(), Seed::new(5))
+    };
+    let mut soa = EnvPool::<SoaCartPole>::new(CartPoleConfig {}, options).unwrap();
+    let _ = soa.reset_all(Reseed::Keep).unwrap();
+    let acts = vec![1i32; 16];
+    let _ = soa
+        .step(ActionInput {
+            discrete: &acts,
+            continuous: &[],
+        })
+        .unwrap();
+    let after = soa_cartpole::LANE_STEPS.load(core::sync::atomic::Ordering::Relaxed);
+    assert!(after >= before + 2, "lane groups stepped: {}", after - before);
+}
