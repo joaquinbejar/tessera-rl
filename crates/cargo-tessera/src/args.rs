@@ -20,6 +20,9 @@ pub enum Command {
     Check(CheckArgs),
     /// `cargo tessera bench`.
     Bench(BenchArgs),
+    /// `cargo tessera eval <args>`: `python -m tessera_rl.eval <args>`
+    /// (ADR-0088 section 9), every argument passed through.
+    Eval(Vec<String>),
 }
 
 /// What `--help` describes.
@@ -209,6 +212,7 @@ pub fn parse<I: IntoIterator<Item = String>>(args: I) -> Result<Command, ArgsErr
         "new" => parse_new(rest),
         "check" => parse_check(rest),
         "bench" => parse_bench(rest),
+        "eval" => Ok(Command::Eval(rest)),
         _ => Err(ArgsError::UnknownCommand(command)),
     }
 }
@@ -406,6 +410,8 @@ Commands:
   check        Run the determinism, continuation, space, invariant and
                golden checks; with --python, the adapter tests too
   bench        Run the crate's criterion bench and print a summary
+  eval <args>  Run `python -m tessera_rl.eval <args>` ($TESSERA_PYTHON or
+               python3): a policy against league opponents, as JSON
 
 Options:
   -h, --help     Print help (also after a command)
@@ -525,6 +531,25 @@ mod tests {
                 snapshots: true,
                 tessera_path: Some(PathBuf::from("/repo")),
             })
+        );
+    }
+
+    #[test]
+    fn test_parse_eval_passes_its_arguments_through() {
+        assert_eq!(
+            parse(argv(&[
+                "tessera",
+                "eval",
+                "--env",
+                "tessera/PaddleDuel-v1",
+                "--help"
+            ]))
+            .unwrap(),
+            Command::Eval(vec![
+                "--env".to_owned(),
+                "tessera/PaddleDuel-v1".to_owned(),
+                "--help".to_owned()
+            ])
         );
     }
 
