@@ -293,7 +293,70 @@ impl Replay<'_> {
         self.check_parts::<E, M>(&pool.cfg, &pool.options, pool.action_heads())?;
         // ADR-0079 item 6 (erratum B2): the caller builds the pool with the
         // recorded map; replay verifies it before any event.
-        self.check_policy_map(pool.policy_map())
+        self.check_policy_map(pool.policy_map())?;
+        self.check_league(pool)
+    }
+
+    /// Checks a league file against the caller-built pool before any event
+    /// (ADR-0088 section 8, erratum 3): the pool has a league exactly when
+    /// the file does; its current view is the file's first `League` event
+    /// (`LeagueMismatch` for another population, `League` for another
+    /// table); and every ONNX policy of every `League` event is one the
+    /// pool's ONNX opponents serve. Nothing is mutated.
+    fn check_league<E, M>(&self, pool: &EnvPool<E, M>) -> Result<(), ReplayError>
+    where
+        E: Persist,
+        E::Config: CanonicalConfig + Sync,
+        E::Header: Send,
+        E::State: Send,
+        M: PersistMask<E>,
+        <E::Header as RecordLayout>::Adaptive: AdaptiveValues<E::Config>,
+    {
+        let league = |reason| -> ReplayError { EngineError::League { reason }.into() };
+        let Some(view) = pool.league_view() else {
+            if self.header.has_league {
+                return Err(league("the file has a league and the pool none"));
+            }
+            return Ok(());
+        };
+        if !self.header.has_league {
+            return Err(league("the pool has a league and the file none"));
+        }
+        let mut first = true;
+        for item in self.events() {
+            let (index, event) = item?;
+            let Event::League { body } = event else {
+                continue;
+            };
+            let recorded = super::league::read_view(body, index)?;
+            if first {
+                first = false;
+                if recorded.population_digest() != view.population_digest() {
+                    return Err(EngineError::LeagueMismatch {
+                        expected: view.population_digest(),
+                        found: recorded.population_digest(),
+                    }
+                    .into());
+                }
+                if recorded != *view {
+                    return Err(league("the pool's league table is not the file's"));
+                }
+            }
+            for kind in recorded.kinds() {
+                if let crate::league::OpponentKind::Onnx { content_hash } = *kind
+                    && !pool.serves_onnx(&content_hash)
+                {
+                    return Err(
+                        EngineError::OpponentPolicy(crate::league::OpponentPolicyError {
+                            reason: "a recorded ONNX policy the pool's ONNX opponents do not serve"
+                                .to_owned(),
+                        })
+                        .into(),
+                    );
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Checks a first-party pool's config, options and action heads against
@@ -429,6 +492,7 @@ impl Replay<'_> {
                 reset_source,
                 ids,
                 records,
+                assignments,
             } => self.apply_keyframe(
                 pool,
                 st,
@@ -443,10 +507,23 @@ impl Replay<'_> {
                     policy_map: self.header.policy_map_digest()?,
                 },
                 &ids,
-                records,
+                (records, assignments),
             ),
             Event::Adaptive { .. } => Err(not_yet(Tag::Adaptive)),
-            Event::League { .. } => Err(not_yet(Tag::League)),
+            // The first view was checked against the pool before any event
+            // (`check_league`); a later one replaces the view as the
+            // recorded barrier did (ADR-0088 section 8).
+            Event::League { .. } if st.summary.keyframes == 0 => Ok(()),
+            Event::League { body } => {
+                let view = super::league::read_view(body, index)?;
+                let league = pool
+                    .league
+                    .as_mut()
+                    .ok_or_else(|| malformed("a League event for a pool without a league"))?;
+                league
+                    .replace_view(view)
+                    .map_err(|_| malformed("a League event whose population shrank"))
+            }
             Event::ResetSource(record) => {
                 let source = reset_source_of(&record, archive_ref::<E>(st))?;
                 let result = pool.set_reset_source(source);
@@ -482,9 +559,9 @@ impl Replay<'_> {
         pool: &mut EnvPool<E, M>,
         st: &mut State,
         index: u64,
-        context: PoolContext,
+        mut context: PoolContext,
         ids: &Ids,
-        records: &[u8],
+        (records, assignments): (&[u8], &[u8]),
     ) -> Result<(), ReplayError>
     where
         E: Persist + Validate,
@@ -499,9 +576,11 @@ impl Replay<'_> {
             field,
         };
         let records = self.decode_records::<E>(index, records)?;
+        let assignments = read_assignments(assignments);
+        let first = st.summary.keyframes == 0;
         st.summary.keyframes = st.summary.keyframes.saturating_add(1);
         let branch_counter = context.branch_counter;
-        if index == 0 {
+        if first {
             if *ids != Ids::All {
                 return Err(malformed("first keyframe ids"));
             }
@@ -516,6 +595,10 @@ impl Replay<'_> {
             }
             // Refused before any write: a missing or different archive.
             check_source(&context.reset_source, archive_ref::<E>(st))?;
+            // A league file's first keyframe restores each instance's
+            // assignment with its record (ADR-0088 erratum 3), as
+            // `restore_with_league` does.
+            context.adaptive.league = league_context(pool, assignments);
             pool.import_all(&records)
                 .map_err(|_| st.diverged(index, DivergenceKind::KeyframeRejected, None))?;
             restore_context(pool, context, archive_ref::<E>(st))?;
@@ -533,18 +616,21 @@ impl Replay<'_> {
             pool.import(&id_list, &records)
                 .map_err(|_| st.diverged(write, DivergenceKind::KeyframeRejected, None))?;
             pool.set_branch_counter(branch_counter)?;
-            return Ok(());
+            // The written instances' opponents were redrawn or copied on
+            // replay as live: the keyframe's assignments check them.
+            return check_assignments(pool, st, write, &id_list, &assignments);
         }
         // A periodic keyframe: check it against the replayed pool.
         if pool.pool_context()?.branch_counter != branch_counter {
             return Err(st.diverged(index, DivergenceKind::BranchCounter, None));
         }
-        for (id, record) in ids_of(ids, self.header.num_envs).into_iter().zip(&records) {
+        let id_list = ids_of(ids, self.header.num_envs);
+        for (&id, record) in id_list.iter().zip(&records) {
             if pool.state_hash(id)? != StateHash::of(record) {
                 return Err(st.diverged(index, DivergenceKind::Keyframe, Some(id)));
             }
         }
-        Ok(())
+        check_assignments(pool, st, index, &id_list, &assignments)
     }
 
     /// Decodes a keyframe's untrusted records; the import validates them.
@@ -573,6 +659,69 @@ impl Replay<'_> {
         }
         Ok(out)
     }
+}
+
+/// A keyframe's assignments (ADR-0088 erratum 3): empty outside a league
+/// file. The reader took exactly four bytes per id.
+pub(super) fn read_assignments(bytes: &[u8]) -> Vec<u32> {
+    bytes
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|&w| u32::from_le_bytes(w))
+        .collect()
+}
+
+/// The league entry of a first keyframe's context: the pool's current
+/// view (the file's latest `League` event) and the keyframe's assignments;
+/// `None` for a pool without a league.
+pub(super) fn league_context<E, M>(
+    pool: &EnvPool<E, M>,
+    assignments: Vec<u32>,
+) -> Option<Box<crate::league::LeagueContext>>
+where
+    E: Persist,
+    E::Config: CanonicalConfig + Sync,
+    E::Header: Send,
+    E::State: Send,
+    M: PersistMask<E>,
+    <E::Header as RecordLayout>::Adaptive: AdaptiveValues<E::Config>,
+{
+    pool.league_view().map(|view| {
+        Box::new(crate::league::LeagueContext {
+            view: view.clone(),
+            assignments,
+        })
+    })
+}
+
+/// Checks the replayed assignments of `ids` against a keyframe's: a
+/// difference is a `Keyframe` divergence at `index` naming the instance.
+fn check_assignments<E, M>(
+    pool: &EnvPool<E, M>,
+    st: &State,
+    index: u64,
+    ids: &[u32],
+    recorded: &[u32],
+) -> Result<(), ReplayError>
+where
+    E: Persist,
+    E::Config: CanonicalConfig + Sync,
+    E::Header: Send,
+    E::State: Send,
+    M: PersistMask<E>,
+    <E::Header as RecordLayout>::Adaptive: AdaptiveValues<E::Config>,
+{
+    let Some(live) = pool.assignment() else {
+        return Ok(());
+    };
+    for (&id, &policy) in ids.iter().zip(recorded) {
+        let replayed = usize::try_from(id).ok().and_then(|i| live.get(i)).copied();
+        if replayed != Some(policy) {
+            return Err(st.diverged(index, DivergenceKind::Keyframe, Some(id)));
+        }
+    }
+    Ok(())
 }
 
 /// Records the outcome of a re-issued call: a success, a poison (the next

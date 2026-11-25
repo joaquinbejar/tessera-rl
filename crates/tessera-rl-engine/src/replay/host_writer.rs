@@ -636,6 +636,7 @@ fn header_bytes<E: HostEnvironment, const A: usize>(
     super::v1_fields::push_extension(
         &mut out,
         &[],
+        false,
         pool.options().chunk_size.get(),
         &super::ResetSourceRecord::Fresh,
     );

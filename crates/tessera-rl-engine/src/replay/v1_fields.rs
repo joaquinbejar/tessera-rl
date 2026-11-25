@@ -9,7 +9,8 @@
 //! file this library writes holds their defaults, and replay refuses a
 //! non-default value as `ReplayError::Unsupported`. The policy map has
 //! landed (#347 stage B2): recorders write it and replay checks it against
-//! the pool (`policy_map.rs`).
+//! the pool (`policy_map.rs`). The league has landed for sync pools (#384
+//! head D): `has_league`, code 4 and tag 12 (`league.rs`, `run.rs`).
 
 use super::ReplayError;
 use super::format::Body;
@@ -198,14 +199,16 @@ pub(crate) fn read_extension(
 pub(crate) fn push_extension(
     out: &mut Vec<u8>,
     codes: &[u8],
+    has_league: bool,
     chunk_size: u32,
     source: &ResetSourceRecord,
 ) {
     let count = u16::try_from(codes.len()).unwrap_or(0);
     out.extend_from_slice(&count.to_le_bytes());
     out.extend_from_slice(codes.get(..usize::from(count)).unwrap_or(&[]));
+    // has_curriculum, then has_league (ADR-0088 section 8, #384 head D).
     out.push(0);
-    out.push(0);
+    out.push(u8::from(has_league));
     match source {
         ResetSourceRecord::Fresh => out.push(0),
         ResetSourceRecord::Archive { digest, weights } => {
@@ -346,11 +349,8 @@ impl super::reader::Replay<'_> {
                 feature: "curricula (ADR-0081)",
             });
         }
-        if self.header.has_league {
-            return Err(ReplayError::Unsupported {
-                feature: "leagues (ADR-0088)",
-            });
-        }
+        // A league (ADR-0088 section 8) is checked by the sync replay
+        // (`check_league`); async and host replays refuse it.
         if self.header.chunk_size != 0 && self.header.chunk_size != chunk_size {
             return Err(PersistError::Incompatible {
                 field: "chunk_size",

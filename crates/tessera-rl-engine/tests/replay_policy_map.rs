@@ -305,3 +305,56 @@ fn test_replay_policy_map_cursor_seek_to_a_keyframe_reproduces_hashes() {
     drop(replay.finish(cur).unwrap());
     assert_eq!(hashes(&pool), recorded);
 }
+
+/// `b` with the library version string and the header checksum cut out
+/// (both change with a release), as `replay.rs`'s pinned fixture does:
+/// the length and XXH3-64 of the whole file, and the XXH3-64 of the header
+/// part alone.
+fn pinned(b: &[u8]) -> ((usize, u64), u64) {
+    let u16_at = |at: usize| usize::from(u16::from_le_bytes([b[at], b[at + 1]]));
+    let lib_at = 48 + 2 + u16_at(48);
+    let lib_len = u16_at(lib_at);
+    let mut at = lib_at + 2 + lib_len;
+    at += 2; // asset_count
+    at += 2 + u16_at(at); // descriptor
+    let config = u32::from_le_bytes(b[at..at + 4].try_into().unwrap()) as usize;
+    // The extension: flags and host fields (4) after the config and the
+    // three counts (12), then the policy map, the two flags, the reset
+    // source (Fresh here) and the chunk size.
+    let mut q = at + 4 + config + 12 + 4;
+    q += 2 + u16_at(q) + 2 + 1 + 4;
+    let header_end = q + 8;
+    let mut out = b[..lib_at + 2].to_vec();
+    out.extend_from_slice(&b[lib_at + 2 + lib_len..header_end - 8]);
+    let header = tessera_rl_core::encoding::checksum(&out);
+    out.extend_from_slice(&b[header_end..]);
+    (
+        (out.len(), tessera_rl_core::encoding::checksum(&out)),
+        header,
+    )
+}
+
+/// #384 head D (ADR-0088 erratum 3, rev's condition): a file without a
+/// league is byte-identical to one written before league replay landed.
+/// The pins are the bytes main c98e1890 writes for these recordings (a
+/// sync and an async recording with heuristic slots, codes 0 and 2), with
+/// the version string and header checksum cut out: the whole sync file,
+/// and the async file's header and length (its events follow the order
+/// `recv` returns ids in, which depends on worker timing, so only those
+/// are reproducible).
+#[test]
+fn test_replay_policy_map_files_without_a_league_are_byte_identical() {
+    let (sync, _) = record_sync(heuristic());
+    let (asy, _) = record_async(heuristic());
+    let (sync_file, _) = pinned(&sync);
+    let ((async_len, _), async_header) = pinned(&asy);
+    assert_eq!(
+        (sync_file, async_len, async_header),
+        (PINNED_SYNC, PINNED_ASYNC_LEN, PINNED_ASYNC_HEADER),
+        "a file without a league changed"
+    );
+}
+
+const PINNED_SYNC: (usize, u64) = (4044, 5_428_336_282_661_761_961);
+const PINNED_ASYNC_LEN: usize = 14344;
+const PINNED_ASYNC_HEADER: u64 = 10_175_052_044_108_022_029;

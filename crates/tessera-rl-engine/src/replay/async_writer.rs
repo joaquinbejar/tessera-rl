@@ -165,6 +165,7 @@ where
             pool_options,
             heads,
             pool.replay_policy_map(),
+            false,
             flags,
             &super::ResetSourceRecord::Fresh,
         )?;

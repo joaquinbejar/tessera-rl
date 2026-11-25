@@ -33,6 +33,7 @@ mod format;
 mod host_run;
 #[cfg(feature = "host")]
 mod host_writer;
+mod league;
 #[cfg(feature = "host")]
 mod outputs_hash;
 mod policy_map;
@@ -49,6 +50,7 @@ pub use error::{DivergenceKind, ReplayError};
 pub use format::{EventTag, FORMAT_VERSION, REPLAY_MAGIC, StateWriteOp};
 #[cfg(feature = "host")]
 pub use host_writer::HostRecorder;
+pub use league::MAX_LEAGUE_POLICIES;
 pub use reader::{
     Event, Events, HostFileKind, HostInfo, Ids, RecordedReseed, RefusalRow, Replay, ReplayHeader,
 };

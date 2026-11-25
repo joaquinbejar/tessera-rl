@@ -409,6 +409,11 @@ impl Replay<'_> {
             return incompatible("host_protocol");
         };
         self.check_v1(pool.options().chunk_size.get())?;
+        if self.header.has_league {
+            return Err(ReplayError::Unsupported {
+                feature: "leagues in host replay files (ADR-0088)",
+            });
+        }
         // Host pools have no policy map (ADR-0079 covers first-party pools).
         if !self.header.policy_map.is_empty() {
             return Err(ReplayError::Unsupported {

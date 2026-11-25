@@ -374,10 +374,26 @@ impl Replay<'_> {
             reset_source,
             ids: Ids::All,
             records,
+            assignments,
         } = event
         else {
             return Err(not_seekable());
         };
+        // A league file (ADR-0088 erratum 3): the view at the keyframe is
+        // the last `League` event before it, decoded before any write.
+        let mut view = None;
+        if self.header.has_league {
+            for item in self.events() {
+                let (at, event) = item?;
+                if at >= index {
+                    break;
+                }
+                if let Event::League { body } = event {
+                    view = Some(super::league::read_view(body, at)?);
+                }
+            }
+        }
+        let assignments = super::run::read_assignments(assignments);
         // An archive source needs the cursor's archive: refused before any
         // write, so a refused seek leaves the pool untouched.
         let archive = cur.state.archive.clone();
@@ -389,6 +405,15 @@ impl Replay<'_> {
         let records = self.decode_records::<E>(index, records)?;
         pool.import_all(&records)
             .map_err(|_| st.diverged(index, DivergenceKind::KeyframeRejected, None))?;
+        if let (Some(view), Some(league)) = (view, pool.league.as_mut()) {
+            league
+                .replace_view(view)
+                .map_err(|_| ReplayError::Malformed {
+                    event_index: index,
+                    field: "a League event whose population shrank",
+                })?;
+        }
+        let league = super::run::league_context(pool, assignments);
         // The whole pool context: the branch counter and the keyframe's reset
         // source (ADR-0075), whatever the pool held before the seek
         // (REVIEW-4c-design-r1 point 2).
@@ -397,8 +422,12 @@ impl Replay<'_> {
             PoolContext {
                 branch_counter,
                 reset_source,
-                // Replays refuse pools with transforms (ADR-0078 item 8).
-                adaptive: crate::adaptive::AdaptiveContext::default(),
+                // Replays refuse pools with transforms (ADR-0078 item 8); a
+                // league file's keyframe carries the assignments.
+                adaptive: crate::adaptive::AdaptiveContext {
+                    league,
+                    ..crate::adaptive::AdaptiveContext::default()
+                },
                 // The recorded map's digest (ADR-0079 item 6): a pool with
                 // another map is refused by `check_context`, before any write.
                 policy_map: self.header.policy_map_digest()?,

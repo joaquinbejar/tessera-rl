@@ -66,7 +66,8 @@
 //! - `Keyframe` (5): `branch_counter:u64`, `reset_source` (the pool
 //!   context's, ADR-0075 item 7), ids, then one record per id: a canonical
 //!   record of `record_len` bytes (ADR-0029), or in a host file
-//!   `len:u32 HostRecord` (ADR-0073, identity digest first).
+//!   `len:u32 HostRecord` (ADR-0073, identity digest first); then, in a
+//!   `has_league` file only, `assignment:u32` per id (ADR-0088 erratum 3).
 //! - `Checkpoint` (6): ids, one `StateHash:u64` per id.
 //! - `Adaptive` (7, ADR-0081 item 7, only with `has_curriculum` 1):
 //!   `count:u32` (at least 1), then per changed instance `id:u32` and the
@@ -81,14 +82,22 @@
 //! - `ResetFrom` (11, ADR-0075 items 5 and 7, first-party files only):
 //!   `count:u32` (1 to the instance count), `count` distinct ids in range,
 //!   then `count` entry indices below 2^24.
-//! - `League` (12, ADR-0088 item 8, only with `has_league` 1): reserved;
-//!   its body is read as opaque bytes until the league lands.
+//! - `League` (12, ADR-0088 section 8 with erratum 3, only with
+//!   `has_league` 1): the league's whole view, `digest:u64 last:u32
+//!   count:u32 kind*count threshold:u64*count`, a kind being `0:u8 tag:u64`
+//!   (External), `1:u8` (Heuristic) or `2:u8 content_hash:[u8; 16]` (Onnx),
+//!   count 1 to 2^16 (`replay::league`). A `has_league` file's first event
+//!   is a `League` event with the view at recording start and its second
+//!   the first keyframe; another `League` event follows each barrier that
+//!   changed the view.
 //! - `End` (0): the trailer of ADR-0072 section 2.
 //!
 //! Until their features land, this library writes the defaults (no
-//! curriculum, no league, a `Fresh` source) and never writes
-//! tags 7, 10, 11 or 12; replay refuses a non-default value or one of those
-//! tags as `ReplayError::Unsupported`. Asset entries are written and checked
+//! curriculum, a `Fresh` source) and never writes tags 7, 10 or 11; replay
+//! refuses a non-default value or one of those tags as
+//! `ReplayError::Unsupported`. A league pool's sync recording writes
+//! `has_league` 1, code 4 and tag 12 (#384 head D); a file without a league
+//! is byte-identical to one written before. Asset entries are written and checked
 //! as ADR-0077 says. The policy map is written (count 0 for the default map,
 //! else one code per agent slot) and checked against the pool before any
 //! event (ADR-0079 item 6, #347 stage B2).

@@ -484,27 +484,27 @@ fn with_league_event(league: u8, tag: u8, body: Vec<u8>) -> Vec<u8> {
 }
 
 #[test]
-fn test_replay_v1_league_fields_are_reserved() {
+fn test_replay_v1_league_fields_are_checked() {
     // ADR-0088 item 8: the flag is 0 or 1.
     assert_eq!(
         invalid_field(&with_ext(ext_league(&[], 0, 2, &[0], 64))),
         "has_league"
     );
-    // A league opens, and replay refuses it until the league lands.
+    // ADR-0088 erratum 3 (#384 head D): a has_league file whose first event
+    // is not its League event is refused at open, with a typed error.
     let league = with_ext(ext_league(&[], 0, 1, &[0], 64));
-    let replay = Replay::open(&league, LIMITS).unwrap();
-    assert!(replay.header().has_league);
     assert!(matches!(
-        replay.run(&mut pool()),
-        Err(ReplayError::Unsupported {
-            feature: "leagues (ADR-0088)"
-        })
+        Replay::open(&league, LIMITS),
+        Err(ReplayError::Malformed {
+            event_index: 0,
+            field
+        }) if field.contains("League")
     ));
-    // Group code 4, opponent, opens, and replay refuses it as a policy map.
+    // Group code 4, opponent, without has_league: malformed before any event.
     let opponent = with_ext(ext(&[0, 4], 0, &[0], 64));
     assert!(matches!(
         run_error(&opponent),
-        ReplayError::Unsupported { .. }
+        ReplayError::Malformed { .. }
     ));
 }
 
@@ -519,14 +519,12 @@ fn test_replay_v1_league_event_needs_a_league() {
         ),
         Err(ReplayError::ReservedTag { tag: 12 })
     ));
-    // With one, it opens with its body as opaque bytes.
-    let file = with_league_event(1, EventTag::League as u8, body);
-    let replay = Replay::open(&file, LIMITS).unwrap();
-    assert!(
-        replay
-            .events()
-            .any(|e| matches!(e, Ok((_, Event::League { body: &[1, 2, 3] }))))
-    );
+    // With one, a League event that is not first is refused at open: the
+    // first event must be the League event (ADR-0088 erratum 3).
+    assert!(matches!(
+        Replay::open(&with_league_event(1, EventTag::League as u8, body), LIMITS),
+        Err(ReplayError::Malformed { event_index: 0, .. })
+    ));
     assert_eq!(EventTag::from_u8(12), Some(EventTag::League));
     assert_eq!(EventTag::from_u8(13), None);
 }

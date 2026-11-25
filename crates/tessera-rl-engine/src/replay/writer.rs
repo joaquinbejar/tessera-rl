@@ -149,7 +149,9 @@ where
     W: Write,
 {
     /// Starts a recording: writes the header and a keyframe of every
-    /// instance.
+    /// instance. A league pool's file (ADR-0088 section 8, erratum 3) holds
+    /// the league's current view as a `League` event before the keyframe,
+    /// and every keyframe holds its instances' assignments.
     ///
     /// # Errors
     ///
@@ -194,6 +196,11 @@ where
             checkpointed: false,
         };
         recorder.out.write_all(&header)?;
+        if let Some(view) = recorder.pool.league_view() {
+            recorder.body.clear();
+            super::league::push_view(&mut recorder.body, view)?;
+            recorder.emit_body(EventTag::League)?;
+        }
         recorder.keyframe(None)?;
         Ok(recorder)
     }
@@ -477,6 +484,42 @@ where
         Ok(())
     }
 
+    /// [`EnvPool::epoch_barrier`], logged: a league whose view changed
+    /// (its digest, kinds or table, compared canonically) writes a
+    /// `League` event with the new view (ADR-0088 section 8, erratum 3).
+    /// Not a logged call: it counts toward neither keyframes nor
+    /// checkpoints. A failed barrier writes nothing.
+    ///
+    /// # Errors
+    ///
+    /// The pool's error as [`ReplayError::Engine`], [`ReplayError::Io`], or
+    /// [`ReplayError::RecorderClosed`] after a poison.
+    pub fn epoch_barrier(&mut self) -> Result<crate::adaptive::EpochReport, ReplayError> {
+        self.open()?;
+        let before = self
+            .pool
+            .league_view()
+            .map(super::league::view_bytes)
+            .transpose()?;
+        let report = self.pool.epoch_barrier()?;
+        if let Some(before) = before {
+            self.body.clear();
+            if let Some(view) = self.pool.league_view() {
+                super::league::push_view(&mut self.body, view)?;
+            }
+            if self.body != before {
+                self.emit_body(EventTag::League)?;
+            }
+        }
+        Ok(report)
+    }
+
+    /// [`EnvPool::freeze_league`]: not logged, since a frozen league's
+    /// barrier changes no view and so writes no `League` event.
+    pub fn freeze_league(&mut self, frozen: bool) {
+        self.pool.freeze_league(frozen);
+    }
+
     /// A keyframe of `ids` (`None`: every instance).
     fn keyframe(&mut self, ids: Option<&[u32]>) -> Result<(), ReplayError> {
         self.body.clear();
@@ -486,9 +529,22 @@ where
         // The pool context's reset source (ADR-0075 item 7).
         super::v1_fields::push_reset_source(&mut self.body, &context.reset_source);
         push_ids(&mut self.body, ids)?;
-        for id in self.ids(ids) {
+        let ids = self.ids(ids);
+        for &id in &ids {
             let record = DecodedRecord::<E>::from(self.pool.snapshot(id)?);
             self.body.extend_from_slice(&encode_to_vec(&record));
+        }
+        // ADR-0088 erratum 3: a league file's keyframe holds each
+        // instance's assignment after the records.
+        if let Some(assignment) = self.pool.assignment() {
+            for &id in &ids {
+                let policy = usize::try_from(id)
+                    .ok()
+                    .and_then(|i| assignment.get(i))
+                    .copied()
+                    .unwrap_or(0);
+                self.body.extend_from_slice(&policy.to_le_bytes());
+            }
         }
         self.emit_body(EventTag::Keyframe)
     }
@@ -581,6 +637,7 @@ where
         &pool.options,
         pool.action_heads(),
         pool.policy_map(),
+        pool.league.is_some(),
         0,
         &source,
     )
@@ -594,6 +651,7 @@ pub(super) fn header_from<E, M>(
     options: &crate::options::PoolOptions,
     (discrete, continuous): (usize, usize),
     policy_map: &crate::policy::PolicyMap,
+    has_league: bool,
     flags: u8,
     source: &super::ResetSourceRecord,
 ) -> Result<Vec<u8>, ReplayError>
@@ -602,7 +660,11 @@ where
     E::Config: CanonicalConfig,
     M: PersistMask<E>,
 {
-    super::policy_map::refuse_league(policy_map)?;
+    // An `Opponent` slot is recorded only with its league (ADR-0088
+    // section 8, #384 head D).
+    if !has_league {
+        super::policy_map::refuse_league(policy_map)?;
+    }
     let codes = super::policy_map::header_codes(policy_map, E::MAX_AGENTS)?;
     let id = identity::<E, M>(cfg, options)?;
     let file_descriptor = descriptor(E::TIER, BUILD_ID)?;
@@ -630,7 +692,7 @@ where
     // flags, then host_protocol, notifies, refuses: 0 for a first-party pool.
     out.extend_from_slice(&[flags, 0, 0, 0]);
     let chunk = options.chunk_size.get();
-    super::v1_fields::push_extension(&mut out, &codes, chunk, source);
+    super::v1_fields::push_extension(&mut out, &codes, has_league, chunk, source);
     let sum = tessera_rl_core::encoding::checksum(&out);
     out.extend_from_slice(&sum.to_le_bytes());
     Ok(out)

@@ -19,7 +19,9 @@ pub enum DivergenceKind {
     NotPoisoned,
     /// A checkpoint's `StateHash` differs from the replayed instance's.
     Checkpoint,
-    /// A periodic keyframe's record differs from the replayed instance's.
+    /// A periodic keyframe's record differs from the replayed instance's;
+    /// or, in a league file, a keyframe's assignment differs from the
+    /// replayed instance's (ADR-0088 erratum 3).
     Keyframe,
     /// The pool's branch counter differs from the keyframe's.
     BranchCounter,
