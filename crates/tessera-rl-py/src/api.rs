@@ -202,22 +202,45 @@ fn mode_args(g: Gil, kw: &Kwargs<'_>) -> CResult<(bool, Option<(usize, BatchOutp
     }
 }
 
-/// `onnx_models` (paths separated by newlines), `onnx_library`,
-/// `onnx_accept_telemetry` and `onnx_max_model_bytes`: the ONNX opponents
+/// A filesystem path as Python's `os.fsencode` gives it, exact `bytes`:
+/// taken byte for byte on Unix (any bytes but NUL, newlines and non-UTF-8
+/// included), as UTF-8 elsewhere.
+pub(crate) fn path_of(g: Gil, v: Ref<'_>, what: &str) -> CResult<std::path::PathBuf> {
+    let b = capi::bytes_of(g, v, what)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt as _;
+        Ok(std::path::PathBuf::from(std::ffi::OsStr::from_bytes(b)))
+    }
+    #[cfg(not(unix))]
+    {
+        String::from_utf8(b.to_vec())
+            .map(std::path::PathBuf::from)
+            .map_err(|_| error(g, Kind::Argument, format!("{what} is not UTF-8")))
+    }
+}
+
+/// `onnx_models` (a list of paths, each `bytes` from `os.fsencode`),
+/// `onnx_library`, `onnx_accept_telemetry` and
+/// `onnx_max_model_bytes`: the ONNX opponents
 /// `tessera_rl.make(..., onnx_opponents=)` passes (#619); all or none.
 fn onnx_args(g: Gil, kw: &Kwargs<'_>) -> CResult<Option<crate::policy::OnnxOpponentArgs>> {
-    let models = kw.string(g, "onnx_models")?;
+    let models = match kw.get("onnx_models") {
+        None => None,
+        Some(list) => Some(
+            capi::list_items(g, list, "onnx_models")?
+                .iter()
+                .map(|item| path_of(g, item.as_ref(), "an onnx_models item"))
+                .collect::<CResult<Vec<_>>>()?,
+        ),
+    };
     let library = kw.string(g, "onnx_library")?;
     let accept = kw.bool(g, "onnx_accept_telemetry")?;
     let max = kw.u64(g, "onnx_max_model_bytes")?;
     match (models, library) {
         (None, None) if accept.is_none() && max.is_none() => Ok(None),
         (Some(models), Some(library)) => Ok(Some(crate::policy::OnnxOpponentArgs {
-            models: models
-                .split('\n')
-                .filter(|m| !m.is_empty())
-                .map(std::path::PathBuf::from)
-                .collect(),
+            models,
             library: std::path::PathBuf::from(library),
             accept_telemetry: accept.unwrap_or(false),
             max_model_bytes: max,

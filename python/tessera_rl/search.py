@@ -64,6 +64,7 @@ per call are the same as under PUCT.
 
 from __future__ import annotations
 
+import os
 import types
 from pathlib import Path
 from typing import NamedTuple
@@ -477,11 +478,11 @@ class OnnxOpponents:
         accept_telemetry: bool = False,
         max_model_bytes: int | None = None,
     ):
-        self._models = [str(Path(m)) for m in models]
+        # Paths cross to the native side as `os.fsencode` bytes, so any
+        # name the filesystem allows (newlines, non-UTF-8 bytes) works.
+        self._models = [os.fsencode(m) for m in models]
         if not self._models:
             raise _native.ArgumentError("OnnxOpponents needs at least one model")
-        if any("\n" in m for m in self._models):
-            raise _native.ArgumentError("an ONNX model path cannot contain a newline")
         self._accept = bool(accept_telemetry)
         self._max = max_model_bytes
         if library is None:
@@ -511,7 +512,7 @@ class OnnxOpponents:
 
     def _native_kwargs(self) -> dict:
         out = {
-            "onnx_models": "\n".join(self._models),
+            "onnx_models": list(self._models),
             "onnx_library": self._library,
             "onnx_accept_telemetry": self._accept,
         }

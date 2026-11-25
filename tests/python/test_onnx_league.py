@@ -93,7 +93,7 @@ def test_onnx_league_build_without_the_feature_refuses_onnx_opponents():
         "agents": 2,
         "policy_map": "1=opponent",
         "league": league._handle,
-        "onnx_models": str(MODEL),
+        "onnx_models": [os.fsencode(MODEL)],
         "onnx_library": MISSING,
         "onnx_accept_telemetry": True,
     }
@@ -102,13 +102,13 @@ def test_onnx_league_build_without_the_feature_refuses_onnx_opponents():
             t._native.make_paddleduel(**kwargs)
     else:
         with pytest.raises(t.CapabilityError, match=r"no ONNX opponents \(the onnx feature\)"):
-            t._native.onnx_model_provenance(model=str(MODEL), library=MISSING, accept_telemetry=True)
+            t._native.onnx_model_provenance(model=os.fsencode(MODEL), library=MISSING, accept_telemetry=True)
         with pytest.raises(t.CapabilityError, match=r"no ONNX opponents \(the onnx feature\)"):
             t._native.make_paddleduel(**kwargs)
 
 
 def test_onnx_league_onnx_opponents_without_a_league_is_refused():
-    kwargs = {"num_envs": 1, "agents": 2, "onnx_models": str(MODEL), "onnx_library": MISSING}
+    kwargs = {"num_envs": 1, "agents": 2, "onnx_models": [os.fsencode(MODEL)], "onnx_library": MISSING}
     want = (t.ArgumentError, "onnx_opponents= needs league=") if has_feature() else (t.CapabilityError, "the onnx feature")
     with pytest.raises(want[0], match=want[1]):
         t._native.make_paddleduel(**kwargs)
@@ -256,3 +256,29 @@ def test_onnx_league_eval_counts_equal_an_external_opponent_playing_the_rule():
     for key in ("wins", "draws", "losses", "learner_return", "opponent_return"):
         assert a[key] == b[key], key
     assert a["onnx_provenance"] == dict(o.provenance[h])
+
+
+@real
+def test_onnx_league_model_path_with_a_newline_loads(tmp_path):
+    # Paths cross as os.fsencode bytes, element by element: no separator.
+    path = tmp_path / "opponent\nwith newline.onnx"
+    path.write_bytes(MODEL.read_bytes())
+    h = content_hash(MODEL)
+    env = pool(uniform(("onnx", h)), onnx_opponents=opponents(path))
+    env.reset()
+    env.close()
+
+
+@real
+def test_onnx_league_non_utf8_model_path_loads_on_linux(tmp_path):
+    if not sys.platform.startswith("linux"):
+        pytest.skip("only Linux filesystems take non-UTF-8 names")
+    path = os.fsencode(tmp_path) + b"/opponent-\xff.onnx"
+    with open(path, "wb") as f:
+        f.write(MODEL.read_bytes())
+    h = content_hash(MODEL)
+    o = opponents(path)
+    assert list(o.provenance) == [h]
+    env = pool(uniform(("onnx", h)), onnx_opponents=o)
+    env.reset()
+    env.close()

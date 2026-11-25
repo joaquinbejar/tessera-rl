@@ -74,7 +74,7 @@ fn load<'py>(g: Gil<'py>, _: &std::path::Path, _: bool) -> CResult<Mine<'py>> {
 }
 
 /// `onnx_model_provenance(model=, library=, accept_telemetry=False,
-/// max_model_bytes=None) -> dict`: an ONNX opponent model's provenance
+/// max_model_bytes=None) -> dict` (`model` is `bytes`, as `os.fsencode`): an ONNX opponent model's provenance
 /// (ADR-0057 section 3) with its league `content_hash` (32 hex digits),
 /// read without building a session (#619).
 pub(crate) fn onnx_model_provenance<'py>(
@@ -83,8 +83,11 @@ pub(crate) fn onnx_model_provenance<'py>(
 ) -> CResult<Mine<'py>> {
     let kw = Kwargs::parse(g, kwargs)?;
     kw.check(g, &[&ATTACH_KEYS])?;
+    let model = kw
+        .get("model")
+        .ok_or_else(|| error(g, Kind::Argument, "missing argument \"model\"".to_owned()))?;
     let args = OnnxArgs {
-        model: PathBuf::from(required(g, &kw, "model")?),
+        model: crate::api::path_of(g, model, "model")?,
         library: PathBuf::from(required(g, &kw, "library")?),
         accept_telemetry: kw.bool(g, "accept_telemetry")?.unwrap_or(false),
         max_model_bytes: kw.u64(g, "max_model_bytes")?,

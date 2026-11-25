@@ -74,7 +74,7 @@ class OnnxEvaluator:
 class OnnxOpponents:
     def __init__(
         self,
-        models: Sequence[str | PathLike[str]],
+        models: Sequence[str | bytes | PathLike[str] | PathLike[bytes]],
         *,
         library: str | PathLike[str] | None = None,
         accept_telemetry: bool = False,
