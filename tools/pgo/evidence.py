@@ -15,8 +15,11 @@ import math
 import os
 import re
 import statistics
+import subprocess
 import tomllib
+from collections.abc import Callable
 from dataclasses import dataclass, field
+from functools import cache
 
 MAX_INTERPRETER_SHARE = 0.001
 MAX_NONLINEARITY = 0.01
@@ -210,19 +213,68 @@ def native_cost(objects: dict[str, Cost]) -> Cost:
     return found[0]
 
 
-# libc's object (glibc, or macOS's libsystem_platform) and its memory primitives.
-_LIBC = re.compile(r"^(libc[.-]|libc\.so|libsystem_platform)")
+# libc's object (glibc, macOS's libsystem_platform, or musl's ld-musl-*,
+# #582) and its memory primitives.
+_LIBC = re.compile(r"^(libc[.-]|libc\.so|libsystem_platform|ld-musl-)")
 _PRIMITIVE = re.compile(r"^(_platform_)?(__)?(mem(set|cpy|move)|bzero)(\b|_|@|$)")
+# Callgrind's name for a function without a symbol (a stripped libc, such as
+# musl 1.2.5 in the musllinux_1_2 image), with an optional recursion suffix.
+_ADDRESS = re.compile(r"^(0x[0-9a-fA-F]+)('\d+)?$")
+
+#: Maps a libc object's path to its defined dynamic symbols, by address.
+Symbols = Callable[[str], dict[int, str]]
 
 
-def is_memory_primitive(obj: str, function: str) -> bool:
-    """Whether `function` in object `obj` is one of libc's memory primitives."""
-    return bool(_LIBC.match(os.path.basename(obj))) and bool(_PRIMITIVE.match(function))
+@cache
+def dynamic_symbols(path: str) -> dict[int, str]:
+    """The defined dynamic symbols of the shared object at `path`, by address
+    (`nm -D --defined-only`). Where several names share an address, a memory
+    primitive's name wins, so an alias cannot hide one. Raises if the table
+    cannot be read: an unresolved stripped libc would otherwise charge
+    nothing, silently (#582)."""
+    try:
+        out = subprocess.run(["nm", "-D", "--defined-only", path], capture_output=True, text=True, check=False)
+    except OSError as e:
+        raise ValueError(f"cannot read the dynamic symbols of {path}: {e}") from e
+    if out.returncode != 0:
+        raise ValueError(f"cannot read the dynamic symbols of {path}: nm exited {out.returncode}: {out.stderr.strip()}")
+    table: dict[int, str] = {}
+    for line in out.stdout.splitlines():
+        parts = line.split()
+        if len(parts) < 3:
+            continue
+        try:
+            address = int(parts[0], 16)
+        except ValueError:
+            continue
+        name = parts[2]
+        if address not in table or (_PRIMITIVE.match(name) and not _PRIMITIVE.match(table[address])):
+            table[address] = name
+    return table
 
 
-def primitive_calls(text: str) -> dict[str, int]:
+def resolve_function(obj: str, function: str, symbols: Symbols = dynamic_symbols) -> str:
+    """`function` as named in a libc object `obj`: an address-only name
+    (`0x...`) is looked up in `obj`'s dynamic symbol table; any other name is
+    returned as it is."""
+    m = _ADDRESS.match(function)
+    if m is None or not _LIBC.match(os.path.basename(obj)):
+        return function
+    return symbols(obj).get(int(m.group(1), 16), function)
+
+
+def is_memory_primitive(obj: str, function: str, symbols: Symbols = dynamic_symbols) -> bool:
+    """Whether `function` in object `obj` is one of libc's memory primitives,
+    by symbol name, or by address for a stripped libc (#582)."""
+    if not _LIBC.match(os.path.basename(obj)):
+        return False
+    return bool(_PRIMITIVE.match(resolve_function(obj, function, symbols)))
+
+
+def primitive_calls(text: str, symbols: Symbols = dynamic_symbols) -> dict[str, int]:
     """Inclusive Ir of every call from the `_native` object into a libc memory
-    primitive, by callee function. A call's cost is the line after its
+    primitive, by callee function (resolved through `symbols` when libc names
+    it only by address). A call's cost is the line after its
     `calls=` line; `cob=` and `cfn=` name its callee (an absent `cob=` means
     the caller's own object)."""
     positions = 1
@@ -276,18 +328,19 @@ def primitive_calls(text: str) -> dict[str, int]:
             pending, cob = None, None
             values = line.split()[positions:]
             ir = int(values[events.index("Ir")]) if len(values) > events.index("Ir") else 0
-            if os.path.basename(caller).startswith(NATIVE_OBJECT) and is_memory_primitive(callee_ob, callee_fn):
-                out[callee_fn] = out.get(callee_fn, 0) + ir
+            if os.path.basename(caller).startswith(NATIVE_OBJECT) and is_memory_primitive(callee_ob, callee_fn, symbols):
+                resolved = resolve_function(callee_ob, callee_fn, symbols)
+                out[resolved] = out.get(resolved, 0) + ir
     if events is None:
         raise ValueError("no events line: not a callgrind file")
     return out
 
 
-def native_cost_with_primitives(text: str) -> Cost:
+def native_cost_with_primitives(text: str, symbols: Symbols = dynamic_symbols) -> Cost:
     """`native_cost` of one file, plus `PRIMITIVE_EVENT`: the inclusive Ir of
-    `_native`'s calls into libc memory primitives (#171)."""
+    `_native`'s calls into libc memory primitives (#171, #582)."""
     cost = native_cost(parse_callgrind(text))
-    return Cost({**cost.events, PRIMITIVE_EVENT: sum(primitive_calls(text).values())})
+    return Cost({**cost.events, PRIMITIVE_EVENT: sum(primitive_calls(text, symbols).values())})
 
 
 # ---------------------------------------------------------- feasibility gate
