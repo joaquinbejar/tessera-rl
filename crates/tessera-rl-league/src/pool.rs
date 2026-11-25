@@ -47,7 +47,7 @@ impl PoolLeague {
 
 /// The engine view of `league`'s population and table (ADR-0088 erratum 1;
 /// ONNX policies run through `EnvPool::with_onnx_opponents`, erratum 2).
-fn view_of(league: &League) -> Result<LeagueView, LeagueError> {
+pub(crate) fn view_of(league: &League) -> Result<LeagueView, LeagueError> {
     let kinds = league
         .population()
         .entries()

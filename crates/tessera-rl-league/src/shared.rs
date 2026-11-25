@@ -94,6 +94,9 @@ struct Role {
     since: PairCounts,
     view: LeagueView,
     fallback: bool,
+    /// The digest of the view the role's pools hold: the view before the
+    /// last commit (#384 head E2, for `check_view` after a restart).
+    installed: u64,
 }
 
 #[derive(Debug)]
@@ -106,6 +109,9 @@ struct Inner {
     roles: Vec<Role>,
     /// Per registered pool: its role.
     members: Vec<usize>,
+    /// After a load: the saved members' roles, which must register again
+    /// in this order before any barrier (#384 head E2).
+    expected: Vec<usize>,
     round: u64,
     /// Per registered pool: its results this round, once submitted.
     slots: Vec<Option<Vec<(PolicyId, Outcome)>>>,
@@ -192,8 +198,10 @@ impl SharedLeague {
                 since: PairCounts::default(),
                 view: placeholder()?,
                 fallback: false,
+                installed: 0,
             };
             role_view(&mut role, &population, roles.len())?;
+            role.installed = crate::persist::view_digest(&role.view);
             roles.push(role);
         }
         Ok(Self {
@@ -205,6 +213,7 @@ impl SharedLeague {
                 population,
                 roles,
                 members: Vec::new(),
+                expected: Vec::new(),
                 round: 0,
                 slots: Vec::new(),
                 dropped: 0,
@@ -225,9 +234,16 @@ impl SharedLeague {
         if role >= inner.roles.len() {
             return Err(LeagueError::InvalidConfig("unknown role"));
         }
-        if inner.round != 0 || inner.slots.iter().any(Option::is_some) {
+        if inner.expected.is_empty() {
+            if inner.round != 0 || inner.slots.iter().any(Option::is_some) {
+                return Err(LeagueError::InvalidConfig(
+                    "pools register before the first barrier",
+                ));
+            }
+        } else if inner.expected.get(inner.members.len()) != Some(&role) {
+            // A loaded league: the saved members, in the saved order.
             return Err(LeagueError::InvalidConfig(
-                "pools register before the first barrier",
+                "a loaded league's pools register again with their saved roles, in order",
             ));
         }
         let index = inner.members.len();
@@ -423,6 +439,10 @@ impl Inner {
         let dropped = core::mem::take(&mut self.dropped);
         self.round = round.saturating_add(1);
         if self.frozen {
+            // The round's pools now hold the current views.
+            for role in &mut self.roles {
+                role.installed = crate::persist::view_digest(&role.view);
+            }
             self.last = Some(CommitReport {
                 round,
                 dropped,
@@ -450,6 +470,7 @@ impl Inner {
         for r in 0..self.roles.len() {
             let len = self.population.len();
             if let Some(role) = self.roles.get_mut(r) {
+                role.installed = crate::persist::view_digest(&role.view);
                 role.counts.resize(len, PairCounts::default());
                 role_view(role, &self.population, r)?;
             }
@@ -539,6 +560,13 @@ impl RoleHandle {
         dropped: u64,
     ) -> Result<(), LeagueBarrierError> {
         let fail = |reason: String| LeagueBarrierError { reason };
+        if inner.members.len() < inner.expected.len() {
+            return Err(fail(format!(
+                "a loaded league waits for {} of its {} pools to register again",
+                inner.expected.len() - inner.members.len(),
+                inner.expected.len()
+            )));
+        }
         if inner.slots.get(index).is_some_and(Option::is_some) {
             return Err(fail(format!(
                 "pool {index} already submitted round {}: waiting for pools {:?}",
@@ -602,6 +630,179 @@ impl LeagueSubsystem for RoleHandle {
             view,
             EngineReport::new(submitted, results.dropped, fallback),
         ))
+    }
+}
+
+impl SharedLeague {
+    /// The league's canonical bytes (#384 head E2, the `persist` module):
+    /// the population, every role's ratings, counts and snapshot state, the
+    /// round, the frozen flag and the members' roles in registration
+    /// order. Tables are recomputed at load.
+    ///
+    /// # Errors
+    ///
+    /// [`LeagueError::Persist`] mid-round (pools have submitted this round)
+    /// or for counts past `u32::MAX`.
+    pub fn save(&self) -> Result<Vec<u8>, LeagueError> {
+        self.saved()?.encode()
+    }
+
+    fn saved(&self) -> Result<crate::persist::Saved, LeagueError> {
+        let inner = self.lock()?;
+        if inner.slots.iter().any(Option::is_some) {
+            return Err(LeagueError::Persist(
+                "save mid-round: some pools have submitted this round",
+            ));
+        }
+        let members = if inner.members.len() < inner.expected.len() {
+            &inner.expected
+        } else {
+            &inner.members
+        };
+        Ok(crate::persist::Saved {
+            kind: crate::persist::KIND_SHARED,
+            elo_k: inner.elo_k,
+            trueskill: inner.trueskill,
+            rate_population: inner.rate_population,
+            population: inner.population.clone(),
+            roles: inner
+                .roles
+                .iter()
+                .map(|r| crate::persist::SavedRole {
+                    cfg: r.cfg,
+                    elo: r.elo,
+                    trueskill: r.trueskill,
+                    counts: r.counts.clone(),
+                    self_play: r.self_play.map(|p| p.0),
+                    rounds: r.rounds,
+                    snapshots: r.snapshots,
+                    since: r.since,
+                    view_digest: crate::persist::view_digest(&r.view),
+                    installed_digest: r.installed,
+                })
+                .collect(),
+            frozen: inner.frozen,
+            round: inner.round,
+            members: members
+                .iter()
+                .map(|&m| u32::try_from(m).unwrap_or(u32::MAX))
+                .collect(),
+        })
+    }
+
+    /// A shared league from [`SharedLeague::save`]'s bytes: checksum
+    /// first, then every field; each role's recomputed view must reproduce
+    /// its saved digest. The saved pools register again with
+    /// [`SharedLeague::member`], with their saved roles and in their saved
+    /// order, before any barrier.
+    ///
+    /// # Errors
+    ///
+    /// [`LeagueError::Persist`] for a malformed, corrupt or mismatched
+    /// file, and the constructors' errors for values they refuse.
+    pub fn load(bytes: &[u8]) -> Result<Self, LeagueError> {
+        let saved = crate::persist::Saved::decode(bytes, crate::persist::KIND_SHARED)?;
+        if saved.roles.is_empty() || saved.roles.len() > 32 {
+            return Err(LeagueError::Persist("a shared league has 1 to 32 roles"));
+        }
+        let n = saved.population.len();
+        let mut roles = Vec::with_capacity(saved.roles.len());
+        for (index, r) in saved.roles.iter().enumerate() {
+            r.cfg.check()?;
+            LeagueConfig {
+                matchmaking: r.cfg.matchmaking,
+                elo_k: saved.elo_k,
+                trueskill: saved.trueskill,
+                rate_population: saved.rate_population,
+            }
+            .check()?;
+            let self_play = r.self_play.map(PolicyId);
+            let self_entry_ok = match (self_play, r.cfg.self_play) {
+                (None, None) => true,
+                (Some(id), Some(s)) => saved.population.get(id).is_ok_and(|p| {
+                    p.kind == PolicyKind::External { tag: s.tag } && p.roles == 1u32 << index
+                }),
+                _ => false,
+            };
+            if !self_entry_ok || r.counts.len() != n {
+                return Err(LeagueError::Persist("a role does not fit the population"));
+            }
+            let mut role = Role {
+                cfg: r.cfg,
+                elo: r.elo,
+                trueskill: r.trueskill,
+                counts: r.counts.clone(),
+                self_play,
+                rounds: r.rounds,
+                snapshots: r.snapshots,
+                since: r.since,
+                view: placeholder()?,
+                fallback: false,
+                installed: r.installed_digest,
+            };
+            role_view(&mut role, &saved.population, index)?;
+            if crate::persist::view_digest(&role.view) != r.view_digest {
+                return Err(LeagueError::Persist(
+                    "a role's recomputed table is not the saved one",
+                ));
+            }
+            roles.push(role);
+        }
+        let expected = saved
+            .members
+            .iter()
+            .map(|&m| usize::try_from(m).unwrap_or(usize::MAX))
+            .collect::<Vec<_>>();
+        if expected.iter().any(|&m| m >= roles.len()) {
+            return Err(LeagueError::Persist("a member of an unknown role"));
+        }
+        Ok(Self {
+            inner: Arc::new(Mutex::new(Inner {
+                elo_k: saved.elo_k,
+                trueskill: saved.trueskill,
+                rate_population: saved.rate_population,
+                frozen: saved.frozen,
+                population: saved.population,
+                roles,
+                members: Vec::new(),
+                expected,
+                round: saved.round,
+                slots: Vec::new(),
+                dropped: 0,
+                last: None,
+            })),
+        })
+    }
+
+    /// The JSON export (ADR-0088 item 7.5): every role's ratings, counts
+    /// and snapshot count, and the population, for metrics.
+    ///
+    /// # Errors
+    ///
+    /// As [`SharedLeague::save`], and [`LeagueError::Persist`] for a
+    /// non-finite value.
+    pub fn export(&self) -> Result<String, LeagueError> {
+        crate::export::export(&self.saved()?)
+    }
+
+    /// Checks a restored pool's view against the view `role`'s pools hold:
+    /// the view before the last commit (the one-round lag), by digest.
+    ///
+    /// # Errors
+    ///
+    /// [`LeagueError::ViewMismatch`] if they differ.
+    pub fn check_view(&self, role: usize, view: &LeagueView) -> Result<(), LeagueError> {
+        let installed = self
+            .lock()?
+            .roles
+            .get(role)
+            .map(|r| r.installed)
+            .ok_or(LeagueError::InvalidConfig("unknown role"))?;
+        if crate::persist::view_digest(view) == installed {
+            Ok(())
+        } else {
+            Err(LeagueError::ViewMismatch { role })
+        }
     }
 }
 

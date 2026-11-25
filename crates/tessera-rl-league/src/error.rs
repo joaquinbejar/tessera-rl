@@ -29,6 +29,15 @@ pub enum LeagueError {
     /// The result rings could not be allocated.
     #[error("the result rings could not be allocated")]
     Allocation,
+    /// A league file could not be read or written (#384 head E2).
+    #[error("league persistence: {0}")]
+    Persist(&'static str),
+    /// A restored pool's view is not the restored league's (#384 head E2).
+    #[error("the pool's view of role {role} is not the league's")]
+    ViewMismatch {
+        /// The role.
+        role: usize,
+    },
     /// The engine refused the view built from this league.
     #[error("invalid league view: {0}")]
     View(#[from] tessera_rl_engine::league::LeagueViewError),
