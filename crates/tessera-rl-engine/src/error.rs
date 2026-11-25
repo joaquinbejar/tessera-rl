@@ -38,6 +38,9 @@ pub enum EngineError {
         /// The name exported twice.
         name: String,
     },
+    /// `PoolOptions::simd_level` names a level this CPU lacks (ADR-0071).
+    #[error(transparent)]
+    SimdLevel(#[from] tessera_rl_simd::LevelError),
     /// Invalid pool options.
     #[error("invalid pool option {option}: {reason}")]
     Options {
