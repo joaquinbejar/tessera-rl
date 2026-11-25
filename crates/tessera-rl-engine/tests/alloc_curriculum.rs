@@ -8,13 +8,18 @@
 //! slots, once per epoch. One test per binary: the counting allocator
 //! counts every thread while enabled.
 
-// The counting allocator needs both modules; this test uses only its
-// start, stop and report.
-#[expect(dead_code, reason = "the shared Counter environment is not used here")]
+// `allow`, not `expect`, and crate-level as in `alloc_rings.rs`: whether
+// rustc reports the shared modules' unused items as dead differs between
+// toolchains (on 1.95.0 the expectations were unfulfilled, #659), and
+// `clippy::allow_attributes` covers outer attributes only.
+#![allow(
+    dead_code,
+    reason = "the shared test modules: this binary uses their counting allocator only"
+)]
+
 mod common;
 
 #[path = "common/alloc_diag.rs"]
-#[expect(dead_code, reason = "only the counting allocator is used here")]
 mod alloc_diag;
 
 use core::num::{NonZeroU32, NonZeroUsize};
