@@ -123,7 +123,7 @@ jobs:
 
   # The Python suite on Windows (#358): GitHub-hosted windows-2025, the exact
   # wheel_job.sh call of wheels.yml's Windows leg (#350, same pinned rustup-init
-  # and uv sha256), which builds the release wheel without the onnx feature
+  # and uv installer hashes), which builds the release wheel without the onnx feature
   # and runs tests/python against it. Hard from its first run (REVIEW #358
   # design r1); POSIX-only tests skip themselves on Windows.
   windows-python:
