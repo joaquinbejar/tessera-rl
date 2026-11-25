@@ -104,12 +104,24 @@ def test_survival_hidden_heuristic_slots_keep_the_head_axis():
     for _ in range(30):
         env.step(random_actions(env, rng))
     assert env.action_masks.shape == (2 * 64, sum(NVEC))
-    # An out-of-range act on a learner reaches the engine: the scatter kept
-    # the head axis and placed the learners' rows.
+    # The scatter kept the head axis and its order.
+    assert_head_order_reaches_the_engine(env)
+    env.close()
+
+
+def assert_head_order_reaches_the_engine(env):
+    # Move 6 is out of range (5 choices) and act 6 is not (7): with the heads
+    # swapped or the head axis lost, this row would pass the range check.
     bad = np.zeros((env.num_agents, 2), dtype=np.int32)
-    bad[0, 1] = 7
-    with pytest.raises(t.ActionError):
+    bad[0] = (6, 0)
+    with pytest.raises(t.ActionError, match="out of range"):
         env.step(bad)
+
+
+def test_survival_flat_actions_keep_the_head_order():
+    env = TesseraPufferEnv(SURVIVAL, num_envs=2, log_interval=None, **CFG)
+    env.reset(seed=7)
+    assert_head_order_reaches_the_engine(env)
     env.close()
 
 
@@ -125,6 +137,24 @@ def test_survival_pipelined_halves_have_the_flat_mask_width():
     pipe.recv()
     pipe.close()
 
+
+def test_survival_pipelined_hidden_slots_masks_keep_both_heads():
+    groups = ["learner" if a % 2 == 0 else "heuristic" for a in range(128)]
+    pipe = pufferlib.vector.make(
+        make_puffer(SURVIVAL, num_envs=4, chunk_size=2, workers=1, mode="pipelined", log_interval=None,
+                    policy_map=groups, **CFG)  # fmt: skip
+    )
+    pipe.reset(seed=8)
+    for _ in range(4):
+        pipe.recv()
+        masks = pipe.action_masks
+        assert masks.shape == (pipe.agents_per_batch, sum(NVEC))
+        live = masks.any(axis=1)
+        # Stay (column 0) and none (column 5) are legal for every live agent.
+        assert live.any() and masks[live, 0].all() and masks[live, 5].all()
+        pipe.send(np.zeros((pipe.agents_per_batch, 2), dtype=np.int32))
+    pipe.recv()
+    pipe.close()
 
 def test_heads_admission_independent_only_naming_the_conditional_head():
     puffer._check_heads("one-head", (5,), [(0, [], 5)])
