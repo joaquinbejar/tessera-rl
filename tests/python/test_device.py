@@ -431,7 +431,7 @@ def test_device_buffers_bounded_across_partial_results():
     for _ in range(3):
         _assert_same(plain.step(_actions(plain)), env.step(_actions(env)))
         # Sync mode refuses reset(ids=...); reset_from is its partial writer.
-        for call in (lambda e: e.reset_from([3], [1]), lambda e: e.reset_from([0, 2], [0]), lambda e: e.reset_from([1], [1])):
+        for call in (lambda e: e.reset_from([3], [1]), lambda e: e.reset_from([0, 2], [0, 1]), lambda e: e.reset_from([1], [1])):
             p, d = call(plain), call(env)
             if d is not None:
                 _assert_same(p, d)
