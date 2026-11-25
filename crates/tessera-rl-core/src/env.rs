@@ -116,6 +116,12 @@ pub trait Environment: Sized + 'static {
     /// instance through [`Environment::step`] (ADR-0071).
     const LANE_STEP: Option<LaneHook<Self>> = None;
 
+    /// The lane kernels of a lane-wise state (ADR-0090 decision 4): set to
+    /// `Some(lane_env_hooks::<Self>())` by a [`LaneEnvironment`](crate::LaneEnvironment);
+    /// `None` (the default) steps every instance through
+    /// [`Environment::step`] on a gathered copy.
+    const LANE_ENV: Option<crate::lane_env::LaneEnvHooks<Self>> = None;
+
     /// The observation space for `cfg`.
     ///
     /// # Errors

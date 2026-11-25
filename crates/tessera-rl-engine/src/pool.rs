@@ -1783,6 +1783,13 @@ pub(crate) fn step_chunk_at<E: Environment, M: MaskProvider<E>>(
     if let Some(run) = ctx.heuristic {
         run(ctx, chunk, first);
     }
+    // Columns (ADR-0090 decision 4); observation transforms (ADR-0078) need
+    // the per-instance observe.
+    if let (Some(level), Some(hooks), true) = (ctx.lanes, E::LANE_ENV, E::State::LANES)
+        && chunk.outputs.transform.shared.is_none()
+    {
+        return step_columns::<E, M>(ctx, level, hooks, chunk);
+    }
     let StepCtx {
         cfg, limit, lanes, ..
     } = *ctx;
@@ -1822,7 +1829,7 @@ pub(crate) fn step_chunk_at<E: Environment, M: MaskProvider<E>>(
                             out.reward.get(l).copied().unwrap_or(0.0),
                             out.end.get(l).copied().flatten(),
                         );
-                        step_one::<E>(
+                        step_one::<E, E::State>(
                             cfg,
                             header,
                             state,
@@ -1837,6 +1844,7 @@ pub(crate) fn step_chunk_at<E: Environment, M: MaskProvider<E>>(
                                     step_out.end_episode(end);
                                 }
                             },
+                            update_acting::<E>,
                         );
                         after_step::<E, M>(ctx, header, state, outputs, i);
                     }
@@ -1872,6 +1880,136 @@ pub(crate) fn step_chunk_at<E: Environment, M: MaskProvider<E>>(
     }
 }
 
+/// The lane arm of a lane-wise state (ADR-0090 decision 4): ready full
+/// groups step and observe on their columns; every other instance takes the
+/// one-instance gather, the scalar step and a scatter.
+fn step_columns<E: Environment, M: MaskProvider<E>>(
+    ctx: &StepCtx<'_, E>,
+    level: Resolved,
+    hooks: tessera_rl_core::LaneEnvHooks<E>,
+    chunk: &mut Chunk<'_, E>,
+) {
+    let Rows {
+        headers,
+        states,
+        columns,
+        discrete,
+        continuous,
+        penalties,
+        penalized,
+        outputs,
+    } = chunk;
+    // As in `step_chunk_at`: one fill per buffer for the whole chunk.
+    clear_chunk(outputs, headers.len());
+    let StepCtx {
+        cfg,
+        authority,
+        limit,
+        auto_reset,
+        archive,
+        targets,
+        ..
+    } = *ctx;
+    let mut base = 0;
+    for hs in headers.chunks_mut(LANES) {
+        let ready = hs.len() == LANES && lane_ready::<E>(hs);
+        let stepped = ready
+            && match <Fields<E> as LaneTuple>::group(columns, base) {
+                Some(mut group) => {
+                    let mut actions = [0i32; LANES];
+                    if let Some(rows) = discrete.get(base..base + LANES) {
+                        actions.copy_from_slice(rows);
+                    }
+                    let mut out = LaneOut::default();
+                    (hooks.step)(cfg, level, &mut group, &actions, &mut out);
+                    observe_lanes::<E>(hooks, cfg, &group, outputs, base);
+                    for (l, header) in hs.iter_mut().enumerate() {
+                        let i = base + l;
+                        let (reward, end) = (
+                            out.reward.get(l).copied().unwrap_or(0.0),
+                            out.end.get(l).copied().flatten(),
+                        );
+                        // `Simultaneous` (checked by `lane_level`): the
+                        // acting update reads no state.
+                        step_one::<E, ()>(
+                            cfg,
+                            header,
+                            &mut (),
+                            outputs,
+                            i,
+                            limit,
+                            &[],
+                            &[],
+                            |(), _, _, step_out| {
+                                step_out.set_reward(AgentSlot::FIRST, reward);
+                                if let Some(end) = end {
+                                    step_out.end_episode(end);
+                                }
+                            },
+                            |_, _, ()| {},
+                        );
+                    }
+                    true
+                }
+                None => false,
+            };
+        for (l, header) in hs.iter_mut().enumerate() {
+            let i = base + l;
+            if !stepped {
+                with_state::<E, _>(states, columns, i, |state| {
+                    scalar_one::<E, M>(
+                        ctx, header, state, discrete, continuous, penalties, penalized, outputs, i,
+                    );
+                });
+            } else if auto_reset == AutoReset::SameStep && header.engine().pending_reset.get() {
+                // Observed on the columns above; only the same-step
+                // reset of `after_step` is left, on a gathered copy.
+                save_terminal(outputs, i);
+                with_state::<E, _>(states, columns, i, |state| {
+                    let target = targets.and_then(|t| t.get(outputs.base + i));
+                    reset_one::<E>(cfg, authority, archive, target, header, state, None, None);
+                    write_agent_masks(outputs, i, header);
+                    observe_instance::<E, M>(cfg, authority, header, state, outputs, i);
+                });
+            }
+        }
+        base += hs.len();
+    }
+}
+
+/// The observations of the group of [`LANES`] instances from `base`, written
+/// by the environment's lane observe on its columns into their zeroed rows
+/// (ADR-0090 decision 4; masks and transforms are excluded by eligibility).
+fn observe_lanes<E: Environment>(
+    hooks: tessera_rl_core::LaneEnvHooks<E>,
+    cfg: &E::Config,
+    group: &tessera_rl_core::LaneGroup<'_, E>,
+    outputs: &mut OutputsView<'_>,
+    base: usize,
+) {
+    let mut leaves: [&mut [u8]; MAX_LEAVES] = Default::default();
+    let mut used = 0;
+    for ((buf, &bytes), view) in outputs
+        .observations
+        .iter_mut()
+        .zip(outputs.leaf_bytes.iter())
+        .zip(leaves.iter_mut())
+    {
+        // One agent per instance: `bytes` per row.
+        let (Some(start), Some(end)) = (base.checked_mul(bytes), (base + LANES).checked_mul(bytes))
+        else {
+            return;
+        };
+        if let Some(rows) = buf.get_mut(start..end) {
+            *view = rows;
+        }
+        used += 1;
+    }
+    if let Some(leaves) = leaves.get_mut(..used) {
+        (hooks.observe)(cfg, group, leaves);
+    }
+}
+
 /// Whether a full group may take the lane path: no instance pending reset
 /// and every agent alive (ADR-0071 decision 3; the shape conditions were
 /// checked at construction).
@@ -1895,8 +2033,14 @@ fn lane_level<E: Environment, M: MaskProvider<E>>(
         Some(level) => Resolved::force(level)?,
         None => Resolved::best(),
     };
-    let eligible = E::LANE_STEP.is_some()
-        && !E::State::LANES
+    // Rows take a `LaneStep`; columns take a `LaneEnvironment` (ADR-0090
+    // decision 4).
+    let hook = if E::State::LANES {
+        E::LANE_ENV.is_some()
+    } else {
+        E::LANE_STEP.is_some()
+    };
+    let eligible = hook
         && !E::READS_ADAPTIVE
         && E::MAX_AGENTS == 1
         && E::TURNS == TurnStructure::Simultaneous
@@ -2003,7 +2147,7 @@ fn scalar_one<E: Environment, M: MaskProvider<E>>(
     let agents = i * E::MAX_AGENTS..(i + 1) * E::MAX_AGENTS;
     let penalty = penalties.get(agents.clone()).unwrap_or(&[]);
     let marked = penalized.get(agents).unwrap_or(&[]);
-    step_one::<E>(
+    step_one::<E, E::State>(
         cfg,
         header,
         state,
@@ -2016,6 +2160,7 @@ fn scalar_one<E: Environment, M: MaskProvider<E>>(
             let mut rng = StepRng::new(authority, identity, StreamId::DYNAMICS);
             E::step_with(cfg, adaptive, state, &view, &mut rng, out);
         },
+        update_acting::<E>,
     );
     after_step::<E, M>(ctx, header, state, outputs, i);
 }
@@ -2591,16 +2736,17 @@ fn update_acting<E: Environment>(cfg: &E::Config, header: &mut E::Header, state:
     clippy::too_many_arguments,
     reason = "one instance's step, split out of the loop"
 )]
-fn step_one<E: Environment>(
+fn step_one<E: Environment, S>(
     cfg: &E::Config,
     header: &mut E::Header,
-    state: &mut E::State,
+    state: &mut S,
     outputs: &mut OutputsView<'_>,
     i: usize,
     limit: Option<u32>,
     penalties: &[f32],
     penalized: &[Bool8],
-    kernel: impl FnOnce(&mut E::State, &tessera_rl_core::Adaptive<E>, &RngIdentity, &mut StepOut<'_>),
+    kernel: impl FnOnce(&mut S, &tessera_rl_core::Adaptive<E>, &RngIdentity, &mut StepOut<'_>),
+    acting: fn(&E::Config, &mut E::Header, &S),
 ) {
     let a = E::MAX_AGENTS;
     let range = i * a..(i + 1) * a;
@@ -2716,7 +2862,7 @@ fn step_one<E: Environment>(
             }
         }
     }
-    update_acting::<E>(cfg, header, state);
+    acting(cfg, header, state);
     if let Some(end) = end {
         finish_episode(header, outputs, i, end, t, total);
     }

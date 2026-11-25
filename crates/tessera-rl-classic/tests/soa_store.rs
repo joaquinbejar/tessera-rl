@@ -26,9 +26,10 @@ use tessera_rl_core::Bool8;
 use tessera_rl_engine::replay::{Recorder, Replay, ReplayWriterOptions};
 use tessera_rl_engine::{
     ActionInput, AsyncOptions, AutoReset, DecodeLimits, DecodedRecord, EngineError, EnvPool,
-    Outputs, PipelinedOptions, PoolOptions, Reseed, SyncOptions,
+    Outputs, PipelinedOptions, PoolOptions, Reseed, SyncOptions, Transforms,
 };
 use tessera_rl_num::identity::Seed;
+use tessera_rl_simd::{Level, Resolved};
 
 #[derive(Debug, Clone, Copy)]
 struct Case {
@@ -38,6 +39,9 @@ struct Case {
     auto_reset: AutoReset,
     limit: Option<u32>,
     steps: u32,
+    /// The lane level of the lane-wise pool (ADR-0090 decision 4); `None`
+    /// takes the best one.
+    level: Option<Level>,
 }
 
 fn options(case: Case) -> PoolOptions {
@@ -45,6 +49,7 @@ fn options(case: Case) -> PoolOptions {
         chunk_size: NonZeroU32::new(case.chunk).unwrap(),
         max_episode_steps: case.limit.and_then(NonZeroU32::new),
         auto_reset: case.auto_reset,
+        simd_level: case.level,
         ..PoolOptions::new(NonZeroU32::new(case.n).unwrap(), Seed::new(29))
     }
 }
@@ -206,14 +211,19 @@ fn matrix(ns: &[u32], chunks: &[u32], workers: &[usize], steps: u32) {
             for &workers in workers {
                 for auto_reset in [AutoReset::NextStep, AutoReset::SameStep] {
                     for limit in [None, Some(40)] {
-                        differential(Case {
-                            n,
-                            chunk,
-                            workers,
-                            auto_reset,
-                            limit,
-                            steps,
-                        });
+                        // Every level this CPU has: each lane kernel must
+                        // match the reference (ADR-0090 4.8).
+                        for level in Resolved::available().map(Resolved::level) {
+                            differential(Case {
+                                n,
+                                chunk,
+                                workers,
+                                auto_reset,
+                                limit,
+                                steps,
+                                level: Some(level),
+                            });
+                        }
                     }
                 }
             }
@@ -248,6 +258,7 @@ fn test_soa_store_pipelined_matches_aos() {
                 auto_reset: AutoReset::SameStep,
                 limit: Some(30),
                 steps: 0,
+                level: None,
             };
             let mut p = EnvPool::<$env>::new(CartPoleConfig {}, options(case))
                 .unwrap()
@@ -299,6 +310,7 @@ fn test_soa_store_replay_files_are_identical_and_cross_replay() {
                 auto_reset: AutoReset::SameStep,
                 limit: Some(25),
                 steps: 0,
+                level: None,
             };
             let mut p = pool!($env, case);
             let options = ReplayWriterOptions {
@@ -357,6 +369,7 @@ fn test_soa_store_async_is_refused() {
         auto_reset: AutoReset::SameStep,
         limit: None,
         steps: 0,
+        level: None,
     };
     let p = pool!(SoaCartPole, case);
     let err = p
@@ -408,6 +421,7 @@ fn test_soa_store_state_is_gathered_by_value() {
         auto_reset: AutoReset::SameStep,
         limit: None,
         steps: 0,
+        level: None,
     };
     let mut soa = pool!(SoaCartPole, case);
     let _ = soa.reset_all(Reseed::Keep).unwrap();
@@ -433,4 +447,79 @@ fn test_soa_store_heuristic_slots_are_refused() {
     ));
     let plain = EnvPool::<CartPole>::new(CartPoleConfig {}, options).unwrap();
     assert!(plain.with_heuristic_slots(&[0]).is_ok());
+}
+
+#[test]
+fn test_soa_store_steps_full_groups_through_the_lane_kernels() {
+    // 16 instances, chunk 8: two full groups per step take step_lanes.
+    let before = soa_cartpole::LANE_STEPS.load(core::sync::atomic::Ordering::Relaxed);
+    let options = PoolOptions {
+        chunk_size: NonZeroU32::new(8).unwrap(),
+        ..PoolOptions::new(NonZeroU32::new(16).unwrap(), Seed::new(5))
+    };
+    let mut soa = EnvPool::<SoaCartPole>::new(CartPoleConfig {}, options).unwrap();
+    let _ = soa.reset_all(Reseed::Keep).unwrap();
+    let acts = vec![1i32; 16];
+    let _ = soa
+        .step(ActionInput {
+            discrete: &acts,
+            continuous: &[],
+        })
+        .unwrap();
+    let after = soa_cartpole::LANE_STEPS.load(core::sync::atomic::Ordering::Relaxed);
+    assert!(
+        after >= before + 2,
+        "lane groups stepped: {}",
+        after - before
+    );
+}
+
+#[test]
+fn test_soa_store_with_transforms_matches_aos() {
+    // Observation transforms take the per-instance observe (ADR-0090 4.4):
+    // the lane-wise pool with a normalization and a frame stack must match
+    // CartPole with the same transforms, byte for byte.
+    use tessera_rl_core::Environment;
+    use tessera_rl_core::space::Space;
+    let leaf = match CartPole::observation_space(&CartPoleConfig {}) {
+        Ok(Space::Dict(entries)) => entries.first().map(|e| e.0.clone()).unwrap_or_default(),
+        _ => String::new(),
+    };
+    let transforms = || {
+        Transforms::new()
+            .normalize(leaf.clone(), 5.0)
+            .frame_stack(leaf.clone(), 4)
+    };
+    for auto_reset in [AutoReset::NextStep, AutoReset::SameStep] {
+        let case = Case {
+            n: 32,
+            chunk: 8,
+            workers: 0,
+            auto_reset,
+            limit: Some(30),
+            steps: 0,
+            level: None,
+        };
+        let mut soa = pool!(SoaCartPole, case)
+            .with_transforms(transforms())
+            .unwrap();
+        let mut plain = pool!(CartPole, case).with_transforms(transforms()).unwrap();
+        let same = auto_reset == AutoReset::SameStep;
+        assert_eq!(
+            outputs(soa.reset_all(Reseed::Keep).unwrap(), same),
+            outputs(plain.reset_all(Reseed::Keep).unwrap(), same)
+        );
+        for t in 0..120 {
+            let acts: Vec<i32> = (0..32).map(|i| action(t, i)).collect();
+            let input = ActionInput {
+                discrete: &acts,
+                continuous: &[],
+            };
+            assert_eq!(
+                outputs(soa.step(input).unwrap(), same),
+                outputs(plain.step(input).unwrap(), same),
+                "{auto_reset:?} step {t}"
+            );
+        }
+    }
 }

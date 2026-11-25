@@ -6,17 +6,23 @@
 //! kernels without a lane step (`ScalarCartPole`, the erratum's baseline).
 //! Same-step auto-reset, steady state (300 settling steps), xorshift actions;
 //! N = 8192 (binding) and 1024 (reported), Inline and two pinned workers.
+//! `soa_<level>` is the same kernels on the column store of a lane-wise
+//! state (`SoaCartPole`, ADR-0090 6): it must beat `lane_<level>` by 1.1x
+//! and `scalar_step` by 1.2x in every binding cell.
 
 #![expect(clippy::unwrap_used, reason = "bench setup unwraps")]
 
 #[path = "support/scalar_cartpole.rs"]
 mod scalar_cartpole;
+#[path = "support/soa_cartpole.rs"]
+mod soa_cartpole;
 
 use core::num::{NonZeroU32, NonZeroUsize};
 use std::hint::black_box;
 
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use scalar_cartpole::ScalarCartPole;
+use soa_cartpole::SoaCartPole;
 use tessera_rl_classic::cartpole::{CartPole, CartPoleConfig};
 use tessera_rl_engine::{ActionInput, AutoReset, EnvPool, PoolOptions, Reseed, SyncOptions};
 use tessera_rl_num::identity::Seed;
@@ -96,6 +102,15 @@ fn bench(c: &mut Criterion) {
     for n in [8192u32, 1024] {
         let mut group = c.benchmark_group(format!("cartpole_lane_stop_{n}"));
         for workers in [0usize, 2] {
+            // ADR-0090 6: the same kernels on the column store (head 2).
+            let (mut soa, acts) = steady!(SoaCartPole, n, workers);
+            run!(
+                group,
+                BenchmarkId::new(format!("soa_{}", lanes.level()), format!("w{workers}")),
+                soa,
+                acts
+            );
+            drop(soa);
             let (mut lane, acts) = steady!(CartPole, n, workers);
             run!(
                 group,
