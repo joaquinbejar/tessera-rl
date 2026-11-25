@@ -26,7 +26,7 @@ use tessera_rl_core::Bool8;
 use tessera_rl_engine::replay::{Recorder, Replay, ReplayWriterOptions};
 use tessera_rl_engine::{
     ActionInput, AsyncOptions, AutoReset, DecodeLimits, DecodedRecord, EngineError, EnvPool,
-    Outputs, PipelinedOptions, PoolOptions, Reseed, SyncOptions,
+    Outputs, PipelinedOptions, PoolOptions, Reseed, SyncOptions, Transforms,
 };
 use tessera_rl_num::identity::Seed;
 use tessera_rl_simd::{Level, Resolved};
@@ -467,5 +467,59 @@ fn test_soa_store_steps_full_groups_through_the_lane_kernels() {
         })
         .unwrap();
     let after = soa_cartpole::LANE_STEPS.load(core::sync::atomic::Ordering::Relaxed);
-    assert!(after >= before + 2, "lane groups stepped: {}", after - before);
+    assert!(
+        after >= before + 2,
+        "lane groups stepped: {}",
+        after - before
+    );
+}
+
+#[test]
+fn test_soa_store_with_transforms_matches_aos() {
+    // Observation transforms take the per-instance observe (ADR-0090 4.4):
+    // the lane-wise pool with a normalization and a frame stack must match
+    // CartPole with the same transforms, byte for byte.
+    use tessera_rl_core::Environment;
+    use tessera_rl_core::space::Space;
+    let leaf = match CartPole::observation_space(&CartPoleConfig {}) {
+        Ok(Space::Dict(entries)) => entries.first().map(|e| e.0.clone()).unwrap_or_default(),
+        _ => String::new(),
+    };
+    let transforms = || {
+        Transforms::new()
+            .normalize(leaf.clone(), 5.0)
+            .frame_stack(leaf.clone(), 4)
+    };
+    for auto_reset in [AutoReset::NextStep, AutoReset::SameStep] {
+        let case = Case {
+            n: 32,
+            chunk: 8,
+            workers: 0,
+            auto_reset,
+            limit: Some(30),
+            steps: 0,
+            level: None,
+        };
+        let mut soa = pool!(SoaCartPole, case)
+            .with_transforms(transforms())
+            .unwrap();
+        let mut plain = pool!(CartPole, case).with_transforms(transforms()).unwrap();
+        let same = auto_reset == AutoReset::SameStep;
+        assert_eq!(
+            outputs(soa.reset_all(Reseed::Keep).unwrap(), same),
+            outputs(plain.reset_all(Reseed::Keep).unwrap(), same)
+        );
+        for t in 0..120 {
+            let acts: Vec<i32> = (0..32).map(|i| action(t, i)).collect();
+            let input = ActionInput {
+                discrete: &acts,
+                continuous: &[],
+            };
+            assert_eq!(
+                outputs(soa.step(input).unwrap(), same),
+                outputs(plain.step(input).unwrap(), same),
+                "{auto_reset:?} step {t}"
+            );
+        }
+    }
 }
