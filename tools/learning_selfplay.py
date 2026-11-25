@@ -20,10 +20,12 @@ Rollout rules (rev, REVIEW-design-r1, Q1):
   Every other seat's action row is zero (the engine does not read it).
 - One transition is stored per acting step with at least one legal action.
   The reward is shared, so the transition's reward is that step's team
-  reward (seat 0's reward, equal to every seat's). A step with no acting
-  seat, if any, adds its reward **undiscounted** to the last stored
-  transition of the episode (T3b's folding rule), and an episode that ends
-  on such a step marks that transition terminal.
+  reward (seat 0's reward, equal to every seat's). Folding rule
+  (rev, REVIEW-r1 (a)): a reward from a step where no seat acts is added,
+  **undiscounted**, to the **previous** stored transition of the same
+  episode, never to the next one, as in T3b; an episode that ends on such
+  a step marks that transition terminal. In Lanterns every live step has
+  exactly one actor, so the case does not arise there.
 - ``auto_reset="same_step"``: the step that ends an episode reports its
   rewards and flags, and its observation is already the next episode's
   first. Truncation is treated as an end with no bootstrap: Lanterns ends
