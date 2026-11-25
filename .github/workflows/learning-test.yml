@@ -43,6 +43,9 @@ jobs:
             artifact: learning-test-snake
           - env: paddleduel
             artifact: learning-test-paddleduel
+          # T1n (#530): the normalized T1 trainer, RL Zoo's MountainCar entry.
+          - env: mountaincar
+            artifact: learning-test-mountaincar
           # T3b (#370): the four that calibrated as learning; Leduc has no
           # gate (its heuristic does not beat uniform play).
           - env: connect4

@@ -51,7 +51,8 @@ hyper = {}
 # learning_normalized; the rest are SB3 PPO defaults (NormalizedHyper). No
 # deviation from the RL Zoo entry; the 1e6-step budget is pre-declared, with
 # one pilot and no tuning loop. A new protocol: no T1 calibration carries
-# over.
+# over. Calibrated on the nightly host (mountaincar.json, #530): median
+# -114.85 against -200 for random, so it has a nightly job.
 [mountaincar]
 env = "tessera/MountainCar-v1"
 tier = "T1n"
