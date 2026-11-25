@@ -203,6 +203,8 @@ class Env:
         self.mode: str = mode
         #: The last split-phase delivery this object handed out.
         self._delivered = 0
+        #: The last whole-pool call's terminal-observation buffers (#545).
+        self._last_terminal: list | None = None
         layout = native.layout()
         self.num_envs: int = layout["num_envs"]
         self.agents: int = layout["agents"]
@@ -441,6 +443,9 @@ class Env:
         # are borrowed views: valid only until the next call on this
         # environment, so a reader takes what it needs at once and drops it.
         self._last_out = out if rows is None else None
+        # Kept apart from `_last_out`, which an adapter may clear after
+        # reading it (#545): `terminal_observations` reads this.
+        self._last_terminal = out.get("terminal_observations") if rows is None else None
         if self.outputs == "borrowed":
             # Zero-copy, read-only arrays over the native views (the buffer
             # protocol carries dtype and shape).
@@ -471,6 +476,33 @@ class Env:
             acting=field("acting", np.bool_, (n, a)),
             slot_generations=field("slot_generations", "<u4", (n, a)),
         )
+
+    @property
+    def terminal_observations(self) -> dict[str, np.ndarray]:
+        """The final observations of the last whole-pool ``reset`` or ``step``,
+        before their same-step reset (#545): a dict of leaves shaped as
+        ``Step.observations``, ``(num_envs, agents, ...)``. Rows of instances
+        that did not end in that call are zero.
+
+        Only with ``auto_reset="same_step"`` and in Sync mode: otherwise, before
+        the first call, and after a call on a subset (a Pipelined half, an Async
+        batch), ``ArgumentError``. In ``borrowed`` mode the arrays are read-only
+        views with the borrow window of ``Step``'s (``is_stale`` applies); in
+        ``owned`` mode each read is a fresh copy."""
+        bufs = self._last_terminal
+        if self.mode != "sync" or bufs is None:
+            raise _native.ArgumentError(
+                "terminal_observations needs a whole-pool reset or step in Sync mode first"
+            )
+        if not bufs:
+            raise _native.ArgumentError('terminal_observations needs auto_reset="same_step"')
+        n, a = self.num_envs, self.agents
+        if self.outputs == "borrowed":
+            return {name: np.asarray(v) for (name, _, _), v in zip(self._leaves, bufs, strict=True)}
+        return {
+            name: np.array(np.frombuffer(buf, dtype=dtype).reshape((n, a, *shape)))
+            for (name, dtype, shape), buf in zip(self._leaves, bufs, strict=True)
+        }
 
     def snapshot(self, index: int) -> bytes:
         """The canonical record of instance ``index``; in Async mode an opaque
