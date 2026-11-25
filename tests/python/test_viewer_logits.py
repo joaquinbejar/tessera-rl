@@ -299,3 +299,21 @@ def test_viewer_logits_watch_rejects_non_callable():
             viewer.watch(env, logits="x.npz")
     finally:
         env.close()
+
+
+def test_viewer_logits_oversized_entry_refused_before_read(tmp_path, served_with, monkeypatch):
+    path = tmp_path / "run.trpl"
+    record(path)
+    monkeypatch.setattr(vl, "MAX_LOGITS_BYTES", 16)
+    v = served_with(path)
+    note = api(v, "/meta")["logits"]["note"]
+    assert "logits.npy declares" in note and "16-byte cap" in note
+    assert "logits" not in api(v, "/step", i=1, instance=0)
+
+
+def test_viewer_logits_oversized_small_entry_refused(tmp_path, served_with, monkeypatch):
+    path = tmp_path / "run.trpl"
+    record(path)
+    monkeypatch.setattr(vl, "MAX_SMALL_ENTRY_BYTES", 8)
+    v = served_with(path)
+    assert "over the 8-byte cap" in api(v, "/meta")["logits"]["note"]

@@ -3,9 +3,9 @@
 a replay, and the per-agent, per-head payload the Viewer serves.
 
 The side file is ``<replay>.logits.npz`` (NumPy's zip format, read with
-``allow_pickle=False``). It is an optional, Python-side sidecar outside the
-1.x stability promise (ADR-0094): its integer ``format_version`` entry is
-``1``, and a newer (or any other) value is refused. It never changes the
+``allow_pickle=False``). It is an optional, Python-side sidecar and
+experimental: it may change in any release. Its integer ``format_version``
+entry is ``1``, and a newer (or any other) value is refused. It never changes the
 replay file. It is bound to one replay by that file's sha256: a side file
 whose hash does not match is ignored, and the Viewer says why in ``/meta``.
 
@@ -18,6 +18,7 @@ from __future__ import annotations
 import contextlib
 import hashlib
 import os
+import zipfile
 
 import numpy as np
 
@@ -27,6 +28,11 @@ __all__ = ["FORMAT_VERSION", "LogitsLog", "load", "logits_log", "payload", "side
 
 #: The side file's format version; any other value is refused.
 FORMAT_VERSION = 1
+#: The largest uncompressed ``logits.npy`` entry a side file may declare
+#: (bytes); larger is refused before anything is read. 1 GiB.
+MAX_LOGITS_BYTES = 1 << 30
+#: The largest uncompressed size of every other entry (bytes).
+MAX_SMALL_ENTRY_BYTES = 1 << 20
 #: Entries a side file holds, and nothing else.
 _KEYS = frozenset({"format_version", "replay_sha256", "shape", "ordinals", "logits"})
 
@@ -151,7 +157,18 @@ def load(side, replay_path, env, step_count: int) -> dict[int, np.ndarray]:
         raise Refused(f"not a readable .npz file ({type(e).__name__})") from None
 
 
+def _check_sizes(side) -> None:
+    """Refuses entries whose declared uncompressed size is over the caps,
+    before NumPy reads any of them."""
+    with zipfile.ZipFile(os.fspath(side)) as z:
+        for info in z.infolist():
+            cap = MAX_LOGITS_BYTES if info.filename == "logits.npy" else MAX_SMALL_ENTRY_BYTES
+            if info.file_size > cap:
+                raise Refused(f"entry {info.filename} declares {info.file_size} bytes, over the {cap}-byte cap")
+
+
 def _load(side, replay_path, env, step_count: int) -> dict[int, np.ndarray]:
+    _check_sizes(side)
     with np.load(os.fspath(side), allow_pickle=False) as data:
         keys = set(data.files)
         if keys != _KEYS:

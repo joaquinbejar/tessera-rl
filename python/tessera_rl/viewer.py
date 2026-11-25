@@ -3,6 +3,9 @@
 steps through a replay file, drawing each instance's scene and showing its
 rewards, flags, masks and observations.
 
+**Experimental**: the module, its endpoints and the logits side file
+(``<replay>.logits.npz``) may change in any release.
+
 The backend is Python's standard library (``http.server``); the front end is
 vendored HTML, CSS and JavaScript drawing on a Canvas 2D context, with no
 build step and no external requests. This module is not imported by
