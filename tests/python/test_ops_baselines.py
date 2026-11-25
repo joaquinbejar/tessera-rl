@@ -52,3 +52,25 @@ def test_ops_baselines_nearest_matches_the_vrp_heuristic(vehicles):
 def test_ops_baselines_round_sqrt_is_exact():
     for v in range(5000):
         assert ob.round_sqrt(v) == round(v**0.5)
+
+
+def _jobs_obs(rows):
+    """A JobShop observation with the given per-job (next duration, work
+    left) and the other features 0."""
+    jobs = np.zeros((len(rows), 5), dtype=np.int32)
+    for j, (duration, work) in enumerate(rows):
+        jobs[j, 1], jobs[j, 2] = duration, work
+    return {"jobs": jobs, "machines": np.zeros((2, 2), dtype=np.int32)}
+
+
+def test_ops_baselines_mwkr_on_the_hand_built_states_of_the_rust_test():
+    """The states of tests/jobshop.rs's MWKR test, as observations: the same
+    picks (the JobShop gate's bar comes from this Python rule)."""
+    # Work left 6, 7 and 4: job 1.
+    assert ob.mwkr(_jobs_obs([(5, 6), (3, 7), (2, 4)]), [True, True, True]) == 1
+    # Job 1 ran its first operation (4 left): job 0 (6 left).
+    assert ob.mwkr(_jobs_obs([(5, 6), (4, 4), (2, 4)]), [True, True, True]) == 0
+    # Jobs 0 and 2 tie at 5 left, job 1 done: the lowest index, job 0.
+    assert ob.mwkr(_jobs_obs([(4, 5), (0, 0), (1, 5)]), [True, False, True]) == 0
+    # SPT on the first state: the shortest next operation, job 2.
+    assert ob.spt(_jobs_obs([(5, 6), (3, 7), (2, 4)]), [True, True, True]) == 2

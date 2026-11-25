@@ -42,10 +42,10 @@
     140
   ],
   "threshold_rule": "p5",
-  "threshold": -1237.35,
-  "median": -1203.6750000000002,
-  "min": -1238.4,
-  "max": -1165.9,
+  "threshold": -1241.25,
+  "median": -1212.125,
+  "min": -1252.0,
+  "max": -1170.6,
   "setup": {
     "env": "tessera/Vrp-v1",
     "total_steps": 500000,
@@ -53,7 +53,7 @@
     "fingerprint": "819aa599a66208b3a4a376decfcf28e7d972adf3722a7a7a3a71e2e5cf089c3d"
   },
   "environment": {
-    "git": "0cedf91ac8983a303bb42aeeb454344c3ee398ad",
+    "git": "e555fed05a94981a60edc0085eb2f5c6d24ec8e9",
     "git_dirty": false,
     "python": "3.11.18",
     "os": "Linux-7.0.0-38-generic-x86_64-with-glibc2.43",
@@ -70,163 +70,163 @@
   "records": [
     {
       "seed": 101,
-      "score": -1213.15
+      "score": -1218.75
     },
     {
       "seed": 102,
-      "score": -1212.3
+      "score": -1208.05
     },
     {
       "seed": 103,
-      "score": -1207.95
+      "score": -1252.0
     },
     {
       "seed": 104,
-      "score": -1184.45
+      "score": -1194.05
     },
     {
       "seed": 105,
-      "score": -1222.5
+      "score": -1212.35
     },
     {
       "seed": 106,
-      "score": -1170.65
+      "score": -1230.1
     },
     {
       "seed": 107,
-      "score": -1167.3
+      "score": -1225.1
     },
     {
       "seed": 108,
-      "score": -1191.9
+      "score": -1218.35
     },
     {
       "seed": 109,
-      "score": -1234.35
+      "score": -1206.0
     },
     {
       "seed": 110,
-      "score": -1223.5
+      "score": -1214.65
     },
     {
       "seed": 111,
-      "score": -1233.65
+      "score": -1204.5
     },
     {
       "seed": 112,
-      "score": -1168.9
+      "score": -1210.35
     },
     {
       "seed": 113,
-      "score": -1169.7
+      "score": -1176.8
     },
     {
       "seed": 114,
-      "score": -1167.5
+      "score": -1217.2
     },
     {
       "seed": 115,
-      "score": -1221.6
+      "score": -1228.8
     },
     {
       "seed": 116,
-      "score": -1201.15
+      "score": -1204.65
     },
     {
       "seed": 117,
-      "score": -1217.95
+      "score": -1225.4
     },
     {
       "seed": 118,
-      "score": -1194.0
+      "score": -1191.8
     },
     {
       "seed": 119,
-      "score": -1200.5
+      "score": -1184.5
     },
     {
       "seed": 120,
-      "score": -1237.35
+      "score": -1232.65
     },
     {
       "seed": 121,
-      "score": -1171.6
+      "score": -1189.35
     },
     {
       "seed": 122,
-      "score": -1228.6
+      "score": -1216.95
     },
     {
       "seed": 123,
-      "score": -1202.75
+      "score": -1220.0
     },
     {
       "seed": 124,
-      "score": -1165.9
+      "score": -1170.6
     },
     {
       "seed": 125,
-      "score": -1187.85
+      "score": -1207.9
     },
     {
       "seed": 126,
-      "score": -1188.3
+      "score": -1214.1
     },
     {
       "seed": 127,
-      "score": -1192.1
+      "score": -1199.45
     },
     {
       "seed": 128,
-      "score": -1224.1
+      "score": -1209.95
     },
     {
       "seed": 129,
-      "score": -1213.4
+      "score": -1237.7
     },
     {
       "seed": 130,
-      "score": -1203.65
+      "score": -1241.25
     },
     {
       "seed": 131,
-      "score": -1202.35
+      "score": -1209.65
     },
     {
       "seed": 132,
-      "score": -1206.85
+      "score": -1202.45
     },
     {
       "seed": 133,
-      "score": -1200.5
+      "score": -1228.8
     },
     {
       "seed": 134,
-      "score": -1238.4
+      "score": -1191.45
     },
     {
       "seed": 135,
-      "score": -1175.6
+      "score": -1210.65
     },
     {
       "seed": 136,
-      "score": -1221.5
+      "score": -1197.75
     },
     {
       "seed": 137,
-      "score": -1203.7
+      "score": -1216.9
     },
     {
       "seed": 138,
-      "score": -1231.15
+      "score": -1218.8
     },
     {
       "seed": 139,
-      "score": -1208.45
+      "score": -1211.9
     },
     {
       "seed": 140,
-      "score": -1236.85
+      "score": -1229.35
     }
   ],
   "gate": {
@@ -236,10 +236,10 @@
   "learns": {
     "learns": true,
     "degenerate": false,
-    "gap": 365.1249999999998,
+    "gap": 356.67499999999995,
     "ci95": [
-      244.02124999999987,
-      496.2025
+      235.8487499999999,
+      488.5
     ],
     "required": 77.67500000000001,
     "random_mean": -1568.8
