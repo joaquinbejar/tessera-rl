@@ -3,6 +3,7 @@ from typing import Any, Callable
 
 WILSON_Z: float
 WAVE: int
+MAX_STEPS: int
 
 def wilson(k: float, n: int, z: float = ...) -> list[float]: ...
 def parse_population(text: str) -> list[tuple[int, Any]]: ...
@@ -20,5 +21,6 @@ def evaluate(
     opponent_slots: list[int] | None = None,
     external: dict[int, Callable[..., Any]] | None = None,
     names: dict[str, Any] | None = None,
+    max_steps: int = ...,
 ) -> dict[str, Any]: ...
 def main(argv: list[str] | None = None) -> int: ...

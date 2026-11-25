@@ -164,3 +164,11 @@ def test_eval_play_submits_the_external_rows():
     assert a.state_hash(0) == b.state_hash(0)
     a.close()
     b.close()
+
+
+def test_eval_episode_past_the_step_limit_is_an_error():
+    """An episode longer than max_steps raises instead of looping (rev, E4
+    r1 nit): a pool without auto-reset on an env with no step cap."""
+    with pytest.raises(RuntimeError, match="ran past 5 steps"):
+        tev.evaluate(DUEL, pol.stay, [(0, "heuristic")], seeds=SEEDS, episodes=1, pools=1,
+                     env_kwargs={"agents": 2, "max_episode_steps": 40}, max_steps=5)
