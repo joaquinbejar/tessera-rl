@@ -45,11 +45,13 @@ hyper = {}
 
 # Tier T1n (#530): at the T1 CleanRL defaults the pilot scored -200 on every
 # seed, the same as a random policy (#370). This is RL Zoo's working PPO
-# setup (hyperparams/ppo.yml at v2.9.2, MountainCar-v0: normalize, 16 envs,
-# n_steps 16, gae_lambda 0.98, 4 epochs, ent_coef 0, 1e6 steps; batch_size 64,
-# so 4 minibatches of 256) on the normalized trainer, learning_normalized;
-# the rest are SB3 PPO defaults (NormalizedHyper). A new protocol: no T1
-# calibration carries over.
+# setup (hyperparams/ppo.yml at v2.9.2, sha256 3eb424c8, MountainCar-v0:
+# normalize, 16 envs, n_steps 16, gae_lambda 0.98, 4 epochs, ent_coef 0, 1e6
+# steps; batch_size 64, so 4 minibatches of 256) on the normalized trainer,
+# learning_normalized; the rest are SB3 PPO defaults (NormalizedHyper). No
+# deviation from the RL Zoo entry; the 1e6-step budget is pre-declared, with
+# one pilot and no tuning loop. A new protocol: no T1 calibration carries
+# over.
 [mountaincar]
 env = "tessera/MountainCar-v1"
 tier = "T1n"

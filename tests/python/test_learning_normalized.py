@@ -115,6 +115,43 @@ def test_learning_t1n_calibrated_t1_fingerprints_still_match():
         assert lp.fingerprint(name) == cal["setup"]["fingerprint"], name
 
 
+def test_learning_t1n_evaluation_scores_raw_returns(monkeypatch):
+    """Reward normalization is training only: evaluation reports the
+    environment's own episode return. MountainCar pays -1 per step, so a raw
+    return is a whole number in [-200, -1]; a normalized one would not be.
+    Scaling training rewards a thousandfold leaves the evaluation unchanged."""
+    pytest.importorskip("torch")
+    import learning_normalized as ln
+    import learning_protocols as lp
+
+    a = lp.train_normalized("mountaincar", 3, 512, 2)
+    assert all(float(r).is_integer() and -200.0 <= r <= -1.0 for r in a["eval_returns"]), a["eval_returns"]
+    real = ln.ReturnNorm.__call__
+    monkeypatch.setattr(ln.ReturnNorm, "__call__", lambda self, r, d: real(self, r, d) * 1000.0)
+    b = lp.train_normalized("mountaincar", 3, 512, 2)
+    assert all(float(r).is_integer() and -200.0 <= r <= -1.0 for r in b["eval_returns"]), b["eval_returns"]
+
+
+def test_learning_t1n_returns_the_frozen_statistics_with_the_agent():
+    pytest.importorskip("torch")
+    import learning_continuous as lc
+    import learning_normalized as ln
+    import learning_protocols as lp
+    import numpy as np
+
+    r = lp.train_normalized("mountaincar", 3, 512, 1)
+    stats = r["obs_norm"]
+    assert set(stats) == {"mean", "var", "count", "clip"}
+    assert len(stats["mean"]) == len(stats["var"]) == 2
+    # One reset plus one update per step: 16 instances, 32 steps.
+    assert stats["count"] == pytest.approx(1e-4 + 16 * 33)
+    # The saved statistics reproduce the evaluation exactly.
+    norm = lc.RunningNorm(2, clip=stats["clip"])
+    norm.mean, norm.var, norm.count = np.array(stats["mean"]), np.array(stats["var"]), stats["count"]
+    norm.frozen = True
+    assert ln.evaluate("tessera/MountainCar-v1", r["agent"], norm, 1, 10_000) == r["eval_returns"]
+
+
 def test_learning_t1n_mountaincar_trains_and_is_deterministic():
     pytest.importorskip("torch")
     import learning_protocols as lp

@@ -19,6 +19,16 @@ module and only the sources it imports (``IMPORTED``).
   normalized final observation (``bootstrap_rewards``, as tier T2).
 - The observation space must be a flat ``Box``: no flattening (T1's
   ``_FlatVector``) is in this path.
+- Determinism: the running statistics are float64, updated once per step
+  over the instances in index order, so one seed gives the same scores twice.
+- The trained parameters and the frozen observation statistics (mean,
+  variance, count) are returned as ``agent`` and ``obs_norm``;
+  ``learning_test`` saves them beside the score file, so a re-evaluation
+  reproduces the frozen normalizer exactly.
+
+Coupling: ``RunningNorm`` and ``bootstrap_rewards`` live in
+``learning_continuous``, which tier T2 (Pendulum) hashes whole. A later edit
+to either moves both the T1n and the T2 fingerprints.
 """
 
 from __future__ import annotations
@@ -217,6 +227,8 @@ def train(env_id: str, seed: int, h: NormalizedHyper, eval_episodes: int, eval_s
         "eval_mean": float(np.mean(evaluation)),
         "curve_mean": _curve_mean(curve),
         "curve": curve,
+        "agent": agent,
+        "obs_norm": {"mean": norm.mean.tolist(), "var": norm.var.tolist(), "count": norm.count, "clip": norm.clip},
     }
 
 
