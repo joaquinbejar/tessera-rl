@@ -79,7 +79,9 @@ jobs:
           # not rebuilt every night.
           cache="$RUNNER_TEMP/../nightly-bench-cache"
           mkdir -p "$cache"
-          for side in base head; do
+          # The head first: when base == head (the A/A first night) the head's
+          # -D warnings build is the one cached for that sha, not the base's.
+          for side in head base; do
             sha=$([ "$side" = base ] && echo "$base" || echo "$head")
             bin="$cache/$sha/tessera-rl-bench-runner"
             if [ ! -x "$bin" ]; then
@@ -89,9 +91,10 @@ jobs:
               # -D warnings for the head only: a warning in an accepted base
               # (built with today's toolchain) must not stop the night.
               flags=$([ "$side" = head ] && echo "-D warnings" || true)
-              (cd "$tree" && RUSTFLAGS="$flags" CARGO_TARGET_DIR="$cache/target" cargo build -q --release --locked -p tessera-rl-bench-runner)
+              # One target dir per side, so the flag switch rebuilds nothing.
+              (cd "$tree" && RUSTFLAGS="$flags" CARGO_TARGET_DIR="$cache/target-$side" cargo build -q --release --locked -p tessera-rl-bench-runner)
               mkdir -p "$cache/$sha"
-              cp "$cache/target/release/tessera-rl-bench-runner" "$bin"
+              cp "$cache/target-$side/release/tessera-rl-bench-runner" "$bin"
               git worktree remove --force "$tree"
             fi
             echo "${side}_runner=$bin" >> "$GITHUB_OUTPUT"
