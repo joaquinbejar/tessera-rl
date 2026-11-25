@@ -50,10 +50,10 @@
     "env": "tessera/Vrp-v1",
     "total_steps": 500000,
     "eval_episodes": 20,
-    "fingerprint": "819aa599a66208b3a4a376decfcf28e7d972adf3722a7a7a3a71e2e5cf089c3d"
+    "fingerprint": "a2589c49be199f6e9506b4b16e9d792b2251a78a7c488daf44fbf594c3dc5492"
   },
   "environment": {
-    "git": "e555fed05a94981a60edc0085eb2f5c6d24ec8e9",
+    "git": "36d1922b3dda959fd59b552cc918ba6e0f77b5b2",
     "git_dirty": false,
     "python": "3.11.18",
     "os": "Linux-7.0.0-38-generic-x86_64-with-glibc2.43",
