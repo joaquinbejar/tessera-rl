@@ -445,6 +445,81 @@ class OnnxEvaluator:
         self._provenance = types.MappingProxyType(native.attach_onnx(**kwargs))
 
 
+class OnnxOpponents:
+    """ONNX models that play a league's ONNX policies, for
+    ``tessera_rl.make(..., league=league, onnx_opponents=...)``.
+
+    A league names an ONNX policy by its content hash (the first 16 bytes of
+    the sha256 of the model file, 32 hex digits): ``("onnx", hash)``. Each
+    model in ``models`` is identified the same way; every ONNX policy of the
+    league must be served by one of them (``ArgumentError``, naming the
+    policy, at ``make``), and models no policy names are loaded and unused.
+    A model's one output ``actions`` (``int64``, ``[batch]`` or
+    ``[batch, 1]``) is the action of each row; discrete action spaces only.
+
+    ``library``, ``accept_telemetry`` and ``max_model_bytes`` are as for
+    ``OnnxEvaluator``: construction loads ONNX Runtime once per process and
+    refuses with ``OnnxError`` unless ``ORT_DISABLE_TELEMETRY=1`` is already
+    set, or ``accept_telemetry=True``.
+
+    Determinism: results with ONNX opponents are repeatable only in
+    ADR-0057's class: the same machine, the same library and model bytes,
+    one thread, and the same batch composition (``num_envs``, seeds and
+    league); never across platforms. ``provenance`` records what they
+    depend on, per content hash.
+    """
+
+    def __init__(
+        self,
+        models,
+        *,
+        library=None,
+        accept_telemetry: bool = False,
+        max_model_bytes: int | None = None,
+    ):
+        self._models = [str(Path(m)) for m in models]
+        if not self._models:
+            raise _native.ArgumentError("OnnxOpponents needs at least one model")
+        if any("\n" in m for m in self._models):
+            raise _native.ArgumentError("an ONNX model path cannot contain a newline")
+        self._accept = bool(accept_telemetry)
+        self._max = max_model_bytes
+        if library is None:
+            library = _default_library()
+        self._library = str(Path(library))
+        self._runtime = _native.onnx_load(
+            library=self._library, accept_telemetry=self._accept
+        )
+        provenance = {}
+        for model in self._models:
+            kwargs = {
+                "model": model,
+                "library": self._library,
+                "accept_telemetry": self._accept,
+            }
+            if self._max is not None:
+                kwargs["max_model_bytes"] = int(self._max)
+            p = dict(_native.onnx_model_provenance(**kwargs))
+            provenance[p.pop("content_hash")] = types.MappingProxyType(p)
+        self._provenance = provenance
+
+    @property
+    def provenance(self):
+        """Each model's provenance (as ``OnnxEvaluator.provenance``) by its
+        content hash: a read-only mapping."""
+        return types.MappingProxyType(dict(self._provenance))
+
+    def _native_kwargs(self) -> dict:
+        out = {
+            "onnx_models": "\n".join(self._models),
+            "onnx_library": self._library,
+            "onnx_accept_telemetry": self._accept,
+        }
+        if self._max is not None:
+            out["onnx_max_model_bytes"] = int(self._max)
+        return out
+
+
 def joint_log_prior(logits, nvec, parents=None, active=None, legal=None) -> np.ndarray:
     """The joint log-prior of a ``MultiDiscrete`` action.
 

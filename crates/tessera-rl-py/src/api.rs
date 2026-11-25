@@ -105,7 +105,7 @@ pub(crate) fn no_positional(g: Gil, args: Ref<'_>, name: &str) -> CResult<()> {
     }
 }
 
-const POOL_KEYS: [&str; 19] = [
+const POOL_KEYS: [&str; 23] = [
     "mode",
     "batch_size",
     "gather",
@@ -125,6 +125,10 @@ const POOL_KEYS: [&str; 19] = [
     "league",
     "role",
     "targets",
+    "onnx_models",
+    "onnx_library",
+    "onnx_accept_telemetry",
+    "onnx_max_model_bytes",
 ];
 
 /// The `outputs` mode: `"borrowed"` (the native default, ADR-0003) or
@@ -198,9 +202,38 @@ fn mode_args(g: Gil, kw: &Kwargs<'_>) -> CResult<(bool, Option<(usize, BatchOutp
     }
 }
 
+/// `onnx_models` (paths separated by newlines), `onnx_library`,
+/// `onnx_accept_telemetry` and `onnx_max_model_bytes`: the ONNX opponents
+/// `tessera_rl.make(..., onnx_opponents=)` passes (#619); all or none.
+fn onnx_args(g: Gil, kw: &Kwargs<'_>) -> CResult<Option<crate::policy::OnnxOpponentArgs>> {
+    let models = kw.string(g, "onnx_models")?;
+    let library = kw.string(g, "onnx_library")?;
+    let accept = kw.bool(g, "onnx_accept_telemetry")?;
+    let max = kw.u64(g, "onnx_max_model_bytes")?;
+    match (models, library) {
+        (None, None) if accept.is_none() && max.is_none() => Ok(None),
+        (Some(models), Some(library)) => Ok(Some(crate::policy::OnnxOpponentArgs {
+            models: models
+                .split('\n')
+                .filter(|m| !m.is_empty())
+                .map(std::path::PathBuf::from)
+                .collect(),
+            library: std::path::PathBuf::from(library),
+            accept_telemetry: accept.unwrap_or(false),
+            max_model_bytes: max,
+        })),
+        _ => Err(error(
+            g,
+            Kind::Argument,
+            "onnx_models and onnx_library go together".to_owned(),
+        )),
+    }
+}
+
 fn pool_args(g: Gil, kw: &Kwargs<'_>, default_limit: u32) -> CResult<PoolArgs> {
     let (pipelined, asynced) = mode_args(g, kw)?;
     Ok(PoolArgs {
+        onnx_opponents: onnx_args(g, kw)?,
         pipelined,
         asynced,
         num_envs: kw.u32(g, "num_envs")?.unwrap_or(1),

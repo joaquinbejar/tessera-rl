@@ -1084,6 +1084,7 @@ mod tests {
             privileged_state: false,
             targets: false,
             league: None,
+            onnx_opponents: None,
             pipelined,
             asynced,
         }

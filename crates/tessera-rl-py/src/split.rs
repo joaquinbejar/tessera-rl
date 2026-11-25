@@ -774,6 +774,7 @@ mod tests {
             privileged_state: false,
             targets: false,
             league: None,
+            onnx_opponents: None,
             pipelined: true,
             asynced: None,
         })
@@ -830,6 +831,7 @@ mod tests {
             privileged_state: false,
             targets: false,
             league: None,
+            onnx_opponents: None,
             pipelined: true,
             asynced: None,
         };
@@ -947,6 +949,7 @@ mod tests {
             privileged_state: false,
             targets: false,
             league: None,
+            onnx_opponents: None,
             pipelined: true,
             asynced: None,
         };

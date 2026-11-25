@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: MIT OR Apache-2.0
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from types import TracebackType
 from typing import Any, NamedTuple, TypeAlias, TypedDict
 
@@ -100,6 +100,8 @@ class Env:
     def canvas(self) -> tuple[int, int] | None: ...
     @property
     def state(self) -> dict[str, np.ndarray] | None: ...
+    @property
+    def onnx_provenance(self) -> Mapping[str, Mapping[str, Any]] | None: ...
     @property
     def assignment(self) -> np.ndarray | None: ...
     @property

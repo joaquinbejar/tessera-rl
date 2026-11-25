@@ -155,6 +155,24 @@ pub(super) const ONNX_LOAD: FunctionRow = FunctionRow::kw::<OnnxLoad>(
     c"onnx_load($module, *, library, accept_telemetry=False)\n--\n\nonnx_load(library=, accept_telemetry=False) -> dict",
 );
 
+/// `onnx_model_provenance(model=, library=, accept_telemetry=,
+/// max_model_bytes=) -> dict`: one ONNX opponent model's content hash and
+/// provenance (#619).
+struct OnnxModelProvenance;
+
+impl FunctionKw for OnnxModelProvenance {
+    fn call<'py>(g: Gil<'py>, args: Ref<'py>, kwargs: Option<Ref<'py>>) -> CResult<Mine<'py>> {
+        crate::api::no_positional(g, args, "onnx_model_provenance")?;
+        crate::onnx_api::onnx_model_provenance(g, kwargs)
+    }
+}
+
+/// The module-level ONNX opponent model provenance (#619).
+pub(super) const ONNX_MODEL_PROVENANCE: FunctionRow = FunctionRow::kw::<OnnxModelProvenance>(
+    c"onnx_model_provenance",
+    c"onnx_model_provenance($module, *, model, library, accept_telemetry=False, max_model_bytes=None)\n--\n\nonnx_model_provenance(model=, library=, accept_telemetry=False, max_model_bytes=None) -> dict",
+);
+
 /// The module-level constructor, for the module's function table.
 pub(super) const MAKER: FunctionRow =
     FunctionRow::kw::<MakeSearch>(c"make_search", c"make_search($module, *, env_id=None, capacity=None, batch=None, eviction=None, c_puct=None, fpu=None, virtual_loss=None, batch_size=None, simulations=None, noise_alpha=None, noise_epsilon=None, seed=None, root=None, gumbel_m=None, c_visit=None, c_scale=None, value=None, discount=None)\n--\n\nmake_search(**search_options) -> Search");

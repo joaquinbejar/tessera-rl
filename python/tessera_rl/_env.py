@@ -28,6 +28,7 @@ modify outputs, use ``outputs="owned"`` or copy first (``tensor.clone()``,
 from __future__ import annotations
 
 import operator
+import types
 import typing
 from typing import NamedTuple, TypedDict
 
@@ -747,6 +748,14 @@ class Env:
         return self._native.is_poisoned()
 
     @property
+    def onnx_provenance(self):
+        """The provenance of each ONNX opponent model (``make(...,
+        onnx_opponents=)``) by its content hash, a read-only mapping of
+        read-only mappings; ``None`` without ONNX opponents."""
+        p = getattr(self, "_onnx_provenance", None)
+        return None if p is None else types.MappingProxyType(dict(p))
+
+    @property
     def assignment(self) -> np.ndarray | None:
         """Each instance's league opponent, uint32
         ``(num_envs,)``: the population id its ``"opponent"`` slots play this
@@ -1071,6 +1080,16 @@ def make(env_id: str, num_envs: int = 1, seed: int = 0, outputs: str = "borrowed
     transformed observation. Host environments refuse it with
     ``CapabilityError``.
 
+    ``league`` (a ``tessera_rl.League``) and ``role`` give ``"opponent"``
+    slots their league; a league with ``("onnx", hash)`` policies needs
+    ``onnx_opponents`` (a ``tessera_rl.search.OnnxOpponents``) serving every
+    such hash (``ArgumentError`` naming the first that none serves; models
+    no policy names are unused), and a build without the ``onnx`` feature
+    refuses ``onnx_opponents`` (``CapabilityError``). Results with ONNX
+    opponents are repeatable only in ADR-0057's class: the same machine,
+    the same library and model bytes, the same batch composition; never
+    across platforms. ``Env.onnx_provenance`` records them.
+
     ``policy_map`` routes agent slots to policy groups: a list
     of group names, one per slot, or a dict from slot to name (other slots
     learners), each ``"learner"``, ``"external"`` (marked only: you still
@@ -1113,14 +1132,26 @@ def make(env_id: str, num_envs: int = 1, seed: int = 0, outputs: str = "borrowed
         "tessera/Survival-v1": _native.make_survival,
     }
     maker = makers.get(env_id)
+    opponents = kwargs.get("onnx_opponents")
     if maker is None:
+        if opponents is not None:
+            raise _native.CapabilityError("host environments have no in-engine league opponents (onnx_opponents=)")
         # A host environment of an installed third-party wheel (SPEC 14.4.1).
         from tessera_rl import _host
 
         return _host.make(env_id, makers, num_envs, seed, outputs, dict(kwargs))
     mode = str(kwargs.get("mode") or "sync")
     indexed = kwargs.get("gather") == "indexed"
-    env = Env(maker(**native_kwargs(num_envs=num_envs, seed=seed, outputs=outputs, **kwargs)), mode, indexed)
+    native = {k: v for k, v in kwargs.items() if k != "onnx_opponents"}
+    extra = {}
+    if opponents is not None:
+        from tessera_rl.search import OnnxOpponents
+
+        if not isinstance(opponents, OnnxOpponents):
+            raise TypeError(f"onnx_opponents must be a tessera_rl.search.OnnxOpponents, got {type(opponents).__name__}")
+        extra = opponents._native_kwargs()
+    env = Env(maker(**native_kwargs(num_envs=num_envs, seed=seed, outputs=outputs, **native), **extra), mode, indexed)
+    env._onnx_provenance = None if opponents is None else dict(opponents._provenance)
     #: What `tessera_rl.viewer.watch` needs to build a one-instance shadow
     #: pool of the same configuration: the id and the options that are not
     #: about execution.

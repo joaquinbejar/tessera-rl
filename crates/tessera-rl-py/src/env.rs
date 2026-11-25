@@ -1414,6 +1414,9 @@ pub(crate) struct PoolArgs {
     /// The league of `"opponent"` slots and the pool's role (ADR-0088
     /// section 10, #384 head E3).
     pub(crate) league: Option<(tessera_rl_league::SharedLeague, usize)>,
+    /// The ONNX models of the league's ONNX policies (#619), `None` for
+    /// none.
+    pub(crate) onnx_opponents: Option<crate::policy::OnnxOpponentArgs>,
     /// The privileged state buffer (ADR-0079 item 7): only for an
     /// environment that implements `PrivilegedState`, in Sync mode.
     pub(crate) privileged_state: bool,
@@ -2407,6 +2410,7 @@ mod tests {
             transforms: tessera_rl_engine::Transforms::new(),
             policy_map: None,
             league: None,
+            onnx_opponents: None,
             pipelined: false,
             asynced: None,
             privileged_state: false,
@@ -2509,6 +2513,7 @@ mod tests {
             transforms: tessera_rl_engine::Transforms::new(),
             policy_map: None,
             league: None,
+            onnx_opponents: None,
             privileged_state: false,
             targets: false,
             pipelined: false,
@@ -2532,6 +2537,7 @@ mod tests {
             transforms: tessera_rl_engine::Transforms::new(),
             policy_map: None,
             league: None,
+            onnx_opponents: None,
             privileged_state: false,
             targets: false,
             pipelined,
@@ -2762,6 +2768,7 @@ mod tests {
             transforms: tessera_rl_engine::Transforms::new(),
             policy_map: None,
             league: None,
+            onnx_opponents: None,
             privileged_state: false,
             targets: false,
             pipelined: false,

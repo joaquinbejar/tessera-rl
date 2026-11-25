@@ -161,6 +161,13 @@ py-test-onnx:
 	  rm -rf $(CURDIR)/target/onnx-test-home && mkdir -p $(CURDIR)/target/onnx-test-home && \
 	  HOME=$(ONNX_TEST_HOME) ORT_DISABLE_TELEMETRY=1 TESSERA_ONNX_TEST=1 \
 	  .venv/bin/python -m pytest -q -rA -p no:cacheprovider tests/python/test_onnx_evaluator.py; status=$$?; \
+	  HOME=$(ONNX_TEST_HOME) ORT_DISABLE_TELEMETRY=1 TESSERA_ONNX_TEST=1 \
+	  .venv/bin/python -m pytest -q -rA -p no:cacheprovider tests/python/test_onnx_league.py \
+	    > $(ONNX_TEST_HOME)/league.out 2>&1 || status=1; \
+	  cat $(ONNX_TEST_HOME)/league.out; \
+	  if grep -Eq '[0-9]+ skipped' $(ONNX_TEST_HOME)/league.out; then \
+	    echo "py-test-onnx: test_onnx_league.py must not skip (#619)"; status=1; \
+	  fi; \
 	fi; \
 	uv sync --locked --python 3.11 --reinstall-package tessera-rl || status=1; \
 	exit $$status

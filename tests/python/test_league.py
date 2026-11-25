@@ -137,10 +137,17 @@ def test_league_save_load_and_export_round_trip():
         tessera_rl.League.load(data[:-1])
 
 
-def test_league_onnx_entry_is_refused_by_make_naming_the_entry():
+def test_league_onnx_entry_without_onnx_opponents_is_refused_naming_the_entry():
     league = tessera_rl.League(POP + [("onnx", "07" * 16)], [{"matchmaking": "uniform"}])
-    with pytest.raises(tessera_rl.CapabilityError, match="league policy 2 is an ONNX opponent"):
+    with pytest.raises(tessera_rl.ArgumentError, match="league policy 2 is ONNX " + "07" * 16 + " and make has no onnx_opponents="):
         _pool(league)
+
+
+def test_league_errors_remapped_for_619_subclass_tessera_error():
+    # #619: league and opponent-policy errors now raise ConfigError and
+    # OnnxError; both stay TesseraError for existing handlers.
+    assert issubclass(tessera_rl.ConfigError, tessera_rl.TesseraError)
+    assert issubclass(tessera_rl.OnnxError, tessera_rl.TesseraError)
 
 
 @pytest.mark.parametrize(
