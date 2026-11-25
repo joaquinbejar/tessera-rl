@@ -39,12 +39,26 @@ def control(steps: int = 1) -> int:
     return total
 
 
+# One scratch array of scores per masks shape (#609): a fresh
+# masks-sized float64 array per step is above the allocator's mmap
+# threshold for large masks (Go9: 256 x 82 x 8 bytes), so the harness
+# itself made an mmap and munmap pair per array per step.
+_SCORES: dict[tuple[int, ...], np.ndarray] = {}
+
+
 def choose(rng, masks, shape, choices: int) -> np.ndarray:
-    """A seeded legal action per agent row; uniform without masks."""
+    """A seeded legal action per agent row; uniform without masks. With
+    masks, the same draws and the same actions as `argmax(random(shape) *
+    masks)`, written into a reused scratch array."""
     if masks is None:
         return rng.integers(0, choices, shape, dtype=np.int32)
-    scores = rng.random(np.asarray(masks).shape)
-    return np.argmax(scores * np.asarray(masks), axis=-1).astype(np.int32)
+    m = np.asarray(masks)
+    scores = _SCORES.get(m.shape)
+    if scores is None:
+        scores = _SCORES[m.shape] = np.empty(m.shape)
+    rng.random(out=scores)
+    np.multiply(scores, m, out=scores)
+    return np.argmax(scores, axis=-1).astype(np.int32)
 
 
 def _make(t, s: evidence.Scenario, manifest: dict):
