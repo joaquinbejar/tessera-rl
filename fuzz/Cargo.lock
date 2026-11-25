@@ -237,6 +237,7 @@ version = "0.3.0"
 dependencies = [
  "inventory",
  "tessera-rl-num",
+ "tessera-rl-simd",
  "thiserror",
  "tracing",
  "xxhash-rust",
