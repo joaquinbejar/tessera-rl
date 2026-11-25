@@ -50,6 +50,7 @@ the API is not stable, and any 0.x release may break it.
 ### Deprecated
 
 - `EnvAssets` (#418): assets are `Asset<T>` config fields with `AssetData` (ADR-0077), and nothing uses the trait. It stays exported, in the prelude too, until its removal in a later minor release.
+- `tessera_rl.pz`'s `agents="all"` and `agents="learner"` as the learner filter (#538): use `visible=`, a new keyword of `parallel_env`, `aec_env`, `TesseraParallelEnv` and `TesseraAECEnv` (`"all"` by default, or `"learner"` to hide heuristic slots, ADR-0079 item 5.2). `agents=` is now the environment's own agent count (Snake, GridKeyDoor, PaddleDuel, LimitOrderBook), so both can be set together; the old string spelling keeps working with a `TesseraDeprecationWarning` attributed to the caller, until its removal in 0.5.0. Passing `visible=` and a string `agents=` together is `ArgumentError`. `tools/lob_training.py` now passes `agents=8` and `visible="learner"`.
 
 ### Breaking
 

@@ -64,11 +64,11 @@ def test_pz_snake_agents_int_is_the_config_key(n):
         aec.close()
 
 
-def test_pz_snake_agents_str_is_the_adapter_option():
-    # A string is the adapter option: with no map every slot is a learner,
+def test_pz_snake_visible_is_the_adapter_option():
+    # `visible` is the adapter option: with no map every slot is a learner,
     # so "learner" and "all" show the same agents (the default count).
     default = pz.parallel_env(ID, seed=1, size=8, obs="state")
-    learner = pz.parallel_env(ID, seed=1, agents="learner", size=8, obs="state")
+    learner = pz.parallel_env(ID, seed=1, visible="learner", size=8, obs="state")
     try:
         assert learner.possible_agents == default.possible_agents
         _, infos = learner.reset(seed=1)

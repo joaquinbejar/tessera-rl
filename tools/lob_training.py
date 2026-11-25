@@ -10,7 +10,7 @@ Setup: one PettingZoo Parallel environment (``tessera_rl.pz``). Slot 0 is
 the learner. Slots 1 to 7 are ADR-0079 heuristic slots (#470): the engine
 plays the environment's own baseline mix there (``baseline_of(slot)``:
 market makers, noise and momentum traders, the design's section 5 mix),
-from each slot's information state. ``agents="learner"`` hides them, so the
+from each slot's information state. ``visible="learner"`` hides them, so the
 learner's dicts hold only ``agent_0``.
 
 Policy: an MLP over the learner's observation (every leaf flattened, each
@@ -86,10 +86,9 @@ def protocol() -> dict:
     return tomllib.loads(PROTOCOLS_FILE.read_text())["lob"]
 
 
-#: The trading agents. It must equal ``LobConfig``'s default (8): with
-#: ``agents="learner"``, ``pz.parallel_env``'s ``agents`` argument is the
-#: learner filter, so the environment's own ``agents`` key cannot be passed
-#: alongside it, and the pool runs the default count.
+#: The trading agents, passed as the environment's ``agents`` key next to
+#: ``visible="learner"`` (#538). The protocol's opponents map is built for this
+#: count, so a protocol file naming another one is refused.
 AGENTS = 8
 #: Slots 1 to 7 are in-engine heuristic opponents (ADR-0079, #470); a dict
 #: map leaves the other slots learners.
@@ -99,7 +98,7 @@ OPPONENTS = {s: "heuristic" for s in range(1, AGENTS)}
 def _config() -> dict:
     cfg = dict(protocol()["config"])
     if cfg.pop("agents", AGENTS) != AGENTS:
-        raise ValueError(f"the lob protocol runs LobConfig's default {AGENTS} agents (see AGENTS)")
+        raise ValueError(f"the lob protocol runs {AGENTS} agents (see AGENTS)")
     return cfg
 
 
@@ -108,7 +107,7 @@ def make_env(seed: int):
     engine."""
     from tessera_rl import pz  # noqa: PLC0415
 
-    return pz.parallel_env(ENV_ID, seed=seed, policy_map=OPPONENTS, agents="learner", **_config())
+    return pz.parallel_env(ENV_ID, seed=seed, policy_map=OPPONENTS, visible="learner", agents=AGENTS, **_config())
 
 
 def make_all_heuristic_env(seed: int):

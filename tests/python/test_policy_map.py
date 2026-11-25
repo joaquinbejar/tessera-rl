@@ -192,7 +192,7 @@ def test_pz_infos_carry_the_policy_group_and_learner_hides_heuristic_slots():
     obs, infos = env.reset()
     assert {infos[a]["policy_group"] for a in env.agents} == {"learner", "heuristic"}
     env.close()
-    env = pz.parallel_env(TAG, seed=1, agents="learner", policy_map=TAG_MAP, **TAG_CFG)
+    env = pz.parallel_env(TAG, seed=1, visible="learner", policy_map=TAG_MAP, **TAG_CFG)
     obs, infos = env.reset()
     assert env.possible_agents == ["agent_0", "agent_1"]
     assert set(obs) == {"agent_0", "agent_1"}
@@ -208,7 +208,7 @@ def test_pz_infos_carry_the_policy_group_and_learner_hides_heuristic_slots():
     with pytest.raises(_native.ArgumentError):
         pz.parallel_env(TAG, agents="heuristic")
     with pytest.raises(_native.CapabilityError):
-        pz.aec_env("tessera/Connect4-v1", agents="learner")
+        pz.aec_env("tessera/Connect4-v1", visible="learner")
 
 
 def test_gym_refuses_a_map_without_slot_0_a_learner():

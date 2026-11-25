@@ -27,7 +27,7 @@ _PACKAGE = os.path.dirname(os.path.abspath(__file__)) + os.sep
 
 
 class TesseraDeprecationWarning(FutureWarning):
-    """A deprecated environment id was used (SPEC 16.1)."""
+    """A deprecated environment id (SPEC 16.1) or argument (#538) was used."""
 
 
 @functools.cache

@@ -26,7 +26,8 @@ class TesseraParallelEnv(ParallelEnv[str, Any, Any]):
         *,
         _pool: Any = None,
         render_mode: str | None = None,
-        agents: str | int = "all",
+        visible: str | None = None,
+        agents: Any = ...,
         **kwargs: Any,
     ) -> None: ...
     def observation_space(self, agent: str) -> spaces.Space[Any]: ...
@@ -55,7 +56,8 @@ class TesseraAECEnv(AECEnv[str, Any, Any]):
         *,
         _pool: Any = None,
         render_mode: str | None = None,
-        agents: str | int = "all",
+        visible: str | None = None,
+        agents: Any = ...,
         **kwargs: Any,
     ) -> None: ...
     def observation_space(self, agent: str) -> spaces.Space[Any]: ...
