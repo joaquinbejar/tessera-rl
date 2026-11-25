@@ -351,18 +351,14 @@ pub(crate) fn read_reset_from(
 impl super::reader::Replay<'_> {
     /// Checks the version 1 fields whose features are not implemented yet
     /// against a pool (asset entries are compared by `check_against`,
-    /// ADR-0077): a curriculum or an archive source (`Unsupported` until
-    /// ADR-0081 and ADR-0075 land; the policy map is checked by
-    /// `check_policy_map`), and the chunk size, which must
+    /// ADR-0077; the policy map is checked by `check_policy_map`, a
+    /// curriculum by `check_pool`): the chunk size, which must
     /// equal the pool's when the header records one (non-zero).
     pub(super) fn check_v1(&self, chunk_size: u32) -> Result<(), ReplayError> {
         // ADR-0079 item 6 (#347 stage B2): a recorded map is checked against
         // the pool by `check_policy_map`, not refused here.
-        if self.header.has_curriculum {
-            return Err(ReplayError::Unsupported {
-                feature: "curricula (ADR-0081)",
-            });
-        }
+        // A curriculum (ADR-0081 item 7) is checked by the sync replay
+        // (`check_pool`); async and host replays refuse it.
         // A league (ADR-0088 section 8) is checked by the sync replay
         // (`check_league`); async and host replays refuse it.
         if self.header.chunk_size != 0 && self.header.chunk_size != chunk_size {

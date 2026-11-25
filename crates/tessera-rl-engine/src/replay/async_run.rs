@@ -115,6 +115,12 @@ impl Replay<'_> {
         }
         let (cfg, options, heads) = pool.replay_parts();
         self.check_parts::<E, M>(cfg, options, heads)?;
+        // Async pools have no curriculum targets (ADR-0081 item 7).
+        if self.header.has_curriculum {
+            return Err(ReplayError::Unsupported {
+                feature: "curricula in async replay files (ADR-0081)",
+            });
+        }
         // Async pools have no league (ADR-0088, #384 head B).
         if self.header.has_league {
             return Err(ReplayError::Unsupported {

@@ -135,7 +135,7 @@ impl Persist for Level {
     const ENV_VERSION: u32 = 1;
 }
 
-/// Raises every slot's level when episodes ended.
+/// Raises each slot's level by one when episodes ended.
 struct Raise;
 
 impl Curriculum<Level> for Raise {
@@ -152,9 +152,12 @@ impl Curriculum<Level> for Raise {
         if report.episodes.count == 0 {
             return;
         }
-        let mut next = *targets.get(0).unwrap();
-        next.level += 1;
-        targets.set_all(next);
+        // Each slot from its own target, so slot 2's explicit one survives.
+        for id in 0..N {
+            let mut next = *targets.get(id).unwrap();
+            next.level += 1;
+            assert!(targets.set(id, next));
+        }
     }
 }
 

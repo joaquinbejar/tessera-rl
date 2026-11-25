@@ -697,10 +697,9 @@ where
         &pool.options,
         pool.action_heads(),
         pool.policy_map(),
-        pool.league.is_some(),
+        (pool.targets().is_some(), pool.league.is_some()),
         0,
         &source,
-        pool.targets().is_some(),
     )
 }
 
@@ -712,10 +711,9 @@ pub(super) fn header_from<E, M>(
     options: &crate::options::PoolOptions,
     (discrete, continuous): (usize, usize),
     policy_map: &crate::policy::PolicyMap,
-    has_league: bool,
+    (has_curriculum, has_league): (bool, bool),
     flags: u8,
     source: &super::ResetSourceRecord,
-    has_curriculum: bool,
 ) -> Result<Vec<u8>, ReplayError>
 where
     E: Persist,

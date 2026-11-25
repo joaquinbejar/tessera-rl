@@ -165,10 +165,9 @@ where
             pool_options,
             heads,
             pool.replay_policy_map(),
-            false,
+            (false, false),
             flags,
             &super::ResetSourceRecord::Fresh,
-            false,
         )?;
         let mut recorder = Self {
             pool,
