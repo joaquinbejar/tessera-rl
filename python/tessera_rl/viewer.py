@@ -66,9 +66,14 @@ import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlsplit
 
+from tessera_rl import _viewer_logits as _logits
 from tessera_rl import replay as _replay
 
-__all__ = ["Viewer", "serve", "show", "watch"]
+__all__ = ["LogitsLog", "Viewer", "logits_log", "serve", "show", "watch"]
+
+#: The side-file writer of policy logits (#683); see :func:`logits_log`.
+LogitsLog = _logits.LogitsLog
+logits_log = _logits.logits_log
 
 _HOST = "127.0.0.1"
 _LOG = logging.getLogger("tessera_rl.viewer")
@@ -109,9 +114,13 @@ class _Session:
 
     is_live = False
 
-    def __init__(self, path, env) -> None:
+    def __init__(self, path, env, logits="auto") -> None:
         self.path = os.fspath(path)
         self.env = env
+        self.heads = _logits.heads_of(env)
+        self.width = _logits.width_of(env)
+        #: The step ordinal of each ``step`` call's event (#683).
+        self.ordinal_of: dict[int, int] = {}
         self.lock = threading.Lock()
         self.num_envs = int(env.num_envs)
         self.agents = int(env.agents)
@@ -128,6 +137,7 @@ class _Session:
         while self._advance():
             pass
         self.calls = len(self.events)
+        self._logits_init(logits)
         #: Per target position (calls applied, 1..calls): the keyframe a
         #: backward seek imports and the position it leaves the cursor at, or
         #: ``None`` to restart. Computed once, so a seek finds it in O(1).
@@ -155,7 +165,44 @@ class _Session:
             self.cursor.close()
         self.cursor = _replay.steps(self.path, self.env)
         self.keyframes = self.cursor.keyframes()
+        if not self.ordinal_of:
+            self.ordinal_of = {e: k for k, e in enumerate(self.cursor.step_events())}
         self.position = 0
+
+    def _logits_init(self, logits) -> None:
+        """The logits source: ``"auto"`` (the side file if present), a side
+        file path, a callable ``fn(call_index, instance)``, or ``None``. A
+        side file that cannot be served is ignored, and ``/meta`` says why."""
+        self.logits_fn = None
+        self.logits_by_ordinal: dict | None = None
+        self.logits_note: str | None = None
+        if logits is None:
+            return
+        if callable(logits):
+            self.logits_fn = logits
+            return
+        side = _logits.side_path(self.path) if logits == "auto" else os.fspath(logits)
+        if not os.path.exists(side):
+            if logits != "auto":
+                self.logits_note = "logits side file not found"
+            return
+        try:
+            self.logits_by_ordinal = _logits.load(side, self.path, self.env, len(self.ordinal_of))
+        except _logits.Refused as e:
+            self.logits_note = f"logits side file ignored: {e}"
+
+    def _logits_row(self, i: int, instance: int):
+        """``(agents, width)`` logits for call ``i``, an ``{"error": ...}``
+        dict, or ``None``."""
+        if self.logits_fn is not None:
+            return _call_logits(self.logits_fn, (i, instance))
+        if self.logits_by_ordinal is None:
+            return None
+        ordinal = self.ordinal_of.get(self.events[i])
+        if ordinal is None:
+            return None
+        arr = self.logits_by_ordinal.get(ordinal)
+        return None if arr is None else arr[instance]
 
     def _advance(self) -> bool:
         if self.cursor is None:
@@ -208,6 +255,7 @@ class _Session:
             "calls": self.calls,
             "calls_seen": len(self.events),
             "live": False,
+            "logits": _logits_meta(self),
         }
 
     def frame(self, i: int, instance: int) -> dict:
@@ -240,6 +288,7 @@ class _Session:
             "episode_truncated": bool(out.episode_truncated[k]),
             "masks": None if out.masks is None else out.masks[k].tolist(),
             "observations": leaves,
+            **_logits_field(self, self._logits_row(i, instance), None if out.masks is None else out.masks[k]),
         }
 
     def close(self) -> None:
@@ -255,7 +304,13 @@ class _LiveSession:
 
     is_live = True
 
-    def __init__(self, env) -> None:
+    def __init__(self, env, logits=None) -> None:
+        if logits is not None and not callable(logits):
+            raise ValueError("viewer.watch takes logits=fn(instance), a callable")
+        self.logits_fn = logits
+        self.logits_note: str | None = None
+        self.heads = _logits.heads_of(env)
+        self.width = _logits.width_of(env)
         env_id = getattr(env, "env_id", None)
         config = getattr(env, "_config", None)
         if env_id is None or config is None:
@@ -286,6 +341,7 @@ class _LiveSession:
             "num_envs": self.num_envs,
             "agents": self.agents,
             "live": True,
+            "logits": _logits_meta(self),
         }
 
     def live(self, instance: int) -> dict:
@@ -322,7 +378,8 @@ class _LiveSession:
     def _draw(self, instance: int, generation: int, record: bytes) -> dict:
         self.shadow.import_record(0, record)
         prims = None if self.canvas is None else [_prim(p) for p in self.shadow.scene(0)]
-        return {"generation": int(generation), "instance": instance, "prims": prims}
+        row = None if self.logits_fn is None else _call_logits(self.logits_fn, (instance,))
+        return {"generation": int(generation), "instance": instance, "prims": prims, **_logits_field(self, row, None)}
 
     def close(self) -> None:
         self.handle.close()
@@ -470,15 +527,15 @@ def _port(port) -> int:
 class Viewer:
     """A running Viewer server (see :func:`serve`)."""
 
-    def __init__(self, path, env, *, port: int = 0) -> None:
+    def __init__(self, path, env, *, port: int = 0, logits="auto") -> None:
         port = _port(port)
-        self._start(_Session(path, env), port)
+        self._start(_Session(path, env, logits), port)
 
     @classmethod
-    def _live(cls, env, port: int) -> Viewer:
+    def _live(cls, env, port: int, logits=None) -> Viewer:
         port = _port(port)
         viewer = cls.__new__(cls)
-        viewer._start(_LiveSession(env), port)
+        viewer._start(_LiveSession(env, logits), port)
         return viewer
 
     def _start(self, session: _Session | _LiveSession, port: int) -> None:
@@ -527,19 +584,26 @@ class Viewer:
         return f"<tessera_rl.viewer.Viewer port={self.address[1]}{' closed' if self._closed else ''}>"
 
 
-def serve(path, env, *, port: int = 0, open_browser: bool = False) -> Viewer:
+def serve(path, env, *, port: int = 0, open_browser: bool = False, logits="auto") -> Viewer:
     """Serves the replay file at ``path``, replayed into ``env``, on
     ``127.0.0.1`` (``port`` 0: a free port). ``env`` must be built as for
     :func:`tessera_rl.replay.run`. Returns the running :class:`Viewer`; its
     ``url`` carries the session token. With ``open_browser``, opens the URL
-    in the default browser."""
-    viewer = Viewer(path, env, port=port)
+    in the default browser.
+
+    ``logits`` (#683): ``"auto"`` shows the replay's side file
+    ``<path>.logits.npz`` (see :func:`logits_log`) if it exists and matches
+    the replay; a path names another side file; a callable
+    ``fn(call_index, instance)`` returns ``(agents, width)`` logits or
+    ``None``; ``None`` shows none. A side file that does not match is
+    ignored, and ``/meta`` says why."""
+    viewer = Viewer(path, env, port=port, logits=logits)
     if open_browser:
         webbrowser.open(viewer.url)
     return viewer
 
 
-def show(path, env, *, height: int = 600):
+def show(path, env, *, height: int = 600, logits="auto"):
     """In Jupyter: starts a Viewer (see :func:`serve`) and returns an
     ``IPython.display.IFrame`` of its page. The frame's ``viewer`` attribute
     is the :class:`Viewer`; close it when done."""
@@ -549,13 +613,13 @@ def show(path, env, *, height: int = 600):
         raise ImportError(
             "tessera_rl.viewer.show needs IPython (run it in Jupyter); use tessera_rl.viewer.serve outside it"
         ) from exc
-    viewer = serve(path, env)
+    viewer = serve(path, env, logits=logits)
     frame = IFrame(viewer.url, width="100%", height=int(height))
     frame.viewer = viewer
     return frame
 
 
-def watch(env, *, port: int = 0) -> Viewer:
+def watch(env, *, port: int = 0, logits=None) -> Viewer:
     """Serves a live view of the training ``env`` on
     ``127.0.0.1`` (``port`` 0: a free port), with the guards of
     :func:`serve`. ``env`` must come from :func:`tessera_rl.make` (the
@@ -564,5 +628,60 @@ def watch(env, *, port: int = 0) -> Viewer:
     usual, from any thread. The page polls ``/live`` every 250 ms; each poll
     waits at most 2 s for the pool to serve the shown instance at a batch
     boundary, then answers ``{"pending": true}``. Returns the running
-    :class:`Viewer`; :meth:`Viewer.close` closes the watch, not ``env``."""
-    return Viewer._live(env, port)
+    :class:`Viewer`; :meth:`Viewer.close` closes the watch, not ``env``.
+
+    ``logits`` (#683): a callable ``fn(instance)`` returning that
+    instance's latest ``(agents, width)`` logits, or ``None``. It is called
+    on the Viewer's request thread when the page polls, never from a
+    worker; an exception shows in the page's logits panel."""
+    return Viewer._live(env, port, logits)
+
+
+def _call_logits(fn, args):
+    """``fn(*args)`` as an ``(agents, width)`` array, ``None``, or an
+    ``{"error": ...}`` dict if it raises or returns something else."""
+    try:
+        row = fn(*args)
+    except Exception as e:  # shown in the panel; the handler keeps working
+        _LOG.warning("viewer logits callable failed: %s", type(e).__name__)
+        return {"error": f"{type(e).__name__}: {e}"}
+    return row
+
+
+def _logits_meta(session) -> dict:
+    if getattr(session, "logits_fn", None) is not None:
+        source = "callable"
+    elif getattr(session, "logits_by_ordinal", None) is not None:
+        source = "file"
+    else:
+        source = None
+    return {"source": source, "note": getattr(session, "logits_note", None)}
+
+
+def _logits_field(session, row, masks) -> dict:
+    """The ``"logits"`` entry of a ``/step`` or ``/live`` answer: absent
+    without a row; ``{"error": ...}`` for a failed or malformed one; else
+    one list of heads per agent (``_viewer_logits.payload``)."""
+    if row is None:
+        return {}
+    if isinstance(row, dict):
+        return {"logits": row}
+    import numpy as np
+
+    try:
+        arr = np.asarray(row, dtype=np.float64)
+    except (TypeError, ValueError):
+        return {"logits": {"error": "logits are not numeric"}}
+    agents = int(session.agents)
+    if arr.shape != (agents, session.width):
+        return {"logits": {"error": f"logits have shape {arr.shape}, expected {(agents, session.width)}"}}
+    mask_rows = None
+    if masks is not None:
+        m = np.asarray(masks)
+        if m.shape == (agents, session.width):
+            mask_rows = m
+    return {
+        "logits": [
+            _logits.payload(arr[a], None if mask_rows is None else mask_rows[a], session.heads) for a in range(agents)
+        ]
+    }

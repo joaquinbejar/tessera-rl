@@ -515,6 +515,11 @@ pub(crate) trait PoolOps: Send {
     fn replay_keyframes(&self) -> Result<Vec<u64>, BindError> {
         Err(sync_only("replay"))
     }
+    /// The event indices of the file's `step` calls, in order (#683: the
+    /// Viewer maps a call to the policy step it logged).
+    fn replay_step_events(&self) -> Result<Vec<u64>, BindError> {
+        Err(sync_only("replay"))
+    }
     /// Ends the stepped replay and drops the cursor: a verified summary if
     /// every event was applied, else one with `stopped_at` set.
     fn replay_finish(&mut self) -> Result<tessera_rl_engine::ReplaySummary, BindError> {
@@ -1336,6 +1341,25 @@ where
             cur,
         )?;
         Ok(replay.keyframes()?)
+    }
+
+    fn replay_step_events(&self) -> Result<Vec<u64>, BindError> {
+        use tessera_rl_engine::replay::Event;
+        let (bytes, cur) = self.cursor.as_ref().ok_or_else(|| {
+            BindError::Argument("replay_step_events: no replay in progress".to_owned())
+        })?;
+        let replay = tessera_rl_engine::Replay::reopen(
+            bytes,
+            tessera_rl_engine::DecodeLimits::default(),
+            cur,
+        )?;
+        let mut steps = Vec::new();
+        for event in replay.events() {
+            if let (index, Event::Step { .. }) = event? {
+                steps.push(index);
+            }
+        }
+        Ok(steps)
     }
 
     fn replay_finish(&mut self) -> Result<tessera_rl_engine::ReplaySummary, BindError> {

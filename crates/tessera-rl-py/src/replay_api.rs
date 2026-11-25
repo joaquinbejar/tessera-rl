@@ -151,6 +151,20 @@ pub(crate) fn replay_keyframes<'py>(g: Gil<'py>, inner: &Inner) -> CResult<Mine<
     )
 }
 
+/// `_replay_step_events() -> tuple[int, ...]`: the event indices of the
+/// file's `step` calls, in order (#683). A scan of the file, like
+/// `_replay_keyframes`.
+pub(crate) fn replay_step_events<'py>(g: Gil<'py>, inner: &Inner) -> CResult<Mine<'py>> {
+    let steps = inner.with(g, |ops| ops.replay_step_events().map_err(|e| to_py(g, e)))?;
+    capi::tuple(
+        g,
+        steps
+            .iter()
+            .map(|&k| capi::int_u64(g, k))
+            .collect::<CResult<Vec<_>>>()?,
+    )
+}
+
 /// `_replay_finish() -> tuple`: ends the stepped replay. The tuples of
 /// `_replay`, the `"ok"` one with a trailing `stopped_at` (`None` when every
 /// event was applied and checked, else the next event's index).

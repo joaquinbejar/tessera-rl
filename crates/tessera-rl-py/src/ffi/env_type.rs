@@ -116,6 +116,7 @@ varargs!(ReplayBeginM, crate::replay_api::replay_begin);
 varargs!(ReplayAdvanceM, crate::replay_api::replay_advance);
 varargs!(ReplaySeekM, crate::replay_api::replay_seek);
 noargs!(ReplayKeyframesM, crate::replay_api::replay_keyframes);
+noargs!(ReplayStepEventsM, crate::replay_api::replay_step_events);
 noargs!(ReplayFinishM, crate::replay_api::replay_finish);
 noargs!(WatchM, crate::watch_api::watch);
 
@@ -214,6 +215,10 @@ static METHODS: MethodTable<EnvBody> = MethodTable::new(&[
     MethodRow::noargs::<ReplayKeyframesM>(
         c"_replay_keyframes",
         c"_replay_keyframes($self, /)\n--\n\n_replay_keyframes() -> tuple[int, ...]: the keyframes _replay_seek accepts",
+    ),
+    MethodRow::noargs::<ReplayStepEventsM>(
+        c"_replay_step_events",
+        c"_replay_step_events($self, /)\n--\n\n_replay_step_events() -> tuple[int, ...]: the event indices of the file's step calls",
     ),
     MethodRow::noargs::<ReplayFinishM>(
         c"_replay_finish",
