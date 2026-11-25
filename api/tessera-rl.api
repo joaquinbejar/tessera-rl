@@ -400,6 +400,8 @@ const tessera_rl::classic::gather::MAX_ITEMS: usize
 const tessera_rl::classic::grid::ENV_ID: &str
 const tessera_rl::classic::grid::ENV_VERSION: u32
 const tessera_rl::classic::grid::layout::MAX_SIDE: u16
+const tessera_rl::classic::grid_lanes::ENV_ID: &str
+const tessera_rl::classic::grid_lanes::ENV_VERSION: u32
 const tessera_rl::classic::keydoor::ACTIONS: u32
 const tessera_rl::classic::keydoor::ENV_ID: &str
 const tessera_rl::classic::keydoor::ENV_VERSION: u32
@@ -697,6 +699,8 @@ const tessera_rl::world::survival::baseline::BRAVE: i32
 const tessera_rl::world::survival::baseline::HUNGRY: i32
 const tessera_rl::world::survival::baseline::THIRSTY: i32
 const tessera_rl::world::survival::map::CELL: usize
+enum tessera_rl::classic::GridOutcome
+enum tessera_rl::classic::grid_lanes::GridOutcome
 enum tessera_rl::core::AssetError
 enum tessera_rl::core::CanonicalDecodeError
 enum tessera_rl::core::ConfigDecodeError
@@ -821,6 +825,12 @@ field tessera_rl::classic::GatherState.steps: u16
 field tessera_rl::classic::GridConfig.layout: tessera_rl_core::asset::Asset<tessera_rl_classic::grid::layout::GridLayout>
 field tessera_rl::classic::GridConfig.max_steps: u16
 field tessera_rl::classic::GridConfig.size: u16
+field tessera_rl::classic::GridLanesState.col: tessera_rl_num::fx32::Fx32
+field tessera_rl::classic::GridLanesState.goal_col: i32
+field tessera_rl::classic::GridLanesState.goal_row: i32
+field tessera_rl::classic::GridLanesState.outcome: tessera_rl_classic::grid_lanes::GridOutcome
+field tessera_rl::classic::GridLanesState.row: tessera_rl_num::fx32::Fx32
+field tessera_rl::classic::GridLanesState.steps: u32
 field tessera_rl::classic::GridObs.pixels: tessera_rl_core::leaf::ObsLeaf<u8>
 field tessera_rl::classic::GridState.goal: [i16; 2]
 field tessera_rl::classic::GridState.out_of_bounds: tessera_rl_core::bool8::Bool8
@@ -915,6 +925,12 @@ field tessera_rl::classic::grid::GridState.out_of_bounds: tessera_rl_core::bool8
 field tessera_rl::classic::grid::GridState.pos: [tessera_rl_num::fx32::Fx32; 2]
 field tessera_rl::classic::grid::GridState.reached_goal: tessera_rl_core::bool8::Bool8
 field tessera_rl::classic::grid::GridState.steps: u16
+field tessera_rl::classic::grid_lanes::GridLanesState.col: tessera_rl_num::fx32::Fx32
+field tessera_rl::classic::grid_lanes::GridLanesState.goal_col: i32
+field tessera_rl::classic::grid_lanes::GridLanesState.goal_row: i32
+field tessera_rl::classic::grid_lanes::GridLanesState.outcome: tessera_rl_classic::grid_lanes::GridOutcome
+field tessera_rl::classic::grid_lanes::GridLanesState.row: tessera_rl_num::fx32::Fx32
+field tessera_rl::classic::grid_lanes::GridLanesState.steps: u32
 field tessera_rl::classic::keydoor::KeyDoorConfig.agents: u32
 field tessera_rl::classic::keydoor::KeyDoorConfig.size: u32
 field tessera_rl::classic::keydoor::KeyDoorObs.carrying: tessera_rl_core::leaf::ObsLeaf<u8>
@@ -2124,6 +2140,37 @@ impl tessera_rl::classic::GridConfig: impl tessera_rl_core::config_canonical::Ca
 impl tessera_rl::classic::GridConfig: impl tessera_rl_core::config_decode::ConfigDecode for tessera_rl_classic::grid::GridConfig
 impl tessera_rl::classic::GridConfig: impl tessera_rl_core::env::EnvConfig for tessera_rl_classic::grid::GridConfig
 impl tessera_rl::classic::GridConfig: impl tessera_rl_core::leaf::Observation<tessera_rl_classic::grid::GridConfig> for tessera_rl_classic::grid::GridObs
+impl tessera_rl::classic::GridLanes: impl core::clone::Clone for tessera_rl_classic::grid_lanes::GridLanes
+impl tessera_rl::classic::GridLanes: impl core::cmp::Eq for tessera_rl_classic::grid_lanes::GridLanes
+impl tessera_rl::classic::GridLanes: impl core::cmp::PartialEq for tessera_rl_classic::grid_lanes::GridLanes
+impl tessera_rl::classic::GridLanes: impl core::default::Default for tessera_rl_classic::grid_lanes::GridLanes
+impl tessera_rl::classic::GridLanes: impl core::fmt::Debug for tessera_rl_classic::grid_lanes::GridLanes
+impl tessera_rl::classic::GridLanes: impl core::marker::Copy for tessera_rl_classic::grid_lanes::GridLanes
+impl tessera_rl::classic::GridLanes: impl core::marker::Send for tessera_rl_classic::grid_lanes::GridLanes
+impl tessera_rl::classic::GridLanes: impl core::marker::StructuralPartialEq for tessera_rl_classic::grid_lanes::GridLanes
+impl tessera_rl::classic::GridLanes: impl core::marker::Sync for tessera_rl_classic::grid_lanes::GridLanes
+impl tessera_rl::classic::GridLanes: impl core::marker::Unpin for tessera_rl_classic::grid_lanes::GridLanes
+impl tessera_rl::classic::GridLanes: impl core::panic::unwind_safe::RefUnwindSafe for tessera_rl_classic::grid_lanes::GridLanes
+impl tessera_rl::classic::GridLanes: impl core::panic::unwind_safe::UnwindSafe for tessera_rl_classic::grid_lanes::GridLanes
+impl tessera_rl::classic::GridLanes: impl tessera_rl_core::env::Environment for tessera_rl_classic::grid_lanes::GridLanes
+impl tessera_rl::classic::GridLanes: impl tessera_rl_core::env::Heuristic for tessera_rl_classic::grid_lanes::GridLanes
+impl tessera_rl::classic::GridLanes: impl tessera_rl_core::env::Persist for tessera_rl_classic::grid_lanes::GridLanes
+impl tessera_rl::classic::GridLanes: impl tessera_rl_core::env::Validate for tessera_rl_classic::grid_lanes::GridLanes
+impl tessera_rl::classic::GridLanes: impl tessera_rl_core::lane_env::LaneEnvironment for tessera_rl_classic::grid_lanes::GridLanes
+impl tessera_rl::classic::GridLanesState: impl core::clone::Clone for tessera_rl_classic::grid_lanes::GridLanesState
+impl tessera_rl::classic::GridLanesState: impl core::cmp::PartialEq for tessera_rl_classic::grid_lanes::GridLanesState
+impl tessera_rl::classic::GridLanesState: impl core::default::Default for tessera_rl_classic::grid_lanes::GridLanesState
+impl tessera_rl::classic::GridLanesState: impl core::fmt::Debug for tessera_rl_classic::grid_lanes::GridLanesState
+impl tessera_rl::classic::GridLanesState: impl core::marker::Copy for tessera_rl_classic::grid_lanes::GridLanesState
+impl tessera_rl::classic::GridLanesState: impl core::marker::Send for tessera_rl_classic::grid_lanes::GridLanesState
+impl tessera_rl::classic::GridLanesState: impl core::marker::StructuralPartialEq for tessera_rl_classic::grid_lanes::GridLanesState
+impl tessera_rl::classic::GridLanesState: impl core::marker::Sync for tessera_rl_classic::grid_lanes::GridLanesState
+impl tessera_rl::classic::GridLanesState: impl core::marker::Unpin for tessera_rl_classic::grid_lanes::GridLanesState
+impl tessera_rl::classic::GridLanesState: impl core::panic::unwind_safe::RefUnwindSafe for tessera_rl_classic::grid_lanes::GridLanesState
+impl tessera_rl::classic::GridLanesState: impl core::panic::unwind_safe::UnwindSafe for tessera_rl_classic::grid_lanes::GridLanesState
+impl tessera_rl::classic::GridLanesState: impl tessera_rl_core::encoding::Canonical for tessera_rl_classic::grid_lanes::GridLanesState
+impl tessera_rl::classic::GridLanesState: impl tessera_rl_core::env::EnvState for tessera_rl_classic::grid_lanes::GridLanesState
+impl tessera_rl::classic::GridLanesState: impl tessera_rl_core::state_init::StateInit for tessera_rl_classic::grid_lanes::GridLanesState
 impl tessera_rl::classic::GridLayout: impl core::clone::Clone for tessera_rl_classic::grid::layout::GridLayout
 impl tessera_rl::classic::GridLayout: impl core::cmp::Eq for tessera_rl_classic::grid::layout::GridLayout
 impl tessera_rl::classic::GridLayout: impl core::cmp::PartialEq for tessera_rl_classic::grid::layout::GridLayout
@@ -2143,6 +2190,22 @@ impl tessera_rl::classic::GridObs: impl core::panic::unwind_safe::RefUnwindSafe 
 impl tessera_rl::classic::GridObs: impl core::panic::unwind_safe::UnwindSafe for tessera_rl_classic::grid::GridObs
 impl tessera_rl::classic::GridObs: impl tessera_rl_core::leaf::Observation<tessera_rl_classic::grid::GridConfig> for tessera_rl_classic::grid::GridObs
 impl tessera_rl::classic::GridObs: impl tessera_rl_core::leaf::ObservationLayout for tessera_rl_classic::grid::GridObs
+impl tessera_rl::classic::GridOutcome: impl core::clone::Clone for tessera_rl_classic::grid_lanes::GridOutcome
+impl tessera_rl::classic::GridOutcome: impl core::cmp::Eq for tessera_rl_classic::grid_lanes::GridOutcome
+impl tessera_rl::classic::GridOutcome: impl core::cmp::PartialEq for tessera_rl_classic::grid_lanes::GridOutcome
+impl tessera_rl::classic::GridOutcome: impl core::default::Default for tessera_rl_classic::grid_lanes::GridOutcome
+impl tessera_rl::classic::GridOutcome: impl core::fmt::Debug for tessera_rl_classic::grid_lanes::GridOutcome
+impl tessera_rl::classic::GridOutcome: impl core::marker::Copy for tessera_rl_classic::grid_lanes::GridOutcome
+impl tessera_rl::classic::GridOutcome: impl core::marker::Send for tessera_rl_classic::grid_lanes::GridOutcome
+impl tessera_rl::classic::GridOutcome: impl core::marker::StructuralPartialEq for tessera_rl_classic::grid_lanes::GridOutcome
+impl tessera_rl::classic::GridOutcome: impl core::marker::Sync for tessera_rl_classic::grid_lanes::GridOutcome
+impl tessera_rl::classic::GridOutcome: impl core::marker::Unpin for tessera_rl_classic::grid_lanes::GridOutcome
+impl tessera_rl::classic::GridOutcome: impl core::panic::unwind_safe::RefUnwindSafe for tessera_rl_classic::grid_lanes::GridOutcome
+impl tessera_rl::classic::GridOutcome: impl core::panic::unwind_safe::UnwindSafe for tessera_rl_classic::grid_lanes::GridOutcome
+impl tessera_rl::classic::GridOutcome: impl tessera_rl_core::encoding::Canonical for tessera_rl_classic::grid_lanes::GridOutcome
+impl tessera_rl::classic::GridOutcome: impl tessera_rl_core::lane_field::LaneField for tessera_rl_classic::grid_lanes::GridOutcome
+impl tessera_rl::classic::GridOutcome: impl tessera_rl_core::state_enum::StateEnum for tessera_rl_classic::grid_lanes::GridOutcome
+impl tessera_rl::classic::GridOutcome: impl tessera_rl_core::state_init::StateInit for tessera_rl_classic::grid_lanes::GridOutcome
 impl tessera_rl::classic::GridState: impl core::clone::Clone for tessera_rl_classic::grid::GridState
 impl tessera_rl::classic::GridState: impl core::cmp::PartialEq for tessera_rl_classic::grid::GridState
 impl tessera_rl::classic::GridState: impl core::default::Default for tessera_rl_classic::grid::GridState
@@ -2845,6 +2908,53 @@ impl tessera_rl::classic::grid::layout::GridLayout: impl core::marker::Unpin for
 impl tessera_rl::classic::grid::layout::GridLayout: impl core::panic::unwind_safe::RefUnwindSafe for tessera_rl_classic::grid::layout::GridLayout
 impl tessera_rl::classic::grid::layout::GridLayout: impl core::panic::unwind_safe::UnwindSafe for tessera_rl_classic::grid::layout::GridLayout
 impl tessera_rl::classic::grid::layout::GridLayout: impl tessera_rl_core::asset::AssetData for tessera_rl_classic::grid::layout::GridLayout
+impl tessera_rl::classic::grid_lanes::GridLanes: impl core::clone::Clone for tessera_rl_classic::grid_lanes::GridLanes
+impl tessera_rl::classic::grid_lanes::GridLanes: impl core::cmp::Eq for tessera_rl_classic::grid_lanes::GridLanes
+impl tessera_rl::classic::grid_lanes::GridLanes: impl core::cmp::PartialEq for tessera_rl_classic::grid_lanes::GridLanes
+impl tessera_rl::classic::grid_lanes::GridLanes: impl core::default::Default for tessera_rl_classic::grid_lanes::GridLanes
+impl tessera_rl::classic::grid_lanes::GridLanes: impl core::fmt::Debug for tessera_rl_classic::grid_lanes::GridLanes
+impl tessera_rl::classic::grid_lanes::GridLanes: impl core::marker::Copy for tessera_rl_classic::grid_lanes::GridLanes
+impl tessera_rl::classic::grid_lanes::GridLanes: impl core::marker::Send for tessera_rl_classic::grid_lanes::GridLanes
+impl tessera_rl::classic::grid_lanes::GridLanes: impl core::marker::StructuralPartialEq for tessera_rl_classic::grid_lanes::GridLanes
+impl tessera_rl::classic::grid_lanes::GridLanes: impl core::marker::Sync for tessera_rl_classic::grid_lanes::GridLanes
+impl tessera_rl::classic::grid_lanes::GridLanes: impl core::marker::Unpin for tessera_rl_classic::grid_lanes::GridLanes
+impl tessera_rl::classic::grid_lanes::GridLanes: impl core::panic::unwind_safe::RefUnwindSafe for tessera_rl_classic::grid_lanes::GridLanes
+impl tessera_rl::classic::grid_lanes::GridLanes: impl core::panic::unwind_safe::UnwindSafe for tessera_rl_classic::grid_lanes::GridLanes
+impl tessera_rl::classic::grid_lanes::GridLanes: impl tessera_rl_core::env::Environment for tessera_rl_classic::grid_lanes::GridLanes
+impl tessera_rl::classic::grid_lanes::GridLanes: impl tessera_rl_core::env::Heuristic for tessera_rl_classic::grid_lanes::GridLanes
+impl tessera_rl::classic::grid_lanes::GridLanes: impl tessera_rl_core::env::Persist for tessera_rl_classic::grid_lanes::GridLanes
+impl tessera_rl::classic::grid_lanes::GridLanes: impl tessera_rl_core::env::Validate for tessera_rl_classic::grid_lanes::GridLanes
+impl tessera_rl::classic::grid_lanes::GridLanes: impl tessera_rl_core::lane_env::LaneEnvironment for tessera_rl_classic::grid_lanes::GridLanes
+impl tessera_rl::classic::grid_lanes::GridLanesState: impl core::clone::Clone for tessera_rl_classic::grid_lanes::GridLanesState
+impl tessera_rl::classic::grid_lanes::GridLanesState: impl core::cmp::PartialEq for tessera_rl_classic::grid_lanes::GridLanesState
+impl tessera_rl::classic::grid_lanes::GridLanesState: impl core::default::Default for tessera_rl_classic::grid_lanes::GridLanesState
+impl tessera_rl::classic::grid_lanes::GridLanesState: impl core::fmt::Debug for tessera_rl_classic::grid_lanes::GridLanesState
+impl tessera_rl::classic::grid_lanes::GridLanesState: impl core::marker::Copy for tessera_rl_classic::grid_lanes::GridLanesState
+impl tessera_rl::classic::grid_lanes::GridLanesState: impl core::marker::Send for tessera_rl_classic::grid_lanes::GridLanesState
+impl tessera_rl::classic::grid_lanes::GridLanesState: impl core::marker::StructuralPartialEq for tessera_rl_classic::grid_lanes::GridLanesState
+impl tessera_rl::classic::grid_lanes::GridLanesState: impl core::marker::Sync for tessera_rl_classic::grid_lanes::GridLanesState
+impl tessera_rl::classic::grid_lanes::GridLanesState: impl core::marker::Unpin for tessera_rl_classic::grid_lanes::GridLanesState
+impl tessera_rl::classic::grid_lanes::GridLanesState: impl core::panic::unwind_safe::RefUnwindSafe for tessera_rl_classic::grid_lanes::GridLanesState
+impl tessera_rl::classic::grid_lanes::GridLanesState: impl core::panic::unwind_safe::UnwindSafe for tessera_rl_classic::grid_lanes::GridLanesState
+impl tessera_rl::classic::grid_lanes::GridLanesState: impl tessera_rl_core::encoding::Canonical for tessera_rl_classic::grid_lanes::GridLanesState
+impl tessera_rl::classic::grid_lanes::GridLanesState: impl tessera_rl_core::env::EnvState for tessera_rl_classic::grid_lanes::GridLanesState
+impl tessera_rl::classic::grid_lanes::GridLanesState: impl tessera_rl_core::state_init::StateInit for tessera_rl_classic::grid_lanes::GridLanesState
+impl tessera_rl::classic::grid_lanes::GridOutcome: impl core::clone::Clone for tessera_rl_classic::grid_lanes::GridOutcome
+impl tessera_rl::classic::grid_lanes::GridOutcome: impl core::cmp::Eq for tessera_rl_classic::grid_lanes::GridOutcome
+impl tessera_rl::classic::grid_lanes::GridOutcome: impl core::cmp::PartialEq for tessera_rl_classic::grid_lanes::GridOutcome
+impl tessera_rl::classic::grid_lanes::GridOutcome: impl core::default::Default for tessera_rl_classic::grid_lanes::GridOutcome
+impl tessera_rl::classic::grid_lanes::GridOutcome: impl core::fmt::Debug for tessera_rl_classic::grid_lanes::GridOutcome
+impl tessera_rl::classic::grid_lanes::GridOutcome: impl core::marker::Copy for tessera_rl_classic::grid_lanes::GridOutcome
+impl tessera_rl::classic::grid_lanes::GridOutcome: impl core::marker::Send for tessera_rl_classic::grid_lanes::GridOutcome
+impl tessera_rl::classic::grid_lanes::GridOutcome: impl core::marker::StructuralPartialEq for tessera_rl_classic::grid_lanes::GridOutcome
+impl tessera_rl::classic::grid_lanes::GridOutcome: impl core::marker::Sync for tessera_rl_classic::grid_lanes::GridOutcome
+impl tessera_rl::classic::grid_lanes::GridOutcome: impl core::marker::Unpin for tessera_rl_classic::grid_lanes::GridOutcome
+impl tessera_rl::classic::grid_lanes::GridOutcome: impl core::panic::unwind_safe::RefUnwindSafe for tessera_rl_classic::grid_lanes::GridOutcome
+impl tessera_rl::classic::grid_lanes::GridOutcome: impl core::panic::unwind_safe::UnwindSafe for tessera_rl_classic::grid_lanes::GridOutcome
+impl tessera_rl::classic::grid_lanes::GridOutcome: impl tessera_rl_core::encoding::Canonical for tessera_rl_classic::grid_lanes::GridOutcome
+impl tessera_rl::classic::grid_lanes::GridOutcome: impl tessera_rl_core::lane_field::LaneField for tessera_rl_classic::grid_lanes::GridOutcome
+impl tessera_rl::classic::grid_lanes::GridOutcome: impl tessera_rl_core::state_enum::StateEnum for tessera_rl_classic::grid_lanes::GridOutcome
+impl tessera_rl::classic::grid_lanes::GridOutcome: impl tessera_rl_core::state_init::StateInit for tessera_rl_classic::grid_lanes::GridOutcome
 impl tessera_rl::classic::keydoor::KeyDoor: impl core::clone::Clone for tessera_rl_classic::keydoor::KeyDoor
 impl tessera_rl::classic::keydoor::KeyDoor: impl core::cmp::Eq for tessera_rl_classic::keydoor::KeyDoor
 impl tessera_rl::classic::keydoor::KeyDoor: impl core::cmp::PartialEq for tessera_rl_classic::keydoor::KeyDoor
@@ -8127,6 +8237,7 @@ method tessera_rl::classic::BrickWallState::empty: fn empty(&self) -> bool
 method tessera_rl::classic::BrickWallState::frame: fn frame(&mut self, action: i32, rng: &mut tessera_rl_num::rng::StepRng) -> (u16, bool)
 method tessera_rl::classic::BrickWallState::has: fn has(&self, row: i32, col: i32) -> bool
 method tessera_rl::classic::BrickWallState::parked: fn parked(&self) -> bool
+method tessera_rl::classic::GridLanesState::cell: const fn cell(&self) -> (i32, i32)
 method tessera_rl::classic::GridLayout::is_wall: fn is_wall(&self, col: i32, row: i32) -> bool
 method tessera_rl::classic::GridLayout::is_wall_at: fn is_wall_at(&self, k: u32, n: u32) -> bool
 method tessera_rl::classic::GridLayout::side: const fn side(&self) -> u16
@@ -8157,6 +8268,7 @@ method tessera_rl::classic::grid::layout::GridLayout::is_wall: fn is_wall(&self,
 method tessera_rl::classic::grid::layout::GridLayout::is_wall_at: fn is_wall_at(&self, k: u32, n: u32) -> bool
 method tessera_rl::classic::grid::layout::GridLayout::side: const fn side(&self) -> u16
 method tessera_rl::classic::grid::layout::GridLayout::wall_count: const fn wall_count(&self) -> u32
+method tessera_rl::classic::grid_lanes::GridLanesState::cell: const fn cell(&self) -> (i32, i32)
 method tessera_rl::classic::keydoor::KeyDoorState::all_finished: fn all_finished(&self, cfg: &tessera_rl_classic::keydoor::KeyDoorConfig) -> bool
 method tessera_rl::classic::keydoor::KeyDoorState::apply: fn apply(&mut self, cfg: &tessera_rl_classic::keydoor::KeyDoorConfig, slot: usize, action: i32)
 method tessera_rl::classic::keydoor::KeyDoorState::can_enter: fn can_enter(&self, cfg: &tessera_rl_classic::keydoor::KeyDoorConfig, col: i32, row: i32, slot: usize) -> bool
@@ -9684,6 +9796,7 @@ mod tessera_rl::classic::cartpole::physics
 mod tessera_rl::classic::gather
 mod tessera_rl::classic::grid
 mod tessera_rl::classic::grid::layout
+mod tessera_rl::classic::grid_lanes
 mod tessera_rl::classic::keydoor
 mod tessera_rl::classic::mountaincar
 mod tessera_rl::classic::mountaincar::physics
@@ -9803,6 +9916,8 @@ struct tessera_rl::classic::GatherObs
 struct tessera_rl::classic::GatherState
 struct tessera_rl::classic::Grid
 struct tessera_rl::classic::GridConfig
+struct tessera_rl::classic::GridLanes
+struct tessera_rl::classic::GridLanesState
 struct tessera_rl::classic::GridLayout
 struct tessera_rl::classic::GridObs
 struct tessera_rl::classic::GridState
@@ -9855,6 +9970,8 @@ struct tessera_rl::classic::grid::GridConfig
 struct tessera_rl::classic::grid::GridObs
 struct tessera_rl::classic::grid::GridState
 struct tessera_rl::classic::grid::layout::GridLayout
+struct tessera_rl::classic::grid_lanes::GridLanes
+struct tessera_rl::classic::grid_lanes::GridLanesState
 struct tessera_rl::classic::keydoor::KeyDoor
 struct tessera_rl::classic::keydoor::KeyDoorConfig
 struct tessera_rl::classic::keydoor::KeyDoorObs
@@ -10305,6 +10422,12 @@ type tessera_rl::core::lane_env::LaneGroup<'a, E> = <<<E as tessera_rl_core::env
 type tessera_rl::core::lane_step::LaneHook<E> = fn(&<E as tessera_rl_core::env::Environment>::Config, tessera_rl_simd::dispatch::Resolved, &mut [<E as tessera_rl_core::env::Environment>::State; 8], &[i32; 8], &mut tessera_rl_core::lane_step::LaneOut)
 type tessera_rl::num::fp::Control = <arch-dependent: u32 on x86_64, u64 on aarch64>
 type tessera_rl::num::math::lane_int::Fx32Mask<L> = <<L as tessera_rl_num::math::lane_int::Fx32Lanes>::Raw as tessera_rl_num::math::lane_int::I32Lanes>::Mask
+variant tessera_rl::classic::GridOutcome::OutOfBounds
+variant tessera_rl::classic::GridOutcome::ReachedGoal
+variant tessera_rl::classic::GridOutcome::Running
+variant tessera_rl::classic::grid_lanes::GridOutcome::OutOfBounds
+variant tessera_rl::classic::grid_lanes::GridOutcome::ReachedGoal
+variant tessera_rl::classic::grid_lanes::GridOutcome::Running
 variant tessera_rl::core::AssetError::DecodedTooLarge { limit: usize }
 variant tessera_rl::core::AssetError::InputTooLarge { len: usize }
 variant tessera_rl::core::AssetError::Invalid { reason: &'static str }
