@@ -25,4 +25,8 @@ if [ -n "${WHEEL_PROFILE_USE:-}" ]; then
     [ -n "${WHEEL_CARGO_PROFILE:-}" ] || { echo "wheel_num_tests: a profile needs WHEEL_CARGO_PROFILE" >&2; exit 2; }
     export RUSTFLAGS="-Cprofile-use=$WHEEL_PROFILE_USE"
 fi
-exec nice -n 10 cargo test -p tessera-rl-num "${args[@]}" --all-features --locked
+# Git Bash on Windows may have no `nice` (#350).
+if command -v nice >/dev/null; then
+    exec nice -n 10 cargo test -p tessera-rl-num "${args[@]}" --all-features --locked
+fi
+exec cargo test -p tessera-rl-num "${args[@]}" --all-features --locked

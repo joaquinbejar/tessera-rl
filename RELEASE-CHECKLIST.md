@@ -139,7 +139,7 @@ Offline signing keys would need an ADR.
   The `release-assets` job checks that PyPI lists one per wheel, from
   `joaquinbejar/tessera-rl`, workflow `pypi.yml`
   (`scripts/pypi_attestations.py`). PyPI's project page shows them per file.
-- **GitHub.** `release-assets` attests the five wheels and every SBOM with
+- **GitHub.** `release-assets` attests the six wheels and every SBOM with
   `actions/attest-build-provenance`. Verify a downloaded file with
   `gh attestation verify <file> -R joaquinbejar/tessera-rl`.
 - **SBOMs.** Every wheel carries a CycloneDX SBOM of its Rust dependencies

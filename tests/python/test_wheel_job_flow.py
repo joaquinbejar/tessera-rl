@@ -145,7 +145,8 @@ def test_wheel_job_builds_every_wheel_with_the_onnx_feature(tmp_path, profile):
     assert checks["checks"]["onnx_smoke"] == 0, checks
 
 
-@pytest.mark.parametrize("target", ["x86_64-pc-windows-msvc", "x86_64-unknown-freebsd"])
+# Windows builds without the feature (#350, option A); other targets are refused.
+@pytest.mark.parametrize("target", ["x86_64-unknown-freebsd", "i686-pc-windows-msvc"])
 def test_wheel_job_refuses_the_onnx_feature_on_other_targets(tmp_path, target):
     """Run for real: exit 2 naming the target, before any download (the fake
     curl leaves a marker if it is ever called)."""

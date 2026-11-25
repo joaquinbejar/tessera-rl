@@ -60,7 +60,7 @@ def test_wheels_hosted_jobs_are_the_arm_ones_and_run_only_on_dispatch_here():
 
 def test_wheels_reports_are_uploaded_when_the_job_fails():
     uploads = re.findall(r"upload-artifact@\S+[^\n]*\n\s+if: always\(\)\n", WORKFLOW)
-    assert len(uploads) == WORKFLOW.count("upload-artifact@") == 5
+    assert len(uploads) == WORKFLOW.count("upload-artifact@") == 6
 
 
 def test_wheels_leaves_nothing_needing_a_chown():
@@ -87,7 +87,9 @@ def test_wheels_x86_64_expects_fp_traps_and_the_hosted_arm_job_does_not():
     # feenableexcept).
     assert "TESSERA_EXPECT_FP_TRAPS:" not in _job("musl-x86_64")
     assert "TESSERA_EXPECT_FP_TRAPS:" not in _job("musl-aarch64")
-    assert WORKFLOW.count("TESSERA_EXPECT_FP_TRAPS:") == 1
+    # Windows x86-64 (#350): traps through _controlfp_s, so expected.
+    assert '      TESSERA_EXPECT_FP_TRAPS: "1"\n' in _job("windows")
+    assert WORKFLOW.count("TESSERA_EXPECT_FP_TRAPS:") == 2
 
 
 CARGO = (ROOT / "Cargo.toml").read_text()
@@ -153,7 +155,7 @@ def test_wheels_x86_64_artifact_is_named_with_profile_commit_and_sha256():
 
 def test_wheel_job_suite_names_its_skips():
     # -rs: every skipped test is listed with its reason in the job log.
-    suite = re.search(r'^nice -n 10 "\$venv/bin/python" -I -m pytest (.*)$', JOB, re.M).group(1)
+    suite = re.search(r'^nice -n 10 "\$venv/\$bindir/python\$exe" -I -m pytest (.*)$', JOB, re.M).group(1)
     assert suite.split()[:3] == ["-q", "-rs", "-p"]
 
 
@@ -164,8 +166,10 @@ def test_wheel_job_enables_onnx_only_on_linux_and_macos():
         JOB,
         re.M,
     )
-    # No Windows wheel job exists, so no wheel is built for Windows with it.
-    assert not re.search(r"runs-on: .*windows", WORKFLOW)
+    # The Windows wheel (#350, option A) is built without it: ADR-0057 has no
+    # Windows loading rows, and the onnx smoke checks the no-evaluator error.
+    assert re.search(r"^    x86_64-pc-windows-msvc\) features=\(\) ;;$", JOB, re.M)
+    assert "has no ONNX evaluator" in JOB
 
 
 # #313: the host example wheel's checks on aarch64 Linux and macOS arm64.
@@ -202,7 +206,7 @@ def test_wheel_job_orderbook_leg_builds_installs_and_tests_the_example():
     assert {"--release", "--locked", "--target", '"$target"', "-m", "examples/host_orderbook/Cargo.toml"} <= set(build)
     assert 'ob_args+=(--compatibility "$compatibility")' in JOB
     # Installed with no dependencies of its own, next to the first-party wheel.
-    assert re.search(r'uv pip install --python "\$venv/bin/python" --no-deps "\$WHEEL_RUN"/orderbook-dist/\*\.whl', JOB)
+    assert re.search(r'uv pip install --python "\$venv/\$bindir/python\$exe" --no-deps "\$WHEEL_RUN"/orderbook-dist/\*\.whl', JOB)
     # It must import, and its test file runs on its own: a skip cannot pass.
     assert "import tessera_example_orderbook._tessera_host" in JOB
     assert re.search(r'-m pytest -q -rs -p no:cacheprovider \\\n\s+"\$root/tests/python/test_host_orderbook.py"', JOB)
@@ -222,3 +226,16 @@ def test_wheels_orderbook_golden_is_one_pinned_pair_asserted_by_the_example():
     src = (ROOT / "tests" / "python" / "test_host_orderbook.py").read_text()
     assert re.search(r"^GOLDEN_11 = \(\n    \"[0-9a-f]{64}\",\n    \"[0-9a-f]{64}\",\n\)$", src, re.M)
     assert "assert first == GOLDEN_11" in src
+
+
+def test_wheels_windows_job_is_hosted_guarded_and_pinned():
+    # #350, option A: GitHub-hosted, the fork and dispatch guard of the other
+    # hosted legs, SHA-pinned actions, and the tools by their sha256.
+    job = _job("windows")
+    assert re.search(r"^    runs-on: windows-\d{4}$", job, re.M), job
+    assert "if: github.event_name == 'workflow_dispatch' && github.repository == 'joaquinbejar/tessera-rl'" in job
+    for uses in re.findall(r"uses: (\S+)", job):
+        assert re.fullmatch(r"[\w.-]+/[\w.-]+@[0-9a-f]{40}", uses), uses
+    run = re.search(r"scripts/wheel_job\.sh x86_64-pc-windows-msvc \"\" ([0-9a-f]{64}) ([0-9a-f]{64}) release", job)
+    assert run, job
+    assert "name: wheel-x86_64-pc-windows-msvc" in job

@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: MIT OR Apache-2.0
-"""Checks the five wheels of one wheels run before they go to PyPI.
+"""Checks the six wheels of one wheels run before they go to PyPI.
 
     python3 -I scripts/pypi_verify.py <artifacts-dir> <tag> <commit> <out-dir>
 
@@ -7,12 +7,13 @@
 the artifact (as `gh run download` lays them out). <tag> is the release tag
 (`v0.2.0`), <commit> the full sha the wheels run built and the tag names.
 
-The run must have exactly the five artifacts of wheels.yml:
+The run must have exactly the six artifacts of wheels.yml:
 
 - `wheel-x86_64-unknown-linux-gnu-wheel-<commit>-<sha256>` (W1),
 - `wheel-aarch64-unknown-linux-gnu`,
 - `wheel-x86_64-unknown-linux-musl`, `wheel-aarch64-unknown-linux-musl` (#350),
-- `wheel-aarch64-apple-darwin`.
+- `wheel-aarch64-apple-darwin`,
+- `wheel-x86_64-pc-windows-msvc` (#350, option A).
 
 For each: exactly one wheel, under the artifact's dist/ (wheels.yml uploads
 `dist/*.whl` with checks.json, so the artifact keeps that layout), and no
@@ -23,7 +24,7 @@ every check in checks.json is 0; the file name is
 and <version> the tag without its `v`; and the wheel's own METADATA says
 `Name: tessera-rl` and `Version: <version>`.
 
-On success the five wheels are copied to <out-dir> with a SHA256SUMS file,
+On success the six wheels are copied to <out-dir> with a SHA256SUMS file,
 and the exit status is 0. Any failure prints every problem found and exits 1;
 a usage error exits 2. Nothing is copied unless every check passes.
 """
@@ -49,6 +50,7 @@ PLATFORMS = {
     "x86_64-unknown-linux-musl": r"musllinux_1_2_x86_64",
     "aarch64-unknown-linux-musl": r"musllinux_1_2_aarch64",
     "aarch64-apple-darwin": r"macosx_[0-9]+_[0-9]+_arm64",
+    "x86_64-pc-windows-msvc": r"win_amd64",
 }
 
 # Checks every wheel's checks.json must hold, each 0 (wheel_job.sh writes
@@ -62,6 +64,7 @@ W0_ARTIFACTS = [
     "wheel-x86_64-unknown-linux-musl",
     "wheel-aarch64-unknown-linux-musl",
     "wheel-aarch64-apple-darwin",
+    "wheel-x86_64-pc-windows-msvc",
 ]
 
 
