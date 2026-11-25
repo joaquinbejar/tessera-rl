@@ -1098,6 +1098,7 @@ mod tests {
             policy_map: None,
             privileged_state: false,
             targets: false,
+            output_allocator: None,
             league: None,
             onnx_opponents: None,
             pipelined,

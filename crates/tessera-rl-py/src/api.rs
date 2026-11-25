@@ -105,7 +105,7 @@ pub(crate) fn no_positional(g: Gil, args: Ref<'_>, name: &str) -> CResult<()> {
     }
 }
 
-const POOL_KEYS: [&str; 23] = [
+const POOL_KEYS: [&str; 24] = [
     "mode",
     "batch_size",
     "gather",
@@ -129,6 +129,7 @@ const POOL_KEYS: [&str; 23] = [
     "onnx_library",
     "onnx_accept_telemetry",
     "onnx_max_model_bytes",
+    "output_allocator",
 ];
 
 /// The `outputs` mode: `"borrowed"` (the native default, ADR-0003) or
@@ -284,6 +285,11 @@ fn pool_args(g: Gil, kw: &Kwargs<'_>, default_limit: u32) -> CResult<PoolArgs> {
             .map_err(|e| error(g, Kind::Argument, e))?,
         privileged_state: kw.bool(g, "privileged_state")?.unwrap_or(false),
         targets: kw.bool(g, "targets")?.unwrap_or(false),
+        // A Python output allocator (ADR-0084): `tessera_rl._cuda`'s pinned
+        // allocator, or a test's.
+        output_allocator: kw
+            .get("output_allocator")
+            .map(|a| crate::env::Allocator(tessera_rl_pyffi::ffi::alloc::output_allocator(g, a))),
         league: match kw.u64(g, "league")? {
             None => None,
             Some(h) => Some((
