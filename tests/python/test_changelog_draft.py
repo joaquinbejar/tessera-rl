@@ -4,9 +4,12 @@ fixture git histories in a temporary repository.
 
 The tests that need git skip, with `GIT_MISSING`, where no `git` is on
 `PATH`, as in the musllinux wheel images (#644); the parser tests still run.
-`test_changelog_draft_skip.py` checks that skip."""
+`GIT`, resolved once on the process `PATH`, is both what decides the skip and
+what the fixtures run, so a git outside `/usr/bin:/bin` (manylinux_2_28) is
+used rather than missed. `test_changelog_draft_skip.py` checks both."""
 
 import importlib.util
+import os
 import shutil
 import subprocess
 import sys
@@ -24,17 +27,25 @@ spec.loader.exec_module(cd)
 
 GIT_MISSING = "git is not on PATH: these tests build fixture git repositories (#644)"
 
+# The git binary on the process PATH, or None: the skip and every fixture
+# call use this one resolution.
+GIT = shutil.which("git")
+
 
 def require_git() -> None:
     """Skips the calling test where `git` is not on `PATH`."""
-    if shutil.which("git") is None:
+    if GIT is None:
         pytest.skip(GIT_MISSING)
 
 
 def git(repo: Path, *args: str) -> str:
+    assert GIT is not None, "git() called without require_git()"
+    # A minimal environment: a fixed identity, no user or system config, and
+    # only the resolved git's own directory on PATH.
     env = {"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.invalid", "GIT_COMMITTER_NAME": "t",
-           "GIT_COMMITTER_EMAIL": "t@example.invalid", "HOME": str(repo), "GIT_CONFIG_NOSYSTEM": "1", "PATH": "/usr/bin:/bin"}
-    return subprocess.run(["git", *args], cwd=repo, env=env, capture_output=True, text=True, check=True).stdout.strip()
+           "GIT_COMMITTER_EMAIL": "t@example.invalid", "HOME": str(repo), "GIT_CONFIG_NOSYSTEM": "1",
+           "PATH": os.path.dirname(GIT)}
+    return subprocess.run([GIT, *args], cwd=repo, env=env, capture_output=True, text=True, check=True).stdout.strip()
 
 
 def commit(repo: Path, message: str) -> str:
@@ -153,7 +164,8 @@ def test_changelog_draft_check_commit_without_ref_is_missing(repo, tmp_path):
 
 def test_changelog_draft_real_history_parses():
     require_git()
-    tags = subprocess.run(["git", "tag", "--list", "v*"], cwd=ROOT, capture_output=True, text=True).stdout.split()
+    assert GIT is not None
+    tags = subprocess.run([GIT, "tag", "--list", "v*"], cwd=ROOT, capture_output=True, text=True).stdout.split()
     if not tags:
         pytest.skip("no release tag in this checkout (shallow CI clone)")
     r = subprocess.run([sys.executable, str(SCRIPT), "--repo", str(ROOT), sorted(tags)[-1]], capture_output=True, text=True)
