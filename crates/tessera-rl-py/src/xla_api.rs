@@ -329,6 +329,7 @@ mod tests {
             league: None,
             onnx_opponents: None,
             targets: false,
+            output_allocator: None,
         }
     }
 
