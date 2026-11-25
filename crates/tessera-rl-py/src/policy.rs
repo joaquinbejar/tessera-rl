@@ -215,6 +215,10 @@ pub(crate) fn plain<E: tessera_rl_core::Environment, M: MaskProvider<E>>(
     pool: EnvPool<E, M>,
     args: &PoolArgs,
 ) -> Result<EnvPool<E, M>, BindError> {
+    // A maker that runs heuristics applied the league already.
+    if pool.policy_groups().contains(&PolicyGroup::Opponent) {
+        return Ok(pool);
+    }
     if args.league.is_some() {
         return Err(BindError::Capability(
             "this environment has no in-engine league opponents (league=)".to_owned(),

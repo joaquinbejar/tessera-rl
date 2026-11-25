@@ -12,7 +12,7 @@ import numpy as np
 import pytest
 
 import tessera_rl
-from tessera_rl import _native, gym, pz
+from tessera_rl import pz
 
 DUEL = "tessera/PaddleDuel-v1"
 POP = ["heuristic", ("external", 7)]
@@ -173,15 +173,16 @@ def test_league_make_refusals():
         tessera_rl.make(DUEL, policy_map={1: "opponent"}, league=league, mode="async", batch_size=1, **common)
 
 
-def test_league_gym_and_pettingzoo_report_the_assignment_and_hide_opponents():
+def test_league_pettingzoo_hides_opponents_and_reports_the_assignment():
+    """A league pool is multi-agent (its opponent rows may be External), so
+    it goes through PettingZoo or the raw Env, not the Gymnasium adapter."""
     league = _league()
-    env = gym.make(DUEL, num_envs=4, workers=0, agents=2, policy_map={1: "opponent"}, league=league, role=0)
-    _, info = env.reset(seed=1)
-    assert info["assignment"].shape == (4,) and info["assignment"].dtype == np.uint32
-    env.close()
     par = pz.parallel_env(DUEL, agents=2, visible="learner", policy_map={1: "opponent"}, league=league, role=1)
-    par.reset(seed=1)
+    _, infos = par.reset(seed=1)
     assert len(par.agents) == 1
+    (agent,) = par.agents
+    assert infos[agent]["policy_group"] == "learner"
+    assert isinstance(infos[agent]["assignment"], int)
     par.close()
 
 

@@ -298,6 +298,24 @@ fn test_league_plain_restore_redraws_from_the_record_identity_equal_and_differen
     assert_eq!(c.assignment().unwrap()[5], expected_draw(&c, 5));
 }
 
+/// A never-reset pool's snapshot restored into another pool draws at its
+/// first reset exactly as the source does (#384 head E3): the restored
+/// assignments of fresh or pending-reset instances are not marked drawn.
+#[test]
+fn test_league_restore_of_a_never_reset_pool_draws_as_the_source() {
+    let mut a = pool();
+    let state = a.snapshot_pool().unwrap();
+    let mut b = pool();
+    b.restore_pool(&state, None).unwrap();
+    a.reset_all(Reseed::Keep).unwrap();
+    b.reset_all(Reseed::Keep).unwrap();
+    assert_eq!(b.assignment().unwrap(), a.assignment().unwrap());
+    assert!(
+        a.assignment().unwrap().iter().any(|&p| p != 0),
+        "the draw is not all the default entry"
+    );
+}
+
 #[test]
 fn test_league_snapshot_and_restore_with_league_round_trip_and_refuse_another_population() {
     let mut a = pool();

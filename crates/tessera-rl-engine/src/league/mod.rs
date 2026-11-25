@@ -333,7 +333,12 @@ impl LeagueState {
     }
 
     /// Writes a checked context entry: the view and every assignment,
-    /// marked drawn for the instances' current identities.
+    /// marked drawn for the instances' current identities. An instance that
+    /// was never reset or waits for its reset keeps the assignment but is
+    /// marked not drawn, so it draws at its reset exactly as the source
+    /// pool's instance does (#384 head E3: a never-reset record's first
+    /// episode has the draw key of its identity, which marking it drawn
+    /// would skip).
     pub(crate) fn restore_context<H: RecordLayout>(
         &mut self,
         context: &LeagueContext,
@@ -341,8 +346,12 @@ impl LeagueState {
     ) {
         self.view = context.view.clone();
         for (i, (&policy, header)) in context.assignments.iter().zip(headers).enumerate() {
-            let identity = header.engine().identity;
+            let engine = header.engine();
+            let identity = engine.identity;
             self.set(i, Some(policy), &identity);
+            if engine.fresh.get() || engine.pending_reset.get() {
+                self.forget(i);
+            }
         }
         self.clear();
     }

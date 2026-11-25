@@ -1460,9 +1460,11 @@ pub(crate) fn heuristic_actions<'py>(g: Gil<'py>, inner: &Inner) -> CResult<Mine
 /// opponent (ADR-0088 item 2.3), little-endian `uint32` `[N]`; `None`
 /// without a league.
 pub(crate) fn assignment<'py>(g: Gil<'py>, inner: &Inner) -> CResult<Mine<'py>> {
-    inner.with(g, |ops| match ops.assignment().map_err(|e| to_py(g, e))? {
-        Some(bytes) => capi::bytes(g, &bytes),
-        None => Ok(capi::none(g)),
+    inner.with(g, |ops| {
+        match ops.assignment().map_err(|e| to_py(g, e))? {
+            Some(bytes) => capi::bytes(g, &bytes),
+            None => Ok(capi::none(g)),
+        }
     })
 }
 
