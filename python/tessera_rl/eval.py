@@ -164,12 +164,18 @@ def provenance() -> dict:
     }
 
 
-def _play(env, policy, external, seed: int, learners, opponents, nvec) -> np.ndarray:
-    """One episode on a single-instance pool; returns each slot's return."""
+#: The default step limit of one episode: a pool without auto-reset on an
+#: env with no step cap would otherwise never end.
+MAX_STEPS = 100_000
+
+
+def _play(env, policy, external, seed: int, learners, opponents, nvec, max_steps: int = MAX_STEPS) -> np.ndarray:
+    """One episode on a single-instance pool; returns each slot's return.
+    An episode longer than ``max_steps`` steps is the run's error."""
     step = env.reset(seed=seed)
     agents = env.agents
     total = np.zeros(agents)
-    while True:
+    for _ in range(max_steps):
         obs = {k: np.asarray(v)[0] for k, v in step.observations.items()}
         masks = None if step.masks is None else np.asarray(step.masks)[0]
         rows = np.zeros((agents, max(len(nvec), 1)), dtype=np.int64)
@@ -183,6 +189,9 @@ def _play(env, policy, external, seed: int, learners, opponents, nvec) -> np.nda
         total += np.asarray(step.rewards, dtype=np.float64)[0]
         if bool(np.asarray(step.episode_terminated)[0]) or bool(np.asarray(step.episode_truncated)[0]):
             return total
+    raise RuntimeError(
+        f"an episode from seed {seed} ran past {max_steps} steps: set the env's max_episode_steps or --max-steps"
+    )
 
 
 def evaluate(
@@ -197,10 +206,11 @@ def evaluate(
     opponent_slots: list[int] | None = None,
     external: dict[int, Callable] | None = None,
     names: dict | None = None,
+    max_steps: int = MAX_STEPS,
 ) -> dict:
     """The evaluation report (the module doc's scheme)."""
-    if episodes <= 0 or pools <= 0 or not seeds:
-        raise _native.ArgumentError("episodes, pools and seeds must be positive")
+    if episodes <= 0 or pools <= 0 or not seeds or max_steps <= 0:
+        raise _native.ArgumentError("episodes, pools, seeds and max_steps must be positive")
     env_kwargs = dict(env_kwargs or {})
     external = dict(external or {})
     for _, kind in opponents:
@@ -243,7 +253,7 @@ def evaluate(
             while any(queues):
                 for m, env in enumerate(envs):
                     for k in queues[m][:WAVE]:
-                        ret = _play(env, policy, ext, seeds[k % len(seeds)], learners, opp, nvec)
+                        ret = _play(env, policy, ext, seeds[k % len(seeds)], learners, opp, nvec, max_steps)
                         learner_sum += float(np.mean(ret[list(learners)])) if learners else 0.0
                         opponent_sum += float(np.mean(ret[list(opp)]))
                     queues[m] = queues[m][WAVE:]
@@ -283,6 +293,7 @@ def evaluate(
         "episodes": episodes,
         "pools": pools,
         "opponent_slots": opponent_slots,
+        "max_steps": max_steps,
         **(names or {}),
     }
     return {"opponents": results, "setup": setup, "provenance": provenance()}
@@ -309,6 +320,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--episodes", type=int, required=True)
     p.add_argument("--pools", type=int, default=8)
     p.add_argument("--opponent-slots")
+    p.add_argument("--max-steps", type=int, default=MAX_STEPS)
     p.add_argument("--output")
     a = p.parse_args(argv)
     if a.population is not None:
@@ -335,6 +347,7 @@ def main(argv: list[str] | None = None) -> int:
         opponent_slots=[int(x) for x in a.opponent_slots.split(",")] if a.opponent_slots else None,
         external=external,
         names={"policy": a.policy, "external": sorted(a.external)},
+        max_steps=a.max_steps,
     )
     text = json.dumps(report, indent=1) + "\n"
     if a.output:
