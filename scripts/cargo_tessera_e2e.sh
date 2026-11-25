@@ -66,13 +66,7 @@ phase new
 
 cp "$root/Cargo.lock" "$crate/Cargo.lock"
 cargo metadata --offline --format-version 1 --manifest-path "$crate/Cargo.toml" >/dev/null
-pairs() { awk '/^name = /{n=$3} /^version = /{print n, $3}' "$1" | sort -u; }
-extra="$(comm -13 <(pairs "$root/Cargo.lock") <(pairs "$crate/Cargo.lock") | grep -v "^\"$crate\" " || true)"
-if [ -n "$extra" ]; then
-    echo "the scaffold's lock has packages the repository's lock does not:" >&2
-    echo "$extra" >&2
-    exit 1
-fi
+"$root/scripts/lock_subset.sh" "$root/Cargo.lock" "$crate/Cargo.lock" "$crate"
 phase lock
 
 (cd "$root" && uv sync --locked --python 3.11 --group test)
