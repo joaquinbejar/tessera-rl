@@ -4,7 +4,7 @@ docs/reviews/370/DESIGN-T3b-r1.md, approved in REVIEW-T3b-r1): masked PPO
 for one learner against ADR-0079 heuristic slots, over the native ``Env``.
 
 The board games declare only PettingZoo AEC, which refuses
-``visible="learner"``, so this tier drives ``tessera_rl.make`` directly
+``agents="learner"``, so this tier drives ``tessera_rl.make`` directly
 (``mode="sync"``, ``outputs="owned"``, ``auto_reset="same_step"``) with a
 ``policy_map`` that makes every slot but the learner's a heuristic. The PPO
 is learning_masked's (CleanRL ``ppo.py``, masked Categorical; its helpers
