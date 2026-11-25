@@ -65,7 +65,8 @@ def _wheel(tmp_path: Path, sbom=None, name=WHEEL, record=True, extra=()) -> Path
         for n, d, method, mode, when in members:
             info = zipfile.ZipInfo(n, date_time=when)
             info.external_attr = (0o100000 | mode) << 16
-            info.create_system = 3
+            # Python's own default is 3 on POSIX: 0 on one member shows it is kept.
+            info.create_system = 0 if n.endswith("WHEEL") else 3
             info.compress_type = method
             z.writestr(info, d, compresslevel=1)
     return path
@@ -242,3 +243,56 @@ def test_sbom_reproduce_epoch_zero_is_the_unix_epoch(tmp_path):
     wheel = _wheel(tmp_path)
     assert _run(wheel, NAME, 0).returncode == 0
     assert json.loads(_members(wheel)[SBOM])["metadata"]["timestamp"] == "1970-01-01T00:00:00Z"
+
+
+def test_sbom_reproduce_refuses_a_timestamp_outside_metadata(tmp_path):
+    # One "timestamp" in the text, but not metadata's: the edited SBOM is checked.
+    text = _sbom().replace(b'"timestamp": ', b'"created": ').replace(
+        b'"version": "0.3.0"}]', b'"version": "0.3.0", "timestamp": "2026-01-01T00:00:00Z"}]')
+    wheel = _wheel(tmp_path, text)
+    before = wheel.read_bytes()
+    p = _run(wheel)
+    assert p.returncode == 1 and "does not carry the new serialNumber and metadata.timestamp" in p.stderr, p.stderr
+    assert wheel.read_bytes() == before
+
+
+def _rewrite_record(wheel: Path, edit) -> None:
+    with zipfile.ZipFile(wheel) as z:
+        members = [(i, z.read(i)) for i in z.infolist()]
+    with zipfile.ZipFile(wheel, "w") as z:
+        for info, d in members:
+            z.writestr(info, edit(d) if info.filename.endswith("/RECORD") else d)
+
+
+def test_sbom_reproduce_refuses_two_record_lines_for_the_sbom(tmp_path):
+    wheel = _wheel(tmp_path)
+    _rewrite_record(wheel, lambda d: d + "".join(x + "\n" for x in d.decode().splitlines() if x.startswith(SBOM + ",")).encode())
+    p = _run(wheel)
+    assert p.returncode == 1 and "RECORD has 2 lines for" in p.stderr, p.stderr
+
+
+def test_sbom_reproduce_keeps_the_record_line_endings(tmp_path):
+    wheel = _wheel(tmp_path)
+    _rewrite_record(wheel, lambda d: d.replace(b"\n", b"\r\n"))
+    assert _run(wheel).returncode == 0
+    record = _members(wheel)[f"{DIST}/RECORD"]
+    assert record.count(b"\r\n") == record.count(b"\n") == len(record.splitlines())
+
+
+def test_sbom_reproduce_removes_its_temporary_file_when_writing_fails(tmp_path, monkeypatch):
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("sbom_reproduce_under_test", TOOL)
+    tool = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(tool)
+    wheel = _wheel(tmp_path)
+    before = wheel.read_bytes()
+
+    def fail(*args, **kwargs):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(zipfile.ZipFile, "writestr", fail)
+    with pytest.raises(OSError, match="disk full"):
+        tool.reproduce(wheel, NAME, EPOCH)
+    assert [x.name for x in tmp_path.iterdir()] == [WHEEL]
+    assert wheel.read_bytes() == before
