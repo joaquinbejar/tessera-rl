@@ -322,6 +322,13 @@ where
             )
         };
         let mut scratch = build(cfg, pool_options)?;
+        // Search never builds or reads the privileged state buffer
+        // (ADR-0079 item 7.3).
+        if scratch.has_privileged_state() {
+            return Err(SearchError::Engine(EngineError::PrivilegedState {
+                reason: "a search scratch pool never has the privileged state buffer",
+            }));
+        }
         // The joint's mask offsets are the scratch pool's (SPEC 11.3).
         if M::ENABLED
             && (0..heads)

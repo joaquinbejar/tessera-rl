@@ -43,6 +43,7 @@ class Env:
     entity_group_heads: int
     turns: str
     policy_groups: tuple[str, ...]
+    privileged_state: bool
     outputs: str
     halves: tuple[range, range] | None
     env_id: str | None
@@ -66,6 +67,8 @@ class Env:
     def freeze_normalization(self, frozen: bool = True) -> None: ...
     @property
     def canvas(self) -> tuple[int, int] | None: ...
+    @property
+    def state(self) -> dict[str, np.ndarray] | None: ...
     @property
     def heuristic_actions(self) -> np.ndarray | None: ...
     @property

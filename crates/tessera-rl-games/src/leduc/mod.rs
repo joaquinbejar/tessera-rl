@@ -43,6 +43,10 @@ use tessera_rl_core::{
 use tessera_rl_macros::{EnvConfig, EnvState, Observation};
 use tessera_rl_num::rng::{ObsRng, StepRng};
 
+mod privileged;
+
+pub use privileged::{LeducPrivileged, STATE_LEN};
+
 /// Versioned environment id (ADR-0023).
 pub const ENV_ID: &str = "tessera/Leduc-v1";
 /// Environment version, bumped with any change to its outputs.

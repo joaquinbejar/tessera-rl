@@ -273,6 +273,11 @@ class TesseraVectorEnv(VectorEnv):
         self._shapes = [(np.dtype(dtype), tuple(shape)) for _, dtype, shape, *_ in layout["leaves"]]
         # Set masks are read as int8 0/1, a zero-copy view of the bool rows.
         self._set_masks = _set_masks(layout)
+        #: The privileged state leaves (``privileged_state=True``), whose rows
+        #: each call returns in ``info["state"]``; empty without the option.
+        self._state_leaves = [
+            (name or "state", np.dtype(dtype), tuple(shape)) for name, dtype, shape, *_ in layout.get("state_leaves", ())
+        ]
 
     # -- outputs -------------------------------------------------------------
 
@@ -312,6 +317,23 @@ class TesseraVectorEnv(VectorEnv):
             info["final_info"] = {}
             info["_final_info"] = done.copy()
         return info
+
+    def _state_info(self, out) -> dict:
+        """The privileged state of every instance as ``info["state"]``, owned
+        copies of shape ``(num_envs, ...)``: one array, or a dict of them
+        for several leaves. Empty without ``privileged_state=True``."""
+        raw = out.get("state")
+        if not self._state_leaves or raw is None:
+            return {}
+        leaves = {}
+        for (name, dtype, shape), buf in zip(self._state_leaves, raw, strict=True):
+            if self.outputs == "borrowed":
+                leaves[name] = np.array(np.asarray(buf))
+            else:
+                leaves[name] = np.frombuffer(buf, dtype=dtype).reshape((self.num_envs, *shape)).copy()
+        if len(leaves) == 1:
+            return {"state": next(iter(leaves.values()))}
+        return {"state": leaves}
 
     def _mask_info(self, out) -> dict:
         """A masked environment's masks of slot 0, owned copies: the root
@@ -372,6 +394,7 @@ class TesseraVectorEnv(VectorEnv):
         native_seed = None if all(s is None for s in seeds) else seeds
         out = self._native.reset(native_seed, ids)
         info = self._mask_info(out)
+        info.update(self._state_info(out))
         if self.metadata["tessera_kind"] == "host":
             # An aborted reset leaves its instance pending (ADR-0065).
             info.update(self._host_infos(out))
@@ -413,6 +436,7 @@ class TesseraVectorEnv(VectorEnv):
             if self._agents != 1:
                 rewards = rewards.copy()
         info = self._info(out, terminated | truncated)
+        info.update(self._state_info(out))
         if self.metadata["tessera_kind"] == "host":
             # ADR-0065: an aborted episode is truncated; its final_obs (in
             # SAME_STEP) is the zero row the engine wrote.
@@ -502,6 +526,9 @@ def _first_info(info: dict) -> dict:
             out[key] = bool(info[key][0])
     if "abort_code" in info:
         out["abort_code"] = int(info["abort_code"][0])
+    if "state" in info:
+        state = info["state"]
+        out["state"] = {k: np.array(v[0]) for k, v in state.items()} if isinstance(state, dict) else np.array(state[0])
     for key in ("refused", "refuse_code"):
         if key in info:
             # Per agent slot of instance 0 (ADR-0070).

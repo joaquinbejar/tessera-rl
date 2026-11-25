@@ -310,6 +310,23 @@ def _visible_option(visible: str | None, agents: Any, kwargs: dict) -> bool:
     return visible == "learner"
 
 
+def _state_space(state_leaves) -> spaces.Space | None:
+    """The space of the privileged state leaves: one Box, a Dict of Boxes, or
+    ``None`` without them."""
+    boxes = {}
+    for name, dtype, shape, low, high in state_leaves:
+        dt = np.dtype(dtype)
+        size = int(np.prod(shape))
+        lo = np.broadcast_to(np.asarray(low, dtype=np.float64).ravel(), (size,)).reshape(shape).astype(dt)
+        hi = np.broadcast_to(np.asarray(high, dtype=np.float64).ravel(), (size,)).reshape(shape).astype(dt)
+        boxes[name or "state"] = spaces.Box(low=lo, high=hi, shape=tuple(shape), dtype=dt)
+    if not boxes:
+        return None
+    if len(boxes) == 1:
+        return next(iter(boxes.values()))
+    return spaces.Dict(boxes)
+
+
 def agent_name(slot: int, generation: int) -> str:
     """The PettingZoo name of the agent (slot, generation)."""
     return f"agent_{slot}" if generation == 0 else f"agent_{slot}_g{generation}"
@@ -367,10 +384,25 @@ class _Agents:
             self.action_space = spaces.Discrete(n)
         self.observation_space = spaces.Dict(leaves)
         self.last = None
+        #: The privileged state space (``privileged_state=True``): one Box,
+        #: or a Dict of them for several leaves; ``None`` without the buffer.
+        self.state_space = _state_space(layout.get("state_leaves", ()))
 
     @property
     def multi(self) -> bool:
         return len(self.nvec) > 1
+
+    def state(self):
+        """The privileged state of the one instance after the last call."""
+        raw = getattr(self.env, "state", None)
+        if self.state_space is None or raw is None:
+            raise _native.CapabilityError(
+                f"{self.env_id}: state() needs privileged_state=True and a reset first"
+            )
+        arrays = {name: np.array(v[0]) for name, v in raw.items()}
+        if isinstance(self.state_space, spaces.Dict):
+            return arrays
+        return next(iter(arrays.values()))
 
     def head_masks(self, slot: int) -> tuple[np.ndarray, ...]:
         """Every head's mask of agent ``slot``, owned copies (multi-head)."""
@@ -507,6 +539,8 @@ class TesseraParallelEnv(ParallelEnv):
             raise
         self.possible_agents = [n for n in self._a.names if not self._a.hidden(self._a.slot_of[n])]
         self.agents = list(self.possible_agents)
+        if self._a.state_space is not None:
+            self.state_space = self._a.state_space
 
     def _visible(self, names: list[str]) -> list[str]:
         """``names`` without the hidden heuristic slots."""
@@ -517,6 +551,13 @@ class TesseraParallelEnv(ParallelEnv):
 
     def action_space(self, agent):
         return self._a.action_space
+
+    def state(self):
+        """The privileged state of the environment after the last ``reset``
+        or ``step`` (``privileged_state=True``), as ``state_space`` describes:
+        both hidden and public information, for a centralized critic. Never
+        feed it to an acting policy. ``CapabilityError`` without the option."""
+        return self._a.state()
 
     def set_reset_source(self, archive=None, weights=None) -> None:
         """Archive resets: forwarded to the wrapped
@@ -647,6 +688,8 @@ class TesseraAECEnv(AECEnv):
             self._a.env.close()
             raise
         self.possible_agents = list(self._a.names)
+        if self._a.state_space is not None:
+            self.state_space = self._a.state_space
         # No reset here: the first reset() is the seed's first episode.
         self.agents = list(self.possible_agents)
         self.rewards = {n: 0.0 for n in self.agents}
@@ -661,6 +704,13 @@ class TesseraAECEnv(AECEnv):
 
     def action_space(self, agent):
         return self._a.action_space
+
+    def state(self):
+        """The privileged state of the environment after the last ``reset``
+        or ``step`` (``privileged_state=True``), as ``state_space`` describes:
+        both hidden and public information, for a centralized critic. Never
+        feed it to an acting policy. ``CapabilityError`` without the option."""
+        return self._a.state()
 
     def observe(self, agent):
         return self._a.observe(self._a.slot_of[agent])

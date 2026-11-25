@@ -242,6 +242,12 @@ class Env:
         #: The `make` options that shape the records (for a shadow pool).
         self._config: dict | None = None
         self._leaves = [(name or "obs", np.dtype(dtype), tuple(shape)) for name, dtype, shape, *_ in layout["leaves"]]
+        #: Whether the pool has the privileged state buffer
+        #: (``make(..., privileged_state=True)``); see ``state``.
+        self.privileged_state: bool = bool(layout.get("privileged_state", False))
+        state_leaves = layout.get("state_leaves", ())
+        self._state_leaves = [(name or "state", np.dtype(dtype), tuple(shape)) for name, dtype, shape, *_ in state_leaves]
+        self._state: dict[str, np.ndarray] | None = None
 
     def reset(self, seed: int | None = None, ids=None) -> Step | list[HalfStep] | AsyncStep | None:
         """Resets every instance; a new seed base if ``seed`` is given.
@@ -446,6 +452,7 @@ class Env:
         # Kept apart from `_last_out`, which an adapter may clear after
         # reading it (#545): `terminal_observations` reads this.
         self._last_terminal = out.get("terminal_observations") if rows is None else None
+        self._state = self._wrap_state(out, n)
         if self.outputs == "borrowed":
             # Zero-copy, read-only arrays over the native views (the buffer
             # protocol carries dtype and shape).
@@ -503,6 +510,32 @@ class Env:
             name: np.array(np.frombuffer(buf, dtype=dtype).reshape((n, a, *shape)))
             for (name, dtype, shape), buf in zip(self._leaves, bufs, strict=True)
         }
+
+    def _wrap_state(self, out: dict, n: int) -> dict[str, np.ndarray] | None:
+        raw = out.get("state")
+        if raw is None:
+            return None
+        if self.outputs == "borrowed":
+            return {name: np.asarray(v) for (name, _, _), v in zip(self._state_leaves, raw, strict=True)}
+        return {
+            name: np.frombuffer(buf, dtype=dtype).reshape((n, *shape))
+            for (name, dtype, shape), buf in zip(self._state_leaves, raw, strict=True)
+        }
+
+    @property
+    def state(self) -> dict[str, np.ndarray] | None:
+        """The privileged state of every instance after the last call, one
+        array per leaf of shape ``(num_envs, ...)``: everything a centralized
+        critic needs, hidden information included. ``None`` without
+        ``make(..., privileged_state=True)`` or before the first call.
+
+        It holds what no player observes: never feed it to a policy that
+        acts. Search never reads it. A pending instance's row is zero. In
+        ``borrowed`` mode the arrays are views with the same window as the
+        observations of that call (``is_stale`` reports when it ended); in
+        ``owned`` mode they are fresh copies. ``Step`` does not carry it.
+        """
+        return self._state
 
     def snapshot(self, index: int) -> bytes:
         """The canonical record of instance ``index``; in Async mode an opaque
@@ -749,7 +782,7 @@ _STRING_OPTIONS = {"auto_reset", "outputs", "mode", "gather", "obs", "wait", "sc
 
 #: Constructor options passed as exact ``bool`` (the RTS ``seat_swap``, the
 #: Lanterns ``zero_on_fuse``, the limit order book's ``allow_short_cash``).
-_BOOL_OPTIONS = frozenset({"seat_swap", "zero_on_fuse", "allow_short_cash"})
+_BOOL_OPTIONS = frozenset({"seat_swap", "zero_on_fuse", "allow_short_cash", "privileged_state"})
 
 #: Asset options: a bundled asset's name (``str``) or its bytes
 #: (``bytes``, or any buffer, copied to exact ``bytes``).

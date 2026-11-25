@@ -31,6 +31,7 @@ mod multi_probe;
 mod observe_panic;
 mod onnx_api;
 mod policy;
+mod privileged;
 mod render_api;
 mod replay_api;
 mod search;

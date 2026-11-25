@@ -212,6 +212,7 @@ fn copy_token<E: Environment, M: MaskProvider<E>>(
         episode_terminated: flags(token.episode_terminated()),
         episode_truncated: flags(token.episode_truncated()),
         masks: flags(token.masks()),
+        state: Vec::new(),
     }
 }
 
@@ -770,6 +771,7 @@ mod tests {
             wait_cap_us: None,
             transforms: tessera_rl_engine::Transforms::new(),
             policy_map: None,
+            privileged_state: false,
             pipelined: true,
             asynced: None,
         })
@@ -823,6 +825,7 @@ mod tests {
             wait_cap_us: None,
             transforms: tessera_rl_engine::Transforms::new(),
             policy_map: None,
+            privileged_state: false,
             pipelined: true,
             asynced: None,
         };
@@ -937,6 +940,7 @@ mod tests {
             wait_cap_us: None,
             transforms: tessera_rl_engine::Transforms::new(),
             policy_map: None,
+            privileged_state: false,
             pipelined: true,
             asynced: None,
         };

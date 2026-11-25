@@ -335,6 +335,28 @@ pub trait InfoHeuristic: ImperfectInformation {
     );
 }
 
+/// The privileged state of one instance (ADR-0079 item 7): everything a
+/// centralized critic needs, hidden information included, as one row per
+/// instance. The engine writes it only when the pool opts in
+/// (`EnvPool::with_privileged_state`), in the same calls that write the
+/// observations; search never reads it.
+///
+/// Its rules are those of `Environment` code: no allocation, no locks, no
+/// randomness, and the output must be a function of `cfg` and `state`.
+pub trait PrivilegedState: Environment {
+    /// The space of one instance's row: boxes, dicts and sets, laid out as
+    /// an observation space. Called at construction only.
+    ///
+    /// # Errors
+    ///
+    /// [`SpaceError`] for an invalid space.
+    fn state_space(cfg: &Self::Config) -> Result<Space, SpaceError>;
+
+    /// Writes the privileged state of `state`. Every leaf is zero on entry,
+    /// as for [`Environment::observe`] (ADR-0058).
+    fn write_state(cfg: &Self::Config, state: &Self::State, out: &mut ObsWriter<'_, '_, ()>);
+}
+
 /// Identity for persisted snapshots (ADR-0011).
 ///
 /// Format 1 covers only environments with no external immutable assets:
