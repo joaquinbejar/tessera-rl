@@ -557,13 +557,16 @@ mod tests {
                 .collect()
         };
         let want = section(&workspace, "[workspace.lints.clippy]");
-        assert!(!want.is_empty());
+        assert!(want.len() > 5, "{want:?}");
         let got = section(toml, "[lints.clippy]");
         for lint in &want {
             // The scaffold forbids unsafe code outright.
             let unsafe_only = lint.starts_with("multiple_unsafe_ops_per_block")
                 || lint.starts_with("undocumented_unsafe_blocks");
-            assert!(unsafe_only || got.contains(lint), "{lint} missing from the scaffold");
+            assert!(
+                unsafe_only || got.contains(lint),
+                "{lint} missing from the scaffold"
+            );
         }
         assert!(toml.contains("unsafe_code = \"forbid\""));
         assert!(toml.contains("missing_docs = \"deny\""));
@@ -590,7 +593,11 @@ mod tests {
         for (rel, text) in &plan.files {
             assert!(!text.contains("metadata.tessera"), "{rel:?}");
         }
-        assert!(plan.files.iter().all(|(p, _)| p != Path::new("clippy.toml")));
+        assert!(
+            plan.files
+                .iter()
+                .all(|(p, _)| p != Path::new("clippy.toml"))
+        );
     }
 
     #[test]

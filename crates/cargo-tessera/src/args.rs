@@ -607,7 +607,14 @@ mod tests {
         assert_eq!(a.kind, Kind::Env);
         assert_eq!(a.agents, 2);
         let got = parse(argv(&["new", "my-env", "--kind", "host", "--snapshots"])).unwrap();
-        assert!(matches!(got, Command::New(NewArgs { kind: Kind::Host, snapshots: true, .. })));
+        assert!(matches!(
+            got,
+            Command::New(NewArgs {
+                kind: Kind::Host,
+                snapshots: true,
+                ..
+            })
+        ));
     }
 
     #[test]
@@ -717,26 +724,6 @@ mod tests {
                 },
             ),
             (
-                &["new", "a", "--kind", "lane"],
-                ArgsError::InvalidValue {
-                    option: "--kind",
-                    value: "lane".to_owned(),
-                    reason: "host or env",
-                },
-            ),
-            (
-                &["new", "a", "--kind", "env", "--kind", "env"],
-                ArgsError::Repeated("--kind"),
-            ),
-            (
-                &["new", "a", "--kind", "env", "--snapshots"],
-                ArgsError::InvalidValue {
-                    option: "--snapshots",
-                    value: "--snapshots".to_owned(),
-                    reason: "only with --kind host: every Environment has snapshot, restore and fork",
-                },
-            ),
-            (
                 &["new", "a", "--quick"],
                 ArgsError::UnknownOption {
                     command: "new",
@@ -776,6 +763,35 @@ mod tests {
             (
                 &["bench", "--offline=1"],
                 ArgsError::UnexpectedValue("--offline"),
+            ),
+        ];
+        for (args, want) in cases {
+            assert_eq!(parse(argv(args)).unwrap_err(), *want, "{args:?}");
+        }
+    }
+
+    #[test]
+    fn test_parse_kind_refusals_each_return_their_error() {
+        let cases: &[(&[&str], ArgsError)] = &[
+            (
+                &["new", "a", "--kind", "lane"],
+                ArgsError::InvalidValue {
+                    option: "--kind",
+                    value: "lane".to_owned(),
+                    reason: "host or env",
+                },
+            ),
+            (
+                &["new", "a", "--kind", "env", "--kind", "env"],
+                ArgsError::Repeated("--kind"),
+            ),
+            (
+                &["new", "a", "--kind", "env", "--snapshots"],
+                ArgsError::InvalidValue {
+                    option: "--snapshots",
+                    value: "--snapshots".to_owned(),
+                    reason: "only with --kind host: every Environment has snapshot, restore and fork",
+                },
             ),
         ];
         for (args, want) in cases {

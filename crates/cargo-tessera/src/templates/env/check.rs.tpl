@@ -15,6 +15,7 @@
 //! observations, rewards, masks and episode flags.
 
 use core::num::{NonZeroU32, NonZeroUsize};
+use std::fmt::Write as _;
 use std::path::Path;
 
 use tessera_rl_core::encoding::StateHasher;
@@ -163,7 +164,8 @@ fn replay(p: &mut Pool, rows: &[Vec<i32>]) -> Result<Vec<u64>, EngineError> {
 fn golden_json(hashes: &[u64]) -> String {
     let rows: Vec<String> = hashes.iter().map(|h| format!("    \"{h:016x}\"")).collect();
     let mut out = String::from("{\n");
-    out.push_str(&format!("  \"env_id\": \"{ENV_ID}\",\n  \"calls\": [\n"));
+    // Writing to a String cannot fail.
+    let _ = writeln!(out, "  \"env_id\": \"{ENV_ID}\",\n  \"calls\": [");
     out.push_str(&rows.join(",\n"));
     out.push_str("\n  ]\n}\n");
     out
@@ -261,8 +263,8 @@ fn test_spaces_observations_within_bounds() {
         let obs = out.observation(0).unwrap();
         let rows = usize::try_from(INSTANCES).unwrap() * AGENTS;
         assert_eq!(obs.len(), rows * 4 * 4, "4 i32 values per agent");
-        for v in obs.chunks_exact(4) {
-            let v = i32::from_le_bytes(v.try_into().unwrap());
+        for v in obs.as_chunks::<4>().0 {
+            let v = i32::from_le_bytes(*v);
             assert!((0..=BOUND).contains(&v), "{v} outside 0..={BOUND}");
         }
         assert_eq!(out.masks().len(), rows * usize::try_from(CHOICES).unwrap());

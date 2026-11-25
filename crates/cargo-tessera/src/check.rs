@@ -90,15 +90,20 @@ mod tests {
 
     #[test]
     fn test_env_marker_only_in_its_table() {
-        assert!(env_marker("[package]\nname = \"a\"\n\n[package.metadata.tessera]\n# x\nkind = \"env\"\n"));
+        assert!(env_marker(
+            "[package]\nname = \"a\"\n\n[package.metadata.tessera]\n# x\nkind = \"env\"\n"
+        ));
         assert!(!env_marker("[package]\nkind = \"env\"\n"));
         assert!(!env_marker("[package.metadata.tessera]\nkind = \"host\"\n"));
-        assert!(!env_marker("[package.metadata.tessera]\n[lib]\nkind = \"env\"\n"));
+        assert!(!env_marker(
+            "[package.metadata.tessera]\n[lib]\nkind = \"env\"\n"
+        ));
     }
 
     #[test]
     fn test_run_python_on_an_env_crate_refused() {
-        let dir = std::env::temp_dir().join(format!("cargo-tessera-envkind-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("cargo-tessera-envkind-{}", std::process::id()));
         std::fs::create_dir_all(dir.join("tests")).unwrap();
         std::fs::write(
             dir.join("Cargo.toml"),
