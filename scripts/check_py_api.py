@@ -40,6 +40,14 @@ MODULES = ("gym", "pz", "puffer", "replay", "render")
 # item 2 names them (some are in flight). Recorded in the header.
 EXPERIMENTAL_MODULES = ("eval", "jax", "masks", "search", "transforms", "viewer")
 
+# ADR-0094 Q1, the owner's call: the host-environment API is experimental
+# until decided, in Python as in Rust (`scripts/check_facade_api.py`). These
+# `tessera_rl` names are left out while `INCLUDE_EXPERIMENTAL` is False; the
+# owner flips both scripts with Q1. Each must be in `__all__` (a test checks
+# it), so a rename cannot slip into the stable snapshot.
+INCLUDE_EXPERIMENTAL = False
+EXPERIMENTAL_NAMES = ("HostEnv", "HostStep")
+
 
 class Refused(Exception):
     """A consistency error, reported with rc 1."""
@@ -215,7 +223,11 @@ def snapshot(root: pathlib.Path) -> str:
                 public = a.asname or a.name
                 if a.asname == a.name and not public.startswith("_") and public not in runtime:
                     raise Refused(f"__init__.pyi re-exports {public}, which __init__.py's __all__ does not list")
-    w.public("", runtime, "tessera_rl")
+    missing = sorted(set(EXPERIMENTAL_NAMES) - set(runtime))
+    if missing:
+        raise Refused(f"EXPERIMENTAL_NAMES not in tessera_rl.__all__: {missing}")
+    stable = runtime if INCLUDE_EXPERIMENTAL else [n for n in runtime if n not in EXPERIMENTAL_NAMES]
+    w.public("", stable, "tessera_rl")
     for m in MODULES:
         w.public(m, module_names(stubs.tree(m)), f"tessera_rl.{m}")
     header = [
@@ -225,6 +237,8 @@ def snapshot(root: pathlib.Path) -> str:
         f"# Python: {PYTHON[0]}.{PYTHON[1]}",
         "# modules: tessera_rl (__all__), " + ", ".join(MODULES),
         "# EXPERIMENTAL_MODULES (not tracked until ADR-0094 item 2 names them): " + ", ".join(EXPERIMENTAL_MODULES),
+        f"# INCLUDE_EXPERIMENTAL: {INCLUDE_EXPERIMENTAL}"
+        + ("" if INCLUDE_EXPERIMENTAL else " (ADR-0094 Q1 open: " + ", ".join(f"tessera_rl.{n}" for n in EXPERIMENTAL_NAMES) + " excluded)"),
     ]
     return "\n".join(header + sorted(w.lines)) + "\n"
 

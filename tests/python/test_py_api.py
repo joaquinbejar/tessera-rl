@@ -57,6 +57,32 @@ def test_py_api_header_records_python_modules_and_stubtest():
     assert "# modules: tessera_rl (__all__), gym, pz, puffer, replay, render" in text
     assert "EXPERIMENTAL_MODULES" in text
     assert "stubtest" in text
+    assert "# INCLUDE_EXPERIMENTAL: False (ADR-0094 Q1 open: tessera_rl.HostEnv, tessera_rl.HostStep excluded)" in text
+
+
+def test_py_api_host_names_follow_the_experimental_switch(tmp_path):
+    """ADR-0094 Q1: HostEnv and HostStep are out of the stable snapshot, and
+    flipping INCLUDE_EXPERIMENTAL brings them (and only them) in."""
+    body = [line for line in (ROOT / "api" / "tessera-rl-py.api").read_text().splitlines() if not line.startswith("#")]
+    assert not any("tessera_rl.HostEnv" in line or "tessera_rl.HostStep" in line for line in body)
+    root = tree(tmp_path)
+    script = tmp_path / "flipped.py"
+    script.write_text(SCRIPT.read_text().replace("INCLUDE_EXPERIMENTAL = False", "INCLUDE_EXPERIMENTAL = True", 1))
+    r = subprocess.run([sys.executable, str(script), "check", "--root", str(root)], capture_output=True, text=True)
+    assert r.returncode == 1
+    added = {line for line in diff_lines(r.stdout) if line.startswith("+") and not line.startswith("+# ")}
+    assert added and all("tessera_rl.HostEnv" in line or "tessera_rl.HostStep" in line for line in added), added
+    assert any(line.startswith("+class tessera_rl.HostEnv") for line in added)
+
+
+def test_py_api_experimental_names_must_be_in_all(tmp_path):
+    root = tree(tmp_path)
+    edit(pkg(root) / "__init__.py", '    "HostStep",\n', "")
+    edit(pkg(root) / "__init__.pyi", '    "HostStep",\n', "")
+    edit(pkg(root) / "__init__.pyi", "from tessera_rl._host import HostStep as HostStep\n", "")
+    r = run(root)
+    assert r.returncode == 1
+    assert "EXPERIMENTAL_NAMES not in tessera_rl.__all__" in r.stdout
 
 
 def test_py_api_added_public_name_is_caught(tmp_path):

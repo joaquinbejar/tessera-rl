@@ -4,6 +4,7 @@
 # Python: 3.11
 # modules: tessera_rl (__all__), gym, pz, puffer, replay, render
 # EXPERIMENTAL_MODULES (not tracked until ADR-0094 item 2 names them): eval, jax, masks, search, transforms, viewer
+# INCLUDE_EXPERIMENTAL: False (ADR-0094 Q1 open: tessera_rl.HostEnv, tessera_rl.HostStep excluded)
 attr tessera_rl.AsyncStep.ids: np.ndarray
 attr tessera_rl.AsyncStep.step: Step
 attr tessera_rl.Env.action_bounds: tuple[float, float] | None
@@ -28,41 +29,6 @@ attr tessera_rl.EpochReport.normalization: NormalizationReport | None
 attr tessera_rl.HalfStep.half: int
 attr tessera_rl.HalfStep.ids: range
 attr tessera_rl.HalfStep.step: Step
-attr tessera_rl.HostEnv.action_bounds: tuple[float, float] | None
-attr tessera_rl.HostEnv.action_choices: int
-attr tessera_rl.HostEnv.action_nvec: tuple[int, ...]
-attr tessera_rl.HostEnv.agents: int
-attr tessera_rl.HostEnv.auto_reset: str
-attr tessera_rl.HostEnv.canvas: None
-attr tessera_rl.HostEnv.entity_group_heads: int
-attr tessera_rl.HostEnv.env_id: str
-attr tessera_rl.HostEnv.env_version: int
-attr tessera_rl.HostEnv.halves: None
-attr tessera_rl.HostEnv.initial_agents: int
-attr tessera_rl.HostEnv.kind: str
-attr tessera_rl.HostEnv.mask_heads: tuple[tuple[int, tuple[int, ...], int], ...]
-attr tessera_rl.HostEnv.mode: str
-attr tessera_rl.HostEnv.num_envs: int
-attr tessera_rl.HostEnv.outputs: str
-attr tessera_rl.HostEnv.refuses_agents: bool
-attr tessera_rl.HostEnv.snapshots: bool
-attr tessera_rl.HostEnv.spawns: bool
-attr tessera_rl.HostEnv.turns: str
-attr tessera_rl.HostStep.abort_code: np.ndarray
-attr tessera_rl.HostStep.aborted: np.ndarray
-attr tessera_rl.HostStep.acting: np.ndarray
-attr tessera_rl.HostStep.agent_terminated: np.ndarray
-attr tessera_rl.HostStep.agent_truncated: np.ndarray
-attr tessera_rl.HostStep.alive: np.ndarray
-attr tessera_rl.HostStep.episode_terminated: np.ndarray
-attr tessera_rl.HostStep.episode_truncated: np.ndarray
-attr tessera_rl.HostStep.masks: np.ndarray | None
-attr tessera_rl.HostStep.observations: dict[str, np.ndarray]
-attr tessera_rl.HostStep.pending_reset: np.ndarray
-attr tessera_rl.HostStep.refuse_code: np.ndarray | None = None
-attr tessera_rl.HostStep.refused: np.ndarray | None = None
-attr tessera_rl.HostStep.rewards: np.ndarray
-attr tessera_rl.HostStep.slot_generations: np.ndarray
 attr tessera_rl.Step.acting: np.ndarray
 attr tessera_rl.Step.agent_terminated: np.ndarray
 attr tessera_rl.Step.agent_truncated: np.ndarray
@@ -123,8 +89,6 @@ class tessera_rl.ExhaustedError(TesseraError)
 class tessera_rl.FloatingPointEnvironmentError(TesseraError)
 class tessera_rl.ForkError(TesseraError)
 class tessera_rl.HalfStep(NamedTuple)
-class tessera_rl.HostEnv()
-class tessera_rl.HostStep(NamedTuple)
 class tessera_rl.League()
 class tessera_rl.OnnxError(TesseraError)
 class tessera_rl.OrderError(TesseraError)
@@ -213,29 +177,6 @@ method tessera_rl.Env.step(self, actions: npt.ArrayLike) -> Step
 method tessera_rl.Env.targets(self) -> list[dict[str, int]]
 method tessera_rl.Env.terminal_observations(self) -> dict[str, np.ndarray] @property
 method tessera_rl.Env.watch(self) -> _native.WatchHandle
-method tessera_rl.HostEnv.__enter__(self) -> HostEnv
-method tessera_rl.HostEnv.__exit__(self, *exc: type[BaseException] | BaseException | TracebackType | None) -> None
-method tessera_rl.HostEnv.__init__(self, obj: Any, outputs: str='borrowed') -> None
-method tessera_rl.HostEnv.close(self) -> None
-method tessera_rl.HostEnv.encode(self, ids: _Ids=None) -> bytes
-method tessera_rl.HostEnv.fork(self, src: int, dst: list[int]) -> None
-method tessera_rl.HostEnv.import_record(self, index: int, record: bytes) -> None
-method tessera_rl.HostEnv.is_poisoned(self) -> bool
-method tessera_rl.HostEnv.load(self, data: bytes, ids: _Ids=None, max_instances: None=None, max_decoded_bytes: None=None) -> None
-method tessera_rl.HostEnv.recv(self, *args: Any, **kwargs: Any) -> NoReturn
-method tessera_rl.HostEnv.render(self, *args: Any, **kwargs: Any) -> NoReturn
-method tessera_rl.HostEnv.reset(self, seed: int | None=None) -> HostStep
-method tessera_rl.HostEnv.reset_from(self, ids: Any, entries: Any) -> NoReturn
-method tessera_rl.HostEnv.restore(self, ids: _Ids, snapshots: Sequence[bytes]) -> None
-method tessera_rl.HostEnv.restore_all(self, snapshots: Sequence[bytes]) -> None
-method tessera_rl.HostEnv.restore_pool(self, snapshot: Any, archive: Any=None) -> NoReturn
-method tessera_rl.HostEnv.scene(self, *args: Any, **kwargs: Any) -> NoReturn
-method tessera_rl.HostEnv.send(self, *args: Any, **kwargs: Any) -> NoReturn
-method tessera_rl.HostEnv.set_reset_source(self, archive: Any=None, weights: Any=None) -> NoReturn
-method tessera_rl.HostEnv.snapshot(self, index: int) -> bytes
-method tessera_rl.HostEnv.snapshot_all(self, *args: Any, **kwargs: Any) -> NoReturn
-method tessera_rl.HostEnv.state_hash(self, index: int) -> int
-method tessera_rl.HostEnv.step(self, actions: npt.ArrayLike) -> HostStep
 method tessera_rl.League.__del__(self) -> None
 method tessera_rl.League.__init__(self, population: list[Any], roles: list[dict[str, Any]], *, elo_k: float=16.0, trueskill: tuple[float, float, float] | None=None, rate_population: bool=False) -> None
 method tessera_rl.League.export(self) -> str
