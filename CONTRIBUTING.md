@@ -25,6 +25,7 @@ Before you start:
   (`feat:`, `fix:`, `docs:`, `test:`, `ci:`, `chore:`, with a scope where it
   helps).
 - Keep a pull request to one concern.
+- A change to the `tessera-rl` facade's public API re-blesses `api/tessera-rl.api` (`make facade-api-bless`) in the same pull request, so its diff shows the API change; `make facade-api` fails otherwise.
 - Every source file starts with the SPDX header
   `SPDX-License-Identifier: MIT OR Apache-2.0` in its comment syntax.
 - After adding or changing a dependency, run `make deny` (cargo-deny:
