@@ -1167,6 +1167,7 @@ dependencies = [
  "tessera-rl-core",
  "tessera-rl-engine",
  "tessera-rl-games",
+ "tessera-rl-league",
  "tessera-rl-num",
  "tessera-rl-search",
  "thiserror",

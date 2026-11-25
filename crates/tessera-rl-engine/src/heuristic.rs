@@ -129,10 +129,14 @@ where
         for &slot in ctx.heuristic_slots {
             let s = usize::from(slot);
             // An opponent slot whose instance plays an `External` policy
-            // keeps the caller's validated row (ADR-0088 item 2.4).
-            if layout.external_opponent(first + i, s) {
+            // keeps the caller's validated row (ADR-0088 item 2.4); an
+            // ONNX policy's row, written on the calling thread, is only
+            // validated here (head C).
+            let mode = layout.opponent_mode(first + i, s);
+            if mode == Some(crate::layout::OPPONENT_EXTERNAL) {
                 continue;
             }
+            let onnx = mode == Some(crate::layout::OPPONENT_ONNX);
             let k = i * a + s;
             let (Some(disc), Some(cont)) = (
                 chunk.discrete.get_mut(k * dh..(k + 1) * dh),
@@ -140,25 +144,29 @@ where
             ) else {
                 continue;
             };
-            // Overwrite the engine's copy whatever was submitted (item
-            // 3.1); a slot that does not act keeps zeros.
-            disc.fill(0);
-            cont.fill(0.0);
             let acting = header
                 .agents()
                 .get(s)
                 .is_some_and(|r| r.alive.get() && r.acting.get());
-            let Some(agent) = AgentSlot::new(slot, a).filter(|_| acting) else {
+            if !onnx {
+                // Overwrite the engine's copy whatever was submitted (item
+                // 3.1); a slot that does not act keeps zeros.
+                disc.fill(0);
+                cont.fill(0.0);
+                let Some(agent) = AgentSlot::new(slot, a).filter(|_| acting) else {
+                    continue;
+                };
+                let mut rng = StepRng::heuristic(ctx.authority, &identity, slot);
+                act(
+                    ctx.cfg,
+                    state,
+                    agent,
+                    &mut rng,
+                    &mut ActionWriter::new(disc, cont),
+                );
+            } else if !acting {
                 continue;
-            };
-            let mut rng = StepRng::heuristic(ctx.authority, &identity, slot);
-            act(
-                ctx.cfg,
-                state,
-                agent,
-                &mut rng,
-                &mut ActionWriter::new(disc, cont),
-            );
+            }
             let mask = chunk
                 .outputs
                 .masks

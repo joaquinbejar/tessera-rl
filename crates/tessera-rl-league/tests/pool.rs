@@ -21,7 +21,7 @@ use tessera_rl_engine::{
 };
 use tessera_rl_league::trueskill::Rating;
 use tessera_rl_league::{
-    League, LeagueConfig, LeagueError, Matchmaking, PolicyKind, PoolLeague, Population, Table, elo,
+    League, LeagueConfig, Matchmaking, PolicyKind, PoolLeague, Population, Table, elo,
 };
 use tessera_rl_num::identity::{RngIdentity, Seed};
 use tessera_rl_num::rng::{RngAuthority, StepRng};
@@ -349,21 +349,35 @@ fn test_league_barrier_applies_episode_results() {
 }
 
 #[test]
-fn test_league_refuses_onnx_policies_and_bad_setups() {
-    let onnx = League::new(
-        LeagueConfig {
-            matchmaking: Matchmaking::Uniform,
-            ..LeagueConfig::default()
-        },
-        population(&[PolicyKind::Onnx {
-            content_hash: [0; 16],
-        }]),
+fn test_league_onnx_policies_need_onnx_opponents_and_bad_setups_are_refused() {
+    let onnx = PoolLeague::new(
+        League::new(
+            LeagueConfig {
+                matchmaking: Matchmaking::Uniform,
+                ..LeagueConfig::default()
+            },
+            population(&[PolicyKind::Onnx {
+                content_hash: [7; 16],
+            }]),
+        )
+        .unwrap(),
     )
     .unwrap();
-    assert_eq!(
-        PoolLeague::new(onnx).err(),
-        Some(LeagueError::OnnxUnsupported(0))
-    );
+    let view = onnx.view().unwrap();
+    // ADR-0088 erratum 2: an ONNX opponent without `with_onnx_opponents`
+    // is refused at the step, before any state changes.
+    let mut p = EnvPool::<PaddleDuel, NoMasks>::new(cfg(), options(Schedule::Static, 2))
+        .unwrap()
+        .with_league(&[1], view, Box::new(onnx))
+        .unwrap();
+    p.reset_all(Reseed::Keep).unwrap();
+    let actions = vec![0i32; N as usize * 2];
+    let refused = p.step(ActionInput {
+        discrete: &actions,
+        continuous: &[],
+    });
+    assert!(matches!(refused, Err(EngineError::League { .. })));
+    assert!(!p.is_poisoned());
     let l = league(&MIXED);
     let view = l.view().unwrap();
     let none = EnvPool::<PaddleDuel, NoMasks>::new(cfg(), options(Schedule::Static, 6))
@@ -616,7 +630,10 @@ impl tessera_rl_engine::league::LeagueSubsystem for FailOnce {
     fn barrier(
         &mut self,
         results: tessera_rl_engine::league::LeagueResults<'_>,
-    ) -> Result<(LeagueView, tessera_rl_engine::league::LeagueReport), tessera_rl_engine::league::LeagueBarrierError> {
+    ) -> Result<
+        (LeagueView, tessera_rl_engine::league::LeagueReport),
+        tessera_rl_engine::league::LeagueBarrierError,
+    > {
         self.calls += 1;
         self.seen.lock().unwrap().push(results.results.len());
         if self.calls == 1 {
@@ -626,7 +643,11 @@ impl tessera_rl_engine::league::LeagueSubsystem for FailOnce {
         }
         Ok((
             self.view.clone(),
-            tessera_rl_engine::league::LeagueReport::new(results.results.len() as u64, results.dropped, false),
+            tessera_rl_engine::league::LeagueReport::new(
+                results.results.len() as u64,
+                results.dropped,
+                false,
+            ),
         ))
     }
 }
@@ -651,7 +672,10 @@ fn test_league_results_kept_after_a_failed_barrier_apply_exactly_once() {
     for t in 0..14 {
         step(&mut p, t % 3);
     }
-    assert!(matches!(p.epoch_barrier(), Err(EngineError::LeagueBarrier(_))));
+    assert!(matches!(
+        p.epoch_barrier(),
+        Err(EngineError::LeagueBarrier(_))
+    ));
     let applied = p.epoch_barrier().unwrap().league.unwrap().applied;
     assert_eq!(p.epoch_barrier().unwrap().league.unwrap().applied, 0);
     let seen = seen.lock().unwrap().clone();

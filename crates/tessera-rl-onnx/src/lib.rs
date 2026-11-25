@@ -9,7 +9,8 @@
 //! library at the explicit path, checks its exact version, and keeps one
 //! runtime per process. `OnnxEvaluator` runs a model on that runtime as
 //! a search evaluator, on the CPU execution provider only, and records its
-//! `Provenance`. These items exist only with the `onnx` feature, so the
+//! `Provenance`. `OnnxOpponents` runs league opponent models for a pool
+//! (ADR-0088 erratum 2). These items exist only with the `onnx` feature, so the
 //! crate docs name them as code rather than links, and build either way.
 
 #[cfg(feature = "onnx")]
@@ -22,6 +23,8 @@ mod hash;
 mod layout;
 #[cfg(feature = "onnx")]
 mod loader;
+#[cfg(feature = "onnx")]
+mod opponents;
 #[cfg(feature = "onnx")]
 mod provenance;
 #[cfg(feature = "onnx")]
@@ -37,6 +40,8 @@ pub use evaluator::{
 };
 #[cfg(feature = "onnx")]
 pub use loader::{PINNED_VERSION, Runtime, load_runtime};
+#[cfg(feature = "onnx")]
+pub use opponents::{OnnxOpponents, content_hash};
 #[cfg(feature = "onnx")]
 pub use provenance::Provenance;
 #[cfg(feature = "onnx")]

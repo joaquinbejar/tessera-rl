@@ -138,7 +138,7 @@ impl<E: Environment, M: MaskProvider<E>> EnvPool<E, M> {
         pool.actions.opponent = (0..E::MAX_AGENTS)
             .map(|s| Bool8::from((mask >> s) & 1 == 1))
             .collect();
-        pool.actions.opponent_heuristic = vec![Bool8::from(false); n];
+        pool.actions.opponent_mode = vec![crate::layout::OPPONENT_EXTERNAL; n];
         pool.league = Some(Box::new(crate::league::LeagueState::new(
             view,
             subsystem,

@@ -466,6 +466,10 @@ pub enum EngineError {
         /// The rule broken.
         reason: &'static str,
     },
+    /// An ONNX opponent policy failed to run (ADR-0088 erratum 2): nothing
+    /// was written and the pool is not poisoned.
+    #[error(transparent)]
+    OpponentPolicy(#[from] crate::league::OpponentPolicyError),
     /// The league's barrier failed (ADR-0088 erratum 1, condition 3): the
     /// pool keeps its previous view and is not poisoned.
     #[error(transparent)]

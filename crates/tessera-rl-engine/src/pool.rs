@@ -107,7 +107,7 @@ pub struct EnvPool<E: Environment, M: MaskProvider<E> = NoMasks> {
     /// field; `()` for every other state (ADR-0090).
     pub(crate) columns: ColumnStore<Columns<E>>,
     pub(crate) actions: ActionLayout,
-    discrete: Vec<i32>,
+    pub(crate) discrete: Vec<i32>,
     continuous: Vec<f32>,
     pub(crate) outputs: Outputs,
     pub(crate) seen: Vec<Bool8>,
@@ -153,6 +153,9 @@ pub struct EnvPool<E: Environment, M: MaskProvider<E> = NoMasks> {
     pub(crate) heuristic_continuous: Vec<f32>,
     /// The league (ADR-0088): `None` without an `Opponent` slot.
     pub(crate) league: Option<Box<crate::league::LeagueState>>,
+    /// The ONNX opponent pass (ADR-0088 erratum 2): `None` without ONNX
+    /// opponents, and then the step never reaches it.
+    pub(crate) onnx: Option<Box<crate::league::OnnxPass>>,
     _masks: PhantomData<M>,
 }
 
@@ -606,6 +609,7 @@ where
             heuristic_discrete: Vec::new(),
             heuristic_continuous: Vec::new(),
             league: None,
+            onnx: None,
             _masks: PhantomData,
         })
     }
@@ -1183,7 +1187,7 @@ where
             league.refresh(
                 &self.authority,
                 &self.headers,
-                &mut self.actions.opponent_heuristic,
+                &mut self.actions.opponent_mode,
             );
         }
     }
@@ -1222,6 +1226,9 @@ where
 
     fn step_inner(&mut self, actions: ActionInput<'_>) -> Result<(), EngineError> {
         self.validate_and_copy(actions)?;
+        if self.league.is_some() {
+            self.run_onnx_opponents()?;
+        }
         // From here the headers change. A step raises `episode_steps`, and a
         // same-step reset `episode_index`, by at most one; `fast_clean` is
         // set again below only if the step completes cleanly.

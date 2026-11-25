@@ -33,6 +33,7 @@ tessera-rl-search = { workspace = true, optional = true }
 [dev-dependencies]
 tessera-rl-classic.workspace = true
 tessera-rl-games.workspace = true
+tessera-rl-league.workspace = true
 
 [lints]
 workspace = true
