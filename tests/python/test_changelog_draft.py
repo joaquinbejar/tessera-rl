@@ -1,8 +1,13 @@
 # SPDX-License-Identifier: MIT OR Apache-2.0
 """scripts/changelog_draft.py (SPEC 20.1, #350): drafts and checks against
-fixture git histories in a temporary repository."""
+fixture git histories in a temporary repository.
+
+The tests that need git skip, with `GIT_MISSING`, where no `git` is on
+`PATH`, as in the musllinux wheel images (#644); the parser tests still run.
+`test_changelog_draft_skip.py` checks that skip."""
 
 import importlib.util
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -16,6 +21,14 @@ cd = importlib.util.module_from_spec(spec)
 # Registered first: @dataclass looks its module up in sys.modules.
 sys.modules[spec.name] = cd
 spec.loader.exec_module(cd)
+
+GIT_MISSING = "git is not on PATH: these tests build fixture git repositories (#644)"
+
+
+def require_git() -> None:
+    """Skips the calling test where `git` is not on `PATH`."""
+    if shutil.which("git") is None:
+        pytest.skip(GIT_MISSING)
 
 
 def git(repo: Path, *args: str) -> str:
@@ -33,6 +46,7 @@ def commit(repo: Path, message: str) -> str:
 
 @pytest.fixture
 def repo(tmp_path: Path) -> Path:
+    require_git()
     git(tmp_path, "init", "-q", "-b", "main")
     commit(tmp_path, "chore: start")
     git(tmp_path, "tag", "v0.0.1")
@@ -138,6 +152,7 @@ def test_changelog_draft_check_commit_without_ref_is_missing(repo, tmp_path):
 
 
 def test_changelog_draft_real_history_parses():
+    require_git()
     tags = subprocess.run(["git", "tag", "--list", "v*"], cwd=ROOT, capture_output=True, text=True).stdout.split()
     if not tags:
         pytest.skip("no release tag in this checkout (shallow CI clone)")
