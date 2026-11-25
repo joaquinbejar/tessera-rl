@@ -611,6 +611,10 @@ jax = [
     { name = "jax", specifier = "==0.10.2" },
     { name = "jaxlib", specifier = "==0.10.2" },
 ]
+site = [
+    { name = "mkdocs", specifier = "==1.6.1" },
+    { name = "pdoc", specifier = "==16.0.0" },
+]
 test = [
     { name = "gymnasium", specifier = "==1.4.0" },
     { name = "numpy", specifier = "==2.4.6" },

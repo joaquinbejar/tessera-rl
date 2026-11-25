@@ -219,8 +219,11 @@ nice -n 10 "$venv/$bindir/python$exe" -I "$root/tools/wheel_golden.py" \
 # wheel surface and is tested in CI's python job. test_pilot, test_loop and
 # test_gate skip here because the venv has no torch: adding torch to it needs a
 # decision about them.
+# test_compat_locks.py checks the checkout's compat locks with `uv lock --check`: a property
+# of the repository, not of the wheel, and the wheel images have no uv and an empty cache.
+# make py-test runs it; this job ignores it, as test_bench.py.
 nice -n 10 "$venv/$bindir/python$exe" -I -m pytest -q -rs -p no:cacheprovider "$root/tests/python" --rootdir "$root" \
-    --ignore="$root/tests/python/test_bench.py" || suite=$?
+    --ignore="$root/tests/python/test_bench.py" --ignore="$root/tests/python/test_compat_locks.py" || suite=$?
 if [ "$orderbook_leg" = 1 ]; then
     # On its own as well, so a skip cannot pass for a run: the example must
     # import from the venv, and the file's tests run against the two wheels

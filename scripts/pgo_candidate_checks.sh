@@ -92,9 +92,10 @@ cd "$WHEEL_RUN/run"
 anchor=0 suite=0 num=0
 nice -n 10 "$venv/bin/python" -I "$root/tools/wheel_golden.py" \
     --actions "$WHEEL_RUN/golden-actions" --out "$WHEEL_RUN/golden-report.json" || anchor=$?
-# The same exclusion as wheel_job.sh: test_bench.py builds with cargo into the repository's target/.
+# The same exclusions as wheel_job.sh: test_bench.py builds with cargo into the repository's
+# target/, and test_compat_locks.py checks the checkout's locks, not the wheel.
 nice -n 10 "$venv/bin/python" -I -m pytest -q -p no:cacheprovider "$root/tests/python" --rootdir "$root" \
-    --ignore="$root/tests/python/test_bench.py" || suite=$?
+    --ignore="$root/tests/python/test_bench.py" --ignore="$root/tests/python/test_compat_locks.py" || suite=$?
 nice -n 10 "$venv/bin/python" -I "$root/tools/pgo/determinism.py" record --wheel "$wheel" --out "$WHEEL_RUN/determinism.json"
 cd "$root"
 WHEEL_CARGO_PROFILE="$cargo_profile" scripts/wheel_num_tests.sh || num=$?
