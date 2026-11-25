@@ -197,6 +197,7 @@ def test_device_tensors_returned_after_wait_queued():
     backend = FakeBackend()
     env = tessera_rl.make(CARTPOLE, num_envs=4, workers=0, device="cuda:0", _device_backend=backend)
     env.reset()
+    env._session._pending.wait()
     backend.log.clear()
     env.reset()
     n = len(_fields(env.host_outputs()))
@@ -429,7 +430,8 @@ def test_device_buffers_bounded_across_partial_results():
     plain.set_reset_source(tessera_rl.Archive(plain, snaps))
     for _ in range(3):
         _assert_same(plain.step(_actions(plain)), env.step(_actions(env)))
-        for call in (lambda e: e.reset(ids=[1, 2]), lambda e: e.reset_from([3], [1]), lambda e: e.reset(ids=[0])):
+        # Sync mode refuses reset(ids=...); reset_from is its partial writer.
+        for call in (lambda e: e.reset_from([3], [1]), lambda e: e.reset_from([0, 2], [0]), lambda e: e.reset_from([1], [1])):
             p, d = call(plain), call(env)
             if d is not None:
                 _assert_same(p, d)
@@ -444,6 +446,14 @@ def test_device_halfstep_arrays_cover_only_their_half():
     env = tessera_rl.make(
         CARTPOLE, num_envs=4, chunk_size=1, workers=1, mode="pipelined", device="cuda:0", _device_backend=alloc_backend
     )
+    env.reset()
+    count = len(env._session._buffers)
+    for _ in range(3):
+        for h in (0, 1):
+            env.send(h, np.zeros((len(env.halves[h]), env.agents), dtype=np.int32))
+        env.recv()
+        env.recv()
+    assert len(env._session._buffers) == count
     env.reset()
     hosts = env.host_outputs()
     spans = {}
