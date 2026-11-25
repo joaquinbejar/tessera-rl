@@ -67,8 +67,13 @@ def test_wheels_leaves_nothing_needing_a_chown():
     assert "chown" not in WORKFLOW
 
 
-def test_wheel_job_excludes_only_the_bench_tests():
-    assert re.findall(r"--ignore\S*", JOB) == ['--ignore="$root/tests/python/test_bench.py"']
+def test_wheel_job_excludes_only_the_bench_and_compat_lock_tests():
+    # test_compat_locks.py checks the checkout's locks with uv, which the
+    # wheel images do not have; make py-test runs it.
+    assert re.findall(r"--ignore\S*", JOB) == [
+        '--ignore="$root/tests/python/test_bench.py"',
+        '--ignore="$root/tests/python/test_compat_locks.py"',
+    ]
     assert "--deselect" not in JOB
 
 
