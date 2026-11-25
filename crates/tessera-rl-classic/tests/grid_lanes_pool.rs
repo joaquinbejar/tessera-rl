@@ -263,11 +263,7 @@ fn differential(cfg: &GridConfig, case: Case) {
             grid.reset(&partial, Reseed::Keep).unwrap();
             rows.reset(&partial, Reseed::Keep).unwrap();
         }
-        // Grid's validator assumes the walk's parity, which a wall breaks
-        // (a blocked move spends a step), so Grid refuses reachable states of a
-        // walled layout on import; the imports run on the open layout here and
-        // on every layout in `test_grid_lanes_pool_records_cross_stores_on_walls`.
-        if t % 37 == 36 && cfg.layout.get().wall_count() == 0 {
+        if t % 37 == 36 {
             // Records cross the stores through their bytes, both ways, and
             // Grid's records import into GridLanes through the mapping.
             let from_rows = rows.encode(&ids).unwrap();

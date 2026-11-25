@@ -45,8 +45,7 @@ impl Validate for GridLanes {
             return invalid("an outcome that disagrees with the position");
         }
         // A move into a wall spends a step without moving, so the parity of
-        // the walk holds only on a layout with no walls (Grid's validator
-        // assumes it always does).
+        // the walk holds only on a layout with no walls (as Grid's, #721).
         let distance = i64::from(col.abs()) + i64::from(row.abs());
         let steps = i64::from(s.steps);
         let parity = cfg.layout.get().wall_count() > 0 || (steps - distance) % 2 == 0;
