@@ -194,7 +194,7 @@ def test_wheels_orderbook_leg_stays_dispatch_only_with_an_approved_window():
     triggers = re.search(r"^on:\n(.*?)\n\S", WORKFLOW, re.M | re.DOTALL).group(1)
     assert re.findall(r"^  (\w+):", triggers, re.M) == ["workflow_dispatch"]
     assert re.search(r"^      approved_window:\n(?:        .*\n)*?        required: true$", triggers, re.M)
-    assert re.search(r"^    needs: linux$", _job("macos"), re.M)
+    assert re.search(r"^    needs: \[preflight, linux\]$", _job("macos"), re.M)
 
 
 def test_wheel_job_orderbook_leg_builds_installs_and_tests_the_example():
@@ -239,3 +239,29 @@ def test_wheels_windows_job_is_hosted_guarded_and_pinned():
     run = re.search(r"scripts/wheel_job\.sh x86_64-pc-windows-msvc \"\" ([0-9a-f]{64}) ([0-9a-f]{64}) release", job)
     assert run, job
     assert "name: wheel-x86_64-pc-windows-msvc" in job
+
+
+WHEEL_JOBS = ["linux", "linux-aarch64", "macos", "musl-x86_64", "musl-aarch64", "windows"]
+
+
+def test_wheels_preflight_outputs_the_commit_and_its_time():
+    # #654: the legs' images have no git, so preflight derives both.
+    job = _job("preflight")
+    assert "    outputs:\n      commit: ${{ steps.rev.outputs.commit }}\n      epoch: ${{ steps.rev.outputs.epoch }}\n" in job
+    rev = re.search(r"^      - id: rev\n(.*?)(?=^      - |\Z)", job, re.M | re.DOTALL).group(1)
+    assert 'epoch="$(git log -1 --format=%ct "$GITHUB_SHA")"' in rev
+    assert 'echo "commit=$GITHUB_SHA" >> "$GITHUB_OUTPUT"' in rev and 'echo "epoch=$epoch" >> "$GITHUB_OUTPUT"' in rev
+    assert job.index("actions/checkout@") < job.index("- id: rev")
+
+
+def test_wheels_every_leg_gets_the_sbom_inputs_from_preflight():
+    assert sorted(WHEEL_JOBS) == sorted(j for j in re.findall(r"^  ([\w-]+):\n", WORKFLOW.split("\njobs:\n", 1)[1], re.M)
+                                        if j != "preflight")
+    for name in WHEEL_JOBS:
+        job = _job(name)
+        assert "scripts/wheel_job.sh" in job, name
+        env = re.search(r"^    env:\n((?:      .*\n)+)", job, re.M).group(1)
+        assert "      WHEEL_COMMIT: ${{ needs.preflight.outputs.commit }}\n" in env, name
+        assert "      SOURCE_DATE_EPOCH: ${{ needs.preflight.outputs.epoch }}\n" in env, name
+        needs = re.search(r"^    needs: (.*)$", job, re.M).group(1)
+        assert needs in ("preflight", "[preflight, linux]"), (name, needs)

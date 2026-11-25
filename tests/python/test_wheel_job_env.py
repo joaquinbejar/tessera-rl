@@ -26,16 +26,20 @@ PATTERNED = ["CARGO_TARGET_DIR", "CARGO_PROFILE_RELEASE_LTO", "CARGO_PROFILE_REL
 HOSTILE = {"RUSTFLAGS": "-D warnings", "CARGO_TERM_COLOR": "always", "CARGO_ENCODED_RUSTFLAGS": "-Cdebuginfo=2",
            "CARGO_TARGET_DIR": "/nonexistent/target", "CARGO_PROFILE_RELEASE_LTO": "fat", "RUSTC_WRAPPER": "/nonexistent"}
 SCRUB = tuple(REFUSED)
+# The reproducible-SBOM inputs (#654), valid unless a test overrides them.
+COMMIT, EPOCH = "0123456789abcdef0123456789abcdef01234567", "1700000000"
 
 
-def run(tmp_path: Path, env: dict, profile: "str | None" = "release"):
+def run(tmp_path: Path, env: dict, profile: "str | None" = "release", drop: tuple = ()):
     """The real script with a logging curl first on PATH; returns the process, the log and WHEEL_RUN."""
     fake, log, wheel_run = tmp_path / "fake", tmp_path / "log", tmp_path / "wheel-run"
     fake.mkdir()
     curl = fake / "curl"
     curl.write_text(f"#!/bin/sh\necho \"curl $*\" >> {log}\nexit 1\n")
     curl.chmod(curl.stat().st_mode | stat.S_IXUSR)
-    env = {**env, "PATH": f"{fake}:{env['PATH']}", "WHEEL_RUN": str(wheel_run)}
+    env = {"WHEEL_COMMIT": COMMIT, "SOURCE_DATE_EPOCH": EPOCH, **env, "PATH": f"{fake}:{env['PATH']}", "WHEEL_RUN": str(wheel_run)}
+    for name in drop:
+        del env[name]
     p = subprocess.run(["bash", str(SCRIPT), "x86_64-unknown-linux-gnu", "manylinux_2_28", "0" * 64, "0" * 64, *([] if profile is None else [profile])],
                        env=env, capture_output=True, text=True, check=False, cwd=tmp_path)
     return p, log.read_text() if log.exists() else "", wheel_run
@@ -94,3 +98,33 @@ def test_wheel_job_accepts_release_and_wheel_and_defaults_to_release(tmp_path, p
     p, log, wheel_run = run(tmp_path, clean(), profile)
     assert "profile must be" not in p.stderr and "refused" not in p.stderr
     assert log.startswith("curl ") and wheel_run.is_dir()
+
+
+
+@pytest.mark.parametrize(
+    "name, value",
+    [("WHEEL_COMMIT", None), ("WHEEL_COMMIT", ""), ("WHEEL_COMMIT", COMMIT[:39]), ("WHEEL_COMMIT", COMMIT.upper()),
+     ("WHEEL_COMMIT", COMMIT + "0"), ("WHEEL_COMMIT", "g" + COMMIT[1:]), ("SOURCE_DATE_EPOCH", None), ("SOURCE_DATE_EPOCH", ""),
+     ("SOURCE_DATE_EPOCH", "-1"), ("SOURCE_DATE_EPOCH", "1.5"), ("SOURCE_DATE_EPOCH", "17e8"), ("SOURCE_DATE_EPOCH", " 1")],
+    ids=["commit-absent", "commit-empty", "commit-short", "commit-upper", "commit-long", "commit-nonhex", "epoch-absent",
+         "epoch-empty", "epoch-negative", "epoch-fraction", "epoch-exponent", "epoch-space"],
+)
+def test_wheel_job_refuses_a_missing_or_malformed_sbom_input_before_anything(tmp_path, name, value):
+    # #654: one line naming the input, before any download or directory.
+    env = {k: v for k, v in clean().items() if k not in ("WHEEL_COMMIT", "SOURCE_DATE_EPOCH")}
+    if value is None:
+        p, log, wheel_run = run(tmp_path, env, drop=(name,))
+    else:
+        p, log, wheel_run = run(tmp_path, {**env, name: value})
+    assert p.returncode == 2, (p.returncode, p.stderr)
+    lines = p.stderr.strip().splitlines()
+    assert len(lines) == 1 and lines[0].startswith(f"wheel_job: {name} must be"), p.stderr
+    assert log == "" and not wheel_run.exists()
+
+
+def test_wheel_job_reads_the_epoch_then_hides_it_from_the_build():
+    # SOURCE_DATE_EPOCH reaches only the SBOM steps, never maturin or cargo.
+    text = SCRIPT.read_text()
+    assert text.index("WHEEL_COMMIT must be") < text.index("mkdir -p")
+    read, hide = text.index('sbom_epoch="$SOURCE_DATE_EPOCH"\n'), text.index("\nunset SOURCE_DATE_EPOCH\n")
+    assert read < hide < text.index("install_rustup.sh") < text.index("uvx ")

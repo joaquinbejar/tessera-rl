@@ -21,6 +21,8 @@ ROOT = Path(__file__).resolve().parents[2]
 AMBIENT = ("RUSTFLAGS", "RUSTDOCFLAGS", "CARGO_ENCODED_RUSTFLAGS", "CARGO_ENCODED_RUSTDOCFLAGS", "CARGO_BUILD_RUSTFLAGS",
            "CARGO_BUILD_RUSTDOCFLAGS", "CARGO_BUILD_TARGET", "CARGO_BUILD_TARGET_DIR", "RUSTC", "RUSTC_WRAPPER",
            "RUSTC_WORKSPACE_WRAPPER", "CARGO_BUILD_RUSTC", "CARGO_BUILD_RUSTC_WRAPPER", "CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER")
+# The reproducible-SBOM inputs (#654).
+COMMIT, EPOCH = "0123456789abcdef0123456789abcdef01234567", "1700000000"
 
 
 def _tool(path: Path, body: str) -> None:
@@ -42,7 +44,7 @@ exit 0
 
 def _uv_tarball(log: Path, payload: Path) -> bytes:
     bodies = {
-        "uvx": f'echo "uvx $*" >> {log}\nprev=""; for a in "$@"; do if [ "$prev" = --out ]; then mkdir -p "$a"; '
+        "uvx": f'echo "uvx $*" >> {log}\necho "uvx-env epoch=${{SOURCE_DATE_EPOCH-unset}}" >> {log}\nprev=""; for a in "$@"; do if [ "$prev" = --out ]; then mkdir -p "$a"; '
                f'echo "$*" > "$a/tessera_rl-0.1.0-cp311-abi3-manylinux_2_28_x86_64.whl"; fi; prev="$a"; done\n',
         "uv": f'echo "uv $*" >> {log}\nif [ "$1" = venv ]; then mkdir -p "$4/bin"; cp {payload}/py "$4/bin/python"; fi\n',
     }
@@ -77,7 +79,8 @@ def run(tmp_path: Path, *profile: str, compare_exit: int = 0, orderbook: str | N
     # jobs, whose suite runs this file): it is set here only when asked (#313).
     env = {k: v for k, v in os.environ.items()
            if k not in AMBIENT and k != "TESSERA_WHEEL_ORDERBOOK" and not k.startswith(("CARGO_PROFILE_", "CARGO_TARGET_"))}
-    env.update(PATH=f"{fake}:{os.environ['PATH']}", WHEEL_RUN=str(tmp_path / "wr"), FAKE_COMPARE_EXIT=str(compare_exit), FAKE_LOG=str(log),
+    env.update(PATH=f"{fake}:{os.environ['PATH']}", WHEEL_RUN=str(tmp_path / "wr"), WHEEL_COMMIT=COMMIT, SOURCE_DATE_EPOCH=EPOCH,
+               FAKE_COMPARE_EXIT=str(compare_exit), FAKE_LOG=str(log),
                FAKE_ORDERBOOK_EXIT=str(orderbook_exit))
     if orderbook is not None:
         env["TESSERA_WHEEL_ORDERBOOK"] = orderbook
@@ -156,7 +159,7 @@ def test_wheel_job_refuses_the_onnx_feature_on_other_targets(tmp_path, target):
     shutil.copy2(ROOT / "scripts" / "wheel_job.sh", root / "scripts" / "wheel_job.sh")
     _tool(fake / "curl", f"touch {marker}\nexit 0\n")
     env = {k: v for k, v in os.environ.items() if k not in AMBIENT and not k.startswith(("CARGO_PROFILE_", "CARGO_TARGET_"))}
-    env.update(PATH=f"{fake}:{os.environ['PATH']}", WHEEL_RUN=str(tmp_path / "wr"))
+    env.update(PATH=f"{fake}:{os.environ['PATH']}", WHEEL_RUN=str(tmp_path / "wr"), WHEEL_COMMIT=COMMIT, SOURCE_DATE_EPOCH=EPOCH)
     p = subprocess.run(["bash", "scripts/wheel_job.sh", target, "", "0" * 64, "0" * 64, "release"],
                        env=env, cwd=root, capture_output=True, text=True, check=False)
     assert p.returncode == 2, (p.returncode, p.stderr)
@@ -206,3 +209,36 @@ def test_wheel_job_orderbook_leg_is_off_unless_asked(tmp_path, flag):
 def test_wheel_job_orderbook_leg_refuses_other_values(tmp_path):
     p, lines, root, wr = run(tmp_path, "release", orderbook="yes")
     assert p.returncode == 2 and "TESSERA_WHEEL_ORDERBOOK must be 0 or 1" in p.stderr
+
+
+def _reproduce(lines):
+    return [x for x in lines if x.startswith("uv run ") and "tools/sbom_reproduce.py" in x]
+
+
+@pytest.mark.parametrize("profile, orderbook", [("release", None), ("wheel", None), ("release", "1")], ids=["release", "wheel", "orderbook"])
+def test_wheel_job_reproduces_every_built_sbom_before_any_install(tmp_path, profile, orderbook):
+    # #654: every built wheel, named by commit, target, profile and features,
+    # with the caller's epoch, before the first install; and sbom_check gets
+    # the main wheel's name and epoch.
+    p, lines, root, wr = run(tmp_path, profile, orderbook=orderbook)
+    assert p.returncode == 0, p.stderr
+    calls = _reproduce(lines)
+    assert all(c.startswith("uv run --python 3.11 --no-project python -I tools/sbom_reproduce.py --wheel ") for c in calls), calls
+    main = f"tessera-rl-wheel:{COMMIT}:x86_64-unknown-linux-gnu:{profile}:onnx"
+    expected = [f"--wheel dist/tessera_rl-0.1.0-cp311-abi3-manylinux_2_28_x86_64.whl --name {main} --epoch {EPOCH}"]
+    if profile == "wheel":
+        expected.append(f"--wheel {wr}/w0-dist/tessera_rl-0.1.0-cp311-abi3-manylinux_2_28_x86_64.whl "
+                        f"--name tessera-rl-wheel:{COMMIT}:x86_64-unknown-linux-gnu:release:onnx --epoch {EPOCH}")
+    if orderbook:
+        expected.append(f"--wheel {wr}/orderbook-dist/tessera_rl-0.1.0-cp311-abi3-manylinux_2_28_x86_64.whl "
+                        f"--name tessera-example-host-orderbook-wheel:{COMMIT}:x86_64-unknown-linux-gnu:release:none "
+                        f"--epoch {EPOCH} --optional")
+    assert [c.split("tools/sbom_reproduce.py ", 1)[1] for c in calls] == expected
+    first_install = next(i for i, x in enumerate(lines) if x.startswith("uv pip install"))
+    last_build = max(i for i, x in enumerate(lines) if x.startswith("uvx"))
+    assert all(last_build < lines.index(c) < first_install for c in calls)
+    # maturin never sees the epoch.
+    envs = [x for x in lines if x.startswith("uvx-env ")]
+    assert envs and all(x == "uvx-env epoch=unset" for x in envs), envs
+    check = [x for x in lines if "tools/sbom_check.py" in x]
+    assert len(check) == 1 and check[0].endswith(f"--serial-name {main} --epoch {EPOCH}"), check

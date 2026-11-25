@@ -146,6 +146,11 @@ jobs:
       TESSERA_EXPECT_FP_TRAPS: "1"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # wheel_job.sh's reproducible-SBOM inputs (#654), from the checkout.
+      - name: The commit and its time
+        run: |
+          echo "WHEEL_COMMIT=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+          echo "SOURCE_DATE_EPOCH=$(git log -1 --format=%ct HEAD)" >> "$GITHUB_ENV"
       # rustup-init.exe 1.29.3 and uv 0.13.6 (uv-x86_64-pc-windows-msvc.zip),
       # by their published sha256; the toolchain is rust-toolchain's.
       - run: scripts/wheel_job.sh x86_64-pc-windows-msvc "" 38027d51d69a5d05493627a0634dbea52d6cd793c8f072d2373d3f4163eec7db a2a8820d5eea32f08ef467ef3b7f66883a9b076d5737a2fc2fbb5f458d1bb50f release
