@@ -1028,6 +1028,7 @@ dependencies = [
  "tessera-rl-num",
  "tessera-rl-ops",
  "tessera-rl-rts",
+ "tessera-rl-world",
  "thiserror",
 ]
 

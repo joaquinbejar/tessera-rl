@@ -57,8 +57,8 @@ use tessera_rl_games::{
 use tessera_rl_markets::{LimitOrderBook, LobConfig};
 use tessera_rl_num::identity::Seed;
 use tessera_rl_ops::{JobShop, JobShopConfig, Vrp, VrpConfig};
-use tessera_rl_world::{Survival, SurvivalConfig};
 use tessera_rl_rts::{Rts, RtsConfig};
+use tessera_rl_world::{Survival, SurvivalConfig};
 
 /// Batches of pregenerated actions cycled through a measurement.
 const ACTION_BATCHES: usize = 64;
