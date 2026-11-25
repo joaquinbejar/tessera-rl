@@ -94,8 +94,11 @@ fn detect() -> Option<NonZeroUsize> {
 /// under the sysfs cpu directory `root`; `None` if any of them cannot be
 /// read or parsed, or `cpus` is empty.
 #[cfg_attr(
-    not(any(target_os = "linux", test)),
-    expect(dead_code, reason = "sysfs exists on Linux only")
+    not(any(all(target_os = "linux", not(miri)), test)),
+    expect(
+        dead_code,
+        reason = "sysfs exists on Linux only, and Miri's detect() returns None"
+    )
 )]
 #[must_use]
 pub(crate) fn sysfs_cores(root: &Path, cpus: &[usize]) -> Option<NonZeroUsize> {
@@ -114,8 +117,11 @@ pub(crate) fn sysfs_cores(root: &Path, cpus: &[usize]) -> Option<NonZeroUsize> {
 /// `Relationship: i32` and `Size: u32` (native endian). A truncated or
 /// malformed record (size below 8 or past the end) gives `None`.
 #[cfg_attr(
-    not(any(windows, test)),
-    expect(dead_code, reason = "the record list is a Windows format")
+    not(any(all(windows, not(miri)), test)),
+    expect(
+        dead_code,
+        reason = "the record list is a Windows format, and Miri's detect() returns None"
+    )
 )]
 #[must_use]
 pub(crate) fn count_records(mut rest: &[u8], relation: i32) -> Option<NonZeroUsize> {
