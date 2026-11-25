@@ -66,8 +66,9 @@ pub(crate) fn flat<E: Environment>(
 /// The new target of every slot `changes` names, each from that slot's
 /// current target with the listed fields replaced, all checked before the
 /// caller writes any: a known slot, a known field, a value of the field's
-/// type, and the config's own validation of the merged values (ranges and
-/// cross-field checks). A slot listed twice gets its changes in order.
+/// type, and the config's own validation of a config holding the slot's
+/// whole current target with the changes applied (ranges and cross-field
+/// checks). A slot listed twice gets its changes in order.
 ///
 /// # Errors
 ///
@@ -105,7 +106,17 @@ where
         let at = match out.iter().position(|(i, _, _)| *i == id) {
             Some(at) => at,
             None => {
-                out.push((id, *current, cfg.clone()));
+                // The config copy holds the slot's whole current target
+                // first, so the config's cross-field checks see the merged
+                // values, whatever the number of adaptive fields.
+                let mut copy = cfg.clone();
+                let mut target = *current;
+                for i in 0..fields.names.len() {
+                    if let Some(v) = (fields.get)(current, i) {
+                        (fields.set)(&mut copy, &mut target, i, v);
+                    }
+                }
+                out.push((id, target, copy));
                 out.len() - 1
             }
         };
