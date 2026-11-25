@@ -61,6 +61,14 @@ jobs:
       # The module moved to the shared boundary crate (ADR-0062 item 8); built
       # alone it needs `extension-module` not to link libpython.
       - run: cargo +nightly miri test -p tessera-rl-pyffi --features pyo3/extension-module --lib --locked ffi::dlpack
+      # The XLA FFI path (ADR-0095): the shared guard, the registry and the
+      # handler on hand-built call frames (the thunk test is ignored: naked
+      # assembly). The handler's panic test leaks the payload by design
+      # (`ffi::dispose`), so it runs alone with leaks ignored.
+      - run: "cargo +nightly miri test -p tessera-rl-pyffi --features pyo3/extension-module,test-hooks --lib --locked -- ffi::inner xla::registry xla::handler --skip test_handler_panic_poisons"
+      - run: "cargo +nightly miri test -p tessera-rl-pyffi --features pyo3/extension-module,test-hooks --lib --locked -- test_handler_panic_poisons"
+        env:
+          MIRIFLAGS: -Zmiri-env-forward=PROPTEST_DISABLE_FAILURE_PERSISTENCE -Zmiri-ignore-leaks
       # No public unsafe function in tessera-rl-pyffi, from rustdoc's JSON
       # (nightly only; #272 step 3). The source scan runs in the Python tests.
       - run: python3 scripts/check_pyffi_api.py

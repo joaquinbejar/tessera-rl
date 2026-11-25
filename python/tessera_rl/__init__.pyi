@@ -18,6 +18,7 @@ from tessera_rl._native import ActionError as ActionError
 from tessera_rl._native import ArgumentError as ArgumentError
 from tessera_rl._native import CapabilityError as CapabilityError
 from tessera_rl._native import ConcurrencyError as ConcurrencyError
+from tessera_rl._native import OrderError as OrderError
 from tessera_rl._native import ConfigError as ConfigError
 from tessera_rl._native import EvaluatorError as EvaluatorError
 from tessera_rl._native import ExhaustedError as ExhaustedError
@@ -42,6 +43,7 @@ __all__ = [
     "ArgumentError",
     "CapabilityError",
     "ConcurrencyError",
+    "OrderError",
     "ConfigError",
     "AsyncStep",
     "Env",

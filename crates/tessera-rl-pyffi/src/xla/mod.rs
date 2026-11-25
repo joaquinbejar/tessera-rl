@@ -9,6 +9,7 @@
 //! - `sys`: `#[repr(C)]` bindings for the subset of the XLA FFI C API 0.3
 //!   the handler uses, checked against the pinned header by layout tests.
 
+pub mod handler;
 pub mod registry;
 mod sync;
 pub mod sys;

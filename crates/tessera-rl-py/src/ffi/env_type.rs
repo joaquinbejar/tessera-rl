@@ -81,6 +81,7 @@ macro_rules! varargs {
 noargs!(LayoutM, api::layout);
 noargs!(OutputsM, api::outputs);
 noargs!(IsPoisonedM, api::is_poisoned);
+noargs!(XlaOpenM, crate::xla_api::open);
 varargs!(RecvM, api::recv);
 varargs!(RestoreM, crate::async_api::restore);
 noargs!(SnapshotAllM, api::snapshot_all);
@@ -139,6 +140,10 @@ static METHODS: MethodTable<EnvBody> = MethodTable::new(&[
     MethodRow::noargs::<OutputsM>(c"outputs", c"outputs($self, /)\n--\n\nCopies of the last call's outputs."),
     MethodRow::noargs::<IsPoisonedM>(c"is_poisoned", c"is_poisoned($self, /)\n--\n\nWhether the pool is poisoned."),
     MethodRow::noargs::<CloseM>(c"close", c"close($self, /)\n--\n\nFrees the pool."),
+    MethodRow::noargs::<XlaOpenM>(
+        c"_xla_open",
+        c"_xla_open($self, /)\n--\n\nRegisters this Env as an XLA FFI handle sharing its guard: (slot, generation). Experimental (tessera_rl.jax.ffi_handle).",
+    ),
     MethodRow::varargs::<ResetM>(c"reset", c"reset($self, seed=None, ids=None, delivered=None, /)\n--\n\nreset(seed=None, ids=None)"),
     MethodRow::varargs::<StepM>(c"step", c"step($self, actions, /)\n--\n\nstep(actions: bytes of int32)"),
     MethodRow::varargs::<SnapshotM>(c"snapshot", c"snapshot($self, id, /)\n--\n\nsnapshot(id) -> bytes"),

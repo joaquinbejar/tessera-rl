@@ -313,10 +313,6 @@ pub(crate) trait PoolOps: Send {
     /// only: the split-phase modes refuse it. A pool with privileged state
     /// (ADR-0079) is refused too: the XLA FFI path exports no privileged
     /// leaves.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "the XLA FFI handler of #369 head B calls it")
-    )]
     fn outputs_into(&self, _dst: &mut [&mut [u8]]) -> Result<(), BindError> {
         Err(BindError::Argument(
             "outputs_into is available in sync mode only".to_owned(),
@@ -419,6 +415,10 @@ pub(crate) trait PoolOps: Send {
     ) -> Result<(), BindError>;
     fn fork(&mut self, src: u32, dst: &[u32]) -> Result<(), BindError>;
     fn is_poisoned(&self) -> bool;
+    /// Poisons the pool (ADR-0028) after a panic caught outside the engine
+    /// mid-operation (the XLA FFI path, ADR-0095). Sync pools only: the
+    /// other modes never reach it (`_xla_open` refuses them).
+    fn poison(&mut self) {}
     /// Attaches a live watch (ADR-0083 item 7) and returns its single
     /// consumer handle. Host pools refuse it (`CapabilityError`).
     fn watch(&mut self) -> Result<tessera_rl_engine::WatchHandle, BindError> {
@@ -1167,6 +1167,10 @@ where
 
     fn is_poisoned(&self) -> bool {
         self.pool.is_poisoned()
+    }
+
+    fn poison(&mut self) {
+        self.pool.poison();
     }
 
     fn watch(&mut self) -> Result<tessera_rl_engine::WatchHandle, BindError> {

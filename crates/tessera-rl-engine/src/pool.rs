@@ -771,6 +771,20 @@ where
         self.poisoned
     }
 
+    /// Poisons the pool (ADR-0028) on behalf of a caller that caught a
+    /// panic in the middle of an operation on it, outside the engine's own
+    /// containment (the XLA FFI binding, ADR-0095): the pool may be
+    /// half-stepped, so it is treated exactly as after a worker panic.
+    ///
+    /// Not public API: `doc(hidden)` puts it outside the ADR-0094 stable
+    /// surface. It is for the first-party binding (`tessera-rl-py`) only,
+    /// which cannot reach a crate-private item; a public poisoning API would
+    /// need an ADR note.
+    #[doc(hidden)]
+    pub const fn poison(&mut self) {
+        self.poisoned = true;
+    }
+
     /// The pool options.
     #[must_use]
     pub const fn options(&self) -> &PoolOptions {

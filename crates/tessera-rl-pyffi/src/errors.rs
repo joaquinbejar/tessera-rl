@@ -65,9 +65,11 @@ pub enum Kind {
     Onnx,
     /// `CapabilityError`.
     Capability,
+    /// `OrderError`: an XLA FFI call out of order (ADR-0095).
+    Order,
 }
 
-const KINDS: [(Kind, &str, &std::ffi::CStr); 16] = [
+const KINDS: [(Kind, &str, &std::ffi::CStr); 17] = [
     (
         Kind::Base,
         "TesseraError",
@@ -148,11 +150,26 @@ const KINDS: [(Kind, &str, &std::ffi::CStr); 16] = [
         "CapabilityError",
         c"A call this environment kind does not support (a host environment's snapshot, for example).",
     ),
+    (
+        Kind::Order,
+        "OrderError",
+        c"An XLA FFI call whose ordering token was not the handle's next one (stale, replayed or reordered); nothing was stepped.",
+    ),
 ];
 
 /// The classes, created once at module initialization; null before.
 static TYPES: [AtomicPtr<ffi::PyObject>; KINDS.len()] =
     [const { AtomicPtr::new(core::ptr::null_mut()) }; KINDS.len()];
+
+/// The class name of `kind` (`"OrderError"`, ...), for an error recorded
+/// without the interpreter and raised later (ADR-0095).
+#[must_use]
+pub fn kind_name(kind: Kind) -> &'static str {
+    KINDS
+        .iter()
+        .find(|(k, _, _)| *k == kind)
+        .map_or("TesseraError", |(_, name, _)| name)
+}
 
 fn index(kind: Kind) -> usize {
     KINDS.iter().position(|(k, _, _)| *k == kind).unwrap_or(0)
