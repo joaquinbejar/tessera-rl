@@ -77,16 +77,15 @@ impl<E> Slot<E> {
         }
     }
 
-    fn try_claim(&self) -> bool {
-        // Acquire: pairs with the Release in `release`.
+    /// Claims `busy`; the claim releases it when dropped, on every path
+    /// out (an early return or an unwind from the caller's closure), so a
+    /// panic can never leave a slot busy forever.
+    fn try_claim(&self) -> Option<Claim<'_, E>> {
+        // Acquire: pairs with the Release in `Claim::drop`.
         self.busy
             .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
             .is_ok()
-    }
-
-    fn release(&self) {
-        // Release: publishes the entry's writes to the next holder.
-        self.busy.store(false, Ordering::Release);
+            .then(|| Claim(self))
     }
 
     /// Runs `f` on the entry cell. The caller holds `busy`.
@@ -94,6 +93,16 @@ impl<E> Slot<E> {
         // SAFETY: every caller holds `busy`, and `entry` is touched only
         // under it, so this is the only reference to the cell's contents.
         self.entry.with_mut(|e| f(unsafe { &mut *e }))
+    }
+}
+
+/// A held `busy` flag of one slot.
+struct Claim<'a, E>(&'a Slot<E>);
+
+impl<E> Drop for Claim<'_, E> {
+    fn drop(&mut self) {
+        // Release: publishes the entry's writes to the next holder.
+        self.0.busy.store(false, Ordering::Release);
     }
 }
 
@@ -135,17 +144,15 @@ impl<E, const N: usize> Registry<E, N> {
     /// [`RegistryError::Full`], with the entry, when no slot is free.
     pub fn open(&self, entry: E) -> Result<Handle, (E, RegistryError)> {
         for (index, slot) in self.slots.iter().enumerate() {
-            if !slot.try_claim() {
+            let Some(_claim) = slot.try_claim() else {
                 continue;
-            }
+            };
             if slot.with_entry(|cell| cell.is_some()) {
-                slot.release();
                 continue;
             }
             slot.with_entry(|cell| *cell = Some(entry));
             // Acquire: the generation a close of the previous entry bumped.
             let generation = slot.generation.load(Ordering::Acquire);
-            slot.release();
             let slot = u32::try_from(index).unwrap_or(u32::MAX);
             return Ok(Handle { slot, generation });
         }
@@ -160,17 +167,15 @@ impl<E, const N: usize> Registry<E, N> {
     /// [`RegistryError::Busy`] or [`RegistryError::Closed`]; `f` did not run.
     pub fn call<R>(&self, handle: Handle, f: impl FnOnce(&mut E) -> R) -> Result<R, RegistryError> {
         let slot = self.slot(handle)?;
-        if !slot.try_claim() {
+        let Some(_claim) = slot.try_claim() else {
             return Err(RegistryError::Busy);
-        }
+        };
         // Acquire: pairs with the AcqRel bump in `close`.
         if slot.generation.load(Ordering::Acquire) != handle.generation {
-            slot.release();
             return Err(RegistryError::Closed);
         }
-        let out = slot.with_entry(|cell| cell.as_mut().map(f));
-        slot.release();
-        out.ok_or(RegistryError::Closed)
+        slot.with_entry(|cell| cell.as_mut().map(f))
+            .ok_or(RegistryError::Closed)
     }
 
     /// Closes `handle`'s entry: later calls refuse with `Closed`, a call in
@@ -191,17 +196,19 @@ impl<E, const N: usize> Registry<E, N> {
             return;
         }
         let mut spins = 0u32;
-        while !slot.try_claim() {
+        let _claim = loop {
+            if let Some(claim) = slot.try_claim() {
+                break claim;
+            }
             if spins < 64 {
                 spin_loop();
                 spins += 1;
             } else {
                 yield_now();
             }
-        }
+        };
         let entry = slot.with_entry(Option::take);
         drop(entry);
-        slot.release();
     }
 
     fn slot(&self, handle: Handle) -> Result<&Slot<E>, RegistryError> {
@@ -252,6 +259,21 @@ mod tests {
         let h = r.open(1).unwrap();
         let inner = r.call(h, |_| r.call(h, |v| *v));
         assert_eq!(inner, Ok(Err(RegistryError::Busy)));
+    }
+
+    /// A panic inside a call releases the slot (its claim drops on unwind),
+    /// so later calls and a close never hang.
+    #[test]
+    fn test_registry_panic_in_call_releases_the_slot() {
+        let r: Registry<u64, 1> = Registry::new();
+        let h = r.open(3).unwrap();
+        let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = r.call(h, |_| panic!("inside a call"));
+        }));
+        assert!(caught.is_err());
+        assert_eq!(r.call(h, |v| *v), Ok(3));
+        r.close(h);
+        assert_eq!(r.call(h, |v| *v), Err(RegistryError::Closed));
     }
 
     #[test]
