@@ -81,11 +81,12 @@ hyper = {}
 # collected, terminated when all are, truncated at the step cap. Its Dict
 # observation (agent, the items Set and its mask) goes through the T1
 # flattening. CleanRL defaults and the T1 budget, pre-declared (no tuning
-# loop). No calibration, so no nightly gate: it scores below random, a
-# suspected trainer or adapter fault (#593). With #564's _FlatVector fix it
-# trains without crashing, but on the 40 calibration seeds its median is 1.05
-# items against 4.55 for a random policy (all 40 seeds at or below random),
-# which points at the pipeline rather than the task.
+# loop). No calibration, so no nightly gate under T1's greedy protocol: the
+# greedy evaluation collapses into loops on the grid (median 1.05 items on the
+# 40 calibration seeds), while the sampling policy improves on random (5.2 vs
+# 4.55, seed 101's training curve). Not a pipeline fault: a scripted greedy
+# collector gets all 8 items through the same gym and flattening paths (#593).
+# A T1 variant with sampled evaluation is #595.
 [gather]
 env = "tessera/Gather-v1"
 tier = "T1"
