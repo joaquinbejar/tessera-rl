@@ -3,9 +3,12 @@
 # Nightly reference training with third-party trainers (SPEC 14.2, #368):
 # each library's own PPO on tessera/CartPole-v1 through the Gymnasium
 # adapter against Gymnasium's CartPole-v1 (tools/reference/). Each library
-# has its own uv project and lock under compat/training/<library>. Report-
-# only (continue-on-error) until each library has 7 green nights; then the
-# gate is turned on in a follow-up PR. About 5 minutes per library on CPU.
+# has its own uv project and lock under compat/training/<library>. An entry
+# with `gate: true` fails the run; with `gate: false` it is report-only
+# (continue-on-error). Every entry starts report-only; once an entry has 7
+# consecutive green scheduled nights, its gate is set to true in a one-line
+# change (sb3 and tianshou: #501; rllib and rllib-tag: #579). About 5
+# minutes per library on CPU.
 
 name: Reference libraries
 
@@ -20,20 +23,22 @@ permissions:
 jobs:
   reference:
     runs-on: [self-hosted, xaskar]
-    continue-on-error: true
+    # Report-only unless the matrix entry is gated (#501).
+    continue-on-error: ${{ !matrix.gate }}
     # RLlib's 300k-step budget runs about 4x longer than the others.
     timeout-minutes: 90
     strategy:
       fail-fast: false
       # job: the make target and report name (reference-<job>); project:
-      # its uv project under compat/training/. rllib-tag is the RLlib
+      # its uv project under compat/training/; gate: whether a failure fails
+      # the run (otherwise report-only). rllib-tag is the RLlib
       # multi-agent smoke on Tag (wiring only), in the rllib project.
       matrix:
         include:
-          - { job: sb3, project: sb3 }
-          - { job: tianshou, project: tianshou }
-          - { job: rllib, project: rllib }
-          - { job: rllib-tag, project: rllib }
+          - { job: sb3, project: sb3, gate: false }
+          - { job: tianshou, project: tianshou, gate: false }
+          - { job: rllib, project: rllib, gate: false }
+          - { job: rllib-tag, project: rllib, gate: false }
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # The pinned uv 0.13.6 from pipx's bin directory, as in
