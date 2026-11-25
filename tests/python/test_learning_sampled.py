@@ -19,11 +19,14 @@ GATHER = "tessera/Gather-v1"
 STEPS = 512  # one T1 rollout: 4 envs x 128 steps
 
 
-def _agent(obs_dim=26, actions=5, seed=0):
+def _agent(rt, seed=0):
+    """An untrained agent sized from the protocol's evaluation environment."""
+    import numpy as np
     import torch
 
-    import reference_training as rt
-
+    env = rt.make_single("tessera")
+    obs_dim, actions = int(np.prod(env.observation_space.shape)), int(env.action_space.n)
+    env.close()
     torch.manual_seed(seed)
     return rt.Agent(obs_dim, actions)
 
@@ -32,8 +35,8 @@ def test_learning_t1s_evaluation_samples_and_is_reproducible():
     import learning_protocols as lp
     import learning_sampled as ls
 
-    agent = _agent()
     with lp._factories(GATHER) as rt:
+        agent = _agent(rt)
         greedy = rt.evaluate("tessera", agent, 6)
         a = ls.evaluate_sampled(rt, agent, 6, seed=1)
         b = ls.evaluate_sampled(rt, agent, 6, seed=1)
