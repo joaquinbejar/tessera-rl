@@ -65,6 +65,31 @@ pub(crate) struct ViewSet {
     pub(crate) state: Vec<ViewSpec>,
 }
 
+/// The privileged state leaves of `layout` as `[n, ...]` views; empty
+/// without the opt-in, `None` for a leaf dtype the protocols cannot name.
+fn state_views(layout: &Layout, n: usize) -> Option<Vec<ViewSpec>> {
+    layout
+        .state_leaves
+        .iter()
+        .enumerate()
+        .map(|(i, leaf)| {
+            let mut shape = vec![n];
+            shape.extend(
+                leaf.shape
+                    .iter()
+                    .map(|&d| usize::try_from(d).unwrap_or(usize::MAX)),
+            );
+            Some(ViewSpec {
+                field: OutputField::PrivilegedState(i),
+                elem: leaf_elem(leaf.dtype)?,
+                shape,
+                first_row: 0,
+                total_rows: n,
+            })
+        })
+        .collect()
+}
+
 /// The view set of `layout`; `None` for a leaf dtype the protocols cannot
 /// name.
 pub(crate) fn view_set(layout: &Layout) -> Option<ViewSet> {
@@ -159,26 +184,7 @@ pub(crate) fn view_set(layout: &Layout) -> Option<ViewSet> {
             )?,
         ),
     ];
-    let state = layout
-        .state_leaves
-        .iter()
-        .enumerate()
-        .map(|(i, leaf)| {
-            let mut shape = vec![n];
-            shape.extend(
-                leaf.shape
-                    .iter()
-                    .map(|&d| usize::try_from(d).unwrap_or(usize::MAX)),
-            );
-            Some(ViewSpec {
-                field: OutputField::PrivilegedState(i),
-                elem: leaf_elem(leaf.dtype)?,
-                shape,
-                first_row: 0,
-                total_rows: n,
-            })
-        })
-        .collect::<Option<Vec<_>>>()?;
+    let state = state_views(layout, n)?;
     Some(ViewSet {
         observations,
         terminal_observations,

@@ -126,7 +126,7 @@ fn test_search_privileged_state_on_or_off_gives_identical_search_and_evaluator_i
     let (hash_off, visits_off, inputs_off) = searched(&off);
     let (hash_on, visits_on, inputs_on) = searched(&on);
     assert!(visits_off.iter().sum::<u32>() > 0);
-    assert!(!inputs_off.observations.is_empty());
+    assert_ne!(inputs_off.observations.len(), 0);
     assert_eq!(hash_off, hash_on);
     assert_eq!(visits_off, visits_on);
     assert_eq!(inputs_off.records, inputs_on.records);
