@@ -273,6 +273,7 @@ impl<H, S, T: LaneTuple> RawChunk<H, S, T> {
             episode_aborts,
             league_outcomes,
             league_slots,
+            base: _,
         } = outputs;
         let leaves = |views: [&mut [u8]; MAX_LEAVES]| views.map(Raw::new);
         // `leaf_bytes` is only read; a read-only view is stored as raw too.
@@ -490,6 +491,7 @@ impl<H, S, T: LaneTuple> RawChunk<H, S, T> {
                 episode_aborts,
                 league_outcomes,
                 league_slots: self.league_slots,
+                base: r.start,
             },
         }
     }

@@ -314,7 +314,9 @@ pub fn engine_kind(e: &EngineError) -> Kind {
         | EngineError::PolicyMap { .. }
         | EngineError::PolicyMapMismatch { .. }
         // An archive of another environment, version or config (ADR-0075).
-        | EngineError::ArchiveMismatch { .. } => Kind::Config,
+        | EngineError::ArchiveMismatch { .. }
+        | EngineError::AdaptiveNotRead { .. }
+        | EngineError::AdaptiveContext { .. } => Kind::Config,
         EngineError::InstanceOutOfRange { .. }
         | EngineError::DuplicateInstance { .. }
         | EngineError::SeedCount { .. }

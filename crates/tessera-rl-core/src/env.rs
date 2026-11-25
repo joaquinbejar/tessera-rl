@@ -73,6 +73,10 @@ pub trait EnvConfig: Sized + 'static {
     }
 }
 
+/// The effective adaptive config values of an environment's instance: its
+/// record header's `adaptive` (ADR-0030).
+pub type Adaptive<E> = <<E as Environment>::Header as RecordLayout>::Adaptive;
+
 /// An environment: one trait for single-agent and multi-agent games.
 ///
 /// `reset`, `step` and `observe` are infallible: all fallible work happens
@@ -150,6 +154,27 @@ pub trait Environment: Sized + 'static {
     /// episode.
     fn reset(cfg: &Self::Config, rng: &mut StepRng, state: &mut Self::State);
 
+    /// Whether [`Environment::reset_with`] or [`Environment::step_with`]
+    /// reads the instance's adaptive values (ADR-0091). Pools refuse
+    /// curricula and targets for an environment with adaptive fields that
+    /// does not read them, and lane stepping requires it false. Set it
+    /// together with an override; a wrapper environment forwards its inner
+    /// environment's value and both methods.
+    const READS_ADAPTIVE: bool = false;
+
+    /// [`Environment::reset`] with the instance's effective adaptive config
+    /// values (ADR-0030, ADR-0091), which the engine always calls. The
+    /// default ignores them.
+    fn reset_with(
+        cfg: &Self::Config,
+        adaptive: &Adaptive<Self>,
+        rng: &mut StepRng,
+        state: &mut Self::State,
+    ) {
+        let _ = adaptive;
+        Self::reset(cfg, rng, state);
+    }
+
     /// Advances one transition.
     fn step(
         cfg: &Self::Config,
@@ -158,6 +183,21 @@ pub trait Environment: Sized + 'static {
         rng: &mut StepRng,
         out: &mut StepOut<'_>,
     );
+
+    /// [`Environment::step`] with the instance's effective adaptive config
+    /// values (ADR-0091), which the engine always calls. The default
+    /// ignores them.
+    fn step_with(
+        cfg: &Self::Config,
+        adaptive: &Adaptive<Self>,
+        state: &mut Self::State,
+        actions: &Actions<'_, Self::Action>,
+        rng: &mut StepRng,
+        out: &mut StepOut<'_>,
+    ) {
+        let _ = adaptive;
+        Self::step(cfg, state, actions, rng, out);
+    }
 
     /// Writes the observation of `agent`. Every leaf is zero on entry:
     /// bytes left unwritten are zero in the output, no earlier content is

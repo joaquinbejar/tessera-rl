@@ -98,7 +98,7 @@ fn slot(i: usize) -> Option<AgentSlot> {
     AgentSlot::new(u16::try_from(i).ok()?, 2)
 }
 
-impl<A: AdaptiveValues<DiceConfig> + Send> Environment for DiceWith<A> {
+impl<A: AdaptiveValues<DiceConfig> + Send + Sync> Environment for DiceWith<A> {
     type State = DiceState;
     type Config = DiceConfig;
     type Obs = DiceObs;
@@ -186,7 +186,7 @@ impl<A: AdaptiveValues<DiceConfig> + Send> Environment for DiceWith<A> {
     }
 }
 
-impl<A: AdaptiveValues<DiceConfig> + Send> ActionMask for DiceWith<A> {
+impl<A: AdaptiveValues<DiceConfig> + Send + Sync> ActionMask for DiceWith<A> {
     fn action_mask(_: &DiceConfig, _: &DiceState, _: AgentSlot, out: &mut MaskWriter<'_>) {
         out.set(0, true);
         out.set(1, true);
@@ -197,7 +197,7 @@ impl<A: AdaptiveValues<DiceConfig> + Send> ActionMask for DiceWith<A> {
     }
 }
 
-impl<A: AdaptiveValues<DiceConfig> + Send> Validate for DiceWith<A> {
+impl<A: AdaptiveValues<DiceConfig> + Send + Sync> Validate for DiceWith<A> {
     fn validate(_: &DiceConfig, s: &DiceState) -> Result<(), InvariantViolation> {
         if s.cards.iter().any(|&c| c >= CARDS) || s.die >= DIE || s.moves > MOVES || s.stall > 1 {
             return Err(InvariantViolation {
@@ -208,7 +208,7 @@ impl<A: AdaptiveValues<DiceConfig> + Send> Validate for DiceWith<A> {
     }
 }
 
-impl<A: AdaptiveValues<DiceConfig> + Send> ImperfectInformation for DiceWith<A> {
+impl<A: AdaptiveValues<DiceConfig> + Send + Sync> ImperfectInformation for DiceWith<A> {
     type InfoState = DiceInfo;
 
     fn info_state(_: &DiceConfig, s: &DiceState, agent: AgentSlot) -> DiceInfo {
@@ -223,7 +223,7 @@ impl<A: AdaptiveValues<DiceConfig> + Send> ImperfectInformation for DiceWith<A> 
     }
 }
 
-impl<A: AdaptiveValues<DiceConfig> + Send> Determinize for DiceWith<A> {
+impl<A: AdaptiveValues<DiceConfig> + Send + Sync> Determinize for DiceWith<A> {
     fn sample(cfg: &DiceConfig, info: &DiceInfo, rng: &mut StepRng, state: &mut DiceState) {
         assert!(cfg.sabotage != 3, "a sampler that panics");
         let me = (info.me as usize).min(1);

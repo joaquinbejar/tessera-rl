@@ -137,6 +137,11 @@ pub struct EnvPool<E: Environment, M: MaskProvider<E> = NoMasks> {
     pub(crate) transform: Option<Box<crate::transform::runtime::Runtime>>,
     /// Episode statistics since the last epoch barrier (ADR-0081 item 3).
     pub(crate) episodes: crate::adaptive::EpisodeStatistics,
+    /// Curriculum targets, one per instance slot, copied into a header at
+    /// its next reset (ADR-0081 item 5.3); `None` without targets.
+    pub(crate) targets: Option<crate::adaptive::Targets<E>>,
+    /// The curriculum subsystem beside the targets (ADR-0081 item 5).
+    pub(crate) curriculum: Option<crate::adaptive::CurriculumSlot<E>>,
     /// Allocations counted in this pool's chunk steps (ADR-0055).
     #[cfg(feature = "debug-checks")]
     pub(crate) allocs: crate::sys::alloc_track::AllocTally,
@@ -195,6 +200,7 @@ impl<E: Environment, M: MaskProvider<E>> EnvPool<E, M> {
                 .map(core::num::NonZeroU32::get),
             auto_reset: self.options.auto_reset,
             archive: self.reset_source.as_ref(),
+            targets: self.targets.as_deref(),
             #[cfg(feature = "debug-checks")]
             allocs: &self.allocs,
             heuristic: self.heuristic.as_ref().map(|h| h.run),
@@ -602,6 +608,8 @@ where
             watch: None,
             transform: None,
             episodes: crate::adaptive::EpisodeStatistics::new(num_envs, false),
+            targets: None,
+            curriculum: None,
             #[cfg(feature = "debug-checks")]
             allocs: crate::sys::alloc_track::AllocTally::default(),
             policy: PolicyMap::new(E::MAX_AGENTS),
@@ -931,9 +939,11 @@ where
             sync,
             reset_source,
             transform,
+            targets,
             ..
         } = self;
         let archive = reset_source.as_ref();
+        let targets = targets.as_deref();
         let mut view = outputs.view_all();
         view.transform = pass_rows(transform, sync.is_some(), StackMode::Fresh);
         let all = Chunk::<E> {
@@ -950,7 +960,7 @@ where
             let heads = (layout.discrete.len(), layout.continuous.len());
             let grain = (chunk_size(options), options.schedule);
             let panicked = par_chunks(&mut rt.gang, all, grain, heads, |chunk, first| {
-                reset_chunk::<E, M>(cfg, authority, archive, chunk, reseed, first);
+                reset_chunk::<E, M>(cfg, authority, (archive, targets), chunk, reseed, first);
             })?;
             if panicked {
                 *poisoned = true;
@@ -959,7 +969,7 @@ where
         } else {
             let mut chunk = all;
             run_kernels(poisoned, || {
-                reset_chunk::<E, M>(cfg, authority, archive, &mut chunk, reseed, 0);
+                reset_chunk::<E, M>(cfg, authority, (archive, targets), &mut chunk, reseed, 0);
             })?;
         }
         self.poisoned = false;
@@ -1085,9 +1095,11 @@ where
             poisoned,
             reset_source,
             transform,
+            targets,
             ..
         } = self;
         let archive = reset_source.as_ref();
+        let targets = targets.as_deref();
         run_kernels(poisoned, || {
             let outputs = &mut outputs.view_all();
             if let Some(t) = transform {
@@ -1103,7 +1115,9 @@ where
                     .and_then(|e| e.get(k))
                     .and_then(|&e| usize::try_from(e).ok());
                 with_state::<E, _>(states, columns, i, |state| {
-                    reset_one::<E>(cfg, authority, archive, header, state, seed, entry);
+                    // A pool-wide view: `i` is the slot.
+                    let target = targets.and_then(|t| t.get(i));
+                    reset_one::<E>(cfg, authority, archive, target, header, state, seed, entry);
                     clear_instance(outputs, i);
                     write_agent_masks(outputs, i, header);
                     observe_instance::<E, M>(cfg, authority, header, state, outputs, i);
@@ -1256,6 +1270,7 @@ where
             episodes,
             heuristic,
             league,
+            targets,
             #[cfg(feature = "debug-checks")]
             allocs,
             ..
@@ -1271,6 +1286,7 @@ where
             limit: options.max_episode_steps.map(core::num::NonZeroU32::get),
             auto_reset: options.auto_reset,
             archive: reset_source.as_ref(),
+            targets: targets.as_deref(),
             #[cfg(feature = "debug-checks")]
             allocs,
             heuristic: heuristic.as_ref().map(|h| h.run),
@@ -1606,6 +1622,10 @@ pub(crate) struct StepCtx<'a, E: Environment> {
     pub(crate) auto_reset: AutoReset,
     /// The attached archive source of resets (ADR-0075).
     pub(crate) archive: Option<&'a ArchiveSource<E>>,
+    /// The curriculum targets, one per instance slot, copied into a header
+    /// at its reset (ADR-0081 item 5.3); `None` without targets. Read-only
+    /// during a pass.
+    pub(crate) targets: Option<&'a [tessera_rl_core::Adaptive<E>]>,
     /// The pool's allocation tally (ADR-0055).
     #[cfg(feature = "debug-checks")]
     pub(crate) allocs: &'a crate::sys::alloc_track::AllocTally,
@@ -1715,6 +1735,7 @@ pub(crate) fn step_chunk_at<E: Environment, M: MaskProvider<E>>(
         limit,
         auto_reset,
         archive,
+        targets,
         ..
     } = *ctx;
     let Rows {
@@ -1739,7 +1760,8 @@ pub(crate) fn step_chunk_at<E: Environment, M: MaskProvider<E>>(
         with_state::<E, _>(states, columns, i, |state| {
             if header.engine().pending_reset.get() {
                 // NextStep: reset instead of stepping (validated above).
-                reset_one::<E>(cfg, authority, archive, header, state, None, None);
+                let target = targets.and_then(|t| t.get(outputs.base + i));
+                reset_one::<E>(cfg, authority, archive, target, header, state, None, None);
                 write_agent_masks(outputs, i, header);
                 outputs.transform.mode = StackMode::Fresh;
                 observe_cleared::<E, M>(cfg, authority, header, state, outputs, i);
@@ -1781,7 +1803,8 @@ pub(crate) fn step_chunk_at<E: Environment, M: MaskProvider<E>>(
             if auto_reset == AutoReset::SameStep && header.engine().pending_reset.get() {
                 save_terminal(outputs, i);
                 // Flags and stats of the ended episode stay set.
-                reset_one::<E>(cfg, authority, archive, header, state, None, None);
+                let target = targets.and_then(|t| t.get(outputs.base + i));
+                reset_one::<E>(cfg, authority, archive, target, header, state, None, None);
                 write_agent_masks(outputs, i, header);
                 // The terminal row was stacked with the ended episode's frames;
                 // the reset refills them (ADR-0078 item 4.2).
@@ -1798,7 +1821,10 @@ pub(crate) fn step_chunk_at<E: Environment, M: MaskProvider<E>>(
 pub(crate) fn reset_chunk<E: Environment, M: MaskProvider<E>>(
     cfg: &E::Config,
     authority: &RngAuthority,
-    archive: Option<&ArchiveSource<E>>,
+    (archive, targets): (
+        Option<&ArchiveSource<E>>,
+        Option<&[tessera_rl_core::Adaptive<E>]>,
+    ),
     chunk: &mut Chunk<'_, E>,
     reseed: Reseed<'_>,
     first: usize,
@@ -1815,7 +1841,8 @@ pub(crate) fn reset_chunk<E: Environment, M: MaskProvider<E>>(
         let k = first + i;
         let seed = reseed.seed(k);
         with_state::<E, _>(states, columns, i, |state| {
-            reset_one::<E>(cfg, authority, archive, header, state, seed, None);
+            let target = targets.and_then(|t| t.get(outputs.base + i));
+            reset_one::<E>(cfg, authority, archive, target, header, state, seed, None);
             write_agent_masks(outputs, i, header);
             outputs.transform.mode = StackMode::Fresh;
             observe_cleared::<E, M>(cfg, authority, header, state, outputs, i);
@@ -2265,15 +2292,26 @@ pub(crate) fn with_step<H: RecordLayout>(header: &mut H, episode: u32, step: u32
 /// salt, lineage and generations), then the entry's state and alive slots
 /// in place of `Environment::reset`. `entry` names the entry (`reset_from`,
 /// validated at the boundary); `None` draws it (item 4).
+#[expect(
+    clippy::too_many_arguments,
+    reason = "one instance's reset, shared by every reset path"
+)]
 pub(crate) fn reset_one<E: Environment>(
     cfg: &E::Config,
     authority: &RngAuthority,
     archive: Option<&ArchiveSource<E>>,
+    target: Option<&tessera_rl_core::Adaptive<E>>,
     header: &mut E::Header,
     state: &mut E::State,
     seed: Option<Seed>,
     entry: Option<usize>,
 ) {
+    // The slot's curriculum target becomes the episode's adaptive values
+    // (ADR-0081 item 5.3), before an archive entry supplies the state
+    // (REVIEW-plan-r1 answer 1: entries hold no adaptive values).
+    if let Some(&value) = target {
+        *header.adaptive_mut() = value;
+    }
     let engine = header.engine();
     let mut episode = engine.identity.episode_index();
     if let Some(seed) = seed {
@@ -2320,7 +2358,8 @@ pub(crate) fn reset_one<E: Environment>(
     }
     *state = E::State::state_default();
     let mut rng = StepRng::new(authority, &identity, StreamId::DYNAMICS);
-    E::reset(cfg, &mut rng, state);
+    let adaptive = *header.adaptive_mut();
+    E::reset_with(cfg, &adaptive, &mut rng, state);
     update_acting::<E>(cfg, header, state);
 }
 
@@ -2386,7 +2425,8 @@ fn step_one<E: Environment>(
         };
         let mut out = StepOut::new(reward_row, term_row, trunc_row, died_row, spawned_row);
         let mut rng = StepRng::new(authority, &identity, StreamId::DYNAMICS);
-        E::step(cfg, state, actions, &mut rng, &mut out);
+        let adaptive = *header.adaptive_mut();
+        E::step_with(cfg, &adaptive, state, actions, &mut rng, &mut out);
         (out.episode_end(), out.agent_events())
     };
     let (end, events) = end;
