@@ -295,12 +295,14 @@ learning-test:
 	uv run --locked --python 3.11 --group test --group torch python tools/learning_test.py night --env $(ENV) --calibration compat/learning/$(ENV).json $(if $(PREVIOUS),--previous $(PREVIOUS)) --out learning-test.json
 
 # Re-calibrates the learning test (a reviewed re-bless, like gungraun):
-# seeds 101-140 in 4 single-threaded shards, on Linux x86-64.
+# seeds 101-140 in 4 single-threaded shards, on Linux x86-64. TOTAL_STEPS is
+# the protocol's calibration budget (compat/learning/protocols.toml).
+TOTAL_STEPS ?= 150000
 learning-calibrate:
 	uv sync --locked --python 3.11 --group test --group torch
 	rm -f learning-cal-*.json
 	pids=""; for k in 0 1 2 3; do a=$$((101 + k * 10)); \
-	  uv run --locked --python 3.11 --group test --group torch python tools/learning_test.py scores --env $(ENV) --total-steps 150000 --seeds $$(seq $$a $$((a + 9))) --out learning-cal-$$k.json & \
+	  uv run --locked --python 3.11 --group test --group torch python tools/learning_test.py scores --env $(ENV) --total-steps $(TOTAL_STEPS) --seeds $$(seq $$a $$((a + 9))) --out learning-cal-$$k.json & \
 	  pids="$$pids $$!"; \
 	done; status=0; for p in $$pids; do wait $$p || status=1; done; \
 	if [ $$status -ne 0 ]; then echo "a calibration shard failed" >&2; exit 1; fi

@@ -197,7 +197,14 @@ def _train(args, seeds: list[int]) -> list[dict]:
             import learning_protocols
 
             tier = learning_protocols.protocol(PROTOCOL)["tier"]
-            if tier == "T2":
+            if tier == "T1n":
+                r = learning_protocols.train_normalized(PROTOCOL, seed, args.total_steps, args.eval_episodes)
+                # rev (#530): the parameters and the frozen observation
+                # statistics beside the score file, for an exact re-evaluation.
+                params = pathlib.Path(f"{args.out}.seed{seed}.pt")
+                torch.save({"agent": r.pop("agent").state_dict(), "obs_norm": r.pop("obs_norm")}, params)
+                r["parameters"] = params.name
+            elif tier == "T2":
                 r = learning_protocols.train_continuous(PROTOCOL, seed, args.total_steps, args.eval_episodes)
             elif tier == "T3a":
                 r = learning_protocols.train_masked(PROTOCOL, seed, args.total_steps, args.eval_episodes)
@@ -214,9 +221,10 @@ def _train(args, seeds: list[int]) -> list[dict]:
             else:
                 r = learning_protocols.train(PROTOCOL, seed, args.total_steps, args.eval_episodes)
         record = {"seed": seed, "score": r["eval_mean"], "eval_returns": r["eval_returns"], "train_seconds": r.get("train_seconds")}
+        if "parameters" in r:
+            record["parameters"] = r["parameters"]
         if "vs_uniform" in r:
             record["vs_uniform"] = float(sum(r["vs_uniform"]) / len(r["vs_uniform"]))
-            record["parameters"] = r["parameters"]
             record["opening_plies"] = r["opening_plies"]
             record["opening_skips"] = r["opening_skips"]
             record["opening_draws"] = r["opening_draws"]
