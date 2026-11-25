@@ -238,7 +238,7 @@ fn test_replay_curriculum_build_pool_checks_the_callers_targets() {
     let replay = Replay::open(&bytes, LIMITS).unwrap();
     // The caller builds the pool; without targets it is refused.
     assert!(matches!(
-        replay.build_pool(|cfg, options| Pool::new(cfg, options)),
+        replay.build_pool(Pool::new),
         Err(ReplayError::Persist(_))
     ));
     let mut pool = replay

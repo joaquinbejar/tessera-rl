@@ -291,10 +291,14 @@ fn test_replay_v1_curriculum_and_archive_refusals() {
         invalid_field(&with_ext(ext(&[], 0, &archive_block(1, &[]), 64))),
         "archive weights"
     );
+    // ADR-0081 item 7 (#359 head C): a curriculum file needs a pool with
+    // targets; this one has none, so it is refused before any write.
     let curriculum = with_ext(ext(&[], 1, &[0], 64));
     assert!(matches!(
         run_error(&curriculum),
-        ReplayError::Unsupported { .. }
+        ReplayError::Persist(PersistError::Incompatible {
+            field: "curriculum"
+        })
     ));
     let archive = with_ext(ext(&[], 0, &archive_block(1, &[1, 0, 3]), 64));
     let replay = Replay::open(&archive, LIMITS).unwrap();
