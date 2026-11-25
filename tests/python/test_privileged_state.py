@@ -5,6 +5,7 @@ mode, PettingZoo ``state()`` and ``state_space``, Gymnasium
 ``info["state"]``, and the refusals."""
 
 import numpy as np
+import pettingzoo.test as pz_test
 import pytest
 
 import tessera_rl
@@ -95,3 +96,38 @@ def test_gymnasium_info_state_rows():
     assert gym._first_info(info)["state"].tolist() == [0, 1, 2]
     vec._state_leaves = []
     assert vec._state_info({}) == {}
+
+
+LOB = "tessera/LimitOrderBook-v1"
+LOB_SMALL = {"agents": 4, "steps": 60, "latency": 1}
+
+
+def test_pettingzoo_state_of_several_leaves_is_one_flat_box():
+    """PettingZoo defines ``state()`` as one array: LimitOrderBook's several
+    state leaves flatten in layout order to their lossless result_type."""
+    env = pz.parallel_env(LOB, seed=3, privileged_state=True, **LOB_SMALL)
+    native = tessera_rl.make(LOB, num_envs=1, seed=3, privileged_state=True, workers=0, outputs="owned", **LOB_SMALL)
+    leaves = native.layout()["state_leaves"]
+    assert len(leaves) > 1
+    space = env.state_space
+    assert len(space.shape) == 1
+    assert space.dtype == np.result_type(*[np.dtype(leaf[1]) for leaf in leaves])
+    assert space.shape[0] == sum(int(np.prod(leaf[2])) for leaf in leaves)
+    env.reset(seed=3)
+    native.reset()
+    state = env.state()
+    assert state.shape == space.shape and state.dtype == space.dtype
+    assert space.contains(state)
+    flat = np.concatenate([np.asarray(v[0]).ravel() for v in native.state.values()]).astype(space.dtype)
+    np.testing.assert_array_equal(state, flat)
+    env.close()
+    native.close()
+
+
+@pytest.mark.filterwarnings(
+    "ignore:Observation is not a NumPy array:UserWarning",
+    "ignore:Observation space for each agent probably should be:UserWarning",
+    "ignore:Environment has not defined a render:UserWarning",
+)
+def test_pettingzoo_parallel_api_test_passes_with_the_state_on():
+    pz_test.parallel_api_test(pz.parallel_env(LOB, seed=3, privileged_state=True, **LOB_SMALL), num_cycles=60)

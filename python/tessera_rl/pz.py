@@ -111,7 +111,7 @@ from pettingzoo import AECEnv, ParallelEnv
 from pettingzoo.utils.conversions import parallel_to_aec_wrapper
 from pettingzoo.utils.wrappers import OrderEnforcingWrapper
 
-from tessera_rl import _envs, _host, _native, _render
+from tessera_rl import _envs, _flat, _host, _native, _render
 from tessera_rl._env import Env, _discrete_actions, _multi_actions, native_kwargs
 from tessera_rl.masks import head_views
 
@@ -310,21 +310,29 @@ def _visible_option(visible: str | None, agents: Any, kwargs: dict) -> bool:
     return visible == "learner"
 
 
-def _state_space(state_leaves) -> spaces.Space | None:
-    """The space of the privileged state leaves: one Box, a Dict of Boxes, or
-    ``None`` without them."""
-    boxes = {}
-    for name, dtype, shape, low, high in state_leaves:
-        dt = np.dtype(dtype)
-        size = int(np.prod(shape))
-        lo = np.broadcast_to(np.asarray(low, dtype=np.float64).ravel(), (size,)).reshape(shape).astype(dt)
-        hi = np.broadcast_to(np.asarray(high, dtype=np.float64).ravel(), (size,)).reshape(shape).astype(dt)
-        boxes[name or "state"] = spaces.Box(low=lo, high=hi, shape=tuple(shape), dtype=dt)
-    if not boxes:
+def _state_space(state_leaves) -> spaces.Box | None:
+    """The space of the privileged state, one ``Box`` as PettingZoo defines
+    ``state()``: the leaf itself, or several leaves flattened in layout order
+    to their lossless ``numpy.result_type`` (the PufferLib observation's
+    rule); ``None`` without them."""
+    leaves = list(state_leaves)
+    if not leaves:
         return None
-    if len(boxes) == 1:
-        return next(iter(boxes.values()))
-    return spaces.Dict(boxes)
+    if len(leaves) == 1:
+        _, dtype, shape, low, high = leaves[0]
+        dt = np.dtype(dtype)
+        return spaces.Box(low=_state_bound(low, shape, dt), high=_state_bound(high, shape, dt), shape=tuple(shape), dtype=dt)
+    dt = _flat.flat_dtype([leaf[1] for leaf in leaves], "state leaves", "the PettingZoo state()")
+    low = np.concatenate([_state_bound(lo, shape, dt).ravel() for _, _, shape, lo, _ in leaves])
+    high = np.concatenate([_state_bound(hi, shape, dt).ravel() for _, _, shape, _, hi in leaves])
+    return spaces.Box(low=low, high=high, shape=(low.size,), dtype=dt)
+
+
+def _state_bound(values, shape, dtype: np.dtype) -> np.ndarray:
+    """A bound per element of a state leaf, from a list that may hold one value."""
+    size = int(np.prod(shape))
+    arr = np.asarray(values, dtype=np.float64).ravel()
+    return np.broadcast_to(arr, (size,)).reshape(shape).astype(dtype)
 
 
 def agent_name(slot: int, generation: int) -> str:
@@ -385,7 +393,7 @@ class _Agents:
         self.observation_space = spaces.Dict(leaves)
         self.last = None
         #: The privileged state space (``privileged_state=True``): one Box,
-        #: or a Dict of them for several leaves; ``None`` without the buffer.
+        #: several leaves flattened in layout order; ``None`` without it.
         self.state_space = _state_space(layout.get("state_leaves", ()))
 
     @property
@@ -399,10 +407,11 @@ class _Agents:
             raise _native.CapabilityError(
                 f"{self.env_id}: state() needs privileged_state=True and a reset first"
             )
-        arrays = {name: np.array(v[0]) for name, v in raw.items()}
-        if isinstance(self.state_space, spaces.Dict):
-            return arrays
-        return next(iter(arrays.values()))
+        rows = [np.asarray(v[0]) for v in raw.values()]
+        if len(rows) == 1:
+            return np.array(rows[0], dtype=self.state_space.dtype)
+        # Layout order (the dict keeps it), cast to the flat dtype.
+        return np.concatenate([r.ravel() for r in rows]).astype(self.state_space.dtype)
 
     def head_masks(self, slot: int) -> tuple[np.ndarray, ...]:
         """Every head's mask of agent ``slot``, owned copies (multi-head)."""
