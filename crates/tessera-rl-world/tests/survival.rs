@@ -477,3 +477,17 @@ fn test_survival_slot_permutation_with_respawn_holds_until_the_first_respawn() {
         );
     }
 }
+
+#[test]
+fn test_survival_damage_from_two_attackers_is_summed() {
+    let mut p = pool(cfg(16, 32, 16), 1, 13);
+    let mut s = blank(&mut p);
+    // 0 at (10, 10) is hit by 1 from the west and 2 from the east.
+    (s.x[0], s.y[0], s.x[1], s.y[1], s.x[2], s.y[2]) = (10, 10, 9, 10, 11, 10);
+    put(&mut p, s);
+    let mut acts = vec![(0, 0); 16];
+    acts[1] = (0, 4); // attack E
+    acts[2] = (0, 6); // attack W
+    step(&mut p, &acts);
+    assert_eq!(state(&p).health[0], MAX_HEALTH - 2 * ATTACK);
+}
