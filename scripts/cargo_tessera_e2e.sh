@@ -1,10 +1,15 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT OR Apache-2.0
 #
-# The end-to-end test of cargo tessera (#351), `make cargo-tessera-e2e`: it
-# builds the tool, scaffolds a host environment crate with path dependencies
-# on this checkout, runs `check --python --bless`, `check --python` and
-# `bench --quick` in it, and prints the wall time of each phase.
+# The end-to-end test of cargo tessera (#351, #628), `make cargo-tessera-e2e`:
+# it builds the tool, then
+# - scaffolds a host environment crate with path dependencies on this
+#   checkout and runs `check --python --bless`, `check --python` and
+#   `bench --quick` in it;
+# - scaffolds a `--kind env` crate the same way and runs `check --bless`,
+#   `check`, `cargo clippy --all-targets -- -D warnings` (the scaffold
+#   carries the workspace's lints and clippy.toml) and `bench --quick`;
+# and prints the wall time of each phase.
 #
 # Nothing is resolved from the network (#351 review r1, point 1):
 # - the scaffold's Cargo.lock starts as a copy of the repository's lock;
@@ -35,6 +40,7 @@ export RUSTUP_TOOLCHAIN
 target="${CARGO_TARGET_DIR:-$root/target}"
 work="$(mktemp -d)"
 crate="e2e-env"
+env_crate="e2e-envtrait"
 start=$(date +%s)
 last=$start
 
@@ -81,5 +87,29 @@ cargo tessera check --python --uv --locked --offline
 phase check
 cargo tessera bench --quick --locked --offline
 phase bench-quick
+
+cd "$work"
+cargo tessera new "$env_crate" --kind env --tessera-path "$root" --agents 2 --turns sequential
+test ! -e "$env_crate/pyproject.toml"
+phase env-new
+# The same lock-subset check as the host pass above, on the env crate.
+cp "$root/Cargo.lock" "$env_crate/Cargo.lock"
+cargo metadata --offline --format-version 1 --manifest-path "$env_crate/Cargo.toml" >/dev/null
+"$root/scripts/lock_subset.sh" "$root/Cargo.lock" "$env_crate/Cargo.lock" "$env_crate"
+phase env-lock
+cd "$work/$env_crate"
+if cargo tessera check --python --locked --offline 2>/dev/null; then
+    echo "cargo tessera check --python must refuse a --kind env crate" >&2
+    exit 1
+fi
+cargo tessera check --bless --locked --offline
+test -s tests/golden.json
+phase env-check-bless
+cargo tessera check --locked --offline
+phase env-check
+cargo clippy --all-targets --locked --offline -- -D warnings
+phase env-clippy
+cargo tessera bench --quick --locked --offline
+phase env-bench-quick
 
 echo "cargo-tessera-e2e: total: $(($(date +%s) - start)) s"
