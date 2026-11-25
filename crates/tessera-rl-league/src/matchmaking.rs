@@ -126,6 +126,13 @@ impl Table {
         }
     }
 
+    /// The last entry with a positive weight: the draw of any `u` past the
+    /// thresholds.
+    #[must_use]
+    pub const fn last(&self) -> Option<u32> {
+        self.last
+    }
+
     /// The thresholds, one per population entry.
     #[must_use]
     pub fn thresholds(&self) -> &[u64] {

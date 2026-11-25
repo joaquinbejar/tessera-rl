@@ -278,6 +278,16 @@ where
                 },
             ));
         }
+        // ADR-0088 head B: the half passes do not draw assignments or
+        // capture league results yet.
+        if self.league.is_some() {
+            return Err(refuse(
+                self,
+                EngineError::League {
+                    reason: "Pipelined mode does not run a league yet",
+                },
+            ));
+        }
         let size = chunk_size(&self.options);
         let chunk = self.options.chunk_size.get();
         let n = self.num_envs_usize();

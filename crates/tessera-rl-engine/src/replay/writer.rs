@@ -602,6 +602,7 @@ where
     E::Config: CanonicalConfig,
     M: PersistMask<E>,
 {
+    super::policy_map::refuse_league(policy_map)?;
     let codes = super::policy_map::header_codes(policy_map, E::MAX_AGENTS)?;
     let id = identity::<E, M>(cfg, options)?;
     let file_descriptor = descriptor(E::TIER, BUILD_ID)?;

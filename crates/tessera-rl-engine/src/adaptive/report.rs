@@ -60,6 +60,9 @@ impl EpisodeStats {
 pub struct EpochReport {
     /// Episode statistics; zero when the subsystem is frozen.
     pub episodes: EpisodeStats,
+    /// The league's barrier (ADR-0088 section 7); `None` without a league
+    /// or when it is frozen.
+    pub league: Option<crate::league::LeagueReport>,
 }
 
 /// The adaptive subsystems' context in the pool context (ADR-0081 item 6),
@@ -70,4 +73,7 @@ pub struct AdaptiveContext {
     /// Normalization (ADR-0078): the transform identity, the statistics and
     /// the frozen flag.
     pub normalization: crate::transform::TransformContext,
+    /// The league (ADR-0088 item 7.3): its view and the assignment array;
+    /// `None` without a league. Result rings are accumulators, not context.
+    pub league: Option<Box<crate::league::LeagueContext>>,
 }

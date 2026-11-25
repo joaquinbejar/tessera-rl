@@ -20,19 +20,26 @@ pub enum PolicyGroup {
     /// imperfect-information environment: a cheating opponent, for
     /// testing only (ADR-0079 item 4.3).
     PrivilegedHeuristic,
+    /// A league opponent (ADR-0088 section 2): every `Opponent` slot of an
+    /// instance plays the policy the league assigned that instance for the
+    /// episode, computed by the engine (`Heuristic`) or submitted by the
+    /// caller (`External`). Set only through `EnvPool::with_league`.
+    Opponent,
 }
 
 impl PolicyGroup {
     /// Every group, in code order.
-    pub const ALL: [Self; 4] = [
+    pub const ALL: [Self; 5] = [
         Self::Learner,
         Self::External,
         Self::Heuristic,
         Self::PrivilegedHeuristic,
+        Self::Opponent,
     ];
 
     /// The group's code in the replay header (ADR-0079 item 6.2): 0
-    /// learner, 1 external, 2 heuristic, 3 privileged heuristic.
+    /// learner, 1 external, 2 heuristic, 3 privileged heuristic, 4
+    /// opponent (ADR-0088 section 8).
     #[must_use]
     #[inline]
     pub const fn code(self) -> u8 {
@@ -41,6 +48,7 @@ impl PolicyGroup {
             Self::External => 1,
             Self::Heuristic => 2,
             Self::PrivilegedHeuristic => 3,
+            Self::Opponent => 4,
         }
     }
 
@@ -53,6 +61,7 @@ impl PolicyGroup {
             1 => Some(Self::External),
             2 => Some(Self::Heuristic),
             3 => Some(Self::PrivilegedHeuristic),
+            4 => Some(Self::Opponent),
             _ => None,
         }
     }
@@ -66,6 +75,7 @@ impl PolicyGroup {
             Self::External => "external",
             Self::Heuristic => "heuristic",
             Self::PrivilegedHeuristic => "privileged_heuristic",
+            Self::Opponent => "opponent",
         }
     }
 
@@ -75,7 +85,9 @@ impl PolicyGroup {
         Self::ALL.into_iter().find(|g| g.name() == name)
     }
 
-    /// Whether the engine computes the slot's action (a heuristic group).
+    /// Whether the engine always computes the slot's action (a heuristic
+    /// group). An `Opponent` slot is computed only when its instance's
+    /// assignment is a heuristic policy, so it is not one.
     #[must_use]
     #[inline]
     pub const fn is_heuristic(self) -> bool {
@@ -93,7 +105,8 @@ mod tests {
             assert_eq!(PolicyGroup::from_code(g.code()), Some(g));
             assert_eq!(PolicyGroup::from_name(g.name()), Some(g));
         }
-        assert_eq!(PolicyGroup::from_code(4), None);
+        assert_eq!(PolicyGroup::from_code(4), Some(PolicyGroup::Opponent));
+        assert_eq!(PolicyGroup::from_code(5), None);
         assert_eq!(PolicyGroup::from_name("onnx"), None);
         assert_eq!(PolicyGroup::default(), PolicyGroup::Learner);
     }

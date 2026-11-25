@@ -446,6 +446,39 @@ pub enum EngineError {
         /// The first such slot of that instance.
         slot: u16,
     },
+    /// A league opponent's heuristic wrote an action out of range or
+    /// illegal under the mask (ADR-0088 item 2.3): an environment bug. It
+    /// poisons the pool, in every build.
+    #[error(
+        "instance {instance}: the opponent heuristic of agent slot {slot} wrote an invalid action"
+    )]
+    OpponentAction {
+        /// The first instance, in instance order, with an invalid action.
+        instance: u32,
+        /// The first such slot of that instance.
+        slot: u16,
+    },
+    /// An invalid league setup (ADR-0088 section 2): no opponent slot, a
+    /// slot out of range or repeated, more than 64 agent slots, a call
+    /// after the first reset or with other heuristic slots.
+    #[error("invalid league: {reason}")]
+    League {
+        /// The rule broken.
+        reason: &'static str,
+    },
+    /// The league's barrier failed (ADR-0088 erratum 1, condition 3): the
+    /// pool keeps its previous view and is not poisoned.
+    #[error(transparent)]
+    LeagueBarrier(#[from] crate::league::LeagueBarrierError),
+    /// League data of another population (ADR-0088 item 3.2); nothing was
+    /// written.
+    #[error("league population digest {found:#018x} does not match the pool's {expected:#018x}")]
+    LeagueMismatch {
+        /// This pool's digest.
+        expected: u64,
+        /// The data's digest.
+        found: u64,
+    },
     /// An invalid policy map, or one set at the wrong time (ADR-0079 item
     /// 2): a slot out of range, a heuristic group the environment cannot
     /// drive, or a map set after the first reset.

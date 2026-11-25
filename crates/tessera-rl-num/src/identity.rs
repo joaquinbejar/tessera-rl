@@ -109,6 +109,10 @@ impl StreamId {
     /// `StepRng::heuristic`, never the environment's own `DYNAMICS`
     /// stream, so adding a heuristic slot shifts no environment draw.
     pub const HEURISTIC: Self = Self(6);
+    /// League assignments (ADR-0088 item 3.1): the opponent policy an
+    /// instance plays for an episode, drawn at its reset through
+    /// `StepRng::league`. Never used by a step.
+    pub const LEAGUE: Self = Self(7);
     /// The first id available to environments.
     pub const FIRST_ENV: u32 = 16;
 

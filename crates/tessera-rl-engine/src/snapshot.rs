@@ -39,6 +39,15 @@ use crate::record::{DecodedRecord, PoolContext, Record};
 use crate::transform::kernels::StackMode;
 use crate::validate::check_ids;
 
+/// A checked pool context, ready to write: the branch counter, the reset
+/// source, the transform context and the league entry.
+pub(crate) type CheckedContext<E> = (
+    u64,
+    Option<ArchiveSource<E>>,
+    crate::transform::TransformContext,
+    Option<Box<crate::league::LeagueContext>>,
+);
+
 impl<E, M> EnvPool<E, M>
 where
     E: Environment,
@@ -123,7 +132,9 @@ where
             let i = pool.index(id)?;
             pool.write_record(i, record);
             pool.note_plain_restore();
-            pool.reobserve(core::iter::once(i), StackMode::Fresh)
+            pool.reobserve(core::iter::once(i), StackMode::Fresh)?;
+            pool.refresh_league();
+            Ok(())
         });
         self.watch_boundary(result.is_ok());
         result
@@ -146,6 +157,7 @@ where
             }
             pool.note_plain_restore();
             pool.reobserve(0..records.len(), StackMode::Fresh)?;
+            pool.refresh_league();
             pool.poisoned = false;
             #[cfg(feature = "debug-checks")]
             pool.discard_allocations();
@@ -171,7 +183,10 @@ where
                 pool.write_record(i, &record);
             }
             pool.copy_transform_state(src, dst);
-            pool.reobserve(valid_indices(dst), StackMode::Keep)
+            pool.copy_league(src, dst);
+            pool.reobserve(valid_indices(dst), StackMode::Keep)?;
+            pool.refresh_league();
+            Ok(())
         });
         self.watch_boundary(result.is_ok());
         result
@@ -251,7 +266,27 @@ where
             self.write_record(i, &branched);
         }
         self.copy_transform_state(src, dst);
-        self.reobserve(valid_indices(dst), StackMode::Keep)
+        self.copy_league(src, dst);
+        self.reobserve(valid_indices(dst), StackMode::Keep)?;
+        self.refresh_league();
+        Ok(())
+    }
+
+    /// Copies instance `src`'s league assignment to every `dst` (fork,
+    /// ADR-0088 item 3.2): a search fork keeps the opponent.
+    fn copy_league(&mut self, src: u32, dst: &[u32]) {
+        let (Some(league), Ok(s)) = (self.league.as_mut(), usize::try_from(src)) else {
+            return;
+        };
+        for &d in dst {
+            let Some(header) = usize::try_from(d).ok().and_then(|d| self.headers.get(d)) else {
+                continue;
+            };
+            let identity = header.engine().identity;
+            if let Ok(d) = usize::try_from(d) {
+                league.copy(s, d, &identity);
+            }
+        }
     }
 
     /// The pool-level context, for pool snapshots.
@@ -272,6 +307,7 @@ where
                         .transform
                         .as_ref()
                         .map_or_else(Default::default, |t| t.context()),
+                    league: pool.league.as_ref().map(|l| Box::new(l.context())),
                 },
                 policy_map: pool.policy.digest(),
             })
@@ -296,11 +332,16 @@ where
         archive: Option<&Archive<E>>,
     ) -> Result<(), EngineError> {
         self.guarded(Poison::Reject, |pool| {
-            let (branch_counter, source, transforms) = pool.check_context(context, archive)?;
+            let (branch_counter, source, transforms, league) =
+                pool.check_context(context, archive)?;
             pool.branch_counter = branch_counter;
             pool.reset_source = source;
             if let Some(t) = pool.transform.as_mut() {
                 t.restore_context(&transforms);
+            }
+            if let (Some(state), Some(league)) = (pool.league.as_mut(), league.as_ref()) {
+                state.restore_context(league, &pool.headers);
+                pool.refresh_league();
             }
             // Partials are not context: they restart empty (ADR-0081 item 6).
             pool.episodes.clear();
@@ -315,14 +356,7 @@ where
         &self,
         context: PoolContext,
         archive: Option<&Archive<E>>,
-    ) -> Result<
-        (
-            u64,
-            Option<ArchiveSource<E>>,
-            crate::transform::TransformContext,
-        ),
-        EngineError,
-    > {
+    ) -> Result<CheckedContext<E>, EngineError> {
         let PoolContext {
             branch_counter,
             reset_source,
@@ -331,7 +365,19 @@ where
         } = context;
         let crate::adaptive::AdaptiveContext {
             normalization: transforms,
+            league,
         } = adaptive;
+        // ADR-0088 item 7.3: another population, or a league on one side
+        // only, is refused before anything is written.
+        match (self.league.as_ref(), league.as_ref()) {
+            (Some(state), Some(context)) => state.check_context(context)?,
+            (None, None) => {}
+            _ => {
+                return Err(EngineError::League {
+                    reason: "the context's league does not match the pool's",
+                });
+            }
+        }
         // ADR-0079 item 2.3: another policy map is refused before anything
         // is written.
         let expected = self.policy.digest();
@@ -377,7 +423,7 @@ where
                 Some(ArchiveSource::new(given.clone(), Some(weights))?)
             }
         };
-        Ok((branch_counter, source, transforms))
+        Ok((branch_counter, source, transforms, league))
     }
 
     /// Replay only: sets the branch counter of a keyframe, keeping the
@@ -419,6 +465,11 @@ where
         if let Some(header) = self.headers.get_mut(i) {
             *header = record.header;
             self.set_state_at(i, &record.state);
+        }
+        // A record written without league data redraws its assignment
+        // from its own identity (ADR-0088 item 3.2); fork copies it back.
+        if let Some(league) = self.league.as_mut() {
+            league.forget(i);
         }
     }
 
@@ -505,7 +556,9 @@ where
             for (i, record) in valid_indices(ids).zip(records) {
                 pool.write_record(i, &record.trust());
             }
-            pool.reobserve(valid_indices(ids), StackMode::Fresh)
+            pool.reobserve(valid_indices(ids), StackMode::Fresh)?;
+            pool.refresh_league();
+            Ok(())
         })
     }
 
@@ -530,6 +583,7 @@ where
                 pool.write_record(i, &record.trust());
             }
             pool.reobserve(0..records.len(), StackMode::Fresh)?;
+            pool.refresh_league();
             pool.poisoned = false;
             #[cfg(feature = "debug-checks")]
             pool.discard_allocations();

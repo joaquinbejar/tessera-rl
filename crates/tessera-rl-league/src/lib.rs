@@ -22,6 +22,7 @@ mod error;
 mod league;
 mod matchmaking;
 mod outcome;
+mod pool;
 mod population;
 mod results;
 
@@ -32,6 +33,7 @@ pub use error::LeagueError;
 pub use league::{League, LeagueConfig, LeagueReport, PairCounts};
 pub use matchmaking::{Matchmaking, PfspWeighting, Table};
 pub use outcome::Outcome;
+pub use pool::PoolLeague;
 pub use population::{Policy, PolicyId, PolicyKind, Population};
 pub use results::Results;
 

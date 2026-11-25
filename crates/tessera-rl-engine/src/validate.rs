@@ -150,7 +150,9 @@ fn check_one<H: RecordLayout>(
     for (slot, row) in header.agents().iter().enumerate() {
         // A heuristic slot's submitted row is never read (ADR-0079 item
         // 3.1): the engine computes it on the worker.
-        if !(row.alive.get() && row.acting.get()) || layout.skips(slot) {
+        if !(row.alive.get() && row.acting.get())
+            || layout.skips(usize::try_from(instance).unwrap_or(usize::MAX), slot)
+        {
             continue;
         }
         let agent = u16::try_from(slot).unwrap_or(u16::MAX);
@@ -269,7 +271,8 @@ pub(crate) fn check_and_copy_actions<H: RecordLayout>(
     for (index, header) in headers.iter().enumerate() {
         let pending = header.engine().pending_reset.get();
         for (slot, row) in header.agents().iter().enumerate() {
-            let required = !pending && row.alive.get() && row.acting.get() && !layout.skips(slot);
+            let required =
+                !pending && row.alive.get() && row.acting.get() && !layout.skips(index, slot);
             let base = index * agents + slot;
             copy_row(
                 required,

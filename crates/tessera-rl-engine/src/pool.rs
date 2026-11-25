@@ -151,6 +151,8 @@ pub struct EnvPool<E: Environment, M: MaskProvider<E> = NoMasks> {
     pub(crate) heuristic_discrete: Vec<i32>,
     /// As `heuristic_discrete`, `[N, A, continuous heads]`.
     pub(crate) heuristic_continuous: Vec<f32>,
+    /// The league (ADR-0088): `None` without an `Opponent` slot.
+    pub(crate) league: Option<Box<crate::league::LeagueState>>,
     _masks: PhantomData<M>,
 }
 
@@ -498,6 +500,10 @@ where
     E::State: Send,
     <E::Header as RecordLayout>::Adaptive: AdaptiveValues<E::Config>,
 {
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one initializer per pool field, in field order"
+    )]
     fn build(cfg: E::Config, options: PoolOptions) -> Result<Self, EngineError> {
         const {
             assert!(
@@ -599,6 +605,7 @@ where
             heuristic: None,
             heuristic_discrete: Vec::new(),
             heuristic_continuous: Vec::new(),
+            league: None,
             _masks: PhantomData,
         })
     }
@@ -895,6 +902,7 @@ where
         let result = self.guarded(Poison::Recover, |pool| pool.reset_all_inner(reseed));
         self.watch_boundary(result.is_ok());
         result?;
+        self.refresh_league();
         Ok(&self.outputs)
     }
 
@@ -973,6 +981,7 @@ where
         let result = self.guarded(Poison::Reject, |pool| pool.reset_inner(ids, reseed));
         self.watch_boundary(result.is_ok());
         result?;
+        self.refresh_league();
         Ok(&self.outputs)
     }
 
@@ -1007,6 +1016,7 @@ where
         let result = self.guarded(Poison::Reject, |pool| pool.reset_from_inner(ids, entries));
         self.watch_boundary(result.is_ok());
         result?;
+        self.refresh_league();
         Ok(&self.outputs)
     }
 
@@ -1158,7 +1168,24 @@ where
         // watch, one `Relaxed` load with an idle one.
         self.watch_boundary(result.is_ok());
         result?;
+        if let Some(league) = self.league.as_mut() {
+            league.collect();
+        }
+        self.refresh_league();
         Ok(&self.outputs)
+    }
+
+    /// Draws the league assignment of every instance that started an
+    /// episode, or was restored or imported, since the last draw (ADR-0088
+    /// item 3.1). Calling thread, no allocation; nothing without a league.
+    pub(crate) fn refresh_league(&mut self) {
+        if let Some(league) = self.league.as_mut() {
+            league.refresh(
+                &self.authority,
+                &self.headers,
+                &mut self.actions.opponent_heuristic,
+            );
+        }
     }
 
     /// Validates `actions` at the boundary and copies them into the
@@ -1221,6 +1248,7 @@ where
             transform,
             episodes,
             heuristic,
+            league,
             #[cfg(feature = "debug-checks")]
             allocs,
             ..
@@ -1242,7 +1270,13 @@ where
             heuristic_slots: heuristic.as_ref().map_or(&[][..], |h| h.slots.as_slice()),
             heuristic_fault: heuristic.as_ref().map(|_| core::slice::from_ref(&fault)),
         };
-        let view = step_view(outputs, transform, sync.is_some(), episodes);
+        let view = step_view(
+            outputs,
+            transform,
+            sync.is_some(),
+            episodes,
+            league.as_deref_mut(),
+        );
         let all = Chunk::<E> {
             headers,
             states,
@@ -1304,6 +1338,9 @@ where
         };
         if let Some((instance, slot)) = crate::heuristic::fault_of(fault.load(Ordering::Relaxed)) {
             self.poisoned = true;
+            if self.league.is_some() {
+                return Err(EngineError::OpponentAction { instance, slot });
+            }
             return Err(EngineError::HeuristicAction { instance, slot });
         }
         let a = E::MAX_AGENTS;
@@ -1523,10 +1560,15 @@ fn step_view<'a>(
     transform: &'a mut Option<Box<crate::transform::runtime::Runtime>>,
     workers: bool,
     episodes: &'a mut crate::adaptive::EpisodeStatistics,
+    league: Option<&'a mut crate::league::LeagueState>,
 ) -> OutputsView<'a> {
     let mut view = outputs.view_all();
     view.transform = pass_rows(transform, workers, StackMode::Push);
     (view.episode_partials, view.episode_aborts) = episodes.rows();
+    if let Some(l) = league {
+        view.league_outcomes = &mut l.outcomes;
+        view.league_slots = l.slots;
+    }
     view
 }
 
@@ -2083,7 +2125,7 @@ pub(crate) fn legality_rows<H: RecordLayout>(
         for (slot, row) in header.agents().iter().enumerate() {
             // Heuristic slots: the submitted row is never read (ADR-0079
             // item 3.1); the worker validates the computed one.
-            if !(row.alive.get() && row.acting.get()) || actions.skips(slot) {
+            if !(row.alive.get() && row.acting.get()) || actions.skips(first + i, slot) {
                 continue;
             }
             let k = i * a + slot;
@@ -2481,6 +2523,15 @@ pub(crate) fn finish_episode<H: RecordLayout>(
     // The instance's own partial (ADR-0081 item 3); absent when frozen.
     if let Some(p) = outputs.episode_partials.get_mut(i) {
         p.add(total, t);
+    }
+    // The league result of the episode (ADR-0088 item 4.1), from the
+    // agents' returns before the next reset clears them; absent without a
+    // league.
+    if outputs.league_slots != 0
+        && let Some(o) = outputs.league_outcomes.get_mut(i)
+    {
+        *o = crate::league::outcome_of(&*header, outputs.league_slots)
+            .map_or(crate::league::NO_RESULT, crate::league::MatchOutcome::code);
     }
 }
 
