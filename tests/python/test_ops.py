@@ -69,3 +69,15 @@ def test_vrp_refusals():
         t.make("tessera/Vrp-v1", vehicles=9)
     with pytest.raises(t.ConfigError):
         t.make("tessera/JobShop-v1", jobs=65)
+
+
+def test_vrp_one_vehicle_through_gymnasium_and_fleets_refused():
+    env = tg.make("tessera/Vrp-v1", num_envs=2, seed=2, customers=6, grid=30)
+    assert env.single_action_space.n == 7
+    obs, info = env.reset()
+    for _ in range(12):
+        actions = np.array([[first_legal(m)] for m in info["action_mask"]], dtype=np.int64)
+        obs, reward, terminated, truncated, info = env.step(actions)
+    env.close()
+    with pytest.raises(t.ArgumentError, match="multi-agent"):
+        tg.make("tessera/Vrp-v1", vehicles=3)
