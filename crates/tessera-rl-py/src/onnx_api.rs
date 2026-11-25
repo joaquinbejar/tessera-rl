@@ -134,21 +134,6 @@ pub(crate) fn info_of(p: &tessera_rl_onnx::Provenance) -> OnnxInfo {
     }
 }
 
-/// `onnx_take_loaded() -> dict`: the provenance of the ONNX opponent
-/// models the last pool made on this thread actually loaded, by content
-/// hash, and forgets it (#619). `tessera_rl.make` calls it before and right
-/// after the native maker, on the same thread, so the record describes the
-/// bytes the pool runs, never an earlier read.
-pub(crate) fn onnx_take_loaded<'py>(g: Gil<'py>) -> CResult<Mine<'py>> {
-    let d = capi::dict(g)?;
-    for (hash, info) in crate::policy::take_loaded() {
-        let key = std::ffi::CString::new(hash)
-            .map_err(|_| error(g, Kind::Argument, "a content hash with NUL".to_owned()))?;
-        capi::dict_set(g, &d, &key, &info_dict(g, &info)?)?;
-    }
-    Ok(d)
-}
-
 #[cfg(not(feature = "onnx"))]
 fn model_provenance<'py>(g: Gil<'py>, _: &OnnxArgs) -> CResult<Mine<'py>> {
     Err(to_py(
@@ -160,7 +145,7 @@ fn model_provenance<'py>(g: Gil<'py>, _: &OnnxArgs) -> CResult<Mine<'py>> {
 }
 
 /// The provenance dict.
-fn info_dict<'py>(g: Gil<'py>, info: &OnnxInfo) -> CResult<Mine<'py>> {
+pub(crate) fn info_dict<'py>(g: Gil<'py>, info: &OnnxInfo) -> CResult<Mine<'py>> {
     let d = capi::dict(g)?;
     capi::dict_set(
         g,

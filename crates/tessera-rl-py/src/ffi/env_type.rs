@@ -102,6 +102,7 @@ varargs!(SceneM, api::scene);
 noargs!(CanvasM, api::canvas);
 noargs!(HeuristicActionsM, api::heuristic_actions);
 noargs!(AssignmentM, api::assignment);
+noargs!(OnnxLoadedM, api::onnx_loaded);
 varargs!(ImportRecordM, api::import_record);
 varargs!(ForkM, api::fork);
 varargs!(MakeArchiveM, api::make_archive);
@@ -167,6 +168,10 @@ static METHODS: MethodTable<EnvBody> = MethodTable::new(&[
     MethodRow::noargs::<AssignmentM>(
         c"assignment",
         c"assignment($self, /)\n--\n\nA copy of each instance's league opponent (uint32 bytes), or None (ADR-0088).",
+    ),
+    MethodRow::noargs::<OnnxLoadedM>(
+        c"onnx_loaded",
+        c"onnx_loaded($self, /)\n--\n\nThe provenance of each ONNX opponent model this pool loaded, by content hash, or None (#619).",
     ),
     MethodRow::varargs::<RenderM>(
         c"render",

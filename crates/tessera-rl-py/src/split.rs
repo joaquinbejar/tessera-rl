@@ -557,6 +557,8 @@ struct SplitHandle {
     layout: Layout,
     /// The view set of each half's rows, built once (the halves are fixed).
     half_views: [Option<Arc<ViewSet>>; 2],
+    /// The provenance of the ONNX opponent models the pool loaded (#619).
+    onnx_loaded: crate::env::OnnxLoaded,
 }
 
 fn wrong_mode(call: &'static str) -> BindError {
@@ -569,6 +571,14 @@ fn wrong_mode(call: &'static str) -> BindError {
 impl PoolOps for SplitHandle {
     fn layout(&self) -> &Layout {
         &self.layout
+    }
+
+    fn set_onnx_loaded(&mut self, loaded: crate::env::OnnxLoaded) {
+        self.onnx_loaded = loaded;
+    }
+
+    fn onnx_loaded(&self) -> &[(String, crate::search::OnnxInfo)] {
+        &self.onnx_loaded
     }
 
     fn half_views(&self, half: usize) -> Option<Arc<ViewSet>> {
@@ -675,6 +685,7 @@ where
         ops,
         layout,
         half_views,
+        onnx_loaded: Vec::new(),
     })
 }
 

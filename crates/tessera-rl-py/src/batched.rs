@@ -889,6 +889,8 @@ struct AsyncHandle {
     ops: Arc<dyn AsyncOps>,
     layout: Layout,
     views: Option<Arc<ViewSet>>,
+    /// The provenance of the ONNX opponent models the pool loaded (#619).
+    onnx_loaded: crate::env::OnnxLoaded,
 }
 
 fn wrong_mode(call: &'static str) -> BindError {
@@ -901,6 +903,14 @@ fn wrong_mode(call: &'static str) -> BindError {
 impl PoolOps for AsyncHandle {
     fn layout(&self) -> &Layout {
         &self.layout
+    }
+
+    fn set_onnx_loaded(&mut self, loaded: crate::env::OnnxLoaded) {
+        self.onnx_loaded = loaded;
+    }
+
+    fn onnx_loaded(&self) -> &[(String, crate::search::OnnxInfo)] {
+        &self.onnx_loaded
     }
 
     fn views(&self) -> Option<&Arc<ViewSet>> {
@@ -1042,7 +1052,12 @@ where
         set,
         owned: outputs == BatchOutputs::Owned,
     });
-    Ok(Box::new(AsyncHandle { ops, layout, views }))
+    Ok(Box::new(AsyncHandle {
+        ops,
+        layout,
+        views,
+        onnx_loaded: Vec::new(),
+    }))
 }
 
 #[cfg(test)]

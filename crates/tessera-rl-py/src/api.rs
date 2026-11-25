@@ -1530,6 +1530,25 @@ pub(crate) fn assignment<'py>(g: Gil<'py>, inner: &Inner) -> CResult<Mine<'py>> 
     })
 }
 
+/// `onnx_loaded() -> dict | None`: the provenance of each ONNX opponent
+/// model this pool loaded, by content hash, read from the loaded models at
+/// construction (#619); `None` without ONNX opponents.
+pub(crate) fn onnx_loaded<'py>(g: Gil<'py>, inner: &Inner) -> CResult<Mine<'py>> {
+    inner.with(g, |ops| {
+        let loaded = ops.onnx_loaded();
+        if loaded.is_empty() {
+            return Ok(capi::none(g));
+        }
+        let d = capi::dict(g)?;
+        for (hash, info) in loaded {
+            let key = std::ffi::CString::new(hash.as_str())
+                .map_err(|_| error(g, Kind::Argument, "a content hash with NUL".to_owned()))?;
+            capi::dict_set(g, &d, &key, &crate::onnx_api::info_dict(g, info)?)?;
+        }
+        Ok(d)
+    })
+}
+
 /// `state_hash(id) -> int`: instance `id`'s state hash (sync mode).
 pub(crate) fn state_hash<'py>(g: Gil<'py>, inner: &Inner, args: Ref<'_>) -> CResult<Mine<'py>> {
     let a: [Ref<'_>; 1] = exactly(g, args, "state_hash")?;
