@@ -63,7 +63,14 @@ pub(crate) fn flat<E: Environment>(
 ) -> Vec<i64> {
     targets
         .iter()
-        .flat_map(|t| (0..fields.names.len()).map(move |i| (fields.get)(t, i).unwrap_or(0)))
+        .flat_map(|t| {
+            (0..fields.names.len()).map(move |i| {
+                let v = (fields.get)(t, i);
+                // Every index below `names.len()` is a field (REVIEW-B-r1).
+                debug_assert!(v.is_some(), "adaptive field {i} has no getter");
+                v.unwrap_or(0)
+            })
+        })
         .collect()
 }
 
