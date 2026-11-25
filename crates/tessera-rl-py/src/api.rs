@@ -799,6 +799,12 @@ pub(crate) fn layout<'py>(g: Gil<'py>, inner: &Inner) -> CResult<Mine<'py>> {
         capi::dict_set(g, &d, c"turns", &capi::string(g, l.turns)?)?;
         let groups = list_of(g, l.policy_groups.iter().map(|&name| capi::string(g, name)))?;
         capi::dict_set(g, &d, c"policy_groups", &groups)?;
+        // ADR-0079 item 8: one team and one role per slot, read at
+        // construction.
+        let teams = list_of(g, l.teams.iter().map(|&t| capi::int_u64(g, t.into())))?;
+        capi::dict_set(g, &d, c"teams", &teams)?;
+        let roles = list_of(g, l.roles.iter().map(|&r| capi::string(g, r)))?;
+        capi::dict_set(g, &d, c"roles", &roles)?;
         let mode = if inner.borrowed() {
             "borrowed"
         } else {

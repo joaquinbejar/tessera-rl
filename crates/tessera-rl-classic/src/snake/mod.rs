@@ -465,6 +465,12 @@ impl Environment for Snake {
         cfg.agents as usize
     }
 
+    /// One team per player: the team is the slot index.
+    fn team(_: &SnakeConfig, slot: AgentSlot) -> u16 {
+        // A slot index is a u16 by construction, so this never falls back.
+        u16::try_from(slot.index()).unwrap_or(0)
+    }
+
     /// Fixed spawns; the only draw is the food.
     fn reset(cfg: &SnakeConfig, rng: &mut StepRng, s: &mut SnakeState) {
         *s = SnakeState::default();

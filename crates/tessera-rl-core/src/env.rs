@@ -136,6 +136,26 @@ pub trait Environment: Sized + 'static {
         Self::MAX_AGENTS
     }
 
+    /// The team of agent `slot` (ADR-0079 item 8): a configuration fact,
+    /// constant for the pool's life. The engine reads it once per slot at
+    /// construction, never while stepping. Agents with the same team share
+    /// a side; defaults to 0 for every slot.
+    #[must_use]
+    fn team(cfg: &Self::Config, slot: AgentSlot) -> u16 {
+        let _ = (cfg, slot);
+        0
+    }
+
+    /// The role of agent `slot` (ADR-0079 item 8), such as `"pursuer"`: a
+    /// configuration fact, constant for the pool's life, read once per
+    /// slot at construction, never while stepping. Defaults to `""` (no
+    /// role).
+    #[must_use]
+    fn role(cfg: &Self::Config, slot: AgentSlot) -> &'static str {
+        let _ = (cfg, slot);
+        ""
+    }
+
     /// Whether alive `agent` acts in `state`: its action is required and
     /// read in the next step. The engine asks after every reset and every
     /// step (after the step's deaths and spawns), for alive agents only,

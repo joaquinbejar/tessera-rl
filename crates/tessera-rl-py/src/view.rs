@@ -237,6 +237,8 @@ mod tests {
             turns: "simultaneous",
             terminal: true,
             policy_groups: Vec::new(),
+            teams: Vec::new(),
+            roles: Vec::new(),
             state_leaves: Vec::new(),
         };
         let set = view_set(&layout).unwrap();
@@ -284,6 +286,8 @@ mod tests {
             turns: "simultaneous",
             terminal: false,
             policy_groups: Vec::new(),
+            teams: Vec::new(),
+            roles: Vec::new(),
             state_leaves: vec![leaf("uint8", vec![13])],
         };
         let set = view_set(&layout).unwrap();
