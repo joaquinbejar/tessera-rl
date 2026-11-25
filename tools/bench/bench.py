@@ -265,6 +265,8 @@ def run_rust(runner: pathlib.Path, cfg: dict, method: dict, pin: dict) -> dict:
         args.append("--legal-actions")
     if cfg.get("schedule"):
         args += ["--schedule", cfg["schedule"]]
+    if cfg.get("chunk_size"):
+        args += ["--chunk-size", str(cfg["chunk_size"])]
     cpus = _cpus_for(cfg, pin)
     if cpus and workers > 0:
         args += ["--cpus", ",".join(str(c) for c in cpus)]
@@ -417,14 +419,19 @@ def _same_work(a: dict, b: dict) -> bool:
     return len(work_a) == 1 and work_a == work_b
 
 
-def derive(results: dict, derived: list[dict], method: dict) -> dict:
+def derive(results: dict, derived: list[dict], method: dict, partial: bool = False) -> dict:
+    """The derived metrics. A scaling row whose multi-worker result is
+    missing is skipped only on a ``partial`` run (an ``--only`` filter); on
+    a full run it is an error, never a silent hole in the table."""
     out = {}
     boot = {"resamples": method["bootstrap_resamples"], "seed": method["bootstrap_seed"]}
     for d in derived:
         if d["kind"] == "scaling":
             a, b = d["multi"], d["single"]
             if a not in results:
-                continue
+                if partial:
+                    continue
+                raise ValueError(f"{d['name']}: no result for {a!r} on a full run")
             # "full" scales by the count the multi-worker run resolved to.
             scale = float(results[a]["workers"] if d["workers"] == "full" else d["workers"])
         elif d["kind"] == "ratio":
@@ -530,7 +537,7 @@ def run(
         "load_average": {"before": load_before, "after": load_average()},
         "results": results,
         "skipped": {name: "required package not installed" for name in skipped},
-        "derived": derive(results, spec.get("derived", []), method),
+        "derived": derive(results, spec.get("derived", []), method, partial=only is not None),
     }
     reasons = qualify(report, qualification)
     report["valid_for_claims"] = not reasons
