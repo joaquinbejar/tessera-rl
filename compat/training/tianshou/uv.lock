@@ -3,8 +3,8 @@ revision = 5
 requires-python = ">=3.11"
 resolution-markers = [
     "python_full_version >= '3.12' and sys_platform == 'win32'",
-    "python_full_version < '3.12' and sys_platform == 'win32'",
     "python_full_version >= '3.12' and sys_platform != 'win32'",
+    "python_full_version < '3.12' and sys_platform == 'win32'",
     "python_full_version < '3.12' and sys_platform != 'win32'",
 ]
 
@@ -1571,6 +1571,10 @@ conformance = [
 jax = [
     { name = "jax", specifier = "==0.10.2" },
     { name = "jaxlib", specifier = "==0.10.2" },
+]
+site = [
+    { name = "mkdocs", specifier = "==1.6.1" },
+    { name = "pdoc", specifier = "==16.0.0" },
 ]
 test = [
     { name = "gymnasium", specifier = "==1.4.0" },
