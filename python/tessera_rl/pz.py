@@ -330,12 +330,17 @@ def _state_space(state_leaves) -> spaces.Box | None:
 
 def _state_bound(values, shape, dtype: np.dtype) -> np.ndarray:
     """A bound per element of a state leaf, from a list that may hold one value.
-    Integer bounds stay integers: a float64 detour would round ``i64::MAX``
-    up to 2**63, which wraps."""
+    Integer bounds are clamped to ``dtype``'s range in Python integers: the
+    layout may carry ``2**63`` for an ``i64`` leaf's top (a float64 round
+    trip), and a float64 cast would wrap it."""
     size = int(np.prod(shape))
-    exact = np.int64 if dtype.kind == "i" else np.uint64 if dtype.kind == "u" else np.float64
-    arr = np.asarray(values, dtype=exact).ravel()
-    return np.broadcast_to(arr, (size,)).reshape(shape).astype(dtype)
+    flat = list(np.asarray(values, dtype=object).ravel())
+    if dtype.kind in "iu":
+        info = np.iinfo(dtype)
+        arr = np.asarray([min(max(int(v), int(info.min)), int(info.max)) for v in flat], dtype=dtype)
+    else:
+        arr = np.asarray(flat, dtype=np.float64).astype(dtype)
+    return np.broadcast_to(arr, (size,)).reshape(shape)
 
 
 def agent_name(slot: int, generation: int) -> str:
