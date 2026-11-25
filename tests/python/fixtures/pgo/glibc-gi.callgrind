@@ -1,0 +1,41 @@
+# callgrind format
+# aarch64 glibc 2.28 sample (#498): _native calls glibc's internal __GI_
+# aliases of memset and memcpy directly; libc is not stripped.
+version: 1
+positions: line
+events: Ir Dr Dw I1mr D1mr D1mw ILmr DLmr DLmw Bc Bcm Bi Bim
+ob=(1) /venv/lib/tessera_rl/_native.abi3.so
+fl=(1) pool.rs
+fn=(1) tessera_rl_engine::pool::clear_chunk
+10 80 0 0 0 0 0 0 0 0 0 0 0 0
+cob=(2) /usr/lib64/libc-2.28.so
+cfn=(2) __GI_memset
+calls=2 0
+11 700 0 0 0 0 0 0 0 0 0 0 0 0
+cob=(2)
+cfn=(3) __GI_memcpy
+calls=1 0
+12 60 0 0 0 0 0 0 0 0 0 0 0 0
+cob=(2)
+cfn=(4) __GI___libc_malloc
+calls=1 0
+13 40 0 0 0 0 0 0 0 0 0 0 0 0
+cob=(2)
+cfn=(5) __GI_memset'2
+calls=1 0
+14 30 0 0 0 0 0 0 0 0 0 0 0 0
+cob=(2)
+cfn=(6) __GI_memchr
+calls=1 0
+15 25 0 0 0 0 0 0 0 0 0 0 0 0
+ob=(2)
+fn=(2)
+1 700 0 0 0 0 0 0 0 0 0 0 0 0
+fn=(3)
+1 60 0 0 0 0 0 0 0 0 0 0 0 0
+fn=(4)
+1 40 0 0 0 0 0 0 0 0 0 0 0 0
+fn=(5)
+1 30 0 0 0 0 0 0 0 0 0 0 0 0
+fn=(6)
+1 25 0 0 0 0 0 0 0 0 0 0 0 0
