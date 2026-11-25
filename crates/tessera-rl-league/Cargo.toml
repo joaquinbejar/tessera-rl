@@ -17,6 +17,7 @@ categories.workspace = true
 [dependencies]
 # The pool side of a league (ADR-0088 erratum 1): this crate implements the
 # engine's league subsystem, so it depends on the engine, never the reverse.
+tessera-rl-core.workspace = true
 tessera-rl-engine.workspace = true
 tessera-rl-num.workspace = true
 thiserror.workspace = true
@@ -26,7 +27,6 @@ criterion.workspace = true
 # The replay refusal of a league pool (ADR-0088 section 8, until head D).
 tessera-rl-engine = { workspace = true, features = ["replay"] }
 tessera-rl-classic.workspace = true
-tessera-rl-core.workspace = true
 proptest.workspace = true
 
 [lints]

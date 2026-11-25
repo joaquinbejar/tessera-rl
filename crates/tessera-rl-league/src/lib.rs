@@ -25,6 +25,8 @@ mod outcome;
 mod pool;
 mod population;
 mod results;
+mod roles;
+mod shared;
 
 pub mod elo;
 pub mod trueskill;
@@ -36,6 +38,8 @@ pub use outcome::Outcome;
 pub use pool::PoolLeague;
 pub use population::{Policy, PolicyId, PolicyKind, Population};
 pub use results::Results;
+pub use roles::{RoleConfig, SelfPlay, SnapshotRule};
+pub use shared::{CommitReport, RoleHandle, SharedConfig, SharedLeague, Snapshot};
 
 /// `ln(10)` as pinned `f64` bits, `0x40026BB1BBB55516` (ADR-0088 item 4.3).
 pub const LN10: f64 = f64::from_bits(0x4002_6BB1_BBB5_5516);

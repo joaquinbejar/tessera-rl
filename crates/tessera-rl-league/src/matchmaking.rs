@@ -139,6 +139,83 @@ impl Table {
         &self.thresholds
     }
 
+    /// This table with entry `reserved` given exactly `floor(share x
+    /// 2^64)` of the range (a self-play share, ADR-0088 section 6): every
+    /// other entry's width is scaled by `(2^64 - reserved width) / 2^64`,
+    /// floored, in integers, and the last positive entry's threshold is
+    /// `u64::MAX`. `reserved` must have weighed 0 in this table. The
+    /// reserved width is exact; a last entry's `u64::MAX` threshold stands
+    /// for 2^64, the end of the draw range. If `reserved` is not the last
+    /// positive entry, the last one absorbs the floors' remainder.
+    ///
+    /// # Errors
+    ///
+    /// [`LeagueError::UnknownPolicy`] for an entry outside the table.
+    #[expect(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "a share in (0, 1) scaled to 2^64 and floored by `as`"
+    )]
+    pub fn with_reserved_share(&self, reserved: PolicyId, share: f64) -> Result<Self, LeagueError> {
+        let n = self.thresholds.len();
+        if reserved.index() >= n {
+            return Err(LeagueError::UnknownPolicy(reserved.0));
+        }
+        let full: u128 = 1 << 64;
+        let width = u128::from((share * TWO_64).floor() as u64);
+        let rest = full - width;
+        // Each entry's width: the reserved one exact, the others this
+        // table's widths scaled to `rest`, floored.
+        let mut widths = Vec::with_capacity(n);
+        let mut previous: u128 = 0;
+        for (i, &t) in self.thresholds.iter().enumerate() {
+            // This table's width of entry `i` (its last entry spans to 2^64).
+            let end = if Some(i) == self.last.map(|l| l as usize) {
+                full
+            } else {
+                u128::from(t)
+            };
+            let own = end.saturating_sub(previous);
+            previous = previous.max(end);
+            widths.push(if i == reserved.index() {
+                width
+            } else {
+                own * rest / full
+            });
+        }
+        // The floors' remainder goes to the last positive entry other than
+        // the reserved one, so the reserved width stays exact.
+        let sum: u128 = widths.iter().sum();
+        let absorber = (0..n)
+            .rev()
+            .find(|&i| i != reserved.index() && widths.get(i).is_some_and(|&w| w > 0));
+        if let Some(w) = absorber.and_then(|a| widths.get_mut(a)) {
+            *w += full.saturating_sub(sum);
+        }
+        let mut thresholds = Vec::with_capacity(n);
+        let mut running: u128 = 0;
+        let mut last = None;
+        for (i, &w) in widths.iter().enumerate() {
+            running += w;
+            if w > 0 {
+                last = Some(u32::try_from(i).map_err(|_| LeagueError::PopulationFull)?);
+            }
+            thresholds.push(u64::try_from(running).unwrap_or(u64::MAX));
+        }
+        // The last positive entry's threshold is `u64::MAX`, standing for
+        // 2^64.
+        if let Some(l) = last
+            && let Some(t) = thresholds.get_mut(l as usize)
+        {
+            *t = u64::MAX;
+        }
+        Ok(Self {
+            thresholds,
+            last,
+            uniform_fallback: self.uniform_fallback,
+        })
+    }
+
     /// Whether every weight was zero and the table fell back to uniform.
     #[must_use]
     pub const fn uniform_fallback(&self) -> bool {

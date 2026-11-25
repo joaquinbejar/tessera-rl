@@ -144,6 +144,19 @@ pub trait LeagueSubsystem: sealed::Sealed + Send {
         &mut self,
         results: LeagueResults<'_>,
     ) -> Result<(LeagueView, LeagueReport), LeagueBarrierError>;
+
+    /// The barrier of a frozen pool (ADR-0088 item 4.6): the pool keeps its
+    /// view and drops nothing into the league. A league shared by several
+    /// pools uses it to count the pool's round as an empty contribution, so
+    /// the other pools' round still commits (#384 head E1). The default
+    /// does nothing.
+    ///
+    /// # Errors
+    ///
+    /// [`LeagueBarrierError`]; the pool then stays as it was.
+    fn frozen_barrier(&mut self) -> Result<(), LeagueBarrierError> {
+        Ok(())
+    }
 }
 
 /// The league's part of the pool context (ADR-0088 item 7.3): the view the
@@ -459,6 +472,7 @@ impl LeagueState {
     /// the view and the rings stay as they were; nothing is poisoned.
     pub(crate) fn barrier(&mut self) -> Result<Option<LeagueReport>, LeagueBarrierError> {
         if self.frozen {
+            self.subsystem.frozen_barrier()?;
             return Ok(None);
         }
         self.drain();
