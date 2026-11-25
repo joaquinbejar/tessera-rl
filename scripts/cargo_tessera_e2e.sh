@@ -111,5 +111,28 @@ cargo clippy --all-targets --locked --offline -- -D warnings
 phase env-clippy
 cargo tessera bench --quick --locked --offline
 phase env-bench-quick
+# A seeded nondeterminism (a static reset counter, #645): the check must
+# fail and name the comparison kind and the first diverging call.
+cd "$work"
+rm -rf "$env_crate-seeded"
+cp -R "$env_crate" "$env_crate-seeded"
+cd "$work/$env_crate-seeded"
+grep -q 'let counter = (rng.next_u32() % CHOICES).min(cfg.target);' src/lib.rs
+sed -i.orig 's|let counter = (rng.next_u32() % CHOICES).min(cfg.target);|let counter = ((rng.next_u32() ^ RESETS.fetch_add(1, core::sync::atomic::Ordering::Relaxed)) % CHOICES).min(cfg.target);|' src/lib.rs
+rm -f src/lib.rs.orig
+cat >> src/lib.rs <<'RS'
+
+/// Counts resets (the seeded defect).
+static RESETS: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+RS
+if cargo tessera check --locked --offline > seeded.out 2>&1; then
+    echo "the check must fail on a seeded static reset counter" >&2
+    exit 1
+fi
+grep -q 'Inline vs Inline (same process)' seeded.out
+grep -Eq 'first divergence at call [0-9]+, (instance [0-9]+|the outputs only)' seeded.out
+# The report, for the log.
+grep -E 'vs (Inline|4 workers|the uninterrupted run)|first divergence at call' seeded.out
+phase env-seeded-report
 
 echo "cargo-tessera-e2e: total: $(($(date +%s) - start)) s"

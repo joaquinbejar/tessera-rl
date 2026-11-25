@@ -520,6 +520,31 @@ mod tests {
     }
 
     #[test]
+    fn test_plan_env_check_reports_first_divergence_by_kind() {
+        let plan = plan(&env_args("my-env"), Path::new("/work")).unwrap();
+        let check = file(&plan, "tests/check.rs");
+        assert!(check.contains("fn first_divergence("));
+        for kind in [
+            "Inline vs Inline (same process)",
+            "Inline vs 4 workers at chunk size",
+            "vs the uninterrupted run",
+            "first divergence at call {call}",
+        ] {
+            assert!(check.contains(kind), "{kind}");
+        }
+        for comparison in [
+            "compare!(Kind::InlineInline",
+            "compare!(Kind::Workers(chunk)",
+            "compare!(Kind::Resume(at)",
+            "compare!(Kind::Snapshot",
+        ] {
+            assert!(check.contains(comparison), "{comparison}");
+        }
+        assert!(!check.contains("assert_eq!(replay("), "no vector dumps");
+        assert!(!check.contains("two Inline pools disagree"));
+    }
+
+    #[test]
     fn test_plan_env_default_pins_exact_tool_version() {
         let plan = plan(&env_args("grid"), Path::new("/work")).unwrap();
         let toml = file(&plan, "Cargo.toml");
