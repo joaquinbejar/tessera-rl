@@ -61,7 +61,7 @@ def run(tmp_path: Path, *profile: str, compare_exit: int = 0, orderbook: str | N
     root, fake, payload, log = tmp_path / "root", tmp_path / "fake", tmp_path / "payload", tmp_path / "log"
     for d in (root / "scripts", fake, payload):
         d.mkdir(parents=True)
-    for name in ("wheel_job.sh", "wheel_num_tests.sh"):
+    for name in ("wheel_job.sh", "wheel_num_tests.sh", "install_rustup.sh"):
         shutil.copy2(ROOT / "scripts" / name, root / "scripts" / name)
     (root / "tools" / "pgo").mkdir(parents=True)
     shutil.copy2(ROOT / "tools" / "pgo" / "checks.py", root / "tools" / "pgo" / "checks.py")

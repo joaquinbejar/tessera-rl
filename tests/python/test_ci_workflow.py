@@ -107,8 +107,9 @@ def test_ci_only_the_python_job_requires_dash():
     assert "TESSERA_REQUIRE_DASH" not in WHEELS
 
 
-def test_ci_only_the_python_job_expects_fp_traps():
-    assert [j for j, body in JOBS.items() if "TESSERA_EXPECT_FP_TRAPS" in body] == ["python"]
+def test_ci_only_the_python_jobs_expect_fp_traps():
+    # The Linux suite and the Windows suite (#358): both on x86-64.
+    assert sorted(j for j, body in JOBS.items() if "TESSERA_EXPECT_FP_TRAPS" in body) == ["python", "windows-python"]
 
 
 MAKEFILE = (ROOT / "Makefile").read_text()
@@ -138,3 +139,81 @@ def test_ci_host_example_is_its_own_unpublished_workspace_with_a_lockfile():
     assert '"examples/host_orderbook"' in (ROOT / "Cargo.toml").read_text().split("default-members", 1)[0]
     pyproject = (EXAMPLE / "pyproject.toml").read_text()
     assert '"example/OrderBook-v1" = "tessera_example_orderbook._tessera_host:make"' in pyproject
+
+
+# Windows CI (#358): GitHub-hosted windows-2025, never the owner's box.
+WINDOWS_JOBS = ["windows-python", "windows-native-wait"]
+
+
+def _wheels_job(name):
+    return _jobs(WHEELS)[name]
+
+
+WINDOWS_IF = (
+    "if: github.repository == 'joaquinbejar/tessera-rl' && "
+    "(github.event_name == 'workflow_dispatch' || "
+    "(github.event_name == 'push' && github.ref == 'refs/heads/main'))"
+)
+
+
+@pytest.mark.parametrize("job", WINDOWS_JOBS)
+def test_ci_windows_job_is_hosted_guarded_and_timed(job):
+    assert re.fullmatch(r"windows-\d{4}", _runs_on(job)), _runs_on(job)
+    # Main pushes and dispatch only, never per pull request (#358).
+    assert WINDOWS_IF in JOBS[job]
+    assert FORK_GUARD not in JOBS[job]
+    assert "if: false" not in JOBS[job]
+    assert re.search(r"^    timeout-minutes: \d+$", JOBS[job], re.M)
+    assert re.search(r"^    defaults:\n      run:\n(?:        #.*\n)*        shell: bash$", JOBS[job], re.M)
+
+
+def test_ci_windows_python_job_is_the_wheels_windows_call():
+    # One source of truth: the same wheel_job.sh call, with the same pinned
+    # rustup-init and uv sha256, as wheels.yml's Windows leg (#350).
+    call = re.compile(r'scripts/wheel_job\.sh x86_64-pc-windows-msvc "" ([0-9a-f]{64}) ([0-9a-f]{64}) release')
+    ci = call.search(JOBS["windows-python"])
+    wheels = call.search(_wheels_job("windows"))
+    assert ci and wheels and ci.groups() == wheels.groups()
+    assert re.search(r"^    timeout-minutes: 120$", JOBS["windows-python"], re.M)
+    assert "if: always()" in JOBS["windows-python"] and "checks.json" in JOBS["windows-python"]
+
+
+def test_ci_windows_native_wait_runs_the_backend_test_with_a_verified_rustup():
+    job = JOBS["windows-native-wait"]
+    assert re.search(r"^    timeout-minutes: 45$", job, re.M)
+    assert "cargo test -p tessera-rl-engine --test sync --locked test_every_wait_backend_matches_inline -- --exact" in job
+    install = re.search(r"scripts/install_rustup\.sh x86_64-pc-windows-msvc ([0-9a-f]{64}) ", job)
+    wheels = re.search(r'scripts/wheel_job\.sh x86_64-pc-windows-msvc "" ([0-9a-f]{64}) ', _wheels_job("windows"))
+    assert install and wheels and install.group(1) == wheels.group(1)
+    # The verified install comes before any cargo step.
+    assert job.index("install_rustup.sh") < job.index("cargo test")
+
+
+INSTALL = (ROOT / "scripts" / "install_rustup.sh").read_text()
+WHEEL_JOB = (ROOT / "scripts" / "wheel_job.sh").read_text()
+
+
+def test_install_rustup_verifies_the_sha_before_running_rustup_init():
+    check = INSTALL.index('if [ "$got" != "$rustup_sha" ]; then')
+    run = INSTALL.index('"$init" -y --no-modify-path --profile minimal --default-toolchain none')
+    assert INSTALL.index("curl --proto '=https' --tlsv1.2") < check < run
+    assert "RUSTUP_VERSION=1.29.3" in INSTALL
+
+
+def test_every_wheel_leg_installs_rustup_through_the_verified_script():
+    # wheel_job.sh runs no rustup-init of its own: every leg (each wheels.yml
+    # matrix entry and the Windows leg) goes through install_rustup.sh with
+    # its own pinned sha256.
+    assert 'bash "$(dirname "$0")/install_rustup.sh" "$target" "$rustup_sha" "$WHEEL_RUN"' in WHEEL_JOB
+    assert "rustup-init" not in WHEEL_JOB.replace("install_rustup.sh", "")
+    assert "RUSTUP_VERSION" not in WHEEL_JOB
+
+
+def test_ci_workflow_can_be_dispatched_for_the_windows_jobs():
+    head = CI.split("\njobs:\n", 1)[0]
+    assert re.search(r"^on:\n(?:.*\n)*?  workflow_dispatch:$", head, re.M)
+
+
+def test_ci_only_the_windows_jobs_are_hosted():
+    hosted = sorted(j for j in JOBS if "self-hosted" not in _runs_on(j))
+    assert hosted == sorted(WINDOWS_JOBS), hosted

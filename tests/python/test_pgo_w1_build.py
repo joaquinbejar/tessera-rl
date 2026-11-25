@@ -141,7 +141,8 @@ def test_pgo_w1_build_pins_the_same_tools_as_the_w0_job():
     def pins(path):
         return dict(re.findall(r"^(RUSTUP_VERSION|UV_VERSION|MATURIN_VERSION)=(\S+)$", path.read_text(), re.M))
 
-    w0 = pins(SCRIPT.parent / "wheel_job.sh")
+    # The W0 job pins rustup in the installer script it shares (#358).
+    w0 = pins(SCRIPT.parent / "wheel_job.sh") | pins(SCRIPT.parent / "install_rustup.sh")
     assert set(w0) == {"RUSTUP_VERSION", "UV_VERSION", "MATURIN_VERSION"} and pins(SCRIPT) == w0
     assert "numpy==2.4.6" in (SCRIPT.parent / "wheel_job.sh").read_text() and "NUMPY_VERSION=2.4.6" in SCRIPT.read_text()
 
