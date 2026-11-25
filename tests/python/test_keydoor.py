@@ -45,3 +45,17 @@ def test_pz_keydoor_passes_the_api_and_seed_tests(agents):
     pz_test.parallel_api_test(pz.parallel_env(ID, seed=1, **kw), num_cycles=200)
     pz_test.api_test(pz.aec_env(ID, seed=1, **kw), num_cycles=200, verbose_progress=False)
     pz_test.seed_test(lambda: pz.aec_env(ID, **kw), num_cycles=100)
+
+
+def test_keydoor_heuristic_slots_run_in_the_engine():
+    """GridKeyDoor's `Heuristic` drives heuristic slots (ADR-0079, #552)."""
+    groups = ["learner", "heuristic", "learner", "heuristic"]
+    env = t.make(ID, num_envs=2, seed=3, agents=4, policy_map=groups, outputs="owned")
+    try:
+        assert list(env.policy_groups) == groups
+        env.reset()
+        env.step(np.full((2, 4), WAIT, dtype=np.int32))
+        acts = env.heuristic_actions
+        assert acts is not None and acts.shape[:2] == (2, 4)
+    finally:
+        env.close()

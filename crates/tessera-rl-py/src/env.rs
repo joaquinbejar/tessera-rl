@@ -1613,7 +1613,9 @@ pub(crate) fn grid(
     finish_rendered(&cfg, pool, args, n, same_step)
 }
 
-/// A key and door pool (`tessera/GridKeyDoor-v1`), with masks.
+/// A key and door pool (`tessera/GridKeyDoor-v1`), with masks; heuristic
+/// slots run its `Heuristic` (ADR-0079 item 4.1: a perfect-information
+/// environment).
 pub(crate) fn keydoor(
     args: &PoolArgs,
     size: Option<u32>,
@@ -1627,6 +1629,7 @@ pub(crate) fn keydoor(
     let (options, n) = options(args)?;
     let same_step = options.auto_reset == AutoReset::SameStep;
     let pool = EnvPool::<KeyDoor, Masked>::with_masks(cfg.clone(), options)?;
+    let pool = crate::policy::perfect(pool, args)?;
     finish_rendered(&cfg, pool, args, n, same_step)
 }
 
