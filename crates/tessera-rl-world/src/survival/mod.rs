@@ -55,9 +55,9 @@ use core::num::NonZeroU32;
 use tessera_rl_core::io::{ActionWriter, Actions, MaskWriter, ObsWriter};
 use tessera_rl_core::space::Space;
 use tessera_rl_core::{
-    ActionMask, AgentSlot, Bool8, ConfigError, Environment, EpisodeEnd, HeaderView, InvariantViolation,
-    NoAdaptive, ObsLeaf, ObsSet, Observation, Phase, RecordHeader, SpaceError, StepOut, Tier,
-    TurnStructure, Validate,
+    ActionMask, AgentSlot, Bool8, ConfigError, Environment, EpisodeEnd, HeaderView,
+    InvariantViolation, NoAdaptive, ObsLeaf, ObsSet, Observation, Phase, RecordHeader, SpaceError,
+    StepOut, Tier, TurnStructure, Validate,
 };
 use tessera_rl_macros::{EnvConfig, EnvState, Observation};
 use tessera_rl_num::rng::{ObsRng, StepRng};
@@ -668,23 +668,45 @@ impl Environment for Survival {
         _: &mut ObsRng,
         out: &mut ObsWriter<'_, '_, SurvivalObs>,
     ) {
-        let a = agent.index();
-        let (x, y) = state.pos(a);
-        let get = |v: &[i16; MAX_AGENTS]| i32::from(v.get(a).copied().unwrap_or(0));
-        let r = i16::try_from(cfg.view).unwrap_or(2).clamp(2, 7);
-        let w = usize::try_from(2 * r + 1).unwrap_or(5);
+        let me = agent.index();
+        let (x, y) = state.pos(me);
+        let get = |v: &[i16; MAX_AGENTS]| i32::from(v.get(me).copied().unwrap_or(0));
+        let radius = i16::try_from(cfg.view).unwrap_or(2).clamp(2, 7);
+        let width = usize::try_from(2 * radius + 1).unwrap_or(5);
+        // The live agents in the window, by window cell (slot + 1), in one
+        // pass over the agents: O(agents) per observation.
+        let mut nearby = [[0u8; 2 * MAX_VIEW + 1]; 2 * MAX_VIEW + 1];
+        for b in 0..state.agent_count() {
+            if !state.is_alive(b) {
+                continue;
+            }
+            let (bx, by) = state.pos(b);
+            let (col, row) = (bx - x + radius, by - y + radius);
+            if let (Ok(col), Ok(row)) = (usize::try_from(col), usize::try_from(row))
+                && let Some(cell) = nearby.get_mut(row).and_then(|r| r.get_mut(col))
+                && col < width
+                && row < width
+            {
+                *cell = u8::try_from(b + 1).unwrap_or(0);
+            }
+        }
         if let Some(mut leaf) = out.leaf_mut(SurvivalObs::WINDOW) {
-            for (row, dy) in (-r..=r).enumerate() {
-                for (col, dx) in (-r..=r).enumerate() {
+            for (row, dy) in (-radius..=radius).enumerate() {
+                for (col, dx) in (-radius..=radius).enumerate() {
                     let (cx, cy) = (x + dx, y + dy);
-                    let at = |channel: usize| channel * w * w + row * w + col;
+                    let at = |channel: usize| channel * width * width + row * width + col;
                     let Some(tile) = state.tile(cx, cy) else {
                         leaf.set(at(0), OUTSIDE);
                         continue;
                     };
                     leaf.set(at(0), tile);
                     leaf.set(at(1), u8::from(state.ready_forest(cx, cy)));
-                    if let Some(b) = state.agent_at(cx, cy) {
+                    let occupant = nearby
+                        .get(row)
+                        .and_then(|r| r.get(col))
+                        .copied()
+                        .unwrap_or(0);
+                    if let Some(b) = usize::from(occupant).checked_sub(1) {
                         let health = state.health.get(b).copied().unwrap_or(0);
                         leaf.set(at(2), 1);
                         leaf.set(at(3), u8::try_from(health).unwrap_or(0));
@@ -708,14 +730,14 @@ impl Environment for Survival {
         // Visible agents, nearest first; the key never involves the slot.
         let mut seen = [(i32::MAX, 0i16, 0i16, 0i16); MAX_AGENTS];
         let mut count = 0;
-        if state.is_alive(a) {
+        if state.is_alive(me) {
             for b in 0..state.agent_count() {
-                if b == a || !state.is_alive(b) {
+                if b == me || !state.is_alive(b) {
                     continue;
                 }
                 let (bx, by) = state.pos(b);
                 let (dx, dy) = (bx - x, by - y);
-                if dx.abs() > r || dy.abs() > r {
+                if dx.abs() > radius || dy.abs() > radius {
                     continue;
                 }
                 if let Some(e) = seen.get_mut(count) {

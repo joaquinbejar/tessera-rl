@@ -25,7 +25,9 @@
 use core::num::NonZeroU32;
 
 use tessera_rl_core::Validate;
-use tessera_rl_engine::{ActionInput, DecodedRecord, EnvPool, Masked, NoMasks, PoolOptions, Reseed};
+use tessera_rl_engine::{
+    ActionInput, DecodedRecord, EnvPool, Masked, NoMasks, PoolOptions, Reseed,
+};
 use tessera_rl_num::identity::Seed;
 use tessera_rl_world::survival::{
     ATTACK, FOREST, GRASS, MAX_AGENTS, MAX_HEALTH, STONE, WATER, map,
@@ -524,7 +526,8 @@ fn test_survival_masks_on_a_hand_built_state() {
     s.tiles[10][9] = STONE;
     (s.x[0], s.y[0], s.x[1], s.y[1]) = (10, 10, 11, 10);
     let header = *p.snapshot(0).unwrap().header();
-    p.import(&[0], &[DecodedRecord::from_parts(header, s).unwrap()]).unwrap();
+    p.import(&[0], &[DecodedRecord::from_parts(header, s).unwrap()])
+        .unwrap();
     let row = mask_row(&p, 0);
     // Moves: stay, N water, E occupied, S grass, W stone.
     assert_eq!(&row[..5], &[true, false, false, true, false]);
@@ -534,7 +537,11 @@ fn test_survival_masks_on_a_hand_built_state() {
     // A regrowing forest masks forage.
     let mut acts = vec![0i32; MAX_AGENTS * 2];
     acts[1] = 1;
-    p.step(ActionInput { discrete: &acts, continuous: &[] }).unwrap();
+    p.step(ActionInput {
+        discrete: &acts,
+        continuous: &[],
+    })
+    .unwrap();
     assert!(!mask_row(&p, 0)[6], "foraged: not ready");
     // The edge masks a move off the map: agent 15 at (15, 31) cannot go S.
     assert!(!mask_row(&p, 15)[3]);
@@ -561,16 +568,22 @@ fn test_survival_observation_window_own_and_others() {
     (s.x[4], s.y[4]) = (20, 20);
     s.tiles[1][2] = FOREST;
     let header = *p.snapshot(0).unwrap().header();
-    p.import(&[0], &[DecodedRecord::from_parts(header, s).unwrap()]).unwrap();
+    p.import(&[0], &[DecodedRecord::from_parts(header, s).unwrap()])
+        .unwrap();
     let out = p.outputs().unwrap();
     // Leaf 0: window [4, 11, 11] per agent slot (view 5).
     let w = 11;
     let window = &out.observation(0).unwrap()[..4 * w * w];
-    let at = |c: usize, dy: i32, dx: i32| window[c * w * w + (dy + 5) as usize * w + (dx + 5) as usize];
+    let at =
+        |c: usize, dy: i32, dx: i32| window[c * w * w + (dy + 5) as usize * w + (dx + 5) as usize];
     assert_eq!(at(0, -5, -5), 255, "off the map");
     assert_eq!(at(0, 0, 1), FOREST);
     assert_eq!(at(1, 0, 1), 1, "ready forest");
-    assert_eq!((at(2, 0, 1), at(3, 0, 1)), (1, 40), "agent 2 and its health");
+    assert_eq!(
+        (at(2, 0, 1), at(3, 0, 1)),
+        (1, 40),
+        "agent 2 and its health"
+    );
     assert_eq!((at(2, 2, 0), at(3, 2, 0)), (1, 70), "agent 3");
     // Leaf 1: own.
     let own: Vec<i32> = out.observation(1).unwrap()[..24]
@@ -587,7 +600,10 @@ fn test_survival_observation_window_own_and_others() {
         .iter()
         .map(|c| i32::from_ne_bytes(*c))
         .collect();
-    let present: Vec<bool> = out.observation(3).unwrap()[..16].iter().map(|&b| b != 0).collect();
+    let present: Vec<bool> = out.observation(3).unwrap()[..16]
+        .iter()
+        .map(|&b| b != 0)
+        .collect();
     assert_eq!(&present[..3], &[true, true, false]);
     assert_eq!(&items[..6], &[1, 0, 40, 0, 2, 70], "nearest first");
 }
@@ -599,18 +615,32 @@ fn test_survival_legal_actions_from_the_masks_always_step() {
     let mut p = masked(cfg(64, 32, 2), 16);
     let mut lcg = 16u64;
     for _ in 0..200 {
-        let masks: Vec<bool> = p.outputs().unwrap().masks().iter().map(|f| f.get()).collect();
+        let masks: Vec<bool> = p
+            .outputs()
+            .unwrap()
+            .masks()
+            .iter()
+            .map(|f| f.get())
+            .collect();
         let mut acts = vec![0i32; MAX_AGENTS * 2];
         for a in 0..MAX_AGENTS {
             let row = &masks[a * 12..a * 12 + 12];
             for (head, range) in [(0, 0..5), (1, 5..12)] {
                 let legal: Vec<usize> = range.clone().filter(|&i| row[i]).collect();
+                // Slots beyond the configured agents have no legal action.
+                if legal.is_empty() {
+                    continue;
+                }
                 lcg = lcg.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1);
                 let pick = legal[(lcg >> 33) as usize % legal.len()];
                 acts[2 * a + head] = i32::try_from(pick - range.start).unwrap();
             }
         }
-        p.step(ActionInput { discrete: &acts, continuous: &[] }).unwrap();
+        p.step(ActionInput {
+            discrete: &acts,
+            continuous: &[],
+        })
+        .unwrap();
         assert!(Survival::validate(&cfg(64, 32, 2), &p.state(0).unwrap()).is_ok());
     }
 }
