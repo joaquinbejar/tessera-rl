@@ -19,8 +19,7 @@ use tessera_rl_num::Fx32;
 
 use crate::bool8::Bool8;
 
-/// Rows per lane group: columns are padded to a multiple of it (ADR-0090).
-pub const LANES: usize = 8;
+pub use crate::lane_step::LANES;
 
 /// A scalar field type of a lane-wise state.
 pub trait LaneField: Copy + Send + Sync + 'static {}
@@ -133,6 +132,14 @@ pub trait LaneTuple: Copy + Send + Sync + 'static + crate::sealed::LaneTupleSeal
 
     /// Writes row `i` of a view; nothing past it.
     fn view_set(view: &mut Self::View<'_>, i: usize, value: Self);
+
+    /// One `&mut [T; LANES]` per column: the group of [`LANES`] rows that
+    /// starts at row `base` of a view (ADR-0090 decision 4).
+    type Group<'a>;
+
+    /// The group of rows `base .. base + LANES` of `view`, or `None` when
+    /// the view holds fewer rows from `base` on (a pool's tail).
+    fn group<'a>(view: &'a mut Self::View<'_>, base: usize) -> Option<Self::Group<'a>>;
 }
 
 impl crate::sealed::LaneTupleSealed for () {}
@@ -167,6 +174,12 @@ impl LaneTuple for () {
     }
 
     fn view_set((): &mut Self::View<'_>, _: usize, (): Self) {}
+
+    type Group<'a> = ();
+
+    fn group<'a>((): &'a mut Self::View<'_>, _: usize) -> Option<Self::Group<'a>> {
+        Some(())
+    }
 }
 
 /// `n` rounded up to a multiple of [`LANES`]; `n` itself if that overflows
@@ -225,6 +238,15 @@ macro_rules! field_tuple {
 
             fn view_get(view: &Self::View<'_>, i: usize) -> Option<Self> {
                 Some(($(*view.$i.get(i)?,)+))
+            }
+
+            type Group<'a> = ($(&'a mut [$t; LANES],)+);
+
+            fn group<'a>(view: &'a mut Self::View<'_>, base: usize) -> Option<Self::Group<'a>> {
+                let end = base.checked_add(LANES)?;
+                Some(($(
+                    <&mut [$t; LANES]>::try_from(view.$i.get_mut(base..end)?).ok()?,
+                )+))
             }
 
             fn view_set(view: &mut Self::View<'_>, i: usize, value: Self) {

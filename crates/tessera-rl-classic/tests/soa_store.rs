@@ -29,6 +29,7 @@ use tessera_rl_engine::{
     Outputs, PipelinedOptions, PoolOptions, Reseed, SyncOptions,
 };
 use tessera_rl_num::identity::Seed;
+use tessera_rl_simd::{Level, Resolved};
 
 #[derive(Debug, Clone, Copy)]
 struct Case {
@@ -38,6 +39,9 @@ struct Case {
     auto_reset: AutoReset,
     limit: Option<u32>,
     steps: u32,
+    /// The lane level of the lane-wise pool (ADR-0090 decision 4); `None`
+    /// takes the best one.
+    level: Option<Level>,
 }
 
 fn options(case: Case) -> PoolOptions {
@@ -45,6 +49,7 @@ fn options(case: Case) -> PoolOptions {
         chunk_size: NonZeroU32::new(case.chunk).unwrap(),
         max_episode_steps: case.limit.and_then(NonZeroU32::new),
         auto_reset: case.auto_reset,
+        simd_level: case.level,
         ..PoolOptions::new(NonZeroU32::new(case.n).unwrap(), Seed::new(29))
     }
 }
@@ -206,14 +211,19 @@ fn matrix(ns: &[u32], chunks: &[u32], workers: &[usize], steps: u32) {
             for &workers in workers {
                 for auto_reset in [AutoReset::NextStep, AutoReset::SameStep] {
                     for limit in [None, Some(40)] {
-                        differential(Case {
-                            n,
-                            chunk,
-                            workers,
-                            auto_reset,
-                            limit,
-                            steps,
-                        });
+                        // Every level this CPU has: each lane kernel must
+                        // match the reference (ADR-0090 4.8).
+                        for level in Resolved::available().map(Resolved::level) {
+                            differential(Case {
+                                n,
+                                chunk,
+                                workers,
+                                auto_reset,
+                                limit,
+                                steps,
+                                level: Some(level),
+                            });
+                        }
                     }
                 }
             }
@@ -248,6 +258,7 @@ fn test_soa_store_pipelined_matches_aos() {
                 auto_reset: AutoReset::SameStep,
                 limit: Some(30),
                 steps: 0,
+                level: None,
             };
             let mut p = EnvPool::<$env>::new(CartPoleConfig {}, options(case))
                 .unwrap()
@@ -299,6 +310,7 @@ fn test_soa_store_replay_files_are_identical_and_cross_replay() {
                 auto_reset: AutoReset::SameStep,
                 limit: Some(25),
                 steps: 0,
+                level: None,
             };
             let mut p = pool!($env, case);
             let options = ReplayWriterOptions {
@@ -357,6 +369,7 @@ fn test_soa_store_async_is_refused() {
         auto_reset: AutoReset::SameStep,
         limit: None,
         steps: 0,
+        level: None,
     };
     let p = pool!(SoaCartPole, case);
     let err = p
@@ -408,6 +421,7 @@ fn test_soa_store_state_is_gathered_by_value() {
         auto_reset: AutoReset::SameStep,
         limit: None,
         steps: 0,
+        level: None,
     };
     let mut soa = pool!(SoaCartPole, case);
     let _ = soa.reset_all(Reseed::Keep).unwrap();
