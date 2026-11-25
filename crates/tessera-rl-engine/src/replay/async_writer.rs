@@ -168,6 +168,7 @@ where
             false,
             flags,
             &super::ResetSourceRecord::Fresh,
+            false,
         )?;
         let mut recorder = Self {
             pool,

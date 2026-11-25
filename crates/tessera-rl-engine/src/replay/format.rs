@@ -92,12 +92,16 @@
 //!   changed the view.
 //! - `End` (0): the trailer of ADR-0072 section 2.
 //!
-//! Until their features land, this library writes the defaults (no
-//! curriculum, a `Fresh` source) and never writes tags 7, 10 or 11; replay
-//! refuses a non-default value or one of those tags as
-//! `ReplayError::Unsupported`. A league pool's sync recording writes
-//! `has_league` 1, code 4 and tag 12 (#384 head D); a file without a league
-//! is byte-identical to one written before. Asset entries are written and checked
+//! A first-party pool with curriculum targets (ADR-0081, #359 head C) writes
+//! `has_curriculum` 1, one tag 7 of every slot's targets right after the
+//! first keyframe, and a tag 7 of the changed slots at each epoch barrier
+//! (or `set_targets`) that changed any; tag 7 events are not calls. Every
+//! other file writes `has_curriculum` 0 and no tag 7, byte for byte as
+//! before. Keyframes hold no targets: a seek rebuilds them from the config's
+//! values and every earlier tag 7. Archive sources write tags 10 and 11
+//! (ADR-0075). A league pool's sync recording writes `has_league` 1, code 4
+//! and tag 12 (#384 head D); a file without a league is byte-identical to
+//! one written before. Asset entries are written and checked
 //! as ADR-0077 says. The policy map is written (count 0 for the default map,
 //! else one code per agent slot) and checked against the pool before any
 //! event (ADR-0079 item 6, #347 stage B2).

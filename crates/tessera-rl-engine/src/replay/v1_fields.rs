@@ -194,20 +194,22 @@ pub(crate) fn read_extension(
 
 /// Appends the extension: the policy map `codes` (empty for the default
 /// map; at most `u16::MAX` codes, checked by `policy_map::header_codes`),
-/// no curriculum, no league, the archive block of `source` (the source at
-/// recording start, ADR-0075 item 7), then `chunk_size`.
+/// `has_curriculum` (ADR-0081 item 7.3), no league, the archive block of
+/// `source` (the source at recording start, ADR-0075 item 7), then
+/// `chunk_size`.
 pub(crate) fn push_extension(
     out: &mut Vec<u8>,
     codes: &[u8],
     has_league: bool,
     chunk_size: u32,
     source: &ResetSourceRecord,
+    has_curriculum: bool,
 ) {
     let count = u16::try_from(codes.len()).unwrap_or(0);
     out.extend_from_slice(&count.to_le_bytes());
     out.extend_from_slice(codes.get(..usize::from(count)).unwrap_or(&[]));
     // has_curriculum, then has_league (ADR-0088 section 8, #384 head D).
-    out.push(0);
+    out.push(u8::from(has_curriculum));
     out.push(u8::from(has_league));
     match source {
         ResetSourceRecord::Fresh => out.push(0),
@@ -218,6 +220,18 @@ pub(crate) fn push_extension(
         }
     }
     out.extend_from_slice(&chunk_size.to_le_bytes());
+}
+
+/// Appends a tag 7 `Adaptive` body (ADR-0081 item 7.1): `count:u32`, then
+/// per entry `id:u32` and the canonical value bytes. `entries` must be
+/// sorted by id, ids distinct; at least one.
+pub(crate) fn push_adaptive(out: &mut Vec<u8>, entries: &[(u32, Vec<u8>)]) {
+    let count = u32::try_from(entries.len()).unwrap_or(u32::MAX);
+    out.extend_from_slice(&count.to_le_bytes());
+    for (id, value) in entries {
+        out.extend_from_slice(&id.to_le_bytes());
+        out.extend_from_slice(value);
+    }
 }
 
 /// Appends a reset source as `read_reset_source` reads it.
