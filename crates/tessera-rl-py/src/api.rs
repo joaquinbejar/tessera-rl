@@ -105,7 +105,7 @@ pub(crate) fn no_positional(g: Gil, args: Ref<'_>, name: &str) -> CResult<()> {
     }
 }
 
-const POOL_KEYS: [&str; 18] = [
+const POOL_KEYS: [&str; 19] = [
     "mode",
     "batch_size",
     "gather",
@@ -124,6 +124,7 @@ const POOL_KEYS: [&str; 18] = [
     "privileged_state",
     "league",
     "role",
+    "targets",
 ];
 
 /// The `outputs` mode: `"borrowed"` (the native default, ADR-0003) or
@@ -226,6 +227,7 @@ fn pool_args(g: Gil, kw: &Kwargs<'_>, default_limit: u32) -> CResult<PoolArgs> {
             .transpose()
             .map_err(|e| error(g, Kind::Argument, e))?,
         privileged_state: kw.bool(g, "privileged_state")?.unwrap_or(false),
+        targets: kw.bool(g, "targets")?.unwrap_or(false),
         league: match kw.u64(g, "league")? {
             None => None,
             Some(h) => Some((
@@ -862,6 +864,10 @@ pub(crate) fn layout<'py>(g: Gil<'py>, inner: &Inner) -> CResult<Mine<'py>> {
         capi::dict_set(g, &d, c"state_leaves", &leaf_list(g, &l.state_leaves)?)?;
         let privileged = !l.state_leaves.is_empty();
         capi::dict_set(g, &d, c"privileged_state", &capi::boolean(g, privileged))?;
+        // ADR-0081 (#613): the adaptive fields of a pool with targets, in
+        // `targets()` order; empty without targets.
+        let adaptive = list_of(g, ops.adaptive_fields().iter().map(|&f| capi::string(g, f)))?;
+        capi::dict_set(g, &d, c"adaptive", &adaptive)?;
         // ADR-0082 point 6: `(path, max, [item leaf indices..., mask index])`.
         let sets = list_of(
             g,
@@ -1827,6 +1833,34 @@ pub(crate) fn freeze_normalization<'py>(
     let frozen = capi::to_bool(g, frozen, "frozen")?;
     inner.with(g, |ops| {
         ops.freeze_normalization(frozen).map_err(|e| to_py(g, e))?;
+        Ok(capi::none(g))
+    })
+}
+
+/// `targets() -> list[int]`: every slot's curriculum targets, field by
+/// field in `layout()["adaptive"]` order (ADR-0081, #613).
+pub(crate) fn targets<'py>(g: Gil<'py>, inner: &Inner) -> CResult<Mine<'py>> {
+    inner.with(g, |ops| {
+        let values = ops.targets().map_err(|e| to_py(g, e))?;
+        list_of(g, values.iter().map(|&v| capi::int_i64(g, v)))
+    })
+}
+
+/// `set_targets(ids, fields, values)`: sets field `fields[k]` of slot
+/// `ids[k]`'s target to `values[k]`; every change is checked before any
+/// write, and each applies at that slot's next reset (ADR-0081 item 5.3).
+pub(crate) fn set_targets<'py>(g: Gil<'py>, inner: &Inner, args: Ref<'_>) -> CResult<Mine<'py>> {
+    let a: [Ref<'_>; 3] = exactly(g, args, "set_targets")?;
+    let [ids, fields, values] = a;
+    let ids = u32_list(g, ids, "ids")?;
+    let fields = u32_list(g, fields, "fields")?;
+    let values = capi::list_items(g, values, "values")?
+        .into_iter()
+        .map(|item| capi::to_i64(g, item.as_ref(), "values"))
+        .collect::<CResult<Vec<i64>>>()?;
+    inner.with(g, |ops| {
+        ops.set_targets(&ids, &fields, &values)
+            .map_err(|e| to_py(g, e))?;
         Ok(capi::none(g))
     })
 }

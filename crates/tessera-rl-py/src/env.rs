@@ -360,6 +360,27 @@ pub(crate) trait PoolOps: Send {
     fn freeze_normalization(&mut self, _frozen: bool) -> Result<(), BindError> {
         Err(transforms_sync_only())
     }
+    /// The adaptive field names a pool with targets exposes (#613); empty
+    /// without targets.
+    fn adaptive_fields(&self) -> &'static [&'static str] {
+        &[]
+    }
+    /// Every slot's targets, field by field (#613).
+    fn targets(&self) -> Result<Vec<i64>, BindError> {
+        Err(crate::targets::no_targets())
+    }
+    /// Sets field `fields[k]` of slot `ids[k]`'s target to `values[k]`,
+    /// every change checked before any write; each applies at that slot's
+    /// next reset (ADR-0081 item 5.3). Recorded as a tag 7 event while
+    /// recording.
+    fn set_targets(
+        &mut self,
+        _ids: &[u32],
+        _fields: &[u32],
+        _values: &[i64],
+    ) -> Result<(), BindError> {
+        Err(crate::targets::no_targets())
+    }
     /// Illegal-but-valid actions replaced in instance `id`'s current
     /// episode, per agent slot (the record header's statistic). Sync mode
     /// only; the split-phase modes refuse it.
@@ -528,6 +549,9 @@ struct Pooled<E: Environment, M: MaskProvider<E>> {
     /// The configuration and render functions, for an environment that
     /// implements `Render` (ADR-0083).
     render: Option<(E::Config, crate::render_api::RenderFns<E>)>,
+    /// The configuration and adaptive fields of a pool built with
+    /// `targets=True` (ADR-0081, #613); `None` otherwise.
+    adaptive: Option<(E::Config, crate::targets::AdaptiveFields<E>)>,
     /// The stepped replay in progress, if any (issue #378): the file bytes,
     /// owned, and the cursor. Each call reopens the bytes with
     /// `Replay::reopen`, which parses the header but does not rescan the
@@ -738,6 +762,7 @@ where
             views: crate::view::view_set(&layout).map(std::sync::Arc::new),
             layout,
             render: None,
+            adaptive: None,
         })
     }
 }
@@ -1000,6 +1025,42 @@ where
 
     fn freeze_normalization(&mut self, frozen: bool) -> Result<(), BindError> {
         self.pool.freeze_normalization(frozen);
+        Ok(())
+    }
+
+    fn adaptive_fields(&self) -> &'static [&'static str] {
+        self.adaptive.as_ref().map_or(&[], |(_, f)| f.names)
+    }
+
+    fn targets(&self) -> Result<Vec<i64>, BindError> {
+        let (_, fields) = self
+            .adaptive
+            .as_ref()
+            .ok_or_else(crate::targets::no_targets)?;
+        let targets = self.pool.targets().ok_or_else(crate::targets::no_targets)?;
+        Ok(crate::targets::flat(fields, targets))
+    }
+
+    fn set_targets(
+        &mut self,
+        ids: &[u32],
+        fields: &[u32],
+        values: &[i64],
+    ) -> Result<(), BindError> {
+        self.not_replaying("set_targets")?;
+        let (cfg, adaptive) = self
+            .adaptive
+            .as_ref()
+            .ok_or_else(crate::targets::no_targets)?;
+        let targets = self.pool.targets().ok_or_else(crate::targets::no_targets)?;
+        let changes = crate::targets::merged(adaptive, cfg, targets, (ids, fields, values))?;
+        if let Some(detached) = self.rec.take() {
+            let mut rec = detached.attach(&mut self.pool);
+            let result = rec.set_targets(&changes);
+            self.rec = Some(rec.detach());
+            return result.map_err(BindError::from);
+        }
+        self.pool.set_targets(&changes)?;
         Ok(())
     }
 
@@ -1328,6 +1389,9 @@ pub(crate) struct PoolArgs {
     /// The privileged state buffer (ADR-0079 item 7): only for an
     /// environment that implements `PrivilegedState`, in Sync mode.
     pub(crate) privileged_state: bool,
+    /// Curriculum targets (`with_targets`, ADR-0081, #613): only for an
+    /// environment with adaptive fields, in Sync mode.
+    pub(crate) targets: bool,
 }
 
 /// What `epoch_barrier()` returns to Python (ADR-0081 item 1.3, #384
@@ -1535,7 +1599,29 @@ where
         tessera_rl_core::AdaptiveValues<E::Config>,
     M: tessera_rl_engine::PersistMask<E> + Send + Sync + 'static,
 {
-    finish_with_render(cfg, pool, args, n, terminal, None)
+    finish_with_render(cfg, pool, args, n, terminal, None, None)
+}
+
+/// [`finish`] for an environment with adaptive fields: `targets=True`
+/// builds the pool with targets and exposes `fields` (ADR-0081, #613).
+pub(crate) fn finish_adaptive<E, M>(
+    cfg: &E::Config,
+    pool: EnvPool<E, M>,
+    args: &PoolArgs,
+    n: usize,
+    terminal: bool,
+    fields: crate::targets::AdaptiveFields<E>,
+) -> Result<Box<dyn PoolOps>, BindError>
+where
+    E: tessera_rl_core::Persist + 'static,
+    E::Config: tessera_rl_core::config::CanonicalConfig + Send + Sync,
+    E::Header: Send + Sync,
+    E::State: Send + Sync,
+    <E::Header as tessera_rl_core::RecordLayout>::Adaptive:
+        tessera_rl_core::AdaptiveValues<E::Config>,
+    M: tessera_rl_engine::PersistMask<E> + Send + Sync + 'static,
+{
+    finish_with_render(cfg, pool, args, n, terminal, None, Some(fields))
 }
 
 /// [`finish`] for an environment that implements `Render`: the sync-mode
@@ -1558,7 +1644,7 @@ where
     M: tessera_rl_engine::PersistMask<E> + Send + Sync + 'static,
 {
     let fns = crate::render_api::render_fns::<E>(cfg)?;
-    finish_with_render(cfg, pool, args, n, terminal, Some((cfg.clone(), fns)))
+    finish_with_render(cfg, pool, args, n, terminal, Some((cfg.clone(), fns)), None)
 }
 
 fn finish_with_render<E, M>(
@@ -1568,6 +1654,7 @@ fn finish_with_render<E, M>(
     n: usize,
     terminal: bool,
     render: Option<(E::Config, crate::render_api::RenderFns<E>)>,
+    fields: Option<crate::targets::AdaptiveFields<E>>,
 ) -> Result<Box<dyn PoolOps>, BindError>
 where
     E: tessera_rl_core::Persist + 'static,
@@ -1581,6 +1668,28 @@ where
     let workers = resolve_workers(args)?;
     check_spin(args)?;
     let policy = wait_policy(args)?;
+    // Curriculum targets (ADR-0081, #613): Sync mode, before the first
+    // reset, for an environment with adaptive fields only.
+    let adaptive = if args.targets {
+        let fields = fields.ok_or_else(|| {
+            BindError::Argument(
+                "targets=True needs an environment with adaptive config fields".to_owned(),
+            )
+        })?;
+        if args.pipelined || args.asynced.is_some() {
+            return Err(BindError::Argument(
+                "targets=True needs mode=\"sync\"".to_owned(),
+            ));
+        }
+        Some(((fields.clone_config)(cfg), fields))
+    } else {
+        None
+    };
+    let pool = if adaptive.is_some() {
+        pool.with_targets()?
+    } else {
+        pool
+    };
     // Before the first reset and before any mode (ADR-0078 item 2.1).
     let pool = pool.with_transforms(args.transforms.clone())?;
     // Learner and external groups for any environment; a maker whose
@@ -1645,6 +1754,7 @@ where
         views,
         storage,
         render,
+        adaptive,
         cursor: None,
     }))
 }
@@ -1819,7 +1929,7 @@ pub(crate) fn gather(
     let (options, n) = options(args)?;
     let same_step = options.auto_reset == AutoReset::SameStep;
     let pool = EnvPool::<Gather, NoMasks>::new(cfg.clone(), options)?;
-    finish(&cfg, pool, args, n, same_step)
+    finish_adaptive(&cfg, pool, args, n, same_step, crate::targets::gather())
 }
 
 /// The paddle duel config fields, by name, as Python passes them.
@@ -2257,6 +2367,7 @@ mod tests {
             pipelined: false,
             asynced: None,
             privileged_state: false,
+            targets: false,
         }
     }
 
@@ -2308,6 +2419,7 @@ mod tests {
     fn test_outputs_into_refuses_privileged_state() {
         let args = PoolArgs {
             privileged_state: true,
+            targets: false,
             ..sync_args(2)
         };
         let mut pool = leduc(&args).unwrap();
@@ -2355,6 +2467,7 @@ mod tests {
             policy_map: None,
             league: None,
             privileged_state: false,
+            targets: false,
             pipelined: false,
             asynced: None,
         };
@@ -2377,6 +2490,7 @@ mod tests {
             policy_map: None,
             league: None,
             privileged_state: false,
+            targets: false,
             pipelined,
             asynced: None,
         }
@@ -2593,6 +2707,7 @@ mod tests {
             policy_map: None,
             league: None,
             privileged_state: false,
+            targets: false,
             pipelined: false,
             asynced: None,
         };

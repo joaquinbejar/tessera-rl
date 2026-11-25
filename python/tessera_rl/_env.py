@@ -249,6 +249,9 @@ class Env:
         layout = native.layout()
         self.num_envs: int = layout["num_envs"]
         self.agents: int = layout["agents"]
+        #: The adaptive config fields of a pool made with ``targets=True``,
+        #: in a fixed order; empty otherwise.
+        self.adaptive_fields: tuple[str, ...] = tuple(layout.get("adaptive", ()))
         self.action_choices: int = layout["action_choices"]
         #: Inclusive ``(low, high)`` of a continuous environment's one float32
         #: head; ``None`` for a discrete one (``action_choices`` is then > 0).
@@ -595,7 +598,49 @@ class Env:
         ids = range(self.num_envs) if ids is None else ids
         return _render.frames(self._native, [_index(i, "ids") for i in ids])
 
-    def epoch_barrier(self) -> EpochReport:
+    def targets(self) -> list[dict[str, int]]:
+        """Every instance's curriculum targets: one dict per instance, keyed
+        by adaptive field (``adaptive_fields``). A target is what that
+        instance's next reset uses; the running episode keeps the values it
+        started with. A fresh copy each call. Needs ``targets=True``."""
+        flat = self._native.targets()
+        k = len(self.adaptive_fields)
+        return [dict(zip(self.adaptive_fields, flat[i * k : (i + 1) * k], strict=True)) for i in range(self.num_envs)]
+
+    def set_targets(self, changes: dict[int, dict[str, int]]) -> None:
+        """Sets curriculum targets: ``changes`` maps an instance index to
+        the adaptive fields to change (the others keep their target). Every
+        change is checked before any is written (``ArgumentError`` for an
+        unknown instance or field or a non-integer value, ``ConfigError``
+        for a value the config refuses), so a refused call changes nothing.
+        Each target applies at that instance's next reset; the running
+        episode is unchanged. While recording, the change is recorded.
+        Needs ``targets=True``."""
+        if not isinstance(changes, dict):
+            raise _native.ArgumentError(f"set_targets takes a dict of instance to fields, not {type(changes).__name__}")
+        ids: list[int] = []
+        fields: list[int] = []
+        values: list[int] = []
+        for index, row in changes.items():
+            i = _index(index, "changes")
+            if not isinstance(row, dict):
+                raise _native.ArgumentError(f"set_targets: instance {i}'s changes must be a dict, not {type(row).__name__}")
+            for name, value in row.items():
+                if name not in self.adaptive_fields:
+                    raise _native.ArgumentError(
+                        f"set_targets: {name!r} is not an adaptive field (fields: {list(self.adaptive_fields)})"
+                    )
+                if isinstance(value, bool) or not isinstance(value, int):
+                    raise _native.ArgumentError(f"set_targets: {name!r} takes an int, not {type(value).__name__}")
+                ids.append(i)
+                fields.append(self.adaptive_fields.index(name))
+                values.append(value)
+        self._native.set_targets(ids, fields, values)
+
+    def epoch_barrier(
+        self,
+        curriculum: typing.Callable[[EpochReport, list[dict[str, int]]], dict[int, dict[str, int]] | None] | None = None,
+    ) -> EpochReport:
         """Runs every adaptive subsystem's barrier, in
         order, and returns their report, a dict with fixed keys
         (``tessera_rl.EpochReport`` in the stubs):
@@ -612,8 +657,22 @@ class Env:
           a pool of a ``tessera_rl.League``, or ``None`` without one or
           while it is frozen.
 
+        With ``curriculum``, a callable, it then calls
+        ``curriculum(report, targets)`` on this thread, with the report and
+        a copy of the current targets (``targets()``: changing it writes
+        nothing), and applies the changes it returns as ``set_targets``
+        does (``None`` or ``{}`` changes nothing). Its determinism is the
+        caller's; a recording keeps its output, not its code. An exception
+        it raises propagates unchanged with no target written; the barrier
+        itself has already run.
+
         Sync mode."""
-        return self._native.epoch_barrier()
+        report = self._native.epoch_barrier()
+        if curriculum is not None:
+            changes = curriculum(report, self.targets())
+            if changes:
+                self.set_targets(changes)
+        return report
 
     def freeze_normalization(self, frozen: bool = True) -> None:
         """Stops (``True``) or restarts (``False``) the accumulation of
@@ -851,7 +910,7 @@ _STRING_OPTIONS = {"auto_reset", "outputs", "mode", "gather", "obs", "wait", "sc
 
 #: Constructor options passed as exact ``bool`` (the RTS ``seat_swap``, the
 #: Lanterns ``zero_on_fuse``, the limit order book's ``allow_short_cash``).
-_BOOL_OPTIONS = frozenset({"seat_swap", "zero_on_fuse", "allow_short_cash", "privileged_state"})
+_BOOL_OPTIONS = frozenset({"seat_swap", "zero_on_fuse", "allow_short_cash", "privileged_state", "targets"})
 
 #: Asset options: a bundled asset's name (``str``) or its bytes
 #: (``bytes``, or any buffer, copied to exact ``bytes``).

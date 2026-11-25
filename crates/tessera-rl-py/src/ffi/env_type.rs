@@ -95,6 +95,8 @@ varargs!(StateHashM, api::state_hash);
 varargs!(RenderM, api::render);
 noargs!(EpochBarrierM, api::epoch_barrier);
 varargs!(FreezeNormalizationM, api::freeze_normalization);
+noargs!(TargetsM, api::targets);
+varargs!(SetTargetsM, api::set_targets);
 varargs!(SceneM, api::scene);
 noargs!(CanvasM, api::canvas);
 noargs!(HeuristicActionsM, api::heuristic_actions);
@@ -171,6 +173,14 @@ static METHODS: MethodTable<EnvBody> = MethodTable::new(&[
     MethodRow::varargs::<FreezeNormalizationM>(
         c"freeze_normalization",
         c"freeze_normalization($self, frozen, /)\n--\n\nStops (True) or restarts (False) normalization accumulation (ADR-0078); sync mode.",
+    ),
+    MethodRow::noargs::<TargetsM>(
+        c"targets",
+        c"targets($self, /)\n--\n\nEvery slot's curriculum targets, field by field in layout()[\"adaptive\"] order (ADR-0081).",
+    ),
+    MethodRow::varargs::<SetTargetsM>(
+        c"set_targets",
+        c"set_targets($self, ids, fields, values, /)\n--\n\nSets target field fields[k] of slot ids[k] to values[k], all checked before any write; each applies at the slot's next reset (ADR-0081).",
     ),
     MethodRow::varargs::<SceneM>(
         c"scene",
@@ -331,7 +341,7 @@ pub(super) const MAKERS: [FunctionRow; 21] = [
     ),
     FunctionRow::kw::<MakeGather>(
         c"make_gather",
-        c"make_gather($module, *, mode=None, batch_size=None, gather=None, num_envs=None, seed=None, max_episode_steps=None, auto_reset=None, chunk_size=None, workers=None, spin=None, outputs=None, size=None, items=None, max_steps=None)\n--\n\nmake_gather(**pool_options, size=8, items=8, max_steps=100) -> Env",
+        c"make_gather($module, *, mode=None, batch_size=None, gather=None, num_envs=None, seed=None, max_episode_steps=None, auto_reset=None, chunk_size=None, workers=None, spin=None, outputs=None, size=None, items=None, max_steps=None, targets=None)\n--\n\nmake_gather(**pool_options, size=8, items=8, max_steps=100, targets=False) -> Env",
     ),
     FunctionRow::kw::<MakeSnake>(
         c"make_snake",
