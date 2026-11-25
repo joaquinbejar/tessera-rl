@@ -17,6 +17,9 @@ BUILD_TIMEOUT_S = 1800
 MATURIN = "1.16.0"
 
 
+HANDLED_SIGNALS = tuple(getattr(signal, n) for n in ("SIGTERM", "SIGINT", "SIGHUP") if hasattr(signal, n))
+
+
 def run_group(cmd: list[str], cwd: str, timeout: float) -> int:
     """Runs ``cmd`` in its own process group and kills that group on every path,
     a timeout or a signal included, so nothing stays behind on a CI host."""
@@ -28,13 +31,37 @@ def run_group(cmd: list[str], cwd: str, timeout: float) -> int:
         return 124
     finally:
         if posix:
+            # The handled signals are blocked during cleanup, so a second one
+            # cannot interrupt it; a pending one is delivered after.
+            old = signal.pthread_sigmask(signal.SIG_BLOCK, HANDLED_SIGNALS)
             try:
-                os.killpg(p.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
+                try:
+                    os.killpg(p.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                reap(p)
+            finally:
+                signal.pthread_sigmask(signal.SIG_SETMASK, old)
         else:
             p.kill()
-        p.wait()
+            p.wait()
+
+
+def reap(p: subprocess.Popen) -> None:
+    """Waits for ``p`` with ``os.waitpid``, not ``Popen.wait`` (#655).
+
+    ``Popen.wait(timeout)`` takes its internal ``_waitpid_lock`` before the
+    ``try`` that releases it. A signal handler raising ``SystemExit`` between
+    the two leaves the lock held, and a later ``Popen.wait`` then blocks
+    forever, leaving the killed child a zombie and this process alive.
+    """
+    if p.returncode is not None:
+        return
+    try:
+        _, status = os.waitpid(p.pid, 0)
+    except ChildProcessError:
+        return  # already reaped
+    p.returncode = os.waitstatus_to_exitcode(status)
 
 
 def exit_on_signals() -> None:
