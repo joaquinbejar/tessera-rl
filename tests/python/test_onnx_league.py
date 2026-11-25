@@ -270,13 +270,22 @@ def test_onnx_league_model_path_with_a_newline_loads(tmp_path):
 
 
 @real
-def test_onnx_league_non_utf8_model_path_loads_on_linux(tmp_path):
-    if not sys.platform.startswith("linux"):
-        pytest.skip("only Linux filesystems take non-UTF-8 names")
-    path = os.fsencode(tmp_path) + b"/opponent-\xff.onnx"
-    with open(path, "wb") as f:
-        f.write(MODEL.read_bytes())
+def test_onnx_league_non_utf8_model_path_loads_where_the_filesystem_allows(tmp_path):
+    # Never skipped. Linux takes a non-UTF-8 name and the model loads from
+    # it; macOS (APFS) refuses the name with OSError, and the bytes path is
+    # still exercised with a valid name passed as os.fsencode bytes.
     h = content_hash(MODEL)
+    path = os.fsencode(tmp_path) + b"/opponent-\xff.onnx"
+    if sys.platform.startswith("linux"):
+        with open(path, "wb") as f:
+            f.write(MODEL.read_bytes())
+    else:
+        with pytest.raises(OSError):
+            with open(path, "wb") as f:
+                f.write(MODEL.read_bytes())
+        path = os.fsencode(tmp_path / "opponent-bytes.onnx")
+        with open(path, "wb") as f:
+            f.write(MODEL.read_bytes())
     o = opponents(path)
     assert list(o.provenance) == [h]
     env = pool(uniform(("onnx", h)), onnx_opponents=o)
