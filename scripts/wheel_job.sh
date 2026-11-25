@@ -21,6 +21,14 @@
 # determinism test asserts GOLDEN_11. The example wheel is not uploaded: it is
 # not published.
 #
+# Reproducible SBOMs (#654): WHEEL_COMMIT (the commit built, 40 lowercase hex
+# characters) and SOURCE_DATE_EPOCH (its commit time, decimal seconds) are
+# required; the legs' images have no git, so the caller derives both. After the
+# builds, tools/sbom_reproduce.py sets each built wheel's SBOM serialNumber
+# (from the commit, target, profile and features) and timestamp (from
+# SOURCE_DATE_EPOCH), before anything installs, records or uploads the wheel.
+# SOURCE_DATE_EPOCH is unset after it is read, so maturin and cargo never see it.
+#
 # Everything it writes goes under $WHEEL_RUN, which the workflow removes, except
 # dist/ and the report that it copies to the workspace for upload. Runs at nice 10.
 set -euo pipefail
@@ -35,6 +43,14 @@ case "$profile" in
     *) echo "wheel_job: profile must be release or wheel, got '$profile'" >&2; exit 2 ;;
 esac
 : "${WHEEL_RUN:?the per-run directory}"
+if ! [[ "${WHEEL_COMMIT-}" =~ ^[0-9a-f]{40}$ ]]; then
+    echo "wheel_job: WHEEL_COMMIT must be the commit's 40 lowercase hex characters, got '${WHEEL_COMMIT-}'" >&2; exit 2
+fi
+if ! [[ "${SOURCE_DATE_EPOCH-}" =~ ^[0-9]+$ ]]; then
+    echo "wheel_job: SOURCE_DATE_EPOCH must be the commit time in decimal seconds, got '${SOURCE_DATE_EPOCH-}'" >&2; exit 2
+fi
+sbom_epoch="$SOURCE_DATE_EPOCH"
+unset SOURCE_DATE_EPOCH
 orderbook_leg="${TESSERA_WHEEL_ORDERBOOK:-0}"
 case "$orderbook_leg" in
     0 | 1) ;;
@@ -53,6 +69,8 @@ case "$target" in
     x86_64-pc-windows-msvc) features=() ;;
     *) echo "wheel_job: the onnx feature is not enabled for $target (ADR-0057)" >&2; exit 2 ;;
 esac
+feature_name=none
+[ "${#features[@]}" -eq 0 ] || feature_name="${features[1]}"
 # Windows runs under Git Bash: executables end in .exe, a venv's interpreter is
 # under Scripts/, the uv archive is a zip, and there may be no `nice`.
 exe="" bindir=bin
@@ -128,6 +146,25 @@ if [ "$orderbook_leg" = 1 ]; then
         -m examples/host_orderbook/Cargo.toml)
     [ -z "$compatibility" ] || ob_args+=(--compatibility "$compatibility")
     nice -n 10 uvx --python 3.11 "maturin==$MATURIN_VERSION" build "${ob_args[@]}"
+fi
+
+# Every built wheel's SBOM (#654), before anything installs or hashes a wheel.
+# The serial's name: wheel, commit, target, Cargo profile, features.
+sbom_reproduce() { # wheel, name, [--optional]
+    uv run --python 3.11 --no-project python -I tools/sbom_reproduce.py --wheel "$1" --name "$2" \
+        --epoch "$sbom_epoch" "${@:3}"
+}
+main_name="tessera-rl-wheel:$WHEEL_COMMIT:$target:$profile:$feature_name"
+for w in dist/*.whl; do sbom_reproduce "$w" "$main_name"; done
+if [ "$profile" = wheel ]; then
+    for w in "$WHEEL_RUN"/w0-dist/*.whl; do sbom_reproduce "$w" "tessera-rl-wheel:$WHEEL_COMMIT:$target:release:$feature_name"; done
+fi
+if [ "$orderbook_leg" = 1 ]; then
+    # Its pyproject enables no SBOM; if maturin writes one anyway, it is made
+    # reproducible too, and a wheel without one is left as it is.
+    for w in "$WHEEL_RUN"/orderbook-dist/*.whl; do
+        sbom_reproduce "$w" "tessera-example-host-orderbook-wheel:$WHEEL_COMMIT:$target:release:none" --optional
+    done
 fi
 
 TESSERA_GOLDEN_ACTIONS="$WHEEL_RUN/golden-actions" nice -n 10 \
@@ -212,7 +249,8 @@ cd "$root"
 crates="$WHEEL_RUN/sbom-crates.txt"
 { cargo tree --locked -p tessera-rl-py --target "$target" -e normal "${features[@]}" --prefix none --format '{p}' |
     cut -d' ' -f1 | sort -u > "$crates" &&
-    "$venv/$bindir/python$exe" -I tools/sbom_check.py --wheel "$wheel" --crates "$crates"; } || sbom=$?
+    "$venv/$bindir/python$exe" -I tools/sbom_check.py --wheel "$wheel" --crates "$crates" \
+        --serial-name "$main_name" --epoch "$sbom_epoch"; } || sbom=$?
 # The num crate's tests under the wheel's own Cargo profile (section 7 item 6).
 num_profile=""
 [ "$profile" = release ] || num_profile="$profile"
