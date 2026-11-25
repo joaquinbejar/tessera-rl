@@ -34,6 +34,12 @@
 //!    enters a level's family only inside its `run_*_lanes`, compiled with
 //!    that level's `#[target_feature]`.
 //!
+//!    This is an invariant of this crate, not of the type system:
+//!    `Resolved`'s field is private, and its one constructor, `Resolved(level)`
+//!    in `dispatch.rs`, runs only in `best`, `force` and `available`, each
+//!    after `Level::present` (`Scalar`, the fallback of `best`, needs no
+//!    feature).
+//!
 //! So a value of a level's type, and every call below, exists only inside
 //! [`LaneKernel::run`] on a CPU that has the level.
 
@@ -348,7 +354,7 @@ macro_rules! register_int_lanes {
                 // SAFETY: the level's features are present (module safety section).
                 let sum = [$(unsafe { $m::add($a, $b) }),+];
                 let Self([$($c),+]) = Self(sum);
-                // SAFETY: as above.
+                // SAFETY: the level's features are present (module safety section).
                 (Self(sum), [$(unsafe { $m::add_overflow($a, $b, $c) }),+])
             }
             #[inline(always)]
@@ -357,7 +363,7 @@ macro_rules! register_int_lanes {
                 // SAFETY: the level's features are present (module safety section).
                 let diff = [$(unsafe { $m::sub($a, $b) }),+];
                 let Self([$($c),+]) = Self(diff);
-                // SAFETY: as above.
+                // SAFETY: the level's features are present (module safety section).
                 (Self(diff), [$(unsafe { $m::sub_overflow($a, $b, $c) }),+])
             }
             #[inline(always)]
@@ -561,7 +567,7 @@ macro_rules! x86_composites {
         pub(super) unsafe fn not(a: R) -> R {
             // SAFETY: the level's features are present (module safety section).
             let ones = unsafe { splat(-1) };
-            // SAFETY: as above.
+            // SAFETY: the level's features are present (module safety section).
             unsafe { xor(a, ones) }
         }
         /// The mask complement: `a ^ -1`.
@@ -581,11 +587,11 @@ macro_rules! x86_composites {
         pub(super) unsafe fn gt_u(a: R, b: R) -> M {
             // SAFETY: the level's features are present (module safety section).
             let flip = unsafe { splat(i32::MIN) };
-            // SAFETY: as above.
+            // SAFETY: the level's features are present (module safety section).
             let a = unsafe { xor(a, flip) };
-            // SAFETY: as above.
+            // SAFETY: the level's features are present (module safety section).
             let b = unsafe { xor(b, flip) };
-            // SAFETY: as above.
+            // SAFETY: the level's features are present (module safety section).
             unsafe { gt(a, b) }
         }
         /// The mask's lane bits, lane `i` in bit `i`.
@@ -596,7 +602,7 @@ macro_rules! x86_composites {
         pub(super) unsafe fn bits(a: M) -> u8 {
             // SAFETY: the level's features are present (module safety section).
             let floats = unsafe { as_ps(a) };
-            // SAFETY: as above.
+            // SAFETY: the level's features are present (module safety section).
             let signs = unsafe { movemask(floats) };
             // One bit per 32-bit lane of one register: at most 8 lanes.
             debug_assert!((0..=0xff).contains(&signs), "movemask of {signs:#x}");
@@ -618,11 +624,11 @@ macro_rules! x86_composites {
         pub(super) unsafe fn add_overflow(a: R, b: R, s: R) -> M {
             // SAFETY: the level's features are present (module safety section).
             let a_flips = unsafe { xor(a, s) };
-            // SAFETY: as above.
+            // SAFETY: the level's features are present (module safety section).
             let b_flips = unsafe { xor(b, s) };
-            // SAFETY: as above.
+            // SAFETY: the level's features are present (module safety section).
             let both = unsafe { and(a_flips, b_flips) };
-            // SAFETY: as above.
+            // SAFETY: the level's features are present (module safety section).
             unsafe { sra31(both) }
         }
         /// `d = a - b` overflows when `a` and `b` differ in sign and `d`'s
@@ -634,11 +640,11 @@ macro_rules! x86_composites {
         pub(super) unsafe fn sub_overflow(a: R, b: R, d: R) -> M {
             // SAFETY: the level's features are present (module safety section).
             let operands_differ = unsafe { xor(a, b) };
-            // SAFETY: as above.
+            // SAFETY: the level's features are present (module safety section).
             let result_flips = unsafe { xor(a, d) };
-            // SAFETY: as above.
+            // SAFETY: the level's features are present (module safety section).
             let both = unsafe { and(operands_differ, result_flips) };
-            // SAFETY: as above.
+            // SAFETY: the level's features are present (module safety section).
             unsafe { sra31(both) }
         }
         /// The saturation bound for a result whose sign should be `sign`'s:
@@ -650,9 +656,9 @@ macro_rules! x86_composites {
         unsafe fn clamp_by_sign(sign: R) -> R {
             // SAFETY: the level's features are present (module safety section).
             let spread = unsafe { sra31(sign) };
-            // SAFETY: as above.
+            // SAFETY: the level's features are present (module safety section).
             let max = unsafe { splat(i32::MAX) };
-            // SAFETY: as above.
+            // SAFETY: the level's features are present (module safety section).
             unsafe { xor(spread, max) }
         }
         /// `Fx32::saturating_add`: on overflow, the bound of `a`'s sign.
@@ -663,11 +669,11 @@ macro_rules! x86_composites {
         pub(super) unsafe fn sat_add(a: R, b: R) -> R {
             // SAFETY: the level's features are present (module safety section).
             let s = unsafe { add(a, b) };
-            // SAFETY: as above.
+            // SAFETY: the level's features are present (module safety section).
             let over = unsafe { add_overflow(a, b, s) };
-            // SAFETY: as above.
+            // SAFETY: the level's features are present (module safety section).
             let clamp = unsafe { clamp_by_sign(a) };
-            // SAFETY: as above.
+            // SAFETY: the level's features are present (module safety section).
             unsafe { select(over, clamp, s) }
         }
         /// `Fx32::saturating_sub`: on overflow, the bound of `a`'s sign.
@@ -678,11 +684,11 @@ macro_rules! x86_composites {
         pub(super) unsafe fn sat_sub(a: R, b: R) -> R {
             // SAFETY: the level's features are present (module safety section).
             let d = unsafe { sub(a, b) };
-            // SAFETY: as above.
+            // SAFETY: the level's features are present (module safety section).
             let over = unsafe { sub_overflow(a, b, d) };
-            // SAFETY: as above.
+            // SAFETY: the level's features are present (module safety section).
             let clamp = unsafe { clamp_by_sign(a) };
-            // SAFETY: as above.
+            // SAFETY: the level's features are present (module safety section).
             unsafe { select(over, clamp, d) }
         }
         /// `Fx32::saturating_mul` (module documentation).
@@ -695,39 +701,39 @@ macro_rules! x86_composites {
             // SAFETY: the level's features are present (module safety section).
             let even = unsafe { mul_even(a, b) };
             // Odd lanes: dwords 1, 3, 5, 7 moved down, then multiplied.
-            // SAFETY: as above.
+            // SAFETY: the level's features are present (module safety section).
             let a_odd = unsafe { srl64_32(a) };
-            // SAFETY: as above.
+            // SAFETY: the level's features are present (module safety section).
             let b_odd = unsafe { srl64_32(b) };
-            // SAFETY: as above.
+            // SAFETY: the level's features are present (module safety section).
             let odd = unsafe { mul_even(a_odd, b_odd) };
             // Bits [16, 48): into the low dword (even) and the high dword (odd).
-            // SAFETY: as above.
+            // SAFETY: the level's features are present (module safety section).
             let even_mid = unsafe { srl64_16(even) };
-            // SAFETY: as above.
+            // SAFETY: the level's features are present (module safety section).
             let odd_mid = unsafe { sll64_16(odd) };
-            // SAFETY: as above.
+            // SAFETY: the level's features are present (module safety section).
             let wrapped = unsafe { blend_odd(even_mid, odd_mid) };
             // Bits [48, 64), sign-extended, aligned with each result lane.
-            // SAFETY: as above.
+            // SAFETY: the level's features are present (module safety section).
             let even_top = unsafe { sra16(even) };
-            // SAFETY: as above.
+            // SAFETY: the level's features are present (module safety section).
             let even_high = unsafe { srl64_32(even_top) };
-            // SAFETY: as above.
+            // SAFETY: the level's features are present (module safety section).
             let odd_high = unsafe { sra16(odd) };
-            // SAFETY: as above.
+            // SAFETY: the level's features are present (module safety section).
             let high = unsafe { blend_odd(even_high, odd_high) };
             // In range exactly when bits [47, 64) are all equal.
-            // SAFETY: as above.
+            // SAFETY: the level's features are present (module safety section).
             let sign = unsafe { sra31(wrapped) };
-            // SAFETY: as above.
+            // SAFETY: the level's features are present (module safety section).
             let fits = unsafe { eq(high, sign) };
             // Out of range: the product's sign (`a ^ b`) picks MIN or MAX.
-            // SAFETY: as above.
+            // SAFETY: the level's features are present (module safety section).
             let product_sign = unsafe { xor(a, b) };
-            // SAFETY: as above.
+            // SAFETY: the level's features are present (module safety section).
             let clamp = unsafe { clamp_by_sign(product_sign) };
-            // SAFETY: as above.
+            // SAFETY: the level's features are present (module safety section).
             unsafe { select(fits, wrapped, clamp) }
         }
     };
@@ -934,9 +940,9 @@ mod neon {
     pub(super) unsafe fn gt_u(a: R, b: R) -> M {
         // SAFETY: NEON is present (module safety section).
         let a = unsafe { as_u(a) };
-        // SAFETY: as above.
+        // SAFETY: NEON is present (module safety section).
         let b = unsafe { as_u(b) };
-        // SAFETY: as above.
+        // SAFETY: NEON is present (module safety section).
         unsafe { gt_u32(a, b) }
     }
     /// Unsigned minimum.
@@ -947,11 +953,11 @@ mod neon {
     pub(super) unsafe fn min_u(a: R, b: R) -> R {
         // SAFETY: NEON is present (module safety section).
         let a = unsafe { as_u(a) };
-        // SAFETY: as above.
+        // SAFETY: NEON is present (module safety section).
         let b = unsafe { as_u(b) };
-        // SAFETY: as above.
+        // SAFETY: NEON is present (module safety section).
         let m = unsafe { min_u32(a, b) };
-        // SAFETY: as above.
+        // SAFETY: NEON is present (module safety section).
         unsafe { as_s(m) }
     }
     /// Unsigned maximum.
@@ -962,11 +968,11 @@ mod neon {
     pub(super) unsafe fn max_u(a: R, b: R) -> R {
         // SAFETY: NEON is present (module safety section).
         let a = unsafe { as_u(a) };
-        // SAFETY: as above.
+        // SAFETY: NEON is present (module safety section).
         let b = unsafe { as_u(b) };
-        // SAFETY: as above.
+        // SAFETY: NEON is present (module safety section).
         let m = unsafe { max_u32(a, b) };
-        // SAFETY: as above.
+        // SAFETY: NEON is present (module safety section).
         unsafe { as_s(m) }
     }
     /// A mask register from four `0` or `-1` words.
@@ -989,13 +995,13 @@ mod neon {
     pub(super) unsafe fn bits(a: M) -> u8 {
         // SAFETY: NEON is present (module safety section).
         let one = unsafe { sign_bits(a) };
-        // SAFETY: as above.
+        // SAFETY: NEON is present (module safety section).
         let b0 = unsafe { lane0(one) };
-        // SAFETY: as above.
+        // SAFETY: NEON is present (module safety section).
         let b1 = unsafe { lane1(one) };
-        // SAFETY: as above.
+        // SAFETY: NEON is present (module safety section).
         let b2 = unsafe { lane2(one) };
-        // SAFETY: as above.
+        // SAFETY: NEON is present (module safety section).
         let b3 = unsafe { lane3(one) };
         let packed = b0 | (b1 << 1) | (b2 << 2) | (b3 << 3);
         // Four lanes of 0 or 1, one bit each: at most 0b1111.
@@ -1015,11 +1021,11 @@ mod neon {
     pub(super) unsafe fn add_overflow(a: R, b: R, s: R) -> M {
         // SAFETY: NEON is present (module safety section).
         let a_flips = unsafe { xor(a, s) };
-        // SAFETY: as above.
+        // SAFETY: NEON is present (module safety section).
         let b_flips = unsafe { xor(b, s) };
-        // SAFETY: as above.
+        // SAFETY: NEON is present (module safety section).
         let both = unsafe { and(a_flips, b_flips) };
-        // SAFETY: as above.
+        // SAFETY: NEON is present (module safety section).
         unsafe { ltz(both) }
     }
     /// A signed overflow of `d = a - b` (as for the x86 levels).
@@ -1030,11 +1036,11 @@ mod neon {
     pub(super) unsafe fn sub_overflow(a: R, b: R, d: R) -> M {
         // SAFETY: NEON is present (module safety section).
         let operands_differ = unsafe { xor(a, b) };
-        // SAFETY: as above.
+        // SAFETY: NEON is present (module safety section).
         let result_flips = unsafe { xor(a, d) };
-        // SAFETY: as above.
+        // SAFETY: NEON is present (module safety section).
         let both = unsafe { and(operands_differ, result_flips) };
-        // SAFETY: as above.
+        // SAFETY: NEON is present (module safety section).
         unsafe { ltz(both) }
     }
     /// `Fx32::saturating_mul`: exact 64-bit products, an arithmetic shift
@@ -1046,21 +1052,21 @@ mod neon {
     pub(super) unsafe fn fx_sat_mul(a: R, b: R) -> R {
         // SAFETY: NEON is present (module safety section).
         let a_low = unsafe { low_half(a) };
-        // SAFETY: as above.
+        // SAFETY: NEON is present (module safety section).
         let b_low = unsafe { low_half(b) };
-        // SAFETY: as above.
+        // SAFETY: NEON is present (module safety section).
         let low = unsafe { mull_low(a_low, b_low) };
-        // SAFETY: as above.
+        // SAFETY: NEON is present (module safety section).
         let high = unsafe { mull_high(a, b) };
-        // SAFETY: as above.
+        // SAFETY: NEON is present (module safety section).
         let low = unsafe { sra64_16(low) };
-        // SAFETY: as above.
+        // SAFETY: NEON is present (module safety section).
         let high = unsafe { sra64_16(high) };
-        // SAFETY: as above.
+        // SAFETY: NEON is present (module safety section).
         let low = unsafe { narrow_sat(low) };
-        // SAFETY: as above.
+        // SAFETY: NEON is present (module safety section).
         let high = unsafe { narrow_sat(high) };
-        // SAFETY: as above.
+        // SAFETY: NEON is present (module safety section).
         unsafe { combine(low, high) }
     }
 
@@ -1084,9 +1090,9 @@ mod neon {
     pub(super) unsafe fn srl<const N: i32>(a: R) -> R {
         // SAFETY: NEON is present (this function's contract).
         let bits = unsafe { as_u(a) };
-        // SAFETY: as above.
+        // SAFETY: NEON is present (this function's contract).
         let shifted = unsafe { vshrq_n_u32::<N>(bits) };
-        // SAFETY: as above.
+        // SAFETY: NEON is present (this function's contract).
         unsafe { as_s(shifted) }
     }
 }
