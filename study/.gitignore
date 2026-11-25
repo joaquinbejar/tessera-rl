@@ -1,0 +1,2 @@
+# Each kit crate is its own Cargo workspace; grade.sh logs under target/.
+target/

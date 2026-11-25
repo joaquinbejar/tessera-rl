@@ -11,6 +11,7 @@ nav:
   - Getting started: getting-started.md
   - Tutorials:
       - Writing an environment: tutorials/writing-an-environment.md
+      - Writing an Environment-trait environment: tutorials/writing-an-environment-trait.md
       - Snapshot, restore and fork: tutorials/snapshot-fork.md
       - Multi-agent: tutorials/multi-agent.md
   - API reference: api.md
