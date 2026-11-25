@@ -533,10 +533,10 @@ mod tests {
             assert!(check.contains(kind), "{kind}");
         }
         for comparison in [
-            "compare(Kind::InlineInline",
-            "compare(Kind::Workers(chunk)",
-            "compare(Kind::Resume(at)",
-            "compare(Kind::Snapshot",
+            "compare!(Kind::InlineInline",
+            "compare!(Kind::Workers(chunk)",
+            "compare!(Kind::Resume(at)",
+            "compare!(Kind::Snapshot",
         ] {
             assert!(check.contains(comparison), "{comparison}");
         }

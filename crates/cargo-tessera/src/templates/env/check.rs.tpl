@@ -152,15 +152,23 @@ fn first_divergence(got: &[Call], want: &[Call]) -> Option<(usize, Option<usize>
     Some((call, instance, a.map_or(0, |c| c.hash), b.map_or(0, |c| c.hash)))
 }
 
-/// Fails the test with `kind`'s report when `got` and `want` differ.
-fn compare(kind: Kind, got: &[Call], want: &[Call]) {
-    if let Some((call, instance, a, b)) = first_divergence(got, want) {
-        let at = instance.map_or_else(|| "the outputs only".to_owned(), |i| format!("instance {i}"));
-        panic!(
-            "{}\nfirst divergence at call {call}, {at} (call hash {a:016x} != {b:016x})",
-            kind.describe()
-        );
-    }
+/// `kind`'s report when `got` and `want` differ.
+fn report(kind: Kind, got: &[Call], want: &[Call]) -> Option<String> {
+    let (call, instance, a, b) = first_divergence(got, want)?;
+    let at = instance.map_or_else(|| "the outputs only".to_owned(), |i| format!("instance {i}"));
+    Some(format!(
+        "{}\nfirst divergence at call {call}, {at} (call hash {a:016x} != {b:016x})",
+        kind.describe()
+    ))
+}
+
+/// Fails the calling test with `kind`'s report when the runs differ.
+macro_rules! compare {
+    ($kind:expr, $got:expr, $want:expr) => {
+        if let Some(report) = report($kind, $got, $want) {
+            panic!("{report}");
+        }
+    };
 }
 
 /// The hash of the pool's records and outputs after a call.
@@ -259,10 +267,10 @@ fn read_golden(text: &str) -> Vec<u64> {
 fn test_determinism_inline_and_workers_agree_and_match_golden() {
     let calls = run(&mut pool(SEED, default_chunk(), 0).unwrap(), CALLS).unwrap();
     let again = run(&mut pool(SEED, default_chunk(), 0).unwrap(), CALLS).unwrap();
-    compare(Kind::InlineInline, &again, &calls);
+    compare!(Kind::InlineInline, &again, &calls);
     for chunk in [1, default_chunk()] {
         let got = run(&mut pool(SEED, chunk, 4).unwrap(), CALLS).unwrap();
-        compare(Kind::Workers(chunk), &got, &calls);
+        compare!(Kind::Workers(chunk), &got, &calls);
     }
     let want: Vec<u64> = calls.iter().map(|c| c.hash).collect();
     let path = Path::new(GOLDEN);
@@ -309,7 +317,7 @@ fn test_continuation_import_into_a_fresh_pool_matches_the_uninterrupted_run() {
             .collect();
         let ids: Vec<u32> = (0..INSTANCES).collect();
         b.import(&ids, &decoded).unwrap();
-        compare(Kind::Resume(at), &replay(&mut b, &rows).unwrap(), &want);
+        compare!(Kind::Resume(at), &replay(&mut b, &rows).unwrap(), &want);
     }
 }
 
@@ -323,7 +331,7 @@ fn test_snapshot_restore_in_place_replays_equal() {
     let records = snapshot(&p).unwrap();
     let (rows, want) = record(&mut p, 24, 80).unwrap();
     p.restore_all(&records).unwrap();
-    compare(Kind::Snapshot, &replay(&mut p, &rows).unwrap(), &want);
+    compare!(Kind::Snapshot, &replay(&mut p, &rows).unwrap(), &want);
 }
 
 #[test]
