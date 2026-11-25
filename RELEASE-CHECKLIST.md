@@ -23,6 +23,11 @@ reviewed tree: the frozen SHA.
 - [ ] Record the frozen `main` SHA. Nothing merges after it until the tag.
 - [ ] `make pre-push` is green on a clean checkout of that SHA.
 - [ ] The full CI matrix is green on that SHA.
+- [ ] Dispatch `wheels.yml` on the frozen SHA (with the coordinator's
+      approved window) and require every leg green, the Windows leg
+      (`W0 (x86_64-pc-windows-msvc)`, #350) included: its first run must not
+      be the release's. Record the run id; `pypi.yml` takes it as
+      `wheels_run_id`.
 - [ ] Replay format: any addition after the first release bumps the replay
       version (`crates/tessera-rl-engine/src/replay/format.rs`). Fields
       reserved in version 1 before that release (ADR-0075, ADR-0079,
