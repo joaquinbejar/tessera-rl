@@ -177,13 +177,12 @@ def test_twoplayer_truncation_target_uses_the_terminal_observation():
     """The bootstrap reads the engine's terminal-observation rows, not the
     post-reset observation, and lands on the closing transition."""
 
+    terminal = np.arange(2 * 2 * 3, dtype=np.float32).reshape(2, 2, 3)
+
     class FakeEnv:
-        num_envs, agents, outputs = 2, 2, "owned"
-        _leaves = [("obs", np.float32, (3,))]
+        terminal_observations = {"obs": terminal}
 
     env = FakeEnv()
-    terminal = np.arange(2 * 2 * 3, dtype=np.float32).reshape(2, 2, 3)
-    env._last_out = {"terminal_observations": [terminal.tobytes()]}
     post_reset = np.zeros((2, 2, 3), dtype=np.float32)
     got = l2.terminal_obs(env, learner=1)
     np.testing.assert_array_equal(got, terminal[:, 1, :])
@@ -294,3 +293,92 @@ def test_t3b_check_calibration_accepts_ten_seeds_with_the_min_rule():
     assert check_calibration(cal) == []
     short = dict(cal, seeds=T3B_CALIBRATION_SEEDS[:9], records=records[:9])
     assert check_calibration(short)
+
+
+def test_twoplayer_terminal_obs_errors_propagate():
+    """#571 (REVIEW-design-r1 condition 3): without same_step auto-reset the
+    accessor's ArgumentError stops the run; there is no fallback."""
+    import tessera_rl
+
+    env = tessera_rl.make("tessera/Tag-v1", num_envs=1, seed=3, workers=0, mode="sync", outputs="owned", auto_reset="next_step")
+    env.reset()
+    env.step(np.zeros((1, env.agents), dtype=np.int32))
+    with pytest.raises(tessera_rl.ArgumentError, match="same_step"):
+        l2.terminal_obs(env, 0)
+    env.close()
+
+
+class _Layout:
+    def __init__(self, nvec, mask_heads, mask_len):
+        self.action_nvec, self.mask_heads, self._mask_len = tuple(nvec), tuple(mask_heads), mask_len
+
+
+def test_twoplayer_action_heads_of_survival_split_the_mask_row():
+    env = l2._make("tessera/Survival-v1", 1, 5, None, {"agents": 16, "size": 32})
+    heads = l2.action_heads(env)
+    assert heads == [(0, 5), (5, 7)]
+    step = env.reset()
+    row = l2.slot_mask(step.masks, 0, 1, 12)[0]
+    move, act = l2.head_masks(row, heads)
+    np.testing.assert_array_equal(move, row[:5])
+    np.testing.assert_array_equal(act, row[5:12])
+    env.close()
+
+
+def test_twoplayer_action_heads_refuse_parents_and_out_of_row_blocks():
+    with pytest.raises(ValueError, match="conditional action heads"):
+        l2.action_heads(_Layout([3, 2], [(0, (), 3), (3, (3,), 2)], 5))
+    with pytest.raises(ValueError, match="outside the mask row"):
+        l2.action_heads(_Layout([3, 4], [(0, (), 3), (3, (), 4)], 6))
+    assert l2.action_heads(_Layout([3, 4], [], 0)) == [(0, 3), (3, 4)]
+
+
+def test_twoplayer_live_heads_needs_every_head():
+    heads = [(0, 2), (2, 3)]
+    mask = np.array([[1, 0, 0, 1, 0], [0, 0, 1, 1, 1], [1, 1, 0, 0, 0]], dtype=bool)
+    np.testing.assert_array_equal(l2.live_heads(mask, heads), [True, False, False])
+
+
+def test_twoplayer_uniform_heads_draw_in_head_order():
+    heads = [(0, 5), (5, 7)]
+    mask = np.ones(12, dtype=bool)
+    a = l2.uniform_legal_heads(np.random.default_rng(9), mask, heads)
+    rng = np.random.default_rng(9)
+    assert a == [l2.uniform_legal(rng, mask[:5]), l2.uniform_legal(rng, mask[5:])]
+
+
+@pytest.mark.torch
+def test_twoplayer_multihead_logprob_and_entropy_are_sums_over_heads():
+    torch = pytest.importorskip("torch")
+    from torch.distributions.categorical import Categorical
+
+    torch.manual_seed(0)
+    heads = [(0, 2), (2, 3)]
+    agent = l2._multihead_agent_class()(4, heads)
+    x = torch.randn(3, 4)
+    mask = torch.tensor([[1, 1, 1, 0, 1], [1, 0, 1, 1, 1], [0, 1, 0, 1, 0]], dtype=torch.bool)
+    action = torch.tensor([[0, 2], [0, 1], [1, 1]])
+    _, logp, ent, _ = agent.act(x, mask, action)
+    logits = agent.actor(x)
+    want_lp, want_ent = 0.0, 0.0
+    for h, (lo, hi) in enumerate(((0, 2), (2, 5))):
+        lg, m = logits[:, lo:hi], mask[:, lo:hi]
+        want_lp = want_lp + Categorical(logits=l2.masked_logits(lg, m)).log_prob(action[:, h])
+        want_ent = want_ent + l2.legal_entropy(lg, m)
+    torch.testing.assert_close(logp, want_lp)
+    torch.testing.assert_close(ent, want_ent)
+    with pytest.raises(AssertionError, match="no legal choice"):
+        agent.act(x, torch.tensor([[1, 1, 0, 0, 0]] * 3, dtype=torch.bool), action)
+
+
+@pytest.mark.torch
+def test_twoplayer_multihead_survival_one_update_smoke():
+    pytest.importorskip("torch")
+    import math
+
+    h = l2.TwoPlayerHyper(total_steps=64, num_envs=2, num_steps=32, num_minibatches=2, update_epochs=1)
+    kwargs = {"agents": 16, "size": 32, "respawn": 4, "steps": 32}
+    agent, learner, rec = l2.train("tessera/Survival-v1", kwargs, 101, [0], h)
+    assert learner == 0 and rec["curve"]
+    scores = l2.eval_scores("tessera/Survival-v1", kwargs, [0], "trained", "heuristic", 2, 1000, "return", agent=agent)
+    assert len(scores) == 2 and all(math.isfinite(s) for s in scores)
