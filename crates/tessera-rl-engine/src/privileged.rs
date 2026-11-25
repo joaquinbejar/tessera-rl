@@ -142,6 +142,11 @@ impl<E: PrivilegedState, M: MaskProvider<E>> EnvPool<E, M> {
     /// the observations, and a pending instance's row is zero. Sync and
     /// Inline modes only: Pipelined and Async refuse a pool with it.
     ///
+    /// Cost: the rows are written in one serial pass on the calling thread
+    /// after the workers' step pass, so each call that writes the outputs
+    /// adds O(N) `write_state` calls that do not scale with the worker
+    /// count. A pool without the buffer pays one branch per call.
+    ///
     /// # Errors
     ///
     /// [`EngineError::PrivilegedState`] after the first reset, on a second

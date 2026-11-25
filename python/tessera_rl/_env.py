@@ -534,6 +534,10 @@ class Env:
         ``borrowed`` mode the arrays are views with the same window as the
         observations of that call (``is_stale`` reports when it ended); in
         ``owned`` mode they are fresh copies. ``Step`` does not carry it.
+
+        Cost: the rows are written in one serial pass after the workers'
+        step, so every call adds ``num_envs`` state writes on the calling
+        thread, whatever ``workers`` is.
         """
         return self._state
 
