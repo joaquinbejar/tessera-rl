@@ -48,6 +48,7 @@
 //! Version 2 adds the window, the set and the masks (#382 stage 2); version
 //! 1 had the `own` leaf only and was never released.
 
+pub mod baseline;
 pub mod map;
 
 use core::num::NonZeroU32;
@@ -56,8 +57,8 @@ use tessera_rl_core::io::{ActionWriter, Actions, MaskWriter, ObsWriter};
 use tessera_rl_core::space::Space;
 use tessera_rl_core::{
     ActionMask, AgentSlot, Bool8, ConfigError, Environment, EpisodeEnd, HeaderView,
-    InvariantViolation, NoAdaptive, ObsLeaf, ObsSet, Observation, Phase, RecordHeader, SpaceError,
-    StepOut, Tier, TurnStructure, Validate,
+    ImperfectInformation, InvariantViolation, NoAdaptive, ObsLeaf, ObsSet, Observation, Phase,
+    RecordHeader, SpaceError, StepOut, Tier, TurnStructure, Validate,
 };
 use tessera_rl_macros::{EnvConfig, EnvState, Observation};
 use tessera_rl_num::rng::{ObsRng, StepRng};
@@ -411,6 +412,61 @@ impl SurvivalState {
     }
 }
 
+/// Writes agent `me`'s window, `[4, 2r + 1, 2r + 1]` with `r = view`, as
+/// `set(index, value)` calls; unwritten cells stay zero. Shared by the
+/// observation and the information state, so they are the same bytes.
+fn fill_window(
+    cfg: &SurvivalConfig,
+    state: &SurvivalState,
+    me: usize,
+    mut set: impl FnMut(usize, u8),
+) {
+    let (x, y) = state.pos(me);
+    let radius = i16::try_from(cfg.view).unwrap_or(2).clamp(2, 7);
+    let width = usize::try_from(2 * radius + 1).unwrap_or(5);
+    // The live agents in the window, by window cell (slot + 1), in one
+    // pass over the agents: O(agents) per observation.
+    let mut nearby = [[0u8; 2 * MAX_VIEW + 1]; 2 * MAX_VIEW + 1];
+    for b in 0..state.agent_count() {
+        if !state.is_alive(b) {
+            continue;
+        }
+        let (bx, by) = state.pos(b);
+        let (col, row) = (bx - x + radius, by - y + radius);
+        if let (Ok(col), Ok(row)) = (usize::try_from(col), usize::try_from(row))
+            && let Some(cell) = nearby.get_mut(row).and_then(|r| r.get_mut(col))
+            && col < width
+            && row < width
+        {
+            *cell = u8::try_from(b + 1).unwrap_or(0);
+        }
+    }
+    {
+        for (row, dy) in (-radius..=radius).enumerate() {
+            for (col, dx) in (-radius..=radius).enumerate() {
+                let (cx, cy) = (x + dx, y + dy);
+                let at = |channel: usize| channel * width * width + row * width + col;
+                let Some(tile) = state.tile(cx, cy) else {
+                    set(at(0), OUTSIDE);
+                    continue;
+                };
+                set(at(0), tile);
+                set(at(1), u8::from(state.ready_forest(cx, cy)));
+                let occupant = nearby
+                    .get(row)
+                    .and_then(|r| r.get(col))
+                    .copied()
+                    .unwrap_or(0);
+                if let Some(b) = usize::from(occupant).checked_sub(1) {
+                    let health = state.health.get(b).copied().unwrap_or(0);
+                    set(at(2), 1);
+                    set(at(3), u8::try_from(health).unwrap_or(0));
+                }
+            }
+        }
+    }
+}
+
 impl Environment for Survival {
     type State = SurvivalState;
     type Config = SurvivalConfig;
@@ -421,6 +477,8 @@ impl Environment for Survival {
     const MAX_AGENTS: usize = MAX_AGENTS;
     const TIER: Tier = Tier::CrossPlatform;
     const TURNS: TurnStructure = TurnStructure::Simultaneous;
+    /// Partially observable: each agent sees its window (stage 3).
+    const PERFECT_INFORMATION: bool = false;
     /// Parallel only: AEC cycle buffering is not designed for this many
     /// agents (DESIGN-r1 section 8).
     const ADAPTERS: tessera_rl_core::Adapters = tessera_rl_core::Adapters::PZ_PARALLEL;
@@ -672,47 +730,10 @@ impl Environment for Survival {
         let (x, y) = state.pos(me);
         let get = |v: &[i16; MAX_AGENTS]| i32::from(v.get(me).copied().unwrap_or(0));
         let radius = i16::try_from(cfg.view).unwrap_or(2).clamp(2, 7);
-        let width = usize::try_from(2 * radius + 1).unwrap_or(5);
-        // The live agents in the window, by window cell (slot + 1), in one
-        // pass over the agents: O(agents) per observation.
-        let mut nearby = [[0u8; 2 * MAX_VIEW + 1]; 2 * MAX_VIEW + 1];
-        for b in 0..state.agent_count() {
-            if !state.is_alive(b) {
-                continue;
-            }
-            let (bx, by) = state.pos(b);
-            let (col, row) = (bx - x + radius, by - y + radius);
-            if let (Ok(col), Ok(row)) = (usize::try_from(col), usize::try_from(row))
-                && let Some(cell) = nearby.get_mut(row).and_then(|r| r.get_mut(col))
-                && col < width
-                && row < width
-            {
-                *cell = u8::try_from(b + 1).unwrap_or(0);
-            }
-        }
         if let Some(mut leaf) = out.leaf_mut(SurvivalObs::WINDOW) {
-            for (row, dy) in (-radius..=radius).enumerate() {
-                for (col, dx) in (-radius..=radius).enumerate() {
-                    let (cx, cy) = (x + dx, y + dy);
-                    let at = |channel: usize| channel * width * width + row * width + col;
-                    let Some(tile) = state.tile(cx, cy) else {
-                        leaf.set(at(0), OUTSIDE);
-                        continue;
-                    };
-                    leaf.set(at(0), tile);
-                    leaf.set(at(1), u8::from(state.ready_forest(cx, cy)));
-                    let occupant = nearby
-                        .get(row)
-                        .and_then(|r| r.get(col))
-                        .copied()
-                        .unwrap_or(0);
-                    if let Some(b) = usize::from(occupant).checked_sub(1) {
-                        let health = state.health.get(b).copied().unwrap_or(0);
-                        leaf.set(at(2), 1);
-                        leaf.set(at(3), u8::try_from(health).unwrap_or(0));
-                    }
-                }
-            }
+            fill_window(cfg, state, me, |at, v| {
+                leaf.set(at, v);
+            });
         }
         if let Some(mut leaf) = out.leaf_mut(SurvivalObs::OWN) {
             let row = [
@@ -798,6 +819,57 @@ impl ActionMask for Survival {
     fn noop(_: &SurvivalConfig, _: &SurvivalState, _: AgentSlot, out: &mut ActionWriter<'_>) {
         out.set_discrete(0, 0);
         out.set_discrete(1, 0);
+    }
+}
+
+/// What one agent knows (`ImperfectInformation`): its `own` values and its
+/// window, the observation's bytes, the window zero-padded to the largest
+/// view. The `others` set is a function of the window, so it is not
+/// repeated.
+#[derive(EnvState, Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(C)]
+pub struct SurvivalInfo {
+    /// Health, food, water, x, y and the episode step.
+    pub own: [i32; 6],
+    /// The window, `[4, 2r + 1, 2r + 1]` for `r = view`, then zeros.
+    pub window: [u8; WINDOW_BYTES],
+}
+
+/// The bytes of the largest window.
+pub const WINDOW_BYTES: usize = 4 * (2 * MAX_VIEW + 1) * (2 * MAX_VIEW + 1);
+const _: () = assert!(core::mem::size_of::<SurvivalInfo>() == 24 + WINDOW_BYTES);
+
+impl Default for SurvivalInfo {
+    fn default() -> Self {
+        Self {
+            own: [0; 6],
+            window: [0; WINDOW_BYTES],
+        }
+    }
+}
+
+impl ImperfectInformation for Survival {
+    type InfoState = SurvivalInfo;
+
+    fn info_state(cfg: &SurvivalConfig, state: &SurvivalState, agent: AgentSlot) -> SurvivalInfo {
+        let me = agent.index();
+        let mut info = SurvivalInfo::default();
+        fill_window(cfg, state, me, |at, v| {
+            if let Some(cell) = info.window.get_mut(at) {
+                *cell = v;
+            }
+        });
+        let (x, y) = state.pos(me);
+        let get = |v: &[i16; MAX_AGENTS]| i32::from(v.get(me).copied().unwrap_or(0));
+        info.own = [
+            get(&state.health),
+            get(&state.food),
+            get(&state.water),
+            i32::from(x.max(0)),
+            i32::from(y.max(0)),
+            i32::from(state.step),
+        ];
+        info
     }
 }
 
