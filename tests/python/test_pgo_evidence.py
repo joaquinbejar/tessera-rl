@@ -4,6 +4,7 @@ real Callgrind output meets the gate is unproven until a host window exists."""
 
 import importlib.util
 import pathlib
+import re
 import subprocess
 import sys
 
@@ -371,3 +372,29 @@ def test_is_memory_primitive_compares_count_on_glibc_musl_and_macos():
     # Not memory primitives: string compares and searches.
     for name in ("strcmp", "memchr", "memrchr", "wmemcmp"):
         assert not ev.is_memory_primitive(glibc, name, lambda path: {}), name
+
+
+def test_is_memory_primitive_glibc_gi_aliases_count():
+    # #498: aarch64 glibc 2.28's `_native` calls these internal aliases directly,
+    # with Callgrind's recursion suffix on deeper frames.
+    glibc = "/usr/lib64/libc-2.28.so"
+    for name in ("__GI_memset", "__GI_memcpy", "__GI_memcpy'2", "__GI_memmove", "__GI_memcmp", "__GI_bzero", "__GI_bcmp"):
+        assert ev.is_memory_primitive(glibc, name, lambda path: {}), name
+    # Other `__GI_` functions, and the aliases outside libc, are not primitives.
+    for name in ("__GI_memchr", "__GI_strcmp", "__GI_memsetx", "__GI___libc_malloc"):
+        assert not ev.is_memory_primitive(glibc, name, lambda path: {}), name
+    assert not ev.is_memory_primitive("/venv/_native.abi3.so", "__GI_memset", lambda path: {})
+
+
+def test_primitive_pattern_grows_only_by_gi_aliases():
+    # The x86 charges stay unchanged: every name the old pattern matched still
+    # matches, and the only new matches start with `__GI_` (after an optional
+    # `_platform_`), which no x86 archive names.
+    old = re.compile(r"^(_platform_)?(__)?(mem(set|cpy|move|cmp(eq)?)|bzero|bcmp)(\b|_|@|$)")
+    names = ["memset", "memcpy@GLIBC_2.14", "__memset_avx2_unaligned_erms", "__memcmpeq_avx2", "_platform_memmove",
+             "__bzero", "bcmp", "memchr", "memsetx", "wmemcmp", "__GI_memset", "__GI_memcpy'2", "__GI_memchr",
+             "_platform___GI_memset", "___memset", "__GI__memset", "GI_memset", "__X_memset", "__GIX_memset"]
+    for name in names:
+        was, now = bool(old.match(name)), bool(ev._PRIMITIVE.match(name))
+        assert now or not was, f"{name} lost"
+        assert was == now or name.startswith(("__GI_", "_platform___GI_")), f"{name} changed"
