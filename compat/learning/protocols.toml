@@ -293,3 +293,26 @@ seats = [0]
 score = "return"
 seeds = 5
 eval_episodes = 20
+
+# tessera/Lanterns-v1 (#529, docs/reviews/529/DESIGN-r1.md): tier T3c, one
+# shared masked-PPO policy on both seats of the cooperative game (no
+# policy_map), one transition per acting step carrying the team reward. The
+# score is the final firework score (0..25). The gate compares it with
+# uniform-legal play on every seat (U) and with every seat a heuristic slot
+# (H, InfoHeuristic). Calibration: T3b's 10 seeds and their minimum. No
+# calibration yet, so no nightly gate.
+# Step cap 128 (make()'s default) > the longest legal 2-player game: 40
+# draws (plays and discards) empty the deck, then one final turn per
+# player, and at most 8 + 39 hints (8 tokens, plus one back per discard or
+# completed colour before the last draw): at most 89 turns. So no
+# truncation and no bootstrap; a run counts any truncation it sees.
+[lanterns]
+env = "tessera/Lanterns-v1"
+tier = "T3c"
+adapter = "tessera_rl.make (native Env, sync, no policy_map: every seat the shared policy)"
+total_steps = 1000000
+hyper = {}
+env_kwargs = { players = 2 }
+score = "final"
+seeds = 5
+eval_episodes = 50

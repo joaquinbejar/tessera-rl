@@ -220,6 +220,13 @@ def _train(args, seeds: list[int]) -> list[dict]:
                 params = pathlib.Path(f"{args.out}.seed{seed}.pt")
                 torch.save(r.pop("agent").state_dict(), params)
                 r["parameters"] = params.name
+            elif tier == "T3c":
+                # #529: the score is the mean final score of the greedy shared
+                # policy; the parameters are saved beside the score file.
+                r = learning_protocols.train_selfplay(PROTOCOL, seed, args.total_steps, args.eval_episodes)
+                params = pathlib.Path(f"{args.out}.seed{seed}.pt")
+                torch.save(r.pop("agent").state_dict(), params)
+                r["parameters"] = params.name
             else:
                 r = learning_protocols.train(PROTOCOL, seed, args.total_steps, args.eval_episodes)
         record = {"seed": seed, "score": r["eval_mean"], "eval_returns": r["eval_returns"], "train_seconds": r.get("train_seconds")}
@@ -230,6 +237,9 @@ def _train(args, seeds: list[int]) -> list[dict]:
             record["opening_plies"] = r["opening_plies"]
             record["opening_skips"] = r["opening_skips"]
             record["opening_draws"] = r["opening_draws"]
+        for key in ("distinct_deals", "distinct_games", "truncations", "eval_truncations"):
+            if key in r:
+                record[key] = r[key]
         records.append(record)
         sys.stderr.write(f"seed {seed}: score {r['eval_mean']:.2f} in {r['train_seconds']}s\n")
     return records
@@ -260,7 +270,13 @@ def cmd_scores(args) -> int:
 def cmd_calibrate(args) -> int:
     shards = [json.loads(pathlib.Path(f).read_text()) for f in args.scores]
     records = [r for shard in shards for r in shard.get("records", [])]
-    if PROTOCOL != "cartpole" and _tier() == "T3b":
+    if PROTOCOL != "cartpole" and _tier() == "T3c":
+        # #529 (REVIEW-design-r1, Q3): T3b's 10 seeds and their minimum.
+        from learning_gate import T3B_CALIBRATION_SEEDS  # noqa: PLC0415
+
+        seeds = args.seeds if args.seeds != CALIBRATION_SEEDS else T3B_CALIBRATION_SEEDS
+        out = calibrate(records, seeds, expected=T3B_CALIBRATION_SEEDS, threshold="min")
+    elif PROTOCOL != "cartpole" and _tier() == "T3b":
         from learning_gate import T3B_CALIBRATION_SEEDS  # noqa: PLC0415
 
         seeds = args.seeds if args.seeds != CALIBRATION_SEEDS else T3B_CALIBRATION_SEEDS
@@ -299,6 +315,21 @@ def cmd_calibrate(args) -> int:
             refs["uniform"],
             refs["heuristic"],
             min_effect=gate.get("min_effect", 0.10),
+        )
+    elif PROTOCOL != "cartpole" and not errors and _tier() == "T3c":
+        # #529 (DESIGN-r1 section 2): U and H on the evaluation seeds, then
+        # the one threshold, or no gate when H does not beat U.
+        import learning_protocols
+
+        from learning_gate import learns_selfplay
+
+        episodes = (out["setup"] or {}).get("eval_episodes") or 50
+        refs = learning_protocols.selfplay_references(PROTOCOL, episodes)
+        gate = learning_protocols.gate(PROTOCOL)
+        out["gate"] = gate
+        out["references"] = refs
+        out["learns"] = learns_selfplay(
+            [r["score"] for r in out["records"]], refs["uniform"], refs["heuristic"], min_effect=gate.get("min_effect", 0.10)
         )
     elif PROTOCOL != "cartpole" and not errors:
         # The "learns at all" check: against a uniform random policy on the

@@ -140,6 +140,19 @@ def fingerprint(name: str) -> str:
             "learning_masked_imported": hashlib.sha256(imported.encode()).hexdigest(),
         }
         params = asdict(twoplayer_hyper(name, protocol(name)["total_steps"]))
+    elif protocol(name)["tier"] == "T3c":
+        import inspect  # noqa: PLC0415
+
+        import learning_selfplay as ls  # noqa: PLC0415
+
+        # Its own scope (#529): the T3c module, and only the learning_masked
+        # functions it imports, so no other tier's code is in it.
+        imported = "\n".join(inspect.getsource(f) for f in ls.IMPORTED)
+        sources = {
+            "learning_selfplay": hashlib.sha256(pathlib.Path(ls.__file__).read_bytes()).hexdigest(),
+            "learning_masked_imported": hashlib.sha256(imported.encode()).hexdigest(),
+        }
+        params = asdict(selfplay_hyper(name, protocol(name)["total_steps"]))
     else:
         sources = {
             "reference_training": hashlib.sha256(pathlib.Path(rt.__file__).read_bytes()).hexdigest(),
@@ -271,6 +284,53 @@ def twoplayer_references(name: str, episodes: int) -> dict:
     return {
         "uniform": l2.eval_scores(p["env"], kwargs, seats, "uniform", "heuristic", episodes, rt.EVAL_SEED_BASE, score, opening_plies=k),
         "heuristic": l2.eval_scores(p["env"], kwargs, seats, "heuristic", "heuristic", episodes, rt.EVAL_SEED_BASE, score, opening_plies=k),
+    }
+
+
+def selfplay_hyper(name: str, total_steps: int):
+    import learning_selfplay as ls  # noqa: PLC0415
+
+    return ls.SelfPlayHyper(**{**protocol(name)["hyper"], "total_steps": total_steps})
+
+
+def train_selfplay(name: str, seed: int, total_steps: int, eval_episodes: int) -> dict:
+    """One training run of a tier T3c protocol (one shared policy on every
+    seat of a cooperative game, ``learning_selfplay``, #529), then its
+    greedy evaluation. Apart from ``train`` so no other tier's fingerprint
+    changes."""
+    import learning_selfplay as ls  # noqa: PLC0415
+    import reference_training as rt  # noqa: PLC0415
+
+    p = protocol(name)
+    if p["tier"] != "T3c":
+        raise ValueError(f"{name} is tier {p['tier']}, not T3c")
+    kwargs = dict(p.get("env_kwargs", {}))
+    agent, record = ls.train(p["env"], kwargs, seed, selfplay_hyper(name, total_steps))
+    trace: list = []
+    scores = ls.eval_scores(p["env"], kwargs, "trained", eval_episodes, rt.EVAL_SEED_BASE, agent, trace=trace)
+    return {
+        **record,
+        "eval_returns": scores,
+        "eval_mean": float(sum(scores) / len(scores)),
+        # rev (REVIEW-design-r1): the evaluation's diversity, per seed.
+        "distinct_deals": len({t[1] for t in trace}),
+        "distinct_games": len({t[2] for t in trace}),
+        "eval_truncations": sum(1 for t in trace if t[3]),
+        "agent": agent,
+    }
+
+
+def selfplay_references(name: str, episodes: int) -> dict:
+    """The T3c reference levels on the evaluation seeds, per episode: U
+    (uniform legal on every seat) and H (every seat a heuristic slot)."""
+    import learning_selfplay as ls  # noqa: PLC0415
+    import reference_training as rt  # noqa: PLC0415
+
+    p = protocol(name)
+    kwargs = dict(p.get("env_kwargs", {}))
+    return {
+        "uniform": ls.eval_scores(p["env"], kwargs, "uniform", episodes, rt.EVAL_SEED_BASE),
+        "heuristic": ls.eval_scores(p["env"], kwargs, "heuristic", episodes, rt.EVAL_SEED_BASE),
     }
 
 

@@ -97,3 +97,10 @@ min_effect = 0.10
 # legal policy scores -1568.8.
 solved = -792.05
 min_effect = 0.10
+
+[lanterns]
+# Tier T3c (#529): lower95(mean(trained) - mean(U)) >= min_effect * (H - U),
+# no gate when lower95(H - U) <= 0. Calibrated on T3b's 10 seeds with the
+# threshold at their minimum: per-night false-red estimate C(5,3)/C(15,3) =
+# 2.2%, as for T3b (exchangeable draws).
+min_effect = 0.10
