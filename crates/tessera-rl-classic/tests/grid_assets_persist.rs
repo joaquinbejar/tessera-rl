@@ -100,6 +100,43 @@ fn test_grid_assets_snapshot_round_trips_and_imports() {
 }
 
 #[test]
+fn test_grid_walled_reachable_odd_parity_state_round_trips() {
+    // #721: on ROOMS the cell (4, 0) is a wall, so four moves right end at
+    // (3, 0) after 4 steps: distance 3, odd parity, a reachable state that
+    // the validator refused before the fix.
+    let mut a = pool(cfg(ROOMS));
+    for _ in 0..4 {
+        a.step(ActionInput {
+            discrete: &[2, 2, 2, 2],
+            continuous: &[],
+        })
+        .unwrap();
+    }
+    let ids: Vec<u32> = (0..4)
+        .filter(|&i| {
+            let s = a.state(i).unwrap();
+            s.cell() == (3, 0) && s.steps == 4 && !s.reached_goal.get()
+        })
+        .collect();
+    assert!(!ids.is_empty(), "no instance reached the odd-parity state");
+    // Through the bytes: encode, decode (which validates) and import.
+    let file = a.encode(&ids).unwrap();
+    let mut b = pool(cfg(ROOMS));
+    let records = b.decode(&file, DecodeLimits::default()).unwrap();
+    b.import(&ids, &records).unwrap();
+    // In memory: snapshot and restore.
+    let mut c = pool(cfg(ROOMS));
+    for &i in &ids {
+        let record = a.snapshot(i).unwrap();
+        c.restore(i, &record).unwrap();
+    }
+    for &i in &ids {
+        assert_eq!(a.state(i).unwrap(), b.state(i).unwrap());
+        assert_eq!(a.state(i).unwrap(), c.state(i).unwrap());
+    }
+}
+
+#[test]
 fn test_grid_assets_other_layout_is_an_asset_mismatch() {
     let file = pool(cfg(ROOMS)).encode(&[0]).unwrap();
     let ours = Asset::<GridLayout>::from_bytes(ROOMS_B).unwrap().hash().0;
