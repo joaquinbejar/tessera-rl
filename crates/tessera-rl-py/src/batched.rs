@@ -1081,6 +1081,7 @@ mod tests {
             wait_cap_us: None,
             transforms: tessera_rl_engine::Transforms::new(),
             policy_map: None,
+            privileged_state: false,
             pipelined,
             asynced,
         }

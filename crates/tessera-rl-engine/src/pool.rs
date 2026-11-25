@@ -162,6 +162,9 @@ pub struct EnvPool<E: Environment, M: MaskProvider<E> = NoMasks> {
     /// The ONNX opponent pass (ADR-0088 erratum 2): `None` without ONNX
     /// opponents, and then the step never reaches it.
     pub(crate) onnx: Option<Box<crate::league::OnnxPass>>,
+    /// The privileged state pass (ADR-0079 item 7); `None` unless the pool
+    /// opted in with `with_privileged_state`.
+    pub(crate) privileged: Option<crate::privileged::PrivilegedRoute<E>>,
     _masks: PhantomData<M>,
 }
 
@@ -629,6 +632,7 @@ where
             heuristic_continuous: Vec::new(),
             league: None,
             onnx: None,
+            privileged: None,
             _masks: PhantomData,
         })
     }
@@ -709,12 +713,14 @@ where
             chunk_size(&self.options),
         )?;
         let exported = obs_leaves(runtime.space())?;
-        let mut outputs = Outputs::new(
+        // The privileged rows (ADR-0079 item 7) keep their layout.
+        let mut outputs = Outputs::new_with(
             num_envs,
             E::MAX_AGENTS,
             &exported.leaves,
             self.options.auto_reset == AutoReset::SameStep,
             self.outputs.mask_len,
+            &self.outputs.privileged_leaves(),
         )?;
         outputs.sets = exported.sets;
         self.outputs = outputs;
@@ -817,7 +823,15 @@ where
         if poison == Poison::Reject && self.poisoned {
             return Err(EngineError::Poisoned);
         }
-        crate::entry::canonical(|| f(self))
+        crate::entry::canonical(|| {
+            let result = f(self);
+            // The privileged rows of a call that wrote the outputs
+            // (ADR-0079 item 7), in the same call; nothing without the
+            // opt-in.
+            let written = self.finish_privileged();
+            let value = result?;
+            written.map(|()| value)
+        })
     }
 
     /// [`EnvPool::guarded`] for read-only methods; they are always rejected

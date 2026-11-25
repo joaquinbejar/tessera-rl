@@ -111,7 +111,7 @@ from pettingzoo import AECEnv, ParallelEnv
 from pettingzoo.utils.conversions import parallel_to_aec_wrapper
 from pettingzoo.utils.wrappers import OrderEnforcingWrapper
 
-from tessera_rl import _envs, _host, _native, _render
+from tessera_rl import _envs, _flat, _host, _native, _render
 from tessera_rl._env import Env, _discrete_actions, _multi_actions, native_kwargs
 from tessera_rl.masks import head_views
 
@@ -310,6 +310,39 @@ def _visible_option(visible: str | None, agents: Any, kwargs: dict) -> bool:
     return visible == "learner"
 
 
+def _state_space(state_leaves) -> spaces.Box | None:
+    """The space of the privileged state, one ``Box`` as PettingZoo defines
+    ``state()``: the leaf itself, or several leaves flattened in layout order
+    to their lossless ``numpy.result_type`` (the PufferLib observation's
+    rule); ``None`` without them."""
+    leaves = list(state_leaves)
+    if not leaves:
+        return None
+    if len(leaves) == 1:
+        _, dtype, shape, low, high = leaves[0]
+        dt = np.dtype(dtype)
+        return spaces.Box(low=_state_bound(low, shape, dt), high=_state_bound(high, shape, dt), shape=tuple(shape), dtype=dt)
+    dt = _flat.flat_dtype([leaf[1] for leaf in leaves], "state leaves", "the PettingZoo state()")
+    low = np.concatenate([_state_bound(lo, shape, dt).ravel() for _, _, shape, lo, _ in leaves])
+    high = np.concatenate([_state_bound(hi, shape, dt).ravel() for _, _, shape, _, hi in leaves])
+    return spaces.Box(low=low, high=high, shape=(low.size,), dtype=dt)
+
+
+def _state_bound(values, shape, dtype: np.dtype) -> np.ndarray:
+    """A bound per element of a state leaf, from a list that may hold one value.
+    Integer bounds are clamped to ``dtype``'s range in Python integers: the
+    layout may carry ``2**63`` for an ``i64`` leaf's top (a float64 round
+    trip), and a float64 cast would wrap it."""
+    size = int(np.prod(shape))
+    flat = list(np.asarray(values, dtype=object).ravel())
+    if dtype.kind in "iu":
+        info = np.iinfo(dtype)
+        arr = np.asarray([min(max(int(v), int(info.min)), int(info.max)) for v in flat], dtype=dtype)
+    else:
+        arr = np.asarray(flat, dtype=np.float64).astype(dtype)
+    return np.broadcast_to(arr, (size,)).reshape(shape)
+
+
 def agent_name(slot: int, generation: int) -> str:
     """The PettingZoo name of the agent (slot, generation)."""
     return f"agent_{slot}" if generation == 0 else f"agent_{slot}_g{generation}"
@@ -367,10 +400,26 @@ class _Agents:
             self.action_space = spaces.Discrete(n)
         self.observation_space = spaces.Dict(leaves)
         self.last = None
+        #: The privileged state space (``privileged_state=True``): one Box,
+        #: several leaves flattened in layout order; ``None`` without it.
+        self.state_space = _state_space(layout.get("state_leaves", ()))
 
     @property
     def multi(self) -> bool:
         return len(self.nvec) > 1
+
+    def state(self):
+        """The privileged state of the one instance after the last call."""
+        raw = getattr(self.env, "state", None)
+        if self.state_space is None or raw is None:
+            raise _native.CapabilityError(
+                f"{self.env_id}: state() needs privileged_state=True and a reset first"
+            )
+        rows = [np.asarray(v[0]) for v in raw.values()]
+        if len(rows) == 1:
+            return np.array(rows[0], dtype=self.state_space.dtype)
+        # Layout order (the dict keeps it), cast to the flat dtype.
+        return np.concatenate([r.ravel() for r in rows]).astype(self.state_space.dtype)
 
     def head_masks(self, slot: int) -> tuple[np.ndarray, ...]:
         """Every head's mask of agent ``slot``, owned copies (multi-head)."""
@@ -507,6 +556,8 @@ class TesseraParallelEnv(ParallelEnv):
             raise
         self.possible_agents = [n for n in self._a.names if not self._a.hidden(self._a.slot_of[n])]
         self.agents = list(self.possible_agents)
+        if self._a.state_space is not None:
+            self.state_space = self._a.state_space
 
     def _visible(self, names: list[str]) -> list[str]:
         """``names`` without the hidden heuristic slots."""
@@ -517,6 +568,13 @@ class TesseraParallelEnv(ParallelEnv):
 
     def action_space(self, agent):
         return self._a.action_space
+
+    def state(self):
+        """The privileged state of the environment after the last ``reset``
+        or ``step`` (``privileged_state=True``), as ``state_space`` describes:
+        both hidden and public information, for a centralized critic. Never
+        feed it to an acting policy. ``CapabilityError`` without the option."""
+        return self._a.state()
 
     def set_reset_source(self, archive=None, weights=None) -> None:
         """Archive resets: forwarded to the wrapped
@@ -647,6 +705,8 @@ class TesseraAECEnv(AECEnv):
             self._a.env.close()
             raise
         self.possible_agents = list(self._a.names)
+        if self._a.state_space is not None:
+            self.state_space = self._a.state_space
         # No reset here: the first reset() is the seed's first episode.
         self.agents = list(self.possible_agents)
         self.rewards = {n: 0.0 for n in self.agents}
@@ -661,6 +721,13 @@ class TesseraAECEnv(AECEnv):
 
     def action_space(self, agent):
         return self._a.action_space
+
+    def state(self):
+        """The privileged state of the environment after the last ``reset``
+        or ``step`` (``privileged_state=True``), as ``state_space`` describes:
+        both hidden and public information, for a centralized critic. Never
+        feed it to an acting policy. ``CapabilityError`` without the option."""
+        return self._a.state()
 
     def observe(self, agent):
         return self._a.observe(self._a.slot_of[agent])

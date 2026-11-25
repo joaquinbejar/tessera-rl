@@ -50,6 +50,37 @@ pub struct Outputs {
     /// Host pools only (ADR-0065): `None` for every other pool, whose
     /// storage layout is unchanged.
     host: Option<HostBufs>,
+    /// The privileged state leaves (ADR-0079 item 7), `[N, leaf bytes]`
+    /// each, laid out after every other buffer; empty unless the pool
+    /// opted in.
+    privileged: Vec<Buf<u8>>,
+    /// Bytes per instance of each privileged leaf.
+    privileged_bytes: Vec<usize>,
+    /// Set by every [`Outputs::view_all`]: this engine call has started a
+    /// write generation, so the privileged rows may be written in it too.
+    written: bool,
+}
+
+/// The sizes of a layout besides its leaves.
+#[derive(Debug, Clone, Copy)]
+struct Parts {
+    num_envs: usize,
+    agents: usize,
+    terminal: bool,
+    mask_len: usize,
+    /// `Some(refuses)` for a host pool.
+    host: Option<bool>,
+}
+
+/// The privileged state rows of one engine call (ADR-0079 item 7), handed
+/// out only after [`Outputs::view_all`] started that call's write
+/// generation (storage invariant 4).
+#[derive(Debug)]
+pub(crate) struct PrivilegedRows<'a> {
+    /// One buffer per leaf, `[N, leaf bytes]`.
+    pub(crate) leaves: &'a mut [Buf<u8>],
+    /// Bytes per instance of each leaf.
+    pub(crate) bytes: &'a [usize],
 }
 
 /// The host-only per-instance outputs (ADR-0065 item 1).
@@ -72,13 +103,33 @@ impl Outputs {
         terminal: bool,
         mask_len: usize,
     ) -> Result<Self, EngineError> {
+        Self::new_with(num_envs, agents, leaves, terminal, mask_len, &[])
+    }
+
+    /// As [`Outputs::new`], plus one privileged state region per leaf of
+    /// `privileged`, `[num_envs, leaf bytes]` (ADR-0079 item 7), laid out
+    /// after every other buffer, so the other offsets are those of a pool
+    /// without them.
+    pub(crate) fn new_with(
+        num_envs: usize,
+        agents: usize,
+        leaves: &[Leaf],
+        terminal: bool,
+        mask_len: usize,
+        privileged: &[Leaf],
+    ) -> Result<Self, EngineError> {
         let b = StorageBuilder::new()?;
-        Self::lay_out(b, num_envs, agents, leaves, terminal, mask_len, None).ok_or(
-            EngineError::Options {
-                option: "num_envs",
-                reason: "buffers too large",
-            },
-        )
+        let parts = Parts {
+            num_envs,
+            agents,
+            terminal,
+            mask_len,
+            host: None,
+        };
+        Self::lay_out(b, &parts, leaves, privileged).ok_or(EngineError::Options {
+            option: "num_envs",
+            reason: "buffers too large",
+        })
     }
 
     /// As [`Outputs::new`], plus the host-only rows `aborted`, `abort_code`
@@ -95,30 +146,36 @@ impl Outputs {
         refuses: bool,
     ) -> Result<Self, EngineError> {
         let b = StorageBuilder::new()?;
-        Self::lay_out(
-            b,
+        let parts = Parts {
             num_envs,
             agents,
-            leaves,
             terminal,
             mask_len,
-            Some(refuses),
-        )
-        .ok_or(EngineError::Options {
+            host: Some(refuses),
+        };
+        Self::lay_out(b, &parts, leaves, &[]).ok_or(EngineError::Options {
             option: "num_envs",
             reason: "buffers too large",
         })
     }
 
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one reservation and one take per output region, in layout order"
+    )]
     fn lay_out(
         mut b: StorageBuilder,
-        num_envs: usize,
-        agents: usize,
+        parts: &Parts,
         leaves: &[Leaf],
-        terminal: bool,
-        mask_len: usize,
-        host: Option<bool>,
+        privileged: &[Leaf],
     ) -> Option<Self> {
+        let Parts {
+            num_envs,
+            agents,
+            terminal,
+            mask_len,
+            host,
+        } = *parts;
         let rows = num_envs.checked_mul(agents)?;
         let obs = leaves
             .iter()
@@ -175,6 +232,17 @@ impl Outputs {
             }
             None => None,
         };
+        // After the host rows: a pool without the opt-in keeps its layout.
+        let privileged_slots = privileged
+            .iter()
+            .enumerate()
+            .map(|(n, leaf)| {
+                b.reserve::<u8>(
+                    OutputField::PrivilegedState(n),
+                    num_envs.checked_mul(leaf.bytes)?,
+                )
+            })
+            .collect::<Option<Vec<_>>>()?;
         let mut r = b.finish()?;
         let host = match host {
             Some((aborted, abort_code, pending_reset, refused, refuse_code)) => Some(HostBufs {
@@ -216,6 +284,12 @@ impl Outputs {
             mask_len,
             sets: SetSpans::default(),
             host,
+            privileged: privileged_slots
+                .into_iter()
+                .map(|slot| r.take(slot))
+                .collect::<Option<_>>()?,
+            privileged_bytes: privileged.iter().map(|l| l.bytes).collect(),
+            written: false,
         })
     }
 
@@ -231,6 +305,46 @@ impl Outputs {
     #[must_use]
     pub fn observation(&self, leaf: usize) -> Option<&[u8]> {
         self.observations.get(leaf).map(|b| &**b)
+    }
+
+    /// Privileged state bytes of leaf `leaf`, `[N, leaf bytes]`, one row
+    /// per instance (ADR-0079 item 7); `None` without the opt-in. A pending
+    /// instance's row is zero. Valid as the observations are: until the
+    /// next call that takes `&mut self` (ADR-0003).
+    #[must_use]
+    pub fn privileged_state(&self, leaf: usize) -> Option<&[u8]> {
+        self.privileged.get(leaf).map(|b| &**b)
+    }
+
+    /// The observation leaves, as laid out.
+    #[must_use]
+    pub(crate) fn leaf_layout(&self) -> Vec<Leaf> {
+        self.leaf_bytes
+            .iter()
+            .map(|&bytes| Leaf { bytes })
+            .collect()
+    }
+
+    /// The privileged leaves, as laid out (empty without the opt-in).
+    #[must_use]
+    pub(crate) fn privileged_leaves(&self) -> Vec<Leaf> {
+        self.privileged_bytes
+            .iter()
+            .map(|&bytes| Leaf { bytes })
+            .collect()
+    }
+
+    /// The privileged rows, if a [`Outputs::view_all`] started a write
+    /// generation since the last take: only then may they be written
+    /// (storage invariant 4). Clears that mark.
+    pub(crate) fn take_privileged(&mut self) -> Option<PrivilegedRows<'_>> {
+        if !core::mem::replace(&mut self.written, false) {
+            return None;
+        }
+        Some(PrivilegedRows {
+            leaves: &mut self.privileged,
+            bytes: &self.privileged_bytes,
+        })
     }
 
     /// Final observations of episodes that ended in the last call, leaf
@@ -485,6 +599,7 @@ impl Outputs {
     /// invariant 4).
     pub(crate) fn view_all(&mut self) -> OutputsView<'_> {
         self.rewards.storage().begin_write();
+        self.written = true;
         let mut observations: [&mut [u8]; MAX_LEAVES] = Default::default();
         for (slot, buf) in observations.iter_mut().zip(self.observations.iter_mut()) {
             *slot = &mut **buf;

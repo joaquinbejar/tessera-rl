@@ -265,6 +265,16 @@ where
                 pool: Some(Box::new(self)),
             });
         }
+        if self.has_privileged_state() {
+            // ADR-0079 item 7: the rows are written on the caller's thread
+            // after each call, which the split-phase modes do not have.
+            return Err(AsyncBuildError {
+                error: EngineError::PrivilegedState {
+                    reason: "Async mode does not support the privileged state buffer",
+                },
+                pool: Some(Box::new(self)),
+            });
+        }
         if self.workers() != 0 {
             return Err(refuse(
                 self,

@@ -14,5 +14,5 @@ pub mod othello;
 pub use connect4::{Connect4, Connect4Config, Connect4Obs, Connect4State};
 pub use go9::{Go9, Go9Config, Go9Obs, Go9State};
 pub use lanterns::{Lanterns, LanternsConfig, LanternsInfo, LanternsObs, LanternsState};
-pub use leduc::{Leduc, LeducConfig, LeducInfo, LeducObs, LeducState};
+pub use leduc::{Leduc, LeducConfig, LeducInfo, LeducObs, LeducPrivileged, LeducState};
 pub use othello::{Othello, OthelloConfig, OthelloObs, OthelloState};

@@ -48,6 +48,7 @@ mod policy;
 mod policy_pool;
 mod pool;
 mod pool_state;
+mod privileged;
 mod record;
 mod registry;
 #[cfg(feature = "replay")]

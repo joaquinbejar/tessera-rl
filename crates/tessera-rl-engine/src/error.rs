@@ -514,6 +514,14 @@ pub enum EngineError {
         /// The context's digest.
         found: u64,
     },
+    /// The privileged state buffer (ADR-0079 item 7) cannot be used here:
+    /// set after the first reset or twice, on a lane-wise state, in a
+    /// split-phase mode, or for a search scratch pool.
+    #[error("privileged state: {reason}")]
+    PrivilegedState {
+        /// The rule broken.
+        reason: &'static str,
+    },
     /// The instance has not been reset yet, or its episode ended in
     /// `Disabled` auto-reset mode.
     #[error("instance {id} is pending reset")]

@@ -105,7 +105,7 @@ pub(crate) fn no_positional(g: Gil, args: Ref<'_>, name: &str) -> CResult<()> {
     }
 }
 
-const POOL_KEYS: [&str; 15] = [
+const POOL_KEYS: [&str; 16] = [
     "mode",
     "batch_size",
     "gather",
@@ -121,6 +121,7 @@ const POOL_KEYS: [&str; 15] = [
     "wait_cap_us",
     "transforms",
     "policy_map",
+    "privileged_state",
 ];
 
 /// The `outputs` mode: `"borrowed"` (the native default, ADR-0003) or
@@ -222,6 +223,7 @@ fn pool_args(g: Gil, kw: &Kwargs<'_>, default_limit: u32) -> CResult<PoolArgs> {
             .map(|s| policy_spec(&s))
             .transpose()
             .map_err(|e| error(g, Kind::Argument, e))?,
+        privileged_state: kw.bool(g, "privileged_state")?.unwrap_or(false),
     })
 }
 
@@ -728,6 +730,25 @@ pub(crate) fn list_of<'py>(
     Ok(list)
 }
 
+/// Leaves as `(name, dtype, shape, low, high)` tuples.
+fn leaf_list<'py>(g: Gil<'py>, leaves: &[crate::env::Leaf]) -> CResult<Mine<'py>> {
+    list_of(
+        g,
+        leaves.iter().map(|leaf| {
+            capi::tuple(
+                g,
+                vec![
+                    capi::string(g, &leaf.name)?,
+                    capi::string(g, leaf.dtype)?,
+                    list_of(g, leaf.shape.iter().map(|&s| capi::int_u64(g, s.into())))?,
+                    list_of(g, leaf.low.iter().map(|&v| capi::float(g, v)))?,
+                    list_of(g, leaf.high.iter().map(|&v| capi::float(g, v)))?,
+                ],
+            )
+        }),
+    )
+}
+
 /// `layout()`: the shapes and dtypes the Python layer needs.
 pub(crate) fn layout<'py>(g: Gil<'py>, inner: &Inner) -> CResult<Mine<'py>> {
     inner.with(g, |ops| {
@@ -774,23 +795,13 @@ pub(crate) fn layout<'py>(g: Gil<'py>, inner: &Inner) -> CResult<Mine<'py>> {
             "owned"
         };
         capi::dict_set(g, &d, c"outputs", &capi::string(g, mode)?)?;
-        let leaves = list_of(
-            g,
-            l.leaves.iter().map(|leaf| {
-                capi::tuple(
-                    g,
-                    vec![
-                        capi::string(g, &leaf.name)?,
-                        capi::string(g, leaf.dtype)?,
-                        list_of(g, leaf.shape.iter().map(|&s| capi::int_u64(g, s.into())))?,
-                        list_of(g, leaf.low.iter().map(|&v| capi::float(g, v)))?,
-                        list_of(g, leaf.high.iter().map(|&v| capi::float(g, v)))?,
-                    ],
-                )
-            }),
-        )?;
         capi::dict_set(g, &d, c"terminal", &capi::boolean(g, l.terminal))?;
-        capi::dict_set(g, &d, c"leaves", &leaves)?;
+        capi::dict_set(g, &d, c"leaves", &leaf_list(g, &l.leaves)?)?;
+        // ADR-0079 item 7: the privileged state leaves, marked privileged;
+        // empty without the opt-in.
+        capi::dict_set(g, &d, c"state_leaves", &leaf_list(g, &l.state_leaves)?)?;
+        let privileged = !l.state_leaves.is_empty();
+        capi::dict_set(g, &d, c"privileged_state", &capi::boolean(g, privileged))?;
         // ADR-0082 point 6: `(path, max, [item leaf indices..., mask index])`.
         let sets = list_of(
             g,
@@ -1280,6 +1291,10 @@ pub(crate) fn owned_dict<'py>(g: Gil<'py>, o: &Owned) -> CResult<Mine<'py>> {
             .map(|leaf| capi::bytearray(g, leaf)),
     )?;
     capi::dict_set(g, &d, c"terminal_observations", &term)?;
+    if !o.state.is_empty() {
+        let state = list_of(g, o.state.iter().map(|leaf| capi::bytearray(g, leaf)))?;
+        capi::dict_set(g, &d, c"state", &state)?;
+    }
     for (key, buf) in [
         (c"rewards", &o.rewards),
         (c"agent_terminated", &o.agent_terminated),
@@ -1325,6 +1340,10 @@ pub(crate) fn views_dict<'py>(
     capi::dict_set(g, &d, c"observations", &obs)?;
     let term = list_of(g, set.terminal_observations.iter().map(&view))?;
     capi::dict_set(g, &d, c"terminal_observations", &term)?;
+    if !set.state.is_empty() {
+        let state = list_of(g, set.state.iter().map(&view))?;
+        capi::dict_set(g, &d, c"state", &state)?;
+    }
     for (key, spec) in &set.others {
         let key =
             std::ffi::CString::new(*key).map_err(|_| error(g, Kind::Argument, "key".to_owned()))?;

@@ -60,6 +60,34 @@ pub(crate) struct ViewSet {
     /// Terminal observation leaves (`same_step` mode only, else empty).
     pub(crate) terminal_observations: Vec<ViewSpec>,
     pub(crate) others: Vec<(&'static str, ViewSpec)>,
+    /// Privileged state leaves, `[N, ...]` (ADR-0079 item 7); empty without
+    /// the opt-in.
+    pub(crate) state: Vec<ViewSpec>,
+}
+
+/// The privileged state leaves of `layout` as `[n, ...]` views; empty
+/// without the opt-in, `None` for a leaf dtype the protocols cannot name.
+fn state_views(layout: &Layout, n: usize) -> Option<Vec<ViewSpec>> {
+    layout
+        .state_leaves
+        .iter()
+        .enumerate()
+        .map(|(i, leaf)| {
+            let mut shape = vec![n];
+            shape.extend(
+                leaf.shape
+                    .iter()
+                    .map(|&d| usize::try_from(d).unwrap_or(usize::MAX)),
+            );
+            Some(ViewSpec {
+                field: OutputField::PrivilegedState(i),
+                elem: leaf_elem(leaf.dtype)?,
+                shape,
+                first_row: 0,
+                total_rows: n,
+            })
+        })
+        .collect()
 }
 
 /// The view set of `layout`; `None` for a leaf dtype the protocols cannot
@@ -156,10 +184,12 @@ pub(crate) fn view_set(layout: &Layout) -> Option<ViewSet> {
             )?,
         ),
     ];
+    let state = state_views(layout, n)?;
     Some(ViewSet {
         observations,
         terminal_observations,
         others,
+        state,
     })
 }
 
@@ -170,7 +200,8 @@ pub(crate) fn half_view_set(layout: &Layout, rows: &Range<usize>) -> Option<View
         .observations
         .iter_mut()
         .chain(set.terminal_observations.iter_mut())
-        .chain(set.others.iter_mut().map(|(_, spec)| spec));
+        .chain(set.others.iter_mut().map(|(_, spec)| spec))
+        .chain(set.state.iter_mut());
     for spec in specs {
         spec.first_row = rows.start;
         *spec.shape.first_mut()? = rows.len();
@@ -206,6 +237,7 @@ mod tests {
             turns: "simultaneous",
             terminal: true,
             policy_groups: Vec::new(),
+            state_leaves: Vec::new(),
         };
         let set = view_set(&layout).unwrap();
         assert_eq!(set.observations[0].shape, vec![3, 2, 4]);
@@ -226,5 +258,38 @@ mod tests {
         assert_eq!(half.observations[0].shape, vec![2, 2, 4]);
         assert_eq!(half.observations[0].first_row, 1);
         assert_eq!(half.observations[0].total_rows, 3);
+    }
+
+    #[test]
+    fn test_view_set_privileged_state_one_row_per_instance() {
+        let leaf = |dtype, shape| Leaf {
+            name: String::new(),
+            dtype,
+            shape,
+            low: vec![0.0],
+            high: vec![1.0],
+        };
+        let layout = Layout {
+            num_envs: 3,
+            agents: 2,
+            initial_agents: 2,
+            leaves: vec![leaf("float32", vec![4])],
+            sets: Vec::new(),
+            action_choices: 2,
+            action_nvec: vec![2],
+            action_bounds: None,
+            mask_len: 0,
+            mask_heads: Vec::new(),
+            entity_group_heads: 0,
+            turns: "simultaneous",
+            terminal: false,
+            policy_groups: Vec::new(),
+            state_leaves: vec![leaf("uint8", vec![13])],
+        };
+        let set = view_set(&layout).unwrap();
+        assert_eq!(set.state.len(), 1);
+        assert_eq!(set.state[0].field, OutputField::PrivilegedState(0));
+        assert_eq!(set.state[0].shape, vec![3, 13]);
+        assert_eq!(set.state[0].elem.itemsize(), 1);
     }
 }

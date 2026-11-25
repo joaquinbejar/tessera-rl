@@ -4,11 +4,10 @@
 //! critic needs and no agent observes. Every account, every resting order
 //! and queued item with its owner, the fundamental and every signal.
 //!
-//! ADR-0079's `PrivilegedState` trait is not on main yet. This module
-//! provides its two halves as plain functions, [`state_space`] and
-//! [`write_state`], with the same `ObsWriter` contract as an observation
-//! (leaves zero on entry, ADR-0058), so the trait impl is two forwarding
-//! lines once it lands. Search never reads it (ADR-0079 item 7.3).
+//! [`LimitOrderBook`] implements `PrivilegedState` by forwarding to the two
+//! plain functions [`state_space`] and [`write_state`], which keep the same
+//! `ObsWriter` contract as an observation (leaves zero on entry, ADR-0058).
+//! Search never reads it (ADR-0079 item 7.3).
 //!
 //! All leaves are `i64`, one dtype; absent rows are zero and their `_mask`
 //! entry is 0.
@@ -17,10 +16,11 @@
 
 use tessera_rl_core::io::ObsWriter;
 use tessera_rl_core::space::Space;
-use tessera_rl_core::{ObsLeaf, Observation, SpaceError};
+use tessera_rl_core::{ObsLeaf, Observation, PrivilegedState, SpaceError};
 use tessera_rl_macros::Observation;
 
 use crate::config::LobConfig;
+use crate::env::LimitOrderBook;
 use crate::limits::{BOOK_CAP, MAX_AGENTS, PENDING_CAP};
 use crate::order::{Kind, Side};
 use crate::state::LobState;
@@ -85,7 +85,7 @@ const fn kind_code(kind: Kind) -> i64 {
 
 /// Writes the privileged state of `state`. Rows are in a canonical order
 /// (orders by id, items by arrival), never by storage index.
-pub fn write_state(_: &LobConfig, state: &LobState, out: &mut ObsWriter<'_, '_, LobPrivileged>) {
+pub fn write_state<O>(_: &LobConfig, state: &LobState, out: &mut ObsWriter<'_, '_, O>) {
     if let Some(mut leaf) = out.leaf_mut(LobPrivileged::AGENTS) {
         let cols = 5;
         for slot in 0..MAX_AGENTS {
@@ -173,5 +173,16 @@ pub fn write_state(_: &LobConfig, state: &LobState, out: &mut ObsWriter<'_, '_, 
             leaf.set(written, 1);
         }
         after = Some(p.arrival);
+    }
+}
+
+/// The privileged state buffer of ADR-0079 item 7: [`LobPrivileged`].
+impl PrivilegedState for LimitOrderBook {
+    fn state_space(cfg: &LobConfig) -> Result<Space, SpaceError> {
+        state_space(cfg)
+    }
+
+    fn write_state(cfg: &LobConfig, state: &LobState, out: &mut ObsWriter<'_, '_, ()>) {
+        write_state(cfg, state, out);
     }
 }

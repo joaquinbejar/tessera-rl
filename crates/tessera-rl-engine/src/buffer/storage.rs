@@ -128,6 +128,9 @@ pub enum OutputField {
     /// Refusing host pools only: refuse codes, `[N, A]`, 0 when not refused
     /// (ADR-0070).
     RefuseCode,
+    /// Privileged state leaf `n`, `[N, leaf bytes]`: one row per instance,
+    /// only in a pool that opted in (ADR-0079 item 7).
+    PrivilegedState(usize),
 }
 
 /// A read-only description of one region: where it is, how long, of what.
@@ -638,6 +641,60 @@ mod tests {
                 assert_eq!(*byte, 0, "padding byte {i} was written");
             }
         }
+    }
+
+    /// The privileged state regions (ADR-0079 item 7) are ordinary `u8`
+    /// regions laid out after the others: zeroed, cache-line aligned,
+    /// disjoint from the observation leaf before them, and written only
+    /// through their own `Buf`.
+    #[test]
+    fn test_storage_privileged_regions_disjoint_zeroed_and_writable() {
+        let mut builder = StorageBuilder::new().unwrap();
+        let obs = builder
+            .reserve::<u8>(OutputField::Observation(0), 6)
+            .unwrap();
+        let first = builder
+            .reserve::<u8>(OutputField::PrivilegedState(0), 9)
+            .unwrap();
+        let second = builder
+            .reserve::<u8>(OutputField::PrivilegedState(1), 3)
+            .unwrap();
+        let mut regions = builder.finish().unwrap();
+        let s = Arc::clone(regions.storage());
+        let mut obs = regions.take(obs).unwrap();
+        let mut first = regions.take(first).unwrap();
+        let mut second = regions.take(second).unwrap();
+        assert!(first.iter().chain(second.iter()).all(|b| *b == 0));
+        assert_eq!(
+            region_align(OutputField::PrivilegedState(0)),
+            OUTPUT_MIN_ALIGN
+        );
+        s.begin_write();
+        obs.fill(1);
+        first.fill(2);
+        second.fill(3);
+        drop((obs, first, second));
+        let o = s.region(OutputField::Observation(0)).unwrap();
+        let p0 = s.region(OutputField::PrivilegedState(0)).unwrap();
+        let p1 = s.region(OutputField::PrivilegedState(1)).unwrap();
+        assert_eq!((p0.len, p0.dtype), (9, OutputDtype::U8));
+        assert_eq!(p0.ptr.align_offset(OUTPUT_MIN_ALIGN), 0);
+        assert!(o.ptr.wrapping_add(o.len) <= p0.ptr);
+        assert!(p0.ptr.wrapping_add(p0.len) <= p1.ptr);
+        // SAFETY: each region is initialized bytes of a live storage, and
+        // no `Buf` (the only writer) exists any more.
+        #[expect(unsafe_code, reason = "test of the audited module")]
+        let ob = unsafe { core::slice::from_raw_parts(o.ptr, o.len) };
+        // SAFETY: as above.
+        #[expect(unsafe_code, reason = "test of the audited module")]
+        let b0 = unsafe { core::slice::from_raw_parts(p0.ptr, p0.len) };
+        // SAFETY: as above.
+        #[expect(unsafe_code, reason = "test of the audited module")]
+        let b1 = unsafe { core::slice::from_raw_parts(p1.ptr, p1.len) };
+        assert_eq!(ob, &[1; 6]);
+        assert_eq!(b0, &[2; 9]);
+        assert_eq!(b1, &[3; 3]);
+        assert_eq!(s.region(OutputField::PrivilegedState(2)), None);
     }
 
     #[test]

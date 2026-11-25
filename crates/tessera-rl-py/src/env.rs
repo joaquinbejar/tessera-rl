@@ -229,6 +229,9 @@ pub(crate) struct Layout {
     /// The policy group of each agent slot (ADR-0079 item 5.1):
     /// `"learner"`, `"external"`, `"heuristic"` or `"privileged_heuristic"`.
     pub(crate) policy_groups: Vec<&'static str>,
+    /// The privileged state leaves (ADR-0079 item 7), one row per
+    /// instance; empty without `privileged_state=True`.
+    pub(crate) state_leaves: Vec<Leaf>,
 }
 
 /// Copies of one call's outputs (`owned` mode).
@@ -256,6 +259,9 @@ pub(crate) struct Owned {
     /// observations of episodes that ended in the call (ADR-0039); rows of
     /// other instances are stale. Empty in other modes.
     pub(crate) terminal_observations: Vec<Vec<u8>>,
+    /// One buffer per privileged state leaf, `[N, leaf]` (ADR-0079 item 7);
+    /// empty without the opt-in.
+    pub(crate) state: Vec<Vec<u8>>,
 }
 
 /// What an environment object can do, whatever the environment.
@@ -649,6 +655,11 @@ where
         } else {
             0
         };
+        // The privileged state leaves, named as observation leaves are.
+        let mut state_leaves = Vec::new();
+        if let Some(space) = pool.privileged_state_space() {
+            leaves(space, "", &mut state_leaves, &mut Vec::new())?;
+        }
         let layout = Layout {
             num_envs,
             agents: E::MAX_AGENTS,
@@ -668,6 +679,7 @@ where
             },
             terminal,
             policy_groups: pool.policy_groups().iter().map(|g| g.name()).collect(),
+            state_leaves,
         };
         Ok(Self {
             storage,
@@ -833,6 +845,9 @@ where
             episode_terminated: flags(out.episode_terminated()),
             episode_truncated: flags(out.episode_truncated()),
             masks: flags(out.masks()),
+            state: (0..MAX_LEAVES)
+                .map_while(|leaf| out.privileged_state(leaf).map(<[u8]>::to_vec))
+                .collect(),
         })
     }
 
@@ -1171,6 +1186,9 @@ pub(crate) struct PoolArgs {
     /// The policy map (ADR-0079), `None` for the default: every slot a
     /// learner.
     pub(crate) policy_map: Option<crate::policy::PolicySpec>,
+    /// The privileged state buffer (ADR-0079 item 7): only for an
+    /// environment that implements `PrivilegedState`, in Sync mode.
+    pub(crate) privileged_state: bool,
 }
 
 /// The refusal of the normalization calls outside sync mode.
@@ -1419,6 +1437,8 @@ where
     // Learner and external groups for any environment; a maker whose
     // environment runs heuristics applied its map already (ADR-0079).
     let pool = crate::policy::plain(pool, args)?;
+    // A maker whose environment has a privileged state applied it already.
+    crate::privileged::check(&pool, args)?;
     let storage = pool.outputs()?.storage();
     let pooled = Pooled::new(cfg, pool, n, terminal, storage)?;
     if args.pipelined {
@@ -1859,6 +1879,7 @@ pub(crate) fn lob(args: &PoolArgs, fields: &LobFields) -> Result<Box<dyn PoolOps
     let pool = EnvPool::<LimitOrderBook, Masked>::with_masks(cfg.clone(), options)?;
     // Heuristic slots from the information state (InfoHeuristic), as Tag (#470).
     let pool = crate::policy::info(pool, args)?;
+    let pool = crate::privileged::apply(pool, args)?;
     finish(&cfg, pool, args, n, same_step)
 }
 
@@ -1904,6 +1925,7 @@ pub(crate) fn leduc(args: &PoolArgs) -> Result<Box<dyn PoolOps>, BindError> {
     let same_step = options.auto_reset == AutoReset::SameStep;
     let pool = EnvPool::<Leduc, Masked>::with_masks(cfg.clone(), options)?;
     let pool = crate::policy::info(pool, args)?;
+    let pool = crate::privileged::apply(pool, args)?;
     finish(&cfg, pool, args, n, same_step)
 }
 
@@ -2045,6 +2067,7 @@ mod tests {
             wait_cap_us: None,
             transforms: tessera_rl_engine::Transforms::new(),
             policy_map: None,
+            privileged_state: false,
             pipelined: false,
             asynced: None,
         };
@@ -2065,6 +2088,7 @@ mod tests {
             wait_cap_us: None,
             transforms: tessera_rl_engine::Transforms::new(),
             policy_map: None,
+            privileged_state: false,
             pipelined,
             asynced: None,
         }
@@ -2279,6 +2303,7 @@ mod tests {
             wait_cap_us: None,
             transforms: tessera_rl_engine::Transforms::new(),
             policy_map: None,
+            privileged_state: false,
             pipelined: false,
             asynced: None,
         };
