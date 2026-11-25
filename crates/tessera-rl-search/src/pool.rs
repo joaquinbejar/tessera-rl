@@ -322,13 +322,7 @@ where
             )
         };
         let mut scratch = build(cfg, pool_options)?;
-        // Search never builds or reads the privileged state buffer
-        // (ADR-0079 item 7.3).
-        if scratch.has_privileged_state() {
-            return Err(SearchError::Engine(EngineError::PrivilegedState {
-                reason: "a search scratch pool never has the privileged state buffer",
-            }));
-        }
+        refuse_privileged(&scratch)?;
         // The joint's mask offsets are the scratch pool's (SPEC 11.3).
         if M::ENABLED
             && (0..heads)
@@ -1438,4 +1432,17 @@ mod poison_tests {
         ));
         assert_eq!(s.obs_row_bytes(), bytes);
     }
+}
+
+/// Search never builds or reads the privileged state buffer (ADR-0079 item
+/// 7.3): a scratch pool that has it is refused.
+fn refuse_privileged<E: Environment, M: MaskProvider<E>>(
+    scratch: &EnvPool<E, M>,
+) -> Result<(), SearchError> {
+    if scratch.has_privileged_state() {
+        return Err(SearchError::Engine(EngineError::PrivilegedState {
+            reason: "a search scratch pool never has the privileged state buffer",
+        }));
+    }
+    Ok(())
 }

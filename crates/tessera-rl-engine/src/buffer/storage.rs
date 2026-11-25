@@ -684,13 +684,13 @@ mod tests {
         // SAFETY: each region is initialized bytes of a live storage, and
         // no `Buf` (the only writer) exists any more.
         #[expect(unsafe_code, reason = "test of the audited module")]
-        let (ob, b0, b1) = unsafe {
-            (
-                core::slice::from_raw_parts(o.ptr, o.len),
-                core::slice::from_raw_parts(p0.ptr, p0.len),
-                core::slice::from_raw_parts(p1.ptr, p1.len),
-            )
-        };
+        let ob = unsafe { core::slice::from_raw_parts(o.ptr, o.len) };
+        // SAFETY: as above.
+        #[expect(unsafe_code, reason = "test of the audited module")]
+        let b0 = unsafe { core::slice::from_raw_parts(p0.ptr, p0.len) };
+        // SAFETY: as above.
+        #[expect(unsafe_code, reason = "test of the audited module")]
+        let b1 = unsafe { core::slice::from_raw_parts(p1.ptr, p1.len) };
         assert_eq!(ob, &[1; 6]);
         assert_eq!(b0, &[2; 9]);
         assert_eq!(b1, &[3; 3]);
