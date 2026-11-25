@@ -107,6 +107,17 @@ pub struct Scenario<C> {
     pub reseed_seed: u64,
 }
 
+/// The lane level `TESSERA_RL_SIMD` forces (ADR-0071), for the second golden
+/// run in CI; `None` when unset (the widest level). It changes speed only.
+#[must_use]
+pub fn forced_level() -> Option<tessera_rl_engine::Level> {
+    let name = std::env::var("TESSERA_RL_SIMD").ok()?;
+    match tessera_rl_engine::Resolved::from_name(Some(&name)) {
+        Ok(level) => Some(level.level()),
+        Err(e) => panic!("TESSERA_RL_SIMD: {e}"),
+    }
+}
+
 impl<C> Scenario<C> {
     /// Pool options of this scenario.
     pub fn options(&self) -> PoolOptions {
@@ -114,6 +125,7 @@ impl<C> Scenario<C> {
             chunk_size: NonZeroU32::new(self.chunk).unwrap_or(NonZeroU32::MIN),
             auto_reset: self.auto_reset,
             max_episode_steps: NonZeroU32::new(self.max_episode_steps),
+            simd_level: forced_level(),
             ..PoolOptions::new(
                 NonZeroU32::new(self.num_envs).unwrap_or(NonZeroU32::MIN),
                 Seed::new(self.seed),

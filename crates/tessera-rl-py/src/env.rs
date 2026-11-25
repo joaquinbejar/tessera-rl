@@ -1469,9 +1469,24 @@ fn options(args: &PoolArgs) -> Result<(PoolOptions, usize), BindError> {
             )));
         }
     };
+    options.simd_level = simd_level(std::env::var("TESSERA_RL_SIMD").ok().as_deref())?;
     let n = usize::try_from(args.num_envs)
         .map_err(|_| BindError::Argument("num_envs too large".to_owned()))?;
     Ok((options, n))
+}
+
+/// The lane level `TESSERA_RL_SIMD` forces (`scalar`, `sse42`, `avx2`,
+/// `neon`), read when a pool is made. Test-only (ADR-0071): it exists for
+/// the forced-scalar golden run and A/B control arms, and it never changes
+/// results, only speed. An unknown name or a level this CPU lacks is an
+/// error, never a silent fallback.
+fn simd_level(name: Option<&str>) -> Result<Option<tessera_rl_simd::Level>, BindError> {
+    name.map(|n| {
+        tessera_rl_simd::Resolved::from_name(Some(n))
+            .map(tessera_rl_simd::Resolved::level)
+            .map_err(|e| BindError::Argument(format!("TESSERA_RL_SIMD: {e}")))
+    })
+    .transpose()
 }
 
 /// The wait backend for new workers. On macOS `thread::park` is a libdispatch
@@ -2616,6 +2631,19 @@ mod tests {
     #[test]
     fn test_check_spin_sync_default_workers_accepted() {
         assert!(check_spin(&spin_args(None, Some(5), false)).is_ok());
+    }
+
+    #[test]
+    fn test_simd_level_unset_scalar_and_unknown_names() {
+        assert!(matches!(super::simd_level(None), Ok(None)));
+        assert!(matches!(
+            super::simd_level(Some("scalar")),
+            Ok(Some(tessera_rl_simd::Level::Scalar))
+        ));
+        assert!(matches!(
+            super::simd_level(Some("avx512")),
+            Err(BindError::Argument(_))
+        ));
     }
 
     #[test]
