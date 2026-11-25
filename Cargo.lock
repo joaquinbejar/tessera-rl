@@ -1210,6 +1210,7 @@ name = "tessera-rl-pyffi"
 version = "0.3.0"
 dependencies = [
  "inventory",
+ "loom",
  "pyo3",
  "tessera-rl-core",
  "tessera-rl-engine",

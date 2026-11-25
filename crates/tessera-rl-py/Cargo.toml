@@ -49,6 +49,8 @@ tessera-rl-macros = { workspace = true, optional = true }
 tessera-rl-macros = { workspace = true }
 # Hostile floating-point modes for the boundary tests (ADR-0041).
 tessera-rl-num = { workspace = true, features = ["test-hooks"] }
+# The counting allocator of the XLA FFI zero-allocation tests (ADR-0095).
+tessera-rl-pyffi = { workspace = true, features = ["test-hooks"] }
 
 [build-dependencies]
 pyo3-build-config = "0.30"

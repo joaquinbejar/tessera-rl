@@ -35,6 +35,9 @@ tessera-rl-core.workspace = true
 tessera-rl-engine.workspace = true
 tessera-rl-num.workspace = true
 
+[target.'cfg(tessera_xla_loom)'.dev-dependencies]
+loom.workspace = true
+
 [dev-dependencies]
 # Hostile floating-point modes for the boundary tests (ADR-0041).
 tessera-rl-num = { workspace = true, features = ["test-hooks"] }
