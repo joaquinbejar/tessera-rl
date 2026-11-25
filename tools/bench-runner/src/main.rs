@@ -30,7 +30,10 @@
 //! conditioned on a parent head: RTS steps under the no-op policy).
 //! `--cpus a,b,...` pins the Sync-mode workers to those logical CPUs (pin
 //! the process itself with `taskset` on Linux); `--max-episode-steps N`
-//! sets the truncation limit (0, the default, is none). The output records
+//! sets the truncation limit (0, the default, is none); `--schedule
+//! static|dynamic` sets how Sync-mode workers take chunks (ADR-0076,
+//! ADR-0087; Static, the engine default, when omitted) and is recorded in
+//! the options when given. The output records
 //! the effective method and pool options, the FNV-1a fingerprint of the
 //! action plan (the same plan the Python harness generates), and the
 //! process CPU affinity where the OS exposes it.
@@ -49,10 +52,11 @@ use tessera_rl_classic::{
 use tessera_rl_core::{Bool8, Environment};
 use tessera_rl_engine::{
     ActionInput, DecodedRecord, EngineError, EnvPool, MaskProvider, Masked, NoMasks, PoolOptions,
-    Record, Reseed, SyncOptions,
+    Record, Reseed, Schedule, SyncOptions,
 };
 use tessera_rl_games::{
-    Connect4, Connect4Config, Go9, Go9Config, Leduc, LeducConfig, Othello, OthelloConfig,
+    Connect4, Connect4Config, Go9, Go9Config, Lanterns, LanternsConfig, Leduc, LeducConfig,
+    Othello, OthelloConfig,
 };
 use tessera_rl_markets::{LimitOrderBook, LobConfig};
 use tessera_rl_num::identity::Seed;
@@ -90,6 +94,16 @@ fn option<T: core::str::FromStr>(args: &[String], flag: &str) -> Result<Option<T
         .and_then(|v| v.parse().ok())
         .map(Some)
         .ok_or_else(|| usage(&format!("{flag} needs a value")))
+}
+
+/// The `--schedule static|dynamic` value, if given.
+fn schedule(args: &[String]) -> Result<Option<Schedule>, Error> {
+    match option::<String>(args, "--schedule")?.as_deref() {
+        None => Ok(None),
+        Some("static") => Ok(Some(Schedule::Static)),
+        Some("dynamic") => Ok(Some(Schedule::Dynamic)),
+        Some(_) => Err(usage("--schedule takes static or dynamic")),
+    }
 }
 
 /// FNV-1a over the little-endian bytes of the plan, batch by batch: the
@@ -205,6 +219,7 @@ fn pool<E, M>(
     workers: usize,
     cpu_set: Option<Vec<usize>>,
     max_episode_steps: u32,
+    schedule: Option<Schedule>,
 ) -> Result<EnvPool<E, M>, Error>
 where
     E: Environment + tessera_rl_core::Validate,
@@ -218,6 +233,12 @@ where
     let n = NonZeroU32::new(num_envs).ok_or_else(|| usage("num_envs must be at least 1"))?;
     let mut options = PoolOptions::new(n, Seed::new(1));
     options.max_episode_steps = NonZeroU32::new(max_episode_steps);
+    if let Some(s) = schedule {
+        if workers == 0 {
+            return Err(usage("--schedule applies to Sync mode"));
+        }
+        options.schedule = s;
+    }
     let mut p = make(options)?;
     if let Some(w) = NonZeroUsize::new(workers) {
         let mut sync = SyncOptions::new(w);
@@ -555,8 +576,14 @@ where
     };
     let requested = cpus(args)?.map_or_else(|| "engine default".to_owned(), |c| format!("{c:?}"));
     let limit: u32 = option(args, "--max-episode-steps")?.unwrap_or(0);
+    // Only when given, so plain runs keep the Python harness's options.
+    let sched = match schedule(args)? {
+        Some(Schedule::Static) => r#", "schedule": "static""#,
+        Some(Schedule::Dynamic) => r#", "schedule": "dynamic""#,
+        None => "",
+    };
     Ok(format!(
-        r#"{{{body}, "options": {{"seed": 1, "auto_reset": "next_step", "max_episode_steps": {limit}, "action_batches": {ACTION_BATCHES}{}}}, "plan_fingerprint": "{:016x}", "profile": "{}", "pinning": {{"worker_cpu_set": "{requested}", "process_affinity": "{}"}}}}"#,
+        r#"{{{body}, "options": {{"seed": 1, "auto_reset": "next_step", "max_episode_steps": {limit}, "action_batches": {ACTION_BATCHES}{}{sched}}}, "plan_fingerprint": "{:016x}", "profile": "{}", "pinning": {{"worker_cpu_set": "{requested}", "process_affinity": "{}"}}}}"#,
         // Only when set, so plain runs keep the Python harness's options.
         if bench.legal.is_some() {
             r#", "legal_actions": true"#
@@ -585,6 +612,7 @@ fn run(args: &[String]) -> Result<String, Error> {
     let cpu_set = cpus(args)?;
     let limit: u32 = option(args, "--max-episode-steps")?.unwrap_or(0);
     let legal = args.iter().any(|a| a == "--legal-actions");
+    let sched = schedule(args)?;
     macro_rules! bench {
         ($env:ty, $cfg:ty, $mask:ty, $make:ident) => {
             bench!(@cfg $env, <$cfg>::default(), $mask, $make)
@@ -600,6 +628,7 @@ fn run(args: &[String]) -> Result<String, Error> {
                         workers,
                         cpu_set,
                         limit,
+                        sched,
                     )?,
                     &cfg,
                     num_envs,
@@ -623,6 +652,8 @@ fn run(args: &[String]) -> Result<String, Error> {
         "go9" => bench!(Go9, Go9Config, Masked, with_masks),
         "leduc" => bench!(Leduc, LeducConfig, Masked, with_masks),
         "othello" => bench!(Othello, OthelloConfig, Masked, with_masks),
+        // Two players (the default): one flat Discrete(50) mask per slot.
+        "lanterns" => bench!(Lanterns, LanternsConfig, Masked, with_masks),
         "rts" => bench!(Rts, RtsConfig, Masked, with_masks),
         // 8 agents, latency 0 (the defaults).
         "lob" => bench!(LimitOrderBook, LobConfig, Masked, with_masks),
@@ -755,6 +786,21 @@ mod tests {
         // Row 1: head 0 from 1 to 2; head 1 from 1 wraps to 0.
         // Row 2: head 0 from 2 wraps to 0; head 1 has no legal choice: kept.
         assert_eq!(out, [2, 0, 0, 1]);
+    }
+
+    #[test]
+    fn test_schedule_option_parses_and_rejects() {
+        let args = |v: &[&str]| v.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>();
+        assert_eq!(schedule(&args(&["x"])).ok(), Some(None));
+        assert_eq!(
+            schedule(&args(&["x", "--schedule", "dynamic"])).ok(),
+            Some(Some(Schedule::Dynamic))
+        );
+        assert_eq!(
+            schedule(&args(&["x", "--schedule", "static"])).ok(),
+            Some(Some(Schedule::Static))
+        );
+        assert!(schedule(&args(&["x", "--schedule", "guided"])).is_err());
     }
 
     #[test]
