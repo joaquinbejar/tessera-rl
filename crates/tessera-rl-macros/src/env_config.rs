@@ -395,7 +395,8 @@ fn adaptive_struct(
     let pad = (8 - total % 8) % 8;
     let field_defs = typed.iter().map(|(_, ident, stored, _)| {
         let stored = qualify(core, stored);
-        quote!(pub #ident: #stored,)
+        let doc = format!("The adaptive `{ident}` config value.");
+        quote!(#[doc = #doc] pub #ident: #stored,)
     });
     let encodes = typed
         .iter()
@@ -417,7 +418,7 @@ fn adaptive_struct(
         (quote!(), quote!(), quote!(), quote!(), quote!())
     } else {
         (
-            quote!(pub _reserved: #core::Reserved<#pad>,),
+            quote!(#[doc = "Padding to a multiple of 8 bytes; only the generated code builds it."] _reserved: #core::Reserved<#pad>,),
             quote!(#core::encoding::Canonical::encode(&self._reserved, out);),
             quote!(_reserved: #core::encoding::Canonical::decode(input)?,),
             quote!(_reserved: #core::Reserved::ZERO,),

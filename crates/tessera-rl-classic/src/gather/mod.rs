@@ -7,6 +7,13 @@
 //! The observation is `{agent: Box[2] i32, items: Set<Box[2] i32, 8>}`:
 //! slot `i` holds item `i`'s `[column, row]` while it is on the grid, and is
 //! absent (mask false, row zero) once collected or when `i >= items`.
+//!
+//! `items` is adaptive (`#[config(adaptive)]`, ADR-0081): a pool with
+//! targets places each episode's items from its slot's target, read at
+//! reset, so a curriculum can change the difficulty between episodes.
+//! Version 2: version 1 had a fixed `items`; at the default, with no
+//! targets, both give the same trajectories, and only the record and
+//! header encoding differ.
 
 mod checks;
 
@@ -15,7 +22,7 @@ use core::num::NonZeroU32;
 use tessera_rl_core::io::{Actions, ObsWriter};
 use tessera_rl_core::space::Space;
 use tessera_rl_core::{
-    AgentSlot, Bool8, Environment, EpisodeEnd, NoAdaptive, ObsLeaf, ObsSet, Observation,
+    Adaptive, AgentSlot, Bool8, Environment, EpisodeEnd, ObsLeaf, ObsSet, Observation,
     RecordHeader, SpaceError, StepOut, Tier,
 };
 use tessera_rl_macros::{EnvConfig, EnvState, Observation};
@@ -24,7 +31,7 @@ use tessera_rl_num::rng::{ObsRng, StepRng};
 /// Environment id (ADR-0023).
 pub const ENV_ID: &str = "tessera/Gather-v1";
 /// Environment version.
-pub const ENV_VERSION: u32 = 1;
+pub const ENV_VERSION: u32 = 2;
 /// Capacity of the item set (ADR-0082 point 9).
 pub const MAX_ITEMS: usize = 8;
 
@@ -52,8 +59,9 @@ pub struct GatherConfig {
     /// Cells on a side.
     #[config(default = 8, range = 4..=16)]
     pub size: u16,
-    /// Items placed at reset, at most [`MAX_ITEMS`].
-    #[config(default = 8, range = 1..=8)]
+    /// Items placed at reset, at most [`MAX_ITEMS`]. Adaptive: a pool with
+    /// targets reads each slot's target at reset (ADR-0081).
+    #[config(default = 8, range = 1..=8, adaptive)]
     pub items: u8,
     /// Steps before the episode is truncated.
     #[config(default = 100, range = 1..=10_000)]
@@ -81,6 +89,26 @@ fn cell(k: u32, n: u32) -> [i16; 2] {
     [coord(k % n), coord(k / n)]
 }
 
+/// Places the agent uniformly on the grid and `items` items uniformly on
+/// the other cells (items may share a cell). The draw order is version 1's.
+fn place(cfg: &GatherConfig, items: u8, rng: &mut StepRng, s: &mut GatherState) {
+    let n = u32::from(cfg.size);
+    let cells = NonZeroU32::new(n * n).unwrap_or(NonZeroU32::MIN);
+    let others = NonZeroU32::new(n * n - 1).unwrap_or(NonZeroU32::MIN);
+    let start = rng.below_u32(cells);
+    *s = GatherState {
+        agent: cell(start, n),
+        ..GatherState::default()
+    };
+    let count = usize::from(items).min(MAX_ITEMS);
+    for (item, present) in s.items.iter_mut().zip(s.present.iter_mut()).take(count) {
+        let k = rng.below_u32(others);
+        *item = cell(if k >= start { k + 1 } else { k }, n);
+        *present = Bool8::TRUE;
+    }
+    s.left = u8::try_from(count).unwrap_or(0);
+}
+
 impl Environment for Gather {
     /// Parallel natively and AEC through cycle buffering (SPEC 12, ADR-0080).
     const ADAPTERS: tessera_rl_core::Adapters =
@@ -89,10 +117,11 @@ impl Environment for Gather {
     type Config = GatherConfig;
     type Obs = GatherObs;
     type Action = ();
-    type Header = RecordHeader<1, NoAdaptive>;
+    type Header = RecordHeader<1, GatherConfigAdaptive>;
 
     const MAX_AGENTS: usize = 1;
     const TIER: Tier = Tier::CrossPlatform;
+    const READS_ADAPTIVE: bool = true;
 
     fn observation_space(cfg: &GatherConfig) -> Result<Space, SpaceError> {
         GatherObs::space(cfg)
@@ -103,23 +132,20 @@ impl Environment for Gather {
     }
 
     /// The agent is uniform on the grid; each item is uniform on the other
-    /// cells (items may share a cell).
+    /// cells (items may share a cell). `cfg.items` items.
     fn reset(cfg: &GatherConfig, rng: &mut StepRng, s: &mut GatherState) {
-        let n = u32::from(cfg.size);
-        let cells = NonZeroU32::new(n * n).unwrap_or(NonZeroU32::MIN);
-        let others = NonZeroU32::new(n * n - 1).unwrap_or(NonZeroU32::MIN);
-        let start = rng.below_u32(cells);
-        *s = GatherState {
-            agent: cell(start, n),
-            ..GatherState::default()
-        };
-        let count = usize::from(cfg.items).min(MAX_ITEMS);
-        for (item, present) in s.items.iter_mut().zip(s.present.iter_mut()).take(count) {
-            let k = rng.below_u32(others);
-            *item = cell(if k >= start { k + 1 } else { k }, n);
-            *present = Bool8::TRUE;
-        }
-        s.left = u8::try_from(count).unwrap_or(0);
+        place(cfg, cfg.items, rng, s);
+    }
+
+    /// As [`Self::reset`], with the slot's adaptive `items` (its target in a
+    /// pool with targets, else the config's).
+    fn reset_with(
+        cfg: &GatherConfig,
+        adaptive: &Adaptive<Self>,
+        rng: &mut StepRng,
+        s: &mut GatherState,
+    ) {
+        place(cfg, adaptive.items, rng, s);
     }
 
     fn step(

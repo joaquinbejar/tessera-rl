@@ -173,11 +173,44 @@ fn test_gather_validate_refuses_inconsistent_states() {
         items: 2,
         ..GatherConfig::default()
     };
+    // Version 2: `items` is adaptive, so a state from a slot whose target
+    // is 6 holds items past the config's 2, and is valid.
     let mut s = pool(few.clone(), 1, 3).state(0).unwrap();
     s.present[5] = Bool8::TRUE;
+    s.items[5] = [5, 5];
     s.left += 1;
-    assert_eq!(
-        Gather::validate(&few, &s).unwrap_err().code,
-        "an item in a slot past the configured items"
-    );
+    if s.items[5] == s.agent {
+        s.items[5] = [4, 4];
+    }
+    assert_eq!(Gather::validate(&few, &s), Ok(()));
+}
+
+/// Version 2 (#613, ADR-0081): `items` is adaptive. A pool with targets
+/// places each episode's items from its slot's target, read at reset; the
+/// running episode keeps its items until then.
+#[test]
+fn test_gather_items_target_applies_at_the_next_reset_only() {
+    let cfg = GatherConfig::default();
+    let options = PoolOptions {
+        auto_reset: AutoReset::Disabled,
+        ..PoolOptions::new(NonZeroU32::new(2).unwrap(), Seed::new(5))
+    };
+    let mut p = EnvPool::<Gather, NoMasks>::new(cfg.clone(), options)
+        .unwrap()
+        .with_targets()
+        .unwrap();
+    p.reset_all(Reseed::Keep).unwrap();
+    assert_eq!(p.state(0).unwrap().left, cfg.items);
+    let mut v = *p.targets().unwrap().first().unwrap();
+    v.items = 2;
+    p.set_targets(&[(0, v)]).unwrap();
+    // Mid-episode: nothing changes before the reset.
+    assert_eq!(p.state(0).unwrap().left, cfg.items);
+    p.reset_all(Reseed::Keep).unwrap();
+    let s0 = p.state(0).unwrap();
+    assert_eq!(s0.left, 2);
+    assert_eq!(s0.present.iter().filter(|b| b.get()).count(), 2);
+    assert_eq!(Gather::validate(&cfg, &s0), Ok(()));
+    // Slot 1 keeps the config's items.
+    assert_eq!(p.state(1).unwrap().left, cfg.items);
 }
